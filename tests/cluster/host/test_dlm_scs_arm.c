@@ -600,6 +600,19 @@ static void arm_bindings(void)
 	    "a departure sweeps the engine's orphaned lock state directly");
 	has("dlm_req_fsm_peer_gone(&d->req, csid)",
 	    "... and fails every request outstanding at the departed member");
+	/* rd vms-e09: the directory-entry removal's glue. It carries no lock
+	 * id, so it must be routed BEFORE the placeholder-lkid refusal, staged
+	 * (the resource is gone), and emitted on the fork thread by the FSM. */
+	before("if (p->op == VMS_DLM_POST_DIR_REMOVE)",
+	       "if (p->req_lkid == VMS_DLM_LKID_UNSET)",
+	       "*** a removal is routed before the lock-id refusal (it names "
+	       "a resource, not a lock) ***");
+	has("return dlm_arm_post_dir_remove(d, p);",
+	    "... and takes the staged path");
+	has("dlm_arm_run_dir_remove(d, w->arg0, w->arg1);",
+	    "the fork thread runs a staged removal");
+	has("(void)dlm_req_fsm_dir_remove(&d->req, &p);",
+	    "... through the FSM's removal emitter");
 }
 
 static void cnxman_legs(void)
@@ -634,6 +647,9 @@ static void cnxman_legs(void)
 	       "one gate under every DLM origination, old and new ***");
 	has("cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST)",
 	    "an origination stamps a fresh transaction on the peer's dialogue");
+	/* rd vms-e09: ...except a notification, which opens none (R3). */
+	has("cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY)",
+	    "a directory-entry removal opens no transaction");
 	has("cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_RESPONSE)",
 	    "a reply stamps a RESPONSE envelope, echoing the request's txn");
 	has("vms_cm_body_build(body, len, cn->dlm_reply, reply.len",

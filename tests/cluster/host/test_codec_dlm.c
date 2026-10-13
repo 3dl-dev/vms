@@ -778,6 +778,69 @@ static void test_named_op04_is_not_a_blkast(void)
 }
 
 /*
+ * rd vms-e09: OVMX's removal, built from the identity a REAL removal carries,
+ * matches that removal at every position R1 grounds and writes zero
+ * everywhere else. Two specimens: the vms-8219 one (L1, the derivation corpus)
+ * and one from the held-out lnm1 corpus.
+ */
+static void test_e09_dir_remove_matches_real_removals(void)
+{
+	static const char *const names[] = { "dlm-dir-remove-vax3",
+					     "dlm-dir-remove-lnm1-mou" };
+	uint32_t k, i;
+
+	printf("-- rd vms-e09: the directory-entry removal OVMX builds is the "
+	       "real one's R1 bytes, zero elsewhere\n");
+	for (k = 0u; k < 2u; k++) {
+		const struct vms_fixture *rm = fixture(names[k]);
+		const uint8_t *real;
+		struct vms_dlm_res_ident id;
+		uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+		const uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+		uint32_t written = 0u, idspan, bad = 0u;
+
+		ct_check(rm != NULL, "the real removal fixture loads");
+		if (rm == NULL)
+			continue;
+		real = rm->bytes + VMS_OFF_SYSAP_BODY;
+		ct_check(vms_dlm_res_ident_parse_body(real, VMS_CM_BODY_LEN, &id) ==
+			 VMS_CODEC_OK, "its identity reads");
+		memset(frame, 0xa5, sizeof(frame));
+		ct_check(vms_dlm_dir_remove_build(&id, frame, sizeof(frame),
+						  &written) == VMS_CODEC_OK,
+			 "OVMX builds the removal from that identity");
+		idspan = 48u + id.name_len;
+		for (i = 0u; i < VMS_CM_BODY_LEN; i++) {
+			int grounded = (i == 8u || i == 9u) ||
+				       (i >= 44u && i < idspan) ||
+				       (i >= 128u && i < 132u);
+			if (grounded ? b[i] != real[i] : b[i] != 0u)
+				bad++;
+		}
+		ct_check_eq_u32(bad, 0u,
+				"*** every R1 byte equals the real removal's, "
+				"every other byte is a zero OVMX wrote ***");
+		ct_check(real[4] == 0 && real[5] == 0 && real[6] == 0 &&
+			 real[7] == 0, "the real removal opens no transaction");
+		ct_check(vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+			 "*** OVMX's removal is a notification (no txn) ***");
+		ct_check(vms_dlm_shape_fit_for_any_member(b, VMS_CM_BODY_LEN),
+			 "*** and a shape fit to address at a real VAX ***");
+	}
+	{
+		/* An UNNAMED op 0x04 is a different message: neither. */
+		uint8_t body[VMS_CM_BODY_LEN];
+
+		memset(body, 0, sizeof(body));
+		body[8] = 0x02u;
+		body[9] = 0x04u;
+		ct_check(!vms_dlm_body_is_notification(body, sizeof(body)) &&
+			 !vms_dlm_shape_fit_for_any_member(body, sizeof(body)),
+			 "an unnamed op 0x04 is neither a removal nor fit");
+	}
+}
+
+/*
  * THE SUPERSESSION, asserted rather than merely documented. The phantom ops
  * are gone as VALUES: 0x03 means $DEQ and 0x05 means BLKAST (rd vms-ea1), and a
  * parser for one refuses the other's frame. A tree that quietly kept a
@@ -820,6 +883,7 @@ static void test_superseded_opcodes_are_one_meaning_each(void)
 		 "the $DEQ parser REFUSES a BLKAST frame");
 
 	test_named_op04_is_not_a_blkast();
+	test_e09_dir_remove_matches_real_removals();
 }
 
 static void test_fixture_roundtrips(void)

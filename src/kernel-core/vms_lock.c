@@ -783,10 +783,82 @@ static struct vms_lock_resource *resource_find_or_create_key(const struct res_ke
     return new_res;
 }
 
+/*
+ * THE MASTER'S DIRECTORY-ENTRY REMOVAL (rd vms-e09), read as the block is freed.
+ *
+ * A resource this node masters has an entry at its directory node naming this
+ * node. When the block goes, VMS's master tells that node (a named cat-0x02
+ * op-0x04, never answered: 8106 real removals, tests/lab/captures/
+ * vms-e09-dir-remove-20261013/). Without it the entry outlives the resource,
+ * the directory sends the next requester here with an 0xf8, and this node holds
+ * nothing to serve it with (lab DC1b: OVMXB asked OVMXA five times, unanswered).
+ *
+ * Filled only when every fact is held: this node is the master, the block knows
+ * its directory hash, the cluster's vector resolves that hash, and the node it
+ * names is ANOTHER member. A resource this node is the directory for keeps its
+ * entry in this node's own table; that is not a wire matter. Caller holds
+ * vms_res_hash_lock (dir_resolve's documented context). Returns 1 when `p` is a
+ * post to make once the lock is dropped.
+ */
+static uint32_t vms_dlm_dir_removes_posted;    /* handed to the DLM arm  */
+static uint32_t vms_dlm_dir_removes_unposted;  /* the arm refused / absent */
+
+uint32_t vms_lock_dlm_dir_removes_posted(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_res_hash_lock);
+    n = vms_dlm_dir_removes_posted;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+uint32_t vms_lock_dlm_dir_removes_unposted(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_res_hash_lock);
+    n = vms_dlm_dir_removes_unposted;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+static int dlm_dir_remove_fill(const struct vms_lock_resource *res,
+                               struct vms_dlm_proxy_post *p)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    uint32_t dir = 0;
+
+    if (res->master_csid == 0 || res->master_csid != vms_local_csid)
+        return 0;
+    if (!res->hash_known || res->name[0] == '\0' || res->parent != NULL)
+        return 0;   /* only a ROOT resource has a directory entry */
+    if (ops.post == NULL || ops.dir_resolve == NULL)
+        return 0;   /* no cluster: no directory node to tell */
+    if (ops.dir_resolve(ops.ctx, res->dir_hash, &dir) != SS__NORMAL)
+        return 0;
+    if (dir == 0 || dir == vms_local_csid)
+        return 0;
+
+    memset(p, 0, sizeof(*p));
+    p->op         = VMS_DLM_POST_DIR_REMOVE;
+    p->dst_csid   = dir;
+    p->req_csid   = vms_local_csid;
+    p->master_csid = vms_local_csid;
+    strscpy(p->resnam, res->name, sizeof(p->resnam));
+    p->dir_hash       = res->dir_hash;
+    p->dir_hash_known = 1u;
+    p->res_group      = res->res_group;
+    p->res_acmode     = res->res_mode;
+    p->to_directory   = 1u;
+    return 1;
+}
+
 static void resource_release(struct vms_lock_resource *res)
 {
-    int i, has_valblk = 0;
+    int i, has_valblk = 0, dir_remove = 0;
     struct vms_lock_resource *parent = NULL;
+    struct vms_dlm_proxy_post rm;
 
     exec_lock(&vms_res_hash_lock);
     res->refcount--;
@@ -820,12 +892,29 @@ static void resource_release(struct vms_lock_resource *res)
          */
         if (!has_valblk && !(res->hash_known && !res->hash_computed)) {
             parent = res->parent;
+            dir_remove = dlm_dir_remove_fill(res, &rm);
             exec_hash_del(&res->hash_node);
             vms_res_blocks--;
             resource_free(res);
         }
     }
     exec_unlock(&vms_res_hash_lock);
+
+    /* rd vms-e09: the removal leaves after the lock is dropped (`post` must not
+     * be called where it could contend with the lock manager). A refusal is
+     * counted: the entry then outlives the resource, as it did before. */
+    if (dir_remove) {
+        struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+
+        int ok = ops.post != NULL && ops.post(ops.ctx, &rm) == SS__NORMAL;
+
+        exec_lock(&vms_res_hash_lock);
+        if (ok)
+            vms_dlm_dir_removes_posted++;
+        else
+            vms_dlm_dir_removes_unposted++;
+        exec_unlock(&vms_res_hash_lock);
+    }
 
     /* A freed sub-resource gives back the reference it held on its parent. */
     if (parent)

@@ -914,6 +914,128 @@ static void inbound_redirect(void)
 	vms_lock_cleanup();
 }
 
+/* $ENQ with NO wire-learned hash: the engine computes the proven one itself
+ * (rd vms-b5b0), so the resource block is reclaimed at its last lock. */
+static uint32_t do_enq_computed(struct vms_proc *proc, const char *resnam,
+				uint32_t lkmode, uint32_t *lkid_out)
+{
+	struct vms_enq_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkmode = lkmode;
+	strscpy(a.resnam, resnam, sizeof(a.resnam));
+	vms_ioctl_enq(proc, (unsigned long)(void *)&a);
+	if (lkid_out)
+		*lkid_out = a.lkid;
+	return a.status;
+}
+
+/*
+ * rd vms-e09: A MASTER THAT FREES ITS RESOURCE REMOVES ITS DIRECTORY ENTRY.
+ *
+ * Lab DC1b: OVMXA mastered F11B$sOVMXSYS on VAX1's 0xf9, freed it, and told
+ * nobody. VAX1 then sent OVMXB to OVMXA with an 0xf8, and OVMXA had nothing to
+ * serve. A real master sends the directory node a named op-0x04 as the
+ * resource goes (8106 real removals, PREDICTION.md R1/R3).
+ */
+static void e09_master_removes_its_directory_entry(void)
+{
+	struct vms_dlm_proxy_post enq, rm;
+	struct vms_proc proc;
+	uint32_t lkid = 0, st;
+	int before;
+
+	printf("--- rd vms-e09: the master removes its directory entry as the "
+	       "resource goes ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	st = do_enq_computed(&proc, "F11B$sE09SYS", LCK_K_EXMODE, &lkid);
+	ct_check(st == SS__NORMAL && lkid != 0,
+		 "$ENQ posts a lookup to the remote directory node");
+	if (!fm_wait_posts(1, &enq)) {
+		ct_check(0, "the lookup was posted");
+		vms_lock_dlm_set_requester_ops(NULL);
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check(enq.to_directory && enq.dst_csid == CSID_DIRECTORY &&
+		 enq.dir_hash_known,
+		 "the lookup goes to CSID 2 carrying a hash the engine holds");
+
+	/* The directory answers 0xf9: "nobody masters it -- you do". */
+	ct_check_eq_u32(vms_lock_dlm_assume_mastery("F11B$sE09SYS", lkid),
+			SS__NORMAL, "this node assumes mastery on the 0xf9");
+
+	pthread_mutex_lock(&fm.lock);
+	before = fm.posts;
+	pthread_mutex_unlock(&fm.lock);
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the last lock goes");
+	if (!fm_wait_posts(before + 1, &rm)) {
+		ct_check(0, "*** freeing the mastered resource posts something ***");
+		vms_lock_dlm_set_requester_ops(NULL);
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check_eq_u32(rm.op, VMS_DLM_POST_DIR_REMOVE,
+			"*** it is the directory-entry removal ***");
+	ct_check_eq_u32(rm.dst_csid, CSID_DIRECTORY,
+			"... to the directory node that holds the entry");
+	ct_check(strcmp(rm.resnam, "F11B$sE09SYS") == 0,
+		 "... for the resource that went");
+	ct_check(rm.dir_hash_known && rm.dir_hash == enq.dir_hash,
+		 "... with the hash the lookup carried (R1)");
+	ct_check(rm.res_group == enq.res_group &&
+		 rm.res_acmode == enq.res_acmode,
+		 "... and the identity the lookup carried (R1)");
+	ct_check_eq_u32(rm.req_lkid, 0u,
+			"it names no lock: the resource is gone");
+	ct_check_eq_u32(vms_lock_dlm_dir_removes_posted(), 1u,
+			"and the engine counted one removal posted");
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
+/* ...and NOTHING when this node is the directory itself, or not the master. */
+static void e09_no_removal_without_a_remote_entry(void)
+{
+	struct vms_proc proc;
+	uint32_t lkid = 0;
+	int before;
+
+	printf("--- rd vms-e09: no removal when no remote directory holds an "
+	       "entry naming this node ---\n");
+	configure_local_only();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	(void)do_enq_computed(&proc, "F11B$sE09OWN", LCK_K_EXMODE, &lkid);
+	pthread_mutex_lock(&fm.lock);
+	before = fm.posts;
+	pthread_mutex_unlock(&fm.lock);
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the lock goes");
+	usleep(50 * 1000);
+	pthread_mutex_lock(&fm.lock);
+	ct_check_eq_u32((uint32_t)fm.posts, (uint32_t)before,
+			"this node is the directory: nothing goes on the wire");
+	pthread_mutex_unlock(&fm.lock);
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -924,5 +1046,7 @@ int main(void)
 	master_idempotent_retransmit();
 	no_cluster_arm_refuses();
 	inbound_redirect();
+	e09_master_removes_its_directory_entry();
+	e09_no_removal_without_a_remote_entry();
 	return ct_summary("test_lock_proxy");
 }

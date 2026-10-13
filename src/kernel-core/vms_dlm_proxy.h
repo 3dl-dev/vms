@@ -75,6 +75,11 @@
 #define VMS_DLM_POST_ENQ     1u   /* a NEW lock request       -> wire op 0x01 */
 #define VMS_DLM_POST_CONVERT 2u   /* an existing lock's mode  -> wire op 0x07 */
 #define VMS_DLM_POST_DEQ     3u   /* release                  -> the DEQ path */
+/* rd vms-e09: a resource this node mastered is gone, so its entry at the
+ * (remote) directory node is removed -> wire op 0x04, never answered. Carries no
+ * lock id: the post names the resource (resnam, res_group, res_acmode, dir_hash)
+ * and the directory node (dst_csid), read off the resource block as it is freed. */
+#define VMS_DLM_POST_DIR_REMOVE 4u
 
 /*
  * THE UNSET LOCK ID. The executive's own convention throughout vms_lock.c: 0 is
@@ -452,6 +457,10 @@ uint32_t vms_lock_dlm_dir_hash_conflicts(void);
  * carries. A diagnostic reads it; nothing acts on it.
  */
 uint32_t vms_lock_dlm_dir_hash_computed_wrong(void);
+/* rd vms-e09: directory-entry removals the engine handed to the DLM arm as a
+ * mastered resource was freed, and those it could not hand over. */
+uint32_t vms_lock_dlm_dir_removes_posted(void);
+uint32_t vms_lock_dlm_dir_removes_unposted(void);
 
 /*
  * HOW MANY RESOURCES THIS EXECUTIVE COULD NOT ROUTE, and so mastered on THIS

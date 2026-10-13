@@ -6677,6 +6677,8 @@ static void test_6ec_founder_in_advertise_answers_the_relay(void)
 	(void)join_feed(req.wire_len);
 	ct_check_eq_u32(n_cm_sent(), before + 1u,
 			"*** the founder answers the relay from [ADVERTISE] ***");
+	if (n_cm_sent() == before)
+		return;   /* no answer: the last frame sent is not one to read */
 	sent = nth_sent(n_cm_sent() - 1u);
 	if (sent == NULL) {
 		ct_check(0, "the answer is readable");

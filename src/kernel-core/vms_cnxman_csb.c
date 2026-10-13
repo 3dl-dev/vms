@@ -1710,6 +1710,13 @@ void cnxman_csb_dialogue_sent(struct vms_csb *csb)
 	csb->cm_send_msg = (uint16_t)(csb->cm_send_msg + 1u);
 }
 
+void cnxman_csb_dialogue_unsent(struct vms_csb *csb)
+{
+	if (csb == NULL)
+		return;
+	csb->cm_send_msg = (uint16_t)(csb->cm_send_msg - 1u);
+}
+
 void cnxman_csb_transaction_opened(struct vms_csb *csb)
 {
 	if (csb == NULL)

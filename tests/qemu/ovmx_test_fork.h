@@ -33,6 +33,13 @@
 static inline pid_t ovmx_fork_kind_st(uint32_t kind, uint32_t *status)
 {
     int hold[2];
+    /* No executive (the CI executive-absent control): there is nothing to
+     * make a PCB with, so the child is a plain fork whose own service calls
+     * then fail honestly -- as ovmx_subprocess.h releases its child. */
+    if (vms_kif_open() < 0) {
+        if (status) *status = 0x908; /* SS$_NOSUCHDEV */
+        return fork();
+    }
     if (pipe(hold) != 0) {
         if (status) *status = 0x124; /* SS$_INSFMEM */
         return -1;
@@ -103,6 +110,10 @@ static inline pid_t ovmx_fork_detached_st(const char *uname, uint32_t uic, uint6
 {
     int gp[2], hold[2];
     int was_reaper = 0;
+    if (vms_kif_open() < 0) {        /* no executive: see ovmx_fork_kind_st */
+        if (status) *status = 0x908; /* SS$_NOSUCHDEV */
+        return fork();
+    }
     (void)prctl(PR_GET_CHILD_SUBREAPER, &was_reaper, 0, 0, 0);
     (void)prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
     if (pipe(gp) != 0 || pipe(hold) != 0) {

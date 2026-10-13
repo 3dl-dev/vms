@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 
 #include "ovmx_layout.h"
+#include "ovmx_subprocess.h"   /* children are subprocesses the executive made (rd vms-1f8) */
 
 #define TCPIP_CONFIG_DIR VMS_SYSTEM_DIR
 #define TCPIP_NS_DAT     TCPIP_CONFIG_DIR "/TCPIP$NAMESERVICE.DAT"
@@ -90,7 +91,9 @@ static int run_tcpip_cmd(const char *cmd_line)
     if (pipe(pipefd) < 0)
         return -1;
 
-    pid_t pid = fork();
+    /* The DCL that runs the command is a subprocess the executive made
+     * (rd vms-1f8), not a task that registers itself. */
+    pid_t pid = ovmx_subprocess_fork(NULL, NULL);
     if (pid < 0) {
         close(pipefd[0]);
         close(pipefd[1]);

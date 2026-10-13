@@ -342,6 +342,10 @@ target_compile_options(vms_tcpip_config PRIVATE
     -Wall -Wextra
 )
 
+# vmssys: its DCL child is a subprocess the executive makes (ovmx_subprocess.h,
+# vms_kif_creprc_pcb -- rd vms-1f8).
+target_link_libraries(vms_tcpip_config PRIVATE vmssys)
+
 set_target_properties(vms_tcpip_config PROPERTIES
     OUTPUT_NAME "TCPIP\$CONFIG"
     SUFFIX ".EXE"
@@ -497,7 +501,7 @@ target_compile_options(vms_sysman PRIVATE
 # vms-d34: includes sysgen_params.h directly for SYS$SYSTEM:OVMXVMSSYS.PAR.
 # vms-5f0: PARAMETERS USE/WRITE now ride the executive Files-11 ACP (RMS-over-ACP)
 # instead of a /vms fopen -- link vmsrms + force sysgen_acp.o (weak-ref pull).
-target_link_libraries(vms_sysman PRIVATE vmsrms vmsfs vmslnm)
+target_link_libraries(vms_sysman PRIVATE vmsrms vmsfs vmslnm vmssys)  # vmssys: DO's subprocess (rd vms-1f8)
 target_compile_definitions(vms_sysman PRIVATE OVMX_SYSGEN_ACP_STRONG)
 
 set_target_properties(vms_sysman PROPERTIES

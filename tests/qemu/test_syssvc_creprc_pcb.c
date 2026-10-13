@@ -13,7 +13,7 @@
  * detached identity its caller may not give.
  *
  * negctl: creprc-pcb-not-a-child, creprc-pcb-identity-unchecked,
- *         creprc-pcb-continue-not-shared
+ *         creprc-pcb-continue-not-shared, subprocess-helper-pcb-not-created
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +26,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_subprocess.h"   /* the in-tree forkers' helper (rd vms-1f8) */
 
 #define EXIT_SKIP 77
 
@@ -206,6 +207,47 @@ int main(void)
         release_and_reap(c, go_w, rep_r, &child_view);
         CHECK(child_view == me.vms_pid,
               "the task, reaching the executive, runs as the creator's VMS process");
+    }
+
+    /* 5. The shared helper every in-tree forker uses (ovmx_subprocess.h,
+     *    rd vms-1f8): the child it releases is the subprocess its creator made
+     *    -- the creator's identity, a VMS PID of its own -- not a task that
+     *    registered itself. */
+    {
+        int rp[2];
+        uint32_t pst = 0, vpid = 0, child_view = 0;
+        char child_user[sizeof(me.username)];
+        memset(child_user, 0, sizeof(child_user));
+        if (pipe(rp) == 0) {
+            pid_t c = ovmx_subprocess_fork(&pst, &vpid);
+            if (c == 0) {
+                struct vms_procinfo ci;
+                uint32_t v = 0;
+                close(rp[0]);
+                memset(&ci, 0, sizeof(ci));
+                if (vms_kif_getjpi_self(&ci) & 1)
+                    v = ci.vms_pid;
+                (void)!write(rp[1], &v, sizeof(v));
+                (void)!write(rp[1], ci.username, sizeof(ci.username));
+                _exit(0);
+            }
+            close(rp[1]);
+            if (c > 0) {
+                if (read(rp[0], &child_view, sizeof(child_view)) != (ssize_t)sizeof(child_view))
+                    child_view = 0;
+                if (read(rp[0], child_user, sizeof(child_user)) != (ssize_t)sizeof(child_user))
+                    child_user[0] = 0;
+                while (waitpid(c, NULL, 0) < 0 && errno == EINTR)
+                    ;
+            }
+            close(rp[0]);
+        }
+        /* negctl: subprocess-helper-pcb-not-created */
+        CHECK(pst == SS$_NORMAL && vpid != 0 && vpid != me.vms_pid,
+              "ovmx_subprocess_fork makes its child a new VMS process before releasing it");
+        CHECK(vpid != 0 && child_view == vpid &&
+                  strncmp(child_user, me.username, sizeof(child_user)) == 0,
+              "the helper's child is the subprocess its creator made (same VMS PID, the creator's user name)");
     }
 
     printf("=== test_syssvc_creprc_pcb: %d passed, %d failed ===\n", pass, fail);

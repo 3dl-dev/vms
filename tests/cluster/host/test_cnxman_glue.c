@@ -501,10 +501,10 @@ static void test_glue_bindings(void)
 	 * a number spec sec 4(j) grounds as strictly monotonic per sender.
 	 * The assignment now lives in cnxman_envelope_originate() alone.
 	 */
-	check_has("scs_send_msg(cn->cl->scs, csb->cdt_conid, body,",
+	check_has("cnxman_cm_send(cn, csb->cdt_conid, body, len)",
 		  "ops.send resolves the destination CSB's real CDT and hands "
 		  "off to SCS (E1)");
-	check_has("scs_send_msg(cn->cl->scs, csb->cdt_conid, body,",
+	check_has("cnxman_cm_send(cn, csb->cdt_conid, body, len)",
 		  "ops.send_csb does the same, addressed by CLUB slot (E73)");
 	check_absent("cnxman_csb_dialogue_sent(",
 		  "E73: no transport thunk assigns a send-msg# -- exactly one "
@@ -717,7 +717,7 @@ static void test_glue_bindings(void)
 	check_has("return cnxman_fsm_rc(scs_dir_lookup(",
 		  "E67: dir_inquire translates (the thunk whose untranslated "
 		  "SS$_NORMAL failed the join at step 2)");
-	check_has("rc = cnxman_fsm_rc(scs_send_msg(cn->cl->scs, conid, body, len));",
+	check_has("rc = cnxman_fsm_rc(cnxman_cm_send(cn, conid, body, len));",
 		  "E67: the join's send_msg translates");
 	/*
 	 * E70 -- the OTHER half of the same wall. Three promotion messages
@@ -789,7 +789,7 @@ static void test_glue_bindings(void)
 
 	check_has("return cnxman_fsm_rc(scs_disconnect(",
 		  "E67: disconnect translates");
-	check_has("return cnxman_fsm_rc(scs_send_msg(",
+	check_has("return cnxman_fsm_rc(cnxman_cm_send(",
 		  "E67: ops.send/ops.send_csb/ops.respond translate too, so an FSM that "
 		  "ever tests their result gets the right answer");
 
@@ -1134,7 +1134,15 @@ static void test_e8b_a_response_rides_its_own_connection(void)
 	check_before("cn->cur_conid = local_conid;",
 		     "cnxman_join_rx_body(&cn->join",
 		     "... BEFORE any FSM is offered the body");
-	check_has("scs_send_msg(cn->cl->scs, cn->cur_conid, body,",
+	/* rd vms-cd8: a refused CM send hands its number back, so the next
+	 * message to that peer does not skip one (lab94ag CNXMGRERR). */
+	check_has("cnxman_csb_dialogue_unsent(csb);",
+		  "rd vms-cd8: a refused body hands back its send-msg#");
+	check_has("st != (int)SS__NORMAL && st != (int)SS__ABORT",
+		  "... except SS$_ABORT, which may be a ring-held frame");
+	check_absent("scs_send_msg(cn->cl->scs, csb->cdt_conid",
+		     "... and no CM send bypasses cnxman_cm_send");
+	check_has("cnxman_cm_send(cn, cn->cur_conid, body, len)",
 		  "... and ops.respond answers on exactly that connection");
 	check_has("cn->cur_csb = csb;",
 		  "... and the CSB handed to the FSMs as `from_csb` is the one "

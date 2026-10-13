@@ -163,7 +163,8 @@
  * ORACLE-PINNED (lab-1 F$MESSAGE, design docs/design-logical-name-placement.md
  * §4.2, vms-556) exactly as src/kernel/vms_internal.h pins it. */
 #define SS__SUPERSEDE   1585        /* SS$_SUPERSEDE (a name was superseded) */
-#define SS__NOLOGNAM    444        /* SS$_NOLOGNAM (no such logical name) */
+#define SS__NOLOGNAM    444
+#define SS__NOLOGTAB    8852        /* SS$_NOLOGTAB (src/libvms/include/ssdef.h) */        /* SS$_NOLOGNAM (no such logical name) */
 #define SS__EXLNMQUOTA  8780       /* oracle-pinned lab-1 F$MESSAGE (arena full) */
 /*
  * Files-11 (ODS-2) ACP subset (rd vms-6a7f, epic vms-208): the six SS$ codes
@@ -501,6 +502,14 @@ struct vms_lock_entry {
 	uint32_t            master_csid;
 	uint32_t            master_lkid;
 	uint32_t            blkast_count;
+	/* The REMASTER ADOPTION that installed this lock (rd vms-14fd,
+	 * src/kernel-core/vms_dlm_adopt.h): the adoption's generation number on
+	 * a master-side LKB created while adopting a handed-over tree, 0 on
+	 * every other lock and on every completed adoption's locks. It is what
+	 * lets an abandoned adoption release EXACTLY what it installed. Mirror
+	 * of the Linux twin (src/kernel/vms_internal.h), where the full note
+	 * lives. */
+	uint32_t            adopt_gen;
 };
 
 /* Lock resource -- a named resource in the lock database. */
@@ -1014,9 +1023,20 @@ void vms_proc_rundown_asts(struct vms_proc *proc, uint8_t min_acmode);
  * every outer mode; vms_lnm_proc_gone applies image rundown (user mode) or
  * process deletion (all modes) for a PCB being torn down. */
 void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
-/* vms_lnm_forget_device deletes the LNM$SYSTEM names whose one equivalence is
+/* vms_lnm_forget_device deletes the LNM$SYSTEM and LNM$JOB names whose one equivalence is
  * `devnam` -- a mailbox's logical name goes when the mailbox does (vms-4a69). */
 void vms_lnm_forget_device(const char *devnam);
+/* rd vms-94a: the clusterwide tables (vms_lnm.c). Each applies one $CRELNT,
+ * $CRELNM or $DELLNM a cluster member propagated, and returns its VMS status. */
+int vms_lnm_cluster_init(void);
+uint32_t vms_lnm_cluster_other_members(void);   /* vms_devtab.c */
+uint32_t vms_lnm_cluster_crelnt(const char *tab, const char *parent,
+                                uint32_t attr, uint8_t acmode, uint32_t promsk);
+uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,
+                                uint32_t attr, uint8_t acmode, uint8_t nequiv,
+                                const struct vms_lnm_equiv *eq);
+uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
+                                uint8_t acmode);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 int  vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode);
@@ -1032,6 +1052,8 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_power(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_netcfg(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
 /* rd vms-bdc1: installed-image privileges at activation (vms_access.c) */
 uint64_t vms_kfe_exec_privs(const void *img);

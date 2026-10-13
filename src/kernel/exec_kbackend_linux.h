@@ -53,6 +53,7 @@
 #include <linux/timekeeping.h>    /* ktime_get_boottime_ns, ktime_get_real_ts64 */
 /* vms-31b (exec_current_uid/gid + block-device resolution) backing headers. */
 #include <linux/cred.h>           /* current_uid, current_gid */
+#include <linux/reboot.h>         /* kernel_power_off (exec_power_off, vms-137e) */
 #include <linux/uidgid.h>         /* from_kuid, from_kgid, init_user_ns */
 #include <linux/blkdev.h>         /* lookup_bdev, bdev_open_by_dev/bdev_file_open_by_dev */
 #include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
@@ -74,8 +75,10 @@
 /* vms-9d2 (primary Ethernet net device -> ETH0:) backing headers. */
 #include <linux/netdevice.h>      /* struct net_device, for_each_netdev, netif_carrier_ok */
 #include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
+#include <linux/sockios.h>        /* SIOCSIFADDR ... SIOCADDRT (exec_netcfg, vms-137e) */
 #include <net/net_namespace.h>    /* init_net */
 #include <linux/if_arp.h>         /* ARPHRD_ETHER */
+#include <linux/utsname.h>        /* init_utsname (exec_hw_model, vms-562ac) */
 /* vms-d61 (seqlock barriers + userspace-publishable arena) backing headers. */
 #include <linux/vmalloc.h>        /* vmalloc_user / vfree (exec_arena_*) */
 #include <asm/barrier.h>          /* smp_wmb / smp_rmb (exec_membar_*) */
@@ -281,6 +284,58 @@ typedef struct task_struct  exec_task_pin_t;   /* a pinned (referenced) task */
 
 static inline int exec_current_is_privileged(void) { return capable(CAP_SYS_ADMIN); }
 
+/* exec_power_off (rd vms-137e): the kernel's own power-off. */
+static inline void exec_power_off(void) { kernel_power_off(); }
+
+/* exec_netcfg (exec_kbackend.h section 5, rd vms-137e): the AF_INET network-
+ * configuration ioctl on a kernel socket, under the kernel's credentials (the
+ * caller holds no CAP_NET_ADMIN). `uptr` is the caller's own struct ifreq /
+ * struct rtentry; inet_ioctl reads (and for GET, writes) it in the caller's
+ * memory, as a userspace ioctl would. */
+static inline int exec_netcfg(uint32_t req, unsigned long uptr)
+{
+	struct socket *sock;
+	struct cred *kcred;
+	const struct cred *old;
+	unsigned int cmd;
+	int rc;
+
+	if (req == 4) {   /* VMS_NETCFG_GET_IFFLAGS: dev_ioctl's, not inet_ioctl's */
+		struct ifreq ifr;
+		struct net_device *dev;
+
+		if (copy_from_user(&ifr, (void __user *)uptr, sizeof(ifr)))
+			return -EFAULT;
+		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+		dev = dev_get_by_name(&init_net, ifr.ifr_name);
+		if (!dev)
+			return -ENODEV;
+		ifr.ifr_flags = (short)dev_get_flags(dev);
+		dev_put(dev);
+		return copy_to_user((void __user *)uptr, &ifr, sizeof(ifr)) ? -EFAULT : 0;
+	}
+	switch (req) {
+	case 1: /* VMS_NETCFG_SET_IFADDR */    cmd = SIOCSIFADDR;    break;
+	case 2: /* VMS_NETCFG_SET_IFNETMASK */ cmd = SIOCSIFNETMASK; break;
+	case 3: /* VMS_NETCFG_SET_IFFLAGS */   cmd = SIOCSIFFLAGS;   break;
+	case 5: /* VMS_NETCFG_ADD_ROUTE */     cmd = SIOCADDRT;      break;
+	case 6: /* VMS_NETCFG_DEL_ROUTE */     cmd = SIOCDELRT;      break;
+	default:                       return -EINVAL;
+	}
+	kcred = prepare_kernel_cred(&init_task);
+	if (!kcred)
+		return -ENOMEM;
+	old = override_creds(kcred);
+	rc = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, 0, &sock);
+	if (rc == 0) {
+		rc = sock->ops->ioctl(sock, cmd, uptr);
+		sock_release(sock);
+	}
+	revert_creds(old);
+	put_cred(kcred);
+	return rc;
+}
+
 /* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): make
  * `id` the CURRENT task's real/effective/saved/fs uid and gid, with no
  * supplementary groups and no capabilities. The executive does it, so the
@@ -294,6 +349,13 @@ static inline int exec_become_substrate_id(uint32_t id)
 
 	if (!new)
 		return -ENOMEM;
+	/* Linux credentials are per thread: changing only this one would leave
+	 * the process's other threads as they were (perhaps root). So only a
+	 * single-threaded process may change identity. */
+	if (!thread_group_empty(current)) {
+		abort_creds(new);
+		return -EBUSY;
+	}
 	if (!uid_valid(u) || !gid_valid(g)) {
 		abort_creds(new);
 		return -EINVAL;
@@ -856,6 +918,31 @@ static inline int exec_netdev_primary(char *name, unsigned int namesz, int *link
 	return found;
 }
 
+/* ---- 11b. this node's hardware model (rd vms-562ac; see exec_kbackend.h) ----
+ * Linux runs OVMX on non-VAX hardware only, so the honest model is the
+ * platform: "OVMX " + the kernel's own machine name (x86_64, aarch64, alpha).
+ * init_utsname() is the boot namespace's record, not a container's view. */
+static inline unsigned int exec_hw_model(char *out, unsigned int outsz)
+{
+	static const char pfx[] = "OVMX ";
+	const char *m = init_utsname()->machine;
+	unsigned int n = 0, i;
+
+	if (out == NULL || m == NULL || m[0] == '\0')
+		return 0;
+	for (i = 0; pfx[i] != '\0'; i++) {
+		if (n >= outsz)
+			return 0;
+		out[n++] = pfx[i];
+	}
+	for (i = 0; m[i] != '\0'; i++) {
+		if (n >= outsz)
+			return 0;   /* never truncated */
+		out[n++] = m[i];
+	}
+	return n;
+}
+
 /* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
  * Trivial forwarders to the exact barriers the logical-name seqlock used
  * before this seam existed (smp_wmb between the generation bumps and the entry
@@ -1084,6 +1171,25 @@ static inline int exec_socket_bind(exec_socket_t s, uint16_t family,
 	sa.sin_port = port_be;              /* network byte order, straight through */
 	sa.sin_addr.s_addr = addr_be;
 	return kernel_bind(s->sock, (struct sockaddr *)&sa, sizeof(sa));
+}
+
+/* exec_socket_bind_reserved (rd vms-137e): a port below 1024, which the
+ * substrate reserves to CAP_NET_BIND_SERVICE, bound as the kernel once the
+ * executive has checked the caller's VMS privilege (vms_ioctl_bg_bind). */
+static inline int exec_socket_bind_reserved(exec_socket_t s, uint16_t family,
+					    uint16_t port_be, uint32_t addr_be)
+{
+	struct cred *kcred = prepare_kernel_cred(&init_task);
+	const struct cred *old;
+	int rc;
+
+	if (!kcred)
+		return -ENOMEM;
+	old = override_creds(kcred);
+	rc = exec_socket_bind(s, family, port_be, addr_be);
+	revert_creds(old);
+	put_cred(kcred);
+	return rc;
 }
 
 static inline int exec_socket_listen(exec_socket_t s, int backlog)

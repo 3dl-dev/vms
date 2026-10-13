@@ -2516,6 +2516,49 @@ uint32_t vms_kif_native_page0(void)
 }
 
 /*
+ * vms_kif_power_off - ask the executive to power the system off
+ * (VMS_IOCTL_POWER, rd vms-137e). CMKRNL on this process's PCB; does not
+ * return when granted. Otherwise the executive's refusal.
+ */
+uint32_t vms_kif_power_off(void)
+{
+    struct vms_power_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    vms_memset(&args, 0, sizeof(args));
+    args.op = VMS_POWER_OP_OFF;
+    KIF_CALL(VMS_IOCTL_POWER, &args);
+    return args.status;
+}
+
+/*
+ * vms_kif_netcfg - apply a network-configuration request through the executive
+ * (VMS_IOCTL_NETCFG, rd vms-137e): `req` is VMS_NETCFG_*, `subst_req` the
+ * substrate's own request structure (Linux: struct ifreq / struct rtentry).
+ * SYSPRV or BYPASS on this process's PCB. *err gets the substrate errno when
+ * the status is SS$_ABORT (NULL OK).
+ */
+uint32_t vms_kif_netcfg(uint32_t req, void *subst_req, int *err)
+{
+    struct vms_netcfg_args args;
+
+    if (err)
+        *err = 0;
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    vms_memset(&args, 0, sizeof(args));
+    args.req = req;
+    args.uptr = (uint64_t)(uintptr_t)subst_req;
+    KIF_CALL(VMS_IOCTL_NETCFG, &args);
+    if (err)
+        *err = args.err;
+    return args.status;
+}
+
+/*
  * vms_kif_p1_protect - NOT an ioctl. See the header comment for why:
  * this wraps a real mprotect(2) on the caller's own address space, the
  * enforced half of the design's critical-P1 mechanism, and it has no
@@ -2779,6 +2822,11 @@ static int vms_kif_lnm_scope_of(uint32_t table, uint32_t *scope_key)
         *scope_key = 0u;
         return 1;
     }
+    /* rd vms-94a: a clusterwide table names its own id (vms_lnm.h). */
+    if (VMS_LNM_TBL_BASE(table) == VMS_LNM_TBL_CLUSTER) {
+        *scope_key = VMS_LNM_TBL_CLKEY(table);
+        return *scope_key != 0u;
+    }
     if (!vms_kif_lnm_myscope(&g, &j, &pk))
         return 0;
     *scope_key = table == VMS_LNM_TBL_GROUP ? g
@@ -2791,6 +2839,84 @@ int vms_kif_lnm_scope_key(uint32_t table, uint32_t *key)
     if (!key || !vms_kif_lnm_arena())
         return 0;
     return vms_kif_lnm_scope_of(table, key);
+}
+
+#define LNM_READ_TRIES_DIR 65536
+
+/*
+ * rd vms-94a: the table word of the clusterwide table called `name`
+ * (LNM$CLUSTER_TABLE, LNM$SYSCLUSTER_TABLE, or one a member created), read
+ * from the executive's own directory entries in the arena. 1 found, 0 not.
+ */
+int vms_kif_lnm_cluster_table(const char *name, uint32_t *table_word)
+{
+    struct vms_lnm_arena *a = vms_kif_lnm_arena();
+    int tries;
+
+    if (!a || !name || !table_word)
+        return 0;
+    for (tries = 0; tries < LNM_READ_TRIES_DIR; tries++) {
+        uint64_t g0 = lnm_gen_load(a);
+        uint32_t i, max, key = 0;
+
+        if (g0 & 1ULL)
+            continue;
+        max = a->max_entries;
+        if (max > VMS_LNM_MAX_ENTRIES)
+            max = VMS_LNM_MAX_ENTRIES;
+        for (i = 0; i < max; i++) {
+            const struct vms_lnm_entry *e = &a->entries[i];
+
+            if (e->in_use && e->table == VMS_LNM_TBL_CLUSTER_DIR &&
+                vms_strcasecmp(e->name, name) == 0) {
+                key = e->scope_key;
+                break;
+            }
+        }
+        if (lnm_gen_load(a) != g0)
+            continue;
+        if (key == 0u)
+            return 0;
+        *table_word = VMS_LNM_TBL_CLUSTER_OF(key);
+        return 1;
+    }
+    return 0;
+}
+
+/* rd vms-94a: the name of clusterwide table `key` (its directory entry). */
+int vms_kif_lnm_cluster_name(uint32_t key, char *out, uint32_t outsz)
+{
+    struct vms_lnm_arena *a = vms_kif_lnm_arena();
+    int tries;
+
+    if (!a || !out || outsz == 0u || key == 0u)
+        return 0;
+    for (tries = 0; tries < LNM_READ_TRIES_DIR; tries++) {
+        uint64_t g0 = lnm_gen_load(a);
+        uint32_t i, max;
+        int found = 0;
+
+        if (g0 & 1ULL)
+            continue;
+        max = a->max_entries;
+        if (max > VMS_LNM_MAX_ENTRIES)
+            max = VMS_LNM_MAX_ENTRIES;
+        for (i = 0; i < max; i++) {
+            const struct vms_lnm_entry *e = &a->entries[i];
+
+            if (e->in_use && e->table == VMS_LNM_TBL_CLUSTER_DIR &&
+                e->scope_key == key) {
+                vms_strncpy(out, e->name, outsz - 1u);
+                out[outsz - 1u] = '\0';
+                found = 1;
+                break;
+            }
+        }
+        if (lnm_gen_load(a) != g0)
+            continue;
+        return found;
+    }
+    return 0;
 }
 
 int vms_kif_lnm_present(void)
@@ -2859,7 +2985,8 @@ int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
          * returns the outermost of the rest (rd vms-ef21). */
         for (i = 0; i < max; i++) {
             const struct vms_lnm_entry *e = &a->entries[i];
-            if (!e->in_use || e->table != table || e->scope_key != scope_key)
+            if (!e->in_use || e->table != VMS_LNM_TBL_BASE(table) ||
+                e->scope_key != scope_key)
                 continue;
             if (e->acmode > max_acmode || !lnm_name_eq(e->name, name, case_blind))
                 continue;
@@ -3006,7 +3133,8 @@ int vms_kif_lnm_enumerate(uint32_t table,
             const struct vms_lnm_entry *e = &a->entries[i];
             uint8_t nv, k;
 
-            if (!e->in_use || e->table != table || e->scope_key != scope_key)
+            if (!e->in_use || e->table != VMS_LNM_TBL_BASE(table) ||
+                e->scope_key != scope_key)
                 continue;
             if (e->num_equiv == 0)
                 continue;

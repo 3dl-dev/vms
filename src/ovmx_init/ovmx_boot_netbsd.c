@@ -59,6 +59,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include "ovmx_boot.h"
 #include "kif_transport.h"   /* the executive transport seam (rd vms-bbde) */
 #include "ovmx_layout.h"          /* VMS_OPERATOR_LOG */
+#include "ovmx_console.h"         /* OVMX_CONSOLE_LINUX_PATH: OPA0:'s node (rd vms-137e) */
 #include "vmsfs/filespec.h"       /* vmsfs_to_linux_path for OPERATOR.LOG */
 
 #include <sys/types.h>
@@ -614,6 +615,26 @@ int ovmx_boot_prepare_stage_dir(const char *dir)
     ta.ta_root_mode = 0755;          /* root-owned, NOT world-writable */
     if (mount("tmpfs", dir, 0, &ta, sizeof ta) != 0 && errno != EBUSY)
         return -1;
+    /* The per-process private staging root (rd vms-137e): sticky and writable
+     * by every uid, not listable, so a process under its executive-given
+     * unprivileged uid makes its own 0700 directory there. chmod after mkdir:
+     * the umask must not strip the bits. */
+    if (mkdir(OVMX_BOOT_STAGE_USERS_DIR, 01733) != 0 && errno != EEXIST)
+        return -1;
+    if (chmod(OVMX_BOOT_STAGE_USERS_DIR, 01733) != 0)
+        return -1;
+    /* OPA0:'s node (OVMX_CONSOLE_LINUX_PATH, rd vms-137e): the console device,
+     * 0600 root, in this tmpfs, so PROVISION can hand it to the startup
+     * identity -- /dev/console sits on the root file system, read-only on a
+     * VAX, where its owner cannot change. */
+    {
+        struct stat cst;
+        if (stat("/dev/console", &cst) != 0 || !S_ISCHR(cst.st_mode))
+            return -1;
+        if (mknod(OVMX_CONSOLE_LINUX_PATH, S_IFCHR | 0600, cst.st_rdev) != 0 &&
+            errno != EEXIST)
+            return -1;
+    }
 
 
     /* The executive's own directory of installed-image copies (rd vms-220):
@@ -627,8 +648,21 @@ int ovmx_boot_prepare_stage_dir(const char *dir)
 void ovmx_boot_power_off(void)
 {
     sync();
+    if (geteuid() != 0)
+        (void)vms_kif_power_off();   /* not root (rd vms-137e): the executive does it */
     reboot(RB_HALT | RB_POWERDOWN, NULL);
     /* Only reached without privilege to power off; the caller then _exit()s. */
+}
+
+void ovmx_boot_note_threads(char *buf, size_t bufsz)
+{
+    (void)buf; (void)bufsz;
+}
+
+void ovmx_boot_stop_console_log_bridge(void)
+{
+    /* NetBSD credentials are per process: the klog reader leaves root with
+     * PID 1 (rd vms-137e). Nothing to stop. */
 }
 
 #endif /* __NetBSD__ */

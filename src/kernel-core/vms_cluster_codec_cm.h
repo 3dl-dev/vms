@@ -1469,13 +1469,24 @@ vms_codec_status_t vms_cm_relay_build(uint8_t tr_class, uint32_t epoch,
  *
  * Sec 4(o) step 6: "M->J cat 0x01 op 0x03 membership COMMIT request
  * (txn, cksum)" -- the message IS its transaction envelope; role slot 0x20 at
- * body[16] (sec 4(r)), class at body[17], epoch at body[12:16]. Everything
- * else zero. The subject is the peer this frame is addressed to, so unlike the
- * relay there is no missing identity here.
+ * body[16] (sec 4(r)), class at body[17], epoch at body[12:16].
+ *
+ * body[20:28] (rd vms-562ac): the coordinator's VMS time when it first commits
+ * this transition. Measured on every real op-0x03 in tests/lab/captures (41
+ * commits with a later open from the same coordinator): one value per
+ * transition -- the same in the commit to every recipient and in every
+ * retransmission (R2: 3 frames over 3.06 s, one value) -- and 0 to 70 ms
+ * before the STAMP the same coordinator's next open carries at body[40:48]
+ * (10 equal at the VAX's 10 ms clock grain, 25 later by 10..70 ms). `xtime` 0
+ * (no clock) leaves the field zero; the caller counts that omission.
+ * Everything else zero. The subject is the peer this frame is addressed to, so
+ * unlike the relay there is no missing identity here.
  *
  * STAMP with is_response=0: a genuine origination.
  */
+#define VMS_OFB_CM_COMMIT_TIME 20u   /* LE u64, VMS absolute time */
 vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
+				       uint64_t xtime,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);
 
@@ -1554,6 +1565,138 @@ vms_codec_status_t vms_cm_0b01_answer_build(const uint8_t *req_body,
 					    uint32_t *written);
 
 /*
+ * THE CLUSTERWIDE LOGICAL NAME OPERATION, cat 0x0b op 0x04 (rd vms-94a).
+ *
+ * MEASURED black-box (Rule 8) in tests/lab/captures/vms-94a-cwlnm-oracle-20261013.
+ * Real V7.3 nodes ran known DEFINE, DEASSIGN and CREATE/NAME_TABLE commands
+ * against LNM$SYSCLUSTER and LNM$CLUSTER_TABLE, and every record they moved
+ * was decoded against those commands (lnmrec.py: 20 records, 0 undecoded
+ * apart from the startup database pushes, which are op 0x06, not this).
+ *
+ * THE REQUEST names a buffer the same way a cat-0x06 close does: body[16:20]
+ * is the requester's buffer name, body[20:24] the recipient's own Con.ID, and
+ * body[32:36] the record length. body[24:28] is a per-requester sequence
+ * number. Every real recipient REQUEST DATAs the record and only then answers.
+ *
+ * THE RECORD is the system service's own argument list:
+ *   rec[0:2] total length    rec[2:4] function: 1 $CRELNM, 2 $CRELNT,
+ *                                               3 $DELLNM
+ *   rec[4:8] base address B  rec[8:12] argument count n
+ *   rec[12:12+4n]            argument pointers, B-relative, 0 = omitted
+ * The arguments come in the documented order: $CRELNM (attr, tabnam, lognam,
+ * acmode, itmlst); $CRELNT (attr, resnam, reslen, quota, promsk, tabnam,
+ * partab, acmode, plus a ninth argument this file does not read); and
+ * $DELLNM (tabnam, lognam, acmode). A descriptor argument is {u32 length,
+ * u32 pointer}. The item list is {u16 buflen, u16 code, u32 bufaddr,
+ * u32 retlen} entries ended by a zero longword, using code 2 LNM$_STRING and
+ * code 3 LNM$_ATTRIBUTES, where an ATTRIBUTES item applies to the strings
+ * after it.
+ *
+ * THE ANSWER is 0x8b/0x04. Real answers carry the requester's txn/token and
+ * otherwise only leftover buffer contents. Two real answers are zero past the
+ * envelope (rm380 137.965, both recipients), and that is the form built here.
+ */
+#define VMS_CM_OP_0B_LNM        0x04u
+#define VMS_OFB_CM_LNM_SEQ      24u
+#define VMS_OFB_CM_LNM_LEN      32u
+#define VMS_CM_LNM_FN_CRELNM    1u
+#define VMS_CM_LNM_FN_CRELNT    2u
+#define VMS_CM_LNM_FN_DELLNM    3u
+#define VMS_CM_LNM_MAX_STR      255u
+#define VMS_CM_LNM_MAX_EQUIV    8u
+#define VMS_CM_LNM_ITEM_STRING  2u
+#define VMS_CM_LNM_ITEM_ATTR    3u
+
+struct vms_cm_lnm_str {
+	uint16_t len;
+	uint16_t pad;
+	uint32_t attr;                     /* translation attributes (equiv) */
+	char     s[VMS_CM_LNM_MAX_STR + 1]; /* NUL-terminated copy           */
+};
+
+struct vms_cm_lnm_op {
+	uint8_t  fn;            /* VMS_CM_LNM_FN_*                          */
+	uint8_t  acmode;
+	uint8_t  has_name;      /* $DELLNM with no lognam: delete all       */
+	uint8_t  n_equiv;
+	uint32_t attr;          /* $CRELNM / $CRELNT attr argument (0 absent) */
+	uint32_t quota;         /* $CRELNT                                  */
+	uint32_t promsk;        /* $CRELNT                                  */
+	uint8_t  has_promsk;
+	uint8_t  pad[3];
+	struct vms_cm_lnm_str table;   /* tabnam                            */
+	struct vms_cm_lnm_str name;    /* lognam                            */
+	struct vms_cm_lnm_str parent;  /* $CRELNT partab                    */
+	struct vms_cm_lnm_str equiv[VMS_CM_LNM_MAX_EQUIV];
+};
+
+/* The descriptor of a cat-0x0b op-0x04 request: name, recipient Con.ID and
+ * length into out->name/conid/len (kind 0). VMS_CODEC_E_CLASS for any other
+ * body or a zero name, Con.ID or length. */
+vms_codec_status_t vms_cm_lnm_desc_parse(const uint8_t *req_body,
+					 uint32_t req_len,
+					 struct vms_cm_xfer_desc *out);
+
+/* Decode one moved record. Every pointer, descriptor and item must lie inside
+ * the record and every string must be 1..255 bytes, or the record is refused
+ * (VMS_CODEC_E_CLASS / E_RANGE) and nothing is applied. */
+vms_codec_status_t vms_cm_lnm_rec_parse(const uint8_t *rec, uint32_t len,
+					struct vms_cm_lnm_op *out);
+
+/*
+ * THE STARTUP DATABASE PULL (rd vms-94a). A node that has just joined asks ONE
+ * older member for the whole clusterwide logical-name database with a cat-0x0b
+ * op-0x05. The member answers 0x8b/0x05 (the echo with body[36:40] = 1), then
+ * sends a cat-0x0b op-0x06 naming a buffer, laid out like op 0x04's. The node
+ * REQUEST DATAs that buffer (one or more DATA frames, 0x0c then 0x0d) and
+ * answers 0x8b/0x04.
+ *
+ * THE REQUEST, measured on 12 of 12 real ones (lnm1, arm A, arm B and four
+ * rm380 runs): body[12:14] is the requester's own CSID high word and
+ * body[14:16] its low word (VAX2 csid 00010002 sends 01 00 02 00), and
+ * body[32:36] is 0x000091e8 in every one. Every other byte varies between
+ * requests as leftover buffer contents does, and is sent as zero.
+ *
+ * THE DATABASE (dbpush.py) is a 20-byte header {u16 length, u16 function 5,
+ * u32 1, u32 1, u32 record count, u32 0x00010001}, followed by that many
+ * records, each the op-0x04 record form with its own u16 length. Tables come
+ * first, parents before children, then the names. In lnm1, VAX3's 2000-byte
+ * push held the 7 tables and the 3 names VAX1 held at that moment (OVMXT1 =
+ * "B", OVMXT4 concealed, OVMXTEST_LONGNAME_2), each decoded equal to its
+ * command.
+ *
+ * VMS_CM_LNM_DB_MAX is 0x91e8 (37352) bytes, the value every real request
+ * carries. OVMX's pull buffer is that size, so a database that large fits
+ * whatever the field means.
+ */
+#define VMS_CM_OP_0B_DBREQ      0x05u
+#define VMS_CM_OP_0B_DBPUSH     0x06u
+#define VMS_OFB_CM_DBREQ_CSID   12u
+#define VMS_CM_LNM_FN_DB        5u
+#define VMS_CM_LNM_DB_HDR       20u
+#define VMS_CM_LNM_DB_MAX       0x91e8u
+
+/* The 0x0b/0x05 request this node sends. own_csid must be the CSID the
+ * cluster assigned this node. */
+vms_codec_status_t vms_cm_lnm_dbreq_build(uint32_t own_csid, uint8_t *out_body,
+					  uint32_t cap, uint32_t *written);
+
+/* Walk a pulled database. *cursor starts at 0. Returns VMS_CODEC_OK with
+ * the next record, VMS_CODEC_E_RANGE at the end, and anything else for a
+ * container this file does not recognise (nothing past it may be applied). */
+vms_codec_status_t vms_cm_lnm_db_next(const uint8_t *db, uint32_t len,
+				      uint32_t *cursor, const uint8_t **rec,
+				      uint32_t *rec_len);
+uint32_t vms_cm_lnm_db_count(const uint8_t *db, uint32_t len);
+
+/* The 0x8b/0x04 answer: the request's txn/token and category|0x80, op 0x04,
+ * zero elsewhere. STAMP with is_response=1. */
+vms_codec_status_t vms_cm_lnm_answer_build(const uint8_t *req_body,
+					   uint32_t req_len,
+					   uint8_t *out_body, uint32_t cap,
+					   uint32_t *written);
+
+/*
  * vms_cm_ack_build - a category-0x04 SYSAP acknowledgement (sec 4(u)):
  * "prompt, opportunistic, cumulative, and never keyed to an opcode". No
  * payload; body[9] is written 0x00 (sec 4(p): "An implementation should
@@ -1618,6 +1761,53 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
  *
  * STAMP with is_response=0.
  */
+/*
+ * WHAT A MEMBER'S PARAMS SAYS ABOUT ITS MEMBERSHIP (rd vms-d52c). MEASURED on
+ * 384 real PARAMS (161 from members -- body[18:20] != 0 -- and 223 from systems
+ * in no cluster):
+ *   body[12:14]  0x5021 from 156 of 161 members (0x5001 from the other 5);
+ *                never 0x21 from a system in no cluster
+ *   body[28:36]  the cluster's formation time (60/60 where checkable)
+ *   body[36:44]  the time of the last committed transition
+ *   body[44:48]  that transition's epoch (56/60)
+ *   body[64:72]  the sender's own membership time (the formation time from
+ *                the founder)
+ * A booting real VAX that hears a PARAMS without them from a system with a
+ * connection manager treats that system as clusterless and proposes FORMING
+ * a cluster with it (lab lab64b, order 2) -- so a member that cannot fill
+ * every one of them does not claim membership at all.
+ */
+#define VMS_OFB_CM_PSTATUS      12u   /* LE u16 */
+#define VMS_CM_PSTATUS_MEMBER   0x5021u
+#define VMS_OFB_CM_PFTIME       28u   /* LE u64 */
+#define VMS_OFB_CM_PLASTXITION  36u   /* LE u64 */
+#define VMS_OFB_CM_PLASTEPOCH   44u   /* LE u32 */
+#define VMS_OFB_CM_PJOINED      64u   /* LE u64 */
+struct vms_cm_member_state {
+	uint64_t ftime;
+	uint64_t last_xition;
+	uint64_t joined;
+	uint32_t last_epoch;
+};
+/* Write the member state into a PARAMS body vms_cm_params_build made.
+ * VMS_CODEC_E_INVAL when a time is 0 (nothing held is ever claimed). */
+vms_codec_status_t vms_cm_params_member_put(uint8_t *body, uint32_t cap,
+					    const struct vms_cm_member_state *ms);
+/*
+ * rd vms-d52c (the [26]=0 finding): write the sender's quorum
+ * (EXPECTED_VOTES + 2) / 2 at body[20:22] and its SYSGEN QDSKVOTES at
+ * body[24:26] (both grounded by rd vms-f297's controlled reconfiguration)
+ * into a PARAMS body vms_cm_params_build made. Real VAXes copy a peer's
+ * advertised QDSKVOTES into the opens they send it (op 0x07/0x08/0x09
+ * body[26]): 11 of 11 opens to OVMX carried 0 while OVMX's PARAMS left
+ * [24:26] zero, every open to a VAX carried that VAX's value. An
+ * EXPECTED_VOTES of 0 is not a configuration this node can hold, so
+ * VMS_CODEC_E_INVAL and nothing is written.
+ */
+vms_codec_status_t vms_cm_params_quorum_put(uint8_t *body, uint32_t cap,
+					    uint16_t expected_votes,
+					    uint16_t qdskvotes);
+
 vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 				       uint16_t lockdirwt,
 				       const struct vms_cm_node_params *own_params,
@@ -1636,6 +1826,24 @@ vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
  * body[40:52]) are deliberately absent: they are not constant even for the
  * node that emitted them, so reproducing them would assert a value no
  * implementation can derive.
+ *
+ * WHAT A REAL JOINER PUTS AT body[20:40], AND WHY OVMX SENDS ZERO (rd
+ * vms-562ac). On every real admission op 0x02 in tests/lab/captures (50,
+ * "00 02 00 00 01 00 xx 04" at [16:24]) the block [20:40] is the joiner's
+ * record of the LAST CLUSTER IT BELONGED TO, kept across reboots:
+ *   [22:28]  that cluster's founding SCSSYSTEMID (0x0401 = 1025, VAX1, on
+ *            disks cloned from the July lab image; 0x0406 = 1030 = OVMXE
+ *            after both VAXes had joined OVMXE's cluster in d52c run r3)
+ *   [28:36]  that cluster's formation time -- byte-equal to r3's FTIME
+ *            (r3's PARAMS body[28:36] and opens body[32:40]) in all four
+ *            db1 op-0x02s; one constant per disk image before that,
+ *            unchanged across days of reboots
+ *   [36:40]  a small count from the same record (2..4; changed with it)
+ * The record is the node's own history, not a property of the cluster it
+ * is joining. An OVMX node holds no persisted record of a previous cluster,
+ * so the honest value is the absent one -- all zero -- and every real
+ * coordinator has admitted OVMX with it (DC1, e09, d52c, db1). Writing any
+ * of these bytes would claim a cluster history this node does not have.
  *
  * STAMP with is_response=0.
  */
@@ -1783,7 +1991,9 @@ enum vms_cm_recipe {
 	 * mutation at body[16] and NOT the ECHO family's body[18] marker. */
 	VMS_CM_RECIPE_STEP_ACK,
 	/* rd vms-52d: the 0x8b/0x01 answer (vms_cm_0b01_answer_build). */
-	VMS_CM_RECIPE_0B01_ANSWER
+	VMS_CM_RECIPE_0B01_ANSWER,
+	/* rd vms-94a: the 0x8b/0x04 clusterwide logical-name answer. */
+	VMS_CM_RECIPE_LNM_ANSWER
 };
 
 /* ------------------------------------------------------------------ *

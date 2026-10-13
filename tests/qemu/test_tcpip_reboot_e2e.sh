@@ -110,11 +110,11 @@ if [ "$rc" -eq 0 ]; then
     record "boot 1: SYSTEM logs in (privileged)" "$rc"
 
     send "TCPIP SET ROUTE /DEFAULT /GATEWAY=$GW"; sleep 2
-    # SET ROUTE PERSISTS the route to TCPIP$ROUTE.DAT regardless of privilege (the
-    # rms_textfile write needs file access, not NET_ADMIN). The CI QEMU env lacks
-    # NET_ADMIN, so the live-table apply is skipped and the verb honestly reports
-    # "recorded ... but not applied" -- what matters for the reboot proof is that
-    # the route was RECORDED (persisted), which the count check below verifies.
+    # SET ROUTE PERSISTS the route to TCPIP$ROUTE.DAT (an RMS write over the ACP)
+    # and, for SYSTEM (SYSPRV), the executive also applies it to the live table
+    # (rd vms-137e); either way the verb names the store it recorded to. What
+    # matters for the reboot proof is that the route was RECORDED (persisted),
+    # which the count check below verifies.
     check "boot 1: SET ROUTE recorded the default route in TCPIP\$ROUTE.DAT" "$LOG1" "TCPIP\$ROUTE.DAT"
 
     # The store holds exactly one route record now.

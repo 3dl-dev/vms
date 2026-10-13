@@ -3535,6 +3535,10 @@ static int vc_resend_one(struct pe_fsm *f, struct pe_vc *vc,
 	if (vms_scs_seq_stamp(e->frame, e->len, &fi, vc->recv_seq, e->seq,
 			      vc_incarnation(vc)) != VMS_CODEC_OK)
 		return -1;
+	/* rd vms-c1d: a ringed block frame keeps its own port opcode. */
+	if (e->blk_op != 0u &&
+	    vms_blk_port_op_put(e->frame, e->len, e->blk_op) != VMS_CODEC_OK)
+		return -1;
 	if (pe_tx_from(f, e->frame, e->len) != 0)
 		return -1;
 	e->retransmits++;
@@ -4773,6 +4777,20 @@ static int blk_stamp_and_send(struct pe_fsm *f, struct pe_vc *vc,
 {
 	struct vms_frame_info fi;
 	uint16_t seq = vc->send_seq;
+	struct pe_vc_unacked *e = NULL;
+
+	/*
+	 * rd vms-c1d: A BLOCK FRAME THAT FITS THE RING IS RINGED. It takes a
+	 * sequence number like any other sequenced frame, so losing it leaves a
+	 * hole the peer will not move past: before this, one lost REQUEST DATA
+	 * (a VAX whose DECnet start changed its station address while OVMX was
+	 * still sending to the old one, lab52dfb) stopped the peer's acks and
+	 * broke the circuit on TIMVCFAIL. Ringed, go-back-N sends it again,
+	 * re-addressed to the circuit's current path (vc_readdress). Frames too
+	 * big for a ring slot, and a full ring, keep the unringed path, counted.
+	 */
+	if (op != 0u && total <= PE_VC_FRAME_MAX)
+		e = vc_ring_alloc(vc);
 
 	if (vms_frame_classify(frame, total, &fi) != VMS_CODEC_OK)
 		return PE_BLK_BADFRAME;
@@ -4790,14 +4808,37 @@ static int blk_stamp_and_send(struct pe_fsm *f, struct pe_vc *vc,
 	 * ungrounded and which is left exactly as it was.
 	 */
 	if (op != 0u &&
-	    vms_blk_port_op_put(frame, total, op) != VMS_CODEC_OK)
+	    vms_blk_port_op_put(frame, total, op) != VMS_CODEC_OK) {
+		if (e != NULL)
+			vc_ring_free(vc, e);
 		return PE_BLK_BADFRAME;
-	if (pe_tx_from(f, frame, total) != 0)
-		return PE_BLK_TXFAIL;
+	}
+	if (e != NULL) {
+		pe_copy(e->frame, frame, total);
+		e->len = total;
+		e->seq = seq;
+		e->blk_op = op;
+		e->due_ms = pe_now(f) + vc_retransmit_ms(f);
+		if (!vc->vcfail_armed)
+			vc_arm_vcfail(f, vc);
+		vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
+	}
+	if (pe_tx_from(f, frame, total) != 0) {
+		if (e == NULL)
+			return PE_BLK_TXFAIL;
+		/* Ringed: the number is taken and the ladder fills it. */
+		vc->send_seq = seq_next(seq);
+		vc->blk_tx++;
+		f->blk_tx_ringed++;
+		return PE_BLK_OK;
+	}
 
 	vc->send_seq = seq_next(seq);
 	vc->blk_tx++;
-	f->blk_tx_unringed++;
+	if (e != NULL)
+		f->blk_tx_ringed++;
+	else
+		f->blk_tx_unringed++;
 	return PE_BLK_OK;
 }
 

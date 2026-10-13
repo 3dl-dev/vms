@@ -403,6 +403,20 @@ vms_proc_create_boot_task(void)
 }
 
 /*
+ * vms_proc_create_boot_task - the boot task's PCB (rd vms-2a5), for
+ * ESTABLISH_SYSTEM's one call. On this substrate every ioctl still
+ * find-or-creates the caller's row (vms_proc_get) -- its removal, with the
+ * NetBSD guest harnesses moved onto a creator, is the second half of vms-2a5
+ * -- so the caller already has a row here and this is reached only through
+ * that path's equivalent.
+ */
+struct vms_proc *
+vms_proc_create_boot_task(void)
+{
+	return vms_proc_get(curlwp->l_proc->p_pid);
+}
+
+/*
  * vms_proc_continue_identity - stamp the calling task's REAL PARENT's executive
  * identity onto `proc' (a child PCB vms_proc_alloc() has just created and seeded
  * fresh) for VMS_IOCTL_REGISTER_CONTINUE. This is the NetBSD twin of
@@ -1174,6 +1188,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_SUBSTRATE_ID:   /* rd vms-ac48 */
 	case VMS_IOCTL_KFE:            /* rd vms-7c64: the known-file list */
 	case VMS_IOCTL_NATIVE_PAGE0:   /* rd vms-b869: CMKRNL, once, activator only */
+	case VMS_IOCTL_POWER:          /* rd vms-137e */
+	case VMS_IOCTL_NETCFG:         /* rd vms-137e */
 		uarg = data;
 		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1204,6 +1220,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_kfe(proc, (unsigned long)uarg);           break;
 		case VMS_IOCTL_NATIVE_PAGE0:
 			r = vms_ioctl_native_page0(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_POWER:
+			r = vms_ioctl_power(proc, (unsigned long)uarg);         break;
+		case VMS_IOCTL_NETCFG:
+			r = vms_ioctl_netcfg(proc, (unsigned long)uarg);        break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

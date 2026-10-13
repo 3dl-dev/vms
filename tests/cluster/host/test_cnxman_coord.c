@@ -46,6 +46,7 @@
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_coord_fsm.h"
 #include "vms_cluster_codec_cm.h"
+#include "vms_cluster_codec_dlm.h"
 #include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, RX specimen
 				  * assembly (FC-P3.15, design sec 3.2.4) */
 
@@ -780,6 +781,84 @@ static void test_relay_precedes_commit(void)
 	}
 	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_COMMIT,
 		 "still committing until the subject answers");
+}
+
+/*
+ * rd vms-562ac: body[20:28] of every op 0x03 is ONE VMS time per transition,
+ * read at the first commit -- the members' commits and the subject's, sent
+ * later, carry the same value (real R2: one value over 3.06 s of commits and
+ * retransmissions). No clock: the field stays zero and the omission counts.
+ */
+static uint64_t sent_le64(const struct sent_frame *s, uint32_t off)
+{
+	return (uint64_t)sent_le32(s, off) |
+	       ((uint64_t)sent_le32(s, off + 4u) << 32);
+}
+
+static void commit_drive(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_join_request(f);
+
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	drive_relay_acks(2);
+}
+
+static void test_commit_carries_one_transition_time(void)
+{
+	const uint64_t t0 = 0x00bc3e4f1c587120ull; /* armA's 773f commit time */
+	uint32_t k;
+
+	printf("\n-- every op 0x03 of a transition carries its commit time --\n");
+	bed_init(2);
+	g.fake.now_vms = t0;
+	commit_drive();
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 2,
+			"the two other members are committed");
+	g.fake.now_vms = t0 + 300000u;   /* 30 ms later: the clock moved on */
+	{
+		uint8_t f[VMS_CM_FRAME_LEN];
+		uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+
+		(void)coord_feed(&g.c, f, n, 1);
+		(void)coord_feed(&g.c, f, n, CSB_VAX2);
+	}
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 3,
+			"and then the subject");
+	for (k = 0; k < 3u; k++) {
+		const struct sent_frame *s =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, k);
+
+		char st[96];
+
+		ct_check(s != NULL && sent_le64(s, VMS_OFF_SYSAP_BODY +
+						   VMS_OFB_CM_COMMIT_TIME) == t0,
+			 "commit k carries the time of the FIRST commit");
+		if (s == NULL)
+			continue;
+		/* rd vms-562ac: the frame-conformance gate's cm_commit rows. */
+		snprintf(st, sizeof(st), "epoch=0x%x,class=0x%x,xtime=0x%llx",
+			 (unsigned)g.cl.club.epoch,
+			 (unsigned)VMS_CM_CLASS_ADD, (unsigned long long)t0);
+		conf_dump("cm_commit", VMS_OFF_SYSAP_BODY, st,
+			  s->bytes + VMS_OFF_SYSAP_BODY,
+			  s->len - VMS_OFF_SYSAP_BODY);
+	}
+	ct_check_eq_u32(g.c.commit_time_omitted, 0u, "nothing omitted");
+
+	bed_init(2);
+	g.fake.now_vms = 0u;
+	commit_drive();
+	{
+		const struct sent_frame *s =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0);
+
+		ct_check(s != NULL && sent_le64(s, VMS_OFF_SYSAP_BODY +
+						   VMS_OFB_CM_COMMIT_TIME) == 0u,
+			 "no clock: the commit time goes out zero");
+	}
+	ct_check(g.c.commit_time_omitted >= 1u,
+		 "...and the omission is counted, never filled");
 }
 
 /*
@@ -1902,6 +1981,20 @@ static void test_transition_readback(void)
 	ct_check_eq_u32(tr.coordinator_csid, OWN_CSID, "coordinator is us");
 }
 
+/* rd vms-6ec: a coordinator records the class it drives as this node's own
+ * transition class, the value its later answer to another coordinator's
+ * op-0x12 relay reports (lab DC2: a founder that only coordinated held none). */
+static void test_6ec_coordinator_records_its_own_class(void)
+{
+	printf("\n-- rd vms-6ec: the class this node drives is its own --\n");
+	bed_init(2);
+	ct_check_eq_u32(g.c.cl->club.own_tr_class, 0u,
+			"idle: this node has been through no transition");
+	drive_add_to_barrier(2);
+	ct_check_eq_u32(g.c.cl->club.own_tr_class, VMS_CM_CLASS_ADD,
+			"*** driving an addition makes 0x02 this node's class ***");
+}
+
 static void test_two_transitions_back_to_back(void)
 {
 	printf("\n-- a second transition gets its own epoch and census --\n");
@@ -2301,6 +2394,63 @@ static void test_f297_zero_weight_joiner_merges(void)
 	ct_check(f297_open_to(VAX2_CSID, &o), "the admission is proposed");
 	ct_check_eq_u32(o.cells.rebuild, VMS_CM_REBUILD_MERGE,
 			"[24] = 1, the merge rebuild");
+
+	/* rd vms-6e3: and a merge runs no barrier. Every participant acks
+	 * Phase 1; at the GO the transition is over -- no release is sent and
+	 * the coordinator lock is free. */
+	drive_open_acks(2);
+	ct_check(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_GO) > 0u,
+		 "the GO went out");
+	/* negctl: coord-merge-waits-for-steps */
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_COMPLETE,
+		 "*** a merge is complete at the GO ***");
+	ct_check_eq_u32(g.cl.club.transition_active, 0,
+			"  the coordinator lock is released");
+	ct_check_eq_u32(g.c.merges_completed, 1, "  counted as a merge");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER_REL),
+			0, "  and no barrier release was sent");
+}
+
+/*
+ * rd vms-6e3 residual: a member's 0x8b/0x05 (its answer to this node's
+ * cat-0x0b op-0x05 logical-name database request, ~0.9 s after every OVMX
+ * admission in lab r6e3a) carries opcode 0x05 in category 0x8b. It is not an
+ * 0x81/0x05 membership-record ack: the coordinator neither counts it nor
+ * consumes it, idle or waiting in RECORDS, and the router hands it on to the
+ * join FSM.
+ */
+static void test_0b05_answer_is_not_a_record_ack(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN], a[VMS_CM_FRAME_LEN];
+	uint32_t n, na;
+	uint32_t i, acks;
+
+	printf("\n-- a 0x8b/0x05 database answer is not a membership-record "
+	       "ack (rd vms-6e3) --\n");
+	bed_init(2);
+	na = mk_response(a, VMS_CM_CAT_0B, VMS_CM_OP_0B_DBREQ);
+	/* negctl: coord-0b05-read-as-record-ack */
+	ct_check(coord_feed(&g.c, a, na, 1) == CNXMAN_COORD_RX_NOT_MINE,
+		 "*** idle: handed on, not consumed ***");
+	ct_check_eq_u32(g.c.ignored_events, 0u,
+			"  and no 'no edge' event is counted");
+
+	(void)coord_feed(&g.c, f, mk_join_request(f), bed_join_csb(2));
+	drive_relay_acks(2);
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	for (i = 0; i < 2u; i++)
+		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_RECORDS,
+		 "the coordinator waits in RECORDS");
+	acks = g.c.membrec_acks;
+	(void)coord_feed(&g.c, a, na, bed_join_csb(2));
+	(void)coord_feed(&g.c, a, na, 1);
+	ct_check_eq_u32(g.c.membrec_acks, acks,
+			"*** RECORDS: a 0x8b/0x05 is not counted as a record "
+			"answer ***");
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_RECORDS,
+		 "  and the open still waits for the real answers");
 }
 
 /* rd vms-f297: the open waits for every membership record's answer, as a real
@@ -2543,6 +2693,61 @@ static void test_52d_startup_query_answered_from_csb(void)
 		 "a node that is not a member answers nothing");
 }
 
+/*
+ * rd vms-e09: the directory-entry removal exactly as cnxman_dlm_send puts it on
+ * the wire -- the FSM's body (vms_dlm_dir_remove_build), then the cluster's
+ * DLM sequence (vms_dlm_seq_put, as cnxman_dlm_seq_stamp), then a NOTIFY
+ * envelope on the directory node's CSB (the order test_dlm_scs_arm pins in the
+ * shipping glue). The conformance gate's `dlm_dir_remove` rows read this dump.
+ */
+static void test_e09_dir_remove_on_the_wire(void)
+{
+	struct vms_fixture real;
+	struct vms_dlm_res_ident id;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char path[600], err[256], state[32];
+	uint32_t written = 0;
+	uint16_t sent0;
+
+	printf("\n-- rd vms-e09: the removal's envelope opens no transaction --\n");
+	snprintf(path, sizeof(path), "%s/dlm-dir-remove-lnm1-mou.spec",
+		 OVMX_FIXTURE_DIR);
+	err[0] = '\0';
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, &real, err,
+			     sizeof(err)) != 0) {
+		printf("  FAIL could not load %s: %s\n", path, err);
+		ct_check(0, "the held-out real removal loads");
+		return;
+	}
+	ct_check(vms_dlm_res_ident_parse_body(real.bytes + VMS_OFF_SYSAP_BODY,
+					      VMS_CM_BODY_LEN, &id) ==
+		 VMS_CODEC_OK, "its identity reads");
+
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_dir_remove_build(&id, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the FSM's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence, as on every DLM message");
+	ct_check(vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "the glue reads it as a notification");
+	sent0 = m->cm_send_msg;
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_NOTIFY);
+	ct_check(b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0,
+		 "*** body[4:8] = 0: no transaction, as in 8106/8106 real removals ***");
+	ct_check(m->cm_send_msg != sent0,
+		 "it still takes the dialogue's next send-msg# (it is a CM message)");
+	snprintf(state, sizeof(state), "seq=%u", (unsigned)g.cl.club.dlm_seq);
+	conf_dump("dlm_dir_remove", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -2554,6 +2759,7 @@ int main(void)
 	test_already_coordinating_refuses();
 
 	test_relay_precedes_commit();
+	test_commit_carries_one_transition_time();
 	test_subject_answer_before_its_commit_is_ignored();
 	test_two_node_cluster_has_an_empty_relay_set();
 
@@ -2565,6 +2771,7 @@ int main(void)
 	test_count_commits_in_phase2_before_the_barrier();
 	test_the_go_is_a_notification();
 	test_52d_startup_query_answered_from_csb();
+	test_e09_dir_remove_on_the_wire();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();
@@ -2596,6 +2803,7 @@ int main(void)
 	test_foreign_frames_route_on();
 	test_slow_step_is_never_timed_out();
 	test_transition_readback();
+	test_6ec_coordinator_records_its_own_class();
 	test_two_transitions_back_to_back();
 	test_names();
 	test_1ac_relay_carries_the_current_epoch();
@@ -2606,6 +2814,7 @@ int main(void)
 	test_f297_each_missing_fact_refuses();
 	test_f297_a_rejected_record_abandons();
 	test_f297_open_waits_for_the_records();
+	test_0b05_answer_is_not_a_record_ack();
 	test_f297_zero_weight_joiner_merges();
 	test_f297_lost_fact_withholds_the_open();
 

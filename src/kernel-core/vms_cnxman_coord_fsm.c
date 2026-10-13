@@ -881,7 +881,14 @@ static void coord_send_commit(struct cnxman_coord *c, uint32_t i)
 	csb = coord_out_to(c, i, &dst);
 	if (csb == NULL)
 		return;
-	if (vms_cm_commit_build(c->tr_class, c->epoch, c->scratch,
+	/* One commit time per transition, taken at its first op 0x03 and
+	 * reused for every recipient and retransmission (rd vms-562ac). */
+	if (c->commit_time == 0u)
+		c->commit_time = coord_now_vms(c);
+	if (c->commit_time == 0u)
+		c->commit_time_omitted++;
+	if (vms_cm_commit_build(c->tr_class, c->epoch, c->commit_time,
+				c->scratch,
 				(uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
@@ -1141,6 +1148,21 @@ static enum cnxman_open_gap coord_open_rebuild(const struct cnxman_coord *c,
 		       ? (uint8_t)VMS_CM_REBUILD_MERGE
 		       : (uint8_t)VMS_CM_REBUILD_DIRECTORY;
 	return CNXMAN_OPEN_GAP_NONE;
+}
+
+/* Is the transition in progress an ADD whose open carries the MERGE rebuild
+ * type? The same derivation the open's body[24] came from (rd vms-6e3). */
+static int coord_is_merge(const struct cnxman_coord *c)
+{
+	uint8_t rb = 0u;
+
+	if (c->tr_class != VMS_CM_CLASS_ADD || c->subject_csb < 0 ||
+	    (uint32_t)c->subject_csb >= c->cl->club.n_csb)
+		return 0;
+	if (coord_open_rebuild(c, &c->cl->club.csb[c->subject_csb], &rb) !=
+	    CNXMAN_OPEN_GAP_NONE)
+		return 0;
+	return rb == VMS_CM_REBUILD_MERGE;
 }
 
 /* The lowest / highest slot in the post-transition nodemap. */
@@ -1454,6 +1476,7 @@ static void coord_claim_club(struct cnxman_coord *c)
 	 */
 	c->epoch = club->epoch;
 	c->epoch_advanced = 0u;
+	c->commit_time = 0u;
 	club->transition_active = 1u;
 	club->transition_class = c->tr_class;
 	club->we_coordinate = 1u;
@@ -1700,6 +1723,19 @@ static void coord_try_go(struct cnxman_coord *c)
 	coord_fanout(c, coord_send_go);
 	coord_commit_phase2(c);
 
+	/*
+	 * A MERGE REBUILD HAS NO BARRIER (rd vms-6e3; the participant side's
+	 * note in vms_cnxman_barrier_fsm.c barrier_h_go() carries the census).
+	 * No real participant reports a step in one and no real coordinator
+	 * releases one, so a coordinator that waited for step 1 here would
+	 * hold the transition -- and the coordinator lock -- forever.
+	 */
+	if (coord_is_merge(c)) {
+		c->merges_completed++;
+		coord_finish(c);
+		return;
+	}
+
 	c->state = (uint8_t)CNXMAN_COORD_BARRIER;
 	c->step = 1u;
 	c->cl->club.barrier_step = 1u;
@@ -1818,6 +1854,9 @@ static int coord_open_transition(struct cnxman_coord *c, uint8_t tr_class,
 	}
 
 	coord_claim_club(c);
+	/* This node's own class is now the one it is driving (rd vms-6ec): a
+	 * later op-0x12 relay from another coordinator is answered with it. */
+	c->cl->club.own_tr_class = tr_class;
 	c->transitions_driven++;
 	coord_dlm_begin(c);
 	return 0;
@@ -2286,6 +2325,19 @@ static enum cnxman_event coord_event_of_response(const struct coord_msg *m)
 			return CNXMAN_EV_RX_TR_ACK;
 		return CNXMAN_EV__COUNT;
 	}
+	/*
+	 * Only a CONFIG (0x81) answer is a transition acknowledgement (rd
+	 * vms-6e3 residual). The opcodes below are cat-0x01 opcodes; the same
+	 * numbers in another category are other messages. The member's 0x8b/0x05
+	 * -- its answer to this node's cat-0x0b op-0x05 logical-name database
+	 * request, about 0.9 s after every OVMX admission (lab r6e3a: OVMXE
+	 * 2.437 s, OVMXB 326.477 s) -- read as an 0x81/0x05 membership-record
+	 * ack: logged as "no edge" when idle, and while this node waits in
+	 * RECORDS it would have counted as a record answer the subject never
+	 * sent. It belongs to the join FSM (cnxman_join_rx_lnm).
+	 */
+	if (m->env.category != vms_wire_response_category(VMS_CM_CAT_CONFIG))
+		return CNXMAN_EV__COUNT;
 	switch (m->env.opcode) {
 	case VMS_CM_OP_RELAY:       /* 0x81/0x12: connectivity confirmed  */
 	case VMS_CM_OP_COMMIT:      /* 0x81/0x03: the subject committed   */

@@ -241,6 +241,23 @@
  *        kauth "is-superuser". This is a REAL host credential, not a value a
  *        process can grant itself (vms_ioctl_establish_system's gate).
  *
+ *   void exec_power_off(void)
+ *        power the system off (rd vms-137e); does not return. Linux:
+ *        kernel_power_off. NetBSD: kern_reboot(RB_HALT|RB_POWERDOWN).
+ *
+ *   int  exec_netcfg(uint32_t req, unsigned long uptr)
+ *        perform the network-configuration request VMS_NETCFG_* whose substrate
+ *        structure is at `uptr` in the CALLER's memory, as the kernel (rd
+ *        vms-137e; the caller's VMS privilege is checked first). 0 or -errno;
+ *        -EOPNOTSUPP where the substrate has no such request. Linux: the AF_INET
+ *        ioctl (SIOCSIFADDR/SIOCSIFNETMASK/SIOC[GS]IFFLAGS/SIOC{ADD,DEL}RT) on
+ *        a kernel socket under the kernel's credentials. NetBSD: -EOPNOTSUPP.
+ *
+ *   int  exec_socket_bind_reserved(exec_socket_t s, uint16_t family,
+ *                                  uint16_t port_be, uint32_t addr_be)
+ *        exec_socket_bind for a reserved port (< 1024), as the kernel, once the
+ *        caller's VMS privilege allowed it (rd vms-137e).
+ *
  *   int  exec_become_substrate_id(uint32_t id)
  *        make `id` the CURRENT task's real/effective/saved uid and gid, with
  *        no supplementary groups and no capabilities (rd vms-ac48). Done by the
@@ -509,6 +526,17 @@
  *        exec_lan_open precedent) -- IFNET_READER_FOREACH(ifp) inside a
  *        pserialize_read_enter()/_exit() section, skipping IFT_LOOP and
  *        requiring IFT_ETHER, taking the first match.
+ *
+ *   unsigned int exec_hw_model(char *out, unsigned int outsz)  (rd vms-562ac)
+ *        this node's REAL hardware model, as the text the cluster's op-0x14
+ *        model record advertises (conductor ruling on honest identity: OVMX
+ *        names the hardware it really runs on, never a copied VAX model).
+ *        A VAX substrate answers the VAX model its own kernel reports
+ *        (NetBSD/vax: cpu_getmodel(), "MicroVAX 3800/3900" on a SIMH KA655);
+ *        any other substrate answers "OVMX <machine>" from its own kernel's
+ *        machine name (Linux: init_utsname()->machine; NetBSD: machine_arch).
+ *        Returns the length written, NOT NUL-terminated; 0 when the text does
+ *        not fit `outsz` -- never truncated -- or the substrate reports none.
  *
  * 12. Host TCP client socket  (vms-9951; called ONLY from the BGn: INET facility,
  *    src/kernel-core/vms_bg.c -- the executive-resident network pseudo-device,

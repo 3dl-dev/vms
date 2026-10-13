@@ -591,6 +591,16 @@ struct vms_resmaster_args {
                                   * over the two readback ioctls (GET_GRANTED +
                                   * DLM_ENUM_WAITS) and never enter the executive. */
 
+#define VMS_DLM_OP_CONVERT  7u   /* a remote holder CONVERTS a lock this node
+                                  * masters, named by the handle THIS node minted
+                                  * (rd vms-14fd). Its own op because a convert
+                                  * names a LOCK, not a NAME: the ENQ path
+                                  * resolves by name at the top of the tree and so
+                                  * cannot convert a SUB-RESOURCE lock, which is
+                                  * what a remastered tree is full of. Falls back
+                                  * to the ENQ path when the handle names no lock
+                                  * of ours. OVMX design choice (Rule 8). */
+
 /* DLKSRCH phase, carried in vms_dlm_xnode_args.flags (mirror of SCS_DLM_DLK_* in
  * scs_dlm.h). Only VICTIM ever reaches the executive dispatch. */
 #define VMS_DLM_DLK_SEARCH_HOLDER   0u
@@ -3717,6 +3727,39 @@ struct vms_substrate_id_args {
     uint32_t reserved;
 };
 #define VMS_IOCTL_SUBSTRATE_ID _IOWR(VMS_IOC_MAGIC, 0xB1, struct vms_substrate_id_args)
+
+/* Power the system off (rd vms-137e): the startup process's halt, as an
+ * executive service gated by CMKRNL on the caller's PCB instead of the
+ * substrate's CAP_SYS_BOOT. Does not return when granted. */
+struct vms_power_args {
+    uint32_t op;          /* VMS_POWER_OP_OFF */
+    uint32_t status;      /* return: SS$_NOPRIV / SS$_BADPARAM */
+};
+#define VMS_POWER_OP_OFF  1
+#define VMS_IOCTL_POWER _IOWR(VMS_IOC_MAGIC, 0xB3, struct vms_power_args)
+
+/* Network configuration through the executive (rd vms-137e): TCP/IP's
+ * SET INTERFACE / SET ROUTE apply an address, mask, interface flags or a route
+ * for a caller holding SYSPRV or BYPASS, the executive acting as the kernel --
+ * not the substrate's CAP_NET_ADMIN, which no OVMX process holds. `uptr` is the
+ * caller's own substrate request (Linux: struct ifreq / struct rtentry), passed
+ * straight to the substrate's network stack. */
+struct vms_netcfg_args {
+    uint32_t req;         /* VMS_NETCFG_* */
+    uint32_t status;      /* return: SS$_NOPRIV / SS$_BADPARAM / SS$_UNSUPPORTED / SS$_ABORT */
+    uint64_t uptr;        /* in: the substrate request, in the caller's memory */
+    int32_t  err;         /* return: the substrate's errno when status is SS$_ABORT */
+    uint32_t reserved;
+};
+#define VMS_NETCFG_SET_IFADDR    1
+#define VMS_NETCFG_SET_IFNETMASK 2
+#define VMS_NETCFG_SET_IFFLAGS   3
+#define VMS_NETCFG_GET_IFFLAGS   4
+#define VMS_NETCFG_ADD_ROUTE     5
+#define VMS_NETCFG_DEL_ROUTE     6
+#define VMS_IOCTL_NETCFG _IOWR(VMS_IOC_MAGIC, 0xB4, struct vms_netcfg_args)
+_Static_assert(sizeof(struct vms_netcfg_args) == 24,
+               "vms_netcfg_args layout changed: VMS_IOCTL_NETCFG ABI break");
 _Static_assert(sizeof(struct vms_substrate_id_args) == 16,
                "vms_substrate_id_args layout changed: VMS_IOCTL_SUBSTRATE_ID ABI break");
 

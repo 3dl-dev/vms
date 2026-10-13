@@ -90,6 +90,7 @@
                               * vms_acct_rss_netbsd.c, rd vms-601). */
 #include <sys/kauth.h>     /* kauth_cred_get, kauth_authorize_generic (Phase F) */
 #include <sys/uio.h>       /* UIO_SYSSPACE (exec_become_substrate_id, vms-ac48) */
+#include <sys/reboot.h>    /* kern_reboot, RB_HALT, RB_POWERDOWN (exec_power_off, vms-137e) */
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
 #include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
@@ -464,6 +465,18 @@ extern int ovmx_task_rss_pages(struct proc *p, uint64_t *pages_out);
  * section is then honestly omitted, never a fabricated 0.
  */
 extern int ovmx_sysmem_bytes(uint64_t *total_bytes, uint64_t *free_bytes);
+
+/* exec_power_off (rd vms-137e): the kernel's own halt + power-down. */
+static __inline void exec_power_off(void) { kern_reboot(RB_HALT | RB_POWERDOWN, NULL); }
+
+/* exec_netcfg (rd vms-137e): not yet on this substrate -- an honest
+ * SS$_UNSUPPORTED to the caller, never a pretend success. */
+static inline int
+exec_netcfg(uint32_t req, unsigned long uptr)
+{
+	(void)req; (void)uptr;
+	return -EOPNOTSUPP;
+}
 
 /* exec_become_substrate_id (exec_kbackend.h section 5, rd vms-ac48): set the
  * current process's real/effective/saved uid and gid to `id`, no groups. The
@@ -858,6 +871,39 @@ exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
  * header comment), so the real body needs a TU that does not include
  * vms_internal.h. Declared extern here; defined in vms_lan_netbsd.c. */
 int exec_netdev_primary(char *name, unsigned int namesz, int *link_up);
+
+/* ---- 11b. this node's hardware model (rd vms-562ac; see exec_kbackend.h) ----
+ * On a VAX the substrate's own model name, the one NetBSD/vax prints at boot
+ * (cpu_getmodel(), <sys/cpu.h>: "MicroVAX 3800/3900" on a SIMH KA655). Any
+ * other NetBSD port: "OVMX " + machine_arch (<sys/systm.h>). */
+#if defined(__vax__)
+#include <sys/cpu.h>       /* cpu_getmodel */
+#endif
+static inline unsigned int exec_hw_model(char *out, unsigned int outsz)
+{
+#if defined(__vax__)
+	static const char pfx[] = "";
+	const char *m = cpu_getmodel();
+#else
+	static const char pfx[] = "OVMX ";
+	const char *m = machine_arch;
+#endif
+	unsigned int n = 0, i;
+
+	if (out == NULL || m == NULL || m[0] == '\0')
+		return 0;
+	for (i = 0; pfx[i] != '\0'; i++) {
+		if (n >= outsz)
+			return 0;
+		out[n++] = pfx[i];
+	}
+	for (i = 0; m[i] != '\0'; i++) {
+		if (n >= outsz)
+			return 0;   /* never truncated */
+		out[n++] = m[i];
+	}
+	return n;
+}
 
 /* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
  * Real mapping: membar_producer/membar_consumer are the portable NetBSD

@@ -761,6 +761,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_dlm_dir.c           # rd vms-8219
     hdr_alone_vms_dlm_echo_guard.c    # rd vms-b5b0
     hdr_alone_vms_dlm_pending.c       # rd vms-f87
+    hdr_alone_vms_dlm_adopt.c         # rd vms-14fd
     hdr_alone_vms_dlm_hash.c          # rd vms-66fe
     hdr_alone_vms_cnxman_csb.c        # FC-P3.6
     hdr_alone_vms_cnxman_recnx_fsm.c  # FC-P3.6
@@ -862,6 +863,25 @@ target_link_libraries(test_lock_host PRIVATE cluster_host_lock Threads::Threads)
 add_test(NAME cluster_host_test_lock_host COMMAND test_lock_host)
 set_tests_properties(cluster_host_test_lock_host PROPERTIES
     LABELS "unit;cluster;cluster_host;lock"
+    TIMEOUT 30
+)
+
+# ---- rd vms-14fd: THE ENGINE ADOPTS A REMASTERED TREE, on the same real
+# engine + host backend as test_lock_host (lock_shim/ FIRST on the include
+# path). Drives src/kernel-core/vms_dlm_adopt.h's door and then the shipping
+# master seam over the locks it installed.
+add_executable(test_dlm_adopt test_dlm_adopt.c)
+target_include_directories(test_dlm_adopt PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_dlm_adopt PRIVATE cluster_host_lock Threads::Threads)
+
+add_test(NAME cluster_host_test_dlm_adopt COMMAND test_dlm_adopt)
+set_tests_properties(cluster_host_test_dlm_adopt PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
     TIMEOUT 30
 )
 
@@ -1099,7 +1119,7 @@ set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
 # types refuse to start unless this passes (tests/lab/tools/fire_gate.sh).
 add_test(NAME cluster_frame_conformance_gate
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_gate.sh"
-        "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp
+        "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
@@ -1131,4 +1151,28 @@ add_test(NAME cluster_host_scs_join_timeline
 set_tests_properties(cluster_host_scs_join_timeline PROPERTIES
     LABELS "unit;cluster;cluster_host;scs"
     TIMEOUT 60
+)
+
+# ---- rd vms-94a: the executive's CLUSTERWIDE logical-name tables -----------
+# src/kernel-core/vms_lnm.c compiled UNCHANGED on the host, the way vms_lock.c
+# is above: lnm_shim/ FIRST redirects its "vms_internal.h" to
+# lnm_host_internal.h and its backend to exec_kbackend_host.h; src/kernel
+# supplies the portable vms_ioctl.h / vms_lnm.h.
+add_executable(test_lnm_cluster test_lnm_cluster.c
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_lnm.c
+    exec_kbackend_host.c)
+target_include_directories(test_lnm_cluster PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lnm_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(test_lnm_cluster PRIVATE Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_lnm_cluster PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME cluster_host_test_lnm_cluster COMMAND test_lnm_cluster)
+set_tests_properties(cluster_host_test_lnm_cluster PROPERTIES
+    LABELS "unit;cluster;cluster_host;lnm"
+    TIMEOUT 30
 )

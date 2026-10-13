@@ -111,6 +111,18 @@ int ovmx_boot_mount_kernel_filesystems(void);
  */
 void ovmx_boot_start_console_log_bridge(void);
 
+/* ovmx_boot_stop_console_log_bridge - before PID 1 leaves substrate root
+ * (rd vms-137e). Linux: end and join the kmsg reader thread (credentials are
+ * per thread there, and the executive changes identity only for a single-
+ * threaded process). NetBSD: nothing -- a process's credentials are shared by
+ * all its LWPs, so the klog reader leaves root with it. */
+void ovmx_boot_stop_console_log_bridge(void);
+
+/* ovmx_boot_note_threads - append " <tid>:<name>" for each thread of this
+ * process to `buf` (a diagnostic for a refused identity change, rd vms-137e).
+ * NetBSD: appends nothing (credentials there are per process). */
+void ovmx_boot_note_threads(char *buf, size_t bufsz);
+
 /*
  * ovmx_boot_mute_kernel_console - lower the substrate kernel's OWN console
  * log level so routine module printk (KERN_INFO and below) stops reaching

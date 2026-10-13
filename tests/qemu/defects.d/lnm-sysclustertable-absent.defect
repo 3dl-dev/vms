@@ -1,0 +1,45 @@
+# lnm-sysclustertable-absent -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the executive's clusterwide logical-name tables (LNM\$SYSCLUSTER_TABLE / LNM\$CLUSTER_TABLE, vms_lnm_cluster_init), rd vms-94a";;
+        targets)      echo "kernel-core/vms_lnm.c";;
+        suites_red)   echo "test_syssvc_lnm_cluster";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lnm_cluster_init() no longer creates LNM\$SYSCLUSTER_TABLE, so the table LNM\$SYSCLUSTER names does not exist in this node's executive: it no longer resolves, and nothing can be defined in it.";;
+        require_fail) cat <<'EOF'
+LNM$SYSCLUSTER_TABLE resolves to an executive clusterwide table
+$CRELNM in LNM$SYSCLUSTER succeeds on a node in no cluster
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+LNM$CLUSTER_TABLE resolves to a different one
+$TRNLNM in LNM$SYSCLUSTER_TABLE reads index 0 back
+$TRNLNM through LNM$SYSCLUSTER reads index 1 of the same name
+the vmslnm manager (DCL's path) reads the same executive name
+$DELLNM removes it
+a second $DELLNM is SS$_NOLOGNAM
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+ONE MISSING TABLE, OBSERVED AT EVERY STEP THAT USES IT. With no
+LNM$SYSCLUSTER_TABLE, the define fails, so every read-back and delete of
+that name fails too. "LNM$CLUSTER_TABLE resolves to a different one" fails
+only because its comparison reads w1, which the first check left at 0. The
+LNM$CLUSTER_TABLE lookup itself still succeeds. Every one of these follows
+from the single absence.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the SYSCLUSTER creation in vms_lnm_cluster_init.
+        sed -i 's|    if ((st \& 1u) \&\& !lnm_cl_table("LNM$SYSCLUSTER_TABLE"))|    if (0 \&\& (st \& 1u) \&\& !lnm_cl_table("LNM$SYSCLUSTER_TABLE")) /* NEGCTL lnm-sysclustertable-absent */|' "$_file"
+
+    :
+}

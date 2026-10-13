@@ -19,21 +19,14 @@
  * fails honestly with SS$_NOSUCHDEV (propagated from vms_kif_mbx_*), never
  * a private substitute.
  *
- * RENDEZVOUS. A named mailbox's logical name is defined in LNM$SYSTEM
- * (executive-resident since vms-d37), not LNM$PROCESS_TABLE as the
- * userspace-only implementation used: a name in LNM$PROCESS is invisible
- * to every other process, so it could never let an unrelated process find
- * this mailbox at all -- defeating the one thing $CREMBX's logical-name
- * argument exists for. STATED AS AN OVMX DESIGN CHOICE: on genuine VMS,
- * $CREMBX's logical name lands in the caller's LNM$PROCESS_TABLE by
- * default, and only reaches LNM$SYSTEM under an explicit
- * /TABLE=LNM$SYSTEM-equivalent qualifier plus SYSNAM or SYSPRV privilege.
- * This implementation always targets LNM$SYSTEM when a name is given
- * (requiring the same privilege the executive already gates LNM$SYSTEM
- * mutation with, vms-5b7) -- a real, disclosed deviation, not a hidden
- * one, made because OVMX has no /TABLE qualifier plumbed through this
- * call's signature yet and a mailbox name nobody outside this process can
- * look up is not a rendezvous mechanism.
+ * RENDEZVOUS. A named mailbox's logical name goes where VMS puts it
+ * (OpenVMS System Services Reference, $CREMBX lognam; rd vms-7dd): a
+ * temporary mailbox's in the table LNM$TEMPORARY_MAILBOX names (LNM$JOB, so
+ * the creator's whole job -- its subprocesses -- finds it), a permanent
+ * mailbox's in the table LNM$PERMANENT_MAILBOX names (LNM$SYSTEM). Both
+ * tables are executive-resident (vms-d37), and the name goes with the mailbox
+ * (vms_lnm_forget_device, vms-4a69). It used to land in LNM$SYSTEM for every
+ * mailbox, so a temporary mailbox named SYS$INPUT was every DCL's SYS$INPUT.
  */
 
 /*
@@ -43,8 +36,8 @@
  * OVMX-PARTIAL: sys$crembx (vms-d44) -- exec: the mailbox itself (the unit
  *     number, the message queue, the buffer-quota accounting) is
  *     executive-resident in vms.ko (vms_kif_mbx_create); a logical name, if
- *     given, is defined in the executive-resident LNM$SYSTEM table
- *     (vms_kif_lnm_define, already wired by vms-d37/sys_logical.c).
+ *     given, is defined in the executive-resident LNM$JOB (temporary) or
+ *     LNM$SYSTEM (permanent) table (sys$crelnm, vms-d37/vms-7dd).
  * OVMX-LOCAL: sys$crembx -- the returned channel NUMBER is a slot index into
  *     this process's own PCB channel table (pcb->channels[]), exactly like
  *     every other $ASSIGN-family channel (src/libvms/syssvc/sys_assign.c);
@@ -83,8 +76,10 @@
  *            the mailbox owner and checks $ASSIGN, read and write against it
  *            (vms_prot.h, rd vms-c6d1)
  *   acmode - Access mode (not yet enforced by the executive)
- *   lognam - Optional logical name; if given, defined in LNM$SYSTEM
- *            pointing at the mailbox's device name (see file header)
+ *   lognam - Optional logical name; if given, defined in
+ *            LNM$TEMPORARY_MAILBOX (temporary) or LNM$PERMANENT_MAILBOX
+ *            (permanent) pointing at the mailbox's device name (see file
+ *            header)
  *
  * Returns:
  *   SS$_NORMAL    - Mailbox created successfully
@@ -152,25 +147,32 @@ uint32_t (sys$crembx)(int prmflg,
     pthread_mutex_unlock(&pcb->chan_lock);
 
     /*
-     * If a logical name was provided, define it in LNM$SYSTEM (see file
-     * header for why SYSTEM, not PROCESS): the equivalence string is the
-     * mailbox's own executive device name, so any process that translates
-     * this name can then sys$assign() to the same executive-resident
-     * mailbox.
+     * If a logical name was provided, define it in the mailbox table its
+     * kind names (see file header): the equivalence string is the mailbox's
+     * own executive device name, so a process that translates this name can
+     * then sys$assign() to the same executive-resident mailbox.
      */
     if (lognam && lognam->dsc$a_pointer && lognam->dsc$w_length > 0) {
         struct dsc$descriptor_s tabdsc;
-        vms_cstr_to_desc(&tabdsc, LNM$_SYSTEM_TABLE);
+        vms_cstr_to_desc(&tabdsc, prmflg ? "LNM$PERMANENT_MAILBOX"
+                                         : "LNM$TEMPORARY_MAILBOX");
 
-        struct item_list_3 itmlst[2];
-        itmlst[0].buflen    = (uint16_t)strlen(devnam);
-        itmlst[0].item_code = LNM$_STRING;
-        itmlst[0].bufaddr   = devnam;
+        /* The equivalence is TERMINAL, in the caller's (user) mode: observed
+         * attr %X10600 mode 3 on VAX V7.3 (docs/oracle/semantics/mbxlnm). */
+        uint32_t eqattr = LNM$M_TERMINAL;
+        struct item_list_3 itmlst[3];
+        itmlst[0].buflen    = (uint16_t)sizeof(eqattr);
+        itmlst[0].item_code = LNM$_ATTRIBUTES;
+        itmlst[0].bufaddr   = &eqattr;
         itmlst[0].retlen    = NULL;
-        itmlst[1].buflen    = 0;
-        itmlst[1].item_code = 0;
-        itmlst[1].bufaddr   = NULL;
+        itmlst[1].buflen    = (uint16_t)strlen(devnam);
+        itmlst[1].item_code = LNM$_STRING;
+        itmlst[1].bufaddr   = devnam;
         itmlst[1].retlen    = NULL;
+        itmlst[2].buflen    = 0;
+        itmlst[2].item_code = 0;
+        itmlst[2].bufaddr   = NULL;
+        itmlst[2].retlen    = NULL;
 
         sys$crelnm(NULL, &tabdsc, lognam, NULL, itmlst);
     }

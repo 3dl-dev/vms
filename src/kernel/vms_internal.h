@@ -374,6 +374,7 @@
  */
 #define SS__SUPERSEDE   1585
 #define SS__NOLOGNAM    444
+#define SS__NOLOGTAB    8852        /* SS$_NOLOGTAB (src/libvms/include/ssdef.h) */
 #define SS__EXLNMQUOTA  8780        /* oracle-pinned lab-1 F$MESSAGE (design §4.2, vms-556) */
 
 /*
@@ -576,6 +577,24 @@ struct vms_lock_entry {
     uint32_t            master_csid;
     uint32_t            master_lkid;
     uint32_t            blkast_count;
+    /*
+     * THE REMASTER ADOPTION THAT INSTALLED THIS LOCK (rd vms-14fd,
+     * src/kernel-core/vms_dlm_adopt.h). Non-zero only on a master-side LKB this
+     * node created while ADOPTING a lock tree a departing/relieved master handed
+     * over, and then it is that adoption's generation number. 0 on every other
+     * lock, including every lock made by $ENQ or by the cross-node serve.
+     *
+     * It exists so an adoption can be UNDONE EXACTLY. A record refused halfway
+     * through a tree leaves locks a holder still believes it holds, and the only
+     * safe answer is to release precisely the ones this adoption installed --
+     * not "every lock of that CSID" (which would take the holder's unrelated
+     * locks) and not "every lock on the tree" (which would take another
+     * holder's). Cleared the moment the adoption completes, so a completed
+     * tree's locks are ordinary master-side locks with no transaction behind
+     * them. Mirrored in src/kernel-netbsd/vms_internal.h and
+     * tests/cluster/host/lock_host_internal.h.
+     */
+    uint32_t            adopt_gen;
 };
 
 /* Lock resource (named resource in the lock database) */
@@ -1289,6 +1308,8 @@ long vms_ioctl_setmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_power(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_netcfg(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
 /* rd vms-bdc1: installed-image privileges at activation (vms_access.c) */
 uint64_t vms_kfe_exec_privs(const void *img);
@@ -1843,6 +1864,17 @@ void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode);
 /* vms_lnm_forget_device deletes the LNM$SYSTEM names whose one equivalence is
  * `devnam` -- a mailbox's logical name goes when the mailbox does (vms-4a69). */
 void vms_lnm_forget_device(const char *devnam);
+/* rd vms-94a: the clusterwide tables (vms_lnm.c). Each applies one $CRELNT,
+ * $CRELNM or $DELLNM a cluster member propagated, and returns its VMS status. */
+int vms_lnm_cluster_init(void);
+uint32_t vms_lnm_cluster_other_members(void);   /* vms_devtab.c */
+uint32_t vms_lnm_cluster_crelnt(const char *tab, const char *parent,
+                                uint32_t attr, uint8_t acmode, uint32_t promsk);
+uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,
+                                uint32_t attr, uint8_t acmode, uint8_t nequiv,
+                                const struct vms_lnm_equiv *eq);
+uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
+                                uint8_t acmode);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 

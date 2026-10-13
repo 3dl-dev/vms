@@ -241,7 +241,24 @@ barrier-stalled-ignores-new-go
 join-reply-to-the-join-target
 join-k10-close-withheld
 join-k5-close-withheld
-csb-0b01-answer-ignores-join-order"
+csb-0b01-answer-ignores-join-order
+guard-ignores-category-0b
+join-lnm-answered-unapplied
+join-lnm-db-not-applied
+pe-blk-frame-unringed
+coord-own-class-unrecorded
+advertise-relay-empty-cell
+engine-dir-remove-never-posted
+codec-dir-remove-no-hash
+cnxman-dir-remove-opens-txn
+barrier-merge-runs-steps
+coord-merge-waits-for-steps
+coord-0b05-read-as-record-ack
+dlm-adopt-parent-not-verified
+dlm-adopt-abort-leaves-mastery
+dlm-adopt-unreported-not-counted
+dlm-adopt-lvb-zeroes-the-block
+dlm-convert-by-name"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -814,6 +831,7 @@ EOF
         why)          echo "every block frame leaves with the message opcode 0x02 the sequenced stamp writes, so a real VMS port reads a REQUEST DATA or SEND DATA as an SCS message with a garbage envelope -- a frame class no real node ever sent (1,217,539 of 1,217,539 opcode-0x02 frames carry the SCS format word).";;
         require_fail) cat <<'EOF'
 *** a REQUEST DATA carries opcode 0x08 (2,759/2,759) ***
+opcode 0x08 on the first send
 *** every earlier one is 0x0c (39 + 2,758 real) ***
 *** the last answer frame is 0x0d ***
   and it is 0x0d
@@ -1056,6 +1074,77 @@ every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
   body[20:24]: the epoch, LE u32
 body[20:24] is OUR epoch, not the coordinator's
 the relay is answered, on the member's new connection
+*** the relay is answered, so the admission can go on ***
+body[17] is the class this node drove, as a real VAX coordinator's answer carries
+*** the founder answers the relay from [ADVERTISE] ***
+EOF
+                      ;;
+        esac;;
+
+    engine-dir-remove-never-posted)
+        case "$_f" in
+        facility)     echo "a master that frees a resource removes its entry at the remote directory node (rd vms-e09)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_dir_remove_fill() never fills a removal, so a freed mastered resource leaves its directory entry behind. That is lab DC1b: VAX1 kept naming OVMXA as master of F11B\$sOVMXSYS, sent OVMXB there with an 0xf8, and OVMXA had nothing to serve.";;
+        require_fail) hd_lines <<'EOF'
+*** freeing the mastered resource posts something ***
+EOF
+                      ;;
+        esac;;
+    codec-dir-remove-no-hash)
+        case "$_f" in
+        facility)     echo "the directory-entry removal carries the directory hash the lookup carried (rd vms-e09, R1)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_dir_remove_build() leaves body[128:132] zero, so the directory node is sent a removal for an entry it cannot find, and the real entry stays.";;
+        require_fail) hd_lines <<'EOF'
+*** every R1 byte equals the real removal's, every other byte is a zero OVMX wrote ***
+EOF
+                      ;;
+        esac;;
+    cnxman-dir-remove-opens-txn)
+        case "$_f" in
+        facility)     echo "a directory-entry removal is a notification: its envelope opens no transaction (rd vms-e09, R3)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_dlm_send() originates a removal as a REQUEST, minting a transaction a real directory node never answers -- 8106 real removals carry body[4:8] = 0.";;
+        require_fail) hd_lines <<'EOF'
+a directory-entry removal opens no transaction
+EOF
+                      ;;
+        esac;;
+
+    guard-ignores-category-0b)
+        case "$_f" in
+        facility)     echo "the emit guard's view of what the peer has sent includes its category-0x0b messages (rd vms-cd8)";;
+        targets)      echo "kernel-core/vms_cluster_emit_guard.c";;
+        suites_red)   echo "test_pe_emit_guard";;
+        isolation)    echo "isolated";;
+        why)          echo "guard_category_is_cm() no longer counts category 0x0b, so after a peer's clusterwide logical-name messages this node's next frame acking them is refused as ack-unbacked. In lab94ag that refusal left a send-msg# hole and VAX1 took a fatal CNXMGRERR.";;
+        require_fail) hd_lines <<'EOF'
+*** acking the peer's 0x0b/0x06 (its send 4) goes out ***
+  nothing refused
+EOF
+                      ;;
+        esac;;
+
+    pe-blk-frame-unringed)
+        case "$_f" in
+        facility)     echo "a block-transfer frame that fits a ring slot is held for go-back-N (rd vms-c1d), so a lost REQUEST DATA is sent again instead of leaving a sequence hole";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_block";;
+        isolation)    echo "isolated";;
+        why)          echo "blk_stamp_and_send() never takes a ring entry again, so every block frame goes out unringed: a REQUEST DATA lost on the wire (lab52dfb: sent to a VAX's old DECnet station address) leaves a hole the peer never moves past, and the circuit breaks on TIMVCFAIL.";;
+        require_fail) hd_lines <<'EOF'
+*** and it holds a ring entry ***
+counted ringed
+not unringed
+*** it went out again ***
+  marked as a retransmission (0x7b)
 EOF
                       ;;
         esac;;
@@ -1094,6 +1183,110 @@ then the cat-0x86 goes
   with state 5, a settled member's answer
   counted
   counted refused
+EOF
+                      ;;
+        esac;;
+
+    join-lnm-db-not-applied)
+        case "$_f" in
+        facility)     echo "the startup database pull (rd vms-94a): every record a member pushes is applied to this node's executive before the push is answered";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_lnm_db_pulled() stops handing the pushed records to the executive and answers anyway, so a late joiner tells the member it took the cluster's logical names while holding none of them.";;
+        require_fail) hd_lines <<'EOF'
+*** the last chunk applies all 10 records ***
+  10 records counted
+  tables first, parents before children, then the names, in the member's order
+then the answer goes
+  0x8b/0x04, as every real answer to a push
+EOF
+                      ;;
+        esac;;
+
+    join-lnm-answered-unapplied)
+        case "$_f" in
+        facility)     echo "the 0x8b/0x04 answer to a member's clusterwide logical-name operation (rd vms-94a): sent only after this node's executive applied it";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_lnm_pulled() no longer checks the status the executive returned, so an operation the executive refused (no such table, arena full) is acknowledged anyway: the member is told this node holds a logical name it does not.";;
+        require_fail) hd_lines <<'EOF'
+*** an operation the executive refused is NOT answered ***
+  counted refused
+EOF
+                      ;;
+        esac;;
+
+    coord-merge-waits-for-steps)
+        case "$_f" in
+        facility)     echo "a coordinator completes a MERGE-rebuild ADD at the GO and waits for no barrier step (rd vms-6e3)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_try_go() loses its merge branch, so an OVMX coordinator of a zero-LOCKDIRWT joiner waits in BARRIER for a step 1 no real participant sends, holding the transition and the coordinator lock for good.";;
+        require_fail) hd_lines <<'EOF2'
+*** a merge is complete at the GO ***
+  the coordinator lock is released
+  counted as a merge
+EOF2
+                      ;;
+        esac;;
+
+    barrier-merge-runs-steps)
+        case "$_f" in
+        facility)     echo "a participant completes a MERGE-rebuild ADD (open body[24] = 1) at the GO and runs no barrier (rd vms-6e3)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_go() loses its merge branch, so a participant of a merge sends step 1 and waits for a release no real coordinator sends, with the transition still active. Lab e09a: OVMXE stayed in that transition and backed off every later membership request, and OVMXB was never admitted.";;
+        require_fail) hd_lines <<'EOF2'
+no op-0x0b is sent
+nothing goes out at the GO
+the transition is complete at the GO
+*** and the transition is no longer active: the coordinator lock is free for the next joiner ***
+counted as a merge
+EOF2
+                      ;;
+        esac;;
+
+    coord-0b05-read-as-record-ack)
+        case "$_f" in
+        facility)     echo "the coordinator takes only CONFIG (0x81) answers as transition acknowledgements (rd vms-6e3 residual)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_event_of_response() stops checking the category, so a member's 0x8b/0x05 logical-name database answer reads as an 0x81/0x05 membership-record ack: logged 'no edge' when idle (lab r6e3a, 0.9 s after each OVMX admission) and counted as a record answer while the coordinator waits in RECORDS.";;
+        require_fail) hd_lines <<'EOF2'
+*** idle: handed on, not consumed ***
+  and no 'no edge' event is counted
+*** RECORDS: a 0x8b/0x05 is not counted as a record answer ***
+EOF2
+                      ;;
+        esac;;
+
+    advertise-relay-empty-cell)
+        case "$_f" in
+        facility)     echo "a founder whose join sits in ADVERTISE answers a coordinator's op-0x12 relay as a member (rd vms-6ec)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "The ADVERTISE row loses its RX_TR_RELAY cell, so the relay lands in an empty cell. That is the lab DC2 stall: real VAX2 asked OVMXB, OVMXB relayed it to the founder OVMXA, OVMXA answered nothing, and VAX2 was never admitted.";;
+        require_fail) hd_lines <<'EOF'
+*** the founder answers the relay from [ADVERTISE] ***
+EOF
+                      ;;
+        esac;;
+
+    coord-own-class-unrecorded)
+        case "$_f" in
+        facility)     echo "a coordinator records the class it drives as this node's own transition class, which its answer to another coordinator's op-0x12 relay reports (rd vms-6ec)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_open_transition() no longer writes club.own_tr_class, so a founder that only ever coordinated holds no class and answers no relay: in lab DC2 real VAX2 asked OVMXB, OVMXB relayed it to the founder OVMXA, OVMXA answered nothing, and VAX2 was never admitted.";;
+        require_fail) hd_lines <<'EOF'
+*** driving an addition makes 0x02 this node's class ***
 EOF
                       ;;
         esac;;
@@ -1360,13 +1553,13 @@ EOF
 
     join-member-count-to-foreign)
         case "$_f" in
-        facility)     echo "a member's count goes only to a peer running this implementation (rd vms-e88; the rd vms-1ac rule -- member-only bytes OVMX does not ground are symmetric between two OVMX nodes and a bugcheck risk in front of a VAX)";;
+        facility)     echo "a member's count goes to a foreign peer only WITH the grounded member state (rd vms-e88, rd vms-d52c; the rd vms-1ac rule -- a count beside zero member-only fields is a record in a shape no real node writes)";;
         targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
-        why)          echo "join_members_for() drops the peer_is_ours test, so a foreign connection manager is sent a member-form count beside the zero member-only fields OVMX cannot ground: a record in a shape no real node writes.";;
+        why)          echo "join_members_for() drops the member-state test, so a foreign connection manager is sent a member-form count while this node holds no formation/transition/membership time to send beside it: a record in a shape no real node writes.";;
         require_fail) hd_lines <<'EOF'
-a foreign connection manager still hears 0
+a foreign connection manager hears 0 while this node holds no member state to send beside the count
 and nothing new goes to the foreign one
 EOF
         ;;
@@ -1974,6 +2167,7 @@ no open goes out after a rejection
 the rejection is counted
 and the transition is abandoned
 and said
+  and the open still waits for the real answers
 EOF
                       ;;
         esac;;
@@ -2036,6 +2230,84 @@ the refusal is COUNTED
   the refusal is counted
   and names the missing fact
 and no transition was opened
+EOF
+                      ;;
+        esac;;
+
+    dlm-adopt-parent-not-verified)
+        case "$_f" in
+        facility)     echo "the remaster adoption's refusal to let an op-0x12 record choose which lock its sub-resource hangs under (rd vms-14fd: body[40:44] names a handle THIS engine minted, so it is LOOKED UP and checked against the adoption and the holder, never trusted)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_adopt_parent_res()'s two lineage checks -- 'plock->adopt_gen != gen' (the parent must be a lock THIS adoption installed) and 'plock->req_csid != r->holder_csid' (it must be held for the SAME holder) -- are disarmed, leaving only the proxy and null-resource checks. Any lock id in the database is then an acceptable parent: a record can hang its sub-resource under another holder's lock, or under a LOCAL lock of this node, and the tree the engine builds is not the tree the holder holds.";;
+        require_fail) hd_lines <<'EOF'
+N6 a sub naming ANOTHER holder's parent is refused
+N7 a sub naming a LOCAL lock as its parent is refused
+N8 installed two locks, not three
+every refusal above was COUNTED
+EOF
+                      ;;
+        esac;;
+
+    dlm-adopt-abort-leaves-mastery)
+        case "$_f" in
+        facility)     echo "an abandoned adoption gives the tree's mastery BACK (rd vms-14fd): a node that has just released the locks it adopted may not go on claiming to master the tree";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_adopt_abort()'s 'root->master_csid = prev;' restore is dropped. The release half still runs -- every lock the adoption installed really goes -- but the root resource block keeps naming THIS node as the tree's master. The executive then asserts mastery of a tree it holds nothing in, which is exactly the fabricated-mastery shape that made a real VAX install OVMX as master of resources it did not master.";;
+        require_fail) hd_lines <<'EOF'
+and mastery of the tree went back where it was
+this node no longer claims to master it
+EOF
+                      ;;
+        esac;;
+
+    dlm-adopt-unreported-not-counted)
+        case "$_f" in
+        facility)     echo "the COUNT of adoptions this node completed but could not report to the old master (rd vms-14fd, INV-6: the op-0x14's body[20:24] and body[28:40] are ungrounded, so the gap is published as a number rather than left silent)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_adopt_end()'s 'vms_dlm_adopt_unreported_n++;' is dropped. The adoption still completes and still sends nothing -- only the tripwire that says so goes silent, so an executive that has adopted a hundred trees and told the old masters about none of them reports a clean zero. A gap nobody counts is a gap nobody closes.";;
+        require_fail) hd_lines <<'EOF'
+and ONE adoption went unreported to the old master -- body[20:24] and body[28:40] of the op-0x14 are not grounded, so no frame is sent
+the gap is exactly 'all of them', stated as a number
+an abandoned adoption owes the old master nothing
+EOF
+                      ;;
+        esac;;
+
+    dlm-adopt-lvb-zeroes-the-block)
+        case "$_f" in
+        facility)     echo "the value block an adopted resource already holds is LEFT ALONE by a record that carries none (rd vms-14fd / vms-a3d: sixteen zeros presented as an LVB is the placeholder INV-6 forbids)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_adopt_link_lkb()'s 'if (r->valblk_present)' guard on the resource-block write is forced true, so EVERY adopted record writes its block -- and a record that carried none writes sixteen zeros over the real value another holder's record just installed. The locks are all still built and the tree is still held; only the data is destroyed.";;
+        require_fail) hd_lines <<'EOF'
+the resource still holds the real block
+EOF
+                      ;;
+        esac;;
+
+    dlm-convert-by-name)
+        case "$_f" in
+        facility)     echo "a cross-node CONVERT names a LOCK, not a NAME (rd vms-14fd): it is served against the lock the handle names, on that lock's own resource block, parent and all";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_master_op_to_xnode() collapses VMS_DLM_MREQ_CONVERT back onto VMS_DLM_OP_ENQ, the pre-vms-14fd behaviour, so an inbound op-0x07 runs the by-NAME enqueue path. For a SUB-RESOURCE lock -- which is what every remastered tree is full of -- that path resolves the name at the TOP of the tree, finds no such root resource, and mints a SECOND lock on a second, root-level resource of the sub's name: the holder ends up with two handles for one lock, its conversion never happens, and on a down-convert the system queued behind the real lock is never granted.";;
+        require_fail) hd_lines <<'EOF'
+the handle does not change
+$GETLKI agrees: S2 is held at EX
+NEGATIVE CONTROL: the convert created no root-level S2
+a DOWN-convert really lowers the granted mode
+and keeps the same handle
+holder 1 takes EX
+holder 2 is queued
+and the master names the holder blocking it
 EOF
                       ;;
         esac;;
@@ -2464,7 +2736,7 @@ apply_edit() {
     join-member-count-to-foreign)
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
         # replacement no longer matches the pattern, so it is not repeatable.
-        sed -i 's|	if (csb == NULL \|\| !csb->peer_is_ours \|\| !join_node_already_member(j))|	if (csb == NULL \|\| !join_node_already_member(j)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
+        sed -i 's|	if (!csb->peer_is_ours \&\& !join_member_state(j, \&ms))|	if (0 \&\& !csb->peer_is_ours \&\& !join_member_state(j, \&ms)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
 
     join-asks-a-system-in-no-cluster)
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
@@ -2592,6 +2864,24 @@ apply_edit() {
         # line is unique in this file: grep -c is 1.
         sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
 
+    engine-dir-remove-never-posted)
+        # `if (dir == 0 || dir == vms_local_csid)` is unique in this file.
+        sed -i 's/^    if (dir == 0 || dir == vms_local_csid)$/    if (1 || dir == 0 || dir == vms_local_csid) \/\* NEGCTL engine-dir-remove-never-posted \*\//' "$_file";;
+    codec-dir-remove-no-hash)
+        # `vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);` is unique in this file.
+        sed -i 's|^	vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);$|	(void)id->hash; /* NEGCTL codec-dir-remove-no-hash */|' "$_file";;
+    cnxman-dir-remove-opens-txn)
+        # `cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);` is unique in this file.
+        sed -i 's|^		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);$|		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST); /* NEGCTL cnxman-dir-remove-opens-txn */|' "$_file";;
+
+    guard-ignores-category-0b)
+        # `	case 0x0bu:` is unique in this file.
+        sed -i 's|^	case 0x0bu:$|	case 0x7fu: /* NEGCTL guard-ignores-category-0b */|' "$_file";;
+
+    pe-blk-frame-unringed)
+        # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.
+        sed -i 's|if (op != 0u \&\& total <= PE_VC_FRAME_MAX)|if (0 \&\& op != 0u \&\& total <= PE_VC_FRAME_MAX) /* NEGCTL pe-blk-frame-unringed */|' "$_file";;
+
     join-k5-close-withheld)
         # `d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) &&` is unique in the file.
         sed -i 's|d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) \&\&|0) \&\& /* NEGCTL join-k5-close-withheld */|' "$_file";;
@@ -2609,12 +2899,76 @@ apply_edit() {
         # BROKEN FIXTURE.
         sed -i 's|\trc = j->ops->respond(j->ops->ctx, j->scratch, VMS_CM_BODY_LEN);|\trc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,\n\t\t\t       VMS_CM_BODY_LEN); /* NEGCTL join-reply-to-the-join-target: every answer leaves on the join target'"'"'s connection, whoever asked */|' "$_file";;
 
+    join-lnm-db-not-applied)
+        # The comment line above the database apply is unique in this file.
+        sed -i 's|		/\* each record of the database, in the member.s order \*/|		st = 1u; break; /* NEGCTL join-lnm-db-not-applied */|' "$_file";;
+
+    join-lnm-answered-unapplied)
+        # `if ((st & 1u) == 0u) {` is unique in this file.
+        sed -i 's|if ((st \& 1u) == 0u) {|if (0 \&\& (st \& 1u) == 0u) { /* NEGCTL join-lnm-answered-unapplied */|' "$_file";;
+
+    coord-0b05-read-as-record-ack)
+        # The category gate in coord_event_of_response() is unique in this file.
+        sed -i 's|	if (m->env.category != vms_wire_response_category(VMS_CM_CAT_CONFIG))|	if (0 \&\& m->env.category != vms_wire_response_category(VMS_CM_CAT_CONFIG)) /* NEGCTL coord-0b05-read-as-record-ack */|' "$_file";;
+
+    advertise-relay-empty-cell)
+        # Inside join_h_relay_if_member() only: its member gate always refuses,
+        # which is the empty cell's behaviour with the handler still referenced.
+        sed -i '/^static enum cnxman_join_rx join_h_relay_if_member(/,/^}/ s|if (!join_node_already_member(j)) {|if (1) { /* NEGCTL advertise-relay-empty-cell */|' "$_file";;
+
+    coord-merge-waits-for-steps)
+        # `if (coord_is_merge(c)) {` is unique in this file.
+        sed -i 's|	if (coord_is_merge(c)) {|	if (0 \&\& coord_is_merge(c)) { /* NEGCTL coord-merge-waits-for-steps */|' "$_file";;
+
+    barrier-merge-runs-steps)
+        # The merge test in barrier_h_go() is unique in this file.
+        sed -i 's|	if (b->open_seen \&\& b->open_rebuild == VMS_CM_REBUILD_MERGE) {|	if (0) { /* NEGCTL barrier-merge-runs-steps */|' "$_file";;
+
+    coord-own-class-unrecorded)
+        # `c->cl->club.own_tr_class = tr_class;` is unique in this file.
+        sed -i 's|^	c->cl->club.own_tr_class = tr_class;$|	(void)tr_class; /* NEGCTL coord-own-class-unrecorded */|' "$_file";;
+
     csb-0b01-answer-ignores-join-order)
         # `requester->admitted_after_local != 0u,` is unique in this file.
         sed -i 's|requester->admitted_after_local != 0u,|1 /* NEGCTL csb-0b01-answer-ignores-join-order */,|' "$_file";;
 
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;
+
+    dlm-adopt-parent-not-verified)
+        # dlm_adopt_parent_res()'s condition spans two lines. Absorbing the
+        # FIRST line's trailing `||` into `0 &&` disarms BOTH lineage checks
+        # with one single-line sed: the second line then reads
+        # `0 && plock->req_csid != ... || plock->resource == NULL) {`, and `&&`
+        # binds tighter than `||`, so only the null-resource check survives.
+        # `0 * gen` keeps `gen` used, so the mutated tree still builds clean.
+        # This exact line (ending in `||` with nothing after) is unique.
+        sed -i 's@^    if (plock->proxy || plock->adopt_gen != gen ||$@    if (plock->proxy || 0 * gen || /* NEGCTL dlm-adopt-parent-not-verified */ 0 \&\&@' "$_file";;
+
+    dlm-adopt-abort-leaves-mastery)
+        # `root->master_csid = prev;` is unique in this file (it sits inside
+        # vms_lock_dlm_adopt_abort's emptiness test, at eight spaces). The
+        # emptiness test itself is untouched -- only the restore it guards goes
+        # away -- and `(void)prev;` keeps the mutated tree building clean.
+        sed -i 's@^        root->master_csid = prev;$@        (void)prev; /* NEGCTL dlm-adopt-abort-leaves-mastery */@' "$_file";;
+
+    dlm-adopt-unreported-not-counted)
+        # `vms_dlm_adopt_unreported_n++;` occurs once (its declaration spells
+        # the name without the `++`, so it cannot match).
+        sed -i 's@^    vms_dlm_adopt_unreported_n++;$@    /* NEGCTL dlm-adopt-unreported-not-counted */@' "$_file";;
+
+    dlm-adopt-lvb-zeroes-the-block)
+        # `if (r->valblk_present)` appears twice (dlm_adopt_alloc_lkb's LKB
+        # copy and dlm_adopt_link_lkb's RESOURCE write), so the edit is RANGE
+        # anchored to dlm_adopt_link_lkb's body. A second apply finds no
+        # `if (r->valblk_present)` left in the range and lands nothing, which
+        # cmd_apply reports as a BROKEN FIXTURE.
+        sed -i '/^static void dlm_adopt_link_lkb(/,/^}/ s@if (r->valblk_present)@if (1) /* NEGCTL dlm-adopt-lvb-zeroes-the-block */@' "$_file";;
+
+    dlm-convert-by-name)
+        # `return VMS_DLM_OP_CONVERT;` is unique (the dispatch's own mention
+        # is a `case` label, not a return).
+        sed -i 's@^        return VMS_DLM_OP_CONVERT;$@        return VMS_DLM_OP_ENQ; /* NEGCTL dlm-convert-by-name */@' "$_file";;
 
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2

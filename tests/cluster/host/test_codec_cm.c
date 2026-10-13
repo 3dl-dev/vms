@@ -1878,10 +1878,240 @@ static void test_0b01_refusals(void)
 		 "rd vms-52d: a 0x8b/0x01 answer is never itself answered");
 }
 
+/*
+ * rd vms-d52c: a REAL member's PARAMS -- VAX1 to OVMXE, lab lab64a order 1
+ * (ts 1791716739.831739; tests/lab/captures/vms-64b-dlm-seq-20261011/). The
+ * member-state fields the builder writes must equal it byte for byte when fed
+ * the same executive facts (formation time, last transition, its epoch, the
+ * sender's own membership time -- VAX1 founded, so that is the formation time).
+ */
+static const uint8_t g_member_params_vax1[132] = {
+	0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00,
+	0x21, 0x50, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00, 0x01, 0x00,
+	0x01, 0x00, 0x01, 0x00, 0x80, 0x3f, 0xbd, 0xd1, 0xf8, 0x3c, 0xbc, 0x00,
+	0x60, 0x46, 0x17, 0xd2, 0xf8, 0x3c, 0xbc, 0x00, 0x04, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x25, 0x00, 0x60, 0x00, 0xc0, 0x24, 0xf9, 0x7f,
+	0x7e, 0x00, 0x00, 0x00, 0x80, 0x3f, 0xbd, 0xd1, 0xf8, 0x3c, 0xbc, 0x00,
+	0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2b, 0x00,
+	0x73, 0x00, 0x00, 0x00, 0x56, 0x37, 0x2e, 0x33, 0x20, 0x20, 0x20, 0x20,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00, 0x01, 0x00, 0x02, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+static void test_member_params_against_real(void)
+{
+	struct vms_cm_node_params own;
+	struct vms_cm_member_state ms;
+	uint8_t b[VMS_CM_BODY_LEN];
+	const uint8_t *r = g_member_params_vax1;
+	uint32_t written = 0;
+
+	printf("-- rd vms-d52c: a member's PARAMS states its membership\n");
+	memset(&own, 0, sizeof(own));
+	ct_check(vms_cm_params_build(1u, 2u, 1u, &own, b, sizeof(b), &written)
+		 == VMS_CODEC_OK, "the PARAMS builds");
+	memcpy(&ms.ftime, r + VMS_OFB_CM_PFTIME, 8);
+	memcpy(&ms.last_xition, r + VMS_OFB_CM_PLASTXITION, 8);
+	memcpy(&ms.joined, r + VMS_OFB_CM_PJOINED, 8);
+	ms.last_epoch = 4u;
+	ct_check(vms_cm_params_member_put(b, sizeof(b), &ms) == VMS_CODEC_OK,
+		 "the member state is written");
+	ct_check(memcmp(b + 12, r + 12, 2) == 0,
+		 "*** body[12:14] = the real member status word 0x5021 ***");
+	ct_check(memcmp(b + 28, r + 28, 20) == 0,
+		 "*** body[28:48] = the real formation time, last transition and "
+		 "epoch ***");
+	ct_check(memcmp(b + 64, r + 64, 8) == 0,
+		 "*** body[64:72] = the real own-membership time ***");
+	ct_check(memcmp(b + 18, r + 18, 2) == 0, "body[18:20] the member count");
+	ms.joined = 0u;
+	ct_check(vms_cm_params_member_put(b, sizeof(b), &ms) == VMS_CODEC_E_INVAL,
+		 "a time not held is never claimed");
+	/* VAX1 ran EXPECTED_VOTES 1 (body[76:80]) and the default QDSKVOTES. */
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 1u, 1u) == VMS_CODEC_OK,
+		 "the quorum words are written");
+	ct_check(memcmp(b + 20, r + 20, 2) == 0,
+		 "*** body[20:22] = the real quorum (EV 1 -> 1) ***");
+	ct_check(memcmp(b + 24, r + 24, 2) == 0,
+		 "*** body[24:26] = the real QDSKVOTES the VAXes echo in opens ***");
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 3u, 2u) == VMS_CODEC_OK &&
+		 b[20] == 2u && b[24] == 2u,
+		 "EV 3 -> quorum 2; QDSKVOTES 2 -> 2 (rd vms-f297 arms)");
+	ct_check(vms_cm_params_quorum_put(b, sizeof(b), 0u, 1u) ==
+		 VMS_CODEC_E_INVAL, "no EXPECTED_VOTES held: nothing claimed");
+}
+
+/*
+ * rd vms-94a -- CLUSTERWIDE LOGICAL NAME RECORDS, decoded from REAL ones.
+ * Every record below was moved by block transfer after a real cat-0x0b op-0x04
+ * in tests/lab/captures/vms-94a-cwlnm-oracle-20261013/lnm1-cwlnm.pcap (times are
+ * that capture's, lnmrec.py), and each is checked against the DCL command that
+ * produced it on the real VAX1 (README.md, "the commands").
+ */
+static const char *const g_lnm_d1 =      /* DEFINE/TABLE=LNM$SYSCLUSTER OVMXT1 "A" (54.365) */
+	"7800010018b80b870500000038b80b873cb80b8758b80b8768b80b876cb80b87"
+	"000000001400000044b80b874c4e4d24535953434c55535445525f5441424c45"
+	"0600000060b80b874f564d5854314253020000000400030088b80b8700000000"
+	"010002008cb80b8700000000000000000000000041000000";
+static const char *const g_lnm_d3 =      /* ... OVMXT3 "X","YY","ZZZ" (56.223) */
+	"9800010018b80b870500000038b80b873cb80b8758b80b8768b80b876cb80b87"
+	"000000001400000044b80b874c4e4d24535953434c55535445525f5441424c45"
+	"0600000060b80b874f564d58543353540200000004000300a0b80b8700000000"
+	"01000200a4b80b870000000002000200a8b80b870000000003000200acb80b87"
+	"00000000000000000000000058474552595908005a5a5a00";
+static const char *const g_lnm_d4 =      /* /EXECUTIVE_MODE/TRANS=CONCEALED OVMXT4 "DUA0:[A.]" (57.617) */
+	"8000010018b80b870500000038b80b873cb80b8758b80b8768b80b876cb80b87"
+	"000000001400000044b80b874c4e4d24535953434c55535445525f5441424c45"
+	"0600000060b80b874f564d5854345354010000000400030088b80b8700000000"
+	"090002008cb80b87000000000000000000010000445541303a5b412e5db80b87";
+static const char *const g_lnm_d6 =      /* DEASSIGN/TABLE=LNM$SYSCLUSTER OVMXT3 (59.078) */
+	"4800030018b80b870300000034b80b8750b80b8730b80b870200000014000000"
+	"3cb80b874c4e4d24535953434c55535445525f5441424c450600000058b80b87"
+	"4f564d5854330b87";
+static const char *const g_lnm_d7 =      /* /NAME=NO_ALIAS OVMXT5 "P1"/T=TERMINAL,"P2"/T=CONCEALED,"P3" (203.910) */
+	"c800010018b80b870500000038b80b873cb80b8758b80b8768b80b876cb80b87"
+	"010000001400000044b80b874c4e4d24535953434c55535445525f5441424c45"
+	"0600000060b80b874f564d58543542530200000004000300c4b80b8700000000"
+	"04000300c8b80b870000000002000200ccb80b870000000004000300d0b80b87"
+	"0000000002000200d4b80b870000000004000300d8b80b870000000002000200"
+	"dcb80b87000000000000000000000000000200005031feff0001000050321700"
+	"0000000050331400";
+static const char *const g_lnm_d8 =      /* CREATE/NAME_TABLE/PARENT=LNM$CLUSTER_TABLE OVMX_CTAB (205.264) */
+	"d800020018b80b870900000048b80b8700000000000000004cb80b8750b80b87"
+	"54b80b8768b80b8784b80b8788b80b87000000010000000000ee008009000000"
+	"5cb80b874f564d585f435441423542531100000070b80b874c4e4d24434c5553"
+	"5445525f5441424c450000000200000077d70f07000000005b00000006000287"
+	"00000000000000000c0008000400010002000600020808000c00000000000000"
+	"000009001400e0ffffffe0fffffffefffffffeffffff17000800109572871400"
+	"0d004f564d585f435441424c55244943435f4f5242535f56";
+static const char *const g_lnm_d11 =     /* DEASSIGN/TABLE=LNM$SYSCLUSTER/ALL (207.949) */
+	"3800030018b80b870300000034b80b870000000030b80b870200000014000000"
+	"3cb80b874c4e4d24535953434c55535445525f5441424c45";
+static const char *const g_lnm_req =     /* the 0x0b/0x04 that carried D1 */
+	"9b213b2f060001200b040000000000000000422f0900522f0600000001000000"
+	"78000000000000000000000000000018434143484524636d53595344534b3120"
+	"20202020ef1500000000f87f7000000000000000000000000041000000004f0f"
+	"0100000000000000000000000000000000000000ffffffff00000000ffffffff"
+	"5ece1fa1";
+
+static uint32_t lnm_hexload(const char *h, uint8_t *out, uint32_t cap)
+{
+	uint32_t n = 0;
+
+	while (h[0] && h[1] && n < cap) {
+		unsigned v;
+
+		sscanf(h, "%2x", &v);
+		out[n++] = (uint8_t)v;
+		h += 2;
+	}
+	return n;
+}
+
+static struct vms_cm_lnm_op g_op;
+
+static void test_lnm_records_against_real(void)
+{
+	uint8_t rec[256], body[VMS_CM_BODY_LEN], ans[VMS_CM_BODY_LEN];
+	struct vms_cm_xfer_desc d;
+	uint32_t n, written = 0, i, nz = 0;
+
+	printf("-- rd vms-94a: clusterwide logical-name records, real ones\n");
+
+	n = lnm_hexload(g_lnm_d1, rec, sizeof(rec));
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) == VMS_CODEC_OK,
+		 "D1 decodes");
+	ct_check(g_op.fn == VMS_CM_LNM_FN_CRELNM &&
+		 !strcmp(g_op.table.s, "LNM$SYSCLUSTER_TABLE") &&
+		 !strcmp(g_op.name.s, "OVMXT1") && g_op.acmode == 2u &&
+		 g_op.attr == 0u && g_op.n_equiv == 1u &&
+		 !strcmp(g_op.equiv[0].s, "A") && g_op.equiv[0].attr == 0u,
+		 "*** D1 = $CRELNM LNM$SYSCLUSTER_TABLE OVMXT1 [super] = \"A\" ***");
+
+	n = lnm_hexload(g_lnm_d3, rec, sizeof(rec));
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) == VMS_CODEC_OK &&
+		 g_op.n_equiv == 3u && !strcmp(g_op.equiv[0].s, "X") &&
+		 !strcmp(g_op.equiv[1].s, "YY") &&
+		 !strcmp(g_op.equiv[2].s, "ZZZ"),
+		 "*** D3 = three equivalences X, YY, ZZZ, in order ***");
+
+	n = lnm_hexload(g_lnm_d4, rec, sizeof(rec));
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) == VMS_CODEC_OK &&
+		 g_op.acmode == 1u && g_op.n_equiv == 1u &&
+		 !strcmp(g_op.equiv[0].s, "DUA0:[A.]") &&
+		 g_op.equiv[0].attr == 0x100u,
+		 "*** D4 = [exec] \"DUA0:[A.]\" [concealed] ***");
+
+	n = lnm_hexload(g_lnm_d7, rec, sizeof(rec));
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) == VMS_CODEC_OK &&
+		 g_op.attr == 1u && g_op.n_equiv == 3u &&
+		 g_op.equiv[0].attr == 0x200u && g_op.equiv[1].attr == 0x100u &&
+		 g_op.equiv[2].attr == 0u && !strcmp(g_op.equiv[2].s, "P3"),
+		 "*** D7 = NO_ALIAS; P1 terminal, P2 concealed, P3 none ***");
+
+	n = lnm_hexload(g_lnm_d6, rec, sizeof(rec));
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) == VMS_CODEC_OK &&
+		 g_op.fn == VMS_CM_LNM_FN_DELLNM && g_op.has_name &&
+		 !strcmp(g_op.name.s, "OVMXT3") && g_op.acmode == 2u,
+		 "*** D6 = $DELLNM LNM$SYSCLUSTER_TABLE OVMXT3 [super] ***");
+
+	n = lnm_hexload(g_lnm_d11, rec, sizeof(rec));
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) == VMS_CODEC_OK &&
+		 g_op.fn == VMS_CM_LNM_FN_DELLNM && !g_op.has_name,
+		 "*** D11 = $DELLNM with no name: DEASSIGN/ALL ***");
+
+	n = lnm_hexload(g_lnm_d8, rec, sizeof(rec));
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) == VMS_CODEC_OK &&
+		 g_op.fn == VMS_CM_LNM_FN_CRELNT &&
+		 !strcmp(g_op.table.s, "OVMX_CTAB") &&
+		 !strcmp(g_op.parent.s, "LNM$CLUSTER_TABLE") &&
+		 g_op.acmode == 2u && g_op.has_promsk &&
+		 (g_op.promsk & 0xffffu) == 0xee00u,
+		 "*** D8 = $CRELNT OVMX_CTAB under LNM$CLUSTER_TABLE, "
+		 "(S:RWCD,O:RWCD,G:R,W:R) ***");
+
+	/* Refusals: a record that misstates its length, an unknown function,
+	 * a pointer outside the record. Nothing is decoded from any of them. */
+	n = lnm_hexload(g_lnm_d1, rec, sizeof(rec));
+	ct_check(vms_cm_lnm_rec_parse(rec, n - 1u, &g_op) != VMS_CODEC_OK,
+		 "a record one byte short of its own length: refused");
+	rec[2] = 5u;
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) != VMS_CODEC_OK,
+		 "function 5 (the startup database push): refused here");
+	n = lnm_hexload(g_lnm_d1, rec, sizeof(rec));
+	rec[16] = 0xf0u;     /* tabnam pointer -> far outside the record */
+	ct_check(vms_cm_lnm_rec_parse(rec, n, &g_op) != VMS_CODEC_OK,
+		 "a pointer outside the record: refused");
+
+	/* The request and its answer. */
+	n = lnm_hexload(g_lnm_req, body, sizeof(body));
+	ct_check(vms_cm_lnm_desc_parse(body, n, &d) == VMS_CODEC_OK &&
+		 d.name == 0x2f420000u && d.conid == 0x2f520009u &&
+		 d.len == 120u,
+		 "*** the 0x0b/0x04 names buffer 2f420000, our Con.ID 2f520009, "
+		 "120 bytes (= D1's own length) ***");
+	ct_check(vms_cm_lnm_answer_build(body, n, ans, sizeof(ans), &written)
+		 == VMS_CODEC_OK && written == VMS_CM_BODY_LEN,
+		 "the 0x8b/0x04 builds");
+	ct_check(ans[8] == 0x8bu && ans[9] == 0x04u &&
+		 memcmp(ans + 4, body + 4, 4) == 0,
+		 "  0x8b/0x04, carrying the request's txn/token");
+	for (i = 10; i < VMS_CM_BODY_LEN; i++)
+		nz += ans[i] != 0u;
+	ct_check(nz == 0u, "  and zero past the header, like the two real "
+			   "all-zero answers (rm380 137.965)");
+	body[9] = 0x05u;
+	ct_check(vms_cm_lnm_desc_parse(body, n, &d) != VMS_CODEC_OK,
+		 "op 0x05 is not this request");
+}
+
 int main(void)
 {
 	test_open_dlm_seq();
 	char err[VMS_FIXTURE_ERRLEN];
+
+	test_member_params_against_real();
 
 	printf("test_codec_cm: connection-manager codec entries (FC-P3.1)\n");
 	test_k10_records_against_real_pairs();
@@ -1893,6 +2123,7 @@ int main(void)
 		return 1;
 	}
 
+	test_lnm_records_against_real();
 	printf("-- rd vms-52d: the cat-0x0b op-0x01 answer\n");
 	test_0b01_answer("cm-0b01-req-older-oracle", "cm-0b01-resp-older-oracle",
 			 1, "0x8b/0x01 from the older member (arm B)");

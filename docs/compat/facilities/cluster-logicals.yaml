@@ -6,19 +6,22 @@ vms_ref: "OpenVMS Cluster Systems manual; $CRELNM (LNM$M_CLUSTERWIDE), $MGBLSC/$
 scope_1_0: in
 plan_ref: vms-694
 summary: >
-  Not separately evidenced as built. Cluster-wide logical-name scope degrades
-  to system-wide; cluster-wide global sections are absent. (The executive
-  logical-name store itself is real but node-local — see
-  kernel-executive$logical-name-store.)
-last_reviewed: 2026-08-31
+  The executive holds LNM$CLUSTER_TABLE, LNM$SYSCLUSTER_TABLE and the tables
+  members create under them (rd vms-94a). A member's propagated $CRELNM,
+  $CRELNT and $DELLNM is pulled, applied and only then answered, and a late
+  joiner pulls the whole clusterwide database. $CRELNM/$TRNLNM/$DELLNM work
+  locally against these tables. This node does not yet send its own changes
+  to the other members, so a local change while it shares a cluster is
+  refused (SS$_UNSUPPORTED). Cluster-wide global sections are absent.
+last_reviewed: 2026-10-13
 items:
   - id: cluster-logicals$clusterwide-logical-names
     kind: feature
-    status: absent
-    authenticity: n/a
+    status: partial
+    authenticity: real
     vms: "LNM$M_CLUSTERWIDE table replication across cluster members"
-    evidence: src/kernel-core/vms_lnm.c
-    notes: "Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built — grep of vms_lnm.c on origin/main finds no CLUSTERWIDE path."
+    evidence: src/kernel-core/vms_lnm.c, src/kernel-core/vms_cnxman_join_fsm.c, tests/lab/captures/vms-94a-cwlnm-oracle-20261013
+    notes: "RECEIVE and LOCAL are built (rd vms-94a). A member's cat-0x0b op-0x04 ($CRELNM/$CRELNT/$DELLNM records, grounded against real V7.3 DEFINE/DEASSIGN/CREATE NAME_TABLE) is pulled, applied to the executive's clusterwide tables and answered. A late joiner pulls the database (op 0x05/0x06). Local $CRELNM/$TRNLNM/$DELLNM on LNM$SYSCLUSTER/LNM$CLUSTER_TABLE work on a node in no cluster. NOT built: originating this node's own changes to the other members. A local change while sharing a cluster is refused SS$_UNSUPPORTED rather than made unannounced. Also not built: answering a member's database request (op 0x05) and LNM$SYSTEM's search through LNM$SYSCLUSTER."
 
   - id: cluster-logicals$global-sections
     kind: feature

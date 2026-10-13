@@ -415,6 +415,8 @@ struct cnxman_coord {
 	uint32_t relays_sent;
 	uint32_t relay_acks;
 	uint32_t commits_sent;
+	/* MERGE-rebuild ADDs completed at the GO with no barrier (rd vms-6e3). */
+	uint32_t merges_completed;
 	uint32_t commit_acks;
 	uint32_t opens_sent;         /* Phase 1 proposals ORIGINATED           */
 	uint32_t open_acks;          /* Phase 1 acknowledgements (p. 7-41)     */
@@ -490,6 +492,13 @@ struct cnxman_coord {
 	/* 1 once coord_advance_epoch() has run for the transition in progress
 	 * (rd vms-1ac). Per-transition, cleared by coord_open_transition(). */
 	uint8_t  epoch_advanced;
+	/* The transition's commit time (rd vms-562ac): read ONCE, at the first
+	 * op-0x03 of the transition, and carried by every op 0x03 of it --
+	 * every recipient and every retransmission -- at body[20:28]. Cleared
+	 * with epoch_advanced. 0 = no clock: the commit goes out with the field
+	 * zero and commit_time_omitted counts it. */
+	uint64_t commit_time;
+	uint32_t commit_time_omitted;
 	uint32_t ignored_events;       /* no table cell: ignored and COUNTED   */
 
 	/* ---- GENESIS (SS9), both outcomes counted from a real call ---- */

@@ -31,17 +31,11 @@
  * survives until $DELMBX marks it, exactly as OpenVMS documents.
  *
  * RENDEZVOUS. Two UNRELATED processes reach the same mailbue by device name
- * (MBAn:, via $ASSIGN) or, for a NAMED mailbox, by logical name. This
- * implementation defines a named mailbox's logical name in LNM$SYSTEM
- * (src/kernel/vms_lnm.c's already-executive-resident table), not
- * LNM$PROCESS_TABLE as the userspace-only implementation did: a name in
- * LNM$PROCESS is invisible to every other process, so it could never do the
- * one thing this item exists to make possible. STATED AS AN OVMX DESIGN
- * CHOICE (real $CREMBX's own logical-name argument on genuine VMS defaults
- * to the caller's LNM$PROCESS_TABLE, and only lands in LNM$SYSTEM under an
- * explicit /TABLE=LNM$SYSTEM-equivalent qualifier and SYSNAM/SYSPRV
- * privilege) -- see src/libvms/syssvc/sys_mailbox.c's header for the same
- * note where it is actually invoked.
+ * (MBAn:, via $ASSIGN) or, for a NAMED mailbox, by logical name. $CREMBX
+ * defines that name where VMS does (rd vms-7dd): a temporary mailbox's in
+ * LNM$TEMPORARY_MAILBOX (LNM$JOB), a permanent one's in LNM$PERMANENT_MAILBOX
+ * (LNM$SYSTEM), both executive-resident (src/kernel-core/vms_lnm.c); the name
+ * goes when the mailbox does. See src/libvms/syssvc/sys_mailbox.c.
  *
  * OVMX DESIGN CHOICE (CLAUDE.md Rule 8), stated rather than implied: the
  * per-ioctl message transfer cap (VMS_MBX_IOCTL_MAXLEN) and the default

@@ -1710,6 +1710,13 @@ void cnxman_csb_dialogue_sent(struct vms_csb *csb)
 	csb->cm_send_msg = (uint16_t)(csb->cm_send_msg + 1u);
 }
 
+void cnxman_csb_dialogue_unsent(struct vms_csb *csb)
+{
+	if (csb == NULL)
+		return;
+	csb->cm_send_msg = (uint16_t)(csb->cm_send_msg - 1u);
+}
+
 void cnxman_csb_transaction_opened(struct vms_csb *csb)
 {
 	if (csb == NULL)
@@ -2027,6 +2034,10 @@ void cnxman_club_found(struct vms_club *club, uint64_t ftime,
 	if (ftime != 0u) {
 		club->ftime = ftime;
 		club->ftime_valid = 1u;
+		/* rd vms-d52c: a real founder's PARAMS body[64:72] equals the
+		 * formation time -- it became a member when it formed it. */
+		club->joined_vms = ftime;
+		club->joined_valid = 1u;
 	}
 	club->fsysid = (uint64_t)fsysid;
 	club->fsysid_valid = 1u;

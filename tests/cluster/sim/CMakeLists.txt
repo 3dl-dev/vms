@@ -294,6 +294,42 @@ set_tests_properties(cluster_sim_test_sim_dlm_mixed_evacuation PROPERTIES
     TIMEOUT 120
 )
 
+# rd vms-14fd's R2: TWO LOCK TREES HANDED OVER AT ONCE, FOUR SYSTEMS. What one
+# node cannot show -- that two concurrent adoptions stay two trees, that the
+# holders' records interleave in time the way the E-captures show them
+# interleaving, and that each holder's NEXT frame (built by the shipping
+# cat-0x02 builder, read by the shipping parser) is served off the tree this
+# executive now holds. Same include and library recipe as
+# test_sim_dlm_mixed_evacuation above.
+add_executable(test_sim_dlm_remaster_adoption
+    scenarios/dlm_remaster_adoption.c
+)
+target_include_directories(test_sim_dlm_remaster_adoption BEFORE PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host/lock_shim
+)
+target_include_directories(test_sim_dlm_remaster_adoption PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host
+)
+target_compile_definitions(test_sim_dlm_remaster_adoption PRIVATE
+    OVMX_CLUSTER_HOST)
+target_link_libraries(test_sim_dlm_remaster_adoption PRIVATE
+    cluster_host_dlm
+    cluster_host_lock
+    cluster_sim_core
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_sim_dlm_remaster_adoption PRIVATE -Wall -Wextra)
+endif()
+add_test(NAME cluster_sim_test_sim_dlm_remaster_adoption
+         COMMAND test_sim_dlm_remaster_adoption)
+set_tests_properties(cluster_sim_test_sim_dlm_remaster_adoption PROPERTIES
+    LABELS "unit;cluster;cluster_sim;lock;dlm"
+    TIMEOUT 120
+)
+
 cluster_sim_test(test_replay test_replay.c)
 target_link_libraries(test_replay PRIVATE cluster_host_fixture)
 target_compile_definitions(test_replay PRIVATE

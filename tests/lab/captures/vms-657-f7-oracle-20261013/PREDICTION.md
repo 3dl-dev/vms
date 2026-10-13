@@ -103,3 +103,25 @@ already knows the master and does not look it up again.
   activity (each run once, then the other), so the master moves back and forth.
 - F1: at least one 0xf7 from the former master to VAX3 for F7ROOT. F2 and F3 are unchanged.
 - Run 3 is the derivation set; runs 4+ are held out. Pass threshold as registered above.
+
+## Run 3 (pod labf7c, 2026-10-13 17:25–17:43): F1 NOT observed; the tree never moved
+
+Capture on the lab PVC: `/lab/run-oracle/f7r3.pcap`. Raw sequence:
+- 17:31:25: VAX1 ran `RMH 110-F7ROOT`.
+- 17:31:28: VAX3 started `RMC 9F7ROOT` in a loop. Its cached-master requests went straight to
+  VAX1 (151,534 F7ROOT 02/01 frames VAX3 -> VAX1 by 17:33, with no lookup), as intended.
+- 17:31:32: VAX2 ran `RMH 114BF7ROOT`.
+- Deviation, recorded here: after 4 min with no move, VAX3 was re-paced to `RMC 1F7ROOT` plus
+  `WAIT 0:0:3`, VAX2's `RMH 114BF7ROOT` was restarted (17:35:59 and 17:41:35), and VAX1's
+  holder was stopped (17:39:16).
+- **No remaster frame (02/0e..14) named F7ROOT in the whole run, and 0 answers had
+  body[34] = 0xf7.** VAX3 sent 526,331 requests to VAX1 over 17 minutes.
+
+Observation, not yet a rule: in run 2 the tree moved 6 s after VAX2's mode-B activity began,
+while VAX3 took only short-lived locks. In run 3 VAX3 held an NL lock on the root and drove
+heavy activity at VAX1, and the tree stayed with VAX1 for the whole run, even after VAX1
+released its own lock. Next arm, to register before firing: begin as run 2 did (fresh-lookup
+poker, so the tree moves), and start VAX3's held-NL cached requester only once the 02/14
+naming F7ROOT has been seen. Its requests will then go to the cached master VAX2. Then drive
+the tree back to VAX1 with VAX1 mode-B activity while VAX2 releases its locks, so that
+VAX3's cached requests race the second move.

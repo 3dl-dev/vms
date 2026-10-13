@@ -247,7 +247,10 @@ join-lnm-answered-unapplied
 join-lnm-db-not-applied
 pe-blk-frame-unringed
 coord-own-class-unrecorded
-advertise-relay-empty-cell"
+advertise-relay-empty-cell
+engine-dir-remove-never-posted
+codec-dir-remove-no-hash
+cnxman-dir-remove-opens-txn"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1066,6 +1069,43 @@ the relay is answered, on the member's new connection
 *** the relay is answered, so the admission can go on ***
 body[17] is the class this node drove, as a real VAX coordinator's answer carries
 *** the founder answers the relay from [ADVERTISE] ***
+EOF
+                      ;;
+        esac;;
+
+    engine-dir-remove-never-posted)
+        case "$_f" in
+        facility)     echo "a master that frees a resource removes its entry at the remote directory node (rd vms-e09)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_dir_remove_fill() never fills a removal, so a freed mastered resource leaves its directory entry behind. That is lab DC1b: VAX1 kept naming OVMXA as master of F11B\$sOVMXSYS, sent OVMXB there with an 0xf8, and OVMXA had nothing to serve.";;
+        require_fail) hd_lines <<'EOF'
+*** freeing the mastered resource posts something ***
+EOF
+                      ;;
+        esac;;
+    codec-dir-remove-no-hash)
+        case "$_f" in
+        facility)     echo "the directory-entry removal carries the directory hash the lookup carried (rd vms-e09, R1)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_dir_remove_build() leaves body[128:132] zero, so the directory node is sent a removal for an entry it cannot find, and the real entry stays.";;
+        require_fail) hd_lines <<'EOF'
+*** every R1 byte equals the real removal's, every other byte is a zero OVMX wrote ***
+EOF
+                      ;;
+        esac;;
+    cnxman-dir-remove-opens-txn)
+        case "$_f" in
+        facility)     echo "a directory-entry removal is a notification: its envelope opens no transaction (rd vms-e09, R3)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_dlm_send() originates a removal as a REQUEST, minting a transaction a real directory node never answers -- 8106 real removals carry body[4:8] = 0.";;
+        require_fail) hd_lines <<'EOF'
+a directory-entry removal opens no transaction
 EOF
                       ;;
         esac;;
@@ -2689,6 +2729,16 @@ apply_edit() {
         # The `return f->last_gasp_incarnation == f->id.incarnation_time;`
         # line is unique in this file: grep -c is 1.
         sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
+
+    engine-dir-remove-never-posted)
+        # `if (dir == 0 || dir == vms_local_csid)` is unique in this file.
+        sed -i 's/^    if (dir == 0 || dir == vms_local_csid)$/    if (1 || dir == 0 || dir == vms_local_csid) \/\* NEGCTL engine-dir-remove-never-posted \*\//' "$_file";;
+    codec-dir-remove-no-hash)
+        # `vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);` is unique in this file.
+        sed -i 's|^	vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);$|	(void)id->hash; /* NEGCTL codec-dir-remove-no-hash */|' "$_file";;
+    cnxman-dir-remove-opens-txn)
+        # `cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);` is unique in this file.
+        sed -i 's|^		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);$|		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST); /* NEGCTL cnxman-dir-remove-opens-txn */|' "$_file";;
 
     guard-ignores-category-0b)
         # `	case 0x0bu:` is unique in this file.

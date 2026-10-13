@@ -700,6 +700,7 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  * ------------------------------------------------------------------ */
 int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len);
 
+
 /* One resource as a directory sees it. `name` is NOT NUL-terminated. */
 struct vms_dlm_res_ident {
 	uint32_t hash;                    /* body[128:132]                  */
@@ -708,6 +709,36 @@ struct vms_dlm_res_ident {
 	uint8_t  name_len;                /* body[47], 1..31                */
 	uint8_t  name[VMS_DLM_NAME_MAX];
 };
+
+/*
+ * THE MASTER'S DIRECTORY-ENTRY REMOVAL (rd vms-e09), a named cat-0x02 op-0x04.
+ * When a resource this node mastered on a remote directory node's 0xf9 goes
+ * away, VMS's master tells that directory node, and the directory node never
+ * answers. Grounded on 8106 real removals in three V7.3 corpora
+ * (tests/lab/captures/vms-e09-dir-remove-20261013/PREDICTION.md, R1 and R3):
+ *
+ *   body[4:8]      0, so no transaction is opened and none is answered
+ *   body[8]/[9]    0x02 / 0x04
+ *   body[12:16]    0x0001 + N, stamped by the connection manager as on every
+ *                  DLM message
+ *   body[44:48+L]  the identity: group, mode, length, name, as the lookup
+ *                  carried it
+ *   body[128:132]  the directory hash, as the lookup carried it
+ *
+ * Everything else in a real removal varies from one removal of the SAME entry
+ * to the next (body[20:24] took 237 values over 394 removals of one entry). It
+ * is the sender's stale buffer, not an entry identifier, so the builder writes
+ * zero there. VMS_CODEC_E_INVAL for an identity with no name. The caller
+ * passes only a hash the executive holds for that identity (res->hash_known).
+ */
+vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,
+					    uint8_t *frame, uint32_t cap,
+					    uint32_t *written);
+
+/* Is this body a DLM NOTIFICATION, one the receiver never answers, so its
+ * envelope must open no transaction (body[4:8] = 0)? Nonzero only for the named
+ * op-0x04 directory-entry removal (rd vms-e09, R3). */
+int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len);
 
 /*
  * The answer to a real VMS member's op-0x0f (rd vms-cab). op 0x0f is one step of

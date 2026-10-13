@@ -1130,6 +1130,49 @@ static enum dlm_req_event dq_event_for_post(uint32_t op)
 	return DLM_REQ_EV_ENQ;
 }
 
+enum dlm_req_status dlm_req_fsm_dir_remove(struct dlm_req_fsm *f,
+					   const struct vms_dlm_proxy_post *p)
+{
+	struct vms_dlm_res_ident id;
+	uint32_t written = 0u;
+
+	if (f == (struct dlm_req_fsm *)0 || p == (const struct vms_dlm_proxy_post *)0)
+		return DLM_REQ_E_INVAL;
+	if (p->op != VMS_DLM_POST_DIR_REMOVE) {
+		f->dir_removes_refused++;
+		return DLM_REQ_E_INVAL;
+	}
+	if (p->dst_csid == 0u) {
+		f->dir_removes_refused++;
+		f->dir_unresolved++;
+		return DLM_REQ_E_NODIR;
+	}
+	if (!p->dir_hash_known) {
+		/* The directory finds its entry by this hash. Never a guessed one. */
+		f->dir_removes_refused++;
+		f->hash_unknown_refused++;
+		return DLM_REQ_E_NOHASH;
+	}
+	dq_bzero(&id, (uint32_t)sizeof(id));
+	id.name_len = dq_name_from_post(p, id.name);
+	id.group    = p->res_group;
+	id.mode     = p->res_acmode;
+	id.hash     = p->dir_hash;
+
+	dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
+	if (vms_dlm_dir_remove_build(&id, f->txframe,
+				     (uint32_t)sizeof(f->txframe),
+				     &written) != VMS_CODEC_OK) {
+		f->dir_removes_refused++;
+		f->codec_failures++;
+		return DLM_REQ_E_CODEC;
+	}
+	if (dq_emit(f, (vms_csid_t)p->dst_csid) != DLM_REQ_OK)
+		return DLM_REQ_E_SEND;
+	f->dir_removes_sent++;
+	return DLM_REQ_OK;
+}
+
 enum dlm_req_status dlm_req_fsm_post(struct dlm_req_fsm *f,
 				     const struct vms_dlm_proxy_post *p)
 {

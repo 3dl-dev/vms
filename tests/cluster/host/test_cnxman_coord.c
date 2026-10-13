@@ -46,6 +46,7 @@
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_coord_fsm.h"
 #include "vms_cluster_codec_cm.h"
+#include "vms_cluster_codec_dlm.h"
 #include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, RX specimen
 				  * assembly (FC-P3.15, design sec 3.2.4) */
 
@@ -2557,6 +2558,61 @@ static void test_52d_startup_query_answered_from_csb(void)
 		 "a node that is not a member answers nothing");
 }
 
+/*
+ * rd vms-e09: the directory-entry removal exactly as cnxman_dlm_send puts it on
+ * the wire -- the FSM's body (vms_dlm_dir_remove_build), then the cluster's
+ * DLM sequence (vms_dlm_seq_put, as cnxman_dlm_seq_stamp), then a NOTIFY
+ * envelope on the directory node's CSB (the order test_dlm_scs_arm pins in the
+ * shipping glue). The conformance gate's `dlm_dir_remove` rows read this dump.
+ */
+static void test_e09_dir_remove_on_the_wire(void)
+{
+	struct vms_fixture real;
+	struct vms_dlm_res_ident id;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char path[600], err[256], state[32];
+	uint32_t written = 0;
+	uint16_t sent0;
+
+	printf("\n-- rd vms-e09: the removal's envelope opens no transaction --\n");
+	snprintf(path, sizeof(path), "%s/dlm-dir-remove-lnm1-mou.spec",
+		 OVMX_FIXTURE_DIR);
+	err[0] = '\0';
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, &real, err,
+			     sizeof(err)) != 0) {
+		printf("  FAIL could not load %s: %s\n", path, err);
+		ct_check(0, "the held-out real removal loads");
+		return;
+	}
+	ct_check(vms_dlm_res_ident_parse_body(real.bytes + VMS_OFF_SYSAP_BODY,
+					      VMS_CM_BODY_LEN, &id) ==
+		 VMS_CODEC_OK, "its identity reads");
+
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_dir_remove_build(&id, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the FSM's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence, as on every DLM message");
+	ct_check(vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "the glue reads it as a notification");
+	sent0 = m->cm_send_msg;
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_NOTIFY);
+	ct_check(b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0,
+		 "*** body[4:8] = 0: no transaction, as in 8106/8106 real removals ***");
+	ct_check(m->cm_send_msg != sent0,
+		 "it still takes the dialogue's next send-msg# (it is a CM message)");
+	snprintf(state, sizeof(state), "seq=%u", (unsigned)g.cl.club.dlm_seq);
+	conf_dump("dlm_dir_remove", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -2579,6 +2635,7 @@ int main(void)
 	test_count_commits_in_phase2_before_the_barrier();
 	test_the_go_is_a_notification();
 	test_52d_startup_query_answered_from_csb();
+	test_e09_dir_remove_on_the_wire();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();

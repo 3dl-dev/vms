@@ -5,6 +5,7 @@
 ;       the root directly in mode r with VALBLK.
 ;   w = A: as '-', then generate lock ACTIVITY: 300 rounds of converting every
 ;       sub-lock to NL and back to s (drives activity-based remastering).
+;   w = B: as A, with 3000 rounds (rd vms-657 run 2).
 ;   r = root lock mode digit (0 NL .. 5 EX), taken EX first with VALBLK so a
 ;       known 16-byte value block is written by the down-conversion to r
 ;   s = sub-lock mode digit, n = number of sub-locks (0-9) named S0..S(n-1)
@@ -82,9 +83,12 @@ PAT: .ASCII /RMLVB-0123456789/
 72$: ADDL2 #24,R7
  INCL R6
  BRB 10$
-50$: CMPB CMDBUF+3,#^A/A/
+50$: MOVL #300,R8
+ CMPB CMDBUF+3,#^A/A/
+ BEQL 52$
+ MOVL #3000,R8
+ CMPB CMDBUF+3,#^A/B/
  BNEQ 58$
- MOVL #300,R8
 52$: CLRL R6
  MOVAB SLKSB,R7
 54$: CMPL R6,NSUB

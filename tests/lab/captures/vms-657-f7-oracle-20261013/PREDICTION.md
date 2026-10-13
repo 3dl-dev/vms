@@ -56,3 +56,19 @@ VAX2 ran RMHOLD 114AF7ROOT.
 F7ROOT, which plausibly kept the tree from moving to VAX2. VAX3's RMPOKE now runs one batch
 of 1000 rounds per node-wide DCL loop iteration, with `WAIT 0:0:2` between batches. VAX2's
 activity grows to 3000 rounds (RMHOLD with a third digit). F1, F2 and F3 stand.
+
+**Run 2 as fired, and step 4 (registered 2026-10-13, before run 2).**
+- Implementation of the amendment: VAX3 runs `$ L: RMPOKE 1F7ROOT` / `$ WAIT 0:0:2` /
+  `$ GOTO L`. VAX2 runs `RMHOLD 114BF7ROOT`. `B` is a new activity mode in `RMHOLD.MAR`:
+  `A`'s loop with 3000 rounds instead of 300.
+- Step 4, added. rd vms-380 RA2/RA3 (`../vms-380-remaster-arms-20261011/README.md`) found
+  that a master holding its own locks does not give the tree up to an equal-LOCKDIRWT
+  node's activity, and that the tree moved VAX1 -> VAX2 only after VAX1 stopped its holder.
+  Run 1 kept VAX1's RMHOLD running throughout. So, if no 0xf7 has appeared 120 s into VAX2's
+  activity, VAX1's RMHOLD is stopped (Ctrl-Y, STOP) while VAX2 and VAX3 continue.
+  Steps 1–3 alone are recorded as the registered amendment's result.
+- **F1 now reads:** an 0xf7 from VAX1 to VAX3 for F7ROOT, after VAX2's activity starts, in
+  steps 1–3 or after step 4. F2 and F3 are unchanged.
+- **Node mapping:** all three nodes advertise the same model text, so MODEL frames cannot tell
+  them apart. Nodes are mapped from the SCSNODE name in each source MAC's SCS START/STACK
+  frames.

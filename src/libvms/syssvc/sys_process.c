@@ -29,8 +29,8 @@
  *               executive, so the child's row carried no user name and a
  *               capable()-derived UIC/privilege set. vms-d31d closed that:
  *               $CREPRC now stamps the child's EXECUTIVE row with the
- *               creator's identity (or the prvadr/uic override) via
- *               vms_kif_setident(), so the child inherits the creator's UIC,
+ *               creator's identity (or the prvadr/uic override), handed
+ *               to the executive in CREPRC_PCB, so the child inherits the creator's UIC,
  *               user name and privileges the way OpenVMS $CREPRC does.
  *   vms-pt1  -- the executive process table every process can query, with
  *               VMS-meaningful attributes. That is what the eleven services
@@ -41,7 +41,8 @@
  *     registered with vms_kif_setprn(); its VMS process id, reported through
  *     pidadr, is the one the executive assigned (read with
  *     vms_kif_getjpi_self()); and its UIC, user name and privilege masks are
- *     stamped onto its executive row with vms_kif_setident(), inherited from
+ *     given to its executive row by CREPRC_PCB when the executive creates
+ *     the process (rd vms-a2c: SETIDENT is LOGINOUT's alone), inherited from
  *     the creator's executive identity unless prvadr/uic override them. Another
  *     process reads all of these back through $GETJPI, and the Files-11
  *     reference monitor enforces the stamped UIC/privileges. (Before vms-d31d
@@ -1142,9 +1143,9 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * SYS$SYSTEM:SYSUAF.DAT and was refused its own authorization read.
      *
      * The creator reads its OWN executive identity here (authentic -- a
-     * process cannot forge the row the executive holds for it), and the
-     * child stamps the resulting identity after it registers, via
-     * vms_kif_setident() below.
+     * process cannot forge the row the executive holds for it), and hands
+     * the resulting identity to the executive in CREPRC_PCB, which applies
+     * it as it creates the child's row (rd vms-a2c).
      */
     struct vms_procinfo creator_info;
     memset(&creator_info, 0, sizeof(creator_info));

@@ -45,7 +45,7 @@ VAX1's copy still holds 'SCS$' / 'UP' from its 'SCS$DIR_LOOKUP' step. So OVMX re
 millisecond. OVMX is the only member that never answers it.
 
 The real answer (28 corpus pairs) echoes the request with body[8] |= 0x80 and writes body[28:32]
-and body[36:40] as a pair: (1, 1) in 18 pairs and (0, 0) in 10. Nothing else changes. In every
+and body[36:40] as a pair: (1, 1) in 21 pairs and (0, 0) in 7. Nothing else changes. In every
 pair the (1, 1) answerer both became a member earlier and has the lower SCSSYSTEMID, so the two
 candidate rules are confounded:
 - R-old: answer (1, 1) when the answerer became a member before the requester, otherwise (0, 0).

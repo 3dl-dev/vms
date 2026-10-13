@@ -783,6 +783,73 @@ static void test_relay_precedes_commit(void)
 }
 
 /*
+ * rd vms-562ac: body[20:28] of every op 0x03 is ONE VMS time per transition,
+ * read at the first commit -- the members' commits and the subject's, sent
+ * later, carry the same value (real R2: one value over 3.06 s of commits and
+ * retransmissions). No clock: the field stays zero and the omission counts.
+ */
+static uint64_t sent_le64(const struct sent_frame *s, uint32_t off)
+{
+	return (uint64_t)sent_le32(s, off) |
+	       ((uint64_t)sent_le32(s, off + 4u) << 32);
+}
+
+static void commit_drive(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_join_request(f);
+
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	drive_relay_acks(2);
+}
+
+static void test_commit_carries_one_transition_time(void)
+{
+	const uint64_t t0 = 0x00bc3e4f1c587120ull; /* armA's 773f commit time */
+	uint32_t k;
+
+	printf("\n-- every op 0x03 of a transition carries its commit time --\n");
+	bed_init(2);
+	g.fake.now_vms = t0;
+	commit_drive();
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 2,
+			"the two other members are committed");
+	g.fake.now_vms = t0 + 300000u;   /* 30 ms later: the clock moved on */
+	{
+		uint8_t f[VMS_CM_FRAME_LEN];
+		uint32_t n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+
+		(void)coord_feed(&g.c, f, n, 1);
+		(void)coord_feed(&g.c, f, n, CSB_VAX2);
+	}
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 3,
+			"and then the subject");
+	for (k = 0; k < 3u; k++) {
+		const struct sent_frame *s =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, k);
+
+		ct_check(s != NULL && sent_le64(s, VMS_OFF_SYSAP_BODY +
+						   VMS_OFB_CM_COMMIT_TIME) == t0,
+			 "commit k carries the time of the FIRST commit");
+	}
+	ct_check_eq_u32(g.c.commit_time_omitted, 0u, "nothing omitted");
+
+	bed_init(2);
+	g.fake.now_vms = 0u;
+	commit_drive();
+	{
+		const struct sent_frame *s =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0);
+
+		ct_check(s != NULL && sent_le64(s, VMS_OFF_SYSAP_BODY +
+						   VMS_OFB_CM_COMMIT_TIME) == 0u,
+			 "no clock: the commit time goes out zero");
+	}
+	ct_check(g.c.commit_time_omitted >= 1u,
+		 "...and the omission is counted, never filled");
+}
+
+/*
  * rd vms-9484: an answer to a commit this node never sent -- the subject's,
  * before its own commit went out -- is not an answer. It neither commits nor
  * opens anything.
@@ -2568,6 +2635,7 @@ int main(void)
 	test_already_coordinating_refuses();
 
 	test_relay_precedes_commit();
+	test_commit_carries_one_transition_time();
 	test_subject_answer_before_its_commit_is_ignored();
 	test_two_node_cluster_has_an_empty_relay_set();
 

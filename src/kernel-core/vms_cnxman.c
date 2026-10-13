@@ -3863,8 +3863,8 @@ int vms_cnxman_start(struct vms_cluster *cl)
 
 	/*
 	 * E31: this node's own identity, as read from real executive state.
-	 * Nothing here is asserted that the executive does not hold: model/
-	 * version/params/dir_descriptor stay `_valid = 0` -- every one of
+	 * Nothing here is asserted that the executive does not hold:
+	 * params/dir_descriptor stay `_valid = 0` -- every one of
 	 * those fields is still an operator-reserved or lab-pinned decision
 	 * (the remaining params offsets, E24's directory descriptor),
 	 * never this glue's default to invent. `conndata` is the one field
@@ -3888,6 +3888,20 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	 */
 	cn->cfg.version_valid =
 		(uint8_t)cluster_sysgen_sw_version(cl, cn->cfg.version);
+
+	/*
+	 * rd vms-562ac: the op-0x14 model record, body[16] count + text --
+	 * THIS node's real hardware, read from the substrate (exec_hw_model:
+	 * the VAX model a VAX kernel reports, "OVMX <machine>" anywhere else).
+	 * Never a copied VAX model string (honest-identity ruling). Every real
+	 * op 0x14 in the corpus is a counted string at body[16] (292/292
+	 * "VAXserver 3900 Series", 21 bytes) whose trailing bytes are not
+	 * written; OVMX zeroes them. Nothing reported: model_valid stays 0 and
+	 * the join advertises an empty model and counts model_omitted.
+	 */
+	cn->cfg.model_len = (uint8_t)exec_hw_model((char *)cn->cfg.model,
+						   (unsigned int)sizeof(cn->cfg.model));
+	cn->cfg.model_valid = (uint8_t)(cn->cfg.model_len != 0u);
 
 	/* THE CLUB, THE FOUR FSMs AND THIS NODE'S CONNECT DATA, armed from the
 	 * identity built above. Shared with CLUEXIT, which re-runs exactly

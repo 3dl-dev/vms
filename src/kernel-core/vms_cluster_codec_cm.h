@@ -1469,13 +1469,24 @@ vms_codec_status_t vms_cm_relay_build(uint8_t tr_class, uint32_t epoch,
  *
  * Sec 4(o) step 6: "M->J cat 0x01 op 0x03 membership COMMIT request
  * (txn, cksum)" -- the message IS its transaction envelope; role slot 0x20 at
- * body[16] (sec 4(r)), class at body[17], epoch at body[12:16]. Everything
- * else zero. The subject is the peer this frame is addressed to, so unlike the
- * relay there is no missing identity here.
+ * body[16] (sec 4(r)), class at body[17], epoch at body[12:16].
+ *
+ * body[20:28] (rd vms-562ac): the coordinator's VMS time when it first commits
+ * this transition. Measured on every real op-0x03 in tests/lab/captures (41
+ * commits with a later open from the same coordinator): one value per
+ * transition -- the same in the commit to every recipient and in every
+ * retransmission (R2: 3 frames over 3.06 s, one value) -- and 0 to 70 ms
+ * before the STAMP the same coordinator's next open carries at body[40:48]
+ * (10 equal at the VAX's 10 ms clock grain, 25 later by 10..70 ms). `xtime` 0
+ * (no clock) leaves the field zero; the caller counts that omission.
+ * Everything else zero. The subject is the peer this frame is addressed to, so
+ * unlike the relay there is no missing identity here.
  *
  * STAMP with is_response=0: a genuine origination.
  */
+#define VMS_OFB_CM_COMMIT_TIME 20u   /* LE u64, VMS absolute time */
 vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
+				       uint64_t xtime,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);
 
@@ -1815,6 +1826,24 @@ vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
  * body[40:52]) are deliberately absent: they are not constant even for the
  * node that emitted them, so reproducing them would assert a value no
  * implementation can derive.
+ *
+ * WHAT A REAL JOINER PUTS AT body[20:40], AND WHY OVMX SENDS ZERO (rd
+ * vms-562ac). On every real admission op 0x02 in tests/lab/captures (50,
+ * "00 02 00 00 01 00 xx 04" at [16:24]) the block [20:40] is the joiner's
+ * record of the LAST CLUSTER IT BELONGED TO, kept across reboots:
+ *   [22:28]  that cluster's founding SCSSYSTEMID (0x0401 = 1025, VAX1, on
+ *            disks cloned from the July lab image; 0x0406 = 1030 = OVMXE
+ *            after both VAXes had joined OVMXE's cluster in d52c run r3)
+ *   [28:36]  that cluster's formation time -- byte-equal to r3's FTIME
+ *            (r3's PARAMS body[28:36] and opens body[32:40]) in all four
+ *            db1 op-0x02s; one constant per disk image before that,
+ *            unchanged across days of reboots
+ *   [36:40]  a small count from the same record (2..4; changed with it)
+ * The record is the node's own history, not a property of the cluster it
+ * is joining. An OVMX node holds no persisted record of a previous cluster,
+ * so the honest value is the absent one -- all zero -- and every real
+ * coordinator has admitted OVMX with it (DC1, e09, d52c, db1). Writing any
+ * of these bytes would claim a cluster history this node does not have.
  *
  * STAMP with is_response=0.
  */

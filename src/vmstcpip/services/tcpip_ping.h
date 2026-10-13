@@ -56,6 +56,7 @@
 #include "iodef.h"
 #include "iosbdef.h"
 #include "ssdef.h"
+#include "tcpip_qio.h"      /* a $QIOW ends with its IOSB status (rd vms-d01) */
 
 /* ICMP message types (RFC 792). */
 #define TCPIP_ICMP_ECHOREPLY 0u
@@ -136,16 +137,14 @@ static inline uint32_t tcpip_ping_echo(uint32_t addr_be, uint16_t id,
         return st;
 
     /* IO$_SETMODE with the raw-ICMP socket-kind selector in P2. */
-    st = sys$qiow(0, chan, IO$_SETMODE, &iosb, NULL, 0,
-                  NULL, IO$K_SOCK_ICMP, 0, 0, 0, 0);
+    st = tcpip_qiow(chan, IO$_SETMODE, &iosb, NULL, IO$K_SOCK_ICMP, 0);
     if (!(st & 1)) { sys$dassgn(chan); return st; }
 
     /* IO$_ACCESS -- connect the raw socket to the target (port unused for ICMP). */
     sa.family = 2;                      /* AF_INET */
     sa.port   = 0;
     sa.addr   = addr_be;
-    st = sys$qiow(0, chan, IO$_ACCESS, &iosb, NULL, 0,
-                  &sa, (uint32_t)sizeof(sa), 0, 0, 0, 0);
+    st = tcpip_qiow(chan, IO$_ACCESS, &iosb, &sa, (uint32_t)sizeof(sa), 0);
     if (!(st & 1)) { sys$dassgn(chan); return st; }
 
     /* Build the ICMP echo request (RFC 792): type/code/checksum/id/seq/payload. */
@@ -162,8 +161,7 @@ static inline uint32_t tcpip_ping_echo(uint32_t addr_be, uint16_t id,
     pdu[2] = (unsigned char)(ck >> 8); pdu[3] = (unsigned char)(ck & 0xffu);
 
     /* IO$_WRITEVBLK -- send the echo request. */
-    st = sys$qiow(0, chan, IO$_WRITEVBLK, &iosb, NULL, 0,
-                  pdu, pdu_len, 0, 0, 0, 0);
+    st = tcpip_qiow(chan, IO$_WRITEVBLK, &iosb, pdu, pdu_len, 0);
     if (!(st & 1)) {
         sys$qiow(0, chan, IO$_DEACCESS, &iosb, NULL, 0, NULL, 0, 0, 0, 0, 0);
         sys$dassgn(chan);
@@ -178,8 +176,7 @@ static inline uint32_t tcpip_ping_echo(uint32_t addr_be, uint16_t id,
     st = SS$_ABORT;
     for (attempts = 0; attempts < 16; attempts++) {
         uint32_t bcnt, ihl, icmp_off, icmp_len;
-        uint32_t rst = sys$qiow(0, chan, IO$_READVBLK, &iosb, NULL, 0,
-                                rbuf, (uint32_t)sizeof(rbuf), 0, 0, 0, 0);
+        uint32_t rst = tcpip_qiow(chan, IO$_READVBLK, &iosb, rbuf, (uint32_t)sizeof(rbuf), 0);
         if (!(rst & 1)) { st = rst; break; }
         bcnt = iosb.iosb$w_bcnt;
         if (bcnt < 1)

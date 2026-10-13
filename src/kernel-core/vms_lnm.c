@@ -278,8 +278,10 @@ void vms_lnm_rundown(uint32_t vms_pid, uint8_t min_acmode)
 }
 
 /*
- * vms_lnm_forget_device - delete the LNM$SYSTEM names whose single equivalence
- * is the device `devnam` ("MBA12:"). A named mailbox's logical name is the
+ * vms_lnm_forget_device - delete the LNM$SYSTEM and LNM$JOB names whose single
+ * equivalence is the device `devnam` ("MBA12:"): $CREMBX puts a permanent
+ * mailbox's name in LNM$SYSTEM and a temporary one's in its creator's LNM$JOB
+ * (rd vms-7dd). A named mailbox's logical name is the
  * mailbox's: when the executive deletes the mailbox the name goes with it, so
  * a later $ASSIGN of the name finds neither (OpenVMS: SS$_IVDEVNAM, observed
  * IO.ASSIGN.MBX.GONE on VAX V7.3 and Alpha V8.4; vms-4a69). Called by the
@@ -296,8 +298,9 @@ void vms_lnm_forget_device(const char *devnam)
     for (i = 0; i < lnm_arena->max_entries; i++) {
         struct vms_lnm_entry *e = &lnm_arena->entries[i];
 
-        if (e->in_use && e->table == VMS_LNM_TBL_SYSTEM && e->num_equiv == 1 &&
-            strcmp(e->equiv[0].value, devnam) == 0)
+        if (e->in_use &&
+            (e->table == VMS_LNM_TBL_SYSTEM || e->table == VMS_LNM_TBL_JOB) &&
+            e->num_equiv == 1 && strcmp(e->equiv[0].value, devnam) == 0)
             lnm_free_entry(e);
     }
     lnm_write_end();

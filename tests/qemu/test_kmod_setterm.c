@@ -128,7 +128,11 @@ static void bound_child(int wfd, int gfd, const char *self, int phase)
     memset(&rep, 0, sizeof(rep));
     rep.phase = (uint32_t)phase;
 
-    if (vms_kif_open() < 0 || ovmx_test_self(&rep.vms_pid) != SS_NORMAL)
+    /* REGISTER on a process that already has its row (its creator made it,
+     * and the re-exec keeps it) reports that row's VMS PID: the adopt reply
+     * register-adopt-pid-not-reported mutates. It goes with REGISTER itself
+     * (rd vms-2a5, the no-registration half). */
+    if (vms_kif_open() < 0 || vms_kif_register(&rep.vms_pid) != SS_NORMAL)
         _exit(3);
 
     if (phase == 0) {

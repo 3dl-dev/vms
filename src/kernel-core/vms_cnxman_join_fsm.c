@@ -2581,6 +2581,7 @@ static enum cnxman_join_rx join_h_commit_any(struct cnxman_join *j,
 	}
 	join_retarget(j, c, e->from_csb);
 	j->tr_class = (uint8_t)VMS_CM_CLASS_FORM;
+	j->cl->club.own_tr_class = (uint8_t)VMS_CM_CLASS_FORM;
 	j->formations_joined++;
 	join_log(j, "%CNXMAN, a cluster member proposed forming a cluster with "
 		    "this node as a founding member");
@@ -2632,9 +2633,10 @@ static enum cnxman_join_rx join_h_commit_any(struct cnxman_join *j,
  * body is the request's own bytes except TWO facts about THIS node, and both
  * are read back from real executive state at the moment of the answer:
  *
- *   body[17]     `j->tr_class`      -- written in join_h_tr_open() from a REAL
- *                                      op-0x08/0x09/0x0d open this node was
- *                                      sent, never composed;
+ *   body[17]     the CLUB's         -- the class of the latest REAL open this
+ *                own_tr_class          node received (join_h_tr_open) or sent
+ *                                      as coordinator (coord_open_transition),
+ *                                      never composed (rd vms-6ec);
  *   body[12:16]  the CLUB's epoch   -- the epoch this node is really at, which
  *   body[20:24]                        is NOT the coordinator's (the recipe
  *                                      correction in vms_cm_relay_response_
@@ -2650,8 +2652,14 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 					const struct join_ev *e)
 {
 	vms_codec_status_t st;
+	/* rd vms-6ec: the class of this node's LATEST transition, sent or
+	 * received. The CLUB holds it, because a node that only ever
+	 * coordinated (a founder) never received an open, so j->tr_class alone
+	 * left it with nothing to answer, and the relay stalled the admission. */
+	uint8_t cls = (j->cl != NULL && j->cl->club.own_tr_class != 0u)
+		    ? j->cl->club.own_tr_class : j->tr_class;
 
-	if (j->tr_class == 0u) {
+	if (cls == 0u) {
 		j->relays_no_class++;
 		join_log(j, "%CNXMAN, a system was relayed to this node before "
 			    "it held a transition class: nothing grounded to "
@@ -2663,7 +2671,7 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 		j->ignored_events++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
-	st = vms_cm_relay_response_build(e->body, e->len, j->tr_class,
+	st = vms_cm_relay_response_build(e->body, e->len, cls,
 					 j->cl->club.epoch, j->scratch,
 					 (uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
@@ -2672,6 +2680,29 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 	if (join_emit_reply(j, e) == 0)
 		j->echoes_sent++;
 	return CNXMAN_JOIN_RX_CONSUMED;
+}
+
+/*
+ * ...AND A MEMBER WHOSE JOIN NEVER RAN ANSWERS IT TOO (rd vms-6ec).
+ *
+ * A node that founded the cluster is a member, but its join FSM never drove
+ * an admission: on every newly discovered system it withholds its op-0x02
+ * (join_withhold_admission) and stays in ADVERTISE. Lab DC2: OVMXA founded and
+ * admitted OVMXB. When real VAX2 asked OVMXB, OVMXB relayed it to OVMXA, and
+ * the relay hit an empty ADVERTISE cell (CNXTRACE: ev=RX_TR_RELAY
+ * detail=EMPTY-CELL). VAX2 was never admitted. In ADVERTISE the relay is
+ * answered exactly as a sitting member answers it, but only when this node
+ * really is a committed member. A node still asking to be admitted is not a
+ * member, and it confirms nothing on the cluster's behalf.
+ */
+static enum cnxman_join_rx join_h_relay_if_member(struct cnxman_join *j,
+						  const struct join_ev *e)
+{
+	if (!join_node_already_member(j)) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	return join_h_relay(j, e);
 }
 
 /*
@@ -3500,8 +3531,11 @@ static enum cnxman_join_rx join_h_tr_open(struct cnxman_join *j,
 {
 	struct vms_cm_open o;
 
-	if (vms_cm_open_parse(e->body, e->len, &o) == VMS_CODEC_OK)
+	if (vms_cm_open_parse(e->body, e->len, &o) == VMS_CODEC_OK) {
 		j->tr_class = o.cls;
+		if (j->cl != NULL)
+			j->cl->club.own_tr_class = o.cls;
+	}
 	return join_forward(j, e);
 }
 
@@ -4866,6 +4900,8 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_MSCP_END]     = join_h_mscp_end,
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_RX_COMMIT]    = join_h_commit_any,   /* rd vms-f29 */
+		/* A founder is a member that sits here (rd vms-6ec). */
+		[CNXMAN_EV_RX_TR_RELAY]  = join_h_relay_if_member,
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
 		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,

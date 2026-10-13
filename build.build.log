@@ -1,4 +1,3 @@
-[  0%] Built target cluster_host_fixture
 [  0%] Built target cluster_host_codec
 [ 50%] Built target cluster_host_cnxman
 [100%] Built target test_cnxman_join
@@ -6,3 +5,22 @@ Built target cluster_host_fixture
 Built target cluster_host_codec
 Built target cluster_host_pe
 Built target test_pe_block
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_fixture.dir/cluster_fixture.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_fixture.dir/cluster_sha256.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_cluster_codec.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_cluster_codec_hello.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_cluster_codec_dlm.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_dlm_hash.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_cluster_codec_vc.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_cluster_codec_cm.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_cluster_codec_scs.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_cluster_codec_mscp.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_cluster_codec_blk.c.o
+[  0%] Building C object tests/cluster/host/CMakeFiles/cluster_host_codec.dir/__/__/__/src/kernel-core/vms_mscp_cl_fsm.c.o
+[  0%] Linking C static library ../../../lib/libcluster_host_fixture.a
+[  0%] Built target cluster_host_fixture
+[  0%] Built target cluster_host_codec
+[  0%] Built target cluster_host_fixture
+[  0%] Built target cluster_host_codec
+[100%] Built target cluster_host_cnxman
+[100%] Built target test_cnxman_join

@@ -2411,6 +2411,48 @@ static void test_f297_zero_weight_joiner_merges(void)
 			0, "  and no barrier release was sent");
 }
 
+/*
+ * rd vms-6e3 residual: a member's 0x8b/0x05 (its answer to this node's
+ * cat-0x0b op-0x05 logical-name database request, ~0.9 s after every OVMX
+ * admission in lab r6e3a) carries opcode 0x05 in category 0x8b. It is not an
+ * 0x81/0x05 membership-record ack: the coordinator neither counts it nor
+ * consumes it, idle or waiting in RECORDS, and the router hands it on to the
+ * join FSM.
+ */
+static void test_0b05_answer_is_not_a_record_ack(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN], a[VMS_CM_FRAME_LEN];
+	uint32_t n, na;
+	uint32_t i, acks;
+
+	printf("\n-- a 0x8b/0x05 database answer is not a membership-record "
+	       "ack (rd vms-6e3) --\n");
+	bed_init(2);
+	na = mk_response(a, VMS_CM_CAT_0B, VMS_CM_OP_0B_DBREQ);
+	/* negctl: coord-0b05-read-as-record-ack */
+	ct_check(coord_feed(&g.c, a, na, 1) == CNXMAN_COORD_RX_NOT_MINE,
+		 "*** idle: handed on, not consumed ***");
+	ct_check_eq_u32(g.c.ignored_events, 0u,
+			"  and no 'no edge' event is counted");
+
+	(void)coord_feed(&g.c, f, mk_join_request(f), bed_join_csb(2));
+	drive_relay_acks(2);
+	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT);
+	for (i = 0; i < 2u; i++)
+		(void)coord_feed(&g.c, f, n, (int32_t)(i + 1u));
+	(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_RECORDS,
+		 "the coordinator waits in RECORDS");
+	acks = g.c.membrec_acks;
+	(void)coord_feed(&g.c, a, na, bed_join_csb(2));
+	(void)coord_feed(&g.c, a, na, 1);
+	ct_check_eq_u32(g.c.membrec_acks, acks,
+			"*** RECORDS: a 0x8b/0x05 is not counted as a record "
+			"answer ***");
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_RECORDS,
+		 "  and the open still waits for the real answers");
+}
+
 /* rd vms-f297: the open waits for every membership record's answer, as a real
  * V7.3 coordinator does (op 05, its 0x81/0x05, THEN op 09 -- lab run XF); sent
  * in the same instant, a real member bugchecked CNXMGRERR (lab arm PF-3). */
@@ -2772,6 +2814,7 @@ int main(void)
 	test_f297_each_missing_fact_refuses();
 	test_f297_a_rejected_record_abandons();
 	test_f297_open_waits_for_the_records();
+	test_0b05_answer_is_not_a_record_ack();
 	test_f297_zero_weight_joiner_merges();
 	test_f297_lost_fact_withholds_the_open();
 

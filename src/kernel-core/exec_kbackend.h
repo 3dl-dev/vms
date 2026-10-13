@@ -510,6 +510,17 @@
  *        pserialize_read_enter()/_exit() section, skipping IFT_LOOP and
  *        requiring IFT_ETHER, taking the first match.
  *
+ *   unsigned int exec_hw_model(char *out, unsigned int outsz)  (rd vms-562ac)
+ *        this node's REAL hardware model, as the text the cluster's op-0x14
+ *        model record advertises (conductor ruling on honest identity: OVMX
+ *        names the hardware it really runs on, never a copied VAX model).
+ *        A VAX substrate answers the VAX model its own kernel reports
+ *        (NetBSD/vax: cpu_getmodel(), "MicroVAX 3800/3900" on a SIMH KA655);
+ *        any other substrate answers "OVMX <machine>" from its own kernel's
+ *        machine name (Linux: init_utsname()->machine; NetBSD: machine_arch).
+ *        Returns the length written, NOT NUL-terminated; 0 when the text does
+ *        not fit `outsz` -- never truncated -- or the substrate reports none.
+ *
  * 12. Host TCP client socket  (vms-9951; called ONLY from the BGn: INET facility,
  *    src/kernel-core/vms_bg.c -- the executive-resident network pseudo-device,
  *    the block-layer seam's transport twin). OVMX never reimplements a transport:

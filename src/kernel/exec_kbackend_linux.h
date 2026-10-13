@@ -76,6 +76,7 @@
 #include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
 #include <net/net_namespace.h>    /* init_net */
 #include <linux/if_arp.h>         /* ARPHRD_ETHER */
+#include <linux/utsname.h>        /* init_utsname (exec_hw_model, vms-562ac) */
 /* vms-d61 (seqlock barriers + userspace-publishable arena) backing headers. */
 #include <linux/vmalloc.h>        /* vmalloc_user / vfree (exec_arena_*) */
 #include <asm/barrier.h>          /* smp_wmb / smp_rmb (exec_membar_*) */
@@ -854,6 +855,31 @@ static inline int exec_netdev_primary(char *name, unsigned int namesz, int *link
 	}
 	rtnl_unlock();
 	return found;
+}
+
+/* ---- 11b. this node's hardware model (rd vms-562ac; see exec_kbackend.h) ----
+ * Linux runs OVMX on non-VAX hardware only, so the honest model is the
+ * platform: "OVMX " + the kernel's own machine name (x86_64, aarch64, alpha).
+ * init_utsname() is the boot namespace's record, not a container's view. */
+static inline unsigned int exec_hw_model(char *out, unsigned int outsz)
+{
+	static const char pfx[] = "OVMX ";
+	const char *m = init_utsname()->machine;
+	unsigned int n = 0, i;
+
+	if (out == NULL || m == NULL || m[0] == '\0')
+		return 0;
+	for (i = 0; pfx[i] != '\0'; i++) {
+		if (n >= outsz)
+			return 0;
+		out[n++] = pfx[i];
+	}
+	for (i = 0; m[i] != '\0'; i++) {
+		if (n >= outsz)
+			return 0;   /* never truncated */
+		out[n++] = m[i];
+	}
+	return n;
 }
 
 /* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----

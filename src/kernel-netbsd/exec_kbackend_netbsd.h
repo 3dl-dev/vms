@@ -859,6 +859,39 @@ exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
  * vms_internal.h. Declared extern here; defined in vms_lan_netbsd.c. */
 int exec_netdev_primary(char *name, unsigned int namesz, int *link_up);
 
+/* ---- 11b. this node's hardware model (rd vms-562ac; see exec_kbackend.h) ----
+ * On a VAX the substrate's own model name, the one NetBSD/vax prints at boot
+ * (cpu_getmodel(), <sys/cpu.h>: "MicroVAX 3800/3900" on a SIMH KA655). Any
+ * other NetBSD port: "OVMX " + machine_arch (<sys/systm.h>). */
+#if defined(__vax__)
+#include <sys/cpu.h>       /* cpu_getmodel */
+#endif
+static inline unsigned int exec_hw_model(char *out, unsigned int outsz)
+{
+#if defined(__vax__)
+	static const char pfx[] = "";
+	const char *m = cpu_getmodel();
+#else
+	static const char pfx[] = "OVMX ";
+	const char *m = machine_arch;
+#endif
+	unsigned int n = 0, i;
+
+	if (out == NULL || m == NULL || m[0] == '\0')
+		return 0;
+	for (i = 0; pfx[i] != '\0'; i++) {
+		if (n >= outsz)
+			return 0;
+		out[n++] = pfx[i];
+	}
+	for (i = 0; m[i] != '\0'; i++) {
+		if (n >= outsz)
+			return 0;   /* never truncated */
+		out[n++] = m[i];
+	}
+	return n;
+}
+
 /* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
  * Real mapping: membar_producer/membar_consumer are the portable NetBSD
  * store-store / load-load barriers (membar_ops(3), <sys/atomic.h> included

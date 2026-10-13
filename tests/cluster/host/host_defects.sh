@@ -246,7 +246,8 @@ join-lnm-answered-unapplied
 join-lnm-db-not-applied
 pe-blk-frame-unringed
 guard-ignores-category-0b
-coord-own-class-unrecorded"
+coord-own-class-unrecorded
+advertise-relay-empty-cell"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1154,6 +1155,19 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** an operation the executive refused is NOT answered ***
   counted refused
+EOF
+                      ;;
+        esac;;
+
+    advertise-relay-empty-cell)
+        case "$_f" in
+        facility)     echo "a founder whose join sits in ADVERTISE answers a coordinator's op-0x12 relay as a member (rd vms-6ec)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "The ADVERTISE row loses its RX_TR_RELAY cell, so the relay lands in an empty cell. That is the lab DC2 stall: real VAX2 asked OVMXB, OVMXB relayed it to the founder OVMXA, OVMXA answered nothing, and VAX2 was never admitted.";;
+        require_fail) hd_lines <<'EOF'
+*** the founder answers the relay from [ADVERTISE] ***
 EOF
                       ;;
         esac;;
@@ -2697,6 +2711,10 @@ apply_edit() {
     join-lnm-answered-unapplied)
         # `if ((st & 1u) == 0u) {` is unique in this file.
         sed -i 's|if ((st \& 1u) == 0u) {|if (0 \&\& (st \& 1u) == 0u) { /* NEGCTL join-lnm-answered-unapplied */|' "$_file";;
+
+    advertise-relay-empty-cell)
+        # `= join_h_relay_if_member,` is unique in this file.
+        sed -i 's|^		\[CNXMAN_EV_RX_TR_RELAY\]  = join_h_relay_if_member,$|		/* NEGCTL advertise-relay-empty-cell */|' "$_file";;
 
     coord-own-class-unrecorded)
         # `c->cl->club.own_tr_class = tr_class;` is unique in this file.

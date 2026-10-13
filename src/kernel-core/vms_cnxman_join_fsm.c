@@ -2683,6 +2683,29 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 }
 
 /*
+ * ...AND A MEMBER WHOSE JOIN NEVER RAN ANSWERS IT TOO (rd vms-6ec).
+ *
+ * A node that founded the cluster is a member, but its join FSM never drove
+ * an admission: on every newly discovered system it withholds its op-0x02
+ * (join_withhold_admission) and stays in ADVERTISE. Lab DC2: OVMXA founded and
+ * admitted OVMXB. When real VAX2 asked OVMXB, OVMXB relayed it to OVMXA, and
+ * the relay hit an empty ADVERTISE cell (CNXTRACE: ev=RX_TR_RELAY
+ * detail=EMPTY-CELL). VAX2 was never admitted. In ADVERTISE the relay is
+ * answered exactly as a sitting member answers it, but only when this node
+ * really is a committed member. A node still asking to be admitted is not a
+ * member, and it confirms nothing on the cluster's behalf.
+ */
+static enum cnxman_join_rx join_h_relay_if_member(struct cnxman_join *j,
+						  const struct join_ev *e)
+{
+	if (!join_node_already_member(j)) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	return join_h_relay(j, e);
+}
+
+/*
  * The op-0x06 MEMBERSHIP burst -- the anti-LARP crux of this whole item.
  *
  * ==========================================================================
@@ -4877,6 +4900,8 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_MSCP_END]     = join_h_mscp_end,
 		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_RX_COMMIT]    = join_h_commit_any,   /* rd vms-f29 */
+		/* A founder is a member that sits here (rd vms-6ec). */
+		[CNXMAN_EV_RX_TR_RELAY]  = join_h_relay_if_member,
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
 		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,

@@ -238,7 +238,9 @@ glue-close-abandons-held-transition
 csb-new-incarnation-carried
 barrier-stalled-refuses-new-transition
 barrier-stalled-ignores-new-go
-join-reply-to-the-join-target"
+join-reply-to-the-join-target
+join-k10-close-withheld
+join-k5-close-withheld"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -865,6 +867,8 @@ EOF
 a stray second 0x0f answers nothing
   and answered the pre-vms-1f64 way
 then the cat-0x86 goes
+*** it is NOT withheld (the startup hang) ***
+*** a kind-5 close is NOT withheld ***
 EOF
                       ;;
         esac;;
@@ -1051,6 +1055,44 @@ every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
   body[20:24]: the epoch, LE u32
 body[20:24] is OUR epoch, not the coordinator's
 the relay is answered, on the member's new connection
+EOF
+                      ;;
+        esac;;
+
+    join-k5-close-withheld)
+        case "$_f" in
+        facility)     echo "the kind-5 cat-0x06 close (rd vms-db1): its record pulled, nothing written back, answered 4 (3,069 of 3,313 real answers)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_h_close() no longer routes a kind-5 close into the block-transfer pull, so it falls to the immediate path, finds no grounded state and is withheld -- the second close that kept a real VAX's startup waiting on an OVMX member (lab labd52c db1-r1).";;
+        require_fail) hd_lines <<'EOF'
+*** a kind-5 close is NOT withheld ***
+its record is pulled whole (456 bytes, the commonest size)
+the cat-0x86 goes once it is read
+  with state 4
+  counted
+  and the buffer name is released
+  counted oversize
+EOF
+                      ;;
+        esac;;
+
+    join-k10-close-withheld)
+        case "$_f" in
+        facility)     echo "the kind-10 cat-0x06 close a booting real VAX sends every member during startup (rd vms-db1): pulled, written back with the measured answer, answered 5";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_h_close() no longer routes a kind-10 close into the block-transfer write-back, so it falls to the immediate path, finds no grounded state and is withheld -- exactly the OVMX behaviour that left both real VAXes' STARTUP waiting with no Username: for 20+ minutes in lab labd52c run 3.";;
+        require_fail) hd_lines <<'EOF'
+*** it is NOT withheld (the startup hang) ***
+a REQUEST DATA was issued for 136 bytes
+*** written back byte-exact with the real member's answer past rec[0:8] ***
+then the cat-0x86 goes
+  with state 5, a settled member's answer
+  counted
+  counted refused
 EOF
                       ;;
         esac;;
@@ -2534,6 +2576,14 @@ apply_edit() {
         # The `return f->last_gasp_incarnation == f->id.incarnation_time;`
         # line is unique in this file: grep -c is 1.
         sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
+
+    join-k5-close-withheld)
+        # `d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) &&` is unique in the file.
+        sed -i 's|d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) \&\&|0) \&\& /* NEGCTL join-k5-close-withheld */|' "$_file";;
+
+    join-k10-close-withheld)
+        # `(d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K10 &&` is unique in the file.
+        sed -i 's|(d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K10 \&\&|(0 \&\& /* NEGCTL join-k10-close-withheld */|' "$_file";;
 
     join-reply-to-the-join-target)
         # The ONE response transmit in this file (grep -c for

@@ -610,8 +610,14 @@ struct cnxman_join_ops {
 enum cnxman_rdev_state {
 	CNXMAN_RDEV_FREE = 0,
 	CNXMAN_RDEV_PULLING,    /* REQUEST DATA out, record not all in   */
-	CNXMAN_RDEV_WRITING     /* answer sent by SEND DATA, awaiting 0x0f */
+	CNXMAN_RDEV_WRITING,    /* answer sent by SEND DATA, awaiting 0x0f */
+	CNXMAN_RDEV_PULLED      /* rd vms-db1 kind 5: read, nothing written */
 };
+
+/* The record buffer: kind-6 records are 136/200 bytes, kind-5 records up to
+ * 1480 measured (136 + 64n, rd vms-db1). A larger one is not pulled (counted,
+ * k5_oversize) -- never truncated. */
+#define CNXMAN_RDEV_BUF       2048u
 
 struct cnxman_rdev {
 	uint8_t                 state;
@@ -622,7 +628,7 @@ struct cnxman_rdev {
 	uint32_t                started_ms;
 	struct vms_cm_xfer_desc desc;
 	uint8_t                 req[VMS_CM_BODY_LEN];
-	uint8_t                 rec[VMS_CM_RDEV_REC_MAX];
+	uint8_t                 rec[CNXMAN_RDEV_BUF];
 };
 
 /* ==========================================================================
@@ -1076,6 +1082,15 @@ struct cnxman_join {
 	uint32_t rdev_answered;
 	uint32_t rdev_nosuchdev;
 	uint32_t rdev_mount_normal;
+	/* rd vms-db1: kind-10 closes answered by the measured write-back and
+	 * state 5, and pulled records that were not the measured shape
+	 * (withheld, counted). */
+	uint32_t k10_answered;
+	uint32_t k10_refused;
+	/* rd vms-db1: kind-5 closes pulled and answered 4; records larger than
+	 * the buffer (not pulled, withheld). */
+	uint32_t k5_answered;
+	uint32_t k5_oversize;
 	uint32_t rdev_unanswerable;
 	uint32_t rdev_conid_mismatch;
 	uint32_t rdev_reclaimed;

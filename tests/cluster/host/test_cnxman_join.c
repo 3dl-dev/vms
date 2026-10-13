@@ -2261,6 +2261,127 @@ static void test_rdev_kind6_mount_record(void)
 	ct_check_eq_u32(g.j.rdev_mount_normal, 1u, "  counted as a MOUNT answer");
 }
 
+/*
+ * rd vms-db1: a kind-10 close (a VAX's startup asks every member) is pulled,
+ * written back with the measured answer, and answered 5 -- never withheld,
+ * which left both lab VAXes' startup waiting (labd52c run 3). The pair is a
+ * real one from a third run, held apart from the codec test's two
+ * (rm380 ra3: VAX 36ea -> 1298).
+ */
+static uint32_t mk_kind10(uint32_t len, uint32_t xfer_conid)
+{
+	uint32_t n = mk_kind6(len, xfer_conid);
+
+	g_frame[VMS_OFF_SYSAP_BODY + VMS_OFB_CM_CLOSE_REQ_KIND] =
+		(uint8_t)VMS_CM_CLOSE_KIND_K10;
+	return n;
+}
+
+static void test_k10_close_writes_back_then_answers(void)
+{
+	static const char k10_req[] =
+	    "0000000000000000880065640a00010001001a000000520000001a0000005200"
+	    "000051ba00870000000040829c8700000000001f000006000100000000000000"
+	    "0000ffffffffffffffff04000100000000000000000002004d10140000001000"
+	    "0000000000004200000000000000200000000000000000000000000000000000"
+	    "0000000000000000";
+	static const char k10_ans[] =
+	    "4041f0ff4041f0ff880065640a00010001001a000000520000001a0000005200"
+	    "000051ba00870000000040829c8700000000001f000006000100000000000000"
+	    "0000ffffffffffffffff04000100000000000100000002004d10140000001000"
+	    "0000000000000200000008000000200000000000000000000000000000000000"
+	    "0000000000000000";
+	uint8_t want[136];
+	uint32_t sent_before, conid;
+
+	printf("\n-- vms-db1: kind-10 close -- pull, write back, answer 5 --\n");
+	rb_bed();
+	conid = g.member_csb->cdt_conid;
+	sent_before = g.n_sent;
+	ct_check_eq_u32(join_feed(mk_kind10(136u, conid)),
+			CNXMAN_JOIN_RX_CONSUMED, "the kind-10 close is taken");
+	ct_check_eq_u32(g.j.closes_withheld, 0u,
+			"*** it is NOT withheld (the startup hang) ***");
+	ct_check_eq_u32(rb.n_req, 1u, "a REQUEST DATA was issued for 136 bytes");
+	ct_check_eq_u32(g.n_sent, sent_before, "  and no cat-0x86 yet");
+
+	if (rb.reg_buf != NULL) {
+		rb_hex(k10_req, rb.reg_buf, 136);
+		cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 136u, 136u);
+	}
+	rb_hex(k10_ans, want, 136);
+	ct_check(rb.n_send == 1u && memcmp(rb.sent_rec + 8, want + 8, 128) == 0,
+		 "*** written back byte-exact with the real member's answer "
+		 "past rec[0:8] ***");
+	cnxman_join_blk_sent(&g.j, 0x00001101u);
+	ct_check_eq_u32(g.n_sent, sent_before + 1u, "then the cat-0x86 goes");
+	ct_check_eq_u32(g.n_sent > sent_before ?
+			sent_le16(n_cm_sent() - 1u, VMS_OFB_CM_CLOSE_STATE) : 0u,
+			VMS_CM_CLOSE_STATE_K10,
+			"  with state 5, a settled member's answer");
+	ct_check_eq_u32(g.j.k10_answered, 1u, "  counted");
+
+	/* A record that is not the measured shape: nothing written, the
+	 * answer withheld and counted -- never a guessed one. */
+	rb_bed();
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind10(136u, g.member_csb->cdt_conid));
+	if (rb.reg_buf != NULL) {
+		rb_hex(k10_req, rb.reg_buf, 136);
+		rb.reg_buf[18] = 0x15;
+		cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 136u, 136u);
+	}
+	ct_check_eq_u32(rb.n_send, 0u, "an undecoded kind-10 record: nothing written");
+	ct_check_eq_u32(g.j.k10_refused, 1u, "  counted refused");
+	ct_check_eq_u32(g.n_sent, sent_before, "  and no answer invented");
+}
+
+/*
+ * rd vms-db1: a kind-5 close (3,069 of 3,313 real answers: pull, then 4) is
+ * read and answered 4 -- nothing is written back. Withheld, it was the second
+ * close that kept a real VAX's startup waiting (labd52c db1-r1).
+ */
+static uint32_t mk_kind5(uint32_t len, uint32_t xfer_conid)
+{
+	uint32_t n = mk_kind6(len, xfer_conid);
+
+	g_frame[VMS_OFF_SYSAP_BODY + VMS_OFB_CM_CLOSE_REQ_KIND] =
+		(uint8_t)VMS_CM_CLOSE_KIND_K5;
+	return n;
+}
+
+static void test_k5_close_pulls_then_answers_4(void)
+{
+	uint32_t sent_before, conid;
+
+	printf("\n-- vms-db1: kind-5 close -- pull, answer 4, write nothing --\n");
+	rb_bed();
+	conid = g.member_csb->cdt_conid;
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind5(456u, conid));
+	ct_check_eq_u32(g.j.closes_withheld, 0u,
+			"*** a kind-5 close is NOT withheld ***");
+	ct_check_eq_u32(rb.req_len, 456u,
+			"its record is pulled whole (456 bytes, the commonest size)");
+	ct_check_eq_u32(g.n_sent, sent_before, "  no answer before the record is in");
+	if (rb.reg_buf != NULL)
+		cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 456u, 456u);
+	ct_check_eq_u32(rb.n_send, 0u, "*** nothing is written back ***");
+	ct_check_eq_u32(g.n_sent, sent_before + 1u, "the cat-0x86 goes once it is read");
+	ct_check_eq_u32(g.n_sent > sent_before ?
+			sent_le16(n_cm_sent() - 1u, VMS_OFB_CM_CLOSE_STATE) : 0u,
+			VMS_CM_CLOSE_STATE_K5_PULLED, "  with state 4");
+	ct_check_eq_u32(g.j.k5_answered, 1u, "  counted");
+	ct_check_eq_u32(rb.n_rel, 1u, "  and the buffer name is released");
+
+	/* Larger than the buffer: not pulled, not truncated, withheld. */
+	rb_bed();
+	sent_before = g.n_sent;
+	(void)join_feed(mk_kind5(CNXMAN_RDEV_BUF + 64u, g.member_csb->cdt_conid));
+	ct_check_eq_u32(rb.n_req, 0u, "an oversize record is not pulled");
+	ct_check_eq_u32(g.j.k5_oversize, 1u, "  counted oversize");
+}
+
 static void test_handoff_without_a_barrier(void)
 {
 	uint32_t len;
@@ -7177,6 +7298,8 @@ int main(void)
 	test_rdev_kind6_close_writes_back_then_answers();
 	test_rdev_kind6_refusals_fall_back();
 	test_rdev_kind6_mount_record();
+	test_k10_close_writes_back_then_answers();
+	test_k5_close_pulls_then_answers_4();
 	test_unowned_frame_is_not_mine();
 	test_member_dialled_connection_still_promotes();
 	test_member_dialled_reaches_the_barrier();

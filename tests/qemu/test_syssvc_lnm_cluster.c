@@ -146,6 +146,22 @@ int main(void)
     st = trn("LNM$CLUSTER_TABLE", "OVMX94A$NAME", 0, v, sizeof v);
     CHECK(!(st & 1), "it is not in LNM$CLUSTER_TABLE");
 
+    /* Real V7.3 (lab94ag): "LNM$SYSTEM" = "LNM$SYSTEM_TABLE", "LNM$SYSCLUSTER". */
+    st = trn("LNM$SYSTEM", "OVMX94A$NAME", 0, v, sizeof v);
+    CHECK((st & 1) && strcmp(v, "ONE") == 0,
+          "LNM$SYSTEM finds a LNM$SYSCLUSTER name (its second table)");
+    st = trn("LNM$FILE_DEV", "OVMX94A$NAME", 0, v, sizeof v);
+    CHECK((st & 1) && strcmp(v, "ONE") == 0,
+          "LNM$FILE_DEV finds it too, after the process/job/group/system tables");
+    st = trn("LNM$SYSTEM_TABLE", "OVMX94A$NAME", 0, v, sizeof v);
+    CHECK(!(st & 1), "LNM$SYSTEM_TABLE alone does not");
+    (void)del("LNM$SYSTEM_TABLE", "OVMX94A$NAME", PSL$C_SUPER);
+    st = cre("LNM$SYSTEM_TABLE", "OVMX94A$NAME", "SYSWINS", NULL, PSL$C_SUPER);
+    st = trn("LNM$SYSTEM", "OVMX94A$NAME", 0, v, sizeof v);
+    CHECK((st & 1) && strcmp(v, "SYSWINS") == 0,
+          "a LNM$SYSTEM_TABLE name of the same name is found first");
+    (void)del("LNM$SYSTEM_TABLE", "OVMX94A$NAME", PSL$C_SUPER);
+
     st = del("LNM$SYSCLUSTER", "OVMX94A$NAME", PSL$C_SUPER);
     CHECK((st & 1) != 0, "$DELLNM removes it");
     st = trn("LNM$SYSCLUSTER_TABLE", "OVMX94A$NAME", 0, v, sizeof v);

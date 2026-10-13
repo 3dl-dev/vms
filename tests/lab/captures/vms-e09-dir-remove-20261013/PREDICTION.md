@@ -106,3 +106,29 @@ group 1, with nobody logged in on VAX1.
   declined = 0.
 - E4: CN = 3; VAX1 offers `Username:`; `unans.py` finds no request to or from VAX1 left
   unanswered; no OVMX→VAX1 CM dialogue skips a send-msg#.
+
+## Lab results (artifacts run 38389813874, lab/int-e09 d29327c97)
+
+**Run a (pod labdemo7): a procedural deviation, kept as evidence.** lab/int-e09's own
+`ovmx_fire_node.sh` predates the second-node support, so the first OVMX node booted as OVMXE
+(1030), not OVMXA (1021).
+- E1 held: OVMXE sent VAX1 one op-0x04 after each of its 5 masteries (4 F11B$sOVMXSYS, 1
+  RMS$55.1.0), each following that name's 0xf9, each with body[4:8] = 0. All 5 on-wire
+  frames pass the gate's `dlm_dir_remove` rows.
+- E2 held: 0 bugchecks.
+- E3 and E4 not reached: OVMXB was never admitted. OVMXB asked OVMXE first (the highest
+  SCSSYSTEMID, vms-e88). OVMXE deferred ("another system is coordinating"), and VAX1 ignored
+  OVMXB's re-issued request. This is unrelated to the removal (rd vms-6e3).
+- Files: `e09a-*`.
+
+**Run b (pod labdemo8), as registered: OVMXA 1021, OVMXB 1022.**
+- E1 **held**. Each OVMX node sent VAX1 5 removals, one per mastery, each after its 0xf9,
+  each with body[4:8] = 0.
+- E2 **held**. VAX1 took all 10 silently. 0 bugchecks.
+- E3 **held**. VAX1 answered OVMXB's lookups for F11B$sOVMXSYS with **0xf9**, because the
+  entry OVMXA had held was gone. OVMXB sent OVMXA no DLM request at all (DC1b had 5
+  unanswered). OVMXA's CNXTRACE: DLMREQ received = 0, declined = 0.
+- E4 **held**. SHOW CLUSTER on OVMXB lists OVMXB, OVMXA and VAX1 as MEMBER. VAX1 offers
+  `Username:`. `unans.py` finds nothing unanswered. No OVMX→VAX1 CM dialogue skips a
+  send-msg#.
+- Files: `e09b-dlm.pcap` (every cat-0x02 frame) and `e09b-*-console.log`.

@@ -1774,6 +1774,55 @@ static void test_inbound_mscp_end_is_delivered(void)
 		 "  and draws no 0x0f (the END message completes a READ)");
 }
 
+/*
+ * rd vms-c1d -- A LOST REQUEST DATA IS SENT AGAIN, NOT LEFT AS A HOLE.
+ *
+ * Measured in lab52dfb (rd vms-94a fire F2): a VAX's DECnet start changed its
+ * station address, OVMX's REQUEST DATA went to the old one, and because block
+ * frames were never ringed the sequence hole it left stopped the VAX's acks and
+ * broke the circuit on TIMVCFAIL. A block frame that fits a ring slot now takes
+ * one: the ladder sends it again at the SAME sequence, marked as a
+ * retransmission, and still carrying its own port opcode at abs 55.
+ */
+static void test_lost_request_data_is_retransmitted(void)
+{
+	struct blk_env e;
+	struct pe_blk_xfer x;
+	struct fake_vc_decoded d;
+	uint16_t seq;
+	uint32_t n_before;
+
+	printf("-- vms-c1d: a lost REQUEST DATA goes again (ringed, opcode kept)\n");
+	open_circuit(&e);
+	seq = the_vc(&e)->send_seq;
+	xfer_init(&x, e.sink_name, 0u, 200u, 0u);
+	ct_check_eq_u32((unsigned long)pe_blk_send_request(&e.fsm, &x),
+			PE_BLK_OK, "the request went out");
+	/* negctl: pe-blk-frame-unringed */
+	ct_check_eq_u32(the_vc(&e)->unacked, 1u,
+			"*** and it holds a ring entry ***");
+	ct_check_eq_u32(e.fsm.blk_tx_ringed, 1u, "counted ringed");
+	ct_check_eq_u32(e.fsm.blk_tx_unringed, 0u, "not unringed");
+	ct_check_eq_u32(e.fake.frame[0].b[VMS_OFF_BLK_PORT_OP],
+			VMS_BLK_OP_REQUEST_DATA, "opcode 0x08 on the first send");
+
+	/* The peer never saw it: no ack arrives. The ladder fires. */
+	n_before = e.fake.n_frames;
+	e.fake.now_ms += 2500u;
+	pe_fsm_vc_timer(&e.fsm, 0);
+	ct_check(e.fake.n_frames > n_before, "*** it went out again ***");
+	d = fake_vc_last(&e.fake, FAKE_VC_SEQ);
+	ct_check(d.ok && d.send_seq == seq,
+		 "  at the SAME sequence (the hole is filled, not skipped)");
+	ct_check_eq_u32(d.msgtype, VMS_SCS_MT_ALT,
+			"  marked as a retransmission (0x7b)");
+	ct_check_eq_u32(e.fake.frame[e.fake.n_frames - 1u].b[VMS_OFF_BLK_PORT_OP],
+			VMS_BLK_OP_REQUEST_DATA,
+			"  *** still opcode 0x08 at abs 55, not the message opcode ***");
+	ct_check_eq_u32(the_vc(&e)->send_seq, (uint16_t)(seq + 1u),
+			"  and the next number did not move");
+}
+
 int main(void)
 {
 	test_block_header_is_byte_exact();
@@ -1785,6 +1834,7 @@ int main(void)
 	test_request_data_unknown_buffer_is_dropped();
 	test_request_data_refusals_are_whole();
 	test_send_request_names_our_destination();
+	test_lost_request_data_is_retransmitted();
 	test_write_pair_round_trips_through_the_port();
 	test_ungrounded_words_are_zero_or_observed();
 	test_receive_lands_in_the_named_buffer();

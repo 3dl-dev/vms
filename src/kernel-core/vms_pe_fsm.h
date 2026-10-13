@@ -547,6 +547,14 @@ struct pe_vc_unacked {
 	uint16_t seq;             /* the sequence it consumed, ONCE        */
 	uint32_t len;
 	uint32_t due_ms;          /* injected-clock deadline of the next try */
+	/*
+	 * rd vms-c1d: the block-transfer port opcode this frame carries at abs
+	 * 55 (REQUEST DATA, confirm, SEND DATA, ...), or 0 for a message. The
+	 * sequence stamp a retransmission re-applies writes the MESSAGE opcode
+	 * there, so a ringed block frame needs its own put back.
+	 */
+	uint8_t  blk_op;
+	uint8_t  pad_blk[3];
 	uint8_t  frame[PE_VC_FRAME_MAX];
 };
 
@@ -1423,6 +1431,7 @@ struct pe_fsm {
 	uint32_t blk_obs_absent;   /* frames emitted with an explicit zero at
 				    * the +4/+6 words because this circuit has
 				    * observed none (INV-6 honest absence)     */
+	uint32_t blk_tx_ringed;    /* rd vms-c1d: block frames held for go-back-N */
 	uint32_t blk_tx_unringed;  /* block frames transmitted OUTSIDE the
 				    * unacked ring -- see SS8d "NO RING"      */
 	uint32_t blk_rx_trailer;   /* TRAP 1's RECEIVE side (FC-P7.1): frames
@@ -1942,6 +1951,12 @@ const char *pe_vc_down_reason_name(enum pe_vc_down_reason r);
  * the datagram service uses: that is the datagram's documented opt-out, and
  * borrowing it for a class the spec places in the sequenced family would be a
  * wire claim nothing measured.
+ *
+ * ***  rd vms-c1d: A BLOCK FRAME THAT FITS A RING SLOT IS RINGED  *** -- REQUEST
+ * DATA, the SEND DATA confirmation and any data frame of PE_VC_FRAME_MAX or
+ * less take a ring entry and go-back-N retransmits them like a message
+ * (pe_fsm.blk_tx_ringed). A lost one used to leave a sequence hole that broke
+ * the circuit (lab52dfb). What follows still holds for the LARGER frames.
  *
  * ***  NO RING, AND WHAT THAT COSTS  ***  FC-P1.2 ruled it (see
  * PE_VC_FRAME_MAX: "The block transfer classes are deliberately NOT covered:

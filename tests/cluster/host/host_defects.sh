@@ -243,7 +243,8 @@ join-k10-close-withheld
 join-k5-close-withheld
 csb-0b01-answer-ignores-join-order
 join-lnm-answered-unapplied
-join-lnm-db-not-applied"
+join-lnm-db-not-applied
+pe-blk-frame-unringed"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1058,6 +1059,20 @@ every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
   body[20:24]: the epoch, LE u32
 body[20:24] is OUR epoch, not the coordinator's
 the relay is answered, on the member's new connection
+EOF
+                      ;;
+        esac;;
+
+    pe-blk-frame-unringed)
+        case "$_f" in
+        facility)     echo "a block-transfer frame that fits a ring slot is held for go-back-N (rd vms-c1d), so a lost REQUEST DATA is sent again instead of leaving a sequence hole";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_block";;
+        isolation)    echo "isolated";;
+        why)          echo "blk_stamp_and_send() never takes a ring entry again, so every block frame goes out unringed: a REQUEST DATA lost on the wire (lab52dfb: sent to a VAX's old DECnet station address) leaves a hole the peer never moves past, and the circuit breaks on TIMVCFAIL.";;
+        require_fail) hd_lines <<'EOF'
+*** and it holds a ring entry ***
+*** it went out again ***
 EOF
                       ;;
         esac;;
@@ -2620,6 +2635,10 @@ apply_edit() {
         # The `return f->last_gasp_incarnation == f->id.incarnation_time;`
         # line is unique in this file: grep -c is 1.
         sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
+
+    pe-blk-frame-unringed)
+        # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.
+        sed -i 's|if (op != 0u \&\& total <= PE_VC_FRAME_MAX)|if (0 \&\& op != 0u \&\& total <= PE_VC_FRAME_MAX) /* NEGCTL pe-blk-frame-unringed */|' "$_file";;
 
     join-k5-close-withheld)
         # `d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) &&` is unique in the file.

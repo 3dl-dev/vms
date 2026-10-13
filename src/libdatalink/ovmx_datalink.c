@@ -125,7 +125,7 @@ int scs_datalink_primary_iface(char *out, size_t n)
 
 /* ---- EXECUTIVE backend: the raw L2 wire routes through /dev/vms ---------- */
 
-#include "vms_ioctl.h"   /* struct vms_l2_*_args + struct vms_register_args */
+#include "vms_ioctl.h"   /* struct vms_l2_*_args */
 #include "kif_calls.h"   /* the executive transport seam (rd vms-bbde) */
 
 /* SCSD opens exactly one datalink for its whole run; a small fd->handle table
@@ -178,13 +178,9 @@ int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
         errno = -fd;
         return -1;
     }
-    /* The executive resolves the caller's process (vms_proc_find_or_err) from
-     * its registration, then gates L2_OPEN on PHY_IO -- register first, exactly
-     * as a caller's own request/response path does. */
-    struct vms_register_args reg;
-    memset(&reg, 0, sizeof(reg));
-    if (kif_call(fd, KIF_SVC_REGISTER, &reg) < 0) { kif_xport_dev_close(fd); return -1; }
-
+    /* The executive resolves the caller's process (vms_proc_find_or_err) -- the
+     * PCB its creator made (rd vms-2a5: nothing registers) -- then gates
+     * L2_OPEN on PHY_IO. A task the executive did not create is refused. */
     struct vms_l2_open_args a;
     memset(&a, 0, sizeof(a));
     strncpy(a.ifname, ifname, sizeof(a.ifname) - 1);

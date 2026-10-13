@@ -827,10 +827,11 @@ void vms_bg_drop_captured(struct list_head *captured)
 }
 
 /*
- * vms_bg_inherit - the #815 real_parent-at-registration path: snapshot the parent
- * live and adopt it onto the child. Retained as the FALLBACK for the parent-stays-
- * open case; the fork-time snapshot (vms_bg_forkinherit.c) wins the race when the
- * parent closes early. Caller holds vms_proc_hash_lock (keeping `parent` alive).
+ * vms_bg_inherit - snapshot the creator's BG channels and adopt them onto the
+ * child the creator is making (vms_proc_create_for, rd vms-2a5): done while the
+ * creator holds the child before releasing it, so a creator that closes its copy
+ * right after the fork cannot lose the race. Caller holds vms_proc_hash_lock
+ * (keeping `parent` alive).
  */
 void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent)
 {

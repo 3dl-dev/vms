@@ -3,13 +3,13 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "INET pseudo-device BGn: -- EAGER FORK-TIME BG channel inheritance (vms_bg_forkinherit_consume + the sched_process_fork capture, src/kernel/vms_bg_forkinherit.c, vms-0cd). #815 inherits a parent's BG channels at the child's REGISTRATION; the fork-time path captures them AT FORK so an accept->fork->close forking server (sshd, inetd) still hands the accepted connection to its child even though it closes its own copy right after the fork.";;
-        targets)      echo "kernel/vms_bg_forkinherit.c";;
+        facility)     echo "INET pseudo-device BGn: -- BG channel inheritance at creation (vms_proc_create_for + vms_bg_inherit, src/kernel/vms_module.c, vms-0cd / rd vms-2a5): an image task or subprocess takes its creator's BG channels while the creator holds it, so an accept->fork->close forking server (sshd, inetd) still hands the accepted connection to its child even though it closes its own copy right after the fork.";;
+        targets)      echo "kernel/vms_module.c";;
         suites_red)   echo "test_syssvc_bg_fork_close_inherit";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "The mutation makes vms_bg_forkinherit_consume's lookup never match (if (0 && ...)), so the child's registration finds no fork-time record and falls back to the #815 real_parent-at-registration snapshot. In test_syssvc_bg_fork_close_inherit the parent CLOSES the accepted channel right after the fork, so by the time the child registers the channel is gone: the child's ovmx_materialize_fd returns SS\$_IVCHAN, and its byte-exact round-trip fails. The no-executive honest-skip and the accept/listener assertions stay green -- only the child's inherit-and-round-trip assertion reddens. This is the eager-fork-inheritance anchor: disable the fork-time capture and the accept->fork->close race is lost. One condition zeroed. NOTE (vms-45a survey): test_syssvc_bg_fork_inherit's own plain-fork/fork+exec cases do NOT detect this mutation -- their parent never closes the channel before the child registers, so vms_proc_inherit_channels's #815 real_parent fallback (untouched by this defect) captures the still-open channel live and both cases stay green; that suite is DEFERRED (see facility_defects.sh header note near vms-45a) pending either a fork-time-vs-#815 discriminating fixture or accepting the shared vms_bg_capture_channels/vms_bg_adopt_channels primitives (which would also redden THIS suite) as its anchor point.";;
+        why)          echo "The mutation stops vms_proc_create_for copying the creator's BG channels onto the child it makes (if (0 \&\& !detached)). In test_syssvc_bg_fork_close_inherit the parent CLOSES the accepted channel right after the fork, so the child's PCB has no channel by that number: ovmx_materialize_fd returns SS\$_IVCHAN and the byte-exact round-trip fails. The no-executive honest-skip and the accept/listener assertions stay green. One condition zeroed; the original condition is gone after substitution, so a second apply is a no-op.";;
         require_fail) cat <<'EOF'
 the forked+exec'd child materialized the inherited connection and round-tripped BYTE-EXACT, though the parent CLOSED it right after the fork -- eager fork-time inheritance (vms-0cd)
 EOF
@@ -21,12 +21,6 @@ EOF
 }
 
 defect_apply() {
-        # Make vms_bg_forkinherit_consume's lookup NEVER match, so the registering
-        # child finds no fork-time record and falls back to the #815 real_parent
-        # snapshot -- which loses the accept->fork->close race. The matching
-        # condition is UNIQUE to this file; prefixing "0 && " keeps every variable
-        # referenced (compiles clean) while forcing the loop to never set pend. After
-        # substitution the original condition is gone, so a second apply is a no-op.
-        sed -i 's|if (cur->tgid == tgid \&\& cur->pid_ref == pidref)|if (0 \&\& cur->tgid == tgid \&\& cur->pid_ref == pidref) /* NEGCTL fork-inherit-disabled */|' "$_file"
+        sed -i 's|^    if (!detached) {$|    if (0 \&\& !detached) { /* NEGCTL fork-inherit-disabled */|' "$_file"
     :
 }

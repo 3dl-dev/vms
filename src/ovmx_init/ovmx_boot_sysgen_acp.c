@@ -180,11 +180,12 @@ static unsigned long boot_next_component(const char **pp, char *buf,
     return n;
 }
 
-static uint32_t boot_acp_register(int fd)
+static uint32_t boot_acp_self(int fd)
 {
-    struct vms_register_args a;
+    struct vms_getjpi_args a;
     boot_acp_memset(&a, 0, sizeof(a));
-    if (kif_call(fd, KIF_SVC_REGISTER, &a) < 0)
+    a.select = VMS_JPI_SEL_SELF;
+    if (kif_call(fd, KIF_SVC_GETJPI, &a) < 0)
         return SS$_NOSUCHDEV;
     return a.status;
 }
@@ -334,7 +335,7 @@ uint32_t ovmx_sysgen_acp_write(const struct sysgen_file *db, int new_version,
     if (fd < 0)
         return SS$_NOSUCHDEV;
 
-    st = boot_acp_register(fd);
+    st = boot_acp_self(fd);
     if (!$VMS_STATUS_SUCCESS(st)) { kif_xport_dev_close(fd); return st; }
 
     st = boot_acp_assign(fd, BOOT_SYSDISK_UNIT, &chan);

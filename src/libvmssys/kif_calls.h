@@ -23,7 +23,7 @@
 #include "../kernel/vms_ioctl.h"
 
 enum kif_svc {
-    KIF_SVC_REGISTER,
+    KIF_SVC_GETJPI,
     KIF_SVC_ASSIGN,
     KIF_SVC_DASSGN,
     KIF_SVC_GETCLI,
@@ -50,7 +50,7 @@ enum kif_svc {
 static inline unsigned long kif_svc_request(enum kif_svc s)
 {
     switch (s) {
-    case KIF_SVC_REGISTER:       return VMS_IOCTL_REGISTER;
+    case KIF_SVC_GETJPI:         return VMS_IOCTL_GETJPI;
     case KIF_SVC_ASSIGN:         return VMS_IOCTL_ASSIGN;
     case KIF_SVC_DASSGN:         return VMS_IOCTL_DASSGN;
     case KIF_SVC_GETCLI:         return VMS_IOCTL_GETCLI;

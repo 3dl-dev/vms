@@ -8,8 +8,9 @@
  *   - Kernel event flags
  *   - Lock manager with 6-mode compatibility
  *
- * Processes register via VMS_IOCTL_REGISTER to get a per-process
- * vms_proc structure allocated in kernel memory.
+ * A process's vms_proc (its PCB) is made by its creator through
+ * VMS_IOCTL_CREPRC_PCB before it runs, or -- for the boot task only -- by
+ * VMS_IOCTL_ESTABLISH_SYSTEM (rd vms-9f32 / vms-2a5). Nothing registers itself.
  */
 
 #include <linux/module.h>
@@ -1361,297 +1362,6 @@ static void vms_proc_copy_identity(struct vms_proc *proc, struct vms_proc *paren
     spin_unlock(&parent->mode_lock);
 }
 
-/*
- * vms_proc_continue_identity - stamp this task's registered VMS parent's
- * identity onto a not-yet-inserted child PCB (vms-4d7, Option B).
- *
- * This is what makes OVMX's fork-per-image invisible to VMS. On OpenVMS an
- * activated image runs IN the current process; OVMX runs it in a fresh
- * forked+exec'd process, so the executive is told (via
- * VMS_IOCTL_REGISTER_CONTINUE, selected by kif_bind when DCL activated the
- * image) to CONTINUE the parent rather than mint a new PCB.
- *
- * THE IDENTITY IS READ FROM THE PARENT'S PCB, NOT FROM THE CALLER. The
- * caller declares only the RELATIONSHIP ("continue my parent"); which
- * process is the parent comes from current->real_parent, which a process
- * cannot forge, and the UIC/username/privileges come from that parent's
- * executive row. This is the same discipline as UIC derivation: a derived
- * fact, never an asserted one -- so it is not the self-declared-identity
- * facade VMS_IOCTL_REGISTER's args were stripped to remove.
- *
- * SECURITY: the parent's CURRENT masks are copied. A parent that
- * setident'd DOWN to an unprivileged identity has reduced masks, so
- * continuing it cannot bring a privilege back -- the reduction now
- * survives image activation, where under the derive-from-capable() path it
- * did not.
- *
- * LOCKING: hash_lock covers uic/username/prcnam/terminal; mode_lock covers
- * the privilege masks. Taken hash-outer then mode-inner, the same order as
- * vms_ioctl_setident(), so an identity is never torn. proc is not yet in
- * the hash, so its own fields need no lock.
- *
- * Returns TRUE when a registered VMS parent was found and its identity was
- * copied onto `proc`, FALSE when the task has no registered VMS parent -- in
- * which case the caller derives an identity the ordinary way. Independently,
- * *shared_vms_pid_out is set to the parent's VMS PID when share_pid is true and
- * a parent was found (the child SHARES it -- image activation, _CONTINUE), and
- * left 0 otherwise (the caller then mints a FRESH VMS PID -- a genuinely new
- * subprocess that inherits identity but NOT the PID, _SUBPROCESS/vms-19e9). The
- * "inherited" answer is returned SEPARATELY from the shared PID precisely
- * because the subprocess case inherits identity yet shares no PID: a 0 shared
- * PID no longer means "did not inherit."
- */
-static bool vms_proc_continue_identity(struct vms_proc *proc, bool share_pid,
-                                       uint32_t *shared_vms_pid_out)
-{
-    struct task_struct *rp;
-    struct pid *parent_pid = NULL;
-    pid_t parent_tgid = 0;
-    struct vms_proc *parent;
-    uint32_t shared_vms_pid = 0;
-    bool inherited = false;
-
-    rcu_read_lock();
-    rp = rcu_dereference(current->real_parent);
-    if (rp) {
-        parent_pid  = task_tgid(rp);
-        parent_tgid = task_tgid_nr(rp);
-    }
-    if (!parent_pid) {
-        rcu_read_unlock();
-        if (shared_vms_pid_out)
-            *shared_vms_pid_out = 0;
-        return false;
-    }
-
-    spin_lock(&vms_proc_hash_lock);
-    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
-        if (parent->linux_pid != parent_tgid)
-            continue;
-        /*
-         * Recycle-safe: an entry keyed by this pid NUMBER is ours to
-         * continue only if it belongs to this same parent INSTANCE. The
-         * pinned struct pid is unique per instance; the number is reused.
-         * (Same check as vms_proc_find_or_err.)
-         */
-        if (parent->pid_ref != parent_pid)
-            continue;
-
-        vms_proc_copy_identity(proc, parent, share_pid);
-
-        /*
-         * SHARE the parent's VMS PID only for an image-activation CONTINUE
-         * (share_pid). A subprocess (_SUBPROCESS, vms-19e9) inherits the
-         * identity above but leaves shared_vms_pid 0, so the caller mints it a
-         * FRESH, distinct VMS PID -- a genuinely new VMS process, as $CREPRC
-         * creates.
-         */
-        if (share_pid)
-            shared_vms_pid = parent->vms_pid;
-        inherited = true;
-        break;
-    }
-    spin_unlock(&vms_proc_hash_lock);
-    rcu_read_unlock();
-
-    if (shared_vms_pid_out)
-        *shared_vms_pid_out = shared_vms_pid;
-    return inherited;
-}
-
-/*
- * vms_proc_parent_job_id - the JOB this registration belongs to (vms-aba,
- * LNM$JOB residency), inherited from the DIRECT parent's PCB if it already
- * has one.
- *
- * A VMS job is a top-level process (an interactive login, a detached
- * process) plus every subprocess it creates -- SPAWN's child stays in the
- * parent's job (documented VMS behaviour: DCL Dictionary, SPAWN; System
- * Services Reference, $CREPRC's JOBCTL parameter). This mirrors that
- * inheritance rule directly against the task hierarchy: a task whose real
- * parent is ALREADY a registered VMS process inherits that parent's
- * job_id, whether this registration is an image-activation CONTINUE of the
- * very same VMS process (vms_proc_continue_identity(), just above) or a
- * genuinely new PCB such as a SPAWNed subprocess -- either way the child
- * is part of the parent's job. Returns 0 when the real parent has no
- * registered PCB, which the caller reads as "this task is a job root."
- *
- * Same read-the-parent's-row-never-the-caller's-word discipline as
- * vms_proc_continue_identity(): a process cannot forge which job it
- * belongs to any more than it can forge its own UIC.
- */
-static uint32_t vms_proc_parent_job_id(void)
-{
-    struct task_struct *rp;
-    struct pid *parent_pid = NULL;
-    pid_t parent_tgid = 0;
-    struct vms_proc *parent;
-    uint32_t job_id = 0;
-
-    rcu_read_lock();
-    rp = rcu_dereference(current->real_parent);
-    if (rp) {
-        parent_pid  = task_tgid(rp);
-        parent_tgid = task_tgid_nr(rp);
-    }
-    if (!parent_pid) {
-        rcu_read_unlock();
-        return 0;
-    }
-
-    spin_lock(&vms_proc_hash_lock);
-    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
-        if (parent->linux_pid != parent_tgid)
-            continue;
-        /* Recycle-safe: see vms_proc_continue_identity(). */
-        if (parent->pid_ref != parent_pid)
-            continue;
-
-        job_id = parent->job_id;
-        break;
-    }
-    spin_unlock(&vms_proc_hash_lock);
-    rcu_read_unlock();
-
-    return job_id;
-}
-
-/*
- * vms_proc_parent_vms_pid - the VMS PID of the registering task's VMS parent
- * (its real_parent's PCB), or 0. Same unforgeable lookup as
- * vms_proc_parent_job_id(). Used to give a FORKED child its parent's
- * process logical names (rd vms-ef21, vms_lnm_copy_process).
- */
-static uint32_t vms_proc_parent_vms_pid(void)
-{
-    struct task_struct *rp;
-    struct pid *parent_pid = NULL;
-    pid_t parent_tgid = 0;
-    struct vms_proc *parent;
-    uint32_t vpid = 0;
-
-    rcu_read_lock();
-    rp = rcu_dereference(current->real_parent);
-    if (rp) {
-        parent_pid  = task_tgid(rp);
-        parent_tgid = task_tgid_nr(rp);
-    }
-    if (!parent_pid) {
-        rcu_read_unlock();
-        return 0;
-    }
-    spin_lock(&vms_proc_hash_lock);
-    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
-        if (parent->linux_pid != parent_tgid || parent->pid_ref != parent_pid)
-            continue;
-        vpid = parent->vms_pid;
-        break;
-    }
-    spin_unlock(&vms_proc_hash_lock);
-    rcu_read_unlock();
-    return vpid;
-}
-
-/*
- * vms_proc_inherit_channels - copy the registering task's VMS parent's open
- * BGn: channels into this fresh child PCB (vms-3bf, executive fork/exec
- * inheritance of BG channels).
- *
- * INHERIT THE CHANNEL, NOT THE IDENTITY. This is deliberately separate from
- * vms_proc_continue_identity(): the child keeps its OWN PCB and its own
- * identity (UIC, user name, privilege masks, VMS PID) -- the per-task fresh
- * accounting that vms-8019/2b8/4d7 rests on is untouched. What the child gains
- * is only the ability to operate the parent's BG channels BY NUMBER, exactly as
- * a Linux child inherits the parent's open fds across fork() without inheriting
- * the parent's credentials. vms_bg_inherit() copies channel-table entries and
- * refcount-shares the host sockets; it writes none of the identity fields.
- *
- * Same read-the-parent's-row discipline as the two helpers above: the child
- * declares nothing; which process is the parent comes from current->real_parent
- * (unforgeable), which survives both fork() and execve(), so the exec'd image's
- * first registration still finds the channel-owning parent. A task with no
- * registered VMS parent -- or a parent that holds no BG channels -- inherits
- * nothing, and a later $QIO on a channel it never received fails honestly with
- * SS$_IVCHAN (INV-6: no fabricated inheritance).
- *
- * LOCKING: vms_proc_hash_lock is held across the copy so the parent PCB cannot
- * be freed under us; vms_bg_inherit() takes the parent's chan_lock nested
- * inside it (hash-outer, chan-inner; BG ioctls never take hash_lock, so no
- * inverse order exists). child is not yet in the hash, so it needs no lock.
- */
-/*
- * vms_proc_capture_channels_for_task - for the fork-inherit rind (vms-0cd). If
- * `parent_task`'s thread group has a registered PCB, capture a kref'd snapshot of
- * its BG channels onto `out` (a caller-owned empty list). Returns nonzero iff
- * anything was captured. Holds vms_proc_hash_lock so the parent PCB cannot be freed
- * mid-capture -- safe to call from the atomic sched_process_fork tracepoint. Same
- * hash-outer / chan-inner order as vms_proc_inherit_channels below.
- */
-int vms_proc_capture_channels_for_task(struct task_struct *parent_task,
-                                       struct list_head *out, uint32_t *out_next_chan)
-{
-    struct vms_proc *parent;
-    pid_t ptgid = task_tgid_nr(parent_task);
-    struct pid *ppid = task_tgid(parent_task);
-
-    spin_lock(&vms_proc_hash_lock);
-    hash_for_each_possible(vms_proc_hash, parent, hash_node, ptgid) {
-        if (parent->linux_pid != ptgid)
-            continue;
-        if (parent->pid_ref != ppid)     /* recycle-safe: same INSTANCE only */
-            continue;
-        (void)vms_bg_capture_channels(parent, out, out_next_chan);
-        break;
-    }
-    spin_unlock(&vms_proc_hash_lock);
-    return !list_empty(out);
-}
-
-static void vms_proc_inherit_channels(struct vms_proc *child)
-{
-    struct task_struct *rp;
-    struct pid *parent_pid = NULL;
-    pid_t parent_tgid = 0;
-    struct vms_proc *parent;
-
-    /*
-     * vms-0cd: prefer the FORK-TIME snapshot, captured before an accept->fork->close
-     * forking server (sshd, inetd) could close the listener's copy of the accepted
-     * connection. Falls through to the #815 real_parent-at-registration snapshot
-     * below when there is no fork record (the parent-stays-open case, which both
-     * paths handle -- the fork record just wins the race when the parent closes
-     * early).
-     */
-    if (vms_bg_forkinherit_consume(child))
-        return;
-
-    rcu_read_lock();
-    rp = rcu_dereference(current->real_parent);
-    if (rp) {
-        parent_pid  = task_tgid(rp);
-        parent_tgid = task_tgid_nr(rp);
-    }
-    if (!parent_pid) {
-        rcu_read_unlock();
-        return;
-    }
-
-    spin_lock(&vms_proc_hash_lock);
-    hash_for_each_possible(vms_proc_hash, parent, hash_node, parent_tgid) {
-        if (parent->linux_pid != parent_tgid)
-            continue;
-        /* Recycle-safe: continue only the same parent INSTANCE (pinned struct
-         * pid), never a reused pid number. Same check as the helpers above. */
-        if (parent->pid_ref != parent_pid)
-            continue;
-        vms_bg_inherit(child, parent);
-        break;
-    }
-    spin_unlock(&vms_proc_hash_lock);
-    rcu_read_unlock();
-}
-
-static struct inode *vms_current_exe_inode(void);   /* rd vms-bdc1, below */
 
 /*
  * vms_proc_init_state - the per-PCB queues, locks and lists every new PCB
@@ -1730,236 +1440,52 @@ static void vms_proc_init_state(struct vms_proc *proc)
     spin_lock_init(&proc->p1_lock);
 }
 
-struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
-                                   bool share_pid)
+/*
+ * vms_proc_create_boot_task - the boot task's PCB (rd vms-2a5, design note 3.1).
+ *
+ * The one PCB the executive makes without a creator: ESTABLISH_SYSTEM's single
+ * call, for the calling task, when it has none (kernel-core
+ * vms_ioctl_establish_system has already refused any second call). Its
+ * identity is not derived from anything here -- not the task's uid, not a
+ * capability -- because the caller stamps SYSTEM onto it immediately. Every
+ * other PCB is made by its creator (vms_proc_create_for). A task the executive
+ * did not create has no PCB, and every facility refuses it (-ESRCH ->
+ * SS$_NONEXPR).
+ */
+struct vms_proc *vms_proc_create_boot_task(void)
 {
-    struct vms_proc *existing, *proc;
-    uint32_t shared_vms_pid = 0;
-    bool inherited = false;
-    uint32_t parent_job_id;
-    uint32_t proc_owner_hint;
-
-    /*
-     * Read before the PCB exists and before any lock this function takes
-     * below -- vms_proc_parent_job_id() takes and releases
-     * vms_proc_hash_lock itself, the same pattern vms_proc_continue_identity()
-     * uses just below.
-     */
-    parent_job_id = vms_proc_parent_job_id();
-    /* The creator (rd vms-9f32): the VMS process this task was started by,
-     * which is told how it ended when it is deleted. Read like the job id,
-     * from the real parent's row -- never from anything the task supplies. */
-    {
-        uint32_t owner = vms_proc_parent_vms_pid();
-        proc_owner_hint = owner;
-    }
+    struct vms_proc *proc, *existing;
+    pid_t pid = current->tgid;
 
     proc = kmem_cache_zalloc(vms_proc_cache, GFP_KERNEL);
     if (!proc)
-        return ERR_PTR(-ENOMEM);
-
+        return NULL;
     proc->linux_pid = pid;
-    proc->owner_vms_pid = proc_owner_hint;
-    proc->current_mode = PSL_C_USER;    /* start in user mode */
-
-    /*
-     * Executive-owned identity (vms-8019).
-     *
-     * The process starts unnamed; $SETPRN (VMS_IOCTL_SETPRN) names it.
-     * The UIC is derived here from the task's own credentials -- it is
-     * deliberately NOT taken from the register arguments, because a
-     * process that can declare its own UIC can forge the group that
-     * scopes process-name uniqueness and lookup. UIC [group,member] is
-     * packed as (group << 16) | member, the packing sys$getjpi's
-     * JPI$_UIC item returns, with OVMX's [gid,uid] mapping.
-     */
-    proc->prcnam[0] = '\0';
-    /* A task running under a substrate uid the executive gave a VMS process
-     * (vms-ac48) is that process's: it takes its UIC. */
-    proc->uic = vms_proc_subst_uic((uint32_t)from_kuid(&init_user_ns, current_uid()),
-                                   (uint32_t)from_kgid(&init_user_ns, current_gid()));
-
-    /*
-     * No user name yet (vms-2b8). A registered process is not an
-     * AUTHENTICATED process: registration proves only that a task
-     * exists. The name arrives with VMS_IOCTL_SETIDENT, after something
-     * that holds privilege has checked SYSUAF -- which is why the
-     * executive can report it as an identity rather than a claim.
-     */
-    memset(proc->username, 0, sizeof(proc->username));
-
-    /*
-     * Pin the backing PROCESS's pid so the entry's liveness can be tested
-     * without racing pid reuse. task_tgid(), not task_pid(): the entry
-     * belongs to the whole thread group and must outlive any one thread
-     * in it (see vms_proc_find_or_err). Released in vms_proc_free().
-     */
+    proc->current_mode = PSL_C_USER;
     proc->pid_ref = get_pid(task_tgid(current));
-
-    /*
-     * THE AUTHORIZED MASK IS DERIVED, NOT REQUESTED (vms-2b8).
-     *
-     * This used to clamp a mask the PROCESS supplied. Clamping an
-     * attacker-supplied value is still trusting an attacker-supplied
-     * value in the unclamped case, and the unclamped case was "the
-     * process is CAP_SYS_ADMIN" -- so every privileged process got
-     * exactly the privileges it asked for, which is the honor system
-     * this item exists to remove. src/ovmx_init/ovmx_init.c asked for
-     * 0xFFFFFFFFFFFFFFFF and got it.
-     *
-     * Now nothing is supplied. capable(CAP_SYS_ADMIN) is a REAL kernel
-     * credential read from the task -- a process cannot grant itself
-     * CAP_SYS_ADMIN, exactly as it cannot grant itself the uid and gid
-     * the UIC above is derived from. That is the whole difference
-     * between a derived fact and an asserted one.
-     *
-     * The privileged case gets the enforced set rather than all 64 bits
-     * (CLAUDE.md Rule 10, and this item's constraint): the executive
-     * hands out only privileges it will actually refuse an operation
-     * over. Privileges beyond that arrive from SYSUAF through
-     * VMS_IOCTL_SETIDENT, where they are stored and reported because
-     * VMS reports them -- but they are never conjured at registration.
-     */
-    /*
-     * INHERIT THE PARENT'S IDENTITY, OR DERIVE (vms-4d7 Option B; vms-19e9).
-     *
-     * When this registration inherits an already-registered VMS parent's
-     * identity, the identity above is REPLACED by the parent's -- UIC, user
-     * name, process name, terminal and both privilege masks. Two shapes:
-     *   - IMAGE ACTIVATION (VMS_IOCTL_REGISTER_CONTINUE): share_pid true, so
-     *     the child ALSO shares the parent's VMS PID -- DCL and the image it
-     *     activated are one VMS process.
-     *   - SUBPROCESS (VMS_IOCTL_REGISTER_SUBPROCESS, SPAWN/$CREPRC): share_pid
-     *     false, so the child inherits the identity but is minted a FRESH,
-     *     distinct VMS PID below -- a genuinely new VMS process.
-     * See vms_proc_continue_identity(); it reads the parent's row, never the
-     * caller's word, and copies the parent's CURRENT (possibly reduced) masks
-     * so a setident-down cannot be undone by a fork. `inherited` (not a zero
-     * shared PID) is what says the identity came from the parent: a subprocess
-     * inherits identity yet shares no PID.
-     */
-    if (inherit_identity)
-        inherited = vms_proc_continue_identity(proc, share_pid,
-                                               &shared_vms_pid);
-
-    if (!inherited) {
-        proc->perm_privs = capable(CAP_SYS_ADMIN)
-                         ? (VMS_PRV_M_ROOT_GRANT | VMS_DEFAULT_PRIVS)
-                         : VMS_DEFAULT_PRIVS;
-        proc->cur_privs = proc->perm_privs;
-    }
     vms_proc_init_state(proc);
 
-    /*
-     * EXECUTIVE FORK/EXEC INHERITANCE OF BG CHANNELS (vms-3bf). Now that the
-     * child's channel lists and chan_lock are initialised (empty), copy in the
-     * parent's open BGn: channels -- by number, host socket refcount-shared --
-     * so a forked (and fork+exec'd) child can operate a connection its parent
-     * accepted, the fd-inheritance analogue a stock forking server (sshd's
-     * privsep sshd-session) needs over BGn:. Done here, before the child is
-     * published in the hash, so no reader observes a half-filled channel list;
-     * identity is NOT inherited -- the child keeps its own PCB (see
-     * vms_proc_inherit_channels). Unrelated tasks inherit nothing -> honest
-     * SS$_IVCHAN downstream, never a fabricated channel (INV-6).
-     */
-    vms_proc_inherit_channels(proc);
-
-    /* Atomically check-and-insert under spinlock to avoid TOCTOU race */
     spin_lock(&vms_proc_hash_lock);
-    hash_for_each_possible_rcu(vms_proc_hash, existing, hash_node, pid) {
+    hash_for_each_possible(vms_proc_hash, existing, hash_node, pid) {
         if (existing->linux_pid == pid) {
             spin_unlock(&vms_proc_hash_lock);
-            /* Release any BG channels vms_proc_inherit_channels() copied in,
-             * dropping their shared host-socket references, before discarding
-             * this never-published PCB -- otherwise the inherited socket refs
-             * leak (vms-3bf). */
-            vms_bg_release_all(proc);
             put_pid(proc->pid_ref);
             kmem_cache_free(vms_proc_cache, proc);
-            return ERR_PTR(-EEXIST);
+            return NULL;            /* a row is already keyed by this pid */
         }
     }
-    /*
-     * THE VMS PROCESS ID IS ASSIGNED HERE, UNDER THE SAME LOCK AS THE
-     * INSERTION (vms-2b8 round 3). It used to be copied from the
-     * register arguments -- i.e. chosen by the process -- with no
-     * uniqueness check at all, so two processes could share one VMS PID
-     * and $GETJPI by that PID returned whichever the hash walk reached
-     * first. Choosing it here, inside the critical section, is what
-     * makes "unique among live processes" true rather than likely.
-     */
-    /*
-     * A CONTINUED image activation SHARES its parent's VMS PID rather than
-     * minting a new one (vms-4d7): the two Linux tasks are one VMS process,
-     * so $GETJPI must resolve either to the same identity. This is not the
-     * duplicate-PID defect vms-2b8 round 3 removed -- that was two DIFFERENT
-     * identities under one PID; here both rows carry the SAME identity by
-     * construction. assign_vms_pid()'s uniqueness scan still protects new
-     * processes: it walks the live table, so it will never hand a fresh
-     * process a PID a live continued child is already sharing.
-     */
-    proc->vms_pid = shared_vms_pid ? shared_vms_pid : assign_vms_pid();
+    proc->vms_pid = assign_vms_pid();
     if (proc->vms_pid == 0) {
         spin_unlock(&vms_proc_hash_lock);
-        /* Same inherited-channel unwind as the -EEXIST path above (vms-3bf). */
-        vms_bg_release_all(proc);
         put_pid(proc->pid_ref);
         kmem_cache_free(vms_proc_cache, proc);
-        return ERR_PTR(-ENOSPC);
+        return NULL;
     }
-    /*
-     * JOB DERIVATION (vms-aba). Inherit the parent's job if it has one;
-     * otherwise this registration is a job root and its job IS its own
-     * freshly assigned vms_pid -- exactly as a new VMS job's ID is the PID
-     * of the process that started it. Finalised here, inside the same
-     * critical section as vms_pid, and before hash_add_rcu() publishes the
-     * entry, so no reader can observe a zero/unset job_id.
-     */
-    proc->job_id = parent_job_id ? parent_job_id : proc->vms_pid;
+    proc->job_id = proc->vms_pid;   /* the system process is its own job */
     hash_add_rcu(vms_proc_hash, &proc->hash_node, pid);
     spin_unlock(&vms_proc_hash_lock);
 
-    /*
-     * A FORKED child (a fresh identity, neither continuing its parent's VMS
-     * process nor created by $CREPRC) starts with its parent's process logical
-     * names, as it started with the parent's memory (rd vms-ef21). A continued
-     * image shares the parent's table outright; a $CREPRC'd subprocess gets
-     * none, as on VMS.
-     */
-    if (!inherited) {
-        uint32_t ppid = vms_proc_parent_vms_pid();
-        if (ppid)
-            vms_lnm_copy_process(ppid, proc->vms_pid);
-    }
-
-    /*
-     * ROUTINE PER-PROCESS TRACE -- pr_debug, NOT pr_info (vms-2213). Every
-     * process registration emitted this at pr_info, so a single interactive
-     * login (LOGINOUT -> DCL -> each spawned image) sprayed several
-     * "vms: registered process ..." lines onto the operator console during
-     * the login flow -- kernel-driver chatter real VMS never shows there.
-     * This line is routine per-object diagnostic trace, so it belongs at
-     * debug level: it stays available through the kernel log (dmesg with
-     * dynamic-debug enabled for this module) but does not reach the console.
-     * Genuine warnings/errors elsewhere in this module keep pr_warn/pr_err.
-     */
-    /* The image this process is running is activated now if the exec hook ran
-     * before the process had a row (rd vms-bdc1). */
-    if (pid == current->tgid) {
-        struct inode *img = vms_current_exe_inode();
-        uint64_t ip = vms_kfe_exec_privs(img);
-
-        if (ip || proc->image_privs)
-            vms_proc_image_privs(proc, ip);
-        if (img)
-            iput(img);
-    }
-
-    pr_debug("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] job=0x%08x privs=0x%llx (%s)\n",
-             pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
-             proc->job_id, proc->perm_privs,
-             shared_vms_pid ? "continued" : (inherited ? "subprocess" : "derived"));
-
+    pr_debug("vms: boot task pid=%d vms_pid=0x%08x\n", pid, proc->vms_pid);
     return proc;
 }
 
@@ -2030,7 +1556,15 @@ uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint3
     proc->current_mode = PSL_C_USER;
     proc->owner_vms_pid = creator->vms_pid;
     vms_proc_init_state(proc);
-    if (cont && !vms_bg_forkinherit_consume_for(proc, tgid, cpid)) {
+    /* BG channels (rd vms-2a5): an image task (CONTINUE) and a subprocess
+     * take the creator's open BGn: channels, by number, host sockets
+     * refcount-shared -- the descriptor inheritance a forking server's child
+     * relies on (OpenSSH's sshd-session through DECC$ vfork/exec, an
+     * accept->fork->close server). Copied HERE, while the creator still holds
+     * the child before releasing it, so a creator that closes its copy right
+     * after the fork cannot lose the race. A detached process gets none.
+     * NEGCTL-ANCHORED (fork-inherit-disabled) */
+    if (!detached) {
         spin_lock(&vms_proc_hash_lock);
         vms_bg_inherit(proc, creator);
         spin_unlock(&vms_proc_hash_lock);
@@ -2182,163 +1716,16 @@ void vms_proc_free(struct vms_proc *proc)
  * ioctl dispatch
  * ================================================================ */
 
-static long vms_ioctl_register(unsigned long arg, bool inherit_identity,
-                               bool share_pid)
-{
-    struct vms_register_args args;
-    struct vms_proc *proc;
-
-    memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
-        return -EFAULT;
-
-    /* No dead predecessor can hold this pid: a PCB is deleted when its
-     * process ends (the exit hook, rd vms-9f32), so the table holds no rows
-     * for processes that no longer exist. */
-
-    /*
-     * NOTHING FROM args IS READ. The struct is output-only: the privilege
-     * mask went in the first round of vms-2b8 and the VMS process ID went
-     * in the third. A registration that takes no input from the process
-     * cannot be steered by one.
-     *
-     * ADOPT, do not recreate, and do not report an error (vms-9fc).
-     *
-     * This used to answer 0x1C for a task that already had an entry, which
-     * made registration a once-per-image operation. It is not: the executive
-     * entry belongs to the PROCESS and survives execve(), so the very next
-     * image activated in the same process would be told "already registered"
-     * and, having nothing else to do with that, would carry on unregistered.
-     *
-     * ORACLE PIN (reference lab node VAX1, OpenVMS VAX V7.3, 2026-07-30):
-     * activating an image inside an existing process does not recreate the
-     * process and is not an error. SHOW PROCESS/ACCOUNTING before and after
-     * two further image activations reports
-     *     Process ID: 2020021D   Process name: "SYSTEM"   Images activated: 19
-     *     Process ID: 2020021D   Process name: "SYSTEM"   Images activated: 21
-     * -- same PCB, same identity, same connect time, images activated simply
-     * counts up. So the VMS-faithful answer to "register a process that
-     * already exists" is to hand back the process that already exists --
-     * INCLUDING the VMS process ID it was already assigned. Minting a second
-     * ID for the same process would make one process answer to two, which is
-     * the collision defect vms-2b8 round 3 removed, arriving from the other
-     * direction.
-     */
-    proc = vms_proc_find_or_err();
-    if (proc) {
-        args.vms_pid = proc->vms_pid;
-        args.status = 0x00000001;  /* SS$_NORMAL */
-        if (copy_to_user((void __user *)arg, &args, sizeof(args)))
-            return -EFAULT;
-        return 0;
-    }
-
-    /* current->tgid, not current->pid: one PCB per process, shared by
-     * every thread in it (see vms_proc_find_or_err). */
-    proc = vms_proc_register(current->tgid, inherit_identity, share_pid);
-    if (IS_ERR(proc)) {
-        if (PTR_ERR(proc) != -EEXIST)
-            return PTR_ERR(proc);   /* -ENOMEM -> SS$_INSFMEM at the boundary */
-
-        /*
-         * Lost the insert race, or the hash holds an entry for this pid
-         * number that is NOT ours (a recycled pid the reaper missed).
-         * Re-resolve through the pid-identity check: adopting on the
-         * strength of a matching pid NUMBER would hand this task another
-         * process's entry, and its privileges with it.
-         */
-        proc = vms_proc_find_or_err();
-        if (!proc)
-            return -ESRCH;
-    }
-
-    args.vms_pid = proc->vms_pid;
-    args.status = 0x00000001;  /* SS$_NORMAL */
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
-        return -EFAULT;
-
-    return 0;
-}
-
-/*
- * VMS_IOCTL_REGISTER_DETACHED (rd vms-ff75) -- the detached grandchild of a
- * $CREPRC PRC$M_DETACH claims the identity its CREATOR had the executive
- * authorize (VMS_IOCTL_CREPRC_TICKET). The caller's ancestry is read from the
- * unforgeable real_parent chain (up to three levels: the intermediate, then
- * the creator, plus one for slack); the ticket is honoured only if its creator
- * is among them. The caller becomes (or already is) its own row: a fresh VMS
- * PID and, its real parent being the unregistered intermediate, a JOB ROOT --
- * a detached process is not in its creator's job. The ticketed identity is
- * then stamped by the executive. A refused/absent/foreign ticket registers
- * NOTHING and answers SS$_NOPRIV.
- */
-static long vms_ioctl_register_detached(unsigned long arg)
-{
-    struct vms_register_detached_args args;
-    struct vms_proc *proc;
-    struct task_struct *t;
-    uint32_t anc[3] = { 0, 0, 0 };
-    char uname[VMS_USERNAME_SIZE];
-    uint32_t uic = 0;
-    uint64_t privs = 0;
-    int i;
-
-    memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
-        return -EFAULT;
-
-    rcu_read_lock();
-    t = current;
-    for (i = 0; i < 3 && t; i++) {
-        t = rcu_dereference(t->real_parent);
-        anc[i] = t ? (uint32_t)task_tgid_nr(t) : 0;
-    }
-    rcu_read_unlock();
-
-    memset(uname, 0, sizeof(uname));
-    if (vms_proc_creprc_ticket_claim(args.ticket, anc, 3, uname, &uic, &privs) != 0) {
-        args.status = SS__NOPRIV;
-        goto out;
-    }
-
-    proc = vms_proc_find_or_err();
-    if (!proc) {
-        proc = vms_proc_register(current->tgid, false, false);
-        if (IS_ERR(proc)) {
-            if (PTR_ERR(proc) != -EEXIST)
-                return PTR_ERR(proc);
-            proc = vms_proc_find_or_err();
-            if (!proc)
-                return -ESRCH;
-        }
-    }
-    vms_proc_apply_ticket_identity(proc, uname, uic, privs);
-    args.vms_pid = proc->vms_pid;
-    args.status  = SS__NORMAL;
-
-out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
-        return -EFAULT;
-    return 0;
-}
-
 static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     struct vms_proc *proc;
 
-    /* REGISTER doesn't require an existing proc. REGISTER_CONTINUE is the
-     * image-activation variant (vms-4d7): it continues the caller's already-
-     * registered VMS parent (identity AND shared PID). REGISTER_SUBPROCESS
-     * (vms-19e9) is the SPAWN/$CREPRC variant: it inherits the parent's
-     * identity but mints a FRESH VMS PID -- a genuinely new VMS process. */
-    if (cmd == VMS_IOCTL_REGISTER)
-        return vms_ioctl_register(arg, false, false);
-    if (cmd == VMS_IOCTL_REGISTER_CONTINUE)
-        return vms_ioctl_register(arg, true, true);
-    if (cmd == VMS_IOCTL_REGISTER_SUBPROCESS)
-        return vms_ioctl_register(arg, true, false);
-    if (cmd == VMS_IOCTL_REGISTER_DETACHED)
-        return vms_ioctl_register_detached(arg);
+    /* ESTABLISH_SYSTEM is the one call a task with no PCB may make: the boot
+     * task's, once, which makes its PCB (rd vms-2a5, design note 3.1). There
+     * is no registration: a task the executive did not create has no PCB, and
+     * every other ioctl below refuses it with -ESRCH (SS$_NONEXPR). */
+    if (cmd == VMS_IOCTL_ESTABLISH_SYSTEM)
+        return vms_ioctl_establish_system(vms_proc_find_or_err(), arg);
 
     /*
      * E47 (docs/cluster-integration-notes.md): the three cluster
@@ -2565,10 +1952,6 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_procscan(proc, arg);
     case VMS_IOCTL_SETIDENT:
         return vms_ioctl_setident(proc, arg);
-    case VMS_IOCTL_CREPRC_TICKET:
-        return vms_ioctl_creprc_ticket(proc, arg);
-    case VMS_IOCTL_ESTABLISH_SYSTEM:
-        return vms_ioctl_establish_system(proc, arg);
 
     /* Hibernate / wake, executive-resident + AST-interruptible (vms-feb) */
     case VMS_IOCTL_HIBER:
@@ -2746,8 +2129,8 @@ static int vms_dev_release(struct inode *inode, struct file *filp)
  *   - task_exit_notifier: the do_exit notifier the OVMX kernels carry
  *     (distro/kernel/patches/0001, tools/cross-alpha/patches/0002); called in
  *     process context with group_dead.
- *   - otherwise the sched_process_exit tracepoint (attached by name, as
- *     vms_bg_forkinherit.c does), whose probe cannot sleep: it queues a
+ *   - otherwise the sched_process_exit tracepoint (attached by name, as the
+ *     exec hook below is), whose probe cannot sleep: it queues a
  *     task_work on the exiting task, which do_exit runs at exit_task_work() --
  *     still in the exiting task, still before exit_notify -- in process context.
  *     If that cannot be queued, the deletion falls back to a workqueue (the
@@ -2893,8 +2276,8 @@ static void vms_exit_hook_exit(void)
  * image's installed privileges go, and an image installed /PRIVILEGED gets
  * its own -- decided here, by the executive, from the file the kernel
  * actually exec'd (vms_kfe_exec_privs: the executive's own pinned copy, by
- * object). A process that has not registered yet is decided when it
- * registers (vms_proc_register). The hook, chosen at build time as for exit:
+ * object). Every process has its PCB before its first exec (its creator made
+ * it, rd vms-2a5). The hook, chosen at build time as for exit:
  *   - task_exec_notifier (distro/kernel/patches/0002,
  *     tools/cross-alpha/patches/0003): exec_binprm, process context;
  *   - otherwise the sched_process_exec tracepoint, whose probe cannot sleep:
@@ -2914,24 +2297,6 @@ static void vms_image_activated(const struct inode *img)
     privs = vms_kfe_exec_privs(img);
     if (privs || proc->image_privs)
         vms_proc_image_privs(proc, privs);
-}
-
-/* The inode of the current process's executable (its mm's exe_file), held. */
-static struct inode *vms_current_exe_inode(void)
-{
-    struct inode *ino = NULL;
-    struct file *f;
-
-    if (!current->mm)
-        return NULL;
-    rcu_read_lock();
-    f = rcu_dereference(current->mm->exe_file);
-    if (f) {
-        ino = file_inode(f);
-        ihold(ino);
-    }
-    rcu_read_unlock();
-    return ino;
 }
 
 #if defined(HAVE_TASK_EXEC_NOTIFIER)
@@ -3256,14 +2621,6 @@ static int __init vms_init(void)
     if (vms_tt_linux_init() == 0)
         pr_info("vms: terminal class driver ready (line discipline attached per terminal)\n");
 
-    /* vms-0cd: eager fork-time BG channel inheritance (sched_process_fork hook), so
-     * an accept->fork->close forking server (sshd, inetd) hands its accepted
-     * connection to the forked child even though it closes its own copy right after
-     * the fork. Non-fatal on failure: the #815 real_parent-at-registration path
-     * still handles the parent-stays-open case; only the close-early race stays
-     * unfixed, and it fails HONEST (SS$_IVCHAN), never fabricated. */
-    if (vms_bg_forkinherit_init())
-        pr_warn("vms: fork-time BG channel inheritance unavailable; accept->fork->close daemons fall back to #815 (honest)\n");
 
     return 0;
 }
@@ -3388,10 +2745,6 @@ static void __exit vms_exit(void)
      * ones before the PCBs that remain are freed below. */
     vms_exec_hook_exit();
     vms_exit_hook_exit();
-
-    /* vms-0cd: stop capturing forks and drain any un-consumed fork-inherit records
-     * (dropping the socket refs they hold) BEFORE the PCBs they snapshot are freed. */
-    vms_bg_forkinherit_exit();
 
     /* Free all process state (vms_proc_free handles sub-objects) */
     hash_for_each_safe(vms_proc_hash, bkt, tmp, proc, hash_node) {

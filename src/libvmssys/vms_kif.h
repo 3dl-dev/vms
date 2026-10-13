@@ -5,17 +5,11 @@
  * These functions abstract the ioctl calls behind VMS-style APIs.
  *
  * Usage:
- *   Just call the vms_kif_* function you want. Every one of them completes
- *   the open -> register sequence for the calling task first, once, and the
- *   registration is re-established automatically after fork(), in a new
- *   thread, and in a freshly activated image after execve().
- *
- * vms_kif_open() and vms_kif_register() remain available for callers that
- * want to drive the sequence explicitly (and to observe REGISTER's status),
- * but NO caller is required to remember them. Requiring it was the bug:
- * this header documented the two-step protocol from the day it was written,
- * vms_kif_register() had zero callers product-wide, and so every /dev/vms
- * ioctl issued by OVMX was rejected with -ESRCH by the executive (vms-9fc).
+ *   Just call the vms_kif_* function you want. The calling process's PCB was
+ *   made by its creator before it ran (VMS_IOCTL_CREPRC_PCB; for the boot task,
+ *   ESTABLISH_SYSTEM -- rd vms-2a5), so there is nothing to register: the first
+ *   call in a process opens its own /dev/vms descriptor, and a task the
+ *   executive did not create is refused by every service with SS$_NONEXPR.
  *
  * UNWIRED DECLARATIONS (vms-7fb). An entry point below that has NO product
  * caller carries a machine-checked declaration line naming itself and the
@@ -53,72 +47,21 @@ int vms_kif_open(void);
  * directly. Open question in vms-a86: should this exist at all? */
 void vms_kif_close(void);
 
-/* Register this process with the kernel module.
- *
- * The unit is the PROCESS, not the thread: the executive holds one PCB per
- * process (keyed by the thread-group id) and every thread of an image
- * shares it, exactly as VMS kernel threads share one PCB. So a second
- * thread registering adopts the process's existing entry and sees the same
- * process name, the same event flag clusters and the same lock ids.
- *
- * Idempotent: registering a task the executive already knows ADOPTS the
- * existing entry and returns SS$_NORMAL, leaving its identity and its
- * privilege mask untouched. That is what VMS does -- activating an image
- * inside a process does not recreate the process (oracle pin: on the
- * reference lab VAX V7.3, SHOW PROCESS/ACCOUNTING across two image
- * activations reports the same Process ID 2020021D and the same process
- * name "SYSTEM" with "Images activated" going 19 -> 21).
- *
- * TAKES NO PRIVILEGE MASK AND NO PROCESS ID (vms-2b8). Registration
- * proves only that a task exists; the executive derives the authorized
- * privilege mask and the UIC from the task's real credentials, and
- * ASSIGNS the VMS process ID. A process that could name its own
- * privileges here would be enforcing them against itself, and a process
- * that could name its own VMS process ID could collide with a privileged
- * process's row and be resolved in its place.
- *
- * vms_pid is OUT, and may be NULL: on success it receives the ID the
- * executive assigned. */
-uint32_t vms_kif_register(uint32_t *vms_pid);
-
-/* Register the CALLING task as a CONTINUATION of its VMS parent's process
- * rather than a new one (vms-4d7, Option B): the executive shares the
- * parent's VMS PID, UIC, user name and privileges onto this task. DCL
- * calls this in the forked child of an image activation, before execve, so
- * the activated image runs with DCL's identity -- SYSTEM's RUN AUTHORIZE
- * holds SYSPRV. Not for SPAWN / RUN/DETACHED / $CREPRC, which are genuinely
- * new VMS processes and use vms_kif_register(). */
-/* OVMX-UNWIRED: vms_kif_register_continue (vms-2a5) -- its last product caller,
- * the retired vmsfs's setuid mount helper, was removed (vms-1f8); DCL's image
- * task is now created by DCL (CREPRC_PCB CONTINUE), and registration by ioctl
- * is removed in vms-2a5. */
+/* The registration entry points (rd vms-2a5). The executive no longer has a
+ * registration service: a process's PCB is made by its creator
+ * (vms_kif_creprc_pcb) before it runs. These four remain only for their fixed
+ * positions in LIBVMSSYS$SHR's released symbol vector, and each returns
+ * SS$_ILLIOFUNC and does nothing. */
+/* OVMX-UNWIRED: vms_kif_register_continue (vms-2a5) -- a released-vector stub;
+ * DCL's image task is created by DCL (CREPRC_PCB CONTINUE). */
 uint32_t vms_kif_register_continue(void);
 
-/* Register the CALLING task as a genuinely NEW VMS process (a fresh, distinct
- * VMS PID) that INHERITS its creator's executive identity -- UIC, user name and
- * privileges -- from its real_parent (vms-19e9). $CREPRC's forked child calls
- * this before it execs, so a SPAWNed subprocess of a NON-ROOT named session
- * (the interactive DCL after LOGINOUT's credential drop) becomes that session's
- * identity by CONTINUATION -- which vms_kif_setident() cannot do, since the
- * executive refuses a non-root self-declared privileged name. This is $CREPRC /
- * SPAWN; image activation (same VMS process, shared PID) uses
- * vms_kif_register_continue() instead. */
-/* OVMX-UNWIRED: vms_kif_register_subprocess (vms-2a5) -- $CREPRC's creator now
- * creates the PCB (vms_kif_creprc_pcb, rd vms-c43); registration by ioctl is
- * removed in vms-2a5. */
+/* OVMX-UNWIRED: vms_kif_register_subprocess (vms-2a5) -- a released-vector
+ * stub; $CREPRC's creator creates the PCB (vms_kif_creprc_pcb, rd vms-c43). */
 uint32_t vms_kif_register_subprocess(void);
 
-/* DETACHED $CREPRC identity, authorized by the CREATOR (rd vms-ff75). The
- * creator calls vms_kif_creprc_ticket() before it forks: the executive checks
- * the requested identity against the creator's OWN row (SETPRV, or a subset of
- * its identity) and returns a single-use ticket, or SS$_NOPRIV with nothing
- * created. The detached grandchild then calls vms_kif_register_detached() as
- * its first executive call: honoured only if the ticket's creator is one of
- * its ancestors, it becomes a new VMS process (fresh PID, own job) carrying
- * that identity. Replaces the grandchild's self-declared vms_kif_setident(),
- * which a non-root, non-SETPRV fresh row is (rightly) refused. */
-/* OVMX-UNWIRED: vms_kif_creprc_ticket (vms-2a5) -- superseded by
- * vms_kif_creprc_pcb (rd vms-c43); removed with registration in vms-2a5.
+/* OVMX-UNWIRED: vms_kif_creprc_ticket (vms-2a5) -- a released-vector stub;
+ * a detached identity is given through vms_kif_creprc_pcb (rd vms-c43).
  * OVMX-UNWIRED: vms_kif_register_detached (vms-2a5) -- likewise. */
 uint32_t vms_kif_creprc_ticket(const char *username, uint32_t uic,
                                uint64_t privs, uint64_t *ticket);

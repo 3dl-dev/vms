@@ -66,3 +66,26 @@ removals, and R2 holds for every removal whose f9 falls inside the capture.
   - VAX1 receives OVMXA's removal for F11B$sOVMXSYS.
   - OVMXB's lookup then gets 0xf9, or gets 0xf8 to a node that serves it.
   - No request goes unanswered, and there are 0 bugchecks.
+
+## Held-out result (`checkrm.py`, run after this file's first commit, 9cd0a7f16)
+
+| corpus | removals | R1 | R2 | R3 | 0xf7, R4 shape |
+|---|---|---|---|---|---|
+| L1 (derivation) | 4881 | 4881 (100%) | 4872/4880 | 0 answers | none |
+| L2 (held out for 0x04) | 245 | 245 (100%) | 217/244 | 0 answers | 4 of 5 |
+| lnm1 (held out) | 2980 | 2980 (100%) | 2954/2957 | 0 answers | none |
+
+- **R1 and R3 held** on both held-out corpora.
+- **R2 failed in its strict form.** Each miss is a second removal for the same mastery,
+  with no lookup in between: 8 in L1, 27 in L2, 3 in lnm1. In L1 and lnm1 every second
+  removal is byte-identical to the first apart from the envelope; in L2, 18 of 27 are. So a
+  real master sometimes sends the removal twice, and a directory node must accept a removal
+  for an entry it no longer holds.
+  - What OVMX does: it sends one removal per mastery, which is the shape of the large
+    majority. As a directory node it already ignores a removal for an absent entry
+    (`vms_dlm_dir_remove`).
+- **R4: 4 of 5 0xf7 answers match.** The fifth answers an op-0x07 (82/07), whose request is
+  not matched by `checkrm.py`'s transaction key. The CONVERT is not used. OVMX answers 0xf7
+  only to an op-0x01 ENQ, the shape the 4 matched answers ground.
+  - No held-out corpus contains a 0xf7, because none has a remaster. The lab run (d) is
+    where R4 meets a real VAX.

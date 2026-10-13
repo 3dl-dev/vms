@@ -186,8 +186,18 @@ static int run_probe(unsigned stage, const char *name, uint32_t uic,
         close(fds[0]);
         memset(&r, 0, sizeof(r));
 
-        if (stage & STAGE_IDENTITY)
+        if (stage & STAGE_IDENTITY) {
             r.setident_status = vms_kif_setident(name, uic, privs);
+        } else {
+            /* This probe is a subprocess of the suite, which is SYSTEM and so
+             * holds SYSPRV (rd vms-2a5: its creator made its row). The stages
+             * that establish no identity need an executive row WITHOUT
+             * SYSPRV, so it gives the privilege up -- current and authorized
+             * -- through the executive, the only place that decides it. */
+            uint64_t pv = 0;
+            (void)vms_kif_setprv(PRV$M_SYSPRV, 0, 1, &pv);
+            (void)vms_kif_setprv(PRV$M_SYSPRV, 0, 0, &pv);
+        }
 
         if (stage & STAGE_PCB_SYSPRV) {
             /* The honor-system route, staged deliberately: a process

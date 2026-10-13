@@ -250,7 +250,7 @@ int main(int argc, char **argv)
 
     int pfd[2];
     if (pipe(pfd) < 0) { printf("  FAIL: pipe\n"); return 1; }
-    pid_t c = ovmx_fork_subprocess();
+    pid_t c = fork();
     if (c == 0) {
         close(pfd[0]);
         _exit(creator_main(pfd[1]));

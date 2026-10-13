@@ -41,3 +41,18 @@ traffic with its block transfers), `f2-*-console.log`.
 
 The topology and the predictions are F2's: G1, G2 and G3. G2 additionally requires that VAX1's
 post-DECnet MOUNT close is answered.
+
+## Fire F3 result (artifacts run 38354422537, lab/int-94a a1175d61f)
+
+The topology was OVMX first: OVMXE founded alone, and VAX1 and VAX2 booted 300 s later.
+
+- G1 **held**. Every 0b/04 to OVMXE was pulled and answered.
+- G2 **held**. Both VAXes finished startup and each offers `Username:` (VAX/VMS V7.3 node
+  VAX1, node VAX2). VAX1 reads `CN_3`. `unans.py` finds no unanswered request in the whole
+  capture, and there were 0 bugchecks. VAX1's DECnet address change happened as in F2, and
+  its circuit to OVMXE held.
+- G3 **held**. `DEFINE/TABLE=LNM$SYSCLUSTER OVMX_F3 "FROM_VAX1"` typed on VAX1 completed with
+  no error. It reached OVMXE as a $CRELNM 0b/04 (LNM$SYSCLUSTER_TABLE, OVMX_F3 [super] =
+  "FROM_VAX1") and was answered 2 ms later.
+
+Files: `f3-ovmx-first-cm.pcap`, `f3-cwlnm.pcap`, `f3-*-console.log`.

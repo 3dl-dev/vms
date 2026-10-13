@@ -881,7 +881,14 @@ static void coord_send_commit(struct cnxman_coord *c, uint32_t i)
 	csb = coord_out_to(c, i, &dst);
 	if (csb == NULL)
 		return;
-	if (vms_cm_commit_build(c->tr_class, c->epoch, c->scratch,
+	/* One commit time per transition, taken at its first op 0x03 and
+	 * reused for every recipient and retransmission (rd vms-562ac). */
+	if (c->commit_time == 0u)
+		c->commit_time = coord_now_vms(c);
+	if (c->commit_time == 0u)
+		c->commit_time_omitted++;
+	if (vms_cm_commit_build(c->tr_class, c->epoch, c->commit_time,
+				c->scratch,
 				(uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
@@ -1454,6 +1461,7 @@ static void coord_claim_club(struct cnxman_coord *c)
 	 */
 	c->epoch = club->epoch;
 	c->epoch_advanced = 0u;
+	c->commit_time = 0u;
 	club->transition_active = 1u;
 	club->transition_class = c->tr_class;
 	club->we_coordinate = 1u;

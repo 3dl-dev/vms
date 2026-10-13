@@ -921,6 +921,7 @@ vms_codec_status_t vms_cm_relay_build(uint8_t tr_class, uint32_t epoch,
 }
 
 vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
+				       uint64_t xtime,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written)
 {
@@ -936,6 +937,8 @@ vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
 
 	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, epoch);
 	cm_put_tag(&w, VMS_CM_ROLE_COMMIT, tr_class);
+	/* The transition's commit time, one value for every recipient (header). */
+	cm_put_le64(&w, VMS_OFB_CM_COMMIT_TIME, xtime);
 
 	return cm_originate_end(&w, written);
 }

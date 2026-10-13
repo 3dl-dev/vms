@@ -89,3 +89,20 @@ removals, and R2 holds for every removal whose f9 falls inside the capture.
   only to an op-0x01 ENQ, the shape the 4 matched answers ground.
   - No held-out corpus contains a 0xf7, because none has a remaster. The lab run (d) is
     where R4 meets a real VAX.
+
+## Lab proof (d), DC1 topology, registered before it runs
+
+Build: lab/int-e09 = lab/int-94c (vms-94a + vms-c1d + vms-cd8 + vms-6ec) + this branch.
+Topology as DC1/DC1b: real VAX1 forms alone, OVMXA (1021) joins, then OVMXB (1022), in
+group 1, with nobody logged in on VAX1.
+
+- E1: each OVMX node sends VAX1 a named op-0x04 with body[4:8] = 0 after each of its
+  F11B$sOVMXSYS masteries ends. No more than one per mastery, and never one without a prior
+  0xf9 to that node for that name. Every one passes the gate's `dlm_dir_remove` rows.
+- E2: VAX1 takes them silently (R3) and does not bugcheck.
+- E3: OVMXB's 02/01 to OVMXA for F11B$sOVMXSYS no longer goes unanswered. Either VAX1
+  answers OVMXB's lookup with 0xf9 (the entry is gone), or it answers 0xf8 to OVMXA while
+  OVMXA really masters the name, and OVMXA serves it (82/01). OVMXA's CNXTRACE DLMREQ shows
+  declined = 0.
+- E4: CN = 3; VAX1 offers `Username:`; `unans.py` finds no request to or from VAX1 left
+  unanswered; no OVMX→VAX1 CM dialogue skips a send-msg#.

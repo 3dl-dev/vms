@@ -97,6 +97,9 @@ static uint32_t phase2_apply_nodemap(struct vms_club *club,
 				     struct cnxman_phase2_stats *st)
 {
 	const struct vms_csb *local = cnxman_club_local(club);
+	/* rd vms-52d: whether THIS node was already a member before this
+	 * commit, read before task 1 rewrites any flag. */
+	int local_was_member = (local != NULL && cnxman_csb_is_member(local));
 	uint32_t i, matched = 0u;
 
 	for (i = 0; i < club->n_csb; i++) {
@@ -138,6 +141,11 @@ static uint32_t phase2_apply_nodemap(struct vms_club *club,
 		}
 		matched++;
 		if (in_map) {
+			/* rd vms-52d: a system this commit makes a member, with
+			 * this node already one, joined after this node. */
+			if (csb != local && local_was_member &&
+			    !cnxman_csb_is_member(csb))
+				csb->admitted_after_local = 1u;
 			cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED |
 							     VMS_CSB_F_MEMBER));
 			/*
@@ -156,10 +164,12 @@ static uint32_t phase2_apply_nodemap(struct vms_club *club,
 			if (csb->sysid_valid)
 				cnxman_club_giveup_clear(club, csb->sysid);
 		}
-		else
+		else {
 			cnxman_csb_clear_flags(csb,
 					       (uint16_t)(VMS_CSB_F_SELECTED |
 							  VMS_CSB_F_MEMBER));
+			csb->admitted_after_local = 0u;
+		}
 	}
 	if (matched < in->bitmap_popcount)
 		st->nodemap_unmapped += (uint32_t)in->bitmap_popcount - matched;

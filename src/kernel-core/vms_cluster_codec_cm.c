@@ -989,6 +989,44 @@ vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
 	return cm_originate_end(&w, written);
 }
 
+vms_codec_status_t vms_cm_0b01_answer_build(const uint8_t *req_body,
+					    uint32_t req_len,
+					    int answerer_older,
+					    uint8_t *out_body, uint32_t cap,
+					    uint32_t *written)
+{
+	struct vms_cm_envelope req_env;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint8_t body[VMS_CM_BODY_LEN];
+	uint32_t v = answerer_older ? 1u : 0u;
+
+	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = cm_recipe_allowed(&req_env, VMS_CM_RECIPE_0B01_ANSWER);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = cm_copy_request_body(req_body, req_len, body);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, out_body, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	/* Verbatim echo: 31/31 real answers differ from their request only at
+	 * body[8], [28:32] and [36:40]. */
+	vms_wire_put_bytes(&w, 0, VMS_CM_BODY_LEN, body);
+	vms_wire_put_u8(&w, VMS_OFB_CM_CATEGORY,
+			vms_wire_response_category(req_env.category));
+	vms_wire_put_le32(&w, VMS_OFB_CM_0B01_A, v);
+	vms_wire_put_le32(&w, VMS_OFB_CM_0B01_B, v);
+
+	return cm_originate_end(&w, written);
+}
+
 vms_codec_status_t vms_cm_ack_build(uint8_t *out_body, uint32_t cap,
 				    uint32_t *written)
 {
@@ -1369,6 +1407,13 @@ static const struct vms_wire_allow_entry g_cm_allow_rows[] = {
 	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_DLM_OP0D,
 	  "cluster-protocol-spec.md sec 4(p): op 0x0d DLM lock-resource "
 	  "rebuild record, verbatim echo + body[34]=0xf9" },
+
+	/* cat 0x0b op 0x01: a booting member asks every older member once, and
+	 * waits for all the answers (rd vms-52d; vms_cm_0b01_answer_build). */
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_0B, VMS_CM_OP_0B_QUERY,
+	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_0B01_ANSWER,
+	  "tests/lab/captures/vms-52d-0b01-oracle-20261013: 31 real pairs, "
+	  "verbatim echo + body[28:32] = body[36:40] = answerer-is-older" },
 
 	/* cat 0x06: closes the transaction (sec 4(p)/(q)). */
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_MEMBERSHIP, VMS_CM_OP_CLOSE,

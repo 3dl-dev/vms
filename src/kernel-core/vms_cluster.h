@@ -366,7 +366,15 @@ struct vms_csb {
 	 * open that admits it. Valid once an op 0x02 from it was read. */
 	uint32_t cfg_count;
 	uint8_t  cfg_count_valid;
-	uint8_t  pad_cfg[3];
+	/*
+	 * 1 when this system became a member in a transition THIS node
+	 * committed while it was already a member: it joined after us (rd
+	 * vms-52d). Set by Phase 2 task 1 and cleared with the MEMBER flag.
+	 * A system that was already a member when this node joined never has
+	 * it set. The 0x8b/0x01 answer reads it (vms_cm_0b01_answer_build).
+	 */
+	uint8_t  admitted_after_local;
+	uint8_t  pad_cfg[2];
 
 	/* ---- the SCS connection this CSB's state describes (p. 7-23) ---- */
 	uint32_t sw_version;        /* software version as advertised, 0 if unknown */

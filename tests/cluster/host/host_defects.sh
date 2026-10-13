@@ -240,7 +240,8 @@ barrier-stalled-refuses-new-transition
 barrier-stalled-ignores-new-go
 join-reply-to-the-join-target
 join-k10-close-withheld
-join-k5-close-withheld"
+join-k5-close-withheld
+csb-0b01-answer-ignores-join-order"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1093,6 +1094,20 @@ then the cat-0x86 goes
   with state 5, a settled member's answer
   counted
   counted refused
+EOF
+                      ;;
+        esac;;
+
+    csb-0b01-answer-ignores-join-order)
+        case "$_f" in
+        facility)     echo "the value of the 0x8b/0x01 answer to a booting member's cat-0x0b op-0x01 startup request (rd vms-52d): 1 only when the requester was admitted after this node";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_0b01_answer() answers 1 to every member instead of reading the requester's admitted_after_local, so a member that was already a member when this node joined is told this node is the older one. 7 of 31 real answers carry 0, all from the newer member of the pair (tests/lab/captures/vms-52d-0b01-oracle-20261013).";;
+        require_fail) hd_lines <<'EOF'
+  with 0 at body[28]
+  and 0 at body[36]
 EOF
                       ;;
         esac;;
@@ -2593,6 +2608,10 @@ apply_edit() {
         # pattern, so a second apply matches nothing and cmd_apply reports
         # BROKEN FIXTURE.
         sed -i 's|\trc = j->ops->respond(j->ops->ctx, j->scratch, VMS_CM_BODY_LEN);|\trc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,\n\t\t\t       VMS_CM_BODY_LEN); /* NEGCTL join-reply-to-the-join-target: every answer leaves on the join target'"'"'s connection, whoever asked */|' "$_file";;
+
+    csb-0b01-answer-ignores-join-order)
+        # `requester->admitted_after_local != 0u,` is unique in this file.
+        sed -i 's|requester->admitted_after_local != 0u,|1 /* NEGCTL csb-0b01-answer-ignores-join-order */,|' "$_file";;
 
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;

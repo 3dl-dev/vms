@@ -750,4 +750,20 @@ void cnxman_envelope_originate(struct vms_csb *csb,
 			       uint8_t body[132] /* VMS_CM_BODY_LEN */,
 			       enum cnxman_envelope_kind kind);
 
+/*
+ * cnxman_csb_0b01_answer - build and stamp this node's 0x8b/0x01 answer to a
+ * booting member's cat-0x0b op-0x01 startup request (rd vms-52d).
+ *
+ * The one value the answer asserts is read from the requester's CSB
+ * (`admitted_after_local`): 1 when that system became a member after this node
+ * did, else 0 (vms_cm_0b01_answer_build has the measurement). Returns 0 with
+ * `out` ready to respond on the request's own connection. Returns -1, with
+ * nothing built, when this node may not answer: this node is not a member, or
+ * the requester is not a member with a learned CSID.
+ */
+int cnxman_csb_0b01_answer(struct vms_csb *requester, int local_is_member,
+			   const uint8_t *req_body, uint32_t req_len,
+			   uint8_t out[132] /* VMS_CM_BODY_LEN */,
+			   uint32_t *written);
+
 #endif /* OVMX_VMS_CNXMAN_CSB_H */

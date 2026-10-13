@@ -2746,8 +2746,22 @@ static void cnxman_sync_peer_incarnation(struct vms_cnxman *cn)
 
 		if (!csb->in_use || !csb->sysid_valid)
 			continue;
-		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
-			continue;   /* our own incarnation is not learned */
+		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u) {
+			/* Our own incarnation is not LEARNED -- it is the
+			 * port's own (pe_incarnation, the abs-80 quadword every
+			 * START/STACK we send carries). rd vms-d52c: the op-0x05
+			 * record a coordinator sends about ITSELF carries it at
+			 * body[28:36]; a real VAX answered OVMXE's zero-timed
+			 * self-record 0x81/0x05 with status 0 and abandoned the
+			 * admission (lab labd52c). Not held: "not told". */
+			uint32_t lo, hi;
+
+			if (pe_incarnation(cn->cl->pe, &lo, &hi) ==
+			    (int)SS__NORMAL)
+				cnxman_csb_set_incarnation(club, csb,
+					((uint64_t)hi << 32) | (uint64_t)lo, 1);
+			continue;
+		}
 		if (csb->state == (uint8_t)VMS_CNXMAN_CSB_DEAD)
 			continue;   /* an old incarnation learns nothing new */
 		(void)cnxman_track_incarnation(cn, csb);

@@ -1,0 +1,29 @@
+name: Docker daemon pulls through the registry mirror first
+description: >-
+  Points the classic docker daemon at mirror.gcr.io before Docker Hub, so a job's
+  `docker run` / `docker pull` / `docker build` of a docker.io image does not depend on an
+  anonymous Docker Hub pull from a shared runner IP, which intermittently fails (429 rate
+  limit, 502 Bad Gateway, auth errors -- rd vms-9a6, vms-d6c). Hub remains the last resort.
+  tools/ci/check_docker_mirror.py requires it (or setup-buildx, which uses it) before any
+  such step.
+runs:
+  using: composite
+  steps:
+    - name: Docker daemon pulls through mirror.gcr.io first
+      shell: bash
+      run: |
+        set -eu
+        f=/etc/docker/daemon.json
+        sudo python3 - "$f" <<'PY'
+        import json, os, sys
+        p = sys.argv[1]
+        cfg = json.load(open(p)) if os.path.exists(p) and os.path.getsize(p) else {}
+        m = cfg.setdefault("registry-mirrors", [])
+        if "https://mirror.gcr.io" not in m:
+            m.insert(0, "https://mirror.gcr.io")
+        json.dump(cfg, open(p, "w"), indent=2)
+        PY
+        sudo systemctl restart docker
+        for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+        docker info --format '{{json .RegistryConfig.Mirrors}}' | grep -q 'mirror.gcr.io' \
+          || { echo "::error::docker daemon did not take the mirror.gcr.io registry mirror"; exit 1; }

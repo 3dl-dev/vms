@@ -100,6 +100,9 @@ jobs:
           # cache and forces a fresh, reproducible install.
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
       - name: Build the lab-vax image
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 

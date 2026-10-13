@@ -253,7 +253,12 @@ codec-dir-remove-no-hash
 cnxman-dir-remove-opens-txn
 barrier-merge-runs-steps
 coord-merge-waits-for-steps
-coord-0b05-read-as-record-ack"
+coord-0b05-read-as-record-ack
+dlm-adopt-parent-not-verified
+dlm-adopt-abort-leaves-mastery
+dlm-adopt-unreported-not-counted
+dlm-adopt-lvb-zeroes-the-block
+dlm-convert-by-name"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -2229,6 +2234,84 @@ EOF
                       ;;
         esac;;
 
+    dlm-adopt-parent-not-verified)
+        case "$_f" in
+        facility)     echo "the remaster adoption's refusal to let an op-0x12 record choose which lock its sub-resource hangs under (rd vms-14fd: body[40:44] names a handle THIS engine minted, so it is LOOKED UP and checked against the adoption and the holder, never trusted)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_adopt_parent_res()'s two lineage checks -- 'plock->adopt_gen != gen' (the parent must be a lock THIS adoption installed) and 'plock->req_csid != r->holder_csid' (it must be held for the SAME holder) -- are disarmed, leaving only the proxy and null-resource checks. Any lock id in the database is then an acceptable parent: a record can hang its sub-resource under another holder's lock, or under a LOCAL lock of this node, and the tree the engine builds is not the tree the holder holds.";;
+        require_fail) hd_lines <<'EOF'
+N6 a sub naming ANOTHER holder's parent is refused
+N7 a sub naming a LOCAL lock as its parent is refused
+N8 installed two locks, not three
+every refusal above was COUNTED
+EOF
+                      ;;
+        esac;;
+
+    dlm-adopt-abort-leaves-mastery)
+        case "$_f" in
+        facility)     echo "an abandoned adoption gives the tree's mastery BACK (rd vms-14fd): a node that has just released the locks it adopted may not go on claiming to master the tree";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_adopt_abort()'s 'root->master_csid = prev;' restore is dropped. The release half still runs -- every lock the adoption installed really goes -- but the root resource block keeps naming THIS node as the tree's master. The executive then asserts mastery of a tree it holds nothing in, which is exactly the fabricated-mastery shape that made a real VAX install OVMX as master of resources it did not master.";;
+        require_fail) hd_lines <<'EOF'
+and mastery of the tree went back where it was
+this node no longer claims to master it
+EOF
+                      ;;
+        esac;;
+
+    dlm-adopt-unreported-not-counted)
+        case "$_f" in
+        facility)     echo "the COUNT of adoptions this node completed but could not report to the old master (rd vms-14fd, INV-6: the op-0x14's body[20:24] and body[28:40] are ungrounded, so the gap is published as a number rather than left silent)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_adopt_end()'s 'vms_dlm_adopt_unreported_n++;' is dropped. The adoption still completes and still sends nothing -- only the tripwire that says so goes silent, so an executive that has adopted a hundred trees and told the old masters about none of them reports a clean zero. A gap nobody counts is a gap nobody closes.";;
+        require_fail) hd_lines <<'EOF'
+and ONE adoption went unreported to the old master -- body[20:24] and body[28:40] of the op-0x14 are not grounded, so no frame is sent
+the gap is exactly 'all of them', stated as a number
+an abandoned adoption owes the old master nothing
+EOF
+                      ;;
+        esac;;
+
+    dlm-adopt-lvb-zeroes-the-block)
+        case "$_f" in
+        facility)     echo "the value block an adopted resource already holds is LEFT ALONE by a record that carries none (rd vms-14fd / vms-a3d: sixteen zeros presented as an LVB is the placeholder INV-6 forbids)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_adopt_link_lkb()'s 'if (r->valblk_present)' guard on the resource-block write is forced true, so EVERY adopted record writes its block -- and a record that carried none writes sixteen zeros over the real value another holder's record just installed. The locks are all still built and the tree is still held; only the data is destroyed.";;
+        require_fail) hd_lines <<'EOF'
+the resource still holds the real block
+EOF
+                      ;;
+        esac;;
+
+    dlm-convert-by-name)
+        case "$_f" in
+        facility)     echo "a cross-node CONVERT names a LOCK, not a NAME (rd vms-14fd): it is served against the lock the handle names, on that lock's own resource block, parent and all";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_adopt";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_master_op_to_xnode() collapses VMS_DLM_MREQ_CONVERT back onto VMS_DLM_OP_ENQ, the pre-vms-14fd behaviour, so an inbound op-0x07 runs the by-NAME enqueue path. For a SUB-RESOURCE lock -- which is what every remastered tree is full of -- that path resolves the name at the TOP of the tree, finds no such root resource, and mints a SECOND lock on a second, root-level resource of the sub's name: the holder ends up with two handles for one lock, its conversion never happens, and on a down-convert the system queued behind the real lock is never granted.";;
+        require_fail) hd_lines <<'EOF'
+the handle does not change
+$GETLKI agrees: S2 is held at EX
+NEGATIVE CONTROL: the convert created no root-level S2
+a DOWN-convert really lowers the granted mode
+and keeps the same handle
+holder 1 takes EX
+holder 2 is queued
+and the master names the holder blocking it
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -2851,6 +2934,41 @@ apply_edit() {
 
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;
+
+    dlm-adopt-parent-not-verified)
+        # dlm_adopt_parent_res()'s condition spans two lines. Absorbing the
+        # FIRST line's trailing `||` into `0 &&` disarms BOTH lineage checks
+        # with one single-line sed: the second line then reads
+        # `0 && plock->req_csid != ... || plock->resource == NULL) {`, and `&&`
+        # binds tighter than `||`, so only the null-resource check survives.
+        # `0 * gen` keeps `gen` used, so the mutated tree still builds clean.
+        # This exact line (ending in `||` with nothing after) is unique.
+        sed -i 's@^    if (plock->proxy || plock->adopt_gen != gen ||$@    if (plock->proxy || 0 * gen || /* NEGCTL dlm-adopt-parent-not-verified */ 0 \&\&@' "$_file";;
+
+    dlm-adopt-abort-leaves-mastery)
+        # `root->master_csid = prev;` is unique in this file (it sits inside
+        # vms_lock_dlm_adopt_abort's emptiness test, at eight spaces). The
+        # emptiness test itself is untouched -- only the restore it guards goes
+        # away -- and `(void)prev;` keeps the mutated tree building clean.
+        sed -i 's@^        root->master_csid = prev;$@        (void)prev; /* NEGCTL dlm-adopt-abort-leaves-mastery */@' "$_file";;
+
+    dlm-adopt-unreported-not-counted)
+        # `vms_dlm_adopt_unreported_n++;` occurs once (its declaration spells
+        # the name without the `++`, so it cannot match).
+        sed -i 's@^    vms_dlm_adopt_unreported_n++;$@    /* NEGCTL dlm-adopt-unreported-not-counted */@' "$_file";;
+
+    dlm-adopt-lvb-zeroes-the-block)
+        # `if (r->valblk_present)` appears twice (dlm_adopt_alloc_lkb's LKB
+        # copy and dlm_adopt_link_lkb's RESOURCE write), so the edit is RANGE
+        # anchored to dlm_adopt_link_lkb's body. A second apply finds no
+        # `if (r->valblk_present)` left in the range and lands nothing, which
+        # cmd_apply reports as a BROKEN FIXTURE.
+        sed -i '/^static void dlm_adopt_link_lkb(/,/^}/ s@if (r->valblk_present)@if (1) /* NEGCTL dlm-adopt-lvb-zeroes-the-block */@' "$_file";;
+
+    dlm-convert-by-name)
+        # `return VMS_DLM_OP_CONVERT;` is unique (the dispatch's own mention
+        # is a `case` label, not a return).
+        sed -i 's@^        return VMS_DLM_OP_CONVERT;$@        return VMS_DLM_OP_ENQ; /* NEGCTL dlm-convert-by-name */@' "$_file";;
 
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2

@@ -591,6 +591,16 @@ struct vms_resmaster_args {
                                   * over the two readback ioctls (GET_GRANTED +
                                   * DLM_ENUM_WAITS) and never enter the executive. */
 
+#define VMS_DLM_OP_CONVERT  7u   /* a remote holder CONVERTS a lock this node
+                                  * masters, named by the handle THIS node minted
+                                  * (rd vms-14fd). Its own op because a convert
+                                  * names a LOCK, not a NAME: the ENQ path
+                                  * resolves by name at the top of the tree and so
+                                  * cannot convert a SUB-RESOURCE lock, which is
+                                  * what a remastered tree is full of. Falls back
+                                  * to the ENQ path when the handle names no lock
+                                  * of ours. OVMX design choice (Rule 8). */
+
 /* DLKSRCH phase, carried in vms_dlm_xnode_args.flags (mirror of SCS_DLM_DLK_* in
  * scs_dlm.h). Only VICTIM ever reaches the executive dispatch. */
 #define VMS_DLM_DLK_SEARCH_HOLDER   0u

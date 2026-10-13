@@ -577,6 +577,24 @@ struct vms_lock_entry {
     uint32_t            master_csid;
     uint32_t            master_lkid;
     uint32_t            blkast_count;
+    /*
+     * THE REMASTER ADOPTION THAT INSTALLED THIS LOCK (rd vms-14fd,
+     * src/kernel-core/vms_dlm_adopt.h). Non-zero only on a master-side LKB this
+     * node created while ADOPTING a lock tree a departing/relieved master handed
+     * over, and then it is that adoption's generation number. 0 on every other
+     * lock, including every lock made by $ENQ or by the cross-node serve.
+     *
+     * It exists so an adoption can be UNDONE EXACTLY. A record refused halfway
+     * through a tree leaves locks a holder still believes it holds, and the only
+     * safe answer is to release precisely the ones this adoption installed --
+     * not "every lock of that CSID" (which would take the holder's unrelated
+     * locks) and not "every lock on the tree" (which would take another
+     * holder's). Cleared the moment the adoption completes, so a completed
+     * tree's locks are ordinary master-side locks with no transaction behind
+     * them. Mirrored in src/kernel-netbsd/vms_internal.h and
+     * tests/cluster/host/lock_host_internal.h.
+     */
+    uint32_t            adopt_gen;
 };
 
 /* Lock resource (named resource in the lock database) */

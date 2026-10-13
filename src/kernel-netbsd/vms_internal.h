@@ -502,6 +502,14 @@ struct vms_lock_entry {
 	uint32_t            master_csid;
 	uint32_t            master_lkid;
 	uint32_t            blkast_count;
+	/* The REMASTER ADOPTION that installed this lock (rd vms-14fd,
+	 * src/kernel-core/vms_dlm_adopt.h): the adoption's generation number on
+	 * a master-side LKB created while adopting a handed-over tree, 0 on
+	 * every other lock and on every completed adoption's locks. It is what
+	 * lets an abandoned adoption release EXACTLY what it installed. Mirror
+	 * of the Linux twin (src/kernel/vms_internal.h), where the full note
+	 * lives. */
+	uint32_t            adopt_gen;
 };
 
 /* Lock resource -- a named resource in the lock database. */

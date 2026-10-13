@@ -200,6 +200,9 @@ struct vms_lock_entry {
 	uint32_t                  master_csid;
 	uint32_t                  master_lkid;
 	uint32_t                  blkast_count;
+	/* The REMASTER ADOPTION that installed this lock (rd vms-14fd) -- see
+	 * src/kernel/vms_internal.h for the rationale. */
+	uint32_t                  adopt_gen;
 };
 
 struct vms_lock_resource {

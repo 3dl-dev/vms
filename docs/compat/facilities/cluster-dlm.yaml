@@ -587,7 +587,7 @@ items:
         reference lab (the field SET is stable; only the offsets change). NOT
         VMS-authentic; never described as such.
       transport: "Ethernet(14) + NISCA seq-msg header [0:42] + SCS envelope [42:58] (MTYPE 10, Con.ID pair) + DLM body [58:138]. Header+envelope byte-identical to every SYSAP application message."
-      opcodes: "OVMX-derived: ENQ=1, GRANT=2, DEQ=3, BLKAST=4, REBUILD=5 (H10b remaster lock rebuild), DLKSRCH=6 (H11 distributed deadlock search, SEARCH/VICTIM)."
+      opcodes: "OVMX-derived: ENQ=1, GRANT=2, DEQ=3, BLKAST=4, REBUILD=5 (H10b remaster lock rebuild), DLKSRCH=6 (H11 distributed deadlock search, SEARCH/VICTIM), CONVERT=7 (rd vms-14fd: a remote holder converts a lock THIS node masters, named by the handle this node minted -- its own engine op because the ENQ path resolves by NAME at the top of the tree and so cannot convert a sub-resource lock). These are the ENGINE's internal dispatch selectors (VMS_DLM_OP_* in src/kernel/vms_ioctl.h, mirrored in src/kernel-netbsd/vms_lock_nb.h), not the cat-0x02 WIRE opcodes, which are the measured real-VMS ones (0x01 ENQ, 0x03 DEQ, 0x07 CONVERT, ...)."
       body_layout: >
         OVMX-derived, little-endian, body-relative offsets (body base = SCA
         content 58): [0]u8 op; [1]u8 mode (LCK$K_); [2:4]u16 flags (LCK$M_);

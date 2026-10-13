@@ -195,6 +195,12 @@ struct vms_resmaster_args {
                                   * mirror of vms_ioctl.h. The shared vms_lock.c
                                   * dispatch handles the VICTIM leg, so it MUST exist
                                   * here too (the #928 amd64-green-≠-twin trap). */
+#define VMS_DLM_OP_CONVERT  7u   /* a remote holder CONVERTS a lock this node
+                                  * masters, by the handle THIS node minted (rd
+                                  * vms-14fd) -- mirror of vms_ioctl.h. The shared
+                                  * vms_lock.c dispatch has a case for it, so it
+                                  * MUST exist here too (the #928
+                                  * amd64-green-!= -twin trap). */
 
 /* DLKSRCH phase (mirror of vms_ioctl.h). Only VICTIM reaches the executive. */
 #define VMS_DLM_DLK_SEARCH_HOLDER   0u

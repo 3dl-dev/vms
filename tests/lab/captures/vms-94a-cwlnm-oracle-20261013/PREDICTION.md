@@ -210,3 +210,14 @@ DC2's procedure, as amended, with L1 to L5 standing.
 
 OVMXA's console also logged `%SCS-W-DIRNOANSWER` and `%SCS-W-CONNTIMO` every 36 s after the
 admission.
+
+## DC1b result (pod labdemo6, lab/int-94c 7946dcbfd)
+
+- D1, D2 and D3 **held**, as in DC1. Each OVMX node pulled VAX1's database (`dc1b-cwlnm.pcap`,
+  12 frames). SHOW CLUSTER on OVMXB lists all three nodes as MEMBER. VAX1 offers `Username:`.
+  0 bugchecks.
+- D4 **held for the VAX**: no send-msg# gap from either OVMX node to VAX1. Between the OVMX
+  nodes it failed again: OVMXB's five 02/01 to OVMXA during its join went unanswered. OVMXA's
+  CNXTRACE (`dc1b-ovmxa-console.log`) says it received 5 requests and declined 5, so the DLM
+  arm refused them; nothing was lost. An all-OVMX 2-node cluster on main and on V0.7-8 answers
+  every 02/01 (rd vms-e09).

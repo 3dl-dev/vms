@@ -829,9 +829,20 @@ static void test_commit_carries_one_transition_time(void)
 		const struct sent_frame *s =
 			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, k);
 
+		char st[96];
+
 		ct_check(s != NULL && sent_le64(s, VMS_OFF_SYSAP_BODY +
 						   VMS_OFB_CM_COMMIT_TIME) == t0,
 			 "commit k carries the time of the FIRST commit");
+		if (s == NULL)
+			continue;
+		/* rd vms-562ac: the frame-conformance gate's cm_commit rows. */
+		snprintf(st, sizeof(st), "epoch=0x%x,class=0x%x,xtime=0x%llx",
+			 (unsigned)g.cl.club.epoch,
+			 (unsigned)VMS_CM_CLASS_ADD, (unsigned long long)t0);
+		conf_dump("cm_commit", VMS_OFF_SYSAP_BODY, st,
+			  s->bytes + VMS_OFF_SYSAP_BODY,
+			  s->len - VMS_OFF_SYSAP_BODY);
 	}
 	ct_check_eq_u32(g.c.commit_time_omitted, 0u, "nothing omitted");
 

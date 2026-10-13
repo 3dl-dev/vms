@@ -105,3 +105,7 @@ d16acf52432eed64e8def6b5df22259c7c99e4083deca488bfd9d3577db7147d  tests/lab/capt
 453984e6c494d8c458cb9de40db0c3c7666aceb0d8ce369d20d801894a01a85c  tests/lab/captures/vms-64b-dlm-seq-20261011/order2-ovmx-first.pcap
 8de6758c5c76bc0513dd3c772d7b56d04b97b768ef7b52384a969da0227e49a4  tests/lab/captures/vms-db1-k10-close-20261012/db1-r1-ovmx-first.pcap
 01d548616b42d3ca6ae60e8b9916ee307a867f35b3e5f58af9548ca9e4a45511  tests/lab/captures/vms-db1-k10-close-20261012/db1-r2-ovmx-first.pcap
+3fb7c7a20f3b8368f8c68c2da420fb5d6341f2399e5155a2fb38622decc7e88d  tests/lab/captures/vms-52d-0b01-oracle-20261013/armA-cm.pcap
+c2791dd6f49617e07957dffbe69920dc1f08172f0071f8a254952e7cb449223f  tests/lab/captures/vms-52d-0b01-oracle-20261013/armB-cm.pcap
+e106bcd28691e583af11a4c730fa9997db867d912e0159cc28802dd054b7f84d  tests/lab/captures/vms-52d-0b01-oracle-20261013/rm380-cat0b.pcap
+618971f8aa9451f8db14dc7295a9891999259c04d58e582ee4e9164fa1eff2c8  tests/lab/captures/vms-52d-0b01-oracle-20261013/rm380-ds3-cat0b.pcap

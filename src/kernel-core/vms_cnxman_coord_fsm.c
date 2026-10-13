@@ -1386,6 +1386,7 @@ static void coord_retire_subject(struct cnxman_coord *c)
 	cnxman_csb_clear_flags(s, (uint16_t)(VMS_CSB_F_SELECTED |
 					     VMS_CSB_F_MEMBER));
 	cnxman_csb_set_flags(s, (uint16_t)VMS_CSB_F_REMOVED);
+	s->admitted_after_local = 0u;   /* rd vms-52d */
 	/*
 	 * ...AND THE CLUSTER HAS GIVEN UP ON THAT INCARNATION (rd vms-0f9).
 	 * Measured on three real OpenVMS VAX V7.3 nodes: after a transition

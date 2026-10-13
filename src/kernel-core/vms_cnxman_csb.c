@@ -290,6 +290,7 @@ static void csb_give_up(struct vms_club *club, struct vms_csb *csb)
 
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_DISCONNECT;
 	csb->flags &= (uint16_t)~VMS_CSB_F_MEMBER;
+	csb->admitted_after_local = 0u;   /* rd vms-52d */
 	csb->next_attempt_ms = 0u;
 	csb->deadline_ms = 0u;
 
@@ -625,6 +626,7 @@ static enum cnxman_csb_action h_dead(struct vms_club *club,
 {
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_DEAD;
 	csb->flags &= (uint16_t)~VMS_CSB_F_MEMBER;
+	csb->admitted_after_local = 0u;   /* rd vms-52d */
 	csb->next_attempt_ms = 0u;
 	csb->deadline_ms = 0u;
 	cnxman_csb_bind_connection(csb, 0u);
@@ -2070,4 +2072,22 @@ void cnxman_club_phase1_mark(struct vms_club *club, int bitmap_valid,
 		    (bitmap_valid && csb_in_phase1_map(csb, bitmap, slots)))
 			csb->cm_phase1_named = 1u;
 	}
+}
+
+int cnxman_csb_0b01_answer(struct vms_csb *requester, int local_is_member,
+			   const uint8_t *req_body, uint32_t req_len,
+			   uint8_t out[132], uint32_t *written)
+{
+	if (requester == NULL || out == NULL || written == NULL)
+		return -1;
+	if (!local_is_member || !requester->in_use || !requester->csid_valid ||
+	    !cnxman_csb_is_member(requester))
+		return -1;
+	if (vms_cm_0b01_answer_build(req_body, req_len,
+				     requester->admitted_after_local != 0u,
+				     out, VMS_CM_BODY_LEN, written) !=
+	    VMS_CODEC_OK)
+		return -1;
+	cnxman_envelope_originate(requester, out, CNXMAN_ENV_RESPONSE);
+	return 0;
 }

@@ -1516,6 +1516,44 @@ vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
 					 uint32_t *written);
 
 /*
+ * vms_cm_0b01_answer_build - the 0x8b/0x01 answer to a booting member's
+ * category-0x0b op-0x01 request (rd vms-52d).
+ *
+ * WHAT THE REQUEST IS. During startup every real OpenVMS VAX V7.3 sends one
+ * cat-0x0b op-0x01 to each member that was already a member when it booted. It
+ * waits for every answer before it goes on (db1-r2: the VAX that got VAX1's
+ * answer and none from OVMX sent nothing more and never reached Username:).
+ * The request writes only body[8:12], [24:28] (0) and [28:32] (1). Every
+ * other byte is left over from the last message on that connection
+ * (tests/lab/captures/vms-52d-0b01-oracle-20261013, stale.py). Toward an OVMX
+ * coordinator, that leftover is OVMX's own 0x81/0x0b ack ("10 02 01" at [16:19]).
+ * That is why the request looked like a role-0x10 form no VAX sends to a VAX.
+ *
+ * THE RECIPE, MEASURED on 31 real request/answer pairs (the lab corpus plus
+ * arms A and B): the answer is the request body echoed verbatim, body[8] |=
+ * 0x80, and body[28:32] and body[36:40] both written with one value, 1 or 0.
+ * Nothing else differs. That value is 1 when the answerer became a member
+ * before the requester, and 0 otherwise (21 pairs give 1, 7 give 0, 3 had
+ * nothing to change). Arm B is a VAX in OVMX's exact position (founder,
+ * coordinator, highest SCSSYSTEMID, LOCKDIRWT 0). It answered both later
+ * VAXes with 1, which refutes the rival "lower SCSSYSTEMID" rule
+ * (PREDICTION.md, registered before the arm ran).
+ *
+ * `answerer_older` is that executive fact, which the caller reads from the
+ * CSB (vms_csb.admitted_after_local). It must never be guessed.
+ * STAMP with is_response=1: the echo already carries the requester's txn/token.
+ */
+#define VMS_CM_CAT_0B           0x0bu /* the cat-0x0b startup request family  */
+#define VMS_CM_OP_0B_QUERY      0x01u /* op 0x01: one per older member        */
+#define VMS_OFB_CM_0B01_A       28u   /* body[28:32] LE u32, answer value    */
+#define VMS_OFB_CM_0B01_B       36u   /* body[36:40] LE u32, the same value  */
+vms_codec_status_t vms_cm_0b01_answer_build(const uint8_t *req_body,
+					    uint32_t req_len,
+					    int answerer_older,
+					    uint8_t *out_body, uint32_t cap,
+					    uint32_t *written);
+
+/*
  * vms_cm_ack_build - a category-0x04 SYSAP acknowledgement (sec 4(u)):
  * "prompt, opportunistic, cumulative, and never keyed to an opcode". No
  * payload; body[9] is written 0x00 (sec 4(p): "An implementation should
@@ -1743,7 +1781,9 @@ enum vms_cm_recipe {
 	/* The coordinator's 0x81/0x0b barrier-step ack (sec 5b above). A recipe
 	 * of its own rather than an ECHO row, because it takes the role-slot
 	 * mutation at body[16] and NOT the ECHO family's body[18] marker. */
-	VMS_CM_RECIPE_STEP_ACK
+	VMS_CM_RECIPE_STEP_ACK,
+	/* rd vms-52d: the 0x8b/0x01 answer (vms_cm_0b01_answer_build). */
+	VMS_CM_RECIPE_0B01_ANSWER
 };
 
 /* ------------------------------------------------------------------ *

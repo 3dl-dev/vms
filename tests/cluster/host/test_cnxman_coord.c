@@ -36,6 +36,7 @@
 
 #include "cluster_test.h"
 #include "cluster_fixture.h"
+#include "conformance_dump.h"
 #include "cnxman_fake_ops.h"
 
 #include "vms_cluster.h"
@@ -2470,6 +2471,78 @@ static void test_1ac_no_open_for_a_system_that_is_not_ours(void)
 		 "and no transition was opened");
 }
 
+/*
+ * rd vms-52d -- A BOOTING MEMBER'S cat-0x0b op-0x01 IS ANSWERED FROM ITS CSB.
+ *
+ * The coordinator admits a joiner. The Phase 2 commit marks the joiner's CSB
+ * as admitted after this node. A member that was already a member when the bed
+ * started is not marked. cnxman_csb_0b01_answer then answers the joiner's real
+ * request (arm B's own frame, cm-0b01-req-older-oracle) with 1 and answers that
+ * member with 0. It refuses a requester that is not a member, and it refuses
+ * when this node is not a member. The built answer is the conformance gate's
+ * `cm_0b01_ans` emission.
+ */
+static void test_52d_startup_query_answered_from_csb(void)
+{
+	struct vms_fixture req;
+	struct vms_csb *j, *m;
+	uint8_t out[VMS_CM_BODY_LEN];
+	uint32_t written = 0;
+	char path[600], err[256];
+	const uint8_t *body;
+	uint32_t blen;
+
+	printf("\n-- rd vms-52d: the cat-0x0b op-0x01 answer reads the CSB --\n");
+	snprintf(path, sizeof(path), "%s/cm-0b01-req-older-oracle.spec",
+		 OVMX_FIXTURE_DIR);
+	err[0] = '\0';
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, &req, err,
+			     sizeof(err)) != 0) {
+		printf("  FAIL could not load %s: %s\n", path, err);
+		ct_check(0, "the arm B request loads");
+		return;
+	}
+	body = req.bytes + VMS_OFF_SYSAP_BODY;
+	blen = req.wire_len - VMS_OFF_SYSAP_BODY;
+
+	bed_init(2);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+	j = cnxman_club_csb_at(&g.cl.club, (uint32_t)bed_join_csb(2));
+	ct_check(cnxman_csb_0b01_answer(j, 1, body, blen, out, &written) != 0,
+		 "before its admission the joiner is not a member: no answer");
+	drive_add_to_barrier(2);
+	ct_check(cnxman_csb_is_member(j), "the joiner is now a member");
+	ct_check_eq_u32(j->admitted_after_local, 1,
+			"Phase 2 marked it admitted after this node");
+	ct_check_eq_u32(m->admitted_after_local, 0,
+			"a member that predates the transition is not marked");
+
+	ct_check(cnxman_csb_0b01_answer(j, 1, body, blen, out, &written) == 0,
+		 "the joiner's request is answered");
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  a whole body");
+	ct_check_eq_u32(out[8], 0x8bu, "  cat 0x8b");
+	ct_check_eq_u32(out[9], 0x01u, "  op 0x01");
+	ct_check_eq_u32((uint32_t)out[28] | (uint32_t)out[29] << 8 |
+			(uint32_t)out[30] << 16 | (uint32_t)out[31] << 24, 1,
+			"  body[28:32] = 1: this node is the older member");
+	ct_check_eq_u32((uint32_t)out[36] | (uint32_t)out[37] << 8 |
+			(uint32_t)out[38] << 16 | (uint32_t)out[39] << 24, 1,
+			"  body[36:40] = 1");
+	ct_check(memcmp(out + 4, body + 4, 4) == 0,
+		 "  the requester's txn/token ride back");
+	conf_dump("cm_0b01_ans", 72u, "older=1", out, written);
+
+	ct_check(cnxman_csb_0b01_answer(m, 1, body, blen, out, &written) == 0,
+		 "a pre-existing member's request is answered too");
+	/* negctl: csb-0b01-answer-ignores-join-order */
+	ct_check_eq_u32(out[28], 0, "  with 0 at body[28]");
+	ct_check_eq_u32(out[36], 0, "  and 0 at body[36]");
+	conf_dump("cm_0b01_ans", 72u, "older=0", out, written);
+
+	ct_check(cnxman_csb_0b01_answer(j, 0, body, blen, out, &written) != 0,
+		 "a node that is not a member answers nothing");
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -2491,6 +2564,7 @@ int main(void)
 	test_go_waits_for_every_phase1_ack();
 	test_count_commits_in_phase2_before_the_barrier();
 	test_the_go_is_a_notification();
+	test_52d_startup_query_answered_from_csb();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();

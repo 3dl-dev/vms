@@ -71,3 +71,14 @@ scs_conreq_mscp	*	74	2	const	const:1	SCS$W_STATUS 1: 995/995
 scs_conreq_mscp	*	76	16	const	bytes:4d534350244449534b20202020202020	MSCP$DISK, blank-padded: 995/995
 scs_conreq_mscp	*	92	16	const	bytes:564d53244449534b5f434c5f44525652	VMS$DISK_CL_DRVR: 995/995
 scs_conreq_mscp	*	108	16	const	bytes:56352e30202020202020202020202b20	connect data: 4,032/4,032 real
+# ---- cat 0x8b op 0x01: the answer to a booting member's startup request (rd vms-52d) ----
+cm_0b01_ans	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j); test_cnxman_join test_e77_* pin it)
+cm_0b01_ans	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+cm_0b01_ans	*	76	4	copied	any:echo	txn/token: the requester's own, echoed (31/31 real answers; test_cnxman_coord pins)
+cm_0b01_ans	*	80	1	const	const:8b	category 0x0b | 0x80, the response (31/31 real answers)
+cm_0b01_ans	*	81	1	const	const:1	op 0x01 (31/31 real answers)
+cm_0b01_ans	*	82	18	copied	any:echo	body[10:28] echoed verbatim: 31/31 real answers equal their request here (vms-52d-0b01-oracle pairs; test_codec_cm byte-compares two real pairs)
+cm_0b01_ans	*	100	4	derived	state:older	body[28:32] = 1 if the requester was admitted after this node, else 0: 21 real answers 1, 7 answers 0, 0 residuals; arm B (OVMX's exact position) gives 1
+cm_0b01_ans	*	104	4	copied	any:echo	body[32:36] echoed verbatim (31/31)
+cm_0b01_ans	*	108	4	derived	state:older	body[36:40] = body[28:32] in every real answer (31/31)
+cm_0b01_ans	*	112	92	copied	any:echo	body[40:132] echoed verbatim (31/31)

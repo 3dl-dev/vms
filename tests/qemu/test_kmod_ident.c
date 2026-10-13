@@ -37,14 +37,15 @@
  * a probe that varies EXACTLY ONE field against a call that is otherwise
  * known to be allowed.
  *
- * THE THREE PROCESSES, and why there are three:
- *   A  the parent. Starts root, so the executive derives a privileged
- *      mask for it; later stamps an authenticated identity in UIC group
- *      300 and thereby drops SETPRV and WORLD.
- *   B  a real credential change, not a flag: setgid(300)+setuid(1001), so
- *      capable(CAP_SYS_ADMIN) is genuinely false and the derived UIC is
- *      genuinely different. Same UIC GROUP as A's stamped identity, which
- *      is the case the oracle says needs no privilege.
+ * THE THREE PROCESSES, and why there are three (every one created by its
+ * creator, which makes its PCB -- rd vms-2a5; nothing registers):
+ *   A  the parent: SYSTEM, made by the harness boot task. Later stamps an
+ *      authenticated identity in UIC group 300 and thereby drops SETPRV and
+ *      WORLD.
+ *   B  an UNPRIVILEGED process A creates in UIC [300,1001], named OVMXB,
+ *      with only TMPMBX|NETMBX; it also drops its Linux credentials for
+ *      real. Same UIC GROUP as A's stamped identity, which is the case the
+ *      oracle says needs no privilege.
  *   D  a process in a DIFFERENT UIC group (400) carrying a real user
  *      name. Without it there is nothing in the table that a
  *      cross-group rule could refuse, and the rule cannot be tested at
@@ -70,6 +71,7 @@
 #include <sys/wait.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"   /* processes this suite creates (rd vms-2a5) */
 
 /*
  * Status values -- ORACLE-PINNED by the implementer of vms-2b8 on the
@@ -90,14 +92,14 @@
 #define SS_NONEXPR      2280
 
 /*
- * Process B's credentials. Both differ from root, so the executive
- * derives a different UIC AND sees capable(CAP_SYS_ADMIN) == false.
- * The uid is what makes this test adversarial rather than decorative:
- * setgid() alone (as vms-8019's test uses) keeps root's capabilities.
+ * Process B: the identity A creates it with (UIC [300,1001], TMPMBX|NETMBX,
+ * user name OVMXB), and the Linux credentials it then drops to, so neither
+ * identity lends it privilege.
  */
 #define B_GID   300
 #define B_UID   1001
 #define B_UIC   (((uint32_t)B_GID << 16) | (uint32_t)B_UID)
+#define B_NAME  "OVMXB"
 
 /* The identity process A stamps on itself, and B then reads back.
  * Its group matches B's so B can also resolve A BY NAME, which is
@@ -379,7 +381,7 @@ static int process_b(int rfd, int wfd)
     if (vms_kif_open() < 0)
         _exit(73);
 
-    r1.registered = vms_kif_register(NULL);
+    r1.registered = ovmx_test_self(NULL);   /* the row A made for it */
 
     memset(&info, 0, sizeof(info));
     r1.getjpi_status = vms_kif_getjpi_self(&info);
@@ -453,8 +455,8 @@ static int process_b(int rfd, int wfd)
      * executive would merely be broken rather than secure. */
     r1.setprv_authorized = vms_kif_setprv(VMS_PRV_M_TMPMBX, 1, 0, &prev);
 
-    /* Weakening our own mask through SETIDENT requires stamping a name,
-     * and an unnamed process has no name to stamp: refused. */
+    /* Weakening our own mask through SETIDENT is still stamping an
+     * identity, which needs CMKRNL: refused. */
     r1.setident_weaken = vms_kif_setident("GUEST", B_UIC, VMS_PRV_M_TMPMBX);
 
     if (write(wfd, &r1, sizeof(r1)) != (ssize_t)sizeof(r1))
@@ -537,9 +539,9 @@ static int process_b(int rfd, int wfd)
  * process_d - a process in a DIFFERENT UIC group, carrying a real
  * identity.
  *
- * Registers as root so that it holds SETPRV and may legitimately stamp
- * an identity (this is the LOGINOUT shape, done a second time by a
- * second process), then drops its Linux credentials for real so that
+ * A subprocess of A (SYSTEM, so it holds CMKRNL and may legitimately stamp
+ * an identity -- the LOGINOUT shape, done a second time by a second
+ * process), which then drops its Linux credentials for real so that
  * nothing about it is privileged by the time it is read.
  *
  * It then blocks forever on rfd. Its row has to still be in the table
@@ -557,7 +559,7 @@ static int process_d(int rfd, int wfd)
     if (vms_kif_open() < 0)
         _exit(80);
 
-    rd.registered     = vms_kif_register(NULL);
+    rd.registered     = ovmx_test_self(NULL);   /* the row A made for it */
     rd.setprn_status  = vms_kif_setprn(D_PRCNAM);
     rd.setident_status = vms_kif_setident(D_USERNAME, D_UIC, D_PRIVS);
 
@@ -613,7 +615,7 @@ int main(void)
     struct a_signal sig;
     struct vms_procinfo info;
     uint32_t status, a_vms_pid, reg_vms_pid = 0;
-    uint64_t prev, expect_reg_privs;
+    uint64_t prev;
 
     printf("=== test_kmod_ident: executive-enforced identity ===\n");
 
@@ -622,7 +624,7 @@ int main(void)
         printf("=== test_kmod_ident: 0 passed, 1 failed ===\n");
         return 1;
     }
-    if (vms_kif_register(&reg_vms_pid) != SS_NORMAL) {
+    if (ovmx_test_self(&reg_vms_pid) != SS_NORMAL) {
         printf("  FAIL: this process has no row its creator made\n");
         printf("=== test_kmod_ident: 0 passed, 1 failed ===\n");
         return 1;
@@ -665,30 +667,21 @@ int main(void)
     }
 
     /* ----------------------------------------------------------------
-     * 1. Registration DERIVES the authorized mask; it does not take one.
+     * 1. THE IDENTITY IS THE CREATOR'S, NOT THE TASK'S (rd vms-2a5).
      *
-     * There is no longer any argument to pass, so the strong statement
-     * this makes is about the VALUE: even a CAP_SYS_ADMIN process gets
-     * exactly the privileges the executive decided to grant, and not
-     * the 0xFFFFFFFFFFFFFFFF that src/ovmx_init/ovmx_init.c used to
-     * hand itself.
+     * This process is root at the Linux level, yet nothing about its
+     * identity comes from that: its creator (the harness boot task) made
+     * its PCB as SYSTEM, and that is what the executive reports.
      * ---------------------------------------------------------------- */
-    expect_reg_privs = VMS_PRV_M_ROOT_GRANT | VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX;
-
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_self(&info);
-    CHECK(status == SS_NORMAL, "privileged process reads its own executive row");
-    CHECK(info.perm_privs == expect_reg_privs,
-          "registration grants the executive's derived mask, not all privileges");
+    CHECK(status == SS_NORMAL, "the process reads its own executive row");
+    CHECK(strcmp(info.username, "SYSTEM") == 0,
+          "its user name is its creator's (SYSTEM), not derived from Linux credentials");
     CHECK(info.cur_privs == info.perm_privs,
           "current privileges start equal to authorized privileges");
-    CHECK(info.username[0] == '\0',
-          "a registered process has NO user name until one is authenticated");
-
     CHECK(vms_kif_chkpriv(VMS_PRV_M_SETPRV) == SS_NORMAL,
-          "privileged process holds SETPRV");
-    CHECK(vms_kif_chkpriv(PRV_M_SYSPRV) == SS_NOPRIV,
-          "even a privileged process is NOT given SYSPRV by registration");
+          "the SYSTEM process holds SETPRV");
 
     a_vms_pid = info.vms_pid;
 
@@ -702,7 +695,7 @@ int main(void)
      * executive assigns and reports.
      * ---------------------------------------------------------------- */
     CHECK(reg_vms_pid != 0,
-          "registration REPORTS a VMS process ID the executive assigned");
+          "the executive reports a VMS process ID it assigned");
     CHECK(reg_vms_pid == a_vms_pid,
           "... and it is the ID the executive files the process under");
     CHECK(a_vms_pid != (uint32_t)getpid(),
@@ -718,7 +711,7 @@ int main(void)
      *     cross-group rule below is unprovable without a row that is
      *     genuinely somewhere else.
      * ---------------------------------------------------------------- */
-    dchild = fork();
+    dchild = ovmx_fork_subprocess();   /* D: a subprocess of A (rd vms-2a5) */
     if (dchild < 0) {
         printf("  FAIL: fork()\n");
         return 1;
@@ -752,9 +745,7 @@ int main(void)
     /* ----------------------------------------------------------------
      * 1d. WORLD ALLOWS THE CROSS-GROUP READ.
      *
-     * This process is still in UIC group 0 and still holds the mask
-     * registration derived for a CAP_SYS_ADMIN task, which includes
-     * WORLD. The identical call is repeated in section 5b after this
+     * This process is still SYSTEM, in UIC group 1, and holds WORLD. The identical call is repeated in section 5b after this
      * process has dropped WORLD, and must then be refused -- same
      * caller, same target, same call, only the privilege mask different.
      * That pair is what isolates the WORLD clause: nothing else in the
@@ -772,7 +763,8 @@ int main(void)
         return 1;
     }
 
-    child = fork();
+    /* B: an unprivileged process A creates in UIC [300,1001] (rd vms-2a5). */
+    child = ovmx_fork_detached_st(B_NAME, B_UIC, VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX, NULL);
     if (child < 0) {
         printf("  FAIL: fork()\n");
         return 1;
@@ -797,21 +789,22 @@ int main(void)
     }
 
     /* ----------------------------------------------------------------
-     * 2. The unprivileged process gets the default set -- and the
-     *    environment it forged had no effect on any of it.
+     * 2. The unprivileged process holds what its creator gave it -- and
+     *    the environment it forged had no effect on any of it.
      * ---------------------------------------------------------------- */
     CHECK(r1.registered == SS_NORMAL,
-          "unprivileged process may register with the executive");
+          "unprivileged process has the row its creator made");
     CHECK(r1.getjpi_status == SS_NORMAL,
           "unprivileged process reads its own executive row");
     CHECK(r1.perm_privs == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX),
-          "unprivileged registration grants only TMPMBX|NETMBX");
-    CHECK((r1.perm_privs & VMS_PRV_M_ROOT_GRANT) == 0,
-          "unprivileged process gets NO enforced privilege (no CMKRNL/CMEXEC/SETPRV)");
+          "its creator gave it only TMPMBX|NETMBX");
+    CHECK((r1.perm_privs & (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | VMS_PRV_M_SETPRV)) == 0,
+          "unprivileged process holds NO enforced privilege (no CMKRNL/CMEXEC/SETPRV)");
     CHECK(r1.uic == B_UIC,
-          "UIC comes from the task's real credentials, not VMS_UIC_GROUP/MEMBER");
-    CHECK(r1.username[0] == '\0',
-          "VMS_USERNAME=SYSTEM in the environment does NOT name the process");
+          "UIC is the one its creator gave, not VMS_UIC_GROUP/MEMBER");
+    CHECK(strcmp(r1.username, B_NAME) == 0,
+          "VMS_USERNAME=SYSTEM in the environment does NOT name the process -- "
+          "its name is the one its creator gave");
 
     /* ----------------------------------------------------------------
      * 3. THE CORE REFUSAL: a process cannot grant itself a privilege it
@@ -821,8 +814,8 @@ int main(void)
           "process WITHOUT SETPRV is REFUSED an identity it was not given (SS$_NOPRIV)");
     CHECK(r1.perm_after_escalate == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX),
           "refused identity leaves the authorized mask untouched");
-    CHECK(r1.username_after_escalate[0] == '\0',
-          "refused identity leaves the process still unnamed (no partial effect)");
+    CHECK(strcmp(r1.username_after_escalate, B_NAME) == 0,
+          "refused identity leaves the process its own name (no partial effect)");
 
     /*
      * ... and each half of the grant rule proved on its own. Deleting
@@ -834,24 +827,24 @@ int main(void)
           "UIC CLAUSE ISOLATED: same authorized mask, SYSTEM's UIC -> SS$_NOPRIV");
     CHECK(r1.uic_after_uic_only == B_UIC &&
           r1.perm_after_uic_only == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX) &&
-          r1.username_after_uic_only[0] == '\0',
+          strcmp(r1.username_after_uic_only, B_NAME) == 0,
           "... and the refused UIC change applied nothing at all");
 
     CHECK(r1.setident_priv_only == SS_NOPRIV,
           "SUBSET CLAUSE ISOLATED: own UIC, one extra privilege -> SS$_NOPRIV");
     CHECK(r1.uic_after_priv_only == B_UIC &&
           r1.perm_after_priv_only == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX) &&
-          r1.username_after_priv_only[0] == '\0',
+          strcmp(r1.username_after_priv_only, B_NAME) == 0,
           "... and the refused privilege grant applied nothing at all");
 
     /* negctl: ident-username-unguarded */
     CHECK(r1.setident_name_only == SS_NOPRIV,
           "USER NAME CLAUSE ISOLATED: own UIC, own mask, name \"SYSTEM\" -> SS$_NOPRIV");
     /* negctl-knockon: ident-username-unguarded */
-    CHECK(r1.username_after_name_only[0] == '\0' &&
+    CHECK(strcmp(r1.username_after_name_only, B_NAME) == 0 &&
           r1.uic_after_name_only == B_UIC &&
           r1.perm_after_name_only == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX),
-          "... and the process is STILL UNNAMED (a process cannot name itself a user)");
+          "... and the process keeps its own name (a process cannot name itself a user)");
 
     CHECK(r1.setprv_unauth == SS_NOTALLPRIV,
           "$SETPRV outside the authorized mask reports SS$_NOTALLPRIV");
@@ -868,8 +861,8 @@ int main(void)
           "$SETPRV WITHIN the authorized mask needs no SETPRV (oracle-pinned)");
     /* negctl-knockon: ident-username-unguarded */
     CHECK(r1.setident_weaken == SS_NOPRIV,
-          "an UNNAMED process cannot stamp an identity at all -- there is no "
-          "name it is allowed to hold constant");
+          "a process without CMKRNL cannot stamp an identity at all, not even "
+          "a weaker one");
 
     /* ----------------------------------------------------------------
      * 4. A stamps an authenticated identity on itself, exceeding its
@@ -891,7 +884,7 @@ int main(void)
     CHECK(info.perm_privs == A_PRIVS,
           "the executive holds the stamped authorized mask");
     CHECK((info.perm_privs & (1ULL << 18)) != 0,
-          "SETPRV permitted granting OPER, which registration had not granted");
+          "the stamped mask carries OPER, as SETPRV permitted");
 
     /* ----------------------------------------------------------------
      * 4b. IDENTITY IS PER-PROCESS, NOT PER-THREAD.
@@ -1035,7 +1028,7 @@ int main(void)
         CHECK(strcmp(r2.bypid_username, A_USERNAME) == 0,
               "A WRITES the user name, B READS it (identity is executive-resident)");
         CHECK(r2.bypid_uic == A_UIC,
-              "B sees the UIC A established, not the one A registered with");
+              "B sees the UIC A established, not the one A was created with");
         CHECK(r2.bypid_perm_privs == A_PRIVS,
               "B sees A's authorized privilege mask");
         /* negctl-knockon: ident-username-unguarded */

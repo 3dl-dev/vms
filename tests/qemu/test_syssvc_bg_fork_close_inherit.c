@@ -12,13 +12,14 @@
  * and IMMEDIATELY closes both the accepted channel and the listener -- then the
  * child (post-exec) materializes the inherited connection and round-trips bytes.
  *
- * WHAT IT PROVES. Eager fork-time inheritance (vms_bg_forkinherit.c) captures the
- * parent's BG channels AT FORK -- taking a shared ref on the host socket before the
- * parent can drop it -- so the child, given only the inherited handle NUMBER, gets
- * its own channel and materializes a real fd whose read()/write() reach the still-
- * alive executive socket BYTE-EXACT. Without the fork capture (see the
- * fork-inherit-disabled negctl) the child falls back to #815, finds the channel
- * gone, and fails -- which is the teeth on this test.
+ * WHAT IT PROVES. The creator has the executive make the child's PCB while it holds
+ * the child, before it closes anything (vms_proc_create_for, rd vms-2a5), and the
+ * child's PCB takes the creator's BG channels then -- a shared ref on the host
+ * socket -- so the child, given only the inherited handle NUMBER, gets its own
+ * channel and materializes a real fd whose read()/write() reach the still-alive
+ * executive socket BYTE-EXACT. Without that copy (see the fork-inherit-disabled
+ * negctl) the child finds no channel by that number and fails -- which is the
+ * teeth on this test.
  *
  * Honest Rule-9 skip with no /dev/vms.
  */
@@ -39,6 +40,7 @@
 #include <net/if.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms_bgsock.h"
 
 #define EXIT_SKIP 77
@@ -167,7 +169,7 @@ int main(int argc, char **argv)
      * connection (fork-time capture took a shared ref before this close). */
     char harg[32];
     snprintf(harg, sizeof(harg), "--child-io=%d", h);
-    pid_t c = fork();
+    pid_t c = ovmx_fork_subprocess();
     if (c == 0) {
         execl(argv[0], argv[0], harg, (char *)NULL);
         _exit(127);

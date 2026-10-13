@@ -28,11 +28,11 @@ exec_socket_t vms_bg_ref_socket(struct vms_proc *proc, uint32_t chan);
 struct list_head;
 
 /*
- * Fork-time BG channel inheritance boundary (vms-0cd). The eager fork-inherit rind
- * (src/kernel/vms_bg_forkinherit.c) captures a parent PCB's BG channels AT FORK --
- * before an accept->fork->close forking server closes the listener's copy -- and
- * hands the snapshot to the child at registration. The channel struct is private to
- * vms_bg.c, so the rind drives these three through an opaque caller-owned list:
+ * BG channel inheritance boundary (vms-0cd, rd vms-2a5). vms_bg_inherit captures a
+ * creator PCB's BG channels while the creator holds the child it is making
+ * (vms_proc_create_for), and adopts them onto the child's new PCB. The channel
+ * struct is private to vms_bg.c, so these three work through an opaque
+ * caller-owned list:
  *
  *   capture: kref'd snapshot of `parent`'s channels onto `out` (must start empty);
  *            0 on success (or empty), -ENOMEM on OOM (out left empty). Caller holds

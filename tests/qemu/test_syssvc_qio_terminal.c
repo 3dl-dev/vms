@@ -117,7 +117,7 @@ static int bootstrap(const char *who)
     }
     uint32_t st = ovmx_test_self(NULL);
     if (!(st & 1)) {
-        printf("  FAIL: %s: vms_kif_register status=%u\n", who, st);
+        printf("  FAIL: %s: no row of its own (status %u)\n", who, st);
         return -1;
     }
     return 0;

@@ -526,7 +526,6 @@ int main(void)
      *     party to the SET), through vms_kif_procscan() -- the exact
      *     reader SHOW SYSTEM uses.
      * --------------------------------------------------------------- */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(found, "the executive's process table row for the holder became named");
     if (found) {
         CHECK(strcmp(hinfo.prcnam, HOLDER_NAME) == 0,
@@ -551,7 +550,6 @@ int main(void)
     CHECK(run_dcl("SHOW SYSTEM\nLOGOUT\n", out, sizeof(out)) == 0,
           "SHOW SYSTEM ran under a second, independent DCL.EXE");
     const char *row = sys_row_for(out, HOLDER_NAME);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(row != NULL,
           "a SECOND DCL.EXE's SHOW SYSTEM named the holder, which it did not create");
     if (row && holder_vms_pid) {
@@ -574,7 +572,6 @@ int main(void)
     CHECK(run_dcl("SET PROCESS/NAME=" HOLDER_NAME "\nLOGOUT\n",
                   out, sizeof(out)) == 0,
           "a third DCL.EXE ran SET PROCESS/NAME for the already-held name");
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: proctab-duplicate-name */
     CHECK(strstr(out, MSG_DUPLNAM) != NULL,
           "SET PROCESS/NAME for a name already held refuses with the "
@@ -615,7 +612,6 @@ int main(void)
         struct vms_procinfo hinfo2;
         memset(&hinfo2, 0, sizeof(hinfo2));
         int found2 = wait_for_named_row((uint32_t)holder2_pid, &hinfo2, (int)ovmx_tcg_ms(15000)) == 0;
-        /* negctl-knockon: bind-client-no-register */
         CHECK(found2,
               "the executive's process table row for the second holder became named");
         if (found2) {
@@ -671,10 +667,8 @@ int main(void)
                   out, sizeof(out)) == 0,
           "a fifth DCL.EXE ran the boundary/oversized SET PROCESS/NAME script");
 
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(out, BOUND_NAME) != NULL,
           "the 15-char boundary-legal name (VMS_PRCNAM_SIZE-1) was accepted");
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(out, MSG_IVLOGNAM) != NULL,
           "the 16-char oversized name is refused with the oracle's two-line "
           "%SET-E-NOTSET / -SYSTEM-F-IVLOGNAM shape, now that upname is sized "
@@ -694,7 +688,6 @@ int main(void)
     if (post_refusal)
         post_refusal += strlen(MSG_IVLOGNAM);
     const char *row2 = post_refusal ? sys_row_for(post_refusal, BOUND_NAME) : NULL;
-    /* negctl-knockon: bind-client-no-register */
     CHECK(row2 != NULL,
           "after the refused rename, SHOW SYSTEM still names this process "
           "with its PRE-EXISTING boundary name -- left UNCHANGED by the "

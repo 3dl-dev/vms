@@ -191,7 +191,6 @@ vms-y := vms_module.o \
          vms_p1.o \
          vms_bg_pollfd.o \
          vms_bg_datafd.o \
-         vms_bg_forkinherit.o \
          ../kernel-core/vms_tt.o \
          vms_tt_linux.o
 

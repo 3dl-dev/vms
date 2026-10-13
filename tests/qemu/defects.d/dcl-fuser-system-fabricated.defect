@@ -16,7 +16,7 @@ G/F$USER: does not answer with SYSTEM
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-C: F$GETJPI("","USERNAME") reports NO name for a process the executive refused to name -- it does not fall back to a Linux account name or to SYSTEM
+C: F$GETJPI("","USERNAME") reports the name the executive holds for this process (UNAUTH, given by its creator) -- not SYSTEM, which it was refused, and not a Linux account name
 C: SHOW PROCESS does NOT report SYSTEM for a process that only claimed it -- through the ioctl AND through VMS_USERNAME
 EOF
                       ;;

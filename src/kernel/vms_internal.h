@@ -1260,15 +1260,6 @@ struct vms_proc *vms_proc_find_or_err(void);
  */
 /* The VMS process ID is assigned by the executive (vms-2b8), so there is
  * no vms_pid parameter to pass: read proc->vms_pid afterwards. */
-/*
- * inherit_identity: replace the fresh, credential-derived identity with the
- *   registering task's real_parent's executive identity (UIC/user name/privs).
- * share_pid: when inheriting, ALSO adopt the parent's VMS PID (image
- *   activation, _CONTINUE) rather than minting a fresh one (a subprocess,
- *   _SUBPROCESS). Ignored when inherit_identity is false.
- */
-struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
-                                   bool share_pid);
 void vms_proc_free(struct vms_proc *proc);
 /* Tear down an entry the caller has ALREADY unlinked under
  * vms_proc_hash_lock (the unlink is the ownership claim). */
@@ -1552,11 +1543,7 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
-/* rd vms-ff75: creator-authorized detached-process identity (vms_proctab.c) */
-long vms_ioctl_creprc_ticket(struct vms_proc *proc, unsigned long arg);
-int  vms_proc_creprc_ticket_claim(uint64_t id, const uint32_t *ancestors, int n,
-                                  char *username /* VMS_USERNAME_SIZE bytes */,
-                                  uint32_t *uic, uint64_t *privs);
+/* A creator-given DETACHED identity, stamped by the executive (vms_proctab.c) */
 void vms_proc_apply_ticket_identity(struct vms_proc *proc, const char *username,
                                     uint32_t uic, uint64_t privs);
 /*
@@ -1590,6 +1577,12 @@ long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg);
  * OPA0:-style counterpart to vms_ioctl_setident() that takes no
  * caller-supplied username/uic/privs; see VMS_SYSTEM_UIC's comment. */
 long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg);
+/*
+ * The boot task's PCB (rd vms-2a5): made only by ESTABLISH_SYSTEM's one call,
+ * for a task with none (proc NULL); every other PCB is made by its creator
+ * (vms_proc_create_for). Substrate half; returns NULL on allocation failure.
+ */
+struct vms_proc *vms_proc_create_boot_task(void);
 
 /* May `caller` read `target`'s identity? Oracle-pinned rule -- see the
  * definition in vms_proctab.c and docs/oracle/vax73-privileges.md §5. */
@@ -1751,19 +1744,6 @@ long vms_ioctl_l2_close(struct vms_proc *proc, unsigned long arg);
 /* Give back every L2 handle (and its host socket) a dying process holds. */
 void vms_l2_release_all(struct vms_proc *proc);
 
-/*
- * Eager fork-time BG channel inheritance (vms-0cd), Linux rind
- * (src/kernel/vms_bg_forkinherit.c). vms_proc_capture_channels_for_task lives in
- * vms_module.c (it owns the PCB hash); the rest are the rind's tracepoint machinery.
- */
-struct task_struct;
-struct list_head;
-int  vms_proc_capture_channels_for_task(struct task_struct *parent_task,
-                                        struct list_head *out, uint32_t *out_next_chan);
-int  vms_bg_forkinherit_init(void);              /* register the fork/exit hooks */
-void vms_bg_forkinherit_exit(void);              /* unregister + drain pending records */
-int  vms_bg_forkinherit_consume(struct vms_proc *child);  /* adopt this task's fork record, if any */
-int  vms_bg_forkinherit_consume_for(struct vms_proc *child, pid_t tgid, struct pid *pidref);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

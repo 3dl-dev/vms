@@ -28,6 +28,7 @@
 #include <sys/wait.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 
@@ -60,7 +61,7 @@ static uint32_t child_status_over_pipe(uint32_t exec_chan, int do_exec, char *se
 {
     int p[2];
     if (pipe(p) != 0) return 0;
-    pid_t c = fork();
+    pid_t c = ovmx_fork_subprocess();
     if (c == 0) {
         char sbuf[16];
         uint32_t st;

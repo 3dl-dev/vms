@@ -611,14 +611,11 @@ int main(void)
 
     struct vms_procinfo selfinfo;
     uint32_t st = vms_kif_getjpi_self(&selfinfo);
-    /* negctl: bind-client-no-register */
     CHECK(st & 1, "the caller has a row in the executive's process table");
 
     uint32_t subject = 0;
     st = spawn_named(SUBJECT_NAME, &subject);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "sys$creprc created the subject process");
-    /* negctl-knockon: bind-client-no-register */
     CHECK(subject != 0, "sys$creprc returned the subject's VMS process ID");
     if (!(st & 1) || subject == 0) {
         printf("=== test_syssvc_showproc: %d passed, %d failed ===\n",

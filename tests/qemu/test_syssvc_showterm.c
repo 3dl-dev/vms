@@ -477,7 +477,6 @@ int main(void)
     close(pipefd[1]);
     close(stopfd[0]);
 
-    /* negctl-knockon: bind-client-no-register */
     expect_ack(pipefd[0],
                "a second process put the console in a known state through the executive (IO$_SETMODE)");
 
@@ -489,30 +488,23 @@ int main(void)
     }
     show_capture("SHOW TERMINAL (terminal bound before exec)", out);
     /* negctl: setterm-binding-not-recorded */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(has_line_prefix(out, HEADER_PREFIX),
           "SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago");
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(has_line(out, "Terminal Characteristics:"),
           "the characteristics heading is printed (oracle section 2)");
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(has_line(out, ORACLE_ROW_1),
           "grid row 1 is byte-for-byte the V7.3 capture");
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(has_line(out, ORACLE_ROW_2),
           "grid row 2 is byte-for-byte the V7.3 capture");
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(has_line(out, ORACLE_ROW_4),
           "grid row 4 is byte-for-byte the V7.3 capture");
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(has_line(out, ORACLE_ROW_10),
           "grid row 10 is byte-for-byte the V7.3 capture");
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(has_line(out, ORACLE_ROW_13),
           "the last row carries the single remaining characteristic, unpadded");
@@ -527,7 +519,6 @@ int main(void)
 
     /* ---- 4. A changes the device; DCL, a third process, sees it ------ */
     if (write(stopfd[1], "g", 1) != 1) {
-        /* negctl-knockon: bind-client-no-register */
         CHECK(0, "could not tell the second process to change the console");
     } else {
         expect_ack(pipefd[0],
@@ -540,12 +531,10 @@ int main(void)
         /* negctl: showterm-width-page-oracle-shaped */
         CHECK(!has_substr(out, "Width:") && !has_substr(out, "Page:"),
               "...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost");
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: setterm-binding-not-recorded */
         CHECK(has_line(out,
               "   Interactive        No Echo            Type_ahead         No Escape"),
               "...and the cleared Echo bit, in the grid cell the oracle prints it in");
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: setterm-binding-not-recorded */
         CHECK(has_line(out,
               "   No Dialup          No Secure server   No Disconnect      Pasthru"),
@@ -556,7 +545,6 @@ int main(void)
 
     /* ---- 5. AFTER: the change is undone and DCL observes THAT ------- */
     if (write(stopfd[1], "g", 1) != 1) {
-        /* negctl-knockon: bind-client-no-register */
         CHECK(0, "could not tell the second process to restore the console");
     } else {
         expect_ack(pipefd[0], "the second process restored the console");
@@ -568,7 +556,6 @@ int main(void)
         /* negctl: showterm-width-page-oracle-shaped */
         CHECK(!has_substr(out, "Width:") && !has_substr(out, "Page:"),
               "...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either");
-        /* negctl-knockon: bind-client-no-register */
         /* negctl-knockon: setterm-binding-not-recorded */
         CHECK(has_line(out, ORACLE_ROW_1),
               "...and grid row 1 is the oracle's bytes again, so neither is the grid");
@@ -667,7 +654,6 @@ int main(void)
         struct vms_procinfo pinfo;
 
         memset(&pinfo, 0, sizeof(pinfo));
-        /* negctl-knockon: bind-client-no-register */
         CHECK(vms_kif_getjpi_self(&pinfo) == SS$_NORMAL &&
               pinfo.terminal[0] == '\0',
               "this process, which bound nothing, still has no terminal -- the bindings belonged to the DCL jobs, not to the device or to the system");

@@ -11,7 +11,7 @@ defect_meta() {
         isolation)    echo "isolated";;
         why)          echo "REPLY/ENABLE goes back to naming the enabling operator \"SYSTEM\" when the executive holds no name for the process -- in the %OPCOM-I-OPRENA message and in the OPC record it sends to OPERATOR.LOG.";;
         require_fail) cat <<'EOF'
-G/REPLY: the OPCOM enable message names no operator
+G/REPLY: the OPCOM enable message names the operator SHIPPING
 G/REPLY: the console message does not name SYSTEM as the operator
 EOF
                       ;;
@@ -22,6 +22,6 @@ EOF
 }
 
 defect_apply() {
-        sed -i '/^int cmd_reply(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-reply-operator-fabricated */|' "$_file"
+        sed -i '/^int cmd_reply(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = "SYSTEM"; /* NEGCTL dcl-reply-operator-fabricated */|' "$_file"
     :
 }

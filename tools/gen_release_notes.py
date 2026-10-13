@@ -176,7 +176,23 @@ def collect_commits(repo_root, since, ref):
     return [s for s in log.splitlines() if s.strip() and not ATTEST_RE.match(s.strip())]
 
 
-def render(version, since, subjects):
+HIGHLIGHTS_DIR = 'docs/release-highlights'
+
+
+def release_highlights(repo_root, ref, version):
+    """The cut's hand-written lead, if it has one: docs/release-highlights/<version>.md
+    AS OF --ref (read through git, like the version). It is the one source for
+    what a release says about itself beyond its commit subjects -- the headline
+    and its known open items -- and is placed verbatim after the generated
+    header. Absent -> no highlights section (every earlier cut)."""
+    proc = run(repo_root, 'show', f'{ref}:{HIGHLIGHTS_DIR}/{version}.md', check=False)
+    if proc.returncode != 0:
+        return None
+    text = proc.stdout.strip('\n')
+    return text or None
+
+
+def render(version, since, subjects, highlights=None):
     buckets = {'Features': [], 'Fixes': [], 'Reverse-Engineering / Protocol': []}
     for s in subjects:
         buckets[classify(s)].append(s)
@@ -188,6 +204,9 @@ def render(version, since, subjects):
         f'Do not hand-edit this file -- re-run the tool against the cut commit instead.'
     )
     lines.append('')
+    if highlights:
+        lines.append(highlights)
+        lines.append('')
     for name in ('Features', 'Fixes', 'Reverse-Engineering / Protocol'):
         items = buckets[name]
         if not items:
@@ -217,7 +236,8 @@ def main():
     version = product_version(args.repo_root, args.ref)
     since = args.since or previous_release_tag(args.repo_root, args.ref)
     subjects = collect_commits(args.repo_root, since, args.ref)
-    notes = render(version, since, subjects)
+    notes = render(version, since, subjects,
+                   release_highlights(args.repo_root, args.ref, version))
 
     if args.out:
         with open(args.out, 'w', encoding='utf-8') as f:

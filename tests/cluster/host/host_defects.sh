@@ -242,7 +242,9 @@ join-reply-to-the-join-target
 join-k10-close-withheld
 join-k5-close-withheld
 csb-0b01-answer-ignores-join-order
-guard-ignores-category-0b"
+guard-ignores-category-0b
+join-lnm-answered-unapplied
+join-lnm-db-not-applied"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1108,6 +1110,37 @@ a REQUEST DATA was issued for 136 bytes
 then the cat-0x86 goes
   with state 5, a settled member's answer
   counted
+  counted refused
+EOF
+                      ;;
+        esac;;
+
+    join-lnm-db-not-applied)
+        case "$_f" in
+        facility)     echo "the startup database pull (rd vms-94a): every record a member pushes is applied to this node's executive before the push is answered";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_lnm_db_pulled() stops handing the pushed records to the executive and answers anyway, so a late joiner tells the member it took the cluster's logical names while holding none of them.";;
+        require_fail) hd_lines <<'EOF'
+*** the last chunk applies all 10 records ***
+  10 records counted
+  tables first, parents before children, then the names, in the member's order
+then the answer goes
+  0x8b/0x04, as every real answer to a push
+EOF
+                      ;;
+        esac;;
+
+    join-lnm-answered-unapplied)
+        case "$_f" in
+        facility)     echo "the 0x8b/0x04 answer to a member's clusterwide logical-name operation (rd vms-94a): sent only after this node's executive applied it";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_lnm_pulled() no longer checks the status the executive returned, so an operation the executive refused (no such table, arena full) is acknowledged anyway: the member is told this node holds a logical name it does not.";;
+        require_fail) hd_lines <<'EOF'
+*** an operation the executive refused is NOT answered ***
   counted refused
 EOF
                       ;;
@@ -2627,6 +2660,14 @@ apply_edit() {
         # pattern, so a second apply matches nothing and cmd_apply reports
         # BROKEN FIXTURE.
         sed -i 's|\trc = j->ops->respond(j->ops->ctx, j->scratch, VMS_CM_BODY_LEN);|\trc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,\n\t\t\t       VMS_CM_BODY_LEN); /* NEGCTL join-reply-to-the-join-target: every answer leaves on the join target'"'"'s connection, whoever asked */|' "$_file";;
+
+    join-lnm-db-not-applied)
+        # The comment line above the database apply is unique in this file.
+        sed -i 's|		/\* each record of the database, in the member.s order \*/|		st = 1u; break; /* NEGCTL join-lnm-db-not-applied */|' "$_file";;
+
+    join-lnm-answered-unapplied)
+        # `if ((st & 1u) == 0u) {` is unique in this file.
+        sed -i 's|if ((st \& 1u) == 0u) {|if (0 \&\& (st \& 1u) == 0u) { /* NEGCTL join-lnm-answered-unapplied */|' "$_file";;
 
     csb-0b01-answer-ignores-join-order)
         # `requester->admitted_after_local != 0u,` is unique in this file.

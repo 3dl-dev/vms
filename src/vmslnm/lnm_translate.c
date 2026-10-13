@@ -101,9 +101,19 @@ static uint32_t translate_system(lnm_manager_t *mgr, const char *name,
                                  char *result, size_t result_size,
                                  uint16_t *result_length, uint32_t *attributes)
 {
+    uint32_t st, w = 0;
+
     (void)mgr;  /* no local fallback -- kept in the signature for callers */
-    return translate_executive(VMS_LNM_TBL_SYSTEM, name, result, result_size,
-                               result_length, attributes);
+    st = translate_executive(VMS_LNM_TBL_SYSTEM, name, result, result_size,
+                             result_length, attributes);
+    /* LNM$SYSTEM is "LNM$SYSTEM_TABLE", "LNM$SYSCLUSTER" on a real V7.3
+     * (rd vms-94a lab94ag): a miss in the first falls through to the
+     * clusterwide table. */
+    if (st == SS$_NOLOGNAM &&
+        vms_kif_lnm_cluster_table("LNM$SYSCLUSTER_TABLE", &w))
+        st = translate_executive(w, name, result, result_size,
+                                 result_length, attributes);
+    return st;
 }
 
 static uint32_t translate_group(const char *name, char *result,
@@ -157,6 +167,11 @@ uint32_t lnm_translate(lnm_manager_t *mgr, const char *table_name,
                          strcasecmp(table_name, LNM_FILE_DEV) == 0 ||
                          strcasecmp(table_name, LNM_DCL_LOGICAL) == 0);
     uint32_t exec_tbl = is_searchlist ? 0 : lnm_exec_table_id(table_name);
+    /* "LNM$SYSTEM" is the search list LNM$SYSTEM_TABLE, LNM$SYSCLUSTER. */
+    if (exec_tbl == VMS_LNM_TBL_SYSTEM &&
+        strcasecmp(table_name, "LNM$SYSTEM_TABLE") != 0)
+        return translate_system(mgr, logical_name, result, result_size,
+                                result_length, attributes);
     if (exec_tbl)
         return translate_executive(exec_tbl, logical_name, result, result_size,
                                    result_length, attributes);

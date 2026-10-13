@@ -156,6 +156,10 @@ echo "mk_vmslnm_shr: LIBRARIAN /CREATE $OLB from $NUNITS member(s)"
 # Its filespec-aware successor, lnm_translate_filespec (vms-240), is APPENDED at the
 # tail -- $PARSE (LIBVMSRMS$SHR) binds it cross-image, so a native LINK resolves it
 # here or fails loudly.
+#
+# lnm_exec_table_id (rd vms-94a) is APPENDED at the tail: DCL's SHOW LOGICAL/TABLE=
+# asks it whether a named table is one the executive holds (LNM$SYSCLUSTER_TABLE,
+# LNM$CLUSTER_TABLE), cross-shareable.
 VEC="\
 lnm_init=PROCEDURE,lnm_shutdown=PROCEDURE,lnm_get_manager=PROCEDURE,\
 lnm_find_table=PROCEDURE,\
@@ -167,7 +171,8 @@ lnm_table_lookup=PROCEDURE,lnm_table_remove=PROCEDURE,lnm_table_enumerate=PROCED
 lnm_translate_values=PROCEDURE,\
 lnm_translate_searchlist=PROCEDURE,\
 lnm_translate_filespec=PROCEDURE,\
-lnm_define_login_logicals=PROCEDURE"
+lnm_define_login_logicals=PROCEDURE,\
+lnm_exec_table_id=PROCEDURE"
 
 echo "mk_vmslnm_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSSYS\$SHR} \\"
 echo "               --symbol-vector ... SELECTIVE $OLB -> $OUT"

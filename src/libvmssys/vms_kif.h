@@ -1168,6 +1168,9 @@ int vms_kif_lnm_present(void);
  * group; JOB = job id; PROCESS = VMS PID), as the executive derives it.
  * Returns 1 and fills *key, or 0 when the executive is unavailable. */
 int vms_kif_lnm_scope_key(uint32_t table, uint32_t *key);
+/* rd vms-94a: the table word of a clusterwide table by name (1 found). */
+int vms_kif_lnm_cluster_table(const char *name, uint32_t *table_word);
+int vms_kif_lnm_cluster_name(uint32_t key, char *out, uint32_t outsz);
 
 /* Look up `name` in an executive-resident table (VMS_LNM_TBL_SYSTEM, _GROUP,
  * _JOB or _PROCESS) the way $TRNLNM does (rd vms-ef21): an exact-case match

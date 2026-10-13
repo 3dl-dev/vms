@@ -124,6 +124,18 @@ uint32_t lnm_exec_table_id(const char *table_name)
         return VMS_LNM_TBL_JOB;
     if (is_process_table(table_name) && vms_kif_lnm_present())
         return VMS_LNM_TBL_PROCESS;
+    /* rd vms-94a: a clusterwide table the executive holds (LNM$SYSCLUSTER
+     * names LNM$SYSCLUSTER_TABLE, LNM$CLUSTER names LNM$CLUSTER_TABLE). */
+    if (table_name) {
+        uint32_t w = 0;
+        const char *ct =
+            strcasecmp(table_name, "LNM$SYSCLUSTER") == 0 ? "LNM$SYSCLUSTER_TABLE"
+          : strcasecmp(table_name, "LNM$CLUSTER") == 0    ? "LNM$CLUSTER_TABLE"
+          : table_name;
+
+        if (vms_kif_lnm_cluster_table(ct, &w))
+            return w;
+    }
     return 0;
 }
 

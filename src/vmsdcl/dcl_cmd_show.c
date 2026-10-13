@@ -247,10 +247,14 @@ static int cmd_show_default(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* vmslnm: the executive table a table name lives in (lnm_client.c). */
+extern uint32_t lnm_exec_table_id(const char *table_name);
+
 /* Callback context for enumerating logical names under SHOW LOGICAL */
 struct show_lnm_ctx {
     const char *table_name;
     int full;               /* vms-676: SHOW LOGICAL/FULL was given */
+    int count;              /* rd vms-94a: names shown */
 };
 
 /* vms-676: sentinel meaning "no real lnm_entry_t backs this value" -- never
@@ -376,6 +380,7 @@ static int show_lnm_callback(const char *name, const lnm_entry_t *entry, void *c
         }
         print_lnm_search_list(name, sctx->table_name, values, n,
                               sctx->full, entry->acmode, entry->attributes);
+        sctx->count++;
     }
     return 0;
 }
@@ -466,6 +471,60 @@ static int cmd_show_logical(struct dcl_command *cmd)
     const char *tlabels[4] = {
         "LNM$PROCESS_TABLE", "LNM$JOB", "LNM$GROUP", "LNM$SYSTEM"
     };
+
+    /*
+     * /TABLE=name (rd vms-94a): one table, named. Its header is the table's
+     * own name, as on a real V7.3: SHOW LOGICAL/TABLE=LNM$SYSCLUSTER prints
+     * "(LNM$SYSCLUSTER_TABLE)", and an empty table adds
+     * "%SHOW-S-NOTRAN, no translation for logical name *".
+     */
+    const char *qtab = dcl_qualifier_value(cmd, "TABLE");
+    if (qtab && qtab[0] && mgr) {
+        char tab[64];
+        size_t k;
+        struct show_lnm_ctx sctx;
+
+        for (k = 0; k < sizeof(tab) - 1 && qtab[k]; k++)
+            tab[k] = (char)toupper((unsigned char)qtab[k]);
+        tab[k] = '\0';
+        if (!lnm_exec_table_id(tab)) {
+            dcl_error("SYSTEM", 4 /* F */, "NOLOGTAB",
+                      "no logical name table name match");
+            return SS$_NOLOGTAB;
+        }
+        const char *label = !strcmp(tab, "LNM$SYSCLUSTER") ? "LNM$SYSCLUSTER_TABLE"
+                          : !strcmp(tab, "LNM$CLUSTER")    ? "LNM$CLUSTER_TABLE"
+                          : tab;
+        if (cmd->param_count >= 2) {
+            char upper_name[256], values[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
+            uint8_t nvalues = 0, acmode = LNM_ACMODE_UNKNOWN;
+            uint32_t attrs = 0;
+            const char *logname = cmd->params[1];
+
+            for (k = 0; k < sizeof(upper_name) - 1 && logname[k]; k++)
+                upper_name[k] = (char)toupper((unsigned char)logname[k]);
+            upper_name[k] = '\0';
+            if (lnm_translate_values(mgr, tab, upper_name, values,
+                                     LNM_MAX_SEARCHLIST, &nvalues, &attrs) !=
+                SS$_NORMAL) {
+                dcl_error("DCL", 0, "NOLOG", "no logical name match");
+                return SS$_NOLOGNAM;
+            }
+            if (full)
+                find_lnm_entry(mgr, tab, upper_name, &acmode);
+            print_lnm_search_list(upper_name, label, values, nvalues, full,
+                                  acmode, attrs);
+            return SS$_NORMAL;
+        }
+        printf("\n(%s)\n", label);
+        sctx.table_name = label;
+        sctx.full = full;
+        sctx.count = 0;
+        lnm_enumerate(mgr, tab, show_lnm_callback, &sctx);
+        if (sctx.count == 0)
+            printf("%%SHOW-S-NOTRAN, no translation for logical name *\n");
+        return SS$_NORMAL;
+    }
 
     if (cmd->param_count >= 2) {
         /* SHOW LOGICAL <name> — look up and display a specific logical */
@@ -575,6 +634,7 @@ static int cmd_show_logical(struct dcl_command *cmd)
                 printf("(%s)\n\n", tlabels[t]);
                 sctx.table_name = tnames[t];
                 sctx.full = full;
+                sctx.count = 0;
                 lnm_enumerate(mgr, tnames[t], show_lnm_callback, &sctx);
                 shown = 1;
             }

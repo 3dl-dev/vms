@@ -415,6 +415,8 @@ struct cnxman_coord {
 	uint32_t relays_sent;
 	uint32_t relay_acks;
 	uint32_t commits_sent;
+	/* MERGE-rebuild ADDs completed at the GO with no barrier (rd vms-6e3). */
+	uint32_t merges_completed;
 	uint32_t commit_acks;
 	uint32_t opens_sent;         /* Phase 1 proposals ORIGINATED           */
 	uint32_t open_acks;          /* Phase 1 acknowledgements (p. 7-41)     */

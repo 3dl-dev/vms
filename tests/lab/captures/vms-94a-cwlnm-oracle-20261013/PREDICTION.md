@@ -181,3 +181,16 @@ Both orders run again on one build that carries the vms-6ec fix. DC1b repeats DC
 D4 stand. DC2b repeats DC2 as amended, and L1 to L4 stand. In addition, for DC2b:
 - L5: OVMXA answers OVMXB's 01/12 relay of VAX2 with 81/12, body[17] = 0x02, the class it
   drove when it admitted OVMXB.
+
+## DC2b result (pod labdemo4, lab/int-94c b92a55bd1 = vms-6ec's class fix only)
+
+- L1 **FAILED again**, and L5 failed. OVMXB relayed VAX2 to OVMXA (01/12, 08:50:14), and
+  OVMXA again sent no 81/12. VAX2 was not admitted, and there was no bugcheck. OVMXA's CNXTRACE
+  (`dc2b-ovmxa-console.log`) shows why: the founder's join sits in ADVERTISE, where a relay is
+  an empty cell (`ev=RX_TR_RELAY detail=EMPTY-CELL`). The class fix was needed but not
+  enough. vms-6ec now also answers the relay from ADVERTISE when this node is a committed
+  member.
+
+## DC2c (lab/int-94c + all of vms-6ec), registered before it runs
+
+DC2's procedure, as amended, with L1 to L5 standing.

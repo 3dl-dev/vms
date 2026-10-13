@@ -55,6 +55,7 @@ diagnostic on failure (e.g. no identity header at --ref, --repo-root is not
 a git repo).
 """
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -180,11 +181,25 @@ HIGHLIGHTS_DIR = 'docs/release-highlights'
 
 
 def release_highlights(repo_root, ref, version):
-    """The cut's hand-written lead, if it has one: docs/release-highlights/<version>.md
-    AS OF --ref (read through git, like the version). It is the one source for
-    what a release says about itself beyond its commit subjects -- the headline
-    and its known open items -- and is placed verbatim after the generated
-    header. Absent -> no highlights section (every earlier cut)."""
+    """The release's hand-written lead, if it has one: docs/release-highlights/
+    <version>.md. It is the one source for what a release says about itself
+    beyond its commit subjects -- the headline and its known open items -- and
+    is placed verbatim after the generated header. Absent -> no highlights
+    section (every earlier cut).
+
+    Read from the WORKING TREE when the file is there, else AS OF --ref through
+    git. At a cut the two are the same file (release.yml checks out the tag;
+    cut-release.sh runs on the cut commit). Afterwards, a correction made to a
+    published release's highlights on main is honoured by regenerating that
+    release's notes against its original cut commit from a main checkout: the
+    commit list still comes from --ref, the highlights from the one source as
+    corrected (rd vms-d52c: V0.7-9's 'completes startup' was withdrawn after the
+    tag). Never hand-edit the generated notes instead."""
+    path = os.path.join(repo_root, HIGHLIGHTS_DIR, f'{version}.md')
+    if os.path.isfile(path):
+        with open(path, encoding='utf-8') as f:
+            text = f.read().strip('\n')
+        return text or None
     proc = run(repo_root, 'show', f'{ref}:{HIGHLIGHTS_DIR}/{version}.md', check=False)
     if proc.returncode != 0:
         return None

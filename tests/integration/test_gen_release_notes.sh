@@ -156,4 +156,27 @@ ft=$(grep -n "^## Features\|^## Fixes" "$OUT_V5" | head -1 | cut -d: -f1)
 [ -n "$hl" ] && [ -n "$ft" ] && [ "$hl" -lt "$ft" ] \
     || fail "the highlights do not lead the generated sections"
 echo "PASS: gen_release_notes.py leads with docs/release-highlights/<version>.md when the cut has one"
+
+# --- 6. A correction to a PUBLISHED release's highlights, made after its tag,
+# is honoured: regenerating that release's notes against the same --ref from a
+# checkout that carries the corrected file gives the corrected text and the
+# SAME commit list (rd vms-d52c: V0.7-9's "completes startup" withdrawn after
+# the tag). One source -- the highlights file -- never a hand-edited output.
+printf '## Highlights\n\nA corrected headline for V0.5.\n\n## Known open items\n\n- one thing\n- one honest addition\n' \
+    > docs/release-highlights/V0.5.md
+echo f > f.txt
+git add -A && git commit -q -m "V0.5 notes: correct the headline"
+OUT_V5C="$WORK/notes-V0.5-corrected.md"
+python3 "$GEN" --repo-root "$REPO" --ref V0.5 --out "$OUT_V5C" 2>"$WORK/gen-v5c.err" \
+    || { cat "$WORK/gen-v5c.err" >&2; fail "gen_release_notes.py exited nonzero regenerating V0.5"; }
+grep -qF "A corrected headline for V0.5." "$OUT_V5C" \
+    || fail "a highlights correction made after the V0.5 tag is not in the regenerated notes:\n$(cat "$OUT_V5C")"
+grep -qF "A headline for V0.5." "$OUT_V5C" \
+    && fail "the regenerated V0.5 notes still carry the withdrawn headline"
+grep -qF -- "- one honest addition" "$OUT_V5C" || fail "the corrected open items are not in the notes"
+diff <(sed -n '/^## Features\|^## Fixes/,$p' "$OUT_V5") <(sed -n '/^## Features\|^## Fixes/,$p' "$OUT_V5C") >/dev/null \
+    || fail "regenerating V0.5 after the correction changed its commit list (it must come from --ref only)"
+grep -qF "V0.5 notes: correct the headline" "$OUT_V5C" \
+    && fail "a commit after the V0.5 tag leaked into the V0.5 notes"
+echo "PASS: a correction to a published release's highlights, made after its tag, is in the regenerated notes (commit list unchanged)"
 exit 0

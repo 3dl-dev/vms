@@ -403,20 +403,6 @@ vms_proc_create_boot_task(void)
 }
 
 /*
- * vms_proc_create_boot_task - the boot task's PCB (rd vms-2a5), for
- * ESTABLISH_SYSTEM's one call. On this substrate every ioctl still
- * find-or-creates the caller's row (vms_proc_get) -- its removal, with the
- * NetBSD guest harnesses moved onto a creator, is the second half of vms-2a5
- * -- so the caller already has a row here and this is reached only through
- * that path's equivalent.
- */
-struct vms_proc *
-vms_proc_create_boot_task(void)
-{
-	return vms_proc_get(curlwp->l_proc->p_pid);
-}
-
-/*
  * vms_proc_continue_identity - stamp the calling task's REAL PARENT's executive
  * identity onto `proc' (a child PCB vms_proc_alloc() has just created and seeded
  * fresh) for VMS_IOCTL_REGISTER_CONTINUE. This is the NetBSD twin of

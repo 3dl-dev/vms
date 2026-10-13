@@ -32,6 +32,7 @@
 #define SS__NOLOGNAM    444
 #define SS__NOLOGTAB    8852
 #define SS__EXLNMQUOTA  8780
+#define SS__UNSUPPORTED 3658
 
 /* The PCB fields vms_lnm.c reads (src/kernel/vms_internal.h names/widths). */
 struct vms_proc {
@@ -50,9 +51,12 @@ static inline void *exec_arena_alloc(size_t n) { return calloc(1, n ? n : 1); }
 static inline void exec_arena_free(void *p) { free(p); }
 
 int  vms_lnm_init(void);
+long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg);
 void vms_lnm_cleanup(void);
 void *vms_lnm_arena_base(void);
 int vms_lnm_cluster_init(void);
+uint32_t vms_lnm_cluster_other_members(void);   /* vms_devtab.c */
 uint32_t vms_lnm_cluster_crelnt(const char *tab, const char *parent,
                                 uint32_t attr, uint8_t acmode, uint32_t promsk);
 uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,

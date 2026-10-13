@@ -169,13 +169,23 @@ static uint32_t derive_scope_key(uint32_t table, const struct vms_proc *proc)
         /* The VMS PID: DCL and the image it activated share it (rd vms-ef21). */
         return proc->vms_pid;
     default:
+        /* rd vms-94a: a clusterwide table's key is the table's own id,
+         * carried in the table word (vms_lnm.h). */
+        if (VMS_LNM_TBL_BASE(table) == VMS_LNM_TBL_CLUSTER)
+            return VMS_LNM_TBL_CLKEY(table);
         return 0;
     }
 }
 
-/* Is `table` one of the executive-resident LNM tables? */
+static bool lnm_cl_id_exists(uint32_t id);
+
+/* Is `table` one of the executive-resident LNM tables? A clusterwide table
+ * word must name a clusterwide table this node holds (rd vms-94a). */
 static bool lnm_table_is_valid(uint32_t table)
 {
+    if (VMS_LNM_TBL_BASE(table) == VMS_LNM_TBL_CLUSTER)
+        return VMS_LNM_TBL_CLKEY(table) != 0u &&
+               lnm_cl_id_exists(VMS_LNM_TBL_CLKEY(table));
     return table == VMS_LNM_TBL_SYSTEM ||
            table == VMS_LNM_TBL_GROUP ||
            table == VMS_LNM_TBL_JOB ||
@@ -393,8 +403,9 @@ static bool lnm_priv_check(uint32_t table, uint64_t cur_privs, uint32_t *status)
 {
     bool ok;
 
-    switch (table) {
+    switch (VMS_LNM_TBL_BASE(table)) {
     case VMS_LNM_TBL_SYSTEM:
+    case VMS_LNM_TBL_CLUSTER:   /* rd vms-94a: as LNM$SYSTEM */
         ok = (cur_privs & (VMS_PRV_M_SYSNAM | VMS_PRV_M_SYSPRV)) != 0;
         break;
     case VMS_LNM_TBL_GROUP:
@@ -418,7 +429,7 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_lnm_def_args *a;
     struct vms_lnm_entry *e;
-    uint32_t scope_key;
+    uint32_t scope_key, base;
     long ret = 0;
     int i;
 
@@ -465,12 +476,26 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
     if (!lnm_priv_check(a->table, proc->cur_privs, &a->status))
         goto out_copy;
 
+    /*
+     * rd vms-94a: A CLUSTERWIDE NAME IS EVERY MEMBER'S. While this node does
+     * not yet send its own changes to the other members (origination is its
+     * own item), a change here with another system in the cluster would make
+     * this node's table disagree with theirs. So it is refused, honestly,
+     * rather than made locally and left unannounced.
+     */
+    if (VMS_LNM_TBL_BASE(a->table) == VMS_LNM_TBL_CLUSTER &&
+        vms_lnm_cluster_other_members() != 0u) {
+        a->status = SS__UNSUPPORTED;
+        goto out_copy;
+    }
+
     scope_key = derive_scope_key(a->table, proc);
     a->acmode = lnm_effective_mode(a->acmode, proc);
+    base = VMS_LNM_TBL_BASE(a->table);   /* the caller's word is not rewritten */
 
     exec_lock(&lnm_write_lock);
 
-    e = lnm_find(a->table, scope_key, a->name, a->acmode);
+    e = lnm_find(base, scope_key, a->name, a->acmode);
     if (e) {
         /* Supersede in place. */
         lnm_write_begin();
@@ -493,7 +518,7 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
 
     lnm_write_begin();
     memset(e, 0, sizeof(*e));
-    e->table = a->table;
+    e->table = base;
     e->scope_key = scope_key;
     e->attributes = a->attributes;
     e->acmode = a->acmode;
@@ -527,7 +552,7 @@ out_free:
 long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_lnm_del_args *a;
-    uint32_t scope_key, i, n = 0;
+    uint32_t scope_key, base, i, n = 0;
     uint8_t mode;
     bool all;
     long ret = 0;
@@ -557,15 +582,22 @@ long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
     if (!lnm_priv_check(a->table, proc->cur_privs, &a->status))
         goto out_copy;
 
+    if (VMS_LNM_TBL_BASE(a->table) == VMS_LNM_TBL_CLUSTER &&
+        vms_lnm_cluster_other_members() != 0u) {
+        a->status = SS__UNSUPPORTED;   /* as define, rd vms-94a */
+        goto out_copy;
+    }
+
     scope_key = derive_scope_key(a->table, proc);
     mode = lnm_effective_mode(a->acmode, proc);
+    base = VMS_LNM_TBL_BASE(a->table);
 
     exec_lock(&lnm_write_lock);
     lnm_write_begin();
     for (i = 0; i < lnm_arena->max_entries; i++) {
         struct vms_lnm_entry *e = &lnm_arena->entries[i];
 
-        if (!e->in_use || e->table != a->table || e->scope_key != scope_key ||
+        if (!e->in_use || e->table != base || e->scope_key != scope_key ||
             e->acmode < mode)
             continue;
         if (!all && strcmp(e->name, a->name) != 0)
@@ -833,4 +865,20 @@ uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
     lnm_write_end();
     exec_unlock(&lnm_write_lock);
     return (n || !name) ? SS__NORMAL : SS__NOLOGNAM;
+}
+
+static bool lnm_cl_id_exists(uint32_t id)
+{
+    uint32_t i;
+
+    if (!lnm_arena)
+        return false;
+    for (i = 0; i < lnm_arena->max_entries; i++) {
+        const struct vms_lnm_entry *e = &lnm_arena->entries[i];
+
+        if (e->in_use && e->table == VMS_LNM_TBL_CLUSTER_DIR &&
+            e->scope_key == id)
+            return true;
+    }
+    return false;
 }

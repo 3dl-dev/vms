@@ -7449,6 +7449,194 @@ static void test_94a_lnm_pulled_applied_answered(void)
 	ct_check_eq_u32(rb.n_req, sent_before, "  but nothing is pulled");
 }
 
+/* lnm1 161.124: VAX1 -> VAX3, 2000 bytes (dbpush.py) */
+static const char lnm_db2000[] =
+	"d007050001000000010000000a00000001000100e40002002cb80b8709000000"
+	"5cb80b87000000000000000060b80b870000000064b80b8780b80b879cb80b87"
+	"a0b80b87010000000000000011000e006cb80b874c4e4d24434c55535445525f"
+	"5441424c45b80b8714000e0088b80b874c4e4d2453595354454d5f4449524543"
+	"544f5259000000002baff81e5847455263000000060002000000000000000000"
+	"0c0008000400010002000600020008000c00000000000000000009001400e8ff"
+	"ffffe8fffffffefffffffeffffff17000800f8180987140015004c4e4d24434c"
+	"55535445525f5441424c454c450000000000000000000000e400020010b90b87"
+	"0900000040b90b87000000000000000044b90b870000000048b90b8764b90b87"
+	"80b90b8784b90b87000000000000000011000e0050b90b87434c55244943435f"
+	"4f5242535f56415831424c4511000e006cb90b874c4e4d24434c55535445525f"
+	"5441424c45000000010000004da75d9f00000000630000000600020000000000"
+	"000000000c0008000400010002000600020808000c0000000000000000000900"
+	"1400ecffffffecfffffffefffffffeffffff170008004894718714001500434c"
+	"55244943435f4f5242535f56415831424c4500000000000000000000e4000200"
+	"f4b90b870900000024ba0b87000000000000000028ba0b87000000002cba0b87"
+	"48ba0b8764ba0b8768ba0b87000000000000000011000e0034ba0b87434c5524"
+	"4943435f4f5242535f4943432400000011000e0050ba0b874c4e4d24434c5553"
+	"5445525f5441424c45000000010000004daf6d4d000000006300000006000200"
+	"00000000000000000c0008000400010002000600020008000c00000000000000"
+	"000009001400ecffffffecfffffffefffffffeffffff17000800785971871400"
+	"1500434c55244943435f4f5242535f4943432400000000000000000000000000"
+	"e4000200d8ba0b870900000008bb0b8700000000000000000cbb0b8700000000"
+	"10bb0b872cbb0b8748bb0b874cbb0b87000000000000000011000e0018bb0b87"
+	"434c55244943435f4f5242535f5641583200000011000e0034bb0b874c4e4d24"
+	"434c55535445525f5441424c45000000010000004daf8d530000000063000000"
+	"0600020000000000000000000c0008000400010002000600020008000c000000"
+	"00000000000009001400ecffffffecfffffffefffffffeffffff170008009858"
+	"718714001500434c55244943435f4f5242535f56415832000000000000000000"
+	"00000000e4000200bcbb0b8709000000ecbb0b870000000000000000f0bb0b87"
+	"00000000f4bb0b8710bc0b872cbc0b8730bc0b87000000000000000012000e00"
+	"fcbb0b874943432452454749535452595f5441424c45000011000e0018bc0b87"
+	"4c4e4d24434c55535445525f5441424c45000000010000000af1ed1400000000"
+	"640000000600020000000000000000000c000800040001000200060002000800"
+	"0c00000000000000000009001400ecffffffecfffffffefffffffeffffff1700"
+	"0800b9577187140016004943432452454749535452595f5441424c4500000000"
+	"0000000000000000ec000200a0bc0b8709000000d0bc0b870000000000000000"
+	"d4bc0b8700000000d8bc0b87f4bc0b8710bd0b8714bd0b870100000000000000"
+	"14000e00e0bc0b874c4e4d24535953434c55535445525f5441424c4511000e00"
+	"fcbc0b874c4e4d24434c55535445525f5441424c45000000000000007be0134b"
+	"00000000660000000600020000000000000000000c0008000400010002000600"
+	"020008000c00000000000000000009001400e8ffffffe8fffffffefffffffeff"
+	"ffff170008004b190987140018004c4e4d24535953434c55535445525f544142"
+	"4c45000000000000000000000000000000000000f40002008cbd0b8709000000"
+	"bcbd0b870000000000000000c0bd0b8700000000c4bd0b87e8bd0b8704be0b87"
+	"08be0b8701000000000000001b000e00ccbd0b874c4e4d24434c55535445525f"
+	"494e54525553494f4e5f5441424c450014000e00f0bd0b874c4e4d2453595343"
+	"4c55535445525f5441424c45000000001ef3f61d000000006d00000006000200"
+	"00000000000000000c0008000400010002000600020008000c00000000000000"
+	"000009001400ecffffffecffffffffffffffffffffff17000800b25471871400"
+	"1f004c4e4d24434c55535445525f494e54525553494f4e5f5441424c45000000"
+	"00000000000000006800010080be0b8705000000a0be0b87a4be0b87c0be0b87"
+	"d0be0b87d4be0b870000000014000e00acbe0b874c4e4d24535953434c555354"
+	"45525f5441424c4506000e00c8be0b874f564d58543100000200000001000200"
+	"e4be0b8700000000000000004200000080000100e8be0b870500000008bf0b87"
+	"0cbf0b8728bf0b8738bf0b873cbf0b870000000014000e0014bf0b874c4e4d24"
+	"535953434c55535445525f5441424c4506000e0030bf0b874f564d5854340000"
+	"010000000400030058bf0b8700000000090002005cbf0b870000000000000000"
+	"00010000445541303a5b412e5d0000008000010068bf0b870500000088bf0b87"
+	"8cbf0b87a8bf0b87c4bf0b87c8bf0b870000000014000e0094bf0b874c4e4d24"
+	"535953434c55535445525f5441424c4513000e00b0bf0b874f564d5854455354"
+	"5f4c4f4e474e414d455f32000200000010000200d8bf0b870000000000000000"
+	"56414c55455f54574f5f4c4f4e474552";
+
+/*
+ * rd vms-94a -- THE STARTUP DATABASE PULL, driven with the REAL push VAX1 sent
+ * a late-booting VAX3 (lnm1 161.124, 2000 bytes: 7 tables, then OVMXT1 = "B",
+ * OVMXT4 concealed, OVMXTEST_LONGNAME_2). This node asks with 0x0b/0x05,
+ * takes the 0x8b/0x05, pulls the 0x0b/0x06 buffer, applies every record in
+ * order, and only then answers 0x8b/0x04.
+ */
+static struct {
+	uint32_t n;
+	char     name[10][260];
+	uint8_t  fn[10];
+} dbf;
+
+static uint32_t dbf_apply(void *ctx, const struct vms_cm_lnm_op *op)
+{
+	(void)ctx;
+	if (dbf.n < 10u) {
+		dbf.fn[dbf.n] = op->fn;
+		snprintf(dbf.name[dbf.n], sizeof(dbf.name[0]), "%s",
+			 op->fn == VMS_CM_LNM_FN_CRELNT ? op->table.s : op->name.s);
+	}
+	dbf.n++;
+	return 1u;
+}
+
+static void test_94a_database_pull(void)
+{
+	static uint8_t db[2048];
+	const struct sent_body *s;
+	uint32_t conid, n, sent_before, i, nz = 0;
+	int32_t from;
+
+	printf("\n-- rd vms-94a: a late joiner pulls the clusterwide logical-name "
+	       "database --\n");
+	rb_bed();
+	memset(&dbf, 0, sizeof(dbf));
+	g.jops.lnm_apply = dbf_apply;
+	conid = g.member_csb->cdt_conid;
+	from = (int32_t)cnxman_club_csb_index(&g.cl.club, g.member_csb);
+	sent_before = g.n_sent;
+
+	ct_check(cnxman_join_lnm_db_request(&g.j, from, 0x00010003u) == 0,
+		 "the 0x0b/0x05 goes out");
+	s = &g.sent[g.n_sent - 1u];
+	ct_check(g.n_sent == sent_before + 1u && s->conid == conid &&
+		 s->body[8] == 0x0bu && s->body[9] == 0x05u,
+		 "  0x0b/0x05, to the member asked");
+	ct_check(s->body[12] == 1u && s->body[13] == 0u && s->body[14] == 3u &&
+		 s->body[15] == 0u,
+		 "  *** body[12:16] = 01 00 03 00, this node's CSID 00010003 "
+		 "(as VAX3's own) ***");
+	ct_check(s->body[32] == 0xe8u && s->body[33] == 0x91u &&
+		 s->body[34] == 0u && s->body[35] == 0u,
+		 "  body[32:36] = 0x91e8, as 12 of 12 real requests");
+	for (i = 16; i < 32; i++)
+		nz += s->body[i] != 0u;
+	for (i = 36; i < VMS_CM_BODY_LEN; i++)
+		nz += s->body[i] != 0u;
+	ct_check_eq_u32(nz, 0u, "  and zero where real ones carry residue");
+	conf_dump("cm_lnm_dbreq", 72u, "csid=0x00010003", s->body,
+		  VMS_CM_BODY_LEN);
+	ct_check(cnxman_join_lnm_db_request(&g.j, from, 0x00010003u) != 0,
+		 "  once per join");
+
+	/* the member's 0x8b/0x05 */
+	(void)mk_cm((uint8_t)(VMS_CM_CAT_0B | 0x80u), VMS_CM_OP_0B_DBREQ, 0x0063);
+	ct_check_eq_u32((uint32_t)cnxman_join_rx_lnm(&g.j, g_frame +
+				VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, from), 1u,
+			"the member's 0x8b/0x05 is taken");
+
+	/* its 0x0b/0x06, naming 2000 bytes */
+	n = mk_cm(VMS_CM_CAT_0B, VMS_CM_OP_0B_DBPUSH, 0x0064);
+	(void)n;
+	{
+		vms_wire_buf_t w;
+
+		vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+		vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_NAME,
+				  0x2f4b0000u);
+		vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_CONID,
+				  conid);
+		vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + 28u, 1u);
+		vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_LNM_LEN,
+				  2000u);
+	}
+	sent_before = g.n_sent;
+	ct_check_eq_u32((uint32_t)cnxman_join_rx_lnm(&g.j, g_frame +
+				VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, from), 1u,
+			"the 0x0b/0x06 push is taken");
+	ct_check(rb.n_req == 1u && rb.req_remote == 0x2f4b0000u &&
+		 rb.req_len == 2000u, "  and its 2000 bytes are REQUESTed");
+	ct_check_eq_u32(g.n_sent, sent_before, "  nothing answered yet");
+
+	rb_hex(lnm_db2000, db, 2000u);
+	memcpy(rb.reg_buf, db, 2000u);
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 564u, 2000u);
+	ct_check_eq_u32(dbf.n, 0u, "  a first chunk applies nothing");
+	cnxman_join_blk_data(&g.j, 0x00001101u, 1692u, 308u, 308u);
+	/* negctl: join-lnm-db-not-applied */
+	ct_check_eq_u32(dbf.n, 10u, "*** the last chunk applies all 10 records ***");
+	ct_check(dbf.fn[0] == VMS_CM_LNM_FN_CRELNT &&
+		 !strcmp(dbf.name[0], "LNM$CLUSTER_TABLE") &&
+		 !strcmp(dbf.name[6], "LNM$CLUSTER_INTRUSION_TABLE") &&
+		 dbf.fn[7] == VMS_CM_LNM_FN_CRELNM &&
+		 !strcmp(dbf.name[7], "OVMXT1") &&
+		 !strcmp(dbf.name[9], "OVMXTEST_LONGNAME_2"),
+		 "  tables first, parents before children, then the names, "
+		 "in the member's order");
+	ct_check_eq_u32(g.n_sent, sent_before + 1u, "then the answer goes");
+	s = &g.sent[g.n_sent - 1u];
+	ct_check(s->body[8] == 0x8bu && s->body[9] == 0x04u && s->conid == conid,
+		 "  0x8b/0x04, as every real answer to a push");
+	ct_check_eq_u32(g.j.lnm_db_records, 10u, "  10 records counted");
+
+	/* An unasked push is refused and never answered. */
+	sent_before = g.n_sent;
+	(void)cnxman_join_rx_lnm(&g.j, g_frame + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN, from);
+	ct_check_eq_u32(g.n_sent, sent_before,
+			"a second, unasked push is not pulled or answered");
+}
+
 int main(void)
 {
 	test_239_disk_class_connect_statement();
@@ -7485,6 +7673,7 @@ int main(void)
 	test_rdev_kind6_mount_record();
 	test_k10_close_writes_back_then_answers();
 	test_94a_lnm_pulled_applied_answered();
+	test_94a_database_pull();
 	test_k5_close_pulls_then_answers_4();
 	test_unowned_frame_is_not_mine();
 	test_member_dialled_connection_still_promotes();

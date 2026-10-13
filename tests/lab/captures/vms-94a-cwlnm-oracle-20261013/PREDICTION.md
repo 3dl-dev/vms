@@ -194,3 +194,19 @@ D4 stand. DC2b repeats DC2 as amended, and L1 to L4 stand. In addition, for DC2b
 ## DC2c (lab/int-94c + all of vms-6ec), registered before it runs
 
 DC2's procedure, as amended, with L1 to L5 standing.
+
+## DC2c result (pod labdemo5, lab/int-94c 7946dcbfd = all of vms-6ec)
+
+- L1 **held**. VAX2 asked OVMXB, was admitted ("now a VAXcluster member -- system VAX2"), and
+  finished startup. SHOW CLUSTER on OVMXA lists OVMXA, OVMXB and VAX2, all MEMBER. Pressing
+  Return gets `VAX/VMS V7.3 node VAX2` and `Username:`. Nobody logged in.
+- L2 **held**. Both 8b/01 answers carry [28:32] = [36:40] = 1.
+- L3 **held**. VAX2 sent no 0b/05.
+- L4 **held for the VAX**: 0 bugchecks, no send-msg# gap from either OVMX node to VAX2, and
+  every request VAX2 sent was answered (each 0b/04 by both nodes, `dc2c-cwlnm.pcap`). The one
+  unanswered message is OVMXB→OVMXA 02/03, a DLM release, which is one-way on V0.7-8 as well
+  (rd vms-e09).
+- L5 **held**. OVMXA answered OVMXB's relay 1 ms later with 81/12, body[17] = 0x02.
+
+OVMXA's console also logged `%SCS-W-DIRNOANSWER` and `%SCS-W-CONNTIMO` every 36 s after the
+admission.

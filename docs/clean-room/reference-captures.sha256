@@ -124,3 +124,5 @@ f93a3550172dae9e286ebbc01a22f0f247591b76ad0cddb9feb9de0539f3b4de  tests/lab/capt
 d89dc1ae94a963380d6a59f75e816d986fafb069c04771b95b17b8bb9d09b33c  tests/lab/captures/vms-94a-cwlnm-oracle-20261013/dc1-cwlnm.pcap
 6dd94fffaa02422f771f94bf61885685824db0db63d63c271110a9a37a817372  tests/lab/captures/vms-94a-cwlnm-oracle-20261013/dc1-ovmx-ovmx-dlm.pcap
 faf4fb28d98b059c07a007c9eecc96759ccd871ad3e5d60bc6267da0e53e620c  tests/lab/captures/vms-94a-cwlnm-oracle-20261013/dc2-cat01.pcap
+fa4573209eb679bc5b72047789ab896a11525fa17c1b961dc03aeec3c0899a98  tests/lab/captures/vms-94a-cwlnm-oracle-20261013/dc2c-cwlnm.pcap
+122594d5a4fc43a1ea3b58743a5f6a6a5a3dc0b82ed09d0e52e74d90b98a350c  tests/lab/captures/vms-94a-cwlnm-oracle-20261013/dc2c-cat01.pcap

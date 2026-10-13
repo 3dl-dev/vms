@@ -45,6 +45,7 @@
 #include "rms_textfile.h"    /* rms_textfile_* -- RMS text I/O over the Files-11 ACP (vms-274) */
 #include "../vmstcpip/mgmt/tcpip_service_db.h" /* TCPIP {SET,SHOW,ENABLE,DISABLE,DELETE} SERVICE engine (#878, vms-71b) */
 #include "ssdef.h"
+#include "ovmx_subprocess.h"   /* children are subprocesses the executive made (rd vms-1f8) */
 #include "ovmx_layout.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
@@ -3453,7 +3454,8 @@ int cmd_link(struct dcl_command *cmd)
     }
     argv[argc] = NULL;
 
-    pid_t pid = fork();
+    /* The linker runs in a subprocess the executive made (rd vms-1f8). */
+    pid_t pid = ovmx_subprocess_fork(NULL, NULL);
     if (pid == 0) {
         execvp("cc", argv);
         _exit(127);

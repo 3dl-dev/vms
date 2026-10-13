@@ -1,0 +1,26 @@
+# subprocess-helper-pcb-not-created -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the in-tree forkers' subprocess helper (ovmx_subprocess_fork in libvms/include/ovmx_subprocess.h -> VMS_IOCTL_CREPRC_PCB SUBPROCESS, rd vms-1f8)";;
+        targets)      echo "libvms/include/ovmx_subprocess.h";;
+        suites_red)   echo "test_syssvc_creprc_pcb";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_subprocess_fork asks for a PCB of an invalid kind, so the executive refuses it and the released child is a task no one created: it has no VMS PID from its creator and registers itself when it first reaches the executive. Every forker built on the helper (PROVISION from the boot task, SYSMAN DO, TCPIP\$CONFIG, DCL's LINK) is then back to self-registration. Gone after apply.";;
+        require_fail) cat <<'EOF'
+ovmx_subprocess_fork makes its child a new VMS process before releasing it
+the helper's child is the subprocess its creator made (same VMS PID, the creator's user name)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i 's|^        st = vms_kif_creprc_pcb((uint32_t)pid, VMS_CREPRC_PCB_SUBPROCESS,$|        st = vms_kif_creprc_pcb((uint32_t)pid, 0xFFu, /* NEGCTL subprocess-helper-pcb-not-created */|' "$_file"
+    :
+}

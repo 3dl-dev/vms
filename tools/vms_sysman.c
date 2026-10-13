@@ -38,6 +38,7 @@
 /*  Paths                                                              */
 /* ------------------------------------------------------------------ */
 #include "ovmx_layout.h"
+#include "ovmx_subprocess.h"   /* children are subprocesses the executive made (rd vms-1f8) */
 
 #define SYSMGR_DIR     VMS_MANAGER_DIR
 #define STARTUP_LIST   SYSMGR_DIR "/STARTUP_LIST.DAT"
@@ -826,7 +827,8 @@ static void cmd_do(const char *rest)
         }
     }
 
-    pid_t pid = fork();
+    /* DO runs DCL in a subprocess the executive made (rd vms-1f8). */
+    pid_t pid = ovmx_subprocess_fork(NULL, NULL);
     if (pid == 0) {
         execlp(dcl_path, dcl_path, "-c", command, (char *)NULL);
         /* If that fails, try just "DCL.EXE" on PATH */

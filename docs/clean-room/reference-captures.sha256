@@ -103,3 +103,7 @@ bcc4ad9ed4c2c90cc33df03c042d6abfee12892061420cb8f41bbb67fcd77ac8  tests/lab/capt
 d16acf52432eed64e8def6b5df22259c7c99e4083deca488bfd9d3577db7147d  tests/lab/captures/vms-64b-dlm-seq-20261011/order1-vax-first.pcap
 1d9f10ec987373b73ab89a80da5cc87b6b3fd10016f3f21b68e17c0cc633b8b2  tests/lab/captures/vms-64b-dlm-seq-20261011/order2-control-pre64b.pcap
 453984e6c494d8c458cb9de40db0c3c7666aceb0d8ce369d20d801894a01a85c  tests/lab/captures/vms-64b-dlm-seq-20261011/order2-ovmx-first.pcap
+3fb7c7a20f3b8368f8c68c2da420fb5d6341f2399e5155a2fb38622decc7e88d  tests/lab/captures/vms-52d-0b01-oracle-20261013/armA-cm.pcap
+c2791dd6f49617e07957dffbe69920dc1f08172f0071f8a254952e7cb449223f  tests/lab/captures/vms-52d-0b01-oracle-20261013/armB-cm.pcap
+e106bcd28691e583af11a4c730fa9997db867d912e0159cc28802dd054b7f84d  tests/lab/captures/vms-52d-0b01-oracle-20261013/rm380-cat0b.pcap
+618971f8aa9451f8db14dc7295a9891999259c04d58e582ee4e9164fa1eff2c8  tests/lab/captures/vms-52d-0b01-oracle-20261013/rm380-ds3-cat0b.pcap

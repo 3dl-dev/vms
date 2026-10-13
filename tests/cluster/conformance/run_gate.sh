@@ -18,7 +18,7 @@ CHECK=$ROOT/tools/cluster/frame_conformance.py
 DUMP=$(mktemp)
 trap 'rm -f "$DUMP" "$DUMP.neg"' EXIT
 
-for t in test_mscp_cl test_cnxman_join test_scs_fsm; do
+for t in test_mscp_cl test_cnxman_join test_scs_fsm test_cnxman_coord; do
 	if ! OVMX_CONFORMANCE_OUT=$DUMP "$BIN/$t" > /dev/null 2>&1; then
 		echo "run_gate.sh: emitter $t itself failed" >&2
 		exit 1

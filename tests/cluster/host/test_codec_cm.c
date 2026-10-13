@@ -1735,6 +1735,76 @@ static void test_open_dlm_seq(void)
 		 "an op-0x08 open is not this carrier");
 }
 
+/*
+ * rd vms-52d -- THE 0x8b/0x01 ANSWER TO A BOOTING MEMBER'S cat-0x0b op-0x01.
+ * Two real pairs, one per value. "older": arm B's VAX3, the founder in
+ * OVMX's exact position, answers a booting VAX1 with 1. "newer": rm380 ds3's
+ * VAX2, which became a member after VAX1, answers VAX1 with 0. Every body
+ * byte past the envelope's send/ack must match the real answer. A builder
+ * that writes the other value must not match either specimen.
+ */
+static void test_0b01_answer(const char *req_name, const char *resp_name,
+			     int older, const char *label)
+{
+	const struct vms_fixture *req = fixture(req_name);
+	const struct vms_fixture *resp = fixture(resp_name);
+	uint8_t built[VMS_CM_BODY_LEN], wrong[VMS_CM_BODY_LEN];
+	uint32_t written = 0, i, diff = 0, wrong_diff = 0;
+	char what[192];
+
+	ct_check(req != NULL, req_name);
+	ct_check(resp != NULL, resp_name);
+	if (req == NULL || resp == NULL)
+		return;
+	snprintf(what, sizeof(what), "%s: vms_cm_0b01_answer_build succeeds",
+		 label);
+	ct_check(vms_cm_0b01_answer_build(fx_body(req), fx_body_len(req), older,
+					  built, sizeof(built), &written) ==
+		 VMS_CODEC_OK, what);
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
+	ct_check(vms_cm_0b01_answer_build(fx_body(req), fx_body_len(req),
+					  !older, wrong, sizeof(wrong),
+					  &written) == VMS_CODEC_OK,
+		 "  (the other value builds too, for the control)");
+	for (i = 4; i < VMS_CM_BODY_LEN; i++) {
+		if (built[i] != fx_body(resp)[i])
+			diff++;
+		if (wrong[i] != fx_body(resp)[i])
+			wrong_diff++;
+	}
+	snprintf(what, sizeof(what),
+		 "%s: body[4:132] equals the real answer byte for byte", label);
+	ct_check(diff == 0, what);
+	snprintf(what, sizeof(what),
+		 "%s: the other value does NOT match the real answer (control)",
+		 label);
+	ct_check(wrong_diff != 0, what);
+}
+
+static void test_0b01_refusals(void)
+{
+	const struct vms_fixture *req = fixture("cm-0b01-req-older-oracle");
+	uint8_t body[VMS_CM_BODY_LEN], out[VMS_CM_BODY_LEN];
+	uint32_t written = 0;
+
+	if (req == NULL) {
+		ct_check(0, "cm-0b01-req-older-oracle present");
+		return;
+	}
+	memcpy(body, fx_body(req), sizeof(body));
+	body[9] = 0x02;   /* cat 0x0b op 0x02: not this recipe's request */
+	ct_check(vms_cm_0b01_answer_build(body, sizeof(body), 1, out,
+					  sizeof(out), &written) !=
+		 VMS_CODEC_OK,
+		 "rd vms-52d: cat 0x0b op 0x02 is refused (not grounded here)");
+	memcpy(body, fx_body(req), sizeof(body));
+	body[8] = 0x8b;   /* an answer is never answered */
+	ct_check(vms_cm_0b01_answer_build(body, sizeof(body), 1, out,
+					  sizeof(out), &written) !=
+		 VMS_CODEC_OK,
+		 "rd vms-52d: a 0x8b/0x01 answer is never itself answered");
+}
+
 int main(void)
 {
 	test_open_dlm_seq();
@@ -1748,6 +1818,13 @@ int main(void)
 		printf("  FAIL fixture corpus: %s\n", err);
 		return 1;
 	}
+
+	printf("-- rd vms-52d: the cat-0x0b op-0x01 answer\n");
+	test_0b01_answer("cm-0b01-req-older-oracle", "cm-0b01-resp-older-oracle",
+			 1, "0x8b/0x01 from the older member (arm B)");
+	test_0b01_answer("cm-0b01-req-newer-oracle", "cm-0b01-resp-newer-oracle",
+			 0, "0x8b/0x01 from the newer member (rm380 ds3)");
+	test_0b01_refusals();
 
 	printf("-- cat 0x01 echo-recipe family (spec sec 4(p)/(r))\n");
 	test_echo_recipe("cm-open-add-req", "cm-open-add-resp", 0,

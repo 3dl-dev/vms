@@ -7308,6 +7308,147 @@ static void test_239_real_scc_end_body_advances_the_walk(void)
 	ct_check_eq_u32(g.j.ignored_events, 0u, "  nothing was ignored");
 }
 
+/*
+ * rd vms-94a -- A MEMBER'S CLUSTERWIDE LOGICAL NAME OPERATION: pull the record,
+ * apply it to the executive, and only THEN answer 0x8b/0x04. The record is the
+ * real D1 (tests/lab/captures/vms-94a-cwlnm-oracle-20261013, VAX1 at 54.365:
+ * DEFINE/TABLE=LNM$SYSCLUSTER OVMXT1 "A"). An executive that does not apply it
+ * gets no answer sent on its behalf.
+ */
+static struct {
+	uint32_t n;
+	uint32_t status;
+	uint8_t  fn, acmode, n_equiv;
+	char     table[260], name[260], eq0[260];
+} lnm_fake;
+
+static uint32_t lnm_fake_apply(void *ctx, const struct vms_cm_lnm_op *op)
+{
+	(void)ctx;
+	lnm_fake.n++;
+	lnm_fake.fn = op->fn;
+	lnm_fake.acmode = op->acmode;
+	lnm_fake.n_equiv = op->n_equiv;
+	snprintf(lnm_fake.table, sizeof(lnm_fake.table), "%s", op->table.s);
+	snprintf(lnm_fake.name, sizeof(lnm_fake.name), "%s", op->name.s);
+	snprintf(lnm_fake.eq0, sizeof(lnm_fake.eq0), "%s", op->equiv[0].s);
+	return lnm_fake.status;
+}
+
+static const char lnm_d1_rec[] =
+	"7800010018b80b870500000038b80b873cb80b8758b80b8768b80b876cb80b87"
+	"000000001400000044b80b874c4e4d24535953434c55535445525f5441424c45"
+	"0600000060b80b874f564d5854314253020000000400030088b80b8700000000"
+	"010002008cb80b8700000000000000000000000041000000";
+
+/* A member's 0x0b/0x04 naming buffer 0x2f420000, length `len`. */
+static uint32_t mk_lnm_req(uint32_t len, uint32_t xfer_conid)
+{
+	vms_wire_buf_t w;
+	uint32_t n = mk_cm(VMS_CM_CAT_0B, VMS_CM_OP_0B_LNM, 0x0062);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_NAME,
+			  0x2f420000u);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_CONID,
+			  xfer_conid);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_LNM_SEQ, 6u);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + 28u, 1u);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_LNM_LEN, len);
+	return n;
+}
+
+static void test_94a_lnm_pulled_applied_answered(void)
+{
+	int32_t from;
+	uint32_t sent_before, conid, i, nz = 0;
+	const struct sent_body *s;
+
+	printf("\n-- rd vms-94a: a clusterwide logical name -- pull, apply, "
+	       "THEN answer --\n");
+	rb_bed();
+	memset(&lnm_fake, 0, sizeof(lnm_fake));
+	lnm_fake.status = 1u;                    /* SS$_NORMAL */
+	g.jops.lnm_apply = lnm_fake_apply;
+	conid = g.member_csb->cdt_conid;
+	from = (int32_t)cnxman_club_csb_index(&g.cl.club, g.member_csb);
+	sent_before = g.n_sent;
+
+	(void)mk_lnm_req(120u, conid);
+	ct_check_eq_u32((uint32_t)cnxman_join_rx_lnm(&g.j, g_frame +
+				VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, from), 1u,
+			"the 0x0b/0x04 is taken");
+	ct_check_eq_u32(rb.n_req, 1u, "a REQUEST DATA was issued");
+	ct_check_eq_u32(rb.req_remote, 0x2f420000u, "  for the member's buffer");
+	ct_check_eq_u32(rb.req_len, 120u, "  120 bytes");
+	ct_check_eq_u32(g.n_sent, sent_before,
+			"*** and nothing is answered before the record is here ***");
+
+	rb_hex(lnm_d1_rec, rb.reg_buf, 120);
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 120u, 120u);
+	ct_check_eq_u32(lnm_fake.n, 1u, "the executive is asked to apply it");
+	ct_check(lnm_fake.fn == VMS_CM_LNM_FN_CRELNM &&
+		 !strcmp(lnm_fake.table, "LNM$SYSCLUSTER_TABLE") &&
+		 !strcmp(lnm_fake.name, "OVMXT1") && lnm_fake.acmode == 2u &&
+		 lnm_fake.n_equiv == 1u && !strcmp(lnm_fake.eq0, "A"),
+		 "*** as $CRELNM LNM$SYSCLUSTER_TABLE OVMXT1 [super] = \"A\" ***");
+	ct_check_eq_u32(g.n_sent, sent_before + 1u, "then the answer goes");
+	s = &g.sent[g.n_sent - 1u];
+	ct_check(s->body[VMS_OFB_CM_CATEGORY] == 0x8bu &&
+		 s->body[VMS_OFB_CM_OPCODE] == 0x04u, "  0x8b/0x04");
+	ct_check_eq_u32(s->conid, conid, "  on the request's own connection");
+	ct_check(s->body[VMS_OFB_CM_TXN] == 0x09u &&
+		 s->body[VMS_OFB_CM_TXN + 2u] == 0xbcu,
+		 "  carrying the member's txn/token");
+	for (i = 10; i < VMS_CM_BODY_LEN; i++)
+		nz += s->body[i] != 0u;
+	ct_check_eq_u32(nz, 0u, "  zero past the header");
+	conf_dump("cm_lnm_ans", 72u, "-", s->body, VMS_CM_BODY_LEN);
+	ct_check_eq_u32(g.j.lnm_applied, 1u, "  counted applied");
+	ct_check_eq_u32(rb.n_rel, 1u, "  and the buffer is released");
+
+	/* The executive did not apply it: no answer claims it did. */
+	/* negctl: join-lnm-answered-unapplied */
+	lnm_fake.status = 8852u;                 /* SS$_NOLOGTAB */
+	sent_before = g.n_sent;
+	(void)mk_lnm_req(120u, conid);
+	(void)cnxman_join_rx_lnm(&g.j, g_frame + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN, from);
+	rb_hex(lnm_d1_rec, rb.reg_buf, 120);
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 120u, 120u);
+	ct_check_eq_u32(g.n_sent, sent_before,
+			"*** an operation the executive refused is NOT answered ***");
+	ct_check_eq_u32(g.j.lnm_refused, 1u, "  counted refused");
+
+	/* A record that is not the measured layout: nothing applied. */
+	lnm_fake.status = 1u;
+	lnm_fake.n = 0u;
+	(void)mk_lnm_req(120u, conid);
+	(void)cnxman_join_rx_lnm(&g.j, g_frame + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN, from);
+	rb_hex(lnm_d1_rec, rb.reg_buf, 120);
+	rb.reg_buf[2] = 9u;
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 120u, 120u);
+	ct_check_eq_u32(lnm_fake.n, 0u, "an undecodable record is never applied");
+
+	/* A descriptor naming another Con.ID: not pulled at all. */
+	sent_before = rb.n_req;
+	(void)mk_lnm_req(120u, conid + 1u);
+	(void)cnxman_join_rx_lnm(&g.j, g_frame + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN, from);
+	ct_check_eq_u32(rb.n_req, sent_before,
+			"a descriptor that is not our Con.ID is not pulled");
+
+	/* No executive hook: refused, never answered. */
+	g.jops.lnm_apply = NULL;
+	sent_before = rb.n_req;
+	(void)mk_lnm_req(120u, conid);
+	ct_check_eq_u32((uint32_t)cnxman_join_rx_lnm(&g.j, g_frame +
+				VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, from), 1u,
+			"with no executive to apply it the request is still claimed");
+	ct_check_eq_u32(rb.n_req, sent_before, "  but nothing is pulled");
+}
+
 int main(void)
 {
 	test_239_disk_class_connect_statement();
@@ -7343,6 +7484,7 @@ int main(void)
 	test_rdev_kind6_refusals_fall_back();
 	test_rdev_kind6_mount_record();
 	test_k10_close_writes_back_then_answers();
+	test_94a_lnm_pulled_applied_answered();
 	test_k5_close_pulls_then_answers_4();
 	test_unowned_frame_is_not_mine();
 	test_member_dialled_connection_still_promotes();

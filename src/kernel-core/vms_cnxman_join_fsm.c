@@ -2977,6 +2977,8 @@ static int join_rdev_start(struct cnxman_join *j, const struct join_ev *e,
 	return 0;
 }
 
+static void join_lnm_pulled(struct cnxman_join *j, struct cnxman_rdev *r);
+
 void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 			  uint32_t offset, uint32_t len,
 			  uint32_t bytes_remaining)
@@ -2995,6 +2997,13 @@ void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 	/* The down-counter includes this frame: equal means the last one. */
 	if (bytes_remaining != len)
 		return;
+
+	/* rd vms-94a: a clusterwide logical-name record. */
+	if (r->flavor == (uint8_t)CNXMAN_RDEV_FL_LNM) {
+		join_lnm_pulled(j, r);
+		join_rdev_free(j, r);
+		return;
+	}
 
 	/* rd vms-db1: a kind-5 record is read and answered 4; nothing is
 	 * written back (3,069 of 3,069 real pulls). */
@@ -3070,6 +3079,118 @@ void cnxman_join_blk_sent(struct cnxman_join *j, uint32_t name)
 			j->rdev_mount_normal++;
 	}
 	join_rdev_free(j, r);
+}
+
+/* ==========================================================================
+ * rd vms-94a: a member's clusterwide logical-name operation (cat 0x0b op 0x04).
+ * Pull the record (every real recipient does), apply it to this node's
+ * executive tables, and only then answer 0x8b/0x04. A record this node cannot
+ * decode or apply is refused, counted and NOT answered: an acknowledgement
+ * would tell the member this node holds a name it does not.
+ * ========================================================================== */
+
+static int join_lnm_answer(struct cnxman_join *j, struct cnxman_rdev *r)
+{
+	struct vms_csb *csb;
+
+	csb = (j->cl == NULL || r->from_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)r->from_csb);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid != r->conid) {
+		j->send_failures++;
+		j->replies_unaddressed++;
+		return -1;
+	}
+	if (vms_cm_lnm_answer_build(r->req, VMS_CM_BODY_LEN, j->scratch,
+				    (uint32_t)sizeof(j->scratch), NULL) !=
+	    VMS_CODEC_OK)
+		return -1;
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_RESPONSE);
+	if (j->jops->send_msg(j->jops->ctx, r->conid, j->scratch,
+			      VMS_CM_BODY_LEN) != 0) {
+		j->send_failures++;
+		return -1;
+	}
+	return 0;
+}
+
+static void join_lnm_pulled(struct cnxman_join *j, struct cnxman_rdev *r)
+{
+	uint32_t st;
+
+	if (vms_cm_lnm_rec_parse(r->rec, r->desc.len, &j->lnm_op) !=
+	    VMS_CODEC_OK) {
+		j->lnm_refused++;
+		join_log(j, "%CNXMAN, a clusterwide logical name operation "
+			    "was not answered: its record is not one this "
+			    "node can decode");
+		return;
+	}
+	st = j->jops->lnm_apply(j->jops->ctx, &j->lnm_op);
+	if ((st & 1u) == 0u) {
+		j->lnm_refused++;
+		join_log(j, "%CNXMAN, a clusterwide logical name operation "
+			    "was not answered: this node's executive did not "
+			    "apply it");
+		return;
+	}
+	if (join_lnm_answer(j, r) == 0)
+		j->lnm_applied++;
+}
+
+int cnxman_join_rx_lnm(struct cnxman_join *j, const uint8_t *body,
+		       uint32_t len, int32_t from_csb)
+{
+	struct vms_cm_xfer_desc d;
+	struct vms_csb *csb;
+	struct cnxman_rdev *r;
+
+	if (j == NULL || body == NULL || len < 10u ||
+	    body[VMS_OFB_CM_CATEGORY] != (uint8_t)VMS_CM_CAT_0B ||
+	    body[VMS_OFB_CM_OPCODE] != (uint8_t)VMS_CM_OP_0B_LNM)
+		return 0;
+	if (!join_rdev_ops_ok(j) || j->jops->lnm_apply == NULL ||
+	    vms_cm_lnm_desc_parse(body, len, &d) != VMS_CODEC_OK ||
+	    d.len > (uint32_t)CNXMAN_RDEV_BUF) {
+		j->lnm_refused++;
+		return 1;
+	}
+	csb = (j->cl == NULL || from_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)from_csb);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u ||
+	    d.conid != csb->cdt_conid) {
+		/* +0 must be OUR Con.ID on that connection, as for a close. */
+		j->rdev_conid_mismatch++;
+		j->lnm_refused++;
+		return 1;
+	}
+	r = join_rdev_slot(j);
+	if (r == NULL) {
+		j->lnm_refused++;
+		return 1;
+	}
+	join_bzero(r, (uint32_t)sizeof(*r));
+	r->flavor = (uint8_t)CNXMAN_RDEV_FL_LNM;
+	r->from_csb = from_csb;
+	r->conid = csb->cdt_conid;
+	r->desc = d;
+	r->started_ms = join_now_ms(j);
+	join_bcopy(r->req, body, VMS_CM_BODY_LEN);
+	if (j->jops->blk_register(j->jops->ctx, r->rec, d.len,
+				  &r->local_name) != 0 ||
+	    r->local_name == 0u) {
+		join_bzero(r, (uint32_t)sizeof(*r));
+		j->lnm_refused++;
+		return 1;
+	}
+	if (j->jops->blk_request(j->jops->ctx, r->conid, d.conid, d.name,
+				 r->local_name, d.len) != 0) {
+		join_rdev_free(j, r);
+		j->lnm_refused++;
+		return 1;
+	}
+	r->state = (uint8_t)CNXMAN_RDEV_PULLING;
+	j->lnm_started++;
+	return 1;
 }
 
 /* A connection went away: its requests can no longer be answered. */

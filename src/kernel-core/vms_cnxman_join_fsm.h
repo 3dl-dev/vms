@@ -598,6 +598,15 @@ struct cnxman_join_ops {
 			uint32_t remote_name, uint32_t local_name,
 			uint32_t len);
 	int (*device_present)(void *ctx, const uint8_t *name, uint32_t len);
+	/*
+	 * rd vms-94a: apply one clusterwide logical-name operation a member
+	 * propagated (cat 0x0b op 0x04) to THIS node's executive logical-name
+	 * tables (vms_lnm.c). Returns the VMS status the operation got here;
+	 * odd means the executive now holds what the record says, so the
+	 * 0x8b/0x04 answer may go out. NULL: this node cannot apply one, and
+	 * the request is withheld rather than acknowledged.
+	 */
+	uint32_t (*lnm_apply)(void *ctx, const struct vms_cm_lnm_op *op);
 };
 
 /*
@@ -618,10 +627,14 @@ enum cnxman_rdev_state {
  * 1480 measured (136 + 64n, rd vms-db1). A larger one is not pulled (counted,
  * k5_oversize) -- never truncated. */
 #define CNXMAN_RDEV_BUF       2048u
+/* What a pulled record is (rd vms-94a). */
+#define CNXMAN_RDEV_FL_CLOSE  0u   /* a cat-0x06 close's record      */
+#define CNXMAN_RDEV_FL_LNM    1u   /* a cat-0x0b op-0x04 LNM record  */
 
 struct cnxman_rdev {
 	uint8_t                 state;
-	uint8_t                 pad[3];
+	uint8_t                 flavor;       /* CNXMAN_RDEV_FL_*           */
+	uint8_t                 pad[2];
 	int32_t                 from_csb;
 	vms_conid_t             conid;        /* OUR Con.ID it arrived on   */
 	uint32_t                local_name;   /* our named buffer: rec[]    */
@@ -1094,6 +1107,12 @@ struct cnxman_join {
 	uint32_t rdev_unanswerable;
 	uint32_t rdev_conid_mismatch;
 	uint32_t rdev_reclaimed;
+	/* rd vms-94a: clusterwide logical-name operations pulled, applied and
+	 * answered; refused (not the measured layout, or not applied here). */
+	uint32_t lnm_started;
+	uint32_t lnm_applied;
+	uint32_t lnm_refused;
+	struct vms_cm_lnm_op lnm_op;   /* decode scratch: no stack in-kernel */
 	struct cnxman_rdev rdev[CNXMAN_RDEV_MAX];
 	uint32_t mscp_cmds_sent;
 	uint32_t mscp_ends;
@@ -1561,6 +1580,15 @@ void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 			  uint32_t offset, uint32_t len,
 			  uint32_t bytes_remaining);
 void cnxman_join_blk_sent(struct cnxman_join *j, uint32_t name);
+
+/*
+ * rd vms-94a: a member's cat-0x0b op-0x04 clusterwide logical-name operation,
+ * on the connection whose CSB is `from_csb`. Returns 1 when the body was one
+ * (its record is being pulled, or it was refused and counted), 0 otherwise.
+ * The answer goes out from cnxman_join_blk_data once the record is applied.
+ */
+int cnxman_join_rx_lnm(struct cnxman_join *j, const uint8_t *body,
+		       uint32_t len, int32_t from_csb);
 
 /* ==========================================================================
  * 8. Readback

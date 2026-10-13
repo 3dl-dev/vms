@@ -1164,6 +1164,16 @@ static void test_52d_startup_query_is_routed(void)
 	check_before("cnxman_0b01_rx(cn, &env, body, len, csb)",
 		     "an unroutable VMS$VAXcluster frame was ",
 		     "... before the frame could be logged as unroutable");
+	/* rd vms-94a: the clusterwide logical-name operation, the same way. */
+	check_before("cnxman_join_rx_lnm(&cn->join, body, len, from_csb)",
+		     "an unroutable VMS$VAXcluster frame was ",
+		     "rd vms-94a: a member's 0x0b/0x04 reaches the join before "
+		     "the unroutable fallback");
+	check_has("cn->jops.lnm_apply = cnxman_jop_lnm_apply;",
+		  "... and the join applies it through the executive's own "
+		  "logical-name tables");
+	check_has("return vms_lnm_cluster_crelnm(op->table.s, op->name.s, op->attr,",
+		  "... a $CRELNM lands in vms_lnm.c, not in a copy");
 }
 
 int main(void)

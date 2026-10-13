@@ -82,3 +82,10 @@ cm_0b01_ans	*	100	4	derived	state:older	body[28:32] = 1 if the requester was adm
 cm_0b01_ans	*	104	4	copied	any:echo	body[32:36] echoed verbatim (31/31)
 cm_0b01_ans	*	108	4	derived	state:older	body[36:40] = body[28:32] in every real answer (31/31)
 cm_0b01_ans	*	112	92	copied	any:echo	body[40:132] echoed verbatim (31/31)
+# ---- cat 0x8b op 0x04: the answer to a member's clusterwide logical-name operation (rd vms-94a) ----
+cm_lnm_ans	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+cm_lnm_ans	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+cm_lnm_ans	*	76	4	copied	any:echo	txn/token: the requester's own (every real 0x8b/0x04 carries its request's; test_cnxman_join pins)
+cm_lnm_ans	*	80	1	const	const:8b	category 0x0b | 0x80, the response (vms-94a-cwlnm-oracle, every answer)
+cm_lnm_ans	*	81	1	const	const:4	op 0x04 (every real answer to an op-0x04)
+cm_lnm_ans	*	82	122	const	const:0	zero: two real answers are zero past the header (rm380 137.965, both recipients); the rest carry only buffer residue

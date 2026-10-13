@@ -1554,6 +1554,92 @@ vms_codec_status_t vms_cm_0b01_answer_build(const uint8_t *req_body,
 					    uint32_t *written);
 
 /*
+ * THE CLUSTERWIDE LOGICAL NAME OPERATION, cat 0x0b op 0x04 (rd vms-94a).
+ *
+ * MEASURED black-box (Rule 8) in tests/lab/captures/vms-94a-cwlnm-oracle-20261013.
+ * Real V7.3 nodes ran known DEFINE, DEASSIGN and CREATE/NAME_TABLE commands
+ * against LNM$SYSCLUSTER and LNM$CLUSTER_TABLE, and every record they moved
+ * was decoded against those commands (lnmrec.py: 20 records, 0 undecoded
+ * apart from the startup database pushes, which are op 0x06, not this).
+ *
+ * THE REQUEST names a buffer the same way a cat-0x06 close does: body[16:20]
+ * is the requester's buffer name, body[20:24] the recipient's own Con.ID, and
+ * body[32:36] the record length. body[24:28] is a per-requester sequence
+ * number. Every real recipient REQUEST DATAs the record and only then answers.
+ *
+ * THE RECORD is the system service's own argument list:
+ *   rec[0:2] total length    rec[2:4] function: 1 $CRELNM, 2 $CRELNT,
+ *                                               3 $DELLNM
+ *   rec[4:8] base address B  rec[8:12] argument count n
+ *   rec[12:12+4n]            argument pointers, B-relative, 0 = omitted
+ * The arguments come in the documented order: $CRELNM (attr, tabnam, lognam,
+ * acmode, itmlst); $CRELNT (attr, resnam, reslen, quota, promsk, tabnam,
+ * partab, acmode, plus a ninth argument this file does not read); and
+ * $DELLNM (tabnam, lognam, acmode). A descriptor argument is {u32 length,
+ * u32 pointer}. The item list is {u16 buflen, u16 code, u32 bufaddr,
+ * u32 retlen} entries ended by a zero longword, using code 2 LNM$_STRING and
+ * code 3 LNM$_ATTRIBUTES, where an ATTRIBUTES item applies to the strings
+ * after it.
+ *
+ * THE ANSWER is 0x8b/0x04. Real answers carry the requester's txn/token and
+ * otherwise only leftover buffer contents. Two real answers are zero past the
+ * envelope (rm380 137.965, both recipients), and that is the form built here.
+ */
+#define VMS_CM_OP_0B_LNM        0x04u
+#define VMS_OFB_CM_LNM_SEQ      24u
+#define VMS_OFB_CM_LNM_LEN      32u
+#define VMS_CM_LNM_FN_CRELNM    1u
+#define VMS_CM_LNM_FN_CRELNT    2u
+#define VMS_CM_LNM_FN_DELLNM    3u
+#define VMS_CM_LNM_MAX_STR      255u
+#define VMS_CM_LNM_MAX_EQUIV    8u
+#define VMS_CM_LNM_ITEM_STRING  2u
+#define VMS_CM_LNM_ITEM_ATTR    3u
+
+struct vms_cm_lnm_str {
+	uint16_t len;
+	uint16_t pad;
+	uint32_t attr;                     /* translation attributes (equiv) */
+	char     s[VMS_CM_LNM_MAX_STR + 1]; /* NUL-terminated copy           */
+};
+
+struct vms_cm_lnm_op {
+	uint8_t  fn;            /* VMS_CM_LNM_FN_*                          */
+	uint8_t  acmode;
+	uint8_t  has_name;      /* $DELLNM with no lognam: delete all       */
+	uint8_t  n_equiv;
+	uint32_t attr;          /* $CRELNM / $CRELNT attr argument (0 absent) */
+	uint32_t quota;         /* $CRELNT                                  */
+	uint32_t promsk;        /* $CRELNT                                  */
+	uint8_t  has_promsk;
+	uint8_t  pad[3];
+	struct vms_cm_lnm_str table;   /* tabnam                            */
+	struct vms_cm_lnm_str name;    /* lognam                            */
+	struct vms_cm_lnm_str parent;  /* $CRELNT partab                    */
+	struct vms_cm_lnm_str equiv[VMS_CM_LNM_MAX_EQUIV];
+};
+
+/* The descriptor of a cat-0x0b op-0x04 request: name, recipient Con.ID and
+ * length into out->name/conid/len (kind 0). VMS_CODEC_E_CLASS for any other
+ * body or a zero name, Con.ID or length. */
+vms_codec_status_t vms_cm_lnm_desc_parse(const uint8_t *req_body,
+					 uint32_t req_len,
+					 struct vms_cm_xfer_desc *out);
+
+/* Decode one moved record. Every pointer, descriptor and item must lie inside
+ * the record and every string must be 1..255 bytes, or the record is refused
+ * (VMS_CODEC_E_CLASS / E_RANGE) and nothing is applied. */
+vms_codec_status_t vms_cm_lnm_rec_parse(const uint8_t *rec, uint32_t len,
+					struct vms_cm_lnm_op *out);
+
+/* The 0x8b/0x04 answer: the request's txn/token and category|0x80 / op,
+ * zero elsewhere. STAMP with is_response=1. */
+vms_codec_status_t vms_cm_lnm_answer_build(const uint8_t *req_body,
+					   uint32_t req_len,
+					   uint8_t *out_body, uint32_t cap,
+					   uint32_t *written);
+
+/*
  * vms_cm_ack_build - a category-0x04 SYSAP acknowledgement (sec 4(u)):
  * "prompt, opportunistic, cumulative, and never keyed to an opcode". No
  * payload; body[9] is written 0x00 (sec 4(p): "An implementation should
@@ -1830,7 +1916,9 @@ enum vms_cm_recipe {
 	 * mutation at body[16] and NOT the ECHO family's body[18] marker. */
 	VMS_CM_RECIPE_STEP_ACK,
 	/* rd vms-52d: the 0x8b/0x01 answer (vms_cm_0b01_answer_build). */
-	VMS_CM_RECIPE_0B01_ANSWER
+	VMS_CM_RECIPE_0B01_ANSWER,
+	/* rd vms-94a: the 0x8b/0x04 clusterwide logical-name answer. */
+	VMS_CM_RECIPE_LNM_ANSWER
 };
 
 /* ------------------------------------------------------------------ *

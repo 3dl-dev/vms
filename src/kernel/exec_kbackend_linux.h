@@ -299,11 +299,24 @@ static inline int exec_netcfg(uint32_t req, unsigned long uptr)
 	unsigned int cmd;
 	int rc;
 
+	if (req == 4) {   /* VMS_NETCFG_GET_IFFLAGS: dev_ioctl's, not inet_ioctl's */
+		struct ifreq ifr;
+		struct net_device *dev;
+
+		if (copy_from_user(&ifr, (void __user *)uptr, sizeof(ifr)))
+			return -EFAULT;
+		ifr.ifr_name[IFNAMSIZ - 1] = '\0';
+		dev = dev_get_by_name(&init_net, ifr.ifr_name);
+		if (!dev)
+			return -ENODEV;
+		ifr.ifr_flags = (short)dev_get_flags(dev);
+		dev_put(dev);
+		return copy_to_user((void __user *)uptr, &ifr, sizeof(ifr)) ? -EFAULT : 0;
+	}
 	switch (req) {
 	case 1: /* VMS_NETCFG_SET_IFADDR */    cmd = SIOCSIFADDR;    break;
 	case 2: /* VMS_NETCFG_SET_IFNETMASK */ cmd = SIOCSIFNETMASK; break;
 	case 3: /* VMS_NETCFG_SET_IFFLAGS */   cmd = SIOCSIFFLAGS;   break;
-	case 4: /* VMS_NETCFG_GET_IFFLAGS */   cmd = SIOCGIFFLAGS;   break;
 	case 5: /* VMS_NETCFG_ADD_ROUTE */     cmd = SIOCADDRT;      break;
 	case 6: /* VMS_NETCFG_DEL_ROUTE */     cmd = SIOCDELRT;      break;
 	default:                       return -EINVAL;

@@ -163,6 +163,10 @@ static int resolve_tables(const char *t, int out[6])
         return 2;
     }
     if (!strcmp(t, "LNM$JOB")) { out[0] = TAB_JOB; return 1; }
+    /* The tables $CREMBX puts a mailbox's logical name in (rd vms-7dd):
+     * LNM$TEMPORARY_MAILBOX -> LNM$JOB, LNM$PERMANENT_MAILBOX -> LNM$SYSTEM. */
+    if (!strcmp(t, "LNM$TEMPORARY_MAILBOX")) { out[0] = TAB_JOB; return 1; }
+    if (!strcmp(t, "LNM$PERMANENT_MAILBOX")) { out[0] = TAB_SYS; return 1; }
     if (!strcmp(t, "LNM$GROUP")) { out[0] = TAB_GROUP; return 1; }
     if (!strncmp(t, "LNM$JOB_", 8)) {
         tab_name(TAB_JOB, buf, sizeof buf);
@@ -269,6 +273,10 @@ static int dir_lookup(int dir, const char *name, int case_blind,
             h->acmode = PSL$C_SUPER; h->nvals = 4;
             strcpy(h->vals[0], "LNM$PROCESS"); strcpy(h->vals[1], "LNM$JOB");
             strcpy(h->vals[2], "LNM$GROUP");   strcpy(h->vals[3], "LNM$SYSTEM");
+        } else if (!eq(name, "LNM$TEMPORARY_MAILBOX")) {
+            h->acmode = PSL$C_KERNEL; h->nvals = 1; strcpy(h->vals[0], "LNM$JOB");
+        } else if (!eq(name, "LNM$PERMANENT_MAILBOX")) {
+            h->acmode = PSL$C_KERNEL; h->nvals = 1; strcpy(h->vals[0], "LNM$SYSTEM");
         } else if (!eq(name, "LNM$DCL_LOGICAL")) {
             h->acmode = PSL$C_SUPER; h->nvals = 1; strcpy(h->vals[0], "LNM$FILE_DEV");
         } else if (!eq(name, "LNM$DIRECTORIES")) {

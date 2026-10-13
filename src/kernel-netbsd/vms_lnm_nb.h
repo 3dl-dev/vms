@@ -109,6 +109,15 @@
  */
 #define VMS_LNM_TBL_CLUSTER     5
 #define VMS_LNM_TBL_CLUSTER_DIR 6
+/*
+ * A define/delete/lookup on a clusterwide table names WHICH one in the high
+ * half of the table word: VMS_LNM_TBL_CLUSTER | (table id << 16), the id being
+ * that table's VMS_LNM_TBL_CLUSTER_DIR scope_key. Every other table word has a
+ * zero high half.
+ */
+#define VMS_LNM_TBL_BASE(t)        ((uint32_t)(t) & 0xffffu)
+#define VMS_LNM_TBL_CLKEY(t)       ((uint32_t)(t) >> 16)
+#define VMS_LNM_TBL_CLUSTER_OF(k)  (VMS_LNM_TBL_CLUSTER | ((uint32_t)(k) << 16))
 
 #define VMS_LNM_MAX_NAME    255     /* == LNM_MAX_NAME (vms/logical.h) */
 #define VMS_LNM_MAX_VALUE   255     /* == LNM_MAX_VALUE */

@@ -77,42 +77,42 @@
     "count": 491,
     "by_status": {
       "verified": 24,
-      "implemented": 294,
+      "implemented": 295,
       "partial": 66,
       "stub": 14,
       "designed": 1,
-      "absent": 92
+      "absent": 91
     },
     "by_authenticity": {
-      "real": 346,
-      "n/a": 93,
+      "real": 347,
+      "n/a": 92,
       "advisory": 46,
       "facade-risk": 6
     },
-    "met": 318,
+    "met": 319,
     "in_progress": 66,
-    "not_started": 107,
+    "not_started": 106,
     "facade_risk": 6
   },
   "overall_in_scope": {
     "count": 445,
     "by_status": {
       "verified": 24,
-      "implemented": 294,
+      "implemented": 295,
       "partial": 64,
       "stub": 10,
       "designed": 1,
-      "absent": 52
+      "absent": 51
     },
     "by_authenticity": {
-      "real": 344,
-      "n/a": 53,
+      "real": 345,
+      "n/a": 52,
       "advisory": 44,
       "facade-risk": 4
     },
-    "met": 318,
+    "met": 319,
     "in_progress": 64,
-    "not_started": 63,
+    "not_started": 62,
     "facade_risk": 4
   },
   "facilities": [
@@ -297,23 +297,24 @@
       "tier": null,
       "plan_ref": "vms-694",
       "vms_ref": "OpenVMS Cluster Systems manual; $CRELNM (LNM$M_CLUSTERWIDE), $MGBLSC/$CRMPSC",
-      "last_reviewed": "2026-08-31",
+      "last_reviewed": "2026-10-13",
       "rollup": {
         "count": 2,
         "by_status": {
           "verified": 0,
           "implemented": 0,
-          "partial": 0,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
-          "absent": 2
+          "absent": 1
         },
         "by_authenticity": {
-          "n/a": 2
+          "real": 1,
+          "n/a": 1
         },
         "met": 0,
-        "in_progress": 0,
-        "not_started": 2,
+        "in_progress": 1,
+        "not_started": 1,
         "facade_risk": 0
       }
     },
@@ -1425,8 +1426,8 @@
         "count": 4,
         "by_status": {
           "verified": 0,
-          "implemented": 0,
-          "partial": 2,
+          "implemented": 1,
+          "partial": 1,
           "stub": 0,
           "designed": 1,
           "absent": 1
@@ -1435,8 +1436,8 @@
           "n/a": 2,
           "real": 2
         },
-        "met": 0,
-        "in_progress": 2,
+        "met": 1,
+        "in_progress": 1,
         "not_started": 2,
         "facade_risk": 0
       }
@@ -2652,12 +2653,12 @@
       "id": "cluster-logicals$clusterwide-logical-names",
       "kind": "feature",
       "vms": "LNM$M_CLUSTERWIDE table replication across cluster members",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "partial",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/kernel-core/vms_lnm.c",
+      "evidence": "src/kernel-core/vms_lnm.c, src/kernel-core/vms_cnxman_join_fsm.c, tests/lab/captures/vms-94a-cwlnm-oracle-20261013",
       "verified_against": null,
-      "notes": "Degrades to system-wide scope (per docs/compatibility-contract.md); no cluster-wide replication built \u2014 grep of vms_lnm.c on origin/main finds no CLUSTERWIDE path.",
+      "notes": "RECEIVE and LOCAL are built (rd vms-94a). A member's cat-0x0b op-0x04 ($CRELNM/$CRELNT/$DELLNM records, grounded against real V7.3 DEFINE/DEASSIGN/CREATE NAME_TABLE) is pulled, applied to the executive's clusterwide tables and answered. A late joiner pulls the database (op 0x05/0x06). Local $CRELNM/$TRNLNM/$DELLNM on LNM$SYSCLUSTER/LNM$CLUSTER_TABLE work on a node in no cluster. NOT built: originating this node's own changes to the other members. A local change while sharing a cluster is refused SS$_UNSUPPORTED rather than made unannounced. Also not built: answering a member's database request (op 0x05) and LNM$SYSTEM's search through LNM$SYSCLUSTER.",
       "plan_ref": "vms-694"
     },
     {
@@ -6897,12 +6898,12 @@
       "id": "ssh$cred-drop",
       "kind": "feature",
       "vms": "session credential drop to the authenticated SYSUAF UIC",
-      "status": "partial",
+      "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/vmsssh/cred_drop.c",
       "verified_against": null,
-      "notes": "A REAL, unit-tested substrate seam (not a facade): the ordered, permanent, fail-closed drop (setgroups/setgid-before-setuid, fail-closed on any error) exercised as the real product logic by tests/vmsssh/test_cred_drop.c. The TCP/IP inetd run-as identity no longer uses it: since vms-1f8 INETD creates each service process DETACHED with the service identity and the executive gives that process its substrate uid. It is the drop the real OpenSSH port (vms-9ef) may bind. status implemented->partial (vms-1f8): no production caller today. Fixes the earlier euid=0 no-drop gap (vms-49e). (The wrapped-sshd consumer that formerly also cited sshd_auth.c here was retired with the scaffold, vms-d916.)",
+      "notes": "A REAL, unit-tested substrate seam (not a facade): the ordered, permanent, fail-closed drop (setgroups/setgid-before-setuid, fail-closed on any error) exercised as the real product logic by tests/vmsssh/test_cred_drop.c. It is CONSUMED TODAY by the TCP/IP inetd per-service run-as identity drop (src/vmstcpip/services/tcpip_inetd_ident.c, rd vms-8bd) and is the same drop the real OpenSSH port (vms-9ef) will bind. Fixes the earlier euid=0 no-drop gap (vms-49e). (The wrapped-sshd consumer that formerly also cited sshd_auth.c here was retired with the scaffold, vms-d916; the seam and its live inetd consumer remain.)",
       "plan_ref": "vms-9ef"
     },
     {
@@ -6917,7 +6918,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsssh/ssh_ident.c",
       "verified_against": null,
-      "notes": "The SEAMS are real and unit-tested: ssh_ident.c establishes identity through the executive (vms_kif_setident) and is FAIL-HONEST \u2014 if the executive refuses (even status, or /dev/vms absent) the session is DENIED with no local privileged fallback (tests/vmsssh/test_ssh_ident.c, closing the audit \u00a73.7 soft-fail bypass); term_map.c maps TERM -> VMS device type, labelled an OVMX design choice (not VMS-authentic) per Rule 8 (tests/vmsssh/test_term_mapping.c). term_map.c is unit-tested substrate with NO production caller yet \u2014 it will be wired by the real OpenSSH port (vms-9ef). status=partial (not implemented) because there is no SSH session wiring them end-to-end yet \u2014 that arrives with the real OpenSSH port (vms-9ef). The former 'RUNTIME-PROVEN over the wrapped sshd' claim (and its sshd_auth.c evidence) is WITHDRAWN: that scaffold was retired as LARP (vms-d916), so the runtime proof it rested on no longer exists.",
+      "notes": "The SEAMS are real and unit-tested: ssh_ident.c establishes identity through the executive (vms_kif_setident) and is FAIL-HONEST \u2014 if the executive refuses (even status, or /dev/vms absent) the session is DENIED with no local privileged fallback (tests/vmsssh/test_ssh_ident.c, closing the audit \u00a73.7 soft-fail bypass); term_map.c maps TERM -> VMS device type, labelled an OVMX design choice (not VMS-authentic) per Rule 8 (tests/vmsssh/test_term_mapping.c). ssh_ident.c is reused by the TCP/IP inetd run-as path (alongside cred_drop.c); term_map.c is unit-tested substrate with NO production caller yet \u2014 it will be wired by the real OpenSSH port (vms-9ef). status=partial (not implemented) because there is no SSH session wiring them end-to-end yet \u2014 that arrives with the real OpenSSH port (vms-9ef). The former 'RUNTIME-PROVEN over the wrapped sshd' claim (and its sshd_auth.c evidence) is WITHDRAWN: that scaffold was retired as LARP (vms-d916), so the runtime proof it rested on no longer exists.",
       "plan_ref": "vms-9ef"
     },
     {
@@ -8807,7 +8808,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsssh/cred_drop.c",
       "verified_against": null,
-      "notes": "vms-49e/vms-6ae: the SEAMS are real and unit-tested \u2014 (a) ssh_ident.c establishes the authenticated identity in the executive via vms_kif_setident, fail-closed on refusal (INV-6, test_ssh_ident.c), and (b) cred_drop.c performs a permanent setgroups/setgid-before-setuid UIC drop, fail-closed on any error (test_cred_drop.c). status=partial (not implemented) because the hand-rolled daemon that used to wire these before an execl of vmsdcl (vmssshd.c) was RETIRED as LARP (vms-d916): there is no SSH login process wiring them end-to-end today. The TCP/IP inetd per-service run-as identity resolves its account from SYSUAF (tcpip_inetd_ident.c, vms-8bd) but no longer uses either seam: since vms-1f8 the service process is created DETACHED with that identity by the executive. Both seams will be bound by the real OpenSSH port (vms-9ef). Was absent/facade-risk (session ran as euid=0/root) on 2026-08-13. Re-census 2026-09-15: evidence repointed off the retired vmssshd.c to the surviving seam; status implemented->partial (no live SSH session).",
+      "notes": "vms-49e/vms-6ae: the SEAMS are real and unit-tested \u2014 (a) ssh_ident.c establishes the authenticated identity in the executive via vms_kif_setident, fail-closed on refusal (INV-6, test_ssh_ident.c), and (b) cred_drop.c performs a permanent setgroups/setgid-before-setuid UIC drop, fail-closed on any error (test_cred_drop.c). status=partial (not implemented) because the hand-rolled daemon that used to wire these before an execl of vmsdcl (vmssshd.c) was RETIRED as LARP (vms-d916): there is no SSH login process wiring them end-to-end today. The drop seam is meanwhile consumed for real by the TCP/IP inetd per-service run-as identity (tcpip_inetd_ident.c, vms-8bd), and both seams will be bound by the real OpenSSH port (vms-9ef). Was absent/facade-risk (session ran as euid=0/root) on 2026-08-13. Re-census 2026-09-15: evidence repointed off the retired vmssshd.c to the surviving seam; status implemented->partial (no live SSH session).",
       "plan_ref": "vms-8ad"
     },
     {
@@ -8882,7 +8883,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmstcpip/services/tcpip_inetd.h",
       "verified_against": null,
-      "notes": "Proven against a real /dev/vms by tests/qemu/test_syssvc_tcpip_inetd.c (vms-cdb9). Until vms-21b the aux server could not run on a BOOTED distro: TCPIP$INETD.EXE was never staged into the image, and it launched service images by a raw execv of a Linux path (service images are ODS-2-resident at SYS$SYSTEM:, not on the boot initramfs VFS). vms-21b stages it at SYS$SYSTEM: and launches service images the VMS way \u2014 materialize off the Files-11 ACP (the shared rms_stage_over_acp DCL RUN + PID1 use) then execve. NOT auto-started in the shipped default (operator security-posture call; enforced by tests/integration/test_tcpip_posture_guard.sh). R4-HARDENED (the gate before any reading/privileged service): each service runs in a process the auxiliary server creates DETACHED with its own SYSUAF run-as account (the SERVICE.DAT username field, resolved by INETD; the executive creates the PCB via VMS_IOCTL_CREPRC_PCB and checks INETD may give that identity; the service then takes the substrate identity the executive gives its process, never root), FAIL-CLOSED \u2014 an empty/unknown account creates no process, a refused identity releases the held task only to _exit(125), and the service never launches as SYSTEM (vms-8bd, vms-1f8, tcpip_inetd_ident.c); and concurrent service children are capped (TCPIP_INETD_MAXCHILD, accept back-pressure) so a network fork-flood cannot exhaust the system (vms-bb4). Both proven by test_syssvc_tcpip_inetd.c (the service reports its own detached process and identity; a refused identity launches nothing, negctl tcpip-inetd-refused-identity-launched) and the daytime cold-boot e2e (DAYTIME launches under the low-priv TCPIP$DAYTIME account). Precondition that unblocks the OpenSSH sshd ladder (vms-9ef).",
+      "notes": "Proven against a real /dev/vms by tests/qemu/test_syssvc_tcpip_inetd.c (vms-cdb9). Until vms-21b the aux server could not run on a BOOTED distro: TCPIP$INETD.EXE was never staged into the image, and it launched service images by a raw execv of a Linux path (service images are ODS-2-resident at SYS$SYSTEM:, not on the boot initramfs VFS). vms-21b stages it at SYS$SYSTEM: and launches service images the VMS way \u2014 materialize off the Files-11 ACP (the shared rms_stage_over_acp DCL RUN + PID1 use) then execve. NOT auto-started in the shipped default (operator security-posture call; enforced by tests/integration/test_tcpip_posture_guard.sh). R4-HARDENED (the gate before any reading/privileged service): each spawned service drops to its own SYSUAF run-as account (the SERVICE.DAT username field -> vms_kif_setident + Linux cred drop) BEFORE execv, FAIL-CLOSED \u2014 an empty/unknown/refused account _exit(125)s and the service never launches, never as SYSTEM (vms-8bd, tcpip_inetd_ident.c); and concurrent service children are capped (TCPIP_INETD_MAXCHILD, accept back-pressure) so a network fork-flood cannot exhaust the system (vms-bb4). Both proven by the fail-closed CHECKs in test_syssvc_tcpip_inetd.c and the daytime cold-boot e2e (DAYTIME launches under the low-priv TCPIP$DAYTIME account). Precondition that unblocks the OpenSSH sshd ladder (vms-9ef).",
       "plan_ref": "vms-67f"
     },
     {

@@ -34,7 +34,7 @@ def decode(r):
     def desc(o):
         if o is None:
             return None
-        l, p = u32(r, o), u32(r, o + 4)
+        l, p = struct.unpack_from('<H', r, o)[0], u32(r, o + 4)
         return r[p - base:p - base + l].decode('latin-1')
 
     def val(o):

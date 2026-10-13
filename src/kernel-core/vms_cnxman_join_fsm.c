@@ -2978,6 +2978,7 @@ static int join_rdev_start(struct cnxman_join *j, const struct join_ev *e,
 }
 
 static void join_lnm_pulled(struct cnxman_join *j, struct cnxman_rdev *r);
+static void join_lnm_db_pulled(struct cnxman_join *j);
 
 void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 			  uint32_t offset, uint32_t len,
@@ -2991,6 +2992,12 @@ void cnxman_join_blk_data(struct cnxman_join *j, uint32_t name,
 	(void)offset;
 	if (j == NULL || !join_rdev_ops_ok(j))
 		return;
+	/* rd vms-94a: the database push lands in its own buffer. */
+	if (j->lnm_db_state == 2u && name != 0u && name == j->lnm_db_name) {
+		if (bytes_remaining == len)
+			join_lnm_db_pulled(j);
+		return;
+	}
 	r = join_rdev_by_name(j, name);
 	if (r == NULL || r->state != (uint8_t)CNXMAN_RDEV_PULLING)
 		return;
@@ -3137,6 +3144,134 @@ static void join_lnm_pulled(struct cnxman_join *j, struct cnxman_rdev *r)
 		j->lnm_applied++;
 }
 
+/* ---- rd vms-94a: the startup database pull ---------------------------- */
+
+int cnxman_join_lnm_db_request(struct cnxman_join *j, int32_t csb_index,
+			       uint32_t own_csid)
+{
+	struct vms_csb *csb;
+	uint32_t written = 0;
+
+	if (j == NULL || j->jops == NULL || j->jops->send_msg == NULL ||
+	    j->lnm_db_state != 0u || own_csid == 0u)
+		return -1;
+	csb = (j->cl == NULL || csb_index < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)csb_index);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u ||
+	    !csb->csid_valid) {
+		j->lnm_db_refused++;
+		return -1;
+	}
+	if (vms_cm_lnm_dbreq_build(own_csid, j->scratch,
+				   (uint32_t)sizeof(j->scratch), &written) !=
+	    VMS_CODEC_OK)
+		return -1;
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_REQUEST);
+	if (j->jops->send_msg(j->jops->ctx, csb->cdt_conid, j->scratch,
+			      VMS_CM_BODY_LEN) != 0) {
+		j->send_failures++;
+		return -1;
+	}
+	join_bcopy(j->lnm_db_req, j->scratch, VMS_CM_BODY_LEN);
+	j->lnm_db_csb = csb_index;
+	j->lnm_db_conid = csb->cdt_conid;
+	j->lnm_db_state = 1u;
+	j->lnm_db_requests++;
+	return 0;
+}
+
+/* The member's 0x0b/0x06: pull the database it names. */
+static void join_lnm_db_push(struct cnxman_join *j, const uint8_t *body,
+			     uint32_t len, int32_t from_csb)
+{
+	struct vms_cm_xfer_desc d;
+	struct vms_csb *csb;
+
+	csb = (j->cl == NULL || from_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)from_csb);
+	if (j->lnm_db_state != 1u || from_csb != j->lnm_db_csb ||
+	    csb == NULL || csb->cdt_conid != j->lnm_db_conid ||
+	    !join_rdev_ops_ok(j) ||
+	    vms_cm_lnm_desc_parse(body, len, &d) != VMS_CODEC_OK ||
+	    d.conid != csb->cdt_conid || d.len > (uint32_t)VMS_CM_LNM_DB_MAX ||
+	    d.len < (uint32_t)VMS_CM_LNM_DB_HDR) {
+		/* Unasked for, from another member, or not the measured
+		 * shape: refused, and never answered. */
+		j->lnm_db_refused++;
+		return;
+	}
+	join_bcopy(j->lnm_db_req, body, VMS_CM_BODY_LEN);
+	if (j->jops->blk_register(j->jops->ctx, j->lnm_db_buf, d.len,
+				  &j->lnm_db_name) != 0 ||
+	    j->lnm_db_name == 0u) {
+		j->lnm_db_refused++;
+		return;
+	}
+	if (j->jops->blk_request(j->jops->ctx, csb->cdt_conid, d.conid,
+				 d.name, j->lnm_db_name, d.len) != 0) {
+		(void)j->jops->blk_release(j->jops->ctx, j->lnm_db_name);
+		j->lnm_db_name = 0u;
+		j->lnm_db_refused++;
+		return;
+	}
+	j->lnm_db_len = d.len;
+	j->lnm_db_state = 2u;
+}
+
+/* The whole database is here: apply every record, then answer 0x8b/0x04. */
+static void join_lnm_db_pulled(struct cnxman_join *j)
+{
+	const uint8_t *rec;
+	uint32_t cursor = 0, rec_len = 0, n = 0, st;
+	vms_codec_status_t cs;
+	struct vms_csb *csb;
+
+	(void)j->jops->blk_release(j->jops->ctx, j->lnm_db_name);
+	j->lnm_db_name = 0u;
+	j->lnm_db_state = 3u;
+	for (;;) {
+		cs = vms_cm_lnm_db_next(j->lnm_db_buf, j->lnm_db_len, &cursor,
+					&rec, &rec_len);
+		if (cs == VMS_CODEC_E_RANGE)
+			break;
+		if (cs != VMS_CODEC_OK ||
+		    vms_cm_lnm_rec_parse(rec, rec_len, &j->lnm_op) !=
+		    VMS_CODEC_OK) {
+			j->lnm_db_refused++;
+			join_log(j, "%CNXMAN, the clusterwide logical name "
+				    "database was not answered: a record in it "
+				    "is not one this node can decode");
+			return;
+		}
+		/* each record of the database, in the member's order */
+		st = j->jops->lnm_apply(j->jops->ctx, &j->lnm_op);
+		if ((st & 1u) == 0u) {
+			j->lnm_db_refused++;
+			join_log(j, "%CNXMAN, the clusterwide logical name "
+				    "database was not answered: this node's "
+				    "executive did not apply a record of it");
+			return;
+		}
+		n++;
+	}
+	if (n != vms_cm_lnm_db_count(j->lnm_db_buf, j->lnm_db_len)) {
+		j->lnm_db_refused++;
+		return;   /* the container's own count disagrees: unanswered */
+	}
+	j->lnm_db_records += n;
+	csb = (j->cl == NULL || j->lnm_db_csb < 0) ? NULL :
+	      cnxman_club_csb_at(&j->cl->club, (uint32_t)j->lnm_db_csb);
+	if (csb == NULL || csb->cdt_conid != j->lnm_db_conid ||
+	    vms_cm_lnm_answer_build(j->lnm_db_req, VMS_CM_BODY_LEN,
+				    j->scratch, (uint32_t)sizeof(j->scratch),
+				    NULL) != VMS_CODEC_OK)
+		return;
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_RESPONSE);
+	if (j->jops->send_msg(j->jops->ctx, j->lnm_db_conid, j->scratch,
+			      VMS_CM_BODY_LEN) != 0)
+		j->send_failures++;
+}
+
 int cnxman_join_rx_lnm(struct cnxman_join *j, const uint8_t *body,
 		       uint32_t len, int32_t from_csb)
 {
@@ -3144,8 +3279,20 @@ int cnxman_join_rx_lnm(struct cnxman_join *j, const uint8_t *body,
 	struct vms_csb *csb;
 	struct cnxman_rdev *r;
 
-	if (j == NULL || body == NULL || len < 10u ||
-	    body[VMS_OFB_CM_CATEGORY] != (uint8_t)VMS_CM_CAT_0B ||
+	if (j == NULL || body == NULL || len < 10u)
+		return 0;
+	/* The member's answer to our database request: it only says the
+	 * push follows. */
+	if (body[VMS_OFB_CM_CATEGORY] == (uint8_t)(VMS_CM_CAT_0B | 0x80u) &&
+	    body[VMS_OFB_CM_OPCODE] == (uint8_t)VMS_CM_OP_0B_DBREQ)
+		return 1;
+	if (body[VMS_OFB_CM_CATEGORY] == (uint8_t)VMS_CM_CAT_0B &&
+	    body[VMS_OFB_CM_OPCODE] == (uint8_t)VMS_CM_OP_0B_DBPUSH) {
+		if (len >= VMS_CM_BODY_LEN)
+			join_lnm_db_push(j, body, len, from_csb);
+		return 1;
+	}
+	if (body[VMS_OFB_CM_CATEGORY] != (uint8_t)VMS_CM_CAT_0B ||
 	    body[VMS_OFB_CM_OPCODE] != (uint8_t)VMS_CM_OP_0B_LNM)
 		return 0;
 	if (!join_rdev_ops_ok(j) || j->jops->lnm_apply == NULL ||

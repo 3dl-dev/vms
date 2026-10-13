@@ -1113,6 +1113,22 @@ struct cnxman_join {
 	uint32_t lnm_applied;
 	uint32_t lnm_refused;
 	struct vms_cm_lnm_op lnm_op;   /* decode scratch: no stack in-kernel */
+	/*
+	 * rd vms-94a: THE STARTUP DATABASE PULL. 0 idle, 1 asked (0x0b/0x05
+	 * out), 2 pulling the member's 0x0b/0x06 buffer, 3 applied. One pull
+	 * per join; the buffer is the size every real request names.
+	 */
+	uint8_t  lnm_db_state;
+	uint8_t  pad_lnm_db[3];
+	int32_t  lnm_db_csb;           /* the member asked                  */
+	vms_conid_t lnm_db_conid;
+	uint32_t lnm_db_name;          /* our named buffer while pulling    */
+	uint32_t lnm_db_len;
+	uint32_t lnm_db_requests;
+	uint32_t lnm_db_records;       /* records applied from pushes       */
+	uint32_t lnm_db_refused;
+	uint8_t  lnm_db_req[VMS_CM_BODY_LEN];
+	uint8_t  lnm_db_buf[VMS_CM_LNM_DB_MAX];
 	struct cnxman_rdev rdev[CNXMAN_RDEV_MAX];
 	uint32_t mscp_cmds_sent;
 	uint32_t mscp_ends;
@@ -1589,6 +1605,14 @@ void cnxman_join_blk_sent(struct cnxman_join *j, uint32_t name);
  */
 int cnxman_join_rx_lnm(struct cnxman_join *j, const uint8_t *body,
 		       uint32_t len, int32_t from_csb);
+
+/*
+ * rd vms-94a: ask the member at `csb` for the clusterwide logical-name
+ * database (0x0b/0x05). `own_csid` is the CSID the cluster assigned this node.
+ * 0 when the request went out, -1 when nothing was sent (counted).
+ */
+int cnxman_join_lnm_db_request(struct cnxman_join *j, int32_t csb,
+			       uint32_t own_csid);
 
 /* ==========================================================================
  * 8. Readback

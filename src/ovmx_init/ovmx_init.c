@@ -61,7 +61,6 @@
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
 #include "ssdef.h"
-#include "ovmx_subprocess.h"   /* children are subprocesses the executive made (rd vms-1f8) */
 #include "dcdef.h"
 /* PID 1's identity is established THROUGH the executive, not declared. */
 #include "vms_kif.h"
@@ -1753,9 +1752,7 @@ static void run_startup(void)
         ovmx_exec_halt("SYS$SYSTEM:PROVISION.EXE is missing",
                        "the system process has no authorized identity");
 
-    /* PROVISION runs as a subprocess of the boot task: the executive makes
-     * its PCB (the SYSTEM identity) before it runs (rd vms-1f8). */
-    pid_t pid = ovmx_subprocess_fork(NULL, NULL);
+    pid_t pid = fork();
     if (pid == 0) {
         execl(provision_path, "PROVISION", (char *)NULL);
         fprintf(stderr, "%%OVMX-E-NOIMG, cannot activate %s: %s\n",

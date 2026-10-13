@@ -67,6 +67,7 @@
 #include "lnmdef.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/logical.h"
 #include "ovmx_banner.h"
 
@@ -404,14 +405,14 @@ static void run_translate_under_process_churn(void)
     int lookups = 0, misses = 0, children = 0;
 
     (void)lnm_create(mgr, LNM_PROCESS_TABLE, "OVMXEC7E$CHURN", "X", 0, LNM_MODE_SUPER);
-    pid_t churner = fork();
+    pid_t churner = ovmx_fork_subprocess();
     if (churner == 0) {
         time_t end = time(NULL) + 4;
         while (time(NULL) < end) {
-            pid_t c = fork();
+            pid_t c = ovmx_fork_subprocess();
             if (c == 0) {
                 uint32_t key = 0;
-                (void)vms_kif_lnm_scope_key(VMS_LNM_TBL_PROCESS, &key); /* register: copy */
+                (void)vms_kif_lnm_scope_key(VMS_LNM_TBL_PROCESS, &key); /* created: own table */
                 _exit(0);                                               /* exit: rundown */
             }
             if (c > 0)

@@ -76,6 +76,7 @@
 #include "lnmdef.h"          /* struct item_list_3 */
 #include "vms/pcb.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "ovmx_layout.h"
 #include "sysuaf.h"          /* sysuaf_lookup + sysuaf_record_t (binary $UAFDEF) */
 #include "vms/logical.h"
@@ -168,7 +169,7 @@ static int run_probe(unsigned stage, const char *name, uint32_t uic,
     if (pipe(fds) < 0)
         return -1;
 
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid < 0) {
         close(fds[0]); close(fds[1]);
         return -1;

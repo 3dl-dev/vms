@@ -59,6 +59,7 @@
 #include "lnmdef.h"       /* struct item_list_3 */
 #include "starlet.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 
@@ -220,7 +221,7 @@ int main(void)
         return 1;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();
     if (child == 0) {
         /*
          * PROCESS A. A distinct Linux process, therefore a distinct process to

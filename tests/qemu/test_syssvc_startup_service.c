@@ -1458,7 +1458,7 @@ int main(void)
         if (pipe(pfd) < 0) {
             CHECK(0, "the identity-propagation probe could be started");
         } else {
-            pid_t probe = fork();
+            pid_t probe = ovmx_fork_subprocess();
             if (probe < 0) {
                 close(pfd[0]); close(pfd[1]);
                 CHECK(0, "the identity-propagation probe could be started");

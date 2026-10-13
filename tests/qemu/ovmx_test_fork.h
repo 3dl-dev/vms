@@ -22,6 +22,7 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/prctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -149,6 +150,24 @@ static inline pid_t ovmx_fork_detached_st(const char *uname, uint32_t uic, uint6
         (void)prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0);
     if (status) *status = st;
     return (st & 1) ? (pid_t)gpid : -1;
+}
+
+/*
+ * ovmx_fork_unprivileged - an UNPRIVILEGED VMS process the suite creates
+ * detached in UIC [gid,uid] with only the default privileges (TMPMBX, NETMBX),
+ * under the suite's own user name -- what $CREPRC with a UIC argument gives on
+ * VMS. It replaces a forked child that setgid()/setuid()'d and then registered
+ * itself with a UIC derived from those credentials (rd vms-2a5): the executive
+ * makes its row, from what its creator may give. The child still drops its own
+ * substrate credentials, so neither identity lends it privilege.
+ */
+static inline pid_t ovmx_fork_unprivileged(uint32_t gid, uint32_t uid)
+{
+    struct vms_procinfo me;
+    memset(&me, 0, sizeof(me));
+    (void)vms_kif_getjpi_self(&me);
+    return ovmx_fork_detached_st(me.username, ((gid & 0xFFFFu) << 16) | (uid & 0xFFFFu),
+                                 VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX, 0);
 }
 
 /*

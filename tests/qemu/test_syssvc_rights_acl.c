@@ -31,6 +31,7 @@
 #include "descrip.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 #include "chpdef.h"
 #include "armdef.h"
@@ -174,7 +175,7 @@ int main(int argc, char **argv)
         return 1;
     }
     fflush(NULL);
-    pid = fork();
+    pid = ovmx_fork_unprivileged(UNPRIV_GID, UNPRIV_UID);
     if (pid == 0) {
         char rfd[16], wfd[16], fs[16];
         close(p2c[1]); close(c2p[0]);

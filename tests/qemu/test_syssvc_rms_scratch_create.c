@@ -54,6 +54,7 @@
 #include <sys/stat.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "ovmx_layout.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
@@ -313,7 +314,7 @@ static int run_scenario(const char *vms_spec, char *out, size_t outsz)
     if (pipe(p) != 0) return -1;
 
     fflush(NULL);
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_unprivileged(SYSTEM_UIC_GROUP, SYSTEM_UIC_MEMBER);
     if (pid < 0) { close(p[0]); close(p[1]); return -1; }
 
     if (pid == 0) {

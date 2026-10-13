@@ -20,6 +20,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms/pcb.h"
 
 #define EXIT_SKIP 77
@@ -73,7 +74,7 @@ int main(void)
     int p2c[2];
     if (pipe(p2c) != 0)
         return 1;
-    pid_t pid = fork();
+    pid_t pid = ovmx_fork_subprocess();
     if (pid == 0) {
         /* The child: a process of its own (registers fresh), then BECOMEs. */
         uint32_t u = 0, r[5] = { 0 };
@@ -92,7 +93,7 @@ int main(void)
         int g2c[2];
         uint32_t guic = 0;
         if (pipe(g2c) == 0) {
-            pid_t g = fork();
+            pid_t g = ovmx_fork_subprocess();
             if (g == 0) {
                 struct vms_procinfo gi;
                 close(g2c[0]);

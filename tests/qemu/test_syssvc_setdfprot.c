@@ -7,7 +7,7 @@
  *   2. setting 0x0F00 returns the previous value and a later read returns 0x0F00;
  *   3. a child that REGISTER_CONTINUEs the parent's identity (an activated image)
  *      inherits 0x0F00 from the executive -- nothing in userspace carries it;
- *   4. a child that registers FRESH (not a continuation) reads the initial value, so
+ *   4. a FRESH (detached, not a continuation) child reads the initial value, so
  *      the inheritance is the executive's choice and not a global.
  *   5. IO$_CREATE of an ordinary file that names no protection of its own takes the
  *      creating process's default: 0x0F00 once set, read back from the ODS-2 header on
@@ -25,24 +25,32 @@
 #include "rmsdef.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 static int pass, fail;
 #define CHECK(c, m) do { if (c) { printf("  PASS: %s\n", m); pass++; } \
                          else   { printf("  FAIL: %s\n", m); fail++; } } while (0)
 
-/* child: register (continue or fresh) and report the default protection it sees */
+/* child: a continuation or a fresh process; report the default protection it sees */
 static int child_read(int cont, uint32_t *out)
 {
     int p[2];
     if (pipe(p) != 0) return -1;
-    pid_t k = fork();
+    /* An image task (CONTINUE) or a FRESH process the suite creates detached
+     * with its own identity -- which starts with none of the creator's process
+     * state (rd vms-2a5: the executive makes both rows; nothing registers). */
+    struct vms_procinfo me;
+    memset(&me, 0, sizeof(me));
+    (void)vms_kif_getjpi_self(&me);
+    pid_t k = cont ? ovmx_fork_continue()
+                   : ovmx_fork_detached_st(me.username, me.uic, me.perm_privs, NULL);
     if (k == 0) {
         close(p[0]);
         uint32_t v = 0xFFFFFFFFu;
         vms_kif_close();                   /* the child gets its own /dev/vms descriptor */
         if (vms_kif_open() >= 0) {
-            uint32_t rs = cont ? vms_kif_register_continue() : vms_kif_register(NULL);
+            uint32_t rs = ovmx_test_self(NULL);
             uint16_t o = 0xBEEF;
             if ((rs & 1) && (vms_kif_dfprot(NULL, &o) & 1)) v = o;
         }
@@ -60,7 +68,7 @@ int main(void)
 {
     printf("=== test_syssvc_setdfprot ===\n");
     if (vms_kif_open() < 0) { printf("  SKIP: no /dev/vms\n"); return EXIT_SKIP; }
-    if (!(vms_kif_register(NULL) & 1)) { printf("  FAIL: register\n"); return 1; }
+    if (!(ovmx_test_self(NULL) & 1)) { printf("  FAIL: register\n"); return 1; }
 
     uint16_t old = 0xBEEF;
     uint32_t st = sys$setdfprot(NULL, &old);

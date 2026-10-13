@@ -165,6 +165,43 @@ static void check_getsyi_service(void)
           "userspace default rather than a reading");
 }
 
+/*
+ * 6 (rd vms-21be): HW_NAME has ONE source. The executive answers it from
+ * exec_hw_model() with or without a connection manager -- the same text this
+ * node puts in its cluster op-0x14 model record -- and $GETSYI returns those
+ * bytes exactly. On a non-VAX substrate the text names OVMX and the machine
+ * ("OVMX x86_64"), never a VAX model and never the old literal.
+ */
+static void check_hw_name_one_source(void)
+{
+    struct vms_cluster_getsyi_args a;
+    char hw[64];
+    uint16_t rl = 0;
+    uint32_t st, gst;
+    struct item_list_3 items[] = {
+        { sizeof(hw), SYI$_HW_NAME, hw, &rl },
+        { 0, 0, NULL, NULL }
+    };
+
+    memset(&a, 0, sizeof(a));
+    st = vms_kif_cluster_getsyi(&a);
+    CHECK(st == SS_NORMAL && a.hw_model_len > 0u &&
+          a.hw_model_len <= sizeof(a.hw_model),
+          "CLUSTER_GETSYI carries the executive's hardware model, even with "
+          "no connection manager");
+#if !defined(__vax__)
+    CHECK(a.hw_model_len > 5u && memcmp(a.hw_model, "OVMX ", 5) == 0,
+          "... and on a non-VAX substrate it names OVMX and the machine "
+          "('OVMX <machine>'), not a copied VAX model");
+#endif
+    memset(hw, 0, sizeof(hw));
+    gst = sys$getsyi(0, 0, 0, items, 0, 0, 0);
+    CHECK(gst == SS_NORMAL && rl == a.hw_model_len &&
+          memcmp(hw, a.hw_model, rl) == 0,
+          "$GETSYI HW_NAME returns exactly the executive's bytes -- one "
+          "source, so the name reported locally is the name advertised");
+}
+
 /* 5: the retired mutators really are unreachable. */
 static void check_mutators_retired(int fd)
 {
@@ -202,6 +239,7 @@ int main(void)
     check_member_get();
     check_getsyi_ioctl();
     check_getsyi_service();
+    check_hw_name_one_source();
     check_mutators_retired(probe);
 
     close(probe);

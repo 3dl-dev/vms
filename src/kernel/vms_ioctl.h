@@ -1278,11 +1278,18 @@ struct vms_cluster_getsyi_args {
     uint8_t  cluster_fsysid_valid;  /* return: 0 = the CLUB has not learned it*/
     uint8_t  cluster_ftime_valid;   /* return: 0 = the CLUB has not learned it*/
     uint8_t  node_csid_valid;       /* return: 0 = this node is still NEW     */
+    /* SYI$_HW_NAME (rd vms-21be): exec_hw_model(), the SAME text this node
+     * advertises in its cluster op-0x14 model record, so the name a node
+     * reports locally is the name its peers see. Counted, not NUL-terminated;
+     * 0 = the substrate reported none (the item is then UNRETRIEVED). Answered
+     * with or without a connection manager. */
+    uint8_t  hw_model_len;
+    uint8_t  hw_model[31];
 };
-_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 36,
+_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 68,
                "vms_cluster_getsyi_args changed size -- VMS_IOCTL_CLUSTER_GETSYI ABI break");
 #define VMS_IOCTL_CLUSTER_GETSYI _IOWR(VMS_IOC_MAGIC, 0x6c, struct vms_cluster_getsyi_args)
-_Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC024566Cu,
+_Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC044566Cu,
                "VMS_IOCTL_CLUSTER_GETSYI encodes differently than the reference build");
 
 /*

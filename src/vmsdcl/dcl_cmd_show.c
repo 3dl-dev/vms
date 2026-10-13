@@ -4291,8 +4291,6 @@ static int cmd_show_cpu(struct dcl_command *cmd)
 
     char node[OVMX_IDENTITY_MAXLEN];
     ovmx_node_name(node, sizeof(node));
-    struct utsname uts;
-    uname(&uts);
 
     char active_str[256], config_str[256];
     format_cpu_set(online, online_max, active_str, sizeof(active_str));
@@ -4334,7 +4332,20 @@ static int cmd_show_cpu(struct dcl_command *cmd)
      * scheduler dispatching a named process onto a specific CPU), so that
      * line is omitted rather than fabricated.
      */
-    printf("\n%s, an OVMX %s system\n", node, uts.machine);
+    /* rd vms-21be: the header is "<node>, a <HW_NAME>" as on VMS ("VAX1, a
+     * VAXserver 3900 Series", docs/oracle/golden/vax-show-cpu.golden), and the
+     * name is the executive's one hardware-model source -- the same text
+     * $GETSYI and F$GETSYI return and this node advertises to its cluster
+     * peers. None reported: the node name alone, never a guessed model. */
+    {
+        struct vms_cluster_getsyi_args hw;
+
+        if (vms_kif_cluster_getsyi(&hw) == SS$_NORMAL && hw.hw_model_len != 0)
+            printf("\n%s, a %.*s\n", node, (int)hw.hw_model_len,
+                   (const char *)hw.hw_model);
+        else
+            printf("\n%s\n", node);
+    }
     printf("Multiprocessing is %s.\n", n_online > 1 ? "ENABLED" : "DISABLED");
     printf("\nPRIMARY CPU = %02d\n", primary);
 

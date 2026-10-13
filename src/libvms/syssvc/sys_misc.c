@@ -158,7 +158,7 @@ uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot)
  *
  * Returns information about the system via an item list. Supported items:
  *   SYI$_NODENAME      - System node name (Linux hostname)
- *   SYI$_HW_NAME       - Hardware description ("OVMX Virtual System")
+ *   SYI$_HW_NAME       - Hardware model, from the executive (exec_hw_model)
  *   SYI$_VERSION        - System version string
  *   SYI$_AVAILCPU_CNT  - Number of available CPUs
  *   SYI$_MEMSIZE       - Physical memory size in pages
@@ -283,10 +283,24 @@ static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
             }
 
             case SYI$_HW_NAME: {
-                const char *hw = "OVMX Virtual System";
-                uint16_t len = (uint16_t)strlen(hw);
+                /*
+                 * rd vms-21be: ONE source. The executive answers with
+                 * exec_hw_model() -- the same text this node advertises to
+                 * its cluster peers in the op-0x14 model record (a VAX
+                 * substrate's own model name, "OVMX <machine>" elsewhere) --
+                 * so the name a node reports locally is the name the cluster
+                 * sees. This used to be the literal "OVMX Virtual System"
+                 * while F$GETSYI printed uname's machine: three answers to
+                 * one question. No executive, or none reported: UNRETRIEVED
+                 * (Rule 9 / INV-6), never a plausible string.
+                 */
+                struct vms_cluster_getsyi_args hargs;
+                uint16_t len = 0;
+
+                if (vms_kif_cluster_getsyi(&hargs) == SS$_NORMAL)
+                    len = hargs.hw_model_len;
                 if (len > item->buflen) len = item->buflen;
-                if (item->bufaddr) memcpy(item->bufaddr, hw, len);
+                if (item->bufaddr && len) memcpy(item->bufaddr, hargs.hw_model, len);
                 if (item->retlen) *item->retlen = len;
                 break;
             }

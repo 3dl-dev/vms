@@ -3343,6 +3343,17 @@ long vms_ioctl_cluster_getsyi(struct vms_proc *proc, unsigned long arg)
     args.cluster_ftime_valid  = v.cluster_ftime_valid;
     args.node_csid            = v.node_csid;
     args.node_csid_valid      = v.node_csid_valid;
+    /* rd vms-21be: SYI$_HW_NAME from the one source the op-0x14 model
+     * record also reads. Longer than the field: refused (0), never cut. */
+    {
+        char hw[64];
+        unsigned int n = exec_hw_model(hw, (unsigned int)sizeof(hw));
+
+        if (n != 0u && n <= sizeof(args.hw_model)) {
+            memcpy(args.hw_model, hw, n);
+            args.hw_model_len = (uint8_t)n;
+        }
+    }
     args.status = SS__NORMAL;
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))

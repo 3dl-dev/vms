@@ -1291,9 +1291,18 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
          * padding -- unlike VERSION's fixed 8-char field). rd vms-76c3. */
         strncpy(result, ovmx_hw_arch(), result_size - 1);
     } else if (strcmp(s, "HW_NAME") == 0) {
-        strncpy(result, uts.machine, result_size - 1);
-        for (size_t i = 0; result[i]; i++)
-            result[i] = (char)toupper((unsigned char)result[i]);
+        /* rd vms-21be: the executive's one hardware-model source, the same
+         * text $GETSYI returns and this node advertises to its cluster
+         * peers (op 0x14). None reported: the null string, never a guess. */
+        struct vms_cluster_getsyi_args hw;
+        size_t n = 0;
+
+        if (vms_kif_cluster_getsyi(&hw) == SS$_NORMAL)
+            n = hw.hw_model_len;
+        if (n > result_size - 1)
+            n = result_size - 1;
+        memcpy(result, hw.hw_model, n);
+        result[n] = '\0';
     } else if (strcmp(s, "BOOTTIME") == 0) {
         format_vms_time(result, result_size);
     } else {

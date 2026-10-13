@@ -174,3 +174,10 @@ coordinating; SHOW CLUSTER on OVMXB listed both as MEMBER. Then VAX2 (Node C) bo
   frame.
 - L2, L3 and L4 were not reached. VAX2 sent no cat-0x0b, and no frame went to it that the
   gate does not cover.
+
+## DC1b and DC2b (lab/int-94c + vms-6ec), registered before they run
+
+Both orders run again on one build that carries the vms-6ec fix. DC1b repeats DC1, and D1 to
+D4 stand. DC2b repeats DC2 as amended, and L1 to L4 stand. In addition, for DC2b:
+- L5: OVMXA answers OVMXB's 01/12 relay of VAX2 with 81/12, body[17] = 0x02, the class it
+  drove when it admitted OVMXB.

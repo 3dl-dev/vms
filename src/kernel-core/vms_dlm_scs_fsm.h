@@ -456,6 +456,8 @@ struct dlm_req_fsm {
 	uint32_t lookups_sent;        /* addressed to a DIRECTORY node         */
 	uint32_t requests_sent;       /* addressed to a MASTER                 */
 	uint32_t releases_sent;       /* op-0x03 $DEQ frames really emitted    */
+	uint32_t dir_removes_sent;    /* op-0x04 removals really emitted (e09) */
+	uint32_t dir_removes_refused; /* ...and refused before a frame existed */
 	uint32_t retransmits;
 	uint32_t grants_rx;
 	uint32_t grants_duplicate;    /* a grant for an already-granted request*/
@@ -520,6 +522,17 @@ void dlm_req_fsm_init(struct dlm_req_fsm *f, const struct dlm_req_ops *ops);
  * ========================================================================== */
 enum dlm_req_status dlm_req_fsm_post(struct dlm_req_fsm *f,
 				     const struct vms_dlm_proxy_post *p);
+
+/*
+ * THE MASTER'S DIRECTORY-ENTRY REMOVAL (rd vms-e09): ONE named cat-0x02 op-0x04
+ * from ONE VMS_DLM_POST_DIR_REMOVE post, to the directory node the post names.
+ * It is a notification: no request block is allocated and no answer is awaited
+ * (R3: 8106 real removals, none answered). Refused, counted and NOT built
+ * unless the post holds a destination, a name and a hash the executive holds.
+ * Returns DLM_REQ_OK only when the frame really went to the send op.
+ */
+enum dlm_req_status dlm_req_fsm_dir_remove(struct dlm_req_fsm *f,
+					   const struct vms_dlm_proxy_post *p);
 
 /* ==========================================================================
  * 10. The INBOUND events

@@ -2,10 +2,11 @@
  * corpus_rt_start.c - what the corpus guest does BEFORE main() (vms-44a, R2.3).
  *
  * 1. Run as SYSTEM. The guest has no login: every program runs as the process
- *    STARTUP runs under, SYSTEM [1,4] with the executive's own full privilege mask
- *    (vms_kif_establish_system() asks the executive for exactly that; it refuses
- *    without CAP_SYS_ADMIN, which init.sh's root has). Programs that look their own
- *    user name up in SYSUAF ($GETUAI, $CREPRC) need a name that is in it.
+ *    STARTUP runs under, SYSTEM [1,4] with the executive's own full privilege mask.
+ *    The harness boot task (ovmx_boot_task, the one process the executive gives
+ *    SYSTEM, once per boot -- rd vms-a2c) creates each program as a detached
+ *    process with that identity, so nothing here asks for it. Programs that look
+ *    their own user name up in SYSUAF ($GETUAI, $CREPRC) need a name that is in it.
  * 2. Give it SYSTEM's default directory, as LOGINOUT does at login: the SYSUAF
  *    record's default device + directory (SYS$SYSROOT:[SYSMGR]), stored with
  *    $SETDDIR in the executive. A program that names a file or a directory
@@ -130,7 +131,6 @@ static void corpus_rt_run_as_system(void)
      *    0x40000000), as on OpenVMS (vms-95b). */
     __ovmx_p0_heap = 1;
 #endif
-    (void)vms_kif_establish_system();
     if (!(sys$getuai(0, 0, &ud, il, 0, 0, 0) & 1)) {
         crtl_on();
         return;

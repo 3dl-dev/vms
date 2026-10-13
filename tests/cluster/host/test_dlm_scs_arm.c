@@ -629,7 +629,7 @@ static void cnxman_legs(void)
 	 * arm originates both arrive here, and both must be refused before a
 	 * byte reaches the port. */
 	before("if (!cnxman_dlm_peer_proven(cn, csb, body, len))",
-	       "scs_send_msg(cl->scs, csb->cdt_conid, cn->dlm_tx",
+	       "cnxman_cm_send(cn, csb->cdt_conid, cn->dlm_tx",
 	       "*** RULE C is evaluated BEFORE a byte reaches the port -- the "
 	       "one gate under every DLM origination, old and new ***");
 	has("cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST)",

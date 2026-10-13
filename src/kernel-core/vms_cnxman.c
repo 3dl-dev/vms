@@ -419,6 +419,7 @@ struct vms_cnxman {
 	uint32_t dlm_replies_sent;     /* answers the arm produced, sent     */
 	uint32_t q0b01_answered;       /* rd vms-52d: 0x8b/0x01 answers sent */
 	uint32_t q0b01_declined;       /* ...requests left unanswered        */
+	uint32_t sends_rolled_back;    /* rd vms-cd8: refused, number returned */
 	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
 	uint32_t dlm_sends;            /* originations the arm asked for     */
 	uint32_t dlm_sends_refused;    /* no CSB / no connection             */
@@ -583,6 +584,38 @@ static int cnxman_fsm_rc(int status)
  * moves bytes. A message SCS refuses BURNS its number -- a gap, never a
  * repeat, which is exactly what the spec's monotonicity permits.
  */
+/*
+ * rd vms-cd8: SEND ONE CM BODY, AND IF IT DID NOT LEAVE, LEAVE NO HOLE.
+ *
+ * The CSB's send-msg# advances when the body is stamped
+ * (cnxman_envelope_originate), BEFORE SCS and the port see it. A refusal after
+ * that (the port's emit guard, no credit, a CDT that is not open) used to keep
+ * the number, so the peer's next message from this node skipped one. Spec
+ * sec 4(j) makes the stream strictly monotonic, and a real VAX took a fatal
+ * CNXMGRERR on exactly that (lab94ag, VAX1: send 4, then 6). Every refusal
+ * except SS$_ABORT means the frame was not taken. ABORT can be the port's
+ * TXFAIL on a frame it holds in its ring and will send again, so that number
+ * stands. The roll-back happens only when the refused body carries the
+ * number this CSB handed out last.
+ */
+static int cnxman_cm_send(struct vms_cnxman *cn, vms_conid_t conid,
+			  const uint8_t *body, uint32_t len)
+{
+	int st = scs_send_msg(cn->cl->scs, conid, body, len);
+
+	if (st != (int)SS__NORMAL && st != (int)SS__ABORT && body != NULL &&
+	    len >= 2u) {
+		struct vms_csb *csb = csb_by_conid(&cn->cl->club, conid);
+		uint16_t sent = (uint16_t)(body[0] | (uint16_t)body[1] << 8);
+
+		if (csb != NULL && sent == csb->cm_send_msg) {
+			cnxman_csb_dialogue_unsent(csb);
+			cn->sends_rolled_back++;
+		}
+	}
+	return st;
+}
+
 static int cnxman_ops_send(void *ctx, vms_csid_t dst, const uint8_t *body,
 			   uint32_t len)
 {
@@ -602,8 +635,7 @@ static int cnxman_ops_send(void *ctx, vms_csid_t dst, const uint8_t *body,
 	csb = cnxman_club_find_csid(&cn->cl->club, dst);
 	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u)
 		return -1;
-	return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, csb->cdt_conid, body,
-					  len));
+	return cnxman_fsm_rc(cnxman_cm_send(cn, csb->cdt_conid, body, len));
 }
 
 /*
@@ -624,8 +656,7 @@ static int cnxman_ops_send_csb(void *ctx, int32_t csb_index,
 	csb = cnxman_club_csb_at(&cn->cl->club, (uint32_t)csb_index);
 	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u)
 		return -1;
-	return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, csb->cdt_conid, body,
-					  len));
+	return cnxman_fsm_rc(cnxman_cm_send(cn, csb->cdt_conid, body, len));
 }
 
 static int cnxman_ops_respond(void *ctx, const uint8_t *body, uint32_t len)
@@ -634,8 +665,7 @@ static int cnxman_ops_respond(void *ctx, const uint8_t *body, uint32_t len)
 
 	if (cn == NULL || !cn->cur_conid_valid || cn->cl->scs == NULL)
 		return -1;
-	return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, cn->cur_conid, body,
-					  len));
+	return cnxman_fsm_rc(cnxman_cm_send(cn, cn->cur_conid, body, len));
 }
 
 static void cnxman_ops_arm_timer(void *ctx, enum cnxman_timer which,
@@ -872,7 +902,7 @@ static int cnxman_jop_send_msg(void *ctx, vms_conid_t conid,
 
 	if (cn->cl->scs == NULL)
 		return -1;
-	rc = cnxman_fsm_rc(scs_send_msg(cn->cl->scs, conid, body, len));
+	rc = cnxman_fsm_rc(cnxman_cm_send(cn, conid, body, len));
 	if (rc != 0)
 		cnxman_note_send_refusal(cn, conid);
 	return rc;
@@ -1636,8 +1666,8 @@ static void cnxman_credit_carrier(struct vms_cnxman *cn,
 		return;
 	}
 	cnxman_envelope_originate(csb, cn->carrier, CNXMAN_ENV_RESPONSE);
-	if (scs_send_msg(cn->cl->scs, local_conid, cn->carrier,
-			 VMS_CM_BODY_LEN) != (int)SS__NORMAL) {
+	if (cnxman_cm_send(cn, local_conid, cn->carrier,
+			   VMS_CM_BODY_LEN) != (int)SS__NORMAL) {
 		cn->credit_carriers_refused++;
 		return;
 	}
@@ -1826,8 +1856,8 @@ int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 	/* An origination the peer WILL answer, so this dialogue mints a fresh
 	 * transaction token for it (E85) and assigns the next send-msg#. */
 	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST);
-	if (scs_send_msg(cl->scs, csb->cdt_conid, cn->dlm_tx,
-			 VMS_CM_BODY_LEN) != (int)SS__NORMAL) {
+	if (cnxman_cm_send(cn, csb->cdt_conid, cn->dlm_tx,
+			   VMS_CM_BODY_LEN) != (int)SS__NORMAL) {
 		cn->dlm_sends_refused++;
 		return -1;
 	}
@@ -2787,8 +2817,22 @@ static void cnxman_sync_peer_incarnation(struct vms_cnxman *cn)
 
 		if (!csb->in_use || !csb->sysid_valid)
 			continue;
-		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
-			continue;   /* our own incarnation is not learned */
+		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u) {
+			/* Our own incarnation is not LEARNED -- it is the
+			 * port's own (pe_incarnation, the abs-80 quadword every
+			 * START/STACK we send carries). rd vms-d52c: the op-0x05
+			 * record a coordinator sends about ITSELF carries it at
+			 * body[28:36]; a real VAX answered OVMXE's zero-timed
+			 * self-record 0x81/0x05 with status 0 and abandoned the
+			 * admission (lab labd52c). Not held: "not told". */
+			uint32_t lo, hi;
+
+			if (pe_incarnation(cn->cl->pe, &lo, &hi) ==
+			    (int)SS__NORMAL)
+				cnxman_csb_set_incarnation(club, csb,
+					((uint64_t)hi << 32) | (uint64_t)lo, 1);
+			continue;
+		}
 		if (csb->state == (uint8_t)VMS_CNXMAN_CSB_DEAD)
 			continue;   /* an old incarnation learns nothing new */
 		(void)cnxman_track_incarnation(cn, csb);

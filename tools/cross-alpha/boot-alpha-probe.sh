@@ -31,7 +31,7 @@ PROBE="${PROBE:-provision}"
 case "$PROBE" in
     provision)  PROBE_SRC=alpha-provision-probe.c;     LINK_KIF=1 ;;
     contention) PROBE_SRC=alpha-contention-probe.c;    LINK_KIF=1 ;;
-    exec)       PROBE_SRC=alpha-exec-provision-init.c; LINK_KIF=0 ;;
+    exec)       PROBE_SRC=alpha-exec-provision-init.c; LINK_KIF=1 ;;
     *) echo "unknown PROBE='$PROBE' (want: provision|contention|exec)"; exit 1 ;;
 esac
 echo "== PROBE=$PROBE ($PROBE_SRC) =="
@@ -46,7 +46,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     echo "== cross-compile the probe init ($SRC) =="
     if [ "$LINK_KIF" = 1 ]; then
         $CC -static -O2 -Wall \
-            -I/repo/src/kernel -I/repo/src/libvmssys \
+            -I/repo/src/kernel -I/repo/src/libvmssys -I/repo/src/libvms/include \
             /tools/$SRC \
             /repo/src/libvmssys/vms_kif.c \
             /repo/src/libvmssys/kif_transport_linux.c \

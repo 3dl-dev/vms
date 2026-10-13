@@ -31,7 +31,9 @@ PROVISION_C="$ROOT/src/ovmx_provision/ovmx_provision.c"
 INTERNAL_H="$ROOT/src/kernel/vms_internal.h"
 PROCTAB_C="$ROOT/src/kernel-core/vms_proctab.c"
 IOCTL_H="$ROOT/src/kernel/vms_ioctl.h"
+INIT_C="$ROOT/src/ovmx_init/ovmx_init.c"
 cp "$PROVISION_C" "$WORK/ovmx_provision.c.orig"
+cp "$INIT_C" "$WORK/ovmx_init.c.orig"
 cp "$INTERNAL_H" "$WORK/vms_internal.h.orig"
 cp "$PROCTAB_C" "$WORK/vms_proctab.c.orig"
 cp "$IOCTL_H" "$WORK/vms_ioctl.h.orig"
@@ -41,11 +43,14 @@ restore() {
     cp "$WORK/vms_internal.h.orig" "$INTERNAL_H"
     cp "$WORK/vms_proctab.c.orig" "$PROCTAB_C"
     cp "$WORK/vms_ioctl.h.orig" "$IOCTL_H"
+    cp "$WORK/ovmx_init.c.orig" "$INIT_C"
 }
 
 R_NOLOOKUP='PROVISION.EXE does not call sysuaf_lookup() (the SYSTEM-record read)'
 R_NOSETIDENT='PROVISION.EXE does not call vms_kif_setident() (LOGINOUT'"'"'s ioctl)'
-R_ESTABLISH='PROVISION.EXE calls vms_kif_establish_system() to become SYSTEM'
+R_ESTABLISH='the boot task (ovmx_init) calls vms_kif_establish_system() to become SYSTEM'
+R_ONLYBOOT='no other product image asks for the SYSTEM identity (it comes from the creator)'
+R_ONCE='vms.ko refuses a second ESTABLISH_SYSTEM (once per boot)'
 R_READBACK='PROVISION.EXE still reads its identity back via $GETJPI(self)'
 R_KUIC='vms.ko defines the SYSTEM UIC as its own constant'
 R_KPRIV='vms.ko defines the SYSTEM privilege mask as its own constant'
@@ -108,27 +113,27 @@ expect_red() {
 printf '%s\n' 'static void evade(void) { sysuaf_record_t r; sysuaf_lookup("SYSTEM", &r); }' >> "$PROVISION_C"
 expect_red "A: sysuaf_lookup(\"SYSTEM\") reintroduced in PROVISION.EXE" \
     "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_ESTABLISH" "$R_READBACK" \
-    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT"
+    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT" "$R_ONLYBOOT" "$R_ONCE"
 
 # --- B. ...or hands a SYSUAF-derived value to the old ioctl --------------
 printf '%s\n' 'static void evade(void) { vms_kif_setident("SYSTEM", 0, 0); }' >> "$PROVISION_C"
 expect_red "B: vms_kif_setident() reintroduced in PROVISION.EXE" \
     "$R_NOSETIDENT" "$R_NOLOOKUP" "$R_ESTABLISH" "$R_READBACK" \
-    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT"
+    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT" "$R_ONLYBOOT" "$R_ONCE"
 
 # --- C. Identity establishment deleted outright (not just SYSUAF-fed) ----
 # Deleting the call satisfies the absence checks, which is why C and D exist
 # as the paired positives.
-sed -i.bak '/vms_kif_establish_system()/d' "$PROVISION_C"
-expect_red "C: vms_kif_establish_system() call deleted from PROVISION.EXE" \
+sed -i.bak '/vms_kif_establish_system()/d' "$INIT_C"
+expect_red "C: vms_kif_establish_system() call deleted from the boot task" \
     "$R_ESTABLISH" "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_READBACK" \
-    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT"
+    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT" "$R_ONLYBOOT" "$R_ONCE"
 
 # --- D. The readback deleted (identity established, never reported) -----
 sed -i.bak '/vms_kif_getjpi_self(&info)/d' "$PROVISION_C"
 expect_red "D: vms_kif_getjpi_self() readback deleted from PROVISION.EXE" \
     "$R_READBACK" "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_ESTABLISH" \
-    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT"
+    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT" "$R_ONLYBOOT" "$R_ONCE"
 
 # --- E. The executive stops owning the UIC constant ----------------------
 # The replacement must not CONTAIN "VMS_SYSTEM_UIC" as a substring (grep -F
@@ -136,19 +141,19 @@ expect_red "D: vms_kif_getjpi_self() readback deleted from PROVISION.EXE" \
 sed -i.bak 's/VMS_SYSTEM_UIC/SYS_UIC_CONST_RENAMED/g' "$INTERNAL_H"
 expect_red "E: VMS_SYSTEM_UIC constant renamed out of vms_internal.h" \
     "$R_KUIC" "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_ESTABLISH" "$R_READBACK" \
-    "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT"
+    "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT" "$R_ONLYBOOT" "$R_ONCE"
 
 # --- F. The executive stops owning the privilege-mask constant -----------
 sed -i.bak 's/VMS_PRV_M_SYSTEM_ALL/SYS_PRIV_CONST_RENAMED/g' "$INTERNAL_H"
 expect_red "F: VMS_PRV_M_SYSTEM_ALL constant renamed out of vms_internal.h" \
     "$R_KPRIV" "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_ESTABLISH" "$R_READBACK" \
-    "$R_KUIC" "$R_KHANDLER" "$R_STRUCT"
+    "$R_KUIC" "$R_KHANDLER" "$R_STRUCT" "$R_ONLYBOOT" "$R_ONCE"
 
 # --- G. The executive's ioctl handler deleted -----------------------------
 sed -i.bak 's/vms_ioctl_establish_system/vms_ioctl_construct_identity/g' "$PROCTAB_C"
 expect_red "G: vms_ioctl_establish_system() renamed out of vms_proctab.c" \
     "$R_KHANDLER" "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_ESTABLISH" "$R_READBACK" \
-    "$R_KUIC" "$R_KPRIV" "$R_STRUCT"
+    "$R_KUIC" "$R_KPRIV" "$R_STRUCT" "$R_ONLYBOOT" "$R_ONCE"
 
 # --- H. The ioctl struct grows a caller-supplied identity field ----------
 # The absence checks A/B and the presence checks C/D/E/F/G are all
@@ -158,7 +163,19 @@ expect_red "G: vms_ioctl_establish_system() renamed out of vms_proctab.c" \
 sed -i.bak 's/struct vms_establish_system_args {/struct vms_establish_system_args {\n    uint32_t uic;/' "$IOCTL_H"
 expect_red "H: uic field added to struct vms_establish_system_args" \
     "$R_STRUCT" "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_ESTABLISH" "$R_READBACK" \
-    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER"
+    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_ONLYBOOT" "$R_ONCE"
+
+# --- I. A product image other than the boot task asks for SYSTEM again ----
+printf '%s\n' 'static void evade(void) { (void)vms_kif_establish_system(); }' >> "$PROVISION_C"
+expect_red "I: vms_kif_establish_system() reintroduced in PROVISION.EXE" \
+    "$R_ONLYBOOT" "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_ESTABLISH" "$R_READBACK" \
+    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT" "$R_ONCE"
+
+# --- J. The executive stops refusing a second call ------------------------
+sed -i.bak 's/vms_system_established/vms_sys_est_renamed/g' "$PROCTAB_C"
+expect_red "J: the once-per-boot flag renamed out of vms_proctab.c" \
+    "$R_ONCE" "$R_NOLOOKUP" "$R_NOSETIDENT" "$R_ESTABLISH" "$R_READBACK" \
+    "$R_KUIC" "$R_KPRIV" "$R_KHANDLER" "$R_STRUCT" "$R_ONLYBOOT"
 
 echo ""
 echo "=========================================="

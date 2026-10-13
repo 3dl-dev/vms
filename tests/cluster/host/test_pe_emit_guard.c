@@ -302,6 +302,29 @@ static void rx_cm(struct guard_env *e, uint16_t seq, uint16_t recv_ack,
 	rx_frame(e, len);
 }
 
+
+/* rx_cm with an explicit category/opcode (rd vms-cd8). */
+static void rx_cm_raw(struct guard_env *e, uint16_t peer_send_msg, uint8_t cat,
+		      uint8_t op)
+{
+	uint8_t dst_lavc[6];
+	vms_wire_buf_t w;
+	uint32_t len;
+
+	ovmx_lavc(dst_lavc);
+	len = fake_peer_seqmsg(&e->peer, ovmx_hw, dst_lavc, peer_send_msg, 0u,
+			       CONID_OURS, CONID_THEIRS, e->buf,
+			       sizeof(e->buf));
+	if (len == 0)
+		return;
+	vms_wire_buf_init(&w, e->buf, len);
+	vms_wire_put_le16(&w, VMS_OFF_CM_SEND_MSG, peer_send_msg);
+	vms_wire_put_le16(&w, VMS_OFF_CM_ACK_MSG, 0u);
+	e->buf[VMS_OFF_CM_CATEGORY] = cat;
+	e->buf[VMS_OFF_CM_OPCODE] = op;
+	rx_frame(e, len);
+}
+
 /* ================================================================== *
  * 1. THE GUARD NEVER BLOCKS CORRECT OUTPUT
  * ================================================================== */
@@ -442,6 +465,32 @@ static void test_e76_unbacked_ack_is_refused(void)
 		 "...names the vector");
 	ct_check(strstr(e.fake.last_log, "VAX1") != NULL,
 		 "...and names the peer, from its own learned SCSNODE");
+}
+
+
+/*
+ * rd vms-cd8 -- THE PEER'S CATEGORY-0x0b MESSAGES COUNT. lab94ag: VAX1's
+ * 8b/05 and 0b/06 (the clusterwide logical-name service) were its send 3 and
+ * 4, the guard left them out and held 2, and a DLM frame acking 4 was refused.
+ * The send-msg# it consumed then went out as a hole and VAX1 took CNXMGRERR.
+ */
+static void test_cd8_category_0b_counts_toward_the_ack(void)
+{
+	struct guard_env e;
+	struct cm_spec s;
+
+	printf("-- vms-cd8: a peer's cat-0x0b messages count toward what may be acked\n");
+	open_circuit(&e);
+	rx_cm(&e, 1u, 0u, 1u);
+	rx_cm(&e, 2u, 0u, 2u);
+	rx_cm_raw(&e, 3u, 0x8bu, 0x05u);       /* VAX1's 8b/05, its send 3 */
+	rx_cm_raw(&e, 4u, 0x0bu, 0x06u);
+	/* negctl: guard-ignores-category-0b */
+	s = cm_ok(1u, 4u);
+	ct_check_eq_u32((unsigned long)send_cm(&e, &s),
+			(unsigned long)PE_VC_SEND_OK,
+			"*** acking the peer's 0x0b/0x06 (its send 4) goes out ***");
+	ct_check_eq_u32(e.fsm.guard_refused, 0u, "  nothing refused");
 }
 
 /* The other half of INV-6, and the reason this cannot false-drop: a peer that
@@ -977,6 +1026,7 @@ int main(void)
 	test_golden_dialogue_is_never_refused();
 	test_non_cm_traffic_is_not_judged();
 	test_e76_unbacked_ack_is_refused();
+	test_cd8_category_0b_counts_toward_the_ack();
 	test_ack_not_judged_before_the_peer_speaks();
 	test_ack_slack_is_exactly_the_measured_one();
 	test_e78_ack_burst_is_refused();

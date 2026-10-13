@@ -28,12 +28,14 @@
  *
  * There is no branch out of the sequence above. In particular there is no path from the
  * decoded source identity to the created process: $CREPRC is passed uic = 0
- * and prvadr = NULL ("the creator's defaults") and PRC$M_LOGINOUT tells it not
- * to stamp even those, so the session starts with NO identity of anyone's
- * choosing and acquires one only when LOGINOUT re-personas it after a
- * successful SYSUAF authentication. The DECnet daemon therefore never holds,
- * forges, or passes a credential -- which is exactly why this call is safe to
- * make from a daemon serving unauthenticated peers.
+ * and prvadr = NULL ("the creator's defaults"), so the session starts as the
+ * daemon itself (SYSTEM, as STARTNET.COM's RUN/DETACHED created it) -- never as
+ * anything the peer said -- and acquires a user's identity only when LOGINOUT
+ * re-personas it after a successful SYSUAF authentication (rd vms-a2c; INSTALL
+ * /PRIVILEGED LOGINOUT, rd vms-7c64, moves that authority to the image). The
+ * DECnet daemon therefore never forges or passes a credential -- which is
+ * exactly why this call is safe to make from a daemon serving unauthenticated
+ * peers.
  */
 
 #define _GNU_SOURCE

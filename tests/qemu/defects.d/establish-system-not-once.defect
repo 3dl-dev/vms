@@ -1,0 +1,27 @@
+# establish-system-not-once -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the SYSTEM identity is constructed once per boot, for the boot task (vms_ioctl_establish_system, kernel-core/vms_proctab.c, rd vms-a2c) -- every later process gets its identity from its creator";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_establish_once";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_establish_system hands the SYSTEM identity to every host-privileged caller, not just the boot task once: any later process can make itself SYSTEM instead of taking its creator's identity. Gone after apply.";;
+        require_fail) cat <<'EOT'
+a second ESTABLISH_SYSTEM (the boot task already made the one call) is refused SS$_NOPRIV
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (vms_system_established) {$|    if (0 \&\& vms_system_established) { /* NEGCTL establish-system-not-once */|' "$_file"
+    :
+}

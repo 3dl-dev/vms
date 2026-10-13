@@ -61,16 +61,21 @@ object dispatch table**. `vms-30e`'s own charter already said "executive device 
   hidden *inside* `$CREPRC`'s implementation and the terminal device's backing — never at the
   console/SSH/CTERM caller layer. Every path calls `$CREPRC` "create a process running
   LOGINOUT.EXE bound to terminal-device X". Today the console reaches LOGINOUT by raw
-  `fork()+execl()` (a disclosed Linux leak, flagged in `ovmx_job_control.c`) and OVMX's `$CREPRC`
-  copies the *creator's* identity — both must change: `$CREPRC` becomes the sole creator for all
-  paths (console included), and it must create a process that **LOGINOUT re-personas post-auth**
-  (see next bullet).
-- **LOGINOUT.EXE is INSTALLED with privilege** (as real VMS installs it) — that is how a process
-  running it gains the authority to read SYSUAF and set the persona *regardless of who created
-  it*. This is the keystone: the creator (`JOB_CONTROL`/`NETACP`) needs **no** identity-forging
-  privilege of its own; LOGINOUT's authority is its own installed image. It dissolves the "network
-  daemon must hold `CAP_SYS_ADMIN` to forge identity" attack (§4 A2) and makes "`$CREPRC` a
-  process LOGINOUT then re-personas" (real VMS) the faithful, buildable model.
+  `fork()+execl()` (a disclosed Linux leak, flagged in `ovmx_job_control.c`) — that must change:
+  `$CREPRC` becomes the sole creator for all paths (console included), and it creates a process
+  that **LOGINOUT re-personas post-auth** (see next bullet).
+- **The login process starts as its creator's SYSTEM-owned process; LOGINOUT re-personas it.**
+  On VMS the process JOB_CONTROL (or NETACP) creates to run LOGINOUT.EXE starts with the
+  creator's identity, a SYSTEM-owned process, and LOGINOUT changes it to the user's identity
+  during login, using the privileges it holds as an INSTALLed image (`INSTALL ADD
+  /PRIVILEGED`). OVMX does the first half today: `$CREPRC` makes the session's PCB with its
+  creator's identity before LOGINOUT's first instruction, and JOB_CONTROL and NETACP are SYSTEM
+  because STARTUP created them (rd vms-a2c: the executive constructs SYSTEM once per boot, for
+  the boot task, and refuses any later `ESTABLISH_SYSTEM`, so a session can no longer construct
+  it for itself). The second half, where LOGINOUT's authority to read SYSUAF and set the
+  persona comes from its own installed image rather than from the identity it started with,
+  lands with rd vms-7c64 (INSTALL /PRIVILEGED LOGINOUT). Neither creator forges an identity: the
+  session holds only what its creator already holds, and nothing a peer sent (§4 A2).
 - **The terminal is a real executive device.** `OPA0:` (console), and — absent today —
   **`RTAn:`** (DECnet inbound SET HOST, RTTDRIVER), `TNAn:` (TELNET), `FTAn:` (pty). A network
   login is LOGINOUT bound to one of these devices, not a nameless PTY session.

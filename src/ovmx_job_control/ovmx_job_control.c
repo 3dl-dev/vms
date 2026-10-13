@@ -178,73 +178,35 @@ int main(void)
     }
 
     /*
-     * ESTABLISH JOB_CONTROL'S SYSTEM IDENTITY IN THE EXECUTIVE (vms-d31d).
+     * JOB_CONTROL'S SYSTEM IDENTITY COMES FROM ITS CREATOR (vms-d31d, rd vms-a2c).
      *
-     * JOB_CONTROL is a SYSTEM-owned detached process. Each login session it
-     * creates below is a DISTINCT executive process (vms-d4ef) that
-     * independently establishes this SAME SYSTEM identity on its own fresh PCB
-     * -- but that call is no longer made HERE: vms-3e9 moved it inside
-     * $CREPRC's PRC$M_LOGINOUT path (src/libvms/syssvc/sys_process.c), where it
-     * belongs, because the authority to read SYSUAF is the LOGINOUT IMAGE's,
-     * not its creator's (design record §2). The two processes still hold system
-     * identity by the same privilege-gated primitive at different vms_pids; the
-     * difference is that JOB_CONTROL no longer establishes it FOR the session.
+     * JOB_CONTROL is a SYSTEM [1,4] detached process on VMS, and it needs that
+     * identity for two live reasons: SHOW SYSTEM must say so from another
+     * process, and it reads each session's row back through $GETJPI to wait for
+     * it (the loop below) -- once LOGINOUT re-personas a session to an ordinary
+     * account, the executive grants that cross-group read only to a caller
+     * holding WORLD (vms_proc_may_read).
      *
-     * WHY JOB_CONTROL STILL ESTABLISHES ITS OWN. Two live reasons, neither of
-     * them the session's SYSUAF read any more:
-     *   - JOB_CONTROL genuinely IS a SYSTEM [1,4] detached process on VMS, and
-     *     SHOW SYSTEM must be able to say so from another process.
-     *   - It reads the session's row back through $GETJPI to wait for it (see
-     *     the loop below). Once LOGINOUT re-personas that session to an
-     *     ordinary account, its UIC is in another group, and the executive
-     *     grants a cross-group row read only to a caller holding WORLD
-     *     (vms_proc_may_read). Without a system identity here, the wait would
-     *     be refused SS$_NOPRIV on the first non-SYSTEM login and the loop
-     *     would read a live session as a finished one.
-     * The SYSUAF protection rules the rest of this comment recites are
-     * unchanged and still describe what the SESSION needs -- they are now
-     * satisfied inside $CREPRC, on the session's own fresh PCB, before the
-     * image is activated (the Wall-6 ordering guard).
+     * It does not ask for it. SYS$STARTUP:JOB_CONTROL_STARTUP.COM's RUN/DETACHED
+     * runs in the STARTUP DCL, which is SYSTEM (the boot task's one
+     * ESTABLISH_SYSTEM, inherited by PROVISION as its subprocess); $CREPRC makes
+     * this process's PCB with its creator's user name, UIC and privileges before
+     * this image runs (VMS_IOCTL_CREPRC_PCB). The executive refuses any later
+     * ESTABLISH_SYSTEM, so asking here would only be refused. The sessions this
+     * process creates get the same identity from it the same way.
      *
-     * WHY THIS CALL, AND WHY $CREPRC DID NOT ALREADY DO IT. JOB_CONTROL is
-     * created by SYS$STARTUP:JOB_CONTROL_STARTUP.COM's
-     * RUN/DETACHED/UIC=[1,4]/PRIVILEGES=(...), and vms-d31d's $CREPRC stamps a
-     * created process's UIC/privileges onto its executive row from the CREATOR's
-     * identity (src/libvms/syssvc/sys_process.c). But that stamp is gated on the
-     * created process inheriting an executive USER NAME, and the boot procedure
-     * that issues the RUN/DETACHED (the STARTUP/STDRV DCL) has none on its
-     * executive row -- so the stamp is skipped and JOB_CONTROL registers with
-     * the fresh, credential-derived seed (VMS_PRV_M_ENFORCED|DEFAULT: SETPRV but
-     * NOT SYSPRV/BYPASS, measured cur=0x13c00f on VAX). On x86_64 that seed
-     * lands at UIC group 0 (root), which is <= MAXSYSGROUP and reads SYSUAF by
-     * luck of the environment -- the root->group-0 crutch this program is
-     * excising -- so the gap is invisible there. On NetBSD/VAX the seed is a
-     * non-system group and the read is denied: the crutch was the only thing
-     * making x86_64 login work, and VAX has no crutch.
-     *
-     * vms_ioctl_establish_system() (src/kernel-core/vms_proctab.c) stamps the
-     * fixed SYSTEM identity -- UIC [1,4], the enforced SYSTEM privilege set,
-     * user name "SYSTEM" -- and is GATED on the caller's real host privilege
-     * (exec_current_is_privileged()); it is the same executive primitive
-     * PROVISION.EXE uses to become SYSTEM without a SYSUAF read. JOB_CONTROL
-     * genuinely holds that host privilege (it registered with the enforced set),
-     * so this is a privilege-checked establishment of a real system identity,
-     * NOT a blanket grant -- and it makes the AUTHENTIC identity load-bearing on
-     * every substrate rather than the group-0 crutch.
-     *
-     * INV-6 / fail-honest: if the executive refuses (no host privilege) or is
-     * absent, JOB_CONTROL is left non-system and the SYSUAF read then fails
-     * honestly, exactly as it does today -- nothing here fabricates the
-     * identity. The status is checked and a diagnostic printed so a regression
-     * is never silent (the swallowed-privilege-error class this item names).
+     * If the identity is not there, say so: the sessions would then be refused
+     * SYS$SYSTEM:SYSUAF.DAT, and a regression must never be silent.
      */
     {
-        uint32_t est = vms_kif_establish_system();
-        if (!(est & 1))
+        struct vms_procinfo self;
+        memset(&self, 0, sizeof(self));
+        uint32_t st = vms_kif_getjpi_self(&self);
+        if (!(st & 1) || strncmp(self.username, "SYSTEM", sizeof(self.username)) != 0)
             fprintf(stderr,
-                    "%%JBC-W-NOSYSID, JOB_CONTROL could not establish its "
-                    "SYSTEM identity (status %08X); console logins will be "
-                    "refused SYS$SYSTEM:SYSUAF.DAT\n", (unsigned)est);
+                    "%%JBC-W-NOSYSID, JOB_CONTROL was not created with the SYSTEM "
+                    "identity (status %08X, user \"%.12s\"); console logins will be "
+                    "refused SYS$SYSTEM:SYSUAF.DAT\n", (unsigned)st, self.username);
     }
 
     /*
@@ -304,14 +266,14 @@ int main(void)
          * terminal-device OPA0:".
          *
          * NO IDENTITY IS PASSED. uic = 0 and prvadr = NULL mean "the creator's
-         * defaults" to $CREPRC, and PRC$M_LOGINOUT then tells it not to stamp
-         * even those: the created process establishes its own system identity
-         * through the privilege-gated executive primitive and LOGINOUT
-         * RE-PERSONAS it to the authenticated user afterwards. JOB_CONTROL
-         * therefore never names, never forges and never sees the identity of
-         * the user who logs in -- which is exactly why the same call will
-         * serve NETACP and the SSH daemon, neither of which may hold the
-         * authority to forge one (design record §2/§3.1).
+         * defaults" to $CREPRC: the session starts as JOB_CONTROL (SYSTEM), on
+         * the PCB $CREPRC makes for it, which is what lets LOGINOUT read SYSUAF
+         * (rd vms-a2c: the executive no longer lets a session construct the
+         * SYSTEM identity itself; INSTALL /PRIVILEGED LOGINOUT, rd vms-7c64,
+         * is where that authority belongs). LOGINOUT RE-PERSONAS it to the
+         * authenticated user afterwards. JOB_CONTROL therefore never names,
+         * never forges and never sees the identity of the user who logs in
+         * (design record §2/§3.1).
          *
          * NO PROCESS NAME IS PASSED either: the session is named by LOGINOUT's
          * own $SETPRN once it knows the account (tools/vms_login.c), which is

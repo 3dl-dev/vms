@@ -241,7 +241,8 @@ barrier-stalled-ignores-new-go
 join-reply-to-the-join-target
 join-k10-close-withheld
 join-k5-close-withheld
-csb-0b01-answer-ignores-join-order"
+csb-0b01-answer-ignores-join-order
+guard-ignores-category-0b"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1060,6 +1061,20 @@ EOF
                       ;;
         esac;;
 
+    guard-ignores-category-0b)
+        case "$_f" in
+        facility)     echo "the emit guard's view of what the peer has sent includes its category-0x0b messages (rd vms-cd8)";;
+        targets)      echo "kernel-core/vms_cluster_emit_guard.c";;
+        suites_red)   echo "test_pe_emit_guard";;
+        isolation)    echo "isolated";;
+        why)          echo "guard_category_is_cm() no longer counts category 0x0b, so after a peer's clusterwide logical-name messages this node's next frame acking them is refused as ack-unbacked. In lab94ag that refusal left a send-msg# hole and VAX1 took a fatal CNXMGRERR.";;
+        require_fail) hd_lines <<'EOF'
+*** acking the peer's 0x0b/0x06 (its send 4) goes out ***
+  nothing refused
+EOF
+                      ;;
+        esac;;
+
     join-k5-close-withheld)
         case "$_f" in
         facility)     echo "the kind-5 cat-0x06 close (rd vms-db1): its record pulled, nothing written back, answered 4 (3,069 of 3,313 real answers)";;
@@ -1360,13 +1375,13 @@ EOF
 
     join-member-count-to-foreign)
         case "$_f" in
-        facility)     echo "a member's count goes only to a peer running this implementation (rd vms-e88; the rd vms-1ac rule -- member-only bytes OVMX does not ground are symmetric between two OVMX nodes and a bugcheck risk in front of a VAX)";;
+        facility)     echo "a member's count goes to a foreign peer only WITH the grounded member state (rd vms-e88, rd vms-d52c; the rd vms-1ac rule -- a count beside zero member-only fields is a record in a shape no real node writes)";;
         targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
-        why)          echo "join_members_for() drops the peer_is_ours test, so a foreign connection manager is sent a member-form count beside the zero member-only fields OVMX cannot ground: a record in a shape no real node writes.";;
+        why)          echo "join_members_for() drops the member-state test, so a foreign connection manager is sent a member-form count while this node holds no formation/transition/membership time to send beside it: a record in a shape no real node writes.";;
         require_fail) hd_lines <<'EOF'
-a foreign connection manager still hears 0
+a foreign connection manager hears 0 while this node holds no member state to send beside the count
 and nothing new goes to the foreign one
 EOF
         ;;
@@ -2464,7 +2479,7 @@ apply_edit() {
     join-member-count-to-foreign)
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
         # replacement no longer matches the pattern, so it is not repeatable.
-        sed -i 's|	if (csb == NULL \|\| !csb->peer_is_ours \|\| !join_node_already_member(j))|	if (csb == NULL \|\| !join_node_already_member(j)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
+        sed -i 's|	if (!csb->peer_is_ours \&\& !join_member_state(j, \&ms))|	if (0 \&\& !csb->peer_is_ours \&\& !join_member_state(j, \&ms)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
 
     join-asks-a-system-in-no-cluster)
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
@@ -2591,6 +2606,10 @@ apply_edit() {
         # The `return f->last_gasp_incarnation == f->id.incarnation_time;`
         # line is unique in this file: grep -c is 1.
         sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
+
+    guard-ignores-category-0b)
+        # `	case 0x0bu:` is unique in this file.
+        sed -i 's|^	case 0x0bu:$|	case 0x7fu: /* NEGCTL guard-ignores-category-0b */|' "$_file";;
 
     join-k5-close-withheld)
         # `d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) &&` is unique in the file.

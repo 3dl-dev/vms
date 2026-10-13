@@ -275,6 +275,44 @@ elif [ -x /tests/corpus_seed_lnm ]; then
     /tests/corpus_seed_lnm >&4 2>&1
 fi
 
+# THE HARNESS BOOT TASK (rd vms-3fa). Every test_syssvc_/test_imgact_/
+# test_corpus_ suite, and every corpus runtime program (rd vms-a2c: the
+# executive constructs SYSTEM once, for this task, and refuses any later
+# ESTABLISH_SYSTEM), runs as a process the executive CREATED: ovmx_boot_task
+# becomes SYSTEM once and makes each suite a DETACHED process with SYSTEM's
+# identity, its own job (VMS_IOCTL_CREPRC_PCB for the held task, then exec), as
+# $CREPRC does on a booted system -- no suite registers itself. test_kmod_*
+# run under it too, except the two that test registration (see below; rd
+# vms-2a5 retires it).
+# With NO executive (/dev/vms absent -- the gate's own negative control) there
+# are no VMS processes to create: suites run directly, so their device-absent
+# branches prove they skip honestly (77). That is not a fallback: a suite that
+# needs the executive can only skip there.
+BOOT_CTL=/tmp/.boot_ctl BOOT_REPLY=/tmp/.boot_reply BOOT_OK=0 NO_EXEC=0
+[ -c /dev/vms ] || NO_EXEC=1
+if [ "$NO_EXEC" = 1 ]; then
+    echo "  no executive (/dev/vms absent): suites run directly, to prove they skip honestly" >&4
+elif [ -x /tests/ovmx_boot_task ]; then
+    rm -f "$BOOT_CTL" "$BOOT_REPLY"
+    mknod "$BOOT_CTL" p && mknod "$BOOT_REPLY" p
+    exec 7<>"$BOOT_REPLY" 8<>"$BOOT_CTL"
+    # Corpus programs run from /tmp/corpus_cwd, as they did as init.sh's own
+    # children; the boot task's working directory is the one they inherit.
+    mkdir -p /tmp/corpus_cwd
+    if [ "$CORPUS_RT" = "1" ]; then _boot_cwd=/tmp/corpus_cwd; else _boot_cwd=/; fi
+    ( cd "$_boot_cwd" && exec /tests/ovmx_boot_task "$BOOT_CTL" "$BOOT_REPLY" ) </dev/null >&4 2>&4 &
+    BOOT_PID=$!
+    if read -t 30 -r _ready <&7 && [ "$_ready" = READY ]; then
+        BOOT_OK=1
+        echo "  boot task up (pid $BOOT_PID): each suite runs as a DETACHED process SYSTEM created" >&4
+    else
+        echo "  FATAL: the harness boot task did not come up -- no suite can run as a process the executive created" >&4
+    fi
+else
+    echo "  FATAL: /tests/ovmx_boot_task is missing -- no suite can run as a process the executive created" >&4
+fi
+
+
 # CORPUS RUNTIME LOOP (vms-44a, R2.3). One line per program on the assertion
 # channel:  CORPUS-RT <name> rc=<exit> signaled=<0|1>   (rc 124 = the 40s per-program budget expired, >128 =
 # killed by signal).  A "CORPUS-RT-BEGIN <name>" line precedes each run so a
@@ -296,16 +334,30 @@ if [ "$CORPUS_RT" = "1" ]; then
         echo "CORPUS-RT-BEGIN $name" >&4
         _args=""
         [ -f "$prog.args" ] && _args=$(cat "$prog.args")
-        # shellcheck disable=SC2086  # the .args file is a plain word list
-        "$prog" $_args </dev/null >/tmp/corpus_out.$$ 2>&1 &
-        _pp=$!
+        # Each program is a DETACHED process the boot task (SYSTEM) creates,
+        # as every suite is (rd vms-a2c): the executive no longer lets a
+        # program construct SYSTEM for itself.
         _t=0
-        while kill -0 "$_pp" 2>/dev/null; do
-            if [ "$_t" -ge 40 ]; then kill -KILL "$_pp" 2>/dev/null; break; fi
-            sleep 1; _t=$((_t+1))
-        done
-        wait "$_pp" 2>/dev/null
-        rc=$?
+        if [ "$BOOT_OK" = 1 ]; then
+            echo "RUN $prog /tmp/corpus_out.$$ $_args" >&8
+            read -r _tag _pp _pst <&7
+            if [ "${_pp:-0}" != 0 ]; then
+                while ! read -t 1 -r _tag rc <&7; do
+                    _t=$((_t+1))
+                    if [ "$_t" -ge 40 ]; then
+                        kill -KILL "$_pp" 2>/dev/null
+                        read -r _tag rc <&7
+                        break
+                    fi
+                done
+            else
+                echo "%OVMX-F-NOTCREATED, $name was not run: the executive did not create it (CREPRC_PCB status ${_pst:-none})" >/tmp/corpus_out.$$
+                read -r _tag rc <&7
+            fi
+        else
+            echo "%OVMX-F-NOTCREATED, $name was not run: the harness boot task is not up" >/tmp/corpus_out.$$
+            rc=126
+        fi
         [ "$_t" -ge 40 ] && rc=124
         sig=0
         grep -qE '^%[A-Z0-9_$]+-[EF]-' /tmp/corpus_out.$$ 2>/dev/null && sig=1
@@ -321,36 +373,6 @@ if [ "$CORPUS_RT" = "1" ]; then
     rm -f /tmp/corpus_out.$$
     cd /
     echo "=== CORPUS-RT DONE: $n_corpus_rt programs ===" >&4
-fi
-
-# THE HARNESS BOOT TASK (rd vms-3fa). Every test_syssvc_/test_imgact_/
-# test_corpus_ suite runs as a process the executive CREATED: ovmx_boot_task
-# becomes SYSTEM once and makes each suite a DETACHED process with SYSTEM's
-# identity, its own job (VMS_IOCTL_CREPRC_PCB for the held task, then exec), as
-# $CREPRC does on a booted system -- no suite registers itself, test_kmod_*
-# included (rd vms-2a5: registration by ioctl is going away).
-# With NO executive (/dev/vms absent -- the gate's own negative control) there
-# are no VMS processes to create: suites run directly, so their device-absent
-# branches prove they skip honestly (77). That is not a fallback: a suite that
-# needs the executive can only skip there.
-BOOT_CTL=/tmp/.boot_ctl BOOT_REPLY=/tmp/.boot_reply BOOT_OK=0 NO_EXEC=0
-[ -c /dev/vms ] || NO_EXEC=1
-if [ "$NO_EXEC" = 1 ]; then
-    echo "  no executive (/dev/vms absent): suites run directly, to prove they skip honestly" >&4
-elif [ -x /tests/ovmx_boot_task ]; then
-    rm -f "$BOOT_CTL" "$BOOT_REPLY"
-    mknod "$BOOT_CTL" p && mknod "$BOOT_REPLY" p
-    exec 7<>"$BOOT_REPLY" 8<>"$BOOT_CTL"
-    /tests/ovmx_boot_task "$BOOT_CTL" "$BOOT_REPLY" </dev/null >&4 2>&4 &
-    BOOT_PID=$!
-    if read -t 30 -r _ready <&7 && [ "$_ready" = READY ]; then
-        BOOT_OK=1
-        echo "  boot task up (pid $BOOT_PID): each suite runs as a DETACHED process SYSTEM created" >&4
-    else
-        echo "  FATAL: the harness boot task did not come up -- no suite can run as a process the executive created" >&4
-    fi
-else
-    echo "  FATAL: /tests/ovmx_boot_task is missing -- no suite can run as a process the executive created" >&4
 fi
 
 for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/test_corpus_*; do

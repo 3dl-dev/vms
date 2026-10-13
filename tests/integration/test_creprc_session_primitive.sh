@@ -34,9 +34,11 @@
 #   3. The mechanics DID move rather than merely vanish: $CREPRC's
 #      implementation carries the terminal-device binding (open + dup2 +
 #      $ASSIGN + SETTERM) and the exec, under PRC$M_INTER / PRC$M_LOGINOUT.
-#   4. THE WALL-6 ORDERING (vms-d4ef, design §A7): inside $CREPRC's
-#      PRC$M_LOGINOUT path, vms_kif_establish_system() is issued BEFORE the
-#      image is activated -- i.e. before the execl() that runs LOGINOUT and
+#   4. THE WALL-6 ORDERING (vms-d4ef, design §A7): inside $CREPRC, a
+#      PRC$M_LOGINOUT session gets its PCB -- with its creator's identity,
+#      made by the creator (rd vms-a2c: the executive constructs SYSTEM once,
+#      for the boot task, so a session can no longer ask for it) -- BEFORE the
+#      image is activated, i.e. before the execl() that runs LOGINOUT and
 #      therefore before LOGINOUT's SYSUAF read. On x86_64 a violation is
 #      INVISIBLE (root maps to UIC group 0, which reads the World-denied
 #      SYSUAF by luck of the environment); on the VAX rail it denies the read
@@ -112,7 +114,7 @@ done
 # a broken system is worse than no gate.
 for need in 'PRC\$M_INTER' 'PRC\$M_LOGINOUT' 'creprc_bind_terminal' \
             'ovmx_console_terminal_path' 'vms_kif_assign' 'vms_kif_setterm' \
-            'vms_kif_establish_system' 'execl(img_path'; do
+            'vms_kif_creprc_pcb' 'execl(img_path'; do
     if grep -q -- "$need" "$CREPRC_C"; then
         :
     else
@@ -122,23 +124,39 @@ for need in 'PRC\$M_INTER' 'PRC\$M_LOGINOUT' 'creprc_bind_terminal' \
     fi
 done
 if [ "$status" -eq 0 ]; then
-    echo "PASS: \$CREPRC carries the terminal binding, the identity establishment and the exec"
+    echo "PASS: \$CREPRC carries the terminal binding, the creator-made PCB and the exec"
 fi
 
-# --- 4. WALL-6: establish_system precedes image activation in $CREPRC ------
+# --- 4. WALL-6: the session's creator-made PCB precedes image activation ----
 # The CALL, not the prose: this file documents the primitive at length, so a
 # line whose first non-blank character is a comment '*' is skipped -- taking a
 # doc mention as the call site would make the ordering check meaningless.
-EST_LINE=$(grep -n 'vms_kif_establish_system()' "$CREPRC_C" \
+# Two halves: (a) a LOGINOUT session is NOT excluded from the creator-made PCB
+# (use_ticket covers it), and (b) the created task's PCB request precedes the
+# exec of the image.
+TICKET_DEF=$(grep -n 'const int use_ticket *=' "$CREPRC_C" | head -1)
+if [ -z "$TICKET_DEF" ]; then
+    echo "FAIL: WALL-6: no use_ticket definition in $CREPRC_C -- cannot tell whether a LOGINOUT session gets a creator-made PCB"
+    status=1
+elif printf '%s\n' "$TICKET_DEF" | grep -q 'loginout'; then
+    echo "FAIL: WALL-6: $CREPRC_C excludes PRC\$M_LOGINOUT sessions from the creator-made PCB:"
+    echo "      $TICKET_DEF"
+    echo "  -> such a session registers itself with a substrate-derived identity, and"
+    echo "     no longer has ESTABLISH_SYSTEM to fall back on (rd vms-a2c)."
+    status=1
+else
+    echo "PASS: WALL-6: a PRC\$M_LOGINOUT session gets its PCB from its creator ($TICKET_DEF)"
+fi
+REQ_LINE=$(grep -n 'creprc_write_all(pcbreq\[1\]' "$CREPRC_C" \
     | grep -vE '^[0-9]+:[[:space:]]*\*' | head -1 | cut -d: -f1)
 EXEC_LINE=$(grep -n 'execl(img_path' "$CREPRC_C" \
     | grep -vE '^[0-9]+:[[:space:]]*\*' | head -1 | cut -d: -f1)
-if [ -n "$EST_LINE" ] && [ -n "$EXEC_LINE" ] && [ "$EST_LINE" -lt "$EXEC_LINE" ]; then
-    echo "PASS: WALL-6 ordering holds -- vms_kif_establish_system() at line $EST_LINE precedes the image activation at line $EXEC_LINE (vms-d4ef; the VAX rail is the runtime proof)"
+if [ -n "$REQ_LINE" ] && [ -n "$EXEC_LINE" ] && [ "$REQ_LINE" -lt "$EXEC_LINE" ]; then
+    echo "PASS: WALL-6 ordering holds -- the PCB request at line $REQ_LINE precedes the image activation at line $EXEC_LINE (vms-d4ef; the VAX rail is the runtime proof)"
 else
     echo "FAIL: WALL-6 ordering violated in $CREPRC_C"
-    echo "      establish_system=${EST_LINE:-absent} image activation=${EXEC_LINE:-absent}"
-    echo "  -> the identity must be on the created process's fresh PCB BEFORE"
+    echo "      PCB request=${REQ_LINE:-absent} image activation=${EXEC_LINE:-absent}"
+    echo "  -> the identity must be on the created process's PCB BEFORE"
     echo "     LOGINOUT reads the World-denied SYS\$SYSTEM:SYSUAF.DAT. x86_64"
     echo "     hides this (root -> UIC group 0 reads SYSUAF anyway); the VAX"
     echo "     rail denies the read RMS\$_PRV and console login stops working."

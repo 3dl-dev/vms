@@ -61,6 +61,7 @@
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
 #include "ssdef.h"
+#include "ovmx_subprocess.h"   /* PROVISION is a subprocess the executive made (rd vms-1f8) */
 #include "dcdef.h"
 /* PID 1's identity is established THROUGH the executive, not declared. */
 #include "vms_kif.h"
@@ -1752,16 +1753,49 @@ static void run_startup(void)
         ovmx_exec_halt("SYS$SYSTEM:PROVISION.EXE is missing",
                        "the system process has no authorized identity");
 
-    pid_t pid = fork();
+    /*
+     * PID 1's SIGCHLD handler reaps ANY child (waitpid(-1, WNOHANG)) -- it is
+     * init, and orphans are reparented to it. Left enabled here it races this
+     * wait: PROVISION's SIGCHLD interrupts waitpid(pid), the handler reaps
+     * PROVISION, the restarted waitpid(pid) fails ECHILD, and the status read
+     * below is uninitialized -- a clean STARTUP then halts the boot as
+     * "%OVMX-F-EXECINIT, the startup process did not complete" (measured on
+     * NetBSD/vax: the wait status read was the child's own pid). So SIGCHLD is
+     * held while PROVISION runs; orphans that end meanwhile are reaped by the
+     * handler as soon as it is released. The hold covers this thread only, so
+     * PID 1's helper threads (the console/OPCOM bridges) are started with
+     * every signal blocked -- otherwise SIGCHLD is delivered to one of them and
+     * the reaper runs there, behind this hold (the NetBSD klog bridge did).
+     */
+    sigset_t chld, prev;
+    sigemptyset(&chld);
+    sigaddset(&chld, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &chld, &prev);
+
+    /* PROVISION runs as a subprocess of the boot task: the executive makes
+     * its PCB before it runs (rd vms-1f8 / vms-a2c). */
+    pid_t pid = ovmx_subprocess_fork(NULL, NULL);
     if (pid == 0) {
+        sigprocmask(SIG_SETMASK, &prev, NULL);
         execl(provision_path, "PROVISION", (char *)NULL);
         fprintf(stderr, "%%OVMX-E-NOIMG, cannot activate %s: %s\n",
                 VMS_PROVISION_PATH, strerror(errno));
         _exit(1);
     }
     if (pid > 0) {
-        int s;
-        waitpid(pid, &s, 0);
+        int s = 0;
+        pid_t w;
+        do { w = waitpid(pid, &s, 0); } while (w < 0 && errno == EINTR);
+        sigprocmask(SIG_SETMASK, &prev, NULL);
+        if (w != pid) {
+            /* The reason goes on the %OVMX-F- line itself: halt_now() can
+             * power off before a second console line drains. */
+            char what[200];
+            snprintf(what, sizeof what,
+                     "the startup process could not be waited for (pid %d: %s)",
+                     (int)pid, w < 0 ? strerror(errno) : "another task was returned");
+            ovmx_exec_halt(what, "SYS$SYSTEM:PROVISION.EXE's status was lost");
+        }
         /*
          * PROVISION.EXE powers the machine off itself on the conditions that
          * are fatal by design (no SYSTEM record, executive refusal), so
@@ -1772,6 +1806,8 @@ static void run_startup(void)
         if (!WIFEXITED(s) || WEXITSTATUS(s) != 0)
             ovmx_exec_halt("the startup process did not complete",
                            "SYS$SYSTEM:PROVISION.EXE failed");
+    } else {
+        sigprocmask(SIG_SETMASK, &prev, NULL);
     }
 }
 

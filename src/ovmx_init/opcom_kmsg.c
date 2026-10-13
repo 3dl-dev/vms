@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -356,7 +357,15 @@ void opcom_kmsg_start(void)
     /* Best-effort: a bridge that fails to start must never block or fail
      * boot -- Rule 9's fail-honest gate is /dev/vms (executive_attach()),
      * not this operator-visibility aid. */
+    /* The bridge takes no signals: PID 1's handlers (SIGCHLD's reaper above
+     * all) must run on PID 1's own thread, which can hold SIGCHLD while it
+     * waits for a child -- a signal this thread took would run the reaper
+     * behind that hold and steal the child's status (rd vms-a2c). */
+    sigset_t all, prev;
+    sigfillset(&all);
+    pthread_sigmask(SIG_BLOCK, &all, &prev);
     (void)pthread_create(&tid, &attr, opcom_kmsg_thread_main, NULL);
+    pthread_sigmask(SIG_SETMASK, &prev, NULL);
     pthread_attr_destroy(&attr);
 }
 

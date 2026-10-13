@@ -21,3 +21,23 @@ The topology is fire F1's: OVMXE (1030, EXPECTED_VOTES 1) founds alone, and VAX1
   OVMXE as a $CRELNM, and is answered.
 
 If G2 fails, the capture's `unans.py` names the next request the VAX waits on.
+
+## Fire F2 result (artifacts run 38350552165, 6f752786d)
+
+- G1 **held**. All 5 cat-0x0b op-0x04 a VAX sent OVMXE (VAX1 4, VAX2 1) were pulled and
+  answered 0x8b/0x04. OVMXE logged no unroutable frame and no "was not answered".
+- G2 **failed in part**. VAX2 finished startup (`job terminated`), which F1 never reached.
+  VAX1 stopped. Its DECnet start changed its station address (08002b390ec9 to aa0004000104),
+  and its next kind-6 MOUNT close to OVMXE drew a REQUEST DATA addressed to the OLD
+  station. Block frames were never ringed, so the lost frame left a sequence hole, the
+  circuit failed on TIMVCFAIL, and the close went unanswered. That is rd vms-c1d (PR #1669),
+  not a logical-name fault. 0 bugchecks.
+- G3 was not reached.
+
+Files: `f2-ovmx-first-cm.pcap` (cat 0x01/0x06/0x0b), `f2-cwlnm.pcap` (the logical-name
+traffic with its block transfers), `f2-*-console.log`.
+
+## Fire F3 (pod lab52dfc, build lab/int-94a = this branch + vms-c1d), registered before it runs
+
+The topology and the predictions are F2's: G1, G2 and G3. G2 additionally requires that VAX1's
+post-DECnet MOUNT close is answered.

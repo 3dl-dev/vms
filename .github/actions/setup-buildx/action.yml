@@ -48,6 +48,16 @@ runs:
            && docker buildx imagetools inspect "ghcr.io/${OWNER}/mirror/moby-buildkit@${digest}" >/dev/null 2>&1; then
           img="ghcr.io/${OWNER}/mirror/moby-buildkit@${digest}"
         fi
+        # Pull it now, retried, so the builder starts from a local image: a
+        # registry that answered the inspect above can still time out on the
+        # pull (ghcr.io i/o timeout, merge-queue run 38328033367). If the GHCR
+        # copy cannot be pulled, fall back to the public mirror.
+        pull() { for i in 1 2 3; do docker pull -q "$1" >/dev/null 2>&1 && return 0; sleep $((i * 10)); done; return 1; }
+        if ! pull "$img"; then
+          echo "::warning::could not pull $img -- falling back to the public mirror"
+          img="mirror.gcr.io/moby/buildkit:buildx-stable-1"
+          pull "$img" || echo "::warning::could not pre-pull $img either; setup-buildx will try"
+        fi
         echo "BuildKit image: $img"
         echo "image=$img" >> "$GITHUB_OUTPUT"
     - uses: docker/setup-buildx-action@v3

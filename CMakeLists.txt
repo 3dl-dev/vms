@@ -610,6 +610,19 @@ if(BUILD_TESTS)
         COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/gen_itemcodes.py --check)
     set_tests_properties(itemcodes_generated_current PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+    # rd vms-c38 / vms-21be: the golden-diff CLASSIFIER's own can-fail proof.
+    # tools/oracle/diff_surface.sh decides MATCH / MISSING / HOLLOW /
+    # ARTIFICE-TELL / FORMAT-DIVERGENT for every oracle surface, and its
+    # machine-masks carry the guardrail that a masked field means "this value
+    # varies", never "ignore this line". Its `selftest` drives each class and
+    # each guardrail on a crafted fixture -- buildless, so it belongs here. It
+    # was reachable only by hand before, which is how the CPU-MODEL mask could
+    # hardcode an English tail word (" Series"/" system") and red a correct
+    # model string without anything noticing.
+    add_test(NAME oracle_diff_surface_selftest
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/oracle/diff_surface.sh selftest)
+    set_tests_properties(oracle_diff_surface_selftest PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
     # rd vms-8d1: semantic oracle -- the buildless half (ratchet selftest, goldens
     # well formed + captured from the current spec, specs generate + compile).
     # The OVMX-vs-real-VMS diff itself runs on the booted runtime in CI's

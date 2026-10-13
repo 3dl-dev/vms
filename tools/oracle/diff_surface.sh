@@ -254,6 +254,32 @@ selftest() {
         echo "  FAIL: blank MP-state passed as MATCH -- '.+' guardrail broken (mask uses '.*'?) [$o]"; fails=$((fails+1)); fi
     MACHINE_MASK=''
 
+    # (v) GUARDRAIL 3, the CPU-MODEL mask (rd vms-21be). The model-identity line
+    #     "<node>, a|an <model>" carries a value that varies by MACHINE, tail word
+    #     and all: VAX V7.3 says "VAXserver 3900 Series", NetBSD/VAX's own
+    #     cpu_getmodel() says "MicroVAX 3800/3900", and OVMX on Linux says
+    #     "OVMX x86_64". The mask once required the line to end in " Series" or
+    #     " system" and so RED-ed two of those three correct strings. It is now
+    #     bounded by a NON-SPACE right after the article instead -- same guardrail,
+    #     no English tail word -- and these three cases hold it there: a model with
+    #     no tail word MATCHes, the article may be "a" or "an", and a HOLLOW
+    #     "<node>, a " still REDS.
+    printf '%s\n' '$ SHOW CPU' 'VAX#, a VAXserver #### Series' > "$tmp/gcpu"
+    printf '%s\n' '$ SHOW CPU' 'OVMX, an OVMX x#_#'            > "$tmp/cpu_notail"
+    printf '%s\n' '$ SHOW CPU' 'VAX#, a MicroVAX ####/####'    > "$tmp/cpu_vaxnb"
+    printf '%s\n' '$ SHOW CPU' 'OVMX, a '                      > "$tmp/cpu_blank"
+    MACHINE_MASK='s/^[A-Z0-9#]+, an? [^ ](.*[^ ])?$/<CPU-MODEL>/'
+    o="$(classify sfc "$tmp/cpu_notail" "$tmp/gcpu" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -eq 0 ]; then echo "  PASS: CPU-MODEL mask matches a model with NO 'Series'/'system' tail ('an OVMX x#_#' -> MATCH)"; else
+        echo "  FAIL: CPU-MODEL no-tail model not MATCH: rc=$rc [$o]"; fails=$((fails+1)); fi
+    o="$(classify sfc "$tmp/cpu_vaxnb" "$tmp/gcpu" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -eq 0 ]; then echo "  PASS: CPU-MODEL mask matches NetBSD/vax's own cpu_getmodel() form ('a MicroVAX ####/####' -> MATCH)"; else
+        echo "  FAIL: CPU-MODEL NetBSD/vax model not MATCH: rc=$rc [$o]"; fails=$((fails+1)); fi
+    o="$(classify sfc "$tmp/cpu_blank" "$tmp/gcpu" "${NORM[@]}")"; rc=$?
+    if [ "$rc" -ne 0 ]; then echo "  PASS: CPU-MODEL mask keeps a HOLLOW model RED ('OVMX, a ' with no model, rc=$rc)"; else
+        echo "  FAIL: hollow model passed as MATCH -- CPU-MODEL guardrail broken [$o]"; fails=$((fails+1)); fi
+    MACHINE_MASK=''
+
     echo "=== $( [ $fails -eq 0 ] && echo 'selftest OK' || echo "selftest FAILED ($fails)" ) ==="
     return $fails
 }

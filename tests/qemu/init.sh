@@ -19,6 +19,15 @@ mount -t devpts none /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || \
     mount -t devpts none /dev/pts 2>/dev/null
 [ -e /dev/pts/ptmx ] && ln -sf pts/ptmx /dev/ptmx 2>/dev/null
 
+# The boot staging tree as ovmx_init leaves it (rd vms-137e): /run/ovmx-boot
+# root 0755, and its per-process staging parent u/ sticky 1733, where a process
+# under its executive-given unprivileged uid makes its own 0700 directory
+# (ovmx_boot_stage_user_dir). This harness boots no ovmx_init, so it lays the
+# tree down itself, as the Alpha syssvc rig does.
+mkdir -p /run/ovmx-boot/u
+chmod 0755 /run/ovmx-boot
+chmod 1733 /run/ovmx-boot/u
+
 echo ""
 echo "=== OVMX Kernel Module Test Suite ==="
 echo "Kernel: $(uname -r) ($(uname -m))"

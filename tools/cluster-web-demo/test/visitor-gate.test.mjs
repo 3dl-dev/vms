@@ -476,22 +476,40 @@ test('a member real VAX that never offers Username: fails the run (rd vms-db1)',
   assert.equal(isCN3(R), true, 'membership alone reads CN=3');
   assert.equal(GATE.isPass(R), false, 'but the run fails: a visitor sees a dead console');
   assert.match(verdictOf(R),
-    /^CN=3 but NOT EVERY NODE AT DCL: VAXC never offered Username: \(last line "%STDRV-I-STARTUP, OpenVMS startup begun"\)/);
+    /^CN=3 but NOT EVERY NODE USABLE: VAXC never offered Username: \(last line "%STDRV-I-STARTUP, OpenVMS startup begun"\)/);
 });
 
-test('Username: alone is not enough: a logged-in DCL $ must follow', () => {
+test('the real VAX passes on offering Username:, and is never logged in to', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  for (const w of ['OVMXA', 'OVMXB']) {
+    observe(R, w, 'Username: ');
+    GATE.observeLogin(R, w, 400);
+    R.login_sent[w] = R.transcript[w].length;
+    observe(R, w, 'SYSTEM\nPassword:\n$ ');
+    GATE.observeLogin(R, w, 420);
+  }
+  observe(R, 'VAXC', 'Username: ');
+  GATE.observeLogin(R, 'VAXC', 600);
+  assert.equal(GATE.isPass(R), true, 'Username: on the VAX proves its startup completed');
+  assert.equal(verdictOf(R), 'CN=3');
+  assert.equal(GATE.loginAction(R, 'VAXC'), null, 'no login is attempted on the real VAX');
+  assert.ok(!GATE.LOGIN_NODES.includes('VAXC'));
+});
+
+test('on an OVMX node, Username: alone is not enough: a logged-in DCL $ must follow', () => {
   const R = cn3Observations();
   R.cn3 = true;
   loggedInEverywhere(R);
   const R2 = cn3Observations();
   R2.cn3 = true;
-  observe(R2, 'VAXC', 'Username: ');
-  GATE.observeLogin(R2, 'VAXC', 300);
-  R2.login_sent.VAXC = R2.transcript.VAXC.length;
-  observe(R2, 'VAXC', 'SYSTEM\nPassword:\n');
-  GATE.observeLogin(R2, 'VAXC', 900);
-  assert.equal(R2.dcl_at.VAXC, undefined);
-  assert.match(verdictOf(R2), /VAXC offered Username: at t=300s but never showed a DCL \$ after login/);
+  loggedInEverywhere(R2);
+  delete R2.dcl_at.OVMXB;
+  R2.login_sent.OVMXB = R2.transcript.OVMXB.length;
+  observe(R2, 'OVMXB', 'SYSTEM\nPassword:\n');
+  GATE.observeLogin(R2, 'OVMXB', 900);
+  assert.equal(R2.dcl_at.OVMXB, undefined);
+  assert.match(verdictOf(R2), /OVMXB offered Username: at t=540s but never showed a DCL \$ after login/);
   assert.equal(GATE.isPass(R), true);
 });
 
@@ -508,12 +526,12 @@ test('a refused login is reported as such, not as a hang', () => {
   const R = cn3Observations();
   R.cn3 = true;
   loggedInEverywhere(R);
-  delete R.dcl_at.VAXC;
-  R.login_sent.VAXC = R.transcript.VAXC.length;
-  observe(R, 'VAXC', 'User authorization failure\nUsername: ');
-  GATE.observeLogin(R, 'VAXC', 700);
-  assert.equal(R.login_failed.VAXC, true);
-  assert.match(verdictOf(R), /VAXC refused the login \(User authorization failure\)/);
+  delete R.dcl_at.OVMXB;
+  R.login_sent.OVMXB = R.transcript.OVMXB.length;
+  observe(R, 'OVMXB', 'User authorization failure\nUsername: ');
+  GATE.observeLogin(R, 'OVMXB', 700);
+  assert.equal(R.login_failed.OVMXB, true);
+  assert.match(verdictOf(R), /OVMXB refused the login \(User authorization failure\)/);
 });
 
 test('the bound is enforced: DCL reached too late fails', () => {
@@ -525,17 +543,23 @@ test('the bound is enforced: DCL reached too late fails', () => {
   assert.match(verdictOf(R), /reached DCL at t=2000s, past the 1500s bound/);
 });
 
-test('nothing is typed before the cluster forms; then wake until Username:, then log in', () => {
+test('nothing is typed before the cluster forms; then wake until Username:, then log in (OVMX only)', () => {
   const R = newObservations();
+  observe(R, 'OVMXB', 'booting\n');
   observe(R, 'VAXC', 'booting\n');
-  assert.equal(GATE.loginAction(R, 'VAXC'), null, 'membership forms with nobody typing');
+  assert.equal(GATE.loginAction(R, 'OVMXB'), null, 'membership forms with nobody typing');
+  assert.equal(GATE.loginAction(R, 'VAXC'), null);
   R.cn3 = true;
-  assert.equal(GATE.loginAction(R, 'VAXC'), 'wake', 'a VMS console offers Username: when asked');
+  assert.equal(GATE.loginAction(R, 'OVMXB'), 'wake', 'a VMS console offers Username: when asked');
+  assert.equal(GATE.loginAction(R, 'VAXC'), 'wake');
+  observe(R, 'OVMXB', 'Username: ');
+  GATE.observeLogin(R, 'OVMXB', 50);
   observe(R, 'VAXC', 'Username: ');
   GATE.observeLogin(R, 'VAXC', 50);
-  assert.equal(GATE.loginAction(R, 'VAXC'), 'login');
-  R.login_sent.VAXC = R.transcript.VAXC.length;
-  assert.equal(GATE.loginAction(R, 'VAXC'), null, 'one login, not a stream of them');
+  assert.equal(GATE.loginAction(R, 'OVMXB'), 'login');
+  assert.equal(GATE.loginAction(R, 'VAXC'), null, 'the real VAX is done once it offers Username:');
+  R.login_sent.OVMXB = R.transcript.OVMXB.length;
+  assert.equal(GATE.loginAction(R, 'OVMXB'), null, 'one login, not a stream of them');
 });
 
 test('the matrix boots Node C after an OVMX node is up (rd vms-db1)', () => {

@@ -2721,8 +2721,9 @@ apply_edit() {
         sed -i 's|if ((st \& 1u) == 0u) {|if (0 \&\& (st \& 1u) == 0u) { /* NEGCTL join-lnm-answered-unapplied */|' "$_file";;
 
     advertise-relay-empty-cell)
-        # `= join_h_relay_if_member,` is unique in this file.
-        sed -i 's|^		\[CNXMAN_EV_RX_TR_RELAY\]  = join_h_relay_if_member,$|		/* NEGCTL advertise-relay-empty-cell */|' "$_file";;
+        # Inside join_h_relay_if_member() only: its member gate always refuses,
+        # which is the empty cell's behaviour with the handler still referenced.
+        sed -i '/^static enum cnxman_join_rx join_h_relay_if_member(/,/^}/ s|if (!join_node_already_member(j)) {|if (1) { /* NEGCTL advertise-relay-empty-cell */|' "$_file";;
 
     coord-own-class-unrecorded)
         # `c->cl->club.own_tr_class = tr_class;` is unique in this file.

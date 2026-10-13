@@ -59,6 +59,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include "ovmx_boot.h"
 #include "kif_transport.h"   /* the executive transport seam (rd vms-bbde) */
 #include "ovmx_layout.h"          /* VMS_OPERATOR_LOG */
+#include "ovmx_console.h"         /* OVMX_CONSOLE_LINUX_PATH: OPA0:'s node (rd vms-137e) */
 #include "vmsfs/filespec.h"       /* vmsfs_to_linux_path for OPERATOR.LOG */
 
 #include <sys/types.h>
@@ -622,6 +623,18 @@ int ovmx_boot_prepare_stage_dir(const char *dir)
         return -1;
     if (chmod(OVMX_BOOT_STAGE_USERS_DIR, 01733) != 0)
         return -1;
+    /* OPA0:'s node (OVMX_CONSOLE_LINUX_PATH, rd vms-137e): the console device,
+     * 0600 root, in this tmpfs, so PROVISION can hand it to the startup
+     * identity -- /dev/console sits on the root file system, read-only on a
+     * VAX, where its owner cannot change. */
+    {
+        struct stat cst;
+        if (stat("/dev/console", &cst) != 0 || !S_ISCHR(cst.st_mode))
+            return -1;
+        if (mknod(OVMX_CONSOLE_LINUX_PATH, S_IFCHR | 0600, cst.st_rdev) != 0 &&
+            errno != EEXIST)
+            return -1;
+    }
 
 
     /* The executive's own directory of installed-image copies (rd vms-220):

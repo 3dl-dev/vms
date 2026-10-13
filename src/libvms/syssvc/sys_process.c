@@ -50,10 +50,10 @@
  *     vms-3e9 adds the SESSION-CREATION mode on the same executive footing:
  *     PRC$M_INTER binds the created process to a terminal DEVICE the executive
  *     records ($ASSIGN + VMS_IOCTL_SETTERM, so $GETJPI/$GETDVI from ANOTHER
- *     process read the binding), and PRC$M_LOGINOUT establishes the created
- *     process's system identity through the privilege-gated
- *     vms_ioctl_establish_system() -- OVMX's stand-in for an INSTALLed
- *     /PRIVILEGED LOGINOUT.EXE -- so no caller above the VMS layer forks,
+ *     process read the binding), and PRC$M_LOGINOUT gives the created process
+ *     its creator's identity on a creator-made PCB -- OVMX's stand-in, until
+ *     rd vms-7c64, for an INSTALLed /PRIVILEGED LOGINOUT.EXE -- so no caller
+ *     above the VMS layer forks,
  *     execs, opens a terminal or forges an identity to start a login session.
  * OVMX-LOCAL: sys$creprc -- the child's default directory and quotas are still
  *     copied only into the child's process-local PCB; no executive row records
@@ -1003,20 +1003,23 @@ static void creprc_define_sysinput(const char *spec)
  *                  the keystone that lets the creator (JOB_CONTROL now,
  *                  NETACP later) forge no identity of its own (design §2).
  *                  OVMX has no INSTALL/PRIVILEGED image-activation mechanism
- *                  (src/install/install.c registers known images; it carries
- *                  no privilege set), so this flag's stand-in is the
- *                  privilege-GATED executive primitive the console login
- *                  already used: vms_kif_establish_system(). It is stated as
- *                  OVMX's own mechanism (Rule 8), not claimed as VMS's, and
- *                  it fabricates nothing -- the executive refuses a caller
- *                  without real host privilege and the SYSUAF read then fails
- *                  honestly (INV-6). It is issued FIRST in the created
- *                  process, before the terminal binding and before the image
- *                  is activated, which is the WALL-6 ordering guard
- *                  (vms-d4ef): the identity must be on the fresh PCB BEFORE
- *                  LOGINOUT reads the World-denied SYSUAF, or the VAX rail --
- *                  which has no root->group-0 crutch to hide behind -- denies
- *                  the read RMS$_PRV. LOGINOUT then RE-PERSONAS the process
+ *                  yet (rd vms-7c64), so this flag's stand-in is $CREPRC's
+ *                  default: the session starts with its CREATOR's identity,
+ *                  on the PCB the creator makes for it (VMS_IOCTL_CREPRC_PCB)
+ *                  before its first instruction. JOB_CONTROL and the DECnet
+ *                  daemon are SYSTEM, so the session is too. (It used to call
+ *                  vms_kif_establish_system() itself; the executive now
+ *                  constructs that identity once per boot, for the boot task
+ *                  only -- rd vms-a2c.) It is stated as OVMX's own mechanism
+ *                  (Rule 8) and fabricates nothing: a creator with no
+ *                  identity to lend yields a session whose SYSUAF read fails
+ *                  honestly (INV-6). The PCB exists before the terminal
+ *                  binding and before the image is activated, which is the
+ *                  WALL-6 ordering guard (vms-d4ef): the identity must be on
+ *                  the PCB BEFORE LOGINOUT reads the World-denied SYSUAF, or
+ *                  the VAX rail -- which has no root->group-0 crutch to hide
+ *                  behind -- denies the read RMS$_PRV. LOGINOUT then
+ *                  RE-PERSONAS the process
  *                  after it authenticates, through the single guarded persona
  *                  primitive (vms_ioctl_setident, "reserved for LOGINOUT").
  *
@@ -1260,7 +1263,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * is forked: refused (SS$_NOPRIV: no SETPRV and not a subset of its own
      * identity) -> nothing is created. The grandchild claims it as its first
      * executive call (vms_kif_register_detached). Same engage rule as the
-     * child computes below; LOGINOUT sessions establish their own identity.
+     * child computes below; a LOGINOUT session takes the same path (rd vms-a2c).
      */
     /*
      * SYS$INPUT named by a VMS DEVICE OR FILE (rd vms-003b): decided HERE, in the
@@ -1286,7 +1289,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         }
     }
 
-    const int use_ticket = detached && !loginout && child_username[0] != 0;
+    const int use_ticket = detached && child_username[0] != 0;
 
     int namefd[2] = { -1, -1 };
     if (pipe(namefd) < 0)
@@ -1463,15 +1466,21 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         int engage = detached ? (child_username[0] != 0 || override_asked)
                               : override_asked;
         /*
-         * PRC$M_LOGINOUT: THE CREATOR STAMPS NO IDENTITY AT ALL (design §2).
-         * The whole point of the installed-privileged-LOGINOUT model is that
-         * the authority to hold a system identity belongs to the IMAGE, not
-         * to whoever created the process -- so the creator-computed
-         * username/UIC/privilege stamp is skipped here and the created
-         * process establishes the identity itself, below, through the
-         * privilege-gated executive primitive. A creator with no identity to
-         * lend (a future NETACP that is not SYSTEM) therefore creates a
-         * working login session exactly as JOB_CONTROL does.
+         * PRC$M_LOGINOUT: THE SESSION STARTS AS ITS CREATOR (rd vms-a2c).
+         * The executive constructs the SYSTEM identity once per boot, for
+         * the boot task, and refuses every later ESTABLISH_SYSTEM -- so a
+         * login session can no longer make that call itself, as it did
+         * before (design record §2). It gets $CREPRC's default instead: its
+         * creator's user name, UIC and privileges, on the PCB the creator
+         * makes for it (use_ticket below). JOB_CONTROL and the DECnet
+         * daemon are SYSTEM, created by STARTUP, so the session holds the
+         * same identity it established for itself before, and LOGINOUT
+         * re-personas it to the authenticated user. A creator with no
+         * identity to lend creates a session that cannot read SYSUAF and is
+         * refused honestly. The design's endpoint -- the authority to read
+         * SYSUAF belongs to the LOGINOUT IMAGE -- is INSTALL /PRIVILEGED
+         * (rd vms-7c64); until it lands, the creator's identity is the
+         * authority.
          */
         if (loginout)
             engage = 0;
@@ -1479,30 +1488,25 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         rep.status = SS$_NORMAL;
 
         /*
-         * WALL-6 (vms-d4ef, preserved verbatim in ORDER as well as in
-         * substance): this runs FIRST in the created process -- before the
-         * process is named, before the terminal is bound, and before the
-         * image is activated -- so the identity is on the fresh PCB BEFORE
+         * WALL-6 (vms-d4ef): a login session's identity is on its PCB BEFORE
          * LOGINOUT reads the World-denied SYS$SYSTEM:SYSUAF.DAT (fh2_fileprot
          * 0xFF88; acp_check_access() grants that read only to a caller in the
-         * SYSTEM protection category). A FRESH registration derives its UIC
-         * from the substrate's credentials: on the QEMU/Linux runtime those
-         * are root -> group 0 <= MAXSYSGROUP, which reads SYSUAF by luck of
-         * the environment; on NetBSD/VAX they are a non-system group and the
-         * ACP denies the read (RMS$_PRV, surfacing as LOGINOUT's clean "User
-         * authorization failure"). Moving this call after the SYSUAF read --
-         * or dropping it -- is an ASYMMETRIC-ARCH regression that x86_64
-         * cannot see, which is why the acceptance for it runs on the VAX rail.
+         * SYSTEM protection category). Since rd vms-a2c that identity is the
+         * creator's, on the PCB the creator makes below before this task does
+         * anything else -- before it is named, before the terminal is bound,
+         * and before the image is activated. A FRESH registration would derive
+         * its UIC from the substrate's credentials: root -> group 0 on the
+         * QEMU/Linux runtime, which reads SYSUAF by luck of the environment,
+         * and a non-system group on NetBSD/VAX, where the ACP denies the read
+         * (RMS$_PRV, LOGINOUT's "User authorization failure"). Losing the
+         * creator-made PCB for a session is an ASYMMETRIC-ARCH regression that
+         * x86_64 cannot see, which is why its acceptance runs on the VAX rail.
          *
-         * INV-6 / fail-honest: vms_ioctl_establish_system() is gated on the
-         * caller's real host privilege. If the executive refuses, or is
-         * absent, the process is left non-system and the SYSUAF read fails
-         * honestly -- nothing here fabricates the identity. The creation is
-         * NOT failed for it (that would surrender the console for a condition
-         * LOGINOUT reports perfectly well itself), but the status is reported
-         * so a regression is never silent: the same diagnostic the console
-         * login child printed before this item moved the sequence here, under
-         * the OVMX facility because it is OVMX's own condition, not a VMS one.
+         * INV-6 / fail-honest: a session whose creator has no identity to lend,
+         * or whose PCB the executive would not make, is left non-system and its
+         * SYSUAF read fails honestly -- nothing here fabricates the identity.
+         * The creation is not failed for it (LOGINOUT reports that perfectly
+         * well itself), but it is reported so a regression is never silent.
          */
         /* THE PCB, FROM THE CREATOR (rd vms-c43): a subprocess, or a detached
          * process with a creator-given identity, asks its creator to create
@@ -1520,15 +1524,12 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         }
         close(pcbreq[1]);
         close(pcbgo[0]);
-        if (loginout) {
-            uint32_t est = vms_kif_establish_system();
-            if (!(est & 1))
-                fprintf(stderr,
-                        "%%OVMX-W-NOSYSID, login session could not establish "
-                        "its SYSTEM identity (status %08X); "
-                        "SYS$SYSTEM:SYSUAF.DAT read will be refused\n",
-                        (unsigned)est);
-        }
+        if (loginout && (!use_ticket || !(pcb_status & 1)))
+            fprintf(stderr,
+                    "%%OVMX-W-NOSYSID, login session was not created with its "
+                    "creator's identity (status %08X); "
+                    "SYS$SYSTEM:SYSUAF.DAT read will be refused\n",
+                    (unsigned)pcb_status);
 
         if (engage && child_username[0] == 0) {
             /* Override asked with no user name to stamp it under: refuse

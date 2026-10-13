@@ -40,6 +40,9 @@
 #include <sys/reboot.h>
 #include <linux/reboot.h>
 
+#include "vms_kif.h"
+#include "ovmx_subprocess.h"
+
 static int load_module(const char *path)
 {
     int fd = open(path, O_RDONLY);
@@ -77,8 +80,13 @@ int main(void)
     printf("XPROV: exec %s\n", prov);
     fflush(stdout);
 
+    /* As ovmx_init does (rd vms-a2c): the boot task becomes SYSTEM once, then
+     * PROVISION is its subprocess and gets that identity from it. */
+    uint32_t est = vms_kif_establish_system();
+    printf("XPROV: ESTABLISH_SYSTEM status=%08X\n", (unsigned)est);
+
     signal(SIGALRM, on_alarm);
-    pid_t pid = fork();
+    pid_t pid = ovmx_subprocess_fork(NULL, NULL);
     if (pid == 0) {
         execl(prov, "PROVISION", (char *)NULL);
         printf("XPROV: execl failed: %s\n", strerror(errno));

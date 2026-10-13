@@ -19,11 +19,12 @@
  * the suite itself orphans still goes to init.
  *
  * Protocol (init.sh holds both FIFOs open read-write):
- *   control FIFO, one line per suite:   RUN <program> <output-path>
+ *   control FIFO, one line per suite:   RUN <program> <output-path> [<arg>...]
  *   reply FIFO, two lines per suite:    PID <substrate-pid> <CREPRC_PCB status>
  *                                       RC <exit status as the shell reports it>
  * The program's stdout and stderr go to <output-path> (init.sh's per-suite
- * FIFO). A program whose PCB could not be made is not run: it is killed while
+ * FIFO, or a file it creates); the words after it are the program's arguments
+ * (the corpus runtime's <program>.args). A program whose PCB could not be made is not run: it is killed while
  * held and reported with its status, so a suite never runs as a process the
  * executive did not create.
  *
@@ -76,7 +77,9 @@ static int read_line(int fd, char *buf, size_t sz)
 
 static struct vms_procinfo g_self;     /* the boot task's own (SYSTEM) row */
 
-static void run_one(int reply, const char *prog, const char *out)
+#define MAX_ARGS 32
+
+static void run_one(int reply, const char *prog, const char *out, char *const *argv)
 {
     char msg[160];
     int gp[2], hold[2];
@@ -92,7 +95,7 @@ static void run_one(int reply, const char *prog, const char *out)
         close(gp[0]); close(hold[1]);
         pid_t g = fork();
         if (g == 0) {
-            int fd = open(out, O_WRONLY);
+            int fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             close(gp[1]);
             if (fd >= 0) {
                 dup2(fd, STDOUT_FILENO);
@@ -105,7 +108,7 @@ static void run_one(int reply, const char *prog, const char *out)
             close(hold[0]);
             if (b != 'g')
                 _exit(125);
-            execl(prog, prog, (char *)NULL);
+            execv(prog, argv);
             _exit(127);
         }
         int32_t gpid = (int32_t)g;
@@ -162,7 +165,9 @@ int main(int argc, char **argv)
 
     /* THE BOOT TASK BECOMES SYSTEM, once (the bootstrap exception of design
      * note 3.1: the one process the executive does not create through a
-     * creator). Today its row comes from registration on open; vms-a2c makes
+     * creator). The executive refuses any later ESTABLISH_SYSTEM (rd vms-a2c),
+     * so every suite and corpus program gets SYSTEM from this task instead.
+     * Today its row comes from registration on open; vms-2a5 makes
      * ESTABLISH_SYSTEM create it. */
     if (vms_kif_open() < 0) {
         fprintf(stderr, "%%OVMX-F-NOEXEC, boot task: /dev/vms not available\n");
@@ -199,7 +204,17 @@ int main(int argc, char **argv)
         if (!out)
             continue;
         *out++ = '\0';
-        run_one(reply, prog, out);
+        char *argv_run[MAX_ARGS + 2];
+        int n = 0;
+        argv_run[n++] = prog;
+        char *a = strchr(out, ' ');
+        if (a) {
+            *a++ = '\0';
+            for (char *w = strtok(a, " "); w && n < MAX_ARGS + 1; w = strtok(NULL, " "))
+                argv_run[n++] = w;
+        }
+        argv_run[n] = NULL;
+        run_one(reply, prog, out, argv_run);
     }
     return 0;
 }

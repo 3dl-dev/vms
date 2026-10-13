@@ -1,0 +1,27 @@
+# dcl-pipe-segment-not-created -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL PIPE segments as subprocesses DCL creates (cmd_pipe -> dcl_pcb_hold_release_kind, VMS_IOCTL_CREPRC_PCB SUBPROCESS, rd vms-1f8)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_dcl_pipe";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cmd_pipe asks for a PCB of an invalid kind, so the executive refuses it and the segment runs as a task no one created: it registers itself and derives its privileges afresh, so a privilege DCL gave up (WORLD) is back in the segment. Gone after apply.";;
+        require_fail) cat <<'EOF'
+the segment carries DCL's CURRENT privileges -- WORLD, which DCL gave up, is gone there too
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^                                            VMS_CREPRC_PCB_SUBPROCESS);$|                                            0xFFu); /* NEGCTL dcl-pipe-segment-not-created */|' "$_file"
+    :
+}

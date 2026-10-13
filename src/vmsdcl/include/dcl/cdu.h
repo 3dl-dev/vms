@@ -17,6 +17,9 @@
 #define CDU_F_QUALIFIER  0x02  /* Has qualifiers */
 #define CDU_F_PARAM      0x04  /* Takes parameters */
 #define CDU_F_NOPREFIX   0x08  /* Don't require $ prefix */
+#define CDU_F_COMMANDS   0x10  /* The rest of the line is command(s) run elsewhere
+                                * (PIPE): its qualifiers belong to THOSE
+                                * commands, so the verb validates none (rd vms-1f8) */
 
 /* Forward declaration */
 struct dcl_command;

@@ -1606,7 +1606,8 @@ int dcl_execute_command(struct dcl_command *cmd)
          * %DCL-W-IVQUAL (or %DCL-W-IVKEYW for a bad keyword) instead of being
          * silently accepted. For verbs not yet retrofit with a table
          * (verb->quals == NULL) this returns SS$_NORMAL and nothing changes. */
-        int qstatus = dcl_validate_qualifiers(verb, cmd);
+        int qstatus = (verb->flags & CDU_F_COMMANDS) ? SS$_NORMAL
+                                                     : dcl_validate_qualifiers(verb, cmd);
         if (qstatus != SS$_NORMAL) {
             dcl_set_status(ctx, qstatus);
             return qstatus;

@@ -495,7 +495,7 @@ static struct dcl_verb builtin_verbs[] = {
       "Phone utility for interactive conversation", q_none },
     { "PING",        cmd_ping,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Send ICMP echo requests to a host (over TCP/IP Services BGn:)", q_ping },
-    { "PIPE",        cmd_pipe,        CDU_F_ABBREV | CDU_F_PARAM, 3,
+    { "PIPE",        cmd_pipe,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_COMMANDS, 3,
       "Execute a DCL pipeline (cmd1 | cmd2 | ...)", q_none },
     { "PRINT",       cmd_print,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Queue a file for printing", q_print },

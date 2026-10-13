@@ -244,7 +244,8 @@ join-k5-close-withheld
 csb-0b01-answer-ignores-join-order
 guard-ignores-category-0b
 join-lnm-answered-unapplied
-join-lnm-db-not-applied"
+join-lnm-db-not-applied
+pe-blk-frame-unringed"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -817,6 +818,7 @@ EOF
         why)          echo "every block frame leaves with the message opcode 0x02 the sequenced stamp writes, so a real VMS port reads a REQUEST DATA or SEND DATA as an SCS message with a garbage envelope -- a frame class no real node ever sent (1,217,539 of 1,217,539 opcode-0x02 frames carry the SCS format word).";;
         require_fail) cat <<'EOF'
 *** a REQUEST DATA carries opcode 0x08 (2,759/2,759) ***
+opcode 0x08 on the first send
 *** every earlier one is 0x0c (39 + 2,758 real) ***
 *** the last answer frame is 0x0d ***
   and it is 0x0d
@@ -1073,6 +1075,23 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** acking the peer's 0x0b/0x06 (its send 4) goes out ***
   nothing refused
+EOF
+                      ;;
+        esac;;
+
+    pe-blk-frame-unringed)
+        case "$_f" in
+        facility)     echo "a block-transfer frame that fits a ring slot is held for go-back-N (rd vms-c1d), so a lost REQUEST DATA is sent again instead of leaving a sequence hole";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_block";;
+        isolation)    echo "isolated";;
+        why)          echo "blk_stamp_and_send() never takes a ring entry again, so every block frame goes out unringed: a REQUEST DATA lost on the wire (lab52dfb: sent to a VAX's old DECnet station address) leaves a hole the peer never moves past, and the circuit breaks on TIMVCFAIL.";;
+        require_fail) hd_lines <<'EOF'
+*** and it holds a ring entry ***
+counted ringed
+not unringed
+*** it went out again ***
+  marked as a retransmission (0x7b)
 EOF
                       ;;
         esac;;
@@ -2643,6 +2662,10 @@ apply_edit() {
     guard-ignores-category-0b)
         # `	case 0x0bu:` is unique in this file.
         sed -i 's|^	case 0x0bu:$|	case 0x7fu: /* NEGCTL guard-ignores-category-0b */|' "$_file";;
+
+    pe-blk-frame-unringed)
+        # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.
+        sed -i 's|if (op != 0u \&\& total <= PE_VC_FRAME_MAX)|if (0 \&\& op != 0u \&\& total <= PE_VC_FRAME_MAX) /* NEGCTL pe-blk-frame-unringed */|' "$_file";;
 
     join-k5-close-withheld)
         # `d.kind == (uint8_t)VMS_CM_CLOSE_KIND_K5) &&` is unique in the file.

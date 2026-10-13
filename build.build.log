@@ -2,3 +2,7 @@
 [  0%] Built target cluster_host_codec
 [ 50%] Built target cluster_host_cnxman
 [100%] Built target test_cnxman_join
+Built target cluster_host_fixture
+Built target cluster_host_codec
+Built target cluster_host_pe
+Built target test_pe_block

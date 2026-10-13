@@ -1087,7 +1087,10 @@ EOF
         why)          echo "blk_stamp_and_send() never takes a ring entry again, so every block frame goes out unringed: a REQUEST DATA lost on the wire (lab52dfb: sent to a VAX's old DECnet station address) leaves a hole the peer never moves past, and the circuit breaks on TIMVCFAIL.";;
         require_fail) hd_lines <<'EOF'
 *** and it holds a ring entry ***
+counted ringed
+not unringed
 *** it went out again ***
+  marked as a retransmission (0x7b)
 EOF
                       ;;
         esac;;

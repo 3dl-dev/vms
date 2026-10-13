@@ -56,3 +56,23 @@ The topology was OVMX first: OVMXE founded alone, and VAX1 and VAX2 booted 300 s
   "FROM_VAX1") and was answered 2 ms later.
 
 Files: `f3-ovmx-first-cm.pcap`, `f3-cwlnm.pcap`, `f3-*-console.log`.
+
+## Fire G (pod lab94ag, build lab/int-94a with the database pull), registered before it runs
+
+The topology is VAX first. VAX1 and VAX2 (golden V7.3) form, and on VAX1
+`DEFINE/TABLE=LNM$SYSCLUSTER OVMX_G1 "VAL_A","VAL_B"` and
+`DEFINE/TABLE=LNM$SYSCLUSTER/EXECUTIVE_MODE OVMX_G2 "VAL_C"` are typed. Then OVMXE boots
+and joins (EXPECTED_VOTES 3).
+
+- H1: once a member, OVMXE sends exactly one 0x0b/0x05, to VAX1 (the lowest SCSSYSTEMID,
+  1025). VAX1 answers 0x8b/0x05 and pushes 0x0b/0x06. OVMXE REQUEST DATAs it and answers
+  0x8b/0x04, logging no "was not answered".
+- H2: on OVMXE, `SHOW LOGICAL/TABLE=LNM$SYSCLUSTER` lists OVMX_G1 = ("VAL_A","VAL_B")
+  [super] and OVMX_G2 = "VAL_C" [exec]. These are names OVMX never saw propagated one by
+  one, only in the pushed database.
+- H3: a third `DEFINE/TABLE=LNM$SYSCLUSTER OVMX_G3 "LATE"` on VAX1 after OVMXE joined
+  reaches OVMXE as a 0b/04 and shows up in the same listing.
+- H4: on OVMXE, `DEFINE/TABLE=LNM$SYSCLUSTER OVMX_G4 "X"` is refused with
+  %SYSTEM-F-UNSUPPORTED, because origination is not built and VAX1 must not diverge.
+  VAX1 never sees an OVMX_G4.
+- H5: 0 bugchecks, CN = 3 on VAX1.

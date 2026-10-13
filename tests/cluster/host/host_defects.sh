@@ -867,6 +867,8 @@ EOF
 a stray second 0x0f answers nothing
   and answered the pre-vms-1f64 way
 then the cat-0x86 goes
+*** it is NOT withheld (the startup hang) ***
+*** a kind-5 close is NOT withheld ***
 EOF
                       ;;
         esac;;

@@ -737,6 +737,35 @@ static void barrier_h_go(struct cnxman_barrier *b, const struct barrier_msg *m)
 		return;
 	}
 
+	/*
+	 * A MERGE REBUILD HAS NO BARRIER (rd vms-6e3). In every transition in
+	 * the capture library whose open carried REBUILD = 1 (a zero-LOCKDIRWT
+	 * joiner among nonzero ones), no real VAX participant sent a single
+	 * op 0x0b after the GO (cn3-achieved 0104, mount-type-over-mscp 0104,
+	 * order1-vax-first 0104), and the real coordinator released nothing:
+	 * it acked an OVMX participant's step 1 with body[18] = 0 and never
+	 * sent 0x0c (7 of 7 merges: cn3-achieved, order1, mount-type, run-fire
+	 * e09d, o1, r20, g1). Every REBUILD = 3 transition ran all twelve
+	 * steps. A participant that started a barrier here waited forever for
+	 * release #1 with the transition still active -- and then backed off
+	 * every later membership request (e09a: OVMXE never answered OVMXB).
+	 * The transition is complete at the GO.
+	 */
+	if (b->open_seen && b->open_rebuild == VMS_CM_REBUILD_MERGE) {
+		/* Not `commits` (that is op-0x0c #12, which a merge never
+		 * sends); the phase-2 commit above is the membership fact. */
+		b->merges_completed++;
+		b->state = (uint8_t)CNXMAN_BARRIER_COMPLETE;
+		b->open_seen = 0u;
+		b->cl->club.transition_active = 0u;
+		b->cl->club.reformations++;
+		b->transitions_completed++;
+		barrier_dlm_end(b, 1);
+		barrier_phase1_clear(b);
+		barrier_log(b, "%CNXMAN, completed VAXcluster state transition");
+		return;
+	}
+
 	b->state = (uint8_t)CNXMAN_BARRIER_STEP;
 	barrier_send_step(b, 1u);
 	b->cl->club.barrier_step = b->step;

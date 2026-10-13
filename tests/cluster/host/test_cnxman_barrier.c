@@ -1067,6 +1067,53 @@ static void test_class_depart_starts_no_barrier(void)
 		 "and Phase 2 still commits: a departure changes membership");
 }
 
+/*
+ * rd vms-6e3: an ADD whose open carries REBUILD = 1 (MERGE) runs no barrier.
+ * No real participant steps in one and no real coordinator releases one (7 of
+ * 7 merges in the library); an OVMX participant that sent step 1 waited for a
+ * release that never came, with the transition still active. Control: the
+ * same ADD with REBUILD = 3 starts the twelve steps.
+ */
+static void merge_case(uint8_t rebuild)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n;
+
+	bed_init();
+	n = mk_open_add(f, 0x21u, 0x03u);
+	f[VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_REBUILD] = rebuild;
+	(void)feed(f, n);
+	g.n_sent = 0;
+	(void)feed(f, mk_go(f, 0x21u, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+}
+
+static void test_merge_rebuild_starts_no_barrier(void)
+{
+	printf("[barrier] a MERGE rebuild (open body[24] = 1) starts no "
+	       "barrier (rd vms-6e3)\n");
+	merge_case(VMS_CM_REBUILD_MERGE);
+	/* negctl: barrier-merge-runs-steps */
+	ct_check_eq_u32(g.b.steps_sent, 0, "no op-0x0b is sent");
+	ct_check_eq_u32(g.n_sent, 0, "nothing goes out at the GO");
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_COMPLETE,
+		 "the transition is complete at the GO");
+	ct_check_eq_u32(g.cl.club.transition_active, 0,
+			"*** and the transition is no longer active: the "
+			"coordinator lock is free for the next joiner ***");
+	ct_check_eq_u32(g.b.merges_completed, 1, "counted as a merge");
+	ct_check_eq_u32(g.b.commits, 0,
+			"not counted as an op-0x0c #12 commit");
+	ct_check(cnxman_barrier_phase2_committed(&g.b),
+		 "Phase 2 committed at the GO");
+
+	merge_case(VMS_CM_REBUILD_DIRECTORY);
+	ct_check_eq_u32(g.b.steps_sent, 1,
+			"CONTROL: a directory rebuild sends step 1");
+	ct_check_eq_u32(g.cl.club.transition_active, 1,
+			"CONTROL: and its transition stays active");
+	ct_check_eq_u32(g.b.merges_completed, 0, "CONTROL: no merge");
+}
+
 /* The class-0x03 extra step, op-0x0f: answered, and it moves nothing. */
 static void test_op0f_extra_step(void)
 {
@@ -1582,6 +1629,7 @@ int main(void)
 	test_f297_open_teaches_the_cluster_facts();
 	test_f297_removal_rederives_the_pair();
 	test_class_depart_starts_no_barrier();
+	test_merge_rebuild_starts_no_barrier();
 	test_op0f_extra_step();
 	test_bitmap_popcount_and_slots();
 	test_bitmap_bit0_is_instrumented();

@@ -1063,6 +1063,9 @@ every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
   body[20:24]: the epoch, LE u32
 body[20:24] is OUR epoch, not the coordinator's
 the relay is answered, on the member's new connection
+*** the relay is answered, so the admission can go on ***
+body[17] is the class this node drove, as a real VAX coordinator's answer carries
+*** the founder answers the relay from [ADVERTISE] ***
 EOF
                       ;;
         esac;;

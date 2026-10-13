@@ -159,3 +159,18 @@ DC2:
 - Node C is VAX2 (root SYS1, golden parameters), booted by `oracle_stage.sh node vax2` after
   OVMXA has founded and OVMXB has joined.
 - L1 to L4 stand as registered, with VAX2 in place of VAX1.
+
+## DC2 result (pod labdemo2, lab/int-94c e64baabb8)
+
+VAX1 was halted at `sim>` during its ROM boot. OVMXA founded, and OVMXB joined with OVMXA
+coordinating; SHOW CLUSTER on OVMXB listed both as MEMBER. Then VAX2 (Node C) booted.
+
+- L1 **FAILED**. VAX2 opened connections to both OVMX nodes and sent its membership request
+  (01/02) to OVMXB. OVMXB, as coordinator, relayed it to OVMXA (01/12, 08:10:53). OVMXA never
+  answered, so OVMXB never proposed the addition. VAX2 kept sending "membership request to
+  system OVMXB" (63 times in 12 minutes) and was never admitted. There was no bugcheck.
+  Cause: OVMXA had only ever coordinated, never received a transition open, so it held no
+  transition class to answer the relay with (rd vms-6ec). `dc2-cat01.pcap` has every cat-0x01
+  frame.
+- L2, L3 and L4 were not reached. VAX2 sent no cat-0x0b, and no frame went to it that the
+  gate does not cover.

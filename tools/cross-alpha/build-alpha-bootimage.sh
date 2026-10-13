@@ -24,8 +24,8 @@
 #                              is unreliable, so we bake it, same as
 #                              boot-vmsko-qemu-alpha.sh).  The initramfs is the
 #                              bootstrap-only slim image: /init = STARTUP.EXE,
-#                              vms.ko, minimal SYSMGR/SYSUAF config,
-#                              vms_mount_helper -- exactly Dockerfile.bootable's
+#                              vms.ko, minimal SYSMGR/SYSUAF config --
+#                              exactly Dockerfile.bootable's
 #                              initramfs-slim, cross-built for Alpha.
 #   imgact-proof/           -- IMGACT.EXE(alpha) + a VMS-native ET_DYN Alpha
 #                              image (PT_INTERP=IMGACT.EXE, DT_NEEDED shareable)
@@ -385,8 +385,8 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
 
     #########################################################################
     # 3. Bootstrap initramfs -- Dockerfile.bootable initramfs-slim for Alpha:
-    #    /init = STARTUP.EXE, /lib/modules/vms.ko, /sbin/
-    #    vms_mount_helper, minimal SYSUAF + SYSMGR config.  The full system
+    #    /init = STARTUP.EXE, /lib/modules/vms.ko, minimal SYSUAF + SYSMGR
+    #    config.  The full system
     #    (DCL/LOGINOUT/IMGACT/SYSLIB) lives on the mounted disk, not here.
     #########################################################################
     echo "-- assemble bootstrap initramfs list --"
@@ -396,8 +396,6 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
         "$IR/vms" "$IR/sbin" "$IR/etc" "$IR/lib/modules" \
         "$IR/vms/SYS0/SYSCOMMON/SYSEXE" "$IR/vms/SYS0/SYSCOMMON/SYSMGR"
     cp "$BIN/STARTUP.EXE"        "$IR/init"
-    cp "$BIN/vms_mount_helper"   "$IR/sbin/vms_mount_helper"
-    chmod 4755 "$IR/sbin/vms_mount_helper"
     cp /vmsko/vms.ko             "$IR/lib/modules/vms.ko"
     cp /repo/distro/rootfs/etc/os-release "$IR/etc/os-release" 2>/dev/null || true
     cp /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT "$IR/vms/SYS0/SYSCOMMON/SYSEXE/"
@@ -421,7 +419,6 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
       echo "dir /lib 755 0 0"
       echo "dir /lib/modules 755 0 0"
       echo "file /init /work/initramfs/init 755 0 0"
-      echo "file /sbin/vms_mount_helper /work/initramfs/sbin/vms_mount_helper 4755 0 0"
       echo "file /lib/modules/vms.ko /work/initramfs/lib/modules/vms.ko 644 0 0"
       [ -f "$IR/etc/os-release" ] && echo "file /etc/os-release /work/initramfs/etc/os-release 644 0 0"
       # VMS config tree (walk the staged initramfs vms/ subtree)

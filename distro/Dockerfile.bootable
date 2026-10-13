@@ -764,14 +764,6 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || { echo "FATAL: LINK.EXE (self-host linker) did not stage onto the disk"; exit 1; } ; \
     test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE  || { echo "FATAL: TCC.EXE (self-host compiler) did not stage onto the disk"; exit 1; } ; \
     test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE  || { echo "FATAL: MMK.EXE (descrip.mms build driver) did not stage onto the disk"; exit 1; } ; \
-    # The setuid-root mount(2)/umount(2) helper (vms-651, tools/
-    # vms_mount_helper.c) -- NOT a VMS image, lives outside SYS$SYSTEM: at a
-    # fixed Linux path (ovmx_layout.h VMS_MOUNT_HELPER_PATH). Owned by root
-    # with the setuid bit set HERE, at build time, so no boot-time step ever
-    # has to (a de-privileged session couldn't set it on itself anyway).
-    cp build-static/bin/vms_mount_helper /system-stage/sbin/vms_mount_helper && \
-    chown root:root /system-stage/sbin/vms_mount_helper && \
-    chmod 4755 /system-stage/sbin/vms_mount_helper && \
     # Kernel modules
     cp src/kernel/vms.ko /system-stage/lib/modules/ && \
     # SYSKRNL distro metadata (rd vms-700/vms-296/vms-3de, GNU/Linux-style
@@ -1239,12 +1231,6 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
     # the bootstrap (see header above); it is already staged onto the
     # distribution disk by the system-tree stage.
     cp build-static/bin/STARTUP.EXE    /initramfs-slim/init && \
-    # MOUNT/DISMOUNT (vms-651) need this on every boot -- DCL comes off the
-    # system disk, but the helper still lives at the same fixed Linux path
-    # outside the VMS tree.
-    cp build-static/bin/vms_mount_helper /initramfs-slim/sbin/vms_mount_helper && \
-    chown root:root /initramfs-slim/sbin/vms_mount_helper && \
-    chmod 4755 /initramfs-slim/sbin/vms_mount_helper && \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-slim/lib/modules/ && \
     # SYSKRNL distro metadata (rd vms-700/vms-296/vms-3de) -- same

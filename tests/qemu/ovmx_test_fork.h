@@ -31,7 +31,8 @@
 
 #include "vms_kif.h"
 
-static inline pid_t ovmx_fork_kind_st(uint32_t kind, uint32_t *status)
+static inline pid_t ovmx_fork_kind_ident_st(uint32_t kind, const char *uname, uint32_t uic,
+                                            uint64_t privs, uint32_t *status)
 {
     int hold[2];
     /* No executive (the CI executive-absent control): there is nothing to
@@ -62,7 +63,7 @@ static inline pid_t ovmx_fork_kind_st(uint32_t kind, uint32_t *status)
         if (status) *status = 0x124;
         return -1;
     }
-    uint32_t st = vms_kif_creprc_pcb((uint32_t)c, kind, 0, 0, 0, 0);
+    uint32_t st = vms_kif_creprc_pcb((uint32_t)c, kind, uname, uic, privs, 0);
     ssize_t w;
     do { w = write(hold[1], (st & 1) ? "g" : "x", 1); } while (w < 0 && errno == EINTR);
     close(hold[1]);
@@ -73,6 +74,23 @@ static inline pid_t ovmx_fork_kind_st(uint32_t kind, uint32_t *status)
         return -1;
     }
     return c;
+}
+
+static inline pid_t ovmx_fork_kind_st(uint32_t kind, uint32_t *status)
+{
+    return ovmx_fork_kind_ident_st(kind, 0, 0, 0, status);
+}
+
+/*
+ * ovmx_fork_subprocess_ident_st - a SUBPROCESS (the suite's job) with the
+ * identity given -- $CREPRC's prvadr/uic override (VMS_CREPRC_PCB_F_IDENTITY,
+ * rd vms-a2c); the executive checks the suite may give it.
+ */
+static inline pid_t ovmx_fork_subprocess_ident_st(const char *uname, uint32_t uic,
+                                                  uint64_t privs, uint32_t *status)
+{
+    return ovmx_fork_kind_ident_st(VMS_CREPRC_PCB_SUBPROCESS | VMS_CREPRC_PCB_F_IDENTITY,
+                                   uname, uic, privs, status);
 }
 
 static inline pid_t ovmx_fork_subprocess_st(uint32_t *status)

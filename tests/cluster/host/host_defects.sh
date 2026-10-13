@@ -1124,6 +1124,10 @@ EOF
         why)          echo "join_lnm_db_pulled() stops handing the pushed records to the executive and answers anyway, so a late joiner tells the member it took the cluster's logical names while holding none of them.";;
         require_fail) hd_lines <<'EOF'
 *** the last chunk applies all 10 records ***
+  10 records counted
+  tables first, parents before children, then the names, in the member's order
+then the answer goes
+  0x8b/0x04, as every real answer to a push
 EOF
                       ;;
         esac;;

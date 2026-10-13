@@ -365,12 +365,9 @@ install(TARGETS vms_tcpip_config RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 add_executable(vms_tcpip_inetd
     vms_tcpip_inetd.c
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets/vms_bgsock.c
-    # R4 G1 (rd vms-8bd): per-service run-as identity drop before execv. The
-    # identity TU + the SHARED sshd identity/credential primitives (Rule 10: reuse,
-    # do not duplicate the proven setident + fail-closed cred-drop logic).
+    # R4 G1 (rd vms-8bd, vms-1f8): the service account each service process is
+    # created with (resolved from SYSUAF; the executive creates the PCB).
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/services/tcpip_inetd_ident.c
-    ${CMAKE_SOURCE_DIR}/src/vmsssh/ssh_ident.c
-    ${CMAKE_SOURCE_DIR}/src/vmsssh/cred_drop.c
     # Force-bind anchor: sysuaf.c weak-references ovmx_sysuaf_read_user/_uic (the
     # real SYSUAF-over-ACP readers in vmsrms/sysuaf_live.o); a weak ref does NOT
     # extract the archive member, so without this strong reference the per-service
@@ -389,8 +386,7 @@ target_include_directories(vms_tcpip_inetd PRIVATE
     # the ODS-2 ACP into an execve-able tmpfs path (vms-21b: the aux server launches
     # ODS-2-resident images the VMS way, not a raw execv of an initramfs path).
     ${CMAKE_SOURCE_DIR}/src/vmsrms/include
-    # R4 G1: ssh_ident.h / cred_drop.h (the shared identity-drop seams) + sysuaf.h.
-    ${CMAKE_SOURCE_DIR}/src/vmsssh
+    # R4 G1: sysuaf.h.
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
 

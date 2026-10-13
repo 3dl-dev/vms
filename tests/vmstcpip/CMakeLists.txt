@@ -16,6 +16,7 @@ target_include_directories(test_tcpip_svcdb_fuzz PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/mgmt
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets
     ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
     ${CMAKE_SOURCE_DIR}/src/vmsrms/include
     ${CMAKE_SOURCE_DIR}/src/vmsrms/include/rms)
 target_compile_options(test_tcpip_svcdb_fuzz PRIVATE -Werror)

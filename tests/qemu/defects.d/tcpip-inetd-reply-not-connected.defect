@@ -14,8 +14,14 @@ defect_meta() {
 the service's reply came back BYTE-EXACT over the connection -- the accepted connection is the spawned service image's SYS$OUTPUT
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+a service created with a run-as identity runs its image and reports its process
+the service runs in a NEW VMS process (its own VMS PID), not the auxiliary server's
+the service process carries the identity the auxiliary server gave it (user name, NO privileges) -- not INETD's
+the service runs on the substrate identity the executive gave its process -- never root, never INETD's
+EOF
+                      ;;
+        knock_on_why)  echo "The run-as identity step (rd vms-1f8) reads what the service process reports about itself back over the same connection, through the same SYS\$OUTPUT dup2 this mutation diverts: with the reply off the connection the client receives no report line, so each assertion over that report reddens. They are the one defect -- the reply not reaching the connection -- observed through a second service image; the refused-identity assertions, which never depend on the service's reply, stay green.";;
         esac
 
 }

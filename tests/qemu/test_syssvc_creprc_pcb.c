@@ -250,6 +250,29 @@ int main(void)
               "the helper's child is the subprocess its creator made (same VMS PID, the creator's user name)");
     }
 
+    /* 6. DETACHED for the creator's OWN held child (rd vms-1f8): the auxiliary
+     *    server (TCPIP$INETD) creates each service process detached with the
+     *    service account's identity and waits for it itself, so the task is
+     *    its child, not a grandchild through an intermediate. */
+    {
+        int go_w, rep_r;
+        pid_t c = held_child(&go_w, &rep_r);
+        uint32_t vpid = 0, child_view = 0;
+        uint32_t st = vms_kif_creprc_pcb((uint32_t)c, VMS_CREPRC_PCB_DETACHED,
+                                         me.username, me.uic, 0, &vpid);
+        CHECK(st == SS$_NORMAL && vpid != 0 && vpid != me.vms_pid,
+              "CREPRC_PCB DETACHED creates the PCB of the creator's own held child");
+        struct vms_procinfo ci;
+        memset(&ci, 0, sizeof(ci));
+        CHECK(vms_kif_getjpi_pid(vpid, &ci) == SS$_NORMAL && ci.linux_pid == (uint32_t)c &&
+                  ci.uic == me.uic && ci.cur_privs == 0 && ci.perm_privs == 0 &&
+                  strncmp(ci.username, me.username, sizeof(ci.username)) == 0,
+              "the detached row carries the identity the creator gave (user name, UIC, no privileges)");
+        release_and_reap(c, go_w, rep_r, &child_view);
+        CHECK(child_view == vpid,
+              "the detached child, reaching the executive, is the row its creator made");
+    }
+
     printf("=== test_syssvc_creprc_pcb: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

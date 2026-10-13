@@ -60,11 +60,12 @@
  * -- the same idiom test_syssvc_tcpip_ping.c uses for tcpip_ping.h -- because
  * src/vmstcpip/services is not on the QEMU test -I path (only .../sockets is). */
 #include "../../src/vmstcpip/services/tcpip_inetd.h"
-#include "../../src/vmstcpip/services/tcpip_inetd_ident.h"  /* R4 G1 fail-closed identity drop */
+#include "../../src/vmstcpip/services/tcpip_inetd_ident.h"  /* R4 G1 fail-closed account resolve */
 
 #define EXIT_SKIP   77
 #define INETD_PORT  15007                       /* the well-known port under test */
 #define SVC_MARKER  "--ovmx-inetd-echo-service"
+#define IDENT_MARKER "--ovmx-inetd-ident-service"
 static const char CLIENT_MSG[] = "OVMX TCPIP$INETD inbound -- vms-cdb9, first spawned service";
 
 static int pass = 0, fail = 0;
@@ -73,24 +74,18 @@ static int pass = 0, fail = 0;
     else { printf("  FAIL: %s\n", msg); fail++; } \
 } while (0)
 
-/* ---- R4 G1 fail-closed identity-drop mocks (no /dev/vms) --------------------
- * The security property: if the executive REFUSES the run-as identity, the drop
- * must fail and the Linux credential drop must NOT be attempted (fail-closed
- * short-circuit) -- the service is never launched, never as SYSTEM. */
-static uint32_t g_ident_ret;            /* status mock_setident returns (odd=accept) */
-static int      g_cred_attempted;       /* set if the cred table was touched at all */
-static uid_t    g_uid;                  /* tracks the last mock setuid, for the verify */
-static gid_t    g_gid;                  /* tracks the last mock setgid, for the verify */
-static uint32_t mock_setident(const char *u, uint32_t uic, uint64_t p)
-{ (void)u; (void)uic; (void)p; return g_ident_ret; }
-static int mock_setgroups(size_t n, const gid_t *l)
-{ (void)n; (void)l; g_cred_attempted = 1; return 0; }
-static int mock_setgid(gid_t g) { g_gid = g; g_cred_attempted = 1; return 0; }
-static int mock_setuid(uid_t u) { g_uid = u; g_cred_attempted = 1; return 0; }
-static uid_t mock_getuid(void)  { return g_uid; }
-static uid_t mock_geteuid(void) { return g_uid; }
-static gid_t mock_getgid(void)  { return g_gid; }
-static gid_t mock_getegid(void) { return g_gid; }
+/* ---- R4 G1 run-as identity resolvers the suite hands the auxiliary server ----
+ * (rd vms-8bd / vms-1f8). The production resolver reads SYSUAF; these give the
+ * identity directly, so the suite drives the creator side for real: the
+ * executive creates the service process DETACHED with what the resolver gave,
+ * or refuses it. */
+static struct tcpip_inetd_identity g_given;
+static int resolve_given(const struct tcpip_service *svc, struct tcpip_inetd_identity *id)
+{
+    (void)svc;
+    *id = g_given;
+    return 0;
+}
 
 /* -----------------------------------------------------------------------
  * SERVICE-IMAGE MODE. When this binary is re-exec'd by the auxiliary server
@@ -107,6 +102,25 @@ static int run_echo_service(void)
     if (n <= 0)
         return 0;
     (void)!write(STDOUT_FILENO, buf, (size_t)n);
+    return 0;
+}
+
+/* IDENT SERVICE MODE: the spawned service image reports the process it runs in
+ * -- its VMS PID, user name, current privileges (all from its own $GETJPI row)
+ * and its substrate uid -- as one line on SYS$OUTPUT (the connection). */
+static int run_ident_service(void)
+{
+    struct vms_procinfo me;
+    char line[200];
+    int n;
+    memset(&me, 0, sizeof(me));
+    if (!(vms_kif_getjpi_self(&me) & 1))
+        memset(&me, 0, sizeof(me));
+    n = snprintf(line, sizeof(line), "IDENT %08x %llx %u %.32s\n",
+                 (unsigned)me.vms_pid, (unsigned long long)me.cur_privs,
+                 (unsigned)getuid(), me.username);
+    if (n > 0)
+        (void)!write(STDOUT_FILENO, line, (size_t)n);
     return 0;
 }
 
@@ -185,6 +199,71 @@ static void client_peer(void)
     _exit(ok ? 0 : 1);
 }
 
+/* A capturing inbound client: connects, sends nothing, and copies whatever the
+ * connection delivers (until end-of-file) to `outfd` for the parent to judge. */
+static void client_capture(int outfd)
+{
+    int c = socket(AF_INET, SOCK_STREAM, 0);
+    struct sockaddr_in sa;
+    struct timeval tv;
+    char rbuf[512];
+    ssize_t got;
+    int tries;
+
+    if (c < 0) _exit(2);
+    tv.tv_sec = 5; tv.tv_usec = 0;
+    (void)setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(INETD_PORT);
+    sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    for (tries = 0; tries < 50; tries++) {
+        if (connect(c, (struct sockaddr *)&sa, sizeof(sa)) == 0)
+            break;
+        usleep(20000);
+    }
+    while ((got = recv(c, rbuf, sizeof(rbuf), 0)) > 0)
+        (void)!write(outfd, rbuf, (size_t)got);
+    close(c);
+    _exit(0);
+}
+
+/* One connection to `svc` through the auxiliary server with resolver `fn`:
+ * returns the spawned pid (or -1), its wait status in *sstatus, and what the
+ * client received in buf (NUL-terminated). */
+static pid_t one_connection(int listen_h, const struct tcpip_service *svc,
+                            tcpip_inetd_identity_fn fn, int *sstatus,
+                            char *buf, size_t bufsz)
+{
+    int cp[2];
+    pid_t cl, sp;
+    size_t have = 0;
+    ssize_t r;
+
+    buf[0] = '\0';
+    *sstatus = -1;
+    if (pipe(cp) != 0)
+        return -1;
+    cl = fork();
+    if (cl == 0) {
+        close(cp[0]);
+        client_capture(cp[1]);                  /* never returns */
+    }
+    close(cp[1]);
+    sp = tcpip_inetd_accept_dispatch(listen_h, svc, NULL, fn);
+    if (sp > 0)
+        while (waitpid(sp, sstatus, 0) < 0 && errno == EINTR)
+            ;
+    while (have + 1 < bufsz && (r = read(cp[0], buf + have, bufsz - 1 - have)) > 0)
+        have += (size_t)r;
+    buf[have] = '\0';
+    close(cp[0]);
+    if (cl > 0)
+        while (waitpid(cl, NULL, 0) < 0 && errno == EINTR)
+            ;
+    return sp;
+}
+
 int main(int argc, char *argv[])
 {
     char self[TCPIP_INETD_PATH_MAX];
@@ -199,6 +278,8 @@ int main(int argc, char *argv[])
     /* SERVICE-IMAGE MODE: re-exec'd by the auxiliary server. */
     if (argc > 1 && strcmp(argv[1], SVC_MARKER) == 0)
         return run_echo_service();
+    if (argc > 1 && strcmp(argv[1], IDENT_MARKER) == 0)
+        return run_ident_service();
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGPIPE, SIG_IGN);
@@ -296,35 +377,20 @@ int main(int argc, char *argv[])
     CHECK(tcpip_inetd_may_accept(TCPIP_INETD_MAXCHILD + 10) == 0,
           "fork-flood gate: back-pressure above the child cap");
 
-    /* ---- R4 G1 fail-closed identity drop (rd vms-8bd) ---------------------
-     * The service must NOT launch (and NEVER as SYSTEM) unless its configured
-     * run-as identity is fully established. Pure policy over mock tables -- no
-     * executive needed, runs on every platform. */
+    /* ---- R4 G1 fail-closed account resolve (rd vms-8bd / vms-1f8) ---------
+     * The auxiliary server resolves a service's run-as account BEFORE it creates
+     * any process; with no account configured it creates none (never a SYSTEM
+     * fallback). No executive needed, runs on every platform. */
     {
-        struct ovmx_ident_syscalls mid = { .fn_setident = mock_setident };
-        struct ovmx_cred_syscalls  mcd = {
-            .fn_setgroups = mock_setgroups, .fn_setgid = mock_setgid,
-            .fn_setuid = mock_setuid, .fn_getuid = mock_getuid,
-            .fn_geteuid = mock_geteuid, .fn_getgid = mock_getgid,
-            .fn_getegid = mock_getegid,
-        };
-        /* An empty run-as account: fail-closed, never a SYSTEM fallback. */
-        CHECK(tcpip_inetd_establish_service_identity("", &mid, &mcd) != 0,
-              "R4 G1: a service with NO configured run-as account fails CLOSED (never SYSTEM)");
-        /* Executive REFUSES the identity (even status) -> apply fails closed AND
-         * the credential drop is never attempted (short-circuit). */
-        g_ident_ret = 0;            /* even = refused */
-        g_cred_attempted = 0;
-        CHECK(tcpip_inetd_apply_identity("SVC", 0x00800085u, 128, 133, 0,
-                                         &mid, &mcd) != 0,
-              "R4 G1: a REFUSED executive identity fails CLOSED (service not launched)");
-        CHECK(g_cred_attempted == 0,
-              "R4 G1: on a refused identity the Linux credential drop is NOT attempted (fail-closed short-circuit)");
-        /* Executive ACCEPTS (odd) + creds verify -> the drop succeeds. */
-        g_ident_ret = 1;            /* odd = accepted */
-        CHECK(tcpip_inetd_apply_identity("SVC", 0x00800085u, 128, 133, 0,
-                                         &mid, &mcd) == 0,
-              "R4 G1: an accepted identity + verified cred drop succeeds");
+        struct tcpip_inetd_identity rid;
+        struct tcpip_service noacct = svcs[0];
+        memset(&rid, 0x5a, sizeof(rid));
+        CHECK(tcpip_inetd_resolve_account("", &rid) != 0 && rid.username[0] == '\0' &&
+                  rid.uic == 0 && rid.privs == 0,
+              "R4 G1: a service with NO configured run-as account fails CLOSED and yields no identity (never SYSTEM)");
+        noacct.user[0] = '\0';
+        CHECK(tcpip_inetd_resolve_service_identity(&noacct, &rid) != 0,
+              "R4 G1: the production resolver refuses a service line without a run-as account");
     }
 
     if (!executive_present()) {
@@ -343,7 +409,7 @@ int main(int argc, char *argv[])
     }
 
     signal(SIGALRM, watchdog);
-    alarm(25);
+    alarm(40);
     bring_lo_up();
 
     /* ---- The auxiliary server binds the well-known port over BGn: -------- */
@@ -368,11 +434,10 @@ int main(int argc, char *argv[])
 
     /* ---- Accept the inbound connection and SPAWN the service image ------- */
     memset(&peer, 0, sizeof(peer));
-    /* identity_fn = NULL: this suite proves the TRANSPORT (accept -> spawn ->
-     * byte round-trip through the executive), not the R4 G1 identity drop -- the
-     * drop's fail-closed policy is unit-tested below (tcpip_inetd_apply_identity
-     * with mock tables) and proven end-to-end on the booted runtime, so the echo
-     * service here launches without a SYSUAF-resolved persona. */
+    /* identity_fn = NULL: this step proves the TRANSPORT (accept -> spawn ->
+     * byte round-trip through the executive); the service is a SUBPROCESS with
+     * the suite's identity. The run-as identity is proven below (the service
+     * process INETD creates DETACHED, and the executive's refusal). */
     svc_pid = tcpip_inetd_accept_dispatch(listen_h, &svcs[0], &peer, NULL);
     CHECK(svc_pid > 0,
           "accept fires on the inbound connect and the auxiliary server spawns the configured service image");
@@ -390,6 +455,59 @@ int main(int argc, char *argv[])
     /* negctl: tcpip-inetd-reply-not-connected */
     CHECK(WIFEXITED(cstatus) && WEXITSTATUS(cstatus) == 0,
           "the service's reply came back BYTE-EXACT over the connection -- the accepted connection is the spawned service image's SYS$OUTPUT");
+
+    /* ---- R4 G1 / vms-1f8: the service process is the one INETD creates ------
+     * DETACHED with the resolved identity -- here the suite's own user name and
+     * UIC with NO privileges, which the executive lets any creator give. The
+     * service image reports the process it runs in: its own VMS PID, the given
+     * (empty) privilege mask, and a substrate uid the executive gave it. */
+    {
+        struct vms_procinfo me;
+        struct tcpip_service isvc = svcs[0];
+        char got[512];
+        int ist = -1;
+        unsigned vpid = 0, uid = 0;
+        unsigned long long privs = ~0ULL;
+        char uname[64] = "";
+        pid_t ip;
+
+        memset(&me, 0, sizeof(me));
+        CHECK(vms_kif_getjpi_self(&me) & 1, "the auxiliary server (this suite) has a row");
+        strncpy(isvc.args, IDENT_MARKER, sizeof(isvc.args) - 1);
+        memset(&g_given, 0, sizeof(g_given));
+        strncpy(g_given.username, me.username, sizeof(g_given.username) - 1);
+        g_given.uic = me.uic;
+        g_given.privs = 0;
+        ip = one_connection(listen_h, &isvc, resolve_given, &ist, got, sizeof(got));
+        int parsed = sscanf(got, "IDENT %x %llx %u %63s", &vpid, &privs, &uid, uname);
+        /* negctl-knockon: tcpip-inetd-reply-not-connected */
+        CHECK(ip > 0 && WIFEXITED(ist) && WEXITSTATUS(ist) == 0 && parsed >= 3,
+              "a service created with a run-as identity runs its image and reports its process");
+        /* negctl-knockon: tcpip-inetd-reply-not-connected */
+        CHECK(parsed >= 3 && vpid != 0 && vpid != me.vms_pid,
+              "the service runs in a NEW VMS process (its own VMS PID), not the auxiliary server's");
+        /* negctl-knockon: tcpip-inetd-reply-not-connected */
+        CHECK(parsed >= 3 && privs == 0 &&
+              strncmp(uname, me.username, sizeof(me.username)) == 0,
+              "the service process carries the identity the auxiliary server gave it (user name, NO privileges) -- not INETD's");
+        /* negctl-knockon: tcpip-inetd-reply-not-connected */
+        CHECK(parsed >= 3 && uid != 0 && uid != (unsigned)getuid(),
+              "the service runs on the substrate identity the executive gave its process -- never root, never INETD's");
+
+        /* The executive REFUSES the identity (an empty user name is not one):
+         * no service process runs the image, the client hears only that the
+         * service is unavailable. */
+        memset(&g_given, 0, sizeof(g_given));
+        g_given.uic = me.uic;
+        ip = one_connection(listen_h, &isvc, resolve_given, &ist, got, sizeof(got));
+        /* negctl: tcpip-inetd-refused-identity-launched */
+        CHECK(ip > 0 && WIFEXITED(ist) && WEXITSTATUS(ist) == 125 &&
+              strstr(got, "IDENT") == NULL,
+              "R4 G1: an identity the executive refuses launches NOTHING (fail-closed, the image never runs)");
+        /* negctl: tcpip-inetd-refused-identity-launched */
+        CHECK(strstr(got, "%OVMX-F-NOSVC, service unavailable") != NULL,
+              "R4 G1: the refused client is told only that the service is unavailable");
+    }
 
     /* Tear the listener down. */
     (void)ovmx_socket_close(listen_h);

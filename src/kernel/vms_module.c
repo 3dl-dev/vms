@@ -1968,8 +1968,8 @@ struct vms_proc *vms_proc_register(pid_t pid, bool inherit_identity,
  * (rd vms-c43; the facility half is vms_ioctl_creprc_pcb in vms_proctab.c).
  *
  * Creates the PCB of the task `child_pid` on behalf of `creator`, before that
- * task runs its image: it must be the creator's child (or, `detached`, its
- * grandchild through the detach intermediate, which the creator holds alive),
+ * task runs its image: it must be the creator's child (or, `detached`, also
+ * its grandchild through the detach intermediate, which the creator holds alive),
  * a whole process, and without a PCB. Its identity is the creator's (a
  * subprocess, process name cleared -- it names itself with $SETPRN) or the one
  * given (detached, authorized by the caller); its creator of record is
@@ -2002,7 +2002,10 @@ uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint3
     related = false;
     if (t && task_tgid(t) == cpid) {
         anc = rcu_dereference(t->real_parent);
-        if (detached && anc)
+        /* DETACHED: the creator's own held child (TCPIP$INETD's service
+         * process, which it waits for) or, for $CREPRC, its grandchild
+         * through the live detach intermediate. */
+        if (detached && anc && task_tgid(anc) != creator->pid_ref)
             anc = rcu_dereference(anc->real_parent);
         related = anc && task_tgid(anc) == creator->pid_ref;
     }

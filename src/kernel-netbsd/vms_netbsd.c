@@ -321,7 +321,7 @@ static bool vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
  * vms_proc_create_for - creator-driven creation, the NetBSD substrate half
  * (rd vms-c43; facility half vms_ioctl_creprc_pcb, kernel-core/vms_proctab.c;
  * Linux twin in src/kernel/vms_module.c). The task must be the creator's child
- * (or, detached, its grandchild through the detach intermediate) and have no
+ * (or, detached, also its grandchild through the detach intermediate) and have no
  * row. Its identity is the creator's (process name cleared) or the given one;
  * its creator of record is `creator`. CONTINUE (rd vms-e50): DCL's image task,
  * the creator's own VMS process -- its VMS PID and identity, process name
@@ -342,7 +342,9 @@ vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
 	cp = proc_find((pid_t)child_pid);
 	if (cp != NULL) {
 		anc = cp->p_pptr;
-		if (detached && anc != NULL)
+		/* DETACHED: the creator's own held child, or its grandchild
+		 * through the live detach intermediate ($CREPRC). */
+		if (detached && anc != NULL && anc->p_pid != creator->pid)
 			anc = anc->p_pptr;
 		related = anc != NULL && anc->p_pid == creator->pid;
 	}

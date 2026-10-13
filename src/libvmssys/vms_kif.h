@@ -1320,7 +1320,7 @@ uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
                                int *out_optval);
 /* Server path (vms-698, OpenSSH server port). bind binds a local AF_INET address
  * (network byte order; port 0 = ephemeral) and returns the EFFECTIVE port/addr in
- * *out_port/*out_addr; listen marks the socket passive; accept blocks for one
+ * *out_port and *out_addr; listen marks the socket passive; accept blocks for one
  * inbound connection and installs it onto accept_exec_chan (a second BG channel
  * the caller $ASSIGNed empty), returning the peer address. NULL out params OK. */
 uint32_t vms_kif_bg_bind(uint32_t exec_chan, uint16_t family, uint16_t port,

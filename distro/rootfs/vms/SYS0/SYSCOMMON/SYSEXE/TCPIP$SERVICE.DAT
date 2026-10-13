@@ -17,8 +17,8 @@
 !
 ! separated by whitespace. "port" is the decimal TCP port the auxiliary server
 ! binds over the executive BGn: seam. "run-as-user" is OPTIONAL: a SYSUAF
-! username the auxiliary server drops to (its UIC + authorized privileges) via
-! vms_kif_setident before executing the service image (rd vms-8bd, R4 G1) -- so
+! username whose identity (its UIC + authorized privileges) the auxiliary server
+! creates the service's detached process with (rd vms-8bd R4 G1, vms-1f8) -- so
 ! a service runs under its own low-privilege account, never SYSTEM. It is
 ! identified positionally as the token that carries NO device colon and NO
 ! slash; because "image-filespec" always carries a device colon
@@ -42,7 +42,7 @@
 ! DAYTIME (RFC 867), rd vms-477 -- the first ENABLED service: a genuine
 ! standalone image (TCPIP$DAYTIME.EXE) the auxiliary server launches end to end
 ! over the executive. On an inbound connection to port 13 the auxiliary server
-! drops to the TCPIP$DAYTIME service account and spawns TCPIP$DAYTIME.EXE with
+! creates a process under the TCPIP$DAYTIME service account running TCPIP$DAYTIME.EXE with
 ! the accepted connection as its SYS$INPUT/SYS$OUTPUT; the image writes the
 ! current date/time as a one-line ASCII string (RFC 867) and exits.
 ! DAYTIME 13 TCPIP$DAYTIME SYS$SYSTEM:TCPIP$DAYTIME.EXE

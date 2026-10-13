@@ -247,7 +247,9 @@ join-lnm-answered-unapplied
 join-lnm-db-not-applied
 pe-blk-frame-unringed
 coord-own-class-unrecorded
-advertise-relay-empty-cell"
+advertise-relay-empty-cell
+barrier-merge-runs-steps
+coord-merge-waits-for-steps"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1167,6 +1169,38 @@ EOF
 *** an operation the executive refused is NOT answered ***
   counted refused
 EOF
+                      ;;
+        esac;;
+
+    coord-merge-waits-for-steps)
+        case "$_f" in
+        facility)     echo "a coordinator completes a MERGE-rebuild ADD at the GO and waits for no barrier step (rd vms-6e3)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_try_go() loses its merge branch, so an OVMX coordinator of a zero-LOCKDIRWT joiner waits in BARRIER for a step 1 no real participant sends, holding the transition and the coordinator lock for good.";;
+        require_fail) hd_lines <<'EOF2'
+*** a merge is complete at the GO ***
+  the coordinator lock is released
+  counted as a merge
+EOF2
+                      ;;
+        esac;;
+
+    barrier-merge-runs-steps)
+        case "$_f" in
+        facility)     echo "a participant completes a MERGE-rebuild ADD (open body[24] = 1) at the GO and runs no barrier (rd vms-6e3)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_go() loses its merge branch, so a participant of a merge sends step 1 and waits for a release no real coordinator sends, with the transition still active. Lab e09a: OVMXE stayed in that transition and backed off every later membership request, and OVMXB was never admitted.";;
+        require_fail) hd_lines <<'EOF2'
+no op-0x0b is sent
+nothing goes out at the GO
+the transition is complete at the GO
+*** and the transition is no longer active: the coordinator lock is free for the next joiner ***
+counted as a merge
+EOF2
                       ;;
         esac;;
 
@@ -2727,6 +2761,14 @@ apply_edit() {
         # Inside join_h_relay_if_member() only: its member gate always refuses,
         # which is the empty cell's behaviour with the handler still referenced.
         sed -i '/^static enum cnxman_join_rx join_h_relay_if_member(/,/^}/ s|if (!join_node_already_member(j)) {|if (1) { /* NEGCTL advertise-relay-empty-cell */|' "$_file";;
+
+    coord-merge-waits-for-steps)
+        # `if (coord_is_merge(c)) {` is unique in this file.
+        sed -i 's|	if (coord_is_merge(c)) {|	if (0) { /* NEGCTL coord-merge-waits-for-steps */|' "$_file";;
+
+    barrier-merge-runs-steps)
+        # The merge test in barrier_h_go() is unique in this file.
+        sed -i 's|	if (b->open_seen \&\& b->open_rebuild == VMS_CM_REBUILD_MERGE) {|	if (0) { /* NEGCTL barrier-merge-runs-steps */|' "$_file";;
 
     coord-own-class-unrecorded)
         # `c->cl->club.own_tr_class = tr_class;` is unique in this file.

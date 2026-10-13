@@ -2393,6 +2393,21 @@ static void test_f297_zero_weight_joiner_merges(void)
 	ct_check(f297_open_to(VAX2_CSID, &o), "the admission is proposed");
 	ct_check_eq_u32(o.cells.rebuild, VMS_CM_REBUILD_MERGE,
 			"[24] = 1, the merge rebuild");
+
+	/* rd vms-6e3: and a merge runs no barrier. Every participant acks
+	 * Phase 1; at the GO the transition is over -- no release is sent and
+	 * the coordinator lock is free. */
+	drive_open_acks(2);
+	ct_check(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_GO) > 0u,
+		 "the GO went out");
+	/* negctl: coord-merge-waits-for-steps */
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_COMPLETE,
+		 "*** a merge is complete at the GO ***");
+	ct_check_eq_u32(g.cl.club.transition_active, 0,
+			"  the coordinator lock is released");
+	ct_check_eq_u32(g.c.merges_completed, 1, "  counted as a merge");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER_REL),
+			0, "  and no barrier release was sent");
 }
 
 /* rd vms-f297: the open waits for every membership record's answer, as a real

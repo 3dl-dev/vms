@@ -244,6 +244,10 @@ struct cnxman_barrier {
 	/* ---- what this node has done, all counted from real dispatches ---- */
 	uint32_t transitions_seen;
 	uint32_t transitions_completed;
+	/* MERGE-rebuild transitions (open body[24] = 1) completed at the GO,
+	 * with no barrier: no real participant steps and no real coordinator
+	 * releases in one (rd vms-6e3). */
+	uint32_t merges_completed;
 
 	/*
 	 * THE COMMITS -- incremented ONLY by barrier_finish(), i.e. only on a

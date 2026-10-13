@@ -277,7 +277,14 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         echo "dir /run/ovmx-boot 755 0 0"
         echo "file /run/ovmx-boot/ACTIVATE.EXE /work/subject.exe 755 0 0"
         echo "file $INTERP_GUEST $IMGACT_EXE 755 0 0"
+      else
+        echo "dir /run 755 0 0"
+        echo "dir /run/ovmx-boot 755 0 0"
       fi
+      # The per-user staging parent (OVMX_BOOT_STAGE_USERS_DIR, rd vms-137e):
+      # ovmx_init's boot makes it 1733 root before STARTUP drops root; this rig
+      # boots no ovmx_init, so it ships it as the boot would have left it.
+      echo "dir /run/ovmx-boot/u 1733 0 0"
       # SUBJECT IMAGES at the exact paths the suites exec (guarded by build
       # success; a target absent on alpha leaves its suites to fail honestly).
       B=/work/cmake-alpha/bin

@@ -316,6 +316,56 @@ vms_codec_status_t vms_cm_rdev_answer_in_place(uint8_t *rec, uint32_t len,
 					       uint32_t status);
 
 /*
+ * THE KIND-10 CLOSE (rd vms-db1). A cat-0x06 close with body[26] = 10 moves
+ * one 136-byte record of class 0x1a; every real VAX booting into a cluster
+ * sends one to each member during startup (lab labd52c run 3), and a member
+ * that withholds the answer leaves that VAX's startup waiting forever.
+ *
+ * MEASURED black-box (rd vms-dc2's Rule-8 scope) over the lab corpus,
+ * pre-registered in tests/lab/captures/vms-db1-k10-close-20261012/:
+ *   - the record, 79/79 pulls: rec[8:12] = 88 00 65 64, rec[16:32] =
+ *     01 00 1a 00 00 00 52 00 00 00 1a 00 00 00 52 00, rec[80:84] = 0;
+ *   - the write-back, 76/76 (45 three-node, 31 two-node): the pulled record
+ *     with rec[82] = 1, rec[102] = 2, rec[106] = 8 and nothing else changed
+ *     but rec[0:8] (the recipient's own memory -- ungrounded, left as the
+ *     requester sent it, as for kind 6);
+ *   - the answer state: 5 after the write-back from a member that has
+ *     already sent (51) or never sends (28) its own kind-10 close; 3, with no
+ *     pull, only from a node still to send its own (83/83). OVMX never sends
+ *     one, so it is always in the first class.
+ */
+#define VMS_CM_CLOSE_KIND_K10        10u
+#define VMS_CM_CLOSE_STATE_K10        5u
+#define VMS_CM_K10_REC_LEN          136u
+#define VMS_CM_K10_OFF_DONE          82u   /* := 1 */
+#define VMS_CM_K10_OFF_B102         102u   /* := 2 */
+#define VMS_CM_K10_OFF_B106         106u   /* := 8 */
+extern const uint8_t vms_cm_k10_class[16];   /* rec[16:32] */
+
+/* Turn a pulled kind-10 record, in place, into its answer. VMS_CODEC_E_CLASS
+ * (and nothing written) for a record that is not the measured shape. */
+vms_codec_status_t vms_cm_k10_answer_in_place(uint8_t *rec, uint32_t len);
+
+/* The close state a member sends once it has written back a record of this
+ * close kind: 5 for kind 6 and kind 10, 0 (withhold) for anything else. */
+uint16_t vms_cm_close_state_after_writeback(uint8_t kind);
+
+/*
+ * THE KIND-5 CLOSE (rd vms-db1), the commonest: its record (136 + 64n bytes,
+ * 1480 the largest measured) is PULLED and never written back, then answered
+ * 4 -- 3,069 of 3,313 real answers. 3, with no pull, came only from a node
+ * still to send its own (172/172, all 136-byte records), the kind-10 rule;
+ * OVMX never sends one. Withheld, it is the second close that kept a real
+ * VAX's startup waiting on an OVMX member (labd52c, db1-r1).
+ */
+#define VMS_CM_CLOSE_KIND_K5          5u
+#define VMS_CM_CLOSE_STATE_K5_PULLED  4u
+
+/* The close state a member sends once it has pulled (and not written back) a
+ * record of this kind: 4 for kind 5, 0 (withhold) for anything else. */
+uint16_t vms_cm_close_state_after_pull(uint8_t kind);
+
+/*
  * The bitmap NEIGHBOURHOOD, body[52:60] -- the span whose emptiness is the
  * ONLY published evidence about how wide the membership bitmap really is.
  *

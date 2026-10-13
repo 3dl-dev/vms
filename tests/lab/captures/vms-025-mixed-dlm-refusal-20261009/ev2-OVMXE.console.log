@@ -1,0 +1,115 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCADB0+36F0ADB0 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> SET LOCKDIRWT 1
+%SYSGEN-E-NOSUCHP, no such parameter "LOCKDIRWT"
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-8 - OpenVMS-compatible
+     9-OCT-2026 04:27:52.17
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXE set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   26.945545] %PEA0, cluster HELLO multicast group 1 (CLUSTER_AUTHORIZE)
+[   26.954182] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 1 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  9-OCT-2026 04:27:53.82
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-8 (OpenVMS-compatible)
+
+Username: 
+Username: [   29.619189] %PEA0, channel verified
+[   29.622091] %PEA0, virtual circuit open
+[   30.046066] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   30.055397] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   30.064793] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   30.070353] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   30.074754] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   30.856716] %PEA0, channel verified
+[   30.857317] %PEA0, virtual circuit open
+[   31.079338] %CNXMAN, a connection manager was discovered on the interconnect
+[   31.143531] %CNXMAN, waiting for connectivity to every cluster member before asking for admission
+[   31.146374] %CNXMAN, waiting to form or join an OpenVMS Cluster
+SYSTEM
+Password: [   32.167658] %CNXMAN, sending VAXcluster membership request to the selected member
+[   32.178827] %CNXMAN, the cluster assigned this node a cluster system id
+[   32.181557] %CNXMAN, the cluster assigned this node a cluster system id
+[   32.189555] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   32.218122] %CNXMAN, this node is a member of the cluster
+[   32.223099] %CNXMAN, VAXcluster state transition in progress
+[   32.225815] %CNXMAN, this node is now a VAXcluster member
+[   32.227901] %CNXMAN, system 0000000000000406 was added to the cluster
+[   32.230237] %CNXMAN, system 0000000000000402 was added to the cluster
+[   32.232159] %CNXMAN, system 0000000000000401 was added to the cluster
+[   32.235545] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[   32.317916] %CNXMAN, completed VAXcluster state transition
+
+
+   Welcome to OpenVMX V0.7-8 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ SHOW CLUSTER
+View of Cluster from system ID 1030 node: OVMXE    09-OCT-2026 04:30:12
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXE  | 00010003 | VMX V0.7        | MEMBER           |
+| 1026   | 00010002 |                 | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ DEFINE/SYSTEM EVAC$DATA VDA100:[EVAC]
+$ CREATE SYS$LOGIN:OVSTBY.COM
+$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE
+$ EVACWL STANDBY NL=75
+$ 
+$ SPAWN/NOWAIT/OUTPUT=SYS$LOGIN:OVMXWL.LOG @SYS$LOGIN:OVSTBY.COM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ EVACWL: standby holds EVAC$WORKLOAD NL for 75 s
+SHOW SYSTEM
+OpenVMX V0.7-8 - OpenVMS-compatible  on node OVMXE   9-OCT-2026 04:30:50.28  Uptime  0 00:03:23
+  Pid    Process Name          CPU         Page flts   Pages
+10000005 SYSTEM_1           0 00:00:00.25        582     880
+10000001                    0 00:00:01.79         87     358
+10000005 SYSTEM_1           0 00:00:00.12        360     320
+10000004 SYSTEM             0 00:00:00.66       1077     854
+10000003 JOB_CONTROL        0 00:00:00.12         92     330
+$ TYPE SYS$LOGIN:OVMXWL.LOG
+%RMS-E-FNF, file not found - SYS$LOGIN:OVMXWL.LOG
+$ [  216.524322] %DLM, a VMS system asked this node, its lock directory, for a resource this node itself holds locks on and does not master: not answered
+[  216.529670] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+EVACWL: holding EVAC$WORKLOAD, waiting for EVAC$DATA:EVAC.DAT

@@ -3,13 +3,13 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "\$CREPRC/SPAWN SUBPROCESS identity-by-continuation (VMS_IOCTL_REGISTER_SUBPROCESS, vms-19e9)";;
+        facility)     echo "creator-driven creation of a SUBPROCESS (vms_proc_create_for, kernel/vms_module.c, rd vms-c43 / vms-2a5) -- the new process's identity is its creator's, copied by the executive, never declared by the child";;
         targets)      echo "kernel/vms_module.c";;
         suites_red)   echo "test_syssvc_creprc_inherit";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_dev_ioctl()'s REGISTER_SUBPROCESS dispatch calls 'vms_ioctl_register(arg, true, false)' (inherit_identity=true, share_pid=false); the mutation flips inherit_identity to false, so a subprocess registers exactly like a bare REGISTER -- no UIC/username/privilege continuation from its real_parent. The subprocess still gets a genuinely FRESH, distinct VMS PID (share_pid was already false) and VMS_IOCTL_REGISTER_SUBPROCESS itself still returns SS\$_NORMAL, so the PID-freshness and registration-accepted assertions stay green; only the inherited-identity fields (user name, UIC, privilege mask) read the pre-continuation (unnamed/unprivileged) defaults instead of the creator's row. The security-half guard (a non-root self-declared SYSTEM identity is refused) is a completely different code path (vms_ioctl_setident) and is untouched. Unique call-site text; gone after substitution (no-op re-apply).";;
+        why)          echo "vms_proc_create_for makes a SUBPROCESS's PCB without copying its creator's identity: the child starts with no user name, UIC 0 and no privileges -- a process that could only get an identity by declaring one. Gone after apply.";;
         require_fail) cat <<'EOF'
 A: the subprocess INHERITED the creator's user name (SYSTEM) -- a readback, not a self-declaration
 EOF
@@ -25,10 +25,6 @@ EOF
 }
 
 defect_apply() {
-        # Unique call-site text (REGISTER_SUBPROCESS's own dispatch); flips
-        # inherit_identity true->false so a subprocess registers like a bare
-        # REGISTER (share_pid stays false -- the PID is still genuinely fresh).
-        # Gone after apply (no-op re-apply).
-        sed -i 's|return vms_ioctl_register(arg, true, false);|return vms_ioctl_register(arg, false, false); /* NEGCTL register-subprocess-identity-self-declared */|' "$_file"
+        sed -i 's|^        vms_proc_copy_identity(proc, creator, false);$|        (void)0; /* NEGCTL register-subprocess-identity-self-declared */|' "$_file"
     :
 }

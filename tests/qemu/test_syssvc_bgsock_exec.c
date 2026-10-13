@@ -36,6 +36,7 @@
 #include <net/if.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 #include "vms_bgsock.h"
 
 #define EXIT_SKIP 77
@@ -146,7 +147,7 @@ int main(int argc, char **argv)
 
     char harg[32];
     snprintf(harg, sizeof(harg), "--child-io=%d", h);
-    pid_t c = fork();
+    pid_t c = ovmx_fork_subprocess();
     if (c == 0) {
         execl(argv[0], argv[0], harg, (char *)NULL);
         _exit(127);

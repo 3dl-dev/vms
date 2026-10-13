@@ -471,6 +471,31 @@ static void executive_attach(void)
         ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));
     }
 
+    /*
+     * THE SYSTEM PROCESS, ONCE (rd vms-a2c / vms-2a5, design note 3.1's
+     * bootstrap exception). VMS system initialization creates the system
+     * process; nothing later asks to become SYSTEM. So the boot task makes the
+     * executive's one ESTABLISH_SYSTEM call here, as soon as the executive is
+     * attached and before it uses any other service: it makes this task's PCB
+     * (there is no registration -- every other process gets its PCB from its
+     * creator) and stamps SYSTEM onto it. Every process after it gets its
+     * identity from its creator: PROVISION (and the STARTUP DCL it becomes) as
+     * this task's subprocess, JOB_CONTROL and the other RUN/DETACHED processes
+     * from STARTUP, each login session from JOB_CONTROL. The executive refuses
+     * a second call. A refusal here leaves the system with no system process,
+     * so it halts the boot.
+     */
+    {
+        uint32_t est = vms_kif_establish_system();
+        if (!(est & 1)) {
+            char why[96];
+            snprintf(why, sizeof why,
+                     "the executive refused the system identity (status %08X)",
+                     (unsigned)est);
+            ovmx_exec_halt(why, "the boot task could not become SYSTEM");
+        }
+    }
+
     if (executive_announce_deferred)
         return;                 /* conversational path: %OVMX-I-EXEC deferred to
                                  * executive_announce() after the SYSBOOT> prompt */
@@ -1752,26 +1777,6 @@ static void run_startup(void)
     if (stat(provision_path, &st) != 0)
         ovmx_exec_halt("SYS$SYSTEM:PROVISION.EXE is missing",
                        "the system process has no authorized identity");
-
-    /*
-     * THE SYSTEM PROCESS'S IDENTITY, ONCE (rd vms-a2c, design note 3.1's
-     * bootstrap exception). VMS system initialization creates the system
-     * process; nothing later asks to become SYSTEM. So the boot task makes
-     * the executive's one ESTABLISH_SYSTEM call here, before it creates
-     * anything, and every process after it gets its identity from its
-     * creator: PROVISION (and the STARTUP DCL it becomes) as this task's
-     * subprocess, JOB_CONTROL and the other RUN/DETACHED processes from
-     * STARTUP, each login session from JOB_CONTROL. The executive refuses a
-     * second call. A refusal here leaves the system with no identity at all,
-     * so it halts the boot.
-     */
-    uint32_t est = vms_kif_establish_system();
-    if (!(est & 1)) {
-        char why[96];
-        snprintf(why, sizeof why, "the executive refused the system identity (status %08X)",
-                 (unsigned)est);
-        ovmx_exec_halt(why, "the boot task could not become SYSTEM");
-    }
 
     /*
      * PID 1's SIGCHLD handler reaps ANY child (waitpid(-1, WNOHANG)) -- it is

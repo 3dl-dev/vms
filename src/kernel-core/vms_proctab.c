@@ -2049,10 +2049,11 @@ static uint32_t subst_uid_alloc_locked(void)
 }
 
 /*
- * vms_proc_subst_uic - the UIC a FRESH registration takes. A task whose
- * substrate uid is one the executive gave a VMS process is that process's
- * (a fork of it): it takes that process's UIC. Any other task keeps today's
- * [gid,uid] derivation. Takes vms_proc_hash_lock itself.
+ * vms_proc_subst_uic - the UIC the NetBSD substrate's find-or-create
+ * (vms_netbsd.c vms_proc_get) seeds a row with; it goes with that path in the
+ * second half of rd vms-2a5. A task whose substrate uid is one the executive
+ * gave a VMS process takes that process's UIC; any other keeps the [gid,uid]
+ * derivation. Takes vms_proc_hash_lock itself.
  */
 uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid)
 {

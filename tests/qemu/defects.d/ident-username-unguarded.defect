@@ -35,8 +35,8 @@ USER NAME CLAUSE ISOLATED: same UIC, same mask, different name -> SS$_NOPRIV
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-... and the process is STILL UNNAMED (a process cannot name itself a user)
-an UNNAMED process cannot stamp an identity at all -- there is no name it is allowed to hold constant
+... and the process keeps its own name (a process cannot name itself a user)
+a process without CMKRNL cannot stamp an identity at all, not even a weaker one
 ... and the executive still holds the name it authenticated
 the refused climb-back changed nothing
 A WRITES the user name, B READS it (identity is executive-resident)

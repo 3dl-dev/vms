@@ -111,7 +111,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     [ "$n_raw" -ge 1 ] || { echo "FATAL: no raw test_kmod_* matched -- the selector no longer matches anything"; exit 1; }
     [ "$n_kif" -ge 1 ] || { echo "FATAL: no vms_kif.h test_kmod_* matched -- the selector no longer matches anything"; exit 1; }
 
-    $CC -static -O2 -Wall /tools/ke-init-alpha.c -o /work/ke-init
+    $CC -static -O2 -Wall -I/repo/src/kernel /tools/ke-init-alpha.c -o /work/ke-init
 
     echo "== cross-compile DCL.EXE for alpha (CMake glibc-static toolchain) =="
     # DCL.EXE is staged as the REAL shipped shell so cross-process suites can

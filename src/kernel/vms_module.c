@@ -1499,8 +1499,11 @@ struct vms_proc *vms_proc_create_boot_task(void)
  * a whole process, and without a PCB. Its identity is the creator's (a
  * subprocess, process name cleared -- it names itself with $SETPRN) or the one
  * given (detached, authorized by the caller); its creator of record is
- * `creator`; it copies nothing else -- no process logical names, no BG
- * channels: a $CREPRC'd process starts with none of its creator's (VMS).
+ * `creator`; it copies no process logical names (a $CREPRC'd process starts
+ * with none of its creator's, VMS). A subprocess does take its creator's open
+ * BGn: channels -- the descriptor inheritance a forking server's child needs
+ * (OpenSSH sshd-session through DECC$ vfork/exec), copied while the creator
+ * still holds the child; a DETACHED process takes none.
  *
  * CONTINUE (rd vms-e50): DCL's image task. OVMX runs an image in a forked task
  * where VMS runs it in the process itself, so the task IS the creator's VMS
@@ -1585,6 +1588,7 @@ uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint3
          * privileges as an activated image does (rd vms-bdc1). */
         vms_proc_copy_identity(proc, creator, true);
     } else if (!detached) {
+        /* NEGCTL-ANCHORED (register-subprocess-identity-self-declared) */
         vms_proc_copy_identity(proc, creator, false);
         proc->prcnam[0] = '\0';
     } else {
@@ -1605,6 +1609,10 @@ uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint3
                             : (creator->job_id ? creator->job_id : creator->vms_pid);
     hash_add_rcu(vms_proc_hash, &proc->hash_node, tgid);
     spin_unlock(&vms_proc_hash_lock);
+    /* No process logical names are copied: a $CREPRC'd process starts with
+     * an empty LNM$PROCESS of its own (VMS); an image task (CONTINUE) shares
+     * its creator's table because it IS its creator's process. */
+    /* NEGCTL-ANCHORED (creprc-detached-copies-creator-lnm) */
     *vms_pid_out = proc->vms_pid;
     return SS__NORMAL;
 }
@@ -1771,8 +1779,11 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     if (cmd == VMS_IOCTL_CLUSTER_DIAG_DLM)
         return vms_ioctl_cluster_diag_dlm(NULL, arg);
 
-    /* All other ioctls require a registered process */
+    /* Every other service needs the caller's PCB, which only its creator (or,
+     * for the boot task, ESTABLISH_SYSTEM) can have made: a task the executive
+     * did not create is refused, and no service makes it one (rd vms-2a5). */
     proc = vms_proc_find_or_err();
+    /* NEGCTL-ANCHORED (unknown-task-gets-pcb) */
     if (!proc)
         return -ESRCH;
 

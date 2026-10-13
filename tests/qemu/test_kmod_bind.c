@@ -1,42 +1,24 @@
 /*
- * test_kmod_bind.c - The product actually reaches the executive (vms-9fc)
+ * test_kmod_bind.c - The product reaches the executive, and only processes the
+ * executive created do (vms-9fc, rd vms-2a5).
  *
- * vms_kif.h documented a two-step protocol from the day it was written:
- * open /dev/vms, then vms_kif_register(). vms_kif_register() was defined
- * and had ZERO CALLERS product-wide. src/kernel/vms_module.c routes every
- * ioctl except REGISTER through vms_proc_find_or_err(), which returns
- * -ESRCH for an unregistered task -- so EVERY /dev/vms call OVMX made was
- * rejected, including sys$ENQ/$DEQ, the facility the executive-retrofit
- * design named as "already wired" and told every implementer to copy.
+ * There is no registration. A process's PCB is made by its creator before it
+ * runs (VMS_IOCTL_CREPRC_PCB; this suite's by the harness boot task, its
+ * children's by this suite), so the first vms_kif_* call a process makes just
+ * opens its own /dev/vms descriptor (kif_bind) and reaches its row. A task the
+ * executive did not create has no row, and every service refuses it with
+ * SS$_NONEXPR. Each property below is checked against a real /dev/vms:
  *
- * A test that opens and registers by hand cannot see that defect: it
- * supplies the very step the product forgets. This file's positive path
- * uses the public entry points exactly the way libvms uses them, against
- * a real /dev/vms, WITHOUT calling vms_kif_open() or vms_kif_register()
- * by hand first to reach the facility under test -- except where the
- * manual call IS the subject (suite 0's bare-setident probe below, and
- * suites 4/5's post-exec register-adopt, each explained at its own
- * definition, not here). Each property below has a minimal mutation
- * described at its own definition:
- *
- *   0 setident binds   (vms-fb9 r6) src/libvmssys/vms_kif.c:
- *                      vms_kif_setident() -> KIF_CALL(...) back to a raw
- *                      vms_sys_ioctl() with no kif_bind()
- *   1 auto-bind        remove the vms_kif_register() call in kif_bind()
- *   2 $ENQ/$DEQ        (same mutation reaches it; see suite 2 note)
- *   3 fork re-bind     kif_bind(): `vms_bound_pid == pid` -> `!= 0`
- *   4 post-exec adopt  vms_module.c: adopt branch -> old 0x1C status
- *   5 adopt keeps privs vms_module.c: adopt branch -> re-apply init_privs
+ *   0 setident binds   (vms-fb9 r6) vms_kif_setident() goes through KIF_CALL
+ *   1 first call binds no explicit vms_kif_open() before a facility
+ *   2 $ENQ/$DEQ        the lock manager through the same path
+ *   3 subprocess       a child its creator made reaches its OWN row
+ *   3b not created     a plain fork() child is refused SS$_NONEXPR and is in
+ *                      no $PROCESS_SCAN (negctl unknown-task-gets-pcb)
+ *   4 post-exec        an image activated in a process is the same VMS
+ *                      process: no call needed, identity and PID intact
  *   6 errno mapping    vms_kif_kerr_to_ss(): any one arm
- *   7 one PCB/process  vms_module.c: current->tgid -> current->pid
- *
- * Suite 0 is a NARROWER property than suite 1: it exists because
- * vms_kif_setident() was, until r6, the ONE entry point in
- * src/libvmssys/vms_kif.c that bypassed kif_bind() entirely (a raw
- * vms_sys_ioctl(), not KIF_CALL) -- so restoring JUST that one bypass
- * (putting the raw ioctl back) turns suite 0 red while suites 1-7 stay
- * green, and restoring the vms-9fc defect in kif_bind() itself (suite 1's
- * mutation) turns suite 0 red TOO, because setident now reaches kif_bind().
+ *   7 one PCB/process  threads share the process's row (negctl pcb-per-thread)
  *
  * Status values are ORACLE-PINNED on the reference lab node VAX1, OpenVMS
  * VAX V7.3 (2026-07-30), by two independent documented-tool observations:
@@ -58,7 +40,7 @@
  *
  * Modes:
  *   (no args)                 the test
- *   --reexec <pipe-wfd>       the freshly activated image (suites 4/5)
+ *   --reexec <pipe-wfd>       the freshly activated image (suite 4)
  */
 
 #include <stdio.h>
@@ -73,6 +55,7 @@
 #include <sys/wait.h>
 
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"
 
 /* Oracle-pinned; see the file header. */
 #define SS_NORMAL       1
@@ -85,6 +68,7 @@
 #define SS_ILLIOFUNC    244
 #define SS_INSFMEM      292
 #define SS_BUGCHECK     676
+#define SS_NONEXPR      2280
 
 /* Local cluster 1 (EFN 32-63). Deliberately NOT a common-cluster flag:
  * EFN 64+ answers SS$_UNASEFC until $ASCEFC associates the cluster, which
@@ -100,39 +84,25 @@
 #define THREAD_RESNAM   "VMS$THREADPROBE"
 #define THREAD_NAME     "VMS$THREADED"
 
-/* Suite 0's identity. This process is root under QEMU (PID 1 runs init.sh
- * as uid 0), so it holds SETPRV from registration (VMS_PRV_M_ENFORCED) and
- * VMS_IOCTL_SETIDENT does not refuse the stamp on privilege grounds -- the
- * property under test is purely "did the ioctl reach a registered process
- * at all", not identity authorization (that is test_kmod_ident.c's job). */
+/* Suite 0's identity. The probe is a subprocess of this suite, which the boot
+ * task made SYSTEM, so it holds CMKRNL/SETPRV and VMS_IOCTL_SETIDENT does not
+ * refuse the stamp on privilege grounds -- the property under test is purely
+ * "did the ioctl reach the process's row at all", not identity authorization
+ * (that is test_kmod_ident.c's job). */
 #define BARE_SETIDENT_USER   "VMS$BAREID"
 #define BARE_SETIDENT_UIC    (((uint32_t)401 << 16) | 402u)
 #define BARE_SETIDENT_PRIVS  VMS_PRV_M_TMPMBX
 
 /*
- * The identity suite 5 establishes before the image is thrown away, and
- * which adoption must hand back to the image that replaces it.
- *
- * REWRITTEN FOR vms-2b8 ROUND 3, and the rewrite makes the suite STRONGER
- * rather than weaker. It used to pass PRIV_FIRST to the first REGISTER and
- * PRIV_SECOND to the second, and assert that the executive's mask did not
- * follow the second request. VMS_IOCTL_REGISTER no longer HAS a privilege
- * argument -- a process cannot ask for privileges at registration at all,
- * and cannot ask for a VMS process ID either -- so the old probe would now
- * be asserting that an argument which does not exist was ignored.
- *
- * The identity is therefore established the way a process really acquires
- * one, through VMS_IOCTL_SETIDENT while holding SETPRV, and adoption has
- * to preserve ALL of it: the user name, the UIC, the privilege mask, the
- * process name AND the VMS process ID. The last of those is new coverage
- * that the old form could not express, because the pid used to be
- * whatever userspace passed.
+ * The identity suite 4 establishes before the image is thrown away, and which
+ * the image that replaces it must still have: the user name, UIC, privilege
+ * mask, process name and VMS process ID. An image activation does not create
+ * a process (VMS), so nothing is asked for and nothing is re-derived.
  */
 #define ADOPT_USER      "VMS$ADOPT"
 #define ADOPT_UIC       (((uint32_t)301 << 16) | 302u)
-/* TMPMBX|NETMBX|OPER -- OPER is not in the mask registration derives, so
- * establishing it proves the identity came from SETIDENT and not from
- * registration re-deriving a default. */
+/* TMPMBX|NETMBX|OPER -- a mask different from SYSTEM's, so a match after exec
+ * proves the image kept the identity SETIDENT established. */
 #define ADOPT_PRIVS     ((1ULL << 15) | (1ULL << 20) | (1ULL << 18))
 
 static int pass = 0, fail = 0;
@@ -151,12 +121,10 @@ struct fork_report {
 
 /* What the re-execed image reports back. */
 struct exec_report {
-    uint32_t register_status;   /* REGISTER issued by a process that has an
-                                 * executive entry already -- the adopt case */
     uint32_t getjpi_status;
     uint32_t linux_pid;
-    uint32_t vms_pid;           /* VMS process ID AFTER the second REGISTER */
-    uint64_t cur_privs;         /* privileges AFTER the second REGISTER */
+    uint32_t vms_pid;           /* VMS process ID after the exec */
+    uint64_t cur_privs;         /* privileges after the exec */
     uint32_t uic;
     char     username[VMS_USERNAME_SIZE];
     char     prcnam[VMS_PRCNAM_SIZE];
@@ -169,12 +137,11 @@ struct preexec_note {
 };
 
 /* ================================================================
- * The re-executed image (suites 4 and 5)
+ * The re-executed image (suite 4)
  *
- * This image was never registered. Its predecessor was, in the same
- * process, and closed the channel before exec. It re-issues REGISTER --
- * which on VMS terms is a second image activation inside one process, and
- * so must ADOPT the surviving entry, not fail and not reset it.
+ * Its predecessor, in the same process, established an identity and closed
+ * its channel before exec. This image asks for nothing: on VMS an image
+ * activation does not create a process, so the row is simply still there.
  * ================================================================ */
 static int reexeced_image(int wfd)
 {
@@ -184,17 +151,6 @@ static int reexeced_image(int wfd)
     uint64_t cur = 0, perm = 0;
 
     memset(&rep, 0, sizeof(rep));
-
-    if (vms_kif_open() < 0) {
-        rep.register_status = 0;   /* 0 is not a VMS status: never got there */
-        (void)!write(wfd, &rep, sizeof(rep));
-        return 1;
-    }
-
-    /* The adopt case. There is nothing left to ask FOR (vms-2b8: neither
-     * a privilege mask nor a process ID), so what adoption must do is
-     * hand back the identity the previous image established -- whole. */
-    rep.register_status = vms_kif_register(NULL);
 
     memset(&info, 0, sizeof(info));
     rep.getjpi_status = vms_kif_getjpi_self(&info);
@@ -214,13 +170,13 @@ static int reexeced_image(int wfd)
 }
 
 /* ================================================================
- * The forked child (suite 3)
+ * The child (suites 3 and 3b)
  *
  * It inherited the parent's thread-local state wholesale: the parent's
  * /dev/vms descriptor number AND the parent's "bound" mark. The executive
- * keys its process table by process, and a fork makes a new one, so the
- * child is NOT registered no matter what its TLS claims. It calls ONE
- * public entry point and nothing else.
+ * keys its process table by process: made by its creator (suite 3), the child
+ * reaches its OWN row; a plain fork() (suite 3b) has none and is refused. It
+ * calls ONE public entry point and nothing else.
  * ================================================================ */
 static void forked_child(int wfd)
 {
@@ -250,7 +206,7 @@ static void forked_child(int wfd)
  * of one image cannot disagree about who they are.
  *
  * This thread therefore uses the public entry points and nothing else
- * (no explicit open, no explicit register: kif_bind runs inside it) and
+ * (no explicit open: kif_bind runs inside it) and
  * reports what the executive tells it. Every value it reports was
  * established by the MAIN thread before this one existed.
  * ================================================================ */
@@ -294,23 +250,13 @@ static void *sibling_thread(void *arg)
  * descriptor is deliberate: it is the only way to reach the failure
  * modes, because the bound client no longer produces them.
  * ================================================================ */
-static int raw_ioctl_errno(unsigned long req, void *arg, int reg)
+static int raw_ioctl_errno(unsigned long req, void *arg)
 {
     int fd = open("/dev/vms", O_RDWR);
     int rc;
 
     if (fd < 0)
         return 0;
-
-    if (reg) {
-        struct vms_register_args ra;
-        memset(&ra, 0, sizeof(ra));
-        ra.vms_pid = (uint32_t)getpid();
-        if (ioctl(fd, VMS_IOCTL_REGISTER, &ra) < 0) {
-            close(fd);
-            return 0;
-        }
-    }
 
     errno = 0;
     rc = ioctl(fd, req, arg);
@@ -320,13 +266,10 @@ static int raw_ioctl_errno(unsigned long req, void *arg, int reg)
 }
 
 /*
- * unregistered_task_errno - what vms.ko answers a task it has no entry for.
- *
- * Forked, because the parent has an entry by now and the executive's
- * lookup is by task. The child touches NO vms_kif_* function -- calling
- * one would bind it and destroy the condition being measured.
+ * unknown_task_errno - what vms.ko answers a task it has no entry for: a plain
+ * fork() child, which the executive did not create (rd vms-2a5).
  */
-static int unregistered_task_errno(void)
+static int unknown_task_errno(void)
 {
     int p[2];
     pid_t c;
@@ -348,7 +291,7 @@ static int unregistered_task_errno(void)
         close(p[0]);
         memset(&efa, 0, sizeof(efa));
         efa.efn = BIND_EFN;
-        ce = raw_ioctl_errno(VMS_IOCTL_SETEF, &efa, 0);
+        ce = raw_ioctl_errno(VMS_IOCTL_SETEF, &efa);
         (void)!write(p[1], &ce, sizeof(ce));
         _exit(0);
     }
@@ -368,8 +311,6 @@ int main(int argc, char **argv)
     uint32_t status, state;
     uint32_t lkid = 0;
     struct vms_procinfo info;
-    uint8_t mode = 0;
-    uint64_t cur = 0, perm = 0;
     char wfd_arg[16];
 
     if (argc >= 3 && strcmp(argv[1], "--reexec") == 0)
@@ -384,26 +325,16 @@ int main(int argc, char **argv)
     }
 
     /* ------------------------------------------------------------
-     * SUITE 0 -- vms_kif_setident() NOW BINDS TOO.
+     * SUITE 0 -- vms_kif_setident() BINDS TOO.
      *
      * Until vms-fb9 r6, vms_kif_setident() issued a raw vms_sys_ioctl()
-     * instead of going through kif_call()/KIF_CALL -- so it never ran
-     * kif_bind() and reached an unregistered process's entry, the same
-     * class of defect suite 1 below exists to prove fixed for the
-     * facilities it drives ($SETEF/$READEF/$GETJPI). Measured against a
-     * real /dev/vms before the r6 fix:
-     * vms_kif_open() followed by a BARE vms_kif_setident() (no
-     * vms_kif_register(), no other vms_kif_* call first) returned
-     * status=20 (SS$_BADPARAM) -- not because the parameters were bad,
-     * but because the unbound ioctl was rejected -ESRCH and the old
-     * failure path hard-coded SS$_BADPARAM for every failure.
-     *
-     * Run in a FORKED CHILD, and before suite 1: the probe has to be the
-     * FIRST vms_kif_* call this task ever makes, or the process would
-     * already be bound (by suite 1's own calls) and the defect would be
-     * invisible -- exactly the trap suite 1's own comment warns about.
+     * instead of going through KIF_CALL, so it never ran kif_bind(): measured
+     * before r6, a vms_kif_open() followed by a BARE vms_kif_setident()
+     * returned SS$_BADPARAM because the ioctl never reached the process's
+     * row. Run in a SUBPROCESS this suite creates (its row exists before it
+     * runs), as the first vms_kif_* call that process makes after open.
      * ------------------------------------------------------------ */
-    printf("--- 0. vms_kif_setident() binds with no prior register ---\n");
+    printf("--- 0. vms_kif_setident() binds as its first call ---\n");
 
     {
         int p[2];
@@ -417,7 +348,7 @@ int main(int argc, char **argv)
             goto done;
         }
 
-        c = fork();
+        c = ovmx_fork_subprocess();
         if (c < 0) {
             printf("  FAIL: fork()\n");
             fail++;
@@ -443,81 +374,63 @@ int main(int argc, char **argv)
         waitpid(c, NULL, 0);
 
         CHECK(n == (ssize_t)sizeof(s), "bare-setident child reported back");
-        /* negctl: bind-client-no-register */
         CHECK(s == SS_NORMAL,
               "vms_kif_open() then a BARE vms_kif_setident() reaches the "
-              "executive with no explicit register");
+              "process's row");
         CHECK(s != SS_BADPARAM,
               "... and is not rejected as the caller's own bad parameter "
               "(the pre-r6 raw-ioctl failure path)");
     }
 
     /* ------------------------------------------------------------
-     * SUITE 1 -- AUTO-BIND.
+     * SUITE 1 -- THE FIRST CALL BINDS.
      *
-     * No vms_kif_open(). No vms_kif_register(). The first thing this
-     * process ever does to the executive is use a facility, exactly as
-     * libvms does. Before this change every one of these returned
-     * SS$_BADPARAM, because the ioctl was rejected with -ESRCH and every
-     * errno was reported as "your parameters were bad".
+     * No vms_kif_open(). The first thing this process does to the executive
+     * is use a facility, exactly as libvms does. Its row was made by its
+     * creator (the harness boot task) before it ran.
      * ------------------------------------------------------------ */
-    printf("--- 1. auto-bind: a facility used with no explicit register ---\n");
+    printf("--- 1. a facility used as the process's first executive call ---\n");
 
     status = vms_kif_setef(BIND_EFN);
-    /* negctl: bind-client-no-register */
     CHECK(status == SS_WASCLR || status == SS_WASSET,
-          "$SETEF reaches the executive with no explicit register");
+          "$SETEF reaches the executive with no explicit open");
     CHECK(status != SS_BADPARAM,
           "$SETEF does not report the caller's parameters as bad");
 
     state = 0;
     status = vms_kif_readef(BIND_EFN, &state);
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: eflag-readef-status-inverted */
     CHECK(status == SS_WASSET, "$READEF sees the flag this process just set");
-    /* negctl-knockon: bind-client-no-register */
     CHECK((state & (1u << (BIND_EFN % 32))) != 0,
           "cluster state carries the flag bit");
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_self(&info);
-    /* negctl: bind-client-no-register */
-    CHECK(status == SS_NORMAL, "$GETJPI(self) resolves the auto-bound process");
-    /* negctl-knockon: bind-client-no-register */
+    CHECK(status == SS_NORMAL, "$GETJPI(self) resolves this process");
     CHECK(info.linux_pid == (uint32_t)getpid(),
           "the executive entry is this process's own");
 
     /* ------------------------------------------------------------
-     * SUITE 2 -- sys$ENQ / sys$DEQ.
-     *
-     * The item's done-condition. src/libvms/syssvc/sys_lock.c calls
-     * vms_kif_enq()/vms_kif_deq() and adds only status translation on top,
-     * and libvms cannot yet be built into this initramfs (vms-1d9), so the
-     * ioctl path is exercised here at the layer sys_lock.c calls. Same
-     * auto-bind rule: nothing registers first.
+     * SUITE 2 -- sys$ENQ / sys$DEQ, through the same path.
      * ------------------------------------------------------------ */
-    printf("--- 2. lock manager reached through the same auto-bind ---\n");
+    printf("--- 2. lock manager reached through the same path ---\n");
 
     status = vms_kif_enq(0, 5 /* LCK$K_EXMODE */, 0, BIND_RESNAM, 0,
                          0, 0, 0, &lkid, NULL);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS_NORMAL, "$ENQ EX granted through /dev/vms");
-    /* negctl-knockon: bind-client-no-register */
     CHECK(lkid != 0, "$ENQ returned a lock id");
 
     status = vms_kif_deq(lkid, NULL, 0);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS_NORMAL, "$DEQ released the lock");
 
     /* ------------------------------------------------------------
-     * SUITE 3 -- fork().
+     * SUITE 3 -- a subprocess its creator made reaches its OWN row.
      *
      * The child's thread-local state says "already bound" and names a
-     * descriptor it inherited. Both are lies about the child. If the bind
-     * is guarded by a plain boolean the child never registers and every
-     * call it makes is rejected forever.
+     * descriptor it inherited. Both are about the parent. kif_bind() must
+     * notice the new process and take its own descriptor.
      * ------------------------------------------------------------ */
-    printf("--- 3. a forked child binds as itself ---\n");
+    printf("--- 3. a subprocess binds as itself ---\n");
 
     if (pipe(pipefd) < 0) {
         printf("  FAIL: pipe()\n");
@@ -525,7 +438,7 @@ int main(int argc, char **argv)
         goto done;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();
     if (child < 0) {
         printf("  FAIL: fork()\n");
         fail++;
@@ -549,49 +462,103 @@ int main(int argc, char **argv)
         close(pipefd[0]);
         waitpid(child, NULL, 0);
 
-        CHECK(n == (ssize_t)sizeof(frep), "forked child reported back");
-        /* negctl-knockon: bind-client-no-register */
+        CHECK(n == (ssize_t)sizeof(frep), "subprocess reported back");
         CHECK(frep.setef_status == SS_WASCLR || frep.setef_status == SS_WASSET,
-              "forked child's $SETEF reaches the executive");
-        /* negctl-knockon: bind-client-no-register */
-        CHECK(frep.setef_status != SS_BUGCHECK,
-              "forked child is not rejected as an unregistered task");
-        /* negctl-knockon: bind-client-no-register */
+              "subprocess's $SETEF reaches the executive");
         CHECK(frep.getjpi_status == SS_NORMAL,
-              "forked child resolves itself in the process table");
-        /* negctl-knockon: bind-client-no-register */
+              "subprocess resolves itself in the process table");
         CHECK(frep.linux_pid == (uint32_t)child,
-              "child's executive entry is the CHILD's, not the parent's");
+              "subprocess's executive entry is the CHILD's, not the parent's");
     }
 
     /* ------------------------------------------------------------
-     * SUITES 4 and 5 -- execve(), and what REGISTER does afterwards.
+     * SUITE 3b -- A TASK THE EXECUTIVE DID NOT CREATE IS NOT A VMS PROCESS
+     * (rd vms-2a5, design note 3.1).
+     *
+     * A plain fork() child calls the same public entry points. There is no
+     * registration: no service makes it a PCB. Every call is refused
+     * SS$_NONEXPR, and $PROCESS_SCAN, run by this suite, never lists it.
+     * ------------------------------------------------------------ */
+    printf("--- 3b. a plain fork() child is refused and is in no $PROCESS_SCAN ---\n");
+
+    {
+        int up[2], go[2];
+
+        if (pipe(up) < 0 || pipe(go) < 0) {
+            printf("  FAIL: pipe()\n");
+            fail++;
+            goto done;
+        }
+        child = fork();
+        if (child < 0) {
+            printf("  FAIL: fork()\n");
+            fail++;
+            goto done;
+        }
+        if (child == 0) {
+            struct fork_report rep;
+            struct vms_procinfo cinfo;
+            char b;
+
+            close(up[0]); close(go[1]);
+            memset(&rep, 0, sizeof(rep));
+            rep.setef_status = vms_kif_setef(BIND_EFN);
+            memset(&cinfo, 0, sizeof(cinfo));
+            rep.getjpi_status = vms_kif_getjpi_self(&cinfo);
+            rep.linux_pid = cinfo.linux_pid;
+            (void)!write(up[1], &rep, sizeof(rep));
+            (void)!read(go[0], &b, 1);          /* alive while the scan runs */
+            _exit(0);
+        }
+        close(up[1]); close(go[0]);
+        {
+            struct fork_report urep;
+            struct vms_procinfo row;
+            uint32_t index = 0, listed = 0, scanned = 0;
+            ssize_t n;
+
+            memset(&urep, 0, sizeof(urep));
+            n = read(up[0], &urep, sizeof(urep));
+            CHECK(n == (ssize_t)sizeof(urep), "the plain fork() child reported back");
+            /* negctl: unknown-task-gets-pcb */
+            CHECK(urep.setef_status == SS_NONEXPR,
+                  "a task the executive did not create is refused $SETEF with SS$_NONEXPR");
+            /* negctl: unknown-task-gets-pcb */
+            CHECK(urep.getjpi_status == SS_NONEXPR,
+                  "... and $GETJPI(self) with SS$_NONEXPR: it has no row");
+
+            for (;;) {
+                memset(&row, 0, sizeof(row));
+                status = vms_kif_procscan(&index, &row);
+                if (status != SS_NORMAL)
+                    break;
+                scanned++;
+                if (row.linux_pid == (uint32_t)child)
+                    listed++;
+                if (scanned > 4096)
+                    break;
+            }
+            CHECK(scanned > 0, "$PROCESS_SCAN listed this system's processes");
+            /* negctl: unknown-task-gets-pcb */
+            CHECK(listed == 0, "the task the executive did not create is in no $PROCESS_SCAN");
+        }
+        (void)!write(go[1], "g", 1);
+        close(up[0]); close(go[1]);
+        waitpid(child, NULL, 0);
+    }
+
+    /* ------------------------------------------------------------
+     * SUITE 4 -- execve(): the activated image is the same VMS process.
      *
      * ORACLE PIN (VAX1, OpenVMS VAX V7.3, 2026-07-30): activating an image
-     * inside an existing process does not recreate the process and is not
-     * an error. SHOW PROCESS/ACCOUNTING across two more image activations:
+     * inside an existing process does not recreate the process. SHOW
+     * PROCESS/ACCOUNTING across two more image activations:
      *     Process ID: 2020021D  name "SYSTEM"  Images activated: 19
      *     Process ID: 2020021D  name "SYSTEM"  Images activated: 21
-     * So a second REGISTER must ADOPT: SS$_NORMAL, same identity, and --
-     * because an image activation never changes a process's privileges --
-     * the privilege mask the previous image established must survive.
+     * The image after exec asks for nothing and finds its identity, process
+     * name and VMS process ID as the previous image left them.
      * ------------------------------------------------------------ */
-    printf("--- 4/5. post-exec REGISTER adopts the surviving process ---\n");
-
-    /* Re-registering an already-bound process is the SUBJECT of the test,
-     * not a setup step the product would otherwise need. It carries no
-     * arguments at all now (vms-2b8), so the only thing it can do wrong is
-     * disturb the process it found. */
-    status = vms_kif_register(NULL);
-    CHECK(status == SS_NORMAL,
-          "re-registering an already-bound process is accepted (adopt)");
-
-    status = vms_kif_setprn(REEXEC_NAME);
-    CHECK(status == SS_NORMAL, "process named before image activation");
-
-    if (vms_kif_getmode(&mode, &cur, &perm) == SS_NORMAL)
-        CHECK((cur & (1ULL << 18)) == 0,
-              "adoption did not conjure a privilege registration never grants");
+    printf("--- 4. the image activated after execve() is the same VMS process ---\n");
 
     if (pipe(pipefd) < 0) {
         printf("  FAIL: pipe()\n");
@@ -599,7 +566,7 @@ int main(int argc, char **argv)
         goto done;
     }
 
-    child = fork();
+    child = ovmx_fork_subprocess();
     if (child < 0) {
         printf("  FAIL: fork()\n");
         fail++;
@@ -610,21 +577,14 @@ int main(int argc, char **argv)
     if (child == 0) {
         close(pipefd[0]);
 
-        /* Establish the pre-exec identity in the CHILD's own executive
-         * entry, then throw the image away. Nothing is carried across:
-         * the channel is closed, no environment variable, no descriptor.
-         *
-         * The identity is established through SETIDENT, the way a process
-         * really acquires one -- registration carries no privilege mask
-         * to establish it with any more (vms-2b8). This image is still
-         * root here, so it holds SETPRV and the stamp is legitimate. */
+        /* Establish the pre-exec identity on the child's own row, then throw
+         * the image away. Nothing is carried across: the channel is closed,
+         * no environment variable, no descriptor. */
         {
             struct preexec_note note;
             struct vms_procinfo pinfo;
 
             memset(&note, 0, sizeof(note));
-            if (vms_kif_register(NULL) != SS_NORMAL)
-                _exit(72);
             if (vms_kif_setprn(REEXEC_NAME "2") != SS_NORMAL)
                 _exit(73);
             if (vms_kif_setident(ADOPT_USER, ADOPT_UIC, ADOPT_PRIVS) != SS_NORMAL)
@@ -653,7 +613,7 @@ int main(int argc, char **argv)
         memset(&note, 0, sizeof(note));
         n = read(pipefd[0], &note, sizeof(note));
         CHECK(n == (ssize_t)sizeof(note) && note.vms_pid != 0,
-              "the pre-exec image reported the VMS process ID it was assigned");
+              "the pre-exec image reported its VMS process ID");
 
         memset(&erep, 0, sizeof(erep));
         n = read(pipefd[0], &erep, sizeof(erep));
@@ -661,40 +621,27 @@ int main(int argc, char **argv)
         waitpid(child, NULL, 0);
 
         CHECK(n == (ssize_t)sizeof(erep), "re-execed image reported back");
-        CHECK(erep.register_status == SS_NORMAL,
-              "REGISTER after execve() adopts the process (SS$_NORMAL)");
-        CHECK(erep.register_status != 0x1C,
-              "REGISTER after execve() is not reported as a duplicate");
         CHECK(erep.getjpi_status == SS_NORMAL,
-              "adopted process still resolves in the process table");
+              "the activated image resolves in the process table without asking");
         CHECK(erep.linux_pid == (uint32_t)child,
-              "adoption kept the same executive entry, not a new one");
+              "it is the same executive entry, not a new one");
         CHECK(strcmp(erep.prcnam, REEXEC_NAME "2") == 0,
-              "adoption did not reset the process name");
-        /*
-         * The identity established before the image was thrown away has to
-         * come back whole. Registration can no longer be handed a mask or a
-         * pid to disturb it with (vms-2b8), so anything different here is
-         * the executive re-deriving state it was supposed to preserve.
-         */
+              "the process name survived the image activation");
         /* negctl-knockon: getmode-buffer-not-written */
         CHECK(erep.cur_privs == ADOPT_PRIVS,
-              "adoption preserved the privilege mask SETIDENT established");
-        CHECK(erep.uic == ADOPT_UIC,
-              "adoption preserved the UIC");
+              "the privilege mask SETIDENT established survived");
+        CHECK(erep.uic == ADOPT_UIC, "the UIC survived");
         CHECK(strcmp(erep.username, ADOPT_USER) == 0,
-              "adoption preserved the authenticated user name");
+              "the authenticated user name survived");
         CHECK(erep.vms_pid == note.vms_pid,
-              "adoption returned the SAME VMS process ID, not a fresh one");
+              "the VMS process ID is the SAME one, not a fresh one");
     }
 
     /* ------------------------------------------------------------
      * SUITE 6 -- honest statuses for real kernel errnos.
      *
-     * Every failure used to be SS$_BADPARAM, i.e. "your parameters were
-     * bad", said to callers whose parameters were fine. The errnos below
-     * are not invented: each is what vms.ko actually returned to a raw
-     * ioctl issued here, and the mapping is then checked against it.
+     * Each errno below is what vms.ko actually returned to a raw ioctl
+     * issued here, and the mapping is then checked against it.
      * ------------------------------------------------------------ */
     printf("--- 6. ioctl failures get honest statuses ---\n");
 
@@ -704,31 +651,21 @@ int main(int argc, char **argv)
 
         /* -ENOTTY: a command number the module does not implement. */
         memset(&efa, 0, sizeof(efa));
-        e = raw_ioctl_errno(_IOWR(VMS_IOC_MAGIC, 0x7E, struct vms_ef_args),
-                            &efa, 1);
+        e = raw_ioctl_errno(_IOWR(VMS_IOC_MAGIC, 0x7E, struct vms_ef_args), &efa);
         CHECK(e == ENOTTY, "module rejects an unknown ioctl with -ENOTTY");
         CHECK(vms_kif_kerr_to_ss(-e) == SS_ILLIOFUNC,
               "-ENOTTY -> SS$_ILLIOFUNC (oracle 244), not SS$_BADPARAM");
 
-        /* -ESRCH: the module's own answer to an unregistered task. This
-         * is the condition auto-bind makes unreachable for the product;
-         * it is provoked here only to show what it maps to if the
-         * executive ever loses a PCB it must hold.
-         *
-         * It has to be provoked in a FRESH PROCESS. The executive keys
-         * its process table by process, not by channel, so a raw second
-         * descriptor opened by THIS process reaches this process's entry
-         * and the ioctl simply succeeds -- which is exactly what the
-         * first version of this check measured, and why it read green on
-         * a claim it was not testing. A second THREAD would not do
-         * either: it shares this process's PCB by design (suite 7). */
-        e = unregistered_task_errno();
-        CHECK(e == ESRCH, "module rejects an unregistered task with -ESRCH");
-        CHECK(vms_kif_kerr_to_ss(-e) == SS_BUGCHECK,
-              "-ESRCH -> SS$_BUGCHECK (oracle 676), not SS$_BADPARAM");
+        /* -ESRCH: the module's answer to a task it did not create, provoked
+         * in a FRESH process (a plain fork): this process's own second
+         * descriptor would reach this process's row. */
+        e = unknown_task_errno();
+        CHECK(e == ESRCH, "module rejects a task it did not create with -ESRCH");
+        CHECK(vms_kif_kerr_to_ss(-e) == SS_NONEXPR,
+              "-ESRCH -> SS$_NONEXPR: not a VMS process");
 
         /* -EFAULT: a pointer the module cannot copy from. */
-        e = raw_ioctl_errno(VMS_IOCTL_SETEF, (void *)(unsigned long)0x1, 1);
+        e = raw_ioctl_errno(VMS_IOCTL_SETEF, (void *)(unsigned long)0x1);
         CHECK(e == EFAULT, "module rejects an unreadable argument with -EFAULT");
         CHECK(vms_kif_kerr_to_ss(-e) == SS_ACCVIO,
               "-EFAULT -> SS$_ACCVIO (oracle 12), not SS$_BADPARAM");
@@ -752,7 +689,7 @@ int main(int argc, char **argv)
      * main thread had set them, and could not release the process's own
      * lock. That is Rule 11's facade inverted: per-thread state
      * pretending to be per-process, and NO single-threaded test can see
-     * it (suites 1-6 all pass either way, because tgid == pid for a
+     * it (suites 0-6 all pass either way, because tgid == pid for a
      * single-threaded process).
      *
      * Minimal mutation for this property and no other:
@@ -801,7 +738,6 @@ int main(int argc, char **argv)
             /* negctl-knockon: eflag-readef-status-inverted */
             CHECK(trep.readef_status == SS_WASSET,
                   "sibling thread sees the event flag the main thread set");
-            /* negctl-knockon: bind-client-no-register */
             /* negctl-knockon: pcb-per-thread */
             CHECK((trep.readef_state & (1u << (THREAD_EFN % 32))) != 0,
                   "sibling thread's cluster state carries the flag bit");

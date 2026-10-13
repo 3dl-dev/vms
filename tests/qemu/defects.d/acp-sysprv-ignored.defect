@@ -5,7 +5,7 @@ defect_meta() {
         case "$_f" in
         facility)     echo "SYSPRV confers the SYSTEM protection category on any protected object (vms_prot_check)";;
         targets)      echo "kernel-core/vms_prot.h";;
-        suites_red)   echo "test_syssvc_privilege_enforce test_syssvc_mbx_prot";;
+        suites_red)   echo "test_syssvc_privilege_enforce test_syssvc_mbx_prot test_syssvc_authorize";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -17,9 +17,10 @@ EOF
         knock_on_fail) cat <<'EOF'
 SYSPRV alone grants the read of the W:W request mailbox (SYSTEM protection category)
 SYSPRV alone grants a write to the no-world-access mailbox (SYSTEM protection category)
+A: AUTHORIZE exited 0 for the admitted session
 EOF
                       ;;
-        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to put a SYSPRV holder in a mailbox's SYSTEM category, for the read and for the write; it is the one SYSPRV property observed on a second object class.";;
+        knock_on_why)  echo "test_syssvc_mbx_prot asks the SAME shared decision (vms_prot.h) to put a SYSPRV holder in a mailbox's SYSTEM category, for the read and for the write; it is the one SYSPRV property observed on a second object class. test_syssvc_authorize's admitted SYSPRV holder (UIC [20,5], not a system group, not SYSUAF's owner) reads SYS\$SYSTEM:SYSUAF.DAT only through SYSPRV, so with the term gone its AUTHORIZE run cannot load SYSUAF and exits 1.";;
         esac
 
 }

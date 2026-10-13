@@ -1,0 +1,25 @@
+# creprc-detached-copies-creator-lnm -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC of a DETACHED process (vms_proc_create_for, kernel/vms_module.c, rd vms-fe7 / vms-2a5) -- the PCB its creator has the executive make starts with an empty LNM\$PROCESS, as on VMS";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_creprc_detached_lnm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_create_for gives a DETACHED process a copy of its creator's LNM\$PROCESS names -- the fork-inheritance shape vms-fe7 found on the booted node (JOB_CONTROL and every login came up with PID 1's plain SYS\$INPUT/OUTPUT/COMMAND = TT:). The suite's creator holds a marker name; detached subjects now see it. Gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+no detached process started with a copy of its creator's (or any) process logical names
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (creprc-detached-copies-creator-lnm)/{n;s|^    \*vms_pid_out = proc->vms_pid;$|    if (detached) vms_lnm_copy_process(creator->vms_pid, proc->vms_pid); /* NEGCTL creprc-detached-copies-creator-lnm */ *vms_pid_out = proc->vms_pid;|}' "$_file"
+    :
+}

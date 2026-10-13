@@ -11,8 +11,8 @@ defect_meta() {
         isolation)    echo "isolated";;
         why)          echo "ACCOUNTING goes back to reporting on \"SYSTEM\" for an unnamed process. This one is not only a wrong label: the same string picks the FILE the login history is read from (ovmx_accounting_get_lastlogin), so an unnamed process is shown SYSTEM's login history under SYSTEM's name.";;
         require_fail) cat <<'EOF'
-G/ACCOUNTING: names no account for an unnamed process
-G/ACCOUNTING: does not report SYSTEM's login history to an unnamed process
+G/ACCOUNTING: names the process's own account, SHIPPING
+G/ACCOUNTING: does not report SYSTEM's login history to a SHIPPING process
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -22,6 +22,6 @@ EOF
 }
 
 defect_apply() {
-        sed -i '/^int cmd_accounting(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-accounting-user-fabricated */|' "$_file"
+        sed -i '/^int cmd_accounting(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = "SYSTEM"; /* NEGCTL dcl-accounting-user-fabricated */|' "$_file"
     :
 }

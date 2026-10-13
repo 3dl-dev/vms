@@ -62,6 +62,7 @@
 #include "stsdef.h"          /* $VMS_STATUS_SUCCESS                          */
 #include "prvdef.h"
 #include "vms_kif.h"
+#include "ovmx_test_fork.h"   /* processes this suite creates (rd vms-2a5) */
 #include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
 
 #define ODS2_UNIT "VDA300:"  /* vdd: the generated system-disk ODS-2 fixture */
@@ -126,9 +127,12 @@ static char *const poison_env[] = {
 #define B_MEM   6u
 #define B_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_LOG_IO | PRV$M_WORLD)
 
-/* Identity C: no identity at all. A real credential change, not a flag --
- * setgid() before setuid(), because setuid() away from root is what drops
- * the capabilities SETPRV is derived from. */
+/* Identity C: an UNPRIVILEGED process -- created by this suite detached in UIC
+ * [300,1001] with only TMPMBX/NETMBX, under a name of its own (rd vms-2a5:
+ * every process is created with an identity; none is unnamed). It also drops
+ * its Linux credentials, setgid() before setuid(), so neither identity lends
+ * it privilege. */
+#define C_NAME  "UNAUTH"
 #define C_GID   300u
 #define C_UID   1001u
 
@@ -164,7 +168,13 @@ static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
      */
     fflush(NULL);
 
-    pid_t pid = fork();
+    /* The process that runs DCL is one this suite creates (rd vms-2a5): a
+     * subprocess with this suite's identity, or -- `drop` -- an UNPRIVILEGED
+     * process in UIC [C_GID,C_UID] named C_NAME. */
+    pid_t pid = drop
+        ? ovmx_fork_detached_st(C_NAME, ((uint32_t)C_GID << 16) | C_UID,
+                                PRV$M_TMPMBX | PRV$M_NETMBX, NULL)
+        : ovmx_fork_subprocess();
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -276,7 +286,7 @@ static int run_session_fork(char *out, size_t outsz)
      */
     fflush(NULL);
 
-    pid_t sess = fork();
+    pid_t sess = ovmx_fork_subprocess();   /* the session: a process this suite creates */
     if (sess < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -306,12 +316,13 @@ static int run_session_fork(char *out, size_t outsz)
                (unsigned)getuid(), (unsigned)getgid());
         fflush(stdout);
 
-        /* 3. The session spawns a subprocess, which claims everything. */
-        pid_t sub = fork();
+        /* 3. The session spawns a subprocess (the session creates it, as
+         *    $CREPRC does), which claims everything. */
+        pid_t sub = ovmx_fork_subprocess();
         if (sub == 0) {
             uint32_t vpid = 0;
-            uint32_t rst = vms_kif_register(&vpid);
-            printf("SUB_REGISTER=%u\n", (unsigned)rst);
+            uint32_t rst = ovmx_test_self(&vpid);
+            printf("SUB_SELF=%u\n", (unsigned)rst);
             uint32_t cst = vms_kif_setident("SYSTEM", (1u << 16) | 4u, ~0ULL);
             printf("SUB_SETIDENT=%u\n", (unsigned)cst);
             fflush(stdout);
@@ -399,7 +410,7 @@ static void scenario_e_a_writes_b_reads(void)
         return;
     }
 
-    a_pid = fork();
+    a_pid = ovmx_fork_subprocess();   /* process A: created by this suite (rd vms-2a5) */
     if (a_pid < 0) {
         CHECK(0, "E: could not fork process A");
         return;
@@ -408,7 +419,7 @@ static void scenario_e_a_writes_b_reads(void)
         uint32_t vpid = 0;
         char go;
         close(a_out[0]); close(a_hold[1]);
-        if (vms_kif_register(&vpid) != SS_NORMAL) _exit(2);
+        if (ovmx_test_self(&vpid) != SS_NORMAL) _exit(2);
         if (!(vms_kif_setident(E_A_NAME, (E_A_GRP << 16) | E_A_MEM,
                                E_A_PRIVS) & 1)) _exit(3);
         /* Publish nothing but the ID. The name, UIC and mask B checks
@@ -451,7 +462,7 @@ static void scenario_e_a_writes_b_reads(void)
      */
     fflush(NULL);
 
-    b_pid = fork();
+    b_pid = ovmx_fork_subprocess();   /* process B: created by this suite (rd vms-2a5) */
     if (b_pid < 0) {
         CHECK(0, "E: could not fork process B");
         close(a_hold[1]);
@@ -464,7 +475,7 @@ static void scenario_e_a_writes_b_reads(void)
         close(b_out[0]);
         dup2(b_out[1], STDOUT_FILENO);
         close(b_out[1]);
-        if (vms_kif_register(&vpid) != SS_NORMAL) { printf("B_REGISTER_FAILED\n"); fflush(stdout); _exit(2); }
+        if (ovmx_test_self(&vpid) != SS_NORMAL) { printf("B_SELF_FAILED\n"); fflush(stdout); _exit(2); }
         /* B takes a DIFFERENT identity, and one WITHOUT SETPRV or
          * WORLD, so nothing below can be B looking at itself and
          * nothing below is explained by B being privileged. */
@@ -558,33 +569,21 @@ static void scenario_e_a_writes_b_reads(void)
  * SYSTEM into OPERATOR.LOG through REPLY, was logged out as SYSTEM, and
  * reported SYSTEM's login history.
  *
- * THE STATE IS REACHABLE WITHOUT PRIVILEGE, and that is why this is a
- * defect rather than a curiosity: vms_proc_register() (src/kernel/
- * vms_module.c) zeroes the username of every newly registered task and
- * inherits nothing -- so ANY process that reaches the executive through the
- * RAW register() path, without an established identity, holds an unnamed row,
- * and F$USER must not fabricate a name for it. (A real SPAWN subprocess is NO
- * LONGER such a process: vms-19e9 gave $CREPRC identity propagation via
- * vms_kif_register_subprocess, so a SPAWNed subprocess inherits the creator's
- * name -- proven in test_syssvc_creprc_inherit.c and pinned by
- * tests/uat/vms_session_qemu.sh 'SPAWN SHOW PROCESS' -> User: SYSTEM. This
- * scenario deliberately forks + register()s to MANUFACTURE the nameless row
- * F$USER's fallback defect needs, which is exactly what it still does.)
+ * WHAT IT IS NOW (rd vms-2a5). There is no registration, so no process is
+ * unnamed: every process is created with an identity. The scenario keeps its
+ * shape -- LOGINOUT's, as scenario D: a session establishes an authenticated
+ * identity through the executive, DROPS its Linux credentials to that UIC,
+ * and only then creates the subprocess, which inherits the session's name,
+ * SHIPPING, and execs the shipped DCL.EXE with the poisoned environment
+ * (VMS_USERNAME=SYSTEM). Every assertion below is made by THIS process, which
+ * is neither the session nor the subprocess, over bytes the subprocess
+ * printed.
  *
- * CROSS-PROCESS BY CONSTRUCTION. The shape is LOGINOUT's, as scenario D:
- * a session establishes an authenticated identity through the executive,
- * DROPS its Linux credentials to that UIC, and only then forks the
- * subprocess. The subprocess registers on its own -- so its row is the
- * unnamed one -- execs the shipped DCL.EXE with the poisoned environment,
- * and every assertion below is made by THIS process, which is neither the
- * session nor the subprocess, over bytes the subprocess printed.
- *
- * WHAT THE ASSERTIONS ARE MADE ON. Each site gets a POSITIVE check that
- * the command ran and rendered the name field EMPTY, in that command's own
- * printf format, plus a NEGATIVE check naming the literal the fallback
- * used to produce. "SYSTEM is absent" alone would be satisfied by the
- * command failing outright, and by the getpwuid() fabrication that the
- * same fallback produced on any system that has an /etc/passwd.
+ * WHAT THE ASSERTIONS ARE MADE ON. Each site gets a POSITIVE check that the
+ * command ran and rendered the executive's name, SHIPPING, in that command's
+ * own printf format, plus a NEGATIVE check naming the literal a fabrication
+ * would produce (SYSTEM, or the host Linux account). "SYSTEM is absent" alone
+ * would be satisfied by the command failing outright.
  * ==================================================================== */
 #define G_NAME  "SHIPPING"
 #define G_GRP   210u
@@ -763,7 +762,7 @@ static size_t g_read_operator_log(char *out, size_t outsz)
 }
 
 /*
- * Empty both candidate operator logs. Used between the unnamed run and the
+ * Empty both candidate operator logs. Used between the subprocess run and the
  * named one below, so each set of header assertions is made about records
  * that run wrote and no other.
  */
@@ -864,7 +863,7 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
      */
     fflush(NULL);
 
-    pid_t sess = fork();
+    pid_t sess = ovmx_fork_subprocess();   /* the session: a process this suite creates */
     if (sess < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -900,14 +899,13 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
         printf("G_SESSION_UID=%u\n", (unsigned)getuid());
         fflush(stdout);
 
-        /* 3. The session SPAWNs. The child registers itself, which is
-         *    where the unnamed row comes from, and claims nothing. */
-        pid_t sub = fork();
+        /* 3. The session SPAWNs: it creates the subprocess (rd vms-2a5), which
+         *    inherits the session's name and claims nothing. */
+        pid_t sub = ovmx_fork_subprocess();
         if (sub == 0) {
             uint32_t vpid = 0;
             struct passwd *pw;
-            printf("G_SUB_REGISTER=%u\n",
-                   (unsigned)vms_kif_register(&vpid));
+            printf("G_SUB_SELF=%u\n", (unsigned)ovmx_test_self(&vpid));
             /* vms-586: point SYS$SYSDEVICE at the $MOUNTed ODS-2 fixture in
              * LNM$JOB, keyed to THIS subprocess's job_id. The DCL.EXE this
              * process execve's into is the SAME process (same job_id), and its
@@ -960,12 +958,12 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
     return 0;
 }
 
-static void scenario_g_unnamed_row_reports_nothing(void)
+static void scenario_g_subprocess_reports_the_executive_name(void)
 {
     static char outg[65536];
     char want[160], nope[160];
 
-    printf("  ---- G: the name-printing commands, in an unnamed subprocess ----\n");
+    printf("  ---- G: the name-printing commands, in a session's subprocess ----\n");
 
     if (g_stage_files() != 0) {
         CHECK(0, "G: could not stage the files SUBMIT and PRINT queue");
@@ -1010,16 +1008,14 @@ static void scenario_g_unnamed_row_reports_nothing(void)
         CHECK(0, "G: could not run the session/subprocess scenario");
         return;
     }
-    dump("G: unnamed subprocess", outg);
+    dump("G: session subprocess", outg);
 
     /* --- the run is what it claims to be ------------------------------ */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outg, "G_SESSION_SETIDENT=1\n") != NULL,
           "G: the session established an authenticated identity");
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outg, "G_SESSION_SELF=" G_NAME "\n") != NULL,
-          "G: the executive HOLDS that name and reads it back -- so the "
-          "subprocess's blank below is not the executive naming nobody");
+          "G: the executive HOLDS that name and reads it back -- the name "
+          "every command below must print is the executive's, SHIPPING");
     {
         char uid_want[64];
         snprintf(uid_want, sizeof(uid_want), "G_SESSION_UID=%u\n",
@@ -1028,25 +1024,24 @@ static void scenario_g_unnamed_row_reports_nothing(void)
               "G: the session dropped its Linux credentials, so the "
               "subprocess is genuinely unprivileged");
     }
-    CHECK(strstr(outg, "G_SUB_REGISTER=1\n") != NULL,
-          "G: the subprocess reached the executive and got a row of its own "
-          "(so its blank name is a real blank, not an absent executive)");
+    CHECK(strstr(outg, "G_SUB_SELF=1\n") != NULL,
+          "G: the subprocess has the row its creator (the session) made");
     CHECK(strstr(outg, "G_SUB_EXEC_FAILED") == NULL,
           "G: the subprocess actually exec'd the shipped DCL.EXE");
-    /* --- the unnamed row itself -------------------------------------- */
+    /* --- the subprocess's row: the session's name, inherited ------------
+     * Since rd vms-2a5 (and vms-afd's identity propagation) a subprocess is
+     * created with its creator's identity, so it IS SHIPPING. Every
+     * name-printing command below must print SHIPPING -- the executive's
+     * name -- and never SYSTEM (what VMS_USERNAME in the poisoned
+     * environment says) nor the host Linux account name. */
     /* cmd_show_process's own field: "User: %-17sProcess ID:". */
-    snprintf(want, sizeof(want), "User: %-17sProcess ID:", "");
+    snprintf(want, sizeof(want), "User: %-17sProcess ID:", G_NAME);
     CHECK(strstr(outg, want) != NULL,
-          "G: a subprocess that registers through the RAW vms_kif_register() "
-          "path reports an EMPTY user name -- an unnamed row, correctly, "
-          "because plain register() derives identity and inherits no name");
-    CHECK(strstr(outg, "User: " G_NAME) == NULL,
-          "G: the raw-register() subprocess does NOT report the SESSION's name "
-          "-- register() never inherits. (A REAL SPAWN subprocess now DOES "
-          "inherit the creator's identity via vms_kif_register_subprocess, "
-          "vms-19e9: proven in test_syssvc_creprc_inherit.c and pinned by "
-          "tests/uat/vms_session_qemu.sh 'SPAWN SHOW PROCESS' -> User: SYSTEM. "
-          "This scenario exercises register(), not $CREPRC, so it stays green.)");
+          "G: SHOW PROCESS reports the session's name SHIPPING for its "
+          "subprocess -- inherited from its creator, read from the executive");
+    CHECK(strstr(outg, "User: SYSTEM") == NULL,
+          "G: SHOW PROCESS does not report SYSTEM, which only the poisoned "
+          "environment claims");
 
     /* --- F$USER (vms-f39) -------------------------------------------- */
     CHECK(strstr(outg, "G_SUB_PWNAM=" G_PWNAME "\n") != NULL,
@@ -1228,12 +1223,12 @@ static void scenario_g_unnamed_row_reports_nothing(void)
     CHECK(strstr(outg, "%PRINT-S-QUEUED, job JOB.TXT") != NULL,
           "G/PRINT: the job really was queued (so the owner assertions below "
           "are about a real queue entry)");
-    snprintf(want, sizeof(want), " %-20s %-12s %-10s\n", "JOB.TXT", "", "Pending");
+    snprintf(want, sizeof(want), " %-20s %-12s %-10s\n", "JOB.TXT", G_NAME, "Pending");
     snprintf(nope, sizeof(nope), " %-20s %-12s %-10s\n", "JOB.TXT", "SYSTEM", "Pending");
     /* negctl: dcl-print-owner-fabricated */
     CHECK(strstr(outg, want) != NULL,
-          "G/PRINT: SHOW QUEUE shows the print job with an EMPTY owner, in "
-          "cmd_show_queue's own column format");
+          "G/PRINT: SHOW QUEUE shows the print job owned by SHIPPING, the "
+          "executive's name, in cmd_show_queue's own column format");
     /* negctl: dcl-print-owner-fabricated */
     CHECK(strstr(outg, nope) == NULL,
           "G/PRINT: the print job is NOT owned by SYSTEM");
@@ -1241,29 +1236,29 @@ static void scenario_g_unnamed_row_reports_nothing(void)
     /* --- SUBMIT (vms-f42d) ------------------------------------------- */
     CHECK(strstr(outg, "%SUBMIT-S-SUBMITTED, job JOB ") != NULL,
           "G/SUBMIT: the batch job really was queued");
-    snprintf(want, sizeof(want), " %-20s %-12s %-10s\n", "JOB", "", "Pending");
+    snprintf(want, sizeof(want), " %-20s %-12s %-10s\n", "JOB", G_NAME, "Pending");
     snprintf(nope, sizeof(nope), " %-20s %-12s %-10s\n", "JOB", "SYSTEM", "Pending");
     /* negctl: dcl-submit-owner-fabricated */
     CHECK(strstr(outg, want) != NULL,
-          "G/SUBMIT: SHOW QUEUE shows the batch job with an EMPTY owner");
+          "G/SUBMIT: SHOW QUEUE shows the batch job owned by SHIPPING");
     /* negctl: dcl-submit-owner-fabricated */
     CHECK(strstr(outg, nope) == NULL,
           "G/SUBMIT: the batch job is NOT owned by SYSTEM");
 
     /* --- ACCOUNTING (vms-f42d) --------------------------------------- */
     /* negctl: dcl-accounting-user-fabricated */
-    CHECK(strstr(outg, "OVMX Accounting for user \n") != NULL,
-          "G/ACCOUNTING: names no account for an unnamed process");
+    CHECK(strstr(outg, "OVMX Accounting for user SHIPPING\n") != NULL,
+          "G/ACCOUNTING: names the process's own account, SHIPPING");
     /* negctl: dcl-accounting-user-fabricated */
     CHECK(strstr(outg, "OVMX Accounting for user SYSTEM") == NULL,
-          "G/ACCOUNTING: does not report SYSTEM's login history to an "
-          "unnamed process");
+          "G/ACCOUNTING: does not report SYSTEM's login history to a "
+          "SHIPPING process");
 
     /* --- REPLY (vms-f42d) -------------------------------------------- */
     /* negctl: dcl-reply-operator-fabricated */
-    CHECK(strstr(outg, "%OPCOM-I-OPRENA, operator  enabled for CENTRAL class "
-                       "messages\n") != NULL,
-          "G/REPLY: the OPCOM enable message names no operator");
+    CHECK(strstr(outg, "%OPCOM-I-OPRENA, operator SHIPPING enabled for CENTRAL "
+                       "class messages\n") != NULL,
+          "G/REPLY: the OPCOM enable message names the operator SHIPPING");
     /* Anchored on what is CAPTURED. cmd_reply also sends an OPC record to
      * OPERATOR.LOG carrying the same name, and an earlier wording of this
      * assertion claimed to be about that record -- it is not, it is about
@@ -1277,9 +1272,9 @@ static void scenario_g_unnamed_row_reports_nothing(void)
     /* --- LOGOUT (vms-f42d) ------------------------------------------- */
     /* negctl: dcl-logout-user-fabricated */
     /* the VAX V7.3 logout line is "  %-12s logged out at ..." (keystroke
-     * LOGOUT L: "  SYSTEM       logged out at"), so an empty name is 15 blanks */
-    CHECK(strstr(outg, "\n               logged out at ") != NULL,
-          "G/LOGOUT: the logout line names no user, in cmd_logout's own "
+     * LOGOUT L: "  SYSTEM       logged out at") */
+    CHECK(strstr(outg, "\n  SHIPPING     logged out at ") != NULL,
+          "G/LOGOUT: the logout line names SHIPPING, in cmd_logout's own "
           "\"  %-12s logged out at\" format");
     /* negctl: dcl-logout-user-fabricated */
     CHECK(strstr(outg, "SYSTEM       logged out at") == NULL,
@@ -1301,28 +1296,17 @@ static void scenario_g_unnamed_row_reports_nothing(void)
      * session that owns the name nor the subprocess that wrote the record --
      * over bytes that reached the filesystem.
      *
-     * WHY THE EMPTY FIELD IS THE RIGHT ANSWER HERE AND NOT A DEFECT BEING
-     * BLESSED. The unnamed row is a REACHABLE PRODUCT STATE, not a test
-     * artefact: vms_proc_register() zeroes the username of every newly
-     * registered task and $CREPRC propagates no identity, so every SPAWNed
-     * process on the real runtime is in it -- tests/uat/vms_session_qemu.sh
-     * pins that blank for SPAWN and it is filed as vms-afd. VMS has no
-     * process without a user name, so there is no VMS rendering of this state
-     * to match; reporting nothing is the honest leg of Rule 10 and inventing
-     * a name is the illegal third answer.
-     *
-     * THESE ARE A TRIPWIRE ON vms-afd, DELIBERATELY. When $CREPRC identity
-     * propagation lands, this subprocess inherits the session's name, the
-     * header carries SHIPPING, and the "names NO user" check below goes RED
-     * -- it does not go quietly vacuous. Whoever lands vms-afd moves it to
-     * the named form, which is exactly what the block after this one already
-     * asserts for a process the executive HAS named. */
+     * WHAT THE FIELD MUST HOLD. Since rd vms-2a5 (the vms-afd tripwire this
+     * block used to carry has fired) the subprocess is created with the
+     * session's identity, so every header names SHIPPING -- the executive's
+     * row -- never SYSTEM (the poisoned environment) and never the host Linux
+     * account. */
     {
         static char oplog[16384];
         size_t oplen = g_read_operator_log(oplog, sizeof(oplog));
-        int total = 0, unnamed;
+        int total = 0, named;
 
-        unnamed = g_opcom_headers_naming(oplog, "", &total);
+        named = g_opcom_headers_naming(oplog, G_NAME, &total);
 
         CHECK(oplen > 0,
               "G/OPCOM: the subprocess's REPLY and LOGOUT records reached an "
@@ -1339,11 +1323,10 @@ static void scenario_g_unnamed_row_reports_nothing(void)
               "G/OPCOM: what landed is sys$sndopr's OPCOM header, in its own "
               "format");
         /* negctl: opcom-header-host-login-name */
-        CHECK(total > 0 && unnamed == total,
-              "G/OPCOM: EVERY header's user field is empty for a process the "
-              "executive has not named -- sys$sndopr reads the executive's "
-              "row, not the caller's PCB and not the passwd database (goes "
-              "RED, not vacuous, when vms-afd propagates identity to SPAWN)");
+        CHECK(total > 0 && named == total,
+              "G/OPCOM: EVERY header's user field is SHIPPING, the executive's "
+              "name for the process -- sys$sndopr reads the executive's row, "
+              "not the caller's PCB and not the passwd database");
         /* negctl: opcom-header-host-login-name */
         CHECK(strstr(oplog, G_PWNAME) == NULL &&
               strstr(oplog, "SHIPUSER") == NULL,
@@ -1360,17 +1343,12 @@ static void scenario_g_unnamed_row_reports_nothing(void)
 
     /* --- THE SAME HEADER, FOR A PROCESS THE EXECUTIVE HAS NAMED --------
      *
-     * THE GAP THIS CLOSES. Everything above exercises the UNNAMED row, so
-     * every OPCOM assertion in this suite could be satisfied by the user
-     * field never being populated at all -- by sys$sndopr writing an empty
-     * name unconditionally, or by get_current_username() being dead code.
-     * Nothing proved a name ever reaches that header.
-     *
-     * So the same command sequence is run again in a process the executive
-     * HAS named. The shape is scenario A's, not G's: run_dcl() establishes
-     * the identity through the executive and execs the real DCL directly, so
-     * DCL runs in the process that owns the named row -- no intermediate
-     * fork, which is what produced the unnamed row above. Same poisoned
+     * THE SAME NAME BY A SECOND ROUTE. The block above reads the name a
+     * subprocess INHERITED; this one runs the same commands in a process
+     * that established the name itself. The shape is scenario A's, not G's:
+     * run_dcl() establishes the identity through the executive and execs the
+     * real DCL directly, so DCL runs in the process that owns the named row.
+     * Same poisoned
      * environment (VMS_USERNAME=SYSTEM), same binary, same log file. The
      * logs are emptied first so what is read is this run's records only.
      *
@@ -1388,11 +1366,10 @@ static void scenario_g_unnamed_row_reports_nothing(void)
                       "REPLY/ENABLE\nLOGOUT\n", outn, sizeof(outn));
         dump("G: named process, OPCOM header", outn);
 
-        /* negctl-knockon: bind-client-no-register */
         CHECK(rcn == 0 && strstr(outn, "SETIDENT_STATUS=1\n") != NULL,
               "G/OPCOM+: the named run established its identity through the "
               "executive (without this the header check below is about a "
-              "process that is also unnamed)");
+              "process with some other name)");
 
         g_read_operator_log(oplog2, sizeof(oplog2));
         named = g_opcom_headers_naming(oplog2, G_NAME, &total);
@@ -1413,11 +1390,9 @@ static void scenario_g_unnamed_row_reports_nothing(void)
          * reported absent by the second. Every other manifest-declared
          * assertion in this file already avoids macros in its text for the
          * same reason; this one was the exception and the selftest said so. */
-        /* negctl-knockon: bind-client-no-register */
         CHECK(total > 0 && named == total,
               "G/OPCOM+: EVERY header names SHIPPING -- the executive's row "
-              "DOES reach sys$sndopr's user field, so the empty field above "
-              "is this process being unnamed and not the field being dead");
+              "DOES reach sys$sndopr's user field by this route too");
         {
             int t3 = 0;
             CHECK(g_opcom_headers_naming(oplog2, "SYSTEM", &t3) == 0,
@@ -1506,7 +1481,7 @@ int main(void)
         return fail > 0 ? 1 : EXIT_SKIP;
     }
 
-    if (vms_kif_register(&selfpid) != SS_NORMAL) {
+    if (ovmx_test_self(&selfpid) != SS_NORMAL) {
         printf("  FAIL: this process has no row its creator made\n");
         printf("=== test_syssvc_ident: 0 passed, 1 failed ===\n");
         return 1;
@@ -1569,17 +1544,13 @@ int main(void)
     }
     dump("identity A", outa);
 
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outa, "SETIDENT_STATUS=1") != NULL,
           "A: the executive accepted the identity a privileged writer established");
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outa, "User: " A_NAME) != NULL,
           "A: SHOW PROCESS reports the user name the EXECUTIVE holds");
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outa, "SYSTEM") == NULL,
           "A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME");
     /* [200,10] octal, in SHOW PROCESS's own "[%03o,%03o]" format. */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outa, "[310,012]") != NULL,
           "A: SHOW PROCESS reports the UIC the EXECUTIVE holds");
     CHECK(strstr(outa, "[001,004]") == NULL,
@@ -1597,7 +1568,6 @@ int main(void)
      * LEX.GETJPI.USERNAME "SYSTEM      ", docs/oracle/semantics/lex/). */
     char want_a[64];
     snprintf(want_a, sizeof want_a, "IDENT_U = \"%-12s\"", A_NAME);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outa, want_a) != NULL,
           "A: F$GETJPI(\"\",\"USERNAME\") returns the name the EXECUTIVE holds "
           "-- the programmatic path reads the same source the display does");
@@ -1630,7 +1600,6 @@ int main(void)
      * appear -- is proved by B below, which adds WORLD to its mask for
      * exactly this reason.
      */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outa, "\nAuthorized privileges:\n NETMBX    TMPMBX\n \nProcess privileges:\n") != NULL,
           "A: the authorized-privileges grid shows ONLY NETMBX and TMPMBX -- the "
           "bits of A's granted mask (TMPMBX|NETMBX|EXQUOTA) that are in "
@@ -1671,14 +1640,12 @@ int main(void)
     }
     dump("identity B", outb);
 
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outb, "User: " B_NAME) != NULL,
           "B: SHOW PROCESS reports B's user name");
     CHECK(strstr(outb, A_NAME) == NULL,
           "B: B does not report A's user name");
     CHECK(strstr(outa, B_NAME) == NULL,
           "A: A does not report B's user name");
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outb, "[001,006]") != NULL,
           "B: SHOW PROCESS reports B's UIC");
     /*
@@ -1689,7 +1656,6 @@ int main(void)
      */
     char want_b[64];
     snprintf(want_b, sizeof want_b, "IDENT_U = \"%-12s\"", B_NAME);
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outb, want_b) != NULL,
           "B: F$GETJPI returns B's name -- two processes with an IDENTICAL "
           "environment get DIFFERENT answers, so the answer is not the "
@@ -1703,12 +1669,10 @@ int main(void)
      * and not merely a blanket suppression (hides everything, which A's
      * empty grid alone could not distinguish from this).
      */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outb, "\nAuthorized privileges:\n NETMBX    TMPMBX    WORLD\n \nProcess privileges:\n") != NULL,
           "B: the authorized-privileges grid shows EXACTLY NETMBX, TMPMBX and WORLD -- "
           "the bits of B's mask that are in VMS_PRV_M_ENFORCED -- not the whole "
           "mask and not nothing");
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outb, "may affect other processes in the world") != NULL,
           "B: SHOW PROCESS/PRIVILEGES lists WORLD's description in the "
           "process-privileges block too");
@@ -1738,12 +1702,10 @@ int main(void)
     {
         char expect[64];
         snprintf(expect, sizeof(expect), "SETIDENT_STATUS=%u", (unsigned)SS$_NOPRIV);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outc, expect) != NULL,
               "C: the executive refused an unprivileged process's attempt to "
               "become SYSTEM (SS$_NOPRIV)");
     }
-    /* negctl-knockon: bind-client-no-register */
     /* negctl-knockon: dcl-fuser-system-fabricated */
     CHECK(strstr(outc, "SYSTEM") == NULL,
           "C: SHOW PROCESS does NOT report SYSTEM for a process that only "
@@ -1754,28 +1716,26 @@ int main(void)
      * goes red for this, but it goes red for a dozen unrelated reasons too,
      * and a defect worth finding once is worth naming.
      *
-     * MEASURED before the fix in src/vmsdcl/dcl_lexical.c (lex_user): this
-     * process -- refused SS$_NOPRIV by the executive two lines above, and so
-     * holding NO name in the process table -- answered F$GETJPI USERNAME
-     * with "SYSTEM", the most privileged account on the system, out of a
-     * hardcoded fallback. SHOW PROCESS, reading the same field of the same
-     * row, correctly printed nothing.
+     * MEASURED before the fix in src/vmsdcl/dcl_lexical.c (lex_user): a
+     * process refused SS$_NOPRIV by the executive, and holding no name in the
+     * process table, answered F$GETJPI USERNAME with "SYSTEM", the most
+     * privileged account on the system, out of a hardcoded fallback. Since
+     * rd vms-2a5 every process is created with a name, so this one carries
+     * the name its creator gave it.
      *
-     * The assertion is on the EXACT empty rendering, not on "SYSTEM is
-     * absent": absence is satisfied by any other invented name, including
-     * the getpwuid() one the same fallback would have produced on a system
-     * with an /etc/passwd -- which is every system except the initramfs this
-     * ran in. An assertion satisfiable by a different fabrication does not
-     * catch the fabrication.
+     * The assertion is on the EXACT rendering of that name, not on "SYSTEM
+     * is absent": absence is satisfied by any other invented name, including
+     * the getpwuid() one a fallback would produce on a system with an
+     * /etc/passwd. An assertion satisfiable by a different fabrication does
+     * not catch the fabrication.
      */
     /* negctl-knockon: dcl-fuser-system-fabricated */
-    CHECK(strstr(outc, "IDENT_U = \"\"") != NULL,
-          "C: F$GETJPI(\"\",\"USERNAME\") reports NO name for a process the "
-          "executive refused to name -- it does not fall back to a Linux "
-          "account name or to SYSTEM");
+    CHECK(strstr(outc, "IDENT_U = \"UNAUTH      \"") != NULL,
+          "C: F$GETJPI(\"\",\"USERNAME\") reports the name the executive holds "
+          "for this process (UNAUTH, given by its creator) -- not SYSTEM, which "
+          "it was refused, and not a Linux account name");
     /* [300,1001] octal: the UIC the executive derived from the credentials
      * the process really has, which is the one thing it could not forge. */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outc, "[454,1751]") != NULL,
           "C: SHOW PROCESS reports the UIC the executive derived from real "
           "credentials");
@@ -1786,7 +1746,6 @@ int main(void)
      * VMS_PRV_M_ENFORCED, so the grid is correctly empty -- same
      * reasoning as identity A above.
      */
-    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(outc, "\nAuthorized privileges:\n NETMBX    TMPMBX\n \nProcess privileges:\n") != NULL,
           "C: the privilege display shows NETMBX and TMPMBX -- the two privileges "
           "the executive granted an unprivileged process, both in "
@@ -1816,7 +1775,6 @@ int main(void)
         }
         dump("session subprocess", outd);
 
-        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outd, "SESSION_SETIDENT=1") != NULL,
               "D: the session established its authenticated identity");
         {
@@ -1827,8 +1785,8 @@ int main(void)
                   "D: the session then BECAME that UIC at the Linux level, as "
                   "tools/vms_login.c does");
         }
-        CHECK(strstr(outd, "SUB_REGISTER=1") != NULL,
-              "D: the subprocess reached the executive at all (so its refusal "
+        CHECK(strstr(outd, "SUB_SELF=1") != NULL,
+              "D: the subprocess has the row its creator made (so its refusal "
               "below is a refusal, not an absent executive)");
         {
             char want[64];
@@ -1926,7 +1884,6 @@ int main(void)
             return 1;
         }
         dump("scenario F, CURPRIV content", outf);
-        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outf, "SETIDENT_STATUS=1") != NULL,
               "F: the executive accepted the SYSTEM/ALL identity this scenario "
               "needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)");
@@ -1944,7 +1901,6 @@ int main(void)
          * did for MOUNT, so it is no longer merely stored and reported; it
          * belongs in the enforced set F$GETJPI CURPRIV walks. PHY_IO (22)
          * renders after MOUNT (17) in the ascending bit walk. */
-        /* negctl-knockon: bind-client-no-register */
         CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,ALTPRI,SETPRV,TMPMBX,WORLD,MOUNT,OPER,NETMBX,PHY_IO,SYSPRV,BYPASS,SYSLCK,GRPPRV,READALL\"") != NULL,
               "F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced "
               "privilege names (CMKRNL,CMEXEC,SYSNAM,GRPNAM,PRMMBX,ALTPRI,SETPRV,TMPMBX,WORLD,MOUNT,OPER,NETMBX,PHY_IO,SYSPRV,BYPASS,SYSLCK,GRPPRV,READALL), "
@@ -1955,7 +1911,7 @@ int main(void)
      * G. Every remaining DCL reader of the user name, asked by a
      *    subprocess the executive has not named (vms-f39, vms-f42d).
      * ---------------------------------------------------------------- */
-    scenario_g_unnamed_row_reports_nothing();
+    scenario_g_subprocess_reports_the_executive_name();
 
     printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

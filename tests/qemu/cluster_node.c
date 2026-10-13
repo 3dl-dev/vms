@@ -193,23 +193,24 @@ static int rig_open_executive(void)
 }
 
 /*
- * STARTUP.EXE's own first executive call. Every ioctl except the four
- * DISPATCH-ALWAYS cluster diagnostics requires the caller to be a registered
- * VMS process (src/kernel/vms_module.c: vms_proc_find_or_err, -ESRCH
+ * STARTUP.EXE's own first executive call. Every ioctl except the
+ * DISPATCH-ALWAYS cluster diagnostics requires the caller to be a VMS process
+ * the executive created (src/kernel/vms_module.c: vms_proc_find_or_err, -ESRCH
  * otherwise), because SYSGEN_LOAD and CLUSTER_START are executive operations a
  * process performs -- not anonymous pokes at a device node.
  */
 static int rig_register(int fd, const struct node_cfg *c)
 {
-	struct vms_register_args a;
+	struct vms_establish_system_args a;
 
+	/* The rig is this node's boot task: the executive's one ESTABLISH_SYSTEM
+	 * call makes its PCB (rd vms-2a5 -- there is no registration). */
 	memset(&a, 0, sizeof(a));
-	if (ioctl(fd, VMS_IOCTL_REGISTER, &a) != 0) {
-		fprintf(stderr, "cluster_node: REGISTER: %s\n", strerror(errno));
+	if (ioctl(fd, VMS_IOCTL_ESTABLISH_SYSTEM, &a) != 0) {
+		fprintf(stderr, "cluster_node: ESTABLISH_SYSTEM: %s\n", strerror(errno));
 		return -1;
 	}
-	printf("RIG-%s-REGISTER status=%u vms_pid=0x%08x\n",
-	       c->tag, (unsigned)a.status, (unsigned)a.vms_pid);
+	printf("RIG-%s-REGISTER status=%u\n", c->tag, (unsigned)a.status);
 	fflush(stdout);
 	return a.status == SS_NORMAL ? 0 : -1;
 }

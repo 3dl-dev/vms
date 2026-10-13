@@ -17,12 +17,12 @@ a process starts in USER mode
 ... and the mode is still USER after the denied escalation
 EOF
                       ;;
-        knock_on_fail) echo "adoption preserved the privilege mask SETIDENT established";;
+        knock_on_fail) echo "the privilege mask SETIDENT established survived";;
         knock_on_why) cat <<'EOF'
 NOT a blunderbuss: this is ONE mutation to the ONE function (vms_ioctl_getmode)
 every one of these five assertions ultimately depends on -- four in
 test_kmod_access.c re-read VMS_IOCTL_GETMODE directly, and test_kmod_bind.c's
-"adoption preserved the privilege mask SETIDENT established" calls
+"the privilege mask SETIDENT established survived" calls
 vms_kif_getmode() (src/libvmssys/vms_kif.c:207/577) to read cur_privs after
 SETIDENT/adoption. vms_kif_getmode()'s KIF_CALL macro returns the mapped
 error status the instant the ioctl fails, BEFORE the `*cur_privs = args.cur_privs`

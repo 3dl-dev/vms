@@ -1,0 +1,29 @@
+# unknown-task-gets-pcb -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process creation (rd vms-2a5, design note 3.1) -- a task the executive did not create has no PCB, and no service makes it one (vms_dev_ioctl, kernel/vms_module.c)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_kmod_bind";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dev_ioctl mints a PCB for any task that calls a service without one -- registration by ioctl, back again: a plain fork() child that never was created by the executive becomes a VMS process on its first call. Gone after apply.";;
+        require_fail) cat <<'EOT'
+a task the executive did not create is refused $SETEF with SS$_NONEXPR
+... and $GETJPI(self) with SS$_NONEXPR: it has no row
+the task the executive did not create is in no $PROCESS_SCAN
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (unknown-task-gets-pcb)/{n;s|^    if (!proc)$|    if (!proc \&\& !(proc = vms_proc_create_boot_task())) /* NEGCTL unknown-task-gets-pcb */|}' "$_file"
+    :
+}

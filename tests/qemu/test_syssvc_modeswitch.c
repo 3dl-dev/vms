@@ -217,7 +217,7 @@ int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);  /* line-buffer stdout across fork(), same rationale as test_kmod_access.c */
 
-    struct vms_register_args reg;
+    uint32_t self_vms_pid = 0;
     uint8_t mode, prev, cur;
     void *p1region;
     size_t p1len = 4096;
@@ -230,8 +230,8 @@ int main(void)
         return EXIT_SKIP;
     }
 
-    memset(&reg, 0, sizeof(reg));
-    CHECK(ovmx_test_self(&reg.vms_pid) == SS_NORMAL, "register process");
+    CHECK(ovmx_test_self(&self_vms_pid) == SS_NORMAL,
+          "this suite has the row its creator made");
 
     /* ---- (1) THE CONTROLLED TRANSITION CHANGES CURRENT MODE, OBSERVABLY ---- */
 

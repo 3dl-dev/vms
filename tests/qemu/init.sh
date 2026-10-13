@@ -257,24 +257,6 @@ suite_in_shard() {
     [ $(( 0x$_h % SHARD_TOTAL )) -eq "$SHARD_INDEX" ]
 }
 
-# CORPUS DEVICE-COVERAGE FIXTURE (vms-08c). tests/corpus/tier1-examples/
-# lib_getdvi.c (an unmodified Eight-Cubed download) asks $GETDVI about the
-# VMS logical name SYS$SYSDEVICE: -- this rig never runs STARTUP.COM, so
-# nothing has defined it yet. corpus_seed_lnm calls the same
-# lnm_setup_defaults() STARTUP.COM would trigger, into the executive-resident
-# LNM$SYSTEM arena every later process (including test_corpus_lib_getdvi
-# below) reads. Run explicitly, once, here -- ahead of the suite loop and
-# NOT through its glob, whose iteration order this must not depend on. Not a
-# suite itself: no "=== SUITE ... ===" line, its own exit code is not
-# tallied (see tests/qemu/corpus_seed_lnm.c's header for why).
-if [ "$CORPUS_RT" = "1" ] && [ -x /tests/corpus_seed_sysvol ]; then
-    # corpus runtime mode boots the system disk instead (VDA300:, mounted, with
-    # the shipped SYSUAF.DAT) -- see tests/qemu/corpus_seed_sysvol.c
-    /tests/corpus_seed_sysvol >&4 2>&1
-elif [ -x /tests/corpus_seed_lnm ]; then
-    /tests/corpus_seed_lnm >&4 2>&1
-fi
-
 # THE HARNESS BOOT TASK (rd vms-3fa). Every test_syssvc_/test_imgact_/
 # test_corpus_ suite, and every corpus runtime program (rd vms-a2c: the
 # executive constructs SYSTEM once, for this task, and refuses any later
@@ -311,6 +293,37 @@ else
     echo "  FATAL: /tests/ovmx_boot_task is missing -- no suite can run as a process the executive created" >&4
 fi
 
+
+# CORPUS DEVICE-COVERAGE FIXTURE (vms-08c). tests/corpus/tier1-examples/
+# lib_getdvi.c (an unmodified Eight-Cubed download) asks $GETDVI about the
+# VMS logical name SYS$SYSDEVICE: -- this rig never runs STARTUP.COM, so
+# nothing has defined it yet. corpus_seed_lnm calls the same
+# lnm_setup_defaults() STARTUP.COM would trigger, into the executive-resident
+# LNM$SYSTEM arena every later process (including test_corpus_lib_getdvi
+# below) reads. Run explicitly, once, here -- ahead of the suite loop and
+# NOT through its glob, whose iteration order this must not depend on. Not a
+# suite itself: no "=== SUITE ... ===" line, its own exit code is not
+# tallied (see tests/qemu/corpus_seed_lnm.c's header for why).
+# The seeder is a process the boot task creates, like every suite (rd vms-2a5:
+# a task the executive did not create is refused every service).
+boot_run_seeder() {
+    if [ "$BOOT_OK" = 1 ]; then
+        echo "RUN $1 /tmp/.seed_out" >&8
+        read -r _tag _spid _sst <&7
+        read -r _tag _src <&7
+        cat /tmp/.seed_out >&4 2>/dev/null
+        rm -f /tmp/.seed_out
+    else
+        "$1" >&4 2>&1
+    fi
+}
+if [ "$CORPUS_RT" = "1" ] && [ -x /tests/corpus_seed_sysvol ]; then
+    # corpus runtime mode boots the system disk instead (VDA300:, mounted, with
+    # the shipped SYSUAF.DAT) -- see tests/qemu/corpus_seed_sysvol.c
+    boot_run_seeder /tests/corpus_seed_sysvol
+elif [ -x /tests/corpus_seed_lnm ]; then
+    boot_run_seeder /tests/corpus_seed_lnm
+fi
 
 # CORPUS RUNTIME LOOP (vms-44a, R2.3). One line per program on the assertion
 # channel:  CORPUS-RT <name> rc=<exit> signaled=<0|1>   (rc 124 = the 40s per-program budget expired, >128 =
@@ -416,10 +429,7 @@ for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/
     # (procnam's SHOW SYSTEM, setname's holder); one hung suite then hid the
     # rest. Healthy suites finish in seconds, the whole pristine run in ~250 s.
     rm -f /tmp/.suite_timed_out
-    # test_kmod_bind and test_kmod_ident test registration itself (kif_bind,
-    # the registration-derived identity), so they still run directly until
-    # vms-2a5 removes registration and turns them into refusal tests.
-    case "$name" in test_kmod_bind|test_kmod_ident) via_boot=0 ;; *) via_boot=1 ;; esac
+    via_boot=1
     [ "$NO_EXEC" = 1 ] && via_boot=0
     PCB_ST=
     if [ "$via_boot" = 1 ]; then

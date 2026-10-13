@@ -768,7 +768,17 @@ struct vms_club {
 	uint16_t proposed_qdisk_votes;
 	uint16_t proposed_members;
 	uint8_t  proposed_valid;     /* 0 outside a transition */
-	uint8_t  pad1[3];
+	/*
+	 * THIS NODE'S OWN TRANSITION CLASS (rd vms-6ec): the class of the latest
+	 * transition it took part in, whether it SENT the open as coordinator or
+	 * RECEIVED it as a member (a FORM it was a founder of counts too). The
+	 * op-0x12 relay answer reports it in body[17]. Real VAX members that had
+	 * last coordinated answer with the class they sent (armA, vms-4f0
+	 * run1/run2, ec2 R2: sent 2, answered 2; fire G: sent 3, answered 3).
+	 * 0 = this node has been through no transition, so it has nothing to report.
+	 */
+	uint8_t  own_tr_class;
+	uint8_t  pad1[2];
 
 	/*
 	 * ---- this node's half of p. 7-30's reconnect period ----

@@ -245,7 +245,8 @@ csb-0b01-answer-ignores-join-order
 guard-ignores-category-0b
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
-pe-blk-frame-unringed"
+pe-blk-frame-unringed
+coord-own-class-unrecorded"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1161,6 +1162,19 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** an operation the executive refused is NOT answered ***
   counted refused
+EOF
+                      ;;
+        esac;;
+
+    coord-own-class-unrecorded)
+        case "$_f" in
+        facility)     echo "a coordinator records the class it drives as this node's own transition class, which its answer to another coordinator's op-0x12 relay reports (rd vms-6ec)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_open_transition() no longer writes club.own_tr_class, so a founder that only ever coordinated holds no class and answers no relay: in lab DC2 real VAX2 asked OVMXB, OVMXB relayed it to the founder OVMXA, OVMXA answered nothing, and VAX2 was never admitted.";;
+        require_fail) hd_lines <<'EOF'
+*** driving an addition makes 0x02 this node's class ***
 EOF
                       ;;
         esac;;
@@ -2691,6 +2705,10 @@ apply_edit() {
     join-lnm-answered-unapplied)
         # `if ((st & 1u) == 0u) {` is unique in this file.
         sed -i 's|if ((st \& 1u) == 0u) {|if (0 \&\& (st \& 1u) == 0u) { /* NEGCTL join-lnm-answered-unapplied */|' "$_file";;
+
+    coord-own-class-unrecorded)
+        # `c->cl->club.own_tr_class = tr_class;` is unique in this file.
+        sed -i 's|^	c->cl->club.own_tr_class = tr_class;$|	(void)tr_class; /* NEGCTL coord-own-class-unrecorded */|' "$_file";;
 
     csb-0b01-answer-ignores-join-order)
         # `requester->admitted_after_local != 0u,` is unique in this file.

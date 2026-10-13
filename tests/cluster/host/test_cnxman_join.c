@@ -6580,6 +6580,7 @@ static void test_4f0_no_class_answers_nothing(void)
 	bed_set_identity();
 	drive_to_state(CNXMAN_JOIN_MEMBER);
 	g.j.tr_class = 0u;   /* an executive that learned no class */
+	g.cl.club.own_tr_class = 0u;   /* ...anywhere (rd vms-6ec) */
 
 	before = n_cm_sent();
 	memcpy(g_frame, req.bytes, req.wire_len);
@@ -6594,6 +6595,55 @@ static void test_4f0_no_class_answers_nothing(void)
 			"...and never counted as one it took part in");
 	ct_check(bed_logged("nothing grounded to answer with"),
 		 "and said out loud on the console");
+}
+
+/*
+ * rd vms-6ec: A FOUNDER THAT ONLY EVER COORDINATED STILL ANSWERS.
+ *
+ * Lab DC2 (tests/lab/captures/vms-94a-cwlnm-oracle-20261013/): OVMXA founded
+ * alone and coordinated OVMXB's addition. It sent the class-2 open and never
+ * received one. When real VAX2 asked OVMXB to admit it, OVMXB relayed it to
+ * OVMXA, and OVMXA answered nothing (relays_no_class). VAX2 was never
+ * admitted. A real VAX that last coordinated answers with the class it SENT:
+ * armA, vms-4f0 run1/run2 and ec2 R2 sent 2 and answered 2; fire G sent 3 and
+ * answered 3. coord_open_transition() records that class in the CLUB, which is
+ * what this test sets.
+ */
+static void test_6ec_coordinator_answers_relay_with_the_class_it_drove(void)
+{
+	struct vms_fixture req;
+	const struct sent_body *sent;
+	uint32_t before;
+
+	printf("\n-- rd vms-6ec: a node that only coordinated answers the "
+	       "relay with the class it drove --\n");
+
+	if (load_relay_fixture("cm-relay-oracle-req", &req) != 0) {
+		ct_check(0, "the oracle relay request loads");
+		return;
+	}
+
+	bed_init();
+	bed_set_identity();
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	g.j.tr_class = 0u;   /* never RECEIVED an open: it founded */
+	g.cl.club.own_tr_class = VMS_CM_CLASS_ADD;   /* it SENT one */
+
+	before = n_cm_sent();
+	memcpy(g_frame, req.bytes, req.wire_len);
+	(void)join_feed(req.wire_len);
+	ct_check_eq_u32(g.j.relays_no_class, 0u,
+			"*** the founder had a class to answer with ***");
+	ct_check_eq_u32(n_cm_sent(), before + 1u,
+			"*** the relay is answered, so the admission can go on ***");
+	sent = nth_sent(n_cm_sent() - 1u);
+	if (sent == NULL) {
+		ct_check(0, "the answer is readable");
+		return;
+	}
+	ct_check_eq_u32(sent->body[VMS_OFB_CM_CLASS], VMS_CM_CLASS_ADD,
+			"body[17] is the class this node drove, as a real VAX "
+			"coordinator's answer carries");
 }
 
 
@@ -7736,6 +7786,7 @@ int main(void)
 	test_4f0_member_answers_the_relay_like_a_real_vax();
 	test_4f0_relay_epoch_is_ours_not_the_coordinators();
 	test_4f0_no_class_answers_nothing();
+	test_6ec_coordinator_answers_relay_with_the_class_it_drove();
 	test_e88_asks_the_highest_not_the_last_discovered();
 	test_e88_waits_for_connectivity_to_every_member();
 	test_e88_no_request_before_the_member_says_what_it_is();

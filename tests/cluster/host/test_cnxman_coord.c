@@ -1902,6 +1902,20 @@ static void test_transition_readback(void)
 	ct_check_eq_u32(tr.coordinator_csid, OWN_CSID, "coordinator is us");
 }
 
+/* rd vms-6ec: a coordinator records the class it drives as this node's own
+ * transition class, the value its later answer to another coordinator's
+ * op-0x12 relay reports (lab DC2: a founder that only coordinated held none). */
+static void test_6ec_coordinator_records_its_own_class(void)
+{
+	printf("\n-- rd vms-6ec: the class this node drives is its own --\n");
+	bed_init(2);
+	ct_check_eq_u32(g.c.cl->club.own_tr_class, 0u,
+			"idle: this node has been through no transition");
+	drive_add_to_barrier(2);
+	ct_check_eq_u32(g.c.cl->club.own_tr_class, VMS_CM_CLASS_ADD,
+			"*** driving an addition makes 0x02 this node's class ***");
+}
+
 static void test_two_transitions_back_to_back(void)
 {
 	printf("\n-- a second transition gets its own epoch and census --\n");
@@ -2596,6 +2610,7 @@ int main(void)
 	test_foreign_frames_route_on();
 	test_slow_step_is_never_timed_out();
 	test_transition_readback();
+	test_6ec_coordinator_records_its_own_class();
 	test_two_transitions_back_to_back();
 	test_names();
 	test_1ac_relay_carries_the_current_epoch();

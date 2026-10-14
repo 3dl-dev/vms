@@ -4291,8 +4291,6 @@ static int cmd_show_cpu(struct dcl_command *cmd)
 
     char node[OVMX_IDENTITY_MAXLEN];
     ovmx_node_name(node, sizeof(node));
-    struct utsname uts;
-    uname(&uts);
 
     char active_str[256], config_str[256];
     format_cpu_set(online, online_max, active_str, sizeof(active_str));
@@ -4334,7 +4332,37 @@ static int cmd_show_cpu(struct dcl_command *cmd)
      * scheduler dispatching a named process onto a specific CPU), so that
      * line is omitted rather than fabricated.
      */
-    printf("\n%s, an OVMX %s system\n", node, uts.machine);
+    /* rd vms-21be: the header is "<node>, a <HW_NAME>" as on VMS ("VAX1, a
+     * VAXserver 3900 Series", docs/oracle/golden/vax-show-cpu.golden), and the
+     * name is the executive's one hardware-model source -- the same text
+     * $GETSYI and F$GETSYI return and this node advertises to its cluster
+     * peers. None reported: the node name alone, never a guessed model.
+     *
+     * THE ARTICLE IS CHOSEN, NOT FIXED. The one oracle point is "VAX1, a
+     * VAXserver 3900 Series" -- a consonant-initial model taking "a". Writing
+     * a literal "a" produced "OVMX, a OVMX x86_64" on this node, which is
+     * wrong English and is not what OVMX printed before the hardware name got
+     * one source ("an OVMX ... "). A vowel-initial model takes "an"; every
+     * model string OVMX has seen -- VAXserver, MicroVAX, OVMX -- is decided by
+     * that one letter. This is presentation, not an unpublished protocol value:
+     * the MODEL TEXT itself is still read from the executive and never
+     * composed here. */
+    {
+        struct vms_cluster_getsyi_args hw;
+
+        if (vms_kif_cluster_getsyi(&hw) == SS$_NORMAL && hw.hw_model_len != 0) {
+            char c0 = (char)hw.hw_model[0];
+            const char *article =
+                (c0 == 'A' || c0 == 'E' || c0 == 'I' || c0 == 'O' || c0 == 'U' ||
+                 c0 == 'a' || c0 == 'e' || c0 == 'i' || c0 == 'o' || c0 == 'u')
+                ? "an" : "a";
+
+            printf("\n%s, %s %.*s\n", node, article, (int)hw.hw_model_len,
+                   (const char *)hw.hw_model);
+        } else {
+            printf("\n%s\n", node);
+        }
+    }
     printf("Multiprocessing is %s.\n", n_online > 1 ? "ENABLED" : "DISABLED");
     printf("\nPRIMARY CPU = %02d\n", primary);
 

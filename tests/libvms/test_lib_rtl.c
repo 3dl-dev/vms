@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <time.h>
+#include <unistd.h>   /* access(): is there an executive to ask (rd vms-21be) */
 
 #include "ssdef.h"
 #include "descrip.h"
@@ -243,7 +244,15 @@ static void test_lib_getsyi(void)
     item = SYI$_HW_NAME;
     st = lib$getsyi(&item, NULL, &hwdesc, &hwlen, NULL, NULL);
     check(st == SS$_NORMAL, "lib$getsyi(SYI$_HW_NAME) returns SS$_NORMAL");
-    check(hwlen > 0, "lib$getsyi(SYI$_HW_NAME) returns non-empty string");
+    /* rd vms-21be: HW_NAME comes from the executive (exec_hw_model(), the
+     * model this node advertises to its cluster). With an executive it is
+     * non-empty; with none (a host run) it is UNRETRIEVED -- the old literal
+     * "OVMX Virtual System" answered here without asking anything. */
+    if (access("/dev/vms", F_OK) == 0)
+        check(hwlen > 0, "lib$getsyi(SYI$_HW_NAME) returns the executive's model");
+    else
+        check(hwlen == 0, "no executive: lib$getsyi(SYI$_HW_NAME) is unretrieved, "
+                          "never a userspace literal (Rule 9)");
 }
 
 /* ------------------------------------------------------------------ */

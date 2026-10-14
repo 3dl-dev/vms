@@ -1136,6 +1136,15 @@ static void test_e8b_a_response_rides_its_own_connection(void)
 		     "... BEFORE any FSM is offered the body");
 	/* rd vms-cd8: a refused CM send hands its number back, so the next
 	 * message to that peer does not skip one (lab94ag CNXMGRERR). */
+	/* rd vms-f4e: the startup database pull waits for a member that is
+	 * ready to serve (a V7.3 pulled early took a fatal INVEXCEPTN). */
+	check_has("if (!best->db_ready) {",
+		  "*** rd vms-f4e: no 0b/05 to a member not yet ready ***");
+	check_before("if (!best->db_ready) {",
+		    "(void)cnxman_join_lnm_db_request(&cn->join,",
+		    "... and the gate stands before the request");
+	check_has("csb->db_ready = 1u;",
+		  "a member's own 0b/01 shows it is ready");
 	check_has("cnxman_csb_dialogue_unsent(csb);",
 		  "rd vms-cd8: a refused body hands back its send-msg#");
 	check_has("st != (int)SS__NORMAL && st != (int)SS__ABORT",

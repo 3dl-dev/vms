@@ -374,7 +374,14 @@ struct vms_csb {
 	 * it set. The 0x8b/0x01 answer reads it (vms_cm_0b01_answer_build).
 	 */
 	uint8_t  admitted_after_local;
-	uint8_t  pad_cfg[2];
+	/*
+	 * 1 once this system has shown it is ready to serve its clusterwide
+	 * logical-name database (rd vms-f4e): its PARAMS said so (bit 0 of
+	 * body[80:84]), or it sent this node a 0b/01 startup query. Never
+	 * cleared on a live CSB. The startup database pull waits for it.
+	 */
+	uint8_t  db_ready;
+	uint8_t  pad_cfg[1];
 
 	/* ---- the SCS connection this CSB's state describes (p. 7-23) ---- */
 	uint32_t sw_version;        /* software version as advertised, 0 if unknown */

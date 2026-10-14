@@ -422,6 +422,7 @@ struct vms_cnxman {
 	 * stack and the array is ~2 KB. */
 	struct vms_lnm_equiv lnm_eq[VMS_LNM_MAX_EQUIV];
 	uint32_t q0b01_answered;       /* rd vms-52d: 0x8b/0x01 answers sent */
+	uint32_t lnm_pull_waits;       /* rd vms-f4e: beats a pull waited for db_ready */
 	uint32_t q0b01_declined;       /* ...requests left unanswered        */
 	uint32_t sends_rolled_back;    /* rd vms-cd8: refused, number returned */
 	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
@@ -1999,6 +2000,11 @@ static int cnxman_0b01_rx(struct vms_cnxman *cn,
 	if (env->category != (uint8_t)VMS_CM_CAT_0B ||
 	    env->opcode != (uint8_t)VMS_CM_OP_0B_QUERY)
 		return 0;
+	/* rd vms-f4e: a system that sends its startup query has its
+	 * clusterwide database service running (lnm1: every real requester
+	 * that had waited on a member pulled after that member's 0b/01). */
+	if (csb != NULL)
+		csb->db_ready = 1u;
 	if (cnxman_csb_0b01_answer(csb, cn->cl->state == VMS_CLUSTER_MEMBER,
 				   body, len, cn->dlm_tx, &written) != 0) {
 		cn->q0b01_declined++;
@@ -2044,6 +2050,16 @@ static void cnxman_lnm_db_maybe_pull(struct vms_cnxman *cn)
 	}
 	if (best == NULL)
 		return;
+	/*
+	 * rd vms-f4e: NOT BEFORE IT IS READY. A V7.3 sent a 0b/05 while it said
+	 * 0x2a (lab f4e2: OVMXA and VAX1 had just formed together) took a fatal
+	 * INVEXCEPTN. A real requester waits for that member's own 0b/01 (24/24
+	 * real pulls). So does this node: nothing is sent and the beat asks again.
+	 */
+	if (!best->db_ready) {
+		cn->lnm_pull_waits++;
+		return;
+	}
 	(void)cnxman_join_lnm_db_request(&cn->join,
 				(int32_t)cnxman_club_csb_index(club, best),
 				local->csid);

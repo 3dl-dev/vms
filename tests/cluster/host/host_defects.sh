@@ -258,7 +258,10 @@ dlm-adopt-parent-not-verified
 dlm-adopt-abort-leaves-mastery
 dlm-adopt-unreported-not-counted
 dlm-adopt-lvb-zeroes-the-block
-dlm-convert-by-name"
+dlm-convert-by-name
+cnxman-db-pull-ignores-ready
+join-db-ready-unlearned
+codec-params-ready-ignores-flag"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1102,6 +1105,44 @@ EOF
         why)          echo "vms_dlm_dir_remove_build() leaves body[128:132] zero, so the directory node is sent a removal for an entry it cannot find, and the real entry stays.";;
         require_fail) hd_lines <<'EOF'
 *** every R1 byte equals the real removal's, every other byte is a zero OVMX wrote ***
+EOF
+                      ;;
+        esac;;
+    cnxman-db-pull-ignores-ready)
+        case "$_f" in
+        facility)     echo "the startup database pull waits for a member ready to serve (rd vms-f4e)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_cnxman_glue";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_lnm_db_maybe_pull() sends the 0b/05 to a member that said 0x2a. A real V7.3 sent one while still starting up took a fatal INVEXCEPTN (lab f4e2, the V0.7-9 demo gate).";;
+        require_fail) hd_lines <<'EOF'
+*** rd vms-f4e: no 0b/05 to a member not yet ready ***
+... and the gate stands before the request
+EOF
+                      ;;
+        esac;;
+    join-db-ready-unlearned)
+        case "$_f" in
+        facility)     echo "a member's readiness to serve its database is learned from its PARAMS (rd vms-f4e)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "The join never records a member's PARAMS readiness, so a ready VAX is never pulled from until it sends a 0b/01, and a VAX that came up long before this node never will.";;
+        require_fail) hd_lines <<'EOF'
+*** a member saying 0x2b is ready ***
+  and a later 0x2a does not take it back
+EOF
+                      ;;
+        esac;;
+    codec-params-ready-ignores-flag)
+        case "$_f" in
+        facility)     echo "PARAMS body[82] bit 0 decides readiness (rd vms-f4e)";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_params_db_ready() ignores the flag bit, so a member saying 0x2a reads as ready: the INVEXCEPTN case.";;
+        require_fail) hd_lines <<'EOF'
+*** ...and saying 0x2a, it is NOT ready (the INVEXCEPTN case) ***
 EOF
                       ;;
         esac;;
@@ -2870,6 +2911,15 @@ apply_edit() {
     codec-dir-remove-no-hash)
         # `vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);` is unique in this file.
         sed -i 's|^	vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);$|	(void)id->hash; /* NEGCTL codec-dir-remove-no-hash */|' "$_file";;
+    cnxman-db-pull-ignores-ready)
+        # `	if (!best->db_ready) {` is unique in this file.
+        sed -i 's/^	if (!best->db_ready) {$/	if (0) { \/\* NEGCTL cnxman-db-pull-ignores-ready \*\//' "$_file";;
+    join-db-ready-unlearned)
+        # `		csb->db_ready = 1u;` is unique in this file.
+        sed -i 's/^		csb->db_ready = 1u;$/		(void)csb; \/\* NEGCTL join-db-ready-unlearned \*\//' "$_file";;
+    codec-params-ready-ignores-flag)
+        # the READY test is unique in this file.
+        sed -i 's/(p->flags \& VMS_CM_PFLAGS_READY) != 0u \&\& p->members != 0u;/p->members != 0u; \/\* NEGCTL codec-params-ready-ignores-flag \*\//' "$_file";;
     cnxman-dir-remove-opens-txn)
         # `cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);` is unique in this file.
         sed -i 's|^		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);$|		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST); /* NEGCTL cnxman-dir-remove-opens-txn */|' "$_file";;

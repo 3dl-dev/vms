@@ -2356,6 +2356,11 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	 */
 	join_learn_lockdirwt(csb, p.lockdirwt);
 
+	/* rd vms-f4e: is it ready to serve its database? Only ever SET here, so a
+	 * later PARAMS cannot undo what a 0b/01 already showed. */
+	if (vms_cm_params_db_ready(&p))
+		csb->db_ready = 1u;
+
 	/*
 	 * AND THE ARITHMETIC RUNS ON WHAT WAS JUST LEARNED (rd vms-d0d).
 	 *

@@ -21,6 +21,11 @@
 # attached to the release as ovmx-vax-nodeB.img.gz), which is where
 # openvmx-site's gate and deploy take Node B from.
 #
+# The SAME job also builds the homepage's single-node OVMX/VAX browser demo
+# disk (matrix node=single, rd vms-208f): the acceptance-proven slim single disk
+# with no cluster identity, attached as ovmx-vax-single.img.gz with its
+# vax-single-manifest.json version sidecar. It was hand-built and sat at V0.7-5.
+#
 # The workflow file runs from main; the BUILD is the ref's own tree (its
 # run-boot.sh, its roster, its sources), so a release-verify branch cut before
 # this file existed can still be built and gated before its tag.
@@ -47,12 +52,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # One build, two shipped VAX demo disks (rd vms-208f, epic vms-d385): Node B of
+  # the cluster demo (CLUSTER_AUTHORIZE group + roster identity), and the
+  # single-node OVMX/VAX browser demo on the homepage -- the same acceptance-
+  # proven slim single disk with no cluster identity at all. Both follow the tag.
   nodeB:
-    name: Node B (OVMX/VAX) for the cluster demo
+    name: ${{ matrix.title }}
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {node: B, title: "Node B (OVMX/VAX) for the cluster demo", img: ovmx-vax-nodeB.img.gz, manifest: nodeB-manifest.json, artifact: cluster-demo-nodeB}
+          - {node: single, title: "Single-node OVMX/VAX browser demo disk", img: ovmx-vax-single.img.gz, manifest: vax-single-manifest.json, artifact: demo-vax-single}
     env:
-      KBUILD_DIR: /tmp/ovmx-vax-nodeB-kbuild
+      KBUILD_DIR: /tmp/ovmx-vax-${{ matrix.node }}-kbuild
       SRC_REF: ${{ inputs.ref || github.ref_name }}
     steps:
       - name: Checkout the ref under test
@@ -69,7 +84,7 @@ jobs:
           [ -n "$VER" ] || { echo "no OVMX_PRODUCT_VERSION in src/libvms/include/ovmx_identity.h"; exit 1; }
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "version=$VER" >> "$GITHUB_OUTPUT"
-          echo "building Node B from $SRC_REF = $SHA, OVMX $VER"
+          echo "building the ${{ matrix.node }} disk from $SRC_REF = $SHA, OVMX $VER"
 
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
@@ -127,6 +142,7 @@ jobs:
           cache-from: type=gha,scope=cross-vax
 
       - name: Node B identity from the roster (mk_democonfig.py DEMO_NODE_B)
+        if: matrix.node == 'B'
         run: |
           set -euo pipefail
           python3 - <<'EOF' > "$RUNNER_TEMP/nodeB.env"
@@ -169,15 +185,16 @@ jobs:
       # own login probe is not CI-covered and times out after "Welcome" on this
       # rail at V0.7-10 (runs 38598276981, 38601013446) while acceptance passes on
       # the same SHA, so the battery is the proof used here.
-      - name: Build + boot Node B (run-boot.sh acceptance; fails unless DCL works)
+      - name: Build + boot the disk (run-boot.sh acceptance; fails unless DCL works)
         env:
           CROSS_IMAGE: ovmx-cross-vax
           LAB_IMAGE: ovmx-vax-lab
         run: |
           set -o pipefail
-          tests/lab-vax/run-boot.sh acceptance 2>&1 | tee "$RUNNER_TEMP/nodeB-build.log"
+          tests/lab-vax/run-boot.sh acceptance 2>&1 | tee "$RUNNER_TEMP/demo-build.log"
 
       - name: Write Node B's cluster identity into the booted disk's ODS-2 partition
+        if: matrix.node == 'B'
         run: |
           set -euo pipefail
           IMG=.boot-cache/lab-vax/single-work/wd0.img
@@ -211,42 +228,45 @@ jobs:
         run: |
           set -euo pipefail
           WANT='${{ steps.src.outputs.version }}'
-          tr -d '\r' < "$RUNNER_TEMP/nodeB-build.log" > "$RUNNER_TEMP/nodeB-console.txt"
-          SEEN=$(grep -ao 'OpenVMX V[0-9][0-9.]*-[0-9][0-9]*' "$RUNNER_TEMP/nodeB-console.txt" | sort -u || true)
+          tr -d '\r' < "$RUNNER_TEMP/demo-build.log" > "$RUNNER_TEMP/demo-console.txt"
+          SEEN=$(grep -ao 'OpenVMX V[0-9][0-9.]*-[0-9][0-9]*' "$RUNNER_TEMP/demo-console.txt" | sort -u || true)
           echo "versions announced: ${SEEN:-<none>}"
-          [ -n "$SEEN" ] || { echo "Node B's boot console never announced an OpenVMX version"; exit 1; }
+          [ -n "$SEEN" ] || { echo "the boot console never announced an OpenVMX version"; exit 1; }
           [ "$SEEN" = "OpenVMX $WANT" ] || { echo "Node B announced '$SEEN', the ref is $WANT"; exit 1; }
-          grep -aq "Username:" "$RUNNER_TEMP/nodeB-console.txt" || { echo "no Username: in Node B's boot"; exit 1; }
+          grep -aq "Username:" "$RUNNER_TEMP/demo-console.txt" || { echo "no Username: in the boot"; exit 1; }
 
-      - name: Package Node B
+      - name: Package the disk + its version sidecar
         run: |
           set -euo pipefail
           mkdir -p out
           IMG=.boot-cache/lab-vax/single-work/wd0.img
           [ -f "$IMG" ] || { echo "no single disk at $IMG"; exit 1; }
-          gzip -n -9 -c "$IMG" > out/ovmx-vax-nodeB.img.gz
-          cp "$RUNNER_TEMP/nodeB-console.txt" out/nodeB-build-final-boot-console.txt
-          python3 - '${{ steps.src.outputs.sha }}' '${{ steps.src.outputs.version }}' "$SRC_REF" <<'EOF'
+          gzip -n -9 -c "$IMG" > "out/${{ matrix.img }}"
+          cp "$RUNNER_TEMP/demo-console.txt" "out/${{ matrix.node }}-build-final-boot-console.txt"
+          python3 - '${{ steps.src.outputs.sha }}' '${{ steps.src.outputs.version }}' "$SRC_REF" '${{ matrix.node }}' '${{ matrix.img }}' '${{ matrix.manifest }}' <<'EOF'
           import hashlib, json, os, sys
-          sha, ver, ref = sys.argv[1:4]
+          sha, ver, ref, node, img, manifest = sys.argv[1:7]
           def h(p): return hashlib.sha256(open(p, "rb").read()).hexdigest()
-          json.dump({"node": os.environ["NODE_B_SCSNODE"], "scssystemid": int(os.environ["NODE_B_SCSSYSTEMID"]),
-                     "ref": ref, "sha": sha, "version": ver,
-                     "img_gz_sha256": h("out/ovmx-vax-nodeB.img.gz"),
-                     "raw_sha256": h(".boot-cache/lab-vax/single-work/wd0.img")},
-                    open("out/nodeB-manifest.json", "w"), indent=2)
+          m = {"ref": ref, "sha": sha, "version": ver,
+               "img_gz_sha256": h("out/" + img),
+               "raw_sha256": h(".boot-cache/lab-vax/single-work/wd0.img")}
+          if node == "B":
+              m = {"node": os.environ["NODE_B_SCSNODE"], "scssystemid": int(os.environ["NODE_B_SCSSYSTEMID"]), **m}
+          else:
+              m = {"node": "single", **m}
+          json.dump(m, open("out/" + manifest, "w"), indent=2)
           EOF
-          cat out/nodeB-manifest.json
+          cat "out/${{ matrix.manifest }}"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cluster-demo-nodeB
+          name: ${{ matrix.artifact }}
           path: out/
           retention-days: 30
 
       # A tag push, or a dispatch whose ref IS a release tag (a catch-up build
       # for a tag cut before this workflow existed, e.g. V0.7-10 -- rd vms-fbdd).
-      - name: Attach Node B to the release (tag builds)
+      - name: Attach the disk + sidecar to the release (tag builds)
         if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/V')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.ref, 'V'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -261,4 +281,4 @@ jobs:
             gh release view "$T" >/dev/null 2>&1 && break
             sleep 60
           done
-          gh release upload "$T" out/ovmx-vax-nodeB.img.gz out/nodeB-manifest.json --clobber
+          gh release upload "$T" "out/${{ matrix.img }}" "out/${{ matrix.manifest }}" --clobber

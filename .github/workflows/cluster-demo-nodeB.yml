@@ -244,13 +244,17 @@ jobs:
           path: out/
           retention-days: 30
 
+      # A tag push, or a dispatch whose ref IS a release tag (a catch-up build
+      # for a tag cut before this workflow existed, e.g. V0.7-10 -- rd vms-fbdd).
       - name: Attach Node B to the release (tag builds)
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/V')
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/V')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.ref, 'V'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          T='${{ github.ref_name }}'
+          T='${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}'
+          git ls-remote --exit-code --tags origin "refs/tags/$T" >/dev/null \
+            || { echo "$T is not a tag; nothing to attach"; exit 0; }
           # release.yml creates the release for this tag; wait for it rather
           # than race it.
           for _ in $(seq 1 60); do

@@ -24,6 +24,7 @@
  */
 #include "cluster_fixture.h"
 #include "cluster_test.h"
+#include "conformance_dump.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, the
 				  * full-frame composer used to assemble a
@@ -265,6 +266,12 @@ static void test_dlm_op0d_recipe(void)
 		 == VMS_CODEC_OK, "vms_cm_dlm_op0d_response_build succeeds");
 	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
 	assert_body_matches(resp, built, "cm-dlm-op0d");
+	/* rd vms-ac4f: 227 of the frames one OVMX node sent a real VAX in one
+	 * demo run were this echo, and no row described a byte. It is a
+	 * VERBATIM copy of the record the coordinator sent, so every row below
+	 * is `copied`, and the fixture match above is what grounds them. */
+	conf_dump("cm_dlm_op0d_echo", VMS_OFF_SYSAP_BODY, "-", built,
+		  VMS_CM_BODY_LEN);
 
 	/* Negative control mirroring spec sec 4(p)'s LOCKMGRERR warning:
 	 * body[16] (the L1 length) must NOT be disturbed the way the cat-0x01

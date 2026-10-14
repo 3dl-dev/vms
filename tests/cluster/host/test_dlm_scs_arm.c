@@ -613,6 +613,21 @@ static void arm_bindings(void)
 	    "the fork thread runs a staged removal");
 	has("(void)dlm_req_fsm_dir_remove(&d->req, &p);",
 	    "... through the FSM's removal emitter");
+
+	/*
+	 * rd vms-c55: AND A REQUEST FOR THE SAME RESOURCE DROPS IT. The run
+	 * that bugchecked a real VAX (tests/lab/captures/vms-c55-lockmgrerr-
+	 * 20261014) has OVMX removing the directory entry for RMS$4F.1.0 and
+	 * asking the same directory who masters RMS$4F.1.0 29 ms later. The
+	 * drop has to happen on the POST path, before the work item is queued,
+	 * because after that the removal is the fork thread's.
+	 */
+	before("dlm_arm_dirrm_drop_for(d, p);",
+	       "kind = dlm_arm_op_to_work_kind(p->op);",
+	       "*** a request for a resource drops that resource's staged "
+	       "directory removal, before the request is queued ***");
+	has("d->dir_removes_dropped++",
+	    "... and the drop is counted, never silent");
 }
 
 static void cnxman_legs(void)

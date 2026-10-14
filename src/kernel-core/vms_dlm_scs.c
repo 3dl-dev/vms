@@ -1077,8 +1077,20 @@ static int dlm_arm_peer_is_ours(struct vms_dlm_scs *d,
 	if (req->peer_is_ours)
 		return 1;
 	d->foreign_refused++;
-	dlm_arm_log(d, "%DLM, refusing a lock message from a system that has "
-		       "not proved it runs this implementation");
+	/*
+	 * NAME THE FRAME (rd vms-c55). A refusal that does not say WHICH
+	 * message it refused cannot be read against a capture: the demo's real
+	 * V7.3 bugchecked LOCKMGRERR 55 ms after this line in two separate
+	 * runs, and the line did not say whether the thing refused was a
+	 * lookup, a release, a blocking AST or a remaster record. The category
+	 * and opcode are the connection manager's own reading of the frame it
+	 * delivered -- no new parse, and nothing asserted on the wire.
+	 */
+	exec_console_printf("%%DLM, refusing a lock message (cat 0x%02x op "
+			    "0x%02x) from system 0x%x: it has not proved it "
+			    "runs this implementation\n",
+			    (unsigned)req->category, (unsigned)req->opcode,
+			    (unsigned)req->from_csid);
 	return 0;
 }
 

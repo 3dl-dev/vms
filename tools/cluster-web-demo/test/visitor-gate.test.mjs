@@ -430,6 +430,20 @@ test('a Node A that is talking has nothing to explain', () => {
   assert.ok(!/Node A/.test(verdictOf(R)), 'a working node is not narrated');
 });
 
+test('a DCL prompt after the VMS NUL fill is a DCL prompt (real VAX: <CR><NUL>$)', () => {
+  // OVMXA's console in the V0.7-9 gate run (b-first): the login banner, the
+  // terminal inquiry VMS sends, then CR NUL $ -- exactly the oracle's bytes.
+  const t = ' Welcome to OpenVMX V0.7-9 - OpenVMS-compatible\r\u001b[c\r\r\n\u0000$';
+  assert.equal(GATE.atDcl(t), true);
+  const R = { transcript: { OVMXA: 'Password: \r\n' + t }, login_sent: { OVMXA: 10 },
+              username_at: { OVMXA: 1 } };
+  GATE.observeLogin(R, 'OVMXA', 7);
+  assert.equal(R.dcl_at.OVMXA, 7);
+  // Still not a prompt: a line that only CONTAINS $ after the fill, and a bare fill.
+  assert.equal(GATE.atDcl('x\n\u0000$ SHOW TIME'), false);
+  assert.equal(GATE.atDcl('x\n\u0000'), false);
+});
+
 test('lastLineOf ignores trailing blanks and the cursor glyph', () => {
   assert.equal(GATE.lastLineOf('a\nb\n\n'), 'b');
   assert.equal(GATE.lastLineOf('%OVMX-I-MOUNTED, system disk VDA0: mounted\n█'),

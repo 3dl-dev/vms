@@ -73,3 +73,44 @@ Pinned by `test_94a_a_corrupt_database_is_answered_and_refused` (driven with
   `gcc -Isrc/kernel-core -o dbparse dbparse.c src/kernel-core/vms_cluster_codec_cm.c
   src/kernel-core/vms_cluster_codec.c`
 - `VAXC.console.log`, `OVMXA.console.log` -- the two consoles of the same run.
+
+## For the demo-datapath lane: everything measured about the deletion
+
+Asked (2026-10-14): is there anything below the frame level, and are other VAXC frames
+shifted the same way?
+
+- **No sub-frame instrumentation.** The only instrument was the demo page's own L2 switch,
+  which records each 0x6007 frame's bytes as it carries them. No VAXC memory, no XQ
+  descriptor state, no pcjs-internal trace. What is below is everything there is.
+- **The deletion is at a FIXED ABSOLUTE FRAME OFFSET, in two independent runs.** Both
+  pushes are a single SCA block DATA frame (`op 0x0d`, `src_off 0`, one segment):
+
+  | run | frame length | payload | deleted byte | absolute frame offset |
+  |---|---|---|---|---|
+  | V0.7-9 `page-order` (run 38577678113) | 568 | 484 | `0xb2`, payload offset 61 | **145** (0x91) |
+  | V0.7-10 `page-order` (run 38582830937) | 1496 | 1412 | `0xb2`, payload offset 61 | **145** (0x91) |
+
+  Same offset in a 568-byte frame and a 1496-byte frame, so it is not length-dependent and
+  not a segment boundary. Both frames carry the identical 24 bytes at abs 136..159
+  (`64b24d8080b24d809c4d80a0b24d80010000000000000011`), which is where the hole shows.
+- **It is a DELETION, not an overwrite.** The frame keeps its declared length: everything
+  after abs 145 is shifted down one byte and one junk byte appears at the end. Proof:
+  re-inserting `0xb2` at payload offset 61 makes the V0.7-10 push decode completely -- six
+  records, exactly the clusterwide tables a V7.3 holds, matching the container's own count
+  of 6 (`dbparse` after the repair). The sender's own length accounting (container length,
+  each record length, the record count) agrees with the UNCORRUPTED data, so the buffer
+  VAXC meant to send was well formed.
+- **Known-correct test vectors**, for a headless repro:
+  - `vaxc-datafrm-received.txt` -- both frames, byte for byte, as they crossed the switch.
+  - `vaxc-dbpush-repaired.txt` -- the same two payloads with the byte re-inserted. These
+    decode; the received ones do not. Any datapath that carries the repaired payload
+    unchanged is correct.
+- **The other VAXC block transfers in those runs are 136-byte close records** (13 in the
+  V0.7-9 run, 2 in the V0.7-10 run). All 15 carry the measured `rec[8:12] = 88 00 65 64`
+  signature, so they are not mangled at the front -- but this lane has no published oracle
+  for their bytes AROUND offset 61, so they are NOT evidence either way about a deletion
+  there. If the fault is at absolute frame offset 145 regardless of content, those frames
+  are 220 bytes long and reach that offset too, which makes them the cheapest place to
+  look next.
+- No 204-byte connection-manager frame in either run decodes to a bogus category or
+  opcode (2,013 and 2,215 of them), so whatever this is, it is not mangling every frame.

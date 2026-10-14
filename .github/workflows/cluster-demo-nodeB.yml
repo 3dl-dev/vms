@@ -22,6 +22,9 @@
 # run-boot.sh, its roster, its sources), so a release-verify branch cut before
 # this file existed can still be built and gated before its tag.
 name: cluster-demo-nodeB
+# openvmx-site finds the build for a ref by this title, then checks the
+# artifact's own manifest (sha, version) against the ref before using it.
+run-name: Node B for ${{ inputs.ref || github.ref_name }}
 
 on:
   workflow_dispatch:

@@ -108,3 +108,7 @@ distro/kernel/ovmx-module-signing-key.pem
 
 # cleanup-swarm coordination scaffold — never commit
 LANE-STATE.md
+
+# Host negctl build logs written into the tree on every run (rd vms-761)
+/build.build.log
+/build.cfg.log

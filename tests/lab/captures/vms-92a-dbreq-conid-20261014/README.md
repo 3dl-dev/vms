@@ -1,8 +1,18 @@
-# vms-92a: V0.7-9 bugchecks a real VAX — the transfer Con.ID of the clusterwide-LNM database request
+# vms-9045: the 0b/05 database request names transfer connection 0
 
-Evidence for the P0. The fix is NOT in this commit: it is a behaviour change to what OVMX
-emits at a real VAX, and it costs a V0.7-9 feature, so it is the conductor's to authorise
-(see **The decision** below).
+**⚠ THE V0.7-9 BUGCHECK'S ROOT CAUSE IS rd vms-f4e (PR #1702), NOT THIS.** That lane got
+there first and fixed it: OVMX pulled the clusterwide-LNM database from a member that was
+not yet READY (its PARAMS said `body[82]` = 0x2a, not 0x2b), and a real VAX still early in
+its own startup died on it. They reproduced it in their own lab with a register dump
+matching the demo's and grounded the readiness rule on 54 real pulls.
+
+What is left here, and what this directory is for, is a **second, separate defect in the
+same frame** that the readiness gate does not touch: **OVMX names transfer connection 0
+where 19 of 19 real requests name a connection.** A ready member will still be asked to
+block-transfer onto connection 0. That is rd **vms-9045**.
+
+The crash narrative below is kept because it is the measured context, and because the
+ruled-out table and the frame log are the evidence a future arm starts from.
 
 ## The crash
 
@@ -90,7 +100,7 @@ an ungrounded value, and a real VAX may dereference it."*
 | the op-0x04 directory removal (#1682) | the vms-e09 arm ran the same topology with it, 0 bugchecks |
 | a flood from OVMX | VAXC's own post-commit membership burst is 254/509 frames in the real corpus too — that is real-VAX behaviour, not an OVMX storm |
 
-## The decision (conductor)
+## The decision (conductor) — now rd vms-9045, no longer the P0
 
 OVMX cannot fill `body[20:24]`: its FORM is not derived — it is **neither** Con.ID the
 frame's own SCS envelope carries, and the nineteen real values have no relation this lane

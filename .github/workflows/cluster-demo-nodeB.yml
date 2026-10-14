@@ -126,7 +126,7 @@ jobs:
       - name: Node B identity from the roster (mk_democonfig.py DEMO_NODE_B)
         run: |
           set -euo pipefail
-          python3 - <<'EOF' >> "$GITHUB_ENV"
+          python3 - <<'EOF' > "$RUNNER_TEMP/nodeB.env"
           import sys
           sys.path.insert(0, "tools/cluster-web-demo")
           from mk_democonfig import DEMO_NODE_B as b
@@ -138,10 +138,15 @@ jobs:
           print("NODE_B_GROUP=%d" % b["group"])
           print("NODE_B_PASSWORD=%s" % b.get("password", ""))
           EOF
-          mkdir -p .boot-cache/lab-vax/nodeB
+          cat "$RUNNER_TEMP/nodeB.env" >> "$GITHUB_ENV"
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/nodeB.env"
           python3 tools/cluster-web-demo/mk_democonfig.py authorize \
-            .boot-cache/lab-vax/nodeB/CLUSTER_AUTHORIZE.DAT "$NODE_B_GROUP" ${NODE_B_PASSWORD:+"$NODE_B_PASSWORD"}
-          echo "CLUSTER_AUTH_FILE=${{ github.workspace }}/.boot-cache/lab-vax/nodeB/CLUSTER_AUTHORIZE.DAT" >> "$GITHUB_ENV"
+            "$RUNNER_TEMP/CLUSTER_AUTHORIZE.DAT" "$NODE_B_GROUP" ${NODE_B_PASSWORD:+"$NODE_B_PASSWORD"}
+          # run-boot.sh wants it under CACHE_DIR, which the lab container may own.
+          DST="${{ github.workspace }}/.boot-cache/lab-vax/nodeB/CLUSTER_AUTHORIZE.DAT"
+          sudo install -D -m 0644 "$RUNNER_TEMP/CLUSTER_AUTHORIZE.DAT" "$DST"
+          echo "CLUSTER_AUTH_FILE=$DST" >> "$GITHUB_ENV"
 
       - name: Build + boot Node B (run-boot.sh sysboot-single; fails unless it reaches Username:)
         run: |

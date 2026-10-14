@@ -46,6 +46,7 @@ TYPE_OF = {
     # the status cell decides which, and a frame carrying neither grounded
     # status is not a directory answer this node builds.
     (0x82, 0x01): None,          # resolved by status, below
+    (0x82, 0x0d): 'cm_dlm_op0d_echo',
 }
 DIR_ANS_BY_STATUS = {0xf9: 'dlm_dir_ans_you', 0xf8: 'dlm_dir_ans_redir'}
 BODY_OFF = 72          # the SYSAP body's frame-absolute offset, and the base every

@@ -22,7 +22,7 @@ trap 'rm -f "$DUMP" "$DUMP.neg"' EXIT
 # whose suite is missing is a frame type the gate cannot see, which is how
 # 903 of 908 frames a booted node sent a real VAX went undescribed.
 for t in test_mscp_cl test_cnxman_join test_scs_fsm test_cnxman_coord \
-         test_dlm_dir; do
+         test_dlm_dir test_codec_cm; do
 	if ! OVMX_CONFORMANCE_OUT=$DUMP "$BIN/$t" > /dev/null 2>&1; then
 		echo "run_gate.sh: emitter $t itself failed" >&2
 		exit 1

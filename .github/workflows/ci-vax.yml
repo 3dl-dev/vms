@@ -83,7 +83,9 @@ jobs:
     # proof stays per-PR via the elf32-vax cross-compile jobs.
     # vms-6e10 KEEPER: intentionally NOT p4-only-gated -- this is the VAX
     # substrate chain the P4 fast-path exists to run.
-    if: ${{ github.event_name != 'pull_request' }}
+    # rd vms-649a: also on a PR that touches the VAX login path (vax_login),
+    # so vax-sysboot-single boots that PR's own substrate, not main's cache.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vax_login == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -157,7 +159,9 @@ jobs:
     needs: [changes, netbsd-vax-simh]
     # vms-6e10 KEEPER: intentionally NOT p4-only-gated -- the P4 fast-path's
     # whole purpose is to run this substrate prime (and the P4 gate below it).
-    if: ${{ github.event_name != 'pull_request' }}
+    # rd vms-649a: also on a PR that touches the VAX login path (vax_login),
+    # so vax-sysboot-single boots that PR's own substrate, not main's cache.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vax_login == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     # The full NetBSD src tree + build.sh obj/tools are large, rebuildable scratch
@@ -1313,12 +1317,90 @@ jobs:
           LAB_IMAGE: ovmx-vax-lab
         run: tests/lab-vax/run-boot.sh acceptance
 
-      # rd vms-649a: the boot mode the shipped demo images use (cluster-demo
-      # Node B, the single-node VAX browser demo) is sysboot-single, and no CI
-      # job ran it, so a login-probe regression after "Welcome" shipped in
-      # V0.7-10 unseen. Same slim disk as acceptance; it must reach Username:,
-      # log in SYSTEM/MANAGER to a DCL $ and survive two commands.
-      - name: "Sysboot-single — the demo images' boot mode: slim single disk to Username: and a usable DCL $"
+
+  vax-sysboot-single:
+    name: "OVMX/NetBSD-vax sysboot-single — the demo images' boot mode reaches Username: and a usable DCL $ (vms-649a)"
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    # Heavy tier (schedule / dispatch, as acceptance), PLUS any PR that touches
+    # the VAX login path (vax_login: DCL, the terminal driver, LOGINOUT, the VAX
+    # harness, boot scripts). Not on every merge (coordinator ruling 2026-10-14).
+    if: ${{ !cancelled() && needs.netbsd-vax-substrate-prime.result == 'success' && (((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true')) || (github.event_name == 'pull_request' && needs.changes.outputs.vax_login == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-sysboot-single-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
+
+      # rd vms-649a: run-boot.sh sysboot-single is the boot mode the shipped
+      # demo images use (cluster-demo Node B, the single-node VAX browser demo).
+      # No CI job ran it, so a login-probe regression after "Welcome" shipped in
+      # V0.7-10 unseen. It must reach Username:, log in SYSTEM/MANAGER to a DCL
+      # $, survive two commands, and really write the ODS-2 partition.
+      - name: "Sysboot-single — slim single disk to Username: and a usable DCL $"
         env:
           CROSS_IMAGE: ovmx-cross-vax
           LAB_IMAGE: ovmx-vax-lab
@@ -2269,6 +2351,7 @@ jobs:
       - netbsd-vax-boot
       - netbsd-vax-sysboot
       - vax-dcl-acceptance
+      - vax-sysboot-single
       - vax-status-gate
       - netbsd-vax-vms-crosscompile
       - netbsd-vax-facility-tools-crosscompile

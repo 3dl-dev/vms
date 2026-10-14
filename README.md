@@ -100,8 +100,9 @@ See [the release roadmap to 1.0](docs/release-roadmap-to-1.0.md) for the full
 milestone ladder and current state.
 
 First-class release architectures are **x86_64, Alpha (LP64), and VAX** (on the
-NetBSD substrate); **aarch64** is also supported. Every release is co-released
-across these architectures through a shared build/release gate.
+NetBSD substrate). Every release is co-released across these three through a
+shared build/release gate. **aarch64** builds and boots from source, and CI
+proves it boots, but releases do not carry aarch64 artifacts yet (vms-0ad0).
 
 OpenVMX runs as a bootable QEMU VM — the VMS-native runtime (image activation via
 `IMGACT.EXE`, linking via `LINK.EXE`, musl userland) — where `vms.ko` provides the

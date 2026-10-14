@@ -743,6 +743,19 @@ static void dlm_arm_run_dir_remove(struct vms_dlm_scs *d, uint32_t slot,
 		d->dir_removes_stale++;
 		return;
 	}
+	/*
+	 * ===================================================================
+	 * ARM ONLY -- rd vms-c55, THE ONE-VARIABLE EXPERIMENT. NEVER MERGE.
+	 * ===================================================================
+	 * The captured crash (tests/lab/captures/vms-c55-lockmgrerr-20261014)
+	 * has exactly two OVMX-originated frames before a real VAX bugchecks
+	 * LOCKMGRERR: this directory-entry removal, and 29 ms later a bare
+	 * lookup for the SAME resource. This branch removes the first so the
+	 * next fire says which one the VAX dies on. Everything else -- the
+	 * lookup, its zero master cell, the refusal diagnostic -- is unchanged.
+	 */
+	d->dir_removes_stale++;   /* counted, so the arm is visible in the counters */
+	return;
 	(void)dlm_req_fsm_dir_remove(&d->req, &p);
 }
 

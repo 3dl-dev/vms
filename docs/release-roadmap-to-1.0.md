@@ -111,7 +111,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-10-13** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-10-14** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -124,7 +124,7 @@ only our forks target.
 | **0.7** | Cluster wire fidelity — a booted OVMX node joins a real VAX cluster and is admitted to sustained CN=3 on a single circuit, crash-safe. | SHIPPED | 10 | 2 | 0 | 83% |
 | **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | in progress | 1 | 2 | 0 | 33% |
 | **0.9** | Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain reach done. The last features land here. | planned | 0 | 0 | 0 | — |
-| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 52 | 35 | 12 | 60% |
+| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 53 | 35 | 12 | 60% |
 
 ### 1.0-gate workstreams (epic rollups)
 
@@ -216,7 +216,7 @@ only our forks target.
 - `vms-4838` [done] REJOIN: drive op 0x02 CM readmission on the MEMBER-INITIATED VMS$VAXcluster connection (rejoiner=TARGET), not OVMX's own outbound joiner VC
 - `vms-ce7` [inbox] Complete diskless satellite boot: NISCS boot-time disk-server VC formation (no MOP load — VMB is ROM-resident) -> pure MSCP-served-disk-over-NISCA capture
 
-**1.0** — rel-1.0 (52/87 done)
+**1.0** — rel-1.0 (53/88 done)
 
 - `vms-015` [done] compat register: repoint drifted cluster-dlm evidence (src/vmsscs → src/kernel-core)
 - `vms-025` [inbox] Mixed cluster: an OVMX $ENQ on a name whose entry in OVMX's lock directory names a VAX master goes to that VAX master and queues/grants there, never a second local master
@@ -263,6 +263,7 @@ only our forks target.
 - `vms-80c` [done] compat: ssh$server-daemon row cites the RETIRING libssh C-reimpl (vmssshd.c), note falsely claims 'wraps OpenSSH' — should point at the wrapped-OpenSSH server once vms-16b retires the second stack
 - `vms-8cf` [done] VAX installer: AUTHORIZE.EXE cross-builds for elf32-vax (Decision A static-link)
 - `vms-9115` [inbox] EPIC: Cluster robustness — OVMX as first-class FOUNDING member (authentic VMS formation) so OVMX^n AND mixed (OVMX)^n·(OpenVMS)^m clusters work (1.0 headline)
+- `vms-92a` [done] P0: V0.7-9 bugchecks a real VAX (INVEXCEPTN) moments after the VAX admits an OVMX node -- intermittent, same PC every time
 - `vms-93fa` [blocked] Lab proof: a real VAX departing with a tree OVMX is chosen to master completes its shutdown, and its surviving VAX holders' locks keep working through OVMX
 - `vms-945e` [done] every boot-required executive facility (proctab/CREPRC, lnm, mbx, ast, access) proven cross-process against the REAL /dev/vms on netbsd-vax (not just event flags; catches ILP32/float/ELF32 bugs amd64 can't)
 - `vms-9c6c` [blocked] R4 (capstone): CLUSTER_CONFIG_LAN.COM provisions OVMX into a cluster end-to-end (operator runs @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM ADD -> node JOINS -> SHOW CLUSTER shows it)
@@ -308,6 +309,7 @@ only our forks target.
 
 ### Shipped releases (git tags)
 
+- **V0.7-10** — Point release.
 - **V0.7-9** — Point release.
 - **V0.7-8** — Point release.
 - **V0.7-7** — Point release.
@@ -319,7 +321,6 @@ only our forks target.
 - **V0.7-1** — Point release.
 - **V0.7** — Cluster wire fidelity — a booted OpenVMX node joins a real OpenVMS VAXcluster on a single circuit. A fresh-booted OVMX node opens its SCS virtual circuit to a live two-node VAXcluster, completes the connection-manager dialogue, and is admitted through the membership transition to STATUS=MEMBER at sustained CN=3 — on ONE NISCA circuit formation, no reformation. This is the first admission that is genuinely OpenVMX's own: the V0.6-11 CN=3 was real as a counted-member state but completed only on a circuit the VAX reformed in response to an OpenVMX defect (an unaddressed op-5 REJECT_RESPONSE that also crash-looped later builds); that defect is fixed, and the join FSM now re-arms across the VAX's transition-abort and completes admission cleanly on the first circuit. Proven on the lab's real VAXes (group 257) by a five-leg gate: OVMX SHOW CLUSTER lists the member, VAX1's SDA CSB shows OVMXJ1 admitted MEMBER, VAX1's F$GETSYI("CLUSTER_NODES") reads 3, the join pcap carries OVMXJ1 in the 0x6007 SCA traffic, and CAP_NET_RAW is DENIED to the booted node — so the OVMX executive itself, not an ambient Linux capability, served the Ethernet L2 I/O. CN=3 held ~225s+ (a floor, not a ceiling — the lab poll ended on a harness race, not a membership drop), both real VAXes zero bugchecks, the release-gating never-crash-a-peer invariant. Honest scope: OVMX's RECOVERY from a VAX transition-abort is host-proven but was not exercised on the wire in the passing run (the abort is intermittent, tracked vms-c10); quorum votes are computed and displayed but not enforced; and this JOINS an existing cluster — it does not yet form a cluster from nothing to a real VAX or MSCP-serve storage to one.
 - **V0.6-16** — Point release.
-- **V0.6-15** — Point release.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

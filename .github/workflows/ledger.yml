@@ -65,8 +65,13 @@ jobs:
       - name: COMPAT drift gate -- yaml is source, md is generated
         run: python3 tools/compat/render_compat.py --check
 
+      # vms-aaf: on pull_request / merge_group, pass --base so a branch that did
+      # not touch the release list is not redded by a tag that postdates it; a
+      # list the change DID edit must still equal git tag. Push to main is strict.
       - name: ROADMAP block gate -- marker integrity + releases match git tags
-        run: python3 tools/ledger/check_roadmap_block.py
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python3 tools/ledger/check_roadmap_block.py ${BASE_SHA:+--base "$BASE_SHA"}
 
       - name: NO-NEW-HAND-COPIES -- forbid a second, hand-kept ledger
         run: python3 tools/ledger/no_new_hand_copies.py
@@ -74,7 +79,7 @@ jobs:
       - name: ROADMAP collapse-guard self-tests -- an empty rd snapshot must NOT publish 0%
         run: |
           python3 -m pip install --user pytest
-          python3 -m pytest tests/tools/test_roadmap_collapse_guard.py -v
+          python3 -m pytest tests/tools/test_roadmap_collapse_guard.py tests/tools/test_check_roadmap_block.py -v
 
   # ---------------------------------------------------------------------------
   # Scheduled/manual live-rd roadmap regen. Keeps the GENERATED block + compat md

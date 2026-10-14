@@ -26,6 +26,9 @@ on:
       - 'tools/compat/**'
       - 'tools/roadmap/**'
       - 'tools/ledger/**'
+      - 'deploy/**'
+      - 'tools/deploy/**'
+      - 'tests/integration/test_drift_sentinel.sh'
       - '**/*.md'
       - '.github/workflows/ledger.yml'
   pull_request:
@@ -75,6 +78,12 @@ jobs:
 
       - name: NO-NEW-HAND-COPIES -- forbid a second, hand-kept ledger
         run: python3 tools/ledger/no_new_hand_copies.py
+
+      # vms-fd8: deploy/targets.yaml (the one inventory of deploy targets) must
+      # validate, and the drift sentinel must still be able to go red on a stale
+      # probe (offline negative control; the live probe runs in drift-sentinel.yml).
+      - name: DEPLOY INVENTORY -- manifest validates; the drift sentinel can fail
+        run: bash tests/integration/test_drift_sentinel.sh "$PWD"
 
       - name: ROADMAP collapse-guard self-tests -- an empty rd snapshot must NOT publish 0%
         run: |

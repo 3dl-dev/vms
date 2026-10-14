@@ -1,0 +1,63 @@
+name: Deploy drift sentinel
+
+# Is every deployed OVMX surface running the latest release tag? (rd vms-fd8,
+# epic vms-d385.) This replaces "devops is someone remembering": every target
+# in deploy/targets.yaml is probed LIVE (no secrets, read-only) and compared
+# with the newest release tag in git. Any target that is not on it -- or whose
+# version cannot be read -- turns this run RED and keeps one open GitHub issue
+# titled "drift: <id>" (label deploy-drift) linking this run. An issue closes
+# itself on the first run that finds its target current again.
+#
+# A gated target (the demo visitor gate) that its gate held back is still
+# drift: the run says so, quoting the pin's reason. Honest, not silenced.
+#
+# When it runs: daily; after every release.yml run (so a new tag is judged
+# once its assets are published, not before); and by hand.
+
+on:
+  schedule:
+    - cron: '23 8 * * *'   # daily 08:23 UTC
+  workflow_run:
+    workflows: ["Cut and Publish Release"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: drift-sentinel
+  cancel-in-progress: false
+
+jobs:
+  sentinel:
+    name: Every deploy target is on the latest release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (tags, so the latest release tag comes from git)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install PyYAML
+        run: python3 -m pip install --user pyyaml
+
+      - name: Negative control -- the sentinel can still go red (offline)
+        run: bash tests/integration/test_drift_sentinel.sh "$PWD"
+
+      - name: Probe every target, sync the drift issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/deploy/drift_sentinel.py \
+            --json drift.json \
+            --sync-issues --repo "${{ github.repository }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: drift-report
+          path: drift.json

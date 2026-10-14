@@ -16,3 +16,13 @@ had said body[82] = 0x2a. Files: r2-cm.pcap (cat 0x01/0x0b), r2-*-console.log.
 Same topology. P1: OVMXA sends no 0b/05 while VAX1's PARAMS said 0x2a and VAX1 has sent it
 no 0b/01. P2: if VAX1 sends OVMXA a 0b/01, OVMXA answers it and only then pulls. P3: 0
 bugchecks; VAX1 offers Username:.
+
+## Fix proof result (pod labf4e4, work/vms-f4e-lnm-ready 256155428, artifacts run 38491844882)
+Same topology: VAX1 and OVMXA formed together; VAX1 had said body[82] = 0x2a.
+- P1 held: no 0b/05 for 63.7 s, while VAX1 was starting up.
+- P2 held: VAX1 sent OVMXA its 0b/01 at 63.70 s, OVMXA answered 8b/01, and pulled 0.79 s later
+  (0b/05 -> 8b/05, 0b/06 -> 8b/04). This is the real pattern of lnm1, where a requester pulled
+  1.08 s after the member's own 0b/01.
+- P3 held: 0 bugchecks; VAX1 offers Username:.
+(Run labf4e3 was abandoned: the ^E halt landed inside VMB's disk load and the simulator never resumed.)
+Files: r4-cm.pcap, r4-*-console.log.

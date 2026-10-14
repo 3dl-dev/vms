@@ -812,6 +812,21 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
 #define VMS_OFB_CM_RESP_MARK   (VMS_OFF_CM_RESP_MARK   - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_RELAY_EPOCH (VMS_OFF_CM_RELAY_EPOCH - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_PARAM_F1    (VMS_OFF_CM_PARAM_F1    - VMS_OFF_SYSAP_BODY)
+/*
+ * rd vms-f4e: body[80:84] of a PARAMS, LE u32. In every clean real frame
+ * body[80:82] and body[83] are 0 and body[82] is 0x2a or 0x2b (334/384; the
+ * rest carry a stale buffer pointer, body[83] 0x7f).
+ * 0x2b only ever comes from a system that is a cluster member (147/147), but
+ * a member can also say 0x2a (14 frames). Over 54 real 0b/05 database pulls,
+ * the requester pulled from a member whose last PARAMS said 0x2b at once
+ * (30/30). When the member had said 0x2a, the requester waited until that
+ * member had sent it a 0b/01 startup query (24/24). Bit 0 is read as "this
+ * system is ready to serve its clusterwide database". Pulling from a VAX that
+ * had said 0x2a bugchecked it (INVEXCEPTN, lab f4e2 and the V0.7-9 demo gate).
+ */
+#define VMS_OFB_CM_PFLAGS      80u   /* body[80:84] LE u32 */
+#define VMS_CM_PFLAGS_CLEAN    0xff00ffffu  /* zero in every clean word */
+#define VMS_CM_PFLAGS_READY    0x00010000u  /* bit 0 of body[82]        */
 #define VMS_OFB_CM_PARAM_F2    (VMS_OFF_CM_PARAM_F2    - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_VERSION     (VMS_OFF_CM_VERSION     - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_TXN         (VMS_OFF_CM_TXN         - VMS_OFF_SYSAP_BODY)
@@ -1049,12 +1064,18 @@ struct vms_cm_params {
 	uint16_t qdskvotes; /* body[24:26] LE u16: the sender's SYSGEN
 			     * QDSKVOTES (rd vms-f297, VMS_OFF_CM_QDSKVOTES)  */
 	uint32_t param_f1; /* body[72:76], observed constant 0x10             */
+	uint32_t flags;    /* body[80:84], rd vms-f4e (VMS_OFB_CM_PFLAGS)     */
 	uint32_t param_f2; /* body[76:80] -- the EXPECTED_VOTES word, raw    */
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], 8-byte space-padded ASCII version field (e.g. V7.3) */
 };
 
 vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 				       struct vms_cm_params *out);
+
+/* rd vms-f4e: does this PARAMS say its sender is ready to serve its database?
+ * Bit 0 of body[82] in a clean flags word, from a system that states it is
+ * a member. A stale-buffer word says nothing, so it reads as not ready. */
+int vms_cm_params_db_ready(const struct vms_cm_params *p);
 
 /*
  * cat-0x01 op-0x02, the joiner's admission request (rd vms-f297): the one field

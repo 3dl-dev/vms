@@ -687,6 +687,41 @@ static void test_fcb_params_lockdirwt(void)
  * and a joiner -- and OVMX's builder puts its own count at exactly those two
  * bytes: built with the oracle's own count, the span is byte-identical.
  */
+/*
+ * rd vms-f4e: body[82] bit 0 is "ready to serve the clusterwide database".
+ * Three real V7.3 PARAMS: a member saying 0x2b, a joiner saying 0x2a, and a
+ * MEMBER saying 0x2a. The last is the case that bugchecked a VAX: it is a
+ * member, and it is not ready.
+ */
+static void test_f4e_params_db_ready(void)
+{
+	const struct vms_fixture *m = fixture("cm-params-member-oracle");
+	const struct vms_fixture *j = fixture("cm-params-joiner-oracle");
+	const struct vms_fixture *n = fixture("cm-params-member-not-ready-oracle");
+	struct vms_cm_params p;
+
+	printf("-- rd vms-f4e: PARAMS body[82] bit 0, ready to serve the "
+	       "database\n");
+	ct_check(m != NULL && j != NULL && n != NULL,
+		 "the three real PARAMS specimens load");
+	if (m == NULL || j == NULL || n == NULL)
+		return;
+	ct_check(vms_cm_params_parse(fx_body(m), fx_body_len(m), &p) ==
+		 VMS_CODEC_OK && vms_cm_params_db_ready(&p),
+		 "*** a member saying 0x2b is ready ***");
+	ct_check(vms_cm_params_parse(fx_body(j), fx_body_len(j), &p) ==
+		 VMS_CODEC_OK && !vms_cm_params_db_ready(&p),
+		 "a joiner saying 0x2a is not");
+	ct_check(vms_cm_params_parse(fx_body(n), fx_body_len(n), &p) ==
+		 VMS_CODEC_OK && p.members == 2u,
+		 "the third is from a member of a two-member cluster");
+	ct_check(!vms_cm_params_db_ready(&p),
+		 "*** ...and saying 0x2a, it is NOT ready (the INVEXCEPTN case) ***");
+	p.flags = 0x7ff8f8c0u;   /* the stale-pointer form real frames carry */
+	ct_check(!vms_cm_params_db_ready(&p),
+		 "a stale-buffer word says nothing, so it reads as not ready");
+}
+
 static void test_e88_params_member_count(void)
 {
 	const struct vms_fixture *m = fixture("cm-params-member-oracle");
@@ -2169,6 +2204,7 @@ int main(void)
 	test_params_parse();
 	test_fcb_params_lockdirwt();
 	test_e88_params_member_count();
+	test_f4e_params_db_ready();
 	test_model_parse();
 	test_dlm_rebuild_parse();
 

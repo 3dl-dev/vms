@@ -1558,6 +1558,42 @@ static void test_lockdirwt_on_the_wire(void)
 			"a value outside 0..255 is not a weight: not learned");
 }
 
+/*
+ * rd vms-f4e: a member's PARAMS tells this node whether that member is ready
+ * to serve its clusterwide database (body[82] bit 0). Built here from the
+ * REAL byte values (0x2a / 0x2b, census over 384 real PARAMS); the codec test
+ * reads the real specimens themselves.
+ */
+static uint32_t mk_member_params_flags(uint8_t b82, uint16_t send_msg)
+{
+	vms_wire_buf_t w;
+	uint32_t n = mk_member_params(1u, 2u, send_msg);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_PFLAGS + 2u, b82);
+	return n;
+}
+
+static void test_f4e_member_ready_is_learned(void)
+{
+	printf("\n-- rd vms-f4e: a member's readiness to serve its database is "
+	       "learned from its PARAMS --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	ct_check_eq_u32(g.member_csb->db_ready, 0u,
+			"unknown before its PARAMS: not ready");
+	(void)join_feed(mk_member_params_flags(0x2au, 0x0087));
+	ct_check_eq_u32(g.member_csb->db_ready, 0u,
+			"*** a member saying 0x2a is not ready ***");
+	(void)join_feed(mk_member_params_flags(0x2bu, 0x0088));
+	ct_check_eq_u32(g.member_csb->db_ready, 1u,
+			"*** a member saying 0x2b is ready ***");
+	(void)join_feed(mk_member_params_flags(0x2au, 0x0089));
+	ct_check_eq_u32(g.member_csb->db_ready, 1u,
+			"  and a later 0x2a does not take it back");
+}
+
 /* rd vms-f29: a class-0x01 FORMATION commit, arriving before this node ever
  * asked to be admitted, makes it a founding member: answered with the echo
  * (class 0x01), and the join moves to ADMIT where the rest of the formation
@@ -7782,6 +7818,7 @@ int main(void)
 	test_csid_learned_edge_exists();
 	test_promotion_records_membership_at_any_csv_slot();
 	test_lockdirwt_on_the_wire();
+	test_f4e_member_ready_is_learned();
 	test_formation_commit_makes_a_founding_member();
 	test_no_invented_connect_data_or_descriptor();
 	test_identity_omissions_are_counted();

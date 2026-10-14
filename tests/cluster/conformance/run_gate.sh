@@ -18,7 +18,11 @@ CHECK=$ROOT/tools/cluster/frame_conformance.py
 DUMP=$(mktemp)
 trap 'rm -f "$DUMP" "$DUMP.neg"' EXIT
 
-for t in test_mscp_cl test_cnxman_join test_scs_fsm test_cnxman_coord; do
+# rd vms-ac4f: every suite that drives a REAL sender belongs here. A sender
+# whose suite is missing is a frame type the gate cannot see, which is how
+# 903 of 908 frames a booted node sent a real VAX went undescribed.
+for t in test_mscp_cl test_cnxman_join test_scs_fsm test_cnxman_coord \
+         test_dlm_dir; do
 	if ! OVMX_CONFORMANCE_OUT=$DUMP "$BIN/$t" > /dev/null 2>&1; then
 		echo "run_gate.sh: emitter $t itself failed" >&2
 		exit 1

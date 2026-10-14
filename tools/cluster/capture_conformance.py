@@ -42,7 +42,12 @@ TYPE_OF = {
     (0x8b, 0x04): 'cm_lnm_ans',
     (0x0b, 0x05): 'cm_lnm_dbreq',
     (0x02, 0x04): 'dlm_dir_remove',
+    # rd vms-ac4f: the DIRECTORY ANSWER. One (cat, op) and two table types --
+    # the status cell decides which, and a frame carrying neither grounded
+    # status is not a directory answer this node builds.
+    (0x82, 0x01): None,          # resolved by status, below
 }
+DIR_ANS_BY_STATUS = {0xf9: 'dlm_dir_ans_you', 0xf8: 'dlm_dir_ans_redir'}
 BODY_OFF = 72          # the SYSAP body's frame-absolute offset, and the base every
                        # CM/DLM row in the table is written against
 BODY_LEN = 132         # the SYSAP body a row describes
@@ -93,6 +98,8 @@ def main(argv):
     for b in fs:
         key = (b[BODY_OFF + 8], b[BODY_OFF + 9])
         typ = TYPE_OF.get(key)
+        if typ is None and key in TYPE_OF:
+            typ = DIR_ANS_BY_STATUS.get(b[BODY_OFF + 34])
         if typ is None:
             uncovered[key] += 1
         else:

@@ -140,3 +140,25 @@ cm_model	*	81	1	const	const:14	op 0x14 (292/292)
 cm_model	*	82	6	const	const:0	body[10:16] zero in 291/292
 cm_model	*	88	1	derived	state:mlen	body[16]: the model text's length (292/292 a counted string, 21 = "VAXserver 3900 Series"); the text is exec_hw_model(), this node's real hardware
 cm_model	*	89	115	derived	any:model	body[17..]: the model text, then zero (real records carry buffer residue past the text in 84/292); test_cnxman_join and test_codec_cm pin the counted string
+
+# ---- cat 0x82 op 0x01: THE DIRECTORY ANSWER (rd vms-ac4f). 306 of the 908 frames
+#      two OVMX nodes sent a real VAX in one demo run were this frame, and no row
+#      described a byte of it (tools/cluster/capture_conformance.py) ----
+dlm_dir_ans_you	*	72	8	copied	any:echo	body[0:8]: the request's txn/token, echoed -- the answer IS the request's body with the cells below overwritten (vms_dlm_dir_answer_build)
+dlm_dir_ans_you	*	80	1	const	const:82	category 0x02 | 0x80, the response
+dlm_dir_ans_you	*	81	1	const	const:1	op 0x01 (an op-0x08 root lookup is answered as 0x01 too, rd vms-629)
+dlm_dir_ans_you	*	82	18	copied	any:echo	body[10:28]: echoed, the requester's own handles and header included -- a reply that renamed them would answer a different lock
+dlm_dir_ans_you	*	100	4	const	const:0	body[28:32]: zero on a 'you master it' -- the answer names no other master. Real answers carry 2007 distinct values here (one of them the S0 address 0x8797e880), i.e. the sender's stale buffer; this node sends zero rather than its own kernel memory (rd vms-42de ruling)
+dlm_dir_ans_you	*	104	2	const	const:0	body[32:34]: inside the span the builder clears
+dlm_dir_ans_you	*	106	1	const	const:f9	body[34]: the status. The only two the codec will build, and the only two in 6175 real answers
+dlm_dir_ans_you	*	107	4	const	const:0	body[35:39]: the rest of the cleared span (real answers carry residue here; zero is the rd vms-42de ruling)
+dlm_dir_ans_you	*	111	93	copied	any:echo	body[39:132]: echoed from the request -- the resource identity, name and hash it asked about, and whatever residue the REQUESTER put past them (a real one carries OPCOM text; it is the asker's, not this node's)
+dlm_dir_ans_redir	*	72	8	copied	any:echo	body[0:8]: the request's txn/token, echoed -- the answer IS the request's body with the cells below overwritten (vms_dlm_dir_answer_build)
+dlm_dir_ans_redir	*	80	1	const	const:82	category 0x02 | 0x80, the response
+dlm_dir_ans_redir	*	81	1	const	const:1	op 0x01 (an op-0x08 root lookup is answered as 0x01 too, rd vms-629)
+dlm_dir_ans_redir	*	82	18	copied	any:echo	body[10:28]: echoed, the requester's own handles and header included -- a reply that renamed them would answer a different lock
+dlm_dir_ans_redir	*	100	4	derived	state:csid	body[28:32]: the master's CSID, read from this node's own directory table -- the whole content of a redirect
+dlm_dir_ans_redir	*	104	2	const	const:0	body[32:34]: inside the span the builder clears
+dlm_dir_ans_redir	*	106	1	const	const:f8	body[34]: the status. The only two the codec will build, and the only two in 6175 real answers
+dlm_dir_ans_redir	*	107	4	const	const:0	body[35:39]: the rest of the cleared span (real answers carry residue here; zero is the rd vms-42de ruling)
+dlm_dir_ans_redir	*	111	93	copied	any:echo	body[39:132]: echoed from the request -- the resource identity, name and hash it asked about, and whatever residue the REQUESTER put past them (a real one carries OPCOM text; it is the asker's, not this node's)

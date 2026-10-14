@@ -280,6 +280,8 @@ static const struct dcl_qual_def q_define[] = {
     { "SYSTEM",                  CDU_VT_NONE, 0, NULL, NULL },
     { "GROUP",                   CDU_VT_NONE, 0, NULL, NULL },
     { "JOB",                     CDU_VT_NONE, 0, NULL, NULL },
+    /* rd vms-aae: the general form the four above are shorthands for */
+    { "TABLE",                   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     { "TRANSLATION_ATTRIBUTES",  CDU_VT_LIST, 0, NULL, NULL },
     { "USER_MODE",               CDU_VT_NONE, 0, NULL, NULL },
     { "SUPERVISOR_MODE",         CDU_VT_NONE, 0, NULL, NULL },
@@ -292,6 +294,8 @@ static const struct dcl_qual_def q_deassign[] = {
     { "GROUP",   CDU_VT_NONE, 0, NULL, NULL },
     { "JOB",     CDU_VT_NONE, 0, NULL, NULL },
     { "ALL",     CDU_VT_NONE, 0, NULL, NULL },
+    /* rd vms-aae */
+    { "TABLE",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     { "USER_MODE",               CDU_VT_NONE, 0, NULL, NULL },
     { "SUPERVISOR_MODE",         CDU_VT_NONE, 0, NULL, NULL },
     { "EXECUTIVE_MODE",          CDU_VT_NONE, 0, NULL, NULL },

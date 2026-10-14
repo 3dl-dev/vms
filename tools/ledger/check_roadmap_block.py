@@ -19,6 +19,15 @@ WHAT THIS CHECKS INSTEAD (all repo-local, no rd, no false-reds on rd drift):
        derived from git tags (repo-local), so it CAN be checked per-PR. A
        hand-added / removed / reordered release entry reds.
 
+    STALE BRANCHES (vms-aaf): a release tag + its reconcile land on main AFTER
+    open PRs branched, so comparing a PR's block to LIVE `git tag` redded every
+    open PR on each release. With `--base REF` (pull_request / merge_group) the
+    gate first compares the checked-out (merge-result) release list to REF's: if
+    the change under test did not touch the list, it cannot have caused drift,
+    and it passes. If it DID touch the list, the list must equal `git tag` --
+    so a hand-edit in a PR still reds. Without `--base` (push to main) the check
+    is strict: a drifted main always reds.
+
     Together these catch the M2 failure mode (hand-editing a derived surface) on
     the repo-local parts, without ever comparing the rd-derived numbers to live
     rd. A subtle hand-edit of an rd-derived count is caught by the scheduled
@@ -28,8 +37,10 @@ Exit 0 = clean; non-zero = drift.
 """
 from __future__ import annotations
 
+import argparse
 import os
 import re
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -52,10 +63,8 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
-def main() -> int:
-    with open(DOC) as fh:
-        text = fh.read()
-
+def release_tags_of(text: str) -> list[str]:
+    """Structural checks on the roadmap doc text; returns its release list."""
     # 1. marker/structural integrity
     n_begin = text.count(GEN_BEGIN)
     n_end = text.count(GEN_END)
@@ -74,27 +83,75 @@ def main() -> int:
     if "### Milestone ladder" not in block or "### Shipped releases" not in block:
         fail("generated block is missing its derived sections "
              "(milestone ladder / shipped releases) -- not tool output.")
-
-    # 2. shipped-releases sub-list matches git tags (repo-local -> checkable)
     m = re.search(r"### Shipped releases[^\n]*\n(.*?)(?:\n### |\n<!-- GENERATED:END)",
                   block, re.S)
     if not m:
         fail("could not locate the 'Shipped releases' sub-list in the block.")
-    block_tags = re.findall(r"^- \*\*(.+?)\*\* —", m.group(1), re.M)
-    git_tags = [r["tag"] for r in reconcile.git_releases()[:12]]
+    return re.findall(r"^- \*\*(.+?)\*\* —", m.group(1), re.M)
+
+
+def base_release_tags(base: str) -> list[str] | None:
+    """The release list at BASE, or None if BASE has no parseable block."""
+    rel = os.path.relpath(DOC, REPO)
+    r = subprocess.run(["git", "-C", REPO, "show", f"{base}:{rel}"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    m = re.search(r"### Shipped releases[^\n]*\n(.*?)(?:\n### |\n<!-- GENERATED:END)",
+                  r.stdout, re.S)
+    if not m:
+        return None
+    return re.findall(r"^- \*\*(.+?)\*\* —", m.group(1), re.M)
+
+
+def verdict(block_tags: list[str], git_tags: list[str],
+            base_tags: list[str] | None) -> str | None:
+    """None = clean; otherwise the reason it is drift.
+
+    base_tags is None in strict mode (push to main). When given, an unchanged
+    release list passes: the change under test did not touch it.
+    """
+    if base_tags is not None and block_tags == base_tags:
+        return None
     if block_tags != git_tags:
-        print("ROADMAP-BLOCK DRIFT: 'Shipped releases' does not match `git tag`.",
-              file=sys.stderr)
+        return "'Shipped releases' does not match `git tag`."
+    return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", help="pull_request/merge_group base SHA: pass when "
+                    "the release list is unchanged from it (vms-aaf)")
+    args = ap.parse_args(argv)
+
+    with open(DOC) as fh:
+        text = fh.read()
+    block_tags = release_tags_of(text)
+
+    # 2. shipped-releases sub-list matches git tags (repo-local -> checkable)
+    git_tags = [r["tag"] for r in reconcile.git_releases()[:12]]
+    base_tags = base_release_tags(args.base) if args.base else None
+    why = verdict(block_tags, git_tags, base_tags)
+    if why:
+        print(f"ROADMAP-BLOCK DRIFT: {why}", file=sys.stderr)
         print(f"  in block: {block_tags}", file=sys.stderr)
         print(f"  git tags: {git_tags}", file=sys.stderr)
+        if base_tags is not None:
+            print(f"  base {args.base}: {base_tags} (this change edited the list)",
+                  file=sys.stderr)
         print("  Releases derive from git tags (repo-local). Regenerate:\n"
               "      python3 tools/roadmap/reconcile.py\n"
               "  Never hand-edit the release list (INV-LEDGER, vms-8465).",
               file=sys.stderr)
         sys.exit(1)
 
-    print(f"clean: roadmap GENERATED block is well-formed; "
-          f"{len(block_tags)} shipped releases match `git tag`.")
+    if base_tags is not None and block_tags == base_tags and block_tags != git_tags:
+        print(f"clean: release list unchanged from base {args.base}; it lags "
+              f"`git tag` ({git_tags[0] if git_tags else '-'}), which main's own "
+              f"release reconcile fixes and the push gate enforces.")
+    else:
+        print(f"clean: roadmap GENERATED block is well-formed; "
+              f"{len(block_tags)} shipped releases match `git tag`.")
     return 0
 
 

@@ -64,5 +64,9 @@ uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,
                                 const struct vms_lnm_equiv *eq);
 uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
                                 uint8_t acmode);
+/* rd vms-94a: the clusterwide tables are/are not the cluster's. */
+void vms_lnm_cluster_desynchronize(uint32_t reason);
+void vms_lnm_cluster_synchronized(void);
+uint32_t vms_lnm_cluster_unsync(void);
 
 #endif

@@ -607,6 +607,27 @@ struct cnxman_join_ops {
 	 * the request is withheld rather than acknowledged.
 	 */
 	uint32_t (*lnm_apply)(void *ctx, const struct vms_cm_lnm_op *op);
+	/*
+	 * rd vms-94a: THE OUTCOME OF A DATABASE PULL, told to the executive.
+	 *
+	 * A pull this node could not decode or apply leaves its clusterwide
+	 * tables holding LESS than the cluster's, and the executive is the only
+	 * place that can answer for them -- so it is told, and it refuses
+	 * clusterwide translations rather than serve a partial table as if it
+	 * were whole (vms_lnm_cluster_desynchronize). The transaction itself is
+	 * ALWAYS completed on the wire: a member left waiting for an answer
+	 * hangs, and never hanging a peer outranks this node's own tidiness.
+	 * NULL: nothing is reported, and the counters below are still kept.
+	 */
+	void (*lnm_db_outcome)(void *ctx, uint8_t outcome);
+};
+
+/* What a pulled clusterwide logical-name database turned out to be. */
+enum cnxman_lnm_db_outcome {
+	CNXMAN_LNM_DB_APPLIED = 0,   /* every record decoded and applied   */
+	CNXMAN_LNM_DB_UNDECODED,     /* a record this codec cannot decode  */
+	CNXMAN_LNM_DB_NOT_APPLIED,   /* the executive refused a record     */
+	CNXMAN_LNM_DB_MISCOUNTED     /* the container's own count disagrees */
 };
 
 /*
@@ -1127,6 +1148,11 @@ struct cnxman_join {
 	uint32_t lnm_db_requests;
 	uint32_t lnm_db_records;       /* records applied from pushes       */
 	uint32_t lnm_db_refused;
+	/* enum cnxman_lnm_db_outcome of the last pull this node could not take
+	 * whole; the transaction was still answered (rd vms-94a ruling). */
+	uint8_t  lnm_db_outcome;
+	uint8_t  pad_lnm_db2[3];
+	uint32_t lnm_db_rearms;        /* pulls re-armed at a transition    */
 	uint8_t  lnm_db_req[VMS_CM_BODY_LEN];
 	uint8_t  lnm_db_buf[VMS_CM_LNM_DB_MAX];
 	struct cnxman_rdev rdev[CNXMAN_RDEV_MAX];
@@ -1613,6 +1639,11 @@ int cnxman_join_rx_lnm(struct cnxman_join *j, const uint8_t *body,
  */
 int cnxman_join_lnm_db_request(struct cnxman_join *j, int32_t csb,
 			       uint32_t own_csid);
+
+/* rd vms-94a: let a FINISHED database pull be made again (a membership change
+ * is when the connection manager asks for this). A pull still in flight is
+ * left alone. */
+void cnxman_join_lnm_db_rearm(struct cnxman_join *j);
 
 /* ==========================================================================
  * 8. Readback

@@ -7800,6 +7800,126 @@ static void test_94a_database_pull(void)
 			"a second, unasked push is not pulled or answered");
 }
 
+/*
+ * rd vms-94a (conductor ruling 2026-10-14) -- A DATABASE THIS NODE CANNOT
+ * DECODE STILL CLOSES THE MEMBER'S TRANSACTION, AND IS STILL REFUSED AT HOME.
+ *
+ * THE BYTES ARE REAL. This is the 484-byte clusterwide logical-name database
+ * the demo's real OpenVMS VAX V7.3 (node VAXC) pushed an OVMX member on
+ * 2026-10-13, recorded frame-for-frame by the demo page's L2 switch
+ * (tests/lab/captures/vms-94a-demo-dbpull-20261014). Its container header is
+ * well formed -- 484 bytes, function 5, two records -- and its first record is
+ * the same $CRELNT of LNM$CLUSTER_TABLE every V7.3 pushes, MINUS ONE BYTE at
+ * record offset 41, with everything after it shifted down one (the second
+ * record's own length byte, 0xec, lands at 247 instead of 248). The byte was
+ * lost in the demo's emulated datapath before the frame ever reached this
+ * node; what matters here is what this node does with it.
+ *
+ * WHAT IT MUST DO. Answer 0x8b/0x04 -- the member is waiting for it, and the
+ * real VAX that got no answer never reached Username: -- and tell the
+ * executive the pull failed, so clusterwide translations here are refused
+ * rather than answered out of a table that is missing the cluster's names.
+ */
+static const char lnm_db_corrupt484[] =
+	"e401050001000000010000000200000001000100e40002002cb24d8009000000"
+	"5cb24d80000000000000000060b24d800000000064b24d8080b24d809c4d80a0"
+	"b24d80010000000000000011000e006cb24d804c4e4d24434c55535445525f54"
+	"41424c4500000014000e0088b24d804c4e4d2453595354454d5f444952454354"
+	"4f52590000000069a8f81400000000630000000600020000000000000000000c"
+	"0008000400010002000600020008000c00000000000000000009001400e8ffff"
+	"ffe8fffffffefffffffeffffff17000800f8124b80140015004c4e4d24434c55"
+	"535445525f5441424c4500000000000000000000000000ec00020010b34d8009"
+	"00000040b34d80000000000000000044b34d800000000048b34d8064b34d8080"
+	"b34d8084b34d80010000000000000014000e0050b34d804c4e4d24535953434c"
+	"55535445525f5441424c4511000e006cb34d804c4e4d24434c55535445525f54"
+	"41424c450000000000000039e713410000000066000000060002000000000000"
+	"0000000c0008000400010002000600020008000c000000000000000000090014"
+	"00e8ffffffe8fffffffefffffffeffffff170008004b134b80140018004c4e4d"
+	"24535953434c55535445525f5441424c45000000000000000000000000000000"
+	"00000000";
+
+static uint8_t dbf_outcome;
+static uint32_t dbf_outcome_n;
+
+static void dbf_outcome_cb(void *ctx, uint8_t outcome)
+{
+	(void)ctx;
+	dbf_outcome = outcome;
+	dbf_outcome_n++;
+}
+
+static void test_94a_a_corrupt_database_is_answered_and_refused(void)
+{
+	static uint8_t db[512];
+	const struct sent_body *s;
+	uint32_t conid, sent_before;
+	int32_t from;
+
+	printf("\n-- rd vms-94a: a database this node cannot decode is ANSWERED, "
+	       "and this node's own tables are marked short --\n");
+	rb_bed();
+	memset(&dbf, 0, sizeof(dbf));
+	dbf_outcome = 0xffu;
+	dbf_outcome_n = 0u;
+	g.jops.lnm_apply = dbf_apply;
+	g.jops.lnm_db_outcome = dbf_outcome_cb;
+	conid = g.member_csb->cdt_conid;
+	from = (int32_t)cnxman_club_csb_index(&g.cl.club, g.member_csb);
+
+	ct_check(cnxman_join_lnm_db_request(&g.j, from, 0x00010003u) == 0,
+		 "the 0x0b/0x05 goes out");
+	(void)mk_cm((uint8_t)(VMS_CM_CAT_0B | 0x80u), VMS_CM_OP_0B_DBREQ, 0x0063);
+	(void)cnxman_join_rx_lnm(&g.j, g_frame + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN, from);
+	(void)mk_cm(VMS_CM_CAT_0B, VMS_CM_OP_0B_DBPUSH, 0x0064);
+	{
+		vms_wire_buf_t w;
+
+		vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+		vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_NAME,
+				  0x2f4b0000u);
+		vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_XFER_CONID,
+				  conid);
+		vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + 28u, 1u);
+		vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_LNM_LEN,
+				  484u);
+	}
+	sent_before = g.n_sent;
+	(void)cnxman_join_rx_lnm(&g.j, g_frame + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN, from);
+	ct_check(rb.n_req == 1u && rb.req_len == 484u,
+		 "the member's 484 bytes are REQUESTed");
+
+	rb_hex(lnm_db_corrupt484, db, 484u);
+	memcpy(rb.reg_buf, db, 484u);
+	cnxman_join_blk_data(&g.j, 0x00001101u, 0u, 484u, 484u);
+
+	/* negctl: join-lnm-db-corrupt-unanswered */
+	ct_check_eq_u32(g.n_sent, sent_before + 1u,
+			"*** the member's transaction IS closed: the 0x8b/0x04 "
+			"goes even though the database did not decode ***");
+	s = &g.sent[g.n_sent - 1u];
+	ct_check(s->body[8] == 0x8bu && s->body[9] == 0x04u && s->conid == conid,
+		 "  0x8b/0x04, on the member's own connection");
+	ct_check_eq_u32(dbf.n, 0u, "no record of it was applied");
+	/* negctl: join-lnm-db-corrupt-not-reported */
+	ct_check_eq_u32(dbf_outcome_n, 1u, "the executive is told, exactly once");
+	ct_check_eq_u32((uint32_t)dbf_outcome,
+			(uint32_t)CNXMAN_LNM_DB_UNDECODED,
+			"*** and told WHY: a record it cannot decode ***");
+	ct_check_eq_u32(g.j.lnm_db_refused, 1u, "  counted refused");
+
+	/* The next transition asks again; a pull in flight is never disturbed. */
+	cnxman_join_lnm_db_rearm(&g.j);
+	ct_check_eq_u32(g.j.lnm_db_rearms, 1u, "a finished pull is re-armed");
+	ct_check(cnxman_join_lnm_db_request(&g.j, from, 0x00010003u) == 0,
+		 "  and this node asks a second time");
+	cnxman_join_lnm_db_rearm(&g.j);
+	ct_check_eq_u32(g.j.lnm_db_rearms, 1u,
+			"  a pull IN FLIGHT is left alone");
+	g.jops.lnm_db_outcome = NULL;
+}
+
 int main(void)
 {
 	test_239_disk_class_connect_statement();
@@ -7838,6 +7958,7 @@ int main(void)
 	test_k10_close_writes_back_then_answers();
 	test_94a_lnm_pulled_applied_answered();
 	test_94a_database_pull();
+	test_94a_a_corrupt_database_is_answered_and_refused();
 	test_k5_close_pulls_then_answers_4();
 	test_unowned_frame_is_not_mine();
 	test_member_dialled_connection_still_promotes();

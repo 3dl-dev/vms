@@ -405,6 +405,12 @@ static uint32_t tab_lookup(int t, const char *name, int case_blind,
         r = local_lookup(name, case_blind, maxmode, &rec);
     else
         r = vms_kif_lnm_lookup(tab_exec_id(t), name, case_blind, maxmode, &rec);
+    /* rd vms-94a: a clusterwide table this node's copy is short of answers
+     * nothing -- SS$_UNSUPPORTED, the same status a clusterwide create gets
+     * here, and never SS$_NOLOGNAM, which would say the cluster has no such
+     * name when this node simply does not hold it. */
+    if (r == VMS_KIF_LNM_UNSYNC)
+        return SS$_UNSUPPORTED;
     if (r < 0)
         return SS$_NOSUCHDEV;                       /* executive absent */
     if (r == 0)

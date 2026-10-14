@@ -402,6 +402,26 @@ void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid)
  * deriving scope_key, let alone before lnm_find()/lnm_alloc_slot() touch
  * an entry.
  */
+/*
+ * MAY A CLUSTERWIDE TABLE BE CHANGED ON THIS NODE AT ALL (rd vms-94a)?
+ *
+ * Two refusals, one rule, one place:
+ *   - ANOTHER MEMBER IS THERE. A clusterwide name is every member's, and this
+ *     node does not yet send its own changes to them, so a change made here
+ *     would be a table that disagrees with theirs, unannounced.
+ *   - THIS NODE'S COPY IS SHORT. A clusterwide database it pulled could not be
+ *     decoded or applied whole (the conductor ruling of 2026-10-14), so it
+ *     cannot even say whether the name is already defined cluster-wide.
+ * Either way the caller gets SS$_UNSUPPORTED and the arena is untouched.
+ */
+static bool lnm_cluster_change_refused(uint32_t table)
+{
+    if (VMS_LNM_TBL_BASE(table) != VMS_LNM_TBL_CLUSTER)
+        return false;
+    return vms_lnm_cluster_other_members() != 0u ||
+           vms_lnm_cluster_unsync() != 0u;
+}
+
 static bool lnm_priv_check(uint32_t table, uint64_t cur_privs, uint32_t *status)
 {
     bool ok;
@@ -480,14 +500,11 @@ long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
 
     /*
-     * rd vms-94a: A CLUSTERWIDE NAME IS EVERY MEMBER'S. While this node does
-     * not yet send its own changes to the other members (origination is its
-     * own item), a change here with another system in the cluster would make
-     * this node's table disagree with theirs. So it is refused, honestly,
-     * rather than made locally and left unannounced.
+     * rd vms-94a: A CLUSTERWIDE NAME IS EVERY MEMBER'S, and this node changes
+     * one only when it can honestly say what every member holds
+     * (lnm_cluster_change_refused states both halves of that rule).
      */
-    if (VMS_LNM_TBL_BASE(a->table) == VMS_LNM_TBL_CLUSTER &&
-        vms_lnm_cluster_other_members() != 0u) {
+    if (lnm_cluster_change_refused(a->table)) {
         a->status = SS__UNSUPPORTED;
         goto out_copy;
     }
@@ -585,8 +602,7 @@ long vms_ioctl_lnm_delete(struct vms_proc *proc, unsigned long arg)
     if (!lnm_priv_check(a->table, proc->cur_privs, &a->status))
         goto out_copy;
 
-    if (VMS_LNM_TBL_BASE(a->table) == VMS_LNM_TBL_CLUSTER &&
-        vms_lnm_cluster_other_members() != 0u) {
+    if (lnm_cluster_change_refused(a->table)) {
         a->status = SS__UNSUPPORTED;   /* as define, rd vms-94a */
         goto out_copy;
     }
@@ -868,6 +884,45 @@ uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
     lnm_write_end();
     exec_unlock(&lnm_write_lock);
     return (n || !name) ? SS__NORMAL : SS__NOLOGNAM;
+}
+
+/*
+ * THIS NODE'S CLUSTERWIDE TABLES ARE NOT THE CLUSTER'S (rd vms-94a, conductor
+ * ruling 2026-10-14).
+ *
+ * A clusterwide logical-name database this node pulled and could not decode or
+ * apply whole leaves its tables holding LESS than every other member's. The
+ * member's transaction is still completed on the wire -- never hang a peer --
+ * but the shortfall is a fact about this executive, and the executive says so
+ * rather than let a translation report "no such logical name" for a name the
+ * cluster really has (INV-6). `reason` is an enum cnxman_lnm_db_outcome; 0
+ * means the tables are the cluster's again and nothing is withheld.
+ */
+void vms_lnm_cluster_desynchronize(uint32_t reason)
+{
+    if (!lnm_arena || reason == 0u)
+        return;
+    exec_lock(&lnm_write_lock);
+    lnm_write_begin();
+    lnm_arena->cluster_unsync = reason;
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
+}
+
+void vms_lnm_cluster_synchronized(void)
+{
+    if (!lnm_arena || lnm_arena->cluster_unsync == 0u)
+        return;
+    exec_lock(&lnm_write_lock);
+    lnm_write_begin();
+    lnm_arena->cluster_unsync = 0u;
+    lnm_write_end();
+    exec_unlock(&lnm_write_lock);
+}
+
+uint32_t vms_lnm_cluster_unsync(void)
+{
+    return lnm_arena ? lnm_arena->cluster_unsync : 0u;
 }
 
 static bool lnm_cl_id_exists(uint32_t id)

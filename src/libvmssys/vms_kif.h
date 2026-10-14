@@ -1127,12 +1127,28 @@ int vms_kif_lnm_scope_key(uint32_t table, uint32_t *key);
 int vms_kif_lnm_cluster_table(const char *name, uint32_t *table_word);
 int vms_kif_lnm_cluster_name(uint32_t key, char *out, uint32_t outsz);
 
+/*
+ * rd vms-94a: THIS NODE'S CLUSTERWIDE TABLES ARE NOT THE CLUSTER'S.
+ *
+ * The executive publishes it in the arena header (vms_lnm.h cluster_unsync)
+ * after a clusterwide logical-name database it pulled could not be decoded or
+ * applied whole. A reader must then REFUSE a clusterwide table rather than
+ * report a name absent that the cluster has: the refusal is this return, and
+ * the service layer renders it SS$_UNSUPPORTED -- never SS$_NOLOGNAM, which
+ * would be a lie, and never SS$_NOSUCHDEV, which would blame the executive.
+ */
+#define VMS_KIF_LNM_UNSYNC   (-2)
+/* Non-zero when the executive says so (the reason is an
+ * enum cnxman_lnm_db_outcome); 0 when the tables are the cluster's. */
+int vms_kif_lnm_cluster_unsync(void);
+
 /* Look up `name` in an executive-resident table (VMS_LNM_TBL_SYSTEM, _GROUP,
  * _JOB or _PROCESS) the way $TRNLNM does (rd vms-ef21): an exact-case match
  * unless case_blind, ignoring entries at modes outer than max_acmode (3 =
  * any), and returning the outermost remaining one. Fills *out (name, every
  * equivalence string, attributes, acmode) and returns 1; 0 when no such name;
- * -1 when the executive is unavailable. */
+ * -1 when the executive is unavailable; VMS_KIF_LNM_UNSYNC for a clusterwide
+ * table this node's copy is short of. */
 int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
                        uint8_t max_acmode, struct vms_kif_lnm_enum_rec *out);
 

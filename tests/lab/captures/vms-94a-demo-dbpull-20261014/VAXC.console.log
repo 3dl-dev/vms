@@ -1,0 +1,108 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 14-OCT-2026 14:10:38.92
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20200208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%CNXMAN,  proposing addition of system OVMXB
+%CNXMAN,  completing VAXcluster state transition
+%CNXMAN,  received VAXcluster membership request from system OVMXA
+%CNXMAN,  proposing addition of system OVMXA
+%CNXMAN,  completing VAXcluster state transition
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.12  %%%%%%%%%%%
+Operator _VAXC$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.14  %%%%%%%%%%%
+Operator status for operator _VAXC$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.49  %%%%%%%%%%%
+Logfile has been initialized by operator _VAXC$OPA0:
+Logfile is VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.50  %%%%%%%%%%%
+Operator status for operator VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.65  %%%%%%%%%%%
+14:10:35.25 Node VAXC (csid 00000000) proposed formation of a VAXcluster
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.69  %%%%%%%%%%%
+14:10:35.25 Node VAXC (csid 00010001) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.72  %%%%%%%%%%%
+14:10:35.29 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.74  %%%%%%%%%%%
+14:11:13.89 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.77  %%%%%%%%%%%
+14:11:13.89 Node VAXC (csid 00010001) proposed addition of node OVMXB
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.80  %%%%%%%%%%%
+14:11:18.94 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.83  %%%%%%%%%%%
+14:11:23.93 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXA
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.86  %%%%%%%%%%%
+14:11:23.97 Node VAXC (csid 00010001) proposed addition of node OVMXA
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:35.89  %%%%%%%%%%%
+14:11:27.90 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:40.24  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:40.25  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:46.01  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  14-OCT-2026 14:11:46.20  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found

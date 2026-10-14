@@ -27,10 +27,15 @@ const CN3_LINES = (self, a, b) => [
 
 const VAXC_ADMITS = 'proposing addition of system OVMXA\nproposing addition of system OVMXB\n';
 
+// Each OVMX node's boot banner, as its console prints it.
+const UNDER_TEST = 'V0.7-10';
+const BANNER = (v = UNDER_TEST) => `    OpenVMX ${v} - OpenVMS-compatible\n`;
+
 function cn3Observations() {
   const R = newObservations();
-  observe(R, 'OVMXA', CN3_LINES('c3', 'c4', 'c5'));
-  observe(R, 'OVMXB', CN3_LINES('c4', 'c3', 'c5'));
+  R.want_version = UNDER_TEST;
+  observe(R, 'OVMXA', BANNER() + CN3_LINES('c3', 'c4', 'c5'));
+  observe(R, 'OVMXB', BANNER() + CN3_LINES('c4', 'c3', 'c5'));
   observe(R, 'VAXC', VAXC_ADMITS);
   R.sca = { OVMXA: 100, OVMXB: 120, VAXC: 90 };
   return R;
@@ -326,11 +331,7 @@ test('OVMX output is not mistaken for substrate noise', () => {
 });
 
 test('a noisy console fails the run even when the cluster formed', () => {
-  const R = newObservations();
-  observe(R, 'OVMXA', CN3_LINES('c3', 'c4', 'c5'));
-  observe(R, 'OVMXB', CN3_LINES('c4', 'c3', 'c5'));
-  observe(R, 'VAXC', VAXC_ADMITS);
-  R.sca = { OVMXA: 1, OVMXB: 1, VAXC: 1 };
+  const R = cn3Observations();
   R.cn3 = true;
   loggedInEverywhere(R);
   assert.equal(GATE.isPass(R), true, 'quiet, clustered and logged in everywhere passes');
@@ -591,4 +592,67 @@ test('the OVMX login is read from the hint the site publishes, or not at all', (
   assert.deepEqual(GATE.parseLoginHint(html), { user: 'SYSTEM', pass: 'MANAGER' });
   assert.equal(GATE.parseLoginHint('<p>no hint here</p>'), null, 'no hint: the gate refuses, never guesses');
   assert.equal(GATE.parseLoginHint(''), null);
+});
+
+// ---- Every OVMX node runs the build under test ------------------------------
+// V0.7-8..V0.7-10 were gated with Node B still on a hand-built V0.7-7 image.
+
+test('the version under test is read from ovmx_identity.h, the one source', () => {
+  const h = '#define OVMX_PRODUCT_NAME       "OpenVMX"\n#define OVMX_PRODUCT_VERSION    "V0.7-10"\n';
+  assert.equal(GATE.productVersionOf(h), 'V0.7-10');
+  assert.equal(GATE.productVersionOf('#define OVMX_PRODUCT_NAME "OpenVMX"\n'), null);
+});
+
+test('a clustered, usable run with a STALE OVMX node fails, and names it', () => {
+  const R = newObservations();
+  R.want_version = UNDER_TEST;
+  observe(R, 'OVMXA', BANNER() + CN3_LINES('c3', 'c4', 'c5'));
+  observe(R, 'OVMXB', BANNER('V0.7-7') + CN3_LINES('c4', 'c3', 'c5'));
+  observe(R, 'VAXC', VAXC_ADMITS);
+  R.sca = { OVMXA: 1, OVMXB: 1, VAXC: 1 };
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  assert.equal(GATE.isQuiet(R), true);
+  assert.equal(GATE.allReady(R), true, 'everything else about the run is fine');
+  assert.equal(GATE.isPass(R), false, 'a stale node is not the build under test');
+  assert.equal(verdictOf(R),
+    'CN=3 but NOT THE BUILD UNDER TEST: OVMXB announced V0.7-7 -- the build under test is V0.7-10');
+});
+
+test('a node that announces the right version AND an old one (a mixed image) fails', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  assert.equal(GATE.isPass(R), true, 'control: both nodes at the version under test pass');
+  observe(R, 'OVMXA', ' Welcome to OpenVMX V0.7-9 - OpenVMS-compatible\n');
+  assert.equal(GATE.isPass(R), false);
+  assert.match(verdictOf(R), /OVMXA announced V0\.7-10\+V0\.7-9/);
+});
+
+test('silence is not the right version: a node that never announced one fails', () => {
+  const R = newObservations();
+  R.want_version = UNDER_TEST;
+  observe(R, 'OVMXA', BANNER() + CN3_LINES('c3', 'c4', 'c5'));
+  observe(R, 'OVMXB', CN3_LINES('c4', 'c3', 'c5'));
+  observe(R, 'VAXC', VAXC_ADMITS);
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  assert.equal(GATE.isPass(R), false);
+  assert.match(verdictOf(R), /OVMXB never announced an OpenVMX version/);
+});
+
+test('a gate that was not told the version under test does not pass anything', () => {
+  const R = cn3Observations();
+  R.want_version = null;
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  assert.equal(GATE.isPass(R), false);
+  assert.match(GATE.versionWhy(R), /not told which OpenVMX version/);
+});
+
+test('the version a node announced survives its console scrolling', () => {
+  const R = cn3Observations();
+  observe(R, 'OVMXB', '$ SHOW SYSTEM\n'.repeat(4000));
+  assert.deepEqual(R.ovmx_versions.OVMXB, [UNDER_TEST]);
+  assert.equal(GATE.versionWhy(R), null);
 });

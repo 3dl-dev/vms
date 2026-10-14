@@ -1,0 +1,204 @@
+# Build the cluster demo's Node B (OVMX/VAX) from a vms ref, so no demo node
+# runs a stale image.
+#
+# WHY. The browser cluster demo has two OVMX nodes. Node A (x86, qemu-wasm) has
+# always been rebuilt per tag by openvmx-site's track-cluster-demo. Node B (the
+# OVMX/VAX slim single disk the pcjs KA655 boots) was built by hand and parked on
+# vax.3dl.network, so the visitor gate kept grading a V0.7-7 Node B against
+# V0.7-9 and V0.7-10 executives. An executive fix never reached it.
+#
+# WHAT. tests/lab-vax/run-boot.sh sysboot-single -- the same build the
+# hand-made images came from -- run on the ref under test, with Node B's
+# identity taken from the ONE roster (tools/cluster-web-demo/mk_democonfig.py
+# DEMO_NODE_B: SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/VAXCLUSTER and the
+# CLUSTER_AUTHORIZE.DAT group). sysboot-single boots the finished disk to
+# Username: and FAILS if it does not; this job also fails unless that boot's
+# console announces the ref's own OVMX_PRODUCT_VERSION and no other. The disk
+# that passed is uploaded as the `cluster-demo-nodeB` artifact (and, for a
+# release tag, attached to the release as ovmx-vax-nodeB.img.gz), which is
+# where openvmx-site's gate and deploy take Node B from.
+#
+# The workflow file runs from main; the BUILD is the ref's own tree (its
+# run-boot.sh, its roster, its sources), so a release-verify branch cut before
+# this file existed can still be built and gated before its tag.
+name: cluster-demo-nodeB
+# openvmx-site finds the build for a ref by this title, then checks the
+# artifact's own manifest (sha, version) against the ref before using it.
+run-name: Node B for ${{ inputs.ref || github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'vms branch, tag or commit to build Node B from (e.g. release-verify-v0.7-10)'
+        required: true
+  push:
+    tags: ['V*']
+
+permissions:
+  contents: write     # gh release upload on a tag
+  packages: read      # the private prebuilt vax toolchain image
+
+concurrency:
+  group: cluster-demo-nodeB-${{ inputs.ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  nodeB:
+    name: Node B (OVMX/VAX) for the cluster demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-nodeB-kbuild
+      SRC_REF: ${{ inputs.ref || github.ref_name }}
+    steps:
+      - name: Checkout the ref under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SRC_REF }}
+
+      - name: Record what is being built
+        id: src
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse HEAD)
+          VER=$(sed -n 's/^#define OVMX_PRODUCT_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' src/libvms/include/ovmx_identity.h)
+          [ -n "$VER" ] || { echo "no OVMX_PRODUCT_VERSION in src/libvms/include/ovmx_identity.h"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "building Node B from $SRC_REF = $SHA, OVMX $VER"
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Install qemu-img (run-boot.sh's cluster-config injector needs it)
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends qemu-utils
+
+      - name: Restore the cached NetBSD/vax disk (primed by ci-vax netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # Restore-only, exact key only: an inexact substrate would be a kernel
+      # built from other sources, which is the staleness this workflow exists
+      # to end. On a miss run-boot.sh builds the substrate from this ref.
+      - name: Restore the OVMX/vax substrate for exactly this source (else it is built)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Install NetBSD/vax if the cache missed (no-op on a hit)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/.boot-cache/lab-vax:/cache" \
+            ovmx-vax-lab install
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s tools/cross-vax/Dockerfile 'tools/cross-vax/*.tar.xz' | sha256sum | cut -c1-16)
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+          else
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+
+      - name: Node B identity from the roster (mk_democonfig.py DEMO_NODE_B)
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF' >> "$GITHUB_ENV"
+          import sys
+          sys.path.insert(0, "tools/cluster-web-demo")
+          from mk_democonfig import DEMO_NODE_B as b
+          print("CLUSTER_SCSNODE=%s" % b["name"])
+          print("CLUSTER_SCSSYSTEMID=%d" % b["id"])
+          print("CLUSTER_VOTES=%d" % b["votes"])
+          print("CLUSTER_EXPECTED_VOTES=%d" % b["expected_votes"])
+          print("CLUSTER_VAXCLUSTER=%d" % b["vaxcluster"])
+          print("NODE_B_GROUP=%d" % b["group"])
+          print("NODE_B_PASSWORD=%s" % b.get("password", ""))
+          EOF
+          mkdir -p .boot-cache/lab-vax/nodeB
+          python3 tools/cluster-web-demo/mk_democonfig.py authorize \
+            .boot-cache/lab-vax/nodeB/CLUSTER_AUTHORIZE.DAT "$NODE_B_GROUP" ${NODE_B_PASSWORD:+"$NODE_B_PASSWORD"}
+          echo "CLUSTER_AUTH_FILE=${{ github.workspace }}/.boot-cache/lab-vax/nodeB/CLUSTER_AUTHORIZE.DAT" >> "$GITHUB_ENV"
+
+      - name: Build + boot Node B (run-boot.sh sysboot-single; fails unless it reaches Username:)
+        run: |
+          set -o pipefail
+          tests/lab-vax/run-boot.sh sysboot-single 2>&1 | tee "$RUNNER_TEMP/nodeB-build.log"
+
+      # The boot sysboot-single just made IS the disk that ships. Its console
+      # must name this ref's version, and nothing older: that is the same
+      # check the visitor gate makes on every OVMX node in the page.
+      - name: The built disk's own boot announces this ref's version, and no other
+        run: |
+          set -euo pipefail
+          WANT='${{ steps.src.outputs.version }}'
+          tr -d '\r' < "$RUNNER_TEMP/nodeB-build.log" > "$RUNNER_TEMP/nodeB-console.txt"
+          SEEN=$(grep -ao 'OpenVMX V[0-9][0-9.]*-[0-9][0-9]*' "$RUNNER_TEMP/nodeB-console.txt" | sort -u || true)
+          echo "versions announced: ${SEEN:-<none>}"
+          [ -n "$SEEN" ] || { echo "Node B's boot console never announced an OpenVMX version"; exit 1; }
+          [ "$SEEN" = "OpenVMX $WANT" ] || { echo "Node B announced '$SEEN', the ref is $WANT"; exit 1; }
+          grep -aq "Username:" "$RUNNER_TEMP/nodeB-console.txt" || { echo "no Username: in Node B's boot"; exit 1; }
+
+      - name: Package Node B
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          IMG=.boot-cache/lab-vax/single-work/wd0.img
+          [ -f "$IMG" ] || { echo "no single disk at $IMG"; exit 1; }
+          gzip -n -9 -c "$IMG" > out/ovmx-vax-nodeB.img.gz
+          cp "$RUNNER_TEMP/nodeB-console.txt" out/nodeB-build-final-boot-console.txt
+          python3 - '${{ steps.src.outputs.sha }}' '${{ steps.src.outputs.version }}' "$SRC_REF" <<'EOF'
+          import hashlib, json, os, sys
+          sha, ver, ref = sys.argv[1:4]
+          def h(p): return hashlib.sha256(open(p, "rb").read()).hexdigest()
+          json.dump({"node": os.environ["CLUSTER_SCSNODE"], "scssystemid": int(os.environ["CLUSTER_SCSSYSTEMID"]),
+                     "ref": ref, "sha": sha, "version": ver,
+                     "img_gz_sha256": h("out/ovmx-vax-nodeB.img.gz"),
+                     "raw_sha256": h(".boot-cache/lab-vax/single-work/wd0.img")},
+                    open("out/nodeB-manifest.json", "w"), indent=2)
+          EOF
+          cat out/nodeB-manifest.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cluster-demo-nodeB
+          path: out/
+          retention-days: 30
+
+      - name: Attach Node B to the release (tag builds)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/V')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          T='${{ github.ref_name }}'
+          # release.yml creates the release for this tag; wait for it rather
+          # than race it.
+          for _ in $(seq 1 60); do
+            gh release view "$T" >/dev/null 2>&1 && break
+            sleep 60
+          done
+          gh release upload "$T" out/ovmx-vax-nodeB.img.gz out/nodeB-manifest.json --clobber

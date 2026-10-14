@@ -97,6 +97,40 @@ export const NETBSD_NOISE = [
   { name: 'root mount',                 re: /root on \w+\d+\w* dumps on|root file system type:/g },
 ];
 
+// ---- Every OVMX node runs the build under test ------------------------------
+//
+// The page has two OVMX nodes, and for V0.7-8..V0.7-10 only ONE of them was
+// rebuilt per release: Node B stayed a V0.7-7 image built by hand, so every
+// executive fix the gate was graded on never reached it, and the gate passed or
+// failed a mixed cluster without saying so. An OVMX console says what it is
+// ("    OpenVMX V0.7-10 - OpenVMS-compatible" at boot, "Welcome to OpenVMX
+// V0.7-10" at login), so the gate reads it there: each OVMX node must announce
+// the version under test and no other. The version comes from the vms tree the
+// gate itself was checked out at (ovmx_identity.h OVMX_PRODUCT_VERSION, the one
+// source), not from anything typed in.
+export const OVMX_VERSION = /OpenVMX (V\d+\.\d+-\d+)\b/g;
+
+// OVMX_PRODUCT_VERSION out of ovmx_identity.h's text, or null.
+export function productVersionOf(identityHeader) {
+  const m = /^#define\s+OVMX_PRODUCT_VERSION\s+"([^"]+)"/m.exec(String(identityHeader || ''));
+  return m ? m[1] : null;
+}
+
+// Why the OVMX nodes are not all the build under test, or null when they are.
+// A node that never announced any version is not "the build under test" either:
+// absence is not evidence of the right image.
+export function versionWhy(R) {
+  const want = R.want_version;
+  if (!want) return 'the gate was not told which OpenVMX version is under test';
+  const why = [];
+  for (const w of LOGIN_NODES) {
+    const seen = (R.ovmx_versions || {})[w] || [];
+    if (!seen.length) why.push(`${w} never announced an OpenVMX version`);
+    else if (seen.some((v) => v !== want)) why.push(`${w} announced ${seen.join('+')}`);
+  }
+  return why.length ? `${why.join('; ')} -- the build under test is ${want}` : null;
+}
+
 // Which substrate markers a console shows, and how many times. {} is the claim
 // rd vms-553 makes; anything else is the console telling on it.
 export function netbsdNoise(text) {
@@ -189,6 +223,11 @@ export function observe(R, who, screen) {
   if (BUG.test(t)) R.bugchecks[who] = (t.match(BUG) || [''])[0];
   if (who !== 'VAXC' && FOUNDED.test(t)) R.ovmx_founded[who] = true;
   if (who === 'VAXC') R.vaxc_admitted = setOf(t, VADD);
+  if (LOGIN_NODES.includes(who)) {
+    R.ovmx_versions = R.ovmx_versions || {};
+    const had = R.ovmx_versions[who] || [];
+    R.ovmx_versions[who] = [...new Set([...had, ...setOf(t, OVMX_VERSION)])];
+  }
   // The OVMX/VAX node's raw console must carry no NetBSD boot output (rd
   // vms-553). Node C is a real VAX/VMS machine and node A is Linux-substrate:
   // neither has a NetBSD substrate to be quiet about.
@@ -261,6 +300,9 @@ export const newObservations = () => ({
   // Username:, when the gate sent its login (the transcript length at that
   // moment), whether the login was refused, and when a DCL `$` followed.
   username_at: {}, login_sent: {}, login_failed: {}, dcl_at: {},
+  // Every OpenVMX version each OVMX node announced on its own console, and the
+  // one under test (set by the caller from ovmx_identity.h). See versionWhy().
+  ovmx_versions: {}, want_version: null,
 });
 
 // A SILENT never-start: the raw console stayed empty (nothing to show a
@@ -439,7 +481,7 @@ export const allReady = (R, boundS = Infinity) =>
 // not been the bar since V0.7-6 (quiet), nor since V0.7-9 (rd vms-db1: a real
 // VAX that is a member and never offers Username: is a dead demo).
 export const isPass = (R, boundS = R.login_bound_s ?? Infinity) =>
-  !!R.cn3 && isQuiet(R) && allReady(R, boundS);
+  !!R.cn3 && isQuiet(R) && allReady(R, boundS) && versionWhy(R) === null;
 
 // Why a clustered run did not have every node usable, in observed terms.
 function loginWhy(R, boundS) {
@@ -468,8 +510,11 @@ export function verdictOf(R) {
            `-- the OVMX nodes must be NON-VOTING (rd vms-1a1)`;
   }
   if (Object.keys(R.bugchecks || {}).length) return `BUGCHECK: ${JSON.stringify(R.bugchecks)}`;
+
   if (R.cn3) {
     if (!isQuiet(R)) return `CN=3 but NOT QUIET: ${noiseWhy(R)}`;
+    const stale = versionWhy(R);
+    if (stale) return `CN=3 but NOT THE BUILD UNDER TEST: ${stale}`;
     const boundS = R.login_bound_s ?? Infinity;
     return allReady(R, boundS) ? 'CN=3' : `CN=3 but NOT EVERY NODE USABLE: ${loginWhy(R, boundS)}`;
   }
@@ -496,6 +541,8 @@ export function verdictOf(R) {
     why.push(`panels that only repainted once revealed: ${JSON.stringify(stalls)} (rd vms-0bc)`);
   }
   if (!isQuiet(R)) why.push(noiseWhy(R));
+  const stale = versionWhy(R);
+  if (stale) why.push(`not the build under test: ${stale}`);
   const silent = silentNeverStarts(R, ['OVMXB', 'VAXC'].filter((w) => w in (R.panel_started || {})));
   if (silent.length) {
     why.push(`SILENT never-start (no console, no watchdog): ${silent.join(',')} (rd vms-bfdd)`);

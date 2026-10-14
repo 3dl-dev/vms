@@ -208,6 +208,8 @@ struct vms_dlm_scs {
 	uint32_t dir_removes_staged;  /* rd vms-e09: removals queued          */
 	uint32_t dir_removes_no_slot; /* ...not queued: every slot busy      */
 	uint32_t dir_removes_stale;   /* a work item naming no staged removal */
+	uint32_t dir_removes_dropped; /* rd vms-c55: dropped, the resource is
+	                               * being asked about again            */
 	uint32_t releases_no_slot;    /* the queue was full: NOTHING staged,  */
 				       /* and the releaser is told so          */
 	uint32_t releases_stale;      /* a work item naming no staged release */
@@ -772,6 +774,66 @@ static void dlm_arm_run_dir_remove(struct vms_dlm_scs *d, uint32_t slot,
  * release takes the staged path above instead -- snapshotted here, in the
  * releaser's own context, while the LKB is still real.
  */
+/* Two resource names equal, bounded (kernel-core takes no libc string call). */
+static int dlm_arm_name_eq(const char *a, const char *b, uint32_t cap)
+{
+	uint32_t i;
+
+	for (i = 0u; i < cap; i++) {
+		if (a[i] != b[i])
+			return 0;
+		if (a[i] == '\0')
+			return 1;
+	}
+	return 1;
+}
+
+/*
+ * A STAGED REMOVAL FOR A RESOURCE THIS NODE IS ASKING ABOUT AGAIN IS DROPPED
+ * (rd vms-c55).
+ *
+ * MEASURED, on the wire, in the run that bugchecked a real VAX
+ * (tests/lab/captures/vms-c55-lockmgrerr-20261014): OVMX sent VAXC a
+ * directory-entry removal for RMS$4F.1.0 and, 29 ms later, a lookup for the
+ * SAME name and hash -- "forget that I master this", immediately followed by
+ * "who masters this?". The VAX answered the lookup with the one status the
+ * corpus only ever gives a bare lookup (0xfe, 10 of 10) and bugchecked
+ * LOCKMGRERR. A directory database being asked to resolve the entry it is in
+ * the middle of deleting is an inconsistency, and this node is the one that
+ * created it.
+ *
+ * The removal exists to retire an entry this node no longer masters (rd
+ * vms-e09). A request for that same resource says the opposite is about to be
+ * true again: the entry is either correct already or is about to be rewritten
+ * by the answer. So the staged removal is DROPPED rather than raced -- the
+ * entry is never deleted and re-created in the same breath, and the directory
+ * never sees the two orders crossing.
+ *
+ * Only a removal still STAGED can be dropped: one already handed to the fork
+ * thread is on the wire, and this node does not chase it. Counted either way.
+ */
+static void dlm_arm_dirrm_drop_for(struct vms_dlm_scs *d,
+				   const struct vms_dlm_proxy_post *p)
+{
+	uint32_t i;
+
+	exec_lock(&d->relq_lock);
+	for (i = 0u; i < DLM_ARM_DIRRM_SLOTS; i++) {
+		const struct vms_dlm_proxy_post *q = &d->dirrm[i].p;
+
+		if (d->dirrm[i].seq == 0u)
+			continue;
+		if (q->res_group != p->res_group ||
+		    q->res_acmode != p->res_acmode ||
+		    !dlm_arm_name_eq(q->resnam, p->resnam,
+				     (uint32_t)sizeof(q->resnam)))
+			continue;
+		d->dirrm[i].seq = 0u;          /* the work item finds no slot */
+		d->dir_removes_dropped++;
+	}
+	exec_unlock(&d->relq_lock);
+}
+
 static uint32_t dlm_arm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
@@ -785,6 +847,9 @@ static uint32_t dlm_arm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 		return dlm_arm_post_dir_remove(d, p);
 	if (p->req_lkid == VMS_DLM_LKID_UNSET)
 		return SS__BADPARAM;   /* never a placeholder handle */
+	/* rd vms-c55: this node does not tell a directory to forget a resource
+	 * and then ask it who masters that same resource. */
+	dlm_arm_dirrm_drop_for(d, p);
 	kind = dlm_arm_op_to_work_kind(p->op);
 	if (kind == 0u)
 		return SS__BADPARAM;

@@ -246,6 +246,7 @@ guard-ignores-category-0b
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
+arm-dirrm-races-the-lookup
 join-lnm-db-corrupt-not-reported
 lnm-unsync-still-serves
 pe-blk-frame-unringed
@@ -1241,6 +1242,19 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** the last chunk applies all 10 records ***
   tables first, parents before children, then the names, in the member's order
+EOF
+                      ;;
+        esac;;
+
+    arm-dirrm-races-the-lookup)
+        case "$_f" in
+        facility)     echo "a request for a resource drops that resource's staged directory-entry removal, so this node never tells a directory to forget a resource and then asks it who masters that same resource (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_arm_post() stops dropping the staged removal, so the pair that preceded a real OpenVMS VAX's LOCKMGRERR goes back on the wire: a cat-0x02 op-0x04 removal for a resource and, milliseconds later, a lookup for that same name and hash.";;
+        require_fail) hd_lines <<'EOF'
+*** a request for a resource drops that resource's staged directory removal, before the request is queued ***
 EOF
                       ;;
         esac;;
@@ -2996,6 +3010,10 @@ apply_edit() {
         # The database walk's apply call -- the TAB-TAB indented one, unique in
         # this file (the per-operation path's is indented once).
         sed -i 's|		st = j->jops->lnm_apply(j->jops->ctx, \&j->lnm_op);|		st = 1u; /* NEGCTL join-lnm-db-not-applied */|' "$_file";;
+
+    arm-dirrm-races-the-lookup)
+        # The one call on the post path. The edit consumes its anchor.
+        sed -i 's|^\tdlm_arm_dirrm_drop_for(d, p);|\t/* NEGCTL arm-dirrm-races-the-lookup */|' "$_file";;
 
     join-lnm-db-corrupt-unanswered)
         # The one answer call at the end of join_lnm_db_pulled(). The edit

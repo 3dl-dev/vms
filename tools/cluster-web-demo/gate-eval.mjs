@@ -312,8 +312,11 @@ export function observeNodeAWorker(R, st) {
 // Trailing blank lines and the cursor's own line are not output (joinScrollback
 // has the long version of why).
 export function lastLineOf(text) {
+  // NUL is the fill character VMS writes before a prompt (the keystroke
+  // oracle's real-VAX login: "<CR><NUL>$"); a terminal displays nothing for it,
+  // so it is not part of what the line printed.
   const lines = String(text || '').split('\n')
-    .map((s) => s.replace(/[\s█]+$/u, '')).filter((s) => s.length);
+    .map((s) => s.replace(/\u0000/gu, '').replace(/[\s█]+$/u, '')).filter((s) => s.length);
   return lines.length ? lines[lines.length - 1] : '';
 }
 

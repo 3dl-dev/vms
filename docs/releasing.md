@@ -238,6 +238,34 @@ regen), and `openvmx-site/.github/workflows/cascade-verify.yml` runs it on every
 push/PR and on a schedule as a loud, build-free backstop (so a drift turns a
 commit status red rather than hiding in a failed capture job).
 
+## Deploy targets and the drift sentinel
+
+Every surface a release deploys to is listed **once**, in `deploy/targets.yaml`
+(epic `vms-d385`). That list covers the per-arch release assets, the openvmx-site
+labels and data, and each browser-demo node. For each target it records what
+builds it (`build`), what publishes it (`deploy`), and a **probe**: a no-secrets,
+read-only way to read the version that is live, such as a banner string, a JSON
+field or a release asset name. The file holds no versions. What is live is read
+every time, never written down.
+
+`.github/workflows/drift-sentinel.yml` runs `tools/deploy/drift_sentinel.py`
+daily, after every release.yml run, and by hand. It probes every target and
+compares the result with the newest release tag. A target that is behind, or
+whose version cannot be read, turns the run **red**. The sentinel then keeps one
+open issue for it, titled `drift: <id>` and labelled `deploy-drift`, that links
+the run, and it closes that issue on the first run that finds the target current.
+A gated target that its gate held back (for example, the demo visitor gate)
+is still reported as drift, with the pin's reason quoted. The offline test
+`tests/integration/test_drift_sentinel.sh` proves the sentinel can fail on a fake
+stale probe. It runs in the ledger gate on every PR and before every sentinel run.
+
+**Adding a surface:** add a target with a probe in the same change that creates
+the surface. A demo or page that nothing probes is the drift this machinery
+exists to catch. **Wiring its deploy:** the release tag is the one trigger.
+In-repo builds are dispatched from release.yml. openvmx-site reacts to the tag
+through its own 10-minute `track-release` poll until `secrets.SITE_DISPATCH_TOKEN`
+exists for a direct `repository_dispatch` (`vms-793`).
+
 ## Related
 
 - `docs/install-guide.md`, `docs/upgrade-guide.md` — the tested install/upgrade procedures.

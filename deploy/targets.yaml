@@ -1,0 +1,110 @@
+# deploy/targets.yaml -- the ONE inventory of every surface an OVMX release
+# deploys to (rd epic vms-d385). Single source: nothing else lists these.
+#
+# Holds NO versions. What a target is running is read LIVE by its `probe`
+# every time tools/deploy/drift_sentinel.py runs (daily and on every tag,
+# .github/workflows/drift-sentinel.yml) and compared with the newest
+# release tag in git. A target whose live version is not that tag is DRIFT:
+# the sentinel goes red and keeps one GitHub issue open per drifted target.
+#
+# Fields
+#   id        stable name; the drift issue is titled "drift: <id>"
+#   rd        the rd item whose outcome is "this target runs the latest tag"
+#   tracks    release  -- must equal the newest release tag (default)
+#             none     -- not release-versioned (a pinned real-VMS volume);
+#                         the probe only proves it is served
+#   gated     true when a gate may legitimately hold the target back (the
+#             demo visitor gate). A gated target still reports drift; the
+#             `pin` file's reason is quoted in the issue.
+#   build     what produces it   {workflow, repo, inputs} or a note
+#   deploy    what publishes it  {workflow, repo, trigger} or a note
+#   probe     a no-secrets, read-only way to read what is LIVE:
+#               kind: text    url            -> the body, stripped
+#               kind: regex   url, pattern   -> group 1 of the first match
+#               kind: json    url, path      -> dotted path (list index ok)
+#               kind: release_asset  pattern -> the tag if the newest
+#                     release carries an asset matching the glob, else absent
+#               kind: served  url            -> HTTP 200 (tracks: none only)
+#   pin       optional URL of a JSON pin {pinned_to, blocked_from, reason}
+
+targets:
+  # ---- GitHub Release assets, per arch (release.yml on the tag) ----------
+  - id: release-x86_64
+    rd: vms-665
+    build: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push}
+    deploy: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push}
+    probe: {kind: release_asset, pattern: "ovmx-distrib.img"}
+  - id: release-alpha
+    rd: vms-665
+    build: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push}
+    deploy: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push}
+    probe: {kind: release_asset, pattern: "DCL-ALPHA.EXE"}
+  - id: release-vax
+    rd: vms-665
+    build: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push}
+    deploy: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push}
+    probe: {kind: release_asset, pattern: "DCL-VAX.EXE"}
+  - id: release-aarch64
+    rd: vms-665
+    build: {note: "no aarch64 leg in release.yml yet"}
+    deploy: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push}
+    probe: {kind: release_asset, pattern: "*[Aa][Aa][Rr][Cc][Hh]64*"}
+
+  # ---- openvmx-site (track-release.yml polls the tags every 10 min) ------
+  - id: site-homepage-version
+    rd: vms-e17
+    build: {note: "label rewrite, no build"}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml, trigger: 10-min tag poll}
+    probe: {kind: regex, url: "https://openvmx.3dl.dev/", pattern: "data-ovmx-version>([^<]+)<"}
+  - id: site-install-guide-version
+    rd: vms-e17
+    build: {note: "label rewrite, no build"}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml, trigger: 10-min tag poll}
+    probe: {kind: regex, url: "https://openvmx.3dl.dev/docs/installation/", pattern: "data-ovmx-version>([^<]+)<"}
+  - id: site-atom-feed
+    rd: vms-e17
+    build: {repo: 3dl-dev/vms, workflow: "tools/roadmap/reconcile.py --feed-only"}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml, trigger: 10-min tag poll}
+    probe: {kind: regex, url: "https://openvmx.3dl.dev/atom.xml", pattern: "<entry>\\s*<title>([^<]+)</title>"}
+  - id: site-roadmap-data
+    rd: vms-e17
+    build: {repo: 3dl-dev/vms, workflow: "tools/roadmap/reconcile.py --site-dir"}
+    deploy: {note: "post-tag site refresh PR (docs/releasing.md)"}
+    probe: {kind: json, url: "https://openvmx.3dl.dev/data/roadmap.json", path: "releases.0.tag"}
+  - id: site-compat-data
+    rd: vms-e17
+    build: {repo: 3dl-dev/vms, workflow: "tools/compat/render_compat.py + data/REFRESH.md scrub"}
+    deploy: {note: "post-tag site refresh PR (docs/releasing.md)"}
+    probe: {kind: json, url: "https://openvmx.3dl.dev/data/compat-surface.json", path: "meta.release"}
+
+  # ---- browser demos ------------------------------------------------------
+  - id: demo-x86-single
+    rd: vms-349
+    gated: true
+    build: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml, trigger: 10-min tag poll}
+    probe: {kind: text, url: "https://openvmx.3dl.dev/boot/DEPLOYED_TAG"}
+    pin: "https://openvmx.3dl.dev/boot/DEMO_PIN.json"
+  - id: demo-vax-single
+    rd: vms-208f
+    build: {note: "built by hand today (vms-208f)"}
+    deploy: {note: "image on vax.3dl.network (pcjs-vax Pages), named in openvmx-site index.html"}
+    probe: {kind: regex, url: "https://openvmx.3dl.dev/", pattern: "ovmx-vax-(v[0-9][0-9.-]*)\\.img\\.gz"}
+  - id: demo-cluster-nodeA
+    rd: vms-ca55
+    gated: true
+    build: {repo: 3dl-dev/openvmx-site, workflow: track-cluster-demo.yml}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-cluster-demo.yml, trigger: after track-release}
+    probe: {kind: text, url: "https://openvmx.3dl.dev/demo/cluster/DEPLOYED_TAG"}
+    pin: "https://openvmx.3dl.dev/demo/cluster/CLUSTER_DEMO_PIN.json"
+  - id: demo-cluster-nodeB
+    rd: vms-fbdd
+    build: {repo: 3dl-dev/vms, workflow: cluster-demo-nodeB.yml, inputs: {ref: "<tag>"}}
+    deploy: {note: "image + nodeB-manifest.json on vax.3dl.network (pcjs-vax Pages)"}
+    probe: {kind: json, url: "https://vax.3dl.network/machines/dec/vax/browser/nodeB-manifest.json", path: "version"}
+  - id: demo-cluster-nodeC
+    rd: vms-fbdd
+    tracks: none
+    build: {note: "pinned real VAX/VMS V7.3 volume; never rebuilt"}
+    deploy: {note: "vax.3dl.network (pcjs-vax Pages)"}
+    probe: {kind: served, url: "https://vax.3dl.network/machines/dec/vax/browser/vms73-nodeC-cluster.dsk.gz"}

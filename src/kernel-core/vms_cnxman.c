@@ -423,6 +423,7 @@ struct vms_cnxman {
 	struct vms_lnm_equiv lnm_eq[VMS_LNM_MAX_EQUIV];
 	uint32_t q0b01_answered;       /* rd vms-52d: 0x8b/0x01 answers sent */
 	uint32_t lnm_pull_waits;       /* rd vms-f4e: beats a pull waited for db_ready */
+	uint32_t lnm_db_unsyncs;       /* rd vms-94a: pulls this node could not take */
 	uint32_t q0b01_declined;       /* ...requests left unanswered        */
 	uint32_t sends_rolled_back;    /* rd vms-cd8: refused, number returned */
 	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
@@ -1069,6 +1070,29 @@ static uint32_t cnxman_jop_lnm_apply(void *ctx, const struct vms_cm_lnm_op *op)
 	}
 }
 
+/*
+ * rd vms-94a (conductor ruling 2026-10-14): WHAT A DATABASE PULL MADE OF
+ * ITSELF, told to the executive.
+ *
+ * The member's transaction is answered either way -- the join FSM does that
+ * before this is called, because a member left waiting for an answer hangs.
+ * What is left is the truth about THIS node: a database it could not take
+ * whole means its clusterwide tables hold less than the cluster's, and the
+ * executive refuses to answer out of them (SS$_UNSUPPORTED on a translation
+ * or a create) instead of reporting a name absent that the cluster has.
+ */
+static void cnxman_jop_lnm_db_outcome(void *ctx, uint8_t outcome)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+
+	if (outcome == (uint8_t)CNXMAN_LNM_DB_APPLIED) {
+		vms_lnm_cluster_synchronized();
+		return;
+	}
+	cn->lnm_db_unsyncs++;
+	vms_lnm_cluster_desynchronize((uint32_t)outcome);
+}
+
 /* SCS block-consumer thunks: the fan-out is exact, so a name that is not one
  * of the join's own is ignored inside cnxman_join_blk_*. */
 static void cnxman_blk_data_cb(void *ctx, uint32_t name, uint32_t offset,
@@ -1101,6 +1125,7 @@ static void cnxman_jops_bind(struct vms_cnxman *cn)
 	cn->jops.blk_send = cnxman_jop_blk_send;
 	cn->jops.device_present = cnxman_jop_device_present;
 	cn->jops.lnm_apply = cnxman_jop_lnm_apply;
+	cn->jops.lnm_db_outcome = cnxman_jop_lnm_db_outcome;
 }
 
 /* ==========================================================================
@@ -1290,8 +1315,16 @@ static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 	 * only on the next beat, so a node stops granting within the same
 	 * message that removed the votes it was relying on.
 	 */
-	if (changed)
+	if (changed) {
 		cnxman_quorum_apply(cn);
+		/* rd vms-94a: a clusterwide database this node could not take
+		 * whole is asked for again now -- the cluster just changed,
+		 * which is both when its own database is rebuilt and when
+		 * another member becomes available to ask. */
+		if (cn->join.lnm_db_outcome !=
+		    (uint8_t)CNXMAN_LNM_DB_APPLIED)
+			cnxman_join_lnm_db_rearm(&cn->join);
+	}
 }
 
 /* ==========================================================================

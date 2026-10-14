@@ -3254,58 +3254,138 @@ static void join_lnm_db_push(struct cnxman_join *j, const uint8_t *body,
 	j->lnm_db_state = 2u;
 }
 
-/* The whole database is here: apply every record, then answer 0x8b/0x04. */
-static void join_lnm_db_pulled(struct cnxman_join *j)
+/*
+ * Apply every record of the pulled database, in the member's order. Returns
+ * one of enum cnxman_lnm_db_outcome and leaves *n_applied holding how many
+ * records really went in -- a database this node could not take whole is a
+ * fact about THIS node's tables, reported by the caller, never a reason to
+ * leave the member's transaction open.
+ */
+static uint8_t join_lnm_db_apply_all(struct cnxman_join *j,
+				     uint32_t *n_applied)
 {
 	const uint8_t *rec;
 	uint32_t cursor = 0, rec_len = 0, n = 0, st;
 	vms_codec_status_t cs;
-	struct vms_csb *csb;
 
-	(void)j->jops->blk_release(j->jops->ctx, j->lnm_db_name);
-	j->lnm_db_name = 0u;
-	j->lnm_db_state = 3u;
 	for (;;) {
 		cs = vms_cm_lnm_db_next(j->lnm_db_buf, j->lnm_db_len, &cursor,
 					&rec, &rec_len);
 		if (cs == VMS_CODEC_E_RANGE)
 			break;
+		*n_applied = n;
 		if (cs != VMS_CODEC_OK ||
 		    vms_cm_lnm_rec_parse(rec, rec_len, &j->lnm_op) !=
-		    VMS_CODEC_OK) {
-			j->lnm_db_refused++;
-			join_log(j, "%CNXMAN, the clusterwide logical name "
-				    "database was not answered: a record in it "
-				    "is not one this node can decode");
-			return;
-		}
-		/* each record of the database, in the member's order */
+		    VMS_CODEC_OK)
+			return (uint8_t)CNXMAN_LNM_DB_UNDECODED;
 		st = j->jops->lnm_apply(j->jops->ctx, &j->lnm_op);
-		if ((st & 1u) == 0u) {
-			j->lnm_db_refused++;
-			join_log(j, "%CNXMAN, the clusterwide logical name "
-				    "database was not answered: this node's "
-				    "executive did not apply a record of it");
-			return;
-		}
+		if ((st & 1u) == 0u)
+			return (uint8_t)CNXMAN_LNM_DB_NOT_APPLIED;
 		n++;
 	}
-	if (n != vms_cm_lnm_db_count(j->lnm_db_buf, j->lnm_db_len)) {
-		j->lnm_db_refused++;
-		return;   /* the container's own count disagrees: unanswered */
-	}
-	j->lnm_db_records += n;
+	*n_applied = n;
+	if (n != vms_cm_lnm_db_count(j->lnm_db_buf, j->lnm_db_len))
+		return (uint8_t)CNXMAN_LNM_DB_MISCOUNTED;
+	return (uint8_t)CNXMAN_LNM_DB_APPLIED;
+}
+
+/* The 0x8b/0x04 that closes the member's push. Real answers carry the
+ * requester's txn/token and nothing else -- no status field is grounded in any
+ * capture (vms_cluster_codec_cm.h), so there is no failure value to write and
+ * the plain answer is what goes, whatever this node made of the records. */
+static int join_lnm_db_answer(struct cnxman_join *j)
+{
+	struct vms_csb *csb;
+
 	csb = (j->cl == NULL || j->lnm_db_csb < 0) ? NULL :
 	      cnxman_club_csb_at(&j->cl->club, (uint32_t)j->lnm_db_csb);
 	if (csb == NULL || csb->cdt_conid != j->lnm_db_conid ||
 	    vms_cm_lnm_answer_build(j->lnm_db_req, VMS_CM_BODY_LEN,
 				    j->scratch, (uint32_t)sizeof(j->scratch),
 				    NULL) != VMS_CODEC_OK)
-		return;
+		return -1;
 	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_RESPONSE);
 	if (j->jops->send_msg(j->jops->ctx, j->lnm_db_conid, j->scratch,
-			      VMS_CM_BODY_LEN) != 0)
+			      VMS_CM_BODY_LEN) != 0) {
 		j->send_failures++;
+		return -1;
+	}
+	return 0;
+}
+
+/* Say on the console, once per pull, what this node could not take. */
+static void join_lnm_db_log_outcome(struct cnxman_join *j, uint8_t outcome)
+{
+	if (outcome == (uint8_t)CNXMAN_LNM_DB_UNDECODED)
+		join_log(j, "%CNXMAN, a record of the clusterwide logical name "
+			    "database is not one this node can decode: its "
+			    "names are NOT held here and this node's "
+			    "clusterwide tables answer nothing until it pulls "
+			    "again");
+	else if (outcome == (uint8_t)CNXMAN_LNM_DB_NOT_APPLIED)
+		join_log(j, "%CNXMAN, this node's executive did not apply a "
+			    "record of the clusterwide logical name database: "
+			    "its names are NOT held here and this node's "
+			    "clusterwide tables answer nothing until it pulls "
+			    "again");
+	else if (outcome == (uint8_t)CNXMAN_LNM_DB_MISCOUNTED)
+		join_log(j, "%CNXMAN, the clusterwide logical name database "
+			    "holds a different number of records than its own "
+			    "count: this node's clusterwide tables answer "
+			    "nothing until it pulls again");
+}
+
+/*
+ * The whole database is here (rd vms-94a, conductor ruling 2026-10-14).
+ *
+ * TWO SEPARATE DUTIES, AND NEITHER IS ALLOWED TO EAT THE OTHER.
+ *   ON THE WIRE: the member is waiting for the 0x8b/0x04 that closes the
+ *   transaction it opened, and a member left waiting hangs -- a real V7.3's
+ *   whole startup sat on exactly this (a demo VAX never reached Username:
+ *   because this code returned without answering, 2026-10-14). So the answer
+ *   ALWAYS goes, decoded or not.
+ *   AT HOME: a database this node could not take whole means its clusterwide
+ *   tables hold less than the cluster's, so the executive is told and answers
+ *   honestly for them (INV-6) until the next transition brings another pull.
+ */
+static void join_lnm_db_pulled(struct cnxman_join *j)
+{
+	uint32_t n = 0;
+	uint8_t outcome;
+
+	(void)j->jops->blk_release(j->jops->ctx, j->lnm_db_name);
+	j->lnm_db_name = 0u;
+	j->lnm_db_state = 3u;
+	outcome = join_lnm_db_apply_all(j, &n);
+	j->lnm_db_records += n;
+	if (outcome != (uint8_t)CNXMAN_LNM_DB_APPLIED) {
+		j->lnm_db_refused++;
+		j->lnm_db_outcome = outcome;
+		join_lnm_db_log_outcome(j, outcome);
+	}
+	if (j->jops->lnm_db_outcome != NULL)
+		j->jops->lnm_db_outcome(j->jops->ctx, outcome);
+	(void)join_lnm_db_answer(j);
+}
+
+/*
+ * rd vms-94a: ASK AGAIN AT THE NEXT TRANSITION. A pull this node could not
+ * take whole left its clusterwide tables short, and the executive is refusing
+ * for them until another pull succeeds. A membership change is when to try:
+ * the cluster may have rebuilt its own database, and a member this node can
+ * ask may have arrived. Only a FINISHED pull is re-armed -- one still in
+ * flight is left alone -- and the request itself is still subject to every
+ * gate cnxman_lnm_db_maybe_pull applies (an older member, ready, connected).
+ */
+void cnxman_join_lnm_db_rearm(struct cnxman_join *j)
+{
+	if (j == NULL || j->lnm_db_state != 3u)
+		return;
+	j->lnm_db_state = 0u;
+	j->lnm_db_csb = -1;
+	j->lnm_db_conid = 0u;
+	j->lnm_db_len = 0u;
+	j->lnm_db_rearms++;
 }
 
 int cnxman_join_rx_lnm(struct cnxman_join *j, const uint8_t *body,

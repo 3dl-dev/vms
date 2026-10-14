@@ -2952,6 +2952,23 @@ static void lnm_read_backoff(int tries)
     }
 }
 
+int vms_kif_lnm_cluster_unsync(void)
+{
+    struct vms_lnm_arena *a = vms_kif_lnm_arena();
+
+    return a ? (int)a->cluster_unsync : 0;
+}
+
+/* rd vms-94a: may this caller be answered out of `table` at all? A clusterwide
+ * table whose database this node could not take whole holds less than the
+ * cluster's, and a search of it would report names absent that are not. */
+static int lnm_table_answerable(uint32_t table)
+{
+    if (VMS_LNM_TBL_BASE(table) != VMS_LNM_TBL_CLUSTER)
+        return 1;
+    return vms_kif_lnm_cluster_unsync() == 0;
+}
+
 int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
                        uint8_t max_acmode, struct vms_kif_lnm_enum_rec *out)
 {
@@ -2964,6 +2981,8 @@ int vms_kif_lnm_lookup(uint32_t table, const char *name, int case_blind,
     a = vms_kif_lnm_arena();
     if (!a)
         return -1;
+    if (!lnm_table_answerable(table))
+        return VMS_KIF_LNM_UNSYNC;
     if (!vms_kif_lnm_scope_of(table, &scope_key))
         return -1;
 
@@ -3097,6 +3116,11 @@ int vms_kif_lnm_enumerate(uint32_t table,
     a = vms_kif_lnm_arena();
     if (!a)
         return -1;   /* executive absent -> caller renders SS$_NOSUCHDEV */
+    /* rd vms-94a: a partial clusterwide table is not listed as if it were
+     * whole -- the listing a visitor reads would be missing the cluster's
+     * own names with nothing to say so. */
+    if (!lnm_table_answerable(table))
+        return VMS_KIF_LNM_UNSYNC;
 
     /* Same scope resolution as vms_kif_lnm_translate: SYSTEM is singular
      * (scope 0); GROUP/JOB use this caller's own executive-derived keys,

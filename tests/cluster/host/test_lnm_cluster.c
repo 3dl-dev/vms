@@ -217,6 +217,44 @@ int main(void)
 		ct_check(vms_ioctl_lnm_define(&p, (unsigned long)&d) == 0 &&
 			 d.status == SS__BADPARAM,
 			 "a clusterwide table id this node does not hold: refused");
+
+		/*
+		 * rd vms-94a (ruling 2026-10-14): THIS NODE'S COPY IS SHORT.
+		 * A clusterwide database the connection manager pulled and
+		 * could not take whole leaves these tables holding less than
+		 * the cluster's, and the executive says so -- alone or not.
+		 */
+		g_others = 0;
+		d.table = VMS_LNM_TBL_CLUSTER_OF(sys);
+		d.status = 0;
+		strcpy(d.name, "OVMX_AFTER_BAD_PULL");
+		d.name_length = 19;
+		vms_lnm_cluster_desynchronize(1u);   /* CNXMAN_LNM_DB_UNDECODED */
+		ct_check_eq_u32(vms_lnm_cluster_unsync(), 1u,
+				"the executive records WHY the tables are short");
+		/* negctl: lnm-unsync-still-serves */
+		ct_check(vms_ioctl_lnm_define(&p, (unsigned long)&d) == 0 &&
+			 d.status == SS__UNSUPPORTED,
+			 "*** a clusterwide DEFINE on an unsynchronized node is "
+			 "refused SS$_UNSUPPORTED, with no other member in "
+			 "sight ***");
+		ct_check(find(VMS_LNM_TBL_CLUSTER, sys,
+			      "OVMX_AFTER_BAD_PULL", 2) == NULL,
+			 "  and nothing was written");
+		x.status = 0;
+		strcpy(x.name, "OVMX_AFTER_BAD_PULL");
+		ct_check(vms_ioctl_lnm_delete(&p, (unsigned long)&x) == 0 &&
+			 x.status == SS__UNSUPPORTED,
+			 "  a DEASSIGN on an unsynchronized node likewise");
+		ct_check(A->cluster_unsync == 1u,
+			 "  and a userspace reader sees it in the arena header");
+		vms_lnm_cluster_synchronized();
+		ct_check_eq_u32(vms_lnm_cluster_unsync(), 0u,
+				"a pull that DID apply clears it");
+		d.status = 0;
+		ct_check(vms_ioctl_lnm_define(&p, (unsigned long)&d) == 0 &&
+			 d.status == SS__NORMAL,
+			 "  and the clusterwide DEFINE is served again");
 	}
 
 	vms_lnm_cleanup();

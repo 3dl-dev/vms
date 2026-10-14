@@ -597,7 +597,10 @@ uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
         int n = vms_kif_lnm_enumerate(exec_tbl, recs, VMS_LNM_MAX_ENTRIES);
         if (n < 0) {
             free(recs);
-            return SS$_NOSUCHDEV;
+            /* rd vms-94a: a clusterwide table this node's copy is short of is
+             * not listed as if it were whole -- the listing would be missing
+             * the cluster's own names with nothing to say so. */
+            return n == VMS_KIF_LNM_UNSYNC ? SS$_UNSUPPORTED : SS$_NOSUCHDEV;
         }
 
         for (int i = 0; i < n; i++) {

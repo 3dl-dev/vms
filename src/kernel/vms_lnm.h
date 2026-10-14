@@ -151,7 +151,15 @@ struct vms_lnm_arena {
     uint32_t arena_size;                /* sizeof(struct vms_lnm_arena) */
     uint32_t max_entries;               /* VMS_LNM_MAX_ENTRIES */
     uint32_t entry_count;               /* hint: entries currently in use */
-    uint32_t reserved;
+    /*
+     * rd vms-94a: NON-ZERO WHEN THIS NODE'S CLUSTERWIDE TABLES ARE NOT THE
+     * CLUSTER'S (enum cnxman_lnm_db_outcome, the reason). Set when a pulled
+     * clusterwide logical-name database could not be decoded or applied
+     * whole, cleared by a pull that was. A reader must not answer a
+     * clusterwide translation while it is set: the names it would not find
+     * are names the cluster has and this node does not (INV-6).
+     */
+    uint32_t cluster_unsync;
     uint64_t generation;                /* seqlock; odd while a write is in flight */
     struct vms_lnm_entry entries[VMS_LNM_MAX_ENTRIES];
 };

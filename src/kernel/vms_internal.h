@@ -1875,6 +1875,14 @@ uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,
                                 const struct vms_lnm_equiv *eq);
 uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
                                 uint8_t acmode);
+/* rd vms-94a: this node's clusterwide tables are NOT the cluster's -- a pulled
+ * clusterwide logical-name database could not be decoded or applied whole, so
+ * every clusterwide translation and create is refused here until a pull
+ * succeeds. `reason` is an enum cnxman_lnm_db_outcome and is published in the
+ * arena header for the userspace readers. */
+void vms_lnm_cluster_desynchronize(uint32_t reason);
+void vms_lnm_cluster_synchronized(void);
+uint32_t vms_lnm_cluster_unsync(void);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 

@@ -1037,6 +1037,11 @@ uint32_t vms_lnm_cluster_crelnm(const char *tab, const char *name,
                                 const struct vms_lnm_equiv *eq);
 uint32_t vms_lnm_cluster_dellnm(const char *tab, const char *name,
                                 uint8_t acmode);
+/* rd vms-94a: this node's clusterwide tables are NOT the cluster's (the same
+ * three entry points as the Linux substrate's vms_internal.h). */
+void vms_lnm_cluster_desynchronize(uint32_t reason);
+void vms_lnm_cluster_synchronized(void);
+uint32_t vms_lnm_cluster_unsync(void);
 void vms_lnm_proc_gone(struct vms_proc *proc);
 void vms_lnm_copy_process(uint32_t from_pid, uint32_t to_pid);
 int  vms_ast_has_deliverable(struct vms_proc *proc, uint8_t cur_mode);

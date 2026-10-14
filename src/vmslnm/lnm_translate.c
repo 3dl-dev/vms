@@ -93,6 +93,15 @@ static uint32_t translate_executive(uint32_t table, const char *name,
                            result_length, attributes);
     if (r == 0)
         return SS$_NOLOGNAM;      /* executive present, name absent */
+    /*
+     * rd vms-94a: THE CLUSTERWIDE TABLE CANNOT BE CONSULTED HERE. This node
+     * could not take the cluster's logical-name database whole, so its copy is
+     * short -- and "absent" would be a lie about a name the cluster may well
+     * have. The refusal is reported as itself, and it ends at the next
+     * successful pull.
+     */
+    if (r == VMS_KIF_LNM_UNSYNC)
+        return SS$_UNSUPPORTED;
 
     return SS$_NOSUCHDEV;         /* r < 0: executive absent -- no fallback */
 }

@@ -200,7 +200,10 @@ struct vms_lnm_arena {
 	uint32_t arena_size;                /* sizeof(struct vms_lnm_arena) */
 	uint32_t max_entries;               /* VMS_LNM_MAX_ENTRIES */
 	uint32_t entry_count;               /* hint: entries currently in use */
-	uint32_t reserved;
+	/* rd vms-94a: non-zero when this node's clusterwide tables are NOT the
+	 * cluster's (enum cnxman_lnm_db_outcome). Same field, same meaning and
+	 * same offset as the Linux substrate's (src/kernel/vms_lnm.h). */
+	uint32_t cluster_unsync;
 	uint64_t generation;                /* seqlock; odd while a write is in flight */
 	struct vms_lnm_entry entries[VMS_LNM_MAX_ENTRIES];
 };

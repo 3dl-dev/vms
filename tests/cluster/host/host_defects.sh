@@ -245,6 +245,9 @@ csb-0b01-answer-ignores-join-order
 guard-ignores-category-0b
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
+join-lnm-db-corrupt-unanswered
+join-lnm-db-corrupt-not-reported
+lnm-unsync-still-serves
 pe-blk-frame-unringed
 coord-own-class-unrecorded
 advertise-relay-empty-cell
@@ -1234,13 +1237,53 @@ EOF
         targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
-        why)          echo "join_lnm_db_pulled() stops handing the pushed records to the executive and answers anyway, so a late joiner tells the member it took the cluster's logical names while holding none of them.";;
+        why)          echo "join_lnm_db_pulled() stops handing the pushed records to the executive, so a late joiner answers the push, reports the database APPLIED and holds none of the cluster's logical names -- with nothing on the console or in the executive to say so.";;
         require_fail) hd_lines <<'EOF'
 *** the last chunk applies all 10 records ***
-  10 records counted
   tables first, parents before children, then the names, in the member's order
-then the answer goes
-  0x8b/0x04, as every real answer to a push
+EOF
+                      ;;
+        esac;;
+
+    join-lnm-db-corrupt-unanswered)
+        case "$_f" in
+        facility)     echo "a clusterwide logical-name database this node cannot decode STILL closes the member's transaction (rd vms-94a ruling 2026-10-14)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_lnm_db_pulled() returns without answering when a record does not decode, which is what left the demo's real OpenVMS VAX V7.3 waiting on an open transaction: its startup never finished and it never offered Username:.";;
+        require_fail) hd_lines <<'EOF'
+*** the member's transaction IS closed: the 0x8b/0x04 goes even though the database did not decode ***
+  0x8b/0x04, on the member's own connection
+EOF
+                      ;;
+        esac;;
+
+    join-lnm-db-corrupt-not-reported)
+        case "$_f" in
+        facility)     echo "a database pull this node could not take whole is REPORTED to the executive, which then refuses clusterwide translations (rd vms-94a ruling)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_lnm_db_pulled() answers the member but never tells the executive the pull failed, so this node goes on answering clusterwide translations out of a table that is missing the cluster's names -- the member is happy and every lookup here lies.";;
+        require_fail) hd_lines <<'EOF'
+the executive is told, exactly once
+*** and told WHY: a record it cannot decode ***
+EOF
+                      ;;
+        esac;;
+
+    lnm-unsync-still-serves)
+        case "$_f" in
+        facility)     echo "an executive whose clusterwide tables are short refuses clusterwide creates and translations SS\$_UNSUPPORTED (rd vms-94a ruling)";;
+        targets)      echo "kernel-core/vms_lnm.c";;
+        suites_red)   echo "test_lnm_cluster";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_lnm_define() stops consulting vms_lnm_cluster_unsync(), so a node that could not take the cluster's logical-name database serves its own partial copy as if it were whole: a name the cluster has reads as absent here.";;
+        require_fail) hd_lines <<'EOF'
+*** a clusterwide DEFINE on an unsynchronized node is refused SS$_UNSUPPORTED, with no other member in sight ***
+  and nothing was written
+  a DEASSIGN on an unsynchronized node likewise
 EOF
                       ;;
         esac;;
@@ -2950,8 +2993,25 @@ apply_edit() {
         sed -i 's|\trc = j->ops->respond(j->ops->ctx, j->scratch, VMS_CM_BODY_LEN);|\trc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,\n\t\t\t       VMS_CM_BODY_LEN); /* NEGCTL join-reply-to-the-join-target: every answer leaves on the join target'"'"'s connection, whoever asked */|' "$_file";;
 
     join-lnm-db-not-applied)
-        # The comment line above the database apply is unique in this file.
-        sed -i 's|		/\* each record of the database, in the member.s order \*/|		st = 1u; break; /* NEGCTL join-lnm-db-not-applied */|' "$_file";;
+        # The database walk's apply call -- the TAB-TAB indented one, unique in
+        # this file (the per-operation path's is indented once).
+        sed -i 's|		st = j->jops->lnm_apply(j->jops->ctx, \&j->lnm_op);|		st = 1u; /* NEGCTL join-lnm-db-not-applied */|' "$_file";;
+
+    join-lnm-db-corrupt-unanswered)
+        # The one answer call at the end of join_lnm_db_pulled(). The edit
+        # CONSUMES its anchor (the call is no longer alone on its line), so a
+        # second apply matches nothing and cmd_apply reports BROKEN FIXTURE.
+        sed -i 's|^\t(void)join_lnm_db_answer(j);|\tif (outcome == (uint8_t)CNXMAN_LNM_DB_APPLIED) (void)join_lnm_db_answer(j); /* NEGCTL join-lnm-db-corrupt-unanswered */|' "$_file";;
+
+    join-lnm-db-corrupt-not-reported)
+        # The one call through the outcome op is unique in this file.
+        sed -i 's|		j->jops->lnm_db_outcome(j->jops->ctx, outcome);|		{ } /* NEGCTL join-lnm-db-corrupt-not-reported */;|' "$_file";;
+
+    lnm-unsync-still-serves)
+        # The ONE place the rule lives (lnm_cluster_change_refused), so this
+        # control covers the define and the delete path at once. The edit
+        # consumes its anchor.
+        sed -i 's%^           vms_lnm_cluster_unsync() != 0u;%           0; /* NEGCTL lnm-unsync-still-serves */%' "$_file";;
 
     join-lnm-answered-unapplied)
         # `if ((st & 1u) == 0u) {` is unique in this file.

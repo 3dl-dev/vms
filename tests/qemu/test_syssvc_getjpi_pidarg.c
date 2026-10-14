@@ -113,7 +113,7 @@ static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
 
     fflush(NULL);
-    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
+    pid_t pid = ovmx_fork_login();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -218,7 +218,7 @@ int main(void)
     }
 
     fflush(NULL);
-    pid_t a_pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
+    pid_t a_pid = ovmx_fork_login();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (a_pid < 0) {
         printf("  FAIL: could not fork process A\n");
         printf("=== test_syssvc_getjpi_pidarg: %d passed, %d failed ===\n", pass, fail + 1);

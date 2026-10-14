@@ -13,7 +13,14 @@
  * re-stamp its OWN identity: refused SS$_NOPRIV, and the row is unchanged.
  * It re-enables CMKRNL ($SETPRV, authorized) and the same call succeeds.
  *
+ * And only a process being logged in may stamp at all (rd vms-a2c): a
+ * SUBPROCESS the suite creates -- not a login process -- holding and enabling
+ * CMKRNL asks to stamp its own identity and is refused SS$_NOPRIV, its row
+ * unchanged. On VMS only LOGINOUT, running in the process being logged in,
+ * writes the identity; nothing that runs after login can.
+ *
  * negctl: setident-cmkrnl-unchecked
+ * negctl: setident-outside-login
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,6 +70,25 @@ static void child(int fd)
     (void)!write(fd, &r, sizeof r);
 }
 
+struct sub_result {
+    uint32_t got_self, has_cmkrnl, st, unchanged;
+};
+
+static void sub_child(int fd)
+{
+    struct sub_result r;
+    struct vms_procinfo me, after;
+    memset(&r, 0, sizeof r);
+    r.got_self = vms_kif_getjpi_self(&me);
+    if (r.got_self & 1) {
+        r.has_cmkrnl = (me.cur_privs & VMS_PRV_M_CMKRNL) != 0;
+        r.st = vms_kif_setident("OVMXSIDS", me.uic, me.perm_privs);
+        r.unchanged = (vms_kif_getjpi_self(&after) & 1) &&
+                      strncmp(after.username, "OVMXSIDS", sizeof after.username) != 0;
+    }
+    (void)!write(fd, &r, sizeof r);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -73,7 +99,7 @@ int main(void)
     }
     int p[2];
     if (pipe(p) != 0) { printf("  FAIL: pipe\n"); return 1; }
-    pid_t c = ovmx_fork_subprocess();
+    pid_t c = ovmx_fork_login();
     if (c == 0) {
         close(p[0]);
         child(p[1]);
@@ -96,6 +122,27 @@ int main(void)
     CHECK(r.restore_st & 1, "$SETPRV re-enables CMKRNL (it is authorized)");
     CHECK(r.allowed_st & 1, "with CMKRNL enabled the same stamp is accepted");
     CHECK(r.stamped, "and the row carries the stamped user name");
+
+    struct sub_result sr;
+    memset(&sr, 0, sizeof sr);
+    if (pipe(p) != 0) { printf("  FAIL: pipe\n"); return 1; }
+    c = ovmx_fork_subprocess();
+    if (c == 0) {
+        close(p[0]);
+        sub_child(p[1]);
+        _exit(0);
+    }
+    close(p[1]);
+    n = c > 0 ? read(p[0], &sr, sizeof sr) : -1;
+    close(p[0]);
+    while (c > 0 && waitpid(c, NULL, 0) < 0 && errno == EINTR)
+        ;
+    CHECK(n == (ssize_t)sizeof sr && (sr.got_self & 1), "a subprocess (not a login process) is a VMS process");
+    CHECK(sr.has_cmkrnl, "it holds CMKRNL enabled");
+    /* negctl: setident-outside-login */
+    CHECK(sr.st == SS$_NOPRIV,
+          "outside a login, stamping an identity is refused SS$_NOPRIV even with CMKRNL");
+    CHECK(sr.unchanged, "the refused stamp left the subprocess's row unchanged");
     printf("=== test_syssvc_setident_cmkrnl: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

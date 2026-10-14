@@ -2310,8 +2310,7 @@ static void vms_image_activated(const struct inode *img)
     if (!proc)
         return;
     privs = vms_kfe_exec_privs(img);
-    if (privs || proc->image_privs)
-        vms_proc_image_privs(proc, privs);
+    vms_proc_image_activated(proc, privs);
 }
 
 #if defined(HAVE_TASK_EXEC_NOTIFIER)

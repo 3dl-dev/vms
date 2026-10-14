@@ -890,6 +890,22 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
+    /*
+     * ONLY DURING LOGIN (rd vms-a2c). On VMS a process's identity is set by
+     * LOGINOUT while it logs the process in, and by nothing afterwards. So
+     * SETIDENT is honoured only in a LOGIN process -- one its creator made
+     * for LOGINOUT (CREPRC_PCB with VMS_CREPRC_PCB_F_LOGIN) -- and only until
+     * the image after LOGINOUT is activated. A process that is not logging
+     * in is refused, CMKRNL or not.
+     * NEGCTL-ANCHORED (setident-outside-login).
+     */
+    if (proc->login_images == 0) {
+        exec_unlock(&proc->mode_lock);
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
     has_setprv = (proc->cur_privs & VMS_PRV_M_SETPRV) != 0;
     authorized = proc->perm_privs;
     cur_uic    = proc->uic;
@@ -1896,18 +1912,27 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
     int detached;
     bool ok;
 
+    uint32_t kind;
+    int login, given;
+
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.username[VMS_USERNAME_SIZE - 1] = '\0';
     args.vms_pid = 0;
-    if (args.flags != VMS_CREPRC_PCB_SUBPROCESS && args.flags != VMS_CREPRC_PCB_DETACHED &&
-        args.flags != VMS_CREPRC_PCB_CONTINUE) {
+    kind  = VMS_CREPRC_PCB_KIND(args.flags);
+    login = (args.flags & VMS_CREPRC_PCB_F_LOGIN) != 0;
+    given = (args.flags & VMS_CREPRC_PCB_F_IDENTITY) != 0;
+    if ((args.flags & ~(0xFFu | VMS_CREPRC_PCB_F_LOGIN | VMS_CREPRC_PCB_F_IDENTITY)) != 0 ||
+        (kind != VMS_CREPRC_PCB_SUBPROCESS && kind != VMS_CREPRC_PCB_DETACHED &&
+         kind != VMS_CREPRC_PCB_CONTINUE) ||
+        (login && kind == VMS_CREPRC_PCB_CONTINUE) ||
+        (given && kind != VMS_CREPRC_PCB_SUBPROCESS)) {
         args.status = SS__BADPARAM;
         goto out;
     }
-    detached = args.flags == VMS_CREPRC_PCB_DETACHED;
-    if (detached) {
+    detached = kind == VMS_CREPRC_PCB_DETACHED;
+    if (detached || given) {
         if (!username_is_valid(args.username)) {
             args.status = SS__IVLOGNAM;
             goto out;
@@ -1924,8 +1949,24 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
             goto out;
         }
     }
-    args.status = vms_proc_create_for(proc, args.child_pid, args.flags, args.username,
+    args.status = vms_proc_create_for(proc, args.child_pid, kind, args.username,
                                       args.uic, args.privs, &args.vms_pid);
+    /* A LOGIN process (rd vms-a2c): SETIDENT is allowed in it while the task
+     * that is becoming LOGINOUT, and LOGINOUT's own image, run -- two image
+     * activations' worth (vms_proc_image_activated counts them down). A
+     * subprocess with a GIVEN identity ($CREPRC uic/prvadr) takes it now,
+     * from the executive, instead of stamping it itself. */
+    if ((args.status & 1) && (login || given)) {
+        struct vms_proc *np;
+
+        exec_lock(&vms_proc_hash_lock);
+        np = find_by_linux_pid(args.child_pid);
+        if (np && login)
+            np->login_images = 2;
+        exec_unlock(&vms_proc_hash_lock);
+        if (np && given)
+            vms_proc_apply_ticket_identity(np, args.username, args.uic, args.privs);
+    }
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;

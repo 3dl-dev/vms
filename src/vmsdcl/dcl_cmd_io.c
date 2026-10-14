@@ -97,6 +97,65 @@ static uint32_t lnm_attrs_from_qualifier(struct dcl_command *cmd)
 }
 
 /*
+ * rd vms-aae: THE TABLE A LOGICAL-NAME COMMAND NAMES.
+ *
+ * /TABLE=name is the general form (DCL Dictionary: ASSIGN, DEFINE, DEASSIGN);
+ * /PROCESS, /JOB, /GROUP and /SYSTEM are shorthands for four well-known
+ * tables, and /PROCESS is the default. Written once because all three
+ * commands make the same choice, and because the choice is now more than four
+ * names: lnm_exec_table_id() resolves the four AND any clusterwide table the
+ * executive holds -- LNM$SYSCLUSTER and LNM$CLUSTER included (rd vms-94a) --
+ * so DEFINE/TABLE=LNM$SYSCLUSTER reaches the real clusterwide table, which is
+ * what fire G's H4 asked for and got %DCL-W-IVQUAL instead.
+ *
+ * `out` receives the UPPERCASED name (VMS convention, as SHOW LOGICAL/TABLE=
+ * already does). Returns 0 when the name is no table this node holds, and
+ * then the caller refuses SS$_NOLOGTAB -- this layer never invents a table to
+ * put a name in, and lnm_create/lnm_delete refuse an unknown one as well.
+ */
+extern uint32_t lnm_exec_table_id(const char *table_name);
+
+static int dcl_lnm_table_of(struct dcl_command *cmd, char *out, size_t cap)
+{
+    const char *qtab = dcl_qualifier_value(cmd, "TABLE");
+    const char *t;
+    size_t k;
+
+    if (!qtab || !qtab[0]) {
+        t = dcl_has_qualifier(cmd, "SYSTEM") ? LNM_SYSTEM_TABLE
+          : dcl_has_qualifier(cmd, "GROUP")  ? LNM_GROUP_TABLE
+          : dcl_has_qualifier(cmd, "JOB")    ? LNM_JOB_TABLE
+          : LNM_PROCESS_TABLE;
+        for (k = 0; k + 1 < cap && t[k]; k++)
+            out[k] = t[k];
+        out[k] = '\0';
+        return 1;
+    }
+    for (k = 0; k + 1 < cap && qtab[k]; k++)
+        out[k] = (char)toupper((unsigned char)qtab[k]);
+    out[k] = '\0';
+    /*
+     * A table this node really holds: executive-resident (the four well-known
+     * ones and every clusterwide table) or one of the manager's own
+     * process-local tables -- which is what LNM$PROCESS_TABLE is in host
+     * build/test tooling, where there is no /dev/vms to key it in. Checked
+     * here so the refusal names the TABLE; lnm_create/lnm_delete refuse an
+     * unknown one as well, and neither ever creates a table to hold a name.
+     */
+    {
+        lnm_manager_t *mgr = lnm_get_manager();
+
+        if (!lnm_exec_table_id(out) &&
+            !(mgr && lnm_find_table(mgr, out))) {
+            dcl_error("SYSTEM", 4 /* F */, "NOLOGTAB",
+                      "no logical name table name match");
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
  * dcl_logical_is_terminal - does a resolved SYS$OUTPUT / SYS$INPUT / SYS$ERROR
  * equivalence name the terminal (the default), rather than a file to redirect
  * through? (vms-f89)
@@ -199,23 +258,6 @@ int cmd_assign(struct dcl_command *cmd)
     const char *equiv   = cmd->params[0];
     const char *logname = cmd->params[1];
 
-    /*
-     * vms-263 (Phase 2, docs/design-dcl-fidelity.md sec 5): /TABLE=name
-     * selects an arbitrary, caller-named logical-name table (DCL
-     * Dictionary, ASSIGN /TABLE) -- real syntax, but there is no
-     * generic "create/look up a table by name" registry anywhere in
-     * src/vmslnm, only the four well-known tables (LNM$PROCESS/JOB/
-     * GROUP/SYSTEM) that DEFINE and ASSIGN both route to below. Neither
-     * command implements it. Refuse honestly rather than silently
-     * ignoring it or guessing a table (INV-DCL).
-     */
-    if (dcl_has_qualifier(cmd, "TABLE")) {
-        dcl_error("DCL", 0, "NOTIMPL",
-                  "ASSIGN /TABLE is not yet implemented - no logical name "
-                  "was created");
-        return SS$_UNSUPPORTED;
-    }
-
     /* Uppercase the logical name (VMS convention) */
     char upper_name[256];
     size_t i;
@@ -224,23 +266,18 @@ int cmd_assign(struct dcl_command *cmd)
     upper_name[i] = '\0';
 
     /*
-     * Target table from the scope qualifiers (/PROCESS is the default) --
-     * the same precedence and the same three executive-resident tables
-     * cmd_define() below already routes to. LNM$SYSTEM/GROUP/JOB are wired
-     * through lnm_create() -> vms_kif -> /dev/vms (src/vmslnm/lnm_client.c's
-     * is_system_table()/is_group_table()/is_job_table()): real, shared with
-     * every other process on the node/group/job tree, and honestly fail
-     * SS$_NOSUCHDEV with no executive present -- no per-process fallback
-     * (INV-6). Reachable and already load-bearing for DEFINE, so ASSIGN
-     * wires to them too rather than refusing.
+     * Target table from /TABLE= or the scope qualifiers (/PROCESS is the
+     * default) -- the same choice cmd_define() and cmd_deassign() make
+     * (dcl_lnm_table_of). LNM$SYSTEM/GROUP/JOB and the clusterwide tables are
+     * wired through lnm_create() -> vms_kif -> /dev/vms: real, shared with
+     * every other process on the node, and honestly SS$_NOSUCHDEV with no
+     * executive present -- no per-process fallback (INV-6).
      */
-    const char *table = LNM_PROCESS_TABLE;
-    if (dcl_has_qualifier(cmd, "SYSTEM"))
-        table = LNM_SYSTEM_TABLE;
-    else if (dcl_has_qualifier(cmd, "GROUP"))
-        table = LNM_GROUP_TABLE;
-    else if (dcl_has_qualifier(cmd, "JOB"))
-        table = LNM_JOB_TABLE;
+    char table_buf[64];
+
+    if (!dcl_lnm_table_of(cmd, table_buf, sizeof(table_buf)))
+        return SS$_NOLOGTAB;
+    const char *table = table_buf;
 
     /*
      * vms-263: reach the REAL logical-name manager, mirroring cmd_define()'s
@@ -315,14 +352,12 @@ int cmd_define(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)logname[i]);
     upper_name[i] = '\0';
 
-    /* Determine target table from qualifiers (/PROCESS is the default) */
-    const char *table = LNM_PROCESS_TABLE;
-    if (dcl_has_qualifier(cmd, "SYSTEM"))
-        table = LNM_SYSTEM_TABLE;
-    else if (dcl_has_qualifier(cmd, "GROUP"))
-        table = LNM_GROUP_TABLE;
-    else if (dcl_has_qualifier(cmd, "JOB"))
-        table = LNM_JOB_TABLE;
+    /* Target table from /TABLE= or the scope qualifiers (rd vms-aae) */
+    char table_buf[64];
+
+    if (!dcl_lnm_table_of(cmd, table_buf, sizeof(table_buf)))
+        return SS$_NOLOGTAB;
+    const char *table = table_buf;
 
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
@@ -359,6 +394,19 @@ int cmd_define(struct dcl_command *cmd)
 
 int cmd_deassign(struct dcl_command *cmd)
 {
+    /*
+     * rd vms-aae: DEASSIGN/ALL/TABLE= deletes every name in ONE named table.
+     * The /ALL path below deletes one NAMED logical from each of the four
+     * well-known tables, which is a different operation, so the combination
+     * is refused rather than silently given the other one (INV-DCL). Checked
+     * before the parameter test because the real form carries no name at all.
+     */
+    if (dcl_has_qualifier(cmd, "ALL") && dcl_qualifier_value(cmd, "TABLE")) {
+        dcl_error("DCL", 0, "NOTIMPL",
+                  "DEASSIGN /ALL with /TABLE= is not implemented - no "
+                  "logical name was deleted");
+        return SS$_UNSUPPORTED;
+    }
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
         dcl_error("DCL", 2, "NOKEYW", "missing logical name");
         return SS$_BADPARAM;
@@ -371,16 +419,15 @@ int cmd_deassign(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)cmd->params[0][i]);
     upper_name[i] = '\0';
 
-    /* Determine target table from qualifiers (/PROCESS is the default) */
+    /* Target table from /TABLE= or the scope qualifiers (rd vms-aae) */
+    char table_buf[64];
     const char *table = LNM_PROCESS_TABLE;
     int all_tables = dcl_has_qualifier(cmd, "ALL");
+
     if (!all_tables) {
-        if (dcl_has_qualifier(cmd, "SYSTEM"))
-            table = LNM_SYSTEM_TABLE;
-        else if (dcl_has_qualifier(cmd, "GROUP"))
-            table = LNM_GROUP_TABLE;
-        else if (dcl_has_qualifier(cmd, "JOB"))
-            table = LNM_JOB_TABLE;
+        if (!dcl_lnm_table_of(cmd, table_buf, sizeof(table_buf)))
+            return SS$_NOLOGTAB;
+        table = table_buf;
     }
 
     lnm_manager_t *mgr = lnm_get_manager();

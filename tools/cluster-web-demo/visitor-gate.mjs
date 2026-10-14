@@ -64,7 +64,8 @@ import { chromium } from 'playwright';
 import fs from 'node:fs';
 import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal,
          silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy,
-         observeLogin, loginAction, allReady, USERNAME, AFTER_WAIT_MS, parseLoginHint } from './gate-eval.mjs';
+         observeLogin, loginAction, allReady, USERNAME, AFTER_WAIT_MS, parseLoginHint,
+         productVersionOf, versionWhy } from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
@@ -78,6 +79,13 @@ const LOGIN_BOUND_S = +(process.env.LOGIN_BOUND_S || RUN_MS / 1000);
 // logged in to (gate-eval.mjs LOGIN_NODES): it passes on offering Username:.
 const HINT_URL = process.env.DEMO_LOGIN_HINT_URL || new URL('/', URL_).href;
 const CREDS = {};
+// The OpenVMX version under test: OVMX_PRODUCT_VERSION of the vms tree this
+// gate was checked out at (the one source -- the gate and the build it grades
+// come from the same checkout), or OVMX_VERSION when grading a page against a
+// different checkout. Every OVMX node in the page must announce it, and only it
+// (gate-eval.mjs versionWhy).
+const IDENTITY_H = new URL('../../src/libvms/include/ovmx_identity.h', import.meta.url);
+let WANT_VERSION = process.env.OVMX_VERSION || null;
 const userFor = (w) => (CREDS[w] || {}).user;
 const passFor = (w) => (CREDS[w] || {}).pass || '';
 // A console that has not offered Username: gets a RETURN at most this often.
@@ -253,6 +261,7 @@ async function oneRun(spec, idx) {
   fs.mkdirSync(dir, { recursive: true });
   const R = { ...spec, order: spec.order.join(','), url: URL_, samples: [],
               verdict: null, lastSeen: {}, ...newObservations(), login_bound_s: LOGIN_BOUND_S,
+              want_version: WANT_VERSION,
               after_waited: {} };
   const lastWake = {};
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
@@ -375,6 +384,14 @@ await (async () => {
     process.exit(2);
   }
   CREDS.OVMXA = hint; CREDS.OVMXB = hint;
+  if (!WANT_VERSION) {
+    try { WANT_VERSION = productVersionOf(fs.readFileSync(IDENTITY_H, 'utf8')); } catch (e) { /* reported below */ }
+  }
+  if (!WANT_VERSION) {
+    console.error(`no OpenVMX version under test: set OVMX_VERSION or run from a vms checkout (${IDENTITY_H.pathname})`);
+    process.exit(2);
+  }
+  log(`build under test: OpenVMX ${WANT_VERSION} -- every OVMX node must announce it, and only it`);
   log(`logins: OVMX nodes as ${hint.user} (published at ${HINT_URL}); VAXC is not logged in to (Username: is its bar)`);
   fs.mkdirSync(OUT, { recursive: true });
   const rows = CASE.length ? MATRIX.filter((m) => CASE.includes(m.label))
@@ -397,7 +414,8 @@ await (async () => {
                    silent_never_starts: silentNeverStarts(r, ['OVMXB', 'VAXC']),
                    nodeA_worker: r.nodeA_worker, nodeA_why: nodeAStallWhy(r),
                    username_at: r.username_at, dcl_at: r.dcl_at, login_failed: r.login_failed,
-                   after_waited: r.after_waited });
+                   after_waited: r.after_waited,
+                   want_version: r.want_version, ovmx_versions: r.ovmx_versions, version_why: versionWhy(r) });
     fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 1));
   }
   const bad = results.filter((r) => !r.pass);

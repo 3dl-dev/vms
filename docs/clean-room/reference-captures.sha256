@@ -130,3 +130,4 @@ fa4573209eb679bc5b72047789ab896a11525fa17c1b961dc03aeec3c0899a98  tests/lab/capt
 85194c688b9cb2c253527277665fa3634eabd0daefa944f7acfb15e15a85f631  tests/lab/captures/vms-e09-dir-remove-20261013/rm-heldout-lnm1.pcap
 f2a2f473fc8c93863d6459af1afda15e3ac5fac453a3e99de7916bfb865b8a93  tests/lab/captures/vms-e09-dir-remove-20261013/e09a-dlm-and-bjoin.pcap
 3548d776cad7843501e803156459ef15e3c7a37ae09040cd8bec483775bed580  tests/lab/captures/vms-e09-dir-remove-20261013/e09b-dlm.pcap
+cfd51bb68a6faa519a48d76f353e68cf9b29e9af338a3e7c33ac0352308a90b3  tests/lab/captures/vms-f4e-db-pull-ready-20261014/r2-cm.pcap

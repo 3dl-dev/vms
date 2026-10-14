@@ -343,6 +343,9 @@ def main():
                       "cc -O -Wall -Wextra -I. -o vmsexitcompl "
                       "vmsexitcompl.c kif_transport_netbsd.c -lpthread "
                       ">> /tmp/toolbuild.log 2>&1 && "
+                      "cc -O -Wall -Wextra -I. -o vmscreator "
+                      "vmscreator.c kif_transport_netbsd.c "
+                      ">> /tmp/toolbuild.log 2>&1 && "
                       "echo TOOLS_BUILD_OK || cat /tmp/toolbuild.log",
                       build_timeout)
         if "TOOLS_BUILD_OK" not in out:
@@ -411,6 +414,32 @@ def main():
             return 14
         log("OK: module loaded and /dev/vms created")
 
+        # The creator (rd vms-6ed): every tool from here on is a VMS process
+        # the creator daemon makes; a shell-started one is not.
+        CR = "/root/ovmx/probe/vmscreator"
+        rc, out = run(child, netbsd_console.creator_start_cmd(CR), cmd_timeout)
+        if phase_token(out, "CREATOR") != "OK":
+            log("FAIL: the creator daemon did not start (ESTABLISH_SYSTEM)")
+            return 15
+        log("OK: the creator daemon holds this boot's ESTABLISH_SYSTEM")
+        # A tool started from the shell -- no creator -- is not a VMS process:
+        # the executive refuses its service call ESRCH (SS$_NONEXPR) instead of
+        # making it a row (rd vms-6ed; find-or-create is gone).
+        unc = ("O=$(%s getjpi_name nobody 2>&1); echo \"$O\" >>%s; "
+               "echo \"$O\" | grep -q 'PROCTAB IOCTLFAIL GETJPI rc=-3' "
+               "&& echo UNCREATED=REFUSED || echo UNCREATED=SERVED" % (PT, TX))
+        rc, out = run(child, unc, cmd_timeout)
+        if phase_token(out, "UNCREATED") != "REFUSED":
+            log("FAIL: a tool the executive did not create was served (it was "
+                "given a row on its first ioctl)")
+            return 16
+        log("OK: a tool the executive did not create is refused ESRCH "
+            "(SS$_NONEXPR) -- no ioctl makes its caller a VMS process")
+        PT = netbsd_console.created(CR, PT)
+        MB = netbsd_console.created(CR, MB)
+        LK = netbsd_console.created(CR, LK)
+        AC = netbsd_console.created(CR, AC)
+
         # =====================================================================
         # PROCTAB (collapsed): A ($SETPRN bg) launched, B ($GETJPI by name) and
         # C ($PROCESS_SCAN) query it, A killed -- all in one in-guest command,
@@ -470,7 +499,7 @@ def main():
         # and which never records an exit. The creator only polls $READEF (not
         # a process-table op), so the executive itself must notice the end.
         # =====================================================================
-        exc = ("EC=$(/root/ovmx/probe/vmsexitcompl 2>&1); "
+        exc = ("EC=$(%s 2>&1); " % netbsd_console.created(CR, "/root/ovmx/probe/vmsexitcompl") +
                "{ echo '### exitcompl'; echo \"$EC\"; } >>%s; "
                "echo \"$EC\" | grep -q '^EXITCOMPL SET' "
                "&& echo EXITCOMPL=PASS || echo \"EXITCOMPL=FAIL\"; echo \"$EC\"" % TX)
@@ -652,6 +681,7 @@ def main():
             % TX, cmd_timeout)
 
         # ---- cleanup --------------------------------------------------------
+        run(child, netbsd_console.CREATOR_STOP_CMD, cmd_timeout)
         run(child, "modunload vms", cmd_timeout)
         try:
             a.halt()

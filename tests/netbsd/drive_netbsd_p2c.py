@@ -349,6 +349,8 @@ def main():
                       "cd /root/ovmx/probe && "
                       "cc -O -Wall -Wextra -I. -o vmseflag "
                       "vmseflag.c kif_transport_netbsd.c >/tmp/toolbuild.log 2>&1 "
+                      "&& cc -O -Wall -Wextra -I. -o vmscreator "
+                      "vmscreator.c kif_transport_netbsd.c >>/tmp/toolbuild.log 2>&1 "
                       "&& echo TOOL_BUILD_OK || cat /tmp/toolbuild.log",
                       build_timeout)
         if "TOOL_BUILD_OK" not in out:
@@ -393,6 +395,16 @@ def main():
             log("FAIL: could not load the module / create /dev/vms")
             return 14
         log("OK: module loaded and /dev/vms created")
+
+        # ---- 4'. the creator (rd vms-6ed): every tool from here on is a VMS
+        # process the creator daemon makes; a shell-started one is not.
+        CR = "/root/ovmx/probe/vmscreator"
+        rc, out = run(child, netbsd_console.creator_start_cmd(CR), cmd_timeout)
+        if phase_token(out, "CREATOR") != "OK":
+            log("FAIL: the creator daemon did not start (ESTABLISH_SYSTEM)")
+            return 25
+        log("OK: the creator daemon holds this boot's ESTABLISH_SYSTEM")
+        EF = netbsd_console.created(CR, EF)
 
         # ---- 4a-4e. CROSS-PROCESS SHARED-STATE PROOF (collapsed) ----------
         # LOSS-TOLERANT TRANSPORT (rd vms-3e7): the emulated TCG serial drops
@@ -513,6 +525,7 @@ def main():
             "NetBSD cv(9) (THE PAYOFF)")
 
         # ---- 5. cleanup ---------------------------------------------------
+        run(child, netbsd_console.CREATOR_STOP_CMD, cmd_timeout)
         run(child, "modunload vms", cmd_timeout)
         try:
             a.halt()

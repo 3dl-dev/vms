@@ -120,15 +120,45 @@ uint32_t vms_local_csid = 1;
  */
 
 /*
- * vms_proc_get - find (or create) the vms_proc for `pid'. The shared facilities
- * need a stable per-process struct across a process's ioctls, keyed by pid; it
- * lives until its process ends (vms_proc_exithook deletes it, rd vms-9f32) or
- * module unload. Allocation happens OUTSIDE the table lock -- exec_zalloc may
- * sleep -- with a re-check after re-acquiring the lock to resolve a race between
- * two lwps of the same process.
+ * vms_proc_find - the vms_proc of task `pid', or NULL: a task the executive
+ * did not create has none (rd vms-2a5/vms-6ed). Every /dev/vms ioctl reaches
+ * its caller's row through this and refuses a NULL with ESRCH (SS$_NONEXPR);
+ * no ioctl creates a row for the task that issued it.
  */
 static struct vms_proc *
-vms_proc_get(pid_t pid)
+vms_proc_find(pid_t pid)
+{
+	struct vms_proc *p;
+	int bkt;
+
+	exec_lock(&vms_proc_hash_lock);
+	exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+		if (p->pid == pid) {
+			exec_unlock(&vms_proc_hash_lock);
+			return p;
+		}
+	}
+	exec_unlock(&vms_proc_hash_lock);
+	return NULL;
+}
+
+/*
+ * vms_proc_alloc - make the vms_proc for `pid' (or return the one it has). The
+ * only callers are the two ways a VMS process comes to exist: its creator's
+ * VMS_IOCTL_CREPRC_PCB (vms_proc_create_for) and the boot task's one
+ * ESTABLISH_SYSTEM (vms_proc_create_boot_task). The row lives until its
+ * process ends (vms_proc_exithook deletes it, rd vms-9f32) or module unload.
+ * Allocation happens OUTSIDE the table lock -- exec_zalloc may sleep -- with a
+ * re-check after re-acquiring the lock.
+ *
+ * The row is seeded with NO identity of its own: UIC 0, the default
+ * privileges only. Its identity is the one its creator gives it (or SYSTEM,
+ * for the boot task), applied by the caller -- never derived from the task's
+ * substrate credentials (rd vms-6ed: the uid/gid-derived UIC and the
+ * ROOT_GRANT a substrate-root task got are gone).
+ */
+static struct vms_proc *
+vms_proc_alloc(pid_t pid)
 {
 	struct vms_proc *p, *np;
 	int bkt;
@@ -146,39 +176,10 @@ vms_proc_get(pid_t pid)
 	if (np == NULL)
 		return NULL;
 	np->pid = pid;
-	/* The creator (rd vms-9f32): the VMS process (the real parent's PCB) that
-	 * started this one, told how it ended when it is deleted. Read from the
-	 * table, never from anything the process supplies. */
-	{
-		struct proc *pp = curproc->p_pptr;
-		struct vms_proc *op;
-		int obkt;
-
-		if (pp != NULL) {
-			exec_lock(&vms_proc_hash_lock);
-			exec_hash_for_each(vms_proc_hash, obkt, op, hash_node) {
-				if (op->pid == pp->p_pid) {
-					np->owner_vms_pid = op->vms_pid;
-					break;
-				}
-			}
-			exec_unlock(&vms_proc_hash_lock);
-		}
-	}
-
-	/*
-	 * Executive-resident identity (P4-A proctab, rd vms-ca7). prcnam/username/
-	 * terminal come "" from the zeroed allocation ($SETPRN / $SETIDENT stamp
-	 * them; terminal stays "" -- no device table in SRCS). uic is DERIVED from
-	 * the calling task's REAL credentials, never a value a process supplies:
-	 * exec_current_gid/uid are the kauth(9) twins of Linux from_kgid/kuid, and
-	 * [group,member] packs (gid<<16)|uid exactly as sys$getjpi's JPI$_UIC does
-	 * (mirrors vms_proc_register). pid_ref is the facility's opaque liveness
-	 * handle: it carries just the pid on this substrate, so the storage is
-	 * embedded in the PCB and pid_ref points at it (proc_find(9) takes no ref to
-	 * drop later). The p0/p1 extents and wake_pending come zeroed.
-	 */
-	np->uic = vms_proc_subst_uic(exec_current_uid(), exec_current_gid());
+	/* pid_ref is the facility's opaque liveness handle: it carries just the
+	 * pid on this substrate, so the storage is embedded in the PCB. uic,
+	 * prcnam, username and terminal come zeroed; the caller applies the
+	 * identity (see above). */
 	np->pid_ref_store.pid = pid;
 	np->pid_ref = &np->pid_ref_store;
 
@@ -193,41 +194,15 @@ vms_proc_get(pid_t pid)
 	 * visible. This mirrors src/kernel/vms_module.c's proc registration:
 	 *   - current_mode starts at PSL_C_USER (a fresh process runs in user mode;
 	 *     0 == PSL_C_KERNEL would be wrong, and zalloc gives 0).
-	 *   - the authorized/current privilege masks are DERIVED, not requested:
-	 *     exec_current_is_privileged() is the NetBSD kauth(9) twin of Linux
-	 *     capable(CAP_SYS_ADMIN) (a real credential read, not an asserted word).
-	 *     EVERY process -- privileged or not -- gets VMS_DEFAULT_PRIVS
-	 *     (TMPMBX|NETMBX), the privileges every VMS process holds by default;
-	 *     this matches src/kernel/vms_module.c's seed EXACTLY (privileged:
-	 *     ENFORCED|DEFAULT, unprivileged: DEFAULT) and is what lets a
-	 *     default-privilege $CREMBX of a temporary mailbox succeed (rd vms-f8a:
-	 *     omitting DEFAULT here made the P4-A mbx proof's $CREMBX return
-	 *     SS$_NOPRIV once proctab stopped masking it). A privileged caller ALSO
-	 *     gets VMS_PRV_M_ROOT_GRANT -- the access-mode privileges vms_access.c/
-	 *     vms_ast.c enforce (CMKRNL/CMEXEC/SETPRV) AND SYSNAM/GRPNAM/WORLD/MOUNT --
-	 *     so both the access-mode allow/deny paths and LNM$SYSTEM DEFINE at boot
-	 *     work (rd vms-72da). Broader SYSUAF privileges arrive later via $SETIDENT
-	 *     (proctab, P4-B), never conjured here. This seed is an OVMX glue choice
-	 *     (Rule 8), not a VMS-authentic value.
+	 *   - the authorized/current privilege masks start at VMS_DEFAULT_PRIVS
+	 *     (TMPMBX|NETMBX), the privileges every VMS process holds; the caller
+	 *     replaces them with the identity it applies.
 	 *   - each per-mode AST queue is enabled by default (Linux vms_module.c) with
 	 *     an empty (self-linked) pending ring and its own guard.
 	 *   - the hibernate cv + its paired lock back async AST delivery (vms-feb).
 	 */
 	np->current_mode = PSL_C_USER;
-	/*
-	 * A privileged (root/kauth) caller gets VMS_PRV_M_ROOT_GRANT | VMS_DEFAULT_PRIVS,
-	 * BYTE-IDENTICAL to src/kernel/vms_module.c (capable(CAP_SYS_ADMIN) path). This
-	 * previously hand-listed a SUBSET (CMKRNL|CMEXEC|SETPRV) that omitted SYSNAM,
-	 * so PID 1's lnm_setup_defaults could not DEFINE the system logicals
-	 * (SYS$SYSTEM et al.) -- the executive gates LNM$SYSTEM on SYSNAM|SYSPRV -- and
-	 * the netbsd-vax boot halted at %OVMX-F-EXECINIT with SYS$SYSTEM unresolved
-	 * (rd vms-72da). ENFORCED carries SYSNAM (+ WORLD/GRPNAM/MOUNT), restoring
-	 * exact Linux parity. Broader SYSUAF privileges still arrive later via
-	 * $SETIDENT (proctab, P4-B), never conjured here.
-	 */
-	np->perm_privs = exec_current_is_privileged()
-	               ? (VMS_PRV_M_ROOT_GRANT | VMS_DEFAULT_PRIVS)
-	               : VMS_DEFAULT_PRIVS;
+	np->perm_privs = VMS_DEFAULT_PRIVS;
 	np->cur_privs = np->perm_privs;
 	exec_lock_init(&np->mode_lock);
 	{
@@ -365,7 +340,7 @@ vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
 	if (found)
 		return SS__BADPARAM;            /* it already is a VMS process */
 
-	proc = vms_proc_get((pid_t)child_pid);
+	proc = vms_proc_alloc((pid_t)child_pid);
 	if (proc == NULL)
 		return SS__INSFMEM;
 	proc->owner_vms_pid = creator->vms_pid;
@@ -412,26 +387,24 @@ vms_proc_count_bufio_current(uint32_t n)
 struct vms_proc *
 vms_netbsd_proc_current(void)
 {
-	return vms_proc_get(curlwp->l_proc->p_pid);
+	return vms_proc_find(curlwp->l_proc->p_pid);   /* NULL: not a VMS process */
 }
 
 /*
  * vms_proc_create_boot_task - the boot task's PCB (rd vms-2a5), for
- * ESTABLISH_SYSTEM's one call. On this substrate every ioctl still
- * find-or-creates the caller's row (vms_proc_get) -- its removal, with the
- * NetBSD guest harnesses moved onto a creator, is the second half of vms-2a5
- * -- so the caller already has a row here and this is reached only through
- * that path's equivalent.
+ * ESTABLISH_SYSTEM's one call: the boot task has no creator, so this call
+ * makes its row (the facility then stamps SYSTEM onto it). No other ioctl
+ * makes a row for its caller (rd vms-6ed).
  */
 struct vms_proc *
 vms_proc_create_boot_task(void)
 {
-	return vms_proc_get(curlwp->l_proc->p_pid);
+	return vms_proc_alloc(curlwp->l_proc->p_pid);
 }
 
 /*
  * vms_proc_continue_identity - stamp the calling task's REAL PARENT's executive
- * identity onto `proc' (a child PCB vms_proc_get() has just created and seeded
+ * identity onto `proc' (a child PCB vms_proc_alloc() has just created and seeded
  * fresh) for VMS_IOCTL_REGISTER_CONTINUE. This is the NetBSD twin of
  * src/kernel/vms_module.c:vms_proc_continue_identity().
  *
@@ -439,8 +412,8 @@ vms_proc_create_boot_task(void)
  * activates an image IN the current process -- same PID, UIC, privileges. OVMX
  * fork()s + execv()s instead (src/vmsdcl/dcl_cmd_process.c), and the child
  * calls vms_kif_register_continue() BEFORE execv while it is still DCL's child.
- * Without this the child's PCB carried the FRESH kauth-seeded mask
- * vms_proc_get() derives (VMS_DEFAULT_PRIVS, plus VMS_PRV_M_ENFORCED for a
+ * Without this the child's PCB carried the FRESH mask vms_proc_alloc() seeds
+ * (VMS_DEFAULT_PRIVS; before rd vms-6ed also VMS_PRV_M_ENFORCED for a
  * root/kauth caller) -- which NEVER includes SYSPRV/BYPASS, since those arrive
  * only via $SETIDENT (VMS_IOCTL_SETIDENT) after login. So SYSTEM's DCL, holding
  * SYSPRV/BYPASS, activated AUTHORIZE/LOGINOUT into a child that did NOT, and the
@@ -459,7 +432,7 @@ vms_proc_create_boot_task(void)
  * and the image it activated are ONE VMS process ($GETJPI resolves either to
  * the same identity). Mirrors the Linux twin field-for-field; job_id is not
  * copied because the NetBSD substrate has no job glue yet (it stays 0 here, as
- * vms_proc_get leaves it -- honest omission, not a fake value).
+ * vms_proc_alloc leaves it -- honest omission, not a fake value).
  *
  * LOCKING. hash_lock (outer) covers the identity fields and vms_pid; each proc's
  * mode_lock (inner) covers its 64-bit privilege masks -- taken outer-then-inner,
@@ -468,7 +441,7 @@ vms_proc_create_boot_task(void)
  * the two mode_locks are never held at once and the 64-bit masks are never torn
  * (which matters on 32-bit VAX, where a uint64_t store is two words).
  *
- * The parent is matched by pid NUMBER -- the same key vms_proc_get() and every
+ * The parent is matched by pid NUMBER -- the same key vms_proc_find() and every
  * walk of vms_proc_hash use on this substrate; the facility reaper clears a dead
  * PCB before its pid can recycle, which is what makes the number a safe key.
  *
@@ -535,7 +508,7 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
 		/*
 		 * SHARE the parent's VMS PID only for an image-activation CONTINUE
 		 * (share_pid). A SUBPROCESS (_SUBPROCESS, vms-19e9) inherits the
-		 * identity above but KEEPS the fresh vms_pid vms_proc_get() minted --
+		 * identity above but KEEPS the fresh vms_pid vms_proc_alloc() minted --
 		 * a genuinely new VMS process, as $CREPRC creates. The Linux twin
 		 * mirror.
 		 */
@@ -888,10 +861,10 @@ vms_mbx_bigio(struct lwp *l, void *data, size_t argsz,
 		return EFAULT;
 	}
 
-	proc = vms_proc_get(l->l_proc->p_pid);
+	proc = vms_proc_find(l->l_proc->p_pid);
 	if (proc == NULL) {
 		exec_free(kbuf);
-		return ENOMEM;
+		return ESRCH;
 	}
 
 	r = fn(proc, (unsigned long)kbuf);
@@ -926,9 +899,9 @@ vms_acp_rw_bounce(struct lwp *l, void *data, int for_write)
 	void *bounce = NULL;
 	long r;
 
-	proc = vms_proc_get(l->l_proc->p_pid);
+	proc = vms_proc_find(l->l_proc->p_pid);
 	if (proc == NULL)
-		return ENOMEM;
+		return ESRCH;
 
 	/*
 	 * Bounce only an in-range transfer. len == 0 moves nothing; len > 1 MiB
@@ -982,9 +955,9 @@ vms_tt_rw_bounce(struct lwp *l, u_long cmd, void *data)
 	uint32_t len, plen = 0, ilen = 0;
 	long r;
 
-	proc = vms_proc_get(l->l_proc->p_pid);
+	proc = vms_proc_find(l->l_proc->p_pid);
 	if (proc == NULL)
-		return ENOMEM;
+		return ESRCH;
 
 	if (cmd == VMS_IOCTL_TT_READ) {
 		struct vms_tt_read_args *a = data;
@@ -1141,9 +1114,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DACEFC:
 	case VMS_IOCTL_DLCEFC:
 		uarg = data;
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 
 		switch (cmd) {
 		case VMS_IOCTL_SETEF:
@@ -1204,9 +1177,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_POWER:          /* rd vms-137e */
 	case VMS_IOCTL_NETCFG:         /* rd vms-137e */
 		uarg = data;
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 
 		switch (cmd) {
 		case VMS_IOCTL_DCLAST:
@@ -1254,9 +1227,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_MBX_SET_WRTATTN:
 	case VMS_IOCTL_MBX_CHKACC:
 		uarg = data;
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 
 		switch (cmd) {
 		case VMS_IOCTL_MBX_CREATE:
@@ -1313,9 +1286,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_TERM_GETRPI:
 	case VMS_IOCTL_TERM_SETCHAR:
 		uarg = data;
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 
 		switch (cmd) {
 		case VMS_IOCTL_ACP_MOUNT:
@@ -1406,9 +1379,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_TTSETMODE:
 	case VMS_IOCTL_SETTERM:
 		uarg = data;
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 
 		switch (cmd) {
 		case VMS_IOCTL_ASSIGN:
@@ -1441,24 +1414,24 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_TT_WRITE:
 		return vms_tt_rw_bounce(l, cmd, data);
 	case VMS_IOCTL_TT_SETMODE:
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 		return vms_facility_errno(vms_ioctl_tt_setmode(proc, (unsigned long)data));
 	case VMS_IOCTL_TT_SENSE:
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 		return vms_facility_errno(vms_ioctl_tt_sense(proc, (unsigned long)data));
 	case VMS_IOCTL_TT_OOBAST:        /* rd vms-f0fb: out-of-band ASTs */
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 		return vms_facility_errno(vms_ioctl_tt_oobast(proc, (unsigned long)data));
 	case VMS_IOCTL_TT_BRKTHRU:       /* rd vms-53a: broadcast to a terminal */
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 		return vms_facility_errno(vms_ioctl_tt_brkthru(proc, (unsigned long)data));
 
 	case VMS_IOCTL_ACP_READVBLK:
@@ -1481,7 +1454,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	 * lives in the kernel and not in the asking process. $HIBER/$WAKE block/
 	 * release in the executive (interruptible by deliverable ASTs); $SETIDENT/
 	 * $ESTABLISH_SYSTEM stamp an authenticated / SYSTEM identity, gated by the
-	 * caller's real host credential (exec_current_is_privileged).
+	 * executive itself: ESTABLISH_SYSTEM once per boot, SETIDENT for a process being
+	 * logged in that holds CMKRNL (rd vms-a2c).
 	 */
 	case VMS_IOCTL_SETPRN:
 	case VMS_IOCTL_GETJPI:
@@ -1503,9 +1477,12 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CREPRC_PCB:
 	case VMS_IOCTL_SPAWN_NOTIFY:
 		uarg = data;
-		proc = vms_proc_get(l->l_proc->p_pid);
-		if (proc == NULL)
-			return ENOMEM;
+		/* ESTABLISH_SYSTEM is the boot task's, which has no row yet: the
+		 * facility makes it (vms_proc_create_boot_task). Every other caller
+		 * the executive did not create is refused. */
+		proc = vms_proc_find(l->l_proc->p_pid);
+		if (proc == NULL && cmd != VMS_IOCTL_ESTABLISH_SYSTEM)
+			return ESRCH;
 
 		switch (cmd) {
 		case VMS_IOCTL_SETPRN:
@@ -1628,9 +1605,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CLUSTER_START:
 	case VMS_IOCTL_CLUSTER_STOP:
 		uarg = data;
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 
 		switch (cmd) {
 		case VMS_IOCTL_ENQ:
@@ -1693,9 +1670,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_LNM_DELETE:
 	case VMS_IOCTL_LNM_GETSCOPE:
 		uarg = data;
-		proc = vms_proc_get(l->l_proc->p_pid);
+		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
-			return ENOMEM;
+			return ESRCH;
 
 		switch (cmd) {
 		case VMS_IOCTL_LNM_DEFINE:

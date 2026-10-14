@@ -542,3 +542,45 @@ class NetBSDConsole(object):
         """Wait for the idle unique prompt (used to resync after an ad-hoc
         interaction that did not go through run())."""
         self.child.expect(self.prompt_re, timeout=timeout)
+
+
+# ---------------------------------------------------------------------------
+# The guest's creator of VMS processes (rd vms-6ed, tests/netbsd/guest/
+# vmscreator.c). A tool started from the root shell is not a VMS process: the
+# executive refuses it SS$_NONEXPR. Once the module is loaded the driver starts
+# the creator daemon (the boot task's one ESTABLISH_SYSTEM) and runs every tool
+# that calls a service as `<creator> <tool> args`, a subprocess the daemon
+# creates. Stop it before modunload: it holds /dev/vms open.
+# ---------------------------------------------------------------------------
+CREATOR_SOCK = "/tmp/vmscreator.sock"   # vmscreator's default: no -s needed
+CREATOR_LOG = "/tmp/vmscreator.log"
+# A short name for the client: each tool line carries it, and a console
+# command over the tty's input-line limit is cut off (its end marker with it).
+CREATOR_LINK = "/tmp/vc"
+
+
+def creator_start_cmd(creator):
+    """One shell command that starts the creator daemon unless it is already
+    listening, and prints CREATOR=OK once it is, else its log and CREATOR=FAIL.
+    Safe to re-issue (a retried command whose marker was lost): the daemon
+    makes this boot's one ESTABLISH_SYSTEM -- the executive refuses a second
+    until the module is reloaded -- so a running daemon is never restarted."""
+    return ("ln -sf %(c)s %(k)s; "
+            "if pgrep -x vmscreator >/dev/null && grep -q 'VMSCREATOR READY' %(l)s 2>/dev/null; "
+            "then echo CREATOR=OK; else "
+            "rm -f %(s)s %(l)s; "
+            "(%(c)s -d %(s)s >%(l)s 2>&1 &); i=0; "
+            "while ! grep -q 'VMSCREATOR READY' %(l)s 2>/dev/null && [ $i -lt 60 ]; "
+            "do sleep 1; i=$((i+1)); done; "
+            "grep -q 'VMSCREATOR READY' %(l)s && echo CREATOR=OK "
+            "|| { cat %(l)s; echo CREATOR=FAIL; }; fi"
+            % {"c": creator, "s": CREATOR_SOCK, "l": CREATOR_LOG, "k": CREATOR_LINK})
+
+
+CREATOR_STOP_CMD = "pkill -x vmscreator 2>/dev/null; sleep 1; true"
+
+
+def created(creator, tool):
+    """The command line that runs `tool` as a VMS process the creator makes
+    (through CREATOR_LINK, which creator_start_cmd points at `creator`)."""
+    return "%s %s" % (CREATOR_LINK, tool)

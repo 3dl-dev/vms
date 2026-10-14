@@ -2089,31 +2089,6 @@ static uint32_t subst_uid_alloc_locked(void)
     return 0;
 }
 
-/*
- * vms_proc_subst_uic - the UIC the NetBSD substrate's find-or-create
- * (vms_netbsd.c vms_proc_get) seeds a row with; it goes with that path in the
- * second half of rd vms-2a5. A task whose substrate uid is one the executive
- * gave a VMS process takes that process's UIC; any other keeps the [gid,uid]
- * derivation. Takes vms_proc_hash_lock itself.
- */
-uint32_t vms_proc_subst_uic(uint32_t uid, uint32_t gid)
-{
-    uint32_t uic = ((gid & 0xFFFFu) << 16) | (uid & 0xFFFFu);
-    struct vms_proc *p;
-    int bkt;
-
-    if (uid < OVMX_SUBST_UID_BASE || uid >= OVMX_SUBST_UID_BASE + OVMX_SUBST_UID_SPAN)
-        return uic;
-    exec_lock(&vms_proc_hash_lock);
-    exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
-        if (p->subst_uid == uid) {
-            uic = p->uic;
-            break;
-        }
-    }
-    exec_unlock(&vms_proc_hash_lock);
-    return uic;
-}
 
 long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg)
 {

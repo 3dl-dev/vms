@@ -110,7 +110,7 @@ def run(child, cmd, timeout, echo=True):
 
 
 def build_source_iso(artifacts_dir, out_iso):
-    for f in ("vms.kmod", "vmsdevalloc"):
+    for f in ("vms.kmod", "vmsdevalloc", "vmscreator"):
         p = os.path.join(artifacts_dir, f)
         if not os.path.isfile(p):
             raise RuntimeError("missing artifact: %s" % p)
@@ -240,12 +240,12 @@ def main():
                       "  test -e $dev || continue; "
                       "  if mount_cd9660 $dev /mnt2 2>/dev/null; then "
                       "    if test -f /mnt2/vmsdevalloc; then ok=$dev; "
-                      "      cp /mnt2/vmsdevalloc /mnt2/vms.kmod /root/ovmx/ && "
-                      "      umount /mnt2 && chmod +x /root/ovmx/vmsdevalloc && break; "
+                      "      cp /mnt2/vmsdevalloc /mnt2/vms.kmod /mnt2/vmscreator /root/ovmx/ && "
+                      "      umount /mnt2 && chmod +x /root/ovmx/vmsdevalloc /root/ovmx/vmscreator && break; "
                       "    else umount /mnt2 2>/dev/null; fi; "
                       "  fi; done; "
                       "echo \"OVMX CD = $ok\"; ls -l /root/ovmx; "
-                      "test -x /root/ovmx/vmsdevalloc && test -f /root/ovmx/vms.kmod",
+                      "test -x /root/ovmx/vmsdevalloc && test -x /root/ovmx/vmscreator && test -f /root/ovmx/vms.kmod",
                       cmd_timeout)
         if rc != 0:
             log("FAIL: could not stage the OVMX artifact CD in the guest")
@@ -296,7 +296,15 @@ def main():
             return HARNESS_ERROR
         ok("/dev/vms live at char major %s" % major)
 
-        P = "/root/ovmx/vmsdevalloc"
+        # The creator (rd vms-6ed): every probe is a VMS process the creator
+        # daemon makes; a shell-started one is not.
+        rc, out = run(child, netbsd_console.creator_start_cmd("/root/ovmx/vmscreator"),
+                      cmd_timeout)
+        if "CREATOR=OK" not in out.replace("echo CREATOR=OK", ""):
+            log("FAIL: the creator daemon did not start (ESTABLISH_SYSTEM)")
+            return HARNESS_ERROR
+        ok("the creator daemon holds this boot's ESTABLISH_SYSTEM")
+        P = netbsd_console.created("/root/ovmx/vmscreator", "/root/ovmx/vmsdevalloc")
 
         # ==============================================================
         # STEP 1 -- TEETH. A unit that is not in the table must be refused.
@@ -368,6 +376,7 @@ def main():
         expect_status(out, "DALLOC", CONSOLE, SS_NORMAL,
                       "$DALLOC %s" % CONSOLE)
 
+        run(child, netbsd_console.CREATOR_STOP_CMD, cmd_timeout)
         run(child, "modunload vms 2>/dev/null; true", cmd_timeout)
 
         log("=" * 70)

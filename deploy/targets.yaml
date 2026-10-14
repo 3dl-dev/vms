@@ -87,9 +87,9 @@ targets:
     pin: "https://openvmx.3dl.dev/boot/DEMO_PIN.json"
   - id: demo-vax-single
     rd: vms-208f
-    build: {note: "built by hand today (vms-208f)"}
-    deploy: {note: "image on vax.3dl.network (pcjs-vax Pages), named in openvmx-site index.html"}
-    probe: {kind: regex, url: "https://openvmx.3dl.dev/", pattern: "ovmx-vax-(v[0-9][0-9.-]*)\\.img\\.gz"}
+    build: {repo: 3dl-dev/vms, workflow: cluster-demo-nodeB.yml, trigger: "tag push (matrix node=single; attaches ovmx-vax-single.img.gz + vax-single-manifest.json)"}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml, trigger: 10-min tag poll}
+    probe: {kind: json, url: "https://openvmx.3dl.dev/demo/vax/vax-single-manifest.json", path: "version"}
   - id: demo-cluster-nodeA
     rd: vms-ca55
     gated: true

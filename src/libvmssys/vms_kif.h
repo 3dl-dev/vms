@@ -979,7 +979,7 @@ uint32_t vms_kif_power_off(void);
 
 /* Apply a network-configuration request through the executive (rd vms-137e):
  * req is VMS_NETCFG_*, subst_req the substrate's own struct ifreq/rtentry.
- * SYSPRV or BYPASS. *err = substrate errno on SS$_ABORT (NULL OK). */
+ * OPER. *err = substrate errno on SS$_ABORT (NULL OK). */
 uint32_t vms_kif_netcfg(uint32_t req, void *subst_req, int *err);
 
 /*

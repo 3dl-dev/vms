@@ -2100,7 +2100,7 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
 
 /*
  * TCPIP SET INTERFACE ifname /HOST=ip /NETWORK_MASK=mask
- * Configure a network interface (SYSPRV or BYPASS; applied by the executive).
+ * Configure a network interface (OPER; applied by the executive).
  */
 static int cmd_tcpip_set_interface(struct dcl_command *cmd)
 {
@@ -2143,7 +2143,7 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
     }
 
     /* Apply through the executive (rd vms-137e): network configuration is a
-     * privileged operation -- SYSPRV or BYPASS on this process -- and the
+     * privileged operation -- OPER on this process (rd vms-ec6) -- and the
      * executive performs it as the kernel; no OVMX process holds the
      * substrate's CAP_NET_ADMIN. Each request is the substrate's own
      * struct ifreq. Without the privilege the setting is only persisted. */
@@ -2159,7 +2159,9 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
         inet_pton(AF_INET, host_ip, &addr->sin_addr);
         st = vms_kif_netcfg(VMS_NETCFG_SET_IFADDR, &ifr, &err);
         if (st == SS$_NOPRIV) {
-            printf("%%TCPIP-W-PRIVREQ, operation requires SYSPRV or BYPASS privilege\n");
+            /* As VMS: %SYSTEM-E-NOPRIV, and nothing is recorded (rd vms-ec6). */
+            printf("%%SYSTEM-E-NOPRIV, insufficient privilege or object protection violation\n");
+            return SS$_NOPRIV;
         } else if (st == SS$_NOSUCHDEV) {
             printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the interface cannot be configured\n");
         } else if (st == SS$_UNSUPPORTED) {
@@ -2271,7 +2273,7 @@ static int cmd_tcpip_show_configuration(struct dcl_command *cmd)
 /*
  * TCPIP SET ROUTE /GATEWAY=ip /DEFAULT
  *   or  /DESTINATION=dest /GATEWAY=gw /NETWORK_MASK=mask
- * Configure a network route (SYSPRV or BYPASS; applied by the executive).
+ * Configure a network route (OPER; applied by the executive).
  */
 static int cmd_tcpip_set_route(struct dcl_command *cmd)
 {
@@ -2305,8 +2307,8 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
      * it the route is only recorded (persisted below) and never applied, so we
      * must NOT later claim it was added (INV-6). `applied` tracks whether the
      * live routing table actually changed. */
-    /* Apply through the executive (rd vms-137e): SYSPRV or BYPASS on this
-     * process; the executive performs it as the kernel. "Replace" semantics, as
+    /* Apply through the executive (rd vms-137e): OPER on this process, as
+     * VMS requires (measured, rd vms-ec6); the executive performs it as the kernel. "Replace" semantics, as
      * the old `ip route replace`: delete any route to the same destination,
      * then add. The request is the substrate's own struct rtentry. */
     int privileged = 1;
@@ -2342,8 +2344,11 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
         } else if (st == SS$_NOPRIV || st == SS$_UNSUPPORTED || st == SS$_NOSUCHDEV) {
             privileged = 0;
             if (st == SS$_NOPRIV) {
-                why = "requires SYSPRV or BYPASS";
-                printf("%%TCPIP-W-PRIVREQ, operation requires SYSPRV or BYPASS privilege\n");
+                /* As VMS: refused outright -- %SYSTEM-E-NOPRIV, nothing applied
+                 * and nothing recorded (real VAX V7.3, rd vms-ec6: a refused
+                 * SET ROUTE leaves no TCPIP$ROUTE record). */
+                printf("%%SYSTEM-E-NOPRIV, insufficient privilege or object protection violation\n");
+                return SS$_NOPRIV;
             } else if (st == SS$_NOSUCHDEV) {
                 why = "no executive";
                 printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the route cannot be applied\n");

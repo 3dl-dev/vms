@@ -4,7 +4,7 @@
  *
  * No OVMX process runs as substrate root, so none holds CAP_NET_ADMIN or
  * CAP_NET_BIND_SERVICE. TCP/IP's SET INTERFACE / SET ROUTE go through
- * VMS_IOCTL_NETCFG (SYSPRV or BYPASS on the caller's PCB) and a BG bind to a
+ * VMS_IOCTL_NETCFG (OPER on the caller's PCB, as VMS requires for SET ROUTE) and a BG bind to a
  * port below 1024 needs SYSPRV, BYPASS or OPER; the executive then acts as the
  * kernel. This suite is SYSTEM (the harness boot task made it):
  *   - it reads and rewrites the loopback interface's flags through the
@@ -138,7 +138,7 @@ int main(void)
               "an unprivileged process ([100,100], TMPMBX+NETMBX) the suite created reported");
         /* negctl: netcfg-privilege-unchecked */
         CHECK(rep.netcfg_st == SS$_NOPRIV,
-              "without SYSPRV or BYPASS, network configuration is refused SS$_NOPRIV");
+              "without OPER, network configuration is refused SS$_NOPRIV");
         /* negctl: bg-bind-reserved-port-unchecked */
         CHECK(rep.reserved_st == SS$_NOPRIV,
               "without SYSPRV, BYPASS or OPER, a reserved-port bind is refused SS$_NOPRIV");

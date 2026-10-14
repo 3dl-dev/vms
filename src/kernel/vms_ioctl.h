@@ -3740,7 +3740,7 @@ struct vms_power_args {
 
 /* Network configuration through the executive (rd vms-137e): TCP/IP's
  * SET INTERFACE / SET ROUTE apply an address, mask, interface flags or a route
- * for a caller holding SYSPRV or BYPASS, the executive acting as the kernel --
+ * for a caller holding OPER (rd vms-ec6), the executive acting as the kernel --
  * not the substrate's CAP_NET_ADMIN, which no OVMX process holds. `uptr` is the
  * caller's own substrate request (Linux: struct ifreq / struct rtentry), passed
  * straight to the substrate's network stack. */

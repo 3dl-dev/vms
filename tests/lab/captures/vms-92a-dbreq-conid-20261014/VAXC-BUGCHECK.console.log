@@ -1,0 +1,153 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+%CNXMAN,  received VAXcluster membership request from system OVMXA
+%CNXMAN,  proposing addition of system OVMXA
+%CNXMAN,  completing VAXcluster state transition
+
+**** Fatal BUG CHECK, version = V7.3     INVEXCEPTN, Exception while above ASTDEL or on interrupt stack
+
+    Crash CPU: 00        Primary CPU: 00
+
+    Active/available CPU masks: 00000001/00000001
+
+    Current process = NULL
+
+    Register dump
+
+        R0 = 00000008
+        R1 = 04080000
+        R2 = 8087D700
+        R3 = 80843CC0
+        R4 = 00000000
+        R5 = 8087D700
+        R6 = 00000000
+        R7 = 00000034
+        R8 = 8082B000
+        R9 = 00000087
+        R10= 00000000
+        R11= 7FFBA70A
+        AP = 7FFE7770
+        FP = 7FFE7754
+        SP = 8133B534
+        PC = 8044E27F
+        PSL= 04080009
+
+    Kernel/interrupt/boot stack
+
+        8133B53C  00000004
+        8133B540  7FFE7754
+        8133B544  FFFFFFFD
+        8133B548  00000001
+        8133B54C  00000040
+        8133B550  00000001
+        8133B554  00000005
+        8133B558  0000000C
+        8133B55C  00000001
+        8133B560  0000001C
+        8133B564  80A0A283
+        8133B568  04080005
+        8133B56C  80A0A26A
+        8133B570  80843CC0
+        8133B574  80871EC0
+        8133B578  80A0A4D2
+        8133B57C  8086A420
+        8133B580  80A02201
+        8133B584  80843CC0
+        8133B588  8081CD97
+        8133B58C  8085A080
+        8133B590  80828780
+        8133B594  8081D9D5
+        8133B598  8086A400
+        8133B59C  8089B1A4
+        8133B5A0  00000000
+        8133B5A4  8082B018
+        8133B5A8  8081E407
+        8133B5AC  8081DA65
+        8133B5B0  8082B018
+        8133B5B4  8133A210
+        8133B5B8  00000034
+        8133B5BC  8133E420
+        8133B5C0  00000087
+        8133B5C4  00000000
+        8133B5C8  7FFBA70A
+        8133B5CC  7FFE7770
+        8133B5D0  8054B8D2
+        8133B5D4  0000003E
+        8133B5D8  00000000
+        8133B5DC  00000002
+        8133B5E0  8133A000
+        8133B5E4  80809980
+        8133B5E8  8133E200
+        8133B5EC  87744A8C
+        8133B5F0  00000000
+        8133B5F4  804CD72E
+        8133B5F8  04030008
+        8133B5FC  804CD9A1
+
+
+    Loaded images 
+
+[SYSMSG]SYSMSG.EXE                     80315400 8035BE00
+[SYS$LDR]SYSLDR_DYN.EXE                80552200 80554200
+[SYS$LDR]DDIF$RMS_EXTENSION.EXE        80554600 80555800
+[SYS$LDR]RECOVERY_UNIT_SERVICES.EXE    80555A00 80556200
+[SYS$LDR]RMS.EXE                       8035C000 80388A00
+SYS$NTA.EXE                            803D1600 803D1800
+VAXCLUSTER_CACHE.EXE                   803D1C00 803D6800
+SYS$UTC_SERVICES.EXE                   803D6E00 803D7C00
+SYS$TRANSACTION_SERVICES.EXE           803D8200 803E6000
+SYS$IPC_SERVICES.EXE                   803E6400 80404400
+CPULOA.EXE                             80404600 80409A00
+LMF$GROUP_TABLE.EXE                    8040BE00 8040D800
+SYSLICENSE.EXE                         8040DC00 80410E00
+F11BXQP.EXE                            80411200 80430A00
+SNAPSHOT_SERVICES.EXE                  80431200 80431E00
+SYSGETSYI.EXE                          80432400 80434400
+SYSDEVICE.EXE                          80434800 80437200
+MESSAGE_ROUTINES.EXE                   80437800 8043DA00
+EXCEPTION.EXE                          8044E000 80458800
+LOGICAL_NAMES.EXE                      80459000 8047C800
+SECURITY.EXE                           8047D200 80486C00
+LOCKING.EXE                            80487400 8048E200
+PAGE_MANAGEMENT.EXE                    8048EC00 80498C00
+WORKING_SET_MANAGEMENT.EXE             804ADA00 804B3800
+IMAGE_MANAGEMENT.EXE                   804B4200 804B7800
+EVENT_FLAGS_AND_ASTS.EXE               804B7E00 804BA000
+IO_ROUTINES.EXE                        804BAA00 804CB000
+PROCESS_MANAGEMENT.EXE                 804CCA00 804DA400
+ERRORLOG.EXE                           80543C00 80544800
+PRIMITIVE_IO.EXE                       80544E00 80546000
+SYSTEM_SYNCHRONIZATION_UNI.EXE         80546400 8054A800
+SYSTEM_PRIMITIVES_MIN.EXE              8054AE00 8054EC00
+
+**** Starting memory dump, writing dump to unit number 0 
+. 
+**** Memory dump complete, dump written  to unit number 0

@@ -1313,6 +1313,17 @@ jobs:
           LAB_IMAGE: ovmx-vax-lab
         run: tests/lab-vax/run-boot.sh acceptance
 
+      # rd vms-649a: the boot mode the shipped demo images use (cluster-demo
+      # Node B, the single-node VAX browser demo) is sysboot-single, and no CI
+      # job ran it, so a login-probe regression after "Welcome" shipped in
+      # V0.7-10 unseen. Same slim disk as acceptance; it must reach Username:,
+      # log in SYSTEM/MANAGER to a DCL $ and survive two commands.
+      - name: "Sysboot-single — the demo images' boot mode: slim single disk to Username: and a usable DCL $"
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
+        run: tests/lab-vax/run-boot.sh sysboot-single
+
   # -----------------------------------------------------------------------
   # vax-status-gate (rd vms-b869, parent vms-3b3f). The VAX analogue of the
   # Alpha native-image gate (run-module-gp-activation-alpha.sh native-gate):

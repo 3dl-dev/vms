@@ -71,7 +71,7 @@ import netbsd_console
 # already has its own crash-hardened `_console_text()` / scattered
 # `except (pexpect.TIMEOUT, pexpect.EOF, Exception)` handling (see below), so
 # it is not re-derived onto `safe_expect()` here.
-from vaxharness import HARNESS_ERROR, PROOF_FAILED
+from vaxharness import HARNESS_ERROR, PROOF_FAILED, DCL_PROMPT
 
 
 # The milestone lines ovmx_init emits, in the order the flagless NetBSD boot
@@ -1125,14 +1125,14 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                         child.send("SYSTEM\r")
                         child.expect("Password:", timeout=30)
                         child.send("MANAGER\r")
-                        child.expect(r"\r?\n\$ ", timeout=120)
+                        child.expect(DCL_PROMPT, timeout=120)
                         log("PERSIST: SYSTEM/MANAGER authenticated, reached $ "
                             "(Purdy fix confirmed on the installed system)")
                         seen["login_dollar"] = True
                         child.send("SHOW TIME\r")
-                        c1 = child.expect([r"\r?\n\$ ", r"Username:"], timeout=60)
+                        c1 = child.expect([DCL_PROMPT, r"Username:"], timeout=60)
                         child.send("SHOW TIME\r")
-                        c2 = child.expect([r"\r?\n\$ ", r"Username:"], timeout=60)
+                        c2 = child.expect([DCL_PROMPT, r"Username:"], timeout=60)
                         if c1 == 0 and c2 == 0:
                             seen["login_persist"] = True
                             log("PERSIST-PASS: DCL session survived TWO post-login "

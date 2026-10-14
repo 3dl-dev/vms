@@ -71,7 +71,7 @@ import anita
 # (its main() is guarded by __name__ == "__main__").
 import drive_boot_vax as db
 from drive_boot_vax import expect_wake, _console_text, _hard_kill, log, env
-from vaxharness import HARNESS_ERROR, PROOF_FAILED
+from vaxharness import HARNESS_ERROR, PROOF_FAILED, DCL_PROMPT
 
 
 # --- OVMX$INSTALL.COM's real console strings (read from the procedure) --------
@@ -115,7 +115,7 @@ DISTRIB_SYS_PW = "MANAGER"
 # The DCL interactive prompt. The echoed foreign-command "$DUA100:..." image
 # spec contains "$D" (dollar-D), never "$ " (dollar-space), so a "\n$ " prompt
 # match never false-fires off a command echo.
-DCL_PROMPT = r"\r?\n\$ "
+# DCL_PROMPT: vaxharness.DCL_PROMPT (tolerates the VMS fill NUL, rd vms-649a)
 
 CMD_TO = 120     # per interactive-command console deadline
 

@@ -63,6 +63,9 @@ on:
       tcpip:
         description: 'tcpip (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.tcpip }}
+      vax_login:
+        description: 'vax_login (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.vax_login }}
 
 permissions:
   contents: read
@@ -97,6 +100,7 @@ jobs:
       alpha_activation: ${{ steps.decide.outputs.alpha_activation }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
       tcpip: ${{ steps.decide.outputs.tcpip }}
+      vax_login: ${{ steps.decide.outputs.vax_login }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -280,6 +284,26 @@ jobs:
               - 'src/vmsfs/include/vmsfs_ondisk.h'
               - 'src/libvmssys/kif_transport.h'
               - 'src/libvmssys/kif_transport_netbsd.c'
+            # rd vms-649a: the inputs of the VAX login path a shipped demo image
+            # boots (run-boot.sh sysboot-single): DCL, the executive terminal
+            # driver, LOGINOUT, the VAX harness and the boot scripts. A PR that
+            # touches one runs the SIMH sysboot-single boot; others do not
+            # (merges, nightly and dispatch run it via the non-PR force-true).
+            # Deliberately NOT '.github/workflows/**': a CI-only edit must not
+            # put a VAX boot on every PR.
+            vax_login:
+              - '.github/workflows/ci-vax.yml'
+              - 'src/vmsdcl/**'
+              - 'src/kernel-core/vms_tt.c'
+              - 'src/kernel-core/vms_tt.h'
+              - 'tools/vms_login.c'
+              - 'tools/loginout_display.c'
+              - 'src/vmslink/mk_loginout.sh'
+              - 'src/vmslink/loginout_rms_bind.c'
+              - 'src/ovmx_init/**'
+              - 'src/ovmx_provision/**'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/**'
+              - 'tests/lab-vax/**'
             netbsd_vax:
               - '.github/workflows/**'
               - 'tests/lab-vax/**'
@@ -446,6 +470,7 @@ jobs:
               echo "alpha_activation=${{ steps.filter.outputs.alpha_activation }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
               echo "tcpip=${{ steps.filter.outputs.tcpip }}"
+              echo "vax_login=${{ steps.filter.outputs.vax_login }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -466,5 +491,6 @@ jobs:
               echo "alpha_activation=true"
               echo "vax_toolchain=true"
               echo "tcpip=true"
+              echo "vax_login=true"
             } >> "$GITHUB_OUTPUT"
           fi

@@ -17,6 +17,7 @@ exception classes) and `pytest`.
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -402,6 +403,33 @@ class TestNegctlGateBashMirror:
     def test_bash_mirror_matches_the_new_carve_out(self, driver_exit_code, negctl, expected):
         assert _bash_negctl_gate(driver_exit_code, negctl) is expected
         assert _bash_negctl_gate(driver_exit_code, negctl) is vh.negctl_gate(driver_exit_code, negctl)
+
+
+# --------------------------------------------------------------------------
+# rd vms-649a: the DCL prompt as a VAX console really shows it.
+# --------------------------------------------------------------------------
+class TestDclPrompt:
+    @pytest.mark.parametrize("console", [
+        # Real VAX V7.3 keystroke oracle / OVMX dcl_main.c: CR LF, fill NUL, "$ ".
+        "Welcome to OpenVMX\r\n\r\n\x00$ ",
+        "  Last interactive login\r\n\x00$ ",
+        # The fill-less form older builds wrote still reads as a prompt.
+        "SHOW TIME\r\n  14-OCT-2026 18:00:00\r\n$ ",
+    ])
+    def test_matches_the_faithful_prompt(self, console):
+        assert re.search(vh.DCL_PROMPT, console)
+
+    @pytest.mark.parametrize("console", [
+        "\r\nUsername: ",
+        "$ RUN $DUA100:[SYS0]X.EXE",       # a $ inside a command echo
+        "\r\nTOTAL $5",                    # a $ that is not a prompt
+    ])
+    def test_does_not_fire_off_non_prompts(self, console):
+        assert not re.search(vh.DCL_PROMPT, console)
+
+    def test_the_old_pattern_misses_the_faithful_prompt(self):
+        """Why vms-649a happened: r'\\r?\\n\\$ ' never sees CR LF NUL '$ '."""
+        assert not re.search(r"\r?\n\$ ", "Welcome\r\n\x00$ ")
 
 
 # --------------------------------------------------------------------------

@@ -115,6 +115,18 @@ HARNESS_ERROR = 66
 
 
 # --------------------------------------------------------------------------
+# The DCL prompt as a VAX console really shows it (rd vms-649a). VMS DCL hands
+# the terminal driver CR LF, a fill NUL, then "$ " (keystroke oracle, real VAX
+# V7.3: "<CR><LF><NUL>$ "; src/vmsdcl/dcl_main.c, vms-f8c). A pattern of
+# r"\r?\n\$ " never matches that faithful prompt, so every login probe that
+# used it timed out right after "Welcome" once OVMX's executive terminal
+# driver emitted the fill (V0.7-9+). One pattern, shared by every VAX driver:
+# a line start, any fill NULs (or a stray CR), then "$ ".
+# --------------------------------------------------------------------------
+DCL_PROMPT = r"\r?\n[\r\x00]*\$ "
+
+
+# --------------------------------------------------------------------------
 # Bug #2: child.before (and .after) can be None, bytes, or something an
 # angry mock throws on. This is the ONE place that gets normalized.
 # --------------------------------------------------------------------------

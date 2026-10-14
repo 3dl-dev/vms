@@ -778,6 +778,7 @@ struct vms_proc {
     uint64_t            perm_privs;     /* permanent privileges */
     uint32_t            subst_uid;      /* substrate uid the executive gave it, 0 = none (vms-ac48) */
     uint64_t            image_privs;    /* the running installed image's (vms-bdc1) */
+    uint8_t             login_images;     /* rd vms-a2c: image activations in which SETIDENT is allowed (a login process: 2 at creation) */
     spinlock_t          mode_lock;
 
     /*
@@ -1314,6 +1315,7 @@ long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);
 /* rd vms-bdc1: installed-image privileges at activation (vms_access.c) */
 uint64_t vms_kfe_exec_privs(const void *img);
 void vms_proc_image_privs(struct vms_proc *proc, uint64_t img_privs);
+void vms_proc_image_activated(struct vms_proc *proc, uint64_t img_privs);
 int vms_kfe_exec_is(const void *img, const char *name);   /* rd vms-15c9 */
 long vms_ioctl_native_page0(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg);

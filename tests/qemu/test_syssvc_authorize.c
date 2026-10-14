@@ -127,7 +127,7 @@ static int run_authorize(const char *username, uint32_t uic, uint64_t privs,
      */
     fflush(NULL);
 
-    pid_t pid = ovmx_fork_subprocess();   /* a VMS subprocess of this suite (rd vms-2a5) */
+    pid_t pid = ovmx_fork_login();   /* a VMS subprocess of this suite (rd vms-2a5) */
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);

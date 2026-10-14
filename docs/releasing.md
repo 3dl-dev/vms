@@ -54,6 +54,32 @@ git tag 0.4 <merged-sha>
 git push origin 0.4
 ```
 
+### Before the tag: the cut checklist
+
+The tag is public and cannot be taken back, so everything that can fail is run
+**before** it, on the exact code the tag will carry.
+
+1. **Freeze.** Push the cut commit to `release-verify-<version>` and dispatch the
+   heavy legs on it (Kernel Executive, Alpha, VAX, Release E2E). Merge the bump PR
+   through the queue.
+2. **Demo visitor gate before the tag.** Run the cluster demo's visitor matrix on
+   the frozen build. Use openvmx-site's `track-cluster-demo` in preflight mode:
+   `gh workflow run track-cluster-demo.yml --repo 3dl-dev/openvmx-site -f tag=<version> -f ref=release-verify-<version> -f preflight=true`.
+   Node A is built from that ref and the gate runs that ref's matcher. Nothing is
+   deployed or pinned. The requirement is **0 VAX bugchecks across every order**.
+   OVMX never crashes a peer. Report every case's verdict as it is. (V0.7-9's gate
+   ran only after its tag, and V0.7-9 shipped crashing a real VAX: vms-f4e.)
+3. **Green by the tagged SHA.** The tag goes on the bump PR's queue merge commit.
+   Its merge-queue and push runs must be green. A run on the verify branch alone
+   is not enough, because the queue can fold in PRs that landed in between.
+4. **Notes are the tagged SHA's.** `release.yml` generates them with
+   `gen_release_notes.py --ref <tag>`, and `tools/check_release_notes.py` fails the
+   publish unless they list exactly `git log <previous tag>..<tag>`. After the tag,
+   the reconcile PR regenerates the in-tree `docs/RELEASE-NOTES-<version>.md` the
+   same way. A correction goes into `docs/release-highlights/<version>.md` only;
+   regenerate the notes and re-publish with `gh release edit --notes-file`. Never
+   hand-edit generated notes.
+
 The tag push fires `.github/workflows/release.yml`, which runs
 `tools/cut-release.sh` then `tools/publish-release.sh` to create the GitHub
 Release with all bundle assets attached and the generated notes as the release

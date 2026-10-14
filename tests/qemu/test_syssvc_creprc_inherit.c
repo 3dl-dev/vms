@@ -111,6 +111,10 @@ int main(void)
         return EXIT_SKIP;
     }
 
+    /* This suite stamps its own identity below, which only a login process
+     * may (rd vms-a2c): run the rest as one. */
+    ovmx_become_login();
+
     /*
      * THIS process becomes the NAMED CREATOR: SYSTEM, holding SYSPRV/SETPRV.
      * It is SYSTEM already (the harness boot task made it), and holds CMKRNL,
@@ -199,7 +203,7 @@ int main(void)
             CHECK(0, "B: pipe()");
         } else {
             fflush(NULL);
-            pid_t p = ovmx_fork_unprivileged(DROP_GID, DROP_UID);
+            pid_t p = ovmx_fork_unprivileged_login(DROP_GID, DROP_UID);
             if (p < 0) {
                 CHECK(0, "B: fork()");
                 close(relay[0]); close(relay[1]);

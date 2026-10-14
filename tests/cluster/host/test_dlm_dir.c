@@ -18,6 +18,7 @@
  *      back-shift deletion.
  */
 #include "cluster_fixture.h"
+#include "conformance_dump.h"
 #include "cluster_test.h"
 #include "vms_cluster_codec_dlm.h"
 #include "vms_cluster_codec_cm.h"
@@ -167,6 +168,11 @@ static void test_answers_match_the_real_directory(void)
 		 written == sizeof(built), "OVMX builds 'you master it'");
 	ct_check(answer_matches(built, a2, 0),
 		 "  *** byte-identical to VAX1's real 0xf9 answer ***");
+	/* rd vms-ac4f: the conformance gate's copy of the frame this node
+	 * really sends a real VAX -- 306 of the 908 frames two OVMX nodes sent
+	 * VAXC in one demo run were this one, and no row described a byte. */
+	conf_dump("dlm_dir_ans_you", VMS_OFF_SYSAP_BODY, "-",
+		  built + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
 	for (i = 28u; i < 39u; i++) {
 		if (i != 34u && built[VMS_OFF_SYSAP_BODY + i] != 0u)
 			zero = 0;
@@ -179,6 +185,8 @@ static void test_answers_match_the_real_directory(void)
 		 VMS_CODEC_OK, "OVMX builds 'the master is 00010002'");
 	ct_check(answer_matches(built, a3, 1),
 		 "  *** byte-identical to VAX1's real 0xf8 answer, CSID included ***");
+	conf_dump("dlm_dir_ans_redir", VMS_OFF_SYSAP_BODY, "csid=0x00010002",
+		  built + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
 
 	ct_check(vms_dlm_dir_answer_build(body_of(q3), blen_of(q3), 0xfa, 0u,
 					  built, sizeof(built), &written) ==

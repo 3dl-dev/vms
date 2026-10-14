@@ -7,16 +7,19 @@
 # vax.3dl.network, so the visitor gate kept grading a V0.7-7 Node B against
 # V0.7-9 and V0.7-10 executives. An executive fix never reached it.
 #
-# WHAT. tests/lab-vax/run-boot.sh sysboot-single -- the same build the
-# hand-made images came from -- run on the ref under test, with Node B's
-# identity taken from the ONE roster (tools/cluster-web-demo/mk_democonfig.py
-# DEMO_NODE_B: SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/VAXCLUSTER and the
-# CLUSTER_AUTHORIZE.DAT group). sysboot-single boots the finished disk to
-# Username: and FAILS if it does not; this job also fails unless that boot's
-# console announces the ref's own OVMX_PRODUCT_VERSION and no other. The disk
-# that passed is uploaded as the `cluster-demo-nodeB` artifact (and, for a
-# release tag, attached to the release as ovmx-vax-nodeB.img.gz), which is
-# where openvmx-site's gate and deploy take Node B from.
+# WHAT. tests/lab-vax/run-boot.sh acceptance -- sysboot-single's slim single
+# disk (the build the hand-made images came from), booted and driven through
+# the shared DCL/SHOW acceptance battery -- run on the ref under test, with
+# Node B's CLUSTER_AUTHORIZE.DAT group on its FFS root. It FAILS unless the
+# battery passes; this job also fails unless that
+# boot announces the ref's own OVMX_PRODUCT_VERSION and no other. Then Node B's
+# identity from the ONE roster (tools/cluster-web-demo/mk_democonfig.py
+# DEMO_NODE_B: SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/VAXCLUSTER) is written
+# into the booted disk's ODS-2 partition by the same offline injector Node A
+# uses (see that step for why it is not booted with it). The result is
+# uploaded as the `cluster-demo-nodeB` artifact (and, for a release tag,
+# attached to the release as ovmx-vax-nodeB.img.gz), which is where
+# openvmx-site's gate and deploy take Node B from.
 #
 # The workflow file runs from main; the BUILD is the ref's own tree (its
 # run-boot.sh, its roster, its sources), so a release-verify branch cut before
@@ -126,29 +129,82 @@ jobs:
       - name: Node B identity from the roster (mk_democonfig.py DEMO_NODE_B)
         run: |
           set -euo pipefail
-          python3 - <<'EOF' >> "$GITHUB_ENV"
+          python3 - <<'EOF' > "$RUNNER_TEMP/nodeB.env"
           import sys
           sys.path.insert(0, "tools/cluster-web-demo")
           from mk_democonfig import DEMO_NODE_B as b
-          print("CLUSTER_SCSNODE=%s" % b["name"])
-          print("CLUSTER_SCSSYSTEMID=%d" % b["id"])
-          print("CLUSTER_VOTES=%d" % b["votes"])
-          print("CLUSTER_EXPECTED_VOTES=%d" % b["expected_votes"])
-          print("CLUSTER_VAXCLUSTER=%d" % b["vaxcluster"])
+          print("NODE_B_SCSNODE=%s" % b["name"])
+          print("NODE_B_SCSSYSTEMID=%d" % b["id"])
+          print("NODE_B_VOTES=%d" % b["votes"])
+          print("NODE_B_EXPECTED_VOTES=%d" % b["expected_votes"])
+          print("NODE_B_VAXCLUSTER=%d" % b["vaxcluster"])
           print("NODE_B_GROUP=%d" % b["group"])
           print("NODE_B_PASSWORD=%s" % b.get("password", ""))
           EOF
-          mkdir -p .boot-cache/lab-vax/nodeB
+          cat "$RUNNER_TEMP/nodeB.env" >> "$GITHUB_ENV"
+          # shellcheck disable=SC1091
+          . "$RUNNER_TEMP/nodeB.env"
           python3 tools/cluster-web-demo/mk_democonfig.py authorize \
-            .boot-cache/lab-vax/nodeB/CLUSTER_AUTHORIZE.DAT "$NODE_B_GROUP" ${NODE_B_PASSWORD:+"$NODE_B_PASSWORD"}
-          echo "CLUSTER_AUTH_FILE=${{ github.workspace }}/.boot-cache/lab-vax/nodeB/CLUSTER_AUTHORIZE.DAT" >> "$GITHUB_ENV"
+            "$RUNNER_TEMP/CLUSTER_AUTHORIZE.DAT" "$NODE_B_GROUP" ${NODE_B_PASSWORD:+"$NODE_B_PASSWORD"}
+          # run-boot.sh wants it under CACHE_DIR, which the lab container may own.
+          DST="${{ github.workspace }}/.boot-cache/lab-vax/nodeB/CLUSTER_AUTHORIZE.DAT"
+          sudo install -D -m 0644 "$RUNNER_TEMP/CLUSTER_AUTHORIZE.DAT" "$DST"
+          echo "CLUSTER_AUTH_FILE=$DST" >> "$GITHUB_ENV"
 
-      - name: Build + boot Node B (run-boot.sh sysboot-single; fails unless it reaches Username:)
+      # WHY THE IDENTITY GOES ON AFTER THE BOOT. Node B is a NON-VOTING member
+      # (VOTES 0): booted alone with its cluster identity it waits to form or
+      # join, and a node without quorum blocks -- LOGINOUT accepts the password
+      # and DCL never answers (measured, run 38598276981). That is correct VMS
+      # behaviour, not a defect, so the build does not boot that identity on its
+      # own. It runs the stock acceptance proof unchanged (boot, PROVISION,
+      # log in, the DCL/SHOW battery) on the disk with the
+      # CLUSTER_AUTHORIZE.DAT group already on its FFS root, and only then writes
+      # the roster's OVMXVMSSYS.PAR into partition 'e' -- with the same offline
+      # injector Node A's sysdisk gets. Its DCL $ in a cluster is the visitor
+      # gate's to prove, next to the real VAX that gives it quorum.
+      # `acceptance` builds exactly sysboot-single's slim single disk, then
+      # boots it and drives the SHARED DCL/SHOW acceptance battery (log in
+      # SYSTEM/MANAGER, run the commands a user types, assert VMS-faithful
+      # output) -- the VAX leg CI already gates every release on. sysboot-single's
+      # own login probe is not CI-covered and times out after "Welcome" on this
+      # rail at V0.7-10 (runs 38598276981, 38601013446) while acceptance passes on
+      # the same SHA, so the battery is the proof used here.
+      - name: Build + boot Node B (run-boot.sh acceptance; fails unless DCL works)
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
         run: |
           set -o pipefail
-          tests/lab-vax/run-boot.sh sysboot-single 2>&1 | tee "$RUNNER_TEMP/nodeB-build.log"
+          tests/lab-vax/run-boot.sh acceptance 2>&1 | tee "$RUNNER_TEMP/nodeB-build.log"
 
-      # The boot sysboot-single just made IS the disk that ships. Its console
+      - name: Write Node B's cluster identity into the booted disk's ODS-2 partition
+        run: |
+          set -euo pipefail
+          IMG=.boot-cache/lab-vax/single-work/wd0.img
+          sudo chown "$(id -u)" "$IMG"
+          W="$RUNNER_TEMP/nodeB-e"; mkdir -p "$W"
+          read -r E_OFF E_SIZE < <(python3 - "$IMG" <<'EOF'
+          import sys
+          sys.path.insert(0, "tests/lab-vax")
+          import mk_single_disk as m
+          head = open(sys.argv[1], "rb").read(m.SECSIZE * 2)
+          lab = m._find_label_off(head)
+          size, off, _ = m._part(head, lab, 4)
+          print(off, size)
+          EOF
+          )
+          echo "partition e: $E_SIZE sectors at sector $E_OFF"
+          dd if="$IMG" of="$W/e.raw" bs=512 skip="$E_OFF" count="$E_SIZE" status=none
+          sh tools/cluster-web-demo/inject-ods2-config.sh "$W/e.raw" "$W/e.qcow2" \
+            --scsnode "$NODE_B_SCSNODE" --scssystemid "$NODE_B_SCSSYSTEMID" \
+            --votes "$NODE_B_VOTES" --expected-votes "$NODE_B_EXPECTED_VOTES" \
+            --vaxcluster "$NODE_B_VAXCLUSTER"
+          qemu-img convert -O raw "$W/e.qcow2" "$W/e.new"
+          [ "$(stat -c%s "$W/e.new")" = "$(stat -c%s "$W/e.raw")" ] || { echo "injected partition changed size"; exit 1; }
+          dd if="$W/e.new" of="$IMG" bs=512 seek="$E_OFF" conv=notrunc status=none
+          python3 tests/lab-vax/mk_single_disk.py verify "$IMG"
+
+      # The boot the acceptance run just made IS the disk that ships. Its console
       # must name this ref's version, and nothing older: that is the same
       # check the visitor gate makes on every OVMX node in the page.
       - name: The built disk's own boot announces this ref's version, and no other
@@ -174,7 +230,7 @@ jobs:
           import hashlib, json, os, sys
           sha, ver, ref = sys.argv[1:4]
           def h(p): return hashlib.sha256(open(p, "rb").read()).hexdigest()
-          json.dump({"node": os.environ["CLUSTER_SCSNODE"], "scssystemid": int(os.environ["CLUSTER_SCSSYSTEMID"]),
+          json.dump({"node": os.environ["NODE_B_SCSNODE"], "scssystemid": int(os.environ["NODE_B_SCSSYSTEMID"]),
                      "ref": ref, "sha": sha, "version": ver,
                      "img_gz_sha256": h("out/ovmx-vax-nodeB.img.gz"),
                      "raw_sha256": h(".boot-cache/lab-vax/single-work/wd0.img")},

@@ -29,8 +29,8 @@
  *               executive, so the child's row carried no user name and a
  *               capable()-derived UIC/privilege set. vms-d31d closed that:
  *               $CREPRC now stamps the child's EXECUTIVE row with the
- *               creator's identity (or the prvadr/uic override) via
- *               vms_kif_setident(), so the child inherits the creator's UIC,
+ *               creator's identity (or the prvadr/uic override), handed
+ *               to the executive in CREPRC_PCB, so the child inherits the creator's UIC,
  *               user name and privileges the way OpenVMS $CREPRC does.
  *   vms-pt1  -- the executive process table every process can query, with
  *               VMS-meaningful attributes. That is what the eleven services
@@ -41,7 +41,8 @@
  *     registered with vms_kif_setprn(); its VMS process id, reported through
  *     pidadr, is the one the executive assigned (read with
  *     vms_kif_getjpi_self()); and its UIC, user name and privilege masks are
- *     stamped onto its executive row with vms_kif_setident(), inherited from
+ *     given to its executive row by CREPRC_PCB when the executive creates
+ *     the process (rd vms-a2c: SETIDENT is LOGINOUT's alone), inherited from
  *     the creator's executive identity unless prvadr/uic override them. Another
  *     process reads all of these back through $GETJPI, and the Files-11
  *     reference monitor enforces the stamped UIC/privileges. (Before vms-d31d
@@ -1142,9 +1143,9 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * SYS$SYSTEM:SYSUAF.DAT and was refused its own authorization read.
      *
      * The creator reads its OWN executive identity here (authentic -- a
-     * process cannot forge the row the executive holds for it), and the
-     * child stamps the resulting identity after it registers, via
-     * vms_kif_setident() below.
+     * process cannot forge the row the executive holds for it), and hands
+     * the resulting identity to the executive in CREPRC_PCB, which applies
+     * it as it creates the child's row (rd vms-a2c).
      */
     struct vms_procinfo creator_info;
     memset(&creator_info, 0, sizeof(creator_info));
@@ -1595,34 +1596,19 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             }
 
             /*
-             * STAMP AN EXPLICIT /UIC or /PRIVILEGES OVERRIDE (vms-d31d), OR --
-             * for a DETACHED process -- THE WHOLE CREATOR-COMPUTED IDENTITY.
-             *
-             * For a subprocess the identity was already inherited by
-             * continuation above, so vms_kif_setident() is needed ONLY when
-             * the caller asked for an EXPLICIT override (uic != 0 or prvadr).
-             * The child now holds the creator's privilege masks, so a creator
-             * that holds SETPRV can make the override and one that cannot is
-             * refused (SS$_NOPRIV) -- exactly the $CREPRC/AUTHORIZE rule
-             * vms_ioctl_setident enforces. For a detached process there was no
-             * continuation, so the stamp still establishes the whole identity
-             * (SYSTEM's [1,4] UIC and privileges reading its own World-denied
-             * SYSUAF), as before. The no-user-name override was already
-             * refused above, so `child_username[0]` is non-empty whenever
-             * `engage` is set here.
-             *
-             * $CREPRC stamps identity only (vms-14a): a subprocess's identity
-             * is inherited/supplied, not authenticated against SYSUAF here, so
-             * the plain (quota-less) SETIDENT is used and the executive omits
-             * VMS_PI_V_QUOTA rather than invent a quota block. JIB quota
-             * inheritance is a separate facility increment.
+             * AN EXPLICIT /UIC or /PRIVILEGES OVERRIDE (vms-d31d) is not
+             * stamped here: the creator handed it to the executive with the
+             * PCB (VMS_CREPRC_PCB_F_IDENTITY for a subprocess; a detached
+             * process's whole identity always travels that way), and the
+             * executive applied the $CREPRC/AUTHORIZE rule -- SETPRV, or no
+             * more than the creator's own -- there. A creator that may not
+             * give it is refused (SS$_NOPRIV) and nothing is created.
+             * $CREPRC stamps identity only (vms-14a): no quota block is
+             * invented.
              */
-            if ((rep.status & 1) && engage && child_username[0] && !use_ticket) {
-                uint32_t ist = vms_kif_setident(child_username, child_uic,
-                                                child_privs);
-                if (!(ist & 1))
-                    rep.status = ist;
-            }
+            /* An explicit /UIC or /PRIVILEGES override reached the row
+             * through the creator's CREPRC_PCB (VMS_CREPRC_PCB_F_IDENTITY):
+             * nothing is stamped here (rd vms-a2c -- SETIDENT is LOGINOUT's). */
         }
 
         /*
@@ -1779,9 +1765,16 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         uint32_t cpid = 0;
         if (creprc_read_all(pcbreq[0], &cpid, sizeof(cpid)) == (ssize_t)sizeof(cpid)) {
             uint32_t go[2] = { 0, 0 };
-            go[0] = vms_kif_creprc_pcb(cpid,
-                                       detached ? VMS_CREPRC_PCB_DETACHED
-                                                : VMS_CREPRC_PCB_SUBPROCESS,
+            /* A LOGINOUT session is a LOGIN process: the one kind in which
+             * the executive lets SETIDENT stamp an identity (rd vms-a2c). A
+             * subprocess given an explicit uic/prvadr takes that identity from
+             * the executive here, never by stamping it itself. */
+            uint32_t pflags = detached ? VMS_CREPRC_PCB_DETACHED : VMS_CREPRC_PCB_SUBPROCESS;
+            if (loginout)
+                pflags |= VMS_CREPRC_PCB_F_LOGIN;
+            if (!detached && (uic != 0 || prvadr != NULL) && child_username[0])
+                pflags |= VMS_CREPRC_PCB_F_IDENTITY;
+            go[0] = vms_kif_creprc_pcb(cpid, pflags,
                                        child_username, child_uic, child_privs, &go[1]);
             (void)creprc_write_all(pcbgo[1], go, sizeof(go));
         }

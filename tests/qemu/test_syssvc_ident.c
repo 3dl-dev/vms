@@ -172,9 +172,9 @@ static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
      * subprocess with this suite's identity, or -- `drop` -- an UNPRIVILEGED
      * process in UIC [C_GID,C_UID] named C_NAME. */
     pid_t pid = drop
-        ? ovmx_fork_detached_st(C_NAME, ((uint32_t)C_GID << 16) | C_UID,
-                                PRV$M_TMPMBX | PRV$M_NETMBX, NULL)
-        : ovmx_fork_subprocess();
+        ? ovmx_fork_detached_flags_st(C_NAME, ((uint32_t)C_GID << 16) | C_UID,
+                                      PRV$M_TMPMBX | PRV$M_NETMBX, VMS_CREPRC_PCB_F_LOGIN, NULL)
+        : ovmx_fork_login();   /* it stamps the identity: a login process (rd vms-a2c) */
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -286,7 +286,7 @@ static int run_session_fork(char *out, size_t outsz)
      */
     fflush(NULL);
 
-    pid_t sess = ovmx_fork_subprocess();   /* the session: a process this suite creates */
+    pid_t sess = ovmx_fork_login();   /* the session: a process this suite creates */
     if (sess < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -318,7 +318,7 @@ static int run_session_fork(char *out, size_t outsz)
 
         /* 3. The session spawns a subprocess (the session creates it, as
          *    $CREPRC does), which claims everything. */
-        pid_t sub = ovmx_fork_subprocess();
+        pid_t sub = ovmx_fork_login();
         if (sub == 0) {
             uint32_t vpid = 0;
             uint32_t rst = ovmx_test_self(&vpid);
@@ -410,7 +410,7 @@ static void scenario_e_a_writes_b_reads(void)
         return;
     }
 
-    a_pid = ovmx_fork_subprocess();   /* process A: created by this suite (rd vms-2a5) */
+    a_pid = ovmx_fork_login();   /* process A: created by this suite (rd vms-2a5) */
     if (a_pid < 0) {
         CHECK(0, "E: could not fork process A");
         return;
@@ -462,7 +462,7 @@ static void scenario_e_a_writes_b_reads(void)
      */
     fflush(NULL);
 
-    b_pid = ovmx_fork_subprocess();   /* process B: created by this suite (rd vms-2a5) */
+    b_pid = ovmx_fork_login();   /* process B: created by this suite (rd vms-2a5) */
     if (b_pid < 0) {
         CHECK(0, "E: could not fork process B");
         close(a_hold[1]);
@@ -863,7 +863,7 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
      */
     fflush(NULL);
 
-    pid_t sess = ovmx_fork_subprocess();   /* the session: a process this suite creates */
+    pid_t sess = ovmx_fork_login();   /* the session: a process this suite creates */
     if (sess < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);

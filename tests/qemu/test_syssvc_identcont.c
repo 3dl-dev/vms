@@ -26,8 +26,8 @@
  *      setident()s the child itself before exec, so it never exercised
  *      inheritance across the activation fork.
  *
- *   B) A parent that setident'd DOWN to an unprivileged identity (FIELD,
- *      [200,10], no SYSPRV) activates AUTHORIZE as its image task (CREPRC_PCB CONTINUE). The
+ *   B) A parent with an unprivileged identity (FIELD, [200,10], no SYSPRV;
+ *      created so by this suite) activates AUTHORIZE as its image task (CREPRC_PCB CONTINUE). The
  *      image inherits the REDUCED identity and is REFUSED. Privileges do
  *      NOT reappear across the activation fork -- the security half.
  *
@@ -180,6 +180,55 @@ static int executive_present(void)
     return 1;
 }
 
+/*
+ * run_as - create a SUBPROCESS of this suite with the identity given ($CREPRC
+ * prvadr/uic, VMS_CREPRC_PCB_F_IDENTITY) and have it activate AUTHORIZE;
+ * its transcript lands in `out', AUTHORIZE's exit code in *rc (-1 unknown,
+ * -2 not activated). Returns the creation status.
+ */
+static uint32_t run_as(const char *name, uint32_t uic, uint64_t privs,
+                       char *out, size_t outsz, int *rc)
+{
+    int relay[2];
+    uint32_t cst = 0;
+    out[0] = '\0';
+    *rc = -2;
+    if (pipe(relay) < 0)
+        return 0;
+    pid_t p = ovmx_fork_subprocess_ident_st(name, uic, privs, &cst);
+    if (p < 0) {
+        printf("  ($CREPRC of %s: status %u)\n", name, (unsigned)cst);
+        close(relay[0]); close(relay[1]);
+        return cst;
+    }
+    if (p == 0) {
+        close(relay[0]);
+        char child_out[8192];
+        int child_rc = -1;
+        if (activate_authorize(child_out, sizeof(child_out), &child_rc) != 0) {
+            dprintf(relay[1], "ACTIVATE_FAILED\n");
+            _exit(3);
+        }
+        dprintf(relay[1], "RC=%d\n%s", child_rc, child_out);
+        close(relay[1]);
+        _exit(0);
+    }
+    close(relay[1]);
+    size_t used = 0;
+    for (;;) {
+        ssize_t n = read(relay[0], out + used, outsz - 1 - used);
+        if (n <= 0) break;
+        used += (size_t)n;
+        if (used >= outsz - 1) break;
+    }
+    out[used] = '\0';
+    close(relay[0]);
+    waitpid(p, NULL, 0);
+    if (strstr(out, "ACTIVATE_FAILED") == NULL && sscanf(out, "RC=%d", rc) != 1)
+        *rc = -1;
+    return cst;
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);  /* vms-b5b */
@@ -190,6 +239,10 @@ int main(void)
         printf("=== test_syssvc_identcont: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
     }
+
+    /* This suite stamps its own identity below, which only a login process
+     * may (rd vms-a2c): run the rest as one. */
+    ovmx_become_login();
 
     /* vms-739: mount the SYSUAF sysvol OURSELVES; do not free-ride on a
      * co-resident ACP suite's mount. Without VDA300: mounted + SYS$SYSDEVICE
@@ -211,84 +264,17 @@ int main(void)
     static char outA[8192], outB[8192];
     int rcA = -1, rcB = -1;
 
-    /* --- B: a setident'd-DOWN parent's activated image is REFUSED ----- */
-    /* A child process drops to FIELD (no SYSPRV) and THEN activates
-     * AUTHORIZE. Privileges must not reappear across the activation fork.
-     * Done in a subprocess so this main (SYSTEM) is not itself reduced, and
-     * before A: the subprocess takes this suite's identity, and only the
-     * suite's own SYSTEM identity (CMKRNL, SETPRV) may stamp FIELD -- A's
-     * SYSPRV-only identity may not (rd vms-2a5). */
-    {
-        int relay[2];
-        if (pipe(relay) < 0) {
-            CHECK(0, "B: pipe()");
-        } else {
-            pid_t p = ovmx_fork_subprocess();   /* a process this suite creates */
-            if (p < 0) {
-                CHECK(0, "B: fork()");
-                close(relay[0]); close(relay[1]);
-            } else if (p == 0) {
-                /* The reduced-privilege "DCL": drop to FIELD, then activate. */
-                close(relay[0]);
-                uint32_t ist = vms_kif_setident(FIELD_NAME, FIELD_UIC, FIELD_PRIVS);
-                if (ist != 1) {
-                    dprintf(relay[1], "SETIDENT_DOWN_FAILED=%u\n", (unsigned)ist);
-                    _exit(2);
-                }
-                char child_out[8192];
-                int child_rc = -1;
-                if (activate_authorize(child_out, sizeof(child_out), &child_rc) != 0) {
-                    dprintf(relay[1], "ACTIVATE_FAILED\n");
-                    _exit(3);
-                }
-                dprintf(relay[1], "RC=%d\n%s", child_rc, child_out);
-                close(relay[1]);
-                _exit(0);
-            } else {
-                close(relay[1]);
-                size_t used = 0;
-                for (;;) {
-                    ssize_t n = read(relay[0], outB + used, sizeof(outB) - 1 - used);
-                    if (n <= 0) break;
-                    used += (size_t)n;
-                    if (used >= sizeof(outB) - 1) break;
-                }
-                outB[used] = '\0';
-                close(relay[0]);
-                waitpid(p, NULL, 0);
-                if (sscanf(outB, "RC=%d", &rcB) != 1) rcB = -1;
-            }
-        }
-
-        dump("B: FIELD parent (no SYSPRV), image continues identity", outB);
-        CHECK(strstr(outB, "CONTINUE_STATUS=1\n") != NULL,
-              "B: the image task has the row its creator made (CREPRC_PCB CONTINUE)");
-        {
-            char want[64];
-            snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
-                     (unsigned long long)(uint64_t)FIELD_PRIVS);
-            CHECK(strstr(outB, want) != NULL,
-                  "B: the continued image holds the PARENT's REDUCED mask, with "
-                  "SYSPRV genuinely absent -- privileges did not reappear");
-        }
-        CHECK(strstr(outB, "%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)") != NULL &&
-              strstr(outB, "-RMS-E-PRV, insufficient privilege or file protection violation") != NULL,
-              "B: AUTHORIZE refused the continued unprivileged image (oracle-grounded message)");
-        CHECK(strstr(outB, "%UAF-I-AUTHVERSION") == NULL,
-              "B: the continued unprivileged image never saw the banner");
-        CHECK(rcB == 1, "B: AUTHORIZE exited 1 for the refused session");
-    }
-
     /* --- A: a SYSPRV parent's activated image is ADMITTED ------------- */
-    /* THIS process becomes SYSTEM (SYSPRV), then activates AUTHORIZE. The
-     * image never setident's -- it inherits SYSPRV purely by continuing
-     * this process across the activation fork. */
+    /* A process this suite creates as SYSTEM with SYSPRV -- $CREPRC with the
+     * identity given (rd vms-a2c: no process stamps its own identity outside a
+     * login) -- activates AUTHORIZE. The image never setident's -- it inherits
+     * SYSPRV purely by continuing its parent across the activation fork. */
     {
-        uint32_t ist = vms_kif_setident(SYS_NAME, SYS_UIC, SYS_PRIVS);
-        CHECK(ist == 1, "A: this process established the SYSTEM/SYSPRV identity to be continued");
+        uint32_t cst = run_as(SYS_NAME, SYS_UIC, SYS_PRIVS, outA, sizeof(outA), &rcA);
+        CHECK(cst & 1, "A: the suite created the SYSTEM/SYSPRV process whose identity is continued");
     }
 
-    if (activate_authorize(outA, sizeof(outA), &rcA) != 0) {
+    if (rcA == -2) {
         CHECK(0, "A: could not activate AUTHORIZE");
     } else {
         dump("A: SYSPRV parent, image continues identity", outA);
@@ -311,6 +297,33 @@ int main(void)
               "A: the continued image was never refused");
         /* negctl: register-continue-identity-dropped */
         CHECK(rcA == 0, "A: AUTHORIZE exited 0 for the admitted session");
+    }
+
+    /* --- B: an unprivileged parent's activated image is REFUSED -------- */
+    /* A process this suite creates as FIELD (no SYSPRV) activates AUTHORIZE.
+     * Privileges must not reappear across the activation fork. A separate
+     * process, so this main (SYSTEM) is not itself reduced. */
+    {
+        uint32_t cst = run_as(FIELD_NAME, FIELD_UIC, FIELD_PRIVS, outB, sizeof(outB), &rcB);
+        CHECK(cst & 1, "B: the suite created the FIELD process");
+
+        dump("B: FIELD parent (no SYSPRV), image continues identity", outB);
+        CHECK(strstr(outB, "CONTINUE_STATUS=1\n") != NULL,
+              "B: the image task has the row its creator made (CREPRC_PCB CONTINUE)");
+        {
+            char want[64];
+            snprintf(want, sizeof(want), "SELF_PRIVS=%016llx\n",
+                     (unsigned long long)(uint64_t)FIELD_PRIVS);
+            CHECK(strstr(outB, want) != NULL,
+                  "B: the continued image holds the PARENT's REDUCED mask, with "
+                  "SYSPRV genuinely absent -- privileges did not reappear");
+        }
+        CHECK(strstr(outB, "%UAF-E-NAOFIL, unable to open system authorization file (SYSUAF.DAT)") != NULL &&
+              strstr(outB, "-RMS-E-PRV, insufficient privilege or file protection violation") != NULL,
+              "B: AUTHORIZE refused the continued unprivileged image (oracle-grounded message)");
+        CHECK(strstr(outB, "%UAF-I-AUTHVERSION") == NULL,
+              "B: the continued unprivileged image never saw the banner");
+        CHECK(rcB == 1, "B: AUTHORIZE exited 1 for the refused session");
     }
 
     printf("=== test_syssvc_identcont: %d passed, %d failed ===\n", pass, fail);

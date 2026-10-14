@@ -7,10 +7,11 @@
 # vax.3dl.network, so the visitor gate kept grading a V0.7-7 Node B against
 # V0.7-9 and V0.7-10 executives. An executive fix never reached it.
 #
-# WHAT. tests/lab-vax/run-boot.sh sysboot-single -- the same build the
-# hand-made images came from -- run on the ref under test, with Node B's
-# CLUSTER_AUTHORIZE.DAT group on its FFS root. sysboot-single boots the disk,
-# logs in and reaches DCL, and FAILS otherwise; this job also fails unless that
+# WHAT. tests/lab-vax/run-boot.sh acceptance -- sysboot-single's slim single
+# disk (the build the hand-made images came from), booted and driven through
+# the shared DCL/SHOW acceptance battery -- run on the ref under test, with
+# Node B's CLUSTER_AUTHORIZE.DAT group on its FFS root. It FAILS unless the
+# battery passes; this job also fails unless that
 # boot announces the ref's own OVMX_PRODUCT_VERSION and no other. Then Node B's
 # identity from the ONE roster (tools/cluster-web-demo/mk_democonfig.py
 # DEMO_NODE_B: SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/VAXCLUSTER) is written
@@ -155,16 +156,26 @@ jobs:
       # join, and a node without quorum blocks -- LOGINOUT accepts the password
       # and DCL never answers (measured, run 38598276981). That is correct VMS
       # behaviour, not a defect, so the build does not boot that identity on its
-      # own. It runs the stock sysboot-single proof unchanged (boot, PROVISION,
-      # log in, DCL $, real writes to the ODS-2 partition) on the disk with the
+      # own. It runs the stock acceptance proof unchanged (boot, PROVISION,
+      # log in, the DCL/SHOW battery) on the disk with the
       # CLUSTER_AUTHORIZE.DAT group already on its FFS root, and only then writes
       # the roster's OVMXVMSSYS.PAR into partition 'e' -- with the same offline
       # injector Node A's sysdisk gets. Its DCL $ in a cluster is the visitor
       # gate's to prove, next to the real VAX that gives it quorum.
-      - name: Build + boot Node B (run-boot.sh sysboot-single; fails unless it reaches DCL)
+      # `acceptance` builds exactly sysboot-single's slim single disk, then
+      # boots it and drives the SHARED DCL/SHOW acceptance battery (log in
+      # SYSTEM/MANAGER, run the commands a user types, assert VMS-faithful
+      # output) -- the VAX leg CI already gates every release on. sysboot-single's
+      # own login probe is not CI-covered and times out after "Welcome" on this
+      # rail at V0.7-10 (runs 38598276981, 38601013446) while acceptance passes on
+      # the same SHA, so the battery is the proof used here.
+      - name: Build + boot Node B (run-boot.sh acceptance; fails unless DCL works)
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
         run: |
           set -o pipefail
-          tests/lab-vax/run-boot.sh sysboot-single 2>&1 | tee "$RUNNER_TEMP/nodeB-build.log"
+          tests/lab-vax/run-boot.sh acceptance 2>&1 | tee "$RUNNER_TEMP/nodeB-build.log"
 
       - name: Write Node B's cluster identity into the booted disk's ODS-2 partition
         run: |
@@ -193,7 +204,7 @@ jobs:
           dd if="$W/e.new" of="$IMG" bs=512 seek="$E_OFF" conv=notrunc status=none
           python3 tests/lab-vax/mk_single_disk.py verify "$IMG"
 
-      # The boot sysboot-single just made IS the disk that ships. Its console
+      # The boot the acceptance run just made IS the disk that ships. Its console
       # must name this ref's version, and nothing older: that is the same
       # check the visitor gate makes on every OVMX node in the page.
       - name: The built disk's own boot announces this ref's version, and no other

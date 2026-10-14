@@ -95,13 +95,17 @@ targets:
     gated: true
     build: {repo: 3dl-dev/openvmx-site, workflow: track-cluster-demo.yml}
     deploy: {repo: 3dl-dev/openvmx-site, workflow: track-cluster-demo.yml, trigger: after track-release}
-    probe: {kind: text, url: "https://openvmx.3dl.dev/demo/cluster/DEPLOYED_TAG"}
+    # PAYLOAD_VER is stamped into node-worker.js by every Node A deploy, so it
+    # names the payload actually served even when DEPLOYED_TAG is absent.
+    probe: {kind: regex, url: "https://openvmx.3dl.dev/demo/cluster/node-worker.js", pattern: "const PAYLOAD_VER = '([^']+)'"}
     pin: "https://openvmx.3dl.dev/demo/cluster/CLUSTER_DEMO_PIN.json"
   - id: demo-cluster-nodeB
     rd: vms-fbdd
-    build: {repo: 3dl-dev/vms, workflow: cluster-demo-nodeB.yml, inputs: {ref: "<tag>"}}
-    deploy: {note: "image + nodeB-manifest.json on vax.3dl.network (pcjs-vax Pages)"}
-    probe: {kind: json, url: "https://vax.3dl.network/machines/dec/vax/browser/nodeB-manifest.json", path: "version"}
+    gated: true
+    build: {repo: 3dl-dev/vms, workflow: cluster-demo-nodeB.yml, trigger: "tag push (attaches ovmx-vax-nodeB.img.gz + nodeB-manifest.json to the release)"}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-cluster-demo.yml, trigger: after track-release, gated with Node A}
+    probe: {kind: json, url: "https://openvmx.3dl.dev/demo/cluster/nodeB/nodeB-manifest.json", path: "version"}
+    pin: "https://openvmx.3dl.dev/demo/cluster/CLUSTER_DEMO_PIN.json"
   - id: demo-cluster-nodeC
     rd: vms-fbdd
     tracks: none

@@ -4,7 +4,7 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "network configuration through the executive (VMS_IOCTL_NETCFG, vms_ioctl_netcfg in kernel-core/vms_access.c) -- SYSPRV or BYPASS, as TCP/IP Services reserves SET INTERFACE / SET ROUTE to a privileged user";;
+        facility)     echo "network configuration through the executive (VMS_IOCTL_NETCFG, vms_ioctl_netcfg in kernel-core/vms_access.c) -- OPER, as TCP/IP Services requires for SET ROUTE (measured on VAX V7.3, rd vms-ec6)";;
         targets)      echo "kernel-core/vms_access.c";;
         suites_red)   echo "test_syssvc_netcfg";;
         blind_suites) echo "";;
@@ -12,7 +12,7 @@ defect_meta() {
         isolation)    echo "isolated";;
         why)          echo "vms_ioctl_netcfg no longer checks the caller's privileges: any process -- an unprivileged user's included -- can change interface addresses, flags and routes, with the executive acting as the kernel on its behalf. Gone after apply.";;
         require_fail) cat <<'EOT'
-without SYSPRV or BYPASS, network configuration is refused SS$_NOPRIV
+without OPER, network configuration is refused SS$_NOPRIV
 EOT
                       ;;
         knock_on_fail) echo "";;
@@ -22,6 +22,6 @@ EOT
 }
 
 defect_apply() {
-        sed -i 's|^    if ((privs \& (VMS_PRV_M_SYSPRV \| VMS_PRV_M_BYPASS)) == 0) {$|    if (0) { /* NEGCTL netcfg-privilege-unchecked */|' "$_file"
+        sed -i 's|^    if ((privs \& VMS_PRV_M_OPER) == 0) {$|    if (0) { /* NEGCTL netcfg-privilege-unchecked */|' "$_file"
     :
 }

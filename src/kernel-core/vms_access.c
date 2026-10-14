@@ -809,12 +809,15 @@ long vms_ioctl_power(struct vms_proc *proc, unsigned long arg)
 
 /*
  * vms_ioctl_netcfg - VMS_IOCTL_NETCFG (rd vms-137e): TCP/IP's SET INTERFACE and
- * SET ROUTE, applied by the executive for a caller whose OWN PCB has SYSPRV or
- * BYPASS enabled. TCP/IP Services reserves network configuration to a
- * privileged user; OVMX processes hold no substrate capability (nothing runs as
- * substrate root), so the executive performs the substrate request as the
- * kernel (exec_netcfg). The request itself is the caller's substrate structure,
- * read by the substrate's own network stack; only the requests below exist.
+ * SET ROUTE, applied by the executive for a caller whose OWN PCB has OPER
+ * enabled. Measured on a real VAX V7.3 with TCP/IP Services (rd vms-ec6,
+ * docs/oracle/vax73-tcpip-privileges.md): TCPIP SET ROUTE is refused
+ * %SYSTEM-E-NOPRIV with only TMPMBX and NETMBX, and with SYSPRV, BYPASS or
+ * SYSNAM alone; OPER alone is accepted. OVMX processes hold no substrate
+ * capability (nothing runs as substrate root), so the executive performs the
+ * substrate request as the kernel (exec_netcfg). The request itself is the
+ * caller's substrate structure, read by the substrate's own network stack;
+ * only the requests below exist.
  */
 /* exec_netcfg's substrate backends switch on these values. */
 _Static_assert(VMS_NETCFG_SET_IFADDR == 1 && VMS_NETCFG_SET_IFNETMASK == 2 &&
@@ -836,7 +839,7 @@ long vms_ioctl_netcfg(struct vms_proc *proc, unsigned long arg)
     privs = proc->cur_privs;
     exec_unlock(&proc->mode_lock);
     /* NEGCTL-ANCHORED (netcfg-privilege-unchecked) */
-    if ((privs & (VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS)) == 0) {
+    if ((privs & VMS_PRV_M_OPER) == 0) {
         args.status = SS__NOPRIV;
         goto out;
     }

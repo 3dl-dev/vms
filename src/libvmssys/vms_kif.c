@@ -2537,7 +2537,7 @@ uint32_t vms_kif_power_off(void)
  * vms_kif_netcfg - apply a network-configuration request through the executive
  * (VMS_IOCTL_NETCFG, rd vms-137e): `req` is VMS_NETCFG_*, `subst_req` the
  * substrate's own request structure (Linux: struct ifreq / struct rtentry).
- * SYSPRV or BYPASS on this process's PCB. *err gets the substrate errno when
+ * OPER on this process's PCB (rd vms-ec6, measured on VMS). *err gets the substrate errno when
  * the status is SS$_ABORT (NULL OK).
  */
 uint32_t vms_kif_netcfg(uint32_t req, void *subst_req, int *err)

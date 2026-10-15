@@ -332,12 +332,18 @@ static void peer_receive(uint32_t sys, const uint8_t *body, uint32_t len)
 	(void)dlm_req_fsm_redirect(&g_fsm, req.req_lkid, g_sim_master);
 }
 
+/* rd vms-97c2: the connection manager refusing to TAKE a frame (no send
+ * credit, no open CDT yet, a send rolled back). Nothing reaches the LAN. */
+static int g_send_refuses;
+
 static int fsm_send(void *ctx, vms_csid_t dst, const uint8_t *body,
 		    uint32_t len)
 {
 	uint32_t sys = which_sys(dst);
 
 	(void)ctx;
+	if (g_send_refuses)
+		return -1;
 	if (g_wire_n < MAX_WIRE) {
 		struct wire_frame *w = &g_wire[g_wire_n++];
 
@@ -616,6 +622,7 @@ static int hash_routing_to(vms_csid_t want, uint32_t *out)
 
 static void reset_wire(void)
 {
+	g_send_refuses = 0;
 	g_wire_n = 0;
 	g_unexpected_ops_rx = 0;
 	g_unexpected_op_first = 0;
@@ -1052,6 +1059,59 @@ static void master_departs_mid_request(void)
 	check_no_phantom_frames("master departs");
 }
 
+/*
+ * rd vms-97c2: A POST THE CONNECTION MANAGER COULD NOT TAKE, AGAINST THE REAL
+ * LOCK ENGINE.
+ *
+ * R1 proves the FSM retains the request block. Only this rung can show the
+ * other half: that the REAL vms_lock.c proxy LKB the $ENQ created is still
+ * there, still pending, and is GRANTED FOR REAL when the next beat finally
+ * gets the frame out. The shipped behaviour before this was to drop the block
+ * -- after which the proxy sat pending for ever with nothing able to complete
+ * it, which is what stopped the demo's OVMX/VAX member in the middle of
+ * STARTUP.COM (visitor-gate run 38760989407).
+ */
+static void a_refused_send_is_retried_and_granted_for_real(void)
+{
+	struct vms_getlki_args gk;
+	uint32_t hash = 0;
+	uint32_t lkid = 0, st;
+
+	printf("--- the connection manager refuses the frame; the beat "
+	       "retries it ---\n");
+	reset_wire();
+
+	ct_check(hash_routing_to(g_csid[1], &hash) == 0,
+		 "a wire value the vector routes to VAXB");
+	g_sim_master = g_csid[0];
+	g_sim_master_lkid = 0x00BEEF01u;
+	wire_teaches_hash("F11B$sOVMXSYS", hash);
+
+	g_send_refuses = 1;
+	st = do_enq("F11B$sOVMXSYS", LCK_K_EXMODE, &lkid);
+	ct_check(st == (uint32_t)SS__NORMAL && lkid != 0u,
+		 "$ENQ creates the proxy LKB and the post is accepted");
+	ct_check_eq_u32(g_wire_n, 0u, "*** NOTHING reached the LAN ***");
+	ct_check(dlm_req_fsm_find(&g_fsm, lkid) != NULL,
+		 "*** the requester arm STILL HOLDS the request ***");
+
+	do_getlki(lkid, &gk);
+	ct_check_eq_u32(gk.granted_mode, (uint32_t)LCK_K_NLMODE,
+			"the real proxy is pending, granted nothing");
+
+	/* The refusal clears; the very next beat sends it for real. */
+	g_send_refuses = 0;
+	g_clock.now_ms += (uint64_t)DLM_REQ_RETRY_MS + 1u;
+	(void)dlm_req_fsm_tick(&g_fsm);
+
+	ct_check(g_wire_n >= 1u, "*** the beat put the deferred frame out ***");
+	do_getlki(lkid, &gk);
+	ct_check_eq_u32(gk.status, (uint32_t)SS__NORMAL, "$GETLKI succeeds");
+	ct_check_eq_u32(gk.granted_mode, (uint32_t)LCK_K_EXMODE,
+			"*** and the REAL engine granted the lock at EX ***");
+	check_no_phantom_frames("refused send, retried");
+}
+
 int main(void)
 {
 	printf("== FC-P4.6 R2: the requester against a simulated cluster ==\n");
@@ -1074,6 +1134,7 @@ int main(void)
 	directory_is_the_master();
 	misaddressed_inbound_is_redirected();
 	master_departs_mid_request();
+	a_refused_send_is_retried_and_granted_for_real();
 
 	return ct_summary("dlm_requester");
 }

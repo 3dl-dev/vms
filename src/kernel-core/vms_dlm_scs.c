@@ -862,10 +862,24 @@ static uint32_t dlm_arm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 	       (uint32_t)SS__NORMAL : (uint32_t)SS__INSFMEM;
 }
 
-/* The fork-thread half of an ENQ/CONVERT post: rebuild it from the lock
+/*
+ * The fork-thread half of an ENQ/CONVERT post: rebuild it from the lock
  * database, then drive the FSM. Every non-OK outcome is the FSM's own counted
  * refusal. A RELEASE never arrives here -- it has no lock left to rebuild from
- * and takes dlm_arm_run_release below. */
+ * and takes dlm_arm_run_release below.
+ *
+ * A REFUSAL HERE MUST END THE ENGINE'S WAIT (rd vms-97c2). dlm_arm_post()
+ * queued this work and answered the caller SS$_NORMAL, so enq_proxy_request()
+ * is already ASLEEP on the proxy LKB in enq_wait_sync() -- a wait only an
+ * answer about THIS request can end. Counting the refusal and returning left
+ * that sleeper for ever: on the public cluster demo it was PID 1's DCL, half
+ * way through STARTUP.COM, and the node never offered Username: again.
+ *
+ * dlm_req_fsm_post() now reports DLM_REQ_OK whenever a request block exists --
+ * including a transmission it deferred onto the retransmit ladder -- so a
+ * non-OK return here means NO block was taken and nothing will ever retry it.
+ * That is an honest terminal answer, and it is delivered as one.
+ */
 static void dlm_arm_run_post(struct vms_dlm_scs *d, uint16_t kind,
 			     uint32_t req_lkid, uint32_t dst_csid)
 {
@@ -875,11 +889,19 @@ static void dlm_arm_run_post(struct vms_dlm_scs *d, uint16_t kind,
 	if (op == 0u || op == VMS_DLM_POST_DEQ)
 		return;
 	if (dlm_arm_refill_post(d, req_lkid, op, (vms_csid_t)dst_csid, &p) != 0) {
+		/* The lock is gone from the database, so there is usually
+		 * nobody left to wake; vms_lock_dlm_proxy_fail answers
+		 * SS$_IVLOCKID for an id that names no proxy, which is the
+		 * honest no-op. It is called anyway so no path out of here
+		 * can leave a waiter behind. */
 		d->posts_lock_gone++;
+		dlm_arm_fail(d, req_lkid, DLM_REQ_FAIL_PATHLOST);
 		return;
 	}
-	if (dlm_req_fsm_post(&d->req, &p) != DLM_REQ_OK)
+	if (dlm_req_fsm_post(&d->req, &p) != DLM_REQ_OK) {
 		d->posts_refused++;
+		dlm_arm_fail(d, req_lkid, DLM_REQ_FAIL_UNROUTABLE);
+	}
 }
 
 /*

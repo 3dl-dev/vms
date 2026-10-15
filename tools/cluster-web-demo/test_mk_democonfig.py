@@ -339,5 +339,74 @@ class TestRosterUniqueness(unittest.TestCase):
                 "in the roster, or quorum cannot be met even at CN=3 (rd vms-1a1)")
 
 
+class TestSystemDiskLabelsAreUniquePerNode(unittest.TestCase):
+    """rd vms-3ea: no two cluster members may master their system disks with
+    one ODS-2 volume label.
+
+    WHY THIS IS A TEST AND NOT A COMMENT. The label is the Files-11 lock
+    namespace: acp_vol_resnam_kind() (src/kernel-core/vmsfs_acp.c) spells a
+    volume's locks "F11B$<kind><label>", so two members whose DIFFERENT local
+    system disks carry one label contend on ONE clusterwide resource for
+    unrelated local I/O -- and vms_lock_acp_vol_ex() takes that resource EX
+    with LCK$M_SYNC and no LCK$M_NOQUEUE, an unbounded wait. It was observed
+    on the wire in visitor-gate run 38760989407: BOTH OVMX members put
+    "F11B$sOVMXSYS" on the LAN, for two disks neither of which is served to
+    the other. VMS does not permit two cluster-visible volumes with one label.
+
+    The check is on the BUILD CONFIGURATION, which is where the defect lives:
+    every image was mastered with the hardcoded default.
+    """
+
+    REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def _read(self, rel):
+        with open(os.path.join(self.REPO, rel), "r", encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_vax_mastering_label_is_a_knob_not_a_literal(self):
+        """run-boot.sh must master from $SYSVOL_LABEL, so a per-node label can
+        be given at build time. A re-hardcoded literal reddens this."""
+        s = self._read("tests/lab-vax/run-boot.sh")
+        self.assertIn('SYSVOL_LABEL="${SYSVOL_LABEL:-OVMXSYS}"', s,
+                      "run-boot.sh no longer declares the SYSVOL_LABEL knob")
+        self.assertNotIn("ods2 master /out/'\"$(basename \"${SYSVOL_IMG}\")\"' OVMXSYS", s,
+                         "the system volume is mastered with a hardcoded label again")
+        self.assertEqual(
+            s.count("' '\"${SYSVOL_LABEL}\"' /tmp/stage 64"), 3,
+            "all three vmsfs_master sites must take the label from the knob")
+
+    def test_node_b_is_built_with_its_own_label(self):
+        """cluster-demo-nodeB.yml must give the clustered Node B a label of its
+        own, derived from its SCSNODE -- the form the one real system on this
+        wire uses (SCSNODE VAXC labels its system disk VAXCSYS)."""
+        s = self._read(".github/workflows/cluster-demo-nodeB.yml")
+        self.assertIn('export SYSVOL_LABEL="${NODE_B_SCSNODE}SYS"', s,
+                      "Node B is no longer built with a per-node system-disk label")
+
+    def test_the_acceptance_battery_reads_the_same_knob(self):
+        """A battery that asserts a hardcoded label would go red on a per-node
+        build, and the temptation would be to weaken the battery. It reads the
+        knob instead, so the two cannot drift apart."""
+        s = self._read("tests/lab-vax/test_dcl_acceptance_vax.sh")
+        self.assertIn('export VOLUME_LABEL="${SYSVOL_LABEL:-OVMXSYS}"', s,
+                      "the VAX acceptance battery hardcodes a volume label again")
+
+    def test_node_b_label_differs_from_the_default_node_a_is_built_with(self):
+        """The whole point: Node A (Dockerfile.bootable / the x86 image) is
+        mastered with the default, so Node B's must not resolve to it."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "mk_democonfig", os.path.join(self.REPO, "tools/cluster-web-demo/mk_democonfig.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        node_b = mod.DEMO_NODE_B["name"]
+        self.assertTrue(node_b, "DEMO_NODE_B has no SCSNODE")
+        self.assertNotEqual(node_b + "SYS", "OVMXSYS",
+                            "Node B's derived label collides with the default "
+                            "every other OVMX image is mastered with")
+        self.assertLessEqual(len(node_b + "SYS"), 12,
+                             "an ODS-2 volume label is 12 characters")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -143,7 +143,7 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	 * body[20:24] MUST NOT GO OUT ZERO (rd vms-c55). The cell is the master's
 	 * handle once one exists and the REQUESTING PROCESS's id before that; a
 	 * real VMS directory answers a zero cell body[34] = 0xfe (12 of 12 in the
-	 * corpus, 0 of 19,916 nonzero ones) and a 0xfe is the last frame a real
+	 * corpus, 0 of 19,370 nonzero ones) and a 0xfe is the last frame a real
 	 * VAX sent before each captured LOCKMGRERR. A caller that holds neither
 	 * value holds no requester, so this is refused here -- the same shape as
 	 * the codec's refusal of lock id 0 -- rather than emitted as a zero.

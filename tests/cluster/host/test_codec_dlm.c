@@ -1697,7 +1697,7 @@ static void test_dlm_seq_and_tail(void)
  * REQUESTING PROCESS's id until then -- and it is never zero. Census over every
  * committed capture, 21,496 real cat-0x02 op-0x01 requests: 20,365 PID-form,
  * 1,116 a master lock id, 15 zero (0.07%). What a real directory answers a zero
- * cell: body[34] = 0xfe, 12 of 12, and 0 of 19,916 nonzero ones -- and a 0xfe is
+ * cell: body[34] = 0xfe, 12 of 12, and 0 of 19,370 nonzero ones -- and a 0xfe is
  * the last frame a real VAX sent before each captured LOCKMGRERR.
  */
 static uint32_t ct_le32(const uint8_t *p)

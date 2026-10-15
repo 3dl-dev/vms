@@ -1269,7 +1269,7 @@ EOF
         targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
         suites_red)   echo "test_dlm_requester";;
         isolation)    echo "isolated";;
-        why)          echo "vms_dlm_enq_request_build() goes back to writing only the master handle at body[20:24], so a fresh request leaves it zero -- which is what a real OpenVMS VAX V7.3 directory answers body[34] = 0xfe to (12 of 12 zero-cell answers in the corpus, 0 of 19,916 nonzero ones), the last frame it sent before each captured LOCKMGRERR.";;
+        why)          echo "vms_dlm_enq_request_build() goes back to writing only the master handle at body[20:24], so a fresh request leaves it zero -- which is what a real OpenVMS VAX V7.3 directory answers body[34] = 0xfe to (12 of 12 zero-cell answers in the corpus, 0 of 19,370 nonzero ones), the last frame it sent before each captured LOCKMGRERR.";;
         require_fail) hd_lines <<'EOF'
 body[20:24] == the LKB's master handle, or its requesting PID while there is none
 ...and body[20:24] is never zero

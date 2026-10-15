@@ -845,6 +845,7 @@ run_acceptance_session() {
       -e OVMX_ARTIFACTS=/artifacts -e OVMX_NETBSD_DIR=/netbsd \
       -e NETBSD_WORKDIR="${workdir}" \
       -e OVMX_SINGLE_RQ0_TYPE="${SINGLE_RQ0_TYPE}" \
+      -e SYSVOL_LABEL="${SYSVOL_LABEL}" \
       "$@" \
       -v "${CACHE_DIR}:/cache" -v "${ARTIFACTS_DIR}:/artifacts:ro" \
       -v "${REPO}:/src:ro" \

@@ -383,6 +383,19 @@ class TestSystemDiskLabelsAreUniquePerNode(unittest.TestCase):
         self.assertIn('export SYSVOL_LABEL="${NODE_B_SCSNODE}SYS"', s,
                       "Node B is no longer built with a per-node system-disk label")
 
+    def test_the_label_is_PLUMBED_into_the_acceptance_container(self):
+        """MEASURED GAP, not a hypothetical (vms run 38811663322). Declaring
+        the knob and reading it is not enough: the battery runs INSIDE the lab
+        container, so unless run_acceptance_session passes SYSVOL_LABEL through
+        `docker run -e`, it silently defaults and the battery asserts OVMXSYS
+        against a disk mastered OVMXBSYS. That is exactly what happened, and
+        the source-text assertions below did NOT catch it -- so the plumbing
+        gets its own assertion."""
+        s = self._read("tests/lab-vax/run-boot.sh")
+        self.assertIn('-e SYSVOL_LABEL="${SYSVOL_LABEL}"', s,
+                      "run_acceptance_session no longer passes the volume "
+                      "label into the container the battery runs in")
+
     def test_the_acceptance_battery_reads_the_same_knob(self):
         """A battery that asserts a hardcoded label would go red on a per-node
         build, and the temptation would be to weaken the battery. It reads the

@@ -36,3 +36,23 @@ jobs:
             -v "$PWD/tests/qemu/test_release_acceptance_e2e.sh:/test.sh:ro" \
             -v "$RUNNER_TEMP/rel:/release:ro" \
             --entrypoint bash ovmx-boot-a64:ci /test.sh
+  a64-emulated-cost:
+    # Measures the wall cost of the same arm64 build from an x86_64 runner
+    # (kernel cross-compiled natively; link-native/builder stages under binfmt).
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+      - name: Build the arm64 bootable set from x86_64 (timed)
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          docker buildx build -f distro/Dockerfile.bootable --platform linux/arm64 \
+            --output type=local,dest="$RUNNER_TEMP/out" .
+          echo "ELAPSED_S=$(( $(date +%s) - start ))"
+          ls -la "$RUNNER_TEMP/out/boot"

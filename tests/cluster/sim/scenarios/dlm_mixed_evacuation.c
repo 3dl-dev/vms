@@ -445,6 +445,15 @@ static void proc_init(struct vms_proc *p)
 	exec_lock_init(&p->mode_lock);
 	exec_lock_init(&p->lock_list_lock);
 	exec_list_head_init(&p->locks);
+	/* Every PCB the executive makes carries a process id, and the lock
+	 * manager puts it at body[20:24] of a cross-node request that has no
+	 * master handle yet (rd vms-c55). A PCB with none is one the executive
+	 * never made, so the harness gives each one its own. */
+	{
+		static uint32_t next_vms_pid = 0x10000001u;
+
+		p->vms_pid = next_vms_pid++;
+	}
 	for (i = 0; i < 4; i++) {
 		exec_lock_init(&p->ast[i].lock);
 		exec_list_head_init(&p->ast[i].pending);
@@ -526,6 +535,9 @@ static int vax_enq_frame(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
 	r.res_group = WL_GROUP;
 	r.res_acmode = WL_MODE;
 	r.res_ident_valid = 1u;
+	/* body[20:24]: the scripted VMS node's REQUESTING PID until a master
+	 * names a handle (rd vms-c55) */
+	r.req_pid = 0x20200204u;
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	return vms_dlm_enq_request_build(&r, opcode, frame, VMS_CM_FRAME_LEN,
 					 &written) == VMS_CODEC_OK ? 0 : -1;

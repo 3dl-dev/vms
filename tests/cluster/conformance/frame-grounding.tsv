@@ -172,3 +172,37 @@ cm_dlm_op0d_echo	*	81	1	const	const:d	body[9]: op 0x0d, echoed unchanged
 cm_dlm_op0d_echo	*	82	24	copied	any:echo	body[10:34]: echoed verbatim. NOT the cat-0x01 body[18]/body[55] mutations -- sec 4(p) warns they land in the L1 region and the 8th byte of the resource NAME here, and applying them bugchecked two real VAXes with LOCKMGRERR
 cm_dlm_op0d_echo	*	106	1	const	const:f9	body[34] = 0xf9, mandatory and unconditional in this recipe (sec 4(p))
 cm_dlm_op0d_echo	*	107	97	copied	any:echo	body[35:132]: echoed verbatim, the resource name and everything the coordinator put past it
+# ---- cat 0x02 op 0x01: THE LOCK REQUEST this node sends a directory or a master
+#      (rd vms-c55). Census for every span below: 21,496 cat-0x02 op-0x01 requests
+#      from real VMS senders in tests/lab/captures, counted by
+#      tools/cluster/dlm_pid_cell_census.py (--selftest pins the headline figures) ----
+dlm_enq_req	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+dlm_enq_req	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_enq_req	*	76	4	derived	any:envelope	txn/token: a request IS answered, so the envelope OPENS a transaction -- unlike the op-0x04 removal, which is a notification and carries 0 here
+dlm_enq_req	*	80	1	const	const:2	category 0x02, the request
+dlm_enq_req	*	81	1	const	const:1	op 0x01 (an ENQ at a master and a root lookup at a directory are the same opcode)
+dlm_enq_req	*	82	2	const	const:0	body[10:12]: stale buffer in a real request; 0 in 16,586 of 21,496, and this node sends no residue (rd vms-42de)
+dlm_enq_req	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b); 21,496 of 21,496
+dlm_enq_req	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq), as on every DLM message
+dlm_enq_req	*	88	4	const	const:0	body[16:20]: stale buffer in a real request; 0 in 17,084 of 21,496
+dlm_enq_req	*	92	4	derived	state:cell	body[20:24]: the MASTER's handle once the master has named one, and the REQUESTING PROCESS's id until then -- read off the LKB and its owning PCB. NEVER ZERO: real senders write a PID-form value 20,365 times and a lock id 1,116 times against 15 zeros (0.07%), and a real directory answers a zero cell body[34] = 0xfe 12 times out of 12 while answering a nonzero one 0 times out of 19,370 (rd vms-c55)
+dlm_enq_req	*	96	4	derived	state:lkid	body[24:28]: this node's OWN handle for the lock, which the master echoes back in its grant -- how the requester matches a completion to its lock
+dlm_enq_req	*	100	2	deviation	const:0	body[28:30]: this node writes 0 and a REAL request does not -- zero in only 36 of 21,496, and the span carries a FIELD rather than residue (35 distinct values over the whole corpus, the same handful recurring across different senders; one node used ONE value for all 3,000 of its requests). What the bits MEAN is unpublished and is NOT guessed here: rd vms-6e6 drives it one flag at a time on real V7.3. Recorded accepting: a real V7.3 directory answered 62 of this node's 80 answered requests 0xf9 with this span zero (openvmx-site 38779039044, all-at-once); the other 18 were 0xfe, which the zero at body[20:24] accounts for
+dlm_enq_req	*	102	1	derived	state:mode	body[30]: the LKB's requested mode (NL=0 CR=1 CW=2 PR=3 PW=4 EX=5, VAXcluster Principles p. 6-3)
+dlm_enq_req	*	103	13	deviation	const:0	body[31:44]: this node writes 0; zero in only 1,649 of 21,496 real requests, and 246 distinct values with visible structure -- field-shaped, not residue. Same treatment and same acceptance evidence as body[28:30] above (rd vms-6e6)
+dlm_enq_req	*	116	2	derived	state:group	body[44:46] UIC group: read off the resource block, part of the key it was created under (rd vms-b5b0)
+dlm_enq_req	*	118	1	derived	state:acmode	body[46] access mode: read off the resource block; NOT a constant 0x03 (rd vms-8219)
+dlm_enq_req	*	119	1	derived	state:namelen	body[47] name length, 1..31
+dlm_enq_req	*	120	76	copied	any:name	body[48:48+L] the resource name off the RSB, then zero to body[124]. A real request leaves residue in that tail (all-zero in only 213 of 21,496); this node sends none (rd vms-42de)
+dlm_enq_req	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b); 21,496 of 21,496
+dlm_enq_req	*	200	4	derived	state:hash	body[128:132] the directory hash for the root name -- a value some system in this cluster put on the wire and vms_lock_dlm_learn_dir_hash() recorded, never one computed here (rd vms-4fb)
+# ---- cat 0x04 op 0x00: the credit/commit ACK (spec sec 4(u), rd vms-ac4f).
+#      The single largest class an OVMX node puts on a real VAX's wire: 256 of
+#      the 298 frames across every committed capture that no row described.
+#      Census: 1,270 real cat-04/00 frames in tests/lab/captures ----
+cm_ack	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_stamp, spec sec 4(j)); NOT this builder's business since FC-P3.15
+cm_ack	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB -- the whole content of an ack
+cm_ack	*	76	4	const	const:0	body[4:8]: no transaction; 1,270 of 1,270 real acks carry 0 here
+cm_ack	*	80	1	const	const:4	body[8]: category 0x04
+cm_ack	*	81	1	const	const:0	body[9]: the opcode byte is not meaningful on an ack (spec sec 4(u)) -- real acks carry whatever stale buffer sat there; this node writes 0
+cm_ack	*	82	122	const	const:0	body[10:132]: the sender's stale buffer. All-zero in 273 of 1,270 real acks and carrying S0 kernel addresses in others; spec sec 4(p) -- 'an implementation should send zeros; do not reproduce another implementation's uninitialised memory' (rd vms-42de)

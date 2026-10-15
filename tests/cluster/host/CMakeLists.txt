@@ -1120,6 +1120,8 @@ set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
 add_test(NAME cluster_frame_conformance_gate
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_gate.sh"
         "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
+        dlm_dir_remove dlm_dir_ans_you dlm_dir_ans_redir cm_dlm_op0d_echo
+        dlm_enq_req cm_ack
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
@@ -1151,6 +1153,52 @@ add_test(NAME cluster_host_scs_join_timeline
 set_tests_properties(cluster_host_scs_join_timeline PROPERTIES
     LABELS "unit;cluster;cluster_host;scs"
     TIMEOUT 60
+)
+
+# ---- rd vms-c55: what real VMS puts in the DLM request's body[20:24] -------
+# The cell is the MASTER's lock id once one exists and the REQUESTING PROCESS's
+# id until then, and it is never zero -- which matters because a real OpenVMS
+# directory answers a zero cell body[34] = 0xfe, and a 0xfe was the last DLM
+# frame a real VAX V7.3 sent before each captured LOCKMGRERR. The codec header
+# and tests/lab/captures/vms-c55-lockmgrerr-20261015 both quote these figures;
+# --selftest re-derives every one of them from the committed corpus, so a
+# number in a comment cannot drift away from the bytes it came from.
+add_test(NAME cluster_host_dlm_pid_cell_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_pid_cell_census.py" --selftest
+)
+set_tests_properties(cluster_host_dlm_pid_cell_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 120
+)
+
+# ---- rd vms-ac4f: the frame-conformance gate asked of a BOOTED node --------
+# cluster_frame_conformance_gate above asks "do the senders ctest can drive
+# emit grounded bytes?". This asks the question a bugcheck asks: of everything
+# an OVMX node really put in front of a real VAX's executive, in every capture
+# this repo has committed, which frames does the table describe and do the
+# described ones hold? Plus the RATCHET -- an undescribed shape must be named
+# in capture-shape-ratchet.tsv, and a row there for a shape now covered is
+# stale, so the list only shrinks and the end state is empty. The --selftest
+# proves the gate can fail on each of those three rules; a gate that cannot
+# fail would let the next ungrounded shape through silently.
+add_test(NAME cluster_capture_conformance_gate
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_capture_gate.py"
+)
+set_tests_properties(cluster_capture_conformance_gate PROPERTIES
+    LABELS "unit;cluster;cluster_host;crash-safety"
+    TIMEOUT 180
+)
+
+add_test(NAME cluster_capture_conformance_gate_selftest
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_capture_gate.py"
+        --selftest
+)
+set_tests_properties(cluster_capture_conformance_gate_selftest PROPERTIES
+    LABELS "unit;cluster;cluster_host;crash-safety;negctl"
+    TIMEOUT 120
 )
 
 # ---- rd vms-94a: the executive's CLUSTERWIDE logical-name tables -----------

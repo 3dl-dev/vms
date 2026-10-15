@@ -153,6 +153,10 @@ struct vms_proc {
 	exec_lock_t          lock_list_lock;
 
 	uint64_t             cur_privs;     /* SYSLCK for an LCK$M_SYSTEM $ENQ (vms-768) */
+	/* The executive's own process id. The lock manager reads it to fill
+	 * body[20:24] on a cross-node request that has no master handle yet
+	 * (rd vms-c55, dlm_proxy_fill_post). */
+	uint32_t             vms_pid;
 	/* (group << 16) | member, as the real twin spells it. The lock manager
 	 * reads the GROUP half: it qualifies every resource name a $ENQ without
 	 * LCK$M_SYSTEM creates (rd vms-b5b0). */

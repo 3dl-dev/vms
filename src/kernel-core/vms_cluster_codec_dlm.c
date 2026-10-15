@@ -80,6 +80,12 @@ vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t 
 	out->mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
 	out->req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
+	/* body[20:24] is ONE cell carrying one of two things, and a RECEIVER
+	 * cannot tell which from the bytes -- only the sender knows whether a
+	 * master had named a handle yet. So the parse reports it as the master
+	 * handle (what every path that consumes a parsed request wants) and
+	 * leaves the builder's PID slot empty rather than guessing. */
+	out->req_pid = 0u;
 	/* body[128:132]: the SENDER's own directory hash for the name (rd
 	 * vms-4fb, Davis p. 6-50); the flag is what tells the caller it may be
 	 * learned at all, because "0" and "absent" are different facts. */
@@ -133,6 +139,17 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	 */
 	if (!req->res_ident_valid)
 		return VMS_CODEC_E_INVAL;
+	/*
+	 * body[20:24] MUST NOT GO OUT ZERO (rd vms-c55). The cell is the master's
+	 * handle once one exists and the REQUESTING PROCESS's id before that; a
+	 * real VMS directory answers a zero cell body[34] = 0xfe (12 of 12 in the
+	 * corpus, 0 of 19,370 nonzero ones) and a 0xfe is the last frame a real
+	 * VAX sent before each captured LOCKMGRERR. A caller that holds neither
+	 * value holds no requester, so this is refused here -- the same shape as
+	 * the codec's refusal of lock id 0 -- rather than emitted as a zero.
+	 */
+	if (req->master_lkid == 0u && req->req_pid == 0u)
+		return VMS_CODEC_E_INVAL;
 
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
@@ -142,7 +159,13 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, opcode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, req->mode);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req->req_lkid);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, req->master_lkid);
+	/* The master's handle when the master has named one, and the requesting
+	 * process's id until then (the struct's census note). One cell, two
+	 * executive reads, and the caller supplied both -- the choice is made
+	 * here, in the codec, because which one the wire carries is a wire rule. */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID,
+			  req->master_lkid != 0u ? req->master_lkid
+						 : req->req_pid);
 	/*
 	 * body[128:132] ONLY when the caller holds a WIRE-LEARNED hash for this
 	 * root name. No `else` branch, on purpose: a zero written here would be

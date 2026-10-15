@@ -338,6 +338,31 @@ enum vms_lck_mode {
 struct vms_dlm_enq_request {
 	uint8_t  mode;              /* LKB requested mode (CONVERT: the NEW mode) */
 	uint32_t master_lkid;       /* body[20:24], see doc comment above     */
+	/*
+	 * THE REQUESTING PROCESS'S ID, which body[20:24] carries INSTEAD when no
+	 * master handle exists yet -- the "PID-form placeholder" the block above
+	 * already describes. It is a separate field because the two are different
+	 * executive reads: `master_lkid` is the master's handle, recorded on the
+	 * LKB by the master's own reply, and `req_pid` is the id of the process
+	 * whose $ENQ this is, read off that process's PCB at post time.
+	 *
+	 * CENSUS, every committed capture (tests/lab/captures, 21,496 cat-0x02
+	 * op-0x01 requests from real VMS senders):
+	 *   20,365  a PID-form value (high byte 0x20, low word < 0x1000)
+	 *    1,116  a master lock id (the requester already had one)
+	 *       15  zero (0.07%)
+	 * and what a real directory ANSWERS a zero: of 19,370 answers whose
+	 * echoed cell is nonzero, NONE carries body[34] = 0xfe; of the 44 whose
+	 * cell is zero, 12 do -- i.e. 0xfe answers a zero cell and nothing else,
+	 * 12 of 12. A 0xfe is the last DLM frame a real VAX V7.3 sent before each
+	 * of the two frame-level LOCKMGRERR specimens (tests/lab/captures/
+	 * vms-c55-lockmgrerr-20261014 and -20261015). Before this field existed
+	 * OVMX wrote zero on 100% of its requests (181 of 181 across nine demo
+	 * case-runs); real VMS writes zero on 0.07%. Every figure here is
+	 * re-derived from the corpus by tools/cluster/dlm_pid_cell_census.py
+	 * --selftest, which ctest runs, so they cannot quietly go stale.
+	 */
+	uint32_t req_pid;           /* body[20:24] when master_lkid is 0      */
 	uint32_t req_lkid;          /* body[24:28], see doc comment above     */
 	uint8_t  name_len;
 	uint8_t  name[VMS_DLM_NAME_MAX];

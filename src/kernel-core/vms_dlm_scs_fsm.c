@@ -236,6 +236,7 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 	req.mode            = (uint8_t)p->lkmode;
 	req.req_lkid = p->req_lkid;      /* our own executive handle */
 	req.master_lkid     = p->master_lkid;   /* 0 until the master named it */
+	req.req_pid         = p->req_pid;       /* ...and who is asking until then */
 	req.dir_hash        = p->dir_hash;
 	req.dir_hash_valid  = p->dir_hash_known;
 	req.name_len        = dq_name_from_post(p, req.name);

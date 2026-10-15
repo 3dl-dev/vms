@@ -69,6 +69,10 @@ struct fake_lkb {
 	uint32_t master_csid;   /* 0 == unmastered, which is what makes a post
 				 * a DIRECTORY lookup (dlm_proxy_fill_post)   */
 	uint32_t master_lkid;
+	/* The requesting process's id, which body[20:24] carries until the
+	 * master names a handle (rd vms-c55). Real on the LKB: dlm_proxy_fill_post
+	 * reads it off the owning PCB. */
+	uint32_t req_pid;
 	uint32_t lkmode;
 	uint32_t flags;
 	char     resnam[32];
@@ -175,6 +179,7 @@ static int fe_refill(void *ctx, uint32_t req_lkid, uint32_t op,
 	out->req_lkid    = e->lkb.lkid;
 	out->master_csid = e->lkb.master_csid;
 	out->master_lkid = e->lkb.master_lkid;
+	out->req_pid     = e->lkb.req_pid;
 	out->lkmode      = e->lkb.lkmode;
 	out->flags       = e->lkb.flags;
 	memcpy(out->resnam, e->lkb.resnam, sizeof(out->resnam));
@@ -305,6 +310,7 @@ static void fe_reset(const char *resnam, uint32_t lkmode, uint32_t hash,
 	memset(&g, 0, sizeof(g));
 	g.lkb.exists = 1;
 	g.lkb.lkid = 0x2001u;
+	g.lkb.req_pid = 0x10000021u;   /* the owning process, as a PCB holds it */
 	g.lkb.lkmode = lkmode;
 	g.lkb.master_csid = master_csid;
 	g.lkb.dir_hash = hash;
@@ -505,9 +511,26 @@ static void check_frame_traces_to_lkb(const struct sent_frame *s,
 	snprintf(what, sizeof(what), "%s: body[30] == the LKB's mode", label);
 	ct_check_eq_u32(req.mode, l->lkmode, what);
 
-	snprintf(what, sizeof(what),
-		 "%s: body[24:28] == the LKB's master handle", label);
-	ct_check_eq_u32(req.master_lkid, l->master_lkid, what);
+	/*
+	 * body[20:24] is ONE cell with two sources on the LKB, and which one it
+	 * carries is itself part of the function from the lock database to the
+	 * frame (rd vms-c55): the MASTER's handle once the master has named one,
+	 * and the REQUESTING PROCESS's id until then. It is never zero -- a real
+	 * VMS directory answers a zero cell body[34] = 0xfe (12 of 12 in the
+	 * corpus) and that answer preceded every captured LOCKMGRERR.
+	 */
+	/* Stated WITHOUT the scenario prefix every other check here carries, so
+	 * the text is a literal in this file: the negative-control manifest
+	 * (host_defects.sh dlm-request-pid-cell-zeroed) names the assertions its
+	 * mutation must redden, and its self-test checks each one exists in the
+	 * suite's source. Several scenarios reddening the same line is a set of
+	 * one, which is what run_host_negctl.sh compares. */
+	ct_check_eq_u32(req.master_lkid,
+			l->master_lkid != 0u ? l->master_lkid : l->req_pid,
+			"body[20:24] == the LKB's master handle, or its "
+			"requesting PID while there is none");
+	ct_check(req.master_lkid != 0u,
+		 "...and body[20:24] is never zero");
 
 	snprintf(what, sizeof(what), "%s: body[47..] == the RSB's name", label);
 	ct_check(req.name_len == (uint8_t)namelen &&
@@ -620,6 +643,9 @@ static void compose_request_body(uint8_t *body, uint32_t req_lkid, uint8_t mode)
 	rq.name_len = 8u;
 	memcpy(rq.name, "OVMXREQ1", 8);
 	rq.res_ident_valid = 1u;
+	/* a real member's request carries its requesting PID at body[20:24]
+	 * (rd vms-c55 census: 20,365 of 21,496 real op-0x01 requests) */
+	rq.req_pid = 0x20200204u;
 	memset(reqframe, 0, sizeof(reqframe));
 	(void)vms_dlm_enq_request_build(&rq, VMS_DLM_WIREOP_ENQ, reqframe,
 					(uint32_t)sizeof(reqframe), &written);
@@ -1846,6 +1872,9 @@ static void test_observe_learns_the_hash(void)
 	req.res_ident_valid = 1u;
 	req.name_len = (uint8_t)strlen("F11B$aSYSDSK1");
 	memcpy(req.name, "F11B$aSYSDSK1", req.name_len);
+	/* a real member's request carries its requesting PID at body[20:24]
+	 * (rd vms-c55 census: 20,365 of 21,496 real op-0x01 requests) */
+	req.req_pid = 0x20200204u;
 
 	memset(&link, 0, sizeof(link));
 	memset(frame, 0, sizeof(frame));

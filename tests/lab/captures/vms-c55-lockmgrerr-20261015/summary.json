@@ -1,0 +1,82 @@
+[
+ {
+  "label": "all-at-once",
+  "order": "A,B,C",
+  "gap": 500,
+  "throttle": 1,
+  "verdict": "BUGCHECK: {\"VAXC\":\"*** Fatal BUG CHECK\"}",
+  "cn3": false,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c5"
+   ],
+   "OVMXB": [],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {
+   "VAXC": "*** Fatal BUG CHECK"
+  },
+  "lost": {
+   "OVMXA": [
+    "0:1989"
+   ],
+   "OVMXB": [
+    "0:1989"
+   ]
+  },
+  "repaint_stalls": {},
+  "lost_unnamed": {
+   "OVMXA": 1,
+   "OVMXB": 2
+  },
+  "substrate_noise": {},
+  "quiet": true,
+  "pass": false,
+  "worstDriftMs": 205,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": [],
+  "nodeA_worker": {
+   "workerSpawned": true,
+   "pipeReady": true,
+   "firstOut": true,
+   "nicTxCount": 745,
+   "nicRxCount": 810,
+   "nicRxDeliverOk": 810,
+   "workerTicks": 212,
+   "acpOk": true
+  },
+  "nodeA_why": null,
+  "username_at": {},
+  "dcl_at": {},
+  "login_failed": {},
+  "after_waited": {},
+  "want_version": "V0.7-10",
+  "ovmx_versions": {
+   "OVMXA": [
+    "V0.7-10"
+   ],
+   "OVMXB": [
+    "V0.7-7"
+   ]
+  },
+  "version_why": "OVMXB announced V0.7-7 -- the build under test is V0.7-10"
+ }
+]

@@ -1086,6 +1086,158 @@ static void test_redirect_budget_terminates(void)
 }
 
 /* ==========================================================================
+ * 4c. rd vms-97c2: A POST THE CONNECTION MANAGER COULD NOT TAKE
+ *
+ * The engine allocates the proxy LKB and puts a synchronous $ENQ to sleep on
+ * it BEFORE it posts, and enq_wait_sync()'s proxy wait is unbounded -- only an
+ * answer about this request can end it. So a post whose frame did not go out
+ * must leave something behind that can still produce that answer.
+ *
+ * The arm used to free the request block ("nothing went out: hold no phantom
+ * request"), which left the sleeper with no ladder and no failure path.
+ * MEASURED on the public cluster demo (visitor-gate run 38760989407): the
+ * OVMX/VAX member's ACP volume-sync $ENQ was refused once, nothing went on the
+ * wire, nothing was logged, and PID 1's STARTUP.COM never returned -- the node
+ * sat between "handing SYS$MANAGER:STARTUP.COM to DCL" and the site-startup
+ * line for 39 minutes while its executive went on serving both peers.
+ *
+ * A send-side refusal is TRANSIENT (no send credit, no open CDT yet, a send
+ * rolled back), so the block is RETAINED and the next beat sends it.
+ * ========================================================================== */
+static void test_send_refused_stays_on_the_ladder(void)
+{
+	struct vms_dlm_proxy_post p;
+
+	printf("-- a post the connection manager could not take is RETAINED, "
+	       "not dropped\n");
+	fe_reset("F11B$sOVMXSYS", VMS_LCK_EX, 0x0246u, 1, CSID_MASTER);
+
+	g.send_fails = 1;              /* the credit-wait pool is full */
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "the post is ACCEPTED: the request is outstanding");
+	ct_check_eq_u32(g.n_sent, 0u, "*** nothing went on the wire ***");
+	ct_check_eq_u32(g_fsm.posts_deferred, 1u,
+			"the deferral was counted where it happened");
+	ct_check_eq_u32(g_fsm.send_failures, 1u, "and so was the send refusal");
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
+			"*** the request block SURVIVES -- the ladder owns it "
+			"***");
+	ct_check_eq_u32(g.fail_calls, 0u,
+			"nothing is failed yet: the next beat may well send it");
+
+	/* The pool drains; the very next beat puts the real frame out. */
+	g.send_fails = 0;
+	g.now_ms += DLM_REQ_RETRY_MS + 1u;
+	ct_check_eq_u32(dlm_req_fsm_tick(&g_fsm), 1u,
+			"*** the beat retransmits the deferred request ***");
+	ct_check_eq_u32(g.n_sent, 1u, "and ONE frame went out");
+	ct_check_eq_u32(g.fail_calls, 0u,
+			"the waiter was never failed -- it gets its answer");
+	check_only_grounded_opcodes_were_sent("deferred post");
+}
+
+/*
+ * ...and when the connection manager NEVER takes it, the ladder still ends:
+ * a bounded honest failure, never the unbounded silent wait.
+ */
+static void test_send_refused_for_ever_still_terminates(void)
+{
+	struct vms_dlm_proxy_post p;
+	uint32_t beats = 0;
+
+	printf("-- a post the connection manager never takes FAILS, bounded\n");
+	fe_reset("F11B$sOVMXSYS", VMS_LCK_EX, 0x0247u, 1, CSID_MASTER);
+
+	g.send_fails = 1;
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "the post is accepted and deferred");
+
+	while (dlm_req_fsm_outstanding(&g_fsm) > 0u && beats < 64u) {
+		g.now_ms += DLM_REQ_RETRY_MS + 1u;
+		(void)dlm_req_fsm_tick(&g_fsm);
+		beats++;
+	}
+	ct_check(beats < 64u, "*** the ladder TERMINATED ***");
+	ct_check(beats <= (uint32_t)DLM_REQ_MAX_TRIES + 1u,
+		 "  within the declared retry budget");
+	ct_check_eq_u32(g.n_sent, 0u, "not one frame ever went out");
+	ct_check_eq_u32(g.fail_calls, 1u,
+			"*** the sleeping $ENQW was told, exactly once ***");
+	ct_check(g.fail_why == DLM_REQ_FAIL_TIMEOUT,
+		 "  with a real status, never a fabricated grant");
+}
+
+/*
+ * A PERMANENT refusal is not deferred: retrying a gate that will answer the
+ * same way cannot help, so the request is failed AT ONCE and no block is left.
+ * (The hash-unknown gate in §3 proves "nothing on the wire"; this proves the
+ * other half -- that the waiter is told.)
+ */
+static void test_permanent_refusal_fails_at_once(void)
+{
+	struct vms_dlm_proxy_post p;
+
+	printf("-- a gate that can only ever refuse fails the waiter AT ONCE\n");
+	fe_reset("OVMX$PRIVATE_VOL", VMS_LCK_EX, 0u, 0 /* no hash */, 0u);
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_DIR);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_E_NOHASH,
+		 "the post is REFUSED, and says so");
+	ct_check_eq_u32(g.n_sent, 0u, "*** nothing went on the wire ***");
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 0u,
+			"no block was left behind");
+	ct_check_eq_u32(g_fsm.posts_deferred, 0u,
+			"and it was NOT put on the ladder");
+	ct_check_eq_u32(g.fail_calls, 1u,
+			"*** the waiter was told, without waiting out a "
+			"ladder ***");
+	ct_check(g.fail_why == DLM_REQ_FAIL_UNROUTABLE,
+		 "  with UNROUTABLE -- the honest reason");
+}
+
+/*
+ * The same rule on a CONVERT of a lock this node already holds. Parking a
+ * refused conversion in ST_GRANTED would hide it from the beat (the one state
+ * dlm_req_fsm_tick skips), and the conversion's own $ENQW is asleep.
+ */
+static void test_convert_send_refused_stays_on_the_ladder(void)
+{
+	struct vms_dlm_proxy_post p;
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint32_t len, n;
+
+	printf("-- a refused CONVERT on a held lock stays on the ladder\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_CR, 0x0248u, 1, CSID_MASTER);
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+	ct_check_eq_u32(g.n_sent, 1u, "the ENQ went out");
+	len = make_grant(frame, g.lkb.lkid, 0x55667788u, VMS_LCK_CR);
+	ct_check(dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len) ==
+		 DLM_REQ_OK, "and it was granted");
+	n = g.n_sent;
+
+	g.lkb.lkmode = VMS_LCK_EX;
+	g.lkb.master_lkid = 0x55667788u;
+	g.send_fails = 1;
+	post_from_lkb(&p, VMS_DLM_POST_CONVERT, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "the convert post is accepted");
+	ct_check_eq_u32(g.n_sent, n, "*** nothing went on the wire ***");
+	ct_check_eq_u32(g_fsm.posts_deferred, 1u, "it was deferred, and counted");
+
+	g.send_fails = 0;
+	g.now_ms += DLM_REQ_RETRY_MS + 1u;
+	ct_check_eq_u32(dlm_req_fsm_tick(&g_fsm), 1u,
+			"*** the beat reaches it: it is NOT parked in "
+			"ST_GRANTED ***");
+	ct_check_eq_u32(g.n_sent, n + 1u, "and the conversion really went out");
+	check_only_grounded_opcodes_were_sent("deferred convert");
+}
+
+/* ==========================================================================
  * 5. ASSUME (outcome 3): "you master it" -- promote, send nothing
  * ========================================================================== */
 static void test_assume_mastery(void)
@@ -2088,6 +2240,10 @@ int main(void)
 	test_hash_unknown_refuses();
 	test_redirect();
 	test_redirect_budget_terminates();
+	test_send_refused_stays_on_the_ladder();
+	test_send_refused_for_ever_still_terminates();
+	test_permanent_refusal_fails_at_once();
+	test_convert_send_refused_stays_on_the_ladder();
 	test_assume_mastery();
 	test_decline_reresolve_then_stop();
 	test_deny_at_master();

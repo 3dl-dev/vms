@@ -177,6 +177,7 @@ dlm-own-directory-not-consulted
 dlm-dir-matched-by-name-alone
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
+dlm-requester-drops-the-untransmitted-post
 dlm-hash-empty-name-not-refused
 cm-close-state-volume-wrong
 dlm-hash-coverage-claims-too-much
@@ -668,6 +669,24 @@ EOF
         require_fail) hd_lines <<'EOF'
 counted
 every refused attempt was counted
+EOF
+                      ;;
+        esac;;
+
+    dlm-requester-drops-the-untransmitted-post)
+        case "$_f" in
+        facility)     echo "THE REQUESTER ARM's retention of a post whose frame did not go out (dq_post_not_sent(), rd vms-97c2): the engine is ASLEEP on a proxy LKB for that request, so the wire record must survive to be retried or failed";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "the TRANSIENT arm stops retaining the block: a send the connection manager could not take frees the request instead of leaving it on the retransmit ladder. That is what shipped, and it is an UNBOUNDED SILENT HANG -- enq_proxy_request() has already allocated the proxy LKB and a synchronous \$ENQ is asleep in enq_wait_sync(), whose proxy wait only an answer about THIS request can end. With no block there is no ladder and no dq_fail(), so one momentarily-full SCS credit-wait pool wedges the calling process for ever, with nothing on the wire and nothing on the console. MEASURED on the public cluster demo (visitor-gate run 38760989407, V0.7-10, 7 of 8 CN=3 cases): the OVMX/VAX member's ACP volume-sync \$ENQ went quiet mid-STARTUP.COM and the node never offered Username: again in 39 minutes while its executive went on serving both peers.";;
+        require_fail) hd_lines <<'EOF'
+*** the request block SURVIVES -- the ladder owns it ***
+*** the beat retransmits the deferred request ***
+and ONE frame went out
+*** the sleeping $ENQW was told, exactly once ***
+*** the beat reaches it: it is NOT parked in ST_GRANTED ***
+and the conversion really went out
 EOF
                       ;;
         esac;;
@@ -2617,6 +2636,15 @@ apply_edit() {
         # exact multi-token line (ending in `||` with nothing after) cannot
         # match it -- it is unique in the file.
         sed -i 's@^\tif (req_lkid == VMS_DLM_LKID_UNSET ||$@\tif (0 \&\& /* NEGCTL dlm-lkid-guard-disabled: the fc8540ae guard no longer refuses */@' "$_file";;
+
+    dlm-requester-drops-the-untransmitted-post)
+        # dq_untransmitted() is called from exactly one place (the TRANSIENT
+        # arm of dq_post_not_sent), so the call line is its own anchor. The
+        # block is freed right after it, which is exactly what shipped: the
+        # bookkeeping happens and then the wire record -- the only thing that
+        # could still answer the sleeping $ENQW -- is thrown away. The
+        # PERMANENT arm below is untouched: only the retention goes.
+        sed -i 's|^\t\tdq_untransmitted(f, e->r);$|\t\tdq_untransmitted(f, e->r); dq_free(e->r); /* NEGCTL dlm-requester-drops-the-untransmitted-post */|' "$_file";;
 
     dlm-requester-hash-refusal-uncounted)
         # `f->hash_unknown_refused++;` occurs TWICE in this file (this

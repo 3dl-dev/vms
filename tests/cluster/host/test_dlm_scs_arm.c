@@ -171,6 +171,22 @@ static void arm_bindings(void)
 	has("dlm_req_fsm_post(&d->req, &p)",
 	    "... before the pure requester FSM is driven");
 
+	/*
+	 * rd vms-97c2: AND NO PATH OUT OF THE FORK-THREAD HALF LEAVES A
+	 * SLEEPER BEHIND. dlm_arm_post() answered the $ENQ caller SS$_NORMAL
+	 * when it queued the work, so enq_proxy_request() is already asleep in
+	 * enq_wait_sync() on the proxy LKB -- a wait only an answer about THIS
+	 * request can end. Counting the refusal and returning left that
+	 * sleeper for ever: on the public cluster demo it was PID 1's DCL,
+	 * half way through STARTUP.COM, and the node never offered Username:
+	 * again (visitor-gate run 38760989407). Both refusals must end the
+	 * wait with a real status.
+	 */
+	has("dlm_arm_fail(d, req_lkid, DLM_REQ_FAIL_PATHLOST)",
+	    "a refill that finds no proxy ends the engine's wait honestly");
+	has("dlm_arm_fail(d, req_lkid, DLM_REQ_FAIL_UNROUTABLE)",
+	    "a post the FSM would not take ends the engine's wait honestly");
+
 	/* RULE B: the reply's fields come from the engine's result object. */
 	/*
 	 * THE GRANT IS BUILT BY ECHOING THE REQUEST (rd vms-b5b0): the only

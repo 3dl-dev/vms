@@ -484,6 +484,11 @@ struct dlm_req_fsm {
 					  /* no route, no master handle, or the */
 					  /* connection manager (RULE C)        */
 					  /* refused it. Nothing was sent.      */
+	uint32_t posts_deferred;         /* a post whose frame did NOT go out, */
+					  /* RETAINED on the retransmit ladder  */
+					  /* rather than dropped (rd vms-97c2): */
+					  /* dropping it left the $ENQW asleep  */
+					  /* on its proxy LKB for ever          */
 	uint32_t posts_no_wireop;        /* a post whose operation has NO wire */
 					  /* opcode at all -- unreachable for   */
 					  /* the three the engine posts, kept   */
@@ -516,9 +521,13 @@ void dlm_req_fsm_init(struct dlm_req_fsm *f, const struct dlm_req_ops *ops);
  * the first transmission is built straight from it -- no refill, because it IS
  * a fresh executive read.
  *
- * Returns DLM_REQ_OK when a frame really went out (or, for a retransmit of a
- * request already outstanding, when the duplicate was recognised and NOT
- * re-minted). Any other return means NOTHING WAS SENT.
+ * Returns DLM_REQ_OK when the request is OUTSTANDING -- either a frame really
+ * went out, or the transmission was refused and the request block was RETAINED
+ * so the retransmit ladder owns it (`posts_deferred`, rd vms-97c2: the engine
+ * is asleep on a proxy LKB for this request, so dropping the block left it
+ * with nothing that could ever complete it). Any other return means the post
+ * was NOT accepted at all -- no block exists, nothing will be retried, and the
+ * caller must end the engine's wait itself.
  * ========================================================================== */
 enum dlm_req_status dlm_req_fsm_post(struct dlm_req_fsm *f,
 				     const struct vms_dlm_proxy_post *p);

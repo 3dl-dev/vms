@@ -393,6 +393,33 @@ static enum dlm_req_status dq_transmit(struct dlm_req_fsm *f, struct dlm_req *r,
 }
 
 /*
+ * dq_untransmitted - a POST whose frame did NOT go out, for a request the
+ * ENGINE is already waiting on (rd vms-97c2).
+ *
+ * The block is RETAINED in its outstanding state so dlm_req_fsm_tick's ladder
+ * retransmits it and, when the ladder is spent, h_timeout_request FAILS it
+ * with a real terminal status. That is h_timeout_request's own rule applied
+ * one beat earlier: a request that can never be transmitted must still walk
+ * off the end of the ladder and be FAILED.
+ *
+ * WHY THE BLOCK MAY NOT BE DROPPED. The engine allocated a PROXY LKB before it
+ * posted, and a synchronous $ENQ is ASLEEP on it in enq_wait_sync(), whose
+ * proxy wait is UNBOUNDED -- only the master's answer may end it. With no wire
+ * record there is no ladder and no dq_fail(), so nothing can ever complete
+ * that sleeper.
+ *
+ * `tries` is advanced because dq_transmit counted none, and `sent_ms` is
+ * stamped so the retry waits one DLM_REQ_RETRY_MS beat rather than spinning.
+ */
+static void dq_untransmitted(struct dlm_req_fsm *f, struct dlm_req *r)
+{
+	f->posts_deferred++;
+	if (r->tries < 0xffu)
+		r->tries++;
+	r->sent_ms = dq_now(f);
+}
+
+/*
  * Transmit a RELEASE for which this arm holds no request block.
  *
  * The block is only this object's WIRE RECORD; the lock is the engine's, and a
@@ -571,7 +598,62 @@ typedef void (*dq_handler_t)(struct dlm_req_fsm *f, struct dq_ev *e);
 
 /* ---- the POST events -------------------------------------------------- */
 
-/* A brand-new request: take the engine's routing decision, then send. */
+/*
+ * dq_post_not_sent - what a POST does when its frame did not go out, for the
+ * three handlers that have a sleeper behind them (rd vms-97c2). One rule, two
+ * arms, and the split is the refusal's own nature:
+ *
+ *   DLM_REQ_E_SEND   the connection manager could not TAKE the frame -- no
+ *                    send credit, no open CDT to that member yet, a rolled-back
+ *                    send. TRANSIENT: the next beat may well send it, so the
+ *                    block is RETAINED and the ladder owns it. DLM_REQ_OK is
+ *                    reported: the request IS outstanding, just not yet on the
+ *                    wire.
+ *   anything else    the gates refused it (no wire opcode for this op, no
+ *                    directory, no provable hash) or the codec would not build
+ *                    it. PERMANENT: retrying cannot change the answer, so the
+ *                    request is FAILED here and now with a real status, the
+ *                    block is freed, and the original refusal is reported.
+ *
+ * Either arm ends with the caller getting an answer. Neither leaves the $ENQW
+ * the engine put to sleep on this request's proxy LKB with nothing that could
+ * ever complete it -- which is what dropping the block unconditionally did.
+ */
+static void dq_post_not_sent(struct dlm_req_fsm *f, struct dq_ev *e,
+			     enum dlm_req_status why)
+{
+	if (why == DLM_REQ_E_SEND) {
+		dq_untransmitted(f, e->r);
+		e->st = DLM_REQ_OK;
+		return;
+	}
+	dq_fail(f, e->r, DLM_REQ_FAIL_UNROUTABLE);
+	e->st = why;
+}
+
+/*
+ * A brand-new request: take the engine's routing decision, then send.
+ *
+ * A REFUSED FIRST TRANSMISSION KEEPS THE BLOCK (rd vms-97c2). This used to
+ * `dq_free(r)` -- "nothing went out: hold no phantom request" -- which left the
+ * $ENQW the engine had already put to sleep on its proxy LKB with no ladder to
+ * answer it and no dq_fail() to end it. MEASURED on the public cluster demo
+ * (visitor-gate run 38760989407, all seven CN=3 cases): the OVMX/VAX member's
+ * ACP volume-sync $ENQ was refused once, nothing went on the wire, nothing was
+ * logged, and PID 1's STARTUP.COM never came back -- the node sat between
+ * "handing SYS$MANAGER:STARTUP.COM to DCL" and the site-startup line for 39
+ * minutes while its executive went on serving both peers normally.
+ *
+ * The refusal is often TRANSIENT (the SCS credit-wait pool momentarily full
+ * under a lock storm, a CSB whose CDT is not open yet, a send rolled back), so
+ * the ladder's next beat simply sends it. A PERMANENT one walks off the end of
+ * the ladder and is failed with a real status. Either way the caller gets an
+ * answer; neither way is an unbounded silent wait.
+ *
+ * The post itself SUCCEEDED -- the request is outstanding, just not yet on the
+ * wire -- so DLM_REQ_OK is reported. Reporting the transmit error here would
+ * make dlm_arm_run_post() fail the very request this block now owns.
+ */
 static void h_post_new(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	struct dlm_req *r = e->r;
@@ -586,7 +668,7 @@ static void h_post_new(struct dlm_req_fsm *f, struct dq_ev *e)
 
 	e->st = dq_transmit(f, r, p);
 	if (e->st != DLM_REQ_OK) {
-		dq_free(r);        /* nothing went out: hold no phantom request */
+		dq_post_not_sent(f, e, e->st);
 		return;
 	}
 	if (p->op == VMS_DLM_POST_CONVERT)
@@ -618,12 +700,25 @@ static void h_post_again(struct dlm_req_fsm *f, struct dq_ev *e)
 	r->state        = e->post->to_directory ? (uint8_t)DLM_REQ_ST_LOOKUP
 						: (uint8_t)DLM_REQ_ST_ENQ;
 	e->st = dq_transmit(f, r, e->post);
-	if (e->st == DLM_REQ_OK)
-		f->retransmits++;
+	if (e->st != DLM_REQ_OK) {
+		dq_post_not_sent(f, e, e->st);
+		return;
+	}
+	f->retransmits++;
 }
 
-/* A CONVERT on a lock we already hold: it goes to the MASTER, and the block
- * moves back to "outstanding at the master" until the reply lands. */
+/*
+ * A CONVERT on a lock we already hold: it goes to the MASTER, and the block
+ * moves back to "outstanding at the master" until the reply lands.
+ *
+ * A REFUSED TRANSMISSION STAYS ON THE LADDER (rd vms-97c2), for the same
+ * reason h_post_new's does: convert_proxy_request() has already marked the LKB
+ * waiting and is asleep on it, and ST_GRANTED is the one state the beat skips
+ * -- parking the block there would have been the same unbounded silent wait.
+ * The lock really is still granted at its old mode, and that is what the
+ * engine restores when the ladder finally fails the conversion; VMS semantics
+ * are that a failed conversion never loses the held lock.
+ */
 static void h_post_convert_granted(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	struct dlm_req *r = e->r;
@@ -636,10 +731,11 @@ static void h_post_convert_granted(struct dlm_req_fsm *f, struct dq_ev *e)
 	r->state        = (uint8_t)DLM_REQ_ST_ENQ;
 
 	e->st = dq_transmit(f, r, e->post);
-	if (e->st == DLM_REQ_OK)
-		f->converts_posted++;
-	else
-		r->state = (uint8_t)DLM_REQ_ST_GRANTED;  /* the lock still is */
+	if (e->st != DLM_REQ_OK) {
+		dq_post_not_sent(f, e, e->st);
+		return;
+	}
+	f->converts_posted++;
 }
 
 /*

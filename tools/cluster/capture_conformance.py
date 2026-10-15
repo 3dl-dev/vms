@@ -38,6 +38,7 @@ CHECKER = os.path.join(HERE, 'frame_conformance.py')
 # the nearest-looking type.
 TYPE_OF = {
     (0x01, 0x03): 'cm_commit',
+    (0x04, 0x00): 'cm_ack',
     (0x01, 0x14): 'cm_model',
     (0x8b, 0x01): 'cm_0b01_ans',
     (0x8b, 0x04): 'cm_lnm_ans',

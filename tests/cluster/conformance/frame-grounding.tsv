@@ -196,3 +196,13 @@ dlm_enq_req	*	119	1	derived	state:namelen	body[47] name length, 1..31
 dlm_enq_req	*	120	76	copied	any:name	body[48:48+L] the resource name off the RSB, then zero to body[124]. A real request leaves residue in that tail (all-zero in only 213 of 21,496); this node sends none (rd vms-42de)
 dlm_enq_req	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b); 21,496 of 21,496
 dlm_enq_req	*	200	4	derived	state:hash	body[128:132] the directory hash for the root name -- a value some system in this cluster put on the wire and vms_lock_dlm_learn_dir_hash() recorded, never one computed here (rd vms-4fb)
+# ---- cat 0x04 op 0x00: the credit/commit ACK (spec sec 4(u), rd vms-ac4f).
+#      The single largest class an OVMX node puts on a real VAX's wire: 256 of
+#      the 298 frames across every committed capture that no row described.
+#      Census: 1,270 real cat-04/00 frames in tests/lab/captures ----
+cm_ack	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_stamp, spec sec 4(j)); NOT this builder's business since FC-P3.15
+cm_ack	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB -- the whole content of an ack
+cm_ack	*	76	4	const	const:0	body[4:8]: no transaction; 1,270 of 1,270 real acks carry 0 here
+cm_ack	*	80	1	const	const:4	body[8]: category 0x04
+cm_ack	*	81	1	const	const:0	body[9]: the opcode byte is not meaningful on an ack (spec sec 4(u)) -- real acks carry whatever stale buffer sat there; this node writes 0
+cm_ack	*	82	122	const	const:0	body[10:132]: the sender's stale buffer. All-zero in 273 of 1,270 real acks and carrying S0 kernel addresses in others; spec sec 4(p) -- 'an implementation should send zeros; do not reproduce another implementation's uninitialised memory' (rd vms-42de)

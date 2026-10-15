@@ -60,6 +60,12 @@
 #                                          bundle's OWN kernel/initrd/
 #                                          distrib.img, never the image's
 #                                          baked-in ones.
+#   OVMX_RELEASE_ARCH                     "aarch64" boots the bundle's aarch64/
+#                                          set (rd vms-b58) under
+#                                          qemu-system-aarch64 instead of the
+#                                          top-level x86_64 set. The version
+#                                          still comes from the bundle's
+#                                          release-manifest.json.
 #   BOOT_TIMEOUT / SETUP_TIMEOUT / RUN_TIMEOUT   forwarded to the gate itself.
 
 set -uo pipefail
@@ -82,8 +88,15 @@ if [ -z "$RELEASE_DIR" ]; then
     echo "      See this script's header for the recipe."
     exit "$SKIP"
 fi
-for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img release-manifest.json; do
-    [ -f "$RELEASE_DIR/$f" ] || { echo "FATAL: $RELEASE_DIR/$f missing -- is this a real tools/cut-release.sh output directory?"; exit 1; }
+[ -f "$RELEASE_DIR/release-manifest.json" ] || { echo "FATAL: $RELEASE_DIR/release-manifest.json missing -- is this a real tools/cut-release.sh output directory?"; exit 1; }
+# The artifact set to boot: the top-level (x86_64) set, or an arch subdir.
+case "${OVMX_RELEASE_ARCH:-}" in
+    "") BOOT_DIR="$RELEASE_DIR"; GUEST_ARCH="" ;;
+    aarch64) BOOT_DIR="$RELEASE_DIR/aarch64"; GUEST_ARCH=aarch64 ;;
+    *) echo "FATAL: unsupported OVMX_RELEASE_ARCH='$OVMX_RELEASE_ARCH' (want: empty or aarch64)"; exit 1 ;;
+esac
+for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img; do
+    [ -f "$BOOT_DIR/$f" ] || { echo "FATAL: $BOOT_DIR/$f missing -- is this a real tools/cut-release.sh output directory?"; exit 1; }
 done
 
 # THE VERSION THE GATE MUST SEE. Read from the cut's own manifest by default
@@ -118,8 +131,9 @@ exec docker run --rm \
     -e "BOOT_TIMEOUT=${BOOT_TIMEOUT:-180}" \
     -e "SETUP_TIMEOUT=${SETUP_TIMEOUT:-60}" \
     -e "RUN_TIMEOUT=${RUN_TIMEOUT:-1500}" \
+    -e "OVMX_GUEST_ARCH=${GUEST_ARCH}" \
     -v "$REPO_ROOT/tests/qemu/test_release_acceptance_e2e.sh:/test.sh:ro" \
-    -v "$RELEASE_DIR:/release:ro" \
+    -v "$BOOT_DIR:/release:ro" \
     --entrypoint bash \
     "$IMAGE" \
     /test.sh

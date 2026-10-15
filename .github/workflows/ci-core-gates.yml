@@ -600,6 +600,52 @@ jobs:
       - name: Boot it under qemu-system-aarch64; vms.ko must give /dev/vms (and nothing without it)
         run: bash tests/qemu-aarch64/test_ovmx_kernel_vmsko.sh "$RUNNER_TEMP/kout"
 
+  aarch64-boot-login:
+    # aarch64 ships in V1.0 (rd vms-32aa, epic vms-0ad0). Builds the whole
+    # bootable set from distro/Dockerfile.bootable for arm64, natively on an
+    # arm64 runner, and boots it with the release-acceptance harness under
+    # qemu-system-aarch64 -machine virt: executive attached, Username:, SYSTEM
+    # login, the PARTS RMS demo, and PRODUCT SHOW PRODUCT == ovmx_identity.h.
+    name: aarch64 bootable set -- builds, boots to login, PARTS, version (vms-32aa)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Build the arm64 bootable set natively (Dockerfile.bootable, TARGETARCH=arm64)
+        run: |
+          set -euo pipefail
+          docker buildx build -f distro/Dockerfile.bootable --platform linux/arm64 \
+            --load -t ovmx-boot-a64:ci .
+
+      - name: Extract the boot artifacts
+        run: |
+          set -euo pipefail
+          id=$(docker create ovmx-boot-a64:ci)
+          mkdir -p "$RUNNER_TEMP/rel"
+          for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img; do
+            docker cp -L "$id:/boot/$f" "$RUNNER_TEMP/rel/$f"
+          done
+          docker rm "$id"
+          K=$(file "$RUNNER_TEMP/rel/vmlinuz"); echo "$K"
+          grep -q "ARM64 boot executable" <<<"$K"
+
+      - name: Boot to login, run PARTS, check the version (release-acceptance harness, aarch64 guest)
+        run: |
+          set -euo pipefail
+          V=$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' src/libvms/include/ovmx_identity.h | head -1)
+          docker run --rm -e EXPECTED_PRODUCT_VERSION="$V" -e OVMX_GUEST_ARCH=aarch64 \
+            -e BOOT_TIMEOUT=900 -e SETUP_TIMEOUT=300 -e RUN_TIMEOUT=2400 \
+            -v "$PWD/tests/qemu/test_release_acceptance_e2e.sh:/test.sh:ro" \
+            -v "$RUNNER_TEMP/rel:/release:ro" \
+            --entrypoint bash ovmx-boot-a64:ci /test.sh
+
   # -----------------------------------------------------------------------
   # Job 1: Build and unit test (host, shared libs, readline)
   # -----------------------------------------------------------------------
@@ -1209,6 +1255,7 @@ jobs:
       - netbsd-console-selftest
       - aarch64-system-boot
       - aarch64-kernel-vmsko
+      - aarch64-boot-login
       - build-and-test
       - conformance
       - corpus-conformance

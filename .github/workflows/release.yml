@@ -58,8 +58,72 @@ permissions:
   packages: read   # GHCR mirror of the pinned base images (vms-9a6, .github/actions/setup-buildx)
 
 jobs:
+  # aarch64 ships in V1.0 (rd vms-b58, epic vms-0ad0). Its bootable set is
+  # built natively on an arm64 runner (under binfmt on x86_64 the userland
+  # stages take hours) by tools/cut-release-aarch64.sh, from the SAME tagged
+  # commit and SOURCE_DATE_EPOCH cut-release.sh uses; cut-and-publish then
+  # hands it to cut-release.sh (--aarch64-dir), which refuses a set stamped
+  # with any other commit/clock. A failed aarch64 build fails this job, and
+  # cut-and-publish needs it: no aarch64, no release.
+  cut-aarch64:
+    name: cut the aarch64 bootable set (arm64 runner)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    outputs:
+      built: ${{ steps.cut.outputs.built }}
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Checkout (same tooling ref as cut-and-publish)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || steps.tag.outputs.tag }}
+          fetch-depth: 0
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+      - name: Build the aarch64 set from the tagged commit
+        id: cut
+        env:
+          OVMX_MODULE_SIGNING_KEY_PEM: ${{ secrets.OVMX_MODULE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          COMMIT=$(git rev-parse "$TAG^{commit}")
+          SDE=$(git log -1 --format=%ct "$COMMIT")
+          SRC="$RUNNER_TEMP/src"; mkdir -p "$SRC"
+          git archive --format=tar "$COMMIT" | tar -x -C "$SRC"
+          if [ ! -f "$SRC/distro/kernel/ovmx-arm64.config" ]; then
+            echo "%CUT-AARCH64-I-PREAARCH64: $TAG predates aarch64 release support -- cut-release.sh will omit aarch64 for this historical cut"
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "${OVMX_MODULE_SIGNING_KEY_PEM:-}" ]; then
+            KEYFILE="$(mktemp)"
+            printf '%s\n' "$OVMX_MODULE_SIGNING_KEY_PEM" > "$KEYFILE"
+            export OVMX_MODULE_SIGNING_KEY="$KEYFILE"
+          fi
+          tools/cut-release-aarch64.sh --src-dir "$SRC" --out-dir "$RUNNER_TEMP/aarch64" \
+            --commit "$COMMIT" --source-date-epoch "$SDE"
+          [ -n "${KEYFILE:-}" ] && rm -f "$KEYFILE" || true
+          echo "built=true" >> "$GITHUB_OUTPUT"
+      - name: Hand the aarch64 set to cut-and-publish
+        if: steps.cut.outputs.built == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-release-set
+          path: ${{ runner.temp }}/aarch64/
+          retention-days: 3
+          if-no-files-found: error
+
   cut-and-publish:
     name: cut-release + publish to GitHub Releases
+    needs: cut-aarch64
     runs-on: ubuntu-latest
     # A full containerized cut is ~25-30 min cold (kernel + VMS-native
     # toolchain + QEMU image); mirror cut-release-reproducible's budget.
@@ -111,6 +175,13 @@ jobs:
       # -> cut-release.sh mints an ephemeral key and only the signature bytes
       # vary. The secret is written to a temp file the script reads via
       # OVMX_MODULE_SIGNING_KEY, then removed.
+      - name: Fetch the aarch64 set cut-aarch64 built
+        if: needs.cut-aarch64.outputs.built == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: aarch64-release-set
+          path: ${{ runner.temp }}/aarch64-prebuilt
+
       - name: Cut the release bundle
         env:
           OVMX_MODULE_SIGNING_KEY_PEM: ${{ secrets.OVMX_MODULE_SIGNING_KEY }}
@@ -123,8 +194,12 @@ jobs:
           else
             echo "release signing: no OVMX_MODULE_SIGNING_KEY secret -- ephemeral key (signatures not reproducible)"
           fi
+          A64=()
+          if [ "${{ needs.cut-aarch64.outputs.built }}" = "true" ]; then
+            A64=(--aarch64-dir "$RUNNER_TEMP/aarch64-prebuilt")
+          fi
           tools/cut-release.sh --ref "${{ steps.tag.outputs.tag }}" \
-            --out-dir "${{ github.workspace }}/dist/release-cut"
+            --out-dir "${{ github.workspace }}/dist/release-cut" "${A64[@]}"
           [ -n "${KEYFILE:-}" ] && rm -f "$KEYFILE" || true
 
       # The notes list exactly what the TAG ships (V0.7-9: notes generated from

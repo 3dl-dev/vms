@@ -419,10 +419,14 @@ jobs:
               - 'tests/netbsd/guest/CMakeLists.txt'
               - 'tests/netbsd/guest/negctl/**'
               - 'CMakeLists.txt'
-            # rd vms-a07: the arm64 OVMX kernel + vms.ko cross-build and boot.
+            # rd vms-a07/vms-32aa: the arm64 OVMX kernel + vms.ko cross-build,
+            # and the arm64 bootable set booted to login.
             aarch64_kernel:
               - '.github/workflows/ci-core-gates.yml'
               - 'distro/Dockerfile.bootable'
+              - 'tests/qemu/test_release_acceptance_e2e.sh'
+              - 'src/imgact/**'
+              - 'src/vmslink/**'
               - 'distro/kernel/**'
               - 'src/kernel/**'
               - 'src/kernel-core/**'

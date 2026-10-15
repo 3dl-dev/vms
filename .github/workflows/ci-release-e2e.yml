@@ -302,6 +302,42 @@ jobs:
             /negctl.sh /gate.sh
 
   # -----------------------------------------------------------------------
+  # aarch64 release set (rd vms-b58, epic vms-0ad0: aarch64 ships in V1.0).
+  # tools/cut-release.sh demands the aarch64 bootable set for every
+  # aarch64-capable commit -- it builds it itself, or takes one built from the
+  # SAME commit + SOURCE_DATE_EPOCH (--aarch64-dir). Building it under binfmt on
+  # the x86_64 runners would take hours per cut, so ONE native arm64 build per
+  # run serves every cut below. A failed aarch64 build fails this job, and the
+  # cuts that need it never run: the gate goes red.
+  # -----------------------------------------------------------------------
+  aarch64-release-set:
+    name: aarch64 release set -- tools/cut-release-aarch64.sh on an arm64 runner (vms-b58)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+      - name: Build the aarch64 set from this commit (cut-release.sh's default clock)
+        run: |
+          set -euo pipefail
+          COMMIT=$(git rev-parse HEAD)
+          SDE=$(git log -1 --format=%ct "$COMMIT")
+          SRC="$RUNNER_TEMP/src"; mkdir -p "$SRC"
+          git archive --format=tar "$COMMIT" | tar -x -C "$SRC"
+          tools/cut-release-aarch64.sh --src-dir "$SRC" --out-dir "$RUNNER_TEMP/aarch64" \
+            --commit "$COMMIT" --source-date-epoch "$SDE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aarch64-release-set
+          path: ${{ runner.temp }}/aarch64/
+          retention-days: 3
+          if-no-files-found: error
+
+  # -----------------------------------------------------------------------
   # cut-release-reproducible (vms-d73, epic vms-a84 RELEASE ENGINEERING)
   #
   # tools/cut-release.sh is the FIRST piece of release-engineering machinery:
@@ -329,7 +365,7 @@ jobs:
   # -----------------------------------------------------------------------
   cut-release-reproducible:
     name: cut-release is byte-reproducible + boots (vms-d73)
-    needs: changes
+    needs: [changes, aarch64-release-set]
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -369,15 +405,21 @@ jobs:
 
       # First independent cut. --no-cache on both cuts is the point: this
       # proves the BUILD is reproducible, not that BuildKit's cache is.
+      - name: Fetch the aarch64 release set (aarch64-release-set job)
+        uses: actions/download-artifact@v4
+        with:
+          name: aarch64-release-set
+          path: ${{ runner.temp }}/aarch64-prebuilt
+
       - name: Cut release A (clean tree, no cache)
         id: cut_a
         run: |
-          tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-a"
+          tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-a" --aarch64-dir "${{ runner.temp }}/aarch64-prebuilt"
 
       - name: Cut release B (independent clean tree, no cache)
         id: cut_b
         run: |
-          tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-b"
+          tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-b" --aarch64-dir "${{ runner.temp }}/aarch64-prebuilt"
 
       # CO-RELEASE GATE PROOF (vms-ca5, epic vms-f10): tools/cut-release.sh
       # now builds VAX (netbsd-vax/elf32-vax) artifacts UNCONDITIONALLY as
@@ -529,7 +571,7 @@ jobs:
   # -----------------------------------------------------------------------
   upgrade-e2e:
     name: install -> UPGRADE -> boot e2e (vms-f05)
-    needs: changes
+    needs: [changes, aarch64-release-set]
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -555,9 +597,15 @@ jobs:
         run: |
           tools/cut-release.sh --ref 28a929b2 --out-dir "${{ github.workspace }}/dist/upgrade-baseline"
 
+      - name: Fetch the aarch64 release set (aarch64-release-set job)
+        uses: actions/download-artifact@v4
+        with:
+          name: aarch64-release-set
+          path: ${{ runner.temp }}/aarch64-prebuilt
+
       - name: Cut the UPGRADE release (this commit)
         run: |
-          tools/cut-release.sh --ref HEAD --out-dir "${{ github.workspace }}/dist/upgrade-upgrade"
+          tools/cut-release.sh --ref HEAD --out-dir "${{ github.workspace }}/dist/upgrade-upgrade" --aarch64-dir "${{ runner.temp }}/aarch64-prebuilt"
 
       - name: Build host tools (INITIALIZE.EXE, vmsfs_master)
         run: |
@@ -789,13 +837,13 @@ jobs:
   # -----------------------------------------------------------------------
   release-acceptance-e2e:
     name: Release-acceptance gate — boot the CUT artifact, verify shipped version (vms-a86f)
-    needs: changes
+    needs: [changes, aarch64-release-set]
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
     if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 300
 
     steps:
       - name: Checkout
@@ -809,10 +857,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
+      - name: Fetch the aarch64 release set (aarch64-release-set job)
+        uses: actions/download-artifact@v4
+        with:
+          name: aarch64-release-set
+          path: ${{ runner.temp }}/aarch64-prebuilt
+
       - name: Cut the release bundle (tools/cut-release.sh, never hand-built)
         id: cut
         run: |
-          tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/release-acceptance"
+          tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/release-acceptance" --aarch64-dir "${{ runner.temp }}/aarch64-prebuilt"
 
       # CO-RELEASE GATE PROOF (vms-ca5, epic vms-f10): the acceptance bundle
       # is a real cut-release.sh cut, so it now unconditionally carries the
@@ -900,6 +954,41 @@ jobs:
           fi
           echo "Negative control confirmed: the gate correctly reddened (exit $rc) on a genuine version disagreement."
           exit 0
+
+      # aarch64 ships in V1.0 (rd vms-b58): the SAME gate boots the cut's
+      # aarch64/ set -- its own Image, initramfs and distrib.img -- under
+      # qemu-system-aarch64 -machine virt (TCG on this x86_64 runner, hence the
+      # longer timeouts), logs in, runs the PARTS scenario and checks the version.
+      - name: Release-acceptance gate (aarch64) — boot the cut's aarch64 set, run PARTS, verify the shipped version
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' && steps.build.outcome == 'success' }}
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest OVMX_RELEASE_ARCH=aarch64 \
+          BOOT_TIMEOUT=1200 SETUP_TIMEOUT=300 RUN_TIMEOUT=3600 \
+          OVMX_RELEASE_DIR="${{ github.workspace }}/dist/release-acceptance" \
+            tests/qemu/run_release_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: the aarch64 release-acceptance run SKIPPED -- it must boot for real." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+      # A failed aarch64 build must fail the cut itself (no aarch64, no release).
+      - name: NEGATIVE CONTROL — tools/cut-release.sh itself must fail when the aarch64 build fails
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
+        run: |
+          set +e
+          RAW=$(OVMX_AARCH64_RELEASE_NEGCTL=1 tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/aarch64-gate-negctl" 2>&1)
+          rc=$?
+          printf '%s\n' "$RAW" | tail -5
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: cut-release.sh PASSED despite OVMX_AARCH64_RELEASE_NEGCTL=1 -- the aarch64 co-release gate is not wired into cut-release.sh" >&2
+            exit 1
+          fi
+          grep -q "aarch64 co-release build failed" <<<"$RAW" \
+            || { echo "FATAL: cut-release.sh failed for the wrong reason (did not name the aarch64 co-release gate)" >&2; exit 1; }
+          echo "Negative control confirmed: cut-release.sh refuses to cut a release when the aarch64 build fails (exit $rc)."
 
   # -----------------------------------------------------------------------
   # tcpip-daytime-boot-e2e (vms-21b): the aux server launches a SYS$SYSTEM:
@@ -1717,6 +1806,7 @@ jobs:
     needs:
       - changes
       - persistent-boot
+      - aarch64-release-set
       - cut-release-reproducible
       - upgrade-e2e
       - install-boot-e2e

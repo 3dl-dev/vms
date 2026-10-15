@@ -751,6 +751,8 @@ EOF
 *** body[24:28] is THE REQUESTER's own handle (0x090003cd -- a value no master ever sent it) ***
 *** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
 *** the grant ECHOES the requester's handle -- which is the correlation OVMX was breaking ***
+builds back from the typed struct
+every CITED byte of the real specimen is byte-exact
 EOF
                       ;;
         esac;;

@@ -64,7 +64,6 @@ static void assert_cited_bytes_match(const struct vms_fixture *f,
 				     uint32_t n, const char *label)
 {
 	uint32_t i, checked = 0, mismatches = 0;
-	char what[224];
 
 	for (i = start; i < n; i++) {
 		if (!vms_fixture_is_cited(f, i, 1))
@@ -78,10 +77,14 @@ static void assert_cited_bytes_match(const struct vms_fixture *f,
 			mismatches++;
 		}
 	}
-	snprintf(what, sizeof(what),
-		 "%s: every CITED byte in [0,%u) is byte-exact (%u checked)",
-		 label, n, checked);
-	ct_check(mismatches == 0 && checked > 0, what);
+	/* The label, the span and the count are CONTEXT and are printed as
+	 * context; the assertion's own text is a literal so the negative-control
+	 * manifest can name it (host_defects.sh requires every require_fail line
+	 * to exist verbatim in the suite's source). */
+	printf("       %s: %u cited byte(s) checked in [0,%u)\n",
+	       label, checked, n);
+	ct_check(mismatches == 0 && checked > 0,
+		 "every CITED byte of the real specimen is byte-exact");
 }
 
 /* ---- group 1: ENQ/CONVERT fixture round trip -------------------------- */

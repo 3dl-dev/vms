@@ -48,9 +48,17 @@
 # link-native-cmake-x86_64 job uses; OVMX_LINK_NATIVE auto-detects ON only
 # when `$CC -dumpmachine` reports an aarch64/x86_64 *-musl triple, which
 # Ubuntu's musl-gcc wrapper does not.
-FROM --platform=linux/amd64 alpine:3.20 AS link-native
+FROM alpine:3.20 AS link-native
 
 RUN apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers
+ARG TARGETARCH
+# Target-arch names for this stage (rd vms-32aa): IMGACT's ARCH, the C flag the
+# LINK.EXE graph is built with, and the ELF machine readelf must report.
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) printf '%s\n' 'OVARCH=x86_64' 'OVRE=X86-64' 'OVTLS=-mtls-dialect=gnu2' ;; \
+      arm64) printf '%s\n' 'OVARCH=aarch64' 'OVRE=AArch64' 'OVTLS=-mno-outline-atomics' ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}'"; exit 1 ;; \
+    esac > /etc/ovmx-arch.env && cat /etc/ovmx-arch.env
 
 WORKDIR /src
 COPY . .
@@ -62,7 +70,7 @@ RUN cmake -B /tmp/build -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Re
 # separate OVMX_IMGACT option, which CMake keeps mutually exclusive with
 # OVMX_STATIC and this configure never sets); built directly via its own
 # Makefile, same musl container, same x86_64 target.
-RUN cd src/imgact && make CC=gcc ARCH=x86_64
+RUN . /etc/ovmx-arch.env && cd src/imgact && make CC=gcc ARCH=$OVARCH
 
 # PARTS.EXE — the OVMX 0.2 "it runs a real VMS app" demo (beads vms-e97/f20,
 # src/apps/parts/), built with the EXACT same cc -> LINK.EXE toolchain as
@@ -73,7 +81,7 @@ RUN cd src/imgact && make CC=gcc ARCH=x86_64
 # (-mtls-dialect=gnu2) — this is the same alpine amd64 musl container that
 # built LINK.EXE/DECC$SHR.EXE/LIBVMSRMS$SHR.EXE above, so PARTS is compiled
 # and linked against those exact producer images.
-RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2" \
+RUN . /etc/ovmx-arch.env && CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $OVTLS" \
     sh src/apps/parts/mk_parts.sh \
         /tmp/build/bin/LINK.EXE \
         /tmp/build/link-native/PARTS.EXE \
@@ -87,7 +95,7 @@ RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -m
 # tests/qemu/test_run_status_e2e.sh boots the runtime, RUNs it, and asserts DCL's
 # $STATUS is the image's executive-recorded completion status (not a blanket
 # %X00000001) AND that the image's stdout reached the console.
-RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2" \
+RUN . /etc/ovmx-arch.env && CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $OVTLS" \
     sh src/apps/rctest/mk_rc3.sh \
         /tmp/build/bin/LINK.EXE \
         /tmp/build/link-native/RC3.EXE \
@@ -96,7 +104,7 @@ RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -m
 # SYMSET.EXE (vms-cded): the CLI-callback RUN target -- LIB$GET_SYMBOL reads a
 # DCL symbol, LIB$SET_SYMBOL leaves a global and a local one in DCL's tables;
 # tests/qemu/test_run_status_e2e.sh RUNs it and shows them from DCL.
-RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2" \
+RUN . /etc/ovmx-arch.env && CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $OVTLS" \
     sh src/apps/rctest/mk_symset.sh \
         /tmp/build/bin/LINK.EXE \
         /tmp/build/link-native/SYMSET.EXE \
@@ -109,8 +117,8 @@ RUN CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -m
 # (/boot/ovmx-distrib-semprobe.img, below) that tests/qemu/test_semantic_oracle.sh
 # boots to diff each probe's transcript against the real-VMS goldens in
 # docs/oracle/semantics/. python3 is build tooling only (the generator).
-RUN apk add --no-cache python3 && \
-    CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mtls-dialect=gnu2" \
+RUN apk add --no-cache python3 && . /etc/ovmx-arch.env && \
+    CC=gcc CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $OVTLS" \
     sh tools/oracle/semantic/mk_semprobes.sh \
         /tmp/build/bin/LINK.EXE /tmp/build/link-native/SYSLIB /tmp/build/semprobe
 
@@ -119,11 +127,11 @@ RUN apk add --no-cache python3 && \
 # LINK.EXE-built x86_64 image with NO DT_NEEDED/DT_HASH (LINK.EXE emits no
 # .dynamic section at all — resolution is via .vms$sv, not ld.so) and
 # IMGACT.EXE must be the freestanding activator (no PT_INTERP of its own).
-RUN set -e; \
+RUN set -e; . /etc/ovmx-arch.env; \
     SYSLIB=/tmp/build/link-native/SYSLIB; SYSEXE=/tmp/build/link-native/SYSEXE; \
     for f in "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE; do \
         echo "-- $f --"; \
-        readelf -h "$f" | grep -q "Machine:.*X86-64" || { echo "FAIL: $f not EM_X86_64"; exit 1; }; \
+        readelf -h "$f" | grep -q "Machine:.*$OVRE" || { echo "FAIL: $f not $OVRE"; exit 1; }; \
         N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED || true); \
         [ "$N" -eq 0 ] || { echo "FAIL: $f has $N DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }; \
         H=$(readelf -d "$f" 2>/dev/null | grep -c HASH || true); \
@@ -131,19 +139,19 @@ RUN set -e; \
     done; \
     COUNT=$(ls "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE | wc -l); \
     [ "$COUNT" -eq 9 ] || { echo "FAIL: expected 9 VMS-native artifacts, got $COUNT"; exit 1; }; \
-    readelf -h src/imgact/IMGACT.EXE | grep -q "Machine:.*X86-64" || { echo "FAIL: IMGACT.EXE not EM_X86_64"; exit 1; }; \
+    readelf -h src/imgact/IMGACT.EXE | grep -q "Machine:.*$OVRE" || { echo "FAIL: IMGACT.EXE not $OVRE"; exit 1; }; \
     if readelf -l src/imgact/IMGACT.EXE 2>/dev/null | grep -q INTERP; then \
         echo "FAIL: IMGACT.EXE itself must have no PT_INTERP"; exit 1; \
     fi; \
-    echo "OK: 9 VMS-native LINK.EXE artifacts (EM_X86_64, zero DT_NEEDED/DT_HASH) + IMGACT.EXE"; \
+    echo "OK: 9 VMS-native LINK.EXE artifacts ($OVRE, zero DT_NEEDED/DT_HASH) + IMGACT.EXE"; \
     P=/tmp/build/link-native/PARTS.EXE; \
-    readelf -h "$P" | grep -q "Machine:.*X86-64" || { echo "FAIL: PARTS.EXE not EM_X86_64"; exit 1; }; \
+    readelf -h "$P" | grep -q "Machine:.*$OVRE" || { echo "FAIL: PARTS.EXE not $OVRE"; exit 1; }; \
     NP=$(readelf -d "$P" 2>/dev/null | grep -c NEEDED || true); \
     [ "$NP" -eq 0 ] || { echo "FAIL: PARTS.EXE has $NP DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }; \
     HP=$(readelf -d "$P" 2>/dev/null | grep -c HASH || true); \
     [ "$HP" -eq 0 ] || { echo "FAIL: PARTS.EXE has $HP DT_HASH entries (ld-linked, not VMS-native)"; exit 1; }; \
     readelf -l "$P" 2>/dev/null | grep -q INTERP || { echo "FAIL: PARTS.EXE has no PT_INTERP (not IMGACT-activated)"; exit 1; }; \
-    echo "OK: PARTS.EXE is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH, PT_INTERP present)"
+    echo "OK: PARTS.EXE is VMS-native ($OVRE, zero DT_NEEDED/DT_HASH, PT_INTERP present)"
 
 # -- kernel-build stage ----------------------------------------------------
 # Builds the OVMX bootable kernel FROM PINNED UPSTREAM SOURCE (vms-448, parent
@@ -199,8 +207,10 @@ FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS kernel-build
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
+ARG BUILDARCH
 
 # One place that maps TARGETARCH to the kernel's names; every later RUN sources it.
+# On a native arm64 build host (BUILDARCH=arm64) nothing is cross-compiled.
 RUN case "${TARGETARCH:-amd64}" in \
       amd64) printf '%s\n' 'KARCH=x86_64' 'KCROSS=' 'KIMG=bzImage' 'KIMG_PATH=arch/x86/boot/bzImage' \
                  'KFRAG=/tmp/ovmx-x86_64.config' 'KCONSOLE=CONFIG_SERIAL_8250_CONSOLE' 'KXPKG=' 'KDEFCONFIG=defconfig' ;; \
@@ -209,7 +219,10 @@ RUN case "${TARGETARCH:-amd64}" in \
                  'KXPKG="gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu"' \
                  'KDEFCONFIG="defconfig virt.config"' ;; \
       *) echo "kernel-build: unsupported TARGETARCH '${TARGETARCH}'"; exit 1 ;; \
-    esac > /etc/ovmx-karch.env && cat /etc/ovmx-karch.env
+    esac > /etc/ovmx-karch.env && \
+    if [ "${TARGETARCH:-amd64}" = "${BUILDARCH:-amd64}" ]; then \
+        printf '%s\n' 'KCROSS=' 'KXPKG=' >> /etc/ovmx-karch.env; \
+    fi && cat /etc/ovmx-karch.env
 
 ARG KERNEL_VERSION=6.12.103
 ARG KERNEL_SHA256=f143aaade8877ba5616e788b4482576db28481bcf557ef537f4fcc3938fc3176
@@ -476,6 +489,13 @@ COPY --from=kernel-build /kernel-out/ /
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
+# Target-arch names for this stage (rd vms-32aa), as in link-native above.
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) printf '%s\n' 'OVARCH=x86_64' 'OVRE=X86-64' ;; \
+      arm64) printf '%s\n' 'OVARCH=aarch64' 'OVRE=AArch64' ;; \
+      *) echo "unsupported TARGETARCH '${TARGETARCH}'"; exit 1 ;; \
+    esac > /etc/ovmx-arch.env && cat /etc/ovmx-arch.env
 
 # Reproducible-build clock (vms-d73, tools/cut-release.sh). Every wall-clock
 # timestamp this stage bakes into a shipped artifact -- the OVMX kit header's
@@ -643,7 +663,7 @@ RUN cmake -B build-static -DBUILD_TESTS=ON >/dev/null && \
 # VMSFS_PROT_DEFAULT (tools/vmsfs_master.c: MASTER_UIC_*, write_header) -- the
 # exact ownership + protection provision_writable_dir() set, so SYSTEM (the
 # OWNER category) can sys$create scratch/user files in them.
-RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
+RUN . /etc/ovmx-arch.env && mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
              /system-stage/tmp /system-stage/var /system-stage/mnt \
              /system-stage/sbin \
              /system-stage/etc \
@@ -887,23 +907,23 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # away from the one that boots is not proof of what boots.
     for name in "DCL.EXE" "LOGINOUT.EXE"; do \
         IMG="/system-stage/vms/SYS0/SYSCOMMON/SYSEXE/$name" && \
-        readelf -h "$IMG" | grep -q "Machine:.*X86-64" || { echo "FAIL: shipped $name not EM_X86_64"; exit 1; } && \
+        readelf -h "$IMG" | grep -q "Machine:.*$OVRE" || { echo "FAIL: shipped $name not $OVRE"; exit 1; } && \
         N=$(readelf -d "$IMG" 2>/dev/null | grep -c NEEDED || true) && \
         [ "$N" -eq 0 ] || { echo "FAIL: shipped $name has $N DT_NEEDED entries"; exit 1; } && \
         H=$(readelf -d "$IMG" 2>/dev/null | grep -c HASH || true) && \
         [ "$H" -eq 0 ] || { echo "FAIL: shipped $name has $H DT_HASH entries"; exit 1; } && \
-        echo "OK: shipped $name is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)"; \
+        echo "OK: shipped $name is VMS-native ($OVRE, zero DT_NEEDED/DT_HASH)"; \
     done && \
     # Same shipped-bytes re-check for PARTS.EXE (vms-cde) -- the SYSUPD copy
     # is what a booted system actually gets, not the /link-native/ build
     # copy the link-native stage already checked.
     PIMG="/system-stage/vms/SYS0/SYSCOMMON/SYSUPD/PARTS.EXE" && \
-    readelf -h "$PIMG" | grep -q "Machine:.*X86-64" || { echo "FAIL: shipped PARTS.EXE not EM_X86_64"; exit 1; } && \
+    readelf -h "$PIMG" | grep -q "Machine:.*$OVRE" || { echo "FAIL: shipped PARTS.EXE not $OVRE"; exit 1; } && \
     PN=$(readelf -d "$PIMG" 2>/dev/null | grep -c NEEDED || true) && \
     [ "$PN" -eq 0 ] || { echo "FAIL: shipped PARTS.EXE has $PN DT_NEEDED entries"; exit 1; } && \
     PH=$(readelf -d "$PIMG" 2>/dev/null | grep -c HASH || true) && \
     [ "$PH" -eq 0 ] || { echo "FAIL: shipped PARTS.EXE has $PH DT_HASH entries"; exit 1; } && \
-    echo "OK: shipped PARTS.EXE is VMS-native (EM_X86_64, zero DT_NEEDED/DT_HASH)" && \
+    echo "OK: shipped PARTS.EXE is VMS-native ($OVRE, zero DT_NEEDED/DT_HASH)" && \
     [ -f "/system-stage/vms/SYS0/SYSCOMMON/SYSUPD/PARTS_SETUP.COM" ] || { echo "FAIL: PARTS_SETUP.COM missing from SYS\$UPDATE: (SYSUPD)"; exit 1; } && \
     echo "OK: PARTS_SETUP.COM present under SYS\$UPDATE: (SYSUPD)"
 # This tree is NOT packed into an initramfs (vms-1ab) -- it flows only into
@@ -1338,9 +1358,14 @@ RUN cp -a /initramfs-slim /initramfs-nodev && \
 # /boot/vmlinuz from the kernel-build stage (vms-448) -- no stock-kernel
 # symlink to reconstruct anymore. Assert it is present and is a real kernel
 # image so the runner stage never COPYs a missing/empty file.
-# Every x86 bzImage carries the "HdrS" setup-header magic at offset 0x202.
-RUN test -s /boot/vmlinuz && \
-    [ "$(dd if=/boot/vmlinuz bs=1 skip=514 count=4 2>/dev/null)" = "HdrS" ] && \
+# Every x86 bzImage carries the "HdrS" setup-header magic at offset 0x202; an
+# arm64 Image carries "ARM\x64" at 0x38 (Documentation/arch/arm64/booting.rst).
+RUN . /etc/ovmx-arch.env && test -s /boot/vmlinuz && \
+    if [ "$OVARCH" = aarch64 ]; then \
+        [ "$(dd if=/boot/vmlinuz bs=1 skip=56 count=3 2>/dev/null)" = "ARM" ]; \
+    else \
+        [ "$(dd if=/boot/vmlinuz bs=1 skip=514 count=4 2>/dev/null)" = "HdrS" ]; \
+    fi && \
     echo "OVMX vmlinuz present: $(ls -lh /boot/vmlinuz | awk '{print $5}'), kernel $(cat /tmp/kver)"
 
 # -- Runner stage --------------------------------------------------------------

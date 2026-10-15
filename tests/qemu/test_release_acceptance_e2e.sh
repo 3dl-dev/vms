@@ -93,14 +93,20 @@ EXPECTED_PRODUCT_VERSION="${EXPECTED_PRODUCT_VERSION:-}"
 KERNEL=/release/vmlinuz
 INITRD=/release/initramfs-ovmx-slim.cpio.gz
 DISTRIB_IMG=/release/ovmx-distrib.img
-ARCH=$(uname -m)
+# The GUEST arch defaults to the host's. OVMX_GUEST_ARCH=aarch64 boots a cut's
+# aarch64/ artifact set (rd vms-0ad0) from any host -- under TCG when the host
+# is not arm64, which is slower but the same machine.
+HOST_ARCH=$(uname -m)
+ARCH="${OVMX_GUEST_ARCH:-$HOST_ARCH}"
+[ "$ARCH" = arm64 ] && ARCH=aarch64
+[ "$HOST_ARCH" = arm64 ] && HOST_ARCH=aarch64
 
 if [ -z "$EXPECTED_PRODUCT_VERSION" ]; then
     echo "FATAL: EXPECTED_PRODUCT_VERSION is required (the cut's release-manifest.json product_version) -- see header" >&2
     exit 1
 fi
 
-if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+if [ "$ARCH" = "aarch64" ]; then
     QEMU=qemu-system-aarch64
     MACHINE="-machine virt -cpu cortex-a57"
     CONSOLE="console=ttyAMA0"

@@ -130,10 +130,26 @@ state neither a master handle nor a requester.
 
 ## Still not known, and not guessed
 
-**What cat-0x02 op-0x19 IS.** Zero VAX-to-VAX occurrences in the whole corpus,
-so a real VAX sends it only to OVMX. Its body carries `body[16:20] = 0x220`, a
-small count at `body[20:24]`, and a 16-byte space-padded name
-(`DISK_CL_DRVR    ` here) -- the same three fields as the 255 cat-0x01 op-0x06
-frames VAXC bursts at OVMXA in this run and in clean runs alike, and it arrives
-on the same VMS$VAXcluster Con.ID (`050070b1 0800e8db`) as the DLM answers. It
-is recorded, not interpreted: answering it needs a VAX-to-VAX oracle.
+**What cat-0x02 op-0x19 IS.** The whole corpus contains exactly TWO op-0x19
+frames and both are VAXC -> OVMXA, one in each of the two crash captures: zero
+VAX-to-VAX, so a real VAX sends it only to OVMX, i.e. OVMX reaches a state a
+real member never puts a VAX in.
+
+What is measured about the frame, and no more: it arrives on the same
+VMS$VAXcluster Con.ID (`050070b1 0800e8db`) as the DLM answers, so it is on the
+lock connection and not another SYSAP's; `body[16:20]` is 0x220; `body[20:24]`
+is a small count (7 here); and `body[24:40]` reads as the 16-byte space-padded
+name `DISK_CL_DRVR`.
+
+Do NOT read a family into those last three. A census of every committed capture
+finds `body[16:20] == 0x220` in 10,000+ frames spread over eighteen different
+(category, opcode) pairs -- cat-0x01 op-0x06 most of all, but also 02/0d, 82/0d,
+01/05, 01/03, 02/03, 02/04, 04/06 and more -- so the value at that offset is not
+a marker of anything, and the 16-byte "name" is sometimes a real SYSAP or
+process name (`DIRECTORY`, `DIR_LOOKUP`, `DISK_CL_DRVR`) and sometimes OPCOM
+text left in the sender's buffer. An earlier draft of this page called the
+op-0x19 "the same three fields as" the op-0x06 burst; that was an overstatement
+and this corrects it.
+
+Answering what op-0x19 means needs a VAX-to-VAX oracle, not a reading of one
+frame.

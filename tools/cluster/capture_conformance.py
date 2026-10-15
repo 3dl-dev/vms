@@ -42,6 +42,7 @@ TYPE_OF = {
     (0x8b, 0x01): 'cm_0b01_ans',
     (0x8b, 0x04): 'cm_lnm_ans',
     (0x0b, 0x05): 'cm_lnm_dbreq',
+    (0x02, 0x01): 'dlm_enq_req',
     (0x02, 0x04): 'dlm_dir_remove',
     (0x82, 0x0d): 'cm_dlm_op0d_echo',
 }

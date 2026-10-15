@@ -2748,6 +2748,69 @@ static void test_e09_dir_remove_on_the_wire(void)
 	conf_dump("dlm_dir_remove", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
+/*
+ * rd vms-c55 / rd vms-ac4f: THE LOCK REQUEST, composed the way the shipping
+ * send path composes it -- the codec's body, then the cluster's DLM sequence,
+ * then the connection manager's envelope on the destination's CSB -- so the
+ * conformance gate's `dlm_enq_req` rows read the bytes a real VAX is handed
+ * and not a builder's half-frame. The FIELD VALUES here are the ones the
+ * engine reads off a real LKB and RSB (dlm_proxy_fill_post); what this pins is
+ * that every one of the 132 bytes is described by a row and lands where the
+ * row says.
+ */
+static void test_c55_enq_request_on_the_wire(void)
+{
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[224];
+	uint32_t written = 0;
+	uint16_t sent0;
+
+	printf("\n-- rd vms-c55: the lock request's 132 bytes, all described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&r, 0, sizeof(r));
+	r.mode            = 5u;              /* EX, as the ACP's volume lock  */
+	r.req_lkid        = 0x01000064u;     /* this node's own handle        */
+	r.req_pid         = 0x10000021u;     /* the owning PCB's process id   */
+	r.dir_hash        = 0x650412f2u;
+	r.dir_hash_valid  = 1u;
+	r.res_group       = 1u;
+	r.res_acmode      = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len        = 10u;
+	memcpy(r.name, "RMS$4F.1.0", 10);
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence, as on every DLM message");
+	ct_check(!vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "a request is NOT a notification: its envelope opens a transaction");
+	sent0 = m->cm_send_msg;
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_REQUEST);
+	ct_check(m->cm_send_msg != sent0,
+		 "it takes the dialogue's next send-msg#");
+	ct_check(b[4] != 0 || b[5] != 0 || b[6] != 0 || b[7] != 0,
+		 "*** body[4:8] names a transaction -- a request IS answered ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
+		 "namelen=%u,hash=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
+		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash);
+	conf_dump("dlm_enq_req", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -2772,6 +2835,7 @@ int main(void)
 	test_the_go_is_a_notification();
 	test_52d_startup_query_answered_from_csb();
 	test_e09_dir_remove_on_the_wire();
+	test_c55_enq_request_on_the_wire();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();

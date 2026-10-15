@@ -1120,6 +1120,8 @@ set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
 add_test(NAME cluster_frame_conformance_gate
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_gate.sh"
         "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
+        dlm_dir_remove dlm_dir_ans_you dlm_dir_ans_redir cm_dlm_op0d_echo
+        dlm_enq_req
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"

@@ -430,6 +430,15 @@ static void proc_init(struct vms_proc *p)
 	exec_lock_init(&p->mode_lock);
 	exec_lock_init(&p->lock_list_lock);
 	exec_list_head_init(&p->locks);
+	/* Every PCB the executive makes carries a process id, and the lock
+	 * manager puts it at body[20:24] of a cross-node request that has no
+	 * master handle yet (rd vms-c55). A PCB with none is one the executive
+	 * never made, so the harness gives each one its own. */
+	{
+		static uint32_t next_vms_pid = 0x10000001u;
+
+		p->vms_pid = next_vms_pid++;
+	}
 	for (i = 0; i < 4; i++) {
 		exec_lock_init(&p->ast[i].lock);
 		exec_list_head_init(&p->ast[i].pending);
@@ -563,13 +572,17 @@ static void check_deq_traces_to_lkb(const struct arm_frame *s,
 	struct vms_dlm_deq d;
 	char what[200];
 
-	snprintf(what, sizeof(what), "%s: the frame parses as a grounded op-0x03",
-		 label);
+	/* Stated WITHOUT the scenario prefix the checks below carry, so the text
+	 * is a literal in this file: the negative-control manifest names the
+	 * assertions a mutation must redden and its self-test requires each to
+	 * exist in the suite's source (host_defects.sh
+	 * dlm-request-pid-not-read-from-pcb). Two scenarios reddening the same
+	 * line is a set of one, which is what run_host_negctl.sh compares. */
 	if (parse_deq(s, &d) != 0) {
-		ct_check(0, what);
+		ct_check(0, "the frame parses as a grounded op-0x03");
 		return;
 	}
-	ct_check(1, what);
+	ct_check(1, "the frame parses as a grounded op-0x03");
 
 	snprintf(what, sizeof(what),
 		 "%s: body[20:24] is the proxy LKB's OWN handle (0x%08x), as the "

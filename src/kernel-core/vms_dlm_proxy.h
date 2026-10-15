@@ -115,6 +115,17 @@ struct vms_dlm_proxy_post {
 	                        * be resolved by the directory node             */
 	uint32_t master_lkid;  /* the master's handle for this lock; 0 until the
 	                        * master's own reply named it                   */
+	/*
+	 * THE REQUESTING PROCESS'S ID (rd vms-c55), read off the LKB's own PCB at
+	 * post time. It rides here for the same reason `dir_hash` does: the wire
+	 * arm must be able to place it at body[20:24] -- which carries the
+	 * requesting PID until a master has named a handle -- WITHOUT deriving
+	 * it, and the only non-deriving source is an executive read while the LKB
+	 * still exists. 0 only for a lock with no process behind it, and the
+	 * codec then refuses the frame rather than sending the zero cell a real
+	 * VMS directory answers 0xfe.
+	 */
+	uint32_t req_pid;
 	uint32_t lkmode;       /* requested mode, read from the LKB             */
 	uint32_t flags;        /* LCK_M_* the requester supplied, read from the LKB */
 	char     resnam[32];   /* the RSB's name                                */

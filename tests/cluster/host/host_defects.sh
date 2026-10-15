@@ -247,6 +247,8 @@ join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
 arm-dirrm-races-the-lookup
+dlm-request-pid-cell-zeroed
+dlm-request-pid-not-read-from-pcb
 join-lnm-db-corrupt-not-reported
 lnm-unsync-still-serves
 pe-blk-frame-unringed
@@ -1255,6 +1257,40 @@ EOF
         why)          echo "dlm_arm_post() stops dropping the staged removal, so the pair that preceded a real OpenVMS VAX's LOCKMGRERR goes back on the wire: a cat-0x02 op-0x04 removal for a resource and, milliseconds later, a lookup for that same name and hash.";;
         require_fail) hd_lines <<'EOF'
 *** a request for a resource drops that resource's staged directory removal, before the request is queued ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-request-pid-cell-zeroed)
+        case "$_f" in
+        facility)     echo "a cross-node lock request carries the REQUESTING PROCESS's id at body[20:24] until a master names a handle, and never a zero (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_enq_request_build() goes back to writing only the master handle at body[20:24], so a fresh request leaves it zero -- which is what a real OpenVMS VAX V7.3 directory answers body[34] = 0xfe to (12 of 12 zero-cell answers in the corpus, 0 of 19,916 nonzero ones), the last frame it sent before each captured LOCKMGRERR.";;
+        require_fail) hd_lines <<'EOF'
+body[20:24] == the LKB's master handle, or its requesting PID while there is none
+...and body[20:24] is never zero
+EOF
+                      ;;
+        esac;;
+
+    dlm-request-pid-not-read-from-pcb)
+        case "$_f" in
+        facility)     echo "the requesting process's id on a cross-node request is READ OFF THAT PROCESS'S PCB at post time, not supplied from anywhere else (rd vms-c55, INV-6)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_proxy_fill_post() stops reading the owning PCB's process id, so the post carries neither a master handle nor a requester and the codec refuses the frame -- the lock request reaches no wire at all. The executive read is what makes the cell real rather than a value the wire arm invented.";;
+        require_fail) hd_lines <<'EOF'
+the lookup (op 0x01) went to the directory node
+two frames total: the ENQ, and now the RELEASE
+*** the second frame is a grounded op-0x03 $DEQ ***
+  addressed to the MASTER, never a directory node
+the frame parses as a grounded op-0x03
+the ENQ, then the rundown RELEASE
+*** rundown emitted a real op-0x03 $DEQ ***
+  the codec REFUSED to build it -- the placeholder that bugchecked a real VAX cannot reach a wire
 EOF
                       ;;
         esac;;
@@ -3014,6 +3050,16 @@ apply_edit() {
     arm-dirrm-races-the-lookup)
         # The one call on the post path. The edit consumes its anchor.
         sed -i 's|^\tdlm_arm_dirrm_drop_for(d, p);|\t/* NEGCTL arm-dirrm-races-the-lookup */|' "$_file";;
+
+    dlm-request-pid-cell-zeroed)
+        # The ternary's PID arm, in the one builder that writes body[20:24] on
+        # a request. The edit CONSUMES its anchor.
+        sed -i 's|: req->req_pid);|: 0u);  /* NEGCTL dlm-request-pid-cell-zeroed */|' "$_file";;
+
+    dlm-request-pid-not-read-from-pcb)
+        # The one executive read of the owning PCB's process id on the post
+        # path. The edit CONSUMES its anchor.
+        sed -i 's|^    p->req_pid     = (lock->proc != NULL) ? lock->proc->vms_pid : 0u;$|    /* NEGCTL dlm-request-pid-not-read-from-pcb */|' "$_file";;
 
     join-lnm-db-corrupt-unanswered)
         # The one answer call at the end of join_lnm_db_pulled(). The edit

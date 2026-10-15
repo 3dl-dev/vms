@@ -341,6 +341,14 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
     p->req_lkid    = lock->lkid;          /* the proxy's own handle */
     p->master_csid = lock->master_csid;   /* 0 until the cluster told us */
     p->master_lkid = lock->master_lkid;   /* 0 until the master named it */
+    /*
+     * ...and WHOSE request this is (rd vms-c55). body[20:24] carries the
+     * requesting process's id until a master has named a handle, so the id is
+     * read here, off the LKB's own PCB, while the LKB still exists -- the same
+     * chokepoint every other field comes through. No process behind the lock
+     * leaves it 0 and the codec refuses the frame.
+     */
+    p->req_pid     = (lock->proc != NULL) ? lock->proc->vms_pid : 0u;
     p->lkmode      = lock->requested_mode;
     p->flags       = lock->flags;
     strscpy(p->resnam, res->name, sizeof(p->resnam));

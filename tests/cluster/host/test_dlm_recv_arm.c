@@ -79,6 +79,15 @@ static void proc_init(struct vms_proc *p)
 	exec_lock_init(&p->mode_lock);
 	exec_lock_init(&p->lock_list_lock);
 	exec_list_head_init(&p->locks);
+	/* Every PCB the executive makes carries a process id, and the lock
+	 * manager puts it at body[20:24] of a cross-node request that has no
+	 * master handle yet (rd vms-c55). A PCB with none is one the executive
+	 * never made, so the harness gives each one its own. */
+	{
+		static uint32_t next_vms_pid = 0x10000001u;
+
+		p->vms_pid = next_vms_pid++;
+	}
 	for (i = 0; i < 4; i++) {
 		exec_lock_init(&p->ast[i].lock);
 		exec_list_head_init(&p->ast[i].pending);
@@ -306,6 +315,9 @@ static int build_grant_for(uint32_t req_lkid, uint32_t master_lkid,
 	rq.mode = (uint8_t)mode;
 	rq.req_lkid = req_lkid;       /* OUR handle, in the requester's slot */
 	rq.master_lkid = 0u;          /* a fresh ENQ knows no master handle  */
+	/* body[20:24]: a real member's REQUESTING PID until the master names a
+	 * handle (rd vms-c55; 20,365 of 21,496 real op-0x01 requests) */
+	rq.req_pid = 0x20200204u;
 	rq.name_len = (uint8_t)n;
 	memcpy(rq.name, resnam, n);
 	rq.res_ident_valid = 1u;

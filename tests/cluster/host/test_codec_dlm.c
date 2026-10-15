@@ -1675,6 +1675,9 @@ static void test_dlm_seq_and_tail(void)
 
 	memset(&r, 0, sizeof(r));
 	r.mode = 5u; r.req_lkid = 0x01000005u; r.name_len = 4u;
+	/* body[20:24] on a request with no master handle yet is the REQUESTING
+	 * PROCESS's id (rd vms-c55); a builder given neither refuses. */
+	r.req_pid = 0x10000007u;
 	memcpy(r.name, "RMT4", 4); r.res_ident_valid = 1u;
 	memset(frame, 0, sizeof(frame));
 	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
@@ -1686,9 +1689,62 @@ static void test_dlm_seq_and_tail(void)
 		 "*** its body[124:128] is the real 0xFFFFFFFF ***");
 }
 
+/*
+ * rd vms-c55: body[20:24] is the master's handle once one exists, and the
+ * REQUESTING PROCESS's id until then -- and it is never zero. Census over every
+ * committed capture, 21,496 real cat-0x02 op-0x01 requests: 20,365 PID-form,
+ * 1,116 a master lock id, 15 zero (0.07%). What a real directory answers a zero
+ * cell: body[34] = 0xfe, 12 of 12, and 0 of 19,916 nonzero ones -- and a 0xfe is
+ * the last frame a real VAX sent before each captured LOCKMGRERR.
+ */
+static uint32_t ct_le32(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+	       ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static void test_enq_request_pid_cell(void)
+{
+	struct vms_dlm_enq_request r;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + 132];
+	const uint32_t off = VMS_OFF_DLM_MASTER_LKID;
+
+	printf("-- rd vms-c55: body[20:24] on a request is never zero\n");
+
+	memset(&r, 0, sizeof(r));
+	r.mode = 5u; r.req_lkid = 0x01000005u; r.name_len = 4u;
+	memcpy(r.name, "RMT4", 4); r.res_ident_valid = 1u;
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), NULL) ==
+			 VMS_CODEC_E_INVAL,
+		 "*** neither a master handle nor a requester: REFUSED ***");
+
+	r.req_pid = 0x10000007u;
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), NULL) == VMS_CODEC_OK &&
+		 ct_le32(frame + off) == 0x10000007u,
+		 "*** no master handle yet: body[20:24] is the requesting PID ***");
+
+	r.master_lkid = 0x0f0003ceu;
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), NULL) == VMS_CODEC_OK &&
+		 ct_le32(frame + off) == 0x0f0003ceu,
+		 "*** once the master named a handle, the handle wins ***");
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_CONVERT, frame,
+					   sizeof(frame), NULL) == VMS_CODEC_OK &&
+		 ct_le32(frame + off) == 0x0f0003ceu,
+		 "... and a CONVERT carries that same handle back");
+}
+
 int main(void)
 {
 	test_dlm_seq_and_tail();
+	test_enq_request_pid_cell();
 	char err[VMS_FIXTURE_ERRLEN];
 
 	printf("test_codec_dlm: cat-0x02 DLM codec entries (FC-P4.5)\n");

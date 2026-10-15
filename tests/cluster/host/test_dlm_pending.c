@@ -50,6 +50,9 @@ static void a_request(uint8_t *body, uint32_t req_lkid, uint8_t mode,
 	rq.res_group = 1u;
 	rq.res_acmode = 3u;
 	rq.res_ident_valid = 1u;
+	/* body[20:24]: a real member's REQUESTING PID until the master names a
+	 * handle (rd vms-c55; 20,365 of 21,496 real op-0x01 requests) */
+	rq.req_pid = 0x20200204u;
 	memset(frame, 0, sizeof(frame));
 	(void)vms_dlm_enq_request_build(&rq, VMS_DLM_WIREOP_ENQ, frame,
 					(uint32_t)sizeof(frame), &written);

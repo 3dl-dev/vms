@@ -567,6 +567,40 @@ jobs:
           echo "PASS: harness correctly went RED when keyed on an absent marker -- the assertion has teeth"
 
   # -----------------------------------------------------------------------
+  # aarch64-kernel-vmsko (rd vms-a07, epic vms-0ad0: aarch64 ships in V1.0).
+  # The OVMX kernel itself -- the pinned 6.12.103 source, the OVMX exit/exec
+  # notifier patches, ovmx-arm64.config on defconfig+virt.config -- cross-built
+  # for arm64 by distro/Dockerfile.bootable's kernel-build stage, with vms.ko
+  # built IN-TREE and signed. Booted under qemu-system-aarch64 -machine virt:
+  # vms.ko must load untainted and register /dev/vms; the same boot without it
+  # must not (negative control). This is the arm64 executive rung the boot-to-
+  # login (vms-32aa) and the aarch64 cut (vms-b58) stand on.
+  # -----------------------------------------------------------------------
+  aarch64-kernel-vmsko:
+    name: aarch64 OVMX kernel + vms.ko -- cross-built, boots, /dev/vms (vms-a07)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Cross-build the arm64 OVMX kernel + vms.ko (kernel-out stage)
+        run: |
+          set -euo pipefail
+          docker buildx build -f distro/Dockerfile.bootable --platform linux/arm64 \
+            --target kernel-out --output type=local,dest="$RUNNER_TEMP/kout" .
+          ls -la "$RUNNER_TEMP/kout"
+          test "$(cat "$RUNNER_TEMP/kout/karch")" = arm64
+
+      - name: Boot it under qemu-system-aarch64; vms.ko must give /dev/vms (and nothing without it)
+        run: bash tests/qemu-aarch64/test_ovmx_kernel_vmsko.sh "$RUNNER_TEMP/kout"
+
+  # -----------------------------------------------------------------------
   # Job 1: Build and unit test (host, shared libs, readline)
   # -----------------------------------------------------------------------
   build-and-test:
@@ -1174,6 +1208,7 @@ jobs:
       - vaxharness-selftest
       - netbsd-console-selftest
       - aarch64-system-boot
+      - aarch64-kernel-vmsko
       - build-and-test
       - conformance
       - corpus-conformance

@@ -173,7 +173,9 @@ RUN set -e; \
 # deps live only in this container stage; NOTHING is installed on the host.
 # Module signing key stage (rd vms-146): see the COPY --from=modkey in
 # kernel-build for why the key lives in its own stage.
-FROM ubuntu:24.04 AS modkey
+# Build platform: the key is arch-neutral, and a cross build (TARGETARCH=arm64,
+# rd vms-a07) must not need to execute target-arch binaries here.
+FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS modkey
 RUN apt-get update -o Acquire::Retries=5 -qq && DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::Retries=5 -y --no-install-recommends openssl >/dev/null && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=secret,id=ovmx_module_signing_key \
     mkdir -p /modkey; KEY=/modkey/ovmx-module-signing-key.pem; \
@@ -188,9 +190,26 @@ RUN --mount=type=secret,id=ovmx_module_signing_key \
         echo "OVMX module signing: generated ephemeral key (signatures non-reproducible, verification still holds)"; \
     fi
 
-FROM ubuntu:24.04 AS kernel-build
+# Runs on the BUILD platform and cross-compiles when TARGETARCH differs (rd
+# vms-a07, epic vms-0ad0: aarch64 ships in V1.0). TARGETARCH=amd64 (the default,
+# and what every existing build gets) runs exactly the x86_64 commands it always
+# did; TARGETARCH=arm64 cross-builds the same pinned, patched kernel and its
+# in-tree signed vms.ko with aarch64-linux-gnu-, using ovmx-arm64.config.
+FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS kernel-build
 
 ENV DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
+
+# One place that maps TARGETARCH to the kernel's names; every later RUN sources it.
+RUN case "${TARGETARCH:-amd64}" in \
+      amd64) printf '%s\n' 'KARCH=x86_64' 'KCROSS=' 'KIMG=bzImage' 'KIMG_PATH=arch/x86/boot/bzImage' \
+                 'KFRAG=/tmp/ovmx-x86_64.config' 'KCONSOLE=CONFIG_SERIAL_8250_CONSOLE' 'KXPKG=' 'KDEFCONFIG=defconfig' ;; \
+      arm64) printf '%s\n' 'KARCH=arm64' 'KCROSS=aarch64-linux-gnu-' 'KIMG=Image' 'KIMG_PATH=arch/arm64/boot/Image' \
+                 'KFRAG=/tmp/ovmx-arm64.config' 'KCONSOLE=CONFIG_SERIAL_AMBA_PL011_CONSOLE' \
+                 'KXPKG="gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu"' \
+                 'KDEFCONFIG="defconfig virt.config"' ;; \
+      *) echo "kernel-build: unsupported TARGETARCH '${TARGETARCH}'"; exit 1 ;; \
+    esac > /etc/ovmx-karch.env && cat /etc/ovmx-karch.env
 
 ARG KERNEL_VERSION=6.12.103
 ARG KERNEL_SHA256=f143aaade8877ba5616e788b4482576db28481bcf557ef537f4fcc3938fc3176
@@ -206,10 +225,10 @@ ARG KERNEL_SHA256=f143aaade8877ba5616e788b4482576db28481bcf557ef537f4fcc3938fc31
 ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
-RUN n=0; until [ "$n" -ge 3 ]; do \
+RUN . /etc/ovmx-karch.env; n=0; until [ "$n" -ge 3 ]; do \
     apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     gcc binutils make bc bison flex libssl-dev libelf-dev openssl \
-    xz-utils curl ca-certificates kmod cpio patch \
+    xz-utils curl ca-certificates kmod cpio patch $KXPKG \
     && break; \
     n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
 done; [ "$n" -lt 3 ] && \
@@ -308,15 +327,17 @@ COPY --from=modkey /modkey/ovmx-module-signing-key.pem /usr/src/linux/ovmx-modul
 # olddefconfig. The fragment (distro/kernel/ovmx-x86_64.config) is the
 # single source of the OVMX-required option set; see its header.
 COPY distro/kernel/ovmx-x86_64.config /tmp/ovmx-x86_64.config
-RUN make ARCH=x86_64 defconfig && \
-    ./scripts/kconfig/merge_config.sh -m .config /tmp/ovmx-x86_64.config && \
-    make ARCH=x86_64 olddefconfig
+COPY distro/kernel/ovmx-arm64.config /tmp/ovmx-arm64.config
+RUN . /etc/ovmx-karch.env && \
+    make ARCH=$KARCH CROSS_COMPILE=$KCROSS $KDEFCONFIG && \
+    ARCH=$KARCH ./scripts/kconfig/merge_config.sh -m .config $KFRAG && \
+    make ARCH=$KARCH CROSS_COMPILE=$KCROSS olddefconfig
 
 # Hard gate: every load-bearing option MUST be enabled as expected. A future
 # defconfig drift or a fragment typo that silently drops one of these would
 # otherwise only surface as a mystery boot hang -- fail the build instead.
-RUN set -e; \
-    need_y="CONFIG_SERIAL_8250_CONSOLE CONFIG_VIRTIO_PCI CONFIG_VIRTIO_BLK \
+RUN set -e; . /etc/ovmx-karch.env; \
+    need_y="$KCONSOLE CONFIG_VIRTIO_PCI CONFIG_VIRTIO_BLK \
             CONFIG_VIRTIO_NET CONFIG_DEVTMPFS CONFIG_TMPFS CONFIG_PROC_FS \
             CONFIG_SYSFS CONFIG_BLK_DEV_INITRD CONFIG_RD_GZIP CONFIG_MODULES \
             CONFIG_BINFMT_ELF CONFIG_EXT4_FS"; \
@@ -347,13 +368,15 @@ RUN set -e; \
 # build input that must be held fixed across cuts to stay byte-reproducible:
 # supply the `ovmx_module_signing_key` secret (same key -> same signatures).
 # Without it the key is ephemeral and only the signature bytes vary.
-RUN export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
+RUN . /etc/ovmx-karch.env && \
+    export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
     export KBUILD_BUILD_USER=ovmx KBUILD_BUILD_HOST=ovmx && \
-    make ARCH=x86_64 -j"$(nproc)" bzImage modules && \
+    make ARCH=$KARCH CROSS_COMPILE=$KCROSS -j"$(nproc)" $KIMG modules && \
     mkdir -p /kernel-out && \
-    cp arch/x86/boot/bzImage /kernel-out/vmlinuz && \
-    make -s ARCH=x86_64 kernelrelease > /kernel-out/kernelrelease && \
-    echo "Built OVMX kernel: $(cat /kernel-out/kernelrelease), bzImage $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
+    cp $KIMG_PATH /kernel-out/vmlinuz && \
+    make -s ARCH=$KARCH CROSS_COMPILE=$KCROSS kernelrelease > /kernel-out/kernelrelease && \
+    echo "$KARCH" > /kernel-out/karch && \
+    echo "Built OVMX kernel ($KARCH): $(cat /kernel-out/kernelrelease), $KIMG $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
 
 # Harvest the IN-TREE-built OVMX modules (vms-934) and prove they are BOTH
 # in-tree (vms-934) AND signed (vms-ff5) right here, fail-closed.
@@ -398,8 +421,9 @@ RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
     [ "$n" -ge 1 ] || { echo "FAIL: harvested $n OVMX module(s); expected at least vms.ko (vms-934)"; exit 1; }; \
     [ -f /kernel-out/vms.ko ] || { echo "FAIL: vms.ko not harvested (vms-934)"; exit 1; }; \
     echo "OK: $n OVMX module(s) built IN-TREE (intree=Y, no TAINT_OUT_OF_TREE) and SIGNED (no TAINT_UNSIGNED_MODULE)"; \
-    nm /kernel-out/vms.ko | grep -q ' ods2_home_parse$' || { echo "FAIL: shipped vms.ko is missing ods2_home_parse -- the kernel-resident ODS-2 codec the Files-11 ACP uses did NOT compile in (rd vms-4a8/vms-5f0, epic vms-208); acp_validate_ods2 in vmsfs_acp.c would be a dangling-symbol modpost break, not a clean build"; exit 1; }; \
-    nm /kernel-out/vms.ko | grep -q ' ods2_dir_insert_blocks$' || { echo "FAIL: shipped vms.ko is missing the genuine ODS-2 edit symbols (ods2_*) the IO\$_WRITEVBLK path uses -- codec NOT compiled in (rd vms-4a8/vms-5f0)"; exit 1; }; \
+    . /etc/ovmx-karch.env; \
+    ${KCROSS}nm /kernel-out/vms.ko | grep -q ' ods2_home_parse$' || { echo "FAIL: shipped vms.ko is missing ods2_home_parse -- the kernel-resident ODS-2 codec the Files-11 ACP uses did NOT compile in (rd vms-4a8/vms-5f0, epic vms-208); acp_validate_ods2 in vmsfs_acp.c would be a dangling-symbol modpost break, not a clean build"; exit 1; }; \
+    ${KCROSS}nm /kernel-out/vms.ko | grep -q ' ods2_dir_insert_blocks$' || { echo "FAIL: shipped vms.ko is missing the genuine ODS-2 edit symbols (ods2_*) the IO\$_WRITEVBLK path uses -- codec NOT compiled in (rd vms-4a8/vms-5f0)"; exit 1; }; \
     echo "OK: shipped vms.ko CARRIES the kernel-resident ODS-2 codec (ods2_home_parse + ods2_dir_insert_blocks present; the Files-11 ACP path, rd vms-4a8/vms-5f0, epic vms-208)"
 
 # NODEV negative-control stub (vms-165): harvest ONE real, self-contained stock
@@ -440,6 +464,14 @@ RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
         ./scripts/sign-file sha256 "$KEY" "$KEY" /kernel-out/nodev-stub.ko || { echo "FAIL: could not sign nodev-stub.ko (vms-165)"; exit 1; }; \
     fi; \
     echo "OK: NODEV negative-control stub = $(basename "$STUB") (real, dependency-free, registers no /dev/vms; vms-165)"
+
+# Just the kernel-build outputs (vmlinuz, kernelrelease, karch, vms.ko,
+# nodev-stub.ko), for consumers that need the kernel and not the whole image:
+#   docker buildx build -f distro/Dockerfile.bootable --platform linux/arm64 \
+#     --target kernel-out --output type=local,dest=<dir> .
+# (rd vms-a07: the aarch64 kernel + vms.ko boot proof, and the aarch64 cut).
+FROM scratch AS kernel-out
+COPY --from=kernel-build /kernel-out/ /
 
 FROM ubuntu:24.04 AS builder
 

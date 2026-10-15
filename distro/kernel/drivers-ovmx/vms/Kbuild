@@ -112,3 +112,9 @@ vms-y := vms_module.o \
 # (vms_cluster_fork.o = the pure queue/dispatch, vms_cluster_fork_bind.o = its
 # exec_kthread/exec_timer binding); their includes are basenames too.
 ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL
+
+# arm64 (rd vms-a07): VMS_IO_COUNT uses the compiler's __atomic_fetch_add. On
+# aarch64 GCC lowers that to a call into libgcc's outline-atomics helpers
+# (__aarch64_ldadd4_relax), which the kernel does not provide, so modpost
+# fails. Inline the atomic instead; x86 already inlines it.
+ccflags-$(CONFIG_ARM64) += $(call cc-option,-mno-outline-atomics)

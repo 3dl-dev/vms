@@ -246,6 +246,12 @@ ccflags-y := -I$(src) -I$(src)/../kernel-core \
              -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL -DOVMX_KTEST_FAULT_INJECT \
              -DOVMX_KTEST_CLUSTER_SEAM -DOVMX_KTEST_DEVTAB_TERMINAL
 
+# arm64 (rd vms-a07): VMS_IO_COUNT uses the compiler's __atomic_fetch_add. On
+# aarch64 GCC lowers that to a call into libgcc's outline-atomics helpers
+# (__aarch64_ldadd4_relax), which the kernel does not provide, so modpost
+# fails. Inline the atomic instead; x86 already inlines it.
+ccflags-$(CONFIG_ARM64) += $(call cc-option,-mno-outline-atomics)
+
 # Default target: build against running kernel
 KDIR ?= /lib/modules/$(shell uname -r)/build
 

@@ -63,6 +63,9 @@ on:
       tcpip:
         description: 'tcpip (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.tcpip }}
+      aarch64_kernel:
+        description: 'aarch64_kernel (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.aarch64_kernel }}
       vax_login:
         description: 'vax_login (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.vax_login }}
@@ -100,6 +103,7 @@ jobs:
       alpha_activation: ${{ steps.decide.outputs.alpha_activation }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
       tcpip: ${{ steps.decide.outputs.tcpip }}
+      aarch64_kernel: ${{ steps.decide.outputs.aarch64_kernel }}
       vax_login: ${{ steps.decide.outputs.vax_login }}
     steps:
       - name: Checkout
@@ -415,6 +419,15 @@ jobs:
               - 'tests/netbsd/guest/CMakeLists.txt'
               - 'tests/netbsd/guest/negctl/**'
               - 'CMakeLists.txt'
+            # rd vms-a07: the arm64 OVMX kernel + vms.ko cross-build and boot.
+            aarch64_kernel:
+              - '.github/workflows/ci-core-gates.yml'
+              - 'distro/Dockerfile.bootable'
+              - 'distro/kernel/**'
+              - 'src/kernel/**'
+              - 'src/kernel-core/**'
+              - 'src/vmsfs/**'
+              - 'tests/qemu-aarch64/**'
             aarch64_boot:
               - '.github/workflows/**'
               - 'tests/qemu-aarch64/**'
@@ -470,6 +483,7 @@ jobs:
               echo "alpha_activation=${{ steps.filter.outputs.alpha_activation }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
               echo "tcpip=${{ steps.filter.outputs.tcpip }}"
+              echo "aarch64_kernel=${{ steps.filter.outputs.aarch64_kernel }}"
               echo "vax_login=${{ steps.filter.outputs.vax_login }}"
             } >> "$GITHUB_OUTPUT"
           else
@@ -491,6 +505,7 @@ jobs:
               echo "alpha_activation=true"
               echo "vax_toolchain=true"
               echo "tcpip=true"
+              echo "aarch64_kernel=true"
               echo "vax_login=true"
             } >> "$GITHUB_OUTPUT"
           fi

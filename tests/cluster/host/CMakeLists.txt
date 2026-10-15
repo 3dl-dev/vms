@@ -1201,6 +1201,24 @@ set_tests_properties(cluster_capture_conformance_gate_selftest PROPERTIES
     TIMEOUT 120
 )
 
+# ---- rd vms-6e6: body[28:30] of a DLM lock request is a FIELD, not residue --
+# OVMX's builder writes zero there. For most spans that is right -- a real
+# request leaves residue and rd vms-42de says this node sends zeros rather than
+# its own kernel memory -- but a real request is zero at body[28:30] only 36
+# times in 21,496, because the value is decided by the RESOURCE FAMILY, which a
+# stale buffer cannot do. --selftest pins that table against the committed
+# corpus so the item's numbers cannot drift from the bytes they came from. It
+# says only what the bytes ARE: which bit means which $ENQ option is unpublished
+# and may only be assigned by a driven one-variable capture.
+add_test(NAME cluster_host_dlm_request_flags_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_request_flags_census.py" --selftest
+)
+set_tests_properties(cluster_host_dlm_request_flags_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 120
+)
+
 # ---- rd vms-94a: the executive's CLUSTERWIDE logical-name tables -----------
 # src/kernel-core/vms_lnm.c compiled UNCHANGED on the host, the way vms_lock.c
 # is above: lnm_shim/ FIRST redirects its "vms_internal.h" to

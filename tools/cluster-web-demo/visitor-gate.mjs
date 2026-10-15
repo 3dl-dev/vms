@@ -61,6 +61,7 @@
 // Needs: playwright, and a host that can carry three emulators (the browser
 // runs qemu-wasm + two pcjs VAXen). Use k3s-worker, not a small dev host.
 import { chromium } from 'playwright';
+import { grabWorkerStacks } from './worker-stacks.mjs';
 import fs from 'node:fs';
 import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal,
          silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy,
@@ -332,6 +333,18 @@ async function oneRun(spec, idx) {
       }
       await samplePanelHealth(page, R);
       await sampleNodeAWorker(page, R);
+      // rd vms-e79 mode (b): heartbeat frozen 60 s -> grab the worker stacks (twice at most).
+      {
+        const tk = (R.nodeA_worker || {}).workerTicks;
+        if (tk !== undefined && tk !== R._tkLast) { R._tkLast = tk; R._tkAt = Date.now(); }
+        if (R._tkAt && Date.now() - R._tkAt > 60000 && (R._stackGrabs || 0) < 2) {
+          R._stackGrabs = (R._stackGrabs || 0) + 1; R._tkAt = Date.now();
+          const g = await grabWorkerStacks(ctx, page, dir, `nodeA workerTicks stuck at ${tk}`);
+          R.nodeA_stack_grabs = (R.nodeA_stack_grabs || 0) + 1;
+          log(`  Node A worker heartbeat stuck at ${tk}: grabbed ${g.workers.length} worker stack(s), ` +
+              `paused=${g.workers.filter((w) => w.paused).length}`);
+        }
+      }
       const health = await page.evaluate(() => ({
         vis: document.visibilityState,
         drift: window.__probe ? window.__probe.worstDriftMs : null,

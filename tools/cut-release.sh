@@ -53,6 +53,15 @@
 #      (no --skip-alpha), with the identical pre-alpha historical-baseline
 #      exception (%CUT-ALPHA-I-PREALPHA). Alpha executive modules are a tracked
 #      follow-on (see cut-release-alpha.sh); alpha-boot-login proves them.
+#   9. Builds the aarch64 BOOTABLE release set (the x86_64 set, for arm64:
+#      vmlinuz Image, slim initramfs, ovmx-distrib.img, ovmx-os.kit) into
+#      OUT_DIR/aarch64/ via tools/cut-release-aarch64.sh -- or takes the set a
+#      separate arm64 runner already built from THIS commit (--aarch64-dir,
+#      refused unless its stamp names the same commit + SOURCE_DATE_EPOCH).
+#      UNCONDITIONAL for any aarch64-capable tree (rd vms-b58, epic vms-0ad0:
+#      aarch64 ships in V1.0): a failed aarch64 build fails the cut. A ref that
+#      predates aarch64 support (no distro/kernel/ovmx-arm64.config) is skipped
+#      LOUDLY (%CUT-AARCH64-I-PREAARCH64), like the VAX/Alpha baselines.
 #
 # Byte-reproducibility (the vms-d73 DONE criterion) depends on
 # SOURCE_DATE_EPOCH: two cuts of the SAME commit must embed the SAME clock
@@ -80,6 +89,9 @@
 #                             reproducibility rather than measure cache reuse)
 #   --source-date-epoch N     Override the reproducible-build clock
 #                             (default: the commit time of --ref)
+#   --aarch64-dir DIR         Use the aarch64 set tools/cut-release-aarch64.sh
+#                             already built for this exact commit + clock (an
+#                             arm64 runner builds it natively; see step 9)
 #   -h, --help                  Show this help and exit
 #
 # Exit 0 on a complete bundle; nonzero and a diagnostic on any failure.
@@ -95,9 +107,10 @@ WORK_DIR=""
 KEEP_WORK=0
 NO_CACHE=0
 SOURCE_DATE_EPOCH_OVERRIDE=""
+AARCH64_PREBUILT=""
 
 usage() {
-    sed -n '2,64p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,97p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -112,6 +125,8 @@ while [ $# -gt 0 ]; do
         --no-cache) NO_CACHE=1; shift ;;
         --source-date-epoch) SOURCE_DATE_EPOCH_OVERRIDE="$2"; shift 2 ;;
         --source-date-epoch=*) SOURCE_DATE_EPOCH_OVERRIDE="${1#--source-date-epoch=}"; shift ;;
+        --aarch64-dir) AARCH64_PREBUILT="$2"; shift 2 ;;
+        --aarch64-dir=*) AARCH64_PREBUILT="${1#--aarch64-dir=}"; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "cut-release.sh: unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
@@ -335,6 +350,56 @@ else
     log "Alpha artifact set present in the cut bundle (${#ALPHA_ARTIFACT_ORDER[@]} artifacts, derived from alpha-artifact-manifest.txt): ${ALPHA_ARTIFACT_ORDER[*]}"
 fi
 
+# --- aarch64 bootable release set -- CO-RELEASE GATE (rd vms-b58) ----------
+# aarch64 ships in V1.0 (epic vms-0ad0). Either build it here
+# (tools/cut-release-aarch64.sh: native on an arm64 host, binfmt-emulated
+# elsewhere) or take the set an arm64 runner already built from this SAME
+# commit + clock (--aarch64-dir). There is no skip: without a matching prebuilt
+# set this script builds it, and a failed build fails the cut.
+AARCH64_ARTIFACT_ORDER=()
+AARCH64_SHA_NAMES=()
+AARCH64_SKIP_NOTE=""
+if [ ! -f "$SRC_DIR/distro/kernel/ovmx-arm64.config" ]; then
+    [ -z "$AARCH64_PREBUILT" ] || fail "--aarch64-dir given, but ref $GIT_REF ($COMMIT) predates aarch64 support (no distro/kernel/ovmx-arm64.config)"
+    log "%CUT-AARCH64-I-PREAARCH64, ref $GIT_REF ($COMMIT) predates aarch64 release support (no distro/kernel/ovmx-arm64.config in the archived tree) -- aarch64 artifacts omitted for this historical cut"
+    AARCH64_SKIP_NOTE="ref $GIT_REF ($COMMIT) predates aarch64 release support (rd vms-b58) -- no distro/kernel/ovmx-arm64.config in the archived tree, so no aarch64 build was attempted or required for this historical cut."
+else
+    AARCH64_OUT_DIR="$OUT_DIR/aarch64"
+    rm -rf "$AARCH64_OUT_DIR"
+    mkdir -p "$AARCH64_OUT_DIR"
+    if [ -n "$AARCH64_PREBUILT" ]; then
+        [ -f "$AARCH64_PREBUILT/aarch64-cut-stamp" ] || fail "--aarch64-dir $AARCH64_PREBUILT has no aarch64-cut-stamp (not a tools/cut-release-aarch64.sh output)"
+        want="$(printf 'commit=%s\nsource_date_epoch=%s' "$COMMIT" "$SOURCE_DATE_EPOCH")"
+        [ "$(cat "$AARCH64_PREBUILT/aarch64-cut-stamp")" = "$want" ] || \
+            fail "--aarch64-dir $AARCH64_PREBUILT was built from a different commit/clock: $(tr '\n' ' ' < "$AARCH64_PREBUILT/aarch64-cut-stamp")(want commit=$COMMIT source_date_epoch=$SOURCE_DATE_EPOCH)"
+        cp -L "$AARCH64_PREBUILT"/* "$AARCH64_OUT_DIR"/
+        log "aarch64: using the prebuilt set in $AARCH64_PREBUILT (stamp matches $COMMIT @ $SOURCE_DATE_EPOCH)"
+    else
+        CUT_RELEASE_AARCH64_ARGS=(--src-dir "$SRC_DIR" --out-dir "$AARCH64_OUT_DIR" --commit "$COMMIT" --source-date-epoch "$SOURCE_DATE_EPOCH")
+        [ "$NO_CACHE" -eq 1 ] && CUT_RELEASE_AARCH64_ARGS+=(--no-cache)
+        log "building the aarch64 bootable release set -- co-release gate, no skip"
+        "$SCRIPT_DIR/cut-release-aarch64.sh" "${CUT_RELEASE_AARCH64_ARGS[@]}" \
+            || fail "aarch64 co-release build failed (tools/cut-release-aarch64.sh) -- a release is NOT cuttable unless the aarch64 build passes (rd vms-b58, epic vms-0ad0)"
+    fi
+    AARCH64_MANIFEST_FILE="$AARCH64_OUT_DIR/aarch64-artifact-manifest.txt"
+    [ -f "$AARCH64_MANIFEST_FILE" ] || fail "no aarch64-artifact-manifest.txt in $AARCH64_OUT_DIR"
+    while IFS= read -r name || [ -n "$name" ]; do
+        [ -n "$name" ] && AARCH64_ARTIFACT_ORDER+=("$name")
+    done < "$AARCH64_MANIFEST_FILE"
+    [ "${#AARCH64_ARTIFACT_ORDER[@]}" -gt 0 ] || fail "aarch64-artifact-manifest.txt named zero artifacts"
+    for name in "${AARCH64_ARTIFACT_ORDER[@]}"; do
+        [ -s "$AARCH64_OUT_DIR/$name" ] || fail "aarch64 artifact missing or empty in the cut bundle: aarch64/$name"
+        AARCH64_SHA_NAMES+=("aarch64/$name")
+    done
+    # The stamp is build metadata, not a shipped artifact; the manifest ships.
+    rm -f "$AARCH64_OUT_DIR/aarch64-cut-stamp"
+    AARCH64_DIR_COUNT="$(find "$AARCH64_OUT_DIR" -maxdepth 1 -type f ! -name 'aarch64-artifact-manifest.txt' | wc -l)"
+    [ "$AARCH64_DIR_COUNT" -eq "${#AARCH64_ARTIFACT_ORDER[@]}" ] || \
+        fail "aarch64 artifact count mismatch: the manifest names ${#AARCH64_ARTIFACT_ORDER[@]} but $AARCH64_OUT_DIR holds $AARCH64_DIR_COUNT files"
+    AARCH64_SHA_NAMES+=("aarch64/aarch64-artifact-manifest.txt")
+    log "aarch64 artifact set present in the cut bundle: ${AARCH64_ARTIFACT_ORDER[*]}"
+fi
+
 # --- The containerized build (unchanged pipeline; this script drives it) ---
 docker buildx inspect >/dev/null 2>&1 || \
     docker buildx create --name ovmx-cut-release --use >/dev/null
@@ -419,9 +484,9 @@ python3 "$SCRIPT_DIR/gen_release_notes.py" \
 # and its own `sha256sum -c SHA256SUMS` re-verification covers them for free.
 (
     cd "$OUT_DIR"
-    sha256sum "${ARTIFACT_ORDER[@]}" ovmx-os.kit.manifest.txt "${VAX_SHA_NAMES[@]}" "${ALPHA_SHA_NAMES[@]}" "$RELEASE_NOTES_FILE" > SHA256SUMS
+    sha256sum "${ARTIFACT_ORDER[@]}" ovmx-os.kit.manifest.txt "${VAX_SHA_NAMES[@]}" "${ALPHA_SHA_NAMES[@]}" "${AARCH64_SHA_NAMES[@]}" "$RELEASE_NOTES_FILE" > SHA256SUMS
 )
-log "wrote $OUT_DIR/SHA256SUMS (including ${#VAX_SHA_NAMES[@]} VAX + ${#ALPHA_SHA_NAMES[@]} Alpha artifacts)"
+log "wrote $OUT_DIR/SHA256SUMS (including ${#VAX_SHA_NAMES[@]} VAX + ${#ALPHA_SHA_NAMES[@]} Alpha + ${#AARCH64_SHA_NAMES[@]} aarch64 artifacts)"
 
 # --- Machine-readable release manifest --------------------------------------
 # OVMX-defined format (Project Rule 8): this is NOT a VSI/PCSI artifact and is
@@ -502,6 +567,28 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
         [ "$alpha_first" -eq 1 ] && alpha_first=0 || printf ',\n'
         printf '      {"component": "alpha/%s", "product_version": "%s", "sha256": "%s", "bytes": %s}' \
             "$name" "$PRODUCT_VERSION" "$(sha256_of "alpha/$name")" "$(bytes_of "alpha/$name")"
+    done
+    printf '\n    ]\n'
+    printf '  },\n'
+    printf '  "aarch64_release": {\n'
+    printf '    "_note": "aarch64 (OVMX/Linux on arm64) bootable release set (rd vms-b58, epic vms-0ad0): the same Dockerfile.bootable pipeline as x86_64, TARGETARCH=arm64 -- an arm64 Image with the in-tree signed vms.ko, the slim initramfs, the pre-installed ovmx-distrib.img and the OS kit. Boots under qemu-system-aarch64 -machine virt; the release-acceptance gate boots these exact files. All files under aarch64/.",\n'
+    printf '    "skipped": %s,\n' "$([ -n "$AARCH64_SKIP_NOTE" ] && echo true || echo false)"
+    if [ -n "$AARCH64_SKIP_NOTE" ]; then
+        printf '    "skipped_reason": "%s",\n' "$AARCH64_SKIP_NOTE"
+    fi
+    printf '    "aarch64_artifacts": [\n'
+    a64_names_first=1
+    for name in "${AARCH64_ARTIFACT_ORDER[@]}"; do
+        [ "$a64_names_first" -eq 1 ] && a64_names_first=0 || printf ',\n'
+        printf '      "%s"' "$name"
+    done
+    printf '\n    ],\n'
+    printf '    "artifacts": [\n'
+    a64_first=1
+    for name in "${AARCH64_ARTIFACT_ORDER[@]}"; do
+        [ "$a64_first" -eq 1 ] && a64_first=0 || printf ',\n'
+        printf '      {"component": "aarch64/%s", "product_version": "%s", "sha256": "%s", "bytes": %s}' \
+            "$name" "$PRODUCT_VERSION" "$(sha256_of "aarch64/$name")" "$(bytes_of "aarch64/$name")"
     done
     printf '\n    ]\n'
     printf '  },\n'

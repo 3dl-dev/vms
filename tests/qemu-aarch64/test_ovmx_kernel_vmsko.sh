@@ -30,7 +30,7 @@ apt-get download -qq busybox-static:arm64
 mkdir -p r/bin r/dev r/proc r/sys
 dpkg-deb -x busybox-static_*arm64.deb bb
 cp "$(ls bb/usr/bin/busybox bb/bin/busybox 2>/dev/null | head -1)" r/bin/busybox
-file r/bin/busybox | grep -q "ARM aarch64" || { echo "busybox is not arm64"; exit 3; }
+grep -q "ARM aarch64" <<<"$(file r/bin/busybox)" || { echo "busybox is not arm64"; exit 3; }
 cp /h/kernel_vmsko_init.sh r/init; chmod 755 r/init
 cp /k/vms.ko r/vms.ko
 ( cd r && find . | cpio -o -H newc 2>/dev/null | gzip -9 ) > initrd.gz
@@ -43,13 +43,13 @@ for mode in load noload; do
         -append "console=ttyAMA0 panic=-1 rdinit=/init ovmxmode=$mode" \
         -nographic -no-reboot -nic none -nodefaults -serial mon:stdio 2>&1 | tr -d "\r" || true)
   printf "%s\n" "$OUT" | grep -a "OVMX_A64\|vms:\|Kernel panic\|Unable to\|BUG\|Oops" | head -20
-  printf "%s\n" "$OUT" | grep -q "OVMX_A64_KERNEL .*machine=aarch64" || { echo "FAIL[$mode]: guest did not report machine=aarch64"; fail=1; }
+  grep -q "OVMX_A64_KERNEL .*machine=aarch64" <<<"$OUT" || { echo "FAIL[$mode]: guest did not report machine=aarch64"; fail=1; }
   if [ $mode = load ]; then
-    printf "%s\n" "$OUT" | grep -q "OVMX_A64_VMSKO_LOADED" || { echo "FAIL[load]: vms.ko did not load"; fail=1; }
-    printf "%s\n" "$OUT" | grep -q "OVMX_A64_DEVVMS_PRESENT" || { echo "FAIL[load]: /dev/vms absent after loading vms.ko"; fail=1; }
-    printf "%s\n" "$OUT" | grep -q "OVMX_A64_TAINTED=0$" || { echo "FAIL[load]: kernel tainted after loading vms.ko (expected in-tree + signed)"; fail=1; }
+    grep -q "OVMX_A64_VMSKO_LOADED" <<<"$OUT" || { echo "FAIL[load]: vms.ko did not load"; fail=1; }
+    grep -q "OVMX_A64_DEVVMS_PRESENT" <<<"$OUT" || { echo "FAIL[load]: /dev/vms absent after loading vms.ko"; fail=1; }
+    grep -q "OVMX_A64_TAINTED=0$" <<<"$OUT" || { echo "FAIL[load]: kernel tainted after loading vms.ko (expected in-tree + signed)"; fail=1; }
   else
-    printf "%s\n" "$OUT" | grep -q "OVMX_A64_DEVVMS_ABSENT" || { echo "FAIL[noload]: /dev/vms present without vms.ko -- the check has no teeth"; fail=1; }
+    grep -q "OVMX_A64_DEVVMS_ABSENT" <<<"$OUT" || { echo "FAIL[noload]: /dev/vms present without vms.ko -- the check has no teeth"; fail=1; }
   fi
 done
 [ $fail = 0 ] && echo "PASS: OVMX arm64 kernel boots, vms.ko loads (in-tree, signed, untainted), /dev/vms exists; absent without it"

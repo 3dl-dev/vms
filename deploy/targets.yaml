@@ -120,6 +120,15 @@ targets:
   - id: qemu-wasm-glue
     rd: vms-e79
     expect: 16
-    build: {repo: 3dl-dev/qemu-wasm, workflow: build-wasm.yml, inputs: {pool: "16", publish: true}}
+    build: {repo: 3dl-dev/qemu-wasm, workflow: build-wasm.yml, inputs: {pool: "16", fs: wasmfs, publish: true}}
     deploy: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml, trigger: "fork release named in its qemu-wasm download step"}
     probe: {kind: regex, url: "https://openvmx.3dl.dev/boot/out.js", pattern: "var pthreadPoolSize = ([0-9]+);"}
+  # The emulator's filesystem backend (vms-e79): WASMFS, not MEMFS -- 0 Node A
+  # freezes in 32 boots vs 7/28 for the MEMFS pool-16 control. track-release
+  # stamps ASSET_VER in node-worker.js from the fork release tag.
+  - id: qemu-wasm-fs
+    rd: vms-e79
+    expect: wasmfs
+    build: {repo: 3dl-dev/qemu-wasm, workflow: build-wasm.yml, inputs: {pool: "16", fs: wasmfs, publish: true}}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml, trigger: "fork release named in its qemu-wasm download step"}
+    probe: {kind: regex, url: "https://openvmx.3dl.dev/demo/cluster/node-worker.js", pattern: "const ASSET_VER = 'wasm-([a-z]+)-pool"}

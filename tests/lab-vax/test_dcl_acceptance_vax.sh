@@ -77,10 +77,14 @@ export EXPECTED_COMPAT_VERSION="$CVER"
 # rd vms-76c3: F$GETSYI("ARCH_NAME") on a __vax__ build -> ovmx_hw_arch() = "VAX".
 export EXPECTED_ARCH_NAME="VAX"
 
-# VOLUME_LABEL tracks master_system_volume's vmsfs_master --ods2 label; verify.
-export VOLUME_LABEL="OVMXSYS"
-if ! grep -qE "ods2 master .* $VOLUME_LABEL " "$REPO/tests/lab-vax/run-boot.sh" 2>/dev/null; then
-    log "WARNING: run-boot.sh no longer masters the VAX system volume as '$VOLUME_LABEL' -- update VOLUME_LABEL"
+# VOLUME_LABEL tracks master_system_volume's vmsfs_master --ods2 label. It is
+# the SAME knob (rd vms-3ea): run-boot.sh masters with $SYSVOL_LABEL, default
+# OVMXSYS, so a build that gives this node its own label asserts that label
+# here rather than the default. Reading one variable is what keeps the battery
+# and the mastering from drifting apart.
+export VOLUME_LABEL="${SYSVOL_LABEL:-OVMXSYS}"
+if ! grep -qE 'ods2 master .*\$\{SYSVOL_LABEL\}' "$REPO/tests/lab-vax/run-boot.sh" 2>/dev/null; then
+    log "WARNING: run-boot.sh no longer masters the VAX system volume from \$SYSVOL_LABEL -- update VOLUME_LABEL"
 fi
 
 # SYSDEV: OVMX/NetBSD-vax names its MSCP system disk DUA0: -- the authentic

@@ -156,6 +156,15 @@ SINGLE_A_SECTORS="${SINGLE_A_SECTORS:-524288}"      # root FFS: 256 MiB
 SINGLE_TOTAL_SECTORS="${SINGLE_TOTAL_SECTORS:-664360}"  # slim disk: RAUSER=340
 SINGLE_RQ0_TYPE="${SINGLE_RQ0_TYPE:-RAUSER=340}"    # 324 MiB MSCP disk
 
+# rd vms-3ea: the ODS-2 LABEL the system volume is mastered with. It is the
+# Files-11 lock namespace -- acp_vol_resnam_kind() spells this node's volume
+# locks "F11B$<kind><label>" -- so in a cluster two DIFFERENT volumes sharing
+# one label share one clusterwide resource. Every OVMX image has been mastered
+# OVMXSYS, which is fine for one node and is an administrator error for two.
+# Overridable so a per-node label can be given at build time; the default is
+# unchanged, so every existing caller masters exactly what it mastered before.
+SYSVOL_LABEL="${SYSVOL_LABEL:-OVMXSYS}"
+
 CROSS_IMAGE="${CROSS_IMAGE:-ovmx-cross-vax}"
 LAB_IMAGE="${LAB_IMAGE:-ovmx-vax-lab}"
 
@@ -579,7 +588,7 @@ master_system_volume() {
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
          /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
       bash /src/tests/lab-vax/stage_sysvol.sh /images /src /tmp/stage
-      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${SYSVOL_IMG}")"' '"${SYSVOL_LABEL}"' /tmp/stage 64
       /tmp/vmsfs_master --ods2 list /out/'"$(basename "${SYSVOL_IMG}")")"
   echo "${listing}"
   [ -f "${SYSVOL_IMG}" ] || die "system-volume mastering did not produce ${SYSVOL_IMG}"
@@ -719,7 +728,7 @@ master_distribution_volume() {
          /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
       bash /src/tests/lab-vax/stage_sysvol.sh --distribution --kit /kit/OVMX-OS-VAX.KIT \
            /images /src /tmp/stage
-      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${DISTRIB_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${DISTRIB_IMG}")"' '"${SYSVOL_LABEL}"' /tmp/stage 64
       /tmp/vmsfs_master --ods2 list /out/'"$(basename "${DISTRIB_IMG}")")"
   echo "${listing}"
   [ -f "${DISTRIB_IMG}" ] || die "distribution-volume mastering did not produce ${DISTRIB_IMG}"
@@ -1217,7 +1226,7 @@ master_status_volume() {
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
          /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
       bash /src/tests/lab-vax/stage_sysvol.sh --status-proof /proof /images /src /tmp/stage
-      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${STATUS_SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
+      /tmp/vmsfs_master --ods2 master /out/'"$(basename "${STATUS_SYSVOL_IMG}")"' '"${SYSVOL_LABEL}"' /tmp/stage 64
       /tmp/vmsfs_master --ods2 list /out/'"$(basename "${STATUS_SYSVOL_IMG}")")"
   echo "${listing}"
   [ -f "${STATUS_SYSVOL_IMG}" ] || die "status proof volume mastering did not produce ${STATUS_SYSVOL_IMG}"

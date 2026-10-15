@@ -26,26 +26,28 @@ targets:
   - {id: data, rd: x, build: {}, deploy: {}, probe: {kind: json, url: "http://f/d.json", path: "releases.0.tag"}}
   - {id: disk, rd: x, build: {}, deploy: {}, probe: {kind: regex, url: "http://f/", pattern: "img-(v[0-9.-]+)\\.gz"}}
   - {id: pinned-vol, rd: x, tracks: none, build: {}, deploy: {}, probe: {kind: served, url: "http://f/vol"}}
+  - {id: glue, rd: x, expect: 16, build: {}, deploy: {}, probe: {kind: regex, url: "http://f/out.js", pattern: "var pthreadPoolSize = ([0-9]+);"}}
 EOF
-fx() {  # fx <label> <tagfile> <disk> <assets-json> <tagfile-status>
+fx() {  # fx <label> <tagfile> <disk> <assets-json> <tagfile-status> [<glue pool>]
   cat > "$T/fx.json" <<EOF
 {"urls": {
   "http://f/": {"status": 200, "body": "<i data-v>$1</i> <a href=img-$3.gz>"},
   "http://f/TAG": {"status": ${5:-200}, "body": "$2\n"},
   "http://f/pin.json": {"status": 200, "body": "{\"reason\": \"visitor gate failed for V0.7-10\"}"},
   "http://f/d.json": {"status": 200, "body": "{\"releases\": [{\"tag\": \"V0.7-10\"}]}"},
-  "http://f/vol": {"status": 200, "body": "x"}},
+  "http://f/vol": {"status": 200, "body": "x"},
+  "http://f/out.js": {"status": 200, "body": "initMainThread() { var pthreadPoolSize = ${6:-16}; }"}},
  "release_assets": $4}
 EOF
 }
 run() { $S --manifest "$T/m.yaml" --latest V0.7-10 --fixture "$T/fx.json" > "$T/out" 2>&1; echo $?; }
 
 fx V0.7-10 V0.7-10 v0.7-10 '["DCL-VAX.EXE"]'
-rc=$(run); [ "$rc" = 0 ] && grep -q "all 6 targets on V0.7-10" "$T/out" \
+rc=$(run); [ "$rc" = 0 ] && grep -q "all 7 targets on V0.7-10" "$T/out" \
   && ok "every probe kind reads a current target as current" || { bad "all-current manifest did not pass (rc=$rc)"; cat "$T/out"; }
 
 fx V0.7-10 V0.7-10 v0.7-5 '["DCL-VAX.EXE"]'
-rc=$(run); [ "$rc" = 1 ] && grep -q "\[DRIFT\] disk: live=v0.7-5" "$T/out" && grep -q "1 of 6" "$T/out" \
+rc=$(run); [ "$rc" = 1 ] && grep -q "\[DRIFT\] disk: live=v0.7-5" "$T/out" && grep -q "1 of 7" "$T/out" \
   && ok "negative control: one stale probe turns the sentinel red and names that target" \
   || { bad "a stale probe did not go red (rc=$rc)"; cat "$T/out"; }
 
@@ -61,6 +63,11 @@ rc=$(run); [ "$rc" = 1 ] && grep -q "\[DRIFT\] tagfile: live=V0.7-9" "$T/out" &&
 fx V0.7-10 V0.7-10 v0.7-10 '["DCL-ALPHA.EXE"]'
 rc=$(run); [ "$rc" = 1 ] && grep -q "\[NOVER\] asset" "$T/out" \
   && ok "an arch the release does not ship is reported" || { bad "missing arch asset passed (rc=$rc)"; cat "$T/out"; }
+
+fx V0.7-10 V0.7-10 v0.7-10 '["DCL-VAX.EXE"]' 200 4
+rc=$(run); [ "$rc" = 1 ] && grep -q "\[DRIFT\] glue: live=4 expected=16" "$T/out" \
+  && ok "a target pinned to a non-tag value (expect:) reds when the live value differs" \
+  || { bad "a wrong pinned value passed (rc=$rc)"; cat "$T/out"; }
 
 printf 'targets:\n  - {id: a, rd: x, build: {}, deploy: {}, probe: {kind: text, url: "u"}}\n  - {id: a, rd: x, build: {}, deploy: {}}\n' > "$T/bad.yaml"
 $S --manifest "$T/bad.yaml" --latest V0.7-10 --fixture "$T/fx.json" > "$T/out" 2>&1; rc=$?

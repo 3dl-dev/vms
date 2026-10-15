@@ -112,3 +112,14 @@ targets:
     build: {note: "pinned real VAX/VMS V7.3 volume; never rebuilt"}
     deploy: {note: "vax.3dl.network (pcjs-vax Pages)"}
     probe: {kind: served, url: "https://vax.3dl.network/machines/dec/vax/browser/vms73-nodeC-cluster.dsk.gz"}
+
+  # ---- the in-browser emulator (every x86 demo node runs it) -------------
+  # Not release-versioned: pinned to the pthread pool the demo needs. A glue
+  # that preallocates fewer workers deadlocks qemu-wasm at random points
+  # (rd vms-e79); the release once labelled pool8 shipped 4.
+  - id: qemu-wasm-glue
+    rd: vms-e79
+    expect: 16
+    build: {repo: 3dl-dev/qemu-wasm, workflow: build-wasm.yml, inputs: {pool: "16", publish: true}}
+    deploy: {repo: 3dl-dev/openvmx-site, workflow: track-release.yml, trigger: "fork release named in its qemu-wasm download step"}
+    probe: {kind: regex, url: "https://openvmx.3dl.dev/boot/out.js", pattern: "var pthreadPoolSize = ([0-9]+);"}

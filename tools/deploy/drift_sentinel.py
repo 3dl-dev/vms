@@ -77,6 +77,8 @@ def load_manifest(path):
         p = t.get("probe") or {}
         if p.get("kind") not in PROBE_KINDS:
             errs.append(f"{tid}: probe.kind must be one of {sorted(PROBE_KINDS)}")
+        if "expect" in t and t.get("tracks") == "none":
+            errs.append(f"{tid}: 'expect' needs a probe that reads a value, not tracks: none")
         if p.get("kind") == "served" and t.get("tracks") != "none":
             errs.append(f"{tid}: a 'served' probe proves no version; use it only with tracks: none")
     if errs:
@@ -173,12 +175,13 @@ def evaluate(targets, latest, net):
             state = "ok" if live == "served" else "unprobeable"
         elif live is None:
             state = "unprobeable"
-        elif norm(live) == norm(latest):
+        elif norm(live) == norm(str(t.get("expect", latest))):
             state = "ok"
         else:
             state = "drift"
         row = {"id": t["id"], "rd": t["rd"], "state": state, "live": live,
-               "expected": None if t.get("tracks") == "none" else latest, "detail": detail}
+               "expected": None if t.get("tracks") == "none" else str(t.get("expect", latest)),
+               "detail": detail}
         if state != "ok" and t.get("gated"):
             row["pin_reason"] = pin_reason(t, net)
         rows.append(row)

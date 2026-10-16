@@ -1,0 +1,91 @@
+# Reusable: make sure the prebuilt OVMX kernel-base image exists in GHCR and say
+# where it is (CI-speed lane A).
+#
+# distro/Dockerfile.bootable's `kernel-base` stage compiles the pinned Linux
+# kernel (~7 min). Its inputs are the Linux version, the patches, the config
+# fragments, the in-tree driver overlay and the module-signing stage -- NOT the
+# src/kernel sources that vms.ko is made from. So it is built once per content
+# hash and kept at ghcr.io/<owner>/ovmx-kernel-base:<arch>-<hash>; every image
+# build then passes `--build-arg KERNEL_BASE=<ref>` and only the Dockerfile's
+# incremental `kernel-build` stage runs (re-stage the sources, rebuild what
+# changed: seconds).
+#
+# Never fails the caller: if the registry is unreachable or unwritable (e.g. a
+# fork PR's read-only token) `ref` is the literal `kernel-base`, which the
+# Dockerfile resolves to its own local stage -- the old, slow, identical build.
+#
+# NB: the base carries the build's EPHEMERAL module-signing key (the kernel
+# needs it to sign modules). It gates nothing (CONFIG_MODULE_SIG_FORCE is off,
+# the Dockerfile asserts it), and release cuts (tools/cut-release.sh) never use
+# this image -- they build the stage locally with the real signing secret.
+name: kernel-base
+
+on:
+  workflow_call:
+    outputs:
+      ref:
+        description: "KERNEL_BASE build-arg value: a GHCR image ref, or 'kernel-base' (local stage)"
+        value: ${{ jobs.ensure.outputs.ref }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  ensure:
+    name: Ensure prebuilt kernel base
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      ref: ${{ steps.final.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Log in to ghcr.io
+        continue-on-error: true
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Content hash of the kernel base inputs
+        id: key
+        run: |
+          set -eu
+          # Dockerfile text of the base only (modkey + kernel-base stages), plus
+          # every file under distro/kernel (patches, configs, overlay, scaffold).
+          h=$( { awk '/AS modkey$/{p=1} /^# -- kernel-build stage \(incremental/{p=0} p' distro/Dockerfile.bootable
+                 find distro/kernel -type f | LC_ALL=C sort | xargs sha256sum; } | sha256sum | cut -c1-20)
+          owner=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
+          echo "ref=ghcr.io/${owner}/ovmx-kernel-base:amd64-${h}" >> "$GITHUB_OUTPUT"
+
+      - name: Already built?
+        id: have
+        run: |
+          if docker buildx imagetools inspect "${{ steps.key.outputs.ref }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build + push the kernel base (cold 7 min, once per content hash)
+        if: ${{ steps.have.outputs.exists != 'true' }}
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          target: kernel-base
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.key.outputs.ref }}
+
+      - name: Resolve KERNEL_BASE
+        id: final
+        run: |
+          if docker buildx imagetools inspect "${{ steps.key.outputs.ref }}" >/dev/null 2>&1; then
+            echo "ref=${{ steps.key.outputs.ref }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::kernel base not available in GHCR; building it locally (slow path)"
+            echo "ref=kernel-base" >> "$GITHUB_OUTPUT"
+          fi

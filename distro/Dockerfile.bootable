@@ -48,6 +48,10 @@
 # link-native-cmake-x86_64 job uses; OVMX_LINK_NATIVE auto-detects ON only
 # when `$CC -dumpmachine` reports an aarch64/x86_64 *-musl triple, which
 # Ubuntu's musl-gcc wrapper does not.
+# Where kernel-build starts from: the local kernel-base stage by default, or a
+# prebuilt kernel-base image from the registry (CI). See the kernel-build stage.
+ARG KERNEL_BASE=kernel-base
+
 FROM alpine:3.20 AS link-native
 
 RUN apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers
@@ -203,7 +207,7 @@ RUN --mount=type=secret,id=ovmx_module_signing_key \
 # and what every existing build gets) runs exactly the x86_64 commands it always
 # did; TARGETARCH=arm64 cross-builds the same pinned, patched kernel and its
 # in-tree signed vms.ko with aarch64-linux-gnu-, using ovmx-arm64.config.
-FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS kernel-build
+FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS kernel-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
@@ -390,6 +394,56 @@ RUN . /etc/ovmx-karch.env && \
     make -s ARCH=$KARCH CROSS_COMPILE=$KCROSS kernelrelease > /kernel-out/kernelrelease && \
     echo "$KARCH" > /kernel-out/karch && \
     echo "Built OVMX kernel ($KARCH): $(cat /kernel-out/kernelrelease), $KIMG $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
+
+# -- kernel-build stage (incremental on top of kernel-base) -----------------
+# CI speed (rd: CI-speed lane A). Everything above is `kernel-base`: pinned
+# Linux source + patches + .config + the OVMX driver overlay, fully compiled.
+# It depends on (Linux version, patches, config fragments, overlay script,
+# drivers-ovmx scaffold, signing key) and NOT on the churning src/kernel sources
+# vms.ko is made from, so CI builds it once per content hash and pushes it to
+# GHCR (see .github/workflows/build-image.yml); jobs then pass
+#   --build-arg KERNEL_BASE=ghcr.io/3dl-dev/ovmx-kernel-base:<hash>
+# and only this stage runs: it re-stages the current OVMX sources into the SAME
+# in-tree drivers/ovmx (so vms.ko is still built in-tree, intree=Y, signed by the
+# kernel's own key) and rebuilds only what changed -- seconds, not ~7 minutes.
+# With no build-arg KERNEL_BASE is the local kernel-base stage above, so a plain
+# `docker build` (and the cut-release reproducibility gate) is unchanged in
+# content: the incremental pass over unchanged sources is a no-op.
+FROM --platform=$BUILDPLATFORM ${KERNEL_BASE} AS kernel-build
+ARG SOURCE_DATE_EPOCH=0
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+WORKDIR /usr/src/linux
+COPY src/kernel                          /tmp/ovmx-src/src/kernel
+COPY src/kernel-core                     /tmp/ovmx-src/src/kernel-core
+COPY src/vmsfs                           /tmp/ovmx-src/src/vmsfs
+COPY distro/kernel/drivers-ovmx          /tmp/ovmx-src/distro/kernel/drivers-ovmx
+COPY distro/kernel/overlay-ovmx-drivers.sh /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh
+# Stage the overlay into a scratch tree (the overlay script rm -rf's its target,
+# which would throw away the base's compiled objects), then sync only the files
+# that differ into the real drivers/ovmx: make rebuilds exactly the changed
+# sources, vmlinux stays up to date (no relink, no .version bump), and files the
+# sources no longer ship are removed.
+RUN . /etc/ovmx-karch.env && \
+    mkdir -p /tmp/kt/drivers && touch /tmp/kt/Makefile && \
+    cp drivers/Kconfig drivers/Makefile /tmp/kt/drivers/ && \
+    bash /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh /tmp/kt /tmp/ovmx-src && \
+    (cd /tmp/kt/drivers/ovmx && find . -type f) | while read -r f; do \
+        if ! cmp -s "/tmp/kt/drivers/ovmx/$f" "drivers/ovmx/$f"; then \
+            mkdir -p "$(dirname "drivers/ovmx/$f")" && cp "/tmp/kt/drivers/ovmx/$f" "drivers/ovmx/$f"; \
+            echo "  changed: $f"; \
+        fi; \
+    done && \
+    (cd drivers/ovmx && find . -type f \( -name '*.c' -o -name '*.h' -o -name Kbuild -o -name Kconfig -o -name Makefile \)) | while read -r f; do \
+        [ -e "/tmp/kt/drivers/ovmx/$f" ] || { rm -f "drivers/ovmx/$f"; echo "  removed: $f"; }; \
+    done && \
+    rm -rf /tmp/kt && \
+    export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
+    export KBUILD_BUILD_USER=ovmx KBUILD_BUILD_HOST=ovmx && \
+    make ARCH=$KARCH CROSS_COMPILE=$KCROSS -j"$(nproc)" $KIMG modules && \
+    cp $KIMG_PATH /kernel-out/vmlinuz && \
+    make -s ARCH=$KARCH CROSS_COMPILE=$KCROSS kernelrelease > /kernel-out/kernelrelease && \
+    echo "$KARCH" > /kernel-out/karch && \
+    echo "Incremental OVMX kernel pass ($KARCH): $(cat /kernel-out/kernelrelease)"
 
 # Harvest the IN-TREE-built OVMX modules (vms-934) and prove they are BOTH
 # in-tree (vms-934) AND signed (vms-ff5) right here, fail-closed.

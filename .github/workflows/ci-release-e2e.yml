@@ -49,9 +49,17 @@ jobs:
   #   Boot 2: same disk  → STARTUP.EXE detects installed system, skips install
   # Proves install-once / boot-many persistence across reboots.
   # -----------------------------------------------------------------------
+  kernel-base:
+    name: Prebuilt kernel base (GHCR)
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/kernel-base.yml
+
   persistent-boot:
     name: Persistent Boot Smoke Test
-    needs: changes
+    needs: [changes, kernel-base]
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -76,6 +84,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
+      - name: Log in to ghcr.io (pull the prebuilt kernel base)
+        continue-on-error: true
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Build bootable image
         id: build
         uses: docker/build-push-action@v6
@@ -85,6 +97,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-boot:latest
+          build-args: |
+            KERNEL_BASE=${{ needs.kernel-base.outputs.ref }}
           cache-from: type=gha
           # THE ONE WRITER of the default-scope layer cache (rd vms-14da). Fifteen
           # jobs build distro/Dockerfile.bootable; when all of them exported
@@ -1805,6 +1819,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - changes
+      - kernel-base
       - persistent-boot
       - aarch64-release-set
       - cut-release-reproducible

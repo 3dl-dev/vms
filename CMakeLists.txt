@@ -721,6 +721,14 @@ if(BUILD_TESTS)
     set_tests_properties(merge_queue_gates_complete PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # Red-main bot (tools/ci/red_main_bot.py): re-run-once flake rule, bisect,
+    # revert PR naming the culprit, refusals -- against a fake gh/git.
+    add_test(NAME red_main_bot_gate
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_red_main_bot.py
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(red_main_bot_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.

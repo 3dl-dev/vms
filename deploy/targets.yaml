@@ -46,7 +46,7 @@ targets:
     probe: {kind: release_asset, pattern: "DCL-VAX.EXE"}
   - id: release-aarch64
     rd: vms-665
-    build: {note: "no aarch64 leg in release.yml yet"}
+    build: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push, note: "job cut-aarch64 on an arm64 runner (tools/cut-release-aarch64.sh, vms-b58)"}
     deploy: {repo: 3dl-dev/vms, workflow: release.yml, trigger: tag push}
     probe: {kind: release_asset, pattern: "*[Aa][Aa][Rr][Cc][Hh]64*"}
 

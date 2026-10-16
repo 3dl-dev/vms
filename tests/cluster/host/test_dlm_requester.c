@@ -130,6 +130,12 @@ struct fake_engine {
 	uint32_t fail_lkid;
 	enum dlm_req_fail_reason fail_why;
 
+	/* Is a cluster state transition running? The CLUB's own flag, as the
+	 * arm reads it (rd vms-c55). The test moves it exactly as a barrier
+	 * does: set at the open, cleared at the last release. */
+	int      transition_active;
+	uint32_t transition_calls;
+
 	uint32_t now_ms;
 	uint32_t logs;
 };
@@ -206,6 +212,14 @@ static int fe_dir_resolve(void *ctx, uint32_t hash16, vms_csid_t *out_csid)
 static uint32_t fe_dir_generation(void *ctx)
 {
 	return ((struct fake_engine *)ctx)->dir_generation;
+}
+
+static int fe_transition_active(void *ctx)
+{
+	struct fake_engine *e = ctx;
+
+	e->transition_calls++;
+	return e->transition_active;
 }
 
 static int fe_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
@@ -325,6 +339,7 @@ static void fe_reset(const char *resnam, uint32_t lkmode, uint32_t hash,
 	g_ops.refill_post = fe_refill;
 	g_ops.dir_resolve = fe_dir_resolve;
 	g_ops.dir_generation = fe_dir_generation;
+	g_ops.transition_active = fe_transition_active;
 	g_ops.record_master = fe_record_master;
 	g_ops.assume_mastery = fe_assume;
 	g_ops.grant_recv = fe_grant;
@@ -2260,6 +2275,186 @@ static void test_relq_survives_the_lkb(void)
 	check_only_grounded_opcodes_were_sent("staged release");
 }
 
+/* ==========================================================================
+ * THE TRANSITION HOLD (rd vms-c55)
+ *
+ * MEASURED, and this is what these three tests encode. Over all 122 pcaps in
+ * tests/lab/captures, real DEC-OUI senders only, the DLM traffic inside a
+ * cluster state transition is the op-0x0d rebuild record and its cat-0x82
+ * echo and essentially nothing else; every non-0x0d cat-0x02 frame a real node
+ * put inside one flew at barrier step 10, 11 or 12 OF 12, and none at steps
+ * 1-5. OVMX sent a DIRECTORY REMOVAL at step 1 in 3 of 3 captures in which a
+ * real OpenVMS VAX V7.3 then bugchecked LOCKMGRERR, and in 0 of 11 clean
+ * case-runs that carried 26 OVMX-originated cat-0x02 requests -- all of them
+ * outside a transition.
+ * ========================================================================== */
+
+static void dir_remove_post(struct vms_dlm_proxy_post *p, vms_csid_t dst)
+{
+	memset(p, 0, sizeof(*p));
+	p->op = VMS_DLM_POST_DIR_REMOVE;
+	p->dst_csid = dst;
+	p->req_csid = CSID_SELF;
+	p->res_group = 0u;
+	p->res_acmode = 0u;
+	p->dir_hash = g.lkb.dir_hash;
+	p->dir_hash_known = g.lkb.hash_known;
+	memcpy(p->resnam, g.lkb.resnam, sizeof(p->resnam));
+}
+
+/*
+ * A request posted DURING a transition waits for it, and the wait costs it no
+ * rung of the retransmit ladder -- a hold is not a failed attempt.
+ */
+static void test_transition_holds_the_request(void)
+{
+	struct vms_dlm_proxy_post p;
+	struct vms_dlm_enq_request req;
+	uint8_t opcode = 0;
+	uint32_t beats;
+
+	printf("-- a lock request posted during a cluster state transition is "
+	       "HELD, not sent\n");
+	fe_reset("RMS$4F.1.0", VMS_LCK_PR, 0x650412f2u, 1, CSID_MASTER);
+	g.lkb.master_lkid = 0x0A0A0A0Au;
+	g.transition_active = 1;       /* the barrier opened */
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "the post is ACCEPTED: the request is outstanding");
+	ct_check_eq_u32(g.n_sent, 0u,
+			"*** nothing went on the wire during the transition "
+			"***");
+	ct_check_eq_u32(g_fsm.posts_held_xition, 1u,
+			"the hold was counted where it was decided");
+	ct_check_eq_u32(g_fsm.posts_deferred, 0u,
+			"and NOT as a send refusal -- nothing refused it");
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
+			"the request block survives, the way a deferral's does");
+
+	/* Beat past the whole ladder: a hold must not spend it. */
+	for (beats = 0u; beats < (uint32_t)DLM_REQ_MAX_TRIES * 3u; beats++) {
+		g.now_ms += DLM_REQ_RETRY_MS + 1u;
+		(void)dlm_req_fsm_tick(&g_fsm);
+	}
+	ct_check_eq_u32(g.n_sent, 0u, "still nothing on the wire");
+	ct_check_eq_u32(g.fail_calls, 0u,
+			"*** and the $ENQW was NOT failed: a transition makes "
+			"lock activity wait, it does not fail it ***");
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
+			"  the request is still outstanding after 15 beats");
+
+	/* The executive's truth moves while the request waits. */
+	g.lkb.master_lkid = 0x0B0B0B0Bu;
+
+	g.transition_active = 0;       /* the coordinator released step 12 */
+	ct_check_eq_u32(dlm_req_fsm_transition_ended(&g_fsm), 1u,
+			"*** the end of the transition releases the held "
+			"request ***");
+	ct_check_eq_u32(g.n_sent, 1u, "one frame, now, went out");
+	ct_check(parse_request(&g.sent[0], &opcode, &req) == 0 &&
+		 opcode == VMS_DLM_WIREOP_ENQ, "it parses as a grounded op 0x01");
+	ct_check_eq_u32(req.master_lkid, 0x0B0B0B0Bu,
+			"*** built from a FRESH read: the handle the LKB holds "
+			"NOW, not the one it held when the post arrived ***");
+	ct_check_eq_u32(g_fsm.xition_resumes, 1u, "the release was counted");
+	ct_check_eq_u32(req.req_lkid, g.lkb.lkid,
+			"  and it still names THIS node's own proxy handle");
+	ct_check_eq_u32(req.mode, g.lkb.lkmode,
+			"  at the mode the LKB really asks for");
+	check_only_grounded_opcodes_were_sent("transition hold");
+}
+
+/*
+ * A DIRECTORY-ENTRY REMOVAL raised during a transition is DROPPED, not queued.
+ * Phase 1 discards all directory information cluster-wide (Davis pp. 7-40/
+ * 7-41, p. 6-33), so the entry it names stops existing either way -- and after
+ * the rebuild this executive holds no fact about it to assert.
+ */
+static void test_transition_drops_a_directory_removal(void)
+{
+	struct vms_dlm_proxy_post p;
+
+	printf("-- a directory-entry removal raised during a transition is "
+	       "DROPPED, counted\n");
+	fe_reset("RMS$4F.1.0", VMS_LCK_PR, 0x650412f2u, 1, CSID_MASTER);
+	g.transition_active = 1;
+
+	dir_remove_post(&p, CSID_DIR);
+	ct_check(dlm_req_fsm_dir_remove(&g_fsm, &p) == DLM_REQ_E_XITION,
+		 "the removal is refused by the transition, and says so");
+	ct_check_eq_u32(g.n_sent, 0u,
+			"*** no cat-0x02 op-0x04 reached the wire during the "
+			"rebuild ***");
+	ct_check_eq_u32(g_fsm.dir_removes_dropped_xition, 1u, "and it is counted");
+	ct_check_eq_u32(g_fsm.dir_removes_sent, 0u, "none was sent");
+
+	g.transition_active = 0;
+	ct_check_eq_u32(dlm_req_fsm_transition_ended(&g_fsm), 0u,
+			"*** and it is not re-sent afterwards: it was dropped, "
+			"not queued ***");
+	ct_check_eq_u32(g.n_sent, 0u, "the wire stayed empty");
+
+	/* The control: outside a transition the SAME post emits the removal. */
+	dir_remove_post(&p, CSID_DIR);
+	ct_check(dlm_req_fsm_dir_remove(&g_fsm, &p) == DLM_REQ_OK,
+		 "outside a transition the same removal goes out");
+	ct_check_eq_u32(g.n_sent, 1u, "  one frame");
+	ct_check_eq_u32(sent_opcode(&g.sent[0]), VMS_DLM_WIREOP_DIR_REMOVE,
+			"  a grounded op-0x04");
+}
+
+/*
+ * ...but a RELEASE still goes. Giving a lock back is how the cluster is left
+ * in a state the rebuild can use -- the same carve-out vms_dlm_quorum.h makes
+ * for a release during a quorum hang.
+ */
+static void test_transition_lets_a_release_through(void)
+{
+	struct vms_dlm_proxy_post p;
+	struct vms_dlm_deq d;
+
+	printf("-- a $DEQ is NOT held by a transition\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_CR, 0x00adu, 1, CSID_MASTER);
+	g.lkb.master_lkid = 0x0DEFACE0u;
+	g.transition_active = 1;
+
+	release_post(&p, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "the release post is accepted");
+	ct_check_eq_u32(g.n_sent, 1u,
+			"*** and the op-0x03 went out DURING the transition "
+			"***");
+	ct_check_eq_u32(sent_opcode(&g.sent[0]), VMS_DLM_WIREOP_DEQ,
+			"  a grounded op-0x03 $DEQ");
+	ct_check(parse_deq(&g.sent[0], &d) == 0, "  it parses through the codec");
+	ct_check_eq_u32(d.master_lkid, 0x0DEFACE0u,
+			"  naming the handle the LKB really holds");
+	ct_check_eq_u32(g_fsm.posts_held_xition, 0u, "nothing was held");
+}
+
+/*
+ * ...and a node with no connection manager at all (the op unbound) holds
+ * nothing: the standalone degradation, same shape as a NULL requester ops
+ * block.
+ */
+static void test_no_transition_op_holds_nothing(void)
+{
+	struct vms_dlm_proxy_post p;
+
+	printf("-- with no transition op bound, nothing is ever held\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_CR, 0x00aeu, 1, CSID_MASTER);
+	g.transition_active = 1;          /* would hold, if anything asked */
+	g_ops.transition_active = NULL;
+	dlm_req_fsm_init(&g_fsm, &g_ops);
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK, "the post is taken");
+	ct_check_eq_u32(g.n_sent, 1u, "and the frame went out");
+	ct_check_eq_u32(g_fsm.posts_held_xition, 0u, "nothing was held");
+	ct_check_eq_u32(g.transition_calls, 0u, "nothing was even asked");
+}
+
 int main(void)
 {
 	printf("== FC-P4.6 R1: the DLM requester FSM ==\n");
@@ -2292,5 +2487,9 @@ int main(void)
 	test_relq_snapshot_is_the_lkb_read();
 	test_relq_refusals();
 	test_relq_survives_the_lkb();
+	test_transition_holds_the_request();
+	test_transition_drops_a_directory_removal();
+	test_transition_lets_a_release_through();
+	test_no_transition_op_holds_nothing();
 	return ct_summary("test_dlm_requester");
 }

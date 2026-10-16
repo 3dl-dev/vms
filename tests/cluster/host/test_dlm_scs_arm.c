@@ -644,6 +644,24 @@ static void arm_bindings(void)
 	       "directory removal, before the request is queued ***");
 	has("d->dir_removes_dropped++",
 	    "... and the drop is counted, never silent");
+
+	/*
+	 * rd vms-c55: THE TRANSITION HOLD. The arm is the only place that can
+	 * tell the requester FSM whether a transition is running, and the only
+	 * place that can tell it one ended. Both bindings are asserted, and so
+	 * is the ORDER of the release: it must come AFTER the directory vector
+	 * has been re-read in transition_end, because the whole point of
+	 * holding the request was to let it re-resolve under the new vector.
+	 */
+	has("d->req_ops.transition_active = dlm_arm_transition_active;",
+	    "*** the requester FSM reads 'a transition is running' from the "
+	    "arm ***");
+	has("return d->cl->club.transition_active != 0u;",
+	    "... and the arm reads it LIVE off the CLUB, never from a copy");
+	before("(void)vms_dlm_dir_drop_unless(&d->dir, dlm_arm_dir_is_ours, d);",
+	       "(void)dlm_req_fsm_transition_ended(&d->req);",
+	       "*** a held request is released only AFTER the new directory "
+	       "vector has been applied ***");
 }
 
 static void cnxman_legs(void)

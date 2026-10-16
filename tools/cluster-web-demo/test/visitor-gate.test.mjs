@@ -619,6 +619,26 @@ test('a clustered, usable run with a STALE OVMX node fails, and names it', () =>
     'CN=3 but NOT THE BUILD UNDER TEST: OVMXB announced V0.7-7 -- the build under test is V0.7-10');
 });
 
+test('a BUGCHECK beside a STALE OVMX node says it is not the build under test (vms-4f4)', () => {
+  const R = newObservations();
+  R.want_version = UNDER_TEST;
+  observe(R, 'OVMXA', BANNER() + CN3_LINES('c3', 'c4', 'c5'));
+  observe(R, 'OVMXB', BANNER('V0.7-7') + CN3_LINES('c4', 'c3', 'c5'));
+  observe(R, 'VAXC', VAXC_ADMITS + '**** FATAL BUGCHECK LOCKMGRERR ****\n');
+  R.cn3 = true;
+  assert.equal(GATE.isPass(R), false);
+  assert.match(verdictOf(R),
+    /^BUGCHECK: .* -- and NOT THE BUILD UNDER TEST: OVMXB announced V0\.7-7 -- the build under test is V0\.7-10$/);
+  // Control: the same bugcheck with every node at the version under test is a
+  // plain BUGCHECK verdict, with no staleness clause.
+  const C = newObservations();
+  C.want_version = UNDER_TEST;
+  observe(C, 'OVMXA', BANNER() + CN3_LINES('c3', 'c4', 'c5'));
+  observe(C, 'OVMXB', BANNER() + CN3_LINES('c4', 'c3', 'c5'));
+  observe(C, 'VAXC', VAXC_ADMITS + '**** FATAL BUGCHECK LOCKMGRERR ****\n');
+  assert.match(verdictOf(C), /^BUGCHECK: \{[^}]*\}$/);
+});
+
 test('a node that announces the right version AND an old one (a mixed image) fails', () => {
   const R = cn3Observations();
   R.cn3 = true;

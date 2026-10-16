@@ -560,6 +560,9 @@ jobs:
       - name: Enable KVM
         uses: ./.github/actions/enable-kvm
 
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
       - name: Fetch cut A
         uses: actions/download-artifact@v4
         with:
@@ -1906,6 +1909,9 @@ jobs:
       - build-image
       - persistent-boot
       - aarch64-release-set
+      - release-sign-key
+      - cut-release-a
+      - cut-release-b
       - cut-release-reproducible
       - upgrade-e2e
       - install-boot-e2e

@@ -1,0 +1,51 @@
+name: Get the bootable image (ovmx-boot:latest)
+description: >-
+  Pull the per-SHA bootable image built once by the workflow's build-image job
+  (ghcr.io/<owner>/ovmx-boot:<sha>) and tag it ovmx-boot:latest. If it cannot be
+  pulled (fork PR with a read-only token, registry outage) fall back to building
+  distro/Dockerfile.bootable in this job, exactly as every job used to.
+  The caller must have run ./.github/actions/setup-buildx.
+inputs:
+  image:
+    description: "Full ref of the prebuilt image (needs.build-image.outputs.image)"
+    required: true
+  kernel-base:
+    description: "KERNEL_BASE for the fallback build (needs.build-image.outputs.kernel-base)"
+    required: false
+    default: kernel-base
+runs:
+  using: composite
+  steps:
+    - name: Pull the prebuilt bootable image
+      id: pull
+      shell: bash
+      continue-on-error: true
+      env:
+        IMAGE: ${{ inputs.image }}
+        GH_TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        set -u
+        [ -n "$IMAGE" ] || { echo "no prebuilt image ref"; exit 1; }
+        echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null
+        for i in 1 2 3; do
+          if docker pull -q "$IMAGE" >/dev/null; then
+            docker tag "$IMAGE" ovmx-boot:latest
+            echo "pulled $IMAGE"
+            exit 0
+          fi
+          sleep $((i * 10))
+        done
+        exit 1
+    - name: Fallback -- build the bootable image in this job
+      if: ${{ steps.pull.outcome != 'success' }}
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: distro/Dockerfile.bootable
+        push: false
+        load: true
+        tags: ovmx-boot:latest
+        build-args: |
+          KERNEL_BASE=${{ inputs.kernel-base }}
+        cache-from: type=gha

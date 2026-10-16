@@ -77,43 +77,43 @@
     "count": 491,
     "by_status": {
       "verified": 24,
-      "implemented": 294,
+      "implemented": 295,
       "partial": 67,
-      "stub": 14,
+      "stub": 13,
       "designed": 1,
       "absent": 91
     },
     "by_authenticity": {
-      "real": 347,
+      "real": 348,
       "n/a": 92,
       "advisory": 46,
-      "facade-risk": 6
+      "facade-risk": 5
     },
-    "met": 318,
+    "met": 319,
     "in_progress": 67,
-    "not_started": 106,
-    "facade_risk": 6
+    "not_started": 105,
+    "facade_risk": 5
   },
   "overall_in_scope": {
     "count": 445,
     "by_status": {
       "verified": 24,
-      "implemented": 294,
+      "implemented": 295,
       "partial": 65,
-      "stub": 10,
+      "stub": 9,
       "designed": 1,
       "absent": 51
     },
     "by_authenticity": {
-      "real": 345,
+      "real": 346,
       "n/a": 52,
       "advisory": 44,
-      "facade-risk": 4
+      "facade-risk": 3
     },
-    "met": 318,
+    "met": 319,
     "in_progress": 65,
-    "not_started": 62,
-    "facade_risk": 4
+    "not_started": 61,
+    "facade_risk": 3
   },
   "facilities": [
     {
@@ -1776,22 +1776,21 @@
         "count": 13,
         "by_status": {
           "verified": 0,
-          "implemented": 9,
+          "implemented": 10,
           "partial": 0,
-          "stub": 1,
+          "stub": 0,
           "designed": 0,
           "absent": 3
         },
         "by_authenticity": {
-          "real": 8,
+          "real": 9,
           "advisory": 1,
-          "facade-risk": 1,
           "n/a": 3
         },
-        "met": 9,
+        "met": 10,
         "in_progress": 0,
-        "not_started": 4,
-        "facade_risk": 1
+        "not_started": 3,
+        "facade_risk": 0
       }
     },
     {
@@ -8368,12 +8367,12 @@
       "id": "sys$cancel",
       "kind": "routine",
       "vms": "Cancel all I/O on all channels of the calling process",
-      "status": "stub",
-      "authenticity": "facade-risk",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_process.c",
       "verified_against": null,
-      "notes": "literal no-op returning SS$_NORMAL; QIO is genuinely ASYNC (io_uring, sys_qio.c/sys_uring.c) so pending I/O CAN exist and is NOT cancelled (the old 'synchronous model' rationale was wrong). Real cancel (io_uring_prep_cancel + IOSB SS$_CANCEL + AST/EF) tracked vms-c8c.",
+      "notes": "Proof tests/qemu/test_syssvc_cancel_uring.c + defects.d/cancel-uring-noop.defect; cancel in sys_uring.c vms_uring_cancel_fd. io_uring-queued requests on the channel's descriptor are cancelled in the kernel and complete with SS$_CANCEL in the IOSB, event flag set, AST run; a request that had already completed keeps its result; pending mailbox reads complete SS$_ABORT (observed, IO.CANCEL.DONE); a channel not held is refused (vms-4a69). Was facade-risk: a no-op returning SS$_NORMAL while the I/O stayed pending (vms-c8c).",
       "plan_ref": "vms-801"
     },
     {

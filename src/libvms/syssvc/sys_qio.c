@@ -81,6 +81,7 @@ extern int vms_uring_submit_rw(int fd, void *buf, uint32_t len, uint64_t offset,
                                 void (*astadr)(uint32_t), uint32_t astprm);
 extern int vms_uring_wait_completion(void);
 extern int vms_uring_process_completions(void);
+extern int vms_uring_cancel_fd(int fd);
 
 /*
  * Try to ensure io_uring is initialized; returns 1 if available, 0 if not.
@@ -559,6 +560,16 @@ void vms$$qio_cancel_chan(uint16_t chan)
 #else  /* no POSIX interval timers/rt signals here -- the read stays synchronous */
 void vms$$qio_cancel_chan(uint16_t chan) { (void)chan; }
 #endif /* __linux__ */
+
+/* $CANCEL support, io_uring half (vms-c8c): every request queued on the
+ * channel's descriptor is cancelled in the kernel and completes with
+ * SS$_CANCEL in its IOSB (+ event flag + AST). */
+void vms$$qio_cancel_uring(uint16_t chan)
+{
+    int fd = vms$$chan_to_fd(chan);
+    if (fd >= 0)
+        (void)vms_uring_cancel_fd(fd);
+}
 
 /*
  * qio_mailbox_op - IO$_READVBLK/WRITEVBLK for a MAILBOX channel (vms-d44).

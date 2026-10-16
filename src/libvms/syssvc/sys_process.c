@@ -170,13 +170,9 @@
  *     vms_kif_mbx_read(nowait)); $CANCEL completes this process's pending
  *     asynchronous MAILBOX reads on the channel with SS$_ABORT (vms-003).
  * OVMX-LOCAL: sys$cancel -- the pending-request table is this process's memory (no
- *     executive pending-read queue yet), and KNOWN GAP (facade-risk, tracked
- *     vms-c8c) for io_uring-submitted file I/O: that is still not cancelled and
- *     $CANCEL returns SS$_NORMAL for it. QIO file I/O is genuinely
- *     ASYNCHRONOUS (io_uring; sys_qio.c/sys_uring.c), so pending async I/O on a
- *     channel CAN exist -- this no-op does NOT cancel it. A real $CANCEL must
- *     io_uring_prep_cancel the channel's inflight SQEs and complete each IOSB
- *     with SS$_CANCEL + fire the AST/EF.
+ *     executive pending-read queue yet). io_uring-queued I/O on the channel's
+ *     descriptor is cancelled with IORING_OP_ASYNC_CANCEL and completes with
+ *     SS$_CANCEL (IOSB, event flag, AST) -- vms-c8c.
  */
 
 #include <stdint.h>
@@ -2221,17 +2217,13 @@ uint32_t (sys$setpri)(const uint32_t *pidadr,
 /*
  * sys$cancel - Cancel pending I/O on a channel.
  *
- * This is a stub that always returns success because our current I/O
- * model is synchronous. All sys$qio operations complete immediately
- * before returning, so there are no pending operations to cancel.
- *
- * When asynchronous I/O is implemented (via io_uring or AIO), this
- * service will need to:
- *   1. Locate any pending I/O request for the specified channel
- *   2. Cancel the operation (io_uring_prep_cancel or aio_cancel)
- *   3. Complete the I/O with SS$_CANCEL status
+ * QIO is genuinely asynchronous (io_uring for waitable devices, an executive
+ * mailbox poll for mailboxes), so requests CAN be pending on a channel. Each
+ * is taken off the channel and completed: mailbox reads SS$_ABORT (observed,
+ * docs/oracle/semantics/io IO.CANCEL.DONE), io_uring requests SS$_CANCEL.
  */
 extern void vms$$qio_cancel_chan(uint16_t chan);
+extern void vms$$qio_cancel_uring(uint16_t chan);
 
 uint32_t sys$cancel(uint16_t chan) {
     /* A channel this process does not hold is refused, as on OpenVMS (vms-4a69,
@@ -2241,9 +2233,11 @@ uint32_t sys$cancel(uint16_t chan) {
     if (!cpcb || !cpcb->channels[cslot].in_use)
         return pcb_chan_unheld_status(chan);
     /* Pending asynchronous MAILBOX reads on the channel complete with SS$_ABORT
-     * (vms-003). KNOWN GAP (vms-c8c): io_uring-submitted file I/O in flight on
-     * the channel is still not cancelled. */
+     * (vms-003); io_uring-queued I/O on the channel's descriptor (terminal,
+     * pipe) is cancelled in the kernel and completes with SS$_CANCEL in its
+     * IOSB, event flag set and AST queued (vms-c8c). */
     vms$$qio_cancel_chan(chan);
+    vms$$qio_cancel_uring(chan);
     return SS$_NORMAL;
 }
 

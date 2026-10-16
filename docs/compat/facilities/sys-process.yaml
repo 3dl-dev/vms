@@ -23,7 +23,7 @@ summary: >
   does (by prcnam or VMS PID, or self when none), authorizes GROUP/WORLD, and
   applies the priority to the resolved Linux pid -- SS$_NONEXPR for an absent
   target, never a silent change of the CALLER's own priority for any target
-  (vms-dff7). SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk).
+  (vms-dff7). SYS$CANCEL cancels io_uring-queued I/O on the channel (IORING_OP_ASYNC_CANCEL; IOSB SS$_CANCEL, event flag, AST) and pending mailbox reads (SS$_ABORT) (vms-c8c).
   SYS$SETPRN and SYS$PROCESS_SCAN are absent.
 last_reviewed: 2026-09-14
 items:
@@ -36,7 +36,7 @@ items:
   - {id: sys$resume, kind: routine, status: implemented, authenticity: real, vms: "Resume a suspended process", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam or VMS PID (like $DELPRC), or self when none; SIGCONT to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904)"}
   - {id: sys$forcex, kind: routine, status: implemented, authenticity: real, vms: "Force a process to exit", evidence: src/libvms/syssvc/sys_process.c, notes: "sys$exit on the caller when no target; otherwise target resolved through the executive by prcnam or VMS PID (like $DELPRC), authorized GROUP/WORLD; SIGUSR1 to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904)"}
   - {id: sys$setpri, kind: routine, status: implemented, authenticity: real, vms: "Set process scheduling priority", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam (caller's UIC group) or VMS PID (like $DELPRC), or self when none; authorized GROUP/WORLD for another process; the VMS-priority<->Linux-nice map is applied to the RESOLVED target's Linux pid, SS$_NONEXPR for an absent target (vms-dff7). Was facade-risk: discarded pidadr/prcnam and set the CALLER's priority for any target."}
-  - {id: sys$cancel, kind: routine, status: stub, authenticity: facade-risk, vms: "Cancel all I/O on all channels of the calling process", evidence: src/libvms/syssvc/sys_process.c, notes: "literal no-op returning SS$_NORMAL; QIO is genuinely ASYNC (io_uring, sys_qio.c/sys_uring.c) so pending I/O CAN exist and is NOT cancelled (the old 'synchronous model' rationale was wrong). Real cancel (io_uring_prep_cancel + IOSB SS$_CANCEL + AST/EF) tracked vms-c8c."}
+  - {id: sys$cancel, kind: routine, status: implemented, authenticity: real, vms: "Cancel all I/O on all channels of the calling process", evidence: src/libvms/syssvc/sys_process.c, notes: "Proof tests/qemu/test_syssvc_cancel_uring.c + defects.d/cancel-uring-noop.defect; cancel in sys_uring.c vms_uring_cancel_fd. io_uring-queued requests on the channel's descriptor are cancelled in the kernel and complete with SS$_CANCEL in the IOSB, event flag set, AST run; a request that had already completed keeps its result; pending mailbox reads complete SS$_ABORT (observed, IO.CANCEL.DONE); a channel not held is refused (vms-4a69). Was facade-risk: a no-op returning SS$_NORMAL while the I/O stayed pending (vms-c8c)."}
   - {id: sys$setprn, kind: routine, status: absent, authenticity: n/a, vms: "Set the calling process's name", notes: "no $SETPRN service; only an internal vms_kif_setprn used by $CREPRC to stamp the child name"}
   - {id: sys$process_scan, kind: routine, status: absent, authenticity: n/a, vms: "Scan for processes matching selection criteria"}
   - {id: sys$_other, kind: routine, status: absent, authenticity: n/a, vms: "Remaining SYS$ process-control services beyond the routines named above (VMS ships ~25 total)"}

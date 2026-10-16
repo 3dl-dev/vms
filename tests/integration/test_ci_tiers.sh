@@ -91,5 +91,7 @@ assert p.check(sha, fetch=lambda wf, r: [run("schedule", "success", "b" * 40)]) 
 assert p.check(sha, fetch=lambda wf, r: [run("workflow_dispatch", "success")]) == 0
 PY
 
+sh -n "$ROOT/tools/ci/fast.sh" && [ -x "$ROOT/tools/ci/fast.sh" ] && ok "tools/ci/fast.sh parses and is executable" || bad "fast.sh syntax"
+
 echo "ci_tiers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

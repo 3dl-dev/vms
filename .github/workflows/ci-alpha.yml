@@ -1839,7 +1839,7 @@ jobs:
   alpha-as:
     name: "OVMX/Alpha self-hosting — GNU as, built for the alpha-dec-vms host, assembles cc1's output on OVMX; DCL DUMP of the EVAX object equals the cross assembler's (vms-5303e)"
     needs: changes
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
 
@@ -1883,6 +1883,14 @@ jobs:
         with:
           path: .cxxtc
           key: alpha-cxx-tc-${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+
+      - name: Restore the host GCC + GNU as images (keyed on everything they are built from)
+        uses: actions/cache@v4
+        with:
+          path: |
+            .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/*.exe
+            .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
+          key: alpha-hostgcc-as-${{ hashFiles('tools/cross-alpha-vms/selfhost/**', 'tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/**', 'src/vmslink/**', 'src/vmsrms/**') }}
 
       - name: "as gate — host GCC and GNU as over the OVMX C RTL, cc1 then as on qemu-system-alpha + /dev/vms; can-fail selftest first"
         env:

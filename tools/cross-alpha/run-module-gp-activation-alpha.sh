@@ -1672,13 +1672,17 @@ PYEOF
     fi
     log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long, network disabled)"
     mkdir -p "$GATE_ROOT/hostgcc" "$GATE_ROOT/hostas"
+    if [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1.exe" ]; then log "host GCC restored from cache"; else
     docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
       bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
       || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
+    fi
     log "step 1c3: build GNU as for the alpha-dec-vms host over this build's C RTL (network disabled)"
+    if [ -s "$GATE_ROOT/hostas/host-as/out/as.exe" ]; then log "host as restored from cache"; else
     docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostas:/w" "$VMS_IMG" \
       bash /src/tools/cross-alpha-vms/selfhost/build-host-as.sh > "$GATE_ROOT/host-as.log" 2>&1 \
       || { tail -60 "$GATE_ROOT/host-as.log"; die "host GNU as build failed -- see $GATE_ROOT/host-as.log"; }
+    fi
     _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"; _as="$GATE_ROOT/hostas/host-as/out/as.exe"
     [ -s "$_as" ] || die "no host as.exe"
     log "step 1d: link the launcher; cross-compile and cross-assemble the reference (twice, to find the time-stamp bytes)"

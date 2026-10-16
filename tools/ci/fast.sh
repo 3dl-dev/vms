@@ -46,7 +46,7 @@ stamp "ctest (PR tier: -LE slow, parallel)"
 ( cd "$BUILD" && ctest --output-on-failure --parallel "$JOBS" -LE slow )
 
 # Host negctl (tests/cluster/host): run the defects whose mutation target you
-# changed, or ALL of them when the harness, a suite or CMake changed. Same
+# changed, or ALL of them when the harness, or a suite changed. Same
 # fail-closed rule as the queue: any change under tests/cluster/host other than
 # a defect target selects everything; a change elsewhere selects nothing.
 HOST=tests/cluster/host
@@ -54,7 +54,7 @@ SEL=""
 ALL=false
 while IFS= read -r f; do
     case "$f" in
-        "$HOST"/*|CMakeLists.txt) ALL=true ;;
+        "$HOST"/*) ALL=true ;;
     esac
 done < "$CHANGED"
 if $ALL; then

@@ -51,6 +51,14 @@ on:
         description: 'Publish as a draft (default true; the final public step stays manual)'
         type: boolean
         default: true
+      rehearsal:
+        description: >-
+          PRE-TAG REHEARSAL: run this workflow's own path against a throwaway
+          annotated tag named rehearse/<anything> (tools/release-rehearsal.sh
+          makes and deletes it). Everything runs except the publish, which is a
+          --dry-run against the bundle's own version, and the site notify.
+        type: boolean
+        default: false
 
 # Creating a GitHub Release needs write access to repository contents.
 permissions:
@@ -134,7 +142,15 @@ jobs:
         id: tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            TAG='${{ github.event.inputs.tag }}'
+            # A rehearsal tag and a real publish never mix: a rehearse/ tag is
+            # only ever dry-run, and a rehearsal only ever cuts a rehearse/ tag.
+            case "$TAG" in rehearse/*) IS_R=true ;; *) IS_R=false ;; esac
+            if [ "$IS_R" != "${{ github.event.inputs.rehearsal }}" ]; then
+              echo "rehearsal=${{ github.event.inputs.rehearsal }} with tag '$TAG': a rehearsal cuts only a rehearse/ tag, and a rehearse/ tag is never published"
+              exit 1
+            fi
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
             echo "draft=${{ github.event.inputs.draft }}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
@@ -224,6 +240,15 @@ jobs:
           if [ "${{ steps.tag.outputs.draft }}" = "true" ]; then
             DRAFT_FLAG="--draft"
           fi
+          if [ "${{ github.event.inputs.rehearsal }}" = "true" ]; then
+            # Rehearsal: verify the bundle and print the publish plan against
+            # the bundle's own version; nothing is created on GitHub.
+            tools/publish-release.sh \
+              --bundle-dir "${{ github.workspace }}/dist/release-cut" \
+              --repo "${{ github.repository }}" \
+              --no-record-notes --dry-run
+            exit 0
+          fi
           tools/publish-release.sh \
             --bundle-dir "${{ github.workspace }}/dist/release-cut" \
             --tag "${{ steps.tag.outputs.tag }}" \
@@ -248,7 +273,7 @@ jobs:
       - name: Notify openvmx-site (repository_dispatch release-tagged) — off critical path
         # Only a release that actually PUBLISHED is announced: the site must not
         # build a demo for a tag whose cut or publish failed.
-        if: success() && steps.tag.outputs.tag != ''
+        if: success() && steps.tag.outputs.tag != '' && github.event.inputs.rehearsal != 'true'
         continue-on-error: true
         env:
           SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}

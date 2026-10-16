@@ -757,6 +757,15 @@ if(BUILD_TESTS)
     set_tests_properties(gen_release_notes_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # tools/cut-release.sh resolves an ANNOTATED release tag to its commit, not
+    # the tag object (V0.7-11's first publish refused its own aarch64 set over
+    # exactly that). Pure shell + git; no docker, no network.
+    add_test(NAME cut_release_resolve_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_cut_release_resolve.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(cut_release_resolve_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # vms-791 (0.4 installer Tier-0): the VMSFS media-mastering tool must
     # produce an image that reads back byte-exact. Masters a synthetic tree
     # (subdirs, a >5-entry directory, a multi-block file, a binary file, an

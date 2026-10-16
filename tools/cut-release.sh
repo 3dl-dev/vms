@@ -92,6 +92,8 @@
 #   --aarch64-dir DIR         Use the aarch64 set tools/cut-release-aarch64.sh
 #                             already built for this exact commit + clock (an
 #                             arm64 runner builds it natively; see step 9)
+#   --resolve-only            Print the commit and clock --ref resolves to
+#                             ("commit=<sha> source_date_epoch=<n>"), then exit
 #   -h, --help                  Show this help and exit
 #
 # Exit 0 on a complete bundle; nonzero and a diagnostic on any failure.
@@ -108,9 +110,10 @@ KEEP_WORK=0
 NO_CACHE=0
 SOURCE_DATE_EPOCH_OVERRIDE=""
 AARCH64_PREBUILT=""
+RESOLVE_ONLY=0
 
 usage() {
-    sed -n '2,97p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,99p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -127,6 +130,7 @@ while [ $# -gt 0 ]; do
         --source-date-epoch=*) SOURCE_DATE_EPOCH_OVERRIDE="${1#--source-date-epoch=}"; shift ;;
         --aarch64-dir) AARCH64_PREBUILT="$2"; shift 2 ;;
         --aarch64-dir=*) AARCH64_PREBUILT="${1#--aarch64-dir=}"; shift ;;
+        --resolve-only) RESOLVE_ONLY=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "cut-release.sh: unknown option: $1" >&2; usage >&2; exit 1 ;;
     esac
@@ -135,12 +139,13 @@ done
 log() { echo "cut-release: $*"; }
 fail() { echo "cut-release: FATAL: $*" >&2; exit 1; }
 
-command -v docker >/dev/null 2>&1 || fail "docker not found"
-docker buildx version >/dev/null 2>&1 || fail "docker buildx not found (needed for --output=local)"
-
 # --- Resolve the commit being cut ------------------------------------------
-COMMIT="$(git -C "$REPO_ROOT" rev-parse "$GIT_REF")" \
-    || fail "cannot resolve git ref '$GIT_REF' in $REPO_ROOT"
+# ^{commit} PEELS an annotated tag to the commit it names. A bare rev-parse of
+# an annotated tag (every release tag is one) yields the TAG OBJECT, which no
+# build stamps: V0.7-11's first publish refused its own aarch64 set as "built
+# from a different commit" because cut-aarch64 peels and this did not.
+COMMIT="$(git -C "$REPO_ROOT" rev-parse --verify --quiet "$GIT_REF^{commit}")" \
+    || fail "cannot resolve git ref '$GIT_REF' to a commit in $REPO_ROOT"
 
 if [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]; then
     log "NOTE: working tree has uncommitted changes -- git archive only cuts" \
@@ -151,6 +156,14 @@ SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH_OVERRIDE:-$(git -C "$REPO_ROOT" log -1 --
 case "$SOURCE_DATE_EPOCH" in
     ''|*[!0-9]*) fail "SOURCE_DATE_EPOCH must be a nonnegative integer, got: $SOURCE_DATE_EPOCH" ;;
 esac
+
+if [ "$RESOLVE_ONLY" -eq 1 ]; then
+    echo "commit=$COMMIT source_date_epoch=$SOURCE_DATE_EPOCH"
+    exit 0
+fi
+
+command -v docker >/dev/null 2>&1 || fail "docker not found"
+docker buildx version >/dev/null 2>&1 || fail "docker buildx not found (needed for --output=local)"
 
 # --- Scratch tree: git archive the commit, NEVER build in the working repo -
 CLEANUP_WORK_DIR=0

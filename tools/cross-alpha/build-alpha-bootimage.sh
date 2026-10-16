@@ -306,6 +306,16 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_CC1_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (CC1): cc1.exe -> SYS\$SYSEXE:CC1.EXE; launcher joint_e2e.exe -> SYS\$SYSEXE; full RMS producer graph -> SYS\$SHARE; CC1-proof SYSTARTUP (DCL writer + DCL TYPE reader) staged"
+            elif [ -f "$JOINT/AS_PROOF" ]; then
+                # vms-5303e: the VMS-hosted cc1 then GNU as, run in sequence by
+                # the launcher JOINT_E2E (vfork+execv) on a DCL-written source.
+                [ -f "$JOINT/cc1.exe" ] || { echo "FAIL: AS_PROOF without $JOINT/cc1.exe"; exit 1; }
+                [ -f "$JOINT/as.exe" ] || { echo "FAIL: AS_PROOF without $JOINT/as.exe"; exit 1; }
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_AS_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (AS): cc1.exe -> SYS\$SYSEXE:CC1.EXE, as.exe -> SYS\$SYSEXE:AS.EXE; launcher joint_e2e.exe -> SYS\$SYSEXE; AS-proof SYSTARTUP (DCL writer + DCL DUMP reader) staged"
             elif [ -f "$JOINT/VMSABI_PROOF" ]; then
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VMSABI_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"

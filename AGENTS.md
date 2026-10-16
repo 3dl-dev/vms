@@ -101,8 +101,8 @@ accepted.
   that fixes it, which goes through the queue like any other -- never mapped around.
 - **`tools/ci/safe_merge.sh <pr>` is the emergency bypass only** (the queue down, or main red with
   its fix itself blocked). It refuses unless the PR is fresh against main, its own checks are green,
-  and every heavy workflow it skipped passed in a `gh workflow run <file> --ref <branch>` dispatch on
-  its head SHA (`tools/ci/merge_heavy_gates.py`); `--allow 'WORKFLOW::JOB::FIXED-BY'` maps a red main
+  (with `--require-heavy`, also that every heavy workflow it skipped passed in a dispatch on its head
+  SHA, `tools/ci/merge_heavy_gates.py`; off by default now that the queue is the gate); `--allow 'WORKFLOW::JOB::FIXED-BY'` maps a red main
   carries to the PR fixing it and is refused when that red skipped steps main has not passed. It
   merges pinned to the head it checked and posts its evidence as the merge comment. Never call
   `gh pr merge` without `--auto` (the queue) outside this script.

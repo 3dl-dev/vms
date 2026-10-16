@@ -1,7 +1,12 @@
 #!/bin/sh
-# safe_merge.sh -- THE way to merge a PR into main.
+# safe_merge.sh -- EMERGENCY-ONLY bypass of the merge queue (queue down, or
+# main red with its fix itself blocked). The normal path is `gh pr merge --auto`:
+# the merge queue IS the gate (heavy legs run there when their area is touched,
+# and nightly + pre-tag verify run all of them), so the old requirement of a
+# workflow_dispatch run per skipped check is retired. It stays available as
+# `--require-heavy` for a bypass that must still prove the skipped workflows.
 #
-# usage: tools/ci/safe_merge.sh <pr-number> [--allow 'WORKFLOW::JOB::FIXED-BY' ...] [--dry-run]
+# usage: tools/ci/safe_merge.sh <pr-number> [--require-heavy] [--allow 'WORKFLOW::JOB::FIXED-BY' ...] [--dry-run]
 #
 # Refuses (exit 1) unless ALL of these hold, then squash-merges pinned to the
 # head SHA it checked (gh pr merge --match-head-commit), so nothing that lands
@@ -9,7 +14,7 @@
 #   1. FRESH  -- tools/ci/merge_freshness.sh origin/main <head>: main has not
 #                changed a file this PR changes since its checks ran.
 #   2. ROLLUP -- the PR's own checks: none failed, none still pending.
-#   3. HEAVY  -- tools/ci/merge_heavy_gates.py: every workflow the PR SKIPPED
+#   3. HEAVY  -- ONLY with --require-heavy; tools/ci/merge_heavy_gates.py: every workflow the PR SKIPPED
 #                passed in a workflow_dispatch run on the head, or failed only in
 #                jobs mapped (--allow) to the PR/item that fixes them.
 # The mapping table (from step 3) is posted as the merge comment.
@@ -19,6 +24,7 @@ set -u
 here=$(cd "$(dirname "$0")" && pwd)
 pr=""
 dry=0
+heavy=0
 gate_args=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -26,6 +32,7 @@ while [ $# -gt 0 ]; do
                  gate_args="$gate_args
 $2"; shift 2 ;;
         --dry-run) dry=1; shift ;;
+        --require-heavy) heavy=1; shift ;;
         *) case "$1" in *[!0-9]*|"") echo "usage: $0 <pr> [--allow 'W::J::FIX' ...] [--dry-run]" >&2; exit 2 ;; esac
            pr=$1; shift ;;
     esac
@@ -54,9 +61,10 @@ if [ -n "$bad" ]; then
 fi
 echo "  ok: no failed or pending PR check"
 
-echo "== 3. heavy gates the PR skipped"
 table=$(mktemp)
 trap 'rm -f "$table"' EXIT
+if [ $heavy -eq 1 ]; then
+echo "== 3. heavy gates the PR skipped"
 set -- "$pr" --table "$table"
 old_ifs=$IFS; IFS='
 '
@@ -65,6 +73,10 @@ IFS=$old_ifs
 python3 "$here/merge_heavy_gates.py" "$@"
 hg=$?
 [ $hg -eq 0 ] || { echo "REFUSED: heavy gates (merge_heavy_gates exit $hg)"; exit 1; }
+else
+    echo "== 3. heavy gates: not required (the merge queue is the gate; --require-heavy to demand dispatch evidence)"
+    echo "(heavy-gate evidence not required for this emergency bypass)" > "$table"
+fi
 
 # The head must not have moved while we checked.
 now=$(gh pr view "$pr" --json headRefOid --jq .headRefOid) || exit 2
@@ -74,7 +86,7 @@ if [ $dry -eq 1 ]; then
     echo "DRY RUN: would merge #$pr at $sha"; cat "$table"; exit 0
 fi
 {
-    echo "Merged with tools/ci/safe_merge.sh at head $sha: fresh against main, PR checks green, and every skipped heavy workflow green on this head or red only in jobs mapped to their fix:"
+    echo "Merged with tools/ci/safe_merge.sh at head $sha: fresh against main, PR checks green (emergency bypass of the merge queue); heavy-gate evidence below:"
     echo
     cat "$table"
 } | gh pr comment "$pr" --body-file - >/dev/null || exit 2

@@ -2343,6 +2343,15 @@ static void test_transition_holds_the_request(void)
 			"lock activity wait, it does not fail it ***");
 	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
 			"  the request is still outstanding after 15 beats");
+	/*
+	 * THE HOLD SAYS SO, ONCE. A node stalled on a held lock request must be
+	 * readable from its console -- the whole reason #1714's refusal
+	 * diagnostic exists -- and a line per held request inside one rebuild
+	 * would be a storm.
+	 */
+	ct_check_eq_u32(g.logs, 1u,
+			"*** the hold named itself on the console exactly ONCE, "
+			"across sixteen held transmissions ***");
 
 	/* The executive's truth moves while the request waits. */
 	g.lkb.master_lkid = 0x0B0B0B0Bu;
@@ -2362,6 +2371,9 @@ static void test_transition_holds_the_request(void)
 			"  and it still names THIS node's own proxy handle");
 	ct_check_eq_u32(req.mode, g.lkb.lkmode,
 			"  at the mode the LKB really asks for");
+	ct_check_eq_u32(g.logs, 2u,
+			"  and the release said so too -- one line each way, "
+			"so a console shows the whole episode");
 	check_only_grounded_opcodes_were_sent("transition hold");
 }
 

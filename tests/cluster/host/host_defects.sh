@@ -272,6 +272,7 @@ codec-params-ready-ignores-flag
 dlm-request-not-held-in-transition
 dlm-dir-remove-sent-in-transition
 dlm-transition-hold-spends-the-ladder
+dlm-transition-hold-is-silent
 arm-transition-never-releases-the-hold"
 
 # ---------------------------------------------------------------------------
@@ -1191,10 +1192,12 @@ the hold was counted where it was decided
 still nothing on the wire
 *** and the $ENQW was NOT failed: a transition makes lock activity wait, it does not fail it ***
   the request is still outstanding after 15 beats
+*** the hold named itself on the console exactly ONCE, across sixteen held transmissions ***
 *** the end of the transition releases the held request ***
 one frame, now, went out
 *** built from a FRESH read: the handle the LKB holds NOW, not the one it held when the post arrived ***
 the release was counted
+  and the release said so too -- one line each way, so a console shows the whole episode
 EOF
                       ;;
         esac;;
@@ -1234,6 +1237,20 @@ it parses as a grounded op 0x01
 the release was counted
   and it still names THIS node's own proxy handle
   at the mode the LKB really asks for
+EOF
+                      ;;
+        esac;;
+
+    dlm-transition-hold-is-silent)
+        case "$_f" in
+        facility)     echo "a node holding lock requests for a transition SAYS so on its console, once per episode (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "the hold stops naming itself, so a node stalled waiting for a rebuild looks identical to a node that lost the request -- which is exactly the ambiguity that cost a whole demo-gate fire to attribute when the OVMX/VAX node sat between the STARTUP.COM hand-off and the site-startup line.";;
+        require_fail) hd_lines <<'EOF'
+*** the hold named itself on the console exactly ONCE, across sixteen held transmissions ***
+  and the release said so too -- one line each way, so a console shows the whole episode
 EOF
                       ;;
         esac;;
@@ -3135,6 +3152,11 @@ apply_edit() {
     dlm-transition-hold-spends-the-ladder)
         # dq_held's one comment line, which is there to be this anchor.
         sed -i 's|^\t/\* tries is deliberately untouched -- see the note above. \*/$|\tif (r->tries < 0xffu) r->tries++; /* NEGCTL dlm-transition-hold-spends-the-ladder */|' "$_file";;
+
+    dlm-transition-hold-is-silent)
+        # The one call that names the hold. Short-circuited rather than
+        # deleted so dq_say_held stays REFERENCED (-Werror=unused-function).
+        sed -i 's|^\t\tdq_say_held(f);$|\t\tif (0) dq_say_held(f); /* NEGCTL dlm-transition-hold-is-silent */|' "$_file";;
 
     arm-transition-never-releases-the-hold)
         # The one release call, at the end of dlm_arm_transition_end().

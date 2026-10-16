@@ -578,6 +578,9 @@ struct dlm_req_fsm {
 					      /* entry it names anyway          */
 	uint32_t xition_resumes;         /* requests released at the end of a  */
 					  /* transition                         */
+	uint8_t  xition_hold_said;       /* this hold episode has been named   */
+					  /* on the console once (see below)    */
+	uint8_t  pad_xition[3];
 };
 
 /* ==========================================================================

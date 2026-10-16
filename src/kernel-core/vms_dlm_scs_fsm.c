@@ -351,6 +351,26 @@ static int dq_op_waits_for_rebuild(uint8_t wireop)
 }
 
 /*
+ * NAME THE HOLD, ONCE PER EPISODE (rd vms-c55, the rd vms-c55/#1714 lesson).
+ *
+ * A stall that does not say why it is stalling costs a whole fire to
+ * attribute: the demo's OVMX/VAX node sat between the STARTUP.COM hand-off and
+ * the site-startup line, and nothing on its console said whether a lock
+ * request was WAITING for a rebuild or had been lost. One line at the first
+ * hold of an episode, one at its release, and a console answers that question
+ * by itself. Bounded by `xition_hold_said`, so a storm of held requests inside
+ * one transition is still one line.
+ */
+static void dq_say_held(struct dlm_req_fsm *f)
+{
+	if (f->xition_hold_said)
+		return;
+	f->xition_hold_said = 1u;
+	dq_log(f, "%DLM, holding cross-node lock requests until the "
+		  "VAXcluster state transition completes");
+}
+
+/*
  * MAY this frame be transmitted at all? Every refusal is counted where it is
  * decided, and NOTHING is built before they have all passed -- a frame that
  * exists is a frame a later edit can send.
@@ -368,6 +388,7 @@ static enum dlm_req_status dq_may_transmit(struct dlm_req_fsm *f, uint8_t wireop
 	if (dq_op_waits_for_rebuild(wireop) && dq_transition_active(f)) {
 		/* The hold. The request is not refused -- it is not yet due. */
 		f->posts_held_xition++;
+		dq_say_held(f);
 		return DLM_REQ_E_XITION;
 	}
 	if (dst == 0u) {
@@ -1828,6 +1849,11 @@ uint32_t dlm_req_fsm_transition_ended(struct dlm_req_fsm *f)
 	}
 	sent = dlm_req_fsm_tick(f);
 	f->xition_resumes += sent;
+	if (f->xition_hold_said) {
+		f->xition_hold_said = 0u;
+		dq_log(f, "%DLM, the VAXcluster state transition completed; "
+			  "held cross-node lock requests resume");
+	}
 	return sent;
 }
 

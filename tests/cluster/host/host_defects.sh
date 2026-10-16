@@ -268,7 +268,12 @@ dlm-adopt-lvb-zeroes-the-block
 dlm-convert-by-name
 cnxman-db-pull-ignores-ready
 join-db-ready-unlearned
-codec-params-ready-ignores-flag"
+codec-params-ready-ignores-flag
+dlm-request-not-held-in-transition
+dlm-dir-remove-sent-in-transition
+dlm-transition-hold-spends-the-ladder
+dlm-transition-hold-is-silent
+arm-transition-never-releases-the-hold"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1170,6 +1175,95 @@ EOF
         why)          echo "vms_cm_params_db_ready() ignores the flag bit, so a member saying 0x2a reads as ready: the INVEXCEPTN case.";;
         require_fail) hd_lines <<'EOF'
 *** ...and saying 0x2a, it is NOT ready (the INVEXCEPTN case) ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-request-not-held-in-transition)
+        case "$_f" in
+        facility)     echo "a cross-node lock request raised while a cluster state transition is running is HELD until it completes (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "dq_may_transmit() stops holding, so OVMX puts lock traffic into a peer's rebuild again -- the one thing that separates the three captures in which a real OpenVMS VAX V7.3 bugchecked LOCKMGRERR (a cat-0x02 request at barrier step 1, 3 of 3) from the eleven clean case-runs (0 of 11, 26 requests, all outside a transition). Real nodes put nothing but the op-0x0d rebuild record inside a transition.";;
+        require_fail) hd_lines <<'EOF'
+*** nothing went on the wire during the transition ***
+the hold was counted where it was decided
+still nothing on the wire
+*** and the $ENQW was NOT failed: a transition makes lock activity wait, it does not fail it ***
+  the request is still outstanding after 15 beats
+*** the hold named itself on the console exactly ONCE, across sixteen held transmissions ***
+*** the end of the transition releases the held request ***
+one frame, now, went out
+*** built from a FRESH read: the handle the LKB holds NOW, not the one it held when the post arrived ***
+the release was counted
+  and the release said so too -- one line each way, so a console shows the whole episode
+EOF
+                      ;;
+        esac;;
+
+    dlm-dir-remove-sent-in-transition)
+        case "$_f" in
+        facility)     echo "a directory-entry removal raised during a transition is DROPPED, counted, never sent into the rebuild (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_req_fsm_dir_remove() emits into a running transition again -- the exact frame (cat-0x02 op-0x04 for RMS\$4F.1.0 at barrier step 1) that precedes the op-0x19 and the LOCKMGRERR in every frame-level crash specimen. Phase 1 discards all directory information cluster-wide, so there is no fact left to assert.";;
+        require_fail) hd_lines <<'EOF'
+the removal is refused by the transition, and says so
+*** no cat-0x02 op-0x04 reached the wire during the rebuild ***
+and it is counted
+none was sent
+the wire stayed empty
+  one frame
+EOF
+                      ;;
+        esac;;
+
+    dlm-transition-hold-spends-the-ladder)
+        case "$_f" in
+        facility)     echo "a transition HOLD costs a request no rung of the retransmit ladder: VMS makes lock activity wait, it does not fail it (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "dq_held() advances tries like a failed attempt, so a transition longer than five beats walks a perfectly routable request off the end of the ladder and FAILS a sleeping \$ENQW with a timeout status -- an error where a real VAX would simply have waited.";;
+        require_fail) hd_lines <<'EOF'
+*** and the $ENQW was NOT failed: a transition makes lock activity wait, it does not fail it ***
+  the request is still outstanding after 15 beats
+*** the end of the transition releases the held request ***
+one frame, now, went out
+it parses as a grounded op 0x01
+*** built from a FRESH read: the handle the LKB holds NOW, not the one it held when the post arrived ***
+the release was counted
+  and it still names THIS node's own proxy handle
+  at the mode the LKB really asks for
+EOF
+                      ;;
+        esac;;
+
+    dlm-transition-hold-is-silent)
+        case "$_f" in
+        facility)     echo "a node holding lock requests for a transition SAYS so on its console, once per episode (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "the hold stops naming itself, so a node stalled waiting for a rebuild looks identical to a node that lost the request -- which is exactly the ambiguity that cost a whole demo-gate fire to attribute when the OVMX/VAX node sat between the STARTUP.COM hand-off and the site-startup line.";;
+        require_fail) hd_lines <<'EOF'
+*** the hold named itself on the console exactly ONCE, across sixteen held transmissions ***
+  and the release said so too -- one line each way, so a console shows the whole episode
+EOF
+                      ;;
+        esac;;
+
+    arm-transition-never-releases-the-hold)
+        case "$_f" in
+        facility)     echo "the end of a transition releases what the hold held, AFTER the new directory vector has been applied (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_arm_transition_end() stops telling the requester FSM the hold has lifted, so every request the transition held waits out a full retry beat instead -- and nothing guarantees it is released under the vector the transition just rebuilt.";;
+        require_fail) hd_lines <<'EOF'
+*** a held request is released only AFTER the new directory vector has been applied ***
 EOF
                       ;;
         esac;;
@@ -3043,6 +3137,30 @@ apply_edit() {
     codec-params-ready-ignores-flag)
         # the READY test is unique in this file.
         sed -i 's/(p->flags \& VMS_CM_PFLAGS_READY) != 0u \&\& p->members != 0u;/p->members != 0u; \/\* NEGCTL codec-params-ready-ignores-flag \*\//' "$_file";;
+
+    dlm-request-not-held-in-transition)
+        # The ONE hold in dq_may_transmit. Short-circuited rather than deleted
+        # so both predicates stay REFERENCED (-Werror=unused-function). The
+        # edit consumes its anchor.
+        sed -i 's|^\tif (dq_op_waits_for_rebuild(wireop) \&\& dq_transition_active(f)) {$|\tif (0 \&\& dq_op_waits_for_rebuild(wireop) \&\& dq_transition_active(f)) { /* NEGCTL dlm-request-not-held-in-transition */|' "$_file";;
+
+    dlm-dir-remove-sent-in-transition)
+        # The ONE bare `if (dq_transition_active(f)) {` -- dlm_req_fsm_dir_
+        # remove's. The compound one in dq_may_transmit does not match.
+        sed -i 's|^\tif (dq_transition_active(f)) {$|\tif (0 \&\& dq_transition_active(f)) { /* NEGCTL dlm-dir-remove-sent-in-transition */|' "$_file";;
+
+    dlm-transition-hold-spends-the-ladder)
+        # dq_held's one comment line, which is there to be this anchor.
+        sed -i 's|^\t/\* tries is deliberately untouched -- see the note above. \*/$|\tif (r->tries < 0xffu) r->tries++; /* NEGCTL dlm-transition-hold-spends-the-ladder */|' "$_file";;
+
+    dlm-transition-hold-is-silent)
+        # The one call that names the hold. Short-circuited rather than
+        # deleted so dq_say_held stays REFERENCED (-Werror=unused-function).
+        sed -i 's|^\t\tdq_say_held(f);$|\t\tif (0) dq_say_held(f); /* NEGCTL dlm-transition-hold-is-silent */|' "$_file";;
+
+    arm-transition-never-releases-the-hold)
+        # The one release call, at the end of dlm_arm_transition_end().
+        sed -i 's|^\t(void)dlm_req_fsm_transition_ended(\&d->req);$|\t/* NEGCTL arm-transition-never-releases-the-hold */|' "$_file";;
     cnxman-dir-remove-opens-txn)
         # `cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);` is unique in this file.
         sed -i 's|^		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);$|		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST); /* NEGCTL cnxman-dir-remove-opens-txn */|' "$_file";;

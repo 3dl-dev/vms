@@ -163,6 +163,56 @@
  *     PARSER, because there is still nothing grounded to parse against.
  *
  * ==========================================================================
+ * THE TRANSITION HOLD -- WHY THIS ARM SENDS NOTHING DURING A REBUILD
+ * (rd vms-c55)
+ * ==========================================================================
+ * A VMScluster STATE TRANSITION quiesces the lock manager: Phase 1 discards
+ * all directory information cluster-wide and Phase 2 rebuilds it, and the
+ * barrier's steps gate the phases (Davis, *VAXcluster Principles*, pp. 7-40 /
+ * 7-41, p. 6-33). While that is running, a member's lock database is not a
+ * thing another member may ask about or tell to forget an entry.
+ *
+ * MEASURED, over all 122 pcaps in tests/lab/captures, real DEC-OUI senders
+ * only: inside a transition window the DLM traffic is the op-0x0d rebuild
+ * record and its cat-0x82 echo (2797 + 1240) and essentially nothing else.
+ * Every non-0x0d cat-0x02 frame a real node put inside a window flew at
+ * barrier step 10, 11 or 12 OF 12 -- the tail, after the rebuild -- with a
+ * single op-0x08 at step 6. NONE at steps 1-5. In the one capture that holds
+ * a whole barrier (vms-20c-rebuild-1789489597: 12 steps, 654 frames between
+ * the GO and the last release) the in-window breakdown is exactly 307 x 02/0d,
+ * 307 x 82/0d and the barrier frames: no lookup, no removal, no release, no
+ * convert.
+ *
+ * OVMX DID THE OPPOSITE, and it is the one thing that separates the runs in
+ * which a real V7.3 bugchecked LOCKMGRERR from the ones in which it did not:
+ * in 3 of 3 crash captures OVMX put a cat-0x02 DIRECTORY REMOVAL on the wire
+ * at BARRIER STEP 1 (two of them a lookup at step 2 as well), and in 11 clean
+ * case-runs carrying 26 OVMX-originated cat-0x02 requests, every one of them
+ * was outside a transition.
+ *
+ * SO THIS ARM HOLDS. While `ops->transition_active` reads true:
+ *   - an ENQ or a CONVERT is NOT transmitted. The request block is RETAINED
+ *     exactly as rd vms-97c2 retains a frame the connection manager could not
+ *     take, the ladder owns it, and the end of the transition releases it. A
+ *     hold is NOT an attempt, so it does not spend a rung of that ladder.
+ *   - a DIRECTORY-ENTRY REMOVAL is DROPPED, counted. It has no sleeper behind
+ *     it and nothing to retry from (the resource it names is already gone,
+ *     which is why the removal exists at all), and Phase 1 discards the entry
+ *     cluster-wide regardless -- so holding it would mean asserting, after the
+ *     rebuild, about a directory entry this executive no longer has a fact
+ *     about. INV-6 says drop it and count it.
+ *   - a $DEQ still goes. Giving a lock BACK is how a cluster is left in a
+ *     state the rebuild can use -- the same reason vms_dlm_quorum.h never
+ *     blocks a release during a quorum hang -- and the corpus shows no real
+ *     node is ever waiting on one being withheld.
+ *
+ * WHY HERE AND NOT IN THE LOCK ENGINE. vms_dlm_quorum.h's limit 1 says it in
+ * terms: the quorum gate is applied at the node that DECIDES the grant, so it
+ * "does not stall the POST of such a request ... deferring the post until
+ * resume is a queue this rung does not build". This IS that queue, for the
+ * other stall, and it is built where the single transmit gate already is.
+ *
+ * ==========================================================================
  * CONTEXT (design §3.2.6, E42/E45)
  * ==========================================================================
  * Every entry point here is non-blocking, allocation-free and clock-free (it
@@ -244,7 +294,8 @@ enum dlm_req_status {
 	DLM_REQ_E_NOWIREOP,   /* no GROUNDED cat-0x02 opcode for this operation*/
 	DLM_REQ_E_CODEC,      /* the codec refused to build the frame          */
 	DLM_REQ_E_SEND,       /* the connection manager could not take it      */
-	DLM_REQ_E_STATE       /* an empty [state][event] cell -- counted       */
+	DLM_REQ_E_STATE,      /* an empty [state][event] cell -- counted       */
+	DLM_REQ_E_XITION      /* a cluster state transition is running (SS8)   */
 };
 
 /*
@@ -308,6 +359,18 @@ struct dlm_req_ops {
 	 * (Davis p. 6-33), which is how a routing decision made under an old
 	 * vector is detected rather than remembered. */
 	uint32_t (*dir_generation)(void *ctx);
+
+	/*
+	 * IS A CLUSTER STATE TRANSITION RUNNING ON THIS NODE? (rd vms-c55, §8.)
+	 *
+	 * A LIVE read of the CLUB's own `transition_active`, never a copy kept
+	 * here -- the same reason dir_generation is an op and not a field
+	 * (INV-6): a remembered "a transition is running" can be stale, and a
+	 * stale one would hold lock traffic a cluster has already released, or
+	 * release it into a rebuild. NULL (or no cluster) means no transition,
+	 * ever, which is the standalone node's honest degradation.
+	 */
+	int (*transition_active)(void *ctx);
 
 	/*
 	 * THE TWO MEMBERSHIP GATES THAT RETIRED HERE (rd vms-b5b0): `all_ovmx`
@@ -504,6 +567,20 @@ struct dlm_req_fsm {
 	uint32_t ignored_events;         /* an empty [state][event] cell       */
 	uint32_t timeouts_failed;        /* the ladder was spent               */
 	uint32_t peers_gone;
+
+	/* THE TRANSITION HOLD (§8). Three facts, each counted where it is
+	 * decided, so a transcript shows how much lock traffic a transition
+	 * held and that every held request was released again. */
+	uint32_t posts_held_xition;      /* a frame not put on the wire        */
+					  /* because a transition is running    */
+	uint32_t dir_removes_dropped_xition; /* ...and a removal abandoned     */
+					      /* because Phase 1 discards the   */
+					      /* entry it names anyway          */
+	uint32_t xition_resumes;         /* requests released at the end of a  */
+					  /* transition                         */
+	uint8_t  xition_hold_said;       /* this hold episode has been named   */
+					  /* on the console once (see below)    */
+	uint8_t  pad_xition[3];
 };
 
 /* ==========================================================================
@@ -538,10 +615,29 @@ enum dlm_req_status dlm_req_fsm_post(struct dlm_req_fsm *f,
  * It is a notification: no request block is allocated and no answer is awaited
  * (R3: 8106 real removals, none answered). Refused, counted and NOT built
  * unless the post holds a destination, a name and a hash the executive holds.
- * Returns DLM_REQ_OK only when the frame really went to the send op.
+ * DROPPED, counted, while a cluster state transition is running (DLM_REQ_E_
+ * XITION; see the TRANSITION HOLD note above). Returns DLM_REQ_OK only when
+ * the frame really went to the send op.
  */
 enum dlm_req_status dlm_req_fsm_dir_remove(struct dlm_req_fsm *f,
 					   const struct vms_dlm_proxy_post *p);
+
+/*
+ * THE TRANSITION ENDED -- release what the hold held (rd vms-c55).
+ *
+ * Called by the DLM arm from the connection manager's `transition_end` role
+ * op, on the fork thread, AFTER the CLUB has cleared `transition_active` and
+ * after the directory vector has been re-read -- so a released request
+ * re-resolves under the NEW vector, which is the whole reason it waited.
+ *
+ * It owns no retransmit path of its own: it makes every outstanding unsettled
+ * request DUE and runs the ordinary ladder beat, so a released request goes
+ * out through exactly the code a retransmit goes out through -- a fresh
+ * `refill_post` read of the lock database, never a remembered frame. Returns
+ * the number of requests that really went on the wire. Safe when nothing was
+ * held.
+ */
+uint32_t dlm_req_fsm_transition_ended(struct dlm_req_fsm *f);
 
 /* ==========================================================================
  * 10. The INBOUND events

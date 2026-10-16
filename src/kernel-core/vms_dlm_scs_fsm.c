@@ -326,6 +326,51 @@ static enum dlm_req_status dq_build_and_send(struct dlm_req_fsm *f,
 }
 
 /*
+ * Is a cluster state transition running RIGHT NOW? A live read through the
+ * injected op, never a flag this object keeps: see the op's note in the header
+ * (§4) for why a remembered answer would be the INV-6 failure.
+ */
+static int dq_transition_active(const struct dlm_req_fsm *f)
+{
+	if (f->ops == (const struct dlm_req_ops *)0 ||
+	    f->ops->transition_active == (int (*)(void *))0)
+		return 0;
+	return f->ops->transition_active(f->ops->ctx) != 0;
+}
+
+/*
+ * Does this operation wait for the rebuild? (rd vms-c55, header §"THE
+ * TRANSITION HOLD".) An ENQ and a CONVERT ACQUIRE, and the corpus shows no
+ * real member acquiring across a rebuild. A $DEQ gives a lock BACK, which is
+ * how the cluster is left in a state the rebuild can use -- the same carve-out
+ * vms_dlm_quorum.h makes for a release during a quorum hang.
+ */
+static int dq_op_waits_for_rebuild(uint8_t wireop)
+{
+	return wireop != (uint8_t)VMS_DLM_WIREOP_DEQ;
+}
+
+/*
+ * NAME THE HOLD, ONCE PER EPISODE (rd vms-c55, the rd vms-c55/#1714 lesson).
+ *
+ * A stall that does not say why it is stalling costs a whole fire to
+ * attribute: the demo's OVMX/VAX node sat between the STARTUP.COM hand-off and
+ * the site-startup line, and nothing on its console said whether a lock
+ * request was WAITING for a rebuild or had been lost. One line at the first
+ * hold of an episode, one at its release, and a console answers that question
+ * by itself. Bounded by `xition_hold_said`, so a storm of held requests inside
+ * one transition is still one line.
+ */
+static void dq_say_held(struct dlm_req_fsm *f)
+{
+	if (f->xition_hold_said)
+		return;
+	f->xition_hold_said = 1u;
+	dq_log(f, "%DLM, holding cross-node lock requests until the "
+		  "VAXcluster state transition completes");
+}
+
+/*
  * MAY this frame be transmitted at all? Every refusal is counted where it is
  * decided, and NOTHING is built before they have all passed -- a frame that
  * exists is a frame a later edit can send.
@@ -339,6 +384,12 @@ static enum dlm_req_status dq_may_transmit(struct dlm_req_fsm *f, uint8_t wireop
 	if (wireop == 0u) {
 		f->posts_no_wireop++;
 		return DLM_REQ_E_NOWIREOP;
+	}
+	if (dq_op_waits_for_rebuild(wireop) && dq_transition_active(f)) {
+		/* The hold. The request is not refused -- it is not yet due. */
+		f->posts_held_xition++;
+		dq_say_held(f);
+		return DLM_REQ_E_XITION;
 	}
 	if (dst == 0u) {
 		f->dir_unresolved++;
@@ -417,6 +468,23 @@ static void dq_untransmitted(struct dlm_req_fsm *f, struct dlm_req *r)
 	f->posts_deferred++;
 	if (r->tries < 0xffu)
 		r->tries++;
+	r->sent_ms = dq_now(f);
+}
+
+/*
+ * dq_held - a request the TRANSITION HOLD kept off the wire (rd vms-c55).
+ *
+ * Like dq_untransmitted in every way but one: `tries` is NOT advanced. A hold
+ * is not a failed attempt. Spending a rung of a five-rung ladder on each beat
+ * of a rebuild would fail, with a timeout status, a request that is merely
+ * waiting for the cluster -- and VMS's own behaviour during a transition is to
+ * make lock activity WAIT, not to fail it (Davis pp. 7-40/7-41). `sent_ms` is
+ * stamped so the ladder re-offers it one beat later rather than spinning, and
+ * dlm_req_fsm_transition_ended() makes it due the moment the hold lifts.
+ */
+static void dq_held(struct dlm_req_fsm *f, struct dlm_req *r)
+{
+	/* tries is deliberately untouched -- see the note above. */
 	r->sent_ms = dq_now(f);
 }
 
@@ -623,6 +691,16 @@ typedef void (*dq_handler_t)(struct dlm_req_fsm *f, struct dq_ev *e);
 static void dq_post_not_sent(struct dlm_req_fsm *f, struct dq_ev *e,
 			     enum dlm_req_status why)
 {
+	if (why == DLM_REQ_E_XITION) {
+		/* A THIRD arm, and it is neither of the two above: the request
+		 * is perfectly routable and nothing refused it -- a cluster
+		 * state transition is running and no member sends lock traffic
+		 * into a rebuild. Retained like the transient arm, but without
+		 * spending a rung (dq_held). */
+		dq_held(f, e->r);
+		e->st = DLM_REQ_OK;
+		return;
+	}
 	if (why == DLM_REQ_E_SEND) {
 		dq_untransmitted(f, e->r);
 		e->st = DLM_REQ_OK;
@@ -1042,6 +1120,14 @@ static void h_timeout_request(struct dlm_req_fsm *f, struct dq_ev *e)
 		dq_free(r);   /* the lock went away under us: abandon quietly */
 		return;
 	}
+	if (e->st == DLM_REQ_E_XITION) {
+		/* NOT a spent rung (rd vms-c55): the ladder is for requests
+		 * that cannot be answered, and this one has not been asked
+		 * yet. The transition's own end releases it. */
+		dq_held(f, r);
+		e->st = DLM_REQ_OK;
+		return;
+	}
 	/*
 	 * The attempt was refused before a frame was built (no wire opcode, no
 	 * hash, no destination), so dq_transmit did not count a try. Count one
@@ -1238,6 +1324,19 @@ enum dlm_req_status dlm_req_fsm_dir_remove(struct dlm_req_fsm *f,
 	if (p->op != VMS_DLM_POST_DIR_REMOVE) {
 		f->dir_removes_refused++;
 		return DLM_REQ_E_INVAL;
+	}
+	if (dq_transition_active(f)) {
+		/*
+		 * DROPPED, not held (rd vms-c55, header §"THE TRANSITION
+		 * HOLD"). Phase 1 of a transition discards all directory
+		 * information cluster-wide (Davis p. 7-40/7-41, p. 6-33), so
+		 * the entry this removal names stops existing whether or not
+		 * it is sent -- and after the rebuild this executive holds no
+		 * fact about it to assert. A removal has no sleeper behind it
+		 * and nothing to re-read, so there is nothing to retain.
+		 */
+		f->dir_removes_dropped_xition++;
+		return DLM_REQ_E_XITION;
 	}
 	if (p->dst_csid == 0u) {
 		f->dir_removes_refused++;
@@ -1720,6 +1819,40 @@ uint32_t dlm_req_fsm_tick(struct dlm_req_fsm *f)
 		(void)dq_dispatch(f, r, DLM_REQ_EV_TIMEOUT, &e);
 		if (f->retransmits != before)
 			sent++;
+	}
+	return sent;
+}
+
+/*
+ * THE HOLD LIFTS (rd vms-c55). Make every outstanding unsettled request DUE
+ * and run one ordinary beat.
+ *
+ * Deliberately NOT a second transmit path: a released request must go out
+ * through the same dq_refill_transmit the ladder uses, so it is built from a
+ * FRESH read of the lock database under the NEW directory vector -- which is
+ * the whole reason it waited. Backdating `sent_ms` by one retry interval is
+ * the only state this touches, and the beat does the rest.
+ */
+uint32_t dlm_req_fsm_transition_ended(struct dlm_req_fsm *f)
+{
+	uint32_t i, now, sent;
+
+	if (f == (struct dlm_req_fsm *)0 || !dq_ops_ok(f))
+		return 0u;
+	now = dq_now(f);
+	for (i = 0u; i < DLM_REQ_MAX; i++) {
+		struct dlm_req *r = &f->req[i];
+
+		if (r->state == (uint8_t)DLM_REQ_ST_IDLE || r->settled)
+			continue;
+		r->sent_ms = now - DLM_REQ_RETRY_MS;
+	}
+	sent = dlm_req_fsm_tick(f);
+	f->xition_resumes += sent;
+	if (f->xition_hold_said) {
+		f->xition_hold_said = 0u;
+		dq_log(f, "%DLM, the VAXcluster state transition completed; "
+			  "held cross-node lock requests resume");
 	}
 	return sent;
 }

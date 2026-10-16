@@ -317,6 +317,20 @@ static uint32_t dlm_arm_dir_generation(void *ctx)
 	return vms_ldwv_generation(&d->cl->club.ldwv);
 }
 
+/*
+ * IS A TRANSITION RUNNING? (rd vms-c55.) One read of the CLUB flag the barrier
+ * and the coordinator FSMs maintain -- the SAME fact cnxman_dlm_seq_learn
+ * already gates on -- and nothing derived. No cluster, no transition.
+ */
+static int dlm_arm_transition_active(void *ctx)
+{
+	const struct vms_dlm_scs *d = (const struct vms_dlm_scs *)ctx;
+
+	if (d == NULL || d->cl == NULL)
+		return 0;
+	return d->cl->club.transition_active != 0u;
+}
+
 static uint32_t dlm_arm_now_ms(void *ctx)
 {
 	(void)ctx;
@@ -541,6 +555,7 @@ static void dlm_arm_bind_req_ops(struct vms_dlm_scs *d)
 	d->req_ops.refill_post     = dlm_arm_refill_post;
 	d->req_ops.dir_resolve     = dlm_arm_dir_resolve;
 	d->req_ops.dir_generation  = dlm_arm_dir_generation;
+	d->req_ops.transition_active = dlm_arm_transition_active;
 	d->req_ops.record_master   = dlm_arm_record_master;
 	d->req_ops.assume_mastery  = dlm_arm_assume_mastery;
 	d->req_ops.grant_recv      = dlm_arm_grant_recv;
@@ -2327,6 +2342,15 @@ static void dlm_arm_transition_end(void *ctx,
 	exec_lock(&d->dir_lock);
 	(void)vms_dlm_dir_drop_unless(&d->dir, dlm_arm_dir_is_ours, d);
 	exec_unlock(&d->dir_lock);
+	/*
+	 * ...AND THE HOLD LIFTS (rd vms-c55), last, so a released request
+	 * re-resolves under the vector this function has just finished
+	 * settling. The CLUB cleared `transition_active` before calling us
+	 * (vms_cnxman_barrier_fsm.c / vms_cnxman_coord_fsm.c), so the arm's
+	 * own transition_active op already reads false and the ladder's
+	 * ordinary beat can send.
+	 */
+	(void)dlm_req_fsm_transition_ended(&d->req);
 }
 
 static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)

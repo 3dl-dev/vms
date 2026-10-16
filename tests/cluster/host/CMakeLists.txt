@@ -1172,6 +1172,24 @@ set_tests_properties(cluster_host_dlm_pid_cell_census PROPERTIES
     TIMEOUT 120
 )
 
+# ---- rd vms-c55: what a node puts on the lock connection DURING a transition
+# The transition hold in vms_dlm_scs_fsm.c is justified by a census, not by a
+# reading of the book: over every committed pcap, no real VMS node put a
+# non-0x0d lock message on the wire at barrier steps 1-5, the one capture that
+# holds a whole 12-step barrier carries exactly 307 op-0x0d records and 307
+# echoes inside it and nothing else, and both frame-level LOCKMGRERR specimens
+# have OVMX originating a removal at step 1 and a lookup at step 2. --selftest
+# re-derives all of it from the committed captures, so the figures in the
+# header comment and in the fix's own grounding cannot drift from the bytes.
+add_test(NAME cluster_host_transition_dlm_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/transition_dlm_census.py" --selftest
+)
+set_tests_properties(cluster_host_transition_dlm_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 300
+)
+
 # ---- rd vms-ac4f: the frame-conformance gate asked of a BOOTED node --------
 # cluster_frame_conformance_gate above asks "do the senders ctest can drive
 # emit grounded bytes?". This asks the question a bugcheck asks: of everything

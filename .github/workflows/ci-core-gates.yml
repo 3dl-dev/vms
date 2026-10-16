@@ -1191,9 +1191,17 @@ jobs:
   # (vms-9ef) — does not yet build. SSH-login CI coverage returns with that
   # port. tests/uat/vms_session_test.sh is retained for that bring-up.
   # -----------------------------------------------------------------------
+  kernel-base:
+    name: Prebuilt kernel base (GHCR)
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/kernel-base.yml
+
   uat-session:
     name: VMS User Acceptance Test
-    needs: changes
+    needs: [changes, kernel-base]
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -1213,6 +1221,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
+      - name: Log in to ghcr.io (pull the prebuilt kernel base)
+        continue-on-error: true
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Build bootable image (uses GHA layer cache)
         uses: docker/build-push-action@v6
         with:
@@ -1221,6 +1233,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-boot:latest
+          build-args: |
+            KERNEL_BASE=${{ needs.kernel-base.outputs.ref }}
           cache-from: type=gha
           # import only: persistent-boot is this scope's one writer (rd vms-14da)
 
@@ -1260,6 +1274,7 @@ jobs:
       - conformance
       - corpus-conformance
       - static-analysis
+      - kernel-base
       - uat-session
     runs-on: ubuntu-latest
     timeout-minutes: 5

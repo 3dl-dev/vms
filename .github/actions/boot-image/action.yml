@@ -48,4 +48,4 @@ runs:
         tags: ovmx-boot:latest
         build-args: |
           KERNEL_BASE=${{ inputs.kernel-base }}
-        cache-from: type=gha
+        cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main

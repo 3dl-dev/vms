@@ -510,6 +510,9 @@ jobs:
     needs: changes
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push the main-only registry layer cache
     timeout-minutes: 30
 
     steps:
@@ -527,8 +530,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-aarch64-boot:latest
-          cache-from: type=gha,scope=aarch64-boot
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=aarch64-boot' || '' }}  # scope aarch64-boot's one writer (rd vms-14da)
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:aarch64-boot
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:aarch64-boot,mode=max,ignore-error=true' || '' }}  # scope aarch64-boot's one writer (rd vms-14da)
 
       - name: Boot arm64 kernel under qemu-system-aarch64, run OVMX EM_AARCH64 init as PID 1
         run: |
@@ -1235,7 +1238,7 @@ jobs:
           tags: ovmx-boot:latest
           build-args: |
             KERNEL_BASE=${{ needs.kernel-base.outputs.ref }}
-          cache-from: type=gha
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main
           # import only: persistent-boot is this scope's one writer (rd vms-14da)
 
       - name: Run UAT session on the real runtime (QEMU console)

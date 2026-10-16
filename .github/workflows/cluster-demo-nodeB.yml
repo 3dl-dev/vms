@@ -139,7 +139,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
 
       - name: Node B identity from the roster (mk_democonfig.py DEMO_NODE_B)
         if: matrix.node == 'B'

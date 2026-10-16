@@ -16,6 +16,15 @@ runs:
     # 37987950134, PR1 run 37991202498. Give the daemon the same mirror.
     - name: Docker daemon pulls through mirror.gcr.io first
       uses: ./.github/actions/docker-mirror
+    # Best-effort ghcr login first: the registry layer caches
+    # (type=registry,ref=ghcr.io/.../ovmx-cache) and the prebuilt images are
+    # read through it. A failed login only costs the cache, never the job.
+    - name: Log in to ghcr.io (layer cache + prebuilt images)
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+      run: echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null 2>&1 || echo "::warning::ghcr login failed; registry caches unavailable"
     - name: Pick the BuildKit image
       id: bk
       shell: bash

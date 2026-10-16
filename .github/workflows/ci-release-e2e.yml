@@ -115,7 +115,7 @@ jobs:
             KERNEL_BASE=${{ needs.kernel-base.outputs.ref }}
           cache-from: |
             type=registry,ref=${{ steps.ref.outputs.cache }}
-            type=gha
+            type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main
           cache-to: ${{ github.ref == 'refs/heads/main' && format('type=registry,ref={0},mode=max,ignore-error=true', steps.ref.outputs.cache) || '' }}
 
       - name: Verify the image is pullable
@@ -1079,7 +1079,7 @@ jobs:
           # Reuses the shared gha layer cache: only the late test-overlay layer
           # differs from the shipped build, so the kernel + build-static layers are
           # cache hits (fast rebuilds), the reason CI beats a cold rail build here.
-          cache-from: type=gha
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main
           # import only: persistent-boot is this scope's one writer (rd vms-14da)
 
       - name: Daytime cold-boot proof — INETD launches DAYTIME (ACP-stage), :13 answers RFC 867

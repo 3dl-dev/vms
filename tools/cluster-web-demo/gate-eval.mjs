@@ -509,7 +509,15 @@ export function verdictOf(R) {
     return `REGRESSION: an OVMX node founded a cluster (${Object.keys(R.ovmx_founded)}) ` +
            `-- the OVMX nodes must be NON-VOTING (rd vms-1a1)`;
   }
-  if (Object.keys(R.bugchecks || {}).length) return `BUGCHECK: ${JSON.stringify(R.bugchecks)}`;
+  if (Object.keys(R.bugchecks || {}).length) {
+    // A bugcheck seen beside a node that is not the build under test says
+    // nothing about the build under test, and must say so where a reader of
+    // the verdict will see it (rd vms-4f4: case-filtered hunts ran a V0.7-7
+    // Node B, and their BUGCHECK lines read as findings about the new build).
+    const stale = versionWhy(R);
+    return `BUGCHECK: ${JSON.stringify(R.bugchecks)}` +
+           (stale ? ` -- and NOT THE BUILD UNDER TEST: ${stale}` : '');
+  }
 
   if (R.cn3) {
     if (!isQuiet(R)) return `CN=3 but NOT QUIET: ${noiseWhy(R)}`;

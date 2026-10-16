@@ -200,7 +200,9 @@ jobs:
       # docs/oracle/keystroke/known-diff.d/ fails, and so does a listed
       # difference that now matches -- the list only shrinks.
       - name: Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        # CI-speed tier: queue runs it when the console/terminal/boot is
+        # touched; nightly, dispatch and the pre-tag verify always run it.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && needs.changes.outputs.keystroke == 'true' }}
         run: |
           KS_ENSURE_WAIT=8 tests/qemu/test_keystroke_oracle.sh keystroke-out
 
@@ -378,7 +380,7 @@ jobs:
   aarch64-release-set:
     name: aarch64 release set -- tools/cut-release-aarch64.sh on an arm64 runner (vms-b58)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 150
     steps:
@@ -437,7 +439,7 @@ jobs:
   release-sign-key:
     name: mint ephemeral module-signing key for the reproducibility cuts
     needs: [changes]
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -464,7 +466,7 @@ jobs:
   cut-release-a:
     name: cut release A (clean tree, no cache; parallel with the other cut)
     needs: [changes, aarch64-release-set, release-sign-key]
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
@@ -506,7 +508,7 @@ jobs:
   cut-release-b:
     name: cut release B (clean tree, no cache; parallel with the other cut)
     needs: [changes, aarch64-release-set, release-sign-key]
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
@@ -549,7 +551,7 @@ jobs:
     name: cut-release is byte-reproducible + boots (vms-d73)
     needs: [changes, cut-release-a, cut-release-b]
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -735,7 +737,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -986,7 +988,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
 

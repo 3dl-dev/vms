@@ -729,6 +729,16 @@ if(BUILD_TESTS)
     set_tests_properties(red_main_bot_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+
+    # CI-speed tiers: tools/ci/ci_tiers.py decides which heavy legs a queue /
+    # PR / nightly / tag event owes (negctl map fails closed), and
+    # tools/ci/pre_tag_verify.py refuses a tag SHA with no green full run.
+    add_test(NAME ci_tiers_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_ci_tiers.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(ci_tiers_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 120)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.

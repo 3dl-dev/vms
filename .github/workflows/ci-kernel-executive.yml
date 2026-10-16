@@ -1652,7 +1652,12 @@ jobs:
   # -----------------------------------------------------------------------
   kernel-executive-facility-negative-controls-shard:
     name: Kernel Executive — Per-Facility Negative Controls (shard ${{ matrix.shard }}/${{ strategy.job-total }})
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    needs: changes
+    # CI-speed tier (tools/ci/ci_tiers.py): nightly / dispatch / release-tag run
+    # every defect; the merge queue runs only the defects whose facility the
+    # change touches (a path-to-facility map that fails closed to ALL); a push
+    # to a branch and a PR run none.
+    if: ${{ needs.changes.outputs.negctl_select != '' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1739,12 +1744,34 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Select this shard's defects (ALL, or the queue's touched-facility subset)
+        id: sel
+        env:
+          NEGCTL_SELECT: ${{ needs.changes.outputs.negctl_select }}
+        run: |
+          set -eu
+          ALL=$(sh tests/qemu/facility_defects.sh list)
+          if [ "$NEGCTL_SELECT" = "ALL" ]; then
+            PICK="$ALL"
+          else
+            PICK=$(echo "$ALL" | grep -Fx -f <(echo "$NEGCTL_SELECT" | tr ' ' '\n') || true)
+          fi
+          # shard by position within the PICKED list so a small subset spreads
+          # over the shards instead of piling onto a few
+          MINE=$(echo "$PICK" | grep . | awk -v n="${{ strategy.job-total }}" -v i="${{ matrix.shard }}" '(NR-1) % n == i' || true)
+          echo "$MINE" > "$RUNNER_TEMP/negctl-mine.txt"
+          echo "n=$(echo "$MINE" | grep -c . || true)" >> "$GITHUB_OUTPUT"
+          echo "selected $(echo "$PICK" | grep -c . || true) of $(echo "$ALL" | grep -c .) defects; this shard runs:"
+          echo "$MINE" | sed 's/^/  /'
+
       # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
       # (host-side and inside `docker run`) use it instead of TCG.
       - name: Enable KVM
+        if: ${{ steps.sel.outputs.n != '0' }}
         uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
+        if: ${{ steps.sel.outputs.n != '0' }}
         uses: ./.github/actions/setup-buildx
 
       # vms-a68: run_facility_negctl.sh rebuilt tests/qemu/Dockerfile from
@@ -1758,6 +1785,7 @@ jobs:
       # the image available to the script's own `docker image inspect` /
       # `docker run` calls below exactly as if it had built it itself.
       - name: Build facility-negctl test image (gha layer cache)
+        if: ${{ steps.sel.outputs.n != '0' }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -1781,14 +1809,14 @@ jobs:
       # self-declarations -- "it may lint but MUST NOT be gated", CLAUDE.md Rule
       # 9 amendment). Nothing downstream reads the emitted record.
       - name: Every executive facility has a control that turns CI red against a real /dev/vms (this shard's slice)
+        if: ${{ steps.sel.outputs.n != '0' }}
         env:
           CONTAINER_ENGINE: docker
           # Advisory emission only; no longer uploaded or compared (vms-49f).
           FACILITY_NEGCTL_RECORD_OUT: ${{ runner.temp }}/facility_negctl_observed.tsv
         run: |
           set -eu
-          DEFECTS=$(sh tests/qemu/facility_defects.sh list \
-            | awk -v n="${{ strategy.job-total }}" -v i="${{ matrix.shard }}" 'NR % n == i')
+          DEFECTS=$(cat "$RUNNER_TEMP/negctl-mine.txt")
           echo "This shard (${{ matrix.shard }}/${{ strategy.job-total }}) runs:"
           echo "$DEFECTS" | sed 's/^/  /'
           # shellcheck disable=SC2086

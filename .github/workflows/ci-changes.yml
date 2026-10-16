@@ -57,6 +57,9 @@ on:
       alpha_activation:
         description: 'alpha_activation (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.alpha_activation }}
+      alpha_selfhost:
+        description: 'alpha_selfhost (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.alpha_selfhost }}
       vax_toolchain:
         description: 'vax_toolchain (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.vax_toolchain }}
@@ -101,6 +104,7 @@ jobs:
       alpha_toolchain: ${{ steps.decide.outputs.alpha_toolchain }}
       alpha_boot_runtime: ${{ steps.decide.outputs.alpha_boot_runtime }}
       alpha_activation: ${{ steps.decide.outputs.alpha_activation }}
+      alpha_selfhost: ${{ steps.decide.outputs.alpha_selfhost }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
       tcpip: ${{ steps.decide.outputs.tcpip }}
       aarch64_kernel: ${{ steps.decide.outputs.aarch64_kernel }}
@@ -214,6 +218,24 @@ jobs:
             # fires the per-PR alpha-boot-mount N=3 activation gate + the cheap
             # alpha-activation-selftest below. Kept scoped so non-Alpha PRs pay
             # nothing.
+            # vms-5303e: the long VMS-hosted GCC pipeline gates (host GCC + GNU as
+            # built over this C RTL, run on OVMX/Alpha). Only the files that can
+            # change their result; nightly + dispatch + pre-tag verify run them
+            # unconditionally.
+            alpha_selfhost:
+              - '.github/workflows/ci-alpha.yml'
+              - 'tools/cross-alpha-vms/selfhost/**'
+              - 'tools/cross-alpha-vms/joint-e2e/asrun_test.c'
+              - 'tools/cross-alpha-vms/patches/**'
+              - 'tools/cross-alpha/run-module-gp-activation-alpha.sh'
+              - 'tools/cross-alpha/build-alpha-bootimage.sh'
+              - 'tools/cross-alpha/SYSTARTUP_VMS_AS_PROOF.COM'
+              - 'tools/cross-alpha/cmp_obj_dump.py'
+              - 'src/vmslink/**'
+              - 'src/libvms/**'
+              - 'src/vmsrms/**'
+              - 'src/imgact/**'
+              - 'src/vmsdcl/dcl_cmd_misc.c'
             alpha_activation:
               - '.github/workflows/**'
               - 'src/kernel/**'
@@ -485,6 +507,7 @@ jobs:
               echo "alpha_toolchain=${{ steps.filter.outputs.alpha_toolchain }}"
               echo "alpha_boot_runtime=${{ steps.filter.outputs.alpha_boot_runtime }}"
               echo "alpha_activation=${{ steps.filter.outputs.alpha_activation }}"
+              echo "alpha_selfhost=${{ steps.filter.outputs.alpha_selfhost }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
               echo "tcpip=${{ steps.filter.outputs.tcpip }}"
               echo "aarch64_kernel=${{ steps.filter.outputs.aarch64_kernel }}"
@@ -507,6 +530,7 @@ jobs:
               echo "alpha_toolchain=true"
               echo "alpha_boot_runtime=true"
               echo "alpha_activation=true"
+              echo "alpha_selfhost=true"
               echo "vax_toolchain=true"
               echo "tcpip=true"
               echo "aarch64_kernel=true"

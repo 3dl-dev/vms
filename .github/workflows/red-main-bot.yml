@@ -1,0 +1,71 @@
+name: Red-main bot (bisect + auto-revert)
+
+# CI-speed (lane B). When a mainline run (push to main, or the nightly) of a CI
+# workflow goes red, this bot re-runs the failed jobs ONCE (an infra flake must
+# never revert anyone), and only if the same jobs are still red it bisects the
+# commits since the last green run (probe = workflow_dispatch of the failing
+# workflow on a bisect/* branch) and opens a revert PR that names the culprit,
+# with auto-merge on so it lands through the merge queue.
+#
+# One step per workflow_run event (tools/ci/red_main_bot.py); the tracking
+# state lives in a `red-main-bot` issue, so no job ever waits for a probe.
+# Refuses (comments on the issue instead) when the culprit is a revert or a
+# release cut, when a bot revert PR is already open, or when the revert does
+# not apply cleanly.
+
+on:
+  workflow_run:
+    workflows:
+      - "CI / Alpha"
+      - "CI / Core Gates"
+      - "CI / Kernel Executive / NetBSD-amd64"
+      - "CI / Release / E2E"
+      - "CI / Self-Host / x86_64 toolchain"
+      - "CI / VAX / NetBSD-vax"
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: red-main-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    name: Re-run once, bisect, revert the culprit
+    if: >-
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success') &&
+      (github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'bisect/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (full history for rev-list / revert)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Git identity for the revert commit
+        run: |
+          git config user.name "ovmx red-main bot"
+          git config user.email "red-main-bot@users.noreply.github.com"
+
+      - name: Ensure the tracking label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create red-main-bot --description "red-main bot tracking issue and revert PR" --color B60205 || true
+
+      - name: Offline self-test (the state machine can still go red)
+        run: python3 tests/integration/test_red_main_bot.py "$PWD"
+
+      - name: Advance the state machine one step
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ toJSON(github.event) }}
+        run: |
+          printf '%s' "$EVENT" > "$RUNNER_TEMP/event.json"
+          python3 tools/ci/red_main_bot.py "$RUNNER_TEMP/event.json" "${{ github.repository }}"

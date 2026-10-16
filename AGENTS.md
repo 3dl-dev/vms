@@ -110,6 +110,16 @@ accepted.
   the kernel-executive proof against a real `/dev/vms`, and the VMS-native link / self-host jobs.
 - **Tests are mandatory.** No change is complete while a test in any layer it touches is skipped,
   failing, or absent — and don't weaken a test to make a task pass.
+- **Do not use `workflow_dispatch` as a pre-merge check.** The PR gates and the merge queue ARE the
+  check: open the PR, let the gates run, enqueue. Dispatching a workflow on your branch to "see if it
+  passes" duplicates the queue's work on a free-runner budget and has produced hundreds of failed,
+  meaningless runs. Heavy legs (release cuts, the full executive negctl, Alpha cc1/C++ self-host, the
+  keystroke oracle) are tiered: the queue runs each when your change touches its area (negctl: only the
+  touched facilities, fail-closed to all on an unmapped path), and the nightly plus the pre-tag verify
+  (`tools/ci/pre_tag_verify.py`) run all of them. Use `tools/ci/fast.sh` for the local loop.
+- **A red on main is bisected and reverted by the red-main bot** (`tools/ci/red_main_bot.py`), after one
+  re-run to rule out an infra flake; the revert PR names the culprit commit. Fix forward only if the
+  revert is wrong.
 - Match the surrounding code's style, naming, and conventions.
 - A facility negative control is one file, `tests/qemu/defects.d/<name>.defect` (its metadata,
   `defect_meta`, and its mutation, `defect_apply`); `tests/qemu/facility_defects.sh` lists the

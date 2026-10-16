@@ -154,7 +154,7 @@ jobs:
     name: NetBSD/vax OVMX substrate prime (modular kernel + STARTUP/vms.kmod)
     # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
     permissions:
-      packages: read
+      packages: write
       contents: read
     needs: [changes, netbsd-vax-simh]
     # vms-6e10 KEEPER: intentionally NOT p4-only-gated -- the P4 fast-path's
@@ -252,8 +252,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-vax' || '' }}  # scope cross-vax's one writer (rd vms-14da)
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax,mode=max,ignore-error=true' || '' }}  # scope cross-vax's one writer (rd vms-14da)
 
       # THE PRIME PROOF + WRITER PAYLOAD: a REAL green sysboot. This builds the
       # full substrate (cross_build -> build_kernel -> master_system_volume ->
@@ -362,7 +362,7 @@ jobs:
           tags: |
             ghcr.io/3dl-dev/ovmx-cross-vax:${{ steps.srchash.outputs.source_hash }}
             ghcr.io/3dl-dev/ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
   netbsd-vax-devvms:
@@ -450,7 +450,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Prove — /dev/vms live on NetBSD/vax + PING (cross-build, custom MODULAR kernel, modload, ioctl)
@@ -571,7 +571,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Prove — common event flags shared cross-process on NetBSD/vax (cross-build, custom MODULAR kernel, modload, set/read/clear + CV wait)
@@ -710,7 +710,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Prove — access-mode enforcement + cross-process AST delivery on NetBSD/vax (cross-build, custom MODULAR kernel, modload, selftest/SETPRV/GETJPI + wrtattn AST)
@@ -879,7 +879,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Prove — process table shared cross-process on NetBSD/vax (cross-build, custom MODULAR kernel, modload, SETPRN/GETJPI/PROCESS_SCAN)
@@ -975,7 +975,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Prove — a mailbox message process B writes is read back byte-for-byte by process C, on NetBSD/vax (cross-build, custom MODULAR kernel, modload, CREMBX/ASSIGN/QIO)
@@ -1068,7 +1068,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: "Prove — ovmx_init boots as PID 1 (executive on /dev/vms, OpenVMX banner, ODS-2 DKA0: mounted)"
@@ -1197,7 +1197,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: "Sysboot — master the OVMX system volume and boot PAST the installed-system gate to the PROVISION.EXE exec"
@@ -1308,7 +1308,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: "Acceptance gate — boot the OVMX/NetBSD-vax single disk, log in SYSTEM/MANAGER, run the shared DCL/SHOW battery, assert VMS-faithful output"
@@ -1392,7 +1392,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       # rd vms-649a: run-boot.sh sysboot-single is the boot mode the shipped
@@ -1486,7 +1486,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: "$STATUS gate — selftest, boot the proof SYSTEM volume, assert each RUN's exact $STATUS"
@@ -1592,7 +1592,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       # The NetBSD/vax KERNEL headers come from the SAME pinned syssrc set the
@@ -1758,7 +1758,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Configure + build ovmx-netbsd-guest-tools via the top-level CMake project under the vax toolchain, then run the width negctl teeth
@@ -1850,7 +1850,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Prove LINK.EXE (-DOVMX_LINK_ELF32) emits elf32-vax .vms$sv shareables + the LP64 gate stays additive
@@ -1930,7 +1930,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Prove LINKVAX.EXE (-DOVMX_LINK_ELF32) emits an elf32-vax --executable consumer (crt0 + PT_INTERP=IMGACT.EXE + .vms$imp) + the LP64 gate stays additive
@@ -2012,7 +2012,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Build LIBVMS$SHR.EXE (genuine elf32-vax .vms$sv shareable, from the real src/libvms RTL)
@@ -2165,7 +2165,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Configure + build the ovmx-images aggregate via the top-level CMake project under the vax toolchain
@@ -2301,7 +2301,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Cross-compile the ACP-read closure for elf32-vax with the ACP arms ON

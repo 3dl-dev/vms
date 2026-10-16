@@ -663,7 +663,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-alpha:latest
-          cache-from: type=gha,scope=cross-alpha
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha
           # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
 
       - name: Activate a VMS-standard image through the real IMGACT.EXE (alpha)
@@ -732,7 +732,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
           # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
 
       - name: Build + structurally prove the elf32-vax IMGACT backend

@@ -1460,6 +1460,9 @@ jobs:
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    permissions:
+      contents: read
+      packages: write   # publish the stage-2 toolchain to GHCR
 
     steps:
       - name: Checkout
@@ -1496,16 +1499,25 @@ jobs:
           cache-from: type=gha,scope=cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
-      - name: Restore the stage-2 C/C++ toolchain
-        uses: actions/cache@v4
+      - name: Restore the stage-2 C/C++ toolchain (GHCR)
+        id: cxxtc
+        uses: ./.github/actions/cxx-toolchain
         with:
-          path: .cxxtc
-          key: alpha-cxx-tc-${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+          mode: fetch
+          key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
 
       - name: "C++ gate — stage-2 g++ over the OVMX C RTL, qemu-system-alpha + /dev/vms; can-fail selftest first"
         env:
           OVMX_CXX_TOOLCHAIN: ${{ github.workspace }}/.cxxtc
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh cxx-gate
+
+      - name: Publish the stage-2 C/C++ toolchain (GHCR)
+        if: ${{ success() }}
+        uses: ./.github/actions/cxx-toolchain
+        with:
+          mode: publish
+          hit: ${{ steps.cxxtc.outputs.hit }}
+          key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
   # -----------------------------------------------------------------------
   # alpha-cxx32 (vms-1045): the C++ gate at the DEC C default (32-bit) pointer
   # size, against the stage-2 toolchain's 32-bit libstdc++ ($X/p32). Shares the
@@ -1517,6 +1529,9 @@ jobs:
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    permissions:
+      contents: read
+      packages: write   # publish the stage-2 toolchain to GHCR
 
     steps:
       - name: Checkout
@@ -1553,16 +1568,25 @@ jobs:
           cache-from: type=gha,scope=cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
-      - name: Restore the stage-2 C/C++ toolchain
-        uses: actions/cache@v4
+      - name: Restore the stage-2 C/C++ toolchain (GHCR)
+        id: cxxtc
+        uses: ./.github/actions/cxx-toolchain
         with:
-          path: .cxxtc
-          key: alpha-cxx-tc-${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+          mode: fetch
+          key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
 
       - name: "C++ gate — stage-2 g++ over the OVMX C RTL, qemu-system-alpha + /dev/vms; can-fail selftest first"
         env:
           OVMX_CXX_TOOLCHAIN: ${{ github.workspace }}/.cxxtc
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh cxx32-gate
+
+      - name: Publish the stage-2 C/C++ toolchain (GHCR)
+        if: ${{ success() }}
+        uses: ./.github/actions/cxx-toolchain
+        with:
+          mode: publish
+          hit: ${{ steps.cxxtc.outputs.hit }}
+          key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
   # -----------------------------------------------------------------------
   # alpha-cc1 (vms-9a63): GCC 14.2's compiler proper, built FOR the
   # alpha-dec-vms host by the stage-2 toolchain over this build's C RTL
@@ -1576,6 +1600,9 @@ jobs:
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    permissions:
+      contents: read
+      packages: write   # publish the stage-2 toolchain to GHCR
 
     steps:
       - name: Checkout
@@ -1612,16 +1639,25 @@ jobs:
           cache-from: type=gha,scope=cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
-      - name: Restore the stage-2 C/C++ toolchain
-        uses: actions/cache@v4
+      - name: Restore the stage-2 C/C++ toolchain (GHCR)
+        id: cxxtc
+        uses: ./.github/actions/cxx-toolchain
         with:
-          path: .cxxtc
-          key: alpha-cxx-tc-${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+          mode: fetch
+          key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
 
       - name: "cc1 gate — host GCC over the OVMX C RTL, cc1 on qemu-system-alpha + /dev/vms; can-fail selftest first"
         env:
           OVMX_CXX_TOOLCHAIN: ${{ github.workspace }}/.cxxtc
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate
+
+      - name: Publish the stage-2 C/C++ toolchain (GHCR)
+        if: ${{ success() }}
+        uses: ./.github/actions/cxx-toolchain
+        with:
+          mode: publish
+          hit: ${{ steps.cxxtc.outputs.hit }}
+          key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
   # -----------------------------------------------------------------------
   # alpha-shipped-shareable-activation (vms-410, vms-deec Decision B): Alpha
   # ships + activates real VMS shareable images. The Alpha VMS-format

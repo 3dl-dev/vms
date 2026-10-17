@@ -1904,6 +1904,8 @@ jobs:
           path: |
             .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
             .boot-cache/alpha-modgp-gate/boot/modgpA.log
+            .boot-cache/alpha-modgp-gate/boot/joint/*.EXE
+            .boot-cache/alpha-modgp-gate/boot/joint/*.exe
           if-no-files-found: ignore
           retention-days: 7
   # -----------------------------------------------------------------------

@@ -123,7 +123,7 @@ jobs:
   kernel-executive-shard:
     name: Kernel Executive (vms.ko via /dev/vms, QEMU) — shard ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: changes
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_kernel == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # Per shard: the fixed image build (gha layer cache, shared scope across
     # shards so it is built once and reused) + one QEMU boot over ~1/N suites.
@@ -366,7 +366,7 @@ jobs:
   kernel-executive-devtab-terminal:
     name: Kernel Executive — test_kmod_devtab_terminal (own VM, QEMU)
     needs: changes
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_kernel == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -456,7 +456,7 @@ jobs:
   kernel-executive-corpus-runtime:
     name: Corpus Runtime Conformance (programs run under /dev/vms, QEMU)
     needs: changes
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (needs.changes.outputs.q_kernel == 'true' || needs.changes.outputs.q_core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

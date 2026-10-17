@@ -508,7 +508,7 @@ jobs:
   aarch64-system-boot:
     name: aarch64 System-Emulation Boot Proof (QEMU)
     needs: changes
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_aarch64_boot == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -579,7 +579,7 @@ jobs:
   aarch64-kernel-vmsko:
     name: aarch64 OVMX kernel + vms.ko -- cross-built, boots, /dev/vms (vms-a07)
     needs: changes
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_aarch64_kernel == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -608,7 +608,7 @@ jobs:
     # login, the PARTS RMS demo, and PRODUCT SHOW PRODUCT == ovmx_identity.h.
     name: aarch64 bootable set -- builds, boots to login, PARTS, version (vms-32aa)
     needs: changes
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_aarch64_kernel == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
     steps:

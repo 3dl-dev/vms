@@ -78,6 +78,27 @@ on:
       keystroke:
         description: 'keystroke (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.keystroke }}
+      q_kernel:
+        description: 'q_kernel: QEMU/SIMH boot-gate area, queue tier (see decide step)'
+        value: ${{ jobs.changes.outputs.q_kernel }}
+      q_core:
+        description: 'q_core: QEMU/SIMH boot-gate area, queue tier (see decide step)'
+        value: ${{ jobs.changes.outputs.q_core }}
+      q_toolchain:
+        description: 'q_toolchain: QEMU/SIMH boot-gate area, queue tier (see decide step)'
+        value: ${{ jobs.changes.outputs.q_toolchain }}
+      q_boot:
+        description: 'q_boot: QEMU/SIMH boot-gate area, queue tier (see decide step)'
+        value: ${{ jobs.changes.outputs.q_boot }}
+      q_alpha_activation:
+        description: 'q_alpha_activation: QEMU/SIMH boot-gate area, queue tier (see decide step)'
+        value: ${{ jobs.changes.outputs.q_alpha_activation }}
+      q_aarch64_kernel:
+        description: 'q_aarch64_kernel: QEMU/SIMH boot-gate area, queue tier (see decide step)'
+        value: ${{ jobs.changes.outputs.q_aarch64_kernel }}
+      q_aarch64_boot:
+        description: 'q_aarch64_boot: QEMU/SIMH boot-gate area, queue tier (see decide step)'
+        value: ${{ jobs.changes.outputs.q_aarch64_boot }}
       negctl_select:
         description: 'negctl_select (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.negctl_select }}
@@ -120,6 +141,13 @@ jobs:
       heavy_release: ${{ steps.tiers.outputs.heavy_release }}
       alpha_selfhost: ${{ steps.tiers.outputs.alpha_selfhost }}
       keystroke: ${{ steps.tiers.outputs.keystroke }}
+      q_kernel: ${{ steps.qtier.outputs.q_kernel }}
+      q_core: ${{ steps.qtier.outputs.q_core }}
+      q_toolchain: ${{ steps.qtier.outputs.q_toolchain }}
+      q_boot: ${{ steps.qtier.outputs.q_boot }}
+      q_alpha_activation: ${{ steps.qtier.outputs.q_alpha_activation }}
+      q_aarch64_kernel: ${{ steps.qtier.outputs.q_aarch64_kernel }}
+      q_aarch64_boot: ${{ steps.qtier.outputs.q_aarch64_boot }}
       negctl_select: ${{ steps.tiers.outputs.negctl_select }}
     steps:
       - name: Checkout
@@ -127,11 +155,15 @@ jobs:
         with:
           fetch-depth: 2
 
-      - name: Path filter (PR only)
+      - name: Path filter (PR and merge queue)
         id: filter
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        # queue: if the filter itself errors, q_* fail CLOSED (all gates run, see qtier)
+        continue-on-error: ${{ github.event_name == 'merge_group' }}
         uses: dorny/paths-filter@v3
         with:
+          base: ${{ github.event.merge_group.base_sha }}
+          ref: ${{ github.event.merge_group.head_sha }}
           filters: |
             core:
               - '.github/workflows/**'
@@ -546,3 +578,46 @@ jobs:
             --ref "${{ github.ref }}" \
             --base "${{ github.event.merge_group.base_sha }}" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
+
+      # PR tier is fast-only: the QEMU/SIMH boot gates (Alpha activation, DCL/SHOW
+      # acceptance, kernel-executive boots, aarch64 boots, alternate-disk) run in
+      # the MERGE QUEUE, each only when the area it covers is touched (same path
+      # filters the PR tier used to apply), plus nightly/dispatch/release-tag in
+      # full. A PR and a push to a branch run none of them.
+      - name: Decide queue-tier boot gates (area in the queue; all on full events; none on PR/push)
+        id: qtier
+        run: |
+          EV="${{ github.event_name }}"
+          REF="${{ github.ref }}"
+          F=false
+          case "$EV" in
+            schedule|workflow_dispatch) F=true ;;
+            push) case "$REF" in refs/tags/*) F=true ;; esac ;;
+          esac
+          {
+            if [ "$F" = true ]; then
+              echo "q_kernel=true"
+              echo "q_core=true"
+              echo "q_toolchain=true"
+              echo "q_boot=true"
+              echo "q_alpha_activation=true"
+              echo "q_aarch64_kernel=true"
+              echo "q_aarch64_boot=true"
+            elif [ "$EV" = merge_group ]; then
+              echo "q_kernel=${{ steps.filter.outputs.kernel || 'true' }}\"
+              echo "q_core=${{ steps.filter.outputs.core || 'true' }}\"
+              echo "q_toolchain=${{ steps.filter.outputs.toolchain || 'true' }}\"
+              echo "q_boot=${{ steps.filter.outputs.boot || 'true' }}\"
+              echo "q_alpha_activation=${{ steps.filter.outputs.alpha_activation || 'true' }}\"
+              echo "q_aarch64_kernel=${{ steps.filter.outputs.aarch64_kernel || 'true' }}\"
+              echo "q_aarch64_boot=${{ steps.filter.outputs.aarch64_boot || 'true' }}\"
+            else
+              echo "q_kernel=false"
+              echo "q_core=false"
+              echo "q_toolchain=false"
+              echo "q_boot=false"
+              echo "q_alpha_activation=false"
+              echo "q_aarch64_kernel=false"
+              echo "q_aarch64_boot=false"
+            fi
+          } >> "$GITHUB_OUTPUT"

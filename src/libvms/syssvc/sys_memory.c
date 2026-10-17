@@ -36,7 +36,7 @@
  * OVMX-USERSPACE: sys$crmpsc (vms-e0a) -- MAP_SHARED mmap of an fd taken from
  *     the caller's own pcb->channels[]; the global section NAME (gsdnam) is
  *     discarded, so no two processes can name the same section.
- * OVMX-USERSPACE: sys$dgblsc (vms-e0a/vms-d91) -- validates gsdnam and returns
+ * OVMX-USERSPACE: sys$dgblsc (vms-d91) -- validates gsdnam and returns
  *     SS$_NOSUCHSEC: sys$crmpsc discards the section name, so no named global
  *     section is ever registered and none can exist to delete.
  * OVMX-USERSPACE: sys$purgws (vms-e0a) -- validates the range and returns

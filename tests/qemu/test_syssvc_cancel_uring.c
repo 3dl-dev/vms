@@ -161,22 +161,28 @@ int main(void)
     CHECK(ast_runs == 1 && ast_prm == 0x1234,
           "$CANCEL ran the cancelled read's AST once with its parameter");
 
-    /* --- 2. a read that had already completed is not reported cancelled --- */
+    /* --- 2. a read that had already completed is not reported cancelled ---
+     * Repeated (vms-532): whether the read's completion had been posted by the
+     * time $CANCEL ran is a timing question, so one pass can hide a race. */
     {
-        struct pipechan c;
-        memset(&c, 0, sizeof c); c.wfd = -1;
-        if (open_pipechan(&c, "c") != 0) {
-            printf("  FAIL: could not assign a channel to the third FIFO\n");
-            return 1;
+        int bad = 0;
+        for (int it = 0; it < 100; it++) {
+            struct pipechan c;
+            memset(&c, 0, sizeof c); c.wfd = -1;
+            if (open_pipechan(&c, "c") != 0) {
+                printf("  FAIL: could not assign a channel to the third FIFO\n");
+                return 1;
+            }
+            iosb_t i3;
+            if (write(c.wfd, "abc", 3) != 3) bad++;
+            (void)queue_read(c.chan, &i3, 4, NULL, 0, buf, sizeof buf);
+            (void)sys$cancel(c.chan);
+            if (!(i3.status == SS$_NORMAL && i3.bcnt == 3)) bad++;
+            close_pipechan(&c);
         }
-        iosb_t i3;
-        CHECK(write(c.wfd, "abc", 3) == 3, "three bytes are written ahead of the read");
-        (void)queue_read(c.chan, &i3, 4, NULL, 0, buf, sizeof buf);
-        (void)sys$cancel(c.chan);
         /* negctl: cancel-uring-noop */
-        CHECK(i3.status == SS$_NORMAL && i3.bcnt == 3,
+        CHECK(bad == 0,
               "a read whose data had arrived keeps its result under $CANCEL (SS$_NORMAL, 3 bytes), not SS$_CANCEL");
-        close_pipechan(&c);
     }
 
     /* --- 3. $CANCEL is per channel --- */

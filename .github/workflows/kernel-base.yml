@@ -22,6 +22,23 @@ name: kernel-base
 
 on:
   workflow_call:
+    inputs:
+      runner:
+        description: "runs-on label (an arm64 runner builds the arm64-native base)"
+        type: string
+        default: ubuntu-latest
+      platform:
+        description: "buildx --platform for the base build (the TARGET arch of the kernel)"
+        type: string
+        default: linux/amd64
+      targetarch:
+        description: "TARGETARCH build-arg override when the base is CROSS-built (image platform stays the build host's, linux/amd64)"
+        type: string
+        default: ""
+      tag:
+        description: "arch label in the image tag; distinct per (target, build-host) pair"
+        type: string
+        default: amd64
     outputs:
       ref:
         description: "KERNEL_BASE build-arg value: a GHCR image ref, or 'kernel-base' (local stage)"
@@ -34,8 +51,8 @@ permissions:
 jobs:
   ensure:
     name: Ensure prebuilt kernel base
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
     outputs:
       ref: ${{ steps.final.outputs.ref }}
     steps:
@@ -57,7 +74,7 @@ jobs:
           h=$( { awk '/AS kernel-base$/{p=1} /^# -- kernel-build stage \(incremental/{p=0} p' distro/Dockerfile.bootable
                  find distro/kernel -type f | LC_ALL=C sort | xargs sha256sum; } | sha256sum | cut -c1-20)
           owner=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
-          echo "ref=ghcr.io/${owner}/ovmx-kernel-base:amd64-${h}" >> "$GITHUB_OUTPUT"
+          echo "ref=ghcr.io/${owner}/ovmx-kernel-base:${{ inputs.tag }}-${h}" >> "$GITHUB_OUTPUT"
 
       - name: Already built?
         id: have
@@ -76,7 +93,8 @@ jobs:
           context: .
           file: distro/Dockerfile.bootable
           target: kernel-base
-          platforms: linux/amd64
+          platforms: ${{ inputs.platform }}
+          build-args: ${{ inputs.targetarch != '' && format('TARGETARCH={0}', inputs.targetarch) || '' }}
           push: true
           tags: ${{ steps.key.outputs.ref }}
 

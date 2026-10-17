@@ -1721,7 +1721,7 @@ PYEOF
     # report for a signal the program catches itself (gas installs handlers)
     export BOOT_QEMU_EXTRA="-d int -D /work/qemu-int.log"
     run_boot_a
-    grep -aiE "opcdec" "$WORK/qemu-int.log" 2>/dev/null | grep -av "pc=fffffc" | head -20 | sed 's/^/  | QEMU-OPCDEC: /' || true
+    grep -aiE -B60 -m1 "opcdec" "$WORK/qemu-int.log" 2>/dev/null | grep -av "pc=fffffc" | tail -25 | sed 's/^/  | QEMU-BEFORE-OPCDEC: /' || true
     grep -aE "OVMX cc1|OVMX as|OVMX-AS-TRACE|AS-PROOF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|as:|cc1:|fatal signal|pc=" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_as "$WORK/modgpA.log" "$GATE_ROOT/asimg/ref1.obj" "$GATE_ROOT/asimg/ref2.obj"; then
       echo ""

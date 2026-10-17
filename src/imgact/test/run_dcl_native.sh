@@ -90,7 +90,7 @@ DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 INCS="-I$DCL_DIR/include -I$LIBVMS_INC -I$VMSFS_INC -I$LNM_INC -I$RMS_INC -I$VMSPROC_DIR/include -I$SRC/vmsqueue -I$LIBVMSSYS_DIR -I$SRC/vmslink/include"
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
 dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_disk_logical \
-dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script \
+dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script dcl_memfile \
 dcl_messages dcl_library dcl_help dcl_mbx"
 DCLOBJS=""
 for t in $TUS; do

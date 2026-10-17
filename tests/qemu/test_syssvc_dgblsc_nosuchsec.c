@@ -30,7 +30,9 @@ int main(void)
     uint32_t ident[2] = {0, 0};
 
     uint32_t st = sys$dgblsc(0, &nm, ident);
+    /* negctl: dgblsc-fake-success */
     CHECK(st == SS$_NOSUCHSEC, "$DGBLSC of a never-created section returns SS$_NOSUCHSEC");
+    /* negctl: dgblsc-fake-success */
     CHECK(!(st & 1), "... and that status is not a success (low bit clear)");
     CHECK(SS$_NOSUCHSEC == 2424, "SS$_NOSUCHSEC is the oracle value 2424 (%X978)");
     CHECK(sys$dgblsc(0, NULL, ident) == SS$_BADPARAM, "$DGBLSC with no name is SS$_BADPARAM");

@@ -200,7 +200,9 @@ jobs:
       # docs/oracle/keystroke/known-diff.d/ fails, and so does a listed
       # difference that now matches -- the list only shrinks.
       - name: Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        # CI-speed tier: queue runs it when the console/terminal/boot is
+        # touched; nightly, dispatch and the pre-tag verify always run it.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && needs.changes.outputs.keystroke == 'true' }}
         run: |
           KS_ENSURE_WAIT=8 tests/qemu/test_keystroke_oracle.sh keystroke-out
 
@@ -378,7 +380,7 @@ jobs:
   aarch64-release-set:
     name: aarch64 release set -- tools/cut-release-aarch64.sh on an arm64 runner (vms-b58)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 150
     steps:
@@ -428,35 +430,22 @@ jobs:
   # filter so ordinary PRs that do not touch release-engineering surfaces
   # don't pay for it, and still runs in full on push/merge_group/schedule.
   # -----------------------------------------------------------------------
-  cut-release-reproducible:
-    name: cut-release is byte-reproducible + boots (vms-d73)
-    needs: [changes, aarch64-release-set]
-    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
-    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
-    # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+  # CI-speed (lane B): cut A and cut B are INDEPENDENT builds (--no-cache, same
+  # commit, same module-signing key), so they run as parallel jobs instead of
+  # back to back (~21 min saved on the critical path). The ephemeral signing key
+  # is minted once, encrypted with the run's GITHUB_TOKEN (valid only for this
+  # run; the repo is public so the key must not sit in the clear in an artifact)
+  # and decrypted by each cut job.
+  release-sign-key:
+    name: mint ephemeral module-signing key for the reproducibility cuts
+    needs: [changes]
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 150
-
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
-      # (host-side and inside `docker run`) use it instead of TCG.
-      - name: Enable KVM
-        uses: ./.github/actions/enable-kvm
-
-      - name: Set up Docker Buildx
-        uses: ./.github/actions/setup-buildx
-
-      # The module signing key is the one remaining random build input (vms-
-      # secret-signing-key). It is NEVER committed. Mint ONE ephemeral key here
-      # and feed it to BOTH cuts via OVMX_MODULE_SIGNING_KEY, so the signatures/
-      # keyring are identical between them -- which is exactly what this gate
-      # asserts -- without any private key living in git. The key is scoped to
-      # this job and never persisted.
-      - name: Mint one ephemeral module-signing key for both cuts
+      - name: Mint one ephemeral module-signing key and encrypt it with the run token
+        env:
+          KEYPASS: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           KEYDIR="${{ runner.temp }}/ovmx-sign"
@@ -465,26 +454,134 @@ jobs:
             -subj "/CN=OVMX ephemeral module signing key (reproducibility gate)/" \
             -keyout "$KEYDIR/key.pem" -out "$KEYDIR/cert.pem"
           cat "$KEYDIR/key.pem" "$KEYDIR/cert.pem" > "$KEYDIR/signing.pem"
-          echo "OVMX_MODULE_SIGNING_KEY=$KEYDIR/signing.pem" >> "$GITHUB_ENV"
-          echo "Minted ephemeral signing key for both cuts (job-scoped, never persisted)."
+          openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KEYPASS -in "$KEYDIR/signing.pem" -out "$KEYDIR/signing.pem.enc"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-sign-key-enc
+          path: ${{ runner.temp }}/ovmx-sign/signing.pem.enc
+          retention-days: 1
+          if-no-files-found: error
 
-      # First independent cut. --no-cache on both cuts is the point: this
-      # proves the BUILD is reproducible, not that BuildKit's cache is.
+
+  cut-release-a:
+    name: cut release A (clean tree, no cache; parallel with the other cut)
+    needs: [changes, aarch64-release-set, release-sign-key]
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+      - name: Fetch the encrypted module-signing key
+        uses: actions/download-artifact@v4
+        with:
+          name: release-sign-key-enc
+          path: ${{ runner.temp }}/ovmx-sign-enc
+      - name: Decrypt the signing key
+        env:
+          KEYPASS: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEYDIR="${{ runner.temp }}/ovmx-sign"
+          mkdir -p "$KEYDIR"
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:KEYPASS -in "${{ runner.temp }}/ovmx-sign-enc/signing.pem.enc" -out "$KEYDIR/signing.pem"
+          echo "OVMX_MODULE_SIGNING_KEY=$KEYDIR/signing.pem" >> "$GITHUB_ENV"
       - name: Fetch the aarch64 release set (aarch64-release-set job)
         uses: actions/download-artifact@v4
         with:
           name: aarch64-release-set
           path: ${{ runner.temp }}/aarch64-prebuilt
-
       - name: Cut release A (clean tree, no cache)
-        id: cut_a
         run: |
           tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-a" --aarch64-dir "${{ runner.temp }}/aarch64-prebuilt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-cut-a
+          path: ${{ github.workspace }}/dist/release-a/
+          retention-days: 1
+          if-no-files-found: error
 
-      - name: Cut release B (independent clean tree, no cache)
-        id: cut_b
+  cut-release-b:
+    name: cut release B (clean tree, no cache; parallel with the other cut)
+    needs: [changes, aarch64-release-set, release-sign-key]
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+      - name: Fetch the encrypted module-signing key
+        uses: actions/download-artifact@v4
+        with:
+          name: release-sign-key-enc
+          path: ${{ runner.temp }}/ovmx-sign-enc
+      - name: Decrypt the signing key
+        env:
+          KEYPASS: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          KEYDIR="${{ runner.temp }}/ovmx-sign"
+          mkdir -p "$KEYDIR"
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:KEYPASS -in "${{ runner.temp }}/ovmx-sign-enc/signing.pem.enc" -out "$KEYDIR/signing.pem"
+          echo "OVMX_MODULE_SIGNING_KEY=$KEYDIR/signing.pem" >> "$GITHUB_ENV"
+      - name: Fetch the aarch64 release set (aarch64-release-set job)
+        uses: actions/download-artifact@v4
+        with:
+          name: aarch64-release-set
+          path: ${{ runner.temp }}/aarch64-prebuilt
+      - name: Cut release B (clean tree, no cache)
         run: |
           tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-b" --aarch64-dir "${{ runner.temp }}/aarch64-prebuilt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-cut-b
+          path: ${{ github.workspace }}/dist/release-b/
+          retention-days: 1
+          if-no-files-found: error
+
+  cut-release-reproducible:
+    name: cut-release is byte-reproducible + boots (vms-d73)
+    needs: [changes, cut-release-a, cut-release-b]
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only.
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Fetch cut A
+        uses: actions/download-artifact@v4
+        with:
+          name: release-cut-a
+          path: ${{ github.workspace }}/dist/release-a
+      - name: Fetch cut B
+        uses: actions/download-artifact@v4
+        with:
+          name: release-cut-b
+          path: ${{ github.workspace }}/dist/release-b
+
+      # Both cuts succeeded (needs:), so the assertions below always run.
+      - id: cut_a
+        run: echo "cut A produced by the cut-release-a job"
+      - id: cut_b
+        run: echo "cut B produced by the cut-release-b job"
+
 
       # CO-RELEASE GATE PROOF (vms-ca5, epic vms-f10): tools/cut-release.sh
       # now builds VAX (netbsd-vax/elf32-vax) artifacts UNCONDITIONALLY as
@@ -640,7 +737,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -891,7 +988,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
 
@@ -1814,6 +1911,9 @@ jobs:
       - build-image
       - persistent-boot
       - aarch64-release-set
+      - release-sign-key
+      - cut-release-a
+      - cut-release-b
       - cut-release-reproducible
       - upgrade-e2e
       - install-boot-e2e

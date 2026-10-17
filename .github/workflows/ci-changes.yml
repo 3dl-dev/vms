@@ -69,6 +69,18 @@ on:
       vax_login:
         description: 'vax_login (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.vax_login }}
+      heavy_release:
+        description: 'heavy_release (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.heavy_release }}
+      alpha_selfhost:
+        description: 'alpha_selfhost (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.alpha_selfhost }}
+      keystroke:
+        description: 'keystroke (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.keystroke }}
+      negctl_select:
+        description: 'negctl_select (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.negctl_select }}
 
 permissions:
   contents: read
@@ -105,9 +117,15 @@ jobs:
       tcpip: ${{ steps.decide.outputs.tcpip }}
       aarch64_kernel: ${{ steps.decide.outputs.aarch64_kernel }}
       vax_login: ${{ steps.decide.outputs.vax_login }}
+      heavy_release: ${{ steps.tiers.outputs.heavy_release }}
+      alpha_selfhost: ${{ steps.tiers.outputs.alpha_selfhost }}
+      keystroke: ${{ steps.tiers.outputs.keystroke }}
+      negctl_select: ${{ steps.tiers.outputs.negctl_select }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Path filter (PR only)
         id: filter
@@ -513,3 +531,18 @@ jobs:
               echo "vax_login=true"
             } >> "$GITHUB_OUTPUT"
           fi
+
+      # CI-speed tiers (tools/ci/ci_tiers.py): the HEAVY legs (release cuts +
+      # e2e, per-facility executive negctl, Alpha cc1/C++ self-host, keystroke
+      # oracle) are out of the PR path. nightly (schedule) / workflow_dispatch /
+      # a release-tag push run them all; the merge queue runs each only when
+      # its area is touched (negctl: a fail-closed path-to-facility map); a
+      # push to a branch runs none (the queue tested that exact tree).
+      - name: Decide heavy tiers (nightly/pre-tag full; queue by path; push none)
+        id: tiers
+        run: |
+          python3 tools/ci/ci_tiers.py \
+            --event "${{ github.event_name }}" \
+            --ref "${{ github.ref }}" \
+            --base "${{ github.event.merge_group.base_sha }}" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"

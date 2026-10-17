@@ -95,6 +95,12 @@ cp -v  "${OVERLAY}/src/internal/syscall_ret.c" "src/internal/"
 mkdir -p "src/process/${TARGET}"
 cp -v  "${OVERLAY}/src/process/${TARGET}/"* "src/process/${TARGET}/"
 
+# vms-5303e: times() writes the kernel's 64-bit struct tms into a buffer of its own
+# width, not over the caller's 16-byte (32-bit clock_t) struct. See the header of
+# src/time/alpha-dec-vms/times.c.
+mkdir -p "src/time/${TARGET}"
+cp -v  "${OVERLAY}/src/time/${TARGET}/"* "src/time/${TARGET}/"
+
 # ---- teach configure the triplet -> ARCH mapping (idempotent) ----
 if ! grep -q "ARCH=alpha-dec-vms" configure; then
 	sed -i 's#^unknown) fail#alpha*) ARCH=alpha-dec-vms ;;\nunknown) fail#' configure

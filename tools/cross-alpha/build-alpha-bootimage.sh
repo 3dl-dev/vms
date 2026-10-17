@@ -84,6 +84,15 @@ if [ "$_force" = "1" ] || [ ! -x "$USERLAND/bin/STARTUP.EXE" ]; then
         cmake --build /b -j"$(nproc)" >/b/build-all.log 2>&1
     '
 fi
+# ASSETS_ONLY=1 (CI, .github/workflows/ci-alpha.yml alpha-assets): stop here. The
+# executive modules/kernel tree (step 0) and the userland (step 1) depend only on
+# the source tree, not on any gate's payload, so CI builds them ONCE per source
+# hash and every gate restores them instead of recompiling Linux/Alpha (~5 min).
+if [ "${ASSETS_ONLY:-0}" = "1" ]; then
+    echo "== ASSETS_ONLY: executive modules/kernel + userland ready; stopping before payload staging =="
+    exit 0
+fi
+
 # NOTE (vms-410): OVMX_STATIC=ON stays here deliberately. This CMake configure
 # targets alpha-linux-gnu (glibc, no OVMX runtime ld.so on the target disk) --
 # it builds the boot-critical PROVISION/JOB_CONTROL/LOGINOUT/DCL chain, which

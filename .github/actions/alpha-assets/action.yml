@@ -89,30 +89,33 @@ runs:
         ASSETS_ONLY=1 VMSKO_WORK="$root/vmsko" USERLAND="$root/userland" WORK="$root/boot" \
           tools/cross-alpha/build-alpha-bootimage.sh
         [ -f "$root/vmsko/vms.ko" ] && [ -x "$root/userland/bin/STARTUP.EXE" ]
-    - name: Publish the assets
+    - name: Publish the kernel base (first build of this kernel/patch set)
+      if: ${{ inputs.mode == 'publish' && steps.key.outputs.hit != 'true' && steps.kbase.outputs.hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        root="$PWD/.boot-cache/alpha-modgp-gate"
+        # the tree + vmlinux only: no vms.ko / module source copy / tarball
+        sudo chown -R "$(id -u):$(id -g)" "$root"
+        printf 'src\nvms.ko\nbuild-vms.log\n*.tar.xz\n' > "$root/vmsko/.dockerignore"
+        printf 'FROM scratch\nCOPY . /vmsko\n' > "$root/Dockerfile.kbase"
+        docker build -q -t "${{ steps.key.outputs.kref }}" -f "$root/Dockerfile.kbase" "$root/vmsko"
+        docker push -q "${{ steps.key.outputs.kref }}"
+        rm -f "$root/vmsko/.dockerignore"
+        echo "published ${{ steps.key.outputs.kref }}"
+    - name: Publish the assets (kernel base layers + this source's vms.ko and userland)
       if: ${{ inputs.mode == 'publish' && steps.key.outputs.hit != 'true' }}
       shell: bash
       run: |
         set -euo pipefail
         root="$PWD/.boot-cache/alpha-modgp-gate"
         sudo chown -R "$(id -u):$(id -g)" "$root"
-        printf 'FROM scratch\nCOPY vmsko /vmsko\nCOPY userland /userland\n' > "$root/Dockerfile.assets"
-        docker build -q -t "${{ steps.key.outputs.ref }}" -f "$root/Dockerfile.assets" "$root"
+        ctx="$(mktemp -d)"
+        cp "$root/vmsko/vms.ko" "$ctx/vms.ko"
+        mv "$root/userland" "$ctx/userland"
+        # FROM the kernel base: its (multi-GB) layers are already in the registry,
+        # so only vms.ko and the userland are pushed.
+        printf 'FROM %s\nCOPY vms.ko /vmsko/vms.ko\nCOPY userland /userland\n' "${{ steps.key.outputs.kref }}" > "$ctx/Dockerfile"
+        docker build -q -t "${{ steps.key.outputs.ref }}" "$ctx"
         docker push -q "${{ steps.key.outputs.ref }}"
         echo "published ${{ steps.key.outputs.ref }}"
-    - name: Publish the kernel base (first build of this kernel/patch set)
-      if: ${{ inputs.mode == 'publish' && steps.key.outputs.hit != 'true' && steps.kbase.outputs.hit != 'true' }}
-      shell: bash
-      continue-on-error: true
-      run: |
-        set -euo pipefail
-        root="$PWD/.boot-cache/alpha-modgp-gate"
-        d="$(mktemp -d)"
-        # the tree + vmlinux only: no vms.ko / module source copy / tarball
-        sudo mv "$root/vmsko" "$d/vmsko"
-        sudo rm -rf "$d/vmsko/src" "$d/vmsko/vms.ko" "$d/vmsko/build-vms.log" "$d"/vmsko/linux-*.tar.xz
-        sudo chown -R "$(id -u):$(id -g)" "$d"
-        printf 'FROM scratch\nCOPY vmsko /vmsko\n' > "$d/Dockerfile"
-        docker build -q -t "${{ steps.key.outputs.kref }}" "$d"
-        docker push -q "${{ steps.key.outputs.kref }}"
-        echo "published ${{ steps.key.outputs.kref }}"

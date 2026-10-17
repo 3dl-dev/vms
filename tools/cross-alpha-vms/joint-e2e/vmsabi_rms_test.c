@@ -25,6 +25,9 @@
 #include <vms/ssdef.h>
 
 #define RMS_NMF 99018           /* RMS$_NMF (rmsdef) */
+#define RMS_FAB 99596           /* RMS$_FAB */
+#define RMS_IFI 99684           /* RMS$_IFI */
+#define RMS_IOP 99700           /* RMS$_IOP */
 
 static int fails, first_fail;
 
@@ -208,6 +211,35 @@ int main(void)
     }
     printf("VMSABI: wildcard SYS$SYSTEM:*.EXE -> %d match(es), end st=%%X%08X\n", n, (unsigned)st);
     check(n >= 2 && saw_self && st == RMS_NMF, 26, "a wildcard $SEARCH walks the directory to RMS$_NMF");
+
+    /* vms-5303e: $MODIFY (bfd/vms-misc.c calls it) is honest. An open file gets
+     * RMS$_IOP and stays as it was; a FAB never opened gets RMS$_IFI; a block
+     * that is not a FAB gets RMS$_FAB. Never a success that changed nothing. */
+    {
+        struct FAB mf = cc$rms_fab;
+        struct FAB nf = cc$rms_fab;
+        struct FAB bad = cc$rms_fab;
+        unsigned char rfm_before;
+
+        mf.fab$l_fna = spec;
+        mf.fab$b_fns = (unsigned char)strlen(spec);
+        st = SYS$OPEN(&mf, 0, 0);
+        check(st & STS$M_SUCCESS, 27, "SYS$OPEN opens the image file");
+        rfm_before = mf.fab$b_rfm;
+        mf.fab$b_rfm = (unsigned char)(rfm_before == FAB$C_FIX ? FAB$C_VAR : FAB$C_FIX);
+        st = SYS$MODIFY(&mf, 0, 0);
+        check(st == RMS_IOP && !(st & STS$M_SUCCESS) && mf.fab$l_sts == (unsigned)st, 28,
+              "SYS$MODIFY on an open file is RMS$_IOP, not a success");
+        st = SYS$CLOSE(&mf, 0, 0);
+        check(st & STS$M_SUCCESS, 29, "SYS$CLOSE closes it");
+        nf.fab$l_fna = spec;
+        nf.fab$b_fns = (unsigned char)strlen(spec);
+        st = SYS$MODIFY(&nf, 0, 0);
+        check(st == RMS_IFI, 30, "negative control: SYS$MODIFY on a FAB never opened is RMS$_IFI");
+        bad.fab$b_bid = 0;
+        st = SYS$MODIFY(&bad, 0, 0);
+        check(st == RMS_FAB, 31, "negative control: SYS$MODIFY on a block that is not a FAB is RMS$_FAB");
+    }
 
     if (fails) {
         printf("OVMX VMSABI RMS test: %d check(s) FAILED (first %d)\n", fails, first_fail);

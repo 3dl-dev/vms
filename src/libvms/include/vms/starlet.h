@@ -13,6 +13,8 @@
 __VMS_ABI_EXTERN_C_BEGIN
 int SYS$ASSIGN(void *devnam, unsigned short *chan, ...);
 int SYS$DASSGN(unsigned short chan);
+int SYS$ASCTIM(unsigned short *timlen, void *timbuf, void *timadr, unsigned int cvtflg);
+int SYS$BINTIM(void *timbuf, void *timadr);
 int SYS$TRNLNM(unsigned int *attr, void *tabnam, void *lognam, unsigned char *acmode, void *itmlst);
 int SYS$CRELNM(unsigned int *attr, void *tabnam, void *lognam, unsigned char *acmode, void *itmlst);
 /* $QIO(W): efn, chan, func, iosb, then astadr, astprm, P1..P6 (quadword argument

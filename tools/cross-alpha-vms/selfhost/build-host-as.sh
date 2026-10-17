@@ -41,9 +41,9 @@ export CONFIG_SITE=/src/tools/cross-alpha-vms/cxx/config.site
     --disable-nls --disable-werror --disable-shared --enable-static --disable-gprofng \
     --disable-plugins --disable-gdb --disable-ld --disable-binutils --disable-gold \
     --disable-sim --disable-readline --without-zstd --with-system-zlib=no \
-    CC="$T-gcc" AR=ar RANLIB=true CFLAGS="-O2 -isystem /src/src/vmsrms/include" \
+    CC="$T-gcc" AR=ar RANLIB=true CFLAGS="-O2 -I/src/src/libvms/include/hostabi" \
     > cfg.log 2>&1 || { tail -40 cfg.log; exit 1; }
-# (rms.h in the sysroot wraps <rms/rms.h> from the vmsrms module, hence the -isystem above)
+# (hostabi/ puts the VMS-layout <rms.h>/<starlet.h> a DEC C program sees ahead of the sysroot's native-OVMX ones; see its headers)
 make -j"$JOBS" all-gas > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]|Error ' make.log | head -40; tail -20 make.log; exit 1; }
 mkdir -p $O/out
 cp gas/as-new.exe $O/out/as.exe 2>/dev/null || cp gas/as-new $O/out/as.exe

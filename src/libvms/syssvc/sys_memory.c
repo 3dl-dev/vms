@@ -36,8 +36,9 @@
  * OVMX-USERSPACE: sys$crmpsc (vms-e0a) -- MAP_SHARED mmap of an fd taken from
  *     the caller's own pcb->channels[]; the global section NAME (gsdnam) is
  *     discarded, so no two processes can name the same section.
- * OVMX-USERSPACE: sys$dgblsc (vms-e0a) -- validates gsdnam and returns
- *     SS$_NORMAL; no global section database exists to delete from.
+ * OVMX-USERSPACE: sys$dgblsc (vms-d91) -- validates gsdnam and returns
+ *     SS$_NOSUCHSEC: sys$crmpsc discards the section name, so no named global
+ *     section is ever registered and none can exist to delete.
  * OVMX-USERSPACE: sys$purgws (vms-e0a) -- validates the range and returns
  *     SS$_NORMAL; nothing is purged and no working set is consulted.
  * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- validates the range, echoes it back
@@ -287,10 +288,10 @@ uint32_t sys$deltva_64(const GENERIC_64 *region_id_64, void *inadr_64,
  * sys$dgblsc - Delete global section.
  *
  * See the doc comment in starlet.h: OVMX has no cross-process named
- * global-section registry, so this validates its arguments and returns
- * success (the "mark for deletion, actual deletion happens once all
- * mapping processes delete their VA ranges" semantic is a no-op here
- * because there is no registry entry to mark).
+ * global-section registry (sys$crmpsc discards gsdnam), so no section by
+ * that name can exist. Honest answer per the VMS System Services Reference:
+ * SS$_NOSUCHSEC, "the specified global section does not exist" -- never a
+ * success that deleted nothing (vms-d91).
  */
 uint32_t sys$dgblsc(uint32_t flags, const struct dsc$descriptor_s *gsdnam,
                     void *ident) {
@@ -298,7 +299,7 @@ uint32_t sys$dgblsc(uint32_t flags, const struct dsc$descriptor_s *gsdnam,
 
     if (!gsdnam || !gsdnam->dsc$a_pointer) return SS$_BADPARAM;
 
-    return SS$_NORMAL;
+    return SS$_NOSUCHSEC;
 }
 
 /*

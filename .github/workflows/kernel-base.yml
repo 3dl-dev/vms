@@ -31,6 +31,10 @@ on:
         description: "buildx --platform for the base build (the TARGET arch of the kernel)"
         type: string
         default: linux/amd64
+      targetarch:
+        description: "TARGETARCH build-arg override when the base is CROSS-built (image platform stays the build host's, linux/amd64)"
+        type: string
+        default: ""
       tag:
         description: "arch label in the image tag; distinct per (target, build-host) pair"
         type: string
@@ -90,6 +94,7 @@ jobs:
           file: distro/Dockerfile.bootable
           target: kernel-base
           platforms: ${{ inputs.platform }}
+          build-args: ${{ inputs.targetarch != '' && format('TARGETARCH={0}', inputs.targetarch) || '' }}
           push: true
           tags: ${{ steps.key.outputs.ref }}
 

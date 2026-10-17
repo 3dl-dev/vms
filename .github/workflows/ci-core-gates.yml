@@ -588,7 +588,8 @@ jobs:
       packages: write
     uses: ./.github/workflows/kernel-base.yml
     with:
-      platform: linux/arm64
+      platform: linux/amd64
+      targetarch: arm64
       tag: arm64x
 
   kernel-base-a64-native:

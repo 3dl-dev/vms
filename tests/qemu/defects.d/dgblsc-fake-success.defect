@@ -1,0 +1,28 @@
+# dgblsc-fake-success -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$DGBLSC of an unregistered global section (src/libvms/syssvc/sys_memory.c, vms-d91)";;
+        targets)      echo "libvms/syssvc/sys_memory.c";;
+        suites_red)   echo "test_syssvc_dgblsc_nosuchsec";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$dgblsc goes back to returning SS\$_NORMAL for a section that never existed -- the pre-vms-d91 facade success. One return value changed.";;
+        require_fail) cat <<'EOF2'
+$DGBLSC of a never-created section returns SS$_NOSUCHSEC
+... and that status is not a success (low bit clear)
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    return SS\$_NOSUCHSEC;$|    return SS$_NORMAL; /* NEGCTL dgblsc-fake-success */|' "$_file"
+
+    :
+}

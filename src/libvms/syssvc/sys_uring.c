@@ -29,6 +29,7 @@
 #include <linux/io_uring.h>
 #include <stdatomic.h>
 #include <pthread.h>
+#include <errno.h>
 #include "starlet.h"
 #include "vms/pcb.h"
 #include "ovmx_pcb_ctx.h"
@@ -68,7 +69,12 @@ struct qio_completion {
     uint32_t astprm;            /* AST parameter */
     int      is_read;           /* 1=read, 0=write */
     int      in_use;            /* 1=slot is active */
+    int      fd;                /* descriptor the request is queued on ($CANCEL) */
 };
+
+/* user_data tag of an IORING_OP_ASYNC_CANCEL SQE ($CANCEL, vms-c8c): its own
+ * CQE is not an I/O completion and is never mapped to a completion slot. */
+#define URING_CANCEL_TAG (1ULL << 62)
 
 #define URING_ENTRIES 256
 #define MAX_INFLIGHT  256
@@ -190,6 +196,7 @@ int vms_uring_submit_rw(int fd, void *buf, uint32_t len, uint64_t offset,
 
     int comp_idx = alloc_completion(iosb, efn, astadr, astprm, is_read);
     if (comp_idx < 0) return -1;
+    completions[comp_idx].fd = fd;
 
     /* Get next SQE slot */
     uint32_t tail = *sq_ring.tail;
@@ -217,6 +224,8 @@ int vms_uring_submit_rw(int fd, void *buf, uint32_t len, uint64_t offset,
     return 0;
 }
 
+static int cancel_unstoppable;
+
 /*
  * Process completions (poll CQ ring)
  * Returns number of completions processed
@@ -231,13 +240,26 @@ int vms_uring_process_completions(void) {
         struct io_uring_cqe *cqe = &cq_ring.cqes[head & mask];
         int comp_idx = (int)cqe->user_data;
 
+        if (cqe->user_data & URING_CANCEL_TAG) {
+            /* a $CANCEL's own CQE: the target is in flight and cannot be
+             * interrupted (-EALREADY); $CANCEL stops waiting for it */
+            if (cqe->res == -EALREADY)
+                cancel_unstoppable = 1;
+            head++;
+            continue;
+        }
+
         if (comp_idx >= 0 && comp_idx < MAX_INFLIGHT) {
             struct qio_completion *comp = &completions[comp_idx];
 
             /* Fill IOSB */
             if (comp->iosb) {
                 struct _iosb *iosb = (struct _iosb *)comp->iosb;
-                if (cqe->res < 0) {
+                if (cqe->res == -ECANCELED) {
+                    /* $CANCEL took the request off the channel (vms-c8c) */
+                    iosb->iosb$w_status = (uint16_t)SS$_CANCEL;
+                    iosb->iosb$w_bcnt = 0;
+                } else if (cqe->res < 0) {
                     iosb->iosb$w_status = (uint16_t)SS$_ABORT;
                     iosb->iosb$w_bcnt = 0;
                 } else if (cqe->res == 0 && comp->is_read) {
@@ -289,6 +311,59 @@ int vms_uring_wait_completion(void) {
 }
 
 /*
+ * vms_uring_cancel_fd - $CANCEL for io_uring-queued I/O (vms-c8c).
+ *
+ * Every request still in flight on `fd` gets an IORING_OP_ASYNC_CANCEL; the
+ * kernel completes each cancelled request with -ECANCELED, which the normal
+ * completion path turns into IOSB = SS$_CANCEL, event flag set, AST queued. A
+ * request that had already finished keeps the result it finished with. Returns
+ * the number of requests that were pending on the descriptor.
+ */
+int vms_uring_cancel_fd(int fd) {
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb || pcb->uring_fd < 0 || fd < 0) return 0;
+
+    /* settle anything that has already completed, so it keeps its real result */
+    vms_uring_process_completions();
+
+    int targeted = 0;
+    cancel_unstoppable = 0;
+    for (int i = 0; i < MAX_INFLIGHT; i++) {
+        pthread_mutex_lock(&comp_lock);
+        int hit = completions[i].in_use && completions[i].fd == fd;
+        pthread_mutex_unlock(&comp_lock);
+        if (!hit) continue;
+
+        uint32_t tail = *sq_ring.tail;
+        uint32_t idx = tail & *sq_ring.ring_mask;
+        struct io_uring_sqe *sqe = &sqes[idx];
+        memset(sqe, 0, sizeof(*sqe));
+        sqe->opcode = IORING_OP_ASYNC_CANCEL;
+        sqe->fd = -1;
+        sqe->addr = (uint64_t)i;            /* the target's user_data */
+        sqe->user_data = URING_CANCEL_TAG | (uint64_t)i;
+        sq_ring.array[idx] = idx;
+        __atomic_store_n(sq_ring.tail, tail + 1, __ATOMIC_RELEASE);
+        io_uring_enter(pcb->uring_fd, 1, 0, 0);
+        targeted++;
+    }
+
+    /* Wait for the cancelled requests to complete (IOSB/EF/AST done in
+     * process_completions) -- bounded by the kernel finishing each one. */
+    while (targeted) {
+        int left = 0;
+        pthread_mutex_lock(&comp_lock);
+        for (int i = 0; i < MAX_INFLIGHT; i++)
+            if (completions[i].in_use && completions[i].fd == fd) left++;
+        pthread_mutex_unlock(&comp_lock);
+        if (!left || cancel_unstoppable) break;
+        io_uring_enter(pcb->uring_fd, 0, 1, IORING_ENTER_GETEVENTS);
+        vms_uring_process_completions();
+    }
+    return targeted;
+}
+
+/*
  * vms_uring_cleanup - Tear down io_uring
  */
 void vms_uring_cleanup(void) {
@@ -333,5 +408,7 @@ int vms_uring_process_completions(void) { return 0; }
 int vms_uring_wait_completion(void) { return -1; }
 
 void vms_uring_cleanup(void) { }
+
+int vms_uring_cancel_fd(int fd) { (void)fd; return 0; }
 
 #endif  /* __linux__ */

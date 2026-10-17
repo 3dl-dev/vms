@@ -1,0 +1,32 @@
+# cancel-uring-noop -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CANCEL of io_uring-queued asynchronous I/O (src/libvms/syssvc/sys_process.c -> sys_uring.c, vms-c8c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_cancel_uring";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$cancel stops calling the io_uring cancel: it validates the channel and returns SS\$_NORMAL while the queued read stays pending in the kernel -- the pre-vms-c8c literal no-op, a success that cancelled nothing. One call removed.";;
+        require_fail) cat <<'EOF2'
+$CANCEL completed the pending read: IOSB = SS$_CANCEL, 0 bytes
+$CANCEL set the cancelled read's event flag
+$CANCEL ran the cancelled read's AST once with its parameter
+a read whose data had arrived keeps its result under $CANCEL (SS$_NORMAL, 3 bytes), not SS$_CANCEL
+cancelling channel A completed A's read with SS$_CANCEL
+cancelling channel B then completed B's read with SS$_CANCEL and set its event flag
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    vms\$\$qio_cancel_uring(chan);$|    (void)0; /* NEGCTL cancel-uring-noop */|' "$_file"
+
+    :
+}

@@ -29,6 +29,7 @@
 #include <linux/io_uring.h>
 #include <stdatomic.h>
 #include <pthread.h>
+#include <poll.h>
 #include <errno.h>
 #include "starlet.h"
 #include "vms/pcb.h"
@@ -333,6 +334,36 @@ int vms_uring_cancel_fd(int fd) {
         int hit = completions[i].in_use && completions[i].fd == fd;
         pthread_mutex_unlock(&comp_lock);
         if (!hit) continue;
+
+        /* A request whose data/room had ALREADY arrived must keep its real
+         * result (vms-532). Its CQE can simply not have been posted yet
+         * (completion runs from task_work / io-wq, slower on emulated
+         * rails), and an ASYNC_CANCEL issued now can win that race and turn
+         * a finished read into SS$_CANCEL. So when the descriptor is ready,
+         * let the kernel post the completion first (bounded: a ready
+         * request that an earlier request on the same fd consumed stays
+         * pending, and is then cancelled as usual). */
+        {
+            pthread_mutex_lock(&comp_lock);
+            short ev = completions[i].is_read ? POLLIN : POLLOUT;
+            pthread_mutex_unlock(&comp_lock);
+            struct pollfd pf = { .fd = fd, .events = ev };
+            if (poll(&pf, 1, 0) > 0 && (pf.revents & ev)) {
+                for (int spin = 0; spin < 40; spin++) {   /* <= ~200 ms */
+                    struct pollfd ur = { .fd = pcb->uring_fd, .events = POLLIN };
+                    (void)poll(&ur, 1, 5);
+                    vms_uring_process_completions();
+                    pthread_mutex_lock(&comp_lock);
+                    int still = completions[i].in_use && completions[i].fd == fd;
+                    pthread_mutex_unlock(&comp_lock);
+                    if (!still) break;
+                }
+            }
+            pthread_mutex_lock(&comp_lock);
+            hit = completions[i].in_use && completions[i].fd == fd;
+            pthread_mutex_unlock(&comp_lock);
+            if (!hit) continue;
+        }
 
         uint32_t tail = *sq_ring.tail;
         uint32_t idx = tail & *sq_ring.ring_mask;

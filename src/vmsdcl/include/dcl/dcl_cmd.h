@@ -1,7 +1,6 @@
 #ifndef __DCL_CMD_H
 #define __DCL_CMD_H
 
-#include "dcl/dcl_memfile.h"
 #include <stdint.h>
 
 /*
@@ -143,9 +142,8 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
  * SYS$INPUT stays the terminal. dcl_sysinput_restore() puts fd 0 back.
  */
 struct dcl_context;
-/* Returns 0, or an SS$ status (already reported) when SYS$INPUT could not be provided. */
-int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si);
-
+struct dcl_sysinput { int saved_fd0; };
+void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si);
 
 /*
  * DCL CREATES ITS IMAGE TASK'S PCB (rd vms-e50, design note 3.1). An image DCL

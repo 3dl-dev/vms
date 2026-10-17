@@ -12,8 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include "dcl/dcl_memfile.h"
 
 static int failures;
@@ -89,43 +87,6 @@ int main(void)
     CHECK(fp != NULL && dcl_pf_gets(line, sizeof line, fp) == NULL, "an empty procedure is an empty stream");
     if (fp)
         dcl_pf_close(fp);
-
-    /* ---- rd vms-f47: the other tmpfs users, under the same refusal ---------- */
-    CHECK(dcl_scratch_tmpfile() == NULL,
-          "the pager's scratch refuses to be created when it cannot take data (listing goes unpaged)");
-    {
-        int rc = dcl_write_all(open("/dev/full", O_WRONLY), "SPAWN-CMD\n", 10);
-        CHECK(rc == -ENOSPC, "dcl_write_all reports a refused write (SPAWN's scratch command)");
-        CHECK(dcl_write_all(open("/dev/null", O_WRONLY), "x", 1) == 0, "dcl_write_all succeeds when the write does");
-    }
-    {
-        struct dcl_sysinput si;
-        char got[8192];
-        ssize_t n;
-        int keep = dup(0);
-        char big[9000];
-
-        si.saved_fd0 = -1;
-        CHECK(dcl_sysinput_install(&si, NULL, 0) == 0, "an empty input block installs (no scratch file)");
-        n = read(0, got, sizeof got);
-        CHECK(n == 0, "... and reads as an honest EOF");
-        dup2(si.saved_fd0, 0); close(si.saved_fd0);
-
-        si.saved_fd0 = -1;
-        CHECK(dcl_sysinput_install(&si, "ADD USER\nEXIT\n", 14) == 0, "a small block installs with file writes refused");
-        n = read(0, got, sizeof got);
-        CHECK(n == 14 && memcmp(got, "ADD USER\nEXIT\n", 14) == 0, "... and the image reads the whole block, not a truncation");
-        n = read(0, got, sizeof got);
-        CHECK(n == 0, "... then EOF");
-        dup2(si.saved_fd0, 0); close(si.saved_fd0);
-
-        memset(big, 'x', sizeof big);
-        si.saved_fd0 = -1;
-        CHECK(dcl_sysinput_install(&si, big, sizeof big) == -1 && si.saved_fd0 == -1,
-              "a block too big for a pipe fails HONESTLY when the scratch file refuses it (fd 0 untouched)");
-        CHECK(fcntl(0, F_GETFD) >= 0, "fd 0 is still open after the refusal");
-        dup2(keep, 0); close(keep);
-    }
 
     setrlimit(RLIMIT_FSIZE, &saved);
     printf(failures ? "FAILED: %d\n" : "ALL PASSED\n", failures);

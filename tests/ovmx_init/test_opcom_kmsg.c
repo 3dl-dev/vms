@@ -63,7 +63,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
 
 #include "opcom_kmsg.h"
 
@@ -175,62 +174,6 @@ static void test_seed_from_spool(void)
     }
 }
 
-/* rd vms-f47: the boot-message spool lives in /tmp, a tmpfs on NetBSD that
- * refuses writes below 4 MB of available memory. A spool append must say so. */
-static void test_spool_refusal(void)
-{
-    char path[] = "/tmp/opcom_spool_testXXXXXX";
-    int fd = mkstemp(path);
-    FILE *rf;
-    char got[64] = "";
-    int full_fd = open("/dev/full", 1 /* O_WRONLY */);
-
-    printf("\n--- spool append is checked (rd vms-f47) ---\n");
-    /* NEGATIVE CONTROL: /dev/full opens fine and only the write fails, which is
-     * exactly what the old open()+unchecked write() could not tell. */
-    if (full_fd < 0) {
-        printf("  FAIL: /dev/full is not available for the negative control\n");
-        failures++;
-    } else {
-        ssize_t w = write(full_fd, "x", 1);
-        if (w == 1) {
-            printf("  FAIL: NEGCTL: a write to /dev/full succeeded\n");
-            failures++;
-        } else {
-            printf("  PASS: NEGCTL: open() of the refusing spool succeeds, only write() fails\n");
-        }
-        close(full_fd);
-    }
-    if (fd < 0) {
-        printf("  FAIL: no scratch dir\n");
-        failures++;
-        return;
-    }
-    close(fd);
-    if (opcom_kmsg_spool_append(path, "%OVMX-I-KMOD, one\n") == 0 &&
-        opcom_kmsg_spool_append(path, "%OVMX-I-KMOD, two\n") == 0) {
-        rf = fopen(path, "r");
-        if (rf) {
-            size_t n = fread(got, 1, sizeof got - 1, rf);
-            got[n] = '\0';
-            fclose(rf);
-        }
-        if (strcmp(got, "%OVMX-I-KMOD, one\n%OVMX-I-KMOD, two\n") == 0)
-            printf("  PASS: an accepted append lands whole, in order\n");
-        else { printf("  FAIL: spool content '%s'\n", got); failures++; }
-    } else {
-        printf("  FAIL: append to a writable spool failed\n");
-        failures++;
-    }
-    unlink(path);
-    {
-        int rc = opcom_kmsg_spool_append("/dev/full", "%OVMX-I-KMOD, lost\n");
-        if (rc == -28 /* ENOSPC */)
-            printf("  PASS: a refused spool append is REPORTED (-ENOSPC), not dropped silently\n");
-        else { printf("  FAIL: refused append returned %d\n", rc); failures++; }
-    }
-}
-
 int main(void)
 {
     printf("=== test_opcom_kmsg: /dev/kmsg -> OPERATOR.LOG reformatter ===\n");
@@ -332,8 +275,6 @@ int main(void)
 
     /* --- 7. the seed path: spool -> genuine OPERATOR.LOG, lossless (vms-98c2) - */
     test_seed_from_spool();
-
-    test_spool_refusal();
 
     printf("\n=== test_opcom_kmsg: %d failed ===\n", failures);
     return failures == 0 ? 0 : 1;

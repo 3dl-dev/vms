@@ -111,11 +111,6 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz);
  */
 void opcom_kmsg_start(void);
 
-/* Append one line to a spool file, checking every step (rd vms-f47): 0, or
- * -errno. The bridge reports a refusal once on stderr instead of dropping the
- * line without a word. */
-int opcom_kmsg_spool_append(const char *path, const char *line);
-
 /*
  * opcom_kmsg_seed_operator_log - one-shot replay of the bridge's durable seed
  * spool (every routed kmsg record since boot) to `emit`, one classified record

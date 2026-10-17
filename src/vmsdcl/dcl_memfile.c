@@ -2,9 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
 #include "dcl/dcl_memfile.h"
 
 struct dcl_pf {
@@ -103,96 +100,4 @@ int dcl_pf_close(struct dcl_pf *pf)
     free(pf->buf);
     free(pf);
     return rc;
-}
-
-FILE *dcl_scratch_tmpfile(void)
-{
-    FILE *tf = tmpfile();
-
-    if (!tf)
-        return NULL;
-    if (fputc('\n', tf) == EOF || fflush(tf) != 0) {
-        fclose(tf);
-        return NULL;
-    }
-    rewind(tf);
-    if (ftruncate(fileno(tf), 0) != 0) {
-        fclose(tf);
-        return NULL;
-    }
-    rewind(tf);
-    return tf;
-}
-
-/*
- * Put `len` bytes of input on fd 0 for the duration of an image activation,
- * saving the old fd 0 in si->saved_fd0. No tmpfs: /dev/null (empty), a pipe
- * (<= DCL_SYSINPUT_PIPE_MAX, written whole before the image starts, so it can
- * never block and an image that never reads cannot deadlock us), else a scratch
- * file whose every write is checked. Returns 0, or -1 with fd 0 untouched.
- */
-#define DCL_SYSINPUT_PIPE_MAX 4096
-int dcl_sysinput_install(struct dcl_sysinput *si, const char *buf, size_t len)
-{
-    int nfd = -1;
-
-    if (len == 0) {
-        nfd = open("/dev/null", O_RDONLY);
-    } else if (len <= DCL_SYSINPUT_PIPE_MAX) {
-        int pf[2];
-
-        if (pipe(pf) == 0) {
-            ssize_t w;
-
-            do { w = write(pf[1], buf, len); } while (w < 0 && errno == EINTR);
-            close(pf[1]);
-            if (w == (ssize_t)len)
-                nfd = pf[0];
-            else
-                close(pf[0]);
-        }
-    }
-    if (nfd < 0 && len > 0) {
-        FILE *tf = tmpfile();
-
-        if (tf) {
-            if (fwrite(buf, 1, len, tf) == len && fflush(tf) == 0) {
-                rewind(tf);
-                nfd = dup(fileno(tf));
-            }
-            fclose(tf);
-        }
-    }
-    if (nfd < 0)
-        return -1;
-    si->saved_fd0 = dup(0);
-    if (si->saved_fd0 < 0 || dup2(nfd, 0) < 0) {
-        if (si->saved_fd0 >= 0) {
-            close(si->saved_fd0);
-            si->saved_fd0 = -1;
-        }
-        close(nfd);
-        return -1;
-    }
-    close(nfd);
-    return 0;
-}
-
-int dcl_write_all(int fd, const char *buf, size_t len)
-{
-    size_t off = 0;
-
-    while (off < len) {
-        ssize_t w = write(fd, buf + off, len - off);
-
-        if (w < 0) {
-            if (errno == EINTR)
-                continue;
-            return -errno;
-        }
-        if (w == 0)
-            return -EIO;
-        off += (size_t)w;
-    }
-    return 0;
 }

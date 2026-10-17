@@ -1224,7 +1224,7 @@ jobs:
   dcl-acceptance-e2e:
     name: DCL/SHOW acceptance gate — boot, run the commands a user types, assert VMS-faithful output
     needs: [changes, build-image]
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (needs.changes.outputs.q_toolchain == 'true' || needs.changes.outputs.q_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -1340,7 +1340,7 @@ jobs:
   device-discovery-alternate-disk-e2e:
     name: "Alternate-disk boot — 2nd-disk device discovery reaches login (vms-9f5)"
     needs: [changes, build-image]
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (needs.changes.outputs.q_kernel == 'true' || needs.changes.outputs.q_toolchain == 'true' || needs.changes.outputs.q_boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
 

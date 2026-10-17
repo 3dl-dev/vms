@@ -123,7 +123,7 @@ jobs:
   alpha-assets:
     name: Alpha executive/kernel + userland, built once (GHCR)
     needs: changes
-    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.alpha_activation == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (needs.changes.outputs.q_alpha_activation == 'true' || needs.changes.outputs.alpha_selfhost == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -722,7 +722,7 @@ jobs:
   alpha-boot-mount:
     name: "OVMX/Alpha per-PR activation gate — boots, mounts DKA0:, activates the N=3 image, asserts $STATUS=%X0035A019 (vms-707/vms-c54)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # vms-c54: 150 (was 120) — the N=3 activation gate adds the alpha-dec-vms
     # toolchain build + joint-image build + activation on top of the boot, so it
@@ -796,7 +796,7 @@ jobs:
   alpha-crtl-rms-n7:
     name: "OVMX/Alpha crtl_rms -> N=7 activation gate — boots, activates the crtl_rms heap+RMS+stdio image on the real /dev/vms executive, asserts $STATUS=%X0035A039 (vms-1ef/vms-065c)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -863,7 +863,7 @@ jobs:
   alpha-crtl-rms-veneer:
     name: "OVMX/Alpha CRTL->RMS veneer gate — boots the veneer-wired crtl_rms image on the real /dev/vms executive, then an INDEPENDENT ACP reader (DIRECTORY/FULL) asserts PORTTEST.DAT;1 landed on the ODS-2 volume with a genuine File ID; validates the vms-1fc LLP64 width fix at runtime (vms-f49)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -922,7 +922,7 @@ jobs:
   alpha-crtl-rms-fileop:
     name: "OVMX/Alpha CRTL->RMS file-op veneer gate — boots the veneer-wired crtl_rms3 image on the real /dev/vms executive; its decc$open/creat/unlink/rename/opendir/readdir/closedir reach the ODS-2 ACP, then an INDEPENDENT DIRECTORY reader asserts the created+renamed files landed with genuine File IDs and the deleted+renamed-away files are gone (vms-3320, blocks vms-fd1)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -977,7 +977,7 @@ jobs:
   alpha-crtl-fd:
     name: "OVMX/Alpha C RTL file layer over RMS — a 32-bit DEC C program's stdio and descriptor calls (fopen/fputs/fgets/open/read/lseek/fstat/stat/dup2/rename/unlink) run over RMS on the ODS-2 volume; DCL writes the record file it reads and DCL TYPE reads back what it wrote (vms-b90, blocks vms-fd1)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1032,7 +1032,7 @@ jobs:
   alpha-vmsabi-rms:
     name: "OVMX/Alpha VMS-ABI RMS — a 32-bit DEC C program calls SYS$PARSE/SYS$SEARCH with a VMS-layout FAB/NAM (vms/rms.h) as GCC vmsdbgout.cc does; NAM$W_FID/DID filled, DIRECTORY/FULL shows the same File ID (vms-692, blocks vms-fd1)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1084,7 +1084,7 @@ jobs:
   alpha-native-image:
     name: "OVMX/Alpha native image — .EXE files LINKed on real OpenVMS Alpha V8.4 run unchanged: SYS$QIOW/LIB$PUT_OUTPUT (rung 1), DECC$SHR stdio via DECC$SHR_EV56 (rung 2), two-module image + own shareable with GSMATCH and DEFINE (rung 3); refusals match the real activator (vms-3b3f)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1149,7 +1149,7 @@ jobs:
   alpha-mf-multifile:
     name: "OVMX/Alpha multi-.o STRICT-link activation gate — boots, activates a real multi-object program (mf_main.obj + mf_util.obj, cross-.o malloc/free/strlen/strcmp/memcpy) on the real /dev/vms executive, asserts $STATUS=%X0035A029 (vms-bdd)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1208,7 +1208,7 @@ jobs:
   alpha-libinit:
     name: "OVMX/Alpha LIB$INITIALIZE gate — the STARLET dispatcher runs the image's LIB$INITIALIZE routines in psect order before main, on the real /dev/vms executive (vms-43c)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1269,7 +1269,7 @@ jobs:
   alpha-invo:
     name: "OVMX/Alpha anchorless SYS$UNWIND — the genuine invocation-context walk + machine transfer resume main after its call with R0 from the mechanism array (vms-ed1)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1327,7 +1327,7 @@ jobs:
   alpha-chf:
     name: "OVMX/Alpha SYS$GL_CALL_HANDL — from inside a condition handler the invocation walk finds the dispatcher frame with its CHF context, then the signalling point (vms-bfd03)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1382,7 +1382,7 @@ jobs:
   alpha-vfork:
     name: "OVMX/Alpha DEC C vfork()/exec*() — a 32-bit program creates a subprocess running an ODS-2 image with arguments, pipes its output back and reaps it (vms-fb4)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1437,7 +1437,7 @@ jobs:
   alpha-p0heap:
     name: "OVMX/Alpha C RTL heap in P0 — small/large/calloc/moving realloc/anon mmap all below 0x40000000 on the real executive (vms-122)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1492,7 +1492,7 @@ jobs:
   alpha-p1stack:
     name: "OVMX/Alpha user stack in P1 — locals, 20 MB of depth and the longword invocation handle in P1 on the real executive (vms-ce5)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1547,7 +1547,7 @@ jobs:
   alpha-p32:
     name: "OVMX/Alpha DEC C 32-bit-pointer program — string/memory/allocator/strto*/strsep/strtok_r/qsort through the 32-bit DECC$SHR entry points (vms-5bc9)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1856,7 +1856,7 @@ jobs:
   alpha-shipped-shareable-activation:
     name: "OVMX/Alpha ships + activates real VMS shareable images — SYSLIB-staged genuine DECC$SHR/LIBOTS$SHR via the ordinary packaging path, asserts $STATUS=%X0035A019 (vms-410)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.q_alpha_activation == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 

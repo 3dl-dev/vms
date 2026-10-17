@@ -91,5 +91,27 @@ assert p.check(sha, fetch=lambda wf, r: [run("schedule", "success", "b" * 40)]) 
 assert p.check(sha, fetch=lambda wf, r: [run("workflow_dispatch", "success")]) == 0
 PY
 
+# PR tier is fast-only: the QEMU/SIMH boot gates are queue-tier (q_* outputs) and no
+# longer fire on pull_request; the one PR smoke boot (console-newline-spam) stays.
+python3 - "$ROOT" <<'PY' && ok "boot gates moved to the queue tier (q_* outputs, none keyed on pull_request)" || bad "queue-tier boot gates"
+import sys, yaml
+W = sys.argv[1] + "/.github/workflows/"
+want = {
+    "ci-core-gates.yml": ["aarch64-system-boot", "aarch64-kernel-vmsko", "aarch64-boot-login"],
+    "ci-kernel-executive.yml": ["kernel-executive-shard", "kernel-executive-devtab-terminal", "kernel-executive-corpus-runtime"],
+    "ci-release-e2e.yml": ["dcl-acceptance-e2e", "device-discovery-alternate-disk-e2e"],
+}
+d = yaml.safe_load(open(W + "ci-alpha.yml"))["jobs"]
+want["ci-alpha.yml"] = [k for k, j in d.items() if "q_alpha_activation" in str(j.get("if"))]
+assert len(want["ci-alpha.yml"]) >= 10, "alpha activation gates not moved"
+for f, jobs in want.items():
+    jj = yaml.safe_load(open(W + f))["jobs"]
+    for j in jobs:
+        c = str(jj[j].get("if"))
+        assert "outputs.q_" in c and "'pull_request'" not in c, (f, j, c)
+jj = yaml.safe_load(open(W + "ci-release-e2e.yml"))["jobs"]
+assert "'pull_request'" in str(jj["console-newline-spam-e2e"].get("if")), "PR smoke boot must stay"
+PY
+
 echo "ci_tiers: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

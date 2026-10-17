@@ -30,15 +30,15 @@ extern void dcl_set_status(struct dcl_context *ctx, int status);
  * Positions the file pointer to the line after the label.
  * Returns 0 on success, -1 if label not found.
  */
-int dcl_find_label(FILE *fp, const char *label)
+int dcl_find_label(struct dcl_pf *fp, const char *label)
 {
     if (!fp || !label) return -1;
 
     /* Rewind to beginning */
-    rewind(fp);
+    dcl_pf_rewind(fp);
 
     char line[DCL_MAX_LINE];
-    while (fgets(line, sizeof(line), fp)) {
+    while (dcl_pf_gets(line, sizeof(line), fp)) {
         /* Remove leading whitespace */
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
@@ -92,12 +92,12 @@ int dcl_find_label(FILE *fp, const char *label)
  * The caller has already pushed the proc_stack level (with .fp set), pushed the
  * local symbol frame, and set gosub_base. Returns the status of the last line.
  */
-static int dcl_run_proc_lines(struct dcl_context *ctx, FILE *fp)
+static int dcl_run_proc_lines(struct dcl_context *ctx, struct dcl_pf *fp)
 {
     char line[DCL_MAX_LINE];
     int status = SS$_NORMAL;
 
-    while (fgets(line, sizeof(line), fp)) {
+    while (dcl_pf_gets(line, sizeof(line), fp)) {
         ctx->proc_stack[ctx->proc_depth].line_number++;
 
         /* Remove trailing newline */
@@ -131,7 +131,7 @@ static int dcl_run_proc_lines(struct dcl_context *ctx, FILE *fp)
         len = strlen(full_line);
         while (len > 0 && full_line[len - 1] == '-') {
             full_line[len - 1] = '\0';
-            if (!fgets(line, sizeof(line), fp)) break;
+            if (!dcl_pf_gets(line, sizeof(line), fp)) break;
             ctx->proc_stack[ctx->proc_depth].line_number++;
             len = strlen(line);
             if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
@@ -265,16 +265,16 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
         return SS$_BADPARAM;
     }
 
-    FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
+    struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
     if (!fp) return SS$_BADPARAM;
 
     /* Save the caller's read position so we resume after the CALL line. */
-    long resume_off = ftell(fp);
+    long resume_off = dcl_pf_tell(fp);
     int  resume_line = ctx->proc_stack[ctx->proc_depth].line_number;
 
     /* Position at the subroutine's label (fp now points just after it). */
     if (dcl_find_label(fp, label) != 0) {
-        fseek(fp, resume_off, SEEK_SET);
+        dcl_pf_seek(fp, resume_off, SEEK_SET);
         dcl_error("DCL", 2, "USGOTO",
                   "target of CALL not found - \\%s\\", label);
         return SS$_BADPARAM;
@@ -317,7 +317,7 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
     ctx->proc_depth--;
 
     /* Resume the caller right after the CALL line. */
-    fseek(fp, resume_off, SEEK_SET);
+    dcl_pf_seek(fp, resume_off, SEEK_SET);
     ctx->proc_stack[ctx->proc_depth].line_number = resume_line;
 
     /* CALL sets $STATUS to the subroutine's completion status. */
@@ -360,8 +360,8 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
  * to the passthrough fopen chain -- keeping the plain host ctest environment
  * (no ACP-mounted SYS$DISK) working exactly as before.
  */
-static FILE *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec,
-                               int *failed)
+static struct dcl_pf *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec,
+                                        int *failed)
 {
     static const char *exts[] = { "", ".COM" };
     for (unsigned e = 0; e < 2; e++) {
@@ -413,10 +413,10 @@ static FILE *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec,
         }
         dcl_rms_read_close(r);
         if (!bad) {
-            FILE *fp = dcl_memfile_open(text, len);
+            struct dcl_pf *pf = dcl_pf_from_mem(text, len);
 
-            if (fp)
-                return fp;                  /* the stream owns `text` now */
+            if (pf)
+                return pf;                  /* the stream owns `text` now */
         }
         free(text);
         dcl_error("DCL", 2, "READERR", "error reading procedure %s", trial);
@@ -460,21 +460,22 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
      * back to the /vms passthrough fopen chain below only when the ACP has no
      * such device/file (host builds without /dev/vms), preserving those tests. */
     FILE *fp = NULL;
+    struct dcl_pf *pf = NULL;
 #if defined(OVMX_HAVE_ACP)
     int acp_failed = 0;
-    fp = dcl_proc_open_acp(ctx, spec, &acp_failed);
+    pf = dcl_proc_open_acp(ctx, spec, &acp_failed);
     if (acp_failed)
         return SS$_INSFMEM;
-    if (fp) {
+    if (pf) {
         strncpy(linux_path, spec, sizeof(linux_path) - 1);
         linux_path[sizeof(linux_path) - 1] = '\0';
     }
 #endif
-    if (!fp)
+    if (!pf && !fp)
         fp = fopen(linux_path, "r");
 
     /* If not found, try adding .com extension */
-    if (!fp) {
+    if (!pf && !fp) {
         char with_ext[1024];
         snprintf(with_ext, sizeof(with_ext), "%s.com", linux_path);
         fp = fopen(with_ext, "r");
@@ -493,7 +494,7 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
      * not exist yet -- e.g. `@SYS$STARTUP:STARTUP` -> ".../startup", missing the
      * real STARTUP.COM. Case-resolve the base and the two .COM spellings against
      * the actual directory entries. (vms-615) */
-    if (!fp) {
+    if (!pf && !fp) {
         extern int vmsfs_resolve_path_case(const char *, char *, size_t);
         const char *exts[] = { "", ".com", ".COM" };
         char cand[1024], resolved[1024];
@@ -509,7 +510,7 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
         }
     }
 
-    if (!fp) {
+    if (!pf && !fp) {
         /* keystroke ERR.DCL E7, VAX V7.3: the full spec, default type .COM,
          * and the RMS reason on its own line -- rd vms-c174 */
         extern void dcl_message_spec(struct dcl_context *, const char *,
@@ -520,19 +521,26 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
         fprintf(stderr, "-RMS-E-FNF, file not found\n");
         return SS$_NOSUCHFILE;
     }
+    if (!pf) {
+        pf = dcl_pf_from_file(fp);      /* the passthrough stdio stream */
+        if (!pf) {
+            fclose(fp);
+            return SS$_INSFMEM;
+        }
+    }
 
     /* Push procedure onto stack */
     if (ctx->proc_depth >= DCL_MAX_NEST - 1) {
         dcl_error("DCL", 4, "NESTLEV",
                   "maximum procedure nesting level exceeded");
-        fclose(fp);
+        dcl_pf_close(pf);
         return SS$_BADPARAM;
     }
 
     ctx->proc_depth++;
     memset(&ctx->proc_stack[ctx->proc_depth], 0,
            sizeof(ctx->proc_stack[0]));
-    ctx->proc_stack[ctx->proc_depth].fp = fp;
+    ctx->proc_stack[ctx->proc_depth].fp = pf;
     strncpy(ctx->proc_stack[ctx->proc_depth].filename, linux_path,
             sizeof(ctx->proc_stack[0].filename) - 1);
     ctx->proc_stack[ctx->proc_depth].line_number = 0;
@@ -561,7 +569,7 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
     }
 
     /* Execute lines */
-    int status = dcl_run_proc_lines(ctx, fp);
+    int status = dcl_run_proc_lines(ctx, pf);
 
     /* A stray RETURN at the top level of a procedure (no open GOSUB, not a
      * subroutine) behaves like EXIT: adopt its status and stop. */
@@ -571,7 +579,7 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
     }
 
     /* Pop procedure from stack */
-    fclose(ctx->proc_stack[ctx->proc_depth].fp);
+    dcl_pf_close(ctx->proc_stack[ctx->proc_depth].fp);
     ctx->proc_stack[ctx->proc_depth].fp = NULL;
     ctx->proc_depth--;
 

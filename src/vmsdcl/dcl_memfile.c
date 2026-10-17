@@ -1,131 +1,103 @@
 /* dcl_memfile.c - see dcl/dcl_memfile.h (rd vms-97c2). */
-#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <sys/types.h>
 #include "dcl/dcl_memfile.h"
 
-struct dcl_memfile {
-    char  *buf;
+struct dcl_pf {
+    FILE  *fp;          /* non-NULL: a stdio stream */
+    char  *buf;         /* otherwise: the procedure text */
     size_t len;
     size_t pos;
 };
 
-static size_t mf_read_bytes(struct dcl_memfile *m, char *out, size_t n)
+struct dcl_pf *dcl_pf_from_mem(char *buf, size_t len)
 {
-    size_t left = m->len - m->pos;
+    struct dcl_pf *pf = calloc(1, sizeof(*pf));
 
-    if (n > left)
-        n = left;
-    memcpy(out, m->buf + m->pos, n);
-    m->pos += n;
-    return n;
+    if (!pf)
+        return NULL;
+    pf->buf = buf;
+    pf->len = len;
+    return pf;
 }
 
-static int mf_seek_to(struct dcl_memfile *m, long long off, int whence, long long *res)
+struct dcl_pf *dcl_pf_from_file(FILE *fp)
 {
-    long long base;
+    struct dcl_pf *pf;
 
+    if (!fp)
+        return NULL;
+    pf = calloc(1, sizeof(*pf));
+    if (!pf)
+        return NULL;
+    pf->fp = fp;
+    return pf;
+}
+
+char *dcl_pf_gets(char *s, int n, struct dcl_pf *pf)
+{
+    size_t i = 0;
+
+    if (!pf || !s || n <= 0)
+        return NULL;
+    if (pf->fp)
+        return fgets(s, n, pf->fp);
+    if (pf->pos >= pf->len)
+        return NULL;
+    while ((int)i < n - 1 && pf->pos < pf->len) {
+        char c = pf->buf[pf->pos++];
+
+        s[i++] = c;
+        if (c == '\n')
+            break;
+    }
+    s[i] = '\0';
+    return s;
+}
+
+long dcl_pf_tell(struct dcl_pf *pf)
+{
+    if (!pf)
+        return -1;
+    return pf->fp ? ftell(pf->fp) : (long)pf->pos;
+}
+
+int dcl_pf_seek(struct dcl_pf *pf, long off, int whence)
+{
+    long base;
+
+    if (!pf)
+        return -1;
+    if (pf->fp)
+        return fseek(pf->fp, off, whence);
     switch (whence) {
     case SEEK_SET: base = 0; break;
-    case SEEK_CUR: base = (long long)m->pos; break;
-    case SEEK_END: base = (long long)m->len; break;
-    default: errno = EINVAL; return -1;
+    case SEEK_CUR: base = (long)pf->pos; break;
+    case SEEK_END: base = (long)pf->len; break;
+    default: return -1;
     }
-    if (base + off < 0) {
-        errno = EINVAL;
+    if (base + off < 0)
         return -1;
-    }
-    /* Reading past the end just reads nothing, as a file does. */
-    m->pos = (size_t)(base + off) > m->len ? m->len : (size_t)(base + off);
-    *res = (long long)m->pos;
+    /* Positioning past the end reads nothing, as a file does. */
+    pf->pos = (size_t)(base + off) > pf->len ? pf->len : (size_t)(base + off);
     return 0;
 }
 
-static void mf_free(struct dcl_memfile *m)
+void dcl_pf_rewind(struct dcl_pf *pf)
 {
-    free(m->buf);
-    free(m);
+    (void)dcl_pf_seek(pf, 0, SEEK_SET);
 }
 
-#if defined(__NetBSD__)
-
-static int nb_read(void *c, char *b, int n)
+int dcl_pf_close(struct dcl_pf *pf)
 {
-    return (int)mf_read_bytes((struct dcl_memfile *)c, b, (size_t)n);
+    int rc = 0;
+
+    if (!pf)
+        return 0;
+    if (pf->fp)
+        rc = fclose(pf->fp);
+    free(pf->buf);
+    free(pf);
+    return rc;
 }
-
-static off_t nb_seek(void *c, off_t off, int whence)
-{
-    long long r;
-
-    if (mf_seek_to((struct dcl_memfile *)c, off, whence, &r) != 0)
-        return -1;
-    return (off_t)r;
-}
-
-static int nb_close(void *c)
-{
-    mf_free((struct dcl_memfile *)c);
-    return 0;
-}
-
-FILE *dcl_memfile_open(char *buf, size_t len)
-{
-    struct dcl_memfile *m = calloc(1, sizeof(*m));
-    FILE *fp;
-
-    if (!m)
-        return NULL;
-    m->buf = buf;
-    m->len = len;
-    fp = funopen(m, nb_read, NULL, nb_seek, nb_close);
-    if (!fp)
-        free(m);                  /* the caller keeps buf */
-    return fp;
-}
-
-#else  /* glibc / musl: fopencookie */
-
-static ssize_t lx_read(void *c, char *b, size_t n)
-{
-    return (ssize_t)mf_read_bytes((struct dcl_memfile *)c, b, n);
-}
-
-static int lx_seek(void *c, off_t *off, int whence)
-{
-    long long r;
-
-    if (mf_seek_to((struct dcl_memfile *)c, *off, whence, &r) != 0)
-        return -1;
-    *off = (off_t)r;
-    return 0;
-}
-
-static int lx_close(void *c)
-{
-    mf_free((struct dcl_memfile *)c);
-    return 0;
-}
-
-FILE *dcl_memfile_open(char *buf, size_t len)
-{
-    static const cookie_io_functions_t io = {
-        .read = lx_read, .write = NULL, .seek = lx_seek, .close = lx_close,
-    };
-    struct dcl_memfile *m = calloc(1, sizeof(*m));
-    FILE *fp;
-
-    if (!m)
-        return NULL;
-    m->buf = buf;
-    m->len = len;
-    fp = fopencookie(m, "r", io);
-    if (!fp)
-        free(m);
-    return fp;
-}
-
-#endif

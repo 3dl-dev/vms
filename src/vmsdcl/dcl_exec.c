@@ -25,7 +25,7 @@ extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
 extern int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
                             char *result, size_t result_size);
-extern int dcl_find_label(FILE *fp, const char *label);
+extern int dcl_find_label(struct dcl_pf *fp, const char *label);
 extern int dcl_execute_line(const char *line);
 extern int dcl_call_subroutine(const char *label, int argc, char **argv);
 long dcl_parse_int(const char *s, int *ok);
@@ -1417,7 +1417,7 @@ int dcl_execute_command(struct dcl_command *cmd)
                       "GOTO not allowed in interactive mode");
             return SS$_BADPARAM;
         }
-        FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
+        struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
         if (dcl_find_label(fp, cmd->params[0]) != 0) {
             dcl_error("DCL", 2, "USGOTO",
                       "target of GOTO not found - \\%s\\", cmd->params[0]);
@@ -1442,8 +1442,8 @@ int dcl_execute_command(struct dcl_command *cmd)
             return SS$_BADPARAM;
         }
         /* Save return position */
-        FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
-        ctx->gosub_stack[ctx->gosub_depth].file_offset = ftell(fp);
+        struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
+        ctx->gosub_stack[ctx->gosub_depth].file_offset = dcl_pf_tell(fp);
         ctx->gosub_stack[ctx->gosub_depth].line_number =
             ctx->proc_stack[ctx->proc_depth].line_number;
         ctx->gosub_depth++;
@@ -1467,8 +1467,8 @@ int dcl_execute_command(struct dcl_command *cmd)
                           ctx->gosub_depth > ctx->proc_stack[ctx->proc_depth].gosub_base);
         if (have_gosub) {
             ctx->gosub_depth--;
-            FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
-            fseek(fp, ctx->gosub_stack[ctx->gosub_depth].file_offset, SEEK_SET);
+            struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
+            dcl_pf_seek(fp, ctx->gosub_stack[ctx->gosub_depth].file_offset, SEEK_SET);
             ctx->proc_stack[ctx->proc_depth].line_number =
                 ctx->gosub_stack[ctx->gosub_depth].line_number;
             return SS$_NORMAL;

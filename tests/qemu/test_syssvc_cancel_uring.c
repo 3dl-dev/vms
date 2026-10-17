@@ -37,6 +37,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <sys/stat.h>
+#include <signal.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -106,8 +107,21 @@ static int ef_is_set(uint32_t efn)
     return sys$readef(efn, &state) == SS$_WASSET;
 }
 
+/* If the guest kernel has no io_uring, $QIO on an empty FIFO would block in a
+ * synchronous read forever. Bound it: fail honestly instead of hanging. */
+static void on_alarm(int sig)
+{
+    static const char m[] =
+        "  FAIL: watchdog: $QIO/$CANCEL blocked >60s (guest io_uring unavailable or $CANCEL lost a request)\n";
+    (void)sig;
+    (void)!write(1, m, sizeof m - 1);
+    _exit(1);
+}
+
 int main(void)
 {
+    signal(SIGALRM, on_alarm);
+    alarm(60);
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("=== test_syssvc_cancel_uring ($CANCEL of real in-flight QIO) ===\n");
 

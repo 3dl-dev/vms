@@ -101,10 +101,11 @@ $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vmsqueue.o" "$SRC/vmsqueue/vmsqueue.c"
 DCLOBJS="$DCLOBJS $WORK/vmsqueue.o"
 NOBJ=$(echo $DCLOBJS | wc -w)
 echo "-- $NOBJ DCL objects compiled VMS-native-clean --"
-# 24 vmsdcl TUs + vmsqueue = 25 (dcl_disk_logical added by vms-f83;
+# 25 vmsdcl TUs + vmsqueue = 26 (dcl_disk_logical added by vms-f83;
 # dcl_help added by vms-01b — the hierarchical HELP engine;
-# dcl_mbx added by vms-786 — mailbox-backed SYS$INPUT/SYS$OUTPUT).
-[ "$NOBJ" -eq 25 ] || { echo "FAIL: expected 25 DCL objects, got $NOBJ"; exit 1; }
+# dcl_mbx added by vms-786 — mailbox-backed SYS$INPUT/SYS$OUTPUT;
+# dcl_memfile added by vms-97c2 — in-memory @-procedure stream).
+[ "$NOBJ" -eq 26 ] || { echo "FAIL: expected 26 DCL objects, got $NOBJ"; exit 1; }
 
 echo
 echo "== DCL.EXE reloc/TLS profile (informative) =="

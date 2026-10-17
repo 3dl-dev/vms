@@ -15,6 +15,7 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "ssdef.h"
+#include "dcl/dcl_memfile.h"
 
 /* External functions */
 extern int dcl_execute_line(const char *line);
@@ -359,7 +360,8 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
  * to the passthrough fopen chain -- keeping the plain host ctest environment
  * (no ACP-mounted SYS$DISK) working exactly as before.
  */
-static FILE *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec)
+static FILE *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec,
+                               int *failed)
 {
     static const char *exts[] = { "", ".COM" };
     for (unsigned e = 0; e < 2; e++) {
@@ -372,22 +374,55 @@ static FILE *dcl_proc_open_acp(struct dcl_context *ctx, const char *spec)
         if (!r)
             continue;                       /* try .COM, then passthrough */
 
-        FILE *fp = tmpfile();
-        if (!fp) { dcl_rms_read_close(r); return NULL; }
-
+        /*
+         * Stage the text in MEMORY, not a tmpfile() (rd vms-97c2): a tmpfs
+         * write fails with ENOSPC below 4 MB of available memory, which is
+         * where a 16 MB VAX sits once it has joined a cluster, and the staging
+         * used to ignore that and hand the engine a truncated procedure that
+         * ended "successfully" having run nothing. A read that fails short of
+         * end-of-file, or memory that cannot hold the text, now fails the
+         * procedure honestly.
+         */
         char rec[8192];
-        int eof = 0;
+        char *text = NULL;
+        size_t len = 0, cap = 0;
+        int eof = 0, bad = 0;
+
         for (;;) {
             int n = dcl_rms_read_record(r, rec, sizeof(rec), &eof);
-            if (n < 0)
-                break;                      /* end-of-file / read error */
+
+            if (n < 0) {
+                bad = !eof;                 /* RMS$_EOF is the normal end */
+                break;
+            }
+            if (len + (size_t)n + 1 > cap) {
+                size_t ncap = cap ? cap * 2 : 4096;
+                char *nt;
+
+                while (ncap < len + (size_t)n + 1)
+                    ncap *= 2;
+                nt = realloc(text, ncap);
+                if (!nt) { bad = 1; break; }
+                text = nt;
+                cap = ncap;
+            }
             if (n > 0)
-                fwrite(rec, 1, (size_t)n, fp);
-            fputc('\n', fp);
+                memcpy(text + len, rec, (size_t)n);
+            len += (size_t)n;
+            text[len++] = '\n';
         }
         dcl_rms_read_close(r);
-        rewind(fp);
-        return fp;
+        if (!bad) {
+            FILE *fp = dcl_memfile_open(text, len);
+
+            if (fp)
+                return fp;                  /* the stream owns `text` now */
+        }
+        free(text);
+        dcl_error("DCL", 2, "READERR", "error reading procedure %s", trial);
+        if (failed)
+            *failed = 1;
+        return NULL;
     }
     return NULL;
 }
@@ -426,7 +461,10 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
      * such device/file (host builds without /dev/vms), preserving those tests. */
     FILE *fp = NULL;
 #if defined(OVMX_HAVE_ACP)
-    fp = dcl_proc_open_acp(ctx, spec);
+    int acp_failed = 0;
+    fp = dcl_proc_open_acp(ctx, spec, &acp_failed);
+    if (acp_failed)
+        return SS$_INSFMEM;
     if (fp) {
         strncpy(linux_path, spec, sizeof(linux_path) - 1);
         linux_path[sizeof(linux_path) - 1] = '\0';

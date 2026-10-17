@@ -104,3 +104,19 @@ set_tests_properties(dcl-prompt-echo-race PROPERTIES
     LABELS "dcl;mbx;unit"
 )
 
+
+# Hermetic test for DCL's in-memory command-procedure stream (rd vms-97c2): the
+# @-procedure staging must not need the filesystem to accept writes.
+add_executable(test_memfile
+    test_memfile.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_memfile.c
+)
+target_include_directories(test_memfile PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    ${VMS_INCLUDE_DIR}
+)
+add_test(NAME dcl-memfile COMMAND test_memfile)
+set_tests_properties(dcl-memfile PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;unit"
+)

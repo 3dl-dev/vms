@@ -70,6 +70,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate     # vms-3b3f: .EXE LINKed on real OpenVMS Alpha runs unchanged (SYS$QIOW/LIB$PUT_OUTPUT via SYS$PUBLIC_VECTORS/LIBRTL)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh as-gate       # vms-5303e: VMS-hosted cc1 then GNU as run on OVMX; DCL DUMP of the EVAX object == cross-assembled object
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
@@ -454,6 +455,41 @@ assert_vfork() {
   echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
   echo "  (c) no activation err         : ok=$err_ok"
   [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
+# assert_as <console-log> <ref1.obj> <ref2.obj> -- THE TEETH for the vms-5303e
+# VMS-hosted cc1 -> GNU as proof (`as-gate'). PASS iff (a) the launcher reports
+# BOTH subprocesses were created, exited and returned success, (b) the launcher's
+# executive seam decodes to sentinel 7, (c) DCL DUMP -- not the image -- shows an
+# EVAX object equal, byte for byte outside the creation time stamps, to what the
+# same binutils built as a cross assembler writes for the same assembly, and
+# (d) no activation error or abnormal termination.
+assert_as() {
+  local log="$1" r1="$2" r2="$3"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  [ -s "$r1" ] && [ -s "$r2" ] || { echo "  FAIL: no reference object"; return 1; }
+  local cc1_ok as_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0
+  cc1_ok=$(grep -qaE 'OVMX cc1 run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
+  as_ok=$(grep -qaE 'OVMX as run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1" "$r2" && same=1
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) cc1 ran + exit 0 : $cc1_ok ; as ran + exit 0 : $as_ok (want 1 1)"
+  echo "  (b) launcher seam    : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
+  echo "  (c) DCL DUMP HELLO.OBJ == cross as object : same=$same"
+  echo "  (d) no activation err: ok=$err_ok"
+  [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -1571,6 +1607,119 @@ EOF
       exit 0
     fi
     echo "FAIL: the VMS-hosted cc1 proof did not pass. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  as-gate)
+    # vms-5303e: GNU as (binutils 2.43 built FOR the alpha-dec-vms host by
+    # selfhost/build-host-as.sh) runs on OVMX/Alpha behind the VMS-hosted cc1:
+    # the launcher (asrun_test.c) vfork+execv's CC1.EXE on a DCL-written C
+    # source and then AS.EXE on the assembly cc1 wrote -- the first two stages
+    # of the GCC driver's pipeline. DCL DUMP shows the EVAX object; it must equal
+    # the object the same binutils built as a cross assembler writes, outside
+    # the creation time stamp (found by assembling the reference twice).
+    MILESTONE_MAIN=asrun_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    BOOT_TIMEOUT="${AS_BOOT_TIMEOUT:-2400}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
+    _st=$(mktemp -d); _fails=0
+    python3 -I - "$_st" <<'PYEOF'
+import sys
+d = sys.argv[1]
+ref1 = bytes(range(1, 71)); r2 = bytearray(ref1); r2[20] ^= 0xff; r2[21] ^= 0xff
+open(d + "/r1.obj", "wb").write(ref1); open(d + "/r2.obj", "wb").write(bytes(r2))
+def dump(b):
+    out = []
+    for o in range(0, len(b), 16):
+        row = b[o:o + 16]
+        hx = " ".join(row[i:i + 4].hex().upper().ljust(8) for i in range(0, 16, 4))
+        out.append("%08X %s  %s" % (o % 512, hx, "." * len(row)))
+    return out
+def log(b, cc1=1, as_=1, code=0, seam="0x0035a039"):
+    L = ["OVMX cc1 run: pid_ok=1 exited=1 code=%d status=%%X00000000" % (0 if cc1 else 1),
+         "OVMX as run: pid_ok=1 exited=1 code=%d status=%%X00000000" % (0 if as_ else 1),
+         "OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=" + seam + " p0=1",
+         "AS-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.OBJ ==="] + dump(b) + ["AS-PROOF: DUMP-STATUS=%X00000001 SEVERITY=1"]
+    return "\r\n".join(L) + "\r\n"
+good = bytearray(ref1); good[20] = 0x77            # differs only at a volatile offset
+open(d + "/pass.log", "w", newline="").write(log(bytes(good)))
+bad = bytearray(ref1); bad[40] ^= 1                # differs outside the time stamp
+open(d + "/diffobj.log", "w", newline="").write(log(bytes(bad)))
+open(d + "/short.log", "w", newline="").write(log(ref1[:50]))
+open(d + "/noas.log", "w", newline="").write(log(ref1, as_=0))
+open(d + "/nocc1.log", "w", newline="").write(log(ref1, cc1=0))
+open(d + "/badseam.log", "w", newline="").write(log(ref1, seam="0x0035a019"))
+open(d + "/nodump.log", "w", newline="").write(log(b""))
+open(d + "/crash.log", "w", newline="").write(log(ref1) + "%DCL-F-ABORT, image SYS$SYSTEM:AS terminated abnormally (signal 11)\r\n")
+PYEOF
+    for _c in "pass:0" "diffobj:1" "short:1" "noas:1" "nocc1:1" "badseam:1" "nodump:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_as "$_st/$_n.log" "$_st/r1.obj" "$_st/r2.obj" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  as selftest $_n: PASS"; else echo "  as selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "as selftest failed -- assert_as cannot be trusted"
+    echo ""
+    build_joint_images
+    _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"; _jr="$GATE_ROOT/joint-n3"
+    if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+      log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
+      mkdir -p "$_tc"
+      docker run --rm --network none -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+        bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+        || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
+    fi
+    log "step 1c2: build GCC for the alpha-dec-vms host over this build's C RTL (long, network disabled)"
+    mkdir -p "$GATE_ROOT/hostgcc" "$GATE_ROOT/hostas"
+    if [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1.exe" ]; then log "host GCC restored from cache"; else
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
+    fi
+    log "step 1c3: build GNU as for the alpha-dec-vms host over this build's C RTL (network disabled)"
+    if [ -s "$GATE_ROOT/hostas/host-as/out/as.exe" ]; then log "host as restored from cache"; else
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostas:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-as.sh > "$GATE_ROOT/host-as.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-as.log"; die "host GNU as build failed -- see $GATE_ROOT/host-as.log"; }
+    fi
+    _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"; _as="$GATE_ROOT/hostas/host-as/out/as.exe"
+    [ -s "$_as" ] || die "no host as.exe"
+    log "step 1d: link the launcher; cross-compile and cross-assemble the reference (twice, to find the time-stamp bytes)"
+    mkdir -p "$GATE_ROOT/asimg"
+    printf '%s\n' 'int printf (const char *, ...);' 'static int sq (int x) { return x * x; }' 'int main (void)' '{' \
+      '  printf ("hello from cc1 on OVMX %d\n", sq (7));' '  return 0;' '}' > "$GATE_ROOT/asimg/hello.c"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/asimg:/img" \
+      -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
+        set -e
+        /out/cxx/bin/alpha-dec-vms-gcc -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/asrun_test.c
+        cd /img && cp hello.c "VDA0:[SYSTMP]HELLO.C" \
+          && $(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=cc1) -quiet -nostdinc -dumpbase hello.c "VDA0:[SYSTMP]HELLO.C" -o ref.s
+        AS=$(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=as)
+        $AS -o ref1.obj ref.s; sleep 3; $AS -o ref2.obj ref.s' \
+      > "$GATE_ROOT/as-link.log" 2>&1 || { tail -40 "$GATE_ROOT/as-link.log"; die "launcher link / reference build failed"; }
+    [ -s "$GATE_ROOT/asimg/ref1.obj" ] || die "the cross as wrote no reference object"
+    cp "$GATE_ROOT/asimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
+    cp "$_cc1" "$WORK/joint/cc1.exe"
+    cp "$_as" "$WORK/joint/as.exe"
+    for _p in "DECC\$SHR" LIBOTS_SHR LIBVMSRMS\$SHR LIBVMS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSPROCESS\$SHR LIBVMSSYS\$SHR; do
+      [ -s "$_jr/$_p.EXE" ] || die "no $_p.EXE in $_jr"
+      cp "$_jr/$_p.EXE" "$WORK/joint/$_p.EXE"
+    done
+    : > "$WORK/joint/AS_PROOF"
+    assemble_boot_image
+    log "step 3: BOOT A -- the VMS-hosted cc1 then GNU as run on the REAL executive (up to ${BOOT_TIMEOUT}s)"
+    # the guest kernel names the fault PC of a stage that dies on a signal
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    run_boot_a
+    grep -aE "OVMX cc1|OVMX as|OVMX-AS-TRACE|AS-PROOF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|as:|cc1:|fatal signal|pc=" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_as "$WORK/modgpA.log" "$GATE_ROOT/asimg/ref1.obj" "$GATE_ROOT/asimg/ref2.obj"; then
+      echo ""
+      echo "PASS: GNU as, built for the alpha-dec-vms host, assembled cc1's output on OVMX/Alpha;"
+      echo "      DCL DUMP shows the same EVAX object the cross assembler writes."
+      exit 0
+    fi
+    echo "FAIL: the VMS-hosted cc1 -> as proof did not pass. Full log: $WORK/modgpA.log"
     tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

@@ -22,6 +22,24 @@ for ps in "" "-mpointer-size=64"; do
         echo "  FAIL vms/ headers (pointer size: ${ps:-default 32}):"; sed "s/^/      /" /tmp/e | head -20; rc=1
     fi
 done
+# vms-5303e: the DEC C shapes bfd/vms-misc.c uses compile against hostabi/ (the
+# <rms.h>/<starlet.h> of a host-built program) ahead of the include root, and the
+# SAME TU must NOT compile without it -- the native <rms.h> is the OVMX internal FAB
+# (no fab-l-ctx, no VMS-ABI services), which is the wall the host gas build hit.
+for ps in "" "-mpointer-size=64"; do
+    if alpha-dec-vms-gcc $ps -std=gnu11 -Wall -Werror -fsyntax-only -isystem /t/libc-stub -I/inc/hostabi -I/inc /t/hostabi_bfd_shapes.c 2>/tmp/e; then
+        echo "  PASS hostabi/ headers: bfd/vms-misc.c shapes compile (pointer size: ${ps:-default 32})"
+    else
+        echo "  FAIL hostabi/ headers (pointer size: ${ps:-default 32}):"; sed "s/^/      /" /tmp/e | head -20; rc=1
+    fi
+done
+if alpha-dec-vms-gcc -std=gnu11 -fsyntax-only -isystem /t/libc-stub -I/inc /t/hostabi_bfd_shapes.c 2>/tmp/ec; then
+    echo "  FAIL control: bfd/vms-misc.c shapes compiled WITHOUT hostabi/ (the native <rms.h> is not the VMS layout)"; rc=1
+elif ! grep -q "rms/rms.h" /tmp/ec; then
+    echo "  FAIL control: the shapes failed without hostabi/ but not at the native rms.h wall:"; head -5 /tmp/ec; rc=1
+else
+    echo "  PASS control: without hostabi/ the same shapes do not compile"
+fi
 # Control: the same FAB shape with an ordinary (client-size) pointer field at
 # 64 bits must break the layout assertion -- the pragma is what holds it.
 cat > /tmp/ctl.c <<C

@@ -230,6 +230,9 @@ extern "C" {
 #define SS$_DEVMOUNT        108    /* Device already mounted */
 #define SS$_DEVNOTMOUNT     124    /* Device not mounted */
 #define SS$_NOSUCHFILE      2320    /* No such file */
+/* ORACLE-PINNED: docs/oracle/vax73-starlet-defs/SSDEF.txt + alpha84 ($EQU SS$_NOSUCHSEC 2424);
+ * msgcat 0x978 %SYSTEM-W-NOSUCHSEC "no such (global) section" (rd vms-d91). */
+#define SS$_NOSUCHSEC       2424    /* No such (global) section */
 
 /* ================================================================
  * Additional commonly-used status codes

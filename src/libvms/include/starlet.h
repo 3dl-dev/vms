@@ -814,15 +814,14 @@ uint32_t sys$deltva_64(
  * sys$deltva_64) - this call only marks intent. OVMX does not maintain
  * a cross-process named-global-section registry (sys$mgblsc/
  * sys$mgblsc_64/sys$mgblsc_gpfn_64 are not implemented - see
- * docs/conformance-gap-report.md), so this validates its arguments and
- * returns success without a registry lookup, consistent with how
- * sys$purgws above documents an equivalent honest simplification.
+ * docs/conformance-gap-report.md), so no named section can exist: this
+ * validates its arguments and returns SS$_NOSUCHSEC (vms-d91).
  *
  * @param flags   Section flags (SEC$M_SYSGBL etc. - ignored)
  * @param gsdnam  Descriptor of the global section name (required)
  * @param ident   Optional section version identification
  *
- * @return  SS$_NORMAL on success, SS$_BADPARAM if gsdnam is missing
+ * @return  SS$_NOSUCHSEC (no registry), SS$_BADPARAM if gsdnam is missing
  */
 uint32_t sys$dgblsc(
     uint32_t flags,

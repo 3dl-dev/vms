@@ -182,7 +182,7 @@ static void test_dgblsc(void)
     uint32_t ident = 0;
 
     uint32_t st = sys$dgblsc(0, &name_d, &ident);
-    check(st == SS$_NORMAL, "sys$dgblsc returns SS$_NORMAL");
+    check(st == SS$_NOSUCHSEC, "sys$dgblsc of an unregistered section returns SS$_NOSUCHSEC");
 
     check(sys$dgblsc(0, NULL, &ident) == SS$_BADPARAM,
           "sys$dgblsc(NULL gsdnam) returns SS$_BADPARAM");

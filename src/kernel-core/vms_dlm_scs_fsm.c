@@ -2075,3 +2075,4 @@ uint32_t dlm_relq_pending(const struct dlm_relq *q)
 	}
 	return n;
 }
+/* ci-speed probe: PR-path timing (do not merge) */

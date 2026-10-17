@@ -18,23 +18,52 @@ typedef char *cp32;     /* host source scans compile every product file */
 extern int printf(const char *, ...);
 extern int waitpid(int, int *, int);
 extern void _exit(int);
+extern int write(int, const void *, size_t);
+extern int *__errno_location(void);
 int decc$$alloc_vfork_blocks(void);
 void *decc$$vfork_jmpbuf(void);
 int decc$$vfork_setjmp(void *) __attribute__((__returns_twice__));
 #define vfork() (decc$$alloc_vfork_blocks() >= 0 ? decc$$vfork_setjmp(decc$$vfork_jmpbuf()) : -1)
 int execv(const char *, cp32 const *) __asm__("decc$$execv32");
 
+/* Unbuffered progress to the console, so a stage that dies before its summary
+ * line is still visible in the gate log. */
+static void trace(const char *tag, const char *what, int v)
+{
+    char b[96];
+    int n = 0;
+    const char *p;
+    for (p = "OVMX-AS-TRACE: "; *p; p++) b[n++] = *p;
+    for (p = tag; *p && n < 60; p++) b[n++] = *p;
+    b[n++] = ' ';
+    for (p = what; *p && n < 80; p++) b[n++] = *p;
+    b[n++] = ' ';
+    if (v < 0) { b[n++] = '-'; v = -v; }
+    {
+        char d[12]; int k = 0;
+        do { d[k++] = (char)('0' + v % 10); v /= 10; } while (v);
+        while (k) b[n++] = d[--k];
+    }
+    b[n++] = '\n';
+    write(1, b, n);
+}
+
 /* Run image with argv; returns 1 when it was created, exited normally with 0. */
 static int stage(const char *tag, const char *image, cp32 const *av)
 {
+    trace(tag, "vfork", 0);
     int pid = vfork();
     if (pid == 0) {
-        execv(image, av);
+        int r = execv(image, av);
+        trace(tag, "execv-returned", r);
+        trace(tag, "errno", *__errno_location());
         _exit(127);
     }
+    trace(tag, "vfork-parent-pid", pid);
     int pid_ok = pid > 0;
     int status = -1;
     int w = pid_ok ? waitpid(pid, &status, 0) : -1;
+    trace(tag, "waitpid", w);
     int exited = w == pid && (status & 0x7f) == 0;
     int code = (status >> 8) & 0xff;
     printf("OVMX %s run: pid_ok=%d exited=%d code=%d status=%%X%08X\n",

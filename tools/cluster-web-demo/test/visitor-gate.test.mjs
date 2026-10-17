@@ -676,3 +676,75 @@ test('the version a node announced survives its console scrolling', () => {
   assert.deepEqual(R.ovmx_versions.OVMXB, [UNDER_TEST]);
   assert.equal(GATE.versionWhy(R), null);
 });
+
+// ---- rd vms-124: the login prompt that times out between two polls ----------
+
+// A console whose Username: is abandoned after `idleS` seconds, goes quiet, and
+// shows a fresh banner + prompt on the next RETURN -- an OVMX login session.
+function idleCycleGuest(idleS) {
+  const g = { now: 0, since: null, quiet: true, screen: 'boot done\n', typed: [] };
+  g.advance = (s) => {
+    g.now += s;
+    if (!g.quiet && g.since !== null && g.now - g.since >= idleS) {
+      g.screen += '\nError reading command input\nTimeout period expired\n';
+      g.quiet = true; g.since = null;
+    }
+  };
+  g.type = (text) => {
+    g.typed.push(text);
+    if (text === '\r' && g.quiet) {
+      g.screen += '\n Welcome to the OpenVMX VAX Operating System\n\nUsername: ';
+      g.quiet = false; g.since = g.now;
+    }
+  };
+  return g;
+}
+
+async function runLoginPolicy({ followUp, pollS }) {
+  const g = idleCycleGuest(20);
+  const R = cn3Observations();
+  R.cn3 = true;
+  const lastWake = {};
+  const io = {
+    type: async (w, t) => g.type(t),
+    read: async () => g.screen,
+    sleep: async (ms) => g.advance(ms / 1000),
+    user: () => 'SYSTEM', pass: () => 'MANAGER', log: () => {},
+  };
+  for (let el = 0; el < 600 && !R.login_sent.OVMXB; el += pollS) {
+    observe(R, 'OVMXB', g.screen);
+    GATE.observeLogin(R, 'OVMXB', el);
+    if (followUp) {
+      await GATE.driveLoginStep(R, 'OVMXB', el, lastWake, 20, io);
+    } else {
+      // the gate as it was: strike RETURN, then look again only a poll later
+      const act = GATE.loginAction(R, 'OVMXB');
+      if (act === 'wake' && el - (lastWake.OVMXB ?? -1e9) >= 20) { lastWake.OVMXB = el; g.type('\r'); }
+      else if (act === 'login') { R.login_sent.OVMXB = R.transcript.OVMXB.length; g.type('SYSTEM\r'); }
+    }
+    g.advance(pollS);
+  }
+  return { sent: R.login_sent.OVMXB !== undefined, typed: g.typed };
+}
+
+test('NEGATIVE CONTROL: waking then re-reading a poll later never reaches a 20 s Username: (rd vms-124)', async () => {
+  const r = await runLoginPolicy({ followUp: false, pollS: 25 });
+  assert.equal(r.sent, false, 'the old cadence is slower than the prompt lifetime: it never logs in');
+});
+
+test('a wake is followed up fast enough to log in inside the prompt lifetime (rd vms-124)', async () => {
+  const r = await runLoginPolicy({ followUp: true, pollS: 25 });
+  assert.equal(r.sent, true, 'OVMXB is logged in to');
+  assert.deepEqual(r.typed.slice(-2), ['SYSTEM\r', 'MANAGER\r']);
+});
+
+test('the real VAX is woken but never followed up or logged in to (rd vms-124)', async () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  const typed = [];
+  const io = { type: async (w, t) => typed.push([w, t]), read: async () => '', sleep: async () => {},
+               user: () => 'U', pass: () => 'P', log: () => {} };
+  const act = await GATE.driveLoginStep(R, 'VAXC', 100, {}, 20, io);
+  assert.equal(act, null);
+  assert.deepEqual(typed, [['VAXC', '\r']]);
+});

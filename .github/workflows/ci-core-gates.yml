@@ -590,7 +590,7 @@ jobs:
     with:
       platform: linux/amd64
       targetarch: arm64
-      tag: arm64x
+      tag: arm64x2
 
   kernel-base-a64-native:
     name: Prebuilt arm64 kernel base, native (GHCR)

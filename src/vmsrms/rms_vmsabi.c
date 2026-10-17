@@ -359,6 +359,26 @@ int SYS$CLOSE(void *fabp, ...)
     return st;
 }
 
+/* SYS$MODIFY -- change an open file's FAB-visible attributes. OVMX's engine
+ * keeps a file's attributes in its Files-11 header and has no path that rewrites
+ * them through an open channel, so $MODIFY does not pretend to: a valid FAB on
+ * an open file gets RMS$_IOP (illegal operation) and the file is untouched; a bad
+ * FAB gets RMS$_FAB; a FAB with no open file gets RMS$_IFI. Callers that treat
+ * $MODIFY as best-effort (binutils' vms_convert_to_var ignores its status) see
+ * the truth rather than a success that changed nothing. */
+int SYS$MODIFY(void *fabp, ...)
+{
+    struct fabdef *fab = (struct fabdef *)fabp;
+    va_list ap;
+    va_start(ap, fabp);
+    struct cmpl c;
+    CMPL_TAKE(ap, c);
+    va_end(ap);
+    if (!fab_ok(fab))
+        return RMS$_FAB;
+    return complete(fab, fab->fab$w_ifi ? RMS$_IOP : RMS$_IFI, &c);
+}
+
 static void rab_req(struct rabdef *rab, struct ovmx_rmsabi_rab *io)
 {
     memset(io, 0, sizeof *io);

@@ -14,10 +14,10 @@
 # fork PR's read-only token) `ref` is the literal `kernel-base`, which the
 # Dockerfile resolves to its own local stage -- the old, slow, identical build.
 #
-# NB: the base carries the build's EPHEMERAL module-signing key (the kernel
-# needs it to sign modules). It gates nothing (CONFIG_MODULE_SIG_FORCE is off,
-# the Dockerfile asserts it), and release cuts (tools/cut-release.sh) never use
-# this image -- they build the stage locally with the real signing secret.
+# NB: the base holds NO signing key. It is built against a throwaway placeholder
+# key that the Dockerfile deletes and asserts gone; the real (ephemeral or secret)
+# key is injected by the kernel-build stage at use time, which re-embeds its
+# certificate and signs the modules. Publishing the package is not a key question.
 name: kernel-base
 
 on:
@@ -52,9 +52,9 @@ jobs:
         id: key
         run: |
           set -eu
-          # Dockerfile text of the base only (modkey + kernel-base stages), plus
+          # Dockerfile text of the base only (the kernel-base stage), plus
           # every file under distro/kernel (patches, configs, overlay, scaffold).
-          h=$( { awk '/AS modkey$/{p=1} /^# -- kernel-build stage \(incremental/{p=0} p' distro/Dockerfile.bootable
+          h=$( { awk '/AS kernel-base$/{p=1} /^# -- kernel-build stage \(incremental/{p=0} p' distro/Dockerfile.bootable
                  find distro/kernel -type f | LC_ALL=C sort | xargs sha256sum; } | sha256sum | cut -c1-20)
           owner=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
           echo "ref=ghcr.io/${owner}/ovmx-kernel-base:amd64-${h}" >> "$GITHUB_OUTPUT"

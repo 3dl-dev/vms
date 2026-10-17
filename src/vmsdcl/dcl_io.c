@@ -32,8 +32,8 @@ int dcl_read_input(struct dcl_context *ctx, const char *prompt,
 
     /* If in a command procedure, read from procedure file */
     if (ctx->proc_depth >= 0 && ctx->proc_stack[ctx->proc_depth].fp) {
-        if (!dcl_pf_gets(buffer, (int)bufsize,
-                         ctx->proc_stack[ctx->proc_depth].fp)) {
+        if (!fgets(buffer, (int)bufsize,
+                   ctx->proc_stack[ctx->proc_depth].fp)) {
             return -1; /* EOF */
         }
         /* Remove trailing newline */

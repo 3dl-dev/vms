@@ -1771,7 +1771,7 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
     si->saved_fd0 = -1;
     if (!ctx || ctx->proc_depth < 0)
         return;                     /* interactive: SYS$INPUT = terminal */
-    struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
+    FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
     if (!fp)
         return;
 
@@ -1785,7 +1785,7 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
         return;
 
     char line[DCL_MAX_LINE];
-    long pos = dcl_pf_tell(fp);
+    long pos = ftell(fp);
     /* DECK/EOD explicit in-stream data (vms-3983). Normally the input block
      * ends at the first '$'-command line; DECK suspends that so a block may
      * itself contain '$'-lines, ending only at the EOD sentinel. Reference:
@@ -1793,7 +1793,7 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
      * "$EOD"; DECK/DOLLAR=string names a different one. */
     int  deck_mode = 0;
     char deck_term[48] = "EOD";
-    while (dcl_pf_gets(line, sizeof(line), fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         const char *p = line;
         while (*p == ' ' || *p == '\t')
             p++;
@@ -1810,7 +1810,7 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                      q[tl] == ' '  || q[tl] == '\t')) {
                     deck_mode = 0;   /* consume the EOD line, feed nothing */
                     ctx->proc_stack[ctx->proc_depth].line_number++;
-                    pos = dcl_pf_tell(fp);
+                    pos = ftell(fp);
                     continue;
                 }
             }
@@ -1841,12 +1841,12 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                 }
                 deck_mode = 1;   /* consume the DECK line, feed nothing */
                 ctx->proc_stack[ctx->proc_depth].line_number++;
-                pos = dcl_pf_tell(fp);
+                pos = ftell(fp);
                 continue;
             }
             /* Next DCL command terminates the image's input. Put the stream
              * back at the start of this line so the parent loop reads it. */
-            dcl_pf_seek(fp, pos, SEEK_SET);
+            fseek(fp, pos, SEEK_SET);
             break;
         }
         /* Data line fed to the image's SYS$INPUT. VMS DCL performs apostrophe
@@ -1867,7 +1867,7 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
         dcl_sym_substitute(line, subst, sizeof(subst));
         fputs(subst, tf);
         ctx->proc_stack[ctx->proc_depth].line_number++;
-        pos = dcl_pf_tell(fp);
+        pos = ftell(fp);
     }
     fflush(tf);
     rewind(tf);

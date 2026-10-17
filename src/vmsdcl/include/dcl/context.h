@@ -1,7 +1,6 @@
 #ifndef __DCL_CONTEXT_H
 #define __DCL_CONTEXT_H
 
-#include "dcl/dcl_memfile.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -26,7 +25,7 @@ struct dcl_context {
 
     /* Command procedure stack */
     struct {
-        struct dcl_pf *fp;     /* the procedure stream (dcl_memfile.h) */
+        FILE *fp;
         char filename[256];
         int  line_number;
         /* Per-level DCL error control (ON / SET [NO]ON). Each command level

@@ -80,7 +80,6 @@ set(VMSDCL_SOURCES
     dcl_filespec.c
     dcl_io.c
     dcl_script.c
-    dcl_memfile.c
     dcl_messages.c
     dcl_library.c
     dcl_help.c

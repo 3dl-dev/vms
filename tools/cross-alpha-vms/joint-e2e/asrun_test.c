@@ -50,10 +50,14 @@ static int stage(const char *tag, const char *image, cp32 const *av)
     int status = -1;
     int w = pid_ok ? waitpid(pid, &status, 0) : -1;
     trace(tag, "waitpid", w);
+    trace(tag, "wait-status", status);
+    trace(tag, "errno-after-wait", *__errno_location());
     int exited = w == pid && (status & 0x7f) == 0;
     int code = (status >> 8) & 0xff;
     printf("OVMX %s run: pid_ok=%d exited=%d code=%d status=%%X%08X\n",
            tag, pid_ok, exited, code, (unsigned)status);
+    fflush(0);
+    trace(tag, "summary-printed", 1);
     return pid_ok && exited && code == 0;
 }
 

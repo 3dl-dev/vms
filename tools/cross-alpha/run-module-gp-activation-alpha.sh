@@ -1716,7 +1716,7 @@ PYEOF
     assemble_boot_image
     log "step 3: BOOT A -- the VMS-hosted cc1 then GNU as run on the REAL executive (up to ${BOOT_TIMEOUT}s)"
     run_boot_a
-    grep -aE "OVMX cc1|OVMX as|AS-PROOF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|as:|cc1:" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    grep -aE "OVMX cc1|OVMX as|OVMX-AS-TRACE|AS-PROOF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|as:|cc1:" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_as "$WORK/modgpA.log" "$GATE_ROOT/asimg/ref1.obj" "$GATE_ROOT/asimg/ref2.obj"; then
       echo ""
       echo "PASS: GNU as, built for the alpha-dec-vms host, assembled cc1's output on OVMX/Alpha;"

@@ -579,9 +579,34 @@ jobs:
   # must not (negative control). This is the arm64 executive rung the boot-to-
   # login (vms-32aa) and the aarch64 cut (vms-b58) stand on.
   # -----------------------------------------------------------------------
+  kernel-base-a64-cross:
+    name: Prebuilt arm64 kernel base, cross-built (GHCR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/kernel-base.yml
+    with:
+      platform: linux/arm64
+      tag: arm64x
+
+  kernel-base-a64-native:
+    name: Prebuilt arm64 kernel base, native (GHCR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/kernel-base.yml
+    with:
+      runner: ubuntu-24.04-arm
+      platform: linux/arm64
+      tag: arm64n
+
   aarch64-kernel-vmsko:
     name: aarch64 OVMX kernel + vms.ko -- cross-built, boots, /dev/vms (vms-a07)
-    needs: changes
+    needs: [changes, kernel-base-a64-cross]
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -595,7 +620,9 @@ jobs:
       - name: Cross-build the arm64 OVMX kernel + vms.ko (kernel-out stage)
         run: |
           set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
           docker buildx build -f distro/Dockerfile.bootable --platform linux/arm64 \
+            --build-arg KERNEL_BASE=${{ needs.kernel-base-a64-cross.outputs.ref }} \
             --target kernel-out --output type=local,dest="$RUNNER_TEMP/kout" .
           ls -la "$RUNNER_TEMP/kout"
           test "$(cat "$RUNNER_TEMP/kout/karch")" = arm64
@@ -610,7 +637,7 @@ jobs:
     # qemu-system-aarch64 -machine virt: executive attached, Username:, SYSTEM
     # login, the PARTS RMS demo, and PRODUCT SHOW PRODUCT == ovmx_identity.h.
     name: aarch64 bootable set -- builds, boots to login, PARTS, version (vms-32aa)
-    needs: changes
+    needs: [changes, kernel-base-a64-native]
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
@@ -624,7 +651,9 @@ jobs:
       - name: Build the arm64 bootable set natively (Dockerfile.bootable, TARGETARCH=arm64)
         run: |
           set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
           docker buildx build -f distro/Dockerfile.bootable --platform linux/arm64 \
+            --build-arg KERNEL_BASE=${{ needs.kernel-base-a64-native.outputs.ref }} \
             --load -t ovmx-boot-a64:ci .
 
       - name: Extract the boot artifacts
@@ -1278,6 +1307,8 @@ jobs:
       - corpus-conformance
       - static-analysis
       - kernel-base
+      - kernel-base-a64-cross
+      - kernel-base-a64-native
       - uat-session
     runs-on: ubuntu-latest
     timeout-minutes: 5

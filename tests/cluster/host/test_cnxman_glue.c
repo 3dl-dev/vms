@@ -1147,8 +1147,11 @@ static void test_e8b_a_response_rides_its_own_connection(void)
 		  "a member's own 0b/01 shows it is ready");
 	check_has("cnxman_csb_dialogue_unsent(csb);",
 		  "rd vms-cd8: a refused body hands back its send-msg#");
-	check_has("st != (int)SS__NORMAL && st != (int)SS__ABORT",
-		  "... except SS$_ABORT, which may be a ring-held frame");
+	check_has("cnxman_csb_refused_send_keeps_number(",
+		  "... except a frame the port HOLDS (rd vms-fb0: asked of the "
+		  "CDT, not read off SS$_ABORT)");
+	check_has("(int32_t)PE_VC_SEND_TXFAIL",
+		  "... and the one holding code is the port's TXFAIL");
 	check_absent("scs_send_msg(cn->cl->scs, csb->cdt_conid",
 		     "... and no CM send bypasses cnxman_cm_send");
 	check_has("cnxman_cm_send(cn, cn->cur_conid, body, len)",

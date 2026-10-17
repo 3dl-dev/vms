@@ -1717,6 +1717,18 @@ void cnxman_csb_dialogue_unsent(struct vms_csb *csb)
 	csb->cm_send_msg = (uint16_t)(csb->cm_send_msg - 1u);
 }
 
+int cnxman_csb_refused_send_keeps_number(int abort_status,
+					 int refusal_known,
+					 int port_was_refuser,
+					 int32_t port_rc, int32_t held_rc)
+{
+	if (!abort_status)
+		return 0;
+	if (!refusal_known || !port_was_refuser)
+		return 1;
+	return port_rc == held_rc;
+}
+
 void cnxman_csb_transaction_opened(struct vms_csb *csb)
 {
 	if (csb == NULL)

@@ -1306,7 +1306,6 @@ EOF
 port NOCREDIT (window spent): the number is handed back
 port RINGFULL: the number is handed back
 port UNSAFE (wire-safety guard): the number is handed back
-a non-ABORT refusal: the number is handed back
 EOF
                       ;;
         esac;;

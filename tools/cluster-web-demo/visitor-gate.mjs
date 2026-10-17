@@ -66,7 +66,7 @@ import fs from 'node:fs';
 import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal,
          silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy,
          observeLogin, loginAction, allReady, USERNAME, AFTER_WAIT_MS, parseLoginHint,
-         productVersionOf, versionWhy } from './gate-eval.mjs';
+         productVersionOf, versionWhy, driveLoginStep } from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
@@ -197,19 +197,13 @@ async function typeTo(page, who, text) {
 
 // One login step per node per poll (rd vms-db1). Nothing before CN=3.
 async function driveLogins(page, R, el, lastWake) {
-  for (const w of NODES) {
-    const act = loginAction(R, w);
-    if (act === 'wake' && el - (lastWake[w] ?? -1e9) >= WAKE_EVERY_S) {
-      lastWake[w] = el;
-      await typeTo(page, w, '\r');
-    } else if (act === 'login') {
-      R.login_sent[w] = (R.transcript[w] || '').length;
-      log(`  ${w}: offered Username: -- logging in as ${userFor(w)}`);
-      await typeTo(page, w, userFor(w) + '\r');
-      await sleep(2500);
-      await typeTo(page, w, passFor(w) + '\r');
-    }
-  }
+  const io = {
+    type: (w, t) => typeTo(page, w, t),
+    read: (w) => consoleOf(page, w, R),
+    sleep, log,
+    user: userFor, pass: passFor,
+  };
+  for (const w of NODES) await driveLoginStep(R, w, el, lastWake, WAKE_EVERY_S, io);
 }
 
 // Bring a panel into the viewport. A pcjs panel below the fold STOPS

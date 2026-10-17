@@ -465,6 +465,47 @@ export function loginAction(R, who) {
   return USERNAME.test(lastLineOf((R.transcript || {})[who])) ? 'login' : 'wake';
 }
 
+// An OVMX console's login prompt does not wait for ever: Username: is abandoned
+// after 20 s of guest time ("Error reading command input / Timeout period
+// expired"), the line goes quiet, and the NEXT RETURN brings a fresh banner and
+// prompt. A gate that strikes RETURN and then reads the console again a whole
+// poll later (15 s of sleep plus three panel reveals) sees the prompt only after
+// it has timed out again, and never types the user name (rd vms-124: OVMXB
+// offered Username: in 8 of 8 cases and was never logged in to). So after a
+// wake the gate looks again every WAKE_FOLLOWUP_MS and logs in the moment the
+// prompt is the last line. What it asserts is unchanged.
+export const WAKE_FOLLOWUP_POLLS = 12;
+export const WAKE_FOLLOWUP_MS = 1000;
+
+// One login step for one node. `io` is the transport: { type(who, text),
+// read(who) -> the node's screen, sleep(ms), user(who), pass(who), log(msg) }.
+export async function driveLoginStep(R, who, el, lastWake, wakeEveryS, io) {
+  let act = loginAction(R, who);
+  if (act === 'wake' && el - (lastWake[who] ?? -1e9) >= wakeEveryS) {
+    lastWake[who] = el;
+    await io.type(who, '\r');
+    act = null;
+    if (LOGIN_NODES.includes(who)) {
+      for (let i = 0; i < WAKE_FOLLOWUP_POLLS && act !== 'login'; i++) {
+        await io.sleep(WAKE_FOLLOWUP_MS);
+        observe(R, who, await io.read(who));
+        observeLogin(R, who, el);
+        act = loginAction(R, who);
+        if (act !== 'login' && act !== 'wake') break;     // logged in, or nothing to do
+      }
+    }
+  }
+  if (act === 'login') {
+    R.login_sent[who] = (R.transcript[who] || '').length;
+    io.log(`  ${who}: offered Username: -- logging in as ${io.user(who)}`);
+    await io.type(who, io.user(who) + '\r');
+    await io.sleep(2500);
+    await io.type(who, io.pass(who) + '\r');
+    return 'login';
+  }
+  return act;
+}
+
 // When a node became usable (seconds since the first click), or undefined: an
 // OVMX node at its logged-in DCL prompt, the real VAX at Username:.
 export const readyAt = (R, w) =>

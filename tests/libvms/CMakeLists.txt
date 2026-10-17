@@ -573,7 +573,8 @@ add_test(NAME test_libvms_struct_layout_gate
 # incidental vms_kif_procscan() reference. _DEFAULT_SOURCE for localtime_r.
 add_executable(test_libvms_ctrl_t_status
     ${CMAKE_CURRENT_SOURCE_DIR}/test_ctrl_t_status.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c)
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_memfile.c)
 target_include_directories(test_libvms_ctrl_t_status PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
     ${VMS_INCLUDE_DIR}

@@ -246,8 +246,21 @@ static void klog_append_operator_log(const char *line)
     if (!f)
         return;                                 /* best-effort */
 
-    fputs(line, f);
-    fclose(f);
+    /* Checked (rd vms-f47): /tmp is a tmpfs, which refuses writes below 4 MB of
+     * available memory, and the on-volume log can refuse too. Still best-effort
+     * for boot, but a refusal is said once rather than lost without a word. */
+    {
+        static int reported;
+        int bad = (fputs(line, f) == EOF);
+
+        if (fclose(f) != 0)
+            bad = 1;
+        if (bad && !reported) {
+            reported = 1;
+            fprintf(stderr, "%%OVMX-W-OPCOM, operator log write refused (%s): "
+                    "boot records will be missing\n", strerror(errno));
+        }
+    }
 }
 
 static void *klog_thread_main(void *arg)

@@ -114,6 +114,48 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           cache-to: ${{ github.ref == 'refs/heads/main' && 'type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms,mode=max,ignore-error=true' || '' }}  # scope cross-alpha-vms's one writer (rd vms-14da)
 
+  # CI speed (lane A): the Linux/Alpha kernel tree + vms.ko (~5 min) and the Alpha
+  # userland are payload-independent, so they are built ONCE here per source hash
+  # and restored by every run-module-gp-activation gate below (composite action
+  # alpha-assets) instead of being recompiled in each of ~20 jobs. A gate whose
+  # restore misses just builds them itself, as before.
+  # KEEP this job's `if` a SUPERSET of every gate that needs it.
+  alpha-assets:
+    name: Alpha executive/kernel + userland, built once (GHCR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.alpha_activation == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+
+      - name: Build the alpha-linux-gnu cross toolchain image
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha
+
+      - name: Build + publish the shared Alpha assets
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: publish
+
   # musl port for alpha-dec-vms — RUNG 1 (vms-960).
   #
   # Build/oracle tooling, Rule-9-clean: nothing here runs inside the OVMX guest.
@@ -679,7 +721,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-boot-mount:
     name: "OVMX/Alpha per-PR activation gate — boots, mounts DKA0:, activates the N=3 image, asserts $STATUS=%X0035A019 (vms-707/vms-c54)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # vms-c54: 150 (was 120) — the N=3 activation gate adds the alpha-dec-vms
@@ -698,10 +740,12 @@ jobs:
       # on a stock runner's ~14 GB root; reclaim the large unused toolchains up
       # front so the boot build can't die on ENOSPC mid-build (mirrors
       # alpha-boot-login).
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -730,6 +774,11 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
+
       - name: "Activation gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, mounts DKA0:, activates the single-proc N=3 image on the real /dev/vms executive over the ODS-2 ACP, asserts $STATUS=%X0035A019 + SS$_NORMAL control (reds on the #853 mount-halt class AND the #921 activation-crash class; runs its own can-fail selftest before the boot)"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
 
@@ -746,7 +795,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-crtl-rms-n7:
     name: "OVMX/Alpha crtl_rms -> N=7 activation gate — boots, activates the crtl_rms heap+RMS+stdio image on the real /dev/vms executive, asserts $STATUS=%X0035A039 (vms-1ef/vms-065c)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -758,10 +807,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -785,6 +836,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "crtl_rms N=7 gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, activates the crtl_rms port image (heap malloc->mallocng + RMS + stdio) on the real /dev/vms executive over the ODS-2 ACP, asserts the heap+RMS+stdio port-test OK + $STATUS=%X0035A039 (sentinel 7); runs its own can-fail selftest before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate
@@ -806,7 +862,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-crtl-rms-veneer:
     name: "OVMX/Alpha CRTL->RMS veneer gate — boots the veneer-wired crtl_rms image on the real /dev/vms executive, then an INDEPENDENT ACP reader (DIRECTORY/FULL) asserts PORTTEST.DAT;1 landed on the ODS-2 volume with a genuine File ID; validates the vms-1fc LLP64 width fix at runtime (vms-f49)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -818,10 +874,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -845,6 +903,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "CRTL->RMS veneer gate — qemu-system-alpha boots the veneer-wired crtl_rms image on the real /dev/vms executive; its decc$fopen writes PORTTEST.DAT via sys$create over the ODS-2 ACP, then an INDEPENDENT reader (DCL DIRECTORY/FULL, a different accessor than the writer's CRTL/RMS handle) asserts PORTTEST.DAT;1 with a genuine ODS-2 File ID a ramfs cannot produce; runs a can-fail selftest (incl. the ramfs-rejection case) before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate
@@ -858,7 +921,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-crtl-rms-fileop:
     name: "OVMX/Alpha CRTL->RMS file-op veneer gate — boots the veneer-wired crtl_rms3 image on the real /dev/vms executive; its decc$open/creat/unlink/rename/opendir/readdir/closedir reach the ODS-2 ACP, then an INDEPENDENT DIRECTORY reader asserts the created+renamed files landed with genuine File IDs and the deleted+renamed-away files are gone (vms-3320, blocks vms-fd1)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -870,10 +933,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -897,6 +962,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "CRTL->RMS file-op veneer gate — independent DIRECTORY reader asserts genuine ODS-2 effects of the port image file-ops; 4-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate
@@ -906,7 +976,7 @@ jobs:
   # vms-254 the native GCC (cc1 reading sources, writing .s) needs.
   alpha-crtl-fd:
     name: "OVMX/Alpha C RTL file layer over RMS — a 32-bit DEC C program's stdio and descriptor calls (fopen/fputs/fgets/open/read/lseek/fstat/stat/dup2/rename/unlink) run over RMS on the ODS-2 volume; DCL writes the record file it reads and DCL TYPE reads back what it wrote (vms-b90, blocks vms-fd1)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -918,10 +988,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -945,6 +1017,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "C RTL file-layer gate — DCL writer + DCL TYPE independent reader; 4-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate
@@ -954,7 +1031,7 @@ jobs:
   # control blocks -- what GCC's VMS-host code calls.
   alpha-vmsabi-rms:
     name: "OVMX/Alpha VMS-ABI RMS — a 32-bit DEC C program calls SYS$PARSE/SYS$SEARCH with a VMS-layout FAB/NAM (vms/rms.h) as GCC vmsdbgout.cc does; NAM$W_FID/DID filled, DIRECTORY/FULL shows the same File ID (vms-692, blocks vms-fd1)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -966,10 +1043,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -993,13 +1072,18 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "VMS-ABI RMS gate — DIRECTORY/FULL File ID cross-check; 3-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate
 
   alpha-native-image:
     name: "OVMX/Alpha native image — .EXE files LINKed on real OpenVMS Alpha V8.4 run unchanged: SYS$QIOW/LIB$PUT_OUTPUT (rung 1), DECC$SHR stdio via DECC$SHR_EV56 (rung 2), two-module image + own shareable with GSMATCH and DEFINE (rung 3); refusals match the real activator (vms-3b3f)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1011,10 +1095,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1038,6 +1124,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "Native-image gate — rungs 1-3 run, refusals as on VMS; 20-case can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate
@@ -1057,7 +1148,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-mf-multifile:
     name: "OVMX/Alpha multi-.o STRICT-link activation gate — boots, activates a real multi-object program (mf_main.obj + mf_util.obj, cross-.o malloc/free/strlen/strcmp/memcpy) on the real /dev/vms executive, asserts $STATUS=%X0035A029 (vms-bdd)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1069,10 +1160,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1096,6 +1189,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "multi-.o STRICT-link gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, STRICT-links (no --allow-undefined) a real multi-object program (mf_main.obj + mf_util.obj across a .o boundary, cross-.o malloc/free/strlen/strcmp/memcpy resolved incl. the ex-blocker decc$free), activates it on the real /dev/vms executive over the ODS-2 ACP, asserts the cross-.o port-test OK + $STATUS=%X0035A029 (sentinel 5); runs its own can-fail selftest before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate
@@ -1109,7 +1207,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-libinit:
     name: "OVMX/Alpha LIB$INITIALIZE gate — the STARLET dispatcher runs the image's LIB$INITIALIZE routines in psect order before main, on the real /dev/vms executive (vms-43c)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1121,10 +1219,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1148,6 +1248,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "LIB$INITIALIZE gate — two longword LIB$INITIALIZE entries run in order before main on the real executive (P0 image); can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh libinit-gate
@@ -1163,7 +1268,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-invo:
     name: "OVMX/Alpha anchorless SYS$UNWIND — the genuine invocation-context walk + machine transfer resume main after its call with R0 from the mechanism array (vms-ed1)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1175,10 +1280,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1202,6 +1309,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "anchorless SYS$UNWIND return-to-main gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh invo-gate
@@ -1214,7 +1326,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-chf:
     name: "OVMX/Alpha SYS$GL_CALL_HANDL — from inside a condition handler the invocation walk finds the dispatcher frame with its CHF context, then the signalling point (vms-bfd03)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1226,10 +1338,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1253,6 +1367,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "SYS$GL_CALL_HANDL dispatcher-frame gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh chf-gate
@@ -1262,7 +1381,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-vfork:
     name: "OVMX/Alpha DEC C vfork()/exec*() — a 32-bit program creates a subprocess running an ODS-2 image with arguments, pipes its output back and reaps it (vms-fb4)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1274,10 +1393,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1301,6 +1422,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "vfork gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh vfork-gate
@@ -1310,7 +1436,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-p0heap:
     name: "OVMX/Alpha C RTL heap in P0 — small/large/calloc/moving realloc/anon mmap all below 0x40000000 on the real executive (vms-122)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1322,10 +1448,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1349,6 +1477,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "P0 heap gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh p0heap-gate
@@ -1358,7 +1491,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-p1stack:
     name: "OVMX/Alpha user stack in P1 — locals, 20 MB of depth and the longword invocation handle in P1 on the real executive (vms-ce5)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1370,10 +1503,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1397,6 +1532,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "P1 stack gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh p1stack-gate
@@ -1406,7 +1546,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-p32:
     name: "OVMX/Alpha DEC C 32-bit-pointer program — string/memory/allocator/strto*/strsep/strtok_r/qsort through the 32-bit DECC$SHR entry points (vms-5bc9)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1418,10 +1558,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1445,6 +1587,11 @@ jobs:
           tags: ovmx-cross-alpha-vms:latest
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "32-bit-pointer program gate — qemu-system-alpha + /dev/vms; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh p32-gate
@@ -1459,7 +1606,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-cxx:
     name: "OVMX/Alpha C++ — a g++/libstdc++ program (ctor, virtual, string/vector, caught exception) built over the OVMX C RTL runs on the real executive (vms-4d0)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
@@ -1474,10 +1621,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1508,6 +1657,11 @@ jobs:
         with:
           mode: fetch
           key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "C++ gate — stage-2 g++ over the OVMX C RTL, qemu-system-alpha + /dev/vms; can-fail selftest first"
         env:
@@ -1528,7 +1682,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-cxx32:
     name: "OVMX/Alpha C++ at the DEC C default 32-bit pointer size — the same program against the toolchain's 32-bit libstdc++ (vms-1045)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
@@ -1543,10 +1697,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1577,6 +1733,11 @@ jobs:
         with:
           mode: fetch
           key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "C++ gate — stage-2 g++ over the OVMX C RTL, qemu-system-alpha + /dev/vms; can-fail selftest first"
         env:
@@ -1599,7 +1760,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-cc1:
     name: "OVMX/Alpha self-hosting — GCC's cc1, built for the alpha-dec-vms host, compiles a C file on OVMX; DCL TYPE of its assembly equals the cross compiler's (vms-9a63)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
@@ -1614,10 +1775,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1648,6 +1811,11 @@ jobs:
         with:
           mode: fetch
           key: ${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "cc1 gate — host GCC over the OVMX C RTL, cc1 on qemu-system-alpha + /dev/vms; can-fail selftest first"
         env:
@@ -1687,7 +1855,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-shipped-shareable-activation:
     name: "OVMX/Alpha ships + activates real VMS shareable images — SYSLIB-staged genuine DECC$SHR/LIBOTS$SHR via the ordinary packaging path, asserts $STATUS=%X0035A019 (vms-410)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
@@ -1699,10 +1867,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
-      - name: Free up disk space
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
           df -h /
 
       - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
@@ -1727,6 +1897,11 @@ jobs:
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
           # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
 
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
+
       - name: "Shipped shareable gate — build-alpha-bootimage.sh's OWN packaging (not caller-injection) stages the genuine DECC$SHR + LIBOTS$SHR into SYS$SHARE, qemu-system-alpha boots the assembled runtime, IMGACT activates a shipped consumer image over the real /dev/vms + ODS-2 ACP, asserts $STATUS=%X0035A019; runs its own can-fail selftest before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate
 
@@ -1744,7 +1919,7 @@ jobs:
   # -----------------------------------------------------------------------
   alpha-activation-selftest:
     name: "OVMX/Alpha N=3 activation gate — assert_activation() can-fail proof (vms-c54, Rule 7)"
-    needs: changes
+    needs: [changes, alpha-assets]
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1752,6 +1927,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
 
       - name: "Selftest — the N=3 activation assertion rejects a wrong sentinel, a missing crt0-join, a broken SS$_NORMAL anchor, an IMGACT activation failure, and an activated-but-crashed image (no build, no boot, seconds)"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh selftest
@@ -2057,6 +2237,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - changes
+      - alpha-assets
       - alpha-toolchain-image
       - musl-alpha-vms
       - gcc-port-include-surface

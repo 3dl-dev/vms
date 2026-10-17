@@ -1896,6 +1896,16 @@ jobs:
         env:
           OVMX_CXX_TOOLCHAIN: ${{ github.workspace }}/.cxxtc
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh as-gate
+      - name: Keep as.exe and the boot log (a fault PC is read against the exact image that ran)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-as-and-boot-log
+          path: |
+            .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
+            .boot-cache/alpha-modgp-gate/boot/modgpA.log
+          if-no-files-found: ignore
+          retention-days: 7
   # -----------------------------------------------------------------------
   # alpha-shipped-shareable-activation (vms-410, vms-deec Decision B): Alpha
   # ships + activates real VMS shareable images. The Alpha VMS-format

@@ -272,14 +272,45 @@ static int parse_kmsg_record(const char *raw, size_t rawlen,
  * provision (opcom_kmsg_seed_operator_log()); it does not, and must not, stand
  * in for that log to a reader (INV-6).
  */
+int opcom_kmsg_spool_append(const char *path, const char *line)
+{
+    size_t len = strlen(line), off = 0;
+    int fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0600);
+
+    if (fd < 0)
+        return -errno;
+    while (off < len) {
+        ssize_t w = write(fd, line + off, len - off);
+
+        if (w < 0) {
+            int e = errno;
+
+            if (e == EINTR)
+                continue;
+            close(fd);
+            return -e;
+        }
+        off += (size_t)w;
+    }
+    close(fd);
+    return 0;
+}
+
 static void opcom_kmsg_append_operator_log(const char *line)
 {
-    int fd = open(OPCOM_KMSG_SEED_SPOOL, O_WRONLY | O_APPEND | O_CREAT, 0600);
-    if (fd < 0)
-        return;  /* best-effort -- see opcom_kmsg_start()'s comment */
+    static int reported;
+    int rc = opcom_kmsg_spool_append(OPCOM_KMSG_SEED_SPOOL, line);
 
-    (void)write(fd, line, strlen(line));
-    close(fd);
+    /* Still best-effort -- a failure never blocks or fails boot -- but no longer
+     * silent: on NetBSD /tmp is a tmpfs, which refuses writes below 4 MB of
+     * available memory (rd vms-f47), and the operator log would otherwise just
+     * lack its boot records with nothing saying so. Said once. */
+    if (rc != 0 && !reported) {
+        reported = 1;
+        fprintf(stderr, "%%OVMX-W-OPCOM, boot message spool %s refused (%s): "
+                "the operator log will lack boot records\n",
+                OPCOM_KMSG_SEED_SPOOL, strerror(-rc));
+    }
 }
 
 /* Set by opcom_kmsg_stop(); the reader notices within one poll period. */

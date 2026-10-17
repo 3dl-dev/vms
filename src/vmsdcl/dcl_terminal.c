@@ -21,6 +21,7 @@
 #include <inttypes.h>
 
 #include "dcl/terminal.h"
+#include "dcl/dcl_memfile.h"
 #include "ssdef.h"
 /* struct vms_procinfo + VMS_PI_V_* valid-bit mask (the executive's $GETJPI
  * contract) -- src/libvmssys/vms_kif.h pulls src/kernel/vms_ioctl.h. */
@@ -363,7 +364,10 @@ int dcl_page_begin(struct dcl_pager *pg)
     if (!isatty(STDOUT_FILENO) || !dcl_tt_assign())
         return 0;                       /* not a terminal: no pager */
     fflush(stdout);
-    pg->tmp = tmpfile();
+    /* A scratch file that cannot take data means no pager, and the listing goes
+     * straight to the terminal -- never into a buffer that silently drops it
+     * (rd vms-f47: tmpfs refuses writes below 4 MB of available memory). */
+    pg->tmp = dcl_scratch_tmpfile();
     if (!pg->tmp)
         return 0;
     pg->save = dup(STDOUT_FILENO);
@@ -387,6 +391,10 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
     if (!pg->tmp)
         return;
     fflush(stdout);
+    int page_werr = ferror(stdout);      /* the buffer filled mid-command */
+    clearerr(stdout);
+    if (page_werr)
+        fprintf(stderr, "%%DCL-W-PAGEFULL, output exceeded the paging buffer; the listing is incomplete\n");
     dup2(pg->save, STDOUT_FILENO);
     close(pg->save);
     pg->save = -1;

@@ -544,7 +544,9 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
      * lines) reads SYS$INPUT from the procedure, not the terminal. Set up
      * before the fork so the child inherits fd 0; restore on every return. */
     struct dcl_sysinput si;
-    dcl_sysinput_setup(ctx, &si);
+    int srt = dcl_sysinput_setup(ctx, &si);
+    if (srt)
+        return srt;
 
     uint32_t status = SS$_NORMAL;
     int pcb_hold[2];

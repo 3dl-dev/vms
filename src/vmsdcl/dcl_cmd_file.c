@@ -3181,7 +3181,9 @@ int cmd_create(struct dcl_command *cmd)
      * record ($PUT), with the trailing newline stripped (RMS records carry no
      * terminator; the RAT=CR attribute supplies it on read-back). */
     struct dcl_sysinput si;
-    dcl_sysinput_setup(ctx, &si);
+    int srt = dcl_sysinput_setup(ctx, &si);
+    if (srt)
+        return srt;
     if (ctx->interactive || ctx->proc_depth >= 0) {
         char line[4096];
         /* A ^Z that ended an earlier CREATE left stdin's end-of-file flag

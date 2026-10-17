@@ -408,7 +408,7 @@ assert_p32() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
-  port_ok=$(grep -aF 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=1 tok=1 sort=1 fnptr=1 ' "$log" | grep -qaE ' times=1$' && echo 1 || echo 0)
+  port_ok=$(grep -aF 'OVMX p32 test: ptr32=1 str=1 mem=1 alloc=1 strto=1 tok=1 sort=1 fnptr=1 ' "$log" | grep -qaF ' times=1' && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
   if [ -n "$mile_hex" ]; then

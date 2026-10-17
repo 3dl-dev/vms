@@ -489,6 +489,31 @@ void cnxman_csb_dialogue_sent(struct vms_csb *csb);
 /* rd vms-cd8: hand back the number of a body that was refused before it left
  * (vms_cnxman.c cnxman_cm_send). Only the number handed out LAST. */
 void cnxman_csb_dialogue_unsent(struct vms_csb *csb);
+
+/*
+ * rd vms-fb0: DID A REFUSED SEND KEEP ITS send-msg#?  Pure; every input is a
+ * read of executive state taken by the caller.
+ *
+ * `abort_status` is whether SCS answered SS$_ABORT -- the ONE status SCS
+ * answers for every transport refusal, so on its own it cannot say whether the
+ * port TOOK the frame. `port_was_refuser`/`port_rc` are the CDT's own record of
+ * who refused and what the port said verbatim, and `held_rc` is the one port
+ * code that means "the frame is in the retransmit ring and WILL go out"
+ * (PE_VC_SEND_TXFAIL). Every other port refusal (no credit, ring full, no
+ * circuit, bad/oversize frame, the wire-safety guard) consumed nothing, so the
+ * number it was stamped with was never on the wire and must be handed back --
+ * else the peer sees a send-msg# hole and a real VAX takes a fatal CNXMGRERR
+ * (run 39072069037: 218 -> 222 with the port window spent).
+ *
+ * Returns 1 when the number STANDS (the frame is held), 0 when it must be
+ * returned. When SCS refused for its own reason (abort_status 0) the frame was
+ * not taken either, so the number is returned (0). When the CDT cannot say who
+ * refused, the number stands: the earlier behaviour, never a guess.
+ */
+int cnxman_csb_refused_send_keeps_number(int abort_status,
+					 int refusal_known,
+					 int port_was_refuser,
+					 int32_t port_rc, int32_t held_rc);
 void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg);
 
 /*

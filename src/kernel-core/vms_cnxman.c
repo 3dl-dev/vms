@@ -608,9 +608,25 @@ static int cnxman_cm_send(struct vms_cnxman *cn, vms_conid_t conid,
 			  const uint8_t *body, uint32_t len)
 {
 	int st = scs_send_msg(cn->cl->scs, conid, body, len);
+	int keeps = 0;
 
-	if (st != (int)SS__NORMAL && st != (int)SS__ABORT && body != NULL &&
-	    len >= 2u) {
+	if (st != (int)SS__NORMAL && body != NULL && len >= 2u) {
+		struct scs_send_refusal r;
+		int known = 0;
+
+		/* rd vms-fb0: SS$_ABORT is every transport refusal; only the
+		 * port's TXFAIL holds the frame. Ask the CDT who refused. */
+		if (st == (int)SS__ABORT) {
+			memset(&r, 0, sizeof(r));
+			known = (scs_send_refusal(cn->cl->scs, conid, &r) ==
+				 (int)SS__NORMAL);
+		}
+		keeps = cnxman_csb_refused_send_keeps_number(
+			st == (int)SS__ABORT, known,
+			known ? r.port_was_refuser : 0,
+			known ? r.port_rc : 0, (int32_t)PE_VC_SEND_TXFAIL);
+	}
+	if (st != (int)SS__NORMAL && !keeps && body != NULL && len >= 2u) {
 		struct vms_csb *csb = csb_by_conid(&cn->cl->club, conid);
 		uint16_t sent = (uint16_t)(body[0] | (uint16_t)body[1] << 8);
 

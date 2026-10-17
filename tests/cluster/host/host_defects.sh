@@ -244,6 +244,7 @@ join-k10-close-withheld
 join-k5-close-withheld
 csb-0b01-answer-ignores-join-order
 guard-ignores-category-0b
+refused-send-always-keeps-number
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
@@ -1290,6 +1291,22 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** acking the peer's 0x0b/0x06 (its send 4) goes out ***
   nothing refused
+EOF
+                      ;;
+        esac;;
+
+    refused-send-always-keeps-number)
+        case "$_f" in
+        facility)     echo "a CM send the port did not take hands its send-msg# back; only a frame the port HOLDS keeps it (rd vms-fb0)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_refused_send_keeps_number() answers the number stands for every SS-dollar-ABORT, so a send the port refused for want of credit keeps its send-msg#. Run 39072069037: three such sends left a 218 to 222 hole and the real VAX took a fatal CNXMGRERR.";;
+        require_fail) hd_lines <<'EOF'
+port NOCREDIT (window spent): the number is handed back
+port RINGFULL: the number is handed back
+port UNSAFE (wire-safety guard): the number is handed back
+a non-ABORT refusal: the number is handed back
 EOF
                       ;;
         esac;;
@@ -3168,6 +3185,10 @@ apply_edit() {
     guard-ignores-category-0b)
         # `	case 0x0bu:` is unique in this file.
         sed -i 's|^	case 0x0bu:$|	case 0x7fu: /* NEGCTL guard-ignores-category-0b */|' "$_file";;
+
+    refused-send-always-keeps-number)
+        # `	return port_rc == held_rc;` is unique in this file.
+        sed -i 's#^	return port_rc == held_rc;$#	return (port_rc == held_rc) || 1; /* NEGCTL refused-send-always-keeps-number */#' "$_file";;
 
     pe-blk-frame-unringed)
         # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.

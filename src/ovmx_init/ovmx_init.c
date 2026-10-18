@@ -1000,39 +1000,27 @@ static void stage_boot_images(void)
      * optional never masks a broken volume.
      */
     static const char *const utils[] = {
-        "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "MAIL.EXE",
-        "MONITOR.EXE", "INITIALIZE.EXE", "PRODUCT.EXE", "LIBRARIAN.EXE",
-        "HELP.EXE", "SCSD.EXE",
+        /* Boot/startup needs these resident: STARTUP.COM runs INSTALL and
+         * SYSGEN, SYSTARTUP runs AUTHORIZE, the cluster daemon is SCSD, and
+         * NETACP $CREPRCs the network servers and DECNETD (a $CREPRC has no lazy
+         * staging path). Every OTHER SYS$SYSTEM utility (MAIL, MONITOR,
+         * INITIALIZE, PRODUCT, LIBRARIAN, HELP, TCC, LINK) is staged on first
+         * use by DCL (dcl_exec_utility -> dcl_resolve_activatable), not here:
+         * the staging directory is a tmpfs, i.e. RAM, and holding all of them
+         * took ~40% of a 16 MB VAX's free memory at boot (rd vms-83d/4029/97c2:
+         * ENOSPC, get_pventry panic, a console that never offers Username:). */
+        "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "SCSD.EXE",
         /* OVMX/VAX: the native image activator DCL execs for an image LINKed
          * on real OpenVMS VAX (vms-b869); absent elsewhere. */
         "NATIVEACT.EXE",
         /* The DECnet FAL network server (rd vms-d85): NETACP $CREPRCs it with
-         * the authenticated user's UIC for each inbound file access, and
-         * $CREPRC execve()s -- the same SYSEXE-utility class as above. */
+         * the authenticated user's UIC for each inbound file access. */
         "FAL.EXE",
         /* The DECnet MAIL-11 network server (rd vms-47fd): NETACP $CREPRCs it
-         * under the MAIL object account for each inbound NODE::USER mail --
-         * the same server-image class as FAL.EXE. Without it on the exec
-         * stage, a booted node refuses every inbound mail (NOIMAGE). */
+         * under the MAIL object account for each inbound NODE::USER mail. */
         "MAIL_SERVER.EXE",
-        /* NETACP's own image (rd vms-c6d1): DECNETD.EXE $CREPRCs a copy of
-         * itself as an unprivileged request-mailbox probe in the booted
-         * brokered-link proof -- the same $CREPRC/execve server-image class.
-         * (STARTNET's RUN/DETACHED reaches it through DCL's lazy ACP staging;
-         * a $CREPRC from NETACP has no such path.) */
+        /* NETACP's own image (rd vms-c6d1). */
         "DECNETD.EXE",
-        /* OVMX-native toolchain (vms-104). The MMK self-host path defines
-         * TCC :== $SYS$SYSTEM:TCC.EXE and LNK :== $SYS$SYSTEM:LINK.EXE (the
-         * descrip.mms toolchain verbs) and fork()+execve()s each (a plain
-         * static image is not in-process-eligible,
-         * so dcl_activate_image forks it) -- exactly the SYSEXE-utility class
-         * above, so they stage the SAME way: bytes off the genuine ODS-2 volume
-         * through the ACP (INV-6), rewritten to the staged copy by
-         * dcl_resolve_activatable_acp / dcl_exec_utility when /vms is absent.
-         * BEST-EFFORT like the rest: a system disk that does not ship the
-         * toolchain (a minimal, non-self-hosting install) skips them honestly.
-         * LIBRARIAN.EXE is already staged above (it is also a SYSEXE utility). */
-        "TCC.EXE", "LINK.EXE",
     };
     for (size_t i = 0; i < sizeof(utils) / sizeof(utils[0]); i++) {
         char acp_path[512], dest[512];

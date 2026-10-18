@@ -536,6 +536,21 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
             bin = staged_path;
     }
 
+    /*
+     * LAZY STAGING (rd vms-83d): a utility the boot bridge did NOT pre-stage
+     * (MAIL, MONITOR, INITIALIZE, PRODUCT, LIBRARIAN, HELP, TCC, LINK) is read
+     * off the ODS-2 volume over the ACP NOW, into this user's private staging
+     * directory -- the same lazy path RUN takes (dcl_resolve_activatable). The
+     * boot no longer holds every utility image in RAM (tmpfs) on a 16 MB VAX.
+     */
+    char lazy_path[PATH_MAX];
+    if (!bin && ctx) {
+        const char *resolved = (sys_path[0] ? sys_path : def_path);
+        if (dcl_resolve_activatable(ctx, vms_spec, resolved, lazy_path,
+                                    sizeof(lazy_path)))
+            bin = lazy_path;
+    }
+
     /* Set argv[0] to resolved path or exe_name for PATH search */
     argv[0] = (char *)(bin ? bin : exe_name);
 

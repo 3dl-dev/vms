@@ -26,6 +26,6 @@ EOF2
 }
 
 defect_apply() {
-        sed -i 's|^            if (qs != SS\$_NORMAL)$|            if (0 \&\& qs != SS$_NORMAL) /* NEGCTL dcl-set-quals-accept-all */|' "$_file"
+        sed -i 's|^            uint32_t qs = dcl_validate_qualifiers(&shim, cmd);$|            uint32_t qs = SS$_NORMAL; (void)shim; /* NEGCTL dcl-set-quals-accept-all */|' "$_file"
     :
 }

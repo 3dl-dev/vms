@@ -3447,114 +3447,43 @@ int cmd_install(struct dcl_command *cmd)
 /*
  * LINK - Link object modules into an executable image.
  *
- * LINK file1[,file2,...]
- * /EXECUTABLE=name — output executable name
- * /MAP — produce link map
+ *   LINK[/EXECUTABLE[=spec]] [/NOINFORMATIONALS] file[/qual][,file...] ...
  *
- * Wraps the system linker (cc).
+ * The verb's argument tail goes to SYS$SYSTEM:LINK.EXE exactly as typed; the
+ * linker reads the VMS command syntax itself (src/vmslink/vms_cli.c), as OpenVMS
+ * LINK reads its own command line. (This was a wrapper around the host `cc`; it
+ * wrote an image no OVMX activator could run.) The qualifier table in
+ * dcl_builtin.c keeps DCL's %DCL-W-IVQUAL for anything LINK.EXE does not know.
  */
 int cmd_link(struct dcl_command *cmd)
 {
-    struct dcl_context *ctx = dcl_get_context();
-
-    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
-        dcl_error("LINK", 2, "NOFILES", "no input files specified");
-        return SS$_BADPARAM;
-    }
-
-    /* Collect input files — params may be comma-separated */
-    char *input_files[64];
-    int input_count = 0;
-    char resolved[64][1024];
-
-    for (int i = 0; i < cmd->param_count && input_count < 64; i++) {
-        if (cmd->params[i][0] == '\0') continue;
-
-        /* Split on commas */
-        char temp[DCL_MAX_LINE];
-        strncpy(temp, cmd->params[i], sizeof(temp) - 1);
-        temp[sizeof(temp) - 1] = '\0';
-
-        char *tok = strtok(temp, ",");
-        while (tok && input_count < 64) {
-            while (*tok == ' ') tok++;
-            if (*tok) {
-                dcl_resolve_path(ctx, tok, resolved[input_count],
-                                 sizeof(resolved[input_count]));
-                input_files[input_count] = resolved[input_count];
-                input_count++;
-            }
-            tok = strtok(NULL, ",");
-        }
-    }
-
-    if (input_count == 0) {
-        dcl_error("LINK", 2, "NOFILES", "no input files specified");
-        return SS$_BADPARAM;
-    }
-
-    /* Determine output name */
-    char output_name[1024];
-    const char *exe_val = dcl_qualifier_value(cmd, "EXECUTABLE");
-    if (exe_val && exe_val[0]) {
-        dcl_resolve_path(ctx, exe_val, output_name, sizeof(output_name));
-    } else {
-        /* Default: first input name without extension + .EXE */
-        strncpy(output_name, input_files[0], sizeof(output_name) - 1);
-        output_name[sizeof(output_name) - 1] = '\0';
-        char *dot = strrchr(output_name, '.');
-        if (dot) *dot = '\0';
-        strncat(output_name, ".EXE", sizeof(output_name) - strlen(output_name) - 1);
-    }
-
-    /* Check /MAP qualifier */
-    int want_map = dcl_has_qualifier(cmd, "MAP");
-    char map_name[1024] = {0};
-    if (want_map) {
-        strncpy(map_name, output_name, sizeof(map_name) - 1);
-        map_name[sizeof(map_name) - 1] = '\0';
-        char *dot = strrchr(map_name, '.');
-        if (dot) *dot = '\0';
-        strncat(map_name, ".MAP", sizeof(map_name) - strlen(map_name) - 1);
-    }
-
-    /* Print linking message */
-    printf("%%LINK-I-LINK, linking %s...\n", output_name);
-
-    /* Build cc command: cc -o output input1 input2 ... [-Wl,-Map,mapfile] */
-    char *argv[128];
+    char *argv[DCL_MAX_PARAMS * 4 + 8] = {NULL};
     int argc = 0;
-    argv[argc++] = "cc";
-    argv[argc++] = "-o";
-    argv[argc++] = output_name;
-    for (int i = 0; i < input_count && argc < 120; i++)
-        argv[argc++] = input_files[i];
-    if (want_map) {
-        static char map_flag[1100];
-        snprintf(map_flag, sizeof(map_flag), "-Wl,-Map,%s", map_name);
-        argv[argc++] = map_flag;
+    argv[argc++] = NULL;                      /* placeholder for the resolved image */
+
+    /* split the raw tail on blanks outside double quotes */
+    static char tail[sizeof(cmd->raw_tail) + 1];
+    snprintf(tail, sizeof tail, "%s", cmd->raw_tail);
+    char *p = tail;
+    while (*p && argc < (int)(sizeof argv / sizeof argv[0]) - 1) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        char *start = p;
+        int inq = 0;
+        while (*p && (inq || (*p != ' ' && *p != '\t'))) {
+            if (*p == '"') inq = !inq;
+            p++;
+        }
+        if (*p) *p++ = '\0';
+        argv[argc++] = start;
     }
     argv[argc] = NULL;
 
-    /* The linker runs in a subprocess the executive made (rd vms-1f8). */
-    pid_t pid = ovmx_subprocess_fork(NULL, NULL);
-    if (pid == 0) {
-        execvp("cc", argv);
-        _exit(127);
-    } else if (pid > 0) {
-        int wstatus;
-        waitpid(pid, &wstatus, 0);
-        if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0) {
-            printf("%%LINK-I-DONE, %s linked successfully\n", output_name);
-            return SS$_NORMAL;
-        } else {
-            dcl_error("LINK", 2, "FAILED", "error linking image");
-            return SS$_ABORT;
-        }
-    } else {
-        dcl_error("LINK", 4, "CREPRC", "cannot create linker process");
-        return SS$_ABORT;
+    if (argc < 2) {
+        dcl_error("LINK", 2, "NOFILES", "no input files specified");
+        return SS$_BADPARAM;
     }
+    return dcl_exec_utility("LINK.EXE", "LINK", argv, argc);
 }
 
 /* ================================================================== */

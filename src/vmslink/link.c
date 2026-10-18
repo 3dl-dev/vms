@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -359,6 +360,18 @@ struct univ {
                          * aliases the alpha-dec-vms port imports. uv[] is static
                          * (BSS), so the larger struct univ (name+internal) costs
                          * no stack. */
+
+/* /NOINFORMATIONALS (VMS syntax): the %LINK-I- messages are not written. */
+static int g_noinform;
+static void link_info(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void link_info(const char *fmt, ...)
+{
+    if (g_noinform) return;
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+}
 
 static void die(const char *msg)
 {
@@ -766,7 +779,7 @@ static void load_archive(const char *path, struct obj **objs, int *n, int *cap)
         if (pos & 1) pos++;   /* members are 2-byte aligned */
     }
     free(abuf);
-    fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d object member%s pulled (whole-archive)\n",
+    link_info("%%LINK-I-ARCHIVE, %s: %d object member%s pulled (whole-archive)\n",
             path, members, members == 1 ? "" : "s");
 }
 
@@ -991,7 +1004,7 @@ static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
     for (int p = 0; p < npool; p++) {
         int got = 0;
         for (int m = 0; m < pools[p].nmem; m++) if (pools[p].pulled[m]) got++;
-        fprintf(stderr, "%%LINK-I-LIBRARY, %s: %d of %d member%s pulled (selective)\n",
+        link_info("%%LINK-I-LIBRARY, %s: %d of %d member%s pulled (selective)\n",
                 pools[p].path, got, pools[p].nmem, pools[p].nmem == 1 ? "" : "s");
     }
 }
@@ -3521,18 +3534,18 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
     if (nstrong)
-        fprintf(stderr, "%%LINK-I-IMPORT, %d cross-image import%s bound to --use "
+        link_info("%%LINK-I-IMPORT, %d cross-image import%s bound to --use "
                 "producer%s (%d PLT stub%s + import GOT; resolved at activation "
                 "via .vms$imp)\n",
                 nstrong, nstrong==1?"":"s", np==1?"":"s",
                 nstrong, nstrong==1?"":"s");
     if (nweak)
-        fprintf(stderr, "%%LINK-I-WEAKIMP, %d weak-by-name import%s "
+        link_info("%%LINK-I-WEAKIMP, %d weak-by-name import%s "
                 "(resolved by NAME against the loaded producer set at activation "
                 "via .vms$wimp; absent -> 0, ELF weak-undef)\n",
                 nweak, nweak==1?"":"s");
     if (g_deferred)
-        fprintf(stderr, "%%LINK-I-DEFEXT, %ld external reference%s left unresolved "
+        link_info("%%LINK-I-DEFEXT, %ld external reference%s left unresolved "
                 "(deferred imports — satisfied by the C RTL / a companion "
                 "shareable at activation, vms-61f)\n",
                 g_deferred, g_deferred == 1 ? "" : "s");
@@ -3973,14 +3986,14 @@ static void evax_add_ximport(struct evax_input *in, int ii,
         /* No --use producer exports it: IMGACT binds it BY NAME against the
          * loaded producer set (.vms$wimp); absent -> the cell stays 0. */
         e->pidx = -1; e->svidx = 0;
-        fprintf(stderr, "%%LINK-I-WEAKIMP, EVAX weak reference '%s' bound by name at "
+        link_info("%%LINK-I-WEAKIMP, EVAX weak reference '%s' bound by name at "
                 "activation, image-relative 0x%llx (%s)\n", r->sym,
                 (unsigned long long)site_va,
                 r->type == EVAX_R_LINKAGE ? "LINKAGE quad[0]" : "data pointer");
         return;
     }
     (*n_ximport)++;
-    fprintf(stderr, "%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to --use "
+    link_info("%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to --use "
             "producer %s [sv#%u], IMGACT-filled at image-relative 0x%llx (%s)\n",
             r->sym, producers[pidx].name, svidx, (unsigned long long)site_va,
             r->type == EVAX_R_LINKAGE ? "LINKAGE quad[0]" : "data pointer");
@@ -4022,7 +4035,7 @@ static void evax_fold_globalvalue(struct evax_input *in, int ii,
     default:
         die("unexpected relocation type folding a globalvalue");
     }
-    fprintf(stderr, "%%LINK-I-GVALFOLD, EVAX globalvalue '%s' folded to absolute "
+    link_info("%%LINK-I-GVALFOLD, EVAX globalvalue '%s' folded to absolute "
             "0x%llx at image-relative 0x%llx (link-time constant, no import cell)\n",
             r->sym, (unsigned long long)folded, (unsigned long long)site_va);
 }
@@ -4758,12 +4771,12 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     struct evax_wredir *wredir = wredir_cap ? calloc((size_t)wredir_cap, sizeof *wredir) : NULL;
     int n_wredir = wredir ? evax_build_weak_redir(in, nin, wredir, wredir_cap) : 0;
     if (n_wredir) {
-        fprintf(stderr, "%%LINK-I-WEAKOVR, %d strong-over-weak redirect slot%s "
+        link_info("%%LINK-I-WEAKOVR, %d strong-over-weak redirect slot%s "
                 "(overridden weak descriptor/code -> strong def)\n",
                 n_wredir, n_wredir == 1 ? "" : "s");
         if (getenv("OVMX_LINK_DUMP_WEAKOVR"))
             for (int i = 0; i < n_wredir; i++)
-                fprintf(stderr, "%%LINK-I-WEAKOVR, redirect from=0x%llx to=0x%llx\n",
+                link_info("%%LINK-I-WEAKOVR, redirect from=0x%llx to=0x%llx\n",
                         (unsigned long long)wredir[i].from,
                         (unsigned long long)wredir[i].to);
     }
@@ -5036,36 +5049,36 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         is_shareable ? (uint32_t)nuniv : xfer_count);
     /* Layout map (stderr) — aids hand-tracing + the integration test. */
     for (int k = 0; k < nos; k++)
-        fprintf(stderr, "%%LINK-I-SECT, %-10s addr=0x%llx size=0x%llx\n",
+        link_info("%%LINK-I-SECT, %-10s addr=0x%llx size=0x%llx\n",
                 osec[k].name, (unsigned long long)osec[k].addr,
                 (unsigned long long)osec[k].size);
     if (!is_shareable)
     {
-        fprintf(stderr, "%%LINK-I-XFER, transfer '%s' -> image-relative 0x%llx\n",
+        link_info("%%LINK-I-XFER, transfer '%s' -> image-relative 0x%llx\n",
                 transfer, (unsigned long long)transfer_va);
         if (xfer_count == 2)
-            fprintf(stderr, "%%LINK-I-LIBINIT, LIB$INITIALIZE first in the transfer "
+            link_info("%%LINK-I-LIBINIT, LIB$INITIALIZE first in the transfer "
                     "vector (0x%llx); %llu byte%s of LIB$INITIALIZE entries\n",
                     (unsigned long long)libinit_va,
                     (unsigned long long)(ld_arr[3].e - ld_arr[3].s),
                     ld_arr[3].e - ld_arr[3].s == 1 ? "" : "s");
     }
     else {
-        fprintf(stderr, "%%LINK-I-SYMVEC, .vms$sv at 0x%llx, %d universal%s, "
+        link_info("%%LINK-I-SYMVEC, .vms$sv at 0x%llx, %d universal%s, "
                 "GSMATCH kind=%u %u.%u\n",
                 (unsigned long long)off_sv, nuniv, nuniv == 1 ? "" : "s",
                 gk, gmaj, gmin);
         for (int i = 0; i < nuniv; i++)
-            fprintf(stderr, "%%LINK-I-UNIV, sv#%d %-24s kind=%u value=0x%llx\n",
+            link_info("%%LINK-I-UNIV, sv#%d %-24s kind=%u value=0x%llx\n",
                     i, uv[i].name, uv[i].kind, (unsigned long long)uv[i].value);
     }
     if (n_ximport)
-        fprintf(stderr, "%%LINK-I-IMPORT, %d EVAX cross-image import%s bound to "
+        link_info("%%LINK-I-IMPORT, %d EVAX cross-image import%s bound to "
                 "--use producer%s (.vms$imp at 0x%llx, resolved at activation)\n",
                 n_ximport, n_ximport == 1 ? "" : "s", np == 1 ? "" : "s",
                 (unsigned long long)off_imp);
     if (nrel > 0)
-        fprintf(stderr, "%%LINK-I-RELOC, %d image-relative slot%s recorded in "
+        link_info("%%LINK-I-RELOC, %d image-relative slot%s recorded in "
                 ".vms$rel at 0x%llx (load-bias fixups applied by IMGACT at "
                 "activation)\n",
                 nrel, nrel == 1 ? "" : "s", (unsigned long long)off_rel);
@@ -5240,7 +5253,7 @@ static void load_archive_evax(const char *path, struct evax_input **ein,
         if (pos & 1) pos++;
     }
     if (whole)
-        fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
+        link_info("%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
                 "(whole-archive)\n", path, members, members == 1 ? "" : "s");
 }
 
@@ -5353,7 +5366,7 @@ static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
     for (int l = 0; l < nlibs; l++) {
         int total = 0;
         for (int m = 0; m < npool; m++) if (lib_of[m] == l) total++;
-        fprintf(stderr, "%%LINK-I-LIBRARY, %s: %d of %d member%s pulled to resolve "
+        link_info("%%LINK-I-LIBRARY, %s: %d of %d member%s pulled to resolve "
                 "references (library search)\n", libs[l], npulled[l], total,
                 total == 1 ? "" : "s");
     }
@@ -5387,8 +5400,15 @@ static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
 }
 
 
+#include "vms_cli.c"   /* the VMS command syntax (vms-ce4) */
+
 int main(int argc, char **argv)
 {
+    if (vms_syntax(argc, argv)) {     /* LINK/EXECUTABLE=x file,... /OPTIONS (vms-ce4) */
+        int nargc = 0;
+        argv = vms_translate(argc, argv, &nargc);
+        argc = nargc;
+    }
     const char *out = NULL;
     const char **ins = calloc((size_t)argc, sizeof *ins);  /* <= argc inputs */
     int nin = 0;
@@ -5500,7 +5520,7 @@ int main(int argc, char **argv)
         free(lib_at); free(ein_after);
         if (getenv("OVMX_LINK_INPUT_ORDER"))   /* the final link order (tests) */
             for (int i = 0; i < nein; i++)
-                fprintf(stderr, "%%LINK-I-INPUT, #%d %s\n", i, ein[i].name);
+                link_info("%%LINK-I-INPUT, #%d %s\n", i, ein[i].name);
         /* vms-614: linker-view universal dump — list the DEFINED decc$ symbols
          * evax_read resolves (weak-alias equates included), for mk_decc_shr.sh to
          * build the symbol vector from, then stop before any emit. Runs after the

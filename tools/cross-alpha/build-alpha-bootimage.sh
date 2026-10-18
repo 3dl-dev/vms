@@ -327,6 +327,20 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRV_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (DRIVER): xgcc/cc1/as.exe -> SYS\$SYSEXE; launcher joint_e2e.exe -> SYS\$SYSEXE; DRV-proof SYSTARTUP staged"
+            elif [ -f "$JOINT/LNK_PROOF" ]; then
+                # vms-e40: cc1 -> as -> LINK (all VMS-hosted) -> RUN the result.
+                for _f in cc1 as link; do
+                    [ -f "$JOINT/$_f.exe" ] || { echo "FAIL: LNK_PROOF without $JOINT/$_f.exe"; exit 1; }
+                done
+                [ -f "$JOINT/crt0.obj" ] && [ -f "$JOINT/STARLET.a" ] || { echo "FAIL: LNK_PROOF without crt0.obj/STARLET.a"; exit 1; }
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
+                cp "$JOINT/crt0.obj" "$SYSEXE/CRT0.OBJ"
+                cp "$JOINT/STARLET.a" "$SYSEXE/STARLET.A"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_LNK_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (LINK): cc1/as/link.exe + crt0.obj + STARLET.a -> SYS\$SYSEXE; LNK-proof SYSTARTUP staged"
             elif [ -f "$JOINT/VMSABI_PROOF" ]; then
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VMSABI_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"

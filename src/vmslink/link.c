@@ -1158,6 +1158,14 @@ static int leading_ci(const char *s, const char *pfx)
  */
 static const char *resolve_producer_path(const char *path, char *out, size_t sz)
 {
+#ifdef __VMS
+    /* LINK built for the VMS host (a DEC C program on OVMX/Alpha, vms-e40): the C
+     * RTL's open() takes the VMS file specification itself -- SYS$SHARE:NAME.EXE is
+     * translated through RMS, as OpenVMS LINK opens its shareable inputs. There is
+     * no POSIX staging copy to look for. */
+    (void)out; (void)sz;
+    return path;
+#endif
     /* Each installed-image logical -> the SYS$SYSROOT subdirectory it lives in. */
     static const struct { const char *log; const char *sub; } maps[] = {
         { "SYS$SHARE:",   "SYSLIB" },
@@ -1196,6 +1204,15 @@ static void load_producer(const char *path_in, struct producer *p)
     char pbuf[512];
     const char *path = resolve_producer_path(path_in, pbuf, sizeof pbuf);
     const char *base = strrchr(path, '/');
+#ifdef __VMS
+    /* a VMS file specification: the producer is recorded by its file name alone
+     * (SYS$SHARE:DECC$SHR.EXE -> DECC$SHR.EXE), as the activator searches for it */
+    {
+        const char *c = strrchr(path, ':'), *b = strrchr(path, ']');
+        if (c && (!base || c > base)) base = c;
+        if (b && (!base || b > base)) base = b;
+    }
+#endif
     snprintf(p->name, sizeof p->name, "%s", base ? base + 1 : path);
 
     int fd = open(path, O_RDONLY);
@@ -3702,13 +3719,27 @@ static int evax_is_weak_ref(const struct evax_object *o, const char *name)
 
 /* Resolved address of a symbol's VALUE (procedure descriptor for a procedure,
  * plain value otherwise) — section base + section-relative value. */
+/* EGSY$V_REL (include/vms/egsy.h, bit 3): the symbol is relative to its psect. A symbol
+ * WITHOUT it is ABSOLUTE -- its value is its value, whatever psect index the object
+ * names (GNU as writes a "$ABS$" psect for `sym = 2' and points the symbol at it).
+ * Treating it as psect-relative adds the psect's placed address to the value, and
+ * crt0's `__gcc_main_flags = 2` (bit 1 = POSIX return codes) becomes base+2. */
+#ifndef EGSY__V_REL
+#define EGSY__V_REL 0x0008
+#endif
+static int evax_sym_is_abs(const struct evax_symbol *s)
+{
+    return s->defined && !(s->flags & EGSY__V_REL);
+}
 static uint64_t evax_sym_value_addr(struct evax_input *in, int di, const struct evax_symbol *s)
 {
+    if (evax_sym_is_abs(s)) return s->value;
     return in[di].sec_base[s->psindx] + s->value;
 }
 /* Resolved address of a symbol's CODE ENTRY (procedure entry point). */
 static uint64_t evax_sym_code_addr(struct evax_input *in, int di, const struct evax_symbol *s)
 {
+    if (evax_sym_is_abs(s)) return s->code_value;
     return in[di].sec_base[s->code_psindx] + s->code_value;
 }
 
@@ -4174,8 +4205,8 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
         S = evax_sym_value_addr(in, di, ds);   /* procedure descriptor / value */
         code_S = evax_sym_code_addr(in, di, ds);
         have_code = 1;
-        S_placed     = (in[di].sec_base[ds->psindx] != 0);
-        codeS_placed = (in[di].sec_base[ds->code_psindx] != 0);
+        S_placed     = evax_sym_is_abs(ds) || (in[di].sec_base[ds->psindx] != 0);
+        codeS_placed = evax_sym_is_abs(ds) || (in[di].sec_base[ds->code_psindx] != 0);
     }
 store_target:;
 

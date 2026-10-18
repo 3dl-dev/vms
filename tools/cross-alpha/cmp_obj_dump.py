@@ -6,16 +6,19 @@ itself varies between two assemblies of the same source (creation time stamps).
 usage: cmp_obj_dump.py <console-log> <ref1.obj> <ref2.obj>
 Exit 0 when the dumped object has the reference length and differs from ref1
 only at offsets where ref1 and ref2 differ from each other. Prints a verdict."""
-import re, sys
+import os, re, sys
+
+BEGIN = os.environ.get("CMP_BEGIN", "AS-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.OBJ ===")
+END = os.environ.get("CMP_END", "AS-PROOF: DUMP-STATUS=")
 
 def dumped(log):
     out, on = bytearray(), False
     for line in open(log, "rb").read().decode("latin-1").splitlines():
         line = line.rstrip("\r")
-        if "AS-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.OBJ ===" in line:
+        if BEGIN in line:
             on = True
             continue
-        if "AS-PROOF: DUMP-STATUS=" in line:
+        if END in line:
             break
         if on and re.match(r"^[0-9A-F]{8} ", line):
             out += bytes.fromhex(line[9:44].replace(" ", ""))
@@ -49,7 +52,7 @@ def main():
     if len(got) > len(a) and not any(got[len(a):]):
         got = got[:len(a)]
     if len(got) != len(a):
-        print("  LENGTH differs from the cross-assembled object")
+        print("  LENGTH differs from the reference")
         return 1
     bad = [i for i in range(len(a)) if got[i] != a[i] and i not in volatile]
     if bad:

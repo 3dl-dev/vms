@@ -625,7 +625,39 @@ int cmd_close(struct dcl_command *cmd)
  * READ - Read a line from a file channel into a symbol.
  */
 
+static int read_impl(struct dcl_command *cmd);
+
+extern int dcl_find_label(struct dcl_pf *fp, const char *label);
+
+/*
+ * READ with /END_OF_FILE=label and /ERROR=label (VSI DCL Dictionary, READ):
+ * at end of file control passes to the /END_OF_FILE label, and on any other
+ * failure (a timeout included) to the /ERROR label -- like GOTO, quietly,
+ * with the READ itself succeeding. With no label for the condition it is
+ * reported and the status returned, as before. Outside a command procedure
+ * there is nothing to branch to, so the condition is reported as usual.
+ */
 int cmd_read(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    int st = read_impl(cmd);
+    if (st & 1)
+        return st;
+
+    int eof = (st == (int)SS$_ENDOFFILE || st == (int)RMS$_EOF);
+    const char *label = eof ? dcl_qualifier_value(cmd, "END_OF_FILE") : NULL;
+    if (!label || !*label)
+        label = dcl_qualifier_value(cmd, "ERROR");
+    if (label && *label && ctx->proc_depth >= 0) {
+        struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
+        if (dcl_find_label(fp, label) == 0)
+            return SS$_NORMAL;
+        dcl_error("DCL", 2, "USGOTO", "target of GOTO not found - \\%s\\", label);
+    }
+    return st;
+}
+
+static int read_impl(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 

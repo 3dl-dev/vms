@@ -301,6 +301,17 @@ static const struct dcl_qual_def q_deassign[] = {
     { "EXECUTIVE_MODE",          CDU_VT_NONE, 0, NULL, NULL },
     QUAL_END
 };
+/* READ: only the qualifiers cmd_read honours (dcl_cmd_io.c). The rest of the
+ * DCL Dictionary set (/DELETE /INDEX /KEY /MATCH /NOLOCK)
+ * is not implemented, so DCL rejects it as an unrecognized qualifier rather
+ * than accept it and silently do something else (vms-097). */
+static const struct dcl_qual_def q_read[] = {
+    { "END_OF_FILE", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "ERROR",       CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PROMPT",      CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "TIME_OUT",    CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
 static const struct dcl_qual_def q_open[] = {
     { "READ",   CDU_VT_NONE, 0, NULL, NULL },
     { "WRITE",  CDU_VT_NONE, 0, NULL, NULL },
@@ -512,7 +523,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "RECALL",    cmd_recall,    CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Show or re-execute commands from command history", q_recall },
     { "READ",        cmd_read,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
-      "Read a record from a file into a symbol" },
+      "Read a record from a file into a symbol", q_read },
     { "RENAME",      cmd_rename,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Change the name and/or location of a file", q_rename },
     { "REPLY",       cmd_reply,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,

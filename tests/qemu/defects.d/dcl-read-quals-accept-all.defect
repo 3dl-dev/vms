@@ -1,0 +1,27 @@
+# dcl-read-quals-accept-all -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL READ qualifier validation (src/vmsdcl/dcl_builtin.c q_read, vms-097)";;
+        targets)      echo "vmsdcl/dcl_builtin.c";;
+        suites_red)   echo "test_syssvc_dcl_read";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "READ goes back to accept-all: the q_read table is unwired from the verb, so an unknown or unimplemented qualifier (/BOGUS, /DELETE) is silently accepted instead of %DCL-W-IVQUAL.";;
+        require_fail) cat <<'EOF2'
+READ/BOGUS is rejected as %DCL-W-IVQUAL naming the qualifier
+READ/DELETE (not implemented) is rejected as %DCL-W-IVQUAL, not silently accepted
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^      "Read a record from a file into a symbol", q_read },$|      "Read a record from a file into a symbol" }, /* NEGCTL dcl-read-quals-accept-all */|' "$_file"
+    :
+}

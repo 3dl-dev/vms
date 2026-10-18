@@ -35,13 +35,12 @@
 #
 # --- Real qualifiers on the SAME verbs still pass (not a blanket reject) ---
 # The positive-control lines below use each verb's real qualifier and must NOT
-# trip IVQUAL. ASSIGN/SYSTEM, OPEN/READ, RECALL/ALL, CONVERT/FDL are honoured;
+# trip IVQUAL. ASSIGN/SYSTEM, OPEN/READ, RECALL/ALL are honoured (CONVERT/FDL is not: it is rejected, vms-558e);
 # SPAWN/NOWAIT exercises the parser's NO-undo path (declared as literal
 # "NOWAIT" in q_spawn) - it must resolve, not reject.
 # EXPECT_NOT: regex:IVQUAL.*\\SYSTEM\\
 # EXPECT_NOT: regex:IVQUAL.*\\READ\\
 # EXPECT_NOT: regex:IVQUAL.*\\ALL\\
-# EXPECT_NOT: regex:IVQUAL.*\\FDL\\
 # EXPECT_NOT: regex:IVQUAL.*\\WAIT\\
 #
 # THE FINDING THIS GATES (docs/design-vms-parity-map.md sec 3). Phase 1
@@ -67,5 +66,4 @@ printf 'CLOSE/ZQCLOSE\nSHOW SYMBOL $STATUS\n'          | $VMSDCL 2>&1
 printf 'ASSIGN/SYSTEM AEQV ALOGNAME\n'                 | $VMSDCL 2>&1
 printf 'OPEN/READ NOSUCH_OPEN.TXT\n'                   | $VMSDCL 2>&1
 printf 'RECALL/ALL\n'                                  | $VMSDCL 2>&1
-printf 'CONVERT/FDL=X NOSUCH_A.DAT NOSUCH_B.DAT\n'     | $VMSDCL 2>&1
 printf 'SPAWN/NOWAIT SHOW TIME\n'                      | $VMSDCL 2>&1

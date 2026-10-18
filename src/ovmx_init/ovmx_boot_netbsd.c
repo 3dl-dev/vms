@@ -179,6 +179,8 @@ static void ovmx_memprobe(int sig)
     (void)sig;
     if (sysctl(mib, 2, &u, &sz, NULL, 0) != 0)
         return;
+    if ((long long)u.free * u.pagesize / 1024 > 7000)
+        return;      /* quiet while memory is healthy */
     n = snprintf(b, sizeof(b),
         "\nMEMPROBE free=%lldK file=%lldK exec=%lldK anon=%lldK wired=%lldK act=%lldK inact=%lldK\n",
         (long long)u.free * u.pagesize / 1024, (long long)u.filepages * u.pagesize / 1024,
@@ -195,7 +197,12 @@ int ovmx_boot_mount_kernel_filesystems(void)
         struct itimerval it;
         it.it_interval.tv_sec = 4; it.it_interval.tv_usec = 0;
         it.it_value = it.it_interval;
-        (void)signal(SIGALRM, ovmx_memprobe);
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_handler = ovmx_memprobe;
+        sa.sa_flags = SA_RESTART;
+        sigemptyset(&sa.sa_mask);
+        (void)sigaction(SIGALRM, &sa, NULL);
         (void)setitimer(ITIMER_REAL, &it, NULL);
     }
     /* Best-effort, exactly like the Linux backend: individual mounts are not

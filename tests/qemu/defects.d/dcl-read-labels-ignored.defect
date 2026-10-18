@@ -1,0 +1,27 @@
+# dcl-read-labels-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL READ /END_OF_FILE and /ERROR labels (src/vmsdcl/dcl_cmd_io.c cmd_read, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_io.c";;
+        suites_red)   echo "test_syssvc_dcl_read";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "READ stops branching to its /END_OF_FILE and /ERROR labels: the failure status is returned straight back, so control falls through to the next line as if the labels had been swallowed.";;
+        require_fail) cat <<'EOF2'
+READ/END_OF_FILE=EOFL branched to EOFL at end of file
+control did not fall through past the READ that hit end of file
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (st \& 1)$|    if (1) /* NEGCTL dcl-read-labels-ignored */|' "$_file"
+    :
+}

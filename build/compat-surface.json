@@ -78,21 +78,21 @@
     "by_status": {
       "verified": 24,
       "implemented": 295,
-      "partial": 68,
-      "stub": 12,
+      "partial": 70,
+      "stub": 10,
       "designed": 1,
       "absent": 91
     },
     "by_authenticity": {
       "real": 348,
       "n/a": 92,
-      "advisory": 48,
-      "facade-risk": 3
+      "advisory": 50,
+      "facade-risk": 1
     },
     "met": 319,
-    "in_progress": 68,
-    "not_started": 104,
-    "facade_risk": 3
+    "in_progress": 70,
+    "not_started": 102,
+    "facade_risk": 1
   },
   "overall_in_scope": {
     "count": 445,
@@ -1746,21 +1746,20 @@
         "by_status": {
           "verified": 0,
           "implemented": 4,
-          "partial": 1,
-          "stub": 3,
+          "partial": 3,
+          "stub": 1,
           "designed": 0,
           "absent": 3
         },
         "by_authenticity": {
           "real": 4,
-          "advisory": 2,
-          "facade-risk": 2,
+          "advisory": 4,
           "n/a": 3
         },
         "met": 4,
-        "in_progress": 1,
-        "not_started": 6,
-        "facade_risk": 2
+        "in_progress": 3,
+        "not_started": 4,
+        "facade_risk": 0
       }
     },
     {
@@ -8156,12 +8155,12 @@
       "id": "sys$lkwset",
       "kind": "routine",
       "vms": "Lock pages in the working set",
-      "status": "stub",
-      "authenticity": "facade-risk",
+      "status": "partial",
+      "authenticity": "advisory",
       "scope_1_0": "out",
       "evidence": "src/libvms/syssvc/sys_memory.c",
       "verified_against": null,
-      "notes": "kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done",
+      "notes": "Proof tests/qemu/test_syssvc_lkwset.c + defects.d/lkwset-noop.defect. mlock() of the page-rounded range in the calling process (via sys$lckpag/sys$ulkpag); no VMS working-set list or WSQUOTA exists, so the lock is the Linux VMM's, SS$_LKWSETFUL is never returned. Was facade-risk: validated and returned SS$_NORMAL with nothing locked (vms-18c2).",
       "plan_ref": "vms-801"
     },
     {
@@ -8171,12 +8170,12 @@
       "id": "sys$ulwset",
       "kind": "routine",
       "vms": "Unlock pages from the working set",
-      "status": "stub",
-      "authenticity": "facade-risk",
+      "status": "partial",
+      "authenticity": "advisory",
       "scope_1_0": "out",
       "evidence": "src/libvms/syssvc/sys_memory.c",
       "verified_against": null,
-      "notes": "kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done",
+      "notes": "Proof tests/qemu/test_syssvc_lkwset.c + defects.d/lkwset-noop.defect. munlock() of the page-rounded range in the calling process (via sys$lckpag/sys$ulkpag); no VMS working-set list or WSQUOTA exists, so the lock is the Linux VMM's, SS$_LKWSETFUL is never returned. Was facade-risk: validated and returned SS$_NORMAL with nothing locked (vms-18c2).",
       "plan_ref": "vms-801"
     },
     {

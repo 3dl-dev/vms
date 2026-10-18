@@ -12,7 +12,7 @@
  *   sys$dgblsc                      - delete global section
  *   sys$device_scan                 - wildcard device enumeration
  *   sys$unwind                      - unwind the condition-handler chain
- *   sys$lkwset / sys$ulwset         - lock/unlock working set (no-op)
+ *   sys$lkwset / sys$ulwset         - lock/unlock pages (mlock)
  *
  * sys$asctoid and sys$cpu_transitionw are PURITY-DEFERRED (need
  * operator-signed VMS constants) and are intentionally not covered here.
@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 
 #include "ssdef.h"
 #include "descrip.h"
@@ -330,12 +331,15 @@ static void test_lkwset(void)
     inadr.va_range$ps_end_va = &array[sizeof(array) - 1];
 
     uint32_t st = sys$lkwset(&inadr, &outadr, 0);
-    check(st == SS$_NORMAL, "sys$lkwset returns SS$_NORMAL");
-    check(outadr.va_range$ps_start_va == inadr.va_range$ps_start_va,
-          "sys$lkwset echoes the start address");
-
-    st = sys$ulwset(&outadr, NULL, 0);
-    check(st == SS$_NORMAL, "sys$ulwset returns SS$_NORMAL");
+    /* vms-18c2: the pages are really mlock()ed; a host refusal is SS$_NOPRIV. */
+    check(st == SS$_NORMAL || st == SS$_NOPRIV, "sys$lkwset locks (SS$_NORMAL) or is honestly refused (SS$_NOPRIV)");
+    if (st == SS$_NORMAL) {
+        uintptr_t pg = (uintptr_t)sysconf(_SC_PAGESIZE);
+        check((uintptr_t)outadr.va_range$ps_start_va == ((uintptr_t)&array[0] & ~(pg - 1)),
+              "sys$lkwset returns the page-rounded range actually locked");
+        st = sys$ulwset(&outadr, NULL, 0);
+        check(st == SS$_NORMAL, "sys$ulwset returns SS$_NORMAL");
+    }
 
     check(sys$lkwset(NULL, &outadr, 0) == SS$_BADPARAM,
           "sys$lkwset(NULL inadr) returns SS$_BADPARAM");

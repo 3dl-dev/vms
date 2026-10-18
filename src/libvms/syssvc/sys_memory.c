@@ -45,9 +45,10 @@
  *     exist to delete.
  * OVMX-USERSPACE: sys$purgws (vms-e0a) -- validates the range and returns
  *     SS$_NORMAL; nothing is purged and no working set is consulted.
- * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- validates the range, echoes it back
- *     in retadr and returns SS$_NORMAL; no pages are locked.
- * OVMX-USERSPACE: sys$ulwset (vms-e0a) -- the same, for unlocking.
+ * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- mlock() of the page-rounded range in
+ *     the calling process only (via sys$lckpag); no VMS working-set list or
+ *     WSQUOTA exists, so the lock is the Linux VMM's, not an executive entry.
+ * OVMX-USERSPACE: sys$ulwset (vms-e0a) -- munlock() of the same (via sys$ulkpag).
  * OVMX-USERSPACE: sys$lckpag (vms-44a) -- mlock() of the page-rounded range in
  *     the calling process only; the lock is the Linux VMM's, not an executive
  *     balance-set entry, so no other process or $GETJPI can see it.
@@ -313,51 +314,20 @@ uint32_t sys$dgblsc(uint32_t flags, const struct dsc$descriptor_s *gsdnam,
 }
 
 /*
- * sys$lkwset - Lock pages into working set.
+ * sys$lkwset / sys$ulwset - lock / unlock pages in the working set (vms-18c2).
  *
- * See the doc comment in starlet.h: OVMX is demand-paged by the Linux
- * VMM (no adjustable working set to lock pages into), so this validates
- * the range, echoes it to retadr, and returns success.
+ * The Linux VMM has no VMS working-set list, so the nearest real lock is the
+ * resident-page lock $LCKPAG already performs: the pages are mlock()ed (or
+ * munlock()ed) for real, the page-rounded range comes back in retadr, a host
+ * refusal is SS$_NOPRIV and an unmapped range SS$_ACCVIO. Not a validated
+ * no-op any more. (SS$_LKWSETFUL is still never returned: no WSQUOTA.)
  */
 uint32_t sys$lkwset(const void *inadr, void *retadr, uint32_t acmode) {
-    (void)acmode;
-    if (!inadr) return SS$_BADPARAM;
-
-    const void **in = (const void **)inadr;
-    uintptr_t start = (uintptr_t)in[0];
-    uintptr_t end = (uintptr_t)in[1];
-    if (end < start) return SS$_BADPARAM;
-
-    if (retadr) {
-        void **ret = (void **)retadr;
-        ret[0] = (void *)start;
-        ret[1] = (void *)end;
-    }
-
-    return SS$_NORMAL;
+    return sys$lckpag(inadr, retadr, acmode);
 }
 
-/*
- * sys$ulwset - Unlock pages from working set.
- *
- * Companion no-op to sys$lkwset above.
- */
 uint32_t sys$ulwset(const void *inadr, void *retadr, uint32_t acmode) {
-    (void)acmode;
-    if (!inadr) return SS$_BADPARAM;
-
-    const void **in = (const void **)inadr;
-    uintptr_t start = (uintptr_t)in[0];
-    uintptr_t end = (uintptr_t)in[1];
-    if (end < start) return SS$_BADPARAM;
-
-    if (retadr) {
-        void **ret = (void **)retadr;
-        ret[0] = (void *)start;
-        ret[1] = (void *)end;
-    }
-
-    return SS$_NORMAL;
+    return sys$ulkpag(inadr, retadr, acmode);
 }
 
 /*

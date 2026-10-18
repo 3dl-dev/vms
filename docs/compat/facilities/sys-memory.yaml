@@ -8,10 +8,10 @@ tier: 1
 plan_ref: vms-801
 summary: >
   VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/
-  DELTVA/EXPREG/CRMPSC are real (mmap-backed). SYS$DGBLSC/PURGWS/LKWSET/
-  ULWSET validate arguments and return SS$_NORMAL with nothing done
-  (facade-risk); LKWSET/ULWSET are kernel-mode/PFN working-set-lock services,
-  out of scope for 1.0. SYS$ADJSTK and SYS$UPDSEC are absent. SYS$LCKPAG
+  DELTVA/EXPREG/CRMPSC are real (mmap-backed). SYS$DGBLSC returns SS$_NOSUCHSEC
+  (no named-section registry) and LKWSET/ULWSET really mlock/munlock the
+  page-rounded range; PURGWS validates and returns SS$_NORMAL (advisory
+  hint). LKWSET/ULWSET are out of scope for 1.0. SYS$ADJSTK and SYS$UPDSEC are absent. SYS$LCKPAG
   (lock pages in physical memory) is absent and permanently out of scope
   (kernel-mode/PFN).
 last_reviewed: 2026-09-14
@@ -22,8 +22,8 @@ items:
   - {id: sys$crmpsc, kind: routine, status: implemented, authenticity: real, vms: "Create and map a section", evidence: src/libvms/syssvc/sys_memory.c, notes: "mmap-backed"}
   - {id: sys$dgblsc, kind: routine, status: partial, authenticity: advisory, vms: "Delete a global section", evidence: src/libvms/syssvc/sys_memory.c, notes: "Proof tests/qemu/test_syssvc_dgblsc_nosuchsec.c + defects.d/dgblsc-fake-success.defect. No named-global-section registry exists (sys$crmpsc discards gsdnam), so under the executive every named delete returns SS$_NOSUCHSEC honestly (SS$_NOSUCHDEV with no executive, one-runtime rule); the delete-a-real-section success path needs the registry (not built). Was facade-risk: returned SS$_NORMAL for a section that never existed (vms-d91)."}
   - {id: sys$purgws, kind: routine, status: stub, authenticity: advisory, vms: "Purge the working set", evidence: src/libvms/syssvc/sys_memory.c, notes: "vms-df8 sweep: $PURGWS is an advisory working-set HINT with no correctness contract; OVMX defers residency to host demand paging, so the no-op is faithful, not a fabrication. Advisory, not facade-risk."}
-  - {id: sys$lkwset, kind: routine, status: stub, authenticity: facade-risk, vms: "Lock pages in the working set", evidence: src/libvms/syssvc/sys_memory.c, scope_1_0: out, notes: "kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done"}
-  - {id: sys$ulwset, kind: routine, status: stub, authenticity: facade-risk, vms: "Unlock pages from the working set", evidence: src/libvms/syssvc/sys_memory.c, scope_1_0: out, notes: "kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done"}
+  - {id: sys$lkwset, kind: routine, status: partial, authenticity: advisory, vms: "Lock pages in the working set", evidence: src/libvms/syssvc/sys_memory.c, scope_1_0: out, notes: "Proof tests/qemu/test_syssvc_lkwset.c + defects.d/lkwset-noop.defect. mlock() of the page-rounded range in the calling process (via sys$lckpag/sys$ulkpag); no VMS working-set list or WSQUOTA exists, so the lock is the Linux VMM's, SS$_LKWSETFUL is never returned. Was facade-risk: validated and returned SS$_NORMAL with nothing locked (vms-18c2)."}
+  - {id: sys$ulwset, kind: routine, status: partial, authenticity: advisory, vms: "Unlock pages from the working set", evidence: src/libvms/syssvc/sys_memory.c, scope_1_0: out, notes: "Proof tests/qemu/test_syssvc_lkwset.c + defects.d/lkwset-noop.defect. munlock() of the page-rounded range in the calling process (via sys$lckpag/sys$ulkpag); no VMS working-set list or WSQUOTA exists, so the lock is the Linux VMM's, SS$_LKWSETFUL is never returned. Was facade-risk: validated and returned SS$_NORMAL with nothing locked (vms-18c2)."}
   - {id: sys$adjstk, kind: routine, status: absent, authenticity: n/a, vms: "Adjust stack size"}
   - {id: sys$updsec, kind: routine, status: absent, authenticity: n/a, vms: "Update a section from memory to disk"}
   - {id: sys$lckpag, kind: routine, status: absent, authenticity: n/a, vms: "Lock pages in physical memory", scope_1_0: out, notes: "kernel-mode/PFN, permanently out of scope"}

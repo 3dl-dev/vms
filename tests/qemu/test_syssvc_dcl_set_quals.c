@@ -90,7 +90,7 @@ int main(void)
     CHECK(run_dcl("SET/ZQONE DEFAULT SYS$LOGIN\nSET DEFAULT/ZQTWO SYS$LOGIN\n"
                   "SET FILE/ZQTHREE NOSUCH.TXT\nSET PROCESS/ZQFOUR\n"
                   "SET MESSAGE/NOFACILITY/FACILITY\nSET PROMPT/NOCARRIAGE_CONTROL=\"p$ \"\n"
-                  "SET MESSAGE/ZQFIVE\n", out, sizeof out) == 0,
+                  "SET MESSAGE/ZQFIVE\nSET PROTECTION=(W:R)/ZQSIX NOSUCH.TXT\n", out, sizeof out) == 0,
           "DCL ran the SET qualifier probes");
     printf("  ---- SET probes ----\n%s  ---- end ----\n", out);
     /* negctl: dcl-set-quals-accept-all */
@@ -103,6 +103,8 @@ int main(void)
     CHECK(strstr(out, "\\ZQFOUR\\") != NULL, "SET PROCESS/ZQFOUR is %DCL-W-IVQUAL");
     /* negctl: dcl-set-quals-accept-all */
     CHECK(strstr(out, "\\ZQFIVE\\") != NULL, "SET MESSAGE/ZQFIVE is %DCL-W-IVQUAL");
+    /* negctl: dcl-set-quals-accept-all */
+    CHECK(strstr(out, "\\ZQSIX\\") != NULL, "SET PROTECTION/ZQSIX is %DCL-W-IVQUAL");
     CHECK(strstr(out, "\\FACILITY\\") == NULL && strstr(out, "\\CARRIAGE_CONTROL\\") == NULL,
           "the declared qualifiers (/FACILITY, /CARRIAGE_CONTROL) are accepted, not refused");
 

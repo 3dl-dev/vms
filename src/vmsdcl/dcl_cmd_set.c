@@ -2560,7 +2560,7 @@ static int cmd_set_symbol(struct dcl_command *cmd)
  * is wrong; each entry lists EXACTLY the qualifiers that sub-verb's handler
  * reads, and anything else is %DCL-W-IVQUAL rather than silently dropped
  * (INV-DCL sec 3: honest over-restriction). Sub-verbs that parse their own
- * qualifiers (TERMINAL, ACL, PROTECTION, PASSWORD, ACCOUNTING, VOLUME,
+ * qualifiers (TERMINAL, ACL, PASSWORD, ACCOUNTING, VOLUME,
  * SYMBOL) are not listed: they validate themselves.
  */
 #define SQ_END { NULL, 0, 0, NULL, NULL }
@@ -2585,6 +2585,8 @@ static const struct dcl_qual_def sq_file[] = {
     { "EXPIRATION_DATE", CDU_VT_VALUE, 0,            NULL, NULL },
     { "VERSION_LIMIT",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     SQ_END };
+static const struct dcl_qual_def sq_protection[] = {
+    { "DEFAULT", CDU_VT_NONE, 0, NULL, NULL }, SQ_END };
 static const struct dcl_qual_def sq_working_set[] = {
     { "QUOTA", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }, SQ_END };
 static const struct dcl_qual_def sq_host[] = {
@@ -2615,6 +2617,7 @@ static const struct {
     { "NOCONTROL",   9, sq_none },
     { "PROCESS",     3, sq_process },
     { "FILE",        4, sq_file },
+    { "PROTECTION",  3, sq_protection },
     { "UIC",         3, sq_none },
     { "WORKING_SET", 4, sq_working_set },
     { "TIME",        4, sq_none },

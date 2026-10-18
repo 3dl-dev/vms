@@ -1,0 +1,27 @@
+# dcl-write-quals-accept-all -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL WRITE qualifier validation (src/vmsdcl/dcl_builtin.c q_write, vms-097)";;
+        targets)      echo "vmsdcl/dcl_builtin.c";;
+        suites_red)   echo "test_syssvc_dcl_write_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "WRITE goes back to accept-all: the q_write table is unwired, so an unknown or unimplemented qualifier (/ZQBOGUS, /UPDATE) is silently accepted instead of %DCL-W-IVQUAL.";;
+        require_fail) cat <<'EOF2'
+WRITE/ZQBOGUS is %DCL-W-IVQUAL naming the qualifier
+WRITE/UPDATE (not implemented) is %DCL-W-IVQUAL, not silently accepted
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^      "Write a record to a file", q_write },$|      "Write a record to a file" }, /* NEGCTL dcl-write-quals-accept-all */|' "$_file"
+    :
+}

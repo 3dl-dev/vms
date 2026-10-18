@@ -1,0 +1,26 @@
+# dcl-write-symbol-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL WRITE/SYMBOL (src/vmsdcl/dcl_cmd_io.c write_impl, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_io.c";;
+        suites_red)   echo "test_syssvc_dcl_write_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "WRITE/SYMBOL stops dereferencing the symbol: it writes the symbol NAME, not its value.";;
+        require_fail) cat <<'EOF2'
+WRITE/SYMBOL writes the named symbol's value
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        snprintf(text, sizeof(text), "%s", sv);$|        snprintf(text, sizeof(text), "%s", symname); (void)sv; /* NEGCTL dcl-write-symbol-ignored */|' "$_file"
+    :
+}

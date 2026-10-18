@@ -1721,7 +1721,7 @@ PYEOF
     # report for a signal the program catches itself (gas installs handlers)
     # AS_QEMU_CPU_RANGE=lo..hi additionally dumps the registers at every translation
     # block entered in that guest-PC range (qemu -dfilter), e.g. around a fault PC
-    export BOOT_QEMU_EXTRA="-d int,cpu,nochain -dfilter ${AS_QEMU_CPU_RANGE:-0x1c8000..0x1ce000} -D /work/qemu-int.log"
+    export BOOT_QEMU_EXTRA="-d int,cpu,nochain -dfilter ${AS_QEMU_CPU_RANGE:-0x1bc000..0x1be000} -D /work/qemu-int.log"
     run_boot_a
     awk 'tolower($0) ~ /opcdec/ && $0 !~ /pc=fffffc/ { for (i = (n > 400 ? n - 400 : 0); i < n; i++) print buf[i % 400]; print; exit }
          $0 !~ /pc=fffffc/ && $0 !~ /INT .*(clk_interrupt|dev_interrupt)/ { buf[n % 400] = $0; n++ }' "$WORK/qemu-int.log" 2>/dev/null | sed 's/^/  | QEMU-BEFORE-OPCDEC: /' || true

@@ -135,40 +135,14 @@ static unsigned int vfork_create_subprocess(pid_t pid)
     return a.status;
 }
 
-/* Run `spec` with arguments args[0..nargs) and environment `envp`. */
-static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **envp)
+/* Create the subprocess that runs the IMGACT launcher line `av`: the task is
+ * forked and held, the executive creates its PCB, and only then is it released to
+ * execve(). Returns the task's pid, or -1 with errno set (no subprocess exists). */
+static pid_t spawn_subprocess(char **av, char **envp)
 {
-    char **av = malloc((nargs + 3) * sizeof *av);
-    if (!av) {
-        errno = ENOMEM;
-        return -1;
-    }
-    av[0] = OVMX_IMGACT_LAUNCHER;
-    av[1] = (char *)spec;
-    for (size_t i = 0; i < nargs; i++)
-        av[2 + i] = args[i];
-    av[2 + nargs] = 0;
-    if (!envp)
-        envp = __environ;
-
-    if (!vblk.active) {
-        execve(OVMX_IMGACT_LAUNCHER, av, envp);
-        int e = errno;
-        free(av);
-        errno = e;
-        return -1;
-    }
-    /* The new process exists in the executive before it runs anything: the
-     * task is held on `hold` until its PCB is made (or refused). */
     int hold[2];
-    if (pipe(hold) != 0) {
-        int e = errno;
-        free(av);
-        vfork_restore_fds();
-        vblk.active = 0;
-        errno = e;
+    if (pipe(hold) != 0)
         return -1;
-    }
     (void)fcntl(hold[0], F_SETFD, FD_CLOEXEC);
     (void)fcntl(hold[1], F_SETFD, FD_CLOEXEC);
     pid_t pid = fork();
@@ -194,19 +168,53 @@ static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **e
         do { n = write(hold[1], &go, 1); } while (n < 0 && errno == EINTR);
     }
     close(hold[1]);
+    if (pid < 0) {
+        errno = e;
+        return -1;
+    }
+    if (!(st & 1u)) {
+        /* The executive made no process: reap the held task. */
+        while (waitpid(pid, 0, 0) < 0 && errno == EINTR)
+            ;
+        errno = (st == 0x908u) ? ENODEV : EPERM;
+        return -1;
+    }
+    return pid;
+}
+
+/* Run `spec` with arguments args[0..nargs) and environment `envp`. */
+static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **envp)
+{
+    char **av = malloc((nargs + 3) * sizeof *av);
+    if (!av) {
+        errno = ENOMEM;
+        return -1;
+    }
+    av[0] = OVMX_IMGACT_LAUNCHER;
+    av[1] = (char *)spec;
+    for (size_t i = 0; i < nargs; i++)
+        av[2 + i] = args[i];
+    av[2 + nargs] = 0;
+    if (!envp)
+        envp = __environ;
+
+    if (!vblk.active) {
+        execve(OVMX_IMGACT_LAUNCHER, av, envp);
+        int e = errno;
+        free(av);
+        errno = e;
+        return -1;
+    }
+    /* The new process exists in the executive before it runs anything: the
+     * task is held until its PCB is made (or refused). */
+    pid_t pid = spawn_subprocess(av, envp);
+    int e = errno;
     free(av);
     vfork_restore_fds();
     vblk.active = 0;
     if (pid < 0) {
         errno = e;
         return -1;                      /* no subprocess: exec*() fails */
-    }
-    if (!(st & 1u)) {
-        /* The executive made no process: reap the held task, exec*() fails. */
-        while (waitpid(pid, 0, 0) < 0 && errno == EINTR)
-            ;
-        errno = (st == 0x908u) ? ENODEV : EPERM;
-        return -1;
     }
     longjmp(vblk.jb, (int)pid);         /* back to the vfork() point */
 }
@@ -353,6 +361,45 @@ int ovmx_execle64(const char *spec, const char *arg0, ...)
     int r = execl_common(spec, ap, 2);
     va_end(ap);
     return r;
+}
+
+
+/*
+ * system() -- DEC C: the string is a DCL command, run in a subprocess by the
+ * command language interpreter (LIB$SPAWN), and the value is the subprocess's
+ * VMS condition value (odd = success). The port's linker wrapper writes
+ * system("$ link ...") and tests bit 0. A leading "$" is the DCL prompt and is
+ * dropped. The subprocess is the DCL image run with `-c COMMAND`, created through
+ * the executive like a vfork()/exec*() child; DCL -c exits 0 when the command's
+ * status was a success and 1 otherwise, so the condition value returned is
+ * SS$_NORMAL or SS$_ABORT. system(NULL) says a command interpreter exists.
+ */
+int ovmx_decc_system(const char *cmd) __asm__("decc$system");
+int ovmx_decc_system(const char *cmd)
+{
+    if (!cmd)
+        return 1;
+    while (*cmd == ' ' || *cmd == '\t')
+        cmd++;
+    if (*cmd == '$')
+        cmd++;
+    while (*cmd == ' ' || *cmd == '\t')
+        cmd++;
+    char *av[5];
+    av[0] = OVMX_IMGACT_LAUNCHER;
+    av[1] = (char *)"SYS$SYSTEM:DCL.EXE";
+    av[2] = (char *)"-c";
+    av[3] = (char *)cmd;
+    av[4] = 0;
+    pid_t pid = spawn_subprocess(av, __environ);
+    if (pid < 0)
+        return errno == ENODEV ? 0x908 : 0x2C;      /* SS$_NOSUCHDEV : SS$_ABORT */
+    int wst = 0;
+    while (waitpid(pid, &wst, 0) < 0) {
+        if (errno != EINTR)
+            return 0x2C;
+    }
+    return (WIFEXITED(wst) && WEXITSTATUS(wst) == 0) ? 1 : 0x2C;
 }
 
 #endif /* __alpha && __VMS */

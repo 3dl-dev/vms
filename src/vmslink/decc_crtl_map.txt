@@ -546,7 +546,6 @@ subwin
 swab
 symlink
 sysconf
-system
 telldir
 tempnam
 time

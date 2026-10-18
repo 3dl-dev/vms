@@ -8,6 +8,8 @@
  * The driver runs cc1, as and then `ld` -- the port's own wrapper (vms-ld.c), which
  * writes an options file and runs the VMS `link` command (DCL LINK -> LINK.EXE). DCL
  * then RUNs HELLO.EXE. Sentinel 7 = the driver was created, ran and exited 0.
+ * Before the driver, two system() calls (a command that works, one that does not) print
+ * their values: the wrapper's link step is a system() call.
  */
 typedef unsigned int size_t;
 #if defined(__VMS)
@@ -16,6 +18,7 @@ typedef char *cp32 __attribute__((__mode__(__SI__)));   /* a DEC C 32-bit pointe
 typedef char *cp32;     /* host source scans compile every product file */
 #endif
 extern int printf(const char *, ...);
+extern int system(const char *);
 extern int waitpid(int, int *, int);
 extern void _exit(int);
 extern int fflush(void *);
@@ -63,6 +66,13 @@ int main(void)
     av[0] = "xgcc"; av[1] = "-BSYS$SYSTEM:"; av[2] = "-L/SYS$SYSTEM"; av[3] = "-nostdinc";
     av[4] = "-x"; av[5] = "c"; av[6] = "VDA0:[SYSTMP]HELLO.C";
     av[7] = "-o"; av[8] = "VDA0:[SYSTMP]HELLO.EXE"; av[9] = 0;
+    /* system(): a DCL command in a subprocess, the VMS condition value back (odd =
+     * success) -- what the port ld wrapper calls to run LINK. The second command
+     * does not exist: its value must be a failure. */
+    int ok_rc = system("$ WRITE SYS$OUTPUT \"OVMX-SYSTEM-OK\"");
+    int bad_rc = system("$ NOSUCHVERB");
+    printf("OVMX system: ok_rc=%d bad_rc=%d\n", ok_rc, bad_rc);
+    fflush(0);
     /* what the driver would run, printed and not run (-###): the commands it builds,
      * in the gate log, for reading a wall against */
     dv[0] = av[0]; dv[1] = "-###";

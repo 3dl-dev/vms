@@ -589,7 +589,7 @@ assert_drl() {
   local log="$1" r1="$2" r2="$3"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   [ -s "$r1" ] && [ -s "$r2" ] || { echo "  FAIL: no reference image"; return 1; }
-  local drv_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 ran=0 st_ok=0
+  local sys_ok=0 drv_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 ran=0 st_ok=0
   drv_ok=$(grep -qaE 'OVMX xgcc run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
@@ -605,14 +605,17 @@ assert_drl() {
   awk '/DRL-PROOF: === RUN THE LINKED PROGRAM/{f=1; next} /DRL-PROOF: HELLO-STATUS=/{f=0} f' "$log" | tr -d '\r' \
     | grep -x 'hello from cc1 on OVMX 49' >/dev/null && ran=1
   grep -aqE 'DRL-PROOF: HELLO-STATUS=%X00000001 SEVERITY=1' "$log" && st_ok=1
+  # system(): the good command printed its line and returned odd, the bad one returned even (SS$_ABORT)
+  grep -aq 'OVMX system: ok_rc=1 bad_rc=44' "$log" && tr -d '\r' < "$log" | grep -x 'OVMX-SYSTEM-OK' >/dev/null && sys_ok=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
   echo "  (a) xgcc ran + exit 0 : $drv_ok (want 1)"
   echo "  (b) launcher seam     : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
   echo "  (c) DCL DUMP HELLO.EXE == the cross driver image : same=$same ; RUN printed the line : $ran ; success status : $st_ok"
+  echo "  (c2) system(): a good command returns odd and ran, a bad one returns SS\$_ABORT : ok=$sys_ok"
   echo "  (d) no activation err : ok=$err_ok"
-  [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -2206,7 +2209,8 @@ for n, b in (("good", bytes(good)), ("bad", bytes(bad)), ("short", ref1[:50])):
     open(d + "/" + n + ".dump", "w").write("\n".join(dump(b)) + "\n")
 PYEOF2
     mklog() {  # mklog <xgcc code> <seam> <hello line> <hello status> <dump good|bad|short>
-      printf '%s\r\n' "OVMX xgcc run: pid_ok=1 exited=1 code=$1 status=%X00000000" \
+      printf '%s\r\n' "OVMX-SYSTEM-OK" "OVMX system: ok_rc=${6:-1} bad_rc=${7:-44}" \
+        "OVMX xgcc run: pid_ok=1 exited=1 code=$1 status=%X00000000" \
         "OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 \$STATUS=$2 p0=1" \
         "DRL-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.EXE ===" \
         && sed 's/$/\r/' "$_st/${5:-good}.dump" \
@@ -2222,8 +2226,10 @@ PYEOF2
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X0000002C > "$_st/badstatus.log"
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 bad > "$_st/diffexe.log"
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 short > "$_st/shortexe.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good 0 44 > "$_st/syszero.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good 1 1 > "$_st/sysbadok.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:LD terminated abnormally (signal 11)'; } > "$_st/crash.log"
-    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "crash:1"; do
+    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_drl "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  xgcclink selftest $_n: PASS"; else echo "  xgcclink selftest $_n: FAIL"; _fails=$((_fails+1)); fi

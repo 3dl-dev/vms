@@ -5,18 +5,18 @@
 
 ## Inventory
 
-**491 surfaces catalogued** across 9 domains, each with a per-surface status.
+**490 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 348 |
-| 🟢 implemented | 295 | | n/a | 92 |
-| 🟡 partial | 70 | | advisory | 50 |
+| ✅ verified | 24 | | real | 357 |
+| 🟢 implemented | 304 | | n/a | 81 |
+| 🟡 partial | 71 | | advisory | 51 |
 | 🟠 stub | 10 | | facade-risk | 1 |
 | 🔵 designed | 1 | |  |  |
-| ⬜ absent | 91 | |  |  |
+| ⬜ absent | 80 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **445 committed** — **319 met** (implemented/verified), 66 in progress (partial), 60 not started (absent/stub/designed).
+- **444 committed** — **328 met** (implemented/verified), 67 in progress (partial), 49 not started (absent/stub/designed).
 - ⚠ **1 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
@@ -34,15 +34,15 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜⬜⬜`  —  222 surfaces catalogued (156 met · 21 in progress · 45 not started) · V1: 213 committed, 156 met
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (165 met · 22 in progress · 34 not started) · V1: 212 committed, 165 met
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)
-<sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-09-14</sub>
+<sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-10-18</sub>
 
 Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5): dispatch_condition() searches the PRIMARY software exception vector, then the LIB$ESTABLISH frame-handler chain, then the SECONDARY and LAST-CHANCE vectors, in the authentic order (lib_signal.c). LIB$ESTABLISH/REVERT/SIGNAL/STOP/ SIG_TO_RET (5 of ~8 core LIB$ CHF entry points) are implemented; the chain is thread-local single-mode userspace (documented, not a per-process fake of a shared facility). SYS$UNWIND is a real frame transfer (rung-2, vms-8802): honors newpc, abandons intervening frames via setjmp/longjmp into an armed VMS$UNWIND_ANCHOR, and on an anchorless ancestor reconstructs the frame by walking the genuine Alpha call chain (PDSC+RSA) through the LIB$GET_*_INVO primitives (rung-3, vms-1fa). SYS$SETEXV establishes the primary/secondary/ last-chance vectors (rung-1, vms-2e72). Hardware faults are bridged to conditions through the SAME dispatcher: SS$_HPARITH from SIGFPE (arith bridge, vms-db3) and SS$_ACCVIO from SIGSEGV/SIGBUS/SIGILL (rung-4, vms-cc8), both Alpha. SYS$DCLEXH registers a real PCB exit handler run LIFO by SYS$EXIT. chf$mech_array frame+depth+savr0 are real; only savr1 stays 0 (host C ABI exposes no VAX/Alpha R1). LIB$SIG_TO_STOP, LIB$MATCH_COND and SYS$EXIV remain absent. Not oracle-verified (local corpus self-tests only, tests/corpus/ tier1-examples/lib_establish.c / lib_sig_to.c / sys_unwind.c) -> implemented, not verified.
 
 
-<sub>16 items · 13 met · 0 in progress · 3 not started</sub>
+<sub>15 items · 13 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -52,7 +52,6 @@ Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5): d
 | 🟢≈ | `lib$stop` | routine | Signal a condition and force program exit if unhandled | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` |
 | 🟢≈ | `lib$sig_to_ret` | routine | Convert a signal to a return status | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` — writes chf$is_mch_savr0 = the signalled condition name |
 | 🟢≈ | `lib$sig_to_stop` | routine | Convert a signal to a stop | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` — re-signals a failure condition through lib$stop; success/informational conditions are resignalled untouched |
-| ⬜ | `lib$sig_to_stop` | routine | Convert a signal to STOP severity | absent | n/a | in |  |
 | ⬜ | `lib$match_cond` | routine | Match a condition code against a list, ignoring severity | absent | n/a | in |  |
 | 🟢 | `lib$_get_invo_context` | routine | Invocation-context primitives (LIB$GET_CURR_INVO_CONTEXT, LIB$GET_PREV_INVO_CONTEXT, LIB$GET_INVO_CONTEXT, LIB$GET_INVO_HANDLE, LIB$GET_PREV_INVO_HANDLE) | implemented | real | in | `src/libvms/rtl/lib_invo.c` — Alpha (CHF rung-3, vms-1fa): walks the genuine Alpha call chain (PDSC+RSA, Alpha Calling Standard) so perform_unwind() can resume into an anchorless ancestor |
 | 🟢≈ | `chf$mech_array` | struct | Condition-handler mechanism-args array (savr0/savr1/frame fields) | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` — chf$ph_mch_frame + chf$is_mch_depth are real (establisher frame via __builtin_frame_address + real chain depth); chf$is_mch_savr0 is written by lib$sig_to_ret. Only chf$is_mch_savr1 stays 0 -- the host C ABI exposes no VAX/Alpha R1 to capture (documented gap, not fabrication) |
@@ -137,12 +136,12 @@ The OVMX mth$routines.h declares 55 MTH$ routines; 42 are implemented in rtl/mth
 | ⬜ | `mth$init_random_number_generator` | routine | Seed/initialize the pseudo-random number generator | absent | n/a | in |  |
 
 ### ots — OTS$ Object-Time-System RTL
-<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS RTL Object Time System (OTS$) Manual · reviewed 2026-09-14</sub>
+<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS RTL Object Time System (OTS$) Manual · reviewed 2026-10-18</sub>
 
 The OVMX ots$routines.h declares 44 OTS$ routines; 32 are implemented in rtl/ots_routines.c, broadly real. Gaps: packed-decimal conversions (OTS$CVT_T_P/CVT_P_T, blocking COBOL/DIBOL decimal), the comparison family (OTS$CMP_GTR/GEQ/...), and string-descriptor management (OTS$SCOPY_DXDX/SCOPY_R_DX/SFREE1_DD/SFREEN_DD/SGET1_DD) — all declared in the header but with zero implementation, a pure stub gap.
 
 
-<sub>13 items · 5 met · 0 in progress · 8 not started</sub>
+<sub>13 items · 10 met · 0 in progress · 3 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -154,11 +153,11 @@ The OVMX ots$routines.h declares 44 OTS$ routines; 32 are implemented in rtl/ots
 | ⬜ | `ots$cvt_t_p` | routine | Convert text to packed decimal | absent | n/a | in | blocks COBOL/DIBOL decimal corpus |
 | ⬜ | `ots$cvt_p_t` | routine | Convert packed decimal to text | absent | n/a | in | blocks COBOL/DIBOL decimal corpus |
 | ⬜ | `ots$_cmp_family` | routine | Comparison family (OTS$CMP_GTR, OTS$CMP_GEQ, ...) | absent | n/a | in |  |
-| ⬜ | `ots$scopy_dxdx` | routine | Copy dynamic descriptor to dynamic descriptor | absent | n/a | in | declared in header, zero implementation — pure stub gap |
-| ⬜ | `ots$scopy_r_dx` | routine | Copy fixed string to dynamic descriptor | absent | n/a | in | declared in header, zero implementation — pure stub gap |
-| ⬜ | `ots$sfree1_dd` | routine | Free one dynamic descriptor | absent | n/a | in | declared in header, zero implementation — pure stub gap |
-| ⬜ | `ots$sfreen_dd` | routine | Free N dynamic descriptors | absent | n/a | in | declared in header, zero implementation — pure stub gap |
-| ⬜ | `ots$sget1_dd` | routine | Allocate one dynamic descriptor | absent | n/a | in | declared in header, zero implementation — pure stub gap |
+| 🟢 | `ots$scopy_dxdx` | routine | Copy string from any descriptor to any descriptor | implemented | real | in | `src/libvms/rtl/ots_routines.c` — Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c. |
+| 🟢 | `ots$scopy_r_dx` | routine | Copy string by reference to a descriptor | implemented | real | in | `src/libvms/rtl/ots_routines.c` — Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c. |
+| 🟢 | `ots$sfree1_dd` | routine | Free one dynamic descriptor | implemented | real | in | `src/libvms/rtl/ots_routines.c` — Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c. |
+| 🟢 | `ots$sfreen_dd` | routine | Free N dynamic descriptors | implemented | real | in | `src/libvms/rtl/ots_routines.c` — Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c. |
+| 🟢 | `ots$sget1_dd` | routine | Allocate one dynamic descriptor | implemented | real | in | `src/libvms/rtl/ots_routines.c` — Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c. |
 
 ### rms-api — RMS programmatic API — entry points, control blocks, file organizations
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS Record Management Services Reference Manual · reviewed 2026-10-08</sub>
@@ -350,20 +349,20 @@ VMS ships ~10 channel/QIO services; OVMX declares 6. Executive-issued channels a
 | ⬜ | `sys$_other` | routine | Remaining SYS$ I/O channel/QIO services beyond assign/dassgn/qio/qiow/device_scan (VMS ships ~10 total for the QIO/channel surface) | absent | n/a | in |  |
 
 ### sys-lock — SYS$ Lock Manager (Programmatic $ENQ/$DEQ)
-<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Lock Management Services · reviewed 2026-09-14</sub>
+<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Lock Management Services · reviewed 2026-10-18</sub>
 
 VMS ships ~10 lock-management services; OVMX implements a 3-routine subset (ENQ/ENQW/DEQ), real. SYS$GETLKI and SYS$GETLKIW are absent entirely.
 
 
-<sub>6 items · 3 met · 0 in progress · 3 not started</sub>
+<sub>6 items · 5 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟢 | `sys$enq` | routine | Enqueue a lock request | implemented | real | in | `src/libvms/syssvc/sys_lock.c` |
 | 🟢 | `sys$enqw` | routine | Enqueue a lock request (waits for completion) | implemented | real | in | `src/libvms/syssvc/sys_lock.c` |
 | 🟢 | `sys$deq` | routine | Dequeue (release) a lock | implemented | real | in | `src/libvms/syssvc/sys_lock.c` |
-| ⬜ | `sys$getlki` | routine | Get lock information (single item) | absent | n/a | in |  |
-| ⬜ | `sys$getlkiw` | routine | Get lock information (waits for completion) | absent | n/a | in |  |
+| 🟢 | `sys$getlki` | routine | Get lock information (single item) | implemented | real | in | `src/libvms/syssvc/sys_lock.c` — Every item answered (LKI$_LOCKID/RESNAM/GRANTCOUNT/PARENT/STATE) is read from the kernel lock manager via VMS_IOCTL_GETLKI; the item-list loop only validates codes (SS$_BADPARAM for one the executive cannot answer). Proof tests/qemu/test_syssvc_getlki.c. The remaining LKI$ items are not answered. |
+| 🟢 | `sys$getlkiw` | routine | Get lock information (waits for completion) | implemented | real | in | `src/libvms/syssvc/sys_lock.c` — Same service as sys$getlki: getlki_impl completes synchronously, so $GETLKIW is $GETLKI. Proof tests/qemu/test_syssvc_getlki.c. |
 | ⬜ | `sys$_other` | routine | Remaining SYS$ lock-management services beyond enq/enqw/deq/getlki(w) (VMS ships ~10 total) | absent | n/a | in |  |
 
 ### sys-logicalnames — SYS$ Logical-Name Services
@@ -416,12 +415,12 @@ VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EX
 | ⬜ | `sys$lckpag` | routine | Lock pages in physical memory | absent | n/a | out | kernel-mode/PFN, permanently out of scope |
 
 ### sys-process — SYS$ Process Control
-<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Process Control Services · reviewed 2026-09-14</sub>
+<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Process Control Services · reviewed 2026-10-18</sub>
 
 VMS ships ~25 process-control services; OVMX declares 14 (all in sys_process.c now — the routines moved out of sys_misc.c). CREPRC/DELPRC/HIBER/EXIT are real and executive-backed: $CREPRC genuinely fork()+execve()s and registers the child in the executive process table with inherited identity, handing back the executive-assigned VMS PID; $DELPRC resolves its target through the executive (by prcnam within the caller's UIC group, or by VMS PID) before terminating. WAKE routes through the executive (vms_kif_wake) by PID or self. FORCEX/SUSPND/ RESUME now resolve their target through the executive the same way DELPRC does (by prcnam or VMS PID, or self when none), authorize a cross-process signal by GROUP/WORLD, and deliver the signal to the resolved Linux pid — SS$_NONEXPR for a process the executive does not carry, never a raw kill() on a VMS pid cast as a Linux pid (vms-904). WAKE still does not resolve prcnam-by-name (documented gap). SETPRI now resolves its target through the executive the same way DELPRC does (by prcnam or VMS PID, or self when none), authorizes GROUP/WORLD, and applies the priority to the resolved Linux pid -- SS$_NONEXPR for an absent target, never a silent change of the CALLER's own priority for any target (vms-dff7). SYS$CANCEL cancels io_uring-queued I/O on the channel (IORING_OP_ASYNC_CANCEL; IOSB SS$_CANCEL, event flag, AST) and pending mailbox reads (SS$_ABORT) (vms-c8c). SYS$SETPRN and SYS$PROCESS_SCAN are absent.
 
 
-<sub>13 items · 10 met · 0 in progress · 3 not started</sub>
+<sub>13 items · 11 met · 0 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -435,7 +434,7 @@ VMS ships ~25 process-control services; OVMX declares 14 (all in sys_process.c n
 | 🟢 | `sys$forcex` | routine | Force a process to exit | implemented | real | in | `src/libvms/syssvc/sys_process.c` — sys$exit on the caller when no target; otherwise target resolved through the executive by prcnam or VMS PID (like $DELPRC), authorized GROUP/WORLD; SIGUSR1 to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904) |
 | 🟢 | `sys$setpri` | routine | Set process scheduling priority | implemented | real | in | `src/libvms/syssvc/sys_process.c` — target resolved through the executive by prcnam (caller's UIC group) or VMS PID (like $DELPRC), or self when none; authorized GROUP/WORLD for another process; the VMS-priority<->Linux-nice map is applied to the RESOLVED target's Linux pid, SS$_NONEXPR for an absent target (vms-dff7). Was facade-risk: discarded pidadr/prcnam and set the CALLER's priority for any target. |
 | 🟢 | `sys$cancel` | routine | Cancel all I/O on all channels of the calling process | implemented | real | in | `src/libvms/syssvc/sys_process.c` — Proof tests/qemu/test_syssvc_cancel_uring.c + defects.d/cancel-uring-noop.defect; cancel in sys_uring.c vms_uring_cancel_fd. io_uring-queued requests on the channel's descriptor are cancelled in the kernel and complete with SS$_CANCEL in the IOSB, event flag set, AST run; a request that had already completed keeps its result; pending mailbox reads complete SS$_ABORT (observed, IO.CANCEL.DONE); a channel not held is refused (vms-4a69). Was facade-risk: a no-op returning SS$_NORMAL while the I/O stayed pending (vms-c8c). |
-| ⬜ | `sys$setprn` | routine | Set the calling process's name | absent | n/a | in | no $SETPRN service; only an internal vms_kif_setprn used by $CREPRC to stamp the child name |
+| 🟢 | `sys$setprn` | routine | Set the calling process's name | implemented | real | in | `src/libvms/syssvc/sys_process.c` — The name lives in the executive's process table: vms_kif_setprn renames this process there and the executive refuses a duplicate name in the group (SS$_DUPLNAM); only the descriptor-to-string copy is userspace. Corpus example tests/corpus/tier1-examples/sys_setprn.c. |
 | ⬜ | `sys$process_scan` | routine | Scan for processes matching selection criteria | absent | n/a | in |  |
 | ⬜ | `sys$_other` | routine | Remaining SYS$ process-control services beyond the routines named above (VMS ships ~25 total) | absent | n/a | in |  |
 
@@ -470,12 +469,12 @@ SYS$SETPRV is now executive-authoritative (vms-pv1): the mask change routes thro
 | ⬜ | `sys$check_access` | routine | Secondary/legacy access-check opinion | absent | n/a | out | deliberately removed by design (vms-2b8) — anti-facade precedent, not a gap to fill |
 
 ### sys-time — SYS$ Time & Timers
-<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Time and Timer Services · reviewed 2026-09-14</sub>
+<sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Time and Timer Services · reviewed 2026-10-18</sub>
 
 VMS ships ~10 time/timer services; OVMX declares 7. SYS$GETTIM/NUMTIM/BINTIM/ ASCTIM/GETUTC are real conversions. SYS$SETIMR/CANTIM are process-local POSIX timers, not queued through an executive timer facility. SYS$SCHDWK and SYS$GETTIM_PREC are absent.
 
 
-<sub>9 items · 7 met · 0 in progress · 2 not started</sub>
+<sub>9 items · 8 met · 1 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -486,8 +485,8 @@ VMS ships ~10 time/timer services; OVMX declares 7. SYS$GETTIM/NUMTIM/BINTIM/ AS
 | 🟢 | `sys$getutc` | routine | Get the current UTC time (128-bit UTC binary) | implemented | real | in | `src/libvms/syssvc/sys_time.c` |
 | 🟢≈ | `sys$setimr` | routine | Set a timer request (AST/event-flag at expiration) | implemented | advisory | in | `src/libvms/syssvc/sys_time.c` — process-local POSIX timer, not queued through the executive |
 | 🟢≈ | `sys$cantim` | routine | Cancel a timer request | implemented | advisory | in | `src/libvms/syssvc/sys_time.c` — process-local POSIX timer, not queued through the executive |
-| ⬜ | `sys$schdwk` | routine | Schedule wakeup | absent | n/a | in |  |
-| ⬜ | `sys$gettim_prec` | routine | Get high-precision system time | absent | n/a | in |  |
+| 🟡≈ | `sys$schdwk` | routine | Schedule wakeup | partial | advisory | in | `src/libvms/syssvc/sys_time.c` — Armed through sys$setimr as a process-local POSIX timer that $WAKEs the caller: a scheduled wakeup dies with the image that requested it (no executive timer queue holds it); a repeat interval or a target named by process name is refused. Corpus example tests/corpus/tier1-examples/sys_schdwk.c. |
+| 🟢 | `sys$gettim_prec` | routine | Get high-precision system time | implemented | real | in | `src/libvms/syssvc/sys_time.c` — The host clock read; it already has sub-tick resolution, so it never reports reduced precision. Corpus example tests/corpus/tier1-examples/sys_gettim_prec.c. |
 
 ## B. File System & Storage
 

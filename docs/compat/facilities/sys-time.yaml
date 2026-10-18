@@ -11,7 +11,7 @@ summary: >
   ASCTIM/GETUTC are real conversions. SYS$SETIMR/CANTIM are process-local POSIX
   timers, not queued through an executive timer facility. SYS$SCHDWK and
   SYS$GETTIM_PREC are absent.
-last_reviewed: 2026-09-14
+last_reviewed: 2026-10-18
 items:
   - {id: sys$gettim, kind: routine, status: implemented, authenticity: real, vms: "Get current system time (64-bit quadword)", evidence: src/libvms/syssvc/sys_time.c}
   - {id: sys$numtim, kind: routine, status: implemented, authenticity: real, vms: "Convert quadword time to a numeric time vector", evidence: src/libvms/syssvc/sys_time.c}
@@ -20,5 +20,5 @@ items:
   - {id: sys$getutc, kind: routine, status: implemented, authenticity: real, vms: "Get the current UTC time (128-bit UTC binary)", evidence: src/libvms/syssvc/sys_time.c}
   - {id: sys$setimr, kind: routine, status: implemented, authenticity: advisory, vms: "Set a timer request (AST/event-flag at expiration)", evidence: src/libvms/syssvc/sys_time.c, notes: "process-local POSIX timer, not queued through the executive"}
   - {id: sys$cantim, kind: routine, status: implemented, authenticity: advisory, vms: "Cancel a timer request", evidence: src/libvms/syssvc/sys_time.c, notes: "process-local POSIX timer, not queued through the executive"}
-  - {id: sys$schdwk, kind: routine, status: absent, authenticity: n/a, vms: "Schedule wakeup"}
-  - {id: sys$gettim_prec, kind: routine, status: absent, authenticity: n/a, vms: "Get high-precision system time"}
+  - {id: sys$schdwk, kind: routine, status: partial, authenticity: advisory, vms: "Schedule wakeup", evidence: src/libvms/syssvc/sys_time.c, notes: "Armed through sys$setimr as a process-local POSIX timer that $WAKEs the caller: a scheduled wakeup dies with the image that requested it (no executive timer queue holds it); a repeat interval or a target named by process name is refused. Corpus example tests/corpus/tier1-examples/sys_schdwk.c."}
+  - {id: sys$gettim_prec, kind: routine, status: implemented, authenticity: real, vms: "Get high-precision system time", evidence: src/libvms/syssvc/sys_time.c, notes: "The host clock read; it already has sub-tick resolution, so it never reports reduced precision. Corpus example tests/corpus/tier1-examples/sys_gettim_prec.c."}

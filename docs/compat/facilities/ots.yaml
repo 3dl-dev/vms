@@ -13,7 +13,7 @@ summary: >
   decimal), the comparison family (OTS$CMP_GTR/GEQ/...), and string-descriptor
   management (OTS$SCOPY_DXDX/SCOPY_R_DX/SFREE1_DD/SFREEN_DD/SGET1_DD) — all
   declared in the header but with zero implementation, a pure stub gap.
-last_reviewed: 2026-09-14
+last_reviewed: 2026-10-18
 items:
   - {id: ots$cvt_l_ti, kind: routine, status: implemented, authenticity: real, vms: "Convert longword to trimmed integer string", evidence: src/libvms/rtl/ots_routines.c}
   - {id: ots$cvt_ti_l, kind: routine, status: implemented, authenticity: real, vms: "Convert trimmed integer string to longword", evidence: src/libvms/rtl/ots_routines.c}
@@ -23,8 +23,8 @@ items:
   - {id: ots$cvt_t_p, kind: routine, status: absent, authenticity: n/a, vms: "Convert text to packed decimal", notes: "blocks COBOL/DIBOL decimal corpus"}
   - {id: ots$cvt_p_t, kind: routine, status: absent, authenticity: n/a, vms: "Convert packed decimal to text", notes: "blocks COBOL/DIBOL decimal corpus"}
   - {id: ots$_cmp_family, kind: routine, status: absent, authenticity: n/a, vms: "Comparison family (OTS$CMP_GTR, OTS$CMP_GEQ, ...)"}
-  - {id: ots$scopy_dxdx, kind: routine, status: absent, authenticity: n/a, vms: "Copy dynamic descriptor to dynamic descriptor", notes: "declared in header, zero implementation — pure stub gap"}
-  - {id: ots$scopy_r_dx, kind: routine, status: absent, authenticity: n/a, vms: "Copy fixed string to dynamic descriptor", notes: "declared in header, zero implementation — pure stub gap"}
-  - {id: ots$sfree1_dd, kind: routine, status: absent, authenticity: n/a, vms: "Free one dynamic descriptor", notes: "declared in header, zero implementation — pure stub gap"}
-  - {id: ots$sfreen_dd, kind: routine, status: absent, authenticity: n/a, vms: "Free N dynamic descriptors", notes: "declared in header, zero implementation — pure stub gap"}
-  - {id: ots$sget1_dd, kind: routine, status: absent, authenticity: n/a, vms: "Allocate one dynamic descriptor", notes: "declared in header, zero implementation — pure stub gap"}
+  - {id: ots$scopy_dxdx, kind: routine, status: implemented, authenticity: real, vms: "Copy string from any descriptor to any descriptor", evidence: src/libvms/rtl/ots_routines.c, notes: "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c."}
+  - {id: ots$scopy_r_dx, kind: routine, status: implemented, authenticity: real, vms: "Copy string by reference to a descriptor", evidence: src/libvms/rtl/ots_routines.c, notes: "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c."}
+  - {id: ots$sfree1_dd, kind: routine, status: implemented, authenticity: real, vms: "Free one dynamic descriptor", evidence: src/libvms/rtl/ots_routines.c, notes: "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c."}
+  - {id: ots$sfreen_dd, kind: routine, status: implemented, authenticity: real, vms: "Free N dynamic descriptors", evidence: src/libvms/rtl/ots_routines.c, notes: "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c."}
+  - {id: ots$sget1_dd, kind: routine, status: implemented, authenticity: real, vms: "Allocate one dynamic descriptor", evidence: src/libvms/rtl/ots_routines.c, notes: "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c."}

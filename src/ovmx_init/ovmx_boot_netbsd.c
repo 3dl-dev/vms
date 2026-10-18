@@ -82,6 +82,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include <string.h>
 #include <unistd.h>
 #include <sys/param.h>
+#include <dirent.h>
 #include <sys/sysctl.h>
 #include <sys/time.h>
 #include <uvm/uvm_extern.h>
@@ -203,6 +204,24 @@ static void ovmx_memprobe(int sig)
         m2[4] = (int)sizeof(kp[0]); m2[5] = 64;
         if (sysctl(m2, 6, kp, &ksz, NULL, 0) != 0)
             return;
+        {
+            DIR *dd = opendir("/run/ovmx-boot");
+            struct dirent *de;
+            long long tot = 0;
+            while (dd && (de = readdir(dd)) != NULL) {
+                char fp[300];
+                struct stat st;
+                snprintf(fp, sizeof(fp), "/run/ovmx-boot/%s", de->d_name);
+                if (stat(fp, &st) == 0 && S_ISREG(st.st_mode)) {
+                    tot += st.st_size;
+                    n = snprintf(b, sizeof(b), "MEMSTAGE %s %lldK\n", de->d_name, (long long)st.st_size / 1024);
+                    if (n > 0) (void)write(2, b, (size_t)n);
+                }
+            }
+            if (dd) closedir(dd);
+            n = snprintf(b, sizeof(b), "MEMSTAGE total %lldK\n", tot / 1024);
+            if (n > 0) (void)write(2, b, (size_t)n);
+        }
         cnt = ksz / sizeof(kp[0]);
         for (i = 0; i < cnt; i++) {
             n = snprintf(b, sizeof(b), "MEMPROC pid=%d %s rss=%lldK vsz=%lldK t=%lld d=%lld s=%lld\n",

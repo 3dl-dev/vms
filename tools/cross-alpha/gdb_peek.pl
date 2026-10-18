@@ -47,7 +47,7 @@ while ($n < 400) {
     $n++;
     printf $log "HIT %d stop=%s pc=%#x t0(r1)=%#x a0(r16)=%#x a1=%#x a2=%#x ra(r26)=%#x pv(r27)=%#x sp=%#x\n",
         $n, substr($stop, 0, 3), $pc, $r[1], $r[16], $r[17], $r[18], $r[26], $r[27], $r[30];
-    if ($r[1] == 0 || $r[1] < 0x1000) {
+    if ($r[1] < 0x1000 || $r[1] > 0x10000000) {
         for my $w ([$addr - 64, $len + 128]) {
             send_pkt(sprintf('m%x,%x', $w->[0], $w->[1])); my $m = recv_pkt();
             print $log sprintf("MEM %#x:\n", $w->[0]);

@@ -336,8 +336,10 @@ static const struct dcl_qual_def q_attach[] = {
     { "IDENTIFICATION", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     QUAL_END
 };
+/* No qualifiers: /FDL (a real record-format conversion) is not implemented, so
+ * DCL rejects it as %DCL-W-IVQUAL like any qualifier the verb does not take,
+ * rather than minting a CONVERT message VMS does not have (vms-558e). */
 static const struct dcl_qual_def q_convert[] = {
-    { "FDL", CDU_VT_VALUE, 0, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_reply[] = {

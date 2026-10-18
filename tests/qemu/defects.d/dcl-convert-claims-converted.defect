@@ -3,15 +3,15 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "DCL CONVERT honesty (src/vmsdcl/dcl_cmd_misc.c cmd_convert, vms-558e)";;
-        targets)      echo "vmsdcl/dcl_cmd_misc.c";;
+        facility)     echo "DCL CONVERT honesty (src/vmsdcl/dcl_builtin.c q_convert, vms-558e)";;
+        targets)      echo "vmsdcl/dcl_builtin.c";;
         suites_red)   echo "test_syssvc_convert_dcl";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "CONVERT/FDL is no longer refused: the NOFDL refusal is skipped, so /FDL falls through to the line copy and the old \"CONVERTED\" claim path -- the pre-vms-558e facade that reported a record-format conversion it did not perform.";;
+        why)          echo "CONVERT/FDL is no longer refused: /FDL is declared in q_convert again, so DCL accepts it and the line copy runs while ignoring it -- the pre-vms-558e facade that reported a record-format conversion it did not perform.";;
         require_fail) cat <<'EOF2'
-CONVERT/FDL is refused (%CONVERT-E-NOFDL), not accepted-and-ignored
+CONVERT/FDL is rejected (%DCL-W-IVQUAL), not accepted-and-ignored
 CONVERT/FDL wrote no output file (no unconverted copy passed off as converted)
 EOF2
                       ;;
@@ -22,6 +22,6 @@ EOF2
 }
 
 defect_apply() {
-        sed -i 's|^    if (dcl_has_qualifier(cmd, "FDL")) {$|    if (0 \&\& dcl_has_qualifier(cmd, "FDL")) { /* NEGCTL dcl-convert-claims-converted */|' "$_file"
+        sed -i '/^static const struct dcl_qual_def q_convert\[\] = {$/,/QUAL_END/ s|^    QUAL_END$|    { "FDL", CDU_VT_VALUE, 0, NULL, NULL }, QUAL_END /* NEGCTL dcl-convert-claims-converted */|' "$_file"
     :
 }

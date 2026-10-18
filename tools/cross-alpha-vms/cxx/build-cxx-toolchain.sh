@@ -128,19 +128,20 @@ cd /tmp/cxx
 # it 24-byte records it reads as 32 bytes (the "pointer" templ/ptr members at
 # +16/+24 in 8-byte form), so the first thread-variable access copied from address 4.
 # emutls.o is the only libgcc member that sees the layout, so the 32-bit object
-# alone is archived beside the 32-bit libstdc++ for 32-bit links to name ahead of
-# -lgcc: it defines __emutls_get_address and __emutls_register_common, the only
-# two entry points, so libgcc's own emutls.o is never pulled in beside it.
-echo "== [5b] libgcc emutls.o at the DEC C default (32-bit) pointer size -> $X/p32/lib/libemutls32.a =="
+# alone is kept beside the 32-bit libstdc++ as a plain object for 32-bit links to
+# name on their command line: it defines __emutls_get_address and
+# __emutls_register_common, the only two entry points, so libgcc's own emutls.o is
+# never pulled in beside it.
+echo "== [5b] libgcc emutls.o at the DEC C default (32-bit) pointer size -> $X/p32/lib/emutls32.o =="
 mkdir -p "$X/p32/lib"
-if [ ! -f "$X/p32/lib/libemutls32.a" ]; then
+if [ ! -f "$X/p32/lib/emutls32.o" ]; then
     LGB=/tmp/cxx/build/$TARGET/libgcc
     [ -d "$LGB" ] || { echo "FAIL: no libgcc build tree at $LGB for the 32-bit emutls"; exit 1; }
     rm -f "$LGB/emutls.o"
     make -C "$LGB" emutls.o CFLAGS="-g0 -O2 -fno-function-sections -fno-data-sections" \
         > /tmp/cxx/emutls32.log 2>&1 || { tail -30 /tmp/cxx/emutls32.log; exit 1; }
     [ -f "$LGB/emutls.o" ] || { echo "FAIL: emutls.o not built"; exit 1; }
-    ar rcS "$X/p32/lib/libemutls32.a" "$LGB/emutls.o"
+    cp "$LGB/emutls.o" "$X/p32/lib/emutls32.o"
 fi
 cd /tmp/cxx
 

@@ -14,8 +14,8 @@
 # the build's C RTL); <joint> the shareables the program links against. Like
 # the host GCC, gas is built at the DEC C default pointer size (32-bit); its
 # __thread variables (emulated TLS) need libgcc's emutls at that size too, which
-# cxx/build-cxx-toolchain.sh archives as p32/lib/libemutls32.a (named in LIBS, ahead
-# of the driver's -lgcc).
+# cxx/build-cxx-toolchain.sh keeps as p32/lib/emutls32.o (named in LDFLAGS: a plain
+# object is linked wherever it sits on the command line, ahead of the driver's -lgcc).
 # Output: /w/host-as/as.exe; progress and any failure go to stdout.
 set -euo pipefail
 T=alpha-dec-vms; B=x86_64-pc-linux-gnu
@@ -45,10 +45,13 @@ export CONFIG_SITE=/src/tools/cross-alpha-vms/cxx/config.site
     --disable-plugins --disable-gdb --disable-ld --disable-binutils --disable-gold \
     --disable-sim --disable-readline --without-zstd --with-system-zlib=no \
     CC="$T-gcc" AR=ar RANLIB=true CFLAGS="-O2 -I/src/src/libvms/include/hostabi" \
-    LIBS="$X/p32/lib/libemutls32.a" \
+    LDFLAGS="$X/p32/lib/emutls32.o" \
     > cfg.log 2>&1 || { tail -40 cfg.log; exit 1; }
 # (hostabi/ puts the VMS-layout <rms.h>/<starlet.h> a DEC C program sees ahead of the sysroot's native-OVMX ones; see its headers)
-make -j"$JOBS" all-gas > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]|Error ' make.log | head -40; tail -20 make.log; exit 1; }
+make -j"$JOBS" V=1 all-gas > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]|Error ' make.log | head -40; tail -20 make.log; exit 1; }
+# the 32-bit emutls object must be on gas' link line (a link that quietly dropped it
+# would use libgcc's 64-bit-pointer emutls and read gas' __thread records wrongly)
+grep -q 'emutls32\.o' make.log || { echo "build-host-as: emutls32.o is not on the as-new link line"; exit 1; }
 mkdir -p $O/out
 cp gas/as-new.exe $O/out/as.exe 2>/dev/null || cp gas/as-new $O/out/as.exe
 ls -la $O/out/as.exe

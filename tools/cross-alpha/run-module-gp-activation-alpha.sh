@@ -1791,7 +1791,7 @@ PYEOF
     cp "$_lk" "$WORK/joint/link.exe"
     # what the link line names, from the stage-2 toolchain and the shareable graph
     mkdir -p "$WORK/joint/lnk"
-    _lgd=$(dirname "$(find "$_tc/cxx/lib/gcc/alpha-dec-vms" -name crt0.o | head -1)")
+    _lgd=$(dirname "$(find -L "$_tc/cxx/lib/gcc/alpha-dec-vms" -name crt0.o | head -1)")
     for _f in crt0.o:CRT0.O crtbegin.o:CRTBEGIN.O crtend.o:CRTEND.O vms-dwarf2eh.o:VMS-DWARF2EH.O libgcc.a:LIBGCC.A; do
       [ -s "$_lgd/${_f%%:*}" ] || die "no ${_f%%:*} in the stage-2 toolchain ($_lgd)"
       cp "$_lgd/${_f%%:*}" "$WORK/joint/lnk/${_f##*:}"

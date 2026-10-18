@@ -538,9 +538,10 @@ assert_drv() {
 # the line its source asks for between the proof markers and finished with a
 # success status, and (d) no activation error or abnormal termination.
 assert_lnk() {
-  local log="$1"
+  local log="$1" r1="$2" r2="$3"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
-  local cc1_ok as_ok ln_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 ran=0 st_ok=0
+  [ -s "$r1" ] && [ -s "$r2" ] || { echo "  FAIL: no reference image"; return 1; }
+  local same=0 cc1_ok as_ok ln_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 ran=0 st_ok=0
   cc1_ok=$(grep -qaE 'OVMX cc1 run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   as_ok=$(grep -qaE 'OVMX as run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   ln_ok=$(grep -qaE 'OVMX link run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
@@ -556,14 +557,17 @@ assert_lnk() {
   awk '/LNK-PROOF: === RUN THE LINKED PROGRAM/{f=1; next} /LNK-PROOF: HELLO-STATUS=/{f=0} f' "$log" | tr -d '\r' \
     | grep -qx 'hello from cc1 on OVMX 49' && ran=1
   grep -aqE 'LNK-PROOF: HELLO-STATUS=%X00000001 SEVERITY=1' "$log" && st_ok=1
+  CMP_BEGIN="LNK-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.EXE ===" CMP_END="LNK-PROOF: DUMP-STATUS=" \
+    python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1" "$r2" && same=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
   echo "  (a) cc1 ran : $cc1_ok ; as ran : $as_ok ; link ran : $ln_ok (want 1 1 1)"
   echo "  (b) launcher seam : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
   echo "  (c) RUN HELLO.EXE printed the line : $ran ; success status : $st_ok"
+  echo "  (c2) DCL DUMP HELLO.EXE == the cross LINK.EXE image : same=$same"
   echo "  (d) no activation err : ok=$err_ok"
-  [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$ln_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$ln_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$same" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -1996,11 +2000,31 @@ PYEOF
     JOINT_CRTL_RMS_VENEER=1
     BOOT_TIMEOUT="${LNK_BOOT_TIMEOUT:-2400}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
     _st=$(mktemp -d); _fails=0
-    mklog() {  # mklog <cc1 code> <as code> <link code> <seam> <hello line> <hello status>
+    python3 -I - "$_st" <<'PYEOF2'
+import sys
+d = sys.argv[1]
+ref1 = bytes(range(1, 91)); r2 = bytearray(ref1); r2[20] ^= 0xff; r2[21] ^= 0xff
+open(d + "/r1.exe", "wb").write(ref1); open(d + "/r2.exe", "wb").write(bytes(r2))
+def dump(b):
+    out = []
+    for o in range(0, len(b), 16):
+        row = b[o:o + 16]
+        hx = " ".join(row[i:i + 4].hex().upper().ljust(8) for i in range(0, 16, 4))
+        out.append("%08X %s  %s" % (o % 512, hx, "." * len(row)))
+    return out
+good = bytearray(ref1); good[20] = 0x77            # differs only at a volatile offset
+bad = bytearray(ref1); bad[40] ^= 1                # differs outside the time stamp
+for n, b in (("good", bytes(good)), ("bad", bytes(bad)), ("short", ref1[:50])):
+    open(d + "/" + n + ".dump", "w").write("\n".join(dump(b)) + "\n")
+PYEOF2
+    mklog() {  # mklog <cc1 code> <as code> <link code> <seam> <hello line> <hello status> [dump: good|bad|short]
       printf '%s\r\n' "OVMX cc1 run: pid_ok=1 exited=1 code=$1 status=%X00000000" \
         "OVMX as run: pid_ok=1 exited=1 code=$2 status=%X00000000" \
         "OVMX link run: pid_ok=1 exited=1 code=$3 status=%X00000000" \
         "OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 \$STATUS=$4 p0=1" \
+        "LNK-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.EXE ===" \
+        && sed 's/$/\r/' "$_st/${7:-good}.dump" \
+        && printf '%s\r\n' "LNK-PROOF: DUMP-STATUS=%X00000001 SEVERITY=1" \
         "LNK-PROOF: === RUN THE LINKED PROGRAM: RUN HELLO.EXE ===" "$5" \
         "LNK-PROOF: HELLO-STATUS=$6 SEVERITY=1" "LNK-PROOF: === END ==="
     }
@@ -2012,10 +2036,12 @@ PYEOF
     mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 50" %X00000001 > "$_st/wrongout.log"
     mklog 0 0 0 0x0035a039 "" %X00000001 > "$_st/noout.log"
     mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X0000002C > "$_st/badstatus.log"
+    mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 bad > "$_st/diffexe.log"
+    mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 short > "$_st/shortexe.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:LINK terminated abnormally (signal 11)'; } > "$_st/crash.log"
-    for _c in "pass:0" "nocc1:1" "noas:1" "nolink:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "crash:1"; do
+    for _c in "pass:0" "nocc1:1" "noas:1" "nolink:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
-      if assert_lnk "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if assert_lnk "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  link selftest $_n: PASS"; else echo "  link selftest $_n: FAIL"; _fails=$((_fails+1)); fi
     done
     rm -rf "$_st"
@@ -2055,8 +2081,21 @@ PYEOF
     docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/lnkimg:/img" \
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
         set -e
-        /out/cxx/bin/alpha-dec-vms-gcc -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/lnkrun_test.c' \
+        /out/cxx/bin/alpha-dec-vms-gcc -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/lnkrun_test.c
+        # the reference image: the same source assembled and linked by the CROSS toolchain
+        # LINK.EXE (twice, to find the link time-stamp bytes), same object name and link line
+        printf "%s\n" "int printf (const char *, ...);" "static int sq (int x) { return x * x; }" "int main (void)" "{" \
+          "  printf (\"hello from cc1 on OVMX %d\\n\", sq (7));" "  return 0;" "}" > /img/hello.c
+        cd /img && cp hello.c "VDA0:[SYSTMP]HELLO.C" && mkdir -p r1 r2
+        for n in 1 2; do
+          /out/cxx/bin/alpha-dec-vms-gcc -nostdinc -x c -c "VDA0:[SYSTMP]HELLO.C" -o r$n/hello.obj
+          /joint/LINK.EXE --transfer __main --use "/joint/DECC\$SHR.EXE" --use /joint/LIBOTS_SHR.EXE \
+            -o r$n/hello.exe /joint/crt0.obj r$n/hello.obj --library /joint/STARLET.a
+          [ "$n" = 1 ] && sleep 3
+        done
+        cp r1/hello.exe ref1.exe; cp r2/hello.exe ref2.exe' \
       > "$GATE_ROOT/lnk-link.log" 2>&1 || { tail -40 "$GATE_ROOT/lnk-link.log"; die "launcher link failed"; }
+    [ -s "$GATE_ROOT/lnkimg/ref1.exe" ] || die "the cross LINK.EXE wrote no reference image"
     cp "$GATE_ROOT/lnkimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
     cp "$_cc1" "$WORK/joint/cc1.exe"; cp "$_as" "$WORK/joint/as.exe"; cp "$_ln" "$WORK/joint/link.exe"
     for _p in crt0.obj STARLET.a; do
@@ -2072,8 +2111,8 @@ PYEOF
     log "step 3: BOOT A -- cc1, as and LINK run on the REAL executive, then DCL RUNs the linked HELLO.EXE (up to ${BOOT_TIMEOUT}s)"
     export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
     run_boot_a
-    grep -aE "OVMX cc1|OVMX as|OVMX link|OVMX-LNK-TRACE|LNK-PROOF|hello from|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|%LINK|link:|fatal signal|pc=" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
-    if assert_lnk "$WORK/modgpA.log"; then
+    grep -aE "OVMX cc1|OVMX as|OVMX link|OVMX-LNK-TRACE|LNK-PROOF|^[0-9A-F]{8} |hello from|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|%LINK|link:|fatal signal|pc=" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_lnk "$WORK/modgpA.log" "$GATE_ROOT/lnkimg/ref1.exe" "$GATE_ROOT/lnkimg/ref2.exe"; then
       echo ""
       echo "PASS: cc1, as and LINK.EXE, all built for the alpha-dec-vms host, compiled, assembled and linked a C"
       echo "      program on OVMX/Alpha, and RUN HELLO.EXE printed its line."

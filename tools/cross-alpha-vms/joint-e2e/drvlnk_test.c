@@ -32,16 +32,13 @@ static void trace(const char *what, int v)
     fflush(0);
 }
 
-int main(void)
+/* Run image with argv; returns 1 when it was created, exited normally with 0. */
+static int stage(const char *tag, const char *image, cp32 const *av)
 {
-    static cp32 av[12];
-    av[0] = "xgcc"; av[1] = "-BSYS$SYSTEM:"; av[2] = "-L/SYS$SYSTEM"; av[3] = "-nostdinc";
-    av[4] = "-x"; av[5] = "c"; av[6] = "VDA0:[SYSTMP]HELLO.C";
-    av[7] = "-o"; av[8] = "VDA0:[SYSTMP]HELLO.EXE"; av[9] = 0;
-    trace("vfork", 0);
+    trace(tag, 0);
     int pid = vfork();
     if (pid == 0) {
-        int r = execv("SYS$SYSTEM:XGCC.EXE", av);
+        int r = execv(image, av);
         trace("execv-returned", r);
         trace("errno", *__errno_location());
         _exit(127);
@@ -54,8 +51,23 @@ int main(void)
     trace("wait-status", status);
     int exited = w == pid && (status & 0x7f) == 0;
     int code = (status >> 8) & 0xff;
-    printf("OVMX xgcc run: pid_ok=%d exited=%d code=%d status=%%X%08X\n",
-           pid_ok, exited, code, (unsigned)status);
+    printf("OVMX %s run: pid_ok=%d exited=%d code=%d status=%%X%08X\n",
+           tag, pid_ok, exited, code, (unsigned)status);
     fflush(0);
-    return pid_ok && exited && code == 0 ? 7 : 3;
+    return pid_ok && exited && code == 0;
+}
+
+int main(void)
+{
+    static cp32 av[12], dv[12];
+    av[0] = "xgcc"; av[1] = "-BSYS$SYSTEM:"; av[2] = "-L/SYS$SYSTEM"; av[3] = "-nostdinc";
+    av[4] = "-x"; av[5] = "c"; av[6] = "VDA0:[SYSTMP]HELLO.C";
+    av[7] = "-o"; av[8] = "VDA0:[SYSTMP]HELLO.EXE"; av[9] = 0;
+    /* what the driver would run, printed and not run (-###): the commands it builds,
+     * in the gate log, for reading a wall against */
+    dv[0] = av[0]; dv[1] = "-###";
+    for (int i = 1; i < 9; i++) dv[i + 1] = av[i];
+    dv[10] = 0;
+    (void)stage("xgcc-dryrun", "SYS$SYSTEM:XGCC.EXE", dv);
+    return stage("xgcc", "SYS$SYSTEM:XGCC.EXE", av) ? 7 : 3;
 }

@@ -2296,7 +2296,8 @@ PYEOF2
     log "step 3: BOOT A -- the GCC driver compiles and links on the REAL executive, then DCL RUNs HELLO.EXE (up to ${BOOT_TIMEOUT}s)"
     export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
     run_boot_a
-    grep -aE "OVMX xgcc|OVMX-DRV-TRACE|DRL-PROOF|^[0-9A-F]{8} |hello from|OVMX-SEAM:|%IMGACT|%DCL|%SYSTEM|%LINK|ld:|gcc:|xgcc:|Couldn|fatal signal|pc=" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    # everything the proof printed, the driver's own output included
+    awk '/DRL-PROOF: === DCL writes the C source/{f=1} f' "$WORK/modgpA.log" 2>/dev/null | tr -d '\r' | sed 's/^/  | /' || true
     if assert_drl "$WORK/modgpA.log" "$GATE_ROOT/drlimg/ref1.exe" "$GATE_ROOT/drlimg/ref2.exe"; then
       echo ""
       echo "PASS: the GCC driver, built for the alpha-dec-vms host, compiled and linked a C program on"

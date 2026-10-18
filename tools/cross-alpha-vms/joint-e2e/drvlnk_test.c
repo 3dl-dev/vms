@@ -1,7 +1,9 @@
 /*
  * drvlnk_test.c - vms-65a: the REAL GCC driver compiles AND links on OVMX/Alpha.
  * The launcher vfork+execv's SYS$SYSTEM:XGCC.EXE as a shell would, with
- *   xgcc -B<SYS$SYSTEM:> -L<SYS$SYSTEM:> -nostdinc -x c HELLO.C -o HELLO.EXE
+ *   xgcc -B/SYS$SYSTEM/ -L/SYS$SYSTEM -nostdinc -x c HELLO.C -o HELLO.EXE
+ * (the paths in the DEC C Unix style: /SYS$SYSTEM/x is SYS$SYSTEM:X, which is how the
+ * port's ld wrapper builds library paths: dir "/lib" name ".a")
  * The driver runs cc1, as and then `ld` -- the port's own wrapper (vms-ld.c), which
  * writes an options file and runs the VMS `link` command (DCL LINK -> LINK.EXE). DCL
  * then RUNs HELLO.EXE. Sentinel 7 = the driver was created, ran and exited 0.
@@ -32,7 +34,7 @@ static void trace(const char *what, int v)
 int main(void)
 {
     static cp32 av[12];
-    av[0] = "xgcc"; av[1] = "-BSYS$SYSTEM:"; av[2] = "-LSYS$SYSTEM:"; av[3] = "-nostdinc";
+    av[0] = "xgcc"; av[1] = "-B/SYS$SYSTEM/"; av[2] = "-L/SYS$SYSTEM"; av[3] = "-nostdinc";
     av[4] = "-x"; av[5] = "c"; av[6] = "VDA0:[SYSTMP]HELLO.C";
     av[7] = "-o"; av[8] = "VDA0:[SYSTMP]HELLO.EXE"; av[9] = 0;
     trace("vfork", 0);

@@ -1663,10 +1663,25 @@ open(d + "/nocc1.log", "w", newline="").write(log(ref1, cc1=0))
 open(d + "/badseam.log", "w", newline="").write(log(ref1, seam="0x0035a019"))
 open(d + "/nodump.log", "w", newline="").write(log(b""))
 open(d + "/crash.log", "w", newline="").write(log(ref1) + "%DCL-F-ABORT, image SYS$SYSTEM:AS terminated abnormally (signal 11)\r\n")
+# a time stamp spelled the way the VMS branch writes it (upper case, the guest's clock)
+# against the host-independent branch's ctime() spelling is masked ...
+rs = bytearray(ref1); rs[30:47] = b"18-Oct-2026 08:02"
+r2s = bytearray(rs); r2s[20] ^= 0xff; r2s[21] ^= 0xff
+open(d + "/s1.obj", "wb").write(bytes(rs)); open(d + "/s2.obj", "wb").write(bytes(r2s))
+gs = bytearray(rs); gs[30:47] = b"18-OCT-2006 08:08"
+open(d + "/stamp.log", "w", newline="").write(log(bytes(gs)))
+# ... and a byte next to it that is not part of the stamp is not
+gb = bytearray(gs); gb[47] ^= 1
+open(d + "/stampbad.log", "w", newline="").write(log(bytes(gb)))
 PYEOF
     for _c in "pass:0" "diffobj:1" "short:1" "noas:1" "nocc1:1" "badseam:1" "nodump:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_as "$_st/$_n.log" "$_st/r1.obj" "$_st/r2.obj" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  as selftest $_n: PASS"; else echo "  as selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    for _c in "stamp:0" "stampbad:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_as "$_st/$_n.log" "$_st/s1.obj" "$_st/s2.obj" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  as selftest $_n: PASS"; else echo "  as selftest $_n: FAIL"; _fails=$((_fails+1)); fi
     done
     rm -rf "$_st"
@@ -1707,7 +1722,10 @@ PYEOF
         cd /img && cp hello.c "VDA0:[SYSTMP]HELLO.C" \
           && $(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=cc1) -quiet -nostdinc -dumpbase hello.c "VDA0:[SYSTMP]HELLO.C" -o ref.s
         AS=$(/out/cxx/bin/alpha-dec-vms-gcc -print-prog-name=as)
-        $AS -o ref1.obj ref.s; sleep 3; $AS -o ref2.obj ref.s' \
+        # the module name in the EVAX header is the output file name: assemble both
+        # references to the name the OVMX run uses (HELLO.OBJ), in their own directories
+        mkdir -p r1 r2; $AS -o r1/hello.obj ref.s; sleep 3; $AS -o r2/hello.obj ref.s
+        cp r1/hello.obj ref1.obj; cp r2/hello.obj ref2.obj' \
       > "$GATE_ROOT/as-link.log" 2>&1 || { tail -40 "$GATE_ROOT/as-link.log"; die "launcher link / reference build failed"; }
     [ -s "$GATE_ROOT/asimg/ref1.obj" ] || die "the cross as wrote no reference object"
     cp "$GATE_ROOT/asimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"

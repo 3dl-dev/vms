@@ -29,7 +29,18 @@ def main():
         print(f"  reference objects differ in LENGTH ({len(a)} vs {len(b)}): cannot mask")
         return 1
     volatile = {i for i in range(len(a)) if a[i] != b[i]}
-    print(f"  reference object {len(a)} bytes, {len(volatile)} volatile (time-stamp) offsets")
+    # The creation time stamp is a character string in the EMH, and the two
+    # assemblers do not spell it alike: bfd's own host-independent branch writes
+    # "18-Oct-2026 08:02" from ctime(), the VMS branch (SYS$ASCTIM, which a VMS
+    # host runs) "18-OCT-2006 08:08" in upper case, from the guest's own clock. Any
+    # DD-MMM-YYYY HH:MM string in either object is a time stamp and is not compared.
+    stamp = re.compile(rb"\d\d-[A-Za-z]{3}-\d{4} \d\d:\d\d")
+    stamps = 0
+    for blob in (a, got):
+        for m in stamp.finditer(blob):
+            volatile.update(range(m.start(), m.end()))
+            stamps += 1
+    print(f"  reference object {len(a)} bytes")
     print(f"  dumped object    {len(got)} bytes")
     if len(got) == 0:
         print("  no object bytes dumped")
@@ -58,7 +69,7 @@ def main():
             print(f"    @{lo}..{hi}: got {got[lo2:hi2].hex()} {got[lo2:hi2]!r}")
             print(f"    {' ' * len(str(lo))}    ref {a[lo2:hi2].hex()} {a[lo2:hi2]!r}")
         return 1
-    print("  identical outside the time-stamp offsets")
+    print(f"  identical outside {len(volatile)} time-stamp bytes ({stamps} date strings, plus what two reference runs vary)")
     return 0
 
 sys.exit(main())

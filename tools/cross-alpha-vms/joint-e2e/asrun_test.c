@@ -120,6 +120,13 @@ int main(void)
         lk[n++] = "--library"; lk[n++] = "VDA0:[SYSTMP]STARLET.A";
         lk[n] = 0;
     }
+    {
+        /* a link with no input: LINK.EXE must say so on stderr, which the pipe carries --
+         * proof that a message from the real link below would be seen */
+        static cp32 nolk[2];
+        nolk[0] = "link"; nolk[1] = 0;
+        (void)stage("link-noargs", "SYS$SYSTEM:LINK.EXE", nolk, 1);
+    }
     int ok = stage("cc1", "SYS$SYSTEM:CC1.EXE", cc, 0);
     if (ok)
         ok = stage("as", "SYS$SYSTEM:AS.EXE", as, 0);

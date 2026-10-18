@@ -908,12 +908,16 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # vms_abi_headers.c and tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test.c,
 # include those headers and are excluded for the same reason (their compiles:
 # run_vms_abi_headers.sh and the vmsabi-rms gate).
+# tools/cross-alpha-vms/include-surface/hostabi_bfd_shapes.c (vms-5303e) includes the
+# host-ABI <rms.h>/<starlet.h> (src/libvms/include/hostabi/), the VMS layout a program
+# built for the OVMX/Alpha host sees; the native scan has no such layout. Its compile is
+# run_vms_abi_headers.sh (with a control that the same TU fails without hostabi/).
 # src/vmslink/ovmx_decc_stat.c and tools/cross-alpha-vms/joint-e2e/
 # crtl_fd_test.c (vms-28d part 2) are written against the DEC C struct stat of
 # the alpha-dec-vms client headers (musl-arch bits/stat.h: st_ino[3], st_fab_*,
 # the __OVMX_DECC_STAT_FIELDS list); a host libc has neither. They define no
 # sys$ service; their real compiles are mk_decc_shr.sh and the crtl-fd gate.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^src/vmsrms/crtl_rms_fd\.c$|^src/vmsrms/rms_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/vms_abi_headers\.c$|^tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test\.c$|^src/vmslink/ovmx_decc_stat\.c$|^tools/cross-alpha-vms/joint-e2e/crtl_fd_test\.c$|^src/libvms/syssvc/sys_vmsabi\.c$"
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^src/vmsrms/crtl_rms_fd\.c$|^src/vmsrms/rms_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/vms_abi_headers\.c$|^tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test\.c$|^src/vmslink/ovmx_decc_stat\.c$|^tools/cross-alpha-vms/joint-e2e/crtl_fd_test\.c$|^src/libvms/syssvc/sys_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/hostabi_bfd_shapes\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

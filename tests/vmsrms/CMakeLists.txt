@@ -415,3 +415,19 @@ target_include_directories(test_rms_default_dir PRIVATE ${VMS_RMS_INCLUDE_DIR} $
 target_link_libraries(test_rms_default_dir PRIVATE vmsrms vmsfs vmslnm pthread)
 add_test(NAME vmsrms_default_dir COMMAND test_rms_default_dir)
 set_tests_properties(vmsrms_default_dir PROPERTIES LABELS "unit;rms" TIMEOUT 30)
+
+# vms-5303e: rms_read_over_acp (DCL DUMP's reader) is fail-honest -- RMS$_ACC with
+# no executive, never a POSIX read of the named path standing in for the volume.
+add_executable(test_read_over_acp test_read_over_acp.c)
+target_include_directories(test_read_over_acp PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_read_over_acp PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_read_over_acp COMMAND test_read_over_acp)
+set_tests_properties(vmsrms_read_over_acp PROPERTIES
+    LABELS "unit;rms"
+    TIMEOUT 30
+)

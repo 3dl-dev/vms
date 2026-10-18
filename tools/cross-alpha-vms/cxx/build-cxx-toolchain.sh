@@ -120,6 +120,30 @@ done
 ar t "$LGDIR/libgcc.a" | grep >/dev/null '^unwind-dw2.o$' || { echo "FAIL: libgcc.a has no EH unwinder"; exit 1; }
 cd /tmp/cxx
 
+# vms-5303e: emulated TLS at the DEC C default (32-bit) pointer size. This target
+# has no native TLS, so `__thread` variables are __emutls_object records whose
+# `void *` members are as wide as the PROGRAM's pointers, and libgcc's
+# __emutls_get_address reads them as wide as ITS pointers. libgcc.a above is built
+# -mpointer-size=64; a 32-bit program (binutils' gas has __thread variables) hands
+# it 24-byte records it reads as 32 bytes (the "pointer" templ/ptr members at
+# +16/+24 in 8-byte form), so the first thread-variable access copied from address 4.
+# emutls.o is the only libgcc member that sees the layout, so the 32-bit object
+# alone is archived beside the 32-bit libstdc++ for 32-bit links to name ahead of
+# -lgcc: it defines __emutls_get_address and __emutls_register_common, the only
+# two entry points, so libgcc's own emutls.o is never pulled in beside it.
+echo "== [5b] libgcc emutls.o at the DEC C default (32-bit) pointer size -> $X/p32/lib/libemutls32.a =="
+mkdir -p "$X/p32/lib"
+if [ ! -f "$X/p32/lib/libemutls32.a" ]; then
+    LGB=/tmp/cxx/build/$TARGET/libgcc
+    [ -d "$LGB" ] || { echo "FAIL: no libgcc build tree at $LGB for the 32-bit emutls"; exit 1; }
+    rm -f "$LGB/emutls.o"
+    make -C "$LGB" emutls.o CFLAGS="-g0 -O2 -fno-function-sections -fno-data-sections" \
+        > /tmp/cxx/emutls32.log 2>&1 || { tail -30 /tmp/cxx/emutls32.log; exit 1; }
+    [ -f "$LGB/emutls.o" ] || { echo "FAIL: emutls.o not built"; exit 1; }
+    ar rcS "$X/p32/lib/libemutls32.a" "$LGB/emutls.o"
+fi
+cd /tmp/cxx
+
 echo "== [6/6] libstdc++-v3 over the OVMX C RTL (configure link tests via OVMX LINK.EXE) =="
 # _USE_STD_STAT (vms-28d part 2): libstdc++'s std::filesystem compares st_ino
 # as a scalar, the X/Open layout; DEC C clients default to the File-ID array.

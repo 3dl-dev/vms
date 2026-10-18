@@ -5400,6 +5400,7 @@ static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
 }
 
 
+#define OVMX_LINK_C 1
 #include "vms_cli.c"   /* the VMS command syntax (vms-ce4) */
 
 int main(int argc, char **argv)

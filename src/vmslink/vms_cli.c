@@ -25,6 +25,16 @@
  */
 
 #include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef OVMX_LINK_C
+/* Compiled on its own (the product-source symbol scan compiles every file): the two
+ * names link.c supplies. Included by link.c, which defines OVMX_LINK_C, none of this. */
+void die(const char *msg);
+static int g_noinform;
+#endif
 
 struct vms_args {
     const char **v;

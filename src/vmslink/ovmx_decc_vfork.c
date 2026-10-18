@@ -363,43 +363,4 @@ int ovmx_execle64(const char *spec, const char *arg0, ...)
     return r;
 }
 
-
-/*
- * system() -- DEC C: the string is a DCL command run in a subprocess by the
- * command language interpreter, through LIB$SPAWN; the value is the VMS
- * condition value of the command (odd = success). The port's linker wrapper
- * writes system("$ link ...") and tests bit 0. A leading "$" is the DCL prompt and
- * is dropped. LIB$SPAWN (LIBVMS$SHR, rtl/lib_misc.c: $CREPRC subprocess, the command
- * fed to DCL as its SYS$INPUT) is bound by name at activation: DECC$SHR is below
- * it in the build cycle, and LIBVMS$SHR is loaded with every C RTL image (LIBVMSRMS$SHR
- * uses it). Without it system() fails with SS$_UNSUPPORTED, never a quiet success.
- * system(NULL) says a command interpreter exists.
- */
-struct ovmx_sys_dsc { unsigned short len; unsigned char dtype, cls; const char *ptr; };
-extern unsigned int lib$spawn(const struct ovmx_sys_dsc *, const void *, const void *,
-                                   const unsigned int *, const void *, unsigned int *,
-                                   unsigned int *, const unsigned int *, void *, void *,
-                                   const void *, const void *, const void *)
-    __attribute__((__weak__));
-
-int ovmx_decc_system(const char *cmd)
-{
-    if (!cmd)
-        return 1;
-    while (*cmd == ' ' || *cmd == '\t')
-        cmd++;
-    if (*cmd == '$')
-        cmd++;
-    while (*cmd == ' ' || *cmd == '\t')
-        cmd++;
-    if (!lib$spawn)
-        return 3658;                                /* SS$_UNSUPPORTED */
-    struct ovmx_sys_dsc d = { (unsigned short)strlen(cmd), 14 /* DSC$K_DTYPE_T */, 1 /* DSC$K_CLASS_S */, cmd };
-    unsigned int status = 0x2Cu;                    /* SS$_ABORT unless the command reports */
-    unsigned int st = lib$spawn(&d, 0, 0, 0, 0, 0, &status, 0, 0, 0, 0, 0, 0);
-    if (!(st & 1u))
-        return (int)st;                             /* the subprocess was not created */
-    return (int)status;
-}
-
 #endif /* __alpha && __VMS */

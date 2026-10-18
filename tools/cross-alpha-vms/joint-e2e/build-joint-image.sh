@@ -272,7 +272,7 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
     echo "-- [vms-9f8e] DECC\$SHR pass 2 (final, the C RTL file layer over RMS, vms-b90) --"
     OVMX_DECC_ARCH=alpha NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \
         ALPHA_CC="$ALPHA_CC" ALPHA_MUSL_SRC="$MUSL_SRC" DECC_USE="$OTS" \
-        ALPHA_CRTL_RMS_USE="$RMS" \
+        ALPHA_CRTL_RMS_USE="$RMS" ALPHA_CRTL_VMS_USE="$VMS" \
         sh "$MK/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
 
     # vms-3b3f: the vector images through which an image LINKed on real

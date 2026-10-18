@@ -402,6 +402,26 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         done
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $FEAT_OBJ"
         echo "mk_decc_shr: DEC C feature-switch API wired (vms-db7): decc\$feature_{get_index,get_name,get_value,set_value}, decc\$set_reentrancy/get_reentrancy (tail-appended)"
+        # vms-65a: DEC C system() (src/vmsrms/crtl_system.c): a DCL command run through
+        # LIB$SPAWN in LIBVMS$SHR, which this pass links --use (ALPHA_CRTL_VMS_USE). The
+        # universal decc$system keeps its place in the vector and is rebound IN PLACE to
+        # ovmx_crtl_system, as fopen/open/creat are; musl's own system() stays internal.
+        [ -n "${ALPHA_CRTL_VMS_USE:-}" ] && [ -f "$ALPHA_CRTL_VMS_USE" ] \
+            || { echo "mk_decc_shr: FAIL ALPHA_CRTL_VMS_USE (LIBVMS\$SHR, for LIB\$SPAWN) not given or not found" >&2; exit 2; }
+        SYS_OBJ="$VENEER_DIR/crtl_system.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+            -o "$SYS_OBJ" "$RMS_SRC_DIR/crtl_system.c"
+        "$NM" --defined-only "$SYS_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_system \
+            || { echo "mk_decc_shr: FAIL crtl_system.c did not define ovmx_crtl_system" >&2; exit 2; }
+        case ",$VEC," in
+            *',decc$system=PROCEDURE,'*) ;;
+            *) echo "mk_decc_shr: FAIL decc\$system is not a PROCEDURE universal to rebind" >&2; exit 2;;
+        esac
+        VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$system=PROCEDURE,/,decc$system\/ovmx_crtl_system=PROCEDURE,/; s/^,//; s/,$//')
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SYS_OBJ"
+        echo "mk_decc_shr: DEC C system() wired (vms-65a): decc\$system -> ovmx_crtl_system (LIB\$SPAWN, --use $ALPHA_CRTL_VMS_USE)"
     fi
 
     # Plain (non-decc$-decorated) names the decc$ filter above cannot catch,
@@ -448,15 +468,6 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # calls (decc$$vfork_setjmp, client <unistd.h>): it must run in the
     # CALLER's frame so exec*() can return to the vfork() point a second time.
     VEC="$VEC,decc\$\$vfork_setjmp/setjmp=PROCEDURE"
-    # vms-65a: DEC C system() runs a DCL command through LIB$SPAWN (ovmx_decc_vfork.c). The
-    # universal decc$system keeps its place in the vector and is rebound IN PLACE to that
-    # function; the musl system() the archive also carries (clone-based, ENOSYS here) stays
-    # an internal, unexported symbol.
-    case ",$VEC," in
-        *',decc$system=PROCEDURE,'*) ;;
-        *) echo "mk_decc_shr: FAIL decc\$system is not a PROCEDURE universal to rebind" >&2; exit 2;;
-    esac
-    VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$system=PROCEDURE,/,decc$system\/ovmx_decc_system=PROCEDURE,/; s/^,//; s/,$//')
     VEC="$VEC,__init_libc=PROCEDURE,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE,___errno_location=PROCEDURE"
 
     # stdin/stdout/stderr -- the C stdio stream FILE* objects, plain DATA names
@@ -530,6 +541,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # the recipe's own echo/log output. See the veneer block earlier for why
     # this must name an ALREADY-BUILT LIBVMSRMS$SHR.EXE.
     [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_RMS_USE"
+    [ -n "${ALPHA_CRTL_VMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_VMS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
     "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_KIFX_OBJ" "$ALPHA_KIFS_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}

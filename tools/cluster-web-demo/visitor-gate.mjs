@@ -197,8 +197,27 @@ async function typeTo(page, who, text) {
 
 // One login step per node per poll (rd vms-db1). Nothing before CN=3.
 async function driveLogins(page, R, el, lastWake) {
+  // Every keystroke the gate sends is recorded per node (rd vms-25f): when,
+  // what kind (a password is never recorded), whether typeTo reported it
+  // delivered, and how much the console grew in the second after a bare RETURN.
+  // That splits "the RETURN never reached the node" (delivered=false, or
+  // grew=0 on a node that is otherwise alive) from "the node got it and
+  // never restarted its login" -- the two are indistinguishable from the
+  // console log alone. What the gate asserts is unchanged.
+  const record = async (w, t) => {
+    const wake = t === '\r';
+    const before = wake ? (await rawConsoleOf(page, w)).length : 0;
+    const delivered = await typeTo(page, w, t);
+    let grew = null;
+    if (wake) { await sleep(1000); grew = (await rawConsoleOf(page, w)).length - before; }
+    (R.keystrokes = R.keystrokes || {});
+    (R.keystrokes[w] = R.keystrokes[w] || []).push(
+      { el, kind: wake ? 'RETURN' : `text(${t.replace(/\r$/, '').length})`, delivered, grew });
+    if (wake) log(`  ${w}: wake RETURN at t=${el}s delivered=${delivered} console grew ${grew} chars`);
+    return delivered;
+  };
   const io = {
-    type: (w, t) => typeTo(page, w, t),
+    type: record,
     read: (w) => consoleOf(page, w, R),
     sleep, log,
     user: userFor, pass: passFor,

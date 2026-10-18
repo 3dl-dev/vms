@@ -1204,6 +1204,15 @@ static void load_producer(const char *path_in, struct producer *p)
     char pbuf[512];
     const char *path = resolve_producer_path(path_in, pbuf, sizeof pbuf);
     const char *base = strrchr(path, '/');
+#if defined(__VMS)
+    /* the producer is recorded by its file name: past a VMS device or directory
+     * (SYS$SHARE:DECC$SHR.EXE, DKA0:[SYS$LDR]X.EXE) as well as a POSIX one */
+    {
+        const char *c = strrchr(path, ':'), *b = strrchr(path, ']');
+        if (c && (!base || c > base)) base = c;
+        if (b && (!base || b > base)) base = b;
+    }
+#endif
     snprintf(p->name, sizeof p->name, "%s", base ? base + 1 : path);
 
     int fd = open(path, O_RDONLY);

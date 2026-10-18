@@ -1,0 +1,30 @@
+# dcl-show-quals-accept-all -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL SHOW per-sub-verb qualifier validation (src/vmsdcl/dcl_cmd_show.c show_subverb_quals, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_dcl_show_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SHOW goes back to accept-all: the per-sub-verb validation result is ignored, so SHOW DEVICE/ZQONE, SHOW LOGICAL/OUTPUT= and the rest silently drop an unknown qualifier instead of %DCL-W-IVQUAL.";;
+        require_fail) cat <<'EOF2'
+SHOW DEVICE/ZQONE is %DCL-W-IVQUAL
+SHOW LOGICAL/OUTPUT= (not implemented) is %DCL-W-IVQUAL, not silently dropped
+SHOW PROCESS/ZQTWO is %DCL-W-IVQUAL
+SHOW MEMORY/ZQTHREE is %DCL-W-IVQUAL
+SHOW DEFAULT/ZQFOUR is %DCL-W-IVQUAL
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^                if (qs != SS\$_NORMAL)$|                if (0 \&\& qs != SS$_NORMAL) /* NEGCTL dcl-show-quals-accept-all */|' "$_file"
+    :
+}

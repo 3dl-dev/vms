@@ -19,6 +19,7 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/vms_messages.h"
 #include "dcl/dcl_rms.h"   /* vms-5f0: OPEN/READ/WRITE/CLOSE ride RMS (ACP), not fopen */
 #include "ssdef.h"
 #include "rmsdef.h"
@@ -893,6 +894,12 @@ static const char *write_arg_tail(const char *raw_tail)
     if (!raw_tail) return NULL;
     const char *p = raw_tail;
     while (*p == ' ' || *p == '\t') p++;
+    /* skip any leading /QUALIFIER tokens (WRITE/SYMBOL chan sym): they were
+     * parsed into cmd->qualifiers and are not part of the expression */
+    while (*p == '/') {
+        while (*p && *p != ' ' && *p != '\t') p++;
+        while (*p == ' ' || *p == '\t') p++;
+    }
     /* skip the channel token */
     while (*p && *p != ' ' && *p != '\t') p++;
     while (*p == ' ' || *p == '\t') p++;
@@ -903,7 +910,31 @@ static const char *write_arg_tail(const char *raw_tail)
  * WRITE - Write text to a file channel.
  */
 
+static int write_impl(struct dcl_command *cmd);
+
+/*
+ * WRITE with /ERROR=label (VSI DCL Dictionary, WRITE): when the write fails,
+ * control passes to the label like GOTO, quietly, the WRITE itself succeeding.
+ * With no label (or outside a command procedure) the failure is reported and
+ * its status returned, as before.
+ */
 int cmd_write(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    int st = write_impl(cmd);
+    if (st & 1)
+        return st;
+    const char *label = dcl_qualifier_value(cmd, "ERROR");
+    if (label && *label && ctx->proc_depth >= 0) {
+        struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
+        if (dcl_find_label(fp, label) == 0)
+            return SS$_NORMAL;
+        dcl_error("DCL", 2, "USGOTO", "target of GOTO not found - \\%s\\", label);
+    }
+    return st;
+}
+
+static int write_impl(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
@@ -939,7 +970,20 @@ int cmd_write(struct dcl_command *cmd)
      * out verbatim and never routed them through the evaluator. */
     char text[DCL_MAX_VALUE];
     const char *arglist = have_prompted ? prompted : write_arg_tail(cmd->raw_tail);
-    if (arglist) {
+    if (dcl_has_qualifier(cmd, "SYMBOL")) {
+        /* WRITE/SYMBOL channel symbol-name: the record is the VALUE of the
+         * named symbol (a record longer than a literal can carry), not an
+         * expression (VSI DCL Dictionary, WRITE /SYMBOL). */
+        const char *symname = (cmd->param_count >= 2) ? cmd->params[1] : NULL;
+        const char *sv = symname ? dcl_sym_get(symname) : NULL;
+        if (!sv) {
+            dcl_error("DCL", 0, "UNDSYM",
+                      "undefined symbol - check validity and spelling\n \\%s\\",
+                      symname ? symname : "");
+            return (int)MSG_DCL_UNDSYM;
+        }
+        snprintf(text, sizeof(text), "%s", sv);
+    } else if (arglist) {
         extern uint32_t dcl_eval_last_failure(void);
         write_eval_arglist(ctx, arglist, text, sizeof(text));
         /* an expression that failed (its message is out) writes nothing

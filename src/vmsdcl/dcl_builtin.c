@@ -453,6 +453,16 @@ static const struct dcl_qual_def q_ftp[] = {
     QUAL_END
 };
 
+/* WRITE honours /SYMBOL (the record is the named symbol's value) and
+ * /ERROR=label (branch like GOTO on failure) -- cmd_write. /UPDATE (RMS
+ * $UPDATE of the last record read) is not implemented and stays %DCL-W-IVQUAL
+ * (vms-097, INV-DCL sec 3). */
+static const struct dcl_qual_def q_write[] = {
+    { "SYMBOL", CDU_VT_NONE,  0,            NULL, NULL },
+    { "ERROR",  CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+
 static struct dcl_verb builtin_verbs[] = {
     { "ACCOUNTING",  cmd_accounting,  CDU_F_ABBREV | CDU_F_QUALIFIER, 4,
       "Display login accounting information for the current user", q_none },
@@ -573,8 +583,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Display the contents of a file", q_type },
     { "WAIT",        cmd_wait,        CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Wait for a specified time interval", q_none },
-    { "WRITE",       cmd_write,       CDU_F_ABBREV | CDU_F_PARAM, 2,
-      "Write a record to a file" },
+    { "WRITE",       cmd_write,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
+      "Write a record to a file", q_write },
 };
 
 static int builtin_count = (int)(sizeof(builtin_verbs) / sizeof(builtin_verbs[0]));

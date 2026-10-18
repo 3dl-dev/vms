@@ -194,6 +194,12 @@ run_cmd() {
 # --- run the SHARED battery (no errexit: it relies on grep exit codes) --------
 PASS=0
 FAIL=0
+FLOOR_KB="${OVMX_VAX_FREE_FLOOR_KB:-}"
+# The floor leg boots a deliberately small VAX (16M): the full battery does not
+# fit it, so that leg stops after login and measures there (rd vms-83d).
+if [ -n "$FLOOR_KB" ] && [ -n "${OVMX_VAX_MEMORY:-}" ]; then
+    export OVMX_BATTERY_STOP_AFTER_LOGIN=1
+fi
 set +e
 # shellcheck source=../qemu/lib/dcl_acceptance_battery.sh
 . "$BATTERY"

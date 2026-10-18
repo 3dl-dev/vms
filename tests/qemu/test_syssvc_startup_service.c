@@ -1306,6 +1306,7 @@ int main(void)
         run_dcl(AMBIG_COM, outA, sizeof(outA), &exit_st);
         printf("  (RUN/PR=4 -- ambiguous: PRIORITY, PRIVILEGES, "
                "PROCESS_NAME)\n%s\n", outA);
+        /* negctl: dcl-run-quals-unvalidated */
         CHECK(!touched() && strstr(outA, "%DCL-W-ABKEYW") != NULL,
               "an ambiguous RUN abbreviation is refused %DCL-W-ABKEYW "
               "before RUN is entered, and the image does not run (oracle)");

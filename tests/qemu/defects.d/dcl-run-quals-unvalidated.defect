@@ -5,7 +5,7 @@ defect_meta() {
         case "$_f" in
         facility)     echo "DCL RUN qualifier validation (src/vmsdcl/dcl_cmd_process.c run_bad_qualifier, vms-097)";;
         targets)      echo "vmsdcl/dcl_cmd_process.c";;
-        suites_red)   echo "test_syssvc_dcl_run_quals";;
+        suites_red)   echo "test_syssvc_dcl_run_quals test_syssvc_startup_service";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -13,6 +13,7 @@ defect_meta() {
         require_fail) cat <<'EOF2'
 RUN/ZQBOGUS is %DCL-W-IVQUAL naming the qualifier (oracle)
 RUN/P=4 is %DCL-W-ABKEYW, an ambiguous abbreviation (oracle)
+an ambiguous RUN abbreviation is refused %DCL-W-ABKEYW before RUN is entered, and the image does not run (oracle)
 EOF2
                       ;;
         knock_on_fail) echo "";;
@@ -22,6 +23,6 @@ EOF2
 }
 
 defect_apply() {
-        sed -i 's|^        if (bad)$|        if (0 \&\& bad) /* NEGCTL dcl-run-quals-unvalidated */|' "$_file"
+        sed -i 's|^        uint32_t bad = run_bad_qualifier(cmd);$|        uint32_t bad = 0; /* NEGCTL dcl-run-quals-unvalidated */|' "$_file"
     :
 }

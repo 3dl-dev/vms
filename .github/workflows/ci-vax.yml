@@ -1404,8 +1404,8 @@ jobs:
           # in, and SHOW MEMORY must report at least this much Free. A RATCHET,
           # not a target: the kernel and executive wire most of the ~10.9 MB the
           # guest sees and NetBSD keeps Free pinned near its low-water mark, so
-          # Free sits at ~92 KB after login today (measured 2026-10-18, CI run
-          # 39159001987 job 117798894080, with the DCL and staging fixes merged).
+          # Free sits at ~92 KB after login today (measured 2026-10-18 on the PR run of this leg,
+          # with the DCL and staging fixes merged).
           # The tmpfs write floor (4 MB) is unreachable at 16 MB; Node B ships at
           # 32 MB. The guard's teeth: a boot that cannot reach a logged-in prompt
           # on 16 MB, or one that leaves nothing Free at all, reds here.

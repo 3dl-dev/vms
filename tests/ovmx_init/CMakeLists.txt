@@ -42,3 +42,10 @@ set_tests_properties(console_policy_unit PROPERTIES
     LABELS "unit;ovmx_init;console"
     TIMEOUT 10
 )
+
+# rd vms-83d: the boot staging tmpfs is RAM on a 16 MB VAX -- pin the footprint.
+add_test(NAME boot_stage_footprint
+         COMMAND sh ${CMAKE_SOURCE_DIR}/tests/ovmx_init/test_stage_footprint.sh
+                 ${CMAKE_SOURCE_DIR})
+set_tests_properties(boot_stage_footprint PROPERTIES
+    LABELS "unit;ovmx_init;footprint")

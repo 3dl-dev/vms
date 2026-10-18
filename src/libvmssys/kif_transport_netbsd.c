@@ -36,6 +36,11 @@ const char *kif_xport_device_path(void)
     return "/dev/vms";
 }
 
+int kif_xport_task_fork(void)
+{
+    return -78;     /* ENOSYS (NetBSD): its process services call the libc fork() */
+}
+
 int kif_xport_dev_open(void)
 {
 	/* The device name is the transport's own knowledge, per the contract;

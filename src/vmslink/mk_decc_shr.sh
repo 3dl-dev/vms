@@ -402,24 +402,34 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         done
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $FEAT_OBJ"
         echo "mk_decc_shr: DEC C feature-switch API wired (vms-db7): decc\$feature_{get_index,get_name,get_value,set_value}, decc\$set_reentrancy/get_reentrancy (tail-appended)"
-        # vms-65a: DEC C system() (src/vmsrms/crtl_system.c): a DCL command run through
+        # vms-65a: DEC C system() (src/vmsrms/crtl_process.c): a DCL command run through
         # LIB$SPAWN in LIBVMS$SHR, which this pass links --use (ALPHA_CRTL_VMS_USE). The
         # universal decc$system keeps its place in the vector and is rebound IN PLACE to
         # ovmx_crtl_system, as fopen/open/creat are; musl's own system() stays internal.
         [ -n "${ALPHA_CRTL_VMS_USE:-}" ] && [ -f "$ALPHA_CRTL_VMS_USE" ] \
             || { echo "mk_decc_shr: FAIL ALPHA_CRTL_VMS_USE (LIBVMS\$SHR, for LIB\$SPAWN) not given or not found" >&2; exit 2; }
-        SYS_OBJ="$VENEER_DIR/crtl_system.o"
+        SYS_OBJ="$VENEER_DIR/crtl_process.o"
         # shellcheck disable=SC2086
         "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
             -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
-            -o "$SYS_OBJ" "$RMS_SRC_DIR/crtl_system.c"
+            -o "$SYS_OBJ" "$RMS_SRC_DIR/crtl_process.c"
         "$NM" --defined-only "$SYS_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_system \
-            || { echo "mk_decc_shr: FAIL crtl_system.c did not define ovmx_crtl_system" >&2; exit 2; }
+            || { echo "mk_decc_shr: FAIL crtl_process.c did not define ovmx_crtl_system" >&2; exit 2; }
         case ",$VEC," in
             *',decc$system=PROCEDURE,'*) ;;
             *) echo "mk_decc_shr: FAIL decc\$system is not a PROCEDURE universal to rebind" >&2; exit 2;;
         esac
         VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$system=PROCEDURE,/,decc$system\/ovmx_crtl_system=PROCEDURE,/; s/^,//; s/,$//')
+        # getcwd: the process default directory (the executive's), VMS or Unix form
+        "$NM" --defined-only "$SYS_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_getcwd \
+            || { echo "mk_decc_shr: FAIL crtl_process.c did not define ovmx_crtl_getcwd" >&2; exit 2; }
+        for _gc in 'decc$_getcwd64=PROCEDURE' 'decc$getcwd/decc$_getcwd64=PROCEDURE'; do
+            case ",$VEC," in
+                *",$_gc,"*) ;;
+                *) echo "mk_decc_shr: FAIL $_gc is not in the vector to rebind" >&2; exit 2;;
+            esac
+        done
+        VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$_getcwd64=PROCEDURE,/,decc$_getcwd64\/ovmx_crtl_getcwd=PROCEDURE,/; s/,decc\$getcwd\/decc\$_getcwd64=PROCEDURE,/,decc$getcwd\/ovmx_crtl_getcwd=PROCEDURE,/; s/^,//; s/,$//')
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SYS_OBJ"
         echo "mk_decc_shr: DEC C system() wired (vms-65a): decc\$system -> ovmx_crtl_system (LIB\$SPAWN, --use $ALPHA_CRTL_VMS_USE)"
     fi

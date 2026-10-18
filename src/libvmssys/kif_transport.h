@@ -51,6 +51,16 @@
 int kif_xport_dev_open(void);
 
 /*
+ * kif_xport_task_fork - create a substrate TASK for the process services
+ * ($CREPRC, LIB$SPAWN): the substrate's own fork, the vehicle the creator then
+ * asks the executive to register as a VMS process (VMS_IOCTL_CREPRC_PCB: PCB and
+ * VMS PID assigned by the executive, never by the task). Returns the new task's
+ * id in the creator, 0 in the new task, or a negative errno. The C RTL has no such
+ * name, so a service built for the OpenVMS calling standard reaches it here.
+ */
+int kif_xport_task_fork(void);
+
+/*
  * kif_xport_device_path - the name of the executive's device node on this
  * substrate ("/dev/vms" today), for the two places that must name it without
  * opening it: PID 1 provisioning the node at boot, and the executive-boundary

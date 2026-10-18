@@ -1,6 +1,15 @@
 /*
- * crtl_system.c - DEC C system() for OVMX (vms-65a), part of the RMS-backed
- * (pass-2) DECC$SHR next to crtl_features.c.
+ * crtl_process.c - the DEC C process-environment calls of the RMS-backed (pass-2)
+ * DECC$SHR, next to crtl_features.c: system() and getcwd() (vms-65a).
+ *
+ * getcwd(buf, size, vms_flag): the process's default directory, which the
+ * executive keeps ($SETDDIR / SET DEFAULT) and RMS completes relative file
+ * specifications in. With vms_flag it is returned as the VMS "DEV:[DIR]"; without,
+ * in the DEC C Unix form "/dev/dir". (musl's getcwd answered the substrate's "/",
+ * which says nothing about where an image's relative files are.)
+ *
+ * system():
+
  *
  * DEC C: the string is a DCL command run in a subprocess by the command language
  * interpreter, through LIB$SPAWN, and the value is the VMS condition value of the
@@ -15,7 +24,11 @@
  * which the executive refuses) stays an internal symbol: decc$system is rebound
  * in place to ovmx_crtl_system by mk_decc_shr.sh.
  */
+#include <errno.h>
+#include <stdlib.h>
 #include <string.h>
+
+#include "rms/crtl_filespec.h"
 
 /* a class-S string descriptor, as LIB$SPAWN takes its command */
 struct crtl_sys_dsc { unsigned short len; unsigned char dtype, cls; const char *ptr; };
@@ -42,4 +55,45 @@ int ovmx_crtl_system(const char *cmd)
     if (!(st & 1u))
         return (int)st;                             /* the subprocess was not created */
     return (int)status;
+}
+
+/* $SETDDIR, read-only: the default directory as a class-S descriptor pair */
+struct crtl_dsc { unsigned short len; unsigned char dtype, cls; char *ptr; };
+extern unsigned int sys$setddir(const struct crtl_dsc *new_dir, unsigned short *old_len,
+                                struct crtl_dsc *old_dir);
+
+char *ovmx_crtl_getcwd(char *buf, unsigned long size, int vms_flag)
+{
+    char vms[256], out[512];
+    struct crtl_dsc d = { sizeof vms - 1, 14, 1, vms };
+    unsigned short n = 0;
+    if (!(sys$setddir(0, &n, &d) & 1) || n == 0 || n >= sizeof vms)
+        n = 0;
+    vms[n] = '\0';
+    if (n == 0)
+        strcpy(vms, "SYS$DISK:[000000]");   /* no default recorded: the system disk's top */
+    if (vms_flag) {
+        strcpy(out, vms);
+    } else if (ovmx_crtl_vms_to_unix(vms, out, sizeof out) < 0) {
+        errno = ERANGE;
+        return 0;
+    }
+    size_t need = strlen(out) + 1;
+    if (!buf) {
+        buf = malloc(size ? size : need);
+        if (!buf) {
+            errno = ENOMEM;
+            return 0;
+        }
+        if (size && size < need) {
+            free(buf);
+            errno = ERANGE;
+            return 0;
+        }
+    } else if (size < need) {
+        errno = ERANGE;
+        return 0;
+    }
+    memcpy(buf, out, need);
+    return buf;
 }

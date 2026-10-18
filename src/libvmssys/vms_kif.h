@@ -1189,6 +1189,11 @@ uint32_t vms_kif_mbx_assign(const char *devnam, uint32_t *exec_chan);
  * unreachable, else SS$_NOSUCHSEC (no named global section is ever registered). */
 uint32_t vms_kif_gblsc_delete(const char *name);
 
+/* vms_kif_task_fork - the substrate task a process service ($CREPRC, LIB$SPAWN) forks
+ * and then has the executive register as a VMS process. Creator: the task id; new
+ * task: 0; failure: -errno. (vms-65a; the C RTL has no fork to offer.) */
+int vms_kif_task_fork(void);
+
 /* $DELMBX: mark the mailbox behind `exec_chan` for deletion. Does not
  * deassign `exec_chan` itself -- see vms_mbx.c's header. */
 uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan);

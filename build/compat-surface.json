@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-17",
+    "generated": "2026-10-18",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -78,42 +78,42 @@
     "by_status": {
       "verified": 24,
       "implemented": 295,
-      "partial": 67,
-      "stub": 13,
+      "partial": 68,
+      "stub": 12,
       "designed": 1,
       "absent": 91
     },
     "by_authenticity": {
       "real": 348,
       "n/a": 92,
-      "advisory": 46,
-      "facade-risk": 5
+      "advisory": 47,
+      "facade-risk": 4
     },
     "met": 319,
-    "in_progress": 67,
-    "not_started": 105,
-    "facade_risk": 5
+    "in_progress": 68,
+    "not_started": 104,
+    "facade_risk": 4
   },
   "overall_in_scope": {
     "count": 445,
     "by_status": {
       "verified": 24,
       "implemented": 295,
-      "partial": 65,
-      "stub": 9,
+      "partial": 66,
+      "stub": 8,
       "designed": 1,
       "absent": 51
     },
     "by_authenticity": {
       "real": 346,
       "n/a": 52,
-      "advisory": 44,
-      "facade-risk": 3
+      "advisory": 45,
+      "facade-risk": 2
     },
     "met": 319,
-    "in_progress": 65,
-    "not_started": 61,
-    "facade_risk": 3
+    "in_progress": 66,
+    "not_started": 60,
+    "facade_risk": 2
   },
   "facilities": [
     {
@@ -1746,21 +1746,21 @@
         "by_status": {
           "verified": 0,
           "implemented": 4,
-          "partial": 0,
-          "stub": 4,
+          "partial": 1,
+          "stub": 3,
           "designed": 0,
           "absent": 3
         },
         "by_authenticity": {
           "real": 4,
-          "facade-risk": 3,
-          "advisory": 1,
+          "advisory": 2,
+          "facade-risk": 2,
           "n/a": 3
         },
         "met": 4,
-        "in_progress": 0,
-        "not_started": 7,
-        "facade_risk": 3
+        "in_progress": 1,
+        "not_started": 6,
+        "facade_risk": 2
       }
     },
     {
@@ -8127,12 +8127,12 @@
       "id": "sys$dgblsc",
       "kind": "routine",
       "vms": "Delete a global section",
-      "status": "stub",
-      "authenticity": "facade-risk",
+      "status": "partial",
+      "authenticity": "advisory",
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_memory.c",
       "verified_against": null,
-      "notes": "validates gsdnam then returns SS$_NORMAL though no named-global-section registry exists -- a delete of an unregistered section is reported as success. Honest fix (return SS$_NOSUCHSEC, needs the status code defined) tracked vms-d91.",
+      "notes": "Proof tests/qemu/test_syssvc_dgblsc_nosuchsec.c + defects.d/dgblsc-fake-success.defect. No named-global-section registry exists (sys$crmpsc discards gsdnam), so under the executive every named delete returns SS$_NOSUCHSEC honestly (SS$_NOSUCHDEV with no executive, one-runtime rule); the delete-a-real-section success path needs the registry (not built). Was facade-risk: returned SS$_NORMAL for a section that never existed (vms-d91).",
       "plan_ref": "vms-801"
     },
     {

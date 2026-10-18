@@ -3217,6 +3217,22 @@ static int mbx_bind_ok(void)
 }
 
 /*
+ * vms_kif_gblsc_delete - $DGBLSC (rd vms-d91). Global sections are
+ * system-wide state, so the answer is the executive's: with /dev/vms
+ * unreachable the call fails SS$_NOSUCHDEV (one runtime, INV-6), never a
+ * userspace answer. The executive keeps no named-global-section registry yet
+ * ($CRMPSC discards the name), so with it reachable no section by this name
+ * exists: SS$_NOSUCHSEC (%SYSTEM-W-NOSUCHSEC, 2424).
+ */
+uint32_t vms_kif_gblsc_delete(const char *name)
+{
+    (void)name;
+    if (!mbx_bind_ok())
+        return SS$_NOSUCHDEV;
+    return SS$_NOSUCHSEC;
+}
+
+/*
  * vms_kif_mbx_create_prot - $CREMBX with its promsk (rd vms-c6d1): the SOGW
  * protection mask the executive records with the mailbox (owner = the caller's
  * UIC) and checks every $ASSIGN, read and write against.

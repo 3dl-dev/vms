@@ -125,7 +125,8 @@ int main(void)
          * proof that a message from the real link below would be seen */
         static cp32 nolk[2];
         nolk[0] = "link"; nolk[1] = 0;
-        (void)stage("link-noargs", "SYS$SYSTEM:LINK.EXE", nolk, 1);
+        (void)stage("link-noargs-pipe", "SYS$SYSTEM:LINK.EXE", nolk, 1);
+        (void)stage("link-noargs-console", "SYS$SYSTEM:LINK.EXE", nolk, 0);
     }
     int ok = stage("cc1", "SYS$SYSTEM:CC1.EXE", cc, 0);
     if (ok)

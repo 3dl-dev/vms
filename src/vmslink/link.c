@@ -1158,6 +1158,14 @@ static int leading_ci(const char *s, const char *pfx)
  */
 static const char *resolve_producer_path(const char *path, char *out, size_t sz)
 {
+#ifdef __VMS
+    /* LINK built for the VMS host (a DEC C program on OVMX/Alpha, vms-e40): the C
+     * RTL's open() takes the VMS file specification itself -- SYS$SHARE:NAME.EXE is
+     * translated through RMS, as OpenVMS LINK opens its shareable inputs. There is
+     * no POSIX staging copy to look for. */
+    (void)out; (void)sz;
+    return path;
+#endif
     /* Each installed-image logical -> the SYS$SYSROOT subdirectory it lives in. */
     static const struct { const char *log; const char *sub; } maps[] = {
         { "SYS$SHARE:",   "SYSLIB" },

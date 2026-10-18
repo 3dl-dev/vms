@@ -74,45 +74,45 @@
     }
   ],
   "overall": {
-    "count": 491,
+    "count": 490,
     "by_status": {
       "verified": 24,
-      "implemented": 295,
-      "partial": 70,
+      "implemented": 304,
+      "partial": 71,
       "stub": 10,
       "designed": 1,
-      "absent": 91
+      "absent": 80
     },
     "by_authenticity": {
-      "real": 348,
-      "n/a": 92,
-      "advisory": 50,
+      "real": 357,
+      "n/a": 81,
+      "advisory": 51,
       "facade-risk": 1
     },
-    "met": 319,
-    "in_progress": 70,
-    "not_started": 102,
+    "met": 328,
+    "in_progress": 71,
+    "not_started": 91,
     "facade_risk": 1
   },
   "overall_in_scope": {
-    "count": 445,
+    "count": 444,
     "by_status": {
       "verified": 24,
-      "implemented": 295,
-      "partial": 66,
+      "implemented": 304,
+      "partial": 67,
       "stub": 8,
       "designed": 1,
-      "absent": 51
+      "absent": 40
     },
     "by_authenticity": {
-      "real": 346,
-      "n/a": 52,
-      "advisory": 46,
+      "real": 355,
+      "n/a": 41,
+      "advisory": 47,
       "facade-risk": 1
     },
-    "met": 319,
-    "in_progress": 66,
-    "not_started": 60,
+    "met": 328,
+    "in_progress": 67,
+    "not_started": 49,
     "facade_risk": 1
   },
   "facilities": [
@@ -239,25 +239,25 @@
       "tier": 1,
       "plan_ref": "vms-2e72",
       "vms_ref": "OpenVMS Programming Concepts Manual \u2014 Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-18",
       "rollup": {
-        "count": 16,
+        "count": 15,
         "by_status": {
           "verified": 0,
           "implemented": 13,
           "partial": 0,
           "stub": 0,
           "designed": 0,
-          "absent": 3
+          "absent": 2
         },
         "by_authenticity": {
           "advisory": 10,
-          "n/a": 3,
+          "n/a": 2,
           "real": 3
         },
         "met": 13,
         "in_progress": 0,
-        "not_started": 3,
+        "not_started": 2,
         "facade_risk": 0
       }
     },
@@ -1160,24 +1160,24 @@
       "tier": 1,
       "plan_ref": "vms-801",
       "vms_ref": "OpenVMS RTL Object Time System (OTS$) Manual",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-18",
       "rollup": {
         "count": 13,
         "by_status": {
           "verified": 0,
-          "implemented": 5,
+          "implemented": 10,
           "partial": 0,
           "stub": 0,
           "designed": 0,
-          "absent": 8
+          "absent": 3
         },
         "by_authenticity": {
-          "real": 5,
-          "n/a": 8
+          "real": 10,
+          "n/a": 3
         },
-        "met": 5,
+        "met": 10,
         "in_progress": 0,
-        "not_started": 8,
+        "not_started": 3,
         "facade_risk": 0
       }
     },
@@ -1655,24 +1655,24 @@
       "tier": 1,
       "plan_ref": "vms-801",
       "vms_ref": "OpenVMS System Services Reference Manual \u2014 Lock Management Services",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-18",
       "rollup": {
         "count": 6,
         "by_status": {
           "verified": 0,
-          "implemented": 3,
+          "implemented": 5,
           "partial": 0,
           "stub": 0,
           "designed": 0,
-          "absent": 3
+          "absent": 1
         },
         "by_authenticity": {
-          "real": 3,
-          "n/a": 3
+          "real": 5,
+          "n/a": 1
         },
-        "met": 3,
+        "met": 5,
         "in_progress": 0,
-        "not_started": 3,
+        "not_started": 1,
         "facade_risk": 0
       }
     },
@@ -1770,25 +1770,25 @@
       "tier": 1,
       "plan_ref": "vms-801",
       "vms_ref": "OpenVMS System Services Reference Manual \u2014 Process Control Services",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-18",
       "rollup": {
         "count": 13,
         "by_status": {
           "verified": 0,
-          "implemented": 10,
+          "implemented": 11,
           "partial": 0,
           "stub": 0,
           "designed": 0,
-          "absent": 3
+          "absent": 2
         },
         "by_authenticity": {
-          "real": 9,
+          "real": 10,
           "advisory": 1,
-          "n/a": 3
+          "n/a": 2
         },
-        "met": 10,
+        "met": 11,
         "in_progress": 0,
-        "not_started": 3,
+        "not_started": 2,
         "facade_risk": 0
       }
     },
@@ -1857,25 +1857,24 @@
       "tier": 1,
       "plan_ref": "vms-801",
       "vms_ref": "OpenVMS System Services Reference Manual \u2014 Time and Timer Services",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-18",
       "rollup": {
         "count": 9,
         "by_status": {
           "verified": 0,
-          "implemented": 7,
-          "partial": 0,
+          "implemented": 8,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
-          "absent": 2
+          "absent": 0
         },
         "by_authenticity": {
-          "real": 5,
-          "advisory": 2,
-          "n/a": 2
+          "real": 6,
+          "advisory": 3
         },
-        "met": 7,
-        "in_progress": 0,
-        "not_started": 2,
+        "met": 8,
+        "in_progress": 1,
+        "not_started": 0,
         "facade_risk": 0
       }
     },
@@ -2326,21 +2325,6 @@
       "evidence": "src/libvms/rtl/lib_signal.c",
       "verified_against": null,
       "notes": "re-signals a failure condition through lib$stop; success/informational conditions are resignalled untouched",
-      "plan_ref": "vms-2e72"
-    },
-    {
-      "domain": "programming-interfaces",
-      "facility": "chf",
-      "facility_name": "Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)",
-      "id": "lib$sig_to_stop",
-      "kind": "routine",
-      "vms": "Convert a signal to STOP severity",
-      "status": "absent",
-      "authenticity": "n/a",
-      "scope_1_0": "in",
-      "evidence": "",
-      "verified_against": null,
-      "notes": "",
       "plan_ref": "vms-2e72"
     },
     {
@@ -5769,13 +5753,13 @@
       "facility_name": "OTS$ Object-Time-System RTL",
       "id": "ots$scopy_dxdx",
       "kind": "routine",
-      "vms": "Copy dynamic descriptor to dynamic descriptor",
-      "status": "absent",
-      "authenticity": "n/a",
+      "vms": "Copy string from any descriptor to any descriptor",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/rtl/ots_routines.c",
       "verified_against": null,
-      "notes": "declared in header, zero implementation \u2014 pure stub gap",
+      "notes": "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c.",
       "plan_ref": "vms-801"
     },
     {
@@ -5784,13 +5768,13 @@
       "facility_name": "OTS$ Object-Time-System RTL",
       "id": "ots$scopy_r_dx",
       "kind": "routine",
-      "vms": "Copy fixed string to dynamic descriptor",
-      "status": "absent",
-      "authenticity": "n/a",
+      "vms": "Copy string by reference to a descriptor",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/rtl/ots_routines.c",
       "verified_against": null,
-      "notes": "declared in header, zero implementation \u2014 pure stub gap",
+      "notes": "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c.",
       "plan_ref": "vms-801"
     },
     {
@@ -5800,12 +5784,12 @@
       "id": "ots$sfree1_dd",
       "kind": "routine",
       "vms": "Free one dynamic descriptor",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/rtl/ots_routines.c",
       "verified_against": null,
-      "notes": "declared in header, zero implementation \u2014 pure stub gap",
+      "notes": "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c.",
       "plan_ref": "vms-801"
     },
     {
@@ -5815,12 +5799,12 @@
       "id": "ots$sfreen_dd",
       "kind": "routine",
       "vms": "Free N dynamic descriptors",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/rtl/ots_routines.c",
       "verified_against": null,
-      "notes": "declared in header, zero implementation \u2014 pure stub gap",
+      "notes": "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c.",
       "plan_ref": "vms-801"
     },
     {
@@ -5830,12 +5814,12 @@
       "id": "ots$sget1_dd",
       "kind": "routine",
       "vms": "Allocate one dynamic descriptor",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/rtl/ots_routines.c",
       "verified_against": null,
-      "notes": "declared in header, zero implementation \u2014 pure stub gap",
+      "notes": "Wraps the LIB$ string-descriptor engine (lib$scopy_*, lib$sget1_dd, lib$sfree1_dd); untransferred-byte count is the OTS return value. Exercised by tests/libvms/test_corpus_surface.c.",
       "plan_ref": "vms-801"
     },
     {
@@ -7945,12 +7929,12 @@
       "id": "sys$getlki",
       "kind": "routine",
       "vms": "Get lock information (single item)",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/syssvc/sys_lock.c",
       "verified_against": null,
-      "notes": "",
+      "notes": "Every item answered (LKI$_LOCKID/RESNAM/GRANTCOUNT/PARENT/STATE) is read from the kernel lock manager via VMS_IOCTL_GETLKI; the item-list loop only validates codes (SS$_BADPARAM for one the executive cannot answer). Proof tests/qemu/test_syssvc_getlki.c. The remaining LKI$ items are not answered.",
       "plan_ref": "vms-801"
     },
     {
@@ -7960,12 +7944,12 @@
       "id": "sys$getlkiw",
       "kind": "routine",
       "vms": "Get lock information (waits for completion)",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/syssvc/sys_lock.c",
       "verified_against": null,
-      "notes": "",
+      "notes": "Same service as sys$getlki: getlki_impl completes synchronously, so $GETLKIW is $GETLKI. Proof tests/qemu/test_syssvc_getlki.c.",
       "plan_ref": "vms-801"
     },
     {
@@ -8380,12 +8364,12 @@
       "id": "sys$setprn",
       "kind": "routine",
       "vms": "Set the calling process's name",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/syssvc/sys_process.c",
       "verified_against": null,
-      "notes": "no $SETPRN service; only an internal vms_kif_setprn used by $CREPRC to stamp the child name",
+      "notes": "The name lives in the executive's process table: vms_kif_setprn renames this process there and the executive refuses a duplicate name in the group (SS$_DUPLNAM); only the descriptor-to-string copy is userspace. Corpus example tests/corpus/tier1-examples/sys_setprn.c.",
       "plan_ref": "vms-801"
     },
     {
@@ -8650,12 +8634,12 @@
       "id": "sys$schdwk",
       "kind": "routine",
       "vms": "Schedule wakeup",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "partial",
+      "authenticity": "advisory",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/syssvc/sys_time.c",
       "verified_against": null,
-      "notes": "",
+      "notes": "Armed through sys$setimr as a process-local POSIX timer that $WAKEs the caller: a scheduled wakeup dies with the image that requested it (no executive timer queue holds it); a repeat interval or a target named by process name is refused. Corpus example tests/corpus/tier1-examples/sys_schdwk.c.",
       "plan_ref": "vms-801"
     },
     {
@@ -8665,12 +8649,12 @@
       "id": "sys$gettim_prec",
       "kind": "routine",
       "vms": "Get high-precision system time",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/syssvc/sys_time.c",
       "verified_against": null,
-      "notes": "",
+      "notes": "The host clock read; it already has sub-tick resolution, so it never reports reduced precision. Corpus example tests/corpus/tier1-examples/sys_gettim_prec.c.",
       "plan_ref": "vms-801"
     },
     {

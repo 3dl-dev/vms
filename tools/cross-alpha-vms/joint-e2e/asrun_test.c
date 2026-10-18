@@ -22,6 +22,9 @@ extern int printf(const char *, ...);
 extern int waitpid(int, int *, int);
 extern void _exit(int);
 extern int fflush(void *);
+extern int write(int, const void *, size_t);
+extern int isatty(int);
+extern int fcntl(int, int, ...);
 extern int fprintf(void *, const char *, ...);
 extern void *stderr;
 extern int open(const char *, int, ...);
@@ -121,6 +124,14 @@ int main(void)
         lk[n++] = "VDA0:[SYSTMP]CRTEND.O";
         lk[n++] = "--library"; lk[n++] = "VDA0:[SYSTMP]STARLET.A";
         lk[n] = 0;
+    }
+    {
+        /* fd 1 and fd 2 as the launcher received them: raw write(2), isatty, F_GETFD */
+        int w1 = write(1, "OVMX-FD1-RAW\n", 13); int e1 = *__errno_location();
+        int w2 = write(2, "OVMX-FD2-RAW\n", 13); int e2 = *__errno_location();
+        printf("OVMX-FD-PROBE: write1=%d errno=%d write2=%d errno=%d isatty=%d,%d,%d fcntl=%d,%d,%d\n", w1, e1, w2, e2,
+               isatty(0), isatty(1), isatty(2), fcntl(0, 1, 0), fcntl(1, 1, 0), fcntl(2, 1, 0));
+        fflush(0);
     }
     fprintf(stderr, "OVMX-STDERR-PROBE: this line is written to stderr by the launcher\n");
     fflush(0);

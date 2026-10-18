@@ -11,7 +11,7 @@ defect_meta() {
         isolation)    echo "isolated";;
         why)          echo "cmd_mail forwards the qualifier as a bare name again (no slash), so MAIL.EXE takes SUBJECT=hi for the recipient.";;
         require_fail) cat <<'EOF2'
-MAIL/SUBJECT=.. reaches MAIL.EXE as a qualifier: the recipient is still NOSUCHUSR
+MAIL/SUBJECT=.. reaches MAIL.EXE as /SUBJECT=value
 the qualifier name is not mistaken for the recipient
 EOF2
                       ;;

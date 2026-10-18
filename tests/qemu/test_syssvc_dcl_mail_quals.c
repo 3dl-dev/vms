@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 
 #include "ssdef.h"
 #include "vms_kif.h"
@@ -76,8 +77,36 @@ static int run_dcl(const char *script, char *out, size_t outsz)
     return 0;
 }
 
-int main(void)
+/* The test binary doubles as the MAIL.EXE stand-in: staged at /bin/MAIL.EXE it
+ * is found by dcl_exec_utility's execvp(exe_name) (PATH=/bin) and reports the
+ * argv DCL forwarded, which is exactly what MAIL.EXE would have parsed. */
+static int stage_self_as_mail(void)
 {
+    int in = open("/proc/self/exe", O_RDONLY);
+    if (in < 0) return -1;
+    int out = open("/bin/MAIL.EXE", O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (out < 0) { close(in); return -1; }
+    char buf[65536];
+    ssize_t n;
+    int rc = 0;
+    while ((n = read(in, buf, sizeof buf)) > 0)
+        if (write(out, buf, (size_t)n) != n) { rc = -1; break; }
+    close(in);
+    if (close(out) != 0) rc = -1;
+    if (rc == 0) chmod("/bin/MAIL.EXE", 0755);
+    return rc;
+}
+
+int main(int argc, char **argv)
+{
+    const char *base = (argc > 0 && argv[0]) ? strrchr(argv[0], '/') : NULL;
+    base = base ? base + 1 : (argc > 0 ? argv[0] : "");
+    if (strcmp(base, "MAIL.EXE") == 0) {          /* stand-in MAIL.EXE mode */
+        for (int i = 1; i < argc; i++)
+            printf("MAILARG=%s\n", argv[i]);
+        return 0;
+    }
+
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("=== test_syssvc_dcl_mail_quals (MAIL qualifiers validated and forwarded) ===\n");
 
@@ -90,18 +119,27 @@ int main(void)
         return 1;
     }
 
+    if (stage_self_as_mail() != 0) {
+        printf("  FAIL: cannot stage the MAIL.EXE stand-in at /bin/MAIL.EXE\n");
+        return 1;
+    }
+
     static char out[16384];
-    CHECK(run_dcl("MAIL/ZQBOGUS NOSUCHUSR\nMAIL/SUBJECT=\"hi\" NOSUCHUSR\n", out, sizeof out) == 0,
+    CHECK(run_dcl("MAIL/ZQBOGUS NOSUCHUSR\nMAIL/SUBJECT=\"hi there\" SOMEUSER\n", out, sizeof out) == 0,
           "DCL ran the MAIL qualifier probes");
     printf("  ---- MAIL probes ----\n%s  ---- end ----\n", out);
     /* negctl: dcl-mail-quals-accept-all */
     CHECK(strstr(out, "%DCL-W-IVQUAL") != NULL && strstr(out, "\\ZQBOGUS\\") != NULL,
           "MAIL/ZQBOGUS is %DCL-W-IVQUAL naming the qualifier");
     /* negctl: dcl-mail-qual-bare-name */
-    CHECK(strstr(out, "no such user NOSUCHUSR") != NULL,
-          "MAIL/SUBJECT=.. reaches MAIL.EXE as a qualifier: the recipient is still NOSUCHUSR");
-    CHECK(strstr(out, "no such user SUBJECT") == NULL,
+    CHECK(strstr(out, "MAILARG=/SUBJECT=hi there") != NULL,
+          "MAIL/SUBJECT=.. reaches MAIL.EXE as /SUBJECT=value");
+    /* negctl: dcl-mail-qual-bare-name */
+    CHECK(strstr(out, "MAILARG=SOMEUSER") != NULL && strstr(out, "MAILARG=SUBJECT") == NULL,
           "the qualifier name is not mistaken for the recipient");
+    CHECK(strstr(out, "MAILARG=NOSUCHUSR") == NULL,
+          "MAIL/ZQBOGUS never reaches MAIL.EXE");
+    unlink("/bin/MAIL.EXE");
 
     printf("=== test_syssvc_dcl_mail_quals: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;

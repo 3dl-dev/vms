@@ -138,9 +138,13 @@ if [ ! -f "$X/p32/lib/emutls32.o" ]; then
     LGB=/tmp/cxx/build/$TARGET/libgcc
     [ -d "$LGB" ] || { echo "FAIL: no libgcc build tree at $LGB for the 32-bit emutls"; exit 1; }
     rm -f "$LGB/emutls.o"
+    # (libgcc/config/alpha/t-vms forces -mpointer-size=64 through HOST_LIBGCC2_CFLAGS)
     make -C "$LGB" emutls.o CFLAGS="-g0 -O2 -fno-function-sections -fno-data-sections" \
+        HOST_LIBGCC2_CFLAGS="-mpointer-size=no" \
         > /tmp/cxx/emutls32.log 2>&1 || { tail -30 /tmp/cxx/emutls32.log; exit 1; }
     [ -f "$LGB/emutls.o" ] || { echo "FAIL: emutls.o not built"; exit 1; }
+    grep -q 'mpointer-size=no' /tmp/cxx/emutls32.log && ! grep -q 'mpointer-size=64' /tmp/cxx/emutls32.log \
+        || { echo "FAIL: emutls.o was not compiled at the default pointer size"; grep -m3 'emutls' /tmp/cxx/emutls32.log; exit 1; }
     cp "$LGB/emutls.o" "$X/p32/lib/emutls32.o"
 fi
 cd /tmp/cxx

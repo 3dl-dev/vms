@@ -3249,10 +3249,15 @@ int cmd_attach(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
- * CONVERT - Convert file format (basic file copy with record counting).
+ * CONVERT - record-for-record copy of a text file (vms-558e).
  *
  * CONVERT input-file output-file
- * /FDL=fdl-file — accepted but ignored with informational message
+ *
+ * Without /FDL the output keeps the input's records and attributes, which a
+ * text-file copy does faithfully, and -- as on VMS -- the command is silent
+ * on success. /FDL asks for a RECORD-FORMAT CONVERSION (organization, record
+ * format, keys) that OVMX does not perform: it is refused, never accepted and
+ * ignored, and nothing is written.
  */
 int cmd_convert(struct dcl_command *cmd)
 {
@@ -3263,9 +3268,12 @@ int cmd_convert(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* Check /FDL qualifier — accepted but not implemented */
+    /* /FDL requests a real format conversion this utility cannot do: refuse
+     * before touching either file, so no unconverted copy is passed off as one. */
     if (dcl_has_qualifier(cmd, "FDL")) {
-        printf("%%CONVERT-I-FDL, /FDL qualifier accepted but ignored in this implementation\n");
+        dcl_error("CONVERT", 2, "NOFDL",
+                  "/FDL record-format conversion is not supported; nothing converted");
+        return SS$_BADPARAM;
     }
 
     char src_path[1024], dst_path[1024];
@@ -3287,16 +3295,15 @@ int cmd_convert(struct dcl_command *cmd)
 
     /* Copy line by line, counting records */
     char line[4096];
-    long records = 0;
-    while (fgets(line, sizeof(line), src)) {
+    while (fgets(line, sizeof(line), src))
         fputs(line, dst);
-        records++;
-    }
 
     fclose(src);
-    fclose(dst);
-
-    printf("%%CONVERT-S-CONVERTED, %ld records converted\n", records);
+    int werr = ferror(dst);
+    if (fclose(dst) != 0 || werr) {
+        dcl_error("CONVERT", 2, "WRITEERR", "error writing %s", cmd->params[1]);
+        return SS$_FILACCERR;
+    }
     return SS$_NORMAL;
 }
 

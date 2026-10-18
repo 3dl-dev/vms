@@ -1,0 +1,27 @@
+# dcl-convert-claims-converted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL CONVERT honesty (src/vmsdcl/dcl_cmd_misc.c cmd_convert, vms-558e)";;
+        targets)      echo "vmsdcl/dcl_cmd_misc.c";;
+        suites_red)   echo "test_syssvc_convert_dcl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "CONVERT/FDL is no longer refused: the NOFDL refusal is skipped, so /FDL falls through to the line copy and the old \"CONVERTED\" claim path -- the pre-vms-558e facade that reported a record-format conversion it did not perform.";;
+        require_fail) cat <<'EOF2'
+CONVERT/FDL is refused (%CONVERT-E-NOFDL), not accepted-and-ignored
+CONVERT/FDL wrote no output file (no unconverted copy passed off as converted)
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (dcl_has_qualifier(cmd, "FDL")) {$|    if (0 \&\& dcl_has_qualifier(cmd, "FDL")) { /* NEGCTL dcl-convert-claims-converted */|' "$_file"
+    :
+}

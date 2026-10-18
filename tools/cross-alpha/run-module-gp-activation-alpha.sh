@@ -967,6 +967,11 @@ run_boot_a() {
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot '"${BOOT_QEMU_EXTRA:-}"' <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!
+      # BOOT_PEEK="PORT PC REG LEN": gdb_peek.pl stops the guest at PC (a user-mode
+      # address), prints registers and a memory window at REG each time, and lets it run on
+      if [ -n "'"${BOOT_PEEK:-}"'" ]; then
+          perl /work/gdb_peek.pl '"${BOOT_PEEK:-}"' /work/peek.log > /dev/null 2>&1 &
+      fi
       exec 6>"$FIFO"
       trap "" PIPE
       W=0
@@ -1721,8 +1726,11 @@ PYEOF
     # report for a signal the program catches itself (gas installs handlers)
     # AS_QEMU_CPU_RANGE=lo..hi additionally dumps the registers at every translation
     # block entered in that guest-PC range (qemu -dfilter), e.g. around a fault PC
-    export BOOT_QEMU_EXTRA="-d int,cpu,nochain -dfilter ${AS_QEMU_CPU_RANGE:-0x1bc000..0x1be000} -D /work/qemu-int.log"
+    export BOOT_QEMU_EXTRA="-d int -D /work/qemu-int.log -gdb tcp:127.0.0.1:1234"
+    export BOOT_PEEK="${AS_PEEK:-1234 0x1bd234 r16 232}"
+    cp "$REPO/tools/cross-alpha/gdb_peek.pl" "$WORK/gdb_peek.pl"
     run_boot_a
+    sed 's/^/  | PEEK: /' "$WORK/peek.log" 2>/dev/null || true
     awk 'tolower($0) ~ /opcdec/ && $0 !~ /pc=fffffc/ { for (i = (n > 400 ? n - 400 : 0); i < n; i++) print buf[i % 400]; print; exit }
          $0 !~ /pc=fffffc/ && $0 !~ /INT .*(clk_interrupt|dev_interrupt)/ { buf[n % 400] = $0; n++ }' "$WORK/qemu-int.log" 2>/dev/null | sed 's/^/  | QEMU-BEFORE-OPCDEC: /' || true
     grep -aE "OVMX cc1|OVMX as|OVMX-AS-TRACE|AS-PROOF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM|as:|cc1:|fatal signal|pc=" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true

@@ -433,9 +433,11 @@ jobs:
   # CI-speed (lane B): cut A and cut B are INDEPENDENT builds (--no-cache, same
   # commit, same module-signing key), so they run as parallel jobs instead of
   # back to back (~21 min saved on the critical path). The ephemeral signing key
-  # is minted once, encrypted with the run's GITHUB_TOKEN (valid only for this
-  # run; the repo is public so the key must not sit in the clear in an artifact)
-  # and decrypted by each cut job.
+  # is minted once and shared as a 1-day artifact. It is a THROWAWAY key that
+  # exists only for this reproducibility comparison: it is never a trust anchor
+  # and never touches secrets.OVMX_MODULE_SIGNING_KEY (release.yml only), so its
+  # being readable in a public repo discloses nothing. (An encrypted hand-off
+  # keyed on GITHUB_TOKEN cannot work: the token is per job.)
   release-sign-key:
     name: mint ephemeral module-signing key for the reproducibility cuts
     needs: [changes]
@@ -443,9 +445,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Mint one ephemeral module-signing key and encrypt it with the run token
-        env:
-          KEYPASS: ${{ secrets.GITHUB_TOKEN }}
+      - name: Mint one throwaway module-signing key (reproducibility gate only)
         run: |
           set -euo pipefail
           KEYDIR="${{ runner.temp }}/ovmx-sign"
@@ -454,11 +454,10 @@ jobs:
             -subj "/CN=OVMX ephemeral module signing key (reproducibility gate)/" \
             -keyout "$KEYDIR/key.pem" -out "$KEYDIR/cert.pem"
           cat "$KEYDIR/key.pem" "$KEYDIR/cert.pem" > "$KEYDIR/signing.pem"
-          openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:KEYPASS -in "$KEYDIR/signing.pem" -out "$KEYDIR/signing.pem.enc"
       - uses: actions/upload-artifact@v4
         with:
-          name: release-sign-key-enc
-          path: ${{ runner.temp }}/ovmx-sign/signing.pem.enc
+          name: release-sign-key
+          path: ${{ runner.temp }}/ovmx-sign/signing.pem
           retention-days: 1
           if-no-files-found: error
 
@@ -476,20 +475,13 @@ jobs:
         uses: ./.github/actions/enable-kvm
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
-      - name: Fetch the encrypted module-signing key
+      - name: Fetch the throwaway module-signing key
         uses: actions/download-artifact@v4
         with:
-          name: release-sign-key-enc
-          path: ${{ runner.temp }}/ovmx-sign-enc
-      - name: Decrypt the signing key
-        env:
-          KEYPASS: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          KEYDIR="${{ runner.temp }}/ovmx-sign"
-          mkdir -p "$KEYDIR"
-          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:KEYPASS -in "${{ runner.temp }}/ovmx-sign-enc/signing.pem.enc" -out "$KEYDIR/signing.pem"
-          echo "OVMX_MODULE_SIGNING_KEY=$KEYDIR/signing.pem" >> "$GITHUB_ENV"
+          name: release-sign-key
+          path: ${{ runner.temp }}/ovmx-sign
+      - name: Use the throwaway signing key
+        run: echo "OVMX_MODULE_SIGNING_KEY=${{ runner.temp }}/ovmx-sign/signing.pem" >> "$GITHUB_ENV"
       - name: Fetch the aarch64 release set (aarch64-release-set job)
         uses: actions/download-artifact@v4
         with:
@@ -518,20 +510,13 @@ jobs:
         uses: ./.github/actions/enable-kvm
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
-      - name: Fetch the encrypted module-signing key
+      - name: Fetch the throwaway module-signing key
         uses: actions/download-artifact@v4
         with:
-          name: release-sign-key-enc
-          path: ${{ runner.temp }}/ovmx-sign-enc
-      - name: Decrypt the signing key
-        env:
-          KEYPASS: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          KEYDIR="${{ runner.temp }}/ovmx-sign"
-          mkdir -p "$KEYDIR"
-          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:KEYPASS -in "${{ runner.temp }}/ovmx-sign-enc/signing.pem.enc" -out "$KEYDIR/signing.pem"
-          echo "OVMX_MODULE_SIGNING_KEY=$KEYDIR/signing.pem" >> "$GITHUB_ENV"
+          name: release-sign-key
+          path: ${{ runner.temp }}/ovmx-sign
+      - name: Use the throwaway signing key
+        run: echo "OVMX_MODULE_SIGNING_KEY=${{ runner.temp }}/ovmx-sign/signing.pem" >> "$GITHUB_ENV"
       - name: Fetch the aarch64 release set (aarch64-release-set job)
         uses: actions/download-artifact@v4
         with:

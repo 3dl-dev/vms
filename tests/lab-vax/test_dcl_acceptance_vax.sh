@@ -200,6 +200,45 @@ set +e
 run_dcl_acceptance_battery
 BRC=$?
 
+# rd vms-83d: FREE-MEMORY FLOOR. The 16 MB VAX demo node (Node B) starved at
+# boot -- free memory ~20 KB, tmpfs refusing writes ('No space left on device'),
+# a console that never offered Username: -- and no gate noticed until the
+# visitor matrix. OVMX_VAX_FREE_FLOOR_KB (set by the 16 MB CI leg together with
+# OVMX_VAX_MEMORY=16M) asserts that, after boot, login and the whole battery,
+# SHOW MEMORY (the executive's own uvm figures) still reports at least that
+# much Free. A footprint regression now reds here, not in the visitor gate.
+FLOOR_KB="${OVMX_VAX_FREE_FLOOR_KB:-}"
+if [ -n "$FLOOR_KB" ]; then
+    run_cmd 'SHOW MEMORY'
+    FREE_PAGES=$(printf '%s\n' "$SEG" | awk '/Main Memory \(/ { for (i = 1; i <= NF; i++) if ($i ~ /^\(.*Mb\)$/) { print $(i+2); exit } }')
+    TOTAL_PAGES=$(printf '%s\n' "$SEG" | awk '/Main Memory \(/ { for (i = 1; i <= NF; i++) if ($i ~ /^\(.*Mb\)$/) { print $(i+1); exit } }')
+    if [ -z "$FREE_PAGES" ] || [ -z "$TOTAL_PAGES" ]; then
+        FAIL=$((FAIL + 1))
+        echo "  FAIL: free-memory floor: could not read Main Memory Total/Free from SHOW MEMORY"
+        printf '%s\n' "$SEG" | tail -12
+    else
+        FREE_KB=$((FREE_PAGES / 2))
+        TOTAL_KB=$((TOTAL_PAGES / 2))
+        log "SHOW MEMORY after the battery: total ${TOTAL_KB} KB, free ${FREE_KB} KB (floor ${FLOOR_KB} KB)"
+        if [ -n "${OVMX_VAX_MEMORY:-}" ]; then
+            want=$(( ${OVMX_VAX_MEMORY%[Mm]} * 1024 ))
+            # The kernel image and reserved pages come off the top; the total
+            # must still show the node was really booted this small.
+            if [ "$TOTAL_KB" -gt "$want" ]; then
+                FAIL=$((FAIL + 1))
+                echo "  FAIL: free-memory floor: guest reports ${TOTAL_KB} KB total, more than the ${want} KB it was booted with"
+            fi
+        fi
+        if [ "$FREE_KB" -ge "$FLOOR_KB" ]; then
+            PASS=$((PASS + 1))
+            echo "  PASS: free-memory floor: ${FREE_KB} KB free >= ${FLOOR_KB} KB"
+        else
+            FAIL=$((FAIL + 1))
+            echo "  FAIL: free-memory floor: ${FREE_KB} KB free < ${FLOOR_KB} KB on a ${TOTAL_KB} KB node (rd vms-83d)"
+        fi
+    fi
+fi
+
 exec 6>&-
 sleep 2
 kill "$QP" 2>/dev/null || true

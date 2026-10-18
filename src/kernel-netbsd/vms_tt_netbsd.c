@@ -726,7 +726,7 @@ vtt_diag_thread(void *arg __unused)
 		struct vms_ttport_nb *p = NULL;
 		struct vms_tt *tt;
 		uint32_t d[12];
-		u_int outc = 0, ts = 0, ps = 0, rxl = 0, pdead = 0, prefs = 0, rawq = 0, canq = 0, inq = 0;
+		u_int outc = 0, ts = 0, ps = 0, rxl = 0, pdead = 0, prefs = 0, rawq = 0, canq = 0;
 		int ld = -1;
 		void *pp = NULL;
 		int have_tt = 0;
@@ -753,7 +753,6 @@ vtt_diag_thread(void *arg __unused)
 					ts = (u_int)tp->t_state;
 					rawq = (u_int)tp->t_rawq.c_cc;
 					canq = (u_int)tp->t_canq.c_cc;
-					inq = (u_int)(tp->t_outq.c_cc);
 					ld = (tp->t_linesw != NULL && tp->t_linesw->l_name != NULL &&
 					    strcmp(tp->t_linesw->l_name, VTT_LDISC_NAME) == 0) ? 1 : 0;
 				}

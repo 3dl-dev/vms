@@ -198,7 +198,7 @@ static void ovmx_memprobe(int sig)
 
         static int calls;
         calls++;
-        if (!(calls == 15 || calls == 40))
+        if (!(calls == 15 || calls == 40 || calls == 60 || calls == 90 || calls == 120 || calls == 150 || calls == 200))
             return;
         dumps++;
         m2[0] = CTL_KERN; m2[1] = KERN_PROC2; m2[2] = KERN_PROC_ALL; m2[3] = 0;
@@ -225,8 +225,8 @@ static void ovmx_memprobe(int sig)
         }
         cnt = ksz / sizeof(kp[0]);
         for (i = 0; i < cnt; i++) {
-            n = snprintf(b, sizeof(b), "MEMPROC pid=%d %s rss=%lldK vsz=%lldK t=%lld d=%lld s=%lld\n",
-                (int)kp[i].p_pid, kp[i].p_comm,
+            n = snprintf(b, sizeof(b), "MEMPROC pid=%d %s stat=%d wm=%s rss=%lldK vsz=%lldK t=%lld d=%lld s=%lld\n",
+                (int)kp[i].p_pid, kp[i].p_comm, (int)kp[i].p_stat, kp[i].p_wmesg,
                 (long long)kp[i].p_vm_rssize * u.pagesize / 1024,
                 (long long)(kp[i].p_vm_tsize + kp[i].p_vm_dsize + kp[i].p_vm_ssize) * u.pagesize / 1024,
                 (long long)kp[i].p_vm_tsize, (long long)kp[i].p_vm_dsize, (long long)kp[i].p_vm_ssize);

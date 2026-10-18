@@ -22,6 +22,8 @@ extern int printf(const char *, ...);
 extern int waitpid(int, int *, int);
 extern void _exit(int);
 extern int fflush(void *);
+extern int fprintf(void *, const char *, ...);
+extern void *stderr;
 extern int open(const char *, int, ...);
 extern int dup2(int, int);
 extern int pipe(int *);
@@ -120,6 +122,8 @@ int main(void)
         lk[n++] = "--library"; lk[n++] = "VDA0:[SYSTMP]STARLET.A";
         lk[n] = 0;
     }
+    fprintf(stderr, "OVMX-STDERR-PROBE: this line is written to stderr by the launcher\n");
+    fflush(0);
     {
         /* a link with no input: LINK.EXE must say so on stderr, which the pipe carries --
          * proof that a message from the real link below would be seen */

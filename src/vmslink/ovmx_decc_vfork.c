@@ -376,11 +376,11 @@ int ovmx_execle64(const char *spec, const char *arg0, ...)
  * system(NULL) says a command interpreter exists.
  */
 struct ovmx_sys_dsc { unsigned short len; unsigned char dtype, cls; const char *ptr; };
-extern unsigned int lib_spawn_weak(const struct ovmx_sys_dsc *, const void *, const void *,
+extern unsigned int lib$spawn(const struct ovmx_sys_dsc *, const void *, const void *,
                                    const unsigned int *, const void *, unsigned int *,
                                    unsigned int *, const unsigned int *, void *, void *,
                                    const void *, const void *, const void *)
-    __asm__("lib$spawn") __attribute__((weak));
+    __attribute__((weak));
 
 int ovmx_decc_system(const char *cmd) __asm__("decc$system");
 int ovmx_decc_system(const char *cmd)
@@ -393,11 +393,11 @@ int ovmx_decc_system(const char *cmd)
         cmd++;
     while (*cmd == ' ' || *cmd == '\t')
         cmd++;
-    if (!lib_spawn_weak)
+    if (!lib$spawn)
         return 3658;                                /* SS$_UNSUPPORTED */
     struct ovmx_sys_dsc d = { (unsigned short)strlen(cmd), 14 /* DSC$K_DTYPE_T */, 1 /* DSC$K_CLASS_S */, cmd };
     unsigned int status = 0x2Cu;                    /* SS$_ABORT unless the command reports */
-    unsigned int st = lib_spawn_weak(&d, 0, 0, 0, 0, 0, &status, 0, 0, 0, 0, 0, 0);
+    unsigned int st = lib$spawn(&d, 0, 0, 0, 0, 0, &status, 0, 0, 0, 0, 0, 0);
     if (!(st & 1u))
         return (int)st;                             /* the subprocess was not created */
     return (int)status;

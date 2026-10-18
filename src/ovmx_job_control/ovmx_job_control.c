@@ -280,7 +280,6 @@ int main(void)
          * what makes SHOW SYSTEM list the session under the username.
          */
         uint32_t session_pid = 0;
-        fprintf(stderr, "\nJCDIAG spawn\n");
         uint32_t cst = sys$creprc(&session_pid, &img_d,
                                   &term_d, &term_d, &term_d,
                                   NULL, NULL, NULL,
@@ -347,7 +346,6 @@ int main(void)
             }
         }
 
-        fprintf(stderr, "\nJCDIAG ended pid=%u cst=%08X\n", (unsigned)session_pid, (unsigned)cst);
         struct timespec t_after;
         clock_gettime(CLOCK_MONOTONIC, &t_after);
         long elapsed_ms = (t_after.tv_sec - t_before.tv_sec) * 1000

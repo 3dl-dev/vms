@@ -20,8 +20,9 @@ cd $O
 trap 'echo "build-host-link: FAIL at line $LINENO: $BASH_COMMAND"' ERR
 echo "== LINK.EXE (host=$T)"
 # link.c is one translation unit (it includes the EVAX reader); the default pointer
-# size is the DEC C one (32-bit), as for the host GCC and gas.
-$T-gcc -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
+# size is the DEC C one (32-bit), as for the host GCC and gas. The images it writes name
+# the booted system activator as PT_INTERP, as the bootable LINK.EXE builds do.
+$T-gcc -O2 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DIMGACT_INTERP_PATH=/run/ovmx-boot/IMGACT.EXE \
     -I/src/src/vmslink/include -I/src/src/vmslink \
     -o $O/out/link.exe /src/src/vmslink/link.c > build.log 2>&1 \
     || { grep -nE ' error:|LINK-[FE]|undefined' build.log | head -40; tail -20 build.log; exit 1; }

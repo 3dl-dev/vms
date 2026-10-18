@@ -1,0 +1,30 @@
+# dcl-set-quals-accept-all -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL SET per-sub-verb qualifier validation (src/vmsdcl/dcl_cmd_set.c set_subverb_quals, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_set.c";;
+        suites_red)   echo "test_syssvc_dcl_set_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SET goes back to accept-all: the per-sub-verb validation result is ignored, so SET/ZQONE DEFAULT, SET FILE/ZQTHREE and the rest silently drop an unknown qualifier instead of %DCL-W-IVQUAL.";;
+        require_fail) cat <<'EOF2'
+SET/ZQONE DEFAULT is %DCL-W-IVQUAL
+SET DEFAULT/ZQTWO is %DCL-W-IVQUAL
+SET FILE/ZQTHREE is %DCL-W-IVQUAL
+SET PROCESS/ZQFOUR is %DCL-W-IVQUAL
+SET MESSAGE/ZQFIVE is %DCL-W-IVQUAL
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^            if (qs != SS\$_NORMAL)$|            if (0 \&\& qs != SS$_NORMAL) /* NEGCTL dcl-set-quals-accept-all */|' "$_file"
+    :
+}

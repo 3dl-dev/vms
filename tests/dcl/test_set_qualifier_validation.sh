@@ -1,0 +1,12 @@
+#!/bin/bash
+# TEST: SET refuses a qualifier its sub-verb does not read, per sub-verb (vms-097).
+# EXPECT: contains:%DCL-W-IVQUAL
+# EXPECT: contains: \ZQONE\
+# EXPECT: contains: \ZQTWO\
+# EXPECT: contains: \ZQTHREE\
+# EXPECT_NOT: contains: \CARRIAGE_CONTROL\
+# EXPECT: contains:%SET-E-NOSUCHFILE
+# EXPECT_NOT: contains: \TRUNCATE\
+# EXPECT_NOT: contains: \FACILITY\
+VMSDCL="${VMSDCL:-vmsdcl}"
+printf 'SET/ZQONE DEFAULT SYS$LOGIN\nSET DEFAULT/ZQTWO SYS$LOGIN\nSET FILE/ZQTHREE NOSUCH.TXT\nSET FILE/TRUNCATE NOSUCH.TXT\nSET MESSAGE/NOFACILITY/FACILITY\nSET PROMPT/NOCARRIAGE_CONTROL="p$ "\n' | $VMSDCL 2>&1

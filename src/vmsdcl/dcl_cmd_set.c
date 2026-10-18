@@ -1272,35 +1272,31 @@ static int cmd_set_password(struct dcl_command *cmd)
  * Controls which components of VMS error messages are displayed.
  * On OpenVMS, dcl_error() respects these flags when formatting output.
  */
+/* /[NO]NAME as the validator leaves it: canonical NAME, negated flag set for
+ * the /NONAME form. The parser splits /NOFACILITY into FACILITY + negated, and
+ * dcl_has_qualifier() answers 0 for a negated match, so the old reads of
+ * "NOFACILITY" never matched and /NOFACILITY silently did nothing. */
+static int set_message_flag(const struct dcl_command *cmd, const char *name,
+                            int *value)
+{
+    for (int i = 0; i < cmd->qualifier_count; i++) {
+        if (strcasecmp(cmd->qualifiers[i].name, name) == 0) {
+            *value = cmd->qualifiers[i].negated ? 0 : 1;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int cmd_set_message(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+    int v;
 
-    /* /[NO]FACILITY */
-    if (dcl_has_qualifier(cmd, "NOFACILITY"))
-        ctx->msg_facility = 0;
-    else if (dcl_has_qualifier(cmd, "FACILITY"))
-        ctx->msg_facility = 1;
-
-    /* /[NO]SEVERITY */
-    if (dcl_has_qualifier(cmd, "NOSEVERITY"))
-        ctx->msg_severity = 0;
-    else if (dcl_has_qualifier(cmd, "SEVERITY"))
-        ctx->msg_severity = 1;
-
-    /* /[NO]IDENTIFICATION */
-    if (dcl_has_qualifier(cmd, "NOIDENTIFICATION") ||
-        dcl_has_qualifier(cmd, "NOIDENT"))
-        ctx->msg_ident = 0;
-    else if (dcl_has_qualifier(cmd, "IDENTIFICATION") ||
-             dcl_has_qualifier(cmd, "IDENT"))
-        ctx->msg_ident = 1;
-
-    /* /[NO]TEXT */
-    if (dcl_has_qualifier(cmd, "NOTEXT"))
-        ctx->msg_text = 0;
-    else if (dcl_has_qualifier(cmd, "TEXT"))
-        ctx->msg_text = 1;
+    if (set_message_flag(cmd, "FACILITY", &v))       ctx->msg_facility = v;
+    if (set_message_flag(cmd, "SEVERITY", &v))       ctx->msg_severity = v;
+    if (set_message_flag(cmd, "IDENTIFICATION", &v)) ctx->msg_ident = v;
+    if (set_message_flag(cmd, "TEXT", &v))           ctx->msg_text = v;
 
     return SS$_NORMAL;
 }
@@ -1769,6 +1765,18 @@ static int cmd_set_file(struct dcl_command *cmd)
         dcl_error("SET", 2, "NOSUCHFILE",
                   "file not found - \\%s\\", filespec);
         return SS$_NOSUCHFILE;
+    }
+
+    /* /TRUNCATE -- release the file's allocation beyond its end-of-file mark.
+     * A host file has no allocation past EOF, so the real operation is a
+     * truncate to the current EOF (a no-op on size, but the call is made and
+     * its failure reported). The MMK tier-4 corpus issues SET FILE/TRUNCATE. */
+    if (dcl_has_qualifier(cmd, "TRUNCATE")) {
+        if (truncate(linux_path, st.st_size) != 0) {
+            dcl_error("SET", 2, "PRV",
+                      "cannot truncate file - %s", vms_strerror(errno));
+            return SS$_NOPRIV;
+        }
     }
 
     /* /VERSION_LIMIT=n — advisory; just validate and acknowledge */
@@ -2546,6 +2554,75 @@ static int cmd_set_symbol(struct dcl_command *cmd)
 /*
  * SET Dispatcher
  */
+/*
+ * Per-sub-verb qualifier tables for the SET umbrella (vms-097). SET's
+ * qualifiers belong to the sub-verb (param[0]), so a single flat verb table
+ * is wrong; each entry lists EXACTLY the qualifiers that sub-verb's handler
+ * reads, and anything else is %DCL-W-IVQUAL rather than silently dropped
+ * (INV-DCL sec 3: honest over-restriction). Sub-verbs that parse their own
+ * qualifiers (TERMINAL, ACL, PROTECTION, PASSWORD, ACCOUNTING, VOLUME,
+ * SYMBOL) are not listed: they validate themselves.
+ */
+#define SQ_END { NULL, 0, 0, NULL, NULL }
+static const struct dcl_qual_def sq_none[] = { SQ_END };
+static const struct dcl_qual_def sq_prompt[] = {
+    { "CARRIAGE_CONTROL", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL }, SQ_END };
+static const struct dcl_qual_def sq_message[] = {
+    { "FACILITY",       CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "SEVERITY",       CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "IDENTIFICATION", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "TEXT",           CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    SQ_END };
+static const struct dcl_qual_def sq_process[] = {
+    { "NAME",       CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PRIORITY",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PRIVILEGES", CDU_VT_LIST,  CDU_Q_VALREQ, NULL, NULL },
+    { "ENABLE",     CDU_VT_NONE,  0,            NULL, NULL },
+    { "DISABLE",    CDU_VT_NONE,  0,            NULL, NULL },
+    SQ_END };
+static const struct dcl_qual_def sq_file[] = {
+    { "TRUNCATE",        CDU_VT_NONE,  0,            NULL, NULL },
+    { "EXPIRATION_DATE", CDU_VT_VALUE, 0,            NULL, NULL },
+    { "VERSION_LIMIT",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    SQ_END };
+static const struct dcl_qual_def sq_working_set[] = {
+    { "QUOTA", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }, SQ_END };
+static const struct dcl_qual_def sq_host[] = {
+    { "USERNAME", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }, SQ_END };
+static const struct dcl_qual_def sq_entry[] = {
+    { "HOLD",    CDU_VT_NONE, 0, NULL, NULL },
+    { "RELEASE", CDU_VT_NONE, 0, NULL, NULL },
+    SQ_END };
+static const struct dcl_qual_def sq_queue[] = {
+    { "STOP",  CDU_VT_NONE, 0, NULL, NULL },
+    { "START", CDU_VT_NONE, 0, NULL, NULL },
+    { "PAUSE", CDU_VT_NONE, 0, NULL, NULL },
+    SQ_END };
+
+static const struct {
+    const char *name;
+    int min_abbrev;
+    const struct dcl_qual_def *quals;
+} set_subverb_quals[] = {
+    { "DEFAULT",     3, sq_none },
+    { "PROMPT",      3, sq_prompt },
+    { "VERIFY",      3, sq_none },
+    { "NOVERIFY",    3, sq_none },
+    { "NOON",        4, sq_none },
+    { "ON",          2, sq_none },
+    { "MESSAGE",     3, sq_message },
+    { "CONTROL",     4, sq_none },
+    { "NOCONTROL",   9, sq_none },
+    { "PROCESS",     3, sq_process },
+    { "FILE",        4, sq_file },
+    { "UIC",         3, sq_none },
+    { "WORKING_SET", 4, sq_working_set },
+    { "TIME",        4, sq_none },
+    { "HOST",        3, sq_host },
+    { "ENTRY",       3, sq_entry },
+    { "QUEUE",       3, sq_queue },
+};
+
 int cmd_set(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1) {
@@ -2554,6 +2631,17 @@ int cmd_set(struct dcl_command *cmd)
     }
 
     const char *subcmd = cmd->params[0];
+
+    for (size_t t = 0; t < sizeof set_subverb_quals / sizeof set_subverb_quals[0]; t++) {
+        if (dcl_match_command(subcmd, set_subverb_quals[t].name,
+                              set_subverb_quals[t].min_abbrev)) {
+            struct dcl_verb shim = { .quals = set_subverb_quals[t].quals };
+            uint32_t qs = dcl_validate_qualifiers(&shim, cmd);
+            if (qs != SS$_NORMAL)
+                return (int)qs;
+            break;
+        }
+    }
 
     if (dcl_match_command(subcmd, "DEFAULT", 3))
         return cmd_set_default(cmd);

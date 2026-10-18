@@ -354,6 +354,15 @@ int cmd_sort(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/*
+ * DUMP reads the file's bytes through the Files-11 ACP (rms_read_over_acp), as
+ * TYPE reads it through RMS: whatever the file's record format -- GNU as's EVAX
+ * object is rfm=udf, which no $GET path serves -- and never as a POSIX fopen() of
+ * a /vms path (INV-6). It used to fopen() the translated path, which on the
+ * product runtime is not where the volume's files are: DUMP of any file written
+ * through RMS answered %RMS-E-FNF (vms-5303e). The executive-absent host defer is
+ * the same one TYPE has (rms_executive_absent(), a kernel-mounted unit).
+ */
 int cmd_dump(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -363,11 +372,41 @@ int cmd_dump(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
+    uint8_t *data = NULL;
+    uint64_t dlen = 0;
+    char eff[1024];
+    uint32_t rst = RMS$_ACC;
+    int have = 0;
+    const char *name_src = NULL;
     char linux_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
 
-    FILE *fp = fopen(linux_path, "rb");
-    if (!fp) {
+    if (dcl_rms_effective_spec(ctx, cmd->params[0], eff, sizeof(eff)) == 0 &&
+        !rms_executive_absent()) {
+        rst = rms_read_over_acp(eff, &data, &dlen);
+        have = (rst == RMS$_NORMAL);
+        name_src = eff;
+    }
+    if (!have && (rms_executive_absent() ||
+                  vmsfs_device_spec_kernel_mounted(cmd->params[0]))) {
+        dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+        FILE *fp = fopen(linux_path, "rb");
+        if (fp) {
+            size_t cap = 4096, n = 0, r;
+            data = malloc(cap);
+            while (data && (r = fread(data + n, 1, cap - n, fp)) > 0) {
+                n += r;
+                if (n == cap) {
+                    uint8_t *g = realloc(data, cap *= 2);
+                    if (!g) { free(data); data = NULL; }
+                    else data = g;
+                }
+            }
+            fclose(fp);
+            if (data) { dlen = n; have = 1; name_src = linux_path; }
+        }
+    }
+    if (!have) {
+        free(data);
         dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
         return SS$_NOSUCHFILE;
     }
@@ -379,23 +418,28 @@ int cmd_dump(struct dcl_command *cmd)
 
     /* VMS DUMP header */
     char vms_name[256];
-    const char *bn = strrchr(linux_path, '/');
-    if (bn) bn++; else bn = linux_path;
+    const char *bn = name_src;
+    const char *sl = strrchr(name_src, '/');
+    const char *br = strrchr(name_src, ']');
+    const char *co = strrchr(name_src, ':');
+    if (sl) bn = sl + 1;
+    else if (br) bn = br + 1;
+    else if (co) bn = co + 1;
     size_t i;
-    for (i = 0; bn[i] && i < sizeof(vms_name)-1; i++)
+    for (i = 0; bn[i] && bn[i] != ';' && i < sizeof(vms_name)-1; i++)
         vms_name[i] = (char)toupper((unsigned char)bn[i]);
     vms_name[i] = '\0';
 
     printf("\nDump of file SYS$DISK:[]%s;1\n\n", vms_name);
     printf("File ID (0,0,0)  End of file block 0  Offset 0\n\n");
 
-    unsigned char buf[16];
-    long offset = 0;
-    size_t n;
+    uint64_t offset = 0;
     long block = 0;
     int in_block_start = 1;
 
-    while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
+    while (offset < dlen) {
+        size_t n = (size_t)(dlen - offset < 16 ? dlen - offset : 16);
+        const uint8_t *buf = data + offset;
         /* Print block header at start of each 512-byte block */
         if (in_block_start || (offset % 512 == 0)) {
             if (offset > 0 && offset % 512 == 0) {
@@ -410,7 +454,7 @@ int cmd_dump(struct dcl_command *cmd)
         }
 
         /* Print offset (VMS style: relative to start of current block) */
-        long block_offset = offset % 512;
+        long block_offset = (long)(offset % 512);
         printf("%08lX ", block_offset);
 
         /* Hex bytes (4 groups of 4, space between) */
@@ -430,10 +474,10 @@ int cmd_dump(struct dcl_command *cmd)
         }
         printf("\n");
 
-        offset += (long)n;
+        offset += n;
     }
 
-    fclose(fp);
+    free(data);
     printf("\n");
 
     return SS$_NORMAL;

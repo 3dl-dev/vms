@@ -1333,6 +1333,100 @@ uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath)
 #endif
 }
 
+/*
+ * rms_read_over_acp - the whole of a file's GENUINE bytes, read off the mounted
+ * ODS-2 volume through the executive Files-11 ACP into a malloc'd buffer (the
+ * caller frees it): IO$_READVBLK over /dev/vms, the same read rms_stage_over_acp
+ * does into a staged file. DCL DUMP is its reader (vms-5303e): a DUMP reads the
+ * file's bytes whatever its record format -- GNU as writes its EVAX object as
+ * rfm=udf, which no record ($GET) path serves -- through the volume, never a
+ * POSIX read of a /vms path (Rule 9 / INV-6). Status and `vmsspec` as there. An
+ * empty file gives *buf == NULL, *len == 0 and RMS$_NORMAL.
+ */
+uint32_t rms_read_over_acp(const char *vmsspec, uint8_t **buf, uint64_t *len)
+{
+    if (!vmsspec || !buf || !len)
+        return RMS$_FAB;
+    *buf = NULL;
+    *len = 0;
+#if defined(OVMX_HAVE_ACP)
+    if (rms_acp_absent())
+        return RMS$_ACC;
+
+    struct FAB tfab = cc$rms_fab;
+    struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
+    struct vms_acp_access_args a;
+    uint32_t chan = 0, st = SS$_NOSUCHFILE;
+    int ncand, got = 0;
+
+    tfab.fab$l_fna = (char *)vmsspec;
+    tfab.fab$b_fns = (uint8_t)strlen(vmsspec);
+    ncand = rms_acp_specs_from_fab(&tfab, specs, RMS_ACP_MAX_CANDS);
+    if (ncand < 0)
+        return RMS$_SYN;
+    for (int i = 0; i < ncand && !got; i++) {
+        struct rms_acp_spec *sp = &specs[i];
+        chan = 0;
+        st = vms_kif_acp_assign(sp->devnam, &chan);
+        if (!$VMS_STATUS_SUCCESS(st))
+            continue;
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        st = rms_acp_resolve_did(chan, sp->dirpath,
+                                 &a.did_num, &a.did_seq, &a.did_rvn, &a.did_nmx);
+        if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); continue; }
+        a.version = sp->version;
+        strncpy(a.name, sp->name, VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&a);
+        if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); continue; }
+        got = 1;
+    }
+    if (!got)
+        return rms_acp_open_status(st);
+
+    uint32_t efblk = a.attr.efblk;
+    uint64_t total = efblk ? (uint64_t)(efblk - 1u) * 512u + a.attr.ffbyte : 0;
+    uint32_t rc = RMS$_NORMAL;
+    uint8_t *mem = NULL;
+    if (total) {
+        mem = malloc((size_t)total);
+        if (!mem)
+            rc = RMS$_DME;
+    }
+    uint64_t got_bytes = 0;
+    uint32_t vbn = 1;
+    while (rc == RMS$_NORMAL && got_bytes < total) {
+        uint8_t blk[512];
+        struct vms_acp_rw_args r;
+        memset(&r, 0, sizeof(r));
+        r.chan = chan; r.vbn = vbn; r.offset = 0; r.length = 512;
+        r.buffer = (uint64_t)(uintptr_t)blk;
+        st = vms_kif_acp_readvb(&r);
+        if (!$VMS_STATUS_SUCCESS(st) || r.xferred == 0) {
+            rc = $VMS_STATUS_SUCCESS(st) ? SS$_ABORT : rms_acp_open_status(st);
+            break;
+        }
+        uint64_t chunk = total - got_bytes;
+        if (chunk > r.xferred) chunk = r.xferred;
+        if (chunk > sizeof(blk)) chunk = sizeof(blk);
+        memcpy(mem + got_bytes, blk, (size_t)chunk);
+        got_bytes += chunk;
+        vbn++;
+    }
+    vms_kif_acp_deaccess(chan);
+    vms_kif_dassgn(chan);
+    if (rc != RMS$_NORMAL) {
+        free(mem);
+        return rc;
+    }
+    *buf = mem;
+    *len = total;
+    return RMS$_NORMAL;
+#else
+    return RMS$_ACC;
+#endif
+}
+
 struct rms_metadata {
     uint32_t magic;         /* RMS_META_MAGIC */
     uint8_t  version;       /* Metadata format version */

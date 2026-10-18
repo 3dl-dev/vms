@@ -1,6 +1,6 @@
 /*
  * crtl_process.c - the DEC C process-environment calls of the RMS-backed (pass-2)
- * DECC$SHR, next to crtl_features.c: system() and getcwd() (vms-65a).
+ * DECC$SHR, next to crtl_features.c: system() and getcwd() (dflt-65a).
  *
  * getcwd(buf, size, vms_flag): the process's default directory, which the
  * executive keeps ($SETDDIR / SET DEFAULT) and RMS completes relative file
@@ -13,7 +13,7 @@
  *
  * DEC C: the string is a DCL command run in a subprocess by the command language
  * interpreter, through LIB$SPAWN, and the value is the VMS condition value of the
- * command (odd = success). The GCC port's linker wrapper (vms-ld.c) writes
+ * command (odd = success). The GCC port's linker wrapper (dflt-ld.c) writes
  * system("$ link ...") and tests bit 0. A leading "$" is the DCL prompt and is
  * dropped. system(NULL) says a command interpreter exists.
  *
@@ -64,17 +64,17 @@ extern unsigned int sys$setddir(const struct crtl_dsc *new_dir, unsigned short *
 
 char *ovmx_crtl_getcwd(char *buf, unsigned long size, int vms_flag)
 {
-    char vms[256], out[512];
-    struct crtl_dsc d = { sizeof vms - 1, 14, 1, vms };
+    char dflt[256], out[512];
+    struct crtl_dsc d = { sizeof dflt - 1, 14, 1, dflt };
     unsigned short n = 0;
-    if (!(sys$setddir(0, &n, &d) & 1) || n == 0 || n >= sizeof vms)
+    if (!(sys$setddir(0, &n, &d) & 1) || n == 0 || n >= sizeof dflt)
         n = 0;
-    vms[n] = '\0';
+    dflt[n] = '\0';
     if (n == 0)
-        strcpy(vms, "SYS$DISK:[000000]");   /* no default recorded: the system disk's top */
+        strcpy(dflt, "SYS$DISK:[000000]");   /* no default recorded: the system disk's top */
     if (vms_flag) {
-        strcpy(out, vms);
-    } else if (ovmx_crtl_vms_to_unix(vms, out, sizeof out) < 0) {
+        strcpy(out, dflt);
+    } else if (ovmx_crtl_vms_to_unix(dflt, out, sizeof out) < 0) {
         errno = ERANGE;
         return 0;
     }

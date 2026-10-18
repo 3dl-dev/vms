@@ -43,10 +43,21 @@ while ($n < 400) {
     last unless defined $stop;
     send_pkt('g'); my $g = recv_pkt();
     my @r = map { le64(substr($g, $_ * 16, 16)) } 0 .. 31;
-    my $addr = $r[$regno{$reg}];
+    (my $rn = $reg) =~ s/d$//; my $addr = $r[$regno{$rn}];
     $n++;
     printf $log "HIT %d stop=%s pc=%#x t0(r1)=%#x a0(r16)=%#x a1=%#x a2=%#x ra(r26)=%#x pv(r27)=%#x sp=%#x\n",
         $n, substr($stop, 0, 3), $pc, $r[1], $r[16], $r[17], $r[18], $r[26], $r[27], $r[30];
+    if ($len > 0 && $reg =~ /d$/) {
+        # r16d: dump the object at r16 (a bfd) and the one its longword at +8 points to
+        send_pkt(sprintf('m%x,%x', $addr, $len)); my $m = recv_pkt();
+        print $log sprintf("OBJ %#x:\n", $addr);
+        for (my $i = 0; $i < length($m); $i += 32) { print $log '  ', substr($m, $i, 32), "\n" }
+        my $p2 = unpack('V', pack('H8', substr($m, 16, 8)));
+        send_pkt(sprintf('m%x,%x', $p2, $len)); $m = recv_pkt();
+        print $log sprintf("DEREF+8 %#x:\n", $p2);
+        for (my $i = 0; $i < length($m); $i += 32) { print $log '  ', substr($m, $i, 32), "\n" }
+        last;
+    }
     if ($len > 0 && ($r[1] < 0x1000 || $r[1] > 0x10000000)) {
         for my $w ([$addr - 64, $len + 128]) {
             send_pkt(sprintf('m%x,%x', $w->[0], $w->[1])); my $m = recv_pkt();

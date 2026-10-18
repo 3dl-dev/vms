@@ -189,6 +189,31 @@ static void ovmx_memprobe(int sig)
         (long long)u.inactive * u.pagesize / 1024);
     if (n > 0)
         (void)write(2, b, (size_t)n);
+    {
+        static int dumps;
+        static struct kinfo_proc2 kp[64];
+        int m2[6];
+        size_t ksz = sizeof(kp);
+        size_t i, cnt;
+
+        if ((long long)u.free * u.pagesize / 1024 > 1500 || dumps >= 4)
+            return;
+        dumps++;
+        m2[0] = CTL_KERN; m2[1] = KERN_PROC2; m2[2] = KERN_PROC_ALL; m2[3] = 0;
+        m2[4] = (int)sizeof(kp[0]); m2[5] = 64;
+        if (sysctl(m2, 6, kp, &ksz, NULL, 0) != 0)
+            return;
+        cnt = ksz / sizeof(kp[0]);
+        for (i = 0; i < cnt; i++) {
+            n = snprintf(b, sizeof(b), "MEMPROC pid=%d %s rss=%lldK vsz=%lldK t=%lld d=%lld s=%lld\n",
+                (int)kp[i].p_pid, kp[i].p_comm,
+                (long long)kp[i].p_vm_rssize * u.pagesize / 1024,
+                (long long)(kp[i].p_vm_tsize + kp[i].p_vm_dsize + kp[i].p_vm_ssize) * u.pagesize / 1024,
+                (long long)kp[i].p_vm_tsize, (long long)kp[i].p_vm_dsize, (long long)kp[i].p_vm_ssize);
+            if (n > 0)
+                (void)write(2, b, (size_t)n);
+        }
+    }
 }
 
 int ovmx_boot_mount_kernel_filesystems(void)

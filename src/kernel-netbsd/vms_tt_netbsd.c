@@ -89,6 +89,7 @@ struct vms_ttport_nb {
  * open of the console line, or the next bind naming the unit, takes it back
  * (vms_tt_set_port). Only the console: a pty's close is its far end leaving.
  */
+static volatile u_int vtt_c_rint, vtt_c_rint_drop, vtt_c_recv, vtt_c_open, vtt_c_close, vtt_c_reclaim;
 static kmutex_t vtt_park_lock;
 static struct vms_tt *vtt_parked;              /* referenced */
 static char vtt_parked_devnam[VMS_DEVNAM_SIZE];
@@ -316,6 +317,7 @@ vtt_softint(void *arg __unused)
 			struct vms_tt *tt = port_tt_get(p);
 
 			if (tt != NULL) {
+				vtt_c_recv++;
 				vms_tt_receive(tt, buf, n);
 				vms_tt_release(tt);
 			}
@@ -345,6 +347,7 @@ vtt_open(dev_t dev, struct tty *tp)
 {
 	struct vms_ttport_nb *p;
 
+	vtt_c_open++;
 	mutex_spin_enter(&tty_lock);
 	tp->t_dev = dev;
 	if (!ISSET(tp->t_state, TS_ISOPEN)) {
@@ -390,6 +393,7 @@ vtt_reclaim(struct vms_ttport_nb *p)
 	if (p->tt == NULL && (tt = vtt_unpark(NULL, p->devnam)) != NULL) {
 		atomic_inc_uint(&p->refs);   /* the class driver's hold */
 		p->tt = tt;
+		vtt_c_reclaim++;
 		mutex_exit(&p->bind_lock);
 		vms_tt_set_port(tt, &vms_ttport_nb_ops, p);
 		return;
@@ -403,6 +407,7 @@ vtt_close(struct tty *tp, int flag __unused)
 	struct vms_ttport_nb *p;
 	struct vms_tt *tt;
 
+	vtt_c_close++;
 	mutex_spin_enter(&tty_lock);
 	p = tp->t_sc;
 	tp->t_sc = NULL;
@@ -490,8 +495,10 @@ vtt_rint(int c, struct tty *tp)
 	if (c & TTY_ERRORMASK)
 		return 0;                    /* framing / parity error: dropped */
 	mutex_spin_enter(&tty_lock);
+	vtt_c_rint++;
 	p = tp->t_sc;
 	if (p == NULL || p->dead) {
+		vtt_c_rint_drop++;
 		mutex_spin_exit(&tty_lock);
 		return 0;
 	}
@@ -718,7 +725,8 @@ vtt_diag_thread(void *arg __unused)
 		struct vms_ttport_nb *p = NULL;
 		struct vms_tt *tt;
 		uint32_t d[12];
-		u_int outc = 0, ts = 0, ps = 0, rxl = 0, pdead = 0, prefs = 0;
+		u_int outc = 0, ts = 0, ps = 0, rxl = 0, pdead = 0, prefs = 0, rawq = 0, canq = 0, inq = 0;
+		int ld = -1;
 		void *pp = NULL;
 		int have_tt = 0;
 
@@ -742,14 +750,19 @@ vtt_diag_thread(void *arg __unused)
 				if (tp != NULL) {
 					outc = (u_int)tp->t_outq.c_cc;
 					ts = (u_int)tp->t_state;
+					rawq = (u_int)tp->t_rawq.c_cc;
+					canq = (u_int)tp->t_canq.c_cc;
+					inq = (u_int)(tp->t_outq.c_cc);
+					ld = (tp->t_linesw != NULL && tp->t_linesw->l_name != NULL &&
+					    strcmp(tp->t_linesw->l_name, VTT_LDISC_NAME) == 0) ? 1 : 0;
 				}
 				mutex_spin_exit(&tty_lock);
 			}
 			vms_tt_release(tt);
 		}
-		n = snprintf(dbuf, sizeof(dbuf), "\r\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u\n",
+		n = snprintf(dbuf, sizeof(dbuf), "\r\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u ld=%d rawq=%u canq=%u rint=%u drop=%u recv=%u open=%u close=%u recl=%u\n",
 		    seq, tp != NULL, pp, pdead, prefs, rxl, outc, ts, ps, have_tt,
-		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11]);
+		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], ld, rawq, canq, vtt_c_rint, vtt_c_rint_drop, vtt_c_recv, vtt_c_open, vtt_c_close, vtt_c_reclaim);
 		for (k = 0; k < n && k < (int)sizeof(dbuf); k++)
 			cnputc((unsigned char)dbuf[k]);
 	}

@@ -438,6 +438,21 @@ static const struct dcl_qual_def q_ping[] = {
     QUAL_END
 };
 
+/* TELNET reads NO qualifier (host and port are parameters), so an empty table:
+ * any qualifier is %DCL-W-IVQUAL rather than silently dropped (vms-097). FTP
+ * reads exactly the qualifiers below (cmd_ftp); every other one is honestly
+ * %DCL-W-IVQUAL until implemented (INV-DCL sec 3). */
+static const struct dcl_qual_def q_ftp[] = {
+    { "PORT",     CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "USER",     CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PASSWORD", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "GET",      CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PUT",      CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "REMOTE",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "OUTPUT",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+
 static struct dcl_verb builtin_verbs[] = {
     { "ACCOUNTING",  cmd_accounting,  CDU_F_ABBREV | CDU_F_QUALIFIER, 4,
       "Display login accounting information for the current user", q_none },
@@ -480,7 +495,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
       "Terminate a command procedure or session", q_none },
     { "FTP",         cmd_ftp,         CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "FTP file transfer client (/GET, /PUT over TCP/IP Services BGn:)" },
+      "FTP file transfer client (/GET, /PUT over TCP/IP Services BGn:)", q_ftp },
     /* HELP takes accept-all qualifiers (quals == NULL, not q_none): a slash
      * token after HELP is a command-qualifier TOPIC to look up (e.g.
      * HELP DIRECTORY QUALIFIERS /EXCLUDE), exactly as VMS HELP treats it, so
@@ -553,7 +568,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "TCPIP",       cmd_tcpip,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "TCP/IP Services network management commands" },
     { "TELNET",      cmd_telnet,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "TELNET remote terminal client (over TCP/IP Services BGn:)" },
+      "TELNET remote terminal client (over TCP/IP Services BGn:)", q_none },
     { "TYPE",        cmd_type,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display the contents of a file", q_type },
     { "WAIT",        cmd_wait,        CDU_F_ABBREV | CDU_F_PARAM, 2,

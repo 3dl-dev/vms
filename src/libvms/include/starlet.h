@@ -838,15 +838,10 @@ uint32_t sys$dgblsc(
  *
  * @return  SS$_NORMAL on success, SS$_BADPARAM if inadr is NULL
  *
- * OVMX processes are demand-paged by the Linux VMM rather than a
- * VMS-style adjustable working set with a lockable resident-page list
- * (see sys$purgws above for the same tradeoff), so there is no
- * WSQUOTA-bounded lock to perform; OVMX validates the range, echoes it
- * to retadr, and returns success without further action. Because OVMX
- * has no working-set quota, this never returns the real VMS
- * SS$_LKWSETFUL condition (exceeded lockable-page quota) - flagged in
- * vms-fb3 findings since that status value was not independently
- * cross-verified against a second source this session.
+ * OVMX has no VMS-style working-set list; the pages containing the range are
+ * locked into physical memory (mlock, as sys$lckpag) and the page-rounded
+ * range actually locked is returned in retadr. A host refusal is SS$_NOPRIV,
+ * an unmapped range SS$_ACCVIO. SS$_LKWSETFUL is never returned (no WSQUOTA).
  */
 uint32_t sys$lkwset(
     const void *inadr,
@@ -863,8 +858,7 @@ uint32_t sys$lkwset(
  *
  * @return  SS$_NORMAL on success, SS$_BADPARAM if inadr is NULL
  *
- * Companion no-op to sys$lkwset above - see that comment for the
- * demand-paging rationale.
+ * Companion to sys$lkwset above: munlock of the page-rounded range.
  */
 uint32_t sys$ulwset(
     const void *inadr,

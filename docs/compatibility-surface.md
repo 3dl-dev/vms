@@ -13,8 +13,8 @@
 |---|---|---|---|---|
 | ✅ verified | 24 | | real | 348 |
 | 🟢 implemented | 295 | | n/a | 92 |
-| 🟡 partial | 68 | | advisory | 48 |
-| 🟠 stub | 12 | | facade-risk | 3 |
+| 🟡 partial | 70 | | advisory | 50 |
+| 🟠 stub | 10 | | facade-risk | 1 |
 | 🔵 designed | 1 | |  |  |
 | ⬜ absent | 91 | |  |  |
 
@@ -34,7 +34,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  222 surfaces catalogued (156 met · 19 in progress · 47 not started) · V1: 213 committed, 156 met · ⚠ 2 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜⬜⬜`  —  222 surfaces catalogued (156 met · 21 in progress · 45 not started) · V1: 213 committed, 156 met
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)
 <sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-09-14</sub>
@@ -396,10 +396,10 @@ VMS ships ~2 mailbox-creation services; OVMX implements both, real, vms.ko-resid
 ### sys-memory — SYS$ Memory Management
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS System Services Reference Manual — Memory Management Services · reviewed 2026-09-14</sub>
 
-VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EXPREG/CRMPSC are real (mmap-backed). SYS$DGBLSC/PURGWS/LKWSET/ ULWSET validate arguments and return SS$_NORMAL with nothing done (facade-risk); LKWSET/ULWSET are kernel-mode/PFN working-set-lock services, out of scope for 1.0. SYS$ADJSTK and SYS$UPDSEC are absent. SYS$LCKPAG (lock pages in physical memory) is absent and permanently out of scope (kernel-mode/PFN).
+VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EXPREG/CRMPSC are real (mmap-backed). SYS$DGBLSC returns SS$_NOSUCHSEC (no named-section registry) and LKWSET/ULWSET really mlock/munlock the page-rounded range; PURGWS validates and returns SS$_NORMAL (advisory hint). LKWSET/ULWSET are out of scope for 1.0. SYS$ADJSTK and SYS$UPDSEC are absent. SYS$LCKPAG (lock pages in physical memory) is absent and permanently out of scope (kernel-mode/PFN).
 
 
-<sub>11 items · 4 met · 1 in progress · 6 not started · ⚠ 2 facade-risk</sub>
+<sub>11 items · 4 met · 3 in progress · 4 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -409,8 +409,8 @@ VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EX
 | 🟢 | `sys$crmpsc` | routine | Create and map a section | implemented | real | in | `src/libvms/syssvc/sys_memory.c` — mmap-backed |
 | 🟡≈ | `sys$dgblsc` | routine | Delete a global section | partial | advisory | in | `src/libvms/syssvc/sys_memory.c` — Proof tests/qemu/test_syssvc_dgblsc_nosuchsec.c + defects.d/dgblsc-fake-success.defect. No named-global-section registry exists (sys$crmpsc discards gsdnam), so under the executive every named delete returns SS$_NOSUCHSEC honestly (SS$_NOSUCHDEV with no executive, one-runtime rule); the delete-a-real-section success path needs the registry (not built). Was facade-risk: returned SS$_NORMAL for a section that never existed (vms-d91). |
 | 🟠≈ | `sys$purgws` | routine | Purge the working set | stub | advisory | in | `src/libvms/syssvc/sys_memory.c` — vms-df8 sweep: $PURGWS is an advisory working-set HINT with no correctness contract; OVMX defers residency to host demand paging, so the no-op is faithful, not a fabrication. Advisory, not facade-risk. |
-| 🟠⚠ | `sys$lkwset` | routine | Lock pages in the working set | stub | facade-risk | out | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
-| 🟠⚠ | `sys$ulwset` | routine | Unlock pages from the working set | stub | facade-risk | out | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
+| 🟡≈ | `sys$lkwset` | routine | Lock pages in the working set | partial | advisory | out | `src/libvms/syssvc/sys_memory.c` — Proof tests/qemu/test_syssvc_lkwset.c + defects.d/lkwset-noop.defect. mlock() of the page-rounded range in the calling process (via sys$lckpag/sys$ulkpag); no VMS working-set list or WSQUOTA exists, so the lock is the Linux VMM's, SS$_LKWSETFUL is never returned. Was facade-risk: validated and returned SS$_NORMAL with nothing locked (vms-18c2). |
+| 🟡≈ | `sys$ulwset` | routine | Unlock pages from the working set | partial | advisory | out | `src/libvms/syssvc/sys_memory.c` — Proof tests/qemu/test_syssvc_lkwset.c + defects.d/lkwset-noop.defect. munlock() of the page-rounded range in the calling process (via sys$lckpag/sys$ulkpag); no VMS working-set list or WSQUOTA exists, so the lock is the Linux VMM's, SS$_LKWSETFUL is never returned. Was facade-risk: validated and returned SS$_NORMAL with nothing locked (vms-18c2). |
 | ⬜ | `sys$adjstk` | routine | Adjust stack size | absent | n/a | in |  |
 | ⬜ | `sys$updsec` | routine | Update a section from memory to disk | absent | n/a | in |  |
 | ⬜ | `sys$lckpag` | routine | Lock pages in physical memory | absent | n/a | out | kernel-mode/PFN, permanently out of scope |
@@ -1332,8 +1332,6 @@ Surfaces that report success without doing the real work, or fake shared state p
 | Surface | Facility | Status | Evidence / notes |
 |---|---|---|---|
 | `dcl-qualifiers$zero-validation-verbs` | dcl-qualifiers | absent | `src/vmsdcl/dcl_parser.c:451` — 11 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit', dcl_parser.c:451), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all (a /token after HELP is a qualifier TOPIC, vms-01b). READ is retrofit (vms-097): q_read declares only the qualifiers cmd_read honours (/END_OF_FILE and /ERROR branch like GOTO, /PROMPT, /TIME_OUT); the unimplemented rest (/DELETE /INDEX /KEY /MATCH /NOLOCK) are %DCL-W-IVQUAL, proven by tests/qemu/test_syssvc_dcl_read.c + defects.d/dcl-read-quals-accept-all.defect. The remaining ones are the Phase-1 follow-up (vms-097). |
-| `sys$lkwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
-| `sys$ulwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
 
 ## Not yet catalogued
 

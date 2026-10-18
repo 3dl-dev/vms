@@ -475,6 +475,11 @@ assert_as() {
   local cc1_ok as_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0
   cc1_ok=$(grep -qaE 'OVMX cc1 run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   as_ok=$(grep -qaE 'OVMX as run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
+  local link_ok run_ok
+  link_ok=$(grep -qaE 'OVMX link run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
+  # the image LINK.EXE wrote, RUN by DCL: it printed what cc1 compiled, and RUN succeeded
+  run_ok=$(awk '/AS-PROOF: === RUN HELLO.EXE/{f=1;next} /AS-PROOF: === END RUN/{f=0} f' "$log" | tr -d '\r' \
+    | grep -qaE '^(.*\| )?hello from cc1 on OVMX 49$' && grep -qaE 'AS-PROOF: HELLO-RUN-STATUS=%X[0-9A-F]*[13579BDF] SEVERITY=1' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
   if [ -n "$mile_hex" ]; then
@@ -488,11 +493,12 @@ assert_as() {
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
-  echo "  (a) cc1 ran + exit 0 : $cc1_ok ; as ran + exit 0 : $as_ok (want 1 1)"
+  echo "  (a) cc1 ran + exit 0 : $cc1_ok ; as ran + exit 0 : $as_ok ; link ran + exit 0 : $link_ok (want 1 1 1)"
+  echo "  (e) DCL RUN HELLO.EXE (linked on OVMX) prints cc1's program output, status success : $run_ok"
   echo "  (b) launcher seam    : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
   echo "  (c) DCL DUMP HELLO.OBJ == cross as object : same=$same"
   echo "  (d) no activation err: ok=$err_ok"
-  [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$link_ok" -eq 1 ] && [ "$run_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -1682,11 +1688,14 @@ def dump(b):
         hx = " ".join(row[i:i + 4].hex().upper().ljust(8) for i in range(0, 16, 4))
         out.append("%08X %s  %s" % (o % 512, hx, "." * len(row)))
     return out
-def log(b, cc1=1, as_=1, code=0, seam="0x0035a039"):
+def log(b, cc1=1, as_=1, code=0, seam="0x0035a039", link=1, hello="hello from cc1 on OVMX 49", rst="%X00000001"):
     L = ["OVMX cc1 run: pid_ok=1 exited=1 code=%d status=%%X00000000" % (0 if cc1 else 1),
          "OVMX as run: pid_ok=1 exited=1 code=%d status=%%X00000000" % (0 if as_ else 1),
+         "OVMX link run: pid_ok=1 exited=1 code=%d status=%%X00000000" % (0 if link else 1),
          "OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=" + seam + " p0=1",
-         "AS-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.OBJ ==="] + dump(b) + ["AS-PROOF: DUMP-STATUS=%X00000001 SEVERITY=1"]
+         "AS-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.OBJ ==="] + dump(b) + ["AS-PROOF: DUMP-STATUS=%X00000001 SEVERITY=1",
+         "AS-PROOF: === END INDEPENDENT READER ===", "AS-PROOF: === RUN HELLO.EXE (linked on OVMX) ==="] + ([hello] if hello else []) + [
+         "AS-PROOF: HELLO-RUN-STATUS=" + rst + " SEVERITY=1", "AS-PROOF: === END RUN ==="]
     return "\r\n".join(L) + "\r\n"
 good = bytearray(ref1); good[20] = 0x77            # differs only at a volatile offset
 open(d + "/pass.log", "w", newline="").write(log(bytes(good)))
@@ -1698,6 +1707,10 @@ open(d + "/nocc1.log", "w", newline="").write(log(ref1, cc1=0))
 open(d + "/badseam.log", "w", newline="").write(log(ref1, seam="0x0035a019"))
 open(d + "/nodump.log", "w", newline="").write(log(b""))
 open(d + "/crash.log", "w", newline="").write(log(ref1) + "%DCL-F-ABORT, image SYS$SYSTEM:AS terminated abnormally (signal 11)\r\n")
+open(d + "/nolink.log", "w", newline="").write(log(ref1, link=0))
+open(d + "/nohello.log", "w", newline="").write(log(ref1, hello=""))
+open(d + "/wronghello.log", "w", newline="").write(log(ref1, hello="hello from cc1 on OVMX 48"))
+open(d + "/runfail.log", "w", newline="").write(log(ref1, rst="%X0000000C"))
 # a time stamp spelled the way the VMS branch writes it (upper case, the guest's clock)
 # against the host-independent branch's ctime() spelling is masked ...
 rs = bytearray(ref1); rs[30:47] = b"18-Oct-2026 08:02"
@@ -1709,7 +1722,7 @@ open(d + "/stamp.log", "w", newline="").write(log(bytes(gs)))
 gb = bytearray(gs); gb[47] ^= 1
 open(d + "/stampbad.log", "w", newline="").write(log(bytes(gb)))
 PYEOF
-    for _c in "pass:0" "diffobj:1" "short:1" "noas:1" "nocc1:1" "badseam:1" "nodump:1" "crash:1"; do
+    for _c in "pass:0" "diffobj:1" "short:1" "noas:1" "nocc1:1" "badseam:1" "nodump:1" "crash:1" "nolink:1" "nohello:1" "wronghello:1" "runfail:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_as "$_st/$_n.log" "$_st/r1.obj" "$_st/r2.obj" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  as selftest $_n: PASS"; else echo "  as selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -1744,8 +1757,17 @@ PYEOF
       bash /src/tools/cross-alpha-vms/selfhost/build-host-as.sh > "$GATE_ROOT/host-as.log" 2>&1 \
       || { tail -60 "$GATE_ROOT/host-as.log"; die "host GNU as build failed -- see $GATE_ROOT/host-as.log"; }
     fi
+    log "step 1c4: build LINK.EXE for the alpha-dec-vms host over this build's C RTL (network disabled)"
+    mkdir -p "$GATE_ROOT/hostlink"
+    if [ -s "$GATE_ROOT/hostlink/host-link/out/link.exe" ]; then log "host LINK restored from cache"; else
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostlink:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-link.sh > "$GATE_ROOT/host-link.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-link.log"; die "host LINK build failed -- see $GATE_ROOT/host-link.log"; }
+    fi
     _cc1="$GATE_ROOT/hostgcc/host-gcc/cc1.exe"; _as="$GATE_ROOT/hostas/host-as/out/as.exe"
+    _lk="$GATE_ROOT/hostlink/host-link/out/link.exe"
     [ -s "$_as" ] || die "no host as.exe"
+    [ -s "$_lk" ] || die "no host link.exe"
     log "step 1d: link the launcher; cross-compile and cross-assemble the reference (twice, to find the time-stamp bytes)"
     mkdir -p "$GATE_ROOT/asimg"
     printf '%s\n' 'int printf (const char *, ...);' 'static int sq (int x) { return x * x; }' 'int main (void)' '{' \
@@ -1766,6 +1788,16 @@ PYEOF
     cp "$GATE_ROOT/asimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
     cp "$_cc1" "$WORK/joint/cc1.exe"
     cp "$_as" "$WORK/joint/as.exe"
+    cp "$_lk" "$WORK/joint/link.exe"
+    # what the link line names, from the stage-2 toolchain and the shareable graph
+    mkdir -p "$WORK/joint/lnk"
+    _lgd=$(dirname "$(find "$_tc/cxx/lib/gcc/alpha-dec-vms" -name crt0.o | head -1)")
+    for _f in crt0.o:CRT0.O crtbegin.o:CRTBEGIN.O crtend.o:CRTEND.O vms-dwarf2eh.o:VMS-DWARF2EH.O libgcc.a:LIBGCC.A; do
+      [ -s "$_lgd/${_f%%:*}" ] || die "no ${_f%%:*} in the stage-2 toolchain ($_lgd)"
+      cp "$_lgd/${_f%%:*}" "$WORK/joint/lnk/${_f##*:}"
+    done
+    [ -s "$_jr/STARLET.a" ] || die "no STARLET.a in $_jr"
+    cp "$_jr/STARLET.a" "$WORK/joint/lnk/STARLET.A"
     for _p in "DECC\$SHR" LIBOTS_SHR LIBVMSRMS\$SHR LIBVMS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSPROCESS\$SHR LIBVMSSYS\$SHR; do
       [ -s "$_jr/$_p.EXE" ] || die "no $_p.EXE in $_jr"
       cp "$_jr/$_p.EXE" "$WORK/joint/$_p.EXE"

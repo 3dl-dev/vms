@@ -1,5 +1,5 @@
 /*
- * asrun_test.c - vms-5303e: the VMS-hosted GCC pipeline's first two stages run
+ * asrun_test.c - vms-5303e, vms-e40: the VMS-hosted GCC pipeline's stages run
  * ON OVMX/Alpha, one after the other, the way the GCC driver runs them
  * (libiberty pex-unix: vfork + execv with an argument vector, wait, then the
  * next stage): cc1.exe compiles VDA0:[SYSTMP]HELLO.C to HELLO.S, then as.exe
@@ -7,7 +7,10 @@
  * over OVMX's C RTL) assembles HELLO.S to the EVAX object HELLO.OBJ. The gate
  * then reads HELLO.OBJ with DCL DUMP (a different accessor) and compares it with
  * the object the same toolchain, built as a cross compiler, writes for the same
- * source. Sentinel 7 = both subprocesses were created, ran and exited 0.
+ * source. Then LINK.EXE (OVMX's linker, built --host=alpha-dec-vms) links
+ * HELLO.OBJ with the port's crt0/crtbegin/crtend and libgcc into HELLO.EXE, with
+ * the argument vector collect2 gives ld; DCL RUNs the image. Sentinel 7 = all
+ * three subprocesses were created, ran and exited 0.
  */
 typedef unsigned int size_t;
 #if defined(__VMS)
@@ -63,14 +66,36 @@ static int stage(const char *tag, const char *image, cp32 const *av)
 
 int main(void)
 {
-    static cp32 cc[9], as[5];
+    static cp32 cc[9], as[5], lk[32];
     cc[0] = "cc1"; cc[1] = "-quiet"; cc[2] = "-nostdinc";
     cc[3] = "-dumpbase"; cc[4] = "hello.c"; cc[5] = "VDA0:[SYSTMP]HELLO.C";
     cc[6] = "-o"; cc[7] = "VDA0:[SYSTMP]HELLO.S"; cc[8] = 0;
     as[0] = "as"; as[1] = "-o"; as[2] = "VDA0:[SYSTMP]HELLO.OBJ";
     as[3] = "VDA0:[SYSTMP]HELLO.S"; as[4] = 0;
+    /* the link line collect2 gives ld for a C program (gcc -### hello.c), as ovmx-ld
+     * maps it onto LINK.EXE: crt0/crtbegin, the object, libgcc, crtend, then the
+     * C RTL and the OVMX shareables as producers and STARLET as the last library */
+    {
+        int n = 0;
+        lk[n++] = "link"; lk[n++] = "--transfer"; lk[n++] = "__main";
+        lk[n++] = "--use"; lk[n++] = "SYS$SHARE:DECC$SHR.EXE";
+        lk[n++] = "--use"; lk[n++] = "SYS$SHARE:LIBOTS_SHR.EXE";
+        lk[n++] = "--use"; lk[n++] = "SYS$SHARE:LIBVMSRMS$SHR.EXE";
+        lk[n++] = "--use"; lk[n++] = "SYS$SHARE:LIBVMS$SHR.EXE";
+        lk[n++] = "-o"; lk[n++] = "VDA0:[SYSTMP]HELLO.EXE";
+        lk[n++] = "VDA0:[SYSTMP]VMS-DWARF2EH.O";
+        lk[n++] = "VDA0:[SYSTMP]CRT0.O";
+        lk[n++] = "VDA0:[SYSTMP]CRTBEGIN.O";
+        lk[n++] = "VDA0:[SYSTMP]HELLO.OBJ";
+        lk[n++] = "--library"; lk[n++] = "VDA0:[SYSTMP]LIBGCC.A";
+        lk[n++] = "VDA0:[SYSTMP]CRTEND.O";
+        lk[n++] = "--library"; lk[n++] = "VDA0:[SYSTMP]STARLET.A";
+        lk[n] = 0;
+    }
     int ok = stage("cc1", "SYS$SYSTEM:CC1.EXE", cc);
     if (ok)
         ok = stage("as", "SYS$SYSTEM:AS.EXE", as);
+    if (ok)
+        ok = stage("link", "SYS$SYSTEM:LINK.EXE", lk);
     return ok ? 7 : 3;
 }

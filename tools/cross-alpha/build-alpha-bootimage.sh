@@ -313,6 +313,14 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 [ -f "$JOINT/as.exe" ] || { echo "FAIL: AS_PROOF without $JOINT/as.exe"; exit 1; }
                 cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
                 cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                # vms-e40: LINK.EXE (host-built) and what the link line names: the port's
+                # crt0/crtbegin/crtend/vms-dwarf2eh objects, libgcc and STARLET
+                [ -f "$JOINT/link.exe" ] || { echo "FAIL: AS_PROOF without $JOINT/link.exe"; exit 1; }
+                cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
+                for _l in CRT0.O CRTBEGIN.O CRTEND.O VMS-DWARF2EH.O LIBGCC.A STARLET.A; do
+                    [ -f "$JOINT/lnk/$_l" ] || { echo "FAIL: AS_PROOF without $JOINT/lnk/$_l"; exit 1; }
+                    cp "$JOINT/lnk/$_l" "$ST/vms/SYSTMP/$_l"
+                done
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_AS_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (AS): cc1.exe -> SYS\$SYSEXE:CC1.EXE, as.exe -> SYS\$SYSEXE:AS.EXE; launcher joint_e2e.exe -> SYS\$SYSEXE; AS-proof SYSTARTUP (DCL writer + DCL DUMP reader) staged"

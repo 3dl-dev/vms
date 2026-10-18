@@ -1837,7 +1837,7 @@ jobs:
   # must equal the cross assembler's, outside the creation time stamp.
   # -----------------------------------------------------------------------
   alpha-as:
-    name: "OVMX/Alpha self-hosting — GNU as, built for the alpha-dec-vms host, assembles cc1's output on OVMX; DCL DUMP of the EVAX object equals the cross assembler's (vms-5303e)"
+    name: "OVMX/Alpha self-hosting — GNU as assembles cc1's output and LINK.EXE links it, both built for the alpha-dec-vms host; DUMP of the EVAX object equals the cross assembler's and the linked image runs (vms-5303e, vms-e40)"
     needs: changes
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
@@ -1890,6 +1890,7 @@ jobs:
           path: |
             .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/*.exe
             .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
+            .boot-cache/alpha-modgp-gate/hostlink/host-link/out/link.exe
           key: alpha-hostgcc-as-${{ hashFiles('tools/cross-alpha-vms/selfhost/**', 'tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/**', 'src/vmslink/**', 'src/vmsrms/**') }}
 
       - name: "as gate — host GCC and GNU as over the OVMX C RTL, cc1 then as on qemu-system-alpha + /dev/vms; can-fail selftest first"
@@ -1903,6 +1904,7 @@ jobs:
           name: host-as-and-boot-log
           path: |
             .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
+            .boot-cache/alpha-modgp-gate/hostlink/host-link/out/link.exe
             .boot-cache/alpha-modgp-gate/boot/modgpA.log
             .boot-cache/alpha-modgp-gate/boot/joint/*.EXE
           if-no-files-found: ignore

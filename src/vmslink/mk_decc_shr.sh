@@ -448,6 +448,15 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # calls (decc$$vfork_setjmp, client <unistd.h>): it must run in the
     # CALLER's frame so exec*() can return to the vfork() point a second time.
     VEC="$VEC,decc\$\$vfork_setjmp/setjmp=PROCEDURE"
+    # vms-65a: DEC C system() runs a DCL command through LIB$SPAWN (ovmx_decc_vfork.c). The
+    # universal decc$system keeps its place in the vector and is rebound IN PLACE to that
+    # function; the musl system() the archive also carries (clone-based, ENOSYS here) stays
+    # an internal, unexported symbol.
+    case ",$VEC," in
+        *',decc$system=PROCEDURE,'*) ;;
+        *) echo "mk_decc_shr: FAIL decc\$system is not a PROCEDURE universal to rebind" >&2; exit 2;;
+    esac
+    VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$system=PROCEDURE,/,decc$system\/ovmx_decc_system=PROCEDURE,/; s/^,//; s/,$//')
     VEC="$VEC,__init_libc=PROCEDURE,__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE,___errno_location=PROCEDURE"
 
     # stdin/stdout/stderr -- the C stdio stream FILE* objects, plain DATA names

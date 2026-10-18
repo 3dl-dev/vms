@@ -382,7 +382,6 @@ extern unsigned int lib$spawn(const struct ovmx_sys_dsc *, const void *, const v
                                    const void *, const void *, const void *)
     __attribute__((__weak__));
 
-int ovmx_decc_system(const char *cmd) __asm__("decc$system");
 int ovmx_decc_system(const char *cmd)
 {
     if (!cmd)

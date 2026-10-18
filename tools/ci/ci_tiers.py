@@ -16,7 +16,7 @@ usage: ci_tiers.py --event EVENT --ref REF [--base SHA] [--files FILE]
                    [--repo DIR]
 Prints `key=value` lines (GITHUB_OUTPUT format):
   heavy_release   true|false
-  alpha_selfhost  true|false
+  alpha_selfhost_tier  true|false
   keystroke       true|false
   negctl_select   ALL | (empty = none) | space-separated defect names
 
@@ -71,7 +71,7 @@ TIERS = {
         ".github/workflows/ci-changes.yml",
     ],
     # Alpha cc1 / C++ self-host gates (hours of QEMU TCG).
-    "alpha_selfhost": [
+    "alpha_selfhost_tier": [
         ".github/workflows/ci-alpha.yml",
         ".github/workflows/ci-changes.yml",
         "tools/cross-alpha-vms/**",
@@ -212,20 +212,20 @@ def changed_files(repo, base):
 
 
 def decide(event, ref, files, table_fn):
-    res = {"heavy_release": "false", "alpha_selfhost": "false",
+    res = {"heavy_release": "false", "alpha_selfhost_tier": "false",
            "keystroke": "false", "negctl_select": ""}
     if is_full(event, ref):
-        return {"heavy_release": "true", "alpha_selfhost": "true",
+        return {"heavy_release": "true", "alpha_selfhost_tier": "true",
                 "keystroke": "true", "negctl_select": "ALL"}
     if event == "push":
         return res  # the queue already tested this exact tree
     if files is None:  # could not compute: fail closed (queue / PR only)
         if event == "merge_group":
-            return {"heavy_release": "true", "alpha_selfhost": "true",
+            return {"heavy_release": "true", "alpha_selfhost_tier": "true",
                     "keystroke": "true", "negctl_select": "ALL"}
         return res
     if event == "merge_group":
-        res["alpha_selfhost"] = "true" if matches_any(files, TIERS["alpha_selfhost"]) else "false"
+        res["alpha_selfhost_tier"] = "true" if matches_any(files, TIERS["alpha_selfhost_tier"]) else "false"
         res["heavy_release"] = "true" if matches_any(files, TIERS["heavy_release"]) else "false"
         res["keystroke"] = "true" if matches_any(files, TIERS["keystroke"]) else "false"
         try:
@@ -257,7 +257,7 @@ def main():
     except Exception as e:  # noqa: BLE001 -- fail closed
         print("ci_tiers: cannot compute changed files (%s)" % e, file=sys.stderr)
     res = decide(a.event, a.ref, files, lambda: defect_table(a.repo))
-    for k in ("heavy_release", "alpha_selfhost", "keystroke", "negctl_select"):
+    for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "negctl_select"):
         print("%s=%s" % (k, res[k]))
 
 

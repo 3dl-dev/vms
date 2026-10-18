@@ -20,7 +20,7 @@ get() { echo "$1" | sed -n "s/^$2=//p"; }
 for ev in schedule workflow_dispatch; do
     o=$(tier $ev refs/heads/main docs/x.md)
     [ "$(get "$o" heavy_release)" = true ] && [ "$(get "$o" keystroke)" = true ] \
-      && [ "$(get "$o" alpha_selfhost)" = true ] && [ "$(get "$o" negctl_select)" = ALL ] \
+      && [ "$(get "$o" alpha_selfhost_tier)" = true ] && [ "$(get "$o" negctl_select)" = ALL ] \
       && ok "$ev runs every heavy tier" || bad "$ev full"
 done
 o=$(tier push refs/tags/V0.9 docs/x.md)
@@ -34,7 +34,7 @@ o=$(tier push refs/heads/main src/kernel-core/vms_access.c)
 
 # a pull_request runs no heavy tier
 o=$(tier pull_request refs/pull/1/merge tools/cut-release.sh src/kernel-core/vms_access.c)
-[ "$(get "$o" heavy_release)" = false ] && [ -z "$(get "$o" negctl_select)" ] && [ "$(get "$o" alpha_selfhost)" = false ] \
+[ "$(get "$o" heavy_release)" = false ] && [ -z "$(get "$o" negctl_select)" ] && [ "$(get "$o" alpha_selfhost_tier)" = false ] \
   && ok "PRs run no heavy tier" || bad "pr none"
 
 # merge queue: docs-only touches nothing heavy
@@ -70,7 +70,7 @@ case "$(get "$o" negctl_select)" in *access-mode-escalation*) ok "queue: a suite
 o=$(tier merge_group q src/kernel-core/vms_tt.c)
 [ "$(get "$o" keystroke)" = true ] && ok "queue: terminal driver change runs the keystroke oracle" || bad "keystroke area"
 o=$(tier merge_group q tools/cross-alpha-vms/Dockerfile)
-[ "$(get "$o" alpha_selfhost)" = true ] && ok "queue: alpha cross-toolchain change runs the cc1/C++ self-host" || bad "alpha area"
+[ "$(get "$o" alpha_selfhost_tier)" = true ] && ok "queue: alpha cross-toolchain change runs the cc1/C++ self-host" || bad "alpha area"
 
 # failing to compute the changed files fails closed in the queue
 o=$(python3 "$ROOT/tools/ci/ci_tiers.py" --repo "$T" --event merge_group --ref x --base deadbeef 2>/dev/null)

@@ -75,9 +75,9 @@ on:
       heavy_release:
         description: 'heavy_release (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.heavy_release }}
-      alpha_selfhost:
-        description: 'alpha_selfhost (CI-speed tier, see tools/ci/ci_tiers.py)'
-        value: ${{ jobs.changes.outputs.alpha_selfhost }}
+      alpha_selfhost_tier:
+        description: 'alpha_selfhost_tier (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.alpha_selfhost_tier }}
       keystroke:
         description: 'keystroke (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.keystroke }}
@@ -122,7 +122,7 @@ jobs:
       aarch64_kernel: ${{ steps.decide.outputs.aarch64_kernel }}
       vax_login: ${{ steps.decide.outputs.vax_login }}
       heavy_release: ${{ steps.tiers.outputs.heavy_release }}
-      alpha_selfhost: ${{ steps.tiers.outputs.alpha_selfhost }}
+      alpha_selfhost_tier: ${{ steps.tiers.outputs.alpha_selfhost_tier }}
       keystroke: ${{ steps.tiers.outputs.keystroke }}
       negctl_select: ${{ steps.tiers.outputs.negctl_select }}
     steps:

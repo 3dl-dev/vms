@@ -1607,7 +1607,7 @@ jobs:
   alpha-cxx:
     name: "OVMX/Alpha C++ — a g++/libstdc++ program (ctor, virtual, string/vector, caught exception) built over the OVMX C RTL runs on the real executive (vms-4d0)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.alpha_selfhost_tier == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
     permissions:
@@ -1683,7 +1683,7 @@ jobs:
   alpha-cxx32:
     name: "OVMX/Alpha C++ at the DEC C default 32-bit pointer size — the same program against the toolchain's 32-bit libstdc++ (vms-1045)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.alpha_selfhost_tier == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
     permissions:
@@ -1761,7 +1761,7 @@ jobs:
   alpha-cc1:
     name: "OVMX/Alpha self-hosting — GCC's cc1, built for the alpha-dec-vms host, compiles a C file on OVMX; DCL TYPE of its assembly equals the cross compiler's (vms-9a63)"
     needs: [changes, alpha-assets]
-    if: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.alpha_selfhost == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ (github.event_name != 'pull_request' && needs.changes.outputs.alpha_selfhost_tier == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 340
     permissions:

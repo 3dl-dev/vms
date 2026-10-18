@@ -1318,6 +1318,102 @@ jobs:
         run: tests/lab-vax/run-boot.sh acceptance
 
 
+  vax-acceptance-16mb:
+    name: "OVMX/NetBSD-vax on a 16 MB VAX — boot, run the acceptance battery, assert a free-memory floor (vms-83d)"
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    # Nightly + dispatch, PLUS any PR that touches the VAX login/boot path
+    # (vax_login: DCL, ovmx_init, the VAX harness) -- the paths whose footprint
+    # decides whether the 16 MB demo node (Node B, a MicroVAX 3900 at 16 MB when
+    # it starved) keeps headroom. rd vms-83d / vms-4029 / vms-25f.
+    if: ${{ !cancelled() && needs.netbsd-vax-substrate-prime.result == 'success' && (((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true')) || (github.event_name == 'pull_request' && needs.changes.outputs.vax_login == 'true')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-acceptance-16mb-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
+          # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
+
+      - name: "Acceptance gate — boot the OVMX/NetBSD-vax single disk, log in SYSTEM/MANAGER, run the shared DCL/SHOW battery, assert VMS-faithful output"
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
+          # The SIMH guest is booted with 16 MB (anita's default is larger), logs
+          # in, and SHOW MEMORY must report at least this much Free. A RATCHET,
+          # not a target: the kernel and executive wire most of the ~10.9 MB the
+          # guest sees and NetBSD keeps Free pinned near its low-water mark, so
+          # Free sits at ~92 KB after login today (measured 2026-10-18 on the PR run of this leg,
+          # with the DCL and staging fixes merged).
+          # The tmpfs write floor (4 MB) is unreachable at 16 MB; Node B ships at
+          # 32 MB. The guard's teeth: a boot that cannot reach a logged-in prompt
+          # on 16 MB, or one that leaves nothing Free at all, reds here.
+          OVMX_VAX_MEMORY: 16M
+          OVMX_VAX_FREE_FLOOR_KB: "48"
+        run: tests/lab-vax/run-boot.sh acceptance
+
+
   vax-sysboot-single:
     name: "OVMX/NetBSD-vax sysboot-single — the demo images' boot mode reaches Username: and a usable DCL $ (vms-649a)"
     # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
@@ -2351,6 +2447,7 @@ jobs:
       - netbsd-vax-boot
       - netbsd-vax-sysboot
       - vax-dcl-acceptance
+      - vax-acceptance-16mb
       - vax-sysboot-single
       - vax-status-gate
       - netbsd-vax-vms-crosscompile

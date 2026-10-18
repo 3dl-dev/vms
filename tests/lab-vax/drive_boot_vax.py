@@ -1471,10 +1471,16 @@ def main():
         log("FAIL: install ISO not found at %s (run lab-vax install first)" % iso_path)
         return HARNESS_ERROR
 
+    # rd vms-83d: OVMX_VAX_MEMORY (e.g. "16M") boots the ACCEPTANCE run on a
+    # smaller VAX than anita's default, so a footprint regression on the 16 MB
+    # demo node (Node B) is caught in CI instead of in the visitor gate. Applied
+    # to the acceptance boot only: the install/assemble sessions need the default.
+    vax_mem = env("OVMX_VAX_MEMORY", "") if mode == "acceptance" else ""
     a = anita.Anita(
         dist=anita.ISO(iso_path, sets=sets),
         workdir=workdir,
         persist=True,
+        **({"memory_size": vax_mem} if vax_mem else {}),
     )
 
     child = None

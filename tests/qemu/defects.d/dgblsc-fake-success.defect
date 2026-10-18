@@ -3,8 +3,8 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "\$DGBLSC of an unregistered global section (src/libvms/syssvc/sys_memory.c, vms-d91)";;
-        targets)      echo "libvms/syssvc/sys_memory.c";;
+        facility)     echo "\$DGBLSC of an unregistered global section (src/libvmssys/vms_kif.c, vms-d91)";;
+        targets)      echo "libvmssys/vms_kif.c";;
         suites_red)   echo "test_syssvc_dgblsc_nosuchsec";;
         blind_suites) echo "";;
         blind_why)    echo "";;

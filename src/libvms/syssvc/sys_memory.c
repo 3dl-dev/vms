@@ -36,9 +36,9 @@
  * OVMX-USERSPACE: sys$crmpsc (vms-e0a) -- MAP_SHARED mmap of an fd taken from
  *     the caller's own pcb->channels[]; the global section NAME (gsdnam) is
  *     discarded, so no two processes can name the same section.
- * OVMX-PARTIAL: sys$dgblsc (vms-d91) -- exec: whether the executive is reachable
- *     at all; with none the call fails SS$_NOSUCHDEV (one runtime, no
- *     userspace answer for system-wide state).
+ * OVMX-PARTIAL: sys$dgblsc (vms-d91) -- exec: vms_kif_gblsc_delete answers;
+ *     SS$_NOSUCHDEV with no executive (one runtime, no userspace answer for
+ *     system-wide state).
  * OVMX-LOCAL: sys$dgblsc -- the SS$_NOSUCHSEC answer itself is not looked up in
  *     the executive: no executive global-section registry exists yet and
  *     sys$crmpsc discards the section name, so no named global section can
@@ -304,12 +304,12 @@ uint32_t sys$dgblsc(uint32_t flags, const struct dsc$descriptor_s *gsdnam,
 
     if (!gsdnam || !gsdnam->dsc$a_pointer) return SS$_BADPARAM;
 
-    /* Global sections are system-wide state, so the answer belongs to the
-     * executive (one runtime): with no executive, fail honestly rather than
-     * answer from userspace. */
-    if (vms_kif_open() < 0) return SS$_NOSUCHDEV;
-
-    return SS$_NOSUCHSEC;
+    /* Global sections are system-wide state: the executive answers (vms-d91). */
+    char nm[256];
+    uint32_t n = gsdnam->dsc$w_length < sizeof nm - 1 ? gsdnam->dsc$w_length : (uint32_t)sizeof nm - 1;
+    memcpy(nm, gsdnam->dsc$a_pointer, n);
+    nm[n] = 0;
+    return vms_kif_gblsc_delete(nm);
 }
 
 /*

@@ -1185,6 +1185,10 @@ uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
  * if no such mailbox exists. */
 uint32_t vms_kif_mbx_assign(const char *devnam, uint32_t *exec_chan);
 
+/* $DGBLSC through the executive (rd vms-d91): SS$_NOSUCHDEV when /dev/vms is
+ * unreachable, else SS$_NOSUCHSEC (no named global section is ever registered). */
+uint32_t vms_kif_gblsc_delete(const char *name);
+
 /* $DELMBX: mark the mailbox behind `exec_chan` for deletion. Does not
  * deassign `exec_chan` itself -- see vms_mbx.c's header. */
 uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan);

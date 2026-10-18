@@ -1744,7 +1744,10 @@ PYEOF
     # report for a signal the program catches itself (gas installs handlers)
     # AS_QEMU_CPU_RANGE=lo..hi additionally dumps the registers at every translation
     # block entered in that guest-PC range (qemu -dfilter), e.g. around a fault PC
-    export BOOT_QEMU_EXTRA="-d int -D /work/qemu-int.log"
+    # AS_QEMU_INT=1: qemu logs every interrupt/exception with its PC (and the awk below
+    # shows the user-mode traps before the first illegal instruction)
+    export BOOT_QEMU_EXTRA=""
+    [ -n "${AS_QEMU_INT:-}" ] && export BOOT_QEMU_EXTRA="-d int -D /work/qemu-int.log"
     if [ -n "${AS_PEEK:-}" ]; then   # AS_PEEK="1234 0xPC r16[dR] LEN" (or "1234 W 0xADDR LEN"): see gdb_peek.pl
         export BOOT_QEMU_EXTRA="$BOOT_QEMU_EXTRA -gdb tcp:127.0.0.1:1234" BOOT_PEEK="$AS_PEEK"
         cp "$REPO/tools/cross-alpha/gdb_peek.pl" "$WORK/gdb_peek.pl"

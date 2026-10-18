@@ -168,72 +168,39 @@ int ovmx_boot_kernel_filesystems_mounted(void)
     return strcmp(vfs.f_fstypename, "tmpfs") == 0;
 }
 
-/* DIAG ONLY (branch diag/vms-83d-memprobe, never merged): sample free memory. */
+/* DIAG ONLY (branch diag/demo-lane, never merged): one compact line per ~60 s. */
 static void ovmx_memprobe(int sig)
 {
     struct uvmexp_sysctl u;
     size_t sz = sizeof(u);
     int mib[2] = { CTL_VM, VM_UVMEXP2 };
-    char b[200];
+    static char b[2400];
+    static struct kinfo_proc2 kp[64];
+    static int c0;
+    int m2[6];
+    size_t ksz = sizeof(kp), i, cnt;
     int n;
 
     (void)sig;
-    { static int c0; if (++c0 % 15 != 0 && c0 != 8 && c0 != 25) return; }
+    if (++c0 % 15 != 0)
+        return;
     if (sysctl(mib, 2, &u, &sz, NULL, 0) != 0)
         return;
-    
-
-    n = snprintf(b, sizeof(b),
-        "\nMEMPROBE free=%lldK file=%lldK exec=%lldK anon=%lldK wired=%lldK act=%lldK inact=%lldK\n",
-        (long long)u.free * u.pagesize / 1024, (long long)u.filepages * u.pagesize / 1024,
-        (long long)u.execpages * u.pagesize / 1024, (long long)u.anonpages * u.pagesize / 1024,
-        (long long)u.wired * u.pagesize / 1024, (long long)u.active * u.pagesize / 1024,
-        (long long)u.inactive * u.pagesize / 1024);
-    if (n > 0)
-        (void)write(2, b, (size_t)n);
-    {
-        static int dumps;
-        static struct kinfo_proc2 kp[64];
-        int m2[6];
-        size_t ksz = sizeof(kp);
-        size_t i, cnt;
-
-        static int calls;
-        calls++;
-
-        dumps++;
-        m2[0] = CTL_KERN; m2[1] = KERN_PROC2; m2[2] = KERN_PROC_ALL; m2[3] = 0;
-        m2[4] = (int)sizeof(kp[0]); m2[5] = 64;
-        if (sysctl(m2, 6, kp, &ksz, NULL, 0) != 0)
-            return;
-        {
-            DIR *dd = opendir("/run/ovmx-boot");
-            struct dirent *de;
-            long long tot = 0;
-            while (dd && (de = readdir(dd)) != NULL) {
-                char fp[300];
-                struct stat st;
-                snprintf(fp, sizeof(fp), "/run/ovmx-boot/%s", de->d_name);
-                if (stat(fp, &st) == 0 && S_ISREG(st.st_mode)) {
-                    tot += st.st_size;
-                    n = snprintf(b, sizeof(b), "MEMSTAGE %s %lldK\n", de->d_name, (long long)st.st_size / 1024);
-                    if (n > 0) (void)write(2, b, (size_t)n);
-                }
-            }
-            if (dd) closedir(dd);
-            n = snprintf(b, sizeof(b), "MEMSTAGE total %lldK\n", tot / 1024);
-            if (n > 0) (void)write(2, b, (size_t)n);
-        }
+    n = snprintf(b, sizeof(b), "\nPROBE#%d free=%lldK anon=%lldK file=%lldK exec=%lldK |",
+        c0 / 15, (long long)u.free * u.pagesize / 1024, (long long)u.anonpages * u.pagesize / 1024,
+        (long long)u.filepages * u.pagesize / 1024, (long long)u.execpages * u.pagesize / 1024);
+    m2[0] = CTL_KERN; m2[1] = KERN_PROC2; m2[2] = KERN_PROC_ALL; m2[3] = 0;
+    m2[4] = (int)sizeof(kp[0]); m2[5] = 64;
+    if (sysctl(m2, 6, kp, &ksz, NULL, 0) == 0) {
         cnt = ksz / sizeof(kp[0]);
-        for (i = 0; i < cnt; i++) {
-            n = snprintf(b, sizeof(b), "MEMPROC pid=%d %s stat=%d wm=%s rss=%lldK vsz=%lldK t=%lld d=%lld s=%lld\n",
+        for (i = 0; i < cnt && n < (int)sizeof(b) - 80; i++)
+            n += snprintf(b + n, sizeof(b) - n, " %d:%s:s%d:%s:%lldK",
                 (int)kp[i].p_pid, kp[i].p_comm, (int)kp[i].p_stat, kp[i].p_wmesg,
-                (long long)kp[i].p_vm_rssize * u.pagesize / 1024,
-                (long long)(kp[i].p_vm_tsize + kp[i].p_vm_dsize + kp[i].p_vm_ssize) * u.pagesize / 1024,
-                (long long)kp[i].p_vm_tsize, (long long)kp[i].p_vm_dsize, (long long)kp[i].p_vm_ssize);
-            if (n > 0)
-                (void)write(2, b, (size_t)n);
-        }
+                (long long)kp[i].p_vm_rssize * u.pagesize / 1024);
+    }
+    if (n > 0 && n < (int)sizeof(b)) {
+        b[n++] = '\n';
+        (void)write(2, b, (size_t)n);
     }
 }
 

@@ -24,6 +24,8 @@ extern void _exit(int);
 extern int fflush(void *);
 extern int open(const char *, int, ...);
 extern int dup2(int, int);
+extern int pipe(int *);
+extern int read(int, void *, size_t);
 extern int close(int);
 extern int *__errno_location(void);
 int decc$$alloc_vfork_blocks(void);
@@ -41,16 +43,20 @@ static void trace(const char *tag, const char *what, int v)
 }
 
 /* Run image with argv; returns 1 when it was created, exited normally with 0. */
-static int stage(const char *tag, const char *image, cp32 const *av, const char *log)
+static int stage(const char *tag, const char *image, cp32 const *av, int capture)
 {
+    int pp[2] = { -1, -1 };
+    if (capture && pipe(pp) != 0)
+        pp[0] = pp[1] = -1;
     trace(tag, "vfork", 0);
     int pid = vfork();
     if (pid == 0) {
-        /* the stage writes its messages to a file DCL TYPEs afterwards (descriptor work
-         * between vfork and exec is the child's: the parent table is restored) */
-        if (log) {
-            int fd = open(log, 0x241 /* O_WRONLY|O_CREAT|O_TRUNC */, 0644);
-            if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); }
+        /* the stage writes its messages into a pipe the launcher prints after the wait
+         * (descriptor work between vfork and exec is the child's: the parent table is
+         * restored when exec returns) */
+        if (pp[1] >= 0) {
+            dup2(pp[1], 1); dup2(pp[1], 2);
+            close(pp[0]); close(pp[1]);
         }
         int r = execv(image, av);
         trace(tag, "execv-returned", r);
@@ -58,12 +64,25 @@ static int stage(const char *tag, const char *image, cp32 const *av, const char 
         _exit(127);
     }
     trace(tag, "vfork-parent-pid", pid);
+    if (pp[1] >= 0)
+        close(pp[1]);
     int pid_ok = pid > 0;
     int status = -1;
     int w = pid_ok ? waitpid(pid, &status, 0) : -1;
     trace(tag, "waitpid", w);
     trace(tag, "wait-status", status);
     trace(tag, "errno-after-wait", *__errno_location());
+    if (pp[0] >= 0) {
+        char b[512];
+        int n;
+        while ((n = read(pp[0], b, sizeof b - 1)) > 0) {
+            b[n] = 0;
+            printf("OVMX-%s-OUT: %s", tag, b);
+        }
+        printf("\n");
+        fflush(0);
+        close(pp[0]);
+    }
     int exited = w == pid && (status & 0x7f) == 0;
     int code = (status >> 8) & 0xff;
     printf("OVMX %s run: pid_ok=%d exited=%d code=%d status=%%X%08X\n",
@@ -105,6 +124,6 @@ int main(void)
     if (ok)
         ok = stage("as", "SYS$SYSTEM:AS.EXE", as, 0);
     if (ok)
-        ok = stage("link", "SYS$SYSTEM:LINK.EXE", lk, "VDA0:[SYSTMP]LINK.LOG");
+        ok = stage("link", "SYS$SYSTEM:LINK.EXE", lk, 1);
     return ok ? 7 : 3;
 }

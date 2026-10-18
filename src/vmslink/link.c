@@ -1158,6 +1158,14 @@ static int leading_ci(const char *s, const char *pfx)
  */
 static const char *resolve_producer_path(const char *path, char *out, size_t sz)
 {
+#if defined(__VMS)
+    /* A VMS-hosted LINK (this source built FOR OpenVMS, as a DEC C program) opens a
+     * producer by its VMS file specification, SYS$SHARE:DECC$SHR.EXE: the C RTL's
+     * open() resolves the logical and reads the file through RMS. The boot-staging
+     * copy below exists for the POSIX LINK images, which cannot (vms-e40). */
+    (void)out; (void)sz;
+    return path;
+#endif
     /* Each installed-image logical -> the SYS$SYSROOT subdirectory it lives in. */
     static const struct { const char *log; const char *sub; } maps[] = {
         { "SYS$SHARE:",   "SYSLIB" },

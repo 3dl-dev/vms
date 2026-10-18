@@ -1727,7 +1727,7 @@ PYEOF
     # AS_QEMU_CPU_RANGE=lo..hi additionally dumps the registers at every translation
     # block entered in that guest-PC range (qemu -dfilter), e.g. around a fault PC
     export BOOT_QEMU_EXTRA="-d int -D /work/qemu-int.log -gdb tcp:127.0.0.1:1234"
-    export BOOT_PEEK="${AS_PEEK:-1234 0x1bd234 r16 232}"
+    export BOOT_PEEK="${AS_PEEK:-1234 0x1bcebc r16 0}"
     cp "$REPO/tools/cross-alpha/gdb_peek.pl" "$WORK/gdb_peek.pl"
     run_boot_a
     sed 's/^/  | PEEK: /' "$WORK/peek.log" 2>/dev/null || true

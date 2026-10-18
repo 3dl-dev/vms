@@ -48,9 +48,9 @@ if ($watch) {
 send_pkt(sprintf('Z0,%x,4', $pc)); my $r = recv_pkt();
 print $log "gdb_peek: breakpoint at ", sprintf('%#x', $pc), " -> $r\n";
 my $n = 0;
-my $first = 1;
+my $first = 1; my $at_main = 0;
 while ($n < 400) {
-    unless ($first) {
+    if (!$first && $at_main) {
         # step off the breakpoint before continuing, as a debugger does
         send_pkt(sprintf('z0,%x,4', $pc)); recv_pkt();
         send_pkt('s'); recv_pkt();
@@ -62,10 +62,25 @@ while ($n < 400) {
     last unless defined $stop;
     send_pkt('g'); my $g = recv_pkt();
     my @r = map { le64(substr($g, $_ * 16, 16)) } 0 .. 31;
-    (my $rn = $reg) =~ s/d$//; my $addr = $r[$regno{$rn}];
+    (my $rn = $reg) =~ s/[dR]$//; my $addr = $r[$regno{$rn}];
     $n++;
     printf $log "HIT %d stop=%s pc=%#x t0(r1)=%#x a0(r16)=%#x a1=%#x a2=%#x ra(r26)=%#x pv(r27)=%#x sp=%#x\n",
         $n, substr($stop, 0, 3), $pc, $r[1], $r[16], $r[17], $r[18], $r[26], $r[27], $r[30];
+    $at_main = 1;
+    if ($reg =~ /R$/) {
+        # trace the return: a temporary breakpoint at the caller's resume address
+        my $rap = $r[26];
+        send_pkt(sprintf('z0,%x,4', $pc)); recv_pkt();
+        send_pkt(sprintf('Z0,%x,4', $rap)); recv_pkt();
+        send_pkt('c'); my $st2 = recv_pkt();
+        send_pkt('g'); my $g2 = recv_pkt();
+        my @r2 = map { le64(substr($g2, $_ * 16, 16)) } 0 .. 31;
+        printf $log "  RET to %#x: v0=%#x (stop=%s)\n", $rap, $r2[0], substr($st2 // '', 0, 3);
+        send_pkt(sprintf('z0,%x,4', $rap)); recv_pkt();
+        send_pkt(sprintf('Z0,%x,4', $pc)); recv_pkt();
+        $at_main = 0;
+        next;
+    }
     if ($len > 0 && $reg =~ /d$/) {
         # r16d: dump the object at r16 (a bfd) and the one its longword at +8 points to
         send_pkt(sprintf('m%x,%x', $addr, $len)); my $m = recv_pkt();

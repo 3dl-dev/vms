@@ -710,8 +710,10 @@ static void
 vtt_diag_thread(void *arg __unused)
 {
 	int seq = 0;
+	static char dbuf[480];
 
 	for (;;) {
+		int n, k;
 		struct tty *tp = NULL;
 		struct vms_ttport_nb *p = NULL;
 		struct vms_tt *tt;
@@ -745,9 +747,11 @@ vtt_diag_thread(void *arg __unused)
 			}
 			vms_tt_release(tt);
 		}
-		printf("\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u\n",
+		n = snprintf(dbuf, sizeof(dbuf), "\r\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u\n",
 		    seq, tp != NULL, pp, pdead, prefs, rxl, outc, ts, ps, have_tt,
 		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11]);
+		for (k = 0; k < n && k < (int)sizeof(dbuf); k++)
+			cnputc((unsigned char)dbuf[k]);
 	}
 }
 

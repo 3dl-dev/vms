@@ -66,6 +66,42 @@ permissions:
   packages: read   # GHCR mirror of the pinned base images (vms-9a6, .github/actions/setup-buildx)
 
 jobs:
+  # CI-speed (lane B): the merge queue runs the heavy legs only when their area
+  # is touched (tools/ci/ci_tiers.py), so a release must prove the FULL suite
+  # (every moved test: release cuts/e2e, executive negctl, Alpha cc1/C++
+  # self-host, keystroke oracle) ran green on the exact SHA it tags -- as a
+  # nightly or `tools/ci/pre_tag_verify.py dispatch` run. No such run, no cut.
+  verify-full:
+    name: pre-tag verify -- full CI suite green on the tagged SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    # A throwaway rehearse/ tag has no full run by construction: report only.
+    continue-on-error: ${{ github.event.inputs.rehearsal == 'true' }}
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Checkout (tag, for its commit)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || steps.tag.outputs.tag }}
+          fetch-depth: 0
+      - name: Every CI workflow has a green FULL run on the tagged SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse "${{ steps.tag.outputs.tag }}^{commit}")
+          python3 tools/ci/pre_tag_verify.py check --sha "$SHA" --repo "${{ github.repository }}"
+
   # aarch64 ships in V1.0 (rd vms-b58, epic vms-0ad0). Its bootable set is
   # built natively on an arm64 runner (under binfmt on x86_64 the userland
   # stages take hours) by tools/cut-release-aarch64.sh, from the SAME tagged
@@ -131,7 +167,7 @@ jobs:
 
   cut-and-publish:
     name: cut-release + publish to GitHub Releases
-    needs: cut-aarch64
+    needs: [cut-aarch64, verify-full]
     runs-on: ubuntu-latest
     # A full containerized cut is ~25-30 min cold (kernel + VMS-native
     # toolchain + QEMU image); mirror cut-release-reproducible's budget.

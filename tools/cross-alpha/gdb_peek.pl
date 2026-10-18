@@ -6,7 +6,8 @@
 # e.g. gdb_peek.pl 1234 0x1bd234 r16 232 /work/peek.log  (dump LEN bytes at register's value)
 use strict; use warnings; use IO::Socket::INET;
 my ($port, $pc, $reg, $len, $out) = @ARGV;
-$pc = hex($pc);
+my $watch = ($pc eq 'W');
+$pc = $watch ? 0 : hex($pc);
 my %regno = map { ("r$_" => $_) } 0 .. 31;
 open(my $log, '>', $out) or die; select((select($log), $| = 1)[0]);
 my $s;
@@ -26,6 +27,24 @@ sub recv_pkt {
 }
 sub le64 { my $h = shift; my $v = 0; for (my $i = 14; $i >= 0; $i -= 2) { $v = ($v << 8) | hex(substr($h, $i, 2)) } $v }
 send_pkt('?'); recv_pkt();
+if ($watch) {
+    # gdb_peek.pl PORT W HEXADDR LEN OUTFILE: a write watchpoint on LEN bytes at HEXADDR
+    my $wa = hex($reg);
+    send_pkt(sprintf('Z2,%x,%x', $wa, $len)); my $wr = recv_pkt();
+    print $log "gdb_peek: watchpoint at ", sprintf('%#x', $wa), " -> $wr\n";
+    for my $n (1 .. 60) {
+        send_pkt('c'); my $stop = recv_pkt(); last unless defined $stop;
+        send_pkt('g'); my $g = recv_pkt();
+        my @r = map { le64(substr($g, $_ * 16, 16)) } 0 .. 31;
+        my $pcv = le64(substr($g, 64 * 16, 16));
+        send_pkt(sprintf('m%x,%x', $wa, $len)); my $m = recv_pkt();
+        printf $log "WRITE %d stop=%s pc=%#x val=%s v0=%#x a0=%#x a1=%#x a2=%#x ra=%#x pv=%#x sp=%#x\n",
+            $n, substr($stop, 0, 3), $pcv, $m, $r[0], $r[16], $r[17], $r[18], $r[26], $r[27], $r[30];
+    }
+    send_pkt(sprintf('z2,%x,%x', $wa, $len)); recv_pkt();
+    send_pkt('D'); recv_pkt();
+    exit 0;
+}
 send_pkt(sprintf('Z0,%x,4', $pc)); my $r = recv_pkt();
 print $log "gdb_peek: breakpoint at ", sprintf('%#x', $pc), " -> $r\n";
 my $n = 0;

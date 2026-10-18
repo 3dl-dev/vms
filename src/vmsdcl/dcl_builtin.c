@@ -122,6 +122,30 @@ static const struct dcl_qual_def q_search[] = {
     { "STATISTICS", CDU_VT_NONE, 0,               NULL, NULL },
     QUAL_END
 };
+
+/* LIBRARY (vms-097): the qualifiers cmd_library and its OBJECT/HELP/TEXT
+ * handlers act on. /REPLACE is insert-or-replace (the insert path replaces a
+ * same-named module), /TEXT is the default library type. /COMPRESS and /VAX
+ * are accepted because the self-host MMK corpus issues them and they are
+ * no-ops BY CONSTRUCTION here: every update rewrites the whole container, so
+ * there is no dead space to compress, and there is one on-disk object-library
+ * format, not distinct VAX and Alpha ones. Anything else (/MACRO /GLOBALS
+ * /LOG /NAMES ...) is not implemented and is %DCL-W-IVQUAL (INV-DCL sec 3). */
+static const struct dcl_qual_def q_library[] = {
+    { "CREATE",   CDU_VT_VALUE, 0, NULL, NULL },
+    { "INSERT",   CDU_VT_NONE,  0, NULL, NULL },
+    { "REPLACE",  CDU_VT_NONE,  0, NULL, NULL },
+    { "DELETE",   CDU_VT_VALUE, 0, NULL, NULL },
+    { "EXTRACT",  CDU_VT_VALUE, 0, NULL, NULL },
+    { "LIST",     CDU_VT_VALUE, 0, NULL, NULL },
+    { "OUTPUT",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "HELP",     CDU_VT_NONE,  0, NULL, NULL },
+    { "OBJECT",   CDU_VT_NONE,  0, NULL, NULL },
+    { "TEXT",     CDU_VT_NONE,  0, NULL, NULL },
+    { "COMPRESS", CDU_VT_VALUE, 0, NULL, NULL },
+    { "VAX",      CDU_VT_NONE,  0, NULL, NULL },
+    QUAL_END
+};
 static const struct dcl_qual_def q_purge[] = {
     { "LOG",     CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
     { "CONFIRM", CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
@@ -510,7 +534,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "INITIALIZE",  cmd_initialize,  CDU_F_ABBREV | CDU_F_PARAM, 4,
       "Format a volume with VMSFS structure", q_none },
     { "LIBRARY",     cmd_library,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Manage text, help, and object libraries" },
+      "Manage text, help, and object libraries", q_library },
     { "LINK",        cmd_link,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Link object modules into executable image", q_link },
     { "LOGOUT",      cmd_logout,      CDU_F_ABBREV, 2,

@@ -363,4 +363,15 @@ int ovmx_execle64(const char *spec, const char *arg0, ...)
     return r;
 }
 
+
+/* The substrate's fork() under a private name, for the OVMX process creation services
+ * (sys$creprc, lib$spawn, DCL SPAWN): they live in shareables built for the OpenVMS
+ * calling standard, which link against DECC$SHR and so cannot name fork. The task
+ * they fork is made a subprocess by the executive before it runs (KIF_SVC_CREPRC_PCB). */
+int ovmx_alpha_fork(void) __asm__("decc$$fork");
+int ovmx_alpha_fork(void)
+{
+    return fork();
+}
+
 #endif /* __alpha && __VMS */

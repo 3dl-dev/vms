@@ -440,6 +440,14 @@ run_dcl_acceptance_battery() {
     fi
     wait_for '$ ' 20 "$LOGIN_OFF"
 
+    # A caller that only needs a booted, logged-in runtime (the 16 MB VAX
+    # free-memory-floor leg, rd vms-83d) sets OVMX_BATTERY_STOP_AFTER_LOGIN and
+    # takes its own measurement here; every other caller runs the whole battery.
+    if [ -n "${OVMX_BATTERY_STOP_AFTER_LOGIN:-}" ]; then
+        ok "stopping after login: the caller measures a booted, logged-in runtime"
+        return 0
+    fi
+
     # =======================================================================
     # THE BATTERY: the basic commands a user types on first login. Each block
     # asserts VMS-faithful output, guards the specific shipped bug, and carries

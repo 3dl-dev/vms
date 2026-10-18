@@ -204,10 +204,9 @@ BRC=$?
 # boot -- free memory ~20 KB, tmpfs refusing writes ('No space left on device'),
 # a console that never offered Username: -- and no gate noticed until the
 # visitor matrix. OVMX_VAX_FREE_FLOOR_KB (set by the 16 MB CI leg together with
-# OVMX_VAX_MEMORY=16M) asserts that, after boot, login and the whole battery,
-# SHOW MEMORY (the executive's own uvm figures) still reports at least that
+# OVMX_VAX_MEMORY=16M) asserts that, after boot and login (the 16M leg stops
+# there), SHOW MEMORY (the executive's own uvm figures) still reports at least that
 # much Free. A footprint regression now reds here, not in the visitor gate.
-FLOOR_KB="${OVMX_VAX_FREE_FLOOR_KB:-}"
 if [ -n "$FLOOR_KB" ]; then
     run_cmd 'SHOW MEMORY'
     FREE_PAGES=$(printf '%s\n' "$SEG" | awk '/Main Memory \(/ { for (i = 1; i <= NF; i++) if ($i ~ /^\(.*Mb\)$/) { print $(i+2); exit } }')

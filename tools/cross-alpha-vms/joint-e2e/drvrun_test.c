@@ -33,10 +33,10 @@ static void trace(const char *what, int v)
 
 int main(void)
 {
-    static cp32 av[12];
-    av[0] = "xgcc"; av[1] = "-v"; av[2] = "-BSYS$SYSTEM:"; av[3] = "-nostdinc";
-    av[4] = "-x"; av[5] = "c"; av[6] = "-c"; av[7] = "VDA0:[SYSTMP]HELLO.C";
-    av[8] = "-o"; av[9] = "VDA0:[SYSTMP]HELLO.OBJ"; av[10] = 0;
+    static cp32 av[11];
+    av[0] = "xgcc"; av[1] = "-BSYS$SYSTEM:"; av[2] = "-nostdinc";
+    av[3] = "-x"; av[4] = "c"; av[5] = "-c"; av[6] = "VDA0:[SYSTMP]HELLO.C";
+    av[7] = "-o"; av[8] = "VDA0:[SYSTMP]HELLO.OBJ"; av[9] = 0;
     trace("vfork", 0);
     int pid = vfork();
     if (pid == 0) {

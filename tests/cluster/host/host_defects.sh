@@ -245,6 +245,7 @@ join-k5-close-withheld
 csb-0b01-answer-ignores-join-order
 guard-ignores-category-0b
 refused-send-always-keeps-number
+dir-remove-unregistered-entry
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
@@ -1306,6 +1307,19 @@ EOF
 port NOCREDIT (window spent): the number is handed back
 port RINGFULL: the number is handed back
 port UNSAFE (wire-safety guard): the number is handed back
+EOF
+                      ;;
+        esac;;
+
+    dir-remove-unregistered-entry)
+        case "$_f" in
+        facility)     echo "a master tells a directory node to drop an entry only when that directory node holds one for the resource (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_dir_remove_fill() no longer requires that a directory answered the resource's lookup, so a resource mastered before the cluster committed a vector is removed from a directory that never held it. The real V7.3 answers cat-0x02 op-0x19 and bugchecks LOCKMGRERR (4 of 4 captured crashes).";;
+        require_fail) hd_lines <<'EOF'
+*** a resource mastered before any directory held an entry for it is NOT removed from the directory ***
 EOF
                       ;;
         esac;;
@@ -3188,6 +3202,10 @@ apply_edit() {
     refused-send-always-keeps-number)
         # `	return port_rc == held_rc;` is unique in this file.
         sed -i 's#^	return port_rc == held_rc;$#	return (port_rc == held_rc) || 1; /* NEGCTL refused-send-always-keeps-number */#' "$_file";;
+
+    dir-remove-unregistered-entry)
+        # `if (res->dir_told_csid == 0u || res->dir_told_csid != dir)` is unique in this file.
+        sed -i 's#if (res->dir_told_csid == 0u || res->dir_told_csid != dir)#if (0 \&\& res->dir_told_csid != dir) /* NEGCTL dir-remove-unregistered-entry */#' "$_file";;
 
     pe-blk-frame-unringed)
         # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.

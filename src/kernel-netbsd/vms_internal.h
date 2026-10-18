@@ -567,7 +567,10 @@ struct vms_lock_resource {
 	uint8_t             dir_valid;
 	uint32_t            dir_gen;
 	uint32_t            dir_csid;       /* directory node CSID; 0 = this node */
-	uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */
+	uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */	/* rd vms-c55: the directory node that was TOLD this node masters this
+	 * resource (its lookup answer was "you master it"); 0 = no directory
+	 * holds an entry for it. A removal is sent only to that node. */
+	uint32_t            dir_told_csid;
 };
 
 /* The global resource-database hash. vms_lock.c lays down the bucket array with

@@ -252,6 +252,7 @@ struct vms_lock_resource {
 	uint32_t            dir_gen;
 	uint32_t                  dir_csid;
 	uint32_t                  master_csid;
+	uint32_t                  dir_told_csid;   /* rd vms-c55 */
 };
 
 /* ================================================================

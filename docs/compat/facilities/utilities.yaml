@@ -11,9 +11,9 @@ summary: >
   utilities are real; SORT does real /KEY field-based sorting (vms-e76), and the
   remaining record/data utilities (BACKUP, CONVERT) are honestly partial on
   their advanced qualifiers rather than full VMS-parity implementations.
-  Re-censused 2026-09-14 against origin/main: unchanged in substance; CONVERT is
-  still the one facade-risk row (line-by-line copy printing CONVERTED); evidence
-  lines re-anchored. PRODUCT stays verified (install-boot-e2e gate).
+  Re-censused 2026-09-14 against origin/main: unchanged in substance; CONVERT was
+  the one facade-risk row; it no longer claims a conversion it does not perform
+  (vms-558e); evidence lines re-anchored. PRODUCT stays verified (install-boot-e2e gate).
 last_reviewed: 2026-09-14
 items:
   - id: utilities$authorize
@@ -112,10 +112,10 @@ items:
   - id: utilities$convert
     kind: utility
     status: partial
-    authenticity: facade-risk
+    authenticity: advisory
     vms: "CONVERT — file/record-format conversion utility"
-    evidence: src/vmsdcl/dcl_cmd_misc.c:3158
-    notes: "/FDL emits an honest %CONVERT-I-FDL 'accepted but ignored' informational (dcl_cmd_misc.c:3127), but the body is a line-by-line fgets/fputs copy that prints '%CONVERT-S-CONVERTED, N records converted' (dcl_cmd_misc.c:3158) — claiming a record-format conversion it did not perform. Real RMS record-format CONVERT tracked vms-558e. Still facade-risk."
+    evidence: src/vmsdcl/dcl_cmd_misc.c
+    notes: "Proof tests/qemu/test_syssvc_convert_dcl.c + tests/dcl/test_convert_honest.sh + defects.d/dcl-convert-claims-converted.defect. A plain CONVERT is a record-for-record text copy and silent on success (as VMS); /FDL (real organization/record-format/key conversion) is refused with %CONVERT-E-NOFDL and writes nothing. Real RMS record-format CONVERT (indexed/relative, FDL-driven) is not implemented. Was facade-risk: accepted /FDL, ignored it, and printed %CONVERT-S-CONVERTED (vms-558e)."
 
   - id: utilities$analyze-disk-structure
     kind: utility

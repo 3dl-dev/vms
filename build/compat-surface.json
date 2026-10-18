@@ -86,13 +86,13 @@
     "by_authenticity": {
       "real": 348,
       "n/a": 92,
-      "advisory": 47,
-      "facade-risk": 4
+      "advisory": 48,
+      "facade-risk": 3
     },
     "met": 319,
     "in_progress": 68,
     "not_started": 104,
-    "facade_risk": 4
+    "facade_risk": 3
   },
   "overall_in_scope": {
     "count": 445,
@@ -107,13 +107,13 @@
     "by_authenticity": {
       "real": 346,
       "n/a": 52,
-      "advisory": 45,
-      "facade-risk": 2
+      "advisory": 46,
+      "facade-risk": 1
     },
     "met": 319,
     "in_progress": 66,
     "not_started": 60,
-    "facade_risk": 2
+    "facade_risk": 1
   },
   "facilities": [
     {
@@ -1988,14 +1988,13 @@
         },
         "by_authenticity": {
           "real": 16,
-          "advisory": 3,
-          "facade-risk": 1,
+          "advisory": 4,
           "n/a": 4
         },
         "met": 13,
         "in_progress": 5,
         "not_started": 6,
-        "facade_risk": 1
+        "facade_risk": 0
       }
     }
   ],
@@ -9193,11 +9192,11 @@
       "kind": "utility",
       "vms": "CONVERT \u2014 file/record-format conversion utility",
       "status": "partial",
-      "authenticity": "facade-risk",
+      "authenticity": "advisory",
       "scope_1_0": "in",
-      "evidence": "src/vmsdcl/dcl_cmd_misc.c:3158",
+      "evidence": "src/vmsdcl/dcl_cmd_misc.c",
       "verified_against": null,
-      "notes": "/FDL emits an honest %CONVERT-I-FDL 'accepted but ignored' informational (dcl_cmd_misc.c:3127), but the body is a line-by-line fgets/fputs copy that prints '%CONVERT-S-CONVERTED, N records converted' (dcl_cmd_misc.c:3158) \u2014 claiming a record-format conversion it did not perform. Real RMS record-format CONVERT tracked vms-558e. Still facade-risk.",
+      "notes": "Proof tests/qemu/test_syssvc_convert_dcl.c + tests/dcl/test_convert_honest.sh + defects.d/dcl-convert-claims-converted.defect. A plain CONVERT is a record-for-record text copy and silent on success (as VMS); /FDL (real organization/record-format/key conversion) is refused with %CONVERT-E-NOFDL and writes nothing. Real RMS record-format CONVERT (indexed/relative, FDL-driven) is not implemented. Was facade-risk: accepted /FDL, ignored it, and printed %CONVERT-S-CONVERTED (vms-558e).",
       "plan_ref": "vms-8ad"
     },
     {

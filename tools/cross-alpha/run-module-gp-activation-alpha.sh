@@ -555,7 +555,7 @@ assert_lnk() {
     fi
   fi
   awk '/LNK-PROOF: === RUN THE LINKED PROGRAM/{f=1; next} /LNK-PROOF: HELLO-STATUS=/{f=0} f' "$log" | tr -d '\r' \
-    | grep -qx 'hello from cc1 on OVMX 49' && ran=1
+    | grep -x 'hello from cc1 on OVMX 49' >/dev/null && ran=1
   grep -aqE 'LNK-PROOF: HELLO-STATUS=%X00000001 SEVERITY=1' "$log" && st_ok=1
   CMP_BEGIN="LNK-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.EXE ===" CMP_END="LNK-PROOF: DUMP-STATUS=" \
     python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1" "$r2" && same=1

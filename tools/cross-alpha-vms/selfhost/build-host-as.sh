@@ -44,7 +44,7 @@ export CONFIG_SITE=/src/tools/cross-alpha-vms/cxx/config.site
     --disable-nls --disable-werror --disable-shared --enable-static --disable-gprofng \
     --disable-plugins --disable-gdb --disable-ld --disable-binutils --disable-gold \
     --disable-sim --disable-readline --without-zstd --with-system-zlib=no \
-    CC="$T-gcc" AR=ar RANLIB=true CFLAGS="-O2 -I/src/src/libvms/include/hostabi" \
+    CC="$T-gcc" AR=ar RANLIB=true CFLAGS="-O2 -I/src/src/libvms/include/hostabi -iquote /src/src/libvms/include/hostabi" \
     LDFLAGS="$X/p32/lib/emutls32.o" \
     > cfg.log 2>&1 || { tail -40 cfg.log; exit 1; }
 # (hostabi/ puts the VMS-layout <rms.h>/<starlet.h> a DEC C program sees ahead of the sysroot's native-OVMX ones; see its headers)

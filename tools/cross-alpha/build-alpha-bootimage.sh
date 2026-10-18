@@ -316,6 +316,17 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_AS_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (AS): cc1.exe -> SYS\$SYSEXE:CC1.EXE, as.exe -> SYS\$SYSEXE:AS.EXE; launcher joint_e2e.exe -> SYS\$SYSEXE; AS-proof SYSTARTUP (DCL writer + DCL DUMP reader) staged"
+            elif [ -f "$JOINT/DRV_PROOF" ]; then
+                # vms-1eb: the REAL GCC driver (xgcc.exe) runs cc1 and as itself.
+                for _f in xgcc cc1 as; do
+                    [ -f "$JOINT/$_f.exe" ] || { echo "FAIL: DRV_PROOF without $JOINT/$_f.exe"; exit 1; }
+                done
+                cp "$JOINT/xgcc.exe" "$SYSEXE/XGCC.EXE"
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRV_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (DRIVER): xgcc/cc1/as.exe -> SYS\$SYSEXE; launcher joint_e2e.exe -> SYS\$SYSEXE; DRV-proof SYSTARTUP staged"
             elif [ -f "$JOINT/VMSABI_PROOF" ]; then
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VMSABI_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"

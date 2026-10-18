@@ -327,6 +327,26 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRV_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (DRIVER): xgcc/cc1/as.exe -> SYS\$SYSEXE; launcher joint_e2e.exe -> SYS\$SYSEXE; DRV-proof SYSTARTUP staged"
+            elif [ -f "$JOINT/DRL_PROOF" ]; then
+                # vms-65a: the REAL GCC driver compiles and links: cc1, as, ld (the port wrapper
+                # around the VMS link command) and LINK.EXE beside it.
+                for _f in xgcc cc1 as ld link; do
+                    [ -f "$JOINT/$_f.exe" ] || { echo "FAIL: DRL_PROOF without $JOINT/$_f.exe"; exit 1; }
+                done
+                cp "$JOINT/xgcc.exe" "$SYSEXE/XGCC.EXE"
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                cp "$JOINT/ld.exe" "$SYSEXE/LD.EXE"
+                cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
+                for _f in crt0.o crtbegin.o crtend.o libgcc.a; do
+                    [ -f "$JOINT/$_f" ] || { echo "FAIL: DRL_PROOF without $JOINT/$_f"; exit 1; }
+                    cp "$JOINT/$_f" "$SYSEXE/$(echo "$_f" | tr a-z A-Z)"
+                done
+                [ -f "$JOINT/STARLET.a" ] || { echo "FAIL: DRL_PROOF without STARLET.a"; exit 1; }
+                cp "$JOINT/STARLET.a" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/STARLET.A"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (DRIVER LINK): xgcc/cc1/as/ld/link.exe + start files + libgcc.a -> SYS\$SYSEXE; STARLET.A -> SYS\$LIBRARY; DRL-proof SYSTARTUP staged"
             elif [ -f "$JOINT/LNK_PROOF" ]; then
                 # vms-e40: cc1 -> as -> LINK (all VMS-hosted) -> RUN the result.
                 for _f in cc1 as link; do

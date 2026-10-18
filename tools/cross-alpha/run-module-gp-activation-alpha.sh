@@ -72,6 +72,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh driver-gate   # vms-1eb: the VMS-hosted xgcc driver runs cc1+as on OVMX; DCL DUMP of the EVAX object == cross driver object
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh link-gate     # vms-e40: cc1 -> as -> LINK.EXE (all VMS-hosted) -> RUN HELLO.EXE on OVMX/Alpha
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh xgcclink-gate # vms-65a: the VMS-hosted xgcc driver compiles AND links hello.c on OVMX/Alpha (cc1, as, ld -> DCL LINK -> LINK.EXE); RUN prints
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh as-gate       # vms-5303e: VMS-hosted cc1 then GNU as run on OVMX; DCL DUMP of the EVAX object == cross-assembled object
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
@@ -574,6 +575,44 @@ assert_lnk() {
   echo "  (c3) DCL LINK/OPTIONS image == the cross LINK.EXE image : same=$same2 ; ran : $ran2 ; success status : $st2_ok"
   echo "  (d) no activation err : ok=$err_ok"
   [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$ln_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$same" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
+# assert_drl <console-log> <ref1.exe> <ref2.exe> -- THE TEETH for the vms-65a
+# driver compile + link proof (`xgcclink-gate'). PASS iff (a) the launcher reports the
+# GCC driver was created, exited and returned success, (b) the launcher seam decodes to
+# sentinel 7, (c) DCL DUMP shows the HELLO.EXE the driver's ld left equal, outside the
+# link time stamps, to the image the cross driver links from the same source, and the
+# program, run by DCL, printed its line and finished with a success status, and (d) no
+# activation error or abnormal termination.
+assert_drl() {
+  local log="$1" r1="$2" r2="$3"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  [ -s "$r1" ] && [ -s "$r2" ] || { echo "  FAIL: no reference image"; return 1; }
+  local drv_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 ran=0 st_ok=0
+  drv_ok=$(grep -qaE 'OVMX xgcc run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  CMP_BEGIN="DRL-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.EXE ===" CMP_END="DRL-PROOF: DUMP-STATUS=" \
+    python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1" "$r2" && same=1
+  awk '/DRL-PROOF: === RUN THE LINKED PROGRAM/{f=1; next} /DRL-PROOF: HELLO-STATUS=/{f=0} f' "$log" | tr -d '\r' \
+    | grep -x 'hello from cc1 on OVMX 49' >/dev/null && ran=1
+  grep -aqE 'DRL-PROOF: HELLO-STATUS=%X00000001 SEVERITY=1' "$log" && st_ok=1
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) xgcc ran + exit 0 : $drv_ok (want 1)"
+  echo "  (b) launcher seam     : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
+  echo "  (c) DCL DUMP HELLO.EXE == the cross driver image : same=$same ; RUN printed the line : $ran ; success status : $st_ok"
+  echo "  (d) no activation err : ok=$err_ok"
+  [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -2135,6 +2174,137 @@ PYEOF2
     fi
     echo "FAIL: the VMS-hosted cc1 -> as -> LINK -> RUN proof did not pass. Full log: $WORK/modgpA.log"
     tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  xgcclink-gate)
+    # vms-65a: the REAL GCC driver (xgcc.exe), built unchanged for the alpha-dec-vms host,
+    # compiles AND links on OVMX/Alpha: it runs cc1, as, and `ld` -- the port's own wrapper
+    # around the VMS LINK command (vms-ld.c) -- which runs DCL LINK, i.e. OVMX's LINK.EXE.
+    # DCL DUMP of HELLO.EXE must equal the image the cross driver links from the same
+    # source, and RUN HELLO.EXE must print its line.
+    MILESTONE_MAIN=drvlnk_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    BOOT_TIMEOUT="${DRL_BOOT_TIMEOUT:-2400}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
+    _st=$(mktemp -d); _fails=0
+    python3 -I - "$_st" <<'PYEOF2'
+import sys
+d = sys.argv[1]
+ref1 = bytes(range(1, 91)); r2 = bytearray(ref1); r2[20] ^= 0xff; r2[21] ^= 0xff
+open(d + "/r1.exe", "wb").write(ref1); open(d + "/r2.exe", "wb").write(bytes(r2))
+def dump(b):
+    out = []
+    for o in range(0, len(b), 16):
+        row = b[o:o + 16]
+        hx = " ".join(row[i:i + 4].hex().upper().ljust(8) for i in range(0, 16, 4))
+        out.append("%08X %s  %s" % (o % 512, hx, "." * len(row)))
+    return out
+good = bytearray(ref1); good[20] = 0x77
+bad = bytearray(ref1); bad[40] ^= 1
+for n, b in (("good", bytes(good)), ("bad", bytes(bad)), ("short", ref1[:50])):
+    open(d + "/" + n + ".dump", "w").write("\n".join(dump(b)) + "\n")
+PYEOF2
+    mklog() {  # mklog <xgcc code> <seam> <hello line> <hello status> <dump good|bad|short>
+      printf '%s\r\n' "OVMX xgcc run: pid_ok=1 exited=1 code=$1 status=%X00000000" \
+        "OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 \$STATUS=$2 p0=1" \
+        "DRL-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.EXE ===" \
+        && sed 's/$/\r/' "$_st/${5:-good}.dump" \
+        && printf '%s\r\n' "DRL-PROOF: DUMP-STATUS=%X00000001 SEVERITY=1" \
+        "DRL-PROOF: === RUN THE LINKED PROGRAM: RUN HELLO.EXE ===" "$3" \
+        "DRL-PROOF: HELLO-STATUS=$4 SEVERITY=1" "DRL-PROOF: === END ==="
+    }
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 > "$_st/pass.log"
+    mklog 1 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 > "$_st/noxgcc.log"
+    mklog 0 0x0035a019 "hello from cc1 on OVMX 49" %X00000001 > "$_st/badseam.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 50" %X00000001 > "$_st/wrongout.log"
+    mklog 0 0x0035a039 "" %X00000001 > "$_st/noout.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X0000002C > "$_st/badstatus.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 bad > "$_st/diffexe.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 short > "$_st/shortexe.log"
+    { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:LD terminated abnormally (signal 11)'; } > "$_st/crash.log"
+    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_drl "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  xgcclink selftest $_n: PASS"; else echo "  xgcclink selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "xgcclink selftest failed -- assert_drl cannot be trusted"
+    echo ""
+    build_joint_images
+    _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"; _jr="$GATE_ROOT/joint-n3"
+    if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+      log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
+      mkdir -p "$_tc"
+      docker run --rm --network none -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+        bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+        || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
+    fi
+    mkdir -p "$GATE_ROOT/hostgcc" "$GATE_ROOT/hostas" "$GATE_ROOT/hostlink"
+    log "step 1c2: GCC for the alpha-dec-vms host (cached or built, network disabled)"
+    if [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/ld.exe" ]; then log "host GCC restored from cache"; else
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
+    fi
+    log "step 1c3: GNU as for the alpha-dec-vms host (cached or built)"
+    if [ -s "$GATE_ROOT/hostas/host-as/out/as.exe" ]; then log "host as restored from cache"; else
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostas:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-as.sh > "$GATE_ROOT/host-as.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-as.log"; die "host GNU as build failed -- see $GATE_ROOT/host-as.log"; }
+    fi
+    log "step 1c4: LINK.EXE for the alpha-dec-vms host (always rebuilt: it is this change's subject)"
+    rm -rf "$GATE_ROOT/hostlink/host-link"
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostlink:/w" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/selfhost/build-host-link.sh > "$GATE_ROOT/host-link.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/host-link.log"; die "host LINK.EXE build failed -- see $GATE_ROOT/host-link.log"; }
+    _hg="$GATE_ROOT/hostgcc/host-gcc"; _as="$GATE_ROOT/hostas/host-as/out/as.exe"; _ln="$GATE_ROOT/hostlink/host-link/link.exe"
+    [ -s "$_as" ] && [ -s "$_ln" ] && [ -s "$_hg/xgcc.exe" ] && [ -s "$_hg/ld.exe" ] || die "no host xgcc.exe / ld.exe / as.exe / link.exe"
+    log "step 1d: the launcher, the start files and the reference image (the cross driver on the same source, twice)"
+    mkdir -p "$GATE_ROOT/drlimg"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/drlimg:/img" \
+      -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
+        set -e
+        G=/out/cxx/bin/alpha-dec-vms-gcc
+        $G -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/drvlnk_test.c
+        for f in crt0.o crtbegin.o crtend.o libgcc.a; do
+          p=$($G -print-file-name=$f); [ -f "$p" ] || { echo "no $f ($p)"; exit 1; }
+          cp "$p" /img/$f
+        done
+        printf "%s\n" "int printf (const char *, ...);" "static int sq (int x) { return x * x; }" "int main (void)" "{" \
+          "  printf (\"hello from cc1 on OVMX %d\\n\", sq (7));" "  return 0;" "}" > /img/hello.c
+        cd /img && cp hello.c "VDA0:[SYSTMP]HELLO.C" && mkdir -p r1 r2
+        for n in 1 2; do
+          $G -nostdinc -x c "VDA0:[SYSTMP]HELLO.C" -o r$n/hello.exe
+          [ "$n" = 1 ] && sleep 3
+        done
+        cp r1/hello.exe ref1.exe; cp r2/hello.exe ref2.exe' \
+      > "$GATE_ROOT/drl-link.log" 2>&1 || { tail -40 "$GATE_ROOT/drl-link.log"; die "launcher link / reference build failed"; }
+    [ -s "$GATE_ROOT/drlimg/ref1.exe" ] || die "the cross driver wrote no reference image"
+    cp "$GATE_ROOT/drlimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
+    cp "$_hg/xgcc.exe" "$WORK/joint/xgcc.exe"; cp "$_hg/cc1.exe" "$WORK/joint/cc1.exe"; cp "$_hg/ld.exe" "$WORK/joint/ld.exe"
+    cp "$_as" "$WORK/joint/as.exe"; cp "$_ln" "$WORK/joint/link.exe"
+    for _p in crt0.o crtbegin.o crtend.o libgcc.a; do cp "$GATE_ROOT/drlimg/$_p" "$WORK/joint/$_p"; done
+    [ -s "$_jr/STARLET.a" ] || die "no STARLET.a in $_jr"
+    cp "$_jr/STARLET.a" "$WORK/joint/STARLET.a"
+    for _p in "DECC\$SHR" LIBOTS_SHR LIBVMSRMS\$SHR LIBVMS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSPROCESS\$SHR LIBVMSSYS\$SHR; do
+      [ -s "$_jr/$_p.EXE" ] || die "no $_p.EXE in $_jr"
+      cp "$_jr/$_p.EXE" "$WORK/joint/$_p.EXE"
+    done
+    : > "$WORK/joint/DRL_PROOF"
+    assemble_boot_image
+    log "step 3: BOOT A -- the GCC driver compiles and links on the REAL executive, then DCL RUNs HELLO.EXE (up to ${BOOT_TIMEOUT}s)"
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    run_boot_a
+    grep -aE "OVMX xgcc|OVMX-DRV-TRACE|DRL-PROOF|^[0-9A-F]{8} |hello from|OVMX-SEAM:|%IMGACT|%DCL|%SYSTEM|%LINK|ld:|gcc:|xgcc:|Couldn|fatal signal|pc=" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_drl "$WORK/modgpA.log" "$GATE_ROOT/drlimg/ref1.exe" "$GATE_ROOT/drlimg/ref2.exe"; then
+      echo ""
+      echo "PASS: the GCC driver, built for the alpha-dec-vms host, compiled and linked a C program on"
+      echo "      OVMX/Alpha (cc1, as, ld -> DCL LINK -> LINK.EXE); RUN HELLO.EXE printed its line."
+      exit 0
+    fi
+    echo "FAIL: the VMS-hosted xgcc compile + link proof did not pass. Full log: $WORK/modgpA.log"
+    tail -80 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;
   vfork-gate)

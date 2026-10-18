@@ -712,9 +712,9 @@ vtt_diag_thread(void *arg __unused)
 	int seq = 0;
 
 	for (;;) {
-		struct tty *tp;
-		struct vms_ttport_nb *p;
-		struct vms_tt *tt = NULL;
+		struct tty *tp = NULL;
+		struct vms_ttport_nb *p = NULL;
+		struct vms_tt *tt;
 		uint32_t d[12];
 		u_int outc = 0, ts = 0, ps = 0, rxl = 0, pdead = 0, prefs = 0;
 		void *pp = NULL;
@@ -722,34 +722,28 @@ vtt_diag_thread(void *arg __unused)
 
 		(void)kpause("vttdg", false, hz * 15, NULL);
 		seq++;
-		tp = cn_tab != NULL ? cn_tab->cn_tp : NULL;
 		memset(d, 0, sizeof(d));
-		mutex_spin_enter(&tty_lock);
-		if (tp != NULL) {
-			outc = (u_int)tp->t_outq.c_cc;
-			ts = (u_int)tp->t_state;
-			p = tp->t_sc;
+		mutex_enter(&vtt_park_lock);
+		ps = vtt_parked != NULL;
+		mutex_exit(&vtt_park_lock);
+		tt = vms_devtab_tt_by_name("OPA0:");
+		if (tt != NULL) {
+			p = vms_tt_diag(tt, d);
 			pp = p;
+			have_tt = 1;
 			if (p != NULL) {
+				mutex_spin_enter(&tty_lock);
+				tp = p->tp;
 				pdead = (u_int)p->dead;
 				rxl = p->rx_len;
 				prefs = p->refs;
+				if (tp != NULL) {
+					outc = (u_int)tp->t_outq.c_cc;
+					ts = (u_int)tp->t_state;
+				}
+				mutex_spin_exit(&tty_lock);
 			}
-		}
-		mutex_spin_exit(&tty_lock);
-		mutex_enter(&vtt_park_lock);
-		ps = vtt_parked != NULL;
-		if (vtt_parked != NULL) {
-			tt = vtt_parked;
-			vms_tt_get(tt);
-		}
-		mutex_exit(&vtt_park_lock);
-		if (tt == NULL && pp != NULL)
-			tt = port_tt_get((struct vms_ttport_nb *)pp);
-		if (tt != NULL) {
-			vms_tt_diag(tt, d);
 			vms_tt_release(tt);
-			have_tt = 1;
 		}
 		printf("\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u\n",
 		    seq, tp != NULL, pp, pdead, prefs, rxl, outc, ts, ps, have_tt,

@@ -1509,8 +1509,10 @@ void vms_tt_kick_ldisc(struct vms_tt *tt)
  * is in flight, then releases it (ops->release). Process context.
  */
 /* DIAG ONLY (diag/demo-lane, never merged): snapshot for the TTDIAG line. */
-void vms_tt_diag(struct vms_tt *tt, uint32_t out[12])
+void *vms_tt_diag(struct vms_tt *tt, uint32_t out[12])
 {
+	void *port;
+
 	exec_lock(&tt->lock);
 	out[0] = (uint32_t)tt->detached;
 	out[1] = (uint32_t)tt->rd_busy;
@@ -1524,7 +1526,9 @@ void vms_tt_diag(struct vms_tt *tt, uint32_t out[12])
 	out[9] = tt->port_gen;
 	out[10] = (uint32_t)(uintptr_t)tt->port;
 	out[11] = (uint32_t)tt->len;
+	port = tt->port;
 	exec_unlock(&tt->lock);
+	return port;
 }
 
 void vms_tt_set_port(struct vms_tt *tt, const struct vms_tt_port_ops *ops, void *port)

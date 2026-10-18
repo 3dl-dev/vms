@@ -1508,6 +1508,25 @@ void vms_tt_kick_ldisc(struct vms_tt *tt)
  * outstanding reads and its binding intact. Waits until no op on the old port
  * is in flight, then releases it (ops->release). Process context.
  */
+/* DIAG ONLY (diag/demo-lane, never merged): snapshot for the TTDIAG line. */
+void vms_tt_diag(struct vms_tt *tt, uint32_t out[12])
+{
+	exec_lock(&tt->lock);
+	out[0] = (uint32_t)tt->detached;
+	out[1] = (uint32_t)tt->rd_busy;
+	out[2] = (uint32_t)tt->rd_active;
+	out[3] = (uint32_t)tt->rd_suspended;
+	out[4] = (uint32_t)tt->rd_done;
+	out[5] = tt->port_busy;
+	out[6] = (uint32_t)tt->refs;
+	out[7] = tt->olen;
+	out[8] = tt->ta_len;
+	out[9] = tt->port_gen;
+	out[10] = (uint32_t)(uintptr_t)tt->port;
+	out[11] = (uint32_t)tt->len;
+	exec_unlock(&tt->lock);
+}
+
 void vms_tt_set_port(struct vms_tt *tt, const struct vms_tt_port_ops *ops, void *port)
 {
 	const struct vms_tt_port_ops *old_ops;

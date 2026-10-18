@@ -111,6 +111,7 @@ void vms_tt_detach(struct vms_tt *tt);
  * re-opened by a session hangup): continue on the new port, releasing the
  * old. The binding, type-ahead and outstanding reads survive. */
 void vms_tt_set_port(struct vms_tt *tt, const struct vms_tt_port_ops *ops, void *port);
+void vms_tt_diag(struct vms_tt *tt, uint32_t out[12]);   /* DIAG ONLY */
 /* The line's session hung up: end read(2)-path reads (vms_tt.c). */
 void vms_tt_kick_ldisc(struct vms_tt *tt);
 

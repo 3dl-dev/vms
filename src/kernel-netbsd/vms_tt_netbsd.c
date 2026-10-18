@@ -55,6 +55,7 @@
 #include <sys/mutex.h>
 #include <sys/queue.h>
 #include <sys/errno.h>
+#include <sys/kthread.h>
 #include <dev/cons.h>          /* cn_tab: which tty is the console */
 
 #include "vms_internal.h"
@@ -703,9 +704,65 @@ static struct linesw vms_tt_disc = {
 	.l_poll  = vtt_poll,
 };
 
+/* DIAG ONLY (diag/demo-lane, never merged): TTDIAG line every ~15 s from a
+ * kernel thread, through kernel printf (polled console, not the tty). */
+static void
+vtt_diag_thread(void *arg __unused)
+{
+	int seq = 0;
+
+	for (;;) {
+		struct tty *tp;
+		struct vms_ttport_nb *p;
+		struct vms_tt *tt = NULL;
+		uint32_t d[12];
+		u_int outc = 0, ts = 0, ps = 0, rxl = 0, pdead = 0, prefs = 0;
+		void *pp = NULL;
+		int have_tt = 0;
+
+		(void)kpause("vttdg", false, hz * 15, NULL);
+		seq++;
+		tp = cn_tab != NULL ? cn_tab->cn_tp : NULL;
+		memset(d, 0, sizeof(d));
+		mutex_spin_enter(&tty_lock);
+		if (tp != NULL) {
+			outc = (u_int)tp->t_outq.c_cc;
+			ts = (u_int)tp->t_state;
+			p = tp->t_sc;
+			pp = p;
+			if (p != NULL) {
+				pdead = (u_int)p->dead;
+				rxl = p->rx_len;
+				prefs = p->refs;
+			}
+		}
+		mutex_spin_exit(&tty_lock);
+		mutex_enter(&vtt_park_lock);
+		ps = vtt_parked != NULL;
+		if (vtt_parked != NULL) {
+			tt = vtt_parked;
+			vms_tt_get(tt);
+		}
+		mutex_exit(&vtt_park_lock);
+		if (tt == NULL && pp != NULL)
+			tt = port_tt_get((struct vms_ttport_nb *)pp);
+		if (tt != NULL) {
+			vms_tt_diag(tt, d);
+			vms_tt_release(tt);
+			have_tt = 1;
+		}
+		printf("\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u\n",
+		    seq, tp != NULL, pp, pdead, prefs, rxl, outc, ts, ps, have_tt,
+		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11]);
+	}
+}
+
 int
 vms_tt_netbsd_init(void)
 {
+	(void)kthread_create(PRI_NONE, KTHREAD_MPSAFE, NULL, vtt_diag_thread, NULL,
+	    NULL, "vttdiag");
+
 	int error;
 
 	mutex_init(&vtt_park_lock, MUTEX_DEFAULT, IPL_NONE);

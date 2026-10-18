@@ -682,19 +682,29 @@ test('the version a node announced survives its console scrolling', () => {
 // A console whose Username: is abandoned after `idleS` seconds, goes quiet, and
 // shows a fresh banner + prompt on the next RETURN -- an OVMX login session.
 function idleCycleGuest(idleS) {
-  const g = { now: 0, since: null, quiet: true, screen: 'boot done\n', typed: [] };
+  // stage: 'quiet' (waiting for the wake RETURN) -> 'user' (Username:) ->
+  // 'pass' (Password:) -> 'dcl'. Each prompt is abandoned after idleS seconds.
+  const g = { now: 0, since: null, quiet: true, stage: 'quiet', screen: 'boot done\n', typed: [] };
   g.advance = (s) => {
     g.now += s;
-    if (!g.quiet && g.since !== null && g.now - g.since >= idleS) {
+    if ((g.stage === 'user' || g.stage === 'pass') && g.since !== null && g.now - g.since >= idleS) {
       g.screen += '\nError reading command input\nTimeout period expired\n';
-      g.quiet = true; g.since = null;
+      g.quiet = true; g.stage = 'quiet'; g.since = null;
     }
   };
   g.type = (text) => {
     g.typed.push(text);
-    if (text === '\r' && g.quiet) {
-      g.screen += '\n Welcome to the OpenVMX VAX Operating System\n\nUsername: ';
-      g.quiet = false; g.since = g.now;
+    if (g.stage === 'quiet') {
+      if (text.endsWith('\r')) {          // RETURN, or any first line, wakes the session
+        g.screen += '\n Welcome to the OpenVMX VAX Operating System\n\nUsername: ';
+        g.quiet = false; g.stage = 'user'; g.since = g.now;
+      }
+    } else if (g.stage === 'user') {
+      g.screen += text.replace(/\r$/, '') + '\nPassword: ';
+      g.stage = 'pass'; g.since = g.now;
+    } else if (g.stage === 'pass') {
+      g.screen += '\n Welcome to OpenVMX V0.7-12 - OpenVMS-compatible\n$ ';
+      g.stage = 'dcl'; g.since = null;
     }
   };
   return g;
@@ -747,4 +757,79 @@ test('the real VAX is woken but never followed up or logged in to (rd vms-124)',
   const act = await GATE.driveLoginStep(R, 'VAXC', 100, {}, 20, io);
   assert.equal(act, null);
   assert.deepEqual(typed, [['VAXC', '\r']]);
+});
+
+// ---- rd vms-25f: a login that lands after the prompt expired ----------------
+//
+// OVMXB's console ended "Username: MANAGER / Password: / Timeout period
+// expired" and then went silent for the rest of the run. Not a wedged console:
+// the user name arrived after the 20 s Username: window had closed, the fresh
+// session took it as its wake keystroke, the password became the user name, and
+// the gate -- which typed once and never looked again -- sent nothing more.
+
+function loginRig({ lateS = 0, retriesSpent = false } = {}) {
+  const g = idleCycleGuest(20);
+  const R = cn3Observations();
+  R.cn3 = true;
+  if (retriesSpent) R.login_retries = { OVMXB: GATE.LOGIN_RETRIES };
+  const lastWake = {};
+  let late = lateS;
+  const io = {
+    type: async (w, t) => {
+      if (late && t !== '\r') { g.advance(late); late = 0; }   // the keys land late, once
+      g.type(t);
+    },
+    read: async () => g.screen,
+    sleep: async (ms) => g.advance(ms / 1000),
+    user: () => 'SYSTEM', pass: () => 'MANAGER', log: () => {},
+  };
+  const step = async (el) => {
+    observe(R, 'OVMXB', g.screen);
+    GATE.observeLogin(R, 'OVMXB', el);
+    return GATE.driveLoginStep(R, 'OVMXB', el, lastWake, 20, io);
+  };
+  return { g, R, step };
+}
+
+test('a user name that lands after Username: expired is retried and logs in (rd vms-25f)', async () => {
+  const { g, R, step } = loginRig({ lateS: 25 });
+  await step(0);
+  observe(R, 'OVMXB', g.screen);
+  GATE.observeLogin(R, 'OVMXB', 5);
+  assert.equal(R.login_retries.OVMXB, 1, 'one retry was needed and counted');
+  assert.ok(R.login_retry_log.length === 1, 'the retry is said, not hidden');
+  assert.equal(R.dcl_at.OVMXB, 5, 'and the node reached its DCL prompt');
+  assert.deepEqual(g.typed.filter((t) => t !== '\r').slice(-2), ['SYSTEM\r', 'MANAGER\r']);
+  assert.doesNotMatch(g.screen, /Username: MANAGER/, 'the password was never taken as a user name');
+});
+
+test('NEGATIVE CONTROL: with its retries spent the same late landing strands the node, as it did (rd vms-25f)', async () => {
+  const { g, R, step } = loginRig({ lateS: 25, retriesSpent: true });
+  await step(0);
+  observe(R, 'OVMXB', g.screen);
+  GATE.observeLogin(R, 'OVMXB', 5);
+  assert.equal(R.dcl_at.OVMXB, undefined, 'never reaches DCL: the retry is what recovers it');
+  assert.equal(GATE.isPass(R), false);
+});
+
+test('a login that lands first time is not counted as a retry (rd vms-25f)', async () => {
+  const { g, R, step } = loginRig();
+  await step(0);
+  observe(R, 'OVMXB', g.screen);
+  GATE.observeLogin(R, 'OVMXB', 5);
+  assert.equal(R.dcl_at.OVMXB, 5);
+  assert.equal(R.login_retries, undefined);
+});
+
+test('observeLogin starts a login over when the console timed it out after it was typed (rd vms-25f)', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  observe(R, 'OVMXB', 'x\nUsername: ');
+  GATE.observeLogin(R, 'OVMXB', 1);
+  R.login_sent.OVMXB = R.transcript.OVMXB.length;
+  observe(R, 'OVMXB', 'x\nUsername: SYSTEM\nPassword: \nError reading command input\nTimeout period expired\n');
+  GATE.observeLogin(R, 'OVMXB', 30);
+  assert.equal(R.login_sent.OVMXB, undefined, 'forgotten: the next poll wakes the console and logs in again');
+  assert.equal(R.login_retries.OVMXB, 1);
+  assert.equal(GATE.loginAction(R, 'OVMXB'), 'wake');
 });

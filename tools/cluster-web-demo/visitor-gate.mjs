@@ -393,6 +393,7 @@ async function oneRun(spec, idx) {
     await samplePanelHealth(page, R);
     await sampleNodeAWorker(page, R);
     R.verdict = verdictOf(R);
+    for (const m of R.login_retry_log || []) log(`  login retried -- ${m}`);   // slowness stays visible (rd vms-25f)
     await page.screenshot({ path: `${dir}/final.png`, fullPage: true }).catch(() => {});
   } finally {
     fs.writeFileSync(`${dir}/result.json`, asJson(R));

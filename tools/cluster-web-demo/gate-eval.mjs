@@ -446,6 +446,7 @@ export function observeLogin(R, who, el) {
     const after = t.slice(sent);
     if (AUTH_FAIL.test(after)) R.login_failed[who] = true;
     else if (after.length && atDcl(t)) R.dcl_at[who] = el;
+    else if (LOGIN_EXPIRED.test(after)) forgetLogin(R, who, 'the login prompt timed out after the login was typed');
   }
   return R;
 }
@@ -477,6 +478,66 @@ export function loginAction(R, who) {
 export const WAKE_FOLLOWUP_POLLS = 12;
 export const WAKE_FOLLOWUP_MS = 1000;
 
+// A visitor who types a user name and finds the console answering with a FRESH
+// "Username:" (the first prompt had already expired when the keys landed), or
+// with "Timeout period expired", presses RETURN and starts over: that is what
+// VMS does and what OVMX reproduces faithfully (LGI_RETRY_TMO, 20 s -- rd
+// vms-29e). The gate used to type the user name, sleep, type the password and
+// never look again, so ONE late landing -- on a guest that is slow under CPU
+// throttling -- left the password to be taken as a user name and the node
+// stranded at "Username: MANAGER / Password: / Timeout" with nobody typing
+// any more (rd vms-25f: not a wedged console -- the executive's terminal driver
+// was bound, idle and healthy; the gate had stopped sending anything).
+// Now the password is sent only once the console says "Password:", and a login
+// that expires or lands out of step is retried -- at most LOGIN_RETRIES times
+// per node, each COUNTED in R.login_retries and logged, so slowness stays
+// visible. What the gate ASSERTS is unchanged: a DCL "$" within the bound.
+export const LOGIN_RETRIES = 3;
+export const PASSWORD_WAIT_POLLS = 12;
+export const PASSWORD_WAIT_MS = 1000;
+export const PASSWORD_PROMPT = /Password:/;
+export const LOGIN_EXPIRED = /Timeout period expired/;
+
+async function typeLogin(R, who, el, io) {
+  const sentAt = (R.transcript[who] || '').length;
+  R.login_sent[who] = sentAt;
+  io.log(`  ${who}: offered Username: -- logging in as ${io.user(who)}`);
+  await io.type(who, io.user(who) + '\r');
+  let ready = false;
+  for (let i = 0; i < PASSWORD_WAIT_POLLS; i++) {
+    await io.sleep(PASSWORD_WAIT_MS);
+    observe(R, who, await io.read(who));
+    const after = String((R.transcript[who] || '')).slice(sentAt);
+    if (PASSWORD_PROMPT.test(after)) { ready = true; break; }
+    if (LOGIN_EXPIRED.test(after) || AUTH_FAIL.test(after)) break;
+    // a FRESH prompt: the typed name was taken as the wake keystroke of a new session
+    if (/Username:\s*$/.test(lastLineOf(after)) && /Username:/.test(after)) break;
+  }
+  if (!ready) return retryLogin(R, who, io, 'no Password: prompt after the user name');
+  await io.type(who, io.pass(who) + '\r');
+  return 'login';
+}
+
+// Forget a login attempt that did not land so loginAction wakes the console and
+// logs in again. Bounded; every retry is counted and said (R.login_retry_log).
+function retryLogin(R, who, io, why) {
+  if (!forgetLogin(R, who, why)) return 'login';       // out of retries: fail honestly
+  const n = R.login_retries[who];
+  if (io) io.log(`  ${who}: login did not land (${why}); starting over like a visitor (retry ${n}/${LOGIN_RETRIES})`);
+  return 'retry';
+}
+
+export function forgetLogin(R, who, why) {
+  R.login_retries = R.login_retries || {};
+  R.login_retry_log = R.login_retry_log || [];
+  const n = R.login_retries[who] || 0;
+  if (n >= LOGIN_RETRIES) return false;
+  R.login_retries[who] = n + 1;
+  R.login_retry_log.push(`${who}: ${why} (retry ${n + 1}/${LOGIN_RETRIES})`);
+  delete R.login_sent[who];
+  return true;
+}
+
 // One login step for one node. `io` is the transport: { type(who, text),
 // read(who) -> the node's screen, sleep(ms), user(who), pass(who), log(msg) }.
 export async function driveLoginStep(R, who, el, lastWake, wakeEveryS, io) {
@@ -496,12 +557,17 @@ export async function driveLoginStep(R, who, el, lastWake, wakeEveryS, io) {
     }
   }
   if (act === 'login') {
-    R.login_sent[who] = (R.transcript[who] || '').length;
-    io.log(`  ${who}: offered Username: -- logging in as ${io.user(who)}`);
-    await io.type(who, io.user(who) + '\r');
-    await io.sleep(2500);
-    await io.type(who, io.pass(who) + '\r');
-    return 'login';
+    const r = await typeLogin(R, who, el, io);
+    if (r === 'retry') {
+      // A login that did not land is started over at once (a visitor presses
+      // RETURN again), not a whole poll later. Each retry spends one of
+      // LOGIN_RETRIES, so the recursion is bounded.
+      lastWake[who] = -1e9;
+      observe(R, who, await io.read(who));
+      observeLogin(R, who, el);
+      return driveLoginStep(R, who, el, lastWake, wakeEveryS, io);
+    }
+    return r;
   }
   return act;
 }

@@ -478,8 +478,10 @@ assert_as() {
   local link_ok run_ok
   link_ok=$(grep -qaE 'OVMX link run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   # the image LINK.EXE wrote, RUN by DCL: it printed what cc1 compiled, and RUN succeeded
-  run_ok=$(awk '/AS-PROOF: === RUN HELLO.EXE/{f=1;next} /AS-PROOF: === END RUN/{f=0} f' "$log" | tr -d '\r' \
-    | grep -qaE '^(.*\| )?hello from cc1 on OVMX 49$' && grep -qaE 'AS-PROOF: HELLO-RUN-STATUS=%X[0-9A-F]*[13579BDF] SEVERITY=1' "$log" && echo 1 || echo 0)
+  local run_region
+  run_region=$(awk '/AS-PROOF: === RUN HELLO.EXE/{f=1;next} /AS-PROOF: === END RUN/{f=0} f' "$log" | tr -d '\r')
+  if grep >/dev/null -aE '^(.*\| )?hello from cc1 on OVMX 49$' <<<"$run_region" \
+     && grep >/dev/null -aE 'AS-PROOF: HELLO-RUN-STATUS=%X[0-9A-F]*[13579BDF] SEVERITY=1' "$log"; then run_ok=1; else run_ok=0; fi
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
   if [ -n "$mile_hex" ]; then

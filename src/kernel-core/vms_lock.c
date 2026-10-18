@@ -924,6 +924,17 @@ static int dlm_dir_remove_fill(const struct vms_lock_resource *res,
         return 0;
     if (dir == 0 || dir == vms_local_csid)
         return 0;
+    /*
+     * rd vms-c55: ONLY A DIRECTORY THAT HOLDS AN ENTRY IS TOLD TO DROP IT.
+     * A resource mastered before the cluster committed a vector (or whose
+     * directory was reached by no lookup) was registered nowhere. Telling the
+     * directory to forget it is a removal VMS never sends -- the real V7.3
+     * answers cat-0x02 op-0x19 (zero times VAX-to-VAX in the corpus) and
+     * bugchecks LOCKMGRERR: 4 of 4 captured crashes carry exactly one such
+     * removal, 0 of ~190 clean removals do.
+     */
+    if (res->dir_told_csid == 0u || res->dir_told_csid != dir)
+        return 0;
 
     memset(p, 0, sizeof(*p));
     p->op         = VMS_DLM_POST_DIR_REMOVE;
@@ -2985,6 +2996,9 @@ uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid)
         st = SS__BADPARAM;
     } else {
         res->master_csid = vms_local_csid;
+        /* rd vms-c55: the directory node that answered holds an entry for
+         * this resource now; only it may be told to forget it. */
+        res->dir_told_csid = res->dir_csid;
         res->dir_valid = 0;          /* the routing question is settled now */
         dlm_promote_proxy_locked(res, lock);
     }

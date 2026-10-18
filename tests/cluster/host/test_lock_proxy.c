@@ -1045,6 +1045,47 @@ static void e09_no_removal_without_a_remote_entry(void)
 	vms_lock_cleanup();
 }
 
+/*
+ * rd vms-c55: NO REMOVAL FOR AN ENTRY NO DIRECTORY EVER HELD. A resource this
+ * node mastered while no remote directory was in play (before the cluster
+ * committed a vector) was registered at nobody. When its last lock goes after
+ * the vector names a remote directory, telling that node to forget it is a
+ * removal VMS never sends: the real V7.3 answers cat-0x02 op-0x19 and
+ * bugchecks LOCKMGRERR (4 of 4 captured crashes, 0 of ~190 clean removals).
+ */
+static void c55_no_removal_for_an_unregistered_entry(void)
+{
+	struct vms_proc proc;
+	uint32_t lkid = 0;
+	int before;
+
+	printf("--- rd vms-c55: no removal for a resource no directory holds ---\n");
+	configure_local_only();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	(void)do_enq_computed(&proc, "F11B$sC55PRE", LCK_K_EXMODE, &lkid);
+	configure_remote_directory();    /* the vector now names another node */
+	pthread_mutex_lock(&fm.lock);
+	before = fm.posts;
+	pthread_mutex_unlock(&fm.lock);
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the lock goes");
+	usleep(50 * 1000);
+	pthread_mutex_lock(&fm.lock);
+	ct_check_eq_u32((uint32_t)fm.posts, (uint32_t)before,
+			"*** a resource mastered before any directory held an "
+			"entry for it is NOT removed from the directory ***");
+	pthread_mutex_unlock(&fm.lock);
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -1057,5 +1098,6 @@ int main(void)
 	inbound_redirect();
 	e09_master_removes_its_directory_entry();
 	e09_no_removal_without_a_remote_entry();
+	c55_no_removal_for_an_unregistered_entry();
 	return ct_summary("test_lock_proxy");
 }

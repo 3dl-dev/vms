@@ -359,7 +359,11 @@ items:
       VAXes then join (vms-d52c, #1667): in the lab (pod labd52c,
       tests/lab/captures/vms-d52c-ovmx-first-20261012) OVMXE founded alone and
       admitted both VAX V7.3 nodes, CN=3 with OVMXE as coordinator, no second
-      cluster, 0 bugchecks. Open, tracked under vms-ci.6: a VAX admitted by an
+      cluster, 0 bugchecks. The mixed demo topology (a real VAX V7.3 plus two booted OVMX
+      nodes) passed the 8-order visitor gate on the V0.7-12 build: CN=3, the VAX offered
+      Username:, both OVMX nodes reached a logged-in DCL prompt, 0 VAX bugchecks
+      (openvmx-site run 39101853519). Intermittent failures remain in the
+      throttled orders (OVMXB startup wedge, vms-4029; login restart, vms-25f). Open, tracked under vms-ci.6: a VAX admitted by an
       OVMX founder reaching Username: (the startup traffic OVMX withheld is
       answered by vms-db1 #1655, vms-52d #1668 and the 0b/04 apply of vms-94a
       #1677; the end-to-end startup is not yet shown in this capture), OVMX

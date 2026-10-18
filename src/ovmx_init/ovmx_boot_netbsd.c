@@ -81,6 +81,10 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/param.h>
+#include <sys/sysctl.h>
+#include <sys/time.h>
+#include <uvm/uvm_extern.h>
 
 /* The NetBSD host path for the OVMX ODS-2 system disk (DKA0:) -- the
  * substrate-specific name the seam exists to hide from ovmx_init.c (Linux:
@@ -163,8 +167,37 @@ int ovmx_boot_kernel_filesystems_mounted(void)
     return strcmp(vfs.f_fstypename, "tmpfs") == 0;
 }
 
+/* DIAG ONLY (branch diag/vms-83d-memprobe, never merged): sample free memory. */
+static void ovmx_memprobe(int sig)
+{
+    struct uvmexp_sysctl u;
+    size_t sz = sizeof(u);
+    int mib[2] = { CTL_VM, VM_UVMEXP2 };
+    char b[200];
+    int n;
+
+    (void)sig;
+    if (sysctl(mib, 2, &u, &sz, NULL, 0) != 0)
+        return;
+    n = snprintf(b, sizeof(b),
+        "\nMEMPROBE free=%lldK file=%lldK exec=%lldK anon=%lldK wired=%lldK act=%lldK inact=%lldK\n",
+        (long long)u.free * u.pagesize / 1024, (long long)u.filepages * u.pagesize / 1024,
+        (long long)u.execpages * u.pagesize / 1024, (long long)u.anonpages * u.pagesize / 1024,
+        (long long)u.wired * u.pagesize / 1024, (long long)u.active * u.pagesize / 1024,
+        (long long)u.inactive * u.pagesize / 1024);
+    if (n > 0)
+        (void)write(2, b, (size_t)n);
+}
+
 int ovmx_boot_mount_kernel_filesystems(void)
 {
+    {
+        struct itimerval it;
+        it.it_interval.tv_sec = 4; it.it_interval.tv_usec = 0;
+        it.it_value = it.it_interval;
+        (void)signal(SIGALRM, ovmx_memprobe);
+        (void)setitimer(ITIMER_REAL, &it, NULL);
+    }
     /* Best-effort, exactly like the Linux backend: individual mounts are not
      * error-checked (a missing pseudo-fs surfaces later as the concrete
      * failure that depends on it). NetBSD's mount(2) is

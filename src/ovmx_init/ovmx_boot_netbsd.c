@@ -180,8 +180,7 @@ static void ovmx_memprobe(int sig)
     (void)sig;
     if (sysctl(mib, 2, &u, &sz, NULL, 0) != 0)
         return;
-    if ((long long)u.free * u.pagesize / 1024 > 7000)
-        return;      /* quiet while memory is healthy */
+
     n = snprintf(b, sizeof(b),
         "\nMEMPROBE free=%lldK file=%lldK exec=%lldK anon=%lldK wired=%lldK act=%lldK inact=%lldK\n",
         (long long)u.free * u.pagesize / 1024, (long long)u.filepages * u.pagesize / 1024,
@@ -197,7 +196,9 @@ static void ovmx_memprobe(int sig)
         size_t ksz = sizeof(kp);
         size_t i, cnt;
 
-        if ((long long)u.free * u.pagesize / 1024 > 1500 || dumps >= 4)
+        static int calls;
+        calls++;
+        if (!(calls == 15 || calls == 40))
             return;
         dumps++;
         m2[0] = CTL_KERN; m2[1] = KERN_PROC2; m2[2] = KERN_PROC_ALL; m2[3] = 0;

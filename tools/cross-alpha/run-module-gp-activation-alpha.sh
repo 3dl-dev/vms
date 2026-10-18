@@ -606,14 +606,14 @@ assert_drl() {
     | grep -x 'hello from cc1 on OVMX 49' >/dev/null && ran=1
   grep -aqE 'DRL-PROOF: HELLO-STATUS=%X00000001 SEVERITY=1' "$log" && st_ok=1
   # system(): the good command printed its line and returned odd, the bad one returned even (SS$_ABORT)
-  grep -aq 'OVMX system: ok_rc=1 bad_rc=44' "$log" && tr -d '\r' < "$log" | grep -x 'OVMX-SYSTEM-OK' >/dev/null && sys_ok=1
+  grep -aqE 'OVMX system: ok_rc=[0-9]*[13579] bad_rc=[0-9]*[02468]' "$log" && tr -d '\r' < "$log" | grep -x 'OVMX-SYSTEM-OK' >/dev/null && sys_ok=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
   echo "  (a) xgcc ran + exit 0 : $drv_ok (want 1)"
   echo "  (b) launcher seam     : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
   echo "  (c) DCL DUMP HELLO.EXE == the cross driver image : same=$same ; RUN printed the line : $ran ; success status : $st_ok"
-  echo "  (c2) system(): a good command returns odd and ran, a bad one returns SS\$_ABORT : ok=$sys_ok"
+  echo "  (c2) system(): a good command returns odd and ran, a bad one returns an even value : ok=$sys_ok"
   echo "  (d) no activation err : ok=$err_ok"
   [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1

@@ -365,15 +365,23 @@ int ovmx_execle64(const char *spec, const char *arg0, ...)
 
 
 /*
- * system() -- DEC C: the string is a DCL command, run in a subprocess by the
- * command language interpreter (LIB$SPAWN), and the value is the subprocess's
- * VMS condition value (odd = success). The port's linker wrapper writes
- * system("$ link ...") and tests bit 0. A leading "$" is the DCL prompt and is
- * dropped. The subprocess is the DCL image run with `-c COMMAND`, created through
- * the executive like a vfork()/exec*() child; DCL -c exits 0 when the command's
- * status was a success and 1 otherwise, so the condition value returned is
- * SS$_NORMAL or SS$_ABORT. system(NULL) says a command interpreter exists.
+ * system() -- DEC C: the string is a DCL command run in a subprocess by the
+ * command language interpreter, through LIB$SPAWN; the value is the VMS
+ * condition value of the command (odd = success). The port's linker wrapper
+ * writes system("$ link ...") and tests bit 0. A leading "$" is the DCL prompt and
+ * is dropped. LIB$SPAWN (LIBVMS$SHR, rtl/lib_misc.c: $CREPRC subprocess, the command
+ * fed to DCL as its SYS$INPUT) is bound by name at activation: DECC$SHR is below
+ * it in the build cycle, and LIBVMS$SHR is loaded with every C RTL image (LIBVMSRMS$SHR
+ * uses it). Without it system() fails with SS$_UNSUPPORTED, never a quiet success.
+ * system(NULL) says a command interpreter exists.
  */
+struct ovmx_sys_dsc { unsigned short len; unsigned char dtype, cls; const char *ptr; };
+extern unsigned int lib_spawn_weak(const struct ovmx_sys_dsc *, const void *, const void *,
+                                   const unsigned int *, const void *, unsigned int *,
+                                   unsigned int *, const unsigned int *, void *, void *,
+                                   const void *, const void *, const void *)
+    __asm__("lib$spawn") __attribute__((weak));
+
 int ovmx_decc_system(const char *cmd) __asm__("decc$system");
 int ovmx_decc_system(const char *cmd)
 {
@@ -385,21 +393,14 @@ int ovmx_decc_system(const char *cmd)
         cmd++;
     while (*cmd == ' ' || *cmd == '\t')
         cmd++;
-    char *av[5];
-    av[0] = OVMX_IMGACT_LAUNCHER;
-    av[1] = (char *)"SYS$SYSTEM:DCL.EXE";
-    av[2] = (char *)"-c";
-    av[3] = (char *)cmd;
-    av[4] = 0;
-    pid_t pid = spawn_subprocess(av, __environ);
-    if (pid < 0)
-        return errno == ENODEV ? 0x908 : 0x2C;      /* SS$_NOSUCHDEV : SS$_ABORT */
-    int wst = 0;
-    while (waitpid(pid, &wst, 0) < 0) {
-        if (errno != EINTR)
-            return 0x2C;
-    }
-    return (WIFEXITED(wst) && WEXITSTATUS(wst) == 0) ? 1 : 0x2C;
+    if (!lib_spawn_weak)
+        return 3658;                                /* SS$_UNSUPPORTED */
+    struct ovmx_sys_dsc d = { (unsigned short)strlen(cmd), 14 /* DSC$K_DTYPE_T */, 1 /* DSC$K_CLASS_S */, cmd };
+    unsigned int status = 0x2Cu;                    /* SS$_ABORT unless the command reports */
+    unsigned int st = lib_spawn_weak(&d, 0, 0, 0, 0, 0, &status, 0, 0, 0, 0, 0, 0);
+    if (!(st & 1u))
+        return (int)st;                             /* the subprocess was not created */
+    return (int)status;
 }
 
 #endif /* __alpha && __VMS */

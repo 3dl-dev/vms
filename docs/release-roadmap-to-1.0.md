@@ -111,7 +111,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-10-16** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-10-18** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -313,6 +313,7 @@ only our forks target.
 
 ### Shipped releases (git tags)
 
+- **V0.7-12** — Point release.
 - **V0.7-11** — Point release.
 - **V0.7-10** — Point release.
 - **V0.7-9** — Point release.
@@ -324,7 +325,6 @@ only our forks target.
 - **V0.7-3** — Point release.
 - **V0.7-2** — Point release.
 - **V0.7-1** — Point release.
-- **V0.7** — Cluster wire fidelity — a booted OpenVMX node joins a real OpenVMS VAXcluster on a single circuit. A fresh-booted OVMX node opens its SCS virtual circuit to a live two-node VAXcluster, completes the connection-manager dialogue, and is admitted through the membership transition to STATUS=MEMBER at sustained CN=3 — on ONE NISCA circuit formation, no reformation. This is the first admission that is genuinely OpenVMX's own: the V0.6-11 CN=3 was real as a counted-member state but completed only on a circuit the VAX reformed in response to an OpenVMX defect (an unaddressed op-5 REJECT_RESPONSE that also crash-looped later builds); that defect is fixed, and the join FSM now re-arms across the VAX's transition-abort and completes admission cleanly on the first circuit. Proven on the lab's real VAXes (group 257) by a five-leg gate: OVMX SHOW CLUSTER lists the member, VAX1's SDA CSB shows OVMXJ1 admitted MEMBER, VAX1's F$GETSYI("CLUSTER_NODES") reads 3, the join pcap carries OVMXJ1 in the 0x6007 SCA traffic, and CAP_NET_RAW is DENIED to the booted node — so the OVMX executive itself, not an ambient Linux capability, served the Ethernet L2 I/O. CN=3 held ~225s+ (a floor, not a ceiling — the lab poll ended on a harness race, not a membership drop), both real VAXes zero bugchecks, the release-gating never-crash-a-peer invariant. Honest scope: OVMX's RECOVERY from a VAX transition-abort is host-proven but was not exercised on the wire in the passing run (the abort is intermittent, tracked vms-c10); quorum votes are computed and displayed but not enforced; and this JOINS an existing cluster — it does not yet form a cluster from nothing to a real VAX or MSCP-serve storage to one.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

@@ -19,6 +19,7 @@ typedef char *cp32;     /* host source scans compile every product file */
 #endif
 extern int printf(const char *, ...);
 extern int system(const char *);
+extern char *getcwd(char *, size_t, int);
 extern int waitpid(int, int *, int);
 extern void _exit(int);
 extern int fflush(void *);
@@ -62,22 +63,23 @@ static int stage(const char *tag, const char *image, cp32 const *av)
 
 int main(void)
 {
-    static cp32 av[12], dv[12];
+    static cp32 av[12], dv[13];
     av[0] = "xgcc"; av[1] = "-BSYS$SYSTEM:"; av[2] = "-L/SYS$SYSTEM"; av[3] = "-nostdinc";
     av[4] = "-x"; av[5] = "c"; av[6] = "VDA0:[SYSTMP]HELLO.C";
-    av[7] = "-o"; av[8] = "VDA0:[SYSTMP]HELLO.EXE"; av[9] = 0;
+    av[7] = "-o"; av[8] = "VDA0:[SYSTMP]HELLO.EXE"; av[9] = "-Wl,-save-temps"; av[10] = 0;
     /* system(): a DCL command in a subprocess, the VMS condition value back (odd =
      * success) -- what the port ld wrapper calls to run LINK. The second command
      * does not exist: its value must be a failure. */
     int ok_rc = system("$ WRITE SYS$OUTPUT \"OVMX-SYSTEM-OK\"");
     int bad_rc = system("$ NOSUCHVERB");
     printf("OVMX system: ok_rc=%d bad_rc=%d\n", ok_rc, bad_rc);
+    { char *cw = getcwd(0, 1024, 1); printf("OVMX getcwd(vms): %s\n", cw ? cw : "(null)"); }
     fflush(0);
     /* what the driver would run, printed and not run (-###): the commands it builds,
      * in the gate log, for reading a wall against */
     dv[0] = av[0]; dv[1] = "-###";
-    for (int i = 1; i < 9; i++) dv[i + 1] = av[i];
-    dv[10] = 0;
+    for (int i = 1; i < 10; i++) dv[i + 1] = av[i];
+    dv[11] = 0;
     (void)stage("xgcc-dryrun", "SYS$SYSTEM:XGCC.EXE", dv);
     return stage("xgcc", "SYS$SYSTEM:XGCC.EXE", av) ? 7 : 3;
 }

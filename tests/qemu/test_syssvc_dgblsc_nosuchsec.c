@@ -36,6 +36,17 @@ int main(void)
         return 1;
     }
     if (vms_kif_open() < 0 || !(ovmx_test_self(NULL) & 1)) {
+        /* Executive ABSENT: assert the service fails honestly (one runtime),
+         * then exit with the honest-skip code 77 that the kernel-executive
+         * negative-control job requires of every public-sys$ suite (rc 0 would
+         * be a fabricated success; rc 1 is "77 not reached"). */
+        struct dsc$descriptor_s n0 = dsc$init("NEVER_CREATED_SECTION");
+        uint32_t st0 = sys$dgblsc(0, &n0, NULL);
+        if (st0 != SS$_NOSUCHDEV) {
+            printf("  FAIL: with no executive $DGBLSC returned %u, expected SS$_NOSUCHDEV\n", st0);
+            return 1;
+        }
+        printf("  PASS: with no executive $DGBLSC fails honestly (SS$_NOSUCHDEV)\n");
         printf("=== test_syssvc_dgblsc_nosuchsec: SKIPPED: no /dev/vms -- the executive is absent, nothing proved ===\n");
         return EXIT_SKIP;
     }

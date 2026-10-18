@@ -36,9 +36,13 @@
  * OVMX-USERSPACE: sys$crmpsc (vms-e0a) -- MAP_SHARED mmap of an fd taken from
  *     the caller's own pcb->channels[]; the global section NAME (gsdnam) is
  *     discarded, so no two processes can name the same section.
- * OVMX-USERSPACE: sys$dgblsc (vms-d91) -- validates gsdnam and returns
- *     SS$_NOSUCHSEC: sys$crmpsc discards the section name, so no named global
- *     section is ever registered and none can exist to delete.
+ * OVMX-PARTIAL: sys$dgblsc (vms-d91) -- exec: whether the executive is reachable
+ *     at all; with none the call fails SS$_NOSUCHDEV (one runtime, no
+ *     userspace answer for system-wide state).
+ * OVMX-LOCAL: sys$dgblsc -- the SS$_NOSUCHSEC answer itself is not looked up in
+ *     the executive: no executive global-section registry exists yet and
+ *     sys$crmpsc discards the section name, so no named global section can
+ *     exist to delete.
  * OVMX-USERSPACE: sys$purgws (vms-e0a) -- validates the range and returns
  *     SS$_NORMAL; nothing is purged and no working set is consulted.
  * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- validates the range, echoes it back
@@ -60,6 +64,7 @@
 #include <errno.h>
 #include "starlet.h"
 #include "va_rangedef.h"
+#include "vms_kif.h"
 
 /* VMS page size is 512 bytes (Alpha/Itanium may use larger, but 512 is the classic) */
 #define VMS_PAGE_SIZE 512
@@ -298,6 +303,11 @@ uint32_t sys$dgblsc(uint32_t flags, const struct dsc$descriptor_s *gsdnam,
     (void)flags; (void)ident;
 
     if (!gsdnam || !gsdnam->dsc$a_pointer) return SS$_BADPARAM;
+
+    /* Global sections are system-wide state, so the answer belongs to the
+     * executive (one runtime): with no executive, fail honestly rather than
+     * answer from userspace. */
+    if (vms_kif_open() < 0) return SS$_NOSUCHDEV;
 
     return SS$_NOSUCHSEC;
 }

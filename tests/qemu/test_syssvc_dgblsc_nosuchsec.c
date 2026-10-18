@@ -16,6 +16,11 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
+#include "vms_kif.h"
+#include "ovmx_test_fork.h"
+#include "vms/pcb.h"
+
+#define EXIT_SKIP 77
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -26,6 +31,14 @@ static int pass = 0, fail = 0;
 int main(void)
 {
     printf("=== test_syssvc_dgblsc_nosuchsec ===\n");
+    if (!vms_pcb_init(0xFFFFFFFFFFFFFFFFULL)) {
+        printf("  FAIL: vms_pcb_init() failed\n");
+        return 1;
+    }
+    if (vms_kif_open() < 0 || !(ovmx_test_self(NULL) & 1)) {
+        printf("=== test_syssvc_dgblsc_nosuchsec: SKIPPED: no /dev/vms -- the executive is absent, nothing proved ===\n");
+        return EXIT_SKIP;
+    }
     struct dsc$descriptor_s nm = dsc$init("NEVER_CREATED_SECTION");
     uint32_t ident[2] = {0, 0};
 

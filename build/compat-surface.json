@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-17",
+    "generated": "2026-10-18",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -8132,7 +8132,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_memory.c",
       "verified_against": null,
-      "notes": "Proof tests/qemu/test_syssvc_dgblsc_nosuchsec.c + defects.d/dgblsc-fake-success.defect. No named-global-section registry exists (sys$crmpsc discards gsdnam), so every named delete returns SS$_NOSUCHSEC honestly; the delete-a-real-section success path needs the registry (not built). Was facade-risk: returned SS$_NORMAL for a section that never existed (vms-d91).",
+      "notes": "Proof tests/qemu/test_syssvc_dgblsc_nosuchsec.c + defects.d/dgblsc-fake-success.defect. No named-global-section registry exists (sys$crmpsc discards gsdnam), so under the executive every named delete returns SS$_NOSUCHSEC honestly (SS$_NOSUCHDEV with no executive, one-runtime rule); the delete-a-real-section success path needs the registry (not built). Was facade-risk: returned SS$_NORMAL for a section that never existed (vms-d91).",
       "plan_ref": "vms-801"
     },
     {

@@ -313,8 +313,8 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 [ -f "$JOINT/as.exe" ] || { echo "FAIL: AS_PROOF without $JOINT/as.exe"; exit 1; }
                 cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
                 cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
-                # vms-e40: LINK.EXE (host-built) and what the link line names: the port's
-                # crt0/crtbegin/crtend/vms-dwarf2eh objects, libgcc and STARLET
+                # vms-e40: LINK.EXE (host-built) and what the link line names: 
+                # crt0, crtbegin, crtend and vms-dwarf2eh objects, libgcc and STARLET
                 [ -f "$JOINT/link.exe" ] || { echo "FAIL: AS_PROOF without $JOINT/link.exe"; exit 1; }
                 cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
                 for _l in CRT0.O CRTBEGIN.O CRTEND.O VMS-DWARF2EH.O LIBGCC.A STARLET.A; do

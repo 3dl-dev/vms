@@ -22,11 +22,6 @@ extern int printf(const char *, ...);
 extern int waitpid(int, int *, int);
 extern void _exit(int);
 extern int fflush(void *);
-extern int write(int, const void *, size_t);
-extern int isatty(int);
-extern int fcntl(int, int, ...);
-extern int fprintf(void *, const char *, ...);
-extern void *stderr;
 extern int open(const char *, int, ...);
 extern int dup2(int, int);
 extern int pipe(int *);
@@ -80,9 +75,12 @@ static int stage(const char *tag, const char *image, cp32 const *av, int capture
     if (pp[0] >= 0) {
         char b[512];
         int n;
+        int shown = 0;
         while ((n = read(pp[0], b, sizeof b - 1)) > 0) {
             b[n] = 0;
-            printf("OVMX-%s-OUT: %s", tag, b);
+            if (shown < 4096)           /* the first lines say what failed; the rest is -I- chatter */
+                printf("OVMX-%s-OUT: %s", tag, b);
+            shown += n;
         }
         printf("\n");
         fflush(0);
@@ -124,24 +122,6 @@ int main(void)
         lk[n++] = "VDA0:[SYSTMP]CRTEND.O";
         lk[n++] = "--library"; lk[n++] = "VDA0:[SYSTMP]STARLET.A";
         lk[n] = 0;
-    }
-    {
-        /* fd 1 and fd 2 as the launcher received them: raw write(2), isatty, F_GETFD */
-        int w1 = write(1, "OVMX-FD1-RAW\n", 13); int e1 = *__errno_location();
-        int w2 = write(2, "OVMX-FD2-RAW\n", 13); int e2 = *__errno_location();
-        printf("OVMX-FD-PROBE: write1=%d errno=%d write2=%d errno=%d isatty=%d,%d,%d fcntl=%d,%d,%d\n", w1, e1, w2, e2,
-               isatty(0), isatty(1), isatty(2), fcntl(0, 1, 0), fcntl(1, 1, 0), fcntl(2, 1, 0));
-        fflush(0);
-    }
-    fprintf(stderr, "OVMX-STDERR-PROBE: this line is written to stderr by the launcher\n");
-    fflush(0);
-    {
-        /* a link with no input: LINK.EXE must say so on stderr, which the pipe carries --
-         * proof that a message from the real link below would be seen */
-        static cp32 nolk[2];
-        nolk[0] = "link"; nolk[1] = 0;
-        (void)stage("link-noargs-pipe", "SYS$SYSTEM:LINK.EXE", nolk, 1);
-        (void)stage("link-noargs-console", "SYS$SYSTEM:LINK.EXE", nolk, 0);
     }
     int ok = stage("cc1", "SYS$SYSTEM:CC1.EXE", cc, 0);
     if (ok)

@@ -700,8 +700,21 @@ int cmd_mail(struct dcl_command *cmd)
     char *argv[64] = {NULL};
     int argc = 0;
     argv[argc++] = NULL; /* placeholder */
-    for (int i = 0; i < cmd->qualifier_count && argc < 62; i++)
-        argv[argc++] = cmd->qualifiers[i].name;
+    /* MAIL.EXE reads "/NAME=value" tokens (vms_mail.c main). The parser strips
+     * the '/' and '=' into qualifiers[], so rebuild the token: forwarding the
+     * bare name made MAIL/SUBJECT="x" user hand MAIL.EXE the word SUBJECT as
+     * the recipient and drop the subject (vms-097). */
+    char qual_bufs[8][340];
+    int nq = 0;
+    for (int i = 0; i < cmd->qualifier_count && argc < 62 && nq < 8; i++) {
+        if (cmd->qualifiers[i].value[0])
+            snprintf(qual_bufs[nq], sizeof qual_bufs[nq], "/%s=%s",
+                     cmd->qualifiers[i].name, cmd->qualifiers[i].value);
+        else
+            snprintf(qual_bufs[nq], sizeof qual_bufs[nq], "/%s",
+                     cmd->qualifiers[i].name);
+        argv[argc++] = qual_bufs[nq++];
+    }
     for (int i = 0; i < cmd->param_count && argc < 62; i++) {
         if (cmd->params[i][0] != '\0')
             argv[argc++] = cmd->params[i];

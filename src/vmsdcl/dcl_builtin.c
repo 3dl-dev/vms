@@ -312,6 +312,14 @@ static const struct dcl_qual_def q_read[] = {
     { "TIME_OUT",    CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     QUAL_END
 };
+
+/* MAIL forwards its qualifiers to MAIL.EXE, which honours exactly /SUBJECT
+ * (vms_mail.c); anything else it silently ignored. Declaring the table makes
+ * the rest %DCL-W-IVQUAL instead of dropped (vms-097, INV-DCL sec 3). */
+static const struct dcl_qual_def q_mail[] = {
+    { "SUBJECT", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
 static const struct dcl_qual_def q_open[] = {
     { "READ",   CDU_VT_NONE, 0, NULL, NULL },
     { "WRITE",  CDU_VT_NONE, 0, NULL, NULL },
@@ -542,7 +550,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "LOGOUT",      cmd_logout,      CDU_F_ABBREV, 2,
       "Terminate an interactive session", q_none },
     { "MAIL",      cmd_mail,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
-      "Send and receive electronic mail messages" },
+      "Send and receive electronic mail messages", q_mail },
     { "MONITOR",   cmd_monitor,   CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Display real-time system activity statistics", q_none },
     { "MOUNT",       cmd_mount,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,

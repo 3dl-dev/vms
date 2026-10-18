@@ -43,6 +43,20 @@ def main():
     bad = [i for i in range(len(a)) if got[i] != a[i] and i not in volatile]
     if bad:
         print(f"  {len(bad)} non-volatile bytes differ; first at offsets {bad[:12]}")
+        # every run of differing bytes with both sides, so a wall is read from the log
+        runs, start = [], None
+        for i in bad:
+            if start is not None and i - prev <= 2:
+                prev = i
+                continue
+            if start is not None:
+                runs.append((start, prev))
+            start = prev = i
+        runs.append((start, prev))
+        for lo, hi in runs[:24]:
+            lo2, hi2 = max(0, lo - 4), min(len(a), hi + 5)
+            print(f"    @{lo}..{hi}: got {got[lo2:hi2].hex()} {got[lo2:hi2]!r}")
+            print(f"    {' ' * len(str(lo))}    ref {a[lo2:hi2].hex()} {a[lo2:hi2]!r}")
         return 1
     print("  identical outside the time-stamp offsets")
     return 0

@@ -25,6 +25,13 @@ $ WRITE HC "}"
 $ CLOSE HC
 $ WRITE SYS$OUTPUT "AS-PROOF: DCL-WRITE-STATUS=''$STATUS'"
 $!
+$! vms-e40 diagnostics: the images the launcher runs, and LINK started by DCL (which
+$! reports an activation failure the vfork path swallows; no input = its usage message)
+$ DIRECTORY/SIZE SYS$SYSTEM:LINK.EXE,AS.EXE,CC1.EXE
+$ DIRECTORY/SIZE VDA0:[SYSTMP]
+$ WRITE SYS$OUTPUT "AS-PROOF: === DCL RUN SYS$SYSTEM:LINK (no input) ==="
+$ RUN SYS$SYSTEM:LINK
+$ WRITE SYS$OUTPUT "AS-PROOF: LINK-NOINPUT-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "AS-PROOF: === MILESTONE: RUN JOINT_E2E (vfork+execv CC1.EXE then AS.EXE) ==="
 $ RUN SYS$SYSTEM:JOINT_E2E
 $ WRITE SYS$OUTPUT "AS-PROOF: RUN-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"

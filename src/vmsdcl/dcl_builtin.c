@@ -390,13 +390,29 @@ static const struct dcl_qual_def q_analyze[] = {
     { "SYSTEM",         CDU_VT_NONE, 0, NULL, NULL },
     QUAL_END
 };
-/* LINK (DCL Dictionary: LINK). cmd_link() honours /EXECUTABLE=name (output
- * image name) and /MAP (produce a link map, /NOMAP the default); it forks the
- * system linker for both. The wider LINK grammar (/SHAREABLE, /DEBUG,
- * /SYSLIB, ...) is a follow-up -- not forwarded today, so honestly rejected. */
+/* LINK (DCL Dictionary: LINK). cmd_link() hands SYS$SYSTEM:LINK.EXE the command
+ * tail as typed; LINK.EXE (src/vmslink/vms_cli.c) acts on /EXECUTABLE, /OPTIONS,
+ * /LIBRARY, /SHAREABLE (as an options-file or file qualifier), /INFORMATIONALS and
+ * the debug/traceback/library-search qualifiers, and refuses with a message the ones
+ * it cannot honour (/MAP, /FULL, /CROSS_REFERENCE, /SHAREABLE as an image kind).
+ * The table lets DCL accept exactly the qualifiers LINK.EXE then judges; a
+ * qualifier outside it draws %DCL-W-IVQUAL here. */
 static const struct dcl_qual_def q_link[] = {
-    { "EXECUTABLE", CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
-    { "MAP",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "EXECUTABLE",       CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "SHAREABLE",        CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "MAP",              CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "FULL",             CDU_VT_NONE,  0,               NULL, NULL },
+    { "CROSS_REFERENCE",  CDU_VT_NONE,  0,               NULL, NULL },
+    { "DEBUG",            CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "TRACEBACK",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "INFORMATIONALS",   CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "OPTIONS",          CDU_VT_NONE,  0,               NULL, NULL },
+    { "LIBRARY",          CDU_VT_NONE,  0,               NULL, NULL },
+    { "INCLUDE",          CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
+    { "SELECTIVE_SEARCH", CDU_VT_NONE,  0,               NULL, NULL },
+    { "SYSLIB",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "SYSSHR",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "USERLIBRARY",      CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
     QUAL_END
 };
 /* PRODUCT (DCL Dictionary: PRODUCT). cmd_product() honours /SOURCE=kit and

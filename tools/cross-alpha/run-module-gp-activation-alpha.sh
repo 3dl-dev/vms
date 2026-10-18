@@ -541,7 +541,7 @@ assert_lnk() {
   local log="$1" r1="$2" r2="$3"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   [ -s "$r1" ] && [ -s "$r2" ] || { echo "  FAIL: no reference image"; return 1; }
-  local same=0 cc1_ok as_ok ln_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 ran=0 st_ok=0
+  local same=0 same2=0 ran2=0 st2_ok=0 cc1_ok as_ok ln_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 ran=0 st_ok=0
   cc1_ok=$(grep -qaE 'OVMX cc1 run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   as_ok=$(grep -qaE 'OVMX as run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   ln_ok=$(grep -qaE 'OVMX link run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
@@ -559,6 +559,11 @@ assert_lnk() {
   grep -aqE 'LNK-PROOF: HELLO-STATUS=%X00000001 SEVERITY=1' "$log" && st_ok=1
   CMP_BEGIN="LNK-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.EXE ===" CMP_END="LNK-PROOF: DUMP-STATUS=" \
     python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1" "$r2" && same=1
+  CMP_BEGIN="LNK-PROOF: === INDEPENDENT READER: DCL DUMP HELLO2.EXE ===" CMP_END="LNK-PROOF: DUMP2-STATUS=" \
+    python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1" "$r2" && same2=1
+  awk '/LNK-PROOF: === RUN THE DCL-LINKED PROGRAM/{f=1; next} /LNK-PROOF: HELLO2-STATUS=/{f=0} f' "$log" | tr -d '\r' \
+    | grep -x 'hello from cc1 on OVMX 49' >/dev/null && ran2=1
+  grep -aqE 'LNK-PROOF: HELLO2-STATUS=%X00000001 SEVERITY=1' "$log" && st2_ok=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
@@ -566,8 +571,9 @@ assert_lnk() {
   echo "  (b) launcher seam : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
   echo "  (c) RUN HELLO.EXE printed the line : $ran ; success status : $st_ok"
   echo "  (c2) DCL DUMP HELLO.EXE == the cross LINK.EXE image : same=$same"
+  echo "  (c3) DCL LINK/OPTIONS image == the cross LINK.EXE image : same=$same2 ; ran : $ran2 ; success status : $st2_ok"
   echo "  (d) no activation err : ok=$err_ok"
-  [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$ln_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$same" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$cc1_ok" -eq 1 ] && [ "$as_ok" -eq 1 ] && [ "$ln_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$same" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -2026,7 +2032,13 @@ PYEOF2
         && sed 's/$/\r/' "$_st/${7:-good}.dump" \
         && printf '%s\r\n' "LNK-PROOF: DUMP-STATUS=%X00000001 SEVERITY=1" \
         "LNK-PROOF: === RUN THE LINKED PROGRAM: RUN HELLO.EXE ===" "$5" \
-        "LNK-PROOF: HELLO-STATUS=$6 SEVERITY=1" "LNK-PROOF: === END ==="
+        "LNK-PROOF: HELLO-STATUS=$6 SEVERITY=1" \
+        "LNK-PROOF: DCL-LINK-STATUS=%X00000001 SEVERITY=1" \
+        "LNK-PROOF: === INDEPENDENT READER: DCL DUMP HELLO2.EXE ===" \
+        && sed 's/$/\r/' "$_st/${8:-good}.dump" \
+        && printf '%s\r\n' "LNK-PROOF: DUMP2-STATUS=%X00000001 SEVERITY=1" \
+        "LNK-PROOF: === RUN THE DCL-LINKED PROGRAM: RUN HELLO2.EXE ===" "${9-hello from cc1 on OVMX 49}" \
+        "LNK-PROOF: HELLO2-STATUS=${10:-%X00000001} SEVERITY=1" "LNK-PROOF: === END ==="
     }
     mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 > "$_st/pass.log"
     mklog 1 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 > "$_st/nocc1.log"
@@ -2037,9 +2049,12 @@ PYEOF2
     mklog 0 0 0 0x0035a039 "" %X00000001 > "$_st/noout.log"
     mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X0000002C > "$_st/badstatus.log"
     mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 bad > "$_st/diffexe.log"
+    mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good bad > "$_st/diffexe2.log"
+    mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good good "" > "$_st/noout2.log"
+    mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good good "hello from cc1 on OVMX 49" %X0000002C > "$_st/badstatus2.log"
     mklog 0 0 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 short > "$_st/shortexe.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:LINK terminated abnormally (signal 11)'; } > "$_st/crash.log"
-    for _c in "pass:0" "nocc1:1" "noas:1" "nolink:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "crash:1"; do
+    for _c in "pass:0" "nocc1:1" "noas:1" "nolink:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "diffexe2:1" "noout2:1" "badstatus2:1" "shortexe:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_lnk "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  link selftest $_n: PASS"; else echo "  link selftest $_n: FAIL"; _fails=$((_fails+1)); fi

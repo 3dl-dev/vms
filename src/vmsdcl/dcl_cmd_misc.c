@@ -3256,7 +3256,8 @@ int cmd_attach(struct dcl_command *cmd)
  * Without /FDL the output keeps the input's records and attributes, which a
  * text-file copy does faithfully, and -- as on VMS -- the command is silent
  * on success. /FDL asks for a RECORD-FORMAT CONVERSION (organization, record
- * format, keys) that OVMX does not perform: it is refused, never accepted and
+ * format, keys) that OVMX does not perform: DCL rejects it as an unrecognized
+ * qualifier (%DCL-W-IVQUAL, via q_convert) before this runs, never accepted and
  * ignored, and nothing is written.
  */
 int cmd_convert(struct dcl_command *cmd)
@@ -3265,14 +3266,6 @@ int cmd_convert(struct dcl_command *cmd)
 
     if (cmd->param_count < 2) {
         dcl_error("CONVERT", 2, "NOINPFIL", "missing input and/or output file");
-        return SS$_BADPARAM;
-    }
-
-    /* /FDL requests a real format conversion this utility cannot do: refuse
-     * before touching either file, so no unconverted copy is passed off as one. */
-    if (dcl_has_qualifier(cmd, "FDL")) {
-        dcl_error("CONVERT", 2, "NOFDL",
-                  "/FDL record-format conversion is not supported; nothing converted");
         return SS$_BADPARAM;
     }
 

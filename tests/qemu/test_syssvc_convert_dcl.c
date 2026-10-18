@@ -6,7 +6,7 @@
  * then line-copied the file and printed "%CONVERT-S-CONVERTED, N records
  * converted" -- claiming a record-format conversion it never did. Now: a plain
  * CONVERT is a record-for-record copy and silent on success (as on VMS); /FDL,
- * which asks for a real conversion, is refused with %CONVERT-E-NOFDL and writes
+ * which asks for a real conversion, is refused with %DCL-W-IVQUAL and writes
  * nothing.
  *
  * With no executive (the negative-control rig) it exits EXIT_SKIP (77), the
@@ -126,8 +126,8 @@ int main(void)
     char fdlpath[128];
     snprintf(fdlpath, sizeof fdlpath, "%s/fdl_out.txt", dir);
     /* negctl: dcl-convert-claims-converted */
-    CHECK(strstr(out2, "CONVERT-E-NOFDL") != NULL,
-          "CONVERT/FDL is refused (%CONVERT-E-NOFDL), not accepted-and-ignored");
+    CHECK(strstr(out2, "DCL-W-IVQUAL") != NULL,
+          "CONVERT/FDL is rejected (%DCL-W-IVQUAL), not accepted-and-ignored");
     /* negctl: dcl-convert-claims-converted */
     CHECK(access(fdlpath, F_OK) != 0,
           "CONVERT/FDL wrote no output file (no unconverted copy passed off as converted)");

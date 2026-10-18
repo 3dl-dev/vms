@@ -48,6 +48,10 @@ libvms_add_test(test_libvms_lib_vm
 libvms_add_test(test_libvms_lib_bitops
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_bitops.c)
 
+# Test 3b: lib$match_cond -- condition-code match (severity/control bits ignored)
+libvms_add_test(test_libvms_lib_match_cond
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_match_cond.c)
+
 # Test 4: str$copy_dx / str$concat / str$compare / str$trim / str$upcase / str$match_wild
 libvms_add_test(test_libvms_str_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_str_routines.c)

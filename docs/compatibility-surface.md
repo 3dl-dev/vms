@@ -11,12 +11,12 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 357 |
-| 🟢 implemented | 304 | | n/a | 81 |
+| ✅ verified | 24 | | real | 358 |
+| 🟢 implemented | 305 | | n/a | 80 |
 | 🟡 partial | 71 | | advisory | 51 |
 | 🟠 stub | 10 | | facade-risk | 1 |
 | 🔵 designed | 1 | |  |  |
-| ⬜ absent | 80 | |  |  |
+| ⬜ absent | 79 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **444 committed** — **328 met** (implemented/verified), 67 in progress (partial), 49 not started (absent/stub/designed).
+- **444 committed** — **329 met** (implemented/verified), 67 in progress (partial), 48 not started (absent/stub/designed).
 - ⚠ **1 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
@@ -34,7 +34,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (165 met · 22 in progress · 34 not started) · V1: 212 committed, 165 met
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (166 met · 22 in progress · 33 not started) · V1: 212 committed, 166 met
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)
 <sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-10-18</sub>
@@ -42,7 +42,7 @@ _The C source-compatibility surface: descriptors, status codes, system services,
 Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5): dispatch_condition() searches the PRIMARY software exception vector, then the LIB$ESTABLISH frame-handler chain, then the SECONDARY and LAST-CHANCE vectors, in the authentic order (lib_signal.c). LIB$ESTABLISH/REVERT/SIGNAL/STOP/ SIG_TO_RET (5 of ~8 core LIB$ CHF entry points) are implemented; the chain is thread-local single-mode userspace (documented, not a per-process fake of a shared facility). SYS$UNWIND is a real frame transfer (rung-2, vms-8802): honors newpc, abandons intervening frames via setjmp/longjmp into an armed VMS$UNWIND_ANCHOR, and on an anchorless ancestor reconstructs the frame by walking the genuine Alpha call chain (PDSC+RSA) through the LIB$GET_*_INVO primitives (rung-3, vms-1fa). SYS$SETEXV establishes the primary/secondary/ last-chance vectors (rung-1, vms-2e72). Hardware faults are bridged to conditions through the SAME dispatcher: SS$_HPARITH from SIGFPE (arith bridge, vms-db3) and SS$_ACCVIO from SIGSEGV/SIGBUS/SIGILL (rung-4, vms-cc8), both Alpha. SYS$DCLEXH registers a real PCB exit handler run LIFO by SYS$EXIT. chf$mech_array frame+depth+savr0 are real; only savr1 stays 0 (host C ABI exposes no VAX/Alpha R1). LIB$SIG_TO_STOP, LIB$MATCH_COND and SYS$EXIV remain absent. Not oracle-verified (local corpus self-tests only, tests/corpus/ tier1-examples/lib_establish.c / lib_sig_to.c / sys_unwind.c) -> implemented, not verified.
 
 
-<sub>15 items · 13 met · 0 in progress · 2 not started</sub>
+<sub>15 items · 14 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -52,7 +52,7 @@ Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5): d
 | 🟢≈ | `lib$stop` | routine | Signal a condition and force program exit if unhandled | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` |
 | 🟢≈ | `lib$sig_to_ret` | routine | Convert a signal to a return status | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` — writes chf$is_mch_savr0 = the signalled condition name |
 | 🟢≈ | `lib$sig_to_stop` | routine | Convert a signal to a stop | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` — re-signals a failure condition through lib$stop; success/informational conditions are resignalled untouched |
-| ⬜ | `lib$match_cond` | routine | Match a condition code against a list, ignoring severity | absent | n/a | in |  |
+| 🟢 | `lib$match_cond` | routine | Match a condition code against a list, ignoring severity | implemented | real | in | `src/libvms/rtl/lib_signal.c` — Compares the condition code field (bits 3..27) of the signalled value with up to eight listed conditions, ignoring severity and control bits; returns the 1-based index or 0. Unit test tests/libvms/test_lib_match_cond.c; used by the tier-1 sys_unwind corpus example. |
 | 🟢 | `lib$_get_invo_context` | routine | Invocation-context primitives (LIB$GET_CURR_INVO_CONTEXT, LIB$GET_PREV_INVO_CONTEXT, LIB$GET_INVO_CONTEXT, LIB$GET_INVO_HANDLE, LIB$GET_PREV_INVO_HANDLE) | implemented | real | in | `src/libvms/rtl/lib_invo.c` — Alpha (CHF rung-3, vms-1fa): walks the genuine Alpha call chain (PDSC+RSA, Alpha Calling Standard) so perform_unwind() can resume into an anchorless ancestor |
 | 🟢≈ | `chf$mech_array` | struct | Condition-handler mechanism-args array (savr0/savr1/frame fields) | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` — chf$ph_mch_frame + chf$is_mch_depth are real (establisher frame via __builtin_frame_address + real chain depth); chf$is_mch_savr0 is written by lib$sig_to_ret. Only chf$is_mch_savr1 stays 0 -- the host C ABI exposes no VAX/Alpha R1 to capture (documented gap, not fabrication) |
 | 🟢≈ | `sys$unwind` | routine | Unwind the call stack to an establisher, transferring control (optionally to newpc) | implemented | advisory | in | `src/libvms/syssvc/sys_condition.c` — rung-2 (vms-8802): records a deferred unwind (target depth + newpc) that the dispatcher performs on the requesting handler's return -- real frame transfer via setjmp/longjmp into an armed VMS$UNWIND_ANCHOR, or an Alpha PDSC/RSA walk (lib_invo.c) for an anchorless ancestor. Single-mode userspace; not executive-resident |

@@ -115,6 +115,7 @@ struct vms_tt {
 	int      ctrlo;            /* CTRL/O: output is being discarded */
 	int      rd_astpend;       /* an AST for the reader's process is queued */
 	int      rd_disturbed;     /* output broke through the read: redisplay */
+	uint32_t diag_reads;       /* DIAG ONLY: reads started */
 };
 
 /* ------------------------------------------------------------------ */
@@ -1215,6 +1216,7 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 	}
 
 	if (!resumed) {
+		tt->diag_reads++;
 		tt->rd_busy = 1;
 		tt->rd_done = 0;
 		tt->rd_owner = req->owner;
@@ -1525,7 +1527,7 @@ void *vms_tt_diag(struct vms_tt *tt, uint32_t out[12])
 	out[8] = tt->ta_len;
 	out[9] = tt->port_gen;
 	out[10] = (uint32_t)(uintptr_t)tt->port;
-	out[11] = (uint32_t)tt->len;
+	out[11] = tt->diag_reads;
 	port = tt->port;
 	exec_unlock(&tt->lock);
 	return port;

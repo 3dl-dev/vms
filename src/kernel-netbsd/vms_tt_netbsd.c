@@ -717,7 +717,6 @@ static void
 vtt_diag_thread(void *arg __unused)
 {
 	int seq = 0;
-	u_int lastsig = 0xffffffff;
 	static char dbuf[480];
 
 	for (;;) {
@@ -761,15 +760,25 @@ vtt_diag_thread(void *arg __unused)
 			vms_tt_release(tt);
 		}
 		{
-			u_int sig = (pdead << 0) | (ps << 1) | ((u_int)have_tt << 2) | (d[0] << 3) |
-			    (d[1] << 4) | (d[2] << 5) | (d[3] << 6) | (d[4] << 7) |
-			    ((d[5] ? 1u : 0u) << 8) | ((u_int)(ld + 1) << 9) | (d[9] << 12) |
-			    ((rawq ? 1u : 0u) << 20) | ((canq ? 1u : 0u) << 21) | ((outc ? 1u : 0u) << 22) |
-			    ((rxl ? 1u : 0u) << 23) | ((d[7] ? 1u : 0u) << 24) | ((d[8] ? 1u : 0u) << 25);
+			static u_int prev_rint, prev_reads, prev_bad;
+			u_int bad = 0, cur_rint = vtt_c_rint;
+			int print = 0;
 
-			if (sig == lastsig && (seq % 8) != 0)
+			if (seq > 14 && have_tt && !d[2])
+				bad |= 1;                      /* no read active */
+			if (d[8] || rxl)
+				bad |= 2;                      /* unread type-ahead / rx */
+			if (cur_rint != prev_rint && d[11] == prev_reads && d[2])
+				print = 1;                     /* input arrived, no read restarted */
+			if (bad && (bad & prev_bad))
+				print = 1;
+			if (seq == 40)
+				print = 1;                     /* the thread is alive */
+			prev_rint = cur_rint;
+			prev_reads = d[11];
+			prev_bad = bad;
+			if (!print)
 				continue;
-			lastsig = sig;
 		}
 		n = snprintf(dbuf, sizeof(dbuf), "\r\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u ld=%d rawq=%u canq=%u rint=%u drop=%u recv=%u open=%u close=%u recl=%u\n",
 		    seq, tp != NULL, pp, pdead, prefs, rxl, outc, ts, ps, have_tt,

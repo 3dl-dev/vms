@@ -586,10 +586,10 @@ assert_lnk() {
 # program, run by DCL, printed its line and finished with a success status, and (d) no
 # activation error or abnormal termination.
 assert_drl() {
-  local log="$1" r1="$2" r2="$3"
+  local log="$1" r1="$2" r2="$3" r1b="$4" r2b="$5"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
-  [ -s "$r1" ] && [ -s "$r2" ] || { echo "  FAIL: no reference image"; return 1; }
-  local sys_ok=0 drv_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 ran=0 st_ok=0
+  [ -s "$r1" ] && [ -s "$r2" ] && [ -s "$r1b" ] && [ -s "$r2b" ] || { echo "  FAIL: no reference image"; return 1; }
+  local sys_ok=0 same2=0 ran2=0 st2_ok=0 drv_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 ran=0 st_ok=0
   drv_ok=$(grep -qaE 'OVMX xgcc run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
@@ -607,6 +607,12 @@ assert_drl() {
   grep -aqE 'DRL-PROOF: HELLO-STATUS=%X00000001 SEVERITY=1' "$log" && st_ok=1
   # system(): the good command printed its line and returned odd, the bad one returned even (SS$_ABORT)
   grep -aqE 'OVMX system: ok_rc=[0-9]*[13579] bad_rc=[0-9]*[02468]' "$log" && tr -d '\r' < "$log" | grep -x 'OVMX-SYSTEM-OK' >/dev/null && sys_ok=1
+  # the program that includes system headers, compiled with no -nostdinc
+  CMP_BEGIN="DRL-PROOF: === INDEPENDENT READER: DCL DUMP HELLO2.EXE ===" CMP_END="DRL-PROOF: DUMP2-STATUS=" \
+    python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1b" "$r2b" && same2=1
+  awk '/DRL-PROOF: === RUN THE HEADER PROGRAM/{f=1; next} /DRL-PROOF: HELLO2-STATUS=/{f=0} f' "$log" | tr -d '\r' \
+    | grep -x 'hello2 headers 7' >/dev/null && ran2=1
+  grep -aqE 'DRL-PROOF: HELLO2-STATUS=%X00000001 SEVERITY=1' "$log" && st2_ok=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
@@ -614,8 +620,9 @@ assert_drl() {
   echo "  (b) launcher seam     : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
   echo "  (c) DCL DUMP HELLO.EXE == the cross driver image : same=$same ; RUN printed the line : $ran ; success status : $st_ok"
   echo "  (c2) system(): a good command returns odd and ran, a bad one returns an even value : ok=$sys_ok"
+  echo "  (c3) HELLO2 (system headers, default search): DUMP == cross driver image : same=$same2 ; RUN printed the line : $ran2 ; success status : $st2_ok"
   echo "  (d) no activation err : ok=$err_ok"
-  [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -2196,6 +2203,7 @@ import sys
 d = sys.argv[1]
 ref1 = bytes(range(1, 91)); r2 = bytearray(ref1); r2[20] ^= 0xff; r2[21] ^= 0xff
 open(d + "/r1.exe", "wb").write(ref1); open(d + "/r2.exe", "wb").write(bytes(r2))
+open(d + "/r1b.exe", "wb").write(ref1); open(d + "/r2b.exe", "wb").write(bytes(r2))
 def dump(b):
     out = []
     for o in range(0, len(b), 16):
@@ -2216,7 +2224,12 @@ PYEOF2
         && sed 's/$/\r/' "$_st/${5:-good}.dump" \
         && printf '%s\r\n' "DRL-PROOF: DUMP-STATUS=%X00000001 SEVERITY=1" \
         "DRL-PROOF: === RUN THE LINKED PROGRAM: RUN HELLO.EXE ===" "$3" \
-        "DRL-PROOF: HELLO-STATUS=$4 SEVERITY=1" "DRL-PROOF: === END ==="
+        "DRL-PROOF: HELLO-STATUS=$4 SEVERITY=1" \
+        "DRL-PROOF: === INDEPENDENT READER: DCL DUMP HELLO2.EXE ===" \
+        && sed 's/$/\r/' "$_st/${8:-good}.dump" \
+        && printf '%s\r\n' "DRL-PROOF: DUMP2-STATUS=%X00000001 SEVERITY=1" \
+        "DRL-PROOF: === RUN THE HEADER PROGRAM: RUN HELLO2.EXE ===" "${9-hello2 headers 7}" \
+        "DRL-PROOF: HELLO2-STATUS=${10:-%X00000001} SEVERITY=1" "DRL-PROOF: === END ==="
     }
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 > "$_st/pass.log"
     mklog 1 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 > "$_st/noxgcc.log"
@@ -2226,12 +2239,16 @@ PYEOF2
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X0000002C > "$_st/badstatus.log"
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 bad > "$_st/diffexe.log"
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 short > "$_st/shortexe.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good 1 44 good bad > "$_st/diffexe2.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good 1 44 good good "" > "$_st/noout2.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good 1 44 good good "hello2 headers 8" > "$_st/wrongout2.log"
+    mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good 1 44 good good "hello2 headers 7" %X0000002C > "$_st/badstatus2.log"
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good 0 44 > "$_st/syszero.log"
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 good 1 1 > "$_st/sysbadok.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:LD terminated abnormally (signal 11)'; } > "$_st/crash.log"
-    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "crash:1"; do
+    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "diffexe2:1" "noout2:1" "wrongout2:1" "badstatus2:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
-      if assert_drl "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if assert_drl "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" "$_st/r1b.exe" "$_st/r2b.exe" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  xgcclink selftest $_n: PASS"; else echo "  xgcclink selftest $_n: FAIL"; _fails=$((_fails+1)); fi
     done
     rm -rf "$_st"
@@ -2284,7 +2301,21 @@ PYEOF2
           $G -nostdinc -x c "VDA0:[SYSTMP]HELLO.C" -o r$n/hello.exe
           [ "$n" = 1 ] && sleep 3
         done
-        cp r1/hello.exe ref1.exe; cp r2/hello.exe ref2.exe' \
+        cp r1/hello.exe ref1.exe; cp r2/hello.exe ref2.exe
+        printf "%s\n" "#include <stdio.h>" "#include <stdlib.h>" "#include <string.h>" "int main (void)" "{" \
+          "  char *p = malloc (16);" "  strcpy (p, \"headers\");" \
+          "  printf (\"hello2 %s %d\\n\", p, (int) strlen (p));" "  free (p);" "  return 0;" "}" > /img/hello2.c
+        cp hello2.c "VDA0:[SYSTMP]HELLO2.C"
+        for n in 1 2; do
+          $G -x c "VDA0:[SYSTMP]HELLO2.C" -o r$n/hello2.exe
+          [ "$n" = 1 ] && sleep 3
+        done
+        cp r1/hello2.exe ref1b.exe; cp r2/hello2.exe ref2b.exe
+        # the headers the native driver is given: the cross sysroot (musl C RTL + STARLET) and
+        # the compiler own, in the trees the staged system volume carries
+        mkdir -p inc/usr inc/gnu
+        cp -rL /out/cxx/sysroot/usr/include inc/usr/include
+        cp -rL "$($G -print-file-name=include)" inc/gnu/gcc-include' \
       > "$GATE_ROOT/drl-link.log" 2>&1 || { tail -40 "$GATE_ROOT/drl-link.log"; die "launcher link / reference build failed"; }
     [ -s "$GATE_ROOT/drlimg/ref1.exe" ] || die "the cross driver wrote no reference image"
     cp "$GATE_ROOT/drlimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
@@ -2297,6 +2328,7 @@ PYEOF2
       [ -s "$_jr/$_p.EXE" ] || die "no $_p.EXE in $_jr"
       cp "$_jr/$_p.EXE" "$WORK/joint/$_p.EXE"
     done
+    rm -rf "$WORK/joint/inc"; cp -r "$GATE_ROOT/drlimg/inc" "$WORK/joint/inc"
     : > "$WORK/joint/DRL_PROOF"
     assemble_boot_image
     log "step 3: BOOT A -- the GCC driver compiles and links on the REAL executive, then DCL RUNs HELLO.EXE (up to ${BOOT_TIMEOUT}s)"
@@ -2304,7 +2336,7 @@ PYEOF2
     run_boot_a
     # everything the proof printed, the driver's own output included
     awk '/DRL-PROOF: === DCL writes the C source/{f=1} f' "$WORK/modgpA.log" 2>/dev/null | tr -d '\r' | sed 's/^/  | /' || true
-    if assert_drl "$WORK/modgpA.log" "$GATE_ROOT/drlimg/ref1.exe" "$GATE_ROOT/drlimg/ref2.exe"; then
+    if assert_drl "$WORK/modgpA.log" "$GATE_ROOT/drlimg/ref1.exe" "$GATE_ROOT/drlimg/ref2.exe" "$GATE_ROOT/drlimg/ref1b.exe" "$GATE_ROOT/drlimg/ref2b.exe"; then
       echo ""
       echo "PASS: the GCC driver, built for the alpha-dec-vms host, compiled and linked a C program on"
       echo "      OVMX/Alpha (cc1, as, ld -> DCL LINK -> LINK.EXE); RUN HELLO.EXE printed its line."

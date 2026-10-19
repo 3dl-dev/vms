@@ -344,6 +344,14 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 done
                 [ -f "$JOINT/STARLET.a" ] || { echo "FAIL: DRL_PROOF without STARLET.a"; exit 1; }
                 cp "$JOINT/STARLET.a" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/STARLET.A"
+                # the C system headers ([USR.INCLUDE]) and the compiler own ([GNU.LIB.GCC.ALPHA-DEC-VMS.14_2_0.INCLUDE]):
+                # where the driver looks by default (logicals USR and GNU, defined by the proof SYSTARTUP)
+                if [ -d "$JOINT/inc/usr/include" ]; then
+                    mkdir -p "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0"
+                    cp -r "$JOINT/inc/usr/include" "$ST/vms/SYS0/SYSCOMMON/USR/INCLUDE"
+                    cp -r "$JOINT/inc/gnu/gcc-include" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0/INCLUDE"
+                    echo "   JOINT-E2E (HEADERS): $(find "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU" -type f | wc -l) header file(s) -> [USR.INCLUDE], [GNU.LIB.GCC.ALPHA-DEC-VMS.14_2_0.INCLUDE]"
+                fi
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (DRIVER LINK): xgcc/cc1/as/ld/link.exe + start files + libgcc.a -> SYS\$SYSEXE; STARLET.A -> SYS\$LIBRARY; DRL-proof SYSTARTUP staged"

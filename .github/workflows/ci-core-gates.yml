@@ -434,6 +434,11 @@ jobs:
       # pre-quiet Node B capture (teeth) and a quiet VMS console (no false red).
       - name: Run console-quiet (substrate_lines) self-tests
         run: python3 -m pytest tests/lab-vax/test_substrate_quiet.py -v
+
+      # rd vms-25f: the closed-console receive-interrupt patch (a closed line must
+      # still read RXDB), pinned against the upstream gencons.c (teeth + applies).
+      - name: Run gencons closed-console patch self-tests
+        run: python3 -m pytest tests/lab-vax/test_gencons_patch.py -v
   # -----------------------------------------------------------------------
   # Job: NetBSD/amd64 console driver self-test (rd vms-d83 / vms-d984)
   #

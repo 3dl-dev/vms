@@ -88,6 +88,24 @@ else
   echo "applied netbsd-ovmx-quiet.patch (OVMX_QUIET kernel option + quiet /boot)"
 fi
 
+# --- rd vms-25f: a closed console must still take its receive character -------
+# NetBSD's gencnrint() returns WITHOUT reading RXDB when the console line is
+# closed (sc->alive == 0). OVMX closes the console whenever a session leader
+# exits (the vnode is revoked), while the receiver's interrupt stays enabled, so a
+# key struck in that window left RCSR DONE set for good: no further interrupt, no
+# further input (the wake RETURN of a timed-out login was the usual one). The
+# patch reads and drops the character, as a closed line does. Idempotent.
+GENCONS_PATCH="${GENCONS_PATCH:-/src/tools/cross-vax/netbsd-ovmx-gencons.patch}"
+[ -f "$GENCONS_PATCH" ] || { echo "FAIL: $GENCONS_PATCH not found"; exit 2; }
+if grep -q 'rd vms-25f' "$SRC/sys/arch/vax/vax/gencons.c"; then
+  echo "netbsd-ovmx-gencons.patch already applied"
+else
+  patch -d "$SRC" -p1 --dry-run -s < "$GENCONS_PATCH" \
+    || { echo "FAIL: netbsd-ovmx-gencons.patch does not apply to $SRC"; exit 1; }
+  patch -d "$SRC" -p1 -s < "$GENCONS_PATCH"
+  echo "applied netbsd-ovmx-gencons.patch (closed console reads and drops RXDB)"
+fi
+
 # --- custom kernel config: GENERIC + the module framework (idempotent) -------
 CONF="$SRC/sys/arch/vax/conf/OVMX"
 if [ ! -f "$CONF" ]; then

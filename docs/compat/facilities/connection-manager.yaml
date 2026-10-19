@@ -360,10 +360,12 @@ items:
       tests/lab/captures/vms-d52c-ovmx-first-20261012) OVMXE founded alone and
       admitted both VAX V7.3 nodes, CN=3 with OVMXE as coordinator, no second
       cluster, 0 bugchecks. The mixed demo topology (a real VAX V7.3 plus two booted OVMX
-      nodes) is intermittent on the V0.7-12 build: the 8-order visitor gate passed 8 of 8 on the
-      release candidate (openvmx-site run 39101853519) and 6 of 8 on the tagged commit (run
-      39111772800), with 0 VAX bugchecks in both; the failures are OVMXB running out of memory
-      during startup (vms-4029) and a login prompt that does not restart (vms-25f). Open, tracked under vms-ci.6: a VAX admitted by an
+      nodes, Node B a 32 MB MicroVAX 3900) passed the 8-order visitor gate on the V0.7-13
+      release candidate with Node B built from it: 8 of 8, 0 VAX bugchecks, the VAX offered
+      Username: and both OVMX nodes reached a logged-in DCL prompt (openvmx-site run
+      39187392378). The V0.7-12 build passed 6 of 8 on its tagged commit (run 39111772800).
+      Intermittent: a rare console-input wedge after a login timeout remains (vms-25f
+      residual, about 1 in 50 throttled runs). Open, tracked under vms-ci.6: a VAX admitted by an
       OVMX founder reaching Username: (the startup traffic OVMX withheld is
       answered by vms-db1 #1655, vms-52d #1668 and the 0b/04 apply of vms-94a
       #1677; the end-to-end startup is not yet shown in this capture), OVMX

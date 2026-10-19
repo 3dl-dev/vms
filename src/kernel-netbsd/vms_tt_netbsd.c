@@ -56,7 +56,10 @@
 #include <sys/queue.h>
 #include <sys/errno.h>
 #include <sys/kthread.h>
-#include <dev/cons.h>          /* cn_tab: which tty is the console */
+#include <dev/cons.h>
+#if defined(__vax__)
+#include <machine/mtpr.h>     /* DIAG: mfpr(PR_RXCS) */
+#endif          /* cn_tab: which tty is the console */
 
 #include "vms_internal.h"
 #include "vms_tt.h"
@@ -727,10 +730,15 @@ vtt_diag_thread(void *arg __unused)
 		uint32_t d[12];
 		u_int outc = 0, ts = 0, ps = 0, rxl = 0, pdead = 0, prefs = 0, rawq = 0, canq = 0;
 		int ld = -1;
+		u_int rxcs = 0xffffffff, txcs = 0xffffffff;
 		void *pp = NULL;
 		int have_tt = 0;
 
 		(void)kpause("vttdg", false, hz * 15, NULL);
+#if defined(__vax__)
+		rxcs = (u_int)mfpr(PR_RXCS);
+		txcs = (u_int)mfpr(PR_TXCS);
+#endif
 		seq++;
 		memset(d, 0, sizeof(d));
 		mutex_enter(&vtt_park_lock);
@@ -774,15 +782,17 @@ vtt_diag_thread(void *arg __unused)
 				print = 1;
 			if (seq == 40)
 				print = 1;                     /* the thread is alive */
+			if (seq >= 12 && cur_rint <= 1)
+				print = 1;                     /* the console never delivered input */
 			prev_rint = cur_rint;
 			prev_reads = d[11];
 			prev_bad = bad;
 			if (!print)
 				continue;
 		}
-		n = snprintf(dbuf, sizeof(dbuf), "\r\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u ld=%d rawq=%u canq=%u rint=%u drop=%u recv=%u open=%u close=%u recl=%u\n",
+		n = snprintf(dbuf, sizeof(dbuf), "\r\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u ld=%d rawq=%u canq=%u rint=%u drop=%u recv=%u open=%u close=%u recl=%u rxcs=%x txcs=%x\n",
 		    seq, tp != NULL, pp, pdead, prefs, rxl, outc, ts, ps, have_tt,
-		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], ld, rawq, canq, vtt_c_rint, vtt_c_rint_drop, vtt_c_recv, vtt_c_open, vtt_c_close, vtt_c_reclaim);
+		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], ld, rawq, canq, vtt_c_rint, vtt_c_rint_drop, vtt_c_recv, vtt_c_open, vtt_c_close, vtt_c_reclaim, rxcs, txcs);
 		for (k = 0; k < n && k < (int)sizeof(dbuf); k++)
 			cnputc((unsigned char)dbuf[k]);
 	}

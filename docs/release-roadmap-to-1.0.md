@@ -111,7 +111,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-10-18** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-10-19** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -132,7 +132,7 @@ only our forks target.
 |---|---|---|---|---:|---:|
 | Executive substrate | `vms-6b8` | 0.5 | in progress | 18/22 | 0 |
 | Command-surface parity | `vms-8ad` | continuous | in progress | 41/74 | 0 |
-| Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 19/25 | 1 |
+| Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 19/25 | 0 |
 | Cluster configuration | `vms-098` | 0.5→0.9 | in progress | 5/18 | 9 |
 | TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 31/63 | 9 |
 | DECnet Phase IV | `vms-30e` | 0.9 | in progress | 59/84 | 1 |
@@ -313,6 +313,7 @@ only our forks target.
 
 ### Shipped releases (git tags)
 
+- **V0.7-13** — Point release.
 - **V0.7-12** — Point release.
 - **V0.7-11** — Point release.
 - **V0.7-10** — Point release.
@@ -324,7 +325,6 @@ only our forks target.
 - **V0.7-4** — Point release.
 - **V0.7-3** — Point release.
 - **V0.7-2** — Point release.
-- **V0.7-1** — Point release.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

@@ -2340,7 +2340,7 @@ PYEOF2
           [ "$n" = 1 ] && sleep 3
         done
         cp r1/hello2.exe ref1b.exe; cp r2/hello2.exe ref2b.exe
-        # the native build, done by the cross toolchain: two objects, an archive, a program
+        # the native build, done by the cross toolchain (the host ar: the alpha-dec-vms ar writes the VMS library format, LINK reads System V archives): two objects, an archive, a program
         # linked against it (twice, to find the link time-stamp bytes)
         printf "%s\n" "int two_a (int x) { return x + 3; }" > twoa.c
         printf "%s\n" "int two_b (int x) { return x * 4; }" > twob.c
@@ -2350,7 +2350,7 @@ PYEOF2
         for n in 1 2; do
           $G -nostdinc -x c -c "VDA0:[SYSTMP]TWOA.C" -o r$n/twoa.o
           $G -nostdinc -x c -c "VDA0:[SYSTMP]TWOB.C" -o r$n/twob.o
-          rm -f r$n/libtwo.a; /opt/cross-alpha-vms/bin/alpha-dec-vms-ar rc r$n/libtwo.a r$n/twoa.o r$n/twob.o
+          rm -f r$n/libtwo.a; ar rcS r$n/libtwo.a r$n/twoa.o r$n/twob.o
           $G -nostdinc -x c "VDA0:[SYSTMP]TWOMAIN.C" -o r$n/two.exe -x none r$n/libtwo.a
           [ "$n" = 1 ] && sleep 3
         done

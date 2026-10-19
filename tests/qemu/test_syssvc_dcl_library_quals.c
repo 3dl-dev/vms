@@ -5,12 +5,13 @@
  * THE BUG THIS GUARDS. LIBRARY was an accept-all verb: LIBRARY/MACRO x.OLB or
  * a typo'd /CREAT silently dropped the qualifier and listed the library
  * instead. cmd_library now declares exactly the qualifiers its handlers act
- * on (plus /COMPRESS and /VAX, no-ops by construction: every update rewrites
- * the whole container); anything else is %DCL-W-IVQUAL.
+ * on; /COMPRESS really rewrites an object library (to /OUTPUT), /VAX is honoured
+ * only on the VAX rail; anything else is %DCL-W-IVQUAL.
  *
  * With no executive (the negative-control rig) it exits EXIT_SKIP (77), the
  * honest-skip code that job requires of every public-sys$ suite.
- * NEGATIVE CONTROL: tests/qemu/defects.d/dcl-library-quals-accept-all.defect.
+ * NEGATIVE CONTROLS: tests/qemu/defects.d/dcl-library-quals-accept-all.defect and
+ * dcl-library-compress-noop.defect.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,8 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <sys/wait.h>
+#include <dirent.h>
+#include <strings.h>
 
 #include "ssdef.h"
 #include "vms_kif.h"
@@ -87,20 +90,53 @@ int main(void)
         return 1;
     }
 
+    char dir[] = "/tmp/ovmx_lb_XXXXXX";
+    if (!mkdtemp(dir)) { printf("  FAIL: mkdtemp\n"); return 1; }
+    char path[160];
+    snprintf(path, sizeof path, "%s/X.OBJ", dir);
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0 || write(fd, "member\n", 7) != 7) { printf("  FAIL: write X.OBJ\n"); return 1; }
+    close(fd);
+
     static char out[16384];
-    CHECK(run_dcl("LIBRARY/ZQONE NOSUCH.TLB\nLIBRARY/MACRO NOSUCH.TLB\n"
-                  "LIBRARY/OBJECT/VAX/COMPRESS=BLOCK=0 NOSUCH.OLB\n", out, sizeof out) == 0,
-          "DCL ran the LIBRARY qualifier probes");
+    char script[1024];
+    snprintf(script, sizeof script,
+             "DEFINE LBDIR \"%s\"\nSET DEFAULT LBDIR:[000000]\n"
+             "LIBRARY/ZQONE NOSUCH.TLB\nLIBRARY/MACRO NOSUCH.TLB\n"
+             "LIBRARY/CREATE/OBJECT Z.OLB X.OBJ\n"
+             "LIBRARY/OBJECT/COMPRESS=BLOCK=0/OUTPUT=P.OLB Z.OLB\n"
+             "LIBRARY/TEXT/COMPRESS NOSUCH.TLB\n"
+             "LIBRARY/OBJECT/VAX NOSUCH.OLB\n", dir);
+    CHECK(run_dcl(script, out, sizeof out) == 0, "DCL ran the LIBRARY probes");
     printf("  ---- LIBRARY probes ----\n%s  ---- end ----\n", out);
     /* negctl: dcl-library-quals-accept-all */
     CHECK(strstr(out, "\\ZQONE\\") != NULL, "LIBRARY/ZQONE is %DCL-W-IVQUAL");
     /* negctl: dcl-library-quals-accept-all */
     CHECK(strstr(out, "\\MACRO\\") != NULL,
           "LIBRARY/MACRO (not implemented) is %DCL-W-IVQUAL, not silently dropped");
-    CHECK(strstr(out, "\\VAX\\") == NULL && strstr(out, "\\COMPRESS\\") == NULL &&
-          strstr(out, "\\OBJECT\\") == NULL,
-          "the declared qualifiers (/OBJECT /VAX /COMPRESS) are accepted, not refused");
+    CHECK(strstr(out, "LIBRARIAN-S-COMPRESSED") != NULL, "LIBRARY/OBJECT/COMPRESS reports the rewrite");
+    int found = 0;
+    DIR *d = opendir(dir);
+    for (struct dirent *e; d && (e = readdir(d)); )
+        if (strcasecmp(e->d_name, "P.OLB") == 0) found = 1;
+    if (d) closedir(d);
+    /* negctl: dcl-library-compress-noop */
+    CHECK(found, "LIBRARY/COMPRESS/OUTPUT=P.OLB wrote the output library");
+    CHECK(strstr(out, "\\COMPRESS\\") != NULL,
+          "/COMPRESS on a TEXT library is %DCL-W-IVQUAL, not silently accepted");
+    CHECK(strstr(out, "\\VAX\\") != NULL,
+          "/VAX off the VAX rail is %DCL-W-IVQUAL, not a silently non-VAX library");
 
+    {
+        DIR *c = opendir(dir);
+        for (struct dirent *e; c && (e = readdir(c)); ) {
+            if (e->d_name[0] == '.') continue;
+            snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
+            unlink(path);
+        }
+        if (c) closedir(c);
+        rmdir(dir);
+    }
     printf("=== test_syssvc_dcl_library_quals: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

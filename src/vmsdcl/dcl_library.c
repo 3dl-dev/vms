@@ -1119,6 +1119,38 @@ static int olb_delete_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/*
+ * LIBRARY/OBJECT/COMPRESS [/OUTPUT=file] lib.OLB -- rewrite the library to
+ * reclaim space. The container is read member by member and written out whole
+ * (to /OUTPUT when given, else over the input), exactly the rewrite VMS does.
+ */
+static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    char lib_path[1024], out_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
+    const char *outspec = dcl_qualifier_value(cmd, "OUTPUT");
+    if (outspec && outspec[0])
+        dcl_resolve_path(ctx, outspec, out_path, sizeof(out_path));
+    else
+        snprintf(out_path, sizeof(out_path), "%s", lib_path);
+
+    struct olb_member *members = NULL;
+    uint32_t count = 0, cap = 0;
+    int st = olb_load(ctx, cmd->params[0], lib_path, &members, &count, &cap);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
+
+    if (olb_write(out_path, members, count) != OLB_OK) {
+        olb_free(members, count);
+        dcl_error("LIBRARIAN", 2, "OPENOUT",
+                  "error writing library - %s", outspec && outspec[0] ? outspec : cmd->params[0]);
+        return SS$_FILACCERR;
+    }
+    olb_free(members, count);
+    printf("%%LIBRARIAN-S-COMPRESSED, object library %s compressed (%u module%s)\n",
+           cmd->params[0], count, count == 1 ? "" : "s");
+    return SS$_NORMAL;
+}
+
 /* Route an OBJECT-library (.OLB) LIBRARY command to the ar-container handlers. */
 static int olb_dispatch(struct dcl_context *ctx, struct dcl_command *cmd)
 {
@@ -1140,6 +1172,53 @@ static int olb_dispatch(struct dcl_context *ctx, struct dcl_command *cmd)
 int cmd_library(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+
+    /* /VAX selects the VAX object-library format. OVMX writes one format per
+     * target architecture, so /VAX is honoured only where that format IS the
+     * target's (the VAX rail); elsewhere it would silently yield a non-VAX
+     * library, so it is refused. */
+#if !defined(__vax__) && !defined(__vax)
+    if (dcl_has_qualifier(cmd, "VAX")) {
+        dcl_error("DCL", 0, "IVQUAL",
+                  "unrecognized qualifier - check validity, spelling, and placement\n \\VAX\\");
+        return SS$_IVQUAL;
+    }
+#endif
+
+    /* /COMPRESS rewrites an OBJECT library (see olb_compress). Combined with
+     * another operation, or on a TEXT/HELP library, it is not implemented. */
+    if (dcl_has_qualifier(cmd, "COMPRESS")) {
+        /* /COMPRESS=BLOCK=0 lexes its "=0" tail into a stray numeric parameter
+         * ahead of the library: the library is the first non-numeric one. */
+        int li = -1;
+        for (int i = 0; i < cmd->param_count; i++) {
+            const char *q = cmd->params[i];
+            int numeric = (*q != '\0');
+            for (; *q; q++)
+                if (*q < '0' || *q > '9') { numeric = 0; break; }
+            if (!numeric) { li = i; break; }
+        }
+        int nlib = 0;
+        for (int i = 0; i < cmd->param_count; i++)
+            if (i == li || !(cmd->params[i][0] >= '0' && cmd->params[i][0] <= '9')) nlib++;
+        int other = dcl_has_qualifier(cmd, "CREATE") || dcl_has_qualifier(cmd, "INSERT") ||
+                    dcl_has_qualifier(cmd, "REPLACE") || dcl_has_qualifier(cmd, "DELETE") ||
+                    dcl_has_qualifier(cmd, "EXTRACT") || dcl_has_qualifier(cmd, "LIST") ||
+                    li < 0 || nlib != 1;
+        if (!other) {
+            if (li > 0) {
+                char tmp[sizeof cmd->params[0]];
+                memcpy(tmp, cmd->params[li], sizeof tmp);
+                memcpy(cmd->params[li], cmd->params[0], sizeof tmp);
+                memcpy(cmd->params[0], tmp, sizeof tmp);
+            }
+            if (lbr_get_type(cmd, cmd->params[0]) == LBR_TYPE_OBJECT)
+                return olb_compress(ctx, cmd);
+        }
+        dcl_error("DCL", 0, "IVQUAL",
+                  "unrecognized qualifier - check validity, spelling, and placement\n \\COMPRESS\\");
+        return SS$_IVQUAL;
+    }
 
     /* OBJECT libraries (.OLB, or /OBJECT) use the real ar-container object-
      * library path so LINK.EXE can pull members (vms-ca9). TEXT/HELP libraries

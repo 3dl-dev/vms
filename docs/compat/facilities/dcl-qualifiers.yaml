@@ -37,11 +37,11 @@ items:
 
   - id: dcl-qualifiers$zero-validation-verbs
     kind: feature
-    status: absent
+    status: partial
     authenticity: facade-risk
-    vms: "Qualifier validation for the accept-all verbs (SET, SHOW, MAIL, WRITE, INSTALL, LIBRARY, TCPIP, TELNET, FTP, HELP)"
+    vms: "Qualifier validation for the verbs that still silently accept an unknown qualifier (WRITE, LIBRARY, TCPIP, TELNET, FTP)"
     evidence: src/vmsdcl/dcl_parser.c:451
-    notes: "10 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit', dcl_parser.c:451), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all (a /token after HELP is a qualifier TOPIC, vms-01b). READ is retrofit (vms-097): q_read declares only the qualifiers cmd_read honours (/END_OF_FILE and /ERROR branch like GOTO, /PROMPT, /TIME_OUT); the unimplemented rest (/DELETE /INDEX /KEY /MATCH /NOLOCK) are %DCL-W-IVQUAL, proven by tests/qemu/test_syssvc_dcl_read.c + defects.d/dcl-read-quals-accept-all.defect. RUN validates its own qualifiers (run_bad_qualifier: %DCL-W-IVQUAL / %DCL-W-ABKEYW, oracle-pinned; tests/qemu/test_syssvc_dcl_run_quals.c + defects.d/dcl-run-quals-unvalidated.defect). The remaining ones are the Phase-1 follow-up (vms-097)."
+    notes: "Re-censused vms-097 (measured with a bogus /ZQBOGUS on each verb): SHOW already refuses any qualifier (%DCL-W-NOQUAL); SET refuses unknown sub-keywords (%DCL-E-IVKEYW); MAIL and INSTALL hand their qualifiers to the MAIL.EXE / INSTALL.EXE images, which are the validators; HELP is deliberately accept-all (a /token after HELP is a topic, vms-01b). Still silently accepting an unknown qualifier: WRITE (its argument is an expression, so a real fix must settle how '/' parses there), TCPIP, LIBRARY, and TELNET/FTP (whose /GET /PUT /USER /PASSWORD /PORT set is OVMX-own, not VMS). READ and RUN were retrofit this round (vms-097; see verb-coverage)."
 
   - id: dcl-qualifiers$per-verb-depth
     kind: feature

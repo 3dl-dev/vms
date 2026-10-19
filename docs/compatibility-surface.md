@@ -13,10 +13,10 @@
 |---|---|---|---|---|
 | ✅ verified | 24 | | real | 357 |
 | 🟢 implemented | 304 | | n/a | 81 |
-| 🟡 partial | 71 | | advisory | 51 |
+| 🟡 partial | 72 | | advisory | 51 |
 | 🟠 stub | 10 | | facade-risk | 1 |
 | 🔵 designed | 1 | |  |  |
-| ⬜ absent | 80 | |  |  |
+| ⬜ absent | 79 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **444 committed** — **328 met** (implemented/verified), 67 in progress (partial), 49 not started (absent/stub/designed).
+- **444 committed** — **328 met** (implemented/verified), 68 in progress (partial), 48 not started (absent/stub/designed).
 - ⚠ **1 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
@@ -583,7 +583,7 @@ SYS$DISK is a genuine Files-11 ODS-2 volume read and written through the executi
 
 _DCL verbs and scripting, qualifier grammar, F$ lexicals, utilities, HELP, queues._
 
-`✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜⬜`  —  65 surfaces catalogued (37 met · 13 in progress · 15 not started) · V1: 58 committed, 37 met · ⚠ 1 facade-risk
+`✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜`  —  65 surfaces catalogued (37 met · 14 in progress · 14 not started) · V1: 58 committed, 37 met · ⚠ 1 facade-risk
 
 ### dcl-qualifiers — DCL Qualifier Grammar (Engine A / CLD tables)
 <sub>scope: in · tier 1 · plan: vms-8ad · ref: OpenVMS Command Definition Utility (CDU) Manual; DCL Dictionary · reviewed 2026-09-14</sub>
@@ -591,13 +591,13 @@ _DCL verbs and scripting, qualifier grammar, F$ lexicals, utilities, HELP, queue
 Per-verb qualifier validation (Phase 1, vms-097). The parser rejects any qualifier not in a verb's table with the authentic %DCL-W-IVQUAL (or %DCL-W-IVKEYW) BEFORE the handler runs, structurally. Re-censused 2026-09-14 against origin/main: 46 of the 58 builtin verbs carry a validating table (29 real q_* tables + 17 q_none reject-all); 12 verbs remain accept-all (quals == NULL). Since the prior census DEASSIGN and DEFINE gained real q_* tables (DIFFERENCES moved to q_none), so the real-table set is now exactly 29. A real CLI$-callable CDU compiler exists for external images but is not used to generate the builtin tables.
 
 
-<sub>5 items · 2 met · 2 in progress · 1 not started · ⚠ 1 facade-risk</sub>
+<sub>5 items · 2 met · 3 in progress · 0 not started · ⚠ 1 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | ✅ | `dcl-qualifiers$ivqual-enforcement` | feature | Unknown /QUALIFIER on a verb -> %DCL-W-IVQUAL; bad keyword -> %DCL-W-IVKEYW, before the handler runs | verified | real | in | `src/vmsdcl/dcl_parser.c:448` — dcl_validate_qualifiers() (dcl_parser.c:448) is the structural enforcement point; called from dispatch (dcl_exec.c) before every handler. Closes the universal silent-accept hole for the retrofit tranche. |
 | 🟡 | `dcl-qualifiers$verb-coverage` | feature | Per-verb qualifier tables validating every DCL verb's /QUALIFIER grammar | partial | real | in | `src/vmsdcl/dcl_builtin.c` — 31 verbs carry a real q_* qualifier table (ANALYZE ASSIGN ATTACH BACKUP CONVERT COPY CREATE DEASSIGN DEFINE DELETE DIRECTORY DUMP INQUIRE LINK MOUNT OPEN PING PRINT PRODUCT PURGE READ RECALL RENAME RUN REPLY SEARCH SORT SPAWN STOP SUBMIT TYPE); 17 more use q_none (empty table = reject-all, honest over-restriction for verbs whose VMS qualifiers OVMX has not retrofit); 10 remain quals == NULL (accept-all). 48 of 58 validate. |
-| ⬜⚠ | `dcl-qualifiers$zero-validation-verbs` | feature | Qualifier validation for the accept-all verbs (SET, SHOW, MAIL, WRITE, INSTALL, LIBRARY, TCPIP, TELNET, FTP, HELP) | absent | facade-risk | in | `src/vmsdcl/dcl_parser.c:451` — 10 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit', dcl_parser.c:451), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all (a /token after HELP is a qualifier TOPIC, vms-01b). READ is retrofit (vms-097): q_read declares only the qualifiers cmd_read honours (/END_OF_FILE and /ERROR branch like GOTO, /PROMPT, /TIME_OUT); the unimplemented rest (/DELETE /INDEX /KEY /MATCH /NOLOCK) are %DCL-W-IVQUAL, proven by tests/qemu/test_syssvc_dcl_read.c + defects.d/dcl-read-quals-accept-all.defect. RUN validates its own qualifiers (run_bad_qualifier: %DCL-W-IVQUAL / %DCL-W-ABKEYW, oracle-pinned; tests/qemu/test_syssvc_dcl_run_quals.c + defects.d/dcl-run-quals-unvalidated.defect). The remaining ones are the Phase-1 follow-up (vms-097). |
+| 🟡⚠ | `dcl-qualifiers$zero-validation-verbs` | feature | Qualifier validation for the verbs that still silently accept an unknown qualifier (WRITE, LIBRARY, TCPIP, TELNET, FTP) | partial | facade-risk | in | `src/vmsdcl/dcl_parser.c:451` — Re-censused vms-097 (measured with a bogus /ZQBOGUS on each verb): SHOW already refuses any qualifier (%DCL-W-NOQUAL); SET refuses unknown sub-keywords (%DCL-E-IVKEYW); MAIL and INSTALL hand their qualifiers to the MAIL.EXE / INSTALL.EXE images, which are the validators; HELP is deliberately accept-all (a /token after HELP is a topic, vms-01b). Still silently accepting an unknown qualifier: WRITE (its argument is an expression, so a real fix must settle how '/' parses there), TCPIP, LIBRARY, and TELNET/FTP (whose /GET /PUT /USER /PASSWORD /PORT set is OVMX-own, not VMS). READ and RUN were retrofit this round (vms-097; see verb-coverage). |
 | 🟡 | `dcl-qualifiers$per-verb-depth` | feature | Full per-verb qualifier set depth (VMS DIRECTORY alone has dozens) | partial | real | in | `src/vmsdcl/dcl_builtin.c` — Per INV-DCL a table lists ONLY implemented qualifiers, so depth is honestly a fraction of VMS (DIRECTORY carries /DATE=MODIFIED,/SIZE,/OWNER,/PROTECTION,... but not the full VMS set); qualifiers VMS accepts that OVMX does not implement are honestly rejected (over-restriction, not a lie). |
 | ✅ | `dcl-qualifiers$cdu-compiler` | routine | CLI$COMPILE_CLD — compile CLD source into a callable command table | verified | real | in | `src/libvms/rtl/lib_cli.c` — Real CDU compiler, CLI$-callable, proven against an external image's CLD — but the 58 builtin verbs still use hand-written C tables, not CDU-generated ones. |
 
@@ -1330,7 +1330,7 @@ Surfaces that report success without doing the real work, or fake shared state p
 
 | Surface | Facility | Status | Evidence / notes |
 |---|---|---|---|
-| `dcl-qualifiers$zero-validation-verbs` | dcl-qualifiers | absent | `src/vmsdcl/dcl_parser.c:451` — 10 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit', dcl_parser.c:451), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all (a /token after HELP is a qualifier TOPIC, vms-01b). READ is retrofit (vms-097): q_read declares only the qualifiers cmd_read honours (/END_OF_FILE and /ERROR branch like GOTO, /PROMPT, /TIME_OUT); the unimplemented rest (/DELETE /INDEX /KEY /MATCH /NOLOCK) are %DCL-W-IVQUAL, proven by tests/qemu/test_syssvc_dcl_read.c + defects.d/dcl-read-quals-accept-all.defect. RUN validates its own qualifiers (run_bad_qualifier: %DCL-W-IVQUAL / %DCL-W-ABKEYW, oracle-pinned; tests/qemu/test_syssvc_dcl_run_quals.c + defects.d/dcl-run-quals-unvalidated.defect). The remaining ones are the Phase-1 follow-up (vms-097). |
+| `dcl-qualifiers$zero-validation-verbs` | dcl-qualifiers | partial | `src/vmsdcl/dcl_parser.c:451` — Re-censused vms-097 (measured with a bogus /ZQBOGUS on each verb): SHOW already refuses any qualifier (%DCL-W-NOQUAL); SET refuses unknown sub-keywords (%DCL-E-IVKEYW); MAIL and INSTALL hand their qualifiers to the MAIL.EXE / INSTALL.EXE images, which are the validators; HELP is deliberately accept-all (a /token after HELP is a topic, vms-01b). Still silently accepting an unknown qualifier: WRITE (its argument is an expression, so a real fix must settle how '/' parses there), TCPIP, LIBRARY, and TELNET/FTP (whose /GET /PUT /USER /PASSWORD /PORT set is OVMX-own, not VMS). READ and RUN were retrofit this round (vms-097; see verb-coverage). |
 
 ## Not yet catalogued
 

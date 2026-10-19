@@ -27,6 +27,7 @@
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
+#include "dcl/vms_messages.h"
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
 #include "vmsqueue.h"
@@ -842,17 +843,14 @@ static void run_creprc_failed(uint32_t status)
  * excepts them, so the table stays a faithful copy of what HELP prints
  * rather than a copy pre-filtered to this one use.
  *
- * A qualifier in NEITHER topic (RUN/NOSUCHQUAL) is not this code's
- * business: on the oracle DCL itself rejects it before RUN is entered
+ * A qualifier in NEITHER topic (RUN/NOSUCHQUAL): on the oracle DCL itself
+ * rejects it before RUN is entered (run_bad_qualifier(), vms-097)
  * -- "%DCL-W-IVQUAL, unrecognized qualifier - check validity,
  * spelling, and placement" (VAX1, same session). The same is true of an
  * abbreviation that resolves to more than one of these names --
  * "%DCL-W-ABKEYW, ambiguous qualifier or keyword - supply more
  * characters" for RUN/P (VAX1, 2026-07-31, captures/
- * run-qualifier-abbrev-vax1-2026-07-31.txt). OVMX's DCL parser
- * validates no qualifier against any command's table, for any command;
- * that is a parser-wide gap, and inventing a RUN-only answer for it
- * here would be a third answer to a question VMS answers elsewhere.
+ * run-qualifier-abbrev-vax1-2026-07-31.txt).
  */
 static const char *const run_process_qualifiers[] = {
     "ACCOUNTING", "AST_LIMIT", "AUTHORIZE", "BUFFER_LIMIT",
@@ -919,11 +917,8 @@ static const char *const run_image_qualifiers[] = {
  * none of them or matches more than one. UNRESOLVED IS NOT DECIDED HERE:
  * on the oracle DCL refuses the command outright, with %DCL-W-IVQUAL for
  * an unknown qualifier and %DCL-W-ABKEYW for an ambiguous abbreviation,
- * BEFORE RUN is entered. OVMX's parser validates no qualifier against
- * any command's table, for any command, so neither refusal exists
- * anywhere in DCL; producing one here for RUN alone would answer for one
- * command a question VMS answers for the whole language. The gap is
- * reported, not patched over.
+ * BEFORE RUN is entered; run_bad_qualifier() issues both refusals, ahead
+ * of everything else in cmd_run (vms-097).
  */
 static const char *run_resolve_qualifier(const char *given)
 {
@@ -986,6 +981,50 @@ static const char *run_qualifier_value(const struct dcl_command *cmd,
             return cmd->qualifiers[i].value[0] ? cmd->qualifiers[i].value : NULL;
     }
     return NULL;
+}
+
+/*
+ * run_bad_qualifier - DCL's own verdict on a RUN qualifier, BEFORE RUN is
+ * entered (ORACLE-PINNED, VAX V7.3, see run_resolve_qualifier above): a name
+ * matching no RUN qualifier is %DCL-W-IVQUAL, a prefix matching more than one
+ * is %DCL-W-ABKEYW. An exact full name is never ambiguous. Returns the
+ * status after printing the message, or 0 when every qualifier resolves.
+ */
+static uint32_t run_bad_qualifier(const struct dcl_command *cmd)
+{
+    for (int i = 0; i < cmd->qualifier_count; i++) {
+        const char *given = cmd->qualifiers[i].name;
+        size_t glen = strlen(given);
+        int hits = 0, exact = 0;
+        if (glen == 0) continue;
+        for (size_t j = 0; j < sizeof(run_process_qualifiers) / sizeof(run_process_qualifiers[0]); j++) {
+            if (strncasecmp(given, run_process_qualifiers[j], glen) == 0) {
+                hits++;
+                if (strlen(run_process_qualifiers[j]) == glen) exact = 1;
+            }
+        }
+        for (size_t j = 0; j < sizeof(run_image_qualifiers) / sizeof(run_image_qualifiers[0]); j++) {
+            if (strncasecmp(given, run_image_qualifiers[j], glen) == 0) {
+                hits++;
+                if (strlen(run_image_qualifiers[j]) == glen) exact = 1;
+            }
+        }
+        if (hits == 0) {
+            dcl_error("DCL", 0, "IVQUAL",
+                      "unrecognized qualifier - check validity, spelling, "
+                      "and placement\n \\%s%s\\",
+                      cmd->qualifiers[i].negated ? "NO" : "", given);
+            return SS$_IVQUAL;
+        }
+        if (hits > 1 && !exact) {
+            dcl_error("DCL", 0, "ABKEYW",
+                      "ambiguous qualifier or keyword - supply more "
+                      "characters\n \\%s%s\\",
+                      cmd->qualifiers[i].negated ? "NO" : "", given);
+            return MSG_DCL_ABKEYW & ~7u;      /* the oracle's -W- severity */
+        }
+    }
+    return 0;
 }
 
 /*
@@ -2628,6 +2667,13 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
 int cmd_run(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+
+    /* DCL refuses an unknown or ambiguous qualifier before RUN is entered. */
+    {
+        uint32_t bad = run_bad_qualifier(cmd);
+        if (bad)
+            return bad;
+    }
 
     /* BEFORE the image parameter is examined: a qualifier OVMX cannot
      * honour is refused, not silently dropped. This is first because

@@ -1,0 +1,28 @@
+# dcl-run-quals-unvalidated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL RUN qualifier validation (src/vmsdcl/dcl_cmd_process.c run_bad_qualifier, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_dcl_run_quals test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "RUN stops validating its qualifiers: run_bad_qualifier is not consulted, so an unknown qualifier (/ZQBOGUS) or an ambiguous abbreviation (/P) is silently dropped and the image runs, instead of %DCL-W-IVQUAL / %DCL-W-ABKEYW.";;
+        require_fail) cat <<'EOF2'
+RUN/ZQBOGUS is %DCL-W-IVQUAL naming the qualifier (oracle)
+RUN/P=4 is %DCL-W-ABKEYW, an ambiguous abbreviation (oracle)
+an ambiguous RUN abbreviation is refused %DCL-W-ABKEYW before RUN is entered, and the image does not run (oracle)
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        uint32_t bad = run_bad_qualifier(cmd);$|        uint32_t bad = 0; /* NEGCTL dcl-run-quals-unvalidated */|' "$_file"
+    :
+}

@@ -714,6 +714,55 @@ static struct linesw vms_tt_disc = {
 	.l_poll  = vtt_poll,
 };
 
+
+/* DIAG / candidate fix (diag/demo-lane): console RX watchdog. In the wedged runs
+ * the VAX console RXCS reads 0xC0 (DONE and IE both set) for minutes while the
+ * receive interrupt is never serviced (rint stuck, RETURNs and a typed user
+ * name never reach the tty). A device whose DONE stays set with its interrupt
+ * enabled across 2 samples 200 ms apart has lost its interrupt: take the
+ * character by polling, atomically against the real ISR (splhigh), and hand it
+ * to the line discipline as the ISR would have. */
+static volatile u_int vtt_c_wd;          /* characters recovered by polling */
+#if defined(__vax__)
+static void
+vtt_rxwd_thread(void *arg __unused)
+{
+	int stalled = 0;
+
+	for (;;) {
+		struct vms_tt *tt;
+		u_int rxcs, c = 0;
+		int s, got = 0;
+
+		(void)kpause("vttrxw", false, hz / 5 > 0 ? hz / 5 : 1, NULL);
+		s = splhigh();
+		rxcs = (u_int)mfpr(PR_RXCS);
+		if ((rxcs & 0x80) && (rxcs & 0x40)) {
+			if (++stalled >= 2) {
+				c = (u_int)mfpr(PR_RXDB);
+				got = 1;
+				stalled = 0;
+			}
+		} else {
+			stalled = 0;
+		}
+		splx(s);
+		if (!got)
+			continue;
+		vtt_c_wd++;
+		tt = vms_devtab_tt_by_name("OPA0:");
+		if (tt != NULL) {
+			uint32_t dd[12];
+			struct vms_ttport_nb *p = vms_tt_diag(tt, dd);
+
+			if (p != NULL && p->tp != NULL)
+				(void)vtt_rint((int)(c & 0xff), p->tp);
+			vms_tt_release(tt);
+		}
+	}
+}
+#endif
+
 /* DIAG ONLY (diag/demo-lane, never merged): TTDIAG line every ~15 s from a
  * kernel thread, through kernel printf (polled console, not the tty). */
 static void
@@ -768,7 +817,7 @@ vtt_diag_thread(void *arg __unused)
 			vms_tt_release(tt);
 		}
 		{
-			static u_int prev_rint, prev_reads, prev_bad;
+			static u_int prev_rint, prev_reads, prev_bad, prev_wd;
 			u_int bad = 0, cur_rint = vtt_c_rint;
 			int print = 0;
 
@@ -780,6 +829,9 @@ vtt_diag_thread(void *arg __unused)
 				print = 1;                     /* input arrived, no read restarted */
 			if (bad && (bad & prev_bad))
 				print = 1;
+			if (vtt_c_wd != prev_wd)
+				print = 1;                     /* the watchdog recovered input */
+			prev_wd = vtt_c_wd;
 			if (seq == 40)
 				print = 1;                     /* the thread is alive */
 			if (seq >= 12 && cur_rint <= 1)
@@ -790,9 +842,9 @@ vtt_diag_thread(void *arg __unused)
 			if (!print)
 				continue;
 		}
-		n = snprintf(dbuf, sizeof(dbuf), "\r\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u ld=%d rawq=%u canq=%u rint=%u drop=%u recv=%u open=%u close=%u recl=%u rxcs=%x txcs=%x\n",
+		n = snprintf(dbuf, sizeof(dbuf), "\r\nTTDIAG#%d cntp=%d p=%p dead=%u prefs=%u rxl=%u outq=%u tstate=%x parked=%u tt=%d det=%u rdbusy=%u rdact=%u rdsusp=%u rddone=%u portbusy=%u ttrefs=%u olen=%u ta=%u gen=%u ttport=%x len=%u ld=%d rawq=%u canq=%u rint=%u drop=%u recv=%u open=%u close=%u recl=%u rxcs=%x txcs=%x wd=%u\n",
 		    seq, tp != NULL, pp, pdead, prefs, rxl, outc, ts, ps, have_tt,
-		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], ld, rawq, canq, vtt_c_rint, vtt_c_rint_drop, vtt_c_recv, vtt_c_open, vtt_c_close, vtt_c_reclaim, rxcs, txcs);
+		    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7], d[8], d[9], d[10], d[11], ld, rawq, canq, vtt_c_rint, vtt_c_rint_drop, vtt_c_recv, vtt_c_open, vtt_c_close, vtt_c_reclaim, rxcs, txcs, vtt_c_wd);
 		for (k = 0; k < n && k < (int)sizeof(dbuf); k++)
 			cnputc((unsigned char)dbuf[k]);
 	}
@@ -803,6 +855,10 @@ vms_tt_netbsd_init(void)
 {
 	(void)kthread_create(PRI_NONE, KTHREAD_MPSAFE, NULL, vtt_diag_thread, NULL,
 	    NULL, "vttdiag");
+#if defined(__vax__)
+	(void)kthread_create(PRI_NONE, KTHREAD_MPSAFE, NULL, vtt_rxwd_thread, NULL,
+	    NULL, "vttrxwd");
+#endif
 
 	int error;
 

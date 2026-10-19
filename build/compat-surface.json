@@ -1973,7 +1973,7 @@
       "tier": 1,
       "plan_ref": "vms-8ad",
       "vms_ref": "OpenVMS System Management Utilities Reference Manual; OpenVMS Utility Routines Manual",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-10-19",
       "rollup": {
         "count": 24,
         "by_status": {
@@ -9104,7 +9104,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsdcl/dcl_library.c",
       "verified_against": null,
-      "notes": "Routes by parameter count rather than the full LIBRARIAN grammar; documented, not a lie. Partial slice exercised by tests/dcl/test_library.sh (not a full-coverage oracle).",
+      "notes": "Routes by parameter count rather than the full LIBRARIAN grammar; documented, not a lie. Qualifiers are validated (q_library, dcl_builtin.c): CREATE INSERT REPLACE DELETE EXTRACT LIST OUTPUT HELP OBJECT TEXT COMPRESS VAX; everything else is %DCL-W-IVQUAL (tests/dcl/test_library_qualifier_validation.sh, tests/qemu/test_syssvc_dcl_library_quals.c, defects.d/dcl-library-quals-accept-all.defect). /COMPRESS is REAL for OBJECT libraries: it reads the members and writes the library to /OUTPUT (else over the input); an object library has no reclaimable space to begin with -- every insert/replace/delete rewrites the whole ar container, proven by tests/dcl/test_library_compress.sh (a library after a replace/replace/delete history is byte-identical to a fresh one of the surviving members) -- and /COMPRESS on a TEXT/HELP library, or combined with another operation, is %DCL-W-IVQUAL (defects.d/dcl-library-compress-noop.defect). /VAX selects the VAX object-library format: honoured only on the VAX rail where it is the target format, otherwise %DCL-W-IVQUAL rather than a silently non-VAX library. Partial slice exercised by tests/dcl/test_library.sh (not a full-coverage oracle).",
       "plan_ref": "vms-8ad"
     },
     {

@@ -1,0 +1,26 @@
+# dcl-library-compress-noop -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL LIBRARY/COMPRESS (src/vmsdcl/dcl_library.c olb_compress, vms-097)";;
+        targets)      echo "vmsdcl/dcl_library.c";;
+        suites_red)   echo "test_syssvc_dcl_library_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "LIBRARY/COMPRESS reports success but never writes the rewritten library: the /OUTPUT file the caller renames next does not exist.";;
+        require_fail) cat <<'EOF2'
+LIBRARY/COMPRESS/OUTPUT=P.OLB wrote the output library
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (olb_write(out_path, members, count) != OLB_OK) {$|    if (0 \&\& olb_write(out_path, members, count) != OLB_OK) { /* NEGCTL dcl-library-compress-noop */|' "$_file"
+    :
+}

@@ -125,11 +125,10 @@ static const struct dcl_qual_def q_search[] = {
 
 /* LIBRARY (vms-097): the qualifiers cmd_library and its OBJECT/HELP/TEXT
  * handlers act on. /REPLACE is insert-or-replace (the insert path replaces a
- * same-named module), /TEXT is the default library type. /COMPRESS and /VAX
- * are accepted because the self-host MMK corpus issues them and they are
- * no-ops BY CONSTRUCTION here: every update rewrites the whole container, so
- * there is no dead space to compress, and there is one on-disk object-library
- * format, not distinct VAX and Alpha ones. Anything else (/MACRO /GLOBALS
+ * same-named module), /TEXT is the default library type. /COMPRESS is real
+ * for OBJECT libraries (cmd_library rewrites the container, honouring
+ * /OUTPUT) and refused for the rest; /VAX is honoured only on the VAX rail
+ * (cmd_library), where the VAX format is the target's. Anything else (/MACRO /GLOBALS
  * /LOG /NAMES ...) is not implemented and is %DCL-W-IVQUAL (INV-DCL sec 3). */
 static const struct dcl_qual_def q_library[] = {
     { "CREATE",   CDU_VT_VALUE, 0, NULL, NULL },

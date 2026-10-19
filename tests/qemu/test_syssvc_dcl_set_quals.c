@@ -9,7 +9,7 @@
  *
  * With no executive (the negative-control rig) it exits EXIT_SKIP (77), the
  * honest-skip code that job requires of every public-sys$ suite.
- * NEGATIVE CONTROL: tests/qemu/defects.d/dcl-set-quals-accept-all.defect.
+ * NEGATIVE CONTROL: tests/qemu/defects.d/dcl-set-declared-qual-refused.defect.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,23 +90,19 @@ int main(void)
     CHECK(run_dcl("SET/ZQONE DEFAULT SYS$LOGIN\nSET DEFAULT/ZQTWO SYS$LOGIN\n"
                   "SET FILE/ZQTHREE NOSUCH.TXT\nSET PROCESS/ZQFOUR\n"
                   "SET MESSAGE/NOFACILITY/FACILITY\nSET PROMPT/NOCARRIAGE_CONTROL=\"p$ \"\n"
-                  "SET MESSAGE/ZQFIVE\nSET PROTECTION=(W:R)/ZQSIX NOSUCH.TXT\n", out, sizeof out) == 0,
+                  "SET MESSAGE/ZQFIVE\nSET PROTECTION=(W:R)/ZQSIX NOSUCH.TXT\nSET FILE/TRUNCATE NOSUCH.TXT\n", out, sizeof out) == 0,
           "DCL ran the SET qualifier probes");
     printf("  ---- SET probes ----\n%s  ---- end ----\n", out);
-    /* negctl: dcl-set-quals-accept-all */
     CHECK(strstr(out, "\\ZQONE\\") != NULL, "SET/ZQONE DEFAULT is %DCL-W-IVQUAL");
-    /* negctl: dcl-set-quals-accept-all */
     CHECK(strstr(out, "\\ZQTWO\\") != NULL, "SET DEFAULT/ZQTWO is %DCL-W-IVQUAL");
-    /* negctl: dcl-set-quals-accept-all */
     CHECK(strstr(out, "\\ZQTHREE\\") != NULL, "SET FILE/ZQTHREE is %DCL-W-IVQUAL");
-    /* negctl: dcl-set-quals-accept-all */
     CHECK(strstr(out, "\\ZQFOUR\\") != NULL, "SET PROCESS/ZQFOUR is %DCL-W-IVQUAL");
-    /* negctl: dcl-set-quals-accept-all */
     CHECK(strstr(out, "\\ZQFIVE\\") != NULL, "SET MESSAGE/ZQFIVE is %DCL-W-IVQUAL");
-    /* negctl: dcl-set-quals-accept-all */
     CHECK(strstr(out, "\\ZQSIX\\") != NULL, "SET PROTECTION/ZQSIX is %DCL-W-IVQUAL");
-    CHECK(strstr(out, "\\FACILITY\\") == NULL && strstr(out, "\\CARRIAGE_CONTROL\\") == NULL,
-          "the declared qualifiers (/FACILITY, /CARRIAGE_CONTROL) are accepted, not refused");
+    /* negctl: dcl-set-declared-qual-refused */
+    CHECK(strstr(out, "\\FACILITY\\") == NULL && strstr(out, "\\CARRIAGE_CONTROL\\") == NULL &&
+          strstr(out, "\\TRUNCATE\\") == NULL,
+          "the declared qualifiers (/FACILITY, /CARRIAGE_CONTROL, /TRUNCATE) are accepted, not refused");
 
     printf("=== test_syssvc_dcl_set_quals: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;

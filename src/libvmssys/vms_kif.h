@@ -1191,7 +1191,13 @@ uint32_t vms_kif_gblsc_delete(const char *name);
 
 /* vms_kif_task_fork - the substrate task a process service ($CREPRC, LIB$SPAWN) forks
  * and then has the executive register as a VMS process. Creator: the task id; new
- * task: 0; failure: -errno. (vms-65a; the C RTL has no fork to offer.) */
+ * task: 0; failure: -errno. (vms-65a; the C RTL has no fork to offer.)
+ *
+ * OVMX-UNWIRED: vms_kif_task_fork (vms-65a) -- its caller is ovmx_alpha_fork() in
+ * ovmx_host_absent.h, compiled only by the OpenVMS-calling-standard (Alpha) build of
+ * sys$creprc, which this census's host compile database does not contain; the x86 and
+ * aarch64 builds call the C library's fork(). Proved in the guest by the xgcclink gate
+ * (alpha-xgcclink): system() -> LIB$SPAWN -> $CREPRC returns an odd status. */
 int vms_kif_task_fork(void);
 
 /* $DELMBX: mark the mailbox behind `exec_chan` for deletion. Does not

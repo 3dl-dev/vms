@@ -333,5 +333,3 @@ vms_kif_netcfg=PROCEDURE
 vms_kif_power_off=PROCEDURE
 # released in V0.7-12
 vms_kif_gblsc_delete=PROCEDURE
-# pending the next release (vms-65a)
-vms_kif_task_fork=PROCEDURE

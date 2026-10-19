@@ -81,5 +81,13 @@ int main(void)
     for (int i = 1; i < 10; i++) dv[i + 1] = av[i];
     dv[11] = 0;
     (void)stage("xgcc-dryrun", "SYS$SYSTEM:XGCC.EXE", dv);
-    return stage("xgcc", "SYS$SYSTEM:XGCC.EXE", av) ? 7 : 3;
+    int ok1 = stage("xgcc", "SYS$SYSTEM:XGCC.EXE", av);
+    /* the second program includes system headers and is compiled with NO -nostdinc: the
+     * driver finds them in the default places (-Wp,-v prints the search list) */
+    static cp32 bv[10];
+    bv[0] = "xgcc"; bv[1] = "-BSYS$SYSTEM:"; bv[2] = "-L/SYS$SYSTEM"; bv[3] = "-Wp,-v";
+    bv[4] = "-x"; bv[5] = "c"; bv[6] = "VDA0:[SYSTMP]HELLO2.C";
+    bv[7] = "-o"; bv[8] = "VDA0:[SYSTMP]HELLO2.EXE"; bv[9] = 0;
+    int ok2 = stage("xgcc2", "SYS$SYSTEM:XGCC.EXE", bv);
+    return ok1 && ok2 ? 7 : 3;
 }

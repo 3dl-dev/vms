@@ -23,6 +23,23 @@ $ WRITE HC "  printf (""hello from cc1 on OVMX %d\n"", sq (7));"
 $ WRITE HC "  return 0;"
 $ WRITE HC "}"
 $ CLOSE HC
+$ OPEN/WRITE HC VDA0:[SYSTMP]HELLO2.C
+$ WRITE HC "#include <stdio.h>"
+$ WRITE HC "#include <stdlib.h>"
+$ WRITE HC "#include <string.h>"
+$ WRITE HC "int main (void)"
+$ WRITE HC "{"
+$ WRITE HC "  char *p = malloc (16);"
+$ WRITE HC "  strcpy (p, ""headers"");"
+$ WRITE HC "  printf (""hello2 %s %d\n"", p, (int) strlen (p));"
+$ WRITE HC "  free (p);"
+$ WRITE HC "  return 0;"
+$ WRITE HC "}"
+$ CLOSE HC
+$! the system headers and the compiler's own, where the driver looks by default
+$! (/usr/include -> USR:[INCLUDE], /gnu/lib/gcc/... -> GNU:[LIB.GCC...]): concealed rooted logicals
+$ DEFINE/SYSTEM/TRANSLATION_ATTRIBUTES=CONCEALED USR SYS$COMMON:[USR.]
+$ DEFINE/SYSTEM/TRANSLATION_ATTRIBUTES=CONCEALED GNU SYS$COMMON:[GNU.]
 $ WRITE SYS$OUTPUT "DRL-PROOF: DCL-WRITE-STATUS=''$STATUS'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === MILESTONE: RUN JOINT_E2E (vfork+execv XGCC.EXE -o HELLO.EXE) ==="
 $ RUN SYS$SYSTEM:JOINT_E2E
@@ -37,6 +54,12 @@ $ WRITE SYS$OUTPUT "DRL-PROOF: DUMP-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === RUN THE LINKED PROGRAM: RUN HELLO.EXE ==="
 $ RUN VDA0:[SYSTMP]HELLO.EXE
 $ WRITE SYS$OUTPUT "DRL-PROOF: HELLO-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
+$ WRITE SYS$OUTPUT "DRL-PROOF: === INDEPENDENT READER: DCL DUMP HELLO2.EXE ==="
+$ DUMP VDA0:[SYSTMP]HELLO2.EXE
+$ WRITE SYS$OUTPUT "DRL-PROOF: DUMP2-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
+$ WRITE SYS$OUTPUT "DRL-PROOF: === RUN THE HEADER PROGRAM: RUN HELLO2.EXE ==="
+$ RUN VDA0:[SYSTMP]HELLO2.EXE
+$ WRITE SYS$OUTPUT "DRL-PROOF: HELLO2-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === END ==="
 $!
 $ EXIT

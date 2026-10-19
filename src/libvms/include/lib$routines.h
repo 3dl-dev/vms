@@ -321,6 +321,23 @@ uint32_t lib$sig_to_stop(
 );
 
 /**
+ * lib$match_cond - Match a condition value against a list of condition values
+ *
+ * Compares the condition code of match_cond (STS$V_COND_ID, bits 3..27: the
+ * facility and message number) with that of each condition in the list,
+ * ignoring severity and the control bits. Up to eight condition values may be
+ * listed; omitted trailing arguments pad with 0 (see the pad macro below).
+ *
+ * @return  1-based index of the first listed condition that matches, or 0
+ */
+uint32_t lib$match_cond(
+    const uint32_t *match_cond,
+    const uint32_t *c1, const uint32_t *c2, const uint32_t *c3,
+    const uint32_t *c4, const uint32_t *c5, const uint32_t *c6,
+    const uint32_t *c7, const uint32_t *c8
+);
+
+/**
  * lib$establish - Establish a condition handler
  *
  * @param handler  Pointer to handler routine
@@ -1774,6 +1791,7 @@ uint32_t lib$traverse_tree(
 #ifndef OVMX_NO_PAD_MACROS
 #include "ovmx_optargs.h"
 /* Omitted trailing arguments pad with 0 (VMS argument-count semantics). */
+#define lib$match_cond(...) OVMX_PAD_9(lib$match_cond, __VA_ARGS__)
 #define lib$spawn(...) OVMX_PAD_13(lib$spawn, __VA_ARGS__)
 #define lib$find_file(...) OVMX_PAD_7(lib$find_file, __VA_ARGS__)
 #define lib$rename_file(...) OVMX_PAD_12(lib$rename_file, __VA_ARGS__)

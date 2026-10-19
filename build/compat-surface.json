@@ -77,42 +77,42 @@
     "count": 490,
     "by_status": {
       "verified": 24,
-      "implemented": 304,
+      "implemented": 305,
       "partial": 71,
       "stub": 10,
       "designed": 1,
-      "absent": 80
+      "absent": 79
     },
     "by_authenticity": {
-      "real": 357,
-      "n/a": 81,
+      "real": 358,
+      "n/a": 80,
       "advisory": 51,
       "facade-risk": 1
     },
-    "met": 328,
+    "met": 329,
     "in_progress": 71,
-    "not_started": 91,
+    "not_started": 90,
     "facade_risk": 1
   },
   "overall_in_scope": {
     "count": 444,
     "by_status": {
       "verified": 24,
-      "implemented": 304,
+      "implemented": 305,
       "partial": 67,
       "stub": 8,
       "designed": 1,
-      "absent": 40
+      "absent": 39
     },
     "by_authenticity": {
-      "real": 355,
-      "n/a": 41,
+      "real": 356,
+      "n/a": 40,
       "advisory": 47,
       "facade-risk": 1
     },
-    "met": 328,
+    "met": 329,
     "in_progress": 67,
-    "not_started": 49,
+    "not_started": 48,
     "facade_risk": 1
   },
   "facilities": [
@@ -244,20 +244,20 @@
         "count": 15,
         "by_status": {
           "verified": 0,
-          "implemented": 13,
+          "implemented": 14,
           "partial": 0,
           "stub": 0,
           "designed": 0,
-          "absent": 2
+          "absent": 1
         },
         "by_authenticity": {
           "advisory": 10,
-          "n/a": 2,
-          "real": 3
+          "real": 4,
+          "n/a": 1
         },
-        "met": 13,
+        "met": 14,
         "in_progress": 0,
-        "not_started": 2,
+        "not_started": 1,
         "facade_risk": 0
       }
     },
@@ -2334,12 +2334,12 @@
       "id": "lib$match_cond",
       "kind": "routine",
       "vms": "Match a condition code against a list, ignoring severity",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
+      "evidence": "src/libvms/rtl/lib_signal.c",
       "verified_against": null,
-      "notes": "",
+      "notes": "Compares the condition code field (bits 3..27) of the signalled value with up to eight listed conditions, ignoring severity and control bits; returns the 1-based index or 0. Unit test tests/libvms/test_lib_match_cond.c; used by the tier-1 sys_unwind corpus example.",
       "plan_ref": "vms-2e72"
     },
     {

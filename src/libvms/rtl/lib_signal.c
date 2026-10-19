@@ -694,6 +694,33 @@ uint32_t lib$sig_to_stop(void *signal_args, void *mechanism_args) {
 }
 
 /* ================================================================
+ * lib$match_cond - match a condition value against a list.
+ *
+ * Only the condition code (STS$V_COND_ID, bits 3..27) is compared, so a
+ * condition matches regardless of its severity and control bits. A NULL entry
+ * ends the list (an omitted trailing argument).
+ * ================================================================ */
+
+uint32_t lib$match_cond(const uint32_t *match_cond,
+                        const uint32_t *c1, const uint32_t *c2,
+                        const uint32_t *c3, const uint32_t *c4,
+                        const uint32_t *c5, const uint32_t *c6,
+                        const uint32_t *c7, const uint32_t *c8) {
+    const uint32_t *list[8] = { c1, c2, c3, c4, c5, c6, c7, c8 };
+    const uint32_t COND_ID = 0x0FFFFFF8u;
+
+    if (match_cond == NULL) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < 8 && list[i] != NULL; i++) {
+        if ((*match_cond & COND_ID) == (*list[i] & COND_ID)) {
+            return i + 1;
+        }
+    }
+    return 0;
+}
+
+/* ================================================================
  * Internal accessors for SYS$UNWIND (sys_condition.c)
  *
  * SYS$UNWIND pops handlers off this file's thread-local chain down to a

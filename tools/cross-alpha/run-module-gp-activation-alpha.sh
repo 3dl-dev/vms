@@ -2350,7 +2350,7 @@ PYEOF2
         for n in 1 2; do
           $G -nostdinc -x c -c "VDA0:[SYSTMP]TWOA.C" -o r$n/twoa.o
           $G -nostdinc -x c -c "VDA0:[SYSTMP]TWOB.C" -o r$n/twob.o
-          rm -f r$n/libtwo.a; /out/cxx/bin/alpha-dec-vms-ar rc r$n/libtwo.a r$n/twoa.o r$n/twob.o
+          rm -f r$n/libtwo.a; /opt/cross-alpha-vms/bin/alpha-dec-vms-ar rc r$n/libtwo.a r$n/twoa.o r$n/twob.o
           $G -nostdinc -x c "VDA0:[SYSTMP]TWOMAIN.C" -o r$n/two.exe -x none r$n/libtwo.a
           [ "$n" = 1 ] && sleep 3
         done

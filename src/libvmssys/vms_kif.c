@@ -3216,6 +3216,11 @@ static int mbx_bind_ok(void)
     return vms_dev_fd >= 0;
 }
 
+int vms_kif_task_fork(void)
+{
+    return kif_xport_task_fork();
+}
+
 /*
  * vms_kif_gblsc_delete - $DGBLSC (rd vms-d91). Global sections are
  * system-wide state, so the answer is the executive's: with /dev/vms

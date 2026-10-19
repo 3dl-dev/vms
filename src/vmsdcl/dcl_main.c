@@ -1106,5 +1106,13 @@ int main(int argc, char *argv[])
     dcl_sym_cleanup();
     vms_pcb_cleanup();
 
+    /* A command interpreter that is fed its commands over a mailbox -- LIB$SPAWN's
+     * command string, a persistent DCL a parent drives -- and reaches the end of its
+     * input without an EXIT or LOGOUT ends with the status of the last command, as
+     * the subprocess's completion status; a command that failed is not reported as a
+     * success to the creator (system() returns it). */
+    if ((mbx_bound & DCL_MBX_BOUND_INPUT) && !dcl_ctx.exit_requested && !dcl_ctx.logout_requested)
+        return (dcl_ctx.last_status & 1) ? 0 : 1;
+
     return dcl_ctx.exit_status;
 }

@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #ifndef OVMX_LINK_C
 /* Compiled on its own (the product-source symbol scan compiles every file): the two
@@ -100,6 +101,8 @@ struct vms_state {
     const char     *first_input;  /* default executable name derives from it */
     int             have_transfer;
     int             depth;        /* options-file nesting */
+    int             nosyslib;     /* /NOSYSLIB: no implicit library search */
+    int             nosysshr;     /* /NOSYSSHR: no implicit shareable images */
 };
 
 static void vms_fatal_qual(const char *code, const char *what)
@@ -257,10 +260,13 @@ static void vms_command_qualifier(struct vms_state *st, const char *q, size_t qn
     } else if ((vms_ci_abbrev(q, qn, "DEBUG") && qn >= 3) || (vms_ci_abbrev(q, qn, "TRACEBACK") && qn >= 3)) {
         fprintf(stderr, "%%LINK-W-IGNORED, /%s%.*s: the image carries the debug sections its objects contain; "
                 "no debugger symbol table is generated\n", neg ? "NO" : "", (int)qn, q);
-    } else if ((vms_ci_abbrev(q, qn, "SYSLIB") && qn >= 4) || (vms_ci_abbrev(q, qn, "SYSSHR") && qn >= 4)
-               || (vms_ci_abbrev(q, qn, "USERLIBRARY") && qn >= 4)) {
+    } else if (vms_ci_abbrev(q, qn, "SYSLIB") && qn >= 4) {
+        st->nosyslib = neg;
+    } else if (vms_ci_abbrev(q, qn, "SYSSHR") && qn >= 4) {
+        st->nosysshr = neg;
+    } else if (vms_ci_abbrev(q, qn, "USERLIBRARY") && qn >= 4) {
         if (!neg)
-            fprintf(stderr, "%%LINK-W-IGNORED, /%.*s: no implicit system library search list is defined; "
+            fprintf(stderr, "%%LINK-W-IGNORED, /%.*s: there are no user library logicals to search; "
                     "name each library\n", (int)qn, q);
     } else if (vms_ci_abbrev(q, qn, "OPTIONS") || vms_ci_abbrev(q, qn, "LIBRARY")
                || vms_ci_abbrev(q, qn, "INCLUDE") || vms_ci_abbrev(q, qn, "SELECTIVE_SEARCH")) {
@@ -280,6 +286,31 @@ static int vms_syntax(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++)
         if (strcmp(argv[i], "-o") == 0) return 0;
+    return 1;
+}
+
+/* The file name part (after the last `]`, `:` or `/`), compared without case. */
+static const char *vms_leaf(const char *spec)
+{
+    const char *b = spec;
+    for (const char *p = spec; *p; p++)
+        if (*p == ']' || *p == ':' || *p == '/') b = p + 1;
+    return b;
+}
+
+/* An implicit library/shareable is added when it exists and the command did not
+ * already name a file of that name as a --use / --library. */
+static int vms_implicit_ok(const struct vms_state *st, const char *spec)
+{
+    for (int i = 0; i + 1 < st->out.n; i++)
+        if ((strcmp(st->out.v[i], "--use") == 0 || strcmp(st->out.v[i], "--library") == 0)) {
+            const char *a = vms_leaf(st->out.v[i + 1]), *b = vms_leaf(spec);
+            size_t n = strlen(a);
+            if (n == strlen(b) && strncasecmp(a, b, n) == 0) return 0;
+        }
+    FILE *f = fopen(spec, "rb");
+    if (!f) return 0;
+    fclose(f);
     return 1;
 }
 
@@ -338,6 +369,21 @@ static char **vms_translate(int argc, char **argv, int *new_argc)
             p = *e ? e + 1 : e;
         }
     }
+    /* The default search of OpenVMS LINK: /SYSLIB searches SYS$LIBRARY:STARLET and
+     * /SYSSHR the system's shareable images (IMAGELIB), after everything the command
+     * names. Here: the C RTL and its companions that are installed, bound only where
+     * the link references them (an unreferenced producer adds nothing to the image),
+     * and the object library STARLET searched last. Whatever the command already
+     * named (by file name) is not added twice. */
+    if (!st.nosysshr) {
+        static const char *const shr[] = { "SYS$SHARE:DECC$SHR.EXE", "SYS$SHARE:LIBOTS_SHR.EXE",
+                                           "SYS$SHARE:LIBVMSRMS$SHR.EXE", "SYS$SHARE:LIBVMS$SHR.EXE", NULL };
+        for (int i = 0; shr[i]; i++)
+            if (vms_implicit_ok(&st, shr[i])) { vms_push(&st.out, "--use"); vms_push(&st.out, shr[i]); }
+    }
+    if (!st.nosyslib && vms_implicit_ok(&st, "SYS$LIBRARY:STARLET.A")) {
+        vms_push(&st.out, "--library"); vms_push(&st.out, "SYS$LIBRARY:STARLET.A");
+    }
     if (!st.have_transfer) {
         /* The GCC port's startup module defines __main; the VMS object format
          * carries no transfer-address record for this producer, so name it. */
@@ -361,6 +407,9 @@ static char **vms_translate(int argc, char **argv, int *new_argc)
     vms_push(&st.out, "-o");
     vms_push(&st.out, outname);
     g_noinform = noinform;
+    if (getenv("OVMX_LINK_VMS_ARGV"))      /* the vector the command became (tests, debugging) */
+        for (int i = 1; i < st.out.n; i++)
+            fprintf(stderr, "%%LINK-I-ARGV, %s\n", st.out.v[i]);
     *new_argc = st.out.n;
     return (char **)st.out.v;
 }

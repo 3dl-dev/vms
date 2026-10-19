@@ -84,6 +84,28 @@ printf '%s\n' 'link_main.obj' 'link_helper.obj' 'IDENTIFICATION="X"' > o7.opt
 $L $X /EXECUTABLE=v7.exe o7.opt/OPT 2> v7.err
 grep -q 'W-IGNORED.*IDENTIFICATION' v7.err && cmp -s gnu.exe v7.exe && ok "unacted keyword: W-IGNORED, link still correct" || bad "unacted keyword not reported"
 
+
+# --- the implicit search (/SYSSHR, /SYSLIB default): installed SYS$SHARE:DECC$SHR.EXE and
+# SYS$LIBRARY:STARLET.A are added after what the command names; /NOSYSSHR /NOSYSLIB switch
+# them off; a file the command already names is not added twice. On this host the logicals
+# are files literally so named in the current directory; OVMX_LINK_VMS_ARGV shows the vector.
+: > 'SYS$SHARE:DECC$SHR.EXE'; : > 'SYS$LIBRARY:STARLET.A'
+argv() { OVMX_LINK_VMS_ARGV=1 $L $X "$@" 2>&1 >/dev/null | sed -n 's/^%LINK-I-ARGV, //p' | tr '\n' ' '; }
+v=$(argv /EXECUTABLE=i1.exe link_main.obj,link_helper.obj)
+case "$v" in *"--use SYS\$SHARE:DECC\$SHR.EXE"*"--library SYS\$LIBRARY:STARLET.A"*) ok "installed DECC\$SHR and STARLET are searched without being named";; *) bad "implicit search missing: $v";; esac
+case "$v" in *LIBOTS_SHR*|*LIBVMS*) bad "an uninstalled producer was added: $v";; *) ok "only installed images are added";; esac
+v=$(argv /EXECUTABLE=i2.exe /NOSYSSHR link_main.obj,link_helper.obj)
+case "$v" in *"--use"*) bad "/NOSYSSHR still added a shareable: $v";; *"--library SYS\$LIBRARY:STARLET.A"*) ok "/NOSYSSHR drops the shareable, keeps STARLET";; *) bad "/NOSYSSHR dropped STARLET too: $v";; esac
+v=$(argv /EXECUTABLE=i3.exe /NOSYSLIB link_main.obj,link_helper.obj)
+case "$v" in *STARLET*) bad "/NOSYSLIB still searched STARLET: $v";; *"--use SYS\$SHARE:DECC\$SHR.EXE"*) ok "/NOSYSLIB drops STARLET, keeps the shareable";; *) bad "/NOSYSLIB dropped the shareable too: $v";; esac
+printf '%s\n' 'link_main.obj' 'link_helper.obj' 'sys$share:decc$shr.exe/SHAREABLE' 'SYS$LIBRARY:starlet.a/LIBRARY' > i4.opt
+v=$(argv /EXECUTABLE=i4.exe i4.opt/OPT)
+[ "$(printf '%s' "$v" | grep -o -i 'decc.shr.exe' | wc -l)" = 1 ] && [ "$(printf '%s' "$v" | grep -o -i 'starlet.a' | wc -l)" = 1 ] \
+    && ok "a producer / library the options file names is not added a second time (any case)" || bad "named image added twice: $v"
+rm -f 'SYS$SHARE:DECC$SHR.EXE' 'SYS$LIBRARY:STARLET.A'
+v=$(argv /EXECUTABLE=i5.exe link_main.obj,link_helper.obj)
+case "$v" in *"--use"*|*"--library"*) bad "nothing installed, yet the vector names one: $v";; *) ok "nothing installed, nothing added";; esac
+
 # GNU-style commands still work (an unrelated first argument must not flip the syntax)
 $L $X -o gnu8.exe /nonexistent-dir-is-not-a-qualifier/link_main.obj 2>/dev/null && bad "bogus path accepted" || ok "GNU-style command with a /path argument stays GNU-style"
 

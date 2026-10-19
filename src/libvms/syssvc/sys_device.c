@@ -233,7 +233,7 @@ static void fill_dvi_item(const struct item_list_3 *item,
         break;
     }
 
-    /* Mounted-volume items (vms-3a1b): read from the ACP's executive-global
+    /* Mounted-volume items (vms-eed): read from the ACP's executive-global
      * mounted-volume table through vms_kif_getvol -- the same source F$GETDVI
      * uses. A unit with no mounted ODS-2 volume answers 0 / an empty label,
      * the honest answer, never a host figure. */

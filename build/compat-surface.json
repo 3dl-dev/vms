@@ -3914,7 +3914,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_device.c",
       "verified_against": null,
-      "notes": "14 of 48 defined DVI$_ items real: DEVNAM/UNIT/DEVTYPE/DEVCLASS/DEVCHAR/REFCNT/ERRCNT/OPCNT/PID/OWNUIC/AVAILABLE/BLOCKSIZE/FULLDEVNAM/ALLDEVNAM; mounted-volume items MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT read from the executive mounted-volume table (vms-3a1b; tests/qemu/test_syssvc_getdvi_volume.c + defects.d/getdvi-volume-items-zero.defect)",
+      "notes": "14 of 48 defined DVI$_ items real: DEVNAM/UNIT/DEVTYPE/DEVCLASS/DEVCHAR/REFCNT/ERRCNT/OPCNT/PID/OWNUIC/AVAILABLE/BLOCKSIZE/FULLDEVNAM/ALLDEVNAM; mounted-volume items MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT read from the executive mounted-volume table (vms-eed; tests/qemu/test_syssvc_getdvi_volume.c + defects.d/getdvi-volume-items-zero.defect)",
       "plan_ref": "vms-651"
     },
     {

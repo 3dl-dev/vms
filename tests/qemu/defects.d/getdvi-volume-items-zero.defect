@@ -3,13 +3,13 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "\$GETDVI mounted-volume items (src/libvms/syssvc/sys_device.c, vms-3a1b)";;
+        facility)     echo "\$GETDVI mounted-volume items (src/libvms/syssvc/sys_device.c, vms-eed)";;
         targets)      echo "libvms/syssvc/sys_device.c";;
         suites_red)   echo "test_syssvc_getdvi_volume";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "sys\$getdvi stops asking the executive for the mounted volume: the vms_kif_getvol read is skipped, so DVI\$_MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT answer 0 / empty for a mounted ODS-2 volume -- the pre-vms-3a1b default-arm behaviour.";;
+        why)          echo "sys\$getdvi stops asking the executive for the mounted volume: the vms_kif_getvol read is skipped, so DVI\$_MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT answer 0 / empty for a mounted ODS-2 volume -- the pre-vms-eed default-arm behaviour.";;
         require_fail) cat <<'EOF2'
 $GETDVI MAXBLOCK equals the volume size the executive holds
 $GETDVI FREEBLOCKS equals the executive's free-block count

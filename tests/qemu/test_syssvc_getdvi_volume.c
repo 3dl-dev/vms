@@ -1,6 +1,6 @@
 /*
  * test_syssvc_getdvi_volume.c - $GETDVI answers the mounted-volume items from
- * the executive's mounted-volume table (vms-3a1b), through the PUBLIC sys$
+ * the executive's mounted-volume table (vms-eed), through the PUBLIC sys$
  * API, and compares them against the executive's own GETVOL answer.
  *
  * THE GAP THIS CLOSES. DVI$_MAXBLOCK / FREEBLOCKS / VOLNAM / CLUSTER /

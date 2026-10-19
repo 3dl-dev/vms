@@ -10,7 +10,7 @@
  *
  * With no executive (the negative-control rig) it exits EXIT_SKIP (77), the
  * honest-skip code that job requires of every public-sys$ suite.
- * NEGATIVE CONTROL: tests/qemu/defects.d/dcl-tcpip-quals-accept-all.defect.
+ * NEGATIVE CONTROL: tests/qemu/defects.d/dcl-tcpip-declared-qual-refused.defect.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,15 +93,12 @@ int main(void)
                   "TCPIP SET ROUTE/DEFAULT\n", out, sizeof out) == 0,
           "DCL ran the TCPIP qualifier probes");
     printf("  ---- TCPIP probes ----\n%s  ---- end ----\n", out);
-    /* negctl: dcl-tcpip-quals-accept-all */
     CHECK(strstr(out, "\\ZQONE\\") != NULL, "TCPIP SET ROUTE/ZQONE is %DCL-W-IVQUAL");
-    /* negctl: dcl-tcpip-quals-accept-all */
     CHECK(strstr(out, "\\OUTPUT\\") != NULL,
           "TCPIP SHOW VERSION/OUTPUT= (not implemented) is %DCL-W-IVQUAL, not silently dropped");
-    /* negctl: dcl-tcpip-quals-accept-all */
     CHECK(strstr(out, "\\ZQTWO\\") != NULL, "TCPIP SHOW INTERFACE/ZQTWO is %DCL-W-IVQUAL");
-    /* negctl: dcl-tcpip-quals-accept-all */
     CHECK(strstr(out, "\\ZQTHREE\\") != NULL, "TCPIP SET SERVICE/ZQTHREE is %DCL-W-IVQUAL");
+    /* negctl: dcl-tcpip-declared-qual-refused */
     CHECK(strstr(out, "\\DEFAULT\\") == NULL,
           "the declared qualifier (SET ROUTE/DEFAULT) is accepted, not refused");
 

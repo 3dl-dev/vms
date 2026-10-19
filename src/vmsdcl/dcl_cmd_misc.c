@@ -2781,6 +2781,53 @@ static int cmd_tcpip_show_service(struct dcl_command *cmd)
 /*
  * TCPIP - TCP/IP Services command with SHOW and SET subcommands.
  */
+/*
+ * Per-sub-command qualifier tables for the TCPIP umbrella (vms-097). TCPIP's
+ * qualifiers belong to the sub-command (and its object: SET ROUTE, SHOW
+ * INTERFACE, ...), so each (verb, object) pair lists EXACTLY the qualifiers
+ * its handler reads and anything else is %DCL-W-IVQUAL rather than silently
+ * dropped. /SYSTEM on SET NAME_SERVICE is the one scope OVMX has (the config
+ * is system-wide), so it is honoured by construction.
+ */
+#define TQ_END { NULL, 0, 0, NULL, NULL }
+#define TQ_FLAG(n) { n, CDU_VT_NONE, 0, NULL, NULL }
+#define TQ_VAL(n)  { n, CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }
+static const struct dcl_qual_def tq_none[] = { TQ_END };
+static const struct dcl_qual_def tq_full[] = { TQ_FLAG("FULL"), TQ_END };
+static const struct dcl_qual_def tq_set_host[] = { TQ_VAL("ADDRESS"), TQ_END };
+static const struct dcl_qual_def tq_set_nameservice[] = {
+    TQ_FLAG("SYSTEM"), TQ_VAL("SERVER"), TQ_VAL("DOMAIN"), TQ_FLAG("REAPPLY"), TQ_END };
+static const struct dcl_qual_def tq_set_interface[] = {
+    TQ_VAL("HOST"), TQ_VAL("NETWORK_MASK"), TQ_FLAG("REAPPLY"), TQ_END };
+static const struct dcl_qual_def tq_set_route[] = {
+    TQ_VAL("GATEWAY"), TQ_FLAG("DEFAULT"), TQ_VAL("DESTINATION"),
+    TQ_VAL("NETWORK_MASK"), TQ_FLAG("REAPPLY"), TQ_END };
+static const struct dcl_qual_def tq_set_service[] = {
+    TQ_VAL("PORT"), TQ_VAL("FILE"), TQ_VAL("USER_NAME"),
+    TQ_FLAG("ENABLE"), TQ_FLAG("DISABLE"), TQ_END };
+
+static const struct {
+    const char *verb;  int vmin;       /* TCPIP <verb> */
+    const char *what;  int wmin;       /* TCPIP <verb> <what>; NULL = verb only */
+    const struct dcl_qual_def *quals;
+} tcpip_subcmd_quals[] = {
+    { "REAPPLY", 3, NULL,            0, tq_none },
+    { "SHOW",    2, "INTERFACE",     3, tq_full },
+    { "SHOW",    2, "ROUTE",         3, tq_none },
+    { "SHOW",    2, "HOST",          3, tq_none },
+    { "SHOW",    2, "VERSION",       3, tq_none },
+    { "SHOW",    2, "CONFIGURATION", 4, tq_none },
+    { "SHOW",    2, "SERVICE",       4, tq_none },
+    { "SET",     2, "HOST",          3, tq_set_host },
+    { "SET",     2, "NAME_SERVICE",  4, tq_set_nameservice },
+    { "SET",     2, "INTERFACE",     3, tq_set_interface },
+    { "SET",     2, "ROUTE",         3, tq_set_route },
+    { "SET",     2, "SERVICE",       3, tq_set_service },
+    { "ENABLE",  2, "SERVICE",       4, tq_none },
+    { "DISABLE", 3, "SERVICE",       4, tq_none },
+    { "DELETE",  3, "SERVICE",       4, tq_none },
+};
+
 int cmd_tcpip(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1) {
@@ -2789,6 +2836,22 @@ int cmd_tcpip(struct dcl_command *cmd)
     }
 
     const char *subcmd = cmd->params[0];
+
+    for (size_t t = 0; t < sizeof tcpip_subcmd_quals / sizeof tcpip_subcmd_quals[0]; t++) {
+        if (!dcl_match_command(subcmd, tcpip_subcmd_quals[t].verb,
+                               tcpip_subcmd_quals[t].vmin))
+            continue;
+        if (tcpip_subcmd_quals[t].what &&
+            (cmd->param_count < 2 ||
+             !dcl_match_command(cmd->params[1], tcpip_subcmd_quals[t].what,
+                                tcpip_subcmd_quals[t].wmin)))
+            continue;
+        struct dcl_verb shim = { .quals = tcpip_subcmd_quals[t].quals };
+        uint32_t qs = dcl_validate_qualifiers(&shim, cmd);
+        if (qs != SS$_NORMAL)
+            return (int)qs;
+        break;
+    }
 
     if (dcl_match_command(subcmd, "REAPPLY", 3)) {
         /* TCPIP REAPPLY -- reapply persisted config from the ACP stores (vms-b97);

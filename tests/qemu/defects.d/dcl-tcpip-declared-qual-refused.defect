@@ -1,0 +1,26 @@
+# dcl-tcpip-declared-qual-refused -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL TCPIP per-sub-command qualifier table (src/vmsdcl/dcl_cmd_misc.c tq_set_route, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_misc.c";;
+        suites_red)   echo "test_syssvc_dcl_tcpip_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The TCPIP SET ROUTE table drops the /DEFAULT it reads: a qualifier the handler honours is refused as %DCL-W-IVQUAL (over-restriction), so the declared-qualifier assertion goes red.";;
+        require_fail) cat <<'EOF2'
+the declared qualifier (SET ROUTE/DEFAULT) is accepted, not refused
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    TQ_VAL("GATEWAY"), TQ_FLAG("DEFAULT"), TQ_VAL("DESTINATION"),$|    TQ_VAL("GATEWAY"), TQ_VAL("DESTINATION"), /* NEGCTL dcl-tcpip-declared-qual-refused */|' "$_file"
+    :
+}

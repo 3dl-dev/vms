@@ -10,7 +10,7 @@
  *
  * With no executive (the negative-control rig) it exits EXIT_SKIP (77), the
  * honest-skip code that job requires of every public-sys$ suite.
- * NEGATIVE CONTROL: tests/qemu/defects.d/dcl-show-quals-accept-all.defect.
+ * NEGATIVE CONTROL: tests/qemu/defects.d/dcl-show-declared-qual-refused.defect.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -93,17 +93,13 @@ int main(void)
                   "SHOW LOGICAL/FULL NOSUCH\nSHOW PROCESS/ID=1\n", out, sizeof out) == 0,
           "DCL ran the SHOW qualifier probes");
     printf("  ---- SHOW probes ----\n%s  ---- end ----\n", out);
-    /* negctl: dcl-show-quals-accept-all */
     CHECK(strstr(out, "\\ZQONE\\") != NULL, "SHOW DEVICE/ZQONE is %DCL-W-IVQUAL");
-    /* negctl: dcl-show-quals-accept-all */
     CHECK(strstr(out, "\\OUTPUT\\") != NULL,
           "SHOW LOGICAL/OUTPUT= (not implemented) is %DCL-W-IVQUAL, not silently dropped");
-    /* negctl: dcl-show-quals-accept-all */
     CHECK(strstr(out, "\\ZQTWO\\") != NULL, "SHOW PROCESS/ZQTWO is %DCL-W-IVQUAL");
-    /* negctl: dcl-show-quals-accept-all */
     CHECK(strstr(out, "\\ZQTHREE\\") != NULL, "SHOW MEMORY/ZQTHREE is %DCL-W-IVQUAL");
-    /* negctl: dcl-show-quals-accept-all */
     CHECK(strstr(out, "\\ZQFOUR\\") != NULL, "SHOW DEFAULT/ZQFOUR is %DCL-W-IVQUAL");
+    /* negctl: dcl-show-declared-qual-refused */
     CHECK(strstr(out, "\\FULL\\") == NULL && strstr(out, "\\ID\\") == NULL &&
           strstr(out, "\\IDENTIFICATION\\") == NULL,
           "the declared qualifiers (/FULL, /ID) are accepted, not refused");

@@ -1,0 +1,26 @@
+# dcl-show-declared-qual-refused -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL SHOW per-sub-verb qualifier table (src/vmsdcl/dcl_cmd_show.c shq_logical, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_dcl_show_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The SHOW LOGICAL table drops the /FULL it reads: a qualifier the handler honours is refused as %DCL-W-IVQUAL (over-restriction), so the declared-qualifier assertion goes red.";;
+        require_fail) cat <<'EOF2'
+the declared qualifiers (/FULL, /ID) are accepted, not refused
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    SHQ_FLAG("FULL"), SHQ_FLAG("PROCESS"), SHQ_FLAG("JOB"),$|    SHQ_FLAG("PROCESS"), SHQ_FLAG("JOB"), /* NEGCTL dcl-show-declared-qual-refused */|' "$_file"
+    :
+}

@@ -76,7 +76,8 @@ export ax_cv_cxx_compile_cxx11_FOR_BUILD=yes CONFIG_SITE=/src/tools/cross-alpha-
 make -j1 configure-host > configure-host.log 2>&1 || { tail -30 configure-host.log; exit 1; }
 make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.log | sort -t: -k3 -u | head -40; exit 1; }
 # ld.exe is the port's own linker wrapper (config/vms/vms-ld.c): it writes an options
-# file and runs the VMS `link` command, the program the driver calls to link (vms-65a)
-for e in cc1 xgcc cpp ld; do cp gcc/$e.exe $O/$e.exe; done
+# file and runs the VMS `link` command, the program the driver calls to link (vms-65a);
+# ar.exe (config/vms/vms-ar.c) is its twin for `ar`: a command file running `library` (vms-8ca)
+for e in cc1 xgcc cpp ld ar; do cp gcc/$e.exe $O/$e.exe; done
 ls -la $O/*.exe
 echo "HOST-GCC: OK"

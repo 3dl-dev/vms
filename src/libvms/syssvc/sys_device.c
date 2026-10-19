@@ -233,6 +233,45 @@ static void fill_dvi_item(const struct item_list_3 *item,
         break;
     }
 
+    /* Mounted-volume items (vms-3a1b): read from the ACP's executive-global
+     * mounted-volume table through vms_kif_getvol -- the same source F$GETDVI
+     * uses. A unit with no mounted ODS-2 volume answers 0 / an empty label,
+     * the honest answer, never a host figure. */
+    case DVI$_MAXBLOCK:
+    case DVI$_FREEBLOCKS:
+    case DVI$_CLUSTER:
+    case DVI$_MOUNTCNT:
+    case DVI$_VOLNAM: {
+        struct vms_getvol_args vol;
+        memset(&vol, 0, sizeof vol);
+        (void)vms_kif_getvol(info->devnam, &vol);
+        if (item->item_code == DVI$_VOLNAM) {
+            char nm[VMS_GETVOL_LABEL_SIZE];
+            memset(nm, 0, sizeof nm);
+            if (vol.mounted) {
+                memcpy(nm, vol.volnam, sizeof nm - 1);
+            }
+            uint16_t len = (uint16_t)strlen(nm);
+            if (len > item->buflen) len = item->buflen;
+            if (item->bufaddr) memcpy(item->bufaddr, nm, len);
+            if (item->retlen) *item->retlen = len;
+            break;
+        }
+        uint32_t v = 0;
+        if (vol.mounted) {
+            switch (item->item_code) {
+            case DVI$_MAXBLOCK:   v = vol.volsize; break;
+            case DVI$_FREEBLOCKS: v = vol.free_valid ? vol.freeblocks : 0u; break;
+            case DVI$_CLUSTER:    v = vol.cluster; break;
+            default:              v = 1u; break;     /* MOUNTCNT: single node */
+            }
+        }
+        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+            *(uint32_t *)item->bufaddr = v;
+        if (item->retlen) *item->retlen = sizeof(uint32_t);
+        break;
+    }
+
     case DVI$_DEVBUFSIZ:
         if (item->bufaddr && item->buflen >= sizeof(uint32_t))
             *(uint32_t *)item->bufaddr = info->devbufsiz ? info->devbufsiz

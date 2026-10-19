@@ -1,0 +1,30 @@
+# getdvi-volume-items-zero -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$GETDVI mounted-volume items (src/libvms/syssvc/sys_device.c, vms-3a1b)";;
+        targets)      echo "libvms/syssvc/sys_device.c";;
+        suites_red)   echo "test_syssvc_getdvi_volume";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$getdvi stops asking the executive for the mounted volume: the vms_kif_getvol read is skipped, so DVI\$_MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT answer 0 / empty for a mounted ODS-2 volume -- the pre-vms-3a1b default-arm behaviour.";;
+        require_fail) cat <<'EOF2'
+$GETDVI MAXBLOCK equals the volume size the executive holds
+$GETDVI FREEBLOCKS equals the executive's free-block count
+$GETDVI VOLNAM is the mounted volume's label
+$GETDVI CLUSTER is the storage-bitmap cluster factor
+$GETDVI MOUNTCNT is 1 for a mounted volume
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        (void)vms_kif_getvol(info->devnam, \&vol);$|        (void)0; /* NEGCTL getdvi-volume-items-zero */|' "$_file"
+    :
+}

@@ -1191,6 +1191,22 @@ static long long r_pio(struct rfile *rf, void *buf, uint64_t n, long long off,
 }
 
 /* The attributes of an open file description (fstat). */
+/* A UNIX path names a directory without a trailing slash ("/usr/include"): DEC C
+ * converts "/dev/dir" to the directory file DEV:[000000]DIR.DIR, so a name that is
+ * not a file is looked up as a directory before the answer is "no such file". GCC's
+ * preprocessor stats each search directory this way. */
+static int stat_unix_path(const char *path, const char *spec, int dir, struct rattr *a)
+{
+    int r = stat_path(spec, dir, a);
+    if (r == -ENOENT && !dir && path && !ovmx_crtl_is_vms_syntax(path)) {
+        char dspec[256];
+        if (ovmx_crtl_unix_to_vms(path, dspec, sizeof dspec, OVMX_FS_DIR) >= 0 &&
+            stat_path(dspec, 1, a) == 0)
+            return 0;
+    }
+    return r;
+}
+
 static int rf_attr(struct rfile *rf, struct rattr *a)
 {
     if (rf->kind == RF_DIR)
@@ -1363,7 +1379,7 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
             if (s == -1) return 0;
             *handled = 1;
             if (s == -2) return -errno;
-            r = stat_path(spec, dir, &a);
+            r = stat_unix_path(path, spec, dir, &a);
         }
         if (r < 0)
             return r;
@@ -1394,7 +1410,7 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
             if (s == -1) return 0;
             *handled = 1;
             if (s == -2) return -errno;
-            r = stat_path(spec, dir, &a);
+            r = stat_unix_path(path, spec, dir, &a);
         }
         if (r < 0) return r;
         attr_to_kstat(&a, (struct kstat *)(uintptr_t)a3);
@@ -1409,7 +1425,7 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
         *handled = 1;
         if (s == -2) return -errno;
         struct rattr a;
-        int r = stat_path(spec, dir, &a);
+        int r = stat_unix_path((const char *)(uintptr_t)a2, spec, dir, &a);
         if (r < 0) return r;
         /* The protection decides: the bits the owner/group/world class grant. */
         int want = (int)a3 & 7;

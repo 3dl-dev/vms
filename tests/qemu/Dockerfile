@@ -750,6 +750,17 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     sh /src/repo/tests/lab/ci6/mk_evacwl_native.sh /src/repo \
         /initramfs/vms/SYS0/SYSCOMMON/SYSLIB \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/EVACWL.EXE && \
+    # RMHOLD.EXE (rd vms-c2b): the remaster arms' holder program -- the OVMX
+    # mirror of the real VAX oracle's RMHOLD.MAR. Built HERE for the same
+    # reason EVACWL is: it links --use the very SYS$LIBRARY copies the suite
+    # then stages on the system volume, and .vms$imp binds by symbol-vector
+    # INDEX. Two producers only (DECC$SHR + LIBVMS$SHR), so cc is enough --
+    # no TCC step. test_syssvc_ci6_rmhold.c activates it.
+    sh /src/repo/tests/lab/ci6/mk_rmhold_native.sh \
+        /src/repo/build-static/bin/LINK.EXE \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RMHOLD.EXE \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMS$SHR.EXE' && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers

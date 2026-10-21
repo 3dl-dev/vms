@@ -18,6 +18,7 @@ Prints `key=value` lines (GITHUB_OUTPUT format):
   heavy_release   true|false
   alpha_selfhost_tier  true|false
   keystroke       true|false
+  decnet          true|false
   negctl_select   ALL | (empty = none) | space-separated defect names
 
 negctl_select is a PATH-TO-FACILITY map that FAILS CLOSED: a changed path that
@@ -76,6 +77,22 @@ TIERS = {
         ".github/workflows/ci-changes.yml",
         "tools/cross-alpha-vms/**",
         "tools/cross-alpha/run-module-gp-activation-alpha.sh",
+        "tools/ci/ci_tiers.py",
+    ],
+    # DECnet pair (ci-vax vax-decnet-pair, rd vms-9394): OVMX/VAX <-> OVMX/x86
+    # SET HOST over NETACP on the executive datalink. Runs in the queue only
+    # when DECnet, the raw-L2 datalink or NETACP's startup is touched.
+    "decnet": [
+        ".github/workflows/ci-vax.yml",
+        ".github/workflows/ci-changes.yml",
+        "src/vmsdecnet/**",
+        "src/libdatalink/**",
+        "src/kernel-core/vms_l2*",
+        "src/kernel/vms_l2*",
+        "src/kernel-netbsd/vms_socket_netbsd.c",
+        "src/kernel-netbsd/vms_l2*",
+        "distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTNET.COM",
+        "tests/lab-vax/run-boot.sh",
         "tools/ci/ci_tiers.py",
     ],
     # Keystroke oracle: the console, terminal driver and boot path.
@@ -213,21 +230,22 @@ def changed_files(repo, base):
 
 def decide(event, ref, files, table_fn):
     res = {"heavy_release": "false", "alpha_selfhost_tier": "false",
-           "keystroke": "false", "negctl_select": ""}
+           "keystroke": "false", "decnet": "false", "negctl_select": ""}
     if is_full(event, ref):
         return {"heavy_release": "true", "alpha_selfhost_tier": "true",
-                "keystroke": "true", "negctl_select": "ALL"}
+                "keystroke": "true", "decnet": "true", "negctl_select": "ALL"}
     if event == "push":
         return res  # the queue already tested this exact tree
     if files is None:  # could not compute: fail closed (queue / PR only)
         if event == "merge_group":
             return {"heavy_release": "true", "alpha_selfhost_tier": "true",
-                    "keystroke": "true", "negctl_select": "ALL"}
+                    "keystroke": "true", "decnet": "true", "negctl_select": "ALL"}
         return res
     if event == "merge_group":
         res["alpha_selfhost_tier"] = "true" if matches_any(files, TIERS["alpha_selfhost_tier"]) else "false"
         res["heavy_release"] = "true" if matches_any(files, TIERS["heavy_release"]) else "false"
         res["keystroke"] = "true" if matches_any(files, TIERS["keystroke"]) else "false"
+        res["decnet"] = "true" if matches_any(files, TIERS["decnet"]) else "false"
         try:
             res["negctl_select"] = negctl_select(files, table_fn())
         except Exception as e:  # noqa: BLE001 -- fail closed
@@ -257,7 +275,7 @@ def main():
     except Exception as e:  # noqa: BLE001 -- fail closed
         print("ci_tiers: cannot compute changed files (%s)" % e, file=sys.stderr)
     res = decide(a.event, a.ref, files, lambda: defect_table(a.repo))
-    for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "negctl_select"):
+    for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "decnet", "negctl_select"):
         print("%s=%s" % (k, res[k]))
 
 

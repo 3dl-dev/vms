@@ -1325,7 +1325,11 @@ jobs:
       packages: read
       contents: read   # gh release download of the x86 peer's boot set
     needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # CI-speed policy: nightly and workflow_dispatch (the pre-tag full run)
+    # always; in the MERGE QUEUE only when DECnet, the raw-L2 datalink or
+    # NETACP's startup is touched (tools/ci/ci_tiers.py `decnet`, fail-closed);
+    # never on a pull_request.
+    if: ${{ ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true')) || (github.event_name == 'merge_group' && needs.changes.outputs.decnet == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:

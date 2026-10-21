@@ -93,6 +93,7 @@
 #include "ovmx_layout.h"    /* ovmx_boot_stage_exec_path                              */
 #include "starlet.h"        /* vms-f54 CLIENT: $ASSIGN/$QIO(W)/$DASSGN terminal I/O */
 #include "descrip.h"        /* dsc$descriptor_s for the SYS$INPUT/SYS$OUTPUT assign */
+#include "opcdef.h"         /* rd vms-158d: the "DECnet starting" OPCOM message */
 #include "iodef.h"          /* IO$_READVBLK/WRITEVBLK/SETMODE + IO$K_TT_PASSALL      */
 #include "lnmdef.h"         /* LNM$C_USER: the DNET$NETACP_REQ logical (rd vms-dda)   */
 
@@ -8470,6 +8471,35 @@ static int run_net_loopback_accept_test(void)
 #undef NL_CHECK
 }
 
+/*
+ * rd vms-158d: what a real VMS node's operator sees when DECnet comes up --
+ * NETACP's OPCOM message "DECnet starting" (tests/lab/captures/
+ * vms-52d-0b01-oracle-20261013/armA-vax1-console.log: "Message from user
+ * DECNET on VAX1 / DECnet starting"). Sent through $SNDOPR, so it is filed in
+ * SYS$MANAGER:OPERATOR.LOG like any operator request; STARTNET.COM prints no
+ * launch line of its own on the console. Best-effort: a refused $SNDOPR never
+ * stops the network.
+ */
+static void netacp_opcom_starting(void)
+{
+    struct {
+        struct opcdef hdr;
+        char text[32];
+    } msgbuf;
+    static const char text[] = "DECnet starting";
+    struct dsc$descriptor_s desc;
+
+    memset(&msgbuf, 0, sizeof msgbuf);
+    msgbuf.hdr.opc$b_ms_type = OPC$_RQ_RQST;
+    OPC$SET_TARGET(msgbuf.hdr, OPC$M_NM_CENTRL);
+    (void)snprintf(msgbuf.hdr.opc$l_ms_text, sizeof msgbuf.text, "%s", text);
+    desc.dsc$a_pointer = (char *)&msgbuf.hdr;
+    desc.dsc$w_length = (uint16_t)(OPC$K_MS_HDRLEN + sizeof text - 1);
+    desc.dsc$b_dtype = DSC$K_DTYPE_T;
+    desc.dsc$b_class = DSC$K_CLASS_S;
+    (void)sys$sndopr(&desc, 0);
+}
+
 int main(int argc, char **argv)
 {
     /* rd vms-c6d1: started by net_req_probe_spawn ($CREPRC, no argv -- VMS
@@ -8874,6 +8904,8 @@ int main(int argc, char **argv)
                : "not executive-resident",
            station[0], station[1], station[2], station[3], station[4], station[5]);
     fflush(stdout);
+    if (argc == 1)                   /* the detached NETACP STARTNET launched */
+        netacp_opcom_starting();
     unsigned ifindex = if_nametoindex(ifname);
     if (ifindex == 0) {
         fprintf(stderr, "DECNETD-E-NOIFACE, unknown interface '%s': %s\n",

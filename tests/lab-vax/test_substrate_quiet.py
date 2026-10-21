@@ -55,14 +55,9 @@ Tests completed.
 -DUA0
   1..0..
 
-%OVMX-I-EXEC, VMS executive attached on /dev/vms
-
     OpenVMX V0.7-5 - OpenVMS-compatible
      1-OCT-2026 13:03:27.75
 
-%OVMX-I-SYSDISK, mounting system disk DUA0:
-%OVMX-I-MOUNTED, system disk DUA0: mounted
-%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
 %SYSINIT, waiting to form or join a VMScluster system
 %CNXMAN,  sending VAXcluster membership request to system VAXC
 %CNXMAN,  now a VAXcluster member -- system OVMXB

@@ -395,7 +395,7 @@ ERRORS=""
 # there is no session to test. Asserting it here (vms-0ff, ported by the
 # vms-a35 PR #6 rebase) keeps a silent regression in the boot guarantee from
 # surfacing as a confusing login timeout instead of a clear one.
-wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT" \
+wait_for ' - OpenVMS-compatible' "$BOOT_TIMEOUT" \
     || fail_with_console "ERROR: the executive never attached — the system did not come up"
 
 send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:

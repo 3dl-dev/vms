@@ -195,9 +195,23 @@ boot_case "ovmx.sysdev=VDA100:" "${VDB_LAYOUT[@]}"
 trap cleanup EXIT
 if reaches_login; then rc=0; else rc=1; fi
 record "Case B: boots the SECOND disk (VDA100:) to login — fails on pristine main" "$rc"
-# Corroborate: the mount narration names the selected unit, not VDA0:.
-if grep -qaF 'system disk VDA100: mounted' "$CONSOLE_LOG"; then mrc=0; else mrc=1; fi
-record "Case B: %OVMX-I-MOUNTED names the discovered unit VDA100:" "$mrc"
+# Corroborate: the system device is the selected unit, not VDA0:. Since rd
+# vms-158d the mount narration (%OVMX-I-MOUNTED) is an OPERATOR.LOG record, not a
+# console line, so ask the booted system the VMS way: log in and translate
+# SYS$SYSDEVICE, which PID 1 publishes from the unit it actually mounted.
+mrc=1
+if [ "$rc" -eq 0 ]; then
+    send 'SYSTEM'
+    if wait_for 'Password:' 30; then
+        send 'MANAGER'
+        if wait_for 'Welcome to OpenVMX' 60; then
+            sleep 2
+            send 'SHOW LOGICAL SYS$SYSDEVICE'
+            if wait_for '"SYS$SYSDEVICE" = "VDA100:"' 30; then mrc=0; fi
+        fi
+    fi
+fi
+record "Case B: SYS\$SYSDEVICE translates to the discovered unit VDA100:" "$mrc"
 { [ "$rc" -ne 0 ] || [ "$mrc" -ne 0 ]; } && dump_console "Case B"
 cleanup; trap - EXIT
 echo ""

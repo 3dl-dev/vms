@@ -819,10 +819,16 @@ int main(void)
                        detail);
     }
 
-    printf("%%OVMX-I-EXEC, system identity %s [%o,%o] established by the executive\n",
-           info.username, (unsigned)((info.uic >> 16) & 0xFFFFu),
-           (unsigned)(info.uic & 0xFFFFu));
-    fflush(stdout);
+    /* rd vms-158d: an operator-log record, not an OPA0: line -- a VMS boot
+     * console prints nothing for the system process's identity. */
+    {
+        char idline[128];
+        snprintf(idline, sizeof idline,
+                 "%%OVMX-I-EXEC, system identity %s [%o,%o] established by the executive",
+                 info.username, (unsigned)((info.uic >> 16) & 0xFFFFu),
+                 (unsigned)(info.uic & 0xFFFFu));
+        (void)rms_textfile_append_line(VMS_OPERATOR_LOG, idline);
+    }
 
     /*
      * PROVISION NOW, AS SYSTEM (vms-4ac). Both steps write ODS-2 ownership over

@@ -80,9 +80,19 @@ from vaxharness import HARNESS_ERROR, PROOF_FAILED, DCL_PROMPT
 # this substrate any more -- the VAX console carries the VMS personality only,
 # so the first OVMX line is the executive attach. What replaces it is the
 # console-quiet check below (SUBSTRATE_MARKERS), which has teeth of its own.
-MS_EXEC    = "VMS executive attached on /dev/vms"           # /dev/vms open
+# rd vms-158d: the executive-attached and system-disk-mounted lines are
+# OPERATOR.LOG records now, NOT console lines -- a real VMS boot console prints
+# neither. The console milestones are what VMS prints:
+#   - the product banner, which PID 1 prints only once the executive is attached
+#     and the system process established (so it IS the attach proof, "exec");
+#   - the mount is proven by what PID 1 can only print AFTER the Files-11 ACP
+#     mounted DUA0:: either %STDRV-I-STARTUP (an installed system was found on
+#     it) or the installed-system halt "... is not an installed OVMX system
+#     volume" (mounted, but no DCL.EXE). A volume that will not mount halts
+#     "... would not mount" instead (MS_MOUNT_FAIL).
 MS_BANNER  = "OpenVMS-compatible"                           # product banner
-MS_MOUNTED = "system disk DUA0: mounted"                    # ODS-2 mounted
+MS_EXEC    = MS_BANNER                                      # printed after attach
+MS_MOUNT_FAIL = "would not mount"                           # ACP $MOUNT refused
 
 # vms-7b15: the SINGLE-disk evidence line. In the single-disk layout the ODS-2
 # volume is PARTITION 'e' of the same MSCP disk (ra0) VMB booted the NetBSD root
@@ -852,7 +862,7 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
     if negctl:
         vmm_args = []
         log("NEGATIVE CONTROL: booting WITHOUT the ODS-2 volume -- the "
-            "'%s' milestone MUST NOT appear" % MS_MOUNTED)
+            "mount-proof milestone (installed-system halt or STDRV) MUST NOT appear")
     else:
         ods2_abs = os.path.abspath(ods2_img)
         vmm_args = ["set rq1 ra92", "attach rq1 " + ods2_abs]
@@ -871,53 +881,40 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
         # ovmx_init IS init: no shell, no login. Watch the console for the
         # milestone lines in order. Each expect has the boot deadline; a
         # milestone that never arrives times out -> honest failure.
-        want_order = [("exec", MS_EXEC), ("banner", MS_BANNER)]
-        if not negctl:
-            want_order.append(("mounted", MS_MOUNTED))
-
         try:
-            for key, pat in want_order:
-                child.expect(pat, timeout=boot_deadline)
-                seen[key] = True
-                _scan_substrate(child, seen)
-                log("MILESTONE: saw %r" % pat)
+            child.expect(MS_BANNER, timeout=boot_deadline)
+            seen["exec"] = seen["banner"] = True
+            _scan_substrate(child, seen)
+            log("MILESTONE: saw %r (the executive is attached)" % MS_BANNER)
         except pexpect.TIMEOUT:
             log("timed out waiting for a boot milestone; saw=%s" % sorted(seen))
         except pexpect.EOF:
             log("SIMH exited before a boot milestone appeared; saw=%s"
                 % sorted(seen))
 
-        if negctl:
-            # TEETH: with no ODS-2 volume the mount MUST fail, so the MOUNTED
-            # line must NOT appear. Race MOUNTED against the honest mount-fail
-            # halt -- if MOUNTED wins, the gate has no teeth (recorded in `seen'
-            # and caught by main); if the halt wins, MOUNTED was correctly
-            # absent.
+        # The mount: race what PID 1 prints only after a SUCCESSFUL ACP mount
+        # (the installed-system halt on this flat volume, or STDRV) against the
+        # honest mount-fail halt. In negctl the mount MUST fail -- if a
+        # mounted-proof line wins there, the gate has no teeth (recorded in
+        # `seen' and caught by main).
+        if seen.get("banner"):
             try:
                 # No pexpect.EOF in the list (anita's expect wrapper crashes on a
                 # matched EOF/TIMEOUT sentinel -- see STEP 1/2); EOF is caught below.
-                idx = child.expect([MS_MOUNTED, r"%OVMX-F-SYSINIT",
-                                    r"%OVMX-F-EXECINIT"], timeout=300)
-                if idx == 0:
+                idx = child.expect([MS_INSTALLED_GATE_FAIL, MS_STDRV,
+                                    MS_MOUNT_FAIL, r"%OVMX-F-EXECINIT"],
+                                   timeout=300 if negctl else boot_deadline)
+                _scan_substrate(child, seen)
+                if idx in (0, 1):
                     seen["mounted"] = True
-                    log("post-milestone: MOUNTED appeared with NO ODS-2 volume "
-                        "(the mount gate has NO teeth)")
+                    log("MILESTONE: the system disk MOUNTED (PID 1 got past the "
+                        "ACP mount: %r)" % ([MS_INSTALLED_GATE_FAIL, MS_STDRV][idx]))
                 else:
-                    log("post-milestone: mount correctly FAILED without an "
-                        "ODS-2 volume; MOUNTED did not appear (teeth confirmed)")
+                    log("post-milestone: the mount FAILED (%s)"
+                        % ("ACP $MOUNT refused" if idx == 2 else "EXECINIT halt"))
             except (pexpect.TIMEOUT, pexpect.EOF, Exception):
-                log("post-milestone: no MOUNTED and no halt within window (or SIMH "
-                    "exited); treating MOUNTED as absent")
-        else:
-            # For the record + the "what's missing for DCL" report: capture the
-            # honest post-milestone halt (require_installed_system: DCL absent).
-            try:
-                child.expect([r"%OVMX-F-SYSINIT", r"%OVMX-F-EXECINIT",
-                              r"%OVMX-E-", r">>>"], timeout=180)
-                log("post-milestone console: ovmx_init reached its honest "
-                    "installed-system halt (expected -- DCL is vms-d59)")
-            except Exception:
-                pass
+                log("post-milestone: no mount proof and no halt within window (or "
+                    "SIMH exited); treating MOUNTED as absent")
     finally:
         _hard_kill(child)
 
@@ -998,17 +995,17 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
         # Pre-mount milestones, same order as do_prove. (Single-disk mode used
         # to also wait for vms.kmod's "DUA0: -> ra0e" printf here; under the
         # OVMX_QUIET kernel that line is in dmesg only -- see MS_DUA0_RA0E.)
-        premount = [("exec", MS_EXEC), ("banner", MS_BANNER),
-                    ("mounted", MS_MOUNTED)]
-        for key, pat in premount:
-            try:
-                child.expect(pat, timeout=boot_deadline)
-                seen[key] = True
-                _scan_substrate(child, seen)
-                log("MILESTONE: saw %r" % pat)
-            except (pexpect.TIMEOUT, pexpect.EOF):
-                log("did not reach milestone %r; saw=%s" % (pat, sorted(seen)))
-                return seen
+        # rd vms-158d: the banner is the executive-attach proof; the mount is
+        # proven by the gate race below (STDRV or the installed-system halt are
+        # both printed only after the ACP mounted DUA0:).
+        try:
+            child.expect(MS_BANNER, timeout=boot_deadline)
+            seen["exec"] = seen["banner"] = True
+            _scan_substrate(child, seen)
+            log("MILESTONE: saw %r (the executive is attached)" % MS_BANNER)
+        except (pexpect.TIMEOUT, pexpect.EOF):
+            log("did not reach milestone %r; saw=%s" % (MS_BANNER, sorted(seen)))
+            return seen
 
         # The decisive race: does the installed-system gate HALT (DCL.EXE
         # absent), or does the boot reach %STDRV-I-STARTUP (past the gate,
@@ -1016,9 +1013,14 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
         try:
             # No pexpect.EOF in the list (anita crashes on a matched EOF sentinel);
             # EOF/TIMEOUT are caught below and reported as an unresolved gate.
-            idx = child.expect([MS_STDRV, MS_INSTALLED_GATE_FAIL],
+            idx = child.expect([MS_STDRV, MS_INSTALLED_GATE_FAIL, MS_MOUNT_FAIL],
                                timeout=boot_deadline)
             _scan_substrate(child, seen)
+            if idx == 2:
+                log("the system disk did NOT mount (%r); saw=%s"
+                    % (MS_MOUNT_FAIL, sorted(seen)))
+                return seen
+            seen["mounted"] = True
             if idx == 0:
                 seen["stdrv"] = True
                 log("MILESTONE: saw %r -- PAST the installed-system gate; PID 1 "

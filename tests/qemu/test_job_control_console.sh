@@ -140,7 +140,7 @@ dump_and_die() {
 }
 
 # --- 1. Boot the pre-installed disk to the login prompt ---------------------
-if wait_for '%OVMX-I-EXEC' 30; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+if wait_for ' - OpenVMS-compatible' 30; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
 if wait_for '%STDRV-I-STARTUP, OpenVMX startup begun' "$BOOT_TIMEOUT"; then
     ok "STDRV begun (STARTUP.COM ran)"
 else
@@ -163,7 +163,7 @@ fi
 # executive attaches -- BEFORE %STDRV-I-STARTUP and before STARTUP.COM's own
 # output -- matching the Alpha oracle (banner right after SYSBOOT hands over,
 # before any startup narration). It is already in the log by now (both
-# %OVMX-I-EXEC and %STDRV-I-STARTUP have already been observed above), so
+# the banner and %STDRV-I-STARTUP have already been observed above), so
 # this checks presence and its position relative to STDRV, not a fresh wait
 # with STARTUP_OFF as a floor -- that floor is now on the WRONG side of the
 # banner (before vms-1fb the banner printed after STARTUP_OFF; now it prints
@@ -277,20 +277,11 @@ BOOT_TOKENS=$(printf '%s\n' "$FID_FULL" | \
     grep -oE '%[A-Z][A-Z0-9_]*-[A-Z]-[A-Z0-9_]+|OpenVMX V[0-9]|Username:' | \
     sed -E 's/^OpenVMX V[0-9]$/__BANNER__/; s/^Username:$/__USERNAME__/' | \
     sed -n '1,/^__USERNAME__$/p')
-EXPECTED_TOKENS='%OVMX-I-EXEC
-__BANNER__
-%OVMX-I-SYSDISK
-%OVMX-I-MOUNTED
-%OVMX-I-SCSNODE
+# rd vms-158d: OVMX's boot narration is OPERATOR.LOG's now, and a successful
+# INSTALL ADD is silent (vms-220) -- the same pinned shape as
+# tests/qemu/test_boot_conformance.sh.
+EXPECTED_TOKENS='__BANNER__
 %STDRV-I-STARTUP
-%OVMX-I-EXEC
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
-%INSTALL-I-ADDED
 %RUN-S-PROC_ID
 __USERNAME__'
 if [ "$BOOT_TOKENS" = "$EXPECTED_TOKENS" ]; then

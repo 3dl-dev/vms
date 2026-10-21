@@ -197,7 +197,7 @@ boot_and_login() {
     local fd; [ "$key" = "A" ] && fd=4 || fd=5
     eval "exec $fd>\"$fifo\""
 
-    if wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}"; then
+    if wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}"; then
         ok "node $key: executive attached (real vms.ko)"
     else
         bad "node $key: executive never attached"
@@ -244,7 +244,7 @@ boot_and_login() {
         -no-reboot <"$fifo" >"$log" 2>&1 &
     QPID_[$key]=$!
     eval "exec $fd>\"$fifo\""
-    wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}" \
+    wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}" \
         || dump_and_die "node $key: boot2 executive never attached"
     send_to "$fd" ''
     wait_for_in "$log" 'Username:' "$BOOT_TIMEOUT" 0 "${QPID_[$key]}" \

@@ -128,7 +128,7 @@ dump_and_die() {
 #        phase driver still reaches its site-specific-startup landmark. If
 #        this fails, the mutation broke boot generally and the checks below
 #        would prove nothing specific to JOB_CONTROL. -----------------------
-if wait_for '%OVMX-I-EXEC' 30; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+if wait_for ' - OpenVMS-compatible' 30; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
 if wait_for '%STDRV-I-STARTUP, OpenVMX startup begun' "$BOOT_TIMEOUT"; then
     ok "STDRV begun (STARTUP.COM ran despite the missing component)"
 else

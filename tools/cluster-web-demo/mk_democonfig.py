@@ -235,6 +235,7 @@ REQUIRED_LOADER_PARAMS = [
 DEMO_NODE_A = {
     "name": "OVMXA", "id": 1987, "votes": 0, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
+    "decnet": "1.1",
 }
 
 # Node B (OVMX/VAX, pcjs KA655/NetBSD-VAX substrate) -- STAGED. Blocked on the
@@ -249,6 +250,7 @@ DEMO_NODE_A = {
 DEMO_NODE_B = {
     "name": "OVMXB", "id": 1988, "votes": 0, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
+    "decnet": "1.2",
 }
 
 # Node C (real OpenVMS VAX, pcjs KA655; V7.3 per rd vms-d24 as of rd vms-2570,
@@ -275,8 +277,19 @@ DEMO_NODE_B = {
 DEMO_NODE_C = {
     "name": "VAXC", "id": 1989, "votes": 1, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
+    "decnet": None,
 }
 
+# DECNET (rd vms-5843). "decnet" is the node's DECnet Phase IV address
+# (area.node), the SAME node name as its SCSNODE -- what a VMS site does when a
+# cluster member is also a DECnet node. Both OVMX nodes are DECnet endnodes of
+# area 1 and each one's permanent node database names the other, so a visitor
+# can SET HOST between them. The real VAX has None because that is what its
+# pinned volume really has: build_nodeC_vms73_cluster.sh declines DECnet
+# Phase IV at install (it needs a license PAK to start its circuit), so VAXC
+# runs no NETACP and no OVMX node may list it as reachable. The addresses are
+# OVMX's choice for this demo, not oracle values.
+#
 # The full 3-node target roster, in genesis join order (C forms, A joins, B
 # joins) -- the single place the demo page/generator should import from for
 # "all three nodes" rather than assembling their own list.
@@ -546,6 +559,33 @@ def _cmd_authorize(args):
           % (args.out, args.group, used))
 
 
+def decnet_ncp_commands(name, roster=None):
+    """The NCP commands that give roster node `name` its DECnet permanent
+    database (rd vms-5843): its executor (address, name, state on) and a
+    DEFINE NODE for every OTHER DECnet node in the roster. NCP.EXE itself
+    writes the files from these (inject-decnet-config.sh) -- this function
+    authors no file bytes. Raises ValueError for a node with no DECnet."""
+    roster = DEMO_ROSTER if roster is None else roster
+    me = [n for n in roster if n["name"] == name]
+    if not me:
+        raise ValueError("no roster node named %r" % name)
+    me = me[0]
+    if not me.get("decnet"):
+        raise ValueError("roster node %s has no DECnet address" % name)
+    cmds = ["SET EXECUTOR ADDRESS %s" % me["decnet"],
+            "SET EXECUTOR NAME %s" % me["name"],
+            "SET EXECUTOR STATE ON"]
+    for n in roster:
+        if n is not me and n.get("decnet"):
+            cmds.append("DEFINE NODE %s NAME %s" % (n["decnet"], n["name"]))
+    return cmds
+
+
+def _cmd_decnet_ncp(args):
+    for c in decnet_ncp_commands(args.name):
+        print(c)
+
+
 def _cmd_roster(args):
     if args.roster:
         with open(args.roster) as fp:
@@ -585,6 +625,11 @@ def main(argv=None):
     p.add_argument("password", nargs="?", default="")
     p.add_argument("--writer", choices=["auto", "c", "py"], default="auto")
     p.set_defaults(func=_cmd_authorize)
+
+    p = sub.add_parser("decnet-ncp", help="print the NCP commands that configure one "
+                                          "roster node's DECnet databases")
+    p.add_argument("name")
+    p.set_defaults(func=_cmd_decnet_ncp)
 
     p = sub.add_parser("roster", help="emit both artifacts per node into a dir")
     p.add_argument("out_dir")

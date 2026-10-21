@@ -216,6 +216,11 @@ jobs:
             --scsnode "$NODE_B_SCSNODE" --scssystemid "$NODE_B_SCSSYSTEMID" \
             --votes "$NODE_B_VOTES" --expected-votes "$NODE_B_EXPECTED_VOTES" \
             --vaxcluster "$NODE_B_VAXCLUSTER"
+          # DECnet (rd vms-5843): the roster's DECnet address and peers, written
+          # by this ref's own NCP.EXE onto the same ODS-2 partition, so Node B's
+          # boot-time STARTNET starts NETACP and SET HOST OVMXA/OVMXB works.
+          sh tools/cluster-web-demo/inject-decnet-config.sh "$W/e.qcow2" "$W/e.qcow2" \
+            --scsnode "$NODE_B_SCSNODE"
           qemu-img convert -O raw "$W/e.qcow2" "$W/e.new"
           [ "$(stat -c%s "$W/e.new")" = "$(stat -c%s "$W/e.raw")" ] || { echo "injected partition changed size"; exit 1; }
           dd if="$W/e.new" of="$IMG" bs=512 seek="$E_OFF" conv=notrunc status=none

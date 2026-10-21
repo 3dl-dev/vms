@@ -854,8 +854,7 @@ int main(void)
      * would leave the child to register itself from scratch and the identity
      * would not follow.
      */
-    char startup_path[512], dcl_path[512];
-    vms_to_linux(VMS_STARTUP_PATH, startup_path, sizeof(startup_path));
+    char dcl_path[512];
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
 
     /* ATOMIC FLIP (vms-5f0): execve the DCL.EXE copy PID 1 staged off the
@@ -870,17 +869,12 @@ int main(void)
             snprintf(dcl_path, sizeof(dcl_path), "%s", staged);
     }
 
-    /* STARTUP.COM presence is DCL's to resolve. With the /vms passthrough
-     * retired it is read through the executive ACP (RMS/$QIO), not a POSIX
-     * stat here -- a stat() of the retired /vms path would spuriously report
-     * "no site startup" on a volume that in fact carries it. DCL reports an
-     * absent procedure itself. On a substrate that still exposes the POSIX
-     * tree the stat is a harmless best-effort warning, not a gate. */
-    struct stat st_buf;
-    if (stat(startup_path, &st_buf) != 0)
-        fprintf(stderr,
-                "%%OVMX-I-STARTUP, handing %s to DCL for ACP resolution\n",
-                VMS_STARTUP_PATH);
+    /* STARTUP.COM presence is DCL's to resolve, through the executive ACP
+     * (RMS/$QIO); DCL reports an absent procedure itself. rd vms-158d deleted
+     * the stat() of the retired /vms path that stood here: it gated nothing,
+     * always failed where the passthrough is gone (NetBSD/VAX), and its only
+     * effect was a "%OVMX-I-STARTUP, handing ... to DCL" line on OPA0: that no
+     * VMS console prints. */
 
     /*
      * LEAVE SUBSTRATE ROOT (rd vms-137e, epic vms-8e6). Everything above --

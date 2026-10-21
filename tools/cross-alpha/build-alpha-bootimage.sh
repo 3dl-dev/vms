@@ -151,6 +151,10 @@ else
 fi
 
 mkdir -p "$WORK"
+# The system disk's size in MB (128 unless a gate stages more: the self-host
+# proofs carry cc1, cc1plus and the C/C++ headers, vms-5b3).
+DISK_MB=${OVMX_ALPHA_DISK_MB:-128}
+case "$DISK_MB" in ''|*[!0-9]*) echo "FAIL: OVMX_ALPHA_DISK_MB=$DISK_MB is not a size in MB"; exit 1;; esac
 
 echo "== assemble the Alpha boot image (disk master + initramfs + kernel bake) =="
 docker run --rm --memory=8g --cpus="$(nproc)" \
@@ -160,6 +164,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
   -v "$USERLAND":/userland:ro \
   -v "$WORK":/work "$IMG" bash -euo pipefail -c '
     KV="'"$KV"'"
+    DISK_MB="'"$DISK_MB"'"
     export ARCH=alpha CROSS_COMPILE=alpha-linux-gnu-
     export QEMU_LD_PREFIX=/usr/alpha-linux-gnu
     BIN=/userland/bin
@@ -425,9 +430,9 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     #    genuine system disk".  --ods2 + 128 MB is what makes it a real
     #    installed system disk the flip mounts.
     #########################################################################
-    echo "-- master ovmx-distrib-alpha.img (genuine ODS-2, 128 MB) --"
+    echo "-- master ovmx-distrib-alpha.img (genuine ODS-2, $DISK_MB MB) --"
     timeout 300 qemu-alpha "$BIN/vmsfs_master" --ods2 master \
-        /work/ovmx-distrib-alpha.img OVMXSYS "$ST/vms" 128
+        /work/ovmx-distrib-alpha.img OVMXSYS "$ST/vms" "$DISK_MB"
     # Verify: the ODS-2 reader has no `extract`; presence-gate via `--ods2 list`
     # exactly as the x86_64 Dockerfile.bootable path does.
     echo "-- verify: --ods2 list carries the login chain --"

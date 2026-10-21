@@ -2220,6 +2220,8 @@ PYEOF2
     # source, and RUN HELLO.EXE must print its line.
     MILESTONE_MAIN=drvlnk_test.c
     export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    # cc1 + cc1plus (~40 MB each), the C and C++ headers: more than the 128 MB default disk
+    export OVMX_ALPHA_DISK_MB=512
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     BOOT_TIMEOUT="${DRL_BOOT_TIMEOUT:-2400}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))

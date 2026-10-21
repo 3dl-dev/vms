@@ -12,16 +12,17 @@ summary: >
   lib$routines.h). Broad genuine coverage across arithmetic/bit ops, char-scan,
   CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree,
   VM, translation tables, output, event flags, logical names, and misc
-  groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND,
-  LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are
+  groups. Notable named gap: the floating LIB$EMODx/LIB$POLYx arithmetic
+  jackets. (Rows once listed for LIB$ISHFT,
+  LIB$ISHFTC, LIB$TRIM and LIB$SFREE_WAIT were removed 2026-10-21: no such
+  routines exist in the VMS LIB$ catalog -- the 227 entry points of the
+  RTL_Routines LIB$ help library; the shift intrinsics are compiler
+  built-ins and trimming is STR$TRIM.) LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are
   now a real FSM with backtracking (vms-9f6, CLOSED).
 last_reviewed: 2026-09-14
 items:
-  - {id: lib$_arith_bitops, kind: routine, status: partial, authenticity: real, vms: "Arithmetic/bit-manipulation group (LIB$ADDX, LIB$SUBX, LIB$BBSS/BBCC, LIB$EMUL, ...; VMS ships ~16)", evidence: src/libvms/rtl/lib_arith.c, notes: "14/16 present"}
-  - {id: lib$ishft, kind: routine, status: absent, authenticity: n/a, vms: "Arithmetic/logical shift"}
-  - {id: lib$ishftc, kind: routine, status: absent, authenticity: n/a, vms: "Circular shift"}
+  - {id: lib$_arith_bitops, kind: routine, status: partial, authenticity: real, vms: "Arithmetic/bit-manipulation group (LIB$ADDX, LIB$SUBX, LIB$BBSS/BBCC, LIB$EMUL, ...; VMS ships ~16)", evidence: src/libvms/rtl/lib_arith.c, notes: "Present: LIB$ADAWI ADDX SUBX EMUL EDIV BBCCI BBSSI EXTV EXTZV INSV FFC FFS CRC CRC_TABLE. Absent: the floating jackets LIB$EMODx and LIB$POLYx (F/D/G/H/S/T)."}
   - {id: lib$_charscan, kind: routine, status: implemented, authenticity: real, vms: "Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6)", evidence: src/libvms/rtl/lib_strconv.c, notes: "Proof tests/libvms/test_lib_rtl_batch2.c + tests/qemu/test_syssvc_lib_movtuc.c + defects.d/lib-movtuc-stop-untranslated.defect. Every VAX character-string-instruction jacket is present: LIB$LOCC LIB$MATCHC LIB$SCANC LIB$SKPC LIB$SPANC LIB$MOVC3 LIB$MOVC5 LIB$MOVTC and (the last gap) LIB$MOVTUC, which returns the 1-based position of the source character that TRANSLATES to the stop character (0 if none), never writes the stop character, and pads with the untranslated fill character or leaves the remainder unchanged when fill is omitted (RTL Library manual)."}
-  - {id: lib$trim, kind: routine, status: absent, authenticity: n/a, vms: "Trim trailing blanks/tabs from a string"}
   - {id: lib$_cli_spawn, kind: routine, status: implemented, authenticity: real, vms: "CLI/spawn group (LIB$SPAWN, LIB$GET_INPUT, LIB$GET_COMMAND, CLI$ FSM parser, ...; VMS ships ~10)", evidence: src/libvms/rtl/lib_common.c, notes: "~10/10 present, including a real CLI$ FSM parser"}
   - {id: lib$do_command, kind: routine, status: implemented, authenticity: real, vms: "Execute a DCL command string programmatically", evidence: src/libvms/rtl/lib_symbol.c, notes: "Over the CLI callback channel (ovmx_cli.h, OVMX_CLI_OP_DO_COMMAND): DCL keeps the command, the image ends without returning (SYS$EXIT, or an in-process image unwinds to DCL), and DCL executes the command at its current level so $STATUS is the command's (src/vmsdcl/dcl_cmd_process.c dcl_activate_image). LIB$_NOCLI with no CLI; a CLI refusal is returned; a command over the documented 255 characters is LIB$_INVARG (OVMX's refusal of an over-length argument). Proof tests/libvms/test_lib_symtab.c, tests/qemu/test_syssvc_lib_do_command.c + defects.d/lib-do-command-returns.defect, and DCL end to end in tests/qemu/test_run_status_e2e.sh (SYMSET.EXE with OVMX_DOCMD)."}
   - {id: lib$_datetime, kind: routine, status: implemented, authenticity: real, vms: "Date/time conversion group (LIB$DAY, LIB$CVT_VECTIM, LIB$CVT_FROM_INTERNAL_TIME, ...)", evidence: src/libvms/rtl/lib_datetime.c}
@@ -36,7 +37,6 @@ items:
   - {id: lib$_logical, kind: routine, status: implemented, authenticity: real, vms: "Logical-name wrapper group (LIB$SYS_TRNLOG, LIB$DELETE_LOGICAL, ...)", evidence: src/libvms/rtl/lib_logical.c}
   - {id: lib$_misc, kind: routine, status: implemented, authenticity: real, vms: "Miscellaneous group (LIB$GETJPI wrapper, LIB$WAIT, ...)", evidence: src/libvms/rtl/lib_misc.c}
   - {id: lib$_dyndesc, kind: routine, status: implemented, authenticity: real, vms: "Dynamic-descriptor helper group (LIB$SGET1_DD, LIB$SFREE1_DD, ...; VMS ships ~5)", evidence: src/libvms/rtl/lib_dyndesc.c, notes: "5/5 present"}
-  - {id: lib$sfree_wait, kind: routine, status: absent, authenticity: n/a, vms: "Wait for and free a string cell"}
   - {id: lib$tparse, kind: routine, status: implemented, authenticity: real, vms: "Table-driven character scanner", evidence: src/libvms/rtl/lib_tparse.c, notes: "real FSM with backtracking; formerly the known gap, closed vms-9f6"}
   - {id: lib$table_parse, kind: routine, status: implemented, authenticity: real, vms: "Table-driven parse entry point", evidence: src/libvms/rtl/lib_tparse.c}
   - {id: lib$_other, kind: routine, status: partial, authenticity: real, vms: "Remaining LIB$ routines beyond the groups enumerated above (VMS ships ~450+ total LIB$ entry points; OVMX implements 116 in rtl/lib_*.c, all backed by real implementations except the named gaps in this file)", evidence: src/libvms/rtl/, scope_1_0: stretch, notes: "broad genuine coverage; 116 distinct LIB$ symbols defined across rtl/lib_*.c"}

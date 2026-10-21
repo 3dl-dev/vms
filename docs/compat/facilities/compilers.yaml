@@ -32,7 +32,7 @@ items:
   - {id: fortran, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
      vms: "VAX/DEC/VSI Fortran (77/90/95)", notes: "Central to the scientific corpus. Needs FOR$ RTL + array descriptors (DSC$K_CLASS_A now DECLARED in descrip.h but unmarshalled) + VAX-float support — all absent. Operator scope call (vms-082)."}
   - {id: cobol, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
-     vms: "VAX/DEC COBOL", notes: "Central to the business corpus. Needs COB$ RTL + packed-decimal (OTS$CVT_T_P/CVT_P_T absent per ots.yaml) + indexed-file multi-key (rms$isam_alternate_key absent per rms-api). Operator scope call (vms-082)."}
+     vms: "VAX/DEC COBOL", notes: "Central to the business corpus. Needs COB$ RTL + packed decimal (DSC$K_DTYPE_P unsupported by LIB$CVT_DX_DX; OTS$DIV_PK_LONG/SHORT absent) + indexed-file multi-key (rms$isam_alternate_key absent per rms-api). Operator scope call (vms-082)."}
   - {id: basic, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
      vms: "VAX/DEC BASIC", notes: "Needs BAS$ RTL + varying-string descriptors (DSC$K_CLASS_VS declared in descrip.h but no RTL operates on it). Operator scope call (vms-082)."}
   - {id: pascal, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,

@@ -196,6 +196,39 @@ dlm_enq_req	*	119	1	derived	state:namelen	body[47] name length, 1..31
 dlm_enq_req	*	120	76	copied	any:name	body[48:48+L] the resource name off the RSB, then zero to body[124]. A real request leaves residue in that tail (all-zero in only 213 of 21,499); this node sends none (rd vms-42de)
 dlm_enq_req	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b); 21,499 of 21,499
 dlm_enq_req	*	200	4	derived	state:hash	body[128:132] the directory hash for the root name -- a value some system in this cluster put on the wire and vms_lock_dlm_learn_dir_hash() recorded, never one computed here (rd vms-4fb)
+# ---- rd vms-85f: the QUEUED answer to a cat-0x02 op-0x01 (cat 0x82, body[34]
+# 0xfb). A frame OVMX had NEVER emitted: a real VAX's $ENQW on a resource OVMX
+# masters and holds at a conflicting mode got no answer at all, its process sat
+# in RWSCS and STOP could not complete it (tests/lab/captures/
+# vms-3ac-promote-20261021). Grounded cell by cell by
+# tools/cluster/dlm_queued_answer_census.py: 110 real -> real queued pairs, 17
+# of them answering a ROOT request, and those 17 rewrite exactly fifteen body
+# offsets. Emitted by test_cnxman_coord.c through the shipping composer.
+dlm_enq_ans_queued	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, CNXMAN_ENV_RESPONSE)
+dlm_enq_ans_queued	*	74	2	derived	any:envelope	ack-msg#: the requester's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_enq_ans_queued	*	76	4	copied	any:echo	body[4:8]: the REQUEST's own transaction, echoed -- an answer is correlated to what it answers, and 110/110 real queued answers carry the request's token here
+dlm_enq_ans_queued	*	80	1	const	const:82	category 0x02 | 0x80, the response; 110/110
+dlm_enq_ans_queued	*	81	1	const	const:1	op stays 0x01: an ENQ is answered as an ENQ, never as something else; 110/110
+dlm_enq_ans_queued	*	82	2	const	const:0	body[10:12]: NOT rewritten by a real answer -- the request's own cell, which this node sends as 0 (the dlm_enq_req row above)
+dlm_enq_ans_queued	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b), echoed
+dlm_enq_ans_queued	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq) and stamped on every DLM message this node sends, answers included (cnxman_dlm_seq_stamp)
+dlm_enq_ans_queued	*	88	4	const	const:0	body[16:20]: the request's own cell, echoed; this node sends no residue (rd vms-42de)
+dlm_enq_ans_queued	*	92	4	derived	state:mlkid	body[20:24]: THE HANDLE THIS MASTER ASSIGNED, read off the LKB the engine really queued (vms_dlm_master_result.master_lkid; the builder refuses 0). 17/17 real ROOT answers rewrite this cell
+dlm_enq_ans_queued	*	96	4	derived	state:lkid	body[24:28]: the REQUESTER's own handle as the ENGINE recorded it on that LKB -- what the requester correlates by. NOT rewritten in 17/17 real answers, and the builder refuses a value that differs from the request's own
+dlm_enq_ans_queued	*	100	1	deviation	const:14	body[28]: the QUEUED record's flag. Real queued answers carry 0x14 (9 of 17 ROOT, 87 of 110) or 0x54 (8 of 17) and WHAT SELECTS THEM IS NOT GROUNDED; every one of the 49,556 GRANTED answers in the same corpus carries 0x10, so bit 0x04 is the queue. This node writes the commonest real form rather than guess the determinant. Recorded accepting: pending the rd vms-85f fire
+dlm_enq_ans_queued	*	101	1	deviation	const:0	body[29]: 0x00 (11 of 17) or 0x02 (6 of 17), same ungrounded determinant as body[28]; the commonest real form
+dlm_enq_ans_queued	*	102	1	copied	state:mode	body[30]: the mode the requester asked for, riding back unchanged -- NOT rewritten in 17/17 real queued answers (the opposite of a grant, which clears it)
+dlm_enq_ans_queued	*	103	1	const	const:0	body[31]: the request's own cell, echoed (0 from this node)
+dlm_enq_ans_queued	*	104	4	const	const:fb0000	body[32:36] = 00 00 fb 00, the QUEUED record, 17 of 17 -- body[34] is the universal cat-0x82 outcome byte and 0xfb is QUEUED (a grant's record is 01 00 fa 00)
+dlm_enq_ans_queued	*	108	8	const	const:0	body[36:44]: ZERO, because the builder REFUSES to answer any request that names a parent. All 93 real answers to a SUB-LOCK request rewrite body[40:44] with an S0 address (high byte 0x87) -- the master's own kernel memory, which this executive does not hold (INV-6), so a queued sub-lock request stays counted silence
+dlm_enq_ans_queued	*	116	2	derived	state:group	body[44:46] UIC group: the request's, echoed -- the resource identity the answer is about
+dlm_enq_ans_queued	*	118	1	derived	state:acmode	body[46] access mode: the request's, echoed
+dlm_enq_ans_queued	*	119	1	derived	state:namelen	body[47] name length: the request's, echoed -- a queued answer keeps the name (a GRANT clears it); 17/17
+dlm_enq_ans_queued	*	120	4	copied	any:name	body[48:52]: the resource name's head, echoed from the request
+dlm_enq_ans_queued	*	124	2	deviation	const:0	body[52:54]: zeroed, which also overwrites two bytes of the echoed name -- and that is what a real master does (17/17 rewrite this pair). body[53] is 0 in 17/17; body[52] is a small number 0..4 that no request cell predicts, so this node writes 0, as vms_dlm_convert_response_build_queued already does
+dlm_enq_ans_queued	*	126	70	copied	any:name	body[54:124]: the rest of the echoed name and the zero tail behind it
+dlm_enq_ans_queued	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b), echoed
+dlm_enq_ans_queued	*	200	4	derived	state:hash	body[128:132]: the directory hash the REQUEST carried, echoed -- a value some system in this cluster put on the wire, never one computed here (rd vms-4fb)
 # ---- cat 0x04 op 0x00: the credit/commit ACK (spec sec 4(u), rd vms-ac4f).
 #      The single largest class an OVMX node puts on a real VAX's wire: 256 of
 #      the 298 frames across every committed capture that no row described.

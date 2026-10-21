@@ -1366,6 +1366,160 @@ static void test_the_fail_safe_is_still_armed(void)
 	engine_down();
 }
 
+/* ==========================================================================
+ * 11. rd vms-85f: A QUEUED MASTER-SEAM OUTCOME PRODUCES A FRAME
+ *
+ * The defect was not in the engine. The engine queued the request correctly and
+ * reported VMS_DLM_MASTER_QUEUED; the ARM then said nothing, because the 0xfb
+ * answer to a first ENQ had never been grounded. A real VAX therefore waited in
+ * RWSCS for ever on a lock OVMX really held for it (measured on hardware,
+ * tests/lab/captures/vms-3ac-promote-20261021).
+ *
+ * This section proves the half the source-scan in test_dlm_scs_arm.c cannot:
+ * that the engine's QUEUED outcome carries the two handles the answer asserts,
+ * that both are reads of this node's own lock database, and that the SHIPPING
+ * codec turns them into a frame. The arrangement is deliberately NOT section
+ * 9's: here a REMOTE peer holds EX and a SECOND remote system queues behind it,
+ * so blocking_csid is real and a BLKAST is owed as well.
+ * ========================================================================== */
+#define EVAC_RES    "EVAC$WORKLOAD"
+#define HOLDER_LKID 0x05000311u   /* the EX holder's own handle              */
+#define WAITER_LKID 0x07000412u   /* the queued requester's own handle       */
+
+/* The frame the queued requester really sent us, composed by the SHIPPING
+ * request builder -- the same object that composes OVMX's own requests. */
+static uint32_t queued_requester_body(uint8_t *frame, uint32_t cap)
+{
+	struct vms_dlm_enq_request r;
+	uint32_t written = 0;
+
+	/* Zero first, exactly as the shipping send path zeroes its frame
+	 * scratch: the request builder writes its own fields and nothing else,
+	 * so an unzeroed buffer would hand the answer builder stack garbage in
+	 * the cells it reads (body[36:44] among them). */
+	memset(frame, 0, cap);
+	memset(&r, 0, sizeof(r));
+	r.mode = LCK_K_EXMODE;
+	r.req_lkid = WAITER_LKID;
+	r.req_pid = 0x10000031u;
+	r.res_group = 0u;
+	r.res_acmode = 0u;
+	r.res_ident_valid = 1u;
+	r.name_len = (uint8_t)strlen(EVAC_RES);
+	memcpy(r.name, EVAC_RES, r.name_len);
+	if (vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame, cap,
+				      &written) != VMS_CODEC_OK)
+		return 0u;
+	return written;
+}
+
+static void test_a_queued_outcome_produces_a_frame(void)
+{
+	struct vms_proc delivery, holder;
+	struct vms_dlm_adopt_tree t;
+	struct vms_dlm_master_result q;
+	struct vms_dlm_enq_response rsp;
+	struct vms_getlki_args lki;
+	uint8_t reqframe[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	const uint8_t *reqbody = reqframe + VMS_OFF_SYSAP_BODY;
+	uint32_t written = 0, held = 0u, n_locks = 0u;
+
+	printf("--- rd vms-85f: a request this master QUEUED is ANSWERED, and "
+	       "the answer's two handles are lock-database reads ---\n");
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	/* 1. THE MEASURED ARRANGEMENT (the lab fire's, exactly): a real VAX
+	 *    handed this node the tree, and a local process of ours holds the
+	 *    workload lock in it at CR. Section 9 proves the hand-over; what
+	 *    this section needs from it is a resource THIS node masters with a
+	 *    conflicting holder on its granted queue. */
+	proc_init(&holder);
+	held = granted_proxy(&holder, EVAC_RES, LCK_K_CRMODE, 0x37000512u);
+	ct_check(held != 0u, "a local lock at CR, granted by the old master");
+	memset(&t, 0, sizeof(t));
+	strscpy(t.resnam, EVAC_RES, sizeof(t.resnam));
+	t.ident_valid = 1u;
+	t.old_master_csid = CSID_MASTER;
+	ct_check_eq_u32(vms_lock_dlm_adopt_open(&t), SS__NORMAL,
+			"the old master hands this node the tree");
+	ct_check_eq_u32(vms_lock_dlm_adopt_end(&t, &n_locks), SS__NORMAL,
+			"  and the adoption completes: this node masters it, "
+			"with our CR lock on its granted queue");
+
+	/* 2. A real VAX asks for EX and is queued behind it. */
+	q = serve(VMS_DLM_MREQ_ENQ, CSID_PEER, WAITER_LKID, LCK_K_EXMODE,
+		  EVAC_RES);
+	ct_check_eq_u32(q.outcome, VMS_DLM_MASTER_QUEUED,
+			"*** the peer's EX is QUEUED behind the local CR ***");
+	ct_check_eq_u32(q.blocking_csid, 0u,
+			"  and no cross-node holder is named: what blocks it is "
+			"this node's own lock, so no BLKAST is addressed at a "
+			"peer");
+	ct_check(q.master_lkid != 0u && q.req_lkid == WAITER_LKID,
+		 "  the outcome carries BOTH handles the answer asserts: the "
+		 "one this engine minted and the requester's own, read back "
+		 "off the LKB");
+
+	/* 3. ...and the handle it reports really is a lock in this database,
+	 *    queued (not granted) for that system. Nothing is asserted that
+	 *    $GETLKI cannot show. */
+	ct_check(getlki(&delivery, q.master_lkid, &lki),
+		 "$GETLKI resolves the handle the outcome named: a real LKB");
+	ct_check_eq_u32(lki.granted_mode, 0u,
+			"  and it is NOT granted -- the lock is on the waiting "
+			"queue, which is what 0xfb means");
+
+	/* 4. THE FRAME. The shipping codec, the request the peer really sent,
+	 *    and the two handles from step 2. */
+	ct_check(queued_requester_body(reqframe, sizeof(reqframe)) != 0u,
+		 "the requester's own op-0x01 composes");
+	memset(ans, 0, sizeof(ans));
+	ct_check(vms_dlm_enq_response_build_queued(reqbody, VMS_CM_BODY_LEN,
+						   q.master_lkid, q.req_lkid,
+						   ans, sizeof(ans),
+						   &written) == VMS_CODEC_OK,
+		 "*** the queued outcome produces a frame ***");
+	ct_check_eq_u32(ans[VMS_OFF_DLM_CAT], 0x82u, "  cat 0x82");
+	ct_check_eq_u32(ans[VMS_OFF_DLM_OP], VMS_DLM_WIREOP_ENQ,
+			"  op stays 0x01");
+	ct_check_eq_u32(ans[VMS_OFF_SYSAP_BODY + 34u], VMS_DLM_REPLY_QUEUED,
+			"  outcome byte 0xfb (251)");
+	/* READ BACK THROUGH THE SHIPPING PARSER, never byte arithmetic -- and
+	 * it is the parser a real VAX's answer meets on OVMX's own requester
+	 * side, so this round trip proves both halves agree on 0xfb. */
+	ct_check(vms_dlm_enq_response_parse_body(ans + VMS_OFF_SYSAP_BODY,
+						 VMS_CM_BODY_LEN, &rsp) ==
+		 VMS_CODEC_OK, "  and the shipping parser reads it back");
+	ct_check_eq_u32((uint32_t)rsp.outcome, (uint32_t)VMS_DLM_ENQ_QUEUED,
+			"*** the parser calls it QUEUED, not GRANTED: a 0xfb "
+			"must never be reported as a lock this node holds ***");
+	ct_check(rsp.master_lkid == q.master_lkid,
+		 "*** body[20:24] is the handle $GETLKI just resolved -- an "
+		 "executive read, not a byte from the request ***");
+	ct_check(rsp.req_lkid == q.req_lkid,
+		 "*** body[24:28] is the requester handle the ENGINE recorded "
+		 "***");
+	ct_check_eq_u32(ans[VMS_OFF_SYSAP_BODY + 30u], LCK_K_EXMODE,
+			"  and the mode it asked for rides back");
+
+	/* 5. NEGATIVE CONTROL: the same outcome with a handle this database
+	 *    does not hold is not answerable -- the builder's refusal is what
+	 *    stops a frame naming a lock that does not exist. */
+	ct_check(vms_dlm_enq_response_build_queued(reqbody, VMS_CM_BODY_LEN,
+						   q.master_lkid,
+						   WAITER_LKID + 1u, ans,
+						   sizeof(ans), &written) !=
+		 VMS_CODEC_OK,
+		 "a requester handle the engine did not record produces NO "
+		 "frame");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_deq_reachable (rd vms-49f8: the op-0x03 $DEQ has a "
@@ -1380,5 +1534,6 @@ int main(void)
 	test_e09_removal_reaches_the_wire();
 	test_adoption_converts_our_own_lock();
 	test_the_fail_safe_is_still_armed();
+	test_a_queued_outcome_produces_a_frame();
 	return ct_summary("test_dlm_deq_reachable");
 }

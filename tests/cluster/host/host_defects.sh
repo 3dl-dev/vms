@@ -188,6 +188,9 @@ dlm-grant-record-omitted
 dlm-echo-guard-never-caps
 dlm-deadlock-search-follows-remote-holders
 dlm-queued-convert-answered-as-granted
+dlm-queued-enq-not-answered
+dlm-queued-answer-read-as-granted
+dlm-queued-sublock-answered-anyway
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -875,6 +878,46 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
   ... outcome byte 0xfb (queued)
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-enq-not-answered)
+        case "$_f" in
+        facility)     echo "the immediate answer to a first ENQ this master QUEUED (vms_dlm_scs.c dlm_arm_reply_queued -> vms_dlm_enq_response_build_queued, rd vms-85f): a real master answers 0xfb at once, and the arm must CALL it";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "the queued branch goes back to saying nothing at all, which is what shipped before. MEASURED COST on real hardware 2026-10-21 20:48-20:52 UTC (tests/lab/captures/vms-3ac-promote-20261021): OVMX mastered RA7T and held its root at CR, VAX2's \$ENQW EX reached it as the master -- and OVMX sent NO DLM frame at all. VAX2's process sat in RWSCS and 'STOP HOLD2' could not complete it. The lock was really queued in OVMX's database; only the answer was missing.";;
+        require_fail) hd_lines <<'EOF'
+*** the QUEUED outcome really REACHES the answer -- the branch calls it, it does not merely define it ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-answer-read-as-granted)
+        case "$_f" in
+        facility)     echo "READING a master's 0xfb (vms_cluster_codec_dlm.c vms_dlm_enq_response_parse_body, rd vms-85f): the QUEUED outcome is resolved BEFORE the grant/deny shape test, because a queued answer has a non-zero mode byte and an echoed name and would otherwise read as a GRANT";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the queued branch is removed, so a real VAX master's 'I have QUEUED your request' is reported to this node's requester FSM as GRANTED -- and the waiting process is told it holds a lock no master gave it (INV-6). It is the mirror of the emit defect: OVMX would both fail to say 0xfb and mis-read one.";;
+        require_fail) hd_lines <<'EOF'
+*** the parser calls it QUEUED, not GRANTED: a 0xfb must never be reported as a lock this node holds ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-sublock-answered-anyway)
+        case "$_f" in
+        facility)     echo "the SUB-LOCK refusal in the queued answer (vms_cluster_codec_dlm.c dlm_req_names_parent, rd vms-85f): a request that names a parent is not answered at all, because all 93 real answers to one carry the master's own S0 address at body[40:44]";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the parent-span test always says 'no parent', so a queued SUB-LOCK request is answered with body[40:44] left as the REQUESTER's parent-master handle -- a cell this executive does not hold, in the one frame family that has already bugchecked two lab VAXes. The honest alternative exists and is counted (queued_unanswerable).";;
+        require_fail) hd_lines <<'EOF'
+*** a queued SUB-LOCK request is REFUSED, not answered with a minted S0 address ***
+  either half of body[36:44] makes it a sub-lock request
 EOF
                       ;;
         esac;;
@@ -2871,6 +2914,19 @@ apply_edit() {
         # answer in the new master's form; the opcode half stays, so only the
         # op-0x0f answer is corrupted and the defect is still one variable.
         sed -i 's|^\tif (new_master != 0 \&\& op == VMS_DLM_WIREOP_RM_0F)$|\tif (op == VMS_DLM_WIREOP_RM_0F) /* NEGCTL dlm-op0f-member-answers-as-new-master */|' "$_file";;
+
+    dlm-queued-enq-not-answered)
+        # The one call that answers it. Removing it removes the anchor.
+        sed -i 's|\t\treturn dlm_arm_reply_queued(d, in, \&res, wireop, reply);|\t\td->queued_no_reply++; return 0; /* NEGCTL dlm-queued-enq-not-answered */|' "$_file";;
+
+    dlm-queued-answer-read-as-granted)
+        # The parse's queued branch turns on one comparison, unique in this
+        # file; making it never match removes the anchor.
+        sed -i 's|\tif (vms_wire_get_u8(\&v, VMS_OFB_DLM_RESULT_STAMP) ==|\tif (0 \&\& vms_wire_get_u8(\&v, VMS_OFB_DLM_RESULT_STAMP) == /* NEGCTL dlm-queued-answer-read-as-granted */|' "$_file";;
+
+    dlm-queued-sublock-answered-anyway)
+        # The parent-span test's own call, unique in this file.
+        sed -i 's|\tif (dlm_req_names_parent(v))|\tif (0) /* NEGCTL dlm-queued-sublock-answered-anyway */|' "$_file";;
 
     dlm-queued-convert-answered-as-granted)
         # The queued outcome is written in exactly one place.

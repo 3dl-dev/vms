@@ -1458,6 +1458,8 @@ struct vms_dlm_scs_view_wire {
     uint32_t deferred_grants_owed;
     uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
     uint32_t queued_no_reply;
+    uint32_t queued_answered;          /* ...and the 0xfb that went back (85f) */
+    uint32_t queued_unanswerable;      /* ...and the honest silence left       */
     uint32_t unparsed;
     uint32_t foreign_refused;
     /* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5) -- the pair
@@ -1486,7 +1488,7 @@ struct vms_dlm_scs_view_wire {
     uint32_t posts_lock_gone;
     uint32_t posts_refused;
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 184,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 192,
                "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
 
 struct vms_cluster_diag_dlm_args {
@@ -1494,7 +1496,7 @@ struct vms_cluster_diag_dlm_args {
     uint32_t pad0;
     struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
 };
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 192,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 200,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 /*
  * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
@@ -1509,12 +1511,16 @@ _Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 192,
  * `valblk_writes_received` (144 -> 148), moving it 0xC090566E -> 0xC094566E --
  * again deliberately. rd vms-ed5 then appended the ten REMASTER counters
  * (148 -> 192), moving it 0xC094566E -> 0xC0C0566E -- deliberately, in that
- * commit. A diagnostic image built from another
+ * commit. rd vms-85f then appended `queued_answered` and
+ * `queued_unanswerable` (192 -> 200), moving it 0xC0C0566E -> 0xC0C8566E --
+ * deliberately, in that commit: a fire has to be able to read WHETHER a queued
+ * requester was answered, which is the defect that wedged a real VAX.
+ * A diagnostic image built from another
  * tree therefore fails LOUDLY (ENOTTY) rather than reading a shorter row as
  * data, which is the behaviour this assert exists to guarantee.
  */
 #define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
-_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC0C0566Eu,
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC0C8566Eu,
                "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
 
 /*

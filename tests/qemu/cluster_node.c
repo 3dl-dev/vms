@@ -1217,12 +1217,13 @@ static void rig_dump_dlm(int fd, const struct node_cfg *c, const char *phase)
 	       (unsigned)v->declined);
 	printf("RIG-%s-DLM-EMIT at=%s releases_sent=%u releases_no_wire_op=%u "
 	       "blkasts_sent=%u blkasts_no_wire_op=%u blkasts_received=%u "
-	       "blkasts_delivered=%u queued_no_reply=%u unparsed=%u "
-	       "foreign_refused=%u\n",
+	       "blkasts_delivered=%u queued_no_reply=%u queued_answered=%u "
+	       "queued_unanswerable=%u unparsed=%u foreign_refused=%u\n",
 	       c->tag, phase, (unsigned)v->releases_sent,
 	       (unsigned)v->releases_no_wire_op, (unsigned)v->blkasts_sent,
 	       (unsigned)v->blkasts_no_wire_op, (unsigned)v->blkasts_received,
 	       (unsigned)v->blkasts_delivered, (unsigned)v->queued_no_reply,
+	       (unsigned)v->queued_answered, (unsigned)v->queued_unanswerable,
 	       (unsigned)v->unparsed, (unsigned)v->foreign_refused);
 	/*
 	 * THE RECEIVE LEDGER (rd vms-c72), on its own line because it is the

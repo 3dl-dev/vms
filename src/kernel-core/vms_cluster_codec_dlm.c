@@ -220,6 +220,35 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t
 
 	out->valblk_present = 0;
 
+	/*
+	 * THE QUEUED ANSWER COMES FIRST (rd vms-85f), because it is the one
+	 * shape both discriminators below get WRONG: body[34] = 0xfb with the
+	 * requested mode and the resource name echoed back reads as a GRANT to
+	 * the grant/deny test, and reporting it as a grant tells the requesting
+	 * process it holds a lock the master has only queued.
+	 *
+	 * body[34] is the universal cat-0x82 outcome byte (see the header), and
+	 * 0xfb is QUEUED on both shapes a master queues: the first ENQ (110
+	 * real pairs, dlm_queued_answer_census.py) and the CONVERT (rd
+	 * vms-cab). Nothing else in the corpus's outcome set carries it, and no
+	 * grant does -- 49,556 of 49,556 grants carry 0xfa.
+	 */
+	if (vms_wire_get_u8(&v, VMS_OFB_DLM_RESULT_STAMP) ==
+	    VMS_DLM_REPLY_QUEUED) {
+		out->req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+		out->master_lkid = vms_wire_get_le32(&v,
+						     VMS_OFB_DLM_MASTER_LKID);
+		if (!vms_wire_view_ok(&v))
+			return v.err;
+		out->outcome = VMS_DLM_ENQ_QUEUED;
+		out->granted_mode = 0;
+		out->granted_mode_present = 0;
+		out->name_len = 0;   /* the name rides back, but nothing holds
+				      * this resource yet: there is no grant to
+				      * name. */
+		return VMS_CODEC_OK;
+	}
+
 	lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
 	mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
@@ -477,6 +506,115 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 		vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK + i,
 				valblk != (const uint8_t *)0 ? valblk[i] : 0u);
 
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/*
+ * Does this REQUEST name a parent lock? body[36:44] is the pair (own parent
+ * lkid, parent's master lkid) on a sub-lock request and all zero on a root one
+ * (tools/cluster/dlm_sublock_census.py). It decides whether a queued answer is
+ * buildable at all -- see the QUEUED RECORD section of the header.
+ */
+static int dlm_req_names_parent(vms_wire_view_t *v)
+{
+	uint32_t i;
+
+	for (i = 0u; i < VMS_DLM_PARENT_SPAN_LEN; i++) {
+		if (vms_wire_get_u8(v, VMS_OFB_DLM_PARENT_SPAN + i) != 0u)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * THE QUEUED RECORD, written in one place: body[28], body[29] and body[32:36].
+ * 17 of 17 real root answers carry 00 00 fb 00 at body[32:36]; body[28:30] has
+ * two real forms and no grounded determinant, so the commonest is written and
+ * recorded as a deviation (header, QUEUED RECORD).
+ */
+static void dlm_put_queued_record(vms_wire_buf_t *w)
+{
+	vms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_QUEUED_FLAG_VAL);
+	vms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG + 1u,
+			VMS_DLM_QUEUED_FLAG2_VAL);
+	vms_wire_put_le32(w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_QUEUED_REC_VAL);
+}
+
+/*
+ * Everything that must hold before this node may answer "queued" at all. Each
+ * refusal is a thing this executive would otherwise have to assert without
+ * holding it -- see the declaration in the header for what each one means.
+ */
+static vms_codec_status_t dlm_queued_answer_admit(vms_wire_view_t *v,
+						  uint32_t master_lkid,
+						  uint32_t req_lkid)
+{
+	uint8_t cat = vms_wire_get_u8(v, VMS_OFB_DLM_CAT);
+	uint8_t op = vms_wire_get_u8(v, VMS_OFB_DLM_OP);
+	uint32_t req_own = vms_wire_get_le32(v, VMS_OFB_DLM_REQ_LKID);
+
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_ENQ)
+		return VMS_CODEC_E_CLASS;
+	if (master_lkid == VMS_DLM_LKID_UNSET || req_lkid == VMS_DLM_LKID_UNSET)
+		return VMS_CODEC_E_INVAL;
+	if (req_lkid != req_own)
+		return VMS_CODEC_E_INVAL;
+	if (dlm_req_names_parent(v))
+		return VMS_CODEC_E_CLASS;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_enq_response_build_queued(const uint8_t *req_body,
+						     uint32_t req_len,
+						     uint32_t master_lkid,
+						     uint32_t req_lkid,
+						     uint8_t *frame, uint32_t cap,
+						     uint32_t *written)
+{
+	vms_wire_view_t v;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	st = dlm_queued_answer_admit(&v, master_lkid, req_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	/*
+	 * THE ANSWER IS THE REQUEST, ECHOED (the same discipline as the grant
+	 * and the queued CONVERT, rd vms-b5b0): the requester's own handle at
+	 * body[24:28], the mode it asked for at body[30] and the name it asked
+	 * about all ride back because they are NOT rewritten -- 17 of 17 real
+	 * root answers leave them alone. The opcode stays 0x01.
+	 */
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
+	/* The handle the ENGINE minted for the LKB it really queued. 17 of 17
+	 * real answers rewrite this cell: a queued requester is told its
+	 * master-side handle now, not when the grant comes. */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
+	/* The requester's own handle AS THE ENGINE RECORDED IT. Equal to the
+	 * echoed bytes by the admission check above, and written from the
+	 * executive so the field is a lock-database read rather than a byte
+	 * carried across frames (struct vms_dlm_master_result). */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req_lkid);
+	dlm_put_queued_record(&w);
+	/* body[52:54]: the SCS-layer word this codec does not own, zeroed as
+	 * the queued CONVERT's answer zeroes it. */
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 52u, 0u);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 53u, 0u);
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)

@@ -170,8 +170,15 @@ struct vms_dlm_scs {
 	uint32_t replies_received;    /* inbound cat-0x82 replies             */
 	uint32_t grants_sent;         /* grant replies built from a real LKB  */
 	uint32_t denies_sent;
-	uint32_t queued_no_reply;     /* genuinely queued: the grant comes later */
-	uint32_t queued_answered;
+	uint32_t queued_no_reply;     /* a request really QUEUED here (the state */
+				       /* that owes a BLKAST); the two below split */
+				       /* it by whether we TOLD the requester     */
+	uint32_t queued_answered;     /* ...and ANSWERED 0xfb at once          */
+	uint32_t queued_unanswerable; /* queued, and the 0xfb answer would have */
+				       /* had to assert a cell this node does  */
+				       /* not hold (a SUB-LOCK request's       */
+				       /* body[40:44], rd vms-85f). Silence,   */
+				       /* counted -- never a minted value.     */
 	uint32_t op0f_acked;          /* op-0x0f answered 82/15 (vms-cab)   */     /* queued CONVERTs answered 0xfb at once (vms-cab) */
 	uint32_t redirects_sent;      /* "the master is X", from a real RSB   */
 	uint32_t blkasts_sent;        /* op-0x05 blocking ASTs really emitted,*/
@@ -1464,6 +1471,59 @@ static void dlm_arm_send_blkast(struct vms_dlm_scs *d,
 	d->blkasts_sent++;
 }
 
+/*
+ * THE QUEUED ANSWER, both shapes (rd vms-cab for the CONVERT, rd vms-85f for
+ * the first ENQ). A real master answers a request it queued AT ONCE: the
+ * request echoed, cat 0x82, the record's outcome byte 0xfb. Until rd vms-85f
+ * this arm answered only the CONVERT, and a real VAX whose $ENQW queued here
+ * had nothing to wait on but silence -- its process sat in RWSCS and STOP could
+ * not complete it (measured, tests/lab/captures/vms-3ac-promote-20261021).
+ *
+ * The ENQ's answer asserts TWO handles, and both are read off the LKB this
+ * engine really queued (struct vms_dlm_master_result): the handle it minted and
+ * the requester's own handle as it recorded it. If the engine recorded neither,
+ * or the request is a SUB-LOCK one (whose answer would have to carry the
+ * master's own S0 address at body[40:44] -- 93 of 93 real ones do), the codec
+ * refuses and this node stays silent and counts it. The lock IS queued either
+ * way, so this is not an error return.
+ */
+static int dlm_arm_build_queued(struct vms_dlm_scs *d,
+				const struct dlm_scs_request *in,
+				const struct vms_dlm_master_result *r,
+				uint8_t wireop)
+{
+	uint32_t written = 0;
+
+	memset(d->txframe, 0, sizeof(d->txframe));
+	if (wireop == VMS_DLM_WIREOP_CONVERT)
+		return vms_dlm_convert_response_build_queued(
+			       in->body, in->len, d->txframe,
+			       (uint32_t)sizeof(d->txframe), &written) ==
+		       VMS_CODEC_OK ? 0 : -1;
+	return vms_dlm_enq_response_build_queued(
+		       in->body, in->len, r->master_lkid, r->req_lkid,
+		       d->txframe, (uint32_t)sizeof(d->txframe), &written) ==
+	       VMS_CODEC_OK ? 0 : -1;
+}
+
+static int dlm_arm_reply_queued(struct vms_dlm_scs *d,
+				const struct dlm_scs_request *in,
+				const struct vms_dlm_master_result *r,
+				uint8_t wireop, struct dlm_scs_reply *reply)
+{
+	/* The queue event itself: a real request on a real waiting queue, and
+	 * the state that owes a BLKAST. The two counters below say whether this
+	 * node managed to TELL the requester. */
+	d->queued_no_reply++;
+	if (dlm_arm_build_queued(d, in, r, wireop) != 0 ||
+	    dlm_arm_stage_reply(d, in, reply) != 0) {
+		d->queued_unanswerable++;
+		return 0;
+	}
+	d->queued_answered++;
+	return 0;
+}
+
 /* One inbound ENQ/CONVERT, served as the tree's master. */
 static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 			     const struct dlm_scs_request *in,
@@ -1504,32 +1564,7 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 							      : e->req_lkid,
 					   in->body, in->len);
 		dlm_arm_send_blkast(d, &res);
-		/*
-		 * A queued CONVERT is ANSWERED NOW (rd vms-cab): a real master
-		 * echoes it back with body[34] = 0xfb, and a VAX that gets no
-		 * answer waits in RWSCS for ever. A queued first ENQ (op 0x01)
-		 * has master-side fields no capture lets this node fill
-		 * (body[40:44] reads as the master's own S0 address), so it
-		 * stays the honest, counted silence.
-		 */
-		if (wireop == VMS_DLM_WIREOP_CONVERT) {
-			uint32_t written = 0;
-
-			memset(d->txframe, 0, sizeof(d->txframe));
-			if (vms_dlm_convert_response_build_queued(
-				    in->body, in->len, d->txframe,
-				    (uint32_t)sizeof(d->txframe),
-				    &written) != VMS_CODEC_OK) {
-				d->codec_failures++;
-				return -1;
-			}
-			if (dlm_arm_stage_reply(d, in, reply) != 0)
-				return -1;
-			d->queued_answered++;
-			return 0;
-		}
-		d->queued_no_reply++;
-		return 0;
+		return dlm_arm_reply_queued(d, in, &res, wireop, reply);
 	case VMS_DLM_MASTER_REDIRECT:
 		/* Davis p. 6-31 outcome 2. There is no grounded cat-0x02 shape
 		 * for "the master is X" (§4(f).1 grounds the grant and deny
@@ -2918,6 +2953,8 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->deferred_grants_owed = d->deferred_grants_no_wire_op;
 	out->deferred_grants_sent = d->deferred_grants_sent;
 	out->queued_no_reply     = d->queued_no_reply;
+	out->queued_answered     = d->queued_answered;
+	out->queued_unanswerable = d->queued_unanswerable;
 	out->unparsed            = d->unparsed;
 	out->foreign_refused     = d->foreign_refused;
 	out->posts_queued        = d->posts_queued;

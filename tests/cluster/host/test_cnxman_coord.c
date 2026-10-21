@@ -2811,6 +2811,87 @@ static void test_c55_enq_request_on_the_wire(void)
 	conf_dump("dlm_enq_req", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
+/*
+ * rd vms-85f: THE QUEUED ANSWER, composed the way the shipping REPLY path
+ * composes it -- the codec's body, the cluster's DLM sequence, then the
+ * connection manager's RESPONSE envelope on the requester's CSB
+ * (vms_cnxman.c's dlm reply leg). This is a frame OVMX had never emitted
+ * before, and the never-crash rule is explicit that a new frame type reaches a
+ * real VAX only behind an automated conformance gate -- so every one of its 132
+ * bytes gets a row here.
+ *
+ * The REQUEST it answers is composed by the shipping request builder, so the
+ * echoed cells are a real OVMX request's cells and not a hand-laid buffer.
+ */
+static void test_85f_queued_answer_on_the_wire(void)
+{
+	/* The handle an engine minted for the LKB it really queued, in the
+	 * grounded lkid form (seq << 24 | idx, minted_form_census.py). */
+	const uint32_t MASTER_LKID = 0x1d000412u;
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t req[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *ab = ans + VMS_OFF_SYSAP_BODY;
+	char state[256];
+	uint32_t written = 0;
+	uint16_t sent0;
+
+	printf("\n-- rd vms-85f: the queued answer's 132 bytes, all described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&r, 0, sizeof(r));
+	r.mode            = 5u;              /* EX, the evacuation's own mode */
+	r.req_lkid        = 0x07000412u;     /* the requester's own handle    */
+	r.req_pid         = 0x10000031u;
+	r.dir_hash        = 0x650412f2u;
+	r.dir_hash_valid  = 1u;
+	r.res_group       = 1u;
+	r.res_acmode      = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len        = 13u;
+	memcpy(r.name, "EVAC$WORKLOAD", 13);
+
+	memset(req, 0, sizeof(req));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, req,
+					   sizeof(req), &written) ==
+		 VMS_CODEC_OK, "the request this master is about to queue");
+
+	/* The requester's own envelope, so the transaction this answer echoes
+	 * is a real one and not a zero. */
+	cnxman_envelope_originate(m, req + VMS_OFF_SYSAP_BODY,
+				  CNXMAN_ENV_REQUEST);
+	memset(ans, 0, sizeof(ans));
+	ct_check(vms_dlm_enq_response_build_queued(req + VMS_OFF_SYSAP_BODY,
+						   VMS_CM_BODY_LEN, MASTER_LKID,
+						   r.req_lkid, ans, sizeof(ans),
+						   &written) == VMS_CODEC_OK,
+		 "the queued answer's body");
+	ct_check(vms_dlm_seq_put(ab, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK,
+		 "the cluster's DLM sequence, as on every DLM message");
+	sent0 = m->cm_send_msg;
+	cnxman_envelope_originate(m, ab, CNXMAN_ENV_RESPONSE);
+	ct_check(m->cm_send_msg != sent0,
+		 "it takes the dialogue's next send-msg#");
+	ct_check(memcmp(ab + 4u, req + VMS_OFF_SYSAP_BODY + 4u, 4u) == 0 &&
+		 (ab[4] | ab[5] | ab[6] | ab[7]) != 0u,
+		 "*** and body[4:8] is the REQUEST's own transaction, echoed: "
+		 "the answer is correlated to what it answers ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,mlkid=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
+		 "namelen=%u,hash=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)MASTER_LKID,
+		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash);
+	conf_dump("dlm_enq_ans_queued", 72u, state, ab, VMS_CM_BODY_LEN);
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -2836,6 +2917,7 @@ int main(void)
 	test_52d_startup_query_answered_from_csb();
 	test_e09_dir_remove_on_the_wire();
 	test_c55_enq_request_on_the_wire();
+	test_85f_queued_answer_on_the_wire();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();

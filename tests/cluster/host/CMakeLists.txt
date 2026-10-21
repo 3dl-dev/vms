@@ -1182,6 +1182,10 @@ add_test(NAME cluster_frame_conformance_gate
         "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
         dlm_dir_remove dlm_dir_ans_you dlm_dir_ans_redir cm_dlm_op0d_echo
         dlm_enq_req cm_ack
+        # rd vms-85f: the QUEUED answer. A frame type OVMX had never emitted,
+        # required here so the never-crash rule's own condition holds -- no new
+        # frame type reaches a real VAX before the gate can see every byte.
+        dlm_enq_ans_queued
         # rd vms-380: the remaster shapes. dlm_rm_14 and dlm_rm_14_ra7 are the
         # two forms rd vms-6ad1 (RA7) fires, and they are required HERE so the
         # gate refuses to let either ship ungrounded.
@@ -1300,6 +1304,26 @@ add_test(NAME cluster_host_dlm_sublock_census
 set_tests_properties(cluster_host_dlm_sublock_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;crash-safety"
     TIMEOUT 180
+)
+
+# ---- rd vms-85f: what a REAL master answers to an op-0x01 IT QUEUED. OVMX
+# answered nothing at all, so a real VAX's $ENQW on a resource OVMX masters and
+# holds at a conflicting mode sat in RWSCS and STOP could not complete it
+# (measured on hardware, tests/lab/captures/vms-3ac-promote-20261021). The
+# census is what makes the answer buildable without a guess: 110 real->real
+# queued pairs, 17 of them for a ROOT request, and those 17 rewrite exactly 15
+# body offsets -- NONE of which is a cell this executive cannot hold. The 93
+# SUB-LOCK answers do carry one (an S0 address at body[40:44]), which is why a
+# queued sub-lock request stays silent and counted. The selftest pins every
+# figure quoted in the codec header and in the dlm_enq_ans_queued rows.
+add_test(NAME cluster_host_dlm_queued_answer_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_queued_answer_census.py"
+        --selftest "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_queued_answer_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 600
 )
 
 # ---- rd vms-c55: what a node puts on the lock connection DURING a transition

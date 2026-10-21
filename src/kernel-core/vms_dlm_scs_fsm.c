@@ -948,6 +948,35 @@ static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 }
 
 /*
+ * QUEUED (0xfb, rd vms-85f). THE MASTER ACCEPTED THE REQUEST AND THE LOCK IS
+ * NOT HELD. Three things follow, and the third is why this handler exists at
+ * all:
+ *
+ *   - NOTHING IS REPORTED TO THE ENGINE. `grant_recv` is not called, no mode
+ *     is recorded, and the proxy LKB stays ungranted: the requesting process
+ *     keeps waiting, which is what a real VMS process does on a queued lock.
+ *     Until this event existed the codec's grant/deny test read an 0xfb as a
+ *     GRANT -- a queued lock was reported to the process as held, a grant no
+ *     master gave.
+ *   - THE STATE DOES NOT MOVE. The request stays outstanding at the master
+ *     (ST_ENQ/ST_LOOKUP), so the master's later 0xfa grant lands on the GRANT
+ *     cell of the state it is already in, and a CONVERT queued on a held lock
+ *     stays ST_GRANTED at its OLD mode.
+ *   - IT IS SETTLED, so the beat stops retransmitting it. An answer arrived:
+ *     re-sending the request would make a master that already queued it answer
+ *     again, once per retransmit, for as long as the lock is held -- the
+ *     frame-per-frame shape every storm in this campaign has had.
+ */
+static void h_queued(struct dlm_req_fsm *f, struct dq_ev *e)
+{
+	f->queued_rx++;
+	e->r->settled = 1u;
+	e->r->tries   = 0u;
+	e->r->sent_ms = dq_now(f);
+	e->st = DLM_REQ_OK;
+}
+
+/*
  * A DENY at the DIRECTORY: it did not answer with a master. Re-resolve through
  * the current vector and retry; when the vector keeps naming the same node the
  * request is UNROUTABLE and the waiter is told so.
@@ -1219,6 +1248,7 @@ static const dq_handler_t dq_table[DLM_REQ_ST__COUNT][DLM_REQ_EV__COUNT] = {
 		[DLM_REQ_EV_DEQ]       = h_post_deq,
 		[DLM_REQ_EV_GRANT]     = h_grant,
 		[DLM_REQ_EV_DENY]      = h_deny_lookup,
+		[DLM_REQ_EV_QUEUED]    = h_queued,
 		[DLM_REQ_EV_REDIRECT]  = h_redirect,
 		[DLM_REQ_EV_ASSUME]    = h_assume,
 		[DLM_REQ_EV_TIMEOUT]   = h_timeout_request,
@@ -1231,6 +1261,7 @@ static const dq_handler_t dq_table[DLM_REQ_ST__COUNT][DLM_REQ_EV__COUNT] = {
 		[DLM_REQ_EV_DEQ]       = h_post_deq,
 		[DLM_REQ_EV_GRANT]     = h_grant,
 		[DLM_REQ_EV_DENY]      = h_deny_master,
+		[DLM_REQ_EV_QUEUED]    = h_queued,
 		[DLM_REQ_EV_REDIRECT]  = h_redirect,
 		[DLM_REQ_EV_ASSUME]    = h_assume,
 		[DLM_REQ_EV_TIMEOUT]   = h_timeout_request,
@@ -1241,6 +1272,9 @@ static const dq_handler_t dq_table[DLM_REQ_ST__COUNT][DLM_REQ_EV__COUNT] = {
 		[DLM_REQ_EV_CONVERT]   = h_post_convert_granted,
 		[DLM_REQ_EV_DEQ]       = h_post_deq,
 		[DLM_REQ_EV_GRANT]     = h_grant_dup,
+		[DLM_REQ_EV_QUEUED]    = h_queued,   /* a CONVERT queued on a
+						      * lock still held at its
+						      * old mode (rd vms-cab) */
 		[DLM_REQ_EV_BLKAST]    = h_blkast,
 		[DLM_REQ_EV_TIMEOUT]   = h_timeout_granted,
 		[DLM_REQ_EV_PEER_GONE] = h_peer_gone_granted
@@ -1421,6 +1455,18 @@ enum dlm_req_status dlm_req_fsm_post(struct dlm_req_fsm *f,
  * foreign master rewrites the field. So the envelope's answer is used when
  * there is one, and body[20] only when there is not.
  */
+/* The ANSWER's outcome, as the table's event. Three outcomes, three events --
+ * and QUEUED is its own, because reporting it as either of the others is a
+ * claim about a lock (held / refused) that the master did not make. */
+static enum dlm_req_event dq_event_for(enum vms_dlm_enq_outcome outcome)
+{
+	if (outcome == VMS_DLM_ENQ_GRANTED)
+		return DLM_REQ_EV_GRANT;
+	if (outcome == VMS_DLM_ENQ_QUEUED)
+		return DLM_REQ_EV_QUEUED;
+	return DLM_REQ_EV_DENY;
+}
+
 static struct dlm_req *dq_match_reply(struct dlm_req_fsm *f,
 				      uint32_t correlated_lkid,
 				      const struct vms_dlm_enq_response *rsp)
@@ -1468,11 +1514,7 @@ enum dlm_req_status dlm_req_fsm_reply(struct dlm_req_fsm *f,
 	dq_bzero(&e, (uint32_t)sizeof(e));
 	e.rsp = &rsp;
 	e.from_csid = from_csid;
-	return dq_dispatch(f, r,
-			   rsp.outcome == VMS_DLM_ENQ_GRANTED
-				   ? DLM_REQ_EV_GRANT
-				   : DLM_REQ_EV_DENY,
-			   &e);
+	return dq_dispatch(f, r, dq_event_for(rsp.outcome), &e);
 }
 
 /* One small entry per event that has no grounded frame shape to parse. */
@@ -1724,11 +1766,7 @@ enum dlm_req_status dlm_req_fsm_reply_body(struct dlm_req_fsm *f,
 	dq_bzero(&e, (uint32_t)sizeof(e));
 	e.rsp = &rsp;
 	e.from_csid = from_csid;
-	return dq_dispatch(f, r,
-			   rsp.outcome == VMS_DLM_ENQ_GRANTED
-				   ? DLM_REQ_EV_GRANT
-				   : DLM_REQ_EV_DENY,
-			   &e);
+	return dq_dispatch(f, r, dq_event_for(rsp.outcome), &e);
 }
 
 /*

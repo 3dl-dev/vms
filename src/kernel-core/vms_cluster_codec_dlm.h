@@ -464,7 +464,18 @@ struct vms_dlm_enq_request {
  */
 enum vms_dlm_enq_outcome {
 	VMS_DLM_ENQ_GRANTED = 0,
-	VMS_DLM_ENQ_DENIED
+	VMS_DLM_ENQ_DENIED,
+	/*
+	 * THE MASTER QUEUED IT (rd vms-85f). body[34] = 0xfb -- the universal
+	 * cat-0x82 outcome byte, read BEFORE either shape discriminator below,
+	 * because a queued answer has a non-zero mode byte and an echoed name
+	 * and the grant/deny test would therefore read it as a GRANT. OVMX did
+	 * read it as a grant until this outcome existed: a lock a real master
+	 * had only QUEUED was reported to the requesting process as held, which
+	 * is a grant no master gave (INV-6). The lock is NOT held; the grant
+	 * arrives later as its own 0xfa frame.
+	 */
+	VMS_DLM_ENQ_QUEUED
 };
 
 struct vms_dlm_enq_response {
@@ -592,6 +603,38 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
  * out lock-id 0 is not a grant) and E_CLASS for a body that is not a cat-0x02
  * op-0x01/op-0x07 request.
  */
+/*
+ * vms_dlm_enq_response_build_queued - the immediate answer to a first ENQ
+ * (op 0x01) a master QUEUED (rd vms-85f).
+ *
+ * The request echoed, the category made a response, the opcode left 0x01, the
+ * QUEUED record written at body[28]/[29]/[32:36], body[52:54] zeroed -- and the
+ * two HANDLES taken from the caller because they are executive reads, not
+ * bytes carried from the frame: `master_lkid` is the handle this engine minted
+ * for the LKB it really put on the waiting queue, and `req_lkid` is the
+ * requester's own handle AS THE ENGINE RECORDED IT on that LKB.
+ *
+ * Grounded cell by cell by tools/cluster/dlm_queued_answer_census.py -- see the
+ * QUEUED RECORD section above for every figure.
+ *
+ * REFUSES, rather than asserting something this node does not hold:
+ *   E_CLASS  a body that is not a cat-0x02 op-0x01 request;
+ *   E_INVAL  a zero master_lkid or req_lkid (the fc8540ae rule: an answer that
+ *            names lock 0 names nothing);
+ *   E_INVAL  a req_lkid that is not the handle the request itself carries at
+ *            body[24:28] -- the engine recorded a different lock, so this is
+ *            not that requester's answer;
+ *   E_CLASS  a SUB-LOCK request (body[36:44] names a parent): all 93 real
+ *            answers to one rewrite body[40:44] with the master's own S0
+ *            address, a value this executive does not hold.
+ */
+vms_codec_status_t vms_dlm_enq_response_build_queued(const uint8_t *req_body,
+						     uint32_t req_len,
+						     uint32_t master_lkid,
+						     uint32_t req_lkid,
+						     uint8_t *frame, uint32_t cap,
+						     uint32_t *written);
+
 /* The immediate answer to a CONVERT a master QUEUED: the request echoed, cat
  * 0x82, body[34] = 0xfb, body[52:54] left zero (rd vms-cab). */
 vms_codec_status_t vms_dlm_convert_response_build_queued(const uint8_t *req_body,
@@ -1002,6 +1045,7 @@ vms_codec_status_t vms_dlm_seq_put(uint8_t *body, uint32_t cap, uint16_t n);
 #define VMS_OFF_DLM_SEND_MSG        72u /* body[0:2]  LE u16, own send-msg# */
 #define VMS_OFF_DLM_ACK_MSG         74u /* body[2:4]  LE u16, ack of peer's */
 #define VMS_OFF_DLM_RESULT_STAMP   106u /* body[34]   u8, unconditional     */
+#define VMS_OFB_DLM_RESULT_STAMP VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RESULT_STAMP)
 
 #define VMS_DLM_RESULT_STAMP_REBUILD 0xf9u /* op 0x0d reply, EVERY specimen */
 /* INFERRED (spec §4(p)): op 0x01/0x07/0x15 replies use 0xfa here instead --
@@ -1233,6 +1277,54 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 #define VMS_OFB_DLM_GRANT_REC   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_REC)
 #define VMS_DLM_GRANT_FLAG_VAL            0x10u  /* body[28], 38/38           */
 #define VMS_DLM_GRANT_REC_VAL             0x00fa0001u /* body[32:36], 38/38   */
+
+/*
+ * ===========================================================================
+ * THE SAME RECORD WHEN THE MASTER QUEUED THE REQUEST INSTEAD (rd vms-85f)
+ *
+ * GROUNDED by tools/cluster/dlm_queued_answer_census.py over the committed
+ * corpus: 110 real -> real cat-0x02 op-0x01 requests whose answer carries
+ * body[34] = 0xfb, paired by the transaction token at body[4:8]. A real master
+ * ANSWERS A QUEUED ENQ AT ONCE -- the request echoed, the category made a
+ * response, the opcode left 0x01 -- and the answer rewrites exactly fifteen
+ * body offsets. Measured at 2 distinct masters, from 7 requesters, in 7
+ * captures, at 2 requested modes.
+ *
+ *   body[28]    = 0x14 (9 of 17) or 0x54 (8 of 17) -- the GRANT's 0x10 with
+ *                 bit 0x04 set. Every one of the 49,556 GRANTED answers in the
+ *                 same corpus carries 0x10 and never 0x14/0x54, so bit 0x04
+ *                 distinguishes a queue from a grant. WHAT SELECTS 0x54 IS NOT
+ *                 GROUNDED and is not guessed: this codec writes 0x14, the
+ *                 commonest real form (87 of 110 overall), and the choice is a
+ *                 `deviation` row in frame-grounding.tsv. (One relation was
+ *                 OBSERVED and is recorded as observed, not used: the
+ *                 request's own body[29] separates the two over all 110 pairs
+ *                 -- 4 distinct inputs, which is not a one-variable diff.)
+ *   body[29]    = 0x00 (11 of 17) or 0x02 (6 of 17). Same treatment: 0x00.
+ *   body[32:36] = 00 00 fb 00, 17 of 17 -- the record, with the universal
+ *                 outcome byte at body[34]. (A grant's is 01 00 fa 00.)
+ *   body[30]      is NOT rewritten: the requested mode rides back unchanged,
+ *                 which is the opposite of a grant (where it is cleared).
+ *   body[24:28]   is NOT rewritten either: the requester's own handle is what
+ *                 it correlates the answer by.
+ *   body[36:44]   stays ZERO on all 17 ROOT answers -- and that is the whole
+ *                 reason this answer can be built at all. The 93 answers to a
+ *                 SUB-LOCK request (one whose body[36:44] names a parent) all
+ *                 rewrite body[40:44] with a value whose high byte is 0x87: an
+ *                 S0 address, the master's own kernel memory. THIS EXECUTIVE
+ *                 DOES NOT HOLD THAT, so a queued sub-lock request stays the
+ *                 honest counted silence (the builder refuses it) until a
+ *                 driven arm grounds the cell.
+ *   body[52:54] = 00 00. body[53] is 0 on all 17; body[52] is a small number
+ *                 0..4 that no request cell predicts, so this codec writes 0 --
+ *                 the same choice vms_dlm_convert_response_build_queued makes,
+ *                 and a `deviation` row.
+ *   body[0:4]/body[8] belong to the CM envelope and the category.
+ * ===========================================================================
+ */
+#define VMS_DLM_QUEUED_FLAG_VAL           0x14u  /* body[28]: 0x10 | 0x04     */
+#define VMS_DLM_QUEUED_FLAG2_VAL          0x00u  /* body[29]                  */
+#define VMS_DLM_QUEUED_REC_VAL            0x00fb0000u /* body[32:36], 17/17  */
 
 /* THE UNIVERSAL cat-0x82 OUTCOME BYTE at body[34] (rd vms-b5b0). The directory
  * answers' 0xf9/0xf8 are declared with the directory role above; this is the

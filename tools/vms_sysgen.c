@@ -188,6 +188,28 @@ static const struct sysgen_param default_params[] = {
       .min_val = 512, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
       .description = "Maximum NISCA packet size, bytes (spec sec 4(k))",
       .type = SYSGEN_TYPE_NUMERIC },
+    /* OVMX_RM_RESIDUE_FILL: an OVMX-OWN parameter, named with the OVMX_
+     * prefix precisely because no real VMS SYSGEN has it. It is the byte the
+     * executive writes across an op-0x14's RESIDUE SPAN -- the span a real
+     * V7.3 new master leaves as its own message buffer (rd vms-42de's ruling:
+     * OVMX emits zeros there, never its own kernel addresses and never
+     * another frame's bytes). 0 IS the shipping, faithful value; the only
+     * reason the knob exists is rd vms-6ad1 (RA7), which sends the SAME
+     * remaster twice -- once zeroed, once with a fixed pattern -- to prove a
+     * real VAX does not read the span.
+     *
+     * NOT dynamic: PID 1 reads it from SYS$SYSTEM:OVMXVMSSYS.PAR at boot
+     * (src/ovmx_init/ovmx_init.c) and hands it to the executive with the rest
+     * of the cluster parameter set, so a change takes effect on the next boot.
+     * It is HERE, in the factory table, and in the seeded store
+     * (distro/rootfs/.../OVMXVMSSYS.PAR) because SYSBOOT> SET and SYSGEN SET
+     * work on the working set a store was loaded into and there is no factory
+     * merge -- a parameter in neither place answers %SYSGEN-E-NOSUCHP and the
+     * knob behind it is unreachable, which is how it shipped in rd vms-ed5. */
+    { .name = "OVMX_RM_RESIDUE_FILL", .current = 0, .default_val = 0,
+      .min_val = 0, .max_val = 255, .flags = 0,
+      .description = "Byte written across an op-0x14 remaster residue span (0 = zeros)",
+      .type = SYSGEN_TYPE_NUMERIC },
     /* MSCP_LOAD / MSCP_SERVE_ALL: published OpenVMS SYSGEN defaults (VSI/HPE
      * OpenVMS System Management Utilities Reference Manual, SYSGEN
      * Parameters) -- MSCP_LOAD defaults to load the MSCP server, MSCP_

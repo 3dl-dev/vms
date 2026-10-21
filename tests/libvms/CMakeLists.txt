@@ -186,6 +186,19 @@ add_test(NAME test_libvms_sysuaf_record COMMAND test_libvms_sysuaf_record)
 libvms_add_test(test_libvms_sysgen_identity
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysgen_identity.c)
 
+# Test 10b: rd vms-c2b -- a parameter the executive READS must exist in the
+# store that SHIPS. Reads the real distro/rootfs OVMXVMSSYS.PAR through the
+# runtime reader; the path arrives in a generated header (see the .h.in).
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/sysgen_store_path.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/sysgen_store_path.h
+    @ONLY
+)
+libvms_add_test(test_libvms_sysgen_shipped_store
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysgen_shipped_store.c)
+target_include_directories(test_libvms_sysgen_shipped_store PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR})
+
 # Test 11: vms-e652 (INV-1) — system-identity SSOT + SYS$ANNOUNCE/SYS$WELCOME.
 # Not via libvms_add_test(): the banner resolver translates logical names and
 # VMS filespecs, so this one also needs vmslnm and vmsfs.

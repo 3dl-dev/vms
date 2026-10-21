@@ -45,7 +45,6 @@ extern "C" {
  * OSS$M_ — Flags for sys$get_security / sys$set_security
  * ================================================================ */
 
-#define OSS$M_RELAX_ACCESS  0x80000000  /* [OVMX] relax normal access restrictions (not in V7.3 $OSSDEF) */
 #define OSS$M_WLOCK         0x1  /* Write-lock the object */
 /* OVMX-private bit (vms-f16, Rule 8 design choice).  The 2026-08-13
  * $OSSDEF oracle dump (OpenVMS VAX V7.3, lab-2) shows real VMS uses
@@ -58,18 +57,6 @@ extern "C" {
  * OSS$M_RELCTX (above), so, like RELCTX, it takes the next free bit and is an OVMX
  * representation, not a VMS-authentic value (vms-619). */
 #define OSS$M_LOCAL         0x4  /* Operate on the local (non-cluster) object */
-
-/* ================================================================
- * OSS$C_ — Object class codes (for the "objclass" argument)
- * ================================================================ */
-
-#define OSS$C_FILE          1   /* File object */
-#define OSS$C_DEVICE        2   /* Device object */
-#define OSS$C_VOLUME        3   /* Volume object */
-#define OSS$C_QUEUE         4   /* Queue object */
-#define OSS$C_SYMBIONT      5   /* Symbiont object */
-#define OSS$C_GROUP_GLOBAL  6   /* Group global section */
-#define OSS$C_SYSTEM_GLOBAL 7   /* System global section */
 
 #ifdef __cplusplus
 }

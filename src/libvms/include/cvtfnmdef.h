@@ -26,13 +26,6 @@ extern "C" {
 #define CVTFNM$C_ACPQIO_TO_RMS  2   /* Convert ACP/QIO format to RMS format */
 #define CVTFNM$C_RMS_TO_ACPQIO  1   /* Convert RMS format to ACP/QIO format */
 
-/* ================================================================
- * CVTFNM$M_ — Output flags returned by sys$cvt_filename
- * ================================================================ */
-
-#define CVTFNM$M_WILDCARD       0x00000001  /* Filename contains wildcards */
-#define CVTFNM$M_TRUNCATED      0x00000002  /* Filename was truncated */
-
 #ifdef __cplusplus
 }
 #endif

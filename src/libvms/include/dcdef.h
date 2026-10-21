@@ -39,7 +39,6 @@ extern "C" {
  * does not exist in $DCDEF must not be presented as if it does).
  * ================================================================ */
 
-#define DC$_UNKNOWN         0   /* Unknown device class (a.k.a. DC$_ANY) */
 #define DC$_DISK            1   /* Disk device */
 #define DC$_TAPE            2   /* Magnetic tape device */
 #define DC$_SCOM           32   /* Serial-communications / LAN device */

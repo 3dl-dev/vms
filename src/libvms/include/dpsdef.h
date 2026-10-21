@@ -22,8 +22,6 @@ extern "C" {
  * ================================================================ */
 
 #define DPS$_MP_PATHNAME    1   /* Multipath device path name (string) */
-#define DPS$_PATH_AVAILABLE 2   /* Path available status (longword) */
-#define DPS$_PATH_CURRENT   3   /* Current path in use (boolean) */
 
 #ifdef __cplusplus
 }

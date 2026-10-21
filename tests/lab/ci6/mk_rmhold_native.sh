@@ -33,7 +33,16 @@ REPO=$(cd "$HERE/../../.." && pwd)
 WORK=${WORK:-/tmp/mk-rmhold}
 mkdir -p "$WORK" "$(dirname "$OUT")"
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector}"
-DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
+# _FORTIFY_SOURCE OFF, AND IT IS NOT A STYLE CHOICE. glibc's hardened headers
+# rewrite printf() into __printf_chk(), a GLIBC-ONLY alias that no OVMX
+# shareable exports and no VMS RTL has ever had -- so an image built on a
+# distro that defaults _FORTIFY_SOURCE on fails to LINK at all:
+#   %LINK-F-ERROR, unresolved external symbol '__printf_chk'
+# which is exactly what the QEMU executive image's gcc did (CI, 2026-10-21),
+# while the musl/alpine bootable build sailed through. .vms$imp binds by
+# symbol-vector INDEX to the producers named here, so every external this
+# object references has to be one of THEIR symbols.
+DEFS="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 echo "mk_rmhold: cc RMHOLD.C"
 # -x c: RMHOLD.C's VMS-canonical uppercase name is not the ".c" extension cc
 # sniffs for, the same reason mk_evacwl_native.sh passes -xc for EVACWL.C.

@@ -71,7 +71,7 @@ static const struct status_entry known_codes[] = {
      */
     { SS$_NOPRIV,       "SYSTEM", "NOPRIV",
       "insufficient privilege or object protection violation" },
-    { SS$_NOSUCHDEV,    "SYSTEM", "NOSUCHDEV",    "no such device" },
+    { SS$_NOSUCHDEV,    "SYSTEM", "NOSUCHDEV",    "no such device available" },  /* alpha84-msgcat.txt */
     { SS$_NOSUCHFILE,   "SYSTEM", "NOSUCHFILE",   "no such file" },
     { SS$_BUGCHECK,     "SYSTEM", "BUGCHECK",     "internal consistency failure" },
     { SS$_FILACCERR,    "SYSTEM", "FILACCERR",    "file access error" },

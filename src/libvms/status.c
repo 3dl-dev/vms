@@ -118,7 +118,7 @@ static const struct status_entry known_codes[] = {
     { SS$_DEADLOCK,     "SYSTEM", "DEADLOCK",     "deadlock detected" },
     { SS$_EXENQLM,      "SYSTEM", "EXENQLM",     "exceeded enqueue limit" },
     { SS$_EXASTLM,      "SYSTEM", "EXASTLM",     "exceeded AST limit" },
-    { SS$_UNSUPPORTED,  "SYSTEM", "UNSUPPORTED",  "unsupported operation" },
+    { SS$_UNSUPPORTED,  "SYSTEM", "UNSUPPORTED",  "unsupported operation or function" },
     { SS$_ENDOFFILE,    "SYSTEM", "ENDOFFILE",    "end of file" },
 
     /* CLI facility (docs/oracle/messages/alpha84-msgcat2.txt) */

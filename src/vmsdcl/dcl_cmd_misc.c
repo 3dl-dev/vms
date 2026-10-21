@@ -3614,8 +3614,8 @@ int cmd_phone(struct dcl_command *cmd)
 int cmd_product(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
-        dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
-        return SS$_NORMAL;
+        /* refused: operation not implemented */
+        return (int)dcl_unsupported();
     }
 
     char subcmd[32];
@@ -3676,8 +3676,8 @@ int cmd_product(struct dcl_command *cmd)
         }
     } else if (strcmp(subcmd, "SHOW") == 0) {
         if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
-            dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
-            return SS$_NORMAL;
+            /* refused: operation not implemented */
+            return (int)dcl_unsupported();
         }
         strncpy(showwhat, cmd->params[1], sizeof(showwhat) - 1);
         showwhat[sizeof(showwhat) - 1] = '\0';
@@ -3698,8 +3698,8 @@ int cmd_product(struct dcl_command *cmd)
             argv[argc++] = dest_arg;
         }
     } else {
-        dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
-        return SS$_NORMAL;
+        /* refused: operation not implemented */
+        return (int)dcl_unsupported();
     }
 
     argv[argc] = NULL;

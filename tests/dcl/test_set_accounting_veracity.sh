@@ -6,7 +6,7 @@
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \BOGUS\
 # EXPECT: contains:$STATUS = "%X00038240"
-# EXPECT: contains:%SET-W-NOTIMPL, per-class accounting (/ENABLE=(class,...) or /DISABLE=(class,...)) is not implemented in OVMX - no state changed
+# EXPECT: contains:%SYSTEM-E-UNSUPPORTED, unsupported operation or function
 # EXPECT: contains:$STATUS = "%X00000E4A"
 # EXPECT: contains:%SET-I-INTSET, accounting disabled
 # EXPECT: contains:Accounting is currently disabled.

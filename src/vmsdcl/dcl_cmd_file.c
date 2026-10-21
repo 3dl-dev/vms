@@ -25,6 +25,7 @@
 #include "ssdef.h"
 #include "stsdef.h"
 #include "rmsdef.h"
+#include "ovmx_status.h"    /* vms_status_string: CREATE-E-DIRNOTCRE secondary */
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
 #include "vmsfs/device.h"        /* vms-b3e: vmsfs_device_spec_kernel_mounted */
@@ -3044,6 +3045,46 @@ static uint32_t dcl_mkdir_acp(const char *vspec)
 }
 
 /*
+ * CREATE/DIRECTORY's two messages, as OpenVMS VAX V7.3 prints them (VAX1,
+ * 2026-10-21, tests/lab/captures/create-directory-20261021/):
+ *
+ *   $ CREATE/DIRECTORY [.OVMXB10]                (it already exists)
+ *   %CREATE-I-EXISTS, [.OVMXB10] already exists           $STATUS %X10911293
+ *   $ CREATE/DIRECTORY NOSUCHDEV:[OVMXB10]
+ *   %CREATE-E-DIRNOTCRE, NOSUCHDEV:[OVMXB10] directory file not created
+ *   -SYSTEM-W-NOSUCHDEV, no such device available         $STATUS %X109112C2
+ *
+ * The spec is echoed as typed, EXISTS prints with or without /LOG, and the
+ * failure carries the reason as a secondary message. The values are the
+ * CREATE facility's (145) condition codes those $STATUS readings show,
+ * without the 0x10000000 inhibit-display bit (OVMX's $STATUS does not set it
+ * for any command yet). They replace an invented "%DCL-I-CREATED, directory
+ * already exists" (VMS has no such message) and an invented
+ * "%RMS-E-CRE, cannot create directory" that returned SS$_FILACCERR.
+ */
+#define CREATE$_EXISTS     0x00911293u
+#define CREATE$_DIRNOTCRE  0x009112C2u
+
+static int create_dir_exists(const char *spec)
+{
+    dcl_error("CREATE", 3, "EXISTS", "%s already exists", spec);
+    return (int)CREATE$_EXISTS;
+}
+
+static int create_dir_not_created(const char *spec, uint32_t why)
+{
+    dcl_error("CREATE", 2, "DIRNOTCRE", "%s directory file not created", spec);
+    if (why != 0) {
+        char sec[256];
+        if (vms_status_string(why, sec, sizeof sec) > 0 && sec[0] == '%') {
+            sec[0] = '-';
+            fprintf(stderr, "%s\n", sec);
+        }
+    }
+    return (int)CREATE$_DIRNOTCRE;
+}
+
+/*
  * CREATE - Create a new file, or (with /DIRECTORY) create a directory.
  */
 int cmd_create(struct dcl_command *cmd)
@@ -3075,15 +3116,9 @@ int cmd_create(struct dcl_command *cmd)
             uint32_t st = dcl_mkdir_acp(vspec);
             if ($VMS_STATUS_SUCCESS(st))
                 return SS$_NORMAL;
-            if (st == SS$_DUPLNAM) {   /* already exists -- informational, not fatal */
-                dcl_error("DCL", 0, "CREATED",
-                          "directory already exists - %s", cmd->params[0]);
-                return SS$_NORMAL;
-            }
-            dcl_error("RMS", 2, "CRE",
-                      "cannot create directory - %s (0x%08X)",
-                      cmd->params[0], st);
-            return SS$_FILACCERR;
+            if (st == SS$_DUPLNAM)     /* already exists -- informational */
+                return create_dir_exists(cmd->params[0]);
+            return create_dir_not_created(cmd->params[0], st);
         }
 
         char linux_path[1024];
@@ -3096,15 +3131,9 @@ int cmd_create(struct dcl_command *cmd)
         }
 
         if (mkdir(linux_path, 0755) != 0) {
-            if (errno == EEXIST) {
-                dcl_error("DCL", 0, "CREATED",
-                          "directory already exists - %s", cmd->params[0]);
-                return SS$_NORMAL;
-            }
-            dcl_error("RMS", 2, "CRE",
-                      "cannot create directory - %s: %s",
-                      cmd->params[0], vms_strerror(errno));
-            return SS$_FILACCERR;
+            if (errno == EEXIST)
+                return create_dir_exists(cmd->params[0]);
+            return create_dir_not_created(cmd->params[0], 0);
         }
 
         return SS$_NORMAL;

@@ -1124,10 +1124,8 @@ static int cmd_set_password(struct dcl_command *cmd)
     }
 
     if (dcl_has_qualifier(cmd, "SECONDARY")) {
-        dcl_error("DCL", 0, "NOTIMPL",
-                  "secondary passwords are not implemented in OVMX - "
-                  "no state changed");
-        return SS$_UNSUPPORTED;
+        /* refused: secondary passwords are not implemented in OVMX - no state changed */
+        return (int)dcl_unsupported();
     }
 
     if (dcl_has_qualifier(cmd, "SYSTEM")) {
@@ -1138,17 +1136,13 @@ static int cmd_set_password(struct dcl_command *cmd)
             dcl_error("SET", 2, "NOPRIV", "no privilege for attempted operation");
             return SS$_NOPRIV;
         }
-        dcl_error("DCL", 0, "NOTIMPL",
-                  "OVMX has no per-node system-password subsystem - "
-                  "no state changed");
-        return SS$_UNSUPPORTED;
+        /* refused: OVMX has no per-node system-password subsystem - no state changed */
+        return (int)dcl_unsupported();
     }
 
     if (dcl_has_qualifier(cmd, "GENERATE")) {
-        dcl_error("DCL", 0, "NOTIMPL",
-                  "/GENERATE password generation is not implemented in "
-                  "OVMX - no state changed");
-        return SS$_UNSUPPORTED;
+        /* refused: /GENERATE password generation is not implemented in OVMX - no state changed */
+        return (int)dcl_unsupported();
     }
 
     /* Self-service change only (see the citation above): look up the
@@ -2183,9 +2177,8 @@ static int cmd_set_host(struct dcl_command *cmd)
 static int cmd_set_audit(struct dcl_command *cmd)
 {
     (void)cmd;
-    dcl_error("SET", 0, "NOTIMPL",
-              "security auditing is not implemented in OVMX - no state changed");
-    return SS$_UNSUPPORTED;
+    /* refused: security auditing is not implemented in OVMX - no state changed */
+    return (int)dcl_unsupported();
 }
 
 /*
@@ -2236,11 +2229,8 @@ static int cmd_set_accounting(struct dcl_command *cmd)
 
     if ((has_enable && enable_val && enable_val[0]) ||
         (has_disable && disable_val && disable_val[0])) {
-        dcl_error("SET", 0, "NOTIMPL",
-                  "per-class accounting (/ENABLE=(class,...) or "
-                  "/DISABLE=(class,...)) is not implemented in OVMX - "
-                  "no state changed");
-        return SS$_UNSUPPORTED;
+        /* refused: per-class accounting (/ENABLE=(class,...) or /DISABLE=(class,...)) is not implemented in OVMX - no state changed */
+        return (int)dcl_unsupported();
     }
 
     /* /ENABLE and /DISABLE together (each with no class list) is
@@ -2409,11 +2399,8 @@ static int cmd_set_volume(struct dcl_command *cmd)
      * header) -- /LABEL included. Report a specific, honest refusal per
      * qualifier given, so the operator knows exactly what did not happen. */
     if (dcl_has_qualifier(cmd, "LABEL")) {
-        dcl_error("SET", 0, "NOTIMPL",
-                  "SET VOLUME/LABEL is not implemented in OVMX - "
-                  "no state changed (vmsfs has no volume-label write-back "
-                  "path for a mounted volume)");
-        return SS$_UNSUPPORTED;
+        /* refused: SET VOLUME/LABEL is not implemented in OVMX - no state changed (vmsfs has no volume-label write-back path for a mounted volume) */
+        return (int)dcl_unsupported();
     }
     static const char *const other_volume_quals[] = {
         "ACCESSED", "CACHE", "DATA_CHECK", "ERASE_ON_DELETE", "EXTENSION",
@@ -2425,10 +2412,8 @@ static int cmd_set_volume(struct dcl_command *cmd)
     };
     for (int i = 0; other_volume_quals[i]; i++) {
         if (dcl_has_qualifier(cmd, other_volume_quals[i])) {
-            dcl_error("SET", 0, "NOTIMPL",
-                      "SET VOLUME/%s is not implemented in OVMX - "
-                      "no state changed", other_volume_quals[i]);
-            return SS$_UNSUPPORTED;
+            /* refused: SET VOLUME/<other_volume_quals[i]> is not implemented in OVMX - no state changed */
+            return (int)dcl_unsupported();
         }
     }
 

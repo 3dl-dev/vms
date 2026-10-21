@@ -572,6 +572,30 @@ static struct vms_dlm_master_result serve(uint32_t op, uint32_t csid,
 	return out;
 }
 
+/* An inbound CONVERT, through the same master seam -- it needs the handle THIS
+ * node minted for the converting system's lock, which an ENQ answer carried. */
+static struct vms_dlm_master_result serve_convert(uint32_t csid,
+						  uint32_t holder_lkid,
+						  uint32_t master_lkid,
+						  uint8_t mode,
+						  const char *name)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result out;
+
+	memset(&r, 0, sizeof(r));
+	memset(&out, 0, sizeof(out));
+	r.op = VMS_DLM_MREQ_CONVERT;
+	r.req_csid = csid;
+	r.req_lkid = holder_lkid;
+	r.master_lkid = master_lkid;
+	r.lkmode = mode;
+	strscpy(r.resnam, name, sizeof(r.resnam));
+	r.res_ident_valid = 1u;
+	(void)vms_lock_dlm_master_serve(&r, &out);
+	return out;
+}
+
 /* ==========================================================================
  * 3. Frame inspection -- through the SHIPPING codec, never byte arithmetic
  * ========================================================================== */
@@ -1736,6 +1760,82 @@ static void test_a_local_release_tells_the_peer(void)
 	engine_down();
 }
 
+/*
+ * ...AND THE FIFTH DOOR, which the item's own list did not name and the code's
+ * own comment did: an INBOUND CONVERT. vms_lock_dlm_xnode_convert's
+ * down-conversion branch says "whoever was waiting behind this holder may now
+ * be granted, and that is the whole point of the evacuation path" -- and the
+ * answer it builds carries the CONVERTER's outcome, with nowhere to report a
+ * THIRD system's grant. So a real VAX demoting EX to CR on a resource OVMX
+ * masters granted another VAX's queued request and told it nothing: the same
+ * silence, in the same sequence, by one more door. One release of strength,
+ * one notification path.
+ */
+static void test_an_inbound_convert_tells_the_third_system(void)
+{
+	const uint32_t EX_LKID = 0x0b000711u;   /* peer A's own handle   */
+	const uint32_t CR_LKID = 0x0c000712u;   /* peer B's own handle   */
+	struct vms_proc holder, delivery;
+	struct vms_dlm_master_result q, qb, cv;
+	struct vms_getlki_args lki;
+	uint32_t lkid, a_master_lkid;
+
+	printf("--- rd vms-28bd: a remote holder's DOWN-CONVERT grants a THIRD "
+	       "system, and that system is told ---\n");
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+	memset(&g_adv, 0, sizeof(g_adv));
+	eng_ops.grant_advanced = eng_grant_advanced;
+	vms_lock_dlm_set_requester_ops(&eng_ops);
+
+	/* The same arrangement as above, and then one step further: our own
+	 * release hands peer A the EX, so the only holder left is remote. */
+	lkid = adv_arrangement(&holder, ADV_RES, &q);
+	ct_check(lkid != 0u, "the arrangement: peer A's EX queued behind our CR");
+	if (lkid == 0u) {
+		vms_lock_dlm_set_delivery_proc(NULL);
+		engine_down();
+		return;
+	}
+	ct_check_eq_u32(do_deq(&holder, lkid), SS__NORMAL,
+			"our holder releases, so peer A now holds EX alone");
+	a_master_lkid = q.master_lkid;
+	ct_check(getlki(&delivery, a_master_lkid, &lki) &&
+		 lki.granted_mode == LCK_K_EXMODE,
+		 "  and the lock database says so");
+
+	/* Peer B queues behind peer A. */
+	qb = serve(VMS_DLM_MREQ_ENQ, CSID_DIRECTORY, CR_LKID, LCK_K_CRMODE,
+		   ADV_RES);
+	ct_check_eq_u32(qb.outcome, VMS_DLM_MASTER_QUEUED,
+			"peer B's CR is QUEUED behind peer A's EX");
+
+	/* *** Peer A demotes EX -> CR. That is a DISMOUNT, on the wire. *** */
+	memset(&g_adv, 0, sizeof(g_adv));
+	cv = serve_convert(CSID_PEER, WAITER_LKID, a_master_lkid,
+			   LCK_K_CRMODE, ADV_RES);
+	ct_check_eq_u32(cv.outcome, VMS_DLM_MASTER_GRANTED,
+			"peer A's down-convert to CR is granted at once");
+	ct_check(getlki(&delivery, qb.master_lkid, &lki) &&
+		 lki.granted_mode == LCK_K_CRMODE,
+		 "*** and peer B's queued CR is GRANTED by it, in this node's "
+		 "own lock database ***");
+	ct_check_eq_u32(g_adv.n, 1u,
+			"*** ...and peer B is TOLD -- the convert's own answer "
+			"goes to peer A and has nowhere to carry peer B's "
+			"grant ***");
+	ct_check(g_adv.csid == CSID_DIRECTORY &&
+		 g_adv.master_lkid == qb.master_lkid,
+		 "  naming peer B and the handle this node granted it, not the "
+		 "converter's");
+
+	(void)EX_LKID;
+	eng_ops.grant_advanced = NULL;
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_deq_reachable (rd vms-49f8: the op-0x03 $DEQ has a "
@@ -1752,5 +1852,6 @@ int main(void)
 	test_the_fail_safe_is_still_armed();
 	test_a_queued_outcome_produces_a_frame();
 	test_a_local_release_tells_the_peer();
+	test_an_inbound_convert_tells_the_third_system();
 	return ct_summary("test_dlm_deq_reachable");
 }

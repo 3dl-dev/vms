@@ -7333,9 +7333,11 @@ static uint32_t vms_lock_dlm_xnode_convert(struct vms_dlm_xnode_args *req,
 {
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    struct dlm_flips flips;
     uint32_t status;
     int hang, stalled;
 
+    memset(&flips, 0, sizeof(flips));
     *handled = 0;
     if (req->lkmode > LCK_K_EXMODE)
         return SS__BADPARAM;
@@ -7368,8 +7370,13 @@ static uint32_t vms_lock_dlm_xnode_convert(struct vms_dlm_xnode_args *req,
         lock->requested_mode = req->lkmode;
         /* A DOWN-conversion frees strength: whoever was waiting behind this
          * holder may now be granted, and that is the whole point of the
-         * evacuation path. */
+         * evacuation path. ANOTHER system's queued request granted here must
+         * be TOLD (rd vms-28bd): this answer carries the CONVERTER's outcome
+         * and has nowhere to report a THIRD system's grant, so it goes out by
+         * the same notification a local release uses. */
+        dlm_flips_snapshot_locked(res, &flips);
         try_grant_waiters(res);
+        dlm_flips_keep_granted_locked(res, &flips);
         req->queued = 0;
         status = SS__NORMAL;
     } else if (!stalled && (req->flags & LCK_M_NOQUEUE)) {
@@ -7393,6 +7400,7 @@ static uint32_t vms_lock_dlm_xnode_convert(struct vms_dlm_xnode_args *req,
     memcpy(req->valblk, res->valblk, LCK_VALBLK_SIZE);
     exec_unlock(&res->lock);
     lock_put(lock);
+    dlm_flips_report(&flips);   /* rd vms-28bd: no resource lock held */
     return status;
 }
 

@@ -194,6 +194,7 @@ dlm-queued-sublock-answered-anyway
 dlm-local-release-tells-nobody
 dlm-rundown-release-tells-nobody
 dlm-grant-advance-uncounted
+dlm-convert-tells-the-converter-only
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -936,6 +937,19 @@ EOF
         why)          echo "the counter bump goes, so a node that granted a lock it could never announce looks exactly like a node that had nothing to announce. That is the anti-LARP tripwire for this whole item: the DEFECT it replaces was silence, and silence that is not counted is indistinguishable from correctness (INV-6, and the same discipline as deferred_grants_owed).";;
         require_fail) hd_lines <<'EOF'
 *** ...and the flip nobody could be told about is COUNTED, not dropped ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-convert-tells-the-converter-only)
+        case "$_f" in
+        facility)     echo "THE INBOUND CONVERT's half of it (vms_lock.c vms_lock_dlm_xnode_convert, rd vms-28bd): a remote holder's DOWN-conversion frees strength, so a THIRD system's queued request is granted -- and the convert's own answer goes to the CONVERTER, with nowhere to carry that grant";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the door the code's OWN comment calls 'the whole point of the evacuation path' goes back to granting in silence. A real VAX demoting EX to CR on a resource OVMX masters -- which is what DISMOUNT does -- grants the other VAX's queued request, and that VAX is never told. The item's door list did not name this one; the test found it, and leaving one silent door while fixing three would read as fixed and hang in the demo.";;
+        require_fail) hd_lines <<'EOF'
+*** ...and peer B is TOLD -- the convert's own answer goes to peer A and has nowhere to carry peer B's grant ***
 EOF
                       ;;
         esac;;
@@ -2977,12 +2991,18 @@ apply_edit() {
         # vms_deq_core's snapshot is the only one taken into `flips`; zeroing
         # the set instead leaves the comparison and the report well-defined and
         # finding nothing, which is exactly the old silence.
-        sed -i 's|    dlm_flips_snapshot_locked(res, \&flips);|    memset(\&flips, 0, sizeof(flips)); /* NEGCTL dlm-local-release-tells-nobody */|' "$_file";;
+        sed -i 's|^    dlm_flips_snapshot_locked(res, \&flips);$|    memset(\&flips, 0, sizeof(flips)); /* NEGCTL dlm-local-release-tells-nobody */|' "$_file";;
 
     dlm-rundown-release-tells-nobody)
         # The sweep's one carry-out line (the quorum resume appends to `all`,
         # not `f`, so this text is unique to lock_teardown_locked).
         sed -i 's|        dlm_flips_append(f, \&mine);|        /* NEGCTL dlm-rundown-release-tells-nobody */|' "$_file";;
+
+    dlm-convert-tells-the-converter-only)
+        # The convert branch's snapshot, distinguished from vms_deq_core's by
+        # its indentation (both name `flips`), so the two defects cannot
+        # mutate each other's door.
+        sed -i 's|^        dlm_flips_snapshot_locked(res, \&flips);$|        /* NEGCTL dlm-convert-tells-the-converter-only */|' "$_file";;
 
     dlm-grant-advance-uncounted)
         # The one counter bump for a flip with no arm bound.

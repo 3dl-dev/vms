@@ -146,12 +146,22 @@ if login A "$LA"; then ra=0; else ra=1; fi
 record "boot 2 (A): SYSTEM logs in" "$ra"
 if login B "$LB"; then rb=0; else rb=1; fi
 record "boot 2 (B): SYSTEM logs in" "$rb"
-if grep -qaF '%DECNET-I-STARTNET' "$LA" && grep -qaF '%DECNET-I-STARTNET' "$LB"; then rc=0; else rc=1; fi
-record "boot 2: boot-time STARTNET launched NETACP on both nodes" "$rc"
 
 if [ "$ra" -eq 0 ] && [ "$rb" -eq 0 ]; then
     echo "  (letting the two NETACPs hear each other ${NETACP_SETTLE}s)"
     sleep "$NETACP_SETTLE"
+    # Boot-time STARTNET launched NETACP on each node. STARTNET prints no
+    # launch line of its own (rd vms-158d), so ask the process table.
+    for n in A B; do
+        lg="$W/$n-run.log"
+        o=$(wc -c <"$lg")
+        send "$n" 'SHOW SYSTEM'
+        waitafter "$n" 'NETACP' 30 "$lg" "$o"; sleep 2
+        seg=$(tail -c "+$((o + 1))" "$lg" | tr -d '\r')
+        if printf '%s\n' "$seg" | grep >/dev/null -E '(^|[[:space:]])NETACP([[:space:]]|$)' \
+           && printf '%s\n' "$seg" | grep >/dev/null -F 'Process Name'; then rc=0; else rc=1; fi
+        record "boot 2 ($n): SHOW SYSTEM lists the NETACP boot-time STARTNET started" "$rc"
+    done
 
     o0=$(wc -c <"$LA")
     send A 'SET HOST OVMXB'

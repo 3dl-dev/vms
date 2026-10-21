@@ -1308,6 +1308,7 @@ EOF
 *** the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
 *** the sub grant equals the real VAX's, byte for byte past the envelope ***
 *** HELD OUT: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+*** PRE-REGISTERED, THIRD TOPOLOGY: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
 EOF
                       ;;
         esac;;
@@ -1351,6 +1352,7 @@ EOF
 *** the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
 *** the sub grant equals the real VAX's, byte for byte past the envelope ***
 *** HELD OUT: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+*** PRE-REGISTERED, THIRD TOPOLOGY: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
   body[28] = 0x10, the grant flag (416/416 real)
   body[34] = 0xfa, granted
 EOF

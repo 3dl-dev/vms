@@ -197,6 +197,8 @@ dlm-grant-advance-uncounted
 dlm-convert-tells-the-converter-only
 dlm-release-opens-a-transaction
 dlm-release-carries-the-lock-mode
+dlm-local-convert-grants-nobody
+dlm-local-convert-tells-nobody
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -968,6 +970,34 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** body[30] is the MEASURED cell, never the lock mode: the arm's nine releases all carry 0 ***
   ...and the caller's parse-only rel_cell is NOT echoed onto this node's wire
+EOF
+                      ;;
+        esac;;
+
+    dlm-local-convert-grants-nobody)
+        case "$_f" in
+        facility)     echo "THE LOCAL DOWN-CONVERT's grant pass (vms_lock.c vms_ioctl_convert's immediate branch, rd vms-9db): giving strength back runs try_grant_waiters, as it does at every other call site";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_host";;
+        isolation)    echo "isolated";;
+        why)          echo "the branch goes back to setting granted_mode and unlocking, which is how it shipped: the ONLY one of the six try_grant_waiters call sites that ran no pass. A process holding EX that converts DOWN to CR then frees strength and grants NOBODY -- not a remote waiter and not a LOCAL one -- and the waiting request sits on res->waiting until some unrelated event on that resource runs the pass. MEASURED on two local processes against the real engine before the fix (test_lock_host.c: the waiter's own synchronous \$ENQW never returned).";;
+        require_fail) hd_lines <<'EOF'
+*** the DOWN-CONVERT GRANTED THE WAITER: freeing strength runs the grant pass, as it does at every other call site (rd vms-9db) ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-local-convert-tells-nobody)
+        case "$_f" in
+        facility)     echo "THE LOCAL DOWN-CONVERT's notification (vms_lock.c vms_ioctl_convert, rd vms-9db + rd vms-28bd): a peer this convert granted is TOLD, from outside the resource lock";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the grant still happens and the peer is never told -- the rd vms-28bd silence by one more door. It is the evacuation's own shape: this node masters the workload's tree, a real VAX is queued for EX behind a local holder, and the holder DEMOTES rather than exiting (what a process that keeps the file open but drops write access does). The peer's process would sit in RWSCS on a lock this node's database already says it holds.";;
+        require_fail) hd_lines <<'EOF'
+*** ...and the peer is TOLD: a local convert is a release door like every other ***
+  naming the peer and the handle this node granted it
+*** ...and the grant nobody could be told about is COUNTED ***
 EOF
                       ;;
         esac;;
@@ -3037,6 +3067,17 @@ apply_edit() {
     dlm-release-carries-the-lock-mode)
         # The release builder's own measured-cell line, unique in this file.
         sed -i 's|^\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
+
+    dlm-local-convert-grants-nobody)
+        # The immediate convert branch's grant pass. Distinguished from the
+        # other sites by the snapshot line that precedes it in the same
+        # branch, so this defect and dlm-local-convert-tells-nobody cannot
+        # mutate each other's line.
+        perl -0pi -e 's|        dlm_flips_snapshot_locked\(res, &flips\);\n        try_grant_waiters\(res\);\n        dlm_flips_keep_granted_locked\(res, &flips\);\n\n        exec_unlock|        /* NEGCTL dlm-local-convert-grants-nobody */\n        memset(&flips, 0, sizeof(flips));\n\n        exec_unlock|' "$_file";;
+
+    dlm-local-convert-tells-nobody)
+        # The same branch's REPORT, left out while the grant pass stays.
+        perl -0pi -e 's|        exec_unlock\(&res->lock\);\n        dlm_flips_report\(&flips\);\n\n        args\.lk_status|        exec_unlock(&res->lock);\n        /* NEGCTL dlm-local-convert-tells-nobody */\n\n        args.lk_status|' "$_file";;
 
     dlm-convert-tells-the-converter-only)
         # The convert branch's snapshot, distinguished from vms_deq_core's by

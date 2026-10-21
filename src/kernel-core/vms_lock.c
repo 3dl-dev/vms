@@ -5795,6 +5795,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
     struct vms_enq_args args;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    struct dlm_flips flips;
     int hang, stalled, vb_write;
 
     memset(&args, 0, sizeof(args));
@@ -5879,7 +5880,31 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
             memcpy(lock->valblk, vb_write ? args.valblk : res->valblk,
                    LCK_VALBLK_SIZE);
 
+        /*
+         * A DOWN-CONVERSION GIVES STRENGTH BACK, SO SOMEBODY MAY NOW BE
+         * GRANTABLE (rd vms-9db). This branch used to set the mode and
+         * unlock, and it was the ONLY try_grant_waiters() call site that did
+         * not run the pass: a process holding EX that converted to CR left a
+         * CR waiter on res->waiting until some unrelated event on that
+         * resource ran it. Measured on the real engine, two local processes,
+         * no cluster (test_lock_host.c, rd vms-9db).
+         *
+         * An UP-conversion cannot grant anyone, but the pass is run
+         * unconditionally all the same: it is the same pass every other site
+         * runs, it grants only what lock_compatible() allows, and a branch
+         * that asked "is this a down-conversion?" would be a second, weaker
+         * copy of that question.
+         *
+         * A cross-node waiter this grants must be TOLD, exactly as at the
+         * release doors (rd vms-28bd): snapshot under the resource lock,
+         * compare under it, report AFTER it is dropped.
+         */
+        dlm_flips_snapshot_locked(res, &flips);
+        try_grant_waiters(res);
+        dlm_flips_keep_granted_locked(res, &flips);
+
         exec_unlock(&res->lock);
+        dlm_flips_report(&flips);
 
         args.lk_status = lock->granted_mode;
         if (args.flags & LCK_M_VALBLK)

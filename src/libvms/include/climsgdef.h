@@ -11,8 +11,11 @@
 #ifndef __CLIMSGDEF_H
 #define __CLIMSGDEF_H
 
+#define CLI$_ABKEYW   0x00038010   /* %CLI-W-ABKEYW, ambiguous qualifier or keyword */
 #define CLI$_IVKEYW   0x00038060   /* %CLI-W-IVKEYW, unrecognized keyword */
 #define CLI$_IVVERB   0x00038090   /* %CLI-W-IVVERB, unrecognized command verb */
+#define CLI$_MAXPARM  0x00038098   /* %CLI-W-MAXPARM, too many parameters */
+#define CLI$_UNDSYM   0x00038140   /* %CLI-W-UNDSYM, undefined symbol */
 #define CLI$_IVQUAL   0x00038240   /* %CLI-W-IVQUAL, unrecognized qualifier */
 
 #endif /* __CLIMSGDEF_H */

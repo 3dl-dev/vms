@@ -1022,7 +1022,7 @@ static uint32_t run_bad_qualifier(const struct dcl_command *cmd)
                       "ambiguous qualifier or keyword - supply more "
                       "characters\n \\%s%s\\",
                       cmd->qualifiers[i].negated ? "NO" : "", given);
-            return MSG_DCL_ABKEYW & ~7u;      /* the oracle's -W- severity */
+            return CLI$_ABKEYW;
         }
     }
     return 0;

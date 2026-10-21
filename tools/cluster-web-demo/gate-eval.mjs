@@ -1075,8 +1075,9 @@ export function echoesPassword(text, pw) {
   return (at >= 0 ? t.slice(at) : t).includes(pw);
 }
 
-// Is %REM-S-END the first thing on its line (after a CR or LF)?
-export const remEndOnOwnLine = (text) => /(^|[\r\n])[ \t]*%REM-S-END,/.test(String(text || ''));
+// Is %REM-S-END the first thing on a NEW line? A bare CR does not count: on a
+// terminal it returns to column 0 of the SAME line and overwrites it.
+export const remEndOnOwnLine = (text) => /(^|\n)\r*[ \t]*%REM-S-END,/.test(String(text || ''));
 
 // Run the session checks once, after every node is usable.
 export async function driveSessionChecks(R, io) {

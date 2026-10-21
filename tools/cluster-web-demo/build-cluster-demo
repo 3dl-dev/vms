@@ -59,6 +59,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 MK_DEMOCONFIG="$HERE/mk_democonfig.py"
 INJECT_INITRAMFS="$HERE/inject-cluster-config.sh"
 INJECT_ODS2="$HERE/inject-ods2-config.sh"
+INJECT_DECNET="$HERE/inject-decnet-config.sh"
 # The ONE reader of the NetBSD/vax disklabel in this repo (rd vms-7b15 wrote it
 # to BUILD Node B's slim single disk); reused here to check that --vax-image is
 # really that disk rather than adding a second disklabel parser.
@@ -180,6 +181,12 @@ if command -v qemu-img >/dev/null 2>&1 && command -v "${CC:-cc}" >/dev/null 2>&1
     "$INJECT_ODS2" "$X86_SYSDISK" "$BUNDLE/nodeA/sysdisk-nodeA.qcow2" \
         --scsnode "$NODE_A_NAME" --scssystemid "$NODE_A_ID" \
         --votes "$NODE_A_VOTES" --expected-votes "$NODE_A_EV"
+    # DECnet (rd vms-5843): the roster gives Node A a DECnet address and names
+    # its DECnet peers, so its boot-time STARTNET starts NETACP and a visitor
+    # can SET HOST to the other OVMX node. NCP.EXE writes the databases;
+    # OVMX_DEMO_NCP names a prebuilt host NCP.EXE, else one is built here.
+    "$INJECT_DECNET" "$BUNDLE/nodeA/sysdisk-nodeA.qcow2" "$BUNDLE/nodeA/sysdisk-nodeA.qcow2" \
+        --scsnode "$NODE_A_NAME" ${OVMX_DEMO_NCP:+--ncp "$OVMX_DEMO_NCP"}
     gzip -n -9 -c "$BUNDLE/nodeA/sysdisk-nodeA.qcow2" > "$BUNDLE/nodeA/sysdisk-nodeA.qcow2.gz"
     rm -f "$BUNDLE/nodeA/sysdisk-nodeA.qcow2"
     NODE_A_SYSDISK_DONE=1

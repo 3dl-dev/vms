@@ -43,6 +43,16 @@
  *       OWN block-backed ODS-2 reader and write its exact bytes to
  *       <out-par-file>, for offline assertion (magic/VAXCLUSTER/SCSNODE) by
  *       mk_democonfig.parse_sysgen_store().
+ *
+ *   puttext <raw-image> <NAME.TYP> <text-file>          (rd vms-5843)
+ *       Add SYS$SYSTEM:<NAME.TYP> as the next version, a TEXT file: RFM=STMLF
+ *       via create_file_stmlf, exactly how vmsfs_master's emit_tree_ods2()
+ *       masters a .DAT/.COM. Used for the DECnet permanent databases
+ *       (NETNODE_LOCAL.DAT / NETNODE_REMOTE.DAT) that NCP.EXE itself authored
+ *       -- inject-decnet-config.sh. Nothing here knows their layout.
+ *
+ *   gettext <raw-image> <NAME.TYP> <out-file>
+ *       Read SYS$SYSTEM:<NAME.TYP> (highest version) back out, verbatim.
  */
 
 #ifndef _POSIX_C_SOURCE
@@ -291,17 +301,125 @@ static int do_readback(const char *image, const char *outpar)
     return 0;
 }
 
+/* Resolve SYS$SYSTEM on a read handle; returns its FID + header. */
+static int sysexe_dir(ods2_bdev_t *rd, ods2_fid_t *fid, uint8_t *dirhdr)
+{
+    return ods2_bdev_resolve_dir(rd, SYSEXE_COMPS, SYSEXE_NDIRS, fid, dirhdr,
+                                 ODS2_BLOCK_SIZE) == ODS2_OK ? 0 : -1;
+}
+
+static int do_puttext(const char *image, const char *name, const char *src)
+{
+    size_t len = 0;
+    uint8_t *data = slurp(src, &len);
+    uint8_t dirhdr[ODS2_BLOCK_SIZE];
+    ods2_bdev_t rd;
+    ods2_wvolume_t w;
+    ods2_fid_t dfid, cur, nf;
+    uint16_t cv = 0, nv = 1;
+    ods2_status_t st;
+    int fd;
+
+    if (!data)
+        return 2;
+    fd = open(image, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "ods2_inject_sysgen: cannot open image %s: %s\n",
+                image, strerror(errno));
+        free(data);
+        return 2;
+    }
+    if (ods2_bdev_open(&rd, fd, 0) != ODS2_OK || sysexe_dir(&rd, &dfid, dirhdr) != 0) {
+        fprintf(stderr, "ods2_inject_sysgen: %s: no genuine ODS-2 SYS$SYSTEM\n", image);
+        goto fail;
+    }
+    if (ods2_bdev_dir_find(&rd, dirhdr, name, 0, &cur, &cv) == ODS2_OK)
+        nv = (uint16_t)(cv + 1);
+    st = ods2_wvolume_open_bdev(fd, 0, &w);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "ods2_inject_sysgen: ods2_wvolume_open_bdev failed (status %d)\n", (int)st);
+        goto fail;
+    }
+    st = ods2_wvolume_create_file_stmlf(&w, name, nv, data, len, dfid, &nf);
+    if (st == ODS2_OK)
+        st = ods2_wvolume_dir_insert(&w, dfid, name, nv, nf);
+    if (st == ODS2_OK && w.io_error != ODS2_OK)
+        st = w.io_error;
+    ods2_wvolume_close(&w);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "ods2_inject_sysgen: writing SYS$SYSTEM:%s;%u failed (status %d)\n",
+                name, nv, (int)st);
+        goto fail;
+    }
+    if (fsync(fd) != 0)
+        fprintf(stderr, "ods2_inject_sysgen: warning: fsync: %s\n", strerror(errno));
+    close(fd);
+    free(data);
+    printf("ods2_inject_sysgen: injected SYS$SYSTEM:%s;%u (%zu bytes, text) into %s\n",
+           name, nv, len, image);
+    return 0;
+fail:
+    close(fd);
+    free(data);
+    return 2;
+}
+
+static int do_gettext(const char *image, const char *name, const char *out)
+{
+    const size_t cap = 512 * 1024;
+    uint8_t hdr[ODS2_BLOCK_SIZE];
+    ods2_bdev_t rd;
+    ods2_fid_t fid;
+    size_t got = 0;
+    FILE *fp;
+    uint8_t *buf;
+    int fd = open(image, O_RDONLY);
+
+    if (fd < 0) {
+        fprintf(stderr, "ods2_inject_sysgen: cannot open image %s: %s\n",
+                image, strerror(errno));
+        return 2;
+    }
+    buf = malloc(cap);
+    if (!buf || ods2_bdev_open(&rd, fd, 0) != ODS2_OK ||
+        ods2_bdev_resolve_file(&rd, SYSEXE_COMPS, SYSEXE_NDIRS, name, 0, &fid,
+                               hdr, sizeof(hdr)) != ODS2_OK ||
+        ods2_bdev_read_file(&rd, hdr, buf, cap, &got) != ODS2_OK) {
+        fprintf(stderr, "ods2_inject_sysgen: cannot read SYS$SYSTEM:%s off %s\n", name, image);
+        free(buf);
+        close(fd);
+        return 2;
+    }
+    close(fd);
+    fp = fopen(out, "wb");
+    if (!fp || fwrite(buf, 1, got, fp) != got) {
+        fprintf(stderr, "ods2_inject_sysgen: cannot write %s\n", out);
+        if (fp) fclose(fp);
+        free(buf);
+        return 2;
+    }
+    fclose(fp);
+    free(buf);
+    return 0;
+}
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
         "usage:\n"
         "  %s inject   <raw-ods2-image> <par-file>       add SYS$SYSTEM:%s;N+1\n"
-        "  %s readback <raw-ods2-image> <out-par-file>   read highest %s out\n",
-        prog, PAR_NAME, prog, PAR_NAME);
+        "  %s readback <raw-ods2-image> <out-par-file>   read highest %s out\n"
+        "  %s puttext  <raw-ods2-image> <NAME.TYP> <text-file>  add SYS$SYSTEM:NAME.TYP;N+1 (STMLF)\n"
+        "  %s gettext  <raw-ods2-image> <NAME.TYP> <out-file>   read highest SYS$SYSTEM:NAME.TYP out\n",
+        prog, PAR_NAME, prog, PAR_NAME, prog, prog);
 }
 
 int main(int argc, char *argv[])
 {
+    if (argc == 5 && strcmp(argv[1], "puttext") == 0)
+        return do_puttext(argv[2], argv[3], argv[4]);
+    if (argc == 5 && strcmp(argv[1], "gettext") == 0)
+        return do_gettext(argv[2], argv[3], argv[4]);
     if (argc != 4) { usage(argv[0]); return 2; }
     if (strcmp(argv[1], "inject") == 0)
         return do_inject(argv[2], argv[3]);

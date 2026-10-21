@@ -341,3 +341,35 @@ class TestRosterUniqueness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDecnetRoster(unittest.TestCase):
+    """rd vms-5843: the roster says which nodes are DECnet nodes and what NCP
+    must tell each one; NCP.EXE writes the databases from these commands."""
+
+    def test_ovmx_nodes_have_distinct_area1_addresses(self):
+        a, b = M.DEMO_NODE_A["decnet"], M.DEMO_NODE_B["decnet"]
+        self.assertNotEqual(a, b)
+        for addr in (a, b):
+            area, node = (int(x) for x in addr.split("."))
+            self.assertEqual(area, 1)
+            self.assertTrue(1 <= node <= 1023)
+
+    def test_vaxc_runs_no_decnet_in_the_roster(self):
+        # The pinned VAXC volume declined DECnet Phase IV at install.
+        self.assertIsNone(M.DEMO_NODE_C["decnet"])
+        with self.assertRaises(ValueError):
+            M.decnet_ncp_commands("VAXC")
+
+    def test_each_ovmx_node_defines_the_other_and_not_vaxc(self):
+        for me, peer in ((M.DEMO_NODE_A, M.DEMO_NODE_B), (M.DEMO_NODE_B, M.DEMO_NODE_A)):
+            cmds = M.decnet_ncp_commands(me["name"])
+            self.assertEqual(cmds[:3], ["SET EXECUTOR ADDRESS %s" % me["decnet"],
+                                        "SET EXECUTOR NAME %s" % me["name"],
+                                        "SET EXECUTOR STATE ON"])
+            self.assertEqual(cmds[3:], ["DEFINE NODE %s NAME %s" % (peer["decnet"], peer["name"])])
+            self.assertFalse(any("VAXC" in c for c in cmds))
+
+    def test_unknown_node_refused(self):
+        with self.assertRaises(ValueError):
+            M.decnet_ncp_commands("NOSUCH")

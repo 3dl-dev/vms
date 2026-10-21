@@ -41,6 +41,14 @@ OVMX_MASTER_ODS2=1 "$WORK/vmsfs_master" --ods2 master \
     "$WORK/stock.raw" OVMXSYS "$REPO/distro/rootfs/vms" 128 >/dev/null
 qemu-img convert -O qcow2 "$WORK/stock.raw" "$WORK/stock-sysdisk.qcow2"
 
+echo "1b. building NCP.EXE once for every generator run below (inject-decnet-config.sh, rd vms-5843)"
+command -v cmake >/dev/null 2>&1 || { echo "SKIP: cmake not on PATH"; exit 0; }
+cmake -S "$REPO" -B "$WORK/ncpbuild" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
+    -DBUILD_TOOLS=ON >"$WORK/ncp-cmake.log" 2>&1 || { cat "$WORK/ncp-cmake.log"; exit 1; }
+cmake --build "$WORK/ncpbuild" --target ncp_exe -j"$(nproc 2>/dev/null || echo 2)" \
+    >"$WORK/ncp-build.log" 2>&1 || { tail -40 "$WORK/ncp-build.log"; exit 1; }
+export OVMX_DEMO_NCP="$WORK/ncpbuild/bin/NCP.EXE"
+
 echo "2. fabricating a minimal (fake, non-booting) initramfs + vmlinuz stand-in"
 mkdir -p "$WORK/initramfs-root/etc/ovmx"
 ( cd "$WORK/initramfs-root" && find . | cpio -o -H newc --quiet | gzip -n ) > "$WORK/stock-initramfs.cpio.gz"
@@ -91,6 +99,21 @@ gunzip -c "$BUNDLE1/nodeA/sysdisk-nodeA.qcow2.gz" > "$WORK/check.qcow2"
 qemu-img convert -O raw "$WORK/check.qcow2" "$WORK/check.raw"
 "$WORK/vmsfs_master" --ods2 list "$WORK/check.raw" | grep -qi '\]OVMXVMSSYS.PAR;2' \
     || { echo "FAIL: bundle sysdisk has no injected OVMXVMSSYS.PAR;2"; exit 1; }
+echo "5b. asserting the sysdisk carries Node A's DECnet databases, as NCP wrote them (rd vms-5843)"
+for f in NETNODE_LOCAL.DAT NETNODE_REMOTE.DAT; do
+    "$WORK/vmsfs_master" --ods2 list "$WORK/check.raw" | grep -qi "\]$f;1" \
+        || { echo "FAIL: bundle sysdisk has no SYS\$SYSTEM:$f"; exit 1; }
+done
+"$CC" -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -O2 -I "$ODS2_INC" \
+    "$DEMO/ods2_inject_sysgen.c" $ODS2_SRCS -o "$WORK/inj"
+"$WORK/inj" gettext "$WORK/check.raw" NETNODE_LOCAL.DAT "$WORK/local.dat"
+"$WORK/inj" gettext "$WORK/check.raw" NETNODE_REMOTE.DAT "$WORK/remote.dat"
+grep -q '^EXECUTOR 1.1 NAME OVMXA STATE on' "$WORK/local.dat" \
+    || { echo "FAIL: NETNODE_LOCAL.DAT is not executor 1.1 OVMXA state on"; cat "$WORK/local.dat"; exit 1; }
+grep -q '1.2' "$WORK/remote.dat" && grep -q 'OVMXB' "$WORK/remote.dat" \
+    || { echo "FAIL: NETNODE_REMOTE.DAT does not name the peer 1.2 OVMXB"; cat "$WORK/remote.dat"; exit 1; }
+grep -q 'VAXC' "$WORK/remote.dat" \
+    && { echo "FAIL: NETNODE_REMOTE.DAT names VAXC, which runs no DECnet"; exit 1; }
 
 echo "6. asserting manifest.json declares Node A live, Node B/C staged"
 "$PYTHON" - "$BUNDLE1/manifest.json" <<'PYEOF'

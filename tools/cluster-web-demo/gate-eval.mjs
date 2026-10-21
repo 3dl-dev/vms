@@ -723,8 +723,9 @@ export function verdictOf(R) {
 // Message identifiers seen on a real OpenVMS VAX V7.3 console in this repo --
 // the demo's own Node C (C.console.txt above) and the VAX lab captures
 // (tests/lab/captures/**/VAXC*.log, *vax<N>*.log). The unit test re-reads those
-// captures: every identifier here must be on one, and every identifier on one
-// must be here -- the list is the captures', not anybody's opinion.
+// captures: every identifier here must be on one -- the list is the captures',
+// not anybody's opinion. An identifier a real VAX printed that is not here yet
+// fails CLOSED (a gate run names it); add it with the capture that shows it.
 export const VMS_CONSOLE_IDS = [
   // cluster, boot, startup
   'CNXMAN', 'PEA0', 'SYSINIT', 'VAXcluster-I-LOADSECDB', 'MSCPLOAD-I-LOADMSCP',
@@ -754,7 +755,8 @@ export const VMS_CONSOLE_IDS = [
   'SEARCH-W-OPENIN', 'SEARCH-E-NOFILE', 'DELETE-W-SEARCHFAIL', 'DELETE-W-FILNOTDEL',
   'CREATE-E-DIRNOTCRE', 'DIRECT-E-OPENIN', 'RENAME-E-OPENIN', 'RENAME-E-SEARCHFAIL',
   'TYPE-W-OPENIN', 'TYPE-W-SEARCHFAIL', 'UAF-I-RDBADDMSGU', 'UAF-I-MDFYMSG', 'UAF-I-DONEMSG', 'UAF-I-ADDMSG',
-  'UAF-I-RDBNOMODS', 'UAF-I-RDBDONEMSG', 'SDA-E-NORSBNAM',
+  'UAF-I-RDBNOMODS', 'UAF-I-RDBDONEMSG', 'SDA-E-NORSBNAM', 'SDA-F-OPENIN', 'SYSMAN-I-ENV',
+  'CLI-W-IVKEYW',
   'RMS-E-FNF', 'SYSTEM-F-DUPLNAM', 'SYSTEM-F-IVADDR', 'SYSTEM-F-NOLOGTAB',
   'SYSTEM-F-NOLOGNAM', 'SYSTEM-F-DEVNOTMOUNT',
 ];

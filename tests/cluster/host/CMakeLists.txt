@@ -100,6 +100,13 @@ cluster_host_test(test_codec_dlm        test_codec_dlm.c)
 # positive assertion byte-exact against a real VAX V7.3 frame, plus a held-out
 # topology and one negative control per cell the codec decides.
 cluster_host_test(test_codec_remaster   test_codec_remaster.c)
+# rd vms-380 RA8 / rd vms-6ad1 RA7: score a FRESH remaster capture with the
+# SHIPPING builders, so a held-out proof tests the codec and not a script that
+# re-implements it. Reads `remaster_census.py --pairs` on stdin. Not a ctest --
+# it needs a capture -- but it is built with the suite so it cannot rot.
+add_executable(score_remaster score_remaster.c)
+target_include_directories(score_remaster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(score_remaster PRIVATE cluster_host_codec)
 # rd vms-66fe / vms-c6e: the derived resource-name hash against 1216 values
 # real OpenVMS VAX nodes put on the wire -- derivation split AND the held-out
 # split frozen before the derivation began.

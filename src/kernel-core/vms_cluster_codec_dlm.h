@@ -1433,11 +1433,23 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  *   body[28]     0x10         416/416        body[29] 0  416/416
  *   body[30:32]  0, 0         408/408 on SUB records
  *   body[32:36]  the grant record, body[34] = 0xfa  416/416
- *   body[36:52]  the resource's VALUE BLOCK; body[52:56] its SEQUENCE. The
- *                8 ROOT answers carry a real block and a real sequence
+ *   body[36:52]  the resource's VALUE BLOCK; body[52:56] its SEQUENCE. All 8
+ *                ROOT answers carry a real block and a real sequence
  *                (SDA-matched: `RMLVB-0123456789` seq 1 in the controlled
- *                arms, live F11B$ blocks at seq 0x131/0x15a in two others);
- *                the 408 SUB answers carry zeros there.
+ *                arms, live F11B$ blocks at seq 0x131/0x15a in two others),
+ *                and this codec reproduces every one of them byte for byte.
+ *                A SUB answer carries no block, and this codec writes twenty
+ *                ZEROS there -- what 14 of 14 real sub answers captured
+ *                during a controlled REMASTER arm carry, and what the
+ *                shipping ENQ-grant builder has always written. 390 sub
+ *                answers from two LOCK-REBUILD captures instead carry
+ *                01 00 00 00 01 00 00 00, zeros, and a small even number at
+ *                body[52:56]: the same not-a-clean-LVB pattern the grant
+ *                block above records on 38/38 real grants, i.e. a busy
+ *                master's residual buffer where a quiet one's is zero. It is
+ *                a `deviation` row in frame-grounding.tsv, not papered over,
+ *                and it is the one span on which score_remaster reports a
+ *                difference against the two rebuild captures.
  *   body[56:132] echoed, the holder's own bytes
  *
  * TWO CELLS ARE NOT NAMED, and neither is guessed:

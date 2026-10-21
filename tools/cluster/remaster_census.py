@@ -3,6 +3,8 @@
 
 usage: remaster_census.py <pcap|dir> ...          the per-cell census
        remaster_census.py --selftest <repo-root>  pin the headline figures
+       remaster_census.py --pairs <pcap> ...      emit request/answer pairs for
+                                                  tests/cluster/host/score_remaster
 
 WHAT IT MEASURES. A real V7.3 lock-tree remaster is seven cat-0x02 steps
 (0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14). This tool walks every SCA frame in
@@ -262,11 +264,27 @@ def selftest(root):
     return 0
 
 
+def emit_pairs(paths):
+    """One line per answered pair, for tests/cluster/host/score_remaster.c:
+
+        <step-op-hex> <answer-op-hex> <request-body-hex> <answer-body-hex>
+
+    The scorer is a C program that calls the COMMITTED builders, so a capture
+    is scored by the shipping codec and not by this file's reading of it.
+    """
+    pairs, _notifs = collect(paths)
+    for step, ans, req, abody in pairs:
+        print('%02x %02x %s %s' % (step, ans, req.hex(), abody.hex()))
+
+
 def main(argv):
     if len(argv) < 2:
         sys.exit(__doc__)
     if argv[1] == '--selftest':
         return selftest(argv[2] if len(argv) > 2 else '.')
+    if argv[1] == '--pairs':
+        emit_pairs(walk_inputs(argv[2:]))
+        return 0
     report(walk_inputs(argv[1:]))
     return 0
 

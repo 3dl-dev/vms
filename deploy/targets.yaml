@@ -112,6 +112,15 @@ targets:
     build: {note: "pinned real VAX/VMS V7.3 volume; never rebuilt"}
     deploy: {note: "vax.3dl.network (pcjs-vax Pages)"}
     probe: {kind: served, url: "https://vax.3dl.network/machines/dec/vax/browser/vms73-nodeC-cluster.dsk.gz"}
+  # The DECnet variant of Node C (rd vms-05d): the same volume plus DECnet-VAX
+  # Phase IV installed + configured, no license PAK (bring your own). A
+  # SEPARATE image; the demo page switches to it via openvmx-site's nodeC URL.
+  - id: demo-cluster-nodeC-decnet
+    rd: vms-05d
+    tracks: none
+    build: {note: "pinned real VAX/VMS V7.3 volume; tools/lab-vax/build_nodeC_vms73_cluster.sh DECNET=1 FROM_GZ=vms73-nodeC-cluster.dsk.gz"}
+    deploy: {note: "vax.3dl.network (pcjs-vax Pages)"}
+    probe: {kind: served, url: "https://vax.3dl.network/machines/dec/vax/browser/vms73-nodeC-decnet-cluster.dsk.gz"}
 
   # ---- the in-browser emulator (every x86 demo node runs it) -------------
   # Not release-versioned: pinned to the pthread pool the demo needs. A glue

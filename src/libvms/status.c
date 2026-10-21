@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "stsdef.h"
 #include "rmsdef.h"
 #include "descrip.h"
@@ -119,9 +120,11 @@ static const struct status_entry known_codes[] = {
     { SS$_EXASTLM,      "SYSTEM", "EXASTLM",     "exceeded AST limit" },
     { SS$_UNSUPPORTED,  "SYSTEM", "UNSUPPORTED",  "unsupported operation" },
     { SS$_ENDOFFILE,    "SYSTEM", "ENDOFFILE",    "end of file" },
-    { SS$_IVVERB,       "SYSTEM", "IVVERB",       "invalid verb" },
-    { SS$_IVQUAL,       "SYSTEM", "IVQUAL",       "invalid qualifier" },
-    { SS$_IVKEYW,       "SYSTEM", "IVKEYW",       "invalid keyword" },
+
+    /* CLI facility (docs/oracle/messages/alpha84-msgcat2.txt) */
+    { CLI$_IVKEYW,      "CLI",    "IVKEYW",       "unrecognized keyword - check validity and spelling" },
+    { CLI$_IVVERB,      "CLI",    "IVVERB",       "unrecognized command verb - check validity and spelling" },
+    { CLI$_IVQUAL,      "CLI",    "IVQUAL",       "unrecognized qualifier - check validity, spelling, and placement" },
 
     /* RMS facility */
     { RMS$_NORMAL,      "RMS",    "NORMAL",       "normal successful completion" },

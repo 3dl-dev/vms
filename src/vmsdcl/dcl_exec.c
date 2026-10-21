@@ -18,6 +18,7 @@
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 
 /* External functions */
 extern int dcl_execute_script(const char *filename, int argc, char **argv);
@@ -1655,7 +1656,7 @@ int dcl_execute_command(struct dcl_command *cmd)
             dcl_error("DCL", 2, "IVVERB",
                       "symbol substitution nested too deeply\n \\%s\\",
                       cmd->verb);
-            return SS$_IVVERB;
+            return CLI$_IVVERB;
         }
         char newline[DCL_MAX_LINE];
         const char *tail = cmd->raw_tail;

@@ -27,6 +27,7 @@
 #include "dcl/dcl_rms.h"          /* vms-481: SET DEFAULT verifies the dir via the ACP */
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
 #include "prv_names.h"    /* VMS_PRIV_NAME_LIST -- the VMS privilege keyword
@@ -449,7 +450,7 @@ static int cmd_set_terminal(struct dcl_command *cmd)
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
                       "and placement\n \\%s\\", qname);
-            return SS$_IVQUAL;
+            return CLI$_IVQUAL;
         }
     }
 
@@ -2498,7 +2499,7 @@ static int cmd_set_symbol(struct dcl_command *cmd)
             dcl_error("DCL", 0, "IVQUAL",
                 "unrecognized qualifier - check validity, spelling, and "
                 "placement\n \\%s\\", qn);
-            return SS$_IVQUAL;
+            return CLI$_IVQUAL;
         }
 
         if (strcmp(canon, "SCOPE") == 0) {
@@ -2536,7 +2537,7 @@ static int cmd_set_symbol(struct dcl_command *cmd)
                 else {
                     dcl_error("DCL", 2, "IVKEYW",
                         "unrecognized SET SYMBOL/SCOPE keyword - \\%s\\", t);
-                    return SS$_IVKEYW;
+                    return CLI$_IVKEYW;
                 }
             }
         }
@@ -2714,5 +2715,5 @@ int cmd_set(struct dcl_command *cmd)
         return cmd_set_queue(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SET keyword - \\%s\\", subcmd);
-    return SS$_IVKEYW;
+    return CLI$_IVKEYW;
 }

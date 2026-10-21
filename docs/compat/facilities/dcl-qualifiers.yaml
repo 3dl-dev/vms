@@ -9,7 +9,13 @@ plan_ref: vms-8ad
 summary: >
   Per-verb qualifier validation (Phase 1, vms-097). The parser rejects any
   qualifier not in a verb's table with the authentic %DCL-W-IVQUAL (or
-  %DCL-W-IVKEYW) BEFORE the handler runs, structurally. Re-censused 2026-09-14
+  %DCL-W-IVKEYW) BEFORE the handler runs, structurally, leaving $STATUS the
+  real CLI condition value: CLI$_IVQUAL %X00038240, CLI$_IVKEYW %X00038060,
+  CLI$_IVVERB %X00038090 (Alpha V8.4 $GETMSG, docs/oracle/messages/
+  alpha84-msgcat2.txt; climsgdef.h). Until 2026-10-21 they were invented
+  SS$_ values 2288/2292/2284 -- 2288 is SS$_NONLOCAL. Proof
+  tests/qemu/test_syssvc_dcl_set_quals.c + defects.d/dcl-ivqual-status-not-cli.defect.
+  Re-censused 2026-09-14
   against origin/main: 46 of the 58 builtin verbs carry a validating table (29
   real q_* tables + 17 q_none reject-all); no verb is accept-all by
   accident any more (the quals == NULL ones validate per sub-verb, in their own

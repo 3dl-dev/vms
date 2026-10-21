@@ -33,6 +33,7 @@
 #include "dcl/parser.h"
 #include "dcl/hlb.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "ovmx_olb.h"
 
 /* External functions */
@@ -1181,7 +1182,7 @@ int cmd_library(struct dcl_command *cmd)
     if (dcl_has_qualifier(cmd, "VAX")) {
         dcl_error("DCL", 0, "IVQUAL",
                   "unrecognized qualifier - check validity, spelling, and placement\n \\VAX\\");
-        return SS$_IVQUAL;
+        return CLI$_IVQUAL;
     }
 #endif
 
@@ -1217,7 +1218,7 @@ int cmd_library(struct dcl_command *cmd)
         }
         dcl_error("DCL", 0, "IVQUAL",
                   "unrecognized qualifier - check validity, spelling, and placement\n \\COMPRESS\\");
-        return SS$_IVQUAL;
+        return CLI$_IVQUAL;
     }
 
     /* OBJECT libraries (.OLB, or /OBJECT) use the real ar-container object-

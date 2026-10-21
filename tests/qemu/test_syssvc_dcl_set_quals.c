@@ -108,6 +108,18 @@ int main(void)
     CHECK(strstr(out, "\\FACILITY\\") == NULL && strstr(out, "\\CARRIAGE_CONTROL\\") == NULL,
           "the declared qualifiers (/FACILITY, /CARRIAGE_CONTROL) are accepted, not refused");
 
+    /* The condition an unknown qualifier leaves in $STATUS is CLI$_IVQUAL,
+     * %X00038240 (OpenVMS Alpha V8.4 $GETMSG: "%CLI-W-IVQUAL, unrecognized
+     * qualifier", docs/oracle/messages/alpha84-msgcat2.txt) -- not 2288, which
+     * is SS$_NONLOCAL. DIRECTORY's table is checked by the generic validator. */
+    static char out2[8192];
+    CHECK(run_dcl("DIRECTORY/ZQSEVEN\nSHOW SYMBOL $STATUS\n", out2, sizeof out2) == 0,
+          "DCL ran the $STATUS probe");
+    printf("  ---- $STATUS probe ----\n%s  ---- end ----\n", out2);
+    /* negctl: dcl-ivqual-status-not-cli */
+    CHECK(strstr(out2, "\\ZQSEVEN\\") != NULL && strstr(out2, "%X00038240") != NULL,
+          "an unknown qualifier leaves $STATUS = %X00038240 (CLI$_IVQUAL)");
+
     printf("=== test_syssvc_dcl_set_quals: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

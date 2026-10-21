@@ -6,8 +6,10 @@ in `tools/lab-vax/PROVENANCE-vms73-nodeC.md`, section "vms73 DECnet variant".
 
 ## Disk
 
-`vms73-nodeC-decnet-cluster.dsk.gz`, sha256
+`vms73-nodeC-decnet-cluster.dsk.gz` first build, sha256
 `c78d3c58dbd59b4003c6ee598a3ef017e0925391ad19224f013859b320e91361` (29,998,193 bytes).
+It has since been superseded by `974af57e…` (SYSTEM password never expires, peers at
+1.963/1.964); see `../vms-05d-nodec-noexpire-20261021/`.
 Uncompressed: 1,505,766,912 bytes, the same RA92 geometry as the input disk; sha256 in
 `disk-sha256-precompress.txt`. Input: the published `vms73-nodeC-cluster.dsk.gz`
 (`45355fd2…4fe15`, verified by the script before use). The build ran in an isolated pod,
@@ -33,7 +35,8 @@ Uncompressed: 1,505,766,912 bytes, the same RA92 geometry as the input disk; sha
 
   LMF also reports `%LICENSE-F-EMTLDB, license database contains no license records`.
 - `ncp-list-known-nodes.log`: `NCP LIST KNOWN NODES` shows executor 1.965 (VAXC) and the remote
-  nodes 1.1 (OVMXA) and 1.2 (OVMXB). `LIST EXECUTOR CHARACTERISTICS` shows nonrouting IV.
+  nodes 1.1 (OVMXA) and 1.2 (OVMXB) in this first build. The re-image changed them to 1.963 and
+  1.964; see `../vms-05d-nodec-noexpire-20261021/`. `LIST EXECUTOR CHARACTERISTICS` shows nonrouting IV.
   `SHOW LICENSE` prints `%SHOW-I-NOLICENSE, no licenses exist`.
 - `byol-shipped-disk-boot-unlicensed.log`: the shipped `.dsk.gz` booted again, from a fresh
   decompress on the bench below. The STARTNET failure is the same.

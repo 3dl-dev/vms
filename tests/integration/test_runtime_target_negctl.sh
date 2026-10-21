@@ -605,7 +605,7 @@ expect_red "$MBX_C" "5(b) sys_mailbox.c rebuilds a private socketpair mailbox" \
 # (c) DEVICE TABLE: $GETDVI answers device state from the host again (statvfs),
 # the classify_device()+statvfs() fake that reported devices the executive
 # never had.
-sed -i 's|^#define VMS_BLOCK_SIZE  512$|#define VMS_BLOCK_SIZE  512\nstatic int __devfake(void){ struct statvfs __v; return statvfs("/", \&__v); }|' "$DEV_C"
+sed -i 's|^#include "vms_kif.h"        /\* pulls in struct vms_devinfo, VMS_DEVNAM_SIZE \*/$|&\nstatic int __devfake(void){ struct statvfs __v; return statvfs("/", \&__v); }|' "$DEV_C"
 expect_red "$DEV_C" "5(c) sys_device.c fabricates device state from host statvfs" \
     "$R_FK_DEV" "$R_FK_EF" "$R_FK_MBX" "$R_FK_LNM" "$R_FK_PRV"
 

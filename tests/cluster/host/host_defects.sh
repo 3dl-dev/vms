@@ -899,8 +899,8 @@ EOF
         case "$_f" in
         facility)     echo "READING a master's 0xfb (vms_cluster_codec_dlm.c vms_dlm_enq_response_parse_body, rd vms-85f): the QUEUED outcome is resolved BEFORE the grant/deny shape test, because a queued answer has a non-zero mode byte and an echoed name and would otherwise read as a GRANT";;
         targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
-        suites_red)   echo "test_codec_dlm test_dlm_deq_reachable";;
-        isolation)    echo "isolated";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated to the codec's own suite, which is where the anchor is asserted against a REAL master's captured answer; the same property is also asserted in test_dlm_deq_reachable (section 11) against this node's own emitted frame, so that suite reddens too and the driver is not asked to score it";;
         why)          echo "the queued branch is removed, so a real VAX master's 'I have QUEUED your request' is reported to this node's requester FSM as GRANTED -- and the waiting process is told it holds a lock no master gave it (INV-6). It is the mirror of the emit defect: OVMX would both fail to say 0xfb and mis-read one.";;
         require_fail) hd_lines <<'EOF'
 *** the parser calls it QUEUED, not GRANTED: a 0xfb must never be reported as a lock this node holds ***

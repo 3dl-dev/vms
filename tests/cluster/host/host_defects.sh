@@ -1284,6 +1284,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** the answer equals the real VAX's, byte for byte past the envelope ***
   body[32] is the REQUEST'S byte, not the grant's 0x01
+  body[35] is the REQUEST'S byte too
 EOF
                       ;;
         esac;;
@@ -1298,6 +1299,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
 *** the sub grant equals the real VAX's, byte for byte past the envelope ***
+*** HELD OUT: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
 EOF
                       ;;
         esac;;
@@ -1324,6 +1326,8 @@ EOF
         why)          echo "the builder stops blanking the body, so every span it does not fill is whatever the caller's frame buffer held -- which on a real executive is its own kernel memory. That is the exact value class that bugchecked two real lab VAXes (vms-239 r17/r19) and the thing the rd vms-42de ruling exists to forbid.";;
         require_fail) hd_lines <<'EOF'
 *** every byte outside the six fields is ZERO -- the rd vms-42de ruling, not OVMX kernel memory ***
+  body[12:16] is left for the CM's own DLM-sequence stamp
+  body[40:44] = 0, the real frame's (63/63)
 EOF
                       ;;
         esac;;

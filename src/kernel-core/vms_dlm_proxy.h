@@ -460,8 +460,12 @@ uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t group,
  *
  * A READ, never a determination made for the asking: the RSB's own `dir_hash`,
  * which is either a value a system in this cluster put on the wire and
- * `_learn_dir_hash` recorded, or one the directory routing already determined
- * and stored for this exact identity. Returns 1 and writes *out only then;
+ * `_learn_dir_hash` recorded, or -- for a root name inside the PROVEN coverage
+ * -- the one `vms_dlm_name_hash_proven()` determined for this exact identity
+ * and the directory routing already stored (the same `dir_hash_for_routing`
+ * read `dir_resolve` makes, so this frame can never carry a value the ROUTING
+ * would not). An identity outside that coverage is REFUSED, not extrapolated.
+ * Returns 1 and writes *out only then;
  * returns 0 -- and the caller leaves the field ZERO, never minted -- for an
  * identity this executive holds no value for. Creates no resource.
  */

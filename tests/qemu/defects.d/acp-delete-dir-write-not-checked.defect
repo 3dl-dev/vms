@@ -1,0 +1,29 @@
+# acp-delete-dir-write-not-checked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "Deleting a file by name needs WRITE access to its parent directory (Files-11 ACP protection gate)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_delete_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "IO\$_DELETE by name checks write on the directory the entry is removed from. The mutation skips that check, so unprivileged [100,100] deletes its own O:RWED DIRW.DAT out of [SYS0.SYSCOMMON.SYSEXE] (0xBA00, world E only). The file's own D check is separate and stays green. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+deleting its own O:RWED file from a directory it may not write is SS$_NOPRIV
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: "/* parent: W */" marks the one directory-write check of IO$_DELETE.
+        sed -i 's|status = acp_check_access(proc, vol, &sc->dfh, 1);   /\* parent: W \*/|status = SS__NORMAL; /* NEGCTL acp-delete-dir-write-not-checked */|' "$_file"
+    :
+}

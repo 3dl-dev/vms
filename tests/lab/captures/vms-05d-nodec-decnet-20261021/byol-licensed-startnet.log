@@ -1,0 +1,44 @@
+[console lines before this point: login as SYSTEM, then the operator typed a LICENSE REGISTER DVNETRTG command with a lab test PAK. The PAK is REDACTED ENTIRELY: it never leaves the lab.]
+LICENSE LOAD DVNETRTG
+%LICENSE-I-LOADED, DEC DVNETRTG was successfully loaded with 51200 units
+$ SHOW LICENSE
+
+Active licenses on node VAXC:
+
+------- Product ID --------    ---- Rating ----- -- Version --
+Product            Producer    Units Avail Activ Version Release    Termination
+DVNETRTG           DEC         51200  0     0      0.0  (none)      18-DEC-2099 
+$ @SYS$STARTUP:STARTNET
+%SYSGEN-E-NOUNLOAD, driver is not unloadable
+%SYSGEN-F-DEVACTIVE, device is active
+%RUN-F-CREPRC, process creation failed
+-SYSTEM-F-DUPLNAM, duplicate name
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM has been superseded
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM_NOSOFTID has been superseded
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM_SOFTID has been superseded
+%NCP-I-NOINFO, No information in database
+%RUN-F-CREPRC, process creation failed
+-SYSTEM-F-DUPLNAM, duplicate name
+$ 
+%%%%%%%%%%%  OPCOM  21-OCT-2026 16:04:09.91  %%%%%%%%%%%
+Message from user DECNET on VAXC
+DECnet event 4.10, circuit up
+From node 1.965 (VAXC), 21-OCT-2026 16:04:05.70
+Circuit QNA-0
+
+
+$ MCR NCP SHOW EXECUTOR
+ 
+ 
+Node Volatile Summary as of 21-OCT-2026 16:04:15
+ 
+Executor node = 1.965 (VAXC)
+ 
+State                    = on
+Identification           = DECnet for OpenVMS VAX V7.3
+
+ 
+$ MCR NCP SHOW KNOWN CIRCUITS
+ 
+ 
+Known Circuit Volatile Summary as of 21-OCT-2026 16:04:18

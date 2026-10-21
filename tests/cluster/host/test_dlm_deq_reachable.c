@@ -1279,7 +1279,7 @@ static void test_adoption_converts_our_own_lock(void)
 	 * ...and the release had its MASTER-SIDE effect: the peer's queued EX
 	 * is granted by this node's own try_grant_waiters. TELLING the peer is
 	 * a separate gap -- a LOCAL release reports no deferred grant to the
-	 * wire arm (rd vms-7e36) -- and this assertion deliberately claims only
+	 * wire arm (rd vms-28bd) -- and this assertion deliberately claims only
 	 * what the lock database says, which is what the engine owns.
 	 */
 	ct_check(getlki(&delivery, m.master_lkid, &lki) &&

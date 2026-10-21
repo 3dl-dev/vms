@@ -178,6 +178,9 @@ COPY src/kernel-core/vms_cluster_codec_mscp.c src/kernel-core/vms_cluster_codec_
 # Makefile's SRCS with E82 but was not staged here, which
 # tests/netbsd/check_guest_payload.sh reports; these lines close that. ---
 COPY src/kernel-core/vms_cluster_emit_guard.c src/kernel-core/vms_cluster_emit_guard.h /netbsd/guest-src/kernel-core/
+# --- rd vms-c56: which executive operator lines are OPA0: lines. Included by
+# exec_kbackend_netbsd.h (exec_console_printf) and vms_cnxman.c. ---
+COPY src/kernel-core/vms_cluster_opa0.h /netbsd/guest-src/kernel-core/
 # --- FC-P6.3: the MSCP disk SERVER. vms_mscp_srv_fsm.c is the pure server
 # (UQB/HQB/HRB + the [state][event] table) and vms_mscp_srv.c is its executive
 # glue; both joined src/kernel-netbsd/Makefile's SRCS with this item, so the

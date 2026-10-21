@@ -407,10 +407,8 @@ int cmd_deassign(struct dcl_command *cmd)
      * before the parameter test because the real form carries no name at all.
      */
     if (dcl_has_qualifier(cmd, "ALL") && dcl_qualifier_value(cmd, "TABLE")) {
-        dcl_error("DCL", 0, "NOTIMPL",
-                  "DEASSIGN /ALL with /TABLE= is not implemented - no "
-                  "logical name was deleted");
-        return SS$_UNSUPPORTED;
+        /* refused: DEASSIGN /ALL with /TABLE= is not implemented - no logical name was deleted */
+        return (int)dcl_unsupported();
     }
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
         dcl_error("DCL", 2, "NOKEYW", "missing logical name");

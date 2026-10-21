@@ -148,8 +148,12 @@ def selftest(repo):
         print('  [%s] %s: %r%s' % ('PASS' if good else 'FAIL', name, got,
                                   '' if good else ' (want %r)' % (want,)))
 
-    check('real releases in the corpus', len(real), 9858)
-    check('OVMX releases in the corpus', len(ovmx), 11)
+    # rd vms-e80 widened the corpus from `.pcap` only to `.pcap.gz` too, which
+    # is 32 more captures: the real releases went 9,858 -> 40,960 and the OVMX
+    # ones 11 -> 15. Every figure below is re-derived over the WHOLE corpus, and
+    # each note says what it moved from.
+    check('real releases in the corpus', len(real), 40960)        # was 9,858
+    check('OVMX releases in the corpus', len(ovmx), 15)           # was 11
 
     # 1. THE ENVELOPE. A release is a NOTIFICATION: no real sender opens a
     #    transaction on one, and nobody answers one.
@@ -162,8 +166,14 @@ def selftest(repo):
     # 2. body[30], AND ITS ENVELOPE. No claim about what it is; the measured
     #    range is the whole point, because OVMX writes a LOCK MODE there and a
     #    lock mode runs 0..5.
+    #    THE ENVELOPE SURVIVED THE WIDENING: 40,960 real releases -- 4.2x the
+    #    9,858 the rule was first read off, 32 more captures -- still carry only
+    #    0 or 1 there. OVMX's set grew to {1, 5} because the widened corpus adds
+    #    the three frames that bugchecked VAX1 (rd vms-3ac), whose lock was held
+    #    at CR: the builder writes the LOCK MODE, so it happened to land inside
+    #    the real envelope by luck. That is the defect, not an exception to it.
     check('real body[30] value set', sorted({b[30] for b in real}), [0, 1])
-    check('OVMX body[30] value set', sorted({b[30] for b in ovmx}), [5])
+    check('OVMX body[30] value set', sorted({b[30] for b in ovmx}), [1, 5])
 
     # 3. body[32]. Equal to body[30] on every real release; zero on every
     #    OVMX one, because the builder does not write it.
@@ -182,13 +192,13 @@ def selftest(repo):
     # 5. The spans a real sender leaves as its own stale buffer, counted so a
     #    `const:0` row for them is a measured choice and not an assumption.
     check('real releases with an all-zero body[16:20]',
-          sum(1 for b in real if b[16:20] == b'\0' * 4), 5700)
+          sum(1 for b in real if b[16:20] == b'\0' * 4), 23357)   # was 5,700
     check('real releases with an all-zero body[36:44]',
-          sum(1 for b in real if b[36:44] == b'\0' * 8), 354)
+          sum(1 for b in real if b[36:44] == b'\0' * 8), 1445)    # was 354
     check('real releases with ffffffff at body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\xff' * 4), 5117)
+          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22384)  # was 5,117
     check('real releases with an all-zero body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\0' * 4), 4095)
+          sum(1 for b in real if b[124:128] == b'\0' * 4), 16344)    # was 4,095
 
     print('dlm_deq_census selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1

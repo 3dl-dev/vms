@@ -115,7 +115,13 @@ def selftest(repo):
         print('  [%s] %s: %r%s' % ('PASS' if good else 'FAIL', name, got,
                                   '' if good else ' (want %r)' % (want,)))
 
-    check('real lock requests in the corpus', len(real), 21499)
+    # rd vms-e80 widened the shared walker to the 32 `.pcap.gz` captures, so
+    # the denominator moved 21,499 -> 74,737. THE NUMERATOR DID NOT: still
+    # exactly 7 real sub-lock requests, from the same 2 senders, at the same 2
+    # modes, with the same 3 parent pairs. rd vms-b67a's grounding is unchanged
+    # by 3.5x the corpus -- and the sample is still 7, which is why that item's
+    # fix is built from the ROUTING rule and not from a cell's value range.
+    check('real lock requests in the corpus', len(real), 74737)   # was 21,499
     check('real requests naming a sub-resource', len(subs), 7)
     check('distinct senders of one', len({s for s, _d, _b, _p in subs}), 2)
     check('distinct sub-lock modes at body[30]',

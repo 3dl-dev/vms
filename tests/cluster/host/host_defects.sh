@@ -275,7 +275,12 @@ dlm-request-not-held-in-transition
 dlm-dir-remove-sent-in-transition
 dlm-transition-hold-spends-the-ladder
 dlm-transition-hold-is-silent
-arm-transition-never-releases-the-hold"
+arm-transition-never-releases-the-hold
+dlm-rm-ack-rewrites-the-grant-record
+dlm-rm-lock-answer-echoes-the-handle
+dlm-rm-lock-answer-invents-a-valblk
+dlm-rm-14-leaks-the-caller-buffer
+dlm-rm-14-pattern-overruns-a-field"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1269,6 +1274,74 @@ EOF
 EOF
                       ;;
         esac;;
+    dlm-rm-ack-rewrites-the-grant-record)
+        case "$_f" in
+        facility)     echo "the 82/15 answer to a remaster step is the request with body[8], body[9] and body[34] rewritten and NOTHING else (rd vms-380 rule 1; 246 of 246 real pairs)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the answer also writes the 32-bit grant record at body[32:36], as the old op-0x0f-only builder did. On an op-0x0f that is invisible (65/65 real requests carry 01 00 .. 00 there); on an op-0x0e or op-0x10 it overwrites the sender's own body[32], [33] and [35], which take 21, 6 and 10 distinct values across the corpus -- OVMX asserting a value nobody sent, in an answer a real VAX echoes.";;
+        require_fail) hd_lines <<'EOF'
+*** the answer equals the real VAX's, byte for byte past the envelope ***
+  body[32] is the REQUEST'S byte, not the grant's 0x01
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-lock-answer-echoes-the-handle)
+        case "$_f" in
+        facility)     echo "the 82/01 answer to an op-0x12 carries at body[20:24] the lock id THIS engine minted, read back off the LKB it created (rd vms-380 rule 2; SDA-matched in RA2, RA5 and RA6)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the answer stops writing the handle the adoption minted, so body[20:24] stays the HOLDER's own EPID, echoed. The holder then records a master handle that names nothing on this node, and its next CONVERT or DEQ on that lock arrives for a lock id this master never issued -- the fc8540ae INVLOCKID shape, one step removed.";;
+        require_fail) hd_lines <<'EOF'
+*** the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+*** the sub grant equals the real VAX's, byte for byte past the envelope ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-lock-answer-invents-a-valblk)
+        case "$_f" in
+        facility)     echo "a value block rides an op-0x12 answer only when the RSB really holds one; sixteen zeros presented as a value block is the placeholder INV-6 forbids (rd vms-380 rule 2)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the answer writes the caller's valblk span whatever valblk_present says, so a SUB-resource grant -- 408 of 408 of which carry zeros on the real wire -- hands the holder a value block for a resource that has none.";;
+        require_fail) hd_lines <<'EOF'
+valblk_present 0 writes NO value block and NO sequence, whatever the struct holds
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-14-leaks-the-caller-buffer)
+        case "$_f" in
+        facility)     echo "an op-0x14 asserts six fields and ZEROS every other byte (the rd vms-42de ruling: residue is emitted as zeros, never OVMX kernel memory)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the builder stops blanking the body, so every span it does not fill is whatever the caller's frame buffer held -- which on a real executive is its own kernel memory. That is the exact value class that bugchecked two real lab VAXes (vms-239 r17/r19) and the thing the rd vms-42de ruling exists to forbid.";;
+        require_fail) hd_lines <<'EOF'
+*** every byte outside the six fields is ZERO -- the rd vms-42de ruling, not OVMX kernel memory ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-14-pattern-overruns-a-field)
+        case "$_f" in
+        facility)     echo "RA7's second fixed pattern lands in the op-0x14's residue spans and nowhere else, so the two fires differ in exactly one variable (rd vms-6ad1)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the residue span runs four bytes long and covers body[40:44], which 63 of 63 real op-0x14s carry as zero. The RA7 fire would then differ from its control in a NAMED field as well as the residue, and whatever the VAX did could not be attributed to either -- a proof that proves nothing, which is worse than no proof.";;
+        require_fail) hd_lines <<'EOF'
+*** not one named field moves when the pattern changes ***
+  body[40:44] stays 0 under the pattern (63/63 real)
+EOF
+                      ;;
+        esac;;
+
     cnxman-dir-remove-opens-txn)
         case "$_f" in
         facility)     echo "a directory-entry removal is a notification: its envelope opens no transaction (rd vms-e09, R3)";;
@@ -2653,8 +2726,12 @@ apply_edit() {
         sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
 
     dlm-op0f-member-answers-as-new-master)
-        # The role test guards the clearing write, in exactly one place.
-        sed -i 's|^\tif (new_master)$|\tif (1) /* NEGCTL dlm-op0f-member-answers-as-new-master */|' "$_file";;
+        # The role test guards the clearing write, in exactly one place -- now
+        # the shared remaster-step answer builder (rd vms-380), which also
+        # gates it on the opcode. Dropping the role half makes a plain member
+        # answer in the new master's form; the opcode half stays, so only the
+        # op-0x0f answer is corrupted and the defect is still one variable.
+        sed -i 's|^\tif (new_master != 0 \&\& op == VMS_DLM_WIREOP_RM_0F)$|\tif (op == VMS_DLM_WIREOP_RM_0F) /* NEGCTL dlm-op0f-member-answers-as-new-master */|' "$_file";;
 
     dlm-queued-convert-answered-as-granted)
         # The queued outcome is written in exactly one place.
@@ -3191,6 +3268,28 @@ apply_edit() {
     arm-transition-never-releases-the-hold)
         # The one release call, at the end of dlm_arm_transition_end().
         sed -i 's|^\t(void)dlm_req_fsm_transition_ended(\&d->req);$|\t/* NEGCTL arm-transition-never-releases-the-hold */|' "$_file";;
+    dlm-rm-ack-rewrites-the-grant-record)
+        # The outcome-byte write in vms_dlm_rm_ack_build is unique in this file;
+        # the injection appends the grant-record write the old op-0x0f-only
+        # builder did, so a second apply cannot match (the anchor is consumed).
+        sed -i 's|^\tvms_wire_put_u8(\&w, VMS_OFF_DLM_RESULT_STAMP, VMS_DLM_REPLY_GRANTED);$|\tvms_wire_put_le32(\&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL); /* NEGCTL dlm-rm-ack-rewrites-the-grant-record */|' "$_file";;
+
+    dlm-rm-lock-answer-echoes-the-handle)
+        # The one write of the minted handle, in vms_dlm_rm_lock_answer_build.
+        sed -i 's|^\tvms_wire_put_le32(\&w, VMS_OFF_DLM_MASTER_LKID, a->master_lkid);$|\t/* NEGCTL dlm-rm-lock-answer-echoes-the-handle */|' "$_file";;
+
+    dlm-rm-lock-answer-invents-a-valblk)
+        # The opt-in that keeps a value block off a resource that has none.
+        sed -i 's|a->valblk_present ? a->valblk\[i\] : 0u);|a->valblk[i]); /* NEGCTL dlm-rm-lock-answer-invents-a-valblk */|' "$_file";;
+
+    dlm-rm-14-leaks-the-caller-buffer)
+        # The one call that blanks an op-0x14's body before it is filled.
+        sed -i 's|^\tdlm_rm14_blank_body(\&w);$|\tif (0) dlm_rm14_blank_body(\&w); /* NEGCTL dlm-rm-14-leaks-the-caller-buffer */|' "$_file";;
+
+    dlm-rm-14-pattern-overruns-a-field)
+        # The residue span's own length, declared once.
+        sed -i 's|^#define VMS_DLM_RM14_RESIDUE_B_LEN   24u$|#define VMS_DLM_RM14_RESIDUE_B_LEN   28u /* NEGCTL dlm-rm-14-pattern-overruns-a-field */|' "$_file";;
+
     cnxman-dir-remove-opens-txn)
         # `cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);` is unique in this file.
         sed -i 's|^		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);$|		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST); /* NEGCTL cnxman-dir-remove-opens-txn */|' "$_file";;

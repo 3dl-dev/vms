@@ -96,6 +96,10 @@ cluster_host_test(fuzz_codec_seed       fuzz_codec_seed.c)
 cluster_host_test(test_codec_hello      test_codec_hello.c)
 cluster_host_test(test_codec_vc         test_codec_vc.c)
 cluster_host_test(test_codec_dlm        test_codec_dlm.c)
+# rd vms-380: lock-tree remastering on the wire (0e/0f/10/11/12/13/14), every
+# positive assertion byte-exact against a real VAX V7.3 frame, plus a held-out
+# topology and one negative control per cell the codec decides.
+cluster_host_test(test_codec_remaster   test_codec_remaster.c)
 # rd vms-66fe / vms-c6e: the derived resource-name hash against 1216 values
 # real OpenVMS VAX nodes put on the wire -- derivation split AND the held-out
 # split frozen before the derivation began.
@@ -1122,6 +1126,10 @@ add_test(NAME cluster_frame_conformance_gate
         "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
         dlm_dir_remove dlm_dir_ans_you dlm_dir_ans_redir cm_dlm_op0d_echo
         dlm_enq_req cm_ack
+        # rd vms-380: the remaster shapes. dlm_rm_14 and dlm_rm_14_ra7 are the
+        # two forms rd vms-6ad1 (RA7) fires, and they are required HERE so the
+        # gate refuses to let either ship ungrounded.
+        dlm_rm_ack dlm_rm_ack_nm dlm_rm_lock_ans dlm_rm_14 dlm_rm_14_ra7
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"

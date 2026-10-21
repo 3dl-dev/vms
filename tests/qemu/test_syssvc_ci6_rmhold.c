@@ -227,6 +227,7 @@ int main(void)
           "the value block RMHOLD wrote on its EX->CR down-conversion comes back "
           "in THIS process's LKSB as RMLVB-0123456789");
 
+    /* negctl: lock-compat-ex-cr */
     CHECK(!(enq(RMHOLD_ROOT, LCK$K_EXMODE, LCK$M_SYSTEM | LCK$M_NOQUEUE, 0, &ex) & 1),
           "an EX request with LCK$M_NOQUEUE is REFUSED while RMHOLD holds CR "
           "(the holder blocks, so it really holds)");

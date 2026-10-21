@@ -1253,10 +1253,11 @@ vms_codec_status_t vms_dlm_deq_parse_body(const uint8_t *body, uint32_t len,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	/* body[30]: the mode the lock is released FROM. The mode byte's
-	 * offset is the ac4-grounded one; the vms-c03 DEQ reads 0x00 (NL)
-	 * there, matching the mode its own op-0x01 grant assigned. */
-	d.mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	/* body[30]: REPORTED, NOT NAMED. The driven arm (rd vms-194) shows it
+	 * is not the mode the lock is released from -- a real node writes 0
+	 * there for every held mode NL..EX -- so the parse side hands the
+	 * caller what the frame carried and nothing else. */
+	d.rel_cell = vms_wire_get_u8(&v, VMS_OFB_DLM_DEQ_REL_CELL);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
@@ -1284,7 +1285,15 @@ vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
 			       d->master_lkid);
 	if (st != VMS_CODEC_OK)
 		return st;
-	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, d->mode);
+	/* body[30] AND ITS MIRROR body[32]: the MEASURED cell, never the lock
+	 * mode (rd vms-194 (c)). The driven arm's nine releases -- every held
+	 * mode NL..EX, a co-holder, and the roles swapped -- all carry 0, and
+	 * body[32] equals body[30] on 41,049 of 41,049 real releases. The
+	 * caller's `rel_cell` is deliberately NOT consulted: it is what an
+	 * inbound release carried, and echoing it would put a peer's byte on
+	 * this node's wire. */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL2, VMS_DLM_DEQ_REL_CELL);
 	/* The name span is deliberately left untouched: a real DEQ carries
 	 * no resource name, so writing one would be adding a field the
 	 * reference does not have. */

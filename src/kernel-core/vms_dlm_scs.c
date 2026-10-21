@@ -1694,7 +1694,12 @@ static void dlm_arm_fill_deq_req(const struct dlm_scs_request *in,
 	out->req_csid = (uint32_t)in->from_csid;
 	out->req_lkid = q->req_lkid;
 	out->master_lkid = q->master_lkid;
-	out->lkmode = q->mode;
+	/* NO MODE. body[30] of a release is not a lock mode (rd vms-194's
+	 * driven arm: nine real releases, every held mode NL..EX, all 0), and
+	 * the DEQ seam identifies the lock by (csid, handle) and reads no mode
+	 * at all. Passing that cell in as `lkmode` was handing the engine an
+	 * ungrounded byte under a field name it would have been right to
+	 * believe. `out` is zeroed above. */
 }
 
 /*

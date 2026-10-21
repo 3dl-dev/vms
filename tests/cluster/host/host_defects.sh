@@ -196,6 +196,7 @@ dlm-rundown-release-tells-nobody
 dlm-grant-advance-uncounted
 dlm-convert-tells-the-converter-only
 dlm-release-opens-a-transaction
+dlm-release-carries-the-lock-mode
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -950,8 +951,22 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "the release goes back to being treated as a message somebody answers, so every one mints a transaction token on the CSB, assigns it to a message no peer will ever answer, and leaves it open. MEASURED (tools/cluster/dlm_deq_census.py over every committed pcap): 0 of 9,858 real releases carry a transaction at body[4:8] and the corpus holds ZERO cat-0x82 op-0x03 answers -- while OVMX opened one on 11 of 11 of its own. It is the envelope-inconsistency class the ovmx-never-crashes-a-peer memory names as crash vector 1 (the one that produced CNXMGRERR), in the one frame family that has already bugchecked two lab VAXes.";;
         require_fail) hd_lines <<'EOF'
-*** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in 9,858 real releases' corpus) ***
+*** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in the 41,049 real releases' corpus) ***
 *** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-release-carries-the-lock-mode)
+        case "$_f" in
+        facility)     echo "body[30] OF A RELEASE (vms_cluster_codec_dlm.c vms_dlm_deq_build, rd vms-194 D2/D3): the MEASURED cell, written by the builder itself, never the lock mode the caller holds";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the builder goes back to putting the LKB's lock mode at body[30], which is how a release of an EX lock carried a 5. DRIVEN ON REAL HARDWARE (tests/lab/captures/vms-194-release-arm-20261021): nine releases on a real two-node V7.3 cluster, one variable each -- the held mode over all six of NL/CR/CW/PR/PW/EX, a non-NULL co-holder, and the roles swapped -- and body[30] reads 0 in every one, so it is NOT the mode. The corpus bounds it the same way: 41,049 real releases carry only 0 or 1. It is the minted-value class that has already bugchecked two lab VAXes (rd vms-239 r17/r19, rd vms-3ac), in the one frame family that did it.";;
+        require_fail) hd_lines <<'EOF'
+*** body[30] is the MEASURED cell, never the lock mode: the arm's nine releases all carry 0 ***
+  ...and the caller's parse-only rel_cell is NOT echoed onto this node's wire
 EOF
                       ;;
         esac;;
@@ -3017,6 +3032,10 @@ apply_edit() {
     dlm-release-opens-a-transaction)
         # The release's own admission line, unique in this file.
         sed -i 's|^\tif (op == VMS_DLM_WIREOP_DEQ)$|\tif (0) /* NEGCTL dlm-release-opens-a-transaction */|' "$_file";;
+
+    dlm-release-carries-the-lock-mode)
+        # The release builder's own measured-cell line, unique in this file.
+        sed -i 's|^\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
 
     dlm-convert-tells-the-converter-only)
         # The convert branch's snapshot, distinguished from vms_deq_core's by

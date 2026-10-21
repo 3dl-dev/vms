@@ -3,6 +3,9 @@
 OVMX's own release differs from it (rd vms-3ac done-condition (d)).
 
 usage: dlm_deq_census.py <pcap|dir> ...        the per-cell census + the diff
+       dlm_deq_census.py --arm <pcap>          the DRIVEN arm: one release per
+                                               arm, attributed by its grant's
+                                               handle pair (rd vms-194 (a))
        dlm_deq_census.py --selftest <repo>     pin the headline figures
 
 WHY THIS EXISTS, AND WHY IT IS THIS FRAME. The cat-0x02 op-0x03 release is the
@@ -90,6 +93,94 @@ def deq_answers(paths):
     return out
 
 
+# ---------------------------------------------------------------------------
+# THE DRIVEN ARM (rd vms-194 (a)). A release carries NO resource name -- the
+# codec refuses to read one, because the bytes a real $DEQ leaves at body[46:]
+# belong to whatever last used the buffer. So a release is attributed to the
+# lock it releases through the HANDLE PAIR its grant carried: the granted
+# cat-0x82 op-0x01 answer names (master lkid, requester lkid) at body[20:28],
+# and the release names the same two longwords. That is the one correlation
+# available, and it is the requester's own pair, not a reading of a name.
+# ---------------------------------------------------------------------------
+def grant_index(frames):
+    """{frozenset(handle pair): (request, answer)} for every GRANTED 82/01.
+
+    Paired by the SCS transaction id at body[4:8] on the (src,dst) it travelled
+    on -- remaster_census's rule, not time and not order.
+    """
+    pending, out = {}, {}
+    for _idx, src, dst, body in frames:
+        if len(body) < BODY_LEN:
+            continue
+        cat, op, tok = body[8], body[9], bytes(body[4:8])
+        if cat == DEQ_CAT and op == 0x01 and tok != b'\0' * 4:
+            pending[(src, dst, tok)] = bytes(body)
+        elif cat == ANSWER_CAT and op == 0x01:
+            req = pending.pop((dst, src, tok), None)
+            if req is None or body[34] != 0xfa:
+                continue
+            ans = bytes(body)
+            out[frozenset((ans[20:24], ans[24:28]))] = (req, ans)
+    return out
+
+
+def attributed_releases(path):
+    """Every op-0x03 in one capture whose grant this capture also holds.
+
+    Yields a dict per release: the NAME its request named, the mode it asked
+    for, the sender, and the two cells rd vms-194 is about.
+    """
+    frames = list(rc.sca_bodies_with_src(path))
+    grants = grant_index(frames)
+    out = []
+    for _idx, src, _dst, body in frames:
+        if len(body) < BODY_LEN or body[8] != DEQ_CAT or body[9] != DEQ_OP:
+            continue
+        g = grants.get(frozenset((bytes(body[20:24]), bytes(body[24:28]))))
+        if g is None:
+            continue
+        req, _ans = g
+        out.append(dict(name=req[48:64].split(b'\0')[0].decode('latin1'),
+                        asked_mode=req[30], sender=src.hex()[-4:],
+                        b30=body[30], b32=body[32]))
+    return out
+
+
+ARM_NAMES = ('DQR0', 'DQR2', 'DQR3', 'DQR4', 'DQR5B', 'DQR5', 'DQL', 'DQB2',
+             'DQB')
+
+
+def arm_releases(path):
+    """The driven arm's own releases, one per arm, keyed by arm name.
+
+    DQR5B before DQR5 and DQB2 before DQB: the names are matched longest-first
+    because a release's request name span carries residue after the name.
+    """
+    out = {}
+    for r in attributed_releases(path):
+        for k in ARM_NAMES:
+            if r['name'].startswith(k):
+                out.setdefault(k, r)
+                break
+    return out
+
+
+def arm_report(path):
+    print("=== rd vms-194 driven RELEASE arm: %s" % path)
+    rows = arm_releases(path)
+    print("%-8s %-8s %-10s %-6s %-6s" % ('arm', 'sender', 'held mode',
+                                         'b[30]', 'b[32]'))
+    for k in sorted(rows, key=lambda k: rows[k]['asked_mode']):
+        r = rows[k]
+        print("%-8s %-8s %-10d %-6d %-6d"
+              % (k, r['sender'], r['asked_mode'], r['b30'], r['b32']))
+    allr = attributed_releases(path)
+    print("\nattributed releases in the whole capture: %d; "
+          "body[32] == body[30] on %d"
+          % (len(allr), sum(1 for r in allr if r['b32'] == r['b30'])))
+    return 0
+
+
 def cell_report(group, label):
     print("\n=== cat-0x02 op-0x03 cells, %s sender  n=%d" % (label, len(group)))
     if not group:
@@ -150,9 +241,9 @@ def selftest(repo):
 
     # rd vms-e80 widened the corpus from `.pcap` only to `.pcap.gz` too, which
     # is 32 more captures: the real releases went 9,858 -> 40,960 and the OVMX
-    # ones 11 -> 15. Every figure below is re-derived over the WHOLE corpus, and
+    # ones 11 -> 15; this arm's own capture then added 89 more (41,049). Every figure below is re-derived over the WHOLE corpus, and
     # each note says what it moved from.
-    check('real releases in the corpus', len(real), 40960)        # was 9,858
+    check('real releases in the corpus', len(real), 41049)        # was 9,858
     check('OVMX releases in the corpus', len(ovmx), 15)           # was 11
 
     # 1. THE ENVELOPE. A release is a NOTIFICATION: no real sender opens a
@@ -192,19 +283,46 @@ def selftest(repo):
     # 5. The spans a real sender leaves as its own stale buffer, counted so a
     #    `const:0` row for them is a measured choice and not an assumption.
     check('real releases with an all-zero body[16:20]',
-          sum(1 for b in real if b[16:20] == b'\0' * 4), 23357)   # was 5,700
+          sum(1 for b in real if b[16:20] == b'\0' * 4), 23402)   # was 5,700
     check('real releases with an all-zero body[36:44]',
-          sum(1 for b in real if b[36:44] == b'\0' * 8), 1445)    # was 354
+          sum(1 for b in real if b[36:44] == b'\0' * 8), 1458)    # was 354
     check('real releases with ffffffff at body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22384)  # was 5,117
+          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22413)  # was 5,117
     check('real releases with an all-zero body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\0' * 4), 16344)    # was 4,095
+          sum(1 for b in real if b[124:128] == b'\0' * 4), 16388)    # was 4,095
+
+    # 6. THE DRIVEN ARM (rd vms-194 (a)), read back off its committed capture.
+    #    Nine arms, one release each, one variable per arm: the held mode over
+    #    NL..EX, a non-NULL co-holder, and the roles swapped. body[30] is 0 in
+    #    EVERY ONE -- so it is NOT the lock mode a real node releases at, which
+    #    is what OVMX's builder wrote there, and the item's clause (c) writes
+    #    the measured 0. What SELECTS the 1 that 8,904 of the corpus's releases
+    #    carry is OUTSIDE this matrix and is not guessed (arms V and S, the
+    #    value block on the release and sub-locks, are the deferred pass).
+    arm = os.path.join(repo, 'tests', 'lab', 'captures',
+                       'vms-194-release-arm-20261021', 'dq-modes.pcap')
+    rows = arm_releases(arm)
+    check('driven arms with exactly one attributed release', len(rows), 9)
+    check('held modes the arm covered',
+          sorted({r['asked_mode'] for r in rows.values()}), [0, 1, 2, 3, 4, 5])
+    check('distinct senders (the roles were swapped)',
+          len({r['sender'] for r in rows.values()}), 2)
+    check('driven releases with body[30] == 0',
+          sum(1 for r in rows.values() if r['b30'] == 0), 9)
+    check('driven releases with body[32] == 0',
+          sum(1 for r in rows.values() if r['b32'] == 0), 9)
+    allarm = attributed_releases(arm)
+    check('attributed releases in that capture', len(allarm), 89)
+    check('...with body[32] == body[30]',
+          sum(1 for r in allarm if r['b32'] == r['b30']), 89)
 
     print('dlm_deq_census selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1
 
 
 def main(argv):
+    if len(argv) >= 3 and argv[1] == '--arm':
+        return arm_report(argv[2])
     if len(argv) >= 2 and argv[1] == '--selftest':
         repo = argv[2] if len(argv) > 2 else os.path.join(HERE, '..', '..')
         return selftest(repo)

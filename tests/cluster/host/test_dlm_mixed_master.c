@@ -519,7 +519,7 @@ static int vax_build_enq(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
 	r.res_acmode = OVMX_RES_MODE;
 	r.res_ident_valid = 1u;
 	/* body[20:24]: a real member's REQUESTING PID until the master names a
-	 * handle (rd vms-c55; 20,365 of 21,496 real op-0x01 requests) */
+	 * handle (rd vms-c55; 20,368 of 21,499 real op-0x01 requests) */
 	r.req_pid = 0x20200204u;
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	return vms_dlm_enq_request_build(&r, opcode, frame, VMS_CM_FRAME_LEN,

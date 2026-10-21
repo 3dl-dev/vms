@@ -389,12 +389,12 @@ struct vms_dlm_enq_request {
 	 * LKB by the master's own reply, and `req_pid` is the id of the process
 	 * whose $ENQ this is, read off that process's PCB at post time.
 	 *
-	 * CENSUS, every committed capture (tests/lab/captures, 21,496 cat-0x02
+	 * CENSUS, every committed capture (tests/lab/captures, 21,499 cat-0x02
 	 * op-0x01 requests from real VMS senders):
-	 *   20,365  a PID-form value (high byte 0x20, low word < 0x1000)
+	 *   20,368  a PID-form value (high byte 0x20, low word < 0x1000)
 	 *    1,116  a master lock id (the requester already had one)
 	 *       15  zero (0.07%)
-	 * and what a real directory ANSWERS a zero: of 19,370 answers whose
+	 * and what a real directory ANSWERS a zero: of 19,377 answers whose
 	 * echoed cell is nonzero, NONE carries body[34] = 0xfe; of the 44 whose
 	 * cell is zero, 12 do -- i.e. 0xfe answers a zero cell and nothing else,
 	 * 12 of 12. A 0xfe is the last DLM frame a real VAX V7.3 sent before each

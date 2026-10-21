@@ -13,7 +13,7 @@ may assign a bit to an option.
 WHY IT EXISTS. OVMX's builder writes ZERO at body[28:30] and at body[31:44].
 For most spans that is the right thing -- a real request leaves residue there
 and rd vms-42de says this node sends zeros rather than its own kernel memory.
-But a real request is zero at body[28:30] only 36 times in 21,496, and the
+But a real request is zero at body[28:30] only 36 times in 21,499, and the
 reason is that the span is not residue at all:
 
     the value is determined by the RESOURCE FAMILY
@@ -196,17 +196,17 @@ def selftest():
 
     n, hit = cmd_spans(paths)
     print("-- body[28:30] and body[31:44] are NOT residue; the other two are")
-    check("real op-0x01 requests", n, 21496)
-    check("body[10:12] zero (residue, as OVMX assumes)", hit["body[10:12]"], 16586)
-    check("body[16:20] zero (residue, as OVMX assumes)", hit["body[16:20]"], 17084)
+    check("real op-0x01 requests", n, 21499)
+    check("body[10:12] zero (residue, as OVMX assumes)", hit["body[10:12]"], 16589)
+    check("body[16:20] zero (residue, as OVMX assumes)", hit["body[16:20]"], 17087)
     check("body[28:30] zero -- a real request almost never is",
           hit["body[28:30]"], 36)
     check("body[31:44] zero -- nor is this one", hit["body[31:44]"], 1649)
 
     fam = cmd_family(paths)
     print("-- and body[28:30] is decided by the resource FAMILY")
-    for name, want_val, want_n in (("F11B$a", 0x007d, 4992),
-                                   ("F11B$s", 0x0239, 7929),
+    for name, want_val, want_n in (("F11B$a", 0x007d, 4993),
+                                   ("F11B$s", 0x0239, 7930),
                                    ("CACHE$cm", 0x0e70, 1605),
                                    ("RMS$", 0x0e19, 152),
                                    ("LMF$", 0x0011, 122)):

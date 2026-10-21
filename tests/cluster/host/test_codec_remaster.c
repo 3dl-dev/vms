@@ -685,6 +685,93 @@ static void test_heldout_topology(void)
 			"  the RA6 root's value-block sequence is 1 too");
 }
 
+/*
+ * RA8 (tests/lab/captures/vms-380-ra8-heldout-20261021): the fire whose eight
+ * predictions were committed BEFORE the pod existed, in a third topology
+ * (O=VAX3, N=VAX1, H=VAX2). Two things from it are pinned here.
+ */
+static void test_ra8_third_topology(void)
+{
+	const struct vms_fixture *req = fixture("ra8-12-root-req");
+	const struct vms_fixture *ans = fixture("ra8-12-root-ans");
+	struct vms_dlm_rm_lock_answer a;
+	struct vms_dlm_rm_lock_rec r;
+	uint8_t built[256];
+
+	printf("-- RA8 (pre-registered, third topology O=VAX3 N=VAX1 H=VAX2)\n");
+	ct_check(req != NULL && ans != NULL, "both specimens load");
+	if (req == NULL || ans == NULL)
+		return;
+
+	memset(&r, 0, sizeof(r));
+	ct_check(vms_dlm_rm_lock_rec_parse_body(fxbody(req), VMS_CM_BODY_LEN,
+						&r) == VMS_CODEC_OK,
+		 "  the holder's root record parses");
+	ct_check_eq_u32(r.holder_lkid, 0x150000abu,
+			"  body[24:28]: VAX2's own root lock id, SDA-listed "
+			"before the move");
+	ct_check_eq_u32(r.holder_epid, 0x20400217u,
+			"  body[20:24]: HOLD2's EPID on VAX2 (SHOW SUMMARY)");
+	ct_check_eq_u32(r.granted_mode, VMS_LCK_CR, "  granted CR, as SDA showed");
+	ct_check_eq_u32(r.is_root, 1, "  and it is the ROOT record");
+
+	memset(&a, 0, sizeof(a));
+	/* The handle SDA on VAX2 lists for the root AFTER the move -- in the
+	 * real path, what the adoption engine minted. */
+	a.master_lkid = 0x01000923u;
+	a.valblk_present = 1u;
+	memcpy(a.valblk, "RMLVB-0123456789", VMS_DLM_VALBLK_WIRE_LEN);
+	a.valblk_seq = 1u;
+	memset(built, 0xa5, sizeof(built));
+	ct_check(vms_dlm_rm_lock_answer_build(fxbody(req), VMS_CM_BODY_LEN, &a,
+					      built, sizeof(built),
+					      NULL) == VMS_CODEC_OK,
+		 "  the grant builds from the handle SDA confirms");
+	ct_check(body_diff(built + VMS_OFF_SYSAP_BODY, fxbody(ans),
+			   g_unnamed_0x12_cells, 4u, "RA8 root 82/01") == 0,
+		 "*** PRE-REGISTERED, THIRD TOPOLOGY: the root grant equals the "
+		 "real VAX's everywhere but the cells rd vms-380 cannot name ***");
+	ct_check(fxbody(ans)[30] == 0xf1u && fxbody(ans)[31] == 0x01u,
+		 "  body[30:32] reads f1 01 here (f0 01 in RA5, f1 01 in RA6)");
+	ct_check(fxbody(ans)[32] == 0xd3u && fxbody(ans)[33] == 0x04u,
+		 "  body[32:34] reads 0x04d3 -- a third value for the cell this "
+		 "codec writes the grounded 0x0001 into");
+}
+
+/*
+ * THE op-0x14 ROLE RULE IS FALSE, and this is the frame that proves it.
+ * RA6 read "body[28] 0x10 / body[34] 0xfa to the old master, 0x80 / 0xf9 to a
+ * holder" off six frames. In RA8's middle remaster the two 0x14s are EXACTLY
+ * INVERTED, and body[28] takes a fourth value. If anyone ever makes OVMX emit
+ * those cells by role, this test is what stops them.
+ */
+static void test_op14_role_rule_is_false(void)
+{
+	const struct vms_fixture *to_o = fixture("ra8-14-inverted-to-oldmaster");
+	const struct vms_fixture *to_h = fixture("ra8-14-inverted-to-other");
+
+	printf("-- the op-0x14 'role rule' is false (RA8's middle remaster)\n");
+	ct_check(to_o != NULL && to_h != NULL, "both specimens load");
+	if (to_o == NULL || to_h == NULL)
+		return;
+	ct_check(fxbody(to_o)[9] == VMS_DLM_WIREOP_RM_14 &&
+		 fxbody(to_h)[9] == VMS_DLM_WIREOP_RM_14,
+		 "  both are op-0x14");
+	ct_check(fxbody(to_o)[28] == 0xd0u && fxbody(to_o)[34] == 0xf9u,
+		 "*** the frame to the OLD MASTER carries d0 / f9 where the "
+		 "role rule wants 10 / fa ***");
+	ct_check(fxbody(to_h)[28] == 0x00u && fxbody(to_h)[34] == 0xfau,
+		 "*** and the frame to the other member carries 00 / fa where "
+		 "it wants 80 / f9 -- exactly inverted ***");
+	/* What IS true of every real 0x14, and what this codec therefore
+	 * asserts: the opcode pair and the zero word. */
+	ct_check(fxbody(to_o)[8] == 0x02u && fxbody(to_h)[8] == 0x02u,
+		 "  body[8] = 0x02 in both (63/63 in the corpus)");
+	ct_check(memcmp(fxbody(to_o) + 40, "\0\0\0\0", 4) == 0 &&
+		 memcmp(fxbody(to_h) + 40, "\0\0\0\0", 4) == 0,
+		 "  body[40:44] = 0 in both (63/63 in the corpus)");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -710,6 +797,8 @@ int main(void)
 	test_op14_ra7_pattern_touches_only_residue();
 	test_notifications_are_notifications();
 	test_heldout_topology();
+	test_ra8_third_topology();
+	test_op14_role_rule_is_false();
 	test_negative_controls();
 	return ct_summary("test_codec_remaster");
 }

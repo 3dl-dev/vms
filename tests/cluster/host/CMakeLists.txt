@@ -1231,6 +1231,22 @@ set_tests_properties(cluster_host_remaster_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-33a: what a HOLDER's op-0x12 record carries. The other half of the
+# remaster census: remaster_census.py measures the new master's ANSWER (which
+# OVMX builds today), this one measures the RECORD a real holder SENDS -- which
+# OVMX must build before a real new master stops waiting forever for its
+# op-0x13. Pins the 420/9/411 split, the cells every real record agrees on, and
+# the parent-pair rule that tells a ROOT record from a SUB one.
+add_test(NAME cluster_host_rec12_holder_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/rec12_holder_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_rec12_holder_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
 # ---- rd vms-c55: what a node puts on the lock connection DURING a transition
 # The transition hold in vms_dlm_scs_fsm.c is justified by a census, not by a
 # reading of the book: over every committed pcap, no real VMS node put a

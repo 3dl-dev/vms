@@ -96,6 +96,7 @@
 #include "vms_dlm_quorum.h"
 #include "vms_dlm_echo_guard.h"
 #include "vms_dlm_pending.h"   /* rd vms-f87: the requests we owe an answer */
+#include "vms_cnxman_csb.h"   /* rd vms-ed5: the CLUB's own member set */
 #include "vms_cnxman_quorum.h"
 #include "vms_dlm_scs.h"
 #include "vms_dlm_scs_fsm.h"

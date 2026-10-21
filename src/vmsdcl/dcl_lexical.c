@@ -39,6 +39,7 @@
 #include "descrip.h"
 #include "lnmdef.h"
 #include "starlet.h"   /* sys$faol / sys$getmsg (F$FAO, F$MESSAGE) */
+#include "prcdef.h"    /* JPI$_MODE, JPI$K_* */
 /* Kernel-interface client: F$DEVICE enumerates the executive's device
  * table through it (vms-fb9), and F$SETPRV routes its privilege mutation
  * through vms_kif_setprv() here -- the SAME already-wired executive edge
@@ -543,14 +544,45 @@ static int lex_process(struct dcl_context *ctx, const char *args,
 }
 
 /*
- * F$MODE() - Return process mode.
+ * The process mode $GETJPI JPI$_MODE reports for `pid` (0: this process), as
+ * F$MODE / F$GETJPI(...,"MODE") spell it. The executive classifies every
+ * process (its row's proc_type), so the answer is its, never this DCL's own
+ * guess from whether its input is a terminal. Returns the $GETJPI status.
+ */
+static uint32_t lex_jpi_mode(uint32_t pid, char *result, size_t result_size)
+{
+    uint32_t mode = 0, p = pid;
+    uint16_t rl = 0;
+    struct item_list_3 il[2];
+    memset(il, 0, sizeof il);
+    il[0].buflen = sizeof mode;
+    il[0].item_code = JPI$_MODE;
+    il[0].bufaddr = &mode;
+    il[0].retlen = &rl;
+    uint32_t st = sys$getjpiw(0, &p, NULL, il, NULL, NULL, 0);
+    if (!(st & 1))
+        return st;
+    snprintf(result, result_size, "%s",
+             mode == JPI$K_INTERACTIVE ? "INTERACTIVE" :
+             mode == JPI$K_BATCH       ? "BATCH" :
+             mode == JPI$K_NETWORK     ? "NETWORK" : "OTHER");
+    return SS$_NORMAL;
+}
+
+/*
+ * F$MODE() - this process's mode, JPI$_MODE (DCL Dictionary: "F$MODE ...
+ * equivalent to F$GETJPI with the MODE item").
  */
 static int lex_mode(struct dcl_context *ctx, const char *args,
                     char *result, size_t result_size)
 {
     (void)args;
-    strncpy(result, ctx->interactive ? "INTERACTIVE" : "BATCH", result_size - 1);
-    result[result_size - 1] = '\0';
+    uint32_t st = lex_jpi_mode(0, result, result_size);
+    if (!(st & 1)) {
+        result[0] = '\0';
+        if (ctx) ctx->last_status = st;
+        return -1;
+    }
     return 0;
 }
 
@@ -1444,16 +1476,14 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
         snprintf(result, result_size, "%u",
                  (unsigned)(strcmp(s, "PRIB") == 0 ? pri : authpri));
     } else if (strcmp(s, "MODE") == 0) {
-        /*
-         * JPI$_MODE (INTERACTIVE/BATCH/NETWORK/OTHER) is not carried in the
-         * executive process row; OVMX can only answer it for the caller's
-         * own DCL session (F$MODE semantics). For another process it is
-         * UNSOURCED -- report nothing rather than the caller's mode, which
-         * would be the same cross-process fabrication this item removes.
-         */
-        if (target[0] == '\0')
-            return lex_mode(ctx, NULL, result, result_size);
-        result[0] = '\0';
+        /* JPI$_MODE from the executive's row for the target (its proc_type
+         * classification), for this process or any other. */
+        uint32_t mst = lex_jpi_mode(info.vms_pid, result, result_size);
+        if (!(mst & 1)) {
+            result[0] = '\0';
+            if (ctx) ctx->last_status = mst;
+            return -1;
+        }
     } else if (strcmp(s, "CURPRIV") == 0 || strcmp(s, "AUTHPRIV") == 0) {
         /*
          * ADDED vms-2b8 round 4 (CURPRIV only, and as a DECIMAL INTEGER);

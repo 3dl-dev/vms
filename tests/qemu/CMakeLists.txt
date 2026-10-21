@@ -1222,6 +1222,17 @@ set_tests_properties(decnet_startnet_boot_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 1500)
+# decnet_sethost_pair_boot_e2e (rd vms-a353): two booted DECnet nodes on one
+# segment; SET HOST A -> B never shows the remote password on A's console, and
+# %REM-S-END lands on its own line. Same opt-in; ci-release-e2e.yml runs it.
+add_test(
+    NAME decnet_sethost_pair_boot_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_decnet_sethost_pair_boot_e2e.sh
+)
+set_tests_properties(decnet_sethost_pair_boot_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1800)
 # ---------------------------------------------------------------------------
 # run_status_e2e (vms-707): boot the real runtime, log in, RUN SYS$SYSTEM:RC3.EXE,
 # and assert the reworked DCL RUN fork path (waitid(WNOWAIT) peek -> executive

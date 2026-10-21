@@ -125,6 +125,17 @@ class Console:
         except OSError:
             return ""
 
+    def raw(self, since=0, until=None):
+        """The console bytes from `since` up to `until` (default: the end),
+        CRs kept (where a line STARTS matters: a bare CR is not a new line)."""
+        try:
+            with open(self.logpath, "rb") as f:
+                f.seek(since)
+                b = f.read() if until is None else f.read(max(0, until - since))
+                return b.decode("latin-1", "replace").replace("\x00", "")
+        except OSError:
+            return ""
+
     def alive(self):
         return True
 
@@ -356,26 +367,37 @@ def pcap_frames(path):
 
 # ---------------------------------------------------------------------------
 # SET HOST <node> from `src`, log in SYSTEM/MANAGER on the far side, ask the
-# far node its architecture, log out. Returns (reached_username, arch, ended).
+# far node its architecture, log out. Returns (reached_username, arch, ended,
+# transcript tail, echo) where echo (rd vms-a353) records what the ORIGINATING
+# console showed -- its OUTPUT, the only thing the log holds:
+#   user_echoed  the typed username appeared while the Username: read was out
+#                (the negative control: that read echoes);
+#   pass_echoed  the typed password appeared while the Password: read was out
+#                (VMS never echoes it);
+#   rem_own_line %REM-S-END starts a line of its own (an LF before it), not
+#                run onto "logged out at ..." by a bare CR.
 # ---------------------------------------------------------------------------
 def set_host(src, node, timeout=240):
+    echo = {"user_echoed": None, "pass_echoed": None, "rem_own_line": None}
     off = src.size()
     src.line("SET HOST " + node)
     i, m = src.expect([r"Username:", r"%[A-Z]+-[EFW]-[A-Z0-9]+[^\n]*"], timeout, off)
     if i != 0:
-        return (False, None, False, src.text(off)[-600:])
+        return (False, None, False, src.text(off)[-600:], echo)
     time.sleep(1)
     o2 = src.size()
     src.line("SYSTEM")
     if src.expect(r"Password:", 120, o2)[0] < 0:
-        return (True, None, False, src.text(off)[-600:])
+        return (True, None, False, src.text(off)[-600:], echo)
     time.sleep(1)
     o3 = src.size()
+    echo["user_echoed"] = "SYSTEM" in src.raw(o2, o3)
     src.line("MANAGER")
     if src.expect(r"(^|\n) ?\$ ", 300, o3)[0] < 0:
-        return (True, None, False, src.text(off)[-600:])
+        return (True, None, False, src.text(off)[-600:], echo)
     time.sleep(2)
     o4 = src.size()
+    echo["pass_echoed"] = "MANAGER" in src.raw(o3, o4)
     src.line('WRITE SYS$OUTPUT "FARARCH="+F$GETSYI("ARCH_NAME")+"/"+F$GETSYI("NODENAME")')
     i, m = src.expect(r"FARARCH=([A-Za-z0-9_]+)/([A-Za-z0-9_]*)", 120, o4)
     arch = (m.group(1), m.group(2)) if m else None
@@ -383,7 +405,12 @@ def set_host(src, node, timeout=240):
     o5 = src.size()
     src.line("LOGOUT")
     i, _ = src.expect(r"%REM-S-END", 180, o5)
-    return (True, arch, i == 0, src.text(off)[-1200:])
+    if i == 0:
+        time.sleep(2)
+        raw = src.raw(o5)
+        k = raw.find("%REM-S-END")
+        echo["rem_own_line"] = k > 0 and raw[k - 1] == "\n"
+    return (True, arch, i == 0, src.text(off)[-1200:], echo)
 
 
 def main():
@@ -501,21 +528,33 @@ def main():
         time.sleep(45)
 
         # ---- x86 -> VAX ------------------------------------------------------
-        reached, arch, ended, tail = set_host(x, VAX_NAME)
+        reached, arch, ended, tail, xecho = set_host(x, VAX_NAME)
         check(reached, "x86 -> VAX: $ SET HOST %s reaches the VAX's LOGINOUT Username: prompt" % VAX_NAME)
         check(arch is not None and arch[0].upper() == "VAX",
               "x86 -> VAX: SYSTEM logs in over CTERM and the far session's F$GETSYI(\"ARCH_NAME\") is VAX "
               "(got %s)" % (arch,))
         check(ended, "x86 -> VAX: LOGOUT ends the remote session (%REM-S-END)")
+        # The x86 CLIENT here is the PUBLISHED release (X86_PEER_DIR), not this
+        # tree, so its echo is reported, not asserted; the VAX client below is
+        # built from this tree and is asserted (rd vms-a353).
+        log("x86 -> VAX (released x86 client): echo %s" % (xecho,))
         print("---- x86 -> VAX transcript ----\n" + tail + "\n-------------------------------", flush=True)
 
         # ---- VAX -> x86 ------------------------------------------------------
-        reached, arch, ended, tail = set_host(v, X86_NAME, timeout=300)
+        reached, arch, ended, tail, vecho = set_host(v, X86_NAME, timeout=300)
         check(reached, "VAX -> x86: $ SET HOST %s reaches the x86's LOGINOUT Username: prompt" % X86_NAME)
         check(arch is not None and arch[0].upper() == "X86_64",
               "VAX -> x86: SYSTEM logs in over CTERM and the far session's F$GETSYI(\"ARCH_NAME\") is X86_64 "
               "(got %s)" % (arch,))
         check(ended, "VAX -> x86: LOGOUT ends the remote session (%REM-S-END)")
+        # rd vms-a353: the VAX console is the originating terminal; its log is
+        # the guest's OUTPUT, so a typed string is in it only if it was echoed.
+        check(vecho["user_echoed"] is True,
+              "VAX -> x86: NEGCTL the Username: read echoes -- the VAX console shows the typed SYSTEM")
+        check(vecho["pass_echoed"] is False,
+              "VAX -> x86: the x86's Password: is NOT echoed on the VAX console (a no-echo CTERM read)")
+        check(vecho["rem_own_line"] is True,
+              "VAX -> x86: %REM-S-END starts its own line (preceded by LF, not a bare CR)")
         print("---- VAX -> x86 transcript ----\n" + tail + "\n-------------------------------", flush=True)
 
         # ---- negative control -------------------------------------------------

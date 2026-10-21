@@ -796,10 +796,17 @@ EOF
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
         why)          echo "the grant record is left out of a built grant, exactly as the lab build did. Without it body[34] -- the position a directory answer carries 0xf9/0xf8 in and a grant 0xfa -- reads 0x00, a value no real answer carries: the requester has no outcome to read. 38 of 38 real grants in the reference capture carry the record.";;
+        # THE SET SHRANK ON PURPOSE (rd vms-380). It used to include the two
+        # op-0x0f answers, because vms_dlm_op0f_ack_build wrote this same
+        # record. The narrowed answer builder writes only body[34] (246 of 246
+        # real answers rewrite nothing else), so this mutation CANNOT reach the
+        # op-0x0f answers any more and naming them would be a lie about what it
+        # does. Those two assertions still run, and they stay mutation-covered
+        # by dlm-op0f-member-answers-as-new-master and by
+        # dlm-rm-ack-rewrites-the-grant-record. The op-0x12 answer's half of
+        # this one writer has its own control, dlm-rm-lock-answer-record-omitted.
         require_fail) hd_lines <<'EOF'
 *** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
-*** the new master's op-0x0f answer equals the real VAX's, byte for byte after the envelope ***
-*** a member's op-0x0f answer equals the real VAX's, body[28:32] KEPT ***
 EOF
                       ;;
         esac;;

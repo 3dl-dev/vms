@@ -349,7 +349,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 [ -f "$JOINT/cc1plus.exe" ] && cp "$JOINT/cc1plus.exe" "$SYSEXE/CC1PLUS.EXE"
                 [ -f "$JOINT/gxx.exe" ] && cp "$JOINT/gxx.exe" "$SYSEXE/GXX.EXE"
                 [ -f "$JOINT/libstdcxx.a" ] && cp "$JOINT/libstdcxx.a" "$SYSEXE/LIBSTDCXX.A"
-                for _f in crt0.o crtbegin.o crtend.o libgcc.a; do
+                for _f in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do
                     [ -f "$JOINT/$_f" ] || { echo "FAIL: DRL_PROOF without $JOINT/$_f"; exit 1; }
                     cp "$JOINT/$_f" "$SYSEXE/$(echo "$_f" | tr a-z A-Z)"
                 done

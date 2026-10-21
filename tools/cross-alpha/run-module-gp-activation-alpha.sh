@@ -591,6 +591,9 @@ assert_drl() {
   [ -s "$r1" ] && [ -s "$r2" ] && [ -s "$r1b" ] && [ -s "$r2b" ] && [ -s "$r1c" ] && [ -s "$r2c" ] && [ -s "$r1d" ] && [ -s "$r2d" ] || { echo "  FAIL: no reference image"; return 1; }
   local same4=0 ran4=0 st4_ok=0 sys_ok=0 same3=0 ran3=0 st3_ok=0 same2=0 ran2=0 st2_ok=0 drv_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 ran=0 st_ok=0
   drv_ok=$(grep -qaE 'OVMX xgcc run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
+  # vms-5b3: a compiler that fails is seen to fail by its parent (GCC's fatal exit, code 1)
+  local fail_seen
+  fail_seen=$(grep -qaE 'OVMX cc1-missing run: pid_ok=1 exited=1 code=1 ' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
   if [ -n "$mile_hex" ]; then
@@ -629,6 +632,7 @@ assert_drl() {
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
   echo "  (a) xgcc ran + exit 0 : $drv_ok (want 1)"
+  echo "  (a2) a failing cc1 is seen to fail (WEXITSTATUS 1) : $fail_seen (want 1)"
   echo "  (b) launcher seam     : ${seam:-<ABSENT>}  decode sentinel=$sentinel (want 7; ok=$mile_ok)"
   echo "  (c) DCL DUMP HELLO.EXE == the cross driver image : same=$same ; RUN printed the line : $ran ; success status : $st_ok"
   echo "  (c2) system(): a good command returns odd and ran, a bad one returns an even value : ok=$sys_ok"
@@ -636,7 +640,7 @@ assert_drl() {
   echo "  (c4) native build (GCC + AR foreign commands, library, link): DUMP == cross build image : same=$same3 ; RUN printed the line : $ran3 ; success status : $st3_ok"
   echo "  (c5) C++ (native g++ -> cc1plus, LINK against libstdc++): DUMP == cross g++ image : same=$same4 ; RUN printed the line : $ran4 ; success status : $st4_ok"
   echo "  (d) no activation err : ok=$err_ok"
-  [ "$same4" -eq 1 ] && [ "$ran4" -eq 1 ] && [ "$st4_ok" -eq 1 ] && [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$same3" -eq 1 ] && [ "$ran3" -eq 1 ] && [ "$st3_ok" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$fail_seen" -eq 1 ] && [ "$same4" -eq 1 ] && [ "$ran4" -eq 1 ] && [ "$st4_ok" -eq 1 ] && [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$same3" -eq 1 ] && [ "$ran3" -eq 1 ] && [ "$st3_ok" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -2248,6 +2252,7 @@ for n, b in (("good", bytes(good)), ("bad", bytes(bad)), ("short", ref1[:50])):
 PYEOF2
     mklog() {  # mklog <xgcc code> <seam> <hello line> <hello status> <dump good|bad|short>
       printf '%s\r\n' "OVMX-SYSTEM-OK" "OVMX system: ok_rc=${6:-1} bad_rc=${7:-44}" \
+        "OVMX cc1-missing run: pid_ok=1 exited=1 code=${17:-1} status=%X00000100" \
         "OVMX xgcc run: pid_ok=1 exited=1 code=$1 status=%X00000000" \
         "OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 \$STATUS=$2 p0=1" \
         "DRL-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.EXE ===" \
@@ -2296,8 +2301,9 @@ PYEOF2
     _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=0" > "$_st/nocatch4.log"
     _p13 good "cxx ctor=0 virt=7 vec=OVMX,C++/libstdc++ caught=1" > "$_st/noctor4.log"
     _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X0000002C > "$_st/badstatus4.log"
+    _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 0 > "$_st/failunseen.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:LD terminated abnormally (signal 11)'; } > "$_st/crash.log"
-    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "diffexe3:1" "noout3:1" "wrongout3:1" "badstatus3:1" "diffexe2:1" "noout2:1" "wrongout2:1" "badstatus2:1" "diffexe4:1" "shortexe4:1" "noout4:1" "nocatch4:1" "noctor4:1" "badstatus4:1" "crash:1"; do
+    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "diffexe3:1" "noout3:1" "wrongout3:1" "badstatus3:1" "diffexe2:1" "noout2:1" "wrongout2:1" "badstatus2:1" "diffexe4:1" "shortexe4:1" "noout4:1" "nocatch4:1" "noctor4:1" "badstatus4:1" "failunseen:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_drl "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" "$_st/r1b.exe" "$_st/r2b.exe" "$_st/r1c.exe" "$_st/r2c.exe" "$_st/r1d.exe" "$_st/r2d.exe" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  xgcclink selftest $_n: PASS"; else echo "  xgcclink selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -2391,7 +2397,7 @@ PYEOF3
         set -e
         G=/out/cxx/bin/alpha-dec-vms-gcc
         $G -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/drvlnk_test.c
-        for f in crt0.o crtbegin.o crtend.o libgcc.a; do
+        for f in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do
           p=$($G -print-file-name=$f); [ -f "$p" ] || { echo "no $f ($p)"; exit 1; }
           cp "$p" /img/$f
         done
@@ -2457,7 +2463,7 @@ PYEOF3
     cp "$_as" "$WORK/joint/as.exe"; cp "$_ln" "$WORK/joint/link.exe"; cp "$_hg/ar.exe" "$WORK/joint/ar.exe"
     cp "$_hg/cc1plus.exe" "$WORK/joint/cc1plus.exe"; cp "$_hg/gxx.exe" "$WORK/joint/gxx.exe"
     cp "$GATE_ROOT/drlimg/libstdcxx.a" "$WORK/joint/libstdcxx.a"
-    for _p in crt0.o crtbegin.o crtend.o libgcc.a; do cp "$GATE_ROOT/drlimg/$_p" "$WORK/joint/$_p"; done
+    for _p in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do cp "$GATE_ROOT/drlimg/$_p" "$WORK/joint/$_p"; done
     [ -s "$_jr/STARLET.a" ] || die "no STARLET.a in $_jr"
     cp "$_jr/STARLET.a" "$WORK/joint/STARLET.a"
     for _p in "DECC\$SHR" LIBOTS_SHR LIBVMSRMS\$SHR LIBVMS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSPROCESS\$SHR LIBVMSSYS\$SHR; do

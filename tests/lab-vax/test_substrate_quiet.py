@@ -11,8 +11,9 @@ pins what that check catches and what it lets through, with no SIMH:
   1. TEETH: a real pre-vms-553 Node B console (V0.7-4, captured off the live
      demo) is full of substrate output -- secondary bootstrap, copyright,
      memory sizing, boot device, module DEBUG -- and every kind is caught.
-  2. The executive's operator lines as the patched kernel writes them to the
-     console (no timestamp, TOCONSOP) and the VMS boot are NOT flagged.
+  2. The executive's console lines as the patched kernel writes them to the
+     console (VMS's own form, no timestamp, TOCONSOP -- rd vms-c56) and the VMS
+     boot are NOT flagged.
   3. The SAME operator line carrying a kernel timestamp IS flagged: a stamped
      line on the console means kernel printf leaked past the quiet gate.
 
@@ -62,10 +63,10 @@ Tests completed.
 %OVMX-I-SYSDISK, mounting system disk DUA0:
 %OVMX-I-MOUNTED, system disk DUA0: mounted
 %OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
-%PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
-%CNXMAN, waiting to form or join an OpenVMS Cluster
+%SYSINIT, waiting to form or join a VMScluster system
+%CNXMAN,  sending VAXcluster membership request to system VAXC
+%CNXMAN,  now a VAXcluster member -- system OVMXB
 %STDRV-I-STARTUP, OpenVMX startup begun at  1-OCT-2026 13:04:36.98
-%CNXMAN, this node is now a VAXcluster member
 Username:"""
 
 

@@ -1083,37 +1083,66 @@ uint64_t exec_ticks_ms(void);
  * that it is deliberately NON-interruptible. */
 void exec_wait_ms(uint32_t ms);
 
-/* SS18: the executive's operator (OPA0:) lines -- "%CNXMAN, ...", "%PEA0, ..."
- * -- on the NetBSD console, which is OPA0: on the VAX rail.
+/* SS18: the executive's operator lines on the NetBSD console, which is OPA0:
+ * on the VAX rail -- ROUTED (rd vms-c56).
+ *
+ * Every line goes to the kernel message buffer, with the kernel's usual
+ * timestamp: dmesg keeps the full record, and the /dev/klog bridge in PID 1
+ * (src/ovmx_init/ovmx_boot_netbsd.c) files it in OPERATOR.LOG. Only a CONSOLE
+ * line -- a console message VMS itself prints, in VMS's form
+ * (src/kernel-core/vms_cluster_opa0.h) -- is ALSO written to the console, and
+ * the way VMS writes one: started on a fresh line, with no "[  83.27]" stamp
+ * (NOTSTAMP), and with no trailing newline, the same convention PID 1's own
+ * "\n%FAC-S-IDENT, text" lines follow, so the two never run together. Every
+ * other line (the connection manager's, PEDRIVER's and the lock manager's
+ * diagnostics) is a diagnostic and does not go on OPA0:. Re-routed, never
+ * dropped.
  *
  * rd vms-553: the OVMX NetBSD/vax kernel is built with OVMX_QUIET
  * (tools/cross-vax/netbsd-ovmx-quiet.patch), which keeps the kernel's own
  * printf(9) chatter in the message buffer only, so the console carries the VMS
- * personality rather than NetBSD's boot. These lines ARE that personality, so
- * they carry TOCONSOP, the patch's "operator line" flag, and still reach the
- * console. They are written twice on purpose: once to the message buffer with
- * the kernel's usual timestamp (dmesg keeps the full record), and once to the
- * console WITHOUT it (NOTSTAMP) -- a VMS operator line has no "[  83.27]"
- * prefix. On a kernel without the patch TOCONSOP is an unknown bit that
- * kprintf ignores, and this degrades to an ordinary console printf.
- * __printflike keeps the compiler checking every call site, the reason this
- * used to be a macro. */
+ * personality rather than NetBSD's boot. The console write carries TOCONSOP,
+ * the patch's "operator line" flag, so it still reaches the console. On a
+ * kernel without the patch TOCONSOP is an unknown bit that kprintf ignores,
+ * and this degrades to an ordinary console printf. __printflike keeps the
+ * compiler checking every call site, the reason this used to be a macro. */
 #include <sys/kprintf.h>   /* TOCONS, TOLOG, NOTSTAMP */
+#include "vms_cluster_opa0.h"
 #ifndef TOCONSOP
 #define TOCONSOP 0x4000    /* == netbsd-ovmx-quiet.patch's sys/kprintf.h value */
 #endif
+static inline void exec_console_opa0_put(const char *fmt, ...) __printflike(1, 2);
+static inline void
+exec_console_opa0_put(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vprintf_flags(TOCONS | TOCONSOP | NOTSTAMP, fmt, ap);
+	va_end(ap);
+}
+
 static inline void exec_console_printf(const char *fmt, ...) __printflike(1, 2);
 static inline void
 exec_console_printf(const char *fmt, ...)
 {
+	char line[VMS_OPA0_LINE_MAX];
+	size_t n;
 	va_list ap;
 
 	va_start(ap, fmt);
 	vprintf_flags(TOLOG, fmt, ap);
 	va_end(ap);
+
 	va_start(ap, fmt);
-	vprintf_flags(TOCONS | TOCONSOP | NOTSTAMP, fmt, ap);
+	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
+	if (!vms_opa0_is_console_line(line))
+		return;
+	n = strlen(line);
+	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+		line[--n] = '\0';
+	exec_console_opa0_put("\n%s", line);
 }
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

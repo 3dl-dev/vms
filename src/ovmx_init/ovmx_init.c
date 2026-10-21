@@ -1530,10 +1530,16 @@ static uint32_t load_cluster_sysgen_params(void)
  * from the ioctl's status, so this cannot announce a membership the executive
  * does not hold (INV-6).
  *
- * The "waiting to form or join an OpenVMS Cluster" wording is VMS's own line
- * for a VAXCLUSTER=2 node with nowhere to join yet; the executive logs it too
- * (vms_cnxman.c), and it is repeated on the console because OPA0: is where
- * SYSINIT puts it and the executive's log is not OPA0: on either substrate.
+ * rd vms-c56: OPA0: carries only what VMS prints there. For a node that is
+ * still forming or joining, VMS's SYSINIT prints "%SYSINIT, waiting to form or
+ * join a VMScluster system" (the real VAX's own console in the demo,
+ * tests/lab/captures/vms-c56-console-chatter-20261021/C.console.txt, and every
+ * VAX lab capture), so that is the console line, word for word. Every other
+ * state has no SYSINIT console line on VMS -- a member announces itself
+ * through CNXMAN ("%CNXMAN,  now a VAXcluster member -- system X", printed by
+ * the executive) -- so OVMX's own wording for it goes to the operator log
+ * (ovmx_boot_operator_log), together with the connection manager's wording for
+ * the joining state. Nothing is dropped.
  */
 /*
  * report_cluster_group - which cluster group this node's port is in, and
@@ -1566,33 +1572,38 @@ static void report_cluster_group(void)
     if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL || !a.port.port_open)
         return;
 
-    if (a.port.cluster_group_valid) {
-        printf("%%CNXMAN, cluster group %u (CLUSTER_AUTHORIZE)\n",
-               (unsigned)a.port.cluster_group);
-        return;
-    }
-    printf("%%CNXMAN, cluster group %u is NOT CONFIGURED (no CLUSTER_AUTHORIZE"
-           " record): this system cannot reach a real cluster\n",
-           (unsigned)a.port.cluster_group);
+    /* rd vms-c56: no VMS console form, so the operator log, not OPA0:. */
+    char line[160];
+
+    if (a.port.cluster_group_valid)
+        snprintf(line, sizeof line, "%%CNXMAN, cluster group %u (CLUSTER_AUTHORIZE)",
+                 (unsigned)a.port.cluster_group);
+    else
+        snprintf(line, sizeof line,
+                 "%%CNXMAN, cluster group %u is NOT CONFIGURED (no CLUSTER_AUTHORIZE"
+                 " record): this system cannot reach a real cluster",
+                 (unsigned)a.port.cluster_group);
+    ovmx_boot_operator_log(line);
 }
 
 static void report_cluster_state(uint32_t state)
 {
     switch (state) {
     case OVMX_CLUSTER_STATE_MEMBER:
-        printf("%%CNXMAN, this system is a member of an OpenVMS Cluster\n");
+        ovmx_boot_operator_log("%CNXMAN, this system is a member of an OpenVMS Cluster");
         break;
     case OVMX_CLUSTER_STATE_JOINING:
-        printf("%%CNXMAN, waiting to form or join an OpenVMS Cluster\n");
+        ovmx_boot_operator_log("%CNXMAN, waiting to form or join an OpenVMS Cluster");
+        printf("%%SYSINIT, waiting to form or join a VMScluster system\n");
         break;
     case OVMX_CLUSTER_STATE_STANDALONE:
-        printf("%%CNXMAN, no OpenVMS Cluster is present; running standalone\n");
+        ovmx_boot_operator_log("%CNXMAN, no OpenVMS Cluster is present; running standalone");
         break;
     case OVMX_CLUSTER_STATE_PORT_UP:
         /* The port is up but the connection manager reported no state of its
          * own -- honest, and distinct from STANDALONE. */
-        printf("%%CNXMAN, the cluster port is up; this system has not joined"
-               " a cluster\n");
+        ovmx_boot_operator_log("%CNXMAN, the cluster port is up; this system has not"
+                               " joined a cluster");
         break;
     default:
         fprintf(stderr,

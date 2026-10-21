@@ -103,11 +103,41 @@ void ovmx_boot_start_console_log_bridge(void)
     opcom_kmsg_start();
 }
 
+void ovmx_boot_operator_log(const char *line)
+{
+    opcom_kmsg_operator_log_line(line);
+}
+
+/*
+ * rd vms-c56: the kernel lines that DO reach OPA0: (the executive's console
+ * lines, a bugcheck) carry no "[   37.218759]" uptime stamp -- a VMS console
+ * line has none. The stamp is the console FORMAT's (printk's `time` parameter,
+ * CONFIG_PRINTK_TIME), not part of the record: /dev/kmsg keeps its own
+ * timestamp field, so dmesg and the OPERATOR.LOG bridge lose nothing. Turned
+ * off here, at the source, before any OVMX module loads; best-effort like the
+ * console level below, and said once if it cannot be done.
+ */
+static void ovmx_boot_unstamp_kernel_console(void)
+{
+    int fd = open("/sys/module/printk/parameters/time", O_WRONLY);
+
+    if (fd >= 0) {
+        ssize_t w = write(fd, "N\n", 2);
+        close(fd);
+        if (w == 2)
+            return;
+    }
+    fprintf(stderr,
+            "%%OVMX-W-CONSOLETIME, could not turn off kernel console timestamps\n");
+}
+
 void ovmx_boot_mute_kernel_console(void)
 {
     char level[8];
     int fd;
     long rc;
+
+    ovmx_boot_unstamp_kernel_console();
 
     /* SYSLOG_ACTION_CONSOLE_LEVEL = 8 (syslog(2)/klogctl(2) man page).
      * Issued as a raw syscall rather than through <sys/klog.h>'s klogctl()

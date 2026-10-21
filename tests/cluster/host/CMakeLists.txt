@@ -441,6 +441,26 @@ set_tests_properties(cluster_host_defects_selftest PROPERTIES
 # booted-node R4 readback (SYSGEN SHOW, CLUSTER_DIAG) is deferred to the lab.
 cluster_host_cnxman_test(test_cluster_sysgen_load test_cluster_sysgen_load.c)
 
+# ---- rd vms-c56: which executive operator lines go on OPA0: ----
+# The ONE routing decision both substrates' exec_console_printf() make, and the
+# VMS console form of the connection manager's events
+# (src/kernel-core/vms_cluster_opa0.h, pure). Grounded against real VMS
+# consoles in tests/lab/captures and against the FSMs' own source text, so it
+# reads the tree: OVMX_SOURCE_DIR.
+add_executable(test_cluster_opa0 test_cluster_opa0.c)
+target_include_directories(test_cluster_opa0 PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_cluster_opa0 PRIVATE
+    OVMX_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME cluster_host_test_cluster_opa0 COMMAND test_cluster_opa0)
+set_tests_properties(cluster_host_test_cluster_opa0 PROPERTIES
+    LABELS "unit;cluster;cluster_host"
+    TIMEOUT 30
+)
+
 # ---- FC-P0.11: the VAXCLUSTER boot-path gate (port up) ----
 # The ONE function (src/libvms/include/cluster_boot_gate.h) ovmx_init.c's
 # start_cluster_port() calls before issuing VMS_IOCTL_CLUSTER_START, compiled
@@ -792,6 +812,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_mscp_cl_conn_fsm.c  # FC-P7.1 (E64 connect admission)
     hdr_alone_vms_dlm_scs_fsm.c       # FC-P4.6
     hdr_alone_vms_cluster_emit_guard.c # E82
+    hdr_alone_vms_cluster_opa0.c      # rd vms-c56
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

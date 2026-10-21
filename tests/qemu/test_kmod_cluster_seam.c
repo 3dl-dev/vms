@@ -47,6 +47,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <net/if.h>
 #include <sys/socket.h>
 #include <linux/netlink.h>
@@ -296,6 +297,44 @@ static int mcast_visible(const char *ifname, const char *mac_colon)
     return 0;
 }
 
+/* rd vms-c56: find the /dev/kmsg record whose text contains `marker` and
+ * return its printk level (pri & 7) and text, or -1 if the ring has none.
+ * /dev/kmsg is the kernel's own record, independent of the module's
+ * self-report: "<pri>,<seq>,<ts>,<flags>;<text>" with control characters in
+ * the text escaped as \xNN (Documentation/ABI/testing/dev-kmsg). */
+static int kmsg_level_of(const char *marker, char *text, size_t textsz)
+{
+    int fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
+    char rec[2048];
+    int found = -1;
+
+    if (fd < 0)
+        return -1;
+    for (;;) {
+        ssize_t n = read(fd, rec, sizeof(rec) - 1);
+        char *semi, *nl;
+
+        if (n < 0) {
+            if (errno == EPIPE)
+                continue;              /* overwritten records; keep reading */
+            break;                     /* EAGAIN: end of the ring */
+        }
+        rec[n] = '\0';
+        semi = strchr(rec, ';');
+        if (!semi)
+            continue;
+        nl = strchr(semi + 1, '\n');
+        if (nl)
+            *nl = '\0';
+        if (strstr(semi + 1, marker)) {
+            found = atoi(rec) & 7;
+            snprintf(text, textsz, "%s", semi + 1);
+        }
+    }
+    close(fd);
+    return found;
+}
+
 int main(void)
 {
     char result[1024];
@@ -356,6 +395,26 @@ int main(void)
     CHECK(result_int(result, "TIMER") == 1, "exec_timer_arm posted-and-woke within 1s (CONTRACT RULE 2)");
     CHECK(result_int(result, "TIME_MONO") == 1, "exec_time_now_vms is strictly increasing across a real sleep");
     CHECK(result_int(result, "TICKS_MONO") == 1, "exec_ticks_ms is strictly increasing across a real sleep");
+
+    /* SS18 (rd vms-c56): exec_console_printf ROUTES. A console message VMS
+     * itself prints goes to OPA0: at KERN_ERR (3, which survives PID 1's
+     * console sink), started on a fresh line; any other executive line is a
+     * diagnostic at KERN_NOTICE (5: below the sink, so never on OPA0:, and
+     * still filed in OPERATOR.LOG by the kmsg bridge). Read back from the
+     * kernel's own log, not the module's word. */
+    CHECK(result_int(result, "CONSOLE") == 1, "the self-test emitted its two SS18 lines");
+    {
+        char text[512];
+        int lvl = kmsg_level_of("now a VAXcluster member -- system KTSEAM", text, sizeof text);
+
+        CHECK(lvl == 3, "a VMS console line is emitted at KERN_ERR (reaches OPA0:)");
+        CHECK(lvl == 3 && strcmp(text, "\\x0a%CNXMAN,  now a VAXcluster member -- system KTSEAM") == 0,
+              "... verbatim, in VMS's form, started on a fresh line");
+        lvl = kmsg_level_of("ktest seam diagnostic KTSEAM", text, sizeof text);
+        CHECK(lvl == 5, "an executive diagnostic is emitted at KERN_NOTICE (operator log, not OPA0:)");
+        CHECK(lvl == 5 && strcmp(text, "%CNXMAN, ktest seam diagnostic KTSEAM (rd vms-c56)") == 0,
+              "... verbatim, nothing dropped");
+    }
 
     CHECK(write_param(TEARDOWN_PARAM, "1") == 0, "write vms_ktest_cluster_seam_teardown");
     CHECK(read_param(RESULT_PARAM, result, sizeof(result)) == 0, "read post-teardown result");

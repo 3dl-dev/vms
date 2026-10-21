@@ -569,7 +569,16 @@ master_system_volume() {
   # %OVMX-F-EXECINIT and the LNM/pager code was NEVER reached -- a false green.
   log "mastering the OVMX/NetBSD-vax SYSTEM volume (vmsfs_master + stage_sysvol.sh)"
   rm -f "${SYSVOL_IMG}"
+  # rd vms-9394: SYSVOL_SYSEXE_EXTRA (unset by default -> byte-identical) names
+  # a host dir whose files stage_sysvol.sh --sysexe-extra lays into SYS$SYSTEM.
+  local extra_mount=() extra_flag=""
+  if [ -n "${SYSVOL_SYSEXE_EXTRA:-}" ]; then
+    [ -d "${SYSVOL_SYSEXE_EXTRA}" ] || die "SYSVOL_SYSEXE_EXTRA is not a dir: ${SYSVOL_SYSEXE_EXTRA}"
+    extra_mount=(-v "${SYSVOL_SYSEXE_EXTRA}:/sysexe-extra:ro")
+    extra_flag="--sysexe-extra /sysexe-extra"
+  fi
   listing="$(docker run --rm -v "${REPO}:/src:ro" -v "${SYSVOL_IMAGES_DIR}:/images:ro" \
+    "${extra_mount[@]}" -e "EXTRA_FLAG=${extra_flag}" \
     -v "$(dirname "${SYSVOL_IMG}"):/out" --entrypoint sh "${CROSS_IMAGE}" -c '
       set -e
       cc -O2 -Wall -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE \
@@ -578,7 +587,7 @@ master_system_volume() {
          /src/src/vmsfs/ods2/ods2_reader.c /src/src/vmsfs/ods2/ods2_writer.c \
          /src/src/vmsfs/ods2/ods2_edit.c /src/src/vmsfs/ods2/ods2_bdev.c \
          /src/src/vmsfs/ods2/ods2_path.c /src/src/vmsfs/ods2/ods2_block_posix.c
-      bash /src/tests/lab-vax/stage_sysvol.sh /images /src /tmp/stage
+      bash /src/tests/lab-vax/stage_sysvol.sh $EXTRA_FLAG /images /src /tmp/stage
       /tmp/vmsfs_master --ods2 master /out/'"$(basename "${SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
       /tmp/vmsfs_master --ods2 list /out/'"$(basename "${SYSVOL_IMG}")")"
   echo "${listing}"
@@ -864,6 +873,93 @@ run_acceptance() {
   log "======================================================================"
   run_acceptance_session /cache/single-work && return 0
   return 1
+}
+
+# ---------------------------------------------------------------------------
+# rd vms-9394: the DECnet PAIR proof (decnet-pair mode). A booted OVMX/VAX whose
+# NETACP opens its datalink through the executive (PHY_IO, no root) and an
+# OVMX/x86 node on ONE Ethernet segment -- SIMH's XQ and QEMU's virtio NIC
+# joined by a pair of localhost UDP sockets -- and SET HOST both ways. The
+# verdict is tests/lab-vax/test_decnet_pair_vax.py's.
+# ---------------------------------------------------------------------------
+DNPAIR_DIR="${DNPAIR_DIR:-${CACHE_DIR}/decnet-pair}"
+DNPAIR_VAX_ADDR="${DNPAIR_VAX_ADDR:-1.43}"
+DNPAIR_VAX_NAME="${DNPAIR_VAX_NAME:-OVMXV}"
+DNPAIR_X86_ADDR="${DNPAIR_X86_ADDR:-1.42}"
+DNPAIR_X86_NAME="${DNPAIR_X86_NAME:-OVMXA}"
+
+# The VAX node's DECnet executor + node databases, in the OVMX text layout NCP
+# SET/DEFINE EXECUTOR / DEFINE NODE writes (src/vmsdecnet/ncp/dnet_ncpstore.c,
+# dnet_nodedb.c -- the header lines are theirs verbatim), staged into SYS$SYSTEM
+# so the FIRST boot's LPBETA STARTNET finds a configured node.
+write_decnet_pair_config() {
+  local d="${DNPAIR_DIR}/sysexe"
+  rm -rf "${d}"; mkdir -p "${d}"
+  {
+    echo "# OVMX DECnet Phase IV local node (executor) database (NCP SET/DEFINE EXECUTOR)."
+    echo "# Format: EXECUTOR <area>.<node>|- NAME <name>|- STATE on|off  -- OVMX layout, not the VMS NETNODE_LOCAL.DAT binary format."
+    echo "EXECUTOR ${DNPAIR_VAX_ADDR} NAME ${DNPAIR_VAX_NAME} STATE on"
+  } > "${d}/NETNODE_LOCAL.DAT"
+  {
+    echo "# OVMX DECnet Phase IV node database (NCP DEFINE/SET NODE)."
+    echo "# Format: NODE <area>.<node> [NAME <name>]  -- OVMX layout, not VMS NETNODE_REMOTE.DAT."
+    echo "NODE ${DNPAIR_X86_ADDR} NAME ${DNPAIR_X86_NAME}"
+  } > "${d}/NETNODE_REMOTE.DAT"
+  log "decnet-pair: VAX executor ${DNPAIR_VAX_ADDR} (${DNPAIR_VAX_NAME}), knows ${DNPAIR_X86_ADDR} (${DNPAIR_X86_NAME})"
+}
+
+# The x86 peer: the published OVMX/x86 boot set (vmlinuz + slim initramfs +
+# ovmx-distrib.img). X86_PEER_DIR may name a local set (e.g. a fresh
+# distro/Dockerfile.bootable build); otherwise the latest 3dl-dev/vms release's
+# assets are fetched with gh into the cache. It is the PEER, an independently
+# proven DECnet node (tests/qemu/test_decnet_startnet_boot_e2e.sh); the code
+# under test here is the VAX's.
+ensure_x86_peer() {
+  X86_PEER_DIR="${X86_PEER_DIR:-${CACHE_DIR}/x86-peer}"
+  local f missing=0
+  for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img; do
+    [ -f "${X86_PEER_DIR}/${f}" ] || missing=1
+  done
+  if [ "${missing}" -eq 1 ]; then
+    command -v gh >/dev/null 2>&1 || die "x86 peer absent at ${X86_PEER_DIR} and gh is not on PATH to fetch it (set X86_PEER_DIR)"
+    mkdir -p "${X86_PEER_DIR}"
+    log "decnet-pair: fetching the latest OVMX/x86 release boot set into ${X86_PEER_DIR}"
+    gh release download --repo "${X86_PEER_REPO:-3dl-dev/vms}" ${X86_PEER_TAG:+"${X86_PEER_TAG}"} \
+      --clobber --dir "${X86_PEER_DIR}" \
+      --pattern vmlinuz --pattern initramfs-ovmx-slim.cpio.gz --pattern ovmx-distrib.img \
+      || die "could not fetch the x86 peer release assets"
+  fi
+  for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img; do
+    [ -f "${X86_PEER_DIR}/${f}" ] || die "x86 peer is missing ${f} in ${X86_PEER_DIR}"
+  done
+  export X86_PEER_DIR
+}
+
+run_decnet_pair() {
+  command -v qemu-system-x86_64 >/dev/null 2>&1 || die "decnet-pair needs qemu-system-x86_64 on the host (the x86 peer)"
+  ensure_x86_peer
+  write_decnet_pair_config
+  build_boot_image_set
+  SYSVOL_SYSEXE_EXTRA="${DNPAIR_DIR}/sysexe" master_system_volume
+  build_single_disk
+  log "======================================================================"
+  log "  DECNET PAIR: OVMX/VAX (SIMH, qt0) <-> OVMX/x86 (QEMU) on one segment;"
+  log "  the VAX's NETACP on the EXECUTIVE datalink (PHY_IO, no root); SET HOST"
+  log "  both ways to a real Username:/DCL session (rd vms-9394)."
+  log "======================================================================"
+  local rc=0
+  set +e
+  timeout --kill-after="${TIMEOUT_GRACE}" "${DNPAIR_TIMEOUT:-4200}" \
+    env REPO="${REPO}" CACHE_DIR="${CACHE_DIR}" ARTIFACTS_DIR="${ARTIFACTS_DIR}" \
+        LAB_IMAGE="${LAB_IMAGE}" X86_PEER_DIR="${X86_PEER_DIR}" DNPAIR_WORK="${DNPAIR_DIR}" \
+        SINGLE_RQ0_TYPE="${SINGLE_RQ0_TYPE}" \
+        DNPAIR_VAX_ADDR="${DNPAIR_VAX_ADDR}" DNPAIR_VAX_NAME="${DNPAIR_VAX_NAME}" \
+        DNPAIR_X86_ADDR="${DNPAIR_X86_ADDR}" DNPAIR_X86_NAME="${DNPAIR_X86_NAME}" \
+      python3 "${HERE}/test_decnet_pair_vax.py"
+  rc=$?
+  set -e
+  docker ps -q --filter "name=ovmx-dnpair-vax-" | xargs -r docker kill >/dev/null 2>&1 || true
+  return "${rc}"
 }
 
 # 5. swap the MODULAR kernel onto the SHARED disk (shared marker).
@@ -1353,6 +1449,15 @@ case "${MODE}" in
     # faithful-output gap to fix (each naming its bug), never a battery weakening.
     #   tests/lab-vax/run-boot.sh acceptance
     run_acceptance && exit 0
+    exit 1
+    ;;
+  decnet-pair)
+    # rd vms-9394: a booted OVMX/VAX (NETACP non-root, its 0x6003 datalink
+    # opened through the executive with PHY_IO, station AA-00-04-00-<1.43>)
+    # and an OVMX/x86 node on one L2 segment; SET HOST both ways.
+    #   tests/lab-vax/run-boot.sh decnet-pair
+    # (needs qemu-system-x86_64 on the host; X86_PEER_DIR or gh for the peer.)
+    run_decnet_pair && exit 0
     exit 1
     ;;
   install)

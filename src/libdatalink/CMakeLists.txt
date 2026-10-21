@@ -31,41 +31,40 @@ target_include_directories(ovmx_datalink PUBLIC
 # and that binary then physically contains no AF_PACKET code: there is no
 # runtime fallback between the two (Rule 9 / INV-6).
 #
-# Both are always BUILT on Linux (ovmx_datalink = the probe, ovmx_datalink_exec
-# = the executive backend) so the default dev build compiles and host-tests
-# both (tests/vmsdecnet/test_datalink_exec_backend.c). Which one DECNETD.EXE
-# LINKS is the OVMX_DATALINK_VIA_EXECUTIVE option, defaulting ON for the
-# booted-runtime build (OVMX_STATIC on Linux: distro/Dockerfile.bootable and
-# tools/cross-alpha's build-static) and OFF for the host dev build, so a lab
-# probe build of DECNETD keeps AF_PACKET. Override explicitly either way with
-# -DOVMX_DATALINK_VIA_EXECUTIVE=ON|OFF. NetBSD (the VAX substrate) has no
-# executive L2 binding yet (src/kernel-netbsd/vms_socket_netbsd.c exec_l2_* are
-# contract-only), so it keeps the bpf(4) backend and the option is forced OFF.
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    if(OVMX_STATIC)
-        set(_ovmx_dl_exec_default ON)
-    else()
-        set(_ovmx_dl_exec_default OFF)
-    endif()
-    option(OVMX_DATALINK_VIA_EXECUTIVE
-           "DECNETD.EXE's raw L2 datalink goes through the executive (/dev/vms VMS_IOCTL_L2_*, PHY_IO) instead of a userspace AF_PACKET socket"
-           ${_ovmx_dl_exec_default})
-
-    add_library(ovmx_datalink_exec STATIC ovmx_datalink.c)
-    target_compile_definitions(ovmx_datalink_exec PUBLIC SCS_DATALINK_VIA_EXECUTIVE)
-    target_include_directories(ovmx_datalink_exec PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-    )
-    target_include_directories(ovmx_datalink_exec PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/kernel                    # vms_ioctl.h / vms_l2.h
-        ${CMAKE_SOURCE_DIR}/src/libvmssys                 # kif_calls.h (rd vms-bbde)
-    )
-    # The executive is reached through libvmssys's transport seam only.
-    target_link_libraries(ovmx_datalink_exec PUBLIC vmssys)
+# Both are always BUILT (ovmx_datalink = the probe/bpf backend, ovmx_datalink_exec
+# = the executive backend) so every build compiles and host-tests both
+# (tests/vmsdecnet/test_datalink_exec_backend.c). Which one DECNETD.EXE LINKS is
+# the OVMX_DATALINK_VIA_EXECUTIVE option:
+#   Linux  -- ON for the booted-runtime build (OVMX_STATIC: distro/Dockerfile.
+#             bootable and tools/cross-alpha's build-static), OFF for the host
+#             dev build, so a lab probe build of DECNETD keeps AF_PACKET.
+#   NetBSD -- ON (rd vms-9394). A NetBSD OVMX build IS the booted OVMX/VAX
+#             runtime (tools/cross-vax/toolchain-vax-netbsd.cmake), whose
+#             executive now carries the L2 binding (src/kernel-netbsd/
+#             vms_socket_netbsd.c exec_l2_*, src/kernel-core/vms_l2.c in the
+#             module), so NETACP opens its datalink through /dev/vms with PHY_IO
+#             like on x86 -- a booted, non-root VMS process cannot open bpf(4).
+#             -DOVMX_DATALINK_VIA_EXECUTIVE=OFF keeps the bpf(4) lab backend.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT OVMX_STATIC)
+    set(_ovmx_dl_exec_default OFF)
 else()
-    set(OVMX_DATALINK_VIA_EXECUTIVE OFF CACHE BOOL
-        "DECNETD datalink via the executive (Linux only)" FORCE)
+    set(_ovmx_dl_exec_default ON)
 endif()
+option(OVMX_DATALINK_VIA_EXECUTIVE
+       "DECNETD.EXE's raw L2 datalink goes through the executive (/dev/vms VMS_IOCTL_L2_*, PHY_IO) instead of a userspace AF_PACKET socket / bpf(4)"
+       ${_ovmx_dl_exec_default})
+
+add_library(ovmx_datalink_exec STATIC ovmx_datalink.c)
+target_compile_definitions(ovmx_datalink_exec PUBLIC SCS_DATALINK_VIA_EXECUTIVE)
+target_include_directories(ovmx_datalink_exec PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_include_directories(ovmx_datalink_exec PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel                    # vms_ioctl.h / vms_l2.h
+    ${CMAKE_SOURCE_DIR}/src/libvmssys                 # kif_calls.h (rd vms-bbde)
+)
+# The executive is reached through libvmssys's transport seam only.
+target_link_libraries(ovmx_datalink_exec PUBLIC vmssys)
 
 if(OVMX_DATALINK_VIA_EXECUTIVE)
     set(OVMX_DECNETD_DATALINK_LIB ovmx_datalink_exec CACHE INTERNAL "")

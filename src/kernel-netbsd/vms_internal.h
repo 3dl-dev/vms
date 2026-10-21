@@ -99,6 +99,12 @@
  * WRITE/SETMODE/BIND structs and numbers, byte-identical to vms_ioctl.h. */
 #include "vms_tt_nb.h"
 
+/* The executive L2 (raw datalink) contract (rd vms-9394): the VMS_IOCTL_L2_*
+ * arg structs and numbers src/kernel-core/vms_l2.c copies, the station-address
+ * policy it enforces, and VMS_PRV_M_PHY_IO it gates on -- included from the ONE
+ * definition in src/kernel/vms_l2.h (see vms_l2_nb.h). */
+#include "vms_l2_nb.h"
+
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
  * src/kernel/vms_internal.h exactly (ORACLE-PINNED there, vms-2a8/vms-8019).
@@ -836,6 +842,19 @@ struct vms_proc {
 	 * this build's process-teardown path (mirrored in vms_netbsd.c). */
 	exec_list_head_t    file_channels;    /* struct vms_acp_chan (defined in vmsfs_acp.c) */
 
+	/*
+	 * L2 (raw datalink) handles (rd vms-9394) -- the executive datalink a
+	 * non-root NETACP opens with PHY_IO (src/kernel-core/vms_l2.c, the SAME
+	 * source the Linux vms.ko builds). Same fields and meaning as
+	 * src/kernel/vms_internal.h: a separate list on its OWN lock, NOT the
+	 * chan_lock/next_chan space (an L2 handle is not a $ASSIGN channel), the
+	 * handle numbers drawn from l2_next_handle under l2_lock. Released at
+	 * process death by vms_l2_release_all() (vms_proc_free_claimed).
+	 */
+	exec_list_head_t    l2_channels;      /* struct vms_l2_handle (vms_l2.c) */
+	exec_lock_t         l2_lock;
+	uint32_t            l2_next_handle;
+
 	/* Deferred-free head (P4-A, rd vms-ca7). The reaper unlinks a dead PCB under
 	 * vms_proc_hash_lock (exec_hash_del_rcu) and reclaims it through
 	 * exec_free_deferred(&proc->rcu, ...) -- immediate on NetBSD (no lockless
@@ -1281,6 +1300,21 @@ long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
+
+/*
+ * Executive L2 datalink (rd vms-9394): src/kernel-core/vms_l2.c, the same
+ * facility the Linux vms.ko dispatches. The substrate half (exec_l2_*) is the
+ * in-kernel ifnet binding in vms_socket_netbsd.c; vms_l2_netbsd_init() sets up
+ * its locks at module load and vms_l2_netbsd_fini() undoes its interface
+ * interposition at module unload.
+ */
+long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_close(struct vms_proc *proc, unsigned long arg);
+void vms_l2_release_all(struct vms_proc *proc);
+void vms_l2_netbsd_init(void);
+void vms_l2_netbsd_fini(void);
 /*
  * Internal (non-ioctl) resolve of a canonical disk-unit name to its backing
  * (major,minor) so the Files-11 ACP's $MOUNT can read the home block/SCB.

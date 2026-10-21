@@ -1,0 +1,30 @@
+# dcl-library-object-posix-io -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL LIBRARY object-library I/O over the Files-11 ACP (src/vmsdcl/dcl_library.c olb_host_defer, vms-8ca)";;
+        targets)      echo "vmsdcl/dcl_library.c";;
+        suites_red)   echo "test_syssvc_dcl_library_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "LIBRARY's OBJECT path goes back to a POSIX fopen() of the translated path even with the executive present: objects written through RMS are %LIBRARIAN-E-OPENIN and no library reaches the volume.";;
+        require_fail) cat <<'EOF2'
+LIBRARY opened both RMS-written objects (no OPENIN)
+the library is on the volume (read over the ACP) and is an ar container
+the library holds both objects' bytes exactly
+LIBRARY/LIST read the library back over the ACP: both modules
+LIBRARY/EXTRACT/OUTPUT wrote the module over the ACP, byte-exact
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    return rms_executive_absent() \|\| vmsfs_device_spec_kernel_mounted(spec);$|    return 1; /* NEGCTL dcl-library-object-posix-io */|' "$_file"
+    :
+}

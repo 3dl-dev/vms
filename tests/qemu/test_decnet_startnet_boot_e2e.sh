@@ -270,6 +270,17 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
 
     if grep -qaF '%NCP-F-' <(tail -c "+$((off + 1))" "$LOG2"); then rc=1; else rc=0; fi
     record "boot 2: no %NCP-F- failure while NETACP is serving" "$rc"
+
+    # rd vms-5843: SET HOST to a node the database does not know says VMS's
+    # SS$_NOSUCHNODE (652, "remote node is unknown") once, and nothing about
+    # an image the user never ran. It said "%SYSTEM-W-NOSUCHDEV, no such
+    # device" and then "%DCL-E-ABORT, image SYS$SYSTEM:DECNETD.EXE exited
+    # with error status %X00000001".
+    run_seg 'SET HOST NOSUCH' "$LOG2" 'NOSUCHNODE' 45
+    if has '%SYSTEM-F-NOSUCHNODE, remote node is unknown'; then rc=0; else rc=1; fi
+    record "boot 2: SET HOST to an unknown node says %SYSTEM-F-NOSUCHNODE, remote node is unknown" "$rc"
+    if has 'DCL-E-ABORT' || has 'NOSUCHDEV'; then rc=1; else rc=0; fi
+    record "boot 2: ... and no %DCL-E-ABORT image line or NOSUCHDEV under it" "$rc"
 else
     record "boot 2: SYSTEM logs in" 1
 fi

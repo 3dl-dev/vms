@@ -353,8 +353,13 @@ int vms_dlm_rm_held_ack(struct vms_dlm_rm *f, uint32_t from_csid,
 			uint8_t category, uint8_t opcode,
 			const uint8_t *body, uint32_t len);
 
-/* op-0x11: some OTHER member is the new master of a tree. A real VMS member
- * never answers one (7 of 7 carry no transaction), so this only counts it. */
+/*
+ * op-0x11: some OTHER member is the new master of a tree. A real VMS member
+ * never answers one (7 of 7 carry no transaction), so this only COUNTS it --
+ * and the count is not cosmetic: it is how many times a real VAX new master
+ * was left waiting for THIS node's op-0x12 records and op-0x13, which this
+ * table does not send. That is the HOLDER half of remastering, rd vms-33a.
+ */
 void vms_dlm_rm_notified(struct vms_dlm_rm *f);
 
 /*

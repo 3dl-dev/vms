@@ -2450,7 +2450,10 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 	 * real ones open no transaction and are never answered, so this node
 	 * answers nothing and asserts nothing; it is COUNTED, because it is also
 	 * the moment a tree this node HOLDS LOCKS IN moved, and OVMX does not
-	 * yet send its own records to that new master (rd vms-5a0).
+	 * yet send its own records to that new master -- which leaves a real
+	 * VAX new master WAITING for this node's op-0x13 (rule W2, 7 of 7
+	 * multi-0x13 episodes). That is the other half of remastering and it is
+	 * rd vms-33a; `rm_notifications` is how many times it mattered.
 	 */
 	if (req->category == (uint8_t)VMS_DLM_CAT_REQUEST &&
 	    req->opcode == (uint8_t)VMS_DLM_WIREOP_RM_11) {

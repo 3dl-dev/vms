@@ -953,6 +953,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in the 41,049 real releases' corpus) ***
 *** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
+the shipping composer opens no transaction on it
 EOF
                       ;;
         esac;;

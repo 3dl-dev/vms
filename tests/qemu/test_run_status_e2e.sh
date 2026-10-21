@@ -207,6 +207,25 @@ else
     bad "the image's local symbol is not in DCL's table: $(printf '%s' "$SEG" | tr '\n' ' ') (vms-cded)"
 fi
 
+# 5. LIB$DO_COMMAND. The image hands DCL a command and exits without returning;
+#    DCL executes it once the image is gone (LIB$ Manual, LIB$DO_COMMAND).
+run_cmd 'OVMX_DOCMD_MARK = "docmd ran"'
+run_cmd 'OVMX_DOCMD = "SHOW SYMBOL OVMX_DOCMD_MARK"'
+run_cmd 'RUN SYS$SYSTEM:SYMSET.EXE'
+echo "----- verbatim: RUN SYS\$SYSTEM:SYMSET.EXE (OVMX_DOCMD) -----"
+printf '%s\n' "$SEG"
+echo "-----------------------------------------------"
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'OVMX_DOCMD_MARK = "docmd ran"'; then
+    ok "LIB\$DO_COMMAND from an image: DCL executed the command after the image exited"
+else
+    bad "LIB\$DO_COMMAND: DCL did not execute the image's command"
+fi
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'do_command returned'; then
+    bad "LIB\$DO_COMMAND returned to the image instead of ending it"
+else
+    ok "LIB\$DO_COMMAND did not return control to the image"
+fi
+
 echo ""
 echo "=== RUN \$STATUS e2e: $PASS passed, $FAIL failed ==="
 kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null

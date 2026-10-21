@@ -6,6 +6,10 @@
  * DCL symbol OVMX_CLI_IN, then sets a global (OVMX_CLI_GLOBAL) and a local
  * (OVMX_CLI_LOCAL) symbol and exits; tests/qemu/test_run_status_e2e.sh then
  * shows both from DCL. Built and activated exactly like RC3.EXE.
+ *
+ * If DCL defines OVMX_DOCMD, the image then hands that command to DCL with
+ * LIB$DO_COMMAND, which does not return: DCL runs the command after the image
+ * exits. A "do_command returned" line therefore means it failed.
  */
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +18,7 @@
 struct dsc { uint16_t len; uint8_t dtype, cls; char *ptr; };
 extern uint32_t lib$set_symbol(const struct dsc *, const struct dsc *, const uint32_t *);
 extern uint32_t lib$get_symbol(const struct dsc *, struct dsc *, uint16_t *, uint32_t *);
+extern uint32_t lib$do_command(const struct dsc *);
 
 static struct dsc d(char *s) { struct dsc x = { (uint16_t)strlen(s), 14, 1, s }; return x; }
 
@@ -36,5 +41,16 @@ int main(void)
     printf("SYMSET: set global %%X%08X local %%X%08X\n",
            lib$set_symbol(&n_g, &v_g, &glob), lib$set_symbol(&n_l, &v_l, &loc));
     fflush(stdout);
+
+    char cbuf[256];
+    struct dsc cmd = { sizeof cbuf, 14, 1, cbuf };
+    struct dsc n_c = d("OVMX_DOCMD");
+    uint16_t clen = 0;
+    if (lib$get_symbol(&n_c, &cmd, &clen, 0) & 1) {
+        cmd.len = clen;
+        st = lib$do_command(&cmd);
+        printf("SYMSET: do_command returned %%X%08X\n", st);
+        fflush(stdout);
+    }
     return 0;
 }

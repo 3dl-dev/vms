@@ -1974,6 +1974,12 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
                                     const char *display_name,
                                     const char *linux_path, char *argv[]);
 
+/* The command an image handed over with LIB$DO_COMMAND (at most 255 chars). */
+static char dcl_do_command[256];
+static int  dcl_do_command_pending;
+
+int dcl_execute_line(const char *line);
+
 int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
                        const char *linux_path, char *argv[])
 {
@@ -1981,8 +1987,17 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
     int srt = dcl_sysinput_setup(ctx, &si);
     if (srt)
         return srt;
+    dcl_do_command_pending = 0;
     int rc = dcl_activate_image_inner(ctx, display_name, linux_path, argv);
     dcl_sysinput_restore(&si);
+    /* LIB$DO_COMMAND: the image has exited; its command executes now, and its
+     * status is the one this activation reports. */
+    if (dcl_do_command_pending) {
+        char line[sizeof dcl_do_command];
+        memcpy(line, dcl_do_command, sizeof line);
+        dcl_do_command_pending = 0;
+        rc = dcl_execute_line(line);
+    }
     return rc;
 }
 
@@ -2030,6 +2045,18 @@ void dcl_cli_handler(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
     case OVMX_CLI_OP_DELETE:
         rs->status = dcl_sym_delete(name, scope) == 0 ? SS$_NORMAL
                                                       : LIB$_NOSUCHSYM;
+        break;
+    case OVMX_CLI_OP_DO_COMMAND:
+        /* LIB$DO_COMMAND: kept until the image exits, then executed by
+         * dcl_activate_image at this command level. */
+        if (rq->value_len > sizeof dcl_do_command - 1) {
+            rs->status = LIB$_INVARG;
+            break;
+        }
+        memcpy(dcl_do_command, rq->value, rq->value_len);
+        dcl_do_command[rq->value_len] = '\0';
+        dcl_do_command_pending = 1;
+        rs->status = SS$_NORMAL;
         break;
     default:
         rs->status = SS$_BADPARAM;

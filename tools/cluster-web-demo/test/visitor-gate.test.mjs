@@ -1252,4 +1252,6 @@ test('SET HOST leg: an echoed remote password fails (VMS never echoes one, vms-a
 test('SET HOST leg: %REM-S-END run on after "logged out at" is caught (oracle: its own line)', () => {
   assert.equal(GATE.remEndOnOwnLine('logged out at 21-OCT-2026 21:57:30.22%REM-S-END, control returned to node OVMXA::'), false);
   assert.equal(GATE.remEndOnOwnLine('logged out at x\r\n%REM-S-END, control returned to node OVMXA::'), true);
+  assert.equal(GATE.remEndOnOwnLine('logged out at x\r%REM-S-END, control returned to node OVMXA::'), false,
+    'a bare CR overwrites the logged-out line on a terminal (measured V0.7-13)');
 });

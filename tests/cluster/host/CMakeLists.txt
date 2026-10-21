@@ -1247,6 +1247,23 @@ set_tests_properties(cluster_host_rec12_holder_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-3ac (d): what a REAL cat-0x02 op-0x03 RELEASE carries, and where
+# OVMX's own release differs. This is the frame that bugchecked a real V7.3 node
+# with INVLOCKID, and the census is what bounds the values OVMX may put in it:
+# 9,858 real releases, 0 of them opening a transaction, 0 answers to a release
+# anywhere in the corpus, body[30] only ever 0 or 1, and body[32] == body[30]
+# on every one. The selftest pins those, because the three deviations they
+# measure (rd vms-194) are quoted in the item and in the grounding rows.
+add_test(NAME cluster_host_dlm_deq_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_deq_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_deq_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
 # ---- rd vms-c55: what a node puts on the lock connection DURING a transition
 # The transition hold in vms_dlm_scs_fsm.c is justified by a census, not by a
 # reading of the book: over every committed pcap, no real VMS node put a

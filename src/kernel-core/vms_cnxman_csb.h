@@ -274,6 +274,22 @@ uint32_t cnxman_club_csb_index(const struct vms_club *club,
  */
 uint32_t cnxman_club_recount_members(struct vms_club *club);
 
+/*
+ * THE OTHER MEMBERS' CSIDs -- p. 7-49's SELECTED set minus this node, and only
+ * the ones whose CSID this club has LEARNED (a member this node cannot address
+ * is not one it can wait for or send to). Added for rd vms-ed5: a lock-tree
+ * remaster's new master is sent an end-of-records by every other member, and
+ * the frames that tell them are point-to-point, so the CLUB is the only honest
+ * source for who they are.
+ *
+ * Returns how many were written. When there are MORE than `max`, it returns
+ * `max` + 1 and writes `max` of them, so a caller that must know the whole set
+ * can tell "all of them" from "as many as fitted" -- and refuse, rather than
+ * silently wait for a member it never recorded.
+ */
+uint32_t cnxman_club_other_member_csids(const struct vms_club *club,
+					vms_csid_t *out, uint32_t max);
+
 /* ==========================================================================
  * 5. Learning -- the only way a peer's advertised value enters a CSB
  *

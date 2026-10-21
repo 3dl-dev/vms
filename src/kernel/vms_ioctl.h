@@ -1451,6 +1451,19 @@ struct vms_dlm_scs_view_wire {
     uint32_t queued_no_reply;
     uint32_t unparsed;
     uint32_t foreign_refused;
+    /* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5) -- the pair
+     * that matters for the ci.6 evacuation gate is rm_trees_held and
+     * rm_held_unreported. See vms_cluster_snapshot.h. */
+    uint32_t rm_opens;
+    uint32_t rm_opens_refused;
+    uint32_t rm_records_adopted;
+    uint32_t rm_records_refused;
+    uint32_t rm_ends_seen;
+    uint32_t rm_trees_held;
+    uint32_t rm_held_sent;
+    uint32_t rm_held_unsent;
+    uint32_t rm_held_unreported;
+    uint32_t rm_notifications;
     /* The connection manager's own, independent count of the same traffic. */
     uint32_t leg_sends;
     uint32_t leg_sends_refused;
@@ -1464,7 +1477,7 @@ struct vms_dlm_scs_view_wire {
     uint32_t posts_lock_gone;
     uint32_t posts_refused;
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 144,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 184,
                "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
 
 struct vms_cluster_diag_dlm_args {
@@ -1472,7 +1485,7 @@ struct vms_cluster_diag_dlm_args {
     uint32_t pad0;
     struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
 };
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 192,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 /*
  * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
@@ -1485,12 +1498,14 @@ _Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
  * the encoded value moved 0xC080566E -> 0xC090566E -- deliberately, with this
  * assert updated in the same commit. rd vms-727 then appended
  * `valblk_writes_received` (144 -> 148), moving it 0xC090566E -> 0xC094566E --
- * again deliberately, in this commit. A diagnostic image built from another
+ * again deliberately. rd vms-ed5 then appended the ten REMASTER counters
+ * (148 -> 192), moving it 0xC094566E -> 0xC0C0566E -- deliberately, in that
+ * commit. A diagnostic image built from another
  * tree therefore fails LOUDLY (ENOTTY) rather than reading a shorter row as
  * data, which is the behaviour this assert exists to guarantee.
  */
 #define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
-_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC098566Eu,
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC0C0566Eu,
                "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
 
 /*
@@ -1548,7 +1563,19 @@ struct vms_sysgen_load_args {
     uint8_t  alloclass;             /* in: ALLOCLASS                              */
     uint8_t  mscp_load;             /* in: MSCP_LOAD                              */
     uint8_t  mscp_serve_all;        /* in: MSCP_SERVE_ALL                         */
-    uint8_t  pad1[3];
+    /*
+     * OVMX_RM_RESIDUE_FILL's wire half (rd vms-ed5, for rd vms-6ad1's RA7),
+     * carved out of this struct's former `pad1[3]' -- so the struct's SIZE and
+     * every _Static_assert below it are UNCHANGED and no ABI moved, exactly as
+     * `clean_depart_off' below was. The NetBSD mirror in
+     * src/kernel-netbsd/vms_lock_nb.h carries the identical field.
+     *
+     * The sense is POSITIVE here and needs no inversion: 0 -- what every caller
+     * that zero-fills the struct supplies -- IS the faithful value (the
+     * vms-42de ruling's zeros across the op-0x14 residue span).
+     */
+    uint8_t  ovmx_rm_residue_fill;  /* in: the op-0x14 residue byte; 0 = zeros   */
+    uint8_t  pad1[2];
 
     uint32_t niscs_max_pktsz;       /* in: NISCS_MAX_PKTSZ (clamped by the port)  */
 

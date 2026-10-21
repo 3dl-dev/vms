@@ -323,7 +323,7 @@ static void test_op12_root_answer_is_the_real_grant(void)
 					      NULL) == VMS_CODEC_OK,
 		 "  the answer builds");
 	conf_dump("dlm_rm_lock_ans", VMS_OFF_SYSAP_BODY,
-		  "lkid=0x020004cc", built + VMS_OFF_SYSAP_BODY,
+		  "lkid=0x020004cc,valblkseq=1", built + VMS_OFF_SYSAP_BODY,
 		  VMS_CM_BODY_LEN);
 	ct_check(body_diff(built + VMS_OFF_SYSAP_BODY, fxbody(ans),
 			   g_unnamed_0x12_cells, 4u, "root 82/01") == 0,
@@ -361,8 +361,9 @@ static void test_op12_sub_answer_is_the_real_grant(void)
 					      built, sizeof(built),
 					      NULL) == VMS_CODEC_OK,
 		 "  the answer builds");
-	conf_dump("dlm_rm_lock_ans", VMS_OFF_SYSAP_BODY, "lkid=0x020004cb",
-		  built + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
+	conf_dump("dlm_rm_lock_ans", VMS_OFF_SYSAP_BODY,
+		  "lkid=0x020004cb,valblkseq=0", built + VMS_OFF_SYSAP_BODY,
+		  VMS_CM_BODY_LEN);
 	ct_check(body_diff(built + VMS_OFF_SYSAP_BODY, fxbody(ans), NULL, 0,
 			   "sub 82/01") == 0,
 		 "*** the sub grant equals the real VAX's, byte for byte past "
@@ -666,7 +667,8 @@ static void test_heldout_topology(void)
 					      built, sizeof(built),
 					      NULL) == VMS_CODEC_OK,
 		 "  the grant builds");
-	snprintf(state, sizeof(state), "lkid=0x%08x", a.master_lkid);
+	snprintf(state, sizeof(state), "lkid=0x%08x,valblkseq=0x%08x",
+		 a.master_lkid, a.valblk_seq);
 	conf_dump("dlm_rm_lock_ans", VMS_OFF_SYSAP_BODY, state,
 		  built + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
 	ct_check(body_diff(built + VMS_OFF_SYSAP_BODY, fxbody(ans),

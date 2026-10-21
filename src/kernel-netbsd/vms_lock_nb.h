@@ -630,6 +630,18 @@ struct vms_dlm_scs_view_wire {
 	uint32_t queued_no_reply;
 	uint32_t unparsed;
 	uint32_t foreign_refused;
+	/* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5). Mirror of
+	 * src/kernel/vms_ioctl.h; see vms_cluster_snapshot.h. */
+	uint32_t rm_opens;
+	uint32_t rm_opens_refused;
+	uint32_t rm_records_adopted;
+	uint32_t rm_records_refused;
+	uint32_t rm_ends_seen;
+	uint32_t rm_trees_held;
+	uint32_t rm_held_sent;
+	uint32_t rm_held_unsent;
+	uint32_t rm_held_unreported;
+	uint32_t rm_notifications;
 	uint32_t leg_sends;
 	uint32_t leg_sends_refused;
 	uint32_t leg_frames_rx;
@@ -684,7 +696,11 @@ struct vms_sysgen_load_args {
 	uint8_t  alloclass;
 	uint8_t  mscp_load;
 	uint8_t  mscp_serve_all;
-	uint8_t  pad1[3];
+	/* OVMX_RM_RESIDUE_FILL (rd vms-ed5): the op-0x14 residue byte, carved
+	 * out of the former pad1[3] so this struct's size is unchanged. Mirror
+	 * of src/kernel/vms_ioctl.h, whose comment carries the rationale. */
+	uint8_t  ovmx_rm_residue_fill;
+	uint8_t  pad1[2];
 
 	uint32_t niscs_max_pktsz;
 
@@ -866,9 +882,9 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 144,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 184,
                "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 192,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

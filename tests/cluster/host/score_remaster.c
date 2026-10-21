@@ -74,19 +74,6 @@ static int is_unnamed_0x12_cell(uint32_t off)
 	return off >= 30u && off < 34u;
 }
 
-/*
- * body[36:56] of a SUB-resource answer: the value-block span a sub answer
- * carries no block in. This codec writes twenty zeros, which is what 14 of 14
- * real sub answers from a controlled REMASTER arm carry; sub answers from a
- * LOCK-REBUILD capture carry a busy master's residual buffer there instead
- * (01 00 00 00 01 00 00 00 .. and a small even number). Reported and counted,
- * exactly like the two unnamed cells -- never silently excused.
- */
-static int is_sub_valblk_span(uint32_t off)
-{
-	return off >= 36u && off < 56u;
-}
-
 /* An op-0x12 ROOT record carries no parent (body[36:44] all zero). */
 static int rec_is_root(const uint8_t *req)
 {
@@ -110,7 +97,7 @@ static uint32_t le32(const uint8_t *b)
  * excuses -- and counts -- the two cells the codec does not name.
  */
 static void judge(const char *what, const uint8_t *built, const uint8_t *real,
-		  int allow_unnamed, int sub_record, struct tally *t)
+		  int allow_unnamed, struct tally *t)
 {
 	unsigned bad = 0, i;
 
@@ -121,8 +108,6 @@ static void judge(const char *what, const uint8_t *built, const uint8_t *real,
 			t->unnamed_differed++;
 			continue;
 		}
-		if (sub_record && is_sub_valblk_span(i))
-			continue;   /* counted once, per record, below */
 		printf("    MISMATCH %s body[%u]: built %02x, real VAX %02x\n",
 		       what, i, built[i], real[i]);
 		bad++;
@@ -167,7 +152,7 @@ static void score_ack(const uint8_t *req, const uint8_t *ans, struct tally *t)
 		t->refused++;
 		return;
 	}
-	judge(what, frame + VMS_OFF_SYSAP_BODY, ans, 0, 0, t);
+	judge(what, frame + VMS_OFF_SYSAP_BODY, ans, 0, t);
 }
 
 /* RULE 2: the 82/01 answer to an op-0x12 lock record. */
@@ -180,21 +165,28 @@ static void score_lock_answer(const uint8_t *req, const uint8_t *ans,
 	int i, root = rec_is_root(req);
 
 	/*
-	 * Every field here is one an executive read supplies in the real path:
-	 * the handle the adoption engine minted and the RSB's own value block
-	 * and sequence. In a SCORING run they are read out of the real answer,
-	 * because this program has no lock database -- which is exactly why the
-	 * handle and the block are NOT what this run proves. What it proves is
-	 * the SHAPE: every other byte of the frame.
+	 * THE HANDLE is read out of the real answer, because this program has
+	 * no lock database -- which is exactly why the handle is NOT what this
+	 * run proves.
+	 *
+	 * THE VALUE BLOCK IS NOT. It is read out of the RECORD, at body[88:108]
+	 * -- the one place the real path gets it too: the record feeds
+	 * vms_lock_dlm_adopt_lock, the engine writes the RSB, and the answer is
+	 * the read-back (rd vms-ed5). So this run DOES prove the block: if the
+	 * 420/420 rule is wrong anywhere, the diff below says so.
 	 */
 	memset(&a, 0, sizeof(a));
 	a.master_lkid = le32(ans + 20);
-	if (root) {
-		a.valblk_present = 1u;
-		for (i = 0; i < (int)VMS_DLM_VALBLK_WIRE_LEN; i++)
-			a.valblk[i] = ans[36 + i];
-		a.valblk_seq = le32(ans + 52);
+	for (i = 0; i < (int)VMS_DLM_VALBLK_WIRE_LEN; i++) {
+		a.valblk[i] = req[88 + i];
+		if (a.valblk[i] != 0u)
+			a.valblk_present = 1u;
 	}
+	a.valblk_seq = le32(req + 104);
+	if (a.valblk_seq != 0u)
+		a.valblk_present = 1u;
+	if (!a.valblk_present)
+		a.valblk_seq = 0u;
 	sprintf(what, "02/12 -> 82/01 (%s)", root ? "ROOT" : "sub");
 
 	memset(frame, 0xa5, sizeof(frame));
@@ -206,18 +198,12 @@ static void score_lock_answer(const uint8_t *req, const uint8_t *ans,
 		return;
 	}
 	if (!root) {
-		int nz = 0, k;
-
-		for (k = 36; k < 56; k++) {
-			if (ans[k] != 0u)
-				nz = 1;
-		}
-		if (nz)
+		if (a.valblk_present)
 			t->subblk_residue++;
 		else
 			t->subblk_zero++;
 	}
-	judge(what, frame + VMS_OFF_SYSAP_BODY, ans, 1, !root, t);
+	judge(what, frame + VMS_OFF_SYSAP_BODY, ans, 1, t);
 }
 
 /* P5: the root/sub split of a real 82/01 answer, independent of our builder. */
@@ -291,8 +277,8 @@ int main(void)
 	printf("  the two cells rd vms-380 does not name (op-0x12 answer "
 	       "body[30:34]): %u byte(s) agreed, %u differed\n",
 	       t.unnamed_agreed, t.unnamed_differed);
-	printf("  real SUB answers' body[36:56]: %u all-zero (what this codec "
-	       "writes), %u carrying a busy master's residual buffer\n",
+	printf("  SUB records: %u whose body[88:108] is twenty zeros (so their "
+	       "answer carries none), %u carrying a real value block\n",
 	       t.subblk_zero, t.subblk_residue);
 	if (t.pairs == 0u) {
 		printf("  FAIL: no pairs on stdin -- nothing was scored\n");

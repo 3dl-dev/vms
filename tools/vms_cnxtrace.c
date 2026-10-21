@@ -341,6 +341,20 @@ static void cnxtrace_print_dlm(void)
            (unsigned)v->releases_received, (unsigned)v->releases_refused,
            (unsigned)v->blkasts_unparsed, (unsigned)v->deferred_grants_sent,
            (unsigned)v->deferred_grants_owed);
+    /* LOCK-TREE REMASTERING, the new master's side (rd vms-ed5). `held` and
+     * `unreported` are the pair the ci.6 evacuation gate is read from: trees a
+     * real VAX handed this node and this node really took, and how many of
+     * those nobody was told about. */
+    printf("%%CNXTRACE-I-DLMRM, trees opened=%u refused=%u  records "
+           "adopted=%u refused=%u  ends=%u\n",
+           (unsigned)v->rm_opens, (unsigned)v->rm_opens_refused,
+           (unsigned)v->rm_records_adopted, (unsigned)v->rm_records_refused,
+           (unsigned)v->rm_ends_seen);
+    printf("%%CNXTRACE-I-DLMRMHELD, trees held=%u  op-0x14 sent=%u unsent=%u  "
+           "completions unreported=%u  other-master notices=%u\n",
+           (unsigned)v->rm_trees_held, (unsigned)v->rm_held_sent,
+           (unsigned)v->rm_held_unsent, (unsigned)v->rm_held_unreported,
+           (unsigned)v->rm_notifications);
     printf("%%CNXTRACE-I-DLMPOST, posts queued=%u unqueued=%u lock_gone=%u "
            "refused=%u\n",
            (unsigned)v->posts_queued, (unsigned)v->posts_unqueued,

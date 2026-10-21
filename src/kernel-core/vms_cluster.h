@@ -177,7 +177,30 @@ struct vms_cluster_params {
 	 * what every reader here asks ("may I announce?").
 	 */
 	uint8_t  clean_depart;
-	uint8_t  pad1[2];
+
+	/*
+	 * OVMX_RM_RESIDUE_FILL (rd vms-ed5, for rd vms-6ad1's RA7 arm) -- the
+	 * byte this node writes across the RESIDUE span of the op-0x14 that
+	 * announces a lock tree it has adopted.
+	 *
+	 * IT IS NOT A PUBLISHED DEC SYSGEN PARAMETER and the name says so
+	 * (INV-0), for the same reason OVMX_CLEAN_DEPART above is not.
+	 *
+	 * WHY IT EXISTS. A real V7.3 new master leaves most of that frame's
+	 * body as its own stale message buffer; the vms-42de ruling says OVMX
+	 * emits ZEROS there instead, and that "a sender's stale buffer cannot
+	 * be something a receiver depends on" is a HYPOTHESIS which must be
+	 * PROVEN before a real peer gets one. The proof is the same remaster
+	 * fired twice -- once with the span zeroed, once with a recognisable
+	 * non-zero pattern -- and the VAX's SDA lock state identical both
+	 * times. This is the knob that selects the second pattern, so the arm
+	 * is a configuration change and not a code change.
+	 *
+	 * ZERO -- the zero-filled case, the default, and the shipping value --
+	 * is the ruling's zeros.
+	 */
+	uint8_t  ovmx_rm_residue_fill;
+	uint8_t  pad1;
 
 	uint32_t niscs_max_pktsz;   /* clamped to the interface MTU by the port */
 

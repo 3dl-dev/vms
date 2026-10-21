@@ -453,6 +453,25 @@ struct vms_dlm_requester_ops {
 uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t group,
 				     uint8_t mode, uint32_t dir_hash);
 
+/*
+ * vms_lock_dlm_dir_hash_of - the directory hash value this executive HOLDS for
+ * an identity, for a frame that must carry one (rd vms-ed5: the op-0x14 that
+ * announces an adopted tree, body[128:132], 68 of 68 real frames).
+ *
+ * A READ, never a determination made for the asking: the RSB's own `dir_hash`,
+ * which is either a value a system in this cluster put on the wire and
+ * `_learn_dir_hash` recorded, or -- for a root name inside the PROVEN coverage
+ * -- the one `vms_dlm_name_hash_proven()` determined for this exact identity
+ * and the directory routing already stored (the same `dir_hash_for_routing`
+ * read `dir_resolve` makes, so this frame can never carry a value the ROUTING
+ * would not). An identity outside that coverage is REFUSED, not extrapolated.
+ * Returns 1 and writes *out only then;
+ * returns 0 -- and the caller leaves the field ZERO, never minted -- for an
+ * identity this executive holds no value for. Creates no resource.
+ */
+int vms_lock_dlm_dir_hash_of(const char *resnam, uint16_t group, uint8_t mode,
+			     uint32_t *out);
+
 /* How many learned hashes disagreed with a value already held for that name
  * (see above). Instrumentation for the FC-P4.2 offset check; a diagnostic
  * reads it, nothing acts on it. */

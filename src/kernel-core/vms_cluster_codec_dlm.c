@@ -634,9 +634,30 @@ vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len
 	return VMS_CODEC_OK;
 }
 
+/* body offsets this family adds. Frame-absolute first, body-relative derived,
+ * so the two spellings can never drift (see the header's note). */
+#define VMS_OFF_DLM_RM_TXN         76u  /* body[4:8]   0 => a notification   */
+#define VMS_OFF_DLM_RM_PARENT_H    108u /* body[36:40] parent HOLDER lkid    */
+#define VMS_OFF_DLM_RM_PARENT_M    112u /* body[40:44] parent NEW-MASTER lkid*/
+#define VMS_OFF_DLM_RM_VALBLK_SEQ  124u /* body[52:56] the value-block seq   */
+/* The op-0x12 RECORD's own copy of the resource's value block and sequence --
+ * body[88:104] and body[104:108]. Not the same span as the ANSWER's: see the
+ * header's rule 2, measured 420/420. */
+#define VMS_OFF_DLM_RM_REC_VALBLK  160u /* body[88:104] the holder's block   */
+#define VMS_OFF_DLM_RM_REC_VALSEQ  176u /* body[104:108] its sequence        */
+
+#define VMS_OFB_DLM_RM_TXN        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_TXN)
+#define VMS_OFB_DLM_RM_SEQ        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_SEQ)
+#define VMS_OFB_DLM_RM_PARENT_H   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_PARENT_H)
+#define VMS_OFB_DLM_RM_PARENT_M   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_PARENT_M)
+#define VMS_OFB_DLM_RM_VALBLK_SEQ VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_VALBLK_SEQ)
+#define VMS_OFB_DLM_RM_REC_VALBLK VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_REC_VALBLK)
+#define VMS_OFB_DLM_RM_REC_VALSEQ VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_REC_VALSEQ)
+
 /* ------------------------------------------------------------------ *
  * The directory role (rd vms-8219) -- see the header for the grounding.
  * ------------------------------------------------------------------ */
+
 
 /* Which frames name a resource FOR A DIRECTORY, and is this one of them? */
 static int dlm_names_for_directory(vms_wire_view_t *v, uint8_t op)
@@ -664,6 +685,28 @@ int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
 		return dlm_names_for_directory(&v, op) &&
 		       vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN) != 0u &&
 		       vms_wire_view_ok(&v);
+	/*
+	 * THE op-0x14 THIS NODE SENDS once it has adopted a tree (rd vms-ed5).
+	 * It faces a real VMS member BY DEFINITION -- the old master and the
+	 * holders that just handed the tree over are real VMS nodes, and a
+	 * departing one WAITS for it (that wait is the ci.6 evacuation gate).
+	 *
+	 * Admitted on its SHAPE and not on its opcode: it must name a resource
+	 * (68 of 68 real op-0x14s carry a name length of 1..31) and carry zero
+	 * at body[40:44] (68 of 68). Those two are what distinguish the frame
+	 * vms_dlm_rm_held_build produces -- six named fields and a residue span
+	 * written with the configured fill -- from any other body that happens
+	 * to say 0x14, and the second of them is the one named field the RA7
+	 * residue pattern must not touch, so a pattern that overran it would be
+	 * refused HERE as well as by its own negative control.
+	 */
+	if (op == VMS_DLM_WIREOP_RM_14) {
+		uint8_t nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+		uint32_t z = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_M);
+
+		return vms_wire_view_ok(&v) && nlen != 0u &&
+		       nlen < VMS_DLM_NAME_MAX && z == 0u;
+	}
 	return op == VMS_DLM_WIREOP_ENQ || op == VMS_DLM_WIREOP_CONVERT ||
 	       op == VMS_DLM_WIREOP_CONVERT_VALBLK ||
 	       op == VMS_DLM_WIREOP_DEQ;
@@ -1542,18 +1585,9 @@ vms_codec_status_t vms_dlm_seq_put(uint8_t *body, uint32_t cap, uint16_t n)
  * rules: vms_cluster_codec_dlm.h, "LOCK-TREE REMASTERING ON THE WIRE".
  * ========================================================================== */
 
-/* body offsets this family adds. Frame-absolute first, body-relative derived,
- * so the two spellings can never drift (see the header's note). */
-#define VMS_OFF_DLM_RM_TXN         76u  /* body[4:8]   0 => a notification   */
-#define VMS_OFF_DLM_RM_PARENT_H    108u /* body[36:40] parent HOLDER lkid    */
-#define VMS_OFF_DLM_RM_PARENT_M    112u /* body[40:44] parent NEW-MASTER lkid*/
-#define VMS_OFF_DLM_RM_VALBLK_SEQ  124u /* body[52:56] the value-block seq   */
-
-#define VMS_OFB_DLM_RM_TXN        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_TXN)
-#define VMS_OFB_DLM_RM_SEQ        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_SEQ)
-#define VMS_OFB_DLM_RM_PARENT_H   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_PARENT_H)
-#define VMS_OFB_DLM_RM_PARENT_M   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_PARENT_M)
-#define VMS_OFB_DLM_RM_VALBLK_SEQ VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_VALBLK_SEQ)
+/* The remastering family's body offsets are declared at the top of this file,
+ * beside the opcode table, because vms_dlm_shape_fit_for_any_member() needs
+ * one of them (the op-0x14's body[40:44]) long before this section. */
 
 /* The residue spans of an op-0x14: everything the 63-frame census does not
  * name. body[12:16] is excluded because the CM stamps the DLM sequence there;
@@ -1562,6 +1596,39 @@ vms_codec_status_t vms_dlm_seq_put(uint8_t *body, uint32_t cap, uint16_t n)
 #define VMS_DLM_RM14_RESIDUE_A_LEN    2u
 #define VMS_DLM_RM14_RESIDUE_B_OFF   16u   /* body[16:40] */
 #define VMS_DLM_RM14_RESIDUE_B_LEN   24u
+
+/*
+ * THE RECORD'S OWN VALUE BLOCK (rd vms-ed5). An op-0x12 carries the holder's
+ * copy of the resource's value block at body[88:104] and its SEQUENCE at
+ * body[104:108], and the 82/01 answer's body[36:56] is that span -- 420 of 420
+ * real pairs, ROOT and sub alike (header rule 2). PRESENT is "the span is not
+ * twenty zeros": in 399 of 399 records with a non-zero block the sequence is
+ * non-zero too, and in 21 of 21 with a zero block it is zero, so the two agree
+ * and neither is read as an assertion about the other. ABSENT leaves the
+ * resource's block alone -- twenty zeros presented as a value block is the
+ * placeholder INV-6 forbids.
+ */
+static vms_codec_status_t dlm_rm_rec_valblk_get(vms_wire_view_t *v,
+						struct vms_dlm_rm_lock_rec *r)
+{
+	uint32_t i;
+	uint8_t any = 0u;
+
+	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++) {
+		r->valblk[i] = vms_wire_get_u8(v, VMS_OFB_DLM_RM_REC_VALBLK + i);
+		if (r->valblk[i] != 0u)
+			any = 1u;
+	}
+	r->valblk_seq = vms_wire_get_le32(v, VMS_OFB_DLM_RM_REC_VALSEQ);
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	if (r->valblk_seq != 0u)
+		any = 1u;
+	r->valblk_present = any;
+	if (!any)
+		r->valblk_seq = 0u;
+	return VMS_CODEC_OK;
+}
 
 /* Is this op one of the five remaster steps that name a resource? */
 static int dlm_rm_is_step_op(uint8_t op)
@@ -1679,6 +1746,9 @@ vms_codec_status_t vms_dlm_rm_lock_rec_parse_body(const uint8_t *body,
 	st = dlm_rm_ident_get(&v, &r.id);
 	if (st != VMS_CODEC_OK)
 		return st;
+	st = dlm_rm_rec_valblk_get(&v, &r);
+	if (st != VMS_CODEC_OK)
+		return st;
 	/* A lock whose handle is 0 is not a lock, and an adoption may not
 	 * install one: the same refusal every lock-id field in this codec
 	 * makes (the fc8540ae lesson in this file's header). */
@@ -1735,6 +1805,25 @@ vms_codec_status_t vms_dlm_rm_ack_build(const uint8_t *req_body,
 	if (written != (uint32_t *)0)
 		*written = vms_wire_buf_len(&w);
 	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_rm_ack_ident(const uint8_t *ans_body, uint32_t len,
+					struct vms_dlm_res_ident *out)
+{
+	vms_wire_view_t v;
+	uint8_t cat, op;
+
+	if (out == (struct vms_dlm_res_ident *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, ans_body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != vms_wire_response_category(VMS_DLM_CAT_REQUEST) ||
+	    op != VMS_DLM_WIREOP_RM_ACK)
+		return VMS_CODEC_E_CLASS;
+	return dlm_rm_ident_get(&v, out);
 }
 
 /*

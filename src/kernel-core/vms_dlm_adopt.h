@@ -36,17 +36,24 @@
  *     it names genuinely exist here.
  *
  * ===========================================================================
- * WHAT THIS SEAM DELIBERATELY DOES NOT DO: THE 0x14 (INV-6)
+ * WHAT THIS SEAM STILL DOES NOT DO: BUILD OR SEND THE 0x14
  * ===========================================================================
- * No function here builds, authorizes or implies an op-0x14. Two of its cells
- * are NOT grounded: body[20:24] and body[28:40]. A 4,658-frame census over the
- * repo captures, /lab/run-oracle, rm380 and dlmlab shows they are not constant
- * ([20] takes 255 values, [28] 69, [32] 150), and RA5's SDA could not name them
- * (the lock slot had been reused by the time SDA ran). Until a controlled arm
- * names them, OVMX emits NO 0x14 -- the honest omission, not a plausible frame.
- * `vms_lock_dlm_adopt_unreported()` COUNTS the adoptions that completed with no
- * 0x14 sent, so the gap is a number this executive reports rather than a
- * silence. Two real lab peers have already been crashed by minted fields.
+ * No function here builds or sends an op-0x14 -- that is the wire arm's, and
+ * the codec's, through vms_dlm_rm_fsm.h. What this seam owes it is the TRUTH
+ * the frame asserts: `vms_lock_dlm_adopt_end` returns SS$_NORMAL only when an
+ * adoption of exactly that root resource really was open here and its locks
+ * really are installed, and `vms_lock_dlm_name_mastered_here` is a second,
+ * independent read of the same claim. A 0x14 sent without both is a node
+ * telling a real VAX it holds a tree it does not have.
+ *
+ * `vms_lock_dlm_adopt_unreported()` still counts the completions nobody was
+ * told about (`completed` minus `reports`), so the gap stays a number this
+ * executive reports rather than a silence. When vms-380 settled the frame it
+ * settled it in the direction that asserts LESS: of the 132-byte body the
+ * op-0x14 names six fields and zeroes the rest, and every one of the four
+ * cells RA5/RA6 thought meaningful turned out, at n=68, to be the sender's
+ * stale buffer. Two real lab peers have already been crashed by minted fields;
+ * rd vms-6ad1 (RA7) is what proves a real VAX does not read that span.
  *
  * ===========================================================================
  * INV-6 IN THE SHAPE OF THE STRUCTS
@@ -96,9 +103,13 @@ struct vms_dlm_adopt_tree {
  *                       this engine did not mint for this adoption is refused.
  *   granted_mode        body[30], requested_mode body[31] (CR 01 01, CW 02 02
  *                       vs SDA 4/4 in RA2).
- *   valblk/_present     the root record's value block. ABSENT means the
- *                       resource's own block is LEFT ALONE: sixteen zeros
- *                       presented as an LVB is the placeholder INV-6 forbids.
+ *   valblk/_seq/_present
+ *                       the record's own copy of the resource's value block
+ *                       and its SEQUENCE -- body[88:104] and body[104:108]
+ *                       (rd vms-ed5; 420 of 420 real 82/01 answers return
+ *                       exactly that span). ABSENT means the resource's own
+ *                       block is LEFT ALONE: twenty zeros presented as an LVB
+ *                       is the placeholder INV-6 forbids.
  */
 struct vms_dlm_adopt_lock_rec {
 	char     resnam[32];           /* this lock's resource name          */
@@ -113,6 +124,7 @@ struct vms_dlm_adopt_lock_rec {
 	uint8_t  valblk_present;
 	uint8_t  pad;
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
+	uint32_t valblk_seq;           /* body[104:108]                      */
 };
 
 /*
@@ -123,10 +135,11 @@ struct vms_dlm_adopt_lock_result {
 	uint32_t master_lkid;    /* 82/01 body[20:24]: the handle WE minted  */
 	uint32_t holder_lkid;    /* 82/01 body[24:28]: read back off the LKB */
 	uint8_t  granted_mode;   /* read back off the LKB                    */
-	uint8_t  valblk_present; /* 1 only when the RSB holds a NON-ZERO block */
+	uint8_t  valblk_present; /* 1 when the RSB holds a block or a sequence */
 	uint8_t  duplicate;      /* 1 = a RETRANSMITTED record; same handle   */
 	uint8_t  pad;
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];   /* the RSB's block, read back */
+	uint32_t valblk_seq;                   /* ...and its sequence        */
 };
 
 /* ==========================================================================
@@ -195,6 +208,38 @@ uint32_t vms_lock_dlm_adopt_abort(const struct vms_dlm_adopt_tree *t,
 /* Is an adoption of this tree OPEN right now? */
 int vms_lock_dlm_adopt_is_open(const struct vms_dlm_adopt_tree *t);
 
+/*
+ * WHICH TREE did this engine mint `master_lkid` inside? (rd vms-ed5)
+ *
+ * A 0x12 record for a SUB-resource names its OWN resource, never the tree's
+ * root, so the only thing that places it in a tree is the PARENT handle at
+ * body[40:44] -- a handle this engine minted and answered in the 82/01 for the
+ * parent record moments earlier. The wire arm therefore has to ASK, and it asks
+ * the engine rather than keeping a table of its own: the lock database is where
+ * the truth is, and a handle no OPEN adoption minted must not place a record in
+ * any tree.
+ *
+ * Fills `*out` -- the root resource's identity, read off the adoption's own
+ * root RSB, plus the old master this adoption was opened for -- and returns 1,
+ * ONLY when `master_lkid` names a non-proxy lock installed by an adoption that
+ * is open right now. Returns 0 and leaves `*out` zeroed otherwise, which is
+ * what a forged or stale parent handle gets.
+ */
+int vms_lock_dlm_adopt_tree_of_lkid(uint32_t master_lkid,
+				    struct vms_dlm_adopt_tree *out);
+
+/*
+ * THIS NODE REALLY TOLD THE CLUSTER about one completed adoption (rd vms-ed5):
+ * at least one of the op-0x14s it owed went out. Raises `_adopt_reports()` and
+ * so lowers `_adopt_unreported()`, which is the number of completions NOBODY
+ * was told about. Called by the wire arm AFTER the sends -- never before, or
+ * the counter would say a tree was announced that nobody was told about. A
+ * member that was owed one and did not get it is counted per frame by the arm
+ * (vms_dlm_rm_fsm.h `held_unsent`); the two answer different questions.
+ */
+void vms_lock_dlm_adopt_reported(void);
+uint32_t vms_lock_dlm_adopt_reports(void);
+
 /* How many locks has the OPEN adoption of this tree installed so far? -1 when
  * no adoption of it is open. */
 int vms_lock_dlm_adopt_installed(const struct vms_dlm_adopt_tree *t);
@@ -206,11 +251,11 @@ uint32_t vms_lock_dlm_adoptions_completed(void);
 uint32_t vms_lock_dlm_adoptions_refused(void);
 
 /*
- * COMPLETED ADOPTIONS THIS NODE COULD NOT REPORT TO THE OLD MASTER, because the
- * op-0x14 that does it has two ungrounded cells (see the header note). Equal to
- * `completed` for as long as that is true. The number exists so the gap is
- * REPORTED rather than silent -- the same discipline as
- * vms_lock_dlm_dir_removes_unposted().
+ * COMPLETED ADOPTIONS THIS NODE COULD NOT REPORT, i.e. `completed` minus
+ * `reports`. The number exists so the gap is REPORTED rather than silent --
+ * the same discipline as vms_lock_dlm_dir_removes_unposted(). An executive
+ * with no wire arm bound reports every completion as unreported, which is
+ * exactly true of it.
  */
 uint32_t vms_lock_dlm_adopt_unreported(void);
 

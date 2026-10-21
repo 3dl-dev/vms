@@ -96,9 +96,12 @@
 #include "vms_dlm_quorum.h"
 #include "vms_dlm_echo_guard.h"
 #include "vms_dlm_pending.h"   /* rd vms-f87: the requests we owe an answer */
+#include "vms_cnxman_csb.h"   /* rd vms-ed5: the CLUB's own member set */
 #include "vms_cnxman_quorum.h"
 #include "vms_dlm_scs.h"
 #include "vms_dlm_scs_fsm.h"
+#include "vms_dlm_rm_fsm.h"    /* rd vms-ed5: the new master's remaster table */
+#include "vms_cluster_sysgen.h"
 
 /* ==========================================================================
  * 1. The arm
@@ -279,6 +282,27 @@ struct vms_dlm_scs {
 	/* THE ECHO GUARD's state (rd vms-b5b0, vms_dlm_echo_guard.h). */
 	struct vms_dlm_echo_guard echo;
 	uint32_t answers_capped;      /* replies withheld by the echo guard   */
+
+	/*
+	 * THE NEW MASTER'S SIDE OF A LOCK-TREE REMASTER (rd vms-ed5,
+	 * vms_dlm_rm_fsm.h). A pure table with injected doors, bound below; it
+	 * holds the trees being handed to this node and who still owes each one
+	 * an end-of-records, and NO lock state -- the adoption engine holds
+	 * that.
+	 */
+	struct vms_dlm_rm          rm;
+	struct vms_dlm_rm_ops      rm_ops;
+	/*
+	 * THE MESSAGE BEING HANDLED, for the table's `stage_reply` door. Set
+	 * for the duration of one vms_dlm_rm_step() call and cleared after --
+	 * the same serialisation of `handle_request` that `txframe` above has
+	 * always relied on, and the reason the door takes a body rather than
+	 * reaching for the connection manager's buffer itself (RULE A).
+	 */
+	const struct dlm_scs_request *rm_req;
+	struct dlm_scs_reply         *rm_reply;
+	uint32_t rm_steps_refused;    /* remaster steps this node would not act */
+				       /* on: counted, never answered           */
 
 	/* THE REQUESTS THIS MASTER OWES AN ANSWER (rd vms-f87,
 	 * vms_dlm_pending.h), and what became of the ones it answered late. */
@@ -2114,6 +2138,239 @@ static void dlm_arm_dir_register(struct vms_dlm_scs *d,
 		d->dir_regs_seen++;
 }
 
+/* ==========================================================================
+ * 5c. THE NEW MASTER'S SIDE OF A LOCK-TREE REMASTER (rd vms-ed5)
+ *
+ * A real VMS node hands one of its lock trees to this node. The TABLE that
+ * follows the hand-over is vms_dlm_rm_fsm.c -- pure, host-testable, and holding
+ * no lock state; this section is only the dozen DOORS it reaches the executive
+ * through, each one a call into something that already existed:
+ *
+ *   the CLUB            who the other members are (p. 7-49's SELECTED set),
+ *                       because every one of them sends the new master an
+ *                       end-of-records and the frames that tell them are
+ *                       point-to-point (vms_dlm_rm_fsm.h rule W1/W2).
+ *   the ADOPTION ENGINE vms_dlm_adopt.h -- the ONLY thing that creates the real
+ *                       RSBs and LKBs and mints the handles the 82/01 answers
+ *                       carry (rd vms-14fd).
+ *   the CODEC           every cat-0x02 byte, inside the table's own TU.
+ *   the CONNECTION MGR  the reply buffer, and the one way out for the op-0x14.
+ *
+ * WHY IT IS ABOVE RULE C, and it is the same argument the directory role in
+ * section 5b makes. RULE C forbids putting a shape in front of a real VAX that
+ * no real VAX has been watched to accept, and creating lock state a FRAME alone
+ * asserted. Neither happens here:
+ *
+ *   THE SHAPES ARE THE REAL ONES, byte for byte. The 82/15 echo and the 82/01
+ *   grant are reproduced from 682 of 682 real request/answer pairs across 123
+ *   captures (tests/cluster/host/score_remaster), and the op-0x14 asserts six
+ *   fields and zeroes the rest (rd vms-42de's ruling; rd vms-6ad1 proves the
+ *   zeroed span is not read before any of it faces a real VAX).
+ *
+ *   THE LOCK STATE IS NOT ASSERTED BY A FRAME, it is REQUESTED BY THE TREE'S
+ *   OWN MASTER. A record is adopted only inside a transaction the OLD MASTER
+ *   opened with its op-0x0e; the LKB is tagged with the CONNECTION MANAGER's
+ *   identification of the sender and the sender's own handle; the parent of a
+ *   sub-record must be a handle THIS engine minted in THIS adoption; and a tree
+ *   that cannot be adopted whole is given back. Every one of those checks is
+ *   the engine's, applied whether or not this file asks.
+ *
+ *   AND REFUSING IT IS NOT NEUTRAL. A real VAX that is shutting down waits for
+ *   the new master it chose; unanswered, its departure does not complete. That
+ *   is the ci.6 evacuation gate, and it is what this section exists for.
+ * ========================================================================== */
+
+/* The CLUB's own answer to "who else is a member". */
+static uint32_t dlm_arm_rm_other_members(void *ctx, uint32_t *csids,
+					 uint32_t max)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (d == NULL || d->cl == NULL)
+		return 0u;
+	return cnxman_club_other_member_csids(&d->cl->club,
+					      (vms_csid_t *)csids, max);
+}
+
+/*
+ * THE ADOPTION ENGINE'S FOUR ENTRY POINTS. Each returns 1 only on SS$_NORMAL:
+ * the table is told "the engine really did it" and nothing else, which is why
+ * the SS$_ vocabulary stops here (vms_dlm_rm_fsm.h).
+ */
+static int dlm_arm_rm_adopt_open(void *ctx, const struct vms_dlm_adopt_tree *t)
+{
+	(void)ctx;
+	return vms_lock_dlm_adopt_open(t) == SS__NORMAL ? 1 : 0;
+}
+
+static int dlm_arm_rm_adopt_lock(void *ctx, const struct vms_dlm_adopt_tree *t,
+				 const struct vms_dlm_adopt_lock_rec *r,
+				 struct vms_dlm_adopt_lock_result *out)
+{
+	(void)ctx;
+	return vms_lock_dlm_adopt_lock(t, r, out) == SS__NORMAL ? 1 : 0;
+}
+
+static int dlm_arm_rm_adopt_end(void *ctx, const struct vms_dlm_adopt_tree *t,
+				uint32_t *n_locks)
+{
+	(void)ctx;
+	return vms_lock_dlm_adopt_end(t, n_locks) == SS__NORMAL ? 1 : 0;
+}
+
+static int dlm_arm_rm_adopt_abort(void *ctx, const struct vms_dlm_adopt_tree *t,
+				  uint32_t *n_undone)
+{
+	(void)ctx;
+	return vms_lock_dlm_adopt_abort(t, n_undone) == SS__NORMAL ? 1 : 0;
+}
+
+static int dlm_arm_rm_tree_of_lkid(void *ctx, uint32_t master_lkid,
+				   struct vms_dlm_adopt_tree *out)
+{
+	(void)ctx;
+	return vms_lock_dlm_adopt_tree_of_lkid(master_lkid, out);
+}
+
+static void dlm_arm_rm_reported(void *ctx)
+{
+	(void)ctx;
+	vms_lock_dlm_adopt_reported();
+}
+
+/* The op-0x14's two executive reads: does this node master the name, and what
+ * directory hash does it HOLD for it (never one computed for the asking). */
+static int dlm_arm_rm_mastered(void *ctx, const char *resnam, uint16_t group,
+			       uint8_t mode)
+{
+	(void)ctx;
+	return vms_lock_dlm_name_mastered_here(resnam, group, mode);
+}
+
+static int dlm_arm_rm_dir_hash(void *ctx, const char *resnam, uint16_t group,
+			       uint8_t mode, uint32_t *out_hash)
+{
+	(void)ctx;
+	return vms_lock_dlm_dir_hash_of(resnam, group, mode, out_hash);
+}
+
+/*
+ * THE REPLY, through the one stager every other answer in this file goes
+ * through -- so the echo guard applies to a remaster answer exactly as it
+ * applies to a grant (rd vms-b5b0). `rm_req`/`rm_reply` are the message being
+ * handled; a door called outside one is a bug and refuses.
+ */
+static int dlm_arm_rm_stage(void *ctx, const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (d == NULL || d->rm_req == NULL || body == NULL ||
+	    len != VMS_CM_BODY_LEN)
+		return -1;
+	memcpy(d->txframe + VMS_OFF_SYSAP_BODY, body, VMS_CM_BODY_LEN);
+	return dlm_arm_stage_reply(d, d->rm_req, d->rm_reply);
+}
+
+/* The op-0x14's only way out: the connection manager, by CSID. */
+static int dlm_arm_rm_send(void *ctx, uint32_t dst_csid, const uint8_t *body,
+			   uint32_t len)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (dlm_arm_send(d, (vms_csid_t)dst_csid, body, len) != 0) {
+		d->send_failures++;
+		return -1;
+	}
+	return 0;
+}
+
+/*
+ * rd vms-6ad1 (RA7): the byte written across the op-0x14's RESIDUE span. The
+ * vms-42de ruling's zeros are what ships, and the second fixed pattern RA7
+ * must fire is a CONFIGURATION this executive was given -- never a literal in
+ * the codec and never a value this file chooses.
+ */
+static uint8_t dlm_arm_rm_residue_fill(void *ctx)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	return (d != NULL && d->cl != NULL) ?
+		cluster_sysgen_rm_residue_fill(d->cl) : 0u;
+}
+
+static void dlm_arm_rm_log(void *ctx, const char *msg)
+{
+	(void)ctx;
+	exec_console_printf("%s\n", msg);
+}
+
+static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
+{
+	d->rm_ops.ctx                = d;
+	d->rm_ops.other_members      = dlm_arm_rm_other_members;
+	d->rm_ops.adopt_open         = dlm_arm_rm_adopt_open;
+	d->rm_ops.adopt_lock         = dlm_arm_rm_adopt_lock;
+	d->rm_ops.adopt_end          = dlm_arm_rm_adopt_end;
+	d->rm_ops.adopt_abort        = dlm_arm_rm_adopt_abort;
+	d->rm_ops.adopt_tree_of_lkid = dlm_arm_rm_tree_of_lkid;
+	d->rm_ops.adopt_reported     = dlm_arm_rm_reported;
+	d->rm_ops.name_mastered_here = dlm_arm_rm_mastered;
+	d->rm_ops.dir_hash           = dlm_arm_rm_dir_hash;
+	d->rm_ops.stage_reply        = dlm_arm_rm_stage;
+	d->rm_ops.send               = dlm_arm_rm_send;
+	d->rm_ops.residue_fill       = dlm_arm_rm_residue_fill;
+	d->rm_ops.log                = dlm_arm_rm_log;
+	vms_dlm_rm_init(&d->rm, &d->rm_ops);
+}
+
+/*
+ * ONE REMASTER STEP, with the message being handled made reachable to the
+ * table's reply door for exactly the length of the call.
+ *
+ * Returns 0 when the table handled it (with or without an answer staged), -1
+ * when it declined or refused -- and then nothing was answered, which is the
+ * floor this arm already stood on for every one of these opcodes.
+ */
+static int dlm_arm_remaster(struct vms_dlm_scs *d,
+			    const struct dlm_scs_request *req,
+			    struct dlm_scs_reply *reply)
+{
+	enum vms_dlm_rm_status st;
+
+	/*
+	 * op-0x0e IS ALSO THIS CODEC'S OWN DLKSRCH OPCODE (rd vms-196), and
+	 * this is the one place the collision can actually bite. The two
+	 * protocols are told apart by the only bit that distinguishes them: a
+	 * cat-0x02 op-0x0e from a system that has PROVED it runs this
+	 * implementation is a distributed deadlock search, and from a real VMS
+	 * system it is a remaster's first step. So the hand-over is only ever
+	 * opened by a system that is not ours -- which is also the only kind of
+	 * system that remasters a tree onto this node today.
+	 */
+	if (req->peer_is_ours &&
+	    req->opcode == (uint8_t)VMS_DLM_WIREOP_RM_0E)
+		return -1;
+
+	d->rm_req = req;
+	d->rm_reply = reply;
+	st = vms_dlm_rm_step(&d->rm, (uint32_t)req->from_csid, req->category,
+			     req->opcode, req->body, req->len);
+	d->rm_req = NULL;
+	d->rm_reply = NULL;
+
+	if (st == VMS_DLM_RM_HANDLED) {
+		/* The one counter this arm keeps for itself: how many op-0x0f
+		 * answers really went out (rd vms-cab's own number). The rest
+		 * of the remaster counting is the table's. */
+		if (req->opcode == (uint8_t)VMS_DLM_WIREOP_RM_0F)
+			d->op0f_acked++;
+		return 0;
+	}
+	if (st == VMS_DLM_RM_REFUSED)
+		d->rm_steps_refused++;
+	return -1;
+}
+
 /*
  * THE DOOR. One cat-0x02 message arrived on the VMS$VAXcluster connection.
  * Returns 0 when it was handled (with or without a reply) and non-zero when it
@@ -2167,34 +2424,49 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 	}
 
 	/*
-	 * op 0x0f FROM ANY MEMBER (rd vms-cab). A real VMS member remastering a
-	 * lock tree sends it to every other member and waits for each answer;
-	 * left unanswered by an OVMX member it stalls the sender's file system
-	 * (lab run ci6-evac-15: VAX2's DCL hung). This node never holds an open
-	 * remaster (it does not adopt trees yet, rd vms-50d), so it answers as
-	 * every member other than the new master does: the request echoed with
-	 * body[28:32] kept (888/888 real pairs). Above RULE C: it creates no lock
-	 * state for the sender.
+	 * A LOCK TREE IS BEING REMASTERED (rd vms-ed5, section 5c above). The
+	 * five steps a real old master and a real holder send -- op 0x0e, 0x0f,
+	 * 0x10, 0x12 and 0x13 -- drive the adoption engine through the table in
+	 * vms_dlm_rm_fsm.c, which stages the 82/15 and 82/01 answers and
+	 * originates the op-0x14 when the tree is held.
+	 *
+	 * THE op-0x0f IS IN HERE FOR THE REASON rd vms-cab ADDED IT (it used to
+	 * have its own branch): a real VMS member remastering a tree sends one
+	 * to EVERY other member and waits for each answer, and left unanswered
+	 * by an OVMX member it stalls the sender's file system (lab run
+	 * ci6-evac-15: VAX2's DCL hung). The answer is the same echo it always
+	 * was; what is new is that this node can now hold an open remaster, so
+	 * the NEW MASTER's extra step -- body[28:32] cleared, 63 of 70 real
+	 * pairs -- is reachable, and the role is read off this node's own
+	 * adoption, never off the frame.
+	 *
+	 * Above RULE C: section 5c states the whole argument.
+	 */
+	if (dlm_arm_remaster(d, req, reply) == 0)
+		return 0;
+
+	/*
+	 * op 0x11 -- some OTHER member was made the new master of a tree. 7 of 7
+	 * real ones open no transaction and are never answered, so this node
+	 * answers nothing and asserts nothing; it is COUNTED, because it is also
+	 * the moment a tree this node HOLDS LOCKS IN moved, and OVMX does not
+	 * yet send its own records to that new master -- which leaves a real
+	 * VAX new master WAITING for this node's op-0x13 (rule W2, 7 of 7
+	 * multi-0x13 episodes). That is the other half of remastering and it is
+	 * rd vms-33a; `rm_notifications` is how many times it mattered.
 	 */
 	if (req->category == (uint8_t)VMS_DLM_CAT_REQUEST &&
-	    req->opcode == (uint8_t)VMS_DLM_WIREOP_0F) {
-		struct vms_dlm_res_ident id;
-		uint32_t written = 0;
-
-		memset(&id, 0, sizeof(id));
-		memset(d->txframe, 0, sizeof(d->txframe));
-		if (vms_dlm_op0f_ack_build(req->body, req->len, 0, &id,
-					   d->txframe,
-					   (uint32_t)sizeof(d->txframe),
-					   &written) != VMS_CODEC_OK) {
-			d->unparsed++;
-			return -1;
-		}
-		if (dlm_arm_stage_reply(d, req, reply) != 0)
-			return -1;
-		d->op0f_acked++;
+	    req->opcode == (uint8_t)VMS_DLM_WIREOP_RM_11) {
+		vms_dlm_rm_notified(&d->rm);
 		return 0;
 	}
+
+	/* The 82/15 answer to an op-0x14 THIS node sent. Matched against a tree
+	 * this node really announced to that system; nothing is emitted. */
+	if (vms_dlm_rm_held_ack(&d->rm, (uint32_t)req->from_csid,
+				req->category, req->opcode, req->body,
+				req->len))
+		return 0;
 
 	/* THE DIRECTORY ROLE toward a real VMS system (rd vms-8219), ABOVE
 	 * RULE C on purpose: see section 5b for why its answer is not a shape
@@ -2372,6 +2644,10 @@ static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)
 	/* ... and every directory entry it mastered goes with it: the survivors
 	 * holding locks on those resources re-register them (rd vms-8219). */
 	dlm_arm_dir_do_drop_master(d, csid);
+	/* ... and it is struck from every lock tree being handed to this node
+	 * that was still waiting for its end-of-records: a departed system will
+	 * not be sending one (rd vms-ed5). */
+	vms_dlm_rm_member_departed(&d->rm, (uint32_t)csid);
 }
 
 /* ==========================================================================
@@ -2495,6 +2771,9 @@ int vms_dlm_scs_start(struct vms_cluster *cl)
 	if (d->dir_store == NULL ||
 	    vms_dlm_dir_init(&d->dir, d->dir_store, VMS_DLM_DIR_CAP) != 0)
 		(void)vms_dlm_dir_init(&d->dir, NULL, 0u);
+
+	/* The new master's remaster table and its doors (rd vms-ed5). */
+	dlm_arm_bind_rm_ops(d);
 
 	/* The echo guard, empty (rd vms-b5b0): exec_zalloc already zeroed it,
 	 * but the state is initialised through its own entry point so the TU
@@ -2667,6 +2946,27 @@ static void dlm_arm_project_state(const struct vms_cluster *cl,
 				  d->no_delivery_proc;
 }
 
+/*
+ * THE REMASTER TABLE'S OWN TALLIES (rd vms-ed5), plus the ENGINE's count of
+ * the completions nobody was told about -- read from the engine and not
+ * derived from the table's, for the reason the view's own comment gives:
+ * two projections of one fact can be compared.
+ */
+static void dlm_arm_project_remaster(const struct vms_dlm_scs *d,
+				     struct vms_dlm_scs_view *out)
+{
+	out->rm_opens            = d->rm.opens;
+	out->rm_opens_refused    = d->rm.opens_refused;
+	out->rm_records_adopted  = d->rm.records_adopted;
+	out->rm_records_refused  = d->rm.records_refused;
+	out->rm_ends_seen        = d->rm.ends_seen;
+	out->rm_trees_held       = d->rm.trees_held;
+	out->rm_held_sent        = d->rm.held_sent;
+	out->rm_held_unsent      = d->rm.held_unsent;
+	out->rm_held_unreported  = vms_lock_dlm_adopt_unreported();
+	out->rm_notifications    = d->rm.notifications;
+}
+
 int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)
 {
 	struct vms_dlm_scs *d;
@@ -2681,6 +2981,7 @@ int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)
 	vms_cluster_fork_enter(cl);
 	dlm_arm_project_state(cl, d, out);
 	dlm_arm_project_emits(d, out);
+	dlm_arm_project_remaster(d, out);
 	/* The SECOND, independent reading of the same traffic, taken one layer
 	 * down in the connection manager (vms_cnxman.h). Not derived from the
 	 * arm's counters above: a disagreement between the two is information a

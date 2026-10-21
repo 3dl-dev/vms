@@ -627,6 +627,23 @@ struct vms_lock_resource {
                                          * waiting only, so it can never grant a
                                          * lock the cluster masters elsewhere. */
     uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
+    /*
+     * THE VALUE BLOCK'S SEQUENCE (rd vms-ed5). A real V7.3 node carries one
+     * beside every resource value block and puts it on the wire: a lock-tree
+     * remaster's op-0x12 record carries the holder's block at body[88:104] and
+     * this number at body[104:108], and the new master's 82/01 answer returns
+     * both -- 420 of 420 real pairs (vms_cluster_codec_dlm.h rule 2). Without
+     * it an adopted resource could only answer a sequence of 0 where the
+     * holder said 0x15a, which tells the holder its block was reset.
+     *
+     * TODAY ONLY AN ADOPTION SETS IT (vms_lock.c dlm_adopt_link_lkb), read
+     * off the record that handed the resource over. That a value-block WRITE
+     * must also advance it is real VMS behaviour this executive does not have
+     * yet; it is rd vms-85c1, and until then this field is only ever what a
+     * remaster was told, never a number this node invented. Mirror in
+     * src/kernel-netbsd/vms_internal.h.
+     */
+    uint32_t            valblk_seq;
     spinlock_t          lock;
     int                 refcount;
     struct vms_lock_resource *parent;

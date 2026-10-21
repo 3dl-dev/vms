@@ -85,6 +85,19 @@ int cluster_sysgen_sw_version(const struct vms_cluster *cl,
 int cluster_sysgen_credits(const struct vms_cluster *cl, uint8_t *out);
 
 /*
+ * cluster_sysgen_rm_residue_fill - OVMX_RM_RESIDUE_FILL (rd vms-ed5): the byte
+ * this node writes across the RESIDUE span of the op-0x14 that announces a
+ * lock tree it has adopted. struct vms_cluster_params carries the whole
+ * rationale and names the arm it exists for (rd vms-6ad1, RA7).
+ *
+ * 0 -- the shipping value, the default, and what an executive that never
+ * loaded its parameters answers -- is the vms-42de ruling's zeros. There is no
+ * other default and nothing here chooses a pattern: an unconfigured node emits
+ * the ruling's frame.
+ */
+uint8_t cluster_sysgen_rm_residue_fill(const struct vms_cluster *cl);
+
+/*
  * cluster_sysgen_clean_depart - OVMX_CLEAN_DEPART (rd vms-abd): may this node
  * ANNOUNCE its departure at the SCS layer when it leaves the cluster?
  *

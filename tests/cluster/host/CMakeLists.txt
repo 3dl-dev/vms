@@ -725,6 +725,7 @@ target_compile_definitions(test_scs_glue_conn PRIVATE
 # which is what makes the R1 rung a sub-second host loop.
 add_library(cluster_host_dlm STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_scs_fsm.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_rm_fsm.c   # rd vms-ed5: the remaster table
 )
 target_include_directories(cluster_host_dlm PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_dlm PUBLIC OVMX_CLUSTER_HOST)
@@ -749,6 +750,32 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME cluster_host_test_dlm_requester COMMAND test_dlm_requester)
 set_tests_properties(cluster_host_test_dlm_requester PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 30
+)
+
+# ---- rd vms-ed5: the NEW MASTER's remaster table (vms_dlm_rm_fsm.c) ----
+# Every inbound frame is a clean-room specimen of ONE real remaster episode
+# (rm5-remaster.pcap's RMT5), replayed into the table in capture order against
+# a FAKE adoption engine whose minted handle is MUTATED between frames -- so a
+# table that cached one, echoed the holder's, or derived one from a counter goes
+# red. It also pins rules W1/W2 (who gets an op-0x14, and when) as behaviour;
+# tools/cluster/remaster_census.py --selftest pins them on the corpus.
+add_executable(test_dlm_remaster_arm test_dlm_remaster_arm.c)
+target_link_libraries(test_dlm_remaster_arm PRIVATE
+    cluster_host_dlm
+    cluster_host_fixture
+)
+target_include_directories(test_dlm_remaster_arm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(test_dlm_remaster_arm PRIVATE
+    OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+    OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_remaster_arm PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_remaster_arm COMMAND test_dlm_remaster_arm)
+set_tests_properties(cluster_host_test_dlm_remaster_arm PROPERTIES
     LABELS "unit;cluster;cluster_host;lock;dlm"
     TIMEOUT 30
 )
@@ -791,6 +818,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_mscp_cl_io_fsm.c    # FC-P7.1
     hdr_alone_vms_mscp_cl_conn_fsm.c  # FC-P7.1 (E64 connect admission)
     hdr_alone_vms_dlm_scs_fsm.c       # FC-P4.6
+    hdr_alone_vms_dlm_rm_fsm.c        # rd vms-ed5
     hdr_alone_vms_cluster_emit_guard.c # E82
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})

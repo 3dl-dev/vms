@@ -142,3 +142,74 @@ them into this capture would confound the one thing this arm measures.
 
 and the census tool grows a `--selftest` figure for whatever the arm shows, so
 the reading cannot drift away from the captures it came from.
+
+---
+
+## AMENDMENT 1 (2026-10-21, committed BEFORE the first capture of this arm)
+
+**What changed, and why.** This arm's driver was to be `RMDEQ.MAR` in this
+directory, which has to be typed onto a lab VAX line by line through the
+console (the lab image carries no ODS-2 writer, so the console is the only way
+in). Before doing that, the lab volume was read: the pod carries
+**`DLMENQ.EXE`, already assembled**, from the rd vms-c03 opcode arms
+(`../vms-c03-dlm-opcodes-20260911/dlm-drivers/DLMENQ.MAR`, committed), and its
+second argument digit selects exactly what this arm needs:
+
+```
+ CMPB CMDBUF+1,#^A/2/
+ BEQL 20$
+ $DEQ_S LKID=LKSB+4      ; <-- any digit but '1'/'2': acquire, then RELEASE
+ BRB 30$
+20$: $HIBER_S            ; '2': acquire and HOLD
+```
+
+So `DLMENQ "<mode>0<name>"` is one `$ENQW` at `<mode>` followed by one `$DEQ`
+of that lock, and `DLMENQ "02<name>"` is a holder that stays. That is the
+baseline and the mode series, driven by a COMMITTED driver that has already
+produced oracle captures, with no new source on the volume.
+
+**The arms this amendment drives, unchanged in their one variable:**
+
+| arm | VAX2 (master) | VAX1 (driver) | the one variable |
+|---|---|---|---|
+| **B** | `DLMENQ "02DQB"` holds NL | `DLMENQ "10DQB"` | the baseline: CR |
+| **R0** | `DLMENQ "02DQR0"` | `DLMENQ "00DQR0"` | held mode **NL** |
+| **R2** | `DLMENQ "02DQR2"` | `DLMENQ "20DQR2"` | held mode **CW** |
+| **R3** | `DLMENQ "02DQR3"` | `DLMENQ "30DQR3"` | held mode **PR** |
+| **R4** | `DLMENQ "02DQR4"` | `DLMENQ "40DQR4"` | held mode **PW** |
+| **R5** | `DLMENQ "02DQR5"` | `DLMENQ "50DQR5"` | held mode **EX** |
+| **L** | `DLMENQ "02DQL"` + `DLMENQ "12DQL"` (a CR holder that STAYS) | `DLMENQ "10DQL"` | a second holder at a NON-NULL mode |
+| **B2** | roles swapped: VAX1 holds NL, **VAX2 drives** | `DLMENQ "10DQB2"` on VAX2 | the MASTER and the SENDER, nothing else |
+| **R5B** | roles swapped | `DLMENQ "50DQR5B"` on VAX2 | the master, at the top mode |
+
+**Two arms are NOT driven by this amendment and are deferred, named:** arm
+**V** (`LCK$M_VALBLK` on the `$DEQ`) and arm **S** (sub-locks under the root).
+`DLMENQ` can express neither -- `DLMLVB3.EXE` on the same volume flushes a
+block on a CONVERT, which is a different operation -- so they still need
+`RMDEQ.MAR` typed in. They are a SECOND pass, and this file will carry a second
+amendment and their own captures when it happens.
+
+**Two mechanical differences from the original registration, stated so the
+reading cannot be fitted later:**
+
+1. **No ten-second quiet gap.** `DLMENQ` releases immediately after it
+   acquires. The gap was for readability only; the request and the release are
+   different opcodes (`02/01` and `02/03`) and every arm uses its own resource
+   name, so each release is still attributable to one arm without pairing logic.
+2. **One capture for the whole mode series** (`dq-modes.pcap`), with the arms
+   separated by their resource names, plus one per swapped arm. The original
+   registration asked for a file per arm; the name separation is what makes
+   that unnecessary, and a single capture removes the risk of a release landing
+   between two files.
+
+**The predictions P1-P6 are NOT re-cut.** P1 (body[30] takes at most two
+values, drawn from {0,1}, over the held-mode series), P2 (something in the
+matrix selects it), P3 (body[32] follows body[30]), P5 (the role does not
+change the answer) and P6 (nothing crashes) are scored exactly as written. P4
+(a sub-lock's release) belongs to the deferred arm S and is scored there.
+
+**And one figure this amendment can already state, because it was re-measured
+between the registration and the fire:** rd vms-e80 widened the census walker
+to the 32 `.pcap.gz` captures, so the envelope P1 is tested against is now
+**40,960 real releases, 4.2x the 9,858 the plan quotes -- still only {0, 1} at
+body[30], and still `body[32] == body[30]` on all 40,960.**

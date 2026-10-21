@@ -1264,6 +1264,23 @@ set_tests_properties(cluster_host_dlm_deq_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-b67a: how a REAL node asks for a SUB-LOCK. The item is that OVMX
+# looks a sub-resource up in the lock DIRECTORY under its own hash and then
+# masters it locally -- a grant no master gave, and one name mastered twice.
+# This census is the measured rule the fix is built from: all 7 real sub-lock
+# requests in the corpus, from two senders at two modes, are addressed to the
+# PARENT'S MASTER and carry the pair (own parent lkid, parent's master lkid) at
+# body[36:44]. The selftest pins it because the item quotes it.
+add_test(NAME cluster_host_dlm_sublock_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_sublock_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_sublock_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
 # ---- rd vms-c55: what a node puts on the lock connection DURING a transition
 # The transition hold in vms_dlm_scs_fsm.c is justified by a census, not by a
 # reading of the book: over every committed pcap, no real VMS node put a

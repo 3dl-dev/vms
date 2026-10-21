@@ -71,7 +71,7 @@
 
 #define VMS_FIXTURE_MAX_WIRE   2048u
 #define VMS_FIXTURE_MAX_SPANS    64u
-#define VMS_FIXTURE_MAX_FILES   128u
+#define VMS_FIXTURE_MAX_FILES   192u
 #define VMS_FIXTURE_ERRLEN      256u
 
 enum vms_fixture_origin {

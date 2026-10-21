@@ -22,6 +22,7 @@
 #include "dcl/vms_messages.h"
 #include "dcl/dcl_rms.h"   /* vms-5f0: OPEN/READ/WRITE/CLOSE ride RMS (ACP), not fopen */
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "rmsdef.h"
 #include "vms/logical.h"
 #include "vmsfs/filespec.h"
@@ -980,7 +981,7 @@ static int write_impl(struct dcl_command *cmd)
             dcl_error("DCL", 0, "UNDSYM",
                       "undefined symbol - check validity and spelling\n \\%s\\",
                       symname ? symname : "");
-            return (int)MSG_DCL_UNDSYM;
+            return (int)CLI$_UNDSYM;
         }
         snprintf(text, sizeof(text), "%s", sv);
     } else if (arglist) {

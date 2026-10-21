@@ -1117,10 +1117,13 @@ static int cmd_set_password(struct dcl_command *cmd)
 
     /* SET PASSWORD takes no parameters. cmd->params[0] is "PASSWORD" (the
      * subcommand keyword) itself; anything past it is an extra parameter
-     * real DCL rejects (MSG_DCL_MAXPARM, dcl_messages.c). */
+     * real DCL rejects with CLI$_MAXPARM (OpenVMS Alpha V8.4 $GETMSG:
+     * "%CLI-W-MAXPARM, too many parameters - reenter command with fewer
+     * parameters", docs/oracle/messages/alpha84-msgcat2.txt). */
     if (cmd->param_count > 1) {
-        dcl_error("DCL", 2, "MAXPARM", "too many parameters");
-        return SS$_BADPARAM;
+        dcl_error("DCL", 0, "MAXPARM",
+                  "too many parameters - reenter command with fewer parameters");
+        return CLI$_MAXPARM;
     }
 
     if (dcl_has_qualifier(cmd, "SECONDARY")) {
@@ -2365,8 +2368,9 @@ static int cmd_set_volume(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
     if (cmd->param_count > 2) {
-        dcl_error("DCL", 2, "MAXPARM", "too many parameters");
-        return SS$_BADPARAM;
+        dcl_error("DCL", 0, "MAXPARM",
+                  "too many parameters - reenter command with fewer parameters");
+        return CLI$_MAXPARM;
     }
 
     const char *device = cmd->params[1];

@@ -497,6 +497,27 @@ int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
                                  uint8_t handle[4]);
 
 /*
+ * dnet_cterm_start_read_echo - THE TERMINAL'S ECHO FOR ONE HOST START READ
+ * (rd vms-a353). In CTERM the SERVER -- the terminal end, the $ SET HOST
+ * client -- echoes what is typed, as the host's Start Read tells it to; the
+ * host never sends the typed text back. Start Read FLAGS (AA-DY88A-TK 4.16.3)
+ * bit 11 (N) = do not echo this read, bit 12 (T) = echo the terminator. The
+ * wire pins it: the real VAX host's Username: read carries FLAGS 0x00b008 and
+ * its Password: read 0x00b808 -- they differ ONLY in N (docs/oracle/
+ * vax-sethost-cterm.pcap; OVMX's host sends 0x009008 / 0x009808).
+ *
+ * `buf` is the inbound BOUND-phase 09-envelope (as dnet_cterm_found_terminal_rx
+ * takes it). On a Start Read, *echo = 1 when typed characters are echoed (N
+ * clear) and *term_echo = 1 when the terminator is echoed (T set and N clear:
+ * a no-echo read echoes nothing). Returns DNET_CTERM_OK; DNET_CTERM_EINVAL
+ * when `buf` is not a Start Read; DNET_CTERM_ETRUNC when it is too short to
+ * carry its FLAGS. A refusal leaves *echo = *term_echo = 0: an unreadable
+ * read never echoes (a password must not leak because a frame was short).
+ */
+int dnet_cterm_start_read_echo(const uint8_t *buf, size_t len,
+                               int *echo, int *term_echo);
+
+/*
  * ---- Terminal-input queue (rd vms-6165: CTERM input is PROMPT-DRIVEN) -----
  *
  * The oracle (real-cterm-ci.pcap, link 8194) shows every host 02-08 message

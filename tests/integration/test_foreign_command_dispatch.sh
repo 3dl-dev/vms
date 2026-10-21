@@ -147,7 +147,7 @@ check "the image actually completed (not just launched)" \
       "a fork that never waits, or a truncated pipe"
 
 check "successful foreign command sets \$STATUS to a VMS success code" \
-      'STATUS = "%X0*1"' \
+      'STATUS == "%X0*1"' \
       "activation status not threaded back into \$STATUS/\$SEVERITY the way \
        a builtin verb's is"
 # $STATUS is displayed in the VMS "%Xhhhhhhhh" representation (vms-3983 —

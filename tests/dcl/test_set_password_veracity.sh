@@ -2,12 +2,12 @@
 # TEST: vms-e9e INV-DCL veracity gate - SET PASSWORD no longer fakes success
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \BOGUS\
-# EXPECT: contains:$STATUS = "%X00038240"
+# EXPECT: contains:$STATUS == "%X00038240"
 # EXPECT: contains:%DCL-W-NOTIMPL, secondary passwords are not implemented in OVMX - no state changed
 # EXPECT: contains:%DCL-W-NOTIMPL, /GENERATE password generation is not implemented in OVMX - no state changed
-# EXPECT: contains:$STATUS = "%X00000E4A"
+# EXPECT: contains:$STATUS == "%X00000E4A"
 # EXPECT: contains:%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters
-# EXPECT: contains:$STATUS = "%X00038098"
+# EXPECT: contains:$STATUS == "%X00038098"
 # EXPECT: contains:%UAF-E-NOSUCHUSER, no such user
 # EXPECT_NOT: contains:not fully implemented
 # EXPECT_NOT: contains:%SET-I-PASSWORD

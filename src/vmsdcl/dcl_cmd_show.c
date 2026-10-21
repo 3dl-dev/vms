@@ -1872,7 +1872,12 @@ static int cmd_show_symbol(struct dcl_command *cmd)
             return SS$_NORMAL;
         }
 
-        const char *value = dcl_sym_get(name);
+        int scope = DCL_SYM_LOCAL;
+        const char *value = dcl_sym_get_which(name, &scope);
+        /* VMS shows a global symbol with "==" and a local one with "="
+         * ($STATUS == "%X10000001" on VAX1, tests/lab/captures/
+         * set-protection-20261021/) -- the same notation that defined it. */
+        const char *eq = (scope == DCL_SYM_GLOBAL) ? "==" : "=";
         if (value) {
             /* Uppercase symbol name for display */
             char upper_name[256];
@@ -1946,10 +1951,10 @@ static int cmd_show_symbol(struct dcl_command *cmd)
                  * yields -2147483648), so all three columns now agree.
                  */
                 unsigned long lw = (unsigned long)v & 0xFFFFFFFFUL;
-                printf("  %s = %ld   Hex = %08lX  Octal = %011lo\n",
-                       upper_name, v, lw, lw);
+                printf("  %s %s %ld   Hex = %08lX  Octal = %011lo\n",
+                       upper_name, eq, v, lw, lw);
             } else {
-                printf("  %s = \"%s\"\n", upper_name, value);
+                printf("  %s %s \"%s\"\n", upper_name, eq, value);
             }
         } else {
             /* an undefined symbol, named exactly: %DCL-W-UNDSYM, CLI status

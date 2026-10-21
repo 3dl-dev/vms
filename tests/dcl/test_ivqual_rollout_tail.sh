@@ -36,8 +36,8 @@
 # EXPECT: contains: \ZQSYSGEN\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \ZQSYSMAN\
-# EXPECT: contains:$STATUS = "%X00038240"
-# EXPECT_NOT: contains:$STATUS = "%X00000001"
+# EXPECT: contains:$STATUS == "%X00038240"
+# EXPECT_NOT: contains:$STATUS == "%X00000001"
 #
 # --- Real qualifiers on the SAME verbs still pass (not a blanket reject) ---
 # The positive-control lines use each populated verb's real DCL Dictionary

@@ -46,7 +46,13 @@
 // the real VAX offering Username: (rd vms-db1: a real VAX can be a member and
 // still hang in its startup, a dead console to a visitor). The matrix includes
 // runs that boot Node C only after an OVMX node is up, since visitors choose
-// the order and that is the order that hung.
+// the order and that is the order that hung. THEN, once every node is usable,
+// what a VMS user does next must work (rd vms-5843/vms-6512): SHOW SYSTEM on
+// each OVMX node lists JOB_CONTROL and NETACP and every other system process
+// the real VAX runs is either shown or named in the gap ledger
+// (gate-eval.mjs SHOW_SYSTEM_GAPS, each with its rd item) -- a ledgered name
+// that appears fails too -- and SET HOST OVMXA->OVMXB and OVMXB->OVMXA each
+// log in to the remote node, print ITS name, and LOGOUT back to %REM-S-END.
 //
 // Usage:
 //   node visitor-gate.mjs                      # the full matrix
@@ -69,7 +75,7 @@ import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintSta
          silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy,
          observeLogin, loginAction, allReady, USERNAME, AFTER_WAIT_MS, parseLoginHint,
          productVersionOf, versionWhy, driveLoginStep, LOGIN_NODES, driveClusterView,
-         clusterViewWhy, chatterWhy } from './gate-eval.mjs';
+         clusterViewWhy, chatterWhy, driveSessionChecks, sessionWhy } from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
@@ -196,6 +202,13 @@ async function typeTo(page, who, text) {
   if (body) await page.keyboard.type(body, { delay: 40 }).catch(() => {});
   if (text.endsWith('\r')) await page.keyboard.press('Enter').catch(() => {});
   return true;
+}
+
+// The transport the session checks use (rd vms-5843/vms-6512): the same typing
+// and reading the login steps use.
+function sessionIo(page, R) {
+  return { type: (w, t) => typeTo(page, w, t), read: (w) => consoleOf(page, w, R),
+           sleep, log, user: userFor, pass: passFor };
 }
 
 // One login step per node per poll (rd vms-db1). Nothing before CN=3.
@@ -397,6 +410,9 @@ async function oneRun(spec, idx) {
         const view = await driveClusterView(R, w, io);
         log(`  ${w}: SHOW CLUSTER members ${JSON.stringify(view)}`);
       }
+      // rd vms-5843/vms-6512: the next things a VMS user does -- SHOW SYSTEM
+      // on each OVMX node, then SET HOST each way between them.
+      await driveSessionChecks(R, sessionIo(page, R));
     }
 
     const elEnd = Math.round((Date.now() - t0) / 1000);
@@ -459,7 +475,8 @@ await (async () => {
                    nodeA_worker: r.nodeA_worker, nodeA_why: nodeAStallWhy(r),
                    username_at: r.username_at, dcl_at: r.dcl_at, login_failed: r.login_failed,
                    after_waited: r.after_waited,
-                   want_version: r.want_version, ovmx_versions: r.ovmx_versions, version_why: versionWhy(r) });
+                   want_version: r.want_version, ovmx_versions: r.ovmx_versions, version_why: versionWhy(r),
+                   show_system: r.show_system, sethost: r.sethost, session_why: sessionWhy(r) });
     fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 1));
   }
   const bad = results.filter((r) => !r.pass);

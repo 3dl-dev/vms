@@ -77,40 +77,40 @@
     "count": 490,
     "by_status": {
       "verified": 24,
-      "implemented": 310,
-      "partial": 68,
+      "implemented": 313,
+      "partial": 67,
       "stub": 9,
       "designed": 1,
-      "absent": 78
+      "absent": 76
     },
     "by_authenticity": {
-      "real": 360,
-      "n/a": 80,
+      "real": 362,
+      "n/a": 78,
       "advisory": 50
     },
-    "met": 334,
-    "in_progress": 68,
-    "not_started": 88,
+    "met": 337,
+    "in_progress": 67,
+    "not_started": 86,
     "facade_risk": 0
   },
   "overall_in_scope": {
     "count": 444,
     "by_status": {
       "verified": 24,
-      "implemented": 310,
-      "partial": 64,
+      "implemented": 313,
+      "partial": 63,
       "stub": 7,
       "designed": 1,
-      "absent": 38
+      "absent": 36
     },
     "by_authenticity": {
-      "real": 358,
-      "n/a": 40,
+      "real": 360,
+      "n/a": 38,
       "advisory": 46
     },
-    "met": 334,
-    "in_progress": 64,
-    "not_started": 46,
+    "met": 337,
+    "in_progress": 63,
+    "not_started": 44,
     "facade_risk": 0
   },
   "facilities": [
@@ -1626,20 +1626,20 @@
         "count": 12,
         "by_status": {
           "verified": 0,
-          "implemented": 8,
-          "partial": 1,
+          "implemented": 11,
+          "partial": 0,
           "stub": 0,
           "designed": 0,
-          "absent": 3
+          "absent": 1
         },
         "by_authenticity": {
           "advisory": 4,
-          "real": 5,
-          "n/a": 3
+          "real": 7,
+          "n/a": 1
         },
-        "met": 8,
-        "in_progress": 1,
-        "not_started": 3,
+        "met": 11,
+        "in_progress": 0,
+        "not_started": 1,
         "facade_risk": 0
       }
     },
@@ -7790,12 +7790,12 @@
       "id": "tt$line-editing",
       "kind": "feature",
       "vms": "Terminal line editing: DELETE, ^U, ^R, ^X, cursor keys, ^A ^B ^D ^E ^F ^H ^J, insert/overstrike",
-      "status": "partial",
+      "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vms_tt.c",
-      "verified_against": null,
-      "notes": "rd vms-eda8. DELETE / ^U / ^R / ^X are the driver's (scope form; the hardcopy \\X\\ form under HARDCOPY). A cursor-key escape sequence is consumed as one key with no effect (it neither ends the read nor lands in the line). ^A ^D ^E ^F ^H ^J and insert/overstrike editing are not implemented yet.",
+      "verified_against": "docs/oracle/keystroke/ LE.CURSOR (^H ^E ^D ^F, left/right arrows, insert default), LE.OVERSTRIKE (^A), LE.CTRLJ, LE.CTRLW, LE.CTRLU, LE.CTRLR, LE.CTRLX, LE.DEL: every step byte-matches the VAX V7.3 console in the CI keystroke gate (tests/qemu/test_keystroke_oracle.sh; ci-release-e2e run 39562817462, 2026-10-21: 0 LE.* steps in known-diff.d)",
+      "notes": "rd vms-eda8 (#1604). The class driver edits the line in the executive: ^H/^E start/end of line, ^D/^F and the arrow keys move, ^A toggles insert/overstrike for the rest of the read (insert is the default), ^J deletes the word to the left, DELETE/^U/^R/^X as before (scope form; the hardcopy \\X\\ form under HARDCOPY). Re-census 2026-10-21: the row said ^A ^D ^E ^F ^H ^J were not implemented; they are, and gated.",
       "plan_ref": "vms-801"
     },
     {
@@ -7835,12 +7835,12 @@
       "id": "tt$broadcast-redisplay",
       "kind": "feature",
       "vms": "A broadcast ($BRKTHRU / REPLY) mid-read is written on its own lines and the prompt + partial line redisplayed",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
-      "verified_against": null,
-      "notes": "rd vms-53a",
+      "evidence": "src/kernel-core/vms_tt.c",
+      "verified_against": "docs/oracle/keystroke/ BC.READ (S, W, R) byte-matches the VAX V7.3 console in the CI keystroke gate (tests/qemu/test_keystroke_oracle.sh; ci-release-e2e run 39562817462, 2026-10-21)",
+      "notes": "rd vms-53a (#1604). Re-census 2026-10-21: landed in the terminal class driver; the row still said absent.",
       "plan_ref": "vms-801"
     },
     {
@@ -7850,12 +7850,12 @@
       "id": "tt$command-recall",
       "kind": "feature",
       "vms": "DCL command recall through the terminal read (up-arrow / ^B / down-arrow)",
-      "status": "absent",
-      "authenticity": "n/a",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "",
-      "verified_against": null,
-      "notes": "rd vms-eb3d",
+      "evidence": "src/kernel-core/vms_tt.c",
+      "verified_against": "docs/oracle/keystroke/ RC.RECALL (up-arrow, ^B, down-arrow) and RC.ALL (RECALL/ALL, RECALL n, RECALL/ERASE): every step byte-matches the VAX V7.3 console in the CI keystroke gate (tests/qemu/test_keystroke_oracle.sh; ci-release-e2e run 39562817462, 2026-10-21)",
+      "notes": "rd vms-eb3d (#1604). Re-census 2026-10-21: landed; the row still said absent.",
       "plan_ref": "vms-801"
     },
     {

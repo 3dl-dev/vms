@@ -408,13 +408,8 @@ extern "C" {
 #define SS$_NOWRITER        9420    /* No writer on mailbox */
 #define SS$_NOMSG           2184    /* No message */
 
-/* ================================================================
- * CLI-related status codes
- * ================================================================ */
-
-#define SS$_IVVERB          2284    /* Invalid verb */
-#define SS$_IVQUAL          2288    /* Invalid qualifier */
-#define SS$_IVKEYW          2292    /* Invalid keyword */
+/* (No SS$_IVVERB/IVQUAL/IVKEYW: those are CLI$_ conditions, climsgdef.h.
+ * 2288 is SS$_NONLOCAL in the V7.3/V8.4 $SSDEF.) */
 
 /* ================================================================
  * Miscellaneous status codes

@@ -71,12 +71,6 @@
 #include <strings.h>
 #include "vms_kif.h"        /* pulls in struct vms_devinfo, VMS_DEVNAM_SIZE */
 
-/*
- * VMS standard block size. Device-independent (a VMS logical block is 512
- * bytes on every device class), so it is a constant, not per-device state
- * fabricated for a device the executive does not describe.
- */
-#define VMS_BLOCK_SIZE  512
 
 /*
  * DVI$_DEVCHAR bits (DEV$M_) that OVMX can derive from the executive's
@@ -204,17 +198,11 @@ static void fill_dvi_item(const struct item_list_3 *item,
         if (item->retlen) *item->retlen = sizeof(uint32_t);
         break;
 
-    case DVI$_AVAILABLE:
+    case DVI$_AVL:
         /* A device the executive lists is available; it models no offline
          * state yet, so "present" is the honest answer to "available". */
         if (item->bufaddr && item->buflen >= sizeof(uint32_t))
             *(uint32_t *)item->bufaddr = 1;
-        if (item->retlen) *item->retlen = sizeof(uint32_t);
-        break;
-
-    case DVI$_BLOCKSIZE:
-        if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-            *(uint32_t *)item->bufaddr = VMS_BLOCK_SIZE;
         if (item->retlen) *item->retlen = sizeof(uint32_t);
         break;
 

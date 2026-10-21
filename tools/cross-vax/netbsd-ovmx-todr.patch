@@ -1,0 +1,78 @@
+--- a/sys/arch/vax/vax/clock.c
++++ b/sys/arch/vax/vax/clock.c
+@@ -216,6 +216,7 @@
+ generic_gettime(struct timeval *tvp)
+ {
+ 	unsigned klocka = mfpr(PR_TODR);
++	time_t base = tvp->tv_sec;
+ 
+ 	/*
+ 	 * Sanity check.
+@@ -228,7 +229,20 @@
+ 		return EINVAL;
+ 	}
+ 
+-	tvp->tv_sec = yeartonum(numtoyear(tvp->tv_sec)) + (klocka - TODRBASE) / 100;
++	tvp->tv_sec = yeartonum(numtoyear(base)) + (klocka - TODRBASE) / 100;
++
++	/*
++	 * OpenVMX (rd vms-b06): the TODR counts from 1 January of the year
++	 * the base (the root filesystem's last write) falls in.  A reading
++	 * more than two days earlier in that year than the base itself means
++	 * the year has turned since the base was written: an emulated KA655
++	 * (SIMH, pcjs) loads its TODR with the host's time of year at power
++	 * on.  Count it in the following year.  Real hardware, whose TODR
++	 * keeps counting past 31 December, never reads below its base.
++	 */
++	if (tvp->tv_sec + 2 * SECS_PER_DAY < base)
++		tvp->tv_sec = yeartonum(numtoyear(base) + 1) +
++		    (klocka - TODRBASE) / 100;
+ 	return 0;
+ }
+ 
+--- a/sys/kern/kern_todr.c
++++ b/sys/kern/kern_todr.c
+@@ -80,6 +80,7 @@
+ #include <sys/intr.h>
+ #include <sys/rndsource.h>
+ #include <sys/mutex.h>
++#include <sys/sysctl.h>
+ 
+ #include <dev/clock_subr.h>	/* hmm.. this should probably move to sys */
+ 
+@@ -167,6 +168,27 @@
+ static bool timeset = false;
+ 
+ /*
++ * OpenVMX (rd vms-b06): whether the boot took its time from the TOD clock
++ * (1) or fell back to the filesystem's or the built-in default time (0).
++ * On a VAX the TODR holds no year: the year comes from the root filesystem,
++ * and a result before PREPOSTEROUS_YEARS or behind the filesystem is
++ * rejected here.  The fallback used to be silent to everything but the
++ * message buffer; OpenVMX's PID 1 reads this and asks the operator for the
++ * date, as VMS does when it has no valid time.
++ */
++static int todr_ovmx_toy_valid;
++
++SYSCTL_SETUP(sysctl_kern_ovmx_toy_setup, "sysctl kern.ovmx_toy_valid setup")
++{
++
++	sysctl_createv(clog, 0, NULL, NULL,
++	    CTLFLAG_PERMANENT, CTLTYPE_INT, "ovmx_toy_valid",
++	    SYSCTL_DESCR("Boot time was taken from a valid TOD clock"),
++	    NULL, 0, &todr_ovmx_toy_valid, 0,
++	    CTL_KERN, CTL_CREATE, CTL_EOL);
++}
++
++/*
+  * todr_set_systime:
+  *	Set up the system's time.  The "base" argument is a best-guess
+  *	close-enough value to use if the TOD clock is unavailable or
+@@ -265,6 +287,7 @@
+ 	}
+ 
+ 	timeset = true;
++	todr_ovmx_toy_valid = goodtime;
+ 
+ 	ts.tv_sec = tv.tv_sec;
+ 	ts.tv_nsec = tv.tv_usec * 1000;

@@ -187,9 +187,9 @@ def selftest():
 
     c = cmd_census(paths)
     print('-- a fresh op-0x01 request names the PROCESS, later ops the HANDLE')
-    check('op-0x01 pid-shaped', c[(0x01, 'pid-shaped')], 20365)
+    check('op-0x01 pid-shaped', c[(0x01, 'pid-shaped')], 20368)
     check('op-0x01 zero', c[(0x01, 'zero')], 15)
-    check('op-0x03 lock-id', c[(0x03, 'lock-id')], 9785)
+    check('op-0x03 lock-id', c[(0x03, 'lock-id')], 9786)
     check('op-0x03 zero', c[(0x03, 'zero')], 0)
 
     print('-- and the cell is per-PROCESS: one value, many resources')
@@ -202,7 +202,7 @@ def selftest():
     check('0xfe answers with a ZERO echoed cell', fe_zero, 12)
     check('0xfe answers with a NONZERO echoed cell', fe_nonzero, 0)
     check('answers to a NONZERO cell, all outcomes',
-          sum(n for (k, _s), n in a.items() if k == 'nonzero'), 19370)
+          sum(n for (k, _s), n in a.items() if k == 'nonzero'), 19377)
     check('answers to a ZERO cell, all outcomes',
           sum(n for (k, _s), n in a.items() if k == 'zero'), 44)
     return 0 if ok else 1

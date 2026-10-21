@@ -1,0 +1,78 @@
+$ NCP SHOW KNOWN NODES
+
+
+Known Node Volatile Summary as of 21-OCT-2026 16:23:08
+
+Executor node = 1.1 (OVMXA)
+
+State                    = on
+Identification           = OVMX DECnet-compatible V0.7-13
+
+
+    Node           State      Active  Delay   Circuit     Next node
+                              Links
+
+ 1.2 (OVMXB)                                  ETH-0          0
+ 1.965 (VAXC)                                 ETH-0          0
+$ SET HOST VAXCSET HOST VAXC
+21-Oct-2026 16:23:16 DECNETD-I-LINKCI, process 10000005: Connect Initiate to 1.965 object 42
+21-Oct-2026 16:23:16 DECNETD-I-LINKOUT, outbound link to 1.965 object 42 is RUN for process 10000005
+
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: SYSTEMSYSTEM
+
+Password: OVMXCLUSTER121-Oct-2026 16:23:18 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
+OVMXCLUSTER1
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC
+    Last interactive login on Wednesday, 21-OCT-2026 16:19
+WARNING - Your password expires on Friday, 23-OCT-2026 18:44
+$ WRITE SYS$OUTPUT "WHO=",F$GETSYI("NODENAME")21-Oct-2026 16:23:21 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+WRITE SYS$OUTPUT "WHO=",F$GETSYI("NODENAME")
+
+WHO=VAXCSHOW TERMINAL
+$ LOGOUTSHOW TERMINAL
+
+Terminal: _RTA1:      Device_Type: LA36          Owner: _RTA1:
+                                              Username: SYSTEM
+Remote Port Info: OVMXA::SYSTEM
+
+   Input:     300     LFfill:  0      Width: 132      Parity: None
+   Output:    300     CRfill:  0      Page:   24      
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          No Tab
+   Wrap               Hardcopy           No Remote          No Eightbit
+   Broadcast          No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        Line Editing       Insert editing     No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     No ANSI_CRT        No Regis           No Block_mode
+   No Advanced_video  No Edit_mode       No DEC_CRT         No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input
+$ LOGOUT
+
+  SYSTEM       logged outNCP :== $SYS$SYSTEM:NCP.EXE at 21-OCT-2026 16:23:26.09%REM-S-END, control returned to node OVMXA::
+21-Oct-2026 16:23:26 DECNETD-I-LINKEND, outbound link to 1.965 (object 42) for process 10000005 ended (its process disconnected)
+$ 
+$ 
+21-Oct-2026 16:23:31 DECNETD-I-SESSTART, inbound SET HOST accepted on RTA0: -- LOGINOUT is authenticating (Remote Port Info: VAXC::SYSTEM)
+$ 
+21-Oct-2026 16:23:31 DECNETD-I-RTATERM, RTA0: takes the originating terminal: device type 32, width 132, page 24 (status 00000001)
+$ 
+21-Oct-2026 16:23:33 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=4 bytes=60
+$ 
+21-Oct-2026 16:23:36 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+$ 
+21-Oct-2026 16:23:48 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=5 bytes=60
+$ 
+21-Oct-2026 16:23:49 DECNETD-I-SESSEND, inbound SET HOST session  ended (the session process exited)
+$ 
+21-Oct-2026 16:23:51 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+$ NCP SHOW KNOWN NODES

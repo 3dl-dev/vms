@@ -27,6 +27,7 @@
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "dcl/vms_messages.h"
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
@@ -1014,7 +1015,7 @@ static uint32_t run_bad_qualifier(const struct dcl_command *cmd)
                       "unrecognized qualifier - check validity, spelling, "
                       "and placement\n \\%s%s\\",
                       cmd->qualifiers[i].negated ? "NO" : "", given);
-            return SS$_IVQUAL;
+            return CLI$_IVQUAL;
         }
         if (hits > 1 && !exact) {
             dcl_error("DCL", 0, "ABKEYW",

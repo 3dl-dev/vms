@@ -96,6 +96,17 @@ cluster_host_test(fuzz_codec_seed       fuzz_codec_seed.c)
 cluster_host_test(test_codec_hello      test_codec_hello.c)
 cluster_host_test(test_codec_vc         test_codec_vc.c)
 cluster_host_test(test_codec_dlm        test_codec_dlm.c)
+# rd vms-380: lock-tree remastering on the wire (0e/0f/10/11/12/13/14), every
+# positive assertion byte-exact against a real VAX V7.3 frame, plus a held-out
+# topology and one negative control per cell the codec decides.
+cluster_host_test(test_codec_remaster   test_codec_remaster.c)
+# rd vms-380 RA8 / rd vms-6ad1 RA7: score a FRESH remaster capture with the
+# SHIPPING builders, so a held-out proof tests the codec and not a script that
+# re-implements it. Reads `remaster_census.py --pairs` on stdin. Not a ctest --
+# it needs a capture -- but it is built with the suite so it cannot rot.
+add_executable(score_remaster score_remaster.c)
+target_include_directories(score_remaster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(score_remaster PRIVATE cluster_host_codec)
 # rd vms-66fe / vms-c6e: the derived resource-name hash against 1216 values
 # real OpenVMS VAX nodes put on the wire -- derivation split AND the held-out
 # split frozen before the derivation began.
@@ -1122,6 +1133,10 @@ add_test(NAME cluster_frame_conformance_gate
         "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
         dlm_dir_remove dlm_dir_ans_you dlm_dir_ans_redir cm_dlm_op0d_echo
         dlm_enq_req cm_ack
+        # rd vms-380: the remaster shapes. dlm_rm_14 and dlm_rm_14_ra7 are the
+        # two forms rd vms-6ad1 (RA7) fires, and they are required HERE so the
+        # gate refuses to let either ship ungrounded.
+        dlm_rm_ack dlm_rm_ack_nm dlm_rm_lock_ans dlm_rm_14 dlm_rm_14_ra7
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
@@ -1170,6 +1185,22 @@ add_test(NAME cluster_host_dlm_pid_cell_census
 set_tests_properties(cluster_host_dlm_pid_cell_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;crash-safety"
     TIMEOUT 120
+)
+
+# ---- rd vms-380: the LOCK-TREE REMASTERING census. Every figure the codec's
+# "LOCK-TREE REMASTERING ON THE WIRE" block and the dlm_rm_* grounding rows
+# quote -- 262 of 262 answers rewriting only body[8], [9] and [34]; 420 of 420
+# op-0x12 answers carrying the grant record; the 23/26/18 split that classifies
+# the op-0x14's body[20:40] as residue -- re-derived from the committed pcaps,
+# so a number in a comment cannot drift away from the bytes it came from.
+add_test(NAME cluster_host_remaster_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/remaster_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_remaster_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
 )
 
 # ---- rd vms-c55: what a node puts on the lock connection DURING a transition

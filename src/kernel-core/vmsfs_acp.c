@@ -1266,14 +1266,30 @@ static int acp_acl_match(const struct vms_proc *proc, struct vms_acp_volume *vol
  * BYPASS, READALL and SYSPRV are applied there, for every object class alike.
  * Returns SS__NORMAL if granted, SS__NOPRIV if refused -- never a silent allow.
  */
-static uint32_t acp_check_access(struct vms_proc *proc, struct vms_acp_volume *vol,
-                                 const ods2_fh2_t *fh, int want_write)
+static uint32_t acp_check_want(struct vms_proc *proc, struct vms_acp_volume *vol,
+                               const ods2_fh2_t *fh, unsigned want)
 {
     uint32_t owner_uic = ((uint32_t)fh->fh2_fileowner.uic_group << 16) |
                          (uint32_t)fh->fh2_fileowner.uic_member;
-    unsigned want = VMS_PROT_ACC_READ;
     int ace_matched;
     uint32_t ace_access = 0;
+
+    /*
+     * The ACL first (vms-d404, docs/oracle/vax73-acl.md): the first identifier
+     * ACE the process matches. vms_prot_check_acl() then decides with it -- the
+     * privilege overrides, a granting ACE, and otherwise the protection code with
+     * group/world closed by a matching ACE that denied.
+     */
+    ace_matched = acp_acl_match(proc, vol, fh, &ace_access);
+
+    return vms_prot_check_acl(proc->uic, proc->cur_privs, owner_uic,
+                              fh->fh2_fileprot, want, ace_matched, ace_access);
+}
+
+static uint32_t acp_check_access(struct vms_proc *proc, struct vms_acp_volume *vol,
+                                 const ods2_fh2_t *fh, int want_write)
+{
+    unsigned want = VMS_PROT_ACC_READ;
 
     if (want_write)
         want |= VMS_PROT_ACC_WRITE;
@@ -1293,16 +1309,7 @@ static uint32_t acp_check_access(struct vms_proc *proc, struct vms_acp_volume *v
     if (!want_write && (fh->fh2_filechar & ODS2_FH2_M_DIRECTORY))
         want = VMS_PROT_ACC_EXECUTE;    /* execute (traversal) */
 
-    /*
-     * The ACL first (vms-d404, docs/oracle/vax73-acl.md): the first identifier
-     * ACE the process matches. vms_prot_check_acl() then decides with it -- the
-     * privilege overrides, a granting ACE, and otherwise the protection code with
-     * group/world closed by a matching ACE that denied.
-     */
-    ace_matched = acp_acl_match(proc, vol, fh, &ace_access);
-
-    return vms_prot_check_acl(proc->uic, proc->cur_privs, owner_uic,
-                              fh->fh2_fileprot, want, ace_matched, ace_access);
+    return acp_check_want(proc, vol, fh, want);
 }
 
 /*
@@ -4370,11 +4377,26 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 args.fid_nmx = file_fid.fid_nmx;
                 goto free_sc;
             }
-            /* Write access is required to delete or modify a file. */
-            status = acp_check_access(proc, vol, &sc->fh, 1);
+            /*
+             * The file's own right. Removing or renaming a file's name is a
+             * DELETE (D) right, not a write: Write lets a process change a file's
+             * contents but not delete it (OpenVMS Guide to System Security, file
+             * class; DCL DELETE: "Requires delete (D) access to the file and
+             * write (W) access to the parent directory"). Any other modify
+             * (attributes, extend) needs write.
+             */
+            if (args.func == VMS_ACP_FOP_DELETE || (args.modifiers & VMS_ACP_M_MOVE))
+                status = acp_check_want(proc, vol, &sc->fh, VMS_PROT_ACC_DELETE);
+            else
+                status = acp_check_access(proc, vol, &sc->fh, 1);
             if (status != SS__NORMAL) { args.status = status; goto free_sc; }
 
             if (args.func == VMS_ACP_FOP_DELETE) {
+                /* ...and write access to the directory the entry is removed from. */
+                if (have_dir) {
+                    status = acp_check_access(proc, vol, &sc->dfh, 1);   /* parent: W */
+                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                }
                 /* Remove the directory entry for this {name, version}. */
                 if (have_dir) {
                     int removed = 0;

@@ -49,3 +49,13 @@ add_test(NAME boot_stage_footprint
                  ${CMAKE_SOURCE_DIR})
 set_tests_properties(boot_stage_footprint PROPERTIES
     LABELS "unit;ovmx_init;footprint")
+
+# rd vms-b06: the boot date check + the operator's date entry, against the REAL
+# src/ovmx_init/boot_time.h PID 1 compiles (header-only, pure).
+add_executable(test_boot_time test_boot_time.c)
+target_include_directories(test_boot_time PRIVATE ${CMAKE_SOURCE_DIR}/src/ovmx_init)
+add_test(NAME boot_time_unit COMMAND test_boot_time)
+set_tests_properties(boot_time_unit PROPERTIES
+    LABELS "unit;ovmx_init;time"
+    TIMEOUT 10
+)

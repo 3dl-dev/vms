@@ -21,6 +21,7 @@
 
 #include "descrip.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "stsdef.h"
 #include "libclidef.h"
 #include "clitable.h"
@@ -274,10 +275,10 @@ static void test_errors(void)
     st = cli$dcl_parse(&bad, tab, NULL, NULL);
     check(!$VMS_STATUS_SUCCESS(st), "missing required value -> error status");
 
-    /* Unknown qualifier -> SS$_IVQUAL. */
+    /* Unknown qualifier -> CLI$_IVQUAL. */
     struct dsc$descriptor_s unk = sdesc("TEST /BOGUS INPUT.DAT");
     st = cli$dcl_parse(&unk, tab, NULL, NULL);
-    check(st == SS$_IVQUAL, "unknown qualifier -> SS$_IVQUAL");
+    check(st == CLI$_IVQUAL, "unknown qualifier -> CLI$_IVQUAL");
 
     cli$free_cld(tab);
 }

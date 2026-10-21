@@ -933,7 +933,11 @@ static uint32_t broker_open_connect(const struct dnet_engine *node, uint32_t own
         *rarea = dnet_area_of(node->addr);
         *rnode = dnet_node_of(node->addr);
     } else if (sethost_resolve_target(n.node, rarea, rnode) != 0) {
-        st = SS$_NOSUCHDEV;               /* not area.node, not in the node DB */
+        /* Not area.node and not in the node database: VMS's condition for that
+         * is SS$_NOSUCHNODE, "remote node is unknown" (SSDEF 652, oracle-pinned
+         * in ssdef.h). It was SS$_NOSUCHDEV, so a visitor's SET HOST VAXC said
+         * "%SYSTEM-W-NOSUCHDEV, no such device" (rd vms-5843). */
+        st = SS$_NOSUCHNODE;
         goto out;
     }
 
@@ -4726,12 +4730,31 @@ static int run_set_host_net(struct netcli *c, const char *target, const char *lo
     uint32_t st = (n > 0 && (size_t)n < sizeof ncb)
         ? netcli_op(c, DNET_BROKER_OP_OPEN, ncb, (size_t)n, NULL, 0, &xf) : SS$_BADPARAM;
     if (!(st & 1)) {
-        /* VMS SET HOST reports only the reason the link failed. */
+        /* VMS SET HOST reports only the reason the link failed -- the
+         * condition's text from the system message catalog ($GETMSG), so
+         * SS$_NOSUCHNODE reads "%SYSTEM-F-NOSUCHNODE, remote node is unknown"
+         * and not "%SYSTEM-F-0051, message number 652" (rd vms-5843). */
         char why[256] = "";
-        (void)vms_status_string(st, why, sizeof why);
+        uint16_t wlen = 0;
+        struct dsc$descriptor_s wd;
+        wd.dsc$w_length = (uint16_t)(sizeof why - 1);
+        wd.dsc$b_dtype = DSC$K_DTYPE_T;
+        wd.dsc$b_class = DSC$K_CLASS_S;
+        wd.dsc$a_pointer = why;
+        if (sys$getmsg(st, &wlen, &wd, 15, NULL) & 1)
+            why[wlen] = '\0';
+        else
+            why[0] = '\0';
         printf("%s\n", why[0] ? why : "%SYSTEM-F-ABORT, abort");
         fflush(stdout);
         sys$dassgn(x.ch_in); sys$dassgn(x.ch_out);
+        /* The message is said once, here; $STATUS carries the condition with
+         * STS$M_INHIB_MSG, as a VMS command that already reported its failure
+         * leaves it. A bare return 1 made DCL add "%DCL-E-ABORT, image
+         * SYS$SYSTEM:DECNETD.EXE exited with error status %X00000001" under
+         * the real reason -- an image name a SET HOST user never ran (rd
+         * vms-5843). */
+        sys$exit(st | 0x10000000u);
         return 1;
     }
     sethost_on_linkup(&x);
@@ -7020,7 +7043,7 @@ static int run_netacp_broker_selftest(void)
         NA_CHECK(st == SS$_BADPARAM, "a malformed NCB is refused SS$_BADPARAM");
         const char *nosuch = "NOSUCHNODE::\"17=\"";
         st = netcli_op(&nc, DNET_BROKER_OP_OPEN, nosuch, strlen(nosuch), NULL, 0, &x);
-        NA_CHECK(st == SS$_NOSUCHDEV, "an unresolvable node is refused (no address invented)");
+        NA_CHECK(st == SS$_NOSUCHNODE, "an unresolvable node is refused SS$_NOSUCHNODE (no address invented)");
         uint8_t b[16];
         st = netcli_op(&nc, DNET_BROKER_OP_RECV, NULL, 0, b, sizeof b, &x);
         NA_CHECK(st == SS$_FILNOTACC, "READVBLK on a channel with no link is SS$_FILNOTACC");

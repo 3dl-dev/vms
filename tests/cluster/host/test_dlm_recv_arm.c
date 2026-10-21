@@ -316,7 +316,7 @@ static int build_grant_for(uint32_t req_lkid, uint32_t master_lkid,
 	rq.req_lkid = req_lkid;       /* OUR handle, in the requester's slot */
 	rq.master_lkid = 0u;          /* a fresh ENQ knows no master handle  */
 	/* body[20:24]: a real member's REQUESTING PID until the master names a
-	 * handle (rd vms-c55; 20,365 of 21,496 real op-0x01 requests) */
+	 * handle (rd vms-c55; 20,368 of 21,499 real op-0x01 requests) */
 	rq.req_pid = 0x20200204u;
 	rq.name_len = (uint8_t)n;
 	memcpy(rq.name, resnam, n);

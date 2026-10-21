@@ -659,7 +659,7 @@ static void compose_request_body(uint8_t *body, uint32_t req_lkid, uint8_t mode)
 	memcpy(rq.name, "OVMXREQ1", 8);
 	rq.res_ident_valid = 1u;
 	/* a real member's request carries its requesting PID at body[20:24]
-	 * (rd vms-c55 census: 20,365 of 21,496 real op-0x01 requests) */
+	 * (rd vms-c55 census: 20,368 of 21,499 real op-0x01 requests) */
 	rq.req_pid = 0x20200204u;
 	memset(reqframe, 0, sizeof(reqframe));
 	(void)vms_dlm_enq_request_build(&rq, VMS_DLM_WIREOP_ENQ, reqframe,
@@ -1888,7 +1888,7 @@ static void test_observe_learns_the_hash(void)
 	req.name_len = (uint8_t)strlen("F11B$aSYSDSK1");
 	memcpy(req.name, "F11B$aSYSDSK1", req.name_len);
 	/* a real member's request carries its requesting PID at body[20:24]
-	 * (rd vms-c55 census: 20,365 of 21,496 real op-0x01 requests) */
+	 * (rd vms-c55 census: 20,368 of 21,499 real op-0x01 requests) */
 	req.req_pid = 0x20200204u;
 
 	memset(&link, 0, sizeof(link));

@@ -16,6 +16,7 @@
 #include "dcl/cdu.h"
 #include "str_util.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 
 /*
  * Declared locally rather than via "dcl/dcl_cmd.h": that header also declares
@@ -612,7 +613,7 @@ int dcl_validate_qualifiers(const struct dcl_verb *verb,
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
                       "and placement\n \\%s\\", shown);
-            return SS$_IVQUAL;
+            return CLI$_IVQUAL;
         }
 
         /* /NO form on a qualifier that is not negatable -> IVQUAL. */
@@ -620,7 +621,7 @@ int dcl_validate_qualifiers(const struct dcl_verb *verb,
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
                       "and placement\n \\NO%s\\", def->name);
-            return SS$_IVQUAL;
+            return CLI$_IVQUAL;
         }
 
         /* Canonicalise an abbreviated name to the declared full name so
@@ -634,7 +635,7 @@ int dcl_validate_qualifiers(const struct dcl_verb *verb,
                 dcl_error("DCL", 0, "IVKEYW",
                           "unrecognized keyword - check validity and "
                           "spelling - \\%s\\", q->value);
-                return SS$_IVKEYW;
+                return CLI$_IVKEYW;
             }
         }
     }

@@ -478,6 +478,15 @@ def start_single_user(a, vmm_args, boot_deadline, cmd_timeout):
     child.expect(r"# ", timeout=cmd_timeout)
     child.sendline("mount -u -w /")
     child.expect(r"# ")
+    # rd vms-b06: give this build session today's date, as the operator gives
+    # a VMS installation its date. The VAX TODR holds no year: NetBSD takes it
+    # from the root filesystem's last write, and every filesystem this session
+    # writes (the shipped OVMX/VAX root among them) carries this clock as that
+    # year. Without it the session ran at NetBSD's built-in 1-JAN-2010 and
+    # stamped 2010 on the disk, so every OVMX/VAX boot -- SIMH and the browser
+    # demo -- came up in 2010.
+    child.sendline("date -u %s" % time.strftime("%Y%m%d%H%M.%S", time.gmtime()))
+    child.expect(r"# ")
     child.sendline("stty -echo 2>/dev/null; true")
     child.expect(r"# ")
     con = console(child)

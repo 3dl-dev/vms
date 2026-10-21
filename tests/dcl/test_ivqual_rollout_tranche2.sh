@@ -4,7 +4,7 @@
 #       accept-all. Each verb below now carries a per-verb qualifier table
 #       (struct dcl_verb.quals, src/vmsdcl/dcl_builtin.c); dcl_validate_qualifiers()
 #       (src/vmsdcl/dcl_parser.c) rejects any qualifier not in the table BEFORE
-#       the handler runs, with the authentic %DCL-W-IVQUAL ($STATUS = 2288).
+#       the handler runs, with the authentic %DCL-W-IVQUAL ($STATUS = %X00038240, CLI$_IVQUAL).
 #
 # --- Unknown qualifiers on the newly-tabled verbs -> %DCL-W-IVQUAL ---
 # Distinct bogus tokens so each verb is proven individually (populated tables:
@@ -30,7 +30,7 @@
 # EXPECT: contains: \ZQWAIT\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \ZQCLOSE\
-# EXPECT: contains:$STATUS = "%X000008F0"
+# EXPECT: contains:$STATUS = "%X00038240"
 # EXPECT_NOT: contains:$STATUS = "%X00000001"
 #
 # --- Real qualifiers on the SAME verbs still pass (not a blanket reject) ---

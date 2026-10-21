@@ -106,7 +106,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -216,6 +216,11 @@ jobs:
             --scsnode "$NODE_B_SCSNODE" --scssystemid "$NODE_B_SCSSYSTEMID" \
             --votes "$NODE_B_VOTES" --expected-votes "$NODE_B_EXPECTED_VOTES" \
             --vaxcluster "$NODE_B_VAXCLUSTER"
+          # DECnet (rd vms-5843): the roster's DECnet address and peers, written
+          # by this ref's own NCP.EXE onto the same ODS-2 partition, so Node B's
+          # boot-time STARTNET starts NETACP and SET HOST OVMXA/OVMXB works.
+          sh tools/cluster-web-demo/inject-decnet-config.sh "$W/e.qcow2" "$W/e.qcow2" \
+            --scsnode "$NODE_B_SCSNODE"
           qemu-img convert -O raw "$W/e.qcow2" "$W/e.new"
           [ "$(stat -c%s "$W/e.new")" = "$(stat -c%s "$W/e.raw")" ] || { echo "injected partition changed size"; exit 1; }
           dd if="$W/e.new" of="$IMG" bs=512 seek="$E_OFF" conv=notrunc status=none

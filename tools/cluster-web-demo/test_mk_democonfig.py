@@ -341,3 +341,47 @@ class TestRosterUniqueness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDecnetRoster(unittest.TestCase):
+    """rd vms-5843: the roster says which nodes are DECnet nodes and what NCP
+    must tell each one; NCP.EXE writes the databases from these commands."""
+
+    def test_nodes_have_distinct_area1_addresses(self):
+        addrs = [n["decnet"] for n in M.DEMO_ROSTER]
+        self.assertEqual(len(set(addrs)), len(addrs))
+        for addr in addrs:
+            area, node = (int(x) for x in addr.split("."))
+            self.assertEqual(area, 1)
+            self.assertTrue(1 <= node <= 1023)
+
+    def test_vaxc_decnet_address_is_its_scssystemid(self):
+        # rd vms-05d: real VMS STARTNET refuses a cluster member whose DECnet
+        # address != SCSSYSTEMID, so VAXC's address is derived, not chosen.
+        area, node = (int(x) for x in M.DEMO_NODE_C["decnet"].split("."))
+        self.assertEqual(area * 1024 + node, M.DEMO_NODE_C["id"])
+        self.assertEqual(M.DEMO_NODE_C["decnet"], "1.965")
+
+    def test_each_node_defines_every_other_node(self):
+        for me in M.DEMO_ROSTER:
+            peers = [n for n in M.DEMO_ROSTER if n is not me]
+            cmds = M.decnet_ncp_commands(me["name"])
+            self.assertEqual(cmds[:3], ["SET EXECUTOR ADDRESS %s" % me["decnet"],
+                                        "SET EXECUTOR NAME %s" % me["name"],
+                                        "SET EXECUTOR STATE ON"])
+            self.assertEqual(cmds[3:], ["DEFINE NODE %s NAME %s" % (p["decnet"], p["name"])
+                                        for p in peers])
+
+    def test_ovmx_nodes_define_vaxc(self):
+        for me in (M.DEMO_NODE_A, M.DEMO_NODE_B):
+            self.assertIn("DEFINE NODE 1.965 NAME VAXC", M.decnet_ncp_commands(me["name"]))
+
+    def test_node_without_decnet_refused(self):
+        roster = [dict(M.DEMO_NODE_A), dict(M.DEMO_NODE_C, decnet=None)]
+        with self.assertRaises(ValueError):
+            M.decnet_ncp_commands("VAXC", roster)
+        self.assertEqual(M.decnet_ncp_commands("OVMXA", roster)[3:], [])
+
+    def test_unknown_node_refused(self):
+        with self.assertRaises(ValueError):
+            M.decnet_ncp_commands("NOSUCH")

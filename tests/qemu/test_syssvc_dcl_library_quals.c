@@ -8,6 +8,10 @@
  * on; /COMPRESS really rewrites an object library (to /OUTPUT), /VAX is honoured
  * only on the VAX rail; anything else is %DCL-W-IVQUAL.
  *
+ * The object library lives on the ODS-2 volume (VDA0:[OVMXDIR]), written and
+ * read back through RMS: LIBRARY's object I/O goes through the Files-11 ACP
+ * (vms-8ca), not a POSIX path a logical names.
+ *
  * With no executive (the negative-control rig) it exits EXIT_SKIP (77), the
  * honest-skip code that job requires of every public-sys$ suite.
  * NEGATIVE CONTROLS: tests/qemu/defects.d/dcl-library-quals-accept-all.defect and
@@ -21,15 +25,18 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <sys/wait.h>
-#include <dirent.h>
 #include <strings.h>
 
+#include "starlet.h"
 #include "ssdef.h"
+#include "rms/rms.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 #define DCL_PATH "/bin/DCL.EXE"
+#define RW_UNIT  "VDA0:"
+#define LBDIR    RW_UNIT "[OVMXDIR]"
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -76,6 +83,35 @@ static int run_dcl(const char *script, char *out, size_t outsz)
     return 0;
 }
 
+/* Write `len` bytes as a new file through RMS (FIX, no record size: each $PUT
+ * lands exactly its bytes). 0 on success. */
+static int put_bytes(const char *spec, const char *buf, size_t len)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_FIX;
+    fab.fab$b_fac = FAB$M_PUT;
+    if (sys$create(&fab, 0, 0) != RMS$_NORMAL) return -1;
+    struct RAB rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    if (sys$connect(&rab, 0, 0) != RMS$_NORMAL) { sys$close(&fab, 0, 0); return -1; }
+    rab.rab$l_rbf = (char *)buf;
+    rab.rab$w_rsz = (uint16_t)len;
+    uint32_t st = sys$put(&rab, 0, 0);
+    uint32_t cst = sys$close(&fab, 0, 0);
+    return (st == RMS$_NORMAL && (cst & 1)) ? 0 : -1;
+}
+
+static void erase(const char *spec)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    (void)sys$erase(&fab, 0, 0);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -90,23 +126,25 @@ int main(void)
         return 1;
     }
 
-    char dir[] = "/tmp/ovmx_lb_XXXXXX";
-    if (!mkdtemp(dir)) { printf("  FAIL: mkdtemp\n"); return 1; }
-    char path[160];
-    snprintf(path, sizeof path, "%s/X.OBJ", dir);
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0 || write(fd, "member\n", 7) != 7) { printf("  FAIL: write X.OBJ\n"); return 1; }
-    close(fd);
+    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_mount(RW_UNIT))) {
+        printf("  FAIL: MOUNT " RW_UNIT "\n");
+        return 1;
+    }
+    unsigned pid = (unsigned)getpid() % 100000u;
+    char xobj[64], zolb[64], polb[64];
+    snprintf(xobj, sizeof xobj, LBDIR "LBX%u.OBJ", pid);
+    snprintf(zolb, sizeof zolb, LBDIR "LBZ%u.OLB", pid);
+    snprintf(polb, sizeof polb, LBDIR "LBP%u.OLB", pid);
+    if (put_bytes(xobj, "member\n", 7) != 0) { printf("  FAIL: write X.OBJ\n"); return 1; }
 
     static char out[16384];
     char script[1024];
     snprintf(script, sizeof script,
-             "DEFINE LBDIR \"%s\"\nSET DEFAULT LBDIR:[000000]\n"
              "LIBRARY/ZQONE NOSUCH.TLB\nLIBRARY/MACRO NOSUCH.TLB\n"
-             "LIBRARY/CREATE/OBJECT Z.OLB X.OBJ\n"
-             "LIBRARY/OBJECT/COMPRESS=BLOCK=0/OUTPUT=P.OLB Z.OLB\n"
+             "LIBRARY/CREATE/OBJECT %s %s\n"
+             "LIBRARY/OBJECT/COMPRESS=BLOCK=0/OUTPUT=%s %s\n"
              "LIBRARY/TEXT/COMPRESS NOSUCH.TLB\n"
-             "LIBRARY/OBJECT/VAX NOSUCH.OLB\n", dir);
+             "LIBRARY/OBJECT/VAX NOSUCH.OLB\n", zolb, xobj, polb, zolb);
     CHECK(run_dcl(script, out, sizeof out) == 0, "DCL ran the LIBRARY probes");
     printf("  ---- LIBRARY probes ----\n%s  ---- end ----\n", out);
     /* negctl: dcl-library-quals-accept-all */
@@ -115,11 +153,11 @@ int main(void)
     CHECK(strstr(out, "\\MACRO\\") != NULL,
           "LIBRARY/MACRO (not implemented) is %DCL-W-IVQUAL, not silently dropped");
     CHECK(strstr(out, "LIBRARIAN-S-COMPRESSED") != NULL, "LIBRARY/OBJECT/COMPRESS reports the rewrite");
-    int found = 0;
-    DIR *d = opendir(dir);
-    for (struct dirent *e; d && (e = readdir(d)); )
-        if (strcasecmp(e->d_name, "P.OLB") == 0) found = 1;
-    if (d) closedir(d);
+    uint8_t *pimg = NULL;
+    uint64_t plen = 0;
+    int found = rms_read_over_acp(polb, &pimg, &plen) == RMS$_NORMAL &&
+                plen > 8 && memcmp(pimg, "!<arch>\n", 8) == 0;
+    free(pimg);
     /* negctl: dcl-library-compress-noop */
     CHECK(found, "LIBRARY/COMPRESS/OUTPUT=P.OLB wrote the output library");
     CHECK(strstr(out, "\\COMPRESS\\") != NULL,
@@ -127,16 +165,7 @@ int main(void)
     CHECK(strstr(out, "\\VAX\\") != NULL,
           "/VAX off the VAX rail is %DCL-W-IVQUAL, not a silently non-VAX library");
 
-    {
-        DIR *c = opendir(dir);
-        for (struct dirent *e; c && (e = readdir(c)); ) {
-            if (e->d_name[0] == '.') continue;
-            snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
-            unlink(path);
-        }
-        if (c) closedir(c);
-        rmdir(dir);
-    }
+    erase(xobj); erase(zolb); erase(polb);
     printf("=== test_syssvc_dcl_library_quals: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

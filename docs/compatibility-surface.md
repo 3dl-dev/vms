@@ -11,12 +11,12 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 359 |
-| 🟢 implemented | 306 | | n/a | 80 |
-| 🟡 partial | 71 | | advisory | 51 |
-| 🟠 stub | 10 | |  |  |
+| ✅ verified | 24 | | real | 362 |
+| 🟢 implemented | 313 | | n/a | 78 |
+| 🟡 partial | 67 | | advisory | 50 |
+| 🟠 stub | 9 | |  |  |
 | 🔵 designed | 1 | |  |  |
-| ⬜ absent | 78 | |  |  |
+| ⬜ absent | 76 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **444 committed** — **330 met** (implemented/verified), 67 in progress (partial), 47 not started (absent/stub/designed).
+- **444 committed** — **337 met** (implemented/verified), 63 in progress (partial), 44 not started (absent/stub/designed).
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -33,7 +33,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (166 met · 22 in progress · 33 not started) · V1: 212 committed, 166 met
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (170 met · 20 in progress · 31 not started) · V1: 212 committed, 170 met
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)
 <sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-10-18</sub>
@@ -90,17 +90,17 @@ Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5): d
 ### lib — LIB$ Run-Time Library
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS RTL Library (LIB$) Manual · reviewed 2026-09-14</sub>
 
-116 distinct LIB$ entry points are implemented across rtl/lib_*.c (the LIB$ include surface declares 254 symbols; 1 stub marker remains in lib$routines.h). Broad genuine coverage across arithmetic/bit ops, char-scan, CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree, VM, translation tables, output, event flags, logical names, and misc groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND, LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are now a real FSM with backtracking (vms-9f6, CLOSED).
+117 distinct LIB$ entry points are implemented across rtl/lib_*.c (the LIB$ include surface declares 254 symbols; 1 stub marker remains in lib$routines.h). Broad genuine coverage across arithmetic/bit ops, char-scan, CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree, VM, translation tables, output, event flags, logical names, and misc groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND, LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are now a real FSM with backtracking (vms-9f6, CLOSED).
 
 
-<sub>22 items · 14 met · 3 in progress · 5 not started</sub>
+<sub>22 items · 15 met · 2 in progress · 5 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟡 | `lib$_arith_bitops` | routine | Arithmetic/bit-manipulation group (LIB$ADDX, LIB$SUBX, LIB$BBSS/BBCC, LIB$EMUL, ...; VMS ships ~16) | partial | real | in | `src/libvms/rtl/lib_arith.c` — 14/16 present |
 | ⬜ | `lib$ishft` | routine | Arithmetic/logical shift | absent | n/a | in |  |
 | ⬜ | `lib$ishftc` | routine | Circular shift | absent | n/a | in |  |
-| 🟡 | `lib$_charscan` | routine | Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6) | partial | real | in | `src/libvms/rtl/lib_charscan.c` — 5/6 present |
+| 🟢 | `lib$_charscan` | routine | Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6) | implemented | real | in | `src/libvms/rtl/lib_strconv.c` — Proof tests/libvms/test_lib_rtl_batch2.c + tests/qemu/test_syssvc_lib_movtuc.c + defects.d/lib-movtuc-stop-untranslated.defect. Every VAX character-string-instruction jacket is present: LIB$LOCC LIB$MATCHC LIB$SCANC LIB$SKPC LIB$SPANC LIB$MOVC3 LIB$MOVC5 LIB$MOVTC and (the last gap) LIB$MOVTUC, which returns the 1-based position of the source character that TRANSLATES to the stop character (0 if none), never writes the stop character, and pads with the untranslated fill character or leaves the remainder unchanged when fill is omitted (RTL Library manual). |
 | ⬜ | `lib$trim` | routine | Trim trailing blanks/tabs from a string | absent | n/a | in |  |
 | 🟢 | `lib$_cli_spawn` | routine | CLI/spawn group (LIB$SPAWN, LIB$GET_INPUT, LIB$GET_COMMAND, CLI$ FSM parser, ...; VMS ships ~10) | implemented | real | in | `src/libvms/rtl/lib_common.c` — ~10/10 present, including a real CLI$ FSM parser |
 | ⬜ | `lib$do_command` | routine | Execute a DCL command string programmatically | absent | n/a | in |  |
@@ -330,7 +330,7 @@ FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message serv
 VMS ships ~10 channel/QIO services; OVMX declares 6. Executive-issued channels are real and cross-process: the console terminal (OPA0:), mailbox channels (vms_mbx.c) and BGn: sockets (vms_bg.c) route their QIOs into the executive. Channels assigned to ordinary/private devices remain per-process file descriptors, invisible cross-process (advisory). The 6th named routine, SYS$CANCEL (process-wide I/O cancellation), is registered under the sys-process facility to avoid a duplicate row.
 
 
-<sub>12 items · 8 met · 1 in progress · 3 not started</sub>
+<sub>12 items · 11 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -340,11 +340,11 @@ VMS ships ~10 channel/QIO services; OVMX declares 6. Executive-issued channels a
 | 🟢≈ | `sys$qiow` | routine | Queue an I/O request (waits for completion) | implemented | advisory | in | `src/libvms/syssvc/sys_qio.c` — same executive/private-channel split as sys$qio |
 | 🟢 | `sys$device_scan` | routine | Scan for devices matching selection criteria | implemented | real | in | `src/libvms/syssvc/sys_device.c` |
 | 🟢 | `tt$class-driver` | feature | Terminal class driver (TTDRIVER): type-ahead held UNECHOED and echoed when a read consumes it, after that read's prompt; standard and caller (P4) terminators; IO$_READPROMPT; IO$M_NOECHO / TIMED / PURGE / TRMNOECHO / NOFILTR / CVTLOW; ^Z echoes *EXIT*; ^X purges type-ahead; TTSYNC ^S/^Q hold/release output; PASSALL; a signal suspends a read rather than ending it | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-f8c. ONE class driver in kernel-core, a line-discipline PORT per substrate (Linux tty_ldisc_ops, NetBSD linesw "vms_tt"): the substrate's own line discipline is REPLACED on the line, so no userspace termios ECHO/ICANON toggle remains anywhere. Binding a line to a unit needs CMKRNL, decided by the executive (vms_prot.h). STARTUP binds OPA0:; the network daemon binds each RTAn:; the console's binding survives a session hangup. DCL, LOGINOUT, MONITOR read with $QIO; a CRTL read(2) on the line is served by the same driver. A unit with no port answers SS$_DEVOFFLINE. |
-| 🟡 | `tt$line-editing` | feature | Terminal line editing: DELETE, ^U, ^R, ^X, cursor keys, ^A ^B ^D ^E ^F ^H ^J, insert/overstrike | partial | real | in | `src/kernel-core/vms_tt.c` — rd vms-eda8. DELETE / ^U / ^R / ^X are the driver's (scope form; the hardcopy \X\ form under HARDCOPY). A cursor-key escape sequence is consumed as one key with no effect (it neither ends the read nor lands in the line). ^A ^D ^E ^F ^H ^J and insert/overstrike editing are not implemented yet. |
+| 🟢 | `tt$line-editing` | feature | Terminal line editing: DELETE, ^U, ^R, ^X, cursor keys, ^A ^B ^D ^E ^F ^H ^J, insert/overstrike | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-eda8 (#1604). The class driver edits the line in the executive: ^H/^E start/end of line, ^D/^F and the arrow keys move, ^A toggles insert/overstrike for the rest of the read (insert is the default), ^J deletes the word to the left, DELETE/^U/^R/^X as before (scope form; the hardcopy \X\ form under HARDCOPY). Re-census 2026-10-21: the row said ^A ^D ^E ^F ^H ^J were not implemented; they are, and gated. |
 | 🟢 | `tt$out-of-band` | feature | Out-of-band ^Y ^C ^O ^T delivered as ASTs ($QIO IO$_SETMODE IO$M_CTRLYAST / CTRLCAST / OUTBAND) | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-f0fb. The executive delivers ^Y/^C/^T/^O as ASTs to the process that enabled them; write breakthrough. The ^T status line has no faithful IO= source on every path (keystroke known-diff OOB.PROMPT). |
 | 🟢 | `tt$carriage-control` | feature | VMS record carriage control on terminal output (implied-CC prefix/suffix, the <CR><NUL> prompt forms the console shows) | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-fc4. Records start on a new line and owe their line feed as on VMS; IO$M_NOFORMAT writes leave the cursor position alone. |
-| ⬜ | `tt$broadcast-redisplay` | feature | A broadcast ($BRKTHRU / REPLY) mid-read is written on its own lines and the prompt + partial line redisplayed | absent | n/a | in | rd vms-53a |
-| ⬜ | `tt$command-recall` | feature | DCL command recall through the terminal read (up-arrow / ^B / down-arrow) | absent | n/a | in | rd vms-eb3d |
+| 🟢 | `tt$broadcast-redisplay` | feature | A broadcast ($BRKTHRU / REPLY) mid-read is written on its own lines and the prompt + partial line redisplayed | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-53a (#1604). Re-census 2026-10-21: landed in the terminal class driver; the row still said absent. |
+| 🟢 | `tt$command-recall` | feature | DCL command recall through the terminal read (up-arrow / ^B / down-arrow) | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-eb3d (#1604). Re-census 2026-10-21: landed; the row still said absent. |
 | ⬜ | `sys$_other` | routine | Remaining SYS$ I/O channel/QIO services beyond assign/dassgn/qio/qiow/device_scan (VMS ships ~10 total for the QIO/channel surface) | absent | n/a | in |  |
 
 ### sys-lock — SYS$ Lock Manager (Programmatic $ENQ/$DEQ)
@@ -503,7 +503,7 @@ Device information, mount/dismount/initialize. MOUNT is real end to end since th
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| 🟡 | `sys$getdvi` | routine | Get device/volume information (synchronous) | partial | real | in | `src/libvms/syssvc/sys_device.c` — 14 of 48 defined DVI$_ items real: DEVNAM/UNIT/DEVTYPE/DEVCLASS/DEVCHAR/REFCNT/ERRCNT/OPCNT/PID/OWNUIC/AVAILABLE/BLOCKSIZE/FULLDEVNAM/ALLDEVNAM; mounted-volume items MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT read from the executive mounted-volume table (vms-eed; tests/qemu/test_syssvc_getdvi_volume.c + defects.d/getdvi-volume-items-zero.defect) |
+| 🟡 | `sys$getdvi` | routine | Get device/volume information (synchronous) | partial | real | in | `src/libvms/syssvc/sys_device.c` — 22 of the 43 DVI$_ codes dvidef.h defines are answered, every one a real $DVIDEF value (docs/oracle/*-starlet-defs/DVIDEF.txt): DEVNAM/UNIT/DEVTYPE/DEVCLASS/DEVCHAR/DEVBUFSIZ/REFCNT/ERRCNT/OPCNT/PID/OWNUIC/AVL/FULLDEVNAM/ALLDEVNAM/TRM/MBX/SPL; (2026-10-21: the invented DVI$_AVAILABLE 0x74 became the real DVI$_AVL 98, F$GETDVI item AVAILABLE became AVL, and the invented DVI$_BLOCKSIZE and eight other non-$DVIDEF codes were removed -- proof tests/qemu/test_syssvc_getdvi.c + defects.d/getdvi-avl-not-answered.defect); mounted-volume items MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT read from the executive mounted-volume table (vms-eed; tests/qemu/test_syssvc_getdvi_volume.c + defects.d/getdvi-volume-items-zero.defect) |
 | 🟡 | `sys$getdviw` | routine | Get device/volume information (with event flag wait) | partial | real | in | `src/libvms/syssvc/sys_device.c` — same DVI$_ coverage as sys$getdvi, mounted-volume items included |
 | 🟠≈ | `devices$getdvi_unimplemented_items` | feature | Remaining 34 DVI$_ items (volume geometry: MAXBLOCK/FREEBLOCKS/VOLNAM/CLUSTER/MOUNTCNT, etc.) | stub | advisory | in | `src/libvms/syssvc/sys_device.c` — honestly return longword 0 rather than fabricating a value — documented 'not known', not a facade, but real software reading e.g. free space sees 0 |
 | 🟢 | `sys$device_scan` | routine | Enumerate devices by wildcard/class | implemented | real | in | `src/libvms/syssvc/sys_device.c` — yields rows of the executive I/O database via vms_kif_devscan() (vms-dv1); it can no longer report a device the executive does not have — wildcard/DVS$_DEVCLASS filtering is applied in-process |
@@ -587,7 +587,7 @@ _DCL verbs and scripting, qualifier grammar, F$ lexicals, utilities, HELP, queue
 ### dcl-qualifiers — DCL Qualifier Grammar (Engine A / CLD tables)
 <sub>scope: in · tier 1 · plan: vms-8ad · ref: OpenVMS Command Definition Utility (CDU) Manual; DCL Dictionary · reviewed 2026-10-19</sub>
 
-Per-verb qualifier validation (Phase 1, vms-097). The parser rejects any qualifier not in a verb's table with the authentic %DCL-W-IVQUAL (or %DCL-W-IVKEYW) BEFORE the handler runs, structurally. Re-censused 2026-09-14 against origin/main: 46 of the 58 builtin verbs carry a validating table (29 real q_* tables + 17 q_none reject-all); no verb is accept-all by accident any more (the quals == NULL ones validate per sub-verb, in their own layer, or by delegation -- see dcl-qualifiers$zero-validation-verbs). Since the prior census DEASSIGN and DEFINE gained real q_* tables (DIFFERENCES moved to q_none), so the real-table set is now exactly 29. A real CLI$-callable CDU compiler exists for external images but is not used to generate the builtin tables.
+Per-verb qualifier validation (Phase 1, vms-097). The parser rejects any qualifier not in a verb's table with the authentic %DCL-W-IVQUAL (or %DCL-W-IVKEYW) BEFORE the handler runs, structurally, leaving $STATUS the real CLI condition value: CLI$_IVQUAL %X00038240, CLI$_IVKEYW %X00038060, CLI$_IVVERB %X00038090 (Alpha V8.4 $GETMSG, docs/oracle/messages/ alpha84-msgcat2.txt; climsgdef.h). Until 2026-10-21 they were invented SS$_ values 2288/2292/2284 -- 2288 is SS$_NONLOCAL. Proof tests/qemu/test_syssvc_dcl_set_quals.c + defects.d/dcl-ivqual-status-not-cli.defect. Re-censused 2026-09-14 against origin/main: 46 of the 58 builtin verbs carry a validating table (29 real q_* tables + 17 q_none reject-all); no verb is accept-all by accident any more (the quals == NULL ones validate per sub-verb, in their own layer, or by delegation -- see dcl-qualifiers$zero-validation-verbs). Since the prior census DEASSIGN and DEFINE gained real q_* tables (DIFFERENCES moved to q_none), so the real-table set is now exactly 29. A real CLI$-callable CDU compiler exists for external images but is not used to generate the builtin tables.
 
 
 <sub>5 items · 3 met · 2 in progress · 0 not started</sub>
@@ -730,7 +730,7 @@ Standalone utility images invoked as DCL verbs. Most core system-management util
 
 _SYSUAF/accounts, privileges, rights DB, protection/ACLs, auditing, SYSGEN, boot, install, accounting._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟡🟠⬜⬜⬜⬜`  —  45 surfaces catalogued (27 met · 9 in progress · 9 not started) · V1: 40 committed, 27 met
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟡🟠⬜⬜⬜⬜`  —  45 surfaces catalogued (30 met · 7 in progress · 8 not started) · V1: 40 committed, 30 met
 
 ### accounting — Accounting
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security; DCL Dictionary (SET/SHOW ACCOUNTING) · reviewed 2026-09-14</sub>
@@ -799,7 +799,7 @@ PRODUCT INSTALL/SHOW and the [SYS0.SYSCOMMON]-rooted install target are real. Th
 All 39 VMS privilege bits are defined. Mode-transition and SETPRV enforcement in the kernel executive are real and verified — including a bit-position bug (SETPRV mismapped to DETACH) caught and fixed against lab-VAX SDA. File-access privilege overrides are PARTLY real: the Files-11 ACP honors BYPASS, READALL, and SYSPRV in its access check (vms-165) and GRPPRV (vms-768). ALTPRI, SYSLCK and OPER are checked in the executive (vms-768).
 
 
-<sub>5 items · 4 met · 1 in progress · 0 not started</sub>
+<sub>5 items · 5 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -807,20 +807,20 @@ All 39 VMS privilege bits are defined. Mode-transition and SETPRV enforcement in
 | ✅ | `sys$mode_transition` | feature | Privilege-checked access-mode escalation gate ($SETMODE) | verified | real | in | `src/kernel-core/vms_access.c:93` — vms_ioctl_setmode. Re-census 2026-09-14: line ref stable (:93). |
 | ✅ | `sys$setprv` | routine | $SETPRV — enable/disable process privileges within the authorized mask | verified | real | in | `src/kernel-core/vms_access.c:320` — vms_ioctl_setprv; SETPRV can only narrow within the authorized mask, never exceed it. Re-census 2026-09-14: line ref stable (:320). |
 | 🟢 | `privs$altpri_syslck_oper` | feature | ALTPRI ($SETPRI above the authorized priority), SYSLCK (LCK$M_SYSTEM), OPER ($BRKTHRU to every terminal / user) | implemented | real | in | `src/kernel-core/vms_proctab.c` — vms-768: without ALTPRI a raise above the authorized priority succeeds at the authorized priority; SS$_NOSYSLCK without SYSLCK; SS$_NOOPER without OPER. Not done: the authorized priority is the DEFPRI default 4 for every process (UAF PRIOR is not read yet); a non-system lock resource is not yet qualified by UIC group, so an LCK$M_SYSTEM lock and a group lock of the same name are one resource. |
-| 🟡 | `privs$file_access_override` | feature | SYSPRV/BYPASS/READALL/GRPPRV override normal file protection checks | partial | real | in | `src/kernel-core/vmsfs_acp.c:1053` — vms-165 retired the old vmsfs_blkdev_permission() (uid==0/gid only); the Files-11 ACP's acp_check_access (vmsfs_acp.c:1022) applies privilege overrides (defines vmsfs_acp.c:999-1001, apply :1053-1056): BYPASS (bit 29) lifts all access control, READALL (bit 35) grants read, SYSPRV (bit 28) confers the SYSTEM protection category. GRPPRV is NOT handled — hence partial, not implemented. Real (does the real thing for the three it honors), not facade-risk. Tracked vms-f15/vms-36d. Cross-listed to protection-acl. Re-census 2026-09-14: unchanged, line refs refreshed (was :861). |
+| 🟢 | `privs$file_access_override` | feature | SYSPRV/BYPASS/READALL/GRPPRV override normal file protection checks | implemented | real | in | `src/kernel-core/vms_prot.h` — The Files-11 ACP's acp_check_access (vmsfs_acp.c) decides through vms_prot_check_acl() (vms_prot.h), shared by every object class: BYPASS lifts all access control, READALL grants read (and a file's execute), SYSPRV confers the SYSTEM protection category, and GRPPRV confers it for an object owned by the accessor's own UIC group (OpenVMS VAX V7.3 oracle, docs/oracle/vax73-acl.md GRPPRV). Proof tests/qemu/test_syssvc_privilege_enforce.c with one negative control per privilege: defects.d/acp-readall-ignored, acp-bypass-ignored, acp-sysprv-ignored, acp-grpprv-ignored. Cross-listed to protection-acl. |
 
 ### protection-acl — File Protection (SOGW/UIC) + ACLs
-<sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security ch. 5 (Protecting Data) · reviewed 2026-10-08</sub>
+<sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security ch. 5 (Protecting Data) · reviewed 2026-10-21</sub>
 
-SOGW/UIC protection is kernel-enforced by the Files-11 ACP and VERIFIED against a real /dev/vms over a real-VAX ODS-2 fixture (test_syssvc_acp_access): a genuinely unprivileged non-owner is refused SS$_NOPRIV where a system-group process succeeds — same code, opposite verdict. The Delete bit is not enforced in the ACP check (advisory). $CHKPRO computes correctly but nothing calls it. The legacy $CHECK_ACCESS 2nd-opinion routine was deliberately removed (vms-2b8) rather than left as a facade. ACLs on files are stored and enforced by the executive ACP (vms-d404, docs/oracle/vax73-acl.md). Privilege overrides (BYPASS/READALL/SYSPRV) are honored in the ACP; GRPPRV is not (cross-ref privileges).
+SOGW/UIC protection is kernel-enforced by the Files-11 ACP and VERIFIED against a real /dev/vms over a real-VAX ODS-2 fixture (test_syssvc_acp_access): a genuinely unprivileged non-owner is refused SS$_NOPRIV where a system-group process succeeds — same code, opposite verdict. Deleting or renaming a file needs its Delete (D) right, and a delete by name also W on the parent directory. $CHKPRO computes correctly but nothing calls it. The legacy $CHECK_ACCESS 2nd-opinion routine was deliberately removed (vms-2b8) rather than left as a facade. ACLs on files are stored and enforced by the executive ACP (vms-d404, docs/oracle/vax73-acl.md). Privilege overrides (BYPASS/READALL/SYSPRV/GRPPRV) are honored in the ACP (cross-ref privileges).
 
 
-<sub>12 items · 7 met · 3 in progress · 2 not started</sub>
+<sub>12 items · 9 met · 2 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | ✅ | `fileprot$sogw_uic` | feature | SOGW protection mask, UIC-based, executive-enforced (denies on category miss) | verified | real | in | `src/kernel-core/vmsfs_acp.c:1022` — vms-165 moved SOGW/UIC enforcement into acp_check_access (nibble-per-category System/Owner/Group/World, set-bit-denies; directory read maps to EXECUTE traversal, vms-548b). Re-census 2026-09-14: unchanged, line ref refreshed (was :861). |
-| 🟠≈ | `fileprot$delete_bit` | feature | Delete (D) protection bit | stub | advisory | in | `src/kernel-core/vmsfs_acp.c:1022` — acp_check_access wants only Read/Write (and Execute for directory traversal); the Delete bit is never a wanted right in the check, so it is not enforced — advisory. Re-census 2026-09-14: unchanged, line ref refreshed (was :861). |
+| 🟢 | `fileprot$delete_bit` | feature | Delete (D) protection bit | implemented | real | in | `src/kernel-core/vmsfs_acp.c` — IO$_DELETE and IO$_MODIFY!MOVE (rename) ask the executive protection decision for VMS_PROT_ACC_DELETE on the file, not write (Guide to System Security, file class: write does not include delete; removing or renaming a name needs D), and IO$_DELETE by name also needs W on the parent directory (DCL DELETE: D on the file, W on the parent). Proof tests/qemu/test_syssvc_acp_delete_prot.c + defects.d/acp-delete-bit-not-wanted.defect + acp-delete-dir-write-not-checked.defect. |
 | 🟢 | `sys$chkpro` | routine | $CHKPRO - may a subject access an object (protection code, ACL, privileges) | implemented | real | in | `src/libvms/syssvc/sys_security.c` — vms-d404: CHP$_ACCESS/FLAGS/OWNER/PROT/ACL/UIC/PRIV/RIGHTS; the subject is a user profile or the caller as the executive holds it. The protection code denies only RWED (CONTROL is the ACL's); a matching ACE that does not grant is final for group and world; BYPASS grants, READALL only with CHP$M_USEREADALL and no matching ACE, SYSPRV and GRPPRV give the system category. A compute service: it decides, the ACP enforces. Object profiles (objpro) SS$_UNSUPPORTED; output items not filled. |
 | 🟢 | `sys$create_user_profile` | routine | $CREATE_USER_PROFILE - a user's security profile for $CHKPRO | implemented | real | in | `src/libvms/syssvc/sys_security.c` — vms-d404: UIC and authorized (CHP$M_DEFPRIV: default) privileges from SYSUAF.DAT, the identifiers the user holds from RIGHTSLIST.DAT; RMS$_RNF for an unknown or empty name as V7.3 answers. The profile's layout is OVMX's own (opaque to callers). |
 | ⬜ | `sys$check_access` | routine | $CHECK_ACCESS legacy 2nd-opinion access check | absent | n/a | in | Deliberately removed (vms-2b8) rather than kept as a redundant/driftable facade — represented as absent by design, a positive anti-facade precedent, not a gap to close |
@@ -830,7 +830,7 @@ SOGW/UIC protection is kernel-enforced by the Files-11 ACP and VERIFIED against 
 | 🟡 | `sys$get_security` | routine | $GET_SECURITY - read an object's security profile | partial | real | in | `src/vmsrms/rms_core.c` — vms-d404: class FILE only: OSS$_OWNER, OSS$_PROTECTION, OSS$_ACL_LENGTH, OSS$_ACL_READ from the executive ACP; other classes SS$_NOCLASS. |
 | 🟡 | `sys$set_security` | routine | $SET_SECURITY - change an object's security profile | partial | real | in | `src/vmsrms/rms_core.c` — vms-d404: class FILE ACL edits (OSS$_ACL_ADD_ENTRY/DELETE_ENTRY/DELETE/DELETE_ALL), OSS$M_LOCAL held until OSS$M_RELCTX; owner/protection items SS$_UNSUPPORTED. |
 | 🟢 | `dcl$set_acl` | command | SET ACL / SHOW ACL / DIRECTORY/ACL, DIRECTORY/SECURITY | implemented | real | in | `src/vmsdcl/dcl_cmd_set.c` — vms-d404: output and messages as V7.3 prints them (docs/oracle/vax73-acl.md). |
-| 🟡 | `fileprot$priv_override` | feature | SYSPRV/BYPASS/READALL/GRPPRV override of normal SOGW checks | partial | real | in | `src/kernel-core/vmsfs_acp.c:1053` — acp_check_access honors BYPASS (lifts all), READALL (grants read), and SYSPRV (SYSTEM category) — real. GRPPRV is not consulted, hence partial. Tracked vms-f15/vms-36d. Full detail under privileges; cross-listed here as the file-access-facing half. Re-census 2026-09-14: unchanged, line ref refreshed (was :861). |
+| 🟢 | `fileprot$priv_override` | feature | SYSPRV/BYPASS/READALL/GRPPRV override of normal SOGW checks | implemented | real | in | `src/kernel-core/vms_prot.h` — vms_prot_check_acl() (the one decision acp_check_access uses) honors BYPASS (lifts all), READALL (read/execute), SYSPRV (system category) and GRPPRV (system category for an object of its own group; OpenVMS VAX V7.3 oracle docs/oracle/vax73-acl.md GRPPRV). Proof tests/qemu/test_syssvc_privilege_enforce.c + defects.d/acp-readall-ignored, acp-bypass-ignored, acp-sysprv-ignored, acp-grpprv-ignored. Full detail under privileges. |
 
 ### rights-db — Rights Database / Identifiers
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security ch. 4 (Identifiers) · reviewed 2026-09-14</sub>

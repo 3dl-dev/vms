@@ -56,3 +56,83 @@ authorization is recorded next to its build script and in rd vms-12a.
 - SHA-256 of the built disk (this build): recorded in
   `tests/lab/captures/vms-2570-nodec-v73-20260923/README.md`, alongside the console evidence
   and the in-browser Node A + Node C exchange capture.
+
+## vms73 DECnet variant — `vms73-nodeC-decnet-cluster.dsk.gz` (rd vms-05d)
+
+Baron's ruling (2026-10-21, rd vms-05d): Node C gets DECnet-VAX Phase IV **installed and
+configured but unlicensed**, so a visitor brings their own DVNETEND license. This is a
+**separate** disk image next to `vms73-nodeC-cluster.dsk.gz`; the original disk is unchanged.
+
+### Source
+
+- Input: the published `vms73-nodeC-cluster.dsk.gz` itself (sha256
+  `45355fd2631c59666b0fe2839d17ed743e7d045646d2c179a8b3402915b4fe15`, the vms-2570 build above),
+  pinned by `FROM_SHA256`. Starting from the built volume rather than re-personalizing
+  `d0-newinst073.dsk` carries the cluster identity, the cluster password (an operator fact that is
+  never typed or committed) and the SYSTEM password over bit-for-bit.
+- DECnet kit: the V7.3 distribution CD's own PCSI kit,
+  `DUA2:[DECNET_PHASE_IV_VAX073.KIT]DEC-VAXVMS-DECNET_PHASE_IV-V0703--1.PCSI`
+  (`/lab/media/openvms073.iso`), installed with `PRODUCT INSTALL DECNET_PHASE_IV`.
+- Built by `build_nodeC_vms73_cluster.sh` with `DECNET=1 FROM_GZ=... FROM_SHA256=...` (PHASE 3 of
+  the script), inside an isolated `ovmx-lab` pod. The lab's live reference cluster was not touched.
+
+### What PHASE 3 does, the VMS way
+
+1. `PRODUCT INSTALL DECNET_PHASE_IV /SOURCE=DUA2:[DECNET_PHASE_IV_VAX073.KIT]`.
+2. `MCR AUTHORIZE CREATE/PROXY` (creates NETPROXY.DAT, so STARTNET does not log
+   "Error opening permanent proxy database").
+3. `@SYS$MANAGER:NETCONFIG`: node name VAXC, address **1.965**, nonrouting endnode, no default
+   DECnet or object accounts (MAIL, FAL, PHONE, NML, MIRROR, VPM all declined).
+4. `NCP DEFINE NODE 1.1 NAME OVMXA` and `DEFINE NODE 1.2 NAME OVMXB` (the OVMX nodes of
+   `tools/cluster-web-demo/mk_democonfig.py`'s `DEMO_ROSTER`).
+5. Uncomments SYSTARTUP_VMS.COM's own `$!$ START/NETWORK DECNET` line, so STARTNET runs at every
+   boot on the console.
+6. **Registers no PAK.** It reboots and asserts that the boot console shows the cluster genesis and
+   STARTNET's `%SYSTEM-F-NOLICENSE`. It then asserts the NCP permanent database and that no DVNET
+   license is active, and shuts down cleanly before packaging.
+
+### Why VAXC is 1.965, not 1.3
+
+The first try used 1.3. Real VMS refused it. NETCONFIG warned "Your DECnet node address should
+match your VAXcluster node address.", and at boot DECdtm logged
+`%DECdtm-W-ADDRNEQ, DECnet address (1027) is not equal to SCSSYSTEMID (1989)`. STARTNET.COM, on a
+cluster member, compares the executor address with `SCSSYSTEMID` and stops:
+"DECnet address of local node must match VAXcluster system ID." / "DECnet not started."
+With 1.3, DECnet could never start, licensed or not. SCSSYSTEMID 1989 is 1*1024 + 965, and
+NETCONFIG offers 1.965 as its default. SCSSYSTEMID stays 1989 (frozen in the roster), so the DECnet
+address follows it. The roster records VAXC as `"decnet": "1.965"`.
+
+### Unchanged
+
+`SCSNODE=VAXC`, `SCSSYSTEMID=1989`, group 257, `VOTES=1`, `EXPECTED_VOTES=1`, `ALLOCLASS=0`, the
+cluster password, the SYSTEM password, the RA92 geometry (2,940,951 blocks), and pcjs bootability.
+
+### Licensing
+
+The shipped volume carries **no license PAK**. At boot LMF reports
+`%LICENSE-F-EMTLDB, license database contains no license records`, and `SHOW LICENSE` prints
+`%SHOW-I-NOLICENSE, no licenses exist`. The build asserts both. The lab proof of
+bring-your-own-license ran on a scratch copy that was deleted afterwards. Its PAKs never left the
+lab and are never committed, published or shipped.
+
+What a visitor's own licenses unlock, as measured in the lab on 2026-10-21. The lab's PAK set has
+DVNETRTG, not DVNETEND; either one starts a Phase IV endnode.
+
+| Licenses loaded on VAXC | `@SYS$STARTUP:STARTNET` | `SET HOST OVMXA` from VAXC | `SET HOST VAXC` from an OVMX node |
+|---|---|---|---|
+| none (as shipped) | `%NCP-W-OPEFAI` / `Circuit = QNA-0` / `%SYSTEM-F-NOLICENSE` | no circuit | no circuit |
+| DVNETEND or DVNETRTG | circuit QNA-0 up (event 4.10) | works (console login needs no base license) | connects, prints the banner and `Username:`, then `No license is active for this software product` |
+| + VAX-VMS | same | works | refused: `%LOGIN-F-NOVAXCLUSTER, DEC VMSCLUSTER license is not active` |
+| + VAX-VMS + VAXCLUSTER | same | works | works, and SHOW TERMINAL on VAXC shows `Remote Port Info: OVMXA::SYSTEM` |
+
+VAXC is a VMScluster member. Real VMS LOGINOUT therefore allows a license-free login only on the
+console (OPA0). An inbound network login needs the VAX-VMS and VAXCLUSTER licenses as well as the
+DECnet license.
+
+### Not changed, noted
+
+At login the SYSTEM account prints `WARNING - Your password expires on Friday, 23-OCT-2026
+18:44`. Both Node C disks carry this, since it was set by the 2026-09-23 personalization. The
+password itself was not touched here.
+
+Capture: `tests/lab/captures/vms-05d-nodec-decnet-20261021/`.

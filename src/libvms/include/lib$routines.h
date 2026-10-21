@@ -590,6 +590,29 @@ uint32_t lib$movtc(
 );
 
 /**
+ * lib$movtuc - Move translated until character (VAX MOVTUC).
+ *
+ * @param src    Source string descriptor
+ * @param stop   Stop-character descriptor (first byte; compared with the
+ *               TRANSLATED source character, and never written)
+ * @param table  256-byte translation table descriptor
+ * @param dst    Destination string descriptor
+ * @param fill   Optional fill descriptor (first byte, untranslated); NULL
+ *               leaves the remainder of the destination unchanged
+ *
+ * @return  1-based source position of the character that translated to
+ *          the stop character; 0 if not found; -1 if the destination
+ *          cannot be written
+ */
+uint32_t lib$movtuc(
+    const struct dsc$descriptor_s *src,
+    const struct dsc$descriptor_s *stop,
+    const struct dsc$descriptor_s *table,
+    struct dsc$descriptor_s *dst,
+    const struct dsc$descriptor_s *fill
+);
+
+/**
  * lib$tra_asc_ebc - Translate an ASCII string to EBCDIC (CP037).
  * lib$tra_ebc_asc - Translate an EBCDIC string to ASCII (CP037).
  */

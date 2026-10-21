@@ -12,8 +12,8 @@
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
 | ✅ verified | 24 | | real | 360 |
-| 🟢 implemented | 309 | | n/a | 80 |
-| 🟡 partial | 69 | | advisory | 50 |
+| 🟢 implemented | 310 | | n/a | 80 |
+| 🟡 partial | 68 | | advisory | 50 |
 | 🟠 stub | 9 | |  |  |
 | 🔵 designed | 1 | |  |  |
 | ⬜ absent | 78 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **444 committed** — **333 met** (implemented/verified), 65 in progress (partial), 46 not started (absent/stub/designed).
+- **444 committed** — **334 met** (implemented/verified), 64 in progress (partial), 46 not started (absent/stub/designed).
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -33,7 +33,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (166 met · 22 in progress · 33 not started) · V1: 212 committed, 166 met
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (167 met · 21 in progress · 33 not started) · V1: 212 committed, 167 met
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)
 <sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-10-18</sub>
@@ -90,17 +90,17 @@ Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5): d
 ### lib — LIB$ Run-Time Library
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS RTL Library (LIB$) Manual · reviewed 2026-09-14</sub>
 
-116 distinct LIB$ entry points are implemented across rtl/lib_*.c (the LIB$ include surface declares 254 symbols; 1 stub marker remains in lib$routines.h). Broad genuine coverage across arithmetic/bit ops, char-scan, CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree, VM, translation tables, output, event flags, logical names, and misc groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND, LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are now a real FSM with backtracking (vms-9f6, CLOSED).
+117 distinct LIB$ entry points are implemented across rtl/lib_*.c (the LIB$ include surface declares 254 symbols; 1 stub marker remains in lib$routines.h). Broad genuine coverage across arithmetic/bit ops, char-scan, CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree, VM, translation tables, output, event flags, logical names, and misc groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND, LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are now a real FSM with backtracking (vms-9f6, CLOSED).
 
 
-<sub>22 items · 14 met · 3 in progress · 5 not started</sub>
+<sub>22 items · 15 met · 2 in progress · 5 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟡 | `lib$_arith_bitops` | routine | Arithmetic/bit-manipulation group (LIB$ADDX, LIB$SUBX, LIB$BBSS/BBCC, LIB$EMUL, ...; VMS ships ~16) | partial | real | in | `src/libvms/rtl/lib_arith.c` — 14/16 present |
 | ⬜ | `lib$ishft` | routine | Arithmetic/logical shift | absent | n/a | in |  |
 | ⬜ | `lib$ishftc` | routine | Circular shift | absent | n/a | in |  |
-| 🟡 | `lib$_charscan` | routine | Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6) | partial | real | in | `src/libvms/rtl/lib_charscan.c` — 5/6 present |
+| 🟢 | `lib$_charscan` | routine | Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6) | implemented | real | in | `src/libvms/rtl/lib_strconv.c` — Proof tests/libvms/test_lib_rtl_batch2.c + tests/qemu/test_syssvc_lib_movtuc.c + defects.d/lib-movtuc-stop-untranslated.defect. Every VAX character-string-instruction jacket is present: LIB$LOCC LIB$MATCHC LIB$SCANC LIB$SKPC LIB$SPANC LIB$MOVC3 LIB$MOVC5 LIB$MOVTC and (the last gap) LIB$MOVTUC, which returns the 1-based position of the source character that TRANSLATES to the stop character (0 if none), never writes the stop character, and pads with the untranslated fill character or leaves the remainder unchanged when fill is omitted (RTL Library manual). |
 | ⬜ | `lib$trim` | routine | Trim trailing blanks/tabs from a string | absent | n/a | in |  |
 | 🟢 | `lib$_cli_spawn` | routine | CLI/spawn group (LIB$SPAWN, LIB$GET_INPUT, LIB$GET_COMMAND, CLI$ FSM parser, ...; VMS ships ~10) | implemented | real | in | `src/libvms/rtl/lib_common.c` — ~10/10 present, including a real CLI$ FSM parser |
 | ⬜ | `lib$do_command` | routine | Execute a DCL command string programmatically | absent | n/a | in |  |

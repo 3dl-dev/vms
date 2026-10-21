@@ -15,8 +15,8 @@
  * the test needs no /vms mount or vmsfs translation (see
  * sysgen_current_path() in sysgen_params.h, vms-d34).
  *
- * F$GETSYI("SCSNODE") vs. F$GETSYI("NODENAME") divergence (b) is proven
- * at the DCL layer by tests/dcl/test_lexical_scsnode.sh.
+ * F$GETSYI("SCSNODE") and F$GETSYI("NODENAME") naming the same node (b) is
+ * proven at the DCL layer by tests/dcl/test_lexical_scsnode.sh (rd vms-433).
  */
 
 #include <stdio.h>
@@ -141,8 +141,13 @@ static void test_getsyi_identity(void)
     check(sysid_result == 4242,
           "lib$getsyi(SYI$_SCSSYSTEMID) returns the configured system ID");
 
-    /* SYI$_NODENAME must still be the Linux hostname, not SCSNODE — proves
-     * the two identities stay distinct at the sys$getsyi layer too. */
+    /* SYI$_NODENAME IS the node's name -- the same SCSNODE (rd vms-433).
+     * The demo's own real VAX answers NODENAME=[VAXC] SCSNODE=[VAXC  ]
+     * (tests/lab/captures/vms-433-nodename-oracle-20261021/). This used to
+     * assert the opposite (NODENAME = the Linux hostname, vms-ci.8), which
+     * is what let a node name itself OVMX while its cluster called it
+     * OVMXB. With no executive (this host test) the parameter file answers
+     * both. */
     char hostbuf[256];
     memset(hostbuf, 0, sizeof(hostbuf));
     struct dsc$descriptor_s hdesc;
@@ -155,8 +160,8 @@ static void test_getsyi_identity(void)
     st = lib$getsyi(&item, NULL, &hdesc, &hlen, NULL, NULL);
     check(st == SS$_NORMAL, "lib$getsyi(SYI$_NODENAME) returns SS$_NORMAL");
     hostbuf[hlen < sizeof(hostbuf) ? hlen : sizeof(hostbuf) - 1] = '\0';
-    check(strcmp(hostbuf, "TESTND") != 0,
-          "SYI$_NODENAME (hostname) differs from the configured SCSNODE");
+    check(strcmp(hostbuf, "TESTND") == 0,
+          "SYI$_NODENAME is the configured SCSNODE (one node name, as VMS)");
 }
 
 int main(void)

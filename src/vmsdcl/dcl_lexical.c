@@ -1238,23 +1238,22 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
     if (len >= 2 && s[0] == '"' && s[len - 1] == '"') { s[len - 1] = '\0'; s++; }
     for (size_t i = 0; s[i]; i++) s[i] = (char)toupper((unsigned char)s[i]);
 
-    struct utsname uts;
-    uname(&uts);
-
-    if (strcmp(s, "NODENAME") == 0) {
-        /* Linux hostname — distinct from the configured SCSNODE (vms-ci.8) */
-        strncpy(result, uts.nodename, result_size - 1);
-        for (size_t i = 0; result[i]; i++)
-            result[i] = (char)toupper((unsigned char)result[i]);
-    } else if (strcmp(s, "SCSNODE") == 0) {
-        /* Configured cluster node identity (SYSGEN SCSNODE) — falls back
-         * to the OVMX default when SYSGEN is unconfigured. */
+    if (strcmp(s, "NODENAME") == 0 || strcmp(s, "SCSNODE") == 0) {
+        /* rd vms-433: ONE node name -- the SCSNODE this system booted with,
+         * as the executive holds it (ovmx_node_name). NODENAME used to be the
+         * substrate hostname and SCSNODE a re-read of the parameter file, so
+         * the demo's OVMX/VAX node answered "OVMX" while its cluster called it
+         * OVMXB. VMS answers both with the node's name. */
         char node[SYSGEN_STRVAL_LEN];
-        if (sysgen_read_string("SCSNODE", node, sizeof(node)) != 0) {
-            strncpy(node, "OVMX", sizeof(node) - 1);
-            node[sizeof(node) - 1] = '\0';
-        }
-        strncpy(result, node, result_size - 1);
+        ovmx_node_name(node, sizeof(node));
+        /* NODENAME is the bare name; SCSNODE is the 6-character SCSNODE
+         * field, blank-padded -- measured on the demo's own VAX:
+         * NODENAME=[VAXC] SCSNODE=[VAXC  ] (tests/lab/captures/
+         * vms-433-nodename-oracle-20261021/). */
+        if (strcmp(s, "SCSNODE") == 0)
+            snprintf(result, result_size, "%-6s", node);
+        else
+            snprintf(result, result_size, "%s", node);
         for (size_t i = 0; result[i]; i++)
             result[i] = (char)toupper((unsigned char)result[i]);
     } else if (strcmp(s, "SCSSYSTEMID") == 0) {

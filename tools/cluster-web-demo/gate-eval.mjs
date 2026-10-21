@@ -1036,6 +1036,13 @@ export async function runSetHost(R, src, dst, io) {
     (AUTH_FAIL.test(s) && { err: 'User authorization failure' }) || (s.length && atDcl(s) && { ok: 1 }),
   SETHOST_WAIT_MS, io);
   if (!d || d.err) return fail(d ? d.err : 'no remote DCL prompt');
+  // VMS never echoes a password (vms-a353): the remote login's output,
+  // from the Password: prompt to the DCL prompt, must not carry it.
+  const pw = io.pass(src);
+  if (pw && echoesPassword(tail(R, src, from), pw)) {
+    rec.step = 'remote Password: (no echo)';
+    return fail('the remote password was echoed on the originating terminal');
+  }
   from = String(R.transcript[src] || '').length;
   await io.type(src, 'WRITE SYS$OUTPUT "SETHOST-"+F$GETSYI("NODENAME")\r');
   rec.step = 'remote NODENAME';
@@ -1050,11 +1057,26 @@ export async function runSetHost(R, src, dst, io) {
   const e = await waitFor(R, src, from, (s) => REM_END.exec(s), 120000, io);
   if (!e) return fail('control never came back (%REM-S-END)');
   if (e[1] !== src) return fail(`control returned to ${e[1]}, not ${src}`);
+  // VMS prints %REM-S-END on a line of its own, after "logged out at ..."
+  // (docs/oracle/vax-sethost-cterm.md section 5).
+  if (!remEndOnOwnLine(tail(R, src, from))) {
+    return fail('%REM-S-END did not start its own line (VMS prints it after a line break)');
+  }
   rec.step = 'done';
   rec.ok = true;
   io.log(`  SET HOST ${leg}: OK (remote NODENAME ${rec.remote_node}, ${e[0]})`);
   return rec;
 }
+
+// Does the output from the Password: prompt onward show the password?
+export function echoesPassword(text, pw) {
+  const t = String(text || '');
+  const at = t.search(PASSWORD_PROMPT);       // absent: the text starts after it
+  return (at >= 0 ? t.slice(at) : t).includes(pw);
+}
+
+// Is %REM-S-END the first thing on its line (after a CR or LF)?
+export const remEndOnOwnLine = (text) => /(^|[\r\n])[ \t]*%REM-S-END,/.test(String(text || ''));
 
 // Run the session checks once, after every node is usable.
 export async function driveSessionChecks(R, io) {

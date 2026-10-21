@@ -1235,3 +1235,21 @@ test('SET HOST leg: a session that lands on the wrong node fails (the local DCL 
   assert.equal(rec.ok, false);
   assert.match(rec.why, /on OVMXA, not OVMXB/);
 });
+
+test('SET HOST leg: an echoed remote password fails (VMS never echoes one, vms-a353)', async () => {
+  const { R, io } = setHostRig((w, t) => {
+    if (t.startsWith('SET HOST')) return 'SET HOST OVMXB\nUsername: ';
+    if (t === 'SYSTEM\r') return 'SYSTEM\nPassword: ';
+    if (t === 'MANAGER\r') return 'MANAGER\n Welcome to OpenVMX V0.7-13\n$ ';   // the measured V0.7-13 echo
+    return '';
+  });
+  const rec = await GATE.runSetHost(R, 'OVMXA', 'OVMXB', io);
+  assert.equal(rec.ok, false);
+  assert.match(rec.why, /password was echoed/);
+  assert.equal(GATE.echoesPassword('Username: SYSTEM\nPassword: \n$ ', 'MANAGER'), false);
+});
+
+test('SET HOST leg: %REM-S-END run on after "logged out at" is caught (oracle: its own line)', () => {
+  assert.equal(GATE.remEndOnOwnLine('logged out at 21-OCT-2026 21:57:30.22%REM-S-END, control returned to node OVMXA::'), false);
+  assert.equal(GATE.remEndOnOwnLine('logged out at x\r\n%REM-S-END, control returned to node OVMXA::'), true);
+});

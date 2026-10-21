@@ -1187,20 +1187,15 @@ static int olb_delete_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
  */
 static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
 {
-    char lib_path[1024], out_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
     const char *outspec = dcl_qualifier_value(cmd, "OUTPUT");
-    if (outspec && outspec[0])
-        dcl_resolve_path(ctx, outspec, out_path, sizeof(out_path));
-    else
-        snprintf(out_path, sizeof(out_path), "%s", lib_path);
+    const char *out_spec = (outspec && outspec[0]) ? outspec : cmd->params[0];
 
     struct olb_member *members = NULL;
     uint32_t count = 0, cap = 0;
-    int st = olb_load(ctx, cmd->params[0], lib_path, &members, &count, &cap);
+    int st = olb_load(ctx, cmd->params[0], &members, &count, &cap);
     if (!$VMS_STATUS_SUCCESS(st)) return st;
 
-    if (olb_write(out_path, members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, out_spec, members, count) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", outspec && outspec[0] ? outspec : cmd->params[0]);

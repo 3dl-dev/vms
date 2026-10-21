@@ -621,3 +621,8 @@ libvms_add_test(test_libvms_utc
 # OPCDEF header: the 24-bit target-class mask (bytes 1..3) and the oracle offsets.
 libvms_add_test(test_libvms_opcdef_layout
     ${CMAKE_CURRENT_SOURCE_DIR}/test_opcdef_layout.c)
+
+# LIB$GET_LUN / LIB$FREE_LUN: the processwide logical-unit pool, against the
+# order and statuses observed on VAX1 (tests/lab/captures/lib-lun-20261021/).
+libvms_add_test(test_libvms_lib_lun
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_lun.c)

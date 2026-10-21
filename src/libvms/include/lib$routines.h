@@ -1248,6 +1248,33 @@ uint32_t lib$reserve_ef(
 );
 
 /* ================================================================
+ * Logical Unit Number Routines
+ * ================================================================ */
+
+/**
+ * lib$get_lun - Allocate one logical unit number from the processwide pool
+ *
+ * @param lun  Receives the allocated unit, or -1 if none was available
+ *
+ * @return  SS$_NORMAL, or LIB$_INSLUN when the pool is exhausted
+ */
+uint32_t lib$get_lun(
+    int32_t *lun
+);
+
+/**
+ * lib$free_lun - Return a unit LIB$GET_LUN allocated
+ *
+ * @param lun  The unit number, as LIB$GET_LUN returned it
+ *
+ * @return  SS$_NORMAL, LIB$_LUNALRFRE if it is not allocated, or
+ *          LIB$_LUNRESSYS if it is outside the pool LIB$GET_LUN manages
+ */
+uint32_t lib$free_lun(
+    const int32_t *lun
+);
+
+/* ================================================================
  * Real-time delay
  * ================================================================ */
 

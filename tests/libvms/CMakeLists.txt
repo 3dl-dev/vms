@@ -122,6 +122,10 @@ libvms_add_test(test_libvms_lib_rtl
 
 # Test 7: vms-cd4 conformance-gap batch — dynamic descriptors, simplified
 # logical-name/CLI-symbol wrappers, sys$purgws, sys$getutc
+# $PROCESS_SCAN item-list handling (the walk itself is the QEMU suite's)
+libvms_add_test(test_libvms_process_scan
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_process_scan.c)
+
 libvms_add_test(test_libvms_lib_symtab
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_symtab.c)
 

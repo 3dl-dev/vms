@@ -884,6 +884,17 @@ assert_crtlfd() {
     tr -d '\r' < "$log" | grep >/dev/null -aF "CFDX: $_call flushed-by-exit" \
       || { echo "  assert_crtlfd: $_call: exit did not flush stdio" >&2; return 1; }
   done
+  # vms-1c83: main RETURNS -> SYS$IMGSTA's $EXIT runs the C RTL exit handler: the
+  # atexit function ran, the unflushed line was written, main's value is $STATUS
+  for _x in "ret 0:%X00000001" "ret 3:%X0035A019"; do
+    _call=${_x%%:*}; _want=${_x##*:}
+    tr -d '\r' < "$log" | grep >/dev/null -aF "CRTLFD-EXIT: $_call STATUS=$_want" \
+      || { echo "  assert_crtlfd: main returning $_call did not give \$STATUS $_want" >&2; return 1; }
+    tr -d '\r' < "$log" | grep >/dev/null -aF "CFDX: $_call flushed-by-exit" \
+      || { echo "  assert_crtlfd: main returning $_call: stdio was not flushed" >&2; return 1; }
+    tr -d '\r' < "$log" | grep >/dev/null -aF "CFDX: $_call atexit-ran" \
+      || { echo "  assert_crtlfd: main returning $_call: the atexit function did not run" >&2; return 1; }
+  done
   return 0
 }
 
@@ -2808,18 +2819,25 @@ EOF
                 "pexit 2:%X0035A011" "pexit 3:%X0035A019" "pexit 255:%X0035A7F9" "pexit 256:%X00000001"; do
         echo "CFDX: ${_x%%:*} flushed-by-exitCRTLFD-EXIT: ${_x%%:*} STATUS=${_x##*:}"
       done
+      for _x in "ret 0:%X00000001" "ret 3:%X0035A019"; do
+        echo "CFDX: ${_x%%:*} flushed-by-exitCFDX: ${_x%%:*} atexit-ranCRTLFD-EXIT: ${_x%%:*} STATUS=${_x##*:}"
+      done
     } > "$_st/pass.log"
     # vms-599 negative controls: musl's exit (exit(1) a POSIX failure, nothing recorded),
     # a __posix_exit that does not encode, and an exit that skips the stdio flush
     sed 's/CRTLFD-EXIT: exit 1 STATUS=%X00000001/CRTLFD-EXIT: exit 1 STATUS=%X0000002C/' "$_st/pass.log" > "$_st/muslexit.log"
     sed 's/CRTLFD-EXIT: pexit 3 STATUS=%X0035A019/CRTLFD-EXIT: pexit 3 STATUS=%X00000003/' "$_st/pass.log" > "$_st/pexitraw.log"
     sed 's/CFDX: exit 3 flushed-by-exit//' "$_st/pass.log" > "$_st/noflush.log"
+    # vms-1c83: main returned and nothing ran down the C RTL (no atexit, no flush)
+    sed 's/CFDX: ret 3 flushed-by-exitCFDX: ret 3 atexit-ran//' "$_st/pass.log" > "$_st/retnorundown.log"
+    sed 's/CFDX: ret 0 atexit-ran//' "$_st/pass.log" > "$_st/retnoatexit.log"
+    sed 's/CRTLFD-EXIT: ret 3 STATUS=%X0035A019/CRTLFD-EXIT: ret 3 STATUS=%X00000003/' "$_st/pass.log" > "$_st/retstatus.log"
     sed 's/CFDUDF.DAT RFM=UDF/CFDUDF.DAT RFM=STMLF/' "$_st/pass.log" > "$_st/kwignored.log"
     sed 's/CFDSLF.DAT RFM=STMLF RAT=\./CFDSLF.DAT RFM=STMLF RAT=C./' "$_st/pass.log" > "$_st/ratignored.log"
     grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
     sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
     sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
-    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1"; do
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi

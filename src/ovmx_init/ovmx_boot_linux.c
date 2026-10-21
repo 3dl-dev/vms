@@ -418,3 +418,18 @@ void ovmx_boot_note_threads(char *buf, size_t bufsz)
     }
     closedir(d);
 }
+
+/*
+ * The boot date check (rd vms-b06). Linux sets the system clock from an RTC
+ * that carries the year and reports no verdict on it, so this backend does not
+ * say; ovmx_init.c's floor check still applies.
+ */
+int ovmx_boot_system_time_valid(void)
+{
+    return -1;
+}
+
+int ovmx_boot_set_system_time(const struct timespec *ts)
+{
+    return clock_settime(CLOCK_REALTIME, ts);
+}

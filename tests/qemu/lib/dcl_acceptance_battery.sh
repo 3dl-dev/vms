@@ -469,6 +469,19 @@ run_dcl_acceptance_battery() {
     must_match "$SEG" '20[0-9][0-9]' "SHOW TIME: reports a plausible current-century year 20XX (rejects epoch-zero 1970 / a hardcoded 19XX; the HH:MM:SS + negctl below are the primary anti-fabrication teeth)"
     if [ "${EXPECT_HOST_YEAR:-1}" = 1 ]; then
         must_have "$SEG" "$CURYEAR" "SHOW TIME: reports the real host year ($CURYEAR)"
+        # rd vms-b06: the DATE, not just the year, is today's -- OVMX/VAX once
+        # booted at 1-JAN-2010 while the TOY held the right day. The shown day
+        # must fall within [now - 2 days, now + 1 day] (host-zone slack).
+        local SHOWN SHOWN_S NOW_S
+        SHOWN=$(printf '%s\n' "$SEG" | grep -oE '[0-9]{1,2}-[A-Za-z]{3}-[0-9]{4}' | head -1)
+        SHOWN_S=$(date -u -d "${SHOWN//-/ }" +%s 2>/dev/null || echo 0)
+        NOW_S=$(date -u +%s)
+        if [ -n "$SHOWN" ] && [ "$SHOWN_S" -ge $((NOW_S - 2 * 86400)) ] \
+           && [ "$SHOWN_S" -le $((NOW_S + 86400)) ]; then
+            ok "SHOW TIME: reports today's date ($SHOWN; host $(date -u +%d-%b-%Y))"
+        else
+            bad "SHOW TIME: reports today's date [shown: '${SHOWN:-none}', host: $(date -u +%d-%b-%Y)]"
+        fi
     fi
     must_match "$SEG" '[0-9]{2}:[0-9]{2}:[0-9]{2}' "SHOW TIME: reports an HH:MM:SS time"
     negctl     "$SEG" 'SHOW TIME' "SHOW TIME"

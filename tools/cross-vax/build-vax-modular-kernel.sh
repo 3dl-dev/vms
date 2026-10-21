@@ -106,6 +106,24 @@ else
   echo "applied netbsd-ovmx-gencons.patch (closed console reads and drops RXDB)"
 fi
 
+# --- rd vms-b06: the TOY clock's year, and saying when there is no valid time --
+# A VAX TODR holds no year; the kernel takes it from the root filesystem's last
+# write. netbsd-ovmx-todr.patch (1) counts a TODR reading that is earlier in the
+# year than that write in the following year (SIMH and pcjs load the TODR with
+# the host's time of year at power on), and (2) publishes the kernel's verdict on
+# the boot time as kern.ovmx_toy_valid, so PID 1 asks for the date, as VMS does,
+# instead of the boot running on NetBSD's silent 1-JAN-2010 fallback. Idempotent.
+TODR_PATCH="${TODR_PATCH:-/src/tools/cross-vax/netbsd-ovmx-todr.patch}"
+[ -f "$TODR_PATCH" ] || { echo "FAIL: $TODR_PATCH not found"; exit 2; }
+if grep -q 'ovmx_toy_valid' "$SRC/sys/kern/kern_todr.c"; then
+  echo "netbsd-ovmx-todr.patch already applied"
+else
+  patch -d "$SRC" -p1 --dry-run -s < "$TODR_PATCH" \
+    || { echo "FAIL: netbsd-ovmx-todr.patch does not apply to $SRC"; exit 1; }
+  patch -d "$SRC" -p1 -s < "$TODR_PATCH"
+  echo "applied netbsd-ovmx-todr.patch (TODR year rollover + kern.ovmx_toy_valid)"
+fi
+
 # --- custom kernel config: GENERIC + the module framework (idempotent) -------
 CONF="$SRC/sys/arch/vax/conf/OVMX"
 if [ ! -f "$CONF" ]; then

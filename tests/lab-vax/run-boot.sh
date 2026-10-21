@@ -399,12 +399,15 @@ cross_build() {
 }
 
 # rd vms-553: the identity of the kernel + /boot this checkout builds -- the
-# build script and the OVMX_QUIET source patch it applies. A cached netbsd-OVMX
+# build script and every source patch it applies (OVMX_QUIET; the closed-console
+# RXDB read, rd vms-25f; the TOY year + kern.ovmx_toy_valid, rd vms-b06). A cached netbsd-OVMX
 # (or an installed one) whose stamp differs is STALE and is rebuilt/reinstalled:
 # the kernel is otherwise cached on the artifact FILE alone, which is how a
 # patched-kernel experiment once silently booted the old kernel (rd vms-bcd).
 KERNEL_STAMP="$(cat "${REPO}/tools/cross-vax/build-vax-modular-kernel.sh" \
-                    "${REPO}/tools/cross-vax/netbsd-ovmx-quiet.patch" | sha256sum | cut -c1-16)"
+                    "${REPO}/tools/cross-vax/netbsd-ovmx-quiet.patch" \
+                    "${REPO}/tools/cross-vax/netbsd-ovmx-gencons.patch" \
+                    "${REPO}/tools/cross-vax/netbsd-ovmx-todr.patch" | sha256sum | cut -c1-16)"
 
 # 2. build (or reuse) the custom MODULAR kernel, cached as ARTIFACTS_DIR/netbsd-OVMX
 #    (+ the OVMX_QUIET secondary bootstrap boot-OVMX, rd vms-553).

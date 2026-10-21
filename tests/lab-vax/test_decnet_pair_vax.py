@@ -476,7 +476,14 @@ def main():
         want = ("via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW), "
                 "station address %s" % mac_str(vax_station))
         dl = [ln for ln in nlog.splitlines() if "DECNETD-I-DATALINK" in ln]
-        check(any(want in ln for ln in dl),
+        # The console may break the long line (it did in CI: the text ended at
+        # "...no CAP_NET_RAW)" with ", station address ..." elsewhere), so
+        # require the executive-backend message AND this node's station in
+        # NETACP's DATALINK report, without assuming they share a line.
+        flat = nlog.replace("\n", "")
+        via = "via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW)"
+        check(any(via in ln for ln in dl)
+              and ("station address %s" % mac_str(vax_station)) in flat,
               "VAX: NETACP opened its 0x6003 datalink THROUGH THE EXECUTIVE with PHY_IO, "
               "station %s (DECNETD-I-DATALINK ... %s)" % (mac_str(vax_station), want))
         for ln in dl[:2]:
@@ -534,6 +541,10 @@ def main():
               "WIRE: no DECnet frame leaves the VAX from its burned-in DELQA address %s -- "
               "every one carries the Phase IV station" % VAX_MAC)
     finally:
+        if any(not ok for ok, _ in RESULTS):   # diagnosable from the CI log alone
+            for c in (v, x):
+                if c is not None:
+                    print("---- %s console (tail) ----\n%s" % (c.name, c.text()[-6000:]), flush=True)
         for c in (x, v):
             if c is not None:
                 c.close()

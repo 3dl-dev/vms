@@ -77,8 +77,8 @@
     "count": 490,
     "by_status": {
       "verified": 24,
-      "implemented": 309,
-      "partial": 69,
+      "implemented": 310,
+      "partial": 68,
       "stub": 9,
       "designed": 1,
       "absent": 78
@@ -88,8 +88,8 @@
       "n/a": 80,
       "advisory": 50
     },
-    "met": 333,
-    "in_progress": 69,
+    "met": 334,
+    "in_progress": 68,
     "not_started": 88,
     "facade_risk": 0
   },
@@ -97,8 +97,8 @@
     "count": 444,
     "by_status": {
       "verified": 24,
-      "implemented": 309,
-      "partial": 65,
+      "implemented": 310,
+      "partial": 64,
       "stub": 7,
       "designed": 1,
       "absent": 38
@@ -108,8 +108,8 @@
       "n/a": 40,
       "advisory": 46
     },
-    "met": 333,
-    "in_progress": 65,
+    "met": 334,
+    "in_progress": 64,
     "not_started": 46,
     "facade_risk": 0
   },
@@ -818,8 +818,8 @@
         "count": 22,
         "by_status": {
           "verified": 0,
-          "implemented": 14,
-          "partial": 3,
+          "implemented": 15,
+          "partial": 2,
           "stub": 0,
           "designed": 0,
           "absent": 5
@@ -828,8 +828,8 @@
           "real": 17,
           "n/a": 5
         },
-        "met": 14,
-        "in_progress": 3,
+        "met": 15,
+        "in_progress": 2,
         "not_started": 5,
         "facade_risk": 0
       }
@@ -4715,12 +4715,12 @@
       "id": "lib$_charscan",
       "kind": "routine",
       "vms": "Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6)",
-      "status": "partial",
+      "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/libvms/rtl/lib_charscan.c",
+      "evidence": "src/libvms/rtl/lib_strconv.c",
       "verified_against": null,
-      "notes": "5/6 present",
+      "notes": "Proof tests/libvms/test_lib_rtl_batch2.c + tests/qemu/test_syssvc_lib_movtuc.c + defects.d/lib-movtuc-stop-untranslated.defect. Every VAX character-string-instruction jacket is present: LIB$LOCC LIB$MATCHC LIB$SCANC LIB$SKPC LIB$SPANC LIB$MOVC3 LIB$MOVC5 LIB$MOVTC and (the last gap) LIB$MOVTUC, which returns the 1-based position of the source character that TRANSLATES to the stop character (0 if none), never writes the stop character, and pads with the untranslated fill character or leaves the remainder unchanged when fill is omitted (RTL Library manual).",
       "plan_ref": "vms-801"
     },
     {

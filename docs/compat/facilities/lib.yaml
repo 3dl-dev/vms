@@ -7,7 +7,7 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-801
 summary: >
-  116 distinct LIB$ entry points are implemented across rtl/lib_*.c (the
+  117 distinct LIB$ entry points are implemented across rtl/lib_*.c (the
   LIB$ include surface declares 254 symbols; 1 stub marker remains in
   lib$routines.h). Broad genuine coverage across arithmetic/bit ops, char-scan,
   CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree,
@@ -20,7 +20,7 @@ items:
   - {id: lib$_arith_bitops, kind: routine, status: partial, authenticity: real, vms: "Arithmetic/bit-manipulation group (LIB$ADDX, LIB$SUBX, LIB$BBSS/BBCC, LIB$EMUL, ...; VMS ships ~16)", evidence: src/libvms/rtl/lib_arith.c, notes: "14/16 present"}
   - {id: lib$ishft, kind: routine, status: absent, authenticity: n/a, vms: "Arithmetic/logical shift"}
   - {id: lib$ishftc, kind: routine, status: absent, authenticity: n/a, vms: "Circular shift"}
-  - {id: lib$_charscan, kind: routine, status: partial, authenticity: real, vms: "Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6)", evidence: src/libvms/rtl/lib_charscan.c, notes: "5/6 present"}
+  - {id: lib$_charscan, kind: routine, status: implemented, authenticity: real, vms: "Character-scan group (LIB$SCANC, LIB$LOCC, LIB$SKPC, ...; VMS ships ~6)", evidence: src/libvms/rtl/lib_strconv.c, notes: "Proof tests/libvms/test_lib_rtl_batch2.c + tests/qemu/test_syssvc_lib_movtuc.c + defects.d/lib-movtuc-stop-untranslated.defect. Every VAX character-string-instruction jacket is present: LIB$LOCC LIB$MATCHC LIB$SCANC LIB$SKPC LIB$SPANC LIB$MOVC3 LIB$MOVC5 LIB$MOVTC and (the last gap) LIB$MOVTUC, which returns the 1-based position of the source character that TRANSLATES to the stop character (0 if none), never writes the stop character, and pads with the untranslated fill character or leaves the remainder unchanged when fill is omitted (RTL Library manual)."}
   - {id: lib$trim, kind: routine, status: absent, authenticity: n/a, vms: "Trim trailing blanks/tabs from a string"}
   - {id: lib$_cli_spawn, kind: routine, status: implemented, authenticity: real, vms: "CLI/spawn group (LIB$SPAWN, LIB$GET_INPUT, LIB$GET_COMMAND, CLI$ FSM parser, ...; VMS ships ~10)", evidence: src/libvms/rtl/lib_common.c, notes: "~10/10 present, including a real CLI$ FSM parser"}
   - {id: lib$do_command, kind: routine, status: absent, authenticity: n/a, vms: "Execute a DCL command string programmatically"}

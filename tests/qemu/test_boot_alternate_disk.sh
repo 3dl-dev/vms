@@ -205,9 +205,14 @@ if [ "$rc" -eq 0 ]; then
     if wait_for 'Password:' 30; then
         send 'MANAGER'
         if wait_for 'Welcome to OpenVMX' 60; then
-            sleep 2
-            send 'SHOW LOGICAL SYS$SYSDEVICE'
-            if wait_for '"SYS$SYSDEVICE" = "VDA100:"' 30; then mrc=0; fi
+            # The login's own output (the terminal-type query, SYLOGIN) may
+            # still be running; a command typed into it is not lost but may not
+            # be answered yet -- ask up to three times.
+            for _try in 1 2 3; do
+                sleep 5
+                send 'SHOW LOGICAL SYS$SYSDEVICE'
+                if wait_for '"SYS$SYSDEVICE" = "VDA100:"' 20; then mrc=0; break; fi
+            done
         fi
     fi
 fi

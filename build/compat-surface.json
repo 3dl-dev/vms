@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-19",
+    "generated": "2026-10-21",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -77,40 +77,40 @@
     "count": 490,
     "by_status": {
       "verified": 24,
-      "implemented": 306,
-      "partial": 71,
-      "stub": 10,
+      "implemented": 309,
+      "partial": 69,
+      "stub": 9,
       "designed": 1,
       "absent": 78
     },
     "by_authenticity": {
-      "real": 359,
+      "real": 360,
       "n/a": 80,
-      "advisory": 51
+      "advisory": 50
     },
-    "met": 330,
-    "in_progress": 71,
-    "not_started": 89,
+    "met": 333,
+    "in_progress": 69,
+    "not_started": 88,
     "facade_risk": 0
   },
   "overall_in_scope": {
     "count": 444,
     "by_status": {
       "verified": 24,
-      "implemented": 306,
-      "partial": 67,
-      "stub": 8,
+      "implemented": 309,
+      "partial": 65,
+      "stub": 7,
       "designed": 1,
       "absent": 38
     },
     "by_authenticity": {
-      "real": 357,
+      "real": 358,
       "n/a": 40,
-      "advisory": 47
+      "advisory": 46
     },
-    "met": 330,
-    "in_progress": 67,
-    "not_started": 47,
+    "met": 333,
+    "in_progress": 65,
+    "not_started": 46,
     "facade_risk": 0
   },
   "facilities": [
@@ -1191,8 +1191,8 @@
         "count": 5,
         "by_status": {
           "verified": 2,
-          "implemented": 2,
-          "partial": 1,
+          "implemented": 3,
+          "partial": 0,
           "stub": 0,
           "designed": 0,
           "absent": 0
@@ -1201,8 +1201,8 @@
           "n/a": 1,
           "real": 4
         },
-        "met": 4,
-        "in_progress": 1,
+        "met": 5,
+        "in_progress": 0,
         "not_started": 0,
         "facade_risk": 0
       }
@@ -1215,25 +1215,24 @@
       "tier": null,
       "plan_ref": "vms-8ad",
       "vms_ref": "OpenVMS Guide to System Security ch. 5 (Protecting Data)",
-      "last_reviewed": "2026-10-08",
+      "last_reviewed": "2026-10-21",
       "rollup": {
         "count": 12,
         "by_status": {
           "verified": 1,
-          "implemented": 6,
-          "partial": 3,
-          "stub": 1,
+          "implemented": 8,
+          "partial": 2,
+          "stub": 0,
           "designed": 0,
           "absent": 1
         },
         "by_authenticity": {
-          "real": 10,
-          "advisory": 1,
+          "real": 11,
           "n/a": 1
         },
-        "met": 7,
-        "in_progress": 3,
-        "not_started": 2,
+        "met": 9,
+        "in_progress": 2,
+        "not_started": 1,
         "facade_risk": 0
       }
     },
@@ -5886,12 +5885,12 @@
       "id": "privs$file_access_override",
       "kind": "feature",
       "vms": "SYSPRV/BYPASS/READALL/GRPPRV override normal file protection checks",
-      "status": "partial",
+      "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/kernel-core/vmsfs_acp.c:1053",
+      "evidence": "src/kernel-core/vms_prot.h",
       "verified_against": null,
-      "notes": "vms-165 retired the old vmsfs_blkdev_permission() (uid==0/gid only); the Files-11 ACP's acp_check_access (vmsfs_acp.c:1022) applies privilege overrides (defines vmsfs_acp.c:999-1001, apply :1053-1056): BYPASS (bit 29) lifts all access control, READALL (bit 35) grants read, SYSPRV (bit 28) confers the SYSTEM protection category. GRPPRV is NOT handled \u2014 hence partial, not implemented. Real (does the real thing for the three it honors), not facade-risk. Tracked vms-f15/vms-36d. Cross-listed to protection-acl. Re-census 2026-09-14: unchanged, line refs refreshed (was :861).",
+      "notes": "The Files-11 ACP's acp_check_access (vmsfs_acp.c) decides through vms_prot_check_acl() (vms_prot.h), shared by every object class: BYPASS lifts all access control, READALL grants read (and a file's execute), SYSPRV confers the SYSTEM protection category, and GRPPRV confers it for an object owned by the accessor's own UIC group (OpenVMS VAX V7.3 oracle, docs/oracle/vax73-acl.md GRPPRV). Proof tests/qemu/test_syssvc_privilege_enforce.c with one negative control per privilege: defects.d/acp-readall-ignored, acp-bypass-ignored, acp-sysprv-ignored, acp-grpprv-ignored. Cross-listed to protection-acl.",
       "plan_ref": "vms-8ad"
     },
     {
@@ -5916,12 +5915,12 @@
       "id": "fileprot$delete_bit",
       "kind": "feature",
       "vms": "Delete (D) protection bit",
-      "status": "stub",
-      "authenticity": "advisory",
+      "status": "implemented",
+      "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/kernel-core/vmsfs_acp.c:1022",
+      "evidence": "src/kernel-core/vmsfs_acp.c",
       "verified_against": null,
-      "notes": "acp_check_access wants only Read/Write (and Execute for directory traversal); the Delete bit is never a wanted right in the check, so it is not enforced \u2014 advisory. Re-census 2026-09-14: unchanged, line ref refreshed (was :861).",
+      "notes": "IO$_DELETE and IO$_MODIFY!MOVE (rename) ask the executive protection decision for VMS_PROT_ACC_DELETE on the file, not write (Guide to System Security, file class: write does not include delete; removing or renaming a name needs D), and IO$_DELETE by name also needs W on the parent directory (DCL DELETE: D on the file, W on the parent). Proof tests/qemu/test_syssvc_acp_delete_prot.c + defects.d/acp-delete-bit-not-wanted.defect + acp-delete-dir-write-not-checked.defect.",
       "plan_ref": "vms-8ad"
     },
     {
@@ -6066,12 +6065,12 @@
       "id": "fileprot$priv_override",
       "kind": "feature",
       "vms": "SYSPRV/BYPASS/READALL/GRPPRV override of normal SOGW checks",
-      "status": "partial",
+      "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/kernel-core/vmsfs_acp.c:1053",
+      "evidence": "src/kernel-core/vms_prot.h",
       "verified_against": null,
-      "notes": "acp_check_access honors BYPASS (lifts all), READALL (grants read), and SYSPRV (SYSTEM category) \u2014 real. GRPPRV is not consulted, hence partial. Tracked vms-f15/vms-36d. Full detail under privileges; cross-listed here as the file-access-facing half. Re-census 2026-09-14: unchanged, line ref refreshed (was :861).",
+      "notes": "vms_prot_check_acl() (the one decision acp_check_access uses) honors BYPASS (lifts all), READALL (read/execute), SYSPRV (system category) and GRPPRV (system category for an object of its own group; OpenVMS VAX V7.3 oracle docs/oracle/vax73-acl.md GRPPRV). Proof tests/qemu/test_syssvc_privilege_enforce.c + defects.d/acp-readall-ignored, acp-bypass-ignored, acp-sysprv-ignored, acp-grpprv-ignored. Full detail under privileges.",
       "plan_ref": "vms-8ad"
     },
     {

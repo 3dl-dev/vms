@@ -872,9 +872,9 @@ assert_crtlfd() {
             "exit 0x1000002C:%X1000002C" "pexit 0:%X00000001" "pexit 1:%X1035A00A" \
             "pexit 2:%X0035A011" "pexit 3:%X0035A019" "pexit 255:%X0035A7F9" "pexit 256:%X00000001"; do
     _call=${_x%%:*}; _want=${_x##*:}
-    tr -d '\r' < "$log" | grep -aqF "CRTLFD-EXIT: $_call STATUS=$_want" \
+    tr -d '\r' < "$log" | grep >/dev/null -aF "CRTLFD-EXIT: $_call STATUS=$_want" \
       || { echo "  assert_crtlfd: $_call did not give \$STATUS $_want" >&2; return 1; }
-    tr -d '\r' < "$log" | grep -aqF "CFDX: $_call flushed-by-exit" \
+    tr -d '\r' < "$log" | grep >/dev/null -aF "CFDX: $_call flushed-by-exit" \
       || { echo "  assert_crtlfd: $_call: exit did not flush stdio" >&2; return 1; }
   done
   return 0

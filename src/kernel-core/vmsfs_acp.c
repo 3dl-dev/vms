@@ -4469,12 +4469,34 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
              * contents but not delete it (OpenVMS Guide to System Security, file
              * class; DCL DELETE: "Requires delete (D) access to the file and
              * write (W) access to the parent directory"). Any other modify
-             * (attributes, extend) needs write.
+             * (extend, truncate, record attributes) needs write.
              */
+            /*
+             * Changing a file's protection or owner is a CONTROL right, not a
+             * write (rd vms-1fb7; OpenVMS Guide to System Security: control
+             * access "gives the holder the privileges of the object's owner" --
+             * to change its protection, owner and ACL). The system and owner
+             * categories hold it whatever the protection code says, so the
+             * owner of an (O:R) file can still change it, as on VMS; a
+             * world-writable stranger cannot. The rule the ACL edit above
+             * applies. An attribute-only modify needs CONTROL alone; one that
+             * also extends, truncates or rewrites record attributes needs
+             * write as well.
+             */
+            {
+            int need_control = ap->func == VMS_ACP_FOP_MODIFY && (ap->attr_ctl & (VMS_ACP_ATTR_PROT | VMS_ACP_ATTR_OWNER));
+            int attr_only = need_control &&
+                            !(ap->attr_ctl & ~(VMS_ACP_ATTR_PROT | VMS_ACP_ATTR_OWNER)) &&
+                            ap->exsz == 0 && ap->trunc_efblk == 0;
             if (ap->func == VMS_ACP_FOP_DELETE || (ap->modifiers & VMS_ACP_M_MOVE))
                 status = acp_check_want(proc, vol, &sc->fh, VMS_PROT_ACC_DELETE);
+            else if (attr_only)
+                status = SS__NORMAL;
             else
                 status = acp_check_access(proc, vol, &sc->fh, 1);
+            if (status == SS__NORMAL && need_control && !acp_has_control(proc, vol, &sc->fh))
+                status = SS__NOPRIV;
+            }
             if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
 
             if (ap->func == VMS_ACP_FOP_DELETE) {

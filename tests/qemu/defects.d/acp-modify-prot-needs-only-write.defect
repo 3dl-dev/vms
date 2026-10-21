@@ -1,0 +1,30 @@
+# acp-modify-prot-needs-only-write -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "The executive ACP grants a change of a file's protection/owner only with CONTROL access (IO\$_MODIFY attribute write)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_dcl_set_protection";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation stops treating a protection/owner write as a CONTROL right, so IO\$_MODIFY falls back to the plain write check: an unprivileged non-owner can rewrite the protection of any world-writable file. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+a world-writable file's protection is refused to a non-owner without CONTROL (SS$_NOPRIV)
+and its header protection is unchanged
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the need_control declaration in the IO$_MODIFY access check.
+        sed -i 's|^            int need_control = args.func == VMS_ACP_FOP_MODIFY \&\& (args.attr_ctl \& (VMS_ACP_ATTR_PROT \| VMS_ACP_ATTR_OWNER));$|            int need_control = 0; /* NEGCTL acp-modify-prot-needs-only-write */|' "$_file"
+    :
+}

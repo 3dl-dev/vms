@@ -1,0 +1,25 @@
+THE ABSENCE, COUNTED OVER THE WHOLE UNTRIMMED CAPTURE
+
+capture: run-fire/refire/wire.pcap, the pod's own br0, 749 SCS-MSG frames
+frames the OVMX node originated:                       119
+of those, cat-0x02 op-0x03 ($DEQ) frames:              0   <-- the crash shape
+
+For contrast, the fire that crashed VAX1 (vms-3ac) had three, and the
+third -- naming the master handle from before the remaster -- is the one
+VAX1 bugchecked on (see ../vms-3ac-invlockid-20261021/deq-frames.txt).
+
+What the OVMX node DID originate here, by (category, opcode):
+  cat 01 op 01     2
+  cat 01 op 02     1
+  cat 01 op 14     2
+  cat 02 op 01     7
+  cat 02 op 04     5
+  cat 02 op 14     2
+  cat 04 op 00    86
+  cat 0b op 05     1
+  cat 81 op 03     1
+  cat 81 op 05     4
+  cat 81 op 09     1
+  cat 82 op 15     3
+  cat 86 op 00     3
+  cat 8b op 04     1

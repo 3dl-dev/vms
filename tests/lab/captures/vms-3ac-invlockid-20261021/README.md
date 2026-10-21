@@ -56,6 +56,18 @@ whole diagnosis (`deq-frames.txt`):
 | `#4503..#4549` | -- | **the tree moves to OVMXE** (0e/0f/10, two 0x13s, OVMX's two 0x14s) | fine |
 | `#14091` | `0x370004A7` | **OVMXE** -- VAX1 masters nothing here any more | **VAX1 bugchecks** |
 
+## AND THE RE-FIRE WITH THE GUARD PASSED, six of six
+
+[`REFIRE.md`](REFIRE.md): the same sequence on a fresh pod with the fixed build
+-- a real VAX remasters the tree onto OVMX again, OVMX releases its holder
+again, and this time the capture contains **zero** `cat 0x02 op 0x03` frames
+from the OVMX node (of 119 it originated), the console says
+`%DLM, not telling system 65537 about lock 16778057 on 'RA7T': THIS node masters
+that resource`, there is no bugcheck on any console, `CLUSTER_NODES` reads 3 on
+both VAXes, and VAX2's directory entry still names OVMXE as the master with the
+lock gone. Pre-registered in [`REFIRE-PLAN.md`](REFIRE-PLAN.md) before the build
+existed.
+
 ## The causal chain, every step off committed evidence
 
 1. VAX1 mastered `RA7T`. OVMX's `$ENQ` was granted and OVMX's **proxy LKB**

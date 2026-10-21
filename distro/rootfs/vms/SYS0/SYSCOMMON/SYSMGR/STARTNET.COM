@@ -86,7 +86,9 @@ $! its own service DB. The EXECUTIVE assigns the process name NETACP as it creat
 $! the process, so SHOW SYSTEM lists it and $GETJPI resolves it by name; a
 $! duplicate is refused to the caller (%RUN-F-CREPRC / -SYSTEM-F-DUPLNAM), making
 $! a re-run idempotent-safe. Per-process status (served / not-configured / a
-$! NOSOCKET failure) goes to SYS$MANAGER:NETACP.LOG, never the console.
+$! NOSOCKET failure) is aimed at SYS$MANAGER:NETACP.LOG and never reaches the
+$! console; until a created process can write a VMS file as its SYS$OUTPUT
+$! (rd vms-c89) $CREPRC puts it on NL: instead (rd vms-5843).
 $ RUN /DETACHED -
        /PROCESS_NAME=NETACP -
        /INPUT=NL: /OUTPUT=SYS$MANAGER:NETACP.LOG -

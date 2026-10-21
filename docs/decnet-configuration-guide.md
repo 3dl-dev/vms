@@ -238,8 +238,12 @@ LPBETA phase) finds `SYS$SYSTEM:NETNODE_LOCAL.DAT` and starts NETACP
 (`SYS$SYSTEM:DECNETD.EXE`) detached. NETACP self-sources its address from that
 file, opens its datalink through the executive on the primary NIC, and sends
 endnode hellos. It needs `PHY_IO`, which it inherits from its creator (SYSTEM);
-without it the executive refuses the datalink with `SS$_NOPRIV`, logged to
-`SYS$MANAGER:NETACP.LOG`. On an unconfigured node STARTNET is a silent no-op.
+without it the executive refuses the datalink with `SS$_NOPRIV` and NETACP exits
+(`SHOW SYSTEM` then lists no NETACP). NETACP runs with no terminal: its own
+status lines are meant for `SYS$MANAGER:NETACP.LOG`, but a created process cannot
+yet write a VMS file as its `SYS$OUTPUT` (rd vms-c89), so today they are
+discarded, never written on the console. On an unconfigured node STARTNET is a
+silent no-op.
 
 ## 3. Remote interactive login — SET HOST
 

@@ -67,6 +67,10 @@
  * OVMX-LOCAL: sys$getjpi -- JPI$_CPUTIM is not the executive's: it comes from
  *     getrusage(RUSAGE_SELF) for the caller and from /proc/<pid>/stat otherwise.
  *     The executive keeps no accounting for a process it has a row for.
+ * OVMX-USERSPACE: sys$process_scan (vms-e99) -- it only builds the scan
+ *     context (criteria + cursor), held in this process as VMS keeps it in the
+ *     caller's; the processes it selects are the executive's rows, read by
+ *     $GETJPI (sys$getjpi's executive path above) when the context is walked.
  * OVMX-PARTIAL: sys$getjpiw (vms-pt1) -- exec: tail-calls sys$getjpi, so the
  *     same executive-resolved row answers the same items.
  * OVMX-LOCAL: sys$getjpiw -- and inherits the same /proc-derived JPI$_CPUTIM.
@@ -195,6 +199,7 @@
 #include "lnmdef.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
+#include "pscandef.h"
 #include "vmsfs/filespec.h"   /* vmsfs_to_linux_path: a VMS image spec */
 #include <sched.h>
 #include "prvdef.h"
@@ -418,6 +423,244 @@ static void jpi_put_long(const struct item_list_3 *item, uint32_t v)
     if (item->retlen) *item->retlen = n;
 }
 
+/*
+ * ---- $PROCESS_SCAN (OpenVMS System Services Reference, $PROCESS_SCAN) ----
+ *
+ * $PROCESS_SCAN builds a scan context from an item list of selection criteria
+ * and returns it in *pidctx; the caller then passes pidctx to $GETJPI as its
+ * pidadr, and each $GETJPI answers for the next process the criteria select,
+ * ending with SS$_NOMOREPROC (which deletes the context). The processes are
+ * the executive's rows, walked with the same cursor a wildcard $GETJPI uses;
+ * the context itself is process-local (VMS keeps it in the caller's process
+ * too). Item codes and flags are the V7.3 $PSCANDEF (pscandef.h).
+ *
+ * Item list entries: word buffer length, word item code, longword value (a
+ * numeric criterion) or buffer address (a string criterion), longword
+ * item-specific flags. Criteria with different item codes are ANDed; an entry
+ * flagged PSCAN$M_OR is ORed with the next entry of the same code. With no
+ * relational flag a criterion is EQL.
+ *
+ * Answered: GRP MEM UIC MODE JOBTYPE PRI PRIB AUTHPRI (numeric: EQL NEQ GTR
+ * GEQ LSS LEQ BIT_ALL BIT_ANY), USERNAME PRCNAM TERMINAL (string: EQL NEQ,
+ * CASE_BLIND, WILDCARD, PREFIX_MATCH), NODE_CSID 0 (this node: OVMX scans no
+ * other node), GETJPI_BUFFER_SIZE (a buffering hint). Any other item --
+ * criteria the executive's row cannot answer (STATE, STS, OWNER, ...) or a
+ * scan of another node -- is SS$_UNSUPPORTED, never silently ignored.
+ *
+ * A string criterion's buffer address is the item list's 32-bit longword, as
+ * VMS defines it: the buffer must lie in the low 4 GB.
+ */
+#define PSCAN_CTX_TAG    0xC0FE0000u
+#define PSCAN_MAX_CTX    16
+#define PSCAN_MAX_ITEMS  32
+#define PSCAN_STR_MAX    64
+
+struct pscan_crit {
+    uint16_t code;
+    uint32_t flags;
+    uint32_t num;
+    char     str[PSCAN_STR_MAX];
+};
+struct pscan_ctx {
+    int      in_use;
+    uint32_t cursor;
+    int      n;
+    struct pscan_crit c[PSCAN_MAX_ITEMS];
+};
+static struct pscan_ctx pscan_tab[PSCAN_MAX_CTX];
+
+struct pscan_ile {
+    uint16_t buflen;
+    uint16_t code;
+    uint32_t value;
+    uint32_t flags;
+};
+
+#define PSCAN_REL_MASK (PSCAN$M_EQL | PSCAN$M_NEQ | PSCAN$M_GTR | PSCAN$M_GEQ | \
+                        PSCAN$M_LSS | PSCAN$M_LEQ | PSCAN$M_BIT_ALL | PSCAN$M_BIT_ANY)
+
+static int pscan_is_string(uint16_t code)
+{
+    return code == PSCAN$_USERNAME || code == PSCAN$_PRCNAM || code == PSCAN$_TERMINAL;
+}
+
+static int pscan_is_numeric(uint16_t code)
+{
+    return code == PSCAN$_GRP || code == PSCAN$_MEM || code == PSCAN$_UIC ||
+           code == PSCAN$_MODE || code == PSCAN$_JOBTYPE || code == PSCAN$_PRI ||
+           code == PSCAN$_PRIB || code == PSCAN$_AUTHPRI;
+}
+
+uint32_t sys$process_scan(uint32_t *pidctx, void *itmlst)
+{
+    if (!pidctx)
+        return SS$_BADPARAM;
+    struct pscan_ctx tmp;
+    memset(&tmp, 0, sizeof tmp);
+    const struct pscan_ile *e = (const struct pscan_ile *)itmlst;
+    for (; e && (e->buflen || e->code); e++) {
+        if (e->code <= PSCAN$_BEGIN || e->code >= PSCAN$_END)
+            return SS$_BADPARAM;
+        if (e->code == PSCAN$_GETJPI_BUFFER_SIZE)
+            continue;
+        if (tmp.n >= PSCAN_MAX_ITEMS)
+            return SS$_BADPARAM;
+        struct pscan_crit *c = &tmp.c[tmp.n];
+        c->code = e->code;
+        c->flags = e->flags;
+        if (pscan_is_numeric(e->code)) {
+            c->num = e->value;
+        } else if (pscan_is_string(e->code)) {
+            const char *a = (const char *)(uintptr_t)e->value;
+            if (!a || e->buflen >= PSCAN_STR_MAX)
+                return SS$_BADPARAM;
+            memcpy(c->str, a, e->buflen);
+            c->str[e->buflen] = '\0';
+        } else if (e->code == PSCAN$_NODE_CSID && e->value == 0 &&
+                   ((e->flags & PSCAN_REL_MASK) == 0 ||
+                    (e->flags & PSCAN_REL_MASK) == PSCAN$M_EQL ||
+                    (e->flags & PSCAN_REL_MASK) == PSCAN$M_NEQ)) {
+            continue;                      /* 0: every node -- this one */
+        } else {
+            return SS$_UNSUPPORTED;
+        }
+        tmp.n++;
+    }
+    for (int i = 0; i < PSCAN_MAX_CTX; i++) {
+        if (!pscan_tab[i].in_use) {
+            pscan_tab[i] = tmp;
+            pscan_tab[i].in_use = 1;
+            *pidctx = PSCAN_CTX_TAG | (uint32_t)i;
+            return SS$_NORMAL;
+        }
+    }
+    return SS$_INSFMEM;
+}
+
+static int pscan_num_match(uint32_t v, const struct pscan_crit *c)
+{
+    switch (c->flags & PSCAN_REL_MASK) {
+    case PSCAN$M_NEQ:     return v != c->num;
+    case PSCAN$M_GTR:     return v >  c->num;
+    case PSCAN$M_GEQ:     return v >= c->num;
+    case PSCAN$M_LSS:     return v <  c->num;
+    case PSCAN$M_LEQ:     return v <= c->num;
+    case PSCAN$M_BIT_ALL: return (v & c->num) == c->num;
+    case PSCAN$M_BIT_ANY: return (v & c->num) != 0;
+    default:              return v == c->num;
+    }
+}
+
+static int pscan_str_match(const char *field, const struct pscan_crit *c)
+{
+    char f[PSCAN_STR_MAX], k[PSCAN_STR_MAX];
+    int blind = (c->flags & PSCAN$M_CASE_BLIND) != 0;
+    size_t i, n;
+    /* The row's value without trailing blanks or a terminal's colon. */
+    for (n = 0; field[n] && n < sizeof f - 1; n++) f[n] = field[n];
+    while (n && (f[n - 1] == ' ' || f[n - 1] == ':')) n--;
+    f[n] = '\0';
+    for (i = 0; c->str[i] && i < sizeof k - 1; i++) k[i] = c->str[i];
+    while (i && (k[i - 1] == ' ' || (c->code == PSCAN$_TERMINAL && k[i - 1] == ':'))) i--;
+    k[i] = '\0';
+    if (blind) {
+        for (i = 0; f[i]; i++) if (f[i] >= 'a' && f[i] <= 'z') f[i] = (char)(f[i] - 32);
+        for (i = 0; k[i]; i++) if (k[i] >= 'a' && k[i] <= 'z') k[i] = (char)(k[i] - 32);
+    }
+    int hit;
+    if (c->flags & PSCAN$M_WILDCARD) {
+        /* '*' any sequence, '%' one character. */
+        const char *p = k, *s = f, *star = NULL, *mark = NULL;
+        while (*s) {
+            if (*p == '*') { star = p++; mark = s; }
+            else if (*p == '%' || *p == *s) { p++; s++; }
+            else if (star) { p = star + 1; s = ++mark; }
+            else break;
+        }
+        while (*p == '*') p++;
+        hit = (*s == '\0' && *p == '\0');
+    } else if (c->flags & PSCAN$M_PREFIX_MATCH) {
+        hit = strncmp(f, k, strlen(k)) == 0;
+    } else {
+        hit = strcmp(f, k) == 0;
+    }
+    return (c->flags & PSCAN$M_NEQ) ? !hit : hit;
+}
+
+static int pscan_crit_match(const struct vms_procinfo *info, const struct pscan_crit *c)
+{
+    switch (c->code) {
+    case PSCAN$_GRP:      return pscan_num_match(info->uic >> 16, c);
+    case PSCAN$_MEM:      return pscan_num_match(info->uic & 0xFFFFu, c);
+    case PSCAN$_UIC:      return pscan_num_match(info->uic, c);
+    case PSCAN$_MODE:
+        return pscan_num_match(info->proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                             : info->proc_type == VMS_PROC_T_OTHER ? JPI$K_OTHER
+                             : JPI$K_INTERACTIVE, c);
+    case PSCAN$_JOBTYPE:
+        return pscan_num_match(info->proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                             : info->terminal[0] ? JPI$K_LOCAL : JPI$K_DETACHED, c);
+    case PSCAN$_PRI:
+    case PSCAN$_PRIB:
+    case PSCAN$_AUTHPRI: {
+        uint32_t p = 0, auth = 0;
+        if (!(vms_kif_pri(VMS_PRI_OP_GET, info->vms_pid, &p, NULL, &auth) & 1))
+            return 0;
+        return pscan_num_match(c->code == PSCAN$_AUTHPRI ? auth : p, c);
+    }
+    case PSCAN$_USERNAME: return pscan_str_match(info->username, c);
+    case PSCAN$_PRCNAM:   return pscan_str_match(info->prcnam, c);
+    case PSCAN$_TERMINAL: {
+        const char *t = info->terminal;
+        while (*t == '_') t++;
+        return pscan_str_match(t, c);
+    }
+    default:              return 0;
+    }
+}
+
+/* Every criterion group holds: same-code entries joined by PSCAN$M_OR form a
+ * group that holds if any member does; groups are ANDed. */
+static int pscan_select(const struct vms_procinfo *info, const struct pscan_ctx *x)
+{
+    int i = 0;
+    while (i < x->n) {
+        int any = 0, j = i;
+        for (;;) {
+            if (pscan_crit_match(info, &x->c[j]))
+                any = 1;
+            if ((x->c[j].flags & PSCAN$M_OR) && j + 1 < x->n && x->c[j + 1].code == x->c[j].code)
+                j++;
+            else
+                break;
+        }
+        if (!any)
+            return 0;
+        i = j + 1;
+    }
+    return 1;
+}
+
+/* The next process a $PROCESS_SCAN context selects; SS$_NOMOREPROC deletes it. */
+static uint32_t pscan_next(uint32_t ctx, struct vms_procinfo *info)
+{
+    uint32_t slot = ctx & 0xFFFFu;
+    if (slot >= PSCAN_MAX_CTX || !pscan_tab[slot].in_use)
+        return SS$_BADPARAM;
+    struct pscan_ctx *x = &pscan_tab[slot];
+    for (;;) {
+        uint32_t st = vms_kif_procscan(&x->cursor, info);
+        if (st == SS$_NONEXPR) {             /* the executive's end of the table */
+            x->in_use = 0;
+            return SS$_NOMOREPROC;
+        }
+        if (!(st & 1))
+            return st;                        /* e.g. no executive: said, not hidden */
+        if (!info->redacted && pscan_select(info, x))
+            return SS$_NORMAL;
+    }
+}
+
 static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                     void *prcnam_arg,
                     void *itmlst_arg,
@@ -445,7 +688,12 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
     uint32_t status;
     uint32_t *pidio = (uint32_t *)(uintptr_t)pidadr;
 
-    if (pidio && (*pidio & 0x80000000u)) {
+    if (pidio && (*pidio & 0xFFFF0000u) == PSCAN_CTX_TAG) {
+        /* A $PROCESS_SCAN context: the next process its criteria select. */
+        status = pscan_next(*pidio, &info);
+        if (!(status & 1))
+            return status;
+    } else if (pidio && (*pidio & 0x80000000u)) {
         /*
          * WILDCARD (OpenVMS System Services Reference, $GETJPI): -1 starts a
          * walk of the processes the caller may see; each call answers for the

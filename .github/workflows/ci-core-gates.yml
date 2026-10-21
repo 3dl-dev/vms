@@ -89,15 +89,12 @@ jobs:
   # md from silently diverging -- someone edits a status in the YAML and
   # forgets to regenerate, or hand-patches the md directly.
   #
-  # `render_compat.py --check` only validates vocab/schema (status/
-  # authenticity/kind against docs/compat/domains.yaml, cross-refs, evidence
-  # paths) -- it does NOT compare its output against the tracked md, so it
-  # cannot catch drift by itself. This job adds that comparison: regenerate,
-  # then diff the fresh render against the committed file. The generated
-  # header carries a "Generated <today>" date stamp that changes on every
-  # run regardless of content, so both sides of the diff have that one line
-  # stripped first -- otherwise the gate would redden on pure calendar
-  # rollover, which is not the drift this gate exists to catch.
+  # This job validates the YAML (vocab/schema/cross-refs) and that it
+  # renders. The md drift comparison is the ledger.yml drift gate (a required
+  # check): a compat PR edits only the YAML; the tracked md is a dated
+  # snapshot refreshed by `render_compat.py --publish`, and a PR that touches
+  # it must make it an exact render (no hand-edits). PRs no longer regenerate
+  # it -- its rollup table made every pair of queued compat PRs conflict.
   #
   # In-repo and network-free (no rd, no external calls), so this is cleanly
   # CI-gateable, unlike tools/roadmap/reconcile.py --check (needs `rd`, which
@@ -202,17 +199,6 @@ jobs:
       - name: Validate compat surface YAML (schema/vocab)
         run: python3 tools/compat/render_compat.py --check
 
-      - name: Detect drift between docs/compat/*.yaml and the generated register
-        run: |
-          set -e
-          cp docs/compatibility-surface.md /tmp/compat-surface-tracked.md
-          python3 tools/compat/render_compat.py
-          if ! diff -u <(grep -v '^> Generated ' /tmp/compat-surface-tracked.md) \
-                       <(grep -v '^> Generated ' docs/compatibility-surface.md); then
-            echo "::error::docs/compatibility-surface.md has drifted from docs/compat/*.yaml (single ledger, INV-LEDGER). Run 'python3 tools/compat/render_compat.py' and commit the regenerated file."
-            exit 1
-          fi
-          echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
   # -----------------------------------------------------------------------
   # Job: cluster core includes gate (FC-P0.1)
   #

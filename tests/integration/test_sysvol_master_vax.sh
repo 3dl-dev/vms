@@ -83,6 +83,8 @@ make_image MAIL_SERVER.EXE  M  6500
 make_image MAIL.EXE         R  6200
 # NCP.EXE (rd vms-5bb5): the DECnet network control program, staged beside it.
 make_image NCP.EXE          C  6000
+# OPCOM.EXE (rd vms-798): the operator communication process PID 1 creates.
+make_image OPCOM.EXE        O  5800
 
 # ---------------------------------------------------------------------------
 # 2. Stage the system tree, then master a 32 MB volume from it.

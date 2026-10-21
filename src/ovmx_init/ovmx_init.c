@@ -1462,6 +1462,17 @@ static uint32_t load_cluster_sysgen_params(void)
      */
     args.clean_depart_off = clean_depart_requested() ? 0 : 1;
 
+    /*
+     * OVMX_RM_RESIDUE_FILL (rd vms-ed5, for rd vms-6ad1's RA7) -- the byte the
+     * executive writes across the op-0x14 residue span. ABSENT leaves the
+     * zero-filled 0, which IS this knob's faithful value (the vms-42de
+     * ruling's zeros), so there is no default to resolve and no negation.
+     * Only an operator who writes a pattern into OVMXVMSSYS.PAR gets one, and
+     * only RA7 ever does.
+     */
+    if (sysgen_read_param("OVMX_RM_RESIDUE_FILL", &u32) == 0 && u32 <= 0xffu)
+        args.ovmx_rm_residue_fill = (uint8_t)u32;
+
     if (sysgen_read_string("DISK_QUORUM", strval, sizeof(strval)) == 0 && strval[0] != '\0')
         sysgen_str_into(strval, args.disk_quorum, sizeof(args.disk_quorum),
                         &args.disk_quorum_len);

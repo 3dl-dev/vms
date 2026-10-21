@@ -281,7 +281,13 @@ dlm-rm-lock-answer-echoes-the-handle
 dlm-rm-lock-answer-invents-a-valblk
 dlm-rm-14-leaks-the-caller-buffer
 dlm-rm-14-pattern-overruns-a-field
-dlm-rm-lock-answer-record-omitted"
+dlm-rm-lock-answer-record-omitted
+dlm-rm-held-before-the-last-end
+dlm-rm-held-to-a-member-that-reported-nothing
+dlm-rm-open-answered-when-refused
+dlm-rm-half-tree-left-adopted
+dlm-rm-held-reported-though-unsent
+dlm-rm-role-claimed-without-an-adoption"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -328,6 +334,7 @@ kernel-core/vms_dlm_ldwv.c
 kernel-core/vms_dlm_pending.c
 kernel-core/vms_dlm_scs.c
 kernel-core/vms_dlm_scs_fsm.c
+kernel-core/vms_dlm_rm_fsm.c
 kernel-core/vms_mscp_cl.c
 kernel-core/vms_mscp_cl_conn_fsm.c
 kernel-core/vms_mscp_cl_fsm.c
@@ -2617,6 +2624,90 @@ EOF
                       ;;
         esac;;
 
+    dlm-rm-held-before-the-last-end)
+        case "$_f" in
+        facility)     echo "rule W2 (rd vms-ed5): the new master sends NO op-0x14 until EVERY member owed an end-of-records has sent one -- 0 of 7 multi-op-0x13 remaster episodes in the corpus interleave";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_owed_complete() returns true as soon as ONE member has reported instead of all of them, so the FIRST op-0x13 closes the adoption and announces the tree. On a real cluster the old master's 0x13 can arrive BEFORE a holder's records (measured in the pre-registered RA8 arm), so this node would close the transaction and then REFUSE four locks a real VAX still believes it holds -- the holder waits forever on a lock its own database says it has.";;
+        require_fail) hd_lines <<'EOF'
+*** the adoption is NOT closed: the holder has not reported (RA8's interleave) ***
+and no op-0x14 has gone out
+with three members and two reports the tree is still waiting
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-held-to-a-member-that-reported-nothing)
+        case "$_f" in
+        facility)     echo "rule W1 (rd vms-ed5): an op-0x14 goes to each system that sent an op-0x13 and to NOBODY else -- 61 of 61 remaster episodes, 0 of 68 frames to a system that reported nothing";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_send_held()'s 'if (!t->done[i]) continue;' is dropped, so the tree is announced to every member of the owed set rather than to the ones that reported. The frame reaches a system that was never part of this hand-over -- a shape no real new master has been watched to send to it, which is exactly what RULE C and ovmx-never-crashes-a-peer forbid, and after a departure it is addressed at a system that has LEFT.";;
+        require_fail) hd_lines <<'EOF'
+*** and only the old master -- the one system that reported -- is told ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-open-answered-when-refused)
+        case "$_f" in
+        facility)     echo "an op-0x0e this node cannot adopt is NOT acknowledged (rd vms-ed5): the 82/15 is this node saying it will take the tree";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_h_open() stages the acknowledgement before testing whether the adoption engine opened anything, so a node with no delivery proc, no cluster identity of its own, or no free tree slot still tells the old master 'yes, I am your new master'. The old master then hands over a tree NOBODY holds: its holders' locks live on a node that has no record of them, and a departing master waits for an op-0x14 that can never come.";;
+        require_fail) hd_lines <<'EOF'
+*** nothing is answered: the old master is not told this node will take a tree it cannot hold ***
+and nothing was answered
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-half-tree-left-adopted)
+        case "$_f" in
+        facility)     echo "a tree that cannot be adopted WHOLE is adopted NOT AT ALL (rd vms-ed5 / vms-14fd): a refused record gives the whole tree back to its old master";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_h_record() stops calling rm_abandon() when the engine refuses a record, so the tree stays open with the locks adopted SO FAR. This node then serves that tree as its master while missing locks a holder still believes it holds -- it will grant an incompatible mode over them, which is the one failure a lock manager must never have.";;
+        require_fail) hd_lines <<'EOF'
+*** the WHOLE tree is given back to its old master ***
+no tree is open here any more
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-held-reported-though-unsent)
+        case "$_f" in
+        facility)     echo "a completion is reported only when its op-0x14s REALLY went out (rd vms-ed5): vms_lock_dlm_adopt_unreported() is the published gap";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_complete()'s 'if (sent != 0u)' guard on adopt_reported() is forced true, so a tree whose announcements ALL failed to transmit is still counted as reported. The executive then publishes a clean zero for the completions nobody was told about, and the one number a lab run reads to find a stranded old master goes silent.";;
+        require_fail) hd_lines <<'EOF'
+*** and the completion is NOT reported: a frame that did not go out is not an announcement ***
+and the executive still counts the completion as unreported
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-role-claimed-without-an-adoption)
+        case "$_f" in
+        facility)     echo "the op-0x0f answer's NEW MASTER role is read off this node's own open adoption (rd vms-ed5 / vms-cab), never off the frame";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_h_role() answers as the NEW MASTER unconditionally, so a plain member clears body[28:32] in its 82/15. The remastering node is told a second system took the role its real new master has, which is the 3-node rule rd vms-cab's held-out captures established and the 2-node ones hid (memory heldout-proof-must-vary-topology).";;
+        require_fail) hd_lines <<'EOF'
+*** body[28:32] is KEPT: this node is not the new master and does not claim to be ***
+no new-master role was asserted
+EOF
+                      ;;
+        esac;;
+
     dlm-adopt-parent-not-verified)
         case "$_f" in
         facility)     echo "the remaster adoption's refusal to let an op-0x12 record choose which lock its sub-resource hangs under (rd vms-14fd: body[40:44] names a handle THIS engine minted, so it is LOOKED UP and checked against the adoption and the holder, never trusted)";;
@@ -2649,11 +2740,11 @@ EOF
 
     dlm-adopt-unreported-not-counted)
         case "$_f" in
-        facility)     echo "the COUNT of adoptions this node completed but could not report to the old master (rd vms-14fd, INV-6: the op-0x14's body[20:24] and body[28:40] are ungrounded, so the gap is published as a number rather than left silent)";;
+        facility)     echo "the COUNT of adoptions this node completed but nobody was told about -- completed minus reported (rd vms-14fd, re-derived by rd vms-ed5: the gap is published as a number rather than left silent, whether it is the whole of `completed` or none of it)";;
         targets)      echo "kernel-core/vms_lock.c";;
         suites_red)   echo "test_dlm_adopt";;
         isolation)    echo "isolated";;
-        why)          echo "vms_lock_dlm_adopt_end()'s 'vms_dlm_adopt_unreported_n++;' is dropped. The adoption still completes and still sends nothing -- only the tripwire that says so goes silent, so an executive that has adopted a hundred trees and told the old masters about none of them reports a clean zero. A gap nobody counts is a gap nobody closes.";;
+        why)          echo "vms_lock_dlm_adopt_unreported()'s 'completed minus reports' subtraction is replaced by a flat 0. Every adoption still completes and the wire arm still reports whatever it really reported -- only the tripwire that says how many completions NOBODY was told about goes silent, so an executive that adopted a hundred trees and announced none of them reports a clean zero. A gap nobody counts is a gap nobody closes.";;
         require_fail) hd_lines <<'EOF'
 and ONE adoption went unreported to the old master -- body[20:24] and body[28:40] of the op-0x14 are not grounded, so no frame is sent
 the gap is exactly 'all of them', stated as a number
@@ -3435,6 +3526,32 @@ apply_edit() {
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;
 
+    dlm-rm-held-before-the-last-end)
+        # `t->n_done == t->n_owed` occurs once (rm_owed_complete).
+        sed -i 's@^\treturn t->n_owed != 0u \&\& t->n_done == t->n_owed;$@\treturn t->n_done != 0u; /* NEGCTL dlm-rm-held-before-the-last-end */@' "$_file";;
+
+    dlm-rm-held-to-a-member-that-reported-nothing)
+        # The `done` filter in rm_send_held, the only `continue` guarded by it.
+        sed -i 's@^\t\t\tcontinue;      /\* owed us nothing: gets nothing (W1) \*/$@\t\t\t(void)0; /* NEGCTL dlm-rm-held-to-a-member-that-reported-nothing */@' "$_file";;
+
+    dlm-rm-open-answered-when-refused)
+        # rm_h_open's engine test: the call still happens and its answer is
+        # thrown away, so the acknowledgement is staged whatever it said.
+        sed -i 's@^\tif (!f->ops->adopt_open(f->ops->ctx, \&slot->tree)) {$@\t(void)f->ops->adopt_open(f->ops->ctx, \&slot->tree); if (0) { /* NEGCTL dlm-rm-open-answered-when-refused */@' "$_file";;
+
+    dlm-rm-half-tree-left-adopted)
+        # The ONE rm_abandon call site (rm_h_record). `(void)t` keeps the
+        # mutated tree building clean.
+        sed -i 's@^\t\trm_abandon(f, t);$@\t\t(void)t; /* NEGCTL dlm-rm-half-tree-left-adopted */@' "$_file";;
+
+    dlm-rm-held-reported-though-unsent)
+        # rm_complete's guard on the report; `sent` stays read.
+        sed -i 's@^\tif (sent != 0u)$@\tif (sent == sent) /* NEGCTL dlm-rm-held-reported-though-unsent */@' "$_file";;
+
+    dlm-rm-role-claimed-without-an-adoption)
+        # rm_h_role's role read: the second arm of the only ternary here.
+        sed -i 's@ST_OPEN) ? 1 : 0;$@ST_OPEN) ? 1 : 1; /* NEGCTL dlm-rm-role-claimed-without-an-adoption */@' "$_file";;
+
     dlm-adopt-parent-not-verified)
         # dlm_adopt_parent_res()'s condition spans two lines. Absorbing the
         # FIRST line's trailing `||` into `0 &&` disarms BOTH lineage checks
@@ -3453,9 +3570,10 @@ apply_edit() {
         sed -i 's@^        root->master_csid = prev;$@        (void)prev; /* NEGCTL dlm-adopt-abort-leaves-mastery */@' "$_file";;
 
     dlm-adopt-unreported-not-counted)
-        # `vms_dlm_adopt_unreported_n++;` occurs once (its declaration spells
-        # the name without the `++`, so it cannot match).
-        sed -i 's@^    vms_dlm_adopt_unreported_n++;$@    /* NEGCTL dlm-adopt-unreported-not-counted */@' "$_file";;
+        # Re-anchored by rd vms-ed5: the gap is no longer a counter of its own
+        # but `completed` minus `reports`, so the way to silence it is to make
+        # the READ answer zero. The subtraction occurs once.
+        sed -i 's@^    return completed - reported;$@    (void)completed; (void)reported; return 0u; /* NEGCTL dlm-adopt-unreported-not-counted */@' "$_file";;
 
     dlm-adopt-lvb-zeroes-the-block)
         # `if (r->valblk_present)` appears twice (dlm_adopt_alloc_lkb's LKB

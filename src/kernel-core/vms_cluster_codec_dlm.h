@@ -1433,24 +1433,24 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  *   body[28]     0x10         420/420        body[29] 0  420/420
  *   body[30:32]  0, 0         411/411 on SUB records
  *   body[32:36]  the grant record, body[34] = 0xfa  420/420
- *   body[36:52]  the resource's VALUE BLOCK; body[52:56] its SEQUENCE. All 9
- *                ROOT answers carry a real block and a real sequence
- *                (SDA-matched: `RMLVB-0123456789` seq 1 in the controlled
- *                arms, live F11B$ blocks at seq 0x131/0x15a in two others),
- *                and this codec reproduces every one of them byte for byte.
- *                A SUB answer carries no block, and this codec writes twenty
- *                ZEROS there -- what 21 of 21 real sub answers captured
- *                during a controlled REMASTER arm carry, and what the
- *                shipping ENQ-grant builder has always written. 390 sub
- *                answers from two LOCK-REBUILD captures instead carry
- *                01 00 00 00 01 00 00 00, zeros, and a small even number at
- *                body[52:56]: the same not-a-clean-LVB pattern the grant
- *                block above records on 38/38 real grants, i.e. a busy
- *                master's residual buffer where a quiet one's is zero. It is
- *                a `deviation` row in frame-grounding.tsv, not papered over,
- *                and it is the one span on which score_remaster reports a
- *                difference against the two rebuild captures.
- *   body[56:132] echoed, the holder's own bytes
+ *   body[36:52]  the resource's VALUE BLOCK; body[52:56] its SEQUENCE. It is
+ *                THE SPAN THE RECORD ITSELF CARRIED AT body[88:108] -- 420 of
+ *                420 real pairs, ROOT and sub alike, with no exception (rd
+ *                vms-ed5 measured it; the earlier reading of this header
+ *                called a sub answer's span "a busy master's residual buffer"
+ *                on 390 of them and wrote twenty zeros, which was wrong in
+ *                exactly those 390). The holder's record is where an adopted
+ *                resource's block comes from, SDA-matched on the new master
+ *                after the move (`RMLVB-0123456789` seq 1 in the controlled
+ *                arms; live F11B$ blocks at seq 0x131/0x15a in two others),
+ *                so this cell is a READ-BACK of the RSB the adoption engine
+ *                just filled -- vms_dlm_adopt.h -- and not an echo. A record
+ *                whose span is twenty zeros leaves the resource's block
+ *                ALONE and its answer carries twenty zeros, which is what 21
+ *                of 21 such real answers carry.
+ *   body[56:132] echoed, the holder's own bytes -- which is why the block
+ *                appears TWICE in a real answer: once at body[36:56] from the
+ *                RSB and once at body[88:108] inside the echo.
  *
  * TWO CELLS ARE NOT NAMED, and neither is guessed:
  *
@@ -1568,6 +1568,19 @@ struct vms_dlm_rm_lock_rec {
 	uint8_t  granted_mode;         /* body[30], LCK$K_                    */
 	uint8_t  requested_mode;       /* body[31], LCK$K_                    */
 	uint8_t  is_root;              /* 1 iff body[36:44] is all zero       */
+	/*
+	 * THE HOLDER'S OWN COPY OF THE RESOURCE'S VALUE BLOCK (rd vms-ed5):
+	 * body[88:104] and its SEQUENCE at body[104:108]. `valblk_present` is
+	 * "that span is not twenty zeros" -- never a flag byte, because
+	 * body[28] does not predict it (0x4a and 0x4b carry a block without
+	 * bit 0x10, 0x7e has bit 0x10 and carries none). This is the ONLY
+	 * place the adopted resource's block can come from, and it is what
+	 * makes the 82/01 answer's body[36:56] a read-back of the RSB rather
+	 * than an echo (rule 2).
+	 */
+	uint8_t  valblk_present;
+	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];
+	uint32_t valblk_seq;
 };
 
 /* Parse an op-0x12 record. VMS_CODEC_E_CLASS for any other (cat, op). */
@@ -1586,6 +1599,16 @@ vms_codec_status_t vms_dlm_rm_ack_build(const uint8_t *req_body,
 					uint32_t req_len, int new_master,
 					uint8_t *frame, uint32_t cap,
 					uint32_t *written);
+
+/*
+ * THE IDENTITY AN 82/15 ANSWER NAMES (rd vms-ed5). The answer is the request
+ * echoed, so it still carries the tree's identity -- which is how this node
+ * recognises the answer to an op-0x14 of its own without inventing a
+ * correlation the connection manager does not surface. VMS_CODEC_E_CLASS for
+ * anything that is not a cat-0x82 op-0x15.
+ */
+vms_codec_status_t vms_dlm_rm_ack_ident(const uint8_t *ans_body, uint32_t len,
+					struct vms_dlm_res_ident *out);
 
 /*
  * WHAT THIS ENGINE DID WITH ONE op-0x12 RECORD -- every field read back off

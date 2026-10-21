@@ -5,6 +5,8 @@ usage: remaster_census.py <pcap|dir> ...          the per-cell census
        remaster_census.py --selftest <repo-root>  pin the headline figures
        remaster_census.py --pairs <pcap> ...      emit request/answer pairs for
                                                   tests/cluster/host/score_remaster
+       remaster_census.py --roles <pcap|dir> ...  the per-episode ROLE GRAPH:
+                                                  who sent which step to whom
 
 WHAT IT MEASURES. A real V7.3 lock-tree remaster is seven cat-0x02 steps
 (0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14). This tool walks every SCA frame in
@@ -140,6 +142,92 @@ def classify_op14_residue(pairs):
                 neither=len(f14) - len(stale_grant) - len(stale_dir))
 
 
+def rm_ident(body):
+    """The resource identity a remaster frame names, or None."""
+    n = body[47]
+    if n < 1 or n > 31:
+        return None
+    return (bytes(body[44:46]), body[46], bytes(body[48:48 + n]))
+
+
+def role_episodes(paths):
+    """Group the remaster steps of each capture into EPISODES and report, per
+    episode, who played which part (rd vms-ed5 rules W1/W2).
+
+    An episode is opened by an op-0x0e for a root identity and collects every
+    later step naming that identity plus every op-0x12 addressed to its new
+    master inside its index span -- a SUB-resource record names its OWN
+    resource, so it cannot be grouped by the root name.
+
+    Each episode is a dict: cap, name, O, N, and `seq`, a list of
+    (frame_index, op, src, dst).
+    """
+    out = []
+    for p in paths:
+        rows = [(i, s, d, b) for (i, s, d, b) in sca_bodies(p)
+                if b[8] == 0x02 and b[9] in RM_STEPS and rm_ident(b) is not None]
+        cur, eps = {}, []
+        for i, s, d, b in rows:
+            k = rm_ident(b)
+            if b[9] == 0x0e:
+                e = dict(cap=os.path.basename(p), name=k[2].decode('latin1'),
+                         O=s, N=d, seq=[])
+                cur[k] = e
+                eps.append(e)
+            e = cur.get(k)
+            if e is not None and b[9] != 0x12:
+                e['seq'].append((i, b[9], s, d))
+        for e in eps:
+            if not any(op == 0x14 for _i, op, _s, _d in e['seq']):
+                continue          # the hand-over never completed in this capture
+            lo = e['seq'][0][0]
+            hi = max(i for i, _o, _s, _d in e['seq'])
+            e['seq'] += [(i, 0x12, s, d) for (i, s, d, b) in rows
+                         if b[9] == 0x12 and d == e['N'] and lo <= i <= hi + 1]
+            e['seq'].sort()
+            out.append(e)
+    return out
+
+
+def role_tally(eps):
+    """The W1/W2 figures over a set of episodes."""
+    t = dict(episodes=len(eps), op14=0, op13=0, sets_equal=0,
+             op14_without_a_13=0, record_after_last_13=0,
+             multi13=0, multi13_batched=0)
+    for e in eps:
+        s13 = sorted({s for _i, o, s, _d in e['seq'] if o == 0x13})
+        t14 = [(i, d) for i, o, _s, d in e['seq'] if o == 0x14]
+        t['op13'] += sum(1 for _i, o, _s, _d in e['seq'] if o == 0x13)
+        t['op14'] += len(t14)
+        if s13 == sorted({d for _i, d in t14}):
+            t['sets_equal'] += 1
+        i13 = [(i, s) for i, o, s, _d in e['seq'] if o == 0x13]
+        for i14, d14 in t14:
+            if not any(i < i14 and s == d14 for i, s in i13):
+                t['op14_without_a_13'] += 1
+        last13 = max([i for i, _s in i13], default=-1)
+        if any(o == 0x12 and i > last13 for i, o, _s, _d in e['seq']):
+            t['record_after_last_13'] += 1
+        if len(i13) > 1:
+            t['multi13'] += 1
+            if all(i14 > i13max for i14, _d in t14
+                   for i13max in [max(i for i, _s in i13)]):
+                t['multi13_batched'] += 1
+    return t
+
+
+def report_roles(paths):
+    eps = role_episodes(paths)
+    for e in eps:
+        print('%-30s %-16s O=%s N=%s' % (e['cap'][:30], e['name'][:16],
+                                         e['O'], e['N']))
+        print('   ' + ' '.join('%d:%02x:%s>%s' % (i, o, s, d)
+                               for i, o, s, d in e['seq']))
+    print()
+    for k, v in role_tally(eps).items():
+        print('   %-26s %d' % (k, v))
+
+
 def report(paths):
     pairs, notifs = collect(paths)
     counts = collections.Counter('%02x/%02x' % (s, o) for s, o, _q, _a in pairs)
@@ -239,6 +327,32 @@ def selftest(root):
                    'body[30:32] -- the codec header names only those two')
     floor('82/01 answers carrying 0x0001 at body[32:34] (what the codec writes)',
           sum(1 for _q, a in g if a[32] == 0x01 and a[33] == 0), 283)
+    # rd vms-ed5: the answer's value-block span IS the record's own, ROOT and
+    # sub alike -- which is what makes it a read-back of the RSB the adoption
+    # engine filled and not an echo. An exception anywhere falsifies the rule.
+    exact_all("82/01 answers whose body[36:56] is the record's body[88:108]",
+              sum(1 for q, a in g if q[88:108] == a[36:56]), len(g))
+    exact_all('op-0x12 records whose value block and sequence agree on being '
+              'present (neither is read as an assertion about the other)',
+              sum(1 for q, _a in g
+                  if (q[88:104] != b'\0' * 16) == (q[104:108] != b'\0' * 4)),
+              len(g))
+
+    # rd vms-ed5 RULES W1/W2: WHEN the new master sends its op-0x14s.
+    eps = role_episodes(paths)
+    rt = role_tally(eps)
+    floor('remaster episodes that reach an op-0x14', rt['episodes'], 61)
+    exact_all('episodes whose op-0x13 SENDERS are exactly its op-0x14 '
+              'RECIPIENTS (rule W1)', rt['sets_equal'], rt['episodes'])
+    if rt['op14_without_a_13']:
+        bad.append('%d op-0x14(s) went to a system that had sent no op-0x13 '
+                   '(rule W1)' % rt['op14_without_a_13'])
+    if rt['record_after_last_13']:
+        bad.append('%d episode(s) carry an op-0x12 AFTER the last op-0x13 '
+                   '(rule W2 assumes none)' % rt['record_after_last_13'])
+    floor('episodes with more than one op-0x13', rt['multi13'], 7)
+    exact_all('multi-op-0x13 episodes whose op-0x14s ALL follow the LAST '
+              'op-0x13 (rule W2)', rt['multi13_batched'], rt['multi13'])
 
     # RULE 3: the op-0x14's body[20:40] is residue.
     c = classify_op14_residue(pairs)
@@ -284,6 +398,9 @@ def main(argv):
         return selftest(argv[2] if len(argv) > 2 else '.')
     if argv[1] == '--pairs':
         emit_pairs(walk_inputs(argv[2:]))
+        return 0
+    if argv[1] == '--roles':
+        report_roles(walk_inputs(argv[2:]))
         return 0
     report(walk_inputs(argv[1:]))
     return 0

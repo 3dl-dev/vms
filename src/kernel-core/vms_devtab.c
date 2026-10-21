@@ -3417,6 +3417,10 @@ static void sysgen_load_args_to_params(const struct vms_sysgen_load_args *args,
     out->alloclass = args->alloclass;
     out->mscp_load = args->mscp_load;
     out->mscp_serve_all = args->mscp_serve_all;
+    /* OVMX_RM_RESIDUE_FILL (rd vms-ed5): a POSITIVE sense, so it carries
+     * straight through -- 0 in a zero-filled args struct is the faithful
+     * value (the vms-42de ruling's zeros). */
+    out->ovmx_rm_residue_fill = args->ovmx_rm_residue_fill;
 
     /*
      * OVMX_CLEAN_DEPART (rd vms-abd): THE ONE FIELD WHOSE SENSE IS UNDONE HERE.

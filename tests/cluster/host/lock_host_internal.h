@@ -221,6 +221,9 @@ struct vms_lock_resource {
 	exec_list_head_t          waiting;
 	exec_list_head_t          proxies;        /* FC-P4.4 proxy queue */
 	uint8_t                   valblk[LCK_VALBLK_SIZE];
+	/* THE VALUE BLOCK'S SEQUENCE (rd vms-ed5). Mirror of the two substrate
+	 * twins; src/kernel/vms_internal.h carries the grounding. */
+	uint32_t                  valblk_seq;
 	exec_lock_t               lock;
 	int                       refcount;
 	struct vms_lock_resource *parent;

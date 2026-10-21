@@ -531,6 +531,9 @@ struct vms_lock_resource {
 	                                     * granting algorithm walks granted and
 	                                     * waiting only. Mirror of the Linux twin. */
 	uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
+	/* THE VALUE BLOCK'S SEQUENCE (rd vms-ed5). Mirror of the Linux twin,
+	 * whose comment carries the grounding and the open item (rd vms-85c1). */
+	uint32_t            valblk_seq;
 	exec_lock_t         lock;
 	int                 refcount;
 	struct vms_lock_resource *parent;

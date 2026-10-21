@@ -466,6 +466,33 @@ struct vms_dlm_scs_view {
 	uint32_t foreign_refused;       /* RULE C: the sender is not proven ours */
 
 	/*
+	 * LOCK-TREE REMASTERING, THE NEW MASTER'S SIDE (rd vms-ed5,
+	 * vms_dlm_rm_fsm.h). Every one of these is a thing that really
+	 * happened here, and the pair that matters for the ci.6 evacuation
+	 * gate is the last two: `rm_trees_held` is how many trees a real VAX
+	 * handed this node and this node really took, and
+	 * `rm_held_unreported` is how many of those nobody was told about --
+	 * the gap, published as a number rather than left silent (the same
+	 * discipline as `deferred_grants_owed` above).
+	 */
+	uint32_t rm_opens;              /* trees a real VAX handed us, opened   */
+	uint32_t rm_opens_refused;      /* ...and the ones NOT taken: no slot,  */
+					 /* no nameable membership, or the engine */
+					 /* would not open the adoption          */
+	uint32_t rm_records_adopted;    /* op-0x12 records that became a real   */
+					 /* master-side LKB here                 */
+	uint32_t rm_records_refused;    /* ...and the ones that took the WHOLE  */
+					 /* tree back to its old master          */
+	uint32_t rm_ends_seen;          /* op-0x13 end-of-records accepted      */
+	uint32_t rm_trees_held;         /* adoptions this node really completed */
+	uint32_t rm_held_sent;          /* op-0x14s really put on the wire      */
+	uint32_t rm_held_unsent;        /* ...owed and not sent, counted        */
+	uint32_t rm_held_unreported;    /* completed adoptions nobody was told  */
+					 /* about: the engine's own completed    */
+					 /* minus reported (vms_dlm_adopt.h)     */
+	uint32_t rm_notifications;      /* op-0x11: another member took a tree  */
+
+	/*
 	 * THE CONNECTION MANAGER'S OWN COUNT OF THE SAME TRAFFIC -- a SECOND,
 	 * INDEPENDENT executive read, taken one layer down (vms_cnxman.c's
 	 * cnxman_dlm_send / cnxman_dlm_rx), of the events the arm counters above
@@ -505,11 +532,12 @@ struct vms_dlm_scs_view {
 	uint32_t posts_lock_gone;       /* refill found no proxy: abandoned     */
 	uint32_t posts_refused;         /* the FSM refused: nothing was sent    */
 };
-/* 144 since rd vms-f87 added deferred_grants_sent: a fixed-width ABI struct
+/* 184 since rd vms-ed5 added the ten remaster counters (144 before): a
+ * fixed-width ABI struct
  * whose size is PINNED, so a field added here fails to build until both
  * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
  * and this number are updated together. */
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 144,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 184,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

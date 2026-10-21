@@ -208,7 +208,9 @@ static uint32_t         vms_dlm_adopt_next_gen;
 static uint32_t         vms_dlm_adoptions_opened_n;
 static uint32_t         vms_dlm_adoptions_completed_n;
 static uint32_t         vms_dlm_adoptions_refused_n;
-static uint32_t         vms_dlm_adopt_unreported_n;
+/* Completions the WIRE ARM really reported (rd vms-ed5). `unreported` is
+ * `completed` minus this, so it is DERIVED and cannot drift from either. */
+static uint32_t         vms_dlm_adopt_reports_n;
 
 
 /* ================================================================
@@ -244,7 +246,7 @@ int vms_lock_init(void)
     vms_dlm_adoptions_opened_n = 0u;
     vms_dlm_adoptions_completed_n = 0u;
     vms_dlm_adoptions_refused_n = 0u;
-    vms_dlm_adopt_unreported_n = 0u;
+    vms_dlm_adopt_reports_n = 0u;
     vms_prev_local_csid = 0u;   /* a fresh engine has had no other identity */
     return 0;
 }
@@ -1252,6 +1254,9 @@ int vms_lock_dlm_name_in_use(const char *resnam, uint16_t group, uint8_t mode)
 
 /* Defined with the router below (the rd vms-151 relabelling lives there). */
 static int dlm_master_is_us(struct vms_lock_resource *res);
+/* Defined with the directory router below: the value to route this resource
+ * by -- held, or determined once and then held. Caller holds res->lock. */
+static uint32_t dir_hash_for_routing(struct vms_lock_resource *res);
 
 /*
  * vms_lock_dlm_name_mastered_here - does THIS node master the resource of this
@@ -1285,6 +1290,45 @@ int vms_lock_dlm_name_mastered_here(const char *resnam, uint16_t group,
     }
     exec_unlock(&vms_res_hash_lock);
     return mine;
+}
+
+/*
+ * vms_lock_dlm_dir_hash_of - the directory hash value this executive holds for
+ * a resource identity, if it holds one (rd vms-ed5; contract vms_dlm_proxy.h).
+ *
+ * The op-0x14 that announces an adopted tree carries the tree's hash at
+ * body[128:132] in 68 of 68 real frames, and this is where it comes from: the
+ * RSB's own `dir_hash`, which is EITHER the value some system in this cluster
+ * put on the wire and vms_lock_dlm_learn_dir_hash() recorded, OR -- for a root
+ * name inside the proven coverage -- the value dir_hash_for_routing() has
+ * already determined and stored for routing. The same read the directory
+ * resolution makes, and no new determination: a name outside the coverage, or
+ * a resource this node does not hold, returns 0 and the frame carries zeros.
+ *
+ * Returns 1 and writes *out only when a real value exists. Creates nothing.
+ */
+int vms_lock_dlm_dir_hash_of(const char *resnam, uint16_t group, uint8_t mode,
+                             uint32_t *out)
+{
+    struct res_key k = { resnam, NULL, group, mode };
+    struct vms_lock_resource *res;
+    int have = 0;
+
+    if (resnam == NULL || resnam[0] == '\0' || out == NULL)
+        return 0;
+    *out = 0u;
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find_key(&k);
+    if (res != NULL) {
+        exec_lock(&res->lock);
+        if (dir_hash_for_routing(res) == SS__NORMAL && res->hash_known) {
+            *out = res->dir_hash;
+            have = 1;
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return have;
 }
 
 uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t group,
@@ -3871,8 +3915,13 @@ static void dlm_adopt_link_lkb(struct vms_lock_resource *res,
      * resource's own block is LEFT ALONE: sixteen zeros written over a real
      * block destroys data and calls it an adoption (INV-6).
      */
-    if (r->valblk_present)
+    if (r->valblk_present) {
         memcpy(res->valblk, r->valblk, LCK_VALBLK_SIZE);
+        /* ...and its SEQUENCE, which the record carried beside it
+         * (body[104:108], rd vms-ed5). A block without its sequence tells the
+         * holder its value block was reset. */
+        res->valblk_seq = r->valblk_seq;
+    }
     exec_list_add_tail(&lock->res_granted, &res->granted);
     exec_unlock(&res->lock);
 }
@@ -3895,14 +3944,24 @@ static void dlm_adopt_fill_result(struct vms_lock_entry *lock,
     out->holder_lkid  = lock->req_lkid;
     out->granted_mode = (uint8_t)lock->granted_mode;
     memcpy(out->valblk, res->valblk, LCK_VALBLK_SIZE);
+    out->valblk_seq = res->valblk_seq;
     exec_unlock(&res->lock);
     out->duplicate = duplicate;
     for (i = 0; i < LCK_VALBLK_SIZE; i++)
         if (out->valblk[i]) { out->valblk_present = 1u; break; }
+    /* A sequence with an all-zero block is still a block: the resource has one
+     * and it happens to read as zeros. 399 of 399 real records with a non-zero
+     * block carry a non-zero sequence and 21 of 21 with a zero block carry
+     * zero, so the two agree -- but neither is read as an assertion about the
+     * other (rd vms-ed5). */
+    if (out->valblk_seq != 0u)
+        out->valblk_present = 1u;
     /* A resource with no block says so and carries none: sixteen zeros
      * presented as an LVB is the placeholder INV-6 forbids. */
-    if (!out->valblk_present)
+    if (!out->valblk_present) {
         memset(out->valblk, 0, LCK_VALBLK_SIZE);
+        out->valblk_seq = 0u;
+    }
 }
 
 /* Is this adoption still open and still ours to add to? Caller holds the lock.
@@ -4065,12 +4124,13 @@ uint32_t vms_lock_dlm_adopt_end(const struct vms_dlm_adopt_tree *t,
     exec_list_del(&a->link);
     vms_dlm_adoptions_completed_n++;
     /*
-     * AND THE OLD MASTER IS NOT TOLD (INV-6). The op-0x14 that tells it has two
-     * ungrounded cells (vms_dlm_adopt.h), so this node sends nothing and COUNTS
-     * the fact. When a controlled arm names body[20:24] and body[28:40], this
-     * is the counter that stops climbing.
+     * AND NOBODY IS TOLD FROM HERE. Completing an adoption emits nothing: the
+     * op-0x14 that announces it belongs to the wire arm (vms_dlm_rm_fsm.h),
+     * which calls vms_lock_dlm_adopt_reported() once its sends really went
+     * out. Until it does, this completion is one of the `unreported` --
+     * `completed` minus `reports` -- so an executive with no arm bound, or an
+     * arm that could not send, reports the gap instead of implying a frame.
      */
-    vms_dlm_adopt_unreported_n++;
     exec_unlock(&vms_dlm_adopt_lock_g);
 
     dlm_adopt_clear_gen(gen);
@@ -4209,6 +4269,59 @@ int vms_lock_dlm_adopt_is_open(const struct vms_dlm_adopt_tree *t)
     return open;
 }
 
+/*
+ * THE TREE ONE OF THIS ENGINE'S OWN ADOPTED HANDLES BELONGS TO (rd vms-ed5).
+ * The contract, and why the wire arm must ask rather than remember, is
+ * vms_dlm_adopt.h.
+ *
+ * The identity is copied off the ADOPTION'S OWN ROOT RSB -- name, UIC group and
+ * access mode, which are set when a resource block is created and never change
+ * (src/kernel/vms_internal.h), the same fields dlm_adopt_find_locked matches
+ * on -- plus the old master this adoption was opened for.
+ */
+int vms_lock_dlm_adopt_tree_of_lkid(uint32_t master_lkid,
+                                    struct vms_dlm_adopt_tree *out)
+{
+    struct vms_lock_entry *lock;
+    struct dlm_adoption *a;
+    uint32_t gen;
+    int found = 0;
+
+    if (out == NULL)
+        return 0;
+    memset(out, 0, sizeof(*out));
+    if (master_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+
+    lock = lock_find_by_id(master_lkid);
+    if (lock == NULL)
+        return 0;
+    /* A PROXY is a lock this node holds SOMEWHERE ELSE, so it never names a
+     * tree this node is adopting; adopt_gen 0 is every other lock. */
+    if (lock->proxy || lock->adopt_gen == 0u) {
+        lock_put(lock);
+        return 0;
+    }
+    gen = lock->adopt_gen;
+    lock_put(lock);
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    a = dlm_adopt_find_gen_locked(gen);
+    if (a != NULL && !a->aborting && a->root != NULL) {
+        strncpy(out->resnam, a->root->name, sizeof(out->resnam) - 1u);
+        out->resnam[sizeof(out->resnam) - 1u] = '\0';
+        out->res_group = a->root->res_group;
+        out->res_mode = a->root->res_mode;
+        out->old_master_csid = a->old_master_csid;
+        out->ident_valid = 1u;
+        found = 1;
+    }
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    if (!found)
+        memset(out, 0, sizeof(*out));
+    return found;
+}
+
 int vms_lock_dlm_adopt_installed(const struct vms_dlm_adopt_tree *t)
 {
     struct dlm_adoption *a;
@@ -4249,9 +4362,31 @@ uint32_t vms_lock_dlm_adoptions_refused(void)
     return dlm_adopt_counter_read(&vms_dlm_adoptions_refused_n);
 }
 
+void vms_lock_dlm_adopt_reported(void)
+{
+    exec_lock(&vms_dlm_adopt_lock_g);
+    /* Never past `completed`: a report of an adoption that did not complete
+     * would make `unreported` wrap, and a counter that lies about a gap is
+     * worse than the gap. */
+    if (vms_dlm_adopt_reports_n < vms_dlm_adoptions_completed_n)
+        vms_dlm_adopt_reports_n++;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+}
+
+uint32_t vms_lock_dlm_adopt_reports(void)
+{
+    return dlm_adopt_counter_read(&vms_dlm_adopt_reports_n);
+}
+
 uint32_t vms_lock_dlm_adopt_unreported(void)
 {
-    return dlm_adopt_counter_read(&vms_dlm_adopt_unreported_n);
+    uint32_t completed, reported;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    completed = vms_dlm_adoptions_completed_n;
+    reported = vms_dlm_adopt_reports_n;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return completed - reported;
 }
 
 /* ================================================================

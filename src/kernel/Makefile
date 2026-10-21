@@ -182,6 +182,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_mscp_cl.o \
          ../kernel-core/vms_cluster_codec_dlm.o \
          ../kernel-core/vms_dlm_scs_fsm.o \
+         ../kernel-core/vms_dlm_rm_fsm.o \
          ../kernel-core/vms_dlm_scs.o \
          ../kernel-core/vms_proctab.o \
          ../kernel-core/vmsfs_acp.o \

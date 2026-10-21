@@ -263,11 +263,11 @@ dlm_rm_14	*	80	1	const	const:2	body[8]: category 0x02; 68/68
 dlm_rm_14	*	81	1	const	const:14	body[9]: op 0x14; 68/68
 dlm_rm_14	*	82	2	const	const:0	body[10:12]: residue. Zero in 46 of 68 real 0x14s; this node sends zero rather than its own kernel memory (rd vms-42de)
 dlm_rm_14	*	84	4	const	const:0	body[12:16]: left zero for cnxman_dlm_seq_stamp, which writes 0x0001 + the cluster's DLM rebuild sequence from club state on every DLM message (rd vms-64b); 68 of 68 real 0x14s carry that form
-dlm_rm_14	*	88	24	const	const:0	body[16:40]: THE RESIDUE SPAN, emitted as zeros (rd vms-42de ruling clause 2). A real sender leaves its message buffer as it found it here -- a stale grant record, a stale directory answer, its own S0 kernel addresses, or ASCII text. Proven not-read by rd vms-6ad1 (RA7), and until that fires this frame is not sent at a real VAX
+dlm_rm_14	*	88	24	const	const:0	body[16:40]: THE RESIDUE SPAN, emitted as the configured fill, 0 by default (rd vms-42de ruling clause 2). A real sender leaves its message buffer as it found it here -- a stale grant record, a stale directory answer, its own S0 kernel addresses, or ASCII text. rd vms-ed5 made the frame reachable from the wire; rd vms-6ad1 (RA7) is the arm that PROVES a real VAX does not read the span, by firing the same remaster twice with two different fills, and it is the first time this frame faces a real node
 dlm_rm_14	*	112	4	const	const:0	body[40:44]: 0 in 68 of 68 real 0x14s
-dlm_rm_14	*	116	2	derived	state:group	body[44:46]: the tree root's UIC group, read off the resource block
-dlm_rm_14	*	118	1	derived	state:acmode	body[46]: the tree root's access mode, read off the resource block
-dlm_rm_14	*	119	1	derived	state:namelen	body[47]: the root name's length, 1..31
+dlm_rm_14	*	116	2	derived	state:group	body[44:46]: the tree root's UIC group. The identity the old master handed over, VERIFIED against this node's lock database before the frame is built -- vms_lock_dlm_adopt_end() returns SS$_NORMAL only for a tree really adopted here and vms_lock_dlm_name_mastered_here() reads the resource block's own master; neither answering yes means nothing is sent (rd vms-ed5)
+dlm_rm_14	*	118	1	derived	state:acmode	body[46]: the tree root's access mode, the same verified identity as body[44:46]
+dlm_rm_14	*	119	1	derived	state:namelen	body[47]: the root name's length, 1..31, of that same verified identity
 dlm_rm_14	*	120	80	copied	any:name	body[48:48+L] the adopted tree's ROOT resource name off the RSB, then zero to body[128]. A real 0x14 leaves residue in that tail -- RA6's carried another resource's name and a fragment of an OPCOM message -- and this node sends none (rd vms-42de)
 dlm_rm_14	*	200	4	derived	state:hash	body[128:132]: the directory hash for that root name, as some system in this cluster put it on the wire and vms_lock_dlm_learn_dir_hash() recorded it; zero, not minted, when this node holds none
 # the SECOND FIXED PATTERN form of the same frame -- the only other thing

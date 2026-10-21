@@ -337,6 +337,18 @@ static inline const char *ovmx_product_banner(void)
  * Writes at most out_len-1 chars plus NUL. No-op if out is NULL or
  * out_len is 0.
  */
+/*
+ * ovmx_booted_scsnode (src/libvms/syssvc/sys_misc.c, rd vms-433) -- the SCSNODE
+ * the running system BOOTED with, as the executive holds it (VMS_IOCTL_CLUSTER_
+ * GETSYI). Returns 1 and fills `out` when the executive answered with one.
+ * WEAK here so a TU that cannot link libvms (a freestanding or host-only
+ * consumer of this header) sees NULL and falls back to the parameter file.
+ */
+int ovmx_booted_scsnode(char *out, size_t out_len);
+#if defined(__GNUC__)
+#pragma weak ovmx_booted_scsnode
+#endif
+
 static inline void ovmx_node_name(char *out, size_t out_len)
 {
     if (!out || out_len == 0)
@@ -345,7 +357,18 @@ static inline void ovmx_node_name(char *out, size_t out_len)
     char configured[SYSGEN_STRVAL_LEN];
     const char *src = OVMX_DEFAULT_NODENAME;
 
-    if (sysgen_read_string("SCSNODE", configured, sizeof(configured)) == 0
+    /* rd vms-433: ONE node name everywhere. On VMS the node name every
+     * surface shows (SHOW SYSTEM/USERS/PROCESS, F$GETSYI("NODENAME") and
+     * "SCSNODE", the cluster) is the SCSNODE the system booted with -- held
+     * in the executive, not re-read from SYS$SYSTEM:OVMXVMSSYS.PAR, which a
+     * process may be unable to read and which can change after boot. The
+     * demo's OVMX/VAX node named itself "OVMX" on four surfaces while its
+     * cluster called it OVMXB. The file is the fallback only where no
+     * executive answers (host tools and tests). */
+    if (ovmx_booted_scsnode && ovmx_booted_scsnode(configured, sizeof(configured))
+            && configured[0] != '\0') {
+        src = configured;
+    } else if (sysgen_read_string("SCSNODE", configured, sizeof(configured)) == 0
             && configured[0] != '\0') {
         src = configured;
     }

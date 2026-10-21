@@ -3,7 +3,8 @@
 #       MOUNT of a nonexistent device) report an honest VMS error instead of
 #       fake success
 # EXPECT: contains:%SYSTEM-F-NOLOGTAB
-# EXPECT: contains:%SET-W-NOTIMPL, security auditing is not implemented in OVMX
+# EXPECT: contains:%SYSTEM-E-UNSUPPORTED, unsupported operation or function
+# EXPECT: contains:$STATUS = "%X00000E4A"
 # EXPECT_NOT: contains:$STATUS = "%X00000001"
 # EXPECT_NOT: contains:%MOUNT-I-MOUNTED
 #

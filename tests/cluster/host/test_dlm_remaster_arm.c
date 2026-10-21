@@ -803,6 +803,35 @@ static void test_slots(void)
 	uint32_t i;
 	uint32_t opened = 0u;
 
+	printf("-- a tree that moves away and comes back REUSES its own slot\n");
+	rig_reset();
+	(void)step("rm-0e-req", RMT_O_CSID);
+	(void)step("rm-13-notif", RMT_O_CSID);
+	(void)step("rm-13-notif", RMT_H_CSID);
+	ct_check_eq_u32(vms_dlm_rm_trees_in_state(&g_rm, VMS_DLM_RM_ST_HELD), 1,
+			"  the tree is held here");
+	ct_check(step("rm-0e-req", RMT_O_CSID) == VMS_DLM_RM_HANDLED,
+		 "  a fresh op-0x0e for the SAME tree is accepted");
+	ct_check_eq_u32(vms_dlm_rm_trees_in_state(&g_rm, VMS_DLM_RM_ST_OPEN), 1,
+			"  one slot is open for it");
+	ct_check_eq_u32(vms_dlm_rm_trees_in_state(&g_rm, VMS_DLM_RM_ST_HELD), 0,
+			"  *** and NO stale HELD slot still names it: two slots "
+			"naming one tree would make the op-0x0f role answer off "
+			"whichever came first ***");
+	{
+		const struct vms_fixture *req = fixture("rm-0e-req");
+		struct vms_dlm_res_ident id;
+
+		memset(&id, 0, sizeof(id));
+		id.group = (uint16_t)(fxbody(req)[44] |
+				      ((uint16_t)fxbody(req)[45] << 8));
+		id.mode = fxbody(req)[46];
+		id.name_len = fxbody(req)[47];
+		memcpy(id.name, fxbody(req) + 48, id.name_len);
+		ct_check(vms_dlm_rm_is_new_master(&g_rm, &id) == 1,
+			 "  and the role readback says NEW MASTER for it");
+	}
+
 	printf("-- concurrent hand-overs, and the refusal past the table's "
 	       "width\n");
 	if (req == NULL) {

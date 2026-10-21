@@ -117,16 +117,31 @@ static struct vms_dlm_rm_tree *rm_slot_any(struct vms_dlm_rm *f,
 }
 
 /*
- * A SLOT TO OPEN A TREE IN. A FREE slot first; failing that, the oldest HELD
- * one -- a tree whose 0x14s have gone out has nothing outstanding, so reusing
- * its slot loses only the ability to recognise a late answer to it (counted as
- * an unmatched reply, never as an answer). A slot in OPEN state is never taken:
- * that tree's holders are still sending records.
+ * A SLOT TO OPEN A TREE IN.
+ *
+ *   1. THE SLOT THAT ALREADY NAMES THIS TREE, if it is HELD. A fresh 0x0e for a
+ *      tree this node already holds is that tree MOVING AWAY AND COMING BACK,
+ *      and it must reuse that slot: two slots naming one identity would make
+ *      the op-0x0f role readback (vms_dlm_rm_is_new_master) answer off whichever
+ *      one it reached first, and answering "I am not the new master" for a tree
+ *      that IS open here is a wrong answer on the wire.
+ *   2. a FREE slot.
+ *   3. failing that, any HELD one -- a tree whose 0x14s have gone out has
+ *      nothing outstanding, so reusing its slot loses only the ability to
+ *      recognise a late answer to it (counted as an unmatched reply, never as
+ *      an answer).
+ *
+ * A slot in OPEN state is never taken: that tree's holders are still sending
+ * records.
  */
-static struct vms_dlm_rm_tree *rm_slot_free(struct vms_dlm_rm *f)
+static struct vms_dlm_rm_tree *rm_slot_free(struct vms_dlm_rm *f,
+					    const struct vms_dlm_res_ident *id)
 {
+	struct vms_dlm_rm_tree *t = rm_slot_of(f, id, VMS_DLM_RM_ST_HELD);
 	uint32_t i;
 
+	if (t != (struct vms_dlm_rm_tree *)0)
+		return t;
 	for (i = 0u; i < VMS_DLM_RM_TREES; i++) {
 		if (f->tree[i].state == VMS_DLM_RM_ST_FREE)
 			return &f->tree[i];
@@ -415,7 +430,7 @@ static enum vms_dlm_rm_status rm_h_open(struct vms_dlm_rm *f,
 					struct vms_dlm_rm_tree *t,
 					const struct rm_in *in)
 {
-	struct vms_dlm_rm_tree *slot = rm_slot_free(f);
+	struct vms_dlm_rm_tree *slot = rm_slot_free(f, &in->step->id);
 
 	(void)t;
 	if (slot == (struct vms_dlm_rm_tree *)0) {
@@ -819,10 +834,19 @@ void vms_dlm_rm_member_departed(struct vms_dlm_rm *f, uint32_t csid)
 int vms_dlm_rm_is_new_master(const struct vms_dlm_rm *f,
 			     const struct vms_dlm_res_ident *id)
 {
-	const struct vms_dlm_rm_tree *t = vms_dlm_rm_find(f, id);
+	uint32_t i;
 
-	return (t != (const struct vms_dlm_rm_tree *)0 &&
-		t->state == (uint8_t)VMS_DLM_RM_ST_OPEN) ? 1 : 0;
+	if (f == (const struct vms_dlm_rm *)0 ||
+	    id == (const struct vms_dlm_res_ident *)0 || id->name_len == 0u)
+		return 0;
+	/* Scans for an OPEN match specifically, and not "the first slot naming
+	 * this tree": the role is "an adoption of it is open HERE, now". */
+	for (i = 0u; i < VMS_DLM_RM_TREES; i++) {
+		if (f->tree[i].state == (uint8_t)VMS_DLM_RM_ST_OPEN &&
+		    rm_ident_eq(&f->tree[i].id, id))
+			return 1;
+	}
+	return 0;
 }
 
 const struct vms_dlm_rm_tree *

@@ -89,7 +89,7 @@ waitfor() { local n="$1" pat="$2" lim="$3" log="$4" w=0
 # wait for $pat in $log AFTER byte offset $off
 waitafter() { local n="$1" pat="$2" lim="$3" log="$4" off="$5" w=0
     while [ $w -lt $((lim*4)) ]; do
-        tail -c "+$((off + 1))" "$log" | grep -qaF -- "$pat" && return 0
+        tail -c "+$((off + 1))" "$log" | grep >/dev/null -aF -- "$pat" && return 0
         kill -0 "${QP[$n]}" 2>/dev/null || return 1
         sleep 0.25; w=$((w+1))
     done; return 1; }
@@ -184,9 +184,9 @@ if [ "$ra" -eq 0 ] && [ "$rb" -eq 0 ]; then
     # (b) the windows: what A's console showed while each remote read was out.
     user_win=$(tail -c "+$((o1 + 1))" "$LA" | head -c "$((o2 - o1))" | tr -d '\r\000')
     pass_win=$(tail -c "+$((o2 + 1))" "$LA" | head -c "$((o3 - o2))" | tr -d '\r\000')
-    if printf '%s' "$user_win" | grep -qF 'SYSTEM'; then rc=0; else rc=1; fi
+    if printf '%s' "$user_win" | grep >/dev/null -F 'SYSTEM'; then rc=0; else rc=1; fi
     record "NEGCTL: the Username: read echoes -- A's console shows the typed SYSTEM (the check can see an echo)" "$rc"
-    if printf '%s' "$pass_win" | grep -qF 'MANAGER'; then rc=1; else rc=0; fi
+    if printf '%s' "$pass_win" | grep >/dev/null -F 'MANAGER'; then rc=1; else rc=0; fi
     record "A's console never shows the remote password: nothing echoed between B's Password: and its DCL prompt" "$rc"
     if grep -qaE 'Password: *MANAGER' "$LA"; then rc=1; else rc=0; fi
     record "A's whole console has no 'Password: MANAGER'" "$rc"
@@ -196,9 +196,9 @@ if [ "$ra" -eq 0 ] && [ "$rb" -eq 0 ]; then
              | grep -o '..2552454d2d532d454e442c' | head -1 | cut -c1-2)
     if [ "$before" = "0a" ]; then rc=0; else rc=1; fi
     record "%REM-S-END starts its own line (preceded by LF, not run onto 'logged out at' by a bare CR; byte before = ${before:-none})" "$rc"
-    if tail -c "+$((o4 + 1))" "$LA" | tr -d '\r\000' | grep -qE '^%REM-S-END, control returned to node OVMXA::$'; then rc=0; else rc=1; fi
+    if tail -c "+$((o4 + 1))" "$LA" | tr -d '\r\000' | grep >/dev/null -E '^%REM-S-END, control returned to node OVMXA::$'; then rc=0; else rc=1; fi
     record "the line reads exactly '%REM-S-END, control returned to node OVMXA::'" "$rc"
-    if tail -c "+$((o4 + 1))" "$LA" | tr -d '\r\000' | grep -qE 'logged out at '; then rc=0; else rc=1; fi
+    if tail -c "+$((o4 + 1))" "$LA" | tr -d '\r\000' | grep >/dev/null -E 'logged out at '; then rc=0; else rc=1; fi
     record "NEGCTL: B's 'logged out at' line precedes it in the same window" "$rc"
 fi
 stop

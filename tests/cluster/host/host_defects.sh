@@ -3087,7 +3087,13 @@ apply_edit() {
         # anchored on the `req->queued = 0;` that follows it, which only the
         # inbound path has. Without the anchor this defect also mutated rd
         # vms-9db's local-convert door and reddened its assertions too.
-        perl -0pi -e 's|        dlm_flips_snapshot_locked\(res, &flips\);\n        try_grant_waiters\(res\);\n        dlm_flips_keep_granted_locked\(res, &flips\);\n        req->queued = 0;|        /* NEGCTL dlm-convert-tells-the-converter-only */\n        req->queued = 0;|' "$_file";;
+        # ONLY the snapshot goes: try_grant_waiters stays, so the THIRD
+        # system is still GRANTED and the defect is exactly "granted in
+        # silence". `flips` is memset at entry, so the compare that follows
+        # finds nothing to report -- which is the silence this control is
+        # about, and keeping the grant is what stops it reddening the
+        # database assertion as well.
+        perl -0pi -e 's|        dlm_flips_snapshot_locked\(res, &flips\);\n        try_grant_waiters\(res\);\n        dlm_flips_keep_granted_locked\(res, &flips\);\n        req->queued = 0;|        /* NEGCTL dlm-convert-tells-the-converter-only */\n        try_grant_waiters(res);\n        dlm_flips_keep_granted_locked(res, &flips);\n        req->queued = 0;|' "$_file";;
 
     dlm-grant-advance-uncounted)
         # The one counter bump for a flip with no arm bound.

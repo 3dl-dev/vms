@@ -38,6 +38,17 @@ Uncompressed: 1,505,766,912 bytes, the same RA92 geometry as the input disk; sha
 - `byol-shipped-disk-boot-unlicensed.log`: the shipped `.dsk.gz` booted again, from a fresh
   decompress on the bench below. The STARTNET failure is the same.
 
+## pcjs bootability (headless chromium, pcjs ovmx-cluster.html)
+
+- `pcjs-browser-boot.log`: the screen lines that `pcjs_boot.mjs` scraped. It ran
+  baron-3dl/pcjs `machines/dec/vax/browser/ovmx-cluster.html` (KA655, 16 MB) at `d4c491f` with
+  `?diskgz=vms73-nodeC-decnet-cluster.dsk.gz`, served locally. The volume boots under pcjs, forms
+  its own cluster (`%CNXMAN, now a VAXcluster member -- system VAXC`), and prints STARTNET's
+  `%NCP-W-OPEFAI` / `Circuit = QNA-0` / `%SYSTEM-F-NOLICENSE` at about 110 s before
+  `Username:`. The scripted login did not take: keystrokes injected into the pcjs screen were
+  dropped. That is a harness limit; the NCP database and license state are already proved
+  under SIMH above.
+
 ## Why 1.965 and not 1.3
 
 STARTNET.COM refuses a cluster member whose DECnet address is not its SCSSYSTEMID. With 1.3 the

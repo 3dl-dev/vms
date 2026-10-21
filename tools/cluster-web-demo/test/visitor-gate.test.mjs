@@ -70,6 +70,30 @@ function loggedInEverywhere(R, at = 600) {
     // rd vms-c56: then the gate reads the node's own SHOW CLUSTER.
     if (GATE.LOGIN_NODES.includes(w)) observe(R, w, '\n' + SHOW_CLUSTER(w));
   }
+  return sessionsPassed(R);
+}
+
+// A real SHOW SYSTEM table as an OVMX node prints it (V0.7-13, DECnet on).
+const OVMX_SHOW_SYSTEM = [
+  'OpenVMX V0.7-13 - OpenVMS-compatible  on node OVMXA  21-OCT-2026 14:17:46.84  Uptime  0 00:02:59',
+  '  Pid    Process Name          CPU         Page flts   Pages',
+  '10000004 JOB_CONTROL        0 00:00:00.02         89     363',
+  '10000001                    0 00:00:01.06         81     357',
+  '10000003 NETACP             0 00:00:00.15       1311    1683',
+  '10000005 SYSTEM             0 00:00:00.47       1098     876',
+  ' $ ',
+].join('\n');
+
+// The session checks (rd vms-5843/vms-6512) as they look when they passed.
+function sessionsPassed(R) {
+  R.session_checked = true;
+  R.show_system = {};
+  for (const w of GATE.LOGIN_NODES) {
+    const rows = GATE.parseShowSystem(OVMX_SHOW_SYSTEM);
+    R.show_system[w] = { rows, ok: true, why: GATE.showSystemWhy(rows) };
+  }
+  R.sethost = {};
+  for (const [a, b] of GATE.SETHOST_LEGS) R.sethost[`${a}->${b}`] = { ok: true, step: 'done', remote_node: b };
   return R;
 }
 
@@ -590,6 +614,7 @@ test('the real VAX passes on offering Username:, and is never logged in to', () 
   }
   observe(R, 'VAXC', 'Username: ');
   GATE.observeLogin(R, 'VAXC', 600);
+  sessionsPassed(R);           // the OVMX-only session checks (rd vms-5843/6512)
   assert.equal(GATE.isPass(R), true, 'Username: on the VAX proves its startup completed');
   assert.equal(verdictOf(R), 'CN=3');
   assert.equal(GATE.loginAction(R, 'VAXC'), null, 'no login is attempted on the real VAX');
@@ -1078,4 +1103,135 @@ test('rd vms-c56: chatter on an OVMX console fails a run that otherwise passes; 
   const N = newObservations();
   observe(N, 'OVMXA', '%OVMX-I-EXEC, x\n[   37.2] %PEA0, channel verified\n');
   assert.match(verdictOf(N), /console chatter: OVMXA/);
+});
+
+
+// ---------------------------------------------------------------------------
+// rd vms-6512: SHOW SYSTEM against the real VAX's system-process list.
+// ---------------------------------------------------------------------------
+
+test('SHOW SYSTEM rows parse as the node printed them, unnamed rows included', () => {
+  const rows = GATE.parseShowSystem('junk\n' + OVMX_SHOW_SYSTEM);
+  assert.deepEqual(rows.map((r) => r.name), ['JOB_CONTROL', '', 'NETACP', 'SYSTEM']);
+  assert.equal(rows[2].pid, '10000003');
+  assert.equal(GATE.parseShowSystem('no table here'), null);
+});
+
+test('the real VAX\'s own SHOW SYSTEM parses to the oracle list (VAXC capture, 2026-10-21)', () => {
+  const vaxc = [
+    '  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages',
+    '20200201 SWAPPER         HIB     16        0   0 00:00:00.05         0      0   ',
+    '20200206 CLUSTER_SERVER  HIB     12       11   0 00:00:00.04       207    315   ',
+    '20200207 CONFIGURE       HIB     11        6   0 00:00:00.04       114    175   ',
+    '20200208 LANACP          HIB     13       39   0 00:00:00.12       357    841   ',
+    '2020020A IPCACP          HIB     10        6   0 00:00:00.01        99    177   ',
+    '2020020B ERRFMT          HIB      9       21   0 00:00:00.04       146    227   ',
+    '2020020C CACHE_SERVER    HIB     16        6   0 00:00:00.00        84    134   ',
+    '2020020D OPCOM           HIB      9       62   0 00:00:00.08       210    259   ',
+    '2020020E AUDIT_SERVER    HIB      9       42   0 00:00:00.13       514    758   ',
+    '2020020F JOB_CONTROL     HIB      8       15   0 00:00:00.03       192    343   ',
+    '20200210 SECURITY_SERVER HIB     10       22   0 00:00:00.06       791   1178   ',
+    '20200211 SMISERVER       HIB      7       33   0 00:00:00.10       343    544   ',
+    '20200212 TP_SERVER       HIB     10       12   0 00:00:00.04       205    317   ',
+    '20200213 SYSTEM          CUR      7      116   0 00:00:00.14       862    512   ',
+  ].join('\n');
+  const names = GATE.parseShowSystem(vaxc).map((r) => r.name).filter((n) => n !== 'SYSTEM');
+  for (const n of names) assert.ok(GATE.SHOW_SYSTEM_ORACLE.includes(n), n);
+  // every oracle name is either required of OVMX or ledgered as a gap -- never both
+  for (const n of GATE.SHOW_SYSTEM_ORACLE) {
+    assert.ok(GATE.SHOW_SYSTEM_REQUIRED.includes(n) !== (n in GATE.SHOW_SYSTEM_GAPS), n);
+  }
+});
+
+test('SHOW SYSTEM: JOB_CONTROL and NETACP are required, the gaps are honestly absent', () => {
+  const ok = GATE.parseShowSystem(OVMX_SHOW_SYSTEM);
+  assert.equal(GATE.showSystemWhy(ok), null);
+  const noNet = ok.filter((r) => r.name !== 'NETACP');
+  assert.match(GATE.showSystemWhy(noNet), /missing NETACP/);
+  assert.match(GATE.showSystemWhy(null), /no SHOW SYSTEM table/);
+});
+
+test('SHOW SYSTEM: a ledgered gap that appears fails -- a placeholder, or a ledger to move', () => {
+  const rows = [...GATE.parseShowSystem(OVMX_SHOW_SYSTEM), { pid: '10000009', name: 'OPCOM' }];
+  assert.match(GATE.showSystemWhy(rows), /shows OPCOM, which the gap ledger says OVMX lacks/);
+});
+
+test('a run whose SHOW SYSTEM falls short does not pass, and says why', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  assert.equal(GATE.isPass(R), true);
+  R.show_system.OVMXB = { rows: [], ok: true, why: 'missing JOB_CONTROL,NETACP' };
+  assert.equal(GATE.isPass(R), false);
+  assert.match(verdictOf(R), /^CN=3 but OVMXB SHOW SYSTEM: missing JOB_CONTROL,NETACP/);
+});
+
+// ---------------------------------------------------------------------------
+// rd vms-5843: SET HOST both ways between the OVMX nodes.
+// ---------------------------------------------------------------------------
+
+test('a run whose SET HOST fails does not pass; checks that never ran do not pass either', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  R.sethost['OVMXB->OVMXA'] = { ok: false, step: 'remote Username:', why: '%SYSTEM-F-UNREACHABLE, remote node is not currently reachable' };
+  assert.equal(GATE.isPass(R), false);
+  assert.match(verdictOf(R), /SET HOST OVMXB->OVMXA failed at remote Username:: %SYSTEM-F-UNREACHABLE/);
+  delete R.session_checked;
+  assert.match(GATE.sessionWhy(R), /never ran/);
+});
+
+// A scripted pair of OVMX consoles: what each prints in answer to what is typed.
+function setHostRig(script) {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  delete R.session_checked; R.sethost = {}; R.show_system = {};
+  const typed = [];
+  const io = {
+    type: async (w, t) => { typed.push([w, t]); const out = script(w, t); if (out) observe(R, w, R.transcript[w] + out); return true; },
+    read: async (w) => R.transcript[w],
+    sleep: async () => {}, log: () => {},
+    user: () => 'SYSTEM', pass: () => 'MANAGER',
+  };
+  return { R, io, typed };
+}
+
+test('SET HOST leg: Username:, Password:, remote NODENAME, LOGOUT, %REM-S-END back home', async () => {
+  const { R, io, typed } = setHostRig((w, t) => {
+    const peer = w === 'OVMXA' ? 'OVMXB' : 'OVMXA';
+    if (t.startsWith('SET HOST')) return `SET HOST ${peer}\n\n Welcome to OpenVMX\n\nUsername: `;
+    if (t === 'SYSTEM\r') return 'SYSTEM\nPassword: ';
+    if (t === 'MANAGER\r') return '\n Welcome to OpenVMX V0.7-13\n$ ';
+    if (t.startsWith('WRITE')) return `WRITE SYS$OUTPUT "SETHOST-"+F$GETSYI("NODENAME")\nSETHOST-${peer}\n$ `;
+    if (t === 'LOGOUT\r') return `LOGOUT\n  SYSTEM logged out\n%REM-S-END, control returned to node ${w}::\n$ `;
+    return '';
+  });
+  const rec = await GATE.runSetHost(R, 'OVMXA', 'OVMXB', io);
+  assert.equal(rec.ok, true, JSON.stringify(rec));
+  assert.equal(rec.remote_node, 'OVMXB');
+  assert.deepEqual(typed.map(([, t]) => t.split(' ')[0].replace('\r', '')),
+                   ['SET', 'SYSTEM', 'MANAGER', 'WRITE', 'LOGOUT']);
+});
+
+test('SET HOST leg: a network error is reported in VMS\'s words, and nothing more is typed', async () => {
+  const { R, io, typed } = setHostRig((w, t) =>
+    t.startsWith('SET HOST') ? 'SET HOST OVMXB\n%SYSTEM-F-UNREACHABLE, remote node is not currently reachable\n$ ' : '');
+  const rec = await GATE.runSetHost(R, 'OVMXA', 'OVMXB', io);
+  assert.equal(rec.ok, false);
+  assert.match(rec.why, /UNREACHABLE/);
+  assert.equal(typed.length, 1);
+});
+
+test('SET HOST leg: a session that lands on the wrong node fails (the local DCL answered)', async () => {
+  const { R, io } = setHostRig((w, t) => {
+    if (t.startsWith('SET HOST')) return 'SET HOST OVMXB\nUsername: ';
+    if (t === 'SYSTEM\r') return 'SYSTEM\nPassword: ';
+    if (t === 'MANAGER\r') return '\n$ ';
+    if (t.startsWith('WRITE')) return 'SETHOST-OVMXA\n$ ';
+    return '';
+  });
+  const rec = await GATE.runSetHost(R, 'OVMXA', 'OVMXB', io);
+  assert.equal(rec.ok, false);
+  assert.match(rec.why, /on OVMXA, not OVMXB/);
 });

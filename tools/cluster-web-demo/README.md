@@ -116,7 +116,13 @@ within `LOGIN_BOUND_S` of the first click (rd vms-db1): each OVMX node offers `U
 logged-in DCL `$`, and the real VAX offers `Username:`: a real VAX can be admitted, so every console reads CN=3, and still hang in its own startup
 and never offer `Username:` — a dead console to a visitor. The matrix's `c-after-a-up` and
 `c-last-after-a-up` rows hold Node C's click until Node A has offered `Username:`, because a VAX booting
-after an OVMX node is up is the order that hung, and visitors choose the order. `gate-eval.mjs` holds every judgement the gate makes as pure functions
+after an OVMX node is up is the order that hung, and visitors choose the order. Once every node is usable the gate does what a VMS user does next (rd vms-5843/vms-6512): `SHOW SYSTEM` on
+each OVMX node must list `JOB_CONTROL` and `NETACP`, and every other system process the demo's real VAX runs
+(`SHOW_SYSTEM_ORACLE`, from its own console) must be either shown or named in the gap ledger
+(`SHOW_SYSTEM_GAPS`, each entry an rd item) -- a ledgered name that appears fails, because it is either a
+placeholder or a landed facility the ledger must move; then `SET HOST OVMXB` from Node A and `SET HOST OVMXA`
+from Node B must each log in to the remote node with the published login, print the remote `NODENAME`, and
+`LOGOUT` back to `%REM-S-END, control returned to node <home>::`. `gate-eval.mjs` holds every judgement the gate makes as pure functions
 over console text, unit-tested by `test/visitor-gate.test.mjs` without a browser — the gate has twice been
 wrong about a run (it failed a healthy cluster whose console had scrolled, and it named a cause its
 evidence did not carry), and a grader that lies in either direction is worse than no grader.

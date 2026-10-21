@@ -184,6 +184,29 @@ a 20-column field, so every value starts at column 20. Confirmed on
 - `Devices allocated:` is **absent entirely** for a process that has none —
   see the `AUDIT_SERVER` captures in §3, which have no such section.
 
+### 2.3 `Devices allocated:` with more than one device (rd vms-c31)
+
+Captured on VAX1, 2026-10-21 (verbatim:
+`tests/lab/captures/showproc-devices-20261021/vax1-show-process-devices.txt`).
+The console session already owned `OPA0:` -- it never ran `ALLOCATE OPA0:` --
+then allocated `TTD3:` and `LPA0:`, in that order:
+
+```
+Devices allocated:  VAX1$OPA0:
+                    VAX1$LPA0:
+                    VAX1$TTD3:
+```
+
+- The section lists every device the process **owns**, not only the ones it
+  `ALLOCATE`d: the login terminal it merely holds a channel to is the first
+  entry (the same holds for a `SET HOST` session's `RTA1:`, in
+  `tests/lab/captures/decnet-sethost-inbound-20261005/vax-sethost-duplnam.txt`).
+- Each further device sits alone on its line at **column 20**, under the first.
+- The order is the I/O database's (`LPA0:` before `TTD3:` although `TTD3:` was
+  allocated first), not allocation order.
+- After both `DEALLOCATE`s the section shrank back to `VAX1$OPA0:` alone.
+- The name is the device's full name (`node$` prefix, no leading underscore).
+
 ---
 
 ## 3. `SHOW PROCESS` with a target
@@ -406,7 +429,7 @@ which is the Rule 10 answer the `---` markers were not.
 | `User Identifier:`   | **printed**, from `JPI$_UIC`, as the octal `[group,member]`. VMS shows the *rights identifier* (`[SYSTEM]`) when one exists; OVMX has no RIGHTSLIST, a pre-existing divergence recorded in `vax73-privileges.md` §6 (4) and not owned by vms-6a7 |
 | `Base priority:`     | **absent** — same reason as the `Pri` column above |
 | `Default file spec:` | **printed**: the caller's own default directory for its own row, and VMS's own literal `Not available` for any other process — the same condition VMS renders that way |
-| `Devices allocated:` | **absent**, which is what VMS prints for a process with none (§3.1) |
+| `Devices allocated:` | **printed** from the executive's device table: every row whose owner is the target, one per line at column 20, preceded by a blank line (§2.3, rd vms-c31); absent for a process that owns none (§3.1). Two remainders: OVMX's full device name has no `node$` prefix (shared with `$GETDVI` `DVI$_FULLDEVNAM`, vms-dv1), and the order is the executive device table's, not VMS's I/O database order |
 | `Privileges:`        | never existed on VMS (§2.2); the invented OVMX line is **deleted** |
 | `Process quotas:`    | belongs to `/QUOTAS` (§2.2); the inline fabricated block is **deleted** from plain `SHOW PROCESS` |
 

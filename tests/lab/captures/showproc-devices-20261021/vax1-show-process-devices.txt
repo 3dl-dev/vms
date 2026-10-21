@@ -1,0 +1,47 @@
+VAX1 (OpenVMS VAX V7.3), vaxlab-0, 2026-10-21, console OPA0: logged in as SYSTEM
+(rd vms-c31). Read through ovmx-lab-console; carriage returns stripped by the reader.
+Lab left as found: both devices DEALLOCATEd (final SHOW PROCESS below) and logged out.
+
+$ SHOW PROCESS
+
+21-OCT-2026 16:41:57.25   User: SYSTEM           Process ID:   2020021A
+                          Node: VAX1             Process name: "SYSTEM"
+
+Terminal:           OPA0:
+User Identifier:    [SYSTEM]
+Base priority:      4
+Default file spec:  SYS$SYSROOT:[SYSMGR]
+
+Devices allocated:  VAX1$OPA0:
+$ ALLOCATE TTD3:
+%DCL-I-ALLOC, _$2$TTD3: allocated
+$ ALLOCATE LPA0:
+%DCL-I-ALLOC, _$2$LPA0: allocated
+$ SHOW PROCESS
+
+21-OCT-2026 16:41:58.12   User: SYSTEM           Process ID:   2020021A
+                          Node: VAX1             Process name: "SYSTEM"
+
+Terminal:           OPA0:
+User Identifier:    [SYSTEM]
+Base priority:      4
+Default file spec:  SYS$SYSROOT:[SYSMGR]
+
+Devices allocated:  VAX1$OPA0:
+                    VAX1$LPA0:
+                    VAX1$TTD3:
+$ DEALLOCATE TTD3:
+$ DEALLOCATE LPA0:
+$ SHOW PROCESS
+
+21-OCT-2026 16:42:49.85   User: SYSTEM           Process ID:   2020021A
+                          Node: VAX1             Process name: "SYSTEM"
+
+Terminal:           OPA0:
+User Identifier:    [SYSTEM]
+Base priority:      4
+Default file spec:  SYS$SYSROOT:[SYSMGR]
+
+Devices allocated:  VAX1$OPA0:
+$ LOGOUT
+  SYSTEM       logged out at 21-OCT-2026 16:42:50.48

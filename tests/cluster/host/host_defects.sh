@@ -2632,9 +2632,22 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_owed_complete() returns true as soon as ONE member has reported instead of all of them, so the FIRST op-0x13 closes the adoption and announces the tree. On a real cluster the old master's 0x13 can arrive BEFORE a holder's records (measured in the pre-registered RA8 arm), so this node would close the transaction and then REFUSE four locks a real VAX still believes it holds -- the holder waits forever on a lock its own database says it has.";;
         require_fail) hd_lines <<'EOF'
-*** the adoption is NOT closed: the holder has not reported (RA8's interleave) ***
-and no op-0x14 has gone out
-with three members and two reports the tree is still waiting
+  *** one to each system that sent an op-0x13 ***
+  *** the adoption is NOT closed: the holder has not reported (RA8's interleave) ***
+  *** the tree is not announced at all while a member still owes an end-of-records ***
+  *** two op-0x14s, after the last op-0x13 ***
+  and is really adopted
+  and no op-0x14 has gone out
+  and the executive still counts the completion as unreported
+  both op-0x14s counted unsent
+  it is struck
+  nothing sent
+  the HOLDER's end-of-records closes it
+  the bystander reports too -- it holds nothing and still sends one (RA8's CACHE$ episode)
+  the holder still owes one
+  the holder's record still lands
+  three op-0x14s now go out
+  with three members and two reports the tree is still waiting
 EOF
                       ;;
         esac;;
@@ -2647,7 +2660,7 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_send_held()'s 'if (!t->done[i]) continue;' is dropped, so the tree is announced to every member of the owed set rather than to the ones that reported. The frame reaches a system that was never part of this hand-over -- a shape no real new master has been watched to send to it, which is exactly what RULE C and ovmx-never-crashes-a-peer forbid, and after a departure it is addressed at a system that has LEFT.";;
         require_fail) hd_lines <<'EOF'
-*** and only the old master -- the one system that reported -- is told ***
+  *** and only the old master -- the one system that reported -- is told ***
 EOF
                       ;;
         esac;;
@@ -2660,8 +2673,9 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_h_open() stages the acknowledgement before testing whether the adoption engine opened anything, so a node with no delivery proc, no cluster identity of its own, or no free tree slot still tells the old master 'yes, I am your new master'. The old master then hands over a tree NOBODY holds: its holders' locks live on a node that has no record of them, and a departing master waits for an op-0x14 that can never come.";;
         require_fail) hd_lines <<'EOF'
-*** nothing is answered: the old master is not told this node will take a tree it cannot hold ***
-and nothing was answered
+  *** nothing is answered: the old master is not told this node will take a tree it cannot hold ***
+  and it is counted
+  the step is REFUSED
 EOF
                       ;;
         esac;;
@@ -2674,8 +2688,8 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_h_record() stops calling rm_abandon() when the engine refuses a record, so the tree stays open with the locks adopted SO FAR. This node then serves that tree as its master while missing locks a holder still believes it holds -- it will grant an incompatible mode over them, which is the one failure a lock manager must never have.";;
         require_fail) hd_lines <<'EOF'
-*** the WHOLE tree is given back to its old master ***
-no tree is open here any more
+  *** the WHOLE tree is given back to its old master ***
+  no tree is open here any more
 EOF
                       ;;
         esac;;
@@ -2688,8 +2702,8 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_complete()'s 'if (sent != 0u)' guard on adopt_reported() is forced true, so a tree whose announcements ALL failed to transmit is still counted as reported. The executive then publishes a clean zero for the completions nobody was told about, and the one number a lab run reads to find a stranded old master goes silent.";;
         require_fail) hd_lines <<'EOF'
-*** and the completion is NOT reported: a frame that did not go out is not an announcement ***
-and the executive still counts the completion as unreported
+  *** and the completion is NOT reported: a frame that did not go out is not an announcement ***
+  and reported as unreported
 EOF
                       ;;
         esac;;
@@ -2702,8 +2716,8 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_h_role() answers as the NEW MASTER unconditionally, so a plain member clears body[28:32] in its 82/15. The remastering node is told a second system took the role its real new master has, which is the 3-node rule rd vms-cab's held-out captures established and the 2-node ones hid (memory heldout-proof-must-vary-topology).";;
         require_fail) hd_lines <<'EOF'
-*** body[28:32] is KEPT: this node is not the new master and does not claim to be ***
-no new-master role was asserted
+  *** body[28:32] is KEPT: this node is not the new master and does not claim to be ***
+  no new-master role was asserted
 EOF
                       ;;
         esac;;

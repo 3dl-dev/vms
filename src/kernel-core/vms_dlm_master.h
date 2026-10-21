@@ -327,7 +327,7 @@ uint32_t vms_lock_dlm_master_apply_valblk(uint32_t req_csid, uint32_t master_lki
  * it. SS$_IVLOCKID otherwise -- a proxy, a local lock, another system's lock,
  * a lock that has gone away, or one that is queued again: there is then no
  * grant to announce, which is an honest omission and not a failure.
- * ==========================================================================
+ * ===========================================================================
  */
 uint32_t vms_lock_dlm_grant_advance_read(uint32_t csid, uint32_t master_lkid,
 					 struct vms_dlm_master_result *out);

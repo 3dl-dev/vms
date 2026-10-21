@@ -44,10 +44,8 @@
 #   NETBSD_WORKDIR                        single-disk workdir (default /cache/single-work).
 #   OVMX_SINGLE_RQ0_TYPE                  SIMH rq0 sizing (default RAUSER=340).
 #   BOOT_TIMEOUT / CMD_TIMEOUT / ACCEPT_TIMEOUT   battery + whole-run bounds.
-#   EXPECT_HOST_YEAR                      1 pins the host year in SHOW TIME (default);
-#                                         set 0 if the SIMH VAX guest clock proves
-#                                         to read off the host (measured on first
-#                                         boot -- the Alpha emulator-RTC pattern).
+#   EXPECT_HOST_YEAR                      1: SHOW TIME must show the host's year and
+#                                         today's date (rd vms-b06; always 1 here).
 set -uo pipefail
 
 log() { echo "[vax-accept] $*"; }
@@ -95,15 +93,14 @@ fi
 
 export CMD_TIMEOUT="${CMD_TIMEOUT:-30}"
 export BOOT_TIMEOUT="${BOOT_TIMEOUT:-300}"
-# SIMH's VAX TOY clock starts at a FIXED default epoch (measured: 1-JAN-2010),
-# NOT the host clock -- OVMX faithfully reports that guest hardware clock, so
-# pinning the host year here would test SIMH's RTC config, not OVMX faithfulness.
-# This is the SAME emulator-RTC case Alpha handles (tools/cross-alpha/
-# run-boot-alpha.sh sets EXPECT_HOST_YEAR=0 for qemu-system-alpha's off RTC).
-# The shared battery's SHOW TIME anti-fabrication teeth stay in force regardless:
-# it still asserts a plausible current-century year (20XX -- rejects 1970/19XX),
-# an HH:MM:SS time, and a non-vacuous negctl. This is NOT a weakening.
-export EXPECT_HOST_YEAR=0
+# rd vms-b06: the VAX guest clock IS the host clock. SIMH loads the KA655 TODR
+# with the host's time of year at power on; the year comes from the root
+# filesystem, which the build session now writes with today's date
+# (drive_boot_vax.py start_single_user). The 1-JAN-2010 this rail used to show
+# was NetBSD's built-in default leaking through a 2010-stamped root FFS, not
+# SIMH -- an OVMX/VAX bug, now fixed, so the battery pins the host year AND
+# today's date here exactly as on x86_64/aarch64.
+export EXPECT_HOST_YEAR=1
 # --- The shared battery's CONSOLE LOGIN-SEQUENCE gate (vms-3e9 a/b/c) ---------
 # console_login_acceptance() in the shared battery proves, on THIS rail, that:
 #   (a) the console prints the system-identification line before "Username:";

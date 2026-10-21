@@ -305,6 +305,27 @@ int ovmx_boot_prepare_stage_dir(const char *dir);
  */
 void ovmx_boot_power_off(void);
 
+/*
+ * ovmx_boot_system_time_valid - does the substrate vouch for the system time
+ * it set at boot (rd vms-b06)? 1 yes, 0 no, -1 the substrate does not say.
+ *
+ * NetBSD: kern.ovmx_toy_valid, which tools/cross-vax/netbsd-ovmx-todr.patch
+ * sets from the kernel's own TOY-clock verdict (a VAX TODR holds no year; the
+ * kernel takes it from the root filesystem and rejects a result it cannot
+ * trust). -1 on a NetBSD kernel without that patch. Linux: -1 -- its RTC
+ * carries the year and the kernel does not report a verdict.
+ */
+int ovmx_boot_system_time_valid(void);
+
+/*
+ * ovmx_boot_set_system_time - set the system clock to the time the operator
+ * entered at the boot date prompt. Returns 0 or -1 with errno. Both backends:
+ * clock_settime(CLOCK_REALTIME); on NetBSD/vax the kernel also writes the
+ * TODR (resettodr), as VMS does when the time is set.
+ */
+struct timespec;
+int ovmx_boot_set_system_time(const struct timespec *ts);
+
 #ifdef __cplusplus
 }
 #endif

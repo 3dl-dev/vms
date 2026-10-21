@@ -98,6 +98,7 @@
  * the NetBSD backend is vms-f2e. See ovmx_boot.h and docs/design-p4-netbsd-vax-
  * boot.md (GAP-C). */
 #include "ovmx_boot.h"
+#include "boot_time.h"         /* the boot date check (rd vms-b06) */
 #if defined(OVMX_BOOT_ACP_BRIDGE)
 /* ACP-read bootstrap bridge (vms-5f0): PID 1 stages the first-hop execve'd
  * images (IMGACT/PROVISION/DCL/JOB_CONTROL/LOGINOUT) off the genuine ODS-2
@@ -1854,6 +1855,55 @@ static void print_stdrv_begun(void)
 }
 
 /*
+ * boot_ensure_system_time - ask the operator for the date when the boot has
+ * no valid one, as VMS does (rd vms-b06).
+ *
+ * A VAX TOY clock holds no year. VMS keeps the year with the system image and,
+ * when the time it derives is not valid, stops and asks
+ * (docs/oracle/installation-media-vax73-alpha84.md §1):
+ *
+ *     PLEASE ENTER DATE AND TIME
+ *      (DD-MMM-YYYY  HH:MM)  07-AUG-2026 15:00
+ *
+ * The substrate says whether it trusts the time it set
+ * (ovmx_boot_system_time_valid). When it does not, the boot asks instead of
+ * running on a made-up date: the demo's Node B used to come up at 1-JAN-2010
+ * without a word. An answer that does not parse is asked again, as VMS asks
+ * again. With the console at EOF nothing can be typed; the boot says the
+ * clock is not set and goes on.
+ *
+ * Called from display_boot_banner() between the product line and the date
+ * line, so the date the banner prints is the one the operator gave.
+ */
+static void boot_ensure_system_time(void)
+{
+    char line[128];
+
+    if (!ovmx_boot_time_needs_operator(ovmx_boot_system_time_valid()))
+        return;
+
+    for (;;) {
+        struct timespec ts;
+
+        fputs(OVMX_BOOT_DATE_PROMPT, stdout);
+        fflush(stdout);
+        if (!fgets(line, (int)sizeof(line), stdin)) {
+            printf("\n%%OVMX-W-NOTIME, no date and time entered; "
+                   "the system clock is not set\n");
+            return;
+        }
+        if (!ovmx_boot_parse_datetime(line, &ts))
+            continue;
+        if (ovmx_boot_set_system_time(&ts) != 0) {
+            printf("%%OVMX-E-SETTIME, cannot set the system time: %s\n",
+                   strerror(errno));
+            return;
+        }
+        return;
+    }
+}
+
+/*
  * The OS identification banner (product name/version + copyright block).
  *
  * BANNER-FIRST (vms-1fb, docs/design-boot-faithful.md §2.5/§3.5/§4 item 3).
@@ -1890,12 +1940,15 @@ static void print_stdrv_begun(void)
 static void display_boot_banner(void)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
-    localtime_r(&ts.tv_sec, &tm);
 
     printf("\n");
     printf("    %s\n", ovmx_product_banner());
+    fflush(stdout);
+    boot_ensure_system_time();
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    localtime_r(&ts.tv_sec, &tm);
     printf("    %2d-%s-%04d %02d:%02d:%02d.%02d\n\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,

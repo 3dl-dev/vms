@@ -439,6 +439,12 @@ jobs:
       # still read RXDB), pinned against the upstream gencons.c (teeth + applies).
       - name: Run gencons closed-console patch self-tests
         run: python3 -m pytest tests/lab-vax/test_gencons_patch.py -v
+
+      # rd vms-b06: the TOY-clock patch (TODR year rollover + kern.ovmx_toy_valid),
+      # the REAL NetBSD 10.1 clock code compiled on the host, unpatched (teeth: the
+      # 1-JAN-2010 boot) and patched; plus the build session's date.
+      - name: Run TOY-clock (todr) patch self-tests
+        run: python3 -m pytest tests/lab-vax/test_todr_patch.py -v
   # -----------------------------------------------------------------------
   # Job: NetBSD/amd64 console driver self-test (rd vms-d83 / vms-d984)
   #

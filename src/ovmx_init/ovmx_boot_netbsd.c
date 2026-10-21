@@ -68,6 +68,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include <sys/module.h>
 #include <sys/reboot.h>
 #include <sys/statvfs.h>
+#include <sys/sysctl.h>
 #include <fs/tmpfs/tmpfs_args.h>
 #include <fs/ptyfs/ptyfs.h>
 #include <miscfs/procfs/procfs.h>
@@ -80,6 +81,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* The NetBSD host path for the OVMX ODS-2 system disk (DKA0:) -- the
@@ -676,6 +678,31 @@ void ovmx_boot_stop_console_log_bridge(void)
 {
     /* NetBSD credentials are per process: the klog reader leaves root with
      * PID 1 (rd vms-137e). Nothing to stop. */
+}
+
+/*
+ * The boot date check (rd vms-b06). A VAX TODR holds no year; the NetBSD
+ * kernel takes the year from the root filesystem's last write and rejects a
+ * result before 2021 or behind that write as "preposterous", falling back to
+ * the filesystem time (or its built-in 1-JAN-2010 12:00). It used to do that
+ * silently. tools/cross-vax/netbsd-ovmx-todr.patch publishes its verdict as
+ * kern.ovmx_toy_valid; a kernel without the patch has no such node, and this
+ * reports -1 ("does not say") rather than inventing a verdict.
+ */
+int ovmx_boot_system_time_valid(void)
+{
+    int v = 0;
+    size_t len = sizeof(v);
+
+    if (sysctlbyname("kern.ovmx_toy_valid", &v, &len, NULL, 0) != 0)
+        return -1;
+    return v != 0;
+}
+
+/* clock_settime(2) as PID 1; the kernel writes the TODR back (resettodr). */
+int ovmx_boot_set_system_time(const struct timespec *ts)
+{
+    return clock_settime(CLOCK_REALTIME, ts);
 }
 
 #endif /* __NetBSD__ */

@@ -10,59 +10,53 @@
  * KERNEL owns the socket (no userspace CAP_NET_RAW needed) and the executive
  * gates opening it on the real VMS PHY_IO privilege instead.
  *
- * WHY THIS FILE IS IN src/kernel-core/ BUT IS NOT (YET) SUBSTRATE-NEUTRAL.
- * Structurally this facility mirrors every other kernel-core facility -- it
- * calls exec_l2_* and exec_socket_release through the seam and names no
- * <linux/net...> socket header of its own. But, exactly like vms_bg.c (whose
- * own header explains this same posture), it still drives its per-process
- * handle list with raw Linux <linux/list.h> + spinlock primitives rather than
- * the substrate-neutral exec_list_ / exec_lock_ seam, so it is -- like
- * vms_bg.c -- a LINUX BUILD for now: this file is not in the NetBSD kmodule's
- * SRCS (src/kernel-netbsd/Makefile), and struct vms_proc's NetBSD twin
- * carries no l2_channels field. The NetBSD exec_l2_* backend (vms_socket_
- * netbsd.c) is a type-checked, unreferenced contract-only twin until a
- * genuine NetBSD L2 binding (BPF, not a socket at all) lands -- see that
- * file's header. This mirrors vms_bg.c's "stays a Linux build for now"
- * posture exactly, for the exact same reason (a host-socket-coupled
- * per-process list that has not yet been ported to the exec_list_* seam).
+ * SUBSTRATE-NEUTRAL (rd vms-9394). This file names no host header: every
+ * host-coupled operation goes through the seams -- the per-process handle
+ * list through exec_list_* (exec_list.h), its guard through exec_lock_*,
+ * user<->kernel copies through exec_copyin/exec_copyout, memory through
+ * exec_zalloc/exec_free, and the datalink itself through exec_l2_* /
+ * exec_socket_release (exec_kbackend.h SS13). So the SAME source builds into
+ * the Linux vms.ko (whose exec_l2_* is a kernel AF_PACKET socket,
+ * exec_kbackend_linux.h) and the NetBSD vms.kmod (whose exec_l2_* is an
+ * in-kernel ifnet binding, src/kernel-netbsd/vms_socket_netbsd.c) -- the
+ * PHY_IO gate, the station-address policy and the executive-owned source
+ * field have exactly ONE implementation. On Linux every op expands to the
+ * primitive this file used before (list_head / spin_lock / copy_from_user /
+ * kzalloc), so the x86 build is behaviour-identical.
  *
  * LIFECYCLE. An L2 handle is minted ON DEMAND by VMS_IOCTL_L2_OPEN and lives
  * in the owning process's l2_channels list (struct vms_proc, vms_internal.h),
- * drawing its handle number from a module-global monotonic counter (like
- * vms_bg_next_unit) -- NOT from proc->next_chan: an L2 handle is not a VMS
- * $ASSIGN channel (see vms_l2.h's NAMING note), so it does not share that
- * number space. VMS_IOCTL_L2_CLOSE releases the handle and its host socket; a
+ * drawing its handle number from that process's own monotonic counter
+ * (proc->l2_next_handle, under l2_lock) -- NOT from proc->next_chan: an L2
+ * handle is not a VMS $ASSIGN channel (see vms_l2.h's NAMING note), so it does
+ * not share that number space, and it is only ever looked up in its owner's
+ * list, so per-process uniqueness is the whole requirement. VMS_IOCTL_L2_CLOSE releases the handle and its host socket; a
  * process that dies without an explicit CLOSE has every L2 handle reclaimed
  * by vms_l2_release_all() at teardown (called from vms_module.c, the same
  * place vms_bg_release_all() runs), so no socket leaks for the life of the
  * module.
  *
- * FIRST-INCREMENT SCOPE (vms-7eb). OPEN / SEND / RECV / CLOSE only, reached
- * solely through the owning process's own handle, exercised synchronously by
- * one thread -- the same scope limits vms_bg.c's header documents for BGn:'s
- * first increment, for the same reason (a handle is looked up under l2_lock
- * and its socket used after the lock is dropped, since a host socket op can
- * sleep). No fork/exec inheritance of L2 handles in this increment (out of
+ * SCOPE (vms-7eb; rd vms-9394). OPEN / SEND / RECV / CLOSE only, reached
+ * solely through the owning process's own handle. A handle is looked up under
+ * l2_lock and its socket used after the lock is dropped (a host socket op can
+ * sleep), so the lookup takes a socket reference for the op's duration: the
+ * several threads of one NETACP may SEND and RECV on one handle concurrently,
+ * and a CLOSE racing them frees nothing they are using. No fork/exec inheritance of L2 handles in this increment (out of
  * scope for the auth-gate slice) -- unlike BGn:'s vms-3bf/vms-0cd, there is no
  * forking-server case driving L2 yet.
  */
 
-#include <linux/module.h>
-#include <linux/slab.h>
-#include <linux/list.h>
-#include <linux/uaccess.h>
-#include <linux/atomic.h>
-#include <linux/errno.h>
-
-#include "vms_internal.h"   /* struct vms_proc / SS__* / VMS_PRV_M_PHY_IO and,
-                             * via vms_ioctl.h, the struct vms_l2_* args */
-#include "exec_kbackend.h"  /* the exec_l2_/exec_socket_ host-socket seam (SS13) */
+#include "vms_internal.h"   /* struct vms_proc / SS__* / VMS_PRV_M_PHY_IO and
+                             * the struct vms_l2_* args (vms_l2.h, via
+                             * vms_ioctl.h on Linux / vms_l2_nb.h on NetBSD) */
+#include "exec_kbackend.h"  /* exec_lock/copy/alloc + the exec_l2_ seam (SS13) */
+#include "exec_list.h"      /* the per-process handle list */
 
 /* One process's L2 handle. The host socket hangs here as an exec_socket_t
  * (the SS12 holder, reused for L2 -- see exec_kbackend_linux.h's SS13 header),
  * keyed to the handle, exactly as a BG channel points at its socket. */
 struct vms_l2_handle {
-    struct list_head list;      /* in proc->l2_channels */
+    exec_list_node_t list;      /* in proc->l2_channels */
     uint32_t handle;            /* this process's L2 handle number */
     uint32_t ifindex;           /* the bound interface's index (from OPEN) */
     exec_socket_t sock;         /* refcounted host AF_PACKET socket */
@@ -71,17 +65,12 @@ struct vms_l2_handle {
                                  * (rd vms-1f69; vms_l2_station.h) */
 };
 
-/* L2 handle numbers are node-wide and monotonic, like vms_bg_next_unit for
- * BGn: units -- an OVMX numbering choice (vms_l2.h): a handle is opaque to the
- * program, which passes it back verbatim, not a number it interprets. */
-static atomic_t vms_l2_next_handle = ATOMIC_INIT(0);
-
 /* Caller holds proc->l2_lock. */
 static struct vms_l2_handle *l2h_find_locked(struct vms_proc *proc, uint32_t handle)
 {
     struct vms_l2_handle *h;
 
-    list_for_each_entry(h, &proc->l2_channels, list) {
+    exec_list_for_each_entry(h, &proc->l2_channels, list) {
         if (h->handle == handle)
             return h;
     }
@@ -90,19 +79,27 @@ static struct vms_l2_handle *l2h_find_locked(struct vms_proc *proc, uint32_t han
 
 /* Find a handle and lift out its socket (and, if `station` is non-NULL, its
  * station address) under the lock, so the (possibly sleeping) host socket op
- * below runs with the lock dropped. Returns the handle record (for its
- * identity) and *sock; NULL means "no such handle". */
+ * below runs with the lock dropped. The socket is returned with a REFERENCE
+ * taken under the lock (rd vms-9394), which the caller drops with
+ * exec_socket_release() when its op is done -- so a concurrent CLOSE from
+ * another thread of the same process (NETACP sends from its FAL/CTERM worker
+ * threads while its main loop sits in RECV) only drops the handle's own
+ * reference and can never free the socket out from under an op in flight.
+ * Returns the handle record (for its identity) and *sock; NULL means "no
+ * such handle". */
 static struct vms_l2_handle *l2h_lookup(struct vms_proc *proc, uint32_t handle,
                                         exec_socket_t *sock, uint8_t *station)
 {
     struct vms_l2_handle *h;
 
-    spin_lock(&proc->l2_lock);
+    exec_lock(&proc->l2_lock);
     h = l2h_find_locked(proc, handle);
     *sock = h ? h->sock : NULL;
+    if (h)
+        exec_socket_get(h->sock);
     if (h && station)
         memcpy(station, h->station, sizeof(h->station));
-    spin_unlock(&proc->l2_lock);
+    exec_unlock(&proc->l2_lock);
     return h;
 }
 
@@ -145,8 +142,9 @@ static bool l2_priv_check(uint64_t cur_privs, uint32_t *status)
  * The check runs after the PHY_IO gate: an unprivileged caller learns nothing
  * about which addresses would have been accepted. Unicast addressed to an
  * accepted Phase IV station reaches the handle because exec_l2_open puts the
- * NIC in promiscuous mode (exec_kbackend_linux.h, vms-a84d) -- the same
- * reason the cluster wire's aa:00:04:00 SCA address is received.
+ * NIC in promiscuous mode on both substrates (exec_kbackend_linux.h,
+ * vms-a84d; src/kernel-netbsd/vms_socket_netbsd.c, rd vms-9394) -- on Linux
+ * the same reason the cluster wire's aa:00:04:00 SCA address is received.
  */
 long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
 {
@@ -158,7 +156,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
     int rc;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
     args.stv = 0;
 
@@ -198,19 +196,19 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    h = kzalloc(sizeof(*h), GFP_KERNEL);
+    h = exec_zalloc(sizeof(*h));
     if (!h) {
         exec_socket_release(sock);
         return -ENOMEM;
     }
-    h->handle = (uint32_t)atomic_inc_return(&vms_l2_next_handle);
     h->ifindex = ifindex;
     h->sock = sock;
     memcpy(h->station, args.station, sizeof(h->station));
 
-    spin_lock(&proc->l2_lock);
-    list_add_tail(&h->list, &proc->l2_channels);
-    spin_unlock(&proc->l2_lock);
+    exec_lock(&proc->l2_lock);
+    h->handle = ++proc->l2_next_handle;
+    exec_list_add_tail(&h->list, &proc->l2_channels);
+    exec_unlock(&proc->l2_lock);
 
     args.handle = h->handle;
     args.ifindex = ifindex;
@@ -218,7 +216,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -242,10 +240,10 @@ long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg)
     long ret = 0;
     long n;
 
-    a = kzalloc(sizeof(*a), GFP_KERNEL);
+    a = exec_zalloc(sizeof(*a));
     if (!a)
         return -ENOMEM;
-    if (copy_from_user(a, (const void __user *)arg, sizeof(*a))) {
+    if (exec_copyin(a, (const void *)arg, sizeof(*a))) {
         ret = -EFAULT;
         goto out_free;
     }
@@ -262,6 +260,7 @@ long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg)
     memcpy(a->data + 6, station, sizeof(station));   /* the executive's source */
 
     n = exec_l2_send(sock, (int)a->ifindex, a->ethertype, a->dst_mac, a->data, a->len);
+    exec_socket_release(sock);   /* the lookup's reference */
     if (n < 0) {
         a->len = 0;
         a->status = SS__ABORT;
@@ -271,10 +270,10 @@ long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg)
     }
 
 out_copy:
-    if (copy_to_user((void __user *)arg, a, sizeof(*a)))
+    if (exec_copyout((void *)arg, a, sizeof(*a)))
         ret = -EFAULT;
 out_free:
-    kfree(a);
+    exec_free(a);
     return ret;
 }
 
@@ -290,10 +289,10 @@ long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg)
     size_t n = 0;
     int rc;
 
-    a = kzalloc(sizeof(*a), GFP_KERNEL);
+    a = exec_zalloc(sizeof(*a));
     if (!a)
         return -ENOMEM;
-    if (copy_from_user(a, (const void __user *)arg, sizeof(*a))) {
+    if (exec_copyin(a, (const void *)arg, sizeof(*a))) {
         ret = -EFAULT;
         goto out_free;
     }
@@ -304,6 +303,7 @@ long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg)
     }
 
     rc = exec_l2_recv(sock, a->data, VMS_L2_MAXLEN, a->timeout_ms, &n);
+    exec_socket_release(sock);   /* the lookup's reference */
     if (rc) {
         a->len = 0;
         a->status = SS__ABORT;
@@ -313,10 +313,10 @@ long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg)
     }
 
 out_copy:
-    if (copy_to_user((void __user *)arg, a, sizeof(*a)))
+    if (exec_copyout((void *)arg, a, sizeof(*a)))
         ret = -EFAULT;
 out_free:
-    kfree(a);
+    exec_free(a);
     return ret;
 }
 
@@ -329,14 +329,14 @@ long vms_ioctl_l2_close(struct vms_proc *proc, unsigned long arg)
     struct vms_l2_handle *h;
 
     memset(&args, 0, sizeof(args));
-    if (copy_from_user(&args, (const void __user *)arg, sizeof(args)))
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
 
-    spin_lock(&proc->l2_lock);
+    exec_lock(&proc->l2_lock);
     h = l2h_find_locked(proc, args.handle);
     if (h)
-        list_del(&h->list);
-    spin_unlock(&proc->l2_lock);
+        exec_list_del(&h->list);
+    exec_unlock(&proc->l2_lock);
 
     if (!h) {
         args.status = SS__IVCHAN;
@@ -344,11 +344,11 @@ long vms_ioctl_l2_close(struct vms_proc *proc, unsigned long arg)
     }
 
     exec_socket_release(h->sock);
-    kfree(h);
+    exec_free(h);
     args.status = SS__NORMAL;
 
 out:
-    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
 }
@@ -362,16 +362,16 @@ out:
 void vms_l2_release_all(struct vms_proc *proc)
 {
     struct vms_l2_handle *h, *tmp;
-    LIST_HEAD(doomed);
+    EXEC_LIST_HEAD(doomed);
 
-    spin_lock(&proc->l2_lock);
-    list_for_each_entry_safe(h, tmp, &proc->l2_channels, list)
-        list_move(&h->list, &doomed);
-    spin_unlock(&proc->l2_lock);
+    exec_lock(&proc->l2_lock);
+    exec_list_for_each_entry_safe(h, tmp, &proc->l2_channels, list)
+        exec_list_move(&h->list, &doomed);
+    exec_unlock(&proc->l2_lock);
 
-    list_for_each_entry_safe(h, tmp, &doomed, list) {
-        list_del(&h->list);
+    exec_list_for_each_entry_safe(h, tmp, &doomed, list) {
+        exec_list_del(&h->list);
         exec_socket_release(h->sock);
-        kfree(h);
+        exec_free(h);
     }
 }

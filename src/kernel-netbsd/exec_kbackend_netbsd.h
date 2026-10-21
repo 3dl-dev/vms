@@ -986,26 +986,19 @@ int  exec_socket_listen(exec_socket_t s, int backlog);
 int  exec_socket_accept(exec_socket_t s, exec_socket_t *out);
 
 /* ================================================================
- * SS13  Host AF_PACKET raw datalink socket (vms-7eb, auth slice of vms-1e4).
+ * SS13  Host raw datalink (vms-7eb, auth slice of vms-1e4) -- REAL on NetBSD
+ *       since rd vms-9394.
  *
- * Substrate-neutrality anchor for the exec_l2_* seam -- these declarations
- * prove the SS13 contract (exec_kbackend.h) is EXPRESSIBLE in NetBSD terms
- * (the signatures name no Linux type), but the DEFINITIONS in
- * vms_socket_netbsd.c are honest CONTRACT-ONLY STUBS, not a real NetBSD
- * binding, because NetBSD has no in-kernel socket(9) domain for raw Ethernet
- * frames the way Linux has AF_PACKET -- the real NetBSD primitive for this is
- * BPF (bpfopen/bpf_setif/bpfwrite/bpfread, a wholly different attach-to-
- * interface design, not a socket at all), which is out of this increment's
- * scope. Each stub touches no device internals and reports failure (-1),
- * naming its real source here (INV-6 / Rule 11: it opens nothing and
- * fabricates nothing) -- the same posture the block-I/O and NIC-lookup
- * contract-only stubs above take. As with exec_socket_* above, the only
- * caller (src/kernel-core/vms_l2.c) is NOT in this module's SRCS (vms_l2.c
- * stays a Linux build for now, exactly as vms_bg.c does -- see vms_bg.c's own
- * header for why: struct vms_proc's per-facility channel lists that are host-
- * socket-coupled are wired substrate-by-substrate, and L2's is Linux-only
- * until a genuine NetBSD BPF binding lands), so these are unresolved-but-
- * unreferenced decls, type-check contract only. */
+ * The signatures name no Linux type, and the DEFINITIONS in vms_socket_netbsd.c
+ * are a genuine NetBSD binding: NetBSD has no in-kernel socket(9) domain for raw
+ * Ethernet frames (Linux's AF_PACKET), so an L2 handle is an exec_socket_t
+ * holder over a per-handle receive ring bound to one interface + ethertype --
+ * frames taken by an `_if_input' interposer on a promiscuous NIC (the DECnet
+ * Phase IV station address is not the NIC's), sent with if_transmit_lock(9).
+ * The caller is src/kernel-core/vms_l2.c, now substrate-neutral and in this
+ * module's SRCS: a non-root NETACP opens its DECnet datalink through the
+ * executive (PHY_IO), never through bpf(4). See vms_socket_netbsd.c's SS13
+ * header for the receive design and why pfil(9) cannot carry it. */
 int  exec_l2_open(const char *ifname, uint16_t ethertype,
 		  uint32_t *out_ifindex, exec_socket_t *out);
 int  exec_l2_hwaddr(const char *ifname, uint8_t mac[6]);

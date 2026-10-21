@@ -127,6 +127,12 @@ COPY src/kernel-core/exec_hash.h src/kernel-core/exec_rbtree.h /netbsd/guest-src
 # "vmsfs/ods2.h" (-I../vmsfs/include). ---
 COPY src/kernel-core/vmsfs_acp.c /netbsd/guest-src/kernel-core/vmsfs_acp.c
 COPY src/kernel-netbsd/vms_blockdev_netbsd.c src/kernel-netbsd/vms_socket_netbsd.c /netbsd/guest-src/kmod/
+# rd vms-9394: the executive L2 datalink -- the substrate-neutral facility, its
+# NetBSD contract header, and the ONE ABI definition it includes from src/kernel
+# (the Makefile reaches guest-src/kernel with -idirafter ${.CURDIR}/../kernel).
+COPY src/kernel-core/vms_l2.c src/kernel-core/vms_l2_ring.h /netbsd/guest-src/kernel-core/
+COPY src/kernel-netbsd/vms_l2_nb.h /netbsd/guest-src/kmod/vms_l2_nb.h
+COPY src/kernel/vms_l2.h src/kernel/vms_l2_station.h /netbsd/guest-src/kernel/
 COPY src/vmsfs/ods2/ods2_reader.c src/vmsfs/ods2/ods2_edit.c src/vmsfs/ods2/ods2_kcompat.h src/vmsfs/ods2/ods2_block.h /netbsd/guest-src/vmsfs/ods2/
 COPY src/vmsfs/include/vmsfs/ods2.h /netbsd/guest-src/vmsfs/include/vmsfs/ods2.h
 # --- FC-P0.1: the executive-resident VMScluster stack's LAN port layer + the

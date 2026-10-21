@@ -110,7 +110,7 @@ ln -sf "$SYS/arch/vax/include" "$KL/vax"
 # VAX build uses, plus -Werror so a warning is a per-PR failure. No x86-only
 # codegen flags (-mno-sse / -mcmodel=kernel are amd64-only); VAX needs none.
 CFLAGS="-std=gnu99 -Werror -Wall -ffreestanding -fno-strict-aliasing -fno-omit-frame-pointer"
-CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE -I$ODS2_INC"
+CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE -I$ODS2_INC -idirafter $SRC/src/kernel"
 
 # The module's translation units -- EXACTLY src/kernel-netbsd/Makefile's SRCS:
 # the NetBSD backend glue + the OVMX intrusive containers + THE SHARED executive
@@ -160,6 +160,7 @@ SRCS="$KMOD/vms_netbsd.c \
       $ODS2/ods2_edit.c \
       $KMOD/vms_blockdev_netbsd.c \
       $KMOD/vms_socket_netbsd.c \
+      $CORE/vms_l2.c \
       $KMOD/vms_lan_netbsd.c \
       $GUEST/cluster_seam.c \
       $CORE/vms_cluster_fork.c \

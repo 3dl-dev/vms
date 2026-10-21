@@ -950,6 +950,7 @@ EOF
         why)          echo "the door the code's OWN comment calls 'the whole point of the evacuation path' goes back to granting in silence. A real VAX demoting EX to CR on a resource OVMX masters -- which is what DISMOUNT does -- grants the other VAX's queued request, and that VAX is never told. The item's door list did not name this one; the test found it, and leaving one silent door while fixing three would read as fixed and hang in the demo.";;
         require_fail) hd_lines <<'EOF'
 *** ...and peer B is TOLD -- the convert's own answer goes to peer A and has nowhere to carry peer B's grant ***
+  naming peer B and the handle this node granted it, not the converter's
 EOF
                       ;;
         esac;;

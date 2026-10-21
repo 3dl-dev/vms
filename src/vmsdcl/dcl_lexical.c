@@ -2412,7 +2412,7 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
         snprintf(result, result_size, "%08X", info.owner_pid);
     } else if (strcmp(item, "OWNUIC") == 0) {
         snprintf(result, result_size, "%u", info.owner_uic);
-    } else if (strcmp(item, "AVAILABLE") == 0) {
+    } else if (strcmp(item, "AVL") == 0) {
         /* A device the executive lists is available; it models no offline
          * state yet, so "present" is the honest answer (a Boolean item). */
         snprintf(result, result_size, "TRUE");

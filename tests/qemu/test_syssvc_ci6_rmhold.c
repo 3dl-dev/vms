@@ -156,6 +156,32 @@ static void reap(pid_t pid)
     waitpid(pid, NULL, 0);
 }
 
+/*
+ * SAY WHAT BECAME OF THE CHILD. An activated image that the host kernel cannot
+ * exec at all dies before it prints a byte -- which is how this suite first
+ * failed in CI (its RMHOLD.EXE baked a BOOTED node's PT_INTERP, so execve
+ * answered ENOENT) -- and then five assertions fail with nothing saying why.
+ * This prints the one fact that names it: still running, or gone and with what
+ * status. WNOWAIT so a peek cannot reap a child the test still needs.
+ */
+static void report_child(pid_t pid, const char *when)
+{
+    siginfo_t si;
+
+    memset(&si, 0, sizeof(si));
+    if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOWAIT | WNOHANG) != 0) {
+        printf("  INFO: %s: waitid on the RMHOLD child failed\n", when);
+        return;
+    }
+    if (si.si_pid == 0) {
+        printf("  INFO: %s: the RMHOLD child is still running\n", when);
+        return;
+    }
+    printf("  INFO: %s: the RMHOLD child is GONE (code %d, status %d) -- if it "
+           "never printed a line it did not run at all\n",
+           when, si.si_code, si.si_status);
+}
+
 /* After the holder is gone its locks are rundown by the executive; the EX
  * that was refused while it held CR must now be grantable. Polled on real
  * state for the same reason as wait_for_peer_holder(). */
@@ -217,9 +243,16 @@ int main(void)
     child = spawn_rmhold();
     if (child < 0) { printf("  FAIL: fork() for RMHOLD\n"); return 1; }
 
-    CHECK(wait_for_peer_holder(&mine, &grantcount),
-          "RMHOLD's root lock is in the executive's lock database: this process's "
-          "own CR grant on " RMHOLD_ROOT " reports LKI$_GRANTCOUNT >= 2");
+    {
+        int held = wait_for_peer_holder(&mine, &grantcount);
+
+        if (!held)
+            report_child(child, "the holder never appeared");
+        CHECK(held,
+              "RMHOLD's root lock is in the executive's lock database: this "
+              "process's own CR grant on " RMHOLD_ROOT " reports "
+              "LKI$_GRANTCOUNT >= 2");
+    }
     printf("  INFO: LKI$_GRANTCOUNT on " RMHOLD_ROOT " = %u\n",
            (unsigned)grantcount);
 

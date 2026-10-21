@@ -756,6 +756,14 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # then stages on the system volume, and .vms$imp binds by symbol-vector
     # INDEX. Two producers only (DECC$SHR + LIBVMS$SHR), so cc is enough --
     # no TCC step. test_syssvc_ci6_rmhold.c activates it.
+    # IMGACT_INTERP_PATH: THIS harness stages the activator at
+    # /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE (two steps above), while
+    # build-static's LINK.EXE bakes a BOOTED node's /run/ovmx-boot/IMGACT.EXE --
+    # and an image whose activator the host kernel cannot open exec-fails ENOENT
+    # before any OVMX code runs. That is exactly how test_syssvc_ci6_rmhold's
+    # child died silently on its first CI run, so the path is stated here and
+    # the recipe refuses a mismatch.
+    IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
     sh /src/repo/tests/lab/ci6/mk_rmhold_native.sh \
         /src/repo/build-static/bin/LINK.EXE \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RMHOLD.EXE \

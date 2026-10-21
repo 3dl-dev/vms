@@ -771,7 +771,7 @@ EOF
         targets)      echo "kernel-core/vms_cluster_codec_dlm.h";;
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
-        why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place.";;
+        why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place. Since rd vms-85f the QUEUED answer reddens too: its admission check compares the engine's recorded requester handle against the one the request carries at body[24:28], so a swapped slot makes it refuse to answer at all.";;
         require_fail) hd_lines <<'EOF'
   body[20:24] == 0x080001cd, the MASTER's handle -- which is why a release names its lock here: the GRANT assigned this requester
   body[20:24] == 0x0a0003a4, the MASTER's handle
@@ -795,6 +795,15 @@ EOF
 *** the grant ECHOES the requester's handle -- which is the correlation OVMX was breaking ***
 builds back from the typed struct
 every CITED byte of the real specimen is byte-exact
+  OVMX writes the commonest real form (0x14/0x00, 0x00) -- inside the measured envelope, and a deviation row
+  and it reads both handles out of the real frame
+  body[36:44] stays zero: a ROOT answer names no parent
+  either half of body[36:44] makes it a sub-lock request
+  the mode the requester asked for (EX) rides back, not cleared
+*** a queued SUB-LOCK request is REFUSED, not answered with a minted S0 address ***
+OVMX builds the queued answer for pair A
+OVMX builds the queued answer for pair B
+the built queued answer equals the real master's, byte for byte
 EOF
                       ;;
         esac;;

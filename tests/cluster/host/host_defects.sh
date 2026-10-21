@@ -941,6 +941,7 @@ EOF
         why)          echo "the counter bump goes, so a node that granted a lock it could never announce looks exactly like a node that had nothing to announce. That is the anti-LARP tripwire for this whole item: the DEFECT it replaces was silence, and silence that is not counted is indistinguishable from correctness (INV-6, and the same discipline as deferred_grants_owed).";;
         require_fail) hd_lines <<'EOF'
 *** ...and the flip nobody could be told about is COUNTED, not dropped ***
+*** ...and the grant nobody could be told about is COUNTED ***
 EOF
                       ;;
         esac;;
@@ -3080,10 +3081,13 @@ apply_edit() {
         perl -0pi -e 's|        exec_unlock\(&res->lock\);\n        dlm_flips_report\(&flips\);\n\n        args\.lk_status|        exec_unlock(&res->lock);\n        /* NEGCTL dlm-local-convert-tells-nobody */\n\n        args.lk_status|' "$_file";;
 
     dlm-convert-tells-the-converter-only)
-        # The convert branch's snapshot, distinguished from vms_deq_core's by
-        # its indentation (both name `flips`), so the two defects cannot
-        # mutate each other's door.
-        sed -i 's|^        dlm_flips_snapshot_locked(res, \&flips);$|        /* NEGCTL dlm-convert-tells-the-converter-only */|' "$_file";;
+        # The INBOUND convert's snapshot. Three doors now call the same three
+        # lines (vms_deq_core at 4-space indent, vms_ioctl_convert and this
+        # one at 8), so indentation alone no longer picks one out: this is
+        # anchored on the `req->queued = 0;` that follows it, which only the
+        # inbound path has. Without the anchor this defect also mutated rd
+        # vms-9db's local-convert door and reddened its assertions too.
+        perl -0pi -e 's|        dlm_flips_snapshot_locked\(res, &flips\);\n        try_grant_waiters\(res\);\n        dlm_flips_keep_granted_locked\(res, &flips\);\n        req->queued = 0;|        /* NEGCTL dlm-convert-tells-the-converter-only */\n        req->queued = 0;|' "$_file";;
 
     dlm-grant-advance-uncounted)
         # The one counter bump for a flip with no arm bound.

@@ -211,6 +211,14 @@ static uint32_t         vms_dlm_adoptions_refused_n;
 /* Completions the WIRE ARM really reported (rd vms-ed5). `unreported` is
  * `completed` minus this, so it is DERIVED and cannot drift from either. */
 static uint32_t         vms_dlm_adopt_reports_n;
+/*
+ * How many PROXY POSTS were refused because THIS node masters the resource
+ * (rd vms-3ac -- the INVLOCKID bugcheck a real V7.3 node took on a release
+ * addressed at a node that no longer mastered it). Guarded by
+ * vms_dlm_req_ops_lock, which dlm_proxy_post already takes through
+ * dlm_req_ops_get() and which no caller of it holds.
+ */
+static uint32_t         vms_dlm_proxy_self_mastered_n;
 
 
 /* ================================================================
@@ -247,6 +255,9 @@ int vms_lock_init(void)
     vms_dlm_adoptions_completed_n = 0u;
     vms_dlm_adoptions_refused_n = 0u;
     vms_dlm_adopt_reports_n = 0u;
+    /* ...and the posts refused because this node masters the resource
+     * (rd vms-3ac): also "since this executive started". */
+    vms_dlm_proxy_self_mastered_n = 0u;
     vms_prev_local_csid = 0u;   /* a fresh engine has had no other identity */
     return 0;
 }
@@ -397,6 +408,43 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
                        (lock->flags & LCK_M_VALBLK) &&
                        lock->granted_mode >= LCK_K_PWMODE &&
                        lock->requested_mode < lock->granted_mode) ? 1u : 0u;
+    /*
+     * ...and whether THIS NODE masters the resource (rd vms-3ac). Read off the
+     * RSB here, like everything else, because this is the one place that holds
+     * both the LKB and its resource block. dlm_proxy_post() REFUSES a post
+     * carrying it: see vms_dlm_proxy.h, and the real VAX that bugchecked
+     * INVLOCKID on a release addressed at a node that no longer mastered the
+     * resource.
+     */
+    p->self_mastered = (res->master_csid != 0u &&
+                        res->master_csid == vms_local_csid) ? 1u : 0u;
+}
+
+uint32_t vms_lock_dlm_proxy_self_mastered(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_dlm_req_ops_lock);
+    n = vms_dlm_proxy_self_mastered_n;
+    exec_unlock(&vms_dlm_req_ops_lock);
+    return n;
+}
+
+/* Count the refusal, and SAY the first one: a node silently not telling a peer
+ * about a lock is the kind of thing that must be visible on a console. */
+static void dlm_proxy_self_mastered_refuse(const struct vms_dlm_proxy_post *p)
+{
+    uint32_t first;
+
+    exec_lock(&vms_dlm_req_ops_lock);
+    first = (vms_dlm_proxy_self_mastered_n++ == 0u);
+    exec_unlock(&vms_dlm_req_ops_lock);
+
+    if (first)
+        exec_console_printf(
+            "%%DLM, not telling system %u about lock %u on '%s': THIS node "
+            "masters that resource\n",
+            (unsigned)p->dst_csid, (unsigned)p->req_lkid, p->resnam);
 }
 
 /*
@@ -407,6 +455,14 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
  * INVLOCKID). Refuses honestly when no ops are installed -- a node with no
  * cluster does not get to pretend it asked one. `post` is contractually
  * non-blocking and must not re-enter the lock manager.
+ *
+ * AND REFUSES A POST ABOUT A RESOURCE THIS NODE MASTERS (rd vms-3ac). The
+ * addressee cannot hold a master copy of a lock whose master is here, so the
+ * frame can only name a handle that node cannot resolve -- which is the second
+ * INVLOCKID bugcheck this function exists to prevent, and this one was
+ * measured on a real V7.3 node (tests/lab/captures/vms-3ac-invlockid-20261021).
+ * The release/convert still completes LOCALLY, which is what a lock on a
+ * resource this node masters means; nothing is lost by not sending it.
  */
 static uint32_t dlm_proxy_post(const struct vms_dlm_proxy_post *p)
 {
@@ -414,6 +470,19 @@ static uint32_t dlm_proxy_post(const struct vms_dlm_proxy_post *p)
 
     if (p->req_lkid == 0 || p->dst_csid == 0)
         return SS__BADPARAM;
+    if (p->self_mastered) {
+        dlm_proxy_self_mastered_refuse(p);
+        /*
+         * THE STATUS DEPENDS ON WHAT WAS NOT SENT, and getting this wrong
+         * trades a crashed peer for a hung caller. A RELEASE had nothing left
+         * to tell anyone -- the local teardown is the release of a lock on a
+         * resource this node masters -- so it succeeded. A REQUEST (ENQ) or a
+         * CONVERT was NOT MADE, and reporting success for it would leave the
+         * requester waiting for a grant nobody will ever send, so it fails
+         * honestly and the caller sees it.
+         */
+        return (p->op == VMS_DLM_POST_DEQ) ? SS__NORMAL : SS__UNSUPPORTED;
+    }
     if (ops.post == NULL)
         return SS__UNSUPPORTED;
     return ops.post(ops.ctx, p);

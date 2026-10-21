@@ -188,6 +188,33 @@ struct vms_dlm_proxy_post {
 	 * it, exactly like `to_directory` and `dir_hash_known`.
 	 */
 	uint8_t  write_valblk;
+
+	/*
+	 * DOES THIS NODE ITSELF MASTER THE RESOURCE? (rd vms-3ac)
+	 *
+	 * Read off the RESOURCE BLOCK at post time -- `res->master_csid ==
+	 * vms_local_csid` -- and it is a REFUSAL CONDITION, not information: a
+	 * proxy transmission about a resource THIS node masters has nowhere
+	 * honest to go, and the engine declines to post it (dlm_proxy_post).
+	 *
+	 * IT IS HERE BECAUSE A REAL VAX BUGCHECKED. 2026-10-21, lab labc2b
+	 * (tests/lab/captures/vms-3ac-invlockid-20261021): a real V7.3 node
+	 * remastered a tree ONTO this node, this node's own lock in that tree
+	 * stayed a proxy pointing at the OLD master, and the lock's release
+	 * sent that old master a cat-0x02 op-0x03 $DEQ naming the handle it had
+	 * minted before the move. The old master no longer had an RSB for the
+	 * resource, and
+	 *
+	 *     **** Fatal BUG CHECK, version = V7.3   INVLOCKID, Invalid lock id
+	 *          R1 = 370004A7
+	 *
+	 * is what a V7.3 node does with a lock id it cannot resolve. R1 was the
+	 * handle in that frame. `dlm_proxy_post` already refused a zero lock id
+	 * for exactly this reason ("a placeholder lock id bugchecked a real VAX
+	 * with INVLOCKID"); this is the same floor for a handle that was real
+	 * once and is addressed at a node that cannot have it any more.
+	 */
+	uint8_t  self_mastered;
 };
 
 /*
@@ -491,6 +518,17 @@ uint32_t vms_lock_dlm_dir_hash_computed_wrong(void);
  * mastered resource was freed, and those it could not hand over. */
 uint32_t vms_lock_dlm_dir_removes_posted(void);
 uint32_t vms_lock_dlm_dir_removes_unposted(void);
+
+/*
+ * HOW MANY PROXY TRANSMISSIONS WERE REFUSED BECAUSE THIS NODE MASTERS THE
+ * RESOURCE (rd vms-3ac) -- see `self_mastered` above. A nonzero reading is not
+ * an error: it is this node declining to tell another node about a lock that
+ * node cannot have, which is the alternative to the INVLOCKID bugcheck that
+ * put the check here. It SHOULD fall to zero once a tree handed to this node
+ * also converts this node's own locks on it out of proxy state; until then the
+ * number is the size of that gap, and a diagnostic reads it.
+ */
+uint32_t vms_lock_dlm_proxy_self_mastered(void);
 
 /*
  * HOW MANY RESOURCES THIS EXECUTIVE COULD NOT ROUTE, and so mastered on THIS

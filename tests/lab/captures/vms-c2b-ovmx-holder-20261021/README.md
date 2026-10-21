@@ -213,7 +213,7 @@ other half).
 | file | what it is |
 |---|---|
 | `PLAN.md` | the pre-registration, committed before the fire |
-| `c2b-ra7a-trimmed.pcap` | 74 of the pod capture's 6,985 frames, selected by `tools/cluster/trim_lab_pcap.py`, payloads unaltered |
+| `c2b-ra7a-trimmed.pcap.gz` | 74 of the pod capture's 6,985 frames, selected by `tools/cluster/trim_lab_pcap.py`, payloads unaltered. **Gzipped on purpose**: it carries OVMX-ORIGINATED frames, and the corpus censuses (`tools/cluster/dlm_pid_cell_census.py --selftest` and friends) walk every plain `*.pcap` under `tests/lab/captures` to describe what REAL VMS senders put on the wire. A plain copy moved their figures by +1 and +10 -- i.e. OVMX's own frames would have been counted as a real VAX's. The ci.6 evacuation captures are gzipped for the same reason; the VAX-only oracle arms (RA5/RA6/RA8) are not, and belong in the census |
 | `frames.txt` | every frame in that pcap, decoded, in capture order |
 | `score.txt` | `remaster_census.py --pairs \| score_remaster` output |
 | `conformance-dump.txt` | the OVMX-originated frames in conformance-dump format, and the checker's result |

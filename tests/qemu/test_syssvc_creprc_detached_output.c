@@ -185,6 +185,7 @@ int main(int argc, char **argv)
         unlink(p);
     }
     unlink(TERMFILE);
+    unlink(CASES[0].out);               /* a stray from an older build, if any */
     unlink(HOSTOUT);
     unlink(HOSTERR);
     CHECK(staged, "staged one subject image per case (this binary, in subject mode)");
@@ -226,6 +227,8 @@ int main(int argc, char **argv)
           "a detached process whose output names a VMS file $CREPRC cannot open writes nothing on its creator's terminal");
     CHECK(!file_has(TERMFILE, MARK " HOSTPATH"),
           "the positive-control subject's output did not leak onto the creator's terminal either");
+    CHECK(access(CASES[0].out, F_OK) != 0,
+          "the VMS file spec was not created as a host file of that literal name in the working directory");
 
     printf("=== test_syssvc_creprc_detached_output: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;

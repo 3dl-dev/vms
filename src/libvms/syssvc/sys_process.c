@@ -948,8 +948,8 @@ static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
  * The name is a VMS spec. Two device kinds have a substrate backing to open:
  * a terminal (OPA0:/TT: -- ovmx_console_terminal_path(), the one home for that
  * mapping) and the null device (NL:/NLA0:, /dev/null underneath, as $ASSIGN
- * maps it in sys_assign.c). Anything else is tried as a host path, which is
- * what the host test harness passes. Returns -1 when nothing opens.
+ * maps it in sys_assign.c). An absolute host path -- what the host test
+ * harness passes -- is opened as one. Returns -1 when nothing opens.
  *
  * WHY THIS EXISTS. Before it, the output spec was handed straight to open(2).
  * A VMS file spec such as STARTNET's SYS$MANAGER:NETACP.LOG never opens that
@@ -967,6 +967,14 @@ static int creprc_open_outstream(const char *spec)
     const char *p = spec[0] == '_' ? spec + 1 : spec;
     if (!strcasecmp(p, "NL:") || !strcasecmp(p, "NLA0:"))
         return open("/dev/null", O_WRONLY);
+    /* Only an absolute substrate path is opened as one (the host harness's
+     * spelling). A VMS file spec handed to open(2) as a RELATIVE path does
+     * not fail -- it CREATES a host file literally named
+     * "SYS$MANAGER:NETACP.LOG" in whatever the creator's working directory
+     * is, a /vms-passthrough-shaped leak; it is refused here instead, and
+     * the caller decides what a detached process gets. */
+    if (spec[0] != '/')
+        return -1;
     return open(spec, O_WRONLY | O_CREAT | O_TRUNC, 0644);
 }
 

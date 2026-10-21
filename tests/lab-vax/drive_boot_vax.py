@@ -179,7 +179,16 @@ MS_PROVISION_IVLOGNAM = "%DCL-E-IVLOGNAM"
 # line is the deterministic proof PROVISION.EXE activated + ran (the boundary the
 # vmsfs vnode pager closed). Its ABSENCE is the stale-volume / pager regression
 # (PROVISION.EXE "missing" -> %OVMX-F-EXECINIT). No brackets -> literal regex.
-MS_PROVISION_RUNNING = r"system identity SYSTEM"
+# rd vms-158d: PROVISION's "system identity SYSTEM [1,4] established by the
+# executive" is an OPERATOR.LOG record now, not a console line (a VMS boot
+# console prints none). PROVISION halts the boot itself (%OVMX-F-EXECINIT) if the
+# system process is not SYSTEM, so the proof it ran is the first thing only it
+# can lead to: its ownership pass (%OVMX-W-OWNER, the e7a regression signal) or
+# the STARTUP DCL it becomes producing output -- the site-startup announcement,
+# a LNMFAIL/IVLOGNAM loop, or the login prompt. ZERO-WIDTH (a lookahead): the
+# match consumes nothing, so STEP 2 still sees every one of those lines.
+MS_PROVISION_RUNNING = (r"(?=%OVMX-W-OWNER|The OVMX system is now executing|"
+                        r"%DCL-E-LNMFAIL|%DCL-E-IVLOGNAM|Username:)")
 # rd vms-e7a: positive forward-progress evidence PAST provision_ownership() --
 # STARTUP.COM's own announcement (distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/
 # STARTUP.COM) that the STDRV phase is running SYSTARTUP_VMS.COM. Reaching
@@ -1053,9 +1062,8 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                 _scan_substrate(child, seen)
                 if idx == 0:
                     seen["provision_running"] = True
-                    log("MILESTONE: %r -- PROVISION.EXE demand-paged off the ODS-2 "
-                        "volume and RUNS; executive established SYSTEM identity"
-                        % MS_PROVISION_RUNNING)
+                    log("MILESTONE: PROVISION.EXE demand-paged off the ODS-2 "
+                        "volume and RUNS (its STARTUP DCL is producing output)")
                 else:
                     why = {1: "%OVMX-F-EXECINIT (SYS$SYSTEM:PROVISION.EXE did not resolve)",
                            2: "%OVMX-E-NOIMG (activation failed)"}.get(idx, "unknown")

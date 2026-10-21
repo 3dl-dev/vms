@@ -37,4 +37,32 @@ $ WRITE SYS$OUTPUT "CRTLFD-ATTR: CFDFIX.DAT RFM=", F$FILE_ATTRIBUTES("VDA0:[SYST
 $ WRITE SYS$OUTPUT "CRTLFD-ATTR: CFDSLF.DAT RFM=", F$FILE_ATTRIBUTES("VDA0:[SYSTMP]CFDSLF.DAT","RFM"), " RAT=", F$FILE_ATTRIBUTES("VDA0:[SYSTMP]CFDSLF.DAT","RAT"), "."
 $ WRITE SYS$OUTPUT "CRTLFD-PROOF: === END INDEPENDENT READER ==="
 $!
+$! vms-599: the image ends through DEC C exit(N) / __posix_exit(N); $STATUS is what
+$! DCL got. The gate compares each with OpenVMS Alpha V8.4
+$! (tests/lab/captures/decc-exit-alpha-20261021). The image's last line has no
+$! newline (only exit's flush prints it), so each status line may follow it.
+$ CFD := $SYS$SYSTEM:JOINT_E2E
+$ CFD exit 0
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: exit 0 STATUS=''$STATUS'"
+$ CFD exit 1
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: exit 1 STATUS=''$STATUS'"
+$ CFD exit 2
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: exit 2 STATUS=''$STATUS'"
+$ CFD exit 3
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: exit 3 STATUS=''$STATUS'"
+$ CFD exit 0x1000002C
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: exit 0x1000002C STATUS=''$STATUS'"
+$ CFD pexit 0
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: pexit 0 STATUS=''$STATUS'"
+$ CFD pexit 1
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: pexit 1 STATUS=''$STATUS'"
+$ CFD pexit 2
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: pexit 2 STATUS=''$STATUS'"
+$ CFD pexit 3
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: pexit 3 STATUS=''$STATUS'"
+$ CFD pexit 255
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: pexit 255 STATUS=''$STATUS'"
+$ CFD pexit 256
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: pexit 256 STATUS=''$STATUS'"
+$!
 $ EXIT

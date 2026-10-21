@@ -14,11 +14,17 @@
  * struct stat is the DEC C RTL's default layout (vms-28d part 2): st_ino[3] is
  * the File ID and st_fab_rfm/rat/mrs the file's RMS record attributes -- what
  * GCC's libcpp (STAT_SIZE_RELIABLE) and incpath (INO_T_EQ) read under VMS.
+ *
+ * Run as a foreign command with "exit N" or "pexit N" (vms-599), it instead ends
+ * through DEC C exit(N) or __posix_exit(N), after printing a line it does not
+ * flush; the SYSTARTUP prints the $STATUS DCL got, which the gate compares with
+ * what OpenVMS Alpha V8.4 gives (tests/lab/captures/decc-exit-alpha-20261021).
  */
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -31,6 +37,8 @@
 #define FAB_C_VAR   2       /* libcpp files.cc spells these out the same way */
 #define FAB_C_STMLF 5
 #define STAT_SIZE_RELIABLE(ST) ((ST).st_fab_rfm != FAB_C_VAR)
+
+void __posix_exit(int);     /* DEC C; <stdlib.h> declares it only under _POSIX_EXIT */
 
 static int fails;
 static int first_fail;
@@ -54,7 +62,15 @@ int main(int argc, char **argv)
 {
     char want[128], got[256];
     long total = 0;
-    (void)argv;
+    if (argc >= 3 && (strcmp(argv[1], "exit") == 0 || strcmp(argv[1], "pexit") == 0)) {
+        int n = (int)strtol(argv[2], NULL, 0);
+        /* fully buffered and no newline: only exit()'s stdio flush prints it */
+        setvbuf(stdout, NULL, _IOFBF, BUFSIZ);
+        printf("CFDX: %s %s flushed-by-exit", argv[1], argv[2]);
+        if (argv[1][0] == 'p')
+            __posix_exit(n);
+        exit(n);
+    }
     setvbuf(stdout, NULL, _IONBF, 0);   /* every line reaches the console */
 
     /* 1. stdio writes a multi-block file of unaligned lines. */

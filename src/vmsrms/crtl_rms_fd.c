@@ -1489,10 +1489,17 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
     }
 }
 
+/* Set by the DEC C exit()/__posix_exit() (crtl_process.c, vms-599) to the routine
+ * that ends the image with SYS$EXIT of the status it was given; called at the
+ * final exit_group, after musl ran the atexit handlers and flushed stdio. */
+void (*__ovmx_crtl_exit_record)(void);
+
 static long long rms_hook(long long n, long long a1, long long a2, long long a3,
                           long long a4, long long a5, long long a6, int *handled)
 {
     (void)a6;
+    if (n == SYS_exit_group && __ovmx_crtl_exit_record)
+        __ovmx_crtl_exit_record();              /* SYS$EXIT: does not return */
     if (in_rms)
         return 0;                               /* RMS's own system calls */
     in_rms = 1;

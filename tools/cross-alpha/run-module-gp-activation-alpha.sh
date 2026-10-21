@@ -865,6 +865,18 @@ assert_crtlfd() {
   printf '%s\n' "$region" | grep >/dev/null -aE "CRTLFD-ATTR: CFDUDF.DAT RFM=UDF$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDUDF.DAT RFM=UDF" >&2; return 1; }
   printf '%s\n' "$region" | grep >/dev/null -aE "CRTLFD-ATTR: CFDFIX.DAT RFM=FIX MRS=20$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDFIX.DAT RFM=FIX MRS=20" >&2; return 1; }
   printf '%s\n' "$region" | grep >/dev/null -aE "CRTLFD-ATTR: CFDSLF.DAT RFM=STMLF RAT=\.$" || { echo "  assert_crtlfd: F\$FILE_ATTRIBUTES does not show CFDSLF.DAT RFM=STMLF with no record attributes" >&2; return 1; }
+  # vms-599: DEC C exit(N) / __posix_exit(N) -> the $STATUS OpenVMS Alpha V8.4 gives
+  # (tests/lab/captures/decc-exit-alpha-20261021), and the unflushed line exit printed.
+  local _x _call _want
+  for _x in "exit 0:%X00000001" "exit 1:%X00000001" "exit 2:%X00000002" "exit 3:%X00000003" \
+            "exit 0x1000002C:%X1000002C" "pexit 0:%X00000001" "pexit 1:%X1035A00A" \
+            "pexit 2:%X0035A011" "pexit 3:%X0035A019" "pexit 255:%X0035A7F9" "pexit 256:%X00000001"; do
+    _call=${_x%%:*}; _want=${_x##*:}
+    tr -d '\r' < "$log" | grep >/dev/null -aF "CRTLFD-EXIT: $_call STATUS=$_want" \
+      || { echo "  assert_crtlfd: $_call did not give \$STATUS $_want" >&2; return 1; }
+    tr -d '\r' < "$log" | grep >/dev/null -aF "CFDX: $_call flushed-by-exit" \
+      || { echo "  assert_crtlfd: $_call: exit did not flush stdio" >&2; return 1; }
+  done
   return 0
 }
 
@@ -2759,13 +2771,23 @@ EOF
       echo "CRTLFD-ATTR: CFDFIX.DAT RFM=FIX MRS=20"
       echo "CRTLFD-ATTR: CFDSLF.DAT RFM=STMLF RAT=."
       echo "CRTLFD-PROOF: === END INDEPENDENT READER ==="
+      for _x in "exit 0:%X00000001" "exit 1:%X00000001" "exit 2:%X00000002" "exit 3:%X00000003" \
+                "exit 0x1000002C:%X1000002C" "pexit 0:%X00000001" "pexit 1:%X1035A00A" \
+                "pexit 2:%X0035A011" "pexit 3:%X0035A019" "pexit 255:%X0035A7F9" "pexit 256:%X00000001"; do
+        echo "CFDX: ${_x%%:*} flushed-by-exitCRTLFD-EXIT: ${_x%%:*} STATUS=${_x##*:}"
+      done
     } > "$_st/pass.log"
+    # vms-599 negative controls: musl's exit (exit(1) a POSIX failure, nothing recorded),
+    # a __posix_exit that does not encode, and an exit that skips the stdio flush
+    sed 's/CRTLFD-EXIT: exit 1 STATUS=%X00000001/CRTLFD-EXIT: exit 1 STATUS=%X0000002C/' "$_st/pass.log" > "$_st/muslexit.log"
+    sed 's/CRTLFD-EXIT: pexit 3 STATUS=%X0035A019/CRTLFD-EXIT: pexit 3 STATUS=%X00000003/' "$_st/pass.log" > "$_st/pexitraw.log"
+    sed 's/CFDX: exit 3 flushed-by-exit//' "$_st/pass.log" > "$_st/noflush.log"
     sed 's/CFDUDF.DAT RFM=UDF/CFDUDF.DAT RFM=STMLF/' "$_st/pass.log" > "$_st/kwignored.log"
     sed 's/CFDSLF.DAT RFM=STMLF RAT=\./CFDSLF.DAT RFM=STMLF RAT=C./' "$_st/pass.log" > "$_st/ratignored.log"
     grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
     sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
     sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
-    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1"; do
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -2777,7 +2799,7 @@ EOF
     assemble_boot_image
     log "step 3: BOOT A -- the C RTL file layer over RMS on the REAL executive"
     run_boot_a
-    grep -aE "CFD:|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    grep -aE "CFD:|CFDX:|CRTLFD-EXIT:|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_crtlfd "$WORK/modgpA.log"; then
       echo ""
       echo "PASS: a 32-bit DEC C program's stdio and descriptor calls ran over RMS on the"

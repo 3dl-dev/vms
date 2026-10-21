@@ -144,7 +144,7 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_mscp_cl_conn_fsm.c \
       $CORE/vms_mscp_cl.c \
       $CORE/vms_cluster_codec_dlm.c \
-      $CORE/vms_dlm_scs_fsm.c \
+      $CORE/vms_dlm_scs_fsm.c $CORE/vms_dlm_rm_fsm.c \
       $CORE/vms_dlm_scs.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo

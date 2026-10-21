@@ -290,6 +290,17 @@ n2=$(frames_with "$HELLO_142" "$PCAP2")
 if [ "$n2" -ge 1 ]; then rc=0; else rc=1; fi
 record "boot 2: the wire carries Phase IV endnode hellos to AB-00-00-03-00-00 SOURCED FROM AA-00-04-00-2A-04, ethertype 0x6003 (count=$n2)" "$rc"
 
+# rd vms-5843: NETACP is a DETACHED process with no terminal. Its own status
+# lines (datalink open, started, per-hello, CTERM listen, broker) must never
+# appear on the operator console -- they used to, because $CREPRC left it on
+# the creator's descriptors when its /OUTPUT file spec could not be opened,
+# and on a booted node a hello line landed on OPA0: every 15 s, in the middle
+# of the login prompt. Read over the whole boot-2 console, which spans many
+# hello periods (the run above sleeps NETACP_SETTLE alone).
+nchat=$(grep -acE 'DECNETD-I-(DATALINK|STARTED|HELLOSENT|ADJINIT|CTERMLISTEN|BROKER),' "$LOG2" || true)
+if [ "${nchat:-0}" -eq 0 ]; then rc=0; else rc=1; fi
+record "boot 2: NETACP's own status lines never reach the operator console (detached, no terminal; $nchat found)" "$rc"
+
 if [ "$FAIL" -ne 0 ]; then
     echo "--- boot 1 log ---"; cat "$LOG1"
     echo "--- boot 2 log ---"; cat "$LOG2"

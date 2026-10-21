@@ -31,7 +31,6 @@ extern "C" {
 #define VA$C_P0         0   /* Process (user) space (P0) */
 #define VA$C_P1         1   /* Control (supervisor) space (P1) */
 #define VA$C_P2         2   /* 64-bit virtual address space (P2) */
-#define VA$C_S0         3   /* System space (S0) */
 
 /* ================================================================
  * VA$_ — Item codes for sys$get_region_info function parameter
@@ -39,8 +38,6 @@ extern "C" {
 
 #define VA$_REGSUM_BY_ID    0   /* Get region summary by region ID */
 #define VA$_REGSUM_BY_VA    1   /* Get region summary by virtual address */
-#define VA$_REGMAP_BY_ID    3   /* Get region map by region ID */
-#define VA$_REGMAP_BY_VA    4   /* Get region map by virtual address */
 
 /* ================================================================
  * REGSUM — Region Summary structure
@@ -60,14 +57,6 @@ struct _regsum {
 };
 
 typedef struct _regsum REGSUM;
-
-/* ================================================================
- * VA$M_ — Region flag bit masks (va$l_flags)
- * ================================================================ */
-
-#define VA$M_NO_CALL_GATE   0x00000001  /* No call gate access */
-#define VA$M_PROTECTED      0x00000002  /* Protected region */
-#define VA$M_64BIT          0x00000004  /* 64-bit address region */
 
 #ifdef __cplusplus
 }

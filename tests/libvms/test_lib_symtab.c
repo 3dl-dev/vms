@@ -15,6 +15,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include "ssdef.h"
 #include "descrip.h"
@@ -22,6 +25,8 @@
 #include "libclidef.h"
 #include "starlet.h"
 #include "va_rangedef.h"
+#include "libdef.h"
+#include "ovmx_cli.h"
 
 static int failures = 0;
 static int total = 0;
@@ -238,6 +243,71 @@ static void test_getutc(void)
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* lib$do_command                                                     */
+/* ------------------------------------------------------------------ */
+static struct ovmx_cli_req docmd_seen;
+static int docmd_calls;
+static uint32_t docmd_answer;
+
+static void docmd_cli(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
+{
+    docmd_seen = *rq;
+    docmd_calls++;
+    memset(rs, 0, sizeof *rs);
+    rs->status = docmd_answer;
+}
+
+static void test_do_command(void)
+{
+    printf("Testing lib$do_command...\n");
+    char text[] = "WRITE SYS$OUTPUT \"DOCMD\"";
+    struct dsc$descriptor_s cmd = { (uint16_t)strlen(text), DSC$K_DTYPE_T, DSC$K_CLASS_S, text };
+
+    lib$$set_cli_handler(NULL);
+    unsetenv(OVMX_CLI_FD_ENV);
+    check(lib$do_command(&cmd) == LIB$_NOCLI, "do_command with no CLI is LIB$_NOCLI");
+
+    lib$$set_cli_handler(docmd_cli);
+    docmd_calls = 0;
+    docmd_answer = LIB$_INSCLIMEM;
+    check(lib$do_command(&cmd) == LIB$_INSCLIMEM, "a CLI refusal is returned to the caller");
+    check(docmd_calls == 1 && docmd_seen.op == OVMX_CLI_OP_DO_COMMAND &&
+          docmd_seen.value_len == strlen(text) &&
+          memcmp(docmd_seen.value, text, strlen(text)) == 0,
+          "the CLI receives the DO_COMMAND request carrying the command text");
+
+    char big[300];
+    memset(big, 'X', sizeof big);
+    struct dsc$descriptor_s bigd = { sizeof big, DSC$K_DTYPE_T, DSC$K_CLASS_S, big };
+    docmd_calls = 0;
+    check(lib$do_command(&bigd) == LIB$_INVARG && docmd_calls == 0,
+          "a command over 255 characters is LIB$_INVARG and never reaches the CLI");
+
+    /* Accepted: the image exits (SS$_NORMAL) instead of returning. */
+    int pfd[2];
+    if (pipe(pfd) == 0) {
+        fflush(NULL);
+        pid_t pid = fork();
+        if (pid == 0) {
+            close(pfd[0]);
+            docmd_answer = SS$_NORMAL;
+            (void)lib$do_command(&cmd);
+            (void)!write(pfd[1], "R", 1);     /* reached only if it returned */
+            _exit(3);
+        }
+        close(pfd[1]);
+        char b;
+        ssize_t n = read(pfd[0], &b, 1);
+        close(pfd[0]);
+        int st = 0;
+        waitpid(pid, &st, 0);
+        check(n == 0 && WIFEXITED(st) && WEXITSTATUS(st) == 0,
+              "an accepted command does not return: the image exits with SS$_NORMAL");
+    }
+    lib$$set_cli_handler(NULL);
+}
+
 int main(void)
 {
     printf("=== test_lib_symtab: vms-cd4 conformance-gap batch ===\n");
@@ -248,6 +318,7 @@ int main(void)
     test_symbol();
     test_purgws();
     test_getutc();
+    test_do_command();
 
     printf("\n%d/%d assertions passed.\n", total - failures, total);
 

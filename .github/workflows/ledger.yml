@@ -4,11 +4,13 @@ name: Ledger drift gates
 # is machine-generated, never hand-authored. This workflow enforces that.
 #
 # THE DESIGN ASYMMETRY (read before editing -- do NOT "simplify" it away):
-#   * COMPAT is repo-local. docs/compat/*.yaml is the source; render_compat.py
-#     regenerates docs/compatibility-surface.md. A PR that hand-edits the md, or
-#     edits a yaml without regenerating, is CLEANLY caught by `--check` (it diffs
-#     the committed md against a regen at the committed date). So compat is a
-#     BLOCKING per-PR gate. This is the clean, high-value half.
+#   * COMPAT is repo-local. docs/compat/*.yaml is the source; a compat PR edits
+#     ONLY the yaml. docs/compatibility-surface.md is a dated SNAPSHOT refreshed
+#     by `render_compat.py --publish` (release bump / regen PR) -- PRs no longer
+#     regenerate it, because its rollup table made every pair of queued compat
+#     PRs conflict. `--check` is BLOCKING: the yaml must validate and render, and
+#     on a PR (--base) that touches the md, the md must equal a fresh render
+#     (a hand-edit is red). This is the clean, high-value half.
 #   * ROADMAP derives from LIVE rd, which is NOT in the repo and mutates
 #     continuously (other sessions close items every hour). Running
 #     `reconcile.py --check` per-PR would regenerate from CURRENT rd and red on
@@ -65,8 +67,13 @@ jobs:
       - name: Install PyYAML (render_compat.py source parser)
         run: python3 -m pip install --user pyyaml
 
+      # The yaml must validate + render on every event. On a pull_request, a
+      # change that touches the tracked md must make it an exact render (no
+      # hand-edits); a yaml-only PR is not asked to regenerate it (churn fix).
       - name: COMPAT drift gate -- yaml is source, md is generated
-        run: python3 tools/compat/render_compat.py --check
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: python3 tools/compat/render_compat.py --check ${PR_BASE:+--base "$PR_BASE"}
 
       # vms-aaf: on pull_request / merge_group, pass --base so a branch that did
       # not touch the release list is not redded by a tag that postdates it; a
@@ -85,10 +92,10 @@ jobs:
       - name: DEPLOY INVENTORY -- manifest validates; the drift sentinel can fail
         run: bash tests/integration/test_drift_sentinel.sh "$PWD"
 
-      - name: ROADMAP collapse-guard self-tests -- an empty rd snapshot must NOT publish 0%
+      - name: ROADMAP collapse-guard + COMPAT gate self-tests -- an empty rd snapshot must NOT publish 0%; a hand-edited compat md reds
         run: |
           python3 -m pip install --user pytest
-          python3 -m pytest tests/tools/test_roadmap_collapse_guard.py tests/tools/test_check_roadmap_block.py -v
+          python3 -m pytest tests/tools/test_roadmap_collapse_guard.py tests/tools/test_check_roadmap_block.py tests/tools/test_render_compat_gate.py -v
 
   # ---------------------------------------------------------------------------
   # Scheduled/manual live-rd roadmap regen. Keeps the GENERATED block + compat md
@@ -125,7 +132,7 @@ jobs:
           fi
           python3 -m pip install --user pyyaml
           python3 tools/roadmap/reconcile.py
-          python3 tools/compat/render_compat.py
+          python3 tools/compat/render_compat.py --publish
           if git diff --quiet -- docs/release-roadmap-to-1.0.md docs/compatibility-surface.md; then
             echo "clean -- derived views already match live rd + yaml sources."
             exit 0

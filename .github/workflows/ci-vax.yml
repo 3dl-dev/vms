@@ -196,7 +196,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -408,7 +408,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -529,7 +529,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -668,7 +668,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -837,7 +837,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -933,7 +933,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -1026,7 +1026,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -1155,7 +1155,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -1273,7 +1273,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -1318,6 +1318,102 @@ jobs:
         run: tests/lab-vax/run-boot.sh acceptance
 
 
+  vax-decnet-pair:
+    name: OVMX/VAX <-> OVMX/x86 DECnet — NETACP on the executive datalink (PHY_IO, no root), SET HOST both ways (vms-9394)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read   # gh release download of the x86 peer's boot set
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-dnpair-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
+          # cache-to omitted: ci-vax.yml:netbsd-vax-substrate-prime is scope cross-vax's one writer (rd vms-14da)
+
+      # The x86 peer is a host QEMU (KVM-accelerated): the published OVMX/x86
+      # boot set, fetched by run-boot.sh with gh (GH_TOKEN below).
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
+      - name: Install the x86 peer's emulator (qemu-system-x86)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends qemu-system-x86
+
+      # rd vms-9394: a booted OVMX/VAX (SIMH, DELQA qt0) and an OVMX/x86 node
+      # (QEMU) on ONE Ethernet segment (SIMH XQ <-> QEMU socket netdev over two
+      # localhost UDP ports). Asserts: boot-time STARTNET starts NETACP; NETACP's
+      # 0x6003 datalink is opened THROUGH THE EXECUTIVE with PHY_IO (no root --
+      # ROOTAUDIT 0), sourcing AA-00-04-00-2B-04 on the wire; SET HOST x86->VAX
+      # and VAX->x86 each reach a real Username:, log in and LOGOUT; a bogus
+      # node is refused (negctl).
+      - name: "DECnet pair — OVMX/VAX NETACP on the executive datalink, SET HOST both ways with OVMX/x86"
+        env:
+          CROSS_IMAGE: ovmx-cross-vax
+          LAB_IMAGE: ovmx-vax-lab
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tests/lab-vax/run-boot.sh decnet-pair
+
   vax-acceptance-16mb:
     name: "OVMX/NetBSD-vax on a 16 MB VAX — boot, run the acceptance battery, assert a free-memory floor (vms-83d)"
     # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
@@ -1358,7 +1454,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -1453,7 +1549,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -1547,7 +1643,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-
 
@@ -2447,6 +2543,7 @@ jobs:
       - netbsd-vax-boot
       - netbsd-vax-sysboot
       - vax-dcl-acceptance
+      - vax-decnet-pair
       - vax-acceptance-16mb
       - vax-sysboot-single
       - vax-status-gate

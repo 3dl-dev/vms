@@ -129,17 +129,6 @@ struct chf$handler_block {
 #endif
 
 /* ================================================================
- * Handler action constants
- * ================================================================ */
-
-#define CHF$K_RESIGNAL      0   /* Resignal to next handler */
-#define CHF$K_CONTINUE      1   /* Continue execution */
-#define CHF$K_UNWIND        2   /* Unwind the call stack */
-
-/* Maximum number of condition handlers in the chain */
-#define CHF$K_MAX_HANDLERS  64
-
-/* ================================================================
  * Mechanism-array flag bits (chf$is_mch_flags)
  *
  * OpenVMS Calling Standard mechanism-array flags. A handler tests

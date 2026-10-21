@@ -23,8 +23,9 @@ summary: >
   vms-db3) and SS$_ACCVIO from SIGSEGV/SIGBUS/SIGILL (rung-4, vms-cc8), both
   Alpha. SYS$DCLEXH registers a real PCB exit handler run LIFO by SYS$EXIT.
   chf$mech_array frame+depth+savr0 are real; only savr1 stays 0 (host C ABI
-  exposes no VAX/Alpha R1). LIB$SIG_TO_STOP, LIB$MATCH_COND and SYS$EXIV remain
-  absent. Not oracle-verified (local corpus self-tests only, tests/corpus/
+  exposes no VAX/Alpha R1). LIB$SIG_TO_STOP and LIB$MATCH_COND are in
+  rtl/lib_signal.c (a SYS$EXIV row was removed 2026-10-21: no such VMS
+  service; exit handlers are SYS$DCLEXH, exception vectors SYS$SETEXV). Not oracle-verified (local corpus self-tests only, tests/corpus/
   tier1-examples/lib_establish.c / lib_sig_to.c / sys_unwind.c) -> implemented,
   not verified.
 last_reviewed: 2026-10-18
@@ -43,4 +44,3 @@ items:
   - {id: sys$dclexh, kind: routine, status: implemented, authenticity: advisory, vms: "Declare an exit handler", evidence: src/libvms/syssvc/sys_process.c, notes: "registers a real exit-handler desblk in the PCB (LIFO, PCB_MAX_EXIT_HANDLERS cap -> SS$_EXQUOTA); run in LIFO order by sys$exit. Per-process (PCB), not executive-resident"}
   - {id: ss$_hparith_bridge, kind: feature, status: implemented, authenticity: real, vms: "Hardware arithmetic trap raises SS$_HPARITH through the CHF dispatcher", evidence: src/libvms/rtl/arith_signal.c, notes: "Alpha (vms-db3): SIGFPE image-start handler decodes sc_fpcr sticky bits into the Alpha exception-summary byte (si_code is lossy) and signals a faithful SS$_HPARITH through dispatch_condition()"}
   - {id: ss$_accvio_bridge, kind: feature, status: implemented, authenticity: real, vms: "Hardware access violation raises SS$_ACCVIO through the CHF dispatcher", evidence: src/libvms/rtl/accvio_signal.c, notes: "Alpha (CHF rung-4, vms-cc8): SIGSEGV/SIGBUS/SIGILL image-start handler builds the public OpenVMS access-violation signal array and dispatches SS$_ACCVIO through the same dispatch_condition() as software conditions"}
-  - {id: sys$exiv, kind: routine, status: absent, authenticity: n/a, vms: "Declare an exit vector"}

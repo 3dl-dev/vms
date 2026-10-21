@@ -775,6 +775,8 @@ struct vms_cluster_getsyi_args {
 	uint8_t  node_csid_valid;
 	uint8_t  hw_model_len;     /* SYI$_HW_NAME, rd vms-21be */
 	uint8_t  hw_model[31];
+	uint8_t  scsnode_len;      /* SYI$_NODENAME/SCSNODE, the booted SCSNODE, rd vms-433 */
+	uint8_t  scsnode[7];
 };
 
 /* ================================================================
@@ -860,7 +862,7 @@ _Static_assert(sizeof(struct vms_cluster_start_args) == 12,
                "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
 _Static_assert(sizeof(struct vms_cluster_stop_args) == 16,
                "vms_cluster_stop_args changed size -- VMS_IOCTL_CLUSTER_STOP ABI break");
-_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 68,
+_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 76,
                "vms_cluster_getsyi_args changed size -- VMS_IOCTL_CLUSTER_GETSYI ABI break");
 _Static_assert(sizeof(struct vms_scs_view_wire) == 32,
                "vms_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");

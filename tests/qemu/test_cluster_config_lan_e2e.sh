@@ -308,8 +308,11 @@ if [ "$rc" -eq 0 ]; then
     # adopted live hostname -- the file and the running system tell one story.
     send 'SNODE = F$GETSYI("SCSNODE")'; sleep 1
     send 'SHOW SYMBOL SNODE'; sleep 1
+    # F$GETSYI("SCSNODE") is the 6-character SCSNODE field, blank-padded, as
+    # the real VAX returns it (SCSNODE=[VAXC  ], tests/lab/captures/
+    # vms-433-nodename-oracle-20261021/).
     check "boot 2: F\$GETSYI(SCSNODE) also reads $NEWNODE (persisted .PAR agrees)" \
-        "$POS_LOG2" "SNODE = \"$NEWNODE\""
+        "$POS_LOG2" "SNODE = \"$(printf '%-6s' "$NEWNODE")\""
 
     # AGREEMENT: SYSGEN USE CURRENT / SHOW SCSNODE reads the same authored value
     # back out of the live parameter store.

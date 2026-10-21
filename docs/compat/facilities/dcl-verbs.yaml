@@ -23,7 +23,7 @@ items:
     authenticity: real
     vms: "~150 DCL verbs (VMS DCL Dictionary), SET/SHOW as ~30-subverb umbrellas each"
     evidence: src/vmsdcl/dcl_builtin.c:401
-    notes: "58 of ~150 verbs present in builtin_verbs[] (ACCOUNTING ANALYZE APPEND ASSIGN ATTACH BACKUP CLOSE CONTINUE CONVERT COPY CREATE DEASSIGN DEFINE DELETE DIFFERENCES DIRECTORY DISMOUNT DUMP EDIT EXIT FTP HELP INQUIRE INSTALL INITIALIZE LIBRARY LINK LOGOUT MAIL MONITOR MOUNT OPEN PHONE PING PIPE PRINT PRODUCT PURGE RECALL READ RENAME REPLY REQUEST RUN SEARCH SET SHOW SORT SPAWN STOP SUBMIT SYSGEN SYSMAN TCPIP TELNET TYPE WAIT WRITE). Real breadth gap, not a facade."
+    notes: "60 of ~150 verbs present in builtin_verbs[] (ACCOUNTING ALLOCATE ANALYZE APPEND ASSIGN ATTACH BACKUP CLOSE CONTINUE CONVERT COPY CREATE DEALLOCATE DEASSIGN DEFINE DELETE DIFFERENCES DIRECTORY DISMOUNT DUMP EDIT EXIT FTP HELP INQUIRE INSTALL INITIALIZE LIBRARY LINK LOGOUT MAIL MONITOR MOUNT OPEN PHONE PING PIPE PRINT PRODUCT PURGE RECALL READ RENAME REPLY REQUEST RUN SEARCH SET SHOW SORT SPAWN STOP SUBMIT SYSGEN SYSMAN TCPIP TELNET TYPE WAIT WRITE). Real breadth gap, not a facade."
 
   - id: dcl-verbs$call-subroutine
     kind: command
@@ -63,10 +63,12 @@ items:
 
   - id: dcl-verbs$allocate-deallocate
     kind: command
-    status: absent
-    authenticity: n/a
+    status: implemented
+    authenticity: real
     vms: "ALLOCATE / DEALLOCATE — device allocation verbs"
     scope_1_0: in
+    evidence: src/vmsdcl/dcl_cmd_io.c
+    notes: "cmd_allocate / cmd_deallocate over $ALLOC / $DALLOC (the executive device table, vms-44a). ALLOCATE prints %DCL-I-ALLOC, <physical name> allocated (/NOLOG suppresses it), as the VAX V7.3 console did for ALLOCATE OPA0: (docs/oracle/vax73-terminal-device.md section 4); OVMX's physical name has no node prefix (_OPA0:, not _VAX1$OPA0:). A logical-name parameter becomes a process logical name for the physical name. Refusals print the system message: %SYSTEM-W-DEVALLOC (observed, section 7.2), %SYSTEM-W-DEVNOTALLOC from DEALLOCATE. Not implemented, refused as %DCL-W-IVQUAL: ALLOCATE/GENERIC, DEALLOCATE/ALL. $STATUS after a successful ALLOCATE is not measured; OVMX leaves SS$_NORMAL. Proof tests/qemu/test_syssvc_dcl_allocate.c + defects.d/dcl-allocate-skips-alloc.defect, dcl-deallocate-skips-dalloc.defect."
 
   - id: dcl-verbs$patch
     kind: command

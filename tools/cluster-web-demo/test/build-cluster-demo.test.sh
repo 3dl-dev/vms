@@ -108,10 +108,10 @@ done
     "$DEMO/ods2_inject_sysgen.c" $ODS2_SRCS -o "$WORK/inj"
 "$WORK/inj" gettext "$WORK/check.raw" NETNODE_LOCAL.DAT "$WORK/local.dat"
 "$WORK/inj" gettext "$WORK/check.raw" NETNODE_REMOTE.DAT "$WORK/remote.dat"
-grep -q '^EXECUTOR 1.1 NAME OVMXA STATE on' "$WORK/local.dat" \
-    || { echo "FAIL: NETNODE_LOCAL.DAT is not executor 1.1 OVMXA state on"; cat "$WORK/local.dat"; exit 1; }
-grep -q '1.2' "$WORK/remote.dat" && grep -q 'OVMXB' "$WORK/remote.dat" \
-    || { echo "FAIL: NETNODE_REMOTE.DAT does not name the peer 1.2 OVMXB"; cat "$WORK/remote.dat"; exit 1; }
+grep -q '^EXECUTOR 1.963 NAME OVMXA STATE on' "$WORK/local.dat" \
+    || { echo "FAIL: NETNODE_LOCAL.DAT is not executor 1.963 OVMXA state on"; cat "$WORK/local.dat"; exit 1; }
+grep -q '1.964' "$WORK/remote.dat" && grep -q 'OVMXB' "$WORK/remote.dat" \
+    || { echo "FAIL: NETNODE_REMOTE.DAT does not name the peer 1.964 OVMXB"; cat "$WORK/remote.dat"; exit 1; }
 grep -q '1.965' "$WORK/remote.dat" && grep -q 'VAXC' "$WORK/remote.dat" \
     || { echo "FAIL: NETNODE_REMOTE.DAT does not name the peer 1.965 VAXC (rd vms-05d)"; cat "$WORK/remote.dat"; exit 1; }
 

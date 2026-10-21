@@ -23,6 +23,21 @@
  * image. The musl system() the archive also carries (a clone with CLONE_VFORK,
  * which the executive refuses) stays an internal symbol: decc$system is rebound
  * in place to ovmx_crtl_system by mk_decc_shr.sh.
+ *
+ * exit() and __posix_exit() (vms-599): the value an image hands exit() is its VMS
+ * completion status, which DCL reads as $STATUS. Measured on OpenVMS Alpha V8.4
+ * (tests/lab/captures/decc-exit-alpha-20261021, MACRO-32 calling the C RTL entry
+ * points): DECC$EXIT turns 0 into %X00000001 (SS$_NORMAL) and passes every other
+ * value through unchanged (1, 2, 3, %X1000002C). DECC$__POSIX_EXIT (what exit()
+ * is under _POSIX_EXIT) keeps the low eight bits, turns 0 into %X00000001, and any
+ * other n into a C-facility message: %X0035A001 + (n << 3), with 1 made an error
+ * whose message is inhibited, %X1035A00A (2 -> %X0035A011, 255 -> %X0035A7F9,
+ * 256 -> %X00000001). musl's exit() ran the atexit handlers and flushed stdio, then
+ * exit_group()ed a POSIX code, and nothing recorded the status: DCL saw exit(1),
+ * a success, as "exited with error status %X00000001". Both entry points record
+ * the status, then run musl's exit; the C RTL file layer's system-call hook
+ * (crtl_rms_fd.c) sees the final exit_group and ends the image with SYS$EXIT of
+ * that status, after the handlers and the flush, as the DEC C RTL does.
  */
 #include <errno.h>
 #include <stdlib.h>
@@ -96,4 +111,49 @@ char *ovmx_crtl_getcwd(char *buf, unsigned long size, int vms_flag)
     }
     memcpy(buf, out, need);
     return buf;
+}
+
+/* ------------------------------------------------------- exit (vms-599) ---- */
+
+extern unsigned int sys$exit(unsigned int code);            /* LIBVMS$SHR */
+extern void (*__ovmx_crtl_exit_record)(void);               /* crtl_rms_fd.c */
+
+static unsigned int crtl_exit_cond;
+
+/* Called from the system-call hook at the image's final exit_group: end the
+ * image with SYS$EXIT of the recorded status (it runs the exit handlers, records
+ * the status with the executive and terminates). The cell is cleared first, so
+ * SYS$EXIT's own exit_group passes straight through the hook. */
+static void crtl_exit_record(void)
+{
+    __ovmx_crtl_exit_record = 0;
+    (void)sys$exit(crtl_exit_cond);
+}
+
+static void crtl_exit_with(unsigned int cond)
+{
+    crtl_exit_cond = cond;
+    __ovmx_crtl_exit_record = crtl_exit_record;
+    exit((cond & 1u) ? 0 : 1);                     /* musl: atexit, stdio flush */
+}
+
+/* DEC C exit(): 0 is SS$_NORMAL, any other value is the status itself. */
+void ovmx_crtl_exit(int status)
+{
+    crtl_exit_with(status == 0 ? 1u : (unsigned int)status);
+}
+
+/* DEC C __posix_exit() (exit() under _POSIX_EXIT): a POSIX code 0-255 as a
+ * C-facility condition value (see the measurement above). */
+void ovmx_crtl_posix_exit(int status)
+{
+    unsigned int n = (unsigned int)status & 255u;
+    unsigned int cond;
+    if (n == 0)
+        cond = 1u;
+    else if (n == 1)
+        cond = 0x1035A00Au;
+    else
+        cond = 0x0035A001u + (n << 3);
+    crtl_exit_with(cond);
 }

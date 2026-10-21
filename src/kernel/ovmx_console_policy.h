@@ -69,6 +69,19 @@
 #define OVMX_CONSOLE_MUTE_LEVEL  4
 
 /*
+ * THE LEVEL THE EXECUTIVE'S DIAGNOSTIC LINES ARE EMITTED AT (== Linux
+ * LOGLEVEL_NOTICE / KERN_NOTICE), rd vms-c56. exec_console_printf() sends a
+ * line to OPA0: only when it is a console message VMS itself prints
+ * (src/kernel-core/vms_cluster_opa0.h); every other executive line -- the
+ * connection manager's, PEDRIVER's, the lock manager's diagnostics -- is
+ * emitted HERE, which must NOT reach the console sink (so it stays off OPA0:)
+ * and must stay at or below NOTICE (so the /dev/kmsg bridge,
+ * src/ovmx_init/opcom_kmsg.c, still files it in OPERATOR.LOG -- it drops
+ * INFO and DEBUG). Re-routed, never dropped.
+ */
+#define OVMX_OPLOG_PRINTK_LEVEL  5
+
+/*
  * Linux's own console rule (kernel/printk/printk.c: a record is emitted iff
  * `level < console_loglevel`), written once so the tests and the two rinds
  * ask the question the same way instead of re-deriving the comparison.
@@ -87,6 +100,10 @@ static inline int ovmx_console_level_reaches_console(int level,
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 _Static_assert(OVMX_OPA0_PRINTK_LEVEL < OVMX_CONSOLE_MUTE_LEVEL,
 	       "the executive's OPA0: lines must survive PID 1's console mute");
+_Static_assert(OVMX_OPLOG_PRINTK_LEVEL >= OVMX_CONSOLE_MUTE_LEVEL,
+	       "the executive's diagnostic lines must not reach OPA0: (rd vms-c56)");
+_Static_assert(OVMX_OPLOG_PRINTK_LEVEL <= 5,
+	       "the executive's diagnostic lines must stay where the kmsg bridge files them");
 #endif
 
 #endif /* OVMX_CONSOLE_POLICY_H */

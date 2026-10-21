@@ -292,6 +292,33 @@ if [ "$rc" -eq 0 ]; then
     send 'SHOW SYMBOL HOST2'; sleep 1
     check "boot 2: F\$GETSYI(NODENAME) reads ALPHA9 (the REAL Linux hostname, set by sethostname())" \
         "$POS_LOG2" 'HOST2 = "ALPHA9"'
+
+    # rd vms-433: ONE node name, the SCSNODE this system BOOTED with, held by
+    # the executive. Edit the parameter file AFTER boot (SET SCSNODE BETA7 +
+    # WRITE CURRENT, no reboot): VMS keeps answering with the booted name,
+    # and so must every OVMX surface. A surface that re-reads the file says
+    # BETA7 -- which is how the demo's OVMX/VAX node came to call itself
+    # OVMX while its cluster called it OVMXB.
+    send 'SYSGEN'; sleep 1
+    send 'USE CURRENT'; sleep 1
+    send 'SET SCSNODE BETA7'; sleep 1
+    send 'WRITE CURRENT'; sleep 1
+    send 'EXIT'; sleep 2
+    check "boot 2: SYSGEN wrote SCSNODE BETA7 to the parameter file (no reboot)" \
+        "$POS_LOG2" "%SYSGEN-I-SETPARAM, SCSNODE changed from ALPHA9 to BETA7"
+    send 'HOST4 = F$GETSYI("NODENAME")'; sleep 1
+    send 'SHOW SYMBOL HOST4'; sleep 1
+    send 'NODE4 = F$GETSYI("SCSNODE")'; sleep 1
+    send 'SHOW SYMBOL NODE4'; sleep 1
+    send 'SHOW PROCESS'; sleep 3
+    send 'SHOW USERS'; sleep 3
+    check "boot 2: F\$GETSYI(NODENAME) is still the BOOTED name ALPHA9 after the file changed" \
+        "$POS_LOG2" 'HOST4 = "ALPHA9"'
+    check "boot 2: F\$GETSYI(SCSNODE) is the booted name, as VMS pads it (oracle: SCSNODE=[VAXC  ])" \
+        "$POS_LOG2" 'NODE4 = "ALPHA9"'
+    check "boot 2: SHOW PROCESS names the node ALPHA9" "$POS_LOG2" 'Node: ALPHA9'
+    check "boot 2: no surface names the node from the edited file (BETA7) or the default (OVMX)" \
+        "$POS_LOG2" 'Node: BETA7' absent
 fi
 kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 

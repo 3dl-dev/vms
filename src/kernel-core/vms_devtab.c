@@ -3354,6 +3354,16 @@ long vms_ioctl_cluster_getsyi(struct vms_proc *proc, unsigned long arg)
             args.hw_model_len = (uint8_t)n;
         }
     }
+    /* rd vms-433: the SCSNODE this system booted with, from the parameters
+     * VMS_IOCTL_SYSGEN_LOAD committed -- the one node name every surface
+     * shows. Read under the fork mutex like the CLUB projection above. */
+    vms_cluster_fork_enter(cl);
+    if (cl->params.scsnode_len != 0u &&
+        cl->params.scsnode_len <= sizeof(args.scsnode)) {
+        memcpy(args.scsnode, cl->params.scsnode, cl->params.scsnode_len);
+        args.scsnode_len = (uint8_t)cl->params.scsnode_len;
+    }
+    vms_cluster_fork_leave(cl);
     args.status = SS__NORMAL;
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))

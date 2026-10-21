@@ -61,6 +61,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include "ovmx_layout.h"          /* VMS_OPERATOR_LOG */
 #include "ovmx_console.h"         /* OVMX_CONSOLE_LINUX_PATH: OPA0:'s node (rd vms-137e) */
 #include "vmsfs/filespec.h"       /* vmsfs_to_linux_path for OPERATOR.LOG */
+#include "opcom_exec_line.h"      /* rd vms-c56: executive lines filed as they are */
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -306,15 +307,36 @@ static void *klog_thread_main(void *arg)
         char *ln;
         for (ln = strtok_r(raw, "\n", &save); ln; ln = strtok_r(NULL, "\n", &save)) {
             char out[600];
+            const char *ex;
             if (*ln == '\0')
                 continue;
-            snprintf(out, sizeof out, "%%SYSKRNL-I-KERNEL, %s\n", ln);
+            /* rd vms-c56: an executive operator line ("%CNXMAN, ...",
+             * "%DLM, ...") is already VMS-form and the executive's, not
+             * NetBSD's -- filed as it is, past the message buffer's stamp
+             * (opcom_exec_line.h). Everything else is the substrate's. */
+            ex = opcom_exec_line(ln);
+            if (ex != NULL)
+                snprintf(out, sizeof out, "%s\n", ex);
+            else
+                snprintf(out, sizeof out, "%%SYSKRNL-I-KERNEL, %s\n", ln);
             klog_append_operator_log(out);
         }
     }
 
     close(kfd);
     return NULL;
+}
+
+/* rd vms-c56: one operator line from PID 1 itself (a diagnostic with no VMS
+ * console form), filed where the bridge files the executive's. */
+void ovmx_boot_operator_log(const char *line)
+{
+    char out[600];
+
+    if (line == NULL || *line == '\0')
+        return;
+    snprintf(out, sizeof out, "%s\n", line);
+    klog_append_operator_log(out);
 }
 
 void ovmx_boot_start_console_log_bridge(void)

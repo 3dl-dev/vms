@@ -1366,6 +1366,15 @@ def do_acceptance(a, boot_deadline, single_rq0_type):
     raw_f = open(raw_path, "wb", buffering=0)
 
     vmm_args = ["set rq0 " + single_rq0_type] if single_rq0_type else []
+    # rd vms-9394: OVMX_VAX_SIMH_EXTRA -- extra SIMH config lines, ';'-separated,
+    # inserted before the disks attach (anita's start_simh). Unset by default
+    # (every existing caller is byte-identical). The DECnet pair test uses it to
+    # put the DELQA (XQ, qt0 under NetBSD) on a UDP L2 segment shared with an
+    # OVMX/x86 node, e.g. "set xq mac=08:00:2B:AA:00:43;attach xq udp:P1:H:P2".
+    extra = env("OVMX_VAX_SIMH_EXTRA")
+    if extra:
+        vmm_args += [ln.strip() for ln in extra.split(";") if ln.strip()]
+        log("ACCEPTANCE: extra SIMH config: %s" % " | ".join(vmm_args[1:] if single_rq0_type else vmm_args))
     log("ACCEPTANCE: booting ONE disk on rq0 (%s) and bridging its console to "
         "the shared DCL/SHOW battery via RAW=%s FIFO=%s (deadline %ds)"
         % (single_rq0_type or "default", raw_path, fifo_path, boot_deadline))

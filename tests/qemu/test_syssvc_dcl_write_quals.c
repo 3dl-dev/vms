@@ -118,6 +118,12 @@ int main(void)
           "WRITE/SYMBOL writes the named symbol's value");
     CHECK(strstr(out1, "%DCL-W-UNDSYM") != NULL && strstr(out1, "\\NOSUCHSYM\\") != NULL,
           "WRITE/SYMBOL of an undefined symbol is %DCL-W-UNDSYM");
+    /* ...and leaves the real CLI$_UNDSYM in $STATUS, %X00038140 (OpenVMS Alpha
+     * V8.4 $GETMSG, docs/oracle/messages/alpha84-msgcat2.txt). */
+    CHECK(run_dcl("WRITE/SYMBOL SYS$OUTPUT NOSUCHSYM\nSHOW SYMBOL $STATUS\n", out2, sizeof out2) == 0,
+          "DCL ran the UNDSYM $STATUS probe");
+    CHECK(strstr(out2, "%X00038140") != NULL,
+          "WRITE/SYMBOL of an undefined symbol leaves $STATUS = %X00038140 (CLI$_UNDSYM)");
     /* negctl: dcl-write-quals-accept-all */
     CHECK(strstr(out1, "\\ZQBOGUS\\") != NULL,
           "WRITE/ZQBOGUS is %DCL-W-IVQUAL naming the qualifier");

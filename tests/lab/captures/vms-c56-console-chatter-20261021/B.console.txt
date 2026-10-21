@@ -1,0 +1,216 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-13 - OpenVMS-compatible
+     1-JAN-2010 12:08:13.48
+
+%OVMX-I-SYSDISK, mounting system disk DUA0:
+%OVMX-I-MOUNTED, system disk DUA0: mounted
+%PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)SYS.PAR
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%PEA0, channel verified%PEA0, virtual circuit open%CNXMAN, a connection manager was discovered on the interconnect
+%CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+%PEA0, channel verified%CNXMAN, waiting for the cluster member to send its cluster parameters before asking for admission
+%PEA0, virtual circuit open%CNXMAN, a connection manager was discovered on the interconnect
+%CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, waiting for connectivity to every cluster member before asking for admission
+%CNXMAN, sending VAXcluster membership request to system VAXC
+
+%DLM, no lock directory vector is committed yet: resources locked now are mastered on THIS NODE ONLY until a cluster transition completes
+%CNXMAN, membership request to VAXC not answered
+%CNXMAN, re-issuing this node's membership request to another cluster member
+%CNXMAN, sending VAXcluster membership request to system OVMXA
+
+%CNXMAN, membership request to OVMXA not answeredto DCL for ACP resolution
+%CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+%CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+%CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+%CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+%CNXMAN, sending VAXcluster membership request to system VAXC
+%CNXMAN, the cluster assigned this node a cluster system id
+%CNXMAN, the cluster assigned this node a cluster system id
+%CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+%CNXMAN, this node is a member of the cluster
+%CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+%CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 [not this implementation]
+%CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=1
+%CNXMAN,   csid=00010003 slot=3 lockdirwt=0 entries=1 (this node)
+%CNXMAN, VAXcluster state transition in progress
+%CNXMAN, this node is now a VAXcluster member
+%CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+%CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 [not this implementation]
+%CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=1
+%CNXMAN,   csid=00010003 slot=3 lockdirwt=0 entries=1 (this node)
+%CNXMAN, system 00000000000007c4 was added to the cluster
+%CNXMAN, system 00000000000007c3 was added to the cluster
+%CNXMAN, system 00000000000007c5 was added to the cluster
+%MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks%CNXMAN, completed VAXcluster state transition
+
+The OVMX system is now executing the site-specific startup commands.
+
+        OVMX DECnet Phase IV -- Startup (STARTNET)
+
+%RUN-S-PROC_ID, identification of created process is 0000006B
+%DECNET-I-STARTNET, NETACP launched detached to serve inbound $ SET HOST.
+
+DECNETD-E-NOSOCKET, bpf datalink open on 'qe0' (0x6003) failed: Permission denied
+  (the AF_PACKET probe needs CAP_NET_RAW -- a host/lab instrument; the booted runtime builds the executive backend, OVMX_DATALINK_VIA_EXECUTIVE)
+%RUN-S-PROC_ID, identification of created process is 0000006D
+
+ Welcome to the OpenVMX VAX Operating System, Version V0.7-13 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMX V0.7-13 - OpenVMS-compatible
+    Last interactive login on  1-JAN-2010 12:08:42.00
+$ SHOW SYSTEM
+OpenVMX V0.7-13 - OpenVMS-compatible  on node OVMX   1-JAN-2010 12:12:07.52  Uptime  0 00:04:09
+  Pid    Process Name          CPU         Page flts   Pages
+00000001                    0 00:01:58.22        244     902
+0000006D JOB_CONTROL        0 00:00:02.93        206     588
+0000006F SYSTEM             0 00:00:09.66        439     775
+$ SHOW USERS
+      OpenVMX User Processes at  1-JAN-2010 12:12:16.15
+    Total number of users = 1,  number of processes = 1
+
+ Username  Node     Interactive  Subprocess   Batch
+ SYSTEM     OVMX            1                    
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-JAN-2010 12:12:25
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | MEMBER           |
+| OVMXA  | 00010002 |                 | MEMBER           |
+| VAXC   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW DEVICES
+Device                  Device        Error  Volume            Free  Trans  Mnt
+ Name                    Status       Count    Label         Blocks  Count  Cnt
+DUA0:                   Mounted           0  OVMXSYS         120746      0    1
+Device                  Device           Error
+ Name                   Status           Count
+OPA0:                   Online               0
+NLA0:                   Online               0
+ETH0:                   Online               0
+NET:                    Online               0
+PEA0:                   Online               0
+$ SHOW TERMINAL
+Terminal: _OPA0:      Device_Type: Unknown       Owner: SYSTEM
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          No Tab
+   Wrap               No Hardcopy        No Remote          No Eightbit
+   Broadcast          No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        No Line Editing    Insert editing     No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     No ANSI_CRT        No Regis           No Block_mode
+   No Advanced_video  No Edit_mode       No DEC_CRT         No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input
+$ SHOW NETWORK
+Product: OVMX TCP/IP Services V0.7-13
+Node: OVMX
+$ SHOW MEMORY
+
+              System Memory Resources on  1-JAN-2010 12:13:00.76
+
+Physical Memory Usage (pages):     Total        Free      In Use    Modified
+  Main Memory (26.32Mb)            53912       25864       28048            
+$ SHOW LOGICAL SYS$SYSDEVICE
+   "SYS$SYSDEVICE" = "DUA0:" (LNM$SYSTEM)
+$ DIRECTORY SYS$LOGIN
+%DIRECT-W-NOFILES, no files found
+$ SHOW TIME
+   1-JAN-2010 12:13:29.85
+$ SHOW PROCESS
+
+ 1-JAN-2010 12:13:38.80   User: SYSTEM           Process ID:   0000006F
+                          Node: OVMX             Process name: "SYSTEM"
+
+Terminal:           OPA0:
+User Identifier:    [001,004]
+Default file spec:  SYS$SYSROOT:[SYSMGR]
+$ HELP
+
+HELP
+
+ Displays online help information about OVMX commands,
+ qualifiers, parameters, and lexical functions.
+
+ Format: HELP [topic [subtopic [...]]]
+
+ Without arguments, HELP displays a list of available topics.
+ You can navigate through help levels:
+   - Type a topic name to see its help text
+   - Press RETURN for a list of subtopics
+   - Type a period (.) to go up one level
+   - Press RETURN at the top level to exit
+
+
+
+  Additional information available:
+
+  ACCOUNTING ANALYZE    APPEND     ASSIGN     ATTACH     BACKUP     CLOSE
+  CONTINUE   CONVERT    COPY       CREATE     DEASSIGN   DEFINE     DELETE
+  DIFFERENCES           DIRECTORY  DISMOUNT   DUMP       EDIT       EXIT
+  HELP       INQUIRE    INSTALL    LIBRARY    LINK       LOGOUT     MAIL
+  MONITOR    MOUNT      OPEN       PHONE      PIPE       PRINT      PRODUCT
+  PURGE      READ       RECALL     RENAME     REPLY      REQUEST    RUN
+  SEARCH     SET        SHOW       SORT       SPAWN      STOP       SUBMIT
+  SYSGEN     SYSMAN     TCPIP      TYPE       WAIT       WRITE      F$CONTEXT
+  F$CVSI     F$CVTIME   F$CVUI     F$DEVICE   F$DIRECTORY           F$EDIT
+  F$ELEMENT  F$ENVIRONMENT         F$EXTRACT  F$FAO      F$FILE_ATTRIBUTES
+  F$GETDVI   F$GETJPI   F$GETQUI   F$GETSYI   F$IDENTIFIER          F$INTEGER
+  F$LENGTH   F$LOCATE   F$MESSAGE  F$MODE     F$PARSE    F$PID
+  F$PRIVILEGE           F$PROCESS  F$SEARCH   F$STRING   F$TIME     F$TRNLNM
+  F$TYPE     F$UNIQUE   F$USER     F$VERIFY   HINTS      CONVENTIONS
+  SPECIFY    PARAMETERS LEXICAL_FUNCTIONS     ON         IF         GOTO
+  GOSUB      RETURN     FTP        PING
+
+Topic? 
+$ SET HOST VAXC
+DECNETD-E-NOSOCKET, bpf datalink open on 'qe0' (0x6003) failed: Permission denied
+  (the AF_PACKET probe needs CAP_NET_RAW -- a host/lab instrument; the booted runtime builds the executive backend, OVMX_DATALINK_VIA_EXECUTIVE)
+%DCL-E-ABORT, image SYS$SYSTEM:DECNETD.EXE exited with error status %X00000001
+$ MAIL
+
+   MAIL -- OpenVMS Mail Utility
+
+Your mail file is empty.
+
+MAIL> EXIT
+
+   Exiting MAIL
+
+$ EXIT
+%DLM, a lock directory lookup could not be recorded (no directory table, or it is full): not answered
+%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001: it has not proved it runs this implementation
+%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001: it has not proved it runs this implementation

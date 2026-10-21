@@ -122,6 +122,10 @@ libvms_add_test(test_libvms_lib_rtl
 
 # Test 7: vms-cd4 conformance-gap batch — dynamic descriptors, simplified
 # logical-name/CLI-symbol wrappers, sys$purgws, sys$getutc
+# $PROCESS_SCAN item-list handling (the walk itself is the QEMU suite's)
+libvms_add_test(test_libvms_process_scan
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_process_scan.c)
+
 libvms_add_test(test_libvms_lib_symtab
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_symtab.c)
 
@@ -630,3 +634,8 @@ libvms_add_test(test_libvms_utc
 # OPCDEF header: the 24-bit target-class mask (bytes 1..3) and the oracle offsets.
 libvms_add_test(test_libvms_opcdef_layout
     ${CMAKE_CURRENT_SOURCE_DIR}/test_opcdef_layout.c)
+
+# LIB$GET_LUN / LIB$FREE_LUN: the processwide logical-unit pool, against the
+# order and statuses observed on VAX1 (tests/lab/captures/lib-lun-20261021/).
+libvms_add_test(test_libvms_lib_lun
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_lun.c)

@@ -353,6 +353,22 @@ vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
 				    written);
 }
 
+/*
+ * THE GRANT RECORD, written in ONE place for both the builders that carry it:
+ * a master's ENQ/CONVERT grant (38 of 38 real grants) and a new master's 82/01
+ * answer to an op-0x12 remaster record (416 of 416). body[28] = 0x10, body[29]
+ * = 0, body[32:36] = 01 00 fa 00 -- the outcome byte at body[34] included.
+ * body[30:32] is NOT written here: a grant clears it and an op-0x12 answer's
+ * root form carries a cell this codec cannot name (rd vms-380 rule 2), so each
+ * builder states that pair itself.
+ */
+static void dlm_put_grant_record(vms_wire_buf_t *w)
+{
+	vms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);
+	vms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG + 1u, 0u); /* body[29], 38/38 */
+	vms_wire_put_le32(w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
+}
+
 vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 						    uint32_t req_len,
 						    uint32_t master_lkid,
@@ -411,11 +427,9 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 	 * the requester's own, echoed -- the correlation. */
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
 	/* The grant record, on every grant (38/38). */
-	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG + 1u, 0); /* body[29], 38/38 */
+	dlm_put_grant_record(&w);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, 0);          /* cleared, 38/38 */
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u, 0);     /* body[31], 38/38 */
-	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
 	/*
 	 * body[36:52] -- THE MASTER RESOURCE'S VALUE BLOCK, the span the op-0x06
 	 * write grounds and the dlm-grant-valblk specimen proves a real grant
@@ -1765,9 +1779,7 @@ vms_dlm_rm_lock_answer_build(const uint8_t *req_body, uint32_t req_len,
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, a->master_lkid);
 	/* The grant record (38/38 real grants; 416/416 real 0x12 answers). */
-	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG + 1u, 0u);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
+	dlm_put_grant_record(&w);
 	/* body[30:32]: the grant's cleared pair, unless the caller holds a
 	 * real executive value for the root form (header rule 2). */
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE,

@@ -1180,6 +1180,22 @@ set_tests_properties(cluster_host_dlm_pid_cell_census PROPERTIES
     TIMEOUT 120
 )
 
+# ---- rd vms-380: the LOCK-TREE REMASTERING census. Every figure the codec's
+# "LOCK-TREE REMASTERING ON THE WIRE" block and the dlm_rm_* grounding rows
+# quote -- 246 of 246 answers rewriting only body[8], [9] and [34]; 416 of 416
+# op-0x12 answers carrying the grant record; the 23/24/18 split that classifies
+# the op-0x14's body[20:40] as residue -- re-derived from the committed pcaps,
+# so a number in a comment cannot drift away from the bytes it came from.
+add_test(NAME cluster_host_remaster_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/remaster_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_remaster_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
 # ---- rd vms-c55: what a node puts on the lock connection DURING a transition
 # The transition hold in vms_dlm_scs_fsm.c is justified by a census, not by a
 # reading of the book: over every committed pcap, no real VMS node put a

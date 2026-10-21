@@ -280,7 +280,8 @@ dlm-rm-ack-rewrites-the-grant-record
 dlm-rm-lock-answer-echoes-the-handle
 dlm-rm-lock-answer-invents-a-valblk
 dlm-rm-14-leaks-the-caller-buffer
-dlm-rm-14-pattern-overruns-a-field"
+dlm-rm-14-pattern-overruns-a-field
+dlm-rm-lock-answer-record-omitted"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -1328,6 +1329,23 @@ EOF
 *** every byte outside the six fields is ZERO -- the rd vms-42de ruling, not OVMX kernel memory ***
   body[12:16] is left for the CM's own DLM-sequence stamp
   body[40:44] = 0, the real frame's (63/63)
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-lock-answer-record-omitted)
+        case "$_f" in
+        facility)     echo "the 82/01 answer to an op-0x12 carries the GRANT RECORD -- body[28]=0x10, body[29]=0, body[32:36]=01 00 fa 00 (rd vms-380 rule 2; 416 of 416 real answers)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the op-0x12 answer stops writing the grant record, so the holder gets an answer with no outcome byte at all -- the ev5 request-storm shape (rd vms-b5b0), here against a holder that is mid-remaster and has nothing else to go on. dlm-grant-record-omitted covers the same record on the ENQ/CONVERT grant path; this is the second consumer of the one writer.";;
+        require_fail) hd_lines <<'EOF'
+*** the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+*** the sub grant equals the real VAX's, byte for byte past the envelope ***
+*** HELD OUT: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+  body[28] = 0x10, the grant flag (416/416 real)
+  body[34] = 0xfa, granted
 EOF
                       ;;
         esac;;
@@ -2724,10 +2742,12 @@ apply_edit() {
         sed -i 's|#define VMS_OFF_DLM_REQ_LKID       96u|#define VMS_OFF_DLM_REQ_LKID       92u /* NEGCTL */|' "$_file";;
 
     dlm-grant-record-omitted)
-        # The record's two writes in the grant builder. Removing the flag write
-        # removes the anchor, so a second apply cannot match.
-        sed -i 's|\tvms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
-        sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
+        # The record is written in ONE place now (dlm_put_grant_record, rd
+        # vms-380), used by the ENQ/CONVERT grant builder and by the op-0x12
+        # answer builder. Removing the flag write removes the anchor, so a
+        # second apply cannot match.
+        sed -i 's|\tvms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
+        sed -i 's|\tvms_wire_put_le32(w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
 
     dlm-op0f-member-answers-as-new-master)
         # The role test guards the clearing write, in exactly one place -- now
@@ -3289,6 +3309,14 @@ apply_edit() {
     dlm-rm-14-leaks-the-caller-buffer)
         # The one call that blanks an op-0x14's body before it is filled.
         sed -i 's|^\tdlm_rm14_blank_body(\&w);$|\tif (0) dlm_rm14_blank_body(\&w); /* NEGCTL dlm-rm-14-leaks-the-caller-buffer */|' "$_file";;
+
+    dlm-rm-lock-answer-record-omitted)
+        # The one call that writes the grant record in the op-0x12 answer
+        # builder (the ENQ/CONVERT grant builder has its own call site, which
+        # dlm-grant-record-omitted covers through the shared writer).
+        # The comment above it is unique in this file, so `n` steps onto
+        # exactly the one call site and nothing else matches on a re-apply.
+        sed -i '\|416/416 real 0x12 answers|{n;s|.*|\t/* NEGCTL dlm-rm-lock-answer-record-omitted */|}' "$_file";;
 
     dlm-rm-14-pattern-overruns-a-field)
         # The residue span's own length, declared once.

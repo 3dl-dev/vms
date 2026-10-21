@@ -34,15 +34,6 @@ extern "C" {
 #define KGB$M_RESOURCE      0x1  /* Resource identifier */
 #define KGB$M_HOLDER_HIDDEN 0x20  /* Holders are hidden */
 
-/* ================================================================
- * KGB$C_ — Identifier type codes
- * ================================================================ */
-
-#define KGB$C_UIC           1   /* UIC-based identifier */
-#define KGB$C_GENERAL       2   /* General identifier */
-#define KGB$C_SUBSYSTEM     3   /* Subsystem identifier */
-#define KGB$C_OBSOLETE      4   /* Obsolete identifier */
-
 #ifdef __cplusplus
 }
 #endif

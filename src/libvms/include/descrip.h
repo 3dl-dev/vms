@@ -187,12 +187,6 @@ struct dsc$descriptor_a {
     int32_t   dsc$l_u2;        /* Upper bound for dimension 2 */
 };
 
-/* Array flag bits for dsc$b_aflags */
-#define DSC$M_FL_REDIM   0x01  /* Array can be redimensioned */
-#define DSC$M_FL_COLUMN  0x02  /* Column-major order (Fortran) */
-#define DSC$M_FL_COEFF   0x04  /* Multipliers are present */
-#define DSC$M_FL_BOUNDS  0x08  /* Bounds are present */
-
 /*
  * Generic descriptor - for function parameters where the
  * class is not known at compile time.

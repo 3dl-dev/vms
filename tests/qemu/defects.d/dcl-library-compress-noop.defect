@@ -21,6 +21,6 @@ EOF2
 }
 
 defect_apply() {
-        sed -i 's|^    if (olb_write(out_path, members, count) != OLB_OK) {$|    if (0 \&\& olb_write(out_path, members, count) != OLB_OK) { /* NEGCTL dcl-library-compress-noop */|' "$_file"
+        sed -i 's|^    if (olb_lib_write(ctx, out_spec, members, count) != OLB_OK) {$|    if (0 \&\& olb_lib_write(ctx, out_spec, members, count) != OLB_OK) { /* NEGCTL dcl-library-compress-noop */|' "$_file"
     :
 }

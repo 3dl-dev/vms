@@ -14,6 +14,7 @@ defect_meta() {
 RUN/ZQBOGUS is %DCL-W-IVQUAL naming the qualifier (oracle)
 RUN/P=4 is %DCL-W-ABKEYW, an ambiguous abbreviation (oracle)
 an ambiguous RUN abbreviation is refused %DCL-W-ABKEYW before RUN is entered, and the image does not run (oracle)
+RUN/P=4 leaves $STATUS = %X00038010 (CLI$_ABKEYW)
 EOF2
                       ;;
         knock_on_fail) echo "";;

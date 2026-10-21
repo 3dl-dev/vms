@@ -1,10 +1,14 @@
 #!/bin/bash
-# TEST: F$GETSYI("SCSNODE") reads the configured cluster node identity,
-# distinct from F$GETSYI("NODENAME") (Linux hostname) (vms-ci.8)
+# TEST: F$GETSYI("SCSNODE") reads the configured cluster node identity, and
+# F$GETSYI("NODENAME") names the SAME node -- one node name, as VMS (rd
+# vms-433; oracle tests/lab/captures/vms-433-nodename-oracle-20261021/:
+# NODENAME=[VAXC] SCSNODE=[VAXC  ]). It used to assert they DIFFER
+# (NODENAME = the Linux hostname, vms-ci.8).
 # EXPECT: contains:NODE = "TESTND"
+# EXPECT: contains:HOST = "TESTND"
 # EXPECT: contains:SID = 4242
-# EXPECT: contains:SCSNODE_DIFFERS_FROM_NODENAME
-# EXPECT_NOT: contains:SCSNODE_SAME_AS_NODENAME
+# EXPECT: contains:SCSNODE_SAME_AS_NODENAME
+# EXPECT_NOT: contains:SCSNODE_DIFFERS_FROM_NODENAME
 # EXPECT_NOT: contains:%DCL-
 VMSDCL="${VMSDCL:-vmsdcl}"
 SYSGEN="${SYSGEN:-$(dirname "$VMSDCL")/SYSGEN.EXE}"

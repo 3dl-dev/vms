@@ -100,6 +100,16 @@ int main(void)
     CHECK(strstr(out, "\\DETACH\\") == NULL,
           "RUN/DETACH resolves to /DETACHED and is NOT refused as an unknown qualifier");
 
+    /* The condition the ambiguous abbreviation leaves in $STATUS is the real
+     * CLI$_ABKEYW, %X00038010 (OpenVMS Alpha V8.4 $GETMSG: "%CLI-W-ABKEYW,
+     * ambiguous qualifier or keyword - supply more characters",
+     * docs/oracle/messages/alpha84-msgcat2.txt) -- not an invented DCL code. */
+    CHECK(run_dcl("RUN/P=4 NOSUCH_IMAGE\nSHOW SYMBOL $STATUS\n", out, sizeof out) == 0,
+          "DCL ran the ABKEYW $STATUS probe");
+    printf("  ---- ABKEYW $STATUS ----\n%s  ---- end ----\n", out);
+    CHECK(strstr(out, "%X00038010") != NULL,
+          "RUN/P=4 leaves $STATUS = %X00038010 (CLI$_ABKEYW)");
+
     printf("=== test_syssvc_dcl_run_quals: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

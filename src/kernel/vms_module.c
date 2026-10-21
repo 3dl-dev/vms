@@ -220,7 +220,7 @@ MODULE_PARM_DESC(vms_ktest_devtab_remove_terminal,
 struct vms_ktest_seam_result {
 	int done, open_ok, mc_add_ok, mc_del_ok, close_ok, hwaddr_ok, mtu_ok, link_ok;
 	int link_up, rx_ok, tx_ok, kthread_ok, kthread_iters;
-	int timer_ok, time_mono_ok, ticks_mono_ok;
+	int timer_ok, time_mono_ok, ticks_mono_ok, console_emitted;
 	uint8_t mc_mac[6], hwaddr[6];
 	uint32_t mtu, rx_len, tx_len;
 	char rx_payload[32], tx_payload[32];
@@ -383,6 +383,20 @@ static void vms_ktest_seam_do_time(struct vms_ktest_seam_result *res)
 }
 
 /*
+ * SS18 (rd vms-c56): one console line and one diagnostic through the REAL
+ * exec_console_printf(). Which went where is not judged here: the harness reads
+ * both records back from /dev/kmsg (their printk levels -- KERN_ERR for OPA0:,
+ * KERN_NOTICE for the operator log -- and the console line's leading newline),
+ * outside this module, the same way it checks the multicast join.
+ */
+static void vms_ktest_seam_do_console(struct vms_ktest_seam_result *res)
+{
+	exec_console_printf("%s\n", "%CNXMAN,  now a VAXcluster member -- system KTSEAM");
+	exec_console_printf("%s\n", "%CNXMAN, ktest seam diagnostic KTSEAM (rd vms-c56)");
+	res->console_emitted = 1;
+}
+
+/*
  * The port and its multicast membership are DELIBERATELY left open on return
  * (no exec_lan_mc_del / exec_lan_close here): the R3 done-condition requires
  * "multicast add visible in `ip maddr`" as an assertion the CALLER makes from
@@ -419,6 +433,7 @@ static int vms_ktest_cluster_seam_run(const char *ifname_a, const char *ifname_b
 	vms_ktest_seam_do_kthread(&res);
 	vms_ktest_seam_do_timer(&res);
 	vms_ktest_seam_do_time(&res);
+	vms_ktest_seam_do_console(&res);
 
 record:
 	res.done = 1;
@@ -509,7 +524,7 @@ static int vms_ktest_cluster_seam_result_get(char *buf, const struct kernel_para
 	    "HWADDR=%d HWADDR_VAL=%02x:%02x:%02x:%02x:%02x:%02x MTU=%d MTU_VAL=%u "
 	    "LINK=%d LINK_UP=%d RX=%d RX_LEN=%u RX_PAYLOAD=%s "
 	    "TX=%d TX_LEN=%u TX_PAYLOAD=%s KTHREAD=%d KTHREAD_ITERS=%d "
-	    "TIMER=%d TIME_MONO=%d TICKS_MONO=%d\n",
+	    "TIMER=%d TIME_MONO=%d TICKS_MONO=%d CONSOLE=%d\n",
 	    res.done, res.open_ok, res.mc_add_ok, res.mc_del_ok, res.close_ok,
 	    res.mc_mac[0], res.mc_mac[1], res.mc_mac[2],
 	    res.mc_mac[3], res.mc_mac[4], res.mc_mac[5],
@@ -519,7 +534,8 @@ static int vms_ktest_cluster_seam_result_get(char *buf, const struct kernel_para
 	    res.rx_ok, res.rx_len, res.rx_payload,
 	    res.tx_ok, res.tx_len, res.tx_payload,
 	    res.kthread_ok, res.kthread_iters,
-	    res.timer_ok, res.time_mono_ok, res.ticks_mono_ok);
+	    res.timer_ok, res.time_mono_ok, res.ticks_mono_ok,
+	    res.console_emitted);
 }
 static const struct kernel_param_ops vms_ktest_cluster_seam_result_ops = {
 	.get = vms_ktest_cluster_seam_result_get,

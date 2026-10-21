@@ -22,10 +22,14 @@ relevant `docs/compat/facilities/<token>.yaml` **in the same PR**:
    tree), and `scope_1_0` if it differs from the facility default. `status:
    verified` **requires** `verified_against` (name the oracle/test).
 2. Bump the facility's `last_reviewed`.
-3. `python3 tools/compat/render_compat.py` and commit the regenerated
-   `docs/compatibility-surface.md` alongside the YAML.
+3. `python3 tools/compat/render_compat.py` to check it renders (output lands in
+   `build/`). Commit **only the YAML** -- do not commit
+   `docs/compatibility-surface.md`; it is a dated snapshot refreshed by
+   `render_compat.py --publish` (release bump / regen PR), so queued compat PRs
+   never conflict on its rollup table.
 4. CI runs `render_compat.py --check`; an un-updated register is loud (evidence
-   drift + staleness warnings), not silent.
+   drift + staleness warnings), not silent, and a PR that touches the md must
+   make it an exact render of the YAML.
 
 Do **not** auto-flip status from a passing test — status is a human judgement of
 coverage; a green local test on a `partial` facility keeps it `partial`.
@@ -82,7 +86,9 @@ notes`, naming gaps individually.
 4. **Render + check** — `render_compat.py` then `render_compat.py --check`
    (against a real `main` checkout). Zero errors.
 5. **Land** — branch off `origin/main` (use a worktree; do not disturb the
-   pinned checkout), commit the YAML + regenerated `.md`, PR, reap green.
+   pinned checkout), `render_compat.py --publish`, commit the YAML + the
+   refreshed snapshot `.md` (a re-census is a natural snapshot point), PR,
+   reap green.
 
 ---
 

@@ -1285,11 +1285,20 @@ struct vms_cluster_getsyi_args {
      * with or without a connection manager. */
     uint8_t  hw_model_len;
     uint8_t  hw_model[31];
+    /* SYI$_NODENAME / SYI$_SCSNODE (rd vms-433): the SCSNODE this system
+     * BOOTED with -- the value VMS_IOCTL_SYSGEN_LOAD committed to the
+     * executive -- so every surface names the node the way its cluster peers
+     * do. Not the parameter FILE (it can be edited after boot, and a process
+     * may be unable to read it), and never the substrate hostname. Counted,
+     * not NUL-terminated; 0 = no SCSNODE was loaded. Answered with or without
+     * a connection manager. */
+    uint8_t  scsnode_len;
+    uint8_t  scsnode[7];       /* VMS_SCSNODE_MAX (6) + 1 */
 };
-_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 68,
+_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 76,
                "vms_cluster_getsyi_args changed size -- VMS_IOCTL_CLUSTER_GETSYI ABI break");
 #define VMS_IOCTL_CLUSTER_GETSYI _IOWR(VMS_IOC_MAGIC, 0x6c, struct vms_cluster_getsyi_args)
-_Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC044566Cu,
+_Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC04C566Cu,
                "VMS_IOCTL_CLUSTER_GETSYI encodes differently than the reference build");
 
 /*

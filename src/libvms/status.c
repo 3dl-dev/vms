@@ -122,16 +122,19 @@ static const struct status_entry known_codes[] = {
     { SS$_ENDOFFILE,    "SYSTEM", "ENDOFFILE",    "end of file" },
 
     /* CLI facility (docs/oracle/messages/alpha84-msgcat2.txt) */
+    { CLI$_ABKEYW,      "CLI",    "ABKEYW",       "ambiguous qualifier or keyword - supply more characters" },
     { CLI$_IVKEYW,      "CLI",    "IVKEYW",       "unrecognized keyword - check validity and spelling" },
     { CLI$_IVVERB,      "CLI",    "IVVERB",       "unrecognized command verb - check validity and spelling" },
+    { CLI$_MAXPARM,     "CLI",    "MAXPARM",      "too many parameters - reenter command with fewer parameters" },
+    { CLI$_UNDSYM,      "CLI",    "UNDSYM",       "undefined symbol - check validity and spelling" },
     { CLI$_IVQUAL,      "CLI",    "IVQUAL",       "unrecognized qualifier - check validity, spelling, and placement" },
 
     /* RMS facility */
     { RMS$_NORMAL,      "RMS",    "NORMAL",       "normal successful completion" },
     { RMS$_FNF,         "RMS",    "FNF",          "file not found" },
     { RMS$_DNF,         "RMS",    "DNF",          "directory not found" },
-    { RMS$_PRV,         "RMS",    "PRV",          "insufficient privilege" },
-    { RMS$_FEX,         "RMS",    "FEX",          "file already exists" },
+    { RMS$_PRV,         "RMS",    "PRV",          "insufficient privilege or file protection violation" },
+    { RMS$_FEX,         "RMS",    "FEX",          "file already exists, not superseded" },
     { RMS$_EOF,         "RMS",    "EOF",          "end of file" },
     { RMS$_RNF,         "RMS",    "RNF",          "record not found" },
     { RMS$_NMF,         "RMS",    "NMF",          "no more files" },

@@ -1,0 +1,36 @@
+VAX1 (OpenVMS VAX V7.3), vaxlab-0, 2026-10-21, console OPA0: logged in as SYSTEM,
+default SYS$SYSROOT:[SYSMGR] (rd vms-916 follow-up). Read through ovmx-lab-console;
+carriage returns stripped by the reader. Verbatim. The first two "SHOW SYMBOL" lines lost
+their $STATUS argument to the driving shell, so DCL prompted "_Symbol:" and took the
+next typed line as the symbol name (the two IVQUAL errors are that, not CREATE output).
+Lab left as found: both directories DELETEd (DIRECTORY shows none), logged out.
+
+$ CREATE/DIRECTORY [.OVMXB10]
+$ SHOW SYMBOL
+_Symbol: CREATE/DIRECTORY [.OVMXB10]
+%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+ \DIRECTORY\
+$ SHOW SYMBOL
+_Symbol: CREATE/DIRECTORY/LOG [.OVMXB10]
+%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
+ \DIRECTORY\
+$ CREATE/DIRECTORY NOSUCHDEV:[OVMXB10]
+%CREATE-E-DIRNOTCRE, NOSUCHDEV:[OVMXB10] directory file not created
+-SYSTEM-W-NOSUCHDEV, no such device available
+$ SHOW SYMBOL
+_Symbol: $STATUS
+  $STATUS == "%X109112C2"
+$ CREATE/DIRECTORY [.OVMXB10]
+%CREATE-I-EXISTS, [.OVMXB10] already exists
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10911293"
+$ CREATE/DIRECTORY/LOG [.OVMXB10]
+%CREATE-I-EXISTS, [.OVMXB10] already exists
+$ CREATE/DIRECTORY/LOG [.OVMXB10.SUB]
+%CREATE-I-CREATED, SYS$SYSROOT:[SYSMGR.OVMXB10.SUB] created
+$ DELETE [.OVMXB10]SUB.DIR;1
+$ DELETE []OVMXB10.DIR;1
+$ DIRECTORY OVMXB10.DIR
+%DIRECT-W-NOFILES, no files found
+$ LOGOUT
+  SYSTEM       logged out at 21-OCT-2026 20:13:37.59

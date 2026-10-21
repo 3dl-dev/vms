@@ -1,7 +1,7 @@
 #!/bin/bash
 # TEST: SET quick-win subcommands produce correct VMS-format output
 # EXPECT: contains:%SET-I-NOTAVAIL, DECnet is not available on this system
-# EXPECT: contains:%SET-W-NOTIMPL, security auditing is not implemented in OVMX
+# EXPECT: contains:%SYSTEM-E-UNSUPPORTED, unsupported operation or function
 # EXPECT: contains:security auditing is currently disabled.
 # EXPECT: contains:%SET-I-INTSET, accounting enabled
 # EXPECT: contains:Accounting is currently enabled.

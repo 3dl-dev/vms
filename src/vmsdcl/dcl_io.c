@@ -14,6 +14,8 @@
 #include "dcl/context.h"
 #include "dcl/parser.h"
 #include "dcl/vms_messages.h"
+#include "dcl/dcl_cmd.h"
+#include "ssdef.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -140,4 +142,20 @@ void dcl_error(const char *facility, int severity, const char *ident,
     char msg[1280];
     dcl_format_error(facility, severity, ident, text, msg, sizeof(msg));
     fprintf(stderr, "%s\n", msg);
+}
+
+/*
+ * The one honest refusal for an operation OVMX does not perform (vms-916):
+ * the REAL condition SS$_UNSUPPORTED, %X00000E4A, displayed with VMS's own
+ * text (OpenVMS Alpha V8.4 $GETMSG: "%SYSTEM-W-UNSUPPORTED, unsupported
+ * operation or function", docs/oracle/messages/alpha84-msgcat.txt, shown at
+ * the value's own E severity). It replaces a family of invented
+ * %DCL-W-NOTIMPL / %SET-W-NOTIMPL / %PCSI-W-NOTIMPL messages: VMS has no
+ * NOTIMPL ident in any of those facilities. Callers return its value and
+ * change no state.
+ */
+uint32_t dcl_unsupported(void)
+{
+    dcl_error("SYSTEM", 2, "UNSUPPORTED", "unsupported operation or function");
+    return SS$_UNSUPPORTED;
 }

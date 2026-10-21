@@ -1,0 +1,29 @@
+# getdvi-avl-not-answered -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$GETDVI answers DVI\$_AVL, the real \$DVIDEF code (98) for 'device is available'";;
+        targets)      echo "libvms/syssvc/sys_device.c";;
+        suites_red)   echo "test_syssvc_getdvi";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$getdvi() answers DVI\$_AVL (0x62). The mutation keys that arm on 0x74 -- the invented DVI\$_AVAILABLE code the header used to carry -- so the real code falls to the default arm and reads 0. Every other item is unaffected. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+sys$getdvi OPA0: DVI$_AVL (98) answers 1 (available)
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: "    case DVI$_AVL:" occurs once in sys_device.c.
+        sed -i 's|^    case DVI\$_AVL:$|    case 0x74: /* NEGCTL getdvi-avl-not-answered */|' "$_file"
+    :
+}

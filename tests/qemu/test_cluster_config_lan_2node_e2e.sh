@@ -629,9 +629,15 @@ check_console_vms_faithful "node B" "$B_LOG2"
 # rd vms-158d: each node's node-name record is in its OPERATOR.LOG (read last:
 # TYPE puts the log's executive diagnostics on the console, which the checks
 # above must not see).
+# rd vms-394e: node A finished its startup -- and PID 1 ended its kernel-log
+# bridge -- long before node B booted, so A's coordinator lines for B's
+# admission are executive records emitted AFTER startup. The post-startup
+# kernel-log intake (a JOB_CONTROL thread) files them in OPERATOR.LOG.
 printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&4 2>/dev/null; sleep 3
 check "node A boot2: OPERATOR.LOG records the node name $NODE_A set from the .PAR" \
     "$A_LOG2" "%OVMX-I-SCSNODE, node name $NODE_A set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+check "node A: OPERATOR.LOG carries an executive record emitted after startup (B's admission, filed by the post-startup intake)" \
+    "$A_LOG2" "%CNXMAN, proposing addition of a system to the cluster"
 printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&6 2>/dev/null; sleep 3
 check "node B boot2: OPERATOR.LOG records the node name $NODE_B set from the .PAR" \
     "$B_LOG2" "%OVMX-I-SCSNODE, node name $NODE_B set from SYS\$SYSTEM:OVMXVMSSYS.PAR"

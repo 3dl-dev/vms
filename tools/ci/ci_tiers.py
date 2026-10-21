@@ -93,6 +93,7 @@ TIERS = {
         "src/kernel-netbsd/vms_l2*",
         "distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTNET.COM",
         "tests/lab-vax/run-boot.sh",
+        "tests/lab-vax/test_decnet_pair_vax.py",
         "tools/ci/ci_tiers.py",
     ],
     # Keystroke oracle: the console, terminal driver and boot path.

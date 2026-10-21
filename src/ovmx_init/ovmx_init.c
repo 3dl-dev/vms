@@ -1811,7 +1811,15 @@ static void start_opcom(void)
     if (ovmx_boot_stage_exec_path(path, staged, sizeof(staged)) &&
         access(staged, X_OK) == 0)
         snprintf(path, sizeof(path), "%s", staged);
-    pid = ovmx_creprc_fork(VMS_CREPRC_PCB_DETACHED, &pcb, NULL);
+    /* DETACHED, with the system process's own identity, as the executive
+     * holds it for PID 1 (it checks a detached child's identity against its
+     * creator's). */
+    struct vms_procinfo me;
+    memset(&me, 0, sizeof me);
+    (void)vms_kif_getjpi_self(&me);
+    me.username[sizeof me.username - 1] = '\0';
+    pid = ovmx_creprc_fork_as(VMS_CREPRC_PCB_DETACHED, me.username, me.uic,
+                              me.cur_privs, &pcb, NULL);
     if (pid == 0) {
         uint32_t subst = 0;
         if (!(vms_kif_substrate_id(VMS_SUBST_OP_GET, &subst) & 1) || subst == 0 ||

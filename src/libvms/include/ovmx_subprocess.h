@@ -38,15 +38,26 @@
 
 /* The same, for a process of the given kind (VMS_CREPRC_PCB_SUBPROCESS or
  * VMS_CREPRC_PCB_DETACHED) -- rd vms-798: PID 1 creates OPCOM DETACHED, as
- * VMS's STARTUP does. */
-static inline pid_t ovmx_creprc_fork(uint32_t kind, uint32_t *pcb_status, uint32_t *vms_pid);
+ * VMS's STARTUP does. A DETACHED process is created with the identity the
+ * creator names (username, uic, privs), which the executive checks against the
+ * creator's own; a subprocess takes its creator's (NULL, 0, 0). */
+static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
+                                        uint32_t uic, uint64_t privs,
+                                        uint32_t *pcb_status, uint32_t *vms_pid);
+
+static inline pid_t ovmx_creprc_fork(uint32_t kind, uint32_t *pcb_status, uint32_t *vms_pid)
+{
+    return ovmx_creprc_fork_as(kind, (const char *)0, 0, 0, pcb_status, vms_pid);
+}
 
 static inline pid_t ovmx_subprocess_fork(uint32_t *pcb_status, uint32_t *vms_pid)
 {
     return ovmx_creprc_fork(VMS_CREPRC_PCB_SUBPROCESS, pcb_status, vms_pid);
 }
 
-static inline pid_t ovmx_creprc_fork(uint32_t kind, uint32_t *pcb_status, uint32_t *vms_pid)
+static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
+                                        uint32_t uic, uint64_t privs,
+                                        uint32_t *pcb_status, uint32_t *vms_pid)
 {
     int go[2];
     pid_t pid;
@@ -74,8 +85,7 @@ static inline pid_t ovmx_creprc_fork(uint32_t kind, uint32_t *pcb_status, uint32
     }
     close(go[0]);
     if (pid > 0)
-        st = vms_kif_creprc_pcb((uint32_t)pid, kind,
-                                (const char *)0, 0, 0, vms_pid);
+        st = vms_kif_creprc_pcb((uint32_t)pid, kind, username, uic, privs, vms_pid);
     do { n = write(go[1], &b, 1); } while (n < 0 && errno == EINTR);
     close(go[1]);
     if (pcb_status)

@@ -296,6 +296,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                      struct vms_dlm_xnode_args *req);
 /*

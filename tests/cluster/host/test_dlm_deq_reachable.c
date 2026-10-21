@@ -82,6 +82,7 @@ void vms_ast_notify_arrival(struct vms_proc *proc)
 #define CSID_LOCAL     1u   /* this node                                   */
 #define CSID_DIRECTORY 2u   /* the member the weight vector names          */
 #define CSID_MASTER    3u   /* the node that masters the tree              */
+#define CSID_PEER      4u   /* another member, holding locks of its own    */
 
 /* ==========================================================================
  * 1. The arm, wired the way src/kernel-core/vms_dlm_scs.c wires it
@@ -519,6 +520,55 @@ static uint32_t granted_proxy(struct vms_proc *proc, const char *resnam,
 	fork_drain();                       /* the ENQ leaves as a real frame */
 	(void)deliver_grant(proc, lkid, mode, master_lkid, resnam);
 	return lkid;
+}
+
+/* ==========================================================================
+ * The engine's OWN readbacks, used by sections 9 and 10 so every claim about
+ * the lock database is a read through a shipping door.
+ * ========================================================================== */
+
+/* $GETLKI on a handle. Returns 0 when the handle names no lock. */
+static int getlki(struct vms_proc *proc, uint32_t lkid,
+		  struct vms_getlki_args *out)
+{
+	memset(out, 0, sizeof(*out));
+	out->lkid = lkid;
+	vms_ioctl_getlki(proc, (unsigned long)(void *)out);
+	return out->status == SS__NORMAL;
+}
+
+/* The granted-lock readback: how many locks are granted on a resource, and the
+ * first one that is held FOR A REMOTE SYSTEM (req_csid != 0). */
+static struct vms_dlm_granted_args granted_of(struct vms_proc *proc,
+					      const char *resnam)
+{
+	struct vms_dlm_granted_args g;
+
+	memset(&g, 0, sizeof(g));
+	strscpy(g.resnam, resnam, sizeof(g.resnam));
+	vms_ioctl_dlm_get_granted(proc, (unsigned long)(void *)&g);
+	return g;
+}
+
+/* One inbound request through the SHIPPING master seam -- the door the wire arm
+ * uses for an op-0x01 / op-0x07 / op-0x03 from a peer. */
+static struct vms_dlm_master_result serve(uint32_t op, uint32_t csid,
+					  uint32_t holder_lkid, uint8_t mode,
+					  const char *name)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result out;
+
+	memset(&r, 0, sizeof(r));
+	memset(&out, 0, sizeof(out));
+	r.op = op;
+	r.req_csid = csid;
+	r.req_lkid = holder_lkid;
+	r.lkmode = mode;
+	strscpy(r.resnam, name, sizeof(r.resnam));
+	r.res_ident_valid = 1u;
+	(void)vms_lock_dlm_master_serve(&r, &out);
+	return out;
 }
 
 /* ==========================================================================
@@ -1086,8 +1136,9 @@ static void test_e09_removal_reaches_the_wire(void)
 }
 
 /* ==========================================================================
- * 9. rd vms-3ac: A RELEASE IS NOT SENT TO A NODE THAT NO LONGER MASTERS THE
- *    RESOURCE -- THE BUGCHECK THIS LANE PUT ON A REAL VAX
+ * 9. rd vms-3ac: ADOPTING A TREE CONVERTS THIS NODE'S OWN LOCKS IN IT OUT OF
+ *    PROXY STATE -- SO THE RELEASE THAT BUGCHECKED A REAL VAX IS RIGHT BY
+ *    CONSTRUCTION, NOT ONLY REFUSED
  *
  * 2026-10-21, lab labc2b (tests/lab/captures/vms-3ac-invlockid-20261021): a
  * real V7.3 node remastered a tree ONTO the OVMX node; the OVMX node's own
@@ -1101,25 +1152,37 @@ static void test_e09_removal_reaches_the_wire(void)
  *
  * with that very handle in R1, dumped memory and rebooted.
  *
- * So: a proxy post about a resource THIS node masters must not go out. The
- * engine states the fact at post time (vms_dlm_proxy_post.self_mastered, read
- * off the RSB) and dlm_proxy_post refuses it. The release still completes
- * locally, which is what releasing a lock on a resource this node masters
- * means.
+ * TWO THINGS ANSWER IT, AND THIS SECTION IS THE FIRST.
+ *
+ * THE FIX, here: a tree this node is handed is a tree this node MASTERS, so
+ * vms_lock_dlm_adopt_end CONVERTS this node's own locks on it out of proxy
+ * state -- a granted one onto res->granted at the mode it is already held at,
+ * without passing through res->waiting (a held lock is not re-decided). The
+ * stale handle is then gone AT ITS SOURCE: the release is a LOCAL release, no
+ * frame is built at all, and the fail-safe below never has to fire. That the
+ * refusal counter stays 0 is how the fix is told from the fail-safe.
+ *
+ * THE FAIL-SAFE, section 10: dlm_proxy_post still refuses any post about a
+ * resource this node masters, for the proxy states an adoption does not reach.
  *
  * THE ADOPTION IS DRIVEN FOR REAL here (vms_lock_dlm_adopt_open/_end), not
  * simulated: the thing that makes this node the master in the field is a real
  * VAX handing it the tree, and that is the door that happens through.
  * ========================================================================== */
-static void test_release_is_not_sent_to_a_node_we_took_over_from(void)
+static void test_adoption_converts_our_own_lock(void)
 {
 	const uint32_t MASTER_LKID = 0x370004A7u;   /* the real crash's handle */
+	const uint32_t PEER_LKID = 0x14000382u;     /* VAX2's own handle, RA7 */
 	struct vms_dlm_adopt_tree t;
+	struct vms_dlm_master_result m;
+	struct vms_dlm_granted_args g;
+	struct vms_getlki_args lki;
+	struct vms_dlm_proxy_post post;
 	struct vms_proc proc, delivery;
-	uint32_t lkid, n0, refused0, n_locks = 0u, st;
+	uint32_t lkid, n0, refused0, promo0, n_locks = 0u, st;
 
-	printf("--- rd vms-3ac: a release is NOT sent to the node we took the "
-	       "tree over FROM ---\n");
+	printf("--- rd vms-3ac: adopting a tree CONVERTS this node's own lock "
+	       "in it ---\n");
 	engine_up();
 	proc_init(&proc);
 	/* The adoption engine refuses to create master-side locks without a
@@ -1132,6 +1195,14 @@ static void test_release_is_not_sent_to_a_node_we_took_over_from(void)
 	ct_check(lkid != 0u,
 		 "a real proxy LKB on RA7T, granted by the master that then "
 		 "hands the tree over");
+	ct_check_eq_u32(vms_lock_dlm_proxy_refill_post(lkid, VMS_DLM_POST_DEQ,
+						       CSID_MASTER, &post),
+			SS__NORMAL,
+			"  and while it IS a proxy the engine can still read a "
+			"release out of it...");
+	ct_check_eq_u32(post.master_lkid, MASTER_LKID,
+			"  ...naming 370004A7, the handle the old master minted "
+			"-- the value R1 held in the bugcheck");
 
 	/* 2. That master remasters the tree ONTO this node, for real. */
 	memset(&t, 0, sizeof(t));
@@ -1140,12 +1211,53 @@ static void test_release_is_not_sent_to_a_node_we_took_over_from(void)
 	t.res_mode = 0u;
 	t.ident_valid = 1u;
 	t.old_master_csid = CSID_MASTER;
+	promo0 = vms_lock_dlm_adopt_promotions();
 	ct_check_eq_u32(vms_lock_dlm_adopt_open(&t), SS__NORMAL,
 			"the old master hands this node the tree (adopt_open)");
 	ct_check_eq_u32(vms_lock_dlm_adopt_end(&t, &n_locks), SS__NORMAL,
 			"  and the adoption completes: this node masters RA7T");
 
-	/* 3. Now release the lock this node still holds in it. */
+	/* 3. *** THE CONVERSION ***, read back through the engine's own doors. */
+	ct_check_eq_u32(vms_lock_dlm_adopt_promotions(), promo0 + 1u,
+			"*** the adoption converted exactly one lock of this "
+			"node's own out of proxy state ***");
+	ct_check_eq_u32(vms_lock_dlm_proxy_refill_post(lkid, VMS_DLM_POST_DEQ,
+						       CSID_MASTER, &post),
+			SS__IVLOCKID,
+			"*** and the engine holds no PROXY by that handle any "
+			"more: there is no stale handle left to build a frame "
+			"from ***");
+	ct_check(getlki(&proc, lkid, &lki),
+		 "the lock itself is still there -- a hand-over does not "
+		 "release anybody's lock");
+	ct_check_eq_u32(lki.granted_mode, LCK_K_CRMODE,
+			"*** still GRANTED at CR: a held lock went onto the "
+			"master's granted queue at its own mode, it was not "
+			"re-decided ***");
+	g = granted_of(&proc, "RA7T");
+	ct_check_eq_u32(g.n_granted, 1u,
+			"one lock is granted on the resource this node now "
+			"masters: ours");
+	ct_check_eq_u32(g.found, 0u,
+			"*** and it is NOT reported as held for a remote "
+			"system: a lock of our own carries no requester CSID, "
+			"or this node would name ITSELF as the holder ***");
+
+	/* 4. ...and the master algorithm really counts it. A peer's EX request
+	 * on the adopted resource must be QUEUED behind our CR -- which only
+	 * happens if the promoted lock is on res->granted -- and nothing
+	 * CROSS-NODE may be reported as blocking it, because what blocks it is
+	 * this node's own lock. */
+	m = serve(VMS_DLM_MREQ_ENQ, CSID_PEER, PEER_LKID, LCK_K_EXMODE, "RA7T");
+	ct_check_eq_u32(m.outcome, VMS_DLM_MASTER_QUEUED,
+			"*** a peer's EX on the adopted resource is QUEUED "
+			"behind the converted lock ***");
+	ct_check_eq_u32(m.blocking_csid, 0u,
+			"*** and no cross-node holder is named as blocking it: "
+			"this node does not address a blocking AST at itself "
+			"***");
+
+	/* 5. Now release the lock this node holds in it. */
 	n0 = a.n_sent;
 	refused0 = vms_lock_dlm_proxy_self_mastered();
 	st = do_deq(&proc, lkid);
@@ -1158,10 +1270,99 @@ static void test_release_is_not_sent_to_a_node_we_took_over_from(void)
 			"*** NOTHING went on the wire: no op-0x03 naming "
 			"370004A7 at the node that no longer masters RA7T -- "
 			"the INVLOCKID frame is not emitted ***");
-	ct_check_eq_u32(vms_lock_dlm_proxy_self_mastered(), refused0 + 1u,
-			"*** and the refusal is COUNTED, not silent ***");
+	ct_check_eq_u32(vms_lock_dlm_proxy_self_mastered(), refused0,
+			"*** and the fail-safe did not have to fire: the "
+			"release had no master to address because the lock was "
+			"already master-side (0 refusals) ***");
+
+	/*
+	 * ...and the release had its MASTER-SIDE effect: the peer's queued EX
+	 * is granted by this node's own try_grant_waiters. TELLING the peer is
+	 * a separate gap -- a LOCAL release reports no deferred grant to the
+	 * wire arm (rd vms-7e36) -- and this assertion deliberately claims only
+	 * what the lock database says, which is what the engine owns.
+	 */
+	ct_check(getlki(&delivery, m.master_lkid, &lki) &&
+		 lki.granted_mode == LCK_K_EXMODE,
+		 "the peer's queued EX is granted by the release, in this "
+		 "node's own lock database");
 
 	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
+/* ==========================================================================
+ * 10. rd vms-3ac: AND THE FAIL-SAFE IS STILL ARMED
+ *
+ * Section 9 removes the stale handle at its source for the state the measured
+ * crash came from. It does not reach EVERY proxy a node can be left holding on
+ * a resource it masters, and the one below is real and reachable today:
+ *
+ *   two local processes $ENQ the same remote-mastered name, so two proxy LKBs
+ *   exist and two lookups go out; the directory answers the FIRST of them
+ *   "there is no master -- YOU master it" (Davis p. 6-31 outcome 3), which
+ *   makes this node the master and promotes THAT proxy
+ *   (vms_lock_dlm_assume_mastery) -- and leaves the second one a proxy on a
+ *   resource this node now masters.
+ *
+ * Releasing the second one is the crash frame by another route. dlm_proxy_post
+ * refuses it from the RSB's own master_csid, says so once on the console and
+ * counts every one. That refusal is what must survive the fix, so it is
+ * asserted here rather than inferred from section 9's silence.
+ * ========================================================================== */
+static void test_the_fail_safe_is_still_armed(void)
+{
+	struct vms_proc p1, p2;
+	uint32_t lkid1 = 0u, lkid2 = 0u, n0, refused0, st;
+	uint8_t ans[VMS_CM_FRAME_LEN];
+	uint32_t written = 0;
+
+	printf("--- rd vms-3ac: the fail-safe still refuses a post about a "
+	       "resource THIS node masters ---\n");
+	engine_up();
+	proc_init(&p1);
+	proc_init(&p2);
+
+	/* Two of this node's processes ask for the same remote-mastered name;
+	 * both requests are real proxy LKBs and both lookups really leave. */
+	ct_check_eq_u32(do_enq(&p1, "GUARDED", LCK_K_CRMODE, &lkid1), SS__NORMAL,
+			"process 1's $ENQ is outstanding at the directory");
+	ct_check_eq_u32(do_enq(&p2, "GUARDED", LCK_K_CRMODE, &lkid2), SS__NORMAL,
+			"process 2's $ENQ on the same name, likewise");
+	fork_drain();
+	ct_check(a.n_sent >= 1u && a.sent[0].dst == CSID_DIRECTORY,
+		 "the lookup went to the directory node");
+	if (a.n_sent < 1u) {
+		engine_down();
+		return;
+	}
+
+	/* The directory answers process 1: nobody masters it, you do. */
+	ct_check(vms_dlm_dir_answer_build(a.sent[0].body, DLM_REQ_BODY_LEN,
+					  VMS_DLM_DIR_YOU_MASTER, 0u, ans,
+					  sizeof(ans), &written) == VMS_CODEC_OK,
+		 "the directory's 0xf9 answer is built from that lookup");
+	ct_check(dlm_req_fsm_reply_body(&a.fsm, (vms_csid_t)CSID_DIRECTORY,
+					lkid1, ans + VMS_OFF_SYSAP_BODY,
+					DLM_REQ_BODY_LEN) == DLM_REQ_OK,
+		 "this node assumes mastery on it -- and promotes THAT proxy");
+
+	/* Process 2's lock is still a proxy, on a resource this node masters. */
+	n0 = a.n_sent;
+	refused0 = vms_lock_dlm_proxy_self_mastered();
+	st = do_deq(&p2, lkid2);
+	fork_drain();
+
+	ct_check_eq_u32(a.n_sent, n0,
+			"*** its release puts NOTHING on the wire: a post "
+			"about a resource this node masters can only name a "
+			"handle the addressee cannot resolve ***");
+	ct_check_eq_u32(vms_lock_dlm_proxy_self_mastered(), refused0 + 1u,
+			"*** and the fail-safe COUNTED it, not silently "
+			"dropped it ***");
+	ct_check_eq_u32(st, SS__NORMAL,
+			"the release itself succeeded locally: nothing is left "
+			"for anybody to tell");
 	engine_down();
 }
 
@@ -1177,6 +1378,7 @@ int main(void)
 	test_queue_full_is_an_honest_refusal();
 	test_a_claim_happens_once();
 	test_e09_removal_reaches_the_wire();
-	test_release_is_not_sent_to_a_node_we_took_over_from();
+	test_adoption_converts_our_own_lock();
+	test_the_fail_safe_is_still_armed();
 	return ct_summary("test_dlm_deq_reachable");
 }

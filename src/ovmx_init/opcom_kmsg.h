@@ -144,4 +144,9 @@ void opcom_kmsg_seed_operator_log_from(const char *path,
 /* End the /dev/kmsg reader thread and wait for it (rd vms-137e). */
 void opcom_kmsg_stop(void);
 
+/* rd vms-c56: file one of PID 1's own operator lines (no trailing newline) in
+ * the spool OPERATOR.LOG is seeded from -- for a boot diagnostic that has no
+ * VMS console form and so does not go on OPA0:. Best-effort, like the rest. */
+void opcom_kmsg_operator_log_line(const char *line);
+
 #endif /* OVMX_OPCOM_KMSG_H */

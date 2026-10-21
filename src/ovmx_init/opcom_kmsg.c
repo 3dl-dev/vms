@@ -22,6 +22,7 @@
 /* _POSIX_C_SOURCE / _DEFAULT_SOURCE come from the ovmx_init target's own
  * compile definitions (CMakeLists.txt) -- not redefined here. */
 #include "opcom_kmsg.h"
+#include "opcom_exec_line.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -143,6 +144,23 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
      * SYSKRNL's. */
     if (level >= 7)
         return OPCOM_KMSG_DROP;
+
+    /*
+     * AN EXECUTIVE OPERATOR LINE (rd vms-c56): "%CNXMAN, ...", "%PEA0, ...",
+     * "%DLM, ..." -- already in VMS form, and since vms-c56 mostly a
+     * diagnostic that exec_console_printf() kept off OPA0: and emitted at
+     * OVMX_OPLOG_PRINTK_LEVEL precisely so that it lands HERE. Filed as it is:
+     * it is the executive speaking, not the Linux kernel, so it is not
+     * re-styled under SYSKRNL (opcom_exec_line.h).
+     */
+    {
+        const char *ex = opcom_exec_line(text);
+
+        if (ex != NULL) {
+            snprintf(out, outsz, "%s\n", ex);
+            return OPCOM_KMSG_OPERATOR_LOG;
+        }
+    }
 
     if (strncmp(text, "vms: ", 5) == 0) {
         body = text + 5;
@@ -311,6 +329,22 @@ static void opcom_kmsg_append_operator_log(const char *line)
                 "the operator log will lack boot records\n",
                 OPCOM_KMSG_SEED_SPOOL, strerror(-rc));
     }
+}
+
+/*
+ * opcom_kmsg_operator_log_line - one operator line from PID 1 itself (rd
+ * vms-c56: a boot diagnostic with no VMS console form, e.g. the cluster group
+ * the port really opened), filed in the same spool the bridge seeds
+ * OPERATOR.LOG from. `line` carries no trailing newline.
+ */
+void opcom_kmsg_operator_log_line(const char *line)
+{
+    char out[600];
+
+    if (line == NULL || *line == '\0')
+        return;
+    snprintf(out, sizeof out, "%s\n", line);
+    opcom_kmsg_append_operator_log(out);
 }
 
 /* Set by opcom_kmsg_stop(); the reader notices within one poll period. */

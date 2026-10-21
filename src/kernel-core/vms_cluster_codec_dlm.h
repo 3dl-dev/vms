@@ -1367,11 +1367,44 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * real: this codec refuses VMS_DLM_LKID_UNSET in either, on the parse side
  * as well as the build side. A release naming lock 0 is not a release, and
  * a peer that acted on one would be acting on nothing.
+ *
+ * body[30] IS NOT THE LOCK MODE, and this codec used to write one there.
+ * THE DRIVEN ARM (rd vms-194 (a), tests/lab/captures/
+ * vms-194-release-arm-20261021): nine arms on a real two-node V7.3 cluster,
+ * one release each, one variable per arm -- the HELD MODE over all six of
+ * NL/CR/CW/PR/PW/EX, a non-NULL co-holder, and the roles swapped so the
+ * sender and the master change places. body[30] reads 0 in EVERY ONE, so a
+ * real node releasing an EX lock does NOT put 5 there. The corpus bounds it
+ * the same way: 41,049 real releases carry only 0 or 1, and the 11 this
+ * executive sent before the fix carried the lock mode -- {1, 5}, out of the
+ * envelope the moment the lock was above CR, in the one frame family that has
+ * already bugchecked two lab VAXes (rd vms-3ac).
+ *
+ * WHAT SELECTS THE 1 THAT 8,904 OF THE CORPUS'S RELEASES CARRY IS NOT KNOWN
+ * AND IS NOT GUESSED. It is not the held mode, not a co-holder and not the
+ * role -- the arm separated all three. The remaining matrix candidates are a
+ * value block flushed on the release and sub-locks under the root, which need
+ * the arm's deferred second pass (arms V and S). Within that one capture a
+ * sub-lock release and a value block each coincided with the 1 on 73 of 73,
+ * but corpus-wide neither holds (96.9% and 89.8%), so neither is a rule.
+ *
+ * So `rel_cell` is PARSE-ONLY: it reports what an inbound release carried,
+ * and the builder writes the measured VMS_DLM_DEQ_REL_CELL at body[30] AND at
+ * body[32] -- equal, which is what 41,049 of 41,049 real releases carry.
  */
+#define VMS_DLM_DEQ_REL_CELL   0u
+/* body[30] and its mirror body[32] on a release. The second offset is the one
+ * the GRANT record calls a per-lock serial (VMS_OFF_DLM_VALBLK_SERIAL); on a
+ * release it equals body[30] in every real frame, which is why it is named
+ * here against the release rather than reused by meaning. */
+#define VMS_OFF_DLM_DEQ_REL_CELL   VMS_OFF_DLM_MODE
+#define VMS_OFF_DLM_DEQ_REL_CELL2  VMS_OFF_DLM_VALBLK_SERIAL
+#define VMS_OFB_DLM_DEQ_REL_CELL   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DEQ_REL_CELL)
+
 struct vms_dlm_deq {
 	uint32_t req_lkid;     /* body[20:24]: our own handle, post-grant   */
 	uint32_t master_lkid;  /* body[24:28]: the master's handle          */
-	uint8_t  mode;         /* body[30]:    the mode being released      */
+	uint8_t  rel_cell;     /* body[30]: PARSE-ONLY (see above)          */
 };
 
 /*
@@ -1496,30 +1529,30 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  * real holder send, the two ANSWER builders, and the op-0x14 builder.
  *
  * THE EVIDENCE, and it is the whole corpus rather than one arm. Every capture
- * under tests/lab/captures (156 files, `.pcap` and `.pcap.gz` alike since rd
+ * under tests/lab/captures (157 files, `.pcap` and `.pcap.gz` alike since rd
  * vms-e80 -- the 32 gzipped ones were invisible to the walker before, and they
  * are four fifths of the frames) walked for cat-0x02 op-0x0e..0x14 and its
  * answer, paired by the SCS transaction id at body[4:8]:
  *
- *     02/0e -> 82/15   808 pairs        02/11   386 notifications
- *     02/0f -> 82/15 1,195 pairs        02/13 1,180 notifications
- *     02/10 -> 82/15   798 pairs        02/12 -> 82/01  3,521 pairs
- *     02/14 -> 82/15 1,174 pairs                (792 ROOT, 2,729 sub)
+ *     02/0e -> 82/15   809 pairs        02/11   386 notifications
+ *     02/0f -> 82/15 1,196 pairs        02/13 1,181 notifications
+ *     02/10 -> 82/15   799 pairs        02/12 -> 82/01  3,521 pairs
+ *     02/14 -> 82/15 1,175 pairs                (792 ROOT, 2,729 sub)
  *
  * ---------------------------------------------------------------------------
  * RULE 1 -- THE 82/15 ANSWER SETS THREE BYTES, AND THE REST IS NOT A RULE.
  *
- * Over all 3,975 answered steps the answer carries
+ * Over all 3,979 answered steps the answer carries
  *   body[0:4]  the CM's send/ack message numbers (the envelope, not ours)
- *   body[8]    0x82     3,975/3,975
- *   body[9]    0x15     3,975/3,975
- *   body[34]   0xfa     3,975/3,975 -- the universal cat-0x82 outcome byte
+ *   body[8]    0x82     3,979/3,979
+ *   body[9]    0x15     3,979/3,979
+ *   body[34]   0xfa     3,979/3,979 -- the universal cat-0x82 outcome byte
  * and for op 0x0f ONLY, a NEW MASTER (the member that has an open remaster for
  * that tree) also clears body[28:32]: 811 of 1,195 pairs clear it, the rest are
  * the plain-member role and keep it (rd vms-cab grounds the same rule on 3,299
  * pairs).
  *
- * THE REST OF THE BODY IS THE REQUEST ECHOED IN 3,527 of the 3,975, AND IT IS
+ * THE REST OF THE BODY IS THE REQUEST ECHOED IN 3,531 of the 3,979, AND IT IS
  * NOT AN INVARIANT. The first reading of this rule said "the request VERBATIM
  * except those bytes, and NOTHING else", on the 262 pairs the walker then saw.
  * The widened corpus has 448 answers that differ elsewhere -- 445 of them

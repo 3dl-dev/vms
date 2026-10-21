@@ -294,7 +294,10 @@ static enum dlm_req_status dq_build_deq(struct dlm_req_fsm *f,
 	dq_bzero(&d, (uint32_t)sizeof(d));
 	d.req_lkid    = p->req_lkid;      /* our own executive handle          */
 	d.master_lkid = p->master_lkid;   /* what the master's grant recorded  */
-	d.mode        = (uint8_t)p->lkmode;
+	/* body[30] IS NOT THE LOCK MODE (rd vms-194). This arm used to put
+	 * p->lkmode there, which is how a release of an EX lock carried a 5
+	 * that no real release has ever carried; the builder now writes the
+	 * measured cell itself, so there is nothing to plumb. */
 
 	dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
 	if (vms_dlm_deq_build(&d, f->txframe, (uint32_t)sizeof(f->txframe),

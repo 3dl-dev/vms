@@ -498,9 +498,42 @@ OVMX now runs the operator communication process, `SYS$SYSTEM:OPCOM.EXE`
 - **Not yet built:**
   - REPLY/ENABLE of further terminals, REPLY to a request, and a new
     OPERATOR.LOG version per boot ("Logfile has been initialized ...").
-  - The post-startup kernel-log intake: filing the executive records emitted
-    after PID 1 ends its `/dev/kmsg` bridge (rd vms-394e, PR #1845). It is held
-    until two-member clusters stop sharing file-system locks: today both
-    members' system disks carry one volume label (rd vms-3ea), and RMS's file
-    lock names the FID alone (rd vms-326). Under those, frequent OPERATOR.LOG
-    writes on one node make the other's lookups of its own log fail.
+  - (The post-startup kernel-log intake is built: §10.)
+
+## 10. After startup: the kernel-log intake (rd vms-394e)
+
+PID 1's `/dev/kmsg` bridge is a thread of PID 1, and PID 1 ends it when
+startup completes: the executive changes a process's substrate identity only
+when the process is single-threaded, and PID 1 must leave root (rd vms-137e).
+Before this item, an executive record emitted after that point (a lock-manager
+refusal at a logged-in DCL prompt, a coordinator's lines when another node
+joins) reached the kernel ring only. With §8 keeping such records off OPA0:,
+they were then visible nowhere a VMS operator looks.
+
+On VMS this is OPCOM's job, and OVMX's OPCOM (§9) does it.
+
+- **Where the intake runs.** On Linux it is a thread of OPCOM, which files
+  OPERATOR.LOG under the same lock its `$SNDOPR` records take, links RMS and
+  never runs as root.
+- **What it does.** It reads the kernel log as an ordinary process and passes
+  every routed record through `opcom_kmsg_classify()`, then appends it to
+  `SYS$MANAGER:OPERATOR.LOG` over RMS (`opcom_kmsg_follow`).
+- **Where it starts, so nothing is filed twice or missed.**
+  - Every spool line now carries the kernel-log sequence number it was written
+    at (`"<seq> %FAC..."`).
+  - PROVISION's boot seed strips that prefix and writes the highest number it
+    filed to `/tmp/.ovmx-opcom-seeded`.
+  - The intake reads the kernel log from its start and files only records after
+    that mark. This includes everything the bridge spooled during the rest of
+    `STARTUP.COM`.
+- **NetBSD** needs none: PID 1's `/dev/klog` reader leaves root with PID 1 and
+  keeps filing for the life of the system.
+
+Asserted by:
+
+- `tests/ovmx_init/test_opcom_kmsg.c`: the seed mark, and the follower filing
+  only records after the mark.
+- `tests/qemu/test_cluster_config_lan_2node_e2e.sh`: the founder's
+  `%CNXMAN, proposing addition of a system to the cluster` for the second node,
+  emitted long after the founder's startup, is in its OPERATOR.LOG.
+- `tests/qemu/test_startup_phase_driver.sh`: SHOW SYSTEM lists OPCOM.

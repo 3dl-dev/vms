@@ -137,12 +137,26 @@ int opcom_kmsg_spool_append(const char *path, const char *line);
  * opcom_kmsg_seed_operator_log_from takes the spool path explicitly so the seed
  * logic is unit-testable against a temp file.
  */
-void opcom_kmsg_seed_operator_log(void (*emit)(const char *line));
-void opcom_kmsg_seed_operator_log_from(const char *path,
+unsigned long long opcom_kmsg_seed_operator_log(void (*emit)(const char *line));
+unsigned long long opcom_kmsg_seed_operator_log_from(const char *path,
                                        void (*emit)(const char *line));
 
 /* End the /dev/kmsg reader thread and wait for it (rd vms-137e). */
 void opcom_kmsg_stop(void);
+
+/*
+ * The post-startup follower (rd vms-394e). The boot seed writes the highest
+ * kernel-log sequence number it filed to OPCOM_KMSG_SEEDED_MARK; a thread of
+ * JOB_CONTROL files every routed kernel-log record after it into OPERATOR.LOG
+ * for the life of the system (until OPCOM exists, rd vms-798). See
+ * opcom_kmsg.c.
+ */
+#define OPCOM_KMSG_SEEDED_MARK "/tmp/.ovmx-opcom-seeded"
+int opcom_kmsg_write_mark(const char *path, unsigned long long seq);
+unsigned long long opcom_kmsg_read_mark(const char *path);
+long opcom_kmsg_follow_fd(int fd, unsigned long long after,
+                          void (*emit)(const char *line), long max_reads);
+void opcom_kmsg_follow(void (*emit)(const char *line));
 
 /* rd vms-c56: file one of PID 1's own operator lines (no trailing newline) in
  * the spool OPERATOR.LOG is seeded from -- for a boot diagnostic that has no

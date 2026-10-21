@@ -56,6 +56,9 @@
  */
 #include "ovmx_layout.h"
 
+static void opcom_kmsg_spool_seq(unsigned long long seq, const char *line);
+static volatile unsigned long long opcom_kmsg_last_seq;
+
 /*
  * TWO FACILITIES (Rule 8 -- both OVMX design choices, neither VMS-authentic).
  * Both land in OPERATOR.LOG only (see opcom_kmsg.h) -- the facility split
@@ -230,12 +233,14 @@ int opcom_kmsg_classify(int pri, const char *text, char *out, size_t outsz)
  *   "<pri>,<seq>,<timestamp_us>,<flags>[,KEY=VALUE]*;<message text>\n"
  *   [optional "  KEY=VALUE\n" continuation/dictionary lines]
  *
- * Only <pri> and the message text (up to the first '\n' after ';') are
- * used; the sequence number, timestamp and any dictionary lines are not
- * needed here.
+ * <pri>, <seq> and the message text (up to the first '\n' after ';') are
+ * used; the timestamp and any dictionary lines are not needed here. <seq> is
+ * the record's position in the kernel log, which is how the OPCOM follower
+ * (rd vms-394e) knows which records the boot seed already filed.
  */
 static int parse_kmsg_record(const char *raw, size_t rawlen,
-                              int *pri, char *msgbuf, size_t msgbufsz)
+                              int *pri, unsigned long long *seq,
+                              char *msgbuf, size_t msgbufsz)
 {
     const char *semi;
     const char *p, *nl;
@@ -249,6 +254,10 @@ static int parse_kmsg_record(const char *raw, size_t rawlen,
         return -1;
 
     *pri = (int)strtol(raw, NULL, 10);
+    if (seq) {
+        const char *c = memchr(raw, ',', (size_t)(semi - raw));
+        *seq = c ? strtoull(c + 1, NULL, 10) : 0;
+    }
 
     p = semi + 1;
     nl = memchr(p, '\n', (size_t)(raw + rawlen - p));
@@ -344,6 +353,20 @@ void opcom_kmsg_operator_log_line(const char *line)
     if (line == NULL || *line == '\0')
         return;
     snprintf(out, sizeof out, "%s\n", line);
+    opcom_kmsg_spool_seq(opcom_kmsg_last_seq, out);
+}
+
+/* opcom_kmsg_last_seq: the kernel-log sequence number of the last record the
+ * bridge read (rd vms-394e). Every spool line carries the sequence number it
+ * was written at, so the boot seed can say how far into the kernel log it
+ * filed, and the OPCOM follower takes over from exactly there. */
+
+/* Append one routed line to the spool, prefixed "<seq> " (rd vms-394e). */
+static void opcom_kmsg_spool_seq(unsigned long long seq, const char *line)
+{
+    char out[640];
+
+    snprintf(out, sizeof out, "%llu %s", seq, line);
     opcom_kmsg_append_operator_log(out);
 }
 
@@ -401,16 +424,18 @@ static void *opcom_kmsg_thread_main(void *arg)
         raw[n] = '\0';
 
         int pri;
+        unsigned long long seq = 0;
         char msg[512];
         char line[600];
 
-        if (parse_kmsg_record(raw, (size_t)n, &pri, msg, sizeof(msg)) != 0)
+        if (parse_kmsg_record(raw, (size_t)n, &pri, &seq, msg, sizeof(msg)) != 0)
             continue;
+        opcom_kmsg_last_seq = seq;
 
         if (opcom_kmsg_classify(pri, msg, line, sizeof(line)) == OPCOM_KMSG_DROP)
             continue;
 
-        opcom_kmsg_append_operator_log(line);
+        opcom_kmsg_spool_seq(seq, line);
     }
 
     close(kfd);
@@ -464,31 +489,52 @@ void opcom_kmsg_stop(void)
  * no '\n' and is skipped. Split out with an explicit path so the seed logic is
  * unit-testable against a temp file without touching the live spool.
  *
+ * rd vms-394e: a spool line starts with the kernel-log sequence number it was
+ * written at ("<seq> %FAC..."); that prefix is not part of the record and is
+ * stripped. The return value is the highest sequence number filed -- the
+ * point the OPCOM follower (opcom_kmsg_follow) continues from. A line without
+ * the prefix is filed as it is.
+ *
  * Best-effort and side-effect-free on failure: if `path` cannot be opened it
- * emits nothing. `emit` must tolerate being called zero or many times.
+ * emits nothing and returns 0. `emit` must tolerate being called zero or many
+ * times.
  */
-void opcom_kmsg_seed_operator_log_from(const char *path,
-                                       void (*emit)(const char *line))
+unsigned long long opcom_kmsg_seed_operator_log_from(const char *path,
+                                                     void (*emit)(const char *line))
 {
     FILE *f;
     char line[640];
+    unsigned long long hi = 0;
 
     if (!emit || !path)
-        return;
+        return 0;
 
     f = fopen(path, "r");
     if (!f)
-        return;
+        return 0;
 
     while (fgets(line, sizeof(line), f)) {
         size_t llen = strlen(line);
+        char *rec = line;
+
         if (llen == 0 || line[llen - 1] != '\n')
             continue;   /* incomplete trailing record -- not fully written yet */
         line[llen - 1] = '\0';   /* RMS $PUT wants the record without the LF */
-        emit(line);
+        if (line[0] >= '0' && line[0] <= '9') {
+            char *end;
+            unsigned long long seq = strtoull(line, &end, 10);
+
+            if (*end == ' ') {
+                rec = end + 1;
+                if (seq > hi)
+                    hi = seq;
+            }
+        }
+        emit(rec);
     }
 
     fclose(f);
+    return hi;
 }
 
 /*
@@ -508,7 +554,141 @@ void opcom_kmsg_seed_operator_log_from(const char *path,
  * survives boot -> provision and the seed is deterministic. One-shot: it replays
  * what the spool holds and returns; it does not follow live.
  */
-void opcom_kmsg_seed_operator_log(void (*emit)(const char *line))
+unsigned long long opcom_kmsg_seed_operator_log(void (*emit)(const char *line))
 {
-    opcom_kmsg_seed_operator_log_from(OPCOM_KMSG_SEED_SPOOL, emit);
+    return opcom_kmsg_seed_operator_log_from(OPCOM_KMSG_SEED_SPOOL, emit);
+}
+
+/* ---- the post-startup follower (rd vms-394e) --------------------------- */
+
+/*
+ * THE GAP THIS CLOSES. The PID-1 bridge above feeds a spool that PROVISION.EXE
+ * replays into OPERATOR.LOG once, at the start of the boot, and PID 1 then
+ * ENDS the bridge thread when startup completes (it must be single-threaded to
+ * leave substrate root, rd vms-137e). So an executive diagnostic emitted after
+ * that -- a lock-manager refusal at a logged-in DCL prompt, a cluster
+ * transition when another node joins -- reached only the kernel ring (dmesg),
+ * never the operator log.
+ *
+ * WHO RUNS IT. On VMS this is OPCOM's job. OVMX has no OPCOM yet (rd vms-798:
+ * the $SNDOPR mailbox, operator-terminal broadcast, REPLY/ENABLE), and a
+ * process that only copied the kernel log and called itself OPCOM would be a
+ * placeholder in SHOW SYSTEM. So the follower runs as a thread of JOB_CONTROL
+ * -- a real, long-lived system process that holds the SYSTEM identity, links
+ * RMS and is never root -- until vms-798 gives it its home. It reads the kernel
+ * log as an ordinary process (/dev/kmsg is readable without privilege when
+ * dmesg is not restricted) and appends every routed record to
+ * SYS$MANAGER:OPERATOR.LOG over RMS, with the bridge's own classification.
+ *
+ * WHERE IT STARTS. The seed filed every spool line up to kernel-log sequence
+ * number S and wrote S to OPCOM_KMSG_SEEDED_MARK. The follower reads the kernel
+ * log from its beginning and files only records AFTER S -- so the records the
+ * bridge spooled after the seed ran (the rest of STARTUP.COM: a cluster join,
+ * say) are filed too, and nothing is filed twice.
+ */
+int opcom_kmsg_write_mark(const char *path, unsigned long long seq)
+{
+    char buf[32];
+    int fd, n, ok;
+
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
+    if (fd < 0)
+        return -errno;
+    n = snprintf(buf, sizeof buf, "%llu\n", seq);
+    ok = write(fd, buf, (size_t)n) == n;
+    close(fd);
+    return ok ? 0 : -EIO;
+}
+
+unsigned long long opcom_kmsg_read_mark(const char *path)
+{
+    char buf[32] = { 0 };
+    int fd = open(path, O_RDONLY | O_NOFOLLOW);
+    ssize_t n;
+
+    if (fd < 0)
+        return 0;
+    n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0)
+        return 0;
+    return strtoull(buf, NULL, 10);
+}
+
+/*
+ * opcom_kmsg_follow_fd - read kernel-log records from `fd` (one record per
+ * read(), the /dev/kmsg contract) and file every routed record whose sequence
+ * number is greater than `after` through `emit` (no trailing '\n'). Returns the
+ * number of records filed. With `max_reads` >= 0 it stops after that many
+ * reads or when the source has nothing more (EAGAIN / end of file) -- the form
+ * the unit test drives; with -1 it follows for ever, polling.
+ */
+long opcom_kmsg_follow_fd(int fd, unsigned long long after,
+                          void (*emit)(const char *line), long max_reads)
+{
+    char raw[8192];
+    long filed = 0, reads = 0;
+
+    for (;;) {
+        ssize_t n;
+        int pri;
+        unsigned long long seq = 0;
+        char msg[512];
+        char line[600];
+        size_t len;
+
+        if (max_reads >= 0 && reads >= max_reads)
+            break;
+        n = read(fd, raw, sizeof(raw) - 1);
+        if (n < 0) {
+            if (errno == EINTR || errno == EPIPE)
+                continue;           /* EPIPE: records overwritten; carry on */
+            if (errno == EAGAIN) {
+                struct pollfd pfd;
+
+                if (max_reads >= 0)
+                    break;
+                pfd.fd = fd;
+                pfd.events = POLLIN;
+                (void)poll(&pfd, 1, 1000);
+                continue;
+            }
+            break;
+        }
+        if (n == 0) {
+            if (max_reads >= 0)
+                break;
+            continue;
+        }
+        reads++;
+        raw[n] = '\0';
+        if (parse_kmsg_record(raw, (size_t)n, &pri, &seq, msg, sizeof(msg)) != 0)
+            continue;
+        if (seq <= after)
+            continue;
+        if (opcom_kmsg_classify(pri, msg, line, sizeof(line)) == OPCOM_KMSG_DROP)
+            continue;
+        len = strlen(line);
+        if (len && line[len - 1] == '\n')
+            line[len - 1] = '\0';
+        emit(line);
+        filed++;
+    }
+    return filed;
+}
+
+void opcom_kmsg_follow(void (*emit)(const char *line))
+{
+    int fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK);
+
+    if (fd < 0) {
+        fprintf(stderr, "%%OVMX-W-OPCOM, the kernel log is not readable (%s): "
+                "executive records after startup will not reach the operator log\n",
+                strerror(errno));
+        return;
+    }
+    (void)lseek(fd, 0, SEEK_SET);
+    (void)opcom_kmsg_follow_fd(fd, opcom_kmsg_read_mark(OPCOM_KMSG_SEEDED_MARK),
+                               emit, -1);
+    close(fd);
 }

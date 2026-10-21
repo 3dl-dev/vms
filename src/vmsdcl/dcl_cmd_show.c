@@ -34,6 +34,7 @@
 #include "dcl/dcl_cmd.h"
 #include "dcl/dcl_rms.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
 #include "starlet.h"
@@ -1782,7 +1783,7 @@ static int cmd_show_symbol(struct dcl_command *cmd)
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
                       "and placement\n \\%s\\", q);
-            return SS$_IVQUAL;
+            return CLI$_IVQUAL;
         }
     }
     if (cmd->param_count >= 2) {
@@ -4570,5 +4571,5 @@ int cmd_show(struct dcl_command *cmd)
     kw[sizeof(kw) - 1] = '\0';
     dcl_error("DCL", 0, "IVKEYW",
               "unrecognized keyword - check validity and spelling\n \\%s\\", kw);
-    return SS$_IVKEYW;
+    return CLI$_IVKEYW;
 }

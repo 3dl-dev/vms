@@ -48,6 +48,7 @@
 #include "rms_textfile.h"    /* rms_textfile_* -- RMS text I/O over the Files-11 ACP (vms-274) */
 #include "../vmstcpip/mgmt/tcpip_service_db.h" /* TCPIP {SET,SHOW,ENABLE,DISABLE,DELETE} SERVICE engine (#878, vms-71b) */
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "ovmx_subprocess.h"   /* children are subprocesses the executive made (rd vms-1f8) */
 #include "ovmx_layout.h"
 #include "vms/logical.h"
@@ -2884,7 +2885,7 @@ int cmd_tcpip(struct dcl_command *cmd)
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SHOW keyword - \\%s\\", what);
-        return SS$_IVKEYW;
+        return CLI$_IVKEYW;
     }
 
     if (dcl_match_command(subcmd, "SET", 2)) {
@@ -2910,7 +2911,7 @@ int cmd_tcpip(struct dcl_command *cmd)
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SET keyword - \\%s\\", what);
-        return SS$_IVKEYW;
+        return CLI$_IVKEYW;
     }
 
     if (dcl_match_command(subcmd, "ENABLE", 2) ||
@@ -2932,7 +2933,7 @@ int cmd_tcpip(struct dcl_command *cmd)
 
     dcl_error("TCPIP", 2, "IVKEYW",
               "unrecognized TCPIP keyword - \\%s\\", subcmd);
-    return SS$_IVKEYW;
+    return CLI$_IVKEYW;
 }
 
 /* ================================================================== */

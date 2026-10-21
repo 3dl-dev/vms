@@ -1,0 +1,29 @@
+# dcl-ivqual-status-not-cli -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "An unknown qualifier leaves \$STATUS = CLI\$_IVQUAL (%X00038240), the real CLI condition value";;
+        targets)      echo "libvms/include/climsgdef.h";;
+        suites_red)   echo "test_syssvc_dcl_set_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "climsgdef.h gives CLI\$_IVQUAL its \$GETMSG value 0x00038240. The mutation restores the former invented 2288 (SS\$_NONLOCAL on V7.3/V8.4), so DIRECTORY/ZQSEVEN still prints %DCL-W-IVQUAL but leaves \$STATUS %X000008F0. The SET probes check the message text only and stay green. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+an unknown qualifier leaves $STATUS = %X00038240 (CLI$_IVQUAL)
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the CLI$_IVQUAL define in climsgdef.h.
+        sed -i 's|^#define CLI\$_IVQUAL   0x00038240 |#define CLI$_IVQUAL   2288 /* NEGCTL dcl-ivqual-status-not-cli */ |' "$_file"
+    :
+}

@@ -187,13 +187,13 @@ def selftest(root):
         if hits != total:
             bad.append('%s: %d of %d, and the rule says all of them' % (what, hits, total))
 
-    floor('02/0e -> 82/15 pairs', counts['0e/15'], 60)
-    floor('02/0f -> 82/15 pairs', counts['0f/15'], 65)
-    floor('02/10 -> 82/15 pairs', counts['10/15'], 58)
-    floor('02/14 -> 82/15 pairs', counts['14/15'], 63)
-    floor('02/12 -> 82/01 pairs', counts['12/01'], 416)
-    floor('02/11 notifications', sum(1 for op, _b in notifs if op == 0x11), 5)
-    floor('02/13 notifications', sum(1 for op, _b in notifs if op == 0x13), 63)
+    floor('02/0e -> 82/15 pairs', counts['0e/15'], 63)
+    floor('02/0f -> 82/15 pairs', counts['0f/15'], 70)
+    floor('02/10 -> 82/15 pairs', counts['10/15'], 61)
+    floor('02/14 -> 82/15 pairs', counts['14/15'], 68)
+    floor('02/12 -> 82/01 pairs', counts['12/01'], 420)
+    floor('02/11 notifications', sum(1 for op, _b in notifs if op == 0x11), 7)
+    floor('02/13 notifications', sum(1 for op, _b in notifs if op == 0x13), 68)
 
     # RULE 1: the 82/15 answer rewrites body[8], body[9], body[34] and -- for
     # an op-0x0f answered by the new master -- body[28:32]. Nothing else.
@@ -214,7 +214,7 @@ def selftest(root):
                    '[28:32] and [34]' % stray)
     f0 = [(q, a) for (s, o, q, a) in pairs if s == 0x0f and o == 0x15]
     floor('op-0x0f answers that CLEAR body[28:32] (the new-master role)',
-          sum(1 for _q, a in f0 if a[28:32] == b'\0\0\0\0'), 60)
+          sum(1 for _q, a in f0 if a[28:32] == b'\0\0\0\0'), 63)
     exact_all('real op-0x0f requests carrying 01 00 .. 00 at body[32:36] '
               '(why the narrowed answer builder is byte-identical there)',
               sum(1 for q, _a in f0 if q[32] == 0x01 and q[33] == 0 and q[35] == 0),
@@ -233,7 +233,7 @@ def selftest(root):
               sum(1 for _q, a in subs if a[30] == 0 and a[31] == 0), len(subs))
     roots = [(q, a) for q, a in g if is_root_record(q)]
     floor('82/01 answers to a ROOT record (the unnamed body[30:32] cell)',
-          len(roots), 8)
+          len(roots), 9)
     if any(a[30] not in (0xf0, 0xf1) or a[31] != 0x01 for _q, a in roots):
         bad.append('a ROOT 82/01 carries something other than f0 01 / f1 01 at '
                    'body[30:32] -- the codec header names only those two')
@@ -242,11 +242,11 @@ def selftest(root):
 
     # RULE 3: the op-0x14's body[20:40] is residue.
     c = classify_op14_residue(pairs)
-    floor('op-0x14 frames', c['total'], 63)
+    floor('op-0x14 frames', c['total'], 68)
     floor('op-0x14s whose body[20:40] is a stale GRANT record',
           c['stale_grant_record'], 23)
     floor('op-0x14s whose body[20:40] is a stale DIRECTORY answer',
-          c['stale_directory_answer'], 24)
+          c['stale_directory_answer'], 26)
     floor('... of those, with a VAX S0 kernel address at body[29:32]',
           c['with_vax_s0_kernel_address'], 18)
     f14 = [q for (s, _o, q, _a) in pairs if s == 0x14]

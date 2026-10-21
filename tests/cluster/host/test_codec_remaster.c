@@ -171,7 +171,7 @@ static void test_ack_echoes_the_cells_a_grant_would_overwrite(void)
 				      sizeof(built), NULL) == VMS_CODEC_OK,
 		 "  builds");
 	ct_check_eq_u32(built[VMS_OFF_DLM_RESULT_STAMP], 0xfau,
-			"  body[34] is the outcome byte, 0xfa (246/246 real)");
+			"  body[34] is the outcome byte, 0xfa (262/262 real)");
 	ct_check(built[VMS_OFF_DLM_GRANT_REC] ==
 		 fxbody(req)[VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_REC)],
 		 "  body[32] is the REQUEST'S byte, not the grant's 0x01");
@@ -338,7 +338,7 @@ static void test_op12_root_answer_is_the_real_grant(void)
 		 built[VMS_OFF_DLM_MODE + 1u] == 0u,
 		 "  this codec writes the grant's 0 0 there, not a guess");
 	ct_check_eq_u32(built[VMS_OFF_DLM_GRANT_FLAG], 0x10u,
-			"  body[28] = 0x10, the grant flag (416/416 real)");
+			"  body[28] = 0x10, the grant flag (420/420 real)");
 	ct_check_eq_u32(built[VMS_OFF_DLM_RESULT_STAMP], 0xfau,
 			"  body[34] = 0xfa, granted");
 }
@@ -410,12 +410,12 @@ static void test_op14_asserts_six_fields_and_zeroes_the_rest(void)
 
 	/* The six fields, each equal to the real frame's. */
 	ct_check(b[8] == fxbody(real)[8] && b[8] == 0x02u,
-		 "  body[8]  = 0x02, the real frame's (63/63)");
+		 "  body[8]  = 0x02, the real frame's (68/68)");
 	ct_check(b[9] == fxbody(real)[9] && b[9] == 0x14u,
-		 "  body[9]  = 0x14, the real frame's (63/63)");
+		 "  body[9]  = 0x14, the real frame's (68/68)");
 	ct_check(memcmp(b + 40, fxbody(real) + 40, 4) == 0 &&
 		 b[40] == 0 && b[41] == 0 && b[42] == 0 && b[43] == 0,
-		 "  body[40:44] = 0, the real frame's (63/63)");
+		 "  body[40:44] = 0, the real frame's (68/68)");
 	ct_check(memcmp(b + 44, fxbody(real) + 44, 4) == 0,
 		 "  body[44:48] = the tree's identity, the real frame's");
 	ct_check(memcmp(b + 48, fxbody(real) + 48, 4) == 0,
@@ -492,7 +492,7 @@ static void test_op14_ra7_pattern_touches_only_residue(void)
 	ct_check(differ_residue > 0,
 		 "  and the residue span really did change (non-vacuous)");
 	ct_check(p[40] == 0u && p[41] == 0u && p[42] == 0u && p[43] == 0u,
-		 "  body[40:44] stays 0 under the pattern (63/63 real)");
+		 "  body[40:44] stays 0 under the pattern (68/68 real)");
 }
 
 /* ---- group 5: negative controls -------------------------------------- */
@@ -766,10 +766,10 @@ static void test_op14_role_rule_is_false(void)
 	/* What IS true of every real 0x14, and what this codec therefore
 	 * asserts: the opcode pair and the zero word. */
 	ct_check(fxbody(to_o)[8] == 0x02u && fxbody(to_h)[8] == 0x02u,
-		 "  body[8] = 0x02 in both (63/63 in the corpus)");
+		 "  body[8] = 0x02 in both (68/68 in the corpus)");
 	ct_check(memcmp(fxbody(to_o) + 40, "\0\0\0\0", 4) == 0 &&
 		 memcmp(fxbody(to_h) + 40, "\0\0\0\0", 4) == 0,
-		 "  body[40:44] = 0 in both (63/63 in the corpus)");
+		 "  body[40:44] = 0 in both (68/68 in the corpus)");
 }
 
 int main(void)

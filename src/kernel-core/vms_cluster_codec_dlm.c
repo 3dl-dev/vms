@@ -344,7 +344,7 @@ vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
 	 * ONE BUILDER FOR ALL FOUR ANSWERED STEPS (rd vms-380 rule 1). This
 	 * used to write the whole 32-bit grant record at body[32:36]; the
 	 * generic builder writes only body[34], which is byte-identical on
-	 * every real op-0x0f (65/65 carry 01 00 .. 00 there, pinned by
+	 * every real op-0x0f (70/70 carry 01 00 .. 00 there, pinned by
 	 * test_codec_remaster) and is the only rule the 246-pair corpus
 	 * supports for op 0x0e/0x10/0x14, where body[32], [33] and [35] take
 	 * 21, 6 and 10 distinct values.
@@ -1778,7 +1778,7 @@ vms_dlm_rm_lock_answer_build(const uint8_t *req_body, uint32_t req_len,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, a->master_lkid);
-	/* The grant record (38/38 real grants; 416/416 real 0x12 answers). */
+	/* The grant record (38/38 real grants; 420/420 real 0x12 answers). */
 	dlm_put_grant_record(&w);
 	/* body[30:32]: the grant's cleared pair, unless the caller holds a
 	 * real executive value for the root form (header rule 2). */

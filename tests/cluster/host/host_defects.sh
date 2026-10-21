@@ -1288,7 +1288,7 @@ EOF
         targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
         suites_red)   echo "test_codec_remaster";;
         isolation)    echo "isolated";;
-        why)          echo "the answer also writes the 32-bit grant record at body[32:36], as the old op-0x0f-only builder did. On an op-0x0f that is invisible (65/65 real requests carry 01 00 .. 00 there); on an op-0x0e or op-0x10 it overwrites the sender's own body[32], [33] and [35], which take 21, 6 and 10 distinct values across the corpus -- OVMX asserting a value nobody sent, in an answer a real VAX echoes.";;
+        why)          echo "the answer also writes the 32-bit grant record at body[32:36], as the old op-0x0f-only builder did. On an op-0x0f that is invisible (70/70 real requests carry 01 00 .. 00 there); on an op-0x0e or op-0x10 it overwrites the sender's own body[32], [33] and [35], which take 21, 6 and 10 distinct values across the corpus -- OVMX asserting a value nobody sent, in an answer a real VAX echoes.";;
         require_fail) hd_lines <<'EOF'
 *** the answer equals the real VAX's, byte for byte past the envelope ***
   body[32] is the REQUEST'S byte, not the grant's 0x01
@@ -1336,7 +1336,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** every byte outside the six fields is ZERO -- the rd vms-42de ruling, not OVMX kernel memory ***
   body[12:16] is left for the CM's own DLM-sequence stamp
-  body[40:44] = 0, the real frame's (63/63)
+  body[40:44] = 0, the real frame's (68/68)
 EOF
                       ;;
         esac;;
@@ -1353,7 +1353,7 @@ EOF
 *** the sub grant equals the real VAX's, byte for byte past the envelope ***
 *** HELD OUT: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
 *** PRE-REGISTERED, THIRD TOPOLOGY: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
-  body[28] = 0x10, the grant flag (416/416 real)
+  body[28] = 0x10, the grant flag (420/420 real)
   body[34] = 0xfa, granted
 EOF
                       ;;
@@ -1368,7 +1368,7 @@ EOF
         why)          echo "the residue span runs four bytes long and covers body[40:44], which 63 of 63 real op-0x14s carry as zero. The RA7 fire would then differ from its control in a NAMED field as well as the residue, and whatever the VAX did could not be attributed to either -- a proof that proves nothing, which is worse than no proof.";;
         require_fail) hd_lines <<'EOF'
 *** not one named field moves when the pattern changes ***
-  body[40:44] stays 0 under the pattern (63/63 real)
+  body[40:44] stays 0 under the pattern (68/68 real)
 EOF
                       ;;
         esac;;
@@ -3325,7 +3325,7 @@ apply_edit() {
         # dlm-grant-record-omitted covers through the shared writer).
         # The comment above it is unique in this file, so `n` steps onto
         # exactly the one call site and nothing else matches on a re-apply.
-        sed -i '\|416/416 real 0x12 answers|{n;s|.*|\t/* NEGCTL dlm-rm-lock-answer-record-omitted */|}' "$_file";;
+        sed -i '\|420/420 real 0x12 answers|{n;s|.*|\t/* NEGCTL dlm-rm-lock-answer-record-omitted */|}' "$_file";;
 
     dlm-rm-14-pattern-overruns-a-field)
         # The residue span's own length, declared once.

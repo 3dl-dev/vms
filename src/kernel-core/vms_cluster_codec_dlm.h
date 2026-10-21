@@ -179,7 +179,7 @@ extern "C" {
  *   H -> N   0x12 x k, ROOT first then its sub-resources, each ANSWERED
  *            cat 0x82 op 0x01 -- the new master's GRANT for that lock
  *   O -> N   0x12 x k for the locks O itself holds (same answer)
- *   H -> N   0x13, O -> N 0x13       end-of-records, NOTIFICATIONS (63/63
+ *   H -> N   0x13, O -> N 0x13       end-of-records, NOTIFICATIONS (68/68
  *                                    carry body[4:8] = 0, none answered)
  *   N -> O   0x14, N -> H 0x14       answered cat 0x82 op 0x15
  *
@@ -1396,27 +1396,27 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  * under tests/lab/captures (122 files) walked for cat-0x02 op-0x0e..0x14 and
  * its answer, paired by the SCS transaction id at body[4:8]:
  *
- *     02/0e -> 82/15    60 pairs        02/11   5 notifications
- *     02/0f -> 82/15    65 pairs        02/13  63 notifications
- *     02/10 -> 82/15    58 pairs        02/12 -> 82/01  416 pairs
- *     02/14 -> 82/15    63 pairs                 (8 ROOT, 408 sub)
+ *     02/0e -> 82/15    63 pairs        02/11   7 notifications
+ *     02/0f -> 82/15    70 pairs        02/13  68 notifications
+ *     02/10 -> 82/15    61 pairs        02/12 -> 82/01  420 pairs
+ *     02/14 -> 82/15    68 pairs                 (9 ROOT, 411 sub)
  *
  * ---------------------------------------------------------------------------
  * RULE 1 -- THE 82/15 ANSWER IS THE REQUEST, WITH THREE BYTES REWRITTEN.
  *
- * Over all 246 answered steps the answer is the request body VERBATIM except
+ * Over all 262 answered steps the answer is the request body VERBATIM except
  *   body[0:4]  the CM's send/ack message numbers (the envelope, not ours)
- *   body[8]    0x82     246/246
- *   body[9]    0x15     246/246
- *   body[34]   0xfa     246/246 -- the universal cat-0x82 outcome byte
+ *   body[8]    0x82     262/262
+ *   body[9]    0x15     262/262
+ *   body[34]   0xfa     262/262 -- the universal cat-0x82 outcome byte
  * ...and NOTHING else, for op 0x0e, 0x10 and 0x14. For op 0x0f ONLY, a NEW
  * MASTER (the member that has an open remaster for that tree) also clears
- * body[28:32]: 60 of 65 pairs clear it, the other 5 are the plain-member role
+ * body[28:32]: 63 of 70 pairs clear it, the other 7 are the plain-member role
  * and keep it (rd vms-cab grounds the same rule on 3,299 pairs).
  *
  * THAT IS A NARROWER REWRITE THAN vms_dlm_op0f_ack_build USED TO DO. It wrote
  * the whole 32-bit grant record at body[32:36]; this builder writes only
- * body[34]. The two are byte-identical on every real op-0x0f (65/65 carry
+ * body[34]. The two are byte-identical on every real op-0x0f (70/70 carry
  * 01 00 .. 00 there), which test_codec_remaster pins -- but they are NOT
  * identical on an op-0x0e or op-0x10, where body[32], [33] and [35] take 21,
  * 6 and 10 distinct values. Echoing is the rule the corpus supports; writing a
@@ -1430,16 +1430,16 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  *   body[20:24]  the lock id THIS engine minted for the record -- read back
  *                off the LKB it names (vms_dlm_adopt_lock_result.master_lkid)
  *   body[24:28]  the holder's own lock id, ECHOED: the correlation
- *   body[28]     0x10         416/416        body[29] 0  416/416
- *   body[30:32]  0, 0         408/408 on SUB records
- *   body[32:36]  the grant record, body[34] = 0xfa  416/416
- *   body[36:52]  the resource's VALUE BLOCK; body[52:56] its SEQUENCE. All 8
+ *   body[28]     0x10         420/420        body[29] 0  420/420
+ *   body[30:32]  0, 0         411/411 on SUB records
+ *   body[32:36]  the grant record, body[34] = 0xfa  420/420
+ *   body[36:52]  the resource's VALUE BLOCK; body[52:56] its SEQUENCE. All 9
  *                ROOT answers carry a real block and a real sequence
  *                (SDA-matched: `RMLVB-0123456789` seq 1 in the controlled
  *                arms, live F11B$ blocks at seq 0x131/0x15a in two others),
  *                and this codec reproduces every one of them byte for byte.
  *                A SUB answer carries no block, and this codec writes twenty
- *                ZEROS there -- what 14 of 14 real sub answers captured
+ *                ZEROS there -- what 21 of 21 real sub answers captured
  *                during a controlled REMASTER arm carry, and what the
  *                shipping ENQ-grant builder has always written. 390 sub
  *                answers from two LOCK-REBUILD captures instead carry
@@ -1454,19 +1454,20 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  *
  * TWO CELLS ARE NOT NAMED, and neither is guessed:
  *
- *   body[30:32]  f0 01 on 5 of 8 real ROOT answers, f1 01 on the other 3,
- *                and 0, 0 on 408 of 408 SUB answers and 38 of 38 plain ENQ
+ *   body[30:32]  f0 01 on 5 of 9 real ROOT answers, f1 01 on the other 4,
+ *                and 0, 0 on 411 of 411 SUB answers and 38 of 38 plain ENQ
  *                grants. It is not residue -- it correlates with the frame's
  *                role and it is near-constant across four unrelated clusters
  *                -- but no capture and no SDA page names what it IS. So it
  *                rides exactly like the BLKAST mode-context pair above:
  *                `root_ctx_valid` opt-in, and a caller with no real
  *                executive value for it gets the grant's 0, 0.
- *   body[32:34]  0x0001 on 283 of 416 real answers -- the value the GRANT
+ *   body[32:34]  0x0001 on 283 of 420 real answers -- the value the GRANT
  *                record grounds, 38/38 -- and a PER-REMASTER number on the
- *                other 133: 0x0365 across every one of RMT6's answers,
+ *                other 137: 0x0365 across every one of RMT6's answers,
  *                0x036e across every one of RMT7's eleven minutes later,
- *                0x07b8 in RA2. The same number reappears as the low half of
+ *                0x04d3 across every one of RA8's (whose N->O op-0x14
+ *                carries 0x04d2 in the same cell), 0x07b8 in RA2. The same number reappears as the low half of
  *                that node's op-0x14 body[20:24], so it is a handle in a
  *                second, node-local index space this executive does not have.
  *                This codec writes the grounded 0x0001.
@@ -1486,12 +1487,12 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  * body[20:24], [24:28], [28] and [34] as probably meaningful on the strength
  * of RA5 and RA6 -- six frames.
  *
- * AT n=63 THOSE FOUR CELLS ARE RESIDUE TOO, and the evidence is the kind the
+ * AT n=68 THOSE FOUR CELLS ARE RESIDUE TOO, and the evidence is the kind the
  * ruling asked for -- the span carries, verbatim, the records of OTHER message
  * types:
- *   23 of 63 carry a stale GRANT RECORD there (body[28]=0x10, body[29:32]=0,
+ *   23 of 68 carry a stale GRANT RECORD there (body[28]=0x10, body[29:32]=0,
  *      body[32]=0x01, body[34]=0xfa -- this header's own 38/38 grant shape)
- *   24 of 63 carry a stale DIRECTORY ANSWER (body[34]=0xf9 "you master it"),
+ *   26 of 68 carry a stale DIRECTORY ANSWER (body[34]=0xf9 "you master it"),
  *      18 of them with a VAX S0 kernel address at body[29:32] (0x87xxxxxx, the
  *      same range as that system's own RSBs and LKBs)
  *   one carries the ASCII text `DIRECTORY   ` at body[24:40]
@@ -1500,15 +1501,19 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  * to the one old master, both shapes appear. body[28] is 0x10 in 27 of 58
  * frames to the old master and body[34] is 0xfa in 28 of 58 -- so RA6's
  * "0x10/0xfa to the old master, 0x80/0xf9 to the holder" was a six-frame
- * accident. (Reported to the lane conductor under the ruling's clause 4, in
- * the direction that makes OVMX assert LESS.)
+ * accident -- and RA8 (tests/lab/captures/vms-380-ra8-heldout-20261021, a
+ * PRE-REGISTERED controlled arm) settled it from three nodes at once: of its
+ * three remasters, RMT8's two op-0x14s follow RA6's rule exactly while the
+ * middle remaster's two are EXACTLY INVERTED, body[28] taking a fourth value
+ * (0xd0). (Reported to the lane conductor under the ruling's clause 4, in the
+ * direction that makes OVMX assert LESS.)
  *
- * What a real 0x14 does hold, over all 63:
- *   body[8:10]     02 14            63/63
+ * What a real 0x14 does hold, over all 68:
+ *   body[8:10]     02 14            68/68
  *   body[12:16]    0x0001 + the cluster DLM rebuild sequence (rd vms-64b),
  *                  which the CONNECTION MANAGER stamps on every DLM message
  *                  from club state -- so this builder leaves it zero
- *   body[40:44]    0                63/63
+ *   body[40:44]    0                68/68
  *   body[44:48]    the tree's identity: group, access mode, name length
  *   body[48:48+L]  the root resource name
  *   body[128:132]  the directory hash for that name

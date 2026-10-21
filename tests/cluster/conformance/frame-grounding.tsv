@@ -210,61 +210,61 @@ cm_ack	*	82	122	const	const:0	body[10:132]: the sender's stale buffer. All-zero 
 #      evidence: vms_cluster_codec_dlm.h "LOCK-TREE REMASTERING ON THE WIRE".
 #      Census: every pcap under tests/lab/captures (122 files), requests paired
 #      with answers by the SCS transaction id at body[4:8] --
-#      02/0e 60 pairs, 02/0f 65, 02/10 58, 02/14 63, 02/12 416 (8 root, 408 sub),
-#      02/11 5 notifications, 02/13 63 notifications ----
+#      02/0e 63 pairs, 02/0f 70, 02/10 61, 02/14 68, 02/12 420 (9 root, 411 sub),
+#      02/11 7 notifications, 02/13 68 notifications ----
 # the 82/15 ANSWER to an op-0x0e / 0x10 / 0x14, and to an op-0x0f answered as a
 # plain MEMBER: the request echoed with body[8], body[9] and body[34] rewritten
 dlm_rm_ack	*	72	4	copied	any:envelope	body[0:4]: echoed from the request here; cnxman_envelope_originate assigns this CSB's real send/ack numbers on the way out (spec sec 4(j))
 dlm_rm_ack	*	76	4	copied	any:echo	body[4:8]: the request's transaction, echoed -- an answer that renamed it would answer a different step
-dlm_rm_ack	*	80	1	const	const:82	body[8]: the request category with the response bit; 246/246
-dlm_rm_ack	*	81	1	const	const:15	body[9]: op 0x15, the one answer opcode for all four answered steps; 246/246
-dlm_rm_ack	*	82	24	copied	any:echo	body[10:34]: echoed verbatim -- the sender's own handles, its DLM rebuild sequence and whatever residue it left past them. A real answer changes NOTHING here (246/246), and body[32], [33], [35] take 21, 6 and 10 distinct values across the corpus, so a constant written there would assert a value nobody sent
+dlm_rm_ack	*	80	1	const	const:82	body[8]: the request category with the response bit; 262/262
+dlm_rm_ack	*	81	1	const	const:15	body[9]: op 0x15, the one answer opcode for all four answered steps; 262/262
+dlm_rm_ack	*	82	24	copied	any:echo	body[10:34]: echoed verbatim -- the sender's own handles, its DLM rebuild sequence and whatever residue it left past them. A real answer changes NOTHING here (262/262), and body[32], [33], [35] take 21, 6 and 10 distinct values across the corpus, so a constant written there would assert a value nobody sent
 dlm_rm_ack	*	106	1	const	const:fa	body[34]: the universal cat-0x82 outcome byte, 0xfa; 246 of 246 real answers carry it whatever the request held (0xf9, 0x03 and 0xfa all seen inbound)
 dlm_rm_ack	*	107	97	copied	any:echo	body[35:132]: echoed verbatim, the resource identity, name, hash and the sender's own residue
 # the same answer when THIS node is the NEW MASTER of the tree an op-0x0f names:
-# body[28:32] is additionally CLEARED (60 of 65 real op-0x0f pairs; rd vms-cab
+# body[28:32] is additionally CLEARED (63 of 70 real op-0x0f pairs; rd vms-cab
 # grounds the same role rule on 3,299 pairs)
 dlm_rm_ack_nm	*	72	4	copied	any:envelope	body[0:4]: as dlm_rm_ack
 dlm_rm_ack_nm	*	76	4	copied	any:echo	body[4:8]: the request's transaction, echoed
-dlm_rm_ack_nm	*	80	1	const	const:82	body[8]: the response category; 246/246
-dlm_rm_ack_nm	*	81	1	const	const:15	body[9]: op 0x15; 246/246
+dlm_rm_ack_nm	*	80	1	const	const:82	body[8]: the response category; 262/262
+dlm_rm_ack_nm	*	81	1	const	const:15	body[9]: op 0x15; 262/262
 dlm_rm_ack_nm	*	82	18	copied	any:echo	body[10:28]: echoed verbatim
-dlm_rm_ack_nm	*	100	4	const	const:0	body[28:32]: CLEARED by the member that holds the open remaster for this tree -- 60 of 65 real op-0x0f answers; the other 5 are the plain-member role and keep it (dlm_rm_ack above)
-dlm_rm_ack_nm	*	104	2	copied	any:echo	body[32:34]: echoed; not rewritten (65/65 real op-0x0f answers carry the request's 01 00)
-dlm_rm_ack_nm	*	106	1	const	const:fa	body[34]: the outcome byte; 246/246
+dlm_rm_ack_nm	*	100	4	const	const:0	body[28:32]: CLEARED by the member that holds the open remaster for this tree -- 63 of 70 real op-0x0f answers; the other 7 are the plain-member role and keep it (dlm_rm_ack above)
+dlm_rm_ack_nm	*	104	2	copied	any:echo	body[32:34]: echoed; not rewritten (70/70 real op-0x0f answers carry the request's 01 00)
+dlm_rm_ack_nm	*	106	1	const	const:fa	body[34]: the outcome byte; 262/262
 dlm_rm_ack_nm	*	107	97	copied	any:echo	body[35:132]: echoed verbatim
 # the 82/01 ANSWER to an op-0x12 lock record: the GRANT the new master issues
 # for the lock the holder just handed over
 dlm_rm_lock_ans	*	72	4	copied	any:envelope	body[0:4]: echoed; the CM assigns the real numbers (spec sec 4(j))
 dlm_rm_lock_ans	*	76	4	copied	any:echo	body[4:8]: the record's own transaction, echoed
-dlm_rm_lock_ans	*	80	1	const	const:82	body[8]: the response category; 416/416
-dlm_rm_lock_ans	*	81	1	const	const:1	body[9]: op 0x01 -- a 0x12 is answered with the ENQ grant opcode; 416/416
+dlm_rm_lock_ans	*	80	1	const	const:82	body[8]: the response category; 420/420
+dlm_rm_lock_ans	*	81	1	const	const:1	body[9]: op 0x01 -- a 0x12 is answered with the ENQ grant opcode; 420/420
 dlm_rm_lock_ans	*	82	10	copied	any:echo	body[10:20]: echoed, the holder's own header and DLM rebuild sequence
 dlm_rm_lock_ans	*	92	4	derived	state:lkid	body[20:24]: the lock id THIS engine minted for the record, read back off the LKB it names (vms_dlm_adopt_lock_result.master_lkid) -- never a counter, never an echo. SDA-matched in RA2 (010003BA..BD), RA5 (020004CC) and RA6
 dlm_rm_lock_ans	*	96	4	copied	any:echo	body[24:28]: the HOLDER's own lock id, echoed -- the correlation that lets it match the answer to its lock (4/4 vs SDA in RA2, RA4, RA5, RA6)
 dlm_rm_lock_ans	*	100	1	const	const:10	body[28]: the grant flag; 416 of 416 real 0x12 answers and 38 of 38 plain ENQ grants
-dlm_rm_lock_ans	*	101	1	const	const:0	body[29]: 416/416
-dlm_rm_lock_ans	*	102	2	deviation	const:0	body[30:32]: THIS NODE WRITES 0 0, which is what 408 of 408 real SUB answers and 38 of 38 plain grants carry. A real ROOT answer carries f0 01 (5 of 8) or f1 01 (3 of 8) -- a cell that correlates with the frame's role and is near-constant across four unrelated clusters, so it is NOT residue, but no capture and no SDA page names what it IS (Rule 8: not guessed). Carried opt-in as vms_dlm_rm_lock_answer.root_ctx for the day an arm names it. Accepted: not yet fired at a real VAX -- rd vms-6ad1 (RA7) is the fire
-dlm_rm_lock_ans	*	104	2	deviation	const:1	body[32:34]: THIS NODE WRITES 0x0001, the value the GRANT record grounds (38/38 real grants) and 283 of 416 real 0x12 answers carry. The other 133 carry a PER-REMASTER number (0x0365 across all of RMT6's answers, 0x036e across all of RMT7's eleven minutes later, 0x07b8 in RA2) which reappears as the low half of that node's own op-0x14 body[20:24]: a handle in a second, node-local index space this executive does not have. The HELD-OUT capture is what caught it (test_codec_remaster). Accepted: not yet fired at a real VAX -- rd vms-6ad1 (RA7) is the fire
-dlm_rm_lock_ans	*	106	1	const	const:fa	body[34]: granted; 416/416
-dlm_rm_lock_ans	*	107	1	const	const:0	body[35]: 417 of 417 real op-0x12 requests carry 0 here and no answer rewrites it
-dlm_rm_lock_ans	*	108	16	deviation	any:valblk	body[36:52]: the RESOURCE's own value block, read back off the RSB this adoption created, and ONLY when it really holds one -- sixteen zeros presented as a value block is the placeholder INV-6 forbids. All 8 real ROOT answers carry a real block (SDA-matched 'RMLVB-0123456789' in the controlled arms, live F11B$ blocks in two others) and this node reproduces them byte for byte. THE DEVIATION IS THE SUB-RESOURCE FORM: this node writes sixteen zeros, which is what 14 of 14 real sub answers captured during a controlled REMASTER arm carry (rm380 RA2, RA5, RA6) -- and what the shipping ENQ-grant builder has always written -- while 390 sub answers from two LOCK-REBUILD captures (vms-20c, vms-e8b) carry 01 00 00 00 01 00 00 00 then zeros, the same not-a-clean-LVB pattern this codec's grant block already records on 38/38 real grants (body[36]=0x01 in 27, body[40]=0x01 in 32). Residue in a busy master's buffer, zero in a quiet one; zero is the rd vms-42de ruling. Accepted: not yet fired at a real VAX -- rd vms-6ad1 (RA7) is the fire
-dlm_rm_lock_ans	*	124	4	deviation	any:valblkseq	body[52:56]: the value block's SEQUENCE, read off the same RSB -- 1 in the controlled arms, 0x131 and 0x15a in two live clusters, reproduced byte for byte on all 8 real ROOT answers. Zero when there is no block, which again matches 14 of 14 real sub answers from a controlled remaster arm and not the 390 from the two rebuild captures (small even numbers there, same residue reading as body[36:52] above)
+dlm_rm_lock_ans	*	101	1	const	const:0	body[29]: 420/420
+dlm_rm_lock_ans	*	102	2	deviation	const:0	body[30:32]: THIS NODE WRITES 0 0, which is what 411 of 411 real SUB answers and 38 of 38 plain grants carry. A real ROOT answer carries f0 01 (5 of 9) or f1 01 (4 of 9) -- a cell that correlates with the frame's role and is near-constant across four unrelated clusters, so it is NOT residue, but no capture and no SDA page names what it IS (Rule 8: not guessed). Carried opt-in as vms_dlm_rm_lock_answer.root_ctx for the day an arm names it. Accepted: not yet fired at a real VAX -- rd vms-6ad1 (RA7) is the fire
+dlm_rm_lock_ans	*	104	2	deviation	const:1	body[32:34]: THIS NODE WRITES 0x0001, the value the GRANT record grounds (38/38 real grants) and 283 of 420 real 0x12 answers carry. The other 133 carry a PER-REMASTER number (0x0365 across all of RMT6's answers, 0x036e across all of RMT7's eleven minutes later, 0x07b8 in RA2) which reappears as the low half of that node's own op-0x14 body[20:24]: a handle in a second, node-local index space this executive does not have. The HELD-OUT capture is what caught it (test_codec_remaster). Accepted: not yet fired at a real VAX -- rd vms-6ad1 (RA7) is the fire
+dlm_rm_lock_ans	*	106	1	const	const:fa	body[34]: granted; 420/420
+dlm_rm_lock_ans	*	107	1	const	const:0	body[35]: 420 of 420 real op-0x12 requests carry 0 here and no answer rewrites it
+dlm_rm_lock_ans	*	108	16	deviation	any:valblk	body[36:52]: the RESOURCE's own value block, read back off the RSB this adoption created, and ONLY when it really holds one -- sixteen zeros presented as a value block is the placeholder INV-6 forbids. All 9 real ROOT answers carry a real block (SDA-matched 'RMLVB-0123456789' in the controlled arms, live F11B$ blocks in two others) and this node reproduces them byte for byte. THE DEVIATION IS THE SUB-RESOURCE FORM: this node writes sixteen zeros, which is what 21 of 21 real sub answers captured during a controlled REMASTER arm carry (rm380 RA2, RA5, RA6, RA8) -- and what the shipping ENQ-grant builder has always written -- while 390 sub answers from two LOCK-REBUILD captures (vms-20c, vms-e8b) carry 01 00 00 00 01 00 00 00 then zeros, the same not-a-clean-LVB pattern this codec's grant block already records on 38/38 real grants (body[36]=0x01 in 27, body[40]=0x01 in 32). Residue in a busy master's buffer, zero in a quiet one; zero is the rd vms-42de ruling. Accepted: not yet fired at a real VAX -- rd vms-6ad1 (RA7) is the fire
+dlm_rm_lock_ans	*	124	4	deviation	any:valblkseq	body[52:56]: the value block's SEQUENCE, read off the same RSB -- 1 in the controlled arms, 0x131 and 0x15a in two live clusters, reproduced byte for byte on all 9 real ROOT answers. Zero when there is no block, which again matches 21 of 21 real sub answers from a controlled remaster arm and not the 390 from the two rebuild captures (small even numbers there, same residue reading as body[36:52] above)
 dlm_rm_lock_ans	*	128	76	copied	any:echo	body[56:132]: echoed from the record -- the holder's own bytes, including whatever residue it left past its name
 # the op-0x14 this node sends once it has adopted a tree. SIX asserted fields;
 # every other byte is ZERO per the rd vms-42de ruling -- and at n=63 the four
-# cells that ruling provisionally called meaningful are residue too: 23 of 63
+# cells that ruling provisionally called meaningful are residue too: 23 of 68
 # real 0x14s carry a stale GRANT record at body[20:40], 24 carry a stale
 # DIRECTORY answer (18 of them with a VAX S0 kernel address at body[29:32]),
 # one carries the ASCII text 'DIRECTORY   ', and role does not predict which
 dlm_rm_14	*	72	4	const	const:0	body[0:4]: this builder writes zero; cnxman_envelope_originate assigns this CSB's send/ack numbers on the way out
 dlm_rm_14	*	76	4	const	const:0	body[4:8]: zero here; the CM mints the transaction token for an origination the peer will answer (E85), as it does for every DLM request
-dlm_rm_14	*	80	1	const	const:2	body[8]: category 0x02; 63/63
-dlm_rm_14	*	81	1	const	const:14	body[9]: op 0x14; 63/63
-dlm_rm_14	*	82	2	const	const:0	body[10:12]: residue. Zero in 42 of 63 real 0x14s; this node sends zero rather than its own kernel memory (rd vms-42de)
-dlm_rm_14	*	84	4	const	const:0	body[12:16]: left zero for cnxman_dlm_seq_stamp, which writes 0x0001 + the cluster's DLM rebuild sequence from club state on every DLM message (rd vms-64b); 63 of 63 real 0x14s carry that form
+dlm_rm_14	*	80	1	const	const:2	body[8]: category 0x02; 68/68
+dlm_rm_14	*	81	1	const	const:14	body[9]: op 0x14; 68/68
+dlm_rm_14	*	82	2	const	const:0	body[10:12]: residue. Zero in 46 of 68 real 0x14s; this node sends zero rather than its own kernel memory (rd vms-42de)
+dlm_rm_14	*	84	4	const	const:0	body[12:16]: left zero for cnxman_dlm_seq_stamp, which writes 0x0001 + the cluster's DLM rebuild sequence from club state on every DLM message (rd vms-64b); 68 of 68 real 0x14s carry that form
 dlm_rm_14	*	88	24	const	const:0	body[16:40]: THE RESIDUE SPAN, emitted as zeros (rd vms-42de ruling clause 2). A real sender leaves its message buffer as it found it here -- a stale grant record, a stale directory answer, its own S0 kernel addresses, or ASCII text. Proven not-read by rd vms-6ad1 (RA7), and until that fires this frame is not sent at a real VAX
-dlm_rm_14	*	112	4	const	const:0	body[40:44]: 0 in 63 of 63 real 0x14s
+dlm_rm_14	*	112	4	const	const:0	body[40:44]: 0 in 68 of 68 real 0x14s
 dlm_rm_14	*	116	2	derived	state:group	body[44:46]: the tree root's UIC group, read off the resource block
 dlm_rm_14	*	118	1	derived	state:acmode	body[46]: the tree root's access mode, read off the resource block
 dlm_rm_14	*	119	1	derived	state:namelen	body[47]: the root name's length, 1..31
@@ -281,7 +281,7 @@ dlm_rm_14_ra7	*	81	1	const	const:14	body[9]: op 0x14
 dlm_rm_14_ra7	*	82	2	deviation	any:ra7-pattern	body[10:12]: RA7's second fixed pattern. A value no real sender produces, sent ON PURPOSE and ONCE, so that comparing the VAX's SDA lock and resource state against the zero fire proves whether the span is read at all (rd vms-42de ruling clause 3). Not an address and not another frame's bytes
 dlm_rm_14_ra7	*	84	4	const	const:0	body[12:16]: left zero for the CM's DLM-sequence stamp, pattern or no pattern
 dlm_rm_14_ra7	*	88	24	deviation	any:ra7-pattern	body[16:40]: RA7's second fixed pattern over the residue span -- the fire the rd vms-42de ruling requires before any residue cell is called residue
-dlm_rm_14_ra7	*	112	4	const	const:0	body[40:44]: 0 under the pattern too (63/63 real)
+dlm_rm_14_ra7	*	112	4	const	const:0	body[40:44]: 0 under the pattern too (68/68 real)
 dlm_rm_14_ra7	*	116	2	derived	state:group	body[44:46]: the tree root's UIC group; unmoved by the pattern
 dlm_rm_14_ra7	*	118	1	derived	state:acmode	body[46]: the tree root's access mode; unmoved by the pattern
 dlm_rm_14_ra7	*	119	1	derived	state:namelen	body[47]: the root name's length; unmoved by the pattern

@@ -127,7 +127,7 @@ SYSTEM_CMDS=(
     'SHOW DEVICE VDA0:'
     'SHOW DEVICE/FULL VDA0:'
     'HELP/NOPROMPT SHOW'
-    'SEARCH SYS$MANAGER:OPERATOR.LOG "system identity"'
+    'TYPE SYS$MANAGER:OPERATOR.LOG'
 )
 
 # Index of the ORIGINAL 'SHOW PROCESS /PRIVILEGES' occurrence above, found
@@ -1405,8 +1405,8 @@ check_response 'HELP/NOPROMPT SHOW' '(SHOW|Additional information)'
 # line: deleting the SETIDENT call leaves the user name empty and the UIC
 # [0,0] (root's derived credentials), and this goes red.
 # rd vms-158d: the record is an OPERATOR.LOG record now (a VMS boot console
-# prints no such line), read back with SEARCH; the last one is this boot's.
-if printf '%s\n' "${CMD_OUTPUT['SEARCH SYS$MANAGER:OPERATOR.LOG "system identity"']}" | \
+# prints no such line), read back with TYPE (RMS; SEARCH still opens a host path, rd vms-a16); the last one is this boot's.
+if printf '%s\n' "${CMD_OUTPUT['TYPE SYS$MANAGER:OPERATOR.LOG']}" | \
      grep -aF 'system identity ' | tail -1 | \
      grep -qF '%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive'; then
     PASS=$((PASS + 1))

@@ -76,6 +76,13 @@ export ax_cv_cxx_compile_cxx11_FOR_BUILD=yes CONFIG_SITE=/src/tools/cross-alpha-
     > cfg.log 2>&1 || { tail -30 cfg.log; exit 1; }
 # configure-host serially: the sub-configures share config.cache
 make -j1 configure-host > configure-host.log 2>&1 || { tail -30 configure-host.log; exit 1; }
+# The C++ front end's module mapper (cp/module.cc) keeps a file's inode as one
+# scalar ino_t. The DEC C RTL's default struct stat carries the three-word File
+# ID instead (and libcpp needs that layout: st_fab_rfm); _USE_STD_STAT is the
+# DEC C RTL's X/Open layout, so module.cc alone is compiled with it -- as a VMS
+# build of GCC 14 would have to. GCC's sources are unchanged.
+grep -q '^CFLAGS-cp/module.o += -D_USE_STD_STAT' gcc/Makefile \
+    || echo 'CFLAGS-cp/module.o += -D_USE_STD_STAT' >> gcc/Makefile
 make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.log | sort -t: -k3 -u | head -40; exit 1; }
 # ld.exe is the port's own linker wrapper (config/vms/vms-ld.c): it writes an options
 # file and runs the VMS `link` command, the program the driver calls to link (vms-65a);

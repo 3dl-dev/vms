@@ -277,18 +277,26 @@ DEMO_NODE_B = {
 DEMO_NODE_C = {
     "name": "VAXC", "id": 1989, "votes": 1, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
-    "decnet": None,
+    "decnet": "1.965",
 }
 
-# DECNET (rd vms-5843). "decnet" is the node's DECnet Phase IV address
+# DECNET (rd vms-5843, vms-05d). "decnet" is the node's DECnet Phase IV address
 # (area.node), the SAME node name as its SCSNODE -- what a VMS site does when a
-# cluster member is also a DECnet node. Both OVMX nodes are DECnet endnodes of
-# area 1 and each one's permanent node database names the other, so a visitor
-# can SET HOST between them. The real VAX has None because that is what its
-# pinned volume really has: build_nodeC_vms73_cluster.sh declines DECnet
-# Phase IV at install (it needs a license PAK to start its circuit), so VAXC
-# runs no NETACP and no OVMX node may list it as reachable. The addresses are
-# OVMX's choice for this demo, not oracle values.
+# cluster member is also a DECnet node. All three nodes are DECnet endnodes of
+# area 1 and each one's permanent node database names the others, so a visitor
+# can SET HOST between them. The OVMX addresses (1.1, 1.2) are OVMX's choice
+# for this demo, not oracle values.
+#
+# VAXC's address is NOT a free choice: it is what its volume really has.
+# build_nodeC_vms73_cluster.sh DECNET=1 installs DECnet-VAX Phase IV and runs
+# NETCONFIG, but registers NO license PAK (rd vms-05d: bring your own DVNETEND
+# license). And real VMS refuses to start DECnet on a cluster member whose
+# executor address differs from SCSSYSTEMID -- STARTNET.COM prints "DECnet
+# address of local node must match VAXcluster system ID." and DECdtm logs
+# %DECdtm-W-ADDRNEQ (measured 2026-10-21 with 1.3). SCSSYSTEMID 1989 =
+# 1*1024 + 965, so VAXC is 1.965, the address NETCONFIG itself offers. Until a
+# visitor loads a license, VAXC's circuit stays off (%SYSTEM-F-NOLICENSE at
+# boot), so SET HOST VAXC from an OVMX node gets VMS's unreachable-node error.
 #
 # The full 3-node target roster, in genesis join order (C forms, A joins, B
 # joins) -- the single place the demo page/generator should import from for

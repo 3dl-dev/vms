@@ -112,8 +112,8 @@ grep -q '^EXECUTOR 1.1 NAME OVMXA STATE on' "$WORK/local.dat" \
     || { echo "FAIL: NETNODE_LOCAL.DAT is not executor 1.1 OVMXA state on"; cat "$WORK/local.dat"; exit 1; }
 grep -q '1.2' "$WORK/remote.dat" && grep -q 'OVMXB' "$WORK/remote.dat" \
     || { echo "FAIL: NETNODE_REMOTE.DAT does not name the peer 1.2 OVMXB"; cat "$WORK/remote.dat"; exit 1; }
-grep -q 'VAXC' "$WORK/remote.dat" \
-    && { echo "FAIL: NETNODE_REMOTE.DAT names VAXC, which runs no DECnet"; exit 1; }
+grep -q '1.965' "$WORK/remote.dat" && grep -q 'VAXC' "$WORK/remote.dat" \
+    || { echo "FAIL: NETNODE_REMOTE.DAT does not name the peer 1.965 VAXC (rd vms-05d)"; cat "$WORK/remote.dat"; exit 1; }
 
 echo "6. asserting manifest.json declares Node A live, Node B/C staged"
 "$PYTHON" - "$BUNDLE1/manifest.json" <<'PYEOF'

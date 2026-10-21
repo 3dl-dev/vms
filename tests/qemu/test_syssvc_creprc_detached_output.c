@@ -48,12 +48,16 @@
 #define DIR_        "/tmp/c5843"
 #define TERMFILE    DIR_ "/creator-terminal.out"
 #define HOSTOUT     DIR_ "/hostpath.out"
+#define HOSTERR     DIR_ "/hostpath.err"
 #define MARK        "MARK5843"
 
-static const struct { const char *role, *spec; } CASES[] = {
-    { "VMSFILE",  "SYS$MANAGER:C5843$NOSUCH.LOG" },
-    { "NULLDEV",  "NL:" },
-    { "HOSTPATH", HOSTOUT },
+/* The host-path case names two files: two independent O_TRUNC opens of ONE
+ * path would each write from offset 0 and the stderr line would overwrite
+ * the stdout line. */
+static const struct { const char *role, *out, *err; } CASES[] = {
+    { "VMSFILE",  "SYS$MANAGER:C5843$NOSUCH.LOG", "SYS$MANAGER:C5843$NOSUCH.LOG" },
+    { "NULLDEV",  "NL:", "NL:" },
+    { "HOSTPATH", HOSTOUT, HOSTERR },
 };
 #define NCASES (int)(sizeof(CASES) / sizeof(CASES[0]))
 
@@ -130,8 +134,8 @@ static int creator_main(int report_fd)
         char img[128];
         snprintf(img, sizeof(img), DIR_ "/%s", CASES[i].role);
         struct dsc$descriptor_s imgd = mkdsc(img);
-        struct dsc$descriptor_s od = mkdsc(CASES[i].spec);
-        struct dsc$descriptor_s ed = mkdsc(CASES[i].spec);
+        struct dsc$descriptor_s od = mkdsc(CASES[i].out);
+        struct dsc$descriptor_s ed = mkdsc(CASES[i].err);
         uint32_t pid = 0;
         r[i] = (int)sys$creprc(&pid, &imgd, NULL, &od, &ed, NULL, NULL,
                                NULL, 0, 0, 0, PRC$M_DETACH);
@@ -182,6 +186,7 @@ int main(int argc, char **argv)
     }
     unlink(TERMFILE);
     unlink(HOSTOUT);
+    unlink(HOSTERR);
     CHECK(staged, "staged one subject image per case (this binary, in subject mode)");
 
     int pfd[2];
@@ -206,13 +211,13 @@ int main(int argc, char **argv)
         if (!(r[i] & 1)) {
             all_created = 0;
             printf("  INFO: $CREPRC (%s, output=%s) status %08X\n",
-                   CASES[i].role, CASES[i].spec, (unsigned)r[i]);
+                   CASES[i].role, CASES[i].out, (unsigned)r[i]);
         }
         if (!ran(CASES[i].role)) all_ran = 0;
     }
     CHECK(all_created, "every detached $CREPRC succeeded");
     CHECK(all_ran, "every detached subject ran and wrote its marker");
-    CHECK(file_has(HOSTOUT, MARK " HOSTPATH stdout") && file_has(HOSTOUT, MARK " HOSTPATH stderr"),
+    CHECK(file_has(HOSTOUT, MARK " HOSTPATH stdout") && file_has(HOSTERR, MARK " HOSTPATH stderr"),
           "positive control: a subject whose output names an openable path writes its marker THERE");
     CHECK(!file_has(TERMFILE, MARK " NULLDEV"),
           "a detached process with output=error=NL: writes nothing on its creator's terminal");

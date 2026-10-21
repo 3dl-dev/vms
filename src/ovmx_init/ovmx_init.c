@@ -1043,6 +1043,7 @@ static void stage_boot_images(void)
         "MAIL_SERVER.EXE",
         /* NETACP's own image (rd vms-c6d1). */
         "DECNETD.EXE",
+        "OPCOM.EXE",       /* PID 1 creates it before STARTUP.COM (vms-798) */
     };
     for (size_t i = 0; i < sizeof(utils) / sizeof(utils[0]); i++) {
         char acp_path[512], dest[512];
@@ -1788,6 +1789,43 @@ static void stop_cluster_port(void)
  * a boot that quietly does not establish an identity, with a banner that says
  * everything is fine.
  */
+/*
+ * start_opcom - create OPCOM, the operator communication process (rd vms-798).
+ * On VMS, STARTUP creates OPCOM as a detached system process before the site
+ * startup runs, and it creates it silently: the console shows no
+ * %RUN-S-PROC_ID for it, only OPCOM's own "Operator _NODE$OPA0: has been
+ * enabled" once it is up. Here PID 1 does the creating: SYS$SYSTEM:OPCOM.EXE as
+ * a DETACHED process with the system process's identity ($CREPRC's path,
+ * ovmx_creprc_fork), which first leaves substrate root -- it is single-threaded
+ * at that point, which is when the executive allows it -- so OPCOM never runs
+ * as root. A system that cannot create it still boots, and says so; $SNDOPR then
+ * keeps writing OPERATOR.LOG in-process (src/libvms/syssvc/sys_operator.c).
+ */
+static void start_opcom(void)
+{
+    char path[512], staged[512];
+    uint32_t pcb = 0;
+    pid_t pid;
+
+    vms_to_linux(VMS_OPCOM_PATH, path, sizeof(path));
+    if (ovmx_boot_stage_exec_path(path, staged, sizeof(staged)) &&
+        access(staged, X_OK) == 0)
+        snprintf(path, sizeof(path), "%s", staged);
+    pid = ovmx_creprc_fork(VMS_CREPRC_PCB_DETACHED, &pcb, NULL);
+    if (pid == 0) {
+        uint32_t subst = 0;
+        if (!(vms_kif_substrate_id(VMS_SUBST_OP_GET, &subst) & 1) || subst == 0 ||
+            !(vms_kif_substrate_id(VMS_SUBST_OP_BECOME, NULL) & 1) ||
+            getuid() != (uid_t)subst)
+            _exit(126);                 /* never run OPCOM as root */
+        execl(path, "OPCOM", (char *)NULL);
+        _exit(127);
+    }
+    if (pid < 0 || !(pcb & 1))
+        fprintf(stderr, "%%OVMX-W-OPCOM, the OPCOM process was not created "
+                "(status %%X%08X)\n", (unsigned)pcb);
+}
+
 static void run_startup(void)
 {
     char provision_path[512];
@@ -2200,6 +2238,7 @@ int main(void)
      * deliberately starts none of its own -- see the NOTE ON SERVICES
      * above. */
     print_stdrv_begun();
+    start_opcom();                       /* rd vms-798: OPCOM before the site startup */
     run_startup();
 
     /*

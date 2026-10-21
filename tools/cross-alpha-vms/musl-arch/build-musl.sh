@@ -75,6 +75,11 @@ cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
 # header of src/malloc/alpha-dec-vms/lite_malloc.c.
 mkdir -p "src/malloc/${TARGET}"
 cp -v  "${OVERLAY}/src/malloc/${TARGET}/"* "src/malloc/${TARGET}/"
+# vms-599: exit() runs the atexit handlers and flushes stdio. Replace generic
+# exit.c (which reaches both through local weak aliases the back end self-binds)
+# with one that calls them by name. See src/exit/alpha-dec-vms/exit.c.
+mkdir -p "src/exit/${TARGET}"
+cp -v  "${OVERLAY}/src/exit/${TARGET}/"* "src/exit/${TARGET}/"
 # vms-122: VMS P0 placement. An address-less mmap (the heap's, and mremap's
 # moves) is placed in the P0 region below 0x40000000, as the VMS heap grows P0,
 # so every malloc result is a valid 32-bit pointer. See
@@ -635,6 +640,31 @@ if ! grep -qE '[[:space:]]U[[:space:]]+__libc_malloc_impl$' /tmp/lmck/nm.out; th
 	exit 8
 fi
 echo "  OK      lite_malloc.o: U __libc_malloc_impl, no local allocator -> one heap (mallocng)"
+
+# --------------------------------------------------------------------------
+# EXIT GATE (vms-599): exit.o must be the alpha-dec-vms override -- it names
+# __funcs_on_exit (atexit handlers) and __stdio_exit (stdio flush) as undefined
+# references and defines neither, so no local weak no-op can absorb the calls.
+# --------------------------------------------------------------------------
+echo "== exit gate (vms-599): exit.o calls the atexit handlers and the stdio flush by name =="
+rm -rf /tmp/exck && mkdir -p /tmp/exck
+EXMEMB=$(grep -m1 -E '(^|/)exit\.' /tmp/libc.members || true)
+[ -n "${EXMEMB}" ] || { echo "VERIFY FAIL (vms-599): no exit member in libc.a" >&2; exit 8; }
+( cd /tmp/exck && ar x "${LIBCA}" "${EXMEMB}" ) 2>/dev/null || true
+"${NM}" "/tmp/exck/${EXMEMB}" >/tmp/exck/nm.out 2>&1 || { cat /tmp/exck/nm.out >&2; exit 8; }
+for _sym in __funcs_on_exit __stdio_exit; do
+	if grep -qE "^[0-9a-fA-F]+[[:space:]]+[A-TV-Za-tv-z][[:space:]]+${_sym}\$" /tmp/exck/nm.out; then
+		echo "VERIFY FAIL (vms-599): exit.o DEFINES ${_sym} (generic exit.c's weak no-op, not the alpha-dec-vms override):" >&2
+		cat /tmp/exck/nm.out >&2
+		exit 8
+	fi
+	if ! grep -qE "[[:space:]]U[[:space:]]+${_sym}\$" /tmp/exck/nm.out; then
+		echo "VERIFY FAIL (vms-599): exit.o does not reference ${_sym} by name:" >&2
+		cat /tmp/exck/nm.out >&2
+		exit 8
+	fi
+done
+echo "  OK      exit.o: U __funcs_on_exit, U __stdio_exit -> exit() runs atexit and flushes stdio"
 
 # --------------------------------------------------------------------------
 # SIZE_T MODEL GATE (vms-537): through musl's own installed header set, ::size_t

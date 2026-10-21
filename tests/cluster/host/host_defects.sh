@@ -3531,8 +3531,10 @@ apply_edit() {
         sed -i 's@^\treturn t->n_owed != 0u \&\& t->n_done == t->n_owed;$@\treturn t->n_done != 0u; /* NEGCTL dlm-rm-held-before-the-last-end */@' "$_file";;
 
     dlm-rm-held-to-a-member-that-reported-nothing)
-        # The `done` filter in rm_send_held, the only `continue` guarded by it.
-        sed -i 's@^\t\t\tcontinue;      /\* owed us nothing: gets nothing (W1) \*/$@\t\t\t(void)0; /* NEGCTL dlm-rm-held-to-a-member-that-reported-nothing */@' "$_file";;
+        # rm_send_held's rule-W1 filter, the only test of `done[i]` against
+        # REPORTED. Disarmed, the tree is announced to every member of the
+        # owed set -- including one that has LEFT the cluster.
+        sed -i 's@^\t\tif (t->done\[i\] != VMS_DLM_RM_OWED_REPORTED)$@\t\tif (0) /* NEGCTL dlm-rm-held-to-a-member-that-reported-nothing */@' "$_file";;
 
     dlm-rm-open-answered-when-refused)
         # rm_h_open's engine test: the call still happens and its answer is
@@ -3540,13 +3542,16 @@ apply_edit() {
         sed -i 's@^\tif (!f->ops->adopt_open(f->ops->ctx, \&slot->tree)) {$@\t(void)f->ops->adopt_open(f->ops->ctx, \&slot->tree); if (0) { /* NEGCTL dlm-rm-open-answered-when-refused */@' "$_file";;
 
     dlm-rm-half-tree-left-adopted)
-        # The ONE rm_abandon call site (rm_h_record). `(void)t` keeps the
-        # mutated tree building clean.
-        sed -i 's@^\t\trm_abandon(f, t);$@\t\t(void)t; /* NEGCTL dlm-rm-half-tree-left-adopted */@' "$_file";;
+        # rm_abandon's body is made a no-op at its first statement (its
+        # `undone` declaration, unique in this file), so the CALL SITE still
+        # references it and the mutated tree builds clean under -Werror.
+        sed -i 's@^\tuint32_t undone = 0u;$@\tuint32_t undone = 0u; if (1) { (void)undone; return; } /* NEGCTL dlm-rm-half-tree-left-adopted */@' "$_file";;
 
     dlm-rm-held-reported-though-unsent)
-        # rm_complete's guard on the report; `sent` stays read.
-        sed -i 's@^\tif (sent != 0u)$@\tif (sent == sent) /* NEGCTL dlm-rm-held-reported-though-unsent */@' "$_file";;
+        # rm_complete's guard on the report. A comma expression, not a
+        # self-comparison: `sent` stays read and -Wtautological-compare has
+        # nothing to say.
+        sed -i 's@^\tif (sent != 0u)$@\tif (((void)sent, 1)) /* NEGCTL dlm-rm-held-reported-though-unsent */@' "$_file";;
 
     dlm-rm-role-claimed-without-an-adoption)
         # rm_h_role's role read: the second arm of the only ternary here.

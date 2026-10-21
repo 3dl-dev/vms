@@ -154,6 +154,16 @@ enum vms_dlm_rm_event {
 	VMS_DLM_RM_EV__COUNT
 };
 
+/*
+ * WHAT BECAME OF ONE MEMBER THIS TREE WAS WAITING ON. Only REPORTED earns an
+ * op-0x14 (rule W1); DEPARTED stops the wait without making the departed system
+ * a recipient, because a system that has left the cluster is not one a frame
+ * may be addressed at.
+ */
+#define VMS_DLM_RM_OWED_WAITING   0u
+#define VMS_DLM_RM_OWED_REPORTED  1u
+#define VMS_DLM_RM_OWED_DEPARTED  2u
+
 /* What became of one inbound step. */
 enum vms_dlm_rm_status {
 	VMS_DLM_RM_NOT_MINE = 0,  /* not a remaster step: the caller goes on    */
@@ -253,12 +263,17 @@ struct vms_dlm_rm_tree {
 	 * when the 0x14 is built (INV-6 point 4). */
 	struct vms_dlm_res_ident  id;
 
-	/* The members that owe an end-of-records, and the ones that sent one.
-	 * `owed` is the CLUB's answer at open time; `done[i]` marks owed[i]. */
+	/*
+	 * THE MEMBERSHIP THIS HAND-OVER IS WAITING ON. `owed` is the CLUB's
+	 * answer when the tree was handed over, kept as a record for the whole
+	 * life of the slot; `done[i]` is what became of owed[i]. A member is
+	 * never removed, so "announced to everyone who reported, and to nobody
+	 * else" stays checkable after the fact.
+	 */
 	uint32_t owed[VMS_DLM_RM_MEMBERS];
-	uint8_t  done[VMS_DLM_RM_MEMBERS];
+	uint8_t  done[VMS_DLM_RM_MEMBERS];   /* VMS_DLM_RM_OWED_*            */
 	uint8_t  n_owed;
-	uint8_t  n_done;
+	uint8_t  n_done;                     /* reported OR departed         */
 
 	uint8_t  state;        /* enum vms_dlm_rm_state                       */
 	uint8_t  pad;

@@ -178,13 +178,14 @@ static int rm_owed_mark(struct vms_dlm_rm_tree *t, uint32_t csid)
 	for (i = 0u; i < t->n_owed; i++) {
 		if (t->owed[i] != csid || t->done[i])
 			continue;
-		t->done[i] = 1u;
+		t->done[i] = VMS_DLM_RM_OWED_REPORTED;
 		t->n_done++;
 		return 1;
 	}
 	return 0;
 }
 
+/* Every member this tree was waiting for has either reported or left. */
 static int rm_owed_complete(const struct vms_dlm_rm_tree *t)
 {
 	return t->n_owed != 0u && t->n_done == t->n_owed;
@@ -202,22 +203,23 @@ static int rm_owed_has(const struct vms_dlm_rm_tree *t, uint32_t csid)
 	return 0;
 }
 
-/* Strike a departed member from one tree's owed set. Returns 1 when it really
- * was owed one -- a departed system will not be sending it. */
+/*
+ * A DEPARTED member stops being waited for -- it will not be sending an
+ * end-of-records -- and stops being a recipient, but it is NOT removed from the
+ * set: `owed` is the membership the CLUB named when the tree was handed over,
+ * and that record is what makes "this tree was announced to everyone who
+ * reported, and to nobody else" checkable afterwards. Returns 1 only when the
+ * member really was still owing one.
+ */
 static int rm_owed_strike(struct vms_dlm_rm_tree *t, uint32_t csid)
 {
-	uint32_t i, j;
+	uint32_t i;
 
 	for (i = 0u; i < t->n_owed; i++) {
-		if (t->owed[i] != csid)
+		if (t->owed[i] != csid || t->done[i])
 			continue;
-		if (t->done[i])
-			t->n_done--;
-		for (j = i; j + 1u < t->n_owed; j++) {
-			t->owed[j] = t->owed[j + 1u];
-			t->done[j] = t->done[j + 1u];
-		}
-		t->n_owed--;
+		t->done[i] = VMS_DLM_RM_OWED_DEPARTED;
+		t->n_done++;
 		return 1;
 	}
 	return 0;
@@ -328,8 +330,12 @@ static uint32_t rm_send_held(struct vms_dlm_rm *f, struct vms_dlm_rm_tree *t)
 		return 0u;
 	}
 	for (i = 0u; i < t->n_owed; i++) {
-		if (!t->done[i])
-			continue;      /* owed us nothing: gets nothing (W1) */
+		/* RULE W1: ONLY a member that really sent an end-of-records.
+		 * Not one that is still owing one (it is not part of this
+		 * hand-over as far as this node can tell), and not one that
+		 * has LEFT the cluster. */
+		if (t->done[i] != VMS_DLM_RM_OWED_REPORTED)
+			continue;
 		if (f->ops->send(f->ops->ctx, t->owed[i],
 				 f->txframe + VMS_OFF_SYSAP_BODY,
 				 VMS_CM_BODY_LEN) != 0) {

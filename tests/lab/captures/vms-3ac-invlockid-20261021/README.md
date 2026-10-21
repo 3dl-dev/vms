@@ -94,3 +94,6 @@ supports: fail-honest, never fatal-to-the-peer.
 | `invlockid-trimmed.pcap.gz` | 518 of the pod capture's 14,825 frames: everything the OVMX node was party to, plus every frame naming `RA7T`, by the rule in `trimrule.py`. Payloads unaltered |
 | `deq-frames.txt` | the three DEQs and the remaster between them, decoded |
 | `trimrule.py` | the trim rule, so the selection is reproducible |
+| `console-vax1-full.log.gz` | VAX1's whole console for the life of the pod -- the boot, the arm, the crash, the reboot and the rejoin attempts |
+| `console-vax2.log`, `console-ovmxe.log` | the other two consoles, whole |
+| `REFIRE-PLAN.md` | the regression re-fire, pre-registered before the fixed build reached a pod |

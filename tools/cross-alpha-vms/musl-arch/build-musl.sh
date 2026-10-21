@@ -236,6 +236,16 @@ if ! grep -q 'vms-28d: psignal' include/signal.h; then
 	perl -0pi -e 's/^void psiginfo\(const siginfo_t \*, const char \*\);\nvoid psignal\(int, const char \*\);\n/#if !defined(__VMS) || defined(__OVMX_LIBC_BUILD) \/* vms-28d: psignal not in the DEC C RTL *\/\nvoid psiginfo(const siginfo_t *, const char *);\nvoid psignal(int, const char *);\n#endif\n/m' include/signal.h
 fi
 grep -q 'vms-28d: psignal' include/signal.h || { echo "vms-28d PATCH FAIL: psignal in include/signal.h" >&2; exit 7; }
+# vms-599: DEC C exit. Under the _POSIX_EXIT feature-test macro exit() is
+# __posix_exit() (a POSIX code 0-255 as a C-facility condition value); otherwise
+# exit()'s value is the VMS status, so EXIT_FAILURE is 2, an error severity
+# (VSI C RTL Reference, exit: "2 or EXIT_FAILURE"; exit(2) measured as %X00000002
+# on OpenVMS Alpha V8.4, tests/lab/captures/decc-exit-alpha-20261021). The GCC
+# port's own programs define _POSIX_EXIT (gcc/config/vms/xm-vms.h).
+if ! grep -q 'vms-599: DEC C exit' include/stdlib.h; then
+	perl -0pi -e 's/^#define EXIT_SUCCESS 0\n/$&#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \/* vms-599: DEC C exit *\/\n#ifdef _POSIX_EXIT\n_Noreturn void __posix_exit (int);\n#define exit __posix_exit\n#else\n#undef EXIT_FAILURE\n#define EXIT_FAILURE 2\n#endif\n#endif\n/m' include/stdlib.h
+fi
+grep -q 'vms-599: DEC C exit' include/stdlib.h || { echo "vms-599 PATCH FAIL: exit in include/stdlib.h" >&2; exit 7; }
 # vms-4ba3: DEC C fgetname(FILE *, char *, ...) -- the file specification of an
 # open stream, served by the RMS file layer (src/vmsrms/crtl_rms_fd.c). A DEC C
 # client form only; musl has no such routine.

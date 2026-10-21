@@ -430,8 +430,24 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
             esac
         done
         VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$_getcwd64=PROCEDURE,/,decc$_getcwd64\/ovmx_crtl_getcwd=PROCEDURE,/; s/,decc\$getcwd\/decc\$_getcwd64=PROCEDURE,/,decc$getcwd\/ovmx_crtl_getcwd=PROCEDURE,/; s/^,//; s/,$//')
+        # vms-599: DEC C exit() records the image's VMS completion status (SYS$EXIT in
+        # LIBVMS$SHR) after musl's atexit handlers and stdio flush. decc$exit is rebound
+        # in place; __posix_exit (exit() under _POSIX_EXIT) is a new universal at the tail.
+        for _ex in ovmx_crtl_exit ovmx_crtl_posix_exit; do
+            "$NM" --defined-only "$SYS_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "$_ex" \
+                || { echo "mk_decc_shr: FAIL crtl_process.c did not define $_ex" >&2; exit 2; }
+        done
+        case ",$VEC," in
+            *',decc$exit=PROCEDURE,'*) ;;
+            *) echo "mk_decc_shr: FAIL decc\$exit is not a PROCEDURE universal to rebind" >&2; exit 2;;
+        esac
+        VEC=$(printf '%s' ",$VEC," | sed 's/,decc\$exit=PROCEDURE,/,decc$exit\/ovmx_crtl_exit=PROCEDURE,/; s/^,//; s/,$//')
+        case ",$VEC,${PASS2_TAIL:-}," in
+            *',decc$__posix_exit'[=/]*) echo "mk_decc_shr: FAIL decc\$__posix_exit is already in the vector" >&2; exit 2;;
+        esac
+        PASS2_TAIL="${PASS2_TAIL:-},decc\$__posix_exit/ovmx_crtl_posix_exit=PROCEDURE"
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SYS_OBJ"
-        echo "mk_decc_shr: DEC C system() wired (vms-65a): decc\$system -> ovmx_crtl_system (LIB\$SPAWN, --use $ALPHA_CRTL_VMS_USE)"
+        echo "mk_decc_shr: DEC C system() wired (vms-65a): decc\$system -> ovmx_crtl_system (LIB\$SPAWN, --use $ALPHA_CRTL_VMS_USE); exit/__posix_exit record \$STATUS (vms-599)"
     fi
 
     # Plain (non-decc$-decorated) names the decc$ filter above cannot catch,

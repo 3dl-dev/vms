@@ -861,8 +861,27 @@ int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len)
 	nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
 	if (!vms_wire_view_ok(&v))
 		return 0;
-	return cat == VMS_DLM_CAT_REQUEST && op == VMS_DLM_WIREOP_DIR_REMOVE &&
-	       nlen != 0u;
+	if (cat != VMS_DLM_CAT_REQUEST)
+		return 0;
+	/*
+	 * THE RELEASE IS A NOTIFICATION TOO (rd vms-194 D1), and on its OPCODE
+	 * alone -- a release carries no name (the codec refuses to read one:
+	 * the bytes a real $DEQ leaves at body[46:] belong to whatever last
+	 * used the buffer), so there is no shape left to admit it on.
+	 *
+	 * MEASURED, tools/cluster/dlm_deq_census.py over every committed pcap:
+	 *   real op-0x03 frames carrying a transaction at body[4:8]  0 of 9,858
+	 *   cat-0x82 op-0x03 ANSWERS anywhere in the corpus                   0
+	 * Nobody answers a release, and no real sender opens a transaction on
+	 * one. OVMX opened one on all 11 of its own, which minted a token on
+	 * the CSB, assigned it to a message no peer will ever answer, and left
+	 * it open -- the envelope-inconsistency class that produced CNXMGRERR
+	 * on a real node (ovmx-never-crashes-a-peer, crash vector 1), in the
+	 * one frame family that has already bugchecked two lab VAXes.
+	 */
+	if (op == VMS_DLM_WIREOP_DEQ)
+		return 1;
+	return op == VMS_DLM_WIREOP_DIR_REMOVE && nlen != 0u;
 }
 
 vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,

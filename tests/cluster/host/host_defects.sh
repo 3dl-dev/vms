@@ -195,6 +195,7 @@ dlm-local-release-tells-nobody
 dlm-rundown-release-tells-nobody
 dlm-grant-advance-uncounted
 dlm-convert-tells-the-converter-only
+dlm-release-opens-a-transaction
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -937,6 +938,20 @@ EOF
         why)          echo "the counter bump goes, so a node that granted a lock it could never announce looks exactly like a node that had nothing to announce. That is the anti-LARP tripwire for this whole item: the DEFECT it replaces was silence, and silence that is not counted is indistinguishable from correctness (INV-6, and the same discipline as deferred_grants_owed).";;
         require_fail) hd_lines <<'EOF'
 *** ...and the flip nobody could be told about is COUNTED, not dropped ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-release-opens-a-transaction)
+        case "$_f" in
+        facility)     echo "THE RELEASE's ENVELOPE (vms_cluster_codec_dlm.c vms_dlm_body_is_notification, rd vms-194 D1): an op-0x03 is a NOTIFICATION, so the connection manager opens no transaction for it";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "the release goes back to being treated as a message somebody answers, so every one mints a transaction token on the CSB, assigns it to a message no peer will ever answer, and leaves it open. MEASURED (tools/cluster/dlm_deq_census.py over every committed pcap): 0 of 9,858 real releases carry a transaction at body[4:8] and the corpus holds ZERO cat-0x82 op-0x03 answers -- while OVMX opened one on 11 of 11 of its own. It is the envelope-inconsistency class the ovmx-never-crashes-a-peer memory names as crash vector 1 (the one that produced CNXMGRERR), in the one frame family that has already bugchecked two lab VAXes.";;
+        require_fail) hd_lines <<'EOF'
+*** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in 9,858 real releases' corpus) ***
+*** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
 EOF
                       ;;
         esac;;
@@ -2998,6 +3013,10 @@ apply_edit() {
         # The sweep's one carry-out line (the quorum resume appends to `all`,
         # not `f`, so this text is unique to lock_teardown_locked).
         sed -i 's|        dlm_flips_append(f, \&mine);|        /* NEGCTL dlm-rundown-release-tells-nobody */|' "$_file";;
+
+    dlm-release-opens-a-transaction)
+        # The release's own admission line, unique in this file.
+        sed -i 's|^\tif (op == VMS_DLM_WIREOP_DEQ)$|\tif (0) /* NEGCTL dlm-release-opens-a-transaction */|' "$_file";;
 
     dlm-convert-tells-the-converter-only)
         # The convert branch's snapshot, distinguished from vms_deq_core's by

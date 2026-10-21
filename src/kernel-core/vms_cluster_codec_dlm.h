@@ -846,9 +846,18 @@ vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,
 					    uint8_t *frame, uint32_t cap,
 					    uint32_t *written);
 
-/* Is this body a DLM NOTIFICATION, one the receiver never answers, so its
- * envelope must open no transaction (body[4:8] = 0)? Nonzero only for the named
- * op-0x04 directory-entry removal (rd vms-e09, R3). */
+/*
+ * Is this body a DLM NOTIFICATION, one the receiver never answers, so its
+ * envelope must open no transaction (body[4:8] = 0)?
+ *
+ * TWO SHAPES, each on its own evidence:
+ *   - the named op-0x04 directory-entry removal (rd vms-e09, R3);
+ *   - the op-0x03 RELEASE (rd vms-194 D1), on its opcode alone because a
+ *     release carries no name. MEASURED by tools/cluster/dlm_deq_census.py:
+ *     0 of 9,858 real releases carry a transaction, and the corpus holds ZERO
+ *     cat-0x82 op-0x03 answers. See the implementation for what OVMX's own 11
+ *     releases cost.
+ */
 int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len);
 
 /*

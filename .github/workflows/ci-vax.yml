@@ -2241,7 +2241,7 @@ jobs:
           set -euo pipefail
           FAKE_IMAGES=/tmp/fake-vax-images
           mkdir -p "$FAKE_IMAGES"
-          for f in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE \
+          for f in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE OPCOM.EXE \
                    PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE; do
             printf 'CI placeholder (this job proves SYSLIB staging, not the boot-image build)\n' > "$FAKE_IMAGES/$f"
           done
@@ -2376,7 +2376,7 @@ jobs:
             echo "FAIL: cmake vax-toolchain configure/build of ovmx-images exited nonzero ($RC)"
             exit 1
           fi
-          for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE; do
+          for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE OPCOM.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE; do
             echo "$RAW" | grep -qF -- "-> $img: ELF32 Digital VAX, dynamically linked, interp=/usr/libexec/ld.elf_so" \
               || { echo "FAIL: $img did not pass the activation contract assertion"; exit 1; }
           done

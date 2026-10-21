@@ -211,7 +211,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     # OPCOM broadcast, in OPCOM's format (tests/lab/captures/
     # vms-52d-0b01-oracle-20261013/armA-vax1-console.log). Read BEFORE the TYPE
     # above could have put the same words on the console: the segment up to it.
-    if head -c "$off" "$LOG2" | tr -d '\r' | grep -A2 -aE '^%%%%%%%%%%%  OPCOM ' | grep -qaF 'DECnet starting'; then rc=0; else rc=1; fi
+    if head -c "$off" "$LOG2" | tr -d '\r' | grep -A2 -aE '^%%%%%%%%%%%  OPCOM ' | grep >/dev/null -aF 'DECnet starting'; then rc=0; else rc=1; fi
     record "boot 2: OPA0: shows NETACP's OPCOM message 'DECnet starting' (as on the real VAX)" "$rc"
 
     # rd vms-dda: an outbound link from a user process, brokered through the

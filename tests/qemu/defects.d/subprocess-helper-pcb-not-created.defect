@@ -21,6 +21,8 @@ EOF
 }
 
 defect_apply() {
-        sed -i 's|^        st = vms_kif_creprc_pcb((uint32_t)pid, VMS_CREPRC_PCB_SUBPROCESS,$|        st = vms_kif_creprc_pcb((uint32_t)pid, 0xFFu, /* NEGCTL subprocess-helper-pcb-not-created */|' "$_file"
+        # rd vms-798: ovmx_subprocess_fork names its kind to ovmx_creprc_fork,
+        # which carries it to the executive -- the kind is what is broken.
+        sed -i 's|^    return ovmx_creprc_fork(VMS_CREPRC_PCB_SUBPROCESS, pcb_status, vms_pid);$|    return ovmx_creprc_fork(0xFFu, pcb_status, vms_pid); /* NEGCTL subprocess-helper-pcb-not-created */|' "$_file"
     :
 }

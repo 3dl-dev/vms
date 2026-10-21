@@ -14,8 +14,10 @@
 # compiler + the 32-bit libstdc++ in cxx/p32); <joint> the shareables the
 # programs link against (DECC$SHR, LIBOTS_SHR, LIBVMS*$SHR, STARLET.a). The
 # host GCC is built at the DEC C default pointer size (32-bit), as DEC C and
-# the port's host configuration assume. Output: /w/host-gcc/{cc1,xgcc,cpp}.exe;
-# progress and any failure go to stdout.
+# the port's host configuration assume. Output: /w/host-gcc/{cc1,cc1plus,xgcc,
+# gxx,cpp,ld,ar}.exe (gxx.exe is the g++ driver, xg++: ODS-2 has no '+');
+# progress and any failure go to stdout. C++ is built too (vms-5b3): GCC 14 is
+# written in C++, so building cc1 on OVMX needs cc1plus there.
 set -euo pipefail
 T=alpha-dec-vms; B=x86_64-pc-linux-gnu
 X=/out/cxx
@@ -67,7 +69,7 @@ echo "== gcc (build=$B host=$T target=$T, all-gcc)"
 mkdir -p $O/b-gcc && cd $O/b-gcc
 export ax_cv_cxx_compile_cxx11_FOR_BUILD=yes CONFIG_SITE=/src/tools/cross-alpha-vms/cxx/config.site
 [ -f Makefile ] || ../src/gcc-14.2.0/configure --build=$B --host=$T --target=$T --prefix=/gnu \
-    --enable-languages=c --disable-nls --disable-bootstrap --disable-shared --disable-lto \
+    --enable-languages=c,c++ --disable-nls --disable-bootstrap --disable-shared --disable-lto \
     --disable-plugin --disable-fixincludes \
     --with-gmp=$H --with-mpfr=$H --with-mpc=$H --without-isl --without-zstd --with-gnu-as \
     CC="$T-gcc" CXX="$T-g++ $P32" AR=ar RANLIB=true CFLAGS="-O2" CXXFLAGS="-O2" \
@@ -78,6 +80,7 @@ make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.lo
 # ld.exe is the port's own linker wrapper (config/vms/vms-ld.c): it writes an options
 # file and runs the VMS `link` command, the program the driver calls to link (vms-65a);
 # ar.exe (config/vms/vms-ar.c) is its twin for `ar`: a command file running `library` (vms-8ca)
-for e in cc1 xgcc cpp ld ar; do cp gcc/$e.exe $O/$e.exe; done
+for e in cc1 cc1plus xgcc cpp ld ar; do cp gcc/$e.exe $O/$e.exe; done
+cp gcc/xg++.exe $O/gxx.exe
 ls -la $O/*.exe
 echo "HOST-GCC: OK"

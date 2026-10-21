@@ -339,6 +339,11 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp "$JOINT/ld.exe" "$SYSEXE/LD.EXE"
                 cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
                 [ -f "$JOINT/ar.exe" ] && cp "$JOINT/ar.exe" "$SYSEXE/AR.EXE"
+                # vms-5b3: C++ -- cc1plus, the g++ driver (xg++; ODS-2 has no '+', so GXX.EXE)
+                # and the 32-bit libstdc++ (LIBSTDCXX.A, searched by LINK)
+                [ -f "$JOINT/cc1plus.exe" ] && cp "$JOINT/cc1plus.exe" "$SYSEXE/CC1PLUS.EXE"
+                [ -f "$JOINT/gxx.exe" ] && cp "$JOINT/gxx.exe" "$SYSEXE/GXX.EXE"
+                [ -f "$JOINT/libstdcxx.a" ] && cp "$JOINT/libstdcxx.a" "$SYSEXE/LIBSTDCXX.A"
                 for _f in crt0.o crtbegin.o crtend.o libgcc.a; do
                     [ -f "$JOINT/$_f" ] || { echo "FAIL: DRL_PROOF without $JOINT/$_f"; exit 1; }
                     cp "$JOINT/$_f" "$SYSEXE/$(echo "$_f" | tr a-z A-Z)"
@@ -351,6 +356,10 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                     mkdir -p "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0"
                     cp -r "$JOINT/inc/usr/include" "$ST/vms/SYS0/SYSCOMMON/USR/INCLUDE"
                     cp -r "$JOINT/inc/gnu/gcc-include" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0/INCLUDE"
+                    # the C++ headers on ODS-2 names (+ header.gcc remap pairs) -> GNU:[CXX]
+                    if [ -d "$JOINT/inc/gnu/cxx" ]; then
+                        cp -r "$JOINT/inc/gnu/cxx" "$ST/vms/SYS0/SYSCOMMON/GNU/CXX"
+                    fi
                     echo "   JOINT-E2E (HEADERS): $(find "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU" -type f | wc -l) header file(s) -> [USR.INCLUDE], [GNU.LIB.GCC.ALPHA-DEC-VMS.14_2_0.INCLUDE]"
                 fi
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM \

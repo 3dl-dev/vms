@@ -3,8 +3,8 @@
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \BOGUS\
 # EXPECT: contains:$STATUS = "%X00038240"
-# EXPECT: contains:%DCL-W-NOTIMPL, secondary passwords are not implemented in OVMX - no state changed
-# EXPECT: contains:%DCL-W-NOTIMPL, /GENERATE password generation is not implemented in OVMX - no state changed
+# EXPECT: contains:%SYSTEM-E-UNSUPPORTED, unsupported operation or function
+# EXPECT_NOT: contains:$STATUS = "%X00000001"
 # EXPECT: contains:$STATUS = "%X00000E4A"
 # EXPECT: contains:%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters
 # EXPECT: contains:$STATUS = "%X00038098"
@@ -50,4 +50,4 @@
 # silently proceeding. It is asserted here as a regression guard on ITS
 # OWN honesty -- it must never become $STATUS = 1.
 VMSDCL="${VMSDCL:-vmsdcl}"
-printf 'SET PASSWORD/BOGUS\nSHOW SYMBOL $STATUS\nSET PASSWORD/SECONDARY\nSET PASSWORD/GENERATE\nSHOW SYMBOL $STATUS\nSET PASSWORD FOO\nSHOW SYMBOL $STATUS\nSET PASSWORD\n' | $VMSDCL 2>&1
+printf 'SET PASSWORD/BOGUS\nSHOW SYMBOL $STATUS\nSET PASSWORD/SECONDARY\nSHOW SYMBOL $STATUS\nSET PASSWORD/GENERATE\nSHOW SYMBOL $STATUS\nSET PASSWORD FOO\nSHOW SYMBOL $STATUS\nSET PASSWORD\n' | $VMSDCL 2>&1

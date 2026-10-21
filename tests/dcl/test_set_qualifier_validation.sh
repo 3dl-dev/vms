@@ -6,7 +6,7 @@
 # EXPECT: contains: \ZQTHREE\
 # EXPECT: contains: \ZQSIX\
 # EXPECT_NOT: contains: \CARRIAGE_CONTROL\
-# EXPECT: contains:%SET-E-NOSUCHFILE
+# EXPECT: contains:%SYSTEM-W-NOSUCHDEV
 # EXPECT_NOT: contains: \TRUNCATE\
 # EXPECT_NOT: contains: \FACILITY\
 VMSDCL="${VMSDCL:-vmsdcl}"

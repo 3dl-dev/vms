@@ -190,17 +190,21 @@ else
     dump_and_die "MOUNT VDA100: did not report success within ${RUN_TIMEOUT}s"
 fi
 
-# --- 2. Current-tree NOTIMPL still fires honestly for a genuinely
-#        unimplemented PRODUCT operation (the shape the pre-fix baseline
-#        used for EVERY operation, including INSTALL) --------------------
+# --- 2. A genuinely unimplemented PRODUCT operation is refused honestly
+#        with the real SS$_UNSUPPORTED (%X00000E4A), never a success status
+#        (the pre-fix baseline answered EVERY operation, INSTALL included,
+#        with an invented %PCSI-E-NOTIMPL and $STATUS success) -----------
 OFF=$(wc -c <"$LOG")
 send 'PRODUCT CONFIGURE FOO'
 wait_for '$' "$RUN_TIMEOUT" "$OFF"
+send 'SHOW SYMBOL $STATUS'
+wait_for '$STATUS = ' "$RUN_TIMEOUT" "$OFF"
 SEG=$(segment_since "$OFF")
-if printf '%s\n' "$SEG" | grep >/dev/null -F '%PCSI-W-NOTIMPL'; then
-    ok "PRODUCT CONFIGURE (still unimplemented) honestly reports %PCSI-W-NOTIMPL"
+if printf '%s\n' "$SEG" | grep >/dev/null -F '%SYSTEM-E-UNSUPPORTED, unsupported operation or function' &&
+   printf '%s\n' "$SEG" | grep >/dev/null -F '$STATUS = "%X00000E4A"'; then
+    ok "PRODUCT CONFIGURE (still unimplemented) is refused %SYSTEM-E-UNSUPPORTED, \$STATUS %X00000E4A"
 else
-    bad "PRODUCT CONFIGURE did not report %PCSI-W-NOTIMPL"
+    bad "PRODUCT CONFIGURE was not refused %SYSTEM-E-UNSUPPORTED / %X00000E4A"
     echo "$SEG"
 fi
 

@@ -41,11 +41,12 @@
  *     executive ACP (IO$_ACCESS, IO$_MODIFY's ACL read).
  * OVMX-LOCAL: sys$get_security -- the object name is resolved and the
  *     security context is kept in this process; class FILE only.
- * OVMX-PARTIAL: sys$set_security (vms-d404) -- exec: ACL entries are added and
- *     deleted in the file header by the executive ACP, which grants the change
- *     only to a process with CONTROL access.
+ * OVMX-PARTIAL: sys$set_security (vms-d404) -- exec: ACL entries, the owner and
+ *     the protection are changed in the file header by the executive ACP
+ *     (IO$_MODIFY), which grants the change only to a process with CONTROL
+ *     access (vms-1fb7).
  * OVMX-LOCAL: sys$set_security -- OSS$M_LOCAL edits are held in this process's
- *     context until OSS$M_RELCTX; owner and protection are not changed here.
+ *     context until OSS$M_RELCTX.
  * OVMX-PARTIAL: sys$open (vms-bc7) -- exec: $ASSIGN the volume + IO$_ACCESS
  *     resolves the filespec by name to a FID and builds the file's VBN->LBN
  *     window (rms_acp_open_file).
@@ -3606,8 +3607,10 @@ uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *))
  * operations, which the ACP grants only to a process with CONTROL access.
  * A security context (contxt) holds the located object between calls;
  * OSS$M_LOCAL edits are held in it and applied when OSS$M_RELCTX releases
- * it. Owner and protection are read here but changed only through the ACP's
- * attribute path ($MODIFY), not by this service (SS$_UNSUPPORTED).
+ * it. OSS$_OWNER and OSS$_PROTECTION are written with IO$_MODIFY's
+ * attribute write (rd vms-1fb7), which the ACP likewise grants only to a
+ * process with CONTROL access -- the path DCL SET PROTECTION, SET FILE
+ * /PROTECTION and SET FILE/OWNER_UIC take.
  * ====================================================================== */
 
 #ifndef VMS_ACP_ACL_ADD              /* vms_acp.h's, when the ACP is not built in */
@@ -3616,6 +3619,10 @@ uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *))
 #define VMS_ACP_ACL_DELETEALL  6u
 #define VMS_ACP_ACL_READ       7u
 #define VMS_ACP_ACL_PURGE     15u
+#endif
+#ifndef VMS_ACP_ATTR_PROT
+#define VMS_ACP_ATTR_PROT     0x01u
+#define VMS_ACP_ATTR_OWNER    0x02u
 #endif
 #define RMS_OSS_ACL_ADD_ENTRY     3
 #define RMS_OSS_ACL_DELETE_ENTRY  4
@@ -3638,6 +3645,8 @@ struct rms_sec_ctx {
     uint16_t fid_num, fid_seq;
     uint8_t  fid_rvn, fid_nmx;
     uint16_t owner_group, owner_member, prot;
+    uint16_t new_group, new_member, new_prot;   /* held OSS$_OWNER / OSS$_PROTECTION */
+    uint8_t  set_attr;                          /* VMS_ACP_ATTR_PROT|OWNER held */
     int      nops;
     struct { uint32_t op; uint32_t len; uint8_t ace[256]; } ops[RMS_SEC_OPS_MAX];
 };
@@ -3708,6 +3717,34 @@ static uint32_t rms_sec_locate(const struct dsc$descriptor_s *objnam, struct rms
         return SS$_NORMAL;
     }
     return last;
+}
+
+/* Write the held owner/protection into the header: IO$_MODIFY by file ID. */
+static uint32_t rms_sec_attrop(struct rms_sec_ctx *c)
+{
+    struct vms_acp_fileop_args f;
+    uint32_t st;
+
+    memset(&f, 0, sizeof(f));
+    f.chan = c->chan;
+    f.func = VMS_ACP_FOP_MODIFY;
+    f.fidmode = 1;
+    f.fid_num = c->fid_num; f.fid_seq = c->fid_seq;
+    f.fid_rvn = c->fid_rvn; f.fid_nmx = c->fid_nmx;
+    f.attr_ctl = c->set_attr;
+    f.attr.fileprot = c->new_prot;
+    f.attr.uic_group = c->new_group;
+    f.attr.uic_member = c->new_member;
+    st = vms_kif_acp_fileop(&f);
+    if (st & 1) {
+        if (c->set_attr & VMS_ACP_ATTR_PROT)
+            c->prot = c->new_prot;
+        if (c->set_attr & VMS_ACP_ATTR_OWNER) {
+            c->owner_group = c->new_group;
+            c->owner_member = c->new_member;
+        }
+    }
+    return st;
 }
 
 /* One ACL operation on the located file through IO$_MODIFY (by file ID). */
@@ -3880,13 +3917,31 @@ uint32_t sys$set_security(const struct dsc$descriptor_s *clsnam,
         return st;
     for (it = (struct rms_sec_item *)itmlst; it && (it->len || it->code); it++) {
         uint32_t op;
+        if (it->code == RMS_OSS_PROTECTION || it->code == RMS_OSS_OWNER) {
+            uint32_t v;
+            if (!it->buf || (it->len != 2 && it->len != 4)) {
+                st = SS$_BADPARAM;
+                goto done;
+            }
+            v = it->len == 2 ? *(const uint16_t *)it->buf : *(const uint32_t *)it->buf;
+            if (it->code == RMS_OSS_PROTECTION) {
+                c->new_prot = (uint16_t)v;
+                c->set_attr |= VMS_ACP_ATTR_PROT;
+            } else {
+                if (it->len != 4) { st = SS$_BADPARAM; goto done; }
+                c->new_group = (uint16_t)(v >> 16);
+                c->new_member = (uint16_t)v;
+                c->set_attr |= VMS_ACP_ATTR_OWNER;
+            }
+            continue;
+        }
         switch (it->code) {
         case RMS_OSS_ACL_ADD_ENTRY:    op = VMS_ACP_ACL_ADD; break;
         case RMS_OSS_ACL_DELETE_ENTRY: op = VMS_ACP_ACL_DEL; break;
         case RMS_OSS_ACL_DELETE:       op = VMS_ACP_ACL_DELETEALL; break;
         case RMS_OSS_ACL_DELETE_ALL:   op = VMS_ACP_ACL_PURGE; break;
         default:
-            st = SS$_UNSUPPORTED;               /* owner/protection: not this service */
+            st = SS$_BADPARAM;                  /* an item this service does not set */
             goto done;
         }
         if (c->nops >= RMS_SEC_OPS_MAX || it->len > sizeof(c->ops[0].ace) ||
@@ -3905,16 +3960,19 @@ uint32_t sys$set_security(const struct dsc$descriptor_s *clsnam,
      * context; releasing the context applies whatever is held. */
     if (!(flags & RMS_OSS_M_LOCAL) || (flags & RMS_OSS_M_RELCTX) || !contxt) {
 #if defined(OVMX_HAVE_ACP)
+        if (c->set_attr)
+            st = rms_sec_attrop(c);
         for (i = 0; i < c->nops && (st & 1); i++) {
             uint32_t len = c->ops[i].len;
             st = rms_sec_aclop(c, c->ops[i].op, len ? c->ops[i].ace : NULL, &len);
         }
 #else
-        if (c->nops)
+        if (c->nops || c->set_attr)
             st = SS$_NOSUCHDEV;
         (void)i;
 #endif
         c->nops = 0;
+        c->set_attr = 0;
     }
 done:
     if ((flags & RMS_OSS_M_RELCTX) || !contxt)

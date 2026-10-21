@@ -1,0 +1,33 @@
+# dcl-set-protection-host-chmod -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL SET PROTECTION changes the Files-11 header through \$SET_SECURITY / the ACP";;
+        targets)      echo "vmsdcl/dcl_cmd_set.c";;
+        suites_red)   echo "test_syssvc_dcl_set_protection";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation makes SET PROTECTION answer success without reaching the header -- what the old host chmod() amounted to on a Files-11 volume: \$STATUS says done, the header, F\$FILE_ATTRIBUTES and DIRECTORY/PROTECTION still show the old protection, and SET FILE/PROTECTION then merges onto the old word. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+the HEADER now holds (S:RWED,O:RWED,G:RE,W:R) = 0xEA00 (read through the ACP)
+F$FILE_ATTRIBUTES(...,"PRO") reads the new protection
+DIRECTORY/PROTECTION shows the new protection
+SET FILE/PROTECTION=(G:R) changes only GROUP: header 0xEE00
+F$FILE_ATTRIBUTES reads the merged protection
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: SET PROTECTION's call into the security service.
+        sed -i 's|^    return set_files_security(ctx, filespec, prot_str, 0, 0, SET\$_SEARCHFAIL_E);$|    (void)set_files_security; return SS$_NORMAL; /* NEGCTL dcl-set-protection-host-chmod */|' "$_file"
+    :
+}

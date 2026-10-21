@@ -28,6 +28,8 @@
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "climsgdef.h"
+#include "rmsdef.h"
+#include "ovmx_status.h"     /* vms_status_string: SET-x-SEARCHFAIL secondaries */
 #include "vms/logical.h"
 #include "vms/privs.h"
 #include "prv_names.h"    /* VMS_PRIV_NAME_LIST -- the VMS privilege keyword
@@ -908,6 +910,164 @@ static int cmd_set_acl(struct dcl_command *cmd)
     return (int)worst;
 }
 
+
+/*
+ * A protection code naming an unknown category: VMS leaves CLI$_IVKEYW and names
+ * it (VAX1, SET PROTECTION=(Q:R): "%DCL-W-IVKEYW, unrecognized keyword - check
+ * validity and spelling" / " \Q\", $STATUS %X00038060).
+ */
+/* The first category token of a protection code that is not (an abbreviation
+ * of) SYSTEM, OWNER, GROUP or WORLD, upcased into tok; "" when every one is. */
+static void prot_bad_category(const char *prot_str, char *tok, size_t toksz)
+{
+    static const char *const cats[] = { "SYSTEM", "OWNER", "GROUP", "WORLD" };
+    const char *p = prot_str;
+
+    tok[0] = '\0';
+    while (*p) {
+        while (*p == '(' || *p == ',' || *p == ' ' || *p == '\t') p++;
+        if (!*p || *p == ')') break;
+        const char *t = p;
+        while (*p && *p != ':' && *p != '=' && *p != ',' && *p != ')') p++;
+        size_t n = (size_t)(p - t), j;
+        int ok = 0;
+        for (j = 0; j < 4 && n; j++)
+            if (n <= strlen(cats[j]) && strncasecmp(t, cats[j], n) == 0) ok = 1;
+        if (!ok) {
+            if (n >= toksz) n = toksz - 1;
+            for (j = 0; j < n; j++) tok[j] = (char)toupper((unsigned char)t[j]);
+            tok[n] = '\0';
+            return;
+        }
+        while (*p && *p != ',' && *p != ')') p++;
+    }
+}
+
+static int set_bad_protection(const char *prot_str)
+{
+    char tok[32];
+    prot_bad_category(prot_str, tok, sizeof tok);
+    dcl_error("DCL", 0, "IVKEYW", "unrecognized keyword - check validity and spelling\n \\%s\\", tok);
+    return CLI$_IVKEYW;
+}
+
+/* 1 when a protection code names only real categories (else the caller
+ * reports set_bad_protection). */
+static int prot_code_ok(const char *prot_str)
+{
+    char tok[32];
+    prot_bad_category(prot_str, tok, sizeof tok);
+    return tok[0] == '\0';
+}
+
+/*
+ * SET PROTECTION / SET FILE: a file's protection and owner live in its Files-11
+ * header, and the executive ACP changes them (rd vms-1fb7) -- $GET_SECURITY /
+ * $SET_SECURITY OSS$_PROTECTION / OSS$_OWNER, IO$_MODIFY's attribute write,
+ * granted only to a process with CONTROL access over the file. What VMS prints
+ * (VAX1, 2026-10-21, tests/lab/captures/set-protection-20261021/):
+ *
+ *   $ SET PROTECTION=(W:R) NOSUCHP.TXT
+ *   %SET-E-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCHP.TXT;
+ *   -RMS-E-FNF, file not found                               $STATUS %X1077123A
+ *   $ SET FILE/TRUNCATE NOSUCHP.TXT
+ *   %SET-F-SEARCHFAIL, error searching for ...  (the same, severity F) %X1077123C
+ *
+ * and nothing at all on success. The SET facility (119) values, without the
+ * inhibit-display bit OVMX's $STATUS does not carry yet (rd vms-390).
+ */
+#define SET$_SEARCHFAIL_E  0x0077123Au
+#define SET$_SEARCHFAIL_F  0x0077123Cu
+
+static void set_print_cond(uint32_t st, int secondary)
+{
+    char m[256];
+    if (vms_status_string(st, m, sizeof m) > 0) {
+        if (secondary && m[0] == '%')
+            m[0] = '-';
+        fprintf(stderr, "%s\n", m);
+    }
+}
+
+/* An operation this build cannot perform on a file: no executive ACP to reach
+ * the header (the host / CI negative-control rig). Never a host chmod/stat. */
+static int set_file_no_executive(void)
+{
+    dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+    return SS$_NOSUCHDEV;
+}
+
+/*
+ * Apply a protection code (merged onto each file's CURRENT protection, VMS's
+ * "unspecified categories are unchanged" rule) and/or an owner to every file
+ * `filespec` names. `searchfail` is the SET$_SEARCHFAIL the verb reports.
+ * Returns the worst status.
+ */
+static int set_files_security(struct dcl_context *ctx, const char *filespec,
+                              const char *prot_str, int have_owner, uint32_t owner,
+                              uint32_t searchfail)
+{
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, filespec);
+    char match[1024];
+    uint32_t fn, worst = SS$_NORMAL;
+    uint16_t fs;
+    uint8_t fr;
+    int nfiles = 0;
+
+    if (d) {
+        while (dcl_rms_dir_next(d, match, sizeof(match), &fn, &fs, &fr)) {
+            static char cls[] = "FILE";
+            struct dsc$descriptor_s cd = { 4, DSC$K_DTYPE_T, DSC$K_CLASS_S, cls };
+            struct dsc$descriptor_s od = { (uint16_t)strlen(match), DSC$K_DTYPE_T,
+                                           DSC$K_CLASS_S, match };
+            struct { uint16_t len, code; void *buf; uint16_t *ret; } it[3];
+            uint32_t prot = 0, st;
+            int k = 0;
+
+            nfiles++;
+            if (prot_str) {
+                uint16_t rl = 0, vprot;
+                it[0].len = 4; it[0].code = OSS$_PROTECTION; it[0].buf = &prot; it[0].ret = &rl;
+                it[1].len = 0; it[1].code = 0; it[1].buf = NULL; it[1].ret = NULL;
+                st = sys$get_security(&cd, &od, NULL, 0, it, NULL, NULL);
+                if (!(st & 1)) {
+                    set_print_cond(st, 0);
+                    worst = st;
+                    continue;
+                }
+                vprot = (uint16_t)prot;
+                if (vmsfs_parse_protection(prot_str, &vprot) != SS$_NORMAL) {
+                    dcl_rms_dir_close(d);
+                    return set_bad_protection(prot_str);
+                }
+                prot = vprot;
+                it[k].len = 4; it[k].code = OSS$_PROTECTION; it[k].buf = &prot; it[k].ret = NULL; k++;
+            }
+            if (have_owner) {
+                it[k].len = 4; it[k].code = OSS$_OWNER; it[k].buf = &owner; it[k].ret = NULL; k++;
+            }
+            it[k].len = 0; it[k].code = 0; it[k].buf = NULL; it[k].ret = NULL;
+            st = sys$set_security(&cd, &od, NULL, 0, it, NULL, NULL);
+            if (!(st & 1)) {
+                set_print_cond(st, 0);
+                worst = st;
+            }
+        }
+    }
+    if (!nfiles) {
+        uint32_t why = d ? dcl_rms_dir_status(d) : RMS$_FNF;
+        if (why == RMS$_NMF || why == 0 || (why & 1))
+            why = RMS$_FNF;
+        dcl_error("SET", (searchfail & 7u) == 4 ? 4 : 2, "SEARCHFAIL",
+                  "error searching for %s", filespec);
+        set_print_cond(why, 1);
+        if (d) dcl_rms_dir_close(d);
+        return (int)searchfail;
+    }
+    dcl_rms_dir_close(d);
+    return (int)worst;
+}
+
 static int cmd_set_protection(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -964,10 +1124,9 @@ static int cmd_set_protection(struct dcl_command *cmd)
          * runs next. */
         uint16_t cur = 0;
         (void)sys$setdfprot(NULL, &cur);
-        if (prot_str[0] == '\0' || vmsfs_parse_protection(prot_str, &cur) != SS$_NORMAL) {
-            dcl_error("DCL", 2, "BADPROT", "invalid protection string - %s", prot_str);
-            return SS$_BADPARAM;
-        }
+        if (prot_str[0] == '\0' || !prot_code_ok(prot_str) ||
+            vmsfs_parse_protection(prot_str, &cur) != SS$_NORMAL)
+            return set_bad_protection(prot_str);
         uint16_t old = 0;
         return (sys$setdfprot(&cur, &old) & 1) ? SS$_NORMAL : SS$_NOPRIV;
     }
@@ -986,33 +1145,33 @@ static int cmd_set_protection(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
+    if (!prot_code_ok(prot_str))
+        return set_bad_protection(prot_str);
+#if defined(OVMX_HAVE_ACP)
+    if (rms_executive_absent())
+        return set_file_no_executive();
+    return set_files_security(ctx, filespec, prot_str, 0, 0, SET$_SEARCHFAIL_E);
+#else
+    /* The netbsd-vax cross carries no ACP yet (vms-d5d): RMS itself keeps its
+     * POSIX backend there, so the protection is the backing file's mode. */
     char linux_path[1024];
     dcl_resolve_path(ctx, filespec, linux_path, sizeof(linux_path));
 
-    /* Seed the protection word from the file's CURRENT protection so that
-     * categories the user does not name are preserved (VMS merge semantics).
-     * A missing file is %RMS-E-FNF, exactly as VMS reports it. */
     struct stat st;
     if (stat(linux_path, &st) != 0) {
-        dcl_error("RMS", 2, "PRV",
-                  "failed to set protection - %s", vms_strerror(ENOENT));
-        return SS$_NOPRIV;
+        dcl_error("SET", 2, "SEARCHFAIL", "error searching for %s", filespec);
+        set_print_cond(RMS$_FNF, 1);
+        return (int)SET$_SEARCHFAIL_E;
     }
     uint16_t vprot = vmsfs_mode_to_protection(st.st_mode);
-
-    if (vmsfs_parse_protection(prot_str, &vprot) != SS$_NORMAL) {
-        dcl_error("DCL", 2, "BADPROT", "invalid protection string - %s", prot_str);
-        return SS$_BADPARAM;
-    }
-
-    mode_t new_mode = vmsfs_protection_to_mode(vprot);
-
-    if (chmod(linux_path, new_mode) != 0) {
-        dcl_error("RMS", 2, "PRV", "failed to set protection - %s", vms_strerror(errno));
+    if (vmsfs_parse_protection(prot_str, &vprot) != SS$_NORMAL)
+        return set_bad_protection(prot_str);
+    if (chmod(linux_path, vmsfs_protection_to_mode(vprot)) != 0) {
+        set_print_cond(SS$_NOPRIV, 0);
         return SS$_NOPRIV;
     }
-
     return SS$_NORMAL;
+#endif
 }
 
 /*
@@ -1736,13 +1895,131 @@ static int cmd_set_process(struct dcl_command *cmd)
 }
 
 /*
- * SET FILE /VERSION_LIMIT=n /EXPIRATION_DATE=ddmmyyyy
+ * SET FILE /PROTECTION=code /OWNER_UIC=uic /TRUNCATE /VERSION_LIMIT=n
+ *          /EXPIRATION_DATE=date  filespec
  *
- * /VERSION_LIMIT — sets ODS-2 version limit on a file.
- *   Under Linux this is advisory (no direct FS support); we record
- *   the intent but cannot enforce it at the kernel level.
- * /EXPIRATION_DATE — sets the file expiration date (utimes).
+ * With the executive ACP (rd vms-1fb7), every change is made to the Files-11
+ * header, never to a host file:
+ *   /PROTECTION, /OWNER_UIC  $SET_SECURITY OSS$_PROTECTION / OSS$_OWNER
+ *                            (IO$_MODIFY attribute write; CONTROL access);
+ *   /TRUNCATE                IO$_MODIFY truncate to the end-of-file block,
+ *                            releasing the allocation past it;
+ *   /VERSION_LIMIT, /EXPIRATION_DATE
+ *                            the ACP has no write path for a file's version
+ *                            limit (a directory-entry field) or its dates yet,
+ *                            so these are refused SS$_UNSUPPORTED and change
+ *                            nothing -- they used to be "acknowledged" and a
+ *                            host utimes(), which VMS-side reads never saw.
+ * A file that is not there is %SET-F-SEARCHFAIL with -RMS-E-FNF (VAX1, see
+ * set_files_security). No executive: %SYSTEM-W-NOSUCHDEV, nothing touched.
  */
+#if defined(OVMX_HAVE_ACP)
+/* Release the allocation past end-of-file, through the ACP, by file ID. */
+static uint32_t set_file_truncate_one(const char *spec)
+{
+    struct rms_fileattr fa;
+    struct vms_acp_fileop_args f;
+    char dev[128];
+    const char *colon = strchr(spec, ':');
+    uint32_t chan = 0, st;
+
+    st = rms_file_attr(spec, &fa);
+    if (!(st & 1))
+        return st;
+    if (fa.efblk == 0 || fa.hiblk <= fa.efblk)
+        return SS$_NORMAL;                      /* nothing allocated past EOF */
+    if (!colon || (size_t)(colon - spec) + 2 > sizeof dev)
+        return SS$_IVDEVNAM;
+    memcpy(dev, spec, (size_t)(colon - spec) + 1);
+    dev[colon - spec + 1] = '\0';
+    st = vms_kif_acp_assign(dev, &chan);
+    if (!(st & 1))
+        return st;
+    memset(&f, 0, sizeof f);
+    f.chan = chan;
+    f.func = VMS_ACP_FOP_MODIFY;
+    f.fidmode = 1;
+    f.fid_num = fa.fid_num; f.fid_seq = fa.fid_seq;
+    f.fid_rvn = fa.fid_rvn; f.fid_nmx = fa.fid_nmx;
+    f.trunc_efblk = fa.efblk;
+    f.trunc_ffbyte = fa.ffbyte;
+    st = vms_kif_acp_fileop(&f);
+    vms_kif_dassgn(chan);
+    return st;
+}
+
+static int set_file_acp(struct dcl_context *ctx, struct dcl_command *cmd,
+                        const char *filespec)
+{
+    const char *protq = dcl_qualifier_value(cmd, "PROTECTION");
+    const char *ownq = dcl_qualifier_value(cmd, "OWNER_UIC");
+    char prot_str[128] = "";
+    uint32_t owner = 0;
+    int have_owner = 0;
+    int worst = SS$_NORMAL;
+
+    if (dcl_has_qualifier(cmd, "VERSION_LIMIT") || dcl_has_qualifier(cmd, "EXPIRATION_DATE"))
+        return (int)dcl_unsupported();
+
+    if (protq && *protq)
+        snprintf(prot_str, sizeof prot_str, protq[0] == '(' ? "%s" : "(%s)", protq);
+    if (prot_str[0] && !prot_code_ok(prot_str))
+        return set_bad_protection(prot_str);
+    if (ownq && *ownq) {
+        unsigned g = 0, m = 0;
+        char tail = 0;
+        if (sscanf(ownq, "[%o,%o%c", &g, &m, &tail) != 3 || tail != ']' ||
+            g > 0xFFFFu || m > 0xFFFFu) {
+            set_print_cond(SS$_IVIDENT, 0);
+            return SS$_IVIDENT;
+        }
+        owner = ((uint32_t)g << 16) | m;
+        have_owner = 1;
+    }
+
+    if (prot_str[0] || have_owner) {
+        worst = set_files_security(ctx, filespec, prot_str[0] ? prot_str : NULL,
+                                   have_owner, owner, SET$_SEARCHFAIL_F);
+        if (!(worst & 1))
+            return worst;
+    }
+
+    if (dcl_has_qualifier(cmd, "TRUNCATE")) {
+        struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, filespec);
+        char match[1024];
+        uint32_t fn;
+        uint16_t fs;
+        uint8_t fr;
+        int n = 0;
+        while (d && dcl_rms_dir_next(d, match, sizeof match, &fn, &fs, &fr)) {
+            uint32_t st = set_file_truncate_one(match);
+            n++;
+            if (!(st & 1)) {
+                set_print_cond(st, 0);
+                worst = (int)st;
+            }
+        }
+        if (!n) {
+            uint32_t why = d ? dcl_rms_dir_status(d) : RMS$_FNF;
+            if (why == RMS$_NMF || why == 0 || (why & 1))
+                why = RMS$_FNF;
+            dcl_error("SET", 4, "SEARCHFAIL", "error searching for %s", filespec);
+            set_print_cond(why, 1);
+            worst = (int)SET$_SEARCHFAIL_F;
+        }
+        if (d)
+            dcl_rms_dir_close(d);
+        return worst;
+    }
+
+    if (!prot_str[0] && !have_owner) {
+        /* No qualifier: VMS still looks the file up (SEARCHFAIL if absent). */
+        return set_files_security(ctx, filespec, NULL, 0, 0, SET$_SEARCHFAIL_F);
+    }
+    return worst;
+}
+#endif
+
 static int cmd_set_file(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -1754,6 +2031,13 @@ static int cmd_set_file(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
+#if defined(OVMX_HAVE_ACP)
+    if (rms_executive_absent())
+        return set_file_no_executive();
+    return set_file_acp(ctx, cmd, cmd->params[1]);
+#else
+    /* The netbsd-vax cross carries no ACP yet (vms-d5d): RMS itself keeps its
+     * POSIX backend there; this is that backend's SET FILE. */
     const char *filespec = cmd->params[1];
     char linux_path[1024];
     dcl_resolve_path(ctx, filespec, linux_path, sizeof(linux_path));
@@ -1866,6 +2150,7 @@ static int cmd_set_file(struct dcl_command *cmd)
     }
 
     return SS$_NORMAL;
+#endif
 }
 
 /*
@@ -2574,6 +2859,8 @@ static const struct dcl_qual_def sq_file[] = {
     { "TRUNCATE",        CDU_VT_NONE,  0,            NULL, NULL },
     { "EXPIRATION_DATE", CDU_VT_VALUE, 0,            NULL, NULL },
     { "VERSION_LIMIT",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PROTECTION",      CDU_VT_LIST,  CDU_Q_VALREQ, NULL, NULL },
+    { "OWNER_UIC",       CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     SQ_END };
 static const struct dcl_qual_def sq_protection[] = {
     { "DEFAULT", CDU_VT_NONE, 0, NULL, NULL }, SQ_END };

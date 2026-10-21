@@ -1,0 +1,29 @@
+# lib-do-command-returns -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "LIB\$DO_COMMAND does not return once the CLI accepts the command: the image exits";;
+        targets)      echo "libvms/rtl/lib_symbol.c";;
+        suites_red)   echo "test_syssvc_lib_do_command";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "After the CLI accepts the command lib\$do_command() calls SYS\$EXIT(SS\$_NORMAL) so the image ends and DCL runs the command. The mutation drops that call, so the routine returns SS\$_NORMAL to its caller and the image carries on. The request itself, the no-CLI status and a refusal are unaffected. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+an accepted command does not return: the image exits with SS$_NORMAL
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: "    sys$exit(SS$_NORMAL);" occurs once in lib_symbol.c, in lib$do_command.
+        sed -i 's|^    sys\$exit(SS\$_NORMAL);$|    /* NEGCTL lib-do-command-returns */|' "$_file"
+    :
+}

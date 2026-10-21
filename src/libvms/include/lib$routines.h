@@ -771,6 +771,15 @@ uint32_t lib$getsyi(
  * ================================================================ */
 
 /**
+ * lib$do_command - Execute Command: stop the image and have the CLI execute
+ * the command (<= 255 characters). Does not return on success.
+ *
+ * @return  LIB$_NOCLI with no CLI; LIB$_INVARG if longer than 255; the CLI's
+ *          refusal otherwise
+ */
+uint32_t lib$do_command(const struct dsc$descriptor_s *command);
+
+/**
  * lib$get_symbol - Get value of a CLI symbol
  *
  * @param symbol       Pointer to descriptor of symbol name

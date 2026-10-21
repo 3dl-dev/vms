@@ -1248,6 +1248,30 @@ static void creprc_define_sysinput(const char *spec)
     (void)vms_kif_lnm_define(VMS_LNM_TBL_PROCESS, "SYS$INPUT", vals, 1, 0, 3 /* user mode */);
 }
 
+/* A VMS file spec (a device ':' or a directory '[' / '<', not a substrate path
+ * beginning '/') that names a FILE, not a bare device such as NL:, OPA0: or
+ * MBA3: -- something after the last ':' or a directory part. */
+static int creprc_is_vms_file_spec(const char *spec)
+{
+    if (!spec || !spec[0] || spec[0] == '/')
+        return 0;
+    if (strpbrk(spec, "[<"))
+        return 1;
+    const char *col = strrchr(spec, ':');
+    return col && col[1] != '\0';
+}
+
+/* SYS$OUTPUT / SYS$ERROR of a DETACHED process named by a VMS file (rd
+ * vms-c89): the process-permanent logical name its image opens, as on VMS --
+ * $CREPRC records the name, the image's run-time library $CREATEs the file
+ * through RMS when the image starts (src/libvms/rtl/sysoutput_rms.c). Same
+ * single executive ioctl in the forked child as SYS$INPUT above. */
+static void creprc_define_stream(const char *lognam, const char *spec)
+{
+    const char *vals[1] = { spec };
+    (void)vms_kif_lnm_define(VMS_LNM_TBL_PROCESS, lognam, vals, 1, 0, 3 /* user mode */);
+}
+
 /*
  * sys$creprc - Create a process.
  *
@@ -2000,14 +2024,19 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             /* A named stream that cannot be opened leaves a SUBPROCESS on its
              * inherited stream (it shares its creator's job) but puts a
              * DETACHED process on the null device -- never on the creator's
-             * console (creprc_open_outstream, rd vms-5843). Writing a VMS
-             * file as a created process's SYS$OUTPUT through RMS is not built
-             * yet (rd vms-c89); until it is, such output is discarded, not
-             * shown on a terminal it was not sent to. */
+             * console (creprc_open_outstream, rd vms-5843). A DETACHED
+             * process whose stream names a VMS FILE gets that name as its
+             * SYS$OUTPUT / SYS$ERROR logical (rd vms-c89): its image's
+             * run-time library $CREATEs the file through RMS at image start
+             * and files each line there (src/libvms/rtl/sysoutput_rms.c). The
+             * host stream stays the null device, never a terminal. */
             if (output && output->dsc$a_pointer) {
                 char path[256];
                 dsc$strncpy(path, output, sizeof(path));
                 int fd = creprc_open_outstream(path);
+                /* NEGCTL-ANCHORED (creprc-detached-output-vms-file-not-written) */
+                if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                    creprc_define_stream("SYS$OUTPUT", path);
                 /* NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal) */
                 if (fd < 0 && detached)
                     fd = open("/dev/null", O_WRONLY);
@@ -2020,6 +2049,8 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 char path[256];
                 dsc$strncpy(path, error, sizeof(path));
                 int fd = creprc_open_outstream(path);
+                if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                    creprc_define_stream("SYS$ERROR", path);
                 if (fd < 0 && detached)
                     fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }

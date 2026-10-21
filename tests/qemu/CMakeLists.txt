@@ -203,6 +203,17 @@ foreach(_anchored
     endif()
 endforeach()
 
+# test_syssvc_creprc_detached_output (rd vms-c89): its subjects are this same
+# binary, created DETACHED with /OUTPUT naming a VMS file; the image-start
+# routine that writes such a SYS$OUTPUT through RMS (sysoutput_rms.c) must be in
+# the subject image, and it reaches RMS through the rms_textfile weak seam, so
+# the suite carries the rms_acp_bind anchor too (pthread: every suite links it).
+if(TARGET test_syssvc_creprc_detached_output)
+    target_sources(test_syssvc_creprc_detached_output PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/libvms/rtl/sysoutput_rms.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
+endif()
+
 # test_syssvc_tcpip_inetd (R4 G1, rd vms-8bd / vms-1f8): the suite compiles the
 # identity resolver TU (tcpip_inetd_ident.c) and needs sysuaf.h on its include
 # path. Its resolver assertions are the fail-closed ones that need no SYSUAF, so

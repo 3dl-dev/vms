@@ -196,6 +196,20 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "NEGCTL boot 2: the SHOW SYSTEM segment is real output (its 'Process Name' column header is present)" "$rc"
     netacp_pid=$(printf '%s\n' "$seg" | grep -oE '^[0-9A-F]{8} NETACP( |$)' | head -1 | cut -c1-8)
 
+    # rd vms-c89: STARTNET runs NETACP /DETACHED /OUTPUT=/ERROR=
+    # SYS$MANAGER:NETACP.LOG. As on VMS, that file IS its SYS$OUTPUT: created
+    # through RMS when the image starts, every line a record. Its first report
+    # names the datalink it opened, so a NETACP.LOG that TYPE reads back with
+    # that line is the file this boot's NETACP wrote.
+    off=$(wc -c <"$LOG2")
+    send 'TYPE SYS$MANAGER:NETACP.LOG'; sleep 6
+    seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-DATALINK, datalink open on' &&
+       printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-STARTED, NETACP up'; then rc=0; else rc=1; fi
+    record "boot 2: SYS\$MANAGER:NETACP.LOG (NETACP's /OUTPUT, written through RMS) carries its DATALINK and STARTED reports (vms-c89)" "$rc"
+    if printf '%s\n' "$seg" | grep >/dev/null -E '%TYPE-W-SEARCHFAIL|%RMS-E-FNF'; then rc=1; else rc=0; fi
+    record "boot 2: TYPE finds NETACP.LOG (no SEARCHFAIL / FNF)" "$rc"
+
     # rd vms-dda: an outbound link from a user process, brokered through the
     # RUNNING boot-time NETACP over $ASSIGN _NET: + $QIO (the DCL battery VM has
     # no NIC, hence no _NET:; this boot has both). COPY 0"SYSTEM MANAGER":: over

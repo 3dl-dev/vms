@@ -239,6 +239,29 @@ int rms_textfile_write_line(const char *vms_spec, const char *line)
     return rc;
 }
 
+int rms_textfile_create(const char *vms_spec)
+{
+    if (!vms_spec || !*vms_spec)
+        return -1;
+    if (!rms_services_present() || !sys$create)
+        return -1;   /* no LIBVMSRMS -> fail honest, no POSIX write */
+
+    char spec[512];
+    rmstf_resolve(vms_spec, spec, sizeof(spec));
+
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_STMLF;
+    fab.fab$b_fac = FAB$M_PUT;
+
+    if (sys$create(&fab, 0, 0) != RMS$_NORMAL)
+        return -1;
+    sys$close(&fab, 0, 0);
+    return 0;
+}
+
 #else  /* !OVMX_HAVE_ACP : no executive in this link (bare libvms unit build) */
 
 #include <stdio.h>
@@ -314,6 +337,19 @@ int rms_textfile_append_line(const char *vms_spec, const char *line)
 int rms_textfile_write_line(const char *vms_spec, const char *line)
 {
     return rmstf_posix_put(vms_spec, line, "w");
+}
+
+int rms_textfile_create(const char *vms_spec)
+{
+    if (!vms_spec || !*vms_spec)
+        return -1;
+    char linux_path[1024];
+    vmsfs_to_linux_path(vms_spec, linux_path, sizeof(linux_path));
+    FILE *f = fopen(linux_path, "w");
+    if (!f)
+        return -1;
+    fclose(f);
+    return 0;
 }
 
 #endif /* OVMX_HAVE_ACP */

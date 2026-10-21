@@ -16,15 +16,24 @@ facilities/*.yaml     one file per facility. facilities/str.yaml is the gold-sta
 Generated outputs (do not edit by hand):
 
 ```
-docs/compatibility-surface.md   internal comprehensive register (regenerated)
-build/compat-surface.json       machine export → website + corpus-compat lookup
+docs/compatibility-surface.md   internal comprehensive register (dated snapshot, --publish)
+build/compatibility-surface.md  the same register rendered from the current YAML (untracked)
+build/compat-surface.json       machine export → website + corpus-compat lookup (untracked)
 ```
+
+A compat PR edits **only the YAML**. It does not regenerate the tracked md: that
+md's rollup table is touched by every status change, so regenerating it in each PR
+made every pair of queued compat PRs conflict. The tracked md is refreshed by
+`--publish` in a release bump or a dedicated regen PR, and CI rejects any change to
+it that is not an exact render of the YAML.
 
 ## Regenerate / validate
 
 ```bash
-python3 tools/compat/render_compat.py          # rewrite the .md and .json
-python3 tools/compat/render_compat.py --check   # validate only (CI gate); non-zero on error
+python3 tools/compat/render_compat.py            # validate + render build/ (md preview + json)
+python3 tools/compat/render_compat.py --publish  # also refresh the tracked snapshot md
+python3 tools/compat/render_compat.py --check    # CI gate: validates + renders; non-zero on error
+python3 tools/compat/render_compat.py --check --base origin/main  # + md must be an exact render if touched
 ```
 
 `--check` reports **errors** (bad vocab, missing `verified_against`, domain mismatch —

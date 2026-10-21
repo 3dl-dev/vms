@@ -226,6 +226,22 @@ carrying a remaster opcode, PLUS every frame sharing a kept frame's SCS
 transaction id -- which is what keeps the ANSWERS, because a `82/01` grant
 overwrites the name span with the resource's value block.
 
+## AND THEN OVMX CRASHED VAX1 -- 2.5 MINUTES LATER, read this next
+
+Nothing above is withdrawn: every measurement in this capture was taken with
+all three nodes up, `CLUSTER_NODES` 3 on both VAXes and zero bugcheck lines on
+any console. But when the arm ENDED its holder on OVMX, OVMX sent VAX1 a
+`$DEQ` (cat 0x02 op 0x03) naming `0x370004A7` -- the master handle VAX1 had
+minted BEFORE it remastered the tree onto OVMX -- and **VAX1 took a fatal
+INVLOCKID bugcheck with that value in R1**, dumped memory and rebooted; VAX2
+then lost quorum.
+
+That is `ovmx-never-crashes-a-peer` broken, and it is release-gating. The crash,
+the frame, the causal chain and the contrast with the two earlier harmless DEQs
+are their own capture: [`../vms-3ac-invlockid-20261021/`](../vms-3ac-invlockid-20261021/),
+rd vms-3ac. Per this arm's own FAIL/STOP rule a real-VAX bugcheck takes its own
+item before anything else in this lane moves, so **RA7 fire B was not run**.
+
 ## What this changes for the items
 
 * **rd vms-c2b**: DONE by this capture -- part 1, with P5 split out as its own

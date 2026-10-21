@@ -104,6 +104,20 @@ fi
 
 PASS=0
 FAIL=0
+# sysgen_count: the number of parameters a SYSGEN / SYSBOOT> session said it
+# LOADED, read out of its own transcript. THE COUNT IS NEVER A LITERAL HERE:
+# "31 parameters written" was the shipped set's size, not a property, so one
+# added parameter (OVMX_RM_RESIDUE_FILL, rd vms-6ad1) reddened four gates in a
+# change that altered nothing about SYSGEN. What this gate MEANS to assert is
+# that WRITE persists exactly the set that was LOADED. Returns 1 with no output
+# when the log carries no count, so the caller fails loudly.
+sysgen_count() {
+    local log="${1:?log}" n
+    n=$(grep -oE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' "$log" 2>/dev/null \
+        | tail -1 | grep -oE '[0-9]+' | tail -1)
+    [ -n "$n" ] || return 1
+    printf '%s\n' "$n"
+}
 record() {
     local desc="$1" rc="$2"
     if [ "$rc" -eq 0 ]; then echo "  PASS: $desc"; PASS=$((PASS + 1))
@@ -236,9 +250,11 @@ if [ "$rc" -eq 0 ]; then
         "$POS_LOG1" "%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to $NEWNODE"
     check "boot 1: SYSGEN SET SCSSYSTEMID changed 0 -> $NEWSID" \
         "$POS_LOG1" "%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to $NEWSID"
-    if waitfor '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG1"; then
+    if NPAR=$(sysgen_count "$POS_LOG1"); then rc=0; else rc=1; fi
+    record "boot 1: the procedure's SYSGEN deck reported how many parameters USE CURRENT loaded" "$rc"
+    if [ "$rc" -eq 0 ] && waitfor "%SYSGEN-I-WRITTEN, $NPAR parameters written to SYS\$SYSTEM:OVMXVMSSYS.PAR;2" 20 "$POS_LOG1"; then
         rc=0; else rc=1; fi
-    record "boot 1: WRITE CURRENT minted OVMXVMSSYS.PAR;2 (real vmsfs version on the volume)" "$rc"
+    record "boot 1: WRITE CURRENT persisted all $NPAR loaded parameters, minting OVMXVMSSYS.PAR;2 (real vmsfs version on the volume)" "$rc"
     check "boot 1: procedure reports 'CHANGE complete ... takes effect on the next reboot'" \
         "$POS_LOG1" "CHANGE complete. The new cluster identity is written to"
 

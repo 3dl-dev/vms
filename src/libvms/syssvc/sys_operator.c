@@ -22,10 +22,13 @@
  *     then from the host passwd database, which is why this line is an upgrade
  *     rather than a correction -- see get_current_username below
  *     (vms-cb5 / vms-f39).
- * OVMX-LOCAL: sys$sndopr -- everything else. The record is appended to
- *     OPERATOR.LOG by this process through vmsfs path translation, the request
- *     number is a counter private to this image, and there is no OPCOM process
- *     to request, so no operator is notified and no reply can ever come back.
+ * OVMX-LOCAL: sys$sndopr -- only when no OPCOM is running (early boot, a host
+ *     ctest, an isolated executive): the record is then appended to
+ *     OPERATOR.LOG by this process and the request number is a counter private
+ *     to this image. Once OPCOM runs (rd vms-798, src/ovmx_opcom) the request
+ *     goes to OPCOM's mailbox instead: OPCOM numbers it, files it, names the
+ *     sender from the executive and broadcasts it to the enabled operator
+ *     terminal. No reply can come back yet (REPLY to a request is not built).
  * OVMX-PARTIAL: sys$brkthruw (vms-96e2) -- exec: the target terminal device
  *     spec is resolved through the executive-resident LNM$SYSTEM table (vmsfs
  *     path translation -> lnm_translate -> vms_kif_lnm_translate) for system
@@ -341,6 +344,57 @@ static void get_current_username(char *buf, size_t bufsz)
 }
 
 /*
+ * TO OPCOM, AS ON VMS (rd vms-798). When the OPCOM process is running it owns
+ * the operator log and the operator terminals: $SNDOPR hands it the request
+ * through its mailbox (opcom_mbx.h) and OPCOM numbers it, files it in
+ * OPERATOR.LOG and broadcasts it to the enabled operator terminals, naming the
+ * sender from the executive (the mailbox read's sender PID), not from anything
+ * in the message. Returns 1 when OPCOM took the request.
+ *
+ * When there is no OPCOM yet -- early boot, before PID 1 creates it; a host
+ * ctest or an isolated executive with no system -- the record is written here,
+ * in-process, as before (OVMX-LOCAL), so no operator record is ever dropped.
+ */
+#include "opcom_mbx.h"
+#include "lnmdef.h"
+
+static int sndopr_to_opcom(const char *blk, size_t blklen, int reply)
+{
+    char devnam[64];
+    uint16_t el = 0;
+    struct item_list_3 it[2];
+    static const char tab[] = "LNM$PERMANENT_MAILBOX";
+    static const char nam[] = OPCOM_MBX_LOGNAM;
+    struct dsc$descriptor_s td = { sizeof tab - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)tab };
+    struct dsc$descriptor_s nd = { sizeof nam - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)nam };
+    unsigned char msg[OPCOM_MBX_MAXMSG];
+    struct opcom_mbx_msg hdr;
+    uint32_t ec = 0, st;
+
+    if (blklen > OPCOM_MBX_MAXBLK)
+        blklen = OPCOM_MBX_MAXBLK;
+    memset(it, 0, sizeof it);
+    it[0].buflen = (uint16_t)(sizeof devnam - 1);
+    it[0].item_code = LNM$_STRING;
+    it[0].bufaddr = devnam;
+    it[0].retlen = &el;
+    if (!(sys$trnlnm(NULL, &td, &nd, NULL, it) & 1) || el == 0)
+        return 0;                               /* no OPCOM running */
+    devnam[el < sizeof devnam ? el : sizeof devnam - 1] = '\0';
+    if (!(vms_kif_mbx_assign(devnam, &ec) & 1))
+        return 0;
+    memset(&hdr, 0, sizeof hdr);
+    hdr.magic = OPCOM_MBX_MAGIC;
+    hdr.flags = reply ? OPCOM_MBX_F_REPLY : 0u;
+    hdr.blklen = (uint32_t)blklen;
+    memcpy(msg, &hdr, sizeof hdr);
+    memcpy(msg + sizeof hdr, blk, blklen);
+    st = vms_kif_mbx_write_ex(ec, msg, (uint32_t)(sizeof hdr + blklen), 1);
+    (void)vms_kif_dassgn(ec);
+    return (st & 1) != 0;
+}
+
+/*
  * sys$sndopr - Send message to operator.
  *
  * Writes a formatted OPCOM-style entry to OPERATOR.LOG.
@@ -397,6 +451,10 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
 
     const char *blk = (const char *)msgbuf->dsc$a_pointer;
     size_t textlen = (size_t)msgbuf->dsc$w_length - OPC$K_MS_HDRLEN;
+
+    /* rd vms-798: OPCOM, when it runs, takes the request (see above). */
+    if (sndopr_to_opcom(blk, msgbuf->dsc$w_length, chan != 0))
+        return SS$_NORMAL;
 
     char msgtext[512];
     if (textlen > sizeof(msgtext) - 1)

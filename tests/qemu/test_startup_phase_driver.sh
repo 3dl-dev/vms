@@ -293,6 +293,28 @@ if [ "$OK" -eq 1 ]; then
     SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
     if printf '%s' "$SEG" | grep >/dev/null -E '^[0-9A-Fa-f]{8} +NETACP'; then r1=1; else r1=0; fi
     record "STARTNET launched NO NETACP on an unconfigured boot (SHOW SYSTEM lists none)" "$r1"
+    # rd vms-798: OPCOM, the operator communication process, runs -- created by
+    # PID 1 before STARTUP.COM, DETACHED, never root -- and enabled OPA0: as
+    # the operator terminal, saying so on it the way a real VAX does.
+    if printf '%s' "$SEG" | grep >/dev/null -E '^[0-9A-Fa-f]{8} +OPCOM'; then r1=0; else r1=1; fi
+    record "SHOW SYSTEM lists the OPCOM process" "$r1"
+    if grep >/dev/null -aE 'Operator _[A-Z0-9$_]+\$OPA0: has been enabled, username SYSTEM' "$CONSOLE_LOG"; then r1=0; else r1=1; fi
+    record "OPCOM enabled OPA0: as an operator terminal and said so on the console" "$r1"
+    if grep >/dev/null -aE '^%%%%%%%%%%%  OPCOM +[ 0-9]{2}-[A-Z]{3}-[0-9]{4} [0-9:.]+  %%%%%%%%%%%' "$CONSOLE_LOG"; then r1=0; else r1=1; fi
+    record "the OPCOM banner on OPA0: is VMS's (eleven %, two spaces, OPCOM, the time)" "$r1"
+    if grep >/dev/null -aF '%OVMX-W-OPCOM' "$CONSOLE_LOG"; then r1=1; else r1=0; fi
+    record "OPCOM was created (no %OVMX-W-OPCOM on the console)" "$r1"
+
+    # $SNDOPR goes THROUGH OPCOM: a REQUEST is broadcast on OPA0: in OPCOM's
+    # format, naming the requester from the executive, and filed in the log.
+    CMD_OFFSET=$(wc -c <"$CONSOLE_LOG")
+    send 'REQUEST "VMS-798 OPCOM PROBE"'
+    sleep 4
+    SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
+    if printf '%s' "$SEG" | grep >/dev/null -E '^Message from user SYSTEM on [A-Z0-9$_]+$'; then r1=0; else r1=1; fi
+    record "REQUEST reaches OPA0: through OPCOM ('Message from user SYSTEM on <node>')" "$r1"
+    if printf '%s' "$SEG" | grep >/dev/null -F 'VMS-798 OPCOM PROBE'; then r1=0; else r1=1; fi
+    record "... carrying the request's text" "$r1"
 fi
 
 cleanup

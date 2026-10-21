@@ -11,12 +11,12 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 360 |
-| 🟢 implemented | 310 | | n/a | 80 |
-| 🟡 partial | 68 | | advisory | 50 |
+| ✅ verified | 24 | | real | 362 |
+| 🟢 implemented | 313 | | n/a | 78 |
+| 🟡 partial | 67 | | advisory | 50 |
 | 🟠 stub | 9 | |  |  |
 | 🔵 designed | 1 | |  |  |
-| ⬜ absent | 78 | |  |  |
+| ⬜ absent | 76 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **444 committed** — **334 met** (implemented/verified), 64 in progress (partial), 46 not started (absent/stub/designed).
+- **444 committed** — **337 met** (implemented/verified), 63 in progress (partial), 44 not started (absent/stub/designed).
 - Not in the V1 commitment set: 10 out · 26 stretch · 10 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -33,7 +33,7 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (167 met · 21 in progress · 33 not started) · V1: 212 committed, 167 met
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜`  —  221 surfaces catalogued (170 met · 20 in progress · 31 not started) · V1: 212 committed, 170 met
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)
 <sub>scope: in · tier 1 · plan: vms-2e72 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual · reviewed 2026-10-18</sub>
@@ -330,7 +330,7 @@ FAO (SYS$FAO/SYS$FAOL + LIB$ wrapper forms): 3/3 implemented, real. Message serv
 VMS ships ~10 channel/QIO services; OVMX declares 6. Executive-issued channels are real and cross-process: the console terminal (OPA0:), mailbox channels (vms_mbx.c) and BGn: sockets (vms_bg.c) route their QIOs into the executive. Channels assigned to ordinary/private devices remain per-process file descriptors, invisible cross-process (advisory). The 6th named routine, SYS$CANCEL (process-wide I/O cancellation), is registered under the sys-process facility to avoid a duplicate row.
 
 
-<sub>12 items · 8 met · 1 in progress · 3 not started</sub>
+<sub>12 items · 11 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -340,11 +340,11 @@ VMS ships ~10 channel/QIO services; OVMX declares 6. Executive-issued channels a
 | 🟢≈ | `sys$qiow` | routine | Queue an I/O request (waits for completion) | implemented | advisory | in | `src/libvms/syssvc/sys_qio.c` — same executive/private-channel split as sys$qio |
 | 🟢 | `sys$device_scan` | routine | Scan for devices matching selection criteria | implemented | real | in | `src/libvms/syssvc/sys_device.c` |
 | 🟢 | `tt$class-driver` | feature | Terminal class driver (TTDRIVER): type-ahead held UNECHOED and echoed when a read consumes it, after that read's prompt; standard and caller (P4) terminators; IO$_READPROMPT; IO$M_NOECHO / TIMED / PURGE / TRMNOECHO / NOFILTR / CVTLOW; ^Z echoes *EXIT*; ^X purges type-ahead; TTSYNC ^S/^Q hold/release output; PASSALL; a signal suspends a read rather than ending it | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-f8c. ONE class driver in kernel-core, a line-discipline PORT per substrate (Linux tty_ldisc_ops, NetBSD linesw "vms_tt"): the substrate's own line discipline is REPLACED on the line, so no userspace termios ECHO/ICANON toggle remains anywhere. Binding a line to a unit needs CMKRNL, decided by the executive (vms_prot.h). STARTUP binds OPA0:; the network daemon binds each RTAn:; the console's binding survives a session hangup. DCL, LOGINOUT, MONITOR read with $QIO; a CRTL read(2) on the line is served by the same driver. A unit with no port answers SS$_DEVOFFLINE. |
-| 🟡 | `tt$line-editing` | feature | Terminal line editing: DELETE, ^U, ^R, ^X, cursor keys, ^A ^B ^D ^E ^F ^H ^J, insert/overstrike | partial | real | in | `src/kernel-core/vms_tt.c` — rd vms-eda8. DELETE / ^U / ^R / ^X are the driver's (scope form; the hardcopy \X\ form under HARDCOPY). A cursor-key escape sequence is consumed as one key with no effect (it neither ends the read nor lands in the line). ^A ^D ^E ^F ^H ^J and insert/overstrike editing are not implemented yet. |
+| 🟢 | `tt$line-editing` | feature | Terminal line editing: DELETE, ^U, ^R, ^X, cursor keys, ^A ^B ^D ^E ^F ^H ^J, insert/overstrike | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-eda8 (#1604). The class driver edits the line in the executive: ^H/^E start/end of line, ^D/^F and the arrow keys move, ^A toggles insert/overstrike for the rest of the read (insert is the default), ^J deletes the word to the left, DELETE/^U/^R/^X as before (scope form; the hardcopy \X\ form under HARDCOPY). Re-census 2026-10-21: the row said ^A ^D ^E ^F ^H ^J were not implemented; they are, and gated. |
 | 🟢 | `tt$out-of-band` | feature | Out-of-band ^Y ^C ^O ^T delivered as ASTs ($QIO IO$_SETMODE IO$M_CTRLYAST / CTRLCAST / OUTBAND) | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-f0fb. The executive delivers ^Y/^C/^T/^O as ASTs to the process that enabled them; write breakthrough. The ^T status line has no faithful IO= source on every path (keystroke known-diff OOB.PROMPT). |
 | 🟢 | `tt$carriage-control` | feature | VMS record carriage control on terminal output (implied-CC prefix/suffix, the <CR><NUL> prompt forms the console shows) | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-fc4. Records start on a new line and owe their line feed as on VMS; IO$M_NOFORMAT writes leave the cursor position alone. |
-| ⬜ | `tt$broadcast-redisplay` | feature | A broadcast ($BRKTHRU / REPLY) mid-read is written on its own lines and the prompt + partial line redisplayed | absent | n/a | in | rd vms-53a |
-| ⬜ | `tt$command-recall` | feature | DCL command recall through the terminal read (up-arrow / ^B / down-arrow) | absent | n/a | in | rd vms-eb3d |
+| 🟢 | `tt$broadcast-redisplay` | feature | A broadcast ($BRKTHRU / REPLY) mid-read is written on its own lines and the prompt + partial line redisplayed | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-53a (#1604). Re-census 2026-10-21: landed in the terminal class driver; the row still said absent. |
+| 🟢 | `tt$command-recall` | feature | DCL command recall through the terminal read (up-arrow / ^B / down-arrow) | implemented | real | in | `src/kernel-core/vms_tt.c` — rd vms-eb3d (#1604). Re-census 2026-10-21: landed; the row still said absent. |
 | ⬜ | `sys$_other` | routine | Remaining SYS$ I/O channel/QIO services beyond assign/dassgn/qio/qiow/device_scan (VMS ships ~10 total for the QIO/channel surface) | absent | n/a | in |  |
 
 ### sys-lock — SYS$ Lock Manager (Programmatic $ENQ/$DEQ)

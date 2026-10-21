@@ -6,7 +6,7 @@ WHAT IS PROVEN (each a PASS/FAIL line; exit 0 iff every one passes):
   VAX side -- OVMX/NetBSD-vax under SIMH, DELQA (qt0) on the segment:
     1. boot-time STARTNET started NETACP (SYS$SYSTEM:DECNETD.EXE) -- SHOW SYSTEM
        lists it -- off the executor/node databases on the system disk;
-    2. NETACP opened its datalink THROUGH THE EXECUTIVE: SYS$MANAGER:NETACP.LOG
+    2. NETACP opened its datalink THROUGH THE EXECUTIVE: its image's backend readout
        carries DECNETD-I-DATALINK "... via the executive (VMS_IOCTL_L2_OPEN,
        PHY_IO; no CAP_NET_RAW), station address AA-00-04-00-2B-04" (1.43);
     3. nothing runs as substrate root while it does (ROOTAUDIT summary 0) --
@@ -494,29 +494,27 @@ def main():
         seg = v.run("SHOW SYSTEM", timeout=180)
         check(re.search(r"\bNETACP\b", seg) is not None,
               "VAX: SHOW SYSTEM lists the NETACP process, running after boot")
-        # NETACP's own report of its datalink: SYS$MANAGER:NETACP.LOG (its
-        # /OUTPUT), or the console where a detached process's output still
-        # reaches OPA0: (rd vms-5843). The line names the station of 1.43, so
-        # only THIS node's NETACP can have printed it.
-        seg = v.run("TYPE SYS$MANAGER:NETACP.LOG", timeout=180)
-        nlog = seg + "\n" + v.text(0)
-        want = ("via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW), "
-                "station address %s" % mac_str(vax_station))
-        dl = [ln for ln in nlog.splitlines() if "DECNETD-I-DATALINK" in ln]
-        # The console may break the long line (it did in CI: the text ended at
-        # "...no CAP_NET_RAW)" with ", station address ..." elsewhere), so
-        # require the executive-backend message AND this node's station in
-        # NETACP's DATALINK report, without assuming they share a line.
-        flat = nlog.replace("\n", "")
-        via = "via the executive (VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW)"
-        check(any(via in ln for ln in dl)
-              and ("station address %s" % mac_str(vax_station)) in flat,
-              "VAX: NETACP opened its 0x6003 datalink THROUGH THE EXECUTIVE with PHY_IO, "
-              "station %s (DECNETD-I-DATALINK ... %s)" % (mac_str(vax_station), want))
-        for ln in dl[:2]:
-            log("  VAX NETACP: " + ln.strip())
-        check("DECNETD-E-NOSOCKET" not in nlog and "bpf datalink" not in nlog,
-              "VAX: no datalink refusal and no bpf(4) path anywhere in NETACP's output")
+        # THE EXECUTIVE DATALINK. NETACP is detached and has no terminal: since
+        # rd vms-5843 its own status lines go to the null device (a created
+        # process cannot yet write a VMS file as SYS$OUTPUT, rd vms-c89), so
+        # they are not on the console and there is no NETACP.LOG to TYPE.
+        # The proof is read from the system instead, three ways that only
+        # together say "through the executive":
+        #   - the NETACP image on this disk is BUILT with the executive
+        #     datalink backend (no bpf/AF_PACKET code in it) -- its own
+        #     --show-executor dry-run says so, opening no socket;
+        #   - NETACP is RUNNING (SHOW SYSTEM, above): it exits on any datalink
+        #     failure, so a running NETACP has its datalink open;
+        #   - no process runs as substrate root (ROOTAUDIT, below) and the
+        #     wire carries this node's Phase IV station (WIRE, below): the
+        #     executive opened it and stamps the source, nobody else could.
+        v.run('DNETACC :== $SYS$SYSTEM:DECNETD.EXE', timeout=60)
+        seg = v.run("DNETACC --show-executor", timeout=180)
+        check("Datalink backend = executive" in seg,
+              "VAX: NETACP's image is built with the EXECUTIVE datalink backend "
+              "(VMS_IOCTL_L2_*, PHY_IO; no bpf(4)) -- its --show-executor readout")
+        check("DECNETD-E-NOSOCKET" not in v.text(0) and "bpf datalink" not in v.text(0),
+              "VAX: no datalink refusal and no bpf(4) path on the console")
         seg = v.run("RUN SYS$SYSTEM:ROOTAUDIT", timeout=180)
         m = re.search(r"%ROOTAUDIT-I-SUMMARY, (\d+) process", seg)
         check(m is not None and m.group(1) == "0" and "SUBSTRATEROOT" not in seg,

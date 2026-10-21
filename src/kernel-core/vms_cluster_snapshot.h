@@ -468,6 +468,18 @@ struct vms_dlm_scs_view {
 	uint32_t queued_answered;
 	uint32_t queued_unanswerable;
 	/*
+	 * A QUEUE THIS NODE ADVANCED FOR ANOTHER SYSTEM, from a LOCAL release
+	 * (rd vms-28bd): a $DEQ, an image rundown, a $DEQALL sweep or a quorum
+	 * regain that flipped a cross-node waiter to granted. `in` is what the
+	 * ENGINE told this arm; `stale` is the subset whose lock was no longer a
+	 * granted master-side lock for that system by the time the fork thread
+	 * read it back, so there was nothing to announce. The announcement
+	 * itself lands in `deferred_grants_sent` with the cross-node release's,
+	 * because it is the same frame.
+	 */
+	uint32_t grant_advances_in;
+	uint32_t grant_advances_stale;
+	/*
 	 * THE ARM'S HONEST DECLINE. A cat-0x02 body this arm could not read as
 	 * any shape it serves -- including an op-0x03 whose lock ids the codec
 	 * refuses. It is NO LONGER where a peer's $DEQ lands: since rd vms-c72
@@ -551,7 +563,7 @@ struct vms_dlm_scs_view {
  * whose size is PINNED, so a field added here fails to build until both
  * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
  * and this number are updated together. */
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 192,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 200,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

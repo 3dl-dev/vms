@@ -264,6 +264,35 @@ static void arm_bindings(void)
 	       "the queue EVENT is counted first and the answer second, so the "
 	       "two counters read as a total and a subset");
 
+	/*
+	 * AND THE OTHER HALF OF THE SAME HANG (rd vms-28bd): a LOCAL release
+	 * that advances a cross-node queue. The engine's notification carries
+	 * only (csid, master_lkid); what this arm does with it is all order and
+	 * all here -- queue one work item, read the lock back on the fork
+	 * thread, then originate the grant through the EXISTING path. The
+	 * behaviour is proven against the real engine in
+	 * test_dlm_deq_reachable.c section 12; the WIRING is only readable here.
+	 */
+	has("d->eng_ops.grant_advanced   = dlm_arm_grant_advanced;",
+	    "*** the engine's queue-advance notification is really BOUND ***");
+	has("dlm_arm_queue_work(d, (uint16_t)DLM_ARM_WORK_GRANT_ADVANCE,",
+	    "... and the notification QUEUES one work item: it sends nothing on "
+	    "the releasing thread");
+	has("g->master_lkid, g->csid) != 0)",
+	    "... carrying only the lock and the system -- no mode, no frame");
+	has("dlm_arm_run_grant_advance(d, w->arg0, w->arg1);",
+	    "... which the fork thread really runs");
+	has("vms_lock_dlm_grant_advance_read(csid, master_lkid, &r) !=",
+	    "... and the frame's four values come from a FRESH read of the lock "
+	    "database, not from the notification");
+	has("d->grant_advances_stale++",
+	    "... a key whose lock is no longer granted for that system is "
+	    "COUNTED, and nothing is sent");
+	before("vms_lock_dlm_grant_advance_read(csid, master_lkid, &r) !=",
+	       "dlm_arm_send_deferred_grant(d, &r);",
+	       "*** the read-back happens BEFORE the send: a grant is never "
+	       "built from a fact that has stopped being true ***");
+
 	/* RULE A: the arm fills a buffer; it never sends a reply. */
 	has("memcpy(reply->body, d->txframe + VMS_OFF_SYSAP_BODY",
 	    "a reply is STAGED into the connection manager's buffer");

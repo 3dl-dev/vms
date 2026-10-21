@@ -1242,12 +1242,15 @@ static void rig_dump_dlm(int fd, const struct node_cfg *c, const char *phase)
 	printf("RIG-%s-DLM-RECV at=%s releases_received=%u "
 	       "valblk_writes_received=%u releases_refused=%u "
 	       "blkasts_unparsed=%u deferred_grants_sent=%u "
-	       "deferred_grants_owed=%u\n",
+	       "deferred_grants_owed=%u grant_advances_in=%u "
+	       "grant_advances_stale=%u\n",
 	       c->tag, phase, (unsigned)v->releases_received,
 	       (unsigned)v->valblk_writes_received,
 	       (unsigned)v->releases_refused, (unsigned)v->blkasts_unparsed,
 	       (unsigned)v->deferred_grants_sent,
-	       (unsigned)v->deferred_grants_owed);
+	       (unsigned)v->deferred_grants_owed,
+	       (unsigned)v->grant_advances_in,
+	       (unsigned)v->grant_advances_stale);
 	printf("RIG-%s-DLM-LEG at=%s sends=%u sends_refused=%u frames_rx=%u "
 	       "replies_sent=%u declined=%u\n",
 	       c->tag, phase, (unsigned)v->leg_sends,

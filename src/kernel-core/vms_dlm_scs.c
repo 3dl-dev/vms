@@ -199,6 +199,13 @@ struct vms_dlm_scs {
 	uint32_t releases_refused;    /* an inbound $DEQ naming no lock this   */
 				       /* node holds FOR THAT SENDER. Nothing  */
 				       /* released, nothing answered.          */
+	uint32_t grant_advances_in;   /* the engine told us a LOCAL release    */
+				       /* advanced a queue for another system   */
+				       /* (rd vms-28bd)                         */
+	uint32_t grant_advances_stale;/* ...and by the time the fork thread ran */
+				       /* the lock was no longer a granted      */
+				       /* master-side lock for that system, so  */
+				       /* there was nothing to announce         */
 	uint32_t deferred_grants_no_wire_op; /* a release really flipped a     */
 				       /* queued cross-node waiter to granted, */
 				       /* and this master has no grounded way  */
@@ -615,6 +622,7 @@ static void dlm_arm_bind_req_ops(struct vms_dlm_scs *d)
 #define DLM_ARM_WORK_POST_CONVERT 2u
 #define DLM_ARM_WORK_POST_DEQ     3u
 #define DLM_ARM_WORK_DIR_REMOVE   4u   /* rd vms-e09: arg0 slot, arg1 generation */
+#define DLM_ARM_WORK_GRANT_ADVANCE 5u  /* rd vms-28bd: arg0 lock id, arg1 CSID */
 
 static uint32_t dlm_arm_work_kind_to_op(uint16_t kind)
 {
@@ -986,6 +994,9 @@ static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx,
 					     struct vms_dlm_dir_local *out);
 static uint32_t dlm_arm_eng_dir_claim_self(void *ctx,
 					   const struct vms_dlm_dir_ask *q);
+/* Defined with the fork-thread half it queues work for (rd vms-28bd). */
+static void dlm_arm_grant_advanced(void *ctx,
+				   const struct vms_dlm_grant_advance *g);
 
 static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 {
@@ -1006,6 +1017,8 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 	 * mean "no system masters it". */
 	d->eng_ops.dir_local_lookup = dlm_arm_eng_dir_local_lookup;
 	d->eng_ops.dir_claim_self   = dlm_arm_eng_dir_claim_self;
+	/* rd vms-28bd: a LOCAL release that advances a cross-node queue. */
+	d->eng_ops.grant_advanced   = dlm_arm_grant_advanced;
 	d->eng_ops.ctx            = d;
 }
 
@@ -2749,6 +2762,57 @@ static void dlm_arm_arm_beat(struct vms_dlm_scs *d)
 			   DLM_ARM_BEAT_MS);
 }
 
+/*
+ * THE LOCAL RELEASE's OTHER HALF (rd vms-28bd) -- the engine's door for "a
+ * queue THIS node just advanced for another system".
+ *
+ * The cross-node release path has always originated the deferred grant from
+ * the master seam's own result (dlm_arm_send_deferred_grant, rd vms-f87). A
+ * LOCAL release -- a $DEQ, an image rundown, a $DEQALL sweep, a quorum regain
+ * -- reached no arm at all, so the peer whose lock the engine had just granted
+ * was never told and its process stayed in RWSCS (measured twice; see
+ * vms_dlm_proxy.h's `grant_advanced`). This is that notification, and it does
+ * the LEAST it can on the caller's thread: ONE work item to the fork thread,
+ * because the caller is a $DEQ ioctl or a rundown and may hold locks this
+ * layer knows nothing about.
+ *
+ * The frame is built on the fork thread from a FRESH read of the lock
+ * database, so nothing from this notification is asserted on the wire except
+ * the identity of the lock to look up.
+ */
+static void dlm_arm_grant_advanced(void *ctx,
+				   const struct vms_dlm_grant_advance *g)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (d == NULL || g == NULL || g->csid == 0u ||
+	    g->master_lkid == VMS_DLM_LKID_UNSET)
+		return;
+	d->grant_advances_in++;
+	if (dlm_arm_queue_work(d, (uint16_t)DLM_ARM_WORK_GRANT_ADVANCE,
+			       g->master_lkid, g->csid) != 0)
+		d->deferred_grants_no_wire_op++;
+}
+
+/*
+ * ...and its fork-thread half. The lock is read back through the engine's own
+ * door: a handle that no longer names a GRANTED master-side lock held for that
+ * system has nothing to announce, which is counted and not an error -- the
+ * same honest-omission shape as a refill that finds no proxy.
+ */
+static void dlm_arm_run_grant_advance(struct vms_dlm_scs *d,
+				      uint32_t master_lkid, uint32_t csid)
+{
+	struct vms_dlm_master_result r;
+
+	if (vms_lock_dlm_grant_advance_read(csid, master_lkid, &r) !=
+	    SS__NORMAL) {
+		d->grant_advances_stale++;
+		return;
+	}
+	dlm_arm_send_deferred_grant(d, &r);
+}
+
 static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
@@ -2773,6 +2837,12 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 	}
 	if (w->kind == (uint16_t)DLM_ARM_WORK_DIR_REMOVE) {
 		dlm_arm_run_dir_remove(d, w->arg0, w->arg1);
+		return;
+	}
+	/* A queue this node advanced for another system (rd vms-28bd): arg0 is
+	 * the lock to read back, arg1 the system it is held for. */
+	if (w->kind == (uint16_t)DLM_ARM_WORK_GRANT_ADVANCE) {
+		dlm_arm_run_grant_advance(d, w->arg0, w->arg1);
 		return;
 	}
 	dlm_arm_run_post(d, w->kind, w->arg0, w->arg1);
@@ -2955,6 +3025,8 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->queued_no_reply     = d->queued_no_reply;
 	out->queued_answered     = d->queued_answered;
 	out->queued_unanswerable = d->queued_unanswerable;
+	out->grant_advances_in   = d->grant_advances_in;
+	out->grant_advances_stale = d->grant_advances_stale;
 	out->unparsed            = d->unparsed;
 	out->foreign_refused     = d->foreign_refused;
 	out->posts_queued        = d->posts_queued;

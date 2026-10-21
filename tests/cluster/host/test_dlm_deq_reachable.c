@@ -64,6 +64,7 @@
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h            */
 #include "vms_dlm_adopt.h"
 #include "vms_dlm_master.h"
+#include "vms_dlm_pending.h"  /* the retained request a deferred grant echoes  */
 #include "vms_dlm_proxy.h"    /* the requester seam the engine posts through   */
 #include "vms_dlm_scs_fsm.h"  /* the requester FSM + the release queue         */
 #include "vms_frame_compose.h"
@@ -1520,6 +1521,221 @@ static void test_a_queued_outcome_produces_a_frame(void)
 	engine_down();
 }
 
+/* ==========================================================================
+ * 12. rd vms-28bd: A LOCAL RELEASE THAT ADVANCES A CROSS-NODE QUEUE IS TOLD
+ *
+ * Section 9 proves the half the lock database owns: a local $DEQ in an adopted
+ * tree really grants the peer's queued EX. Its own closing comment names what
+ * was missing -- "TELLING the peer is a separate gap: a LOCAL release reports
+ * no deferred grant to the wire arm". Measured twice on real hardware, and both
+ * times a real VAX process in RWSCS that STOP could not complete.
+ *
+ * This section is that gap closed, end to end, through the shipping objects:
+ * the engine NOTIFIES (vms_dlm_requester_ops.grant_advanced), the notification
+ * carries only the key, the arm's own door reads the four values back out of
+ * the lock database (vms_lock_dlm_grant_advance_read), and the pending table
+ * plus the codec turn them into THE REQUESTER'S OWN FRAME. Then the same thing
+ * through the RUNDOWN door, because an image rundown is how the evacuation's
+ * holder actually ends. And the counted silence when no arm is bound.
+ * ========================================================================== */
+#define ADV_RES    "EVAC$ADVANCE"
+
+/* What the engine told this arm, recorded as it arrives. */
+static struct {
+	uint32_t n;
+	uint32_t csid;
+	uint32_t master_lkid;
+} g_adv;
+
+static void eng_grant_advanced(void *ctx, const struct vms_dlm_grant_advance *g)
+{
+	(void)ctx;
+	g_adv.n++;
+	g_adv.csid = g->csid;
+	g_adv.master_lkid = g->master_lkid;
+}
+
+/* The arrangement, built from the engine's own doors: a real VAX hands this
+ * node the tree, a local process holds the root at CR, and a peer's EX queues
+ * behind it. Returns the local lock's handle, 0 on failure. */
+static uint32_t adv_arrangement(struct vms_proc *holder, const char *resnam,
+				struct vms_dlm_master_result *q)
+{
+	struct vms_dlm_adopt_tree t;
+	uint32_t lkid, n_locks = 0u;
+
+	proc_init(holder);
+	lkid = granted_proxy(holder, resnam, LCK_K_CRMODE, 0x37000611u);
+	if (lkid == 0u)
+		return 0u;
+	memset(&t, 0, sizeof(t));
+	strscpy(t.resnam, resnam, sizeof(t.resnam));
+	t.ident_valid = 1u;
+	t.old_master_csid = CSID_MASTER;
+	if (vms_lock_dlm_adopt_open(&t) != SS__NORMAL ||
+	    vms_lock_dlm_adopt_end(&t, &n_locks) != SS__NORMAL)
+		return 0u;
+	*q = serve(VMS_DLM_MREQ_ENQ, CSID_PEER, WAITER_LKID, LCK_K_EXMODE,
+		   resnam);
+	return (q->outcome == (uint8_t)VMS_DLM_MASTER_QUEUED) ? lkid : 0u;
+}
+
+/* The fork-thread half the glue runs, with the shipping objects: read the lock
+ * back, take the requester's own retained frame, and build the grant. */
+static int adv_grant_frame(const struct vms_dlm_grant_advance *g,
+			   struct vms_dlm_pending *pending, uint8_t *frame,
+			   uint32_t cap, struct vms_dlm_master_result *out)
+{
+	uint8_t reqbody[VMS_CM_BODY_LEN];
+	uint32_t n, written = 0;
+
+	if (vms_lock_dlm_grant_advance_read(g->csid, g->master_lkid, out) !=
+	    SS__NORMAL)
+		return 0;
+	n = vms_dlm_pending_take(pending, out->deferred_csid,
+				 out->deferred_req_lkid, reqbody,
+				 (uint32_t)sizeof(reqbody));
+	if (n == 0u)
+		return 0;
+	memset(frame, 0, cap);
+	return vms_dlm_enq_response_build_grant(reqbody, n,
+						out->deferred_master_lkid, NULL,
+						frame, cap, &written) ==
+	       VMS_CODEC_OK;
+}
+
+static void test_a_local_release_tells_the_peer(void)
+{
+	struct vms_proc holder, delivery;
+	struct vms_dlm_master_result q, r;
+	struct vms_dlm_pending pending;
+	struct vms_dlm_grant_advance g;
+	struct vms_dlm_enq_response rsp;
+	struct vms_getlki_args lki;
+	uint8_t reqframe[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint32_t lkid, rep0, unrep0;
+
+	printf("--- rd vms-28bd: a LOCAL release that advances a cross-node "
+	       "queue is TOLD, and the grant is the requester's own frame ---\n");
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+	memset(&g_adv, 0, sizeof(g_adv));
+	eng_ops.grant_advanced = eng_grant_advanced;
+	vms_lock_dlm_set_requester_ops(&eng_ops);
+	vms_dlm_pending_init(&pending);
+
+	lkid = adv_arrangement(&holder, ADV_RES, &q);
+	ct_check(lkid != 0u,
+		 "the arrangement: an adopted tree, our CR lock in it, and a "
+		 "peer's EX queued behind it");
+	if (lkid == 0u) {
+		engine_down();
+		return;
+	}
+	/* The arm keeps the requester's own frame when it answers 'queued'
+	 * (rd vms-f87) -- which is what the deferred grant is built from. */
+	ct_check(queued_requester_body(reqframe, sizeof(reqframe)) != 0u,
+		 "the peer's own op-0x01 composes");
+	ct_check(vms_dlm_pending_keep(&pending, CSID_PEER, q.req_lkid,
+				      reqframe + VMS_OFF_SYSAP_BODY,
+				      VMS_CM_BODY_LEN) == 1,
+		 "  and it is retained, because we owe that peer an answer");
+
+	rep0 = vms_lock_dlm_grant_flips_reported();
+	ct_check_eq_u32(do_deq(&holder, lkid), SS__NORMAL,
+			"our holder releases its CR lock -- a LOCAL release");
+
+	/* 1. THE NOTIFICATION. */
+	ct_check_eq_u32(g_adv.n, 1u,
+			"*** the engine told the arm exactly once that it "
+			"advanced a queue for another system ***");
+	ct_check_eq_u32(vms_lock_dlm_grant_flips_reported(), rep0 + 1u,
+			"  and counted it as reported");
+	ct_check(g_adv.csid == CSID_PEER && g_adv.master_lkid == q.master_lkid,
+		 "  naming the SYSTEM and this node's own handle for its lock "
+		 "-- and nothing else");
+
+	/* 2. THE READ BACK, at the moment of the send. */
+	g.csid = g_adv.csid;
+	g.master_lkid = g_adv.master_lkid;
+	memset(ans, 0, sizeof(ans));
+	ct_check(adv_grant_frame(&g, &pending, ans, sizeof(ans), &r),
+		 "*** and that key produces a GRANT FRAME: the lock reads back "
+		 "as granted for that system, and the requester's own retained "
+		 "body is what carries it ***");
+	ct_check(r.deferred_grant == 1u && r.deferred_csid == CSID_PEER &&
+		 r.deferred_req_lkid == WAITER_LKID &&
+		 r.deferred_master_lkid == q.master_lkid,
+		 "  the four values are the lock database's, read at send time");
+	ct_check_eq_u32(r.deferred_mode, LCK_K_EXMODE,
+			"  including the mode the engine really granted (EX)");
+	ct_check(getlki(&delivery, q.master_lkid, &lki) &&
+		 lki.granted_mode == LCK_K_EXMODE,
+		 "  which is what $GETLKI says about that LKB independently");
+	ct_check(vms_dlm_enq_response_parse_body(ans + VMS_OFF_SYSAP_BODY,
+						 VMS_CM_BODY_LEN, &rsp) ==
+		 VMS_CODEC_OK &&
+		 rsp.outcome == VMS_DLM_ENQ_GRANTED &&
+		 rsp.master_lkid == q.master_lkid &&
+		 rsp.req_lkid == WAITER_LKID,
+		 "*** and the frame the peer receives is a GRANT naming its own "
+		 "handle and ours ***");
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+
+	/* 3. THE RUNDOWN DOOR -- how the evacuation's holder actually ends. */
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+	memset(&g_adv, 0, sizeof(g_adv));
+	eng_ops.grant_advanced = eng_grant_advanced;
+	vms_lock_dlm_set_requester_ops(&eng_ops);
+	lkid = adv_arrangement(&holder, ADV_RES, &q);
+	ct_check(lkid != 0u, "the same arrangement again");
+	if (lkid != 0u) {
+		/* min_acmode 0 == every mode, which is what process death
+		 * sweeps; these locks are enqueued at mode 0. The DOOR is
+		 * what matters: lock_sweep_run -> lock_teardown_locked, the
+		 * one the $DEQALL sweep and the image rundown share. */
+		vms_proc_rundown_locks(&holder, 0u);
+		ct_check_eq_u32(g_adv.n, 1u,
+				"*** the RUNDOWN / $DEQALL SWEEP door reports "
+				"the flip too -- reported from the sweep's own "
+				"blockable context, not the $DEQ path ***");
+		ct_check(getlki(&delivery, q.master_lkid, &lki) &&
+			 lki.granted_mode == LCK_K_EXMODE,
+			 "  and the peer's lock really is granted");
+	}
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+
+	/* 4. NEGATIVE CONTROL: no arm bound. The flip still happens, and the
+	 *    fact that nobody could be told is COUNTED, not silent. */
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+	memset(&g_adv, 0, sizeof(g_adv));
+	eng_ops.grant_advanced = NULL;        /* a node with no wire arm */
+	vms_lock_dlm_set_requester_ops(&eng_ops);
+	unrep0 = vms_lock_dlm_grant_flips_unreported();
+	lkid = adv_arrangement(&holder, ADV_RES, &q);
+	ct_check(lkid != 0u, "the same arrangement, with no arm bound");
+	if (lkid != 0u) {
+		ct_check_eq_u32(do_deq(&holder, lkid), SS__NORMAL,
+				"the local release still succeeds");
+		ct_check_eq_u32(g_adv.n, 0u, "nothing was reported");
+		ct_check_eq_u32(vms_lock_dlm_grant_flips_unreported(),
+				unrep0 + 1u,
+				"*** ...and the flip nobody could be told about "
+				"is COUNTED, not dropped ***");
+	}
+	eng_ops.grant_advanced = NULL;
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_deq_reachable (rd vms-49f8: the op-0x03 $DEQ has a "
@@ -1535,5 +1751,6 @@ int main(void)
 	test_adoption_converts_our_own_lock();
 	test_the_fail_safe_is_still_armed();
 	test_a_queued_outcome_produces_a_frame();
+	test_a_local_release_tells_the_peer();
 	return ct_summary("test_dlm_deq_reachable");
 }

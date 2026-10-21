@@ -1032,7 +1032,12 @@ set_tests_properties(cluster_host_test_lock_quorum_hang PROPERTIES
 # cluster_host_dlm (the FSM + codec, built -DOVMX_CLUSTER_HOST). The two meet
 # only in this test's own TU, which names vms_internal.h and vms_dlm_scs_fsm.h
 # together -- possible since the codec's opcodes were renamed WIREOP (vms-fa7).
-add_executable(test_dlm_deq_reachable test_dlm_deq_reachable.c vms_frame_compose.c)
+# rd vms-28bd adds vms_dlm_pending.c to its own sources (it lives in
+# cluster_host_cnxman, which this test deliberately does not link): the
+# deferred grant a LOCAL release owes is built from the requester's OWN
+# retained frame, so proving that end to end needs the real table.
+add_executable(test_dlm_deq_reachable test_dlm_deq_reachable.c vms_frame_compose.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_pending.c)
 target_include_directories(test_dlm_deq_reachable PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
     ${OVMX_CLUSTER_CORE_DIR}

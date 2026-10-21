@@ -191,6 +191,9 @@ dlm-queued-convert-answered-as-granted
 dlm-queued-enq-not-answered
 dlm-queued-answer-read-as-granted
 dlm-queued-sublock-answered-anyway
+dlm-local-release-tells-nobody
+dlm-rundown-release-tells-nobody
+dlm-grant-advance-uncounted
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -887,6 +890,52 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
   ... outcome byte 0xfb (queued)
+EOF
+                      ;;
+        esac;;
+
+    dlm-local-release-tells-nobody)
+        case "$_f" in
+        facility)     echo "THE LOCAL RELEASE's half of a deferred GRANT (vms_lock.c vms_deq_core -> dlm_flips_*, rd vms-28bd): a \$DEQ that flips a cross-node waiter to granted NOTIFIES the wire arm, so the peer whose lock it is gets told";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the \$DEQ path goes back to advancing the queue in silence, which is what shipped before. MEASURED COST, twice on real hardware: 2026-10-09 on vaxlab-3 and 2026-10-21 (tests/lab/captures/vms-3ac-promote-20261021). Both times this executive GRANTED the lock -- \$GETLKI reads the mode back -- and told nobody, and the real VAX's process sat in RWSCS where even STOP could not complete it. It is the ci.6 evacuation's own sequence: OVMX holds the workload lock, a real VAX queues behind it, OVMX's holder ends.";;
+        require_fail) hd_lines <<'EOF'
+*** the engine told the arm exactly once that it advanced a queue for another system ***
+  and counted it as reported
+  naming the SYSTEM and this node's own handle for its lock -- and nothing else
+*** and that key produces a GRANT FRAME: the lock reads back as granted for that system, and the requester's own retained body is what carries it ***
+  the four values are the lock database's, read at send time
+  including the mode the engine really granted (EX)
+*** and the frame the peer receives is a GRANT naming its own handle and ours ***
+*** ...and the flip nobody could be told about is COUNTED, not dropped ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rundown-release-tells-nobody)
+        case "$_f" in
+        facility)     echo "THE RUNDOWN / \$DEQALL SWEEP's half of it (vms_lock.c lock_teardown_locked -> dlm_flips_append, rd vms-28bd): the sweep carries each resource's flips out to lock_sweep_run's blockable context and reports them there";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the sweep stops carrying its flips out, so an image RUNDOWN advances a cross-node queue in silence while an explicit \$DEQ still reports it. That is the door the evacuation actually uses -- the workload holder EXITS, it does not \$DEQ -- so a fix that covered only the \$DEQ path would read as fixed and hang in the demo.";;
+        require_fail) hd_lines <<'EOF'
+*** the RUNDOWN / $DEQALL SWEEP door reports the flip too -- reported from the sweep's own blockable context, not the $DEQ path ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-grant-advance-uncounted)
+        case "$_f" in
+        facility)     echo "THE COUNT OF A FLIP NOBODY COULD BE TOLD ABOUT (vms_lock.c dlm_flips_report, rd vms-28bd): with no wire arm bound the grant still happened, and the fact that it could not be announced is published";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the counter bump goes, so a node that granted a lock it could never announce looks exactly like a node that had nothing to announce. That is the anti-LARP tripwire for this whole item: the DEFECT it replaces was silence, and silence that is not counted is indistinguishable from correctness (INV-6, and the same discipline as deferred_grants_owed).";;
+        require_fail) hd_lines <<'EOF'
+*** ...and the flip nobody could be told about is COUNTED, not dropped ***
 EOF
                       ;;
         esac;;
@@ -2923,6 +2972,21 @@ apply_edit() {
         # answer in the new master's form; the opcode half stays, so only the
         # op-0x0f answer is corrupted and the defect is still one variable.
         sed -i 's|^\tif (new_master != 0 \&\& op == VMS_DLM_WIREOP_RM_0F)$|\tif (op == VMS_DLM_WIREOP_RM_0F) /* NEGCTL dlm-op0f-member-answers-as-new-master */|' "$_file";;
+
+    dlm-local-release-tells-nobody)
+        # vms_deq_core's snapshot is the only one taken into `flips`; zeroing
+        # the set instead leaves the comparison and the report well-defined and
+        # finding nothing, which is exactly the old silence.
+        sed -i 's|    dlm_flips_snapshot_locked(res, \&flips);|    memset(\&flips, 0, sizeof(flips)); /* NEGCTL dlm-local-release-tells-nobody */|' "$_file";;
+
+    dlm-rundown-release-tells-nobody)
+        # The sweep's one carry-out line (the quorum resume appends to `all`,
+        # not `f`, so this text is unique to lock_teardown_locked).
+        sed -i 's|        dlm_flips_append(f, \&mine);|        /* NEGCTL dlm-rundown-release-tells-nobody */|' "$_file";;
+
+    dlm-grant-advance-uncounted)
+        # The one counter bump for a flip with no arm bound.
+        sed -i 's|            vms_dlm_grant_flips_unreported_n++;|            /* NEGCTL dlm-grant-advance-uncounted */|' "$_file";;
 
     dlm-queued-enq-not-answered)
         # The one call that answers it. Removing it removes the anchor.

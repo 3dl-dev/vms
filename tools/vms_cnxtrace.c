@@ -339,10 +339,13 @@ static void cnxtrace_print_dlm(void)
      * is left of the honest silence -- a real flip whose request frame is no
      * longer held, answered on the requester's next ask. */
     printf("%%CNXTRACE-I-DLMRECV, releases received=%u refused=%u  blkasts "
-           "unparsed=%u  deferred grants sent=%u owed=%u\n",
+           "unparsed=%u  deferred grants sent=%u owed=%u  local advances=%u "
+           "stale=%u\n",
            (unsigned)v->releases_received, (unsigned)v->releases_refused,
            (unsigned)v->blkasts_unparsed, (unsigned)v->deferred_grants_sent,
-           (unsigned)v->deferred_grants_owed);
+           (unsigned)v->deferred_grants_owed,
+           (unsigned)v->grant_advances_in,
+           (unsigned)v->grant_advances_stale);
     /* LOCK-TREE REMASTERING, the new master's side (rd vms-ed5). `held` and
      * `unreported` are the pair the ci.6 evacuation gate is read from: trees a
      * real VAX handed this node and this node really took, and how many of

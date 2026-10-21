@@ -222,6 +222,16 @@ static uint32_t         vms_dlm_adopt_promotions_n;
  * dlm_req_ops_get() and which no caller of it holds.
  */
 static uint32_t         vms_dlm_proxy_self_mastered_n;
+/*
+ * QUEUES THIS NODE ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd): the flips this
+ * executive REPORTED to the wire arm, the ones it could not report because no
+ * arm was bound, and the cross-node waiters a single release advanced beyond
+ * the snapshot's bound. Three facts about the same event, published rather
+ * than left silent -- the silence is what wedged a real VAX twice.
+ */
+static uint32_t         vms_dlm_grant_flips_reported_n;
+static uint32_t         vms_dlm_grant_flips_unreported_n;
+static uint32_t         vms_dlm_grant_flips_overflow_n;
 
 
 /* ================================================================
@@ -262,6 +272,10 @@ int vms_lock_init(void)
     /* ...and the posts refused because this node masters the resource
      * (rd vms-3ac): also "since this executive started". */
     vms_dlm_proxy_self_mastered_n = 0u;
+    /* ...and the queues this node advanced for another system (rd vms-28bd). */
+    vms_dlm_grant_flips_reported_n = 0u;
+    vms_dlm_grant_flips_unreported_n = 0u;
+    vms_dlm_grant_flips_overflow_n = 0u;
     vms_prev_local_csid = 0u;   /* a fresh engine has had no other identity */
     return 0;
 }
@@ -2335,6 +2349,192 @@ static void notify_blocking_asts(struct vms_lock_resource *res,
 }
 
 /* ================================================================
+ * A QUEUE THIS NODE ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd)
+ * ================================================================
+ *
+ * WHAT WAS WRONG, MEASURED TWICE. try_grant_waiters() flips a cross-node
+ * waiter from queued to GRANTED for real -- the master-side LKB is granted, and
+ * $GETLKI reads the mode back. When the release that did it came over the wire
+ * the arm hears about it (vms_lock_dlm_xnode_deq reports the flip and
+ * dlm_arm_send_deferred_grant originates the grant, rd vms-f87). When it was a
+ * LOCAL release, NOTHING was reported to any arm, so the peer was never told:
+ * 2026-10-09 on vaxlab-3 and again 2026-10-21 (tests/lab/captures/
+ * vms-3ac-promote-20261021), a real VAX's process sat in RWSCS indefinitely and
+ * STOP could not complete it. The lock was granted in this executive's
+ * database the whole time; only the frame was missing.
+ *
+ * It is the EVACUATION's own path, not an exotic one: OVMX holds the workload
+ * lock, a real VAX queues behind it for EX, and OVMX's holder process EXITS.
+ *
+ * WHAT IS REPORTED, AND WHAT IS NOT. Only (csid, master_lkid) -- the system and
+ * THIS node's own handle for the lock it granted that system. Not the mode, not
+ * the requester's handle, not a frame: the arm reads those back through
+ * vms_lock_dlm_grant_advance_read() at the moment it sends, so the grant
+ * asserts a lock that still exists rather than one that existed when the queue
+ * moved. A local waiter is never reported: its completion AST and its wake are
+ * what tell it, and they already run.
+ *
+ * THE DISCIPLINE. The snapshot and the comparison run UNDER res->lock (they
+ * walk the queues); the report runs with NO resource lock held, the same rule
+ * the op-0x04 directory removal follows. A caller that cannot honour that
+ * splits the two halves across its own unlock.
+ */
+#define DLM_FLIPS_MAX 8u
+
+struct dlm_flips {
+    uint32_t n;
+    uint32_t overflow;        /* more cross-node waiters than slots         */
+    struct {
+        uint32_t lkid;        /* this node's handle for that system's lock  */
+        uint32_t csid;        /* the system it is held FOR                   */
+    } e[DLM_FLIPS_MAX];
+};
+
+/* Every CROSS-NODE waiter on the resource right now. res->lock HELD. */
+static void dlm_flips_snapshot_locked(struct vms_lock_resource *res,
+                                      struct dlm_flips *s)
+{
+    struct vms_lock_entry *w;
+
+    memset(s, 0, sizeof(*s));
+    exec_list_for_each_entry(w, &res->waiting, res_waiting) {
+        if (w->req_csid == 0u)
+            continue;          /* local: the AST and the wake tell it */
+        if (s->n >= DLM_FLIPS_MAX) {
+            s->overflow++;
+            break;
+        }
+        s->e[s->n].lkid = w->lkid;
+        s->e[s->n].csid = w->req_csid;
+        s->n++;
+    }
+}
+
+/* Keep only the snapshotted waiters that are now GRANTED. res->lock HELD. */
+static void dlm_flips_keep_granted_locked(struct vms_lock_resource *res,
+                                          struct dlm_flips *s)
+{
+    uint32_t i, kept = 0u;
+
+    for (i = 0u; i < s->n; i++) {
+        struct vms_lock_entry *g;
+
+        exec_list_for_each_entry(g, &res->granted, res_granted) {
+            if (g->lkid != s->e[i].lkid || g->waiting ||
+                g->grant_state != SS__NORMAL)
+                continue;
+            s->e[kept++] = s->e[i];
+            break;
+        }
+    }
+    s->n = kept;
+}
+
+/* Carry one resource's survivors into a sweep-wide set. Any lock may be held:
+ * this only copies. The bound is the same, and an overflow is the same fact. */
+static void dlm_flips_append(struct dlm_flips *dst, const struct dlm_flips *src)
+{
+    uint32_t i;
+
+    dst->overflow += src->overflow;
+    for (i = 0u; i < src->n; i++) {
+        if (dst->n >= DLM_FLIPS_MAX) {
+            dst->overflow++;
+            continue;
+        }
+        dst->e[dst->n++] = src->e[i];
+    }
+}
+
+/* Tell the arm. NO RESOURCE LOCK HELD. Nothing to tell is not a silence worth
+ * counting; an arm that is not there IS (INV-6: published, not hidden). */
+static void dlm_flips_report(const struct dlm_flips *s)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    uint32_t i;
+
+    vms_dlm_grant_flips_overflow_n += s->overflow;
+    for (i = 0u; i < s->n; i++) {
+        struct vms_dlm_grant_advance g;
+
+        if (ops.grant_advanced == NULL) {
+            vms_dlm_grant_flips_unreported_n++;
+            continue;
+        }
+        memset(&g, 0, sizeof(g));
+        g.csid = s->e[i].csid;
+        g.master_lkid = s->e[i].lkid;
+        ops.grant_advanced(ops.ctx, &g);
+        vms_dlm_grant_flips_reported_n++;
+    }
+}
+
+uint32_t vms_lock_dlm_grant_flips_reported(void)
+{
+    return vms_dlm_grant_flips_reported_n;
+}
+
+uint32_t vms_lock_dlm_grant_flips_unreported(void)
+{
+    return vms_dlm_grant_flips_unreported_n;
+}
+
+uint32_t vms_lock_dlm_grant_flips_overflow(void)
+{
+    return vms_dlm_grant_flips_overflow_n;
+}
+
+/*
+ * vms_lock_dlm_grant_advance_read - read a master-side LKB back as a
+ * deferred-grant report (rd vms-28bd).
+ *
+ * The arm calls this on the fork thread, after the notification above, to get
+ * the four values the grant asserts -- and it gets them from the LOCK DATABASE
+ * at that moment, not from the notification. A lock that has gone away, or is
+ * not held for that system, or is not granted, is NOT reportable: there is then
+ * no grant to send, which is an honest omission and not an error.
+ */
+uint32_t vms_lock_dlm_grant_advance_read(uint32_t csid, uint32_t master_lkid,
+                                         struct vms_dlm_master_result *out)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    uint32_t req_lkid;
+    uint8_t mode;
+    int ok;
+
+    if (out == NULL || csid == 0u || master_lkid == VMS_DLM_LKID_UNSET)
+        return SS__BADPARAM;
+    memset(out, 0, sizeof(*out));
+    out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+
+    lock = lock_find_by_id(master_lkid);
+    if (lock == NULL)
+        return SS__IVLOCKID;
+    res = lock->resource;
+    if (lock->proxy || res == NULL || lock->req_csid != csid) {
+        lock_put(lock);
+        return SS__IVLOCKID;
+    }
+    exec_lock(&res->lock);
+    ok = (!lock->waiting && lock->grant_state == SS__NORMAL);
+    mode = (uint8_t)lock->granted_mode;
+    req_lkid = lock->req_lkid;
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    if (!ok || req_lkid == VMS_DLM_LKID_UNSET)
+        return SS__IVLOCKID;
+
+    out->outcome = (uint8_t)VMS_DLM_MASTER_RELEASED;
+    out->deferred_grant = 1u;
+    out->deferred_csid = csid;
+    out->deferred_master_lkid = master_lkid;
+    out->deferred_req_lkid = req_lkid;
+    out->deferred_mode = mode;
+    return SS__NORMAL;
+}
+
+/* ================================================================
  * Process lock cleanup -- and the RUNDOWN RELEASE the master must hear about
  * ================================================================
  *
@@ -2415,9 +2615,11 @@ static int dlm_release_collect_locked(struct dlm_release_batch *b,
  * batch is full, which is how the sweep knows to drain it and come back.
  */
 static int lock_teardown_locked(struct vms_lock_entry *lock,
-                                struct dlm_release_batch *b)
+                                struct dlm_release_batch *b,
+                                struct dlm_flips *f)
 {
     struct vms_lock_resource *res = lock->resource;
+    struct dlm_flips mine;
 
     exec_lock(&res->lock);
     /* The release is read off the LKB while the LKB is still real. */
@@ -2433,7 +2635,15 @@ static int lock_teardown_locked(struct vms_lock_entry *lock,
     if (!lock->proxy && (lock->flags & LCK_M_VALBLK) && !lock->waiting)
         memcpy(res->valblk, lock->valblk, LCK_VALBLK_SIZE);
 
+    /* A cross-node waiter this rundown grants must be TOLD (rd vms-28bd) --
+     * an image rundown is how the evacuation's holder actually ends. The
+     * report cannot happen here (the caller holds proc->lock_list_lock), so
+     * the survivors ride out to lock_sweep_run's blockable context. */
+    dlm_flips_snapshot_locked(res, &mine);
     try_grant_waiters(res);
+    dlm_flips_keep_granted_locked(res, &mine);
+    if (f != NULL)
+        dlm_flips_append(f, &mine);
     exec_unlock(&res->lock);
 
     /* Remove from process list and ID tree */
@@ -2471,7 +2681,7 @@ static int lock_sweep_matches(const struct vms_lock_entry *lock,
 
 /* Returns nonzero when matching locks may remain (the batch filled). */
 static int lock_sweep_pass(struct vms_proc *proc, const struct lock_sweep *s,
-                           struct dlm_release_batch *b)
+                           struct dlm_release_batch *b, struct dlm_flips *f)
 {
     struct vms_lock_entry *lock, *tmp;
     int more = 0;
@@ -2480,7 +2690,7 @@ static int lock_sweep_pass(struct vms_proc *proc, const struct lock_sweep *s,
     exec_list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list) {
         if (!lock_sweep_matches(lock, s))
             continue;
-        if (!lock_teardown_locked(lock, b)) {
+        if (!lock_teardown_locked(lock, b, f)) {
             more = 1;    /* batch full: drain it and come back for this one */
             break;
         }
@@ -2494,14 +2704,18 @@ static int lock_sweep_pass(struct vms_proc *proc, const struct lock_sweep *s,
 static void lock_sweep_run(struct vms_proc *proc, const struct lock_sweep *s)
 {
     struct dlm_release_batch b;
+    struct dlm_flips f;
     int more;
 
     b.n = 0;
     do {
-        more = lock_sweep_pass(proc, s, &b);
+        memset(&f, 0, sizeof(f));
+        more = lock_sweep_pass(proc, s, &b, &f);
         /* OUTSIDE proc->lock_list_lock: this is the blockable context E6 asks
-         * the release to be posted from. */
+         * the release to be posted from -- and the one the queue-advance
+         * report needs too (rd vms-28bd). */
         dlm_release_batch_post(&b);
+        dlm_flips_report(&f);
     } while (more);
 }
 
@@ -5356,6 +5570,7 @@ static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
     struct vms_deq_args args = *io;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    struct dlm_flips flips;
     uint32_t proxy_st = SS__NORMAL;
     int deqall = (args.flags & LCK_M_DEQALL) != 0;
 
@@ -5416,9 +5631,14 @@ static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io)
 
     lock_unlink_from_res(lock);
 
-    /* Try to grant waiters now that this lock is released */
+    /* Try to grant waiters now that this lock is released. A cross-node waiter
+     * this grants must be TOLD (rd vms-28bd): snapshot under the lock, compare
+     * under the lock, report after it. */
+    dlm_flips_snapshot_locked(res, &flips);
     try_grant_waiters(res);
+    dlm_flips_keep_granted_locked(res, &flips);
     exec_unlock(&res->lock);
+    dlm_flips_report(&flips);
 
     /* Remove from process list */
     exec_lock(&proc->lock_list_lock);
@@ -6050,16 +6270,26 @@ static void quorum_unstall_waiters(struct vms_lock_resource *res)
 void vms_lock_quorum_resume(void)
 {
     struct vms_lock_resource *res;
+    struct dlm_flips all, mine;
     int bkt;
 
+    memset(&all, 0, sizeof(all));
     exec_lock(&vms_res_hash_lock);
     exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
         exec_lock(&res->lock);
         quorum_unstall_waiters(res);
+        /* A cross-node request the hang was holding down is GRANTED by this
+         * pass, and must be told (rd vms-28bd) -- the resume is a release of
+         * strength like any other. Collected here, reported below: the report
+         * may not run under the resource hash lock. */
+        dlm_flips_snapshot_locked(res, &mine);
         try_grant_waiters(res);
+        dlm_flips_keep_granted_locked(res, &mine);
+        dlm_flips_append(&all, &mine);
         exec_unlock(&res->lock);
     }
     exec_unlock(&vms_res_hash_lock);
+    dlm_flips_report(&all);
 }
 
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)

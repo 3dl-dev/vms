@@ -941,6 +941,35 @@ static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
     return SS$_NORMAL;
 }
 
+/*
+ * creprc_open_outstream - the host fd backing a created process's SYS$OUTPUT
+ * or SYS$ERROR, named by $CREPRC's output/error descriptor (rd vms-5843).
+ *
+ * The name is a VMS spec. Two device kinds have a substrate backing to open:
+ * a terminal (OPA0:/TT: -- ovmx_console_terminal_path(), the one home for that
+ * mapping) and the null device (NL:/NLA0:, /dev/null underneath, as $ASSIGN
+ * maps it in sys_assign.c). Anything else is tried as a host path, which is
+ * what the host test harness passes. Returns -1 when nothing opens.
+ *
+ * WHY THIS EXISTS. Before it, the output spec was handed straight to open(2).
+ * A VMS file spec such as STARTNET's SYS$MANAGER:NETACP.LOG never opens that
+ * way (there is no /vms passthrough), the dup2 was skipped, and the detached
+ * NETACP kept the CREATOR's descriptors -- the operator console STARTUP runs
+ * on -- so every DECNETD-I- line it wrote landed on OPA0: in the middle of the
+ * login prompt. A detached process has no terminal; it must never write on the
+ * creator's console because a file could not be opened for it.
+ */
+static int creprc_open_outstream(const char *spec)
+{
+    char backing[256];
+    if (ovmx_console_terminal_path(spec, backing, sizeof(backing)))
+        return open(backing, O_WRONLY | O_NOCTTY);
+    const char *p = spec[0] == '_' ? spec + 1 : spec;
+    if (!strcasecmp(p, "NL:") || !strcasecmp(p, "NLA0:"))
+        return open("/dev/null", O_WRONLY);
+    return open(spec, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+}
+
 /* A mailbox device name: MBAn: (with or without the leading underscore). */
 static int creprc_is_mailbox(const char *spec)
 {
@@ -1711,10 +1740,20 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 int fd = open("/dev/null", O_RDONLY);
                 if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
             }
+            /* A named stream that cannot be opened leaves a SUBPROCESS on its
+             * inherited stream (it shares its creator's job) but puts a
+             * DETACHED process on the null device -- never on the creator's
+             * console (creprc_open_outstream, rd vms-5843). Writing a VMS
+             * file as a created process's SYS$OUTPUT through RMS is not built
+             * yet (rd vms-c89); until it is, such output is discarded, not
+             * shown on a terminal it was not sent to. */
             if (output && output->dsc$a_pointer) {
                 char path[256];
                 dsc$strncpy(path, output, sizeof(path));
-                int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                int fd = creprc_open_outstream(path);
+                /* NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal) */
+                if (fd < 0 && detached)
+                    fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
             } else if (detached) {
                 int fd = open("/dev/null", O_WRONLY);
@@ -1723,7 +1762,9 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             if (error && error->dsc$a_pointer) {
                 char path[256];
                 dsc$strncpy(path, error, sizeof(path));
-                int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                int fd = creprc_open_outstream(path);
+                if (fd < 0 && detached)
+                    fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
             } else if (detached) {
                 int fd = open("/dev/null", O_WRONLY);

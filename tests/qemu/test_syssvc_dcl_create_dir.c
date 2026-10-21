@@ -98,7 +98,6 @@ static int run_dcl(const char *script, char *out, size_t outsz)
 
 int main(void)
 {
-    static char out[16384];
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     printf("=== test_syssvc_dcl_create_dir (CREATE/DIRECTORY: VMS's messages and conditions) ===\n");
@@ -116,53 +115,39 @@ int main(void)
     CHECK($VMS_STATUS_SUCCESS(vms_kif_acp_assign("VDA0:", &chan)) && chan != 0,
           "$ASSIGN a file-class channel to VDA0:");
 
-    CHECK(run_dcl("CREATE/DIRECTORY VDA0:[OVMXDIR.CRB10]\n"
-                  "SHOW SYMBOL $STATUS\n"
-                  "WRITE SYS$OUTPUT \"--AGAIN--\"\n"
-                  "CREATE/DIRECTORY VDA0:[OVMXDIR.CRB10]\n"
-                  "SHOW SYMBOL $STATUS\n"
-                  "WRITE SYS$OUTPUT \"--NODEV--\"\n"
-                  "CREATE/DIRECTORY NOSUCHDEV:[CRB10]\n"
-                  "SHOW SYMBOL $STATUS\n", out, sizeof out) == 0,
-          "DCL ran the CREATE/DIRECTORY probes");
-    printf("  ---- CREATE/DIRECTORY probes ----\n%s  ---- end ----\n", out);
+    /* One DCL session per probe: DCL's messages go to SYS$ERROR and its
+     * SHOW/WRITE output to SYS$OUTPUT, so within one captured session their
+     * relative order is not the order they were produced. */
+    static char first[8192], second[8192], third[8192];
+    CHECK(run_dcl("CREATE/DIRECTORY VDA0:[OVMXDIR.CRB10]\nSHOW SYMBOL $STATUS\n",
+                  first, sizeof first) == 0, "DCL ran the new-directory probe");
+    printf("  ---- new directory ----\n%s  ---- end ----\n", first);
+    CHECK(run_dcl("CREATE/DIRECTORY VDA0:[OVMXDIR.CRB10]\nSHOW SYMBOL $STATUS\n",
+                  second, sizeof second) == 0, "DCL ran the existing-directory probe");
+    printf("  ---- existing directory ----\n%s  ---- end ----\n", second);
+    CHECK(run_dcl("CREATE/DIRECTORY NOSUCHDEV:[CRB10]\nSHOW SYMBOL $STATUS\n",
+                  third, sizeof third) == 0, "DCL ran the failing-create probe");
+    printf("  ---- failing create ----\n%s  ---- end ----\n", third);
 
-    const char *again = strstr(out, "--AGAIN--");
-    const char *nodev = strstr(out, "--NODEV--");
-    CHECK(again && nodev, "the probe markers are present");
-    if (!again || !nodev) {
-        printf("=== test_syssvc_dcl_create_dir: %d passed, %d failed ===\n", pass, fail);
-        return 1;
-    }
-    {
-        char first[4096];
-        size_t n = (size_t)(again - out);
-        if (n >= sizeof first) n = sizeof first - 1;
-        memcpy(first, out, n); first[n] = '\0';
-        CHECK(strstr(first, "%CREATE-") == NULL && strstr(first, "%DCL-") == NULL &&
-              strstr(first, "%RMS-") == NULL,
-              "a new directory is created silently, as VMS does");
-        CHECK(strstr(first, "$STATUS = \"%X00000001\"") != NULL,
-              "the new directory leaves $STATUS = %X00000001");
-    }
-    {
-        char second[4096];
-        size_t n = (size_t)(nodev - again);
-        if (n >= sizeof second) n = sizeof second - 1;
-        memcpy(second, again, n); second[n] = '\0';
-        /* negctl: dcl-create-dir-invented-msgs */
-        CHECK(strstr(second, "%CREATE-I-EXISTS, VDA0:[OVMXDIR.CRB10] already exists") != NULL,
-              "an existing directory is %CREATE-I-EXISTS, <spec> already exists (oracle)");
-        /* negctl: dcl-create-dir-invented-msgs */
-        CHECK(strstr(second, "%X00911293") != NULL,
-              "an existing directory leaves $STATUS = %X00911293 (CREATE-I-EXISTS)");
-    }
+    CHECK(strstr(first, "%CREATE-") == NULL && strstr(first, "%DCL-") == NULL &&
+          strstr(first, "%RMS-") == NULL,
+          "a new directory is created silently, as VMS does");
+    CHECK(strstr(first, "%X00000001") != NULL,
+          "the new directory leaves $STATUS = %X00000001");
     /* negctl: dcl-create-dir-invented-msgs */
-    CHECK(strstr(nodev, "%CREATE-E-DIRNOTCRE, NOSUCHDEV:[CRB10] directory file not created") != NULL,
+    CHECK(strstr(second, "%CREATE-I-EXISTS, VDA0:[OVMXDIR.CRB10] already exists") != NULL,
+          "an existing directory is %CREATE-I-EXISTS, <spec> already exists (oracle)");
+    /* negctl: dcl-create-dir-invented-msgs */
+    CHECK(strstr(second, "%X00911293") != NULL,
+          "an existing directory leaves $STATUS = %X00911293 (CREATE-I-EXISTS)");
+    /* negctl: dcl-create-dir-invented-msgs */
+    CHECK(strstr(third, "%CREATE-E-DIRNOTCRE, NOSUCHDEV:[CRB10] directory file not created") != NULL,
           "a failed create is %CREATE-E-DIRNOTCRE, <spec> directory file not created (oracle)");
     /* negctl: dcl-create-dir-invented-msgs */
-    CHECK(strstr(nodev, "%X009112C2") != NULL,
+    CHECK(strstr(third, "%X009112C2") != NULL,
           "a failed create leaves $STATUS = %X009112C2 (CREATE-E-DIRNOTCRE)");
+    CHECK(strstr(third, "\n-") != NULL || third[0] == '-',
+          "the reason follows as a secondary -FAC-S-IDENT line (oracle)");
 
     CHECK($VMS_STATUS_SUCCESS(delete_in(chan, OVMXDIR_FID_NUM, "CRB10.DIR")),
           "delete VDA0:[OVMXDIR]CRB10.DIR (restore)");

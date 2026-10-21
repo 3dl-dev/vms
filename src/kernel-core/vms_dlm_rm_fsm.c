@@ -389,6 +389,13 @@ static void rm_complete(struct vms_dlm_rm *f, struct vms_dlm_rm_tree *t)
 	sent = rm_send_held(f, t);
 	t->held_sent = sent;
 	f->held_sent += sent;
+	/*
+	 * REPORTED when AT LEAST ONE op-0x14 really went out: the engine's
+	 * `unreported` counts completions NOBODY was told about, and this one
+	 * was told to somebody. A member that was owed one and did not get it
+	 * is named by `held_unsent`, per frame -- the two counters answer
+	 * different questions and neither stands in for the other.
+	 */
 	if (sent != 0u)
 		f->ops->adopt_reported(f->ops->ctx);
 }

@@ -230,10 +230,12 @@ int vms_lock_dlm_adopt_tree_of_lkid(uint32_t master_lkid,
 
 /*
  * THIS NODE REALLY TOLD THE CLUSTER about one completed adoption (rd vms-ed5):
- * the op-0x14s it owed went out. Raises `_adopt_reports()` and so lowers
- * `_adopt_unreported()`, which is the number of completions this node could NOT
- * report. Called by the wire arm AFTER the sends succeeded -- never before, or
- * the counter would say a tree was announced that nobody was told about.
+ * at least one of the op-0x14s it owed went out. Raises `_adopt_reports()` and
+ * so lowers `_adopt_unreported()`, which is the number of completions NOBODY
+ * was told about. Called by the wire arm AFTER the sends -- never before, or
+ * the counter would say a tree was announced that nobody was told about. A
+ * member that was owed one and did not get it is counted per frame by the arm
+ * (vms_dlm_rm_fsm.h `held_unsent`); the two answer different questions.
  */
 void vms_lock_dlm_adopt_reported(void);
 uint32_t vms_lock_dlm_adopt_reports(void);

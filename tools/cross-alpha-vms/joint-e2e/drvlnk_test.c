@@ -81,6 +81,11 @@ int main(void)
     for (int i = 1; i < 10; i++) dv[i + 1] = av[i];
     dv[11] = 0;
     (void)stage("xgcc-dryrun", "SYS$SYSTEM:XGCC.EXE", dv);
+    /* vms-5b3: a compiler that fails must be SEEN to fail by its parent (the
+     * driver judges cc1/cc1plus/as by WEXITSTATUS): cc1 on a missing source */
+    static cp32 fv[4];
+    fv[0] = "cc1"; fv[1] = "-quiet"; fv[2] = "VDA0:[SYSTMP]NOSUCH.C"; fv[3] = 0;
+    (void)stage("cc1-missing", "SYS$SYSTEM:CC1.EXE", fv);
     int ok1 = stage("xgcc", "SYS$SYSTEM:XGCC.EXE", av);
     /* the second program includes system headers and is compiled with NO -nostdinc: the
      * driver finds them in the default places (-Wp,-v prints the search list) */

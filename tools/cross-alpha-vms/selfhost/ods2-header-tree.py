@@ -15,6 +15,8 @@ Mapping, for a file whose name is not ODS-2 legal:
   - '+' -> 'x'                       (c++config.h -> cxxconfig.h, the VMS "CXX" spelling)
   - any other character outside A-Z a-z 0-9 $ _ - -> '_'
   - a name part over 39 characters -> its first 32, '_', 6 hex digits of its SHA-1
+Every directory's header.gcc lists every pair in the tree: a search directory
+that lacks the file then says "not here" instead of failing on an invalid name.
 Directory names are not remapped (remap_filename only maps the last component a
 directory's own header.gcc names): an illegal directory name is an error. So is
 an illegal type, and two names that land on the same ODS-2 name.
@@ -71,11 +73,14 @@ def main(argv):
         sys.stderr.write('ods2-header-tree: no directory %s\n' % src)
         return 1
     errors = 0
+    pairs = {}                      # every name the tree cannot hold -> its ODS-2 spelling
+    outdirs = []
     for root, dirs, files in os.walk(src, followlinks=True):
         dirs.sort()
         rel = os.path.relpath(root, src)
         out = dst if rel == '.' else os.path.join(dst, rel)
         os.makedirs(out, exist_ok=True)
+        outdirs.append(out)
         seen = {}
         for d in dirs:
             if not LEGAL.match(d):
@@ -83,7 +88,6 @@ def main(argv):
                                  % os.path.join(rel, d))
                 errors += 1
             seen.setdefault(d.lower() + '.dir', d)
-        remap = []
         for f in sorted(files):
             try:
                 o = ods2_name(f)
@@ -99,16 +103,23 @@ def main(argv):
             seen[o] = f
             shutil.copyfile(os.path.join(root, f), os.path.join(out, o))
             if o != crtl_name(f):
-                remap.append((f, o))
-        if remap:
-            if 'header.gcc' in seen:
-                sys.stderr.write('ods2-header-tree: %s already has a header.gcc\n' % rel)
-                errors += 1
-                continue
+                if pairs.get(f, o) != o:
+                    sys.stderr.write('ods2-header-tree: %s maps two ways\n' % f)
+                    errors += 1
+                pairs[f] = o
+                print('%s/%s -> %s' % (rel, f, o.upper()))
+        if 'header.gcc' in seen:
+            sys.stderr.write('ods2-header-tree: %s already has a header.gcc\n' % rel)
+            errors += 1
+    # Every directory carries every pair: the preprocessor looks for
+    # <bits/c++config.h> in each search directory's bits/ in turn, and an
+    # unmapped c++config.h there is an invalid ODS-2 name (a hard error), while a
+    # mapped name that is absent is "not here" and the search goes on.
+    if pairs and not errors:
+        for out in outdirs:
             with open(os.path.join(out, 'header.gcc'), 'w') as m:
-                for f, o in remap:
-                    m.write('%s %s\n' % (f, o))
-                    print('%s/%s -> %s' % (rel, f, o.upper()))
+                for f in sorted(pairs):
+                    m.write('%s %s\n' % (f, pairs[f]))
     return 1 if errors else 0
 
 

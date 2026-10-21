@@ -20,10 +20,13 @@ python3 -I "$HERE/ods2-header-tree.py" "$T/src" "$T/out" > "$T/log" 2>&1 && ok "
 [ "$(cat "$T/out/bits/cxxconfig.h" 2>/dev/null)" = cfg ] && ok "c++config.h -> CXXCONFIG.H" || bad "no cxxconfig.h"
 grep -qx 'c++config.h cxxconfig.h' "$T/out/bits/header.gcc" 2>/dev/null && ok "bits/header.gcc maps it" || bad "bits/header.gcc"
 grep -q basic_string "$T/out/bits/header.gcc" && bad "a legal name was remapped" || ok "a legal name is not remapped"
+# every directory carries every pair (a search dir without the file says "not here")
+grep -qx 'c++config.h cxxconfig.h' "$T/out/ext/pb_ds/header.gcc" && grep -qx 'stdc++.h stdcxx.h' "$T/out/bits/header.gcc" \
+  && ok "every directory's header.gcc carries every pair" || bad "pairs are not in every directory"
 [ -f "$T/out/iostream" ] && [ -f "$T/out/bits/basic_string.h" ] && ok "legal names kept" || bad "legal names"
-grep -qx 'stdc++.h stdcxx.h' "$T/out/header.gcc" && ok "stdc++.h -> STDCXX.H" || bad "stdc++.h"
+grep -qx 'stdc++.h stdcxx.h' "$T/out/header.gcc" && [ -f "$T/out/stdcxx.h" ] && ok "stdc++.h -> STDCXX.H" || bad "stdc++.h"
 # a.b.h: the C RTL itself looks up A_B.H, so the file goes there and needs no pair
-[ -f "$T/out/a_b.h" ] && ! grep -q '^a.b.h' "$T/out/header.gcc" && ok "a.b.h -> A_B.H, no pair" || bad "a.b.h"
+[ -f "$T/out/a_b.h" ] && ! grep -q '^a\.b\.h' "$T/out/header.gcc" && ok "a.b.h -> A_B.H, no pair" || bad "a.b.h"
 n=$(sed -n 's/^cc_hash_max_collision_check_resize_trigger_imp.hpp //p' "$T/out/ext/pb_ds/header.gcc")
 s=${n%.hpp}
 [ -n "$n" ] && [ ${#s} -le 39 ] && [ -f "$T/out/ext/pb_ds/$n" ] && ok "a 46-character name -> $n" || bad "long name ($n)"

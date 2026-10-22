@@ -247,6 +247,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # caller). No apostrophes / literal \$ escaped: this whole block runs inside
     # the assemble docker bash -c single-quote.
     JOINT=/work/joint
+    MASTER_FMT=--ods2
     if [ -f "$JOINT/joint_e2e.exe" ] && [ -f "$JOINT/DECC\$SHR.EXE" ] && [ -f "$JOINT/LIBOTS_SHR.EXE" ]; then
         echo "-- staging JOINT-E2E port-image proof onto the ODS-2 volume --"
         cp "$JOINT/joint_e2e.exe"   "$SYSEXE/JOINT_E2E.EXE"
@@ -344,11 +345,13 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp "$JOINT/ld.exe" "$SYSEXE/LD.EXE"
                 cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
                 [ -f "$JOINT/ar.exe" ] && cp "$JOINT/ar.exe" "$SYSEXE/AR.EXE"
-                # vms-5b3: C++ -- cc1plus, the g++ driver (xg++; ODS-2 has no '+', so GXX.EXE)
-                # and the 32-bit libstdc++ (LIBSTDCXX.A, searched by LINK)
+                # vms-5b3: C++ -- cc1plus and the g++ driver (xg++, staged as GXX.EXE).
+                # vms-408: the 32-bit libstdc++ under its own name, libstdc++.a, which the
+                # driver -lstdc++ finds: this proof masters an ODS-5 system disk (below)
                 [ -f "$JOINT/cc1plus.exe" ] && cp "$JOINT/cc1plus.exe" "$SYSEXE/CC1PLUS.EXE"
                 [ -f "$JOINT/gxx.exe" ] && cp "$JOINT/gxx.exe" "$SYSEXE/GXX.EXE"
-                [ -f "$JOINT/libstdcxx.a" ] && cp "$JOINT/libstdcxx.a" "$SYSEXE/LIBSTDCXX.A"
+                [ -f "$JOINT/libstdc++.a" ] && cp "$JOINT/libstdc++.a" "$SYSEXE/libstdc++.a"
+                MASTER_FMT=--ods5
                 for _f in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do
                     [ -f "$JOINT/$_f" ] || { echo "FAIL: DRL_PROOF without $JOINT/$_f"; exit 1; }
                     cp "$JOINT/$_f" "$SYSEXE/$(echo "$_f" | tr a-z A-Z)"
@@ -365,7 +368,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                     if [ -d "$JOINT/gccsrc" ]; then
                         cp -r "$JOINT/gccsrc" "$ST/vms/SYS0/SYSCOMMON/GCCSRC"
                     fi
-                    # the C++ headers on ODS-2 names (+ header.gcc remap pairs) -> GNU:[CXX]
+                    # vms-408: the C++ headers as GCC installs them (bits/c++config.h ...) -> GNU:[CXX]
                     if [ -d "$JOINT/inc/gnu/cxx" ]; then
                         cp -r "$JOINT/inc/gnu/cxx" "$ST/vms/SYS0/SYSCOMMON/GNU/CXX"
                     fi
@@ -435,12 +438,15 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     #    installed system disk the flip mounts.
     #########################################################################
     echo "-- master ovmx-distrib-alpha.img (genuine ODS-2, $DISK_MB MB) --"
-    timeout 300 qemu-alpha "$BIN/vmsfs_master" --ods2 master \
+    # vms-408: the driver-link proof masters ODS-5 (MASTER_FMT, set where it is staged): its
+    # C++ headers and libstdc++.a carry names ODS-2 cannot hold. Every other image: ODS-2.
+    echo "-- master format: $MASTER_FMT"
+    timeout 300 qemu-alpha "$BIN/vmsfs_master" "$MASTER_FMT" master \
         /work/ovmx-distrib-alpha.img OVMXSYS "$ST/vms" "$DISK_MB"
     # Verify: the ODS-2 reader has no `extract`; presence-gate via `--ods2 list`
     # exactly as the x86_64 Dockerfile.bootable path does.
     echo "-- verify: --ods2 list carries the login chain --"
-    timeout 300 qemu-alpha "$BIN/vmsfs_master" --ods2 list /work/ovmx-distrib-alpha.img > /work/distrib-list.txt
+    timeout 300 qemu-alpha "$BIN/vmsfs_master" "$MASTER_FMT" list /work/ovmx-distrib-alpha.img > /work/distrib-list.txt
     head -40 /work/distrib-list.txt
     # IMGACT.EXE + JOB_CONTROL.EXE included: the boot-image staging bridge
     # (ovmx_init.c stage_boot_images) requires all five first-hop images on the

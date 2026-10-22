@@ -53,6 +53,16 @@
  *
  *   gettext <raw-image> <NAME.TYP> <out-file>
  *       Read SYS$SYSTEM:<NAME.TYP> (highest version) back out, verbatim.
+ *
+ *   relabel <raw-image> <volume-label>                  (rd vms-3ea)
+ *       Give the volume its own label -- SET VOLUME/LABEL's on-disk effect,
+ *       through the codec's ods2_bdev_relabel (both home blocks + the
+ *       SECURITY.SYS profile; nothing is written on any refusal). The label is
+ *       the Files-11 cluster lock namespace ("F11B$<kind><label>"), so every
+ *       node of a cluster needs its own; the demo gives node X "<X>SYS".
+ *
+ *   label <raw-image>
+ *       Print the volume's label as the block reader sees it (read-back proof).
  */
 
 #ifndef _POSIX_C_SOURCE
@@ -403,6 +413,58 @@ static int do_gettext(const char *image, const char *name, const char *out)
     return 0;
 }
 
+static int do_relabel(const char *image, const char *label)
+{
+    int fd = open(image, O_RDWR);
+    ods2_bdev_t bv;
+    ods2_status_t st;
+    char old[13];
+
+    if (fd < 0) {
+        fprintf(stderr, "relabel: cannot open %s: %s\n", image, strerror(errno));
+        return 1;
+    }
+    st = ods2_bdev_open(&bv, fd, 0);
+    if (st == ODS2_OK)
+        st = ods2_bdev_relabel(&bv, label, old);
+    if (st == ODS2_OK && fsync(fd) != 0)
+        st = ODS2_ERR_IO;
+    close(fd);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "relabel: %s not relabelled %s: %s\n",
+                image, label, ods2_strerror(st));
+        return 1;
+    }
+    printf("relabel: volume %s is now %s\n", old, label);
+    return 0;
+}
+
+static int do_label(const char *image)
+{
+    int fd = open(image, O_RDONLY);
+    ods2_bdev_t bv;
+    ods2_status_t st;
+    char lab[13];
+    size_t n;
+
+    if (fd < 0) {
+        fprintf(stderr, "label: cannot open %s: %s\n", image, strerror(errno));
+        return 1;
+    }
+    st = ods2_bdev_open(&bv, fd, 0);
+    close(fd);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "label: %s: %s\n", image, ods2_strerror(st));
+        return 1;
+    }
+    memcpy(lab, bv.home.hm2_volname, 12);
+    lab[12] = '\0';
+    for (n = 12; n > 0 && lab[n - 1] == ' '; n--)
+        lab[n - 1] = '\0';
+    printf("%s\n", lab);
+    return 0;
+}
+
 static void usage(const char *prog)
 {
     fprintf(stderr,
@@ -410,8 +472,10 @@ static void usage(const char *prog)
         "  %s inject   <raw-ods2-image> <par-file>       add SYS$SYSTEM:%s;N+1\n"
         "  %s readback <raw-ods2-image> <out-par-file>   read highest %s out\n"
         "  %s puttext  <raw-ods2-image> <NAME.TYP> <text-file>  add SYS$SYSTEM:NAME.TYP;N+1 (STMLF)\n"
-        "  %s gettext  <raw-ods2-image> <NAME.TYP> <out-file>   read highest SYS$SYSTEM:NAME.TYP out\n",
-        prog, PAR_NAME, prog, PAR_NAME, prog, prog);
+        "  %s gettext  <raw-ods2-image> <NAME.TYP> <out-file>   read highest SYS$SYSTEM:NAME.TYP out\n"
+        "  %s relabel  <raw-ods2-image> <volume-label>  give the volume its own label (rd vms-3ea)\n"
+        "  %s label    <raw-ods2-image>                 print the volume label\n",
+        prog, PAR_NAME, prog, PAR_NAME, prog, prog, prog, prog);
 }
 
 int main(int argc, char *argv[])
@@ -420,7 +484,11 @@ int main(int argc, char *argv[])
         return do_puttext(argv[2], argv[3], argv[4]);
     if (argc == 5 && strcmp(argv[1], "gettext") == 0)
         return do_gettext(argv[2], argv[3], argv[4]);
+    if (argc == 3 && strcmp(argv[1], "label") == 0)
+        return do_label(argv[2]);
     if (argc != 4) { usage(argv[0]); return 2; }
+    if (strcmp(argv[1], "relabel") == 0)
+        return do_relabel(argv[2], argv[3]);
     if (strcmp(argv[1], "inject") == 0)
         return do_inject(argv[2], argv[3]);
     if (strcmp(argv[1], "readback") == 0)

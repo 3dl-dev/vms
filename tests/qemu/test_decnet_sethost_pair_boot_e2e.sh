@@ -169,6 +169,7 @@ if [ "$ra" -eq 0 ] && [ "$rb" -eq 0 ]; then
     # database, loaded at network start. Take OVMXB out of A's PERMANENT
     # database now (PURGE): LIST no longer shows it, yet the SET HOST below
     # still resolves OVMXB -- from the volatile copy, reading no file.
+    send A 'NCP :== $SYS$SYSTEM:NCP.EXE'; sleep 1     # this boot's session
     op=$(wc -c <"$LA")
     send A 'NCP PURGE NODE OVMXB'; sleep 3
     ol=$(wc -c <"$LA")

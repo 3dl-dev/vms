@@ -93,3 +93,35 @@ test. Worked around with `tests/lab/tools/stage_cluster_group.sh 1`, the group
 number read from VMS itself (`SYSMAN> CONFIGURATION SHOW
 CLUSTER_AUTHORIZATION` on VAX1: *"Cluster group number: 1 / Multicast address:
 AB-00-04-01-01-01"*), never back-derived.
+
+## THE ATTRIBUTION, asked the only way that can falsify it
+
+A real VAX granting its own process a lock is only evidence about *this frame*
+if nothing else could have produced the grant. So: every frame in the whole
+capture carrying arm 1's handle pair `(52030001, ad030054)`, in order, is the
+complete life of that lock on the wire —
+
+```
+f2287   OVMXE -> VAX2   82/01  body[34]=fb   QUEUED      res='A4D1'
+f2525   OVMXE -> VAX2   02/02                THE GRANT
+f3193   VAX2  -> OVMXE  02/03                $DEQ        (STOP HOLD2)
+```
+
+**VAX2 never asked again.** There is no second `op-0x01`, no retransmit and no
+convert between the queued answer and VAX2 releasing a lock *by handle* — and a
+node only `$DEQ`s a lock it believes it holds. The op-0x02 is the only thing
+that can account for the transition, and VAX2's own `$DEQ` is a second,
+independent statement that it took it. Arm 2 is the same shape (`f4214` queued,
+`f4371` the grant, with its `$DEQ` after this capture's end because the pod was
+torn down on `STOP HOLD4`).
+
+## What was NOT exercised by this fire, stated
+
+The fire drove the **LOCAL** release door (`^Y` on the holder → `vms_deq_core`).
+The other doors the fix shares are host-proven and not lab-fired here: the
+INBOUND release (`dlm_arm_serve_deq`), the RUNDOWN/`$DEQALL` sweep, the inbound
+CONVERT that grants a third system, and the local down-convert
+(`test_dlm_deq_reachable` sections 12–15). They now all go out through the same
+`dlm_arm_send_grant_notify`, which is what makes one fire evidence about the
+shape rather than about one call site — but the call sites themselves remain
+host-evidence.

@@ -25,3 +25,6 @@ target_include_directories(vmsdecnet_broker PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../nsp/include   # dnet_nsp.h (DNET_NSP_MAX_DATA)
 )
+# rmsdef.h / ssdef.h: dnet_broker_iosb_status maps an RMS failure to its SS$ code
+# (rd vms-acf3 follow-up).
+target_include_directories(vmsdecnet_broker PRIVATE ${CMAKE_SOURCE_DIR}/src/libvms/include)

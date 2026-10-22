@@ -13,6 +13,9 @@
 
 #include <string.h>
 
+#include "rmsdef.h"
+#include "ssdef.h"
+
 /* Little-endian field helpers (arch-neutral -- the record crosses a process
  * boundary via the mailbox and must decode identically on every substrate). */
 static void put_u16(uint8_t *p, uint16_t v)
@@ -329,4 +332,20 @@ DNET_BROKER_API uint32_t dnet_broker_control(struct dnet_broker_chan *bc,
     if (xfer)
         *xfer = n;
     return st;
+}
+
+DNET_BROKER_API uint32_t dnet_broker_iosb_status(uint32_t st)
+{
+    if ((st >> 16) == 0)
+        return st;                              /* already an SS$ (word) code */
+    if (st & 1)
+        return 1;                               /* a facility success: SS$_NORMAL */
+    switch (st) {
+    case RMS$_FLK:
+    case RMS$_SHR: return SS$_ACCONFLICT;
+    case RMS$_PRV: return SS$_NOPRIV;
+    case RMS$_FNF:
+    case RMS$_DNF: return SS$_NOSUCHFILE;
+    default:       return SS$_FCPREADERR;
+    }
 }

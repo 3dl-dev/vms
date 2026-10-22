@@ -34,9 +34,12 @@
  * and the objects its inbound dispatch serves. LIST KNOWN OBJECTS / LIST OBJECT
  * read the permanent NETOBJECT.DAT.
  *
- * HONEST SCOPE, not yet built: OVMX keeps ONE persisted node database, so SET
- * (volatile) and DEFINE (permanent) both act on it (a running NETACP re-reads it
- * per request); the permanent object database does not yet feed NETACP's
+ * NODE: SET / CLEAR change the RUNNING NETACP's VOLATILE node database (through
+ * NETACP, dnet_netctl; OPER required) and DEFINE / PURGE the PERMANENT one, the
+ * file NETACP loads its volatile copy from when the network starts -- the VMS
+ * split (rd vms-acf3). SHOW reads the volatile database, LIST the permanent.
+ * HONEST SCOPE, not yet built: SET/DEFINE EXECUTOR both act on the one
+ * executor file; the permanent object database does not yet feed NETACP's
  * object table; LOOP and circuit/line SET are later rungs and are not faked here
  * (INV-6).
  */
@@ -262,6 +265,40 @@ static int ncp_fetch(uint8_t entity)
         return 0;
     }
     return 1;
+}
+
+/* NCP SET / CLEAR NODE: change the RUNNING NETACP's VOLATILE node database
+ * (dnet_netctl over the same _NET: IO$_ACPCONTROL SHOW uses). As on VMS, the
+ * volatile database is the running network's: with no NETACP serving there is
+ * none to change, and the command fails the way SHOW does. Returns the exit
+ * code. */
+static int fail(const char *msg);
+
+static int ncp_netctl(const struct dnet_netctl_req *q)
+{
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    struct ncp_net n = { 0 };
+    struct dsc$descriptor_s d;
+    static char netdev[] = "_NET:";
+    d.dsc$w_length = (uint16_t)strlen(netdev);
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = netdev;
+    uint32_t st = sys$assign(&d, &n.chan, 0, NULL);
+    if (!(st & 1))
+        return ncp_net_fail(st);
+    st = dnet_netctl_send(ncp_query, &n, q);
+    (void)sys$dassgn(n.chan);
+    if (st & 1)
+        return 0;
+    if (st == SS$_NOSUCHNODE)
+        return fail("UNRNODE, no such node in the database");
+    if (st == SS$_BADPARAM)
+        return fail("INVNAME, bad node name or name already in use");
+    if (st == SS$_INSFMEM)
+        return fail("DBFULL, node database is full");
+    return ncp_net_fail(st);
 }
 
 /* SHOW NODE x: the executor itself, or an entry of NETACP's known-node table. */
@@ -506,6 +543,18 @@ int main(int argc, char **argv)
             const char *name = "";
             if (argc >= 6 && ieq(argv[4], "NAME"))
                 name = argv[5];
+            /* SET: the running NETACP's VOLATILE database. DEFINE: the
+             * PERMANENT one (the file), loaded when the network starts. */
+            if (ieq(verb, "SET")) {
+                struct dnet_netctl_req q;
+                memset(&q, 0, sizeof q);
+                q.kind = DNET_NETCTL_SET_NODE;
+                q.addr = a;
+                if (strlen(name) > DNET_NODEDB_NAMEMAX)
+                    return fail("INVNAME, bad node name or name already in use");
+                snprintf(q.name, sizeof q.name, "%s", name);
+                return ncp_netctl(&q);
+            }
             struct dnet_nodedb db;
             if (nodes_load(&db) != DNET_NODEDB_OK)
                 return fail("DBRDERR, node database is corrupt");
@@ -586,6 +635,21 @@ int main(int argc, char **argv)
 
     /* ---- CLEAR / PURGE NODE ---- */
     if (ieq(verb, "CLEAR") || ieq(verb, "PURGE")) {
+        if (ieq(ent, "NODE") && argc >= 4 && ieq(verb, "CLEAR")) {
+            /* CLEAR: the running NETACP's VOLATILE database (PURGE: the file). */
+            struct dnet_netctl_req q;
+            memset(&q, 0, sizeof q);
+            q.kind = DNET_NETCTL_CLEAR_NODE;
+            uint16_t a = 0;
+            if (dnet_nodedb_parse_addr(argv[3], &a) == DNET_NODEDB_OK) {
+                q.addr = a;
+            } else {
+                if (strlen(argv[3]) > DNET_NODEDB_NAMEMAX)
+                    return fail("INVNODE, bad node name or address");
+                snprintf(q.name, sizeof q.name, "%s", argv[3]);
+            }
+            return ncp_netctl(&q);
+        }
         if (ieq(ent, "NODE") && argc >= 4) {
             struct dnet_nodedb db;
             if (nodes_load(&db) != DNET_NODEDB_OK)

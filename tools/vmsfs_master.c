@@ -75,8 +75,8 @@
 
 struct node {
     int          is_dir;
-    char         name[VMSFS_NAME_MAX + 1];   /* component name (upcased) */
-    char         type[VMSFS_TYPE_MAX + 1];   /* file type; "" for dirs */
+    char         name[ODS5_NAME_MAX + 1];    /* component name (upcased; as is on --ods5) */
+    char         type[ODS5_NAME_MAX + 1];    /* file type; "" for dirs */
 
     uint32_t     fid;
     uint16_t     version;                    /* 1 for files, 0 for dirs */
@@ -120,9 +120,36 @@ static void node_add_child(struct node *dir, struct node *child)
  * The last '.' separates name from type; no dot means an empty type.
  * Directories carry the whole basename as the name and an empty type.
  */
+/* Structure level of the volume do_master_ods2 lays down: ODS-2 by default,
+ * ODS-5 with --ods5 (rd vms-7e7e) -- a level-5 home block and SCB, the reserved
+ * files ODS-2 headers, every mastered file and directory a level-5 header and
+ * ODS-5 directory records, as INITIALIZE/STRUCTURE=5 on the real Alpha leaves
+ * them (tests/lab/captures/ods5-alpha-20261022/RESULTS.md). */
+static uint16_t g_master_struclev = ODS2_STRUCLEV_V2;
+
 static int split_name_type(const char *base, int is_dir,
                            char *name, char *type)
 {
+    /* rd vms-408: an ODS-5 volume holds a host name as it is -- its case, its
+     * '+', its extra dots, up to 236 characters (RESULTS.md R4-R6) -- so
+     * libstdc++'s bits/c++config.h is mastered under that name, not an ODS-2
+     * stand-in. The last '.' still starts a file's type. */
+    if (ODS2_IS_ODS5(g_master_struclev)) {
+        const char *d5 = is_dir ? NULL : strrchr(base, '.');
+        size_t n5 = (d5 && d5 != base) ? (size_t)(d5 - base) : strlen(base);
+        if (strlen(base) > ODS5_NAME_MAX - (is_dir ? 4u : 0u)) {
+            fprintf(stderr, "%%MASTER-E-NAMLONG, name longer than ODS-5's 236 characters: %s\n", base);
+            return -1;
+        }
+        memcpy(name, base, n5);
+        name[n5] = '\0';
+        if (d5 && d5 != base)
+            strcpy(type, d5 + 1);
+        else
+            type[0] = '\0';
+        return 0;
+    }
+
     const char *dot = is_dir ? NULL : strrchr(base, '.');
     size_t nlen, tlen;
     size_t i;
@@ -1102,7 +1129,7 @@ static void ods2_entry_name(const struct node *n, char *out, size_t outsz)
 static int emit_tree_ods2(ods2_wvolume_t *wvol, const struct node *dir,
                           ods2_fid_t dir_fid)
 {
-    char entry[VMSFS_NAME_MAX + VMSFS_TYPE_MAX + 8];
+    char entry[2 * ODS5_NAME_MAX + 8];
     ods2_status_t st;
 
     for (size_t i = 0; i < dir->nchild; i++) {
@@ -1161,13 +1188,6 @@ static int emit_tree_ods2(ods2_wvolume_t *wvol, const struct node *dir,
     }
     return 0;
 }
-
-/* Structure level of the volume do_master_ods2 lays down: ODS-2 by default,
- * ODS-5 with --ods5 (rd vms-7e7e) -- a level-5 home block and SCB, the reserved
- * files ODS-2 headers, every mastered file and directory a level-5 header and
- * ODS-5 directory records, as INITIALIZE/STRUCTURE=5 on the real Alpha leaves
- * them (tests/lab/captures/ods5-alpha-20261022/RESULTS.md). */
-static uint16_t g_master_struclev = ODS2_STRUCLEV_V2;
 
 static int do_master_ods2(const char *image, const char *label,
                           const char *srcdir, long size_mb)

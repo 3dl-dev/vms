@@ -41,7 +41,8 @@ cat-0x02 op-0x02 IS the deferred grant, nor what selects body[34]'s value, nor
 what the other 291 are about. It measures that the shape OVMX wants to send
 does not exist on a real cluster and that this other shape is what occupies the
 moment, which is the evidence a DESIGN decision needs -- not a substitute for
-one.
+one. That decision is rd vms-a4d7, which carries the driven arm that would
+ground the cells.
 
 PAIRING is by transaction token and the (src,dst) pair, the same rule
 remaster_census.py and dlm_queued_answer_census.py use, and every frame is

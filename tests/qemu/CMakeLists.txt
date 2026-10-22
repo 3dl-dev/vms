@@ -204,7 +204,10 @@ foreach(_anchored
         # seam (tcpip_service_db.h -> rms_textfile_write_line/append_line/getline),
         # so it needs the same force-bind as tcpip_config_acp or every store/read
         # returns -1 with no honest RMS status.
-        test_syssvc_tcpip_service_db)
+        test_syssvc_tcpip_service_db
+        # test_syssvc_rms_textfile_threads (rd vms-acf3): rms_textfile from two
+        # threads (append + open/getline/close); only through the weak seam.
+        test_syssvc_rms_textfile_threads)
     if(TARGET ${_anchored})
         target_sources(${_anchored} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)

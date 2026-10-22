@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "rms_textfile.h"
+#include "ssdef.h"
 
 #if defined(OVMX_HAVE_ACP)
 
@@ -77,15 +78,19 @@ struct rms_textfile {
     char       spec[512];      /* resolved filespec; fab$l_fna points at it     */
     char       rbuf[1024];     /* per-$GET record buffer                        */
     int        connected;
+    uint32_t   last_st;        /* the last $GET's status (RMS$_EOF at the end)  */
 };
 
-static rms_textfile_t *rmstf_open_unl(const char *vms_spec)
+static rms_textfile_t *rmstf_open_unl(const char *vms_spec, uint32_t *st)
 {
+    *st = RMS$_FNM;
     if (!vms_spec || !*vms_spec)
         return NULL;
+    *st = SS$_NOSUCHDEV;
     if (!rms_services_present())
-        return NULL;   /* no LIBVMSRMS in this image -> fail honest */
+        return NULL;   /* no LIBVMSRMS in this image: no file layer at all */
 
+    *st = RMS$_DME;
     rms_textfile_t *tf = calloc(1, sizeof(*tf));
     if (!tf)
         return NULL;
@@ -110,7 +115,7 @@ static rms_textfile_t *rmstf_open_unl(const char *vms_spec)
     tf->fab.fab$b_rfm = FAB$C_STMLF;
     tf->fab.fab$b_fac = FAB$M_GET;
 
-    if (sys$open(&tf->fab, 0, 0) != RMS$_NORMAL) {
+    if ((*st = sys$open(&tf->fab, 0, 0)) != RMS$_NORMAL) {
         free(tf);
         return NULL;
     }
@@ -120,12 +125,14 @@ static rms_textfile_t *rmstf_open_unl(const char *vms_spec)
     tf->rab.rab$l_ubf = tf->rbuf;
     tf->rab.rab$w_usz = (uint16_t)sizeof(tf->rbuf);
 
-    if (sys$connect(&tf->rab, 0, 0) != RMS$_NORMAL) {
+    if ((*st = sys$connect(&tf->rab, 0, 0)) != RMS$_NORMAL) {
         sys$close(&tf->fab, 0, 0);
         free(tf);
         return NULL;
     }
     tf->connected = 1;
+    tf->last_st = RMS$_NORMAL;
+    *st = RMS$_NORMAL;
     return tf;
 }
 
@@ -136,8 +143,11 @@ static int rmstf_getline_unl(rms_textfile_t *tf, char *buf, size_t bufsz, int *t
     if (!tf || !buf || bufsz < 2)
         return 0;
 
-    if (sys$get(&tf->rab, 0, 0) != RMS$_NORMAL)
-        return 0;   /* RMS$_EOF or any read error -> no more records */
+    /* RMS$_EOF or a read error: no more records. Which one is kept for
+     * rms_textfile_last_status() -- a reader that must not mistake a failed
+     * read for the end of the file asks (rd vms-acf3). */
+    if ((tf->last_st = sys$get(&tf->rab, 0, 0)) != RMS$_NORMAL)
+        return 0;
 
     size_t rsz = tf->rab.rab$w_rsz;
     size_t copy = rsz;
@@ -272,12 +282,25 @@ static int rmstf_create_unl(const char *vms_spec)
  * this lock for its whole RMS sequence. */
 static pthread_mutex_t rmstf_lock = PTHREAD_MUTEX_INITIALIZER;
 
+rms_textfile_t *rms_textfile_open_st(const char *vms_spec, uint32_t *status)
+{
+    uint32_t st = RMS$_NORMAL;
+    pthread_mutex_lock(&rmstf_lock);
+    rms_textfile_t *tf = rmstf_open_unl(vms_spec, &st);
+    pthread_mutex_unlock(&rmstf_lock);
+    if (status)
+        *status = st;
+    return tf;
+}
+
 rms_textfile_t *rms_textfile_open(const char *vms_spec)
 {
-    pthread_mutex_lock(&rmstf_lock);
-    rms_textfile_t *tf = rmstf_open_unl(vms_spec);
-    pthread_mutex_unlock(&rmstf_lock);
-    return tf;
+    return rms_textfile_open_st(vms_spec, NULL);
+}
+
+uint32_t rms_textfile_last_status(const rms_textfile_t *tf)
+{
+    return tf ? tf->last_st : RMS$_IFI;
 }
 
 int rms_textfile_getline(rms_textfile_t *tf, char *buf, size_t bufsz, int *too_long)
@@ -321,26 +344,52 @@ int rms_textfile_create(const char *vms_spec)
 
 #else  /* !OVMX_HAVE_ACP : no executive in this link (bare libvms unit build) */
 
+#include <errno.h>
 #include <stdio.h>
+#include "rms/rms.h"
 #include "vmsfs/filespec.h"
 
 struct rms_textfile {
     FILE *fp;
 };
 
-rms_textfile_t *rms_textfile_open(const char *vms_spec)
+rms_textfile_t *rms_textfile_open_st(const char *vms_spec, uint32_t *status)
 {
+    if (status)
+        *status = RMS$_FNM;
     if (!vms_spec || !*vms_spec)
         return NULL;
     char linux_path[1024];
     vmsfs_to_linux_path(vms_spec, linux_path, sizeof(linux_path));
     FILE *fp = fopen(linux_path, "r");
-    if (!fp)
+    if (!fp) {
+        if (status)
+            *status = (errno == ENOENT) ? RMS$_FNF : RMS$_ACC;
         return NULL;
+    }
     rms_textfile_t *tf = calloc(1, sizeof(*tf));
-    if (!tf) { fclose(fp); return NULL; }
+    if (!tf) {
+        fclose(fp);
+        if (status)
+            *status = RMS$_DME;
+        return NULL;
+    }
     tf->fp = fp;
+    if (status)
+        *status = RMS$_NORMAL;
     return tf;
+}
+
+rms_textfile_t *rms_textfile_open(const char *vms_spec)
+{
+    return rms_textfile_open_st(vms_spec, NULL);
+}
+
+uint32_t rms_textfile_last_status(const rms_textfile_t *tf)
+{
+    if (!tf || !tf->fp)
+        return RMS$_IFI;
+    return ferror(tf->fp) ? RMS$_RER : RMS$_EOF;
 }
 
 int rms_textfile_getline(rms_textfile_t *tf, char *buf, size_t bufsz, int *too_long)

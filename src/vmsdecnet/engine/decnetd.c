@@ -229,13 +229,19 @@ static int sethost_source_executor(unsigned *area, unsigned *node)
 
 /* Resolve a --set-host target: accept "area.node" directly, else look the token
  * up as a NODE NAME (case-insensitive) in the remote node database. Returns 0
- * and fills area/node. */
+ * and fills area/node; -1 when the database does not list the name; -2 when
+ * the database could not be READ (its RMS status is
+ * dnet_store_last_rms_status()) -- a node NETACP cannot look up is not a node
+ * that is unknown (rd vms-acf3). */
 static int sethost_resolve_target(const char *token, unsigned *area, unsigned *node)
 {
     if (parse_addr(token, area, node) == 0)
         return 0;
     static struct dnet_nodedb db;
-    if (dnet_store_load_nodes(&db) != DNET_STORE_OK)
+    int lrc = dnet_store_load_nodes(&db);
+    if (lrc == DNET_STORE_EREAD)
+        return -2;
+    if (lrc != DNET_STORE_OK)
         return -1;
     const struct dnet_node_entry *e = dnet_nodedb_by_name(&db, token);
     if (!e)
@@ -927,18 +933,30 @@ static uint32_t broker_open_connect(const struct dnet_engine *node, uint32_t own
 {
     struct dnet_ncb n;
     uint32_t st = SS$_NORMAL;
+    int rrc = 0;
     if (dnet_ncb_parse((const char *)ncbtxt, ncblen, &n) != DNET_NCB_OK)
         return SS$_BADPARAM;
 
     if (strcmp(n.node, "0") == 0 || strcasecmp(n.node, node->node_name) == 0) {
         *rarea = dnet_area_of(node->addr);
         *rnode = dnet_node_of(node->addr);
-    } else if (sethost_resolve_target(n.node, rarea, rnode) != 0) {
+    } else if ((rrc = sethost_resolve_target(n.node, rarea, rnode)) != 0) {
         /* Not area.node and not in the node database: VMS's condition for that
          * is SS$_NOSUCHNODE, "remote node is unknown" (SSDEF 652, oracle-pinned
          * in ssdef.h). It was SS$_NOSUCHDEV, so a visitor's SET HOST VAXC said
-         * "%SYSTEM-W-NOSUCHDEV, no such device" (rd vms-5843). */
-        st = SS$_NOSUCHNODE;
+         * "%SYSTEM-W-NOSUCHDEV, no such device" (rd vms-5843).
+         * A node database NETACP could not READ is not "unknown": the request
+         * fails with the RMS status of that read (rd vms-acf3). */
+        if (rrc == -2) {
+            st = dnet_store_last_rms_status();
+            if (st == 0 || (st & 1))
+                st = RMS$_RER;
+            fprintf(stderr, "DECNETD-E-NODEDB, cannot read the node database to resolve '%s' (status %08X)\n",
+                    n.node, (unsigned)st);
+            fflush(stderr);
+        } else {
+            st = SS$_NOSUCHNODE;
+        }
         goto out;
     }
 
@@ -4582,7 +4600,14 @@ static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
     /* Resolve the remote node NAME -> area.node (the node database the SET HOST
      * client uses too); no address is ever invented (INV-6). */
     unsigned rarea = 0, rnode = 0;
-    if (sethost_resolve_target(plan.node, &rarea, &rnode) != 0) {
+    int rrc = sethost_resolve_target(plan.node, &rarea, &rnode);
+    if (rrc == -2) {
+        fprintf(stderr, "DECNETD-E-NODEDB, COPY: cannot read the node database"
+                        " to resolve '%s' (status %08X)\n",
+                plan.node, (unsigned)dnet_store_last_rms_status());
+        return 1;
+    }
+    if (rrc != 0) {
         fprintf(stderr, "DECNETD-E-NOSUCHNODE, COPY: cannot resolve node '%s'"
                         " (not area.node, and not a NAME in the node database)\n",
                 plan.node);
@@ -9006,7 +9031,15 @@ int main(int argc, char **argv)
 
     if (set_host_to) {
         unsigned ta = 0, tn = 0;
-        if (sethost_resolve_target(set_host_to, &ta, &tn) != 0) {
+        int rrc = sethost_resolve_target(set_host_to, &ta, &tn);
+        if (rrc == -2) {
+            fprintf(stderr, "DECNETD-E-NODEDB, --set-host: cannot read the node"
+                            " database to resolve '%s' (status %08X)\n",
+                    set_host_to, (unsigned)dnet_store_last_rms_status());
+            scs_datalink_close(sock);
+            return 1;
+        }
+        if (rrc != 0) {
             fprintf(stderr, "DECNETD-E-NOSUCHNODE, --set-host: cannot resolve"
                             " node '%s' (not area.node, and not a NAME in the"
                             " node database)\n", set_host_to);
@@ -9061,12 +9094,20 @@ int main(int argc, char **argv)
                         dnet_engine_router_hello_emitted(&eng, now);
                     else
                         dnet_engine_hello_emitted(&eng, now);
-                    log_ts(stdout);
-                    printf(" DECNETD-I-HELLOSENT, %s circuit %s seq=%lu bytes=%zd\n",
-                           is_router ? "router-hello" : "endnode-hello",
-                           eng.circuit,
-                           is_router ? eng.router_hello_sent : eng.hello_sent, sent);
-                    fflush(stdout);
+                    /* rd vms-acf3: the persistent NETACP (argc == 1, the
+                     * process STARTNET creates) logs no per-hello line --
+                     * VMS's NETACP logs no hellos, and one line every hello
+                     * timer grew SYS$MANAGER:NETACP.LOG without bound on the
+                     * system disk. A diagnostic run (--iface ... from DCL)
+                     * still reports each hello it sends. */
+                    if (argc != 1) {
+                        log_ts(stdout);
+                        printf(" DECNETD-I-HELLOSENT, %s circuit %s seq=%lu bytes=%zd\n",
+                               is_router ? "router-hello" : "endnode-hello",
+                               eng.circuit,
+                               is_router ? eng.router_hello_sent : eng.hello_sent, sent);
+                        fflush(stdout);
+                    }
                 }
             }
         }

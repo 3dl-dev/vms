@@ -1,0 +1,25 @@
+# rms-textfile-open-failure-reads-as-absent -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "rms_textfile_open_st reports WHY an open failed -- RMS\$_FNF/RMS\$_DNF only for a file that is not there -- so a reader (NETACP's node database) never takes a failed read for an absent or empty file (rd vms-acf3)";;
+        targets)      echo "libvms/rtl/rms_textfile.c";;
+        suites_red)   echo "test_syssvc_rms_textfile_threads";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation reports every failed \$OPEN as RMS\$_FNF -- the shape that made an unreadable NETNODE_REMOTE.DAT read as an empty node database and SET HOST say SS\$_NOSUCHNODE. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+an open that fails for a reason other than absence does not report RMS$_FNF or RMS$_DNF
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/^static rms_textfile_t \*rmstf_open_unl/,/^}$/ s|^    if ((\*st = sys\$open(&tf->fab, 0, 0)) != RMS\$_NORMAL) {$|    if ((*st = sys$open(\&tf->fab, 0, 0)) != RMS$_NORMAL \&\& (*st = RMS$_FNF)) { /* NEGCTL rms-textfile-open-failure-reads-as-absent */|' "$_file"
+    :
+}

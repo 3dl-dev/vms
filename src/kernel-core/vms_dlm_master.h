@@ -308,6 +308,31 @@ uint32_t vms_lock_dlm_master_apply_valblk(uint32_t req_csid, uint32_t master_lki
 					  const uint8_t *valblk);
 
 /* ==========================================================================
+ * 3b. A QUEUE THIS NODE ADVANCED FOR ANOTHER SYSTEM, read back (rd vms-28bd)
+ *
+ * The LOCAL release paths notify the arm through
+ * vms_dlm_requester_ops.grant_advanced, which carries only (csid,
+ * master_lkid). This is how the arm turns that key into the four values a
+ * deferred GRANT asserts -- and it reads them out of the lock database AT THE
+ * MOMENT OF THE SEND, not at the moment of the flip, so a frame is never built
+ * from a fact that has since stopped being true.
+ *
+ * `*out` is filled exactly as the master seam fills it for a cross-node
+ * release: outcome RELEASED with `deferred_grant` set and the four
+ * `deferred_*` fields, so the arm's existing origination path takes it
+ * unchanged and there is no second wire shape.
+ *
+ * SS$_NORMAL only when the handle still names a MASTER-SIDE lock this node
+ * holds FOR that system and that lock is GRANTED with a requester handle on
+ * it. SS$_IVLOCKID otherwise -- a proxy, a local lock, another system's lock,
+ * a lock that has gone away, or one that is queued again: there is then no
+ * grant to announce, which is an honest omission and not a failure.
+ * ===========================================================================
+ */
+uint32_t vms_lock_dlm_grant_advance_read(uint32_t csid, uint32_t master_lkid,
+					 struct vms_dlm_master_result *out);
+
+/* ==========================================================================
  * 4. A member left
  *
  * The kernel-core door onto the departure sweep VMS_IOCTL_DLM_MEMBER_DEPART

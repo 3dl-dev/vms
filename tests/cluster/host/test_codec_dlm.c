@@ -47,6 +47,17 @@ static const struct vms_fixture *fixture(const char *name)
 	return NULL;
 }
 
+/* A specimen's DLM SYSAP body, and how much of it there is. */
+static const uint8_t *body_of(const struct vms_fixture *f)
+{
+	return f->bytes + VMS_OFF_SYSAP_BODY;
+}
+
+static uint32_t blen_of(const struct vms_fixture *f)
+{
+	return f->wire_len - VMS_OFF_SYSAP_BODY;
+}
+
 /*
  * `start` scopes the comparison to the span a builder actually writes.
  * Every fixture also carries a plausible header/envelope prefix (abs
@@ -1525,6 +1536,211 @@ static void test_queued_convert_answer_is_the_real_one(void)
 			"*** a CONVERT is granted as op 0x07, the request's own op ***");
 }
 
+/* ==========================================================================
+ * rd vms-85f: THE ANSWER TO A FIRST ENQ (op 0x01) THE MASTER QUEUED
+ *
+ * OVMX used to answer NOTHING. A real OpenVMS VAX V7.3 node's $ENQW on a
+ * resource OVMX mastered and held at a conflicting mode therefore had nothing
+ * to wait on but silence: its process sat in RWSCS and STOP could not complete
+ * it (measured on hardware, tests/lab/captures/vms-3ac-promote-20261021).
+ *
+ * The two pairs below are REAL request/answer pairs from two DIFFERENT masters,
+ * two requesters, two resources and two modes (the vary-the-topology rule). The
+ * census behind them is tools/cluster/dlm_queued_answer_census.py.
+ * ========================================================================== */
+
+/* Every body offset the real queued answers rewrite, apart from the two the
+ * CODEC owns differently: body[0:4] is the CM envelope (the wrapper's, not
+ * this builder's) and body[20:24] is the master's own handle. */
+#define Q_ENVELOPE_LEN 4u
+
+static void q_compare(const struct vms_fixture *ans, const uint8_t *built,
+		      const uint32_t *allow, uint32_t n_allow,
+		      const char *label)
+{
+	uint32_t i, j, diffs = 0;
+
+	for (i = Q_ENVELOPE_LEN; i < VMS_CM_BODY_LEN; i++) {
+		int allowed = 0;
+
+		for (j = 0; j < n_allow; j++)
+			allowed |= (allow[j] == i);
+		if (allowed)
+			continue;
+		if (built[VMS_OFF_SYSAP_BODY + i] !=
+		    ans->bytes[VMS_OFF_SYSAP_BODY + i]) {
+			if (diffs == 0)
+				printf("       %s: first diff at body[%u]: "
+				       "built %02x, real %02x\n", label, i,
+				       built[VMS_OFF_SYSAP_BODY + i],
+				       ans->bytes[VMS_OFF_SYSAP_BODY + i]);
+			diffs++;
+		}
+	}
+	printf("       %s: %u of %u body bytes compared\n", label,
+	       VMS_CM_BODY_LEN - Q_ENVELOPE_LEN - n_allow, VMS_CM_BODY_LEN);
+	ct_check(diffs == 0,
+		 "the built queued answer equals the real master's, byte for byte");
+}
+
+static void test_queued_enq_answer_is_the_real_one(void)
+{
+	const struct vms_fixture *qa = fixture("dlm-queued-enq-req-a");
+	const struct vms_fixture *aa = fixture("dlm-queued-enq-ans-a");
+	const struct vms_fixture *qb = fixture("dlm-queued-enq-req-b");
+	const struct vms_fixture *ab = fixture("dlm-queued-enq-ans-b");
+	/* Pair B's master wrote the OTHER real value in each of the three
+	 * cells whose determinant is not grounded. */
+	static const uint32_t allow_b[] = { 28u, 29u, 52u };
+	uint8_t built[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-85f: a queued op-0x01 is ANSWERED, and the answer "
+	       "is the real one --\n");
+	ct_check(qa && aa && qb && ab, "the four specimens load");
+	if (!qa || !aa || !qb || !ab)
+		return;
+	ct_check_eq_u32(body_of(aa)[34], VMS_DLM_REPLY_QUEUED,
+			"VAX1's real answer to that EX request carries 0xfb: "
+			"it QUEUED it");
+
+	/*
+	 * AND THE OTHER DIRECTION FIRST: what this node makes of a REAL
+	 * master's queued answer. Until rd vms-85f the grant/deny shape test
+	 * read this frame as a GRANT -- its mode byte is non-zero and its name
+	 * is echoed -- so a lock a real VAX had only queued was reported to the
+	 * waiting process as held.
+	 */
+	{
+		struct vms_dlm_enq_response rsp;
+
+		memset(&rsp, 0xa5, sizeof(rsp));
+		ct_check(vms_dlm_enq_response_parse_body(body_of(aa),
+							 blen_of(aa), &rsp) ==
+			 VMS_CODEC_OK, "the real queued answer parses");
+		ct_check_eq_u32((uint32_t)rsp.outcome,
+				(uint32_t)VMS_DLM_ENQ_QUEUED,
+				"*** the parser calls it QUEUED, not GRANTED: "
+				"a 0xfb must never be reported as a lock this "
+				"node holds ***");
+		ct_check(rsp.master_lkid == 0x0f000272u &&
+			 rsp.req_lkid == 0x0e0002b2u,
+			 "  and it reads both handles out of the real frame");
+	}
+
+	/*
+	 * PAIR A. The two handles are the ones VAX1's own answer carries, which
+	 * is what makes the comparison exact: in the shipping path they come
+	 * from struct vms_dlm_master_result, read off the LKB this engine
+	 * queued (proven in test_dlm_deq_reachable.c).
+	 */
+	memset(built, 0xa5, sizeof(built));
+	ct_check(vms_dlm_enq_response_build_queued(body_of(qa), blen_of(qa),
+						   0x0f000272u, 0x0e0002b2u,
+						   built, sizeof(built),
+						   &written) == VMS_CODEC_OK,
+		 "OVMX builds the queued answer for pair A");
+	q_compare(aa, built, NULL, 0u, "pair A");
+	ct_check(built[VMS_OFF_SYSAP_BODY + 30u] == body_of(qa)[30] &&
+		 built[VMS_OFF_SYSAP_BODY + 30u] == 5u,
+		 "  the mode the requester asked for (EX) rides back, not cleared");
+	ct_check(memcmp(built + VMS_OFF_SYSAP_BODY + 36u, "\0\0\0\0\0\0\0\0",
+			8u) == 0,
+		 "  body[36:44] stays zero: a ROOT answer names no parent");
+
+	/*
+	 * PAIR B, a second master. Everything matches except the three cells
+	 * with no grounded determinant, and the test NAMES their values so the
+	 * deviation is visible rather than hidden by the allow-list.
+	 */
+	memset(built, 0xa5, sizeof(built));
+	ct_check(vms_dlm_enq_response_build_queued(body_of(qb), blen_of(qb),
+						   0x04000552u, 0x0c000275u,
+						   built, sizeof(built),
+						   &written) == VMS_CODEC_OK,
+		 "OVMX builds the queued answer for pair B");
+	q_compare(ab, built, allow_b, 3u, "pair B");
+	ct_check(body_of(ab)[28] == 0x54u && body_of(ab)[29] == 0x02u &&
+		 body_of(ab)[52] == 0x02u,
+		 "  that master wrote 0x54/0x02 at body[28:30] and 0x02 at "
+		 "body[52]");
+	ct_check(built[VMS_OFF_SYSAP_BODY + 28u] == VMS_DLM_QUEUED_FLAG_VAL &&
+		 built[VMS_OFF_SYSAP_BODY + 29u] == VMS_DLM_QUEUED_FLAG2_VAL &&
+		 built[VMS_OFF_SYSAP_BODY + 52u] == 0u,
+		 "  OVMX writes the commonest real form (0x14/0x00, 0x00) -- "
+		 "inside the measured envelope, and a deviation row");
+}
+
+/*
+ * ...AND WHAT IT REFUSES. Every one of these is a value this executive does not
+ * hold; the alternative to each refusal is a frame that asserts it.
+ */
+static void test_queued_enq_answer_refuses_what_it_cannot_hold(void)
+{
+	const struct vms_fixture *qa = fixture("dlm-queued-enq-req-a");
+	const struct vms_fixture *aa = fixture("dlm-queued-enq-ans-a");
+	uint8_t built[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t sub[VMS_CM_BODY_LEN];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-85f: and what the queued answer refuses --\n");
+	if (!qa || !aa)
+		return;
+	ct_check(vms_dlm_enq_response_build_queued(body_of(qa), blen_of(qa), 0u,
+						   0x0e0002b2u, built,
+						   sizeof(built), &written) ==
+		 VMS_CODEC_E_INVAL,
+		 "a ZERO master handle is refused (an answer naming lock 0 "
+		 "names nothing)");
+	ct_check(vms_dlm_enq_response_build_queued(body_of(qa), blen_of(qa),
+						   0x0f000272u, 0u, built,
+						   sizeof(built), &written) ==
+		 VMS_CODEC_E_INVAL,
+		 "a ZERO requester handle is refused: the engine recorded none");
+	ct_check(vms_dlm_enq_response_build_queued(body_of(qa), blen_of(qa),
+						   0x0f000272u, 0x0e0002b3u,
+						   built, sizeof(built),
+						   &written) == VMS_CODEC_E_INVAL,
+		 "a requester handle that is NOT the one the request carries is "
+		 "refused: that is a different lock");
+	ct_check(vms_dlm_enq_response_build_queued(body_of(aa), blen_of(aa),
+						   0x0f000272u, 0x0e0002b2u,
+						   built, sizeof(built),
+						   &written) == VMS_CODEC_E_CLASS,
+		 "a RESPONSE is refused as input");
+
+	/* A SUB-LOCK request: all 93 real answers to one rewrite body[40:44]
+	 * with the master's own S0 address, which this executive does not hold.
+	 * So the answer is refused and the arm stays honestly silent. */
+	memcpy(sub, body_of(qa), VMS_CM_BODY_LEN);
+	sub[40] = 0x29u;    /* the parent's master handle, as a real one sends */
+	sub[41] = 0x04u;
+	sub[43] = 0x09u;
+	ct_check(vms_dlm_enq_response_build_queued(sub, sizeof(sub),
+						   0x0f000272u, 0x0e0002b2u,
+						   built, sizeof(built),
+						   &written) == VMS_CODEC_E_CLASS,
+		 "*** a queued SUB-LOCK request is REFUSED, not answered with a "
+		 "minted S0 address ***");
+	memcpy(sub, body_of(qa), VMS_CM_BODY_LEN);
+	sub[36] = 0x04u;    /* ...and the requester's own parent handle alone  */
+	ct_check(vms_dlm_enq_response_build_queued(sub, sizeof(sub),
+						   0x0f000272u, 0x0e0002b2u,
+						   built, sizeof(built),
+						   &written) == VMS_CODEC_E_CLASS,
+		 "  either half of body[36:44] makes it a sub-lock request");
+	ct_check(vms_dlm_enq_response_build_queued(body_of(qa), 100u,
+						   0x0f000272u, 0x0e0002b2u,
+						   built, sizeof(built),
+						   &written) == VMS_CODEC_E_SHORT,
+		 "a short body is refused");
+	ct_check(vms_dlm_enq_response_build_queued(NULL, blen_of(qa),
+						   0x0f000272u, 0x0e0002b2u,
+						   built, sizeof(built),
+						   &written) == VMS_CODEC_E_SHORT,
+		 "a NULL body is refused");
+}
+
 /*
  * rd vms-cab: the NEW MASTER's answer to an op-0x0f (it holds the open 0e for
  * the tree), against two REAL pairs from lab run ci6-evac-15 (2026-10-10,
@@ -1769,6 +1985,8 @@ int main(void)
 	test_dlksrch_twin();
 
 	test_queued_convert_answer_is_the_real_one();
+	test_queued_enq_answer_is_the_real_one();
+	test_queued_enq_answer_refuses_what_it_cannot_hold();
 	test_op0f_ack_is_the_real_one();
 	test_op0f_member_answer_keeps_state();
 	return ct_summary("test_codec_dlm");

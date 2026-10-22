@@ -188,6 +188,14 @@ dlm-grant-record-omitted
 dlm-echo-guard-never-caps
 dlm-deadlock-search-follows-remote-holders
 dlm-queued-convert-answered-as-granted
+dlm-queued-enq-not-answered
+dlm-queued-answer-read-as-granted
+dlm-queued-sublock-answered-anyway
+dlm-local-release-tells-nobody
+dlm-rundown-release-tells-nobody
+dlm-grant-advance-uncounted
+dlm-convert-tells-the-converter-only
+dlm-release-opens-a-transaction
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -768,7 +776,7 @@ EOF
         targets)      echo "kernel-core/vms_cluster_codec_dlm.h";;
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
-        why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place.";;
+        why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place. Since rd vms-85f the QUEUED answer reddens too: its admission check compares the engine's recorded requester handle against the one the request carries at body[24:28], so a swapped slot makes it refuse to answer at all.";;
         require_fail) hd_lines <<'EOF'
   body[20:24] == 0x080001cd, the MASTER's handle -- which is why a release names its lock here: the GRANT assigned this requester
   body[20:24] == 0x0a0003a4, the MASTER's handle
@@ -792,6 +800,15 @@ EOF
 *** the grant ECHOES the requester's handle -- which is the correlation OVMX was breaking ***
 builds back from the typed struct
 every CITED byte of the real specimen is byte-exact
+  OVMX writes the commonest real form (0x14/0x00, 0x00) -- inside the measured envelope, and a deviation row
+  and it reads both handles out of the real frame
+  body[36:44] stays zero: a ROOT answer names no parent
+  either half of body[36:44] makes it a sub-lock request
+  the mode the requester asked for (EX) rides back, not cleared
+*** a queued SUB-LOCK request is REFUSED, not answered with a minted S0 address ***
+OVMX builds the queued answer for pair A
+OVMX builds the queued answer for pair B
+the built queued answer equals the real master's, byte for byte
 EOF
                       ;;
         esac;;
@@ -875,6 +892,120 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
   ... outcome byte 0xfb (queued)
+EOF
+                      ;;
+        esac;;
+
+    dlm-local-release-tells-nobody)
+        case "$_f" in
+        facility)     echo "THE LOCAL RELEASE's half of a deferred GRANT (vms_lock.c vms_deq_core -> dlm_flips_*, rd vms-28bd): a \$DEQ that flips a cross-node waiter to granted NOTIFIES the wire arm, so the peer whose lock it is gets told";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the \$DEQ path goes back to advancing the queue in silence, which is what shipped before. MEASURED COST, twice on real hardware: 2026-10-09 on vaxlab-3 and 2026-10-21 (tests/lab/captures/vms-3ac-promote-20261021). Both times this executive GRANTED the lock -- \$GETLKI reads the mode back -- and told nobody, and the real VAX's process sat in RWSCS where even STOP could not complete it. It is the ci.6 evacuation's own sequence: OVMX holds the workload lock, a real VAX queues behind it, OVMX's holder ends.";;
+        require_fail) hd_lines <<'EOF'
+*** the engine told the arm exactly once that it advanced a queue for another system ***
+  and counted it as reported
+  naming the SYSTEM and this node's own handle for its lock -- and nothing else
+*** and that key produces a GRANT FRAME: the lock reads back as granted for that system, and the requester's own retained body is what carries it ***
+  the four values are the lock database's, read at send time
+  including the mode the engine really granted (EX)
+*** and the frame the peer receives is a GRANT naming its own handle and ours ***
+*** ...and the flip nobody could be told about is COUNTED, not dropped ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rundown-release-tells-nobody)
+        case "$_f" in
+        facility)     echo "THE RUNDOWN / \$DEQALL SWEEP's half of it (vms_lock.c lock_teardown_locked -> dlm_flips_append, rd vms-28bd): the sweep carries each resource's flips out to lock_sweep_run's blockable context and reports them there";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the sweep stops carrying its flips out, so an image RUNDOWN advances a cross-node queue in silence while an explicit \$DEQ still reports it. That is the door the evacuation actually uses -- the workload holder EXITS, it does not \$DEQ -- so a fix that covered only the \$DEQ path would read as fixed and hang in the demo.";;
+        require_fail) hd_lines <<'EOF'
+*** the RUNDOWN / $DEQALL SWEEP door reports the flip too -- reported from the sweep's own blockable context, not the $DEQ path ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-grant-advance-uncounted)
+        case "$_f" in
+        facility)     echo "THE COUNT OF A FLIP NOBODY COULD BE TOLD ABOUT (vms_lock.c dlm_flips_report, rd vms-28bd): with no wire arm bound the grant still happened, and the fact that it could not be announced is published";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the counter bump goes, so a node that granted a lock it could never announce looks exactly like a node that had nothing to announce. That is the anti-LARP tripwire for this whole item: the DEFECT it replaces was silence, and silence that is not counted is indistinguishable from correctness (INV-6, and the same discipline as deferred_grants_owed).";;
+        require_fail) hd_lines <<'EOF'
+*** ...and the flip nobody could be told about is COUNTED, not dropped ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-release-opens-a-transaction)
+        case "$_f" in
+        facility)     echo "THE RELEASE's ENVELOPE (vms_cluster_codec_dlm.c vms_dlm_body_is_notification, rd vms-194 D1): an op-0x03 is a NOTIFICATION, so the connection manager opens no transaction for it";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "the release goes back to being treated as a message somebody answers, so every one mints a transaction token on the CSB, assigns it to a message no peer will ever answer, and leaves it open. MEASURED (tools/cluster/dlm_deq_census.py over every committed pcap): 0 of 9,858 real releases carry a transaction at body[4:8] and the corpus holds ZERO cat-0x82 op-0x03 answers -- while OVMX opened one on 11 of 11 of its own. It is the envelope-inconsistency class the ovmx-never-crashes-a-peer memory names as crash vector 1 (the one that produced CNXMGRERR), in the one frame family that has already bugchecked two lab VAXes.";;
+        require_fail) hd_lines <<'EOF'
+*** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in 9,858 real releases' corpus) ***
+*** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-convert-tells-the-converter-only)
+        case "$_f" in
+        facility)     echo "THE INBOUND CONVERT's half of it (vms_lock.c vms_lock_dlm_xnode_convert, rd vms-28bd): a remote holder's DOWN-conversion frees strength, so a THIRD system's queued request is granted -- and the convert's own answer goes to the CONVERTER, with nowhere to carry that grant";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the door the code's OWN comment calls 'the whole point of the evacuation path' goes back to granting in silence. A real VAX demoting EX to CR on a resource OVMX masters -- which is what DISMOUNT does -- grants the other VAX's queued request, and that VAX is never told. The item's door list did not name this one; the test found it, and leaving one silent door while fixing three would read as fixed and hang in the demo.";;
+        require_fail) hd_lines <<'EOF'
+*** ...and peer B is TOLD -- the convert's own answer goes to peer A and has nowhere to carry peer B's grant ***
+  naming peer B and the handle this node granted it, not the converter's
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-enq-not-answered)
+        case "$_f" in
+        facility)     echo "the immediate answer to a first ENQ this master QUEUED (vms_dlm_scs.c dlm_arm_reply_queued -> vms_dlm_enq_response_build_queued, rd vms-85f): a real master answers 0xfb at once, and the arm must CALL it";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "the queued branch goes back to saying nothing at all, which is what shipped before. MEASURED COST on real hardware 2026-10-21 20:48-20:52 UTC (tests/lab/captures/vms-3ac-promote-20261021): OVMX mastered RA7T and held its root at CR, VAX2's \$ENQW EX reached it as the master -- and OVMX sent NO DLM frame at all. VAX2's process sat in RWSCS and 'STOP HOLD2' could not complete it. The lock was really queued in OVMX's database; only the answer was missing.";;
+        require_fail) hd_lines <<'EOF'
+*** the QUEUED outcome really REACHES the answer -- the branch calls it, it does not merely define it ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-answer-read-as-granted)
+        case "$_f" in
+        facility)     echo "READING a master's 0xfb (vms_cluster_codec_dlm.c vms_dlm_enq_response_parse_body, rd vms-85f): the QUEUED outcome is resolved BEFORE the grant/deny shape test, because a queued answer has a non-zero mode byte and an echoed name and would otherwise read as a GRANT";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated to the codec's own suite, which is where the anchor is asserted against a REAL master's captured answer; the same property is also asserted in test_dlm_deq_reachable (section 11) against this node's own emitted frame, so that suite reddens too and the driver is not asked to score it";;
+        why)          echo "the queued branch is removed, so a real VAX master's 'I have QUEUED your request' is reported to this node's requester FSM as GRANTED -- and the waiting process is told it holds a lock no master gave it (INV-6). It is the mirror of the emit defect: OVMX would both fail to say 0xfb and mis-read one.";;
+        require_fail) hd_lines <<'EOF'
+*** the parser calls it QUEUED, not GRANTED: a 0xfb must never be reported as a lock this node holds ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-sublock-answered-anyway)
+        case "$_f" in
+        facility)     echo "the SUB-LOCK refusal in the queued answer (vms_cluster_codec_dlm.c dlm_req_names_parent, rd vms-85f): a request that names a parent is not answered at all, because all 93 real answers to one carry the master's own S0 address at body[40:44]";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the parent-span test always says 'no parent', so a queued SUB-LOCK request is answered with body[40:44] left as the REQUESTER's parent-master handle -- a cell this executive does not hold, in the one frame family that has already bugchecked two lab VAXes. The honest alternative exists and is counted (queued_unanswerable).";;
+        require_fail) hd_lines <<'EOF'
+*** a queued SUB-LOCK request is REFUSED, not answered with a minted S0 address ***
+  either half of body[36:44] makes it a sub-lock request
 EOF
                       ;;
         esac;;
@@ -2871,6 +3002,44 @@ apply_edit() {
         # answer in the new master's form; the opcode half stays, so only the
         # op-0x0f answer is corrupted and the defect is still one variable.
         sed -i 's|^\tif (new_master != 0 \&\& op == VMS_DLM_WIREOP_RM_0F)$|\tif (op == VMS_DLM_WIREOP_RM_0F) /* NEGCTL dlm-op0f-member-answers-as-new-master */|' "$_file";;
+
+    dlm-local-release-tells-nobody)
+        # vms_deq_core's snapshot is the only one taken into `flips`; zeroing
+        # the set instead leaves the comparison and the report well-defined and
+        # finding nothing, which is exactly the old silence.
+        sed -i 's|^    dlm_flips_snapshot_locked(res, \&flips);$|    memset(\&flips, 0, sizeof(flips)); /* NEGCTL dlm-local-release-tells-nobody */|' "$_file";;
+
+    dlm-rundown-release-tells-nobody)
+        # The sweep's one carry-out line (the quorum resume appends to `all`,
+        # not `f`, so this text is unique to lock_teardown_locked).
+        sed -i 's|        dlm_flips_append(f, \&mine);|        /* NEGCTL dlm-rundown-release-tells-nobody */|' "$_file";;
+
+    dlm-release-opens-a-transaction)
+        # The release's own admission line, unique in this file.
+        sed -i 's|^\tif (op == VMS_DLM_WIREOP_DEQ)$|\tif (0) /* NEGCTL dlm-release-opens-a-transaction */|' "$_file";;
+
+    dlm-convert-tells-the-converter-only)
+        # The convert branch's snapshot, distinguished from vms_deq_core's by
+        # its indentation (both name `flips`), so the two defects cannot
+        # mutate each other's door.
+        sed -i 's|^        dlm_flips_snapshot_locked(res, \&flips);$|        /* NEGCTL dlm-convert-tells-the-converter-only */|' "$_file";;
+
+    dlm-grant-advance-uncounted)
+        # The one counter bump for a flip with no arm bound.
+        sed -i 's|            vms_dlm_grant_flips_unreported_n++;|            /* NEGCTL dlm-grant-advance-uncounted */|' "$_file";;
+
+    dlm-queued-enq-not-answered)
+        # The one call that answers it. Removing it removes the anchor.
+        sed -i 's|\t\treturn dlm_arm_reply_queued(d, in, \&res, wireop, reply);|\t\td->queued_no_reply++; return 0; /* NEGCTL dlm-queued-enq-not-answered */|' "$_file";;
+
+    dlm-queued-answer-read-as-granted)
+        # The parse's queued branch turns on one comparison, unique in this
+        # file; making it never match removes the anchor.
+        sed -i 's|\tif (vms_wire_get_u8(\&v, VMS_OFB_DLM_RESULT_STAMP) ==|\tif (0 \&\& vms_wire_get_u8(\&v, VMS_OFB_DLM_RESULT_STAMP) == /* NEGCTL dlm-queued-answer-read-as-granted */|' "$_file";;
+
+    dlm-queued-sublock-answered-anyway)
+        # The parent-span test's own call, unique in this file.
+        sed -i 's|\tif (dlm_req_names_parent(v))|\tif (0) /* NEGCTL dlm-queued-sublock-answered-anyway */|' "$_file";;
 
     dlm-queued-convert-answered-as-granted)
         # The queued outcome is written in exactly one place.

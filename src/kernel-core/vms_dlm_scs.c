@@ -170,8 +170,15 @@ struct vms_dlm_scs {
 	uint32_t replies_received;    /* inbound cat-0x82 replies             */
 	uint32_t grants_sent;         /* grant replies built from a real LKB  */
 	uint32_t denies_sent;
-	uint32_t queued_no_reply;     /* genuinely queued: the grant comes later */
-	uint32_t queued_answered;
+	uint32_t queued_no_reply;     /* a request really QUEUED here (the state */
+				       /* that owes a BLKAST); the two below split */
+				       /* it by whether we TOLD the requester     */
+	uint32_t queued_answered;     /* ...and ANSWERED 0xfb at once          */
+	uint32_t queued_unanswerable; /* queued, and the 0xfb answer would have */
+				       /* had to assert a cell this node does  */
+				       /* not hold (a SUB-LOCK request's       */
+				       /* body[40:44], rd vms-85f). Silence,   */
+				       /* counted -- never a minted value.     */
 	uint32_t op0f_acked;          /* op-0x0f answered 82/15 (vms-cab)   */     /* queued CONVERTs answered 0xfb at once (vms-cab) */
 	uint32_t redirects_sent;      /* "the master is X", from a real RSB   */
 	uint32_t blkasts_sent;        /* op-0x05 blocking ASTs really emitted,*/
@@ -192,6 +199,13 @@ struct vms_dlm_scs {
 	uint32_t releases_refused;    /* an inbound $DEQ naming no lock this   */
 				       /* node holds FOR THAT SENDER. Nothing  */
 				       /* released, nothing answered.          */
+	uint32_t grant_advances_in;   /* the engine told us a LOCAL release    */
+				       /* advanced a queue for another system   */
+				       /* (rd vms-28bd)                         */
+	uint32_t grant_advances_stale;/* ...and by the time the fork thread ran */
+				       /* the lock was no longer a granted      */
+				       /* master-side lock for that system, so  */
+				       /* there was nothing to announce         */
 	uint32_t deferred_grants_no_wire_op; /* a release really flipped a     */
 				       /* queued cross-node waiter to granted, */
 				       /* and this master has no grounded way  */
@@ -608,6 +622,7 @@ static void dlm_arm_bind_req_ops(struct vms_dlm_scs *d)
 #define DLM_ARM_WORK_POST_CONVERT 2u
 #define DLM_ARM_WORK_POST_DEQ     3u
 #define DLM_ARM_WORK_DIR_REMOVE   4u   /* rd vms-e09: arg0 slot, arg1 generation */
+#define DLM_ARM_WORK_GRANT_ADVANCE 5u  /* rd vms-28bd: arg0 lock id, arg1 CSID */
 
 static uint32_t dlm_arm_work_kind_to_op(uint16_t kind)
 {
@@ -979,6 +994,9 @@ static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx,
 					     struct vms_dlm_dir_local *out);
 static uint32_t dlm_arm_eng_dir_claim_self(void *ctx,
 					   const struct vms_dlm_dir_ask *q);
+/* Defined with the fork-thread half it queues work for (rd vms-28bd). */
+static void dlm_arm_grant_advanced(void *ctx,
+				   const struct vms_dlm_grant_advance *g);
 
 static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 {
@@ -999,6 +1017,8 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 	 * mean "no system masters it". */
 	d->eng_ops.dir_local_lookup = dlm_arm_eng_dir_local_lookup;
 	d->eng_ops.dir_claim_self   = dlm_arm_eng_dir_claim_self;
+	/* rd vms-28bd: a LOCAL release that advances a cross-node queue. */
+	d->eng_ops.grant_advanced   = dlm_arm_grant_advanced;
 	d->eng_ops.ctx            = d;
 }
 
@@ -1464,6 +1484,59 @@ static void dlm_arm_send_blkast(struct vms_dlm_scs *d,
 	d->blkasts_sent++;
 }
 
+/*
+ * THE QUEUED ANSWER, both shapes (rd vms-cab for the CONVERT, rd vms-85f for
+ * the first ENQ). A real master answers a request it queued AT ONCE: the
+ * request echoed, cat 0x82, the record's outcome byte 0xfb. Until rd vms-85f
+ * this arm answered only the CONVERT, and a real VAX whose $ENQW queued here
+ * had nothing to wait on but silence -- its process sat in RWSCS and STOP could
+ * not complete it (measured, tests/lab/captures/vms-3ac-promote-20261021).
+ *
+ * The ENQ's answer asserts TWO handles, and both are read off the LKB this
+ * engine really queued (struct vms_dlm_master_result): the handle it minted and
+ * the requester's own handle as it recorded it. If the engine recorded neither,
+ * or the request is a SUB-LOCK one (whose answer would have to carry the
+ * master's own S0 address at body[40:44] -- 93 of 93 real ones do), the codec
+ * refuses and this node stays silent and counts it. The lock IS queued either
+ * way, so this is not an error return.
+ */
+static int dlm_arm_build_queued(struct vms_dlm_scs *d,
+				const struct dlm_scs_request *in,
+				const struct vms_dlm_master_result *r,
+				uint8_t wireop)
+{
+	uint32_t written = 0;
+
+	memset(d->txframe, 0, sizeof(d->txframe));
+	if (wireop == VMS_DLM_WIREOP_CONVERT)
+		return vms_dlm_convert_response_build_queued(
+			       in->body, in->len, d->txframe,
+			       (uint32_t)sizeof(d->txframe), &written) ==
+		       VMS_CODEC_OK ? 0 : -1;
+	return vms_dlm_enq_response_build_queued(
+		       in->body, in->len, r->master_lkid, r->req_lkid,
+		       d->txframe, (uint32_t)sizeof(d->txframe), &written) ==
+	       VMS_CODEC_OK ? 0 : -1;
+}
+
+static int dlm_arm_reply_queued(struct vms_dlm_scs *d,
+				const struct dlm_scs_request *in,
+				const struct vms_dlm_master_result *r,
+				uint8_t wireop, struct dlm_scs_reply *reply)
+{
+	/* The queue event itself: a real request on a real waiting queue, and
+	 * the state that owes a BLKAST. The two counters below say whether this
+	 * node managed to TELL the requester. */
+	d->queued_no_reply++;
+	if (dlm_arm_build_queued(d, in, r, wireop) != 0 ||
+	    dlm_arm_stage_reply(d, in, reply) != 0) {
+		d->queued_unanswerable++;
+		return 0;
+	}
+	d->queued_answered++;
+	return 0;
+}
+
 /* One inbound ENQ/CONVERT, served as the tree's master. */
 static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 			     const struct dlm_scs_request *in,
@@ -1504,32 +1577,7 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 							      : e->req_lkid,
 					   in->body, in->len);
 		dlm_arm_send_blkast(d, &res);
-		/*
-		 * A queued CONVERT is ANSWERED NOW (rd vms-cab): a real master
-		 * echoes it back with body[34] = 0xfb, and a VAX that gets no
-		 * answer waits in RWSCS for ever. A queued first ENQ (op 0x01)
-		 * has master-side fields no capture lets this node fill
-		 * (body[40:44] reads as the master's own S0 address), so it
-		 * stays the honest, counted silence.
-		 */
-		if (wireop == VMS_DLM_WIREOP_CONVERT) {
-			uint32_t written = 0;
-
-			memset(d->txframe, 0, sizeof(d->txframe));
-			if (vms_dlm_convert_response_build_queued(
-				    in->body, in->len, d->txframe,
-				    (uint32_t)sizeof(d->txframe),
-				    &written) != VMS_CODEC_OK) {
-				d->codec_failures++;
-				return -1;
-			}
-			if (dlm_arm_stage_reply(d, in, reply) != 0)
-				return -1;
-			d->queued_answered++;
-			return 0;
-		}
-		d->queued_no_reply++;
-		return 0;
+		return dlm_arm_reply_queued(d, in, &res, wireop, reply);
 	case VMS_DLM_MASTER_REDIRECT:
 		/* Davis p. 6-31 outcome 2. There is no grounded cat-0x02 shape
 		 * for "the master is X" (§4(f).1 grounds the grant and deny
@@ -2714,6 +2762,57 @@ static void dlm_arm_arm_beat(struct vms_dlm_scs *d)
 			   DLM_ARM_BEAT_MS);
 }
 
+/*
+ * THE LOCAL RELEASE's OTHER HALF (rd vms-28bd) -- the engine's door for "a
+ * queue THIS node just advanced for another system".
+ *
+ * The cross-node release path has always originated the deferred grant from
+ * the master seam's own result (dlm_arm_send_deferred_grant, rd vms-f87). A
+ * LOCAL release -- a $DEQ, an image rundown, a $DEQALL sweep, a quorum regain
+ * -- reached no arm at all, so the peer whose lock the engine had just granted
+ * was never told and its process stayed in RWSCS (measured twice; see
+ * vms_dlm_proxy.h's `grant_advanced`). This is that notification, and it does
+ * the LEAST it can on the caller's thread: ONE work item to the fork thread,
+ * because the caller is a $DEQ ioctl or a rundown and may hold locks this
+ * layer knows nothing about.
+ *
+ * The frame is built on the fork thread from a FRESH read of the lock
+ * database, so nothing from this notification is asserted on the wire except
+ * the identity of the lock to look up.
+ */
+static void dlm_arm_grant_advanced(void *ctx,
+				   const struct vms_dlm_grant_advance *g)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (d == NULL || g == NULL || g->csid == 0u ||
+	    g->master_lkid == VMS_DLM_LKID_UNSET)
+		return;
+	d->grant_advances_in++;
+	if (dlm_arm_queue_work(d, (uint16_t)DLM_ARM_WORK_GRANT_ADVANCE,
+			       g->master_lkid, g->csid) != 0)
+		d->deferred_grants_no_wire_op++;
+}
+
+/*
+ * ...and its fork-thread half. The lock is read back through the engine's own
+ * door: a handle that no longer names a GRANTED master-side lock held for that
+ * system has nothing to announce, which is counted and not an error -- the
+ * same honest-omission shape as a refill that finds no proxy.
+ */
+static void dlm_arm_run_grant_advance(struct vms_dlm_scs *d,
+				      uint32_t master_lkid, uint32_t csid)
+{
+	struct vms_dlm_master_result r;
+
+	if (vms_lock_dlm_grant_advance_read(csid, master_lkid, &r) !=
+	    SS__NORMAL) {
+		d->grant_advances_stale++;
+		return;
+	}
+	dlm_arm_send_deferred_grant(d, &r);
+}
+
 static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
@@ -2738,6 +2837,12 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 	}
 	if (w->kind == (uint16_t)DLM_ARM_WORK_DIR_REMOVE) {
 		dlm_arm_run_dir_remove(d, w->arg0, w->arg1);
+		return;
+	}
+	/* A queue this node advanced for another system (rd vms-28bd): arg0 is
+	 * the lock to read back, arg1 the system it is held for. */
+	if (w->kind == (uint16_t)DLM_ARM_WORK_GRANT_ADVANCE) {
+		dlm_arm_run_grant_advance(d, w->arg0, w->arg1);
 		return;
 	}
 	dlm_arm_run_post(d, w->kind, w->arg0, w->arg1);
@@ -2918,6 +3023,10 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->deferred_grants_owed = d->deferred_grants_no_wire_op;
 	out->deferred_grants_sent = d->deferred_grants_sent;
 	out->queued_no_reply     = d->queued_no_reply;
+	out->queued_answered     = d->queued_answered;
+	out->queued_unanswerable = d->queued_unanswerable;
+	out->grant_advances_in   = d->grant_advances_in;
+	out->grant_advances_stale = d->grant_advances_stale;
 	out->unparsed            = d->unparsed;
 	out->foreign_refused     = d->foreign_refused;
 	out->posts_queued        = d->posts_queued;

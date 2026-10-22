@@ -325,11 +325,13 @@ static void cnxtrace_print_dlm(void)
            (unsigned)v->grants_sent, (unsigned)v->grants_received,
            (unsigned)v->declined);
     printf("%%CNXTRACE-I-DLMEMIT, releases sent=%u none=%u  blkasts sent=%u "
-           "none=%u rx=%u delivered=%u  queued=%u unparsed=%u foreign=%u\n",
+           "none=%u rx=%u delivered=%u  queued=%u answered=%u unanswerable=%u "
+           "unparsed=%u foreign=%u\n",
            (unsigned)v->releases_sent, (unsigned)v->releases_no_wire_op,
            (unsigned)v->blkasts_sent, (unsigned)v->blkasts_no_wire_op,
            (unsigned)v->blkasts_received, (unsigned)v->blkasts_delivered,
-           (unsigned)v->queued_no_reply, (unsigned)v->unparsed,
+           (unsigned)v->queued_no_reply, (unsigned)v->queued_answered,
+           (unsigned)v->queued_unanswerable, (unsigned)v->unparsed,
            (unsigned)v->foreign_refused);
     /* The RECEIVE half (rd vms-c72): what a PEER's op-0x03/op-0x04 did to this
      * executive's own lock database. `sent` is the deferred grant this master
@@ -337,10 +339,13 @@ static void cnxtrace_print_dlm(void)
      * is left of the honest silence -- a real flip whose request frame is no
      * longer held, answered on the requester's next ask. */
     printf("%%CNXTRACE-I-DLMRECV, releases received=%u refused=%u  blkasts "
-           "unparsed=%u  deferred grants sent=%u owed=%u\n",
+           "unparsed=%u  deferred grants sent=%u owed=%u  local advances=%u "
+           "stale=%u\n",
            (unsigned)v->releases_received, (unsigned)v->releases_refused,
            (unsigned)v->blkasts_unparsed, (unsigned)v->deferred_grants_sent,
-           (unsigned)v->deferred_grants_owed);
+           (unsigned)v->deferred_grants_owed,
+           (unsigned)v->grant_advances_in,
+           (unsigned)v->grant_advances_stale);
     /* LOCK-TREE REMASTERING, the new master's side (rd vms-ed5). `held` and
      * `unreported` are the pair the ci.6 evacuation gate is read from: trees a
      * real VAX handed this node and this node really took, and how many of

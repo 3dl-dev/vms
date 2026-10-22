@@ -287,6 +287,16 @@ struct vms_dlm_dir_local {
  * the wait, because the engine owns the LKB (vms_dlm_scs.h SS5). It returns
  * SS$_NORMAL when the request is queued for transmission, or an SS$_ status.
  */
+/*
+ * THE REPORT OF A QUEUE THIS NODE ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd).
+ * Two values, both of them this executive's own: see `grant_advanced` below for
+ * why there are only two.
+ */
+struct vms_dlm_grant_advance {
+	uint32_t csid;          /* the system whose request is now granted  */
+	uint32_t master_lkid;   /* THIS node's handle for that lock         */
+};
+
 struct vms_dlm_requester_ops {
 	uint32_t (*post)(void *ctx, const struct vms_dlm_proxy_post *p);
 
@@ -443,6 +453,39 @@ struct vms_dlm_requester_ops {
 	 */
 	uint32_t (*dir_claim_self)(void *ctx, const struct vms_dlm_dir_ask *q);
 
+	/*
+	 * A QUEUE THIS NODE JUST ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd).
+	 *
+	 * A release on THIS node -- a $DEQ, an image rundown, a $DEQALL sweep,
+	 * a quorum regain -- can flip a cross-node waiter from queued to
+	 * GRANTED, and the lock really is granted afterwards. Until this op
+	 * existed the engine told nobody, so the peer whose lock it was waited
+	 * for ever: measured twice on real hardware (2026-10-09 vaxlab-3 and
+	 * 2026-10-21, tests/lab/captures/vms-3ac-promote-20261021), a real
+	 * VAX's process in RWSCS that even STOP could not complete. The
+	 * cross-node release path has always reported it (the master seam's
+	 * `deferred_grant`); this is the same fact from the LOCAL door.
+	 *
+	 * WHAT IT CARRIES IS DELIBERATELY THE KEY AND NOTHING ELSE: the system,
+	 * and THIS node's own handle for the lock it granted that system. No
+	 * mode, no requester handle, no frame. The implementation reads those
+	 * back through vms_lock_dlm_grant_advance_read() when it is about to
+	 * send, so the grant asserts a lock that exists THEN -- the same
+	 * refill-at-send-time discipline `post` follows, and the reason a work
+	 * item may cross a context switch at all.
+	 *
+	 * CONTEXT: called with NO RESOURCE LOCK HELD (the op-0x04 removal's
+	 * rule). It still must not block and must not re-enter the lock
+	 * manager: the shipping implementation queues one work item to the fork
+	 * thread and returns.
+	 *
+	 * ABSENT (NULL) MEANS NO CLUSTER ARM. The flip is then COUNTED
+	 * (vms_lock_dlm_grant_flips_unreported()), never silently dropped: a
+	 * node that granted a lock it could not announce is a fact an operator
+	 * must be able to read.
+	 */
+	void (*grant_advanced)(void *ctx, const struct vms_dlm_grant_advance *g);
+
 	void *ctx;
 };
 
@@ -529,6 +572,23 @@ uint32_t vms_lock_dlm_dir_removes_unposted(void);
  * number is the size of that gap, and a diagnostic reads it.
  */
 uint32_t vms_lock_dlm_proxy_self_mastered(void);
+
+/*
+ * QUEUES THIS NODE ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd) -- the three
+ * readings of `grant_advanced` above, since this executive started.
+ *
+ *   _reported()    a flip really handed to the wire arm;
+ *   _unreported()  a flip with NO arm bound. Not an error on a node that is
+ *                  not clustered; on one that is, it is the measured hang;
+ *   _overflow()    cross-node waiters beyond the snapshot's fixed bound on a
+ *                  single release. Those are still GRANTED in the lock
+ *                  database and still answered on the requester's next ask --
+ *                  the pre-existing behaviour -- and the number says how often
+ *                  that happened rather than leaving it invisible.
+ */
+uint32_t vms_lock_dlm_grant_flips_reported(void);
+uint32_t vms_lock_dlm_grant_flips_unreported(void);
+uint32_t vms_lock_dlm_grant_flips_overflow(void);
 
 /*
  * HOW MANY RESOURCES THIS EXECUTIVE COULD NOT ROUTE, and so mastered on THIS

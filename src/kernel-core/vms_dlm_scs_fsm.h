@@ -432,6 +432,7 @@ enum dlm_req_event {
 	DLM_REQ_EV_DEQ,        /* the engine posted a RELEASE                  */
 	DLM_REQ_EV_GRANT,      /* a cat-0x82 reply, GRANTED shape              */
 	DLM_REQ_EV_DENY,       /* a cat-0x82 reply, DENIED shape               */
+	DLM_REQ_EV_QUEUED,     /* ...QUEUED (0xfb): accepted, not granted      */
 	DLM_REQ_EV_REDIRECT,   /* outcome 2: "the master is X"                 */
 	DLM_REQ_EV_ASSUME,     /* outcome 3: "no master -- you master it"      */
 	DLM_REQ_EV_BLKAST,     /* the master is blocked behind our lock        */
@@ -525,6 +526,11 @@ struct dlm_req_fsm {
 	uint32_t grants_rx;
 	uint32_t grants_duplicate;    /* a grant for an already-granted request*/
 	uint32_t denies_rx;
+	uint32_t queued_rx;           /* a master told us 0xfb: the request is */
+				       /* ACCEPTED and the lock is NOT held --  */
+				       /* nothing is outstanding on the wire,   */
+				       /* and the grant comes as its own frame  */
+				       /* (rd vms-85f)                          */
 	uint32_t redirects_followed;  /* outcome 2 -> retry at the named master*/
 	uint32_t masteries_assumed;   /* outcome 3                             */
 	uint32_t declines_reresolved; /* a decline -> re-resolve -> retry      */

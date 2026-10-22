@@ -1967,9 +1967,12 @@ int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 	}
 	/* An origination the peer WILL answer, so this dialogue mints a fresh
 	 * transaction token for it (E85) and assigns the next send-msg#. A
-	 * NOTIFICATION -- the directory-entry removal, which no VMS node ever
-	 * answers (rd vms-e09, R3) -- opens no transaction: body[4:8] stays 0,
-	 * as on every real removal. */
+	 * NOTIFICATION opens no transaction: body[4:8] stays 0, as on every
+	 * real one. Two shapes are notifications -- the directory-entry removal
+	 * (rd vms-e09, R3) and, since rd vms-194, the op-0x03 RELEASE: 0 of
+	 * 9,858 real releases carry a transaction and the corpus holds zero
+	 * answers to one, so a token minted on a release was assigned to a
+	 * message nobody would ever answer and left open on the CSB. */
 	if (vms_dlm_body_is_notification(cn->dlm_tx, VMS_CM_BODY_LEN))
 		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);
 	else

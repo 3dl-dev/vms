@@ -235,6 +235,64 @@ static void arm_bindings(void)
 	absent("dlm_arm_count_deferred_grant",
 	       "*** and the old count-and-say-nothing path is GONE ***");
 
+	/*
+	 * AND THE QUEUE IS ANSWERED WHEN IT IS MADE (rd vms-85f). The deferred
+	 * grant above is the SECOND half of a queued request's life; this is
+	 * the first, and it was missing entirely -- a real VAX whose $ENQW
+	 * queued at this master got no frame at all and sat in RWSCS, a process
+	 * STOP could not complete (measured, vms-3ac-promote-20261021). The
+	 * builder's own refusals are proven in test_codec_dlm.c and the
+	 * engine's two handles in test_dlm_deq_reachable.c; what only the
+	 * shipped text can say is that the QUEUED branch CALLS it.
+	 */
+	has("return dlm_arm_reply_queued(d, in, &res, wireop, reply);",
+	    "*** the QUEUED outcome really REACHES the answer -- the branch "
+	    "calls it, it does not merely define it ***");
+	has("vms_dlm_enq_response_build_queued(\n",
+	    "... and the ENQ's queued answer is built by the codec");
+	has("r->master_lkid, r->req_lkid,",
+	    "... from the two handles the ENGINE's result object carries, "
+	    "never from the request's own bytes");
+	has("d->queued_answered++",
+	    "... an answered queue is COUNTED");
+	has("d->queued_unanswerable++",
+	    "... and one this node cannot answer honestly stays SILENT and is "
+	    "counted too (a queued SUB-LOCK request: INV-6, no minted S0 "
+	    "address)");
+	before("d->queued_no_reply++",
+	       "d->queued_answered++",
+	       "the queue EVENT is counted first and the answer second, so the "
+	       "two counters read as a total and a subset");
+
+	/*
+	 * AND THE OTHER HALF OF THE SAME HANG (rd vms-28bd): a LOCAL release
+	 * that advances a cross-node queue. The engine's notification carries
+	 * only (csid, master_lkid); what this arm does with it is all order and
+	 * all here -- queue one work item, read the lock back on the fork
+	 * thread, then originate the grant through the EXISTING path. The
+	 * behaviour is proven against the real engine in
+	 * test_dlm_deq_reachable.c section 12; the WIRING is only readable here.
+	 */
+	has("d->eng_ops.grant_advanced   = dlm_arm_grant_advanced;",
+	    "*** the engine's queue-advance notification is really BOUND ***");
+	has("dlm_arm_queue_work(d, (uint16_t)DLM_ARM_WORK_GRANT_ADVANCE,",
+	    "... and the notification QUEUES one work item: it sends nothing on "
+	    "the releasing thread");
+	has("g->master_lkid, g->csid) != 0)",
+	    "... carrying only the lock and the system -- no mode, no frame");
+	has("dlm_arm_run_grant_advance(d, w->arg0, w->arg1);",
+	    "... which the fork thread really runs");
+	has("vms_lock_dlm_grant_advance_read(csid, master_lkid, &r) !=",
+	    "... and the frame's four values come from a FRESH read of the lock "
+	    "database, not from the notification");
+	has("d->grant_advances_stale++",
+	    "... a key whose lock is no longer granted for that system is "
+	    "COUNTED, and nothing is sent");
+	before("vms_lock_dlm_grant_advance_read(csid, master_lkid, &r) !=",
+	       "dlm_arm_send_deferred_grant(d, &r);",
+	       "*** the read-back happens BEFORE the send: a grant is never "
+	       "built from a fact that has stopped being true ***");
+
 	/* RULE A: the arm fills a buffer; it never sends a reply. */
 	has("memcpy(reply->body, d->txframe + VMS_OFF_SYSAP_BODY",
 	    "a reply is STAGED into the connection manager's buffer");

@@ -211,6 +211,9 @@ static uint32_t         vms_dlm_adoptions_refused_n;
 /* Completions the WIRE ARM really reported (rd vms-ed5). `unreported` is
  * `completed` minus this, so it is DERIVED and cannot drift from either. */
 static uint32_t         vms_dlm_adopt_reports_n;
+/* THIS NODE's OWN locks that an adoption converted out of proxy state
+ * (rd vms-3ac, the completeness fix). Guarded by vms_dlm_adopt_lock_g. */
+static uint32_t         vms_dlm_adopt_promotions_n;
 /*
  * How many PROXY POSTS were refused because THIS node masters the resource
  * (rd vms-3ac -- the INVLOCKID bugcheck a real V7.3 node took on a release
@@ -255,6 +258,7 @@ int vms_lock_init(void)
     vms_dlm_adoptions_completed_n = 0u;
     vms_dlm_adoptions_refused_n = 0u;
     vms_dlm_adopt_reports_n = 0u;
+    vms_dlm_adopt_promotions_n = 0u;
     /* ...and the posts refused because this node masters the resource
      * (rd vms-3ac): also "since this executive started". */
     vms_dlm_proxy_self_mastered_n = 0u;
@@ -3057,7 +3061,36 @@ uint32_t vms_lock_dlm_proxy_fail(uint32_t req_lkid, uint32_t status)
 }
 
 /*
- * dlm_promote_proxy_locked - turn a proxy LKB into a real local lock.
+ * dlm_proxy_stops_being_one_locked - the fields that stop an LKB from being a
+ * requester-side IMAGE of a lock somebody else masters. Caller holds res->lock
+ * and has already recorded this node as the resource's master.
+ *
+ * THE REMOTE IDENTITY GOES WITH THE PROXY STATE, and that is not cosmetic. On
+ * res->granted a nonzero `req_csid` means "held FOR that system": it is what
+ * the master path reports as a blocking holder's identity (the cross-node
+ * BLKAST directive in vms_enq_core_ex, vms_ioctl_dlm_get_granted) and what
+ * vms_lock_dlm_master_apply_valblk reads to tell a local lock from a remote
+ * one. A proxy carries vms_local_csid there ("we are the requester"), so a
+ * promoted lock that kept it would make this node name ITSELF as the remote
+ * holder of its own lock -- and address a blocking AST at itself. A lock this
+ * node holds for itself is a LOCAL lock, and a local lock carries 0.
+ *
+ * `master_lkid` goes for the reason rd vms-3ac was filed: a handle minted by a
+ * node that no longer masters the resource is a handle nobody can resolve, and
+ * a frame naming one bugchecked a real V7.3 node with INVLOCKID.
+ */
+static void dlm_proxy_stops_being_one_locked(struct vms_lock_entry *lock)
+{
+    exec_list_del(&lock->res_proxy);
+    lock->proxy       = 0;
+    lock->master_csid = vms_local_csid;     /* we master it now, for real */
+    lock->master_lkid = VMS_DLM_LKID_UNSET; /* no remote handle exists */
+    lock->req_csid    = 0u;                 /* ...and it is nobody else's */
+    lock->req_lkid    = VMS_DLM_LKID_UNSET;
+}
+
+/*
+ * dlm_promote_proxy_locked - turn a PENDING proxy LKB into a real local lock.
  * Caller holds res->lock and has already recorded this node as the master.
  *
  * The proxy comes off res->proxies and goes onto res->waiting, which is the
@@ -3066,14 +3099,16 @@ uint32_t vms_lock_dlm_proxy_fail(uint32_t req_lkid, uint32_t status)
  * cluster masters elsewhere -- see the PROXY LKB comment at the top of this
  * file). try_grant_waiters() then decides it exactly as it decides every local
  * $ENQ: granted if the local queues allow, genuinely queued if they do not.
+ *
+ * ONLY FOR A REQUEST THAT IS NOT YET HELD. A proxy the old master GRANTED must
+ * not pass through res->waiting -- a moment there is a moment the lock is not
+ * held, and the local algorithm would re-decide a grant the cluster already
+ * made. That one goes straight onto res->granted (dlm_adopt_promote_lkid).
  */
 static void dlm_promote_proxy_locked(struct vms_lock_resource *res,
                                      struct vms_lock_entry *lock)
 {
-    exec_list_del(&lock->res_proxy);
-    lock->proxy       = 0;
-    lock->master_csid = vms_local_csid;   /* we master it now, for real */
-    lock->master_lkid = VMS_DLM_LKID_UNSET; /* no remote handle exists */
+    dlm_proxy_stops_being_one_locked(lock);
     lock->waiting     = 1;
     lock->grant_state = 0;
     exec_list_add_tail(&lock->res_waiting, &res->waiting);
@@ -4169,6 +4204,197 @@ static void dlm_adopt_clear_gen(uint32_t gen)
     exec_unlock(&vms_res_hash_lock);
 }
 
+/* ================================================================
+ * AND THIS NODE'S OWN LOCKS IN THE TREE STOP BEING PROXIES
+ * ================================================================
+ *
+ * rd vms-3ac, THE COMPLETENESS FIX. The adoption above installs the OTHER
+ * holders' locks. It used to leave THIS node's own locks on the adopted
+ * resource exactly as they were: proxy LKBs naming the OLD master and the
+ * handle the old master minted. Measured consequence, on a real V7.3 node
+ * (tests/lab/captures/vms-3ac-invlockid-20261021): when the local holder ended,
+ * the proxy release path did what a proxy release does -- it sent the recorded
+ * master a cat-0x02 op-0x03 naming that handle -- and the recorded master, which
+ * by then had no resource block for the name at all, took
+ *
+ *     **** Fatal BUG CHECK, version = V7.3  INVLOCKID, Invalid lock id
+ *          R1 = 370004A7
+ *
+ * dumped memory and rebooted, and the cluster lost quorum behind it.
+ *
+ * dlm_proxy_post() REFUSES such a post (the fail-safe, and it stays), but the
+ * stale handle is removed AT ITS SOURCE here: a tree this node has been handed
+ * is a tree this node MASTERS, so its own locks on it are master-side locks.
+ * Then the release is local by construction, a CONVERT of one is decided here
+ * instead of failing honestly, and nothing is left for the fail-safe to catch.
+ *
+ * WHAT IS NOT DONE HERE, deliberately: the resource's VALUE BLOCK is not
+ * installed from the promoted lock's own copy. Whether a real new master takes
+ * the block from its own granted lock when no op-0x12 record carried one is NOT
+ * GROUNDED -- the corpus has no episode where the new master was the only
+ * holder -- and rd vms-89dc is the arm that measures it. Guessing it would write
+ * a value this executive was never told, which is the fabrication INV-6 forbids.
+ */
+
+/*
+ * How deep a sublock chain this walk will follow. A bound, not a policy: the
+ * walk must terminate even if a resource chain were ever made cyclic, and VMS's
+ * own sublock nesting is limited (Davis SS6: a lock's parent chain is finite and
+ * shallow -- $ENQ returns SS$_EXDEPTH past the limit).
+ */
+#define DLM_RES_TREE_MAX_DEPTH 32
+
+/*
+ * Is `res` the adopted tree's root, or a resource somewhere under it?
+ *
+ * Walked up the PARENT CHAIN, which is the only thing that says a resource
+ * belongs to a tree. A resource's parent is set when the block is created and
+ * never changes, and a child holds a reference on its parent
+ * (resource_find_or_create_key), so a live child's ancestors are live too and
+ * this needs no second resource lock.
+ */
+static int dlm_res_within_tree(const struct vms_lock_resource *res,
+                               const struct vms_lock_resource *root)
+{
+    int depth;
+
+    for (depth = 0; res != NULL && depth <= DLM_RES_TREE_MAX_DEPTH; depth++) {
+        if (res == root)
+            return 1;
+        res = res->parent;
+    }
+    return 0;
+}
+
+/*
+ * The lock id of the next proxy LKB of OURS inside the adopted tree, either a
+ * PENDING one or a granted one as `pending` asks.
+ *
+ * A SNAPSHOT, for the reason dlm_find_lock_of_csid states: the promotion itself
+ * must run with the resource hash lock dropped, because promoting a pending
+ * request runs try_grant_waiters() -- which nests the AST and hibernate locks
+ * under res->lock. This sweep adds no lock edge the shipping grant path does
+ * not already have.
+ */
+static int dlm_adopt_scan_own_proxy(const struct vms_lock_resource *root,
+                                    int pending, uint32_t *lkid)
+{
+    struct vms_lock_resource *res;
+    int bkt, found = 0;
+
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        struct vms_lock_entry *l;
+
+        if (!dlm_res_within_tree(res, root))
+            continue;
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(l, &res->proxies, res_proxy) {
+            if (!!l->waiting != !!pending)
+                continue;
+            *lkid = l->lkid;
+            found = 1;
+            break;
+        }
+        exec_unlock(&res->lock);
+        if (found)
+            break;
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+/*
+ * Promote the one proxy LKB named by `lkid`, re-checking under the resource
+ * lock everything the snapshot above read without it. Returns 1 when a proxy
+ * really became a local lock.
+ *
+ * A GRANTED proxy goes STRAIGHT ONTO res->granted at the mode it is already
+ * held at -- the same way the 0x12 records' locks are installed, and for the
+ * same reason (vms_lock_dlm_xnode_rebuild's comment): re-running the local
+ * granting algorithm would re-DERIVE a decision the cluster has already made
+ * about a lock somebody is holding right now. A PENDING one, which nobody has
+ * granted, is decided HERE now -- the transition vms_lock_dlm_assume_mastery
+ * makes when the directory answers "there is no master, you master it".
+ */
+static int dlm_adopt_promote_lkid(uint32_t lkid,
+                                  const struct vms_lock_resource *root)
+{
+    struct vms_lock_entry *lock = lock_find_by_id(lkid);
+    struct vms_lock_resource *res;
+    int promoted = 0;
+
+    if (lock == NULL)
+        return 0;
+    res = lock->resource;
+    if (res == NULL || !dlm_res_within_tree(res, root)) {
+        lock_put(lock);
+        return 0;
+    }
+
+    exec_lock(&res->lock);
+    if (lock->proxy) {
+        if (lock->waiting) {
+            dlm_promote_proxy_locked(res, lock);
+        } else {
+            dlm_proxy_stops_being_one_locked(lock);
+            exec_list_add_tail(&lock->res_granted, &res->granted);
+        }
+        promoted = 1;
+    }
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return promoted;
+}
+
+/*
+ * Convert every lock THIS NODE holds in the adopted tree out of proxy state.
+ * Returns how many really went.
+ *
+ * GRANTED FIRST, then pending: a request this node has not been granted must be
+ * decided against the holders that really hold the resource, and our own held
+ * lock is one of them. Each promotion takes its LKB off res->proxies, so the
+ * scan cannot return the same lock twice and the loop terminates; a lock that
+ * went away under us ends its pass rather than spinning.
+ */
+static uint32_t dlm_adopt_promote_own_locks(const struct vms_lock_resource *root)
+{
+    uint32_t n = 0u;
+    int pending;
+
+    for (pending = 0; pending <= 1; pending++) {
+        uint32_t lkid = 0u;
+
+        while (dlm_adopt_scan_own_proxy(root, pending, &lkid)) {
+            if (!dlm_adopt_promote_lkid(lkid, root))
+                break;
+            n++;
+        }
+    }
+    return n;
+}
+
+uint32_t vms_lock_dlm_adopt_promotions(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    n = vms_dlm_adopt_promotions_n;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return n;
+}
+
+/* Count what the sweep really did. A promotion that happened is a number this
+ * executive reports, like every other adoption fact here. */
+static void dlm_adopt_count_promotions(uint32_t n)
+{
+    if (n == 0u)
+        return;
+    exec_lock(&vms_dlm_adopt_lock_g);
+    vms_dlm_adopt_promotions_n += n;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+}
+
 uint32_t vms_lock_dlm_adopt_end(const struct vms_dlm_adopt_tree *t,
                                 uint32_t *n_locks)
 {
@@ -4203,6 +4429,14 @@ uint32_t vms_lock_dlm_adopt_end(const struct vms_dlm_adopt_tree *t,
     exec_unlock(&vms_dlm_adopt_lock_g);
 
     dlm_adopt_clear_gen(gen);
+    /*
+     * ...AND THIS NODE'S OWN LOCKS IN THE TREE STOP BEING PROXIES (rd vms-3ac).
+     * After the 0x13, not at adopt_open: an adoption that ABORTS gives the tree
+     * back to the old master (vms_lock_dlm_adopt_abort), and our locks on it are
+     * then genuinely still that master's to answer for. `root` still carries the
+     * adoption's reference, so the tree is walkable here.
+     */
+    dlm_adopt_count_promotions(dlm_adopt_promote_own_locks(root));
     resource_release(root);
     exec_free(a);
     if (n_locks != NULL)

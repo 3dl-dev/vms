@@ -1547,6 +1547,7 @@ the frame parses as a grounded op-0x03
 the ENQ, then the rundown RELEASE
 *** rundown emitted a real op-0x03 $DEQ ***
   the codec REFUSED to build it -- the placeholder that bugchecked a real VAX cannot reach a wire
+the lookup went to the directory node
 EOF
                       ;;
         esac;;

@@ -64,6 +64,35 @@ def sca_bodies(path):
         yield idx, frame[6:12].hex()[-4:], frame[0:6].hex()[-4:], frame[BODY_OFF:]
 
 
+def sca_bodies_with_src(path):
+    """The same frames as sca_bodies, with the WHOLE six-byte addresses.
+
+    sca_bodies abbreviates them to the last two bytes, which identifies a node
+    within one lab but throws away the OUI -- and the OUI is what tells a real
+    DEC interface from an OVMX one (dlm_deq_census.py). Same discriminators,
+    same body slice; only the address width differs.
+    """
+    try:
+        with open(path, 'rb') as fp:
+            data = fp.read()
+    except OSError:
+        return
+    if len(data) < 24:
+        return
+    off, idx = 24, 0
+    while off + 16 <= len(data):
+        _ts, _us, caplen, _origlen = struct.unpack('<IIII', data[off:off + 16])
+        off += 16
+        frame = data[off:off + caplen]
+        off += caplen
+        idx += 1
+        if len(frame) != SCA_FRAME_LEN or frame[12:14] != SCA_ETHERTYPE:
+            continue
+        if frame[31] != 0x13 or frame[55] != 0x02:
+            continue
+        yield idx, frame[6:12], frame[0:6], frame[BODY_OFF:]
+
+
 def pair_one_capture(path):
     """Return (pairs, notifications) for one capture.
 

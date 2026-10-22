@@ -185,6 +185,18 @@ uint32_t vms_lock_dlm_adopt_lock(const struct vms_dlm_adopt_tree *t,
  * number any later statement about this tree has to be consistent with.
  *
  * Completing an adoption sends NOTHING. See this header's 0x14 note.
+ *
+ * AND IT CONVERTS THIS NODE'S OWN LOCKS IN THE TREE OUT OF PROXY STATE
+ * (rd vms-3ac). A tree this node has been handed is a tree this node masters,
+ * so a lock of its own on it is no longer a requester-side image of somebody
+ * else's lock: a granted one becomes a master-side granted lock at the mode it
+ * is already held at, a pending one is decided by this node's own queues, and
+ * neither keeps the old master's handle. That is what makes the release of such
+ * a lock LOCAL by construction rather than a frame naming a handle the old
+ * master cannot resolve -- the frame that bugchecked a real V7.3 node with
+ * INVLOCKID (tests/lab/captures/vms-3ac-invlockid-20261021).
+ *
+ * An ABORTED adoption promotes nothing: it gives the tree back.
  */
 uint32_t vms_lock_dlm_adopt_end(const struct vms_dlm_adopt_tree *t,
 				uint32_t *n_locks);
@@ -243,6 +255,15 @@ uint32_t vms_lock_dlm_adopt_reports(void);
 /* How many locks has the OPEN adoption of this tree installed so far? -1 when
  * no adoption of it is open. */
 int vms_lock_dlm_adopt_installed(const struct vms_dlm_adopt_tree *t);
+
+/*
+ * THIS NODE'S OWN LOCKS THAT ADOPTIONS CONVERTED out of proxy state, since boot
+ * (rd vms-3ac). The counted half of the sentence above, and the one number that
+ * tells the fix from the fail-safe: when this rises,
+ * vms_lock_dlm_proxy_self_mastered() -- the posts dlm_proxy_post refused
+ * because this node masters the resource -- does not have to.
+ */
+uint32_t vms_lock_dlm_adopt_promotions(void);
 
 /* Adoptions opened / completed / refused, since boot. Diagnostics, never a
  * substitute for reading the lock database. */

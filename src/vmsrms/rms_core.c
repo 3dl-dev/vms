@@ -97,6 +97,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -732,15 +733,73 @@ static uint32_t rms_fileshare_mode(uint8_t fac, uint8_t shr)
     return shr_write ? LCK_K_CWMODE : LCK_K_PWMODE;
 }
 
-/* rms_file_lock_resnam - the FID-named file-access resource: two opens of the
- * SAME file (same FID) contend on the SAME resource; different files never
- * do. "RMS$" + hex(fid_num|(fid_nmx<<16)) + "." + hex(fid_seq) + "." +
- * hex(fid_rvn), well under the 32-byte (incl. NUL) DLM resnam width. */
+/* rms_file_lock_devlock - the volume's identity in the file-access resource
+ * (rd vms-acf3): the name of the device the file is on, as every cluster member
+ * that can reach it names it. A device name that already carries a '$' (an
+ * allocation-class or served-device name) is used as given; a bare local unit
+ * ("VDA0") is qualified with this node's booted SCSNODE ("OVMXB$VDA0"), the
+ * name its MSCP-served copy has on the other members. Without it the
+ * resource named only the FID -- and in a VAXcluster, where the DLM is
+ * cluster-wide and every member boots its own disk mastered from the same kit,
+ * two DIFFERENT files with the same FID on two members' disks contended for
+ * ONE lock: node A appending its NETACP.LOG or OPERATOR.LOG turned node B's
+ * read of NETNODE_REMOTE.DAT away with RMS$_SHR ("remote node is unknown"),
+ * and two members' OPERATOR.LOG appends split a log into a new version.
+ * Empty when the executive does not answer (no device row, no cluster). */
+static void rms_file_lock_devlock(const rms_file_t *h, char *out, size_t outsz)
+{
+    struct vms_devinfo di;
+    out[0] = '\0';
+    if (!h->assigned)
+        return;
+    memset(&di, 0, sizeof di);
+    if (!$VMS_STATUS_SUCCESS(vms_kif_getdvi_chan(h->chan, &di)))
+        return;
+    char dev[VMS_DEVNAM_SIZE + 1];
+    const char *d = di.devnam;
+    while (*d == '_')
+        d++;
+    size_t n = 0;
+    while (d[n] && d[n] != ':' && n < VMS_DEVNAM_SIZE) {
+        dev[n] = d[n];
+        n++;
+    }
+    dev[n] = '\0';
+    if (!dev[0])
+        return;
+    if (strchr(dev, '$')) {
+        snprintf(out, outsz, "%s", dev);
+        return;
+    }
+    struct vms_cluster_getsyi_args a;
+    memset(&a, 0, sizeof a);
+    char node[16] = "";
+    if ($VMS_STATUS_SUCCESS(vms_kif_cluster_getsyi(&a)) && a.scsnode_len > 0 &&
+        a.scsnode_len < sizeof node && a.scsnode_len <= sizeof a.scsnode) {
+        size_t k = 0;
+        for (size_t i = 0; i < a.scsnode_len; i++)
+            if (a.scsnode[i] != ' ' && a.scsnode[i] != '\0')
+                node[k++] = (char)toupper((unsigned char)a.scsnode[i]);
+        node[k] = '\0';
+    }
+    if (node[0])
+        snprintf(out, outsz, "%s$%s", node, dev);
+    else
+        snprintf(out, outsz, "%s", dev);
+}
+
+/* rms_file_lock_resnam - the file-access resource: two opens of the SAME file
+ * contend on the SAME resource; different files never do. "RMS$" +
+ * hex(fid_num|(fid_nmx<<16)) + "." + hex(fid_seq) + "." + hex(fid_rvn) + "/" +
+ * the volume's device lock name (rms_file_lock_devlock), within the 32-byte
+ * (incl. NUL) DLM resnam width. */
 static void rms_file_lock_resnam(const rms_file_t *h, char out[32])
 {
     unsigned fidhi = (unsigned)h->fid_num | ((unsigned)h->fid_nmx << 16);
-    snprintf(out, 32, "RMS$%X.%X.%X", fidhi,
-             (unsigned)h->fid_seq, (unsigned)h->fid_rvn);
+    char dl[32];
+    rms_file_lock_devlock(h, dl, sizeof dl);
+    snprintf(out, 32, "RMS$%X.%X.%X/%s", fidhi,
+             (unsigned)h->fid_seq, (unsigned)h->fid_rvn, dl);
 }
 
 /*

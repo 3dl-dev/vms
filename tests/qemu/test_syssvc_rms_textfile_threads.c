@@ -23,8 +23,20 @@
  *   3. A FAILED OPEN THAT IS NOT ABSENCE IS NOT RMS$_FNF/RMS$_DNF: a device
  *      that does not exist. A reader can tell "no database" from "could not
  *      read the database".
+ *   4. THE FILE-ACCESS LOCK IS THE FILE'S, NOT ITS FID'S. RMS arbitrates file
+ *      sharing with a DLM lock per file. It was named by the FID alone, and in
+ *      a VAXcluster -- one DLM, every member booting its own disk mastered from
+ *      the same kit -- two DIFFERENT files with the same FID on two members'
+ *      disks contended: node A appending its NETACP.LOG turned node B's read
+ *      of NETNODE_REMOTE.DAT away (RMS$_SHR), and SET HOST said "remote node
+ *      is unknown"; two members' OPERATOR.LOG appends split a log into a new
+ *      version. The same class on ONE node: every ODS-2 volume has BADLOG.SYS
+ *      at FID (9,9,0). Holding VDA0:'s exclusively (SHR=NIL) must refuse a
+ *      second open of THAT file (the check has teeth) and must NOT refuse
+ *      VDA300:'s BADLOG.SYS, a different file with the same FID.
  *
  * negctl: rms-textfile-open-failure-reads-as-absent
+ * negctl: rms-file-lock-named-by-fid-alone
  */
 #include <pthread.h>
 #include <stdint.h>
@@ -33,6 +45,7 @@
 #include <string.h>
 
 #include "rmsdef.h"
+#include "rms/rms.h"
 #include "rms_textfile.h"
 #include "vms_kif.h"
 
@@ -153,6 +166,36 @@ int main(void)
         /* negctl: rms-textfile-open-failure-reads-as-absent */
         CHECK(!tf && st != RMS$_FNF && st != RMS$_DNF && !(st & 1),
               "an open that fails for a reason other than absence does not report RMS$_FNF or RMS$_DNF");
+    }
+
+    /* 4. Same FID, different volume: no contention. */
+    {
+        CHECK(vms_kif_acp_mount("VDA300:") & 1, "VDA300: (a second ODS-2 volume) mounted for the ACP");
+        static const char a_spec[] = "VDA0:[000000]BADLOG.SYS;1";
+        static const char a2_spec[] = "VDA0:[000000]BADLOG.SYS;1";
+        static const char b_spec[] = "VDA300:[000000]BADLOG.SYS;1";
+        struct FAB fa = cc$rms_fab, fa2 = cc$rms_fab, fb = cc$rms_fab;
+        fa.fab$l_fna = (char *)a_spec;   fa.fab$b_fns = (uint8_t)strlen(a_spec);
+        fa2.fab$l_fna = (char *)a2_spec; fa2.fab$b_fns = (uint8_t)strlen(a2_spec);
+        fb.fab$l_fna = (char *)b_spec;   fb.fab$b_fns = (uint8_t)strlen(b_spec);
+        fa.fab$b_fac = fa2.fab$b_fac = fb.fab$b_fac = FAB$M_GET;
+        fa.fab$b_shr = fa2.fab$b_shr = fb.fab$b_shr = FAB$M_NIL;   /* exclusive */
+        uint32_t sa = sys$open(&fa, 0, 0);
+        printf("  INFO: exclusive open of %s: status %08X\n", a_spec, (unsigned)sa);
+        CHECK(sa == RMS$_NORMAL, "VDA0:'s BADLOG.SYS (FID 9,9,0) opened exclusively");
+        uint32_t sa2 = sys$open(&fa2, 0, 0);
+        printf("  INFO: second open of the same file: status %08X\n", (unsigned)sa2);
+        CHECK(sa2 == RMS$_SHR,
+              "a second open of THAT file while it is held exclusively is refused RMS$_SHR (the check has teeth)");
+        if (sa2 == RMS$_NORMAL) sys$close(&fa2, 0, 0);
+        uint32_t sb = sys$open(&fb, 0, 0);
+        printf("  INFO: exclusive open of %s: status %08X\n", b_spec, (unsigned)sb);
+        /* negctl: rms-file-lock-named-by-fid-alone */
+        CHECK(sb == RMS$_NORMAL,
+              "another volume's BADLOG.SYS -- same FID, different file -- opens while VDA0:'s is held: the file-access lock names the volume, not just the FID");
+        if (sb == RMS$_NORMAL) sys$close(&fb, 0, 0);
+        if (sa == RMS$_NORMAL) sys$close(&fa, 0, 0);
+        (void)vms_kif_acp_dmount("VDA300:");
     }
 
     (void)vms_kif_acp_dmount(ODS2_UNIT);   /* clean slate for co-resident suites */

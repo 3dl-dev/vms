@@ -1,0 +1,25 @@
+# rms-file-lock-named-by-fid-alone -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "RMS's file-access DLM lock is named by the FID AND the volume's device lock name (node\$unit), so two different files with the same FID on two volumes -- or on two cluster members' disks -- never contend (rd vms-acf3)";;
+        targets)      echo "vmsrms/rms_core.c";;
+        suites_red)   echo "test_syssvc_rms_textfile_threads";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation drops the volume from the resource name (FID alone, as before rd vms-acf3), so holding one volume's BADLOG.SYS exclusively refuses another volume's -- the collision that turned node B's node-database read away while node A wrote NETACP.LOG. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+another volume's BADLOG.SYS -- same FID, different file -- opens while VDA0:'s is held: the file-access lock names the volume, not just the FID
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/^static void rms_file_lock_resnam/,/^}$/ s|^    rms_file_lock_devlock(h, dl, sizeof dl);$|    dl[0] = 0; /* NEGCTL rms-file-lock-named-by-fid-alone */|' "$_file"
+    :
+}

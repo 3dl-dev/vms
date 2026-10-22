@@ -20,6 +20,6 @@ EOT
 }
 
 defect_apply() {
-        sed -i '/^static rms_textfile_t \*rmstf_open_unl/,/^}$/ s|^    if ((\*st = sys\$open(&tf->fab, 0, 0)) != RMS\$_NORMAL) {$|    if ((*st = sys$open(\&tf->fab, 0, 0)) != RMS$_NORMAL \&\& (*st = RMS$_FNF)) { /* NEGCTL rms-textfile-open-failure-reads-as-absent */|' "$_file"
+        sed -i '/^static rms_textfile_t \*rmstf_open_unl/,/^}$/ s|^    if ((\*st = rmstf_open_wait(&tf->fab)) != RMS\$_NORMAL) {$|    if ((*st = rmstf_open_wait(\&tf->fab)) != RMS$_NORMAL \&\& (*st = RMS$_FNF)) { /* NEGCTL rms-textfile-open-failure-reads-as-absent */|' "$_file"
     :
 }

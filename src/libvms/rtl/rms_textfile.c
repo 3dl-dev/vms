@@ -24,6 +24,7 @@
 #define _DEFAULT_SOURCE
 
 #include <pthread.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -81,6 +82,8 @@ struct rms_textfile {
     uint32_t   last_st;        /* the last $GET's status (RMS$_EOF at the end)  */
 };
 
+static uint32_t rmstf_open_wait(struct FAB *fab);   /* below: $OPEN, waiting out RMS$_SHR */
+
 static rms_textfile_t *rmstf_open_unl(const char *vms_spec, uint32_t *st)
 {
     *st = RMS$_FNM;
@@ -115,7 +118,7 @@ static rms_textfile_t *rmstf_open_unl(const char *vms_spec, uint32_t *st)
     tf->fab.fab$b_rfm = FAB$C_STMLF;
     tf->fab.fab$b_fac = FAB$M_GET;
 
-    if ((*st = sys$open(&tf->fab, 0, 0)) != RMS$_NORMAL) {
+    if ((*st = rmstf_open_wait(&tf->fab)) != RMS$_NORMAL) {
         free(tf);
         return NULL;
     }
@@ -171,6 +174,23 @@ static void rmstf_close_unl(rms_textfile_t *tf)
     free(tf);
 }
 
+/* $OPEN, waiting out a brief share conflict (rd vms-acf3). Another process
+ * holding the file for a conflicting access turns an $OPEN away with RMS$_SHR;
+ * an operator-log or node-database access is short, so retry for up to
+ * ~1 s before reporting it. Any other status is returned at once. */
+static uint32_t rmstf_open_wait(struct FAB *fab)
+{
+    uint32_t st = RMS$_SHR;
+    for (int i = 0; i < 100; i++) {
+        st = sys$open(fab, 0, 0);
+        if (st != RMS$_SHR)
+            break;
+        struct timespec ts = { 0, 10 * 1000 * 1000 };
+        nanosleep(&ts, NULL);
+    }
+    return st;
+}
+
 /* Resolve device-field logicals into `out` (see rms_textfile_open). */
 static void rmstf_resolve(const char *spec, char *out, size_t outsz)
 {
@@ -213,10 +233,24 @@ static int rmstf_append_line_unl(const char *vms_spec, const char *line)
     fab.fab$b_rfm = FAB$C_STMLF;
     fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
 
-    /* Append to the existing OPERATOR.LOG, or create it on first write. */
-    if (sys$open(&fab, 0, 0) != RMS$_NORMAL &&
-        sys$create(&fab, 0, 0) != RMS$_NORMAL)
-        return -1;
+    /* Append to the existing file, or create it on first write -- ONLY when it
+     * is not there (RMS$_FNF). A file that is there but could not be opened
+     * (another accessor holding it past the wait) is a failed append, never
+     * a reason to start a NEW VERSION: that split OPERATOR.LOG, leaving this
+     * boot's earlier records in the older version (rd vms-acf3). */
+    uint32_t ost = rmstf_open_wait(&fab);
+    if (ost != RMS$_NORMAL) {
+        if (ost != RMS$_FNF)
+            return -1;
+        fab = cc$rms_fab;
+        fab.fab$l_fna = spec;
+        fab.fab$b_fns = (uint8_t)strlen(spec);
+        fab.fab$b_org = FAB$C_SEQ;
+        fab.fab$b_rfm = FAB$C_STMLF;
+        fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
+        if (sys$create(&fab, 0, 0) != RMS$_NORMAL)
+            return -1;
+    }
 
     /* RAB$M_EOF positions the record context at end-of-file so the $PUT lands
      * as an append (IO$_WRITEVBLK past EOF with implicit extend). */

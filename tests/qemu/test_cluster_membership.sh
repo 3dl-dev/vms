@@ -314,13 +314,13 @@ for k in "${KEYS[@]}"; do
     if grep -q '^status=1$' "$out"; then
         ok "node $k: CNXMAN is UP -- the ioctl answers SS\$_NORMAL from real struct vms_club state"
     else
-        bad "node $k: CLUSTER_DIAG_CSB row CLUB says CNXMAN is not up (status=$(grep '^status=' "$out" | head -1)) -- expected once FC-P3.9 wires vms_cnxman_start() into CLUSTER_START"
+        bad "node $k: CLUSTER_DIAG_CSB row CLUB says CNXMAN is not up (status=$(grep -a '^status=' "$out" | head -1)) -- expected once FC-P3.9 wires vms_cnxman_start() into CLUSTER_START"
     fi
 
     walk="/tmp/cluster-mem-csb-${k}.txt"
     if read_diag "$k" '-walk 32' >"$walk" 2>/dev/null; then
         echo "node $k CSB rows:"; sed 's/^/    /' "$walk" | head -60
-        rows=$(grep '^csb_rows=' "$walk" | tail -1 | cut -d= -f2)
+        rows=$(grep -a '^csb_rows=' "$walk" | tail -1 | cut -d= -f2)
         NODES_SEEN_[$k]="${rows:-0}"
         grep -q '^csid=00000000$' "$walk" \
             && bad "node $k: a CSB row reports csid 0 without its valid flag -- INV-6/E30 tripwire" \

@@ -312,7 +312,7 @@ status_proof_selftest() {
       _expect fail "${name}'s own output line missing (the image never ran)" "$st/noimg$i.log"
     fi
   done
-  n="$(grep -n 'STATUS-PROOF: .*-STATUS=' "$st/pass.log" | head -1 | cut -d: -f1)"
+  n="$(grep -a -n 'STATUS-PROOF: .*-STATUS=' "$st/pass.log" | head -1 | cut -d: -f1)"
   head -n "$n" "$st/pass.log" > "$st/trunc.log"
   _expect fail "run truncated after the first STATUS line" "$st/trunc.log"
   grep -v "=== END ===" "$st/pass.log" > "$st/noend.log"

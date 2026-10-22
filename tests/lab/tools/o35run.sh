@@ -86,9 +86,9 @@ X2=$(kx grep -ac XITDONE $L/scsd-$TAG-J.log 2>/dev/null | tr -d '\r')
 ADM2=$(kx grep -aoE 'admitted=[0-9]+|READMITMAP.*' $L/scsd-$TAG-J.log 2>/dev/null | tail -2 | tr '\n' '|')
 # final oracle read
 sample 'J-END'
-CNJ1=$(grep 'J-END vax1' "$TL" | tail -1); CNJ2=$(grep 'J-END vax2' "$TL" | tail -1)
+CNJ1=$(grep -a 'J-END vax1' "$TL" | tail -1); CNJ2=$(grep -a 'J-END vax2' "$TL" | tail -1)
 log "J done: XITDONE_count=$X2 verdict=[$ADM2]"
 log "FINAL ORACLE: $CNJ1 || $CNJ2"
-log "wire idents: $(strings -a "$HOSTL/$TAG.pcap" 2>/dev/null | grep -oE 'OVX[A-Z0-9]{3}|OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
+log "wire idents: $(strings -a "$HOSTL/$TAG.pcap" 2>/dev/null | grep -a -oE 'OVX[A-Z0-9]{3}|OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
 echo "===$TAG-DONE===" >> "$S"
 log "wrote $S (status), $TL (timeline); pcap=$HOSTL/$TAG.pcap; daemon logs scsd-$TAG-F1/J.log"

@@ -406,7 +406,7 @@ cmd_handlers() {
     [ -d "$_root/kernel" ] || fa_die "no $_root/kernel"
     _attr=$(cmd_attribute)
     _sites=$(cmd_sites)
-    grep -hoE '^(long|int|static long|static int)[ \t]+vms_ioctl_[A-Za-z0-9_]+' "$_root"/kernel/*.c 2>/dev/null \
+    grep -a -hoE '^(long|int|static long|static int)[ \t]+vms_ioctl_[A-Za-z0-9_]+' "$_root"/kernel/*.c 2>/dev/null \
         | sed 's/.*\(vms_ioctl_[A-Za-z0-9_]*\)/\1/' | sort -u \
         | while read -r _h; do
             [ -n "$_h" ] || continue

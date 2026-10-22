@@ -85,7 +85,7 @@ run_seg() { local o w=0; o=$(wc -c <"$2"); send "$1"
     sleep 2; seg=$(tail -c "+$((o + 1))" "$2" | tr -d '\r'); }
 has() { printf '%s\n' "$seg" | grep >/dev/null -F -- "$1"; }
 frames_with() { [ -s "$2" ] || { echo 0; return; }
-    od -An -v -tx1 "$2" | tr -d ' \n' | grep -o "$1" | wc -l; }
+    od -An -v -tx1 "$2" | tr -d ' \n' | grep -a -o "$1" | wc -l; }
 
 DISK=/tmp/dn-startnet-e2e.img
 LOG1=/tmp/dn-startnet-boot1.log
@@ -198,7 +198,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: SHOW SYSTEM lists a RUNNING NETACP ${NETACP_SETTLE}s after boot (it exits on any datalink failure)" "$rc"
     if printf '%s\n' "$seg" | grep >/dev/null -F 'Process Name'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the SHOW SYSTEM segment is real output (its 'Process Name' column header is present)" "$rc"
-    netacp_pid=$(printf '%s\n' "$seg" | grep -oE '^[0-9A-F]{8} NETACP( |$)' | head -1 | cut -c1-8)
+    netacp_pid=$(printf '%s\n' "$seg" | grep -a -oE '^[0-9A-F]{8} NETACP( |$)' | head -1 | cut -c1-8)
 
     # rd vms-158d: NETACP announced itself the VMS way -- OPCOM, "DECnet
     # starting" -- and OPERATOR.LOG carries it.
@@ -274,7 +274,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
        && has '   Object   Number  File/PID                   User Id          Password' \
        && printf '%s\n' "$seg" | grep >/dev/null -xF '  FAL           17  FAL.EXE'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW KNOWN OBJECTS lists NETACP's FAL 17 FAL.EXE (byte-identical to the real VAX row) under the VAX heading" "$rc"
-    cterm_pid=$(printf '%s\n' "$seg" | grep -oE '^  CTERM         42  [0-9A-F]{8}$' | cut -c21-28)
+    cterm_pid=$(printf '%s\n' "$seg" | grep -a -oE '^  CTERM         42  [0-9A-F]{8}$' | cut -c21-28)
     if [ -n "$cterm_pid" ] && [ -n "${netacp_pid:-}" ] && [ "$cterm_pid" = "$netacp_pid" ]; then rc=0; else rc=1; fi
     record "boot 2: SHOW KNOWN OBJECTS' CTERM 42 row carries the PID of the NETACP serving it ($cterm_pid), the PID SHOW SYSTEM lists for NETACP (${netacp_pid:-none})" "$rc"
     run_seg 'NCP SHOW OBJECT FAL' "$LOG2" 'Object Volatile Summary' 30

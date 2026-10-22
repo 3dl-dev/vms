@@ -577,6 +577,23 @@ if(BUILD_TESTS)
     set_tests_properties(guide_drift_negctl PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # vms-906: a test that reads a VALUE out of a console log must be
+    # BINARY-SAFE. One missing `-a` on a `grep -o` reddened two e2e gates and
+    # took a whole merge group down with them (run 39698326725): a console log
+    # carries NUL bytes, GNU grep then calls the file binary, and -o prints
+    # NOTHING while the line is right there. Whether it fires depends on where
+    # the NUL lands, so the same code passes or fails run to run -- a gate
+    # whose verdict depends on byte timing. This lint is the class, closed:
+    # `-o` must carry `-a`, and a captured LINE from a file operand must too.
+    # The selftest plants one violation of each rule and requires the lint to
+    # red, so an always-OK linter cannot pass. Pure text -- no docker, no QEMU.
+    add_test(NAME binary_safe_readers_lint
+        COMMAND python3
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/lint_binary_safe_readers.py
+                --selftest ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(binary_safe_readers_lint PROPERTIES
+        LABELS "integration;test-flaky" TIMEOUT 60)
+
     # vms-44a (roadmap R2): docs/corpus-scoreboard.md is generated from the
     # committed corpus baselines + written reasons; stale page or a non-running
     # program without a reason fails. Pure text/JSON -- no docker, no QEMU.

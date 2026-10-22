@@ -169,7 +169,7 @@ fi
 # and the login prompt. Timestamps, PIDs, and everything else about full
 # message TEXT are deliberately not compared here -- see this file's header.
 RAW_SEQ=$(printf '%s\n' "$CLEAN" | \
-    grep -oE '%[A-Z][A-Z0-9_]*-[A-Z]-[A-Z0-9_]+|OpenVMX V[0-9]|Username:' | \
+    grep -a -oE '%[A-Z][A-Z0-9_]*-[A-Z]-[A-Z0-9_]+|OpenVMX V[0-9]|Username:' | \
     sed -E 's/^OpenVMX V[0-9]$/__BANNER__/; s/^Username:$/__USERNAME__/')
 
 # Trim to the first __USERNAME__ (inclusive): the boot phase this test is

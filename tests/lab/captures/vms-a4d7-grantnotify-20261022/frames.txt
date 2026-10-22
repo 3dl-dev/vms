@@ -1,0 +1,31 @@
+rd vms-a4d7 / rd vms-28bd fire a4d2: the scoring read over the fire's own capture.
+Produced by score_grantnotify.py (committed before the fire ran) over wire.pcap.gz.
+
+QUEUED ANSWERS OVMXE ORIGINATED: 2
+  f2287   -> 08002bf8c80c  our handle 52030001  its handle ad030054  mode 5  res='A4D1'
+  f4214   -> aa0004000104  our handle 54030001  its handle b8020038  mode 5  res='A4D2'
+
+op-0x02 f2525   -> 08002bf8c80c  our 52030001  its ad030054  after f2287  mode 5==5  b31==b30  txn=0  namelen=0  b28:30=1400  tail=ffffffff/ffffffff
+op-0x02 f4371   -> aa0004000104  our 54030001  its b8020038  after f4214  mode 5==5  b31==b30  txn=0  namelen=0  b28:30=1400  tail=ffffffff/ffffffff
+P1/P2: 2 op-0x02 ORIGINATED by OVMXE, 2 of them correct on every registered cell
+
+P6: 0 OVMXE-originated 0xfa grants naming a queued handle pair (want 0)
+P7: 0 cat-0x82 op-0x02 answers from anybody (want 0)
+
+EVERY DLM/CM frame OVMXE ORIGINATED, by (cat, op):
+  01/01  2
+  01/02  1
+  01/14  2
+  02/01  9
+  02/02  2
+  02/04  5
+  02/14  4
+  04/00  86
+  0b/05  1
+  81/03  1
+  81/05  4
+  81/09  1
+  82/01  2
+  82/15  6
+  86/00  3
+  8b/04  1

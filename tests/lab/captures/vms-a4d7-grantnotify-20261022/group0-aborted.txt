@@ -1,0 +1,28 @@
+rd vms-daa: the ABORTED first boot (a4d1), which ran on cluster group 0.
+
+--- source MACs and their multicast destinations, /lab/run-fire/a4d1-group0-aborted/wire.pcap ---
+    383 08:00:2b:f8:c8:0c > aa:00:04:00:01:04
+    347 aa:00:04:00:01:04 > 08:00:2b:f8:c8:0c
+    150 aa:00:04:00:01:04 > ab:00:04:01:01:01
+    150 52:54:00:00:e5:01 > ab:00:04:01:00:01
+    149 08:00:2b:f8:c8:0c > ab:00:04:01:01:01
+
+THE READING, and it is unambiguous: the two real VAXes (08:00:2b:f8:c8:0c and
+aa:00:04:00:01:04) each multicast their LAVC HELLOs to AB-00-04-01-01-01 --
+cluster group 1, which VMS itself prints (SYSMAN> CONFIGURATION SHOW
+CLUSTER_AUTHORIZATION on VAX1: "Cluster group number: 1 / Multicast address:
+AB-00-04-01-01-01"). The OVMX node (52:54:00:00:e5:01) multicast 150 of its own
+to AB-00-04-01-00-01 -- group 0, the "no group configured" address an artifacts
+build ships because distro/Dockerfile.bootable stages /etc/ovmx/
+cluster_authorize.dat only when built with --build-arg CLUSTER_AUTH_GROUP.
+Neither side received one frame of the other's; the node booted perfectly,
+reached DCL, brought PEA0: Online, and never joined. RUN SYS$SYSTEM:CNXTRACE
+read `connected=0 lockdirwt=0 gen=0` with `join state=IDLE`, and SHOW CLUSTER
+listed only OVMXE with no CSID.
+
+ovmx_fire.sh checks SOURCE_COMMIT (twice, once inside the pod) and the
+frame-conformance gate, and does NOT check this -- which is rd vms-daa. The
+failure mode reads exactly like the cluster defect under test, and the only
+tell is the destination MAC above. Fixed for this fire by
+tests/lab/tools/stage_cluster_group.sh 1 and a re-fire (a4d2), whose evidence
+is the rest of this directory.

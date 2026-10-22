@@ -1330,7 +1330,7 @@ vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
 	/* body[30] AND ITS MIRROR body[32]: the MEASURED cell, never the lock
 	 * mode (rd vms-194 (c)). The driven arm's nine releases -- every held
 	 * mode NL..EX, a co-holder, and the roles swapped -- all carry 0, and
-	 * body[32] equals body[30] on 41,049 of 41,049 real releases. The
+	 * body[32] equals body[30] on 41,296 of 41,296 real releases. The
 	 * caller's `rel_cell` is deliberately NOT consulted: it is what an
 	 * inbound release carried, and echoing it would put a peer's byte on
 	 * this node's wire. */

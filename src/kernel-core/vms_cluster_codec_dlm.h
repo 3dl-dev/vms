@@ -1375,12 +1375,12 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * NL/CR/CW/PR/PW/EX, a non-NULL co-holder, and the roles swapped so the
  * sender and the master change places. body[30] reads 0 in EVERY ONE, so a
  * real node releasing an EX lock does NOT put 5 there. The corpus bounds it
- * the same way: 41,049 real releases carry only 0 or 1, and the 11 this
+ * the same way: 41,296 real releases carry only 0 or 1, and the 11 this
  * executive sent before the fix carried the lock mode -- {1, 5}, out of the
  * envelope the moment the lock was above CR, in the one frame family that has
  * already bugchecked two lab VAXes (rd vms-3ac).
  *
- * WHAT SELECTS THE 1 THAT 8,904 OF THE CORPUS'S RELEASES CARRY IS NOT KNOWN
+ * WHAT SELECTS THE 1 THAT 33,965 OF THE CORPUS'S RELEASES CARRY IS NOT KNOWN
  * AND IS NOT GUESSED. It is not the held mode, not a co-holder and not the
  * role -- the arm separated all three. The remaining matrix candidates are a
  * value block flushed on the release and sub-locks under the root, which need
@@ -1390,7 +1390,7 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  *
  * So `rel_cell` is PARSE-ONLY: it reports what an inbound release carried,
  * and the builder writes the measured VMS_DLM_DEQ_REL_CELL at body[30] AND at
- * body[32] -- equal, which is what 41,049 of 41,049 real releases carry.
+ * body[32] -- equal, which is what 41,296 of 41,296 real releases carry.
  */
 #define VMS_DLM_DEQ_REL_CELL   0u
 /* body[30] and its mirror body[32] on a release. The second offset is the one

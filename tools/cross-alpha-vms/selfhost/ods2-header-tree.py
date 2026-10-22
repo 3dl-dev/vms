@@ -131,9 +131,17 @@ def main(argv):
     # tree (-I comes ahead of -isystem), turns <bits/c++config.h> there into a
     # name that is merely absent, so the search goes on instead of failing.
     if relpairs_out and not errors:
+        # every trailing part of each path: an include of <bits/c++config.h> is
+        # relative to whichever include root holds bits/ (here alpha-dec-vms/)
+        seen_rel = set()
         with open(relpairs_out, 'w') as m:
             for f, o in relpairs:
-                m.write('%s %s\n' % (f, o))
+                fp, op = f.split('/'), o.split('/')
+                for k in range(len(fp)):
+                    a, b = '/'.join(fp[k:]), '/'.join(op[k:])
+                    if a not in seen_rel:
+                        seen_rel.add(a)
+                        m.write('%s %s\n' % (a, b))
     return 1 if errors else 0
 
 

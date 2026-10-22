@@ -917,6 +917,12 @@ EOF
   including the mode the engine really granted (EX)
 *** and the frame the peer receives is a GRANT naming its own handle and ours ***
 *** ...and the flip nobody could be told about is COUNTED, not dropped ***
+the engine reports exactly one advanced queue -- what the lab read as `local advances=1`
+  naming the peer and the SECOND LKB, not the cancelled one
+the lock reads back as granted for that system at the moment of the send
+*** and the key the GRANT path takes with is the key the arm RETAINED under -- the one thing section 12 could not disagree about ***
+*** so the retained frame is found and the grant is built ***
+  and it names the SECOND requester's handle, so the stale retained frame cannot be what the peer receives
 EOF
                       ;;
         esac;;

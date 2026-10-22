@@ -73,6 +73,8 @@
  */
 #define SS__DUPLNAM     148         /* duplicate process name (ssdef.h SS$_DUPLNAM) */
 #define SS__NONEXPR     2280        /* nonexistent process (ssdef.h SS$_NONEXPR) */
+#define SS__BADFILENAME 2072        /* SS$_BADFILENAME, docs/oracle/alpha84-starlet-defs/SSDEF.txt; the
+                                     * XQP's answer to a 237-character ODS-5 name (rd vms-7e7e) */
 #define SS__IVLOGNAM    340         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
 #define SS__NOPRIV      0x00000024
 #define SS__NOOPER      10388       /* SS$_NOOPER (STARLET $SSDEF) */

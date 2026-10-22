@@ -384,7 +384,8 @@ int main(void)
         memset(toolong, 'g', 233);
         memcpy(toolong + 233, ".hpp", 5);            /* 237: one past the maximum */
         st = fileop(chan, VMS_ACP_FOP_CREATE, VMS_ACP_M_CREATE, toolong, 0, &f);
-        check(!$VMS_STATUS_SUCCESS(st), "IO$_CREATE of a 237-character name is refused (fail-honest)");
+        check(st == 2072u /* SS$_BADFILENAME, docs/oracle/alpha84-starlet-defs/SSDEF.txt */,
+              "IO$_CREATE of a 237-character name is SS$_BADFILENAME, as on the real Alpha (CONSOLE-3.txt)");
         check(find_fid(chan, toolong, NULL) == 0, "and nothing was entered for it");
     }
 

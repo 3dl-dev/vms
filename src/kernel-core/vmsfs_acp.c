@@ -4093,6 +4093,14 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                 }
             }
 
+            /* An ODS-5 name is at most 236 characters; the real XQP refuses a
+             * 237-character one with SS$_BADFILENAME (lab-Alpha V8.4, rd
+             * vms-7e7e: tests/lab/captures/ods5-alpha-20261022/CONSOLE-3.txt). */
+            if (ODS2_IS_ODS5(vol->struclev) && strlen(ap->name) > ODS5_NAME_MAX) {
+                ap->status = SS__BADFILENAME;
+                goto free_sc;
+            }
+
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
             did.fid_num = ap->did_num;

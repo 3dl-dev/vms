@@ -132,3 +132,37 @@ observation.
 `TYPE C^+^+CONFIG.H`, `DIRECTORY MIXEDCASE.TXT` and `DIRECTORY ^C9.TXT` all
 found the lower-case files. A new version of `e.TXT` goes into the existing
 `E.txt` record, which keeps its case.
+
+## Session 3: RMS and the XQP on ODS-5 and ODS-2 (pod `ods5alpha-3`)
+
+Predictions in `PREREGISTERED-3.md` (for rd vms-b9c), console in
+`CONSOLE-3.txt`. Two LD volumes: `LDA1:` INITIALIZE/STRUCTURE=5, `LDA2:` plain
+INITIALIZE (ODS-2). Probes are DCL F$PARSE / F$SEARCH, which call RMS $PARSE /
+$SEARCH. The first login attempt timed out (the pod had 0.7 CPU), so the console
+shows one round of commands typed at `Username:`; the real run follows the
+second login.
+
+| # | verdict | observed |
+|---|---|---|
+| R1 | hit | EXTENDED `F$PARSE("c^+^+config.h")` = `LDA1:[TEST]c^+^+config.h;` |
+| R2 | hit | TRADITIONAL: `LDA1:[TEST]C^+^+CONFIG.H;` |
+| R3 | hit | EXTENDED `F$PARSE("a.b.c.d")` = `LDA1:[TEST]a^.b^.c.d;` |
+| R4 | **miss** | TRADITIONAL does not fail: `LDA1:[TEST]A^.B^.C.D;` (upcased, dots escaped) |
+| R5 | hit | NAME `a^.b^.c`, TYPE `.d` |
+| R6 | hit | `F$SEARCH("C^+^+CONFIG.H")` = `LDA1:[TEST]c^+^+config.h;1` |
+| R7 | hit | `F$SEARCH("*.*;*")` walks the directory order: `a^_b.txt`, `a^.b^.c.d`, `c^+^+config.h`, `caf<E9>.txt` (the Latin-1 byte itself, not escaped), `libstdc^+^+.a`, `MixedCase.Txt`, `^U4E2D.txt` |
+| R8 | refined | F$PARSE takes 236 and 237 characters alike (lengths 248 / 249 with `LDA1:[TEST]`); it is the create that refuses 237: `%COPY-E-OPENOUT ... -RMS-E-CRE, ACP file create failed -SYSTEM-W-BADFILENAME, bad file name syntax`. The 236-character file is created. |
+| R9 | hit | on the ODS-2 volume F$PARSE expands as on ODS-5; creating `c^+^+config.h` fails `-RMS-E-CRE -SYSTEM-W-BADFILENAME`, `a.b.c.d` fails `-RMS-E-CRE -SYSTEM-W-BADFILEVER` -- the ACP (XQP), not RMS, refuses them |
+| R10 | hit | on the ODS-2 volume `lower.txt` and `MixedCase.Txt` are stored `LOWER.TXT;1`, `MIXEDCASE.TXT;1`; `F$SEARCH("lower.txt")` finds `LOWER.TXT;1` |
+| R11 | **miss** | `F$PARSE("c++config.h")` returns "": RMS itself needs `^+`, not only the DCL command line |
+
+Extra: `F$PARSE("a b.txt")` (an unescaped space) gives `ab.txt;`;
+`F$PARSE("^u4e2d.TXT")` gives `^U4E2D.TXT;` (hex upper-cased, the type's case
+kept); `F$SEARCH("CAF^C9.TXT")` finds `caf<E9>.txt;1`.
+
+For the ACP (rd vms-7e7e): a 237-character name on ODS-5 is SS$_BADFILENAME
+(2072, `docs/oracle/alpha84-starlet-defs/SSDEF.txt`). On an ODS-2 volume the
+XQP upper-cases a name and refuses ODS-5-only characters (SS$_BADFILENAME) and
+extra dots (SS$_BADFILEVER, 2080). OVMX's RMS upper-cases before the ACP today,
+so that ODS-2 refusal becomes reachable only when RMS passes extended names
+through (rd vms-b9c).

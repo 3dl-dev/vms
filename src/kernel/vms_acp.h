@@ -130,10 +130,12 @@ struct vms_acp_assign_args {
  * READ is the default (FIB$V_NOWRITE semantics) when WRITE is clear. */
 #define VMS_ACP_ACCTL_WRITE   0x00000001u   /* FIB$V_WRITE: access for write */
 
-/* Longest "NAME.TYPE" (P2) an IO$_ACCESS directory search takes. A directory
- * component is searched as "NAME.DIR". Fixed so the arg struct's size (hence
- * its ioctl encoding) is stable. */
-#define VMS_ACP_NAME_SIZE     80
+/* "NAME.TYPE" (P2) buffer of an IO$_ACCESS directory search, NUL included. A
+ * directory component is searched as "NAME.DIR". 256 holds the longest ODS-5
+ * name (236 8-bit characters, public ODS-5 documentation; rd vms-7e7e widened
+ * it from ODS-2's 80). Fixed so the arg struct's size (hence its ioctl
+ * encoding) is stable. */
+#define VMS_ACP_NAME_SIZE     256
 
 /*
  * The ATR-list (P5) SUBSET IO$_ACCESS returns and IO$_DEACCESS could write
@@ -302,11 +304,11 @@ _Static_assert(VMS_IOCTL_ACP_WRITEVBLK == 0xC030566Eu,
 
 _Static_assert(sizeof(struct vms_acp_fileattr) == 88,
                "vms_acp_fileattr changed size -- IO$_ACCESS ATR ABI break");
-_Static_assert(sizeof(struct vms_acp_access_args) == 224,
+_Static_assert(sizeof(struct vms_acp_access_args) == 400,
                "vms_acp_access_args changed size -- VMS_IOCTL_ACP_ACCESS ABI break");
 _Static_assert(sizeof(struct vms_acp_deaccess_args) == 8,
                "vms_acp_deaccess_args changed size -- VMS_IOCTL_ACP_DEACCESS ABI break");
-_Static_assert(VMS_IOCTL_ACP_ACCESS == 0xC0E0566Bu,
+_Static_assert(VMS_IOCTL_ACP_ACCESS == 0xC190566Bu,
                "VMS_IOCTL_ACP_ACCESS encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ACP_DEACCESS == 0xC008566Cu,
                "VMS_IOCTL_ACP_DEACCESS encodes differently here than on the reference build");
@@ -354,12 +356,11 @@ _Static_assert(VMS_IOCTL_ACP_DEACCESS == 0xC008566Cu,
 #define VMS_ACP_CTL_SEARCH    1u    /* wildcard directory context ($SEARCH) */
 
 /*
- * Resultant-name buffer (P3/P4): "NAME.TYPE;VERSION". VMS_ACP_NAME_SIZE (80)
- * holds "NAME.TYPE"; ";" + up to a 5-digit version (ODS-2 version is a 16-bit
- * field, max 65535) + a NUL fit in 4 spare, rounded to keep the struct's
- * 4-byte tail alignment clean.
+ * Resultant-name buffer (P3/P4): "NAME.TYPE;VERSION" -- a VMS_ACP_NAME_SIZE
+ * name, ";" and up to a 5-digit version (a 16-bit field, max 65535) and a NUL,
+ * rounded to 8 bytes.
  */
-#define VMS_ACP_RESNAM_SIZE   84
+#define VMS_ACP_RESNAM_SIZE   264
 
 /*
  * IO$_ACPCONTROL wildcard directory search. Open (wcc_reset) or continue a
@@ -412,9 +413,9 @@ struct vms_acp_acpcontrol_args {
 #define VMS_IOCTL_ACP_ACPCONTROL \
     _IOWR(VMS_IOC_MAGIC, 0x6F, struct vms_acp_acpcontrol_args)
 
-_Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 200,
+_Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 556,
                "vms_acp_acpcontrol_args changed size -- VMS_IOCTL_ACP_ACPCONTROL ABI break");
-_Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
+_Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC22C566Fu,
                "VMS_IOCTL_ACP_ACPCONTROL encodes differently here than on the reference build");
 
 /*
@@ -572,9 +573,9 @@ struct vms_acp_fileop_args {
 #define VMS_IOCTL_ACP_FILEOP \
     _IOWR(VMS_IOC_MAGIC, 0x6F, struct vms_acp_fileop_args)
 
-_Static_assert(sizeof(struct vms_acp_fileop_args) == 360,
+_Static_assert(sizeof(struct vms_acp_fileop_args) == 712,
                "vms_acp_fileop_args changed size -- VMS_IOCTL_ACP_FILEOP ABI break");
-_Static_assert(VMS_IOCTL_ACP_FILEOP == 0xC168566Fu,
+_Static_assert(VMS_IOCTL_ACP_FILEOP == 0xC2C8566Fu,
                "VMS_IOCTL_ACP_FILEOP encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ACP_FILEOP != VMS_IOCTL_ACP_ACPCONTROL,
                "FILEOP and ACPCONTROL must stay DISTINCT 32-bit commands on the shared nr 0x6F");

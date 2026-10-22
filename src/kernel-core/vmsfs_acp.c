@@ -1718,6 +1718,11 @@ struct acp_search_ctx {
     char       prev_name[VMS_ACP_NAME_SIZE];   /* cursor: last returned "NAME.TYPE" */
     int        have_best;
     char       best_name[VMS_ACP_NAME_SIZE];
+    /* per-record scratch for acp_search_scan_cb: three name-sized buffers are
+     * too much for the kernel stack once a name is ODS-5-long (rd vms-7e7e) */
+    char       s_ename[VMS_ACP_NAME_SIZE];
+    char       s_nm[VMS_ACP_NAME_SIZE];
+    char       s_tp[VMS_ACP_NAME_SIZE];
     uint16_t   best_ver;
     ods2_fid_t best_fid;
 };
@@ -1892,17 +1897,16 @@ static int acp_search_scan_cb(const char *name, unsigned name_len,
                               uint16_t version, const ods2_fid_t *fid, void *ctx)
 {
     struct acp_search_ctx *c = (struct acp_search_ctx *)ctx;
-    char ename[VMS_ACP_NAME_SIZE];
-    char nm[VMS_ACP_NAME_SIZE], tp[VMS_ACP_NAME_SIZE];
+    char *ename = c->s_ename, *nm = c->s_nm, *tp = c->s_tp;
     unsigned i;
 
-    if (name_len >= sizeof(ename))
-        name_len = sizeof(ename) - 1;
+    if (name_len >= VMS_ACP_NAME_SIZE)
+        name_len = VMS_ACP_NAME_SIZE - 1;
     for (i = 0; i < name_len; i++)
         ename[i] = name[i];
     ename[name_len] = '\0';
 
-    acp_split_name(ename, nm, tp, sizeof(nm));
+    acp_split_name(ename, nm, tp, VMS_ACP_NAME_SIZE);
 
     if (!acp_glob_ci(c->name_pat, nm))
         return 0;
@@ -3997,30 +4001,30 @@ static uint32_t acp_acl_op(struct vms_proc *proc, struct vms_acp_volume *vol,
 
 #endif /* OVMX_ODS2_KERNEL */
 
-long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
+static long acp_fileop(struct vms_proc *proc, unsigned long arg,
+                       struct vms_acp_fileop_args *ap)
 {
-    struct vms_acp_fileop_args args;
     struct vms_acp_chan *ch;
     struct vms_acp_volume *vol = NULL;
 
-    memset(&args, 0, sizeof(args));
-    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+    memset(ap, 0, sizeof(*ap));
+    if (exec_copyin(ap, (const void *)arg, sizeof(*ap)))
         return -EFAULT;
-    args.name[VMS_ACP_NAME_SIZE - 1] = '\0';
+    ap->name[VMS_ACP_NAME_SIZE - 1] = '\0';
 
-    if (args.func != VMS_ACP_FOP_CREATE && args.func != VMS_ACP_FOP_DELETE &&
-        args.func != VMS_ACP_FOP_MODIFY) {
-        args.status = SS__BADPARAM;         /* unknown $QIO function code */
+    if (ap->func != VMS_ACP_FOP_CREATE && ap->func != VMS_ACP_FOP_DELETE &&
+        ap->func != VMS_ACP_FOP_MODIFY) {
+        ap->status = SS__BADPARAM;         /* unknown $QIO function code */
         goto out;
     }
 
     exec_lock(&proc->chan_lock);
-    ch = acp_chan_find_locked(proc, args.chan);
+    ch = acp_chan_find_locked(proc, ap->chan);
     if (ch)
         vol = ch->vol;
     exec_unlock(&proc->chan_lock);
     if (!ch || !vol) {
-        args.status = SS__IVCHAN;
+        ap->status = SS__IVCHAN;
         goto out;
     }
 
@@ -4048,20 +4052,20 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             char fop_resnam[32];
             acp_vol_resnam(vol, fop_resnam, sizeof(fop_resnam));
             status = vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid);   /* vms-233: EX $ENQ, per-volume sync */
-            if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
         }
 
-        if (args.func == VMS_ACP_FOP_CREATE) {
+        if (ap->func == VMS_ACP_FOP_CREATE) {
             ods2_fid_t did, new_fid, backlink;
             uint32_t did_num, new_fidnum = 0, hdr_lbn, alloc_lbn = 0;
             uint16_t new_version;
-            unsigned kind = args.kind;
+            unsigned kind = ap->kind;
             uint32_t filechar = 0;
             ods2_extent_t ext;
             unsigned n_ext = 0;
             ods2_uic_t owner;
             uint16_t fileprot = 0;
-            int is_dir = (args.attr.filechar & ODS2_FH2_M_DIRECTORY) != 0;
+            int is_dir = (ap->attr.filechar & ODS2_FH2_M_DIRECTORY) != 0;
             uint32_t alloc_count;
             ods2_fid_t prev;
             const uint8_t *inherit_from;
@@ -4075,45 +4079,53 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * BYPASS, or GRPPRV for an owner in the creator's own group. The
              * creator's own UIC is always fine. Refused before anything is
              * allocated. */
-            if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
-                uint32_t want = ((uint32_t)args.attr.uic_group << 16) |
-                                args.attr.uic_member;
+            if (ap->attr_ctl & VMS_ACP_ATTR_OWNER) {
+                uint32_t want = ((uint32_t)ap->attr.uic_group << 16) |
+                                ap->attr.uic_member;
                 uint32_t my_grp = (proc->uic >> 16) & 0xFFFFu;
                 int sys_user = my_grp <= VMS_PROT_MAXSYSGROUP ||
                                (proc->cur_privs & (VMS_PRV_M_SYSPRV | VMS_PRV_M_BYPASS));
-                int grp_ok = args.attr.uic_group == my_grp &&
+                int grp_ok = ap->attr.uic_group == my_grp &&
                              (proc->cur_privs & VMS_PRV_M_GRPPRV);
                 if (want != proc->uic && !sys_user && !grp_ok) {
-                    args.status = SS__NOPRIV;
+                    ap->status = SS__NOPRIV;
                     goto free_sc;
                 }
             }
 
+            /* An ODS-5 name is at most 236 characters; the real XQP refuses a
+             * 237-character one with SS$_BADFILENAME (lab-Alpha V8.4, rd
+             * vms-7e7e: tests/lab/captures/ods5-alpha-20261022/CONSOLE-3.txt). */
+            if (ODS2_IS_ODS5(vol->struclev) && strlen(ap->name) > ODS5_NAME_MAX) {
+                ap->status = SS__BADFILENAME;
+                goto free_sc;
+            }
+
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
-            did.fid_num = args.did_num;
-            did.fid_nmx = args.did_nmx;
+            did.fid_num = ap->did_num;
+            did.fid_nmx = ap->did_nmx;
             did_num = ods2_fid_number(&did);
             if (did_num == 0)
                 did_num = ODS2_FID_MFD;
 
             status = acp_read_header(vol, did_num, sc->dirhdr, &sc->dfh);
-            if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
             if (!(sc->dfh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
-                args.status = SS__NOSUCHFILE;   /* DID is not a directory */
+                ap->status = SS__NOSUCHFILE;   /* DID is not a directory */
                 goto free_sc;
             }
             /* Writing a directory entry is a write to the directory file. */
             status = acp_check_access(proc, vol, &sc->dfh, 1);
-            if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
 
             /* New highest version (VMS $CREATE default): highest existing + 1. */
             memset(&prev, 0, sizeof(prev));
-            if (args.version != 0) {
-                new_version = args.version;
+            if (ap->version != 0) {
+                new_version = ap->version;
             } else {
                 ods2_fid_t cur; uint16_t curver = 0;
-                uint32_t fst = acp_dir_find(vol, sc->dirhdr, sc->rw.blk, args.name,
+                uint32_t fst = acp_dir_find(vol, sc->dirhdr, sc->rw.blk, ap->name,
                                             0, &cur, &curver);
                 new_version = (fst == SS__NORMAL) ? (uint16_t)(curver + 1u) : 1u;
                 if (fst == SS__NORMAL)
@@ -4134,12 +4146,12 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
 
             /* Allocate a real FID from the index bitmap. */
             status = acp_fid_alloc(vol, sc->ibblk, &new_fidnum);
-            if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
             /* The index file must hold the new file's header. */
             status = acp_idx_extend(vol, sc, new_fidnum);
             if (status != SS__NORMAL) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
-                args.status = status;
+                ap->status = status;
                 goto free_sc;
             }
             /* The inherited ACL: the source's whole ACL (it may continue in
@@ -4157,7 +4169,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             }
             if (status != SS__NORMAL) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
-                args.status = status;
+                ap->status = status;
                 goto free_sc;
             }
 
@@ -4174,13 +4186,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * file, and acp_dir_mutate grows the directory into it before it
              * takes another block from BITMAP.SYS. Too large for the volume ->
              * acp_bitmap_alloc's SS$_DEVICEFULL. */
-            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;
+            alloc_count = is_dir ? (ap->exsz > 1u ? ap->exsz : 1u) : ap->exsz;
             if (alloc_count > 0) {
                 acp_snap_from_vol(&sc->snap, vol);
                 status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn);
                 if (status != SS__NORMAL) {
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);  /* roll back the FID */
-                    args.status = status;
+                    ap->status = status;
                     goto free_sc;
                 }
                 ext.lbn = alloc_lbn; ext.count = alloc_count; n_ext = 1;
@@ -4196,18 +4208,18 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             }
             owner.uic_group  = (uint16_t)((proc->uic >> 16) & 0xFFFFu);
             owner.uic_member = (uint16_t)(proc->uic & 0xFFFFu);
-            if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
+            if (ap->attr_ctl & VMS_ACP_ATTR_OWNER) {
                 /* (privilege to name this owner checked at the top of CREATE) */
-                owner.uic_group  = args.attr.uic_group;
-                owner.uic_member = args.attr.uic_member;
+                owner.uic_group  = ap->attr.uic_group;
+                owner.uic_member = ap->attr.uic_member;
             }
-            if (args.attr_ctl & VMS_ACP_ATTR_PROT)
-                fileprot = args.attr.fileprot;
+            if (ap->attr_ctl & VMS_ACP_ATTR_PROT)
+                fileprot = ap->attr.fileprot;
             else if (inherit_mode == ACP_INHERIT_VER)
                 fileprot = sc->tfh.fh2_fileprot;    /* the previous version's */
             else if (have_dprot)
                 fileprot = dprot;                   /* the directory's DEFAULT_PROTECTION */
-            else if (!is_dir && ods2_class_fileprot(args.name, 0, new_fidnum) == 0xAA00u)
+            else if (!is_dir && ods2_class_fileprot(ap->name, 0, new_fidnum) == 0xAA00u)
                 /* An ordinary file created with no protection of its own gets the
                  * creating process's default file protection ($SETDFPROT, else
                  * RMS_FILEPROT's default), as the VMS file system gives it. The
@@ -4222,13 +4234,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             /* At the volume's structure level: an ODS-5 volume's new files and
              * directories get level-5 headers with the case-preserved name in
              * the FI5 area, as on the real Alpha volume (rd vms-7e7e). */
-            if (ods2_fh2_build_ex(sc->filehdr, new_fidnum, 1, args.name, new_version,
+            if (ods2_fh2_build_ex(sc->filehdr, new_fidnum, 1, ap->name, new_version,
                                   filechar, kind, n_ext ? &ext : NULL, n_ext,
                                   0, backlink, owner, fileprot, vol->maxfiles,
                                   ODS2_IS_ODS5(vol->struclev) ? ODS2_STRUCLEV_V5
                                                               : ODS2_STRUCLEV_V2) != ODS2_OK) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
-                args.status = SS__BADPARAM;
+                ap->status = SS__BADPARAM;
                 goto free_sc;
             }
             /* Creation and revision dates: the system time now (vms-263e). A real
@@ -4249,19 +4261,19 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     if (n_ext > 0)
                         (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
-                    args.status = status;
+                    ap->status = status;
                     goto free_sc;
                 }
                 ods2_fh2_reseal(sc->filehdr);
             }
             /* Default version limit (FAT$W_VERSIONS, carried in attr.recattr[30..31]):
              * LIB$CREATE_DIR's max-versions and CREATE/DIRECTORY/VERSION_LIMIT. */
-            if ((args.attr_ctl & VMS_ACP_ATTR_VERSIONS) &&
-                (args.attr.recattr[30] | args.attr.recattr[31])) {
+            if ((ap->attr_ctl & VMS_ACP_ATTR_VERSIONS) &&
+                (ap->attr.recattr[30] | ap->attr.recattr[31])) {
                 uint8_t *fat = (uint8_t *)sc->filehdr + offsetof(ods2_fh2_t, fh2_recattr)
                                + offsetof(ods2_recattr_t, fat_versions);
-                fat[0] = args.attr.recattr[30];
-                fat[1] = args.attr.recattr[31];
+                fat[0] = ap->attr.recattr[30];
+                fat[1] = ap->attr.recattr[31];
                 ods2_fh2_reseal(sc->filehdr);
             }
             /* The caller's record attributes (ATR$C_RECATTR): RMS $CREATE's
@@ -4269,14 +4281,14 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * DIRECTORY/FULL and F$FILE_ATTRIBUTES read back what the creator
              * asked for instead of the kind preset. Not for a directory, whose
              * FAT is the ACP's own. */
-            if ((args.attr_ctl & VMS_ACP_ATTR_RECATTR) && !is_dir) {
-                acp_apply_recattr(sc->filehdr, args.attr.recattr);
+            if ((ap->attr_ctl & VMS_ACP_ATTR_RECATTR) && !is_dir) {
+                acp_apply_recattr(sc->filehdr, ap->attr.recattr);
                 ods2_fh2_reseal(sc->filehdr);
             }
             /* A preallocated data file is allocated-but-EMPTY: keep hiblk but set
              * EOF to the empty position so a later $PUT/WRITEVBLK extends from 0. */
             if (n_ext > 0 && !is_dir) {
-                (void)ods2_fh2_set_eof(sc->filehdr, args.exsz, 1, 0);
+                (void)ods2_fh2_set_eof(sc->filehdr, ap->exsz, 1, 0);
                 ods2_fh2_reseal(sc->filehdr);
             } else if (is_dir) {
                 /* A new directory's single block is an EMPTY ODS-2 directory:
@@ -4299,7 +4311,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                         (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                         if (n_ext > 0)
                             (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
-                        args.status = SS__DEVNOTMOUNT;
+                        ap->status = SS__DEVNOTMOUNT;
                         goto free_sc;
                     }
                 }
@@ -4317,7 +4329,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 acp_bdev_write(vol->backing_major, vol->backing_minor,
                                           hdr_lbn, sc->filehdr, ACP_BLOCK_SIZE) != 0) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
-                args.status = SS__DEVNOTMOUNT;
+                ap->status = SS__DEVNOTMOUNT;
                 goto free_sc;
             }
 
@@ -4327,9 +4339,9 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             new_fid.fid_nmx = (uint8_t)(new_fidnum >> 16);
 
             /* Enter it in the directory (IO$M_CREATE). */
-            if (args.modifiers & VMS_ACP_M_CREATE) {
+            if (ap->modifiers & VMS_ACP_M_CREATE) {
                 status = acp_dir_mutate(vol, sc, sc->dirhdr, did_num, /*insert*/1,
-                                        args.name, (unsigned)strlen(args.name),
+                                        ap->name, (unsigned)strlen(ap->name),
                                         new_version, new_fid,
                                         new_fidnum <= ODS2_RESFILES, NULL);
                 if (status != SS__NORMAL) {
@@ -4338,32 +4350,32 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                     if (n_ext > 0)
                         (void)acp_free_file_blocks(vol, sc->filehdr, sc, 1);
-                    args.status = status;   /* SS$_DUPLNAM / SS$_DEVICEFULL */
+                    ap->status = status;   /* SS$_DUPLNAM / SS$_DEVICEFULL */
                     goto free_sc;
                 }
             }
 
             /* Optionally access it (IO$M_ACCESS): build a window on the channel. */
-            if (args.modifiers & VMS_ACP_M_ACCESS) {
-                int want_write = (args.acctl & VMS_ACP_ACCTL_WRITE) != 0;
+            if (ap->modifiers & VMS_ACP_M_ACCESS) {
+                int want_write = (ap->acctl & VMS_ACP_ACCTL_WRITE) != 0;
                 /* Re-read the header we just wrote so the window reflects the
                  * possibly-EOF-patched allocation. */
                 if (acp_read_header(vol, new_fidnum, sc->filehdr, &sc->fh) == SS__NORMAL)
-                    (void)acp_access_from_header(proc, args.chan, sc->filehdr, &sc->fh,
+                    (void)acp_access_from_header(proc, ap->chan, sc->filehdr, &sc->fh,
                                                  new_fid, new_version, want_write);
             }
 
-            args.fid_num = new_fid.fid_num;
-            args.fid_seq = new_fid.fid_seq;
-            args.fid_rvn = new_fid.fid_rvn;
-            args.fid_nmx = new_fid.fid_nmx;
-            args.out_version = new_version;
+            ap->fid_num = new_fid.fid_num;
+            ap->fid_seq = new_fid.fid_seq;
+            ap->fid_rvn = new_fid.fid_rvn;
+            ap->fid_nmx = new_fid.fid_nmx;
+            ap->out_version = new_version;
             /* The new header's record attributes as written (ATR$C_RECATTR
              * out), so the creator's view of the file is the disk's. */
-            memcpy(args.attr.recattr,
+            memcpy(ap->attr.recattr,
                    sc->filehdr + offsetof(ods2_fh2_t, fh2_recattr),
-                   sizeof(args.attr.recattr));
-            args.status = SS__NORMAL;
+                   sizeof(ap->attr.recattr));
+            ap->status = SS__NORMAL;
             goto free_sc;
         }
 
@@ -4371,45 +4383,45 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
         {
             ods2_fid_t file_fid;
             uint32_t file_fidnum, did_num = 0;
-            uint16_t rver = args.version;
+            uint16_t rver = ap->version;
             int have_dir = 0;
 
-            if (args.fidmode) {
+            if (ap->fidmode) {
                 memset(&file_fid, 0, sizeof(file_fid));
-                file_fid.fid_num = args.fid_num;
-                file_fid.fid_seq = args.fid_seq;
-                file_fid.fid_rvn = args.fid_rvn;
-                file_fid.fid_nmx = args.fid_nmx;
+                file_fid.fid_num = ap->fid_num;
+                file_fid.fid_seq = ap->fid_seq;
+                file_fid.fid_rvn = ap->fid_rvn;
+                file_fid.fid_nmx = ap->fid_nmx;
                 file_fidnum = ods2_fid_number(&file_fid);
             } else {
                 ods2_fid_t did;
                 memset(&did, 0, sizeof(did));
-                did.fid_num = args.did_num;
-                did.fid_nmx = args.did_nmx;
+                did.fid_num = ap->did_num;
+                did.fid_nmx = ap->did_nmx;
                 did_num = ods2_fid_number(&did);
                 if (did_num == 0)
                     did_num = ODS2_FID_MFD;
                 status = acp_read_header(vol, did_num, sc->dirhdr, &sc->dfh);
-                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                 if (!(sc->dfh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
-                    args.status = SS__NOSUCHFILE;
+                    ap->status = SS__NOSUCHFILE;
                     goto free_sc;
                 }
                 have_dir = 1;
-                status = acp_dir_find(vol, sc->dirhdr, sc->rw.blk, args.name,
-                                      args.version, &file_fid, &rver);
-                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                status = acp_dir_find(vol, sc->dirhdr, sc->rw.blk, ap->name,
+                                      ap->version, &file_fid, &rver);
+                if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                 file_fidnum = ods2_fid_number(&file_fid);
             }
 
             status = acp_read_header(vol, file_fidnum, sc->filehdr, &sc->fh);
-            if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
             /* IO$_MODIFY of the access control list (vms-d404): its own
              * access rule (CONTROL to change it, READ to read it). */
-            if (args.func == VMS_ACP_FOP_MODIFY && args.acl_op != 0) {
-                args.status = acp_acl_op(proc, vol, sc, file_fidnum, &args);
-                args.fid_num = file_fid.fid_num;
-                args.fid_nmx = file_fid.fid_nmx;
+            if (ap->func == VMS_ACP_FOP_MODIFY && ap->acl_op != 0) {
+                ap->status = acp_acl_op(proc, vol, sc, file_fidnum, ap);
+                ap->fid_num = file_fid.fid_num;
+                ap->fid_nmx = file_fid.fid_nmx;
                 goto free_sc;
             }
             /*
@@ -4420,47 +4432,47 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * write (W) access to the parent directory"). Any other modify
              * (attributes, extend) needs write.
              */
-            if (args.func == VMS_ACP_FOP_DELETE || (args.modifiers & VMS_ACP_M_MOVE))
+            if (ap->func == VMS_ACP_FOP_DELETE || (ap->modifiers & VMS_ACP_M_MOVE))
                 status = acp_check_want(proc, vol, &sc->fh, VMS_PROT_ACC_DELETE);
             else
                 status = acp_check_access(proc, vol, &sc->fh, 1);
-            if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+            if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
 
-            if (args.func == VMS_ACP_FOP_DELETE) {
+            if (ap->func == VMS_ACP_FOP_DELETE) {
                 /* ...and write access to the directory the entry is removed from. */
                 if (have_dir) {
                     status = acp_check_access(proc, vol, &sc->dfh, 1);   /* parent: W */
-                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                 }
                 /* Remove the directory entry for this {name, version}. */
                 if (have_dir) {
                     int removed = 0;
                     status = acp_dir_mutate(vol, sc, sc->dirhdr, did_num, /*remove*/0,
-                                            args.name, (unsigned)strlen(args.name),
+                                            ap->name, (unsigned)strlen(ap->name),
                                             rver, file_fid, 0, &removed);
-                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
-                    if (!removed) { args.status = SS__NOSUCHFILE; goto free_sc; }
+                    if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
+                    if (!removed) { ap->status = SS__NOSUCHFILE; goto free_sc; }
                 }
                 /* Deallocate the file (IO$M_DELETE, or a by-FID delete). */
-                if ((args.modifiers & VMS_ACP_M_DELETE) || args.fidmode) {
+                if ((ap->modifiers & VMS_ACP_M_DELETE) || ap->fidmode) {
                     status = acp_free_file_blocks(vol, sc->filehdr, sc, 1);
-                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                     acp_ext_free_chain(vol, sc, sc->filehdr);   /* vms-a88c: ACL extension headers */
                     status = acp_fid_free(vol, file_fidnum, sc->ibblk);
-                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                     /* Invalidate the header so a later ACCESS is SS$_NOSUCHFILE. */
                     memset(sc->filehdr, 0, ACP_BLOCK_SIZE);
                     if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                                   acp_hdr_lbn(vol, file_fidnum),
                                                   sc->filehdr, ACP_BLOCK_SIZE) != 0) {
-                        args.status = SS__DEVNOTMOUNT;
+                        ap->status = SS__DEVNOTMOUNT;
                         goto free_sc;
                     }
                 }
-                args.fid_num = file_fid.fid_num;
-                args.fid_nmx = file_fid.fid_nmx;
-                args.out_version = rver;
-                args.status = SS__NORMAL;
+                ap->fid_num = file_fid.fid_num;
+                ap->fid_nmx = file_fid.fid_nmx;
+                ap->out_version = rver;
+                ap->status = SS__NORMAL;
                 goto free_sc;
             }
 
@@ -4472,7 +4484,7 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
              * rewrite the file header's ident name (+ backlink on a cross-dir
              * move). The file KEEPS its FID + allocation. This is the primitive
              * $SETUAI / AUTHORIZE-seed use for create-tmp -> rename replace. */
-            if (args.modifiers & VMS_ACP_M_MOVE) {
+            if (ap->modifiers & VMS_ACP_M_MOVE) {
                 ods2_fid_t tdid, backlink;
                 uint32_t tdid_num;
                 uint16_t new_version;
@@ -4480,18 +4492,18 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 ods2_fh2_t *tfh;
                 int cross_dir, removed = 0;
 
-                if (args.fidmode || !have_dir || args.new_name[0] == '\0') {
-                    args.status = SS__BADPARAM;   /* rename is by-name; needs a target */
+                if (ap->fidmode || !have_dir || ap->new_name[0] == '\0') {
+                    ap->status = SS__BADPARAM;   /* rename is by-name; needs a target */
                     goto free_sc;
                 }
                 /* Source directory write access (removing an entry). */
                 status = acp_check_access(proc, vol, &sc->dfh, 1);
-                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
 
                 /* Target directory (new_did 0 => the same directory). */
                 memset(&tdid, 0, sizeof(tdid));
-                tdid.fid_num = args.new_did_num;
-                tdid.fid_nmx = args.new_did_nmx;
+                tdid.fid_num = ap->new_did_num;
+                tdid.fid_nmx = ap->new_did_nmx;
                 tdid_num = ods2_fid_number(&tdid);
                 if (tdid_num == 0)
                     tdid_num = did_num;
@@ -4499,13 +4511,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
 
                 if (cross_dir) {
                     status = acp_read_header(vol, tdid_num, sc->tdirhdr, &sc->tfh);
-                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                     if (!(sc->tfh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
-                        args.status = SS__NOSUCHFILE;   /* target DID not a directory */
+                        ap->status = SS__NOSUCHFILE;   /* target DID not a directory */
                         goto free_sc;
                     }
                     status = acp_check_access(proc, vol, &sc->tfh, 1);
-                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                    if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                     tdirhdr = sc->tdirhdr;
                     tfh = &sc->tfh;
                 } else {
@@ -4514,51 +4526,51 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 }
 
                 /* New version: caller-given, else highest of new_name + 1. */
-                if (args.new_version != 0) {
-                    new_version = args.new_version;
+                if (ap->new_version != 0) {
+                    new_version = ap->new_version;
                 } else {
                     ods2_fid_t cur; uint16_t curver = 0;
                     uint32_t fst = acp_dir_find(vol, tdirhdr, sc->rw.blk,
-                                                args.new_name, 0, &cur, &curver);
+                                                ap->new_name, 0, &cur, &curver);
                     new_version = (fst == SS__NORMAL) ? (uint16_t)(curver + 1u) : 1u;
                 }
 
                 /* Insert the NEW entry, then remove the OLD (crash-safe order). */
                 status = acp_dir_mutate(vol, sc, tdirhdr, tdid_num, /*insert*/1,
-                                        args.new_name,
-                                        (unsigned)strlen(args.new_name),
+                                        ap->new_name,
+                                        (unsigned)strlen(ap->new_name),
                                         new_version, file_fid,
                                         file_fidnum <= ODS2_RESFILES, NULL);
-                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
 
                 status = acp_dir_mutate(vol, sc, sc->dirhdr, did_num, /*remove*/0,
-                                        args.name, (unsigned)strlen(args.name),
+                                        ap->name, (unsigned)strlen(ap->name),
                                         rver, file_fid, 0, &removed);
-                if (status != SS__NORMAL) { args.status = status; goto free_sc; }
-                if (!removed) { args.status = SS__NOSUCHFILE; goto free_sc; }
+                if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
+                if (!removed) { ap->status = SS__NOSUCHFILE; goto free_sc; }
 
                 /* Rewrite the file header's ident name (+ cross-dir backlink). */
                 memset(&backlink, 0, sizeof(backlink));
                 backlink.fid_num = (uint16_t)(tdid_num & 0xFFFF);
                 backlink.fid_seq = tfh->fh2_fid.fid_seq;
                 backlink.fid_nmx = (uint8_t)(tdid_num >> 16);
-                if (ods2_fh2_rename(sc->filehdr, args.new_name, new_version,
+                if (ods2_fh2_rename(sc->filehdr, ap->new_name, new_version,
                                     cross_dir ? &backlink : NULL) != ODS2_OK) {
-                    args.status = SS__BADPARAM;
+                    ap->status = SS__BADPARAM;
                     goto free_sc;
                 }
                 ods2_fh2_reseal(sc->filehdr);
                 if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                               acp_hdr_lbn(vol, file_fidnum),
                                               sc->filehdr, ACP_BLOCK_SIZE) != 0) {
-                    args.status = SS__DEVNOTMOUNT;
+                    ap->status = SS__DEVNOTMOUNT;
                     goto free_sc;
                 }
 
-                args.fid_num = file_fid.fid_num;
-                args.fid_nmx = file_fid.fid_nmx;
-                args.out_version = new_version;
-                args.status = SS__NORMAL;
+                ap->fid_num = file_fid.fid_num;
+                ap->fid_nmx = file_fid.fid_nmx;
+                ap->out_version = new_version;
+                ap->status = SS__NORMAL;
                 goto free_sc;
             }
 
@@ -4571,26 +4583,26 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                 int touched = 0;
 
                 /* EXTEND (FIB$L_EXSZ): allocate + append a retrieval pointer. */
-                if (args.exsz > 0) {
+                if (ap->exsz > 0) {
                     uint32_t run_lbn = 0;
                     acp_snap_from_vol(&sc->snap, vol);
-                    status = acp_bitmap_alloc(&sc->snap, &sc->rw, args.exsz, &run_lbn);
-                    if (status != SS__NORMAL) { args.status = status; goto free_sc; }
-                    if (ods2_fh2_map_append(sc->filehdr, run_lbn, args.exsz) != ODS2_OK) {
-                        args.status = SS__DEVICEFULL;   /* FH2 map area full */
+                    status = acp_bitmap_alloc(&sc->snap, &sc->rw, ap->exsz, &run_lbn);
+                    if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
+                    if (ods2_fh2_map_append(sc->filehdr, run_lbn, ap->exsz) != ODS2_OK) {
+                        ap->status = SS__DEVICEFULL;   /* FH2 map area full */
                         goto free_sc;
                     }
-                    new_hiblk = old_hiblk + args.exsz;
+                    new_hiblk = old_hiblk + ap->exsz;
                     touched = 1;
                 }
 
                 /* TRUNCATE (to trunc_efblk): free the blocks past it, shrink. */
-                if (args.trunc_efblk > 0 && args.trunc_efblk <= new_hiblk) {
+                if (ap->trunc_efblk > 0 && ap->trunc_efblk <= new_hiblk) {
                     /* Free allocation strictly past the new EOF block. */
-                    if (args.trunc_efblk < new_hiblk) {
+                    if (ap->trunc_efblk < new_hiblk) {
                         status = acp_free_file_blocks(vol, sc->filehdr, sc,
-                                                      args.trunc_efblk + 1u);
-                        if (status != SS__NORMAL) { args.status = status; goto free_sc; }
+                                                      ap->trunc_efblk + 1u);
+                        if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                         /* Rewrite the map to cover only [1, trunc_efblk]. */
                         {
                             struct acp_win_ext fex[ACP_WINDOW_MAX];
@@ -4598,13 +4610,13 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                             unsigned mpoff = sc->filehdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
                             uint8_t *mp = sc->filehdr + (size_t)mpoff * 2u;
                             size_t mapcap = ods2_fh2_map_end(sc->filehdr) - (size_t)mpoff * 2u;   /* stop below the ACL */
-                            uint32_t want = args.trunc_efblk, e;
+                            uint32_t want = ap->trunc_efblk, e;
 
                             wb.win = fex; wb.max = ACP_WINDOW_MAX; wb.n = 0;
                             wb.next_vbn = 1; wb.overflow = 0;
                             if (ods2_fh2_map_walk(sc->filehdr, acp_winbuild_cb, &wb, NULL)
                                     != ODS2_OK) {
-                                args.status = SS__DEVNOTMOUNT; goto free_sc;
+                                ap->status = SS__DEVNOTMOUNT; goto free_sc;
                             }
                             memset(mp, 0, mapcap);
                             sc->filehdr[offsetof(ods2_fh2_t, fh2_map_inuse)] = 0;
@@ -4612,33 +4624,33 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                                 uint32_t take = fex[e].count < want ? fex[e].count : want;
                                 if (ods2_fh2_map_append(sc->filehdr, fex[e].lbn, take)
                                         != ODS2_OK) {
-                                    args.status = SS__DEVICEFULL; goto free_sc;
+                                    ap->status = SS__DEVICEFULL; goto free_sc;
                                 }
                                 want -= take;
                             }
                         }
                     }
-                    new_hiblk = args.trunc_efblk;
-                    new_efblk = args.trunc_efblk;
-                    new_ffbyte = args.trunc_ffbyte;
+                    new_hiblk = ap->trunc_efblk;
+                    new_efblk = ap->trunc_efblk;
+                    new_ffbyte = ap->trunc_ffbyte;
                     touched = 1;
                 }
 
                 /* WRITE ATTRIBUTES (record attributes, ATR$C_RECATTR): RMS
                  * $CLOSE records the longest record written (FAT$W_RSIZE). */
-                if ((args.attr_ctl & VMS_ACP_ATTR_RECATTR) &&
+                if ((ap->attr_ctl & VMS_ACP_ATTR_RECATTR) &&
                     !(sc->fh.fh2_filechar & ODS2_FH2_M_DIRECTORY)) {
-                    acp_apply_recattr(sc->filehdr, args.attr.recattr);
+                    acp_apply_recattr(sc->filehdr, ap->attr.recattr);
                     touched = 1;
                 }
 
                 /* WRITE ATTRIBUTES (protection / owner). */
-                if (args.attr_ctl & VMS_ACP_ATTR_PROT) {
+                if (ap->attr_ctl & VMS_ACP_ATTR_PROT) {
                     acp_put16(sc->filehdr + offsetof(ods2_fh2_t, fh2_fileprot),
-                             args.attr.fileprot);
+                             ap->attr.fileprot);
                     touched = 1;
                 }
-                if (args.attr_ctl & VMS_ACP_ATTR_OWNER) {
+                if (ap->attr_ctl & VMS_ACP_ATTR_OWNER) {
                     /*
                      * FIX D (vms-af26, boot-speed): skip the header write-back
                      * when the on-disk owner ALREADY equals the requested UIC.
@@ -4655,12 +4667,12 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                      * unchanged -- the resulting on-disk owner is identical
                      * either way; only the redundant write is elided.
                      */
-                    if (sc->fh.fh2_fileowner.uic_group  != args.attr.uic_group ||
-                        sc->fh.fh2_fileowner.uic_member != args.attr.uic_member) {
+                    if (sc->fh.fh2_fileowner.uic_group  != ap->attr.uic_group ||
+                        sc->fh.fh2_fileowner.uic_member != ap->attr.uic_member) {
                         acp_put16(sc->filehdr + offsetof(ods2_fh2_t, fh2_fileowner) + 0,
-                                 args.attr.uic_member);
+                                 ap->attr.uic_member);
                         acp_put16(sc->filehdr + offsetof(ods2_fh2_t, fh2_fileowner) + 2,
-                                 args.attr.uic_group);
+                                 ap->attr.uic_group);
                         touched = 1;
                     }
                 }
@@ -4671,18 +4683,18 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
                     if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                                   acp_hdr_lbn(vol, file_fidnum),
                                                   sc->filehdr, ACP_BLOCK_SIZE) != 0) {
-                        args.status = SS__DEVNOTMOUNT;
+                        ap->status = SS__DEVNOTMOUNT;
                         goto free_sc;
                     }
                 }
 
-                args.fid_num = file_fid.fid_num;
-                args.fid_nmx = file_fid.fid_nmx;
-                args.out_version = rver;
-                args.new_hiblk = new_hiblk;
-                args.new_efblk = new_efblk;
-                args.new_ffbyte = new_ffbyte;
-                args.status = SS__NORMAL;
+                ap->fid_num = file_fid.fid_num;
+                ap->fid_nmx = file_fid.fid_nmx;
+                ap->out_version = rver;
+                ap->new_hiblk = new_hiblk;
+                ap->new_efblk = new_efblk;
+                ap->new_ffbyte = new_ffbyte;
+                ap->status = SS__NORMAL;
                 goto free_sc;
             }
         }
@@ -4694,17 +4706,35 @@ free_sc:
         exec_free(sc);
     }
 #else
-    args.status = SS__DEVNOTMOUNT;           /* no codec: nothing mountable here */
+    ap->status = SS__DEVNOTMOUNT;           /* no codec: nothing mountable here */
 #endif /* OVMX_ODS2_KERNEL */
 
     /* creating or deleting a file is one buffered I/O of the caller's, as
      * the XQP call is on VMS (rd vms-ae8) */
-    if (args.status & 1)
+    if (ap->status & 1)
         VMS_IO_COUNT(&proc->io_buffered, 1u);
 out:
-    if (exec_copyout((void *)arg, &args, sizeof(args)))
+    if (exec_copyout((void *)arg, ap, sizeof(*ap)))
         return -EFAULT;
     return 0;
+}
+
+
+/*
+ * IO$_CREATE / IO$_DELETE / IO$_MODIFY entry. The argument block is on the heap:
+ * with ODS-5-long names (two VMS_ACP_NAME_SIZE fields, rd vms-7e7e) it is too
+ * big for the kernel stack frame alongside the handler's own locals.
+ */
+long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_acp_fileop_args *ap = exec_zalloc(sizeof(*ap));
+    long rc;
+
+    if (!ap)
+        return -ENOMEM;
+    rc = acp_fileop(proc, arg, ap);
+    exec_free(ap);
+    return rc;
 }
 
 /* ================================================================

@@ -30,9 +30,11 @@
  *     upper case world: its search lists the same names as before;
  *   - a name absent from the ODS-5 directory is SS$_NOSUCHFILE.
  *
+ *   7. A 236-character name (the ODS-5 maximum) is created, found and deleted
+ *      through the widened name ABI; 237 characters are refused.
+ *
  * NOT HERE (tracked): UCS-2 names (^U4E2D.txt) cannot cross the ACP's 8-bit
- * name ABI yet (rd vms-f1a2); names over 79 bytes need the wider ABI (rd
- * vms-7e7e, next piece).
+ * name ABI yet (rd vms-f1a2).
  *
  * NO /dev/vms -> SKIP (77): the ACP is executive-resident.
  */
@@ -360,6 +362,32 @@ int main(void)
     check($VMS_STATUS_SUCCESS(st), "IO$_DELETE libstdc++.a;2");
     n = search_all(chan, TEST_DIR_FID, "*.*;*", res, 32);
     check(n == 9, "after the deletes [TEST] lists its nine original 8-bit names again");
+
+    /* ---- 7. ODS-5-long names through the widened name ABI ---- */
+    {
+        char longn[VMS_ACP_NAME_SIZE], toolong[VMS_ACP_NAME_SIZE];
+        memset(longn, 'g', 232);
+        memcpy(longn + 232, ".hpp", 5);              /* 236 characters: the ODS-5 maximum */
+        st = fileop(chan, VMS_ACP_FOP_CREATE, VMS_ACP_M_CREATE, longn, 0, &f);
+        fid = fidof(f.fid_num, f.fid_nmx);
+        check($VMS_STATUS_SUCCESS(st) && f.out_version == 1,
+              "IO$_CREATE of a 236-character name (the ODS-5 maximum)");
+        check(find_fid(chan, longn, NULL) == fid && fid != 0, "the 236-character name resolves by name");
+        {
+            uint32_t lbn = raw_hdr_lbn(fid);
+            check(lbn && raw_read(lbn, hdr) == 0 && hdr[81] == 238 &&
+                  memcmp(hdr + 80 + 76, longn, 236) == 0 && hdr[1] == 40 + (76 + 238) / 2,
+                  "on the platter: the whole name in the FI5 area, map moved past it");
+        }
+        st = fileop(chan, VMS_ACP_FOP_DELETE, VMS_ACP_M_DELETE, longn, 1, &f);
+        check($VMS_STATUS_SUCCESS(st), "IO$_DELETE of the 236-character name");
+        memset(toolong, 'g', 233);
+        memcpy(toolong + 233, ".hpp", 5);            /* 237: one past the maximum */
+        st = fileop(chan, VMS_ACP_FOP_CREATE, VMS_ACP_M_CREATE, toolong, 0, &f);
+        check(st == 2072u /* SS$_BADFILENAME, docs/oracle/alpha84-starlet-defs/SSDEF.txt */,
+              "IO$_CREATE of a 237-character name is SS$_BADFILENAME, as on the real Alpha (CONSOLE-3.txt)");
+        check(find_fid(chan, toolong, NULL) == 0, "and nothing was entered for it");
+    }
 
     /* ---- negative control: the ODS-2 system volume is still ODS-2 ---- */
     {

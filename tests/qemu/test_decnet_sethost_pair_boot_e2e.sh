@@ -205,7 +205,7 @@ if [ "$ra" -eq 0 ] && [ "$rb" -eq 0 ]; then
 
     # (c) %REM-S-END on a line of its own: the byte before it is a line feed.
     before=$(tail -c "+$((o4 + 1))" "$LA" | od -An -v -tx1 | tr -d ' \n' \
-             | grep -o '..2552454d2d532d454e442c' | head -1 | cut -c1-2)
+             | grep -a -o '..2552454d2d532d454e442c' | head -1 | cut -c1-2)
     if [ "$before" = "0a" ]; then rc=0; else rc=1; fi
     record "%REM-S-END starts its own line (preceded by LF, not run onto 'logged out at' by a bare CR; byte before = ${before:-none})" "$rc"
     if tail -c "+$((o4 + 1))" "$LA" | tr -d '\r\000' | grep >/dev/null -E '^%REM-S-END, control returned to node OVMXA::$'; then rc=0; else rc=1; fi

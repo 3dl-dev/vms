@@ -106,6 +106,6 @@ wait $TCPD 2>/dev/null || true
 X2=$(kx grep -ac XITDONE $L/scsd-o33-J.log 2>/dev/null | tr -d '\r')
 ADM2=$(kx grep -aoE 'admitted=[0-9]+|SCSD-I-CMOP04|CM-OP04-BARRIER-SEEN|OBS-0-CM-RESP|READMITMAP-SUMMARY.*' $L/scsd-o33-J.log 2>/dev/null | tr -d '\r' | tr '\n' '|')
 log "J done: XITDONE_count=$X2  verdict=[$ADM2]"
-log "wire identities: $(strings -a "$HOSTL/o33.pcap" 2>/dev/null | grep -oE 'OVX[A-Z0-9]{3}' | sort -u | tr '\n' ' ')"
+log "wire identities: $(strings -a "$HOSTL/o33.pcap" 2>/dev/null | grep -a -oE 'OVX[A-Z0-9]{3}' | sort -u | tr '\n' ' ')"
 echo "===o33-DONE===" >> "$S"
 log "wrote $S $C1 $C2 ; pcap=$HOSTL/o33.pcap ; daemon logs scsd-o33-F1/J.log"

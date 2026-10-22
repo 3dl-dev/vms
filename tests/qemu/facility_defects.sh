@@ -906,7 +906,7 @@ cmd_coverage() {
     : >"$_anch_tmp/fail"; : >"$_anch_tmp/named"; : >"$_anch_tmp/suites"
     _defs_sp=$(echo $DEFECTS)
 
-    _anch_raw=$( (cd "$_cov_tests" && grep -Hno \
+    _anch_raw=$( (cd "$_cov_tests" && grep -a -Hno \
         '/\* negctl\(-knockon\)\{0,1\}: [a-z0-9][a-z0-9-]* \*/' \
         test_kmod_*.c test_syssvc_*.c test_imgact_*.c) 2>/dev/null )
 

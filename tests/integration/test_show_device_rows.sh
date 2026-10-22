@@ -349,7 +349,7 @@ check_lists_disk() {
     label="$1"; cmdline="$2"
     run_show "$cmdline"
     if grep -q '^VDA[0-9]*: ' "$WORK/out"; then
-        first=$(grep -m1 '^VDA[0-9]*: ' "$WORK/out")
+        first=$(grep -a -m1 '^VDA[0-9]*: ' "$WORK/out")
         if printf '%s' "$first" | grep -q 'Online'; then
             echo "  OK: $label listed an executive disk unit ($(printf '%s' "$first" | awk '{print $1}')) as a real row"
         else

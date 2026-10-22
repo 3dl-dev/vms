@@ -134,7 +134,7 @@ kx grep -ao 'SCSD-T-CMIN, cat 0x[0-9a-f]* op 0x[0-9a-f]*' "$L/scsd-$TAG.log" 2>/
 # Guardrail 18: prove WHICH identity reached the wire. Read the capture from the
 # shared volume on the host -- the in-pod version of this needs another level of
 # shell quoting and silently returned empty.
-log "identity on the wire: $(strings -a "$HOSTL/d94-$TAG.pcap" 2>/dev/null | grep -oE 'OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
+log "identity on the wire: $(strings -a "$HOSTL/d94-$TAG.pcap" 2>/dev/null | grep -a -oE 'OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
 
 # ⚠ PULL THE PRIOR-ADMISSION SIDECAR BACK TO THE HOST STORE. OVMX writes it
 # beside the store INSIDE the pod, and the store is re-copied per run -- so

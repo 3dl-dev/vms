@@ -274,7 +274,7 @@ done
 # THIS run's own transcript, using the same token-extraction shape, so a
 # regression here is caught by this test too, not only by the sibling.
 BOOT_TOKENS=$(printf '%s\n' "$FID_FULL" | \
-    grep -oE '%[A-Z][A-Z0-9_]*-[A-Z]-[A-Z0-9_]+|OpenVMX V[0-9]|Username:' | \
+    grep -a -oE '%[A-Z][A-Z0-9_]*-[A-Z]-[A-Z0-9_]+|OpenVMX V[0-9]|Username:' | \
     sed -E 's/^OpenVMX V[0-9]$/__BANNER__/; s/^Username:$/__USERNAME__/' | \
     sed -n '1,/^__USERNAME__$/p')
 # rd vms-158d: OVMX's boot narration is OPERATOR.LOG's now, and a successful

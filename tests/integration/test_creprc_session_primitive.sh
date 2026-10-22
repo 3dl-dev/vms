@@ -134,7 +134,7 @@ fi
 # Two halves: (a) a LOGINOUT session is NOT excluded from the creator-made PCB
 # (use_ticket covers it), and (b) the created task's PCB request precedes the
 # exec of the image.
-TICKET_DEF=$(grep -n 'const int use_ticket *=' "$CREPRC_C" | head -1)
+TICKET_DEF=$(grep -a -n 'const int use_ticket *=' "$CREPRC_C" | head -1)
 if [ -z "$TICKET_DEF" ]; then
     echo "FAIL: WALL-6: no use_ticket definition in $CREPRC_C -- cannot tell whether a LOGINOUT session gets a creator-made PCB"
     status=1
@@ -147,9 +147,9 @@ elif printf '%s\n' "$TICKET_DEF" | grep -q 'loginout'; then
 else
     echo "PASS: WALL-6: a PRC\$M_LOGINOUT session gets its PCB from its creator ($TICKET_DEF)"
 fi
-REQ_LINE=$(grep -n 'creprc_write_all(pcbreq\[1\]' "$CREPRC_C" \
+REQ_LINE=$(grep -a -n 'creprc_write_all(pcbreq\[1\]' "$CREPRC_C" \
     | grep -vE '^[0-9]+:[[:space:]]*\*' | head -1 | cut -d: -f1)
-EXEC_LINE=$(grep -n 'execl(img_path' "$CREPRC_C" \
+EXEC_LINE=$(grep -a -n 'execl(img_path' "$CREPRC_C" \
     | grep -vE '^[0-9]+:[[:space:]]*\*' | head -1 | cut -d: -f1)
 if [ -n "$REQ_LINE" ] && [ -n "$EXEC_LINE" ] && [ "$REQ_LINE" -lt "$EXEC_LINE" ]; then
     echo "PASS: WALL-6 ordering holds -- the PCB request at line $REQ_LINE precedes the image activation at line $EXEC_LINE (vms-d4ef; the VAX rail is the runtime proof)"

@@ -94,8 +94,8 @@ FAIL=0
 # was LOADED, and that an independent session reads the same set back.
 sysgen_count_text() {
     local n
-    n=$(grep -oE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' | tail -1 \
-        | grep -oE '[0-9]+' | tail -1)
+    n=$(grep -a -oE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' | tail -1 \
+        | grep -a -oE '[0-9]+' | tail -1)
     [ -n "$n" ] || return 1
     printf '%s\n' "$n"
 }

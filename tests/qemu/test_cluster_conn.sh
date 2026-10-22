@@ -326,9 +326,9 @@ for k in A B; do
         # allocator refuses to do until the glue seeds it from the port's real
         # incarnation (SCS_ERR_NOCONID). A seed of 0 is itself a legal value,
         # so asserting conid_epoch != 0 would be a coin flip, not a check.
-        echo "    (conid_epoch as the allocator holds it: $(grep '^conid_epoch=' "$out" | head -1))"
+        echo "    (conid_epoch as the allocator holds it: $(grep -a '^conid_epoch=' "$out" | head -1))"
     else
-        bad "node $k: CLUSTER_DIAG_CONN row SCS says SCS is not up (status=$(grep '^status=' "$out" | head -1))"
+        bad "node $k: CLUSTER_DIAG_CONN row SCS says SCS is not up (status=$(grep -a '^status=' "$out" | head -1))"
     fi
 
     walk="/tmp/cluster-conn-cdt-${k}.txt"

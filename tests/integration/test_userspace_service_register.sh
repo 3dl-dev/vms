@@ -699,7 +699,7 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
     # declared it. See register_buildset.awk for where this list is consumed.
     INSTALLED_TARGETS="$WORK/installed_targets"
     _cmakelists_z \
-        | xargs -0 grep -hoE 'install\([[:space:]]*TARGETS[[:space:]]+[^)]*\)' 2>/dev/null \
+        | xargs -0 grep -a -hoE 'install\([[:space:]]*TARGETS[[:space:]]+[^)]*\)' 2>/dev/null \
         | sed -E 's/^install\([[:space:]]*TARGETS[[:space:]]*//' \
         | sed -E 's/[[:space:]]+(RUNTIME|LIBRARY|ARCHIVE|OBJECTS|FRAMEWORK|BUNDLE|PUBLIC_HEADER|PRIVATE_HEADER|RESOURCE|FILE_SET|EXPORT).*$//' \
         | sed -E 's/\)[[:space:]]*$//' \
@@ -767,7 +767,7 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
     : > "$OFF_OPTS"
     if [ -f "$WORK/cmk/CMakeCache.txt" ]; then
         DECLARED_OPTS=$(_cmakelists_z \
-            | xargs -0 grep -hoE '^[[:space:]]*option\([[:space:]]*[A-Za-z0-9_]+' 2>/dev/null \
+            | xargs -0 grep -a -hoE '^[[:space:]]*option\([[:space:]]*[A-Za-z0-9_]+' 2>/dev/null \
             | sed -E 's/^[[:space:]]*option\([[:space:]]*//' | sort -u)
         for _opt in $DECLARED_OPTS; do
             grep -qE "^${_opt}:BOOL=OFF\$" "$WORK/cmk/CMakeCache.txt" && printf '%s\n' "$_opt" >> "$OFF_OPTS"
@@ -1119,7 +1119,7 @@ while IFS= read -r rawline; do
     [ -n "$rawline" ] || continue
     dfile=${rawline%%:*}
     good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-USERSPACE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | grep -a -oE 'OVMX-USERSPACE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*[^[:space:]]' \
         | head -1)
     if [ -n "$good" ]; then
         dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-USERSPACE:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
@@ -1128,7 +1128,7 @@ while IFS= read -r rawline; do
         continue
     fi
     good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-PARTIAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*exec:[[:space:]]*[^[:space:]]' \
+        | grep -a -oE 'OVMX-PARTIAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*exec:[[:space:]]*[^[:space:]]' \
         | head -1)
     if [ -n "$good" ]; then
         dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-PARTIAL:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
@@ -1137,7 +1137,7 @@ while IFS= read -r rawline; do
         continue
     fi
     good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-LOCAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | grep -a -oE 'OVMX-LOCAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
         | head -1)
     if [ -n "$good" ]; then
         dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-LOCAL:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
@@ -1145,7 +1145,7 @@ while IFS= read -r rawline; do
         continue
     fi
     good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-EXECUTIVE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*proof=[^[:space:]]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | grep -a -oE 'OVMX-EXECUTIVE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*proof=[^[:space:]]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
         | head -1)
     if [ -n "$good" ]; then
         dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-EXECUTIVE:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')

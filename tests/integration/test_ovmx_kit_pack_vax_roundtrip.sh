@@ -115,7 +115,7 @@ MANIFEST="$WORK/manifest.txt"
 "$PACK" list "$KIT" > "$MANIFEST" || fail "list exited non-zero"
 
 grep -q "^Product:.*OVMX VAXVMS VMS" "$MANIFEST" \
-    || fail "manifest product identity is not 'OVMX VAXVMS VMS' (got: $(grep '^Product:' "$MANIFEST"))"
+    || fail "manifest product identity is not 'OVMX VAXVMS VMS' (got: $(grep -a '^Product:' "$MANIFEST"))"
 echo "PASS: manifest product identity is OVMX VAXVMS VMS"
 
 for name in $BOOT_IMAGES $UTIL_IMAGES $DATA_FILES STARTUP.COM SYSTARTUP_VMS.COM; do

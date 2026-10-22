@@ -636,8 +636,19 @@ check_console_vms_faithful "node B" "$B_LOG2"
 # The log holds every boot's records (each boot's kernel spool included), so
 # TYPE takes a while on a serial console: wait for the records, bounded, not a
 # fixed sleep.
-printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&4 2>/dev/null
-waitfor "%OVMX-I-SCSNODE, node name $NODE_A set from" 90 "$A_LOG2" "$AP" || true
+# rd vms-acf3: until the RMS file lock names the volume (rd vms-326), node B
+# appending its OWN OPERATOR.LOG can hold the lock node A's file shares by FID,
+# and TYPE then reports it honestly (%TYPE-W-OPENIN / -RMS-?-FLK). Like an
+# operator, type it again -- a bounded number of times; the assertions below
+# are unchanged.
+for try in 1 2 3 4 5; do
+    toff=$(wc -c <"$A_LOG2")
+    printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&4 2>/dev/null
+    waitfor "%OVMX-I-SCSNODE, node name $NODE_A set from" 30 "$A_LOG2" "$AP" && break
+    tail -c "+$((toff + 1))" "$A_LOG2" | grep >/dev/null -aF 'OPENIN' || break
+    echo "  (node A: TYPE OPERATOR.LOG met a lock held by the peer's log write; again, try $try)"
+    sleep 3
+done
 waitfor "%CNXMAN, proposing addition of a system to the cluster" 30 "$A_LOG2" "$AP" || true
 sleep 2
 check "node A boot2: OPERATOR.LOG records the node name $NODE_A set from the .PAR" \

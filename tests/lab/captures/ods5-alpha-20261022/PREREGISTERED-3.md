@@ -23,3 +23,11 @@ ODS-2 volume (LDA2:), under PARSE_STYLE=EXTENDED and =TRADITIONAL.
 | R9 | On the ODS-2 volume, EXTENDED `F$PARSE("LDA2:[000000]c^+^+config.h")` still returns an expanded string (syntax is volume-independent), but creating the file fails with an RMS name error (`%RMS-F-FNM` or `-SYN`). |
 | R10 | On the ODS-2 volume a lower-case name created under EXTENDED is stored upper case (`COPY NL: lower.txt` lists `LOWER.TXT;1`). |
 | R11 | `F$PARSE("c++config.h")` (an unescaped `+` inside a quoted string) under EXTENDED is accepted as the name `c++config.h` -- RMS needs no escape for `+`, only DCL's command line does. |
+
+## Session 4 (written after session 3, before session 4): which characters need `^`
+
+| # | prediction |
+|---|---|
+| C1 | Under EXTENDED, every printable ASCII character other than letters, digits, `$`, `-` and `_` makes an UNESCAPED name fail F$PARSE, and is accepted after `^`, the expanded string keeping `^c`. |
+| C2 | `^20` (space) expands to `^_`; `^5F` expands to `_`; `^E9` expands to the raw byte E9. |
+| C3 | A type takes the same characters as a name: `F$PARSE("ab.t^+u")` = `...ab.t^+u;`. |

@@ -166,3 +166,28 @@ XQP upper-cases a name and refuses ODS-5-only characters (SS$_BADFILENAME) and
 extra dots (SS$_BADFILEVER, 2080). OVMX's RMS upper-cases before the ACP today,
 so that ODS-2 refusal becomes reachable only when RMS passes extended names
 through (rd vms-b9c).
+
+## Session 4: which characters need `^` (pod `ods5alpha-4`)
+
+Predictions C1-C3 at the end of `PREREGISTERED-3.md`, console in
+`CONSOLE-4.txt`. Each probe is `F$PARSE("a<c>b.t")` and `F$PARSE("a^<c>b.t")`
+under PARSE_STYLE=EXTENDED, default device `SYS$SYSROOT:[SYSMGR]`.
+
+| character | unescaped | escaped `^c` |
+|---|---|---|
+| space | `ab.t` (the space is dropped) | `a^_b.t` |
+| `! # & ' ( ) + , / : ; < = > @ [ \ ] ^ `` ` `` { | } "` | fails ("") | kept as `^c` |
+| `$` `-` | kept | `^` dropped: `a$b.t`, `a-b.t` |
+| `~` | kept | `^` dropped: `a~b.t` |
+| `_` | kept | `^_` is a SPACE: `a^_b.t` |
+| `%` | kept (a wildcard) | kept as `^%` (a literal) |
+| `*` | kept (a wildcard) | fails |
+| `?` | becomes `%` | fails |
+
+Hex escapes: `^20` -> `^_`, `^5F` -> `_`, `^2B` -> `^+`, `^41` -> `A`, `^61` ->
+`a`, `^E9` -> the raw byte E9. A type takes escapes too: `ab.t^+u` parses,
+`ab.t+u` fails. Under TRADITIONAL the same table holds with the result upper-cased
+(`A^+B.T`, `A~B.T`, `A^#B.T`, `A^&B.T`; `a+b.t` still fails).
+
+Verdicts: C1 **partly missed** (`~` needs no escape; `^` before `$ - ~` is
+dropped; `^_` is a space, not an underscore; `^*` and `^?` fail); C2 hit; C3 hit.

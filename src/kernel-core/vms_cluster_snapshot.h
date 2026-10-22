@@ -480,6 +480,34 @@ struct vms_dlm_scs_view {
 	uint32_t grant_advances_in;
 	uint32_t grant_advances_stale;
 	/*
+	 * ...AND WHICH DOOR THE OWED GRANT WAS REFUSED AT (fire q85f1,
+	 * 2026-10-22). `deferred_grants_owed` above is the SUM of three
+	 * different facts, and a lab fire read it as `owed=1` beside a real VAX
+	 * that was still waiting -- with no way to say WHICH:
+	 *
+	 *   `pending_keep_refused`  the requester's frame was never retained at
+	 *                           all (so there was nothing to echo later),
+	 *   `pending_overflow`      ...and how often that was the table being
+	 *                           FULL rather than the request being
+	 *                           unkeyable: the table's own counter, read
+	 *                           out, because 16 slots that nothing ever
+	 *                           drains is a different defect from a bad key,
+	 *   `deferred_grants_no_body` the flip happened and the frame was not
+	 *                           there to take back,
+	 *   `deferred_grants_send_failed` the frame was built and the one way
+	 *                           out refused it (RULE C, no CSB, no
+	 *                           sequence).
+	 *
+	 * Each is also said once on the console, but a console line is a weaker
+	 * instrument than the row: the executive's in-kernel lines are muted at
+	 * the console level this build boots with (ovmx_console_policy.h), so
+	 * the ROW is what a fire reads.
+	 */
+	uint32_t pending_keep_refused;
+	uint32_t pending_overflow;
+	uint32_t deferred_grants_no_body;
+	uint32_t deferred_grants_send_failed;
+	/*
 	 * THE ARM'S HONEST DECLINE. A cat-0x02 body this arm could not read as
 	 * any shape it serves -- including an op-0x03 whose lock ids the codec
 	 * refuses. It is NO LONGER where a peer's $DEQ lands: since rd vms-c72
@@ -563,7 +591,7 @@ struct vms_dlm_scs_view {
  * whose size is PINNED, so a field added here fails to build until both
  * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
  * and this number are updated together. */
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 200,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 216,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

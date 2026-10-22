@@ -324,6 +324,22 @@ struct vms_dlm_scs {
 	uint32_t deferred_grants_sent;    /* originated when a queue advanced */
 	uint32_t deferred_grants_no_body; /* owed, but its frame was not held */
 	uint32_t send_failures;           /* the one way out refused it       */
+	/*
+	 * AND WHICH OF THOSE TWO IT WAS, SAID ONCE (fire q85f1, 2026-10-22).
+	 *
+	 * `deferred_grants_owed` in the diagnostic row is the SUM of the two
+	 * above plus the work-queue refusal, so the lab read `owed=1` off a
+	 * real VAX that was still waiting and could not say WHICH door
+	 * refused: the retained frame missing, or the one way out saying no.
+	 * Each now names itself on the console the FIRST time it happens --
+	 * the same once-per-condition discipline the echo guard's own line
+	 * follows, and every value in it is a read of this arm's own state.
+	 */
+	uint32_t pending_keep_refused;    /* a queued request whose frame     */
+					   /* could not be retained at all     */
+	uint8_t  no_body_said;
+	uint8_t  send_fail_said;
+	uint8_t  keep_refused_said;
 };
 
 /* ==========================================================================
@@ -1552,6 +1568,43 @@ static int dlm_arm_reply_queued(struct vms_dlm_scs *d,
 	return 0;
 }
 
+/*
+ * RETAIN THE REQUESTER'S OWN FRAME, AND SAY SO IF IT CANNOT BE (fire q85f1).
+ *
+ * The key is the pair the GRANT path will look it up by -- the requesting
+ * system as the connection manager named it, and THAT SYSTEM'S OWN handle as
+ * the engine recorded it on the LKB it just queued (`res.req_lkid`; the wire
+ * value only when the engine reported none, which is the one case where the
+ * two derivations could differ). Nothing here is composed: both halves are
+ * reads.
+ *
+ * It used to be a `(void)` call. A retention that silently did not happen is
+ * a grant that silently never leaves: the lab read `owed=1` with a real VAX
+ * still waiting and could not tell this door from the other two.
+ */
+static void dlm_arm_keep_request(struct vms_dlm_scs *d,
+				 const struct dlm_scs_request *in,
+				 const struct vms_dlm_enq_request *e,
+				 const struct vms_dlm_master_result *res)
+{
+	uint32_t key = res->req_lkid != 0u ? res->req_lkid : e->req_lkid;
+
+	if (vms_dlm_pending_keep(&d->pending, (uint32_t)in->from_csid, key,
+				 in->body, in->len) == 1)
+		return;
+	d->pending_keep_refused++;
+	if (d->keep_refused_said)
+		return;
+	d->keep_refused_said = 1u;
+	exec_console_printf(
+		"%%DLM, this node queued a lock request from system 0x%x and "
+		"could not retain its frame (its handle 0x%x, body %u bytes; "
+		"retained kept=%u overflow=%u). The queue is real; the grant "
+		"will be the requester's next ask.\n",
+		(unsigned)in->from_csid, (unsigned)key, (unsigned)in->len,
+		(unsigned)d->pending.kept, (unsigned)d->pending.overflow);
+}
+
 /* One inbound ENQ/CONVERT, served as the tree's master. */
 static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 			     const struct dlm_scs_request *in,
@@ -1587,10 +1640,7 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 		 * the grant it would get by asking again, rather than one this
 		 * executive composed from fields.
 		 */
-		(void)vms_dlm_pending_keep(&d->pending, (uint32_t)in->from_csid,
-					   res.req_lkid != 0u ? res.req_lkid
-							      : e->req_lkid,
-					   in->body, in->len);
+		dlm_arm_keep_request(d, in, e, &res);
 		dlm_arm_send_blkast(d, &res);
 		return dlm_arm_reply_queued(d, in, &res, wireop, reply);
 	case VMS_DLM_MASTER_REDIRECT:
@@ -1755,6 +1805,42 @@ static void dlm_arm_fill_deq_req(const struct dlm_scs_request *in,
  * database and the requester's next ask is answered from it. A grant composed
  * out of fields to fill the gap is exactly what rd vms-b5b0's storm was.
  */
+/* THE RETAINED FRAME IS NOT THERE -- said once, with the key it looked under
+ * and what the table has done since it started, so a transcript distinguishes
+ * "nothing was ever retained" from "retained under another key". */
+static void dlm_arm_say_no_body(struct vms_dlm_scs *d,
+				const struct vms_dlm_master_result *r)
+{
+	if (d->no_body_said)
+		return;
+	d->no_body_said = 1u;
+	exec_console_printf(
+		"%%DLM, a grant this node owes system 0x%x has no retained "
+		"request to echo (our lock 0x%x, its handle 0x%x; retained "
+		"kept=%u replaced=%u overflow=%u released=%u). The lock IS "
+		"granted here and its next ask is answered from it.\n",
+		(unsigned)r->deferred_csid,
+		(unsigned)r->deferred_master_lkid,
+		(unsigned)r->deferred_req_lkid,
+		(unsigned)d->pending.kept, (unsigned)d->pending.replaced,
+		(unsigned)d->pending.overflow, (unsigned)d->pending.dropped);
+}
+
+/* ...and the other door: the frame was built and the one way out refused it. */
+static void dlm_arm_say_send_failed(struct vms_dlm_scs *d,
+				    const struct vms_dlm_master_result *r)
+{
+	if (d->send_fail_said)
+		return;
+	d->send_fail_said = 1u;
+	exec_console_printf(
+		"%%DLM, the grant this node owes system 0x%x was built and "
+		"could not be sent (our lock 0x%x, its handle 0x%x)\n",
+		(unsigned)r->deferred_csid,
+		(unsigned)r->deferred_master_lkid,
+		(unsigned)r->deferred_req_lkid);
+}
+
 static void dlm_arm_send_deferred_grant(struct vms_dlm_scs *d,
 					const struct vms_dlm_master_result *r)
 {
@@ -1771,6 +1857,7 @@ static void dlm_arm_send_deferred_grant(struct vms_dlm_scs *d,
 	if (n == 0u) {
 		d->deferred_grants_no_body++;
 		d->deferred_grants_no_wire_op++;
+		dlm_arm_say_no_body(d, r);
 		return;
 	}
 
@@ -1790,6 +1877,7 @@ static void dlm_arm_send_deferred_grant(struct vms_dlm_scs *d,
 			 VMS_CM_BODY_LEN) != 0) {
 		d->send_failures++;
 		d->deferred_grants_no_wire_op++;
+		dlm_arm_say_send_failed(d, r);
 		return;
 	}
 	d->deferred_grants_sent++;
@@ -3045,6 +3133,14 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->releases_refused    = d->releases_refused;
 	out->deferred_grants_owed = d->deferred_grants_no_wire_op;
 	out->deferred_grants_sent = d->deferred_grants_sent;
+	/* ...and its decomposition, so a fire names the door (fire q85f1). The
+	 * overflow count is the retention table's OWN counter, read out here
+	 * rather than mirrored into this struct, for the same reason every
+	 * other field is a read: one owner per fact. */
+	out->pending_keep_refused = d->pending_keep_refused;
+	out->pending_overflow = d->pending.overflow;
+	out->deferred_grants_no_body = d->deferred_grants_no_body;
+	out->deferred_grants_send_failed = d->send_failures;
 	out->queued_no_reply     = d->queued_no_reply;
 	out->queued_answered     = d->queued_answered;
 	out->queued_unanswerable = d->queued_unanswerable;

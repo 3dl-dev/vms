@@ -1436,6 +1436,26 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
                              uint32_t *lkid_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
+/*
+ * THE RMS FILE-ACCESS LOCK, taken by the EXECUTIVE on RMS's behalf (rd
+ * vms-326). The resource is 'RMS$' + the 6-byte file id + 0x02 + the 12-byte
+ * space-padded volume label + three NULs, at UIC group 0 / access mode 1
+ * (EXECUTIVE) -- the identity THIS FUNCTION assigns, because the access mode is
+ * part of the resource's identity and a user-mode caller that could claim mode
+ * 1 could forge another's file locks. `lkmode`/`flags` are RMS's own sharing
+ * decision and LCK$M_* (NOQUEUE for the immediate SS$_NOTQUEUED that becomes
+ * RMS$_FLK). SS$_BADPARAM, counted (vms_lock_rms_file_enq_no_label), when the
+ * volume has no label and so no name can be built -- there is no second-best
+ * name. Release with vms_lock_acp_vol_release. See vms_lock.c and
+ * src/kernel-core/vms_rms_lockname.h.
+ */
+uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
+                               uint16_t fid_num, uint16_t fid_seq,
+                               uint8_t fid_rvn, uint8_t fid_nmx,
+                               const char *label, uint32_t label_len,
+                               uint32_t lkmode, uint32_t flags,
+                               uint32_t *lkid_out);
+uint32_t vms_lock_rms_file_enq_no_label(void);
 /* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
  * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
  * $DISMOUNT as the cluster-registration presence marker (not serialization).

@@ -111,6 +111,13 @@ target_link_libraries(score_remaster PRIVATE cluster_host_codec)
 # real OpenVMS VAX nodes put on the wire -- derivation split AND the held-out
 # split frozen before the derivation began.
 cluster_host_test(test_dlm_hash         test_dlm_hash.c)
+# rd vms-326: the RMS FILE-ACCESS lock's name, built from a file id and a volume
+# label and checked BYTE-FOR-BYTE against eight real VAX frames (named by
+# capture and frame number), plus the properties that make it a cluster-wide
+# file identity -- two volumes are two resources, a C string of the name is
+# SEVEN bytes of twenty-six -- and the refusals: no label, no name (INV-6: the
+# executive invents no volume).
+cluster_host_test(test_rms_lockname     test_rms_lockname.c)
 
 # rd vms-5339: never-crash-a-peer fuzz of the DLM (+ CM PARAMS) wire decoders.
 # To catch an over-read INSIDE the codec, the codec itself must be sanitizer-

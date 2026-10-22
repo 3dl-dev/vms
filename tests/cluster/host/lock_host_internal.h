@@ -305,6 +305,18 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                      struct vms_dlm_xnode_args *req);
+/* The RMS FILE-ACCESS lock the EXECUTIVE takes on RMS's behalf (rd vms-326):
+ * 'RMS$' + the 6-byte file id + 0x02 + the 12-byte space-padded volume label +
+ * three NULs, at UIC group 0 / access mode 1 (EXECUTIVE) -- an identity this
+ * function assigns and no caller can state. Mirror of the
+ * src/kernel/vms_internal.h decl, where the full note lives. */
+uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
+                               uint16_t fid_num, uint16_t fid_seq,
+                               uint8_t fid_rvn, uint8_t fid_nmx,
+                               const char *label, uint32_t label_len,
+                               uint32_t lkmode, uint32_t flags,
+                               uint32_t *lkid_out);
+uint32_t vms_lock_rms_file_enq_no_label(void);
 /*
  * Image rundown's lock release. In the real kernel this is called by
  * vms_access.c (image rundown) with PSL_C_USER; a host test calls it directly

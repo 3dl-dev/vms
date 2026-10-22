@@ -1351,6 +1351,33 @@ set_tests_properties(cluster_host_dlm_rms_name_hash PROPERTIES
     TIMEOUT 300
 )
 
+# ---- rd vms-f4c0: what a real VAX's FILES-11 XQP locks are named, measured
+# before OVMX emits any of them. OVMX serializes every on-disk-structure write
+# behind ONE resource per VOLUME ("F11B$s" + the label, 18 bytes, a ROOT lock);
+# a real VAX takes a 10-byte PER-FILE SUB-lock, so on a SHARED volume the two
+# nodes take DIFFERENTLY NAMED locks and do not serialize against each other at
+# all -- both can be inside the read-modify-write of one file header. This
+# census pins the three things that were NOT grounded: the 4-byte field is a
+# little-endian file number whose high bytes are zero throughout (so the corpus
+# cannot discriminate the FID nmx extension, and says so rather than resolving
+# it by assertion); the PARENT of every resolvable sub-lock is the per-VOLUME
+# root "F11B$v" + the 12-byte space-padded label, 26,030 of 26,030 with no
+# ambiguous handle; and the two families OVMX takes none of (F11B$c, whose
+# selector is NOT KNOWN and is not guessed, and the 22-byte F11B$a, which the
+# measurement corrects from "volume allocation" to PER-FILE). It also pins the
+# identity both halves need to move together: every real F11B$ request is
+# (group 0, mode 0 = KERNEL) and every OVMX one is the enqueuing process's
+# (group 1, mode 3 = USER).
+add_test(NAME cluster_host_f11b_lock_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/f11b_lock_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_f11b_lock_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;files11"
+    TIMEOUT 180
+)
+
 # ---- rd vms-85f: what a REAL master answers to an op-0x01 IT QUEUED. OVMX
 # answered nothing at all, so a real VAX's $ENQW on a resource OVMX masters and
 # holds at a conflicting mode sat in RWSCS and STOP could not complete it

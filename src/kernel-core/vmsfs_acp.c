@@ -114,7 +114,7 @@ struct vms_acp_volume {
     uint32_t         backing_major;     /* backing block device (vms-127) */
     uint32_t         backing_minor;
     uint32_t         volsize;           /* SCB volume size, 512-byte blocks */
-    uint16_t         struclev;          /* home/SCB structure level (0x0201) */
+    uint16_t         struclev;          /* home/SCB structure level (0x0201 ODS-2, 0x0501 ODS-5) */
     uint16_t         cluster;           /* SCB storage-bitmap cluster factor (vms-e6f) */
     char             volname[13];       /* NUL-terminated ODS-2 volume label */
     /*
@@ -210,8 +210,8 @@ struct vms_acp_chan {
     uint8_t          search_have_prev;  /* cursor valid (a match was returned) */
     uint8_t          spad0;
     uint16_t         search_prev_ver;   /* cursor: last returned version */
-    char             search_name_pat[VMS_ACP_NAME_SIZE]; /* name-part glob (upcased) */
-    char             search_type_pat[VMS_ACP_NAME_SIZE]; /* type-part glob (upcased) */
+    char             search_name_pat[VMS_ACP_NAME_SIZE]; /* name-part glob (matched case-blind) */
+    char             search_type_pat[VMS_ACP_NAME_SIZE]; /* type-part glob (matched case-blind) */
     char             search_prev_name[VMS_ACP_NAME_SIZE]; /* cursor: last "NAME.TYPE" */
 };
 
@@ -397,6 +397,14 @@ static uint32_t acp_window_map_vbn(const struct acp_win_ext *win, uint32_t n,
 /* The LBN of file number `fidnum`'s primary header: its INDEXF.SYS VBN mapped
  * through the index file's extents. 0 when the index file does not (yet) hold
  * that header. */
+/* The directory-edit mode for a volume's structure level (rd vms-7e7e). */
+#if defined(OVMX_ODS2_KERNEL)
+static unsigned acp_vol_dirflags(const struct vms_acp_volume *vol)
+{
+    return ODS2_IS_ODS5(vol->struclev) ? ODS2_DIRF_ODS5 : 0u;
+}
+#endif
+
 static uint32_t acp_hdr_lbn(const struct vms_acp_volume *vol, uint32_t fidnum)
 {
     if (fidnum == 0 || vol->idxwin_n == 0)
@@ -649,10 +657,12 @@ static uint32_t acp_validate_ods2(uint32_t major, uint32_t minor,
     st = ods2_scb_parse(s->blk, sizeof(s->blk), &s->scb);
     if (st != ODS2_OK)
         goto done;
-    if (s->scb.scb_struclev != ODS2_STRUCLEV_V2)
+    /* ODS-2, or ODS-5 (rd vms-7e7e): the home block and the SCB must agree. */
+    if (!ODS2_STRUCLEV_OK(s->scb.scb_struclev) ||
+        s->scb.scb_struclev != s->home.hm2_struclev)
         goto done;
 
-    /* Genuine ODS-2. Record the validated identity (the volume's, not a
+    /* Genuine Files-11 (level 2 or 5). Record the validated identity (the volume's, not a
      * process's -- this row is executive-global). */
     out->struclev = s->home.hm2_struclev;
     out->volsize  = s->scb.scb_volsize;
@@ -1338,15 +1348,17 @@ static uint32_t acp_read_header(struct vms_acp_volume *vol, uint32_t fid_num,
 
 /* ---- directory search (over exec_blockdev_read_block + codec decoders) ---- */
 
-/* Case-insensitive compare of an on-disk (length-counted) name against a C
- * string, mirroring ods2_path.c's name_eq_ci -- VMS filespecs are case-blind. */
+/* Case-insensitive compare of an on-disk (length-counted) 8-bit name against a
+ * C string -- VMS filespecs are case-blind. The fold is the codec's ods5_fold
+ * (rd vms-7e7e, observed on a real ODS-5 volume: a-z and the Latin-1 letters);
+ * an ODS-2 name is A-Z 0-9 $ - _ . only, where it is the old ASCII toupper. */
 static int acp_name_eq_ci(const char *name, unsigned name_len, const char *want)
 {
     unsigned i;
     for (i = 0; i < name_len; i++) {
         if (want[i] == '\0')
             return 0;
-        if (toupper((unsigned char)name[i]) != toupper((unsigned char)want[i]))
+        if (ods5_fold((unsigned char)name[i]) != ods5_fold((unsigned char)want[i]))
             return 0;
     }
     return want[name_len] == '\0';
@@ -1672,6 +1684,7 @@ struct acp_access_scratch {
     uint8_t    dblk[ACP_BLOCK_SIZE];
     ods2_fh2_t dfh;
     ods2_fh2_t fh;
+    ods2_hdr_ident_t ident;             /* FI2 or FI5 ident, for the ATR dates */
 };
 
 /* ================================================================
@@ -1714,8 +1727,8 @@ static int acp_ci_cmp_cstr(const char *a, const char *b)
 {
     unsigned i = 0;
     for (;;) {
-        int ca = toupper((unsigned char)a[i]);
-        int cb = toupper((unsigned char)b[i]);
+        int ca = (int)ods5_fold((unsigned char)a[i]);
+        int cb = (int)ods5_fold((unsigned char)b[i]);
         if (ca != cb)
             return ca - cb;
         if (ca == '\0')
@@ -1736,7 +1749,7 @@ static int acp_glob_ci(const char *pat, const char *str)
 
     while (*str) {
         if (*pat == '%' ||
-            (*pat != '*' && toupper((unsigned char)*pat) == toupper((unsigned char)*str))) {
+            (*pat != '*' && ods5_fold((unsigned char)*pat) == ods5_fold((unsigned char)*str))) {
             pat++;
             str++;
         } else if (*pat == '*') {
@@ -1754,28 +1767,30 @@ static int acp_glob_ci(const char *pat, const char *str)
     return *pat == '\0';
 }
 
-/* Split "NAME.TYPE" on the FIRST '.' into name_out / type_out (no '.' => type
- * "" ). Bounded by sz. */
+/* Split "NAME.TYPE" on the LAST '.' into name_out / type_out (no '.' => type
+ * ""). Bounded by sz. An ODS-2 name has one dot; an ODS-5 name may have more,
+ * and its type is what follows the last (rd vms-7e7e: the real system lists
+ * a.b.c.d as a^.b^.c.d -- name "a.b.c", type ".d"). */
 static void acp_split_name(const char *full, char *name_out, char *type_out, size_t sz)
 {
-    size_t i = 0, j = 0;
+    size_t i, j = 0, dot = (size_t)-1;
 
-    while (full[i] && full[i] != '.' && j + 1 < sz)
-        name_out[j++] = full[i++];
+    for (i = 0; full[i]; i++)
+        if (full[i] == '.')
+            dot = i;
+    for (i = 0; full[i] && i != dot && j + 1 < sz; i++)
+        name_out[j++] = full[i];
     name_out[j] = '\0';
-    while (full[i] && full[i] != '.')   /* skip any over-length name remainder */
-        i++;
-    if (full[i] == '.')
-        i++;
     j = 0;
-    while (full[i] && j + 1 < sz)
-        type_out[j++] = full[i++];
+    if (dot != (size_t)-1)
+        for (i = dot + 1; full[i] && j + 1 < sz; i++)
+            type_out[j++] = full[i];
     type_out[j] = '\0';
 }
 
 /*
  * Parse a VMS wildcard filespec ("*.TXT", "*.*;*", "A.TXT;0", ...) into an
- * upcased name-part glob, type-part glob, and version selector. Version rules
+ * name-part glob, type-part glob (both matched case-blind), and version selector. Version rules
  * (OVMX design choice, DCL DIRECTORY / F$SEARCH behaviour): no ";" or ";*" =>
  * ALL versions; ";N" (N>0) => exactly N; ";0" => highest per name. A pattern
  * with no "." matches any type.
@@ -1787,17 +1802,21 @@ static void acp_parse_search_pattern(const char *pattern,
     char work[VMS_ACP_NAME_SIZE];
     size_t i, semi = (size_t)-1, dot = (size_t)-1;
 
+    /* Copied as typed: the glob folds both sides (ods5_fold), and a fold can
+     * leave the 8-bit range (U+00FF -> U+0178), so the pattern is not upcased
+     * in place. */
     for (i = 0; i + 1 < sizeof(work) && pattern[i]; i++)
-        work[i] = (char)toupper((unsigned char)pattern[i]);
+        work[i] = pattern[i];
     work[i] = '\0';
 
     *ver_mode = ACP_VER_ALL;
     *ver_exact = 0;
 
-    /* Locate ';' (version) and the FIRST '.' (before the ';'). */
+    /* Locate ';' (version) and the LAST '.' before it (an ODS-5 name may have
+     * several dots; the type follows the last -- acp_split_name). */
     for (i = 0; work[i]; i++) {
         if (work[i] == ';') { semi = i; break; }
-        if (work[i] == '.' && dot == (size_t)-1) dot = i;
+        if (work[i] == '.') dot = i;
     }
 
     if (semi != (size_t)-1) {
@@ -2001,7 +2020,6 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
         struct acp_access_scratch *s;
         struct acp_winbuild wb;
         struct acp_win_ext window[ACP_WINDOW_MAX];
-        const ods2_ident_t *id;
         ods2_fid_t file_fid;
         uint16_t out_version = args.version;
         uint32_t file_fid_num;
@@ -2137,13 +2155,14 @@ long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg)
         args.attr.uic_group  = s->fh.fh2_fileowner.uic_group;
         args.attr.uic_member = s->fh.fh2_fileowner.uic_member;
         memcpy(args.attr.recattr, &s->fh.fh2_recattr, sizeof(args.attr.recattr));
-        id = ods2_fh2_ident(s->filehdr);
-        if (id) {
-            args.attr.revision = id->fi2_revision;
-            memcpy(args.attr.credate, id->fi2_credate, 8);
-            memcpy(args.attr.revdate, id->fi2_revdate, 8);
-            memcpy(args.attr.expdate, id->fi2_expdate, 8);
-            memcpy(args.attr.bakdate, id->fi2_bakdate, 8);
+        /* Revision + dates from whichever ident layout the header has: FI2
+         * (level 2) or FI5 (level 5, rd vms-7e7e). */
+        if (ods2_fh2_ident_get(s->filehdr, &s->ident) == ODS2_OK) {
+            args.attr.revision = s->ident.revision;
+            memcpy(args.attr.credate, s->ident.credate, 8);
+            memcpy(args.attr.revdate, s->ident.revdate, 8);
+            memcpy(args.attr.expdate, s->ident.expdate, 8);
+            memcpy(args.attr.bakdate, s->ident.bakdate, 8);
         }
 
         args.window_nextents = wb.n;
@@ -3427,13 +3446,17 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
         }
     }
 
+    /* An ODS-5 volume's directories are ordered and matched case-blind, with
+     * each record's name type in dir_flags (rd vms-7e7e); ODS-2's are not. */
     if (op_insert)
-        st = ods2_dir_insert_blocks(inbuf, nblk, name, namecount, version, entry_fid,
-                                    is_resfile, flat, flat_cap, outbuf, nblk + 1u, &out_nblk);
+        st = ods2_dir_insert_blocks_ex(inbuf, nblk, name, namecount, version, entry_fid,
+                                       is_resfile, flat, flat_cap, outbuf, nblk + 1u,
+                                       &out_nblk, acp_vol_dirflags(vol));
     else {
         int removed = 0;
-        st = ods2_dir_remove_blocks(inbuf, nblk, name, namecount, version,
-                                    flat, flat_cap, outbuf, nblk + 1u, &out_nblk, &removed);
+        st = ods2_dir_remove_blocks_ex(inbuf, nblk, name, namecount, version,
+                                       flat, flat_cap, outbuf, nblk + 1u, &out_nblk,
+                                       &removed, acp_vol_dirflags(vol));
         if (removed_out)
             *removed_out = removed;
     }
@@ -3815,12 +3838,19 @@ static uint32_t acp_acl_store(struct vms_acp_volume *vol, struct acp_fileop_scra
         } else {
             const ods2_ident_t *pid = ods2_fh2_ident(hdr);
             ods2_fid_t bl; ods2_uic_t ow = { 0, 0 };
+            uint16_t plev = (uint16_t)(hdr[offsetof(ods2_fh2_t, fh2_struclev)] |
+                                       (hdr[offsetof(ods2_fh2_t, fh2_struclev) + 1] << 8));
 
             memset(&bl, 0, sizeof(bl));
-            if (ods2_fh2_build(x->raw, f, 1, "EXT", 1, 0, ODS2_FK_DATA, NULL, 0, 0, bl, ow,
-                               hdr[offsetof(ods2_fh2_t, fh2_fileprot)] |
-                               (uint16_t)(hdr[offsetof(ods2_fh2_t, fh2_fileprot) + 1] << 8),
-                               vol->maxfiles) != ODS2_OK) {
+            /* The extension header takes its primary's structure level. Its
+             * ident on ODS-5 (a placeholder name, like ODS-2's "EXT" stub
+             * before the name copy below) is NOT observed on a real volume
+             * yet: only ODS-2 extension headers were (rd vms-7e7e). */
+            if (ods2_fh2_build_ex(x->raw, f, 1, "EXT", 1, 0, ODS2_FK_DATA, NULL, 0, 0, bl, ow,
+                                  hdr[offsetof(ods2_fh2_t, fh2_fileprot)] |
+                                  (uint16_t)(hdr[offsetof(ods2_fh2_t, fh2_fileprot) + 1] << 8),
+                                  vol->maxfiles,
+                                  ODS2_IS_ODS5(plev) ? ODS2_STRUCLEV_V5 : ODS2_STRUCLEV_V2) != ODS2_OK) {
                 st = SS__BADPARAM;
                 goto out;
             }
@@ -3828,7 +3858,7 @@ static uint32_t acp_acl_store(struct vms_acp_volume *vol, struct acp_fileop_scra
             acp_put_fid(x->raw, offsetof(ods2_fh2_t, fh2_backlink), fidnum, pseq);
             memcpy(x->raw + offsetof(ods2_fh2_t, fh2_fileowner),
                    hdr + offsetof(ods2_fh2_t, fh2_fileowner), sizeof(ods2_uic_t));
-            if (pid) {
+            if (pid && !ODS2_IS_ODS5(plev)) {
                 ods2_ident_t *xid = (ods2_ident_t *)(uintptr_t)ods2_fh2_ident(x->raw);
                 if (xid)
                     memcpy(xid->fi2_filename, pid->fi2_filename, sizeof(xid->fi2_filename));
@@ -4189,9 +4219,14 @@ long vms_ioctl_acp_fileop(struct vms_proc *proc, unsigned long arg)
             backlink.fid_num = (uint16_t)(did_num & 0xFFFF);
             backlink.fid_seq = sc->dfh.fh2_fid.fid_seq;
             backlink.fid_nmx = (uint8_t)(did_num >> 16);
-            if (ods2_fh2_build(sc->filehdr, new_fidnum, 1, args.name, new_version,
-                               filechar, kind, n_ext ? &ext : NULL, n_ext,
-                               0, backlink, owner, fileprot, vol->maxfiles) != ODS2_OK) {
+            /* At the volume's structure level: an ODS-5 volume's new files and
+             * directories get level-5 headers with the case-preserved name in
+             * the FI5 area, as on the real Alpha volume (rd vms-7e7e). */
+            if (ods2_fh2_build_ex(sc->filehdr, new_fidnum, 1, args.name, new_version,
+                                  filechar, kind, n_ext ? &ext : NULL, n_ext,
+                                  0, backlink, owner, fileprot, vol->maxfiles,
+                                  ODS2_IS_ODS5(vol->struclev) ? ODS2_STRUCLEV_V5
+                                                              : ODS2_STRUCLEV_V2) != ODS2_OK) {
                 (void)acp_fid_free(vol, new_fidnum, sc->ibblk);
                 args.status = SS__BADPARAM;
                 goto free_sc;

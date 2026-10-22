@@ -197,6 +197,8 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     ODS2CC="$ODS2SRC/ods2_reader.c $ODS2SRC/ods2_writer.c $ODS2SRC/ods2_edit.c $ODS2SRC/ods2_bdev.c $ODS2SRC/ods2_block_posix.c"
     # DKA0: the real-VAX ODS-2 system disk (committed fixture, verbatim copy).
     cp /repo/tests/ods2/real_vax_ods2.dsk /work/tests/ods2_real.img
+    # the REAL Alpha V8.4 ODS-5 volume test_syssvc_acp_ods5 mounts (rd vms-7e7e)
+    cp /repo/tests/lab/captures/ods5-alpha-20261022/ods5t.dsk /work/tests/ods5_real.img
     # DKA200: multi-version search volume.
     gcc -O2 -Wall -I/repo/src/vmsfs/include -o /work/mk_search \
         /repo/tests/qemu/mkimage_ods2_search.c $ODS2CC
@@ -319,7 +321,11 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # 4. Boot qemu-system-alpha -M clipper with the 5 ODS-2 fixture disks.
     #    Fixture -> virtio unit -> VMS device (mirrors run_tests.sh vda..vde):
     #    vda DKA0: real | vdb DKA100: blank | vdc DKA200: search |
-    #    vdd DKA300: sysvol | vde DKA400: imgact.
+    #    vdd DKA300: sysvol | vde DKA400: imgact | vdf DKA500: ODS-5 (rd
+    #    vms-7e7e: a sixth function of the multifunction slot 0x3. The boot
+    #    hang noted below came with a virtio-net device beside the disks; this
+    #    sixth disk function has not yet been booted on clipper -- the first
+    #    scheduled run of this job is its proof).
     ####################################################################
     echo "== prepare fixture disks =="
     cp /work/tests/ods2_real.img   /work/d0.img
@@ -327,6 +333,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cp /work/tests/ods2_search.img /work/d2.img
     cp /work/tests/ods2_sysvol.img /work/d3.img
     cp /work/tests/ods2_imgact.img /work/d4.img
+    cp /work/tests/ods5_real.img   /work/d5.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="
     # NO NIC: on clipper, a virtio-net-pci alongside the 5 virtio-blk fixture
@@ -344,11 +351,13 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         -drive file=/work/d2.img,format=raw,if=none,id=d2 \
         -drive file=/work/d3.img,format=raw,if=none,id=d3 \
         -drive file=/work/d4.img,format=raw,if=none,id=d4 \
+        -drive file=/work/d5.img,format=raw,if=none,id=d5 \
         -device virtio-blk-pci,drive=d0,addr=0x3.0x0,multifunction=on \
         -device virtio-blk-pci,drive=d1,addr=0x3.0x1 \
         -device virtio-blk-pci,drive=d2,addr=0x3.0x2 \
         -device virtio-blk-pci,drive=d3,addr=0x3.0x3 \
         -device virtio-blk-pci,drive=d4,addr=0x3.0x4 \
+        -device virtio-blk-pci,drive=d5,addr=0x3.0x5 \
         2>&1 | tee /work/syssvc-boot.raw \
         | grep -avE "TSUNAMI machine check|tsunami_(read|write)" || true
     grep -avE "TSUNAMI machine check|tsunami_(read|write)" /work/syssvc-boot.raw > /work/syssvc-boot.log || true

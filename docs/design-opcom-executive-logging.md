@@ -465,3 +465,42 @@ a real VAX console never printed, cluster-facility lines only in VMS's forms),
 by the kernel-executive seam test (`tests/qemu/test_kmod_cluster_seam.c`: the
 two levels, read back from `/dev/kmsg`) and by the booted 2-node e2e
 (`tests/qemu/test_cluster_config_lan_2node_e2e.sh`).
+
+## 9. OPCOM (rd vms-798)
+
+OVMX now runs the operator communication process, `SYS$SYSTEM:OPCOM.EXE`
+(`src/ovmx_opcom`), as VMS does.
+
+- **Creation.** PID 1 creates it after STDRV and before `STARTUP.COM`. It is a
+  DETACHED process with the system process's identity
+  (`ovmx_creprc_fork(VMS_CREPRC_PCB_DETACHED)`). It leaves substrate root
+  before it runs, so it is never root. The creation is silent, as VMS's STARTUP
+  creates it: no `%RUN-S-PROC_ID` appears. SHOW SYSTEM lists it as `OPCOM`.
+- **Mailbox.** It creates a permanent mailbox named `OPCOM$MAILBOX` in
+  `LNM$PERMANENT_MAILBOX`. `sys$sndopr` sends each request there
+  (`opcom_mbx.h`: a small header with the reply flag, then the caller's OPC
+  block). Before OPCOM runs, `sys$sndopr` writes OPERATOR.LOG in-process, as it
+  did.
+- **Sender.** OPCOM names the sender from the executive: the mailbox read's
+  sender PID, then `$GETJPI` for the user name. Nothing in the message decides
+  that line.
+- **Records.** For each request OPCOM writes the oracle record and files it in
+  OPERATOR.LOG: the banner, then `Message from user U on NODE` (or
+  `Request N, from user U on NODE` when a reply channel was given), then the
+  text.
+- **Broadcast.** It sends the record to OPA0:, the enabled operator terminal.
+- **At start.** It enables OPA0: for every class and says so on OPA0: and in
+  the log: `Operator _NODE$OPA0: has been enabled, username SYSTEM` and the
+  operator status. The real VAX's console shows the same lines, and
+  `tests/ovmx_init/test_opcom_record.c` checks each one against that capture.
+- **NETACP.** Its "DECnet starting" ($SNDOPR, rd vms-158d) therefore reaches
+  OPA0: as it does on the real VAX.
+- **Not yet built:**
+  - REPLY/ENABLE of further terminals, REPLY to a request, and a new
+    OPERATOR.LOG version per boot ("Logfile has been initialized ...").
+  - The post-startup kernel-log intake: filing the executive records emitted
+    after PID 1 ends its `/dev/kmsg` bridge (rd vms-394e, PR #1845). It is held
+    until two-member clusters stop sharing file-system locks: today both
+    members' system disks carry one volume label (rd vms-3ea), and RMS's file
+    lock names the FID alone (rd vms-326). Under those, frequent OPERATOR.LOG
+    writes on one node make the other's lookups of its own log fail.

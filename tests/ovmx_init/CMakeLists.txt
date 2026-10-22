@@ -59,3 +59,11 @@ set_tests_properties(boot_time_unit PROPERTIES
     LABELS "unit;ovmx_init;time"
     TIMEOUT 10
 )
+
+# test_opcom_record (rd vms-798): OPCOM.EXE's record text, checked line by line
+# against the real VAX V7.3 console capture in tests/lab/captures.
+add_executable(test_opcom_record test_opcom_record.c)
+target_include_directories(test_opcom_record PRIVATE ${CMAKE_SOURCE_DIR}/src/ovmx_opcom)
+target_compile_definitions(test_opcom_record PRIVATE OVMX_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_test(NAME opcom_record_unit COMMAND test_opcom_record)
+set_tests_properties(opcom_record_unit PROPERTIES LABELS "unit;ovmx_init;opcom" TIMEOUT 10)

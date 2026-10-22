@@ -783,6 +783,10 @@ RUN . /etc/ovmx-arch.env && mkdir -p /system-stage/dev /system-stage/proc /syste
     # this copy is NOT best-effort, no "2>/dev/null ;" here, matching
     # PROVISION.EXE's treatment above).
     cp build-static/bin/JOB_CONTROL.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    # OPCOM.EXE (vms-798) -- the operator communication process PID 1 creates
+    # before STARTUP.COM. NOT best-effort: without it $SNDOPR has no OPCOM and
+    # OPA0: is never enabled as an operator terminal.
+    cp build-static/bin/OPCOM.EXE      /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/HELP.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/AUTHORIZE.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/MAIL.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \

@@ -1511,6 +1511,12 @@ COPY --from=builder /boot/ovmx-os.kit /boot/ovmx-os.kit
 # release-manifest.json from the actual shipped kit, without needing
 # ovmx_kit_pack on the release host.
 COPY --from=builder /boot/ovmx-os.kit.manifest.txt /boot/ovmx-os.kit.manifest.txt
+# Provisioning tool (rd vms-3ea), build/test tooling only (Rule 9), never on the
+# media and never run at boot: every multi-node gate boots N copies of the ONE
+# ovmx-distrib.img, and each copy must get its own volume label before it boots
+# (`vmsfs_master --ods2 relabel <disk> <SCSNODE>SYS` -- SET VOLUME/LABEL's
+# on-disk effect), because the label is the Files-11 cluster lock namespace.
+COPY --from=builder /src/build-static/bin/vmsfs_master /usr/local/bin/vmsfs_master
 # Negative controls for test_executive_integral.sh only — never a runtime.
 COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz

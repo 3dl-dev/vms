@@ -1,0 +1,25 @@
+# rms-textfile-append-splits-on-conflict -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "rms_textfile_append_line \$CREATEs only a file that is not there (RMS\$_FNF); an \$OPEN refused for any other reason is a failed append, never a new version of the file (rd vms-acf3)";;
+        targets)      echo "libvms/rtl/rms_textfile.c";;
+        suites_red)   echo "test_syssvc_rms_textfile_threads";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation \$CREATEs on any failed \$OPEN (the old 'open, else create'), so an append refused by a share conflict starts a new version holding only its record -- how OPERATOR.LOG lost a boot's earlier records. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+the failed append did not start a new version: the file still reads its two original records
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/^static int rmstf_append_line_unl/,/^}$/ s|^        if (ost != RMS\$_FNF)$|        if (0 \&\& ost != RMS$_FNF) /* NEGCTL rms-textfile-append-splits-on-conflict */|' "$_file"
+    :
+}

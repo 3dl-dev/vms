@@ -23,20 +23,14 @@
  *   3. A FAILED OPEN THAT IS NOT ABSENCE IS NOT RMS$_FNF/RMS$_DNF: a device
  *      that does not exist. A reader can tell "no database" from "could not
  *      read the database".
- *   4. THE FILE-ACCESS LOCK IS THE FILE'S, NOT ITS FID'S. RMS arbitrates file
- *      sharing with a DLM lock per file. It was named by the FID alone, and in
- *      a VAXcluster -- one DLM, every member booting its own disk mastered from
- *      the same kit -- two DIFFERENT files with the same FID on two members'
- *      disks contended: node A appending its NETACP.LOG turned node B's read
- *      of NETNODE_REMOTE.DAT away (RMS$_SHR), and SET HOST said "remote node
- *      is unknown"; two members' OPERATOR.LOG appends split a log into a new
- *      version. The same class on ONE node: every ODS-2 volume has BADLOG.SYS
- *      at FID (9,9,0). Holding VDA0:'s exclusively (SHR=NIL) must refuse a
- *      second open of THAT file (the check has teeth) and must NOT refuse
- *      VDA300:'s BADLOG.SYS, a different file with the same FID.
+ *   4. AN APPEND NEVER SPLITS A FILE. While another accessor holds the file
+ *      past the share wait, an append FAILS (-1); it does not $CREATE a new
+ *      version holding only the new record -- which is how OPERATOR.LOG lost
+ *      a boot's earlier records under a share conflict (#1845's 2-node e2e).
+ *      Once the holder lets go, the append lands in the same file.
  *
  * negctl: rms-textfile-open-failure-reads-as-absent
- * negctl: rms-file-lock-named-by-fid-alone
+ * negctl: rms-textfile-append-splits-on-conflict
  */
 #include <pthread.h>
 #include <stdint.h>
@@ -168,34 +162,43 @@ int main(void)
               "an open that fails for a reason other than absence does not report RMS$_FNF or RMS$_DNF");
     }
 
-    /* 4. Same FID, different volume: no contention. */
+    /* 4. An append under a share conflict fails; it never starts a version. */
     {
-        CHECK(vms_kif_acp_mount("VDA300:") & 1, "VDA300: (a second ODS-2 volume) mounted for the ACP");
-        static const char a_spec[] = "VDA0:[000000]BADLOG.SYS;1";
-        static const char a2_spec[] = "VDA0:[000000]BADLOG.SYS;1";
-        static const char b_spec[] = "VDA300:[000000]BADLOG.SYS;1";
-        struct FAB fa = cc$rms_fab, fa2 = cc$rms_fab, fb = cc$rms_fab;
-        fa.fab$l_fna = (char *)a_spec;   fa.fab$b_fns = (uint8_t)strlen(a_spec);
-        fa2.fab$l_fna = (char *)a2_spec; fa2.fab$b_fns = (uint8_t)strlen(a2_spec);
-        fb.fab$l_fna = (char *)b_spec;   fb.fab$b_fns = (uint8_t)strlen(b_spec);
-        fa.fab$b_fac = fa2.fab$b_fac = fb.fab$b_fac = FAB$M_GET;
-        fa.fab$b_shr = fa2.fab$b_shr = fb.fab$b_shr = FAB$M_NIL;   /* exclusive */
-        uint32_t sa = sys$open(&fa, 0, 0);
-        printf("  INFO: exclusive open of %s: status %08X\n", a_spec, (unsigned)sa);
-        CHECK(sa == RMS$_NORMAL, "VDA0:'s BADLOG.SYS (FID 9,9,0) opened exclusively");
-        uint32_t sa2 = sys$open(&fa2, 0, 0);
-        printf("  INFO: second open of the same file: status %08X\n", (unsigned)sa2);
-        CHECK(sa2 == RMS$_SHR,
-              "a second open of THAT file while it is held exclusively is refused RMS$_SHR (the check has teeth)");
-        if (sa2 == RMS$_NORMAL) sys$close(&fa2, 0, 0);
-        uint32_t sb = sys$open(&fb, 0, 0);
-        printf("  INFO: exclusive open of %s: status %08X\n", b_spec, (unsigned)sb);
-        /* negctl: rms-file-lock-named-by-fid-alone */
-        CHECK(sb == RMS$_NORMAL,
-              "another volume's BADLOG.SYS -- same FID, different file -- opens while VDA0:'s is held: the file-access lock names the volume, not just the FID");
-        if (sb == RMS$_NORMAL) sys$close(&fb, 0, 0);
-        if (sa == RMS$_NORMAL) sys$close(&fa, 0, 0);
-        (void)vms_kif_acp_dmount("VDA300:");
+        static const char sp[] = "VDA0:[OVMXDIR]ACF3SPLIT.LOG";
+        CHECK(rms_textfile_write_line(sp, "ACF3 split record 1") == 0 &&
+              rms_textfile_append_line(sp, "ACF3 split record 2") == 0,
+              "wrote a two-record file");
+        struct FAB hold = cc$rms_fab;
+        hold.fab$l_fna = (char *)sp;
+        hold.fab$b_fns = (uint8_t)strlen(sp);
+        hold.fab$b_fac = FAB$M_GET;
+        hold.fab$b_shr = FAB$M_NIL;          /* exclusive: no other accessor */
+        uint32_t hs = sys$open(&hold, 0, 0);
+        CHECK(hs == RMS$_NORMAL, "another accessor holds the file exclusively");
+        int arc = rms_textfile_append_line(sp, "ACF3 split record 3");
+        printf("  INFO: append while held: %d\n", arc);
+        CHECK(arc != 0, "an append while the file is held past the share wait fails");
+        if (hs == RMS$_NORMAL) sys$close(&hold, 0, 0);
+
+        rms_textfile_t *tf = rms_textfile_open(sp);
+        char rec[256];
+        int n = 0, first_ok = 0, too_long = 0;
+        while (tf && rms_textfile_getline(tf, rec, sizeof rec, &too_long) == 1) {
+            if (n == 0 && strcmp(rec, "ACF3 split record 1") == 0) first_ok = 1;
+            n++;
+        }
+        if (tf) rms_textfile_close(tf);
+        printf("  INFO: the file now reads %d record(s)\n", n);
+        /* negctl: rms-textfile-append-splits-on-conflict */
+        CHECK(first_ok && n == 2,
+              "the failed append did not start a new version: the file still reads its two original records");
+        CHECK(rms_textfile_append_line(sp, "ACF3 split record 3") == 0,
+              "once the holder lets go, the append succeeds");
+        tf = rms_textfile_open(sp);
+        n = 0;
+        while (tf && rms_textfile_getline(tf, rec, sizeof rec, &too_long) == 1) n++;
+        if (tf) rms_textfile_close(tf);
+        CHECK(n == 3, "... and lands in the same file (three records)");
     }
 
     (void)vms_kif_acp_dmount(ODS2_UNIT);   /* clean slate for co-resident suites */

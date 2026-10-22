@@ -608,9 +608,12 @@ export const allReady = (R, boundS = Infinity) =>
 // node at a logged-in DCL prompt, the real VAX at Username:. Membership alone has
 // not been the bar since V0.7-6 (quiet), nor since V0.7-9 (rd vms-db1: a real
 // VAX that is a member and never offers Username: is a dead demo).
+// rd vms-5843/vms-6512: and, once usable, a VMS user's next steps work --
+// SHOW SYSTEM lists the system processes (or the gap ledger accounts for
+// them), and SET HOST works both ways between the OVMX nodes.
 export const isPass = (R, boundS = R.login_bound_s ?? Infinity) =>
   !!R.cn3 && isQuiet(R) && allReady(R, boundS) && versionWhy(R) === null &&
-  clusterViewWhy(R) === null && chatterWhy(R) === null;
+  clusterViewWhy(R) === null && chatterWhy(R) === null && sessionWhy(R) === null;
 
 // Why a clustered run did not have every node usable, in observed terms.
 function loginWhy(R, boundS) {
@@ -657,7 +660,9 @@ export function verdictOf(R) {
     const view = clusterViewWhy(R);
     if (view) return `CN=3 but NOT EVERY MEMBER IN SHOW CLUSTER: ${view}`;
     const chat = chatterWhy(R);
-    return chat ? `CN=3 but CONSOLE CHATTER: ${chat}` : 'CN=3';
+    if (chat) return `CN=3 but CONSOLE CHATTER: ${chat}`;
+    const sw = sessionWhy(R);
+    return sw ? `CN=3 but ${sw}` : 'CN=3';
   }
   const why = [];
   for (const w of LOGIN_NODES) {
@@ -903,4 +908,197 @@ export async function driveClusterView(R, who, io) {
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// SESSION CHECKS (rd vms-5843 SET HOST, rd vms-6512 SHOW SYSTEM). Once every
+// node is usable, the gate does the next two things a VMS user does on a
+// cluster: looks at SHOW SYSTEM, and SET HOSTs from one OVMX node to the other.
+// Both are judged by pure functions over console text, as everything else is.
+// ---------------------------------------------------------------------------
+
+// The system processes the demo's own real VAX runs -- VAXC, OpenVMS VAX V7.3,
+// its pinned volume booted 2026-10-21 (tests/lab/captures/
+// vms-6512-nodec-show-system-20261021/) -- plus the three a DECnet node adds
+// (VAX1 oracle, docs/oracle/vax73-show-system-process.md). The logged-in
+// user's own process (SYSTEM) is not a system process and is not listed.
+export const SHOW_SYSTEM_ORACLE = [
+  'SWAPPER', 'CLUSTER_SERVER', 'CONFIGURE', 'LANACP', 'IPCACP', 'ERRFMT',
+  'CACHE_SERVER', 'OPCOM', 'AUDIT_SERVER', 'JOB_CONTROL', 'SECURITY_SERVER',
+  'SMISERVER', 'TP_SERVER', 'NETACP', 'REMACP', 'EVL',
+];
+
+// The ones every OVMX demo node must show: OVMX has the facility, and STARTUP
+// runs it as a detached process with its VMS name.
+export const SHOW_SYSTEM_REQUIRED = ['JOB_CONTROL', 'NETACP'];
+
+// The honest ledger of the rest: OVMX does not have the facility, so the name
+// is ABSENT -- never a placeholder row. Each names the item that builds it. A
+// name here that a node DOES show fails the run: either a placeholder crept in
+// or the facility landed and this ledger must move it to REQUIRED.
+export const SHOW_SYSTEM_GAPS = {
+  SWAPPER: 'vms-8c04', CLUSTER_SERVER: 'vms-50d3', CONFIGURE: 'vms-0282',
+  LANACP: 'vms-1998', IPCACP: 'vms-04d', ERRFMT: 'vms-d2c',
+  CACHE_SERVER: 'vms-4a3', OPCOM: 'vms-798', AUDIT_SERVER: 'vms-caf2',
+  SECURITY_SERVER: 'vms-9d9', SMISERVER: 'vms-d87', TP_SERVER: 'vms-255',
+  REMACP: 'vms-ca1', EVL: 'vms-d58',
+};
+
+// The rows of the LAST SHOW SYSTEM table in `text`: [{pid, name}]. A row is an
+// 8-hex-digit PID at column 0 followed by the 15-column name field.
+export function parseShowSystem(text) {
+  const t = String(text || '').replace(/\r/g, '');
+  const at = t.lastIndexOf('Process Name');
+  if (at < 0) return null;
+  const rows = [];
+  for (const line of t.slice(t.indexOf('\n', at) + 1).split('\n')) {
+    const m = /^([0-9A-F]{8}) (.{0,15})/.exec(line);
+    if (!m) { if (rows.length) break; continue; }
+    rows.push({ pid: m[1], name: m[2].trim() });
+  }
+  return rows;
+}
+
+// Why one node's SHOW SYSTEM rows fall short, or null.
+export function showSystemWhy(rows) {
+  if (!rows) return 'no SHOW SYSTEM table was printed';
+  const names = new Set(rows.map((r) => r.name));
+  const why = [];
+  const missing = SHOW_SYSTEM_REQUIRED.filter((n) => !names.has(n));
+  if (missing.length) why.push(`missing ${missing.join(',')}`);
+  const placeholders = Object.keys(SHOW_SYSTEM_GAPS).filter((n) => names.has(n));
+  if (placeholders.length) {
+    why.push(`shows ${placeholders.join(',')}, which the gap ledger says OVMX lacks ` +
+             `(a placeholder, or a facility that landed -- move it to SHOW_SYSTEM_REQUIRED)`);
+  }
+  const unaccounted = SHOW_SYSTEM_ORACLE.filter((n) =>
+    !names.has(n) && !SHOW_SYSTEM_REQUIRED.includes(n) && !(n in SHOW_SYSTEM_GAPS));
+  if (unaccounted.length) why.push(`absent and not in the gap ledger: ${unaccounted.join(',')}`);
+  return why.length ? why.join('; ') : null;
+}
+
+// The SET HOST legs: from each OVMX node to the other, by node name. The real
+// VAX runs no DECnet on the shipped volume, so it is not a leg.
+export const SETHOST_LEGS = [['OVMXA', 'OVMXB'], ['OVMXB', 'OVMXA']];
+export const SETHOST_WAIT_MS = 300000;      // an emulated remote login is slow
+export const REM_END = /%REM-S-END, control returned to node ([A-Z0-9$_]+)::/;
+const NET_ERR = /%[A-Z]+-[EFW]-[A-Z0-9]+, [^\r\n]*/;
+
+const tail = (R, w, from) => String((R.transcript || {})[w] || '').slice(from);
+
+// Poll one node until `pred(textSinceOffset)` holds, or `ms` runs out.
+async function waitFor(R, w, from, pred, ms, io, stepMs = 2000) {
+  for (let left = ms; left > 0; left -= stepMs) {
+    observe(R, w, await io.read(w));
+    const s = tail(R, w, from);
+    const r = pred(s);
+    if (r) return r;
+    await io.sleep(stepMs);
+  }
+  observe(R, w, await io.read(w));
+  return pred(tail(R, w, from));
+}
+
+// SHOW SYSTEM on one logged-in OVMX node: the rows, as that node printed them.
+export async function runShowSystem(R, w, io) {
+  const from = String(R.transcript[w] || '').length;
+  await io.type(w, 'SHOW SYSTEM\r');
+  const ok = await waitFor(R, w, from, (s) => /Process Name/.test(s) && atDcl(s), 120000, io);
+  const rows = parseShowSystem(tail(R, w, from));
+  (R.show_system = R.show_system || {})[w] = { rows: rows || [], ok: !!ok, why: ok ? showSystemWhy(rows) : 'SHOW SYSTEM did not return to the DCL prompt' };
+  io.log(`  ${w}: SHOW SYSTEM -> ${(rows || []).map((r) => r.name || '(unnamed)').join(' ')}` +
+         ` :: ${R.show_system[w].why || 'OK'}`);
+  return R.show_system[w];
+}
+
+// One SET HOST leg, driven the way a visitor does it: SET HOST <peer>, log in
+// at the REMOTE node's Username:/Password: with the published login, ask the
+// remote node its name, LOGOUT, and read control coming back.
+export async function runSetHost(R, src, dst, io) {
+  const leg = `${src}->${dst}`;
+  const rec = (R.sethost = R.sethost || {})[leg] = { ok: false, step: 'start' };
+  const fail = (why) => { rec.why = why; io.log(`  SET HOST ${leg}: FAIL at ${rec.step}: ${why}`); return rec; };
+  let from = String(R.transcript[src] || '').length;
+  await io.type(src, `SET HOST ${dst}\r`);
+  rec.step = 'remote Username:';
+  const u = await waitFor(R, src, from, (s) =>
+    (NET_ERR.test(s) && { err: s.match(NET_ERR)[0] }) || (/Username:\s*$/.test(lastLineOf(s)) && { ok: 1 }),
+  SETHOST_WAIT_MS, io);
+  if (!u || u.err) return fail(u ? u.err : 'no remote Username: prompt');
+  from = String(R.transcript[src] || '').length;
+  await io.type(src, io.user(src) + '\r');
+  rec.step = 'remote Password:';
+  if (!await waitFor(R, src, from, (s) => PASSWORD_PROMPT.test(s), 120000, io)) return fail('no remote Password: prompt');
+  from = String(R.transcript[src] || '').length;
+  await io.type(src, io.pass(src) + '\r');
+  rec.step = 'remote DCL $';
+  const d = await waitFor(R, src, from, (s) =>
+    (AUTH_FAIL.test(s) && { err: 'User authorization failure' }) || (s.length && atDcl(s) && { ok: 1 }),
+  SETHOST_WAIT_MS, io);
+  if (!d || d.err) return fail(d ? d.err : 'no remote DCL prompt');
+  // VMS never echoes a password (vms-a353): the remote login's output,
+  // from the Password: prompt to the DCL prompt, must not carry it.
+  const pw = io.pass(src);
+  if (pw && echoesPassword(tail(R, src, from), pw)) {
+    rec.step = 'remote Password: (no echo)';
+    return fail('the remote password was echoed on the originating terminal');
+  }
+  from = String(R.transcript[src] || '').length;
+  await io.type(src, 'WRITE SYS$OUTPUT "SETHOST-"+F$GETSYI("NODENAME")\r');
+  rec.step = 'remote NODENAME';
+  const n = await waitFor(R, src, from, (s) => /SETHOST-([A-Z0-9$_]+)/.exec(s), 120000, io);
+  if (!n) return fail('the remote session printed no NODENAME');
+  rec.remote_node = n[1];
+  if (n[1] !== dst) return fail(`the session is on ${n[1]}, not ${dst}`);
+  await waitFor(R, src, from, (s) => atDcl(s), 60000, io);
+  from = String(R.transcript[src] || '').length;
+  await io.type(src, 'LOGOUT\r');
+  rec.step = '%REM-S-END';
+  const e = await waitFor(R, src, from, (s) => REM_END.exec(s), 120000, io);
+  if (!e) return fail('control never came back (%REM-S-END)');
+  if (e[1] !== src) return fail(`control returned to ${e[1]}, not ${src}`);
+  // VMS prints %REM-S-END on a line of its own, after "logged out at ..."
+  // (docs/oracle/vax-sethost-cterm.md section 5).
+  if (!remEndOnOwnLine(tail(R, src, from))) {
+    return fail('%REM-S-END did not start its own line (VMS prints it after a line break)');
+  }
+  rec.step = 'done';
+  rec.ok = true;
+  io.log(`  SET HOST ${leg}: OK (remote NODENAME ${rec.remote_node}, ${e[0]})`);
+  return rec;
+}
+
+// Does the output from the Password: prompt onward show the password?
+export function echoesPassword(text, pw) {
+  const t = String(text || '');
+  const at = t.search(PASSWORD_PROMPT);       // absent: the text starts after it
+  return (at >= 0 ? t.slice(at) : t).includes(pw);
+}
+
+// Is %REM-S-END the first thing on a NEW line? A bare CR does not count: on a
+// terminal it returns to column 0 of the SAME line and overwrites it.
+export const remEndOnOwnLine = (text) => /(^|\n)\r*[ \t]*%REM-S-END,/.test(String(text || ''));
+
+// Run the session checks once, after every node is usable.
+export async function driveSessionChecks(R, io) {
+  if (R.session_checked) return;
+  R.session_checked = true;
+  for (const w of LOGIN_NODES) await runShowSystem(R, w, io);
+  for (const [s, d] of SETHOST_LEGS) await runSetHost(R, s, d, io);
+}
+
+// Why the session checks fall short, or null.
+export function sessionWhy(R) {
+  if (!R.session_checked) return 'the SHOW SYSTEM / SET HOST checks never ran';
+  const why = [];
+  for (const w of LOGIN_NODES) {
+    const s = (R.show_system || {})[w];
+    if (!s) why.push(`${w} SHOW SYSTEM never ran`);
+    else if (s.why) why.push(`${w} SHOW SYSTEM: ${s.why}`);
+  }
+  for (const [s, d] of SETHOST_LEGS) {
+    const r = (R.sethost || {})[`${s}->${d}`];
+    if (!r || !r.ok) why.push(`SET HOST ${s}->${d} failed at ${r ? r.step : 'start'}${r && r.why ? `: ${r.why}` : ''}`);
+  }
+  return why.length ? why.join('; ') : null;
 }

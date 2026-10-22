@@ -59,6 +59,7 @@
 #include "vms_internal.h"     /* -> lock_shim/vms_internal.h -> lock_host_internal.h */
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h -> exec_kbackend_host.h */
 #include "vms_dlm_proxy.h"    /* the requester seam under test */
+#include "vms_rms_lockname.h" /* the RMS file-access lock's name (rd vms-326) */
 
 #include <pthread.h>
 #include <stdio.h>
@@ -1262,6 +1263,134 @@ static void rms326_counted_binary_names(void)
 	vms_lock_cleanup();
 }
 
+
+/*
+ * ==========================================================================
+ * rd vms-326: THE EXECUTIVE TAKES THE RMS FILE-ACCESS LOCK, AND USERSPACE
+ * CANNOT REACH ITS IDENTITY.
+ *
+ * The access mode is part of a resource's IDENTITY -- the directory hash is
+ * computed over it -- and a real VAX's RMS file-access lock is (UIC group 0,
+ * access mode 1 = EXECUTIVE) on all 1,130 captured frames, because on a real
+ * VAX RMS runs AT executive mode. OVMX's RMS is a userspace library at mode 3,
+ * so a lock it took for itself would be a DIFFERENT RESOURCE from the VAX's:
+ * the two would not contend and both nodes could hold EX on one file.
+ *
+ * The ruling (conductor, 2026-10-22) is that the EXECUTIVE takes this lock on
+ * RMS's behalf and assigns the identity, and that no caller-supplied access
+ * mode goes on the $ENQ ABI -- a process that could claim mode 1 could forge or
+ * steal another's RMS file locks. This proves both halves against the real
+ * engine: what the executive's own enqueue puts on the wire, and that the
+ * ioctl path cannot produce it.
+ * ==========================================================================
+ */
+static void rms326_the_executive_takes_the_file_lock(void)
+{
+	struct vms_dlm_proxy_post post;
+	struct vms_proc proc1, proc2;
+	uint8_t want[VMS_RMS_LOCKNAME_LEN];
+	uint32_t lkid1 = 0, lkid2 = 0, lkid3 = 0, st, before;
+
+	printf("--- rd vms-326: the EXECUTIVE takes the file-access lock, at "
+	       "the identity a real VAX uses ---\n");
+	ct_check(vms_rms_lockname(284u, 1u, 0u, 0u, "SYSDSK1", 7u, want,
+				  (uint32_t)sizeof(want)) ==
+		 VMS_RMS_LOCKNAME_LEN,
+		 "the measured 26-byte name for (284,1,0) on SYSDSK1");
+
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc1);
+	proc_init(&proc2);
+	/* A realistic user-mode process: UIC group 20, access mode USER. */
+	proc1.uic = (20u << 16) | 7u;
+	proc1.current_mode = 3u;
+	proc2.uic = proc1.uic;
+	proc2.current_mode = 3u;
+
+	/* (1) WHAT THE EXECUTIVE PUTS ON THE WIRE. */
+	st = vms_lock_rms_file_enq(&proc1, 284u, 1u, 0u, 0u, "SYSDSK1", 7u,
+				   LCK_K_EXMODE, LCK_M_NOQUEUE, &lkid1);
+	ct_check(st == SS__NORMAL && lkid1 != 0,
+		 "the executive's file-access $ENQ is accepted");
+	if (!fm_wait_posts(1, &post)) {
+		ct_check(0, "it was posted");
+		vms_lock_dlm_set_requester_ops(NULL);
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check_eq_u32(post.resnam_len, VMS_RMS_LOCKNAME_LEN,
+			"*** the post carries the 26-byte count ***");
+	ct_check(memcmp(post.resnam, want, VMS_RMS_LOCKNAME_LEN) == 0,
+		 "*** ...and the exact bytes a real VAX sends for that file ***");
+	ct_check_eq_u32((uint32_t)post.res_group, 0u,
+			"*** at UIC group 0 -- not the process's group 20 ***");
+	ct_check_eq_u32((uint32_t)post.res_acmode, 1u,
+			"*** and ACCESS MODE 1 (executive) -- not the "
+			"process's mode 3 ***");
+
+	/* (2) THE SAME 26 BYTES THROUGH THE IOCTL PATH ARE A DIFFERENT
+	 *     RESOURCE: userspace cannot name the executive's. */
+	st = do_enq_counted(&proc2, (const char *)want, VMS_RMS_LOCKNAME_LEN,
+			    LCK_K_EXMODE, LCK_M_NOQUEUE, &lkid2);
+	ct_check(st == SS__NORMAL && lkid2 != 0,
+		 "a process $ENQs the same 26 bytes and is granted");
+	ct_check(fm_wait_posts(2, &post), "...and that posts too");
+	ct_check(memcmp(post.resnam, want, VMS_RMS_LOCKNAME_LEN) == 0,
+		 "the name on the wire is the same 26 bytes");
+	ct_check(post.res_group == 20u && post.res_acmode == 3u,
+		 "*** but at the PROCESS's identity (group 20, mode 3): a "
+		 "user-mode caller cannot claim the executive's ***");
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+
+	/* (3) IT REALLY SERIALIZES, on a node that masters its own resources:
+	 *     two accesses of ONE file conflict, two files never do. */
+	configure_local_only();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc1);
+	proc_init(&proc2);
+
+	st = vms_lock_rms_file_enq(&proc1, 284u, 1u, 0u, 0u, "SYSDSK1", 7u,
+				   LCK_K_EXMODE, LCK_M_NOQUEUE, &lkid1);
+	ct_check(st == SS__NORMAL, "file (284,1,0) on SYSDSK1 is granted EX");
+	st = vms_lock_rms_file_enq(&proc2, 284u, 1u, 0u, 0u, "SYSDSK1", 7u,
+				   LCK_K_EXMODE, LCK_M_NOQUEUE, &lkid2);
+	ct_check_eq_u32(st, SS__NOTQUEUED,
+			"*** a second access of the SAME file is refused -- the "
+			"lock serializes ***");
+	st = vms_lock_rms_file_enq(&proc2, 284u, 1u, 0u, 0u, "VAX1DATA", 8u,
+				   LCK_K_EXMODE, LCK_M_NOQUEUE, &lkid3);
+	ct_check(st == SS__NORMAL && lkid3 != 0,
+		 "*** ...while the same file id on ANOTHER VOLUME is granted: "
+		 "the collision rd vms-acf3 measured is gone ***");
+
+	/* (4) NO LABEL, NO LOCK -- and it is counted, not silent. */
+	before = vms_lock_rms_file_enq_no_label();
+	ct_check_eq_u32(vms_lock_rms_file_enq(&proc1, 284u, 1u, 0u, 0u, NULL,
+					      0u, LCK_K_EXMODE, LCK_M_NOQUEUE,
+					      &lkid3),
+			SS__BADPARAM,
+			"a file on a volume with no label takes NO lock");
+	ct_check_eq_u32(vms_lock_rms_file_enq_no_label(), before + 1u,
+			"*** ...and the refusal is COUNTED, so a node taking no "
+			"file locks is visible ***");
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -1276,5 +1405,6 @@ int main(void)
 	e09_no_removal_without_a_remote_entry();
 	c55_no_removal_for_an_unregistered_entry();
 	rms326_counted_binary_names();
+	rms326_the_executive_takes_the_file_lock();
 	return ct_summary("test_lock_proxy");
 }

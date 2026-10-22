@@ -1153,6 +1153,19 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
                              uint32_t *lkid_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
+/* THE RMS FILE-ACCESS LOCK, taken by the EXECUTIVE on RMS's behalf (rd
+ * vms-326): 'RMS$' + the 6-byte file id + 0x02 + the 12-byte space-padded
+ * volume label + three NULs, at UIC group 0 / access mode 1 (EXECUTIVE) -- an
+ * identity the function assigns, never a caller. Mirror of the
+ * src/kernel/vms_internal.h decl, where the full note lives (#928: kernel-core
+ * lock ops must be declared in BOTH headers). */
+uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
+                               uint16_t fid_num, uint16_t fid_seq,
+                               uint8_t fid_rvn, uint8_t fid_nmx,
+                               const char *label, uint32_t label_len,
+                               uint32_t lkmode, uint32_t flags,
+                               uint32_t *lkid_out);
+uint32_t vms_lock_rms_file_enq_no_label(void);
 /* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
  * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
  * $DISMOUNT as the cluster-registration presence marker. Released with

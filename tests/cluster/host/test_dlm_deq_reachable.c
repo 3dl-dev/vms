@@ -2183,6 +2183,193 @@ out:
 	engine_down();
 }
 
+/* ==========================================================================
+ * 16. rd vms-5cd: A TREE THIS NODE HAS BEEN HANDED BUT HAS NOT FINISHED
+ *     ADOPTING DOES NOT GRANT AWAY A LOCK THIS NODE HOLDS
+ *
+ * MEASURED ON REAL HARDWARE, TWICE IN FOUR MINUTES (2026-10-22, pod lab85f,
+ * OVMX LOCKDIRWT 0 and two V7.3 VAXes at 1 -- the GENERAL configuration;
+ * tests/lab/captures/vms-5cd-doublegrant-20261022):
+ *
+ *   OVMXE held RA7V's root at CR (`RMHOLD 100-RA7V`, lkid 01000356), process
+ *   hibernating and still holding. VAX1 -- the old master -- handed the tree
+ *   over: 02/0e, 02/0f, 02/10 each answered 82/15 by OVMX, then one 02/13.
+ *   And then NOTHING: no op-0x14 ever left OVMX, polled every 15s for 120
+ *   seconds. Two minutes later VAX2's $ENQ for EX on RA7V arrived and OVMX
+ *   answered cat-0x82 op-0x01 body[34]=0xfa -- GRANTED. VAX2's process went to
+ *   HIB believing it held EX while OVMX's own process was still hibernating on
+ *   its CR. Same shape again on a second fresh tree, RA7W.
+ *
+ * WHY: vms_lock_dlm_adopt_open makes this node the master AT ONCE (it must --
+ * the 0x12 records that follow are master-side locks), while this node's OWN
+ * lock in the tree stays a PROXY until adopt_END runs the rd vms-3ac
+ * conversion. The compatibility check walked only res->granted, so the
+ * resource looked EMPTY and EX was compatible with nothing.
+ *
+ * WHY THE ADOPTION NEVER ENDED, since this section's arrangement depends on it:
+ * the op-0x14 goes out only after the LAST owed op-0x13 is in (rule W2,
+ * vms_dlm_rm_fsm.h, 7 of 7 real episodes), and the owed set is the CLUB -- every
+ * other member. For RA7V only ONE member sent an op-0x13, because the name
+ * hashed the DIRECTORY onto the old master, so there was no separate directory
+ * node to send a second one. The run 100 minutes earlier, whose name hashed
+ * elsewhere, had TWO senders, reached held=1, and correctly answered VAX2 0xfb
+ * QUEUED. That LIVENESS half -- who really owes an op-0x13 -- is a wire rule
+ * this executive does not have grounding for and is filed separately
+ * (rd vms-f9e8). THIS section is the SAFETY half: in that state, a conflicting
+ * request is QUEUED and never granted.
+ *
+ * The test drives the measured state exactly: adopt_OPEN with NO adopt_end.
+ * ========================================================================== */
+#define DG_RES  "RA7V"            /* the tree of fire 5, by its real name */
+
+static void test_an_unfinished_adoption_grants_nothing_away(void)
+{
+	struct vms_proc holder, delivery;
+	struct vms_dlm_master_result q;
+	struct vms_dlm_granted_args gr;
+	struct vms_dlm_adopt_tree t;
+	struct vms_getlki_args lki;
+	uint32_t lkid, blocks0, n_locks = 0u;
+
+	printf("--- rd vms-5cd: an UNFINISHED adoption grants nothing away ---\n");
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	/* 1. A local process holds the root at CR -- granted by the node that
+	 *    masters it, which is the state `RMHOLD 100-RA7V` left behind. */
+	proc_init(&holder);
+	lkid = granted_proxy(&holder, DG_RES, LCK_K_CRMODE, 0x29000510u);
+	ct_check(lkid != 0u,
+		 "this node's own process holds RA7V's root at CR, granted by "
+		 "the old master");
+
+	/* 2. The old master hands the TREE over -- and that is all. No 0x13 from
+	 *    the second member ever comes, so the arm never calls adopt_end: the
+	 *    measured `trees opened=1 records adopted=0 trees held=0`. */
+	memset(&t, 0, sizeof(t));
+	strscpy(t.resnam, DG_RES, sizeof(t.resnam));
+	t.ident_valid = 1u;
+	t.old_master_csid = CSID_MASTER;
+	ct_check_eq_u32(vms_lock_dlm_adopt_open(&t), SS__NORMAL,
+			"the old master hands this node the tree (adopt_open)");
+
+	/* 3. The state the defect lived in, asserted rather than assumed: this
+	 *    node masters the resource, NOTHING is on its granted queue, and our
+	 *    own lock is still a proxy. */
+	gr = granted_of(&holder, DG_RES);
+	ct_check_eq_u32(gr.n_granted, 0u,
+			"*** the granted queue is EMPTY: the adoption has not "
+			"converted our lock, which is the picture the grant was "
+			"decided against ***");
+	ct_check(getlki(&holder, lkid, &lki) &&
+		 lki.granted_mode == LCK_K_CRMODE,
+		 "  and our own lock is nevertheless GRANTED at CR");
+
+	/* 4. *** THE FRAME OVMX PUT ON THE WIRE. *** A peer's EX, through the
+	 *    same master seam the wire arm serves an op-0x01 with. */
+	blocks0 = vms_lock_dlm_proxy_compat_blocks();
+	q = serve(VMS_DLM_MREQ_ENQ, CSID_PEER, WAITER_LKID, LCK_K_EXMODE,
+		  DG_RES);
+	ct_check_eq_u32(q.outcome, VMS_DLM_MASTER_QUEUED,
+			"*** the peer's EX is QUEUED, not granted: a resource "
+			"this node's own process holds at CR is not handed to "
+			"another system at EX ***");
+	ct_check_eq_u32(vms_lock_dlm_proxy_compat_blocks(), blocks0 + 1u,
+			"*** and the engine COUNTED the withheld grant, so a "
+			"fire can attribute the queue to this executive ***");
+	ct_check(getlki(&delivery, q.master_lkid, &lki) &&
+		 lki.granted_mode == LCK_K_NLMODE,
+		 "  the peer's lock exists here and is granted at NL -- it is "
+		 "waiting, not holding");
+	ct_check(getlki(&holder, lkid, &lki) &&
+		 lki.granted_mode == LCK_K_CRMODE,
+		 "  and our own CR is untouched by the request");
+
+	/* 5. The adoption then COMPLETES. The conversion puts our lock on the
+	 *    granted queue, and the peer is STILL queued -- the promotion does
+	 *    not re-decide a grant the cluster made, and CR still blocks EX. */
+	ct_check_eq_u32(vms_lock_dlm_adopt_end(&t, &n_locks), SS__NORMAL,
+			"the adoption completes (the second op-0x13 arrives)");
+	gr = granted_of(&holder, DG_RES);
+	ct_check_eq_u32(gr.n_granted, 1u,
+			"our converted lock is on the granted queue now");
+	ct_check(getlki(&delivery, q.master_lkid, &lki) &&
+		 lki.granted_mode == LCK_K_NLMODE,
+		 "*** and the peer is still QUEUED: the two halves of the fix "
+		 "agree rather than one covering for the other ***");
+
+	/* 6. ...and the release is what grants it, as section 9 proves for the
+	 *    completed case. The outcome is a WAIT that ends, not a wait for
+	 *    ever: the defect's honest alternative. */
+	ct_check_eq_u32(do_deq(&holder, lkid), SS__NORMAL,
+			"our holder releases");
+	ct_check(getlki(&delivery, q.master_lkid, &lki) &&
+		 lki.granted_mode == LCK_K_EXMODE,
+		 "*** the peer's EX is granted by the RELEASE -- after the "
+		 "holder let go, which is when a real VAX gets it ***");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
+/* ==========================================================================
+ * 17. rd vms-5cd, THE NEGATIVE CONTROL'S OTHER SIDE: A PENDING PROXY IS NOT A
+ *     HOLDER
+ *
+ * The fix counts a proxy the CLUSTER HAS GRANTED. A proxy that is still
+ * PENDING at its master is a lock NOBODY has granted, and counting that one
+ * would be the mirror-image fabrication: queueing a request behind a lock this
+ * node does not hold. This section is the floor under section 16 -- it is what
+ * stops "see every granted lock" from becoming "see every lock block".
+ * ========================================================================== */
+#define PG_RES  "RA7X"
+
+static void test_a_pending_proxy_is_not_a_holder(void)
+{
+	struct vms_proc asker, delivery;
+	struct vms_dlm_master_result q;
+	struct vms_dlm_adopt_tree t;
+	struct vms_getlki_args lki;
+	uint32_t lkid = 0u, blocks0;
+
+	printf("--- rd vms-5cd: a PENDING proxy is not a holder ---\n");
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	/* A local process ASKS for EX on a tree the old master still has, and
+	 * the master has not answered: a proxy LKB, pending. */
+	proc_init(&asker);
+	(void)do_enq(&asker, PG_RES, LCK_K_EXMODE, &lkid);
+	fork_drain();
+	ct_check(lkid != 0u && getlki(&asker, lkid, &lki) &&
+		 lki.granted_mode == LCK_K_NLMODE,
+		 "our own request is outstanding at the master: granted at NL");
+
+	/* The tree is then handed to this node, so the resource is ours to
+	 * decide -- with an UNANSWERED request of our own on it. */
+	memset(&t, 0, sizeof(t));
+	strscpy(t.resnam, PG_RES, sizeof(t.resnam));
+	t.ident_valid = 1u;
+	t.old_master_csid = CSID_MASTER;
+	ct_check_eq_u32(vms_lock_dlm_adopt_open(&t), SS__NORMAL,
+			"the tree is handed over while our request is pending");
+
+	blocks0 = vms_lock_dlm_proxy_compat_blocks();
+	q = serve(VMS_DLM_MREQ_ENQ, CSID_PEER, WAITER_LKID, LCK_K_EXMODE,
+		  PG_RES);
+	ct_check_eq_u32(q.outcome, VMS_DLM_MASTER_GRANTED,
+			"*** the peer's EX is GRANTED: nobody holds this "
+			"resource, and an unanswered request of ours is not a "
+			"lock ***");
+	ct_check_eq_u32(vms_lock_dlm_proxy_compat_blocks(), blocks0,
+			"  and nothing was counted as withheld");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_deq_reachable (rd vms-49f8: the op-0x03 $DEQ has a "
@@ -2202,5 +2389,7 @@ int main(void)
 	test_an_inbound_convert_tells_the_third_system();
 	test_a_local_convert_tells_the_peer();
 	test_the_lab_sequence_keys_agree();
+	test_an_unfinished_adoption_grants_nothing_away();
+	test_a_pending_proxy_is_not_a_holder();
 	return ct_summary("test_dlm_deq_reachable");
 }

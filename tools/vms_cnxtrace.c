@@ -369,6 +369,13 @@ static void cnxtrace_print_dlm(void)
            (unsigned)v->pending_keep_refused, (unsigned)v->pending_overflow,
            (unsigned)v->deferred_grants_no_body,
            (unsigned)v->deferred_grants_send_failed);
+    /* THE DOUBLE GRANT THAT DID NOT HAPPEN (rd vms-5cd). Grant decisions the
+     * ENGINE withheld because a PROXY LKB of this node's holds the resource --
+     * the check that was missing when OVMX granted a real VAX EX over a CR its
+     * own process held, twice in four minutes. A lab fire reads this line to
+     * attribute the queue to this executive rather than to the wire. */
+    printf("%%CNXTRACE-I-DLMHOLDOWN, grants withheld by a proxy lock of ours=%u"
+           "\n", (unsigned)v->proxy_compat_blocks);
     printf("%%CNXTRACE-I-DLMPOST, posts queued=%u unqueued=%u lock_gone=%u "
            "refused=%u\n",
            (unsigned)v->posts_queued, (unsigned)v->posts_unqueued,

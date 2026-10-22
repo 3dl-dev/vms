@@ -585,13 +585,29 @@ struct vms_dlm_scs_view {
 	uint32_t posts_unqueued;        /* the fork queue would not take it     */
 	uint32_t posts_lock_gone;       /* refill found no proxy: abandoned     */
 	uint32_t posts_refused;         /* the FSM refused: nothing was sent    */
+
+	/*
+	 * THE ENGINE'S LOCK-SAFETY READ (rd vms-5cd): grant decisions this
+	 * executive WITHHELD because a PROXY LKB of its own holds the resource
+	 * -- a lock the cluster granted this node, on a resource this node has
+	 * since come to master (a tree handed over, a directory answering "you
+	 * master it"). Read from the engine, like `rm_held_unreported` above,
+	 * and not derived from anything the arm counted.
+	 *
+	 * It is in the row because the alternative was measured twice on real
+	 * hardware: OVMX GRANTED a real VAX EX on a resource its own hibernating
+	 * process held at CR, because the compatibility check walked only
+	 * res->granted and the proxy was not on it. A nonzero reading here is
+	 * that grant NOT happening, attributable to this executive.
+	 */
+	uint32_t proxy_compat_blocks;
 };
 /* 184 since rd vms-ed5 added the ten remaster counters (144 before): a
  * fixed-width ABI struct
  * whose size is PINNED, so a field added here fails to build until both
  * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
  * and this number are updated together. */
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 216,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 220,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

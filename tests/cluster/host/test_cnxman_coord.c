@@ -3037,6 +3037,71 @@ static void test_194_release_on_the_wire(void)
 	conf_dump("dlm_deq", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
+/*
+ * rd vms-a4d7: THE DEFERRED GRANT'S 132 BYTES, ALL DESCRIBED.
+ *
+ * A frame type OVMX has never put on a real node's wire -- 387 real op-0x02
+ * frames are in the corpus and OVMX emitted none of them -- so it faces a real
+ * V7.3 lock manager only behind the conformance gate, and every one of its 132
+ * bytes gets a row in frame-grounding.tsv.
+ *
+ * Driven through the SHIPPING pair: the codec builder, then the DLM sequence
+ * stamp and the envelope writer, with the notification branch chosen by the
+ * shipping predicate -- so what the gate measures is what the wire would see.
+ */
+static void test_a4d7_grant_notify_on_the_wire(void)
+{
+	/* The two handles and the two modes an engine read back off the LKB it
+	 * had just granted: the handles in the grounded lkid form (seq << 24 |
+	 * idx, minted_form_census.py), the modes the evacuation's own EX. */
+	struct vms_dlm_grant_notify gn;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[192];
+	uint32_t written = 0;
+	uint16_t sent0;
+
+	printf("\n-- rd vms-a4d7: the deferred grant's 132 bytes, all "
+	       "described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	gn.master_lkid  = 0x1d000412u;
+	gn.req_lkid     = 0x07000412u;
+	gn.granted_mode = (uint8_t)VMS_LCK_EX;
+	gn.req_mode     = (uint8_t)VMS_LCK_EX;
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_grant_notify_build(&gn, frame, sizeof(frame),
+					    &written) == VMS_CODEC_OK,
+		 "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK,
+		 "the cluster's DLM sequence, as on every DLM message");
+	sent0 = m->cm_send_msg;
+	cnxman_envelope_originate(m, b,
+				  vms_dlm_body_is_notification(b,
+							       VMS_CM_BODY_LEN)
+					  ? CNXMAN_ENV_NOTIFY
+					  : CNXMAN_ENV_REQUEST);
+	ct_check(m->cm_send_msg != sent0,
+		 "it takes the dialogue's next send-msg#");
+	ct_check(b[4] == 0u && b[5] == 0u && b[6] == 0u && b[7] == 0u,
+		 "*** and the shipping composer opens NO TRANSACTION on it: "
+		 "0 of 387 real op-0x02 frames carry one and no node answers "
+		 "one ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,mlkid=%u,lkid=%u,mode=%u,reqmode=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)gn.master_lkid,
+		 (unsigned)gn.req_lkid, (unsigned)gn.granted_mode,
+		 (unsigned)gn.req_mode);
+	conf_dump("dlm_grant_notify", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -3064,6 +3129,7 @@ int main(void)
 	test_c55_enq_request_on_the_wire();
 	test_85f_queued_answer_on_the_wire();
 	test_194_release_opens_no_transaction();
+	test_a4d7_grant_notify_on_the_wire();
 	test_194_release_on_the_wire();
 
 	test_twelve_times_m_minus_one();

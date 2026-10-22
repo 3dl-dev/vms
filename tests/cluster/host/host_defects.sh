@@ -169,6 +169,9 @@ ldwv-refusal-uncounted
 ldwv-drops-our-own-membership
 join-promotion-records-nothing
 dlm-deferred-grant-not-sent
+dlm-deferred-grant-as-an-answer
+dlm-deferred-grant-at-nl
+dlm-deferred-grant-opens-a-transaction
 lock-interrupted-wait-ignored
 dlm-pending-overflow-overwrites
 dlm-dir-remove-by-anyone
@@ -526,13 +529,54 @@ EOF
 
     dlm-deferred-grant-not-sent)
         case "$_f" in
-        facility)     echo "THE DEFERRED GRANT (dlm_arm_send_deferred_grant(), rd vms-f87): when a release advances this master's queue, the waiter is TOLD -- its own queued frame echoed back with the handle this engine assigned";;
+        facility)     echo "THE DEFERRED GRANT (dlm_arm_send_grant_notify(), rd vms-f87 + rd vms-a4d7): when a release advances this master's queue, the waiter is TOLD -- a cat-0x02 op-0x02 naming that lock's own handle pair and the mode this engine granted, read off the LKB at the moment of the send";;
         targets)      echo "kernel-core/vms_dlm_scs.c";;
         suites_red)   echo "test_dlm_scs_arm";;
         isolation)    echo "isolated";;
         why)          echo "the origination is removed and the flip goes back to being counted in silence, which is what shipped before. MEASURED COST, 2026-10-09 10:56Z on vaxlab-3: an OVMX master held EX on EVAC\$WORKLOAD, VAX1's \$ENQW EX queued at it correctly, OVMX released -- and VAX1 was never told. Its process sat in RWSCS indefinitely and could not even be STOPped. The engine HAD granted the lock; only the frame was missing. This is ci.6's last step.";;
         require_fail) hd_lines <<'EOF'
-*** and the RELEASE path really CALLS the origination -- not just defines it ***
+*** the RELEASE path really CALLS the origination -- not just defines it ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-deferred-grant-as-an-answer)
+        case "$_f" in
+        facility)     echo "THE DEFERRED GRANT IS A cat-0x02 REQUEST, NOT AN ANSWER (vms_cluster_codec_dlm.c vms_dlm_grant_notify_build, rd vms-a4d7): a real master never answers an already-answered transaction a second time";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the category goes back to 0x82, which is the shape rd vms-f87 built and the corpus has no instance of: 0 of 111 real queued transactions were ever answered 0xfa on that transaction, and 0 of the 3,974 real 0xfa grants whose request their capture lacks name a handle pair the master had QUEUED (tools/cluster/dlm_late_grant_census.py). It is also unsendable -- vms_dlm_shape_fit_for_any_member rejects every cat-0x82 toward a system that has not proved it runs this implementation, which the lab read as 'send_failed=1' beside the CM's own 'refused=0'. Putting a minted shape in front of a real V7.3 lock manager is the class that bugchecked two lab VAXes.";;
+        require_fail) hd_lines <<'EOF'
+  body[8:10] = 02 02
+*** and the codec calls it a NOTIFICATION: 0 of 387 real op-0x02 frames open a transaction and no node answers one ***
+*** and FIT FOR A REAL VMS MEMBER: the gate that refused the cat-0x82 echo by construction admits this shape, which is why the grant can now leave at all ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-deferred-grant-at-nl)
+        case "$_f" in
+        facility)     echo "THE GRANTED MODE A DEFERRED GRANT MAY ASSERT (vms_cluster_codec_dlm.c dlm_grant_notify_modes_ok, rd vms-a4d7): body[30] is a real lock mode in 387 of 387 real op-0x02 frames and NEVER NL";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the refusal is removed, so an engine reporting a grant at NL -- a mode no real deferred grant carries, because an NL request is granted at once and never queued -- is stated on the wire instead of being counted as a grant this node will not assert. An ungrounded value in a mode cell is what the vms-194 arm found OVMX writing into a release's body[30], in the one frame family that has already bugchecked two lab VAXes.";;
+        require_fail) hd_lines <<'EOF'
+*** a granted mode of NL: REFUSED. body[30] is a real lock mode in 387 of 387 and never NL -- an NL request is granted at once and never deferred ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-deferred-grant-opens-a-transaction)
+        case "$_f" in
+        facility)     echo "THE DEFERRED GRANT IS A NOTIFICATION (vms_cluster_codec_dlm.c vms_dlm_body_is_notification, rd vms-a4d7): 0 of 387 real op-0x02 frames carry a transaction at body[4:8] and the corpus holds zero cat-0x82 op-0x02 answers anywhere";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated to the codec's own suite; test_cnxman_coord asserts the same property on the composed frame, so that suite reddens too and the driver is not asked to score it";;
+        why)          echo "the op-0x02 stops being classified as a notification, so cnxman_dlm_send takes the REQUEST branch and the connection manager mints a transaction token on the CSB for a message no peer will ever answer -- and leaves it open. That is the envelope-inconsistency class that produced CNXMGRERR on a real node (ovmx-never-crashes-a-peer, crash vector 1), and the identical defect rd vms-194 D1 measured on this node's own releases.";;
+        require_fail) hd_lines <<'EOF'
+*** and the codec calls it a NOTIFICATION: 0 of 387 real op-0x02 frames open a transaction and no node answers one ***
 EOF
                       ;;
         esac;;
@@ -682,7 +726,7 @@ EOF
         targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
-        why)          echo "dlm_lkid_pair_put()'s shared guard ('req_lkid == VMS_DLM_LKID_UNSET || master_lkid == VMS_DLM_LKID_UNSET -> VMS_CODEC_E_INVAL'), which both vms_dlm_deq_build() and vms_dlm_blkast_build() call before writing a single byte, is disarmed. A $DEQ or BLKAST naming lock-id 0 -- the exact fc8540ae shape -- is built and sent instead of refused.";;
+        why)          echo "dlm_lkid_pair_put()'s shared guard ('req_lkid == VMS_DLM_LKID_UNSET || master_lkid == VMS_DLM_LKID_UNSET -> VMS_CODEC_E_INVAL'), which vms_dlm_deq_build(), vms_dlm_blkast_build() and vms_dlm_grant_notify_build() all call before writing a single byte, is disarmed. A $DEQ, a BLKAST or a DEFERRED GRANT naming lock-id 0 -- the exact fc8540ae shape -- is built and sent instead of refused. That the deferred grant reddens here too is the point: it shares the guard rather than carrying its own copy of it (rd vms-a4d7).";;
         require_fail) hd_lines <<'EOF'
   master_lkid==0 REFUSED on $DEQ (0x03)
   req_lkid==0 REFUSED on $DEQ (0x03)
@@ -690,6 +734,8 @@ EOF
   master_lkid==0 REFUSED on BLKAST (0x05)
   req_lkid==0 REFUSED on BLKAST (0x05)
 *** a refused build wrote NO byte at all ***
+*** no master handle: REFUSED. A placeholder handle is what bugchecked VAX1 with INVLOCKID ***
+*** no requester handle: REFUSED -- the grant would name nobody's lock ***
 EOF
                       ;;
         esac;;
@@ -912,17 +958,19 @@ EOF
 *** the engine told the arm exactly once that it advanced a queue for another system ***
   and counted it as reported
   naming the SYSTEM and this node's own handle for its lock -- and nothing else
-*** and that key produces a GRANT FRAME: the lock reads back as granted for that system, and the requester's own retained body is what carries it ***
+*** and that key produces a GRANT FRAME: the lock reads back as granted for that system, and the op-0x02 the corpus puts at that moment is built from what the read reported ***
   the four values are the lock database's, read at send time
   including the mode the engine really granted (EX)
-*** and the frame the peer receives is a GRANT naming its own handle and ours ***
+  and the SECOND read, the mode that LKB asked for -- equal at a grant, and body[31] on the wire
+*** and the frame the peer receives is a cat-0x02 op-0x02 naming its own handle and ours ***
+*** with the mode $GETLKI independently says this engine granted, in BOTH mode cells -- 95 of 95 real deferred grants carry them equal ***
 *** ...and the flip nobody could be told about is COUNTED, not dropped ***
 the engine reports exactly one advanced queue -- what the lab read as `local advances=1`
   naming the peer and the SECOND LKB, not the cancelled one
 the lock reads back as granted for that system at the moment of the send
 *** and the key the GRANT path takes with is the key the arm RETAINED under -- the one thing section 12 could not disagree about ***
-*** so the retained frame is found and the grant is built ***
-  and it names the SECOND requester's handle, so the stale retained frame cannot be what the peer receives
+*** so the deferred grant is built from that read ***
+  and it names the SECOND requester's handle and the SECOND LKB, so the cancelled request cannot be what the peer receives -- the engine's own read is the only source
 EOF
                       ;;
         esac;;
@@ -3264,8 +3312,26 @@ apply_edit() {
         sed -i 's|                                 VMS_DEADLOCK_WAIT_MS, &timed_out)) {|                             VMS_DEADLOCK_WAIT_MS, \&timed_out);\n        if (0) {|' "$_file";;
 
     dlm-deferred-grant-not-sent)
-        # The one call that originates it. Removing it removes the anchor.
-        sed -i 's|\tdlm_arm_send_deferred_grant(d, \&res);|\td->deferred_grants_no_wire_op++; /* NEGCTL dlm-deferred-grant-not-sent */|' "$_file";;
+        # The one call that originates it (rd vms-a4d7 renamed it when the
+        # frame stopped being an echo). Removing it removes the anchor.
+        sed -i 's|\t\tdlm_arm_grant_from_result(d, \&res);|\t\td->deferred_grants_no_wire_op++; /* NEGCTL dlm-deferred-grant-not-sent */|' "$_file";;
+
+    dlm-deferred-grant-as-an-answer)
+        # The flag write is the first line after the lock-id pair; prepending a
+        # category overwrite there makes the frame the cat-0x82 echo again. The
+        # anchor is consumed, so a second apply cannot match.
+        sed -i 's|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_GRANT_NOTIFY_FLAG,|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_CAT, 0x82u);\n\tvms_wire_put_u8(\&w, VMS_OFF_DLM_GRANT_NOTIFY_FLAG /* NEGCTL dlm-deferred-grant-as-an-answer */,|' "$_file";;
+
+    dlm-deferred-grant-at-nl)
+        # The mode predicate is one expression, unique in this file.
+        sed -i 's|\treturn g->granted_mode != (uint8_t)VMS_LCK_NL \&\&|\treturn /* NEGCTL dlm-deferred-grant-at-nl */|' "$_file";;
+
+    dlm-deferred-grant-opens-a-transaction)
+        # The notification classifier's own verdict line, unique in this file
+        # (shape_fit's copy of the same test ends in `&&`, not `;`). Making it
+        # never true drops the op out of the notification class and consumes
+        # the anchor, so a second apply cannot match.
+        sed -i 's|\t\t       flag == VMS_DLM_GRANT_NOTIFY_FLAG_VAL;|\t\t       flag != flag; /* NEGCTL dlm-deferred-grant-opens-a-transaction */|' "$_file";;
 
     dlm-pending-overflow-overwrites)
         # The full-table arm's own two lines (both unique in this file, and

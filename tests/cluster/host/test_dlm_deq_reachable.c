@@ -1610,26 +1610,25 @@ static uint32_t adv_arrangement(struct vms_proc *holder, const char *resnam,
 }
 
 /* The fork-thread half the glue runs, with the shipping objects: read the lock
- * back, take the requester's own retained frame, and build the grant. */
+ * back and build the DEFERRED GRANT from what that read reported (rd vms-a4d7
+ * -- a cat-0x02 op-0x02 keyed by the two handles, which needs no retained
+ * request body: the echo this used to build is a shape no real master sends). */
 static int adv_grant_frame(const struct vms_dlm_grant_advance *g,
-			   struct vms_dlm_pending *pending, uint8_t *frame,
-			   uint32_t cap, struct vms_dlm_master_result *out)
+			   uint8_t *frame, uint32_t cap,
+			   struct vms_dlm_master_result *out)
 {
-	uint8_t reqbody[VMS_CM_BODY_LEN];
-	uint32_t n, written = 0;
+	struct vms_dlm_grant_notify gn;
+	uint32_t written = 0;
 
 	if (vms_lock_dlm_grant_advance_read(g->csid, g->master_lkid, out) !=
 	    SS__NORMAL)
 		return 0;
-	n = vms_dlm_pending_take(pending, out->deferred_csid,
-				 out->deferred_req_lkid, reqbody,
-				 (uint32_t)sizeof(reqbody));
-	if (n == 0u)
-		return 0;
+	gn.master_lkid  = out->deferred_master_lkid;
+	gn.req_lkid     = out->deferred_req_lkid;
+	gn.granted_mode = out->deferred_mode;
+	gn.req_mode     = out->deferred_req_mode;
 	memset(frame, 0, cap);
-	return vms_dlm_enq_response_build_grant(reqbody, n,
-						out->deferred_master_lkid, NULL,
-						frame, cap, &written) ==
+	return vms_dlm_grant_notify_build(&gn, frame, cap, &written) ==
 	       VMS_CODEC_OK;
 }
 
@@ -1639,7 +1638,7 @@ static void test_a_local_release_tells_the_peer(void)
 	struct vms_dlm_master_result q, r;
 	struct vms_dlm_pending pending;
 	struct vms_dlm_grant_advance g;
-	struct vms_dlm_enq_response rsp;
+	struct vms_dlm_grant_notify gn;
 	struct vms_getlki_args lki;
 	uint8_t reqframe[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
 	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
@@ -1690,27 +1689,40 @@ static void test_a_local_release_tells_the_peer(void)
 	g.csid = g_adv.csid;
 	g.master_lkid = g_adv.master_lkid;
 	memset(ans, 0, sizeof(ans));
-	ct_check(adv_grant_frame(&g, &pending, ans, sizeof(ans), &r),
+	ct_check(adv_grant_frame(&g, ans, sizeof(ans), &r),
 		 "*** and that key produces a GRANT FRAME: the lock reads back "
-		 "as granted for that system, and the requester's own retained "
-		 "body is what carries it ***");
+		 "as granted for that system, and the op-0x02 the corpus puts "
+		 "at that moment is built from what the read reported ***");
 	ct_check(r.deferred_grant == 1u && r.deferred_csid == CSID_PEER &&
 		 r.deferred_req_lkid == WAITER_LKID &&
 		 r.deferred_master_lkid == q.master_lkid,
 		 "  the four values are the lock database's, read at send time");
 	ct_check_eq_u32(r.deferred_mode, LCK_K_EXMODE,
 			"  including the mode the engine really granted (EX)");
+	ct_check_eq_u32(r.deferred_req_mode, LCK_K_EXMODE,
+			"  and the SECOND read, the mode that LKB asked for -- "
+			"equal at a grant, and body[31] on the wire");
 	ct_check(getlki(&delivery, q.master_lkid, &lki) &&
 		 lki.granted_mode == LCK_K_EXMODE,
 		 "  which is what $GETLKI says about that LKB independently");
-	ct_check(vms_dlm_enq_response_parse_body(ans + VMS_OFF_SYSAP_BODY,
-						 VMS_CM_BODY_LEN, &rsp) ==
+	ct_check(vms_dlm_grant_notify_parse_body(ans + VMS_OFF_SYSAP_BODY,
+						 VMS_CM_BODY_LEN, &gn) ==
 		 VMS_CODEC_OK &&
-		 rsp.outcome == VMS_DLM_ENQ_GRANTED &&
-		 rsp.master_lkid == q.master_lkid &&
-		 rsp.req_lkid == WAITER_LKID,
-		 "*** and the frame the peer receives is a GRANT naming its own "
-		 "handle and ours ***");
+		 gn.master_lkid == q.master_lkid &&
+		 gn.req_lkid == WAITER_LKID,
+		 "*** and the frame the peer receives is a cat-0x02 op-0x02 "
+		 "naming its own handle and ours ***");
+	ct_check(gn.granted_mode == LCK_K_EXMODE &&
+		 gn.req_mode == LCK_K_EXMODE,
+		 "*** with the mode $GETLKI independently says this engine "
+		 "granted, in BOTH mode cells -- 95 of 95 real deferred "
+		 "grants carry them equal ***");
+	ct_check(ans[VMS_OFF_SYSAP_BODY + 4u] == 0u &&
+		 ans[VMS_OFF_SYSAP_BODY + 5u] == 0u &&
+		 ans[VMS_OFF_SYSAP_BODY + 6u] == 0u &&
+		 ans[VMS_OFF_SYSAP_BODY + 7u] == 0u,
+		 "  and it opens no transaction: nobody answers a deferred "
+		 "grant, so no token is minted for a reply that never comes");
 	vms_lock_dlm_set_delivery_proc(NULL);
 	engine_down();
 
@@ -2059,7 +2071,7 @@ static void test_the_lab_sequence_keys_agree(void)
 	struct vms_dlm_master_result q1, q2, r;
 	struct vms_dlm_pending pending;
 	struct vms_dlm_grant_advance g;
-	struct vms_dlm_enq_response rsp;
+	struct vms_dlm_grant_notify gn;
 	struct vms_getlki_args lki;
 	struct vms_dlm_adopt_tree t;
 	uint8_t body1[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
@@ -2156,17 +2168,16 @@ static void test_the_lab_sequence_keys_agree(void)
 			"the arm RETAINED under -- the one thing section 12 "
 			"could not disagree about ***");
 	memset(ans, 0, sizeof(ans));
-	ct_check(adv_grant_frame(&g, &pending, ans, sizeof(ans), &r),
-		 "*** so the retained frame is found and the grant is built "
-		 "***");
-	ct_check(vms_dlm_enq_response_parse_body(ans + VMS_OFF_SYSAP_BODY,
-						 VMS_CM_BODY_LEN, &rsp) ==
+	ct_check(adv_grant_frame(&g, ans, sizeof(ans), &r),
+		 "*** so the deferred grant is built from that read ***");
+	ct_check(vms_dlm_grant_notify_parse_body(ans + VMS_OFF_SYSAP_BODY,
+						 VMS_CM_BODY_LEN, &gn) ==
 		 VMS_CODEC_OK &&
-		 rsp.outcome == VMS_DLM_ENQ_GRANTED &&
-		 rsp.req_lkid == LAB_W2_LKID &&
-		 rsp.master_lkid == q2.master_lkid,
-		 "  and it names the SECOND requester's handle, so the stale "
-		 "retained frame cannot be what the peer receives");
+		 gn.req_lkid == LAB_W2_LKID &&
+		 gn.master_lkid == q2.master_lkid,
+		 "  and it names the SECOND requester's handle and the SECOND "
+		 "LKB, so the cancelled request cannot be what the peer "
+		 "receives -- the engine's own read is the only source");
 
 	/* The stale entry is still there, uncollected -- stated rather than
 	 * assumed, because an entry nothing ever takes is a slot leak and the

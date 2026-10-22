@@ -1375,12 +1375,12 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * NL/CR/CW/PR/PW/EX, a non-NULL co-holder, and the roles swapped so the
  * sender and the master change places. body[30] reads 0 in EVERY ONE, so a
  * real node releasing an EX lock does NOT put 5 there. The corpus bounds it
- * the same way: 41,049 real releases carry only 0 or 1, and the 11 this
+ * the same way: 41,296 real releases carry only 0 or 1, and the 11 this
  * executive sent before the fix carried the lock mode -- {1, 5}, out of the
  * envelope the moment the lock was above CR, in the one frame family that has
  * already bugchecked two lab VAXes (rd vms-3ac).
  *
- * WHAT SELECTS THE 1 THAT 8,904 OF THE CORPUS'S RELEASES CARRY IS NOT KNOWN
+ * WHAT SELECTS THE 1 THAT 33,965 OF THE CORPUS'S RELEASES CARRY IS NOT KNOWN
  * AND IS NOT GUESSED. It is not the held mode, not a co-holder and not the
  * role -- the arm separated all three. The remaining matrix candidates are a
  * value block flushed on the release and sub-locks under the root, which need
@@ -1390,7 +1390,7 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  *
  * So `rel_cell` is PARSE-ONLY: it reports what an inbound release carried,
  * and the builder writes the measured VMS_DLM_DEQ_REL_CELL at body[30] AND at
- * body[32] -- equal, which is what 41,049 of 41,049 real releases carry.
+ * body[32] -- equal, which is what 41,296 of 41,296 real releases carry.
  */
 #define VMS_DLM_DEQ_REL_CELL   0u
 /* body[30] and its mirror body[32] on a release. The second offset is the one
@@ -1402,10 +1402,107 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 #define VMS_OFB_DLM_DEQ_REL_CELL   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DEQ_REL_CELL)
 
 struct vms_dlm_deq {
-	uint32_t req_lkid;     /* body[20:24]: our own handle, post-grant   */
-	uint32_t master_lkid;  /* body[24:28]: the master's handle          */
+	/* dlm_lkid_pair_put/_get put `master_lkid` at body[20:24] and
+	 * `req_lkid` at body[24:28] -- the field NAMES say which handle, the
+	 * offsets are the pair's, the same way round as every other
+	 * lock-id-only message (frame-grounding.tsv's dlm_deq rows). */
+	uint32_t req_lkid;     /* body[24:28]: our own handle, post-grant   */
+	uint32_t master_lkid;  /* body[20:24]: the master's handle          */
 	uint8_t  rel_cell;     /* body[30]: PARSE-ONLY (see above)          */
 };
+
+/*
+ * ===========================================================================
+ * THE DEFERRED GRANT (op 0x02): WHAT A MASTER SENDS WHEN A LOCK IT QUEUED
+ * BECOMES GRANTABLE (rd vms-a4d7, under rd vms-28bd).
+ *
+ * THE SHAPE THIS REPLACES HAD NO REAL INSTANCE. rd vms-f87 built the deferred
+ * grant as the requester's own queued request ECHOED BACK as a second cat-0x82
+ * op-0x01 answer carrying 0xfa -- a SECOND answer on a transaction already
+ * answered. tools/cluster/dlm_late_grant_census.py falsifies that by two
+ * independent routes over the whole committed corpus:
+ *   111 real -> real op-0x01 transactions were answered 0xfb QUEUED, and
+ *     0 of them were ever answered 0xfa on that transaction;
+ *   3,974 real 0xfa grants have no request in their capture -- every one with
+ *     a live transaction token, i.e. an answer to a request off the capture --
+ *     and 0 of the 3,974 name a handle pair that master had QUEUED.
+ * So "a real master originates grants nobody just asked for" does not survive
+ * pairing by handle, and emitting the echo would have put a shape no real
+ * master sends in front of a real V7.3 lock manager: the minted-shape class
+ * that bugchecked two lab VAXes (ovmx-never-crashes-a-peer).
+ *
+ * WHAT A REAL MASTER SENDS INSTEAD, measured by POSITION and not by analogy:
+ *   95 of the 111 queued answers are followed by a cat-0x02 op-0x02 from the
+ *      MASTER to the REQUESTER naming that lock's own (master, requester)
+ *      handle pair, and 0 are PRECEDED by one;
+ *   87 of those 95 are followed by the requester's own $DEQ or CONVERT on the
+ *      same handles -- it went on to use a lock it had been told was queued;
+ *    1 of 111 reached that later use with no op-0x02 seen.
+ * 387 real op-0x02 frames are in the corpus and OVMX has emitted none.
+ *
+ * THE FIELD MAP, every figure pinned by that census's --selftest and quoted
+ * cell by cell in frame-grounding.tsv's dlm_grant_notify rows:
+ *   body[4:8]     = 0, 387/387. A NOTIFICATION: nobody answers one, and the
+ *                   corpus holds zero cat-0x82 op-0x02 anywhere. Opening a
+ *                   transaction for a message no peer will answer is the
+ *                   envelope-inconsistency class that produced CNXMGRERR.
+ *   body[20:24]     THE MASTER's handle -- this executive's own LKB handle for
+ *                   the lock it just granted. Never 0 in 387/387, and this
+ *                   builder refuses 0 (dlm_lkid_pair_put).
+ *   body[24:28]     THE REQUESTER's handle, as this engine recorded it on that
+ *                   LKB: what the requester correlates by. Never 0 in 387/387.
+ *   body[28]      = 0x14, 387/387.  body[29] = 0, 387/387.
+ *   body[30]        THE GRANTED MODE. Equal to the queued request's own mode in
+ *                   95 of 95, and 1..5 (never NL) in 387/387.
+ *   body[31]        A SECOND mode cell, equal to body[30] in 95 of 95. NOT the
+ *                   same cell: in the larger CONVERT-correlated population 41
+ *                   of 267 differ. So this builder writes a SECOND executive
+ *                   read -- the mode the LKB was requested at -- which at a
+ *                   grant equals the mode it was granted at. WHAT MAKES THEM
+ *                   DIFFER IS NOT KNOWN AND NOT GUESSED.
+ *   body[112:116] = 0, body[116:120] = ffffffff, body[120:124] = 0,
+ *   body[124:128] = ffffffff -- all 387/387.
+ *   body[47]      = 0: NO RESOURCE NAME, 95 of 95 (383 of 387 overall). The
+ *                   message is keyed by HANDLES, so this builder writes no name.
+ * Every other span is a real sender's stale buffer and this node writes zero
+ * there (the rd vms-42de ruling), body[34] included -- 0 is its modal real
+ * value (255 of 387) and the 0xfa/0xfb that appear there are not a status for
+ * this op (the 95 read 0x00, 0x43, 0xfa, 0xfb, 0x01, 0x20, 0xf9, 0x72, 0x9e).
+ * ===========================================================================
+ */
+#define VMS_DLM_WIREOP_GRANT_NOTIFY   0x02u  /* master -> requester: GRANTED */
+#define VMS_DLM_GRANT_NOTIFY_FLAG_VAL  0x14u /* body[28], 387/387           */
+#define VMS_DLM_GRANT_NOTIFY_FLAG2_VAL 0x00u /* body[29], 387/387           */
+#define VMS_DLM_GRANT_NOTIFY_TAIL_VAL  0xffffffffu /* body[116:120] + [124:128] */
+
+#define VMS_OFF_DLM_GRANT_NOTIFY_FLAG    VMS_OFF_DLM_GRANT_FLAG /* body[28]  */
+#define VMS_OFF_DLM_GRANT_NOTIFY_FLAG2   101u                   /* body[29]  */
+#define VMS_OFF_DLM_GRANT_NOTIFY_MODE    VMS_OFF_DLM_MODE       /* body[30]  */
+#define VMS_OFF_DLM_GRANT_NOTIFY_REQMODE 103u                   /* body[31]  */
+#define VMS_OFF_DLM_GRANT_NOTIFY_TAIL1   188u            /* body[116:120]    */
+#define VMS_OFF_DLM_GRANT_NOTIFY_TAIL2   VMS_OFF_DLM_REQ_TAIL /* body[124:128] */
+#define VMS_OFB_DLM_GRANT_NOTIFY_FLAG  VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_NOTIFY_FLAG)
+#define VMS_OFB_DLM_GRANT_NOTIFY_TAIL1 VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_NOTIFY_TAIL1)
+#define VMS_OFB_DLM_GRANT_NOTIFY_TAIL2 VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_NOTIFY_TAIL2)
+#define VMS_OFB_DLM_GRANT_NOTIFY_MODE  VMS_OFB_DLM_MODE
+#define VMS_OFB_DLM_GRANT_NOTIFY_REQMODE \
+	VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_NOTIFY_REQMODE)
+
+/* THE FOUR VALUES THIS FRAME ASSERTS, each an executive read off the LKB the
+ * engine really granted -- never a byte carried over from another frame. */
+struct vms_dlm_grant_notify {
+	uint32_t master_lkid;   /* body[20:24]: OUR handle for that lock    */
+	uint32_t req_lkid;      /* body[24:28]: the requester's own handle  */
+	uint8_t  granted_mode;  /* body[30]: the mode the engine granted    */
+	uint8_t  req_mode;      /* body[31]: the mode the LKB asked for     */
+};
+
+vms_codec_status_t
+vms_dlm_grant_notify_build(const struct vms_dlm_grant_notify *g,
+			   uint8_t *frame, uint32_t cap, uint32_t *written);
+vms_codec_status_t
+vms_dlm_grant_notify_parse_body(const uint8_t *body, uint32_t len,
+				struct vms_dlm_grant_notify *out);
 
 /*
  * A blocking AST (op 0x05, rd vms-ea1), master -> the remote holder whose lock is in

@@ -211,52 +211,78 @@ static void arm_bindings(void)
 	       "no builder is ever called with the unset-lock-id sentinel");
 
 	/*
-	 * THE DEFERRED GRANT IS ORIGINATED NOW (rd vms-f87), and from the
-	 * requester's OWN frame. Measured cost of the old silence: a real VAX
-	 * whose $ENQW queued at an OVMX master was never told it had been
-	 * granted, and its process sat in RWSCS unkillable.
+	 * THE DEFERRED GRANT IS ORIGINATED NOW (rd vms-f87), AND IT IS A
+	 * cat-0x02 op-0x02 (rd vms-a4d7). Measured cost of the old silence: a
+	 * real VAX whose $ENQW queued at an OVMX master was never told it had
+	 * been granted, and its process sat in RWSCS unkillable.
+	 *
+	 * THE ECHO THAT USED TO GO HERE IS GONE, and this is where the text
+	 * says so. It was the requester's own queued request handed back as a
+	 * SECOND cat-0x82 op-0x01 answer carrying 0xfa, and
+	 * tools/cluster/dlm_late_grant_census.py falsifies that shape twice
+	 * over: 0 of 111 real queued transactions were ever answered 0xfa on
+	 * that transaction, and 0 of the 3,974 real 0xfa grants whose request
+	 * their capture lacks name a handle pair the master had QUEUED. It also
+	 * could not leave -- vms_dlm_shape_fit_for_any_member rejects every
+	 * cat-0x82 toward an unproven system, which the lab read as
+	 * `send_failed=1` beside the CM's own `refused=0`.
 	 */
-	has("vms_dlm_pending_keep(&d->pending",
-	    "a request the engine QUEUED has its frame kept (the answer we owe)");
-	has("dlm_arm_send_deferred_grant(d, &res);",
-	    "*** and the RELEASE path really CALLS the origination -- not just "
+	has("dlm_arm_grant_from_result(d, &res);",
+	    "*** the RELEASE path really CALLS the origination -- not just "
 	    "defines it ***");
-	has("vms_dlm_pending_take(&d->pending, r->deferred_csid",
-	    "... and the flip takes that frame back out, keyed by the waiter "
-	    "the ENGINE named");
-	has("vms_dlm_enq_response_build_grant(reqbody, n,",
-	    "... so the deferred grant is the requester's OWN body, echoed -- "
-	    "never a frame composed from fields here");
+	has("vms_dlm_grant_notify_build(&g, d->txframe,",
+	    "... and what it originates is the op-0x02 the corpus puts at that "
+	    "moment, built by the codec");
 	has("d->deferred_grants_sent++",
 	    "... and an originated grant is COUNTED");
-	has("d->deferred_grants_no_body++",
-	    "... while a flip whose frame is NOT held sends nothing, counted "
+	has("d->deferred_grants_refused++",
+	    "... while a grant the CODEC will not state sends nothing, counted "
 	    "(INV-6: no invented frame to fill the gap)");
+	absent("vms_dlm_pending_take(",
+	       "*** THE ECHO IS GONE: nothing takes a retained request body "
+	       "back out to answer a transaction twice ***");
+	absent("vms_dlm_enq_response_build_grant(reqbody",
+	       "*** ...and the deferred grant is nowhere built as an ENQ "
+	       "ANSWER, the one shape a real master never sends there ***");
 
 	/*
-	 * AND EACH OF THE THREE DOORS NAMES ITSELF (fire q85f1, 2026-10-22).
+	 * BOTH DOORS READ THE LOCK BACK AT THE MOMENT OF THE SEND (rd
+	 * vms-a4d7). The inbound release used to pass its own result's
+	 * `deferred_mode` to the builder, and on that path the value came off
+	 * the release FRAME rather than off the LKB. One door, one read.
+	 */
+	has("vms_lock_dlm_grant_advance_read(csid, master_lkid, &r) !=",
+	    "*** the four values are read out of the lock database IN the send "
+	    "path, not carried to it ***");
+	absent("dlm_arm_send_deferred_grant(d, &r)",
+	       "... so no caller hands the sender a pre-filled result to "
+	       "assert");
+	has("g->granted_mode = r->deferred_mode;",
+	    "... body[30] is the mode that read-back reported granted");
+	has("g->req_mode     = r->deferred_req_mode;",
+	    "... and body[31] is its SECOND read, the mode the LKB asked for -- "
+	    "two cells, two reads, never one value written twice");
+
+	/*
+	 * AND EACH DOOR NAMES ITSELF (fire q85f1, 2026-10-22).
 	 *
 	 * The lab read `deferred grants sent=0 owed=1` off a real VAX that was
 	 * still waiting, and `owed` is the SUM of the retention that did not
-	 * happen, the frame that was not held and the send that was refused.
-	 * A fire that cannot say which door refused has to be run twice, so
-	 * each one says so once, out of this arm's own state.
+	 * happen, the grant that could not be stated and the send that was
+	 * refused. A fire that cannot say which door refused has to be run
+	 * twice, so each one says so once, out of this arm's own state.
 	 */
 	has("dlm_arm_keep_request(d, in, e, &res);",
 	    "the retention is a CHECKED call, not a (void) cast");
 	has("d->pending_keep_refused++",
 	    "... a retention that did not happen is COUNTED");
-	has("dlm_arm_say_no_body(d, r);",
-	    "*** and the three doors each name themselves on the console: the "
-	    "frame that was not held ***");
-	has("dlm_arm_say_send_failed(d, r);",
+	has("dlm_arm_say_refused(d, &g, csid);",
+	    "*** and each door names itself on the console: the grant this "
+	    "node will not state ***");
+	has("dlm_arm_say_send_failed(d, &g, csid);",
 	    "... the send that was refused");
 	has("d->keep_refused_said = 1u;",
 	    "... each said ONCE, the echo guard's own discipline");
-	has("(unsigned)d->pending.kept, (unsigned)d->pending.replaced,",
-	    "... and the retention table's own counters ride in the line, so a "
-	    "transcript tells 'never retained' from 'retained under another "
-	    "key'");
 	absent("(void)vms_dlm_pending_keep(",
 	       "*** and the retention is nowhere called unchecked ***");
 	absent("dlm_arm_count_deferred_grant",
@@ -316,16 +342,21 @@ static void arm_bindings(void)
 	    "... a key whose lock is no longer granted for that system is "
 	    "COUNTED, and nothing is sent");
 	before("vms_lock_dlm_grant_advance_read(csid, master_lkid, &r) !=",
-	       "dlm_arm_send_deferred_grant(d, &r);",
-	       "*** the read-back happens BEFORE the send: a grant is never "
-	       "built from a fact that has stopped being true ***");
+	       "vms_dlm_grant_notify_build(&g, d->txframe,",
+	       "*** the read-back happens BEFORE the frame is built: a grant is "
+	       "never built from a fact that has stopped being true ***");
+	before("vms_dlm_grant_notify_build(&g, d->txframe,",
+	       "dlm_arm_send(d, (vms_csid_t)csid,",
+	       "... and the build before the send, so nothing half-built goes "
+	       "out");
 
 	/* RULE A: the arm fills a buffer; it never sends a reply. */
 	has("memcpy(reply->body, d->txframe + VMS_OFF_SYSAP_BODY",
 	    "a reply is STAGED into the connection manager's buffer");
 	absent("cnxman_dlm_send(d->cl, (vms_csid_t)r->deferred",
-	       "the arm originates no grant of its own: there is no grounded "
-	       "release to flip one (the counted gap, not a guess)");
+	       "... and the deferred grant does not reach the connection "
+	       "manager behind dlm_arm_send's back: ONE way out, so RULE C and "
+	       "the shape gate apply to it like every other origination");
 
 	/* RULE C, and its ORDER. */
 	has("if (!dlm_arm_peer_is_ours(d, req))",

@@ -363,11 +363,13 @@ static void cnxtrace_print_dlm(void)
     /* WHICH DOOR an owed deferred grant was refused at (fire q85f1). `owed`
      * on the line above is the SUM of these; the fire that first read it as
      * `owed=1` could not say whether the frame was never retained, was not
-     * found, or could not be sent. */
+     * found, or could not be sent. `refused` replaced `no_body` when the
+     * deferred grant stopped being an echo of a retained frame (rd vms-a4d7):
+     * it is now the CODEC declining to state a handle or a mode. */
     printf("%%CNXTRACE-I-DLMOWED, owed grants by door: keep_refused=%u "
-           "table_overflow=%u no_body=%u send_failed=%u\n",
+           "table_overflow=%u refused=%u send_failed=%u\n",
            (unsigned)v->pending_keep_refused, (unsigned)v->pending_overflow,
-           (unsigned)v->deferred_grants_no_body,
+           (unsigned)v->deferred_grants_refused,
            (unsigned)v->deferred_grants_send_failed);
     /* THE DOUBLE GRANT THAT DID NOT HAPPEN (rd vms-5cd). Grant decisions the
      * ENGINE withheld because a PROXY LKB of this node's holds the resource --

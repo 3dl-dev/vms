@@ -2596,7 +2596,7 @@ uint32_t vms_lock_dlm_grant_advance_read(uint32_t csid, uint32_t master_lkid,
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
     uint32_t req_lkid;
-    uint8_t mode;
+    uint8_t mode, reqmode;
     int ok;
 
     if (out == NULL || csid == 0u || master_lkid == VMS_DLM_LKID_UNSET)
@@ -2612,9 +2612,15 @@ uint32_t vms_lock_dlm_grant_advance_read(uint32_t csid, uint32_t master_lkid,
         lock_put(lock);
         return SS__IVLOCKID;
     }
+    /* BOTH MODE CELLS OF THE GRANT ARE READ HERE, under the resource's own
+     * lock and in one pass, so the pair the frame carries is a pair this LKB
+     * really held at one instant -- not two reads a grant could slip between
+     * (rd vms-a4d7: body[30] is the granted mode, body[31] the requested one,
+     * and they are not the same cell). */
     exec_lock(&res->lock);
     ok = (!lock->waiting && lock->grant_state == SS__NORMAL);
     mode = (uint8_t)lock->granted_mode;
+    reqmode = (uint8_t)lock->requested_mode;
     req_lkid = lock->req_lkid;
     exec_unlock(&res->lock);
     lock_put(lock);
@@ -2627,6 +2633,7 @@ uint32_t vms_lock_dlm_grant_advance_read(uint32_t csid, uint32_t master_lkid,
     out->deferred_master_lkid = master_lkid;
     out->deferred_req_lkid = req_lkid;
     out->deferred_mode = mode;
+    out->deferred_req_mode = reqmode;
     return SS__NORMAL;
 }
 

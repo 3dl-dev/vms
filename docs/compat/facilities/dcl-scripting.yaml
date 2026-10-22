@@ -75,7 +75,7 @@ items:
   - id: dcl-scripting$f-mode
     kind: lexical
     status: partial
-    authenticity: advisory
+    authenticity: real
     vms: "F$MODE reports INTERACTIVE/BATCH/OTHER/NETWORK per the actual process context"
     evidence: src/vmsdcl/dcl_lexical.c
-    notes: "Reports only INTERACTIVE vs BATCH from ctx->interactive; NETWORK/OTHER modes not distinguished. Honest two-value report of what OVMX tracks, not a fabrication — advisory, not facade-risk."
+    notes: "F$MODE() and F$GETJPI(pid,\"MODE\") read $GETJPI JPI$_MODE, the executive's classification of the process (its row's proc_type): INTERACTIVE for an interactive job's processes, OTHER for a detached one, BATCH for a batch job root (none runs: no batch engine). Formerly DCL guessed INTERACTIVE/BATCH from whether its own input was a terminal. Partial: the executive does not classify a DECnet object's server process as NETWORK (it reports OTHER). Proof tests/qemu/test_syssvc_dcl_fmode.c + defects.d/dcl-fmode-from-terminal.defect."

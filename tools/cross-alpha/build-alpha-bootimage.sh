@@ -151,6 +151,10 @@ else
 fi
 
 mkdir -p "$WORK"
+# The system disk's size in MB (128 unless a gate stages more: the self-host
+# proofs carry cc1, cc1plus and the C/C++ headers, vms-5b3).
+DISK_MB=${OVMX_ALPHA_DISK_MB:-128}
+case "$DISK_MB" in ''|*[!0-9]*) echo "FAIL: OVMX_ALPHA_DISK_MB=$DISK_MB is not a size in MB"; exit 1;; esac
 
 echo "== assemble the Alpha boot image (disk master + initramfs + kernel bake) =="
 docker run --rm --memory=8g --cpus="$(nproc)" \
@@ -160,6 +164,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
   -v "$USERLAND":/userland:ro \
   -v "$WORK":/work "$IMG" bash -euo pipefail -c '
     KV="'"$KV"'"
+    DISK_MB="'"$DISK_MB"'"
     export ARCH=alpha CROSS_COMPILE=alpha-linux-gnu-
     export QEMU_LD_PREFIX=/usr/alpha-linux-gnu
     BIN=/userland/bin
@@ -338,7 +343,13 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
                 cp "$JOINT/ld.exe" "$SYSEXE/LD.EXE"
                 cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
-                for _f in crt0.o crtbegin.o crtend.o libgcc.a; do
+                [ -f "$JOINT/ar.exe" ] && cp "$JOINT/ar.exe" "$SYSEXE/AR.EXE"
+                # vms-5b3: C++ -- cc1plus, the g++ driver (xg++; ODS-2 has no '+', so GXX.EXE)
+                # and the 32-bit libstdc++ (LIBSTDCXX.A, searched by LINK)
+                [ -f "$JOINT/cc1plus.exe" ] && cp "$JOINT/cc1plus.exe" "$SYSEXE/CC1PLUS.EXE"
+                [ -f "$JOINT/gxx.exe" ] && cp "$JOINT/gxx.exe" "$SYSEXE/GXX.EXE"
+                [ -f "$JOINT/libstdcxx.a" ] && cp "$JOINT/libstdcxx.a" "$SYSEXE/LIBSTDCXX.A"
+                for _f in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do
                     [ -f "$JOINT/$_f" ] || { echo "FAIL: DRL_PROOF without $JOINT/$_f"; exit 1; }
                     cp "$JOINT/$_f" "$SYSEXE/$(echo "$_f" | tr a-z A-Z)"
                 done
@@ -350,6 +361,10 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                     mkdir -p "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0"
                     cp -r "$JOINT/inc/usr/include" "$ST/vms/SYS0/SYSCOMMON/USR/INCLUDE"
                     cp -r "$JOINT/inc/gnu/gcc-include" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0/INCLUDE"
+                    # the C++ headers on ODS-2 names (+ header.gcc remap pairs) -> GNU:[CXX]
+                    if [ -d "$JOINT/inc/gnu/cxx" ]; then
+                        cp -r "$JOINT/inc/gnu/cxx" "$ST/vms/SYS0/SYSCOMMON/GNU/CXX"
+                    fi
                     echo "   JOINT-E2E (HEADERS): $(find "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU" -type f | wc -l) header file(s) -> [USR.INCLUDE], [GNU.LIB.GCC.ALPHA-DEC-VMS.14_2_0.INCLUDE]"
                 fi
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM \
@@ -415,9 +430,9 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     #    genuine system disk".  --ods2 + 128 MB is what makes it a real
     #    installed system disk the flip mounts.
     #########################################################################
-    echo "-- master ovmx-distrib-alpha.img (genuine ODS-2, 128 MB) --"
+    echo "-- master ovmx-distrib-alpha.img (genuine ODS-2, $DISK_MB MB) --"
     timeout 300 qemu-alpha "$BIN/vmsfs_master" --ods2 master \
-        /work/ovmx-distrib-alpha.img OVMXSYS "$ST/vms" 128
+        /work/ovmx-distrib-alpha.img OVMXSYS "$ST/vms" "$DISK_MB"
     # Verify: the ODS-2 reader has no `extract`; presence-gate via `--ods2 list`
     # exactly as the x86_64 Dockerfile.bootable path does.
     echo "-- verify: --ods2 list carries the login chain --"

@@ -55,6 +55,15 @@
 # through VMS_IOCTL_CLUSTER_DIAG_CSB / _MEMBER_GET (INV-6) -- an equally
 # executive-backed, just DCL-surfaced, source of truth.
 #
+# SUPERSEDED IN PART (rd vms-151, then rd vms-c56). The finding above predates
+# vms-151, which found PID 1's console sink one level too low for the
+# executive's OPA0: lines and fixed it; they reach this console now. Since
+# vms-c56 only the lines a VMS console prints get there, in VMS's own form
+# ("%CNXMAN,  now a VAXcluster member -- system OVMXB"), and every executive
+# diagnostic goes to OPERATOR.LOG -- this gate asserts both (search
+# check_console_vms_faithful). Membership itself is still read from SHOW
+# CLUSTER, the executive's table.
+#
 # =============================================================================
 # WHY SHOW CLUSTER/CLUSTER's "Nodes" LINE, NOT F$GETSYI("CLUSTER_NODES")
 # =============================================================================
@@ -169,6 +178,37 @@ check() {
 check_re() {
     local desc="$1" log="$2" pattern="$3"
     if grep -qaE -- "$pattern" "$log" 2>/dev/null; then record "$desc" 0; else record "$desc" 1; fi
+}
+check_re_absent() {
+    local desc="$1" log="$2" pattern="$3"
+    if grep -qaE -- "$pattern" "$log" 2>/dev/null; then
+        record "$desc" 1
+        grep -naE -- "$pattern" "$log" 2>/dev/null | head -5 | sed 's/^/      | /'
+    else
+        record "$desc" 0
+    fi
+}
+# rd vms-c56: OPA0: carries only what a VMS console prints. The executive's
+# DIAGNOSTICS ("%CNXMAN, no coordinator CSID seen yet ...", "%PEA0, channel
+# verified", "%DLM, refusing a lock message ...") go to OPERATOR.LOG -- one
+# space after the comma is OVMX's diagnostic form, two is VMS's console form
+# ("%CNXMAN,  now a VAXcluster member -- system X"); and no executive line
+# carries a printk uptime stamp. (Linux's own early-boot lines DO carry stamps
+# on this boot -- loglevel=7, before PID 1 turns stamps off -- so the stamp
+# check is on executive lines only.)
+check_console_vms_faithful() {  # label log
+    local label="$1" log="$2" pea0
+    check_re_absent "$label: no executive diagnostic on the console (%CNXMAN/%DLM/%MSCP_CL/%SCS with OVMX's one-space form)" \
+        "$log" '%(CNXMAN|DLM|MSCP_CL|SCS), [^ ]'
+    pea0=$(grep -aE '%PEA0, ' "$log" 2>/dev/null | grep -avF 'Port has Closed Virtual Circuit - REMOTE NODE ' | head -3)
+    if [ -z "$pea0" ]; then
+        record "$label: no PEDRIVER diagnostic on the console (%PEA0, channel verified ...)" 0
+    else
+        record "$label: no PEDRIVER diagnostic on the console (%PEA0, channel verified ...)" 1
+        printf '%s\n' "$pea0" | sed 's/^/      | /'
+    fi
+    check_re_absent "$label: no executive line carries a printk uptime stamp" \
+        "$log" '\[ *[0-9]+\.[0-9]+\] *%(CNXMAN|PEA0|DLM|MSCP_CL|SCS|SYSINIT),'
 }
 waitfor() {  # pattern limit-seconds log pid
     local pat="$1" lim="${2:-60}" log="$3" pid="$4" w=0
@@ -484,6 +524,12 @@ if [ "$NEGCTL" = "1" ]; then
         "$B_LOG2" "Local CSID          (not yet assigned by the cluster)"
     check "NEGCTL: node B's SHOW CLUSTER never shows a MEMBER row" \
         "$B_LOG2" "MEMBER " absent
+    check_console_vms_faithful "NEGCTL: node A" "$A_LOG2"
+    check_console_vms_faithful "NEGCTL: node B" "$B_LOG2"
+    check_re_absent "NEGCTL: node A's console never announces a membership it does not hold" \
+        "$A_LOG2" '%CNXMAN,  now a VAXcluster member'
+    check_re_absent "NEGCTL: node B's console never announces a membership it does not hold" \
+        "$B_LOG2" '%CNXMAN,  now a VAXcluster member'
 
     if [ "$FAIL" -ne 0 ]; then
         echo "--- node A boot2 log (tail) ---"; tail -n 80 "$A_LOG2"
@@ -560,6 +606,23 @@ check_re "node A: SHOW CLUSTER lists node B ($NODE_B or its SCSSYSTEMID $ID_B) a
 printf 'SHOW CLUSTER/CLUSTER\r' >&4 2>/dev/null; sleep 3
 check_re "node A: SHOW CLUSTER/CLUSTER shows a real minted Local CSID (it founded, not fabricated)" \
     "$A_LOG2" "Local CSID +[0-9A-Fa-f]{8}"
+
+# rd vms-c56: each console announces the cluster the way a VMS console does,
+# and carries nothing else from the executive. Node A FOUNDED: VMS's founder
+# prints "proposing formation of a VAXcluster" and then its own membership.
+# Node B JOINED: VMS's joiner prints the membership request and its own
+# membership, naming itself (the real VAX's console:
+# tests/lab/captures/vms-52d-0b01-oracle-20261013/armA-vax2-console.log).
+check "node A: console announces the formation in VMS's words" \
+    "$A_LOG2" "%CNXMAN,  proposing formation of a VAXcluster"
+check "node A: console announces its own membership in VMS's words" \
+    "$A_LOG2" "%CNXMAN,  now a VAXcluster member -- system $NODE_A"
+check "node B: console announces its own membership in VMS's words" \
+    "$B_LOG2" "%CNXMAN,  now a VAXcluster member -- system $NODE_B"
+check "node B: SYSINIT's own line while it joins" \
+    "$B_LOG2" "%SYSINIT, waiting to form or join a VMScluster system"
+check_console_vms_faithful "node A" "$A_LOG2"
+check_console_vms_faithful "node B" "$B_LOG2"
 
 # Never-crash-a-peer: neither console shows a bugcheck/panic anywhere in the run.
 for LABEL in "node A" "node B"; do

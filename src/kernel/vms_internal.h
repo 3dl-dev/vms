@@ -915,6 +915,10 @@ struct vms_proc {
      */
     struct list_head    l2_channels;    /* struct vms_l2_handle */
     spinlock_t          l2_lock;
+    uint32_t            l2_next_handle; /* last L2 handle number minted for
+                                         * this process, under l2_lock (the
+                                         * substrate-neutral vms_l2.c, rd
+                                         * vms-9394) */
 
     /*
      * Files-11 (ODS-2) ACP file-class channels (vms-149, epic vms-208). A
@@ -1771,9 +1775,11 @@ void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent);
 
 /*
  * L2 (raw datalink) socket surface (vms-7eb, auth slice of vms-1e4; vms_l2.h).
- * Like BGn:, the L2 driver is Linux host-socket glue (src/kernel/
- * exec_kbackend_linux.h's exec_l2_* seam), so vms_module.c dispatches its
- * ioctls and calls vms_l2_release_all at process teardown directly. Unlike
+ * The facility (src/kernel-core/vms_l2.c) is substrate-neutral since rd
+ * vms-9394 and also builds into the NetBSD vms.kmod; on this substrate its
+ * exec_l2_* seam is an AF_PACKET socket (exec_kbackend_linux.h), and
+ * vms_module.c dispatches its ioctls and calls vms_l2_release_all at process
+ * teardown directly. Unlike
  * BGn: there is no fork/exec inheritance for L2 handles in this increment --
  * out of scope for the auth-gate slice (vms-1e4); a process that forks starts
  * with none, exactly as a freshly registered process does today.

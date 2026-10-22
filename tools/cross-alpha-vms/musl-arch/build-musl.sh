@@ -75,6 +75,15 @@ cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
 # header of src/malloc/alpha-dec-vms/lite_malloc.c.
 mkdir -p "src/malloc/${TARGET}"
 cp -v  "${OVERLAY}/src/malloc/${TARGET}/"* "src/malloc/${TARGET}/"
+# vms-599: exit() runs the atexit handlers and flushes stdio. Replace generic
+# exit.c (which reaches both through local weak aliases the back end self-binds)
+# with one that calls them by name. See src/exit/alpha-dec-vms/exit.c.
+mkdir -p "src/exit/${TARGET}"
+cp -v  "${OVERLAY}/src/exit/${TARGET}/"* "src/exit/${TARGET}/"
+# ... and __stdio_exit.c, which reaches stdin/stdout/stderr through the same kind
+# of local weak alias (a NULL), so the flush saw no FILE. See its header.
+mkdir -p "src/stdio/${TARGET}"
+cp -v  "${OVERLAY}/src/stdio/${TARGET}/"* "src/stdio/${TARGET}/"
 # vms-122: VMS P0 placement. An address-less mmap (the heap's, and mremap's
 # moves) is placed in the P0 region below 0x40000000, as the VMS heap grows P0,
 # so every malloc result is a valid 32-bit pointer. See
@@ -236,6 +245,24 @@ if ! grep -q 'vms-28d: psignal' include/signal.h; then
 	perl -0pi -e 's/^void psiginfo\(const siginfo_t \*, const char \*\);\nvoid psignal\(int, const char \*\);\n/#if !defined(__VMS) || defined(__OVMX_LIBC_BUILD) \/* vms-28d: psignal not in the DEC C RTL *\/\nvoid psiginfo(const siginfo_t *, const char *);\nvoid psignal(int, const char *);\n#endif\n/m' include/signal.h
 fi
 grep -q 'vms-28d: psignal' include/signal.h || { echo "vms-28d PATCH FAIL: psignal in include/signal.h" >&2; exit 7; }
+# vms-599: DEC C exit. Under the _POSIX_EXIT feature-test macro exit() is
+# __posix_exit() (a POSIX code 0-255 as a C-facility condition value); otherwise
+# exit()'s value is the VMS status, so EXIT_FAILURE is 2, an error severity
+# (VSI C RTL Reference, exit: "2 or EXIT_FAILURE"; exit(2) measured as %X00000002
+# on OpenVMS Alpha V8.4, tests/lab/captures/decc-exit-alpha-20261021). The GCC
+# port's own programs define _POSIX_EXIT (gcc/config/vms/xm-vms.h).
+if ! grep -q 'vms-599: DEC C exit' include/stdlib.h; then
+	perl -0pi -e 's/^#define EXIT_SUCCESS 0\n/$&#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \/* vms-599: DEC C exit *\/\n#ifdef _POSIX_EXIT\n_Noreturn void __posix_exit (int);\n#else\n#undef EXIT_FAILURE\n#define EXIT_FAILURE 2\n#endif\n#endif\n/m' include/stdlib.h
+fi
+grep -q 'vms-599: DEC C exit' include/stdlib.h || { echo "vms-599 PATCH FAIL: exit in include/stdlib.h" >&2; exit 7; }
+# vms-5b3: under _POSIX_EXIT, exit() IS __posix_exit() by its link name, not by a
+# macro: C++'s <cstdlib> #undefs exit and brings in ::exit, so a macro left every
+# C++ program (GCC 14's cc1, cc1plus, xgcc) on the DEC C exit(1) == success path,
+# and the driver never saw a compiler fail.
+if ! grep -q 'vms-5b3: exit is __posix_exit' include/stdlib.h; then
+	perl -0pi -e 's/^_Noreturn void exit \(int\);\n/#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \&\& defined(_POSIX_EXIT) \/* vms-5b3: exit is __posix_exit *\/\n_Noreturn void exit (int) __asm__("decc\$__posix_exit");\n#else\n_Noreturn void exit (int);\n#endif\n/m' include/stdlib.h
+fi
+grep -q 'vms-5b3: exit is __posix_exit' include/stdlib.h || { echo "vms-5b3 PATCH FAIL: exit in include/stdlib.h" >&2; exit 7; }
 # vms-4ba3: DEC C fgetname(FILE *, char *, ...) -- the file specification of an
 # open stream, served by the RMS file layer (src/vmsrms/crtl_rms_fd.c). A DEC C
 # client form only; musl has no such routine.
@@ -625,6 +652,34 @@ if ! grep -qE '[[:space:]]U[[:space:]]+__libc_malloc_impl$' /tmp/lmck/nm.out; th
 	exit 8
 fi
 echo "  OK      lite_malloc.o: U __libc_malloc_impl, no local allocator -> one heap (mallocng)"
+
+# --------------------------------------------------------------------------
+# EXIT GATE (vms-599): exit.o must be the alpha-dec-vms override -- it names
+# __funcs_on_exit (atexit handlers) and __stdio_exit (stdio flush) as undefined
+# references and defines neither, so no local weak no-op can absorb the calls.
+# --------------------------------------------------------------------------
+echo "== exit gate (vms-599): exit() runs atexit and flushes stdio, every link by name =="
+rm -rf /tmp/exck && mkdir -p /tmp/exck
+for _spec in "exit:__funcs_on_exit __stdio_exit" "__stdio_exit:__stdin_used __stdout_used __stderr_used"; do
+	_m=${_spec%%:*}; _syms=${_spec#*:}
+	EXMEMB=$(grep -m1 -E "(^|/)${_m}\\." /tmp/libc.members || true)
+	[ -n "${EXMEMB}" ] || { echo "VERIFY FAIL (vms-599): no ${_m} member in libc.a" >&2; exit 8; }
+	( cd /tmp/exck && ar x "${LIBCA}" "${EXMEMB}" ) 2>/dev/null || true
+	"${NM}" "/tmp/exck/${EXMEMB}" >/tmp/exck/nm.out 2>&1 || { cat /tmp/exck/nm.out >&2; exit 8; }
+	for _sym in ${_syms}; do
+		if grep -qE "^[0-9a-fA-F]+[[:space:]]+[A-TV-Za-tv-z][[:space:]]+${_sym}\$" /tmp/exck/nm.out; then
+			echo "VERIFY FAIL (vms-599): ${_m}.o DEFINES ${_sym} (musl's local weak alias, not the alpha-dec-vms override):" >&2
+			cat /tmp/exck/nm.out >&2
+			exit 8
+		fi
+		if ! grep -qE "[[:space:]]U[[:space:]]+${_sym}\$" /tmp/exck/nm.out; then
+			echo "VERIFY FAIL (vms-599): ${_m}.o does not reference ${_sym} by name:" >&2
+			cat /tmp/exck/nm.out >&2
+			exit 8
+		fi
+	done
+	echo "  OK      ${_m}.o: U ${_syms}"
+done
 
 # --------------------------------------------------------------------------
 # SIZE_T MODEL GATE (vms-537): through musl's own installed header set, ::size_t

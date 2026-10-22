@@ -109,7 +109,7 @@ targets:
   - id: demo-cluster-nodeC
     rd: vms-fbdd
     tracks: none
-    build: {note: "pinned real VAX/VMS V7.3 volume; never rebuilt"}
+    build: {note: "pinned real VAX/VMS V7.3 volume; re-imaged only by tools/lab-vax/build_nodeC_vms73_cluster.sh (NOEXPIRE=1 FROM_GZ, rd vms-05d)"}
     deploy: {note: "vax.3dl.network (pcjs-vax Pages)"}
     probe: {kind: served, url: "https://vax.3dl.network/machines/dec/vax/browser/vms73-nodeC-cluster.dsk.gz"}
   # The DECnet variant of Node C (rd vms-05d): the same volume plus DECnet-VAX

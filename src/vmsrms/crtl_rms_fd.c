@@ -1489,10 +1489,17 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
     }
 }
 
+/* Set by the DEC C exit()/__posix_exit() (crtl_process.c, vms-599) to the routine
+ * that ends the image with SYS$EXIT of the status it was given; called at the
+ * final exit_group, after musl ran the atexit handlers and flushed stdio. */
+void (*__ovmx_crtl_exit_record)(void);
+
 static long long rms_hook(long long n, long long a1, long long a2, long long a3,
                           long long a4, long long a5, long long a6, int *handled)
 {
     (void)a6;
+    if (n == SYS_exit_group && __ovmx_crtl_exit_record)
+        __ovmx_crtl_exit_record();              /* SYS$EXIT: does not return */
     if (in_rms)
         return 0;                               /* RMS's own system calls */
     in_rms = 1;
@@ -1700,6 +1707,7 @@ int (*__ovmx_crtl_fab_query)(int fd, int dirfd, const char *path,
 /* decc$main is bound to this in the RMS-backed DECC$SHR (mk_decc_shr.sh): the
  * C RTL's per-image entry turns the RMS file layer on, then runs the C RTL's
  * own argument/environment setup. */
+extern void ovmx_crtl_declare_exit_handler(void);   /* crtl_process.c */
 extern void ovmx_decc_main_crtl(void *, void *, void *, void *, unsigned int,
                                 unsigned int, int *, int *, int *)
     __asm__("decc$main");
@@ -1710,6 +1718,7 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
 {
     TR("crtlfd: main enter", 0);
     ovmx_crtl_fd_install();
+    ovmx_crtl_declare_exit_handler();   /* vms-1c83: $EXIT runs the C RTL down */
     ovmx_decc_main_crtl(progxfer, cli_util, imghdr, image_file_desc, linkflag,
                         cliflag, argc, argv, envp);
     TR("crtlfd: decc$main returned", 0);

@@ -655,6 +655,38 @@ int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
     return DNET_CTERM_OK;
 }
 
+/* Start Read FLAGS bits the terminal acts on (AA-DY88A-TK 4.16.3; the same
+ * bits dnet_cterm_hostfsm.h names DNET_CTH_RD_NOECHO / _TERM_ECHO). */
+#define SR_FLAG_NOECHO     0x000800u
+#define SR_FLAG_TERM_ECHO  0x001000u
+
+int dnet_cterm_start_read_echo(const uint8_t *buf, size_t len,
+                               int *echo, int *term_echo)
+{
+    if (echo)      *echo = 0;
+    if (term_echo) *term_echo = 0;
+    if (!buf || !echo || !term_echo)
+        return DNET_CTERM_EINVAL;
+
+    const uint8_t *body;
+    size_t body_len;
+    int rc = dnet_cterm_found_envelope_parse(buf, len, NULL, &body, &body_len, NULL);
+    if (rc != DNET_CTERM_OK)
+        return rc == DNET_CTERM_ETRUNC ? rc : DNET_CTERM_EINVAL;
+    if (body_len < 1 || body[0] != 0x02)
+        return DNET_CTERM_EINVAL;                /* not a Start Read */
+    if (body_len < 4)
+        return DNET_CTERM_ETRUNC;                /* MSGTYPE + 3 FLAGS bytes */
+
+    uint32_t flags = (uint32_t)body[1] | ((uint32_t)body[2] << 8) |
+                     ((uint32_t)body[3] << 16);
+    if (!(flags & SR_FLAG_NOECHO)) {
+        *echo = 1;
+        *term_echo = (flags & SR_FLAG_TERM_ECHO) ? 1 : 0;
+    }
+    return DNET_CTERM_OK;
+}
+
 /* ---- Session Control connect message (SET HOST -> CTERM object) ---------- */
 /*
  * The DNA Session Control CONNECT message, in the shape the ORACLE captured

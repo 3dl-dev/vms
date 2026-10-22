@@ -231,6 +231,23 @@ static const struct sysgen_param default_params[] = {
       .description = "Quorum disk device name (\"\" = none configured)",
       .type = SYSGEN_TYPE_STRING,
       .str_current = "", .str_default = "" },
+    /* OVMX_CLEAN_DEPART: the LAST parameter PID 1 reads that existed in no
+     * table and no store, i.e. the same unreachable-knob defect this change is
+     * about (rd vms-c2b), found by enumerating ovmx_init.c's own
+     * sysgen_read_param() calls. Its absence was not inert in the usual way:
+     * clean_depart_requested() resolves ABSENT to
+     * SYSGEN_DEFAULT_OVMX_CLEAN_DEPART precisely so that a store which has
+     * never carried it does not read as OFF -- a fallback that was doing the
+     * work of a factory entry. With the entry here and in the shipped store the
+     * fallback covers only a store written before this commit, and an operator
+     * can actually turn the switch off. The value IS the SSOT define, so
+     * nothing about this node's behaviour changes. */
+    { .name = "OVMX_CLEAN_DEPART",
+      .current = SYSGEN_DEFAULT_OVMX_CLEAN_DEPART,
+      .default_val = SYSGEN_DEFAULT_OVMX_CLEAN_DEPART,
+      .min_val = 0, .max_val = 1, .flags = 0,
+      .description = "Announce departure at the SCS layer when leaving (1 = yes)",
+      .type = SYSGEN_TYPE_NUMERIC },
 };
 
 #define DEFAULT_PARAM_COUNT \

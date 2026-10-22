@@ -85,6 +85,20 @@ command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 
 
 PASS=0
 FAIL=0
+# sysgen_count_text: the parameter count a SYSGEN session said it LOADED, read
+# out of a transcript on stdin. THE COUNT IS NEVER A LITERAL HERE: this gate
+# used to assert "31 parameters written", the shipped set's size rather than a
+# property, so adding ONE parameter (OVMX_RM_RESIDUE_FILL, rd vms-6ad1)
+# reddened it and three sibling gates in a change that altered nothing about
+# SYSGEN. What it MEANS to assert is that WRITE persists exactly the set that
+# was LOADED, and that an independent session reads the same set back.
+sysgen_count_text() {
+    local n
+    n=$(grep -oE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' | tail -1 \
+        | grep -oE '[0-9]+' | tail -1)
+    [ -n "$n" ] || return 1
+    printf '%s\n' "$n"
+}
 ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 bad() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
@@ -173,8 +187,15 @@ check_a '%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to TESTND' \
     "SET SCSNODE changed the value away from the seed's OVMX"
 # THE VERSION-BUMP PROOF: the seed already put ;1 on disk, so a correct
 # WRITE CURRENT MUST land on ;2, not silently overwrite ;1.
-check_a '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' \
-    "WRITE CURRENT created version ;2 over the seed's ;1 (real vmsfs version, not an in-memory counter)"
+# THE COUNT IS PROCESS A'S OWN: USE DEFAULT reported how many factory
+# parameters it loaded, and WRITE CURRENT must persist exactly those.
+if NPAR_A=$(printf '%s\n' "$A_SEG" | sysgen_count_text); then
+    ok "process A's USE DEFAULT reported how many factory parameters it loaded"
+else
+    dump_and_die "process A's USE DEFAULT printed no parameter count"
+fi
+check_a "%SYSGEN-I-WRITTEN, $NPAR_A parameters written to SYS\$SYSTEM:OVMXVMSSYS.PAR;2" \
+    "WRITE CURRENT persisted all $NPAR_A loaded parameters as version ;2 over the seed's ;1 (real vmsfs version, not an in-memory counter)"
 
 # --- 4. Process B: an INDEPENDENT SYSGEN session's USE CURRENT --------------
 # A fresh process, no shared memory with A -- if it sees TESTND, it read
@@ -192,8 +213,8 @@ else
 fi
 B_SEG=$(segment_since "$B_OFF")
 check_b() { if printf '%s\n' "$B_SEG" | grep >/dev/null -F "$1"; then ok "$2"; else bad "$2"; fi; }
-check_b '%SYSGEN-I-LOADED, 31 parameters loaded from' \
-    "USE CURRENT loaded a real file (not the NOCURRENT/factory-default fallback)"
+check_b "%SYSGEN-I-LOADED, $NPAR_A parameters loaded from" \
+    "USE CURRENT loaded a real file carrying all $NPAR_A parameters process A wrote (not the NOCURRENT/factory-default fallback)"
 check_b 'ovmxvmssys.par;2' \
     "USE CURRENT read the HIGHEST version (;2), matching the oracle's USE-reads-highest behavior"
 if printf '%s\n' "$B_SEG" | grep >/dev/null -F 'ovmxvmssys.par;1'; then

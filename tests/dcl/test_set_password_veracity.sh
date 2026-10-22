@@ -6,8 +6,8 @@
 # EXPECT: contains:%DCL-W-NOTIMPL, secondary passwords are not implemented in OVMX - no state changed
 # EXPECT: contains:%DCL-W-NOTIMPL, /GENERATE password generation is not implemented in OVMX - no state changed
 # EXPECT: contains:$STATUS = "%X00000E4A"
-# EXPECT: contains:%DCL-E-MAXPARM, too many parameters
-# EXPECT: contains:$STATUS = "%X00000014"
+# EXPECT: contains:%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters
+# EXPECT: contains:$STATUS = "%X00038098"
 # EXPECT: contains:%UAF-E-NOSUCHUSER, no such user
 # EXPECT_NOT: contains:not fully implemented
 # EXPECT_NOT: contains:%SET-I-PASSWORD

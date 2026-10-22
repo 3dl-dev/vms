@@ -984,12 +984,18 @@
  *    %CNXMAN / %VAXcluster lines the operator and the lab harness read on OPA0:).
  *
  *   void exec_console_printf(const char *fmt, ...)
- *        Emit one line on the node's console. Format-checked at the call site on
- *        both substrates. Linux: printk at KERN_ERR -- KERN_INFO is suppressed
- *        at the QEMU console loglevel, so an INFO-level cluster line is invisible
- *        exactly where the harness reads it (memory forking-daemon-over-bgn-
- *        ladder). NetBSD: printf(9). This op EXISTS so the cluster stack stops
- *        using pr_info(), a Linux idiom the NetBSD twin has to #define away.
+ *        Emit one executive operator line, ROUTED (rd vms-c56): a CONSOLE line
+ *        -- a console message VMS itself prints, in VMS's form
+ *        (vms_cluster_opa0.h vms_opa0_is_console_line) -- goes on OPA0:,
+ *        started on a fresh line and with no substrate timestamp; every other
+ *        line is a DIAGNOSTIC and goes to the kernel log only, from where the
+ *        substrate's kernel-log bridge files it in OPERATOR.LOG. Nothing is
+ *        dropped. Format-checked at the call site on both substrates. Linux:
+ *        printk at KERN_ERR (console) / KERN_NOTICE (diagnostic), both levels
+ *        named in src/kernel/ovmx_console_policy.h. NetBSD: printf(9) TOLOG
+ *        always, plus TOCONS|NOTSTAMP for a console line. This op EXISTS so the
+ *        cluster stack stops using pr_info(), a Linux idiom the NetBSD twin has
+ *        to #define away.
  *
  *        "THE CONSOLE" IS NOT THE RIND'S ALONE TO GUARANTEE (rd vms-151). On
  *        Linux the record still has to clear the console level PID 1 sets for

@@ -106,12 +106,6 @@ extern "C" {
 #define LCK$M_CANCEL    0x0002  /* bit 1  Cancel a queued lock/conversion request */
 #define LCK$M_INVVALBLK 0x0004  /* bit 2  Invalidate the value block on dequeue */
 
-/* ================================================================
- * LCK$C_ — Lock value block length
- * ================================================================ */
-
-#define LCK$C_VALBLK_LEN    16  /* Size of the lock value block (bytes) */
-
 #ifdef __cplusplus
 }
 #endif

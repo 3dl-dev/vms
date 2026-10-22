@@ -412,3 +412,56 @@ executive's row, never a host-Linux or fabricated name).
   OVMX-facility kmsg lines too, once BOTH turned out not to belong on the
   console -- OPERATOR.LOG capture is how this bridge's information
   survives at all, now that none of it is console-routable.
+
+## 8. The executive's own operator lines: console forms vs diagnostics (rd vms-c56)
+
+**Measured 2026-10-21, live 3-node demo, V0.7-13**
+(`tests/lab/captures/vms-c56-console-chatter-20261021/`). The cluster stack's
+operator lines (`%CNXMAN, ...`, `%PEA0, ...`, `%DLM, ...`, `%MSCP_CL, ...`,
+about 200 distinct texts) all reached OPA0: through `exec_console_printf()`,
+with Linux printk uptime stamps, on the `Username:` line and at the DCL
+prompt. The real OpenVMS VAX in the same cluster printed three short
+`%CNXMAN,  ...` lines.
+
+**The rule.** A line goes on OPA0: only when it is a console message VMS
+itself prints, in VMS's form: the oracle forms in
+`src/kernel-core/vms_cluster_opa0.h`, each found verbatim on a real VAX console
+in `tests/lab/captures` (`tests/cluster/host/test_cluster_opa0.c` checks this).
+Every other executive line is a **diagnostic**: it goes to the kernel log only
+and reaches OPERATOR.LOG through this document's bridge, **filed as it is**
+(it is already VMS-form and the executive's, so it is not re-styled SYSKRNL:
+`src/ovmx_init/opcom_exec_line.h`). Nothing is dropped.
+
+| Substrate | Console line | Diagnostic |
+|-----------|--------------|------------|
+| Linux | `printk` KERN_ERR (3), started on a fresh line; `printk.time` off (PID 1) | `printk` KERN_NOTICE (5), below the console sink, at or above the bridge's NOTICE bar |
+| NetBSD | `printf(9)` TOLOG, plus TOCONS\|TOCONSOP\|NOTSTAMP as `"\n<line>"` | `printf(9)` TOLOG only (message buffer -> `/dev/klog` bridge) |
+
+Both levels live in `src/kernel/ovmx_console_policy.h`, with compile-time
+asserts that the console level survives PID 1's sink and the diagnostic level
+does not.
+
+**The connection manager's events in VMS form.** `cnxman_ops_log()`
+(`vms_cnxman.c`) passes each diagnostic through `vms_opa0_cnxman_form()`; when
+the event is one VMS announces on its console it prints VMS's line too:
+`sending VAXcluster membership request to system <NODE>`, `now a VAXcluster
+member -- system <own SCSNODE>`, `proposing formation of a VAXcluster`,
+`quorum lost, blocking activity`, `quorum regained, resuming activity`. The
+coordinator-side and loss events (`received ... from system`, `proposing
+addition of system`, `completing VAXcluster state transition`, `lost connection
+to system`, `removed from VAXcluster system`, `%PEA0, Port has Closed Virtual
+Circuit`) need the subject's name and the coordinator role at the event site;
+until those call sites say them, nothing is printed for them on OPA0: rather
+than a guess.
+
+**PID 1's own cluster lines.** `report_cluster_group()`/`report_cluster_state()`
+(`ovmx_init.c`) print only SYSINIT's VMS line, `%SYSINIT, waiting to form or
+join a VMScluster system`, on the console; the OVMX wording goes to the operator
+log through the `ovmx_boot_operator_log()` seam op.
+
+**Asserted** by the visitor gate (`consoleChatter`,
+`tools/cluster-web-demo/gate-eval.mjs`: no printk stamp, no message identifier
+a real VAX console never printed, cluster-facility lines only in VMS's forms),
+by the kernel-executive seam test (`tests/qemu/test_kmod_cluster_seam.c`: the
+two levels, read back from `/dev/kmsg`) and by the booted 2-node e2e
+(`tests/qemu/test_cluster_config_lan_2node_e2e.sh`).

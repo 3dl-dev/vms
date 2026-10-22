@@ -510,9 +510,17 @@ static const struct dcl_qual_def q_write[] = {
     QUAL_END
 };
 
+/* ALLOCATE logs by default (/NOLOG suppresses the %DCL-I-ALLOC line). */
+static const struct dcl_qual_def q_allocate[] = {
+    { "LOG", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    QUAL_END
+};
+
 static struct dcl_verb builtin_verbs[] = {
     { "ACCOUNTING",  cmd_accounting,  CDU_F_ABBREV | CDU_F_QUALIFIER, 4,
       "Display login accounting information for the current user", q_none },
+    { "ALLOCATE",    cmd_allocate,    CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Allocate a device to this process", q_allocate },
     { "ANALYZE",     cmd_analyze,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
       "Analyze system components", q_analyze },
     { "APPEND",      cmd_append,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -533,6 +541,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Copy a file", q_copy },
     { "CREATE",      cmd_create,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Create a new file (or directory with /DIRECTORY)", q_create },
+    { "DEALLOCATE",  cmd_deallocate,  CDU_F_ABBREV | CDU_F_PARAM, 4,
+      "Deallocate a device this process allocated", q_none },
     { "DEASSIGN",    cmd_deassign,    CDU_F_ABBREV | CDU_F_PARAM, 4,
       "Deassign (remove) a logical name", q_deassign },
     { "DEFINE",      cmd_define,      CDU_F_ABBREV | CDU_F_PARAM, 4,

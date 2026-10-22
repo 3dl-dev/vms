@@ -36,14 +36,6 @@ extern "C" {
 #define CIA$M_INTRUDER      0x1  /* Entry is classified as intruder */
 #define CIA$M_SUSPECT       0x2  /* Entry is classified as suspect */
 
-/* ================================================================
- * CIA$C_ — Breakin record context codes
- * ================================================================ */
-
-#define CIA$C_NETWORK       1   /* Network breakin context */
-#define CIA$C_TERMINAL      2   /* Terminal breakin context */
-#define CIA$C_USERNAME      3   /* Username breakin context */
-
 #ifdef __cplusplus
 }
 #endif

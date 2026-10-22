@@ -1469,6 +1469,16 @@ out:
     return 0;
 }
 
+/* C-facility C$_EXIT range: (cond & ~control & ~severity) = 0x0035A000 + (n << 3),
+ * n = 1..255 (see vms_ioctl_setexit). */
+static uint32_t vms_cond_posix_exit_code(uint32_t cond)
+{
+    uint32_t m = cond & 0x0FFFFFF8u;
+    if (m >= 0x0035A008u && m <= 0x0035A7F8u)
+        return (m - 0x0035A000u) >> 3;
+    return (cond & VMS_STS_M_SUCCESS) ? 0u : 1u;
+}
+
 /*
  * vms_ioctl_setexit - record `condition` as the caller's image completion
  * $STATUS and report the derived success/severity + POSIX exit code.
@@ -1521,11 +1531,16 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg)
 
     args.success  = (uint8_t)(args.condition & VMS_STS_M_SUCCESS);
     args.severity = (uint8_t)(args.condition & VMS_STS_M_SEVERITY);
-    /* OVMX design choice (CLAUDE.md Rule 8): POSIX has one 8-bit exit code
-     * and no VMS counterpart, so the mapping is ours -- 0 when the VMS
-     * success bit is set, else nonzero. The full condition value remains
-     * the authoritative status; this is the lossy Linux-side echo. */
-    args.exit_code = (args.condition & VMS_STS_M_SUCCESS) ? 0u : 1u;
+    /* The Linux-side echo of the status (the full condition value remains
+     * the authoritative $STATUS): what a DEC C parent's wait()/waitpid()
+     * reports as WEXITSTATUS, since that wait is the substrate's. A C RTL
+     * exit status -- the C-facility condition DEC C __posix_exit(n) and the
+     * GCC start-up's return-from-main build, %X0035A001 + (n << 3), with n = 1
+     * an inhibited error %X1035A00A (oracle: vms-599,
+     * tests/lab/captures/decc-exit-alpha-20261021) -- gives back n, which is
+     * what GCC's driver reads from cc1/as/ld on a VMS host (vms-5b3). Any
+     * other condition: 0 when the success bit is set, else 1. */
+    args.exit_code = vms_cond_posix_exit_code(args.condition);
     args.status = SS__NORMAL;
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))

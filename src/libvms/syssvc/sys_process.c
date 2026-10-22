@@ -67,6 +67,10 @@
  * OVMX-LOCAL: sys$getjpi -- JPI$_CPUTIM is not the executive's: it comes from
  *     getrusage(RUSAGE_SELF) for the caller and from /proc/<pid>/stat otherwise.
  *     The executive keeps no accounting for a process it has a row for.
+ * OVMX-USERSPACE: sys$process_scan (vms-e99) -- it only builds the scan
+ *     context (criteria + cursor), held in this process as VMS keeps it in the
+ *     caller's; the processes it selects are the executive's rows, read by
+ *     $GETJPI (sys$getjpi's executive path above) when the context is walked.
  * OVMX-PARTIAL: sys$getjpiw (vms-pt1) -- exec: tail-calls sys$getjpi, so the
  *     same executive-resolved row answers the same items.
  * OVMX-LOCAL: sys$getjpiw -- and inherits the same /proc-derived JPI$_CPUTIM.
@@ -195,6 +199,7 @@
 #include "lnmdef.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
+#include "pscandef.h"
 #include "vmsfs/filespec.h"   /* vmsfs_to_linux_path: a VMS image spec */
 #include <sched.h>
 #include "prvdef.h"
@@ -235,19 +240,31 @@
  * mapping is applied here; DCL then derives $STATUS from the exit code, as it
  * does for any image that recorded nothing.
  */
-uint32_t sys$exit(uint32_t code) {
+/*
+ * vms$$run_exit_handlers - the first half of $EXIT: run the declared exit
+ * handlers, last declared first, each with the exit status. Each is taken off
+ * the list before it is called (as VMS does), so a handler runs once however the
+ * process ends. sys$exit runs them, then records the status and ends; IMGACT
+ * calls this when an image's main transfer RETURNS (SYS$IMGSTA's $EXIT, vms-1c83)
+ * and then records the status itself, through the executive, as it always has.
+ */
+uint32_t vms$$run_exit_handlers(uint32_t code) {
     struct vms_pcb *pcb = vms_pcb_get();
-
-    /* Run exit handlers in LIFO order */
-    if (pcb) {
-        for (int i = pcb->exit_handler_count - 1; i >= 0; i--) {
-            struct pcb_exit_handler *blk = pcb->exit_handlers[i];
-            if (blk && blk->handler) {
-                uint32_t status = code;
-                blk->handler(&status);
-            }
+    if (!pcb)
+        return SS$_NORMAL;              /* no process context: no handlers were declared */
+    while (pcb->exit_handler_count > 0) {
+        struct pcb_exit_handler *blk = pcb->exit_handlers[--pcb->exit_handler_count];
+        pcb->exit_handlers[pcb->exit_handler_count] = NULL;
+        if (blk && blk->handler) {
+            uint32_t status = code;
+            blk->handler(&status);
         }
     }
+    return SS$_NORMAL;
+}
+
+uint32_t sys$exit(uint32_t code) {
+    (void)vms$$run_exit_handlers(code);
 
     uint32_t exit_code = (code & 1) ? 0 : 1;  /* VMS success -> 0, failure -> 1 */
     uint32_t mapped = exit_code;
@@ -418,6 +435,244 @@ static void jpi_put_long(const struct item_list_3 *item, uint32_t v)
     if (item->retlen) *item->retlen = n;
 }
 
+/*
+ * ---- $PROCESS_SCAN (OpenVMS System Services Reference, $PROCESS_SCAN) ----
+ *
+ * $PROCESS_SCAN builds a scan context from an item list of selection criteria
+ * and returns it in *pidctx; the caller then passes pidctx to $GETJPI as its
+ * pidadr, and each $GETJPI answers for the next process the criteria select,
+ * ending with SS$_NOMOREPROC (which deletes the context). The processes are
+ * the executive's rows, walked with the same cursor a wildcard $GETJPI uses;
+ * the context itself is process-local (VMS keeps it in the caller's process
+ * too). Item codes and flags are the V7.3 $PSCANDEF (pscandef.h).
+ *
+ * Item list entries: word buffer length, word item code, longword value (a
+ * numeric criterion) or buffer address (a string criterion), longword
+ * item-specific flags. Criteria with different item codes are ANDed; an entry
+ * flagged PSCAN$M_OR is ORed with the next entry of the same code. With no
+ * relational flag a criterion is EQL.
+ *
+ * Answered: GRP MEM UIC MODE JOBTYPE PRI PRIB AUTHPRI (numeric: EQL NEQ GTR
+ * GEQ LSS LEQ BIT_ALL BIT_ANY), USERNAME PRCNAM TERMINAL (string: EQL NEQ,
+ * CASE_BLIND, WILDCARD, PREFIX_MATCH), NODE_CSID 0 (this node: OVMX scans no
+ * other node), GETJPI_BUFFER_SIZE (a buffering hint). Any other item --
+ * criteria the executive's row cannot answer (STATE, STS, OWNER, ...) or a
+ * scan of another node -- is SS$_UNSUPPORTED, never silently ignored.
+ *
+ * A string criterion's buffer address is the item list's 32-bit longword, as
+ * VMS defines it: the buffer must lie in the low 4 GB.
+ */
+#define PSCAN_CTX_TAG    0xC0FE0000u
+#define PSCAN_MAX_CTX    16
+#define PSCAN_MAX_ITEMS  32
+#define PSCAN_STR_MAX    64
+
+struct pscan_crit {
+    uint16_t code;
+    uint32_t flags;
+    uint32_t num;
+    char     str[PSCAN_STR_MAX];
+};
+struct pscan_ctx {
+    int      in_use;
+    uint32_t cursor;
+    int      n;
+    struct pscan_crit c[PSCAN_MAX_ITEMS];
+};
+static struct pscan_ctx pscan_tab[PSCAN_MAX_CTX];
+
+struct pscan_ile {
+    uint16_t buflen;
+    uint16_t code;
+    uint32_t value;
+    uint32_t flags;
+};
+
+#define PSCAN_REL_MASK (PSCAN$M_EQL | PSCAN$M_NEQ | PSCAN$M_GTR | PSCAN$M_GEQ | \
+                        PSCAN$M_LSS | PSCAN$M_LEQ | PSCAN$M_BIT_ALL | PSCAN$M_BIT_ANY)
+
+static int pscan_is_string(uint16_t code)
+{
+    return code == PSCAN$_USERNAME || code == PSCAN$_PRCNAM || code == PSCAN$_TERMINAL;
+}
+
+static int pscan_is_numeric(uint16_t code)
+{
+    return code == PSCAN$_GRP || code == PSCAN$_MEM || code == PSCAN$_UIC ||
+           code == PSCAN$_MODE || code == PSCAN$_JOBTYPE || code == PSCAN$_PRI ||
+           code == PSCAN$_PRIB || code == PSCAN$_AUTHPRI;
+}
+
+uint32_t sys$process_scan(uint32_t *pidctx, void *itmlst)
+{
+    if (!pidctx)
+        return SS$_BADPARAM;
+    struct pscan_ctx tmp;
+    memset(&tmp, 0, sizeof tmp);
+    const struct pscan_ile *e = (const struct pscan_ile *)itmlst;
+    for (; e && (e->buflen || e->code); e++) {
+        if (e->code <= PSCAN$_BEGIN || e->code >= PSCAN$_END)
+            return SS$_BADPARAM;
+        if (e->code == PSCAN$_GETJPI_BUFFER_SIZE)
+            continue;
+        if (tmp.n >= PSCAN_MAX_ITEMS)
+            return SS$_BADPARAM;
+        struct pscan_crit *c = &tmp.c[tmp.n];
+        c->code = e->code;
+        c->flags = e->flags;
+        if (pscan_is_numeric(e->code)) {
+            c->num = e->value;
+        } else if (pscan_is_string(e->code)) {
+            const char *a = (const char *)(uintptr_t)e->value;
+            if (!a || e->buflen >= PSCAN_STR_MAX)
+                return SS$_BADPARAM;
+            memcpy(c->str, a, e->buflen);
+            c->str[e->buflen] = '\0';
+        } else if (e->code == PSCAN$_NODE_CSID && e->value == 0 &&
+                   ((e->flags & PSCAN_REL_MASK) == 0 ||
+                    (e->flags & PSCAN_REL_MASK) == PSCAN$M_EQL ||
+                    (e->flags & PSCAN_REL_MASK) == PSCAN$M_NEQ)) {
+            continue;                      /* 0: every node -- this one */
+        } else {
+            return SS$_UNSUPPORTED;
+        }
+        tmp.n++;
+    }
+    for (int i = 0; i < PSCAN_MAX_CTX; i++) {
+        if (!pscan_tab[i].in_use) {
+            pscan_tab[i] = tmp;
+            pscan_tab[i].in_use = 1;
+            *pidctx = PSCAN_CTX_TAG | (uint32_t)i;
+            return SS$_NORMAL;
+        }
+    }
+    return SS$_INSFMEM;
+}
+
+static int pscan_num_match(uint32_t v, const struct pscan_crit *c)
+{
+    switch (c->flags & PSCAN_REL_MASK) {
+    case PSCAN$M_NEQ:     return v != c->num;
+    case PSCAN$M_GTR:     return v >  c->num;
+    case PSCAN$M_GEQ:     return v >= c->num;
+    case PSCAN$M_LSS:     return v <  c->num;
+    case PSCAN$M_LEQ:     return v <= c->num;
+    case PSCAN$M_BIT_ALL: return (v & c->num) == c->num;
+    case PSCAN$M_BIT_ANY: return (v & c->num) != 0;
+    default:              return v == c->num;
+    }
+}
+
+static int pscan_str_match(const char *field, const struct pscan_crit *c)
+{
+    char f[PSCAN_STR_MAX], k[PSCAN_STR_MAX];
+    int blind = (c->flags & PSCAN$M_CASE_BLIND) != 0;
+    size_t i, n;
+    /* The row's value without trailing blanks or a terminal's colon. */
+    for (n = 0; field[n] && n < sizeof f - 1; n++) f[n] = field[n];
+    while (n && (f[n - 1] == ' ' || f[n - 1] == ':')) n--;
+    f[n] = '\0';
+    for (i = 0; c->str[i] && i < sizeof k - 1; i++) k[i] = c->str[i];
+    while (i && (k[i - 1] == ' ' || (c->code == PSCAN$_TERMINAL && k[i - 1] == ':'))) i--;
+    k[i] = '\0';
+    if (blind) {
+        for (i = 0; f[i]; i++) if (f[i] >= 'a' && f[i] <= 'z') f[i] = (char)(f[i] - 32);
+        for (i = 0; k[i]; i++) if (k[i] >= 'a' && k[i] <= 'z') k[i] = (char)(k[i] - 32);
+    }
+    int hit;
+    if (c->flags & PSCAN$M_WILDCARD) {
+        /* '*' any sequence, '%' one character. */
+        const char *p = k, *s = f, *star = NULL, *mark = NULL;
+        while (*s) {
+            if (*p == '*') { star = p++; mark = s; }
+            else if (*p == '%' || *p == *s) { p++; s++; }
+            else if (star) { p = star + 1; s = ++mark; }
+            else break;
+        }
+        while (*p == '*') p++;
+        hit = (*s == '\0' && *p == '\0');
+    } else if (c->flags & PSCAN$M_PREFIX_MATCH) {
+        hit = strncmp(f, k, strlen(k)) == 0;
+    } else {
+        hit = strcmp(f, k) == 0;
+    }
+    return (c->flags & PSCAN$M_NEQ) ? !hit : hit;
+}
+
+static int pscan_crit_match(const struct vms_procinfo *info, const struct pscan_crit *c)
+{
+    switch (c->code) {
+    case PSCAN$_GRP:      return pscan_num_match(info->uic >> 16, c);
+    case PSCAN$_MEM:      return pscan_num_match(info->uic & 0xFFFFu, c);
+    case PSCAN$_UIC:      return pscan_num_match(info->uic, c);
+    case PSCAN$_MODE:
+        return pscan_num_match(info->proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                             : info->proc_type == VMS_PROC_T_OTHER ? JPI$K_OTHER
+                             : JPI$K_INTERACTIVE, c);
+    case PSCAN$_JOBTYPE:
+        return pscan_num_match(info->proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                             : info->terminal[0] ? JPI$K_LOCAL : JPI$K_DETACHED, c);
+    case PSCAN$_PRI:
+    case PSCAN$_PRIB:
+    case PSCAN$_AUTHPRI: {
+        uint32_t p = 0, auth = 0;
+        if (!(vms_kif_pri(VMS_PRI_OP_GET, info->vms_pid, &p, NULL, &auth) & 1))
+            return 0;
+        return pscan_num_match(c->code == PSCAN$_AUTHPRI ? auth : p, c);
+    }
+    case PSCAN$_USERNAME: return pscan_str_match(info->username, c);
+    case PSCAN$_PRCNAM:   return pscan_str_match(info->prcnam, c);
+    case PSCAN$_TERMINAL: {
+        const char *t = info->terminal;
+        while (*t == '_') t++;
+        return pscan_str_match(t, c);
+    }
+    default:              return 0;
+    }
+}
+
+/* Every criterion group holds: same-code entries joined by PSCAN$M_OR form a
+ * group that holds if any member does; groups are ANDed. */
+static int pscan_select(const struct vms_procinfo *info, const struct pscan_ctx *x)
+{
+    int i = 0;
+    while (i < x->n) {
+        int any = 0, j = i;
+        for (;;) {
+            if (pscan_crit_match(info, &x->c[j]))
+                any = 1;
+            if ((x->c[j].flags & PSCAN$M_OR) && j + 1 < x->n && x->c[j + 1].code == x->c[j].code)
+                j++;
+            else
+                break;
+        }
+        if (!any)
+            return 0;
+        i = j + 1;
+    }
+    return 1;
+}
+
+/* The next process a $PROCESS_SCAN context selects; SS$_NOMOREPROC deletes it. */
+static uint32_t pscan_next(uint32_t ctx, struct vms_procinfo *info)
+{
+    uint32_t slot = ctx & 0xFFFFu;
+    if (slot >= PSCAN_MAX_CTX || !pscan_tab[slot].in_use)
+        return SS$_BADPARAM;
+    struct pscan_ctx *x = &pscan_tab[slot];
+    for (;;) {
+        uint32_t st = vms_kif_procscan(&x->cursor, info);
+        if (st == SS$_NONEXPR) {             /* the executive's end of the table */
+            x->in_use = 0;
+            return SS$_NOMOREPROC;
+        }
+        if (!(st & 1))
+            return st;                        /* e.g. no executive: said, not hidden */
+        if (!info->redacted && pscan_select(info, x))
+            return SS$_NORMAL;
+    }
+}
+
 static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                     void *prcnam_arg,
                     void *itmlst_arg,
@@ -445,7 +700,12 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
     uint32_t status;
     uint32_t *pidio = (uint32_t *)(uintptr_t)pidadr;
 
-    if (pidio && (*pidio & 0x80000000u)) {
+    if (pidio && (*pidio & 0xFFFF0000u) == PSCAN_CTX_TAG) {
+        /* A $PROCESS_SCAN context: the next process its criteria select. */
+        status = pscan_next(*pidio, &info);
+        if (!(status & 1))
+            return status;
+    } else if (pidio && (*pidio & 0x80000000u)) {
         /*
          * WILDCARD (OpenVMS System Services Reference, $GETJPI): -1 starts a
          * walk of the processes the caller may see; each call answers for the
@@ -941,6 +1201,44 @@ static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
     return SS$_NORMAL;
 }
 
+/*
+ * creprc_open_outstream - the host fd backing a created process's SYS$OUTPUT
+ * or SYS$ERROR, named by $CREPRC's output/error descriptor (rd vms-5843).
+ *
+ * The name is a VMS spec. Two device kinds have a substrate backing to open:
+ * a terminal (OPA0:/TT: -- ovmx_console_terminal_path(), the one home for that
+ * mapping) and the null device (NL:/NLA0:, /dev/null underneath, as $ASSIGN
+ * maps it in sys_assign.c). A plain substrate path -- what the host test
+ * harness passes -- is opened as one; a VMS file spec is not. Returns -1
+ * when nothing opens.
+ *
+ * WHY THIS EXISTS. Before it, the output spec was handed straight to open(2).
+ * A VMS file spec such as STARTNET's SYS$MANAGER:NETACP.LOG never opens that
+ * way (there is no /vms passthrough), the dup2 was skipped, and the detached
+ * NETACP kept the CREATOR's descriptors -- the operator console STARTUP runs
+ * on -- so every DECNETD-I- line it wrote landed on OPA0: in the middle of the
+ * login prompt. A detached process has no terminal; it must never write on the
+ * creator's console because a file could not be opened for it.
+ */
+static int creprc_open_outstream(const char *spec)
+{
+    char backing[256];
+    if (ovmx_console_terminal_path(spec, backing, sizeof(backing)))
+        return open(backing, O_WRONLY | O_NOCTTY);
+    const char *p = spec[0] == '_' ? spec + 1 : spec;
+    if (!strcasecmp(p, "NL:") || !strcasecmp(p, "NLA0:"))
+        return open("/dev/null", O_WRONLY);
+    /* A VMS file spec -- one with a device (':') or a directory ('[', '<')
+     * -- is never handed to open(2): as a relative path it does not fail, it
+     * CREATES a host file literally named "SYS$MANAGER:NETACP.LOG" in
+     * whatever the creator's working directory is, a /vms-passthrough-shaped
+     * leak. It is refused here and the caller decides what the process
+     * gets. A plain substrate path (what the host harness passes) opens. */
+    if (spec[0] != '/' && strpbrk(spec, ":[<"))
+        return -1;
+    return open(spec, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+}
+
 /* A mailbox device name: MBAn: (with or without the leading underscore). */
 static int creprc_is_mailbox(const char *spec)
 {
@@ -960,6 +1258,30 @@ static void creprc_define_sysinput(const char *spec)
 {
     const char *vals[1] = { spec };
     (void)vms_kif_lnm_define(VMS_LNM_TBL_PROCESS, "SYS$INPUT", vals, 1, 0, 3 /* user mode */);
+}
+
+/* A VMS file spec (a device ':' or a directory '[' / '<', not a substrate path
+ * beginning '/') that names a FILE, not a bare device such as NL:, OPA0: or
+ * MBA3: -- something after the last ':' or a directory part. */
+static int creprc_is_vms_file_spec(const char *spec)
+{
+    if (!spec || !spec[0] || spec[0] == '/')
+        return 0;
+    if (strpbrk(spec, "[<"))
+        return 1;
+    const char *col = strrchr(spec, ':');
+    return col && col[1] != '\0';
+}
+
+/* SYS$OUTPUT / SYS$ERROR of a DETACHED process named by a VMS file (rd
+ * vms-c89): the process-permanent logical name its image opens, as on VMS --
+ * $CREPRC records the name, the image's run-time library $CREATEs the file
+ * through RMS when the image starts (src/libvms/rtl/sysoutput_rms.c). Same
+ * single executive ioctl in the forked child as SYS$INPUT above. */
+static void creprc_define_stream(const char *lognam, const char *spec)
+{
+    const char *vals[1] = { spec };
+    (void)vms_kif_lnm_define(VMS_LNM_TBL_PROCESS, lognam, vals, 1, 0, 3 /* user mode */);
 }
 
 /*
@@ -1711,10 +2033,25 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 int fd = open("/dev/null", O_RDONLY);
                 if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
             }
+            /* A named stream that cannot be opened leaves a SUBPROCESS on its
+             * inherited stream (it shares its creator's job) but puts a
+             * DETACHED process on the null device -- never on the creator's
+             * console (creprc_open_outstream, rd vms-5843). A DETACHED
+             * process whose stream names a VMS FILE gets that name as its
+             * SYS$OUTPUT / SYS$ERROR logical (rd vms-c89): its image's
+             * run-time library $CREATEs the file through RMS at image start
+             * and files each line there (src/libvms/rtl/sysoutput_rms.c). The
+             * host stream stays the null device, never a terminal. */
             if (output && output->dsc$a_pointer) {
                 char path[256];
                 dsc$strncpy(path, output, sizeof(path));
-                int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                int fd = creprc_open_outstream(path);
+                /* NEGCTL-ANCHORED (creprc-detached-output-vms-file-not-written) */
+                if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                    creprc_define_stream("SYS$OUTPUT", path);
+                /* NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal) */
+                if (fd < 0 && detached)
+                    fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
             } else if (detached) {
                 int fd = open("/dev/null", O_WRONLY);
@@ -1723,7 +2060,11 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             if (error && error->dsc$a_pointer) {
                 char path[256];
                 dsc$strncpy(path, error, sizeof(path));
-                int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                int fd = creprc_open_outstream(path);
+                if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                    creprc_define_stream("SYS$ERROR", path);
+                if (fd < 0 && detached)
+                    fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
             } else if (detached) {
                 int fd = open("/dev/null", O_WRONLY);

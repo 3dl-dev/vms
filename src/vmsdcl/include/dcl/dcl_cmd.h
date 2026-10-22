@@ -63,6 +63,8 @@ int cmd_continue(struct dcl_command *cmd);
 /* ---- I/O commands (dcl_cmd_io.c) ---- */
 int cmd_assign(struct dcl_command *cmd);
 int cmd_deassign(struct dcl_command *cmd);
+int cmd_allocate(struct dcl_command *cmd);
+int cmd_deallocate(struct dcl_command *cmd);
 int cmd_define(struct dcl_command *cmd);
 int cmd_open(struct dcl_command *cmd);
 int cmd_close(struct dcl_command *cmd);

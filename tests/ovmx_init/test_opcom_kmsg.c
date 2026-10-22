@@ -66,6 +66,7 @@
 #include <fcntl.h>
 
 #include "opcom_kmsg.h"
+#include "opcom_exec_line.h"   /* rd vms-c56: shared with the NetBSD /dev/klog bridge */
 
 static int failures = 0;
 
@@ -329,6 +330,45 @@ int main(void)
     check_drop("empty text is never routed", 6, "");
     check_drop("bare 'vms: ' with no body text is never routed", 6, "vms: ");
     check_drop("bare 'vmsfs: ' with no body text is never routed", 6, "vmsfs: ");
+
+    /* --- 6b. rd vms-c56: the EXECUTIVE's own operator lines -- the
+     *     diagnostics exec_console_printf() keeps off OPA0: at NOTICE, and the
+     *     console lines it prints at ERR -- are filed in OPERATOR.LOG as they
+     *     are: already VMS-form, the executive's, never re-styled SYSKRNL. --- */
+    check_operator_log("executive diagnostic at NOTICE -> OPERATOR.LOG verbatim",
+                        5, "%CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned",
+                        "%CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned\n");
+    check_operator_log("executive DLM diagnostic -> OPERATOR.LOG verbatim",
+                        5, "%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001",
+                        "%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001\n");
+    check_operator_log("executive console line (kmsg-escaped leading newline) -> verbatim",
+                        3, "\\x0a%CNXMAN,  now a VAXcluster member -- system OVMXA",
+                        "%CNXMAN,  now a VAXcluster member -- system OVMXA\n");
+    check_operator_log("a facility-severity-ident executive line -> verbatim",
+                        5, "%CNXMAN-I-NODEPART, OVMX_CLEAN_DEPART is set",
+                        "%CNXMAN-I-NODEPART, OVMX_CLEAN_DEPART is set\n");
+    check_drop("an executive line at kernel DEBUG is still dropped", 7,
+               "%CNXMAN, a debug trace");
+    /* ... and nothing that merely starts with '%' is mistaken for one. */
+    check_operator_log("a kernel line starting '%' but not a facility stays SYSKRNL",
+                        4, "%5 of buffers used",
+                        "%SYSKRNL-W-KERNEL, %5 of buffers used\n");
+    /* The NetBSD /dev/klog form: the message buffer's uptime stamp first. */
+    {
+        const char *ex = opcom_exec_line("[    83.2700000] %PEA0, channel verified");
+        if (ex && strcmp(ex, "%PEA0, channel verified") == 0) {
+            printf("  PASS: NetBSD-stamped executive line recognised past its stamp\n");
+        } else {
+            printf("  FAIL: NetBSD-stamped executive line not recognised (%s)\n", ex ? ex : "(null)");
+            failures++;
+        }
+        if (opcom_exec_line("[    83.2700000] mainbus0 (root)") == NULL) {
+            printf("  PASS: a stamped NetBSD kernel line is not an executive line\n");
+        } else {
+            printf("  FAIL: a stamped NetBSD kernel line was taken for an executive line\n");
+            failures++;
+        }
+    }
 
     /* --- 7. the seed path: spool -> genuine OPERATOR.LOG, lossless (vms-98c2) - */
     test_seed_from_spool();

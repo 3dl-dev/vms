@@ -2447,13 +2447,27 @@ static int run_isolation_test(void)
  *
  * ANTI-LARP TERMINAL I/O (the standing invariant for this lane): the client runs
  * in the user's interactive process, so it does its LOCAL terminal I/O through
- * its VMS terminal CHANNEL -- $ASSIGN SYS$INPUT / SYS$OUTPUT, $QIO IO$_SETMODE
- * (OVMX pass-all selector IO$K_TT_PASSALL) to hand echo/editing to the remote,
- * and $QIO IO$_READVBLK / IO$_WRITEVBLK to move bytes -- the SAME executive
- * terminal path a console login or an RTAn: device uses. It NEVER calls
- * tcsetattr/cfmakeraw on fd 0/1, and it contains NO fork/exec/openpty/dup2. The
- * termios that realises pass-all lives in the executive terminal driver
- * (src/libvms/syssvc/sys_qio.c qio_terminal_setmode), below the $QIO interface.
+ * its VMS terminal CHANNELS -- $ASSIGN SYS$INPUT / SYS$OUTPUT, and TT: (the
+ * job's terminal unit) when SYS$INPUT is that terminal -- and $QIO
+ * IO$_READVBLK / IO$_WRITEVBLK to move bytes: the SAME executive terminal path
+ * a console login or an RTAn: device uses. It NEVER calls tcsetattr/cfmakeraw
+ * on fd 0/1, and it contains NO fork/exec/openpty/dup2.
+ *
+ * WHO ECHOES (rd vms-a353). In CTERM the TERMINAL echoes what is typed, as the
+ * host's Start Read says (AA-DY88A-TK 4.16.3: N = no echo, T = echo the
+ * terminator); the host never sends the typed text back -- in the oracle no
+ * host->client frame carries the typed username or password, and a real VAX
+ * client shows "Username: SYSTEM" but a blank "Password: " (docs/oracle/
+ * vax-sethost-cterm.*; tests/lab/captures/decnet-sethost-inbound-20261005/
+ * vax1-console.txt). So each Start Read becomes ONE local terminal read on the
+ * TT: channel, issued by the executive terminal driver with the Start Read's
+ * echo: IO$M_NOECHO when N is set, IO$M_TRMNOECHO when T is clear. The driver
+ * -- not this program, not the substrate tty -- echoes and edits the line,
+ * exactly as it does for a local LOGINOUT. (The earlier design asked for
+ * IO$K_TT_PASSALL on the SYS$INPUT channel and relied on the remote for echo;
+ * that channel carries no executive terminal channel, so the request was a
+ * silent no-op, the line discipline echoed every read, and the remote
+ * Password: was shown in clear on the originating terminal.)
  */
 
 static void sethost_mkdesc(struct dsc$descriptor_s *d, const char *s)
@@ -2464,26 +2478,17 @@ static void sethost_mkdesc(struct dsc$descriptor_s *d, const char *s)
     d->dsc$a_pointer = (char *)s;
 }
 
-/* Set the local terminal channel's line discipline via the executive terminal
- * driver ($QIO IO$_SETMODE). passall=1 -> pass-through (remote owns echo/edit);
- * passall=0 -> restore the interactive line discipline. Off a real tty (a pipe
- * in the automated test) this is a harmless no-op in the driver. */
-static void sethost_set_line(uint16_t chan, int passall)
-{
-    struct _iosb iosb;
-    (void)sys$qiow(0, chan, IO$_SETMODE, &iosb, NULL, 0,
-                   NULL, passall ? IO$K_TT_PASSALL : IO$K_TT_NORMAL,
-                   0, 0, 0, 0);
-}
-
 /* Write a NUL-terminated string to the local terminal through its VMS output
- * channel ($QIO IO$_WRITEVBLK) -- e.g. the canonical %REM-S-END message. */
-static void sethost_term_write(uint16_t chan, const char *s)
+ * channel ($QIO IO$_WRITEVBLK). `record` != 0 writes it as ONE VMS RECORD
+ * (carriage control " ", P4 = 0x20): the terminal driver puts it on a line of
+ * its own -- a new line before it, rendered for wherever the cursor is, and a
+ * carriage return after -- the way VMS writes a message to a terminal. */
+static void sethost_term_write(uint16_t chan, const char *s, int record)
 {
     struct _iosb iosb;
     fflush(stdout);
     (void)sys$qiow(0, chan, IO$_WRITEVBLK, &iosb, NULL, 0,
-                   (void *)s, (uint32_t)strlen(s), 0, 0, 0, 0);
+                   (void *)s, (uint32_t)strlen(s), 0, record ? 0x20 : 0, 0, 0);
 }
 
 /* HELLO cadence + link give-up/retransmit tick, then flush any FSM PDU. */
@@ -2655,10 +2660,12 @@ static uint32_t netcli_op(struct netcli *c, uint16_t op, const void *in, size_t 
 struct sh_ctx {
     struct dnet_cterm_session term;
     struct dnet_cterm_inq inq;
-    int read_pending, passall_on, session_bound_ever, stdin_eof, rc, done;
+    int read_pending, session_bound_ever, stdin_eof, rc, done;
     int skip_lf;                        /* CTERM Write "newline" flag state  */
     int quiet;                          /* a user's SET HOST: no DECNETD-I chatter */
+    int rd_echo, rd_term_echo;          /* the pending Start Read's echo (vms-a353) */
     uint16_t ch_in, ch_out;
+    uint16_t ch_tt;                     /* TT:, when SYS$INPUT is the terminal; 0 = not */
     /* the link: the standalone engine (eng/sock/ifindex) OR a _NET: channel */
     struct dnet_engine *eng;
     int sock;
@@ -2691,6 +2698,18 @@ static int sethost_send_queued_line(struct sh_ctx *x)
         return -1;
     x->term.reads_sent++;
     return 1;
+}
+
+/* Show what the host wrote. On a terminal the bytes go to the terminal unit
+ * as they are ($QIO IO$_WRITEVBLK, no carriage control): the host already
+ * formatted them for a terminal, and the driver tracks where they leave the
+ * cursor -- which is what puts %REM-S-END on a line of its own (rd vms-a353).
+ * Off a terminal they go to SYS$OUTPUT. */
+static void sethost_show(struct sh_ctx *x, const uint8_t *b, size_t n)
+{
+    struct _iosb iosb;
+    (void)sys$qiow(0, x->ch_tt ? x->ch_tt : x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
+                   (void *)b, (uint32_t)n, 0, 0, 0, 0);
 }
 
 /* The link is RUN: arm the CTERM client FSM and wait for the host, which
@@ -2736,10 +2755,6 @@ static void sethost_on_data(struct sh_ctx *x, const uint8_t *data, size_t len)
                        " BOUND on %s\n", x->where);
                 fflush(stdout);
             }
-            /* Hand echo/editing to the REMOTE session: pass-all the LOCAL
-             * terminal through the executive driver. */
-            sethost_set_line(x->ch_in, 1);
-            x->passall_on = 1;
         }
         return;
     }
@@ -2763,9 +2778,7 @@ static void sethost_on_data(struct sh_ctx *x, const uint8_t *data, size_t len)
             x->term.writes_recv++;
             if (dnet_cterm_write_render(sub, sublen, &x->skip_lf, shown,
                                         sizeof shown, &sn) == 0 && sn) {
-                struct _iosb iosb;
-                (void)sys$qiow(0, x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
-                               shown, (uint32_t)sn, 0, 0, 0, 0);
+                sethost_show(x, shown, sn);
             }
             continue;
         }
@@ -2792,23 +2805,29 @@ static void sethost_on_bound_msg(struct sh_ctx *x, const uint8_t *data, size_t l
         return;
     if (tk == DNET_CTERM_TK_WRITE) {
         x->term.writes_recv++;
-        if (txtlen) {
-            struct _iosb iosb;
-            (void)sys$qiow(0, x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
-                           txt, (uint32_t)txtlen, 0, 0, 0, 0);
-        }
+        if (txtlen)
+            sethost_show(x, txt, txtlen);
     } else if (tk == DNET_CTERM_TK_START_READ) {
         /* rd vms-6165: a 02-08 is PROMPT-AND-READ -- display the prompt text,
-         * THEN answer with exactly one queued input line. One solicit -> one
-         * line, never more, never before this arrives. If the queue has no
-         * complete line yet, remember the solicit and satisfy it the moment one
-         * becomes available. */
+         * THEN answer with exactly one input line. One solicit -> one line,
+         * never more, never before this arrives.
+         *
+         * rd vms-a353: the read's echo is the HOST's to choose (N / T flags);
+         * a flags field that does not parse reads as no-echo. */
         x->term.writes_recv++;
-        if (txtlen) {
-            struct _iosb iosb;
-            (void)sys$qiow(0, x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
-                           txt, (uint32_t)txtlen, 0, 0, 0, 0);
+        (void)dnet_cterm_start_read_echo(data, len, &x->rd_echo, &x->rd_term_echo);
+        if (txtlen)
+            sethost_show(x, txt, txtlen);
+        if (x->ch_tt) {
+            /* A TERMINAL: the line is read NOW, by the terminal driver, with
+             * this read's echo (sethost_on_term_input). Type-ahead typed
+             * before the solicit waits, unechoed, in the driver until then --
+             * so a password typed early is never echoed by an earlier read. */
+            x->read_pending = 1;
+            return;
         }
+        /* Not a terminal (a pipe or a file): nothing is echoed; the lines are
+         * queued as they arrive and one is released per solicit. */
         int srr = sethost_send_queued_line(x);
         if (srr < 0) {
             fprintf(stderr, "DECNETD-E-READDATA, could not send CTERM Read Data\n");
@@ -2826,11 +2845,73 @@ static void sethost_on_bound_msg(struct sh_ctx *x, const uint8_t *data, size_t l
     /* TK_OTHER / TK_NONE: NSP-ack only, nothing to display or answer. */
 }
 
+/* Does the client want local input now? On a terminal only while a host
+ * Start Read is outstanding (the driver keeps type-ahead until then); from a
+ * pipe whenever it is readable (lines are queued, released per solicit). */
+static int sethost_wants_input(const struct sh_ctx *x)
+{
+    if (!dnet_cterm_is_bound(&x->term) || x->stdin_eof)
+        return 0;
+    return x->ch_tt ? x->read_pending : 1;
+}
+
+/* Satisfy the outstanding Start Read from the TERMINAL: one read by the
+ * executive terminal driver, echoing exactly as the Start Read asked (rd
+ * vms-a353), answered with one Read Data carrying the line and the terminator
+ * the driver ended it with. */
+static void sethost_read_terminal_line(struct sh_ctx *x)
+{
+    uint8_t line[DNET_CTERM_MAX_DATA];
+    struct _iosb iosb;
+    uint32_t func = IO$_READVBLK;
+
+    if (!x->rd_echo)
+        func |= IO$M_NOECHO;
+    if (!x->rd_term_echo)
+        func |= IO$M_TRMNOECHO;
+    memset(&iosb, 0, sizeof iosb);
+    uint32_t rst = sys$qiow(0, x->ch_tt, func, &iosb, NULL, 0,
+                            line, (uint32_t)sizeof(line), 0, 0, 0, 0);
+    uint32_t est = (rst & 1) ? iosb.iosb$w_status : rst;
+    if (!(est & 1)) {
+        /* A read the driver aborted (CTRL/Y) leaves the solicit outstanding
+         * for the next line. Anything else -- the terminal hung up, its port
+         * is gone -- stops reading it but keeps the link: the session still
+         * ends on the host's Unbind or a link drop, never on the local side
+         * by itself (rd vms-6165). */
+        if (est != SS$_ABORT)
+            x->stdin_eof = 1;
+        return;
+    }
+    size_t n = iosb.iosb$w_bcnt;
+    if (n > sizeof line)
+        n = sizeof line;
+    /* IOSB words 2/3: the terminator character and its size. A read that ended
+     * without one (the buffer filled) is sent with CR, as a full line. */
+    uint8_t term = (iosb.iosb$l_dev_depend >> 16) ? (uint8_t)(iosb.iosb$l_dev_depend & 0xff)
+                                                  : 0x0d;
+    size_t clen = 0;
+    if (dnet_cterm_found_read_data_build(line, n, term, x->cpdu, sizeof x->cpdu,
+                                         &clen) != 0 ||
+        sh_link_send(x, x->cpdu, clen) != 0) {
+        fprintf(stderr, "DECNETD-E-READDATA, could not send CTERM Read Data\n");
+        x->rc = 1; x->done = 1;
+        return;
+    }
+    x->term.reads_sent++;
+    x->read_pending = 0;
+}
+
 /* The local terminal is readable: read it through its VMS channel. */
 static void sethost_on_term_input(struct sh_ctx *x)
 {
     uint8_t inbuf[DNET_CTERM_MAX_DATA];
     struct _iosb iosb;
+    if (x->ch_tt) {
+        if (x->read_pending)
+            sethost_read_terminal_line(x);
+        return;
+    }
     /* Read the keystrokes through the VMS terminal channel ($QIO), never a raw
      * read on fd 0. poll() only told us bytes are ready. */
     uint32_t rst = sys$qiow(0, x->ch_in, IO$_READVBLK, &iosb, NULL, 0,
@@ -2884,15 +2965,42 @@ static int sethost_open_terminal(struct sh_ctx *x)
         x->ch_in = 0;
         return -1;
     }
+    /* rd vms-a353: when SYS$INPUT is the job's terminal, read it through a
+     * channel to the TERMINAL UNIT (TT:) -- the executive terminal driver's
+     * channel, on which a read takes IO$M_NOECHO. Without it a remote
+     * Password: read would be echoed, so a terminal whose channel cannot be
+     * had refuses SET HOST rather than show a password. */
+    {
+        int fd = vms$$chan_to_fd(x->ch_in);
+        if (fd >= 0 && isatty(fd)) {
+            struct dsc$descriptor_s dtt;
+            sethost_mkdesc(&dtt, "TT:");
+            uint32_t st = sys$assign(&dtt, &x->ch_tt, 0, NULL);
+            if (!(st & 1)) {
+                fprintf(stderr, "DECNETD-E-NOTERMCHAN, could not $ASSIGN the"
+                                " terminal (TT:), status %u\n", st);
+                x->ch_tt = 0;
+                sys$dassgn(x->ch_in); sys$dassgn(x->ch_out);
+                x->ch_in = x->ch_out = 0;
+                return -1;
+            }
+        }
+    }
     return 0;
+}
+
+static void sethost_close_terminal(struct sh_ctx *x)
+{
+    if (x->ch_tt) sys$dassgn(x->ch_tt);
+    sys$dassgn(x->ch_in);
+    sys$dassgn(x->ch_out);
+    x->ch_tt = x->ch_in = x->ch_out = 0;
 }
 
 /* Restore the terminal, unbind a bound session, say %REM-S-END. The caller
  * then releases the link. */
 static void sethost_finish(struct sh_ctx *x, const char *local_node)
 {
-    if (x->passall_on)
-        sethost_set_line(x->ch_in, 0);
     if (dnet_cterm_is_bound(&x->term)) {
         size_t clen = 0;
         if (dnet_cterm_unbind(&x->term, DNET_CTERM_UNBIND_NORMAL, x->cpdu,
@@ -2904,9 +3012,20 @@ static void sethost_finish(struct sh_ctx *x, const char *local_node)
      * returns to -- only once a session was actually established. */
     if (x->session_bound_ever) {
         char msg[96];
-        snprintf(msg, sizeof(msg),
-                 "%%REM-S-END, control returned to node %s::\n", local_node);
-        sethost_term_write(x->ch_out, msg);
+        if (x->ch_tt) {
+            /* rd vms-a353: ON ITS OWN LINE, as VMS shows it -- "SYSTEM logged
+             * out at ..." then "%REM-S-END, ..." beneath it. The remote's last
+             * output ends with a bare CR (its line feed owed), so the message
+             * goes as a record: the driver starts it on a new line rendered
+             * for where the cursor is (LF after a CR, CR LF mid-line). */
+            snprintf(msg, sizeof(msg),
+                     "%%REM-S-END, control returned to node %s::", local_node);
+            sethost_term_write(x->ch_tt, msg, 1);
+        } else {
+            snprintf(msg, sizeof(msg),
+                     "%%REM-S-END, control returned to node %s::\n", local_node);
+            sethost_term_write(x->ch_out, msg, 0);
+        }
     }
     if (x->quiet)
         return;
@@ -2978,7 +3097,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             != DNET_ENGINE_OK) {
         fprintf(stderr, "DECNETD-E-NOCONNECT, could not open a logical link"
                         " to %u.%u\n", parea, pnode);
-        sys$dassgn(x.ch_in); sys$dassgn(x.ch_out);
+        sethost_close_terminal(&x);
         return 1;
     }
     {
@@ -3013,7 +3132,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
         struct pollfd pfd[2];
         int nfd = 0;
         pfd[nfd].fd = sock;          pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
-        if (dnet_cterm_is_bound(&x.term) && !x.stdin_eof && term_fd >= 0) {
+        if (sethost_wants_input(&x) && term_fd >= 0) {
             pfd[nfd].fd = term_fd;   pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
         }
         int pr = poll(pfd, (nfds_t)nfd, 1000);
@@ -3098,8 +3217,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, dl);
         }
     }
-    sys$dassgn(x.ch_in);
-    sys$dassgn(x.ch_out);
+    sethost_close_terminal(&x);
     return x.rc;
 }
 
@@ -4747,7 +4865,7 @@ static int run_set_host_net(struct netcli *c, const char *target, const char *lo
             why[0] = '\0';
         printf("%s\n", why[0] ? why : "%SYSTEM-F-ABORT, abort");
         fflush(stdout);
-        sys$dassgn(x.ch_in); sys$dassgn(x.ch_out);
+        sethost_close_terminal(&x);
         /* The message is said once, here; $STATUS carries the condition with
          * STS$M_INHIB_MSG, as a VMS command that already reported its failure
          * leaves it. A bare return 1 made DCL add "%DCL-E-ABORT, image
@@ -4775,7 +4893,7 @@ static int run_set_host_net(struct netcli *c, const char *target, const char *lo
         }
         if (x.done)
             break;
-        if (dnet_cterm_is_bound(&x.term) && !x.stdin_eof && term_fd >= 0) {
+        if (sethost_wants_input(&x) && term_fd >= 0) {
             struct pollfd pfd = { term_fd, POLLIN, 0 };
             int pr = poll(&pfd, 1, 20);
             if (pr > 0 && (pfd.revents & (POLLIN | POLLHUP)))
@@ -4787,8 +4905,7 @@ static int run_set_host_net(struct netcli *c, const char *target, const char *lo
     }
     sethost_finish(&x, local_node);
     (void)netcli_op(c, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &xf);
-    sys$dassgn(x.ch_in);
-    sys$dassgn(x.ch_out);
+    sethost_close_terminal(&x);
     return x.rc;
 }
 

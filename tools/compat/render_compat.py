@@ -8,19 +8,29 @@ facilities/*.yaml) and emits:
   * build/compat-surface.json       -- machine export (website + corpus lookup)
 
 Usage:
-    python3 tools/compat/render_compat.py            # render both outputs
-    python3 tools/compat/render_compat.py --check    # validate YAML + DRIFT-GATE the md
+    python3 tools/compat/render_compat.py              # validate + render to build/ (preview)
+    python3 tools/compat/render_compat.py --publish    # ALSO refresh the tracked snapshot md
+    python3 tools/compat/render_compat.py --check [--base SHA]   # CI gate
 
 The source YAML is authoritative; the generated files are never hand-edited.
 See docs/design-compat-surface-register.md for the data model and vocab.
 
---check is the CI drift gate (INV-LEDGER, vms-8465). It (1) validates the YAML
-source and (2) regenerates docs/compatibility-surface.md IN MEMORY and diffs it
-against the committed file. Any drift -- a hand-edit of the generated md, or a
-docs/compat/*.yaml change that was not regenerated -- exits non-zero. The only
-volatile field, the "Generated <date>" stamp, is neutralised by regenerating at
-the committed file's own date, so the gate is repo-local and never false-reds on
-the calendar. build/compat-surface.json is git-ignored and is NOT gated.
+WHY PRs DO NOT REGENERATE THE TRACKED MD (vms-8465 follow-on, the churn fix):
+every compat PR used to commit a regenerated docs/compatibility-surface.md, and
+its rollup-count table is one hunk that EVERY status change touches -- so any two
+queued compat PRs conflicted and went UNMERGEABLE on GitHub (server-side merges
+honour no merge driver). Now a PR edits ONLY docs/compat/*.yaml; the tracked md
+is a dated SNAPSHOT refreshed by an explicit `--publish` (a release bump, or a
+dedicated regen PR). build/compat-surface.json is git-ignored and untracked; every
+consumer (website, corpus lookup, release cut) renders it from the YAML.
+
+--check is the CI drift gate (INV-LEDGER). It (1) validates the YAML source and
+(2) renders the md in memory, so a YAML that does not render is red. (3) With
+--base SHA (pull requests): if the change touches docs/compatibility-surface.md,
+the committed md must equal a fresh render of the YAML at the committed file's
+own "Generated <date>" stamp -- a hand-edit, or a snapshot taken from anything
+but this tree's YAML, is red. A change that leaves the md alone is not asked to
+regenerate it.
 """
 from __future__ import annotations
 
@@ -42,6 +52,7 @@ COMPAT = REPO / "docs" / "compat"
 FACILITIES = COMPAT / "facilities"
 OUT_MD = REPO / "docs" / "compatibility-surface.md"
 OUT_JSON = REPO / "build" / "compat-surface.json"
+OUT_MD_PREVIEW = REPO / "build" / "compatibility-surface.md"
 
 # NO coverage percentage. The total VMS compatibility surface has no known
 # denominator, so "% covered" would be a fabricated number (operator ruling
@@ -393,10 +404,26 @@ def build_json(domains, facilities, as_of=None):
     }
 
 
+def md_touched_since(base: str) -> bool:
+    """True when docs/compatibility-surface.md differs between BASE and the tree."""
+    import subprocess
+    rel = str(OUT_MD.relative_to(REPO))
+    r = subprocess.run(["git", "-C", str(REPO), "diff", "--quiet", base, "--", rel])
+    if r.returncode not in (0, 1):
+        sys.exit(f"ERROR: git diff against base {base!r} failed (exit {r.returncode}); "
+                 "the drift gate needs full history (fetch-depth: 0).")
+    return r.returncode == 1
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true",
-                    help="validate YAML + drift-gate the generated md; non-zero exit on drift")
+                    help="validate YAML + render in memory; with --base, drift-gate the "
+                    "tracked md when the change touches it; non-zero exit on error/drift")
+    ap.add_argument("--base", help="(with --check) the merge base of the change; the "
+                    "tracked md is compared to a fresh render only if it changed since BASE")
+    ap.add_argument("--publish", action="store_true",
+                    help="also rewrite the tracked snapshot docs/compatibility-surface.md")
     ap.add_argument("--as-of", help="date stamp YYYY-MM-DD for the 'Generated' line "
                     "(default: today UTC). In --check it is auto-derived from the "
                     "committed file so the stamp never false-reds.")
@@ -417,48 +444,62 @@ def main():
     if ctx.errors:
         sys.exit(2)
 
+    n_items = sum(len(f.get('items', []) or []) for f in facilities)
     if args.check:
-        # (2) DRIFT GATE: regenerate the md in memory and diff against the
-        # committed file. Neutralise the only volatile field -- the "Generated
-        # <date>" stamp -- by regenerating at the committed file's own date, so
-        # the gate reds ONLY on real source/content drift, never on the calendar.
-        if not OUT_MD.exists():
-            print(f"ERROR: {OUT_MD.relative_to(REPO)} missing -- run "
-                  "render_compat.py to generate it.", file=sys.stderr)
-            sys.exit(2)
-        committed = OUT_MD.read_text()
-        m = re.search(r"^> Generated (\d{4}-\d{2}-\d{2}) ", committed, re.M)
-        as_of = args.as_of or (m.group(1) if m else None)
-        expected = render_md(domains, facilities, uncovered, ctx, as_of=as_of)
-        if committed != expected:
-            import difflib
-            diff = "".join(difflib.unified_diff(
-                committed.splitlines(keepends=True),
-                expected.splitlines(keepends=True),
-                fromfile="committed docs/compatibility-surface.md",
-                tofile="regenerated from docs/compat/*.yaml",
-            ))
-            print("DRIFT: docs/compatibility-surface.md is out of sync with "
-                  "docs/compat/*.yaml.\n"
-                  "Fix the SOURCE (docs/compat/*.yaml), then regenerate:\n"
-                  "    python3 tools/compat/render_compat.py\n"
-                  "Never hand-edit the generated md (INV-LEDGER, vms-8465).\n",
-                  file=sys.stderr)
-            print(diff, file=sys.stderr)
-            sys.exit(1)
-        print(f"clean: {len(facilities)} facilities, "
-              f"{sum(len(f.get('items', []) or []) for f in facilities)} items, "
+        # (2) the YAML must render (md + json) -- an exception here is red.
+        render_md(domains, facilities, uncovered, ctx, as_of=args.as_of)
+        json.dumps(build_json(domains, facilities, as_of=args.as_of))
+        compared = "not touched by this change; not compared"
+        if args.base and md_touched_since(args.base):
+            # (3) DRIFT GATE on a change that touches the tracked md: it must be
+            # an exact render of THIS tree's YAML. Neutralise the only volatile
+            # field -- the "Generated <date>" stamp -- by regenerating at the
+            # committed file's own date, so it never false-reds on the calendar.
+            if not OUT_MD.exists():
+                print(f"ERROR: {OUT_MD.relative_to(REPO)} deleted -- it is the "
+                      "tracked snapshot; refresh it with --publish.", file=sys.stderr)
+                sys.exit(2)
+            committed = OUT_MD.read_text()
+            m = re.search(r"^> Generated (\d{4}-\d{2}-\d{2}) ", committed, re.M)
+            as_of = args.as_of or (m.group(1) if m else None)
+            expected = render_md(domains, facilities, uncovered, ctx, as_of=as_of)
+            if committed != expected:
+                import difflib
+                diff = "".join(difflib.unified_diff(
+                    committed.splitlines(keepends=True),
+                    expected.splitlines(keepends=True),
+                    fromfile="committed docs/compatibility-surface.md",
+                    tofile="regenerated from docs/compat/*.yaml",
+                ))
+                print("DRIFT: this change edits docs/compatibility-surface.md, and the "
+                      "result is not a render of docs/compat/*.yaml.\n"
+                      "Either leave the md alone (a compat PR edits only the YAML), or "
+                      "refresh the snapshot from the source:\n"
+                      "    python3 tools/compat/render_compat.py --publish\n"
+                      "Never hand-edit the generated md (INV-LEDGER, vms-8465).\n",
+                      file=sys.stderr)
+                print(diff, file=sys.stderr)
+                sys.exit(1)
+            compared = "matches a fresh render of the source"
+        print(f"clean: {len(facilities)} facilities, {n_items} items, "
               f"{len(uncovered)} uncovered, {len(ctx.warnings)} warnings; "
-              "docs/compatibility-surface.md matches source.")
+              f"YAML renders; docs/compatibility-surface.md {compared}.")
         return
 
-    OUT_MD.write_text(render_md(domains, facilities, uncovered, ctx, as_of=args.as_of))
+    md = render_md(domains, facilities, uncovered, ctx, as_of=args.as_of)
     OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
+    OUT_MD_PREVIEW.write_text(md)
     OUT_JSON.write_text(json.dumps(build_json(domains, facilities, as_of=args.as_of),
                                    indent=2))
-    print(f"wrote {OUT_MD.relative_to(REPO)} and {OUT_JSON.relative_to(REPO)} "
-          f"({len(facilities)} facilities, "
-          f"{sum(len(f.get('items', []) or []) for f in facilities)} items).")
+    wrote = [OUT_MD_PREVIEW, OUT_JSON]
+    if args.publish:
+        OUT_MD.write_text(md)
+        wrote.append(OUT_MD)
+    print("wrote " + ", ".join(str(p.relative_to(REPO)) for p in wrote) +
+          f" ({len(facilities)} facilities, {n_items} items).")
+    if not args.publish:
+        print("note: the tracked snapshot docs/compatibility-surface.md is NOT rewritten "
+              "(a compat PR edits only the YAML); --publish refreshes it.")
 
 
 if __name__ == "__main__":

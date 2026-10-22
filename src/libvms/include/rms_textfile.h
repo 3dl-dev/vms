@@ -72,4 +72,13 @@ int rms_textfile_append_line(const char *vms_spec, const char *line);
  */
 int rms_textfile_write_line(const char *vms_spec, const char *line);
 
+/*
+ * $CREATE a NEW, empty version of a VMS text file (stream-LF) and close it,
+ * so later rms_textfile_append_line() calls on the same spec land in it --
+ * a created process's SYS$OUTPUT file (rd vms-c89): VMS gives each run its
+ * own version. Returns 0 on success, -1 on any failure (fail-honest, as
+ * above).
+ */
+int rms_textfile_create(const char *vms_spec);
+
 #endif /* RMS_TEXTFILE_H */

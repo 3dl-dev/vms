@@ -78,6 +78,7 @@
 #include "vms_cluster_fork.h"  /* FC-P0.5: cf_timer_*, fork_enter/leave */
 #include "vms_cluster_snapshot.h"
 #include "vms_cluster_sysgen.h" /* E78: SYSGEN CLUSTER_CREDITS, the VC grant */
+#include "vms_cluster_opa0.h"   /* rd vms-c56: the console forms of CNXMAN events */
 #include "vms_scs.h"            /* the SYSAP surface this glue registers on */
 #include "vms_scs_fsm.h"        /* enum scs_close_reason (E29) */
 #include "vms_cluster_codec_dlm.h" /* rd vms-1ee: VMS_DLM_CAT_REQUEST, the DLM leg */
@@ -719,15 +720,30 @@ static uint64_t cnxman_ops_now_vms(void *ctx)
 	return exec_time_now_vms();
 }
 
-/* The %CNXMAN / %VAXcluster OPA0: lines. Every join/barrier/coordinator/
+/* The connection manager's operator lines. Every join/barrier/coordinator/
  * recnx/CSB-ladder call site already composes the whole "%CNXMAN, ..." string
  * (grepped across all five .c files at review time); this is the one place
- * that reaches the console, exactly as scs_ops_log does for SCS. */
+ * they leave the stack, exactly as scs_ops_log does for SCS.
+ *
+ * rd vms-c56: each of those lines is a DIAGNOSTIC -- exec_console_printf()
+ * routes it to the operator log, not OPA0: (vms_cluster_opa0.h). When the
+ * event it reports is one a VMS node announces on its console, the console
+ * line VMS prints for it follows, in VMS's own form, named from this node's
+ * own SCSNODE (vms_opa0_cnxman_form()). Message text and routing only: no
+ * state is read here but the node's own name. */
 static void cnxman_ops_log(void *ctx, const char *msg)
 {
-	(void)ctx;
-	if (msg != NULL)
-		exec_console_printf("%s\n", msg);
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	char opa0[VMS_OPA0_LINE_MAX];
+
+	if (msg == NULL)
+		return;
+	exec_console_printf("%s\n", msg);
+	if (cn != NULL && cn->cl != NULL &&
+	    vms_opa0_cnxman_form(msg, (const char *)cn->cl->params.scsnode,
+				 cn->cl->params.scsnode_len, opa0,
+				 (unsigned int)sizeof(opa0)))
+		exec_console_printf("%s\n", opa0);
 }
 
 static void cnxman_ops_bind(struct vms_cnxman *cn)

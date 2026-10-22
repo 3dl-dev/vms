@@ -91,6 +91,12 @@ if ! grep -qE 'DUA0.* is PRIMARY' "$REPO/src/kernel-netbsd/vms_blockdev_netbsd.c
     log "WARNING: vms_blockdev_netbsd.c no longer names the VAX system disk '$SYSDEV' as PRIMARY -- update SYSDEV"
 fi
 
+# rd vms-9394: the battery's executive-datalink proof opens a REAL interface for
+# an interactive DECNETD image. On x86_64/Alpha that is the Linux loopback "lo";
+# on this rail it is the DELQA, qt0 -- NetBSD's lo0 is not an Ethernet, and the
+# NetBSD executive's L2 binding takes Ethernet interfaces only.
+export DNET_DATALINK_IFACE="${DNET_DATALINK_IFACE:-qt0}"
+
 export CMD_TIMEOUT="${CMD_TIMEOUT:-30}"
 export BOOT_TIMEOUT="${BOOT_TIMEOUT:-300}"
 # rd vms-b06: the VAX guest clock IS the host clock. SIMH loads the KA655 TODR

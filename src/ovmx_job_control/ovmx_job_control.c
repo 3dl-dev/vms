@@ -114,6 +114,11 @@
  * the $ASSIGN/SETTERM pair that used to stand in the forked login child moved
  * inside $CREPRC's terminal binding (vms-d0b's calls, relocated by vms-3e9). */
 #include "vms_kif.h"
+#if defined(__linux__)
+#include <pthread.h>
+#include "opcom_kmsg.h"     /* rd vms-394e: the post-startup kernel-log intake */
+#include "rms_textfile.h"
+#endif
 
 static volatile sig_atomic_t shutdown_requested = 0;
 
@@ -139,6 +144,56 @@ static const char *vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
     return buf;
 }
 
+#if defined(__linux__)
+/*
+ * THE POST-STARTUP KERNEL-LOG INTAKE (rd vms-394e). PID 1's /dev/kmsg bridge is
+ * a thread of PID 1 and ends when startup completes (PID 1 must be
+ * single-threaded to leave substrate root, rd vms-137e), and since rd vms-c56
+ * the executive's diagnostics are kept off OPA0: -- so a record emitted after
+ * startup (a %DLM refusal at a logged-in prompt, the coordinator's lines when
+ * another node joins) would otherwise reach the kernel ring only. This thread
+ * files every routed kernel-log record after the boot seed's mark into
+ * SYS$MANAGER:OPERATOR.LOG over RMS (opcom_kmsg_follow), for the life of the
+ * system.
+ *
+ * WHY HERE, AND NOT IN A PROCESS NAMED OPCOM. On VMS this is OPCOM's job, but
+ * OVMX has no OPCOM yet (rd vms-798: the $SNDOPR mailbox, operator-terminal
+ * broadcast, REPLY/ENABLE). A process that only copied the kernel log and
+ * called itself OPCOM would be a placeholder in SHOW SYSTEM; so the intake runs
+ * inside a real, long-lived system process that already exists, holds the
+ * SYSTEM identity and links RMS. It moves into OPCOM when vms-798 lands.
+ * NetBSD needs none: PID 1's /dev/klog reader keeps filing after startup.
+ */
+static void kmsg_intake_emit(const char *line)
+{
+    (void)rms_textfile_append_line(VMS_OPERATOR_LOG, line);
+}
+
+static void *kmsg_intake_main(void *arg)
+{
+    (void)arg;
+    opcom_kmsg_follow(kmsg_intake_emit);
+    return NULL;
+}
+
+static void start_kmsg_intake(void)
+{
+    pthread_t tid;
+    pthread_attr_t attr;
+    sigset_t all, prev;
+
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    /* The intake takes no signals: JOB_CONTROL's handlers run on its main
+     * thread, which waits for its login children. */
+    sigfillset(&all);
+    pthread_sigmask(SIG_BLOCK, &all, &prev);
+    (void)pthread_create(&tid, &attr, kmsg_intake_main, NULL);
+    pthread_sigmask(SIG_SETMASK, &prev, NULL);
+    pthread_attr_destroy(&attr);
+}
+#endif
+
 /*
  * Main: JOB_CONTROL creates login sessions on the console, forever, until
  * asked to stop. This IS the whole of JOB_CONTROL's job (design-init-
@@ -159,6 +214,10 @@ int main(void)
      * unchanged from PID 1's login loop (CLAUDE.md Rule 10: this behavior
      * was not independently oracle-pinned then and is not invented now). */
     signal(SIGHUP, SIG_IGN);
+
+#if defined(__linux__)
+    start_kmsg_intake();
+#endif
 
     char loginout_path[512], dcl_path[512];
     vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));

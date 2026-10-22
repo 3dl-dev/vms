@@ -1639,6 +1639,8 @@ int cmd_type(struct dcl_command *cmd)
                 fclose(fp);
                 return SS$_NORMAL;
             }
+            if (errno == ENOENT)
+                rst = RMS$_FNF;          /* the fall-back's own answer: not there */
         }
         {
             /* as VMS says it (keystroke ERR.DCL E4): the search failed, and
@@ -1647,10 +1649,37 @@ int cmd_type(struct dcl_command *cmd)
                                          const char *, char *, size_t);
             char full[1100];
             dcl_message_spec(ctx, cmd->params[0], NULL, full, sizeof full);
-            dcl_error("TYPE", 0, "SEARCHFAIL", "error searching for %s", full);
-            fprintf(stderr, "-RMS-E-FNF, file not found\n");
+            if (rst == 0 || rst == RMS$_FNF || rst == RMS$_DNF) {
+                dcl_error("TYPE", 0, "SEARCHFAIL", "error searching for %s", full);
+                fprintf(stderr, "-RMS-E-FNF, file not found\n");
+                return SS$_NOSUCHFILE;
+            }
+            /* The file is there but could not be opened (another accessor
+             * holds it, no privilege, ...): say so with RMS's own status --
+             * "%TYPE-W-OPENIN, error opening <file> as input" over the reason
+             * (msgcat 0x1098 OPENIN; e.g. RMS$_FLK "file currently locked by
+             * another user"), never "file not found" for a file that exists
+             * (rd vms-acf3). */
+            dcl_error("TYPE", 0, "OPENIN", "error opening %s as input", full);
+            {
+                char txt[256];
+                uint16_t tl = 0;
+                struct dsc$descriptor_s md;
+                md.dsc$w_length = (uint16_t)(sizeof txt - 1);
+                md.dsc$b_dtype = DSC$K_DTYPE_T;
+                md.dsc$b_class = DSC$K_CLASS_S;
+                md.dsc$a_pointer = txt;
+                if ((sys$getmsg(rst, &tl, &md, 0x0F, NULL) & 1) && tl > 0) {
+                    txt[tl] = '\0';
+                    if (txt[0] == '%')
+                        txt[0] = '-';
+                    fprintf(stderr, "%s\n", txt);
+                } else {
+                    fprintf(stderr, "-SYSTEM-F-STATUS, status %%X%08X\n", (unsigned)rst);
+                }
+            }
         }
-        return SS$_NOSUCHFILE;
+        return rst;
     }
 
     /* Check for /PAGE qualifier */

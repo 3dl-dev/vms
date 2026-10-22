@@ -398,6 +398,16 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
      * leaves it 0 and the codec refuses the frame.
      */
     p->req_pid     = (lock->proc != NULL) ? lock->proc->vms_pid : 0u;
+    /*
+     * ...and WHICH PARENT it hangs under (rd vms-b67a). Both halves off this
+     * LKB: `parent_id` is our own handle for the parent and
+     * `parent_master_lkid` the handle that parent's MASTER gave it, recorded
+     * here by vms_enq_core_ex from the parent LKB it held a reference on. A
+     * ROOT request leaves both 0, which is what a root MEANS on the wire; the
+     * codec refuses a half-filled pair rather than send one.
+     */
+    p->parent_own_lkid    = lock->parent_id;
+    p->parent_master_lkid = lock->parent_master_lkid;
     p->lkmode      = lock->requested_mode;
     p->flags       = lock->flags;
     dlm_post_set_resnam(p, res);
@@ -3238,9 +3248,107 @@ static void dlm_proxy_unwind(struct vms_proc *proc, struct vms_lock_resource *re
  * `res` carries one reference from resource_find_or_create; it is handed to the
  * proxy on success and released on every failure path.
  */
+/* ==========================================================================
+ * A SUB-LOCK UNDER A PROXY PARENT (rd vms-b67a)
+ *
+ * WHAT WAS WRONG, MEASURED at two real V7.3 VAXes (the vms-c2b fire,
+ * tests/lab/captures/vms-c2b-ovmx-holder-20261021). OVMX held the ROOT of a
+ * tree a real VAX mastered -- routed correctly, directory then master, with the
+ * master's SDA showing the MSTCPY. Its three SUB-locks then went to the
+ * DIRECTORY NODE under each sub-NAME's own derived hash, as if each were a root,
+ * were answered "no entry", and OVMX MASTERED THEM LOCALLY and reported them
+ * granted at CW. The master's SDA lists no such locks. That is a grant no
+ * master gave, and one sub-resource name mastered on two nodes at once.
+ *
+ * WHAT A REAL NODE DOES, and it is PUBLISHED as well as measured: only ROOT
+ * resources are in the lock directory (Davis p. 6-29), and a resource TREE HAS
+ * ONE MASTER -- so a lock whose PARID names a parent goes to the PARENT's
+ * master, the only node that can grant it. Measured: all 7 real sub-lock
+ * requests in the corpus are addressed to the node that granted their parent,
+ * none is answered 0xf9, and each names its parent by the PAIR (its own parent
+ * handle, that parent's master handle) at body[36:44] -- byte-for-byte the pair
+ * the parent's own grant carried (tools/cluster/dlm_sublock_census.py, pinned
+ * by ctest).
+ *
+ * SO THE FIX IS NOT A BYPASS BRANCH. dlm_resolve_master() consults
+ * dlm_route_known_master() FIRST, which routes straight to res->master_csid
+ * with no directory lookup at all. Giving the SUB-RESOURCE its tree's master
+ * therefore makes the directory path UNREACHABLE for it by construction,
+ * rather than by a test somebody can later delete.
+ * ========================================================================== */
+
+/* The three things a proxy parent tells its sub-lock, read off the parent LKB
+ * in one pass while the $ENQ still holds a reference on it. */
+struct enq_parent_facts {
+	uint32_t master_csid;    /* the TREE's master                          */
+	uint32_t own_lkid;       /* our own handle for the parent              */
+	uint32_t master_lkid;    /* the handle that master gave the parent     */
+	uint8_t  proxy;          /* the parent is a lock the CLUSTER holds     */
+};
+
+static void enq_read_parent_facts(const struct vms_lock_entry *plock,
+                                  struct enq_parent_facts *f)
+{
+    f->proxy       = plock->proxy ? 1u : 0u;
+    f->master_csid = plock->master_csid;
+    f->own_lkid    = plock->lkid;
+    f->master_lkid = plock->master_lkid;
+}
+
+/*
+ * CAN A SUB-LOCK BE COMPOSED UNDER THIS PARENT AT ALL?
+ *
+ * Only when the cluster has named the tree's master AND that master has named
+ * a handle for the parent. ZERO at body[40:44] is what a ROOT record means, so
+ * a master receiving a sub request with a zero pair would create a SECOND root
+ * for the name -- the same double-mastering this item is about, by a different
+ * door. A parent whose grant has not arrived yet therefore produces an honest
+ * refusal, never a frame.
+ */
+static int enq_parent_can_carry_a_sublock(const struct enq_parent_facts *f)
+{
+    return f->master_csid != 0u &&
+           f->own_lkid != VMS_DLM_LKID_UNSET &&
+           f->master_lkid != VMS_DLM_LKID_UNSET;
+}
+
+/*
+ * THE SUB-RESOURCE INHERITS ITS TREE'S MASTER.
+ *
+ * Never overwrites a master this block already holds: a disagreement between a
+ * tree's root and its own sub-resource is a contradiction, and it is REFUSED
+ * rather than resolved by preference. Returns SS$_NORMAL when the block now
+ * names that master.
+ *
+ * WHY REFUSING IS THE RIGHT FLOOR AND NOT A HANG WAITING TO HAPPEN. The one way
+ * the two could disagree is a REMASTER between the sub-RSB being created and
+ * this $ENQ -- and a remaster does not leave the disagreement behind: if the
+ * tree comes HERE the adoption walks it and every resource in it becomes
+ * locally mastered, and if it moves elsewhere the new master's own grant
+ * rewrites res->master_csid on each resource it answers for
+ * (vms_lock_dlm_grant_recv). So this branch is a state the design does not
+ * produce, which is exactly the kind that must fail honestly rather than be
+ * papered over: following the parent here would be this node DECIDING which of
+ * two executive facts to believe, and the one thing it must never do is assert
+ * a master it was not told (Rule 9, INV-6).
+ */
+static uint32_t enq_sub_adopt_tree_master(struct vms_lock_resource *res,
+                                          uint32_t master_csid)
+{
+    uint32_t st = SS__NORMAL;
+
+    exec_lock(&res->lock);
+    if (res->master_csid == 0u)
+        res->master_csid = master_csid;
+    else if (res->master_csid != master_csid)
+        st = SS__IVLOCKID;
+    exec_unlock(&res->lock);
+    return st;
+}
+
 static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
                               struct vms_lock_resource *res, uint32_t dst_csid,
-                              int *intr)
+                              const struct enq_parent_facts *pf, int *intr)
 {
     struct vms_dlm_proxy_post post;
     struct vms_lock_entry *lock;
@@ -3261,6 +3369,13 @@ static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
         a->status = SS__INSFMEM;
         return;
     }
+    /* THE PARENT'S MASTER HANDLE, onto the LKB (rd vms-b67a). `parent_id` is
+     * already there from the args; this is the half only the PARENT LKB holds,
+     * and vms_enq_core_ex read it while it had a reference on that lock. Set
+     * HERE, before dlm_proxy_fill_post, so the post reads BOTH halves off this
+     * LKB and the fill stays the single place every wire value comes from. A
+     * root request leaves it 0, which is what a root means on the wire. */
+    lock->parent_master_lkid = (pf != NULL && pf->proxy) ? pf->master_lkid : 0u;
     dlm_proxy_link(proc, res, lock);
 
     exec_lock(&res->lock);
@@ -5332,6 +5447,11 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     struct vms_enq_args args = *io;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    /* What a PROXY parent tells this sub-lock, read off the parent LKB below
+     * (rd vms-b67a). All-zero for a root $ENQ and for an inbound cross-node
+     * request, whose parid is the REQUESTER's handle and is stored, not
+     * resolved here. */
+    struct enq_parent_facts pfacts = { 0u, 0u, 0u, 0u };
     int stalled;
 
     if (args.lkmode > LCK_K_EXMODE) {
@@ -5379,10 +5499,25 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
                 args.status = SS__IVLOCKID;
                 goto out;
             }
-            /* A parent the CLUSTER holds (a proxy LKB) has its tree at the
-             * master; the sub-tree is not modelled on this node, so the
-             * sublock is named at the root, as before. */
-            pres = plock->proxy ? NULL : plock->resource;
+            /*
+             * THE SUB-TREE IS A TREE ON THIS NODE TOO, even when the parent is
+             * a lock the CLUSTER holds (rd vms-b67a). The resource block goes
+             * UNDER the parent's either way, so a later remaster and $GETLKI
+             * see the real shape -- and the sub-resource then inherits the
+             * tree's master below, which is what keeps it out of the lock
+             * directory. It used to be named at the ROOT for a proxy parent,
+             * which is how OVMX came to master S0/S1/S2 locally and report
+             * grants no master gave.
+             */
+            pres = plock->resource;
+            enq_read_parent_facts(plock, &pfacts);
+            if (pfacts.proxy && !enq_parent_can_carry_a_sublock(&pfacts)) {
+                /* The tree's master, or the parent's handle at it, is not
+                 * known yet: this sub-lock cannot be stated to anybody. */
+                lock_put(plock);
+                args.status = SS__IVLOCKID;
+                goto out;
+            }
         }
         k.name = args.resnam;
         k.name_len = args.resnam_len;
@@ -5395,6 +5530,20 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     if (!res) {
         args.status = SS__INSFMEM;
         goto out;
+    }
+    if (pfacts.proxy) {
+        /* A TREE HAS ONE MASTER, and only ROOT resources are in the directory
+         * (Davis p. 6-29). Giving the sub-resource the master read off its
+         * parent LKB is what sends this request to the only node that can
+         * grant it -- dlm_route_known_master answers before any directory
+         * lookup is attempted. */
+        uint32_t pst = enq_sub_adopt_tree_master(res, pfacts.master_csid);
+
+        if (pst != SS__NORMAL) {
+            resource_release(res);
+            args.status = pst;
+            goto out;
+        }
     }
 
     /*
@@ -5428,7 +5577,8 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         if (route == DLM_ROUTE_REMOTE && !xn) {
             int wait_intr = 0;
 
-            enq_proxy_request(proc, &args, res, dst_csid, &wait_intr);
+            enq_proxy_request(proc, &args, res, dst_csid, &pfacts,
+                              &wait_intr);
             if (wait_intr)
                 return -ERESTARTSYS;   /* a signal, not an answer */
             goto out;      /* enq_proxy_request owns `res` from here */

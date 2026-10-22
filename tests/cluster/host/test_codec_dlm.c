@@ -1990,6 +1990,79 @@ static void test_enq_request_pid_cell(void)
 		 "... and a CONVERT carries that same handle back");
 }
 
+/*
+ * rd vms-b67a: THE PARENT SPAN IS BOTH-OR-NEITHER.
+ *
+ * body[36:44] is (own parent handle, parent's master handle), and 7 of 7 real
+ * sub-lock requests carry both non-zero while 74,730 of 74,737 roots carry both
+ * zero (tools/cluster/dlm_sublock_census.py). A HALF-FILLED pair is the shape
+ * that must never leave: body[40:44] = 0 reads to the master as a ROOT, and it
+ * would create a SECOND root for the name -- the double-mastering rd vms-b67a
+ * measured from the other side, by a different door.
+ */
+static void test_b67a_parent_span_is_both_or_neither(void)
+{
+	struct vms_dlm_enq_request r, back;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t opcode = 0;
+
+	printf("-- rd vms-b67a: the parent span, built and refused\n");
+
+	memset(&r, 0, sizeof(r));
+	r.mode = 2u;
+	r.req_lkid = 0x0100036au;
+	r.req_pid = 0x10000031u;
+	r.res_group = 1u;
+	r.res_acmode = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len = 2u;
+	memcpy(r.name, "S0", 2);
+
+	/* A ROOT: both halves zero, which is what a root MEANS here. */
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), NULL) == VMS_CODEC_OK,
+		 "a ROOT request builds with no parent named");
+	ct_check(ct_le32(frame + VMS_OFF_DLM_PARENT_SPAN) == 0u &&
+		 ct_le32(frame + VMS_OFF_DLM_PARENT_SPAN + 4u) == 0u,
+		 "  ...and leaves body[36:44] zero");
+
+	/* A SUB-LOCK: a real pair, round-tripped. */
+	r.parent_own_lkid = 0x59000076u;
+	r.parent_master_lkid = 0x3c000695u;
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), NULL) == VMS_CODEC_OK,
+		 "a SUB-LOCK request builds");
+	ct_check_eq_u32(ct_le32(frame + VMS_OFF_DLM_PARENT_SPAN), 0x59000076u,
+			"*** body[36:40] is the sender's OWN parent handle ***");
+	ct_check_eq_u32(ct_le32(frame + VMS_OFF_DLM_PARENT_SPAN + 4u),
+			0x3c000695u,
+			"*** body[40:44] is THE PARENT'S MASTER handle ***");
+	ct_check(vms_dlm_enq_request_parse_body(frame + VMS_OFF_SYSAP_BODY,
+						VMS_CM_BODY_LEN, &opcode,
+						&back) == VMS_CODEC_OK &&
+		 back.parent_own_lkid == r.parent_own_lkid &&
+		 back.parent_master_lkid == r.parent_master_lkid,
+		 "  ...and the parse reports the pair back, unchanged");
+
+	/* HALF-FILLED, both ways round: REFUSED. */
+	r.parent_master_lkid = 0u;
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), NULL) ==
+		 VMS_CODEC_E_INVAL,
+		 "*** a parent named with NO master handle: REFUSED. Zero at "
+		 "body[40:44] reads to the master as a ROOT and would create a "
+		 "second root for the name ***");
+	r.parent_own_lkid = 0u;
+	r.parent_master_lkid = 0x3c000695u;
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), NULL) ==
+		 VMS_CODEC_E_INVAL,
+		 "  ...and a master handle with no parent of our own: refused "
+		 "too");
+}
+
 int main(void)
 {
 	test_dlm_seq_and_tail();
@@ -2019,5 +2092,6 @@ int main(void)
 	test_queued_enq_answer_refuses_what_it_cannot_hold();
 	test_op0f_ack_is_the_real_one();
 	test_op0f_member_answer_keeps_state();
+	test_b67a_parent_span_is_both_or_neither();
 	return ct_summary("test_codec_dlm");
 }

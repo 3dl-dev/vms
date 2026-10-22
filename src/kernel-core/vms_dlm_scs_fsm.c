@@ -248,8 +248,25 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 	req.req_lkid = p->req_lkid;      /* our own executive handle */
 	req.master_lkid     = p->master_lkid;   /* 0 until the master named it */
 	req.req_pid         = p->req_pid;       /* ...and who is asking until then */
-	req.dir_hash        = p->dir_hash;
-	req.dir_hash_valid  = p->dir_hash_known;
+	/*
+	 * THE PARENT SPAN, body[36:44] (rd vms-b67a): a sub-lock names its parent
+	 * by the pair (our handle, that parent's master handle), both read off the
+	 * parent LKB by the engine and carried in the post. A ROOT post leaves
+	 * both 0, which is what a root means on the wire.
+	 */
+	req.parent_own_lkid    = p->parent_own_lkid;
+	req.parent_master_lkid = p->parent_master_lkid;
+	/*
+	 * ...and A SUB REQUEST CARRIES NO DIRECTORY HASH. The hash indexes the
+	 * directory, only ROOT resources are in the directory, and this request
+	 * is addressed to the master the parent named -- so there is no lookup
+	 * for a hash to serve. A real sub request does carry four bytes at
+	 * body[128:132], and what selects them is NOT a function of the name this
+	 * executive can learn or compute (Rule 8), so writing anything but zero
+	 * would be minting one. The deviation is recorded in frame-grounding.tsv.
+	 */
+	req.dir_hash        = (p->parent_own_lkid != 0u) ? 0u : p->dir_hash;
+	req.dir_hash_valid  = (p->parent_own_lkid != 0u) ? 0u : p->dir_hash_known;
 	req.name_len        = dq_name_from_post(p, req.name);
 	/*
 	 * The identity that qualifies the name, body[44:46] + body[46] (rd

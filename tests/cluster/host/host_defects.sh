@@ -174,6 +174,8 @@ dlm-pending-overflow-overwrites
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
+dlm-sublock-looked-up-in-the-directory
+dlm-sublock-parent-pair-zeroed
 dlm-dir-matched-by-name-alone
 dlm-resource-name-keyed-by-c-string
 dlm-lkid-guard-disabled
@@ -608,6 +610,41 @@ EOF
         require_fail) hd_lines <<'EOF'
 the learner keeps exactly its bound of new names
 and counts every name it declined
+EOF
+                      ;;
+        esac;;
+
+    dlm-sublock-looked-up-in-the-directory)
+        case "$_f" in
+        facility)     echo "SUB-LOCK ROUTING (vms_lock.c vms_enq_core_ex, rd vms-b67a): a lock whose PARID names a parent goes to the PARENT'S MASTER, because only ROOT resources are in the lock directory (Davis p. 6-29) and a resource tree has one master";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the sub-resource stops inheriting its tree's master, so dlm_resolve_master falls through to the DIRECTORY path and the sub NAME is looked up as if it were a root -- exactly what shipped before. MEASURED COST at two real V7.3 VAXes 2026-10-21 (tests/lab/captures/vms-c2b-ovmx-holder-20261021): OVMX held the ROOT of a tree VAX1 mastered, then sent S0/S1/S2 to VAX2 (the directory) under each sub name's own derived hash, was answered 'no entry', and MASTERED THEM LOCALLY -- reporting lock ids 0100034B/4C/4D granted at CW that VAX1's SDA does not list. A grant no master gave, and one sub-resource name mastered on two nodes at once.";;
+        require_fail) hd_lines <<'EOF'
+the sub-lock's request was posted
+*** and it goes to the PARENT'S MASTER -- never to the directory, as 7 of 7 real sub-lock requests do ***
+  ...and it is NOT a directory lookup
+*** body[36:40] is OUR OWN handle for the parent, read off the parent LKB ***
+*** body[40:44] is the handle THE PARENT'S MASTER gave it -- the pair that parent's own grant carried ***
+  and NO hash is asserted for a sub name nobody was asked about (Rule 8)
+the posted name is the sub-resource's own
+body[30] is the sub-lock's own requested mode
+its request was posted too
+EOF
+                      ;;
+        esac;;
+
+    dlm-sublock-parent-pair-zeroed)
+        case "$_f" in
+        facility)     echo "THE PARENT SPAN IS BOTH-OR-NEITHER (vms_cluster_codec_dlm.c vms_dlm_enq_request_build, rd vms-b67a): body[36:44] is (own parent handle, parent's master handle) and a half-filled pair never leaves";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the both-or-neither refusal is removed, so a sub-lock request can go out with body[40:44] = 0. ZERO THERE IS WHAT A ROOT MEANS -- every one of the corpus's 74,730 root requests carries it, and 7 of 7 real sub requests carry both halves non-zero -- so a master receiving one would read a sub-lock as a ROOT and create a SECOND root for the name. That is the same double-mastering rd vms-b67a measured, reached by a different door.";;
+        require_fail) hd_lines <<'EOF'
+*** a parent named with NO master handle: REFUSED. Zero at body[40:44] reads to the master as a ROOT and would create a second root for the name ***
+  ...and a master handle with no parent of our own: refused too
 EOF
                       ;;
         esac;;
@@ -3194,6 +3231,16 @@ apply_edit() {
     dlm-learner-unbounded)
         # `vms_res_blocks < VMS_DLM_LEARN_RES_CAP;` is unique in this file.
         sed -i 's|vms_res_blocks < VMS_DLM_LEARN_RES_CAP;|1; /* NEGCTL dlm-learner-unbounded */|' "$_file";;
+
+    dlm-sublock-looked-up-in-the-directory)
+        # The one call that gives a sub-resource its tree's master. Replacing
+        # the inheritance with a no-op restores the old routing and consumes
+        # the anchor, so a second apply cannot match.
+        sed -i 's|        uint32_t pst = enq_sub_adopt_tree_master(res, pfacts.master_csid);|        uint32_t pst = SS__NORMAL; /* NEGCTL dlm-sublock-looked-up-in-the-directory */|' "$_file";;
+
+    dlm-sublock-parent-pair-zeroed)
+        # The both-or-neither refusal is one expression, unique in this file.
+        sed -i 's|\tif ((req->parent_own_lkid == 0u) != (req->parent_master_lkid == 0u))|\tif (0) /* NEGCTL dlm-sublock-parent-pair-zeroed */|' "$_file";;
 
     dlm-own-directory-not-consulted)
         # `if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))`

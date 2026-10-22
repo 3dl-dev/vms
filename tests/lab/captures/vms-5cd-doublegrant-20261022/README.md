@@ -77,3 +77,34 @@ peer crash.
 | `trimmed.pcap.gz` | the 12 frames the committed trim rule kept (payloads unaltered) |
 | `frames.txt` | those frames decoded, the request/answer pairs, and every frame OVMXE originated |
 | `console-*.log` | all three consoles, whole |
+
+## Second instance, 2 of 2 attempts (RA7W, 02:34-02:38Z)
+
+Reproduced on a second fresh tree, with the capture started BEFORE step 1 this
+time (`instance2-trimmed.pcap.gz`, `instance2-frames.txt`,
+`instance2-console-*.log`):
+
+* 02:34:45 OVMXE holds `RA7W`'s root at CR (`root lkid 01000358`);
+* 02:35:23 VAX1's holder ends and the tree is handed over -- `f566/f568`
+  `02/0e` -> `82/15`, `f569/f571` `02/0f` -> `82/15`, `f573/f576` `02/10` ->
+  `82/15`, `f577` `02/13` (this one carries `master_lkid 0x00000000` and
+  `pid 0xffffffff`, where instance 1's named OVMX's own lock with mode `0xd1` --
+  the `0x13` shape VARIES);
+* then **nothing for 120 seconds**: the capture was polled every 15 s for an
+  OVMXE-originated `op-0x14` and counted ZERO at every sample;
+* 02:37:46 VAX2 asks EX -> **`f1408`, `body[34]=0xfa`, GRANTED**, and VAX2's
+  process goes to `HIB` while OVMX's own holder still holds CR.
+
+Final counters: `trees opened=2 records adopted=0 ends=2`, `trees held=0
+op-0x14 sent=0`, `grants sent=2`, `proxy_lkbs=3`.
+
+**The discriminator across the three runs.** In fire q85f1 -- which DID reach
+`trees held=1` and DID answer `0xfb` QUEUED, correctly -- **two** members sent
+an `op-0x13`: VAX1 and VAX2, the latter being the DIRECTORY node for that name.
+In instances 1 and 2 only **one** did, because for `RA7V` and `RA7W` the old
+master was also the directory node (OVMX's own root request went straight to
+VAX1 in both, with no redirect). So "how many members send an `op-0x13`" differs
+exactly between the runs that held and the runs that did not -- and that is a
+property of the resource-name hash, i.e. of the NAME. Which is why this is
+reachable at will, and why it hid: the names the earlier fires used happened to
+hash to the other node.

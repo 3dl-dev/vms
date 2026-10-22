@@ -9,7 +9,7 @@ defect_meta() {
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "The ACP sizes a new directory with 'alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;'. The mutation restores the old one-block-always rule, so a directory created with an initial allocation of 3 holds 1 block. Gone after substitution (no-op re-apply).";;
+        why)          echo "The ACP sizes a new directory with 'alloc_count = is_dir ? (ap->exsz > 1u ? ap->exsz : 1u) : ap->exsz;'. The mutation restores the old one-block-always rule, so a directory created with an initial allocation of 3 holds 1 block. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOF'
 the new directory holds the requested 3 blocks
 BIGD.DIR holds the 200 blocks asked for
@@ -25,6 +25,6 @@ EOF
 }
 
 defect_apply() {
-        sed -i 's|^            alloc_count = is_dir ? (args.exsz > 1u ? args.exsz : 1u) : args.exsz;$|            alloc_count = is_dir ? 1u : args.exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file"
+        sed -i 's|^            alloc_count = is_dir ? (ap->exsz > 1u ? ap->exsz : 1u) : ap->exsz;$|            alloc_count = is_dir ? 1u : ap->exsz; /* NEGCTL acp-dir-exsz-ignored */|' "$_file"
     :
 }

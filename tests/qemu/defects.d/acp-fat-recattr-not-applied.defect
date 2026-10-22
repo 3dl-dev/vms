@@ -25,6 +25,6 @@ EOF
 }
 
 defect_apply() {
-        sed -i 's|^            if ((args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) {$|            if (0 \&\& (args.attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) { /* NEGCTL acp-fat-recattr-not-applied */|' "$_file"
+        sed -i 's|^            if ((ap->attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) {$|            if (0 \&\& (ap->attr_ctl \& VMS_ACP_ATTR_RECATTR) \&\& !is_dir) { /* NEGCTL acp-fat-recattr-not-applied */|' "$_file"
     :
 }

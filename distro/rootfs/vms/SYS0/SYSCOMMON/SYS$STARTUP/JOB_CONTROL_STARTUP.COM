@@ -40,12 +40,12 @@ $! this procedure supplies it explicitly, and names it the VMS way: OPA0:,
 $! the operator console (src/kernel-core/vms_devtab.c). This procedure spells
 $! a VMS device, never a substrate path.
 $!
-$! HOW OPA0: RESOLVES. RUN/DETACHED's /INPUT=/OUTPUT=/ERROR= qualifiers resolve
-$! through dcl_resolve_path() (src/vmsdcl/dcl_filespec.c). It recognises the
-$! console-terminal aliases (OPA0:/_OPA0:/TT:/TT0:) via the SINGLE resolver
-$! ovmx_console_terminal_path() (src/libvms/include/ovmx_console.h) -- the same
-$! source sys$assign() uses -- and yields the console's backing device before
-$! the ':'-bearing spec could fall into the vmsfs disk translator. The Linux
+$! HOW OPA0: RESOLVES. RUN/DETACHED's /INPUT= resolves through dcl_resolve_path()
+$! (src/vmsdcl/dcl_filespec.c); /OUTPUT= and /ERROR= reach $CREPRC as the VMS
+$! spec they name (rd vms-c89). Both recognise the console-terminal aliases
+$! (OPA0:/_OPA0:/TT:/TT0:) via the SINGLE resolver ovmx_console_terminal_path()
+$! (src/libvms/include/ovmx_console.h) -- the same source sys$assign() uses --
+$! and yield the console's backing device, never a disk file. The Linux
 $! device that backs OPA0: (measured vms-1c57) lives ONLY inside that resolver
 $! and never appears on this VMS surface. JOB_CONTROL's own login children take
 $! a channel to OPA0: the VMS way ($ASSIGN + $GETDVI, vms-d0b) once they are

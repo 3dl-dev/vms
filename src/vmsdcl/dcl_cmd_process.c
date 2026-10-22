@@ -1318,10 +1318,17 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
     const char *q;
     if ((q = run_qualifier_value(cmd, "INPUT")) && *q)
         dcl_resolve_path(ctx, q, in_path, sizeof(in_path));
+    /* /OUTPUT and /ERROR go to $CREPRC as the VMS file spec they name (DCL's
+     * device/directory defaults filled in), exactly what VMS hands the new
+     * process as SYS$OUTPUT / SYS$ERROR: $CREPRC binds a device (OPA0:, NL:)
+     * itself and gives a DETACHED process a FILE as those logical names, which
+     * its image writes through RMS (rd vms-c89). Translating it to a host path
+     * here named the retired /vms passthrough -- a file that never appeared on
+     * the ODS-2 volume. A substrate path ('/', './') passes through as given. */
     if ((q = run_qualifier_value(cmd, "OUTPUT")) && *q)
-        dcl_resolve_path(ctx, q, out_path, sizeof(out_path));
+        dcl_rms_effective_spec(ctx, q, out_path, sizeof(out_path));
     if ((q = run_qualifier_value(cmd, "ERROR")) && *q)
-        dcl_resolve_path(ctx, q, err_path, sizeof(err_path));
+        dcl_rms_effective_spec(ctx, q, err_path, sizeof(err_path));
 
     const char *prcnam = run_qualifier_value(cmd, "PROCESS_NAME");
 

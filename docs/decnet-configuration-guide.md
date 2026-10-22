@@ -240,10 +240,10 @@ file, opens its datalink through the executive on the primary NIC, and sends
 endnode hellos. It needs `PHY_IO`, which it inherits from its creator (SYSTEM);
 without it the executive refuses the datalink with `SS$_NOPRIV` and NETACP exits
 (`SHOW SYSTEM` then lists no NETACP). NETACP runs with no terminal: its own
-status lines are meant for `SYS$MANAGER:NETACP.LOG`, but a created process cannot
-yet write a VMS file as its `SYS$OUTPUT` (rd vms-c89), so today they are
-discarded, never written on the console. On an unconfigured node STARTNET is a
-silent no-op.
+status lines go to `SYS$MANAGER:NETACP.LOG`, its `/OUTPUT` and `/ERROR` file, a
+new version each time NETACP starts, never to the console. Read it with
+`$ TYPE SYS$MANAGER:NETACP.LOG`. Its first line names the datalink it opened
+(`DECNETD-I-DATALINK`). On an unconfigured node STARTNET is a silent no-op.
 
 ## 3. Remote interactive login — SET HOST
 

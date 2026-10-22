@@ -135,8 +135,14 @@ FAIL=0
 # fails loudly instead of comparing against an empty string.
 sysgen_count() {
     local log="${1:?log}" n
-    n=$(grep -oE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' "$log" 2>/dev/null \
-        | tail -1 | grep -oE '[0-9]+' | tail -1)
+    # -a IS LOAD-BEARING (measured in merge-group run 39698326725): a QEMU
+    # console log carries NUL bytes, so GNU grep calls it BINARY and -o prints
+    # NOTHING even though the line is there. Every other reader in this file
+    # uses -q, where binary detection still exits 0 on a match, which is why
+    # only the reader that needs the TEXT was bitten -- it returned empty, and
+    # four checks compared against an empty string.
+    n=$(grep -aoE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' "$log" 2>/dev/null \
+        | tail -1 | grep -aoE '[0-9]+' | tail -1)
     [ -n "$n" ] || return 1
     printf '%s\n' "$n"
 }

@@ -545,7 +545,7 @@ uint32_t vms_kif_dlcefc(const char *name)
  * ================================================================ */
 
 uint32_t vms_kif_enq(uint32_t efn, uint32_t lkmode, uint32_t flags,
-                      const char *resnam, uint32_t parid,
+                      const char *resnam, uint32_t resnam_len, uint32_t parid,
                       uint64_t astadr, uint64_t astprm,
                       uint64_t blkastadr,
                       uint32_t *lkid, uint8_t *valblk)
@@ -557,9 +557,25 @@ uint32_t vms_kif_enq(uint32_t efn, uint32_t lkmode, uint32_t flags,
     args.lkmode = lkmode;
     args.flags = flags;
     args.parid = parid;
-    if (resnam)
-        vms_strncpy(args.resnam, resnam, 31);
-    args.resnam[31] = '\0';
+    /*
+     * THE NAME'S BYTES, COUNTED (rd vms-326). `vms_strncpy` stopped at the
+     * first NUL, so an RMS file-access lock name reached the executive as its
+     * 7-byte prefix and every such lock on every volume became one resource.
+     * The caller's count rides in `resnam_len`; 0 keeps the old spelling for
+     * an ASCII name (the executive measures it), and a count above 31 is
+     * refused by the executive with SS$_IVBUFLEN.
+     */
+    if (resnam != 0) {
+        if (resnam_len != 0u) {
+            uint32_t n = resnam_len > 32u ? 32u : resnam_len;
+
+            vms_memcpy(args.resnam, resnam, n);
+            args.resnam_len = resnam_len;
+        } else {
+            vms_strncpy(args.resnam, resnam, 31);
+            args.resnam[31] = '\0';
+        }
+    }
     args.astadr = astadr;
     args.astprm = astprm;
     args.blkastadr = blkastadr;

@@ -130,7 +130,15 @@ uint32_t vms_lock_dlm_local_csid(void);
  * off the asking frame: one name in two resource domains is two resources, and
  * answering about the wrong one is how a second master is made.
  */
-int vms_lock_dlm_name_in_use(const char *resnam, uint16_t group, uint8_t mode);
+/*
+ * `resnam_len` is the name's COUNTED length (rd vms-326): the wire carries it
+ * at body[47] and a VMS resource name may contain NULs, so a question asked by
+ * a NUL-terminated spelling would be a question about a different resource. 0
+ * means "the NUL-terminated string in resnam", which is what a caller holding
+ * an ASCII name states.
+ */
+int vms_lock_dlm_name_in_use(const char *resnam, uint32_t resnam_len,
+			     uint16_t group, uint8_t mode);
 
 /*
  * DOES THIS NODE MASTER THE RESOURCE OF THIS NAME? (rd vms-db2a.)
@@ -147,8 +155,8 @@ int vms_lock_dlm_name_in_use(const char *resnam, uint16_t group, uint8_t mode);
  * `group`/`mode` identify WHICH resource of that name is being asked about
  * (rd vms-b5b0), from the asking frame's own identity span.
  */
-int vms_lock_dlm_name_mastered_here(const char *resnam, uint16_t group,
-				    uint8_t mode);
+int vms_lock_dlm_name_mastered_here(const char *resnam, uint32_t resnam_len,
+				    uint16_t group, uint8_t mode);
 
 /* ==========================================================================
  * 2. One inbound request, as the master sees it
@@ -177,6 +185,15 @@ struct vms_dlm_master_request {
 	uint32_t lkmode;       /* body[30], LCK$K_ encoding                   */
 	uint32_t flags;        /* LCK$M_ the requester supplied               */
 	char     resnam[32];   /* body[48..], the root resource name          */
+	/*
+	 * ...and ITS COUNTED LENGTH, body[47] (rd vms-326). A VMS resource name
+	 * is counted and may contain NULs (RMS's file-access lock carries
+	 * three), so the master cannot take this name as a C string without
+	 * serving one resource's request against another's block. 0 means the
+	 * frame carried no name at all -- which only an op-0x07 CONVERT may do,
+	 * and it must then name a master handle instead.
+	 */
+	uint8_t  resnam_len;
 	/*
 	 * THE REST OF THE RESOURCE'S IDENTITY (rd vms-b5b0): body[44:46] UIC
 	 * group and body[46] access mode, read off the SAME frame as the name

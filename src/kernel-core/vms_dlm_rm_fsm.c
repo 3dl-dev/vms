@@ -309,14 +309,18 @@ static int rm_held_body(struct vms_dlm_rm *f, const struct vms_dlm_rm_tree *t)
 	uint32_t hash = 0u;
 
 	rm_ident_to_name(&t->id, nm, (uint32_t)sizeof(nm));
-	if (!f->ops->name_mastered_here(f->ops->ctx, nm, t->id.group,
-					t->id.mode))
+	/* The COUNT comes off the identity, not from the C string (rd
+	 * vms-326): `nm` is NUL-terminated for a diagnostic's sake, and a
+	 * resource name may contain NULs of its own. */
+	if (!f->ops->name_mastered_here(f->ops->ctx, nm, t->id.name_len,
+					t->id.group, t->id.mode))
 		return -1;
 
 	rm_bzero(&h, (uint32_t)sizeof(h));
 	h.id = t->id;
 	h.id.hash = 0u;
-	if (f->ops->dir_hash(f->ops->ctx, nm, t->id.group, t->id.mode, &hash)) {
+	if (f->ops->dir_hash(f->ops->ctx, nm, t->id.name_len, t->id.group,
+			     t->id.mode, &hash)) {
 		h.id.hash = hash;
 		h.hash_known = 1u;
 	}

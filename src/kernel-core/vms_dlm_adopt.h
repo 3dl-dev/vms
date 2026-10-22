@@ -83,6 +83,7 @@
  */
 struct vms_dlm_adopt_tree {
 	char     resnam[32];        /* the ROOT resource name, body[48..]   */
+	uint8_t  resnam_len;        /* ...and its count, body[47] (vms-326) */
 	uint32_t old_master_csid;   /* the system handing the tree over      */
 	uint16_t res_group;         /* body[44:46]                           */
 	uint8_t  res_mode;          /* body[46]                              */
@@ -113,6 +114,12 @@ struct vms_dlm_adopt_tree {
  */
 struct vms_dlm_adopt_lock_rec {
 	char     resnam[32];           /* this lock's resource name          */
+	uint8_t  resnam_len;           /* ...and its count, body[47]
+	                                * (rd vms-326: a VMS resource name is
+	                                * COUNTED and may contain NULs, so an
+	                                * adopted lock keyed by a C string would
+	                                * be keyed on a different resource than
+	                                * the $ENQ path's)                    */
 	uint32_t holder_csid;
 	uint32_t holder_lkid;
 	uint32_t parent_master_lkid;   /* 0 => the tree's root record        */

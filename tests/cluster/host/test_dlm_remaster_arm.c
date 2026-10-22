@@ -89,6 +89,8 @@ struct fake {
 
 	/* what really happened */
 	uint32_t opens, ends, aborts, reports;
+	/* the name COUNTS the FSM asked the engine with (rd vms-326) */
+	uint32_t mastered_len, hash_len;
 	struct vms_dlm_adopt_tree  opened;
 	struct vms_dlm_adopt_lock_rec last_rec;
 	uint32_t n_locks;
@@ -208,23 +210,30 @@ static void fk_reported(void *ctx)
 	((struct fake *)ctx)->reports++;
 }
 
-static int fk_mastered(void *ctx, const char *resnam, uint16_t group,
-		       uint8_t mode)
-{
-	(void)resnam;
-	(void)group;
-	(void)mode;
-	return ((struct fake *)ctx)->mastered;
-}
-
-static int fk_hash(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
-		   uint32_t *out)
+static int fk_mastered(void *ctx, const char *resnam, uint32_t resnam_len,
+		       uint16_t group, uint8_t mode)
 {
 	struct fake *f = (struct fake *)ctx;
 
 	(void)resnam;
 	(void)group;
 	(void)mode;
+	/* The name's COUNT the FSM asked with (rd vms-326), recorded so the
+	 * test can assert the question was about the identity's own length and
+	 * not about a C-string prefix of it. */
+	f->mastered_len = resnam_len;
+	return f->mastered;
+}
+
+static int fk_hash(void *ctx, const char *resnam, uint32_t resnam_len,
+		   uint16_t group, uint8_t mode, uint32_t *out)
+{
+	struct fake *f = (struct fake *)ctx;
+
+	(void)resnam;
+	(void)group;
+	(void)mode;
+	f->hash_len = resnam_len;
 	if (!f->hash_known)
 		return 0;
 	*out = f->hash;

@@ -192,8 +192,8 @@ dlm_enq_req	*	102	1	derived	state:mode	body[30]: the LKB's requested mode (NL=0 
 dlm_enq_req	*	103	13	deviation	const:0	body[31:44]: this node writes 0; zero in only 1,650 of 21,656 real requests, and 258 distinct values with visible structure -- field-shaped, not residue. Same treatment and same acceptance evidence as body[28:30] above (rd vms-6e6)
 dlm_enq_req	*	116	2	derived	state:group	body[44:46] UIC group: read off the resource block, part of the key it was created under (rd vms-b5b0)
 dlm_enq_req	*	118	1	derived	state:acmode	body[46] access mode: read off the resource block; NOT a constant 0x03 (rd vms-8219)
-dlm_enq_req	*	119	1	derived	state:namelen	body[47] name length, 1..31
-dlm_enq_req	*	120	76	copied	any:name	body[48:48+L] the resource name off the RSB, then zero to body[124]. A real request leaves residue in that tail (all-zero in only 213 of 21,656); this node sends none (rd vms-42de)
+dlm_enq_req	*	119	1	derived	state:namelen	body[47] name length, 1..31 -- the resource block's own name_len, read off the RSB at post time (rd vms-326: a VMS resource name is COUNTED and may contain NULs; it used to be a strnlen of a C string, which sent 7 bytes of RMS's 26-byte file-access lock name)
+dlm_enq_req	*	120	76	copied	any:name	body[48:48+L] the resource name off the RSB -- exactly L counted bytes, NULs included (rd vms-326) -- then zero to body[124]. A real request leaves residue in that tail (all-zero in only 213 of 21,656); this node sends none (rd vms-42de)
 dlm_enq_req	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b); 21,656 of 21,656
 dlm_enq_req	*	200	4	derived	state:hash	body[128:132] the directory hash for the root name -- a value some system in this cluster put on the wire and vms_lock_dlm_learn_dir_hash() recorded, never one computed here (rd vms-4fb)
 # ---- cat 0x02 op 0x03: THE LOCK RELEASE this node sends a master (rd vms-194).

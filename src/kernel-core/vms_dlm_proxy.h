@@ -128,7 +128,22 @@ struct vms_dlm_proxy_post {
 	uint32_t req_pid;
 	uint32_t lkmode;       /* requested mode, read from the LKB             */
 	uint32_t flags;        /* LCK_M_* the requester supplied, read from the LKB */
-	char     resnam[32];   /* the RSB's name                                */
+	char     resnam[32];   /* the RSB's name -- COUNTED, see resnam_len      */
+	/*
+	 * HOW MANY OF THOSE BYTES ARE THE NAME (rd vms-326).
+	 *
+	 * A VMS resource name is counted and may be BINARY: RMS's file-access
+	 * lock is 'RMS$' + the 6-byte file id + 0x02 + the 12-byte volume label
+	 * + three NULs, 26 bytes (1,130 real cat-0x02 frames,
+	 * tools/cluster/dlm_rms_name_hash_check.py). The wire carries the count at
+	 * body[47] and the bytes at body[48..], so the post carries both -- a
+	 * NUL-terminated field would have put the 7-byte truncation on the wire
+	 * and asked the directory node about a resource nobody has.
+	 *
+	 * Read off the RESOURCE BLOCK at post time, like the name itself:
+	 * `res->name_len`. Always 1..31 on a post the engine made.
+	 */
+	uint8_t  resnam_len;
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];  /* the LKB's value block (a write
 	                        * crossing carries it; otherwise zeros)         */
 
@@ -520,8 +535,15 @@ struct vms_dlm_requester_ops {
  * offset or the "one hash per name, cluster-wide" property the whole scheme
  * rests on.
  */
-uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t group,
-				     uint8_t mode, uint32_t dir_hash);
+/*
+ * `resnam_len` is the name's COUNTED length, as the frame carried it at
+ * body[47] (rd vms-326). A VMS resource name may contain NULs, and a value
+ * filed under the C-string prefix of one would sit on a resource block no
+ * $ENQ ever names. 0 means "the NUL-terminated string in resnam".
+ */
+uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t resnam_len,
+				     uint16_t group, uint8_t mode,
+				     uint32_t dir_hash);
 
 /*
  * vms_lock_dlm_dir_hash_of - the directory hash value this executive HOLDS for
@@ -539,8 +561,8 @@ uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t group,
  * returns 0 -- and the caller leaves the field ZERO, never minted -- for an
  * identity this executive holds no value for. Creates no resource.
  */
-int vms_lock_dlm_dir_hash_of(const char *resnam, uint16_t group, uint8_t mode,
-			     uint32_t *out);
+int vms_lock_dlm_dir_hash_of(const char *resnam, uint32_t resnam_len,
+			     uint16_t group, uint8_t mode, uint32_t *out);
 
 /* How many learned hashes disagreed with a value already held for that name
  * (see above). Instrumentation for the FC-P4.2 offset check; a diagnostic
@@ -707,7 +729,8 @@ uint32_t vms_lock_dlm_proxy_fail(uint32_t req_lkid, uint32_t status);
  * handle names a proxy on a different resource than `resnam` -- a mismatch that
  * would mean acting on an answer about some other lock.
  */
-uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid);
+uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t resnam_len,
+				     uint32_t req_lkid);
 
 /*
  * OUTCOME 2 (Davis p. 6-31): the directory node answered "the master is X".
@@ -735,7 +758,8 @@ uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid);
  * proxy's resource). A `master_csid` of 0 is refused: "unmastered" is what 0
  * MEANS in this engine, so it is not an answer.
  */
-uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t req_lkid,
+uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t resnam_len,
+				    uint32_t req_lkid,
 				    uint32_t master_csid);
 
 /*

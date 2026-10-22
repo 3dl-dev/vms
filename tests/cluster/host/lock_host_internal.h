@@ -108,6 +108,9 @@ static inline void strscpy(char *dst, const char *src, size_t size)
 #define SS__SYNCH       1673         /* SS$_SYNCH */
 #define SS__CANCELGRANT 3626         /* SS$_CVTUNGRANT */
 #define SS__UNSUPPORTED 3658         /* SS$_UNSUPPORTED */
+/* SS$_IVBUFLEN -- $ENQ's answer to a resource name of 0 or more than 31
+ * bytes (rd vms-326). Mirror of src/kernel/vms_internal.h. */
+#define SS__IVBUFLEN    844
 
 /* ================================================================
  * Lock-manager sizing constants (real values, copied from
@@ -212,6 +215,9 @@ struct vms_lock_entry {
 struct vms_lock_resource {
 	exec_hash_node_t          hash_node;
 	char                      name[32];
+	/* How many of those bytes are the name (rd vms-326): a VMS resource name
+	 * is counted and may contain NULs. Mirror of src/kernel/vms_internal.h. */
+	uint8_t                   name_len;
 	/* The rest of the resource's identity: UIC group (0 for a LCK$M_SYSTEM
 	 * name) and access mode -- the two values that qualify a VMS resource
 	 * name and that its directory hash is computed over (rd vms-b5b0). */

@@ -37,20 +37,31 @@ static void dq_memcpy(void *dst, const void *src, uint32_t n)
 
 /* Copy a NUL-terminated resource name out of a post into a codec name field.
  * Returns the length placed. The post's `resnam` came from the RSB. */
+/*
+ * THE NAME, COUNTED, OUT OF THE POST (rd vms-326). It used to stop at the
+ * first NUL, which for the one name family VMS fills with NULs -- the RMS
+ * file-access lock, 'RMS$' + 6 FID bytes + 0x02 + a 12-byte volume label +
+ * three NULs -- put SEVEN bytes at body[47:55] where the real VAX puts 26,
+ * and so asked the directory node about a resource nobody has. The engine
+ * states the count on the post; this copies exactly that many bytes.
+ */
 static uint8_t dq_name_from_post(const struct vms_dlm_proxy_post *p,
 				 uint8_t *out)
 {
-	uint8_t n = 0u;
+	uint8_t n = p->resnam_len;
+	uint8_t i;
 
-	while (n < (uint8_t)VMS_DLM_NAME_MAX && p->resnam[n] != '\0') {
-		out[n] = (uint8_t)p->resnam[n];
-		n++;
-	}
+	if (n > (uint8_t)VMS_DLM_NAME_MAX)
+		n = (uint8_t)VMS_DLM_NAME_MAX;
+	for (i = 0u; i < n; i++)
+		out[i] = (uint8_t)p->resnam[i];
 	return n;
 }
 
 /* The mirror: a codec name field into a NUL-terminated buffer the engine's
- * `learn_dir_hash` / `assume_mastery` take. `out` is VMS_DLM_NAME_MAX + 1. */
+ * `learn_dir_hash` / `assume_mastery` take ALONGSIDE the count (rd vms-326:
+ * they key on the count, and the NUL is only so a diagnostic can print an
+ * ASCII name). `out` is VMS_DLM_NAME_MAX + 1. */
 static void dq_name_to_cstr(const uint8_t *name, uint8_t len, char *out)
 {
 	uint8_t i;
@@ -1054,8 +1065,8 @@ static void h_redirect(struct dlm_req_fsm *f, struct dq_ev *e)
 		e->st = DLM_REQ_E_NOLOCK;
 		return;
 	}
-	if (f->ops->record_master(f->ops->ctx, p.resnam, r->req_lkid,
-				  e->master_csid) != 0) {
+	if (f->ops->record_master(f->ops->ctx, p.resnam, p.resnam_len,
+				  r->req_lkid, e->master_csid) != 0) {
 		e->st = DLM_REQ_E_INVAL;
 		return;
 	}
@@ -1103,7 +1114,8 @@ static void h_assume(struct dlm_req_fsm *f, struct dq_ev *e)
 		e->st = DLM_REQ_E_NOLOCK;
 		return;
 	}
-	if (f->ops->assume_mastery(f->ops->ctx, p.resnam, r->req_lkid) != 0) {
+	if (f->ops->assume_mastery(f->ops->ctx, p.resnam, p.resnam_len,
+				   r->req_lkid) != 0) {
 		e->st = DLM_REQ_E_INVAL;
 		return;
 	}
@@ -1333,8 +1345,10 @@ static int dq_ops_ok(const struct dlm_req_fsm *f)
 	       o->grant_recv != (int (*)(void *,
 					 const struct vms_dlm_proxy_grant *))0 &&
 	       o->record_master != (int (*)(void *, const char *, uint32_t,
+					    uint32_t,
 					    vms_csid_t))0 &&
-	       o->assume_mastery != (int (*)(void *, const char *, uint32_t))0 &&
+	       o->assume_mastery != (int (*)(void *, const char *, uint32_t,
+					     uint32_t))0 &&
 	       o->blkast_deliver != (int (*)(void *, uint32_t))0;
 }
 
@@ -1621,7 +1635,8 @@ uint32_t dlm_req_fsm_peer_gone(struct dlm_req_fsm *f, vms_csid_t csid)
  * request and the DENY reply shape echo it, a GRANT does not (spec §4(f).1).
  * The frame-taking entry reaches this through the body splice, so there is one
  * reader of a name, not two. */
-static int dq_body_name(const uint8_t *body, uint32_t len, char *out)
+static int dq_body_name(const uint8_t *body, uint32_t len, char *out,
+			uint32_t *out_len)
 {
 	struct vms_dlm_enq_request req;
 	struct vms_dlm_enq_response rsp;
@@ -1633,18 +1648,21 @@ static int dq_body_name(const uint8_t *body, uint32_t len, char *out)
 		if (req.name_len == 0u)
 			return -1;
 		dq_name_to_cstr(req.name, req.name_len, out);
+		*out_len = req.name_len;
 		return 0;
 	}
 	if (vms_dlm_rebuild_parse_body(body, len, &rec) == VMS_CODEC_OK) {
 		if (rec.name_len == 0u)
 			return -1;
 		dq_name_to_cstr(rec.name, rec.name_len, out);
+		*out_len = rec.name_len;
 		return 0;
 	}
 	if (vms_dlm_enq_response_parse_body(body, len, &rsp) == VMS_CODEC_OK) {
 		if (rsp.name_len == 0u)
 			return -1;
 		dq_name_to_cstr(rsp.name, rsp.name_len, out);
+		*out_len = rsp.name_len;
 		return 0;
 	}
 	return -1;
@@ -1668,11 +1686,13 @@ uint32_t dlm_req_fsm_observe_body(struct dlm_req_fsm *f, const uint8_t *body,
 	char name[VMS_DLM_NAME_MAX + 1u];
 	struct vms_dlm_res_ident id;
 	uint32_t hash = 0u;
+	uint32_t name_len = 0u;
 
 	if (f == (struct dlm_req_fsm *)0 || body == (const uint8_t *)0)
 		return 0u;
 	if (f->ops == (const struct dlm_req_ops *)0 ||
-	    f->ops->learn_dir_hash == (int (*)(void *, const char *, uint16_t,
+	    f->ops->learn_dir_hash == (int (*)(void *, const char *, uint32_t,
+					       uint16_t,
 					       uint8_t, uint32_t))0)
 		return 0u;
 	if (vms_dlm_dir_hash_parse_body(body, len, &hash) != VMS_CODEC_OK)
@@ -1687,10 +1707,13 @@ uint32_t dlm_req_fsm_observe_body(struct dlm_req_fsm *f, const uint8_t *body,
 	 */
 	if (vms_dlm_res_ident_parse_body(body, len, &id) != VMS_CODEC_OK)
 		return 0u;
-	if (dq_body_name(body, len, name) != 0)
+	/* The name AND ITS COUNT, both off the same frame (rd vms-326): a value
+	 * filed under a C-string truncation of a binary name would sit on a
+	 * resource block no $ENQ ever asks about. */
+	if (dq_body_name(body, len, name, &name_len) != 0)
 		return 0u;
-	if (f->ops->learn_dir_hash(f->ops->ctx, name, id.group, id.mode,
-				   hash) != 0)
+	if (f->ops->learn_dir_hash(f->ops->ctx, name, name_len, id.group,
+				   id.mode, hash) != 0)
 		return 0u;
 	f->hashes_learned++;
 	return 1u;

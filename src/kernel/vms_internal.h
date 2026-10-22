@@ -164,6 +164,13 @@
 #define SS__SYNCH       1673        /* granted synchronously (ssdef.h SS$_SYNCH) */
 #define SS__CANCELGRANT 8508        /* conversion cancelled (ssdef.h SS$_CVTUNGRANT) */
 #define SS__VALNOTVALID 2544        /* value block not valid (ssdef.h SS$_VALNOTVALID) */
+/* An invalid buffer length (ssdef.h SS$_IVBUFLEN == 844, the value this tree
+ * already ships for the name; NOT re-derived here, same discipline as the
+ * block above). $ENQ's answer to a resource name of 0 or more than 31 bytes
+ * -- observed, and the refusal src/libvms/syssvc/sys_lock.c makes on the
+ * descriptor before the ioctl; the executive makes the same one on the count
+ * it is handed (rd vms-326). */
+#define SS__IVBUFLEN     844
 
 /*
  * SS__UNSUPPORTED -- this tree's existing src/libvms/include/ssdef.h value
@@ -603,6 +610,25 @@ struct vms_lock_entry {
 struct vms_lock_resource {
     struct hlist_node   hash_node;      /* in global resource hash */
     char                name[32];
+    /*
+     * HOW MANY OF THOSE BYTES ARE THE NAME (rd vms-326).
+     *
+     * A VMS RESOURCE NAME IS COUNTED, NOT TERMINATED, and may contain NULs:
+     * RMS names a file-access lock 'RMS$' + the 6-byte file id + 0x02 + the
+     * 12-byte space-padded volume label + three NULs (26 bytes, measured on
+     * 1,130 real cat-0x02 frames -- tools/cluster/dlm_rms_name_hash_check.py).
+     * Measuring this block's name with strnlen instead would make every
+     * same-file-id name on every volume ONE resource, which is what refused a
+     * reader of one file on behalf of a writer of another (rd vms-acf3), and
+     * would put a 7-byte truncation at body[47:55] on the wire.
+     *
+     * 1..31, set at creation from the counted name the caller stated and never
+     * changed; it is part of the identity every lookup matches on (`struct
+     * res_key`). The byte after the name is kept NUL so a diagnostic printf of
+     * an ASCII name is still safe. Mirror in src/kernel-netbsd/vms_internal.h
+     * and tests/cluster/host/lock_host_internal.h.
+     */
+    uint8_t             name_len;
     /*
      * THE REST OF THE RESOURCE'S IDENTITY (rd vms-b5b0). A VMS resource name is
      * QUALIFIED: two $ENQs name the same resource only if they agree on the

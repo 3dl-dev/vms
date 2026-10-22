@@ -360,6 +360,24 @@ static int quorum_hang_active(void)
 _Static_assert(VMS_DLM_VALBLK_LEN == LCK_VALBLK_SIZE,
                "vms_dlm_proxy.h VMS_DLM_VALBLK_LEN must equal LCK_VALBLK_SIZE");
 
+/*
+ * THE RESOURCE'S NAME, COUNTED, out of the block and into a post (rd vms-326).
+ * `strscpy` stopped at the first NUL and a VMS resource name may contain one
+ * (RMS's file-access lock carries three), so this is a counted copy plus the
+ * count -- the two halves of one fact, never one without the other.
+ */
+static void dlm_post_set_resnam(struct vms_dlm_proxy_post *p,
+                                const struct vms_lock_resource *res)
+{
+    uint32_t n = res->name_len;
+
+    if (n > sizeof(p->resnam))
+        n = (uint32_t)sizeof(p->resnam);
+    memset(p->resnam, 0, sizeof(p->resnam));
+    memcpy(p->resnam, res->name, n);
+    p->resnam_len = (uint8_t)n;
+}
+
 static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
                                 const struct vms_lock_resource *res,
                                 uint32_t op, uint32_t dst_csid,
@@ -382,7 +400,7 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
     p->req_pid     = (lock->proc != NULL) ? lock->proc->vms_pid : 0u;
     p->lkmode      = lock->requested_mode;
     p->flags       = lock->flags;
-    strscpy(p->resnam, res->name, sizeof(p->resnam));
+    dlm_post_set_resnam(p, res);
     memcpy(p->valblk, lock->valblk, LCK_VALBLK_SIZE);
     /*
      * The resource's DIRECTORY HASH, off the resource block (FC-P4.6,
@@ -795,14 +813,22 @@ static void lock_unlink_from_res(struct vms_lock_entry *lock)
  *
  * FNV-1a over the name's significant bytes: public-domain, unrelated to
  * anything VMS does, and its VALUE is unobservable outside this file (a lookup
- * confirms the name with strncmp), which is what makes it safe to be OVMX's
+ * confirms the name with res_name_eq), which is what makes it safe to be OVMX's
  * own choice.
  */
-static uint32_t resource_hash_key(const char *name)
+/*
+ * OVER THE NAME'S COUNTED BYTES, NOT UP TO A NUL (rd vms-326). A VMS resource
+ * name may contain NULs (RMS's file-access lock carries three), so hashing to
+ * the first one would put every name of one file id on every volume in the
+ * same bucket AND make them compare equal -- see resource_find_key().
+ */
+static uint32_t resource_hash_key(const char *name, uint32_t name_len)
 {
     uint32_t h = 2166136261u;   /* FNV-1a offset basis */
-    size_t i, n = strnlen(name, 32);
+    size_t i, n = name_len;
 
+    if (n > 32u)
+        n = 32u;
     for (i = 0; i < n; i++) {
         h ^= (uint32_t)(unsigned char)name[i];
         h *= 16777619u;         /* FNV-1a prime */
@@ -840,22 +866,76 @@ static uint32_t resource_hash_key(const char *name)
  * what it is: a diagnostic read that cannot name a domain.
  * ================================================================
  */
+/*
+ * ...AND THE NAME IS A COUNTED BYTE STRING (rd vms-326), which is the fifth
+ * thing on that list and was missing. `name_len` is 1..31; a key whose length
+ * is 0 is not a name at all and the callers refuse it before they get here.
+ */
 struct res_key {
     const char *name;
+    uint32_t    name_len;               /* the name's counted length, 1..31 */
     struct vms_lock_resource *parent;   /* NULL for a root resource */
     uint16_t    group;                  /* 0 for a LCK$M_SYSTEM name */
     uint8_t     mode;                   /* PSL_C_* access mode */
 };
 
+/*
+ * A COUNTED COMPARISON, and the reason is a measured defect, not tidiness.
+ * `strncmp` stops at the first NUL in EITHER name, so the 26-byte RMS names
+ *
+ *   'RMS$' 1c 01 01 00 00 00 02 'SYSDSK1     ' 00 00 00
+ *   'RMS$' 1c 01 01 00 00 00 02 'VAX1DATA    ' 00 00 00
+ *
+ * -- the same file id on two different volumes -- compared EQUAL, so one
+ * resource block served both files and a lock on either blocked the other
+ * (rd vms-acf3, rd vms-326). Length first, then memcmp over exactly that many
+ * bytes.
+ */
+static int res_name_eq(const struct vms_lock_resource *res,
+                       const struct res_key *k)
+{
+    if ((uint32_t)res->name_len != k->name_len)
+        return 0;              /* a different LENGTH is a different name */
+    return memcmp(res->name, k->name, k->name_len) == 0;
+}
+
+/* THE ONE LENGTH THIS ENGINE WILL HOLD (rd vms-326): a VMS resource name is
+ * 1..31 bytes ($ENQ answers SS$_IVBUFLEN outside that), and 31 is also what
+ * leaves the byte after the name NUL in a 32-byte block. Every caller checks
+ * it at its own boundary; this is the structural floor under all of them, so a
+ * block with a nonsense length cannot come into existence. */
+#define VMS_RES_NAME_MAX 31u
+
+static int res_name_len_ok(uint32_t name_len)
+{
+    return name_len != 0u && name_len <= VMS_RES_NAME_MAX;
+}
+
+/*
+ * Is this block's name exactly these `len` bytes? (rd vms-326.) The same
+ * counted test res_name_eq makes, for the paths that find a lock by HANDLE and
+ * then check the name an answer carried -- `strncmp` would have accepted a
+ * truncation of it. `len` 0 means the caller handed a NUL-terminated name.
+ */
+static int res_name_is(const struct vms_lock_resource *res, const char *name,
+                       uint32_t len)
+{
+    if (name == NULL)
+        return 0;
+    if (len == 0u)
+        len = (uint32_t)strnlen(name, VMS_RES_NAME_MAX + 1u);
+    return (uint32_t)res->name_len == len &&
+           memcmp(res->name, name, len) == 0;
+}
+
 static struct vms_lock_resource *resource_find_key(const struct res_key *k)
 {
     struct vms_lock_resource *res;
-    uint32_t key = resource_hash_key(k->name);
+    uint32_t key = resource_hash_key(k->name, k->name_len);
 
     exec_hash_for_each_possible(vms_res_hash, res, hash_node, key) {
         if (res->parent == k->parent && res->res_group == k->group &&
-            res->res_mode == k->mode &&
-            strncmp(res->name, k->name, 32) == 0)
+            res->res_mode == k->mode && res_name_eq(res, k))
             return res;
     }
     return NULL;
@@ -871,17 +951,39 @@ static struct vms_lock_resource *resource_find_key(const struct res_key *k)
  * and it is NOT acceptable for a routing or mastering decision: those take a
  * `res_key`. Nothing in this file may use this function to decide where a
  * frame goes.
+ *
+ * AND IT CAN ONLY ANSWER FOR A NAME A C STRING CAN SPELL (rd vms-326). The
+ * caller hands a NUL-terminated name, so a resource whose name contains a NUL
+ * -- an RMS file-access lock -- is not findable this way at all, and reporting
+ * the block whose first NUL-terminated run matched would be reporting a
+ * DIFFERENT resource. It is measured here as the counted name the caller could
+ * have meant, and nothing else matches.
  */
 static struct vms_lock_resource *resource_find_by_name_any(const char *name)
 {
     struct vms_lock_resource *res;
-    uint32_t key = resource_hash_key(name);
+    uint32_t len = (uint32_t)strnlen(name, 32);
+    uint32_t key = resource_hash_key(name, len);
 
     exec_hash_for_each_possible(vms_res_hash, res, hash_node, key) {
-        if (res->parent == NULL && strncmp(res->name, name, 32) == 0)
+        if (res->parent == NULL && (uint32_t)res->name_len == len &&
+            memcmp(res->name, name, len) == 0)
             return res;
     }
     return NULL;
+}
+
+/*
+ * HOW LONG THE NAME ON AN INBOUND CROSS-NODE REQUEST IS (rd vms-326). The wire
+ * arm states the count it read at body[47]; 0 means a caller stated only the
+ * NUL-terminated spelling, and an empty one means the request names no
+ * resource at all -- which several paths below refuse.
+ */
+static uint32_t xnode_name_len(const struct vms_dlm_xnode_args *req)
+{
+    if (req->resnam_len != 0u)
+        return (uint32_t)req->resnam_len;
+    return (uint32_t)strnlen(req->resnam, sizeof(req->resnam));
 }
 
 /*
@@ -895,6 +997,7 @@ static struct res_key xnode_res_key(const struct vms_dlm_xnode_args *req)
     struct res_key k;
 
     k.name = req->resnam;
+    k.name_len = xnode_name_len(req);
     k.parent = NULL;
     k.group = req->res_group;
     k.mode = req->res_mode;
@@ -905,6 +1008,9 @@ static struct vms_lock_resource *resource_find_or_create_key(const struct res_ke
 {
     struct vms_lock_resource *res, *new_res;
     uint32_t key;
+
+    if (!res_name_len_ok(k->name_len))
+        return NULL;
 
     exec_lock(&vms_res_hash_lock);
     res = resource_find_key(k);
@@ -932,7 +1038,12 @@ static struct vms_lock_resource *resource_find_or_create_key(const struct res_ke
         return res;
     }
 
-    strscpy(new_res->name, k->name, sizeof(new_res->name));
+    /* The COUNTED name (rd vms-326), not a strscpy: the name may contain NULs
+     * and strscpy would stop at the first one. The tail is left zero (the
+     * block came from exec_zalloc), so the byte after the name is NUL and a
+     * diagnostic printf of an ASCII name is still safe. */
+    memcpy(new_res->name, k->name, k->name_len);
+    new_res->name_len = (uint8_t)k->name_len;
     /* The identity the caller stated, which is the identity this block will
      * answer for on the wire for as long as it exists (rd vms-b5b0). */
     new_res->res_group = k->group;
@@ -949,7 +1060,7 @@ static struct vms_lock_resource *resource_find_or_create_key(const struct res_ke
     if (k->parent)
         k->parent->refcount++;
 
-    key = resource_hash_key(k->name);
+    key = resource_hash_key(k->name, k->name_len);
     exec_hash_add(vms_res_hash, &new_res->hash_node, key);
     vms_res_blocks++;
     exec_unlock(&vms_res_hash_lock);
@@ -1005,7 +1116,10 @@ static int dlm_dir_remove_fill(const struct vms_lock_resource *res,
 
     if (res->master_csid == 0 || res->master_csid != vms_local_csid)
         return 0;
-    if (!res->hash_known || res->name[0] == '\0' || res->parent != NULL)
+    /* `name_len` 0 is "this block has no name", which `name[0] == NUL` used
+     * to stand for and cannot any more: a counted name may BEGIN with a NUL
+     * (rd vms-326). */
+    if (!res->hash_known || res->name_len == 0u || res->parent != NULL)
         return 0;   /* only a ROOT resource has a directory entry */
     if (ops.post == NULL || ops.dir_resolve == NULL)
         return 0;   /* no cluster: no directory node to tell */
@@ -1030,7 +1144,7 @@ static int dlm_dir_remove_fill(const struct vms_lock_resource *res,
     p->dst_csid   = dir;
     p->req_csid   = vms_local_csid;
     p->master_csid = vms_local_csid;
-    strscpy(p->resnam, res->name, sizeof(p->resnam));
+    dlm_post_set_resnam(p, res);
     p->dir_hash       = res->dir_hash;
     p->dir_hash_known = 1u;
     p->res_group      = res->res_group;
@@ -1319,13 +1433,41 @@ static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash,
     return SS__NORMAL;
 }
 
-int vms_lock_dlm_name_in_use(const char *resnam, uint16_t group, uint8_t mode)
+/*
+ * THE ROOT KEY A BY-NAME ENTRY POINT NAMES (rd vms-326).
+ *
+ * Every one of these entry points is reached from the DLM arm with a name that
+ * came off a cat-0x02 frame, where it is COUNTED (body[47]) and may contain
+ * NULs. `resnam_len` is that count; 0 is the legacy spelling for "the
+ * NUL-terminated string", which is all an ASCII caller (and every host test)
+ * ever states. Nothing here creates a resource.
+ */
+static struct res_key res_key_counted(const char *resnam, uint32_t resnam_len,
+                                      uint16_t group, uint8_t mode)
 {
-    struct res_key k = { resnam, NULL, group, mode };
+    struct res_key k;
+
+    k.name = resnam;
+    k.name_len = resnam_len != 0u
+                     ? resnam_len
+                     : (uint32_t)strnlen(resnam, VMS_RES_NAME_MAX + 1u);
+    k.parent = NULL;
+    k.group = group;
+    k.mode = mode;
+    return k;
+}
+
+int vms_lock_dlm_name_in_use(const char *resnam, uint32_t resnam_len,
+                             uint16_t group, uint8_t mode)
+{
+    struct res_key k;
     struct vms_lock_resource *res;
     int busy = 0;
 
-    if (resnam == NULL || resnam[0] == '\0')
+    if (resnam == NULL)
+        return 1;
+    k = res_key_counted(resnam, resnam_len, group, mode);
+    if (!res_name_len_ok(k.name_len))
         return 1;
     exec_lock(&vms_res_hash_lock);
     res = resource_find_key(&k);
@@ -1359,14 +1501,17 @@ static uint32_t dir_hash_for_routing(struct vms_lock_resource *res);
  * documents (rd vms-151): a resource mastered before the cluster assigned this
  * node its CSID carries the previous identity, and it is still this node's.
  */
-int vms_lock_dlm_name_mastered_here(const char *resnam, uint16_t group,
-                                    uint8_t mode)
+int vms_lock_dlm_name_mastered_here(const char *resnam, uint32_t resnam_len,
+                                    uint16_t group, uint8_t mode)
 {
-    struct res_key k = { resnam, NULL, group, mode };
+    struct res_key k;
     struct vms_lock_resource *res;
     int mine = 0;
 
-    if (resnam == NULL || resnam[0] == '\0')
+    if (resnam == NULL)
+        return 0;
+    k = res_key_counted(resnam, resnam_len, group, mode);
+    if (!res_name_len_ok(k.name_len))
         return 0;
     exec_lock(&vms_res_hash_lock);
     res = resource_find_key(&k);
@@ -1394,14 +1539,17 @@ int vms_lock_dlm_name_mastered_here(const char *resnam, uint16_t group,
  *
  * Returns 1 and writes *out only when a real value exists. Creates nothing.
  */
-int vms_lock_dlm_dir_hash_of(const char *resnam, uint16_t group, uint8_t mode,
-                             uint32_t *out)
+int vms_lock_dlm_dir_hash_of(const char *resnam, uint32_t resnam_len,
+                             uint16_t group, uint8_t mode, uint32_t *out)
 {
-    struct res_key k = { resnam, NULL, group, mode };
+    struct res_key k;
     struct vms_lock_resource *res;
     int have = 0;
 
-    if (resnam == NULL || resnam[0] == '\0' || out == NULL)
+    if (resnam == NULL || out == NULL)
+        return 0;
+    k = res_key_counted(resnam, resnam_len, group, mode);
+    if (!res_name_len_ok(k.name_len))
         return 0;
     *out = 0u;
     exec_lock(&vms_res_hash_lock);
@@ -1418,14 +1566,25 @@ int vms_lock_dlm_dir_hash_of(const char *resnam, uint16_t group, uint8_t mode,
     return have;
 }
 
-uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t group,
-                                     uint8_t mode, uint32_t dir_hash)
+uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t resnam_len,
+                                     uint16_t group, uint8_t mode,
+                                     uint32_t dir_hash)
 {
-    struct res_key k = { resnam, NULL, group, mode };
+    struct res_key k;
     struct vms_lock_resource *res;
     uint32_t st;
 
-    if (resnam == NULL || resnam[0] == '\0')
+    if (resnam == NULL)
+        return SS__BADPARAM;
+    k = res_key_counted(resnam, resnam_len, group, mode);
+    /*
+     * A LEARNED VALUE MUST BE FILED UNDER THE NAME THE $ENQ WILL ASK FOR
+     * (rd vms-326). The name is counted here for the same reason the $ENQ path
+     * counts it: filing an RMS file-access lock's hash under the 7-byte prefix
+     * its first NUL ends would put the value on a resource block no lock ever
+     * names, and leave the real one unroutable.
+     */
+    if (!res_name_len_ok(k.name_len))
         return SS__BADPARAM;
     if (!dir_hash_learn_room(&k))
         return SS__INSFMEM;
@@ -1545,16 +1704,24 @@ static int dlm_directory_installed(void)
  * resource block (rd vms-b5b0). Caller holds res->lock.
  *
  * Every argument is an executive read: the name the block was created with, and
- * the group and access mode the creating $ENQ (or the parsed frame) stated. The
- * name is taken as the bytes this executive holds for it; a resource name with
- * an embedded NUL cannot be represented by this engine's `char name[32]` at all,
- * so there is no case where the bytes hashed differ from the bytes this node
- * would put on the wire.
+ * the group and access mode the creating $ENQ (or the parsed frame) stated.
+ *
+ * AND THE NAME IS ITS COUNTED BYTES (rd vms-326), which is what makes the
+ * bytes hashed here the same bytes this node puts at body[48:48+n] on the
+ * wire. It used to be strnlen'd, and for the one name family VMS fills with
+ * NULs -- the RMS file-access lock -- that hashed SEVEN bytes of a 26-byte
+ * name and routed the lookup at whatever directory node the wrong value
+ * named. MEASURED on the real thing, 1,130 of 1,130 real cat-0x02 frames:
+ * with the counted name this function's value IS the value the real VAX put
+ * at body[128:132] for the same identity (tools/cluster/
+ * dlm_rms_name_hash_check.py, ctest cluster_host_dlm_rms_name_hash) -- a
+ * black-box (input, output) check against values VMS broadcast in the clear,
+ * the same evidence class the function was determined from.
  */
 static uint32_t dir_hash_compute(const struct vms_lock_resource *res,
                                  uint32_t *out)
 {
-    uint32_t len = (uint32_t)strnlen(res->name, sizeof(res->name));
+    uint32_t len = res->name_len;
 
     if (res->parent != NULL)
         return SS__UNSUPPORTED;     /* not a root name: never computed */
@@ -1904,7 +2071,7 @@ static int dlm_route_own_directory(struct vms_lock_resource *res,
     *status = SS__NORMAL;
     if (ops.dir_local_lookup == NULL)
         return 0;
-    name_len = (uint32_t)strnlen(res->name, sizeof(res->name));
+    name_len = res->name_len;   /* counted, never strnlen'd (rd vms-326) */
     if (name_len == 0u)
         return 0;
 
@@ -3336,13 +3503,14 @@ static void dlm_promote_proxy_locked(struct vms_lock_resource *res,
  * and promote the outstanding proxy, so the requester's own $ENQW completes
  * from a genuine local grant rather than from a message this node invented.
  */
-uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid)
+uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t resnam_len,
+                                     uint32_t req_lkid)
 {
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
     uint32_t st = SS__NORMAL;
 
-    if (resnam == NULL || resnam[0] == '\0' || req_lkid == VMS_DLM_LKID_UNSET)
+    if (resnam == NULL || req_lkid == VMS_DLM_LKID_UNSET)
         return SS__BADPARAM;
 
     lock = dlm_proxy_find(req_lkid);
@@ -3354,7 +3522,7 @@ uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid)
     /* The answer must be about the lock it names. Acting on a directory reply
      * for one resource against a proxy on another would master the wrong
      * tree -- the shape of error that produces two masters. */
-    if (strncmp(res->name, resnam, sizeof(res->name)) != 0) {
+    if (!res_name_is(res, resnam, resnam_len)) {
         st = SS__BADPARAM;
     } else {
         res->master_csid = vms_local_csid;
@@ -3385,14 +3553,14 @@ static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
  * arm must put the answer HERE and then re-read it, rather than remembering it.
  * Grants nothing and wakes nobody: a routing fact is not a completion.
  */
-uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t req_lkid,
-                                    uint32_t master_csid)
+uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t resnam_len,
+                                    uint32_t req_lkid, uint32_t master_csid)
 {
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
     uint32_t st = SS__NORMAL;
 
-    if (resnam == NULL || resnam[0] == '\0' ||
+    if (resnam == NULL ||
         req_lkid == VMS_DLM_LKID_UNSET || master_csid == 0)
         return SS__BADPARAM;   /* 0 IS "unmastered" here, so it is no answer */
 
@@ -3402,7 +3570,7 @@ uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t req_lkid,
 
     res = lock->resource;
     exec_lock(&res->lock);
-    if (strncmp(res->name, resnam, sizeof(res->name)) != 0) {
+    if (!res_name_is(res, resnam, resnam_len)) {
         st = SS__BADPARAM;     /* an answer about some other lock */
     } else {
         lock->master_csid = master_csid;
@@ -3627,6 +3795,20 @@ static uint8_t dlm_master_read_lkb(uint32_t master_lkid, uint32_t *req_lkid)
     return mode;
 }
 
+/*
+ * HOW LONG THE NAME ON THIS INBOUND REQUEST IS (rd vms-326). The wire arm
+ * states the count it read at body[47]; 0 with a nonempty NUL-terminated
+ * spelling is a local caller of the master door that stated only the string,
+ * and 0 with an empty one is a frame that carried NO name -- which is what the
+ * refusals below are about.
+ */
+static uint32_t mreq_name_len(const struct vms_dlm_master_request *r)
+{
+    if (r->resnam_len != 0u)
+        return (uint32_t)r->resnam_len;
+    return (uint32_t)strnlen(r->resnam, sizeof(r->resnam));
+}
+
 /* A request this executive can act on at all: a named sender, a handle the
  * sender minted, and (for ENQ/CONVERT) a resource name. Refused rather than
  * defaulted -- a lock tagged with CSID 0 would name no owner (condition 2). */
@@ -3654,13 +3836,13 @@ static int dlm_master_request_ok(const struct vms_dlm_master_request *r)
      * must then carry a master handle.
      */
     if (r->op == VMS_DLM_MREQ_ENQ &&
-        (r->resnam[0] == '\0' || !r->res_ident_valid))
+        (mreq_name_len(r) == 0u || !r->res_ident_valid))
         return 0;
     if (r->op == VMS_DLM_MREQ_CONVERT && !r->res_ident_valid &&
         r->master_lkid == VMS_DLM_LKID_UNSET)
         return 0;
     if (r->op == VMS_DLM_MREQ_CONVERT && r->res_ident_valid &&
-        r->resnam[0] == '\0' && r->master_lkid == VMS_DLM_LKID_UNSET)
+        mreq_name_len(r) == 0u && r->master_lkid == VMS_DLM_LKID_UNSET)
         return 0;
     if (r->op == VMS_DLM_MREQ_DEQ && r->master_lkid == VMS_DLM_LKID_UNSET)
         return 0;
@@ -3679,8 +3861,8 @@ static int dlm_master_request_ok(const struct vms_dlm_master_request *r)
  * caller must refuse, never guess a domain.
  */
 static int dlm_master_ident_of_lkid(uint32_t master_lkid, char *name,
-                                    uint32_t name_cap, uint16_t *group,
-                                    uint8_t *mode)
+                                    uint32_t name_cap, uint8_t *name_len,
+                                    uint16_t *group, uint8_t *mode)
 {
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
@@ -3696,7 +3878,17 @@ static int dlm_master_ident_of_lkid(uint32_t master_lkid, char *name,
         return 0;
     }
     exec_lock(&res->lock);
-    strscpy(name, res->name, name_cap);
+    /* COUNTED (rd vms-326): the block's name may contain NULs, and the caller
+     * is about to put it on a request that carries its length. */
+    {
+        uint32_t n = res->name_len;
+
+        if (n > name_cap)
+            n = name_cap;
+        memset(name, 0, name_cap);
+        memcpy(name, res->name, n);
+        *name_len = (uint8_t)n;
+    }
     *group = res->res_group;
     *mode = res->res_mode;
     exec_unlock(&res->lock);
@@ -3716,17 +3908,25 @@ static int dlm_master_fill_args(const struct vms_dlm_master_request *r,
     a->req_csid    = r->req_csid;
     a->req_lkid    = r->req_lkid;
     a->master_lkid = r->master_lkid;
-    strscpy(a->resnam, r->resnam, sizeof(a->resnam));
+    /* The name, COUNTED, exactly as the frame carried it (rd vms-326). */
+    {
+        uint32_t n = mreq_name_len(r);
+
+        if (n > sizeof(a->resnam))
+            n = (uint32_t)sizeof(a->resnam);
+        memcpy(a->resnam, r->resnam, n);
+        a->resnam_len = (uint8_t)n;
+    }
     a->res_group = r->res_group;
     a->res_mode = r->res_mode;
     /* A convert whose frame identity is stale: take the resource from the lock
      * the convert names (above). If that handle names no lock of ours there is
      * nothing to convert and nothing to name -- refuse. */
     if (r->op == VMS_DLM_MREQ_CONVERT &&
-        (!r->res_ident_valid || r->resnam[0] == '\0') &&
+        (!r->res_ident_valid || mreq_name_len(r) == 0u) &&
         !dlm_master_ident_of_lkid(r->master_lkid, a->resnam,
-                                  sizeof(a->resnam), &a->res_group,
-                                  &a->res_mode))
+                                  sizeof(a->resnam), &a->resnam_len,
+                                  &a->res_group, &a->res_mode))
         return 0;
     if (r->valblk_present) {
         memcpy(a->valblk, r->valblk, LCK_VALBLK_SIZE);
@@ -3968,9 +4168,27 @@ static uint32_t dlm_adopt_refuse(uint32_t status)
 
 /* The tree's identity must be COMPLETE. "Which resource of that name" has no
  * honest default (rd vms-b5b0): guessing it adopts somebody else's tree. */
+/* The counted length of a record's name (rd vms-326); 0 means the caller
+ * stated only the NUL-terminated spelling, and an empty one is no name. */
+static uint32_t adopt_tree_name_len(const struct vms_dlm_adopt_tree *t)
+{
+    if (t->resnam_len != 0u)
+        return (uint32_t)t->resnam_len;
+    return (uint32_t)strnlen(t->resnam, sizeof(t->resnam));
+}
+
+static uint32_t adopt_rec_name_len(const struct vms_dlm_adopt_lock_rec *r)
+{
+    if (r->resnam_len != 0u)
+        return (uint32_t)r->resnam_len;
+    return (uint32_t)strnlen(r->resnam, sizeof(r->resnam));
+}
+
 static int dlm_adopt_tree_ok(const struct vms_dlm_adopt_tree *t)
 {
-    if (t == NULL || t->resnam[0] == '\0' || !t->ident_valid)
+    if (t == NULL || !t->ident_valid)
+        return 0;
+    if (!res_name_len_ok(adopt_tree_name_len(t)))
         return 0;
     if (t->old_master_csid == 0u)
         return 0;   /* a hand-over from nobody is not a hand-over */
@@ -3983,6 +4201,7 @@ static struct res_key dlm_adopt_root_key(const struct vms_dlm_adopt_tree *t)
     struct res_key k;
 
     k.name = t->resnam;
+    k.name_len = adopt_tree_name_len(t);
     k.parent = NULL;
     k.group = t->res_group;
     k.mode = t->res_mode;
@@ -4000,7 +4219,7 @@ static struct dlm_adoption *dlm_adopt_find_locked(const struct vms_dlm_adopt_tre
         struct vms_lock_resource *r = a->root;
 
         if (r->res_group == t->res_group && r->res_mode == t->res_mode &&
-            strncmp(r->name, t->resnam, sizeof(r->name)) == 0)
+            res_name_is(r, t->resnam, adopt_tree_name_len(t)))
             return a;
     }
     return NULL;
@@ -4086,7 +4305,9 @@ uint32_t vms_lock_dlm_adopt_open(const struct vms_dlm_adopt_tree *t)
  * is not a lock a remaster carries. Refused, never defaulted. */
 static int dlm_adopt_rec_ok(const struct vms_dlm_adopt_lock_rec *r)
 {
-    if (r == NULL || r->resnam[0] == '\0' || !r->ident_valid)
+    if (r == NULL || !r->ident_valid)
+        return 0;
+    if (!res_name_len_ok(adopt_rec_name_len(r)))
         return 0;
     if (r->holder_csid == 0u || r->holder_lkid == VMS_DLM_LKID_UNSET)
         return 0;
@@ -4104,7 +4325,8 @@ static int dlm_adopt_rec_is_the_root(const struct vms_dlm_adopt_tree *t,
                                      const struct vms_dlm_adopt_lock_rec *r)
 {
     return r->res_group == t->res_group && r->res_mode == t->res_mode &&
-           strncmp(r->resnam, t->resnam, sizeof(t->resnam)) == 0;
+           adopt_rec_name_len(r) == adopt_tree_name_len(t) &&
+           memcmp(r->resnam, t->resnam, adopt_tree_name_len(t)) == 0;
 }
 
 /*
@@ -4344,6 +4566,7 @@ uint32_t vms_lock_dlm_adopt_lock(const struct vms_dlm_adopt_tree *t,
     }
 
     k.name = r->resnam;
+    k.name_len = adopt_rec_name_len(r);
     /* NULL parent for the root record: a tree, not a flat set of same-named
      * roots. The parent lock's reference is still held, so k.parent cannot be
      * freed under resource_find_or_create_key. */
@@ -4825,8 +5048,10 @@ int vms_lock_dlm_adopt_tree_of_lkid(uint32_t master_lkid,
     exec_lock(&vms_dlm_adopt_lock_g);
     a = dlm_adopt_find_gen_locked(gen);
     if (a != NULL && !a->aborting && a->root != NULL) {
-        strncpy(out->resnam, a->root->name, sizeof(out->resnam) - 1u);
-        out->resnam[sizeof(out->resnam) - 1u] = '\0';
+        /* COUNTED, like every other copy of a resource name (rd vms-326). */
+        memset(out->resnam, 0, sizeof(out->resnam));
+        memcpy(out->resnam, a->root->name, a->root->name_len);
+        out->resnam_len = a->root->name_len;
         out->res_group = a->root->res_group;
         out->res_mode = a->root->res_mode;
         out->old_master_csid = a->old_master_csid;
@@ -5114,9 +5339,22 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         goto out;
     }
 
-    /* Ensure null-terminated resource name */
-    args.resnam[31] = '\0';
-    if (args.resnam[0] == '\0') {
+    /*
+     * THE NAME'S LENGTH, SETTLED ONCE (rd vms-326). A VMS resource name is a
+     * counted 1..31-byte string that MAY CONTAIN NULs -- RMS's file-access
+     * lock is 26 bytes with three of them -- so this path takes the caller's
+     * count and only falls back to measuring the NUL-terminated spelling when
+     * the caller stated none (`resnam_len` 0, which is what an ASCII caller
+     * states; see struct vms_enq_args). Above 31 is the same refusal $ENQ
+     * makes on the descriptor, SS$_IVBUFLEN.
+     */
+    if (args.resnam_len > VMS_RES_NAME_MAX) {
+        args.status = SS__IVBUFLEN;
+        goto out;
+    }
+    if (args.resnam_len == 0u)
+        args.resnam_len = (uint32_t)strnlen(args.resnam, sizeof(args.resnam));
+    if (args.resnam_len == 0u) {
         args.status = SS__BADPARAM;
         goto out;
     }
@@ -5147,6 +5385,7 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
             pres = plock->proxy ? NULL : plock->resource;
         }
         k.name = args.resnam;
+        k.name_len = args.resnam_len;
         k.parent = pres;
         enq_resource_identity(proc, &args, xn, &k.group, &k.mode);
         res = resource_find_or_create_key(&k);
@@ -5992,7 +6231,12 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
         struct vms_lock_entry *granted;
         uint32_t n = 0;
 
-        strscpy(args.resnam, res->name, sizeof(args.resnam));
+        /* THE NAME, COUNTED (rd vms-326): $GETLKI's LKI$_RESNAM is a counted
+         * string, and a strscpy would hand back the 7-byte prefix of a
+         * 26-byte RMS file-access lock name. */
+        memset(args.resnam, 0, sizeof(args.resnam));
+        memcpy(args.resnam, res->name, res->name_len);
+        args.resnam_len = res->name_len;
         memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
 
         /*
@@ -6008,6 +6252,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
         args.grant_count = n;
     } else {
         memset(args.resnam, 0, sizeof(args.resnam));
+        args.resnam_len = 0u;
         memset(args.valblk, 0, LCK_VALBLK_SIZE);
         args.grant_count = 0;
     }
@@ -6398,7 +6643,13 @@ long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg)
             args.total++;
             if (args.count < VMS_DLM_ENUM_WAITS_MAX) {
                 struct vms_dlm_wait_ent *e = &args.ent[args.count];
-                strscpy(e->resnam, res->name, sizeof(e->resnam));
+                /* The name's counted bytes (rd vms-326). This entry carries
+                 * no length cell -- the 48-byte layout is ABI-frozen -- so a
+                 * reader that needs the count asks $GETLKI by req_lkid; what
+                 * must not happen is the 7-byte prefix of a binary name
+                 * appearing here as if it were the whole of it. */
+                memset(e->resnam, 0, sizeof(e->resnam));
+                memcpy(e->resnam, res->name, res->name_len);
                 e->master_csid = p->master_csid;
                 e->req_lkid = p->lkid;
                 e->req_csid = p->req_csid;
@@ -6824,7 +7075,7 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
         return SS__IVLOCKID;   /* names one of OUR locks, not one of our proxies */
     }
     if (lock == NULL) {
-        if (req->resnam[0] == '\0')
+        if (xnode_name_len(req) == 0u)
             return SS__BADPARAM;
         lock = dlm_proxy_reconstruct(req);
         if (lock == NULL)
@@ -7138,7 +7389,7 @@ static uint32_t dlm_xnode_enq(struct vms_proc *proc,
     int dup_queued = 0;
 
     /* A request that names a resource must actually name one. */
-    if (req->resnam[0] == '\0')
+    if (xnode_name_len(req) == 0u)
         return SS__BADPARAM;
 
     /*
@@ -7163,8 +7414,10 @@ static uint32_t dlm_xnode_enq(struct vms_proc *proc,
     memset(&a, 0, sizeof(a));
     a.lkmode = req->lkmode;
     a.flags = req->flags & (LCK_M_NOQUEUE | LCK_M_VALBLK);
+    /* The name AND its count, so the master keys the resource by the same
+     * bytes the requester named (rd vms-326). */
     memcpy(a.resnam, req->resnam, sizeof(a.resnam));
-    a.resnam[sizeof(a.resnam) - 1] = '\0';
+    a.resnam_len = xnode_name_len(req);
     a.owner_csid = req->req_csid;   /* held FOR the remote requester */
     /*
      * LVB READ crossing (rd vms-eeb, rung H9). Carry the requester's inbound
@@ -7480,7 +7733,14 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         return SS__BADPARAM;
     if (!proc)
         return SS__BADPARAM;
-    req->resnam[sizeof(req->resnam) - 1] = '\0';
+    /*
+     * THE NAME'S COUNT IS VALIDATED ONCE, HERE (rd vms-326). A resource name
+     * is 1..31 counted bytes and may contain NULs, so this dispatch bounds the
+     * count the caller stated instead of forcing a NUL into the last byte --
+     * which a 31-byte binary name would have had truncated.
+     */
+    if (req->resnam_len > VMS_RES_NAME_MAX)
+        return SS__IVBUFLEN;
 
     /* Clean contention outputs on every path; the ENQ branch fills them. */
     req->queued = 0;
@@ -7554,7 +7814,7 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
          * the old master gracefully departed and the directory re-resolved here.
          * Reconstruct the holder's REAL pre-departure grant DIRECTLY into
          * res->granted (never re-derive it through the enqueue/grant core). */
-        if (req->resnam[0] == '\0')
+        if (xnode_name_len(req) == 0u)
             return SS__BADPARAM;
         return vms_lock_dlm_xnode_rebuild(proc, req);
     case VMS_DLM_OP_DLKSRCH:

@@ -157,19 +157,19 @@ static int h_dir_resolve(void *ctx, uint32_t hash16, vms_csid_t *out_csid)
 
 static uint32_t h_dir_generation(void *ctx) { (void)ctx; return 1u; }
 
-static int h_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int h_record_master(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid,
 			   vms_csid_t master_csid)
 {
 	(void)ctx;
-	return vms_lock_dlm_record_master(resnam, req_lkid,
+	return vms_lock_dlm_record_master(resnam, resnam_len, req_lkid,
 					  (uint32_t)master_csid) == SS__NORMAL ?
 	       0 : -1;
 }
 
-static int h_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int h_assume(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid)
 {
 	(void)ctx;
-	return vms_lock_dlm_assume_mastery(resnam, req_lkid) == SS__NORMAL ?
+	return vms_lock_dlm_assume_mastery(resnam, resnam_len, req_lkid) == SS__NORMAL ?
 	       0 : -1;
 }
 
@@ -192,11 +192,12 @@ static int h_blkast_deliver(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int h_learn(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
+static int h_learn(void *ctx, const char *resnam, uint32_t resnam_len,
+			  uint16_t group, uint8_t mode,
 		   uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	return vms_lock_dlm_learn_dir_hash(resnam, resnam_len, group, mode, hash) ==
 	       SS__NORMAL ? 0 : -1;
 }
 
@@ -283,7 +284,7 @@ static void wire_learn(const char *resnam)
 		hash = (uint16_t)((hash << 1) ^ (uint8_t)*c);
 	/* ...under the identity this test's processes enqueue at (uic 0, access
 	 * mode 0): a learned value belongs to an identity (rd vms-b5b0). */
-	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, hash);
+	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, 0u, hash);
 }
 
 /*

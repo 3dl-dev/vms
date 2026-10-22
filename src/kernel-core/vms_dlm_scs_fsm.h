@@ -386,11 +386,15 @@ struct dlm_req_ops {
 	/* --- the engine ACTIONS (vms_dlm_proxy.h) --- */
 
 	/* Outcome 2: record the master the directory named, THEN refill. */
-	int (*record_master)(void *ctx, const char *resnam, uint32_t req_lkid,
-			     vms_csid_t master_csid);
+	/* `resnam_len` is the name's COUNTED length (rd vms-326): a VMS
+	  * resource name may contain NULs, so the engine must be told how many
+	  * bytes the name is, not where its first NUL is. */
+	int (*record_master)(void *ctx, const char *resnam, uint32_t resnam_len,
+			     uint32_t req_lkid, vms_csid_t master_csid);
 	/* Outcome 3: "you master it" -- promote the proxy and run local
 	 * granting, so the $ENQW completes from a genuine local grant. */
-	int (*assume_mastery)(void *ctx, const char *resnam, uint32_t req_lkid);
+	int (*assume_mastery)(void *ctx, const char *resnam,
+			      uint32_t resnam_len, uint32_t req_lkid);
 	/* A grant arrived: record it on the proxy and wake the waiter. */
 	int (*grant_recv)(void *ctx, const struct vms_dlm_proxy_grant *g);
 	/* A blocking AST arrived for a lock we hold: fire the holder's REAL
@@ -401,7 +405,8 @@ struct dlm_req_ops {
 	 * (Davis p. 6-50) -- production: vms_lock_dlm_learn_dir_hash. The
 	 * `group`/`mode` come off the SAME frame: a hash is a value of the whole
 	 * identity, not of the name (rd vms-b5b0). */
-	int (*learn_dir_hash)(void *ctx, const char *resnam, uint16_t group,
+	int (*learn_dir_hash)(void *ctx, const char *resnam,
+			      uint32_t resnam_len, uint16_t group,
 			      uint8_t mode, uint32_t dir_hash);
 	/* No answer is coming: end the proxy's wait with a real status. */
 	void (*fail)(void *ctx, uint32_t req_lkid, enum dlm_req_fail_reason why);

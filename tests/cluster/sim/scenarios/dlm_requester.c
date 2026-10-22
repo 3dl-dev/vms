@@ -382,18 +382,18 @@ static uint32_t fsm_dir_generation(void *ctx)
 	return vms_ldwv_generation(&g_sys[SIM_OVMX].cl.club.ldwv);
 }
 
-static int fsm_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int fsm_record_master(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid,
 			     vms_csid_t master_csid)
 {
 	(void)ctx;
-	return vms_lock_dlm_record_master(resnam, req_lkid, master_csid) ==
+	return vms_lock_dlm_record_master(resnam, resnam_len, req_lkid, master_csid) ==
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
-static int fsm_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int fsm_assume(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid)
 {
 	(void)ctx;
-	return vms_lock_dlm_assume_mastery(resnam, req_lkid) ==
+	return vms_lock_dlm_assume_mastery(resnam, resnam_len, req_lkid) ==
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
@@ -410,11 +410,11 @@ static int fsm_blkast(void *ctx, uint32_t req_lkid)
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
-static int fsm_learn(void *ctx, const char *resnam, uint16_t group,
+static int fsm_learn(void *ctx, const char *resnam, uint32_t resnam_len, uint16_t group,
 		     uint8_t mode, uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	return vms_lock_dlm_learn_dir_hash(resnam, resnam_len, group, mode, hash) ==
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 

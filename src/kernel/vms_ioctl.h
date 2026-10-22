@@ -459,7 +459,48 @@ struct vms_enq_args {
     uint32_t lkmode;            /* requested lock mode (0-5) */
     uint32_t flags;             /* LCK_M_* flags */
     uint32_t parid;             /* parent lock ID (0 for root) */
-    char     resnam[32];        /* resource name (null-terminated) */
+    char     resnam[32];        /* resource name; see resnam_len below */
+    /*
+     * HOW MANY BYTES OF `resnam` ARE THE NAME (rd vms-326).
+     *
+     * A VMS RESOURCE NAME IS COUNTED AND MAY BE BINARY. $ENQ takes it as a
+     * character-string DESCRIPTOR of 1..31 bytes (system services reference),
+     * and VMS's own components put NULs inside one: RMS names a file-access
+     * lock 'RMS$' + the 6-byte file id + 0x02 + the 12-byte space-padded
+     * volume label + three NUL bytes -- 26 bytes, measured on 1,130 real
+     * cat-0x02 frames from real OpenVMS VAX nodes (tools/cluster/
+     * dlm_rms_name_hash_check.py, pinned by ctest
+     * cluster_host_dlm_rms_name_hash). A NUL-TERMINATED name cannot
+     * express that, and the consequence is not cosmetic: two files with the
+     * same file id on two different volumes produced the SAME 7-byte
+     * truncation, so one cluster-wide resource served both and a read of one
+     * file was refused by a writer of the other (rd vms-acf3).
+     *
+     * 0 MEANS "THE NUL-TERMINATED STRING IN `resnam`", which is what every
+     * caller with an ASCII name states and the only thing the executive could
+     * read before this field existed; the engine measures it with strnlen and
+     * the result is identical for a name with no embedded NUL. A caller with
+     * a BINARY name MUST state the count -- $ENQ (src/libvms/syssvc/
+     * sys_lock.c) always passes the descriptor's own dsc$w_length, so a name
+     * that arrives counted stays counted all the way to body[47:48+n] on the
+     * wire.
+     *
+     * Above 31 is SS$_IVBUFLEN, the same refusal $ENQ makes on the
+     * descriptor (observed; see sys_lock.c do_enq).
+     *
+     * AND WHY THE EXPLICIT PAD BESIDE IT. This struct holds uint64_t fields,
+     * which the two substrates align differently: LP64 Linux/amd64 aligns a
+     * 64-bit scalar to 8, NetBSD/VAX (ILP32) to 4. A SINGLE 4-byte field added
+     * in front of the three uint64_t handles therefore grows the struct by 8
+     * on amd64 and by 4 on VAX -- 112 against 108 -- and the two sides of
+     * /dev/vms must agree on one layout (the _Static_asserts in
+     * src/kernel-netbsd/vms_lock_nb.h are what catch a drift; this pair is
+     * what the NetBSD/vax cross-compile measured). Two 4-byte fields keep
+     * `astadr` on an 8-byte boundary on both, so the size is 112 everywhere.
+     * The pad is zero and nothing reads it.
+     */
+    uint32_t resnam_len;
+    uint32_t pad_resnam;        /* zero; keeps the layout data-model-stable */
     uint64_t astadr;            /* completion AST address */
     uint64_t astprm;            /* AST parameter */
     uint64_t blkastadr;         /* blocking AST address */
@@ -490,7 +531,16 @@ struct vms_getlki_args {
     uint32_t granted_mode;      /* return: current granted mode */
     uint32_t requested_mode;    /* return: requested mode (if waiting) */
     uint32_t parent_id;         /* return: parent lock ID */
-    char     resnam[32];        /* return: resource name */
+    char     resnam[32];        /* return: resource name (see resnam_len) */
+    /*
+     * HOW MANY BYTES OF `resnam` THE NAME IS (rd vms-326). $GETLKI's
+     * LKI$_RESNAM is a counted string, and a resource name may contain NULs
+     * (the RMS file-access lock does -- see struct vms_enq_args.resnam_len),
+     * so a readback that only returned 32 bytes and a NUL could not tell a
+     * 26-byte binary name from its 7-byte prefix. This is the resource
+     * block's own `name_len`, never a strnlen of the copy.
+     */
+    uint32_t resnam_len;
     uint8_t  valblk[LCK_VALBLK_SIZE]; /* return: value block */
     uint32_t status;            /* return: SS$_ status */
     uint32_t grant_count;       /* return: LKI$_GRANTCOUNT -- the resource's
@@ -725,7 +775,17 @@ struct vms_dlm_xnode_args {
      */
     uint16_t res_group;
     uint8_t  res_mode;
-    uint8_t  pad_res;
+    /*
+     * ...AND HOW MANY BYTES OF `resnam` THE NAME IS (rd vms-326). A resource
+     * name is COUNTED on the wire (body[47] is its length) and may contain
+     * NULs, so a cross-node request about an RMS file-access lock cannot be
+     * carried by a NUL-terminated field. The WIRE ARM states the count it
+     * parsed out of the frame (src/kernel-core/vms_dlm_scs.c); 0 means "the
+     * NUL-terminated string in resnam", exactly as in struct vms_enq_args.
+     *
+     * Carved out of the former pad_res -- same size, no ABI change.
+     */
+    uint8_t  resnam_len;
 };
 _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");

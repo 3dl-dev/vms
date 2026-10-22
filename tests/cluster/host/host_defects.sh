@@ -175,6 +175,7 @@ dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
 dlm-dir-matched-by-name-alone
+dlm-resource-name-keyed-by-c-string
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
 dlm-requester-drops-the-untransmitted-post
@@ -668,6 +669,21 @@ EOF
         require_fail) hd_lines <<'EOF'
 a removal from a system that is not the master removes nothing
 the master's removal does
+EOF
+                      ;;
+        esac;;
+
+    dlm-resource-name-keyed-by-c-string)
+        case "$_f" in
+        facility)     echo "the engine's COUNTED resource-name key (res_name_eq() + resource_hash_key(), rd vms-326): a VMS resource name is 1..31 counted bytes that MAY CONTAIN NULs, so two names that differ only after an embedded NUL are two resources";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the two places that KEY a resource by its name -- the hash bucket and the equality test -- are put back to the C-string spelling they had before rd vms-326: the bucket hashes up to the name's first NUL and the comparison is a strncmp. That is one property (the name is keyed by its COUNT) disarmed in the two places that implement it, and it reinstates a measured defect: VMS names an RMS file-access lock 'RMS\$' + 6 FID bytes + 0x02 + a 12-byte volume label + three NULs, so the SAME file id on two DIFFERENT volumes compares equal at its first NUL and becomes ONE cluster-wide resource -- node A writing one file then refuses node B's read of another (rd vms-acf3), and the 7-byte truncation is what goes on the wire, where it hashes to a value no real VAX ever sent (0 of 1,130, tools/cluster/dlm_rms_name_hash_check.py).";;
+        require_fail) hd_lines <<'EOF'
+*** ...and carries all 26 bytes, NULs included ***
+*** and the two identities have DIFFERENT directory hashes: the truncation had one ***
+*** the VAX1DATA name is granted at EX at the same time: two files, two resources ***
 EOF
                       ;;
         esac;;
@@ -3190,6 +3206,19 @@ apply_edit() {
         # already gone, so cmd_apply's pristine-compare reports BROKEN
         # FIXTURE rather than silently moving on to the second occurrence.
         sed -i '/^\tldwv_survey_club(club, &s);$/,/^\t\treturn st;$/ s|club->ldwv_build_refused++;|/* NEGCTL ldwv-refusal-uncounted: the refusal is not counted */|' "$_file";;
+
+    dlm-resource-name-keyed-by-c-string)
+        # The two lines that KEY a resource by its name, back to their
+        # pre-rd-vms-326 C-string spelling: the comparison becomes a strncmp
+        # (which stops at the first NUL in either name) and the hash bucket is
+        # taken over the name's strnlen. BOTH are needed and neither alone
+        # changes any behaviour -- the counted hash puts two same-prefix names
+        # in different buckets, so the strncmp is never even reached, and the
+        # counted comparison keeps them apart inside one bucket, so a strnlen
+        # hash is harmless on its own. Together they are the defect that was
+        # measured against real hardware.
+        sed -i 's|    return memcmp(res->name, k->name, k->name_len) == 0;|    return strncmp(res->name, k->name, 32) == 0; /* NEGCTL dlm-resource-name-keyed-by-c-string */|' "$_file"
+        sed -i 's|    size_t i, n = name_len;|    size_t i, n = strnlen(name, 32); /* NEGCTL dlm-resource-name-keyed-by-c-string */\n\n    (void)name_len;|' "$_file";;
 
     dlm-lkid-guard-disabled)
         # dlm_lkid_pair_put()'s guard is split across two source lines

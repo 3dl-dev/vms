@@ -123,7 +123,20 @@ struct vms_enq_args {
 	uint32_t lkmode;            /* in: requested lock mode (0-5) */
 	uint32_t flags;             /* in: LCK_M_* flags */
 	uint32_t parid;             /* in: parent lock ID (0 for root) */
-	char     resnam[32];        /* in: resource name (null-terminated) */
+	char     resnam[32];        /* in: resource name; see resnam_len below */
+	/* HOW MANY BYTES OF `resnam` ARE THE NAME (rd vms-326). A VMS resource
+	 * name is COUNTED (a 1..31-byte descriptor) and may be BINARY: RMS's
+	 * file-access lock is 26 bytes with three NULs in it, measured on 1,130
+	 * real cat-0x02 frames. 0 means "the NUL-terminated string in resnam",
+	 * which is what an ASCII caller states; above 31 is SS$_IVBUFLEN.
+	 * `pad_resnam` is zero and nothing reads it: it keeps `astadr` 8-byte
+	 * aligned on BOTH data models, so this struct is 112 bytes on LP64
+	 * amd64 and on ILP32 VAX alike (one 4-byte field alone would make it
+	 * 112 and 108 -- the drift the asserts at the foot of this file exist
+	 * to catch, and did). Mirror of src/kernel/vms_ioctl.h, where the full
+	 * note lives. */
+	uint32_t resnam_len;
+	uint32_t pad_resnam;
 	uint64_t astadr;            /* in: completion AST address */
 	uint64_t astprm;            /* in: AST parameter */
 	uint64_t blkastadr;         /* in: blocking AST address */
@@ -149,7 +162,11 @@ struct vms_getlki_args {
 	uint32_t granted_mode;      /* return: current granted mode */
 	uint32_t requested_mode;    /* return: requested mode (if waiting) */
 	uint32_t parent_id;         /* return: parent lock ID */
-	char     resnam[32];        /* return: resource name */
+	char     resnam[32];        /* return: resource name (see resnam_len) */
+	/* HOW MANY BYTES OF `resnam` THE NAME IS (rd vms-326): the resource
+	 * block's own name_len, so a 26-byte binary name reads back whole and not
+	 * as its 7-byte prefix. Mirror of src/kernel/vms_ioctl.h. */
+	uint32_t resnam_len;
 	uint8_t  valblk[LCK_VALBLK_SIZE]; /* return: value block */
 	uint32_t status;            /* return: SS$_ status */
 	uint32_t grant_count;       /* return: LKI$_GRANTCOUNT, the resource's
@@ -244,7 +261,11 @@ struct vms_dlm_xnode_args {
 	 * twin (src/kernel/vms_ioctl.h), where the full note lives. */
 	uint16_t res_group;
 	uint8_t  res_mode;
-	uint8_t  pad_res;
+	/* ...and how many bytes of `resnam` the name is (rd vms-326), stated by
+	 * the wire arm out of the frame it parsed; 0 means the NUL-terminated
+	 * string. Carved out of the former pad_res -- same size, no ABI change.
+	 * Mirror of src/kernel/vms_ioctl.h. */
+	uint8_t  resnam_len;
 };
 
 /*
@@ -832,11 +853,14 @@ struct vms_cluster_getsyi_args {
  * address, so a size drift is an ABI break. These MUST match src/kernel/
  * vms_ioctl.h exactly (measured on amd64/LP64).
  */
-_Static_assert(sizeof(struct vms_enq_args) == 104,
+/* 104 -> 112 when rd vms-326 added `resnam_len`: a resource name is counted,
+ * and the executive could not express a binary one without it. */
+_Static_assert(sizeof(struct vms_enq_args) == 112,
                "vms_enq_args changed size -- VMS_IOCTL_ENQ/CONVERT ABI break");
 _Static_assert(sizeof(struct vms_deq_args) == 28,
                "vms_deq_args changed size -- VMS_IOCTL_DEQ ABI break");
-_Static_assert(sizeof(struct vms_getlki_args) == 72,
+/* 72 -> 76 with rd vms-326's `resnam_len` ($GETLKI's LKI$_RESNAM is counted). */
+_Static_assert(sizeof(struct vms_getlki_args) == 76,
                "vms_getlki_args changed size -- VMS_IOCTL_GETLKI ABI break");
 _Static_assert(sizeof(struct vms_resmaster_args) == 64,
                "vms_resmaster_args changed size -- VMS_IOCTL_GET_RESMASTER ABI break");

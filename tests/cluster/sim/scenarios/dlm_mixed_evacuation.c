@@ -384,18 +384,19 @@ static int o_fsm_dir_resolve(void *ctx, uint32_t hash, vms_csid_t *out)
 	return 0;
 }
 
-static int o_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int o_record_master(void *ctx, const char *resnam,
+			   uint32_t resnam_len, uint32_t req_lkid,
 			   vms_csid_t master)
 {
 	(void)ctx;
-	return vms_lock_dlm_record_master(resnam, req_lkid, (uint32_t)master) ==
+	return vms_lock_dlm_record_master(resnam, resnam_len, req_lkid, (uint32_t)master) ==
 	       SS__NORMAL ? 0 : -1;
 }
 
-static int o_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int o_assume(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid)
 {
 	(void)ctx;
-	return vms_lock_dlm_assume_mastery(resnam, req_lkid) == SS__NORMAL ?
+	return vms_lock_dlm_assume_mastery(resnam, resnam_len, req_lkid) == SS__NORMAL ?
 	       0 : -1;
 }
 
@@ -411,11 +412,11 @@ static int o_blkast(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int o_learn(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
-		   uint32_t hash)
+static int o_learn(void *ctx, const char *resnam, uint32_t resnam_len,
+		   uint16_t group, uint8_t mode, uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	return vms_lock_dlm_learn_dir_hash(resnam, resnam_len, group, mode, hash) ==
 	       SS__NORMAL ? 0 : -1;
 }
 
@@ -561,7 +562,8 @@ static enum vms_dlm_dir_outcome vax_lookup(const uint8_t *frame,
 		for (i = 0u; i < id.name_len && id.name[i] != 0u; i++)
 			nm[i] = (char)id.name[i];
 		nm[i] = '\0';
-		(void)vms_lock_dlm_learn_dir_hash(nm, id.group, id.mode, hash);
+		/* The COUNT this harness copied, like the real arm (rd vms-326). */
+		(void)vms_lock_dlm_learn_dir_hash(nm, i, id.group, id.mode, hash);
 	}
 	return vms_dlm_dir_lookup(&o.dir, &id, from, (vms_csid_t)CSID_OVMX,
 				  out_master);

@@ -653,6 +653,13 @@ struct vms_dlm_scs_view_wire {
 	uint32_t queued_unanswerable;      /* ...and the honest silence left       */
 	uint32_t grant_advances_in;        /* a LOCAL release advanced a cross-node */
 	uint32_t grant_advances_stale;     /* ...queue; and the ones with no lock  */
+	/* WHICH DOOR the owed grant was refused at (fire q85f1). `owed` above is
+	 * their sum, which a lab fire could not decompose; see
+	 * vms_cluster_snapshot.h for what each one means. */
+	uint32_t pending_keep_refused;
+	uint32_t pending_overflow;
+	uint32_t deferred_grants_no_body;
+	uint32_t deferred_grants_send_failed;
 	uint32_t unparsed;
 	uint32_t foreign_refused;
 	/* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5). Mirror of
@@ -912,7 +919,7 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 200,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 216,
                "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 208,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");

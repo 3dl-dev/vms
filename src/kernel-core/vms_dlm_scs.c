@@ -3133,6 +3133,14 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->releases_refused    = d->releases_refused;
 	out->deferred_grants_owed = d->deferred_grants_no_wire_op;
 	out->deferred_grants_sent = d->deferred_grants_sent;
+	/* ...and its decomposition, so a fire names the door (fire q85f1). The
+	 * overflow count is the retention table's OWN counter, read out here
+	 * rather than mirrored into this struct, for the same reason every
+	 * other field is a read: one owner per fact. */
+	out->pending_keep_refused = d->pending_keep_refused;
+	out->pending_overflow = d->pending.overflow;
+	out->deferred_grants_no_body = d->deferred_grants_no_body;
+	out->deferred_grants_send_failed = d->send_failures;
 	out->queued_no_reply     = d->queued_no_reply;
 	out->queued_answered     = d->queued_answered;
 	out->queued_unanswerable = d->queued_unanswerable;

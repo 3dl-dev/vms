@@ -2928,7 +2928,6 @@ static void test_194_release_opens_no_transaction(void)
 	memset(&d, 0, sizeof(d));
 	d.req_lkid    = 0x01000349u;   /* this node's own handle   */
 	d.master_lkid = 0x160004a7u;   /* the master's, off the LKB */
-	d.mode        = 1u;
 	memset(frame, 0, sizeof(frame));
 	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &written) ==
 		 VMS_CODEC_OK, "the release's body");
@@ -2937,7 +2936,7 @@ static void test_194_release_opens_no_transaction(void)
 		 "message");
 	ct_check(vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
 		 "*** the shipping predicate calls a release a NOTIFICATION: "
-		 "nobody answers one (0 answers in 9,858 real releases' "
+		 "nobody answers one (0 answers in the 41,049 real releases' "
 		 "corpus) ***");
 	sent0 = m->cm_send_msg;
 	/* THE CHOICE, not the writer: this is cnxman_dlm_send's own expression,
@@ -2982,6 +2981,62 @@ static void test_194_release_opens_no_transaction(void)
 		 "the two, it does not blanket them ***");
 }
 
+/*
+ * rd vms-194 (d): THE RELEASE'S 132 BYTES, ALL DESCRIBED -- composed the way
+ * the shipping send path composes it (the codec's body, the cluster's DLM
+ * sequence, then the connection manager's envelope on the destination's CSB,
+ * through cnxman_dlm_send's OWN notification expression), so the conformance
+ * gate's `dlm_deq` rows read the bytes a real VAX is handed.
+ *
+ * The field values are the ones the engine reads off a real LKB
+ * (dlm_proxy_fill_post -> dq_build_deq): the two handles and nothing else.
+ * `rel_cell` is set to EX on purpose -- the value the OLD builder would have
+ * put at body[30] -- so the dump proves the shipping composer writes the
+ * measured cell and not a lock mode.
+ */
+static void test_194_release_on_the_wire(void)
+{
+	struct vms_dlm_deq d;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[160];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-194 (d): the release's 132 bytes, all described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&d, 0, sizeof(d));
+	d.master_lkid = 0x160004a7u;   /* the master's handle, off the LKB  */
+	d.req_lkid    = 0x01000349u;   /* this node's own handle            */
+	d.rel_cell    = VMS_LCK_EX;    /* parse-only: must NOT reach a byte */
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK,
+		 "the cluster's DLM sequence, as on every DLM message");
+	cnxman_envelope_originate(m, b,
+				  vms_dlm_body_is_notification(b,
+							       VMS_CM_BODY_LEN)
+					  ? CNXMAN_ENV_NOTIFY
+					  : CNXMAN_ENV_REQUEST);
+	ct_check(b[4] == 0u && b[5] == 0u && b[6] == 0u && b[7] == 0u,
+		 "the shipping composer opens no transaction on it");
+	ct_check(b[VMS_OFB_DLM_DEQ_REL_CELL] == 0u,
+		 "*** body[30] on the wire is the measured 0, not the EX the "
+		 "caller's parse-only cell carried (rd vms-194) ***");
+	snprintf(state, sizeof(state), "seq=%u,masterlkid=%u,ownlkid=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)d.master_lkid,
+		 (unsigned)d.req_lkid);
+	conf_dump("dlm_deq", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -3009,6 +3064,7 @@ int main(void)
 	test_c55_enq_request_on_the_wire();
 	test_85f_queued_answer_on_the_wire();
 	test_194_release_opens_no_transaction();
+	test_194_release_on_the_wire();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();

@@ -613,10 +613,21 @@ static void check_deq_traces_to_lkb(const struct sent_frame *s,
 		 "own grant recorded -- never a placeholder)", label);
 	ct_check_eq_u32(d.master_lkid, l->master_lkid, what);
 
+	/* body[30] IS NOT THE MODE (rd vms-194's driven arm: nine real
+	 * releases, every held mode NL..EX, all 0). This assertion used to
+	 * read `d.rel_cell == l->lkmode`, which pinned the defect; it now
+	 * demands the measured 0 AND -- when the LKB is above NL -- that the
+	 * mode is demonstrably NOT on the wire. */
 	snprintf(what, sizeof(what),
-		 "%s: body[30] == the mode the LKB holds as it is released",
+		 "%s: body[30] == 0, the measured cell, NOT the LKB's mode",
 		 label);
-	ct_check_eq_u32(d.mode, l->lkmode, what);
+	ct_check_eq_u32(d.rel_cell, 0u, what);
+	if (l->lkmode != 0u) {
+		snprintf(what, sizeof(what),
+			 "%s: ...and the LKB's mode %u is nowhere in it",
+			 label, (unsigned)l->lkmode);
+		ct_check(d.rel_cell != l->lkmode, what);
+	}
 
 	snprintf(what, sizeof(what),
 		 "%s: the resource NAME is NOT on the wire -- a DEQ names its "
@@ -917,7 +928,6 @@ static void test_granted_lock_is_usable_and_releasable(void)
 	memset(&d, 0, sizeof(d));
 	d.req_lkid = g.lkb.lkid;
 	d.master_lkid = 0x0C0FFEE0u;
-	d.mode = VMS_LCK_NL;
 	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &len) ==
 		 VMS_CODEC_OK,
 		 "the codec builds a grounded op-0x03 for real handles");
@@ -2268,8 +2278,9 @@ static void test_relq_survives_the_lkb(void)
 	ct_check(parse_deq(&g.sent[n], &d) == 0, "  it parses through the codec");
 	ct_check_eq_u32(d.master_lkid, 0x0DEFACE0u,
 			"  naming the master's handle the LKB held at release");
-	ct_check_eq_u32(d.mode, VMS_LCK_CR,
-			"  and the mode it was really released at");
+	ct_check_eq_u32(d.rel_cell, 0u,
+			"  carrying the measured body[30], not the CR the LKB "
+			"was really released at (rd vms-194)");
 	ct_check_eq_u32(g_fsm.releases_sent, 1u, "counted as sent");
 	ct_check_eq_u32(g_fsm.releases_no_wire_op, 0u, "and not as a gap");
 	check_only_grounded_opcodes_were_sent("staged release");

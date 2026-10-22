@@ -557,7 +557,8 @@ static int build_deq(uint8_t *frame, uint32_t req_lkid, uint32_t master_lkid,
 	memset(&d, 0, sizeof(d));
 	d.req_lkid = req_lkid;
 	d.master_lkid = master_lkid;
-	d.mode = mode;
+	(void)mode;    /* body[30] is not the mode: the builder writes the
+			* measured cell itself (rd vms-194) */
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	return vms_dlm_deq_build(&d, frame, VMS_CM_FRAME_LEN, &written) ==
 	       VMS_CODEC_OK ? 0 : -1;
@@ -585,7 +586,8 @@ static void deq_body_to_master_request(const uint8_t *body, uint32_t from_csid,
 	out->req_csid = from_csid;
 	out->req_lkid = q.req_lkid;
 	out->master_lkid = q.master_lkid;
-	out->lkmode = q.mode;
+	/* and NO MODE: the arm stopped passing body[30] in as one (rd
+	 * vms-194), because it is not a mode and the DEQ seam reads none. */
 }
 
 /* The resource identity the simulated peer's frames carry (rd vms-b5b0): a

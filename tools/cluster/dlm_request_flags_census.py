@@ -196,18 +196,18 @@ def selftest():
 
     n, hit = cmd_spans(paths)
     print("-- body[28:30] and body[31:44] are NOT residue; the other two are")
-    check("real op-0x01 requests", n, 21499)
-    check("body[10:12] zero (residue, as OVMX assumes)", hit["body[10:12]"], 16589)
-    check("body[16:20] zero (residue, as OVMX assumes)", hit["body[16:20]"], 17087)
+    check("real op-0x01 requests", n, 21656)
+    check("body[10:12] zero (residue, as OVMX assumes)", hit["body[10:12]"], 16691)
+    check("body[16:20] zero (residue, as OVMX assumes)", hit["body[16:20]"], 17171)
     check("body[28:30] zero -- a real request almost never is",
           hit["body[28:30]"], 36)
-    check("body[31:44] zero -- nor is this one", hit["body[31:44]"], 1649)
+    check("body[31:44] zero -- nor is this one", hit["body[31:44]"], 1650)
 
     fam = cmd_family(paths)
     print("-- and body[28:30] is decided by the resource FAMILY")
-    for name, want_val, want_n in (("F11B$a", 0x007d, 4993),
-                                   ("F11B$s", 0x0239, 7930),
-                                   ("CACHE$cm", 0x0e70, 1605),
+    for name, want_val, want_n in (("F11B$a", 0x007d, 5045),
+                                   ("F11B$s", 0x0239, 7994),
+                                   ("CACHE$cm", 0x0e70, 1606),
                                    ("RMS$", 0x0e19, 152),
                                    ("LMF$", 0x0011, 122)):
         check("%s -> 0x%04x" % (name, want_val), fam[name][want_val], want_n)

@@ -495,7 +495,10 @@ static void test_deq_release(void)
 			"  body[20:24] == 0x080001cd, the MASTER's handle -- "
 			"which is why a release names its lock here: the GRANT "
 			"assigned this requester");
-	ct_check_eq_u32(d.mode, VMS_LCK_NL, "  body[30] == NL, the released mode");
+	ct_check_eq_u32(d.rel_cell, 0u,
+			"  body[30] == 0 on this real release -- and the "
+			"driven arm (rd vms-194) says that is NOT the released "
+			"mode: a real node writes 0 for every held mode NL..EX");
 
 	memset(built, 0xAA, sizeof(built));
 	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
@@ -511,6 +514,34 @@ static void test_deq_release(void)
 			"*** the builder writes NO resource identity: a $DEQ "
 			"names its lock by lock-id, so body[46] is not its "
 			"field to write (rd vms-b5b0) ***");
+
+	/*
+	 * body[30] IS NOT THE LOCK MODE (rd vms-194 (c)). The driven arm put
+	 * nine real releases on a real wire -- every held mode NL..EX, a
+	 * non-NULL co-holder, and the roles swapped -- and every one carries 0.
+	 * This codec wrote the LKB's mode there, so releasing an EX lock
+	 * carried a 5 that no real release has ever carried, in the one frame
+	 * family that has already bugchecked two lab VAXes (rd vms-3ac).
+	 *
+	 * Driven the only way that can go wrong: `rel_cell` is set to EX, the
+	 * value the old builder would have written, and the frame must still
+	 * carry the measured 0 -- at body[30] AND at its mirror body[32],
+	 * which equals it on 41,049 of 41,049 real releases.
+	 */
+	d.rel_cell = VMS_LCK_EX;
+	memset(built, 0xAA, sizeof(built));
+	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
+		 VMS_CODEC_OK, "a release builds with rel_cell set to EX");
+	ct_check_eq_u32(built[VMS_OFF_DLM_DEQ_REL_CELL], 0u,
+			"*** body[30] is the MEASURED cell, never the lock "
+			"mode: the arm's nine releases all carry 0 ***");
+	ct_check_eq_u32(built[VMS_OFF_DLM_DEQ_REL_CELL2], 0u,
+			"*** body[32] mirrors it, as 41,049 of 41,049 real "
+			"releases do ***");
+	ct_check(built[VMS_OFF_DLM_DEQ_REL_CELL] !=
+		 (uint8_t)VMS_LCK_EX,
+		 "  ...and the caller's parse-only rel_cell is NOT echoed "
+		 "onto this node's wire");
 }
 
 /*
@@ -1110,7 +1141,6 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 	memset(&d, 0, sizeof(d));
 	d.master_lkid = 0x00020017u;   /* plausible real LKB handles */
 	d.req_lkid = 0x00010042u;
-	d.mode = VMS_LCK_NL;
 	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
 		 VMS_CODEC_OK,
 		 "  a $DEQ with two real nonzero lock ids builds");

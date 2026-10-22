@@ -173,7 +173,7 @@ cm_dlm_op0d_echo	*	82	24	copied	any:echo	body[10:34]: echoed verbatim. NOT the c
 cm_dlm_op0d_echo	*	106	1	const	const:f9	body[34] = 0xf9, mandatory and unconditional in this recipe (sec 4(p))
 cm_dlm_op0d_echo	*	107	97	copied	any:echo	body[35:132]: echoed verbatim, the resource name and everything the coordinator put past it
 # ---- cat 0x02 op 0x01: THE LOCK REQUEST this node sends a directory or a master
-#      (rd vms-c55). Census for every span below: 21,499 cat-0x02 op-0x01 requests
+#      (rd vms-c55). Census for every span below: 21,656 cat-0x02 op-0x01 requests
 #      from real VMS senders in tests/lab/captures, counted by
 #      tools/cluster/dlm_pid_cell_census.py (--selftest pins the headline figures) ----
 dlm_enq_req	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
@@ -181,21 +181,52 @@ dlm_enq_req	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# s
 dlm_enq_req	*	76	4	derived	any:envelope	txn/token: a request IS answered, so the envelope OPENS a transaction -- unlike the op-0x04 removal, which is a notification and carries 0 here
 dlm_enq_req	*	80	1	const	const:2	category 0x02, the request
 dlm_enq_req	*	81	1	const	const:1	op 0x01 (an ENQ at a master and a root lookup at a directory are the same opcode)
-dlm_enq_req	*	82	2	const	const:0	body[10:12]: stale buffer in a real request; 0 in 16,589 of 21,499, and this node sends no residue (rd vms-42de)
-dlm_enq_req	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b); 21,499 of 21,499
+dlm_enq_req	*	82	2	const	const:0	body[10:12]: stale buffer in a real request; 0 in 16,691 of 21,656, and this node sends no residue (rd vms-42de)
+dlm_enq_req	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b); 21,656 of 21,656
 dlm_enq_req	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq), as on every DLM message
-dlm_enq_req	*	88	4	const	const:0	body[16:20]: stale buffer in a real request; 0 in 17,087 of 21,499
+dlm_enq_req	*	88	4	const	const:0	body[16:20]: stale buffer in a real request; 0 in 17,171 of 21,656
 dlm_enq_req	*	92	4	derived	state:cell	body[20:24]: the MASTER's handle once the master has named one, and the REQUESTING PROCESS's id until then -- read off the LKB and its owning PCB. NEVER ZERO: real senders write a PID-form value 20,368 times and a lock id 1,116 times against 15 zeros (0.07%), and a real directory answers a zero cell body[34] = 0xfe 12 times out of 12 while answering a nonzero one 0 times out of 19,377 (rd vms-c55)
 dlm_enq_req	*	96	4	derived	state:lkid	body[24:28]: this node's OWN handle for the lock, which the master echoes back in its grant -- how the requester matches a completion to its lock
-dlm_enq_req	*	100	2	deviation	const:0	body[28:30]: this node writes 0 and a REAL request does not -- zero in only 36 of 21,499, and the span carries a FIELD rather than residue (35 distinct values over the whole corpus, the same handful recurring across different senders; one node used ONE value for all 3,000 of its requests). What the bits MEAN is unpublished and is NOT guessed here: rd vms-6e6 drives it one flag at a time on real V7.3. Recorded accepting: a real V7.3 directory answered 62 of this node's 80 answered requests 0xf9 with this span zero (openvmx-site 38779039044, all-at-once); the other 18 were 0xfe, which the zero at body[20:24] accounts for
+dlm_enq_req	*	100	2	deviation	const:0	body[28:30]: this node writes 0 and a REAL request does not -- zero in only 36 of 21,656, and the span carries a FIELD rather than residue (35 distinct values over the whole corpus, the same handful recurring across different senders; one node used ONE value for all 3,000 of its requests). What the bits MEAN is unpublished and is NOT guessed here: rd vms-6e6 drives it one flag at a time on real V7.3. Recorded accepting: a real V7.3 directory answered 62 of this node's 80 answered requests 0xf9 with this span zero (openvmx-site 38779039044, all-at-once); the other 18 were 0xfe, which the zero at body[20:24] accounts for
 dlm_enq_req	*	102	1	derived	state:mode	body[30]: the LKB's requested mode (NL=0 CR=1 CW=2 PR=3 PW=4 EX=5, VAXcluster Principles p. 6-3)
-dlm_enq_req	*	103	13	deviation	const:0	body[31:44]: this node writes 0; zero in only 1,649 of 21,499 real requests, and 246 distinct values with visible structure -- field-shaped, not residue. Same treatment and same acceptance evidence as body[28:30] above (rd vms-6e6)
+dlm_enq_req	*	103	13	deviation	const:0	body[31:44]: this node writes 0; zero in only 1,650 of 21,656 real requests, and 258 distinct values with visible structure -- field-shaped, not residue. Same treatment and same acceptance evidence as body[28:30] above (rd vms-6e6)
 dlm_enq_req	*	116	2	derived	state:group	body[44:46] UIC group: read off the resource block, part of the key it was created under (rd vms-b5b0)
 dlm_enq_req	*	118	1	derived	state:acmode	body[46] access mode: read off the resource block; NOT a constant 0x03 (rd vms-8219)
 dlm_enq_req	*	119	1	derived	state:namelen	body[47] name length, 1..31
-dlm_enq_req	*	120	76	copied	any:name	body[48:48+L] the resource name off the RSB, then zero to body[124]. A real request leaves residue in that tail (all-zero in only 213 of 21,499); this node sends none (rd vms-42de)
-dlm_enq_req	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b); 21,499 of 21,499
+dlm_enq_req	*	120	76	copied	any:name	body[48:48+L] the resource name off the RSB, then zero to body[124]. A real request leaves residue in that tail (all-zero in only 213 of 21,656); this node sends none (rd vms-42de)
+dlm_enq_req	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b); 21,656 of 21,656
 dlm_enq_req	*	200	4	derived	state:hash	body[128:132] the directory hash for the root name -- a value some system in this cluster put on the wire and vms_lock_dlm_learn_dir_hash() recorded, never one computed here (rd vms-4fb)
+# ---- cat 0x02 op 0x03: THE LOCK RELEASE this node sends a master (rd vms-194).
+#      Census for every span below: 41,049 cat-0x02 op-0x03 frames from real VMS
+#      senders in tests/lab/captures, counted by tools/cluster/dlm_deq_census.py
+#      (--selftest pins every figure). The RELEASE IS A NOTIFICATION: 0 of those
+#      41,049 carry a transaction and the corpus holds ZERO cat-0x82 op-0x03
+#      answers anywhere. body[30] AND body[32] are the cells the DRIVEN ARM
+#      settled (tests/lab/captures/vms-194-release-arm-20261021): nine real
+#      releases, every held mode NL..EX, a co-holder, the roles swapped -- all 0,
+#      so this frame carries NO LOCK MODE, which is what it used to carry. Past
+#      body[33] a real release is its sender's STALE BUFFER (the codec refuses to
+#      read even a name there); this node sends none, as rd vms-42de requires. ----
+dlm_deq	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+dlm_deq	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_deq	*	76	4	const	const:0	body[4:8]: NO TRANSACTION. A release is a notification: 0 of 41,049 real releases carry a token here and no node has ever answered one. This node opened one on all 11 of its early releases, which minted a token on the CSB for a message nobody would answer and left it open -- the envelope-inconsistency class that produced CNXMGRERR (rd vms-194 D1)
+dlm_deq	*	80	1	const	const:2	category 0x02, the request side; 41,049 of 41,049
+dlm_deq	*	81	1	const	const:3	op 0x03, the release; 41,049 of 41,049
+dlm_deq	*	82	2	const	const:0	body[10:12]: stale buffer in a real release (0 in 34,928 and 38,347 of 41,049); this node sends no residue (rd vms-42de)
+dlm_deq	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b); 41,049 of 41,049
+dlm_deq	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq), as on every DLM message. 13 distinct values across the corpus's clusters; body[15] is 0 in 41,049 of 41,049
+dlm_deq	*	88	4	const	const:0	body[16:20]: stale buffer in a real release (all-zero in 23,402 of 41,049); this node sends none
+dlm_deq	*	92	4	derived	state:masterlkid	body[20:24]: THE MASTER'S handle, read off the LKB this node is releasing -- what the master's own grant recorded. NEVER a placeholder: a release naming a handle the master does not know is what bugchecked VAX1 with INVLOCKID (rd vms-3ac, R1 = 370004A7), and the codec refuses lkid 0 on both sides
+dlm_deq	*	96	4	derived	state:ownlkid	body[24:28]: this node's OWN handle for the lock, read off the same LKB -- the correlation the master matches the release to
+dlm_deq	*	100	2	const	const:0	body[28:30]: 0 in 40,921 of 41,049 real releases at body[28] and in 41,049 of 41,049 at body[29]
+dlm_deq	*	102	1	const	const:0	body[30]: THE MEASURED CELL, and NOT the lock mode. rd vms-194's driven arm: nine real releases on a real two-node V7.3 cluster, one variable each -- the held mode over all six of NL/CR/CW/PR/PW/EX, a non-NULL co-holder, and the roles swapped -- read 0 in every one. The corpus carries only 0 (7,323) or 1 (33,726); this node wrote the LKB's mode, so a release of an EX lock carried 5. WHAT SELECTS THE 1 IS NOT KNOWN AND NOT GUESSED: not the held mode, not a co-holder, not the role (the arm separated all three); the deferred arms V and S test a value block on the release and sub-locks
+dlm_deq	*	103	1	const	const:0	body[31]: stale buffer in a real release (0 in 32,362 of 41,049); this node sends none
+dlm_deq	*	104	1	const	const:0	body[32]: the MIRROR of body[30] -- equal to it in 41,049 of 41,049 real releases, including the 33,726 that carry 1, so the equality is not an artefact of both being 0. Written deliberately rather than left zero by accident
+dlm_deq	*	105	3	const	const:0	body[33:36]: 0 in 41,049 of 41,049 real releases, all three bytes
+dlm_deq	*	108	12	const	const:0	body[36:48]: a real release's STALE BUFFER -- 254, 123, 33, 36, 169, 48, 32, 23, 34, 40, 24 and 33 distinct values per byte, the sender's previous message showing through. This node sends none (rd vms-42de)
+dlm_deq	*	120	76	const	const:0	body[48:124]: NO RESOURCE NAME, and no residue. A real release carries no name -- the codec refuses to read one, because what a real $DEQ leaves here is whatever last used the buffer (142, 47, 97 ... distinct values per byte) -- so writing one would add a field the reference does not have (rd vms-b5b0)
+dlm_deq	*	196	4	const	const:0	body[124:128]: a real release carries ffffffff (22,413 of 41,049) or zero (16,980-17,066 per byte); this node writes the zero form, which is a measured real one. UNLIKE the request, whose body[124:128] is ffffffff in 21,656 of 21,656 -- the release's own census is what licenses the difference
+dlm_deq	*	200	4	const	const:0	body[128:132]: a real release's tail residue (174-243 distinct values per byte, all-zero in about 12,500 of 41,049); this node sends none
 # ---- rd vms-85f: the QUEUED answer to a cat-0x02 op-0x01 (cat 0x82, body[34]
 # 0xfb). A frame OVMX had NEVER emitted: a real VAX's $ENQW on a resource OVMX
 # masters and holds at a conflicting mode got no answer at all, its process sat

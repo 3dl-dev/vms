@@ -672,10 +672,15 @@ static void check_deq_traces_to_lkb(const struct arm_frame *s,
 		 (unsigned)lkb->master_lkid);
 	ct_check_eq_u32(d.master_lkid, lkb->master_lkid, what);
 
+	/* body[30] IS NOT THE MODE. rd vms-194's driven arm put nine real
+	 * releases on a real two-node V7.3 wire -- every held mode NL..EX, a
+	 * co-holder, and the roles swapped -- and all nine carry 0. This
+	 * assertion read `== lkb->lkmode` and so pinned the defect: a release
+	 * of an EX lock went out carrying a 5 no real release carries. */
 	snprintf(what, sizeof(what),
-		 "%s: body[30] is the mode the LKB really held (%u), not a "
-		 "template", label, (unsigned)lkb->lkmode);
-	ct_check_eq_u32(d.mode, lkb->lkmode, what);
+		 "%s: body[30] is the MEASURED cell 0, not the %u the LKB "
+		 "really held", label, (unsigned)lkb->lkmode);
+	ct_check_eq_u32(d.rel_cell, 0u, what);
 }
 
 /* Read the LKB the way the arm's refill door does. Returns 0 when the lock is

@@ -499,7 +499,7 @@ static void test_bdev(const uint8_t *img, size_t len)
     uint8_t hdr[ODS2_BLOCK_SIZE];
     ods2_hdr_ident_t id;
 
-    printf("[8] block-backed reader + ODS-2 writer refusal\n");
+    printf("[8] block-backed reader + writer refusal\n");
     if (fd < 0 || write(fd, img, len) != (ssize_t)len) {
         printf("  FAIL: temp image\n");
         g_failures++;
@@ -512,7 +512,8 @@ static void test_bdev(const uint8_t *img, size_t len)
     CHECK_EQ(ods2_fh2_ident_get(hdr, &id), ODS2_OK, "FID 18 ident");
     CHECK_EQ(id.namelen, 73, "FID 18 is the 73-byte name");
     CHECK_EQ(ods2_wvolume_open_bdev(fd, len, &wv), ODS2_ERR_FORMAT,
-             "ODS-2 writer refuses a level-5 volume");
+             "the volume writer refuses to append to a layout it did not lay down "
+             "(a real VMS-INITIALIZEd volume), fail-honest");
     close(fd);
     unlink(path);
 }

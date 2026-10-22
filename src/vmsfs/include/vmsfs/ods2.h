@@ -1471,6 +1471,7 @@ typedef struct ods2_wvolume {
     uint32_t  next_free_lbn;        /* bump allocator watermark, blocks     */
     uint32_t  next_free_fid;        /* bump allocator watermark, FIDs       */
     ods2_fid_t mfd_fid;             /* FID of [000000] (ODS2_FID_MFD)       */
+    uint16_t  struclev;             /* ODS2_STRUCLEV_V2 / _V5 (rd vms-7e7e) */
 
     /* ---- block-device-backed mode only (vms-6d3b) ---- */
     int            is_bdev;         /* 0 == in-memory `image` mode (above)  */
@@ -1509,6 +1510,16 @@ typedef struct ods2_wvolume {
 ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
                                  const ods2_format_params_t *params,
                                  ods2_wvolume_t *wvol);
+
+/* ods2_volume_format at a chosen structure level (rd vms-7e7e):
+ * ODS2_STRUCLEV_V2 is exactly ods2_volume_format; ODS2_STRUCLEV_V5 lays down
+ * an ODS-5 volume as INITIALIZE/STRUCTURE=5 does -- level-5 home block and
+ * SCB, the reserved files still level-2 headers, and every file and directory
+ * the writer then creates a level-5 header with ODS-5 directory records
+ * (tests/lab/captures/ods5-alpha-20261022/RESULTS.md R1-R8). */
+ods2_status_t ods2_volume_format_ex(uint8_t *image, size_t image_len,
+                                    const ods2_format_params_t *params,
+                                    ods2_wvolume_t *wvol, uint16_t struclev);
 
 /*
  * Allocate `count` contiguous free blocks via the storage bitmap
@@ -1822,6 +1833,13 @@ ods2_status_t ods2_fh2_build_ex(void *header_block, uint32_t fidnum, uint16_t se
                                 uint16_t fileprot, uint32_t maxfiles,
                                 uint16_t struclev);
 
+/* Lay down a level-5 header's FI5 ident area for "name.type;version" idbuf
+ * (n bytes) at word ODS5_ID_OFF_WORDS -- name type, length, revision 0, no
+ * dates, length hints "none", the name NUL padded (RESULTS.md R3/R4) -- and
+ * return the word offset where the map area must start, or 0 if the name does
+ * not fit. Shared by ods2_fh2_build_ex and the volume writer. */
+unsigned ods5_fi5_lay(void *header_block, const char *idbuf, size_t n);
+
 /* Store the creation and revision dates (VMS 64-bit absolute time) in a
  * header's ident area; expiration/backup dates untouched. Reseal after. */
 ods2_status_t ods2_fh2_set_dates(void *header_block, uint64_t credate,
@@ -1981,6 +1999,10 @@ ods2_status_t ods2_dir_remove_blocks(const uint8_t *in_blocks, unsigned in_nblk,
 ods2_status_t ods2_wvolume_format_bdev(int fd, uint64_t span_bytes,
                                        const ods2_format_params_t *params,
                                        ods2_wvolume_t *wvol);
+/* ... at a chosen structure level (rd vms-7e7e; see ods2_volume_format_ex). */
+ods2_status_t ods2_wvolume_format_bdev_ex(int fd, uint64_t span_bytes,
+                                          const ods2_format_params_t *params,
+                                          ods2_wvolume_t *wvol, uint16_t struclev);
 
 /*
  * Commit every block currently held in `wvol`'s sparse cache to its backing

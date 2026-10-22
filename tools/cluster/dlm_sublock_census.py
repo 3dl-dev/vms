@@ -158,7 +158,11 @@ def selftest(repo):
     # fourth parent pair. (The rd vms-85f fire capture joined in the same pass
     # and added no sub-lock: its OVMX node held the root only, because this
     # item is open.)
-    check('real lock requests in the corpus', len(real), 74938)   # was 21,499
+    # rd vms-5cd's fix fire (tests/lab/captures/vms-5cd-fixfire-20261022) then
+    # added 376 more real requests and NOT ONE sub-lock request: its arms hold
+    # a ROOT only, so the numerator below is unmoved at 10 while the
+    # denominator grows again -- the same shape rd vms-e80's 3.5x widening had.
+    check('real lock requests in the corpus', len(real), 75314)   # was 21,499
     check('real requests naming a sub-resource', len(subs), 10)   # was 7
     check('distinct senders of one', len({s for s, _d, _b, _p in subs}), 3)
     check('distinct sub-lock modes at body[30]',

@@ -1558,6 +1558,11 @@ ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
     st = ods2_bdev_open(&rd, fd, span_bytes);
     if (st != ODS2_OK)
         return st;
+    /* The reader now accepts ODS-5 (rd vms-7e7e); this writer lays down ODS-2
+     * headers and byte-ordered directories only, so it refuses a level-5
+     * volume rather than write ODS-2 records into it. */
+    if (rd.home.hm2_struclev != ODS2_STRUCLEV_V2)
+        return ODS2_ERR_FORMAT;
 
     /* Authoritative total_blocks == the SCB's scb_volsize. BITMAP.SYS's VBN1
      * (the SCB) is always LBN 4 for this writer's fixed layout (mfd_lbn 3 + 1,

@@ -418,11 +418,13 @@ if [ "$rc" -eq 0 ]; then
     check "node A boot2: F\$GETSYI(NODENAME) reads $NODE_A (adopted live hostname)" \
         "$A_LOG2" "HOSTA = \"$NODE_A\""
     # rd vms-3ea: the executive mounted THIS node's own volume -- the label
-    # is read back from the mounted volume, not from this script.
+    # is read back from the mounted volume, not from this script. (VOLNAM
+    # comes back as the home block's 12-byte, space-padded field, so the
+    # match is on the label and not on a closing quote.)
     printf 'VOLA = F$GETDVI("SYS$SYSDEVICE","VOLNAM")\r' >&4; sleep 1
     printf 'SHOW SYMBOL VOLA\r' >&4; sleep 1
     check "node A boot2: its system disk is mounted with its own label $LABEL_A" \
-        "$A_LOG2" "VOLA = \"$LABEL_A\""
+        "$A_LOG2" "VOLA = \"$LABEL_A"
 fi
 
 # ==========================================================================
@@ -510,7 +512,7 @@ if [ "$rc" -eq 0 ]; then
     printf 'VOLB = F$GETDVI("SYS$SYSDEVICE","VOLNAM")\r' >&6; sleep 1
     printf 'SHOW SYMBOL VOLB\r' >&6; sleep 1
     check "node B boot2: its system disk is mounted with its own label $LABEL_B" \
-        "$B_LOG2" "VOLB = \"$LABEL_B\""
+        "$B_LOG2" "VOLB = \"$LABEL_B"
 fi
 
 if [ "$NEGCTL" = "1" ]; then

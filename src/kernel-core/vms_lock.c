@@ -41,6 +41,7 @@
 #include "exec_list.h"        /* exec_list_* (granted/waiting/proc lists) */
 #include "exec_hash.h"        /* exec_hash_* (the resource database)          */
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
+#include "vms_rms_lockname.h"   /* the RMS file-access lock's name + identity (rd vms-326) */
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
 #include "vms_dlm_master.h"   /* the MASTER-side door + the delivery proc      */
 #include "vms_dlm_adopt.h"    /* the REMASTER ADOPTION seam (rd vms-14fd)      */
@@ -5307,16 +5308,43 @@ static void enq_inbound_not_master(struct vms_lock_resource *res,
  * parse, so this path never has to invent one. Taking the delivery process's
  * UIC and mode instead would be exactly the conflation rd vms-c27 forbids: the
  * identity belongs to the requesting system, not to STARTUP.
+ *
+ * AN $ENQ THE EXECUTIVE ITSELF MAKES (rd vms-326), for a resource whose
+ * identity is a property of the SERVICE and not of the process asking for it.
+ * The RMS file-access lock is the case: a real VAX's is (UIC group 0, access
+ * mode 1 = EXECUTIVE) on all 1,130 captured frames, because on a real VAX RMS
+ * runs AT executive mode -- and a lock taken at a user-mode caller's mode 3
+ * would be a DIFFERENT RESOURCE from the VAX's, so the two would not contend
+ * and both nodes could hold EX on one file. `id` is that stated identity.
+ *
+ * AND IT IS NOT REACHABLE FROM USERSPACE, BY CONSTRUCTION. `id` is an argument
+ * of an internal function; no field of the ioctl ABI carries it, and
+ * vms_ioctl_enq's path passes NULL. A caller-supplied access mode would let any
+ * process claim mode 1 and forge or steal another's RMS file locks -- which the
+ * VMS protection model does not permit, and which is why privileged power is an
+ * executive service here and not an ABI field (conductor's ruling, 2026-10-22).
  * ==========================================================================
  */
+/* The identity an EXECUTIVE-INTERNAL $ENQ states for its own resource. */
+struct dlm_enq_ident {
+    uint16_t group;
+    uint8_t  mode;
+};
+
 static void enq_resource_identity(struct vms_proc *proc,
                                   const struct vms_enq_args *a,
                                   const struct dlm_xnode_enq_out *xn,
+                                  const struct dlm_enq_ident *id,
                                   uint16_t *out_group, uint8_t *out_mode)
 {
     if (xn != NULL) {
         *out_group = xn->res_group;
         *out_mode = xn->res_mode;
+        return;
+    }
+    if (id != NULL) {
+        *out_group = id->group;
+        *out_mode = id->mode;
         return;
     }
     *out_group = (a->flags & LCK_M_SYSTEM) ? (uint16_t)0
@@ -5326,8 +5354,15 @@ static void enq_resource_identity(struct vms_proc *proc,
     exec_unlock(&proc->mode_lock);
 }
 
-static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
-                            struct dlm_xnode_enq_out *xn)
+/*
+ * `id` is the identity an executive-internal caller STATES for its own
+ * resource (rd vms-326), NULL for every other path -- see
+ * enq_resource_identity(). vms_enq_core_ex() below is the NULL case, which is
+ * what the ioctl and the cross-node arm both reach.
+ */
+static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
+                               struct dlm_xnode_enq_out *xn,
+                               const struct dlm_enq_ident *id)
 {
     struct vms_enq_args args = *io;
     struct vms_lock_entry *lock;
@@ -5387,7 +5422,7 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         k.name = args.resnam;
         k.name_len = args.resnam_len;
         k.parent = pres;
-        enq_resource_identity(proc, &args, xn, &k.group, &k.mode);
+        enq_resource_identity(proc, &args, xn, id, &k.group, &k.mode);
         res = resource_find_or_create_key(&k);
         if (plock)
             lock_put(plock);
@@ -5737,6 +5772,19 @@ out:
     return 0;
 }
 
+/*
+ * The identity-free entry: the request's identity is the enqueuing process's
+ * own (or the frame's, for an inbound cross-node request). Every caller that
+ * is not the executive stating its OWN service's identity comes through here,
+ * and the ioctl path is one of them -- which is what makes a stated access mode
+ * unreachable from userspace (rd vms-326).
+ */
+static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
+                            struct dlm_xnode_enq_out *xn)
+{
+    return vms_enq_core_ident(proc, io, xn, NULL);
+}
+
 long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_enq_args args;
@@ -5969,7 +6017,111 @@ uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
     return (a.status & 1u) ? SS__NORMAL : a.status;
 }
 
-/* Release the volume lock taken by vms_lock_acp_vol_ex. A zero lkid (the lock
+/*
+ * ================================================================
+ * THE RMS FILE-ACCESS LOCK, TAKEN BY THE EXECUTIVE (rd vms-326)
+ * ================================================================
+ *
+ * WHOSE LOCK THIS IS. RMS takes one DLM lock per ACCESSED FILE so two opens of
+ * one file arbitrate. On a real VAX its resource is 'RMS$' + the 6-byte file id
+ * + 0x02 + the 12-byte space-padded volume label + three NULs, at UIC group 0
+ * and ACCESS MODE 1 -- EXECUTIVE -- on all 1,130 captured frames
+ * (src/kernel-core/vms_rms_lockname.h carries the measurement and the form).
+ *
+ * WHY THE EXECUTIVE TAKES IT AND NOT RMS (conductor's ruling, 2026-10-22).
+ * OVMX's RMS is a userspace library running at access mode 3. The access mode
+ * is part of the RESOURCE'S IDENTITY -- the directory hash is computed over it
+ * -- so a lock taken at mode 3 is a different resource from the VAX's: the two
+ * would not contend, and both nodes could hold EX on one file. The fix is NOT
+ * to let the $ENQ ABI carry a caller-supplied access mode: a process that could
+ * claim mode 1 could forge or steal another's RMS file locks, which the VMS
+ * protection model does not permit. So the lock is enqueued HERE, by the
+ * executive, on RMS's behalf -- the Files-11 ACP is the caller, because at
+ * IO$_ACCESS time it already holds both halves of the name (the file id it just
+ * accessed and the mounted volume's label) -- and the identity is assigned by
+ * this function, never stated by anybody outside the executive.
+ *
+ * `lkmode` is RMS's own sharing decision (LCK$K_*, from the FAB's FAC/SHR), and
+ * `flags` its own LCK$M_* (NOQUEUE for an immediate SS$_NOTQUEUED answer, which
+ * is what RMS turns into RMS$_FLK). NO SYSLCK CHECK, deliberately: the
+ * privilege gate on vms_ioctl_enq exists for a USERSPACE caller naming a
+ * system-wide resource; this is the executive naming its own service's.
+ *
+ * NO LABEL, NO LOCK. A name cannot be built without the volume label, and
+ * there is no second-best name to fall back on: a blank or invented label span
+ * would name a volume nobody has, and two nodes that both invented one would
+ * collide on a resource that names no file (INV-6). SS$_BADPARAM says so, and
+ * the refusal is counted so a node that is taking NO file locks is visible
+ * rather than silently unprotected.
+ */
+static uint32_t vms_rms_file_enq_no_label;
+
+uint32_t vms_lock_rms_file_enq_no_label(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_res_hash_lock);
+    n = vms_rms_file_enq_no_label;
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
+                               uint16_t fid_num, uint16_t fid_seq,
+                               uint8_t fid_rvn, uint8_t fid_nmx,
+                               const char *label, uint32_t label_len,
+                               uint32_t lkmode, uint32_t flags,
+                               uint32_t *lkid_out)
+{
+    struct dlm_enq_ident id;
+    struct vms_enq_args a;
+    uint8_t name[VMS_RMS_LOCKNAME_LEN];
+    uint32_t n;
+
+    if (lkid_out)
+        *lkid_out = 0;
+    if (proc == NULL)
+        return SS__BADPARAM;
+
+    n = vms_rms_lockname(fid_num, fid_seq, fid_rvn, fid_nmx, label, label_len,
+                         name, (uint32_t)sizeof(name));
+    if (n == 0u) {
+        exec_lock(&vms_res_hash_lock);
+        if (vms_rms_file_enq_no_label++ == 0u)
+            exec_console_printf("%%RMS, no volume label for file (%u,%u,%u): "
+                                "no file-access lock taken\n",
+                                (unsigned)fid_num, (unsigned)fid_seq,
+                                (unsigned)fid_rvn);
+        exec_unlock(&vms_res_hash_lock);
+        return SS__BADPARAM;
+    }
+
+    memset(&a, 0, sizeof(a));
+    a.lkmode = lkmode;
+    a.flags = flags;
+    memcpy(a.resnam, name, n);
+    a.resnam_len = n;             /* counted: the name carries three NULs */
+
+    /* The identity the EXECUTIVE assigns to this service's resource. */
+    id.group = (uint16_t)VMS_RMS_LOCKNAME_GROUP;
+    id.mode = (uint8_t)VMS_RMS_LOCKNAME_ACMODE;
+
+    /*
+     * An INTERRUPTED wait is not a status (the reasoning at
+     * vms_lock_acp_vol_ex): an in-kernel caller with no ioctl to restart
+     * re-enters the wait itself. With LCK$M_NOQUEUE -- which is what RMS
+     * passes -- nothing ever waits and this runs once.
+     */
+    while (vms_enq_core_ident(proc, &a, NULL, &id) != 0)
+        ;
+    if (lkid_out)
+        *lkid_out = a.lkid;
+    return a.status;
+}
+
+/* Release the volume lock taken by vms_lock_acp_vol_ex -- and the file-access
+ * lock taken by vms_lock_rms_file_enq, which is the same act: a $DEQ of a lock
+ * this executive holds for the caller. A zero lkid (the lock
  * was never taken -- acquire failed, or the negctl dropped the enqueue) is a
  * no-op, so the ACP write path can release unconditionally at its single exit. */
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid)

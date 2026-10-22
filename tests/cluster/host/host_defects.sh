@@ -176,6 +176,7 @@ dlm-learner-unbounded
 dlm-own-directory-not-consulted
 dlm-dir-matched-by-name-alone
 dlm-resource-name-keyed-by-c-string
+dlm-exec-enq-takes-the-callers-identity
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
 dlm-requester-drops-the-untransmitted-post
@@ -681,11 +682,26 @@ EOF
         targets)      echo "kernel-core/vms_lock.c";;
         suites_red)   echo "test_lock_proxy";;
         isolation)    echo "isolated";;
-        why)          echo "the two places that KEY a resource by its name -- the hash bucket and the equality test -- are put back to the C-string spelling they had before rd vms-326: the bucket hashes up to the name's first NUL and the comparison is a strncmp. That is one property (the name is keyed by its COUNT) disarmed in the two places that implement it, and it reinstates a measured defect: VMS names an RMS file-access lock 'RMS\$' + 6 FID bytes + 0x02 + a 12-byte volume label + three NULs, so the SAME file id on two DIFFERENT volumes compares equal at its first NUL and becomes ONE cluster-wide resource -- node A writing one file then refuses node B's read of another (rd vms-acf3), and the 7-byte truncation is what goes on the wire, where it hashes to a value no real VAX ever sent (0 of 1,130, tools/cluster/dlm_rms_name_hash_check.py).";;
+        why)          echo "the two places that KEY a resource by its name -- the hash bucket and the equality test -- are put back to the C-string spelling they had before rd vms-326: the bucket hashes up to the name's first NUL and the comparison is a strncmp. That is one property (the name is keyed by its COUNT) disarmed in the two places that implement it, and it reinstates a measured defect: VMS names an RMS file-access lock 'RMS\$' + 6 FID bytes + 0x02 + a 12-byte volume label + three NULs, so the SAME file id on two DIFFERENT volumes compares equal at its first NUL and becomes ONE cluster-wide resource -- node A writing one file then refuses node B's read of another (rd vms-acf3), and the 7-byte truncation is what goes on the wire, where it hashes to a value no real VAX ever sent (0 of 1,130, tools/cluster/dlm_rms_name_hash_check.py). The fourth reddened assertion is the EXECUTIVE's own file-access lock (vms_lock_rms_file_enq) meeting the same collision from the other side: the same file id on two volumes becomes one resource there too.";;
         require_fail) hd_lines <<'EOF'
 *** ...and carries all 26 bytes, NULs included ***
 *** and the two identities have DIFFERENT directory hashes: the truncation had one ***
 *** the VAX1DATA name is granted at EX at the same time: two files, two resources ***
+*** ...while the same file id on ANOTHER VOLUME is granted: the collision rd vms-acf3 measured is gone ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-exec-enq-takes-the-callers-identity)
+        case "$_f" in
+        facility)     echo "the identity an EXECUTIVE-INTERNAL \$ENQ states for its own service's resource (enq_resource_identity()'s stated-identity arm, rd vms-326): the RMS file-access lock is (UIC group 0, access mode 1 = EXECUTIVE) because the executive takes it, not the user-mode process that asked";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "enq_resource_identity() ignores the identity the executive STATED and falls through to the enqueuing process's own UIC group and access mode -- which is what a userspace RMS taking this lock for itself would produce. The access mode is part of the RESOURCE's identity (the directory hash is computed over it), and a real VAX's RMS file-access lock is (group 0, mode 1) on all 1,130 captured frames, so a lock taken at a user process's (group 20, mode 3) is a DIFFERENT RESOURCE from the VAX's: the two do not contend and both nodes can hold EX on one file -- the inverse of the collision rd vms-acf3 measured, and a worse one. Single-condition disarm of the stated-identity arm; the name, its count and the serialization are untouched, which is what makes the two reddened assertions exactly the identity.";;
+        require_fail) hd_lines <<'EOF'
+*** at UIC group 0 -- not the process's group 20 ***
+*** and ACCESS MODE 1 (executive) -- not the process's mode 3 ***
 EOF
                       ;;
         esac;;
@@ -3270,6 +3286,12 @@ apply_edit() {
         # measured against real hardware.
         sed -i 's|    return memcmp(res->name, k->name, k->name_len) == 0;|    return strncmp(res->name, k->name, 32) == 0; /* NEGCTL dlm-resource-name-keyed-by-c-string */|' "$_file"
         sed -i 's|    size_t i, n = name_len;|    size_t i, n = strnlen(name, 32); /* NEGCTL dlm-resource-name-keyed-by-c-string */\n\n    (void)name_len;|' "$_file";;
+
+    dlm-exec-enq-takes-the-callers-identity)
+        # The stated-identity arm of enq_resource_identity(): disarmed, so an
+        # executive-internal $ENQ falls through to the enqueuing process's own
+        # UIC group and access mode. `if (id != NULL) {` is unique in the file.
+        sed -i 's|    if (id != NULL) {|    if (0) { /* NEGCTL dlm-exec-enq-takes-the-callers-identity */|' "$_file";;
 
     dlm-lkid-guard-disabled)
         # dlm_lkid_pair_put()'s guard is split across two source lines

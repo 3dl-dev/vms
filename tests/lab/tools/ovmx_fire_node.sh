@@ -9,5 +9,6 @@ LOG=$LOGS/$(echo "$NODE" | tr A-Z a-z).log
 ip tuntap add $TAP mode tap 2>/dev/null; ip link set $TAP master br0; ip link set $TAP up
 mkdir -p $RE $LOGS
 [ "${OVMX_NOCAP:-0}" = 1 ] || setsid nohup tcpdump -i br0 -s0 -U -w $RE/wire.pcap 'ether proto 0x6007' > $RE/tcpdump.out 2>&1 < /dev/null &
-setsid nohup env ART=$ART OUT=$LOG TAP=$TAP MAC=$MAC NAME=$NODE SCSNODE=$NODE SCSSYSID=$SYSID VOTES=1 EXPVOTES=$EV DUR=10800 bash /lab/run-evac/ovmx_evnode.sh > $RE/$NODE.drv.out 2>&1 < /dev/null &
+setsid nohup env ART=$ART OUT=$LOG TAP=$TAP MAC=$MAC NAME=$NODE SCSNODE=$NODE SCSSYSID=$SYSID VOTES=1 EXPVOTES=$EV DUR=10800 \
+  LOCKDIRWT="${LOCKDIRWT:-}" RM_RESIDUE_FILL="${RM_RESIDUE_FILL:-}" bash /lab/run-evac/ovmx_evnode.sh > $RE/$NODE.drv.out 2>&1 < /dev/null &
 echo up $NODE

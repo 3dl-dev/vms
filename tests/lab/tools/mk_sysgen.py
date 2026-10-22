@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """mk_sysgen.py [--force] <out.dat> <SCSNODE> <SCSSYSTEMID> [template.dat]
        mk_sysgen.py --alloc <prefix> [registry-dir]
+       mk_sysgen.py --addparam <store.dat> <NAME> <cur> <def> <min> <max> <desc>
 
 x86_64 replacement for tools/mk_sysgen, which is an aarch64 ELF binary with no
 surviving source and therefore does not run on the workshop dev host
@@ -193,8 +194,63 @@ def alloc(prefix, dirname):
     print("%s %d" % (node, sysid))
 
 
+def addparam(path, name, current, default, lo, hi, description):
+    """Add ONE numeric parameter to a SYSG v2 store, in place.
+
+    WHY THIS EXISTS (rd vms-c2b / rd vms-6ad1 RA7). SYSBOOT> SET and SYSGEN SET
+    operate on the WORKING SET, which USE CURRENT loads from the store -- there
+    is no factory merge (tools/vms_sysgen.c's use_cmd). So a parameter that is
+    not IN the store cannot be set at all: SYSBOOT answers
+    %SYSGEN-E-NOSUCHP and the knob behind it is unreachable plumbing. That is
+    exactly what happened to OVMX_RM_RESIDUE_FILL, whose PAR-to-executive path
+    rd vms-ed5 shipped while the parameter itself existed in no store.
+
+    This is the SAME in-place discipline the identity patch above uses: the
+    store's own layout (sysgen_params.h v2), a free slot, count + 1, and
+    nothing else touched. It REFUSES to redefine a name that is already there,
+    so it can never silently change a parameter's meaning.
+    """
+    buf = bytearray(open(path, "rb").read())
+    if len(buf) != HDR + 64 * PSZ:
+        die("%s is %d bytes, expected %d" % (path, len(buf), HDR + 64 * PSZ))
+    magic, version, count = struct.unpack_from("<III", buf, 0)
+    if magic != 0x53595347 or version != 2:
+        die("%s magic/version %08x/%d is not SYSG v2" % (path, magic, version))
+    if count >= 64:
+        die("%s already holds %d parameters (SYSGEN_MAX_PARAMS)" % (path, count))
+    if len(name) > 31:
+        die("parameter name %r is %d chars; the field is 32 with a NUL" % (name, len(name)))
+    if len(description) > 79:
+        die("description is %d chars; the field is 80 with a NUL" % len(description))
+    if not (lo <= current <= hi) or not (lo <= default <= hi):
+        die("current %d / default %d outside %d..%d" % (current, default, lo, hi))
+    for i in range(count):
+        base = HDR + i * PSZ
+        if buf[base:base + 32].split(b"\0")[0].decode("ascii", "replace") == name:
+            die("%s already defines %s -- this tool never redefines one" % (path, name))
+
+    base = HDR + count * PSZ
+    buf[base:base + PSZ] = b"\0" * PSZ
+    buf[base:base + 32] = name.encode("ascii").ljust(32, b"\0")
+    struct.pack_into("<IIII", buf, base + CUR, current, default, lo, hi)
+    buf[base + FLAGS] = 0                      # read at boot, not dynamic
+    buf[base + DESC:base + DESC + 80] = description.encode("ascii").ljust(80, b"\0")
+    buf[base + TYPE] = 0                       # SYSGEN_TYPE_NUMERIC
+    struct.pack_into("<I", buf, 8, count + 1)
+    open(path, "wb").write(buf)
+    print("mk_sysgen.py: %s += %s (current %d, default %d, range %d..%d), "
+          "now %d parameters" % (path, name, current, default, lo, hi, count + 1))
+
+
 def main():
     argv = sys.argv[1:]
+    if argv and argv[0] == "--addparam":
+        if len(argv) != 8:
+            die("usage: mk_sysgen.py --addparam <store.dat> <NAME> <current> "
+                "<default> <min> <max> <description>")
+        addparam(argv[1], argv[2], int(argv[3], 0), int(argv[4], 0),
+                 int(argv[5], 0), int(argv[6], 0), argv[7])
+        return
     if argv and argv[0] == "--alloc":
         if len(argv) not in (2, 3):
             die("usage: mk_sysgen.py --alloc <prefix> [registry-dir]")

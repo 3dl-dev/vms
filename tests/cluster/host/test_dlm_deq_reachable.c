@@ -62,6 +62,8 @@
 
 #include "vms_internal.h"     /* -> lock_shim/vms_internal.h (the real engine) */
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h            */
+#include "vms_dlm_adopt.h"
+#include "vms_dlm_master.h"
 #include "vms_dlm_proxy.h"    /* the requester seam the engine posts through   */
 #include "vms_dlm_scs_fsm.h"  /* the requester FSM + the release queue         */
 #include "vms_frame_compose.h"
@@ -1083,6 +1085,86 @@ static void test_e09_removal_reaches_the_wire(void)
 	engine_down();
 }
 
+/* ==========================================================================
+ * 9. rd vms-3ac: A RELEASE IS NOT SENT TO A NODE THAT NO LONGER MASTERS THE
+ *    RESOURCE -- THE BUGCHECK THIS LANE PUT ON A REAL VAX
+ *
+ * 2026-10-21, lab labc2b (tests/lab/captures/vms-3ac-invlockid-20261021): a
+ * real V7.3 node remastered a tree ONTO the OVMX node; the OVMX node's own
+ * lock in that tree stayed a PROXY pointing at the old master; the lock's
+ * release sent that old master a cat-0x02 op-0x03 naming the handle it had
+ * minted before the move; and the old master -- which by then had no RSB for
+ * the resource at all -- took
+ *
+ *     **** Fatal BUG CHECK, version = V7.3  INVLOCKID, Invalid lock id
+ *          R1 = 370004A7
+ *
+ * with that very handle in R1, dumped memory and rebooted.
+ *
+ * So: a proxy post about a resource THIS node masters must not go out. The
+ * engine states the fact at post time (vms_dlm_proxy_post.self_mastered, read
+ * off the RSB) and dlm_proxy_post refuses it. The release still completes
+ * locally, which is what releasing a lock on a resource this node masters
+ * means.
+ *
+ * THE ADOPTION IS DRIVEN FOR REAL here (vms_lock_dlm_adopt_open/_end), not
+ * simulated: the thing that makes this node the master in the field is a real
+ * VAX handing it the tree, and that is the door that happens through.
+ * ========================================================================== */
+static void test_release_is_not_sent_to_a_node_we_took_over_from(void)
+{
+	const uint32_t MASTER_LKID = 0x370004A7u;   /* the real crash's handle */
+	struct vms_dlm_adopt_tree t;
+	struct vms_proc proc, delivery;
+	uint32_t lkid, n0, refused0, n_locks = 0u, st;
+
+	printf("--- rd vms-3ac: a release is NOT sent to the node we took the "
+	       "tree over FROM ---\n");
+	engine_up();
+	proc_init(&proc);
+	/* The adoption engine refuses to create master-side locks without a
+	 * delivery process (condition 4, rd vms-c27) -- a real node has one. */
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	/* 1. This node holds a lock the OLD MASTER granted it. */
+	lkid = granted_proxy(&proc, "RA7T", LCK_K_CRMODE, MASTER_LKID);
+	ct_check(lkid != 0u,
+		 "a real proxy LKB on RA7T, granted by the master that then "
+		 "hands the tree over");
+
+	/* 2. That master remasters the tree ONTO this node, for real. */
+	memset(&t, 0, sizeof(t));
+	strscpy(t.resnam, "RA7T", sizeof(t.resnam));
+	t.res_group = 0u;
+	t.res_mode = 0u;
+	t.ident_valid = 1u;
+	t.old_master_csid = CSID_MASTER;
+	ct_check_eq_u32(vms_lock_dlm_adopt_open(&t), SS__NORMAL,
+			"the old master hands this node the tree (adopt_open)");
+	ct_check_eq_u32(vms_lock_dlm_adopt_end(&t, &n_locks), SS__NORMAL,
+			"  and the adoption completes: this node masters RA7T");
+
+	/* 3. Now release the lock this node still holds in it. */
+	n0 = a.n_sent;
+	refused0 = vms_lock_dlm_proxy_self_mastered();
+	st = do_deq(&proc, lkid);
+	fork_drain();
+
+	ct_check_eq_u32(st, SS__NORMAL,
+			"$DEQ succeeds: a release on a resource this node "
+			"masters is a LOCAL release, and nothing failed");
+	ct_check_eq_u32(a.n_sent, n0,
+			"*** NOTHING went on the wire: no op-0x03 naming "
+			"370004A7 at the node that no longer masters RA7T -- "
+			"the INVLOCKID frame is not emitted ***");
+	ct_check_eq_u32(vms_lock_dlm_proxy_self_mastered(), refused0 + 1u,
+			"*** and the refusal is COUNTED, not silent ***");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_deq_reachable (rd vms-49f8: the op-0x03 $DEQ has a "
@@ -1095,5 +1177,6 @@ int main(void)
 	test_queue_full_is_an_honest_refusal();
 	test_a_claim_happens_once();
 	test_e09_removal_reaches_the_wire();
+	test_release_is_not_sent_to_a_node_we_took_over_from();
 	return ct_summary("test_dlm_deq_reachable");
 }

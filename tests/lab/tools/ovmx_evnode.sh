@@ -36,6 +36,13 @@ w=0; until grep -qaF 'SYSBOOT> ' "$OUT" || [ $w -ge 1800 ]; do kill -0 $QP || br
 if grep -qaF 'SYSBOOT> ' "$OUT"; then
   for c in "SET SCSNODE $SCSNODE" "SET SCSSYSTEMID $SCSSYSID" 'SET VAXCLUSTER 2' "SET VOTES $VOTES" "SET EXPECTED_VOTES $EXPVOTES"; do send "$c"; sleep 3; done
   [ -n "$LOCKDIRWT" ] && { send "SET LOCKDIRWT $LOCKDIRWT"; sleep 3; }
+  # RM_RESIDUE_FILL (rd vms-6ad1, RA7): the byte the executive writes across an
+  # op-0x14's residue span. Set HERE, at SYSBOOT>, because the WRITE below
+  # persists the working set to SYS$SYSTEM:OVMXVMSSYS.PAR before PID 1 reads
+  # the parameter set -- so the fill takes effect on THIS boot, with no second
+  # reboot and no edit to the artifact image. Unset leaves the store's 0, which
+  # is the rd vms-42de ruling's zeros and what ships.
+  [ -n "${RM_RESIDUE_FILL:-}" ] && { send "SET OVMX_RM_RESIDUE_FILL $RM_RESIDUE_FILL"; sleep 3; }
   send 'WRITE'; sleep 5; send 'CONTINUE'
 else echo "[$NAME] FATAL no SYSBOOT>" >> "$OUT"; fi
 cnt() { tr -d '\r\000' < "$OUT" | grep -ac -- "$1"; true; }

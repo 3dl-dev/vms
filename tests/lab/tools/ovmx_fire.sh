@@ -39,7 +39,12 @@ kubectl -n ovmx-lab cp "$HERE/ovmx_evnode.sh" "$POD:/lab/run-evac/ovmx_evnode.sh
 # cluster alone before any VAX boots (the OVMX-first order, rd vms-d52c).
 # OVMX_NODE / OVMX_SYSID / OVMX_MAC / OVMX_TAP / OVMX_NOCAP boot a second OVMX
 # node in the same pod (the demo topology, rd vms-94a); see ovmx_fire_node.sh.
+# RM_RESIDUE_FILL / LOCKDIRWT: SYSGEN values this fire wants the node booted
+# with. They travel to the SYSBOOT> prompt (ovmx_evnode.sh), which persists them
+# to OVMXVMSSYS.PAR before PID 1 reads the parameter set -- RA7's two fires
+# differ in exactly this one variable (rd vms-6ad1).
 exec kubectl -n ovmx-lab exec "$POD" -- env OVMX_NODE="${OVMX_NODE:-OVMXE}" \
 	OVMX_SYSID="${OVMX_SYSID:-1030}" OVMX_MAC="${OVMX_MAC:-52:54:00:00:e5:01}" \
 	OVMX_TAP="${OVMX_TAP:-tap3}" OVMX_NOCAP="${OVMX_NOCAP:-0}" \
+	LOCKDIRWT="${LOCKDIRWT:-}" RM_RESIDUE_FILL="${RM_RESIDUE_FILL:-}" \
 	bash /lab/run-evac/ovmx_fire_node.sh "/lab/$BASE" "$TAG" "${OVMX_FIRE_EXPVOTES:-3}"

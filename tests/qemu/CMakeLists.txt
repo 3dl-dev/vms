@@ -128,6 +128,14 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
        NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
         continue()
     endif()
+    # test_syssvc_ci6_rmhold drives RMHOLD.EXE, the remaster arms' holder
+    # program (tests/lab/ci6/mk_rmhold_native.sh) -- a VMS-native image on the
+    # same LINK.EXE backend, so the same arch condition applies for the same
+    # reason (rd vms-c2b).
+    if(_name STREQUAL "test_syssvc_ci6_rmhold" AND
+       NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
+        continue()
+    endif()
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 

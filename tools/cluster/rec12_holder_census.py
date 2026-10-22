@@ -90,9 +90,13 @@ def selftest(repo):
         print('  [%s] %s: %r%s' % ('PASS' if good else 'FAIL', name, got,
                                    '' if good else ' (want %r)' % (want,)))
 
-    check('records paired with an answer', len(recs), 420)
-    check('ROOT records', len(root), 9)
-    check('SUB records', len(sub), 411)
+    # rd vms-e80 taught the shared walker to read `.pcap.gz`, which is 32 more
+    # captures: 420 -> 3,521 records (ROOT 9 -> 792, SUB 411 -> 2,729). Every
+    # requester is still a real DEC OUI (2,780 aa0004 + 741 08002b); OVMX has
+    # never sent an op-0x12, which is rd vms-33a's whole point.
+    check('records paired with an answer', len(recs), 3521)   # was 420
+    check('ROOT records', len(root), 792)                     # was 9
+    check('SUB records', len(sub), 2729)                      # was 411
 
     # The cells every real record agrees on, root and sub alike -- the ones a
     # builder may write as constants, and the only ones.
@@ -104,24 +108,36 @@ def selftest(repo):
     # MEASURED, not expected: the list below is what the corpus says, and the
     # selftest exists so a corpus change has to move it deliberately.
     #
-    # READ IT WITH THE CAUTION IN THE HEADER: "constant across every captured
-    # record" is NOT "constant in the protocol". body[44:46] is 0 in all 420
-    # because every captured holder used a LCK$M_SYSTEM name (UIC group 0) --
-    # a builder must still write the RSB's own group there, not a zero. The
-    # same goes for body[63:66] (0x20, the name padding of names shorter than
-    # the span) and body[38]/[42] (the high byte of a lock id, which the
-    # minted-form census already describes as 0 in real ids).
-    check('cells constant across ALL 420 records',
+    # THE CAUTION IN THE HEADER WAS RIGHT, AND THE WIDER CORPUS PROVED IT (rd
+    # vms-e80). Over 420 records forty-four cells looked constant; over 3,521
+    # thirty-four do. TEN DROPPED OUT, and they are exactly the cells the
+    # header warned a builder not to treat as constants:
+    #   body[ 44]  0 x3,519 / 1 x2        the UIC group the header named: a
+    #                                     holder with a non-zero group exists
+    #   body[ 63]  0x20 x3,416, then 0x00/0x53/0x44/0x72    name tail, not padding
+    #   body[ 64]  0x20 x3,421, then 0x50/0xc0/0x4b
+    #   body[ 65]  0x20 x3,422, then 0x5a/0x57/0x31
+    #   body[ 17]  0 x3,148 / 1 x187 / 2 x186
+    #   body[ 34]  1 x3,089 / 0 x432
+    #   body[ 71]  0 x3,224 / 0x25 x193 / 0x49 x49 / 0x87 x47
+    #   body[108]  0 x3,509 / 4 x8 / 8 x4
+    #   body[109]  0 x3,339 / 2 x182
+    #   body[110]  1 x3,516 / 0 x5
+    # None is named here and none is guessed: a cell gets a name in the codec
+    # header, with a capture or an SDA page behind it (Rule 8). What this
+    # records is that a builder writing any of the ten as a constant would be
+    # writing the OLD corpus's accident.
+    check('cells constant across ALL 3,521 records',
           [off for off, _v in agree],
-          [5, 8, 9, 12, 13, 15, 17, 18, 19, 26, 33, 34, 35, 38, 42, 44, 45,
-           63, 64, 65, 71, 86, 87, 106, 107, 108, 109, 110, 112, 113, 114,
-           115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127])
+          [5, 8, 9, 12, 13, 15, 18, 19, 26, 33, 35, 38, 42, 45, 86, 87,
+           106, 107, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122,
+           123, 124, 125, 126, 127])
     check('and their values',
           [v for _off, v in agree],
           [0x00, 0x02, 0x12, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-           0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x20, 0x20, 0x00, 0x00,
-           0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0xff,
-           0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff])
+           0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+           0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
+           0xff])
 
     # body[36:44] is the PARENT PAIR, and it is what tells the two apart.
     check('every ROOT record has an all-zero body[36:44]',

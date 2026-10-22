@@ -45,22 +45,20 @@ the (src,dst) pair it travelled on, the same rule remaster_census.py uses.
 Frames are classified by remaster_census's SCS-MSG discriminators, so a frame
 counted here is a frame the shipping codec also classifies as one.
 
-THE CORPUS. The shared walker (remaster_census.walk_inputs) reads `.pcap` only,
-and 28 of this corpus's captures are `.pcap.gz`. Reading only `.pcap` loses 71 of
-the 110 pairs, so this tool decompresses the gzipped ones to a temporary file and
-hands THAT to the same reader -- no second parser. Both figures are pinned below;
-rd vms-9e4c tracks teaching the shared walker about `.gz` so the other censuses'
-pins are re-derived deliberately rather than as a side effect.
+THE CORPUS. The whole of tests/lab/captures, `.pcap` and `.pcap.gz` alike,
+through the shared walker (remaster_census.walk_inputs). This tool was written
+before that walker read `.pcap.gz` and carried its own decompressing wrapper;
+rd vms-e80 moved the gzip handling into the walker, where every census gets it,
+and the wrapper is gone. The plain-.pcap-only figure is still pinned below --
+the shared walker's old view loses 71 of the 110 pairs -- so the difference
+stays on the record.
 
 CLEAN-ROOM: reads captured frames only. No VSI/HPE source, no binaries, no
 recomputation of an unpublished algorithm.
 """
 import collections
-import gzip
 import os
-import shutil
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -80,31 +78,13 @@ def is_real(mac):
     return mac[:3].hex() in REAL_OUI
 
 
-def walk_inputs(args, with_gz=True):
-    """Every .pcap in the arguments, and the .pcap.gz ones too."""
-    out = list(rc.walk_inputs(args))
-    if not with_gz:
-        return sorted(out)
-    for a in args:
-        if os.path.isdir(a):
-            for root, _d, files in os.walk(a):
-                out += [os.path.join(root, f) for f in files
-                        if f.endswith('.pcap.gz')]
-        elif a.endswith('.pcap.gz'):
-            out.append(a)
-    return sorted(out)
+def plain_only(paths):
+    """The subset of a walk that is an uncompressed `.pcap`.
 
-
-def bodies(path):
-    """rc.sca_bodies_with_src, with the gzipped captures read too."""
-    if not path.endswith('.gz'):
-        yield from rc.sca_bodies_with_src(path)
-        return
-    with tempfile.NamedTemporaryFile(suffix='.pcap') as tmp:
-        with gzip.open(path, 'rb') as src:
-            shutil.copyfileobj(src, tmp)
-        tmp.flush()
-        yield from rc.sca_bodies_with_src(tmp.name)
+    What the shared walker saw before rd vms-e80 -- kept so the selftest can
+    still pin how much of the evidence that view lost.
+    """
+    return [p for p in paths if not p.endswith('.gz')]
 
 
 def pair_one_capture(path, status):
@@ -114,7 +94,7 @@ def pair_one_capture(path, status):
     whose (dst, src, token) matches it -- the transaction, not the order.
     """
     pairs, pending = [], {}
-    for _idx, src, dst, body in bodies(path):
+    for _idx, src, dst, body in rc.sca_bodies_with_src(path):
         if len(body) < BODY_LEN:
             continue
         if body[8] == REQ_CAT and body[9] == ENQ_OP and body[4:8] != b'\0' * 4:
@@ -154,7 +134,7 @@ def answer_status_table(paths):
     """Counter of (sender class, body[34]) over every 82/01 in the corpus."""
     tab = collections.Counter()
     for p in paths:
-        for _idx, src, _dst, body in bodies(p):
+        for _idx, src, _dst, body in rc.sca_bodies_with_src(p):
             if len(body) >= BODY_LEN and body[8] == ANS_CAT and \
                body[9] == ENQ_OP:
                 tab[('real' if is_real(src) else 'ovmx', body[34])] += 1
@@ -224,8 +204,8 @@ def expect(ok, what):
 
 def selftest(repo):
     caps = os.path.join(repo, 'tests', 'lab', 'captures')
-    paths = walk_inputs([caps])
-    pcap_only = walk_inputs([caps], with_gz=False)
+    paths = rc.walk_inputs([caps])
+    pcap_only = plain_only(paths)
     bad = 0
     q = real_pairs(paths, QUEUED)
     root, sub = split_root_sub(q)
@@ -317,7 +297,7 @@ def main(argv):
     if len(argv) < 2:
         print(__doc__)
         return 2
-    report(walk_inputs(argv[1:]))
+    report(rc.walk_inputs(argv[1:]))
     return 0
 
 

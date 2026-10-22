@@ -854,9 +854,11 @@ vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,
  *   - the named op-0x04 directory-entry removal (rd vms-e09, R3);
  *   - the op-0x03 RELEASE (rd vms-194 D1), on its opcode alone because a
  *     release carries no name. MEASURED by tools/cluster/dlm_deq_census.py:
- *     0 of 9,858 real releases carry a transaction, and the corpus holds ZERO
- *     cat-0x82 op-0x03 answers. See the implementation for what OVMX's own 11
- *     releases cost.
+ *     0 of 40,960 real releases carry a transaction, and the corpus holds
+ *     ZERO cat-0x82 op-0x03 answers (9,858 when the rule was first read; rd
+ *     vms-e80 widened the walker to the `.pcap.gz` captures and the figure
+ *     grew 4.2x without an exception). See the implementation for what OVMX's
+ *     own 15 releases cost.
  */
 int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len);
 
@@ -1493,27 +1495,40 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  * block is the CODEC for it: the parsers for the steps a real old master and a
  * real holder send, the two ANSWER builders, and the op-0x14 builder.
  *
- * THE EVIDENCE, and it is the whole corpus rather than one arm. Every pcap
- * under tests/lab/captures (122 files) walked for cat-0x02 op-0x0e..0x14 and
- * its answer, paired by the SCS transaction id at body[4:8]:
+ * THE EVIDENCE, and it is the whole corpus rather than one arm. Every capture
+ * under tests/lab/captures (156 files, `.pcap` and `.pcap.gz` alike since rd
+ * vms-e80 -- the 32 gzipped ones were invisible to the walker before, and they
+ * are four fifths of the frames) walked for cat-0x02 op-0x0e..0x14 and its
+ * answer, paired by the SCS transaction id at body[4:8]:
  *
- *     02/0e -> 82/15    63 pairs        02/11   7 notifications
- *     02/0f -> 82/15    70 pairs        02/13  68 notifications
- *     02/10 -> 82/15    61 pairs        02/12 -> 82/01  420 pairs
- *     02/14 -> 82/15    68 pairs                 (9 ROOT, 411 sub)
+ *     02/0e -> 82/15   808 pairs        02/11   386 notifications
+ *     02/0f -> 82/15 1,195 pairs        02/13 1,180 notifications
+ *     02/10 -> 82/15   798 pairs        02/12 -> 82/01  3,521 pairs
+ *     02/14 -> 82/15 1,174 pairs                (792 ROOT, 2,729 sub)
  *
  * ---------------------------------------------------------------------------
- * RULE 1 -- THE 82/15 ANSWER IS THE REQUEST, WITH THREE BYTES REWRITTEN.
+ * RULE 1 -- THE 82/15 ANSWER SETS THREE BYTES, AND THE REST IS NOT A RULE.
  *
- * Over all 262 answered steps the answer is the request body VERBATIM except
+ * Over all 3,975 answered steps the answer carries
  *   body[0:4]  the CM's send/ack message numbers (the envelope, not ours)
- *   body[8]    0x82     262/262
- *   body[9]    0x15     262/262
- *   body[34]   0xfa     262/262 -- the universal cat-0x82 outcome byte
- * ...and NOTHING else, for op 0x0e, 0x10 and 0x14. For op 0x0f ONLY, a NEW
- * MASTER (the member that has an open remaster for that tree) also clears
- * body[28:32]: 63 of 70 pairs clear it, the other 7 are the plain-member role
- * and keep it (rd vms-cab grounds the same rule on 3,299 pairs).
+ *   body[8]    0x82     3,975/3,975
+ *   body[9]    0x15     3,975/3,975
+ *   body[34]   0xfa     3,975/3,975 -- the universal cat-0x82 outcome byte
+ * and for op 0x0f ONLY, a NEW MASTER (the member that has an open remaster for
+ * that tree) also clears body[28:32]: 811 of 1,195 pairs clear it, the rest are
+ * the plain-member role and keep it (rd vms-cab grounds the same rule on 3,299
+ * pairs).
+ *
+ * THE REST OF THE BODY IS THE REQUEST ECHOED IN 3,527 of the 3,975, AND IT IS
+ * NOT AN INVARIANT. The first reading of this rule said "the request VERBATIM
+ * except those bytes, and NOTHING else", on the 262 pairs the walker then saw.
+ * The widened corpus has 448 answers that differ elsewhere -- 445 of them
+ * answering an op-0x14, all inside two captures -- and the differing bytes
+ * carry unrelated message text (one answer's name span reads ":39.50  ",
+ * another's "MSCP$SIGNAL"): the answering node's own send buffer. So the echo
+ * is what a reused receive buffer looks like, and a RECIPIENT may read only the
+ * cells above. This codec's builders echo, which is the commonest real form;
+ * nothing in this codec may DEPEND on an inbound 82/15 echoing anything.
  *
  * THAT IS A NARROWER REWRITE THAN vms_dlm_op0f_ack_build USED TO DO. It wrote
  * the whole 32-bit grant record at body[32:36]; this builder writes only
@@ -1531,41 +1546,50 @@ extern const struct vms_wire_allow_table vms_dlm_allow_table;
  *   body[20:24]  the lock id THIS engine minted for the record -- read back
  *                off the LKB it names (vms_dlm_adopt_lock_result.master_lkid)
  *   body[24:28]  the holder's own lock id, ECHOED: the correlation
- *   body[28]     0x10         420/420        body[29] 0  420/420
- *   body[30:32]  0, 0         411/411 on SUB records
- *   body[32:36]  the grant record, body[34] = 0xfa  420/420
+ *   body[28]     0x10         3,509/3,521    body[29] 0  3,521/3,521
+ *   body[30:32]  0, 0         2,549/2,729 on SUB records
+ *   body[32:36]  the grant record, body[34] = 0xfa  3,521/3,521
  *   body[36:52]  the resource's VALUE BLOCK; body[52:56] its SEQUENCE. It is
- *                THE SPAN THE RECORD ITSELF CARRIED AT body[88:108] -- 420 of
- *                420 real pairs, ROOT and sub alike, with no exception (rd
- *                vms-ed5 measured it; the earlier reading of this header
- *                called a sub answer's span "a busy master's residual buffer"
- *                on 390 of them and wrote twenty zeros, which was wrong in
- *                exactly those 390). The holder's record is where an adopted
+ *                THE SPAN THE RECORD ITSELF CARRIED AT body[88:108] -- 3,336
+ *                of 3,521 real pairs, ROOT (784/792) and sub (2,552/2,729)
+ *                alike (rd vms-ed5 measured it on the 420 pairs the walker
+ *                then read; rd vms-e80 widened the corpus to the 32 `.pcap.gz`
+ *                captures and the figure became a ratio: the 185 exceptions
+ *                are in three captures, two of them arms whose own RESULTS.md
+ *                records a node wedged and removed by the survivors. Before
+ *                that, the reading called a sub answer's span "a busy
+ *                master's residual buffer" on 390 of them and wrote twenty
+ *                zeros, which was wrong in exactly those 390). Of the records
+ *                that CARRY a block, 2,702 of 2,702 carry a non-zero sequence
+ *                with it. The holder's record is where an adopted
  *                resource's block comes from, SDA-matched on the new master
  *                after the move (`RMLVB-0123456789` seq 1 in the controlled
  *                arms; live F11B$ blocks at seq 0x131/0x15a in two others),
  *                so this cell is a READ-BACK of the RSB the adoption engine
  *                just filled -- vms_dlm_adopt.h -- and not an echo. A record
  *                whose span is twenty zeros leaves the resource's block
- *                ALONE and its answer carries twenty zeros, which is what 21
- *                of 21 such real answers carry.
+ *                ALONE and its answer carries twenty zeros, which is what 811
+ *                of the 819 such real answers carry.
  *   body[56:132] echoed, the holder's own bytes -- which is why the block
  *                appears TWICE in a real answer: once at body[36:56] from the
  *                RSB and once at body[88:108] inside the echo.
  *
  * TWO CELLS ARE NOT NAMED, and neither is guessed:
  *
- *   body[30:32]  f0 01 on 5 of 9 real ROOT answers, f1 01 on the other 4,
- *                and 0, 0 on 411 of 411 SUB answers and 38 of 38 plain ENQ
+ *   body[30:32]  f1 01 on 698 of 792 real ROOT answers, f0 01 on 88 more, and
+ *                six oddities in the two distressed captures (f2 01 once,
+ *                05 02 four times, 04 00 once); 0, 0 on 2,549 of 2,729 SUB
+ *                answers -- the 180 exceptions all read 02 00 and all come
+ *                from one capture -- and 38 of 38 plain ENQ
  *                grants. It is not residue -- it correlates with the frame's
  *                role and it is near-constant across four unrelated clusters
  *                -- but no capture and no SDA page names what it IS. So it
  *                rides exactly like the BLKAST mode-context pair above:
  *                `root_ctx_valid` opt-in, and a caller with no real
  *                executive value for it gets the grant's 0, 0.
- *   body[32:34]  0x0001 on 283 of 420 real answers -- the value the GRANT
- *                record grounds, 38/38 -- and a PER-REMASTER number on the
- *                other 137: 0x0365 across every one of RMT6's answers,
+ *   body[32:34]  0x0001 on 1,302 of 3,521 real answers -- the value the GRANT
+ *                record grounds, 38/38 -- zero on 819, and a PER-REMASTER
+ *                number on the rest: 0x0365 across every one of RMT6's answers,
  *                0x036e across every one of RMT7's eleven minutes later,
  *                0x04d3 across every one of RA8's (whose N->O op-0x14
  *                carries 0x04d2 in the same cell), 0x07b8 in RA2. The same number reappears as the low half of

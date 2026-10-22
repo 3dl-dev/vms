@@ -870,7 +870,7 @@ int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len)
 	 * used the buffer), so there is no shape left to admit it on.
 	 *
 	 * MEASURED, tools/cluster/dlm_deq_census.py over every committed pcap:
-	 *   real op-0x03 frames carrying a transaction at body[4:8]  0 of 9,858
+	 *   real op-0x03 frames carrying a transaction at body[4:8]  0 of 40,960
 	 *   cat-0x82 op-0x03 ANSWERS anywhere in the corpus                   0
 	 * Nobody answers a release, and no real sender opens a transaction on
 	 * one. OVMX opened one on all 11 of its own, which minted a token on
@@ -1757,11 +1757,11 @@ vms_codec_status_t vms_dlm_seq_put(uint8_t *body, uint32_t cap, uint16_t n)
 /*
  * THE RECORD'S OWN VALUE BLOCK (rd vms-ed5). An op-0x12 carries the holder's
  * copy of the resource's value block at body[88:104] and its SEQUENCE at
- * body[104:108], and the 82/01 answer's body[36:56] is that span -- 420 of 420
- * real pairs, ROOT and sub alike (header rule 2). PRESENT is "the span is not
- * twenty zeros": in 399 of 399 records with a non-zero block the sequence is
- * non-zero too, and in 21 of 21 with a zero block it is zero, so the two agree
- * and neither is read as an assertion about the other. ABSENT leaves the
+ * body[104:108], and the 82/01 answer's body[36:56] is that span -- 3,336 of
+ * 3,521 real pairs, ROOT and sub alike (header rule 2). PRESENT is "the span is
+ * not twenty zeros": in 2,702 of 2,702 records with a non-zero block the
+ * sequence is non-zero too, and in 804 of the 819 with a zero block it is zero,
+ * so the two agree and neither is read as an assertion about the other. ABSENT leaves the
  * resource's block alone -- twenty zeros presented as a value block is the
  * placeholder INV-6 forbids.
  */

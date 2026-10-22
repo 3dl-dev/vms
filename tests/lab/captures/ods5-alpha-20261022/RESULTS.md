@@ -176,7 +176,7 @@ under PARSE_STYLE=EXTENDED, default device `SYS$SYSROOT:[SYSMGR]`.
 | character | unescaped | escaped `^c` |
 |---|---|---|
 | space | `ab.t` (the space is dropped) | `a^_b.t` |
-| `! # & ' ( ) + , / : ; < = > @ [ \ ] ^ `` ` `` { | } "` | fails ("") | kept as `^c` |
+| `! # & ' ( ) + , / : ; < = > @ [ \ ] ^ { } "`, backquote, vertical bar | fails ("") | kept as `^c` |
 | `$` `-` | kept | `^` dropped: `a$b.t`, `a-b.t` |
 | `~` | kept | `^` dropped: `a~b.t` |
 | `_` | kept | `^_` is a SPACE: `a^_b.t` |

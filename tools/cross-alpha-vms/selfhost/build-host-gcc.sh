@@ -90,6 +90,7 @@ make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.lo
 for e in cc1 cc1plus xgcc cpp ld ar; do cp gcc/$e.exe $O/$e.exe; done
 cp gcc/xg++.exe $O/gxx.exe
 # vms-9a0: what compiling a cc1 source file needs, as one tree (GCCSRC/): GCC's
+# (every front end's .def too: the generated all-tree.def includes them all)
 # source headers and the sources compiled natively (SRC/), the headers this
 # build generated (BLD/: auto-host.h, config.h, tm.h, options.h, insn-*.h ...),
 # and GMP/MPFR/MPC's (HOST/include). The gate stages it on the OVMX system disk
@@ -97,8 +98,7 @@ cp gcc/xg++.exe $O/gxx.exe
 G=$O/gccsrc; rm -rf $G; mkdir -p $G/SRC $G/BLD $G/HOST
 S=$O/src/gcc-14.2.0
 ( cd $S && find gcc include libcpp/include libdecnumber libbacktrace libcody \
-      \( -path gcc/testsuite -o -path gcc/jit -o -path gcc/doc -o -path gcc/po -o -path gcc/m2 \
-         -o -path gcc/ada -o -path gcc/rust -o -path gcc/go -o -path gcc/d -o -path gcc/fortran \) -prune \
+      \( -path gcc/testsuite -o -path gcc/jit -o -path gcc/doc -o -path gcc/po \) -prune \
       -o -type f \( -name '*.h' -o -name '*.def' -o -name '*.hh' \) -print ) > $O/gccsrc.list
 ( cd $S && tar cf - -T $O/gccsrc.list ) | ( cd $G/SRC && tar xf - )
 mkdir -p $G/SRC/gcc/c && cp $S/gcc/c/c-lang.cc $G/SRC/gcc/c/

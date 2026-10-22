@@ -15,6 +15,7 @@
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
  * OVMX-PARTIAL: sys$setdfprot (vms-44a) -- exec: the default file protection is the executive's per-process attribute (VMS_IOCTL_DFPROT): set in one process, a REGISTER_CONTINUE child inherits it, and nothing in this file holds the value (tests/qemu/test_syssvc_setdfprot.c reads it back across that inheritance).
  * OVMX-LOCAL: sys$setdfprot -- the RMS$_NORMAL status mapping (the Alpha V8.4 lab's service returns RMS$_NORMAL, not SS$_NORMAL). The setdfprot-not-stored negative control now anchors the executive half; the status mapping is the local half, so it stays PARTIAL.
+ * OVMX-EXECUTIVE: sys$set_process_propertiesw (vms-b9c) proof=tests/qemu/test_syssvc_pprop.c -- the parse style is the executive's per-process attribute (VMS_IOCTL_PPROP -> vms_ioctl_pprop, kernel-core/vms_proctab.c): stored in the PCB, read back by RMS on every $PARSE, inherited by the next image; nothing in this file holds it.
  * OVMX-USERSPACE: sys$get_entropy (vms-44a) -- getrandom(2) (arc4random_buf on BSD): the host kernel's
  *     CSPRNG, not an executive entropy pool; the bytes are real entropy.
  * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
@@ -152,6 +153,34 @@ uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot)
 {
     uint32_t st = vms_kif_dfprot(newprot, oldprot);
     return (st & 1) ? RMS$_NORMAL : st;
+}
+
+/*
+ * sys$set_process_propertiesw - set a process property (rd vms-b9c).
+ *
+ * The public OpenVMS form: three null arguments, the PPROP$C_ property code, its
+ * new value, an optional receiver of the previous value, a buffer size and flags
+ * (the last two are for properties OVMX does not implement). Implemented: the
+ * file-name parse style -- PPROP$C_PARSE_STYLE_PERM (the process's) and
+ * PPROP$C_PARSE_STYLE_TEMP (the current image's), values PARSE_STYLE$C_TRADITIONAL
+ * / _EXTENDED (docs/oracle/alpha84-starlet-defs/PPROPDEF.txt). The value is the
+ * executive's; RMS reads it on each $PARSE. Any other property: SS$_BADPARAM
+ * (not implemented here, said so rather than pretended).
+ */
+uint32_t sys$set_process_propertiesw(void *nullarg1, void *nullarg2, void *nullarg3,
+                                     uint32_t property, uint64_t value,
+                                     uint64_t *prev_value, uint64_t buffer_size,
+                                     uint32_t flags)
+{
+    uint32_t v = (uint32_t)value, old = 0, st;
+
+    (void)nullarg1; (void)nullarg2; (void)nullarg3; (void)buffer_size; (void)flags;
+    if (value > 0xFFFFFFFFull)
+        return SS$_BADPARAM;
+    st = vms_kif_pprop(property, &v, &old);
+    if ((st & 1) && prev_value)
+        *prev_value = old;
+    return st;
 }
 
 /*

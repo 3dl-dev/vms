@@ -772,6 +772,11 @@ struct vms_proc {
 	 * with dfprot; "" = never set. */
 	char                ddir[VMS_DDIR_SIZE];
 
+	/* $SET_PROCESS_PROPERTIESW parse style (VMS_IOCTL_PPROP, rd vms-b9c),
+	 * as src/kernel/vms_internal.h: permanent and current-image style. */
+	uint8_t             parse_style_perm;
+	uint8_t             parse_style_image;
+
 	/* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
 	 * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
 	 * privilege mask. Same hash_lock as the identity fields. */
@@ -1530,6 +1535,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);

@@ -1362,6 +1362,12 @@ static void vms_proc_copy_identity(struct vms_proc *proc, struct vms_proc *paren
     proc->dfprot     = parent->dfprot;      /* $SETDFPROT is inherited */
     proc->dfprot_set = parent->dfprot_set;
     memcpy(proc->ddir, parent->ddir, sizeof(proc->ddir)); /* $SETDDIR too */
+    /* parse style (rd vms-b9c): the permanent style carries over, and the new
+     * image starts at it -- PARSE_STYLE_TEMP lasts only for the image that set
+     * it. What a SUBPROCESS starts with is not yet observed on VMS; it takes
+     * the creator's permanent style like the other defaults. */
+    proc->parse_style_perm  = parent->parse_style_perm;
+    proc->parse_style_image = parent->parse_style_perm;
     memcpy(proc->rights_id, parent->rights_id, sizeof(proc->rights_id));
     memcpy(proc->rights_attr, parent->rights_attr, sizeof(proc->rights_attr));
     proc->rights_n = parent->rights_n;          /* the process rights list (vms-7d5a) */
@@ -2004,6 +2010,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_dfprot(proc, arg);
     case VMS_IOCTL_DDIR:
         return vms_ioctl_ddir(proc, arg);
+    case VMS_IOCTL_PPROP:
+        return vms_ioctl_pprop(proc, arg);
     case VMS_IOCTL_RIGHTS:
         return vms_ioctl_rights(proc, arg);
     case VMS_IOCTL_PRI:

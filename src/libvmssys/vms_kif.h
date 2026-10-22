@@ -833,6 +833,9 @@ uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);
 
 /* $SETDFPROT -- process default file protection, held by the executive. */
 uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot);
+/* $SET_PROCESS_PROPERTIESW executive half (rd vms-b9c): one process property
+ * (PPROP$C_ code; the parse style today) read and optionally set. */
+uint32_t vms_kif_pprop(uint32_t property, const uint32_t *newvalue, uint32_t *oldvalue);
 /* $SETDDIR: the executive-held process default directory (rd vms-872). */
 uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap);
 /* The process rights list (vms-7d5a, VMS_IOCTL_RIGHTS): $GRANTID / $REVOKID. op = VMS_RIGHTS_OP_GRANT / _REVOKE; pid 0 = the caller. */

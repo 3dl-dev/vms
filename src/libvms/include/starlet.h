@@ -1777,6 +1777,11 @@ uint32_t sys$clrast(void);
 
 /** sys$setdfprot - Set/read the process default file protection (executive-resident); returns RMS$_NORMAL */
 uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot);
+/** sys$set_process_propertiesw - set a process property (PPROP$C_; the parse style, rd vms-b9c) */
+uint32_t sys$set_process_propertiesw(void *nullarg1, void *nullarg2, void *nullarg3,
+                                     uint32_t property, uint64_t value,
+                                     uint64_t *prev_value, uint64_t buffer_size,
+                                     uint32_t flags);
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

@@ -138,7 +138,7 @@ fi
 # disclosed, not silently assumed fixed -- see the comment there.
 ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 
-# Six virtio disks (vms-3e8 + vms-0044 + vms-3e8e + vms-7e7e). The executive enumerates the
+# Seven virtio disks (vms-3e8 + vms-0044 + vms-3e8e + vms-7e7e + vms-3ea). The executive enumerates the
 # node's virtio block devices into DK units (VDA0: from vda, VDA100: from vdb,
 # VDA200: from vdc, VDA300: from vdd, VDA400: from vde) at module init -- test_kmod_disk asserts the
 # vda/vdb mapping against a real vms.ko, so the guest must actually HAVE the
@@ -242,6 +242,12 @@ else
     echo "                the ODS-5 ACP test (vms-7e7e) needs the real Alpha ODS-5 volume on VDA500: (vdf)" >&2
     exit 2
 fi
+#   vdg (VDA600:) -- a SECOND copy of /ods2_search.img: a different unit carrying
+#                    the same label (OVMXSEARCH) as VDA200:. test_syssvc_acp_
+#                    volalrmnt (rd vms-3ea) proves $MOUNT refuses it while
+#                    VDA200: is mounted (%MOUNT-F-VOLALRMNT).
+OVMX_DISK6=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+cp "$OVMX_ODS2_SEARCH_SRC" "$OVMX_DISK6"
 # A scratch SCSI disk (blank), attached as a REAL virtio-scsi disk below. Its
 # only purpose is to prove the executive's non-virtio disk probe: with a real
 # /dev/sda present in the guest, vms_devtab_probe_disks() must enter SDA0:
@@ -250,7 +256,7 @@ fi
 # not read the contents. vms-ddc / vms-47d (device-native naming beyond virtio).
 OVMX_SCSI0=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 truncate -s 16M "$OVMX_SCSI0"
-trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3" "$OVMX_DISK4" "$OVMX_DISK5" "$OVMX_SCSI0"' EXIT
+trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3" "$OVMX_DISK4" "$OVMX_DISK5" "$OVMX_DISK6" "$OVMX_SCSI0"' EXIT
 
 # One virtio-net NIC (vms-9d2). Exactly as the two virtio disks above give the
 # executive real block devices to enumerate into DK units, this gives it a real
@@ -342,6 +348,8 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -device virtio-blk-pci,drive=ovmxdisk4 \
     -drive if=none,id=ovmxdisk5,file="$OVMX_DISK5",format=raw \
     -device virtio-blk-pci,drive=ovmxdisk5 \
+    -drive if=none,id=ovmxdisk6,file="$OVMX_DISK6",format=raw \
+    -device virtio-blk-pci,drive=ovmxdisk6 \
     -device virtio-scsi-pci,id=scsi0 \
     -drive if=none,id=ovmxscsi0,file="$OVMX_SCSI0",format=raw \
     -device scsi-hd,drive=ovmxscsi0,bus=scsi0.0 \

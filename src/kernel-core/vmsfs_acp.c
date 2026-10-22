@@ -926,7 +926,8 @@ long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg)
 
         acp_vol_resnam_kind(vol, 'v', vresnam, sizeof(vresnam));
         vms_lock_acp_vol_standing(proc, vresnam, &vol->vol_lkid, &remote);
-        if (vol->vol_lkid != 0 && remote &&
+        if (0 /* NEGCTL rd vms-3ea: cross-member VOLALRMNT check removed */ &&
+            vol->vol_lkid != 0 && remote &&
             backing_major != VMS_DEVTAB_SERVED_MAJOR) {
             vms_lock_acp_vol_release(proc, vol->vol_lkid);
             exec_free(vol);

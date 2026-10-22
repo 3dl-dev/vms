@@ -94,14 +94,16 @@ class TestSysgenStore(unittest.TestCase):
         self.assertEqual(p["LOCKDIRWT"]["current"], 0)
         self.assertEqual(p["QDSKVOTES"]["current"], 0)
 
-    def test_seed_actually_omits_them(self):
-        """Guard the premise: the shipped seed IS incomplete (E61), so the
-        completeness this tool adds is real, not a straw man."""
+    def test_seed_carries_them(self):
+        """The shipped seed now agrees with the SYSGEN factory table (#1841,
+        vms-c2b gate: factory table == shipped seed), so it carries all six
+        parameters it used to omit (E61). Guard that, so a regression to an
+        incomplete seed is caught here rather than at boot."""
         seed = open(_SEED, "rb").read()
         for name in ("LOCKDIRWT", "QDSKVOTES", "TIMVCFAIL", "NISCS_MAX_PKTSZ",
                      "MSCP_LOAD", "MSCP_SERVE_ALL"):
-            self.assertIsNone(_find_record_base(seed, name),
-                              "seed unexpectedly already has %s" % name)
+            self.assertIsNotNone(_find_record_base(seed, name),
+                                 "seed is missing %s" % name)
 
     def test_rejects_bad_scsnode(self):
         with self.assertRaises(ValueError):

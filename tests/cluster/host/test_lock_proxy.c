@@ -1262,6 +1262,182 @@ static void rms326_counted_binary_names(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * rd vms-b67a: A SUB-LOCK UNDER A PROXY PARENT
+ *
+ * WHAT WENT WRONG AT TWO REAL V7.3 VAXes (tests/lab/captures/
+ * vms-c2b-ovmx-holder-20261021). OVMX held the ROOT of a tree a real VAX
+ * mastered -- routed the full two-hop path, with that master's SDA showing the
+ * MSTCPY. Its three SUB-locks then went to the DIRECTORY NODE under each sub
+ * NAME's own derived hash, as if each were a root; the directory answered "no
+ * entry"; and OVMX MASTERED THEM LOCALLY and reported them granted at CW. The
+ * master's SDA lists no such locks. A grant no master gave, and one
+ * sub-resource name mastered on two nodes at once.
+ *
+ * WHAT A REAL NODE DOES, published AND measured: only ROOT resources are in the
+ * lock directory (Davis p. 6-29) and a resource TREE HAS ONE MASTER, so a lock
+ * whose PARID names a parent goes to the PARENT's master. All 7 real sub-lock
+ * requests in the corpus are addressed to the node that granted their parent,
+ * none is answered 0xf9, and each names its parent by the pair (its own parent
+ * handle, that parent's master handle) at body[36:44] -- byte-for-byte the pair
+ * the parent's own grant carried (tools/cluster/dlm_sublock_census.py).
+ *
+ * These two cases drive the REAL engine for both halves of that: the route, and
+ * the honest refusal when the parent cannot yet be named.
+ * ================================================================ */
+static void b67a_sublock_goes_to_the_parents_master(void)
+{
+	/* A real parent-master handle, from the 2026-10-22 driven arm: VAX1's
+	 * master lock id for RMT9's root, which its SDA printed as the
+	 * sub-lock's "Par. id: 3C000695". */
+	const uint32_t PARENT_MASTER_LKID = 0x3c000695u;
+	struct vms_dlm_proxy_post post;
+	struct vms_proc proc;
+	uint32_t root = 0, sub = 0, rootS0 = 0, st;
+
+	printf("--- rd vms-b67a: a sub-lock under a PROXY parent goes to the "
+	       "PARENT'S MASTER, never to the directory ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	/* (1) THE ROOT, routed the long way and GRANTED -- which is the only
+	 *     thing that gives this node a parent handle to name. */
+	st = do_enq(&proc, "RMT9", LCK_K_CRMODE, 0, &root);
+	ct_check(st == SS__NORMAL && root != 0,
+		 "the root $ENQ creates a proxy and posts a request");
+	ct_check(fm_wait_posts(1, &post), "the root's request was posted");
+	ct_check_eq_u32(post.dst_csid, CSID_DIRECTORY,
+			"the ROOT's first request goes to the DIRECTORY node");
+	ct_check(post.parent_own_lkid == 0u && post.parent_master_lkid == 0u,
+		 "*** a ROOT request names NO parent -- both halves of "
+		 "body[36:44] are 0, which is what a root MEANS on the wire "
+		 "(74,730 of the corpus's 74,737 real requests) ***");
+	st = deliver_grant(&proc, root, LCK_K_CRMODE, PARENT_MASTER_LKID,
+			   "RMT9", NULL, 0, 0);
+	ct_check_eq_u32(st, SS__NORMAL,
+			"the master GRANTS the root and names its own handle");
+
+	/* (2) THE SUB-LOCK. Note what is deliberately NOT done: no hash is
+	 *     learned for the sub NAME. A request addressed to a master needs no
+	 *     directory index, and this executive will never have learned one for
+	 *     a name no directory was ever asked about. */
+	{
+		struct vms_enq_args a;
+
+		memset(&a, 0, sizeof(a));
+		a.lkmode = LCK_K_CWMODE;
+		a.parid = root;
+		strscpy(a.resnam, "S0", sizeof(a.resnam));
+		vms_ioctl_enq(&proc, (unsigned long)(void *)&a);
+		st = a.status;
+		sub = a.lkid;
+	}
+	ct_check(st == SS__NORMAL && sub != 0,
+		 "*** the sub-lock $ENQ is accepted with NO directory hash for "
+		 "its name ***");
+	ct_check(fm_wait_posts(2, &post), "the sub-lock's request was posted");
+	ct_check_eq_u32(post.dst_csid, CSID_MASTER,
+			"*** and it goes to the PARENT'S MASTER -- never to the "
+			"directory, as 7 of 7 real sub-lock requests do ***");
+	ct_check_eq_u32(post.to_directory, 0u,
+			"  ...and it is NOT a directory lookup");
+	ct_check_eq_u32(post.parent_own_lkid, root,
+			"*** body[36:40] is OUR OWN handle for the parent, read "
+			"off the parent LKB ***");
+	ct_check_eq_u32(post.parent_master_lkid, PARENT_MASTER_LKID,
+			"*** body[40:44] is the handle THE PARENT'S MASTER gave "
+			"it -- the pair that parent's own grant carried ***");
+	ct_check_eq_u32(post.dir_hash_known, 0u,
+			"  and NO hash is asserted for a sub name nobody was "
+			"asked about (Rule 8)");
+	ct_check(strcmp(post.resnam, "S0") == 0,
+		 "the posted name is the sub-resource's own");
+	ct_check_eq_u32(post.lkmode, LCK_K_CWMODE,
+			"body[30] is the sub-lock's own requested mode");
+
+	/* (3) IT IS A SUB-RESOURCE, not a second root called S0. Asked the way
+	 *     that can tell them apart: a ROOT $ENQ for the same name, with a
+	 *     hash learned for it, still routes through the DIRECTORY and still
+	 *     names no parent -- so it is a different resource block. */
+	st = do_enq(&proc, "S0", LCK_K_CRMODE, 0, &rootS0);
+	ct_check(st == SS__NORMAL && rootS0 != 0 && rootS0 != sub,
+		 "a ROOT $ENQ for the same name gets its own lock");
+	ct_check(fm_wait_posts(3, &post), "its request was posted too");
+	ct_check_eq_u32(post.dst_csid, CSID_DIRECTORY,
+			"*** and THAT one goes to the DIRECTORY: the sub-resource "
+			"under RMT9 and the root called S0 are different "
+			"resources, so the sub-lock was not named at the root ***");
+	ct_check(post.parent_own_lkid == 0u && post.parent_master_lkid == 0u,
+		 "  ...naming no parent, as a root does");
+}
+
+/*
+ * ...AND THE OTHER HALF: a parent this node holds as a proxy but has NO master
+ * handle for yet (its grant has not arrived) cannot carry a sub-lock at all.
+ * body[40:44] = 0 is what a ROOT record means, so a master receiving one for a
+ * sub-lock would create a SECOND root for the name. Refused honestly, and
+ * NOTHING is posted.
+ */
+static void b67a_sublock_refuses_a_parent_with_no_master_handle(void)
+{
+	struct vms_proc proc;
+	uint32_t root = 0, sub = 0, st;
+	int posts_before;
+
+	printf("--- rd vms-b67a: a sub-lock under a parent with no master "
+	       "handle is REFUSED, not sent ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	/* The root is POSTED and still PENDING: no grant has arrived, so this
+	 * node holds no handle the master would recognise for it. */
+	st = do_enq(&proc, "RMTA", LCK_K_CRMODE, 0, &root);
+	ct_check(st == SS__NORMAL && root != 0, "the root $ENQ is outstanding");
+	ct_check(fm_wait_posts(1, NULL), "its request was posted");
+	pthread_mutex_lock(&fm.lock);
+	posts_before = fm.posts;
+	pthread_mutex_unlock(&fm.lock);
+
+	{
+		struct vms_enq_args a;
+
+		memset(&a, 0, sizeof(a));
+		a.lkmode = LCK_K_CWMODE;
+		a.parid = root;
+		strscpy(a.resnam, "S1", sizeof(a.resnam));
+		vms_ioctl_enq(&proc, (unsigned long)(void *)&a);
+		st = a.status;
+		sub = a.lkid;
+	}
+	ct_check_eq_u32(st, SS__IVLOCKID,
+			"*** a sub-lock under a parent whose grant has not "
+			"arrived is REFUSED ***");
+	ct_check_eq_u32(sub, 0u, "  ...and no lock handle is returned");
+	{
+		int posts_after;
+
+		pthread_mutex_lock(&fm.lock);
+		posts_after = fm.posts;
+		pthread_mutex_unlock(&fm.lock);
+		ct_check_eq_u32((uint32_t)posts_after, (uint32_t)posts_before,
+				"*** and NOTHING WAS POSTED: a zero at "
+				"body[40:44] reads to the master as a ROOT and "
+				"would create a second root for the name ***");
+	}
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -1276,5 +1452,7 @@ int main(void)
 	e09_no_removal_without_a_remote_entry();
 	c55_no_removal_for_an_unregistered_entry();
 	rms326_counted_binary_names();
+	b67a_sublock_goes_to_the_parents_master();
+	b67a_sublock_refuses_a_parent_with_no_master_handle();
 	return ct_summary("test_lock_proxy");
 }

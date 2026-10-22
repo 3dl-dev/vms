@@ -502,6 +502,15 @@ struct vms_lock_entry {
 	                                     * is a follow-on (vms-489). Mirror of the
 	                                     * Linux vms_internal.h field. */
 	/*
+	 * THE PARENT'S MASTER HANDLE (rd vms-b67a): the second half of the
+	 * (own, master) pair a sub-lock request carries at body[36:44], read off
+	 * the PARENT LKB at $ENQ. 0 for a root lock and for a sub-lock under a
+	 * local parent; a proxy parent with no master handle yet makes the $ENQ
+	 * refuse rather than leave this 0 on a frame. Mirror of the Linux
+	 * vms_internal.h field; see there for the full reasoning.
+	 */
+	uint32_t            parent_master_lkid;
+	/*
 	 * PROXY LKB (FC-P4.4) -- the requester-side image of a lock mastered on
 	 * ANOTHER node (Davis p. 6-52's *process copy*). See the Linux twin
 	 * (src/kernel/vms_internal.h) for the full per-field rationale this file

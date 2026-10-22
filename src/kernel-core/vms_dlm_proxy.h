@@ -126,6 +126,21 @@ struct vms_dlm_proxy_post {
 	 * VMS directory answers 0xfe.
 	 */
 	uint32_t req_pid;
+	/*
+	 * THE PARENT THIS SUB-LOCK HANGS UNDER (rd vms-b67a), both halves read
+	 * off the LKB at post time like every other field here: `parent_own_lkid`
+	 * is this node's own handle for the parent, `parent_master_lkid` the
+	 * handle that parent's MASTER gave it. The request's body[36:44] is that
+	 * pair, and 7 real VAX-to-VAX sub-lock requests carry it byte-for-byte
+	 * from the parent's own grant (tools/cluster/dlm_sublock_census.py).
+	 *
+	 * BOTH ZERO for a ROOT request, which is what a root MEANS on the wire --
+	 * so a half-filled pair is refused by the codec rather than sent, and a
+	 * sub-lock whose parent has no master handle yet never reaches this
+	 * struct (vms_enq_core_ex refuses the $ENQ).
+	 */
+	uint32_t parent_own_lkid;
+	uint32_t parent_master_lkid;
 	uint32_t lkmode;       /* requested mode, read from the LKB             */
 	uint32_t flags;        /* LCK_M_* the requester supplied, read from the LKB */
 	char     resnam[32];   /* the RSB's name -- COUNTED, see resnam_len      */

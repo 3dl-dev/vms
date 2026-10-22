@@ -2811,6 +2811,85 @@ static void test_c55_enq_request_on_the_wire(void)
 	conf_dump("dlm_enq_req", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
+/* One little-endian longword out of a composed body, so the assertion below
+ * reads the WIRE and not the struct it was built from. */
+static uint32_t le32_at(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+	       ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/*
+ * rd vms-b67a: THE SAME REQUEST WHEN IT NAMES A PARENT -- a SUB-LOCK.
+ *
+ * Only ROOT resources are in the lock directory (Davis p. 6-29) and a resource
+ * TREE HAS ONE MASTER, so this frame is addressed to the PARENT's master and
+ * carries the pair (own parent handle, parent's master handle) at body[36:44].
+ * Two spans therefore differ from the root form and get their own rows: that
+ * pair, and body[128:132], which this node writes ZERO because the hash indexes
+ * a directory a sub-resource is not in and which was never asked about the name
+ * (Rule 8). The values below are a REAL pair, from the 2026-10-22 driven arm.
+ */
+static void test_b67a_sublock_request_on_the_wire(void)
+{
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[256];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-b67a: the SUB-LOCK request's 132 bytes, all "
+	       "described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&r, 0, sizeof(r));
+	r.mode            = 2u;              /* CW, as RMHOLD's sub-locks     */
+	r.req_lkid        = 0x0100036au;     /* this node's own handle        */
+	r.req_pid         = 0x10000031u;
+	/* THE PARENT PAIR. VAX2's own root handle and VAX1's master handle for
+	 * it, which VAX1's SDA printed as the sub-lock's "Par. id: 3C000695"
+	 * (tests/lab/captures/vms-b67a-sublock-arm-20261022, landing with the
+	 * arm's own evidence). */
+	r.parent_own_lkid    = 0x59000076u;
+	r.parent_master_lkid = 0x3c000695u;
+	/* NO HASH: a sub-resource is not in the directory. */
+	r.dir_hash_valid  = 0u;
+	r.res_group       = 1u;
+	r.res_acmode      = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len        = 2u;
+	memcpy(r.name, "S0", 2);
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence");
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_REQUEST);
+	ct_check(le32_at(b + 36u) == r.parent_own_lkid &&
+		 le32_at(b + 40u) == r.parent_master_lkid,
+		 "*** body[36:44] is the PARENT PAIR, which is what makes this a "
+		 "sub-lock and not a second root of the same name ***");
+	ct_check(b[128] == 0 && b[129] == 0 && b[130] == 0 && b[131] == 0,
+		 "*** and body[128:132] is ZERO: the hash indexes a directory "
+		 "this resource is not in, and no directory was ever asked "
+		 "about the name (Rule 8) ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
+		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
+		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid);
+	conf_dump("dlm_enq_req_sub", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 /*
  * rd vms-85f: THE QUEUED ANSWER, composed the way the shipping REPLY path
  * composes it -- the codec's body, the cluster's DLM sequence, then the
@@ -3062,6 +3141,7 @@ int main(void)
 	test_52d_startup_query_answered_from_csb();
 	test_e09_dir_remove_on_the_wire();
 	test_c55_enq_request_on_the_wire();
+	test_b67a_sublock_request_on_the_wire();
 	test_85f_queued_answer_on_the_wire();
 	test_194_release_opens_no_transaction();
 	test_194_release_on_the_wire();

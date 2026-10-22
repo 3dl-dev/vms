@@ -227,6 +227,39 @@ dlm_deq	*	108	12	const	const:0	body[36:48]: a real release's STALE BUFFER -- 254
 dlm_deq	*	120	76	const	const:0	body[48:124]: NO RESOURCE NAME, and no residue. A real release carries no name -- the codec refuses to read one, because what a real $DEQ leaves here is whatever last used the buffer (142, 47, 97 ... distinct values per byte) -- so writing one would add a field the reference does not have (rd vms-b5b0)
 dlm_deq	*	196	4	const	const:0	body[124:128]: a real release carries ffffffff (22,413 of 41,049) or zero (16,980-17,066 per byte); this node writes the zero form, which is a measured real one. UNLIKE the request, whose body[124:128] is ffffffff in 21,656 of 21,656 -- the release's own census is what licenses the difference
 dlm_deq	*	200	4	const	const:0	body[128:132]: a real release's tail residue (174-243 distinct values per byte, all-zero in about 12,500 of 41,049); this node sends none
+# ---- rd vms-b67a: THE SAME REQUEST WHEN IT NAMES A PARENT (a SUB-LOCK).
+#      Only ROOT resources are in the lock directory (Davis p. 6-29) and a
+#      resource TREE HAS ONE MASTER, so a lock whose PARID names a parent goes
+#      to the PARENT's master. Measured over the corpus by
+#      tools/cluster/dlm_sublock_census.py (pinned by ctest): of 74,737 real
+#      cat-0x02 op-0x01 requests, SEVEN name a sub-resource -- two senders, two
+#      modes -- and all seven are addressed to the node that granted their
+#      parent, none is answered 0xf9, and each names its parent by the pair
+#      (own parent handle, parent's master handle) at body[36:44], byte-for-byte
+#      the pair that parent's own grant carried. Identical to dlm_enq_req except
+#      at those two spans and at body[128:132]. ----
+dlm_enq_req_sub	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+dlm_enq_req_sub	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_enq_req_sub	*	76	4	derived	any:envelope	txn/token: a request IS answered, so the envelope OPENS a transaction -- unlike the op-0x04 removal, which is a notification and carries 0 here
+dlm_enq_req_sub	*	80	1	const	const:2	category 0x02, the request
+dlm_enq_req_sub	*	81	1	const	const:1	op 0x01 (an ENQ at a master and a root lookup at a directory are the same opcode)
+dlm_enq_req_sub	*	82	2	const	const:0	body[10:12]: stale buffer in a real request; 0 in 16,589 of 21,499, and this node sends no residue (rd vms-42de)
+dlm_enq_req_sub	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b); 21,499 of 21,499
+dlm_enq_req_sub	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq), as on every DLM message
+dlm_enq_req_sub	*	88	4	const	const:0	body[16:20]: stale buffer in a real request; 0 in 17,087 of 21,499
+dlm_enq_req_sub	*	92	4	derived	state:cell	body[20:24]: the MASTER's handle once the master has named one, and the REQUESTING PROCESS's id until then -- read off the LKB and its owning PCB. NEVER ZERO: real senders write a PID-form value 20,368 times and a lock id 1,116 times against 15 zeros (0.07%), and a real directory answers a zero cell body[34] = 0xfe 12 times out of 12 while answering a nonzero one 0 times out of 19,377 (rd vms-c55)
+dlm_enq_req_sub	*	96	4	derived	state:lkid	body[24:28]: this node's OWN handle for the lock, which the master echoes back in its grant -- how the requester matches a completion to its lock
+dlm_enq_req_sub	*	100	2	deviation	const:0	body[28:30]: this node writes 0 and a REAL request does not -- zero in only 36 of 21,499, and the span carries a FIELD rather than residue (35 distinct values over the whole corpus, the same handful recurring across different senders; one node used ONE value for all 3,000 of its requests). What the bits MEAN is unpublished and is NOT guessed here: rd vms-6e6 drives it one flag at a time on real V7.3. Recorded accepting: a real V7.3 directory answered 62 of this node's 80 answered requests 0xf9 with this span zero (openvmx-site 38779039044, all-at-once); the other 18 were 0xfe, which the zero at body[20:24] accounts for
+dlm_enq_req_sub	*	102	1	derived	state:mode	body[30]: the LKB's requested mode (NL=0 CR=1 CW=2 PR=3 PW=4 EX=5, VAXcluster Principles p. 6-3)
+dlm_enq_req_sub	*	103	5	deviation	const:0	body[31:36]: this node writes 0, as on a root request; zero in only 1,650 of 74,737 real requests and field-shaped rather than residue (rd vms-6e6 drives it one flag at a time). Same treatment and same acceptance evidence as the root form's body[31:44] row
+dlm_enq_req_sub	*	108	4	derived	state:parentown	body[36:40]: THIS NODE'S OWN handle for the parent lock, read off the parent LKB by vms_enq_core_ex while it held a reference on it (vms_lock.c enq_read_parent_facts) and carried on the LKB to the post. 7 of 7 real sub requests carry the sender's own parent handle here -- byte-for-byte the value the parent's grant carried at body[24:28]. The builder refuses a HALF-filled pair
+dlm_enq_req_sub	*	112	4	derived	state:parentmaster	body[40:44]: THE PARENT'S MASTER HANDLE, the handle that master gave the parent, read off the same LKB in the same pass. 7 of 7 real sub requests carry it, byte-for-byte the parent grant's body[20:24], and the master's own SDA prints it as the sub-lock's 'Par. id'. ZERO HERE IS WHAT A ROOT MEANS, so a parent with no master handle yet makes the $ENQ refuse (SS$_IVLOCKID) rather than let this cell go out 0 -- a master reading a zero would create a SECOND root for the name, which is the double-mastering rd vms-b67a measured
+dlm_enq_req_sub	*	116	2	derived	state:group	body[44:46] UIC group: read off the resource block, part of the key it was created under (rd vms-b5b0)
+dlm_enq_req_sub	*	118	1	derived	state:acmode	body[46] access mode: read off the resource block; NOT a constant 0x03 (rd vms-8219)
+dlm_enq_req_sub	*	119	1	derived	state:namelen	body[47] name length, 1..31
+dlm_enq_req_sub	*	120	76	copied	any:name	body[48:48+L] the resource name off the RSB, then zero to body[124]. A real request leaves residue in that tail (all-zero in only 213 of 21,499); this node sends none (rd vms-42de)
+dlm_enq_req_sub	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b); 21,499 of 21,499
+dlm_enq_req_sub	*	200	4	deviation	const:0	body[128:132]: THIS NODE WRITES ZERO ON A SUB REQUEST. A real sub request DOES carry four bytes here (7 of 7), but the hash indexes the DIRECTORY, only ROOT resources are in the directory, and this frame is addressed to the master the parent named -- there is no lookup for a hash to serve. This executive cannot compute the value (Rule 8) and can never have learned it for a name no directory was ever asked about, so zero is the only honest cell; what the real value is a function of is settled by rd vms-b67a's own driven arm and is NOT guessed here. Recorded accepting: pending the vms-c2b re-fire with sub-locks
 # ---- rd vms-85f: the QUEUED answer to a cat-0x02 op-0x01 (cat 0x82, body[34]
 # 0xfb). A frame OVMX had NEVER emitted: a real VAX's $ENQW on a resource OVMX
 # masters and holds at a conflicting mode got no answer at all, its process sat

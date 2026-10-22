@@ -1187,6 +1187,11 @@ add_test(NAME cluster_frame_conformance_gate
         "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
         dlm_dir_remove dlm_dir_ans_you dlm_dir_ans_redir cm_dlm_op0d_echo
         dlm_enq_req cm_ack
+        # rd vms-b67a: the SAME request when it names a PARENT. Its own type
+        # because two spans differ from the root form -- the parent pair at
+        # body[36:44] and the hash cell this node writes zero -- and a row
+        # cannot be both forms at once.
+        dlm_enq_req_sub
         # rd vms-85f: the QUEUED answer. A frame type OVMX had never emitted,
         # required here so the never-crash rule's own condition holds -- no new
         # frame type reaches a real VAX before the gate can see every byte.
@@ -1199,6 +1204,22 @@ add_test(NAME cluster_frame_conformance_gate
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
     TIMEOUT 120
+)
+
+# ---- The LOCK BLOCK's three twins must declare the same fields (rd vms-b67a).
+# struct vms_lock_entry is declared once per substrate plus once for the host
+# bed, by hand. Only the HOST twin's omission is caught by a compiler here, so a
+# field added on Linux and forgotten on NetBSD builds clean and fails far from
+# the change. Pure Python over this repo's own headers; the checker's own header
+# records the omission that made it exist.
+add_test(NAME cluster_host_lkb_twins
+    COMMAND ${CMAKE_COMMAND} -E env
+        python3 "${CMAKE_SOURCE_DIR}/tools/ci/check_lkb_twins.py"
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_lkb_twins PROPERTIES
+    LABELS "unit;cluster;cluster_host;abi"
+    TIMEOUT 30
 )
 
 add_test(NAME cluster_host_wire_safety_audit

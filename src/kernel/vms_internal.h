@@ -566,6 +566,26 @@ struct vms_lock_entry {
                                          * parent-child AUTO-RELEASE cascade is a
                                          * follow-on (vms-489), not wired here. */
     /*
+     * THE PARENT'S MASTER HANDLE (rd vms-b67a), for a sub-lock whose parent is
+     * a lock the CLUSTER holds. The request that carries this lock to its
+     * master names its parent by the PAIR (our handle for the parent, the
+     * master's handle for the parent) at body[36:44] -- grounded on 7 real
+     * VAX-to-VAX sub-lock requests, where the pair is byte-for-byte the pair
+     * that parent's own grant carried. `parent_id` above is the first half;
+     * this is the second, READ OFF THE PARENT LKB by vms_enq_core_ex while it
+     * still holds a reference on it, because the only other way to reach it at
+     * post time would be to take the PARENT resource's lock while holding the
+     * CHILD's.
+     *
+     * 0 for a root lock and for a sub-lock under a LOCAL parent (which this
+     * node masters, so no request leaves). A sub-lock under a proxy parent
+     * whose grant has not arrived cannot be composed at all -- a zero here is
+     * what a ROOT record means on the wire, and a master that received one
+     * would create a SECOND root for the name -- so vms_enq_core_ex refuses
+     * that $ENQ rather than letting this field be 0 on a frame.
+     */
+    uint32_t            parent_master_lkid;
+    /*
      * PROXY LKB (FC-P4.4, design SS3.4 + hard call 7; Davis p. 6-52's *process
      * copy*). proxy == 1 marks the requester-side image of a lock this node
      * does NOT master: the executive holds a real lock block for it -- so

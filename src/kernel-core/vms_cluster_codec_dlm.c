@@ -86,6 +86,18 @@ vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t 
 	 * handle (what every path that consumes a parsed request wants) and
 	 * leaves the builder's PID slot empty rather than guessing. */
 	out->req_pid = 0u;
+	/*
+	 * THE PARENT SPAN, body[36:44] (rd vms-b67a): reported as it is, so a
+	 * parsed request says whether it is a ROOT (both zero -- 74,730 of the
+	 * corpus's 74,737) or a SUB-LOCK (both non-zero -- 7 of 7, and never a
+	 * half-filled pair). Reported, not vouched for: the engine decides what
+	 * it may do with a parent an inbound request names, and this is also what
+	 * makes a round trip through parse+build byte-exact for both shapes.
+	 */
+	out->parent_own_lkid =
+		vms_wire_get_le32(&v, VMS_OFB_DLM_PARENT_SPAN);
+	out->parent_master_lkid =
+		vms_wire_get_le32(&v, VMS_OFB_DLM_PARENT_SPAN + 4u);
 	/* body[128:132]: the SENDER's own directory hash for the name (rd
 	 * vms-4fb, Davis p. 6-50); the flag is what tells the caller it may be
 	 * learned at all, because "0" and "absent" are different facts. */
@@ -150,6 +162,16 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	 */
 	if (req->master_lkid == 0u && req->req_pid == 0u)
 		return VMS_CODEC_E_INVAL;
+	/*
+	 * THE PARENT SPAN IS BOTH-OR-NEITHER (rd vms-b67a). Both zero is a ROOT
+	 * request and that is what a root means on the wire; both non-zero is a
+	 * sub-lock, which 7 of 7 real sub requests carry. A HALF-FILLED pair is
+	 * refused: body[40:44] = 0 on a sub-lock reads to the master as a root,
+	 * and it would create a SECOND root for the name -- the double-mastering
+	 * this item measured from the other side.
+	 */
+	if ((req->parent_own_lkid == 0u) != (req->parent_master_lkid == 0u))
+		return VMS_CODEC_E_INVAL;
 
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
@@ -181,6 +203,18 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	 * group-qualified resource would make the directory node scan for a
 	 * resource nobody has -- the same class of error as a zero hash.
 	 */
+	/*
+	 * body[36:44]: THE PARENT PAIR, written only for a sub-lock. A ROOT
+	 * request leaves the span as the caller's zeroed frame found it, which is
+	 * what 74,730 of the corpus's 74,737 real requests carry there
+	 * (dlm_sublock_census: 7 of them name a sub-resource).
+	 */
+	if (req->parent_own_lkid != 0u) {
+		vms_wire_put_le32(&w, VMS_OFF_DLM_PARENT_SPAN,
+				  req->parent_own_lkid);
+		vms_wire_put_le32(&w, VMS_OFF_DLM_PARENT_SPAN + 4u,
+				  req->parent_master_lkid);
+	}
 	vms_wire_put_le16(&w, VMS_OFF_DLM_RES_GROUP, req->res_group);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, req->res_acmode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, req->name_len);

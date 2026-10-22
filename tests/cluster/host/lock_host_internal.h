@@ -201,6 +201,9 @@ struct vms_lock_entry {
 	uint32_t                  req_csid;
 	uint32_t                  req_lkid;
 	uint32_t                  parent_id;
+	/* The parent's MASTER handle, for a sub-lock under a proxy parent (rd
+	 * vms-b67a) -- the second half of the pair body[36:44] carries. */
+	uint32_t                  parent_master_lkid;
 	/* PROXY LKB (FC-P4.4) -- see src/kernel/vms_internal.h for the per-field
 	 * rationale; this file mirrors field presence/type, not byte layout. */
 	uint8_t                   proxy;

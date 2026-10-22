@@ -407,6 +407,40 @@ struct vms_dlm_enq_request {
 	 */
 	uint32_t req_pid;           /* body[20:24] when master_lkid is 0      */
 	uint32_t req_lkid;          /* body[24:28], see doc comment above     */
+	/*
+	 * THE PARENT SPAN, body[36:44] -- A SUB-LOCK GOES TO ITS PARENT'S MASTER
+	 * (rd vms-b67a).
+	 *
+	 * MEASURED, tools/cluster/dlm_sublock_census.py over every committed
+	 * capture (pinned by ctest cluster_host_dlm_sublock_census): of the real
+	 * cat-0x02 op-0x01 requests in the corpus, SEVEN name a sub-resource --
+	 * from two different real senders at two different modes -- and every one
+	 * of them
+	 *   W1  is addressed to the node that GRANTED ITS PARENT, never to a
+	 *       directory node, and is never answered 0xf9 ("you master it");
+	 *   W2  carries at body[36:40] the sender's OWN handle for the parent and
+	 *       at body[40:44] that parent's MASTER handle -- byte-for-byte the
+	 *       pair the parent's own grant carried at body[24:28]/body[20:24];
+	 *   W3  carries the sub-lock's requested mode at body[30], like a root.
+	 * The op-0x12 remaster RECORD says the same thing about the same two
+	 * cells (rd vms-33a: every ROOT record zero there, every SUB record
+	 * non-zero), which is why the engine's adoption record already calls the
+	 * second half `parent_master_lkid`.
+	 *
+	 * BOTH ZERO IS A ROOT REQUEST, and that is what a root MEANS here. So the
+	 * builder refuses a HALF-filled pair: a master receiving body[40:44] = 0
+	 * for a sub-lock would read it as a root and create a SECOND root for the
+	 * name -- the double-mastering rd vms-b67a measured from the other side.
+	 *
+	 * body[128:132] IS NOT WRITTEN ON A SUB REQUEST, and the reason is in the
+	 * DIRECTORY HASH section below: a real sub request does carry four bytes
+	 * there, but the value is not a function of the name this executive can
+	 * learn or compute (Rule 8), and no directory was ever asked about a
+	 * sub-resource -- so there is nothing for this node to write but zero,
+	 * recorded as a `deviation` row rather than passed off as a hash.
+	 */
+	uint32_t parent_own_lkid;   /* body[36:40], 0 on a ROOT request       */
+	uint32_t parent_master_lkid;/* body[40:44], 0 on a ROOT request       */
 	uint8_t  name_len;
 	uint8_t  name[VMS_DLM_NAME_MAX];
 

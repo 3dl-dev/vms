@@ -97,6 +97,7 @@ enum { VK_OBJ, VK_OPT, VK_LIB, VK_SHR };
 
 struct vms_state {
     struct vms_args out;          /* the translated vector (argv[0] first) */
+    struct vms_args clusters;     /* CLUSTER= option files, in declaration order */
     const char     *exe;          /* /EXECUTABLE=spec */
     const char     *first_input;  /* default executable name derives from it */
     int             have_transfer;
@@ -117,7 +118,6 @@ static void vms_add_file(struct vms_state *st, char *spec, int kind, int from_op
 /* Keywords of an options file the linker acts on. Returns 1 when handled. */
 static int vms_opt_keyword(struct vms_state *st, const char *line)
 {
-    (void)st;
     const char *eq = strchr(line, '=');
     size_t kn = eq ? (size_t)(eq - line) : strlen(line);
     while (kn && isspace((unsigned char)line[kn - 1])) kn--;
@@ -140,6 +140,31 @@ static int vms_opt_keyword(struct vms_state *st, const char *line)
     /* CASE_SENSITIVE=YES|NO only changes how the options that follow compare names;
      * this linker compares names exactly. Both spellings are in force already. */
     if (vms_ci_abbrev(key, kn, "CASE_SENSITIVE") && kn >= 4) return 1;
+    /* CLUSTER=name[,base-address[,pfc[,file-spec,...]]] (vms-5b3): the files are
+     * input to the link, in a cluster the options declare; option-declared
+     * clusters come ahead of the default cluster, so their files are linked
+     * before the command's own. This linker places the image as one cluster
+     * (no base address, no page fault cluster): a base or pfc is not honoured
+     * and says so. The GCC port's ld names libgcc's vms-dwarf2eh.o this way. */
+    if (vms_ci_abbrev(key, kn, "CLUSTER") && kn >= 3) {
+        char *v = vms_dup(val, strlen(val));
+        int field = 0;
+        for (char *f = v; f;) {
+            char *c = strchr(f, ',');
+            if (c) *c = 0;
+            while (*f && isspace((unsigned char)*f)) f++;
+            size_t fl = strlen(f);
+            while (fl && isspace((unsigned char)f[fl - 1])) f[--fl] = 0;
+            if ((field == 1 || field == 2) && *f)
+                fprintf(stderr, "%%LINK-W-IGNORED, CLUSTER=%s: %s '%s' is not acted on by this linker\n",
+                        v, field == 1 ? "base address" : "page fault cluster", f);
+            else if (field >= 3 && *f)
+                vms_push(&st->clusters, vms_default_type(f, ".obj"));
+            field++;
+            f = c ? c + 1 : NULL;
+        }
+        return 1;
+    }
     return 0;
 }
 
@@ -368,6 +393,17 @@ static char **vms_translate(int argc, char **argv, int *new_argc)
             if (file[0]) vms_add_file(&st, file, kind, 0);
             p = *e ? e + 1 : e;
         }
+    }
+    /* Option-declared clusters precede the default cluster: their files go first. */
+    if (st.clusters.n) {
+        struct vms_args v = { 0, 0, 0 };
+        vms_push(&v, st.out.v[0]);
+        for (int i = 0; i < st.clusters.n; i++)
+            vms_push(&v, st.clusters.v[i]);
+        for (int i = 1; i < st.out.n; i++)
+            vms_push(&v, st.out.v[i]);
+        free(st.out.v);
+        st.out = v;
     }
     /* The default search of OpenVMS LINK: /SYSLIB searches SYS$LIBRARY:STARLET and
      * /SYSSHR the system's shareable images (IMAGELIB), after everything the command

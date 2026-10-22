@@ -126,6 +126,34 @@ extern "C" {
 #define ODS2_STRUCLEV_LEVEL(w)  (((w) >> 8) & 0xFF)
 #define ODS2_STRUCLEV_VERSION(w) ((w) & 0xFF)
 
+/*
+ * ODS-5 (Files-11 structure level 5, version 1), rd vms-7e7e. OBSERVED on a
+ * real OpenVMS Alpha V8.4 volume made by INITIALIZE/STRUCTURE=5
+ * (tests/lab/captures/ods5-alpha-20261022/, RESULTS.md R1-R3): the home block
+ * and SCB carry 0x0501 and the format string stays "DECFILE11B  ". The ten
+ * reserved files keep ODS-2 (0x0201) headers with the FI2 ident area; files
+ * and directories created on the volume get 0x0501 headers with the FI5 ident
+ * area (ods5_ident_t below).
+ */
+#define ODS2_STRUCLEV_V5        0x0501u
+#define ODS2_STRUCLEV_OK(w)     ((w) == ODS2_STRUCLEV_V2 || (w) == ODS2_STRUCLEV_V5)
+#define ODS2_IS_ODS5(w)         (ODS2_STRUCLEV_LEVEL(w) == 5)
+
+/* ODS-5 file name types: FI5 control byte, and bits 3..5 of a directory
+ * record's dir_flags. OBSERVED (RESULTS.md R5/R6): a name legal on ODS-2
+ * (39.39, one dot, A-Z a-z 0-9 $ - _) is type 0 even when mixed case; any other
+ * 8-bit name is ISO Latin-1 (1); a name with a character above U+00FF is UCS-2
+ * (3), two bytes per character, little-endian. */
+#define ODS5_NAMETYPE_ODS2      0u
+#define ODS5_NAMETYPE_ISL1      1u
+#define ODS5_NAMETYPE_UCS2      3u
+#define ODS5_DIRFLAG_NT_SHIFT   3
+#define ODS5_DIRFLAG_NT_MASK    0x38u
+#define ODS5_DIR_NAMETYPE(flags) (((flags) & ODS5_DIRFLAG_NT_MASK) >> ODS5_DIRFLAG_NT_SHIFT)
+
+/* Longest ODS-5 "name.type" (public ODS-5 documentation: 236 8-bit chars). */
+#define ODS5_NAME_MAX           236u
+
 /* Volume format identifier stored in hm2_format (12 bytes, space padded). [N] */
 #define ODS2_FORMAT_STRING      "DECFILE11B  "
 #define ODS2_FORMAT_LEN         12
@@ -478,6 +506,41 @@ typedef struct ods2_ident {
 } ods2_ident_t;
 
 /* ================================================================
+ * IDENT AREA, ODS-5 (FI5) -- rd vms-7e7e. Every offset OBSERVED on the real
+ * Alpha V8.4 ODS-5 volume tests/lab/captures/ods5-alpha-20261022/ods5t.dsk and
+ * cross-checked against that session's DUMP/HEADER (CONSOLE.txt), which names
+ * each field ("File name type", "File name length", "Last access date", "Last
+ * attribute change date", "Extended RMS record attributes", "File length
+ * hints: Record count / Data byte count"). See RESULTS.md R4.
+ *
+ * The name ("name.type;version", case preserved, NUL padded) starts at byte 76
+ * and is fi5_namelen BYTES long (a UCS-2 name is two bytes per character). The
+ * area is at least 120 bytes; a longer name runs on past fi5_filename and the
+ * map area moves down: the observed header for a 73-byte name has fh2_mpoffset
+ * = fh2_idoffset + (76 + 74) / 2. Headers are laid down with fh2_idoffset = 40
+ * words (byte 80), immediately after fh2_highwater.
+ * ================================================================ */
+typedef struct ods5_ident {
+    uint8_t  fi5_control;       /*  0: name type (ODS5_NAMETYPE_*)          */
+    uint8_t  fi5_namelen;       /*  1: name bytes, incl. ";version"         */
+    uint16_t fi5_revision;      /*  2: revision count                       */
+    uint8_t  fi5_credate[8];    /*  4: creation date                        */
+    uint8_t  fi5_revdate[8];    /* 12: revision date                        */
+    uint8_t  fi5_expdate[8];    /* 20: expiration date                      */
+    uint8_t  fi5_bakdate[8];    /* 28: backup date                          */
+    uint8_t  fi5_accdate[8];    /* 36: last access date                     */
+    uint8_t  fi5_attdate[8];    /* 44: last attribute change date           */
+    uint8_t  fi5_ex_recattr[8]; /* 52: extended RMS record attributes       */
+    uint8_t  fi5_hint_recs[8];  /* 60: length hint, record count (~0 = none)*/
+    uint8_t  fi5_hint_bytes[8]; /* 68: length hint, data bytes  (~0 = none) */
+    char     fi5_filename[44];  /* 76: name; longer names run on            */
+} ods5_ident_t;
+
+#define ODS5_ID_OFF_WORDS       40u  /* observed fh2_idoffset on ODS-5 headers */
+#define ODS5_IDENT_FIXED        76u  /* bytes before fi5_filename              */
+#define ODS5_IDENT_MIN          120u /* smallest observed ident area           */
+
+/* ================================================================
  * STORAGE CONTROL BLOCK  (SCB) - block 1 (VBN 1) of BITMAP.SYS.
  *
  * The SCB carries volume summary info used for space allocation:
@@ -649,6 +712,12 @@ _Static_assert(sizeof(ods2_ident_t)   == 120, "IDENT area must be 120 bytes");
 _Static_assert(offsetof(ods2_ident_t, fi2_revision) == 20, "fi2_revision@20");
 _Static_assert(offsetof(ods2_ident_t, fi2_credate)  == 22, "fi2_credate@22");
 
+_Static_assert(sizeof(ods5_ident_t)   == 120, "FI5 area is 120 bytes for a <=44-byte name");
+_Static_assert(offsetof(ods5_ident_t, fi5_credate)    == 4,  "fi5_credate@4");
+_Static_assert(offsetof(ods5_ident_t, fi5_accdate)    == 36, "fi5_accdate@36");
+_Static_assert(offsetof(ods5_ident_t, fi5_hint_recs)  == 60, "fi5_hint_recs@60");
+_Static_assert(offsetof(ods5_ident_t, fi5_filename)   == 76, "fi5_filename@76");
+
 _Static_assert(sizeof(ods2_scb_t)     == 512, "SCB must be 512 bytes");
 _Static_assert(offsetof(ods2_scb_t, scb_volsize)  == 4,   "scb_volsize@4");
 _Static_assert(offsetof(ods2_scb_t, scb_checksum) == 510, "scb_checksum@510");
@@ -704,6 +773,34 @@ ods2_status_t ods2_fh2_parse(const void *block, size_t block_len,
 const ods2_ident_t *ods2_fh2_ident(const void *header_block);
 
 /*
+ * A header's identification, whichever layout it uses: the FI2 area of a
+ * level-2 header or the FI5 area of a level-5 one (rd vms-7e7e, RESULTS.md R4).
+ * name[] is "name.type;version" as stored -- case preserved, NUL-terminated;
+ * a UCS-2 name (nametype ODS5_NAMETYPE_UCS2) is its raw little-endian bytes.
+ * ODS2_ERR_FORMAT if the ident area does not fit the header.
+ */
+typedef struct ods2_hdr_ident {
+    unsigned nametype;          /* ODS5_NAMETYPE_*; always ODS2 for FI2   */
+    unsigned namelen;           /* bytes in name[]                        */
+    uint16_t revision;
+    uint8_t  credate[8];
+    uint8_t  revdate[8];
+    uint8_t  expdate[8];
+    uint8_t  bakdate[8];
+    char     name[256];
+} ods2_hdr_ident_t;
+ods2_status_t ods2_fh2_ident_get(const void *header_block, ods2_hdr_ident_t *out);
+
+/* ODS-5 name rules (RESULTS.md R6-R8). ods5_fold: the upper-case fold that
+ * orders and matches names. ods5_name_type: the type a new 8-bit "name.type"
+ * is stored as (ODS5_NAMETYPE_ODS2 or _ISL1). ods5_name_cmp: <0/0/>0 directory
+ * order of two stored names, each with its own name type (lengths in bytes). */
+unsigned ods5_fold(unsigned c);
+unsigned ods5_name_type(const char *name, unsigned len);
+int ods5_name_cmp(const void *a, unsigned alen, unsigned atype,
+                  const void *b, unsigned blen, unsigned btype);
+
+/*
  * Parse and validate the Storage Control Block (SCB, BITMAP.SYS VBN1) from a
  * raw 512-byte buffer into `out`. Validates the additive checksum and the
  * structure-level word, same convention as ods2_home_parse / ods2_fh2_parse.
@@ -731,6 +828,16 @@ typedef int (*ods2_map_cb)(const ods2_extent_t *ext, void *ctx);
  */
 ods2_status_t ods2_fh2_map_walk(const void *header_block,
                                 ods2_map_cb cb, void *ctx, unsigned *n_out);
+
+/* VBN (1-based) -> LBN through a header's retrieval pointers; ODS2_ERR_RANGE
+ * past its allocation. */
+ods2_status_t ods2_fh2_map_vbn(const void *header_block, uint32_t vbn, uint32_t *lbn_out);
+
+/* LBN of file `fid_num`'s primary header: its INDEXF.SYS VBN
+ * (hm2_ibmapvbn + hm2_ibmapsize + fid_num - 1) mapped through the index file's
+ * own header `indexf_header` (file 1, at hm2_ibmaplbn + hm2_ibmapsize). */
+ods2_status_t ods2_indexf_header_lbn(const ods2_home_t *home, const void *indexf_header,
+                                     uint32_t fid_num, uint32_t *lbn_out);
 
 /* ---- Volume-level reader over an in-memory ODS-2 image ---- */
 
@@ -786,6 +893,17 @@ ods2_status_t ods2_volume_list_dir(const ods2_volume_t *vol,
  * (no new format facts; same layout the reader always used). [N] direct.h
  */
 int ods2_dir_block_scan(const void *dir_block, ods2_dir_cb cb, void *ctx);
+
+/*
+ * Typed twin of ods2_dir_block_scan (rd vms-7e7e): the callback also gets each
+ * record's ODS-5 name type (ODS5_DIR_NAMETYPE of dir_flags), and UCS-2 records
+ * are included. ods2_dir_block_scan itself passes only the 8-bit (ODS-2 and
+ * ISL-1) records, since its callback takes an 8-bit name (UCS-2 names through
+ * the ACP: rd vms-f1a2).
+ */
+typedef int (*ods2_dir_tcb)(const char *name, unsigned name_len, unsigned nametype,
+                            uint16_t version, const ods2_fid_t *fid, void *ctx);
+int ods2_dir_block_scan_typed(const void *dir_block, ods2_dir_tcb tcb, void *ctx);
 
 /* ---- Volume-level reader over a real BLOCK DEVICE / image fd ----
  *
@@ -1692,6 +1810,18 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
                              ods2_fid_t backlink, ods2_uic_t owner,
                              uint16_t fileprot, uint32_t maxfiles);
 
+/* ods2_fh2_build at a chosen structure level (rd vms-7e7e): ODS2_STRUCLEV_V2
+ * gives exactly ods2_fh2_build's header; ODS2_STRUCLEV_V5 a level-5 header with
+ * the FI5 ident area (case-preserved name up to ODS5_NAME_MAX, name type per
+ * ods5_name_type), laid down as the real Alpha V8.4 volume lays it. */
+ods2_status_t ods2_fh2_build_ex(void *header_block, uint32_t fidnum, uint16_t seq,
+                                const char *name, uint16_t version, uint32_t filechar,
+                                unsigned kind, const ods2_extent_t *extents,
+                                unsigned n_extents, size_t data_len,
+                                ods2_fid_t backlink, ods2_uic_t owner,
+                                uint16_t fileprot, uint32_t maxfiles,
+                                uint16_t struclev);
+
 /* Store the creation and revision dates (VMS 64-bit absolute time) in a
  * header's ident area; expiration/backup dates untouched. Reseal after. */
 ods2_status_t ods2_fh2_set_dates(void *header_block, uint64_t credate,
@@ -1733,6 +1863,27 @@ ods2_status_t ods2_dir_insert_blocks(const uint8_t *in_blocks, unsigned in_nblk,
                                      uint8_t *flat, size_t flat_cap,
                                      uint8_t *out_blocks, unsigned out_nblk_cap,
                                      unsigned *out_nblk);
+
+/* Directory-edit mode flags for the _ex variants (rd vms-7e7e).
+ * ODS2_DIRF_ODS5: the directory is on an ODS-5 volume -- order and match names
+ * case-blind (ods5_name_cmp) and store each new record's name type in
+ * dir_flags (RESULTS.md R5-R8). 0 is exactly the ODS-2 behaviour. */
+#define ODS2_DIRF_ODS5  0x1u
+
+ods2_status_t ods2_dir_insert_blocks_ex(const uint8_t *in_blocks, unsigned in_nblk,
+                                        const char *name, unsigned namecount,
+                                        uint16_t version, ods2_fid_t entry_fid,
+                                        int is_resfile,
+                                        uint8_t *flat, size_t flat_cap,
+                                        uint8_t *out_blocks, unsigned out_nblk_cap,
+                                        unsigned *out_nblk, unsigned dflags);
+ods2_status_t ods2_dir_remove_blocks_ex(const uint8_t *in_blocks, unsigned in_nblk,
+                                        const char *name, unsigned namecount,
+                                        uint16_t version,
+                                        uint8_t *flat, size_t flat_cap,
+                                        uint8_t *out_blocks, unsigned out_nblk_cap,
+                                        unsigned *out_nblk, int *removed,
+                                        unsigned dflags);
 
 /* Remove `version` (0 => every version) of `name` from a directory's data
  * blocks, repacking into out_blocks. Never grows or deallocates directory

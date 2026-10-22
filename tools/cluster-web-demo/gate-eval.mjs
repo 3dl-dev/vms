@@ -712,7 +712,10 @@ export function verdictOf(R) {
 //   (b) a message identifier ("%FAC," or "%FAC-S-IDENT,") that a real VMS
 //       console never showed: not in VMS_CONSOLE_IDS (every one of which a
 //       real VAX printed -- the unit test re-reads the captures to prove it)
-//       and not OVMX's own boot narration (OVMX_BOOT_IDS); or
+//       and not OVMX's own boot narration (OVMX_BOOT_IDS -- EMPTY since rd
+//       vms-158d, kept only so the rule reads the same if it is ever needed);
+//       an identifier with no leading '%' ("DECNETD-E-NOSOCKET, ...") is still
+//       an identifier, and is judged the same way; or
 //   (c) a cluster-facility line (%CNXMAN, %PEA0, %SYSINIT -- facilities VMS
 //       prints with no severity) that is not one of the FORMS a real VAX
 //       printed, word for word, two spaces and all.
@@ -761,14 +764,12 @@ export const VMS_CONSOLE_IDS = [
   'SYSTEM-F-NOLOGNAM', 'SYSTEM-F-DEVNOTMOUNT',
 ];
 
-// OVMX's own boot narration, which no VMS console prints: the orchestrator's
-// lines the boot-conformance test pins in order (tests/qemu/
-// test_boot_conformance.sh), in OVMX's own facility (docs/design-opcom-
-// executive-logging.md sec4). Listed by name, so ANY other OVMX identifier on
-// the console still fails. Bringing these to a VMS form is tracked separately.
-export const OVMX_BOOT_IDS = [
-  'OVMX-I-EXEC', 'OVMX-I-SYSDISK', 'OVMX-I-MOUNTED', 'OVMX-I-SCSNODE', 'DECNET-I-STARTNET',
-];
+// OVMX's own boot narration allowed on the console, which no VMS console
+// prints. EMPTY (rd vms-158d): the executive-attached, system-disk mount,
+// node-name and system-identity lines now go to OPERATOR.LOG, and STARTNET
+// prints only what RUN prints; NETACP reports "DECnet starting" to OPCOM. An
+// entry here would be debt with an rd item, never a convenience.
+export const OVMX_BOOT_IDS = [];
 
 // The forms the cluster facilities take on a real VAX console (C.console.txt;
 // vms-52d-0b01-oracle-20261013, vms-ci6-evac-20261009, vms-fcb-lockdirwt-
@@ -801,9 +802,14 @@ const FORM_FACILITIES = ['CNXMAN', 'PEA0', 'SYSINIT'];
 
 export const PRINTK_STAMP = /\[\s*\d+\.\d+\]/;
 const MSG_ID = /%([A-Za-z][A-Za-z0-9$_]*(?:-[A-Z]-[A-Z0-9$_]+)?),/g;
-// Where the OS's own console starts: the substrate banner or the executive's
-// first line. Before it is firmware and the page.
-const OS_START = /OVMX\/\S+ -- SYSKRNL|%OVMX-I-EXEC,/;
+// A message identifier written WITHOUT its '%' at the start of a line
+// ("DECNETD-E-NOSOCKET, bpf datalink open ... failed", V0.7-13 Node B). A DCL
+// continuation line starts with '-' ("-RMS-E-FNF, ...") and is not this.
+const BARE_ID = /^\s*([A-Z][A-Z0-9$_]*-[A-Z]-[A-Z0-9$_]+),/;
+// Where the OS's own console starts: the substrate banner, the product banner,
+// or (older images) the executive's first line. Before it is firmware and the
+// page.
+const OS_START = /OVMX\/\S+ -- SYSKRNL|%OVMX-I-|OpenVMX V\d+\.\d+/;
 
 // The console lines a real VMS console would not carry, each as
 // {line, why}, in order, once each. [] is the claim.
@@ -822,6 +828,8 @@ export function consoleChatter(text) {
     const line = raw.replace(/[\s█]+$/u, '');
     if (!line) continue;
     if (PRINTK_STAMP.test(line)) flag(line, 'substrate printk timestamp');
+    const bare = BARE_ID.exec(line);
+    if (bare && !allowed.has(bare[1])) flag(line, `${bare[1]} is not a message a VMS console prints`);
     for (const m of line.matchAll(MSG_ID)) {
       const id = m[1];
       if (!allowed.has(id)) { flag(line, `%${id} is not a message a VMS console prints`); continue; }

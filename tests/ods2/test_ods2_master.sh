@@ -36,6 +36,8 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 mkdir -p "$TREE/SYS0/SYSCOMMON/SYSEXE" "$TREE/SYS0/SYSCOMMON/SYSLIB"
 printf '$ SET NOON\n$ WRITE SYS$OUTPUT "hello"\n' > "$TREE/SYS0/SYSCOMMON/SYSEXE/LOGIN.COM"
 printf 'documentation record\n'                    > "$TREE/SYS0/SYSCOMMON/SYSLIB/README.TXT"
+# vms-5b3: a file with no type (C++ headers: <cstdio>) is the directory record "NOTES."
+printf 'no file type\n'                            > "$TREE/SYS0/SYSCOMMON/SYSLIB/NOTES"
 # A binary image: MUST be stored verbatim (create_file_raw), not VAR-reframed.
 head -c 4096 /dev/urandom                          > "$TREE/SYS0/SYSCOMMON/SYSEXE/DCL.EXE"
 # vms-5f0: a >2 MB binary. Its data (10240 blocks) exceeds a single FM2
@@ -75,7 +77,8 @@ for want in \
     '\[SYS0.SYSCOMMON.SYSEXE\]LOGIN.COM;1' \
     '\[SYS0.SYSCOMMON.SYSEXE\]DCL.EXE;1' \
     '\[SYS0.SYSCOMMON.SYSEXE\]BIGIMG.EXE;1' \
-    '\[SYS0.SYSCOMMON.SYSLIB\]README.TXT;1'
+    '\[SYS0.SYSCOMMON.SYSLIB\]README.TXT;1' \
+    '\[SYS0.SYSCOMMON.SYSLIB\]NOTES\.;1'
 do
     grep -Eq "$want" "$LOUT" || { cat "$LOUT" >&2; fail "list missing: $want"; }
 done

@@ -17,6 +17,13 @@
  * DECC$SHR always links atexit.c and __stdio_exit.c, so this override calls both
  * by NAME, with no local definition for a self-bind to land on. _fini and
  * __libc_exit_fini keep musl's local forms: nothing overrides them here.
+ *
+ * vms-1c83: the same rundown is the C RTL's exit handler. On VMS the C RTL
+ * declares an exit handler ($DCLEXH) when it initializes, and $EXIT runs it, so
+ * an image whose main() RETURNS (SYS$IMGSTA calls $EXIT with its value) still
+ * runs its atexit functions and gets its streams written out. crtl_process.c
+ * declares that handler; it calls __ovmx_crtl_rundown, which runs at most once,
+ * so exit() (rundown, then SYS$EXIT, which runs the handler) does it once.
  */
 #include <stdlib.h>
 #include <stdint.h>
@@ -41,10 +48,20 @@ static void libc_exit_fini(void)
 
 weak_alias(libc_exit_fini, __libc_exit_fini);
 
-_Noreturn void exit(int code)
+static volatile int rundown_done;
+
+void __ovmx_crtl_rundown(void)
 {
+	if (rundown_done)
+		return;
+	rundown_done = 1;
 	__funcs_on_exit();
 	__libc_exit_fini();
 	__stdio_exit();
+}
+
+_Noreturn void exit(int code)
+{
+	__ovmx_crtl_rundown();
 	_Exit(code);
 }

@@ -53,9 +53,6 @@ extern "C" {
 #define PSL$C_SUPER     2   /* Supervisor mode (DCL shell runs here) */
 #define PSL$C_USER      3   /* User mode — normal application code */
 
-/* Maximum access mode value */
-#define PSL$C_MAX_MODE  3   /* Most privileged = 0, least = 3 */
-
 /* ================================================================
  * PSL$M_ — Bit-mask constants for the Processor Status Longword
  *
@@ -73,7 +70,6 @@ extern "C" {
 #define PSL$M_DV        0x00000080  /* Decimal overflow enable */
 #define PSL$M_FU        0x00000040  /* Floating underflow enable */
 #define PSL$M_IV        0x00000020  /* Integer overflow enable */
-#define PSL$M_T         0x00000010  /* Trace pending */
 
 /* Current access mode field (bits 24-25 on VAX, V7.3 $PSLDEF) */
 #define PSL$M_CURMOD    0x03000000  /* Current mode field mask */

@@ -92,6 +92,82 @@ run_qemu() {
         </dev/null 2>&1 || true
 }
 
+# rd vms-158d: the node-name record (%OVMX-I-SCSNODE) is an OPERATOR.LOG record
+# now -- a real VMS boot console prints no such line -- so a boot whose node
+# name this test asserts is driven to a login, and the record is read back with
+# TYPE SYS$MANAGER:OPERATOR.LOG over the same console. The expect program lives
+# in a file (no shell quoting of Tcl). Args: disk, kernel append, and an
+# optional SYSBOOT> dialogue (one command per element, run before CONTINUE).
+OPLOG_EXP=$(mktemp /tmp/sysboot-oplog.XXXXXX.exp)
+cat >"$OPLOG_EXP" <<'EXP'
+log_user 1
+set qemu   [lindex $argv 0]
+set disk   [lindex $argv 1]
+set append [lindex $argv 2]
+set cmds   [lrange $argv 3 end]
+set timeout [expr {[info exists env(EXP_TIMEOUT)] ? $env(EXP_TIMEOUT) : 300}]
+eval spawn $qemu -nographic -append [list $append] -m 256M -smp 1 -nic none -nodefaults -serial mon:stdio -drive file=$disk,format=raw,if=virtio -no-reboot
+if {[llength $cmds] > 0} {
+    expect {
+        "SYSBOOT> " {}
+        timeout { puts "EXPECT-TIMEOUT: never saw SYSBOOT>"; exit 1 }
+        eof { puts "EXPECT-EOF: before SYSBOOT>"; exit 1 }
+    }
+    foreach c $cmds {
+        send "$c\r"
+        if {$c eq "CONTINUE"} break
+        expect {
+            "SYSBOOT> " {}
+            timeout { puts "EXPECT-TIMEOUT: no SYSBOOT> after $c"; exit 1 }
+        }
+    }
+}
+expect {
+    "%STDRV-I-STARTUP" {}
+    timeout { puts "EXPECT-TIMEOUT: no STDRV"; exit 1 }
+    eof { puts "EXPECT-EOF: before STDRV"; exit 1 }
+}
+set saved $timeout
+set timeout 3
+set n 0
+set got 0
+while {!$got} {
+    send "\r"
+    expect {
+        "Username:" { set got 1 }
+        timeout { incr n; if {$n > 60} { puts "EXPECT-TIMEOUT: no Username:"; exit 1 } }
+        eof { puts "EXPECT-EOF: before Username:"; exit 1 }
+    }
+}
+set timeout 60
+send "SYSTEM\r"
+expect {
+    "Password:" {}
+    timeout { puts "EXPECT-TIMEOUT: no Password:"; exit 1 }
+}
+send "MANAGER\r"
+expect {
+    -re {\$ $} {}
+    timeout { puts "EXPECT-TIMEOUT: no DCL prompt"; exit 1 }
+}
+send "TYPE SYS\$MANAGER:OPERATOR.LOG\r"
+expect {
+    -re {\$ $} {}
+    timeout { puts "EXPECT-TIMEOUT: TYPE did not return"; exit 1 }
+}
+send "LOGOUT\r"
+sleep 2
+send "\x01x"
+expect eof
+EXP
+run_qemu_oplog() {   # disk  extra-append  [SYSBOOT> commands...]
+    local disk="$1" extra_append="$2"; shift 2
+    EXP_TIMEOUT=$((TIMEOUT - 10)) timeout "$TIMEOUT" expect "$OPLOG_EXP" \
+        "$QEMU $MACHINE -kernel $KERNEL -initrd $INITRD" "$disk" \
+        "$CONSOLE loglevel=3 quiet${extra_append:+ $extra_append}" "$@" 2>&1 || true
+}
+trap 'rm -f "$OPLOG_EXP"' EXIT
+
 if [ ! -f "$DISTRIB_IMG" ]; then
     echo "FAIL: $DISTRIB_IMG is missing -- this test needs an installed disk."
     exit 1
@@ -110,10 +186,15 @@ cp "$DISTRIB_IMG" "$DISK"
 # Baseline: SYSBOOT> never appears, and %OVMX-I-SCSNODE shows the disk's
 # real, factory-default SCSNODE (read_boot_parameters(), vms-b6a7).
 echo "--- Boot A: flagless boot (baseline) ---"
-OUT_A=$(run_qemu "$DISK")
+OUT_A=$(run_qemu_oplog "$DISK" "")
+BOOT_A=$(sed -n '1,/Username:/p' <<<"$OUT_A")
 
 check "Boot A: no SYSBOOT prompt on a flagless boot" "$OUT_A" 'SYSBOOT>' absent
-check "Boot A: node name set from the real parameter file" "$OUT_A" \
+check "Boot A: the console carries no OVMX node-name line (rd vms-158d)" "$BOOT_A" \
+    '%OVMX-I-SCSNODE' absent
+# The LAST node-name record is this boot's (the log keeps every earlier boot's).
+LAST_A=$(grep -aF '%OVMX-I-SCSNODE, node name ' <<<"$OUT_A" | tail -1)
+check "Boot A: OPERATOR.LOG records the node name set from the real parameter file" "$LAST_A" \
     '%OVMX-I-SCSNODE, node name OVMX set from SYS$SYSTEM:OVMXVMSSYS.PAR'
 echo ""
 
@@ -145,8 +226,8 @@ OUT_B=$(timeout "$TIMEOUT" expect -c "
     }
     send \"CONTINUE\r\"
     expect {
-        \"%OVMX-I-SCSNODE\" {}
-        timeout { puts \"EXPECT-TIMEOUT: no SCSNODE line after CONTINUE\"; exit 1 }
+        \"%STDRV-I-STARTUP\" {}
+        timeout { puts \"EXPECT-TIMEOUT: no STDRV line after CONTINUE\"; exit 1 }
     }
     # Give the rest of boot a moment to settle, then quit QEMU cleanly
     # (Ctrl-A X, the same escape run-qemu.sh/boot.sh document) rather than
@@ -188,7 +269,17 @@ check "Boot B: SHOW SCSNODE dashes row byte-shaped to the oracle" "$OUT_B" \
     '--------------            -------    -------   -------    -------  ----  -------'
 check "Boot B: SHOW SCSNODE row - quoted/padded current value" "$OUT_B" \
     'SCSNODE                 "OVMX    "    "    "    "    "     "ZZZZ" Ascii'
-check "Boot B: SET took effect for THIS boot (node name ZZ9)" "$OUT_B" \
+check "Boot B: the console carries no OVMX node-name line (rd vms-158d)" "$OUT_B" \
+    '%OVMX-I-SCSNODE' absent
+# ... the SET's effect, read back from OPERATOR.LOG on a second conversational
+# boot of a COPY of the disk with the same dialogue (this boot's console was
+# needed whole for the pre-prompt slice above).
+DISK_B2=/tmp/sysboot-conv-b2.img
+cp "$DISTRIB_IMG" "$DISK_B2"
+OUT_B2=$(run_qemu_oplog "$DISK_B2" "ovmx.flags=0,1" "SET SCSNODE ZZ9" "CONTINUE")
+rm -f "$DISK_B2"
+LAST_B2=$(grep -aF '%OVMX-I-SCSNODE, node name ' <<<"$OUT_B2" | tail -1)
+check "Boot B: SET took effect for THIS boot (OPERATOR.LOG: node name ZZ9)" "$LAST_B2" \
     '%OVMX-I-SCSNODE, node name ZZ9 set from SYS$SYSTEM:OVMXVMSSYS.PAR'
 echo ""
 
@@ -197,12 +288,17 @@ echo ""
 # OVMXVMSSYS.PAR is untouched -- this boot must read the SAME value Boot A
 # did, never "ZZ9".
 echo "--- Boot C: flagless boot again (persistence proof) ---"
-OUT_C=$(run_qemu "$DISK")
+OUT_C=$(run_qemu_oplog "$DISK" "")
 
 check "Boot C: no SYSBOOT prompt on a flagless boot" "$OUT_C" 'SYSBOOT>' absent
-check "Boot C: node name is the FILE's value again, not ZZ9" "$OUT_C" \
+# The LAST node-name record is this boot's: Boot B's own ZZ9 record is
+# legitimately earlier in the same disk's OPERATOR.LOG.
+LAST_C=$(grep -aF '%OVMX-I-SCSNODE, node name ' <<<"$OUT_C" | tail -1)
+BOOT_C=$(sed -n '1,/Username:/p' <<<"$OUT_C")
+check "Boot C: node name is the FILE's value again, not ZZ9 (OPERATOR.LOG)" "$LAST_C" \
     '%OVMX-I-SCSNODE, node name OVMX set from SYS$SYSTEM:OVMXVMSSYS.PAR'
-check "Boot C: the in-memory SET from Boot B did NOT persist" "$OUT_C" 'ZZ9' absent
+check "Boot C: the in-memory SET from Boot B did NOT persist (this boot's record)" "$LAST_C" 'ZZ9' absent
+check "Boot C: the in-memory SET from Boot B did NOT persist (console)" "$BOOT_C" 'ZZ9' absent
 echo ""
 
 if [ "$FAIL" -eq 0 ]; then

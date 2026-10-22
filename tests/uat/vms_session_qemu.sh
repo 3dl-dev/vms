@@ -127,6 +127,7 @@ SYSTEM_CMDS=(
     'SHOW DEVICE VDA0:'
     'SHOW DEVICE/FULL VDA0:'
     'HELP/NOPROMPT SHOW'
+    'TYPE SYS$MANAGER:OPERATOR.LOG'
 )
 
 # Index of the ORIGINAL 'SHOW PROCESS /PRIVILEGES' occurrence above, found
@@ -395,7 +396,7 @@ ERRORS=""
 # there is no session to test. Asserting it here (vms-0ff, ported by the
 # vms-a35 PR #6 rebase) keeps a silent regression in the boot guarantee from
 # surfacing as a confusing login timeout instead of a clear one.
-wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT" \
+wait_for ' - OpenVMS-compatible' "$BOOT_TIMEOUT" \
     || fail_with_console "ERROR: the executive never attached — the system did not come up"
 
 send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
@@ -1403,7 +1404,11 @@ check_response 'HELP/NOPROMPT SHOW' '(SHOW|Additional information)'
 # above it is not echo-satisfiable. The values are asserted, not just the
 # line: deleting the SETIDENT call leaves the user name empty and the UIC
 # [0,0] (root's derived credentials), and this goes red.
-if grep -qF 'system identity SYSTEM [1,4] established by the executive' <<<"$OUTPUT"; then
+# rd vms-158d: the record is an OPERATOR.LOG record now (a VMS boot console
+# prints no such line), read back with TYPE (RMS; SEARCH still opens a host path, rd vms-a16); the last one is this boot's.
+if printf '%s\n' "${CMD_OUTPUT['TYPE SYS$MANAGER:OPERATOR.LOG']}" | \
+     grep -aF 'system identity ' | tail -1 | \
+     grep -qF '%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive'; then
     PASS=$((PASS + 1))
 else
     FAIL=$((FAIL + 1))

@@ -94,14 +94,16 @@ class TestSysgenStore(unittest.TestCase):
         self.assertEqual(p["LOCKDIRWT"]["current"], 0)
         self.assertEqual(p["QDSKVOTES"]["current"], 0)
 
-    def test_seed_actually_omits_them(self):
-        """Guard the premise: the shipped seed IS incomplete (E61), so the
-        completeness this tool adds is real, not a straw man."""
+    def test_seed_carries_them(self):
+        """The shipped seed now agrees with the SYSGEN factory table (#1841,
+        vms-c2b gate: factory table == shipped seed), so it carries all six
+        parameters it used to omit (E61). Guard that, so a regression to an
+        incomplete seed is caught here rather than at boot."""
         seed = open(_SEED, "rb").read()
         for name in ("LOCKDIRWT", "QDSKVOTES", "TIMVCFAIL", "NISCS_MAX_PKTSZ",
                      "MSCP_LOAD", "MSCP_SERVE_ALL"):
-            self.assertIsNone(_find_record_base(seed, name),
-                              "seed unexpectedly already has %s" % name)
+            self.assertIsNotNone(_find_record_base(seed, name),
+                                 "seed is missing %s" % name)
 
     def test_rejects_bad_scsnode(self):
         with self.assertRaises(ValueError):
@@ -355,12 +357,20 @@ class TestDecnetRoster(unittest.TestCase):
             self.assertEqual(area, 1)
             self.assertTrue(1 <= node <= 1023)
 
-    def test_vaxc_decnet_address_is_its_scssystemid(self):
+    def test_every_decnet_address_is_its_scssystemid(self):
         # rd vms-05d: real VMS STARTNET refuses a cluster member whose DECnet
-        # address != SCSSYSTEMID, so VAXC's address is derived, not chosen.
-        area, node = (int(x) for x in M.DEMO_NODE_C["decnet"].split("."))
-        self.assertEqual(area * 1024 + node, M.DEMO_NODE_C["id"])
-        self.assertEqual(M.DEMO_NODE_C["decnet"], "1.965")
+        # address != SCSSYSTEMID (%DECdtm-W-ADDRNEQ / "DECnet not started."),
+        # so every roster address is derived, not chosen.
+        for n in M.DEMO_ROSTER:
+            area, node = (int(x) for x in n["decnet"].split("."))
+            self.assertEqual((area << 10) | node, n["id"], n["name"])
+            self.assertTrue(M.decnet_address_matches_id(n), n["name"])
+        self.assertEqual([n["decnet"] for n in (M.DEMO_NODE_A, M.DEMO_NODE_B, M.DEMO_NODE_C)],
+                         ["1.963", "1.964", "1.965"])
+
+    def test_address_check_rejects_a_mismatch(self):
+        self.assertFalse(M.decnet_address_matches_id(dict(M.DEMO_NODE_C, decnet="1.3")))
+        self.assertTrue(M.decnet_address_matches_id(dict(M.DEMO_NODE_C, decnet=None)))
 
     def test_each_node_defines_every_other_node(self):
         for me in M.DEMO_ROSTER:

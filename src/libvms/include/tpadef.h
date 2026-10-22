@@ -53,7 +53,6 @@ typedef struct _tpadef TPADEF;
  * ================================================================ */
 
 #define TPA$K_COUNT0        8   /* Number of longwords in TPADEF block */
-#define TPA$K_VERSION0      0   /* Block version 0 */
 
 /* ================================================================
  * TPA$M_ — Option bit masks for tpa$l_options

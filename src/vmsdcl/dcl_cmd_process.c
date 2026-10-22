@@ -1318,10 +1318,17 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
     const char *q;
     if ((q = run_qualifier_value(cmd, "INPUT")) && *q)
         dcl_resolve_path(ctx, q, in_path, sizeof(in_path));
+    /* /OUTPUT and /ERROR go to $CREPRC as the VMS file spec they name (DCL's
+     * device/directory defaults filled in), exactly what VMS hands the new
+     * process as SYS$OUTPUT / SYS$ERROR: $CREPRC binds a device (OPA0:, NL:)
+     * itself and gives a DETACHED process a FILE as those logical names, which
+     * its image writes through RMS (rd vms-c89). Translating it to a host path
+     * here named the retired /vms passthrough -- a file that never appeared on
+     * the ODS-2 volume. A substrate path ('/', './') passes through as given. */
     if ((q = run_qualifier_value(cmd, "OUTPUT")) && *q)
-        dcl_resolve_path(ctx, q, out_path, sizeof(out_path));
+        dcl_rms_effective_spec(ctx, q, out_path, sizeof(out_path));
     if ((q = run_qualifier_value(cmd, "ERROR")) && *q)
-        dcl_resolve_path(ctx, q, err_path, sizeof(err_path));
+        dcl_rms_effective_spec(ctx, q, err_path, sizeof(err_path));
 
     const char *prcnam = run_qualifier_value(cmd, "PROCESS_NAME");
 
@@ -1974,6 +1981,12 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
                                     const char *display_name,
                                     const char *linux_path, char *argv[]);
 
+/* The command an image handed over with LIB$DO_COMMAND (at most 255 chars). */
+static char dcl_do_command[256];
+static int  dcl_do_command_pending;
+
+int dcl_execute_line(const char *line);
+
 int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
                        const char *linux_path, char *argv[])
 {
@@ -1981,8 +1994,17 @@ int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
     int srt = dcl_sysinput_setup(ctx, &si);
     if (srt)
         return srt;
+    dcl_do_command_pending = 0;
     int rc = dcl_activate_image_inner(ctx, display_name, linux_path, argv);
     dcl_sysinput_restore(&si);
+    /* LIB$DO_COMMAND: the image has exited; its command executes now, and its
+     * status is the one this activation reports. */
+    if (dcl_do_command_pending) {
+        char line[sizeof dcl_do_command];
+        memcpy(line, dcl_do_command, sizeof line);
+        dcl_do_command_pending = 0;
+        rc = dcl_execute_line(line);
+    }
     return rc;
 }
 
@@ -2030,6 +2052,18 @@ void dcl_cli_handler(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
     case OVMX_CLI_OP_DELETE:
         rs->status = dcl_sym_delete(name, scope) == 0 ? SS$_NORMAL
                                                       : LIB$_NOSUCHSYM;
+        break;
+    case OVMX_CLI_OP_DO_COMMAND:
+        /* LIB$DO_COMMAND: kept until the image exits, then executed by
+         * dcl_activate_image at this command level. */
+        if (rq->value_len > sizeof dcl_do_command - 1) {
+            rs->status = LIB$_INVARG;
+            break;
+        }
+        memcpy(dcl_do_command, rq->value, rq->value_len);
+        dcl_do_command[rq->value_len] = '\0';
+        dcl_do_command_pending = 1;
+        rs->status = SS$_NORMAL;
         break;
     default:
         rs->status = SS$_BADPARAM;

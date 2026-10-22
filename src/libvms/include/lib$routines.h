@@ -771,6 +771,15 @@ uint32_t lib$getsyi(
  * ================================================================ */
 
 /**
+ * lib$do_command - Execute Command: stop the image and have the CLI execute
+ * the command (<= 255 characters). Does not return on success.
+ *
+ * @return  LIB$_NOCLI with no CLI; LIB$_INVARG if longer than 255; the CLI's
+ *          refusal otherwise
+ */
+uint32_t lib$do_command(const struct dsc$descriptor_s *command);
+
+/**
  * lib$get_symbol - Get value of a CLI symbol
  *
  * @param symbol       Pointer to descriptor of symbol name
@@ -1236,6 +1245,33 @@ uint32_t lib$free_ef(
  */
 uint32_t lib$reserve_ef(
     const uint32_t *efn
+);
+
+/* ================================================================
+ * Logical Unit Number Routines
+ * ================================================================ */
+
+/**
+ * lib$get_lun - Allocate one logical unit number from the processwide pool
+ *
+ * @param lun  Receives the allocated unit, or -1 if none was available
+ *
+ * @return  SS$_NORMAL, or LIB$_INSLUN when the pool is exhausted
+ */
+uint32_t lib$get_lun(
+    int32_t *lun
+);
+
+/**
+ * lib$free_lun - Return a unit LIB$GET_LUN allocated
+ *
+ * @param lun  The unit number, as LIB$GET_LUN returned it
+ *
+ * @return  SS$_NORMAL, LIB$_LUNALRFRE if it is not allocated, or
+ *          LIB$_LUNRESSYS if it is outside the pool LIB$GET_LUN manages
+ */
+uint32_t lib$free_lun(
+    const int32_t *lun
 );
 
 /* ================================================================

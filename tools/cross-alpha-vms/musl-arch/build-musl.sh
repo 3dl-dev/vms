@@ -252,9 +252,17 @@ grep -q 'vms-28d: psignal' include/signal.h || { echo "vms-28d PATCH FAIL: psign
 # on OpenVMS Alpha V8.4, tests/lab/captures/decc-exit-alpha-20261021). The GCC
 # port's own programs define _POSIX_EXIT (gcc/config/vms/xm-vms.h).
 if ! grep -q 'vms-599: DEC C exit' include/stdlib.h; then
-	perl -0pi -e 's/^#define EXIT_SUCCESS 0\n/$&#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \/* vms-599: DEC C exit *\/\n#ifdef _POSIX_EXIT\n_Noreturn void __posix_exit (int);\n#define exit __posix_exit\n#else\n#undef EXIT_FAILURE\n#define EXIT_FAILURE 2\n#endif\n#endif\n/m' include/stdlib.h
+	perl -0pi -e 's/^#define EXIT_SUCCESS 0\n/$&#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \/* vms-599: DEC C exit *\/\n#ifdef _POSIX_EXIT\n_Noreturn void __posix_exit (int);\n#else\n#undef EXIT_FAILURE\n#define EXIT_FAILURE 2\n#endif\n#endif\n/m' include/stdlib.h
 fi
 grep -q 'vms-599: DEC C exit' include/stdlib.h || { echo "vms-599 PATCH FAIL: exit in include/stdlib.h" >&2; exit 7; }
+# vms-5b3: under _POSIX_EXIT, exit() IS __posix_exit() by its link name, not by a
+# macro: C++'s <cstdlib> #undefs exit and brings in ::exit, so a macro left every
+# C++ program (GCC 14's cc1, cc1plus, xgcc) on the DEC C exit(1) == success path,
+# and the driver never saw a compiler fail.
+if ! grep -q 'vms-5b3: exit is __posix_exit' include/stdlib.h; then
+	perl -0pi -e 's/^_Noreturn void exit \(int\);\n/#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \&\& defined(_POSIX_EXIT) \/* vms-5b3: exit is __posix_exit *\/\n_Noreturn void exit (int) __asm__("decc\$__posix_exit");\n#else\n_Noreturn void exit (int);\n#endif\n/m' include/stdlib.h
+fi
+grep -q 'vms-5b3: exit is __posix_exit' include/stdlib.h || { echo "vms-5b3 PATCH FAIL: exit in include/stdlib.h" >&2; exit 7; }
 # vms-4ba3: DEC C fgetname(FILE *, char *, ...) -- the file specification of an
 # open stream, served by the RMS file layer (src/vmsrms/crtl_rms_fd.c). A DEC C
 # client form only; musl has no such routine.

@@ -30,6 +30,9 @@
 #define OVMX_CLI_OP_SET     1
 #define OVMX_CLI_OP_GET     2
 #define OVMX_CLI_OP_DELETE  3
+/* LIB$DO_COMMAND: `value` is the command (<= 255 chars). The CLI keeps it and
+ * executes it once the image has exited (the caller then calls SYS$EXIT). */
+#define OVMX_CLI_OP_DO_COMMAND 4
 
 #define OVMX_CLI_NAME_MAX   255
 #define OVMX_CLI_VALUE_MAX  1024

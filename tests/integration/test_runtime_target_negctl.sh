@@ -336,7 +336,7 @@ expect_red "$INIT_C" "3b(d) return before the halt makes the halt unreachable" \
 
 # (e) probe-and-release: the open succeeds, halts on failure, and then hands the
 # descriptor back, so vms.ko is no longer pinned and rmmod succeeds mid-life.
-sed -i 's#^    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\\n");$#    close(executive_fd);\n    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\\n");#' "$INIT_C"
+sed -i 's#^    boot_oplog("%%OVMX-I-EXEC, VMS executive attached on /dev/vms");$#    close(executive_fd);\n    boot_oplog("%%OVMX-I-EXEC, VMS executive attached on /dev/vms");#' "$INIT_C"
 expect_red "$INIT_C" "3b(e) descriptor closed again -- probe-and-release, not a pin" \
     "$R_CLOSE" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 

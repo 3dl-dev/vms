@@ -16,8 +16,9 @@ summary: >
   SS$_ values 2288/2292/2284 -- 2288 is SS$_NONLOCAL. Proof
   tests/qemu/test_syssvc_dcl_set_quals.c + defects.d/dcl-ivqual-status-not-cli.defect.
   Re-censused 2026-09-14
-  against origin/main: 46 of the 58 builtin verbs carry a validating table (29
-  real q_* tables + 17 q_none reject-all); no verb is accept-all by
+  against origin/main: 48 of the 60 builtin verbs carry a validating table (30
+  real q_* tables + 18 q_none reject-all; ALLOCATE q_allocate and
+  DEALLOCATE q_none added 2026-10-21); no verb is accept-all by
   accident any more (the quals == NULL ones validate per sub-verb, in their own
   layer, or by delegation -- see dcl-qualifiers$zero-validation-verbs). Since the prior census DEASSIGN and DEFINE gained real q_*
   tables (DIFFERENCES moved to q_none), so the real-table set is now exactly 29.

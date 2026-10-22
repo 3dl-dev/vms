@@ -63,6 +63,9 @@ static int lbr_get_type(struct dcl_command *cmd, const char *path)
     if (dot) {
         if (strcasecmp(dot, ".HLB") == 0) return LBR_TYPE_HELP;
         if (strcasecmp(dot, ".OLB") == 0) return LBR_TYPE_OBJECT;
+        /* .A: the object library a Unix-style `ar` makes and the linker searches
+         * (the GCC port's ar wrapper runs `library /replace/create libx.a x.o`) */
+        if (strcasecmp(dot, ".A") == 0) return LBR_TYPE_OBJECT;
     }
     return LBR_TYPE_TEXT;
 }

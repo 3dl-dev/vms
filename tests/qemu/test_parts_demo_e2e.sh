@@ -155,7 +155,7 @@ dump_and_die() {
 }
 
 # --- 1. Boot: blank disk -> STARTUP.EXE installs -> login prompt ------------
-if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+if wait_for ' - OpenVMS-compatible' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
 # vms-2213: OPA0: LOGINOUT now waits for RETURN before presenting Username:
 # (the "press RETURN to log in" console behaviour). Wake it with a CR -- a
 # real operator's keystroke -- so the login prompt appears.

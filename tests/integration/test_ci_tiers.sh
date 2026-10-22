@@ -66,6 +66,18 @@ done
 o=$(tier merge_group q tests/qemu/test_kmod_access.c)
 case "$(get "$o" negctl_select)" in *access-mode-escalation*) ok "queue: a suite source selects the defects that redden it" ;; *) bad "suite source map" ;; esac
 
+# decnet tier (ci-vax vax-decnet-pair, rd vms-9394): queue only when touched
+o=$(tier merge_group q src/libdatalink/ovmx_datalink.c)
+[ "$(get "$o" decnet)" = true ] && ok "queue: a datalink change runs the DECnet pair" || bad "decnet area"
+o=$(tier merge_group q src/vmsdecnet/engine/decnetd.c)
+[ "$(get "$o" decnet)" = true ] && ok "queue: a NETACP change runs the DECnet pair" || bad "decnet netacp"
+o=$(tier merge_group q docs/foo.md src/kernel-core/vms_access.c)
+[ "$(get "$o" decnet)" = false ] && ok "queue: an unrelated change does not run the DECnet pair" || bad "decnet unrelated"
+o=$(tier pull_request refs/pull/1/merge src/vmsdecnet/engine/decnetd.c)
+[ "$(get "$o" decnet)" = false ] && ok "PRs never run the DECnet pair" || bad "decnet pr"
+o=$(tier schedule refs/heads/main docs/x.md)
+[ "$(get "$o" decnet)" = true ] && ok "nightly runs the DECnet pair" || bad "decnet nightly"
+
 # keystroke / alpha selfhost area
 o=$(tier merge_group q src/kernel-core/vms_tt.c)
 [ "$(get "$o" keystroke)" = true ] && ok "queue: terminal driver change runs the keystroke oracle" || bad "keystroke area"

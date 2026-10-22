@@ -211,6 +211,35 @@ DNET_NETSHOW_API int dnet_netshow_rsp_decode(const uint8_t *buf, size_t len,
                                              struct dnet_netshow_rsp *out);
 
 /* ---------------------------------------------------------------------------
+ * NODE CONTROL: NCP SET / CLEAR NODE against the RUNNING NETACP's VOLATILE node
+ * database (NCP DEFINE / PURGE NODE change the permanent database, the file).
+ * Rides the same IO$_ACPCONTROL as SHOW; told apart by its first byte, which no
+ * SHOW request carries. NETACP answers with a status only:
+ *   SS$_NORMAL, SS$_NOPRIV (no OPER), SS$_BADPARAM (bad address/name, or the
+ *   name already names another node), SS$_NOSUCHNODE (CLEAR of a node the
+ *   volatile database does not hold), SS$_INSFMEM (the database is full).
+ * ------------------------------------------------------------------------- */
+#define DNET_NETCTL_VERSION    0xC1u
+#define DNET_NETCTL_SET_NODE   1u     /* addr + name ("" = unnamed)                 */
+#define DNET_NETCTL_CLEAR_NODE 2u     /* addr, or (addr 0) the name                 */
+#define DNET_NETCTL_REQ_LEN    (4u + DNET_NETSHOW_NAMEMAX + 1u)  /* ver kind addr2 name7 */
+
+struct dnet_netctl_req {
+    uint8_t  kind;                          /* DNET_NETCTL_*                       */
+    uint16_t addr;                          /* area<<10 | node, 0 = by name        */
+    char     name[DNET_NETSHOW_NAMEMAX + 1];
+};
+
+/* Encode/decode: decode requires exactly DNET_NETCTL_REQ_LEN bytes, the version,
+ * a known kind and a NUL-terminated name within its field. */
+DNET_NETSHOW_API int dnet_netctl_req_encode(const struct dnet_netctl_req *q,
+                                            uint8_t *buf, size_t cap, size_t *outlen);
+DNET_NETSHOW_API int dnet_netctl_req_decode(const uint8_t *buf, size_t len,
+                                            struct dnet_netctl_req *out);
+/* 1 iff buf is a node-control record (its first byte), not a SHOW request. */
+DNET_NETSHOW_API int dnet_netctl_is_req(const uint8_t *buf, size_t len);
+
+/* ---------------------------------------------------------------------------
  * The CLIENT: gather a whole entity (walking pages) through a query callback --
  * libvms $QIO IO$_ACPCONTROL on a _NET: channel in NCP/DCL, the in-process broker
  * in the host selftest. query() returns the VMS completion status and the raw
@@ -250,6 +279,10 @@ struct dnet_netshow_view {
  * asked for / whose pages do not chain, or 1 (SS$_NORMAL). */
 DNET_NETSHOW_API uint32_t dnet_netshow_fetch(dnet_netshow_query_fn query, void *ctx,
                                              uint8_t entity, struct dnet_netshow_view *v);
+
+/* Send ONE node-control request through `query`; returns NETACP's status. */
+DNET_NETSHOW_API uint32_t dnet_netctl_send(dnet_netshow_query_fn query, void *ctx,
+                                           const struct dnet_netctl_req *q);
 
 /* ---------------------------------------------------------------------------
  * The FORMATTERS (oracle layout). Each line is handed to emit() WITHOUT a

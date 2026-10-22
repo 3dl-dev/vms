@@ -230,6 +230,16 @@ extern "C" {
 #define SS$_DEVMOUNT        108    /* Device already mounted */
 #define SS$_DEVNOTMOUNT     124    /* Device not mounted */
 #define SS$_NOSUCHFILE      2320    /* No such file */
+/* ORACLE-PINNED: docs/oracle/vax73-starlet-defs/SSDEF.txt ($EQU SS$_ACCONFLICT 2048,
+ * $EQU SS$_FCPREADERR 2184); msgcat 0x800 %SYSTEM-W-ACCONFLICT "file access
+ * conflict", 0x888 %SYSTEM-W-FCPREADERR "file processor read error". The SS$
+ * forms of an RMS file-access failure, for a word-wide IOSB (rd vms-acf3). */
+#ifndef SS$_ACCONFLICT
+#define SS$_ACCONFLICT      2048    /* File access conflict */
+#endif
+#ifndef SS$_FCPREADERR
+#define SS$_FCPREADERR      2184    /* File processor read error */
+#endif
 /* ORACLE-PINNED: docs/oracle/vax73-starlet-defs/SSDEF.txt + alpha84 ($EQU SS$_NOSUCHSEC 2424);
  * msgcat 0x978 %SYSTEM-W-NOSUCHSEC "no such (global) section" (rd vms-d91). */
 #define SS$_NOSUCHSEC       2424    /* No such (global) section */

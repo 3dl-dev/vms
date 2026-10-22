@@ -227,6 +227,61 @@ static int sethost_source_executor(unsigned *area, unsigned *node)
     return 0;
 }
 
+/*
+ * NETACP's VOLATILE node database (rd vms-acf3 follow-up). As on VMS, the
+ * running network works from its volatile copy: it is loaded from the
+ * permanent database (SYS$SYSTEM:NETNODE_REMOTE.DAT, what NCP DEFINE writes)
+ * when NETACP starts serving, every NETACP lookup reads it -- connect
+ * resolution, NCP SHOW, the remote port info and peer names of inbound
+ * sessions -- and NCP SET/CLEAR NODE change it through NETACP
+ * (netacp_netctl), never the file. NCP DEFINE/PURGE NODE change the file
+ * only; the next NETACP start loads it. So a SET HOST no longer reads a file
+ * at all: it used to re-read NETNODE_REMOTE.DAT on every lookup, which was
+ * both unlike VMS and what a cross-node file-lock collision (rd vms-326)
+ * turned into SET HOST failures.
+ *
+ * Before NETACP serves (self-tests, the --set-host client, COPY), the
+ * permanent file is what a lookup reads, as before.
+ */
+static struct dnet_nodedb g_vnodes;
+static int g_vnodes_live;
+
+/* Load the volatile database from the permanent one: NETACP start. A missing
+ * permanent database is an empty volatile one; an unreadable one is reported
+ * and leaves it empty (the network still starts; SET NODE can fill it). */
+static void netacp_vnodes_load(void)
+{
+    int rc = dnet_store_load_nodes(&g_vnodes);
+    if (rc == DNET_STORE_EREAD) {
+        log_ts(stderr);
+        fprintf(stderr, " DECNETD-E-NODEDB, cannot read the permanent node database"
+                        " (status %08X); the volatile database starts empty\n",
+                (unsigned)dnet_store_last_rms_status());
+        fflush(stderr);
+        dnet_nodedb_init(&g_vnodes);
+    } else if (rc != DNET_STORE_OK) {
+        dnet_nodedb_init(&g_vnodes);
+    }
+    g_vnodes_live = 1;
+}
+
+/* The node database a lookup reads: NETACP's volatile copy while it serves,
+ * else the permanent file. NULL (and *err = DNET_STORE_EREAD) when the file
+ * could not be read. */
+static const struct dnet_nodedb *netacp_nodedb(int *err)
+{
+    static struct dnet_nodedb file_db;
+    if (err) *err = DNET_STORE_OK;
+    if (g_vnodes_live)
+        return &g_vnodes;
+    int rc = dnet_store_load_nodes(&file_db);
+    if (rc != DNET_STORE_OK) {
+        if (err) *err = rc;
+        return NULL;
+    }
+    return &file_db;
+}
+
 /* Resolve a --set-host target: accept "area.node" directly, else look the token
  * up as a NODE NAME (case-insensitive) in the remote node database. Returns 0
  * and fills area/node; -1 when the database does not list the name; -2 when
@@ -237,13 +292,13 @@ static int sethost_resolve_target(const char *token, unsigned *area, unsigned *n
 {
     if (parse_addr(token, area, node) == 0)
         return 0;
-    static struct dnet_nodedb db;
-    int lrc = dnet_store_load_nodes(&db);
+    int lrc = DNET_STORE_OK;
+    const struct dnet_nodedb *db = netacp_nodedb(&lrc);
     if (lrc == DNET_STORE_EREAD)
         return -2;
-    if (lrc != DNET_STORE_OK)
+    if (!db)
         return -1;
-    const struct dnet_node_entry *e = dnet_nodedb_by_name(&db, token);
+    const struct dnet_node_entry *e = dnet_nodedb_by_name(db, token);
     if (!e)
         return -1;
     *area = dnet_area_of(e->addr);
@@ -948,12 +1003,15 @@ static uint32_t broker_open_connect(const struct dnet_engine *node, uint32_t own
          * A node database NETACP could not READ is not "unknown": the request
          * fails with the RMS status of that read (rd vms-acf3). */
         if (rrc == -2) {
-            st = dnet_store_last_rms_status();
-            if (st == 0 || (st & 1))
-                st = RMS$_RER;
+            uint32_t rst = dnet_store_last_rms_status();
+            if (rst == 0 || (rst & 1))
+                rst = RMS$_RER;
             fprintf(stderr, "DECNETD-E-NODEDB, cannot read the node database to resolve '%s' (status %08X)\n",
-                    n.node, (unsigned)st);
+                    n.node, (unsigned)rst);
             fflush(stderr);
+            /* A NET: completion carries an SS$ (word) status: the RMS
+             * failure's SS$ form, e.g. RMS$_FLK -> SS$_ACCONFLICT. */
+            st = dnet_broker_iosb_status(rst);
         } else {
             st = SS$_NOSUCHNODE;
         }
@@ -5343,11 +5401,11 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
  * ("1025::SYSTEM"). Re-records the RTAn:'s remote port info with the name. */
 static void netacp_rpi_by_name(struct dnet_cterm_host_session *hs, uint16_t peer)
 {
-    static struct dnet_nodedb db;
     const char *user = strstr(hs->remote_port_info, "::");
-    if (!user || !hs->devnam[0] || dnet_store_load_nodes(&db) != DNET_STORE_OK)
+    const struct dnet_nodedb *db = netacp_nodedb(NULL);
+    if (!user || !hs->devnam[0] || !db)
         return;
-    const struct dnet_node_entry *e = dnet_nodedb_by_addr(&db, peer);
+    const struct dnet_node_entry *e = dnet_nodedb_by_addr(db, peer);
     if (!e || !e->name[0])
         return;
     char named[sizeof hs->remote_port_info];
@@ -5362,10 +5420,10 @@ static void netacp_rpi_by_name(struct dnet_cterm_host_session *hs, uint16_t peer
  * else its decimal address (rd vms-47fd; the same rule as Remote Port Info). */
 static void netacp_peer_name(uint16_t peer, char *out, size_t cap)
 {
-    static struct dnet_nodedb db;
     const struct dnet_node_entry *e = NULL;
-    if (dnet_store_load_nodes(&db) == DNET_STORE_OK)
-        e = dnet_nodedb_by_addr(&db, peer);
+    const struct dnet_nodedb *db = netacp_nodedb(NULL);
+    if (db)
+        e = dnet_nodedb_by_addr(db, peer);
     if (e && e->name[0]) snprintf(out, cap, "%s", e->name);
     else                 snprintf(out, cap, "%u", (unsigned)peer);
 }
@@ -5673,12 +5731,61 @@ static unsigned netacp_show_nodes(const struct netacp_slot *slots,
     return n;
 }
 
+/*
+ * netacp_netctl - NCP SET / CLEAR NODE against this NETACP's VOLATILE node
+ * database (dnet_netctl request; NCP DEFINE / PURGE change the permanent file).
+ * VMS's NCP SET and CLEAR need OPER, so the requester's current privileges are
+ * read from the executive (its PID is the one that queued the request) and a
+ * requester without OPER is refused SS$_NOPRIV -- as is one the executive
+ * cannot describe. The answer is a status only.
+ */
+/* The requester's current privileges, as the executive holds them; 0 when it
+ * cannot say (fail closed). A hook so the in-process self-test, which has no
+ * executive, can name a requester's privileges. */
+static uint64_t netacp_requester_privs_exec(uint32_t pid)
+{
+    struct vms_procinfo who;
+    memset(&who, 0, sizeof who);
+    if (!(vms_kif_getjpi_pid(pid, &who) & 1))
+        return 0;
+    return who.cur_privs;
+}
+static uint64_t (*g_netacp_requester_privs)(uint32_t pid) = netacp_requester_privs_exec;
+
+static void netacp_netctl(const struct dnet_broker_req *req)
+{
+    struct dnet_netctl_req q;
+    uint32_t st;
+
+    if (dnet_netctl_req_decode(req->data, req->datalen, &q) != DNET_NETSHOW_OK) {
+        netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_BADPARAM, NULL, 0);
+        return;
+    }
+    if (!(g_netacp_requester_privs(req->owner_pid) & PRV$M_OPER)) {
+        netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_NOPRIV, NULL, 0);
+        return;
+    }
+    if (!g_vnodes_live)
+        netacp_vnodes_load();
+    int rc;
+    if (q.kind == DNET_NETCTL_SET_NODE)
+        rc = q.addr ? dnet_nodedb_set(&g_vnodes, q.addr, q.name) : DNET_NODEDB_EINVAL;
+    else if (q.addr)
+        rc = dnet_nodedb_clear_addr(&g_vnodes, q.addr);
+    else
+        rc = dnet_nodedb_clear_name(&g_vnodes, q.name);
+    st = rc == DNET_NODEDB_OK     ? SS$_NORMAL
+       : rc == DNET_NODEDB_ENOENT ? SS$_NOSUCHNODE
+       : rc == DNET_NODEDB_EFULL  ? SS$_INSFMEM
+       :                            SS$_BADPARAM;
+    netacp_respond(NULL, req->reply_unit, req->corr_id, st, NULL, 0);
+}
+
 static void netacp_show(const struct netacp_slot *slots, const struct dnet_engine *node,
                         const struct dnet_broker_req *req)
 {
     static struct dnet_netshow_rsp r;
     static struct dnet_netshow_node all[DNET_NODEDB_MAX + DNET_ADJ_MAX_NEIGHBORS];
-    static struct dnet_nodedb db;
     struct dnet_netshow_req q;
     uint8_t out[DNET_NETSHOW_RSP_MAX + 16];
     size_t olen = 0;
@@ -5692,9 +5799,9 @@ static void netacp_show(const struct netacp_slot *slots, const struct dnet_engin
     r.as_of = (uint32_t)time(NULL);
     netacp_show_exec(slots, node, &r.exec);
 
-    int have_db = dnet_store_load_nodes(&db) == DNET_STORE_OK;
+    const struct dnet_nodedb *vdb = netacp_nodedb(NULL);   /* the VOLATILE database */
     if (q.entity == DNET_NETSHOW_ENT_NODES) {
-        unsigned n = netacp_show_nodes(slots, node, have_db ? &db : NULL, all,
+        unsigned n = netacp_show_nodes(slots, node, vdb, all,
                                        (unsigned)(sizeof all / sizeof all[0]));
         r.total = (uint16_t)n;
         r.first = q.cursor > n ? (uint16_t)n : q.cursor;
@@ -5717,7 +5824,7 @@ static void netacp_show(const struct netacp_slot *slots, const struct dnet_engin
              * neighbours route, so it names none (INV-6), never a guess. */
             if (!dnet_engine_is_router(node) && node->have_dr) {
                 c->adj_addr = dnet_addr_from_id(node->dr_id);
-                netacp_show_name(have_db ? &db : NULL, c->adj_addr, c->adj_name);
+                netacp_show_name(vdb, c->adj_addr, c->adj_name);
             }
         } else if (r.count) {
             struct dnet_netshow_line *l = &r.u.line[0];
@@ -5780,7 +5887,7 @@ static void netacp_show(const struct netacp_slot *slots, const struct dnet_engin
             l->local_link = sl->lk.link.local_addr;
             l->remote_link = sl->lk.link.remote_addr;
             l->node = sl->peer;
-            netacp_show_name(have_db ? &db : NULL, sl->peer, l->name);
+            netacp_show_name(vdb, sl->peer, l->name);
             l->pid = sl->outbound ? sl->owner_pid
                    : sl->object == DNET_FAL_OBJECT ? sl->fal.pid
                    : sl->host.session_pid;
@@ -5908,8 +6015,11 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
     uint16_t base = (uint16_t)(req->op & DNET_BROKER_OP_MASK);
     char pa[8];
 
-    if (base == DNET_BROKER_OP_SHOW) {          /* NCP SHOW: read-only, no link */
-        netacp_show(slots, node, req);
+    if (base == DNET_BROKER_OP_SHOW) {          /* NCP SHOW / SET|CLEAR NODE  */
+        if (dnet_netctl_is_req(req->data, req->datalen))
+            netacp_netctl(req);
+        else
+            netacp_show(slots, node, req);
         return;
     }
     if (base == DNET_BROKER_OP_OPEN) {
@@ -7416,6 +7526,10 @@ static uint32_t show_wrong_entity(void *ctx, const uint8_t *req, size_t reqlen,
     r.entity = DNET_NETSHOW_ENT_LINKS;
     return dnet_netshow_rsp_encode(&r, rsp, rspcap, rsplen) == DNET_NETSHOW_OK ? 1u : 20u;
 }
+/* Requester privileges for the self-test (no executive): OPER, or none. */
+static uint64_t vdb_privs_oper(uint32_t pid) { (void)pid; return PRV$M_OPER; }
+static uint64_t vdb_privs_none(uint32_t pid) { (void)pid; return 0; }
+
 static int nbs_silent_get(void *ctx, uint8_t *buf, size_t cap, size_t *len)
 { (void)ctx; (void)buf; (void)cap; (void)len; return 0; }
 
@@ -7973,6 +8087,107 @@ static int run_netacp_show_selftest(void)
                   "a NETACP not serving inbound connects lists NO objects ('No information in"
                   " database') -- and its dispatch refuses 17 and 42 alike");
         g_netacp_serve_inbound = 1;
+    }
+
+    /* ---- rd vms-acf3: NETACP works from its VOLATILE node database ---- */
+    {
+        unsigned ra = 0, rn = 0;
+        /* The network starts: the volatile copy is loaded from the file. */
+        netacp_vnodes_load();
+        NS2_CHECK(g_vnodes_live && dnet_nodedb_by_name(&g_vnodes, "VAXB") != NULL,
+                  "network start: NETACP's volatile node database is loaded from the permanent one (VAXB)");
+        /* The permanent database changes under it (NCP DEFINE/PURGE): VAXB gone. */
+        {
+            static struct dnet_nodedb pdb;
+            dnet_nodedb_init(&pdb);
+            dnet_nodedb_set(&pdb, (1u << 10) | 2u, "VAX2");
+            (void)dnet_store_save_nodes(&pdb);
+        }
+        NS2_CHECK(sethost_resolve_target("VAXB", &ra, &rn) == 0 && ra == 1 && rn == 11,
+                  "a lookup reads the volatile database, not the file: VAXB still resolves to 1.11"
+                  " after the permanent database dropped it");
+        /* The file becomes UNREADABLE (a directory in its place): no lookup notices. */
+        setenv("OVMX_DECNET_NODEDB", "/", 1);
+        ra = rn = 0;
+        NS2_CHECK(sethost_resolve_target("VAX2", &ra, &rn) == 0 && ra == 1 && rn == 2,
+                  "with the permanent node database unreadable, a SET HOST lookup still resolves"
+                  " (no file is read on the SET HOST path)");
+        uint32_t st2 = dnet_netshow_fetch(show_cli_query, &sc, DNET_NETSHOW_ENT_NODES, &v);
+        int seen_b = 0;
+        for (unsigned i = 0; i < v.nnodes; i++)
+            if (!strcmp(v.nodes[i].name, "VAXB")) seen_b = 1;
+        NS2_CHECK(st2 == 1 && seen_b, "SHOW KNOWN NODES reads the volatile database too (VAXB listed)");
+
+        /* NCP SET / CLEAR NODE through NETACP. */
+        struct dnet_netctl_req q;
+        memset(&q, 0, sizeof q);
+        q.kind = DNET_NETCTL_SET_NODE;
+        q.addr = (uint16_t)((1u << 10) | 7u);
+        snprintf(q.name, sizeof q.name, "VOL7");
+        g_netacp_requester_privs = vdb_privs_none;
+        NS2_CHECK(dnet_netctl_send(show_cli_query, &sc, &q) == SS$_NOPRIV &&
+                  dnet_nodedb_by_name(&g_vnodes, "VOL7") == NULL,
+                  "SET NODE from a requester without OPER is refused SS$_NOPRIV and changes nothing");
+        g_netacp_requester_privs = vdb_privs_oper;
+        NS2_CHECK(dnet_netctl_send(show_cli_query, &sc, &q) == SS$_NORMAL,
+                  "SET NODE 1.7 NAME VOL7 (OPER) is accepted by the running NETACP");
+        ra = rn = 0;
+        NS2_CHECK(sethost_resolve_target("VOL7", &ra, &rn) == 0 && ra == 1 && rn == 7,
+                  "... and VOL7 resolves to 1.7 at once (the volatile database changed)");
+        setenv("OVMX_DECNET_NODEDB", dbpath, 1);
+        {
+            static struct dnet_nodedb fdb;
+            NS2_CHECK(dnet_store_load_nodes(&fdb) == DNET_STORE_OK &&
+                      dnet_nodedb_by_name(&fdb, "VOL7") == NULL,
+                      "... and the permanent database was NOT written (SET is volatile; DEFINE is the file)");
+        }
+        struct dnet_netctl_req dup = q;
+        dup.addr = (uint16_t)((1u << 10) | 8u);           /* VOL7 already names 1.7 */
+        NS2_CHECK(dnet_netctl_send(show_cli_query, &sc, &dup) == SS$_BADPARAM,
+                  "SET NODE giving a name another node already has is refused SS$_BADPARAM");
+        memset(&q, 0, sizeof q);
+        q.kind = DNET_NETCTL_CLEAR_NODE;
+        snprintf(q.name, sizeof q.name, "VOL7");
+        NS2_CHECK(dnet_netctl_send(show_cli_query, &sc, &q) == SS$_NORMAL &&
+                  sethost_resolve_target("VOL7", &ra, &rn) == -1,
+                  "CLEAR NODE VOL7 removes it from the volatile database (it no longer resolves)");
+        NS2_CHECK(dnet_netctl_send(show_cli_query, &sc, &q) == SS$_NOSUCHNODE,
+                  "CLEAR NODE of a node the volatile database does not hold is SS$_NOSUCHNODE");
+        g_netacp_requester_privs = netacp_requester_privs_exec;
+
+        /* The control record: bounds-validated, never confused with a SHOW query. */
+        uint8_t cb[DNET_NETCTL_REQ_LEN + 2];
+        size_t cn = 0;
+        struct dnet_netctl_req cd;
+        memset(&q, 0, sizeof q);
+        q.kind = DNET_NETCTL_SET_NODE; q.addr = 0x0402u; snprintf(q.name, sizeof q.name, "ABCDEF");
+        int ce = dnet_netctl_req_encode(&q, cb, sizeof cb, &cn);
+        NS2_CHECK(ce == DNET_NETSHOW_OK && cn == DNET_NETCTL_REQ_LEN &&
+                  dnet_netctl_req_decode(cb, cn, &cd) == DNET_NETSHOW_OK &&
+                  cd.kind == q.kind && cd.addr == q.addr && !strcmp(cd.name, "ABCDEF") &&
+                  dnet_netctl_req_decode(cb, cn - 1, &cd) == DNET_NETSHOW_ETRUNC &&
+                  dnet_netctl_req_decode(cb, cn + 1, &cd) == DNET_NETSHOW_EBADLEN,
+                  "the node-control record round-trips; a short or long one is refused");
+        cb[4 + 6] = 'X';                                  /* no NUL inside the name field */
+        NS2_CHECK(dnet_netctl_req_decode(cb, cn, &cd) == DNET_NETSHOW_EBADLEN,
+                  "a node-control record whose name has no terminator is refused");
+        struct dnet_netshow_req sq = { DNET_NETSHOW_VERSION, DNET_NETSHOW_ENT_NODES, 0 };
+        uint8_t sb[8]; size_t sn2 = 0;
+        (void)dnet_netshow_req_encode(&sq, sb, sizeof sb, &sn2);
+        NS2_CHECK(dnet_netctl_is_req(cb, cn) && !dnet_netctl_is_req(sb, sn2),
+                  "a node-control record and a SHOW query are told apart by their first byte");
+
+        /* A NET: completion's word-wide IOSB status (rd vms-acf3). */
+        NS2_CHECK(dnet_broker_iosb_status(RMS$_FLK) == SS$_ACCONFLICT &&
+                  dnet_broker_iosb_status(RMS$_SHR) == SS$_ACCONFLICT &&
+                  dnet_broker_iosb_status(RMS$_PRV) == SS$_NOPRIV &&
+                  dnet_broker_iosb_status(RMS$_FNF) == SS$_NOSUCHFILE &&
+                  dnet_broker_iosb_status(RMS$_RER) == SS$_FCPREADERR &&
+                  dnet_broker_iosb_status(SS$_NOSUCHNODE) == SS$_NOSUCHNODE &&
+                  dnet_broker_iosb_status(SS$_NORMAL) == SS$_NORMAL,
+                  "an RMS failure reaches a NET: IOSB as its SS$ form (RMS$_FLK -> SS$_ACCONFLICT,"
+                  " never the truncated 000082AA); an SS$ status is unchanged");
+        g_vnodes_live = 0;
     }
 
     for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
@@ -9062,6 +9277,7 @@ int main(int argc, char **argv)
     static struct netacp_slot slots[NETACP_POOL_CAP];
     memset(slots, 0, sizeof slots);
     uint16_t next_lla = 0x2100;
+    netacp_vnodes_load();              /* the network starts: volatile <- permanent */
     memcpy(g_netacp_self, eng.my_id, 6);
     g_netacp_self_set = 1;
     g_netacp_serve_inbound = cterm_server;

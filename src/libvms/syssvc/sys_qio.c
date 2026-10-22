@@ -877,7 +877,9 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
  *   IO$_READVBLK  p1 = buffer, p2 = size; waits for a message. With IO$M_NOW it
  *                 completes at once, SS$_ENDOFFILE when none is buffered.
  *   IO$_DEACCESS  disconnect.
- *   IO$_ACPCONTROL a READ-ONLY query of NETACP's volatile database (NCP SHOW,
+ *   IO$_ACPCONTROL a query of NETACP's volatile database (NCP SHOW) or a change
+ *                 to its volatile node database (NCP SET/CLEAR NODE, dnet_netctl,
+ *                 OPER checked by NETACP; rd vms-acf3) -- (NCP SHOW,
  *                 DCL SHOW NETWORK -- rd vms-30e): p1 = buffer, p2 = its size,
  *                 p3 = the length of the query the caller placed at p1 (a
  *                 dnet_netshow request). NETACP's snapshot record overwrites the
@@ -1088,6 +1090,10 @@ static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         }
     }
 
+    /* The IOSB status is a WORD: a facility status (an RMS$_ code NETACP got
+     * reading a file) is given as its SS$ form, never truncated into a
+     * "%NONAME-E-NOMSG" number (rd vms-acf3). */
+    st = dnet_broker_iosb_status(st);
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)st;
         iosb->iosb$w_bcnt = (xfer > 65535) ? 65535 : (uint16_t)xfer;

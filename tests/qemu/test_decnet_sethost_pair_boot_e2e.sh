@@ -165,10 +165,24 @@ if [ "$ra" -eq 0 ] && [ "$rb" -eq 0 ]; then
     echo "  (letting the two NETACPs hear each other ${NETACP_SETTLE}s)"
     sleep "$NETACP_SETTLE"
 
+    # rd vms-acf3: the running network works from NETACP's VOLATILE node
+    # database, loaded at network start. Take OVMXB out of A's PERMANENT
+    # database now (PURGE): LIST no longer shows it, yet the SET HOST below
+    # still resolves OVMXB -- from the volatile copy, reading no file.
+    op=$(wc -c <"$LA")
+    send A 'NCP PURGE NODE OVMXB'; sleep 3
+    ol=$(wc -c <"$LA")
+    send A 'NCP LIST KNOWN NODES'; sleep 4
+    pseg=$(tail -c "+$((op + 1))" "$LA" | head -c "$((ol - op))" | tr -d '\r')
+    lseg=$(tail -c "+$((ol + 1))" "$LA" | tr -d '\r')
+    if printf '%s\n' "$lseg" | grep >/dev/null -E '^ *[0-9]+\.[0-9]+ +OVMXB *$' ||
+       ! printf '%s\n' "$lseg" | grep >/dev/null -F 'Known Node Permanent Summary' ||
+       printf '%s\n' "$pseg" | grep >/dev/null -F '%NCP-E-'; then rc=1; else rc=0; fi
+    record "A: NCP PURGE NODE OVMXB took it out of the permanent database (LIST no longer lists it)" "$rc"
     o0=$(wc -c <"$LA")
     send A 'SET HOST OVMXB'
     if waitafter A 'Username:' 120 "$LA" "$o0"; then rc=0; else rc=1; fi
-    record "A: SET HOST OVMXB reaches B's LOGINOUT Username: prompt" "$rc"
+    record "A: SET HOST OVMXB reaches B's LOGINOUT Username: prompt (resolved from NETACP's volatile node database; the permanent one no longer lists OVMXB)" "$rc"
     sleep 1
     o1=$(wc -c <"$LA")
     send A 'SYSTEM'

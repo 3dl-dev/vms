@@ -361,6 +361,10 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                     mkdir -p "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0"
                     cp -r "$JOINT/inc/usr/include" "$ST/vms/SYS0/SYSCOMMON/USR/INCLUDE"
                     cp -r "$JOINT/inc/gnu/gcc-include" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0/INCLUDE"
+                    # vms-9a0: GCC's source + generated headers, the response file -> GCCSRC:[...]
+                    if [ -d "$JOINT/gccsrc" ]; then
+                        cp -r "$JOINT/gccsrc" "$ST/vms/SYS0/SYSCOMMON/GCCSRC"
+                    fi
                     # the C++ headers on ODS-2 names (+ header.gcc remap pairs) -> GNU:[CXX]
                     if [ -d "$JOINT/inc/gnu/cxx" ]; then
                         cp -r "$JOINT/inc/gnu/cxx" "$ST/vms/SYS0/SYSCOMMON/GNU/CXX"

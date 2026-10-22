@@ -586,10 +586,10 @@ assert_lnk() {
 # program, run by DCL, printed its line and finished with a success status, and (d) no
 # activation error or abnormal termination.
 assert_drl() {
-  local log="$1" r1="$2" r2="$3" r1b="$4" r2b="$5" r1c="$6" r2c="$7" r1d="$8" r2d="$9"
+  local log="$1" r1="$2" r2="$3" r1b="$4" r2b="$5" r1c="$6" r2c="$7" r1d="$8" r2d="$9" r1e="${10}" r2e="${11}"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
-  [ -s "$r1" ] && [ -s "$r2" ] && [ -s "$r1b" ] && [ -s "$r2b" ] && [ -s "$r1c" ] && [ -s "$r2c" ] && [ -s "$r1d" ] && [ -s "$r2d" ] || { echo "  FAIL: no reference image"; return 1; }
-  local same4=0 ran4=0 st4_ok=0 sys_ok=0 same3=0 ran3=0 st3_ok=0 same2=0 ran2=0 st2_ok=0 drv_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 ran=0 st_ok=0
+  [ -s "$r1" ] && [ -s "$r2" ] && [ -s "$r1b" ] && [ -s "$r2b" ] && [ -s "$r1c" ] && [ -s "$r2c" ] && [ -s "$r1d" ] && [ -s "$r2d" ] && [ -s "$r1e" ] && [ -s "$r2e" ] || { echo "  FAIL: no reference image"; return 1; }
+  local same5=0 st5_ok=0 same4=0 ran4=0 st4_ok=0 sys_ok=0 same3=0 ran3=0 st3_ok=0 same2=0 ran2=0 st2_ok=0 drv_ok seam mile_hex mile_dec sentinel="?" mile_ok=0 same=0 ran=0 st_ok=0
   drv_ok=$(grep -qaE 'OVMX xgcc run: pid_ok=1 exited=1 code=0 ' "$log" && echo 1 || echo 0)
   # vms-5b3: a compiler that fails is seen to fail by its parent (GCC's fatal exit, code 1)
   local fail_seen
@@ -628,6 +628,10 @@ assert_drl() {
   awk '/DRL-PROOF: === RUN THE C\+\+ PROGRAM/{f=1; next} /DRL-PROOF: CXX-STATUS=/{f=0} f' "$log" | tr -d '\r' \
     | grep -x 'cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1' >/dev/null && ran4=1
   grep -aqE 'DRL-PROOF: CXX-STATUS=%X00000001 SEVERITY=1' "$log" && st4_ok=1
+  # vms-9a0: a real cc1 source file (gcc/c/c-lang.cc, GCC's own build flags) compiled on OVMX
+  grep -aqE 'DRL-PROOF: BUILD-TU-STATUS=%X00000001 SEVERITY=1' "$log" && st5_ok=1
+  CMP_BEGIN="DRL-PROOF: === INDEPENDENT READER: DCL DUMP C-LANG.OBJ ===" CMP_END="DRL-PROOF: DUMP5-STATUS=" \
+    python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1e" "$r2e" && same5=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
@@ -639,8 +643,9 @@ assert_drl() {
   echo "  (c3) HELLO2 (system headers, default search): DUMP == cross driver image : same=$same2 ; RUN printed the line : $ran2 ; success status : $st2_ok"
   echo "  (c4) native build (GCC + AR foreign commands, library, link): DUMP == cross build image : same=$same3 ; RUN printed the line : $ran3 ; success status : $st3_ok"
   echo "  (c5) C++ (native g++ -> cc1plus, LINK against libstdc++): DUMP == cross g++ image : same=$same4 ; RUN printed the line : $ran4 ; success status : $st4_ok"
+  echo "  (c6) cc1 source TU (gcc/c/c-lang.cc) compiled by the native g++: DUMP == cross g++ object : same=$same5 ; success status : $st5_ok"
   echo "  (d) no activation err : ok=$err_ok"
-  [ "$fail_seen" -eq 1 ] && [ "$same4" -eq 1 ] && [ "$ran4" -eq 1 ] && [ "$st4_ok" -eq 1 ] && [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$same3" -eq 1 ] && [ "$ran3" -eq 1 ] && [ "$st3_ok" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$same5" -eq 1 ] && [ "$st5_ok" -eq 1 ] && [ "$fail_seen" -eq 1 ] && [ "$same4" -eq 1 ] && [ "$ran4" -eq 1 ] && [ "$st4_ok" -eq 1 ] && [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$same3" -eq 1 ] && [ "$ran3" -eq 1 ] && [ "$st3_ok" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -2239,7 +2244,7 @@ PYEOF2
     export OVMX_ALPHA_DISK_MB=512
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
-    BOOT_TIMEOUT="${DRL_BOOT_TIMEOUT:-2400}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
+    BOOT_TIMEOUT="${DRL_BOOT_TIMEOUT:-4800}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
     _st=$(mktemp -d); _fails=0
     python3 -I - "$_st" <<'PYEOF2'
 import sys
@@ -2249,6 +2254,7 @@ open(d + "/r1.exe", "wb").write(ref1); open(d + "/r2.exe", "wb").write(bytes(r2)
 open(d + "/r1b.exe", "wb").write(ref1); open(d + "/r2b.exe", "wb").write(bytes(r2))
 open(d + "/r1c.exe", "wb").write(ref1); open(d + "/r2c.exe", "wb").write(bytes(r2))
 open(d + "/r1d.exe", "wb").write(ref1); open(d + "/r2d.exe", "wb").write(bytes(r2))
+open(d + "/r1e.obj", "wb").write(ref1); open(d + "/r2e.obj", "wb").write(bytes(r2))
 def dump(b):
     out = []
     for o in range(0, len(b), 16):
@@ -2285,7 +2291,11 @@ PYEOF2
         && sed 's/$/\r/' "$_st/${14:-good}.dump" \
         && printf '%s\r\n' "DRL-PROOF: DUMP4-STATUS=%X00000001 SEVERITY=1" \
         "DRL-PROOF: === RUN THE C++ PROGRAM: RUN CXXHELLO.EXE ===" "${15-cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1}" \
-        "DRL-PROOF: CXX-STATUS=${16:-%X00000001} SEVERITY=1" "DRL-PROOF: === END ==="
+        "DRL-PROOF: CXX-STATUS=${16:-%X00000001} SEVERITY=1" \
+        "DRL-PROOF: BUILD-TU-STATUS=${19:-%X00000001} SEVERITY=1" \
+        "DRL-PROOF: === INDEPENDENT READER: DCL DUMP C-LANG.OBJ ===" \
+        && sed 's/$/\r/' "$_st/${18:-good}.dump" \
+        && printf '%s\r\n' "DRL-PROOF: DUMP5-STATUS=%X00000001 SEVERITY=1" "DRL-PROOF: === END ==="
     }
     mklog 0 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 > "$_st/pass.log"
     mklog 1 0x0035a039 "hello from cc1 on OVMX 49" %X00000001 > "$_st/noxgcc.log"
@@ -2313,10 +2323,13 @@ PYEOF2
     _p13 good "cxx ctor=0 virt=7 vec=OVMX,C++/libstdc++ caught=1" > "$_st/noctor4.log"
     _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X0000002C > "$_st/badstatus4.log"
     _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 0 > "$_st/failunseen.log"
+    _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 1 bad > "$_st/diffobj5.log"
+    _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 1 short > "$_st/shortobj5.log"
+    _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 1 good %X1035A00A > "$_st/tufail5.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:LD terminated abnormally (signal 11)'; } > "$_st/crash.log"
-    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "diffexe3:1" "noout3:1" "wrongout3:1" "badstatus3:1" "diffexe2:1" "noout2:1" "wrongout2:1" "badstatus2:1" "diffexe4:1" "shortexe4:1" "noout4:1" "nocatch4:1" "noctor4:1" "badstatus4:1" "failunseen:1" "crash:1"; do
+    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "diffexe3:1" "noout3:1" "wrongout3:1" "badstatus3:1" "diffexe2:1" "noout2:1" "wrongout2:1" "badstatus2:1" "diffexe4:1" "shortexe4:1" "noout4:1" "nocatch4:1" "noctor4:1" "badstatus4:1" "failunseen:1" "diffobj5:1" "shortobj5:1" "tufail5:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
-      if assert_drl "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" "$_st/r1b.exe" "$_st/r2b.exe" "$_st/r1c.exe" "$_st/r2c.exe" "$_st/r1d.exe" "$_st/r2d.exe" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if assert_drl "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" "$_st/r1b.exe" "$_st/r2b.exe" "$_st/r1c.exe" "$_st/r2c.exe" "$_st/r1d.exe" "$_st/r2d.exe" "$_st/r1e.obj" "$_st/r2e.obj" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  xgcclink selftest $_n: PASS"; else echo "  xgcclink selftest $_n: FAIL"; _fails=$((_fails+1)); fi
     done
     rm -rf "$_st"
@@ -2334,7 +2347,8 @@ PYEOF2
     mkdir -p "$GATE_ROOT/hostgcc" "$GATE_ROOT/hostas" "$GATE_ROOT/hostlink"
     log "step 1c2: GCC for the alpha-dec-vms host (cached or built, network disabled)"
     if [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/ld.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/ar.exe" ] \
-       && [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1plus.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/gxx.exe" ]; then log "host GCC restored from cache"; else
+       && [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1plus.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/gxx.exe" ] \
+       && [ -s "$GATE_ROOT/hostgcc/host-gcc/gccsrc.tar" ]; then log "host GCC restored from cache"; else
     docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
       bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
       || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
@@ -2403,7 +2417,15 @@ for l in com:
 want = open(sys.argv[2]).read().splitlines()
 sys.exit(0 if got == want else 1)
 PYEOF3
-    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/drlimg:/img" \
+    # vms-9a0: one real cc1 source file, gcc/c/c-lang.cc, with the flags GCC's own all-gcc
+    # build gives it (build-host-gcc.sh, make.log), over GCC's headers at /GCCSRC/{SRC,BLD,HOST}
+    # -- the same path for the cross g++ (a container directory) and the native one (the
+    # rooted logical GCCSRC). Everything after the driver name is in a response file the
+    # driver reads (@file), so the case of every argument is exactly as written.
+    printf '%s\n' "-fno-PIE -DIN_GCC_FRONTEND -O2 -DIN_GCC -fno-exceptions -fno-rtti -fasynchronous-unwind-tables -W -Wall -Wno-narrowing -Wwrite-strings -Wcast-qual -Wmissing-format-attribute -Wconditionally-supported -Woverloaded-virtual -pedantic -Wno-long-long -Wno-variadic-macros -Wno-overlength-strings -DHAVE_CONFIG_H -fno-PIE -I/GCCSRC/BLD/gcc -I/GCCSRC/SRC/gcc -I/GCCSRC/SRC/gcc/c -I/GCCSRC/SRC/include -I/GCCSRC/SRC/libcpp/include -I/GCCSRC/SRC/libcody -I/GCCSRC/HOST/include -I/GCCSRC/SRC/libdecnumber -I/GCCSRC/SRC/libdecnumber/dpd -I/GCCSRC/BLD/libdecnumber -I/GCCSRC/SRC/libbacktrace" > "$GATE_ROOT/drlimg/cc1tu.flags"
+    printf '%s\n' "-BSYS\$SYSTEM: -remap -nostdinc++ -isystem /GNU/CXX -isystem /GNU/CXX/ALPHA-DEC-VMS $(cat "$GATE_ROOT/drlimg/cc1tu.flags") -x c++ -c VDA0:[SYSTMP]C-LANG.CC -o VDA0:[SYSTMP]C-LANG.OBJ" \
+      > "$GATE_ROOT/drlimg/cc1tu.rsp"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/drlimg:/img" -v "$_hg:/hg:ro" \
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
         set -e
         G=/out/cxx/bin/alpha-dec-vms-gcc
@@ -2456,6 +2478,15 @@ PYEOF3
         cp r1/cxxhello.exe ref1d.exe; cp r2/cxxhello.exe ref2d.exe
         cp $P32/lib/libstdc++.a libstdcxx.a
         rm -rf cxx-src; cp -rL $P32/include/c++/14_2_0 cxx-src
+        # vms-9a0: the cc1 source file, by the cross g++ over the same /GCCSRC tree
+        mkdir -p /GCCSRC && tar xf /hg/gccsrc.tar -C /GCCSRC --strip-components=1
+        cp /GCCSRC/SRC/gcc/c/c-lang.cc "VDA0:[SYSTMP]C-LANG.CC"
+        for n in 1 2; do
+          $GXX -nostdinc++ -isystem $P32/include/c++/14_2_0 -isystem $P32/include/c++/14_2_0/alpha-dec-vms \
+            $(cat cc1tu.flags) -x c++ -c "VDA0:[SYSTMP]C-LANG.CC" -o r$n/c-lang.obj
+          [ "$n" = 1 ] && sleep 3
+        done
+        cp r1/c-lang.obj ref1e.obj; cp r2/c-lang.obj ref2e.obj
         # the headers the native driver is given: the cross sysroot (musl C RTL + STARLET) and
         # the compiler own, in the trees the staged system volume carries
         mkdir -p inc/usr inc/gnu
@@ -2464,6 +2495,7 @@ PYEOF3
       > "$GATE_ROOT/drl-link.log" 2>&1 || { tail -40 "$GATE_ROOT/drl-link.log"; die "launcher link / reference build failed"; }
     [ -s "$GATE_ROOT/drlimg/ref1.exe" ] || die "the cross driver wrote no reference image"
     [ -s "$GATE_ROOT/drlimg/ref1d.exe" ] || die "the cross g++ wrote no C++ reference image"
+    [ -s "$GATE_ROOT/drlimg/ref1e.obj" ] || die "the cross g++ wrote no c-lang.obj reference"
     # the C++ headers on ODS-2 names, with the header.gcc maps g++ -remap reads (c++config.h ...)
     # (into a tree this user owns: drlimg/ is written by the container)
     rm -rf "$GATE_ROOT/cxxinc"
@@ -2483,6 +2515,10 @@ PYEOF3
     done
     rm -rf "$WORK/joint/inc"; cp -r "$GATE_ROOT/drlimg/inc" "$WORK/joint/inc"
     cp -r "$GATE_ROOT/cxxinc" "$WORK/joint/inc/gnu/cxx"
+    # vms-9a0: GCC's source + generated headers and the response file -> GCCSRC (SYS$COMMON:[GCCSRC])
+    rm -rf "$WORK/joint/gccsrc"; mkdir -p "$WORK/joint/gccsrc"
+    tar xf "$_hg/gccsrc.tar" -C "$WORK/joint/gccsrc" --strip-components=1
+    cp "$GATE_ROOT/drlimg/cc1tu.rsp" "$WORK/joint/gccsrc/cc1tu.rsp"
     : > "$WORK/joint/DRL_PROOF"
     assemble_boot_image
     log "step 3: BOOT A -- the GCC driver compiles and links on the REAL executive, then DCL RUNs HELLO.EXE (up to ${BOOT_TIMEOUT}s)"
@@ -2490,7 +2526,7 @@ PYEOF3
     run_boot_a
     # everything the proof printed, the driver's own output included
     awk '/DRL-PROOF: === DCL writes the C source/{f=1} f' "$WORK/modgpA.log" 2>/dev/null | tr -d '\r' | sed 's/^/  | /' || true
-    if assert_drl "$WORK/modgpA.log" "$GATE_ROOT/drlimg/ref1.exe" "$GATE_ROOT/drlimg/ref2.exe" "$GATE_ROOT/drlimg/ref1b.exe" "$GATE_ROOT/drlimg/ref2b.exe" "$GATE_ROOT/drlimg/ref1c.exe" "$GATE_ROOT/drlimg/ref2c.exe" "$GATE_ROOT/drlimg/ref1d.exe" "$GATE_ROOT/drlimg/ref2d.exe"; then
+    if assert_drl "$WORK/modgpA.log" "$GATE_ROOT/drlimg/ref1.exe" "$GATE_ROOT/drlimg/ref2.exe" "$GATE_ROOT/drlimg/ref1b.exe" "$GATE_ROOT/drlimg/ref2b.exe" "$GATE_ROOT/drlimg/ref1c.exe" "$GATE_ROOT/drlimg/ref2c.exe" "$GATE_ROOT/drlimg/ref1d.exe" "$GATE_ROOT/drlimg/ref2d.exe" "$GATE_ROOT/drlimg/ref1e.obj" "$GATE_ROOT/drlimg/ref2e.obj"; then
       echo ""
       echo "PASS: the GCC driver, built for the alpha-dec-vms host, compiled and linked a C program on"
       echo "      OVMX/Alpha (cc1, as, ld -> DCL LINK -> LINK.EXE); RUN HELLO.EXE printed its line;"

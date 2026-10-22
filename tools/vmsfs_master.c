@@ -1081,17 +1081,17 @@ static int read_host_file(const char *path, uint64_t size,
  * (extension), no dot; content bytes are verbatim in BOTH cases. */
 
 /* Construct a node's on-disk directory-entry name: "NAME.DIR" for a directory,
- * "NAME.TYPE" (or bare "NAME" when the type is empty) for a file -- exactly the
+ * "NAME.TYPE" for a file -- "NAME." when the type is empty: an ODS-2 directory
+ * record always spells the '.', and RMS looks a null-type file up as "NAME."
+ * (vms-5b3: libstdc++'s <cstdio>, <string> ... were unreachable) -- exactly the
  * spelling ods2_wvolume_create_dir/create_file_raw + dir_insert expect and the
  * reader resolves back (a "SYS0" path component is the entry "SYS0.DIR"). */
 static void ods2_entry_name(const struct node *n, char *out, size_t outsz)
 {
     if (n->is_dir)
         snprintf(out, outsz, "%s.DIR", n->name);
-    else if (n->type[0])
-        snprintf(out, outsz, "%s.%s", n->name, n->type);
     else
-        snprintf(out, outsz, "%s", n->name);
+        snprintf(out, outsz, "%s.%s", n->name, n->type);
 }
 
 /* Recursively create every child of `dir` (already created, FID `dir_fid`) on

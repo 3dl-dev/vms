@@ -85,6 +85,19 @@ $L $X /EXECUTABLE=v7.exe o7.opt/OPT 2> v7.err
 grep -q 'W-IGNORED.*IDENTIFICATION' v7.err && cmp -s gnu.exe v7.exe && ok "unacted keyword: W-IGNORED, link still correct" || bad "unacted keyword not reported"
 
 
+# vms-5b3: CLUSTER=name,,,file -- the file is linked, ahead of the command's own files
+# (option-declared clusters precede the default cluster): the GNU-style link that names
+# it first is the reference. A base address / pfc is reported, not honoured silently.
+$L $X -o gnu9.exe link_helper.obj link_main.obj 2> /dev/null
+printf '%s\n' 'link_main.obj' 'cluster=EXTRA,,,link_helper.obj' > o9.opt
+$L $X /EXECUTABLE=v9.exe o9.opt/OPT 2> v9.err
+grep -q 'W-IGNORED' v9.err && bad "CLUSTER drew a warning: $(cat v9.err)" || ok "CLUSTER=name,,,file accepted"
+cmp -s gnu9.exe v9.exe && ok "a CLUSTER file is linked ahead of the default cluster == GNU-style image" || bad "CLUSTER file not linked first"
+cmp -s gnu.exe v9.exe && bad "CLUSTER order not distinguishable (fixture)" || true
+printf '%s\n' 'link_main.obj' 'cluster=EXTRA,%X20000,,link_helper.obj' > o10.opt
+$L $X /EXECUTABLE=v10.exe o10.opt/OPT 2> v10.err
+grep -q 'W-IGNORED.*base address' v10.err && cmp -s gnu9.exe v10.exe && ok "CLUSTER base address: W-IGNORED, file still linked" || bad "CLUSTER base address not reported"
+
 # --- the implicit search (/SYSSHR, /SYSLIB default): installed SYS$SHARE:DECC$SHR.EXE and
 # SYS$LIBRARY:STARLET.A are added after what the command names; /NOSYSSHR /NOSYSLIB switch
 # them off; a file the command already names is not added twice. On this host the logicals

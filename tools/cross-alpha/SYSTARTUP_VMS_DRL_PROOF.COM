@@ -104,6 +104,56 @@ $ WRITE SYS$OUTPUT "DRL-PROOF: DUMP3-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === RUN THE BUILT PROGRAM: RUN TWO.EXE ==="
 $ RUN VDA0:[SYSTMP]TWO.EXE
 $ WRITE SYS$OUTPUT "DRL-PROOF: TWO-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
+$!
+$! vms-5b3: C++. GCC 14 is written in C++, so cc1 built on OVMX needs cc1plus and libstdc++
+$! here. The g++ driver (xg++, GXX.EXE: ODS-2 names have no '+') runs CC1PLUS.EXE, as and
+$! ld; LINK searches SYS$SYSTEM:LIBSTDCXX.A, the 32-bit libstdc++. The C++ headers are on
+$! ODS-2 names under GNU:[CXX]: -remap has the preprocessor read each directory's
+$! HEADER.GCC, which pairs a name the source includes (bits/c++config.h) with the name the
+$! file has (CXXCONFIG.H) -- GCC's own mechanism for file systems that restrict names.
+$! -nostdlib++ and the library named last: the -lstdc++ the driver adds would look for
+$! libstdc++.a, a name ODS-2 cannot hold.
+$ WRITE SYS$OUTPUT "DRL-PROOF: === C++: the native g++ compiles a C++ program ==="
+$ OPEN/WRITE HC VDA0:[SYSTMP]CXXHELLO.CC
+$ WRITE HC "#include <cstdio>"
+$ WRITE HC "#include <string>"
+$ WRITE HC "#include <vector>"
+$ WRITE HC "#include <stdexcept>"
+$ WRITE HC "struct B { virtual int f () const { return 1; } virtual ~B () {} };"
+$ WRITE HC "struct D : B { int f () const { return 7; } };"
+$ WRITE HC "static int ctor_ran = 0;"
+$ WRITE HC "struct Init { Init () { ctor_ran = 42; } };"
+$ WRITE HC "static Init g_init;"
+$ WRITE HC "__attribute__ ((noinline)) static int thrower (int x)"
+$ WRITE HC "{"
+$ WRITE HC "  if (x > 0)"
+$ WRITE HC "    throw std::runtime_error (""ovmx"");"
+$ WRITE HC "  return x;"
+$ WRITE HC "}"
+$ WRITE HC "int main (int argc, char **argv)"
+$ WRITE HC "{"
+$ WRITE HC "  B *b = new D;"
+$ WRITE HC "  std::vector<std::string> v;"
+$ WRITE HC "  v.push_back (""OVMX"");"
+$ WRITE HC "  v.push_back (std::string (""C++"") + ""/libstdc++"");"
+$ WRITE HC "  int caught = 0;"
+$ WRITE HC "  try { thrower (argc); }"
+$ WRITE HC "  catch (const std::runtime_error e) { caught = std::string (e.what ()) == ""ovmx""; }"
+$ WRITE HC "  std::printf (""cxx ctor=%d virt=%d vec=%s,%s caught=%d\n"", ctor_ran, b->f (), v[0].c_str (), v[1].c_str (), caught);"
+$ WRITE HC "  delete b;"
+$ WRITE HC "  return 0;"
+$ WRITE HC "}"
+$ CLOSE HC
+$ DIRECTORY GNU:[CXX]STRING.,GNU:[CXX.ALPHA-DEC-VMS.BITS]CXXCONFIG.H,GNU:[CXX.ALPHA-DEC-VMS.BITS]HEADER.GCC
+$ GXX := $SYS$SYSTEM:GXX.EXE
+$ GXX -BSYS$SYSTEM: -L/SYS$SYSTEM -remap -nostdinc++ -isystem /GNU/CXX -isystem /GNU/CXX/ALPHA-DEC-VMS -nostdlib++ -x c++ VDA0:[SYSTMP]CXXHELLO.CC -o VDA0:[SYSTMP]CXXHELLO.EXE -x none SYS$SYSTEM:LIBSTDCXX.A
+$ WRITE SYS$OUTPUT "DRL-PROOF: BUILD-CXX-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
+$ WRITE SYS$OUTPUT "DRL-PROOF: === INDEPENDENT READER: DCL DUMP CXXHELLO.EXE ==="
+$ DUMP VDA0:[SYSTMP]CXXHELLO.EXE
+$ WRITE SYS$OUTPUT "DRL-PROOF: DUMP4-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
+$ WRITE SYS$OUTPUT "DRL-PROOF: === RUN THE C++ PROGRAM: RUN CXXHELLO.EXE ==="
+$ RUN VDA0:[SYSTMP]CXXHELLO.EXE
+$ WRITE SYS$OUTPUT "DRL-PROOF: CXX-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === END ==="
 $!
 $ EXIT

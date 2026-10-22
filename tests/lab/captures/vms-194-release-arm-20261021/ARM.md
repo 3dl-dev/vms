@@ -2,8 +2,19 @@
 
 Pod `vaxlab-4` in `ovmx-lab`, 2026-10-21 22:54-22:59 UTC. Two real OpenVMS VAX
 V7.3 nodes, **no OVMX node** (`CLUSTER_NODES` read 2 on both consoles before
-and after, `LOCKDIRWT` 1 on VAX1). VAX1 is `aa-00-04-00-01-04` (`0104` below),
-VAX2 `aa-00-04-00-a3-96` (`a396`).
+and after, `LOCKDIRWT` 1 on VAX1, `LOCKDIRWT` 1 and SCSSYSTEMID 1026 on VAX2).
+VAX1 is `aa-00-04-00-01-04` (`0104` below), VAX2 `aa-00-04-00-a3-96` (`a396`).
+
+**Substrate provenance, recorded rather than left out.** That pod runs
+`ovmx-vaxlab:5`, not the `:7` its manifest names -- as every shared `vaxlab`
+replica did at the time, which is filed as rd vms-386. `:5`'s headline absence
+is the SIMH `set clock nocatchup` fix (rd vms-549c), whose failure mode is a
+host-scheduling stall presenting as a VAX hang. **This arm is not
+timing-sensitive**: it reads the CONTENT of nine frames, one variable at a
+time, and a stall shows up as a hang rather than as different bytes. Nothing
+hung (both consoles run clean and the cluster read 2 nodes afterwards), and a
+fire whose predictions turn on a WAIT STATE -- rd vms-85f's -- was deliberately
+NOT moved onto this pod for the same reason.
 
 Scored against [`PLAN.md`](PLAN.md) and its **AMENDMENT 1**, both committed
 before the capture existed (`6b42369e2` and `fe27b48b4`). The predictions were

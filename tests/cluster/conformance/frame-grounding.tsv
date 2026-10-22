@@ -227,6 +227,39 @@ dlm_deq	*	108	12	const	const:0	body[36:48]: a real release's STALE BUFFER -- 254
 dlm_deq	*	120	76	const	const:0	body[48:124]: NO RESOURCE NAME, and no residue. A real release carries no name -- the codec refuses to read one, because what a real $DEQ leaves here is whatever last used the buffer (142, 47, 97 ... distinct values per byte) -- so writing one would add a field the reference does not have (rd vms-b5b0)
 dlm_deq	*	196	4	const	const:0	body[124:128]: a real release carries ffffffff (22,419-22,428 of 41,064) or zero (16,987-17,073 per byte); this node writes the zero form, which is a measured real one. UNLIKE the request, whose body[124:128] is ffffffff in 21,656 of 21,656 -- the release's own census is what licenses the difference
 dlm_deq	*	200	4	const	const:0	body[128:132]: a real release's tail residue (174-243 distinct values per byte, all-zero in about 12,500 of 41,064); this node sends none
+# ---- rd vms-a4d7: THE DEFERRED GRANT, cat-0x02 op-0x02. What a master sends
+#      when a lock it answered 0xfb QUEUED becomes grantable, and the frame that
+#      REPLACED rd vms-f87's echo (a second 0xfa answer on an already-answered
+#      transaction -- 0 of 111 real queued transactions, and 0 of the 3,974 real
+#      0xfa grants with no request in their capture, name a queued handle pair).
+#      Grounded by tools/cluster/dlm_late_grant_census.py: 387 real op-0x02
+#      frames (the SHAPE) of which 95 follow a queued answer on that lock's own
+#      handle pair, 0 precede one, and 87 are followed by the requester USING
+#      the lock (the ROLE). Emitted by test_cnxman_coord.c through the shipping
+#      builder. OVMX has never put this frame on a real node's wire. ----
+dlm_grant_notify	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, CNXMAN_ENV_NOTIFY)
+dlm_grant_notify	*	74	2	derived	any:envelope	ack-msg#: the requester's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_grant_notify	*	76	4	const	const:0	body[4:8]: NO TRANSACTION, 0 of 387. A NOTIFICATION -- the corpus holds ZERO cat-0x82 op-0x02 answers anywhere, so nobody answers one, and opening a token for a message no peer will answer is the envelope-inconsistency class that produced CNXMGRERR (the same finding as the release, rd vms-194 D1)
+dlm_grant_notify	*	80	1	const	const:2	body[8]: category 0x02, the request side; 387 of 387
+dlm_grant_notify	*	81	1	const	const:2	body[9]: op 0x02; 387 of 387. The opcode this codec had no name for until this item
+dlm_grant_notify	*	82	2	const	const:0	body[10:12]: a real sender's stale buffer (zero in 237 of 387); this node sends none (rd vms-42de)
+dlm_grant_notify	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b); 387 of 387
+dlm_grant_notify	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq) and stamped by cnxman_dlm_seq_stamp, as on every DLM message. body[15] is 0 in 387 of 387
+dlm_grant_notify	*	88	4	const	const:0	body[16:20]: stale buffer (all-zero in 179 of 387; 112 of the rest read 0x80004428, a VAX S0 kernel address showing through). This node sends none
+dlm_grant_notify	*	92	4	derived	state:mlkid	body[20:24]: THE HANDLE THIS MASTER HOLDS for the lock it just granted, read off that LKB at the moment of the send (vms_lock_dlm_grant_advance_read, which answers SS$_NORMAL only for a GRANTED master-side lock held FOR that system). Non-zero in 387 of 387 and the builder refuses 0: a placeholder handle is what bugchecked VAX1 with INVLOCKID (rd vms-3ac)
+dlm_grant_notify	*	96	4	derived	state:lkid	body[24:28]: the REQUESTER's OWN handle as this engine recorded it on that LKB -- what the requester correlates the grant by. Non-zero in 387 of 387, and it is HALF THE KEY the 95-frame population was found under
+dlm_grant_notify	*	100	1	const	const:14	body[28]: 0x14, 387 of 387
+dlm_grant_notify	*	101	1	const	const:0	body[29]: 0x00, 387 of 387
+dlm_grant_notify	*	102	1	derived	state:mode	body[30]: THE GRANTED MODE, read off the same LKB in the same pass. Equal to the queued request's own mode in 95 of 95, and a real lock mode that is never NL in 387 of 387 -- the builder refuses NL, because an NL request is granted at once and never deferred
+dlm_grant_notify	*	103	1	derived	state:reqmode	body[31]: THE REQUESTED MODE, a SECOND executive read off that LKB (lock->requested_mode), which at a grant equals the mode it was granted at -- body[31] == body[30] in 95 of 95. NOT a copy of body[30]: in the larger CONVERT-correlated population 41 of 267 differ, so the two are different cells and this node writes two reads. WHAT MAKES THEM DIFFER IS NOT KNOWN AND NOT GUESSED
+dlm_grant_notify	*	104	4	const	const:0	body[32:36]: stale buffer (all-zero in 116 of 387). body[34] is included deliberately: it is NOT a status cell for this op -- 0 is its modal real value (255 of 387) and across the 95 it reads 0x00, 0x43, 0xfa, 0xfb, 0x01, 0x20, 0xf9, 0x72, 0x9e, which no status would
+dlm_grant_notify	*	108	12	const	const:0	body[36:48]: stale buffer (all-zero in 266 of 387). body[47], the name length, is 0 in 95 of 95 and 383 of 387: this message is keyed by HANDLES and carries no resource name
+dlm_grant_notify	*	120	64	const	const:0	body[48:112]: NO RESOURCE NAME, and no residue. All-zero in only 16 of 387 real frames -- a real sender leaves whatever last used its message buffer here, including ASCII -- so this node writing zeros is the rd vms-42de ruling applied, not a measured majority
+dlm_grant_notify	*	184	4	const	const:0	body[112:116]: 0, 387 of 387
+dlm_grant_notify	*	188	4	const	const:ffffffff	body[116:120]: ffffffff, 387 of 387
+dlm_grant_notify	*	192	4	const	const:0	body[120:124]: 0, 387 of 387
+dlm_grant_notify	*	196	4	const	const:ffffffff	body[124:128]: ffffffff, 387 of 387 -- the same tail form the REQUEST carries (21,656 of 21,656), measured again for this op rather than assumed from it
+dlm_grant_notify	*	200	4	const	const:0	body[128:132]: a real op-0x02's tail residue (all-zero in 102 of 387, 75-110 distinct values per byte); this node sends none
 # ---- rd vms-85f: the QUEUED answer to a cat-0x02 op-0x01 (cat 0x82, body[34]
 # 0xfb). A frame OVMX had NEVER emitted: a real VAX's $ENQW on a resource OVMX
 # masters and holds at a conflicting mode got no answer at all, its process sat

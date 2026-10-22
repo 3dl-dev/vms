@@ -845,6 +845,35 @@ int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
 		return vms_wire_view_ok(&v) && nlen != 0u &&
 		       nlen < VMS_DLM_NAME_MAX && z == 0u;
 	}
+	/*
+	 * THE DEFERRED GRANT THIS MASTER ORIGINATES (rd vms-a4d7). It faces a
+	 * real VMS member BY DEFINITION: the requester whose lock this master
+	 * queued is the node waiting on it, and that wait is the ci.6
+	 * evacuation's own hang (a real VAX's process in LEF with its $ENQW
+	 * outstanding). Refusing it here is what made the grant OVMX owed
+	 * unsendable -- `send_failed=1` with the CM's own leg reporting
+	 * `refused=0` -- because the shape rd vms-f87 built was a cat-0x82
+	 * ANSWER and the first test below rejects every response.
+	 *
+	 * Admitted on its SHAPE and not on its opcode: both handles non-zero
+	 * (387/387), the flag byte 0x14 (387/387), and a real lock mode that is
+	 * never NL at body[30] (387/387) -- so a body that happens to say 0x02
+	 * is not admitted as one. (Its transaction cell belongs to the CM,
+	 * which routes it through the NOTIFY branch -- see
+	 * vms_dlm_body_is_notification, where the same 0x14 admits it.)
+	 */
+	if (op == VMS_DLM_WIREOP_GRANT_NOTIFY) {
+		uint32_t mh = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
+		uint32_t rh = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+		uint8_t flag = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_NOTIFY_FLAG);
+		uint8_t mode = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_NOTIFY_MODE);
+
+		return vms_wire_view_ok(&v) &&
+		       mh != VMS_DLM_LKID_UNSET && rh != VMS_DLM_LKID_UNSET &&
+		       flag == VMS_DLM_GRANT_NOTIFY_FLAG_VAL &&
+		       mode != (uint8_t)VMS_LCK_NL &&
+		       mode <= (uint8_t)VMS_LCK_EX;
+	}
 	return op == VMS_DLM_WIREOP_ENQ || op == VMS_DLM_WIREOP_CONVERT ||
 	       op == VMS_DLM_WIREOP_CONVERT_VALBLK ||
 	       op == VMS_DLM_WIREOP_DEQ;
@@ -881,6 +910,19 @@ int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len)
 	 */
 	if (op == VMS_DLM_WIREOP_DEQ)
 		return 1;
+	/*
+	 * SO IS THE DEFERRED GRANT (rd vms-a4d7). 0 of 387 real cat-0x02
+	 * op-0x02 frames carry a transaction at body[4:8], and the corpus holds
+	 * ZERO cat-0x82 op-0x02 answers anywhere: nobody answers one. Admitted
+	 * on its SHAPE as well as its opcode -- the flag byte 0x14 that 387 of
+	 * 387 carry -- so a body that merely says 0x02 is not mistaken for it.
+	 */
+	if (op == VMS_DLM_WIREOP_GRANT_NOTIFY) {
+		uint8_t flag = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_NOTIFY_FLAG);
+
+		return vms_wire_view_ok(&v) &&
+		       flag == VMS_DLM_GRANT_NOTIFY_FLAG_VAL;
+	}
 	return op == VMS_DLM_WIREOP_DIR_REMOVE && nlen != 0u;
 }
 
@@ -1302,6 +1344,104 @@ vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
 		return w.err;
 	if (written != (uint32_t *)0)
 		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/* ==========================================================================
+ * THE DEFERRED GRANT, cat-0x02 op-0x02 (rd vms-a4d7, under rd vms-28bd).
+ * Field map, both falsifiers of the shape it replaces, and every census
+ * figure: vms_cluster_codec_dlm.h, "THE DEFERRED GRANT (op 0x02)".
+ * ========================================================================== */
+
+/* THE REFUSALS, each a measured property rather than defensiveness:
+ *   - either handle 0 (dlm_lkid_pair_put): a grant naming lock 0 is a
+ *     placeholder, and a placeholder handle is what bugchecked VAX1 with
+ *     INVLOCKID (rd vms-3ac). Both are non-zero in 387 of 387 real frames.
+ *   - a granted mode outside CR..EX: body[30] is a real lock mode in 387/387
+ *     and NEVER NL. An NL request is granted at once, never deferred, so a
+ *     caller reporting one has nothing to report.
+ *   - a requested mode above EX: body[31] is a mode cell too.
+ * Nothing is clamped. A frame that cannot be built honestly is REFUSED and the
+ * caller counts the refusal (INV-6). */
+static int dlm_grant_notify_modes_ok(const struct vms_dlm_grant_notify *g)
+{
+	return g->granted_mode != (uint8_t)VMS_LCK_NL &&
+	       g->granted_mode <= (uint8_t)VMS_LCK_EX &&
+	       g->req_mode <= (uint8_t)VMS_LCK_EX;
+}
+
+vms_codec_status_t
+vms_dlm_grant_notify_build(const struct vms_dlm_grant_notify *g,
+			   uint8_t *frame, uint32_t cap, uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint32_t i;
+
+	if (g == (const struct vms_dlm_grant_notify *)0)
+		return VMS_CODEC_E_INVAL;
+	if (!dlm_grant_notify_modes_ok(g))
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	/* Every byte this frame does not carry is a zero THIS builder wrote: a
+	 * real sender leaves its message buffer as it found it in the residue
+	 * spans, and none of this node's memory reaches a peer (rd vms-42de). */
+	for (i = 0u; i < VMS_CM_BODY_LEN; i++)
+		vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + i, 0u);
+
+	st = dlm_lkid_pair_put(&w, VMS_DLM_WIREOP_GRANT_NOTIFY, g->req_lkid,
+			       g->master_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_NOTIFY_FLAG,
+			VMS_DLM_GRANT_NOTIFY_FLAG_VAL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_NOTIFY_FLAG2,
+			VMS_DLM_GRANT_NOTIFY_FLAG2_VAL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_NOTIFY_MODE, g->granted_mode);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_NOTIFY_REQMODE, g->req_mode);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_NOTIFY_TAIL1,
+			  VMS_DLM_GRANT_NOTIFY_TAIL_VAL);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_NOTIFY_TAIL2,
+			  VMS_DLM_GRANT_NOTIFY_TAIL_VAL);
+	/* NO TRANSACTION at body[4:8] and NO RESOURCE NAME at body[47:]: both
+	 * stay the zeros written above. body[12:14] = 0x0001 and the cluster's
+	 * DLM sequence at body[14:16] are stamped on the way out by
+	 * cnxman_dlm_seq_stamp, body[0:4] by cnxman_envelope_originate -- the
+	 * same two hands that stamp every other DLM message this node sends. */
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t
+vms_dlm_grant_notify_parse_body(const uint8_t *body, uint32_t len,
+				struct vms_dlm_grant_notify *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_grant_notify g;
+	vms_codec_status_t st;
+
+	if (out == (struct vms_dlm_grant_notify *)0)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, body, len);
+	st = dlm_lkid_pair_get(&v, VMS_DLM_WIREOP_GRANT_NOTIFY, &g.req_lkid,
+			       &g.master_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+	g.granted_mode = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_NOTIFY_MODE);
+	g.req_mode = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_NOTIFY_REQMODE);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (!dlm_grant_notify_modes_ok(&g))
+		return VMS_CODEC_E_RANGE;
+	*out = g;
 	return VMS_CODEC_OK;
 }
 

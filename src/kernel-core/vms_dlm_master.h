@@ -257,11 +257,19 @@ struct vms_dlm_master_result {
 	 * RELEASED: did this release FLIP a queued cross-node waiter to
 	 * granted? Then the master owes THAT requester a deferred GRANT, and
 	 * these name it -- its CSID, its own handle, our handle for it, and
-	 * the mode it now holds. `deferred_grant` 0 means nothing flipped.
+	 * the two modes on the LKB (granted, requested). `deferred_grant` 0
+	 * means nothing flipped.
+	 *
+	 * THE CSID AND OUR HANDLE ARE THE KEY, and the rest are the values the
+	 * frame asserts (rd vms-a4d7): the arm re-reads all of them through
+	 * vms_lock_dlm_grant_advance_read() at the moment of the send, so this
+	 * result's modes are what the engine saw WHEN THE QUEUE MOVED and are
+	 * never themselves put on the wire by the release path.
 	 */
 	uint8_t  deferred_grant;
 	uint8_t  deferred_mode;
-	uint8_t  pad2[2];
+	uint8_t  deferred_req_mode;
+	uint8_t  pad2[1];
 	uint32_t deferred_csid;
 	uint32_t deferred_req_lkid;
 	uint32_t deferred_master_lkid;

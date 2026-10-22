@@ -1456,7 +1456,7 @@ struct vms_dlm_scs_view_wire {
     uint32_t releases_refused;
     uint32_t blkasts_unparsed;
     uint32_t deferred_grants_owed;
-    uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
+    uint32_t deferred_grants_sent;     /* the op-0x02 originated (a4d7/f87)  */
     uint32_t queued_no_reply;
     uint32_t queued_answered;          /* ...and the 0xfb that went back (85f) */
     uint32_t queued_unanswerable;      /* ...and the honest silence left       */
@@ -1468,7 +1468,7 @@ struct vms_dlm_scs_view_wire {
      * See vms_cluster_snapshot.h for what each one means. */
     uint32_t pending_keep_refused;
     uint32_t pending_overflow;
-    uint32_t deferred_grants_no_body;
+    uint32_t deferred_grants_refused;
     uint32_t deferred_grants_send_failed;
     uint32_t unparsed;
     uint32_t foreign_refused;

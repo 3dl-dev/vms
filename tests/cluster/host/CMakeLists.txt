@@ -1216,6 +1216,10 @@ add_test(NAME cluster_frame_conformance_gate
         # required here so the never-crash rule's own condition holds -- no new
         # frame type reaches a real VAX before the gate can see every byte.
         dlm_enq_ans_queued
+        # rd vms-a4d7: the DEFERRED GRANT (cat-0x02 op-0x02). Also a frame type
+        # OVMX has never emitted, and the one that replaced an invented echo --
+        # required here so no byte of it reaches a real lock manager ungrounded.
+        dlm_grant_notify
         # rd vms-380: the remaster shapes. dlm_rm_14 and dlm_rm_14_ra7 are the
         # two forms rd vms-6ad1 (RA7) fires, and they are required HERE so the
         # gate refuses to let either ship ungrounded.

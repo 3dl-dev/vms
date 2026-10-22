@@ -1990,6 +1990,167 @@ static void test_enq_request_pid_cell(void)
 		 "... and a CONVERT carries that same handle back");
 }
 
+/*
+ * rd vms-a4d7: THE DEFERRED GRANT, against the real frames it was derived from.
+ *
+ * Two specimens, two arrangements (heldout-proof-must-vary-topology): two
+ * different masters, two different requesters, two different modes, two
+ * captures. Each is the cat-0x02 op-0x02 a real master sent AFTER answering
+ * that requester's op-0x01 with 0xfb QUEUED on the same handle pair.
+ *
+ * WHAT IS ASSERTED, and the line between the two halves. The cells OVMX writes
+ * must be BYTE-EXACT with the real frame. The residue spans must be ZERO in
+ * what OVMX builds AND non-zero in the real frame -- which is the rd vms-42de
+ * deviation made visible rather than assumed: a reader can see that this node
+ * does not send its own memory where a real sender does.
+ */
+static void assert_grant_notify_cell(const struct vms_fixture *f,
+				     const uint8_t *built, uint32_t off,
+				     uint32_t len, const char *what)
+{
+	ct_check(memcmp(built + off, f->bytes + off, (size_t)len) == 0, what);
+}
+
+static void check_one_grant_notify(const char *name, uint8_t want_mode)
+{
+	const struct vms_fixture *f = fixture(name);
+	struct vms_dlm_grant_notify g;
+	uint8_t built[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint32_t written = 0;
+	static const uint32_t RESIDUE[][2] = {
+		{VMS_OFF_SYSAP_BODY + 10u, 2u}, {VMS_OFF_SYSAP_BODY + 16u, 4u},
+		{VMS_OFF_SYSAP_BODY + 32u, 16u}, {VMS_OFF_SYSAP_BODY + 48u, 64u},
+		{VMS_OFF_SYSAP_BODY + 128u, 4u}
+	};
+	uint32_t i, live = 0, zeroed = 0;
+
+	printf("-- %s: the deferred grant a real master sent (rd vms-a4d7)\n",
+	       name);
+	ct_check(f != NULL, "fixture loads");
+	if (f == NULL)
+		return;
+
+	ct_check(vms_dlm_grant_notify_parse_body(f->bytes + VMS_OFF_SYSAP_BODY,
+						 f->wire_len - VMS_OFF_SYSAP_BODY,
+						 &g) == VMS_CODEC_OK,
+		 "the real frame parses as a deferred grant");
+	ct_check(g.master_lkid != 0u && g.req_lkid != 0u,
+		 "  both handles are real (387 of 387 real op-0x02 frames)");
+	ct_check_eq_u32(g.granted_mode, want_mode,
+			"  body[30] is the mode its queued request asked for "
+			"(95 of 95)");
+	ct_check_eq_u32(g.req_mode, want_mode,
+			"  body[31] carries the same mode at a grant (95 of 95)");
+
+	memset(built, 0xAA, sizeof(built));
+	ct_check(vms_dlm_grant_notify_build(&g, built, sizeof(built),
+					    &written) == VMS_CODEC_OK,
+		 "and OVMX's builder builds it back from the typed struct");
+
+	assert_grant_notify_cell(f, built, VMS_OFF_SYSAP_BODY + 4u, 4u,
+		"*** body[4:8] is ZERO, as it is in 387 of 387: a NOTIFICATION "
+		"opens no transaction ***");
+	assert_grant_notify_cell(f, built, VMS_OFF_DLM_CAT, 2u,
+		"  body[8:10] = 02 02");
+	assert_grant_notify_cell(f, built, VMS_OFF_DLM_MASTER_LKID, 4u,
+		"*** body[20:24] is the MASTER's own handle, byte-exact ***");
+	assert_grant_notify_cell(f, built, VMS_OFF_DLM_REQ_LKID, 4u,
+		"*** body[24:28] is the REQUESTER's handle, byte-exact ***");
+	assert_grant_notify_cell(f, built, VMS_OFF_DLM_GRANT_NOTIFY_FLAG, 2u,
+		"  body[28:30] = 14 00, as in 387 of 387");
+	assert_grant_notify_cell(f, built, VMS_OFF_DLM_GRANT_NOTIFY_MODE, 2u,
+		"*** body[30] and body[31], the two mode cells, byte-exact ***");
+	assert_grant_notify_cell(f, built, VMS_OFF_SYSAP_BODY + 112u, 16u,
+		"*** body[112:128] = 0, ffffffff, 0, ffffffff -- all four "
+		"cells byte-exact, 387 of 387 ***");
+	ct_check_eq_u32(built[VMS_OFF_DLM_NAME_LEN], 0u,
+			"  body[47] = 0: no resource name, this message is "
+			"keyed by HANDLES");
+
+	for (i = 0u; i < sizeof(RESIDUE) / sizeof(RESIDUE[0]); i++) {
+		uint32_t j;
+		int any_real = 0, all_zero = 1;
+
+		for (j = 0u; j < RESIDUE[i][1]; j++) {
+			if (f->bytes[RESIDUE[i][0] + j] != 0u)
+				any_real = 1;
+			if (built[RESIDUE[i][0] + j] != 0u)
+				all_zero = 0;
+		}
+		if (any_real)
+			live++;
+		if (all_zero)
+			zeroed++;
+	}
+	ct_check_eq_u32(zeroed, (uint32_t)(sizeof(RESIDUE) / sizeof(RESIDUE[0])),
+			"*** every residue span this node writes is ZERO: none "
+			"of its memory reaches a peer (rd vms-42de) ***");
+	ct_check(live > 0u,
+		 "*** ...and the real sender left something in at least one of "
+		 "them, so the deviation is measured, not assumed ***");
+}
+
+static void test_grant_notify_is_the_real_one(void)
+{
+	struct vms_dlm_grant_notify g;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+
+	check_one_grant_notify("dlm-grant-notify-a", (uint8_t)VMS_LCK_PW);
+	check_one_grant_notify("dlm-grant-notify-b", (uint8_t)VMS_LCK_EX);
+
+	printf("-- rd vms-a4d7: what the deferred grant REFUSES to say\n");
+	g.master_lkid = 0x1d000412u;
+	g.req_lkid = 0x07000412u;
+	g.granted_mode = (uint8_t)VMS_LCK_EX;
+	g.req_mode = (uint8_t)VMS_LCK_EX;
+
+	g.master_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(vms_dlm_grant_notify_build(&g, frame, sizeof(frame), NULL) ==
+		 VMS_CODEC_E_INVAL,
+		 "*** no master handle: REFUSED. A placeholder handle is what "
+		 "bugchecked VAX1 with INVLOCKID ***");
+	g.master_lkid = 0x1d000412u;
+	g.req_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(vms_dlm_grant_notify_build(&g, frame, sizeof(frame), NULL) ==
+		 VMS_CODEC_E_INVAL,
+		 "*** no requester handle: REFUSED -- the grant would name "
+		 "nobody's lock ***");
+	g.req_lkid = 0x07000412u;
+	g.granted_mode = (uint8_t)VMS_LCK_NL;
+	ct_check(vms_dlm_grant_notify_build(&g, frame, sizeof(frame), NULL) ==
+		 VMS_CODEC_E_INVAL,
+		 "*** a granted mode of NL: REFUSED. body[30] is a real lock "
+		 "mode in 387 of 387 and never NL -- an NL request is granted "
+		 "at once and never deferred ***");
+	g.granted_mode = (uint8_t)VMS_LCK_EX + 1u;
+	ct_check(vms_dlm_grant_notify_build(&g, frame, sizeof(frame), NULL) ==
+		 VMS_CODEC_E_INVAL,
+		 "  a mode above EX: REFUSED");
+	g.granted_mode = (uint8_t)VMS_LCK_EX;
+	g.req_mode = (uint8_t)VMS_LCK_EX + 1u;
+	ct_check(vms_dlm_grant_notify_build(&g, frame, sizeof(frame), NULL) ==
+		 VMS_CODEC_E_INVAL,
+		 "  and a REQUESTED mode above EX: refused too, because "
+		 "body[31] is a mode cell as well");
+
+	/* AND IT IS A NOTIFICATION, which is what keeps the CM from minting a
+	 * transaction token for a message no peer will ever answer -- the
+	 * envelope-inconsistency class that produced CNXMGRERR on a real node. */
+	g.req_mode = (uint8_t)VMS_LCK_EX;
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_grant_notify_build(&g, frame, sizeof(frame), NULL) ==
+		 VMS_CODEC_OK, "a well-formed deferred grant builds");
+	ct_check(vms_dlm_body_is_notification(frame + VMS_OFF_SYSAP_BODY,
+					      VMS_CM_BODY_LEN) == 1,
+		 "*** and the codec calls it a NOTIFICATION: 0 of 387 real "
+		 "op-0x02 frames open a transaction and no node answers one ***");
+	ct_check(vms_dlm_shape_fit_for_any_member(frame + VMS_OFF_SYSAP_BODY,
+						  VMS_CM_BODY_LEN) == 1,
+		 "*** and FIT FOR A REAL VMS MEMBER: the gate that refused the "
+		 "cat-0x82 echo by construction admits this shape, which is "
+		 "why the grant can now leave at all ***");
+}
+
 int main(void)
 {
 	test_dlm_seq_and_tail();
@@ -2019,5 +2180,6 @@ int main(void)
 	test_queued_enq_answer_refuses_what_it_cannot_hold();
 	test_op0f_ack_is_the_real_one();
 	test_op0f_member_answer_keeps_state();
+	test_grant_notify_is_the_real_one();
 	return ct_summary("test_codec_dlm");
 }

@@ -486,17 +486,33 @@ struct vms_dlm_scs_view {
 	 * that was still waiting -- with no way to say WHICH:
 	 *
 	 *   `pending_keep_refused`  the requester's frame was never retained at
-	 *                           all (so there was nothing to echo later),
-	 *   `pending_overflow`      ...and how often that was the table being
-	 *                           FULL rather than the request being
-	 *                           unkeyable: the table's own counter, read
-	 *                           out, because 16 slots that nothing ever
-	 *                           drains is a different defect from a bad key,
-	 *   `deferred_grants_no_body` the flip happened and the frame was not
-	 *                           there to take back,
+	 *                           all. The DEFERRED GRANT NO LONGER NEEDS IT
+	 *                           (rd vms-a4d7: the op-0x02 is keyed by
+	 *                           handles and carries no echoed body), so
+	 *                           this and `pending_overflow` are now the
+	 *                           RECORD of what this master queued, not a
+	 *                           door the grant can be refused at; retiring
+	 *                           the table is rd vms-5f9a,
+	 *   `pending_overflow`      ...and how often that retention failed for
+	 *                           want of a slot rather than a key: the
+	 *                           table's own counter, read out, because 16
+	 *                           slots that nothing ever drains is a
+	 *                           different defect from a bad key,
+	 *   `deferred_grants_refused` the flip happened, the lock read back,
+	 *                           and the CODEC would not state the grant --
+	 *                           a handle or a mode this node will not
+	 *                           assert (rd vms-a4d7). The door that used to
+	 *                           sit here, `deferred_grants_refused` (the
+	 *                           retained frame was not there to echo), went
+	 *                           away with the echo itself,
 	 *   `deferred_grants_send_failed` the frame was built and the one way
 	 *                           out refused it (RULE C, no CSB, no
 	 *                           sequence).
+	 *
+	 * And `grant_advances_stale` above is the FIFTH outcome, which is NOT a
+	 * refusal: the key no longer named a granted master-side lock held for
+	 * that system when the send read it back, so there was no grant to
+	 * announce. Both doors now read back at send time, so both land there.
 	 *
 	 * Each is also said once on the console, but a console line is a weaker
 	 * instrument than the row: the executive's in-kernel lines are muted at
@@ -505,7 +521,7 @@ struct vms_dlm_scs_view {
 	 */
 	uint32_t pending_keep_refused;
 	uint32_t pending_overflow;
-	uint32_t deferred_grants_no_body;
+	uint32_t deferred_grants_refused;
 	uint32_t deferred_grants_send_failed;
 	/*
 	 * THE ARM'S HONEST DECLINE. A cat-0x02 body this arm could not read as

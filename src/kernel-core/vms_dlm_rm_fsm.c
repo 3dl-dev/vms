@@ -47,8 +47,8 @@ static int rm_ops_ok(const struct vms_dlm_rm *f)
 	       o->adopt_lock != 0 && o->adopt_end != 0 && o->adopt_abort != 0 &&
 	       o->adopt_tree_of_lkid != 0 && o->adopt_reported != 0 &&
 	       o->name_mastered_here != 0 && o->dir_hash != 0 &&
-	       o->stage_reply != 0 && o->send != 0 && o->residue_fill != 0 &&
-	       o->log != 0;
+	       o->dir_node != 0 && o->stage_reply != 0 && o->send != 0 &&
+	       o->residue_fill != 0 && o->log != 0;
 }
 
 static void rm_say(const struct vms_dlm_rm *f, const char *msg)
@@ -158,29 +158,117 @@ static struct vms_dlm_rm_tree *rm_slot_free(struct vms_dlm_rm *f,
  * ========================================================================== */
 
 /*
- * SNAPSHOT THE OTHER MEMBERS into the tree's owed set. The CLUB is the only
- * honest source: the 0x0f and 0x11 that tell the other members are
- * point-to-point and this node never sees them (vms_dlm_rm_fsm.h).
- *
- * Returns 0 on a real snapshot. Non-zero means this node could not name the
- * membership it would have to wait for -- no member at all, or more than the
- * owed set is wide -- and then the tree is refused rather than half-waited for.
+ * THE CLUB: the SELECTED members other than this node (p. 7-49), as the
+ * connection manager holds them. Returns the count, or 0 when this node cannot
+ * ENUMERATE its own cluster -- no member at all, or more than this file can
+ * name. The owed set is no longer the whole club (rd vms-083), but the club is
+ * still what says whether a system is a member at all, so a cluster this node
+ * cannot enumerate is one where rule W1 cannot be honoured.
  */
-static int rm_owed_snapshot(struct vms_dlm_rm *f, struct vms_dlm_rm_tree *t)
+static uint32_t rm_club(struct vms_dlm_rm *f, uint32_t *csids)
 {
-	uint32_t n = f->ops->other_members(f->ops->ctx, t->owed,
+	uint32_t n = f->ops->other_members(f->ops->ctx, csids,
 					   VMS_DLM_RM_MEMBERS);
+
+	return (n == 0u || n > VMS_DLM_RM_MEMBERS) ? 0u : n;
+}
+
+/* Is `csid` a SELECTED member of this cluster other than this node? */
+static int rm_is_member(struct vms_dlm_rm *f, uint32_t csid)
+{
+	uint32_t csids[VMS_DLM_RM_MEMBERS];
+	uint32_t n = csid != 0u ? rm_club(f, csids) : 0u;
 	uint32_t i;
 
-	if (n == 0u || n > VMS_DLM_RM_MEMBERS)
-		return -1;
 	for (i = 0u; i < n; i++) {
-		if (t->owed[i] == 0u)
-			return -1;   /* a member this node cannot address */
-		t->done[i] = 0u;
+		if (csids[i] == csid)
+			return 1;
 	}
-	t->n_owed = (uint8_t)n;
+	return 0;
+}
+
+/*
+ * ADD one member to this tree's owed set. Idempotent: a member already in it
+ * stays as it is, reported or not. Returns 1 when the set now contains `csid`,
+ * 0 when it could not (unaddressable, or wider than the set).
+ */
+static int rm_owed_add(struct vms_dlm_rm *f, struct vms_dlm_rm_tree *t,
+		       uint32_t csid)
+{
+	uint32_t i;
+
+	if (csid == 0u)
+		return 0;
+	for (i = 0u; i < t->n_owed; i++) {
+		if (t->owed[i] == csid)
+			return 1;
+	}
+	if (t->n_owed >= VMS_DLM_RM_MEMBERS) {
+		f->owed_overflow++;
+		return 0;
+	}
+	t->owed[t->n_owed] = csid;
+	t->done[t->n_owed] = VMS_DLM_RM_OWED_WAITING;
+	t->n_owed++;
+	return 1;
+}
+
+/*
+ * THE TREE'S DIRECTORY NODE, or nothing. Two executive reads behind one door
+ * (vms_dlm_rm_fsm.h): the hash this engine HOLDS for the root name, resolved
+ * through the connection manager's own weight vector. `*out` is written only
+ * when the answer is a member other than this node.
+ */
+static int rm_dir_member(struct vms_dlm_rm *f, const struct vms_dlm_rm_tree *t,
+			 uint32_t *out)
+{
+	char nm[VMS_DLM_NAME_MAX + 1u];
+	uint32_t csid = 0u;
+
+	/* The COUNT comes off the identity, never from the C string: a VMS
+	 * resource name may contain NULs of its own (rd vms-326). */
+	rm_ident_to_name(&t->id, nm, (uint32_t)sizeof(nm));
+	if (!f->ops->dir_node(f->ops->ctx, nm, t->id.name_len,
+			      t->id.group, t->id.mode, &csid))
+		return 0;
+	if (csid == 0u)            /* this node is the directory itself */
+		return 0;
+	if (!rm_is_member(f, csid))
+		return 0;
+	*out = csid;
+	return 1;
+}
+
+/*
+ * SEED the owed set from EXECUTIVE STATE, not from the club wholesale
+ * (rd vms-083's driven arm; the reasoning and the four runs are in
+ * vms_dlm_rm_fsm.h). Two systems at open time: the OLD MASTER, which the 0x0e
+ * came from, and the tree's DIRECTORY NODE when this node can name it. A
+ * holder joins the set when its own 0x12 record is adopted.
+ *
+ * Returns 0 when the set names at least the old master. Non-zero means this
+ * node cannot address the system handing it the tree, or cannot enumerate its
+ * own cluster at all -- and then the tree is refused rather than half-waited
+ * for, because a sender this node cannot recognise is one it cannot ack.
+ */
+static int rm_owed_seed(struct vms_dlm_rm *f, struct vms_dlm_rm_tree *t)
+{
+	uint32_t csids[VMS_DLM_RM_MEMBERS];
+	uint32_t dir = 0u;
+
+	t->n_owed = 0u;
 	t->n_done = 0u;
+	if (rm_club(f, csids) == 0u)
+		return -1;
+	if (!rm_owed_add(f, t, t->tree.old_master_csid))
+		return -1;
+	if (rm_dir_member(f, t, &dir)) {
+		if (!rm_owed_add(f, t, dir))
+			return -1;
+		f->owed_dir_named++;
+	} else {
+		f->owed_dir_unknown++;
+	}
 	return 0;
 }
 
@@ -462,11 +550,11 @@ static enum vms_dlm_rm_status rm_h_open(struct vms_dlm_rm *f,
 	rm_ident_to_name(&in->step->id, slot->tree.resnam,
 			 (uint32_t)sizeof(slot->tree.resnam));
 
-	if (rm_owed_snapshot(f, slot) != 0) {
+	if (rm_owed_seed(f, slot) != 0) {
 		f->opens_refused++;
 		rm_say(f, "%DLM, a lock tree is being handed to this node and "
-			  "it cannot name the members it would have to collect "
-			  "lock records from: NOT accepted");
+			  "it cannot address the system handing it over: NOT "
+			  "accepted");
 		rm_bzero(slot, (uint32_t)sizeof(*slot));
 		return VMS_DLM_RM_REFUSED;
 	}
@@ -583,6 +671,13 @@ static enum vms_dlm_rm_status rm_h_record(struct vms_dlm_rm *f,
 		f->records_duplicate++;
 	else
 		f->records_adopted++;
+	/*
+	 * A HOLDER THAT REALLY SENT A RECORD WILL SEND AN END-OF-RECORDS, so it
+	 * joins the owed set here -- the third of the owed set's three sources
+	 * (rd vms-083), and the only one that is a FACT rather than a
+	 * resolution. Idempotent, so k records from one holder add it once.
+	 */
+	(void)rm_owed_add(f, t, in->from_csid);
 	if (rm_stage_lock_answer(f, in->body, in->len, &res) != 0)
 		return VMS_DLM_RM_REFUSED;
 	return VMS_DLM_RM_HANDLED;
@@ -598,8 +693,20 @@ static enum vms_dlm_rm_status rm_h_end(struct vms_dlm_rm *f,
 				       const struct rm_in *in)
 {
 	if (!rm_owed_mark(t, in->from_csid)) {
-		f->ends_unexpected++;
-		return VMS_DLM_RM_REFUSED;
+		/*
+		 * NOT PREDICTED, BUT A MEMBER. The owed set is what this node
+		 * computed from its own state; the SENDERS are a fact, and rule
+		 * W1 owes each of them a 0x14. So a 0x13 from a selected member
+		 * the seed did not name is ADMITTED (counted apart), where one
+		 * from a system that is no member of this cluster is refused.
+		 */
+		if (!rm_is_member(f, in->from_csid) ||
+		    !rm_owed_add(f, t, in->from_csid) ||
+		    !rm_owed_mark(t, in->from_csid)) {
+			f->ends_unexpected++;
+			return VMS_DLM_RM_REFUSED;
+		}
+		f->ends_admitted++;
 	}
 	f->ends_seen++;
 	if (rm_owed_complete(t))

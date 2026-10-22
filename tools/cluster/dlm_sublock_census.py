@@ -121,7 +121,7 @@ def selftest(repo):
     # modes, with the same 3 parent pairs. rd vms-b67a's grounding is unchanged
     # by 3.5x the corpus -- and the sample is still 7, which is why that item's
     # fix is built from the ROUTING rule and not from a cell's value range.
-    check('real lock requests in the corpus', len(real), 74894)   # was 21,499
+    check('real lock requests in the corpus', len(real), 74895)   # was 21,499, then 74,894
     check('real requests naming a sub-resource', len(subs), 7)
     check('distinct senders of one', len({s for s, _d, _b, _p in subs}), 2)
     check('distinct sub-lock modes at body[30]',

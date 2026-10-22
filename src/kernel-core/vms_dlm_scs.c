@@ -2326,6 +2326,31 @@ static int dlm_arm_rm_dir_hash(void *ctx, const char *resnam,
 }
 
 /*
+ * WHICH MEMBER IS THIS NAME'S DIRECTORY NODE (rd vms-083) -- the second system
+ * that owes a tree an end-of-records. The SAME TWO READS dlm_arm_dir_resolve
+ * routes a lookup with, composed and nothing more: the hash this engine HOLDS
+ * for the name (never one computed for the asking) through the connection
+ * manager's own weight vector. 0 in *out_csid means THIS node (Davis p. 6-32).
+ */
+static int dlm_arm_rm_dir_node(void *ctx, const char *resnam,
+			       uint32_t resnam_len, uint16_t group,
+			       uint8_t mode, uint32_t *out_csid)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+	uint32_t hash = 0u;
+	vms_csid_t csid = 0u;
+
+	if (d == NULL || out_csid == NULL)
+		return 0;
+	if (!vms_lock_dlm_dir_hash_of(resnam, resnam_len, group, mode, &hash))
+		return 0;
+	if (dlm_arm_dir_resolve(d, hash, &csid) != 0)
+		return 0;
+	*out_csid = csid;
+	return 1;
+}
+
+/*
  * THE REPLY, through the one stager every other answer in this file goes
  * through -- so the echo guard applies to a remaster answer exactly as it
  * applies to a grant (rd vms-b5b0). `rm_req`/`rm_reply` are the message being
@@ -2387,6 +2412,7 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.adopt_reported     = dlm_arm_rm_reported;
 	d->rm_ops.name_mastered_here = dlm_arm_rm_mastered;
 	d->rm_ops.dir_hash           = dlm_arm_rm_dir_hash;
+	d->rm_ops.dir_node           = dlm_arm_rm_dir_node;
 	d->rm_ops.stage_reply        = dlm_arm_rm_stage;
 	d->rm_ops.send               = dlm_arm_rm_send;
 	d->rm_ops.residue_fill       = dlm_arm_rm_residue_fill;

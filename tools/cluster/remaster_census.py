@@ -383,7 +383,7 @@ def selftest(root):
                     if i not in (8, 9, 34) and not 28 <= i < 32)]
     exact_ratio('82/15 answers that differ from the request ONLY in body[8], '
                 '[9], [28:32] and [34]',
-                len(acked) - len(stray), len(acked), 3531, 3979)
+                len(acked) - len(stray), len(acked), 3563, 4011)
     exact_ratio('...of those, the ones answering an op-0x14 (the other 3 answer '
                 'an op-0x10)',
                 sum(1 for q, _a in stray if q[9] == 0x14), len(stray), 445, 448)
@@ -469,7 +469,7 @@ def selftest(root):
                    '(rule W1)' % rt['op14_without_a_13'])
     exact_ratio('episodes whose op-0x13 SENDERS are exactly its op-0x14 '
                 'RECIPIENTS (rule W1)', rt['sets_equal'], rt['episodes'],
-                792, 795)
+                797, 800)
     floor('episodes with more than one op-0x13', rt['multi13'], 383)
     exact_all('multi-op-0x13 episodes whose op-0x14s ALL follow the LAST '
               'op-0x13 (rule W2)', rt['multi13_batched'], rt['multi13'])
@@ -486,7 +486,7 @@ def selftest(root):
               at['episodes'])
     exact_ratio('episodes with a late op-0x12 once the overlapping ones are '
                 'counted too (the grouping, not the protocol)',
-                rt['record_after_last_13'], rt['episodes'], 172, 795)
+                rt['record_after_last_13'], rt['episodes'], 172, 800)
 
     # RULE 3: the op-0x14's body[20:40] is residue.
     c = classify_op14_residue(pairs)

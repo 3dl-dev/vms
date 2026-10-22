@@ -17,10 +17,24 @@
  *   dir/                      ->  [.DIR]
  *   file                      ->  FILE.          (an explicit null type, so no
  *                                                  default type is applied)
- *   a.b.c                     ->  A_B.C          (ODS-2 allows one dot: all but
- *                                                  the last become underscores)
  *
- * Case is preserved (RMS upcases on ODS-2). A specification that is already in
+ * EXTENDED NAMES AND CASE (rd vms-da9b). The DEC C feature switches decide the
+ * rest, as observed on OpenVMS Alpha V8.4 with decc$to_vms / decc$translate_vms
+ * (tests/lab/captures/ods5-alpha-20261022/RESULTS.md session 5):
+ *   - DECC$EFS_CHARSET off (the default): a UNIX name ODS-2 cannot carry -- a
+ *     '+', a space, a '~', a dot that is not the type's, a dot in a directory --
+ *     is refused (EINVAL); "file" -> FILE (no '.' added). toward UNIX, a name
+ *     holding a ^ escape is refused.
+ *   - DECC$EFS_CHARSET on: such characters are written with ^ escapes
+ *     ("bits/c++config.h" -> [.BITS]C^+^+CONFIG.H, "foo.tar.gz" -> FOO^.TAR.GZ,
+ *     "14.2.0/" -> [.14^.2^.0]) and read back without them.
+ *   - DECC$EFS_CASE_PRESERVE off: upper case toward OpenVMS, lower case toward
+ *     UNIX ("[TEST]MixedCase.Txt;2" -> /sys$disk/test/mixedcase.txt.2); on: the
+ *     case is kept both ways.
+ * Toward UNIX a version is kept as ".N", a null type keeps its '.', and a
+ * relative directory starts with "./" (all observed).
+ *
+ * A specification that is already in
  * OpenVMS syntax (it has a ':' '[' '<' or ';' and no '/') passes through
  * unchanged. ".." components are resolved lexically against preceding
  * components (VMS has no symbolic links, so this is exact); a ".." that would
@@ -81,21 +95,74 @@ static int puts0(char *out, size_t outsz, size_t *len, const char *p)
     return put(out, outsz, len, p, strlen(p));
 }
 
-/* ODS-2 file name: keep the last '.', turn every earlier one into '_'. A name
- * without a dot gets an explicit null type ("FILE."). */
-static int put_name(char *out, size_t outsz, size_t *len, const char *p, size_t n)
+/* ------------------------------------------------- the feature switches ---- */
+
+/* The DEC C feature table (crtl_features.c); weak so a link without it -- the
+ * bootstrap DECC$SHR -- reads every switch as its default, 0. */
+extern int ovmx_crtl_feature_current(int index) __attribute__((__weak__));
+#define FS_FEAT_EFS_CHARSET       2   /* OVMX_CRTL_FEAT_EFS_CHARSET */
+#define FS_FEAT_EFS_CASE_PRESERVE 3   /* OVMX_CRTL_FEAT_EFS_CASE_PRESERVE */
+
+static int fs_feat(int index)
 {
+    return ovmx_crtl_feature_current && ovmx_crtl_feature_current(index) != 0;
+}
+
+/* A character every OpenVMS name may hold unescaped. */
+static int fs_ods2ch(int c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+           c == '$' || c == '-' || c == '_';
+}
+
+/*
+ * One UNIX name component (a directory, or the file's name.type) toward
+ * OpenVMS. `is_file`: the component's LAST dot is the type delimiter. Every
+ * other dot, and every character ODS-2 cannot carry, is ^-escaped under
+ * DECC$EFS_CHARSET and refused (-1, EINVAL) without it. The case is kept under
+ * DECC$EFS_CASE_PRESERVE and upper-cased without it. '*' and '%' stay as
+ * wildcards. No '.' is added to a name that has none (observed "file" -> FILE).
+ */
+static int put_comp(char *out, size_t outsz, size_t *len, const char *p, size_t n, int is_file)
+{
+    int efs = fs_feat(FS_FEAT_EFS_CHARSET), keep = fs_feat(FS_FEAT_EFS_CASE_PRESERVE);
     const char *last = NULL;
-    for (size_t i = 0; i < n; i++)
-        if (p[i] == '.')
-            last = p + i;
+
+    if (is_file)
+        for (size_t i = 0; i < n; i++)
+            if (p[i] == '.')
+                last = p + i;
     for (size_t i = 0; i < n; i++) {
-        char c = (p[i] == '.' && p + i != last) ? '_' : p[i];
-        if (put(out, outsz, len, &c, 1) < 0)
+        unsigned char c = (unsigned char)p[i];
+        char esc[2] = { '^', 0 };
+        int need_escape = 0;
+
+        if (c == '.' && p + i == last) {
+            if (put(out, outsz, len, ".", 1) < 0)
+                return -1;
+            continue;
+        }
+        if (c == '*' || c == '%' || fs_ods2ch(c)) {
+            /* plain */
+        } else if (efs && (c == '~' || c >= 0x80)) {
+            /* plain under EFS (observed: x~y.h -> X~Y.H) */
+        } else if (efs && c >= 0x20 && c != 0x7F) {
+            need_escape = 1;
+        } else {
+            errno = EINVAL;            /* ODS-2 cannot hold it (observed refusals) */
+            return -2;
+        }
+        if (need_escape) {
+            esc[1] = c == ' ' ? '_' : (char)c;
+            if (put(out, outsz, len, esc, 2) < 0)
+                return -1;
+            continue;
+        }
+        if (!keep && c >= 'a' && c <= 'z')
+            c = (unsigned char)(c - 'a' + 'A');
+        if (put(out, outsz, len, (const char *)&c, 1) < 0)
             return -1;
     }
-    if (!last && put(out, outsz, len, ".", 1) < 0)
-        return -1;
     return 0;
 }
 
@@ -179,6 +246,7 @@ int ovmx_crtl_unix_to_vms(const char *in, char *out, size_t outsz, int mode)
     }
 
     size_t len = 0;
+    int rc = 0;
     out[0] = '\0';
     int first_dir = 0;             /* index of the first directory component */
     if (absolute) {
@@ -186,8 +254,9 @@ int ovmx_crtl_unix_to_vms(const char *in, char *out, size_t outsz, int mode)
             errno = EINVAL;        /* "/" names no device */
             return -1;
         }
-        if (put(out, outsz, &len, cp[0], cl[0]) < 0 || puts0(out, outsz, &len, ":") < 0)
-            goto toolong;
+        if ((rc = put_comp(out, outsz, &len, cp[0], cl[0], 0)) < 0 ||
+            puts0(out, outsz, &len, ":") < 0)
+            goto fail;
         first_dir = 1;
     }
 
@@ -201,8 +270,8 @@ int ovmx_crtl_unix_to_vms(const char *in, char *out, size_t outsz, int mode)
                 goto toolong;
             for (int i = 0; i < ndir; i++) {
                 if ((i && puts0(out, outsz, &len, ".") < 0) ||
-                    put(out, outsz, &len, cp[first_dir + i], cl[first_dir + i]) < 0)
-                    goto toolong;
+                    (rc = put_comp(out, outsz, &len, cp[first_dir + i], cl[first_dir + i], 0)) < 0)
+                    goto fail;
             }
             if (puts0(out, outsz, &len, "]") < 0)
                 goto toolong;
@@ -222,8 +291,8 @@ int ovmx_crtl_unix_to_vms(const char *in, char *out, size_t outsz, int mode)
         }
         for (int i = 0; i < ndir; i++) {
             if (puts0(out, outsz, &len, (any || i == 0) ? "." : "") < 0 ||
-                put(out, outsz, &len, cp[i], cl[i]) < 0)
-                goto toolong;
+                (rc = put_comp(out, outsz, &len, cp[i], cl[i], 0)) < 0)
+                goto fail;
             any = 1;
         }
         if (puts0(out, outsz, &len, "]") < 0)
@@ -239,12 +308,15 @@ int ovmx_crtl_unix_to_vms(const char *in, char *out, size_t outsz, int mode)
             errno = EINVAL;        /* no file name component */
             return -1;
         }
-        if (put_name(out, outsz, &len, cp[ni], cl[ni]) < 0)
-            goto toolong;
+        if ((rc = put_comp(out, outsz, &len, cp[ni], cl[ni], 1)) < 0)
+            goto fail;
         return OVMX_FS_FILE;
     }
     return OVMX_FS_DIR;
 
+fail:
+    if (rc == -2)
+        return -1;                 /* errno EINVAL already: a name the switches refuse */
 toolong:
     errno = ENAMETOOLONG;
     return -1;
@@ -252,8 +324,40 @@ toolong:
 
 /* ----------------------------------------------------------- VMS -> Unix ---- */
 
+/*
+ * One OpenVMS name part toward UNIX (rd vms-da9b): under DECC$EFS_CHARSET the ^
+ * escapes are taken out (^_ is a space, ^c the character c); without it a ^ is
+ * refused (EINVAL), as the real decc$translate_vms refused every escaped name.
+ * Lower-cased unless DECC$EFS_CASE_PRESERVE. A UCS-2 ^Uhhhh cannot be written
+ * as 8-bit UNIX text: EINVAL (rd vms-f1a2).
+ */
+static int put_unix(char *out, size_t outsz, size_t *len, const char *p, size_t n)
+{
+    int efs = fs_feat(FS_FEAT_EFS_CHARSET), keep = fs_feat(FS_FEAT_EFS_CASE_PRESERVE);
+
+    for (size_t i = 0; i < n; i++) {
+        char c = p[i];
+        if (c == '^') {
+            if (!efs || i + 1 >= n || p[i + 1] == 'U') {
+                errno = EINVAL;
+                return -2;
+            }
+            c = p[++i];
+            if (c == '_')
+                c = ' ';
+        } else if (!keep && c >= 'A' && c <= 'Z') {
+            c = (char)(c - 'A' + 'a');
+        }
+        if (put(out, outsz, len, &c, 1) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 int ovmx_crtl_vms_to_unix(const char *in, char *out, size_t outsz)
 {
+    int rc = 0;
+
     if (!in || !*in || !out || outsz == 0) {
         errno = EINVAL;
         return -1;
@@ -284,24 +388,35 @@ int ovmx_crtl_vms_to_unix(const char *in, char *out, size_t outsz)
     size_t dirlen = 0;
     if (*p == '[' || *p == '<') {
         char close = *p == '[' ? ']' : '>';
-        const char *e = strchr(p, close);
-        if (!e)
+        const char *e = p + 1;
+        while (*e && *e != close)  /* an escaped ^] is not the end */
+            e += (*e == '^' && e[1]) ? 2 : 1;
+        if (!*e)
             goto inval;
         dir = p + 1;
         dirlen = (size_t)(e - dir);
         p = e + 1;
     }
-    /* name.type, version dropped (';' or a second '.') */
+    /* name.type;version -- the version kept as ".N" (observed:
+     * [TEST]MixedCase.Txt;2 -> .../mixedcase.txt.2), a null type keeping its
+     * '.' (observed: README. -> readme.). A version given as a second '.'
+     * (NAME.TYP.VER) is read the same. */
     const char *nm = p;
     const char *semi = strchr(nm, ';');
     size_t nmlen = semi ? (size_t)(semi - nm) : strlen(nm);
-    const char *dot = memchr(nm, '.', nmlen);
-    if (dot) {
-        const char *dot2 = memchr(dot + 1, '.', nmlen - (size_t)(dot + 1 - nm));
-        if (dot2)
-            nmlen = (size_t)(dot2 - nm);   /* NAME.TYP.VER form */
-        if (nmlen == (size_t)(dot - nm) + 1)
-            nmlen--;                       /* "NAME." -> "NAME" */
+    const char *ver = semi ? semi + 1 : NULL;
+    size_t verlen = ver ? strlen(ver) : 0;
+    {
+        const char *dot = NULL, *dot2 = NULL;
+        for (size_t i = 0; i < nmlen; i++) {
+            if (nm[i] == '^') { i++; continue; }
+            if (nm[i] == '.') { if (!dot) dot = nm + i; else if (!dot2) dot2 = nm + i; }
+        }
+        if (dot2 && !semi && !fs_feat(FS_FEAT_EFS_CHARSET)) {
+            ver = dot2 + 1;                        /* NAME.TYP.VER form */
+            verlen = nmlen - (size_t)(ver - nm);
+            nmlen = (size_t)(dot2 - nm);
+        }
     }
 
     size_t len = 0;
@@ -310,8 +425,9 @@ int ovmx_crtl_vms_to_unix(const char *in, char *out, size_t outsz)
     if (dir && dirlen > 0 && (dir[0] == '.' || dir[0] == '-'))
         relative = 1;
     if (dev) {
-        if (puts0(out, outsz, &len, "/") < 0 || put(out, outsz, &len, dev, devlen) < 0)
-            goto toolong;
+        if (puts0(out, outsz, &len, "/") < 0 ||
+            (rc = put_unix(out, outsz, &len, dev, devlen)) < 0)
+            goto fail;
     } else if (dir && !relative && dirlen > 0) {
         if (puts0(out, outsz, &len, "/sys$disk") < 0)
             goto toolong;
@@ -321,12 +437,15 @@ int ovmx_crtl_vms_to_unix(const char *in, char *out, size_t outsz)
     if (dir && dirlen > 0) {
         const char *d = dir;
         const char *de = dir + dirlen;
-        if (*d == '.')
-            d++;                                /* relative "[.A.B]" */
+        if (*d == '.') {
+            d++;                                /* relative "[.A.B]" -> "./a/b" */
+            if (!dev && puts0(out, outsz, &len, ".") < 0)
+                goto toolong;
+        }
         while (d < de) {
             const char *s = d;
             while (d < de && *d != '.')
-                d++;
+                d += (*d == '^' && d + 1 < de) ? 2 : 1;
             size_t n = (size_t)(d - s);
             size_t k = 0;
             while (k < n && s[k] == '-')
@@ -340,8 +459,8 @@ int ovmx_crtl_vms_to_unix(const char *in, char *out, size_t outsz)
                 wrote_dir = 1;
             } else if (n > 0 && !(n == 6 && memcmp(s, "000000", 6) == 0)) {
                 if ((len && puts0(out, outsz, &len, "/") < 0) ||
-                    put(out, outsz, &len, s, n) < 0)
-                    goto toolong;
+                    (rc = put_unix(out, outsz, &len, s, n)) < 0)
+                    goto fail;
                 wrote_dir = 1;
             }
             if (d < de)
@@ -351,7 +470,10 @@ int ovmx_crtl_vms_to_unix(const char *in, char *out, size_t outsz)
 
     if (nmlen > 0) {
         if ((len && puts0(out, outsz, &len, "/") < 0) ||
-            put(out, outsz, &len, nm, nmlen) < 0)
+            (rc = put_unix(out, outsz, &len, nm, nmlen)) < 0)
+            goto fail;
+        if (ver && verlen > 0 &&
+            (puts0(out, outsz, &len, ".") < 0 || put(out, outsz, &len, ver, verlen) < 0))
             goto toolong;
     } else if (!len) {
         if (puts0(out, outsz, &len, wrote_dir ? "" : ".") < 0)
@@ -359,6 +481,10 @@ int ovmx_crtl_vms_to_unix(const char *in, char *out, size_t outsz)
     }
     return 0;
 
+fail:
+    if (rc == -2)
+        return -1;
+    goto toolong;
 inval:
     errno = EINVAL;
     return -1;

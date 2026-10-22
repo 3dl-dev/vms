@@ -220,7 +220,12 @@ int main(int argc, char **argv)
     printf("CFD: fgetname -> \"%s\" / \"%s\"\n", gs ? spec : "(null)", gu ? uspec : "(null)");
     check(gs == spec && strstr(spec, "[SYSTMP]CFDOUT.TXT;") != NULL && strchr(spec, ':') != NULL,
           29, "fgetname(f, buf, 1) returns the full VMS file specification");
-    check(gu == uspec && strstr(uspec, "/SYSTMP/CFDOUT.TXT") != NULL && uspec[0] == '/', 30,
+    /* The UNIX form is the C RTL's default translation: lowercased, the
+     * version kept as ".N" -- the real Alpha V8.4 C RTL turns
+     * [TEST]MixedCase.Txt;2 into /sys$disk/test/mixedcase.txt.2
+     * (tests/lab/captures/ods5-alpha-20261022/CONSOLE-5.txt, RUN-DEFAULT). */
+    check(gu == uspec && strstr(uspec, "/systmp/cfdout.txt.") != NULL && uspec[0] == '/' &&
+              uspec[strlen(uspec) - 1] >= '0' && uspec[strlen(uspec) - 1] <= '9', 30,
           "fgetname(f, buf, 0) returns its UNIX form");
     check(fgetname(stdout, spec, 1) == NULL, 31, "fgetname of a non-RMS stream is a null pointer");
 

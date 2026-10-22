@@ -244,6 +244,15 @@ if(TARGET test_syssvc_crtl_features)
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c)
 endif()
 
+# test_syssvc_crtl_efs (rd vms-da9b): the DEC C feature table and the UNIX<->
+# OpenVMS name translator (crtl_features.c, crtl_filespec.c), driven with the
+# DECC$EFS_* logicals against the real ODS-5 volume.
+if(TARGET test_syssvc_crtl_efs)
+    target_sources(test_syssvc_crtl_efs PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c)
+endif()
+
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
 # condition bridge, end to end under -static. Alpha-only (the test honest-skips
 # on other arches), so its two extra needs are guarded on the alpha target:

@@ -726,7 +726,7 @@ EOF
         targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
-        why)          echo "dlm_lkid_pair_put()'s shared guard ('req_lkid == VMS_DLM_LKID_UNSET || master_lkid == VMS_DLM_LKID_UNSET -> VMS_CODEC_E_INVAL'), which both vms_dlm_deq_build() and vms_dlm_blkast_build() call before writing a single byte, is disarmed. A $DEQ or BLKAST naming lock-id 0 -- the exact fc8540ae shape -- is built and sent instead of refused.";;
+        why)          echo "dlm_lkid_pair_put()'s shared guard ('req_lkid == VMS_DLM_LKID_UNSET || master_lkid == VMS_DLM_LKID_UNSET -> VMS_CODEC_E_INVAL'), which vms_dlm_deq_build(), vms_dlm_blkast_build() and vms_dlm_grant_notify_build() all call before writing a single byte, is disarmed. A $DEQ, a BLKAST or a DEFERRED GRANT naming lock-id 0 -- the exact fc8540ae shape -- is built and sent instead of refused. That the deferred grant reddens here too is the point: it shares the guard rather than carrying its own copy of it (rd vms-a4d7).";;
         require_fail) hd_lines <<'EOF'
   master_lkid==0 REFUSED on $DEQ (0x03)
   req_lkid==0 REFUSED on $DEQ (0x03)
@@ -734,6 +734,8 @@ EOF
   master_lkid==0 REFUSED on BLKAST (0x05)
   req_lkid==0 REFUSED on BLKAST (0x05)
 *** a refused build wrote NO byte at all ***
+*** no master handle: REFUSED. A placeholder handle is what bugchecked VAX1 with INVLOCKID ***
+*** no requester handle: REFUSED -- the grant would name nobody's lock ***
 EOF
                       ;;
         esac;;

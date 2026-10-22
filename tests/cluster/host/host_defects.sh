@@ -959,6 +959,7 @@ EOF
 *** and that key produces a GRANT FRAME: the lock reads back as granted for that system, and the op-0x02 the corpus puts at that moment is built from what the read reported ***
   the four values are the lock database's, read at send time
   including the mode the engine really granted (EX)
+  and the SECOND read, the mode that LKB asked for -- equal at a grant, and body[31] on the wire
 *** and the frame the peer receives is a cat-0x02 op-0x02 naming its own handle and ours ***
 *** with the mode $GETLKI independently says this engine granted, in BOTH mode cells -- 95 of 95 real deferred grants carry them equal ***
 *** ...and the flip nobody could be told about is COUNTED, not dropped ***

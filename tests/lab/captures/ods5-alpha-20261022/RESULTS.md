@@ -191,3 +191,26 @@ Hex escapes: `^20` -> `^_`, `^5F` -> `_`, `^2B` -> `^+`, `^41` -> `A`, `^61` ->
 
 Verdicts: C1 **partly missed** (`~` needs no escape; `^` before `$ - ~` is
 dropped; `^_` is a space, not an underscore; `^*` and `^?` fail); C2 hit; C3 hit.
+
+## Session 5: the DEC C RTL's name translation (pod `ods5alpha-5`)
+
+Predictions in `PREREGISTERED-5.md`, console in `CONSOLE-5.txt`, probe source
+`TOVMS.MAR` (our own MACRO-32: decc$to_vms on eleven UNIX names with an action
+routine that prints each result, decc$translate_vms on seven OpenVMS names). It
+was run five times: no feature logicals; DECC$EFS_CHARSET=ENABLE; plus
+DECC$EFS_CASE_PRESERVE=ENABLE; plus DECC$FILENAME_UNIX_REPORT=ENABLE; and
+DECC$FILENAME_UNIX_REPORT alone.
+
+| # | verdict | observed |
+|---|---|---|
+| E1 | hit | at the defaults decc$to_vms gives nothing for `bits/c++config.h` (refused, no callback) |
+| E2 | **miss** | at the defaults `a.b.c.d` is refused too; there is no underscore mapping. `dir/sub/MixedCase.Txt` -> `[.DIR.SUB]MIXEDCASE.TXT` (upper-cased); `file` -> `FILE` |
+| E3 | partly missed | EFS_CHARSET escapes as predicted but upper-cases: `[.BITS]C^+^+CONFIG.H`, `A^.B^.C.D`, `FOO^.TAR.GZ`, `[.INCLUDE.C^+^+.14^.2^.0.BITS]C^+^+CONFIG.H`, `A^_B.TXT`, `X~Y.H` (`~` plain) |
+| E4 | hit, refined | with EFS_CHARSET, translate_vms(`[.bits]c^+^+config.h`) = `./bits/c++config.h` (escapes removed, a relative directory written `./`) |
+| E5 | **miss** | EFS_CASE_PRESERVE is what keeps case in BOTH directions: `[.bits]c^+^+config.h`, `/LDA1/TEST/c++config.h.1`, `README.` |
+
+Also observed: translate_vms keeps the version as `.N`
+(`[TEST]MixedCase.Txt;2` -> `/sys$disk/test/mixedcase.txt.2`) and a null type's
+dot (`README.` -> `readme.`); at the defaults it lower-cases and refuses every
+name holding an escape; DECC$FILENAME_UNIX_REPORT changed nothing in these two
+routines.

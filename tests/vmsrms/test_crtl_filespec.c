@@ -4,7 +4,14 @@
  * decc$from_vms, decc$translate_vms entry points built on them.
  *
  * The UNIX->VMS table is the HP C RTL Reference "File Specification
- * Conversion" rules (see crtl_filespec.c). decc$to_vms is driven exactly the
+ * Conversion" rules (see crtl_filespec.c). rd vms-da9b: the structural table
+ * runs with DECC$EFS_CHARSET and DECC$EFS_CASE_PRESERVE enabled (case kept, so
+ * the expected strings read as typed); a second table runs at the DEC C
+ * DEFAULTS, which the real OpenVMS Alpha V8.4 C RTL showed to upper-case toward
+ * OpenVMS, lower-case toward UNIX, refuse names ODS-2 cannot carry, keep a
+ * version as ".N" and a null type's '.', and write a relative directory as
+ * "./" (tests/lab/captures/ods5-alpha-20261022 session 5; the full replay is
+ * test_crtl_efs_oracle.c). decc$to_vms is driven exactly the
  * way GCC's VMS-host code drives it (gcc/config/vms/vms-ld.c, vms-ar.c,
  * gcc/vmsdbgout.cc: an action routine that copies the name and returns 0,
  * allow_wild=1, no_directory=1). Host-only: no wildcard in these cases, so no
@@ -15,6 +22,13 @@
 #include <string.h>
 
 #include "rms/crtl_filespec.h"
+#include "rms/crtl_features.h"
+
+static void switches(int efs, int keep_case)
+{
+    ovmx_crtl_feature_set_value(ovmx_crtl_feature_get_index("DECC$EFS_CHARSET"), 1, efs);
+    ovmx_crtl_feature_set_value(ovmx_crtl_feature_get_index("DECC$EFS_CASE_PRESERVE"), 1, keep_case);
+}
 
 int decc$to_vms(const char *, int (*)(char *, int), int, int);
 int decc$from_vms(const char *, int (*)(char *), int);
@@ -68,6 +82,7 @@ static int from_action(char *name)
 int main(void)
 {
     printf("=== crtl filespec translation (vms-32ae) ===\n");
+    switches(1, 1);                 /* the structural table: case kept */
 
     u2v("/dka0/usr/include/stdio.h", OVMX_FS_AUTO, "dka0:[usr.include]stdio.h", OVMX_FS_FILE);
     u2v("/sys$scratch/ccA1b2.s", OVMX_FS_AUTO, "sys$scratch:ccA1b2.s", OVMX_FS_FILE);
@@ -83,8 +98,8 @@ int main(void)
     u2v("a/../b.c", OVMX_FS_AUTO, "b.c", OVMX_FS_FILE);
     u2v("/dka0/a/../b/c.c", OVMX_FS_AUTO, "dka0:[b]c.c", OVMX_FS_FILE);
     u2v("/dka0/../x", OVMX_FS_AUTO, "", -1);
-    u2v("makefile", OVMX_FS_AUTO, "makefile.", OVMX_FS_FILE);
-    u2v("libfoo.so.1", OVMX_FS_AUTO, "libfoo_so.1", OVMX_FS_FILE);
+    u2v("makefile", OVMX_FS_AUTO, "makefile", OVMX_FS_FILE);      /* no '.' added (observed) */
+    u2v("libfoo.so.1", OVMX_FS_AUTO, "libfoo^.so.1", OVMX_FS_FILE); /* EFS: earlier dots ^. */
     u2v("dir/", OVMX_FS_AUTO, "[.dir]", OVMX_FS_DIR);
     u2v("dir", OVMX_FS_DIR, "[.dir]", OVMX_FS_DIR);
     u2v(".", OVMX_FS_AUTO, "[]", OVMX_FS_DIR);
@@ -95,20 +110,35 @@ int main(void)
     u2v("SYS$LOGIN:LOGIN.COM", OVMX_FS_AUTO, "SYS$LOGIN:LOGIN.COM", OVMX_FS_PASSTHRU);
     u2v("[.SRC]MAIN.C;3", OVMX_FS_AUTO, "[.SRC]MAIN.C;3", OVMX_FS_PASSTHRU);
 
-    v2u("DKA0:[USR.INCLUDE]STDIO.H;1", "/DKA0/USR/INCLUDE/STDIO.H");
+    v2u("DKA0:[USR.INCLUDE]STDIO.H;1", "/DKA0/USR/INCLUDE/STDIO.H.1");  /* version kept */
     v2u("DKA0:[000000]FILE.TXT", "/DKA0/FILE.TXT");
     v2u("DKA0:[000000.A]B.C", "/DKA0/A/B.C");
     v2u("SYS$LOGIN:LOGIN.COM", "/SYS$LOGIN/LOGIN.COM");
-    v2u("[.SRC]MAIN.C", "SRC/MAIN.C");
+    v2u("[.SRC]MAIN.C", "./SRC/MAIN.C");
     v2u("[-]X.C", "../X.C");
     v2u("[--.A]X.C", "../../A/X.C");
     v2u("[-.-]X.C", "../../X.C");
     v2u("[MY-DIR]F.C", "/sys$disk/MY-DIR/F.C");
-    v2u("MAKEFILE.", "MAKEFILE");
-    v2u("A.B;2", "A.B");
+    v2u("MAKEFILE.", "MAKEFILE.");
+    v2u("A.B;2", "A.B.2");
     v2u("DKA0:[A.B]", "/DKA0/A/B");
     v2u("NODE::DKA0:[A]B.C", NULL);
     v2u("[A.B", NULL);
+
+    /* the DEC C defaults (no EFS switch): observed on OpenVMS Alpha V8.4 */
+    switches(0, 0);
+    u2v("/dka0/usr/include/stdio.h", OVMX_FS_AUTO, "DKA0:[USR.INCLUDE]STDIO.H", OVMX_FS_FILE);
+    u2v("dir/sub/MixedCase.Txt", OVMX_FS_AUTO, "[.DIR.SUB]MIXEDCASE.TXT", OVMX_FS_FILE);
+    u2v("file", OVMX_FS_AUTO, "FILE", OVMX_FS_FILE);
+    u2v("libfoo.so.1", OVMX_FS_AUTO, "", -1);            /* a second dot: refused */
+    u2v("bits/c++config.h", OVMX_FS_AUTO, "", -1);       /* '+': refused */
+    u2v("a b.txt", OVMX_FS_AUTO, "", -1);                /* a space: refused */
+    v2u("DKA0:[000000]FILE.TXT", "/dka0/file.txt");
+    v2u("[TEST]MixedCase.Txt;2", "/sys$disk/test/mixedcase.txt.2");
+    v2u("README.", "readme.");
+    v2u("[.SRC]MAIN.C", "./src/main.c");
+    v2u("[.bits]c^+^+config.h", NULL);                   /* an escape: refused */
+    switches(1, 1);
 
     /* decc$to_vms the way GCC's VMS-host code calls it. */
     calls = 0;
@@ -125,8 +155,8 @@ int main(void)
     check(n == 0 && calls == 0, "decc$to_vms with no_directory=1 on a directory -> 0, action not called");
 
     n = decc$from_vms("DKA0:[A.B]C.D;5", from_action, 0);
-    check(n == 1 && strcmp(ux_buff, "/DKA0/A/B/C.D") == 0,
-          "decc$from_vms(\"DKA0:[A.B]C.D;5\") -> /DKA0/A/B/C.D");
+    check(n == 1 && strcmp(ux_buff, "/DKA0/A/B/C.D.5") == 0,
+          "decc$from_vms(\"DKA0:[A.B]C.D;5\") -> /DKA0/A/B/C.D.5 (the version kept, as translate_vms does)");
 
     char *t = decc$translate_vms("SYS$SCRATCH:CC1.S");
     check(t && strcmp(t, "/SYS$SCRATCH/CC1.S") == 0,

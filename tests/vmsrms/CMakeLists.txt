@@ -394,6 +394,7 @@ set_tests_properties(vmsrms_meta_org PROPERTIES
 add_executable(test_crtl_filespec
     test_crtl_filespec.c
     ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c
 )
 target_include_directories(test_crtl_filespec PRIVATE
     ${VMS_RMS_INCLUDE_DIR}
@@ -401,11 +402,34 @@ target_include_directories(test_crtl_filespec PRIVATE
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_INCLUDE_DIR}
 )
-target_link_libraries(test_crtl_filespec PRIVATE vmsrms vmsfs vmslnm pthread)
+target_link_libraries(test_crtl_filespec PRIVATE vmsrms vms vmsfs vmslnm pthread)
 add_test(NAME vmsrms_crtl_filespec COMMAND test_crtl_filespec)
 set_tests_properties(vmsrms_crtl_filespec PROPERTIES
     LABELS "unit;rms;crtl"
     TIMEOUT 30
+)
+
+# rd vms-da9b: the same translator under the DEC C EFS switches, replayed
+# against the real OpenVMS Alpha V8.4 decc$to_vms / decc$translate_vms
+# (tests/lab/captures/ods5-alpha-20261022/CONSOLE-5.txt, five switch settings
+# x eighteen names). crtl_features.c supplies the switch table.
+add_executable(test_crtl_efs_oracle
+    test_crtl_efs_oracle.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c
+)
+target_include_directories(test_crtl_efs_oracle PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_crtl_efs_oracle PRIVATE vmsrms vms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_crtl_efs_oracle COMMAND test_crtl_efs_oracle)
+set_tests_properties(vmsrms_crtl_efs_oracle PROPERTIES
+    LABELS "unit;rms;crtl;ods5"
+    TIMEOUT 30
+    ENVIRONMENT "ODS5_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022"
 )
 
 # vms-0ae: RMS merges a relative directory ([.X], [-], []) with the process

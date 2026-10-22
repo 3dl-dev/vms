@@ -11,7 +11,9 @@
 #define __RMS_CRTL_FEATURES_H
 
 #define OVMX_CRTL_FEAT_FILE_SHARING  1     /* DECC$FILE_SHARING -- see crtl_features.c */
-#define OVMX_CRTL_FEAT_COUNT         1
+#define OVMX_CRTL_FEAT_EFS_CHARSET   2     /* DECC$EFS_CHARSET (rd vms-da9b)         */
+#define OVMX_CRTL_FEAT_EFS_CASE_PRESERVE 3 /* DECC$EFS_CASE_PRESERVE (rd vms-da9b)   */
+#define OVMX_CRTL_FEAT_COUNT         3
 #define OVMX_C_SINGLE_THREAD         0     /* reentrancy.h C$C_SINGLE_THREAD */
 #define OVMX_C_MULTITHREAD           1     /* reentrancy.h C$C_MULTITHREAD   */
 

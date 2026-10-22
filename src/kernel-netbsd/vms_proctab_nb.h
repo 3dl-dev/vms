@@ -468,6 +468,33 @@ struct vms_ddir_args {
 #define VMS_IOCTL_DDIR              _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x5F, struct vms_ddir_args)
 
 /*
+ * Byte-identical to src/kernel/vms_ioctl.h.
+ * $SET_PROCESS_PROPERTIESW -- a process property (rd vms-b9c): the file-name
+ * PARSE STYLE, a per-process attribute of the executive's PCB like $SETDFPROT's
+ * default protection. `property` is the PPROP$C_ code
+ * (docs/oracle/alpha84-starlet-defs/PPROPDEF.txt): PARSE_STYLE_PERM (1) sets
+ * the permanent style and the current image's; PARSE_STYLE_TEMP (0) the current
+ * image's only. `value` is PARSE_STYLE$C_TRADITIONAL (0) or _EXTENDED (1);
+ * `oldvalue` always returns the value of that property in force before the
+ * call. Any other property or value is SS$_BADPARAM. An image activated in the
+ * same process starts with the permanent style. OVMX design choice (Rule 8):
+ * the byte layout of this ioctl.
+ */
+#define VMS_PPROP_PARSE_STYLE_TEMP   0u   /* PPROP$C_PARSE_STYLE_TEMP */
+#define VMS_PPROP_PARSE_STYLE_PERM   1u   /* PPROP$C_PARSE_STYLE_PERM */
+#define VMS_PARSE_STYLE_TRADITIONAL  0u   /* PARSE_STYLE$C_TRADITIONAL */
+#define VMS_PARSE_STYLE_EXTENDED     1u   /* PARSE_STYLE$C_EXTENDED */
+struct vms_pprop_args {
+    uint32_t property;  /* in:  PPROP$C_ code */
+    uint32_t set;       /* in:  nonzero = store value */
+    uint32_t value;     /* in:  the new value */
+    uint32_t oldvalue;  /* out: the value in force before this call */
+    uint32_t status;    /* return: SS$_ status */
+    uint32_t pad;
+};
+#define VMS_IOCTL_PPROP             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x77, struct vms_pprop_args)
+
+/*
  * The PROCESS RIGHTS LIST (vms-7d5a): the identifiers a process holds besides its
  * UIC, executive state like the privilege mask -- $GRANTID adds one, $REVOKID removes
  * one, and the Files-11 ACP's ACL check (vmsfs_acp.c acp_proc_holds) matches an
@@ -588,6 +615,10 @@ _Static_assert(sizeof(struct vms_ddir_args) == 8 + 2 * VMS_DDIR_SIZE,
                "vms_ddir_args layout changed: VMS_IOCTL_DDIR ABI break");
 _Static_assert(VMS_IOCTL_DDIR == 0xC208565Fu,
                "VMS_IOCTL_DDIR encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_pprop_args) == 24,
+               "vms_pprop_args layout changed: VMS_IOCTL_PPROP ABI break");
+_Static_assert(VMS_IOCTL_PPROP == 0xC0185677u,
+               "VMS_IOCTL_PPROP encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
                "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
 _Static_assert(sizeof(struct vms_pri_args) == 24,

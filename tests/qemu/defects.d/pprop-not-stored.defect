@@ -1,0 +1,39 @@
+# pprop-not-stored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$SET_PROCESS_PROPERTIESW parse style is held per process in the executive (rd vms-b9c)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_pprop";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_pprop() stores a new permanent parse style with 'proc->parse_style_perm  = (uint8_t)args.value;'. The mutation drops that store, so PARSE_STYLE_PERM changes only the current image's style: the permanent style stays TRADITIONAL, the next read of it is wrong, and an image activated afterwards starts TRADITIONAL. Unique line in the file; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a later read returns EXTENDED for the process and the current image
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+PARSE_STYLE_TEMP=TRADITIONAL changes the image's style only
+an activated image (REGISTER_CONTINUE) starts at the PERMANENT style, EXTENDED
+a value that is not a parse style is SS$_BADPARAM and stores nothing
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME UNSTORED PERMANENT STYLE, READ AGAIN LATER. Every later assertion that
+reads the permanent style -- after the TEMP change, in the activated image that
+inherits it, and after the refused bad value -- finds TRADITIONAL instead of the
+EXTENDED that was set. The first read of the default, the previous-value return,
+the fresh-process check and the BADPARAM status never depend on the store.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^            proc->parse_style_perm  = (uint8_t)args.value;$|            /* NEGCTL pprop-not-stored */|' "$_file"
+
+    :
+}

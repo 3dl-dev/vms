@@ -2111,6 +2111,30 @@ uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot)
 }
 
 /*
+ * $SET_PROCESS_PROPERTIESW's executive half (VMS_IOCTL_PPROP, rd vms-b9c):
+ * read and optionally replace one process property (PPROP$C_ code) of this
+ * process. Returns the SS$ status; *oldvalue receives the value in force
+ * before the call.
+ */
+uint32_t vms_kif_pprop(uint32_t property, const uint32_t *newvalue, uint32_t *oldvalue)
+{
+    struct vms_pprop_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.property = property;
+    if (newvalue) {
+        args.set = 1;
+        args.value = *newvalue;
+    }
+
+    KIF_CALL(VMS_IOCTL_PPROP, &args);
+
+    if (oldvalue)
+        *oldvalue = args.oldvalue;
+    return args.status;
+}
+
+/*
  * $SETDDIR: read and optionally replace this process's default directory, held
  * by the executive (VMS_IOCTL_DDIR, rd vms-872). newdir NULL = read only.
  * olddir (may be NULL) receives the directory in force before the call ("" if

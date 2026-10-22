@@ -493,6 +493,10 @@ vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
 		proc->dfprot     = parent->dfprot;      /* $SETDFPROT is inherited */
 		proc->dfprot_set = parent->dfprot_set;
 		memcpy(proc->ddir, parent->ddir, sizeof(proc->ddir)); /* $SETDDIR too */
+		/* parse style (rd vms-b9c), as the Linux module: the permanent
+		 * style carries over and the new image starts at it */
+		proc->parse_style_perm  = parent->parse_style_perm;
+		proc->parse_style_image = parent->parse_style_perm;
 		memcpy(proc->rights_id, parent->rights_id, sizeof(proc->rights_id));
 		memcpy(proc->rights_attr, parent->rights_attr, sizeof(proc->rights_attr));
 		proc->rights_n = parent->rights_n;   /* the process rights list (vms-7d5a) */
@@ -1488,6 +1492,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_GETCLI:
 	case VMS_IOCTL_DFPROT:
 	case VMS_IOCTL_DDIR:
+	case VMS_IOCTL_PPROP:
 	case VMS_IOCTL_RIGHTS:
 	case VMS_IOCTL_PRI:
 	case VMS_IOCTL_BRKAUTH:
@@ -1530,6 +1535,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dfprot(proc, (unsigned long)uarg);           break;
 		case VMS_IOCTL_DDIR:
 			r = vms_ioctl_ddir(proc, (unsigned long)uarg);             break;
+		case VMS_IOCTL_PPROP:
+			r = vms_ioctl_pprop(proc, (unsigned long)uarg);            break;
 		case VMS_IOCTL_RIGHTS:
 			r = vms_ioctl_rights(proc, (unsigned long)uarg);           break;
 		case VMS_IOCTL_PRI:

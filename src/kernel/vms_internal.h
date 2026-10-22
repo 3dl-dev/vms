@@ -1074,6 +1074,13 @@ struct vms_proc {
      * REGISTER_CONTINUE like dfprot. "" = never set. Same hash_lock. */
     char                ddir[VMS_DDIR_SIZE];
 
+    /* $SET_PROCESS_PROPERTIESW parse style (VMS_IOCTL_PPROP, rd vms-b9c):
+     * PARSE_STYLE$C_TRADITIONAL (0) or _EXTENDED (1). parse_style_perm is the
+     * process's permanent style, parse_style_image the current image's; a new
+     * image (REGISTER_CONTINUE) starts at the permanent one. Same hash_lock. */
+    uint8_t             parse_style_perm;
+    uint8_t             parse_style_image;
+
     /* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
      * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
      * privilege mask. Same hash_lock as the identity fields. */
@@ -1606,6 +1613,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);

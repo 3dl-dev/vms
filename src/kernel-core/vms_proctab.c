@@ -1743,6 +1743,49 @@ out:
 }
 
 /*
+ * vms_ioctl_pprop - $SET_PROCESS_PROPERTIESW (rd vms-b9c): the caller's OWN
+ * file-name parse style. Self-targeted; the executive owns the value, so every
+ * image the process runs (RMS reading it on each $PARSE) sees the style DCL
+ * set. PARSE_STYLE_PERM stores the permanent style and the current image's;
+ * PARSE_STYLE_TEMP the current image's only. oldvalue is the property's value
+ * before the call. Any other property or value: SS$_BADPARAM, nothing stored.
+ */
+long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_pprop_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if ((args.property != VMS_PPROP_PARSE_STYLE_PERM &&
+         args.property != VMS_PPROP_PARSE_STYLE_TEMP) ||
+        (args.set && args.value != VMS_PARSE_STYLE_TRADITIONAL &&
+         args.value != VMS_PARSE_STYLE_EXTENDED)) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    exec_lock(&vms_proc_hash_lock);
+    if (args.property == VMS_PPROP_PARSE_STYLE_PERM) {
+        args.oldvalue = proc->parse_style_perm;
+        if (args.set) {
+            proc->parse_style_perm  = (uint8_t)args.value;
+            proc->parse_style_image = (uint8_t)args.value;
+        }
+    } else {
+        args.oldvalue = proc->parse_style_image;
+        if (args.set)
+            proc->parse_style_image = (uint8_t)args.value;
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_rights - the process rights list (rd vms-7d5a): $GRANTID / $REVOKID
  * add / remove an identifier, LIST reads it. GRANT and REVOKE need CMKRNL, as on
  * OpenVMS ($GRANTID with every privilege disabled is SS$_NOPRIV, the V7.3 / V8.4

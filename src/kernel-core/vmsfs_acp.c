@@ -80,6 +80,20 @@ _Static_assert(VMS_ACP_SERVE_DEVNAM_MAX == VMS_DEVNAM_SIZE,
 #define ACP_BLOCK_SIZE 512u
 
 /*
+ * rd vms-3ea: the status $MOUNT returns when ANOTHER volume of the same label
+ * is already mounted. VMS reports this as %MOUNT-F-VOLALRMNT, "another volume
+ * of same label already mounted" (OpenVMS System Messages, MOUNT facility) --
+ * a MOUNT-facility condition whose value this tree does not carry (the
+ * captured message catalogue is SYSTEM + RMS only, docs/oracle/messages). The
+ * same call SS__DEVNOTMOUNT's note in vms_internal.h records: return an
+ * ALREADY-GROUNDED SS$ value rather than invent one, and let the MOUNT surface
+ * render VMS's own text. SS$_DUPLNAM (148, "duplicate name") says what it is
+ * -- the label is the volume's name -- and $MOUNT returns it for nothing else,
+ * so DCL MOUNT maps it to the VOLALRMNT message unambiguously.
+ */
+#define ACP_SS_VOLALRMNT SS__DUPLNAM
+
+/*
  * One executive-resident mounted ODS-2 volume. The unit name + assigned-channel
  * refcount are the channel rung's (vms-149); vms-127 adds the VALIDATED volume
  * identity -- backing device, structure level, size and label read off the home
@@ -295,6 +309,35 @@ static struct vms_acp_volume *acp_vol_find_locked(const char *devnam)
 
     exec_list_for_each_entry(vol, &vms_acp_vol_list, list) {
         if (strcmp(vol->devnam, devnam) == 0)
+            return vol;
+    }
+    return NULL;
+}
+
+/*
+ * rd vms-3ea: does a volume of label `volname` (the 12-byte, space-padded
+ * home-block field, NUL-terminated) already sit in this node's mount table?
+ * An unlabelled volume (a label of nothing but spaces) has no label to clash.
+ * Caller holds vms_acp_vol_lock.
+ */
+static int acp_label_is_blank(const char *volname)
+{
+    size_t i;
+
+    for (i = 0; i < 12 && volname[i] != '\0'; i++)
+        if (volname[i] != ' ')
+            return 0;
+    return 1;
+}
+
+static struct vms_acp_volume *acp_vol_find_label_locked(const char *volname)
+{
+    struct vms_acp_volume *vol;
+
+    if (acp_label_is_blank(volname))
+        return NULL;
+    exec_list_for_each_entry(vol, &vms_acp_vol_list, list) {
+        if (strncmp(vol->volname, volname, 12) == 0)
             return vol;
     }
     return NULL;
@@ -831,36 +874,90 @@ long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg)
     vol->backing_minor = backing_minor;
 
     /*
-     * Publish into the executive-global table. Re-check for a racing mount of
-     * the same unit (validation ran unlocked); if another thread won, keep its
-     * row and report success -- the volume IS mounted either way (idempotent).
+     * rd vms-3ea: ANOTHER VOLUME OF THE SAME LABEL, ON THIS NODE. The label is
+     * the Files-11 lock namespace (acp_vol_resnam_kind: "F11B$<kind><label>")
+     * and the name of the volume, so two DIFFERENT units carrying one label
+     * cannot both be mounted: VMS's MOUNT refuses the second with
+     * %MOUNT-F-VOLALRMNT, "another volume of same label already mounted". The
+     * same unit again is the idempotent case above, never this.
      */
     exec_lock(&vms_acp_vol_lock);
-    if (acp_vol_find_locked(devnam)) {
+    if (acp_vol_find_label_locked(vol->volname)) {
         exec_unlock(&vms_acp_vol_lock);
         exec_free(vol);
-        args.status = SS__NORMAL;
+        args.status = ACP_SS_VOLALRMNT;
         goto out;
     }
-    exec_list_add_tail(&vol->list, &vms_acp_vol_list);
     exec_unlock(&vms_acp_vol_lock);
 
     /*
      * vms-25e: take the STANDING volume lock a faithful MOUNT holds for the whole
      * mount life -- the cluster-registration presence marker the connection
-     * manager registers to the coordinator on join. Enqueued AFTER dropping
-     * vms_acp_vol_lock (the enqueue may take DLM locks; never hold the table lock
-     * across it). Best-effort: a failure (no DLM backend) leaves vol_lkid 0 and
-     * the volume is mounted regardless -- the standing lock is a cluster facility,
-     * NEVER a gate on the mount itself (INV-6: honest omission on failure). Owned
-     * by the mounting process; for the PID-1-mounted system disk that is the
-     * node's life.
+     * manager registers to the coordinator on join. Enqueued with
+     * vms_acp_vol_lock NOT held (the enqueue may take DLM locks; never hold the
+     * table lock across it), and BEFORE the volume is published, so a refusal
+     * below leaves nothing in the table. Best-effort: a failure (no DLM backend)
+     * leaves vol_lkid 0 and the volume is mounted regardless -- the standing lock
+     * is a cluster facility, NEVER a gate on the mount by itself (INV-6: honest
+     * omission on failure). Owned by the mounting process; for the
+     * PID-1-mounted system disk that is the node's life.
+     *
+     * rd vms-3ea: ANOTHER VOLUME OF THE SAME LABEL, ON ANOTHER MEMBER. If the
+     * lock came back mastered by another member, that member already holds
+     * F11B$v<label>: it has a volume of this label mounted. Whether that is
+     * THIS volume is the whole question, and the executive answers it from
+     * what it holds, adding nothing to the wire:
+     *   - this unit is a LOCAL disk (its backing is a block device of this
+     *     node, not an MSCP-served unit). This node serves only volumes it has
+     *     mounted (vms_acp_volume_at), and it has not mounted this one yet, so
+     *     no other member can have reached it through this node; OVMX has no
+     *     multi-host shared bus. The other member's volume is a DIFFERENT one:
+     *     VOLALRMNT, never a second volume behind one clusterwide lock name.
+     *   - this unit is SERVED to this node (VMS_DEVTAB_SERVED_MAJOR): the
+     *     member that serves it has it mounted, legitimately, under its label --
+     *     the cluster mount of one physical volume. No error.
+     * A volume mounted before this node joined (the system disk, mounted ahead
+     * of CLUSTER_START) took the lock while no other member was visible, so it
+     * is not judged here; that case is the cluster lane's (rd vms-3ea notes).
      */
     {
         char vresnam[32];
+        int remote = 0;
+
         acp_vol_resnam_kind(vol, 'v', vresnam, sizeof(vresnam));
-        vms_lock_acp_vol_standing(proc, vresnam, &vol->vol_lkid);
+        vms_lock_acp_vol_standing(proc, vresnam, &vol->vol_lkid, &remote);
+        if (vol->vol_lkid != 0 && remote &&
+            backing_major != VMS_DEVTAB_SERVED_MAJOR) {
+            vms_lock_acp_vol_release(proc, vol->vol_lkid);
+            exec_free(vol);
+            args.status = ACP_SS_VOLALRMNT;
+            goto out;
+        }
     }
+
+    /*
+     * Publish into the executive-global table. Re-check for a racing mount of
+     * the same unit (validation ran unlocked); if another thread won, keep its
+     * row and report success -- the volume IS mounted either way (idempotent).
+     * A racing mount of ANOTHER unit with this label that won is VOLALRMNT.
+     */
+    exec_lock(&vms_acp_vol_lock);
+    if (acp_vol_find_locked(devnam)) {
+        exec_unlock(&vms_acp_vol_lock);
+        vms_lock_acp_vol_release(proc, vol->vol_lkid);
+        exec_free(vol);
+        args.status = SS__NORMAL;
+        goto out;
+    }
+    if (acp_vol_find_label_locked(vol->volname)) {
+        exec_unlock(&vms_acp_vol_lock);
+        vms_lock_acp_vol_release(proc, vol->vol_lkid);
+        exec_free(vol);
+        args.status = ACP_SS_VOLALRMNT;
+        goto out;
+    }
+    exec_list_add_tail(&vol->list, &vms_acp_vol_list);
+    exec_unlock(&vms_acp_vol_lock);
 
     args.status = SS__NORMAL;
 

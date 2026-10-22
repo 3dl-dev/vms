@@ -270,6 +270,26 @@ vmsfs_master --ods2 relabel "$A_DISK" "$LABEL_A" \
 vmsfs_master --ods2 relabel "$B_DISK" "$LABEL_B" \
     || { echo "FATAL: could not give node B's system disk the label $LABEL_B"; exit 1; }
 
+# rd vms-3ea, the ENFORCEMENT half: each node also gets a small LOCAL data disk
+# (its second virtio disk, VDA100:), and the two are DIFFERENT volumes mastered
+# separately but given ONE label, OVMXDATA -- the administrator error VMS
+# refuses. Once the cluster has formed, node A mounts its own; node B's MOUNT
+# of ITS own must then be %MOUNT-F-VOLALRMNT, promptly (never a hang), because
+# the label is the volume's clusterwide lock name and another member already
+# holds it for a different volume.
+DATA_LABEL=OVMXDATA
+A_DATA=/tmp/ccl2-a-data.img
+B_DATA=/tmp/ccl2-b-data.img
+DATA_TREE=/tmp/ccl2-data-tree
+rm -rf "$A_DATA" "$B_DATA" "$DATA_TREE"
+mkdir -p "$DATA_TREE"
+printf 'node A data volume\n' > "$DATA_TREE/README.TXT"
+vmsfs_master --ods2 master "$A_DATA" "$DATA_LABEL" "$DATA_TREE" 4 >/dev/null \
+    || { echo "FATAL: could not master node A's data volume"; exit 1; }
+printf 'node B data volume\n' > "$DATA_TREE/README.TXT"
+vmsfs_master --ods2 master "$B_DATA" "$DATA_LABEL" "$DATA_TREE" 4 >/dev/null \
+    || { echo "FATAL: could not master node B's data volume"; exit 1; }
+
 # ==========================================================================
 # drive_configure_add - the documented procedure's ADD path (menu choice 1),
 # run interactively over an already-open console fifo. $1=fd $2=log $3=pid
@@ -396,6 +416,7 @@ timeout -k 15 "$JOIN_TIMEOUT" $QEMU $MACHINE $ACCEL \
     -netdev "socket,id=net0,listen=127.0.0.1:${SEGMENT_PORT}" \
     -device "virtio-net-pci,netdev=net0,mac=${MAC_A},romfile=" \
     -drive file="$A_DISK",format=raw,if=virtio,cache=writethrough \
+    -drive file="$A_DATA",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$A_FIFO" >"$A_LOG2" 2>&1 &
 AP=$!
 exec 4>"$A_FIFO"
@@ -486,6 +507,7 @@ timeout -k 15 "$JOIN_TIMEOUT" $QEMU $MACHINE $ACCEL \
     -netdev "socket,id=net0,connect=127.0.0.1:${SEGMENT_PORT}" \
     -device "virtio-net-pci,netdev=net0,mac=${MAC_B},romfile=" \
     -drive file="$B_DISK",format=raw,if=virtio,cache=writethrough \
+    -drive file="$B_DATA",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$B_FIFO" >"$B_LOG2" 2>&1 &
 BP=$!
 exec 6>"$B_FIFO"
@@ -653,6 +675,41 @@ check "node B: SYSINIT's own line while it joins" \
     "$B_LOG2" "%SYSINIT, waiting to form or join a VMScluster system"
 check_console_vms_faithful "node A" "$A_LOG2"
 check_console_vms_faithful "node B" "$B_LOG2"
+
+# ==========================================================================
+# rd vms-3ea: TWO DIFFERENT VOLUMES, ONE LABEL, TWO MEMBERS -> VOLALRMNT.
+# Node A mounts its local OVMXDATA; node B's MOUNT of ITS OWN, different,
+# local OVMXDATA must be refused in VMS's words within a bounded wait. Then A
+# dismounts and B's same MOUNT succeeds: the refusal tracked the OTHER member
+# holding the label, not anything about B's disk. Run after the console
+# checks above: MOUNT's lines are DCL's, but keep the faithful-console checks
+# about the formation itself.
+# ==========================================================================
+echo ""
+echo "--- rd vms-3ea: one label on two members' different local volumes ---"
+printf 'MOUNT VDA100: %s\r' "$DATA_LABEL" >&4 2>/dev/null
+if waitfor "%MOUNT-I-MOUNTED, $DATA_LABEL mounted on _VDA100:" 60 "$A_LOG2" "$AP"; then rc=0; else rc=1; fi
+record "node A: MOUNT of its local $DATA_LABEL volume succeeds" "$rc"
+B_VOL_OFF=$(wc -c <"$B_LOG2")
+printf 'MOUNT VDA100: %s\r' "$DATA_LABEL" >&6 2>/dev/null
+B_VOL_T0=$(date +%s)
+if waitfor "%MOUNT-F-VOLALRMNT, another volume of same label already mounted" 60 "$B_LOG2" "$BP"; then rc=0; else rc=1; fi
+record "node B: MOUNT of its OWN, different $DATA_LABEL volume is %MOUNT-F-VOLALRMNT within 60s (never a hang)" "$rc"
+echo "  (node B's refusal took $(( $(date +%s) - B_VOL_T0 ))s)"
+if tail -c +"$((B_VOL_OFF + 1))" "$B_LOG2" | grep -aqF "%MOUNT-I-MOUNTED, $DATA_LABEL mounted"; then
+    record "node B: its duplicate-label volume was NOT mounted" 1
+else
+    record "node B: its duplicate-label volume was NOT mounted" 0
+fi
+printf 'DISMOUNT VDA100:\r' >&4 2>/dev/null
+if waitfor "%DISMOUNT-I-DISMOUNTED, _VDA100: dismounted" 60 "$A_LOG2" "$AP"; then rc=0; else rc=1; fi
+record "node A: DISMOUNT of its $DATA_LABEL volume frees the label" "$rc"
+sleep 3
+printf 'MOUNT VDA100: %s\r' "$DATA_LABEL" >&6 2>/dev/null
+if waitfor "%MOUNT-I-MOUNTED, $DATA_LABEL mounted on _VDA100:" 60 "$B_LOG2" "$BP"; then rc=0; else rc=1; fi
+record "node B: with the label free cluster-wide, the SAME MOUNT now succeeds (the refusal was the other member's label)" "$rc"
+printf 'DISMOUNT VDA100:\r' >&6 2>/dev/null
+waitfor "%DISMOUNT-I-DISMOUNTED, _VDA100: dismounted" 60 "$B_LOG2" "$BP" || true
 
 # rd vms-158d: each node's node-name record is in its OPERATOR.LOG (read last:
 # TYPE puts the log's executive diagnostics on the console, which the checks

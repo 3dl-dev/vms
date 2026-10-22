@@ -1,0 +1,16 @@
+rd vms-b67a second arrangement: the RMT9 / S0 / S1 / S2 frames, decoded by tools/cluster/dlm_body.py
+
+f42  req  cat=02 op=01 ENQ (new lock request)   VAX1->08002b51a04d mode=0x05(EX) reqid/pid=0x2020021d master_lkid=0x5a000693 reslen=4 res='RMT9'
+f43  resp cat=82 op=01 ENQ (new lock request)   08002b51a04d->VAX1 mode=0xa6(-) reqid/pid=0x2020021d master_lkid=0x5a000693 reslen=4 res='RMT9'
+f232 req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->VAX1 mode=0x01(CR) reqid/pid=0x2040021a master_lkid=0x76000359 reslen=4 res='RMT9'
+f234 req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->VAX1 mode=0x02(CW) reqid/pid=0x2040021a master_lkid=0x4d000360 reslen=2 res='S0'
+f236 req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->VAX1 mode=0x02(CW) reqid/pid=0x2040021a master_lkid=0x4c000361 reslen=2 res='S1'
+f238 req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->VAX1 mode=0x02(CW) reqid/pid=0x2040021a master_lkid=0x50000362 reslen=2 res='S2'
+
+--- the cells W1'-W4' are scored on (name taken by body[47] length) ---
+f42   cat=0x02 RMT9  mode(b30)=05  own(b24:28)=9306005a master(b20:24)=1d022020  parent(b36:44)=0000000000000000  hash(b128:132)=12543943  b34=01
+f43   cat=0x82 RMT9  mode(b30)=a6  own(b24:28)=9306005a master(b20:24)=1d022020  parent(b36:44)=6298870000000000  hash(b128:132)=12543943  b34=f9
+f232  cat=0x02 RMT9  mode(b30)=01  own(b24:28)=59030076 master(b20:24)=1a024020  parent(b36:44)=0000000000000000  hash(b128:132)=12543943  b34=01
+f234  cat=0x02 S0    mode(b30)=02  own(b24:28)=6003004d master(b20:24)=1a024020  parent(b36:44)=590300769506003c  hash(b128:132)=e3bd7e45  b34=01
+f236  cat=0x02 S1    mode(b30)=02  own(b24:28)=6103004c master(b20:24)=1a024020  parent(b36:44)=590300769506003c  hash(b128:132)=e3bdec78  b34=01
+f238  cat=0x02 S2    mode(b30)=02  own(b24:28)=62030050 master(b20:24)=1a024020  parent(b36:44)=590300769506003c  hash(b128:132)=e3bd5aac  b34=01

@@ -310,9 +310,13 @@ run_case() {
     if [ "$rc" -eq 0 ]; then
         send 'SYSTEM'; sleep 1
         send 'MANAGER'; sleep 3
-        waitfor 'Welcome to OpenVMX' 60 "$log2" >/dev/null 2>&1 || true
-        sleep 3
-        send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 6
+        # The same login wait boot 1 uses: the DCL prompt, not a fixed sleep
+        # (a TYPE typed before it lands in LOGIN's terminal inquiry).
+        if waitfor 'Welcome to OpenVMX' 60 "$log2" && waitfor '$ ' 90 "$log2"; then
+            send 'TYPE SYS$MANAGER:OPERATOR.LOG'
+            waitfor 'system identity ' 60 "$log2" >/dev/null 2>&1 || true
+            sleep 3
+        fi
     fi
 
     kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null

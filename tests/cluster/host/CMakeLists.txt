@@ -1301,6 +1301,26 @@ set_tests_properties(cluster_host_dlm_deq_census PROPERTIES
 # requests in the corpus, from two senders at two modes, are addressed to the
 # PARENT'S MASTER and carry the pair (own parent lkid, parent's master lkid) at
 # body[36:44]. The selftest pins it because the item quotes it.
+# ---- rd vms-326: WHAT A REAL VAX CALLS AN RMS FILE-ACCESS LOCK, and the one
+# reason OVMX cannot say it yet. Classifies every RMS$ name in the corpus by who
+# ORIGINATED it (an answer echoes the requester's name, so the sender is the
+# wrong attribution): every real-originated name is the 26-byte binary form, and
+# every short text-form name is OVMX's own -- which real VAXes have ANSWERED, so
+# OVMX's form reached a real cluster's behaviour and not just its wire. Pins the
+# per-byte map, the (group, access mode) identity that routes it, and the
+# BLOCKER: all 64 real names contain a NUL, so the C-string resource name this
+# executive carries truncates them at byte 4, 7 or 8 -- one of them to 'RMS$'
+# alone, which every such file on every volume would then share.
+add_test(NAME cluster_host_dlm_rms_name_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_rms_name_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_rms_name_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;rms"
+    TIMEOUT 180
+)
+
 add_test(NAME cluster_host_dlm_sublock_census
     COMMAND python3
         "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_sublock_census.py" --selftest

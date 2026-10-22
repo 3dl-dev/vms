@@ -199,6 +199,8 @@ dlm-release-opens-a-transaction
 dlm-release-carries-the-lock-mode
 dlm-local-convert-grants-nobody
 dlm-local-convert-tells-nobody
+dlm-proxy-holder-not-in-compat
+dlm-proxy-compat-reads-the-asked-mode
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -915,6 +917,12 @@ EOF
   including the mode the engine really granted (EX)
 *** and the frame the peer receives is a GRANT naming its own handle and ours ***
 *** ...and the flip nobody could be told about is COUNTED, not dropped ***
+the engine reports exactly one advanced queue -- what the lab read as `local advances=1`
+  naming the peer and the SECOND LKB, not the cancelled one
+the lock reads back as granted for that system at the moment of the send
+*** and the key the GRANT path takes with is the key the arm RETAINED under -- the one thing section 12 could not disagree about ***
+*** so the retained frame is found and the grant is built ***
+  and it names the SECOND requester's handle, so the stale retained frame cannot be what the peer receives
 EOF
                       ;;
         esac;;
@@ -999,6 +1007,37 @@ EOF
 *** ...and the peer is TOLD: a local convert is a release door like every other ***
   naming the peer and the handle this node granted it
 *** ...and the grant nobody could be told about is COUNTED ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-proxy-holder-not-in-compat)
+        case "$_f" in
+        facility)     echo "THE COMPATIBILITY CHECK SEES EVERY GRANTED LOCK, PROXY INCLUDED (vms_lock.c lock_compatible -> held_proxies_compatible, rd vms-5cd): a lock the CLUSTER granted this node, still carried as a proxy LKB, blocks an incompatible request on a resource this node masters";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the check goes back to walking res->granted alone, which is how it shipped -- and that is a DOUBLE GRANT, measured on real hardware twice in four minutes (2026-10-22, pod lab85f, tests/lab/captures/vms-5cd-doublegrant-20261022). A real VAX handed OVMX a lock tree while an OVMX process held its root at CR through a proxy; adopt_open made this node the master at once; the adoption never reached HELD (one op-0x13, not two), so the rd vms-3ac conversion never ran; and VAX2's \$ENQ for EX was answered body[34]=0xfa GRANTED, with VAX2's process in HIB believing it held EX while OVMX's own process still held CR. Two incompatible modes on one resource, the second of them a frame OVMX put on the wire.";;
+        require_fail) hd_lines <<'EOF'
+*** the peer's EX is QUEUED, not granted: a resource this node's own process holds at CR is not handed to another system at EX ***
+*** and the engine COUNTED the withheld grant, so a fire can attribute the queue to this executive ***
+  the peer's lock exists here and is granted at NL -- it is waiting, not holding
+our converted lock is on the granted queue now
+*** and the peer is still QUEUED: the two halves of the fix agree rather than one covering for the other ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-proxy-compat-reads-the-asked-mode)
+        case "$_f" in
+        facility)     echo "...AT THE MODE THE MASTER GRANTED, NEVER THE MODE WE ASKED FOR (vms_lock.c held_proxies_compatible, rd vms-5cd): a proxy still PENDING at its master is a lock NOBODY has granted, and it blocks nothing";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the floor under the fix above is removed: EVERY proxy LKB counts as a holder, at the mode it REQUESTED, so an outstanding request of this node's own that no master has answered blocks another system. That is the mirror-image fabrication of the double grant -- queueing a peer behind a lock this executive does not hold -- and it is reachable in exactly the arrangement the fix exists for: a tree handed over while a request of ours is still outstanding.";;
+        require_fail) hd_lines <<'EOF'
+*** the peer's EX is GRANTED: nobody holds this resource, and an unanswered request of ours is not a lock ***
+  and nothing was counted as withheld
 EOF
                       ;;
         esac;;
@@ -3079,6 +3118,25 @@ apply_edit() {
     dlm-local-convert-tells-nobody)
         # The same branch's REPORT, left out while the grant pass stays.
         perl -0pi -e 's|        exec_unlock\(&res->lock\);\n        dlm_flips_report\(&flips\);\n\n        args\.lk_status|        exec_unlock(&res->lock);\n        /* NEGCTL dlm-local-convert-tells-nobody */\n\n        args.lk_status|' "$_file";;
+
+    dlm-proxy-holder-not-in-compat)
+        # The PROXY half of the compatibility answer, removed: lock_compatible
+        # goes back to walking res->granted alone. Anchored on the call inside
+        # lock_compatible (the only place held_proxies_compatible is reached
+        # from), so the helper itself -- and the dlm-pending-proxy-counted-as-
+        # holder defect's own anchor inside proxy_is_held -- are untouched.
+        perl -0pi -e 's|    if \(!held_proxies_compatible\(res, requested, exclude\)\) \{\n        vms_dlm_proxy_compat_blocks_n\+\+;\n        return 0;\n    \}\n|    /* NEGCTL dlm-proxy-holder-not-in-compat */\n    (void)held_proxies_compatible;\n|' "$_file";;
+
+    dlm-proxy-compat-reads-the-asked-mode)
+        # "Granted by the cluster, at the granted mode" degraded to "is a
+        # proxy at all, at the mode it asked for", so an outstanding request
+        # of our own counts as a lock we hold. Anchored on the walk's two
+        # lines inside held_proxies_compatible, which no other defect touches.
+        # NOTE the {} delimiters: with s|...|...| perl hands the engine a BARE
+        # pipe for an escaped one, so `\|\|` becomes an EMPTY ALTERNATION that
+        # matches at offset 0 and prepends the replacement to the file (caught
+        # by this manifest's own twice-apply check, 2026-10-22).
+        perl -0pi -e 's{        if \(held == exclude \|\| !proxy_is_held\(held\)\)\n            continue;\n        if \(!compat\[requested\]\[held->granted_mode\]\)}{        if (held == exclude || !held->proxy) /* NEGCTL dlm-proxy-compat-reads-the-asked-mode */\n            continue;\n        if (!compat[requested][held->requested_mode])}' "$_file";;
 
     dlm-convert-tells-the-converter-only)
         # The INBOUND convert's snapshot. Three doors now call the same three

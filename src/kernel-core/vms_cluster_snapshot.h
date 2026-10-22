@@ -480,6 +480,34 @@ struct vms_dlm_scs_view {
 	uint32_t grant_advances_in;
 	uint32_t grant_advances_stale;
 	/*
+	 * ...AND WHICH DOOR THE OWED GRANT WAS REFUSED AT (fire q85f1,
+	 * 2026-10-22). `deferred_grants_owed` above is the SUM of three
+	 * different facts, and a lab fire read it as `owed=1` beside a real VAX
+	 * that was still waiting -- with no way to say WHICH:
+	 *
+	 *   `pending_keep_refused`  the requester's frame was never retained at
+	 *                           all (so there was nothing to echo later),
+	 *   `pending_overflow`      ...and how often that was the table being
+	 *                           FULL rather than the request being
+	 *                           unkeyable: the table's own counter, read
+	 *                           out, because 16 slots that nothing ever
+	 *                           drains is a different defect from a bad key,
+	 *   `deferred_grants_no_body` the flip happened and the frame was not
+	 *                           there to take back,
+	 *   `deferred_grants_send_failed` the frame was built and the one way
+	 *                           out refused it (RULE C, no CSB, no
+	 *                           sequence).
+	 *
+	 * Each is also said once on the console, but a console line is a weaker
+	 * instrument than the row: the executive's in-kernel lines are muted at
+	 * the console level this build boots with (ovmx_console_policy.h), so
+	 * the ROW is what a fire reads.
+	 */
+	uint32_t pending_keep_refused;
+	uint32_t pending_overflow;
+	uint32_t deferred_grants_no_body;
+	uint32_t deferred_grants_send_failed;
+	/*
 	 * THE ARM'S HONEST DECLINE. A cat-0x02 body this arm could not read as
 	 * any shape it serves -- including an op-0x03 whose lock ids the codec
 	 * refuses. It is NO LONGER where a peer's $DEQ lands: since rd vms-c72
@@ -557,13 +585,29 @@ struct vms_dlm_scs_view {
 	uint32_t posts_unqueued;        /* the fork queue would not take it     */
 	uint32_t posts_lock_gone;       /* refill found no proxy: abandoned     */
 	uint32_t posts_refused;         /* the FSM refused: nothing was sent    */
+
+	/*
+	 * THE ENGINE'S LOCK-SAFETY READ (rd vms-5cd): grant decisions this
+	 * executive WITHHELD because a PROXY LKB of its own holds the resource
+	 * -- a lock the cluster granted this node, on a resource this node has
+	 * since come to master (a tree handed over, a directory answering "you
+	 * master it"). Read from the engine, like `rm_held_unreported` above,
+	 * and not derived from anything the arm counted.
+	 *
+	 * It is in the row because the alternative was measured twice on real
+	 * hardware: OVMX GRANTED a real VAX EX on a resource its own hibernating
+	 * process held at CR, because the compatibility check walked only
+	 * res->granted and the proxy was not on it. A nonzero reading here is
+	 * that grant NOT happening, attributable to this executive.
+	 */
+	uint32_t proxy_compat_blocks;
 };
 /* 184 since rd vms-ed5 added the ten remaster counters (144 before): a
  * fixed-width ABI struct
  * whose size is PINNED, so a field added here fails to build until both
  * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
  * and this number are updated together. */
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 200,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 220,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

@@ -3115,6 +3115,14 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->releases_refused    = d->releases_refused;
 	out->deferred_grants_owed = d->deferred_grants_no_wire_op;
 	out->deferred_grants_sent = d->deferred_grants_sent;
+	/* ...and its decomposition, so a fire names the door (fire q85f1). The
+	 * overflow count is the retention table's OWN counter, read out here
+	 * rather than mirrored into this struct, for the same reason every
+	 * other field is a read: one owner per fact. */
+	out->pending_keep_refused = d->pending_keep_refused;
+	out->pending_overflow = d->pending.overflow;
+	out->deferred_grants_no_body = d->deferred_grants_no_body;
+	out->deferred_grants_send_failed = d->send_failures;
 	out->queued_no_reply     = d->queued_no_reply;
 	out->queued_answered     = d->queued_answered;
 	out->queued_unanswerable = d->queued_unanswerable;
@@ -3167,6 +3175,15 @@ static void dlm_arm_project_remaster(const struct vms_dlm_scs *d,
 	out->rm_held_unsent      = d->rm.held_unsent;
 	out->rm_held_unreported  = vms_lock_dlm_adopt_unreported();
 	out->rm_notifications    = d->rm.notifications;
+	/*
+	 * ...AND THE GRANTS THE ENGINE WITHHELD because a proxy LKB of this
+	 * node's holds the resource (rd vms-5cd). Read from the ENGINE, like
+	 * rm_held_unreported above: it is the lock database's own count, and the
+	 * arm neither keeps nor derives it. It belongs beside the remaster
+	 * tallies because that is the arrangement that produced the double grant
+	 * -- a tree this node was handed, decided against an empty picture.
+	 */
+	out->proxy_compat_blocks = vms_lock_dlm_proxy_compat_blocks();
 }
 
 int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)

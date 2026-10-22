@@ -574,6 +574,22 @@ uint32_t vms_lock_dlm_dir_removes_unposted(void);
 uint32_t vms_lock_dlm_proxy_self_mastered(void);
 
 /*
+ * HOW MANY GRANT DECISIONS WERE WITHHELD BECAUSE A PROXY LKB OF THIS NODE'S
+ * HOLDS THE RESOURCE (rd vms-5cd).
+ *
+ * A proxy the cluster has GRANTED is a lock this node holds, and
+ * lock_compatible() counts it -- wherever the resource is mastered. This is
+ * how often that mattered: a request (local, or a peer's served through the
+ * master seam) that the granted queue alone would have allowed and a proxy of
+ * ours forbade. The request is QUEUED, which is the honest outcome; before
+ * this counter existed the same arrangement GRANTED it, measured twice on real
+ * hardware (OVMX granted VAX2 EX on a resource its own process held at CR).
+ *
+ * A diagnostic reads it; nothing acts on it.
+ */
+uint32_t vms_lock_dlm_proxy_compat_blocks(void);
+
+/*
  * QUEUES THIS NODE ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd) -- the three
  * readings of `grant_advanced` above, since this executive started.
  *

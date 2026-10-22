@@ -632,6 +632,13 @@ struct vms_dlm_scs_view_wire {
 	uint32_t queued_unanswerable;      /* ...and the honest silence left       */
 	uint32_t grant_advances_in;        /* a LOCAL release advanced a cross-node */
 	uint32_t grant_advances_stale;     /* ...queue; and the ones with no lock  */
+	/* WHICH DOOR the owed grant was refused at (fire q85f1). `owed` above is
+	 * their sum, which a lab fire could not decompose; see
+	 * vms_cluster_snapshot.h for what each one means. */
+	uint32_t pending_keep_refused;
+	uint32_t pending_overflow;
+	uint32_t deferred_grants_no_body;
+	uint32_t deferred_grants_send_failed;
 	uint32_t unparsed;
 	uint32_t foreign_refused;
 	/* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5). Mirror of
@@ -655,6 +662,10 @@ struct vms_dlm_scs_view_wire {
 	uint32_t posts_unqueued;
 	uint32_t posts_lock_gone;
 	uint32_t posts_refused;
+	/* The ENGINE's lock-safety read (rd vms-5cd): grant decisions withheld
+	 * because a PROXY LKB of this node's holds the resource. Mirror of
+	 * src/kernel/vms_ioctl.h; see vms_cluster_snapshot.h. */
+	uint32_t proxy_compat_blocks;
 };
 
 struct vms_cluster_diag_dlm_args {
@@ -888,9 +899,17 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 200,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 220,
                "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 208,
+/*
+ * 228 = the row (220) + status + pad0. THIS NUMBER WAS STALE AT 208 from
+ * 2026-10-22 (rd vms-28bd's four owed-grant counters grew the row 200 -> 216 in
+ * both other copies and this assert was not moved with them), which no host
+ * gate catches: this header is compiled only by tests/netbsd/guest/vmslock.c on
+ * the VAX rail, so the mirror that exists to fail LOUDLY was quietly wrong.
+ * Corrected here with rd vms-5cd's own field, and filed as its own gap.
+ */
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 228,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

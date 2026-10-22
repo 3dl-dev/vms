@@ -360,6 +360,22 @@ static void cnxtrace_print_dlm(void)
            (unsigned)v->rm_trees_held, (unsigned)v->rm_held_sent,
            (unsigned)v->rm_held_unsent, (unsigned)v->rm_held_unreported,
            (unsigned)v->rm_notifications);
+    /* WHICH DOOR an owed deferred grant was refused at (fire q85f1). `owed`
+     * on the line above is the SUM of these; the fire that first read it as
+     * `owed=1` could not say whether the frame was never retained, was not
+     * found, or could not be sent. */
+    printf("%%CNXTRACE-I-DLMOWED, owed grants by door: keep_refused=%u "
+           "table_overflow=%u no_body=%u send_failed=%u\n",
+           (unsigned)v->pending_keep_refused, (unsigned)v->pending_overflow,
+           (unsigned)v->deferred_grants_no_body,
+           (unsigned)v->deferred_grants_send_failed);
+    /* THE DOUBLE GRANT THAT DID NOT HAPPEN (rd vms-5cd). Grant decisions the
+     * ENGINE withheld because a PROXY LKB of this node's holds the resource --
+     * the check that was missing when OVMX granted a real VAX EX over a CR its
+     * own process held, twice in four minutes. A lab fire reads this line to
+     * attribute the queue to this executive rather than to the wire. */
+    printf("%%CNXTRACE-I-DLMHOLDOWN, grants withheld by a proxy lock of ours=%u"
+           "\n", (unsigned)v->proxy_compat_blocks);
     printf("%%CNXTRACE-I-DLMPOST, posts queued=%u unqueued=%u lock_gone=%u "
            "refused=%u\n",
            (unsigned)v->posts_queued, (unsigned)v->posts_unqueued,

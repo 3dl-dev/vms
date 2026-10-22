@@ -1,0 +1,28 @@
+rd vms-5cd fire d5cd1 -- WHAT OVMXE PUT ON THE WIRE, counted over the
+WHOLE capture (not the trim), by the shipping census walker
+tools/cluster/remaster_census.py's sca_bodies_with_src.
+
+SCS-MSG frames in the capture: 1665
+
+EVERY frame OVMXE ORIGINATED, by (category, opcode):
+  cat=0x01 op=0x01 : 2
+  cat=0x01 op=0x02 : 1
+  cat=0x01 op=0x14 : 2
+  cat=0x02 op=0x01 : 8
+  cat=0x02 op=0x03 : 1
+  cat=0x02 op=0x04 : 5
+  cat=0x04 op=0x00 : 86
+  cat=0x0b op=0x05 : 1
+  cat=0x81 op=0x03 : 1
+  cat=0x81 op=0x05 : 4
+  cat=0x81 op=0x09 : 1
+  cat=0x82 op=0x01 : 2
+  cat=0x82 op=0x15 : 3
+  cat=0x86 op=0x00 : 9
+  cat=0x8b op=0x04 : 1
+
+ITS cat-0x82 op-0x01 ANSWERS, by the outcome cell body[34]:
+  body[34]=0xfb QUEUED   : 2
+
+*** 0xfa (GRANTED) count: 0 ***
+*** op-0x14 (tree is held here) originated by OVMXE: 0 ***

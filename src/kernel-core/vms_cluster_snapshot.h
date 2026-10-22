@@ -492,7 +492,7 @@ struct vms_dlm_scs_view {
 	 *                           this and `pending_overflow` are now the
 	 *                           RECORD of what this master queued, not a
 	 *                           door the grant can be refused at; retiring
-	 *                           the table is rd vms-5f9a,
+	 *                           the table is rd vms-838f,
 	 *   `pending_overflow`      ...and how often that retention failed for
 	 *                           want of a slot rather than a key: the
 	 *                           table's own counter, read out, because 16

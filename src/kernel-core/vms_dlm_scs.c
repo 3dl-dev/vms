@@ -399,18 +399,19 @@ static int dlm_arm_refill_post(void *ctx, uint32_t req_lkid, uint32_t op,
 }
 
 static int dlm_arm_record_master(void *ctx, const char *resnam,
-				 uint32_t req_lkid, vms_csid_t master_csid)
+				 uint32_t resnam_len, uint32_t req_lkid,
+				 vms_csid_t master_csid)
 {
 	(void)ctx;
-	return vms_lock_dlm_record_master(resnam, req_lkid, master_csid) ==
-	       SS__NORMAL ? 0 : -1;
+	return vms_lock_dlm_record_master(resnam, resnam_len, req_lkid,
+					  master_csid) == SS__NORMAL ? 0 : -1;
 }
 
 static int dlm_arm_assume_mastery(void *ctx, const char *resnam,
-				  uint32_t req_lkid)
+				  uint32_t resnam_len, uint32_t req_lkid)
 {
 	(void)ctx;
-	return vms_lock_dlm_assume_mastery(resnam, req_lkid) ==
+	return vms_lock_dlm_assume_mastery(resnam, resnam_len, req_lkid) ==
 	       SS__NORMAL ? 0 : -1;
 }
 
@@ -426,12 +427,13 @@ static int dlm_arm_blkast_deliver(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int dlm_arm_learn_dir_hash(void *ctx, const char *resnam, uint16_t group,
+static int dlm_arm_learn_dir_hash(void *ctx, const char *resnam,
+				  uint32_t resnam_len, uint16_t group,
 				  uint8_t mode, uint32_t dir_hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, dir_hash) ==
-	       SS__NORMAL ? 0 : -1;
+	return vms_lock_dlm_learn_dir_hash(resnam, resnam_len, group, mode,
+					   dir_hash) == SS__NORMAL ? 0 : -1;
 }
 
 /*
@@ -828,16 +830,23 @@ static void dlm_arm_run_dir_remove(struct vms_dlm_scs *d, uint32_t slot,
  * release takes the staged path above instead -- snapshotted here, in the
  * releaser's own context, while the LKB is still real.
  */
-/* Two resource names equal, bounded (kernel-core takes no libc string call). */
-static int dlm_arm_name_eq(const char *a, const char *b, uint32_t cap)
+/*
+ * Two resource names equal: SAME COUNT, SAME BYTES (rd vms-326). Bounded, and
+ * kernel-core takes no libc string call. The predecessor stopped at the first
+ * NUL in either name, which made every RMS file-access lock of one file id
+ * compare equal across volumes -- the collision that refused a reader of one
+ * file on behalf of a writer of another (rd vms-acf3).
+ */
+static int dlm_arm_name_eq(const char *a, uint32_t alen, const char *b,
+			   uint32_t blen, uint32_t cap)
 {
 	uint32_t i;
 
-	for (i = 0u; i < cap; i++) {
+	if (alen != blen || alen > cap)
+		return 0;
+	for (i = 0u; i < alen; i++) {
 		if (a[i] != b[i])
 			return 0;
-		if (a[i] == '\0')
-			return 1;
 	}
 	return 1;
 }
@@ -879,7 +888,8 @@ static void dlm_arm_dirrm_drop_for(struct vms_dlm_scs *d,
 			continue;
 		if (q->res_group != p->res_group ||
 		    q->res_acmode != p->res_acmode ||
-		    !dlm_arm_name_eq(q->resnam, p->resnam,
+		    !dlm_arm_name_eq(q->resnam, q->resnam_len, p->resnam,
+				     p->resnam_len,
 				     (uint32_t)sizeof(q->resnam)))
 			continue;
 		d->dirrm[i].seq = 0u;          /* the work item finds no slot */
@@ -1258,10 +1268,15 @@ static void dlm_arm_fill_master_req(const struct dlm_scs_request *in,
 	out->req_lkid = e->req_lkid;
 	out->master_lkid = e->master_lkid;
 	out->lkmode = e->mode;
-	if (n >= sizeof(out->resnam))
-		n = (uint32_t)sizeof(out->resnam) - 1u;
+	/* COUNTED (rd vms-326): the frame states the length at body[47] and a
+	 * VMS resource name may contain NULs, so the master is told how many
+	 * bytes the name is rather than being left to find a terminator. The
+	 * tail stays zero (the struct was memset above), so a diagnostic
+	 * printf of an ASCII name is still safe. */
+	if (n > sizeof(out->resnam))
+		n = (uint32_t)sizeof(out->resnam);
 	memcpy(out->resnam, e->name, n);
-	out->resnam[n] = '\0';
+	out->resnam_len = (uint8_t)n;
 	/*
 	 * WHICH resource of that name (rd vms-b5b0): body[44:46] UIC group and
 	 * body[46] access mode, as the codec read them. `res_ident_valid` is 0
@@ -1926,27 +1941,28 @@ static int dlm_arm_handle_reply(struct vms_dlm_scs *d,
  * ========================================================================== */
 
 /*
- * Does THIS node hold locks on the resource? The engine keys resources by a C
- * string, so a wire name with an embedded NUL (the real VAX's F11B$a<label>
- * allocation locks carry binary bytes after the label) is asked about by its
- * prefix -- the same spelling the hash learner files it under. A prefix that
- * names a resource this node holds locks on is refused (a superset of the
- * exact collision); anything else cannot be this node's.
+ * Does THIS node hold locks on the resource? ASKED BY THE COUNTED NAME (rd
+ * vms-326). It used to be asked by the name's C-string PREFIX, because the
+ * engine keyed resources by a C string and a wire name may carry NULs (the
+ * real VAX's F11B$a<label> allocation locks and every RMS file-access lock
+ * do); the question was then about a different resource than the frame named,
+ * and was deliberately answered as a superset to stay safe. The engine now
+ * keys on the count, so the exact question is askable and this asks it.
  */
 static int dlm_arm_dir_name_held(const struct vms_dlm_res_ident *id)
 {
 	char nm[VMS_DLM_NAME_MAX + 1u];
 	uint32_t i;
 
-	for (i = 0u; i < id->name_len && id->name[i] != 0u; i++)
+	for (i = 0u; i < id->name_len && i < VMS_DLM_NAME_MAX; i++)
 		nm[i] = (char)id->name[i];
 	nm[i] = '\0';
 	if (i == 0u)
-		return 0;          /* a name that starts with NUL is no engine name */
+		return 0;          /* a frame with no name names no resource */
 	/* ...and about the resource the asking frame's own identity names (rd
 	 * vms-b5b0): a lock this node holds on the SAME name in a DIFFERENT
 	 * resource domain is not this resource and must not answer for it. */
-	return vms_lock_dlm_name_in_use(nm, id->group, id->mode);
+	return vms_lock_dlm_name_in_use(nm, i, id->group, id->mode);
 }
 
 static void dlm_arm_dir_say(struct vms_dlm_scs *d, uint8_t *said,
@@ -2009,21 +2025,20 @@ static int dlm_arm_dir_tr_redirect(struct vms_dlm_scs *d,
 
 /*
  * Does THIS node MASTER the resource this lookup names? (rd vms-db2a.) Asked
- * the same way `dlm_arm_dir_name_held` asks its question -- by the engine's own
- * spelling of the name, prefix-terminated at an embedded NUL -- because it is
- * the same namespace.
+ * the same way `dlm_arm_dir_name_held` asks its question -- by the frame's
+ * COUNTED name (rd vms-326) -- because it is the same namespace.
  */
 static int dlm_arm_dir_name_mastered(const struct vms_dlm_res_ident *id)
 {
 	char nm[VMS_DLM_NAME_MAX + 1u];
 	uint32_t i;
 
-	for (i = 0u; i < id->name_len && id->name[i] != 0u; i++)
+	for (i = 0u; i < id->name_len && i < VMS_DLM_NAME_MAX; i++)
 		nm[i] = (char)id->name[i];
 	nm[i] = '\0';
 	if (i == 0u)
 		return 0;
-	return vms_lock_dlm_name_mastered_here(nm, id->group, id->mode);
+	return vms_lock_dlm_name_mastered_here(nm, i, id->group, id->mode);
 }
 
 /* Forward: the master-role serve, defined with the rest of the inbound paths. */
@@ -2293,18 +2308,21 @@ static void dlm_arm_rm_reported(void *ctx)
 
 /* The op-0x14's two executive reads: does this node master the name, and what
  * directory hash does it HOLD for it (never one computed for the asking). */
-static int dlm_arm_rm_mastered(void *ctx, const char *resnam, uint16_t group,
+static int dlm_arm_rm_mastered(void *ctx, const char *resnam,
+			       uint32_t resnam_len, uint16_t group,
 			       uint8_t mode)
 {
 	(void)ctx;
-	return vms_lock_dlm_name_mastered_here(resnam, group, mode);
+	return vms_lock_dlm_name_mastered_here(resnam, resnam_len, group, mode);
 }
 
-static int dlm_arm_rm_dir_hash(void *ctx, const char *resnam, uint16_t group,
+static int dlm_arm_rm_dir_hash(void *ctx, const char *resnam,
+			       uint32_t resnam_len, uint16_t group,
 			       uint8_t mode, uint32_t *out_hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_dir_hash_of(resnam, group, mode, out_hash);
+	return vms_lock_dlm_dir_hash_of(resnam, resnam_len, group, mode,
+					out_hash);
 }
 
 /*

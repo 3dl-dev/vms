@@ -108,7 +108,9 @@ int main(void)
     /* Process-permanent resources, taken at Supervisor mode. */
     CHECK(vms_kif_assign("OPA0:", &chan_perm) == SS_NORMAL,
           "assigned a Supervisor-mode channel to OPA0: (process-permanent)");
-    status = vms_kif_enq(1, LCK_K_EXMODE, 0, "OVMX_RUNDWN_PERM", 0,
+    /* resnam_len 0: a NUL-terminated ASCII name, measured by the executive
+     * (rd vms-326 -- a counted name is what a BINARY resource name needs). */
+    status = vms_kif_enq(1, LCK_K_EXMODE, 0, "OVMX_RUNDWN_PERM", 0, 0,
                          0, 0, 0, &lkid_perm, NULL);
     CHECK(status == SS_NORMAL && lkid_perm != 0,
           "enqueued a Supervisor-mode lock (process-permanent)");
@@ -121,7 +123,7 @@ int main(void)
     /* Image-scoped resources, taken at User mode -- these must NOT survive. */
     CHECK(vms_kif_assign("OPA0:", &chan_img) == SS_NORMAL,
           "the image assigned a User-mode channel to OPA0:");
-    status = vms_kif_enq(1, LCK_K_EXMODE, 0, "OVMX_RUNDWN_IMG", 0,
+    status = vms_kif_enq(1, LCK_K_EXMODE, 0, "OVMX_RUNDWN_IMG", 0, 0,
                          0, 0, 0, &lkid_img, NULL);
     CHECK(status == SS_NORMAL && lkid_img != 0,
           "the image enqueued a User-mode lock");

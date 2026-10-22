@@ -1331,6 +1331,26 @@ set_tests_properties(cluster_host_dlm_sublock_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-326: DOES THE PROVEN HASH FUNCTION ANSWER FOR A BINARY NAME, and
+# is its answer the one the real VAX put on the wire? The counted-name change
+# makes the executive hash a resource's 26 counted bytes instead of the 7-byte
+# prefix its first NUL ended, and routing a lookup by a WRONG value is the grant
+# storm. So the value is checked against the real thing: every real cat-0x02
+# frame in the corpus naming an RMS file-access lock, computed value vs
+# body[128:132]. A black-box (input, output) check against values VMS broadcast
+# in the clear -- the same evidence class the function was determined from
+# (Baron's rd vms-dc2 ruling). The name FORM itself is pinned separately by
+# cluster_host_dlm_rms_name_census.
+add_test(NAME cluster_host_dlm_rms_name_hash
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_rms_name_hash_check.py"
+        --selftest "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_rms_name_hash PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;rms"
+    TIMEOUT 300
+)
+
 # ---- rd vms-85f: what a REAL master answers to an op-0x01 IT QUEUED. OVMX
 # answered nothing at all, so a real VAX's $ENQW on a resource OVMX masters and
 # holds at a conflicting mode sat in RWSCS and STOP could not complete it

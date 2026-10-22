@@ -415,7 +415,8 @@ int main(int argc, char **argv)
      * ------------------------------------------------------------ */
     printf("--- 2. lock manager reached through the same path ---\n");
 
-    status = vms_kif_enq(0, 5 /* LCK$K_EXMODE */, 0, BIND_RESNAM, 0,
+    /* resnam_len 0: a NUL-terminated ASCII name (rd vms-326). */
+    status = vms_kif_enq(0, 5 /* LCK$K_EXMODE */, 0, BIND_RESNAM, 0, 0,
                          0, 0, 0, &lkid, NULL);
     CHECK(status == SS_NORMAL, "$ENQ EX granted through /dev/vms");
     CHECK(lkid != 0, "$ENQ returned a lock id");
@@ -709,7 +710,7 @@ int main(int argc, char **argv)
 
         thread_lkid = 0;
         status = vms_kif_enq(0, 5 /* LCK$K_EXMODE */, 0, THREAD_RESNAM, 0,
-                             0, 0, 0, &thread_lkid, NULL);
+                             0, 0, 0, 0, &thread_lkid, NULL);
         CHECK(status == SS_NORMAL, "main thread takes a lock");
         CHECK(thread_lkid != 0, "main thread holds a lock id");
 

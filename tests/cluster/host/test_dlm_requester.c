@@ -114,9 +114,15 @@ struct fake_engine {
 	uint32_t refills;
 	uint32_t record_master_calls;
 	char     record_master_name[40];
+	/* The name's COUNT the FSM handed the engine (rd vms-326). Recorded
+	 * because the engine keys the resource on it: a requester that handed
+	 * over a C-string truncation of a binary name would have the engine
+	 * record mastery of a resource nobody locked. */
+	uint32_t record_master_len;
 	vms_csid_t record_master_csid;
 	uint32_t assume_calls;
 	char     assume_name[40];
+	uint32_t assume_len;
 	uint32_t grant_calls;
 	struct vms_dlm_proxy_grant last_grant;
 	int      grant_refuse;
@@ -125,6 +131,7 @@ struct fake_engine {
 	int      blkast_refuse;
 	uint32_t learn_calls;
 	char     learn_name[40];
+	uint32_t learn_len;
 	uint32_t learn_hash;
 	uint32_t fail_calls;
 	uint32_t fail_lkid;
@@ -188,7 +195,12 @@ static int fe_refill(void *ctx, uint32_t req_lkid, uint32_t op,
 	out->req_pid     = e->lkb.req_pid;
 	out->lkmode      = e->lkb.lkmode;
 	out->flags       = e->lkb.flags;
+	/* The name AND ITS COUNT, as the real engine's dlm_proxy_fill_post
+	 * reads them off the RSB (rd vms-326). The fake LKB's name is an ASCII
+	 * C string, so its count is its strlen -- and the FSM must take the
+	 * count from here, never re-measure the bytes. */
 	memcpy(out->resnam, e->lkb.resnam, sizeof(out->resnam));
+	out->resnam_len = (uint8_t)strlen(e->lkb.resnam);
 	memcpy(out->valblk, e->lkb.valblk, VMS_DLM_VALBLK_LEN);
 	out->dir_hash       = e->lkb.dir_hash;
 	out->dir_hash_known = e->lkb.hash_known;
@@ -222,7 +234,8 @@ static int fe_transition_active(void *ctx)
 	return e->transition_active;
 }
 
-static int fe_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int fe_record_master(void *ctx, const char *resnam,
+			    uint32_t resnam_len, uint32_t req_lkid,
 			    vms_csid_t master_csid)
 {
 	struct fake_engine *e = ctx;
@@ -232,13 +245,15 @@ static int fe_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
 	e->record_master_calls++;
 	snprintf(e->record_master_name, sizeof(e->record_master_name), "%s",
 		 resnam);
+	e->record_master_len = resnam_len;
 	e->record_master_csid = master_csid;
 	/* what vms_lock_dlm_record_master really does */
 	e->lkb.master_csid = master_csid;
 	return 0;
 }
 
-static int fe_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int fe_assume(void *ctx, const char *resnam, uint32_t resnam_len,
+		     uint32_t req_lkid)
 {
 	struct fake_engine *e = ctx;
 
@@ -246,6 +261,7 @@ static int fe_assume(void *ctx, const char *resnam, uint32_t req_lkid)
 		return -1;
 	e->assume_calls++;
 	snprintf(e->assume_name, sizeof(e->assume_name), "%s", resnam);
+	e->assume_len = resnam_len;
 	e->lkb.master_csid = CSID_SELF;   /* promoted: we master it now */
 	return 0;
 }
@@ -283,13 +299,14 @@ static int fe_blkast(void *ctx, uint32_t req_lkid)
 	return 0;
 }
 
-static int fe_learn(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
-		    uint32_t hash)
+static int fe_learn(void *ctx, const char *resnam, uint32_t resnam_len,
+		    uint16_t group, uint8_t mode, uint32_t hash)
 {
 	struct fake_engine *e = ctx;
 
 	e->learn_calls++;
 	snprintf(e->learn_name, sizeof(e->learn_name), "%s", resnam);
+	e->learn_len = resnam_len;
 	e->learn_hash = hash;
 	e->learn_group = group;
 	e->learn_mode = mode;
@@ -2311,6 +2328,7 @@ static void dir_remove_post(struct vms_dlm_proxy_post *p, vms_csid_t dst)
 	p->dir_hash = g.lkb.dir_hash;
 	p->dir_hash_known = g.lkb.hash_known;
 	memcpy(p->resnam, g.lkb.resnam, sizeof(p->resnam));
+	p->resnam_len = (uint8_t)strlen(g.lkb.resnam);
 }
 
 /*

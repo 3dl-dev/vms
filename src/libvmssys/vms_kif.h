@@ -245,9 +245,17 @@ uint32_t vms_kif_dlcefc(const char *name);
  * Lock Manager (3d)
  * ================================================================ */
 
-/* Enqueue lock request. Returns lock ID in *lkid */
+/*
+ * Enqueue lock request. Returns lock ID in *lkid.
+ *
+ * `resnam_len` IS THE NAME'S COUNT (rd vms-326). A VMS resource name is a
+ * counted 1..31-byte string that may contain NULs -- RMS's file-access lock
+ * carries three -- so $ENQ passes the descriptor's own dsc$w_length here and
+ * the executive keys the resource on exactly those bytes. 0 means "the
+ * NUL-terminated string in resnam", which is what an ASCII caller states.
+ */
 uint32_t vms_kif_enq(uint32_t efn, uint32_t lkmode, uint32_t flags,
-                      const char *resnam, uint32_t parid,
+                      const char *resnam, uint32_t resnam_len, uint32_t parid,
                       uint64_t astadr, uint64_t astprm,
                       uint64_t blkastadr,
                       uint32_t *lkid, uint8_t *valblk);

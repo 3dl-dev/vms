@@ -218,7 +218,11 @@ struct vms_dlm_rm_ops {
 	void (*adopt_reported)(void *ctx);
 
 	/* Does this executive master that name NOW? (the 0x14's second read) */
-	int (*name_mastered_here)(void *ctx, const char *resnam, uint16_t group,
+	/* `resnam_len` is the name's COUNTED length (rd vms-326): a VMS
+	 * resource name may contain NULs, so the question must state how many
+	 * bytes the name is. */
+	int (*name_mastered_here)(void *ctx, const char *resnam,
+				  uint32_t resnam_len, uint16_t group,
 				  uint8_t mode);
 	/*
 	 * The directory hash this executive LEARNED for the name, if any
@@ -226,8 +230,8 @@ struct vms_dlm_rm_ops {
 	 * wire, never computed here). 0 = none held, and then the 0x14 carries
 	 * zeros there.
 	 */
-	int (*dir_hash)(void *ctx, const char *resnam, uint16_t group,
-			uint8_t mode, uint32_t *out_hash);
+	int (*dir_hash)(void *ctx, const char *resnam, uint32_t resnam_len,
+			uint16_t group, uint8_t mode, uint32_t *out_hash);
 
 	/*
 	 * STAGE the answer to the step being handled. RULE A (vms_dlm_scs.h):

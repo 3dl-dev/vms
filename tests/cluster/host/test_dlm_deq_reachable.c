@@ -180,19 +180,19 @@ static uint32_t arm_dir_generation(void *ctx)
 	return a.dir_gen;
 }
 
-static int arm_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int arm_record_master(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid,
 			     vms_csid_t master_csid)
 {
 	(void)ctx;
-	return vms_lock_dlm_record_master(resnam, req_lkid,
+	return vms_lock_dlm_record_master(resnam, resnam_len, req_lkid,
 					  (uint32_t)master_csid) == SS__NORMAL ?
 	       0 : -1;
 }
 
-static int arm_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int arm_assume(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid)
 {
 	(void)ctx;
-	return vms_lock_dlm_assume_mastery(resnam, req_lkid) == SS__NORMAL ?
+	return vms_lock_dlm_assume_mastery(resnam, resnam_len, req_lkid) == SS__NORMAL ?
 	       0 : -1;
 }
 
@@ -208,11 +208,11 @@ static int arm_blkast(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int arm_learn(void *ctx, const char *resnam, uint16_t group,
+static int arm_learn(void *ctx, const char *resnam, uint32_t resnam_len, uint16_t group,
 		     uint8_t mode, uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	return vms_lock_dlm_learn_dir_hash(resnam, resnam_len, group, mode, hash) ==
 	       SS__NORMAL ? 0 : -1;
 }
 
@@ -463,7 +463,7 @@ static void wire_learn(const char *resnam)
 		h = (uint16_t)((h << 1) ^ (uint8_t)*c);
 	/* ...under the identity this test's processes enqueue at (uic 0, access
 	 * mode 0): a learned value belongs to an identity (rd vms-b5b0). */
-	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, h);
+	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, 0u, h);
 }
 
 static uint32_t do_enq(struct vms_proc *proc, const char *resnam,
@@ -959,7 +959,7 @@ static void test_gate_zero_master_lkid(void)
 	 */
 	(void)do_enq(&proc, "DEQGATE3", LCK_K_PRMODE, &lkid);
 	fork_drain();
-	ct_check_eq_u32(vms_lock_dlm_record_master("DEQGATE3", lkid,
+	ct_check_eq_u32(vms_lock_dlm_record_master("DEQGATE3", 0u, lkid,
 						   CSID_MASTER),
 			(uint32_t)SS__NORMAL,
 			"the directory named the master; the master has not "

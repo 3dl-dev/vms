@@ -177,7 +177,7 @@ static void wire_learn(const char *resnam)
 	/* Under the identity the test's own processes enqueue at (uic 0, access
 	 * mode 0): a learned value belongs to an identity, not to a name
 	 * (rd vms-b5b0). */
-	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, h);
+	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, 0u, h);
 }
 
 /* Wait (bounded) until at least `n` requests have been posted, then copy the
@@ -979,7 +979,7 @@ static void e09_master_removes_its_directory_entry(void)
 		 "the lookup goes to CSID 2 carrying a hash the engine holds");
 
 	/* The directory answers 0xf9: "nobody masters it -- you do". */
-	ct_check_eq_u32(vms_lock_dlm_assume_mastery("F11B$sE09SYS", lkid),
+	ct_check_eq_u32(vms_lock_dlm_assume_mastery("F11B$sE09SYS", 0u, lkid),
 			SS__NORMAL, "this node assumes mastery on the 0xf9");
 
 	pthread_mutex_lock(&fm.lock);
@@ -1086,6 +1086,182 @@ static void c55_no_removal_for_an_unregistered_entry(void)
 	vms_lock_cleanup();
 }
 
+
+/*
+ * ==========================================================================
+ * rd vms-326: A COUNTED, BINARY RESOURCE NAME IS ITS OWN RESOURCE.
+ *
+ * THE DEFECT THIS CLOSES, measured on a real cluster and in a real demo. VMS
+ * names RMS's file-access lock
+ *
+ *     'RMS$' | 6 FID bytes | 0x02 | 12-byte space-padded volume label | 00 00 00
+ *
+ * -- 26 bytes with three NULs in it, on 1,130 real cat-0x02 frames
+ * (tools/cluster/dlm_rms_name_hash_check.py). The executive keyed resources by a
+ * NUL-TERMINATED C string, so the two names below -- the SAME file id on two
+ * DIFFERENT volumes -- compared equal at their first NUL and became ONE
+ * cluster-wide resource. Node A writing NETACP.LOG then refused node B's read
+ * of a different file on another disk (rd vms-acf3), and the 7-byte truncation
+ * is what went on the wire.
+ *
+ * WHAT IS PROVEN HERE, against the real engine:
+ *   1. two names that differ only AFTER an embedded NUL are two resources --
+ *      both $ENQ EX requests are granted;
+ *   2. and that is not vacuous: the SAME name from another process at EX with
+ *      NOQUEUE is refused SS$_NOTQUEUED, so these resources really do conflict;
+ *   3. the POST the wire arm would transmit carries the COUNT (26) and all 26
+ *      bytes -- read off the resource block by dlm_proxy_fill_post, the INV-6
+ *      chokepoint -- and the two names' directory hashes DIFFER, so the two
+ *      lookups go to the identity the cluster would compute for each;
+ *   4. $GETLKI reads the 26-byte name back whole, not as its 7-byte prefix;
+ *   5. a count outside 1..31 is SS$_IVBUFLEN, the refusal $ENQ makes on the
+ *      descriptor.
+ * ==========================================================================
+ */
+
+/* The measured RMS file-access name for (fid, volume label). `out` is 32. */
+static uint32_t rms326_name(char *out, uint16_t fid_num, uint16_t fid_seq,
+			    uint8_t fid_rvn, uint8_t fid_nmx,
+			    const char *label)
+{
+	uint32_t i;
+
+	memset(out, 0, 32);
+	memcpy(out, "RMS$", 4);
+	out[4] = (char)(fid_num & 0xffu);
+	out[5] = (char)((fid_num >> 8) & 0xffu);
+	out[6] = (char)(fid_seq & 0xffu);
+	out[7] = (char)((fid_seq >> 8) & 0xffu);
+	out[8] = (char)fid_rvn;
+	out[9] = (char)fid_nmx;
+	out[10] = (char)0x02;
+	for (i = 0u; i < 12u; i++)
+		out[11 + i] = (label[i] != '\0') ? label[i] : ' ';
+	/* out[23..25] stay NUL -- the three the measured form ends with. */
+	return 26u;
+}
+
+/* $ENQ a COUNTED name: the length is stated, exactly as $ENQ states the
+ * descriptor's dsc$w_length (src/libvms/syssvc/sys_lock.c). */
+static uint32_t do_enq_counted(struct vms_proc *proc, const char *resnam,
+			       uint32_t resnam_len, uint32_t lkmode,
+			       uint32_t flags, uint32_t *lkid_out)
+{
+	struct vms_enq_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkmode = lkmode;
+	a.flags = flags;
+	memcpy(a.resnam, resnam, sizeof(a.resnam));
+	a.resnam_len = resnam_len;
+	vms_ioctl_enq(proc, (unsigned long)(void *)&a);
+	if (lkid_out)
+		*lkid_out = a.lkid;
+	return a.status;
+}
+
+static void rms326_counted_binary_names(void)
+{
+	char n1[32], n2[32];
+	struct vms_dlm_proxy_post p1, p2;
+	struct vms_getlki_args gk;
+	struct vms_proc proc1, proc2;
+	uint32_t len, lkid1 = 0, lkid2 = 0, lkid3 = 0, st;
+
+	printf("--- rd vms-326: a counted binary resource name is its own "
+	       "resource ---\n");
+	len = rms326_name(n1, 0x011cu, 1u, 0u, 0u, "SYSDSK1");
+	(void)rms326_name(n2, 0x011cu, 1u, 0u, 0u, "VAX1DATA");
+	ct_check(len == 26u && memcmp(n1, n2, 11) == 0 && n1[7] == '\0',
+		 "the two names share their first 11 bytes and both carry a "
+		 "NUL inside them");
+
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc1);
+	proc_init(&proc2);
+
+	/* (1) Two resources, not one. Both are mastered elsewhere here (the
+	 * directory is another node), so each $ENQ posts and reports the
+	 * request outstanding -- what matters is that there are TWO of them. */
+	st = do_enq_counted(&proc1, n1, len, LCK_K_EXMODE, 0, &lkid1);
+	ct_check(st == SS__NORMAL && lkid1 != 0,
+		 "$ENQ on the SYSDSK1 name is accepted");
+	ct_check(fm_wait_posts(1, &p1), "...and posted");
+	st = do_enq_counted(&proc2, n2, len, LCK_K_EXMODE, 0, &lkid2);
+	ct_check(st == SS__NORMAL && lkid2 != 0 && lkid2 != lkid1,
+		 "*** $ENQ on the VAX1DATA name is a SECOND lock, not the same "
+		 "resource ***");
+	ct_check(fm_wait_posts(2, &p2), "...and posted on its own");
+
+	/* (3) The post carries the COUNT and every byte, read off the RSB. */
+	ct_check_eq_u32(p2.resnam_len, 26u,
+			"*** the post states the name's 26-byte COUNT ***");
+	ct_check(memcmp(p2.resnam, n2, 26) == 0,
+		 "*** ...and carries all 26 bytes, NULs included ***");
+	ct_check(p1.dir_hash_known && p2.dir_hash_known &&
+		 p1.dir_hash != p2.dir_hash,
+		 "*** and the two identities have DIFFERENT directory hashes: "
+		 "the truncation had one ***");
+
+	/* (4) $GETLKI reads the whole name back. */
+	st = do_getlki(&proc1, lkid1, &gk);
+	ct_check(st == SS__NORMAL, "$GETLKI on the first lock");
+	ct_check_eq_u32(gk.resnam_len, 26u,
+			"*** LKI$_RESNAM reads back 26 bytes ***");
+	ct_check(memcmp(gk.resnam, n1, 26) == 0,
+		 "*** ...byte-for-byte the name that was enqueued ***");
+
+	/* (5) The refusals at the boundary. */
+	ct_check_eq_u32(do_enq_counted(&proc1, n1, 32u, LCK_K_EXMODE, 0, NULL),
+			SS__IVBUFLEN,
+			"a 32-byte count is SS$_IVBUFLEN");
+	ct_check_eq_u32(do_enq_counted(&proc1, n1, 99u, LCK_K_EXMODE, 0, NULL),
+			SS__IVBUFLEN,
+			"...and so is one past the field");
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+
+	/*
+	 * (2) THE NON-VACUITY CONTROL, on a node that masters its own
+	 * resources: the same 26-byte name from a second process at EX with
+	 * NOQUEUE must be REFUSED. If the counted key had made every name
+	 * unique -- the opposite error -- this would be granted too.
+	 */
+	configure_local_only();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc1);
+	proc_init(&proc2);
+
+	st = do_enq_counted(&proc1, n1, len, LCK_K_EXMODE, 0, &lkid1);
+	ct_check(st == SS__NORMAL, "the SYSDSK1 name is granted locally at EX");
+	st = do_enq_counted(&proc2, n2, len, LCK_K_EXMODE, LCK_M_NOQUEUE,
+			    &lkid2);
+	ct_check(st == SS__NORMAL && lkid2 != 0,
+		 "*** the VAX1DATA name is granted at EX at the same time: two "
+		 "files, two resources ***");
+	st = do_enq_counted(&proc2, n1, len, LCK_K_EXMODE, LCK_M_NOQUEUE,
+			    &lkid3);
+	ct_check_eq_u32(st, SS__NOTQUEUED,
+			"*** and the SAME name is REFUSED -- the resources do "
+			"conflict (the control that makes the two grants above "
+			"mean something) ***");
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -1099,5 +1275,6 @@ int main(void)
 	e09_master_removes_its_directory_entry();
 	e09_no_removal_without_a_remote_entry();
 	c55_no_removal_for_an_unregistered_entry();
+	rms326_counted_binary_names();
 	return ct_summary("test_lock_proxy");
 }

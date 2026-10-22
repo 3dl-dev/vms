@@ -389,8 +389,6 @@ static void an_unproven_identity_masters_locally_and_sends_nothing(void)
 }
 
 /* ================================================================
- * 3. The wire supplies the hash: the lookup routes, with THAT value./* ================================================================
- * 3. The wire supplies the hash: the lookup routes, with THAT value./* ================================================================
  * 3. The wire supplies the hash: the lookup routes, with THAT value.
  * ================================================================ */
 static void wire_hash_routes_the_lookup(void)
@@ -412,9 +410,9 @@ static void wire_hash_routes_the_lookup(void)
 	cm_install();
 	proc_init(&proc);
 
-	st = vms_lock_dlm_learn_dir_hash("SHAREDROOT", RES_GROUP, RES_MODE, WIRE_HASH);
+	st = vms_lock_dlm_learn_dir_hash("SHAREDROOT", 0u, RES_GROUP, RES_MODE, WIRE_HASH);
 	ct_check_eq_u32(st, SS__NORMAL, "a cat-02 frame named SHAREDROOT");
-	st = vms_lock_dlm_learn_dir_hash("OTHERROOT", RES_GROUP, RES_MODE, WIRE_HASH);
+	st = vms_lock_dlm_learn_dir_hash("OTHERROOT", 0u, RES_GROUP, RES_MODE, WIRE_HASH);
 	ct_check_eq_u32(st, SS__NORMAL,
 			"and named OTHERROOT with the SAME value -- which no "
 			"name-derived hash could do");
@@ -460,14 +458,14 @@ static void conflicting_learn_is_counted(void)
 	cm_install();
 	before = vms_lock_dlm_dir_hash_conflicts();
 
-	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("CONFLICT1", RES_GROUP, RES_MODE, 0x1234u),
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("CONFLICT1", 0u, RES_GROUP, RES_MODE, 0x1234u),
 			SS__NORMAL, "the first value is learned");
-	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("CONFLICT1", RES_GROUP, RES_MODE, 0x1234u),
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("CONFLICT1", 0u, RES_GROUP, RES_MODE, 0x1234u),
 			SS__NORMAL, "the same value again is fine");
 	ct_check_eq_u32(vms_lock_dlm_dir_hash_conflicts(), before,
 			"and counts no conflict");
 
-	st = vms_lock_dlm_learn_dir_hash("CONFLICT1", RES_GROUP, RES_MODE, 0x5678u);
+	st = vms_lock_dlm_learn_dir_hash("CONFLICT1", 0u, RES_GROUP, RES_MODE, 0x5678u);
 	ct_check_eq_u32(st, SS__BADPARAM, "a DIFFERENT value is refused");
 	ct_check_eq_u32(vms_lock_dlm_dir_hash_conflicts(), before + 1u,
 			"and counted -- the evidence that falsifies the field "
@@ -484,9 +482,9 @@ static void conflicting_learn_is_counted(void)
 				"and the FIRST value is still what routing uses");
 	}
 
-	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash(NULL, RES_GROUP, RES_MODE, 1u), SS__BADPARAM,
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash(NULL, 0u, RES_GROUP, RES_MODE, 1u), SS__BADPARAM,
 			"a null name is refused");
-	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("", RES_GROUP, RES_MODE, 1u), SS__BADPARAM,
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("", 0u, RES_GROUP, RES_MODE, 1u), SS__BADPARAM,
 			"an empty name is refused");
 	vms_lock_cleanup();
 }
@@ -508,7 +506,7 @@ static uint32_t learn_n(const char *prefix, uint32_t n)
 
 	for (i = 0; i < n; i++) {
 		snprintf(name, sizeof(name), "%s%05u", prefix, (unsigned)i);
-		if (vms_lock_dlm_learn_dir_hash(name, RES_GROUP, RES_MODE,
+		if (vms_lock_dlm_learn_dir_hash(name, 0u, RES_GROUP, RES_MODE,
 					    (i << 16) | 1u) ==
 		    SS__NORMAL)
 			kept++;
@@ -533,7 +531,7 @@ static void learner_is_bounded(void)
 			"the learner keeps exactly its bound of new names");
 	ct_check_eq_u32(vms_lock_dlm_dir_hash_learn_full(), full0 + 100u,
 			"and counts every name it declined");
-	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("LRN00000", RES_GROUP, RES_MODE, 1u), SS__NORMAL,
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("LRN00000", 0u, RES_GROUP, RES_MODE, 1u), SS__NORMAL,
 			"a name that already has a block is still recorded at the bound");
 
 	proc_init(&proc);
@@ -569,7 +567,7 @@ static void generation_invalidates_the_cache(void)
 	cm_install();
 	proc_init(&proc);
 
-	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("GENROOT", RES_GROUP, RES_MODE, 0x0101u),
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("GENROOT", 0u, RES_GROUP, RES_MODE, 0x0101u),
 			SS__NORMAL, "the wire named GENROOT");
 
 	(void)do_enq(&proc, "GENROOT", LCK_K_EXMODE, &lkid);
@@ -645,7 +643,7 @@ static void learned_hash_survives_reclaim(void)
 
 	/* The wire names a resource this node holds no lock on -- the common
 	 * case during a join's rebuild burst. */
-	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("REBUILTROOT", RES_GROUP, RES_MODE, 0x0F0Fu),
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("REBUILTROOT", 0u, RES_GROUP, RES_MODE, 0x0F0Fu),
 			SS__NORMAL, "learned from a rebuild record");
 
 	/* Much later, a local $ENQ. If the block had been reclaimed the value
@@ -687,7 +685,7 @@ static void learned_hash_survives_reclaim(void)
 		struct vms_resmaster_args rm;
 		uint32_t lkid2 = 0;
 
-		ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("OURSROOT", RES_GROUP, RES_MODE, 0x2222u),
+		ct_check_eq_u32(vms_lock_dlm_learn_dir_hash("OURSROOT", 0u, RES_GROUP, RES_MODE, 0x2222u),
 				SS__NORMAL, "the wire named another root");
 		st = do_enq(&proc, "OURSROOT", LCK_K_EXMODE, &lkid2);
 		ct_check(st == SS__NORMAL && lkid2 != 0,
@@ -793,7 +791,7 @@ static void the_wire_overrides_a_computed_value_and_counts_it(void)
 
 	/* A frame from a real system, naming the same identity, with another
 	 * value. */
-	st = vms_lock_dlm_learn_dir_hash("FALSIFYME", RES_GROUP, RES_MODE,
+	st = vms_lock_dlm_learn_dir_hash("FALSIFYME", 0u, RES_GROUP, RES_MODE,
 					 computed ^ 0x55u);
 	ct_check_eq_u32(st, SS__NORMAL, "the wire's value is ACCEPTED");
 	ct_check_eq_u32(vms_lock_dlm_dir_hash_computed_wrong(), before + 1u,
@@ -817,7 +815,6 @@ static void the_wire_overrides_a_computed_value_and_counts_it(void)
 }
 
 /* ================================================================
- * 9. GENESIS RELABELS THIS NODE'S OWN MASTERY (rd vms-151)/* ================================================================
  * 9. GENESIS RELABELS THIS NODE'S OWN MASTERY (rd vms-151)
  *
  * MEASURED: a booted OVMX node founded generation 1 and its userland stopped
@@ -851,7 +848,7 @@ static void genesis_relabels_this_nodes_own_mastery(void)
 	proc_init(&proc);
 	vms_local_csid = CSID_LOCAL;   /* the pre-cluster placeholder */
 
-	st = vms_lock_dlm_learn_dir_hash("PREGENESIS", RES_GROUP, RES_MODE, WIRE_HASH);
+	st = vms_lock_dlm_learn_dir_hash("PREGENESIS", 0u, RES_GROUP, RES_MODE, WIRE_HASH);
 	ct_check_eq_u32(st, SS__NORMAL, "the wire named PREGENESIS");
 	st = do_enq(&proc, "PREGENESIS", LCK_K_EXMODE, &lkid);
 	ct_check(st == SS__NORMAL && lkid != 0,

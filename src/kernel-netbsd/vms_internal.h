@@ -165,6 +165,10 @@
 #define SS__SYNCH       1673       /* SS$_SYNCH (granted synchronously) */
 #define SS__CANCELGRANT 8508       /* SS$_CVTUNGRANT (conversion could not be granted) */
 #define SS__UNSUPPORTED 3658       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
+/* SS$_IVBUFLEN (invalid buffer length): $ENQ's answer to a resource name of 0
+ * or more than 31 bytes (rd vms-326). Value matches src/kernel/vms_internal.h
+ * exactly. */
+#define SS__IVBUFLEN    844
 /* Logical-name subset (rd vms-72da). Values match src/kernel/vms_internal.h
  * exactly. SS__IVLOGNAM (340) comes from vms_proctab_nb.h. SUPERSEDE/NOLOGNAM
  * are public $SSDEF; SS__EXLNMQUOTA is the ONE value not yet in ssdef.h --
@@ -524,6 +528,12 @@ struct vms_lock_entry {
 struct vms_lock_resource {
 	exec_hash_node_t    hash_node;      /* link in the global resource hash */
 	char                name[32];
+	/* How many of those bytes are the name (rd vms-326): a VMS resource name
+	 * is COUNTED and may contain NULs (RMS's file-access lock is 26 bytes
+	 * with three of them), so the block carries the count and every lookup
+	 * matches on it. Mirror of the Linux twin (src/kernel/vms_internal.h),
+	 * where the full note lives. */
+	uint8_t             name_len;
 	/* The rest of the resource's identity -- UIC group (0 for a
 	 * LCK$M_SYSTEM name) and access mode, the two values that qualify a VMS
 	 * resource name and that the directory hash is computed over (rd

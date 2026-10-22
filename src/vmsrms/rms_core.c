@@ -788,7 +788,12 @@ static uint32_t rms_file_lock_acquire(rms_file_t *h, uint8_t fac, uint8_t shr)
     uint32_t lkid = 0, st;
 
     rms_file_lock_resnam(h, resnam);
-    st = vms_kif_enq(0, mode, LCK_M_NOQUEUE, resnam, 0, 0, 0, 0, &lkid, NULL);
+    /* resnam_len 0: a NUL-terminated text name, measured by the executive.
+     * The byte-exact VMS form -- 'RMS$' + the 6 FID bytes + 0x02 + the
+     * 12-byte volume label + three NULs, which NEEDS the count -- is rd
+     * vms-326's second half. */
+    st = vms_kif_enq(0, mode, LCK_M_NOQUEUE, resnam, 0, 0, 0, 0, 0, &lkid,
+                     NULL);
     if ($VMS_STATUS_SUCCESS(st))
         h->access_lkid = lkid;
     return st;

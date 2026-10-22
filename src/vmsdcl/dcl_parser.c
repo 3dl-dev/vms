@@ -155,6 +155,17 @@ static void collect_rest(dcl_lexer_t *lex, char *buf, size_t bufsize)
  *
  * Returns 0 on success, -1 on error.
  */
+/*
+ * The process's current file-name parse style (rd vms-0b0): nonzero under
+ * PARSE_STYLE=EXTENDED. The product's definition (dcl_cmd_set.c) asks the
+ * executive; this weak default -- TRADITIONAL, the style a process starts
+ * with -- is what a hermetic parser test links against.
+ */
+__attribute__((weak)) int dcl_parse_style_extended(void)
+{
+    return 0;
+}
+
 int dcl_parse_line(const char *line, struct dcl_command *cmd)
 {
     dcl_lexer_t lex;
@@ -166,6 +177,7 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
     cmd->type = DCL_NODE_COMMAND;
 
     dcl_lexer_init(&lex, line);
+    lex.ext_names = dcl_parse_style_extended();
 
     /* Get first token */
     if (dcl_lexer_next(&lex, &tok) != 0) return -1;
@@ -342,6 +354,13 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
         size_t before = lex.pos;
         if (dcl_lexer_next(&lex, &tok) != 0) break;
         if (tok.type == TOK_EOF || tok.type == TOK_NEWLINE) break;
+        /* A '^' outside quotes under PARSE_STYLE=TRADITIONAL (rd vms-0b0): the
+         * lexer leaves it a token of its own, and DCL refuses the command --
+         * lab-Alpha V8.4, TYPE c^+^+config.h after SET PROCESS/PARSE_STYLE=
+         * TRADITIONAL: %DCL-W-PARMDEL ... \^\ (ods5-alpha-20261022/CONSOLE.txt). */
+        if (tok.type == TOK_WORD && tok.value[0] == '^' && tok.value[1] == '\0' &&
+            !lex.ext_names && cmd->parse_status == 0)
+            cmd->parse_status = 0x00038110u;   /* CLI$_PARMDEL */
         /* ADJACENT tokens with no blank between them are ONE DCL parameter
          * (rd vms-a8a lab: `COPY VAX1"SYSTEM pw"::T1.TXT X` was split into three
          * parameters at the quotes). DCL keeps an embedded quoted span inside

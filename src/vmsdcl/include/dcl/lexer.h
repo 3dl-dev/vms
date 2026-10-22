@@ -60,6 +60,10 @@ typedef struct {
     int line;
     int col;
     int at_line_start;      /* Track if we are at beginning of line */
+    int ext_names;          /* rd vms-0b0: PARSE_STYLE=EXTENDED -- a '^' and the
+                             * character after it are part of a word (an ODS-5
+                             * escape: c^+^+config.h, a^_b.txt); under
+                             * TRADITIONAL a '^' is a token of its own */
 } dcl_lexer_t;
 
 void dcl_lexer_init(dcl_lexer_t *lex, const char *input);

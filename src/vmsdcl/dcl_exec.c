@@ -1607,6 +1607,14 @@ int dcl_execute_command(struct dcl_command *cmd)
          * %DCL-W-IVQUAL (or %DCL-W-IVKEYW for a bad keyword) instead of being
          * silently accepted. For verbs not yet retrofit with a table
          * (verb->quals == NULL) this returns SS$_NORMAL and nothing changes. */
+        /* rd vms-0b0: a '^' in a parameter under PARSE_STYLE=TRADITIONAL --
+         * %DCL-W-PARMDEL, as lab-Alpha V8.4 answers TYPE c^+^+config.h. */
+        if (cmd->parse_status == 0x00038110u) {
+            dcl_error("DCL", 0, "PARMDEL",
+                      "invalid parameter delimiter - check use of special characters\n \\^\\");
+            dcl_set_status(ctx, (int)cmd->parse_status);
+            return (int)cmd->parse_status;
+        }
         int qstatus = (verb->flags & CDU_F_COMMANDS) ? SS$_NORMAL
                                                      : dcl_validate_qualifiers(verb, cmd);
         if (qstatus != SS$_NORMAL) {

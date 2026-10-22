@@ -107,3 +107,13 @@ items:
     vms: "SET (~30 sub-verbs) / SHOW (~30 sub-verbs) umbrella depth"
     evidence: src/vmsdcl/dcl_cmd_set.c
     notes: "Re-measured 2026-09-14 on origin/main: SET dispatches 20 real cmd_set_* sub-handlers (ACCOUNTING AUDIT CONTROL DEFAULT ENTRY FILE HOST MESSAGE PASSWORD PROCESS PROMPT PROTECTION QUEUE SYMBOL TERMINAL TIME UIC VERIFY VOLUME WORKING_SET), rejecting unknown keywords with %DCL-W-IVKEYW; SHOW dispatches 29 real cmd_show_* sub-handlers (dcl_cmd_show.c: ACCOUNTING AUDIT CLUSTER CPU DEFAULT DEVICE ENTRY ERROR INTRUSION LICENSE LOGICAL MEMORY NETWORK PROCESS PROCESS_PRIVILEGES PROCESS_QUOTAS PROTECTION QUEUE QUOTA ROOT STATUS SYMBOL SYSTEM TERMINAL TIME TRANSLATION USERS VERIFY WORKING_SET). Each real, not facaded, but short of VMS's ~30-each full set. 2026-10-19: both umbrellas now validate qualifiers per sub-verb (SET: set_subverb_quals; SHOW: show_subverb_quals; unknown qualifier -> %DCL-W-IVQUAL), proven by tests/qemu/test_syssvc_dcl_set_quals.c and test_syssvc_dcl_show_quals.c; see dcl-qualifiers$zero-validation-verbs."
+
+  - id: dcl-verbs$parse-style
+    kind: feature
+    status: verified
+    authenticity: real
+    vms: "SET PROCESS/PARSE_STYLE=EXTENDED|TRADITIONAL, F$GETJPI PARSE_STYLE_PERM / PARSE_STYLE_IMAGE, and DCL's reading of ODS-5 names under each style"
+    scope_1_0: in
+    evidence: tests/qemu/test_syssvc_dcl_ods5.c
+    verified_against: "rd vms-0b0: lab-Alpha V8.4 on an ODS-5 volume (tests/lab/captures/ods5-alpha-20261022/CONSOLE.txt session 1, CONSOLE-6.txt session 6): F$GETJPI values, OPEN/WRITE / TYPE / DIRECTORY / DELETE of c^+^+config.h and MixedCase.Txt under EXTENDED, PARMDEL for '^' and upper-casing under TRADITIONAL, IVKEYW for a bad keyword, a bare /PARSE_STYLE meaning TRADITIONAL"
+    notes: "The style lives in the executive's PCB ($SET_PROCESS_PROPERTIESW PPROP$C_PARSE_STYLE_PERM) and every reader takes it from there: F$GETJPI through the $GETJPI row (any process the caller may $GETJPI), RMS for case, the DCL lexer for '^'. Under EXTENDED a '^' and the character after it are part of a filespec word (hermetic: tests/dcl/test_parse_ext_names.c); under TRADITIONAL a '^' outside quotes is %DCL-W-PARMDEL. A foreign command's argument tail is passed as typed, not checked."

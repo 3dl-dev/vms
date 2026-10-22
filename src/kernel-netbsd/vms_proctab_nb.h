@@ -198,7 +198,10 @@ struct vms_procinfo {
 	uint8_t  current_mode;
 	uint8_t  redacted;
 	uint8_t  proc_type;   /* VMS_PROC_T_* -- process classification (vms-c17) */
-	uint8_t  pad[1];
+	uint8_t  parse_style; /* VMS_PROCINFO_PS_* (rd vms-0b0): bit 0 the permanent file-name
+	                       * parse style is EXTENDED, bit 1 the current image's is. Withheld
+	                       * (0) on a redacted row. Was the last padding byte: the struct
+	                       * stays 216 bytes. */
 	uint64_t cur_privs;
 	uint64_t perm_privs;
 	char     username[VMS_USERNAME_SIZE];
@@ -581,6 +584,8 @@ struct vms_procctl_args {
  * Both sides of /dev/vms compile these structs separately and pass them by raw
  * address, so a size drift is an ABI break. These MUST match vms_ioctl.h.
  */
+#define VMS_PROCINFO_PS_PERM_EXTENDED  0x01u  /* JPI$_PARSE_STYLE_PERM is EXTENDED */
+#define VMS_PROCINFO_PS_IMAGE_EXTENDED 0x02u  /* JPI$_PARSE_STYLE_IMAGE is EXTENDED */
 _Static_assert(sizeof(struct vms_procinfo) == 216,
                "vms_procinfo layout changed: process-table ioctl ABI break");
 _Static_assert(sizeof(struct vms_getjpi_args) == 288,

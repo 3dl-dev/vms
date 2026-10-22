@@ -1,0 +1,30 @@
+# dcl-caret-always-escape -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL refuses a '^' in a parameter under PARSE_STYLE=TRADITIONAL (%DCL-W-PARMDEL) and reads it as an ODS-5 escape only under EXTENDED, as lab-Alpha V8.4 does (rd vms-0b0)";;
+        targets)      echo "vmsdcl/dcl_parser.c";;
+        suites_red)   echo "test_syssvc_dcl_ods5";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "dcl_parse_line() sets the lexer's ext_names from the process's current parse style. The mutation sets it always, so under TRADITIONAL a '^' is lexed into the filespec, the command runs, and TYPE c^+^+config.h prints the file the real system refuses to name. Every EXTENDED case is unchanged.";;
+        require_fail) cat <<'EOF2'
+TRADITIONAL: TYPE c^+^+config.h is refused %DCL-W-PARMDEL, as lab-Alpha V8.4 refuses it
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one line that sets the lexer's parse style.
+        # Gone after substitution (no-op re-apply).
+        sed -i 's#^    lex.ext_names = dcl_parse_style_extended();$#    lex.ext_names = 1; /* NEGCTL dcl-caret-always-escape */#' "$_file"
+    :
+}

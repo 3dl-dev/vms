@@ -171,6 +171,11 @@ static void proc_fill_info(const struct vms_proc *proc,
                             ? VMS_PROC_T_INTERACTIVE : VMS_PROC_T_OTHER;
     }
 
+    /* JPI$_PARSE_STYLE_PERM / _IMAGE (rd vms-0b0): the PCB's file-name parse
+     * styles, set by $SET_PROCESS_PROPERTIESW; below the redaction return with
+     * the rest of what a caller may only read of a process it may $GETJPI. */
+    info->parse_style  = (uint8_t)((proc->parse_style_perm  == VMS_PARSE_STYLE_EXTENDED ? VMS_PROCINFO_PS_PERM_EXTENDED  : 0u) |
+                                   (proc->parse_style_image == VMS_PARSE_STYLE_EXTENDED ? VMS_PROCINFO_PS_IMAGE_EXTENDED : 0u));
     info->linux_pid    = (uint32_t)proc->linux_pid;
     info->uic          = proc->uic;
     info->current_mode = proc->current_mode;

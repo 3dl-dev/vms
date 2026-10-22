@@ -214,3 +214,25 @@ Also observed: translate_vms keeps the version as `.N`
 dot (`README.` -> `readme.`); at the defaults it lower-cases and refuses every
 name holding an escape; DECC$FILENAME_UNIX_REPORT changed nothing in these two
 routines.
+
+## Session 6: DCL under the parse style (pod `ods5alpha-6`)
+
+Predictions in `PREREGISTERED-6.md`, console in `CONSOLE-6.txt`. A fresh LD
+volume `ODS5U` was initialised `/STRUCTURE=5` on LDA1:, and the battery ran in
+`LDA1:[TEST]`.
+
+| # | verdict | observed |
+|---|---|---|
+| 1 | hit | at login `F$GETJPI("","PARSE_STYLE_PERM")` and `_IMAGE` are `TRADITIONAL` |
+| 2 | hit | after `SET PROCESS/PARSE_STYLE=EXTENDED` both are `EXTENDED` |
+| 3 | hit | `OPEN/WRITE F MixedCase.Txt` makes `MixedCase.Txt;1`; `TYPE mixedcase.txt` finds it |
+| 4 | hit | `OPEN/WRITE F c^+^+config.h`; `TYPE C^+^+CONFIG.H` prints it; `DIRECTORY c^+^+config.h` lists `c^+^+config.h;1` |
+| 5 | hit | `OPEN/WRITE F a.b.c` makes `a^.b.c;1` |
+| 6 | hit | `DELETE c^+^+config.h;*` and `DELETE MixedCase.Txt;*` remove both |
+| 7 | hit | `SET PROCESS/PARSE_STYLE=TRADITIONAL`: both items `TRADITIONAL` |
+| 8 | hit | under TRADITIONAL `TYPE x^+y.h` is `%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters` then ` \^\` |
+| 9 | hit | under TRADITIONAL `OPEN/WRITE F lower.txt` makes `LOWER.TXT;1` |
+| 10 | hit | `SET PROCESS/PARSE_STYLE=BOGUS` is `%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling` then ` \BOGUS\` |
+| 11 | **miss** | a bare `SET PROCESS/PARSE_STYLE` is accepted silently and sets `TRADITIONAL` (from EXTENDED too); `=EXT` and `=(EXTENDED)` set `EXTENDED` |
+
+SHOW PROCESS does not show the parse style.

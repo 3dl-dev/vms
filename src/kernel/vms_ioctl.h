@@ -2754,7 +2754,10 @@ struct vms_procinfo {
                            * below proc_fill_info()'s redaction early return,
                            * so a redacted row carries the OTHER default. Fits
                            * the existing padding -- struct stays 216 bytes. */
-    uint8_t  pad[1];
+    uint8_t  parse_style; /* VMS_PROCINFO_PS_* (rd vms-0b0): bit 0 the permanent file-name
+                           * parse style is EXTENDED, bit 1 the current image's is. Withheld
+                           * (0) on a redacted row. Was the last padding byte: the struct
+                           * stays 216 bytes. */
     uint64_t cur_privs;                 /* current (process) privileges */
     uint64_t perm_privs;                /* authorized (permanent) privileges */
     char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */
@@ -3578,6 +3581,8 @@ struct vms_native_page0_args {
  * and with them the GETJPI and PROCSCAN request numbers a third time.
  * Same discipline, same reason.
  */
+#define VMS_PROCINFO_PS_PERM_EXTENDED  0x01u  /* JPI$_PARSE_STYLE_PERM is EXTENDED */
+#define VMS_PROCINFO_PS_IMAGE_EXTENDED 0x02u  /* JPI$_PARSE_STYLE_IMAGE is EXTENDED */
 _Static_assert(sizeof(struct vms_procinfo) == 216,
                "vms_procinfo layout changed: process-table ioctl ABI break");
 _Static_assert(sizeof(struct vms_setprn_args) == 72,

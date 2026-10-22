@@ -47,6 +47,10 @@ struct dcl_command {
                                             * command's argv without disturbing
                                             * the `rest` consumers (SPAWN, PIPE,
                                             * assignments). vms-615. */
+    uint32_t parse_status;                 /* rd vms-0b0: a parameter error the
+                                            * parser found (CLI$_PARMDEL for a '^'
+                                            * under PARSE_STYLE=TRADITIONAL),
+                                            * reported when a built-in verb runs */
 };
 
 /* Parse a DCL command line into a command structure */

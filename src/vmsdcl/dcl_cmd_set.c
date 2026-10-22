@@ -34,6 +34,7 @@
                            * dictionary, the SAME single source SHOW
                            * PROCESS/PRIVILEGES renders from (dcl_cmd_show.c) */
 #include "starlet.h"
+#include "ppropdef.h"     /* PPROP$C_PARSE_STYLE_PERM, PARSE_STYLE$C_* (vms-0b0) */
 #include "vmsfs/filespec.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
@@ -1592,6 +1593,49 @@ static int cmd_set_process(struct dcl_command *cmd)
     }
 
     /*
+     * /PARSE_STYLE=EXTENDED|TRADITIONAL (rd vms-0b0) -- $SET_PROCESS_PROPERTIESW
+     * PPROP$C_PARSE_STYLE_PERM: the executive stores the permanent style and
+     * the current image's (this DCL's) in the PCB; every image the process
+     * runs next starts with it. RMS reads the style from there; this DCL's own
+     * lexer reads it too (a '^' in a parameter is refused under TRADITIONAL).
+     * As lab-Alpha V8.4 answers (tests/lab/captures/ods5-alpha-20261022/
+     * CONSOLE-6.txt): the keyword abbreviates (=EXT) and may be parenthesised
+     * (=(EXTENDED)); a bare /PARSE_STYLE is TRADITIONAL; any other keyword is
+     * %DCL-W-IVKEYW naming it.
+     */
+    const char *ps_val = dcl_qualifier_value(cmd, "PARSE_STYLE");
+    if (ps_val || dcl_has_qualifier(cmd, "PARSE_STYLE")) {
+        char kw[64];
+        size_t kl;
+        snprintf(kw, sizeof kw, "%s", ps_val ? ps_val : "");
+        kl = strlen(kw);
+        if (kl >= 2 && kw[0] == '(' && kw[kl - 1] == ')') {
+            memmove(kw, kw + 1, kl - 2);
+            kw[kl - 2] = '\0';
+            kl -= 2;
+        }
+        uint32_t style;
+        if (kl == 0 || strncasecmp(kw, "TRADITIONAL", kl) == 0)
+            style = PARSE_STYLE$C_TRADITIONAL;
+        else if (strncasecmp(kw, "EXTENDED", kl) == 0)
+            style = PARSE_STYLE$C_EXTENDED;
+        else {
+            for (size_t i = 0; i < kl; i++)
+                kw[i] = (char)toupper((unsigned char)kw[i]);
+            dcl_error("DCL", 0, "IVKEYW",
+                      "unrecognized keyword - check validity and spelling\n \\%s\\", kw);
+            return CLI$_IVKEYW;
+        }
+        uint32_t st = sys$set_process_propertiesw(NULL, NULL, NULL, PPROP$C_PARSE_STYLE_PERM,
+                                                  style, NULL, 0, 0);
+        if (!(st & 1)) {
+            dcl_error("OVMX", 2, "PPROP",
+                      "$SET_PROCESS_PROPERTIESW failed, status %%X%08X", (unsigned)st);
+            return (int)st;
+        }
+    }
+
+    /*
      * /PRIORITY=n -- $SETPRI on this process. The EXECUTIVE decides (vms-768):
      * it sets the base priority, and a raise above the authorized priority
      * without ALTPRI succeeds AT the authorized priority, as OpenVMS VAX V7.3
@@ -2578,10 +2622,24 @@ static const struct dcl_qual_def sq_message[] = {
     { "IDENTIFICATION", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
     { "TEXT",           CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
     SQ_END };
+
+/*
+ * The current image's file-name parse style, from the executive's PCB (rd
+ * vms-0b0): what the DCL parser reads before it lexes a command, so a '^'
+ * escape is part of a filespec under EXTENDED and refused under TRADITIONAL.
+ * No executive: TRADITIONAL. Overrides dcl_parser.c's weak default.
+ */
+int dcl_parse_style_extended(void)
+{
+    uint32_t v = 0;
+    return (vms_kif_pprop(VMS_PPROP_PARSE_STYLE_TEMP, NULL, &v) & 1) &&
+           v == VMS_PARSE_STYLE_EXTENDED;
+}
 static const struct dcl_qual_def sq_process[] = {
     { "NAME",       CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     { "PRIORITY",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     { "PRIVILEGES", CDU_VT_LIST,  CDU_Q_VALREQ, NULL, NULL },
+    { "PARSE_STYLE", CDU_VT_VALUE, 0,          NULL, "TRADITIONAL" },
     { "ENABLE",     CDU_VT_NONE,  0,            NULL, NULL },
     { "DISABLE",    CDU_VT_NONE,  0,            NULL, NULL },
     SQ_END };

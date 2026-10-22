@@ -33,17 +33,6 @@ extern "C" {
 
 #define GLCKTBL$M_PERMANENT 0x00000001  /* Persistent across image activation */
 
-/* ================================================================
- * GLOCK$C_ — Galaxy lock mode codes
- * ================================================================ */
-
-#define GLOCK$C_NLMODE      0   /* Null lock mode */
-#define GLOCK$C_CRMODE      1   /* Concurrent read */
-#define GLOCK$C_CWMODE      2   /* Concurrent write */
-#define GLOCK$C_PRMODE      3   /* Protected read */
-#define GLOCK$C_PWMODE      4   /* Protected write */
-#define GLOCK$C_EXMODE      5   /* Exclusive */
-
 #ifdef __cplusplus
 }
 #endif

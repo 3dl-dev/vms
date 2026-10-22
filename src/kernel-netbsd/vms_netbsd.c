@@ -242,6 +242,16 @@ vms_proc_alloc(pid_t pid)
 	exec_list_head_init(&np->file_channels);
 
 	/*
+	 * L2 (raw datalink) handles (rd vms-9394) -- this process's (initially
+	 * empty) ring of executive datalink handles on its OWN lock (an L2 handle
+	 * is not a $ASSIGN channel), mirroring the Linux vms_module.c
+	 * registration. vms_proc_free_claimed() gives them back at process death.
+	 */
+	exec_list_head_init(&np->l2_channels);
+	exec_lock_init(&np->l2_lock);
+	np->l2_next_handle = 0;
+
+	/*
 	 * DEVICE channels (rd vms-618) -- this process's (initially empty) ring of
 	 * channels to executive device-table rows, on the SAME chan_lock/next_chan
 	 * space as the mailbox and file channels above. vms_proc_release_channels()
@@ -604,6 +614,12 @@ vms_proc_free_claimed(struct vms_proc *proc)
 	 * mailbox release above, mirroring the Linux vms.ko's vms_acp_release_all in
 	 * vms_module.c's proc free. */
 	vms_acp_release_all(proc);
+	/* Close every executive L2 datalink handle this process still held (rd
+	 * vms-9394) -- the Linux vms.ko's vms_l2_release_all in its proc free --
+	 * so a NETACP that dies without L2_CLOSE leaves no port armed and no
+	 * promiscuous reference on the NIC. */
+	vms_l2_release_all(proc);
+	exec_lock_destroy(&proc->l2_lock);
 	/* Clear this process's $SETCLUEVT registration, if any (FC-P3.8) --
 	 * mirrors the Linux vms.ko's vms_cnxman_proc_gone call in vms_module.c's
 	 * proc free. A no-op when the cluster stack never started or this
@@ -717,6 +733,8 @@ vms_proctab_teardown(void)
 		 * only destroy this process's lock_list_lock guard, which vms_lock_cleanup
 		 * did not own. */
 		vms_proc_release_channels(p);
+		vms_l2_release_all(p);           /* rd vms-9394 */
+		exec_lock_destroy(&p->l2_lock);
 		vms_proc_rundown_asts(p, PSL_C_KERNEL);
 		exec_lock_destroy(&p->lock_list_lock);
 		exec_lock_destroy(&p->chan_lock);
@@ -1649,6 +1667,40 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return vms_facility_errno(r);
 
 	/*
+	 * Executive L2 datalink (rd vms-9394) -- src/kernel-core/vms_l2.c, the SAME
+	 * facility the Linux vms.ko dispatches, over this substrate's in-kernel
+	 * ifnet binding (exec_l2_* in vms_socket_netbsd.c). OPEN is gated on the
+	 * caller's VMS PHY_IO privilege inside the facility: a non-root NETACP
+	 * gets its DECnet datalink from the executive, never from bpf(4). All four
+	 * are _IOWR and <= 2072 bytes (vms_l2_send_args), under this port's
+	 * one-page IOCPARM_MAX, so they ride the framework pre-copy path -- hand
+	 * `data' straight to the facility, whose exec_copyin/out are in-kernel
+	 * copies. RECV may sleep (bounded by its timeout_ms) holding no lock.
+	 */
+	case VMS_IOCTL_L2_OPEN:
+	case VMS_IOCTL_L2_SEND:
+	case VMS_IOCTL_L2_RECV:
+	case VMS_IOCTL_L2_CLOSE:
+		uarg = data;
+		proc = vms_proc_find(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ESRCH;
+
+		switch (cmd) {
+		case VMS_IOCTL_L2_OPEN:
+			r = vms_ioctl_l2_open(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_L2_SEND:
+			r = vms_ioctl_l2_send(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_L2_RECV:
+			r = vms_ioctl_l2_recv(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_L2_CLOSE:
+			r = vms_ioctl_l2_close(proc, (unsigned long)uarg); break;
+		default:
+			return ENOTTY;   /* unreachable */
+		}
+		return vms_facility_errno(r);
+
+	/*
 	 * Logical-name facility (LNM$SYSTEM/GROUP/JOB, src/kernel-core/vms_lnm.c) --
 	 * rd vms-72da. Same dispatch shape as the others: find-or-create the caller's
 	 * proc (the facility derives its LNM$GROUP/JOB scope from the PCB's uic/job_id
@@ -1722,6 +1774,9 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * guards (resource hash + lock-ID tree) and the empty resource-database
 		 * bucket array, before any $ENQ can run. */
 		vms_lock_init();
+		/* The executive L2 datalink's locks (rd vms-9394), before the
+		 * cdevsw attach so no VMS_IOCTL_L2_* can reach them uninitialised. */
+		vms_l2_netbsd_init();
 		/* Bring up the logical-name arena (rd vms-72da) BEFORE /dev/vms exists,
 		 * so no open/mmap can race a NULL arena. vms_lnm_init allocates the ONE
 		 * read-only-publishable arena (uvm_km_alloc(UVM_KMF_WIRED)); a failure
@@ -1857,6 +1912,9 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * device row by the time it is freed. */
 		vms_devtab_cleanup();
 		vms_blockdev_netbsd_release_all();
+		/* Every L2 handle went with its proc above; now restore any NIC
+		 * input routine the L2 binding interposed (rd vms-9394). */
+		vms_l2_netbsd_fini();
 		/* Free the logical-name arena LAST (rd vms-72da): no process can reach it
 		 * anymore (the device is detached) and no facility above references it. */
 		vms_lnm_cleanup();

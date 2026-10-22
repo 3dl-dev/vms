@@ -235,7 +235,7 @@ REQUIRED_LOADER_PARAMS = [
 DEMO_NODE_A = {
     "name": "OVMXA", "id": 1987, "votes": 0, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
-    "decnet": "1.1",
+    "decnet": "1.963",
 }
 
 # Node B (OVMX/VAX, pcjs KA655/NetBSD-VAX substrate) -- STAGED. Blocked on the
@@ -250,7 +250,7 @@ DEMO_NODE_A = {
 DEMO_NODE_B = {
     "name": "OVMXB", "id": 1988, "votes": 0, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
-    "decnet": "1.2",
+    "decnet": "1.964",
 }
 
 # Node C (real OpenVMS VAX, pcjs KA655; V7.3 per rd vms-d24 as of rd vms-2570,
@@ -284,19 +284,24 @@ DEMO_NODE_C = {
 # (area.node), the SAME node name as its SCSNODE -- what a VMS site does when a
 # cluster member is also a DECnet node. All three nodes are DECnet endnodes of
 # area 1 and each one's permanent node database names the others, so a visitor
-# can SET HOST between them. The OVMX addresses (1.1, 1.2) are OVMX's choice
-# for this demo, not oracle values.
+# can SET HOST between them.
 #
-# VAXC's address is NOT a free choice: it is what its volume really has.
-# build_nodeC_vms73_cluster.sh DECNET=1 installs DECnet-VAX Phase IV and runs
-# NETCONFIG, but registers NO license PAK (rd vms-05d: bring your own DVNETEND
-# license). And real VMS refuses to start DECnet on a cluster member whose
-# executor address differs from SCSSYSTEMID -- STARTNET.COM prints "DECnet
-# address of local node must match VAXcluster system ID." and DECdtm logs
-# %DECdtm-W-ADDRNEQ (measured 2026-10-21 with 1.3). SCSSYSTEMID 1989 =
-# 1*1024 + 965, so VAXC is 1.965, the address NETCONFIG itself offers. Until a
-# visitor loads a license, VAXC's circuit stays off (%SYSTEM-F-NOLICENSE at
-# boot), so SET HOST VAXC from an OVMX node gets VMS's unreachable-node error.
+# No address here is a free choice. Real VMS refuses to start DECnet on a
+# cluster member whose executor address is not its SCSSYSTEMID
+# (area*1024 + node). Measured 2026-10-21 on the real V7.3 Node C with
+# address 1.3 (tests/lab/captures/vms-05d-nodec-decnet-20261021/README.md):
+#   %DECdtm-W-ADDRNEQ, DECnet address (1027) is not equal to SCSSYSTEMID (1989)
+#   DECnet address of local node must match VAXcluster system ID.
+#   DECnet not started.
+# So every roster node's address is derived from its "id": OVMXA 1987 = 1.963,
+# OVMXB 1988 = 1.964, VAXC 1989 = 1.965 (the address NETCONFIG itself offers).
+# decnet_address_matches_id() below is the check; the roster test enforces it.
+#
+# VAXC's volume (build_nodeC_vms73_cluster.sh DECNET=1) has DECnet-VAX Phase IV
+# installed and configured but NO license PAK (rd vms-05d: bring your own
+# license). Until a visitor loads one, VAXC's circuit stays off
+# (%SYSTEM-F-NOLICENSE at boot), so SET HOST VAXC from an OVMX node gets VMS's
+# unreachable-node error.
 #
 # The full 3-node target roster, in genesis join order (C forms, A joins, B
 # joins) -- the single place the demo page/generator should import from for
@@ -565,6 +570,18 @@ def _cmd_authorize(args):
                                    writer=args.writer)
     print("mk_democonfig: wrote %s group=%d (writer=%s)"
           % (args.out, args.group, used))
+
+
+def decnet_address_matches_id(node):
+    """True when roster `node`'s DECnet address equals its SCSSYSTEMID
+    (area<<10 | node), which real VMS requires of a cluster member before
+    STARTNET will start DECnet (rd vms-05d). A node with no DECnet is vacuously
+    fine."""
+    addr = node.get("decnet")
+    if not addr:
+        return True
+    area, num = (int(x) for x in addr.split("."))
+    return (area << 10) | num == node["id"]
 
 
 def decnet_ncp_commands(name, roster=None):

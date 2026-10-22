@@ -46,10 +46,46 @@ static void check(int cond, const char *name)
     }
 }
 
+/*
+ * EVERY PARAMETER PID 1 READS, enumerated from src/ovmx_init/ovmx_init.c's own
+ * sysgen_read_param() / sysgen_read_string() calls -- the complete set this
+ * suite's title is about. Nine of them were missing from the shipped store when
+ * this list was first taken (2026-10-22, merge-group run 39698326725): the eight
+ * the e2e drift gate caught by counting, plus OVMX_CLEAN_DEPART, which existed
+ * in NO table and no store and was being carried entirely by its absent-value
+ * fallback. A read with no store entry is a knob an operator cannot turn.
+ *
+ * This list is the cheap rung under the QEMU drift gate: it reddens in under a
+ * second, where the e2e needs a boot. A new sysgen_read_param() call belongs
+ * here in the same commit that adds it.
+ */
+static const char *const read_by_pid1[] = {
+    "ALLOCLASS", "CLUSTER_CREDITS", "EXPECTED_VOTES", "LOCKDIRWT",
+    "MSCP_LOAD", "MSCP_SERVE_ALL", "NISCS_MAX_PKTSZ", "OVMX_CLEAN_DEPART",
+    "OVMX_RM_RESIDUE_FILL", "QDSKVOTES", "RECNXINTERVAL", "SCSSYSTEMID",
+    "TIMVCFAIL", "VAXCLUSTER", "VOTES",
+};
+
+static void check_every_read_is_reachable(void)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(read_by_pid1) / sizeof(read_by_pid1[0]); i++) {
+        uint32_t v = 0xdeadbeefu;
+        char desc[96];
+
+        snprintf(desc, sizeof(desc),
+                 "%s is IN the shipped store (PID 1 reads it)",
+                 read_by_pid1[i]);
+        check(sysgen_read_param(read_by_pid1[i], &v) == 0, desc);
+    }
+}
+
 int main(void)
 {
     uint32_t value = 0xdeadbeefu;
     char node[16];
+    char dq[16];
 
     printf("test_sysgen_shipped_store: the shipped OVMXVMSSYS.PAR carries the "
            "parameters the executive reads (rd vms-c2b)\n");
@@ -77,6 +113,17 @@ int main(void)
           strcmp(node, "OVMX") == 0,
           "SCSNODE still reads OVMX -- adding a parameter did not disturb the "
           "store's identity");
+
+    /* ...and the whole set, so the next unreachable knob reddens here and not
+     * in a lab fire. The two string-typed reads are checked by their own
+     * reader. */
+    check_every_read_is_reachable();
+    memset(dq, 0xff, sizeof(dq));
+    check(sysgen_read_string("DISK_QUORUM", dq, sizeof(dq)) == 0 &&
+          dq[0] == '\0',
+          "DISK_QUORUM is IN the shipped store and reads as \"\" -- no quorum "
+          "disk configured, which is a STATED configuration and not an absent "
+          "parameter");
 
     printf("test_sysgen_shipped_store: %d failure(s)\n", failures);
     return failures ? 1 : 0;

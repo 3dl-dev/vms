@@ -123,6 +123,29 @@ fi
 
 PASS=0
 FAIL=0
+# sysgen_count: the number of parameters a SYSGEN / SYSBOOT> session said it
+# LOADED, read out of its own transcript. THE COUNT IS NEVER A LITERAL HERE.
+# This gate used to assert "%SYSGEN-I-WRITTEN, 31 parameters written": 31 was
+# the shipped set's size, not a property of anything, so adding ONE parameter
+# (OVMX_RM_RESIDUE_FILL, rd vms-6ad1's RA7 residue knob, which had to exist in
+# the store to be settable at all) reddened this gate and three others in a
+# change that altered nothing about SYSGEN. What the gate MEANS to assert is
+# that WRITE persists exactly the set that was LOADED -- true at any table size.
+# Prints nothing and returns 1 when the log carries no count, so the caller
+# fails loudly instead of comparing against an empty string.
+sysgen_count() {
+    local log="${1:?log}" n
+    # -a IS LOAD-BEARING (measured in merge-group run 39698326725): a QEMU
+    # console log carries NUL bytes, so GNU grep calls it BINARY and -o prints
+    # NOTHING even though the line is there. Every other reader in this file
+    # uses -q, where binary detection still exits 0 on a match, which is why
+    # only the reader that needs the TEXT was bitten -- it returned empty, and
+    # four checks compared against an empty string.
+    n=$(grep -aoE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' "$log" 2>/dev/null \
+        | tail -1 | grep -aoE '[0-9]+' | tail -1)
+    [ -n "$n" ] || return 1
+    printf '%s\n' "$n"
+}
 record() {
     local desc="$1" rc="$2"
     if [ "$rc" -eq 0 ]; then echo "  PASS: $desc"; PASS=$((PASS + 1))
@@ -215,13 +238,30 @@ if [ "$rc" -eq 0 ]; then
     send 'SET SCSNODE ALPHA9'; sleep 1
     send 'WRITE CURRENT'; sleep 1
     send 'EXIT'; sleep 1
-    if waitfor '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG1"; then
+    if NPAR=$(sysgen_count "$POS_LOG1"); then rc=0; else rc=1; fi
+    record "boot 1: USE CURRENT reported how many parameters it loaded" "$rc"
+    if [ "$rc" -eq 0 ] && waitfor "%SYSGEN-I-WRITTEN, $NPAR parameters written to SYS\$SYSTEM:OVMXVMSSYS.PAR;2" 20 "$POS_LOG1"; then
         rc=0
     else
         rc=1
     fi
-    record "boot 1: WRITE CURRENT created ;2 over the seed's ;1 (real vmsfs version)" "$rc"
+    record "boot 1: WRITE CURRENT persisted all $NPAR loaded parameters and created ;2 over the seed's ;1 (real vmsfs version)" "$rc"
     check "boot 1: SET SCSNODE changed OVMX to ALPHA9" "$POS_LOG1" "%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to ALPHA9"
+
+    # THE DRIFT GATE THE LITERAL COUNT WAS STANDING IN FOR, and the gap that
+    # actually broke this file: the SHIPPED seed (what USE CURRENT just loaded)
+    # and the COMPILED-IN factory table are two independent sources, and a
+    # parameter added to one and not the other is unreachable -- which is
+    # exactly what rd vms-c2b found for OVMX_RM_RESIDUE_FILL. USE DEFAULT in a
+    # fresh session reports the factory count; it must equal the seed's. No
+    # WRITE here, so nothing on the volume changes.
+    send 'SYSGEN'; sleep 1
+    send 'USE DEFAULT'; sleep 1
+    send 'EXIT'; sleep 1
+    if NFACT=$(sysgen_count "$POS_LOG1"); then rc=0; else rc=1; fi
+    record "boot 1: USE DEFAULT reported how many factory parameters it loaded" "$rc"
+    if [ "$rc" -eq 0 ] && [ "$NFACT" = "$NPAR" ]; then rc=0; else rc=1; fi
+    record "boot 1: the compiled-in factory table and the SHIPPED seed agree on the parameter set ($NFACT == $NPAR)" "$rc"
 
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
     sleep "$SETTLE_SECS"
@@ -245,7 +285,9 @@ record "boot 2 (reboot): still reaches the login prompt (mount-or-halt gate unaf
 
 # The boot console ITSELF announces the new node name, before any DCL runs --
 # a second, independent proof beyond the DCL session below.
-check "boot 2: %OVMX-I-SCSNODE console line names ALPHA9" "$POS_LOG2" "%OVMX-I-SCSNODE, node name ALPHA9 set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+# rd vms-158d: the node-name record is OPERATOR.LOG's, not the console's (no VMS
+# boot console prints it); it is read back from the log after login, below.
+check "boot 2: the console carries no OVMX node-name line" "$POS_LOG2" "%OVMX-I-SCSNODE" absent
 check "boot 2: NO honest-halt (a good, present .PAR does not warn)" "$POS_LOG2" "%OVMX-W-NOPARAMS" absent
 
 if [ "$rc" -eq 0 ]; then
@@ -285,6 +327,11 @@ if [ "$rc" -eq 0 ]; then
     check "boot 2: SHOW PROCESS names the node ALPHA9" "$POS_LOG2" 'Node: ALPHA9'
     check "boot 2: no surface names the node from the edited file (BETA7) or the default (OVMX)" \
         "$POS_LOG2" 'Node: BETA7' absent
+    # rd vms-158d: PID 1's node-name record is an OPERATOR.LOG record (a real
+    # VMS boot console prints no such line) -- read it back the VMS way.
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 3
+    check "boot 2: OPERATOR.LOG records the node name ALPHA9 set from the .PAR" \
+        "$POS_LOG2" "%OVMX-I-SCSNODE, node name ALPHA9 set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 fi
 kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 

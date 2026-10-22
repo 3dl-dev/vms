@@ -1,0 +1,651 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/lab/k8s-labs/vms05d-lab/buildD/vax.ini-1> attach nvr data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/lab/k8s-labs/vms05d-lab/buildD/vax.ini-9> attach rq0 data/d0.dsk
+%SIM-INFO: RQ0: 'data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: VAXCSYS      Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/vms05d-lab/buildD/vax.ini-12> attach -r rq2 /lab/media/openvms073.iso
+%SIM-INFO: RQ2: Unit is read only
+%SIM-INFO: RQ2: '/lab/media/openvms073.iso' Contains ODS2 File system
+%SIM-INFO: RQ2: Volume Name: VAXVMS073    Format: DECFILE11B   Sectors In Volume: 1067894
+/lab/k8s-labs/vms05d-lab/buildD/vax.ini-18> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>^U
+>>>B DUA0
+[drv:boot-echo-verified attempt 1 'B DUA0']
+
+(BOOT/R5:0 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 21-OCT-2026 20:16:30.53
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20200208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.07  %%%%%%%%%%%
+Operator _VAXC$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.08  %%%%%%%%%%%
+Operator status for operator _VAXC$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.14  %%%%%%%%%%%
+Logfile has been initialized by operator _VAXC$OPA0:
+Logfile is VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;4
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.14  %%%%%%%%%%%
+Operator status for operator VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;4
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.16  %%%%%%%%%%%
+20:16:30.08 Node VAXC (csid 00000000) proposed formation of a VAXcluster
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.16  %%%%%%%%%%%
+20:16:30.08 Node VAXC (csid 00010001) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.17  %%%%%%%%%%%
+20:16:30.08 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.23  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.23  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.30  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.30  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.31  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.31  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.31  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%SMG-W-GBLNOTCRE, global section not created
+-SYSTEM-F-GPTFULL, global page table is full
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.44  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAX-VMS use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAX-VMS use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.44  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.47  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAXC.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:16:35.52  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Audit server starting up
+Event time:               21-OCT-2026 20:16:35.51
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at 21-OCT-2026 20:16:35.58
+
+  Accounting information:
+  Buffered I/O count:            1148         Peak working set size:    1558
+  Direct I/O count:               500         Peak page file size:      4924
+  Page faults:                   3734         Mounted volumes:             0
+  Charged CPU time:           0 00:00:02.51   Elapsed time:     0 00:00:05.13
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-I-NOVAXCLUSTER, DEC VMSCLUSTER license is not active
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3
+    Last interactive login on Wednesday, 21-OCT-2026 20:13[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT F$GETSYI("EXPECTED_VOTES"),F$GETSYI("VOTES"),F$GETSYI("NODENAME"),F$GETSYI("CLUSTER_NODES")
+11VAXC1
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW CLUSTER
+                   --- VAXcluster Summary ---
+
+         Quorum   Votes   Quorum Disk Votes   Status Summary
+         ------   -----   -----------------   --------------
+            1       1            N/A              quorum
+
+                        --- CSB list ---
+
+Address   Node    CSID      Votes   State     Status
+-------   ----    ----      -----   -----     ------
+
+83A42740  VAXC    00010001    1     local   member,qf_same,qf_noaccess
+                 --- Cluster Block (CLUB) 83A26100 ---
+
+Flags: 10080001 cluster,init,quorum
+
+Quorum/Votes                  1/1    Last transaction code          01
+Quorum Disk Votes           65535    Last trans. number              2
+Nodes                           1    Last coordinator CSID    00010001
+Quorum Disk                          Last time stamp       21-OCT-2026
+Found Node SYSID     0000000007C5                             20:16:30
+Founding Time         21-OCT-2026    Largest trans. id        00000002
+                         20:16:30    Resource Alloc. retry           0
+Index of next CSID           0002    Figure of Merit          00000101
+Quorum Disk Cntrl Block  83A26540    Member State Seq. Num        0001
+Timer Entry Address      00000000    Foreign Cluster          00000000
+CSP Queue                   empty    Curr. coord. CSID        00010001
+         --- Cluster Failover Control Block (CLUFCB) 83A26238 ---
+
+Flags: 00000004 sync_node
+
+Failover Step Index      00000038    CSB of Synchr. System    83A42740    
+Failover Instance ID     00000002                                         
+
+
+
+         --- Cluster Quorum Disk Control Block (CLUDCB) 83A26540 ---
+
+State     : 0004 qs_not_ready
+Flags     : 0100 qf_noaccess
+CSP Flags : 0000 
+
+Iteration Counter               0             UCB address     00000000
+Activity Counter                0             TQE address     83A26580
+Quorum file LBN          00000000             IRP address     00000000
+                                              Watcher CSID    00000000
+
+         --- VAXC Cluster System Block (CSB) 83A42740 ---
+
+State:  0B local
+Flags:  030E002A member,selected,send_ext_status,local,status_rcvd
+                 qf_same,qf_noaccess,vcc
+Cpblty: 00000AD0 cwcreprc,cwlogicals,ipc_demult_conn
+SWVers: V7.3                LNM Seqnum: 0000000100000004
+HWName: VAXserver 3900 Series
+
+Quorum/Votes         1/1    Next seq. number    0000    Send queue      00000000
+Quor. Disk Vote        1    Last seq num rcvd   0000    Resend queue    00000000
+CSID            00010001    Last ack. seq num   0000    Block xfer Q.      empty
+Eco/Version         1/27    Unacked messages       0    CDT address     00000000
+Reconn. time    00000000    Ack limit              0    PDT address     00000000
+Ref. count             2    Lock mgr dir wgt       0    TQE address     00000000
+Ref. time    21-OCT-2026    Incarnation  21-OCT-2026    SB address      8357DD78
+                20:16:30                    20:17:26    Current CDRP    00000001
+Cache Protocol  00000000                                                        
+SDA> EXIT
+$ MOUNT/OVERRIDE=IDENTIFICATION DUA2:
+%MOUNT-I-WRITELOCK, volume is write locked
+%MOUNT-I-MOUNTED, VAXVMS073 mounted on _VAXC$DUA2:
+$ PRODUCT INSTALL DECNET_PHASE_IV /SOURCE=DUA2:[DECNET_PHASE_IV_VAX073.KIT]
+ 
+The following product has been selected:
+    DEC VAXVMS DECNET_PHASE_IV V7.3        Layered Product
+ 
+Do you want to continue? [YES] YES
+ 
+Configuration phase starting ...
+ 
+You will be asked to choose options, if any, for each selected product and for
+any products that may be installed to satisfy software dependency requirements.
+ 
+DEC VAXVMS DECNET_PHASE_IV V7.3: DECNET_PHASE_IV
+ 
+    COPYRIGHT (c)  2-APR-2001 -- All rights reserved
+ 
+    Digital Equipment Corporation
+ 
+* This product does not have any configuration options.
+ 
+    Support addendum to DECnet Phase IV service contract required
+ 
+    Do you want to continue? [YES] YES
+ 
+Execution phase starting ...
+
+The following product will be installed to destination:
+    DEC VAXVMS DECNET_PHASE_IV V7.3        DISK$VAXCSYS:[VMS$COMMON.]
+ 
+Portion done: 0%...10%...30%...40%...50%...60%...70%...80%...100%
+
+The following product has been installed:
+    DEC VAXVMS DECNET_PHASE_IV V7.3        Layered Product
+$ SET DEFAULT SYS$SYSTEM
+$ MCR AUTHORIZE CREATE/PROXY
+%UAF-W-NETCHANERR, error assigning a channel to NET:
+-SYSTEM-W-NOSUCHDEV, no such device available
+$ SET DEFAULT SYS$LOGIN
+$ @SYS$MANAGER:NETCONFIG
+
+        DECnet for OpenVMS network configuration procedure
+
+This procedure will help you define the parameters needed to get DECnet 
+running on this machine.  You will be shown the changes before they are 
+executed, in case you wish to perform them manually.
+
+What do you want your DECnet node name to be?          [VAXC]: 
+What do you want your DECnet address to be?           [1.965]: 
+Do you want to operate as a router?         [NO (nonrouting)]: NO
+Do you want a default DECnet account?                    [NO]: NO
+Do you want a default account for the MAIL object?      [YES]: NO
+Do you want a default account for the FAL object?        [NO]: NO
+Do you want a default account for the PHONE object?     [YES]: NO
+Do you want a default account for the NML object?       [YES]: NO
+Do you want a default account for the MIRROR object?    [YES]: NO
+Do you want a default account for the VPM object?       [YES]: NO
+
+        Here are the commands necessary to setup your system.
+
+$ RUN SYS$SYSTEM:NCP
+    PURGE MODULE CONFIGURATOR KNOWN CIRCUITS ALL
+$ DEFINE/USER SYS$OUTPUT NL:
+$ DEFINE/USER SYS$ERROR NL:
+$ RUN SYS$SYSTEM:NCP    ! Remove existing entry, if any
+    PURGE NODE 1.965 ALL
+    PURGE NODE VAXC ALL
+$ RUN SYS$SYSTEM:NCP
+    DEFINE EXECUTOR ADDRESS 1.965
+    DEFINE EXECUTOR STATE ON
+    DEFINE EXECUTOR NAME VAXC
+    DEFINE EXECUTOR MAXIMUM ADDRESS 1023
+    DEFINE EXECUTOR TYPE NONROUTING IV
+    PURGE KNOWN OBJECTS ALL
+    DEFINE OBJECT TASK NUMBER 0 USER ILLEGAL PASSWORD DISABLED
+    DEFINE LINE    QNA-0 STATE ON
+    DEFINE CIRCUIT QNA-0 STATE ON COST 4
+    DEFINE LOGGING MONITOR STATE ON
+    DEFINE LOGGING MONITOR EVENTS 0.0-9
+    DEFINE LOGGING MONITOR EVENTS 2.0-1
+    DEFINE LOGGING MONITOR EVENTS 4.2-13,15-16,18-20
+    DEFINE LOGGING MONITOR EVENTS 5.0-18
+Press RETURN to continue
+
+    DEFINE LOGGING MONITOR EVENTS 128.0-4
+
+Do you want these commands to be executed?  [YES]: YES
+%NCP-I-NOINFO, No information in database
+%NCP-I-NOINFO, No information in database
+%NCP-I-SUCCESS,  Success  
+Logging sink type = monitor
+%NML-I-RECADDED, Database entry added
+
+The changes have been made.
+
+If you have not already registered the DECnet-VAX key, then do so now.
+
+After the key has been registered, you should invoke the procedure 
+SYS$MANAGER:STARTNET.COM to startup DECnet-VAX with these changes.
+
+(If the key is already registered) Do you want DECnet started?  [YES]: NO
+$ MCR NCP DEFINE NODE 1.963 NAME OVMXA
+$ MCR NCP DEFINE NODE 1.964 NAME OVMXB
+$ CREATE SYS$LOGIN:STARTNET_ON.EDT
+S"$!$ START/NETWORK DECNET"$ START/NETWORK DECNET" WHOLE
+EXIT
+*EXIT*
+$ EDIT/EDT/COMMAND=SYS$LOGIN:STARTNET_ON.EDT SYS$MANAGER:SYSTARTUP_VMS.COM
+  318       $ START/NETWORK DECNET
+SYS$COMMON:[SYSMGR]SYSTARTUP_VMS.COM;2 408 lines
+[EOB]
+$ DELETE SYS$LOGIN:STARTNET_ON.EDT;*
+$ PURGE SYS$MANAGER:SYSTARTUP_VMS.COM
+$ @SYS$SYSTEM:SHUTDOWN
+
+
+        SHUTDOWN -- Perform an Orderly System Shutdown
+                    on node VAXC
+
+How many minutes until final shutdown [0]: 
+Reason for shutdown [Standalone]: vms-05d DECnet configured
+Do you want to spin down the disk volumes [NO]? NO
+Do you want to invoke the site-specific shutdown procedure [YES]? YES
+Should an automatic system reboot be performed [NO]? YES
+When will the system be rebooted [shortly via automatic reboot]: 
+Shutdown options (enter as a comma-separated list):
+ REMOVE_NODE         Remaining nodes in the cluster should adjust quorum
+ CLUSTER_SHUTDOWN    Entire cluster is shutting down
+ REBOOT_CHECK        Check existence of basic system files
+ SAVE_FEEDBACK       Save AUTOGEN feedback information from this boot
+ DISABLE_AUTOSTART   Disable autostart queues
+
+Shutdown options [NONE]: 
+
+%SHUTDOWN-I-OPERATOR, this terminal is now an operator's console
+%SHUTDOWN-I-DISLOGINS, interactive logins will now be disabled
+%SET-I-INTSET, login interactive limit = 0, current interactive value = 1
+%SHUTDOWN-I-STOPQUEUES, the queues on this node will now be stopped
+
+%SHUTDOWN-I-SITESHUT, the site-specific shutdown procedure will now be invoked
+%SHUTDOWN-I-STOPUSER, all user processes will now be stopped
+%SHUTDOWN-I-STOPAUDIT, the security auditing subsystem will now be shut down
+%SHUTDOWN-I-STOPSMISRV, the SMI server will now be shut down
+%SHUTDOWN-I-STOPSECSRV, the security server will now be shut down
+%SHUTDOWN-I-REMOVE, all installed images will now be removed
+%SHUTDOWN-I-DISMOUNT, all volumes will now be dismounted
+?06 HLT INST
+        PC = 83C50509
+Loading system software.
+No default boot device has been specified.
+
+Available devices.
+-DUA0 (RA92)
+-DUA2 (RRD40)
+-MUA0 (TK50)
+-MUA1 (TK50)
+-MUA2 (TK50)
+-MUA3 (TK50)
+-XQA0 (08-00-2B-FD-C9-77)
+
+Device? [XQA0]: DUA0
+
+(BOOT/R5:0 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 21-OCT-2026 20:20:47.67
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20200208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.64  %%%%%%%%%%%
+Operator _VAXC$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.64  %%%%%%%%%%%
+Operator status for operator _VAXC$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.65  %%%%%%%%%%%
+Logfile has been initialized by operator _VAXC$OPA0:
+Logfile is VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;5
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.65  %%%%%%%%%%%
+Operator status for operator VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;5
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.65  %%%%%%%%%%%
+20:20:46.83 Node VAXC (csid 00000000) proposed formation of a VAXcluster
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.66  %%%%%%%%%%%
+20:20:46.83 Node VAXC (csid 00010001) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.66  %%%%%%%%%%%
+20:20:46.84 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.70  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.70  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.78  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-PROXYSTARTINGUP, proxy processing now starting up
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.78  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.78  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.78  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%SMG-W-GBLNOTCRE, global section not created
+-SYSTEM-F-GPTFULL, global page table is full
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.90  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAX-VMS use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAX-VMS use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.90  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:52.97  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAXC.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:53.02  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Audit server starting up
+Event time:               21-OCT-2026 20:20:53.01
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%RUN-S-PROC_ID, identification of created process is 20200213
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:20:53.14  %%%%%%%%%%%
+Message from user DECNET on VAXC
+DECnet starting
+
+%NCP-W-OPEFAI, Operation failure  
+Circuit = QNA-0
+%SYSTEM-F-NOLICENSE, operation requires software license
+%NCP-I-NOINFO, No information in database
+%RUN-S-PROC_ID, identification of created process is 20200215
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at 21-OCT-2026 20:20:55.88
+
+  Accounting information:
+  Buffered I/O count:            1500         Peak working set size:    1556
+  Direct I/O count:               599         Peak page file size:      4924
+  Page faults:                   7242         Mounted volumes:             0
+  Charged CPU time:           0 00:00:03.27   Elapsed time:     0 00:00:08.31
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-I-NOVAXCLUSTER, DEC VMSCLUSTER license is not active
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC
+    Last interactive login on Wednesday, 21-OCT-2026 20:16[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/WIDTH=132/NOBROADCAST
+$ MCR NCP LIST KNOWN NODES
+ 
+ 
+Known Node Permanent Summary as of 21-OCT-2026 20:21:20
+ 
+Executor node = 1.965 (VAXC)
+ 
+State                    = on
+
+ 
+Remote node =   1.963 (OVMXA)
+ 
+No information available
+
+ 
+Remote node =   1.964 (OVMXB)
+ 
+No information available
+
+ 
+Remote node =   1.965 (VAXC)
+ 
+No information available
+
+ 
+$ MCR NCP LIST EXECUTOR CHARACTERISTICS
+ 
+ 
+Node Permanent Characteristics as of 21-OCT-2026 20:21:25
+ 
+Executor node = 1.965 (VAXC)
+ 
+Management version       = V4.0.0
+Type                     = nonrouting IV
+Maximum address          = 1023
+
+ 
+$ SHOW LICENSE
+
+Active licenses on node VAXC:
+%SHOW-I-NOLICENSE, no licenses exist
+$ @SYS$SYSTEM:SHUTDOWN
+
+
+        SHUTDOWN -- Perform an Orderly System Shutdown
+                    on node VAXC
+
+How many minutes until final shutdown [0]: 
+Reason for shutdown [Standalone]: vms-2570 demo build
+Do you want to spin down the disk volumes [NO]? NO
+Do you want to invoke the site-specific shutdown procedure [YES]? YES
+Should an automatic system reboot be performed [NO]? NO
+When will the system be rebooted [later]: 
+Shutdown options (enter as a comma-separated list):
+ REMOVE_NODE         Remaining nodes in the cluster should adjust quorum
+ CLUSTER_SHUTDOWN    Entire cluster is shutting down
+ REBOOT_CHECK        Check existence of basic system files
+ SAVE_FEEDBACK       Save AUTOGEN feedback information from this boot
+ DISABLE_AUTOSTART   Disable autostart queues
+
+Shutdown options [NONE]: 
+
+%SHUTDOWN-I-OPERATOR, this terminal is now an operator's console
+%SHUTDOWN-I-DISLOGINS, interactive logins will now be disabled
+%SET-I-INTSET, login interactive limit = 0, current interactive value = 1
+%SHUTDOWN-I-SHUTNET, the DECnet network will now be shut down
+%SHUTDOWN-I-STOPQUEUES, the queues on this node will now be stopped
+
+%SHUTDOWN-I-SITESHUT, the site-specific shutdown procedure will now be invoked
+%SHUTDOWN-I-STOPUSER, all user processes will now be stopped
+%SHUTDOWN-I-STOPAUDIT, the security auditing subsystem will now be shut down
+%SHUTDOWN-I-STOPSMISRV, the SMI server will now be shut down
+%SHUTDOWN-I-STOPSECSRV, the security server will now be shut down
+%SHUTDOWN-I-REMOVE, all installed images will now be removed
+%SHUTDOWN-I-DISMOUNT, all volumes will now be dismounted
+	SYSTEM SHUTDOWN COMPLETE - use console to halt system
+Infinite loop, PC: 834036D3 (BRB 834036D3)
+sim> 

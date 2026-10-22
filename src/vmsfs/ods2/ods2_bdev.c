@@ -83,6 +83,20 @@ ods2_status_t ods2_bdev_read_header(const ods2_bdev_t *bv, uint32_t fid_num,
     idx_lbn = bv->home.hm2_ibmaplbn + bv->home.hm2_ibmapsize;
     hdr_lbn = idx_lbn + (fid_num - 1);
 
+    /* Past file 1, map through INDEXF.SYS's own extents (see
+     * ods2_volume_read_header): a VMS-INITIALIZEd volume continues the
+     * headers in a later extent. */
+    if (fid_num > 1) {
+        uint8_t ixf[ODS2_BLOCK_SIZE];
+        st = bdev_read_block(bv, idx_lbn, ixf, sizeof(ixf));
+        if (st != ODS2_OK)
+            return st;
+        /* An index file whose map does not reach this VBN (a minimal image
+         * with no INDEXF retrieval pointers) keeps the plain arithmetic --
+         * the reader's behaviour before the map was consulted. */
+        (void)ods2_indexf_header_lbn(&bv->home, ixf, fid_num, &hdr_lbn);
+    }
+
     st = bdev_read_block(bv, hdr_lbn, header_out, out_len);
     if (st != ODS2_OK)
         return st;

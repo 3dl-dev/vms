@@ -1,0 +1,30 @@
+# dcl-deallocate-skips-dalloc -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL DEALLOCATE gives the device back through \$DALLOC";;
+        targets)      echo "vmsdcl/dcl_cmd_io.c";;
+        suites_red)   echo "test_syssvc_dcl_allocate";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cmd_deallocate() asks \$DALLOC. The mutation answers success without the call, so the executive keeps the allocation (SHOW DEVICE still reads Online alloc after DEALLOCATE) and a device that was never allocated is not reported as DEVNOTALLOC. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+after DEALLOCATE OPA0: SHOW DEVICE reads plain Online
+DEALLOCATE of a device not allocated is SS$_DEVNOTALLOC
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one sys$dalloc call in cmd_deallocate.
+        sed -i 's|uint32_t st = sys\$dalloc(&dd, 0);|uint32_t st = SS$_NORMAL; /* NEGCTL dcl-deallocate-skips-dalloc */|' "$_file"
+    :
+}

@@ -215,7 +215,7 @@ boot_and_login() {
               "$((BOOT_TIMEOUT * 2 + FORM_WAIT + 180))"
     eval "exec $fd>\"$fifo\""
 
-    wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}" \
+    wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}" \
         && ok "node $key: executive attached (real vms.ko)" \
         || bad "node $key: executive never attached"
     send_to "$fd" ''
@@ -243,7 +243,7 @@ boot_and_login() {
     qemu_boot "$key" "$tap" "$disk" "$log" "$fifo" \
               "$((BOOT_TIMEOUT + FORM_WAIT + 180))"
     eval "exec $fd>\"$fifo\""
-    wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}" \
+    wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}" \
         || dump_and_die "node $key: boot2 executive never attached"
     send_to "$fd" ''
     wait_for_in "$log" 'Username:' "$BOOT_TIMEOUT" 0 "${QPID_[$key]}" \

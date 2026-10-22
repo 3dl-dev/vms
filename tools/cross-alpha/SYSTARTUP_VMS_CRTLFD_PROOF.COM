@@ -64,5 +64,12 @@ $ CFD pexit 255
 $ WRITE SYS$OUTPUT "CRTLFD-EXIT: pexit 255 STATUS=''$STATUS'"
 $ CFD pexit 256
 $ WRITE SYS$OUTPUT "CRTLFD-EXIT: pexit 256 STATUS=''$STATUS'"
+$! vms-1c83: main RETURNS N. SYS$IMGSTA's $EXIT runs the C RTL's exit handler:
+$! the atexit function runs and the unflushed line is written; main's value goes
+$! through the GCC start-up's POSIX mapping (3 -> %X0035A019).
+$ CFD ret 0
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: ret 0 STATUS=''$STATUS'"
+$ CFD ret 3
+$ WRITE SYS$OUTPUT "CRTLFD-EXIT: ret 3 STATUS=''$STATUS'"
 $!
 $ EXIT

@@ -155,6 +155,20 @@ static uint32_t do_getjpi_self_pid(int fd)
     return a.info.vms_pid;
 }
 
+/* The POSIX exit code a condition echoes as (what DEC C wait() reports): a C
+ * RTL exit status %X0035A001 + (n << 3) (n = 1: %X1035A00A) gives n back;
+ * anything else 0 on success, 1 otherwise. Written out per case, not derived. */
+static unsigned want_exit_code(uint32_t cond)
+{
+    switch (cond) {
+    case 0x1035A00Au: return 1;
+    case 0x0035A011u: return 2;
+    case 0x0035A019u: return 3;
+    case 0x0035A7F9u: return 255;
+    default:          return STS_SUCCESS(cond) ? 0u : 1u;
+    }
+}
+
 /* One $EXIT/$STATUS self round-trip: record `cond`, read it back, and assert
  * the recorded longword and its decoded success/severity/exit_code. */
 static void check_status_roundtrip(int fd, uint32_t cond, const char *label)
@@ -178,8 +192,8 @@ static void check_status_roundtrip(int fd, uint32_t cond, const char *label)
              label, STS_SEVERITY(cond));
     CHECK(se.severity == STS_SEVERITY(cond), msg);
     snprintf(msg, sizeof msg, "%s: SETEXIT maps to POSIX exit_code %u",
-             label, STS_SUCCESS(cond) ? 0u : 1u);
-    CHECK(se.exit_code == (STS_SUCCESS(cond) ? 0u : 1u), msg);
+             label, want_exit_code(cond));
+    CHECK(se.exit_code == want_exit_code(cond), msg);
 
     if (do_getexit(fd, VMS_JPI_SEL_SELF, 0, &ge) != 0) {
         snprintf(msg, sizeof msg, "%s: GETEXIT(self) ioctl succeeded", label);
@@ -244,6 +258,11 @@ int main(void)
     printf("--- $EXIT / $STATUS (self) ---\n");
     check_status_roundtrip(fd, COND_OK,    "SS$_NORMAL");
     check_status_roundtrip(fd, COND_ABORT, "SS$_ABORT");
+    /* vms-5b3: C RTL exit statuses (DEC C __posix_exit / return from main) */
+    check_status_roundtrip(fd, 0x1035A00Au, "C$_EXIT n=1");
+    check_status_roundtrip(fd, 0x0035A011u, "C$_EXIT n=2");
+    check_status_roundtrip(fd, 0x0035A019u, "C$_EXIT n=3");
+    check_status_roundtrip(fd, 0x0035A7F9u, "C$_EXIT n=255");
     check_status_roundtrip(fd, COND_INFO,  "INFO-severity");
     /* Recording 0 must still read back has_exited==1 -- the flag, not a zero
      * condition, is what says "an image completed". */

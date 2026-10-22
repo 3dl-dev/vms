@@ -157,3 +157,44 @@ void ovmx_crtl_posix_exit(int status)
         cond = 0x0035A001u + (n << 3);
     crtl_exit_with(cond);
 }
+
+/* ------------------------------------------- the C RTL exit handler (vms-1c83) */
+
+/* On VMS the C RTL declares an exit handler ($DCLEXH) when it initializes; $EXIT
+ * runs it, so its atexit functions run and its streams are written out however the
+ * image ends: exit(), a $EXIT of its own, or main() returning (SYS$IMGSTA calls
+ * $EXIT with main's value). The handler is the C RTL's rundown (musl-arch exit.c,
+ * run at most once). The block is the one LIBVMS$SHR's $DCLEXH/$EXIT keep
+ * (src/vmsprocess/include/vms/pcb.h, struct pcb_exit_handler): forward link,
+ * handler, argument count, address of the status longword. */
+extern unsigned int sys$dclexh(void *desblk);               /* LIBVMS$SHR */
+extern void __ovmx_crtl_rundown(void);                      /* musl-arch exit.c */
+
+struct crtl_exh {
+    void *flink;
+    void (*handler)(unsigned int *);
+    unsigned int arg_count;
+    unsigned int *status_addr;
+};
+
+static struct crtl_exh crtl_exh_blk;
+static unsigned int crtl_exh_status;
+
+static void crtl_exit_handler(unsigned int *status)
+{
+    (void)status;
+    __ovmx_crtl_rundown();
+}
+
+/* Called once per image, from decc$main (crtl_rms_fd.c, ovmx_crtl_fd_main). */
+void ovmx_crtl_declare_exit_handler(void)
+{
+    if (crtl_exh_blk.handler)
+        return;
+    crtl_exh_blk.flink = 0;
+    crtl_exh_blk.handler = crtl_exit_handler;
+    crtl_exh_blk.arg_count = 1;
+    crtl_exh_blk.status_addr = &crtl_exh_status;
+    if (!(sys$dclexh(&crtl_exh_blk) & 1u))
+        crtl_exh_blk.handler = 0;     /* not declared (no process context): honest, exit() still runs down */
+}

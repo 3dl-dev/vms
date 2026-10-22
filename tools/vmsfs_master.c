@@ -1081,17 +1081,17 @@ static int read_host_file(const char *path, uint64_t size,
  * (extension), no dot; content bytes are verbatim in BOTH cases. */
 
 /* Construct a node's on-disk directory-entry name: "NAME.DIR" for a directory,
- * "NAME.TYPE" (or bare "NAME" when the type is empty) for a file -- exactly the
+ * "NAME.TYPE" for a file -- "NAME." when the type is empty: an ODS-2 directory
+ * record always spells the '.', and RMS looks a null-type file up as "NAME."
+ * (vms-5b3: libstdc++'s <cstdio>, <string> ... were unreachable) -- exactly the
  * spelling ods2_wvolume_create_dir/create_file_raw + dir_insert expect and the
  * reader resolves back (a "SYS0" path component is the entry "SYS0.DIR"). */
 static void ods2_entry_name(const struct node *n, char *out, size_t outsz)
 {
     if (n->is_dir)
         snprintf(out, outsz, "%s.DIR", n->name);
-    else if (n->type[0])
-        snprintf(out, outsz, "%s.%s", n->name, n->type);
     else
-        snprintf(out, outsz, "%s", n->name);
+        snprintf(out, outsz, "%s.%s", n->name, n->type);
 }
 
 /* Recursively create every child of `dir` (already created, FID `dir_fid`) on
@@ -1161,6 +1161,13 @@ static int emit_tree_ods2(ods2_wvolume_t *wvol, const struct node *dir,
     }
     return 0;
 }
+
+/* Structure level of the volume do_master_ods2 lays down: ODS-2 by default,
+ * ODS-5 with --ods5 (rd vms-7e7e) -- a level-5 home block and SCB, the reserved
+ * files ODS-2 headers, every mastered file and directory a level-5 header and
+ * ODS-5 directory records, as INITIALIZE/STRUCTURE=5 on the real Alpha leaves
+ * them (tests/lab/captures/ods5-alpha-20261022/RESULTS.md). */
+static uint16_t g_master_struclev = ODS2_STRUCLEV_V2;
 
 static int do_master_ods2(const char *image, const char *label,
                           const char *srcdir, long size_mb)
@@ -1239,12 +1246,14 @@ static int do_master_ods2(const char *image, const char *label,
     }
 
     ods2_format_params_t params;
+    memset(&params, 0, sizeof(params));
     params.total_blocks = total_blocks;
     params.maxfiles     = maxfiles;
     params.volname      = label;
 
     ods2_wvolume_t wvol;
-    ods2_status_t st = ods2_wvolume_format_bdev(fd, span, &params, &wvol);
+    ods2_status_t st = ods2_wvolume_format_bdev_ex(fd, span, &params, &wvol,
+                                                   g_master_struclev);  /* --ods5: vms-7e7e */
     if (st != ODS2_OK) {
         fprintf(stderr, "%%MASTER-F-FORMAT, ODS-2 format failed: %s\n",
                 ods2_strerror(st));
@@ -1274,8 +1283,8 @@ static int do_master_ods2(const char *image, const char *label,
     close(fd);
 
     if (rc == 0)
-        printf("%%MASTER-I-DONE, mastered %s (volume %.12s, ODS-2)\n",
-               image, label);
+        printf("%%MASTER-I-DONE, mastered %s (volume %.12s, %s)\n",
+               image, label, ODS2_IS_ODS5(g_master_struclev) ? "ODS-5" : "ODS-2");
     return rc;
 }
 
@@ -1382,8 +1391,9 @@ static int do_list_ods2(const char *image)
         return 1;
     }
 
-    printf("%%MASTER-I-VOLUME, %.12s (%u blocks, DECFILE11B)\n",
-           bv.home.hm2_volname, bv.nblocks);
+    printf("%%MASTER-I-VOLUME, %.12s (%u blocks, DECFILE11B, structure level %u)\n",
+           bv.home.hm2_volname, bv.nblocks,
+           (unsigned)ODS2_STRUCLEV_LEVEL(bv.home.hm2_struclev));
 
     const char *comps[ODS2_LIST_MAXDEPTH + 1];
     ods2_list_recurse(&bv, comps, 0, "[000000]", 0);
@@ -1396,12 +1406,14 @@ static void usage(void)
 {
     fprintf(stderr,
         "Usage:\n"
-        "  vmsfs_master [--ods2|--vmfs] master  <image> <volume-label> <source-dir> [size-in-MB]\n"
-        "  vmsfs_master [--ods2]        list    <image>\n"
+        "  vmsfs_master [--ods2|--ods5|--vmfs] master  <image> <volume-label> <source-dir> [size-in-MB]\n"
+        "  vmsfs_master [--ods2|--ods5]        list    <image>\n"
         "  vmsfs_master                 extract <image> <output-dir>   (VMFS only)\n"
         "\n"
         "  --ods2 masters/lists a genuine ODS-2 (Files-11 L2, DECFILE11B) volume\n"
-        "         (vms-5eb R6-build); default and OVMX_MASTER_ODS2=0 use VMFS.\n");
+        "         (vms-5eb R6-build); default and OVMX_MASTER_ODS2=0 use VMFS.\n"
+        "  --ods5 masters a genuine ODS-5 (Files-11 L5) volume, the equivalent of\n"
+        "         INITIALIZE/STRUCTURE=5 (vms-7e7e); list reads either level.\n");
 }
 
 int main(int argc, char *argv[])
@@ -1417,6 +1429,11 @@ int main(int argc, char *argv[])
 
     int argi = 1;
     if (argc > argi && strcmp(argv[argi], "--ods2") == 0) { use_ods2 = 1; argi++; }
+    else if (argc > argi && strcmp(argv[argi], "--ods5") == 0) {
+        use_ods2 = 1;
+        g_master_struclev = ODS2_STRUCLEV_V5;
+        argi++;
+    }
     else if (argc > argi && strcmp(argv[argi], "--vmfs") == 0) { use_ods2 = 0; argi++; }
 
     if (argc <= argi) { usage(); return 1; }

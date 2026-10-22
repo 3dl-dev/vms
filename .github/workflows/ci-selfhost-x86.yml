@@ -366,6 +366,12 @@ jobs:
         run: |
           bash tools/cross-alpha-vms/cxx/test_ovmx_ld.sh
 
+      # vms-5b3: the C++ headers go onto the ODS-2 volume under legal names, with
+      # the header.gcc pairs GCC's -remap reads; an unplaceable tree is refused.
+      - name: Prove the C++ header tree maps onto ODS-2 names with -remap pairs (vms-5b3)
+        run: |
+          bash tools/cross-alpha-vms/selfhost/test_ods2_header_tree.sh
+
       # vms-122: LINK.EXE resolves a same-TU weak override by the address a
       # section-relative reloc names, not by the section base -- the exported
       # decc$_mmap64/decc$munmap used to enter the strong __vm_wait (a no-op).

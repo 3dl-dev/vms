@@ -1,0 +1,33 @@
+# pscan-criteria-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$PROCESS_SCAN: \$GETJPI on a scan context returns only the processes its criteria select";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_process_scan";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "pscan_next() walks the executive's process rows and returns the next one pscan_select() accepts. The mutation drops the selection, so every visible process is returned: each criterion scan selects every process. \$PROCESS_SCAN's own refusal of an unanswerable item is unaffected. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+PRCNAM EQL "PSCANKID" selects exactly the subprocess, then SS$_NOMOREPROC
+PRCNAM "PSCAN*" with WILDCARD selects both, nothing else
+"pscankid" selects nothing without CASE_BLIND
+"pscankid" with CASE_BLIND selects the subprocess
+PRCNAM KID OR PRCNAM MOM selects both
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one pscan_select() call, in pscan_next().
+        sed -i 's#        if (!info->redacted \&\& pscan_select(info, x))#        if (!info->redacted \&\& (pscan_select(info, x) || 1)) /* NEGCTL pscan-criteria-ignored */#' "$_file"
+    :
+}

@@ -115,6 +115,12 @@ BOOT_DATE="${BOOT_DATE:-$(date '+%d-%b-%Y %H:%M' | tr a-z A-Z)}"
 # STARTNET fails with VMS's own license message (bring-your-own-license).
 # See PHASE 3 below.
 DECNET="${DECNET:-0}"
+# NOEXPIRE=1 (Baron 2026-10-21, rd vms-05d): the SYSTEM account's password
+# never expires. The 2026-09-23 personalization left it on the VMS default
+# lifetime, so every login warned "Your password expires on Friday,
+# 23-OCT-2026" and the demo would demand a new password after that. AUTHORIZE
+# MODIFY SYSTEM/PWDLIFETIME=NONE/NOPWDEXPIRED -- the password itself is unchanged.
+NOEXPIRE="${NOEXPIRE:-0}"
 # FROM_GZ: instead of personalizing BASE_DSK from scratch (PHASES 1-2), start
 # from an ALREADY-BUILT Node C volume -- the published vms73-nodeC-cluster.dsk.gz
 # -- and apply only PHASE 3 to it. Its cluster identity, cluster password and
@@ -132,7 +138,8 @@ fi
 
 mkdir -p "$WORKDIR/data"
 if [ -n "$FROM_GZ" ]; then
-    [ "$DECNET" = 1 ] || { echo "FATAL: FROM_GZ only makes sense with DECNET=1" >&2; exit 1; }
+    [ "$DECNET" = 1 ] || [ "$NOEXPIRE" = 1 ] \
+        || { echo "FATAL: FROM_GZ only makes sense with DECNET=1 and/or NOEXPIRE=1" >&2; exit 1; }
     [ -f "$FROM_GZ" ] || { echo "FATAL: FROM_GZ not found: $FROM_GZ" >&2; exit 1; }
     if [ -n "$FROM_SHA256" ]; then
         echo "$FROM_SHA256  $FROM_GZ" | sha256sum -c - >&2 \
@@ -339,6 +346,30 @@ send "$SYSTEM_PW" 4
 wait_for '\$ $' 30
 fi   # PHASES 1-2 (skipped with FROM_GZ)
 
+# --- NOEXPIRE (see top): SYSTEM's password never expires; prove it on a fresh login.
+if [ "$NOEXPIRE" = 1 ]; then
+mark
+send 'SET DEFAULT SYS$SYSTEM' 2
+send 'MCR AUTHORIZE MODIFY SYSTEM/PWDLIFETIME=NONE/NOPWDEXPIRED' 5
+wait_for '%UAF-I-MDFYMSG, user record\(s\) updated|%UAF-[EFW]-' 30
+since_mark | grep -aE '%UAF-I-MDFYMSG' >/dev/null || {
+    echo "FATAL (NOEXPIRE): AUTHORIZE did not modify SYSTEM:" >&2; since_mark >&2; exit 1; }
+send 'SET DEFAULT SYS$LOGIN' 2
+mark
+send 'LOGOUT' 4
+wait_for 'logged out' 30
+send "" 3
+wait_for 'Username: ?$' 60
+send "SYSTEM" 2
+wait_for 'Password: ?$' 15
+send "$SYSTEM_PW" 4
+wait_for '\$ $' 60
+if since_mark | grep -aE 'password expires|password has expired' >/dev/null; then
+    echo "FATAL (NOEXPIRE): login still warns about password expiry:" >&2; since_mark >&2; exit 1
+fi
+echo "OK (NOEXPIRE): SYSTEM logs in with no password-expiry warning." >&2
+fi
+
 # --- vms-902-pattern hard assertion: never silently ship a non-clustered
 #     volume. Unlike the V5.5 build's SIMH (no network support at all), this
 #     lab's SIMH binary DOES support real Ethernet (the vaxlab StatefulSet's
@@ -381,7 +412,8 @@ echo "OK (vms-2570 assertion): VAXC formed its own 1-node VAXcluster (real genes
 #     (%DECdtm-W-ADDRNEQ). SCSSYSTEMID 1989 = 1*1024 + 965, so VAXC is 1.965 --
 #     NETCONFIG offers exactly that as its default and we accept it.
 #   - Peers: the OVMX nodes of tools/cluster-web-demo/mk_democonfig.py's
-#     DEMO_ROSTER (OVMXA 1.1, OVMXB 1.2), defined with NCP DEFINE NODE.
+#     DEMO_ROSTER (OVMXA 1.963, OVMXB 1.964 -- each its SCSSYSTEMID, as VMS
+#     requires of cluster members), defined with NCP DEFINE NODE.
 #   - Startup: SYSTARTUP_VMS.COM's own "$!$ START/NETWORK DECNET" line is
 #     uncommented (VMS's documented choice when there are no batch queues), so
 #     STARTNET runs at boot on the console.
@@ -393,7 +425,7 @@ DN_NODE=$((SCSSYSTEMID % 1024))
 DN_ADDR="$DN_AREA.$DN_NODE"
 # Peers = the OVMX nodes of the demo roster (name address), kept in step with
 # tools/cluster-web-demo/mk_democonfig.py DEMO_NODE_A/DEMO_NODE_B "decnet".
-DN_PEERS="${DN_PEERS:-OVMXA:1.1 OVMXB:1.2}"
+DN_PEERS="${DN_PEERS:-OVMXA:1.963 OVMXB:1.964}"
 
 mark
 send 'MOUNT/OVERRIDE=IDENTIFICATION DUA2:' 3

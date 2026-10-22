@@ -1707,6 +1707,7 @@ int (*__ovmx_crtl_fab_query)(int fd, int dirfd, const char *path,
 /* decc$main is bound to this in the RMS-backed DECC$SHR (mk_decc_shr.sh): the
  * C RTL's per-image entry turns the RMS file layer on, then runs the C RTL's
  * own argument/environment setup. */
+extern void ovmx_crtl_declare_exit_handler(void);   /* crtl_process.c */
 extern void ovmx_decc_main_crtl(void *, void *, void *, void *, unsigned int,
                                 unsigned int, int *, int *, int *)
     __asm__("decc$main");
@@ -1717,6 +1718,7 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
 {
     TR("crtlfd: main enter", 0);
     ovmx_crtl_fd_install();
+    ovmx_crtl_declare_exit_handler();   /* vms-1c83: $EXIT runs the C RTL down */
     ovmx_decc_main_crtl(progxfer, cli_util, imghdr, image_file_desc, linkflag,
                         cliflag, argc, argv, envp);
     TR("crtlfd: decc$main returned", 0);

@@ -487,14 +487,18 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
      * == 86 chars max ([N] ods2_ident_t), plus a NUL. Names that fit in
      * 20 chars only ever use the first 21 bytes of this buffer -- see
      * the byte-identical-for-short-names note below. */
-    char idbuf[20 + 66 + 1];
+    char idbuf[ODS5_NAME_MAX + 8];
     size_t base_len, n;
     ods2_status_t st;
     uint8_t rtype, rattrib;
     uint16_t rsize, maxrec, ffbyte;
     uint32_t hiblk, efblk, total_count;
-    unsigned ei;
+    unsigned ei, mp_words = MP_OFF_WORDS;
     static const ods2_uic_t system_owner_uic = { 4, 1 }; /* [F11] SYSTEM [1,4] */
+    /* On an ODS-5 volume every file but the ten reserved ones gets a level-5
+     * header with the FI5 ident area; the reserved files keep ODS-2 headers,
+     * as INITIALIZE/STRUCTURE=5 leaves them (rd vms-7e7e, RESULTS.md R2/R3). */
+    int fi5 = ODS2_IS_ODS5(wvol->struclev) && fidnum > ODS2_RESFILES;
 
     if (fidnum < 1 || fidnum > wvol->maxfiles)
         return ODS2_ERR_ARGS;
@@ -513,15 +517,24 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
      * distro-tree names like "LIBVMSPROCESS$SHR.EXE;1" (23 chars) exceed
      * the old 20-char-only cap; the ident write below splits anything
      * over 20 chars across both fields. */
+    if (base_len > (fi5 ? ODS5_NAME_MAX : 20u + 66u))
+        return ODS2_ERR_ARGS;
     n = (size_t)snprintf(idbuf, sizeof(idbuf), "%s;%u", name, (unsigned)version);
-    if (n >= sizeof(idbuf))
+    if (n >= sizeof(idbuf) || (!fi5 && n > 20u + 66u))
         return ODS2_ERR_ARGS;
 
     h = wblk(wvol, lbn);
     memset(h, 0, ODS2_BLOCK_SIZE);
 
-    h[offsetof(ods2_fh2_t, fh2_idoffset)] = ID_OFF_WORDS;
-    h[offsetof(ods2_fh2_t, fh2_mpoffset)] = MP_OFF_WORDS;
+    if (fi5) {
+        mp_words = ods5_fi5_lay(h, idbuf, n);
+        if (mp_words == 0)
+            return ODS2_ERR_ARGS;
+        h[offsetof(ods2_fh2_t, fh2_idoffset)] = ODS5_ID_OFF_WORDS;
+    } else {
+        h[offsetof(ods2_fh2_t, fh2_idoffset)] = ID_OFF_WORDS;
+    }
+    h[offsetof(ods2_fh2_t, fh2_mpoffset)] = (uint8_t)mp_words;
     /* [F4] fh2_acoffset MUST be the sentinel 255 ("no ACL area"), NOT
      * mpoffset. An earlier draft set acoffset == mpoffset (a common "empty
      * area starts right after the previous one" convention) and a real
@@ -538,7 +551,7 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
     h[offsetof(ods2_fh2_t, fh2_acoffset)] = 255;
     h[offsetof(ods2_fh2_t, fh2_rsoffset)] = 255;
 
-    put16(h + offsetof(ods2_fh2_t, fh2_struclev), ODS2_STRUCLEV_V2);
+    put16(h + offsetof(ods2_fh2_t, fh2_struclev), fi5 ? ODS2_STRUCLEV_V5 : ODS2_STRUCLEV_V2);
 
     /* fh2_fid: num (16 low bits), seq, rvn, nmx (high 8 bits). [F2] see
      * ods2.h: reserved files use seq == their own fid_num; created files
@@ -746,7 +759,22 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
      * On-Disk Structure Specification documents for fi2_filename itself,
      * applied to its continuation field.
      */
-    {
+    if (fi5) {
+        /* FI5 (laid down above by ods5_fi5_lay): revision 1 and the mastering
+         * time as creation, revision, last-access and attribute dates -- a
+         * mastered file has been created and written once (RESULTS.md R4). */
+        uint8_t *id = h + (size_t)ODS5_ID_OFF_WORDS * 2;
+        uint64_t now = ods2_vms_time_from_unix_ns(ods2_wall_ns());
+        static const size_t dates[] = {
+            offsetof(ods5_ident_t, fi5_credate), offsetof(ods5_ident_t, fi5_revdate),
+            offsetof(ods5_ident_t, fi5_accdate), offsetof(ods5_ident_t, fi5_attdate) };
+        unsigned di;
+        put16(id + offsetof(ods5_ident_t, fi5_revision), 1);
+        for (di = 0; di < 4; di++) {
+            put32(id + dates[di], (uint32_t)now);
+            put32(id + dates[di] + 4, (uint32_t)(now >> 32));
+        }
+    } else {
         uint8_t *id = h + (size_t)ID_OFF_WORDS * 2;
         size_t first_len = (n < 20) ? n : 20;
         size_t ext_len = (n > 20) ? (n - 20) : 0;
@@ -782,11 +810,11 @@ static ods2_status_t write_fh2_header_ext(ods2_wvolume_t *wvol, uint32_t fidnum,
      * MP_OFF_WORDS*2 to the checksum at byte 510, so bound-check each
      * pointer against that ceiling (vms-5f0). */
     {
-        const size_t map_cap = ODS2_BLOCK_SIZE - (size_t)MP_OFF_WORDS * 2 - 2;
+        const size_t map_cap = ODS2_BLOCK_SIZE - (size_t)mp_words * 2 - 2;
         size_t mp_bytes = 0;
         for (ei = 0; ei < n_extents; ei++) {
             unsigned words = 0;
-            uint8_t *mp = h + (size_t)MP_OFF_WORDS * 2 + mp_bytes;
+            uint8_t *mp = h + (size_t)mp_words * 2 + mp_bytes;
             if (mp_bytes + 8 > map_cap)          /* worst-case pointer = 4 words */
                 return ODS2_ERR_ARGS;
             st = encode_map_extent(mp, extents[ei].lbn, extents[ei].count, &words);
@@ -920,7 +948,7 @@ static void write_home_block(ods2_wvolume_t *wvol, uint32_t self_lbn,
     put32(hb + offsetof(ods2_home_t, hm2_homelbn),   self_lbn);
     put32(hb + offsetof(ods2_home_t, hm2_alhomelbn), alt_lbn);
     put32(hb + offsetof(ods2_home_t, hm2_altidxlbn), altidx_lbn);
-    put16(hb + offsetof(ods2_home_t, hm2_struclev),  ODS2_STRUCLEV_V2);
+    put16(hb + offsetof(ods2_home_t, hm2_struclev),  wvol->struclev); /* 0x0201, or 0x0501 (vms-7e7e) */
     put16(hb + offsetof(ods2_home_t, hm2_cluster),   1);
 
     /* [F12] INDEXF.SYS's own map is now genuinely 3 extents (see
@@ -1246,7 +1274,7 @@ static ods2_status_t format_common(ods2_wvolume_t *wvol,
     {
         uint8_t *scb = wblk(wvol, bitmap_scb_lbn);
         memset(scb, 0, ODS2_BLOCK_SIZE);
-        put16(scb + offsetof(ods2_scb_t, scb_struclev), ODS2_STRUCLEV_V2);
+        put16(scb + offsetof(ods2_scb_t, scb_struclev), wvol->struclev);
         put16(scb + offsetof(ods2_scb_t, scb_cluster),  1);
         put32(scb + offsetof(ods2_scb_t, scb_volsize),  total_blocks);
         put32(scb + offsetof(ods2_scb_t, scb_blksize),  1); /* [OVMX-inferred] */
@@ -1368,6 +1396,14 @@ ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
                                  const ods2_format_params_t *params,
                                  ods2_wvolume_t *wvol)
 {
+    return ods2_volume_format_ex(image, image_len, params, wvol, ODS2_STRUCLEV_V2);
+}
+
+/* ods2_volume_format at a chosen structure level (rd vms-7e7e). */
+ods2_status_t ods2_volume_format_ex(uint8_t *image, size_t image_len,
+                                    const ods2_format_params_t *params,
+                                    ods2_wvolume_t *wvol, uint16_t struclev)
+{
     uint32_t total_blocks, maxfiles;
 
     if (!image || !params || !wvol || !params->volname)
@@ -1387,6 +1423,9 @@ ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
     wvol->image_len = image_len;
     wvol->nblocks   = total_blocks;
     wvol->maxfiles  = maxfiles;
+    wvol->struclev  = struclev;
+    if (!ODS2_STRUCLEV_OK(wvol->struclev))
+        return ODS2_ERR_ARGS;
 
     return format_common(wvol, params);
 }
@@ -1409,6 +1448,14 @@ ods2_status_t ods2_volume_format(uint8_t *image, size_t image_len,
 ods2_status_t ods2_wvolume_format_bdev(int fd, uint64_t span_bytes,
                                        const ods2_format_params_t *params,
                                        ods2_wvolume_t *wvol)
+{
+    return ods2_wvolume_format_bdev_ex(fd, span_bytes, params, wvol, ODS2_STRUCLEV_V2);
+}
+
+/* ods2_wvolume_format_bdev at a chosen structure level (rd vms-7e7e). */
+ods2_status_t ods2_wvolume_format_bdev_ex(int fd, uint64_t span_bytes,
+                                          const ods2_format_params_t *params,
+                                          ods2_wvolume_t *wvol, uint16_t struclev)
 {
     uint32_t total_blocks, maxfiles;
     ods2_status_t st;
@@ -1438,6 +1485,9 @@ ods2_status_t ods2_wvolume_format_bdev(int fd, uint64_t span_bytes,
     wvol->bdev_fd  = fd;
     wvol->nblocks  = total_blocks;
     wvol->maxfiles = maxfiles;
+    wvol->struclev = struclev;
+    if (!ODS2_STRUCLEV_OK(wvol->struclev))
+        return ODS2_ERR_ARGS;
 
     st = wcache_init(wvol);
     if (st != ODS2_OK)
@@ -1578,6 +1628,11 @@ ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
     wvol->bdev_fd  = fd;
     wvol->nblocks  = total_blocks;
     wvol->maxfiles = rd.home.hm2_maxfiles;
+    /* Keep writing at the volume's own level: an ODS-5 volume's new files get
+     * level-5 headers and its directories the ODS-5 order (rd vms-7e7e). */
+    wvol->struclev = rd.home.hm2_struclev;
+    if (scb.scb_struclev != wvol->struclev)
+        return ODS2_ERR_FORMAT;
     if (wvol->maxfiles < ODS2_RESFILES)
         return ODS2_ERR_FORMAT;
 
@@ -2122,7 +2177,7 @@ static ods2_status_t merge_dir_record(const uint8_t *src, unsigned src_len,
     memset(out, 0xFF, new_len);
     put16(out + 0, (uint16_t)(new_len - 2));      /* dir_size */
     memcpy(out + 2, src + 2, 4);                  /* verlimit + flags + namecount, unchanged */
-    memcpy(out + 6, src + 6, namecount);           /* name bytes, unchanged */
+    memcpy(out + 6, src + 6, val_off - 6u);        /* name bytes + pad byte, as stored */
     for (i = 0; i < new_idx; i++)
         memcpy(out + val_off + i * 8u, src + val_off + i * 8u, 8u);
     put16(out + val_off + new_idx * 8u + 0, version);
@@ -2152,6 +2207,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     int have_insert = 0, found_name = 0;
     unsigned nblk, cur;
     size_t foff;
+    int ods5 = wvol && ODS2_IS_ODS5(wvol->struclev);
     /*
      * rd vms-4a8: hdr[512] + hdr_parsed(512) + newrec[512] + lbns[256]*4(1024)
      * = ~2.6KB of on-stack scratch pushed this frame to 3288 bytes, over the
@@ -2245,9 +2301,13 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     put16(s->newrec + 2,
           (entry_fid.fid_num <= ODS2_RESFILES) ? version
                                                 : ODS2_DIR_VERLIMIT_DEFAULT);
-    s->newrec[4] = 0;                                               /* dir_flags */
+    /* dir_flags: on ODS-5 the name type in bits 3..5 (rd vms-7e7e, R5/R6). */
+    s->newrec[4] = ods5
+                 ? (uint8_t)(ods5_name_type(name, namecount) << ODS5_DIRFLAG_NT_SHIFT) : 0;
     s->newrec[5] = (uint8_t)namecount;                             /* dir_namecount */
     memcpy(s->newrec + 6, name, namecount);
+    if (ods5 && (namecount & 1u))
+        s->newrec[6 + namecount] = 0;   /* real volumes pad with 0 (R5; ODS-2: rd vms-46cd) */
     put16(s->newrec + new_valoff + 0, version);
     put16(s->newrec + new_valoff + 2, entry_fid.fid_num);
     put16(s->newrec + new_valoff + 4, entry_fid.fid_seq);
@@ -2286,7 +2346,11 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
                 goto done;
             }
             if (!found_name && !have_insert) {
-                int cmp = dir_name_cmp(name, namecount,
+                /* ODS-5: case-blind code-point order and match (R7/R8). */
+                int cmp = ods5
+                        ? ods5_name_cmp(name, namecount, ODS5_NAMETYPE_ISL1,
+                                        blk + off + 6, nc, ODS5_DIR_NAMETYPE(blk[off + 4]))
+                        : dir_name_cmp(name, namecount,
                                        (const char *)blk + off + 6, nc);
                 if (cmp == 0) {
                     /* [vms-9794] NAME already exists: merge the new
@@ -2393,8 +2457,10 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     if (nblk > blocks_before) {
         uint32_t hlbn = wvol->hdr_base_lbn + (ods2_fid_number(&dir_fid) - 1);
         uint8_t *h = wblk(wvol, hlbn);
-        uint8_t *mp_base = h + (size_t)MP_OFF_WORDS * 2;
-        size_t map_cap = ODS2_BLOCK_SIZE - (size_t)MP_OFF_WORDS * 2 - 2;
+        /* the header's own map offset: a level-5 header's follows its name */
+        size_t mp_off = (size_t)h[offsetof(ods2_fh2_t, fh2_mpoffset)] * 2;
+        uint8_t *mp_base = h + mp_off;
+        size_t map_cap = ODS2_BLOCK_SIZE - mp_off - 2;
         unsigned nx = 0;
         uint32_t hiblk = nblk, efblk = nblk + 1;
 
@@ -2714,8 +2780,9 @@ static ods2_status_t wvol_dir_remove(ods2_wvolume_t *wvol, ods2_fid_t dir_fid,
         memcpy(inbuf + (size_t)i * ODS2_BLOCK_SIZE, wblk(wvol, lbns[i]),
                ODS2_BLOCK_SIZE);
 
-    st = ods2_dir_remove_blocks(inbuf, nlbn, name, namecount, version,
-                                flat, flatcap, outbuf, nlbn, &out_nblk, removed);
+    st = ods2_dir_remove_blocks_ex(inbuf, nlbn, name, namecount, version,
+                                   flat, flatcap, outbuf, nlbn, &out_nblk, removed,
+                                   ODS2_IS_ODS5(wvol->struclev) ? ODS2_DIRF_ODS5 : 0u);
     if (st != ODS2_OK)
         goto done;
 

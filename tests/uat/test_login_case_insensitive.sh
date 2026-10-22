@@ -139,7 +139,7 @@ PASS=0
 FAIL=0
 ERRORS=""
 
-wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT" \
+wait_for ' - OpenVMS-compatible' "$BOOT_TIMEOUT" \
     || fail_with_console "ERROR: the executive never attached — the system did not come up"
 send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
 wait_for 'Username:' "$BOOT_TIMEOUT" || fail_with_console "ERROR: no login prompt"

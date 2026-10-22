@@ -23,6 +23,7 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -78,7 +79,7 @@ struct rms_textfile {
     int        connected;
 };
 
-rms_textfile_t *rms_textfile_open(const char *vms_spec)
+static rms_textfile_t *rmstf_open_unl(const char *vms_spec)
 {
     if (!vms_spec || !*vms_spec)
         return NULL;
@@ -128,7 +129,7 @@ rms_textfile_t *rms_textfile_open(const char *vms_spec)
     return tf;
 }
 
-int rms_textfile_getline(rms_textfile_t *tf, char *buf, size_t bufsz, int *too_long)
+static int rmstf_getline_unl(rms_textfile_t *tf, char *buf, size_t bufsz, int *too_long)
 {
     if (too_long)
         *too_long = 0;
@@ -150,7 +151,7 @@ int rms_textfile_getline(rms_textfile_t *tf, char *buf, size_t bufsz, int *too_l
     return 1;
 }
 
-void rms_textfile_close(rms_textfile_t *tf)
+static void rmstf_close_unl(rms_textfile_t *tf)
 {
     if (!tf)
         return;
@@ -185,7 +186,7 @@ static int rmstf_put(struct FAB *fab, const char *line, uint32_t rop)
     return (st == RMS$_NORMAL) ? 0 : -1;
 }
 
-int rms_textfile_append_line(const char *vms_spec, const char *line)
+static int rmstf_append_line_unl(const char *vms_spec, const char *line)
 {
     if (!vms_spec || !*vms_spec || !line)
         return -1;
@@ -214,7 +215,7 @@ int rms_textfile_append_line(const char *vms_spec, const char *line)
     return rc;
 }
 
-int rms_textfile_write_line(const char *vms_spec, const char *line)
+static int rmstf_write_line_unl(const char *vms_spec, const char *line)
 {
     if (!vms_spec || !*vms_spec || !line)
         return -1;
@@ -236,6 +237,85 @@ int rms_textfile_write_line(const char *vms_spec, const char *line)
 
     int rc = rmstf_put(&fab, line, 0);
     sys$close(&fab, 0, 0);
+    return rc;
+}
+
+static int rmstf_create_unl(const char *vms_spec)
+{
+    if (!vms_spec || !*vms_spec)
+        return -1;
+    if (!rms_services_present() || !sys$create)
+        return -1;   /* no LIBVMSRMS -> fail honest, no POSIX write */
+
+    char spec[512];
+    rmstf_resolve(vms_spec, spec, sizeof(spec));
+
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_STMLF;
+    fab.fab$b_fac = FAB$M_PUT;
+
+    if (sys$create(&fab, 0, 0) != RMS$_NORMAL)
+        return -1;
+    sys$close(&fab, 0, 0);
+    return 0;
+}
+
+/* ONE RMS CALLER AT A TIME (rd vms-158d / vms-c89). An image can reach this
+ * layer from two threads: NETACP's SYS$OUTPUT reader (sysoutput_rms.c) files
+ * its lines here while the image's main thread files an operator request
+ * ($SNDOPR -> OPERATOR.LOG). The RMS record services keep per-process state,
+ * and two interleaved $OPEN/$PUT/$CLOSE sequences lost a record (NETACP.LOG
+ * without its DATALINK line, measured in CI). Every entry point below holds
+ * this lock for its whole RMS sequence. */
+static pthread_mutex_t rmstf_lock = PTHREAD_MUTEX_INITIALIZER;
+
+rms_textfile_t *rms_textfile_open(const char *vms_spec)
+{
+    pthread_mutex_lock(&rmstf_lock);
+    rms_textfile_t *tf = rmstf_open_unl(vms_spec);
+    pthread_mutex_unlock(&rmstf_lock);
+    return tf;
+}
+
+int rms_textfile_getline(rms_textfile_t *tf, char *buf, size_t bufsz, int *too_long)
+{
+    pthread_mutex_lock(&rmstf_lock);
+    int rc = rmstf_getline_unl(tf, buf, bufsz, too_long);
+    pthread_mutex_unlock(&rmstf_lock);
+    return rc;
+}
+
+void rms_textfile_close(rms_textfile_t *tf)
+{
+    pthread_mutex_lock(&rmstf_lock);
+    rmstf_close_unl(tf);
+    pthread_mutex_unlock(&rmstf_lock);
+}
+
+int rms_textfile_append_line(const char *vms_spec, const char *line)
+{
+    pthread_mutex_lock(&rmstf_lock);
+    int rc = rmstf_append_line_unl(vms_spec, line);
+    pthread_mutex_unlock(&rmstf_lock);
+    return rc;
+}
+
+int rms_textfile_write_line(const char *vms_spec, const char *line)
+{
+    pthread_mutex_lock(&rmstf_lock);
+    int rc = rmstf_write_line_unl(vms_spec, line);
+    pthread_mutex_unlock(&rmstf_lock);
+    return rc;
+}
+
+int rms_textfile_create(const char *vms_spec)
+{
+    pthread_mutex_lock(&rmstf_lock);
+    int rc = rmstf_create_unl(vms_spec);
+    pthread_mutex_unlock(&rmstf_lock);
     return rc;
 }
 
@@ -314,6 +394,19 @@ int rms_textfile_append_line(const char *vms_spec, const char *line)
 int rms_textfile_write_line(const char *vms_spec, const char *line)
 {
     return rmstf_posix_put(vms_spec, line, "w");
+}
+
+int rms_textfile_create(const char *vms_spec)
+{
+    if (!vms_spec || !*vms_spec)
+        return -1;
+    char linux_path[1024];
+    vmsfs_to_linux_path(vms_spec, linux_path, sizeof(linux_path));
+    FILE *f = fopen(linux_path, "w");
+    if (!f)
+        return -1;
+    fclose(f);
+    return 0;
 }
 
 #endif /* OVMX_HAVE_ACP */

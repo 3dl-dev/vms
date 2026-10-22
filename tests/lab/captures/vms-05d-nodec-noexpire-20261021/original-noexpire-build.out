@@ -1,0 +1,37 @@
+/lab/cluster-demo-nodeC-v73/vms73-nodeC-cluster.dsk.gz: OK
+OK (NOEXPIRE): SYSTEM logs in with no password-expiry warning.
+== console evidence (identity + genesis) ==
+20:12:19.86 Node VAXC (csid 00010001) completed VAXcluster state transition
+Message from user JOB_CONTROL on VAXC
+Message from user JOB_CONTROL on VAXC
+Message from user SYSTEM on VAXC
+Message from user SYSTEM on VAXC
+Message from user SYSTEM on VAXC
+Message from user SYSTEM on VAXC
+Message from user SYSTEM on VAXC
+Message from user SYSTEM on VAXC
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+Message from user SYSTEM on VAXC
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAXC.LM$JOURNAL)
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+%LOGIN-I-NOVAXCLUSTER, DEC VMSCLUSTER license is not active
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Image name:               VAXC$DUA0:[SYS0.SYSCOMMON.][SYSEXE]AUTHORIZE.EXE
+%LOGIN-I-NOVAXCLUSTER, DEC VMSCLUSTER license is not active
+11VAXC1
+Address   Node    CSID      Votes   State     Status
+83A42740  VAXC    00010001    1     local   member,qf_same,qf_noaccess
+Nodes                           1    Last coordinator CSID    00010001
+Index of next CSID           0002    Figure of Merit          00000101
+CSP Queue                   empty    Curr. coord. CSID        00010001
+                                              Watcher CSID    00000000
+         --- VAXC Cluster System Block (CSB) 83A42740 ---
+CSID            00010001    Last ack. seq num   0000    Block xfer Q.      empty
+OK (vms-2570 assertion): VAXC formed its own 1-node VAXcluster (real genesis), group 257, SCSSYSTEMID 1989.
+Wrote /lab/k8s-labs/vms05d-lab/buildA/vms73-nodeC-cluster.dsk.gz
+gzip integrity OK
+2fc51785040e34e17961511cb0abfd836774a438c8535ecaf21d9b83c45d1980  /lab/k8s-labs/vms05d-lab/buildA/vms73-nodeC-cluster.dsk.gz

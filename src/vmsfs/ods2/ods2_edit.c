@@ -413,8 +413,50 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
                              ods2_fid_t backlink, ods2_uic_t owner,
                              uint16_t fileprot, uint32_t maxfiles)
 {
+    return ods2_fh2_build_ex(header_block, fidnum, seq, name, version, filechar,
+                             kind, extents, n_extents, data_len, backlink, owner,
+                             fileprot, maxfiles, ODS2_STRUCLEV_V2);
+}
+
+/*
+ * The FI5 ident area of a new level-5 header (rd vms-7e7e), laid down as the
+ * real Alpha V8.4 volume lays it (tests/lab/captures/ods5-alpha-20261022/
+ * RESULTS.md R3/R4): ident at word 40, name type + name length, revision 0,
+ * no dates (the caller's ods2_fh2_set_dates), no extended record attributes,
+ * length hints "none" (all ones, as on every file the real system had not
+ * written), then "name.type;version" case preserved, NUL padded to 44 bytes or
+ * run on for a longer name, with the map area straight after. Returns the map
+ * offset in words, or 0 if the name does not fit.
+ */
+unsigned ods5_fi5_lay(void *header_block, const char *idbuf, size_t n)
+{
     uint8_t *h = (uint8_t *)header_block;
-    char idbuf[20 + 66 + 1];
+    uint8_t *id = h + (size_t)ODS5_ID_OFF_WORDS * 2u;
+    size_t namearea = n < 44u ? 44u : ((n + 1u) & ~(size_t)1u);
+    size_t area = ODS5_IDENT_FIXED + namearea;
+
+    if (n > 255u || (size_t)ODS5_ID_OFF_WORDS * 2u + area + 8u > ODS2_BLOCK_SIZE - 2u)
+        return 0;
+    memset(id, 0, area);
+    id[offsetof(ods5_ident_t, fi5_control)] = (uint8_t)ods5_name_type(idbuf,
+                                         (unsigned)(strchr(idbuf, ';') - idbuf));
+    id[offsetof(ods5_ident_t, fi5_namelen)] = (uint8_t)n;
+    memset(id + offsetof(ods5_ident_t, fi5_hint_recs), 0xFF, 16);
+    memcpy(id + ODS5_IDENT_FIXED, idbuf, n);
+    return ODS5_ID_OFF_WORDS + (unsigned)(area / 2u);
+}
+
+ods2_status_t ods2_fh2_build_ex(void *header_block, uint32_t fidnum, uint16_t seq,
+                                const char *name, uint16_t version, uint32_t filechar,
+                                unsigned kind, const ods2_extent_t *extents,
+                                unsigned n_extents, size_t data_len,
+                                ods2_fid_t backlink, ods2_uic_t owner,
+                                uint16_t fileprot, uint32_t maxfiles,
+                                uint16_t struclev)
+{
+    uint8_t *h = (uint8_t *)header_block;
+    int ods5 = ODS2_IS_ODS5(struclev);
+    char idbuf[ODS5_NAME_MAX + 8];
     size_t base_len, n;
     ods2_status_t st;
     uint8_t rtype, rattrib;
@@ -438,18 +480,30 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
     base_len = strlen(name);
     if (base_len == 0)
         return ODS2_ERR_ARGS;
+    if (struclev != ODS2_STRUCLEV_V2 && struclev != ODS2_STRUCLEV_V5)
+        return ODS2_ERR_ARGS;
+    if (base_len > (ods5 ? ODS5_NAME_MAX : 20u + 66u))
+        return ODS2_ERR_ARGS;
     n = (size_t)snprintf(idbuf, sizeof(idbuf), "%s;%u", name, (unsigned)version);
-    if (n >= sizeof(idbuf))
+    if (n >= sizeof(idbuf) || (!ods5 && n > 20u + 66u))
         return ODS2_ERR_ARGS;
 
     memset(h, 0, ODS2_BLOCK_SIZE);
 
-    h[offsetof(ods2_fh2_t, fh2_idoffset)] = ED_ID_OFF_WORDS;
-    h[offsetof(ods2_fh2_t, fh2_mpoffset)] = ED_MP_OFF_WORDS;
+    if (ods5) {
+        unsigned mp = ods5_fi5_lay(h, idbuf, n);
+        if (mp == 0)
+            return ODS2_ERR_ARGS;
+        h[offsetof(ods2_fh2_t, fh2_idoffset)] = ODS5_ID_OFF_WORDS;
+        h[offsetof(ods2_fh2_t, fh2_mpoffset)] = (uint8_t)mp;
+    } else {
+        h[offsetof(ods2_fh2_t, fh2_idoffset)] = ED_ID_OFF_WORDS;
+        h[offsetof(ods2_fh2_t, fh2_mpoffset)] = ED_MP_OFF_WORDS;
+    }
     h[offsetof(ods2_fh2_t, fh2_acoffset)] = 255;    /* [F4] no-ACL sentinel */
     h[offsetof(ods2_fh2_t, fh2_rsoffset)] = 255;
 
-    ed_put16(h + offsetof(ods2_fh2_t, fh2_struclev), ODS2_STRUCLEV_V2);
+    ed_put16(h + offsetof(ods2_fh2_t, fh2_struclev), struclev);
 
     ed_put16(h + offsetof(ods2_fh2_t, fh2_fid) + 0, (uint16_t)(fidnum & 0xFFFF));
     ed_put16(h + offsetof(ods2_fh2_t, fh2_fid) + 2, seq);
@@ -541,8 +595,9 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
     ed_put16(h + offsetof(ods2_fh2_t, fh2_fileprot), eff_prot);
     ed_put32(h + offsetof(ods2_fh2_t, fh2_highwater), hiblk + 1u);
 
-    /* ident area: "NAME.TYPE;VERSION", space-padded (write_fh2_header_ext). */
-    {
+    /* ident area: "NAME.TYPE;VERSION", space-padded (write_fh2_header_ext).
+     * A level-5 header's FI5 area was laid down above (ods5_fi5_lay). */
+    if (!ods5) {
         uint8_t *id = h + (size_t)ED_ID_OFF_WORDS * 2;
         size_t first_len = (n < 20) ? n : 20;
         size_t ext_len = (n > 20) ? (n - 20) : 0;
@@ -576,6 +631,38 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
 }
 
 /*
+ * Rename a level-5 header in place (rd vms-7e7e): new name type, length and
+ * name in its FI5 area, every date and hint kept. The area's size follows the
+ * name (RESULTS.md R4), so the map words move with fh2_mpoffset; ODS2_ERR_NOSPACE
+ * if they would run into the ACL. Same name area rule as ods5_fi5_lay.
+ */
+static ods2_status_t ed_fi5_rename(uint8_t *h, const char *idbuf, size_t n)
+{
+    unsigned idoff = h[offsetof(ods2_fh2_t, fh2_idoffset)];
+    unsigned mp = h[offsetof(ods2_fh2_t, fh2_mpoffset)];
+    unsigned inuse = h[offsetof(ods2_fh2_t, fh2_map_inuse)];
+    size_t namearea = n < 44u ? 44u : ((n + 1u) & ~(size_t)1u);
+    size_t new_mp = (size_t)idoff * 2u + ODS5_IDENT_FIXED + namearea;
+    size_t mapbytes = (size_t)inuse * 2u;
+    uint8_t map[ODS2_BLOCK_SIZE];
+    uint8_t *id = h + (size_t)idoff * 2u;
+
+    if (n > 255u || idoff == 0 || mp < idoff ||
+        (size_t)mp * 2u + mapbytes > ods2_fh2_map_end(h) ||
+        new_mp + mapbytes > ods2_fh2_map_end(h) || new_mp / 2u > 254u)
+        return n > 255u ? ODS2_ERR_ARGS : ODS2_ERR_NOSPACE;
+    memcpy(map, h + (size_t)mp * 2u, mapbytes);
+    memset(id + ODS5_IDENT_FIXED, 0, (size_t)mp * 2u + mapbytes - ((size_t)idoff * 2u + ODS5_IDENT_FIXED));
+    id[offsetof(ods5_ident_t, fi5_control)] = (uint8_t)ods5_name_type(idbuf,
+                                         (unsigned)(strchr(idbuf, ';') - idbuf));
+    id[offsetof(ods5_ident_t, fi5_namelen)] = (uint8_t)n;
+    memcpy(id + ODS5_IDENT_FIXED, idbuf, n);
+    memcpy(h + new_mp, map, mapbytes);
+    h[offsetof(ods2_fh2_t, fh2_mpoffset)] = (uint8_t)(new_mp / 2u);
+    return ODS2_OK;
+}
+
+/*
  * ods2_fh2_rename - rewrite an EXISTING file header's identification area (file
  * name + version), and -- when `new_backlink` is non-NULL -- its directory
  * back-link FID, for an IO$_MODIFY!IO$M_MOVE (rename/move) of the file
@@ -601,7 +688,7 @@ ods2_status_t ods2_fh2_rename(void *header_block, const char *name,
     uint8_t *h = (uint8_t *)header_block;
     unsigned idoff_words;
     uint8_t *id;
-    char idbuf[20 + 66 + 1];
+    char idbuf[ODS5_NAME_MAX + 8];
     size_t n, first_len, ext_len;
 
     if (!h || !name || name[0] == '\0')
@@ -609,6 +696,15 @@ ods2_status_t ods2_fh2_rename(void *header_block, const char *name,
 
     n = (size_t)snprintf(idbuf, sizeof(idbuf), "%s;%u", name, (unsigned)version);
     if (n >= sizeof(idbuf))
+        return ODS2_ERR_ARGS;
+
+    if (ODS2_IS_ODS5(ed_rd16(h + offsetof(ods2_fh2_t, fh2_struclev)))) {
+        ods2_status_t st = ed_fi5_rename(h, idbuf, n);
+        if (st != ODS2_OK)
+            return st;
+        goto backlink;
+    }
+    if (n > 20u + 66u)
         return ODS2_ERR_ARGS;
 
     idoff_words = h[offsetof(ods2_fh2_t, fh2_idoffset)];
@@ -631,6 +727,7 @@ ods2_status_t ods2_fh2_rename(void *header_block, const char *name,
             memcpy(ext, idbuf + 20, ext_len);
     }
 
+backlink:
     /* fh2_backlink: the parent-directory FID ([F2]). Rewritten only on a MOVE
      * across directories; a same-directory rename passes NULL and keeps it. */
     if (new_backlink) {
@@ -701,7 +798,7 @@ static ods2_status_t ed_merge_dir_record(const uint8_t *src, unsigned src_len,
     memset(out, 0xFF, new_len);
     ed_put16(out + 0, (uint16_t)(new_len - 2));
     memcpy(out + 2, src + 2, 4);                 /* verlimit + flags + namecount */
-    memcpy(out + 6, src + 6, namecount);
+    memcpy(out + 6, src + 6, val_off - 6u);      /* name + its pad byte, as stored */
     for (i = 0; i < new_idx; i++)
         memcpy(out + val_off + i * 8u, src + val_off + i * 8u, 8u);
     ed_put16(out + val_off + new_idx * 8u + 0, version);
@@ -751,6 +848,18 @@ static ods2_status_t ed_dir_pack(const uint8_t *flat, size_t flat_used,
     return ODS2_OK;
 }
 
+/* Directory order of a NEW 8-bit name against a stored record (rd vms-7e7e):
+ * byte order on ODS-2 ([F13]); on ODS-5 the case-blind code-point order of
+ * RESULTS.md R7, with the stored record's own name type. */
+static int ed_dir_cmp_mode(unsigned dflags, const char *name, unsigned namecount,
+                           const uint8_t *rec, unsigned nc)
+{
+    if (dflags & ODS2_DIRF_ODS5)
+        return ods5_name_cmp(name, namecount, ODS5_NAMETYPE_ISL1,
+                             rec + 6, nc, ODS5_DIR_NAMETYPE(rec[4]));
+    return ed_dir_name_cmp(name, namecount, (const char *)rec + 6, nc);
+}
+
 ods2_status_t ods2_dir_insert_blocks(const uint8_t *in_blocks, unsigned in_nblk,
                                      const char *name, unsigned namecount,
                                      uint16_t version, ods2_fid_t entry_fid,
@@ -758,6 +867,19 @@ ods2_status_t ods2_dir_insert_blocks(const uint8_t *in_blocks, unsigned in_nblk,
                                      uint8_t *flat, size_t flat_cap,
                                      uint8_t *out_blocks, unsigned out_nblk_cap,
                                      unsigned *out_nblk)
+{
+    return ods2_dir_insert_blocks_ex(in_blocks, in_nblk, name, namecount, version,
+                                     entry_fid, is_resfile, flat, flat_cap,
+                                     out_blocks, out_nblk_cap, out_nblk, 0);
+}
+
+ods2_status_t ods2_dir_insert_blocks_ex(const uint8_t *in_blocks, unsigned in_nblk,
+                                        const char *name, unsigned namecount,
+                                        uint16_t version, ods2_fid_t entry_fid,
+                                        int is_resfile,
+                                        uint8_t *flat, size_t flat_cap,
+                                        uint8_t *out_blocks, unsigned out_nblk_cap,
+                                        unsigned *out_nblk, unsigned dflags)
 {
     uint8_t newrec[ODS2_BLOCK_SIZE];
     unsigned new_valoff, newrec_len, b;
@@ -782,9 +904,17 @@ ods2_status_t ods2_dir_insert_blocks(const uint8_t *in_blocks, unsigned in_nblk,
     memset(newrec, 0xFF, sizeof(newrec));
     ed_put16(newrec + 0, (uint16_t)(newrec_len - 2));
     ed_put16(newrec + 2, is_resfile ? version : ODS2_DIR_VERLIMIT_DEFAULT);
-    newrec[4] = 0;                               /* dir_flags */
+    /* dir_flags: type FID (0); on ODS-5 the name type in bits 3..5 (R5/R6). */
+    newrec[4] = (dflags & ODS2_DIRF_ODS5)
+              ? (uint8_t)(ods5_name_type(name, namecount) << ODS5_DIRFLAG_NT_SHIFT) : 0;
     newrec[5] = (uint8_t)namecount;
     memcpy(newrec + 6, name, namecount);
+    /* The pad byte after an odd-length name is 0 on the real volumes (Alpha
+     * ODS-5 [TEST]/[S], and the VAX ODS-2 fixture's [OVMXDIR] too). ODS-5 mode
+     * writes 0; ODS-2 mode keeps its historical 0xFF (rd vms-46cd tracks
+     * aligning it). */
+    if ((dflags & ODS2_DIRF_ODS5) && (namecount & 1u))
+        newrec[6 + namecount] = 0;
     ed_put16(newrec + new_valoff + 0, version);
     ed_put16(newrec + new_valoff + 2, entry_fid.fid_num);
     ed_put16(newrec + new_valoff + 4, entry_fid.fid_seq);
@@ -810,8 +940,7 @@ ods2_status_t ods2_dir_insert_blocks(const uint8_t *in_blocks, unsigned in_nblk,
             if (6u + nc > reclen)
                 return ODS2_ERR_FORMAT;
             if (!found_name && !have_insert) {
-                int cmp = ed_dir_name_cmp(name, namecount,
-                                          (const char *)blk + off + 6, nc);
+                int cmp = ed_dir_cmp_mode(dflags, name, namecount, blk + off, nc);
                 if (cmp == 0) {
                     unsigned merged_len;
                     st = ed_merge_dir_record(blk + off, reclen, nc, version,
@@ -851,6 +980,19 @@ ods2_status_t ods2_dir_remove_blocks(const uint8_t *in_blocks, unsigned in_nblk,
                                      uint8_t *out_blocks, unsigned out_nblk_cap,
                                      unsigned *out_nblk, int *removed)
 {
+    return ods2_dir_remove_blocks_ex(in_blocks, in_nblk, name, namecount, version,
+                                     flat, flat_cap, out_blocks, out_nblk_cap,
+                                     out_nblk, removed, 0);
+}
+
+ods2_status_t ods2_dir_remove_blocks_ex(const uint8_t *in_blocks, unsigned in_nblk,
+                                        const char *name, unsigned namecount,
+                                        uint16_t version,
+                                        uint8_t *flat, size_t flat_cap,
+                                        uint8_t *out_blocks, unsigned out_nblk_cap,
+                                        unsigned *out_nblk, int *removed,
+                                        unsigned dflags)
+{
     unsigned b;
     size_t flat_used = 0, need;
 
@@ -882,7 +1024,7 @@ ods2_status_t ods2_dir_remove_blocks(const uint8_t *in_blocks, unsigned in_nblk,
             if (6u + nc > reclen)
                 return ODS2_ERR_FORMAT;
 
-            if (!ed_dir_name_cmp(name, namecount, (const char *)blk + off + 6, nc)) {
+            if (!ed_dir_cmp_mode(dflags, name, namecount, blk + off, nc)) {
                 /* Matching name: drop the requested version(s). */
                 val_off = 6u + nc;
                 if (val_off & 1) val_off++;
@@ -954,51 +1096,94 @@ static uint8_t *ed_ident(uint8_t *h)
     return h + (size_t)idoff_words * 2u;
 }
 
+/* Byte offsets of the revision count and dates inside a header's ident area,
+ * for its layout: FI2 (level 2) or FI5 (level 5, RESULTS.md R4). */
+struct ed_idoffs { unsigned rev, cre, revd, acc, att; int ods5; };
+
+static uint8_t *ed_ident_offs(uint8_t *h, struct ed_idoffs *o)
+{
+    uint8_t *id = ed_ident(h);
+
+    if (!id)
+        return NULL;
+    if (ODS2_IS_ODS5(ed_rd16(h + offsetof(ods2_fh2_t, fh2_struclev)))) {
+        o->ods5 = 1;
+        o->rev  = offsetof(ods5_ident_t, fi5_revision);
+        o->cre  = offsetof(ods5_ident_t, fi5_credate);
+        o->revd = offsetof(ods5_ident_t, fi5_revdate);
+        o->acc  = offsetof(ods5_ident_t, fi5_accdate);
+        o->att  = offsetof(ods5_ident_t, fi5_attdate);
+    } else {
+        o->ods5 = 0;
+        o->rev  = offsetof(ods2_ident_t, fi2_revision);
+        o->cre  = offsetof(ods2_ident_t, fi2_credate);
+        o->revd = offsetof(ods2_ident_t, fi2_revdate);
+        o->acc  = o->att = 0;
+    }
+    return id;
+}
+
+static void ed_put64(uint8_t *p, uint64_t v)
+{
+    ed_put32(p, (uint32_t)v);
+    ed_put32(p + 4, (uint32_t)(v >> 32));
+}
+
 /*
  * ods2_fh2_set_dates - store a header's creation and revision dates (VMS 64-bit
  * absolute times, 100 ns since 17-NOV-1858) in the ident area. Expiration and
  * backup dates are not touched: a volume without retention leaves the
  * expiration date zero ("<None specified>") and only BACKUP records a backup
- * date, as on the real VAX volume (tests/ods2/real_vax_ods2.dsk). Reseal after.
+ * date, as on the real VAX volume (tests/ods2/real_vax_ods2.dsk). A level-5
+ * header also has a last-access and a last-attribute-change date; a new file
+ * on the real Alpha volume carries the creation time in the first and a time
+ * no earlier than it in the second (RESULTS.md R4), so they take the creation
+ * and revision dates. Reseal after.
  */
 ods2_status_t ods2_fh2_set_dates(void *header_block, uint64_t credate,
                                  uint64_t revdate)
 {
+    struct ed_idoffs o;
     uint8_t *id;
 
     if (!header_block)
         return ODS2_ERR_ARGS;
-    id = ed_ident((uint8_t *)header_block);
+    id = ed_ident_offs((uint8_t *)header_block, &o);
     if (!id)
         return ODS2_ERR_FORMAT;
-    ed_put32(id + offsetof(ods2_ident_t, fi2_credate), (uint32_t)credate);
-    ed_put32(id + offsetof(ods2_ident_t, fi2_credate) + 4, (uint32_t)(credate >> 32));
-    ed_put32(id + offsetof(ods2_ident_t, fi2_revdate), (uint32_t)revdate);
-    ed_put32(id + offsetof(ods2_ident_t, fi2_revdate) + 4, (uint32_t)(revdate >> 32));
+    ed_put64(id + o.cre, credate);
+    ed_put64(id + o.revd, revdate);
+    if (o.ods5) {
+        ed_put64(id + o.acc, credate);
+        ed_put64(id + o.att, revdate);
+    }
     return ODS2_OK;
 }
 
 /*
  * ods2_fh2_touch_revision - record one modification of the file: the revision
- * count goes up by one and the revision date becomes `now`. The file system
- * does this when a file accessed for write is deaccessed. Reseal after.
+ * count goes up by one and the revision date becomes `now` (on a level-5
+ * header the attribute-change date too: closing a written file changes its
+ * attributes). The file system does this when a file accessed for write is
+ * deaccessed. Reseal after.
  */
 ods2_status_t ods2_fh2_touch_revision(void *header_block, uint64_t now)
 {
+    struct ed_idoffs o;
     uint8_t *id;
     uint16_t rev;
 
     if (!header_block)
         return ODS2_ERR_ARGS;
-    id = ed_ident((uint8_t *)header_block);
+    id = ed_ident_offs((uint8_t *)header_block, &o);
     if (!id)
         return ODS2_ERR_FORMAT;
-    rev = (uint16_t)(id[offsetof(ods2_ident_t, fi2_revision)] |
-                     (id[offsetof(ods2_ident_t, fi2_revision) + 1] << 8));
+    rev = ed_rd16(id + o.rev);
     if (rev != 0xFFFFu)
         rev++;
-    ed_put16(id + offsetof(ods2_ident_t, fi2_revision), rev);
-    ed_put32(id + offsetof(ods2_ident_t, fi2_revdate), (uint32_t)now);
-    ed_put32(id + offsetof(ods2_ident_t, fi2_revdate) + 4, (uint32_t)(now >> 32));
+    ed_put16(id + o.rev, rev);
+    ed_put64(id + o.revd, now);
+    if (o.ods5)
+        ed_put64(id + o.att, now);
     return ODS2_OK;
 }

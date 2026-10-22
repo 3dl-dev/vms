@@ -38,7 +38,6 @@ extern "C" {
  * ================================================================ */
 
 #define BRK$M_CLUSTER       0x800  /* Send to all nodes in cluster */
-#define BRK$M_NOQUEUE       0x00000002  /* Do not queue if terminal is busy */
 
 #ifdef __cplusplus
 }

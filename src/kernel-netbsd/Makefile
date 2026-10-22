@@ -101,7 +101,8 @@ SRCS=		vms_netbsd.c \
 		ods2_reader.c \
 		ods2_edit.c \
 		vms_blockdev_netbsd.c \
-		vms_socket_netbsd.c
+		vms_socket_netbsd.c \
+		vms_l2.c
 
 # FC-P0.1 (the executive-resident VMScluster stack): ../kernel-core/vms_pe.c is
 # the LAN port layer, and it is in SRCS from its FIRST commit -- not "Linux
@@ -193,5 +194,13 @@ CPPFLAGS+=	-DOVMX_ODS2_KERNEL -I${.CURDIR}/../vmsfs/include
 # ownership-shaped is substrate-local: the table itself and $ALLOC/$DALLOC/
 # $ASSIGN/$DASSGN/$GETDVI/$DEVICE_SCAN have exactly ONE implementation.
 CPPFLAGS+=	-DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE
+# rd vms-9394: ../kernel-core/vms_l2.c (the executive L2 datalink -- the PHY_IO-
+# gated VMS_IOCTL_L2_* a non-root NETACP opens its DECnet datalink with) is in
+# SRCS above, over vms_socket_netbsd.c's real exec_l2_* binding. Its ABI header
+# (src/kernel/vms_l2.h + vms_l2_station.h) has ONE definition for every
+# substrate and userspace, reached through vms_l2_nb.h. -idirafter, not -I: it
+# is searched after this dir and kernel-core, so the NetBSD twin vms_internal.h
+# and every *_nb.h still win and only those two names come from src/kernel.
+CPPFLAGS+=	-idirafter ${.CURDIR}/../kernel
 
 .include <bsd.kmodule.mk>

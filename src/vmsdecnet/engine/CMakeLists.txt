@@ -41,7 +41,12 @@ target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 # with sys$open/ovmx_sysuaf_read_user NULL. The anchor takes their address so the
 # static linker pulls rms_core.o + sysuaf_live.o (the same weak-seam trap
 # provision_rms_bind.c / loginout_rms_bind.c / tests/qemu/rms_acp_bind.c close).
-add_executable(decnetd_exe decnetd.c decnetd_rms_bind.c)
+# sysoutput_rms.c (rd vms-c89): NETACP is created DETACHED with
+# /OUTPUT=/ERROR=SYS$MANAGER:NETACP.LOG; this image-start routine $CREATEs that
+# file through RMS and files each line DECNETD writes there (vmsrms below is in
+# the link closure, decnetd_rms_bind.c binds it; Threads for its reader).
+add_executable(decnetd_exe decnetd.c decnetd_rms_bind.c
+               ${CMAKE_SOURCE_DIR}/src/libvms/rtl/sysoutput_rms.c)
 target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libdatalink/include       # scs_datalink.h

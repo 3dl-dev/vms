@@ -14,8 +14,10 @@
 # compiler + the 32-bit libstdc++ in cxx/p32); <joint> the shareables the
 # programs link against (DECC$SHR, LIBOTS_SHR, LIBVMS*$SHR, STARLET.a). The
 # host GCC is built at the DEC C default pointer size (32-bit), as DEC C and
-# the port's host configuration assume. Output: /w/host-gcc/{cc1,xgcc,cpp}.exe;
-# progress and any failure go to stdout.
+# the port's host configuration assume. Output: /w/host-gcc/{cc1,cc1plus,xgcc,
+# gxx,cpp,ld,ar}.exe (gxx.exe is the g++ driver, xg++: ODS-2 has no '+');
+# progress and any failure go to stdout. C++ is built too (vms-5b3): GCC 14 is
+# written in C++, so building cc1 on OVMX needs cc1plus there.
 set -euo pipefail
 T=alpha-dec-vms; B=x86_64-pc-linux-gnu
 X=/out/cxx
@@ -67,16 +69,44 @@ echo "== gcc (build=$B host=$T target=$T, all-gcc)"
 mkdir -p $O/b-gcc && cd $O/b-gcc
 export ax_cv_cxx_compile_cxx11_FOR_BUILD=yes CONFIG_SITE=/src/tools/cross-alpha-vms/cxx/config.site
 [ -f Makefile ] || ../src/gcc-14.2.0/configure --build=$B --host=$T --target=$T --prefix=/gnu \
-    --enable-languages=c --disable-nls --disable-bootstrap --disable-shared --disable-lto \
+    --enable-languages=c,c++ --disable-nls --disable-bootstrap --disable-shared --disable-lto \
     --disable-plugin --disable-fixincludes \
     --with-gmp=$H --with-mpfr=$H --with-mpc=$H --without-isl --without-zstd --with-gnu-as \
     CC="$T-gcc" CXX="$T-g++ $P32" AR=ar RANLIB=true CFLAGS="-O2" CXXFLAGS="-O2" \
     > cfg.log 2>&1 || { tail -30 cfg.log; exit 1; }
 # configure-host serially: the sub-configures share config.cache
 make -j1 configure-host > configure-host.log 2>&1 || { tail -30 configure-host.log; exit 1; }
+# The C++ front end's module mapper (cp/module.cc) keeps a file's inode as one
+# scalar ino_t. The DEC C RTL's default struct stat carries the three-word File
+# ID instead (and libcpp needs that layout: st_fab_rfm); _USE_STD_STAT is the
+# DEC C RTL's X/Open layout, so module.cc alone is compiled with it -- as a VMS
+# build of GCC 14 would have to. GCC's sources are unchanged.
+grep -q '^CFLAGS-cp/module.o += -D_USE_STD_STAT' gcc/Makefile \
+    || echo 'CFLAGS-cp/module.o += -D_USE_STD_STAT' >> gcc/Makefile
 make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.log | sort -t: -k3 -u | head -40; exit 1; }
 # ld.exe is the port's own linker wrapper (config/vms/vms-ld.c): it writes an options
-# file and runs the VMS `link` command, the program the driver calls to link (vms-65a)
-for e in cc1 xgcc cpp ld; do cp gcc/$e.exe $O/$e.exe; done
-ls -la $O/*.exe
+# file and runs the VMS `link` command, the program the driver calls to link (vms-65a);
+# ar.exe (config/vms/vms-ar.c) is its twin for `ar`: a command file running `library` (vms-8ca)
+for e in cc1 cc1plus xgcc cpp ld ar; do cp gcc/$e.exe $O/$e.exe; done
+cp gcc/xg++.exe $O/gxx.exe
+# vms-9a0: what compiling a cc1 source file needs, as one tree (GCCSRC/): GCC's
+# (every front end's .def too: the generated all-tree.def includes them all)
+# source headers and the sources compiled natively (SRC/), the headers this
+# build generated (BLD/: auto-host.h, config.h, tm.h, options.h, insn-*.h ...),
+# and GMP/MPFR/MPC's (HOST/include). The gate stages it on the OVMX system disk
+# and gives the cross g++ the same tree at the same path.
+G=$O/gccsrc; rm -rf $G; mkdir -p $G/SRC $G/BLD $G/HOST
+S=$O/src/gcc-14.2.0
+( cd $S && find gcc include libcpp/include libdecnumber libbacktrace libcody \
+      \( -path gcc/testsuite -o -path gcc/jit -o -path gcc/doc -o -path gcc/po \) -prune \
+      -o -type f \( -name '*.h' -o -name '*.def' -o -name '*.hh' \) -print ) > $O/gccsrc.list
+( cd $S && tar cf - -T $O/gccsrc.list ) | ( cd $G/SRC && tar xf - )
+mkdir -p $G/SRC/gcc/c && cp $S/gcc/c/c-lang.cc $G/SRC/gcc/c/
+( cd $O/b-gcc/gcc && find . -maxdepth 1 -type f \( -name '*.h' -o -name '*.def' \) -print | tar cf - -T - ) \
+    | ( mkdir -p $G/BLD/gcc && cd $G/BLD/gcc && tar xf - )
+mkdir -p $G/BLD/libdecnumber && cp $O/b-gcc/libdecnumber/*.h $G/BLD/libdecnumber/
+cp -r $H/include $G/HOST/include
+( cd $O && tar cf gccsrc.tar gccsrc ) && rm -rf $G
+echo "   gccsrc.tar: $(tar tf $O/gccsrc.tar | grep -vc '/$') files"
+ls -la $O/*.exe $O/gccsrc.tar
 echo "HOST-GCC: OK"

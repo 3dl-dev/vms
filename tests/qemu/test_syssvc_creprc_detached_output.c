@@ -22,8 +22,15 @@
  *     The marker must be IN that file -- the positive control that proves
  *     the subjects really write, so the two "absent" checks above mean
  *     something.
+ *   - VMSRMS (rd vms-c89): output/error = a VMS file on the mounted ODS-2
+ *     volume, as STARTNET's /OUTPUT=/ERROR=SYS$MANAGER:NETACP.LOG. VMS gives
+ *     the process that file as SYS$OUTPUT/SYS$ERROR; its image's run-time
+ *     library $CREATEs it and every line becomes a record. Both markers must
+ *     be records of that file, read back through RMS (a different reader
+ *     from the writer), and neither may reach the creator's terminal.
  *
  * negctl: creprc-detached-output-on-creator-terminal
+ * negctl: creprc-detached-output-vms-file-not-written
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +49,7 @@
 #include "prcdef.h"
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "rms_textfile.h"
 #include "ovmx_test_fork.h"
 
 #define EXIT_SKIP   77
@@ -50,6 +58,8 @@
 #define HOSTOUT     DIR_ "/hostpath.out"
 #define HOSTERR     DIR_ "/hostpath.err"
 #define MARK        "MARK5843"
+#define ODS2_UNIT   "VDA0:"
+#define RMSSPEC     "VDA0:[OVMXDIR]C89DETOUT.LOG"
 
 /* The host-path case names two files: two independent O_TRUNC opens of ONE
  * path would each write from offset 0 and the stderr line would overwrite
@@ -58,6 +68,7 @@ static const struct { const char *role, *out, *err; } CASES[] = {
     { "VMSFILE",  "SYS$MANAGER:C5843$NOSUCH.LOG", "SYS$MANAGER:C5843$NOSUCH.LOG" },
     { "NULLDEV",  "NL:", "NL:" },
     { "HOSTPATH", HOSTOUT, HOSTERR },
+    { "VMSRMS",   RMSSPEC, RMSSPEC },
 };
 #define NCASES (int)(sizeof(CASES) / sizeof(CASES[0]))
 
@@ -110,6 +121,20 @@ static int file_has(const char *path, const char *needle)
     if (n <= 0) return 0;
     buf[n] = '\0';
     return strstr(buf, needle) != NULL;
+}
+
+/* Does the VMS file (its highest version), read through RMS, hold a record
+ * containing `needle`? */
+static int rms_file_has(const char *spec, const char *needle)
+{
+    rms_textfile_t *tf = rms_textfile_open(spec);
+    if (!tf) return 0;
+    char rec[1024];
+    int found = 0, too_long = 0;
+    while (!found && rms_textfile_getline(tf, rec, sizeof(rec), &too_long))
+        if (strstr(rec, needle)) found = 1;
+    rms_textfile_close(tf);
+    return found;
 }
 
 static int ran(const char *role)
@@ -189,6 +214,8 @@ int main(int argc, char **argv)
     unlink(HOSTOUT);
     unlink(HOSTERR);
     CHECK(staged, "staged one subject image per case (this binary, in subject mode)");
+    CHECK(vms_kif_acp_mount(ODS2_UNIT) & 1,
+          "VDA0: mounted executive-global for the ACP (the VMSRMS subject's volume)");
 
     int pfd[2];
     if (pipe(pfd) < 0) { printf("  FAIL: pipe\n"); return 1; }
@@ -229,6 +256,24 @@ int main(int argc, char **argv)
           "the positive-control subject's output did not leak onto the creator's terminal either");
     CHECK(access(CASES[0].out, F_OK) != 0,
           "the VMS file spec was not created as a host file of that literal name in the working directory");
+
+    /* rd vms-c89: the VMSRMS subject's lines are records of its SYS$OUTPUT
+     * file. Its image files them from a reader as it exits, so allow it a
+     * bounded time to land. */
+    int got_out = 0, got_err = 0;
+    for (int waited = 0; waited < 10000 && !(got_out && got_err); waited += 250) {
+        got_out = rms_file_has(RMSSPEC, MARK " VMSRMS stdout");
+        got_err = rms_file_has(RMSSPEC, MARK " VMSRMS stderr");
+        if (!(got_out && got_err)) poll(NULL, 0, 250);
+    }
+    /* negctl: creprc-detached-output-vms-file-not-written */
+    CHECK(got_out,
+          "a detached process whose /OUTPUT names a VMS file writes its SYS$OUTPUT lines as records of that file (read back through RMS)");
+    CHECK(got_err,
+          "... and its SYS$ERROR naming the same file lands in the same file");
+    CHECK(!file_has(TERMFILE, MARK " VMSRMS"),
+          "the VMSRMS subject wrote nothing on its creator's terminal");
+    (void)vms_kif_acp_dmount(ODS2_UNIT);   /* clean slate for co-resident suites */
 
     printf("=== test_syssvc_creprc_detached_output: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;

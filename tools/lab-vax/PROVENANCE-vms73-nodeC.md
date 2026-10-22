@@ -83,8 +83,10 @@ configured but unlicensed**, so a visitor brings their own DVNETEND license. Thi
    "Error opening permanent proxy database").
 3. `@SYS$MANAGER:NETCONFIG`: node name VAXC, address **1.965**, nonrouting endnode, no default
    DECnet or object accounts (MAIL, FAL, PHONE, NML, MIRROR, VPM all declined).
-4. `NCP DEFINE NODE 1.1 NAME OVMXA` and `DEFINE NODE 1.2 NAME OVMXB` (the OVMX nodes of
-   `tools/cluster-web-demo/mk_democonfig.py`'s `DEMO_ROSTER`).
+4. `NCP DEFINE NODE 1.963 NAME OVMXA` and `DEFINE NODE 1.964 NAME OVMXB` (the OVMX nodes of
+   `tools/cluster-web-demo/mk_democonfig.py`'s `DEMO_ROSTER`). Each address is that node's
+   SCSSYSTEMID (1987, 1988), for the same reason VAXC is 1.965. The first published build
+   (`c78d3c58…`) still had 1.1 and 1.2.
 5. Uncomments SYSTARTUP_VMS.COM's own `$!$ START/NETWORK DECNET` line, so STARTNET runs at every
    boot on the console.
 6. **Registers no PAK.** It reboots and asserts that the boot console shows the cluster genesis and
@@ -129,10 +131,31 @@ VAXC is a VMScluster member. Real VMS LOGINOUT therefore allows a license-free l
 console (OPA0). An inbound network login needs the VAX-VMS and VAXCLUSTER licenses as well as the
 DECnet license.
 
-### Not changed, noted
+## Re-image 2026-10-21: SYSTEM password never expires (both Node C disks)
 
-At login the SYSTEM account prints `WARNING - Your password expires on Friday, 23-OCT-2026
-18:44`. Both Node C disks carry this, since it was set by the 2026-09-23 personalization. The
-password itself was not touched here.
+Baron's ruling, 2026-10-21. The 2026-09-23 personalization left SYSTEM on the default password
+lifetime, so every login printed `WARNING - Your password expires on Friday, 23-OCT-2026 18:44`.
+After that date the demo would have demanded a new password. Both disks are re-imaged with real
+AUTHORIZE, and the password itself is unchanged:
 
-Capture: `tests/lab/captures/vms-05d-nodec-decnet-20261021/`.
+    $ SET DEFAULT SYS$SYSTEM
+    $ MCR AUTHORIZE MODIFY SYSTEM/PWDLIFETIME=NONE/NOPWDEXPIRED
+    %UAF-I-MDFYMSG, user record(s) updated
+
+This is `build_nodeC_vms73_cluster.sh NOEXPIRE=1`. It asserts a fresh login with no expiry
+warning before it packages.
+
+| disk | built from | sha256 (.gz) | raw sha256 |
+|---|---|---|---|
+| `vms73-nodeC-cluster.dsk.gz` | `NOEXPIRE=1 FROM_GZ=` the 2026-09-23 disk (`45355fd2…4fe15`) | `2fc51785040e34e17961511cb0abfd836774a438c8535ecaf21d9b83c45d1980` | `59880a1ee14037f3301fe7592c08d8154fc53983296e6ef36f03de753608a7bc` |
+| `vms73-nodeC-decnet-cluster.dsk.gz` | `DECNET=1 FROM_GZ=` the new original above | `974af57e43fa13026cafdb0bff081b548d279a7ba6e1fb23b450438a3f536376` | `4113c11b108329ba55d19930c56e8db135c85b1fa07ad21f4433535a64191d3f` |
+
+I verified each image by booting a fresh copy and logging in as SYSTEM. There was no expiry
+warning, and `AUTHORIZE SHOW SYSTEM` reports `Pwdlifetime: (none)` and empty `Flags:`. Cluster
+identity, group 257, the cluster password and the RA92 geometry are unchanged, and the re-image
+made no other change. The boot itself still updates VMS's own run-time files (logs, last-login
+time), as any boot of the volume does. Published by baron-3dl/pcjs#11. Lab copies are in
+`/lab/cluster-demo-nodeC-v73-r2/` and `/lab/cluster-demo-nodeC-v73-decnet-r2/`.
+
+Captures: `tests/lab/captures/vms-05d-nodec-decnet-20261021/` (DECnet, BYOL) and
+`tests/lab/captures/vms-05d-nodec-noexpire-20261021/` (the re-image).

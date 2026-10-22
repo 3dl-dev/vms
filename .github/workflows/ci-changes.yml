@@ -81,6 +81,9 @@ on:
       keystroke:
         description: 'keystroke (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.keystroke }}
+      decnet:
+        description: 'decnet (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.decnet }}
       negctl_select:
         description: 'negctl_select (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.negctl_select }}
@@ -124,6 +127,7 @@ jobs:
       heavy_release: ${{ steps.tiers.outputs.heavy_release }}
       alpha_selfhost_tier: ${{ steps.tiers.outputs.alpha_selfhost_tier }}
       keystroke: ${{ steps.tiers.outputs.keystroke }}
+      decnet: ${{ steps.tiers.outputs.decnet }}
       negctl_select: ${{ steps.tiers.outputs.negctl_select }}
     steps:
       - name: Checkout

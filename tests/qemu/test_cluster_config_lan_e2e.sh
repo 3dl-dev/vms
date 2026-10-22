@@ -104,6 +104,26 @@ fi
 
 PASS=0
 FAIL=0
+# sysgen_count: the number of parameters a SYSGEN / SYSBOOT> session said it
+# LOADED, read out of its own transcript. THE COUNT IS NEVER A LITERAL HERE:
+# "31 parameters written" was the shipped set's size, not a property, so one
+# added parameter (OVMX_RM_RESIDUE_FILL, rd vms-6ad1) reddened four gates in a
+# change that altered nothing about SYSGEN. What this gate MEANS to assert is
+# that WRITE persists exactly the set that was LOADED. Returns 1 with no output
+# when the log carries no count, so the caller fails loudly.
+sysgen_count() {
+    local log="${1:?log}" n
+    # -a IS LOAD-BEARING (measured in merge-group run 39698326725): a QEMU
+    # console log carries NUL bytes, so GNU grep calls it BINARY and -o prints
+    # NOTHING even though the line is there. Every other reader in this file
+    # uses -q, where binary detection still exits 0 on a match, which is why
+    # only the reader that needs the TEXT was bitten -- it returned empty, and
+    # four checks compared against an empty string.
+    n=$(grep -aoE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' "$log" 2>/dev/null \
+        | tail -1 | grep -aoE '[0-9]+' | tail -1)
+    [ -n "$n" ] || return 1
+    printf '%s\n' "$n"
+}
 record() {
     local desc="$1" rc="$2"
     if [ "$rc" -eq 0 ]; then echo "  PASS: $desc"; PASS=$((PASS + 1))
@@ -236,9 +256,11 @@ if [ "$rc" -eq 0 ]; then
         "$POS_LOG1" "%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to $NEWNODE"
     check "boot 1: SYSGEN SET SCSSYSTEMID changed 0 -> $NEWSID" \
         "$POS_LOG1" "%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to $NEWSID"
-    if waitfor '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG1"; then
+    if NPAR=$(sysgen_count "$POS_LOG1"); then rc=0; else rc=1; fi
+    record "boot 1: the procedure's SYSGEN deck reported how many parameters USE CURRENT loaded" "$rc"
+    if [ "$rc" -eq 0 ] && waitfor "%SYSGEN-I-WRITTEN, $NPAR parameters written to SYS\$SYSTEM:OVMXVMSSYS.PAR;2" 20 "$POS_LOG1"; then
         rc=0; else rc=1; fi
-    record "boot 1: WRITE CURRENT minted OVMXVMSSYS.PAR;2 (real vmsfs version on the volume)" "$rc"
+    record "boot 1: WRITE CURRENT persisted all $NPAR loaded parameters, minting OVMXVMSSYS.PAR;2 (real vmsfs version on the volume)" "$rc"
     check "boot 1: procedure reports 'CHANGE complete ... takes effect on the next reboot'" \
         "$POS_LOG1" "CHANGE complete. The new cluster identity is written to"
 
@@ -268,8 +290,9 @@ record "boot 2 (reboot): still reaches the login prompt" "$rc"
 
 # ADOPTION PROOF #1: the boot console ITSELF announces the authored node name,
 # before any DCL runs -- PID 1 read the authored OVMXVMSSYS.PAR and applied it.
-check "boot 2: %OVMX-I-SCSNODE console line names the authored $NEWNODE" \
-    "$POS_LOG2" "%OVMX-I-SCSNODE, node name $NEWNODE set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+# rd vms-158d: that record is OPERATOR.LOG's now (no VMS boot console prints
+# it); the console must not carry it, and the log is read back after login.
+check "boot 2: the console carries no OVMX node-name line" "$POS_LOG2" "%OVMX-I-SCSNODE" absent
 check "boot 2: NO honest-halt warning (a good, present .PAR does not warn)" \
     "$POS_LOG2" "%OVMX-W-NOPARAMS" absent
 
@@ -287,6 +310,12 @@ if [ "$rc" -eq 0 ]; then
     send 'SHOW SYMBOL HOST2'; sleep 1
     check "boot 2: F\$GETSYI(NODENAME) reads $NEWNODE (the REAL live hostname, set by sethostname())" \
         "$POS_LOG2" "HOST2 = \"$NEWNODE\""
+
+    # rd vms-158d: PID 1's node-name record is an OPERATOR.LOG record (a real
+    # VMS boot console prints no such line) -- read it back the VMS way.
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 3
+    check "boot 2: OPERATOR.LOG records the node name $NEWNODE set from the .PAR" \
+        "$POS_LOG2" "%OVMX-I-SCSNODE, node name $NEWNODE set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 
     # AGREEMENT: F$GETSYI("SCSNODE") (reads the persisted .PAR) agrees with the
     # adopted live hostname -- the file and the running system tell one story.

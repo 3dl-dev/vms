@@ -1691,6 +1691,10 @@ uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcna
 /** sys$canwak - Cancel scheduled wakeups of the target (pidadr NULL = self) */
 uint32_t sys$canwak(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam);
 
+/** sys$process_scan - Build a process-selection context for $GETJPI
+ *  (item codes and flags: pscandef.h) */
+uint32_t sys$process_scan(uint32_t *pidctx, void *itmlst);
+
 /** sys$alloc - Allocate a device (phylen/phybuf receive the physical name) */
 uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
                    struct dsc$descriptor_s *phybuf, uint32_t acmode,

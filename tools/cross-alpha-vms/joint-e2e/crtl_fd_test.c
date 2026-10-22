@@ -15,6 +15,8 @@
  * the File ID and st_fab_rfm/rat/mrs the file's RMS record attributes -- what
  * GCC's libcpp (STAT_SIZE_RELIABLE) and incpath (INO_T_EQ) read under VMS.
  *
+ * Run as a foreign command with "ret N" (vms-1c83), main returns N after an
+ * atexit() registration and an unflushed line.
  * Run as a foreign command with "exit N" or "pexit N" (vms-599), it instead ends
  * through DEC C exit(N) or __posix_exit(N), after printing a line it does not
  * flush; the SYSTARTUP prints the $STATUS DCL got, which the gate compares with
@@ -58,10 +60,25 @@ static void line_text(int i, char *buf, size_t n)
     snprintf(buf, n, "line %03d of the OVMX C RTL file layer over RMS\n", i);
 }
 
+static const char *ret_arg;
+static void ret_atexit(void)
+{
+    printf("CFDX: ret %s atexit-ran", ret_arg);
+}
+
 int main(int argc, char **argv)
 {
     char want[128], got[256];
     long total = 0;
+    if (argc >= 3 && strcmp(argv[1], "ret") == 0) {
+        /* vms-1c83: main RETURNS. Its atexit function and its unflushed line
+         * appear only if $EXIT runs the C RTL's exit handler. */
+        ret_arg = argv[2];
+        atexit(ret_atexit);
+        setvbuf(stdout, NULL, _IOFBF, BUFSIZ);
+        printf("CFDX: ret %s flushed-by-exit", argv[2]);
+        return (int)strtol(argv[2], NULL, 0);
+    }
     if (argc >= 3 && (strcmp(argv[1], "exit") == 0 || strcmp(argv[1], "pexit") == 0)) {
         int n = (int)strtol(argv[2], NULL, 0);
         /* fully buffered and no newline: only exit()'s stdio flush prints it */

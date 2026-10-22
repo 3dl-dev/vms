@@ -378,12 +378,16 @@ def selftest(root):
     # buffer. The echo is what a reused receive buffer looks like, not a
     # protocol invariant. OVMX's builder echoes, which is the commonest real
     # form (3,527 of 3,975); what a RECIPIENT may read is only the cells above.
+    # 2026-10-22: rd vms-5cd's fix fire added THREE more answered steps (the
+    # 0e/0f/10 hand-over OVMX answered, 3,570 of 4,018) and all three echo
+    # exactly, so the ratio moved by +3/+3 and the 445-of-448 stray split did
+    # not move at all.
     stray = [(q, a) for q, a in acked
              if any(q[i] != a[i] for i in range(4, BODY_LEN)
                     if i not in (8, 9, 34) and not 28 <= i < 32)]
     exact_ratio('82/15 answers that differ from the request ONLY in body[8], '
                 '[9], [28:32] and [34]',
-                len(acked) - len(stray), len(acked), 3567, 4015)
+                len(acked) - len(stray), len(acked), 3570, 4018)
     exact_ratio('...of those, the ones answering an op-0x14 (the other 3 answer '
                 'an op-0x10)',
                 sum(1 for q, _a in stray if q[9] == 0x14), len(stray), 445, 448)

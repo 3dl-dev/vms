@@ -1680,6 +1680,28 @@ ods2_status_t ods2_security_parse(const void *block, size_t block_len,
                                   char *label_out, size_t label_out_size,
                                   ods2_uic_t *owner_out);
 
+/*
+ * Re-key a SECURITY.SYS VBN1 profile block to `label` (rd vms-3ea). Only the
+ * block ods2_security_build() would make for the block's own label and owner
+ * is rewritten (the zero-ACL profile INITIALIZE writes); any other content is
+ * ODS2_ERR_FORMAT with the buffer untouched. Implemented in ods2_writer.c.
+ */
+ods2_status_t ods2_security_set_label(uint8_t block[ODS2_BLOCK_SIZE],
+                                      const char *label);
+
+/*
+ * Relabel a volume OFFLINE -- the on-disk effect of SET VOLUME/LABEL (rd
+ * vms-3ea): the primary and alternate home blocks and the SECURITY.SYS VBN1
+ * profile all get `label` (1..12 of A-Z 0-9 $ _ -, see ods2_label_valid).
+ * Every block is read, parsed and edited in memory before any is written;
+ * nothing is written if any of them does not parse or names a different
+ * current label. `old_out` (13 bytes, may be NULL) receives the old label.
+ * `bv` must have been opened read-write (ods2_bdev_open on an O_RDWR fd).
+ * Implemented in ods2_writer.c.
+ */
+ods2_status_t ods2_bdev_relabel(ods2_bdev_t *bv, const char *label,
+                                char old_out[13]);
+
 /* ================================================================
  * PURE EDIT surface (implemented in ods2/ods2_edit.c) -- the write-side twins
  * of the reader's pure parse operations, for the Files-11 ODS-2 ACP's
@@ -1848,6 +1870,16 @@ ods2_status_t ods2_fh2_set_dates(void *header_block, uint64_t credate,
 /* One modification: revision count + 1, revision date = now. The file system
  * does this when a file accessed for write is deaccessed. Reseal after. */
 ods2_status_t ods2_fh2_touch_revision(void *header_block, uint64_t now);
+
+/*
+ * Volume labels (rd vms-3ea). ods2_label_valid returns the length of `label`
+ * when it is a label INITIALIZE accepts (1..12 of A-Z 0-9 $ _ -), else 0.
+ * ods2_home_set_label writes `label` (space-padded) into a home block that
+ * already parses, and reseals both of its checksums; a block that does not
+ * parse is refused untouched. The on-disk half of SET VOLUME/LABEL.
+ */
+size_t        ods2_label_valid(const char *label);
+ods2_status_t ods2_home_set_label(void *home_block, const char *label);
 
 /* VMS absolute time (100 ns ticks since 17-NOV-1858) of a Unix-epoch time in
  * nanoseconds: 3506716800 s separate the two bases. */

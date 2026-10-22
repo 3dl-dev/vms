@@ -1441,7 +1441,7 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
  * $DISMOUNT as the cluster-registration presence marker (not serialization).
  * Released with vms_lock_acp_vol_release. See vms_lock.c. */
 uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
-                                   uint32_t *lkid_out);
+                                   uint32_t *lkid_out, int *remote_out);
 /*
  * DLM resource-directory + mastering (vms-ci.5 DB). Read-only diagnostic:
  * report the directory node, the mastering node and the granted-lock count

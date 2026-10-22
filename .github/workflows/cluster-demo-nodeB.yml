@@ -185,12 +185,29 @@ jobs:
       # own login probe is not CI-covered and times out after "Welcome" on this
       # rail at V0.7-10 (runs 38598276981, 38601013446) while acceptance passes on
       # the same SHA, so the battery is the proof used here.
+      # rd vms-3ea: THE SYSTEM DISK'S ODS-2 LABEL IS PER NODE. The label is the
+      # Files-11 lock namespace (acp_vol_resnam_kind spells this volume's locks
+      # "F11B$<kind><label>"), so two members whose different system disks carry
+      # one label contend on one clusterwide resource for unrelated local I/O.
+      # Every OVMX image was mastered OVMXSYS, which is correct for one node and
+      # is the duplicate-label administrator error VMS does not permit for two.
+      # The form follows the one real system we have on the wire: SCSNODE VAXC
+      # labels its system disk VAXCSYS, so Node B's is <SCSNODE>SYS. The
+      # single-node demo disk has no cluster identity and keeps the default.
       - name: Build + boot the disk (run-boot.sh acceptance; fails unless DCL works)
         env:
           CROSS_IMAGE: ovmx-cross-vax
           LAB_IMAGE: ovmx-vax-lab
+          OVMX_NODE: ${{ matrix.node }}
         run: |
           set -o pipefail
+          # Node B's own label, from the roster's SCSNODE (already in the
+          # environment). The single-node disk joins no cluster, so it keeps
+          # run-boot.sh's default and this exports nothing for it.
+          if [ "$OVMX_NODE" = B ]; then
+            export SYSVOL_LABEL="${NODE_B_SCSNODE}SYS"
+            echo "system-disk ODS-2 label for this node: $SYSVOL_LABEL (rd vms-3ea)"
+          fi
           tests/lab-vax/run-boot.sh acceptance 2>&1 | tee "$RUNNER_TEMP/demo-build.log"
 
       - name: Write Node B's cluster identity into the booted disk's ODS-2 partition

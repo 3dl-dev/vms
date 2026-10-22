@@ -257,6 +257,13 @@ boot_and_login() {
 DISK_A=/tmp/cluster-conn-a.img
 DISK_B=/tmp/cluster-conn-b.img
 rm -f "$DISK_A" "$DISK_B"; cp "$DISTRIB_IMG" "$DISK_A"; cp "$DISTRIB_IMG" "$DISK_B"
+# rd vms-3ea: each node's system disk gets its own label, <SCSNODE>SYS (the
+# real VAX's form: SCSNODE VAXC -> VAXCSYS). Both copies of the one kit carry
+# OVMXSYS, and the label is the Files-11 cluster lock namespace, so two
+# members' DIFFERENT disks would otherwise share one clusterwide resource.
+# SET VOLUME/LABEL's on-disk effect, offline: vmsfs_master relabel.
+vmsfs_master --ods2 relabel "$DISK_A" NODEASYS || { echo "FAIL: relabel node A's system disk" >&2; exit 1; }
+vmsfs_master --ods2 relabel "$DISK_B" NODEBSYS || { echo "FAIL: relabel node B's system disk" >&2; exit 1; }
 
 boot_and_login A "$TAP_A" "$DISK_A" NODEA 1040
 boot_and_login B "$TAP_B" "$DISK_B" NODEB 1041

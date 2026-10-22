@@ -5999,15 +5999,20 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid)
  * never block the XQP, another writer, or another cluster node -- deadlock-free
  * and cluster-safe by construction. Released by vms_lock_acp_vol_release at
  * $DISMOUNT (or on the holder's rundown). Returns the executive status; on
- * SS$_NORMAL *lkid_out is the standing lock's handle for later registration.
+ * SS$_NORMAL *lkid_out is the standing lock's handle for later registration,
+ * and *remote_out (may be NULL) is 1 when the granted lock is a proxy -- the
+ * resource is mastered by ANOTHER member, which therefore already holds it
+ * (rd vms-3ea: $MOUNT's same-label check reads this).
  */
 uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
-                                   uint32_t *lkid_out)
+                                   uint32_t *lkid_out, int *remote_out)
 {
     struct vms_enq_args a;
 
     if (lkid_out)
         *lkid_out = 0;
+    if (remote_out)
+        *remote_out = 0;
     memset(&a, 0, sizeof(a));
     a.lkmode = LCK_K_NLMODE;    /* NL: a presence marker, holds nothing exclusive */
     a.flags  = LCK_M_SYNC;      /* $ENQW; an NL request grants immediately */
@@ -6019,6 +6024,21 @@ uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
         ;
     if (a.status == SS__NORMAL && lkid_out)
         *lkid_out = a.lkid;
+    /*
+     * rd vms-3ea: WHO MASTERS IT. A granted lock that is a PROXY (FC-P4.4)
+     * means another member already holds a lock on this resource -- the
+     * directory named that member as master because the resource exists there
+     * -- so another member has a volume of this label mounted. Read off the
+     * lock block the engine itself built; nothing is asked of the wire.
+     */
+    if (a.status == SS__NORMAL && remote_out) {
+        struct vms_lock_entry *lk = lock_find_by_id(a.lkid);
+
+        if (lk) {
+            *remote_out = lk->proxy ? 1 : 0;
+            lock_put(lk);
+        }
+    }
     return a.status;
 }
 

@@ -1160,7 +1160,7 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
  * vms_lock_acp_vol_release. Mirror of the src/kernel/vms_internal.h decl (#928:
  * kernel-core lock ops must be declared in BOTH the Linux and NetBSD headers). */
 uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
-                                   uint32_t *lkid_out);
+                                   uint32_t *lkid_out, int *remote_out);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);

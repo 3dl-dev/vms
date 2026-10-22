@@ -3175,6 +3175,15 @@ static void dlm_arm_project_remaster(const struct vms_dlm_scs *d,
 	out->rm_held_unsent      = d->rm.held_unsent;
 	out->rm_held_unreported  = vms_lock_dlm_adopt_unreported();
 	out->rm_notifications    = d->rm.notifications;
+	/*
+	 * ...AND THE GRANTS THE ENGINE WITHHELD because a proxy LKB of this
+	 * node's holds the resource (rd vms-5cd). Read from the ENGINE, like
+	 * rm_held_unreported above: it is the lock database's own count, and the
+	 * arm neither keeps nor derives it. It belongs beside the remaster
+	 * tallies because that is the arrangement that produced the double grant
+	 * -- a tree this node was handed, decided against an empty picture.
+	 */
+	out->proxy_compat_blocks = vms_lock_dlm_proxy_compat_blocks();
 }
 
 int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)

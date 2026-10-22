@@ -127,21 +127,43 @@ static uint32_t vms_prev_local_csid;
  * lock it names (the idempotency D-DLM-5 asks for).
  *
  * WHY IT IS ON A THIRD RESOURCE QUEUE. A proxy hangs off res->proxies, never
- * off res->granted or res->waiting. try_grant_waiters() and lock_compatible()
- * walk only the latter two, so the executive is structurally incapable of
- * granting -- or of counting as a blocker -- a lock the cluster masters
- * elsewhere. Only a message from the master (vms_lock_dlm_xnode_grant_recv)
- * moves a proxy's granted mode. This is the same guarantee the origin list gave
- * by living outside the queues, kept by construction rather than by a flag test
- * inside every scan.
+ * off res->granted or res->waiting. try_grant_waiters() walks only the latter
+ * two, so the executive is structurally incapable of GRANTING a lock the
+ * cluster masters elsewhere. Only a message from the master
+ * (vms_lock_dlm_xnode_grant_recv) moves a proxy's granted mode. This is the
+ * same guarantee the origin list gave by living outside the queues, kept by
+ * construction rather than by a flag test inside every scan.
+ *
+ * *** BUT A PROXY THE CLUSTER HAS GRANTED IS STILL A LOCK THIS NODE HOLDS, AND
+ * THE COMPATIBILITY CHECK COUNTS IT (rd vms-5cd). ***
+ *
+ * The premise this split rested on -- "a tree is mastered on exactly one node,
+ * so a node never runs local granting on a tree it proxies" -- IS FALSE, and
+ * the falsification was measured on real hardware twice in four minutes
+ * (2026-10-22, pod lab85f, tests/lab/captures/vms-5cd-doublegrant-20261022):
+ *
+ *   a local process held RA7V's root at CR through a proxy LKB (master VAX1);
+ *   VAX1 then handed the TREE to this node, so vms_lock_dlm_adopt_open set
+ *   res->master_csid to this node AT ONCE -- as it must, the records that
+ *   follow are master-side locks -- while the proxy stayed a proxy (the
+ *   rd vms-3ac conversion runs at adopt_END, which this hand-over never
+ *   reached); and VAX2's $ENQ for EX, now routed here, found res->granted
+ *   EMPTY and was GRANTED. Two incompatible modes on one resource, the second
+ *   of them a frame this node put on the wire.
+ *
+ * So the rule is split in two, and only one half was ever load-bearing:
+ *   GRANTING a proxy is still unrepresentable (it is not on res->waiting);
+ *   a proxy with a real GRANTED mode is a HOLDER for compatibility purposes,
+ *   wherever the resource is mastered. Counting it can only ever QUEUE a
+ *   request -- the honest outcome -- and never fabricate a grant.
  *
  * WHERE IT DIVERGES FROM VMS. VMS keeps process-copy LKBs on the RSB's own
- * granted/waiting queues and tells the three kinds apart by a field (p. 6-52).
- * OVMX splits the queue instead, because in OVMX those queues ARE the local
- * granting algorithm's input. The behaviour is identical -- a tree is mastered
- * on exactly one node, so a node never runs local granting on a tree it proxies
- * -- and the split makes the fabrication unrepresentable rather than merely
- * absent.
+ * granted/waiting queues and tells the three kinds apart by a field (p. 6-52);
+ * its granting algorithm therefore sees a process copy as a holder by
+ * construction. OVMX splits the queue instead, because in OVMX those queues
+ * ARE the local granting algorithm's input -- and lock_compatible() walks
+ * res->proxies as well, which is what restores the behaviour VMS gets from the
+ * single queue.
  */
 
 /*
@@ -223,6 +245,15 @@ static uint32_t         vms_dlm_adopt_promotions_n;
  */
 static uint32_t         vms_dlm_proxy_self_mastered_n;
 /*
+ * GRANT DECISIONS WITHHELD BECAUSE A PROXY LKB OF OURS HOLDS THE RESOURCE
+ * (rd vms-5cd). Incremented by lock_compatible() under res->lock -- the same
+ * discipline as `deadlock_budget_hits`; read by a diagnostic, acted on by
+ * nothing. A nonzero reading on a clustered node is this node correctly
+ * refusing to grant away a resource its own process holds through the cluster
+ * -- the grant that was measured going out twice (2026-10-22).
+ */
+static uint32_t         vms_dlm_proxy_compat_blocks_n;
+/*
  * QUEUES THIS NODE ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd): the flips this
  * executive REPORTED to the wire arm, the ones it could not report because no
  * arm was bound, and the cross-node waiters a single release advanced beyond
@@ -272,6 +303,9 @@ int vms_lock_init(void)
     /* ...and the posts refused because this node masters the resource
      * (rd vms-3ac): also "since this executive started". */
     vms_dlm_proxy_self_mastered_n = 0u;
+    /* ...and the grants withheld because a proxy of ours holds the resource
+     * (rd vms-5cd). */
+    vms_dlm_proxy_compat_blocks_n = 0u;
     /* ...and the queues this node advanced for another system (rd vms-28bd). */
     vms_dlm_grant_flips_reported_n = 0u;
     vms_dlm_grant_flips_unreported_n = 0u;
@@ -2064,20 +2098,82 @@ static uint32_t dlm_resolve_master(struct vms_lock_resource *res, int inbound,
  * ================================================================ */
 
 /*
- * Check if a lock at mode 'requested' is compatible with all
- * currently granted locks on the resource (excluding 'exclude').
+ * IS THIS PROXY LKB A LOCK THE CLUSTER HAS GRANTED US? (rd vms-5cd)
+ *
+ * A fresh proxy is `waiting` -- pending AT THE MASTER (dlm_proxy_alloc) -- and
+ * granted at NL, which only a message from the master raises
+ * (vms_lock_dlm_xnode_grant_recv clears `waiting` and writes the mode, and does
+ * so only for a non-NL grant). So these two fields, read together, are the
+ * engine's own record of "the cluster says we hold this", and nothing else in
+ * this file may assert it.
+ *
+ * A PENDING proxy is deliberately NOT a holder: nobody has granted it, and
+ * treating it as one would block requests on the strength of a lock this node
+ * does not have.
  */
-static int lock_compatible(struct vms_lock_resource *res,
-                           uint32_t requested,
-                           struct vms_lock_entry *exclude)
+static int proxy_is_held(const struct vms_lock_entry *lock)
 {
-    struct vms_lock_entry *granted;
+    return lock->proxy && !lock->waiting &&
+           lock->granted_mode != LCK_K_NLMODE;
+}
+
+uint32_t vms_lock_dlm_proxy_compat_blocks(void)
+{
+    return vms_dlm_proxy_compat_blocks_n;
+}
+
+/* The GRANTED queue's half of the answer: every lock this node has granted
+ * locally or on behalf of another system. Caller holds res->lock. */
+static int granted_queue_compatible(const struct vms_lock_resource *res,
+                                    uint32_t requested,
+                                    const struct vms_lock_entry *exclude)
+{
+    const struct vms_lock_entry *granted;
 
     exec_list_for_each_entry(granted, &res->granted, res_granted) {
         if (granted == exclude)
             continue;
         if (!compat[requested][granted->granted_mode])
             return 0;
+    }
+    return 1;
+}
+
+/* The PROXY queue's half: every lock the CLUSTER has granted this node and
+ * that this node still carries as a requester-side image. Caller holds
+ * res->lock. */
+static int held_proxies_compatible(const struct vms_lock_resource *res,
+                                   uint32_t requested,
+                                   const struct vms_lock_entry *exclude)
+{
+    const struct vms_lock_entry *held;
+
+    exec_list_for_each_entry(held, &res->proxies, res_proxy) {
+        if (held == exclude || !proxy_is_held(held))
+            continue;
+        if (!compat[requested][held->granted_mode])
+            return 0;
+    }
+    return 1;
+}
+
+/*
+ * Check if a lock at mode 'requested' is compatible with EVERY lock this node
+ * holds on the resource (excluding 'exclude') -- the granted queue AND the
+ * proxies the cluster has granted us. See "the PROXY LKB" at the top of this
+ * file for why the second queue is in this answer: without it a tree handed to
+ * this node is decided against an EMPTY picture, which granted EX over a CR
+ * this node's own process held (rd vms-5cd, measured twice).
+ */
+static int lock_compatible(struct vms_lock_resource *res,
+                           uint32_t requested,
+                           struct vms_lock_entry *exclude)
+{
+    if (!granted_queue_compatible(res, requested, exclude))
+        return 0;
+    if (!held_proxies_compatible(res, requested, exclude)) {
+        vms_dlm_proxy_compat_blocks_n++;
+        return 0;
     }
     return 1;
 }

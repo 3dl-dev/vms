@@ -123,4 +123,27 @@ cmp -s "$WORK/ods5.list.out" "$LOUT" && fail "ODS-5 listing identical to ODS-2 o
 grep -q 'structure level 2' "$LOUT" || fail "ODS-2 list does not report structure level 2"
 echo "PASS: master --ods5 lays down a level-5 volume the reader walks back"
 
+# ---- 7. --ods5 keeps real names (rd vms-408): libstdc++'s tree as GCC installs it. ----
+T5="$WORK/tree5"
+mkdir -p "$T5/include/c++/14.2.0/bits" "$T5/lib"
+printf '#define CXXCONFIG 1\n' > "$T5/include/c++/14.2.0/bits/c++config.h"
+printf 'archive\n'              > "$T5/lib/libstdc++.a"
+printf 'no type\n'              > "$T5/include/c++/14.2.0/cstdio"
+R5_IMG="$WORK/real5.img"
+"$MASTER" --ods5 master "$R5_IMG" OVMXSYS "$T5" 16 > "$WORK/real5.master.out" 2>&1 \
+    || { cat "$WORK/real5.master.out" >&2; fail "master --ods5 of a tree with real C++ names exited non-zero"; }
+"$MASTER" --ods5 list "$R5_IMG" > "$WORK/real5.list.out" 2>&1 \
+    || { cat "$WORK/real5.list.out" >&2; fail "list of the real-name ODS-5 volume exited non-zero"; }
+for want in \
+    'c\+\+\.DIR;1' \
+    '14\.2\.0\.DIR;1' \
+    'c\+\+config\.h;1' \
+    'libstdc\+\+\.a;1' \
+    'cstdio\.;1'
+do
+    grep -Eq "$want" "$WORK/real5.list.out" || { cat "$WORK/real5.list.out" >&2; fail "real-name ODS-5 list missing: $want"; }
+done
+grep -q 'C++CONFIG' "$WORK/real5.list.out" && fail "--ods5 upper-cased a name (want it as the host spells it)"
+echo "PASS: master --ods5 keeps c++config.h, libstdc++.a and the 14.2.0 directory under their real names"
+
 echo "ALL PASS: vmsfs_master --ods2 masters + reads a genuine ODS-2 SYS\$DISK tree"

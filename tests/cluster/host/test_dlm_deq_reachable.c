@@ -1841,6 +1841,133 @@ static void test_an_inbound_convert_tells_the_third_system(void)
 	engine_down();
 }
 
+/* ==========================================================================
+ * 14. rd vms-9db: A LOCAL DOWN-CONVERT IS THE SAME DOOR
+ *
+ * Section 13 is the INBOUND convert: a remote holder demotes and a third
+ * system is granted. This is its local twin, and it was missing twice over --
+ * vms_ioctl_convert's immediate branch ran no grant pass at all (measured on
+ * two purely local processes in test_lock_host.c), so it could neither grant a
+ * local waiter nor tell a remote one. With the pass in place it is just
+ * another release door, and it must report like one.
+ *
+ * It is the evacuation's own shape: this node masters the workload's tree, a
+ * real VAX is queued for EX behind a local holder, and the holder DEMOTES
+ * rather than exiting -- which is what a process that keeps the file open but
+ * drops write access does.
+ * ========================================================================== */
+/* adv_arrangement, with the two modes named: the local holder takes
+ * `held`, the peer asks for `want`. The adoption is what makes this node the
+ * master, which is what lets the master seam serve the peer at all. */
+static uint32_t adv_arrangement_at(struct vms_proc *holder, const char *resnam,
+				   uint32_t held, uint8_t want,
+				   struct vms_dlm_master_result *q)
+{
+	struct vms_dlm_adopt_tree t;
+	uint32_t lkid, n_locks = 0u;
+
+	proc_init(holder);
+	lkid = granted_proxy(holder, resnam, held, 0x37000612u);
+	if (lkid == 0u)
+		return 0u;
+	memset(&t, 0, sizeof(t));
+	strscpy(t.resnam, resnam, sizeof(t.resnam));
+	t.ident_valid = 1u;
+	t.old_master_csid = CSID_MASTER;
+	if (vms_lock_dlm_adopt_open(&t) != SS__NORMAL ||
+	    vms_lock_dlm_adopt_end(&t, &n_locks) != SS__NORMAL)
+		return 0u;
+	*q = serve(VMS_DLM_MREQ_ENQ, CSID_PEER, WAITER_LKID, want, resnam);
+	return (q->outcome == (uint8_t)VMS_DLM_MASTER_QUEUED) ? lkid : 0u;
+}
+
+static uint32_t local_convert(struct vms_proc *proc, uint32_t lkid,
+			      uint32_t mode)
+{
+	struct vms_enq_args c;
+
+	memset(&c, 0, sizeof(c));
+	c.lkid = lkid;
+	c.lkmode = mode;
+	vms_ioctl_convert(proc, (unsigned long)(void *)&c);
+	return c.status;
+}
+
+static void test_a_local_convert_tells_the_peer(void)
+{
+	struct vms_proc holder, delivery;
+	struct vms_dlm_master_result q;
+	struct vms_getlki_args lki;
+	uint32_t lkid = 0u, unrep0;
+
+	printf("--- rd vms-9db: a LOCAL down-convert grants the peer, and tells "
+	       "it ---\n");
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+	memset(&g_adv, 0, sizeof(g_adv));
+	eng_ops.grant_advanced = eng_grant_advanced;
+	vms_lock_dlm_set_requester_ops(&eng_ops);
+
+	/* The evacuation's arrangement, built from the engine's own doors, the
+	 * same way section 12 builds it -- a real VAX hands this node the tree
+	 * -- except that the local process holds the root at EX, so the peer's
+	 * CR genuinely has to wait. A tree this node has not been handed is
+	 * refused by the master seam (VMS_DLM_MASTER_REFUSED), which is why the
+	 * adoption is part of the arrangement and not scenery. */
+	lkid = adv_arrangement_at(&holder, "CVT$EVAC", LCK_K_EXMODE,
+				  LCK_K_CRMODE, &q);
+	if (lkid == 0u) {
+		ct_check(0, "the arrangement: a peer's CR queued behind our EX");
+		goto out;
+	}
+	ct_check_eq_u32(q.outcome, VMS_DLM_MASTER_QUEUED,
+			"the peer's CR is QUEUED behind this node's EX");
+
+	/* *** The one event: a LOCAL demotion, through the shipping ioctl. *** */
+	ct_check_eq_u32(local_convert(&holder, lkid, LCK_K_CRMODE), SS__NORMAL,
+			"the local holder converts EX -> CR immediately");
+	ct_check(getlki(&delivery, q.master_lkid, &lki) &&
+		 lki.granted_mode == LCK_K_CRMODE,
+		 "*** and the peer's queued CR is GRANTED by the convert, in "
+		 "this node's own lock database (rd vms-9db) ***");
+	ct_check_eq_u32(g_adv.n, 1u,
+			"*** ...and the peer is TOLD: a local convert is a "
+			"release door like every other ***");
+	ct_check(g_adv.csid == CSID_PEER && g_adv.master_lkid == q.master_lkid,
+		 "  naming the peer and the handle this node granted it");
+	(void)do_deq(&holder, lkid);
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+
+	/* NEGATIVE CONTROL: no arm bound. The grant still happens and the fact
+	 * that nobody could be told is COUNTED, exactly as at the other doors. */
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+	memset(&g_adv, 0, sizeof(g_adv));
+	eng_ops.grant_advanced = NULL;
+	vms_lock_dlm_set_requester_ops(&eng_ops);
+	unrep0 = vms_lock_dlm_grant_flips_unreported();
+	lkid = adv_arrangement_at(&holder, "CVT$EVAC2", LCK_K_EXMODE,
+				  LCK_K_CRMODE, &q);
+	ct_check(lkid != 0u, "the same arrangement, with no arm bound");
+	if (lkid != 0u) {
+		ct_check_eq_u32(local_convert(&holder, lkid, LCK_K_CRMODE),
+				SS__NORMAL, "the convert still succeeds");
+		ct_check_eq_u32(g_adv.n, 0u, "nothing was reported");
+		ct_check_eq_u32(vms_lock_dlm_grant_flips_unreported(),
+				unrep0 + 1u,
+				"*** ...and the grant nobody could be told "
+				"about is COUNTED ***");
+		(void)do_deq(&holder, lkid);
+	}
+out:
+	eng_ops.grant_advanced = NULL;
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_deq_reachable (rd vms-49f8: the op-0x03 $DEQ has a "
@@ -1858,5 +1985,6 @@ int main(void)
 	test_a_queued_outcome_produces_a_frame();
 	test_a_local_release_tells_the_peer();
 	test_an_inbound_convert_tells_the_third_system();
+	test_a_local_convert_tells_the_peer();
 	return ct_summary("test_dlm_deq_reachable");
 }

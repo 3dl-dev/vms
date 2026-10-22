@@ -1137,6 +1137,133 @@ static void the_ev11_remote_contention_does_not_spin_the_deadlock_search(void)
 	vms_lock_cleanup();
 }
 
+/*
+ * rd vms-9db: A LOCAL DOWN-CONVERT MUST RUN THE WAITER PASS.
+ *
+ * FOUND BY INSPECTION while building rd vms-28bd, reading every
+ * try_grant_waiters() call site: vms_ioctl_convert()'s IMMEDIATE branch set
+ * lock->granted_mode and unlocked, with no grant pass. Every other site has
+ * one (lock_teardown_locked, dlm_promote_proxy_locked, vms_deq_core,
+ * vms_lock_quorum_resume, vms_lock_dlm_xnode_deq and
+ * vms_lock_dlm_xnode_convert -- whose comment calls it "the whole point of the
+ * evacuation path"). So a process holding EX that converted DOWN to CR freed
+ * strength and granted NOBODY: the waiter stayed on res->waiting until some
+ * unrelated event on that resource ran the pass.
+ *
+ * THIS IS THE MEASUREMENT the item asked for before the fix, and it is a
+ * purely LOCAL pair -- no cluster, no proxy, no arm. A holds EX, B waits for
+ * CR, A converts EX->CR, and CR+CR is compatible: B must be granted BY THE
+ * CONVERT. B's request is a real synchronous $ENQW on its own thread, so
+ * "granted" means the engine woke it, not that a flag moved.
+ *
+ * The wait is BOUNDED and the failure is reported rather than hung: if the
+ * convert does not grant B, this polls for a fixed window, records the defect,
+ * and then releases A's lock so B's thread can finish and the suite can exit.
+ */
+struct cvt_waiter {
+	struct vms_proc *proc;
+	const char      *resnam;
+	uint32_t         status;
+	uint32_t         lkid;
+	volatile int     done;
+};
+
+static void *cvt_waiter_thread(void *arg)
+{
+	struct cvt_waiter *w = arg;
+
+	w->status = do_enq(w->proc, w->resnam, LCK_K_CRMODE, LCK_M_SYNC,
+			   &w->lkid);
+	w->done = 1;
+	return NULL;
+}
+
+/* Poll for the waiter's own completion, up to `ms`. Returns 1 if it finished. */
+static int cvt_waiter_wait(struct cvt_waiter *w, unsigned ms)
+{
+	unsigned i;
+
+	for (i = 0; i < ms; i++) {
+		if (w->done)
+			return 1;
+		usleep(1000);
+	}
+	return 0;
+}
+
+static void a_local_down_convert_grants_the_waiter(void)
+{
+	struct vms_proc holder, waiter;
+	struct vms_enq_args cvt;
+	struct cvt_waiter w;
+	pthread_t th;
+	uint32_t lkid_a = 0, status;
+	int finished;
+
+	printf("\n-- rd vms-9db: a LOCAL down-convert runs the waiter pass --\n");
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	proc_init(&holder);
+	proc_init(&waiter);
+
+	status = do_enq(&holder, "CVTGRANT1", LCK_K_EXMODE, 0, &lkid_a);
+	ct_check(status == SS__NORMAL && lkid_a != 0,
+		 "the holder's EX is granted (real engine)");
+
+	memset(&w, 0, sizeof(w));
+	w.proc = &waiter;
+	w.resnam = "CVTGRANT1";
+	if (pthread_create(&th, NULL, cvt_waiter_thread, &w) != 0) {
+		ct_check(0, "pthread_create for the waiting $ENQW");
+		vms_lock_cleanup();
+		return;
+	}
+	/* Let the request reach res->waiting and enter its cv wait, so what is
+	 * measured below is the convert's grant pass and not a request that
+	 * arrived after the strength was already given back. */
+	usleep(20 * 1000);
+	ct_check(!w.done, "the CR request is really waiting behind the EX");
+
+	/* THE ONE EVENT: a local DOWN-conversion, through the shipping ioctl. */
+	memset(&cvt, 0, sizeof(cvt));
+	cvt.lkid = lkid_a;
+	cvt.lkmode = LCK_K_CRMODE;
+	vms_ioctl_convert(&holder, (unsigned long)(void *)&cvt);
+	ct_check_eq_u32(cvt.status, SS__NORMAL,
+			"the holder converts EX->CR immediately (CR is "
+			"compatible with the CR that is waiting)");
+
+	finished = cvt_waiter_wait(&w, 500u);
+	ct_check(finished,
+		 "*** the DOWN-CONVERT GRANTED THE WAITER: freeing strength "
+		 "runs the grant pass, as it does at every other call site "
+		 "(rd vms-9db) ***");
+	if (!finished) {
+		/* Unwedge the thread so the suite can finish and say so. */
+		(void)do_deq(&holder, lkid_a);
+		(void)cvt_waiter_wait(&w, 2000u);
+	}
+	pthread_join(th, NULL);
+	ct_check(w.status == SS__NORMAL && w.lkid != 0,
+		 "  and it is granted for real, with a lock id");
+	if (finished && w.lkid != 0) {
+		struct vms_getlki_args g;
+
+		memset(&g, 0, sizeof(g));
+		g.lkid = w.lkid;
+		vms_ioctl_getlki(&waiter, (unsigned long)(void *)&g);
+		ct_check(g.status == SS__NORMAL &&
+			 g.granted_mode == LCK_K_CRMODE,
+			 "  at CR, read back through $GETLKI -- the engine's "
+			 "own account of what it granted");
+		(void)do_deq(&waiter, w.lkid);
+	}
+	(void)do_deq(&holder, lkid_a);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_host (vms_lock.c, the real engine, R1 host unit) ===\n");
@@ -1151,5 +1278,6 @@ int main(void)
 	the_ev6_queue_shape_does_not_spin();
 	a_signal_ends_the_wait_instead_of_spinning();
 	the_ev11_remote_contention_does_not_spin_the_deadlock_search();
+	a_local_down_convert_grants_the_waiter();
 	return ct_summary("test_lock_host");
 }

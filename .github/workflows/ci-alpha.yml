@@ -1889,6 +1889,7 @@ jobs:
         with:
           path: |
             .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/*.exe
+            .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/gccsrc.tar
             .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
           key: alpha-hostgcc-as-${{ hashFiles('tools/cross-alpha-vms/selfhost/**', 'tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/**', 'src/vmslink/**', 'src/vmsrms/**') }}
 
@@ -1963,6 +1964,7 @@ jobs:
         with:
           path: |
             .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/*.exe
+            .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/gccsrc.tar
             .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
           key: alpha-hostgcc-as-${{ hashFiles('tools/cross-alpha-vms/selfhost/**', 'tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/**', 'src/vmslink/**', 'src/vmsrms/**') }}
 
@@ -2037,6 +2039,7 @@ jobs:
         with:
           path: |
             .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/*.exe
+            .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/gccsrc.tar
             .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
           key: alpha-hostgcc-as-${{ hashFiles('tools/cross-alpha-vms/selfhost/**', 'tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/**', 'src/vmslink/**', 'src/vmsrms/**') }}
 
@@ -2111,6 +2114,7 @@ jobs:
         with:
           path: |
             .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/*.exe
+            .boot-cache/alpha-modgp-gate/hostgcc/host-gcc/gccsrc.tar
             .boot-cache/alpha-modgp-gate/hostas/host-as/out/as.exe
           key: alpha-hostgcc-as-${{ hashFiles('tools/cross-alpha-vms/selfhost/**', 'tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/**', 'src/vmslink/**', 'src/vmsrms/**') }}
 

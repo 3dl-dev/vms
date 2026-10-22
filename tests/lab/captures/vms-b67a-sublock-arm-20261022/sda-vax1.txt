@@ -1,0 +1,142 @@
+SDA> SHOW RESOURCE/NAME=S0
+Address of RSB:  879DF780  GGMODE:       CW  Status: VALID                   
+Parent RSB:      879CD840  CGMODE:       CW                                  
+Sub-RSB count:          0  FGMODE:       CW                                  
+Lock Count:             1  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 00003053   S0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 07000697  CW 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> SHOW LOCK 07000697
+
+Lock id:  07000697   PID:     00000000   Flags:                           
+Par. id:  3C000695   SUBLCKs:        0                                    
+LKB:      8799A400   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CW   00000000-FFFFFFFF
+
+Resource:      00000000 00003053    S0......  Status:  MSTCPY                  
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Master copy of lock 4D000360 on system 00010002
+
+
+Lock id:  01000698   PID:     00000000   Flags:                           
+Par. id:  3C000695   SUBLCKs:        0                                    
+LKB:      8799C100   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CW   00000000-FFFFFFFF
+
+Resource:      00000000 00003253    S2......  Status:  MSTCPY                  
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Master copy of lock 50000362 on system 00010002
+
+
+Lock id:  13000699   PID:     00000000   Flags:   VALBLK  SYNCSTS SYSTEM  
+Par. id:  2200000D   SUBLCKs:        0            NOQUOTA NODLCKW         
+LKB:      8799C280   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      PW   00000000-FFFFFFFF
+
+Resource:      002A7324 42313146    F11B$s*.  Status:  MSTCPY  CACHED          
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Master copy of lock 6100035C on system 00010002
+
+
+Lock id:  0C00069A   PID:     00010013   Flags:   VALBLK  SYNCSTS SYSTEM  
+Par. id:  01000004   SUBLCKs:        0            NOQUOTA NODLCKW         
+LKB:      8799C880   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      PW   00000000-FFFFFFFF
+
+Resource:      002A7324 42313146    F11B$s*.  Status:  NOQUOTA CACHED          
+ Length   10   00000000 00000000    ........                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  0E00069B   PID:     00010013   Flags:   VALBLK  CONVERT         
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      8799DB80   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      PW   00000000-FFFFFFFF
+
+Resource:      54535953 24495444    DTI$SYST  Status:  CACHED                  
+ Length   15   00315841 56244D45    EM$VAX1.                                   
+ Kernel mode   00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  0100069C   PID:     00000000   Flags:   VALBLK  NOQUEUE SYNCSTS 
+Par. id:  00000000   SUBLCKs:        0            SYSTEM  NOQUOTA CVTSYS  
+LKB:      8799E180   BLKAST:  86FECF0A                                    
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      59536124 42313146    F11B$aSY  Status:  NOQUOTA                 
+ Length   22   20202031 4B534453    SDSK1                                      
+ Kernel mode   00000000 04202020       .....                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  0100069D   PID:     00000000   Flags:   CONVERT NOQUEUE SYSTEM  
+Par. id:  00000000   SUBLCKs:        0            NOQUOTA CVTSYS  NODLCKW 
+LKB:      8799E780   BLKAST:  86FADB38            NODLCKB                 
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      6D632445 48434143    CACHE$cm  Status:  FLOCK                   
+ Length   24   20314B53 44535953    SYSDSK1                                    
+ Kernel mode   00000420 20202020         ...                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+
+Lock id:  0700069E   PID:     00000000   Flags:   VALBLK  NOQUEUE SYNCSTS 
+Par. id:  00000000   SUBLCKs:        0            SYSTEM  NOQUOTA CVTSYS  
+LKB:      8799E900   BLKAST:  86FECF0A                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      59536124 42313146    F11B$aSY  Status:  NOQUOTA CACHED          
+ Length   22   20202031 4B534453    SDSK1                                      
+ Kernel mode   00000000 002A2020      *.....                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+SDA> EXIT

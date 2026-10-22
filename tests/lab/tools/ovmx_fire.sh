@@ -31,8 +31,29 @@ if ! bash "$ROOT/tests/cluster/conformance/run_gate.sh" "$BUILD/bin" "$@"; then
 	exit 1
 fi
 
-BASE=$(basename "$ART")
+# STAGED UNDER THE TAG, AND RE-VERIFIED IN THE POD (measured 2026-10-22).
+#
+# This used to stage at /lab/$(basename "$ART") and trust the SOURCE_COMMIT it
+# had just read from the LOCAL directory. `kubectl cp <dir> <pod>:<dir>` NESTS
+# when the destination already exists, so the SECOND fire whose artifacts
+# directory had the same basename -- which every `gh run download` produces,
+# they are all called `ovmx-boot-artifacts` -- landed at
+# /lab/ovmx-boot-artifacts/ovmx-boot-artifacts/ and THE NODE BOOTED THE FIRST
+# FIRE'S BITS while this script reported the gate green. Measured: fire q85f3
+# ran a build whose SOURCE_COMMIT was the previous one, and the only tell was a
+# missing line in a diagnostic.
+#
+# So the staging path carries the TAG (unique per fire by construction), and
+# the commit is read back OUT OF THE POD afterwards. A fire now refuses rather
+# than running the wrong executive.
+BASE="art-$TAG"
+kubectl -n ovmx-lab exec "$POD" -- rm -rf "/lab/$BASE" || exit 1
 kubectl -n ovmx-lab cp "$ART" "$POD:/lab/$BASE" || exit 1
+INPOD=$(kubectl -n ovmx-lab exec "$POD" -- sh -c "tr -d '[:space:]' < /lab/$BASE/SOURCE_COMMIT" 2>/dev/null)
+if [ "$INPOD" != "$WANT" ]; then
+	echo "ovmx_fire.sh: REFUSED -- the pod's staged artifacts are $INPOD, the gated build is $WANT" >&2
+	exit 1
+fi
 kubectl -n ovmx-lab cp "$HERE/ovmx_fire_node.sh" "$POD:/lab/run-evac/ovmx_fire_node.sh" || exit 1
 kubectl -n ovmx-lab cp "$HERE/ovmx_evnode.sh" "$POD:/lab/run-evac/ovmx_evnode.sh" || exit 1
 # OVMX_FIRE_EXPVOTES: OVMXE's EXPECTED_VOTES (default 3). 1 lets OVMXE found a

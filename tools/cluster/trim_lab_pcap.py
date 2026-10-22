@@ -15,7 +15,11 @@ usage: trim_pcap.py <in.pcap> <out.pcap>
 """
 import struct, sys
 
-NAMES = (b'RA7T', b'S0', b'S1', b'S2')
+# RA7U joins RA7T (2026-10-22): the rd vms-85f re-fire had to move to a fresh
+# tree name because the pod's RA7T carried a GRANTED EX whose owner was gone --
+# a leftover of three OVMX node cycles in one pod, which left the arm's own
+# step 1 in LEF. Same sequence, a tree with no residue.
+NAMES = (b'RA7T', b'RA7U', b'RA7V', b'S0', b'S1', b'S2')
 RM_OPS = set(range(0x0e, 0x15)) | {0x1a}
 
 

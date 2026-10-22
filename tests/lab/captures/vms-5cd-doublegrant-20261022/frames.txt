@@ -1,0 +1,29 @@
+rd vms-5cd: the RA7V frames, decoded by tools/cluster/dlm_body.py --all
+
+f194 req  cat=02 op=0e ?                        VAX1->52540000e501 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7V'
+f196 resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7V'
+f197 req  cat=02 op=0f ?                        VAX1->52540000e501 mode=0x01(CR) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7V'
+f199 resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7V'
+f201 req  cat=02 op=10 ?                        VAX1->52540000e501 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7V'
+f204 resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7V'
+f205 req  cat=02 op=13 ?                        VAX1->52540000e501 mode=0xd1(-) reqid/pid=0x66000698 master_lkid=0x01000356 reslen=4 res='RA7V'
+f355 req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->VAX1 mode=0x05(EX) reqid/pid=0x20400221 master_lkid=0x1300036c reslen=4 res='RA7V'
+f356 resp cat=82 op=01 ENQ (new lock request)   VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x20400221 master_lkid=0x1300036c reslen=4 res='RA7V'
+f357 req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->52540000e501 mode=0x05(EX) reqid/pid=0x20400221 master_lkid=0x1300036c reslen=4 res='RA7V'
+
+--- request/answer pairs by SCS transaction (body[4:8]) ---
+pair req f8 -> ans f9  body[34]=0xfa  diffs(19): [0, 1, 2, 3, 8, 20, 21, 22, 23, 28, 30, 32, 34, 46, 47, 48, 49, 50, 51]
+
+--- every frame OVMXE ORIGINATED ---
+frames OVMXE ORIGINATED (src = 52:54:00:00:e5:01), by cat/op:
+   cat 0x82 op 0x01 : 1
+   cat 0x82 op 0x15 : 3
+   cat 0x86 op 0x00 : 2
+
+every one of them, in order (frame, UTC, cat, op, body[34]):
+   f196   02:08:41  cat=0x82 op=0x15 body[34]=0xfa
+   f199   02:08:41  cat=0x82 op=0x15 body[34]=0xfa
+   f204   02:08:41  cat=0x82 op=0x15 body[34]=0xfa
+   f359   02:09:00  cat=0x82 op=0x01 body[34]=0xfa
+   f779   02:10:02  cat=0x86 op=0x00 body[34]=0x00
+   f786   02:10:02  cat=0x86 op=0x00 body[34]=0x00

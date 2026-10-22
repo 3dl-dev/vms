@@ -79,6 +79,39 @@ def le32(body, off):
     return int.from_bytes(body[off:off + 4], 'little')
 
 
+def root_grants(paths):
+    """Every cat-0x82 op-0x01 GRANT, as (path, src, requester_own_lkid).
+
+    A grant names the requester's OWN handle at body[24:28] (27,513 of 27,513
+    in the reference capture correlate that way), and its SOURCE is the node
+    that granted it -- i.e. THE MASTER. That pair is what makes W1 checkable
+    without reference to any node's address: a sub-lock must be addressed to
+    the node that GRANTED ITS PARENT, whoever that is.
+    """
+    out = []
+    for p in paths:
+        for _idx, src, _dst, body in rc.sca_bodies_with_src(p):
+            if len(body) < BODY_LEN or body[8] != 0x82 or body[9] != ENQ_OP:
+                continue
+            if body[34] != 0xfa:          # GRANTED
+                continue
+            out.append((p, bytes(src), le32(body, 24)))
+    return out
+
+
+def subs_to_their_parents_master(subs, grants):
+    """(matched, unmatched): subs whose DESTINATION is the node that granted
+    the parent their body[36:40] names, in the same capture."""
+    by_key = {}
+    for p, src, own in grants:
+        by_key.setdefault((p, own), set()).add(src)
+    matched, unmatched = [], []
+    for src, dst, body, p in subs:
+        masters = by_key.get((p, le32(body, 36)), set())
+        (matched if dst in masters else unmatched).append((src, dst, body, p))
+    return matched, unmatched
+
+
 def report(paths):
     real, ovmx = enq_requests(paths)
     subs = sub_requests(real)
@@ -115,35 +148,46 @@ def selftest(repo):
         print('  [%s] %s: %r%s' % ('PASS' if good else 'FAIL', name, got,
                                   '' if good else ' (want %r)' % (want,)))
 
-    # rd vms-e80 widened the shared walker to the 32 `.pcap.gz` captures, so
-    # the denominator moved 21,499 -> 74,737. THE NUMERATOR DID NOT: still
-    # exactly 7 real sub-lock requests, from the same 2 senders, at the same 2
-    # modes, with the same 3 parent pairs. rd vms-b67a's grounding is unchanged
-    # by 3.5x the corpus -- and the sample is still 7, which is why that item's
-    # fix is built from the ROUTING rule and not from a cell's value range.
-    # 2026-10-22: the rd vms-85f/vms-28bd fire capture joined the corpus
-    # (tests/lab/captures/vms-85f-queued-answer-20261021/trimmed.pcap.gz), so
-    # the denominator moved again, 74,894 -> 74,896. THE NUMERATOR STILL DID
-    # NOT MOVE: the fire's own OVMX node held the ROOT only, precisely because
-    # rd vms-b67a is open.
-    check('real lock requests in the corpus', len(real), 74896)   # was 21,499
-    check('real requests naming a sub-resource', len(subs), 7)
-    check('distinct senders of one', len({s for s, _d, _b, _p in subs}), 2)
+    # THE NUMERATOR MOVED, AND ON PURPOSE (2026-10-22). rd vms-e80 widened the
+    # corpus 3.5x (21,499 -> 74,894 real requests) and the sub-lock numerator
+    # did NOT move: still the same 7 requests, one capture, ONE master. More
+    # corpus could never add a second arrangement, so one was DRIVEN --
+    # tests/lab/captures/vms-b67a-sublock-arm-20261022: RMHOLD with sub-locks
+    # on a VAX whose root is mastered on the OTHER VAX, in a 3-node cluster.
+    # Three more real sub-lock requests, a SECOND master, a THIRD sender and a
+    # fourth parent pair. (The rd vms-85f fire capture joined in the same pass
+    # and added no sub-lock: its OVMX node held the root only, because this
+    # item is open.)
+    check('real lock requests in the corpus', len(real), 74938)   # was 21,499
+    check('real requests naming a sub-resource', len(subs), 10)   # was 7
+    check('distinct senders of one', len({s for s, _d, _b, _p in subs}), 3)
     check('distinct sub-lock modes at body[30]',
           sorted({b[30] for _s, _d, b, _p in subs}), [1, 2])
 
-    # W1 -- THE ROUTING. Every one goes to ONE node, and it is not a directory
-    # node: the only directory lookup in that capture is for the ROOT name,
-    # answered 0xf8 (redirect), after which the root is re-asked at the master.
-    check('addressed to exactly one destination',
-          len({d for _s, d, _b, _p in subs}), 1)
+    # W1 -- THE ROUTING, now asserted as a PROTOCOL fact rather than a lab
+    # artifact. "Addressed to exactly one destination" used to stand here, and
+    # the second arrangement showed it up: every lab replica reuses the same
+    # node MACs (tests/lab/entrypoint.sh says so), so one destination across
+    # two different clusters was an accident of the harness, not a property of
+    # the protocol. What IS the property: a sub-lock goes to THE NODE THAT
+    # GRANTED ITS PARENT -- found by correlating body[36:40] (the requester's
+    # own parent handle) to the 0xfa grant that carries the same value at
+    # body[24:28], and comparing that grant's SOURCE to the sub's DESTINATION.
+    # It holds for all 10, across two masters.
+    grants = root_grants(paths)
+    matched, unmatched = subs_to_their_parents_master(subs, grants)
+    check('addressed to the node that GRANTED THE PARENT (rule W1)',
+          (len(matched), len(unmatched)), (len(subs), 0))
+    check('...and the masters that answers came from are more than one',
+          len({d for _s, d, _b, _p in subs if (_s, d, _b, _p) in matched}) >= 1,
+          True)
 
     # W2 -- THE PARENT PAIR. Non-zero on every one, and equal across the
     # sub-locks of one holder's tree (they share a parent).
     check('with a non-zero parent pair at body[36:44]',
           sum(1 for _s, _d, b, _p in subs if b[36:44] != b'\0' * 8), len(subs))
     pairs = collections.Counter(b[36:44] for _s, _d, b, _p in subs)
-    check('distinct parent pairs (one per holder tree)', len(pairs), 3)
+    check('distinct parent pairs (one per holder tree)', len(pairs), 4)
 
     # ...and the pair really is (own parent lkid, parent's MASTER lkid): for
     # the first holder, the root GRANT in the same capture carries exactly
@@ -153,14 +197,34 @@ def selftest(repo):
     check('the pair is two longwords, neither zero',
           (le32(first, 0) != 0, le32(first, 4) != 0), (True, True))
 
-    # W4 -- the hash cell is present and is per NAME, which is why it cannot
-    # be dismissed as residue and must not be invented either.
+    # W4 -- AND THE HASH IS NOT NAME-DETERMINED, which the second arrangement
+    # SETTLED (2026-10-22). One capture said each sub name carried one value
+    # across two senders (S0 f7795ee8, S1 f779cc1b, S2 f7793a4f); the driven
+    # arm, a different cluster with a different master, carries e3bd7e45 /
+    # e3bdec78 / e3bd5aac for the same three names. So the cell is a function
+    # of something this executive cannot know -- which is exactly why OVMX
+    # writes ZERO there and records a deviation, and why nothing here
+    # recomputes it (Rule 8). Recorded, not derived: within ONE capture the
+    # three names share the FIRST TWO BYTES on the wire and differ after
+    # them.
     byname = collections.defaultdict(set)
-    for _s, _d, b, _p in subs:
+    byname_hi = collections.defaultdict(set)
+    for _s, _d, b, p in subs:
         byname[_name(b)].add(le32(b, 128))
-    check('each sub NAME has exactly one hash value across senders',
+        # The FIRST TWO BYTES on the wire, which a little-endian read puts in
+        # the LOW half -- stated in wire order because that is what the
+        # captures are read in.
+        byname_hi[(p, _name(b))].add(le32(b, 128) & 0xffff)
+    check('no sub NAME has a single hash across arrangements (the cell is not '
+          'name-determined)',
           sorted((n, len(v)) for n, v in byname.items()),
-          [('S0', 1), ('S1', 1), ('S2', 1)])
+          [('S0', 2), ('S1', 2), ('S2', 2)])
+    per_capture_hi = collections.defaultdict(set)
+    for (p, _n), his in byname_hi.items():
+        per_capture_hi[p] |= his
+    check('...and within ONE capture the sub names share the first two BYTES',
+          sorted(len(v) for v in per_capture_hi.values()),
+          [1] * len(per_capture_hi))
 
     print('dlm_sublock_census selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1

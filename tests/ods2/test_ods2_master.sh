@@ -96,4 +96,31 @@ grep -q 'NOTODS2' "$WORK/vmfs.list.out" \
     || { cat "$WORK/vmfs.list.out" >&2; fail "VMFS image rejected without the honest NOTODS2 reason"; }
 echo "PASS: list --ods2 rejects a non-ODS-2 (VMFS) volume, fail-honest"
 
+# ---- 6. --ods5 (rd vms-7e7e): the same tree as an ODS-5 volume. ----
+ODS5_IMG="$WORK/ods5.img"
+"$MASTER" --ods5 master "$ODS5_IMG" OVMXSYS "$TREE" 16 > "$WORK/ods5.master.out" 2>&1 \
+    || { cat "$WORK/ods5.master.out" >&2; fail "master --ods5 exited non-zero"; }
+grep -q 'ODS-5' "$WORK/ods5.master.out" \
+    || { cat "$WORK/ods5.master.out" >&2; fail "master --ods5 did not announce ODS-5"; }
+# home block structure level word (LBN 1, byte 12): 0x0501 little-endian = 01 05,
+# as on the real Alpha V8.4 INITIALIZE/STRUCTURE=5 volume (RESULTS.md R1).
+lev=$(dd if="$ODS5_IMG" bs=1 skip=524 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+[ "$lev" = "0105" ] || fail "ODS-5 home block structure level bytes are '$lev', want 0105"
+lev2=$(dd if="$IMG" bs=1 skip=524 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+[ "$lev2" = "0102" ] || fail "ODS-2 home block structure level bytes are '$lev2', want 0102 (unchanged)"
+"$MASTER" --ods5 list "$ODS5_IMG" > "$WORK/ods5.list.out" 2>&1 \
+    || { cat "$WORK/ods5.list.out" >&2; fail "list of the ODS-5 volume exited non-zero"; }
+grep -q 'structure level 5' "$WORK/ods5.list.out" \
+    || { cat "$WORK/ods5.list.out" >&2; fail "list does not report structure level 5"; }
+for want in \
+    '\[SYS0.SYSCOMMON.SYSEXE\]LOGIN.COM;1' \
+    '\[SYS0.SYSCOMMON.SYSEXE\]BIGIMG.EXE;1' \
+    '\[SYS0.SYSCOMMON.SYSLIB\]NOTES\.;1'
+do
+    grep -Eq "$want" "$WORK/ods5.list.out" || { cat "$WORK/ods5.list.out" >&2; fail "ODS-5 list missing: $want"; }
+done
+cmp -s "$WORK/ods5.list.out" "$LOUT" && fail "ODS-5 listing identical to ODS-2 one (level line must differ)"
+grep -q 'structure level 2' "$LOUT" || fail "ODS-2 list does not report structure level 2"
+echo "PASS: master --ods5 lays down a level-5 volume the reader walks back"
+
 echo "ALL PASS: vmsfs_master --ods2 masters + reads a genuine ODS-2 SYS\$DISK tree"

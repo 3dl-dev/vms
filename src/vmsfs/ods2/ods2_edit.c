@@ -428,8 +428,9 @@ ods2_status_t ods2_fh2_build(void *header_block, uint32_t fidnum, uint16_t seq,
  * run on for a longer name, with the map area straight after. Returns the map
  * offset in words, or 0 if the name does not fit.
  */
-static unsigned ed_fi5_lay(uint8_t *h, const char *idbuf, size_t n)
+unsigned ods5_fi5_lay(void *header_block, const char *idbuf, size_t n)
 {
+    uint8_t *h = (uint8_t *)header_block;
     uint8_t *id = h + (size_t)ODS5_ID_OFF_WORDS * 2u;
     size_t namearea = n < 44u ? 44u : ((n + 1u) & ~(size_t)1u);
     size_t area = ODS5_IDENT_FIXED + namearea;
@@ -490,7 +491,7 @@ ods2_status_t ods2_fh2_build_ex(void *header_block, uint32_t fidnum, uint16_t se
     memset(h, 0, ODS2_BLOCK_SIZE);
 
     if (ods5) {
-        unsigned mp = ed_fi5_lay(h, idbuf, n);
+        unsigned mp = ods5_fi5_lay(h, idbuf, n);
         if (mp == 0)
             return ODS2_ERR_ARGS;
         h[offsetof(ods2_fh2_t, fh2_idoffset)] = ODS5_ID_OFF_WORDS;
@@ -595,7 +596,7 @@ ods2_status_t ods2_fh2_build_ex(void *header_block, uint32_t fidnum, uint16_t se
     ed_put32(h + offsetof(ods2_fh2_t, fh2_highwater), hiblk + 1u);
 
     /* ident area: "NAME.TYPE;VERSION", space-padded (write_fh2_header_ext).
-     * A level-5 header's FI5 area was laid down above (ed_fi5_lay). */
+     * A level-5 header's FI5 area was laid down above (ods5_fi5_lay). */
     if (!ods5) {
         uint8_t *id = h + (size_t)ED_ID_OFF_WORDS * 2;
         size_t first_len = (n < 20) ? n : 20;
@@ -633,7 +634,7 @@ ods2_status_t ods2_fh2_build_ex(void *header_block, uint32_t fidnum, uint16_t se
  * Rename a level-5 header in place (rd vms-7e7e): new name type, length and
  * name in its FI5 area, every date and hint kept. The area's size follows the
  * name (RESULTS.md R4), so the map words move with fh2_mpoffset; ODS2_ERR_NOSPACE
- * if they would run into the ACL. Same name area rule as ed_fi5_lay.
+ * if they would run into the ACL. Same name area rule as ods5_fi5_lay.
  */
 static ods2_status_t ed_fi5_rename(uint8_t *h, const char *idbuf, size_t n)
 {

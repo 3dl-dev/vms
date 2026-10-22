@@ -150,7 +150,7 @@ record "boot 2 (B): SYSTEM logs in" "$rb"
 # RUN's %RUN-S-PROC_ID and NETACP's OPCOM "DECnet starting"), so the launch is
 # proven by the process: no refused $CREPRC on either console, and SHOW SYSTEM
 # on each node lists NETACP.
-if grep -qaF '%RUN-F-CREPRC' "$LA" || grep -qaF '%RUN-F-CREPRC' "$LB"; then rc=1; else rc=0; fi
+if grep >/dev/null -aF '%RUN-F-CREPRC' "$LA" || grep >/dev/null -aF '%RUN-F-CREPRC' "$LB"; then rc=1; else rc=0; fi
 for n in A B; do
     [ "$rc" -eq 0 ] || break
     if [ "$n" = A ]; then lg="$LA"; else lg="$LB"; fi

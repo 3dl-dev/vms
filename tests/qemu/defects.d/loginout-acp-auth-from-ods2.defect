@@ -63,8 +63,9 @@ EOF
 }
 
 defect_apply() {
-        # Scoped to the READER (rms_textfile_open, /^rms_textfile_t
-        # \*rms_textfile_open/,/^}$/) so ONLY the read path misframes -- the
+        # Scoped to the READER (its body, rmstf_open_unl, behind the locking
+        # rms_textfile_open wrapper since rd vms-158d: /^static rms_textfile_t
+        # \*rmstf_open_unl/,/^}$/) so ONLY the read path misframes -- the
         # writers keep writing stream-LF. The record format is forced to VAR
         # AFTER $OPEN: since rd vms-158 $OPEN loads the file's own format from
         # the header (as VMS does), so a wrong format declared BEFORE $OPEN is
@@ -74,7 +75,7 @@ defect_apply() {
         # $PUT/$CREATE writers are untouched. After substitution the 4-space
         # `    tf->rab = cc$rms_rab;` no longer occurs in the reader's range --
         # the no-op the idempotency selftest requires.
-        sed -i '/^rms_textfile_t \*rms_textfile_open/,/^}$/ s|    tf->rab = cc$rms_rab;|    tf->fab.fab$b_rfm = FAB$C_VAR; tf->rab = cc$rms_rab; /* NEGCTL loginout-acp-auth-from-ods2 */|' "$_file"
+        sed -i '/^static rms_textfile_t \*rmstf_open_unl/,/^}$/ s|    tf->rab = cc$rms_rab;|    tf->fab.fab$b_rfm = FAB$C_VAR; tf->rab = cc$rms_rab; /* NEGCTL loginout-acp-auth-from-ods2 */|' "$_file"
 
     :
 }

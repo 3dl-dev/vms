@@ -28,6 +28,7 @@
 #define RMS_TEXTFILE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct rms_textfile rms_textfile_t;
 
@@ -39,6 +40,22 @@ typedef struct rms_textfile rms_textfile_t;
  * reached (fail-honest -- no ACP volume, no /dev/vms, or no such file).
  */
 rms_textfile_t *rms_textfile_open(const char *vms_spec);
+
+/*
+ * As rms_textfile_open, and *status (when non-NULL) receives the RMS status:
+ * RMS$_NORMAL on success; on failure why -- RMS$_FNF/RMS$_DNF for a file or
+ * directory that is not there, SS$_NOSUCHDEV when this image has no file layer
+ * at all (no RMS services, no executive), anything else for a file that is
+ * there but could not be opened (rd vms-acf3: a reader must not take a failed
+ * open for an absent file).
+ */
+rms_textfile_t *rms_textfile_open_st(const char *vms_spec, uint32_t *status);
+
+/*
+ * Why the last rms_textfile_getline() returned 0: RMS$_EOF at the end of the
+ * file, any other status for a read that failed part way (rd vms-acf3).
+ */
+uint32_t rms_textfile_last_status(const rms_textfile_t *tf);
 
 /*
  * Read the next record into `buf` (always NUL-terminated). Returns 1 when a

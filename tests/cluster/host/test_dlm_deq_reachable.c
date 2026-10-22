@@ -2215,7 +2215,7 @@ out:
  * elsewhere, had TWO senders, reached held=1, and correctly answered VAX2 0xfb
  * QUEUED. That LIVENESS half -- who really owes an op-0x13 -- is a wire rule
  * this executive does not have grounding for and is filed separately
- * (rd vms-f9e8). THIS section is the SAFETY half: in that state, a conflicting
+ * (rd vms-083). THIS section is the SAFETY half: in that state, a conflicting
  * request is QUEUED and never granted.
  *
  * The test drives the measured state exactly: adopt_OPEN with NO adopt_end.

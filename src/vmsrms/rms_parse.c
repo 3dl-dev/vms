@@ -95,8 +95,145 @@ static int fs_namech(int c)
     return isalnum(c) || c == '$' || c == '_' || c == '-' || c == '*' || c == '%';
 }
 
-/* Split and upcase one file specification; RMS$_SYN on a malformed one. */
-static uint32_t fs_split(const char *s, size_t n, struct fspec *f)
+/* ==========================================================================
+ * EXTENDED FILE SPECIFICATION CHARACTERS (rd vms-b9c). Observed on OpenVMS
+ * Alpha V8.4 with F$PARSE, tests/lab/captures/ods5-alpha-20261022/RESULTS.md
+ * sessions 3 and 4 -- the same rules under PARSE_STYLE=EXTENDED and
+ * TRADITIONAL, except that TRADITIONAL upper-cases the result:
+ *   - plain: letters, digits, $ - _ ~, and 8-bit (Latin-1) bytes; '*' and '%'
+ *     are wildcards; '?' becomes '%'; a space is dropped;
+ *   - anything else unescaped is RMS$_SYN;
+ *   - '^' escapes: ^hh (two hex digits) is that byte, written back in its
+ *     canonical form below; ^Uhhhh is a UCS-2 character, kept as ^U + upper
+ *     hex; ^_ and "^ " are a space, written ^_; ^$ ^- ^~ are the plain
+ *     character; ^ before . % or any character that needs it is kept; ^*, ^?
+ *     and ^ before a letter or digit that is not a hex pair are RMS$_SYN.
+ * Canonical form of one character: a space is ^_; a plain character is
+ * itself; '%' as a literal is ^%; every other printable character is ^c.
+ * ========================================================================== */
+static int fs_plain(int c)
+{
+    return isalnum(c) || c == '$' || c == '-' || c == '_' || c == '~' || c >= 0x80;
+}
+
+static int fs_needs_escape(int c)
+{
+    return c != 0 && strchr("!#&'()+,./:;<=>@[\\]^`{|}\"%", c) != NULL;
+}
+
+static int fs_hex(int c)
+{
+    return isxdigit(c);
+}
+
+/* Append one character in canonical form; 0 on overflow or a character no file
+ * specification can carry (a control character, a literal * or ?). */
+static int fs_put_canon(char *out, size_t cap, size_t *k, int c, int ext)
+{
+    if (c == ' ') {
+        if (*k + 3 > cap) return 0;
+        out[(*k)++] = '^'; out[(*k)++] = '_';
+        return 1;
+    }
+    if (fs_plain(c)) {
+        if (*k + 2 > cap) return 0;
+        out[(*k)++] = (char)(ext ? c : (c < 0x80 ? toupper(c) : c));
+        return 1;
+    }
+    if (fs_needs_escape(c)) {
+        if (*k + 3 > cap) return 0;
+        out[(*k)++] = '^'; out[(*k)++] = (char)c;
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * Scan one part (name, type, or a directory component) of an extended file
+ * specification from s[*i] up to the first unescaped character in `stops`,
+ * writing its canonical text to out (NUL-terminated). Returns RMS$_NORMAL, or
+ * RMS$_SYN for a character the rules above refuse. A wildcard sets *wild.
+ */
+static uint32_t fs_scan_part(const char *s, size_t n, size_t *i, const char *stops,
+                             char *out, size_t cap, int ext)
+{
+    size_t k = 0;
+
+    while (*i < n) {
+        int c = (unsigned char)s[*i];
+        if (strchr(stops, c))
+            break;
+        if (c == ' ') { (*i)++; continue; }                     /* dropped */
+        if (c == '*' || c == '%' || c == '?') {                 /* wildcards */
+            if (k + 2 > cap) return RMS$_SYN;
+            out[k++] = c == '?' ? '%' : (char)c;
+            (*i)++;
+            continue;
+        }
+        if (c == '^') {
+            int e = *i + 1 < n ? (unsigned char)s[*i + 1] : 0;
+            if (e == 'U' || e == 'u') {
+                if (*i + 5 < n && fs_hex((unsigned char)s[*i + 2]) && fs_hex((unsigned char)s[*i + 3]) &&
+                    fs_hex((unsigned char)s[*i + 4]) && fs_hex((unsigned char)s[*i + 5])) {
+                    if (k + 7 > cap) return RMS$_SYN;
+                    out[k++] = '^'; out[k++] = 'U';
+                    for (int h = 2; h < 6; h++)
+                        out[k++] = (char)toupper((unsigned char)s[*i + h]);
+                    *i += 6;
+                    continue;
+                }
+            }
+            if (*i + 2 < n && fs_hex(e) && fs_hex((unsigned char)s[*i + 2])) {
+                char hx[3] = { (char)e, s[*i + 2], 0 };
+                int b = (int)strtol(hx, NULL, 16);
+                if (b == '*' || b == '?' || b < 0x20 || b == 0x7F || b == '%') {
+                    if (b != '%') return RMS$_SYN;
+                }
+                if (b == '%') {
+                    if (k + 3 > cap) return RMS$_SYN;
+                    out[k++] = '^'; out[k++] = '%';
+                } else if (!fs_put_canon(out, cap, &k, b, ext)) {
+                    return RMS$_SYN;
+                }
+                *i += 3;
+                continue;
+            }
+            if (e == '_' || e == ' ') {                          /* a space */
+                if (!fs_put_canon(out, cap, &k, ' ', ext)) return RMS$_SYN;
+                *i += 2;
+                continue;
+            }
+            if (e == '*' || e == '?' || e == 0)
+                return RMS$_SYN;
+            if (e == '%' || fs_needs_escape(e)) {
+                if (k + 3 > cap) return RMS$_SYN;
+                out[k++] = '^'; out[k++] = (char)e;
+                *i += 2;
+                continue;
+            }
+            /* ^$ ^- ^~: the character itself (observed: the escape is not
+             * kept). ^ before a letter or digit that is not a hex pair is
+             * RMS$_SYN (observed: "a^b.t" fails). */
+            if (isalnum(e))
+                return RMS$_SYN;
+            if (!fs_put_canon(out, cap, &k, e, ext)) return RMS$_SYN;
+            *i += 2;
+            continue;
+        }
+        if (!fs_plain(c))
+            return RMS$_SYN;
+        if (!fs_put_canon(out, cap, &k, c, ext)) return RMS$_SYN;
+        (*i)++;
+    }
+    if (k >= cap) return RMS$_SYN;
+    out[k] = '\0';
+    return RMS$_NORMAL;
+}
+
+/* Split one file specification; RMS$_SYN on a malformed one. `ext` != 0 is
+ * PARSE_STYLE=EXTENDED: the case of the directory, name and type is kept;
+ * otherwise it is upper-cased (the node and device always are). */
+static uint32_t fs_split(const char *s, size_t n, struct fspec *f, int ext)
 {
     size_t i = 0, k;
     memset(f, 0, sizeof *f);
@@ -136,98 +273,101 @@ static uint32_t fs_split(const char *s, size_t n, struct fspec *f)
             i = k + 1;
             break;
         }
-        if (!fs_namech((unsigned char)s[k])) break;
+        if (s[k] == '^' || !fs_namech((unsigned char)s[k])) break;  /* no device has a '^' */
     }
-    /* [directory] or <directory> */
+    /* [directory] or <directory>: components separated by an unescaped '.',
+     * each scanned by the extended-specification rules */
     if (i < n && (s[i] == '[' || s[i] == '<')) {
         char close = s[i] == '[' ? ']' : '>';
-        size_t j = i + 1, d = 0;
-        while (j < n && s[j] != close) {
-            int c = (unsigned char)s[j];
-            if (!(fs_namech(c) || c == '.')) return RMS$_SYN;
-            if (d + 2 >= sizeof f->dir) return RMS$_SYN;
-            f->dir[++d] = (char)toupper(c);
-            j++;
-        }
-        if (j >= n) return RMS$_SYN;                 /* no closing bracket */
+        char stops[3] = { '.', close, 0 };
+        size_t d = 1;
+        i++;
         f->dir[0] = '[';
-        f->dir[++d] = ']';
+        for (;;) {
+            char comp[256];
+            if (fs_scan_part(s, n, &i, stops, comp, sizeof comp, ext) != RMS$_NORMAL)
+                return RMS$_SYN;
+            if (d + strlen(comp) + 2 >= sizeof f->dir) return RMS$_SYN;
+            memcpy(f->dir + d, comp, strlen(comp));
+            d += strlen(comp);
+            if (i >= n) return RMS$_SYN;                     /* no closing bracket */
+            if (s[i] == close) break;
+            f->dir[d++] = '.';                               /* an unescaped '.' */
+            i++;
+        }
+        f->dir[d++] = ']';
+        f->dir[d] = '\0';
         f->has_dir = 1;
-        i = j + 1;
+        i++;
     }
-#if !defined(__vax__) && !defined(__vax)
+
     /*
-     * MORE THAN ONE '.' IN THE NAME FIELD (64-bit). OpenVMS Alpha V8.4 RMS
-     * takes the LAST '.' as the type delimiter and keeps the earlier ones in
-     * the name, escaped ODS-5 style: "A.B.C.D" -> name "A^.B^.C", type ".D"
-     * (semantic oracle RMS.PARSE.SYNTAX2). VAX V7.3 RMS knows no such name
-     * and says RMS$_SYN, which the scanner below still does on VAX. A last
-     * segment that is a version ("A.B.1") keeps the classic reading.
+     * name.type;version. The unescaped dots split the field: with none it is
+     * all name; the LAST unescaped dot starts the type and the earlier ones are
+     * kept in the name, escaped ("a.b.c.d" -> name "a^.b^.c", type ".d" --
+     * OpenVMS Alpha V8.4, semantic oracle RMS.PARSE.SYNTAX2 and RESULTS.md R3,
+     * under either parse style). VAX V7.3 RMS knows no such name and says
+     * RMS$_SYN. A last segment that is a version number ("A.B.1") keeps the
+     * classic name.type.version reading.
      */
     {
-        size_t e = i, dots = 0, last = 0, q;
-        while (e < n && (fs_namech((unsigned char)s[e]) || s[e] == '.')) {
-            if (s[e] == '.') { dots++; last = e; }
-            e++;
+        char seg[8][256];
+        size_t nseg = 0;
+        int ver_by_dot = 0;
+        for (;;) {
+            if (nseg >= 8) return RMS$_SYN;
+            if (fs_scan_part(s, n, &i, ".;", seg[nseg], sizeof seg[nseg], ext) != RMS$_NORMAL)
+                return RMS$_SYN;
+            nseg++;
+            if (i < n && s[i] == '.') { i++; continue; }
+            break;
         }
-        if (dots >= 2 && (e == n || s[e] == ';')) {
-            int numeric = last + 1 < e;
-            for (q = last + 1; q < e; q++)
-                if (!(isdigit((unsigned char)s[q]) || s[q] == '*' || s[q] == '-'))
+        /* "name.type.version": two or more dots and a numeric last segment */
+        if (nseg >= 3) {
+            const char *v = seg[nseg - 1];
+            int numeric = v[0] != '\0';
+            for (const char *q = v; *q; q++)
+                if (!(isdigit((unsigned char)*q) || *q == '*' || *q == '-'))
                     numeric = 0;
-            if (!numeric) {
-                k = 0;
-                for (; i < last; i++) {
-                    if (k + 3 >= sizeof f->name) return RMS$_SYN;
-                    if (s[i] == '.')
-                        f->name[k++] = '^';
-                    f->name[k++] = (char)toupper((unsigned char)s[i]);
-                }
-                f->name[k] = '\0';
-                f->has_name = k > 0;
-                i = last + 1;
-                k = 0;
-                while (i < e) {
-                    if (k + 1 >= sizeof f->type) return RMS$_SYN;
-                    f->type[k++] = (char)toupper((unsigned char)s[i++]);
-                }
-                f->has_type = 1;
-                goto version;
+            if (numeric) {
+                if (strlen(v) >= sizeof f->ver) return RMS$_SYN;
+                ver_by_dot = 1;
+                memcpy(f->ver, v, strlen(v) + 1);
+                nseg--;
             }
         }
-    }
+#if defined(__vax__) || defined(__vax)
+        if (nseg > 2)
+            return RMS$_SYN;
 #endif
-    /* name */
-    k = 0;
-    while (i < n && fs_namech((unsigned char)s[i])) {
-        if (k + 1 >= sizeof f->name) return RMS$_SYN;
-        f->name[k++] = (char)toupper((unsigned char)s[i++]);
-    }
-    f->has_name = k > 0;
-    /* .type */
-    if (i < n && s[i] == '.') {
-        i++;
-        k = 0;
-        while (i < n && fs_namech((unsigned char)s[i])) {
-            if (k + 1 >= sizeof f->type) return RMS$_SYN;
-            f->type[k++] = (char)toupper((unsigned char)s[i++]);
+        if (nseg == 1) {
+            snprintf(f->name, sizeof f->name, "%s", seg[0]);
+            f->has_name = f->name[0] != '\0';
+        } else {
+            size_t nk = 0;
+            for (size_t g = 0; g + 1 < nseg; g++) {
+                size_t l = strlen(seg[g]);
+                if (nk + l + 3 >= sizeof f->name) return RMS$_SYN;
+                if (g > 0) { f->name[nk++] = '^'; f->name[nk++] = '.'; }
+                memcpy(f->name + nk, seg[g], l);
+                nk += l;
+            }
+            f->name[nk] = '\0';
+            f->has_name = nk > 0;
+            snprintf(f->type, sizeof f->type, "%s", seg[nseg - 1]);
+            f->has_type = 1;
         }
-        f->has_type = 1;
-    }
-#if !defined(__vax__) && !defined(__vax)
-version:
-#endif
-    /* ;version, or .version after a type */
-    if (i < n && (s[i] == ';' || (s[i] == '.' && f->has_type))) {
-        int dotver = s[i] == '.';
-        i++;
-        k = 0;
-        while (i < n && (isdigit((unsigned char)s[i]) || s[i] == '*' || s[i] == '-')) {
-            if (k + 1 >= sizeof f->ver) return RMS$_SYN;
-            f->ver[k++] = s[i++];
+        if (ver_by_dot) {
+            f->has_ver = 1;
+        } else if (i < n && s[i] == ';') {
+            i++;
+            k = 0;
+            while (i < n && (isdigit((unsigned char)s[i]) || s[i] == '*' || s[i] == '-')) {
+                if (k + 1 >= sizeof f->ver) return RMS$_SYN;
+                f->ver[k++] = s[i++];
+            }
+            f->has_ver = 1;
         }
-        if (dotver && k == 0) return RMS$_SYN;
-        f->has_ver = 1;
     }
     if (i != n)
         return RMS$_SYN;                                /* stray characters */
@@ -247,7 +387,7 @@ static int fs_trn(const char *name, char *eq, size_t eqsz, uint32_t *attr, int32
  * Sets *dir_from_lnm when a translation supplied the directory, *devbits to the
  * NAM$M_CNCL_DEV / ROOT_DIR / SEARCH_LIST of the device it stops at.
  */
-static uint32_t fs_xlate_dev(struct fspec *f, int *dir_from_lnm, uint32_t *devbits)
+static uint32_t fs_xlate_dev(struct fspec *f, int *dir_from_lnm, uint32_t *devbits, int ext)
 {
     *devbits = 0;
     for (int depth = 0; f->has_dev && depth < 10; depth++) {
@@ -269,7 +409,7 @@ static uint32_t fs_xlate_dev(struct fspec *f, int *dir_from_lnm, uint32_t *devbi
             snprintf(f->dev, sizeof f->dev, "%s", eq);
             for (char *p = f->dev; *p; p++) *p = (char)toupper((unsigned char)*p);
         } else {
-            if (fs_split(eq, strlen(eq), &e) != RMS$_NORMAL || !e.has_dev)
+            if (fs_split(eq, strlen(eq), &e, ext) != RMS$_NORMAL || !e.has_dev)
                 return RMS$_NORMAL;                     /* not a device translation */
             memcpy(f->dev, e.dev, sizeof f->dev);
             if (e.has_dir) {
@@ -315,17 +455,41 @@ static uint32_t fs_wild(const char *s)
     return strpbrk(s, "*%") != NULL;
 }
 
+/*
+ * The process's file-name parse style (rd vms-b9c): the executive's per-process
+ * attribute ($SET_PROCESS_PROPERTIESW, VMS_IOCTL_PPROP), read on every parse so a
+ * SET PROCESS/PARSE_STYLE takes effect at once. The current image's style
+ * (PPROP$C_PARSE_STYLE_TEMP) is the one in force. No executive (a host tool):
+ * TRADITIONAL, the style a process starts with.
+ */
+static int rms_parse_style_extended(void)
+{
+#if defined(OVMX_HAVE_ACP)
+    uint32_t v = 0;
+    if ((vms_kif_pprop(VMS_PPROP_PARSE_STYLE_TEMP, NULL, &v) & 1) &&
+        v == VMS_PARSE_STYLE_EXTENDED)
+        return 1;
+#endif
+    return 0;
+}
+
 uint32_t rms_name_parse(const char *fna, size_t fns, const char *dna, size_t dns,
                         struct rms_pname *pn)
+{
+    return rms_name_parse_ex(fna, fns, dna, dns, pn, rms_parse_style_extended());
+}
+
+uint32_t rms_name_parse_ex(const char *fna, size_t fns, const char *dna, size_t dns,
+                           struct rms_pname *pn, int ext)
 {
     struct fspec p, d, x;
     int dir_from_lnm = 0, dummy = 0;
     uint32_t pbits = 0, dbits = 0, xbits = 0, st;
 
     memset(pn, 0, sizeof *pn);
-    if ((st = fs_split(fna ? fna : "", fna ? fns : 0, &p)) != RMS$_NORMAL)
+    if ((st = fs_split(fna ? fna : "", fna ? fns : 0, &p, ext)) != RMS$_NORMAL)
         return st;
-    if ((st = fs_xlate_dev(&p, &dir_from_lnm, &pbits)) != RMS$_NORMAL)
+    if ((st = fs_xlate_dev(&p, &dir_from_lnm, &pbits, ext)) != RMS$_NORMAL)
         return st;
     uint32_t fnb = (p.has_node ? NAM$M_NODE : 0) | (p.has_dev ? NAM$M_EXP_DEV : 0) |
                    ((p.has_dir || dir_from_lnm) ? NAM$M_EXP_DIR : 0) |
@@ -335,9 +499,9 @@ uint32_t rms_name_parse(const char *fna, size_t fns, const char *dna, size_t dns
 
     /* the default name */
     if (dna && dns) {
-        if (fs_split(dna, dns, &d) != RMS$_NORMAL)
+        if (fs_split(dna, dns, &d, ext) != RMS$_NORMAL)
             return RMS$_DNA;
-        (void)fs_xlate_dev(&d, &dummy, &dbits);
+        (void)fs_xlate_dev(&d, &dummy, &dbits, ext);
         if (!p.has_dev && d.has_dev) { memcpy(p.dev, d.dev, sizeof p.dev); p.has_dev = 1; devbits = dbits; }
         if (!p.has_dir && d.has_dir) { memcpy(p.dir, d.dir, sizeof p.dir); p.has_dir = 1; }
         if (!p.has_name && d.has_name) { memcpy(p.name, d.name, sizeof p.name); p.has_name = 1; }
@@ -350,8 +514,8 @@ uint32_t rms_name_parse(const char *fna, size_t fns, const char *dna, size_t dns
     {
         char ddir[256] = "";
         if ((vms_kif_ddir(NULL, ddir, sizeof ddir) & 1) && ddir[0] &&
-            fs_split(ddir, strlen(ddir), &x) == RMS$_NORMAL) {
-            (void)fs_xlate_dev(&x, &dummy, &xbits);
+            fs_split(ddir, strlen(ddir), &x, ext) == RMS$_NORMAL) {
+            (void)fs_xlate_dev(&x, &dummy, &xbits, ext);
             if (!p.has_dev && x.has_dev) {
                 memcpy(p.dev, x.dev, sizeof p.dev); p.has_dev = 1; devbits = xbits;
                 if (!p.has_dir && x.has_dir) { memcpy(p.dir, x.dir, sizeof p.dir); p.has_dir = 1; }

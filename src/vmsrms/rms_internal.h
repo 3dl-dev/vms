@@ -113,6 +113,11 @@ struct rms_pname {
 };
 uint32_t rms_name_parse(const char *fna, size_t fns, const char *dna, size_t dns,
                         struct rms_pname *pn);
+/* rms_name_parse under a given parse style (ext != 0: PARSE_STYLE=EXTENDED,
+ * the case of directory, name and type kept) -- rms_name_parse reads the
+ * process's style from the executive and calls this (rd vms-b9c). */
+uint32_t rms_name_parse_ex(const char *fna, size_t fns, const char *dna, size_t dns,
+                           struct rms_pname *pn, int ext);
 void rms_nam_set_parts(struct NAM *nam, char *base, const struct rms_pname *pn);
 
 

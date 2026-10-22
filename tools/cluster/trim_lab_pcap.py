@@ -11,7 +11,10 @@ A RULE, not a hand-picked window, in two passes:
             name rule alone drops exactly the frames that carry the handles.
 Everything else in the pod's own br0 traffic (the VAXes' F11B$/CACHE$ chatter)
 is dropped. Frame payloads are never altered.
-usage: trim_pcap.py <in.pcap> <out.pcap>
+The NAMES are an argument, not a constant: rd vms-083's arm holds four root
+resources of its own. Given none, the rd vms-c2b / vms-6ad1 set is used, so
+every existing caller trims exactly what it trimmed before.
+usage: trim_pcap.py <in.pcap> <out.pcap> [<resource-name> ...]
 """
 import struct, sys
 
@@ -39,6 +42,9 @@ def selected(body):
     cat, op = body[8], body[9]
     return nm in NAMES or (cat in (0x02, 0x82) and op in RM_OPS)
 
+
+if len(sys.argv) > 3:
+    NAMES = tuple(a.encode('latin1') for a in sys.argv[3:])
 
 data = open(sys.argv[1], 'rb').read()
 txns = set()

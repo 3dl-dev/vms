@@ -296,6 +296,7 @@ dlm-rm-14-pattern-overruns-a-field
 dlm-rm-lock-answer-record-omitted
 dlm-rm-held-before-the-last-end
 dlm-rm-held-to-a-member-that-reported-nothing
+dlm-rm-owed-set-is-the-whole-club
 dlm-rm-open-answered-when-refused
 dlm-rm-half-tree-left-adopted
 dlm-rm-held-reported-though-unsent
@@ -2828,21 +2829,54 @@ EOF
         why)          echo "rm_owed_complete() returns true as soon as ONE member has reported instead of all of them, so the FIRST op-0x13 closes the adoption and announces the tree. On a real cluster the old master's 0x13 can arrive BEFORE a holder's records (measured in the pre-registered RA8 arm), so this node would close the transaction and then REFUSE four locks a real VAX still believes it holds -- the holder waits forever on a lock its own database says it has.";;
         require_fail) hd_lines <<'EOF'
   *** one to each system that sent an op-0x13 ***
+  *** the admitted sender gets its op-0x14 too ***
   *** the adoption is NOT closed: the holder has not reported (RA8's interleave) ***
-  *** the tree is not announced at all while a member still owes an end-of-records ***
+  *** the tree does NOT close: the holder owes one ***
   *** two op-0x14s, after the last op-0x13 ***
+  and both reporters are told
   and is really adopted
+  and no further op-0x14 goes out
   and no op-0x14 has gone out
-  and the executive still counts the completion as unreported
   both op-0x14s counted unsent
   it is struck
   nothing sent
+  the DIRECTORY node has not reported
   the HOLDER's end-of-records closes it
-  the bystander reports too -- it holds nothing and still sends one (RA8's CACHE$ episode)
+  the directory node reports, holding nothing in the tree
+  the directory node still owes one
   the holder still owes one
   the holder's record still lands
-  three op-0x14s now go out
-  with three members and two reports the tree is still waiting
+  the old master still owes one
+  two op-0x14s now go out
+  two op-0x14s, after the last 0x13
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-owed-set-is-the-whole-club)
+        case "$_f" in
+        facility)     echo "the owed-op-0x13 set is the ROLES, computed from executive state (rd vms-083's driven one-variable arm on two real VAX V7.3 nodes): the old master, the tree's directory node, and every member that really sent an op-0x12 -- never the whole club";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_owed_seed() snapshots the WHOLE CLUB into the owed set -- the pre-rd vms-083 behaviour, taken from a census of uncontrolled episodes. The driven arm moved one variable (which node the root name assigns as the tree's directory) and measured that when the directory IS the old master, the remaining member gets no op-0x0f, no op-0x11 and sends NOTHING for 180 s. Waiting for it leaves the tree un-HELD forever: no op-0x14 goes out, the adopted locks stay in proxy state, and a proxy LKB is not on the granted queue the compatibility check walks -- which is how OVMX granted EX on a resource its own process held at CR (rd vms-5cd, 2 of 2).";;
+        require_fail) hd_lines <<'EOF'
+  *** one to each system that sent an op-0x13 ***
+  *** the admitted sender gets its op-0x14 too ***
+  *** the adoption CLOSES on that one report ***
+  *** the tree reaches HELD: no double grant ***
+  and both reporters are told
+  and no further op-0x14 goes out
+  and the tree still completes
+  counted as ADMITTED
+  its 0x13 closes the tree
+  one op-0x14
+  the late end-of-records is refused
+  the old master alone closes it
+  to the one system that sent one
+  two op-0x14s now go out
+  two op-0x14s, after the last 0x13
+  with one op-0x14
 EOF
                       ;;
         esac;;
@@ -3809,6 +3843,11 @@ apply_edit() {
 
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;
+
+    dlm-rm-owed-set-is-the-whole-club)
+        # The pre-rd vms-083 seed, restored: every member of the club is
+        # waited for, including one with no role in the tree at all.
+        sed -i 's@^\tif (rm_club(f, csids) == 0u)$@\t{ uint32_t _i, _n = rm_club(f, csids); if (_n == 0u) return -1; for (_i = 0u; _i < _n; _i++) (void)rm_owed_add(f, t, csids[_i]); } /* NEGCTL dlm-rm-owed-set-is-the-whole-club */\n\tif (0)@' "$_file";;
 
     dlm-rm-held-before-the-last-end)
         # `t->n_done == t->n_owed` occurs once (rm_owed_complete).

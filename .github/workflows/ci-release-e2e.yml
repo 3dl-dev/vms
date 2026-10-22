@@ -1800,8 +1800,8 @@ jobs:
   # VMS-faithful operator procedure -- @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM, the
   # CHANGE path from docs/cluster-configuration-guide.md -- INTERACTIVELY over
   # the console on a real booted OVMX, then reboots the same disk, and the
-  # running system ADOPTS the authored SCSNODE: the boot console's own
-  # %OVMX-I-SCSNODE line names it and F$GETSYI("NODENAME") (the live Linux
+  # running system ADOPTS the authored SCSNODE: the boot's own
+  # %OVMX-I-SCSNODE record (SYS$MANAGER:OPERATOR.LOG, rd vms-158d) names it and F$GETSYI("NODENAME") (the live Linux
   # hostname PID 1 sethostname()'d from the authored SCSNODE) reads it back,
   # with F$GETSYI("SCSNODE") and SYSGEN USE CURRENT agreeing. Where
   # boot-scsnode-hostname-e2e types the SYSGEN commands by hand and the host

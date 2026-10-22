@@ -105,7 +105,7 @@ run_cmd() {
 }
 
 # --- Boot to login ----------------------------------------------------------
-if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+if wait_for ' - OpenVMS-compatible' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
 w=0
 until grep -qaF 'Username:' "$LOG" 2>/dev/null || [ "$w" -ge "$BOOT_TIMEOUT" ]; do
     send ''; sleep 1; w=$((w + 1))

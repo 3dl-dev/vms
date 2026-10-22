@@ -385,8 +385,9 @@ wake_login "$A_LOG2" "$AP" 4
 if waitfor 'Username:' 180 "$A_LOG2" "$AP"; then rc=0; else rc=1; fi
 record "node A boot2 (reboot): reaches the login prompt" "$rc"
 
-check "node A boot2: %OVMX-I-SCSNODE console line names the authored $NODE_A" \
-    "$A_LOG2" "%OVMX-I-SCSNODE, node name $NODE_A set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+# rd vms-158d: the node-name record is OPERATOR.LOG's (no VMS boot console
+# prints it): absent here, read back from the log after login below.
+check "node A boot2: the console carries no OVMX node-name line" "$A_LOG2" "%OVMX-I-SCSNODE" absent
 
 if [ "$rc" -eq 0 ]; then
     printf 'SYSTEM\r' >&4; sleep 1
@@ -468,8 +469,9 @@ wake_login "$B_LOG2" "$BP" 6
 if waitfor 'Username:' 180 "$B_LOG2" "$BP"; then rc=0; else rc=1; fi
 record "node B boot2 (reboot): reaches the login prompt" "$rc"
 
-check "node B boot2: %OVMX-I-SCSNODE console line names the authored $NODE_B" \
-    "$B_LOG2" "%OVMX-I-SCSNODE, node name $NODE_B set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+# rd vms-158d: the node-name record is OPERATOR.LOG's (no VMS boot console
+# prints it): absent here, read back from the log after login below.
+check "node B boot2: the console carries no OVMX node-name line" "$B_LOG2" "%OVMX-I-SCSNODE" absent
 
 if [ "$rc" -eq 0 ]; then
     printf 'SYSTEM\r' >&6; sleep 1
@@ -623,6 +625,16 @@ check "node B: SYSINIT's own line while it joins" \
     "$B_LOG2" "%SYSINIT, waiting to form or join a VMScluster system"
 check_console_vms_faithful "node A" "$A_LOG2"
 check_console_vms_faithful "node B" "$B_LOG2"
+
+# rd vms-158d: each node's node-name record is in its OPERATOR.LOG (read last:
+# TYPE puts the log's executive diagnostics on the console, which the checks
+# above must not see).
+printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&4 2>/dev/null; sleep 3
+check "node A boot2: OPERATOR.LOG records the node name $NODE_A set from the .PAR" \
+    "$A_LOG2" "%OVMX-I-SCSNODE, node name $NODE_A set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&6 2>/dev/null; sleep 3
+check "node B boot2: OPERATOR.LOG records the node name $NODE_B set from the .PAR" \
+    "$B_LOG2" "%OVMX-I-SCSNODE, node name $NODE_B set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 
 # Never-crash-a-peer: neither console shows a bugcheck/panic anywhere in the run.
 for LABEL in "node A" "node B"; do

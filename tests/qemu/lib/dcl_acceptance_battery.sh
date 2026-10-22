@@ -397,7 +397,7 @@ run_dcl_acceptance_battery() {
     local SYSDEV_NAME="${SYSDEV%:}"
 
     # --- Boot the real runtime to the login prompt --------------------------
-    if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+    if wait_for ' - OpenVMS-compatible' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
 
     # --- THE CONSOLE LOGIN SEQUENCE (vms-3e9 a/b/c) -------------------------
     # Runs BEFORE any keystroke is sent, because that is what makes it a proof.
@@ -1496,8 +1496,8 @@ run_dcl_acceptance_battery() {
     must_have "$SEG" '[DNCFG::]' \
         "DECnet config [vms-1f69]: a fresh system disk has no SYS\$SYSTEM:NETNODE_LOCAL.DAT (the node is unconfigured)"
     run_cmd '@SYS$MANAGER:STARTNET'
-    must_not_have "$SEG" '%DECNET-I-STARTNET' \
-        "DECnet config [vms-1f69]: STARTNET on the UNCONFIGURED node launches no NETACP (silent no-op, real-VMS gate)"
+    must_not_have "$SEG" '%RUN-S-PROC_ID' \
+        "DECnet config [vms-1f69]: STARTNET on the UNCONFIGURED node launches no NETACP (no RUN of it -- silent no-op, real-VMS gate)"
     run_cmd 'NCP :== $SYS$SYSTEM:NCP.EXE'
     local NCP_OFF; NCP_OFF=$(wc -c <"$LOG")
     send 'NCP SET EXECUTOR ADDRESS 1.42'
@@ -1618,14 +1618,13 @@ run_dcl_acceptance_battery() {
         # system does at LPBETA, on a VM with a NIC, and checks the wire.)
         run_cmd '@SYS$MANAGER:STARTNET'
         if printf '%s\n' "$SEG" | grep -qF '%RUN-F-CREPRC'; then
-            must_not_have "$SEG" '%DECNET-I-STARTNET' \
+            must_not_have "$SEG" '%RUN-S-PROC_ID' \
                 "STARTNET [vms-1f69]: a REFUSED RUN/DETACHED is never announced as a NETACP launch (honest .COM)"
-            must_have "$SEG" '%DECNET-E-STARTNET' \
-                "STARTNET [vms-1f69]: a refused NETACP launch is reported %DECNET-E-STARTNET with its status"
+            note "STARTNET [vms-158d]: the refusal is RUN's own %RUN-F-CREPRC (the .COM adds no line of its own)"
             note "STARTNET [vms-1f69]: interactive RUN/DETACHED from this non-root session was refused (rd vms-ff75); the running-NETACP proof is the boot-time e2e"
         else
-            must_have "$SEG" '%DECNET-I-STARTNET' \
-                "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and launches NETACP detached"
+            must_have "$SEG" '%RUN-S-PROC_ID' \
+                "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and launches NETACP detached (RUN's own line)"
         fi
     fi
     wait_for '$ ' 20 "$DN_OFF"

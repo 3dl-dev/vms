@@ -230,13 +230,12 @@ if [ "$rc" -eq 0 ]; then
     # this must WAIT for the exact line (like the WRITE assertion above and the
     # sibling test_boot_scsnode_hostname_e2e.sh's line), never one-shot grep it
     # too early. The line must still name CLUX (assertion strength unchanged).
-    if waitfor '%OVMX-I-SCSNODE, node name CLUX set from SYS$SYSTEM:OVMXVMSSYS.PAR' 90 "$POS_LOG"; then
-        rc=0; else rc=1; fi
-    record "boot: %OVMX-I-SCSNODE console line names the authored CLUX" "$rc"
-
+    # rd vms-158d: the announce is an OPERATOR.LOG record now (no VMS boot
+    # console prints it); it is read back from the log after login, below.
     wake_login "$POS_LOG"
     if waitfor 'Username:' 120 "$POS_LOG"; then rc=0; else rc=1; fi
     record "boot: reaches the login prompt after CONTINUE" "$rc"
+    check "boot: the console carries no OVMX node-name line" "$POS_LOG" "%OVMX-I-SCSNODE" absent
 fi
 
 if [ "$rc" -eq 0 ]; then
@@ -250,6 +249,11 @@ if [ "$rc" -eq 0 ]; then
     send 'SHOW SYMBOL HOSTP'; sleep 1
     check "in-guest: F\$GETSYI(NODENAME) reads the authored CLUX (real hostname)" \
         "$POS_LOG" 'HOSTP = "CLUX"'
+    # rd vms-158d: PID 1's node-name record is an OPERATOR.LOG record (a real
+    # VMS boot console prints no such line) -- read it back the VMS way.
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 3
+    check "in-guest: OPERATOR.LOG records the node name CLUX set from the .PAR" \
+        "$POS_LOG" "%OVMX-I-SCSNODE, node name CLUX set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 
     # NUMERIC param in effect: dcl_lexical.c reads the OVMXVMSSYS.PAR store
     # fresh and sees the ;2 the SYSBOOT> WRITE minted. F$GETSYI returns an

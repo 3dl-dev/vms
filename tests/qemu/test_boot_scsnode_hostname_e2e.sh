@@ -285,7 +285,9 @@ record "boot 2 (reboot): still reaches the login prompt (mount-or-halt gate unaf
 
 # The boot console ITSELF announces the new node name, before any DCL runs --
 # a second, independent proof beyond the DCL session below.
-check "boot 2: %OVMX-I-SCSNODE console line names ALPHA9" "$POS_LOG2" "%OVMX-I-SCSNODE, node name ALPHA9 set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+# rd vms-158d: the node-name record is OPERATOR.LOG's, not the console's (no VMS
+# boot console prints it); it is read back from the log after login, below.
+check "boot 2: the console carries no OVMX node-name line" "$POS_LOG2" "%OVMX-I-SCSNODE" absent
 check "boot 2: NO honest-halt (a good, present .PAR does not warn)" "$POS_LOG2" "%OVMX-W-NOPARAMS" absent
 
 if [ "$rc" -eq 0 ]; then
@@ -325,6 +327,11 @@ if [ "$rc" -eq 0 ]; then
     check "boot 2: SHOW PROCESS names the node ALPHA9" "$POS_LOG2" 'Node: ALPHA9'
     check "boot 2: no surface names the node from the edited file (BETA7) or the default (OVMX)" \
         "$POS_LOG2" 'Node: BETA7' absent
+    # rd vms-158d: PID 1's node-name record is an OPERATOR.LOG record (a real
+    # VMS boot console prints no such line) -- read it back the VMS way.
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 3
+    check "boot 2: OPERATOR.LOG records the node name ALPHA9 set from the .PAR" \
+        "$POS_LOG2" "%OVMX-I-SCSNODE, node name ALPHA9 set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 fi
 kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 

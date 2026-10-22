@@ -146,8 +146,20 @@ if login A "$LA"; then ra=0; else ra=1; fi
 record "boot 2 (A): SYSTEM logs in" "$ra"
 if login B "$LB"; then rb=0; else rb=1; fi
 record "boot 2 (B): SYSTEM logs in" "$rb"
-if grep -qaF '%DECNET-I-STARTNET' "$LA" && grep -qaF '%DECNET-I-STARTNET' "$LB"; then rc=0; else rc=1; fi
-record "boot 2: boot-time STARTNET launched NETACP on both nodes" "$rc"
+# rd vms-158d: STARTNET prints no launch line of its own (a VMS console shows
+# RUN's %RUN-S-PROC_ID and NETACP's OPCOM "DECnet starting"), so the launch is
+# proven by the process: no refused $CREPRC on either console, and SHOW SYSTEM
+# on each node lists NETACP.
+if grep >/dev/null -aF '%RUN-F-CREPRC' "$LA" || grep >/dev/null -aF '%RUN-F-CREPRC' "$LB"; then rc=1; else rc=0; fi
+for n in A B; do
+    [ "$rc" -eq 0 ] || break
+    if [ "$n" = A ]; then lg="$LA"; else lg="$LB"; fi
+    o=$(wc -c <"$lg")
+    send "$n" 'SHOW SYSTEM'
+    waitafter "$n" ' NETACP' 60 "$lg" "$o" || rc=1
+    sleep 2
+done
+record "boot 2: boot-time STARTNET launched NETACP on both nodes (SHOW SYSTEM lists it; no %RUN-F-CREPRC)" "$rc"
 
 if [ "$ra" -eq 0 ] && [ "$rb" -eq 0 ]; then
     echo "  (letting the two NETACPs hear each other ${NETACP_SETTLE}s)"

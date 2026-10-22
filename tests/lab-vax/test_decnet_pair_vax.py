@@ -489,11 +489,23 @@ def main():
 
         # ---- VAX: boot-time STARTNET + the executive datalink ---------------
         boot = v.text(0)
-        check("%DECNET-I-STARTNET" in boot and "%DECNET-E-STARTNET" not in boot,
-              "VAX: boot-time STARTNET found the configured executor database and launched NETACP")
+        # rd vms-158d: STARTNET prints no launch line of its own -- a real VMS
+        # console shows only RUN's %RUN-S-PROC_ID and NETACP's OPCOM "DECnet
+        # starting" (tests/lab/captures/vms-52d-0b01-oracle-20261013/
+        # armA-vax1-console.log). So the launch is proven by the process
+        # itself (SHOW SYSTEM) and by NETACP's OPCOM record in OPERATOR.LOG,
+        # and a refused launch is RUN's own %RUN-F-CREPRC on the console.
+        check("%RUN-F-CREPRC" not in boot
+              and re.search(r"%DECNET-[IE]-STARTNET|DECnet Phase IV -- Startup", boot) is None,
+              "VAX: boot-time STARTNET launched NETACP without a refused $CREPRC, "
+              "and put no OVMX launch line on the console")
         seg = v.run("SHOW SYSTEM", timeout=180)
         check(re.search(r"\bNETACP\b", seg) is not None,
               "VAX: SHOW SYSTEM lists the NETACP process, running after boot")
+        seg = v.run("TYPE SYS$MANAGER:OPERATOR.LOG", timeout=180)
+        check("DECnet starting" in seg,
+              "VAX: OPERATOR.LOG carries NETACP's OPCOM message 'DECnet starting' "
+              "(sent once its datalink is open)")
         # THE EXECUTIVE DATALINK. NETACP is detached and has no terminal: since
         # rd vms-5843 its own status lines go to the null device (a created
         # process cannot yet write a VMS file as SYS$OUTPUT, rd vms-c89), so

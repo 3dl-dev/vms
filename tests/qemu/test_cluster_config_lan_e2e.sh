@@ -290,8 +290,9 @@ record "boot 2 (reboot): still reaches the login prompt" "$rc"
 
 # ADOPTION PROOF #1: the boot console ITSELF announces the authored node name,
 # before any DCL runs -- PID 1 read the authored OVMXVMSSYS.PAR and applied it.
-check "boot 2: %OVMX-I-SCSNODE console line names the authored $NEWNODE" \
-    "$POS_LOG2" "%OVMX-I-SCSNODE, node name $NEWNODE set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+# rd vms-158d: that record is OPERATOR.LOG's now (no VMS boot console prints
+# it); the console must not carry it, and the log is read back after login.
+check "boot 2: the console carries no OVMX node-name line" "$POS_LOG2" "%OVMX-I-SCSNODE" absent
 check "boot 2: NO honest-halt warning (a good, present .PAR does not warn)" \
     "$POS_LOG2" "%OVMX-W-NOPARAMS" absent
 
@@ -309,6 +310,12 @@ if [ "$rc" -eq 0 ]; then
     send 'SHOW SYMBOL HOST2'; sleep 1
     check "boot 2: F\$GETSYI(NODENAME) reads $NEWNODE (the REAL live hostname, set by sethostname())" \
         "$POS_LOG2" "HOST2 = \"$NEWNODE\""
+
+    # rd vms-158d: PID 1's node-name record is an OPERATOR.LOG record (a real
+    # VMS boot console prints no such line) -- read it back the VMS way.
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 3
+    check "boot 2: OPERATOR.LOG records the node name $NEWNODE set from the .PAR" \
+        "$POS_LOG2" "%OVMX-I-SCSNODE, node name $NEWNODE set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 
     # AGREEMENT: F$GETSYI("SCSNODE") (reads the persisted .PAR) agrees with the
     # adopted live hostname -- the file and the running system tell one story.

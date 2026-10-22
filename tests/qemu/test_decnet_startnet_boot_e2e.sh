@@ -178,10 +178,14 @@ wake_login "$LOG2"
 if waitfor 'Username:' "$BOOT_TIMEOUT" "$LOG2"; then rc=0; else rc=1; fi
 record "boot 2: reaches the login prompt" "$rc"
 boot2_up=$rc
-if grep -qaF '%DECNET-I-STARTNET' "$LOG2"; then rc=0; else rc=1; fi
-record "boot 2: boot-time STARTNET found NETNODE_LOCAL.DAT and launched NETACP (%DECNET-I-STARTNET)" "$rc"
-if grep -qaE '%DECNET-E-STARTNET|%RUN-F-CREPRC' "$LOG2"; then rc=1; else rc=0; fi
-record "boot 2: no refused launch (%DECNET-E-STARTNET / %RUN-F-CREPRC absent)" "$rc"
+# rd vms-158d: STARTNET prints no launch line of its own -- a real VMS console
+# shows only RUN's %RUN-S-PROC_ID and NETACP's OPCOM "DECnet starting". That
+# NETACP was launched and runs is SHOW SYSTEM's to say (below), and its OPCOM
+# record is read back from OPERATOR.LOG.
+if grep -qaE '%DECNET-[IE]-STARTNET|DECnet Phase IV -- Startup' "$LOG2"; then rc=1; else rc=0; fi
+record "boot 2: STARTNET puts no OVMX launch line on the console (rd vms-158d)" "$rc"
+if grep -qaF '%RUN-F-CREPRC' "$LOG2"; then rc=1; else rc=0; fi
+record "boot 2: no refused launch (%RUN-F-CREPRC absent)" "$rc"
 
 if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: SYSTEM logs in" 0
@@ -195,6 +199,14 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     if printf '%s\n' "$seg" | grep >/dev/null -F 'Process Name'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the SHOW SYSTEM segment is real output (its 'Process Name' column header is present)" "$rc"
     netacp_pid=$(printf '%s\n' "$seg" | grep -oE '^[0-9A-F]{8} NETACP( |$)' | head -1 | cut -c1-8)
+
+    # rd vms-158d: NETACP announced itself the VMS way -- OPCOM, "DECnet
+    # starting" -- and OPERATOR.LOG carries it.
+    off=$(wc -c <"$LOG2")
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 6
+    seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECnet starting'; then rc=0; else rc=1; fi
+    record "boot 2: OPERATOR.LOG carries NETACP's OPCOM message 'DECnet starting'" "$rc"
 
     # rd vms-dda: an outbound link from a user process, brokered through the
     # RUNNING boot-time NETACP over $ASSIGN _NET: + $QIO (the DCL battery VM has

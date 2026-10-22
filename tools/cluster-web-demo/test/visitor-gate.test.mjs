@@ -999,20 +999,19 @@ test('rd vms-c56: every allowlisted identifier and form is one a real VAX printe
   for (const id of GATE.OVMX_BOOT_IDS) assert.ok(!GATE.VMS_CONSOLE_IDS.includes(id), id);
 });
 
-test('rd vms-c56: the console the fix produces passes', () => {
+test('rd vms-c56/vms-158d: the console the fix produces passes', () => {
+  // Node A after vms-158d: the substrate line, the product banner, SYSINIT,
+  // STDRV, the connection manager's VMS lines, RUN's own line, the login.
   const after = [
     'OVMX/Linux -- SYSKRNL (Linux kernel)',
-    '%OVMX-I-EXEC, VMS executive attached on /dev/vms',
     '',
     '    OpenVMX V0.7-14 - OpenVMS-compatible',
-    '%OVMX-I-SYSDISK, mounting system disk VDA0:',
-    '%OVMX-I-MOUNTED, system disk VDA0: mounted',
-    '%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR',
+    '    21-OCT-2026 15:05:36.62',
+    '',
     '%SYSINIT, waiting to form or join a VMScluster system',
     '%STDRV-I-STARTUP, OpenVMX startup begun at 21-OCT-2026 15:05:49.85',
     '%CNXMAN,  sending VAXcluster membership request to system VAXC',
     '%CNXMAN,  now a VAXcluster member -- system OVMXA',
-    '%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive',
     '%RUN-S-PROC_ID, identification of created process is 10000003',
     ' Welcome to the OpenVMX X86_64 Operating System, Version V0.7-14 (OpenVMS-compatible)',
     'Username: SYSTEM',
@@ -1020,10 +1019,37 @@ test('rd vms-c56: the console the fix produces passes', () => {
   ].join('\n');
   // The firmware and the page's own line before the OS are not the OS's console.
   assert.deepEqual(GATE.consoleChatter('%NIC-CFG, initramfs=x mac=y\nSeaBIOS (version 1)\n' + after), []);
+  // Node B (NetBSD/VAX) has no substrate line: its console starts at the banner.
+  assert.deepEqual(GATE.consoleChatter('KA655-B V5.3, VMB 2.7\n>>>B DUA0\n' + after.split('\n').slice(1).join('\n')), []);
+});
+
+test('rd vms-158d: no OVMX boot narration is allowed on the console any more', () => {
+  assert.deepEqual(GATE.OVMX_BOOT_IDS, [], 'the allowlist is empty: the gate is strict');
+  const one = (line) => GATE.consoleChatter('    OpenVMX V0.7-14 - OpenVMS-compatible\n' + line).map((x) => x.why);
+  for (const [line, id] of [
+    ['%OVMX-I-EXEC, VMS executive attached on /dev/vms', 'OVMX-I-EXEC'],
+    ['%OVMX-I-SYSDISK, mounting system disk VDA0:', 'OVMX-I-SYSDISK'],
+    ['%OVMX-I-MOUNTED, system disk VDA0: mounted', 'OVMX-I-MOUNTED'],
+    ['%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR', 'OVMX-I-SCSNODE'],
+    ['%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive', 'OVMX-I-EXEC'],
+    ['%DECNET-I-STARTNET, NETACP launched detached to serve inbound $ SET HOST.', 'DECNET-I-STARTNET'],
+  ]) assert.deepEqual(one(line), [`%${id} is not a message a VMS console prints`], line);
+  // An identifier with no '%' is still an identifier (V0.7-13 Node B, STARTNET).
+  assert.deepEqual(one("DECNETD-E-NOSOCKET, bpf datalink open on 'qe0' (0x6003) failed: Permission denied"),
+                   ['DECNETD-E-NOSOCKET is not a message a VMS console prints']);
+  assert.deepEqual(one(' DECNETD-I-DATALINK, datalink open on ETH0'),
+                   ['DECNETD-I-DATALINK is not a message a VMS console prints']);
+  // ... but a DCL continuation line ("-RMS-E-FNF, ...") is VMS's own form.
+  assert.deepEqual(one('-RMS-E-FNF, file not found'), []);
+  const b = GATE.consoleChatter(C56('B.console.txt'));
+  assert.ok(b.some((x) => x.why === 'DECNETD-E-NOSOCKET is not a message a VMS console prints'),
+            'V0.7-13 Node B: the bare DECNETD-E-NOSOCKET line is caught');
+  assert.ok(b.some((x) => x.why === '%OVMX-I-EXEC is not a message a VMS console prints'),
+            'V0.7-13 Node B: its boot narration is caught');
 });
 
 test('rd vms-c56: each forbidden kind is caught on its own (no blanket pass)', () => {
-  const one = (line) => GATE.consoleChatter('%OVMX-I-EXEC, VMS executive attached on /dev/vms\n' + line).map((x) => x.why);
+  const one = (line) => GATE.consoleChatter('    OpenVMX V0.7-14 - OpenVMS-compatible\n' + line).map((x) => x.why);
   assert.deepEqual(one('[   37.218759] %CNXMAN,  now a VAXcluster member -- system OVMXA'),
                    ['substrate printk timestamp'], 'a VMS form with a printk stamp');
   assert.deepEqual(one('%CNXMAN, now a VAXcluster member -- system OVMXA'),
@@ -1034,8 +1060,7 @@ test('rd vms-c56: each forbidden kind is caught on its own (no blanket pass)', (
   assert.deepEqual(one('%MSCP_CL, the member answered NOT PRESENT HERE'),
                    ['%MSCP_CL is not a message a VMS console prints']);
   assert.deepEqual(one('%OVMX-W-CLUSTERPORT, cluster port did not start'),
-                   ['%OVMX-W-CLUSTERPORT is not a message a VMS console prints'],
-                   'only the named OVMX boot lines are let through, not the facility');
+                   ['%OVMX-W-CLUSTERPORT is not a message a VMS console prints']);
   assert.deepEqual(one('%CNXMAN,  proposing formation of a VAXcluster'), []);
 });
 

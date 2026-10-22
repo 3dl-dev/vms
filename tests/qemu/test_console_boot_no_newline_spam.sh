@@ -141,10 +141,10 @@ longest_blank_run() {
 # --- Boot the real runtime; the OPERATOR MASHES RETURN DURING THE BOOT -------
 # This is the whole point: we type RETURNs BEFORE "Username:" is visible, the
 # way an operator does while staring at a slow boot with no prompt yet.
-if wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT"; then
+if wait_for ' - OpenVMS-compatible' "$BOOT_TIMEOUT"; then
     ok "executive attached (real vms.ko) -- boot is underway, no login prompt yet"
 else
-    dump_and_die "executive never attached (%OVMX-I-EXEC) within ${BOOT_TIMEOUT}s"
+    dump_and_die "executive never attached (no OpenVMX banner) within ${BOOT_TIMEOUT}s"
 fi
 
 # Record where the pre-login boot segment begins (right after the exec line),
@@ -175,7 +175,7 @@ fi
 ok "runtime boots to the login prompt (Username:) despite the RETURN hammering"
 
 # --- ASSERTION: no run of echoed blank lines in the pre-Username: segment ----
-# Segment = from just after %OVMX-I-EXEC up to (not including) the first
+# Segment = from just after the OpenVMX banner line up to (not including) the first
 # "Username:" line. In the buggy build every mashed RETURN was echoed here as a
 # blank line, so the longest run ~= HAMMER_RETURNS. The fix clears ECHO for the
 # wake window, so the operator's keystrokes are not echoed and the run is ~0.
@@ -184,7 +184,7 @@ FULL=$(segment_since 0)
 PRE=$(printf '%s\n' "$FULL" | awk '/Username:/{exit} {print}')
 # And restrict to what came after the exec attach (drop the linux/boot noise
 # before it, which is not what this test is about).
-PRE=$(printf '%s\n' "$PRE" | awk 'seen{print} /%OVMX-I-EXEC/{seen=1}')
+PRE=$(printf '%s\n' "$PRE" | awk 'seen{print} / - OpenVMS-compatible/{seen=1}')
 RUN=$(printf '%s\n' "$PRE" | longest_blank_run)
 TOTAL_BLANK=$(printf '%s\n' "$PRE" | grep -c '^[[:space:]]*$')
 echo "  measured: longest consecutive blank-line run in pre-Username: boot segment = $RUN (total blank lines = $TOTAL_BLANK)"

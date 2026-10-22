@@ -66,7 +66,6 @@ $! INVOCATION:
 $!   @SYS$MANAGER:STARTNET
 $!
 $ SET NOON
-$ SAY := WRITE SYS$OUTPUT
 $!
 $! GATE: DECnet is configured only if the local node database exists. If not,
 $! STARTNET is a faithful SILENT no-op -- launch nothing, print nothing (real VMS
@@ -74,9 +73,13 @@ $! runs no STARTNET on an unconfigured node; the boot console stays pristine).
 $! F$SEARCH is a pure DCL lexical -- no image runs, so no %DCL-E-ABORT.
 $ IF F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") .EQS. "" THEN GOTO no_decnet
 $!
-$ SAY ""
-$ SAY "        OVMX DECnet Phase IV -- Startup (STARTNET)"
-$ SAY ""
+$! THE CONSOLE (rd vms-158d). A real VMS node's console shows only what VMS
+$! itself prints for this step: RUN's own "%RUN-S-PROC_ID, identification of
+$! created process is ..." and then NETACP's OPCOM message "DECnet starting"
+$! (tests/lab/captures/vms-52d-0b01-oracle-20261013/armA-vax1-console.log).
+$! So this procedure prints no banner and no launch line of its own: NETACP
+$! reports "DECnet starting" to OPCOM ($SNDOPR, SYS$MANAGER:OPERATOR.LOG) once
+$! its datalink is open, and a refused launch is RUN's own %RUN-F-CREPRC.
 $! NETACP is a persistent master listener -- it must run as a DETACHED process,
 $! NOT a foreground RUN that would BLOCK system startup forever. VMS RUN passes
 $! the image NO argv (an image parameter only), so DECNETD self-sources its
@@ -94,19 +97,17 @@ $ RUN /DETACHED -
        /INPUT=NL: /OUTPUT=SYS$MANAGER:NETACP.LOG -
        /ERROR=SYS$MANAGER:NETACP.LOG -
        SYS$SYSTEM:DECNETD.EXE
-$! HONEST LAUNCH REPORT (rd vms-1f69): the announcement is made only when RUN
-$! /DETACHED actually created the process. A refused $CREPRC (%RUN-F-CREPRC,
+$! HONEST LAUNCH REPORT (rd vms-1f69): NETACP announces "DECnet starting" to
+$! OPCOM only once it is really running. A refused $CREPRC (%RUN-F-CREPRC,
 $! e.g. -SYSTEM-F-NOPRIV / -DUPLNAM) is reported with its status and NOTHING
 $! claims NETACP is running. (Copy $STATUS first: a later command resets it.)
 $ run_status = $STATUS
 $ IF .NOT. run_status THEN GOTO run_failed
-$ SAY "%DECNET-I-STARTNET, NETACP launched detached to serve inbound $ SET HOST."
-$ SAY ""
 $ EXIT
 $!
 $ run_failed:
-$ SAY "%DECNET-E-STARTNET, NETACP was NOT started (RUN/DETACHED status " + F$STRING(run_status) + ")"
-$ SAY ""
+$! RUN has already said why, in its own words (%RUN-F-CREPRC); the status goes
+$! back to the caller unchanged and nothing claims NETACP is running.
 $ EXIT run_status
 $!
 $ no_decnet:

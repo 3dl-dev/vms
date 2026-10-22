@@ -428,19 +428,6 @@ if printf '%s\n' "$(segment_since 0)" | grep >/dev/null -F 'OVMX$INSTALL Option'
 else
     ok "the booted target does NOT re-run the install menu"
 fi
-# END-TO-END vms-597: the SCSNODE the `install` phase wrote to the target's
-# OVMXVMSSYS.PAR (via SYSGEN's inline WRITE CURRENT through the rooted
-# SYS$SYSTEM redirect) MUST be what this booted target reports as its node
-# identity -- ovmx_init prints "%OVMX-I-SCSNODE, node name <X> set from
-# SYS$SYSTEM:OVMXVMSSYS.PAR". Seeing $R1_SCSNODE (not the OVMX kit default)
-# proves the install's SCS configuration reached and persisted to the target's
-# own parameter file across the container boundary. This is the assertion the
-# old gate skipped entirely by answering SCSNODE blank.
-if printf '%s\n' "$(segment_since 0)" | grep >/dev/null -F "node name $R1_SCSNODE"; then
-    ok "the install-set SCSNODE ($R1_SCSNODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
-else
-    bad "the install-set SCSNODE ($R1_SCSNODE) did NOT appear on the target's boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"
-fi
 # First-boot completion is a justified no-op for OVMX (vms-649): the target
 # must NOT run any self-install phase on this boot.
 if printf '%s\n' "$(segment_since 0)" | grep >/dev/null -F '%STARTUP-I-INSTALL'; then
@@ -463,6 +450,28 @@ else
     dump_and_die "SYSTEM login with the install-set password failed -- the install-set password did not persist to the target"
 fi
 wait_for '$' 20 "$OFF"
+
+# END-TO-END vms-597: the SCSNODE the `install` phase wrote to the target's
+# OVMXVMSSYS.PAR (via SYSGEN's inline WRITE CURRENT through the rooted
+# SYS$SYSTEM redirect) MUST be what this booted target reports as its node
+# identity -- ovmx_init records "%OVMX-I-SCSNODE, node name <X> set from
+# SYS$SYSTEM:OVMXVMSSYS.PAR". Seeing $R1_SCSNODE (not the OVMX kit default)
+# proves the install's SCS configuration reached and persisted to the target's
+# own parameter file across the container boundary. This is the assertion the
+# old gate skipped entirely by answering SCSNODE blank.
+# rd vms-158d: a VMS boot console prints no such line, so the record is in
+# the target's SYS$MANAGER:OPERATOR.LOG; read it back (TYPE, through RMS) and
+# check the LAST node-name record, which is this boot's.
+OFF=$(wc -c <"$LOG")
+send 'TYPE SYS$MANAGER:OPERATOR.LOG'
+wait_for '$ ' "$RUN_TIMEOUT" "$OFF"
+SEG=$(segment_since "$OFF")
+if printf '%s\n' "$SEG" | grep -aF 'node name ' | tail -1 | grep >/dev/null -F "node name $R1_SCSNODE set from"; then
+    ok "the install-set SCSNODE ($R1_SCSNODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
+else
+    bad "the install-set SCSNODE ($R1_SCSNODE) did NOT appear on the target's boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"
+    printf '%s\n' "$SEG" | grep -aF 'node name '
+fi
 
 # PRODUCT SHOW PRODUCT (default -- reads the TARGET's own VMS$PRODUCT_DATABASE.DAT
 # that PRODUCT INSTALL /DESTINATION wrote into the target's rooted [SYSEXE]).

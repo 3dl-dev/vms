@@ -474,19 +474,6 @@ if printf '%s\n' "$TB" | grep >/dev/null -F 'OVMX$INSTALL Option'; then
 else
     ok "the installed target's own SYSTARTUP_VMS.COM does NOT run the install menu (two-variant staging, sec3.3)"
 fi
-# End-to-end proof of the vms-597 SCS step: the SCSNODE the install wrote to
-# the target's OVMXVMSSYS.PAR (via SYSGEN WRITE CURRENT through the rooted
-# SYS$SYSTEM redirect) is what the booted target now reports as its node
-# identity -- ovmx_init prints "%OVMX-I-SCSNODE, node name <X> set from
-# SYS$SYSTEM:OVMXVMSSYS.PAR". Seeing the operator-chosen $SCS_NODE (not the
-# OVMX kit default) proves the install's SCS configuration reached and
-# persisted to the target's own parameter file.
-if printf '%s\n' "$TB" | grep >/dev/null -F "node name $SCS_NODE"; then
-    ok "the install-set SCSNODE ($SCS_NODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
-else
-    bad "the install-set SCSNODE ($SCS_NODE) did NOT appear on the target's own boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"
-fi
-
 # Close the loop: log in as SYSTEM with the INSTALL-SET password (NOT the kit
 # default). A successful login is positive proof the install-set password
 # persisted to the target's own SYSUAF across the DISMOUNT/flush (vms-963).
@@ -502,6 +489,27 @@ if wait_for 'Welcome to OpenVMX' "$BOOT_TIMEOUT" "$OFF2" && wait_for '$ ' 90 "$O
     ok "SYSTEM logs in on the booted target with the INSTALL-SET password, not the kit default (vms-963 end-to-end)"
 else
     dump_and_die "SYSTEM could not log in with the install-set password -- it did not persist to the booted target"
+fi
+
+# End-to-end proof of the vms-597 SCS step: the SCSNODE the install wrote to
+# the target's OVMXVMSSYS.PAR (via SYSGEN WRITE CURRENT through the rooted
+# SYS$SYSTEM redirect) is what the booted target now reports as its node
+# identity -- ovmx_init records "%OVMX-I-SCSNODE, node name <X> set from
+# SYS$SYSTEM:OVMXVMSSYS.PAR". Seeing the operator-chosen $SCS_NODE (not the
+# OVMX kit default) proves the install's SCS configuration reached and
+# persisted to the target's own parameter file.
+# rd vms-158d: a VMS boot console prints no such line, so the record is in the
+# target's SYS$MANAGER:OPERATOR.LOG; read it back (TYPE, through RMS) and check
+# the LAST node-name record, which is this boot's.
+OFF3=$(wc -c <"$LOG")
+send 'TYPE SYS$MANAGER:OPERATOR.LOG'
+wait_for '$ ' "$BOOT_TIMEOUT" "$OFF3"
+SEG3=$(segment_since "$OFF3")
+if printf '%s\n' "$SEG3" | grep -aF 'node name ' | tail -1 | grep >/dev/null -F "node name $SCS_NODE set from"; then
+    ok "the install-set SCSNODE ($SCS_NODE) persisted to the target and the booted target reads it from OVMXVMSSYS.PAR (end-to-end vms-597)"
+else
+    bad "the install-set SCSNODE ($SCS_NODE) did NOT appear on the target's own boot -- SYSGEN WRITE CURRENT did not persist to the target's OVMXVMSSYS.PAR"
+    printf '%s\n' "$SEG3" | grep -aF 'node name '
 fi
 
 kill_boot "$QPID"; QPID=""

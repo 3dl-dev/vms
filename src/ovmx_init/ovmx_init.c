@@ -407,6 +407,27 @@ static void provision_disk_mount_points(void)
  */
 static int executive_fd = -1;
 
+/*
+ * boot_oplog - one line of PID 1's own boot narration, filed in the operator
+ * log and NOT printed on OPA0: (rd vms-158d). A real VMS boot console prints no
+ * "executive attached", "mounting system disk", "system disk mounted" or "node
+ * name set" line (the real VAX's console: tests/lab/captures/
+ * vms-c56-console-chatter-20261021/C.console.txt) -- so OVMX's own facts about
+ * those steps go where VMS puts an operator's record, through the boot seam's
+ * operator-log op (ovmx_boot_operator_log, rd vms-c56). Nothing is dropped.
+ */
+static void boot_oplog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void boot_oplog(const char *fmt, ...)
+{
+    char line[256];
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    ovmx_boot_operator_log(line);
+}
+
 /* When set before executive_attach(), the executive is attached SILENTLY: the
  * %OVMX-I-EXEC console line is suppressed and executive_announce() emits it
  * later. The conversational boot path (vms-46c) must attach the executive BEFORE
@@ -422,7 +443,7 @@ static int executive_announce_deferred = 0;
  * executive_announce_deferred was set (the conversational path, after SYSBOOT>). */
 static void executive_announce(void)
 {
-    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
+    boot_oplog("%%OVMX-I-EXEC, VMS executive attached on /dev/vms");
 }
 
 /*
@@ -500,7 +521,7 @@ static void executive_attach(void)
     if (executive_announce_deferred)
         return;                 /* conversational path: %OVMX-I-EXEC deferred to
                                  * executive_announce() after the SYSBOOT> prompt */
-    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
+    boot_oplog("%%OVMX-I-EXEC, VMS executive attached on /dev/vms");
 }
 
 /*
@@ -726,8 +747,8 @@ static void bare_metal_init(void)
                 "the system disk is not present; OVMX does not install one at boot");
         }
 
-        printf("%%OVMX-I-SYSDISK, mounting system disk %s\n",
-               ovmx_boot_system_disk_unit());
+        boot_oplog("%%OVMX-I-SYSDISK, mounting system disk %s",
+                   ovmx_boot_system_disk_unit());
 
         /* Mount the system disk via the substrate's own mechanism. The boot
          * seam keeps ovmx_init.c substrate-neutral -- ONE source, no #ifdef
@@ -757,8 +778,8 @@ static void bare_metal_init(void)
                 "OVMX does not initialize or install it at boot");
         }
 
-        printf("%%OVMX-I-MOUNTED, system disk %s mounted\n",
-               ovmx_boot_system_disk_unit());
+        boot_oplog("%%OVMX-I-MOUNTED, system disk %s mounted",
+                   ovmx_boot_system_disk_unit());
 
         /* Publish the DISCOVERED system device (vms-9f5) so every child --
          * imgact.c, lnm_defaults.c, DCL -- resolves SYS$SYSDEVICE to the disk
@@ -843,10 +864,10 @@ static void bare_metal_init(void)
      * above, announced now), the banner, then the mount lines. */
     executive_announce();
     print_banner_once();
-    printf("%%OVMX-I-SYSDISK, mounting system disk %s\n",
-           ovmx_boot_system_disk_unit());
-    printf("%%OVMX-I-MOUNTED, system disk %s mounted\n",
-           ovmx_boot_system_disk_unit());
+    boot_oplog("%%OVMX-I-SYSDISK, mounting system disk %s",
+               ovmx_boot_system_disk_unit());
+    boot_oplog("%%OVMX-I-MOUNTED, system disk %s mounted",
+               ovmx_boot_system_disk_unit());
 
     /* vms.ko is loaded (executive_attach() above, silent); emit the taint mask
      * readout, gated on the ovmx.taintreport boot flag (vms-566). */
@@ -1196,7 +1217,7 @@ static void read_boot_parameters(void)
         const char *node = sysboot_get_string(&conversational_boot_params, "SCSNODE");
         if (node && node[0] != '\0') {
             sethostname(node, strlen(node));
-            printf("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR\n",
+            boot_oplog("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR",
                    node);
             return;
         }
@@ -1242,7 +1263,7 @@ static void read_boot_parameters(void)
 
     if (have_node) {
         sethostname(node, strlen(node));
-        printf("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR\n",
+        boot_oplog("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR",
                node);
         return;
     }

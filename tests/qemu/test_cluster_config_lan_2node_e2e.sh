@@ -633,12 +633,20 @@ check_console_vms_faithful "node B" "$B_LOG2"
 # bridge -- long before node B booted, so A's coordinator lines for B's
 # admission are executive records emitted AFTER startup. The post-startup
 # kernel-log intake (a JOB_CONTROL thread) files them in OPERATOR.LOG.
-printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&4 2>/dev/null; sleep 3
+# The log holds every boot's records (each boot's kernel spool included), so
+# TYPE takes a while on a serial console: wait for the records, bounded, not a
+# fixed sleep.
+printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&4 2>/dev/null
+waitfor "%OVMX-I-SCSNODE, node name $NODE_A set from" 90 "$A_LOG2" "$AP" || true
+waitfor "%CNXMAN, proposing addition of a system to the cluster" 30 "$A_LOG2" "$AP" || true
+sleep 2
 check "node A boot2: OPERATOR.LOG records the node name $NODE_A set from the .PAR" \
     "$A_LOG2" "%OVMX-I-SCSNODE, node name $NODE_A set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 check "node A: OPERATOR.LOG carries an executive record emitted after startup (B's admission, filed by the post-startup intake)" \
     "$A_LOG2" "%CNXMAN, proposing addition of a system to the cluster"
-printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&6 2>/dev/null; sleep 3
+printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&6 2>/dev/null
+waitfor "%OVMX-I-SCSNODE, node name $NODE_B set from" 90 "$B_LOG2" "$BP" || true
+sleep 2
 check "node B boot2: OPERATOR.LOG records the node name $NODE_B set from the .PAR" \
     "$B_LOG2" "%OVMX-I-SCSNODE, node name $NODE_B set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 

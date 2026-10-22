@@ -1319,6 +1319,25 @@ set_tests_properties(cluster_host_dlm_deq_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-28bd: HOW A REAL MASTER DELIVERS A GRANT IT COULD NOT GIVE AT
+# ONCE. The rd vms-5cd fix fire measured the door an owed deferred grant is
+# refused at (`send_failed=1`, the SHAPE gate in cnxman_dlm_peer_proven), and
+# this census is why widening that gate would be the WRONG fix: over the whole
+# corpus, 111 real->real op-0x01 transactions were answered 0xfb QUEUED and
+# ZERO of them were later answered 0xfa on the same transaction -- so the frame
+# rd vms-f87 built has no real instance at all. It also pins what DOES occupy
+# that moment (a cat-0x02 op-0x02 notification this codec has no name for, 387
+# real frames, 0 ever emitted by OVMX) WITHOUT claiming what it means.
+add_test(NAME cluster_host_dlm_late_grant_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_late_grant_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_late_grant_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 300
+)
+
 # ---- rd vms-b67a: how a REAL node asks for a SUB-LOCK. The item is that OVMX
 # looks a sub-resource up in the lock DIRECTORY under its own hash and then
 # masters it locally -- a grant no master gave, and one name mastered twice.

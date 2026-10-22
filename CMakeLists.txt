@@ -1260,6 +1260,21 @@ if(BUILD_TESTS)
     set_tests_properties(labjoin_booted_negctl PROPERTIES
         LABELS "integration;cluster" TIMEOUT 60)
 
+    # A lab fire cannot boot a node onto NO CLUSTER'S WIRE (rd vms-daa). The
+    # cluster group number is what the LAVC HELLO multicast address is built
+    # from, so a group-0 initramfs -- which is what an ordinary image build
+    # produces -- puts the node on AB-00-04-01-00-00: it transmits into the
+    # void, receives nothing and never joins, with no failure and no console
+    # line saying why (measured on lab-2 vaxlab-4). ovmx_fire.sh checked the
+    # build's provenance and the frame-conformance gate but never this, and it
+    # cost a whole run. Hermetic: four tiny initramfs images built with the
+    # project's own record writer, no pod and no boot. Carries its own negative
+    # control (a checker without the group-0 test must stop refusing).
+    add_test(NAME lab_fire_cluster_group
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_fire_cluster_group.sh)
+    set_tests_properties(lab_fire_cluster_group PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 120)
+
     # The lab node image's vax.ini keeps SIMH's timer catch-up OFF (rd vms-549c):
     # with catch-up on, a host stall overflowed the timer calibration (Current
     # Insts Per Tick went negative), every event went to a negative delay, and

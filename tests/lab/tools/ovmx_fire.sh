@@ -4,9 +4,17 @@
 #
 # Refuses to start unless:
 #   1. <artifacts-dir>/SOURCE_COMMIT names the commit <build-dir> was built from
-#      (the gate must have checked the code that will run), and
+#      (the gate must have checked the code that will run),
 #   2. the frame-conformance gate passes for every frame type this fire will
-#      send to a real node (tests/cluster/conformance/run_gate.sh).
+#      send to a real node (tests/cluster/conformance/run_gate.sh), and
+#   3. the INITRAMFS THAT WILL BOOT carries a non-zero cluster group (rd
+#      vms-daa). The group is what the LAVC HELLO multicast address is built
+#      from, so a group-0 image -- which is what an ordinary build produces --
+#      puts the node on AB-00-04-01-00-00, where it transmits into the void,
+#      receives nothing and NEVER JOINS. Nothing fails and no console line says
+#      why: the fire just yields a capture with no join in it, which is one
+#      whole lab run. OVMX_FIRE_GROUP=<n> additionally requires an exact group
+#      (the lab VAX cluster is group 1).
 # Then it stages the artifacts in the pod and starts the node with a capture,
 # console at /lab/k8s-labs/<pod>/logs/ovmxe.log (ovmx-lab-console reads it).
 set -u
@@ -28,6 +36,13 @@ if [ -n "$(git -C "$SRC" status --porcelain --untracked-files=no)" ]; then
 fi
 if ! bash "$ROOT/tests/cluster/conformance/run_gate.sh" "$BUILD/bin" "$@"; then
 	echo "ovmx_fire.sh: REFUSED -- the frame-conformance gate did not pass" >&2
+	exit 1
+fi
+# The cluster group, read out of the very file ovmx_evnode.sh passes to -initrd
+# (rd vms-daa). OVMX_FIRE_GROUP, when set, is the group this fire REQUIRES.
+if ! bash "$ROOT/tests/lab/tools/check_cluster_group.sh" \
+		"$ART/initramfs-ovmx-slim.cpio.gz" "${OVMX_FIRE_GROUP:-}"; then
+	echo "ovmx_fire.sh: REFUSED -- the initramfs would boot on no cluster's wire" >&2
 	exit 1
 fi
 

@@ -230,8 +230,35 @@ static void arm_bindings(void)
 	has("d->deferred_grants_sent++",
 	    "... and an originated grant is COUNTED");
 	has("d->deferred_grants_no_body++",
-	    "... while a flip whose frame is NOT held stays silent, counted "
+	    "... while a flip whose frame is NOT held sends nothing, counted "
 	    "(INV-6: no invented frame to fill the gap)");
+
+	/*
+	 * AND EACH OF THE THREE DOORS NAMES ITSELF (fire q85f1, 2026-10-22).
+	 *
+	 * The lab read `deferred grants sent=0 owed=1` off a real VAX that was
+	 * still waiting, and `owed` is the SUM of the retention that did not
+	 * happen, the frame that was not held and the send that was refused.
+	 * A fire that cannot say which door refused has to be run twice, so
+	 * each one says so once, out of this arm's own state.
+	 */
+	has("dlm_arm_keep_request(d, in, e, &res);",
+	    "the retention is a CHECKED call, not a (void) cast");
+	has("d->pending_keep_refused++",
+	    "... a retention that did not happen is COUNTED");
+	has("dlm_arm_say_no_body(d, r);",
+	    "*** and the three doors each name themselves on the console: the "
+	    "frame that was not held ***");
+	has("dlm_arm_say_send_failed(d, r);",
+	    "... the send that was refused");
+	has("d->keep_refused_said = 1u;",
+	    "... each said ONCE, the echo guard's own discipline");
+	has("(unsigned)d->pending.kept, (unsigned)d->pending.replaced,",
+	    "... and the retention table's own counters ride in the line, so a "
+	    "transcript tells 'never retained' from 'retained under another "
+	    "key'");
+	absent("(void)vms_dlm_pending_keep(",
+	       "*** and the retention is nowhere called unchecked ***");
 	absent("dlm_arm_count_deferred_grant",
 	       "*** and the old count-and-say-nothing path is GONE ***");
 

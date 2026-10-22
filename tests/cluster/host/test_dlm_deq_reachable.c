@@ -1968,6 +1968,221 @@ out:
 	engine_down();
 }
 
+/* ==========================================================================
+ * 15. THE LAB SEQUENCE, AND THE KEY IT TURNS ON (fire q85f1, 2026-10-22)
+ *
+ * Section 12 proves the deferred grant end to end -- and the SAME chain, run at
+ * two real V7.3 VAXes two days later, did not send the frame:
+ * `deferred grants sent=0 owed=1  local advances=1 stale=0`
+ * (tests/lab/captures/vms-85f-queued-answer-20261021/FIRE.md). The engine
+ * reported the flip; nothing reached the wire; the real VAX stayed in LEF.
+ *
+ * WHAT SECTION 12 CANNOT SEE, and this section exists for. The retained frame
+ * is stored under a KEY and taken back under a SEPARATELY DERIVED key:
+ *
+ *   keep   (vms_dlm_scs.c, the QUEUED branch): (in->from_csid,
+ *          res.req_lkid ? res.req_lkid : e->req_lkid)
+ *   take   (the grant-advance fork half):      (g->csid, lock->req_lkid)
+ *
+ * Section 12 passes `q.req_lkid` to BOTH sides, so the two derivations can
+ * never disagree there -- and disagreement is precisely what produces
+ * `owed=1`. So this section drives the engine through THE LAB'S OWN SEQUENCE,
+ * including the step section 12 has no analogue for: the first requester's
+ * request was ANSWERED queued, then CANCELLED by an inbound release (the real
+ * `STOP HOLD2`), and a SECOND request with a FRESH handle was queued behind the
+ * same holder. Both keys are asserted against each other explicitly, and the
+ * stale entry the cancelled request left behind must not be what the grant
+ * carries.
+ *
+ * The handles are the ones the capture recorded, so a reader can line this test
+ * up against frames.txt: VAX2's two locks were 0x3a0001dd and 0x41000351.
+ * ========================================================================== */
+#define LABSEQ_RES   "RA7T"
+#define LAB_W1_LKID  0x3a0001ddu  /* VAX2's first handle (frame f84)         */
+#define LAB_W2_LKID  0x41000351u  /* its second, after STOP destroyed HOLD2  */
+
+/* The frame a queued requester really sent, for an arbitrary handle and name --
+ * composed by the SHIPPING request builder, like queued_requester_body(). */
+static uint32_t labseq_body(uint8_t *frame, uint32_t cap, uint32_t req_lkid,
+			    uint32_t req_pid)
+{
+	struct vms_dlm_enq_request r;
+	uint32_t written = 0;
+
+	memset(frame, 0, cap);
+	memset(&r, 0, sizeof(r));
+	r.mode = LCK_K_EXMODE;
+	r.req_lkid = req_lkid;
+	r.req_pid = req_pid;
+	r.res_ident_valid = 1u;
+	r.name_len = (uint8_t)strlen(LABSEQ_RES);
+	memcpy(r.name, LABSEQ_RES, r.name_len);
+	if (vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame, cap,
+				      &written) != VMS_CODEC_OK)
+		return 0u;
+	return written;
+}
+
+/* The arm's own key expression for the QUEUED branch, written once here so the
+ * test keys the table the way the shipping arm keys it and not some other way. */
+static uint32_t arm_keep_key(const struct vms_dlm_master_result *q,
+			     uint32_t wire_req_lkid)
+{
+	return q->req_lkid != 0u ? q->req_lkid : wire_req_lkid;
+}
+
+/* An inbound release, through the master seam -- the door `STOP HOLD2` reached:
+ * a peer dropping a lock it has, named by BOTH handles. */
+static struct vms_dlm_master_result serve_deq(uint32_t csid,
+					      uint32_t holder_lkid,
+					      uint32_t master_lkid,
+					      const char *name)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result out;
+
+	memset(&r, 0, sizeof(r));
+	memset(&out, 0, sizeof(out));
+	r.op = VMS_DLM_MREQ_DEQ;
+	r.req_csid = csid;
+	r.req_lkid = holder_lkid;
+	r.master_lkid = master_lkid;
+	strscpy(r.resnam, name, sizeof(r.resnam));
+	r.res_ident_valid = 1u;
+	(void)vms_lock_dlm_master_serve(&r, &out);
+	return out;
+}
+
+static void test_the_lab_sequence_keys_agree(void)
+{
+	struct vms_proc holder, delivery;
+	struct vms_dlm_master_result q1, q2, r;
+	struct vms_dlm_pending pending;
+	struct vms_dlm_grant_advance g;
+	struct vms_dlm_enq_response rsp;
+	struct vms_getlki_args lki;
+	struct vms_dlm_adopt_tree t;
+	uint8_t body1[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t body2[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint32_t lkid = 0u, n_locks = 0u, key1, key2;
+
+	printf("--- fire q85f1: the lab's own sequence -- a cancelled queued "
+	       "request, then a fresh one, then the local release ---\n");
+	engine_up();
+	proc_init(&delivery);
+	vms_lock_dlm_set_delivery_proc(&delivery);
+	memset(&g_adv, 0, sizeof(g_adv));
+	eng_ops.grant_advanced = eng_grant_advanced;
+	vms_lock_dlm_set_requester_ops(&eng_ops);
+	vms_dlm_pending_init(&pending);
+
+	/* Steps 1-3 of the fire: a real VAX masters the tree, this node holds
+	 * the root at CR in it, and then the tree is handed over. */
+	proc_init(&holder);
+	lkid = granted_proxy(&holder, LABSEQ_RES, LCK_K_CRMODE, 0x2900050fu);
+	memset(&t, 0, sizeof(t));
+	strscpy(t.resnam, LABSEQ_RES, sizeof(t.resnam));
+	t.ident_valid = 1u;
+	t.old_master_csid = CSID_MASTER;
+	ct_check(lkid != 0u &&
+		 vms_lock_dlm_adopt_open(&t) == SS__NORMAL &&
+		 vms_lock_dlm_adopt_end(&t, &n_locks) == SS__NORMAL,
+		 "steps 1-3: the tree is handed to this node and our own CR "
+		 "lock is in it");
+	if (lkid == 0u)
+		goto out;
+
+	/* Step 4: the peer's EX is QUEUED and the arm retains its frame. */
+	q1 = serve(VMS_DLM_MREQ_ENQ, CSID_PEER, LAB_W1_LKID, LCK_K_EXMODE,
+		   LABSEQ_RES);
+	ct_check_eq_u32(q1.outcome, VMS_DLM_MASTER_QUEUED,
+			"step 4: the peer's first EX request is QUEUED");
+	key1 = arm_keep_key(&q1, LAB_W1_LKID);
+	ct_check_eq_u32(key1, LAB_W1_LKID,
+			"  and the key the arm retains it under IS the "
+			"requester's own handle");
+	ct_check(labseq_body(body1, sizeof(body1), LAB_W1_LKID,
+			      0x20400218u) != 0u &&
+		 vms_dlm_pending_keep(&pending, CSID_PEER, key1,
+				      body1 + VMS_OFF_SYSAP_BODY,
+				      VMS_CM_BODY_LEN) == 1,
+		 "  the requester's own frame is retained");
+
+	/* Step 6: STOP HOLD2 -- the peer cancels the request it is waiting on.
+	 * The real VAX sent one cat-0x02 op-0x03 (frame 7320 of the capture). */
+	(void)serve_deq(CSID_PEER, LAB_W1_LKID, q1.master_lkid, LABSEQ_RES);
+	ct_check(!getlki(&delivery, q1.master_lkid, &lki),
+		 "step 6: the cancelled request's LKB is gone from this node's "
+		 "database");
+
+	/* Step 7: a FRESH process on the peer asks again -- a new handle, and a
+	 * new handle on our side too. */
+	q2 = serve(VMS_DLM_MREQ_ENQ, CSID_PEER, LAB_W2_LKID, LCK_K_EXMODE,
+		   LABSEQ_RES);
+	ct_check_eq_u32(q2.outcome, VMS_DLM_MASTER_QUEUED,
+			"step 7: the peer's SECOND EX request is QUEUED too");
+	ct_check(q2.master_lkid != q1.master_lkid,
+		 "  under a handle of ours that is not the cancelled one");
+	key2 = arm_keep_key(&q2, LAB_W2_LKID);
+	ct_check_eq_u32(key2, LAB_W2_LKID,
+			"  and the arm's key for it is the SECOND requester "
+			"handle");
+	ct_check(labseq_body(body2, sizeof(body2), LAB_W2_LKID,
+			      0x20400219u) != 0u &&
+		 vms_dlm_pending_keep(&pending, CSID_PEER, key2,
+				      body2 + VMS_OFF_SYSAP_BODY,
+				      VMS_CM_BODY_LEN) == 1,
+		 "  and its frame is retained beside the stale one");
+
+	/* Step 8: ^Y -- the LOCAL release of our own lock in the adopted tree. */
+	ct_check_eq_u32(do_deq(&holder, lkid), SS__NORMAL,
+			"step 8: our holder's LOCAL release");
+	ct_check_eq_u32(g_adv.n, 1u,
+			"the engine reports exactly one advanced queue -- what "
+			"the lab read as `local advances=1`");
+	ct_check(g_adv.csid == CSID_PEER && g_adv.master_lkid == q2.master_lkid,
+		 "  naming the peer and the SECOND LKB, not the cancelled one");
+
+	/* *** THE KEY AGREEMENT. This is what `owed=1` means. *** */
+	g.csid = g_adv.csid;
+	g.master_lkid = g_adv.master_lkid;
+	ct_check_eq_u32(vms_lock_dlm_grant_advance_read(g.csid, g.master_lkid,
+							&r),
+			SS__NORMAL, "the lock reads back as granted for that "
+			"system at the moment of the send");
+	ct_check_eq_u32(r.deferred_req_lkid, key2,
+			"*** and the key the GRANT path takes with is the key "
+			"the arm RETAINED under -- the one thing section 12 "
+			"could not disagree about ***");
+	memset(ans, 0, sizeof(ans));
+	ct_check(adv_grant_frame(&g, &pending, ans, sizeof(ans), &r),
+		 "*** so the retained frame is found and the grant is built "
+		 "***");
+	ct_check(vms_dlm_enq_response_parse_body(ans + VMS_OFF_SYSAP_BODY,
+						 VMS_CM_BODY_LEN, &rsp) ==
+		 VMS_CODEC_OK &&
+		 rsp.outcome == VMS_DLM_ENQ_GRANTED &&
+		 rsp.req_lkid == LAB_W2_LKID &&
+		 rsp.master_lkid == q2.master_lkid,
+		 "  and it names the SECOND requester's handle, so the stale "
+		 "retained frame cannot be what the peer receives");
+
+	/* The stale entry is still there, uncollected -- stated rather than
+	 * assumed, because an entry nothing ever takes is a slot leak and the
+	 * table is 16 deep. */
+	ct_check_eq_u32(vms_dlm_pending_take(&pending, CSID_PEER, key1,
+					     ans + VMS_OFF_SYSAP_BODY,
+					     VMS_CM_BODY_LEN),
+			(uint32_t)VMS_CM_BODY_LEN,
+			"the cancelled request's frame is STILL RETAINED: a "
+			"cancel drops no pending entry today");
+out:
+	eng_ops.grant_advanced = NULL;
+	vms_lock_dlm_set_delivery_proc(NULL);
+	engine_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_deq_reachable (rd vms-49f8: the op-0x03 $DEQ has a "
@@ -1986,5 +2201,6 @@ int main(void)
 	test_a_local_release_tells_the_peer();
 	test_an_inbound_convert_tells_the_third_system();
 	test_a_local_convert_tells_the_peer();
+	test_the_lab_sequence_keys_agree();
 	return ct_summary("test_dlm_deq_reachable");
 }

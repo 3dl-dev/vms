@@ -508,6 +508,7 @@ timeout -k 15 "$JOIN_TIMEOUT" $QEMU $MACHINE $ACCEL \
     -m 256M -smp 1 -nodefaults -serial stdio \
     -netdev "socket,id=net0,connect=127.0.0.1:${SEGMENT_PORT}" \
     -device "virtio-net-pci,netdev=net0,mac=${MAC_B},romfile=" \
+    -object filter-dump,id=fdb,netdev=net0,file=/tmp/ccl2-b.pcap \
     -drive file="$B_DISK",format=raw,if=virtio,cache=writethrough \
     -drive file="$B_DATA",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$B_FIFO" >"$B_LOG2" 2>&1 &
@@ -693,6 +694,7 @@ printf 'MOUNT VDA100: %s\r' "$DATA_LABEL" >&4 2>/dev/null
 if waitfor "%MOUNT-I-MOUNTED, $DATA_LABEL mounted on _VDA100:" 60 "$A_LOG2" "$AP"; then rc=0; else rc=1; fi
 record "node A: MOUNT of its local $DATA_LABEL volume succeeds" "$rc"
 B_VOL_OFF=$(wc -c <"$B_LOG2")
+echo "DBG-MOUNT-B-EPOCH $(date +%s.%N)"
 printf 'MOUNT VDA100: %s\r' "$DATA_LABEL" >&6 2>/dev/null
 B_VOL_T0=$(date +%s)
 if waitfor "%MOUNT-F-VOLALRMNT, another volume of same label already mounted" 60 "$B_LOG2" "$BP"; then rc=0; else rc=1; fi
@@ -764,6 +766,10 @@ kill "$AP" "$BP" 2>/dev/null; wait "$AP" 2>/dev/null; wait "$BP" 2>/dev/null
 exec 4>&- 2>/dev/null; exec 6>&- 2>/dev/null
 rm -f "$A_FIFO" "$B_FIFO"
 
+echo "DBG-PCAP-BEGIN"
+gzip -9 -c /tmp/ccl2-b.pcap | base64 -w 0
+echo ""
+echo "DBG-PCAP-END"
 if [ "$FAIL" -ne 0 ]; then
     echo "--- node A boot1 log ---"; cat "$A_LOG1"
     echo "--- node A boot2 log ---"; cat "$A_LOG2"

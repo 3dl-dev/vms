@@ -121,7 +121,12 @@ def selftest(repo):
     # modes, with the same 3 parent pairs. rd vms-b67a's grounding is unchanged
     # by 3.5x the corpus -- and the sample is still 7, which is why that item's
     # fix is built from the ROUTING rule and not from a cell's value range.
-    check('real lock requests in the corpus', len(real), 74894)   # was 21,499
+    # 2026-10-22: the rd vms-85f/vms-28bd fire capture joined the corpus
+    # (tests/lab/captures/vms-85f-queued-answer-20261021/trimmed.pcap.gz), so
+    # the denominator moved again, 74,894 -> 74,896. THE NUMERATOR STILL DID
+    # NOT MOVE: the fire's own OVMX node held the ROOT only, precisely because
+    # rd vms-b67a is open.
+    check('real lock requests in the corpus', len(real), 74896)   # was 21,499
     check('real requests naming a sub-resource', len(subs), 7)
     check('distinct senders of one', len({s for s, _d, _b, _p in subs}), 2)
     check('distinct sub-lock modes at body[30]',

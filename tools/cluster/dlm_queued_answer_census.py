@@ -141,6 +141,17 @@ def answer_status_table(paths):
     return tab
 
 
+def ovmx_queued_answers(paths):
+    """Every cat-0x82 op-0x01 QUEUED answer an OVMX node emitted, as bodies."""
+    out = []
+    for p in paths:
+        for _idx, src, _dst, body in rc.sca_bodies_with_src(p):
+            if len(body) >= BODY_LEN and body[8] == ANS_CAT and \
+               body[9] == ENQ_OP and body[34] == QUEUED and not is_real(src):
+                out.append(bytes(body))
+    return out
+
+
 def print_status_table(tab):
     print("=== every cat-0x82 op-0x01 in the corpus, by sender and body[34]")
     for (cls, st), n in sorted(tab.items(), key=lambda kv: -kv[1]):
@@ -282,10 +293,29 @@ def selftest(repo):
     bad += expect(all(a[32:36] == bytes((1, 0, GRANTED, 0))
                       for _p, _q, a, _r, _s in g),
                   "and their record at body[32:36] is 01 00 fa 00")
-    bad += expect(not any(st == QUEUED and cls == 'ovmx'
-                          for cls, st in answer_status_table(paths)),
-                  "NO OVMX node has ever emitted one: the silence this item "
-                  "is about")
+    # 2026-10-22: THIS CONTROL IS NOW A MEASUREMENT, NOT A SILENCE.
+    #
+    # It used to assert that no OVMX node had ever emitted a queued answer --
+    # "the silence this item is about". The rd vms-85f fire ended that silence
+    # on a real cluster: two OVMX-emitted 0xfb answers reached a real V7.3's
+    # lock manager, which accepted them (its process left RWSCS for LEF and
+    # STOP completed it) -- tests/lab/captures/vms-85f-queued-answer-20261021.
+    #
+    # So the control keeps its teeth by asserting WHAT they are instead of that
+    # they are absent: every OVMX-emitted queued answer in the whole corpus
+    # must carry the queue bit at body[28], the 0xfb status, and a master
+    # handle that is non-zero and is NOT the requester's own -- the minted-value
+    # class that bugchecked two lab VAXes. A malformed one cannot slip in.
+    ovmx_q = ovmx_queued_answers(paths)
+    bad += expect(len(ovmx_q) == 2,
+                  "OVMX-emitted queued answers in the corpus: %d (the two the "
+                  "rd vms-85f fire put on a real cluster's wire)" % len(ovmx_q))
+    bad += expect(all(a[28] & 0x04 for a in ovmx_q),
+                  "every one carries the queue bit 0x04 at body[28]")
+    bad += expect(all(a[20:24] != bytes(4) and a[20:24] != a[24:28]
+                      for a in ovmx_q),
+                  "...and a master handle that is neither zero nor the "
+                  "requester's own")
     print("\n%s" % ("selftest: all figures hold" if bad == 0
                     else "selftest: %d FAILED" % bad))
     return 1 if bad else 0

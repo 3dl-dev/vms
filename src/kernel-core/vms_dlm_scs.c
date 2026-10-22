@@ -323,7 +323,7 @@ struct vms_dlm_scs {
 	 * vms-a4d7: the deferred grant is a cat-0x02 op-0x02 keyed by handles,
 	 * so it needs no retained body), and what is left is the RECORD of
 	 * what was queued, which the DLMOWED diagnostic row reports. Retiring
-	 * the table is rd vms-5f9a, not a silent side effect of this change. */
+	 * the table is rd vms-838f, not a silent side effect of this change. */
 	struct vms_dlm_pending pending;
 	uint32_t deferred_grants_sent;    /* the op-0x02 really ORIGINATED    */
 	uint32_t deferred_grants_refused; /* owed, and the codec would not    */

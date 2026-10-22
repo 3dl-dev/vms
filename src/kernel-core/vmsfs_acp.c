@@ -405,6 +405,41 @@ static unsigned acp_vol_dirflags(const struct vms_acp_volume *vol)
 }
 #endif
 
+/*
+ * acp_ods2_newname - the XQP's rule for a NEW name on an ODS-2 volume (rd
+ * vms-b9c), applied before anything is allocated: the name is stored upper
+ * case ("lower.txt" -> LOWER.TXT), and a name ODS-2 cannot hold is refused --
+ * a character outside A-Z 0-9 $ - _ is SS$_BADFILENAME ("c++config.h"), a
+ * second '.' is SS$_BADFILEVER ("a.b.c.d"). Observed on OpenVMS Alpha V8.4
+ * creating on an ODS-2 volume under PARSE_STYLE=EXTENDED
+ * (tests/lab/captures/ods5-alpha-20261022 RESULTS.md session 3, R9/R10).
+ * RMS upper-cases under TRADITIONAL itself, so before EXTENDED reached the ACP
+ * no ODS-2 create saw anything but such names. An ODS-5 volume keeps names as
+ * given. The 39.39 length limit is not enforced here (not yet observed).
+ */
+#if defined(OVMX_ODS2_KERNEL)
+static uint32_t acp_ods2_newname(const struct vms_acp_volume *vol, char *name)
+{
+    unsigned dots = 0;
+    char *p;
+
+    if (ODS2_IS_ODS5(vol->struclev))
+        return SS__NORMAL;
+    for (p = name; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c >= 'a' && c <= 'z')
+            *p = (char)(c - 'a' + 'A');
+        else if (c == '.') {
+            if (++dots > 1)
+                return SS__BADFILEVER;
+        } else if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                     c == '$' || c == '-' || c == '_'))
+            return SS__BADFILENAME;
+    }
+    return SS__NORMAL;
+}
+#endif
+
 static uint32_t acp_hdr_lbn(const struct vms_acp_volume *vol, uint32_t fidnum)
 {
     if (fidnum == 0 || vol->idxwin_n == 0)
@@ -4100,6 +4135,10 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                 ap->status = SS__BADFILENAME;
                 goto free_sc;
             }
+            /* On ODS-2 the name is stored upper case, and one the volume cannot
+             * hold is refused before anything is allocated (rd vms-b9c). */
+            status = acp_ods2_newname(vol, ap->name);
+            if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
 
             /* Resolve the directory (for the entry + version selection). */
             memset(&did, 0, sizeof(did));
@@ -4496,6 +4535,13 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                     ap->status = SS__BADPARAM;   /* rename is by-name; needs a target */
                     goto free_sc;
                 }
+                /* the new name obeys the volume's rules as a created one does */
+                if (ODS2_IS_ODS5(vol->struclev) && strlen(ap->new_name) > ODS5_NAME_MAX) {
+                    ap->status = SS__BADFILENAME;
+                    goto free_sc;
+                }
+                status = acp_ods2_newname(vol, ap->new_name);
+                if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                 /* Source directory write access (removing an entry). */
                 status = acp_check_access(proc, vol, &sc->dfh, 1);
                 if (status != SS__NORMAL) { ap->status = status; goto free_sc; }

@@ -431,3 +431,23 @@ set_tests_properties(vmsrms_read_over_acp PROPERTIES
     LABELS "unit;rms"
     TIMEOUT 30
 )
+
+# rd vms-b9c: RMS $PARSE's name engine replays the real OpenVMS Alpha V8.4
+# F$PARSE probes line by line (tests/lab/captures/ods5-alpha-20261022/
+# CONSOLE-3.txt, CONSOLE-4.txt): extended-specification escapes, the parse
+# style's case rule, multi-dot names, 236/237-character names.
+add_executable(test_rms_parse_ods5 test_rms_parse_ods5.c)
+target_include_directories(test_rms_parse_ods5 PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_rms_parse_ods5 PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_parse_ods5 COMMAND test_rms_parse_ods5)
+set_tests_properties(vmsrms_parse_ods5 PROPERTIES
+    LABELS "unit;rms;ods5"
+    TIMEOUT 30
+    ENVIRONMENT "ODS5_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022"
+)

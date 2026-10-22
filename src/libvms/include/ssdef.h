@@ -88,6 +88,12 @@ extern "C" {
  * quotas not enabled on this volume". $STATUS = %X000003D4 (low 3 bits = 4 = F). */
 #define SS$_QFNOTACT        980     /* Disk quotas not enabled on this volume (%SYSTEM-F-QFNOTACT) */
 #define SS$_ABORT           44      /* Abort */
+/* The XQP's answer to a name the volume cannot hold (rd vms-b9c): Alpha V8.4
+ * $SSDEF (docs/oracle/alpha84-starlet-defs/SSDEF.txt), observed as
+ * -SYSTEM-W-BADFILENAME / -BADFILEVER under -RMS-E-CRE (ODS-5 capture
+ * RESULTS.md session 3). */
+#define SS$_BADFILENAME     2072    /* Bad file name syntax */
+#define SS$_BADFILEVER      2080    /* Bad file version number */
 
 /* ================================================================
  * Warning status codes (severity = 0)

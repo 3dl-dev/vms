@@ -113,6 +113,23 @@ struct rms_pname {
 };
 uint32_t rms_name_parse(const char *fna, size_t fns, const char *dna, size_t dns,
                         struct rms_pname *pn);
+/* rms_name_parse under a given parse style (ext != 0: PARSE_STYLE=EXTENDED,
+ * the case of directory, name and type kept) -- rms_name_parse reads the
+ * process's style from the executive and calls this (rd vms-b9c). */
+/* RMS <-> ACP name forms (rd vms-b9c): canonical expanded-string text to the
+ * on-disk bytes the ACP stores, and on-disk "name.type[;ver]" back to the
+ * canonical resultant form. -1 on overflow (or a UCS-2 ^U character, which
+ * the 8-bit ACP name cannot carry, rd vms-f1a2). */
+int rms_name_to_disk(const char *in, size_t n, char *out, size_t cap);
+int rms_name_from_disk(const char *in, size_t n, char *out, size_t cap);
+/* The process's parse style (1 = EXTENDED), and the ACP form of one name part
+ * under it: TRADITIONAL upper-cases, EXTENDED keeps case; escapes removed. */
+int rms_parse_style_extended(void);
+int rms_acp_name(const char *in, size_t n, char *out, size_t cap);
+/* Put an original spec's name part back onto a composed candidate spec. */
+void rms_splice_name(char *cand, size_t cap, const char *orig);
+uint32_t rms_name_parse_ex(const char *fna, size_t fns, const char *dna, size_t dns,
+                           struct rms_pname *pn, int ext);
 void rms_nam_set_parts(struct NAM *nam, char *base, const struct rms_pname *pn);
 
 

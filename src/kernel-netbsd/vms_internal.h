@@ -115,6 +115,7 @@
 #define SS__INSFMEM  292           /* SS$_INSFMEM */
 #define SS__DUPLNAM  148           /* SS$_DUPLNAM (INSTALL ADD of an installed file) */
 #define SS__BADFILENAME 2072       /* SS$_BADFILENAME (ACP: name too long, rd vms-7e7e) */
+#define SS__BADFILEVER  2080       /* SS$_BADFILEVER (ACP: a second '.' on ODS-2, rd vms-b9c) */
 #define SS__ILLEFC   236           /* SS$_ILLEFC */
 #define SS__UNASEFC  564           /* SS$_UNASEFC */
 /* Access-mode + AST subset (P4-A). Values match src/kernel/vms_internal.h

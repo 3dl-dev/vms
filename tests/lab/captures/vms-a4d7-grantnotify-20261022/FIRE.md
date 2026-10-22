@@ -83,8 +83,8 @@ population). Each stays recorded-and-not-explained in
 `tools/cluster/dlm_late_grant_census.py` (Rule 8).
 
 **ONE GATE GAP FOUND, FILED AS rd vms-daa.** The first boot of this fire
-(`a4d1`, set aside in the pod as `/lab/run-fire/a4d1-group0-aborted`) never
-joined: `build-boot-artifacts.yml` ships an empty `/etc/ovmx`, so the node ran
+(`a4d1`; its evidence is `group0-aborted.txt`, read out of the pod before the
+pod was deleted) never joined: `build-boot-artifacts.yml` ships an empty `/etc/ovmx`, so the node ran
 on cluster **group 0** and transmitted 113 frames to `ab:00:04:01:00:01` while
 the VAXes used `ab:00:04:01:01:01`. `ovmx_fire.sh` checks `SOURCE_COMMIT` and
 the conformance gate but not this, and the failure mode is a node that boots

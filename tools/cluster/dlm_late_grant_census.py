@@ -30,8 +30,11 @@ is the minted-shape class that has bugchecked lab VAXes twice.
 
 WHAT A REAL MASTER DOES INSTEAD, as far as the wire shows: the commonest thing
 that reaches the requester about that lock afterwards is a **cat-0x02 op-0x02**
-message FROM the master, an opcode this codec has no name for. 387 of them are
-in the corpus, every one from a real sender, and this census pins what they are:
+message FROM the master, an opcode this codec had no name for. 387 of them are
+in the corpus from a real sender (and TWO from an OVMX node, which this census
+licensed and the 2026-10-22 fire put in front of a real V7.3 lock manager --
+tests/lab/captures/vms-a4d7-grantnotify-20261022), and this census pins what
+they are:
 notifications (no transaction), carrying no resource name, keyed by lock
 HANDLES, with a status cell at body[34] whose values include 0xfa -- and 96 of
 the 387 name the handles of a request the same pair had queued.
@@ -434,12 +437,16 @@ def selftest(repo):
           out['queued THEN granted on one transaction'], 111)
     check('*** ...of those, later answered 0xfa on the SAME transaction ***',
           out['queued THEN granted on one transaction'], 0)
-    check('granted at once (the contrast)', out['granted at once'], 53799)
+    check('granted at once (the contrast)', out['granted at once'], 53878)
 
     # 2. WHAT OCCUPIES THAT MOMENT INSTEAD, measured and not interpreted.
     real, ovmx, named = notify_frames(paths)
     check('real cat-0x02 op-0x02 frames', len(real), 387)
-    check('...emitted by an OVMX node, ever', len(ovmx), 0)
+    # THE TWO THIS NODE HAS NOW SENT, at two real V7.3 VAXes
+    # (tests/lab/captures/vms-a4d7-grantnotify-20261022): before that fire this
+    # figure was 0 and the shape was one OVMX had never emitted. Pinned so a
+    # third one cannot appear without a fire to explain it.
+    check('...emitted by an OVMX node (the a4d7 fire\'s two)', len(ovmx), 2)
     check('...opening a transaction at body[4:8]',
           sum(1 for b in real if b[OFF_TXN] != b'\0' * 4), 0)
     check('...carrying no resource name (body[47] == 0)',
@@ -463,7 +470,7 @@ def selftest(repo):
     # 4. THE SECOND FALSIFIER, independent of the transaction pairing: the
     #    0xfa grants vms_dlm_scs.c's header read as unsolicited.
     tot, noreq, notok, qnamed = unsolicited_grants(paths)
-    check('real->real 0xfa grants', tot, 53818)
+    check('real->real 0xfa grants', tot, 53897)
     check('...with no request in the same capture', noreq, 3974)
     check('...of those, carrying no transaction token', notok, 0)
     check('*** ...naming a pair this master had QUEUED ***', qnamed, 0)

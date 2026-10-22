@@ -315,10 +315,12 @@ def selftest(repo):
     # handle that is non-zero and is NOT the requester's own -- the minted-value
     # class that bugchecked two lab VAXes. A malformed one cannot slip in.
     ovmx_q = ovmx_queued_answers(paths)
-    bad += expect(len(ovmx_q) == 4,
+    bad += expect(len(ovmx_q) == 6,
                   "OVMX-emitted queued answers in the corpus: %d (two from the "
                   "rd vms-85f fire, two from the rd vms-5cd fix fire -- the "
-                  "latter the answers that replaced a DOUBLE GRANT)" % len(ovmx_q))
+                  "latter the answers that replaced a DOUBLE GRANT -- and two "
+                  "from the rd vms-a4d7 grant-notify fire, each of which was "
+                  "followed by the op-0x02 that GRANTED it)" % len(ovmx_q))
     bad += expect(all(a[28] & 0x04 for a in ovmx_q),
                   "every one carries the queue bit 0x04 at body[28]")
     bad += expect(all(a[20:24] != bytes(4) and a[20:24] != a[24:28]

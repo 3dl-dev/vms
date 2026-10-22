@@ -241,15 +241,20 @@ def selftest(repo):
 
     # rd vms-e80 widened the corpus from `.pcap` only to `.pcap.gz` too, which
     # is 32 more captures: the real releases went 9,858 -> 40,960 and the OVMX
-    # ones 11 -> 15; this arm's own capture then added 89 more (41,049). Every figure below is re-derived over the WHOLE corpus, and
+    # ones 11 -> 15; this arm's own capture then added 89 more (41,049). Every figure below is
+    # re-derived over the WHOLE corpus, and
     # each note says what it moved from.
     # ...and rd vms-5cd's FIX FIRE added 154 more real releases and ONE OVMX
-    # one (41,218 / 16). The OVMX one matters beyond the count: it is the first
+    # one (41,218 / 16), then rd vms-a4d7's GRANT-NOTIFY FIRE added 78 more
+    # real ones and no OVMX one (41,296 / 16 -- that fire's OVMX node released
+    # LOCALLY, which puts no op-0x03 on the wire; its own new frame family is
+    # the cat-0x02 op-0x02 pinned by dlm_late_grant_census.py).
+    # The one OVMX release matters beyond the count: it is the first
     # in the corpus built by the POST-rd vms-194 emitter, and it is the first
     # that obeys the real rule in two cells the older fifteen broke --
     # body[4:8] opens NO transaction and body[30] is 0. Both are called out
     # where they are pinned below.
-    check('real releases in the corpus', len(real), 41218)        # was 9,858
+    check('real releases in the corpus', len(real), 41296)        # was 9,858
     check('OVMX releases in the corpus', len(ovmx), 16)           # was 11
 
     # 1. THE ENVELOPE. A release is a NOTIFICATION: no real sender opens a
@@ -258,8 +263,8 @@ def selftest(repo):
           sum(1 for b in real if b[4:8] != b'\0' * 4), 0)
     check('answers to a release, anywhere in the corpus', len(answers), 0)
     # 15 of the 16, not all of them: the one the rd vms-5cd fix fire emitted
-    # (2026-10-22, pod lab5cd) opens NO transaction, which is what 41,218 of
-    # 41,218 real releases do. The emitter was fixed by rd vms-194 between the
+    # (2026-10-22, pod lab5cd) opens NO transaction, which is what 41,296 of
+    # 41,296 real releases do. The emitter was fixed by rd vms-194 between the
     # two fires, and this is that fix measured on a real cluster's wire.
     check('OVMX releases carrying a transaction at body[4:8]',
           sum(1 for b in ovmx if b[4:8] != b'\0' * 4), 15)
@@ -297,13 +302,13 @@ def selftest(repo):
     # 5. The spans a real sender leaves as its own stale buffer, counted so a
     #    `const:0` row for them is a measured choice and not an assumption.
     check('real releases with an all-zero body[16:20]',
-          sum(1 for b in real if b[16:20] == b'\0' * 4), 23532)   # was 5,700
+          sum(1 for b in real if b[16:20] == b'\0' * 4), 23580)   # was 5,700
     check('real releases with an all-zero body[36:44]',
           sum(1 for b in real if b[36:44] == b'\0' * 8), 1458)    # was 354
     check('real releases with ffffffff at body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22488)  # was 5,117
+          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22514)  # was 5,117
     check('real releases with an all-zero body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\0' * 4), 16441)    # was 4,095
+          sum(1 for b in real if b[124:128] == b'\0' * 4), 16474)    # was 4,095
 
     # 6. THE DRIVEN ARM (rd vms-194 (a)), read back off its committed capture.
     #    Nine arms, one release each, one variable per arm: the held mode over

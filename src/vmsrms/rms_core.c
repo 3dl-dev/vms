@@ -484,13 +484,12 @@ static int rms_acp_spec_parse(const char *spec_in, struct rms_acp_spec *s)
         }
         if (rl == 0)
             return -1;                       /* no filename component */
-        if (rl >= sizeof(s->name)) rl = sizeof(s->name) - 1;
-        for (size_t i = 0; i < rl; i++) {
-            char c = rest[i];
-            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-            s->name[i] = c;
-        }
-        s->name[rl] = '\0';
+        /* The ACP's form of the name (rd vms-b9c): upper-cased under
+         * PARSE_STYLE=TRADITIONAL as before, case kept under EXTENDED, the ^
+         * escapes of the expanded string taken out ("c^+^+config.h" is the
+         * 11 bytes c++config.h on disk). */
+        if (rms_acp_name(rest, rl, s->name, sizeof(s->name)) < 0)
+            return -1;
     }
     return 0;
 }
@@ -515,6 +514,33 @@ static int rms_acp_spec_parse(const char *spec_in, struct rms_acp_spec *s)
  * path, never a POSIX fallback). Returns the candidate count, or -1 on a
  * malformed/empty spec.
  */
+/*
+ * rms_splice_name - put the file-name part ("name.type;ver", everything after
+ * the directory) of the ORIGINAL spec back onto a composed candidate. The
+ * candidate composer (vmsfs_compose_ods2_candidates) resolves the device and
+ * directory logicals but reparses the name with the ODS-2-era parser, which
+ * upper-cases it and refuses a name longer than 39 characters; the name is
+ * RMS's to carry through unchanged (rd vms-b9c: an EXTENDED name keeps its
+ * case and its ^ escapes until rms_acp_name takes them out).
+ */
+static const char *rms_name_part(const char *spec)
+{
+    const char *p = strrchr(spec, ']');
+    const char *q = strrchr(spec, '>');
+    if (q && (!p || q > p)) p = q;
+    if (!p) p = strrchr(spec, ':');
+    return p ? p + 1 : spec;
+}
+
+void rms_splice_name(char *cand, size_t cap, const char *orig)
+{
+    char *cn = (char *)rms_name_part(cand);
+    const char *on = rms_name_part(orig);
+    size_t head = (size_t)(cn - cand);
+    if (head + strlen(on) < cap)
+        memcpy(cn, on, strlen(on) + 1);
+}
+
 static int rms_acp_specs_from_fab(struct FAB *fab, struct rms_acp_spec *specs,
                                   int max)
 {
@@ -529,6 +555,7 @@ static int rms_acp_specs_from_fab(struct FAB *fab, struct rms_acp_spec *specs,
 
     int out = 0;
     for (int i = 0; i < n && out < max; i++) {
+        rms_splice_name(cands[i], sizeof cands[i], spec);
         if (rms_acp_spec_parse(cands[i], &specs[out]) == 0)
             out++;
     }
@@ -563,23 +590,25 @@ uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
     if (strcmp(work, "000000") == 0)
         return SS$_NORMAL;
 
-    for (tok = strtok_r(work, ".", &save); tok;
-         tok = strtok_r(NULL, ".", &save)) {
+    (void)save;
+    for (tok = work; tok && *tok; ) {
         struct vms_acp_access_args a;
         uint32_t st;
-        size_t tl = strlen(tok);
+        size_t tl = 0;
         char nm[VMS_ACP_NAME_SIZE];
+        char *next;
 
-        if (tl == 0)
-            continue;
+        /* one component: up to the next UNESCAPED '.' (an extended directory
+         * name may hold "^." -- rd vms-b9c) */
+        while (tok[tl] && !(tok[tl] == '.' && (tl == 0 || tok[tl - 1] != '^')))
+            tl++;
+        next = tok[tl] ? tok + tl + 1 : NULL;
+        if (tl == 0) { tok = next; continue; }
         if (tl > VMS_ACP_NAME_SIZE - 5) tl = VMS_ACP_NAME_SIZE - 5;
-        for (size_t i = 0; i < tl; i++) {
-            char c = tok[i];
-            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-            nm[i] = c;
-        }
-        nm[tl] = '\0';
+        if (rms_acp_name(tok, tl, nm, sizeof(nm) - 4) < 0)
+            return SS$_BADPARAM;              /* a UCS-2 component (rd vms-f1a2) */
         strncat(nm, ".DIR", sizeof(nm) - strlen(nm) - 1);
+        tok = next;
 
         memset(&a, 0, sizeof(a));
         a.chan    = chan;
@@ -997,7 +1026,9 @@ rms_file_t *rms_open_named_handle_kind_prot(const char *vms_spec, int want_write
 
             if (st_out)
                 *st_out = $VMS_STATUS_SUCCESS(last) ? RMS$_DNF
-                                                   : rms_acp_open_status(last);
+                        : (last == SS$_BADFILENAME || last == SS$_BADFILEVER)
+                          ? RMS$_CRE    /* the volume refused the name (rd vms-b9c) */
+                          : rms_acp_open_status(last);
             return NULL;
         }
     }

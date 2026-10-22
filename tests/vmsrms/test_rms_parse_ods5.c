@@ -176,6 +176,26 @@ static void session3(const char *dir)
     CHECK(seen == 13, "session 3: %d probe lines replayed (expect 13)", seen);
 }
 
+/* on-disk names (session 1's [TEST], DUMP/DIRECTORY) <-> the names the real
+ * DIRECTORY / $SEARCH printed for them (CONSOLE.txt) */
+static void name_forms(void)
+{
+    static const char *const pairs[][2] = {
+        { "a b.txt;1", "a^_b.txt;1" }, { "a.b.c.d;1", "a^.b^.c.d;1" },
+        { "c++config.h;1", "c^+^+config.h;1" }, { "caf\xe9.txt;1", "caf\xe9.txt;1" },
+        { "libstdc++.a;1", "libstdc^+^+.a;1" }, { "MixedCase.Txt;1", "MixedCase.Txt;1" },
+        { "README.;1", "README.;1" }, { "PLAIN.TXT;1", "PLAIN.TXT;1" } };
+    char out[300];
+    for (unsigned i = 0; i < sizeof pairs / sizeof pairs[0]; i++) {
+        CHECK(rms_name_from_disk(pairs[i][0], strlen(pairs[i][0]), out, sizeof out) >= 0 &&
+              strcmp(out, pairs[i][1]) == 0, "from_disk '%s' -> '%s' (got '%s')", pairs[i][0], pairs[i][1], out);
+        CHECK(rms_name_to_disk(pairs[i][1], strlen(pairs[i][1]), out, sizeof out) >= 0 &&
+              strcmp(out, pairs[i][0]) == 0, "to_disk '%s' -> '%s' (got '%s')", pairs[i][1], pairs[i][0], out);
+    }
+    CHECK(rms_name_to_disk("^U4E2D.txt", 10, out, sizeof out) < 0,
+          "a UCS-2 name cannot become an 8-bit ACP name (rd vms-f1a2)");
+}
+
 static void negative_control(void)
 {
     /* the EXTENDED results are not reproduced under TRADITIONAL (case) */
@@ -197,6 +217,7 @@ int main(void)
     if (!dir) { printf("FAIL: ODS5_FIXTURE_DIR not set\n"); return 1; }
     session4(dir);
     session3(dir);
+    name_forms();
     negative_control();
     printf("test_rms_parse_ods5: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

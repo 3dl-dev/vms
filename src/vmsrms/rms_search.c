@@ -152,17 +152,13 @@ static void search_split(const char *spec, char *dev, size_t devsz,
         p = rb + 1;
     }
 
-    /* PATTERN: the remainder ("NAME.TYPE;VER"), upcased (ODS-2 is case-
-     * insensitive; the on-disk records the codec decodes are upper-case). */
-    {
-        size_t i = 0;
-        for (; p[i] && i < patsz - 1; i++) {
-            char c = p[i];
-            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-            pat[i] = c;
-        }
-        pat[i] = '\0';
-    }
+    /* PATTERN: the remainder ("NAME.TYPE;VER") in the ACP's form (rd
+     * vms-b9c): upper-cased under PARSE_STYLE=TRADITIONAL as before, case kept
+     * under EXTENDED (the ACP matches case-blind either way), the ^ escapes
+     * taken out. A UCS-2 pattern cannot reach the 8-bit ACP (rd vms-f1a2):
+     * it matches nothing. */
+    if (rms_acp_name(p, strlen(p), pat, patsz) < 0)
+        pat[0] = '\0';
 }
 
 /*
@@ -187,6 +183,8 @@ void rms_parse_did(struct NAM *nam)
     expanded[len] = '\0';
 
     ncand = vmsfs_compose_ods2_candidates(expanded, cands, 4);
+    for (int ci = 0; ci < ncand; ci++)
+        rms_splice_name(cands[ci], sizeof cands[ci], expanded);
     if (ncand <= 0) {
         strncpy(cands[0], expanded, sizeof(cands[0]) - 1);
         cands[0][sizeof(cands[0]) - 1] = '\0';
@@ -300,6 +298,9 @@ static uint32_t rms_acp_search(void *fab_ptr)
                                                       VMS_SEARCH_MAX_CANDS);
             int chosen = 0;
 
+            for (int ci = 0; ci < ncand; ci++)       /* the name as parsed (rd vms-b9c) */
+                rms_splice_name(cands[ci], sizeof cands[ci], expanded);
+
             if (ncand <= 0) {
                 /* No device logical to compose (device-less / plain physical
                  * spec): keep the pre-vms-3a8 behaviour on the expanded spec. */
@@ -405,14 +406,18 @@ static uint32_t rms_acp_search(void *fab_ptr)
     /* Build the resultant VMS spec "DEV:[DIR]NAME.TYPE;VER" from the ACP's
      * resultant name (a.resnam == "NAME.TYPE;VERSION"). */
     {
-        char vms_result[1024];
+        char vms_result[1024], cres[300];
         int n;
+        /* canonical (escaped) form of the found name, so a later open of this
+         * resultant through rms_acp_name gets the on-disk bytes back */
+        if (rms_name_from_disk(a.resnam, strlen(a.resnam), cres, sizeof cres) < 0)
+            snprintf(cres, sizeof cres, "%s", a.resnam);
         if (ctx->dirpath[0])
             n = snprintf(vms_result, sizeof(vms_result), "%s[%s]%s",
-                         ctx->devnam, ctx->dirpath, a.resnam);
+                         ctx->devnam, ctx->dirpath, cres);
         else
             n = snprintf(vms_result, sizeof(vms_result), "%s[000000]%s",
-                         ctx->devnam, a.resnam);
+                         ctx->devnam, cres);
         if (n < 0) n = 0;
 
         if (nam->nam$l_rsa && nam->nam$b_rss > 0) {
@@ -434,8 +439,13 @@ static uint32_t rms_acp_search(void *fab_ptr)
          * stays the $PARSE's (observed RMS.SEARCH.*, docs/oracle/semantics/rms/).
          */
         if (nam->nam$l_rsa && nam->nam$b_rss > 0 && ctx->esa_devdir[0]) {
-            char rs[300];
-            int k = snprintf(rs, sizeof rs, "%s%s", ctx->esa_devdir, a.resnam);
+            char rs[600], canon[300];
+            int k;
+            /* the found name in its canonical, escaped form (a^.b^.c.d,
+             * c^+^+config.h ...), as the real $SEARCH returns it (rd vms-b9c) */
+            if (rms_name_from_disk(a.resnam, strlen(a.resnam), canon, sizeof canon) < 0)
+                snprintf(canon, sizeof canon, "%s", a.resnam);
+            k = snprintf(rs, sizeof rs, "%s%s", ctx->esa_devdir, canon);
             if (k > 0 && (size_t)k <= nam->nam$b_rss) {
                 struct rms_pname pn;
                 const char *dot, *semi;
@@ -446,7 +456,11 @@ static uint32_t rms_acp_search(void *fab_ptr)
                 pn.dir_off = ctx->esa_devlen; pn.dir_len = ctx->esa_dirlen;
                 pn.name_off = (uint8_t)strlen(ctx->esa_devdir);
                 semi = strrchr(rs + pn.name_off, ';');
-                dot = memchr(rs + pn.name_off, '.', (size_t)((semi ? semi : rs + k) - (rs + pn.name_off)));
+                /* the type starts at the LAST unescaped '.' (a^.b^.c.d) */
+                dot = NULL;
+                for (const char *q = rs + pn.name_off; q < (semi ? semi : rs + k); q++)
+                    if (*q == '.' && (q == rs + pn.name_off || q[-1] != '^'))
+                        dot = q;
                 pn.name_len = (uint8_t)((dot ? dot : semi ? semi : rs + k) - (rs + pn.name_off));
                 pn.type_off = (uint8_t)(pn.name_off + pn.name_len);
                 pn.type_len = (uint8_t)(dot ? (semi ? semi : rs + k) - dot : 0);

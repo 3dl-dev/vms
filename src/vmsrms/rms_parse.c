@@ -230,6 +230,78 @@ static uint32_t fs_scan_part(const char *s, size_t n, size_t *i, const char *sto
     return RMS$_NORMAL;
 }
 
+/*
+ * rms_name_to_disk - the on-disk bytes of one canonical (expanded-string) name
+ * part: "c^+^+config.h" -> "c++config.h", "a^.b^.c.d" -> "a.b.c.d", "a^_b" ->
+ * "a b", "^%" -> "%". What RMS hands the ACP (rd vms-b9c): the name is stored
+ * literally, the escapes are a parse-time convention only (RESULTS.md P8).
+ * Returns the length, or -1 on overflow or a UCS-2 ^Uhhhh character, which
+ * the 8-bit ACP name cannot carry (rd vms-f1a2).
+ */
+int rms_name_to_disk(const char *in, size_t n, char *out, size_t cap)
+{
+    size_t i = 0, k = 0;
+
+    while (i < n) {
+        char c = in[i];
+        if (c == '^' && i + 1 < n) {
+            char e = in[i + 1];
+            if (e == 'U' && i + 5 < n && isxdigit((unsigned char)in[i + 2]))
+                return -1;                              /* UCS-2: not 8-bit */
+            c = e == '_' ? ' ' : e;
+            i += 2;
+        } else {
+            i++;
+        }
+        if (k + 1 >= cap)
+            return -1;
+        out[k++] = c;
+    }
+    out[k] = '\0';
+    return (int)k;
+}
+
+/*
+ * rms_name_from_disk - the canonical (resultant-string) form of an on-disk
+ * "name.type": the last '.' starts the type and the earlier ones are escaped,
+ * a space is ^_, a character that needs it is ^c, 8-bit bytes stay as they are
+ * -- what the real system's $SEARCH returned (RESULTS.md R7: a^_b.txt,
+ * a^.b^.c.d, c^+^+config.h, caf<E9>.txt). Returns the length, or -1 on
+ * overflow. A ";version" suffix, if present, is copied through.
+ */
+int rms_name_from_disk(const char *in, size_t n, char *out, size_t cap)
+{
+    size_t i, k = 0, end = n, lastdot = (size_t)-1;
+    const char *semi = memchr(in, ';', n);
+
+    if (semi)
+        end = (size_t)(semi - in);
+    for (i = 0; i < end; i++)
+        if (in[i] == '.')
+            lastdot = i;
+    for (i = 0; i < end; i++) {
+        int c = (unsigned char)in[i];
+        if (c == '.' && i == lastdot) {
+            if (k + 2 > cap) return -1;
+            out[k++] = '.';
+        } else if (c == '.') {
+            if (k + 3 > cap) return -1;
+            out[k++] = '^'; out[k++] = '.';
+        } else if (c == '%') {
+            if (k + 3 > cap) return -1;
+            out[k++] = '^'; out[k++] = '%';
+        } else if (!fs_put_canon(out, cap, &k, c, 1)) {
+            return -1;
+        }
+    }
+    for (; i < n; i++) {
+        if (k + 2 > cap) return -1;
+        out[k++] = in[i];
+    }
+    out[k] = '\0';
+    return (int)k;
+}
+
 /* Split one file specification; RMS$_SYN on a malformed one. `ext` != 0 is
  * PARSE_STYLE=EXTENDED: the case of the directory, name and type is kept;
  * otherwise it is upper-cased (the node and device always are). */
@@ -462,7 +534,7 @@ static uint32_t fs_wild(const char *s)
  * (PPROP$C_PARSE_STYLE_TEMP) is the one in force. No executive (a host tool):
  * TRADITIONAL, the style a process starts with.
  */
-static int rms_parse_style_extended(void)
+int rms_parse_style_extended(void)
 {
 #if defined(OVMX_HAVE_ACP)
     uint32_t v = 0;
@@ -471,6 +543,30 @@ static int rms_parse_style_extended(void)
         return 1;
 #endif
     return 0;
+}
+
+/*
+ * rms_acp_name - the name RMS hands the ACP for one part of a file
+ * specification (a "name.type", or a directory component): under
+ * PARSE_STYLE=TRADITIONAL upper-cased, as RMS always did; under EXTENDED its
+ * case kept; and the ^ escapes taken out (rms_name_to_disk). The ACP matches
+ * names case-blind and, on an ODS-2 volume, stores them upper case itself.
+ */
+int rms_acp_name(const char *in, size_t n, char *out, size_t cap)
+{
+    char tmp[512];
+    size_t i;
+    int ext = rms_parse_style_extended();
+
+    if (n >= sizeof tmp)
+        return -1;
+    for (i = 0; i < n; i++) {
+        char c = in[i];
+        if (!ext && c >= 'a' && c <= 'z')
+            c = (char)(c - 'a' + 'A');
+        tmp[i] = c;
+    }
+    return rms_name_to_disk(tmp, n, out, cap);
 }
 
 uint32_t rms_name_parse(const char *fna, size_t fns, const char *dna, size_t dns,

@@ -2513,9 +2513,9 @@ jobs:
             exit 1
           fi
 
-          echo "$RAW" | grep -qF "OK: all 9 ACP-read closure translation units compile for vax--netbsdelf" \
+          echo "$RAW" | grep -qF "OK: all 10 ACP-read closure translation units compile for vax--netbsdelf" \
             || { echo "FAIL: the closure compile proof did not run"; exit 1; }
-          echo "$RAW" | grep -qF "OK: 9/9 objects are elf32-vax" \
+          echo "$RAW" | grep -qF "OK: 10/10 objects are elf32-vax" \
             || { echo "FAIL: the elf32-vax object-arch proof did not run"; exit 1; }
           echo "$RAW" | grep -qF "OK: every ACP arm in the closure is genuinely compiled in" \
             || { echo "FAIL: the ACP-arms-compiled-in TEETH did not run"; exit 1; }

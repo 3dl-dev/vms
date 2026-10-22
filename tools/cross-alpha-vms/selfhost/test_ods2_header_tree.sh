@@ -38,6 +38,10 @@ print(bad) if bad else None
 sys.exit(1 if bad else 0)
 EOF
 
+python3 -I "$HERE/ods2-header-tree.py" "$T/src" "$T/out2" --relative-pairs "$T/rel.txt" > /dev/null 2>&1 \
+  && grep -qx 'bits/c++config.h bits/cxxconfig.h' "$T/rel.txt" && grep -qx 'c++config.h cxxconfig.h' "$T/rel.txt" \
+  && grep -qx 'stdc++.h stdcxx.h' "$T/rel.txt" && [ "$(grep -c '^c++config.h ' "$T/rel.txt")" = 1 ] \
+  && ok "--relative-pairs lists dir/name pairs for other include directories" || bad "--relative-pairs"
 mkdir -p "$T/s2/c++"; echo x > "$T/s2/c++/x.h"
 python3 -I "$HERE/ods2-header-tree.py" "$T/s2" "$T/o2" > /dev/null 2>&1 && bad "an illegal directory name accepted" || ok "an illegal directory name is refused"
 mkdir -p "$T/s3"; echo 1 > "$T/s3/a+b.h"; echo 2 > "$T/s3/axb.h"

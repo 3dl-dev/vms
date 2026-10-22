@@ -89,5 +89,24 @@ make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.lo
 # ar.exe (config/vms/vms-ar.c) is its twin for `ar`: a command file running `library` (vms-8ca)
 for e in cc1 cc1plus xgcc cpp ld ar; do cp gcc/$e.exe $O/$e.exe; done
 cp gcc/xg++.exe $O/gxx.exe
-ls -la $O/*.exe
+# vms-9a0: what compiling a cc1 source file needs, as one tree (GCCSRC/): GCC's
+# (every front end's .def too: the generated all-tree.def includes them all)
+# source headers and the sources compiled natively (SRC/), the headers this
+# build generated (BLD/: auto-host.h, config.h, tm.h, options.h, insn-*.h ...),
+# and GMP/MPFR/MPC's (HOST/include). The gate stages it on the OVMX system disk
+# and gives the cross g++ the same tree at the same path.
+G=$O/gccsrc; rm -rf $G; mkdir -p $G/SRC $G/BLD $G/HOST
+S=$O/src/gcc-14.2.0
+( cd $S && find gcc include libcpp/include libdecnumber libbacktrace libcody \
+      \( -path gcc/testsuite -o -path gcc/jit -o -path gcc/doc -o -path gcc/po \) -prune \
+      -o -type f \( -name '*.h' -o -name '*.def' -o -name '*.hh' \) -print ) > $O/gccsrc.list
+( cd $S && tar cf - -T $O/gccsrc.list ) | ( cd $G/SRC && tar xf - )
+mkdir -p $G/SRC/gcc/c && cp $S/gcc/c/c-lang.cc $G/SRC/gcc/c/
+( cd $O/b-gcc/gcc && find . -maxdepth 1 -type f \( -name '*.h' -o -name '*.def' \) -print | tar cf - -T - ) \
+    | ( mkdir -p $G/BLD/gcc && cd $G/BLD/gcc && tar xf - )
+mkdir -p $G/BLD/libdecnumber && cp $O/b-gcc/libdecnumber/*.h $G/BLD/libdecnumber/
+cp -r $H/include $G/HOST/include
+( cd $O && tar cf gccsrc.tar gccsrc ) && rm -rf $G
+echo "   gccsrc.tar: $(tar tf $O/gccsrc.tar | grep -vc '/$') files"
+ls -la $O/*.exe $O/gccsrc.tar
 echo "HOST-GCC: OK"

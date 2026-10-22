@@ -65,8 +65,11 @@ def crtl_name(name):
 
 
 def main(argv):
-    if len(argv) != 3:
-        sys.stderr.write('usage: ods2-header-tree.py SRC DST\n')
+    relpairs_out = None
+    if len(argv) == 5 and argv[3] == '--relative-pairs':
+        relpairs_out = argv[4]
+    elif len(argv) != 3:
+        sys.stderr.write('usage: ods2-header-tree.py SRC DST [--relative-pairs FILE]\n')
         return 1
     src, dst = argv[1], argv[2]
     if not os.path.isdir(src):
@@ -74,6 +77,7 @@ def main(argv):
         return 1
     errors = 0
     pairs = {}                      # every name the tree cannot hold -> its ODS-2 spelling
+    relpairs = []                   # the same, as paths relative to the tree's top
     outdirs = []
     for root, dirs, files in os.walk(src, followlinks=True):
         dirs.sort()
@@ -107,6 +111,8 @@ def main(argv):
                     sys.stderr.write('ods2-header-tree: %s maps two ways\n' % f)
                     errors += 1
                 pairs[f] = o
+                rp = '' if rel == '.' else rel + '/'
+                relpairs.append((rp + f, rp + o))
                 print('%s/%s -> %s' % (rel, f, o.upper()))
         if 'header.gcc' in seen:
             sys.stderr.write('ods2-header-tree: %s already has a header.gcc\n' % rel)
@@ -120,6 +126,22 @@ def main(argv):
             with open(os.path.join(out, 'header.gcc'), 'w') as m:
                 for f in sorted(pairs):
                     m.write('%s %s\n' % (f, pairs[f]))
+    # --relative-pairs: "<dir/name> <dir/odsname>" for every remapped file. A
+    # header.gcc made of these, in ANOTHER include directory searched before this
+    # tree (-I comes ahead of -isystem), turns <bits/c++config.h> there into a
+    # name that is merely absent, so the search goes on instead of failing.
+    if relpairs_out and not errors:
+        # every trailing part of each path: an include of <bits/c++config.h> is
+        # relative to whichever include root holds bits/ (here alpha-dec-vms/)
+        seen_rel = set()
+        with open(relpairs_out, 'w') as m:
+            for f, o in relpairs:
+                fp, op = f.split('/'), o.split('/')
+                for k in range(len(fp)):
+                    a, b = '/'.join(fp[k:]), '/'.join(op[k:])
+                    if a not in seen_rel:
+                        seen_rel.add(a)
+                        m.write('%s %s\n' % (a, b))
     return 1 if errors else 0
 
 

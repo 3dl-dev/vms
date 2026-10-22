@@ -1,0 +1,181 @@
+vms-85f + vms-28bd fire q85f1: the frames the committed trim rule kept (94 of 9,696), decoded by tools/cluster/dlm_body.py --all
+
+f0   req  cat=02 op=0e ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x1c0001d4 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f1   req  cat=02 op=0e ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x03000479 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f2   req  cat=02 op=0e ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x03000442 reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f3   req  cat=02 op=0e ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f4   req  cat=02 op=0e ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x210001f3 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f5   resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x1c0001d4 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f6   resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x03000479 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f7   resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x03000442 reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f8   resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f9   req  cat=02 op=0f ?                        VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x2020021a master_lkid=0x1c0001d4 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f10  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x210001f3 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f11  req  cat=02 op=0f ?                        VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x00000000 master_lkid=0x03000479 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f12  req  cat=02 op=0f ?                        VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x2020021a master_lkid=0x03000442 reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f13  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x1c0001d4 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f14  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x03000479 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f15  req  cat=02 op=0f ?                        VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f16  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x03000442 reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f17  req  cat=02 op=0f ?                        VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x2020021b master_lkid=0x210001f3 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f18  req  cat=02 op=1a ?                        VAX1->08002b51a04d mode=0xd0(-) reqid/pid=0x40000008 master_lkid=0x0100024e reslen=0 res=''
+f19  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f20  req  cat=02 op=10 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x1c0001d4 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f21  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x210001f3 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f22  req  cat=02 op=1a ?                        VAX1->08002b51a04d mode=0xd1(-) reqid/pid=0x0b00050f master_lkid=0x0900024a reslen=0 res=''
+f23  req  cat=02 op=10 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x03000479 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f24  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x1c0001d4 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f25  req  cat=02 op=1a ?                        VAX1->08002b51a04d mode=0xd1(-) reqid/pid=0x050001ef master_lkid=0x10000268 reslen=0 res=''
+f26  req  cat=02 op=10 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x03000442 reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f27  req  cat=02 op=1a ?                        VAX1->08002b51a04d mode=0xd1(-) reqid/pid=0x06000487 master_lkid=0x01000282 reslen=0 res=''
+f28  req  cat=02 op=10 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f29  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x03000479 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f30  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x03000442 reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f31  req  cat=02 op=1a ?                        VAX1->08002b51a04d mode=0xd1(-) reqid/pid=0x080004bb master_lkid=0x01000286 reslen=0 res=''
+f32  req  cat=02 op=10 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x210001f3 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f33  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f34  req  cat=02 op=13 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f35  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x210001f3 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f36  req  cat=02 op=13 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f37  req  cat=02 op=14 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x0200068d master_lkid=0x1c000355 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f38  req  cat=02 op=13 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f39  req  cat=02 op=14 ?                        08002b51a04d->VAX1 mode=0x98(-) reqid/pid=0x20400212 master_lkid=0x16000354 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f40  req  cat=02 op=13 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f41  req  cat=02 op=14 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x20400212 master_lkid=0x100001dd reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f42  req  cat=02 op=13 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f43  req  cat=02 op=14 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x0400068d master_lkid=0x0d000357 reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f44  resp cat=82 op=15 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x0200068d master_lkid=0x1c000355 reslen=24 res='CACHE$cmSYSDSK1     á\x01\x00\x00'
+f45  req  cat=02 op=14 ?                        08002b51a04d->VAX1 mode=0x97(-) reqid/pid=0x20400212 master_lkid=0x29000315 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f46  resp cat=82 op=15 ?                        VAX1->08002b51a04d mode=0x98(-) reqid/pid=0x20400212 master_lkid=0x16000354 reslen=24 res='CACHE$cmSYSDSK1     \x0e\x01\x00\x00'
+f47  resp cat=82 op=15 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x20400212 master_lkid=0x100001dd reslen=24 res='CACHE$cmSYSDSK1     Þ\x01\x00\x00'
+f48  resp cat=82 op=15 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x0400068d master_lkid=0x0d000357 reslen=24 res='CACHE$cmSYSDSK1     ë\x01\x00\x00'
+f49  resp cat=82 op=15 ?                        VAX1->08002b51a04d mode=0x97(-) reqid/pid=0x20400212 master_lkid=0x29000315 reslen=24 res='CACHE$cmSYSDSK1     ¼\x03\x00\x00'
+f50  req  cat=02 op=01 ENQ (new lock request)   52540000e501->08002b51a04d mode=0x05(EX) reqid/pid=0x10000004 master_lkid=0x0100034f reslen=18 res='F11B$sOVMXSYS     '
+f51  resp cat=82 op=01 ENQ (new lock request)   08002b51a04d->52540000e501 mode=0x00(NL) reqid/pid=0x10000004 master_lkid=0x0100034f reslen=18 res='F11B$sOVMXSYS     '
+f52  req  cat=02 op=01 ENQ (new lock request)   52540000e501->08002b51a04d mode=0x05(EX) reqid/pid=0x10000004 master_lkid=0x01000350 reslen=18 res='F11B$sOVMXSYS     '
+f53  resp cat=82 op=01 ENQ (new lock request)   08002b51a04d->52540000e501 mode=0x00(NL) reqid/pid=0x10000004 master_lkid=0x01000350 reslen=18 res='F11B$sOVMXSYS     '
+f54  req  cat=02 op=0e ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x03000479 reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f55  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x03000479 reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f56  req  cat=02 op=0f ?                        VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x2020021a master_lkid=0x03000442 reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f57  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021a master_lkid=0x03000442 reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f58  req  cat=02 op=1a ?                        VAX1->08002b51a04d mode=0xd1(-) reqid/pid=0x1300068a master_lkid=0x190000cc reslen=0 res=''
+f59  req  cat=02 op=10 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f60  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f61  req  cat=02 op=13 ?                        VAX1->08002b51a04d mode=0x4f(-) reqid/pid=0x24534353 master_lkid=0x5f524944 reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f62  req  cat=02 op=14 ?                        08002b51a04d->VAX1 mode=0x00(NL) reqid/pid=0x2040020b master_lkid=0x18000351 reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f63  resp cat=82 op=15 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x2040020b master_lkid=0x18000351 reslen=24 res='CACHE$cmSYSDSK1     .\x01\x00\x00'
+f64  req  cat=02 op=01 ENQ (new lock request)   52540000e501->08002b51a04d mode=0x01(CR) reqid/pid=0x10000004 master_lkid=0x01000351 reslen=4 res='RA7T'
+f65  resp cat=82 op=01 ENQ (new lock request)   08002b51a04d->52540000e501 mode=0x01(CR) reqid/pid=0x10000004 master_lkid=0x01000351 reslen=4 res='RA7T'
+f66  req  cat=02 op=01 ENQ (new lock request)   52540000e501->VAX1 mode=0x01(CR) reqid/pid=0x10000004 master_lkid=0x01000351 reslen=4 res='RA7T'
+f67  resp cat=82 op=01 ENQ (new lock request)   VAX1->52540000e501 mode=0x00(NL) reqid/pid=0x2900050f master_lkid=0x01000351 reslen=53 res=''
+f68  req  cat=02 op=0e ?                        VAX1->52540000e501 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7T'
+f69  resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7T'
+f70  req  cat=02 op=0f ?                        VAX1->52540000e501 mode=0x01(CR) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7T'
+f71  req  cat=02 op=0f ?                        VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=4 res='RA7T'
+f72  resp cat=82 op=15 ?                        08002b51a04d->VAX1 mode=0x01(CR) reqid/pid=0x2020021b master_lkid=0x0d00068a reslen=4 res='RA7T'
+f73  resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7T'
+f74  req  cat=02 op=1a ?                        VAX1->52540000e501 mode=0xd0(-) reqid/pid=0x2900050f master_lkid=0x01000351 reslen=53 res=''
+f75  req  cat=02 op=10 ?                        VAX1->52540000e501 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7T'
+f76  resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7T'
+f77  req  cat=02 op=11 ?                        VAX1->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=4 res='RA7T'
+f78  req  cat=02 op=13 ?                        VAX1->52540000e501 mode=0xd0(-) reqid/pid=0x2900050f master_lkid=0x01000351 reslen=4 res='RA7T'
+f79  req  cat=02 op=13 ?                        08002b51a04d->52540000e501 mode=0x01(CR) reqid/pid=0x290004bb master_lkid=0x30000351 reslen=4 res='RA7T'
+f80  req  cat=02 op=14 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=4 res='RA7T'
+f81  req  cat=02 op=14 ?                        52540000e501->08002b51a04d mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=4 res='RA7T'
+f82  resp cat=82 op=15 ?                        VAX1->52540000e501 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=4 res='RA7T'
+f83  resp cat=82 op=15 ?                        08002b51a04d->52540000e501 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000000 reslen=4 res='RA7T'
+f84  req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->52540000e501 mode=0x05(EX) reqid/pid=0x20400218 master_lkid=0x3a0001dd reslen=4 res='RA7T'
+f85  resp cat=82 op=01 ENQ (new lock request)   52540000e501->08002b51a04d mode=0x05(EX) reqid/pid=0x01000352 master_lkid=0x3a0001dd reslen=4 res='RA7T'
+f90  req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->52540000e501 mode=0x05(EX) reqid/pid=0x20400219 master_lkid=0x41000351 reslen=4 res='RA7T'
+f91  resp cat=82 op=01 ENQ (new lock request)   52540000e501->08002b51a04d mode=0x05(EX) reqid/pid=0x01000353 master_lkid=0x41000351 reslen=4 res='RA7T'
+
+--- request/answer body diffs, by SCS transaction id at body[4:8] ---
+pair req f50 -> ans f51  body[34]=0xf9  diffs(10): [0, 1, 2, 3, 8, 28, 29, 30, 32, 34]
+   body[  0] 65 -> 0e
+   body[  1] 00 -> 01
+   body[  2] 0d -> 65
+   body[  3] 01 -> 00
+   body[  8] 02 -> 82
+   body[ 28] 00 -> 01
+   body[ 29] 00 -> 06
+   body[ 30] 05 -> 00
+   body[ 32] 00 -> 05
+   body[ 34] 00 -> f9
+pair req f52 -> ans f53  body[34]=0xf9  diffs(10): [0, 1, 2, 3, 8, 28, 29, 30, 32, 34]
+   body[  0] 67 -> 0f
+   body[  1] 00 -> 01
+   body[  2] 0e -> 67
+   body[  3] 01 -> 00
+   body[  8] 02 -> 82
+   body[ 28] 00 -> 01
+   body[ 29] 00 -> 06
+   body[ 30] 05 -> 00
+   body[ 32] 00 -> 05
+   body[ 34] 00 -> f9
+pair req f64 -> ans f65  body[34]=0xf8  diffs(12): [0, 1, 2, 3, 8, 28, 32, 34, 35, 36, 37, 38]
+   body[  0] 6b -> 12
+   body[  1] 00 -> 01
+   body[  2] 11 -> 6b
+   body[  3] 01 -> 00
+   body[  8] 02 -> 82
+   body[ 28] 00 -> 01
+   body[ 32] 00 -> 05
+   body[ 34] 00 -> f8
+   body[ 35] 00 -> ff
+   body[ 36] 00 -> ff
+   body[ 37] 00 -> ff
+   body[ 38] 00 -> ff
+pair req f66 -> ans f67  body[34]=0xfa  diffs(27): [0, 2, 8, 20, 21, 23, 28, 30, 32, 34, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52]
+   body[  0] 09 -> 08
+   body[  2] 07 -> 09
+   body[  8] 02 -> 82
+   body[ 20] 04 -> 0f
+   body[ 21] 00 -> 05
+   body[ 23] 10 -> 29
+   body[ 28] 00 -> 10
+   body[ 30] 01 -> 00
+   body[ 32] 00 -> 01
+   body[ 34] 00 -> fa
+   body[ 36] 00 -> 52
+   body[ 37] 00 -> 4d
+   body[ 38] 00 -> 4c
+   body[ 39] 00 -> 56
+   body[ 40] 00 -> 42
+   body[ 41] 00 -> 2d
+   body[ 42] 00 -> 30
+   body[ 43] 00 -> 31
+   body[ 44] 00 -> 32
+   body[ 45] 00 -> 33
+   body[ 46] 03 -> 34
+   body[ 47] 04 -> 35
+   body[ 48] 52 -> 36
+   body[ 49] 41 -> 37
+   body[ 50] 37 -> 38
+   body[ 51] 54 -> 39
+   body[ 52] 00 -> 01
+pair req f84 -> ans f85  body[34]=0xfb  diffs(12): [0, 1, 2, 3, 8, 20, 21, 22, 23, 28, 32, 34]
+   body[  0] 15 -> 6d
+   body[  1] 01 -> 00
+   body[  2] 6c -> 15
+   body[  3] 00 -> 01
+   body[  8] 02 -> 82
+   body[ 20] 18 -> 52
+   body[ 21] 02 -> 03
+   body[ 22] 40 -> 00
+   body[ 23] 20 -> 01
+   body[ 28] 11 -> 14
+   body[ 32] 18 -> 00
+   body[ 34] 01 -> fb
+pair req f90 -> ans f91  body[34]=0xfb  diffs(12): [0, 1, 2, 3, 8, 20, 21, 22, 23, 28, 32, 34]
+   body[  0] 18 -> 6f
+   body[  1] 01 -> 00
+   body[  2] 6e -> 18
+   body[  3] 00 -> 01
+   body[  8] 02 -> 82
+   body[ 20] 19 -> 53
+   body[ 21] 02 -> 03
+   body[ 22] 40 -> 00
+   body[ 23] 20 -> 01
+   body[ 28] 11 -> 14
+   body[ 32] 19 -> 00
+   body[ 34] 01 -> fb

@@ -138,7 +138,7 @@ fi
 # disclosed, not silently assumed fixed -- see the comment there.
 ASSERT_TRANSCRIPT=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 
-# Five virtio disks (vms-3e8 + vms-0044 + vms-3e8e). The executive enumerates the
+# Six virtio disks (vms-3e8 + vms-0044 + vms-3e8e + vms-7e7e). The executive enumerates the
 # node's virtio block devices into DK units (VDA0: from vda, VDA100: from vdb,
 # VDA200: from vdc, VDA300: from vdd, VDA400: from vde) at module init -- test_kmod_disk asserts the
 # vda/vdb mapping against a real vms.ko, so the guest must actually HAVE the
@@ -227,6 +227,21 @@ else
     echo "                the IMGACT-over-ACP test (vms-3e8e) needs an ODS-2 image volume on VDA400: (vde)" >&2
     exit 2
 fi
+#   vdf (VDA500:) -- a REAL ODS-5 volume made by OpenVMS Alpha V8.4
+#                    (INITIALIZE/STRUCTURE=5, extended names created there, copied
+#                    out byte for byte: tests/lab/captures/ods5-alpha-20261022/
+#                    ods5t.dsk, staged as /ods5_real.img). test_syssvc_acp_ods5
+#                    (rd vms-7e7e) $MOUNTs it through the executive ACP, reads,
+#                    creates, renames and deletes extended names on it.
+OVMX_DISK5=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+OVMX_ODS5_SRC=/ods5_real.img
+if [ -f "$OVMX_ODS5_SRC" ]; then
+    cp "$OVMX_ODS5_SRC" "$OVMX_DISK5"
+else
+    echo "run_tests.sh: FATAL: ODS-5 fixture $OVMX_ODS5_SRC missing --" >&2
+    echo "                the ODS-5 ACP test (vms-7e7e) needs the real Alpha ODS-5 volume on VDA500: (vdf)" >&2
+    exit 2
+fi
 # A scratch SCSI disk (blank), attached as a REAL virtio-scsi disk below. Its
 # only purpose is to prove the executive's non-virtio disk probe: with a real
 # /dev/sda present in the guest, vms_devtab_probe_disks() must enter SDA0:
@@ -235,7 +250,7 @@ fi
 # not read the contents. vms-ddc / vms-47d (device-native naming beyond virtio).
 OVMX_SCSI0=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 truncate -s 16M "$OVMX_SCSI0"
-trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3" "$OVMX_DISK4" "$OVMX_SCSI0"' EXIT
+trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3" "$OVMX_DISK4" "$OVMX_DISK5" "$OVMX_SCSI0"' EXIT
 
 # One virtio-net NIC (vms-9d2). Exactly as the two virtio disks above give the
 # executive real block devices to enumerate into DK units, this gives it a real
@@ -325,6 +340,8 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -device virtio-blk-pci,drive=ovmxdisk3 \
     -drive if=none,id=ovmxdisk4,file="$OVMX_DISK4",format=raw \
     -device virtio-blk-pci,drive=ovmxdisk4 \
+    -drive if=none,id=ovmxdisk5,file="$OVMX_DISK5",format=raw \
+    -device virtio-blk-pci,drive=ovmxdisk5 \
     -device virtio-scsi-pci,id=scsi0 \
     -drive if=none,id=ovmxscsi0,file="$OVMX_SCSI0",format=raw \
     -device scsi-hd,drive=ovmxscsi0,bus=scsi0.0 \

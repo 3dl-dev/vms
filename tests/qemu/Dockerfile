@@ -433,6 +433,10 @@ RUN cd /src/repo && CC=gcc sh tests/qemu/mk_corpus_native.sh /src/repo
 # (acp_rw / acp_mount / ...), which mount + read this volume through the real
 # executive ACP (the retired vmsfs.ko "ods2ro" VFS presentation used to be here).
 COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img
+# A REAL ODS-5 volume made by OpenVMS Alpha V8.4 (rd vms-7e7e): run_tests.sh
+# copies it onto VDA500: (vdf) for test_syssvc_acp_ods5. Provenance:
+# tests/lab/captures/ods5-alpha-20261022/RESULTS.md.
+COPY tests/lab/captures/ods5-alpha-20261022/ods5t.dsk /ods5_real.img
 COPY tests/ods2/ovmxdir_hello.golden /hello.golden
 
 # GENERATED multi-version ODS-2 volume for the $SEARCH proof (vms-a0b, epic

@@ -240,19 +240,31 @@
  * mapping is applied here; DCL then derives $STATUS from the exit code, as it
  * does for any image that recorded nothing.
  */
-uint32_t sys$exit(uint32_t code) {
+/*
+ * vms$$run_exit_handlers - the first half of $EXIT: run the declared exit
+ * handlers, last declared first, each with the exit status. Each is taken off
+ * the list before it is called (as VMS does), so a handler runs once however the
+ * process ends. sys$exit runs them, then records the status and ends; IMGACT
+ * calls this when an image's main transfer RETURNS (SYS$IMGSTA's $EXIT, vms-1c83)
+ * and then records the status itself, through the executive, as it always has.
+ */
+uint32_t vms$$run_exit_handlers(uint32_t code) {
     struct vms_pcb *pcb = vms_pcb_get();
-
-    /* Run exit handlers in LIFO order */
-    if (pcb) {
-        for (int i = pcb->exit_handler_count - 1; i >= 0; i--) {
-            struct pcb_exit_handler *blk = pcb->exit_handlers[i];
-            if (blk && blk->handler) {
-                uint32_t status = code;
-                blk->handler(&status);
-            }
+    if (!pcb)
+        return SS$_NORMAL;              /* no process context: no handlers were declared */
+    while (pcb->exit_handler_count > 0) {
+        struct pcb_exit_handler *blk = pcb->exit_handlers[--pcb->exit_handler_count];
+        pcb->exit_handlers[pcb->exit_handler_count] = NULL;
+        if (blk && blk->handler) {
+            uint32_t status = code;
+            blk->handler(&status);
         }
     }
+    return SS$_NORMAL;
+}
+
+uint32_t sys$exit(uint32_t code) {
+    (void)vms$$run_exit_handlers(code);
 
     uint32_t exit_code = (code & 1) ? 0 : 1;  /* VMS success -> 0, failure -> 1 */
     uint32_t mapped = exit_code;

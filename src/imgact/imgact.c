@@ -2557,8 +2557,26 @@ static void imgact_u32_hex8(char *out, uint32_t v)
  * stdcall_returned=0. */
 static int g_seam_no_transfer;
 
+/* vms-1c83: set when the image's main transfer RETURNED. VMS's SYS$IMGSTA
+ * then calls $EXIT with the returned value, and $EXIT first runs the exit
+ * handlers the image declared -- the C RTL's among them, which runs the atexit
+ * functions and writes out buffered streams. This is that first half, in the
+ * activated image's own LIBVMS$SHR (vms$$run_exit_handlers); the status is
+ * recorded below only after it, so a waiting parent (LIB$SPAWN, a /NOWAIT
+ * completion) never resumes before the child's output is written. */
+#if defined(__alpha__)
+static unsigned long g_run_exit_handlers;
+#endif
+
 static void imgact_vms_exit(unsigned long cond)
 {
+#if defined(__alpha__)
+	if (g_run_exit_handlers) {
+		unsigned long run = g_run_exit_handlers;
+		g_run_exit_handlers = 0;
+		(void)imgact_sv_call(run, (unsigned long)(uint32_t)cond, 0);
+	}
+#endif
 	int fd = kif_xport_dev_open();
 	if (fd < 0) {
 		/* No executive: cannot record the VMS completion status. Report
@@ -2739,6 +2757,12 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 	unsigned long cond = imgact_vms_transfer_stack(pv, ai, args,
 						       imgact_p1_stack());
 
+#if defined(__alpha__)
+	/* vms-1c83: main returned -- $EXIT, as SYS$IMGSTA does: the exit handlers
+	 * the image declared run first (imgact_vms_exit). */
+	for (int i = 0; i < g_nprods && !g_run_exit_handlers; i++)
+		g_run_exit_handlers = sv_find_named(&g_prods[i], "vms$$run_exit_handlers");
+#endif
 	imgact_vms_exit(cond);          /* executive $EXIT; does not return */
 	sys_exit(IMGACT_EXIT_NOEXEC);   /* defensive: never reached */
 }

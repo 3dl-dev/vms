@@ -293,6 +293,11 @@ if [ "$OK" -eq 1 ]; then
     SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
     if printf '%s' "$SEG" | grep >/dev/null -E '^[0-9A-Fa-f]{8} +NETACP'; then r1=1; else r1=0; fi
     record "STARTNET launched NO NETACP on an unconfigured boot (SHOW SYSTEM lists none)" "$r1"
+    # rd vms-394e: the post-startup kernel-log intake (a JOB_CONTROL thread)
+    # claims no process of its own -- no placeholder OPCOM in SHOW SYSTEM
+    # until the real facility exists (rd vms-798).
+    if printf '%s' "$SEG" | grep >/dev/null -E '^[0-9A-Fa-f]{8} +OPCOM'; then r1=1; else r1=0; fi
+    record "SHOW SYSTEM lists no placeholder OPCOM process" "$r1"
 fi
 
 cleanup

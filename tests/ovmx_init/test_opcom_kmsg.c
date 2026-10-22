@@ -64,6 +64,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/socket.h>
 
 #include "opcom_kmsg.h"
 #include "opcom_exec_line.h"   /* rd vms-c56: shared with the NetBSD /dev/klog bridge */
@@ -173,6 +174,98 @@ static void test_seed_from_spool(void)
         failures++;
     } else {
         printf("  PASS: seed from a missing spool emits nothing (best-effort)\n");
+    }
+}
+
+/*
+ * rd vms-394e: spool lines carry the kernel-log sequence number they were
+ * written at; the seed strips it, files the record, and returns the highest
+ * one -- the mark the OPCOM follower continues from.
+ */
+static void test_seed_seq_mark(void)
+{
+    char path[] = "/tmp/opcom_seedseq_XXXXXX";
+    int fd = mkstemp(path);
+    unsigned long long hi;
+    const char *body =
+        "41 %OVMX-I-KMOD, initializing VMS kernel module\n"
+        "97 %CNXMAN, waiting to form or join an OpenVMS Cluster\n"
+        "%OVMX-I-SYSID, an old-format line with no sequence\n"
+        "97 %OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR\n";
+
+    printf("\n--- seed strips the sequence prefix and returns the mark (rd vms-394e) ---\n");
+    if (fd < 0) { printf("  FAIL: mkstemp\n"); failures++; return; }
+    (void)write(fd, body, strlen(body));
+    close(fd);
+    seed_n = 0;
+    hi = opcom_kmsg_seed_operator_log_from(path, seed_capture_emit);
+    unlink(path);
+    if (hi == 97 && seed_n == 4 &&
+        strcmp(seed_cap[0], "%OVMX-I-KMOD, initializing VMS kernel module") == 0 &&
+        strcmp(seed_cap[1], "%CNXMAN, waiting to form or join an OpenVMS Cluster") == 0 &&
+        strcmp(seed_cap[2], "%OVMX-I-SYSID, an old-format line with no sequence") == 0 &&
+        strcmp(seed_cap[3], "%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR") == 0) {
+        printf("  PASS: records filed without their prefix; mark = 97 (the highest)\n");
+    } else {
+        printf("  FAIL: hi=%llu n=%d first=\"%s\"\n", hi, seed_n, seed_cap[0]);
+        failures++;
+    }
+
+    {
+        char mpath[] = "/tmp/opcom_mark_XXXXXX";
+        int mfd = mkstemp(mpath);
+        close(mfd);
+        unlink(mpath);   /* write_mark creates it (O_NOFOLLOW, no stale file) */
+        if (opcom_kmsg_write_mark(mpath, 12345678901ULL) == 0 &&
+            opcom_kmsg_read_mark(mpath) == 12345678901ULL &&
+            opcom_kmsg_read_mark("/tmp/opcom_mark_absent_zzzz") == 0) {
+            printf("  PASS: the mark round-trips; a missing mark reads 0 (file everything)\n");
+        } else {
+            printf("  FAIL: mark round-trip\n");
+            failures++;
+        }
+        unlink(mpath);
+    }
+}
+
+/*
+ * rd vms-394e: the OPCOM follower files, from a stream of kernel-log records
+ * (one per read, as /dev/kmsg delivers them -- a SEQPACKET socket keeps the
+ * boundaries here), every routed record AFTER the seed's mark and nothing at or
+ * before it: no record filed twice, none missed.
+ */
+static void test_follow_after_mark(void)
+{
+    int sv[2];
+    const char *recs[] = {
+        "5,96,1000,-;%CNXMAN, filed by the seed already\n",
+        "5,97,1001,-;%CNXMAN, also filed by the seed\n",
+        "5,98,1002,-;%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001\n",
+        "6,99,1003,-;random INFO-level driver chatter\n",
+        "3,100,1004,-;\\x0a%CNXMAN,  now a VAXcluster member -- system OVMXB\n",
+        "5,101,1005,-;%CNXMAN, proposing addition of a system to the cluster\n SUBSYSTEM=x\n",
+    };
+    long filed;
+    unsigned i;
+
+    printf("\n--- the OPCOM follower files only what the seed did not (rd vms-394e) ---\n");
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) {
+        printf("  FAIL: socketpair\n"); failures++; return;
+    }
+    for (i = 0; i < sizeof(recs) / sizeof(recs[0]); i++)
+        (void)write(sv[1], recs[i], strlen(recs[i]));
+    close(sv[1]);
+    seed_n = 0;
+    filed = opcom_kmsg_follow_fd(sv[0], 97, seed_capture_emit, 100);
+    close(sv[0]);
+    if (filed == 3 && seed_n == 3 &&
+        strcmp(seed_cap[0], "%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001") == 0 &&
+        strcmp(seed_cap[1], "%CNXMAN,  now a VAXcluster member -- system OVMXB") == 0 &&
+        strcmp(seed_cap[2], "%CNXMAN, proposing addition of a system to the cluster") == 0) {
+        printf("  PASS: records 98, 100, 101 filed verbatim; 96/97 (seeded) and the INFO line not\n");
+    } else {
+        printf("  FAIL: filed=%ld n=%d first=\"%s\"\n", filed, seed_n, seed_n ? seed_cap[0] : "");
+        failures++;
     }
 }
 
@@ -374,6 +467,9 @@ int main(void)
     test_seed_from_spool();
 
     test_spool_refusal();
+
+    test_seed_seq_mark();
+    test_follow_after_mark();
 
     printf("\n=== test_opcom_kmsg: %d failed ===\n", failures);
     return failures == 0 ? 0 : 1;

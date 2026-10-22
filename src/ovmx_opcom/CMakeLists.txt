@@ -2,17 +2,16 @@
 #
 # Created by PID 1 as a DETACHED SYSTEM process named OPCOM: the $SNDOPR
 # mailbox, OPERATOR.LOG, and the broadcast to the enabled operator terminal
-# (OPA0:). On Linux it also carries the post-startup kernel-log intake
-# (opcom_kmsg.c, rd vms-394e) and therefore the same strong RMS anchors
-# PROVISION.EXE carries (provision_rms_bind.c, vms-aac) so rms_textfile's weak
-# seam binds in a static link. NetBSD's PID-1 /dev/klog reader keeps filing the
-# kernel log itself.
+# (OPA0:). It writes OPERATOR.LOG through rms_textfile, so on Linux it carries
+# the strong RMS anchors PROVISION.EXE carries (provision_rms_bind.c, vms-aac)
+# for rms_textfile's weak seam to bind in a static link. The post-startup
+# kernel-log intake (rd vms-394e) is not in OPCOM yet: held behind rd vms-3ea /
+# vms-326 (see docs/design-opcom-executive-logging.md sec 9).
 add_executable(ovmx_opcom
     ovmx_opcom.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_sources(ovmx_opcom PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/ovmx_init/opcom_kmsg.c
         ${CMAKE_SOURCE_DIR}/src/ovmx_provision/provision_rms_bind.c)
 endif()
 

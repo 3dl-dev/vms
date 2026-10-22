@@ -18,10 +18,7 @@
  *      the address sys$sndopr (src/libvms/syssvc/sys_operator.c) sends to;
  *   2. enables OPA0: as an operator terminal for every class and says so,
  *      on OPA0: and in the log ("has been enabled", "Operator status for");
- *   3. (Linux) runs the kernel-log intake: every routed kernel/executive record
- *      after the boot seed's mark goes into OPERATOR.LOG (rd vms-394e,
- *      opcom_kmsg_follow) -- operator-log records, not broadcasts;
- *   4. for ever: reads the mailbox; for each request takes the SENDER from the
+ *   3. for ever: reads the mailbox; for each request takes the SENDER from the
  *      executive (the read's sender PID -> $GETJPI user name -- never from the
  *      message), builds the oracle record, files it and broadcasts it to OPA0:.
  *
@@ -57,7 +54,6 @@
 #include "opcom_mbx.h"
 #include "opcom_record.h"
 #if defined(__linux__)
-#include "opcom_kmsg.h"
 #endif
 
 #define OPCOM_BRK_CLASS 7u          /* BRK$C_OPCOM: the message class OPCOM broadcasts under */
@@ -229,22 +225,6 @@ static void serve_request(const unsigned char *buf, uint32_t len, uint32_t sende
     opcom_record(lines, 2, 1);
 }
 
-#if defined(__linux__)
-static void kmsg_emit(const char *line)
-{
-    pthread_mutex_lock(&oplog_lock);
-    oplog_line(line);
-    pthread_mutex_unlock(&oplog_lock);
-}
-
-static void *kmsg_intake(void *arg)
-{
-    (void)arg;
-    opcom_kmsg_follow(kmsg_emit);
-    return NULL;
-}
-#endif
-
 int main(void)
 {
     uint32_t chan = 0;
@@ -257,22 +237,6 @@ int main(void)
     if (!open_mailbox(&chan))
         return 1;
     enable_console_operator();
-
-#if defined(__linux__)
-    {
-        pthread_t tid;
-        pthread_attr_t attr;
-        sigset_t all, prev;
-
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        sigfillset(&all);
-        pthread_sigmask(SIG_BLOCK, &all, &prev);
-        (void)pthread_create(&tid, &attr, kmsg_intake, NULL);
-        pthread_sigmask(SIG_SETMASK, &prev, NULL);
-        pthread_attr_destroy(&attr);
-    }
-#endif
 
     for (;;) {
         uint32_t actlen = 0, sender = 0;

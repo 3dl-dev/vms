@@ -324,6 +324,7 @@ int main(void)
 
     st = fileop(chan, VMS_ACP_FOP_CREATE, VMS_ACP_M_CREATE, "gcc++-new.h", 0, &f);
     check($VMS_STATUS_SUCCESS(st) && f.out_version == 1, "IO$_CREATE gcc++-new.h (ISL-1 characters)");
+    /* negctl: acp-ods5-dir-byte-order */
     check(raw_dir_flags("gcc++-new.h") == 0x08, "on the platter: its directory record, name type ISL-1 (flags 0x08)");
     {
         uint32_t lbn = raw_hdr_lbn(fidof(f.fid_num, f.fid_nmx));

@@ -1,0 +1,51 @@
+# acp-ods5-dir-byte-order -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "Files-11 ACP on an ODS-5 volume: directory records are ordered and matched case-blind and carry their ODS-5 name type (rd vms-7e7e, tests/lab/captures/ods5-alpha-20261022/RESULTS.md R5-R8)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_ods5";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_vol_dirflags() turns on the codec's ODS-5 directory mode (ODS2_DIRF_ODS5) for a level-5 volume: every IO\$_CREATE / IO\$_DELETE / IO\$_MODIFY directory edit then orders and matches names case-blind and stores the name type in dir_flags, as the real Alpha V8.4 volume does. Returning 0 puts an ODS-5 volume's directories back in ODS-2 mode: a new ISL-1 name gets dir_flags 0 instead of 0x08, a different-case CREATE of an existing name makes a second record instead of a new version of the first, and a different-case DELETE finds the entry (lookups fold case on their own) but cannot remove it. Lookups, \$SEARCH, the header build and every ODS-2 volume do not go through this mode, so only the ODS-5 suite's directory-edit assertions redden.";;
+        require_fail) cat <<'EOF'
+on the platter: its directory record, name type ISL-1 (flags 0x08)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the record keeps its first case: libstdc++.a;2, libstdc++.a;1
+IO$_DELETE by a different case
+IO$_DELETE gcc-plugin.H removes Gcc-Plugin.h
+IO$_DELETE libstdc++.a;2
+after the deletes [TEST] lists its nine original 8-bit names again
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME ODS-2-MODE DIRECTORY EDIT, SEEN AT EVERY LATER CASE-SENSITIVE STEP.
+With the volume's directories edited in ODS-2 mode, LIBSTDC++.A is entered as a
+record of its own (byte order and byte match) rather than as version 2 of
+libstdc++.a, so the version listing shows two spellings; and every DELETE that
+spells a name in another case resolves the entry (the lookup folds case itself)
+but the byte-matching remove drops nothing and the ACP answers SS$_NOSUCHFILE --
+the different-case deletes of the renamed file, of Gcc-Plugin.h and of the ;2
+version. The undeleted files leave [TEST] with more than its nine original
+names. The creates themselves, the lookups, $SEARCH order, the header bytes and
+the ODS-2 volume control never go through the directory-edit mode and stay
+green.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # ANCHORED to the single return of acp_vol_dirflags(): the expression
+        # `ODS2_IS_ODS5(vol->struclev) ? ODS2_DIRF_ODS5 : 0u` occurs exactly
+        # once in the file. After substitution the original text is gone, so a
+        # second apply matches nothing (the no-op selftest requires).
+        sed -i 's|return ODS2_IS_ODS5(vol->struclev) ? ODS2_DIRF_ODS5 : 0u;|return 0u; /* NEGCTL acp-ods5-dir-byte-order */|' "$_file"
+
+    :
+}

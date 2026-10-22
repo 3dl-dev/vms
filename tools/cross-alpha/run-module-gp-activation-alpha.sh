@@ -2499,7 +2499,7 @@ PYEOF3
     # the C++ headers on ODS-2 names, with the header.gcc maps g++ -remap reads (c++config.h ...)
     # (into a tree this user owns: drlimg/ is written by the container)
     rm -rf "$GATE_ROOT/cxxinc"
-    python3 -I "$REPO/tools/cross-alpha-vms/selfhost/ods2-header-tree.py" "$GATE_ROOT/drlimg/cxx-src" "$GATE_ROOT/cxxinc" \
+    python3 -I "$REPO/tools/cross-alpha-vms/selfhost/ods2-header-tree.py" "$GATE_ROOT/drlimg/cxx-src" "$GATE_ROOT/cxxinc" --relative-pairs "$GATE_ROOT/cxx-relpairs.txt" \
       || die "the C++ header tree cannot be placed on ODS-2 names"
     cp "$GATE_ROOT/drlimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
     cp "$_hg/xgcc.exe" "$WORK/joint/xgcc.exe"; cp "$_hg/cc1.exe" "$WORK/joint/cc1.exe"; cp "$_hg/ld.exe" "$WORK/joint/ld.exe"
@@ -2519,6 +2519,10 @@ PYEOF3
     rm -rf "$WORK/joint/gccsrc"; mkdir -p "$WORK/joint/gccsrc"
     tar xf "$_hg/gccsrc.tar" -C "$WORK/joint/gccsrc" --strip-components=1
     cp "$GATE_ROOT/drlimg/cc1tu.rsp" "$WORK/joint/gccsrc/cc1tu.rsp"
+    # every GCC include directory is searched (-I) before the C++ headers: each gets the
+    # C++ tree's dir/name pairs, so <bits/c++config.h> there is absent, not an invalid
+    # ODS-2 name (the ODS-2 layout; vms-408 drops it with ODS-5)
+    find "$WORK/joint/gccsrc" -type d -exec cp "$GATE_ROOT/cxx-relpairs.txt" {}/header.gcc \;
     : > "$WORK/joint/DRL_PROOF"
     assemble_boot_image
     log "step 3: BOOT A -- the GCC driver compiles and links on the REAL executive, then DCL RUNs HELLO.EXE (up to ${BOOT_TIMEOUT}s)"

@@ -10,6 +10,18 @@
 add_executable(ovmx_job_control
     ovmx_job_control.c
 )
+# rd vms-394e: on Linux JOB_CONTROL hosts the post-startup kernel-log intake
+# (PID 1's /dev/kmsg bridge ends with startup); NetBSD's PID-1 /dev/klog reader
+# keeps running, so nothing is added there.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # provision_rms_bind.c: the same strong RMS anchors PROVISION.EXE carries, so
+    # rms_textfile_append_line's weak seam binds in a static link (vms-aac).
+    target_sources(ovmx_job_control PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/ovmx_init/opcom_kmsg.c
+        ${CMAKE_SOURCE_DIR}/src/ovmx_provision/provision_rms_bind.c)
+    target_include_directories(ovmx_job_control PRIVATE ${CMAKE_SOURCE_DIR}/src/ovmx_init)
+    target_link_libraries(ovmx_job_control PRIVATE vmsrms)
+endif()
 
 target_include_directories(ovmx_job_control PRIVATE
     ${VMS_INCLUDE_DIR}

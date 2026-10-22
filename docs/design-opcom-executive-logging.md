@@ -465,3 +465,45 @@ a real VAX console never printed, cluster-facility lines only in VMS's forms),
 by the kernel-executive seam test (`tests/qemu/test_kmod_cluster_seam.c`: the
 two levels, read back from `/dev/kmsg`) and by the booted 2-node e2e
 (`tests/qemu/test_cluster_config_lan_2node_e2e.sh`).
+
+## 9. After startup: the kernel-log intake (rd vms-394e)
+
+PID 1's `/dev/kmsg` bridge is a thread of PID 1, and PID 1 ends it when
+startup completes: the executive changes a process's substrate identity only
+when the process is single-threaded, and PID 1 must leave root (rd vms-137e).
+Before this item, an executive record emitted after that point (a lock-manager
+refusal at a logged-in DCL prompt, a coordinator's lines when another node
+joins) reached the kernel ring only. With §8 keeping such records off OPA0:,
+they were then visible nowhere a VMS operator looks.
+
+On VMS this is OPCOM's job. OVMX has no OPCOM yet (rd vms-798: the `$SNDOPR`
+mailbox, operator-terminal broadcast, REPLY/ENABLE). A process that only copied
+the kernel log and called itself OPCOM would be a placeholder in SHOW SYSTEM,
+and none is created.
+
+- **Where the intake runs.** On Linux it is a thread of JOB_CONTROL, a real,
+  long-lived SYSTEM process that links RMS and never runs as root. It moves into
+  OPCOM when vms-798 lands.
+- **What it does.** It reads the kernel log as an ordinary process and passes
+  every routed record through `opcom_kmsg_classify()`, then appends it to
+  `SYS$MANAGER:OPERATOR.LOG` over RMS (`opcom_kmsg_follow`).
+- **Where it starts, so nothing is filed twice or missed.**
+  - Every spool line now carries the kernel-log sequence number it was written
+    at (`"<seq> %FAC..."`).
+  - PROVISION's boot seed strips that prefix and writes the highest number it
+    filed to `/tmp/.ovmx-opcom-seeded`.
+  - The intake reads the kernel log from its start and files only records after
+    that mark. This includes everything the bridge spooled during the rest of
+    `STARTUP.COM`.
+- **NetBSD** needs none: PID 1's `/dev/klog` reader leaves root with PID 1 and
+  keeps filing for the life of the system.
+
+Asserted by:
+
+- `tests/ovmx_init/test_opcom_kmsg.c`: the seed mark, and the follower filing
+  only records after the mark.
+- `tests/qemu/test_cluster_config_lan_2node_e2e.sh`: the founder's
+  `%CNXMAN, proposing addition of a system to the cluster` for the second node,
+  emitted long after the founder's startup, is in its OPERATOR.LOG.
+- `tests/qemu/test_startup_phase_driver.sh`: SHOW SYSTEM lists no placeholder
+  OPCOM.

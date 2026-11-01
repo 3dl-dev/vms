@@ -19,6 +19,17 @@
 #include "vms_syscall.h"
 #include "vms_types.h"
 
+int kif_xport_task_fork(void)
+{
+    /* clone(SIGCHLD) with no shared state is fork(2): the child's exit signals
+     * the creator (SIGCHLD is 20 on Alpha, 17 elsewhere). */
+#if defined(__alpha__)
+    return (int)vms_sys_clone(20, 0, 0, 0, 0);
+#else
+    return (int)vms_sys_clone(17, 0, 0, 0, 0);
+#endif
+}
+
 const char *kif_xport_device_path(void)
 {
     return "/dev/vms";

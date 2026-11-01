@@ -37,20 +37,31 @@ static void dq_memcpy(void *dst, const void *src, uint32_t n)
 
 /* Copy a NUL-terminated resource name out of a post into a codec name field.
  * Returns the length placed. The post's `resnam` came from the RSB. */
+/*
+ * THE NAME, COUNTED, OUT OF THE POST (rd vms-326). It used to stop at the
+ * first NUL, which for the one name family VMS fills with NULs -- the RMS
+ * file-access lock, 'RMS$' + 6 FID bytes + 0x02 + a 12-byte volume label +
+ * three NULs -- put SEVEN bytes at body[47:55] where the real VAX puts 26,
+ * and so asked the directory node about a resource nobody has. The engine
+ * states the count on the post; this copies exactly that many bytes.
+ */
 static uint8_t dq_name_from_post(const struct vms_dlm_proxy_post *p,
 				 uint8_t *out)
 {
-	uint8_t n = 0u;
+	uint8_t n = p->resnam_len;
+	uint8_t i;
 
-	while (n < (uint8_t)VMS_DLM_NAME_MAX && p->resnam[n] != '\0') {
-		out[n] = (uint8_t)p->resnam[n];
-		n++;
-	}
+	if (n > (uint8_t)VMS_DLM_NAME_MAX)
+		n = (uint8_t)VMS_DLM_NAME_MAX;
+	for (i = 0u; i < n; i++)
+		out[i] = (uint8_t)p->resnam[i];
 	return n;
 }
 
 /* The mirror: a codec name field into a NUL-terminated buffer the engine's
- * `learn_dir_hash` / `assume_mastery` take. `out` is VMS_DLM_NAME_MAX + 1. */
+ * `learn_dir_hash` / `assume_mastery` take ALONGSIDE the count (rd vms-326:
+ * they key on the count, and the NUL is only so a diagnostic can print an
+ * ASCII name). `out` is VMS_DLM_NAME_MAX + 1. */
 static void dq_name_to_cstr(const uint8_t *name, uint8_t len, char *out)
 {
 	uint8_t i;
@@ -236,8 +247,26 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 	req.mode            = (uint8_t)p->lkmode;
 	req.req_lkid = p->req_lkid;      /* our own executive handle */
 	req.master_lkid     = p->master_lkid;   /* 0 until the master named it */
-	req.dir_hash        = p->dir_hash;
-	req.dir_hash_valid  = p->dir_hash_known;
+	req.req_pid         = p->req_pid;       /* ...and who is asking until then */
+	/*
+	 * THE PARENT SPAN, body[36:44] (rd vms-b67a): a sub-lock names its parent
+	 * by the pair (our handle, that parent's master handle), both read off the
+	 * parent LKB by the engine and carried in the post. A ROOT post leaves
+	 * both 0, which is what a root means on the wire.
+	 */
+	req.parent_own_lkid    = p->parent_own_lkid;
+	req.parent_master_lkid = p->parent_master_lkid;
+	/*
+	 * ...and A SUB REQUEST CARRIES NO DIRECTORY HASH. The hash indexes the
+	 * directory, only ROOT resources are in the directory, and this request
+	 * is addressed to the master the parent named -- so there is no lookup
+	 * for a hash to serve. A real sub request does carry four bytes at
+	 * body[128:132], and what selects them is NOT a function of the name this
+	 * executive can learn or compute (Rule 8), so writing anything but zero
+	 * would be minting one. The deviation is recorded in frame-grounding.tsv.
+	 */
+	req.dir_hash        = (p->parent_own_lkid != 0u) ? 0u : p->dir_hash;
+	req.dir_hash_valid  = (p->parent_own_lkid != 0u) ? 0u : p->dir_hash_known;
 	req.name_len        = dq_name_from_post(p, req.name);
 	/*
 	 * The identity that qualifies the name, body[44:46] + body[46] (rd
@@ -293,7 +322,10 @@ static enum dlm_req_status dq_build_deq(struct dlm_req_fsm *f,
 	dq_bzero(&d, (uint32_t)sizeof(d));
 	d.req_lkid    = p->req_lkid;      /* our own executive handle          */
 	d.master_lkid = p->master_lkid;   /* what the master's grant recorded  */
-	d.mode        = (uint8_t)p->lkmode;
+	/* body[30] IS NOT THE LOCK MODE (rd vms-194). This arm used to put
+	 * p->lkmode there, which is how a release of an EX lock carried a 5
+	 * that no real release has ever carried; the builder now writes the
+	 * measured cell itself, so there is nothing to plumb. */
 
 	dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
 	if (vms_dlm_deq_build(&d, f->txframe, (uint32_t)sizeof(f->txframe),
@@ -325,6 +357,51 @@ static enum dlm_req_status dq_build_and_send(struct dlm_req_fsm *f,
 }
 
 /*
+ * Is a cluster state transition running RIGHT NOW? A live read through the
+ * injected op, never a flag this object keeps: see the op's note in the header
+ * (§4) for why a remembered answer would be the INV-6 failure.
+ */
+static int dq_transition_active(const struct dlm_req_fsm *f)
+{
+	if (f->ops == (const struct dlm_req_ops *)0 ||
+	    f->ops->transition_active == (int (*)(void *))0)
+		return 0;
+	return f->ops->transition_active(f->ops->ctx) != 0;
+}
+
+/*
+ * Does this operation wait for the rebuild? (rd vms-c55, header §"THE
+ * TRANSITION HOLD".) An ENQ and a CONVERT ACQUIRE, and the corpus shows no
+ * real member acquiring across a rebuild. A $DEQ gives a lock BACK, which is
+ * how the cluster is left in a state the rebuild can use -- the same carve-out
+ * vms_dlm_quorum.h makes for a release during a quorum hang.
+ */
+static int dq_op_waits_for_rebuild(uint8_t wireop)
+{
+	return wireop != (uint8_t)VMS_DLM_WIREOP_DEQ;
+}
+
+/*
+ * NAME THE HOLD, ONCE PER EPISODE (rd vms-c55, the rd vms-c55/#1714 lesson).
+ *
+ * A stall that does not say why it is stalling costs a whole fire to
+ * attribute: the demo's OVMX/VAX node sat between the STARTUP.COM hand-off and
+ * the site-startup line, and nothing on its console said whether a lock
+ * request was WAITING for a rebuild or had been lost. One line at the first
+ * hold of an episode, one at its release, and a console answers that question
+ * by itself. Bounded by `xition_hold_said`, so a storm of held requests inside
+ * one transition is still one line.
+ */
+static void dq_say_held(struct dlm_req_fsm *f)
+{
+	if (f->xition_hold_said)
+		return;
+	f->xition_hold_said = 1u;
+	dq_log(f, "%DLM, holding cross-node lock requests until the "
+		  "VAXcluster state transition completes");
+}
+
+/*
  * MAY this frame be transmitted at all? Every refusal is counted where it is
  * decided, and NOTHING is built before they have all passed -- a frame that
  * exists is a frame a later edit can send.
@@ -338,6 +415,12 @@ static enum dlm_req_status dq_may_transmit(struct dlm_req_fsm *f, uint8_t wireop
 	if (wireop == 0u) {
 		f->posts_no_wireop++;
 		return DLM_REQ_E_NOWIREOP;
+	}
+	if (dq_op_waits_for_rebuild(wireop) && dq_transition_active(f)) {
+		/* The hold. The request is not refused -- it is not yet due. */
+		f->posts_held_xition++;
+		dq_say_held(f);
+		return DLM_REQ_E_XITION;
 	}
 	if (dst == 0u) {
 		f->dir_unresolved++;
@@ -416,6 +499,23 @@ static void dq_untransmitted(struct dlm_req_fsm *f, struct dlm_req *r)
 	f->posts_deferred++;
 	if (r->tries < 0xffu)
 		r->tries++;
+	r->sent_ms = dq_now(f);
+}
+
+/*
+ * dq_held - a request the TRANSITION HOLD kept off the wire (rd vms-c55).
+ *
+ * Like dq_untransmitted in every way but one: `tries` is NOT advanced. A hold
+ * is not a failed attempt. Spending a rung of a five-rung ladder on each beat
+ * of a rebuild would fail, with a timeout status, a request that is merely
+ * waiting for the cluster -- and VMS's own behaviour during a transition is to
+ * make lock activity WAIT, not to fail it (Davis pp. 7-40/7-41). `sent_ms` is
+ * stamped so the ladder re-offers it one beat later rather than spinning, and
+ * dlm_req_fsm_transition_ended() makes it due the moment the hold lifts.
+ */
+static void dq_held(struct dlm_req_fsm *f, struct dlm_req *r)
+{
+	/* tries is deliberately untouched -- see the note above. */
 	r->sent_ms = dq_now(f);
 }
 
@@ -622,6 +722,16 @@ typedef void (*dq_handler_t)(struct dlm_req_fsm *f, struct dq_ev *e);
 static void dq_post_not_sent(struct dlm_req_fsm *f, struct dq_ev *e,
 			     enum dlm_req_status why)
 {
+	if (why == DLM_REQ_E_XITION) {
+		/* A THIRD arm, and it is neither of the two above: the request
+		 * is perfectly routable and nothing refused it -- a cluster
+		 * state transition is running and no member sends lock traffic
+		 * into a rebuild. Retained like the transient arm, but without
+		 * spending a rung (dq_held). */
+		dq_held(f, e->r);
+		e->st = DLM_REQ_OK;
+		return;
+	}
 	if (why == DLM_REQ_E_SEND) {
 		dq_untransmitted(f, e->r);
 		e->st = DLM_REQ_OK;
@@ -869,6 +979,35 @@ static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 }
 
 /*
+ * QUEUED (0xfb, rd vms-85f). THE MASTER ACCEPTED THE REQUEST AND THE LOCK IS
+ * NOT HELD. Three things follow, and the third is why this handler exists at
+ * all:
+ *
+ *   - NOTHING IS REPORTED TO THE ENGINE. `grant_recv` is not called, no mode
+ *     is recorded, and the proxy LKB stays ungranted: the requesting process
+ *     keeps waiting, which is what a real VMS process does on a queued lock.
+ *     Until this event existed the codec's grant/deny test read an 0xfb as a
+ *     GRANT -- a queued lock was reported to the process as held, a grant no
+ *     master gave.
+ *   - THE STATE DOES NOT MOVE. The request stays outstanding at the master
+ *     (ST_ENQ/ST_LOOKUP), so the master's later 0xfa grant lands on the GRANT
+ *     cell of the state it is already in, and a CONVERT queued on a held lock
+ *     stays ST_GRANTED at its OLD mode.
+ *   - IT IS SETTLED, so the beat stops retransmitting it. An answer arrived:
+ *     re-sending the request would make a master that already queued it answer
+ *     again, once per retransmit, for as long as the lock is held -- the
+ *     frame-per-frame shape every storm in this campaign has had.
+ */
+static void h_queued(struct dlm_req_fsm *f, struct dq_ev *e)
+{
+	f->queued_rx++;
+	e->r->settled = 1u;
+	e->r->tries   = 0u;
+	e->r->sent_ms = dq_now(f);
+	e->st = DLM_REQ_OK;
+}
+
+/*
  * A DENY at the DIRECTORY: it did not answer with a master. Re-resolve through
  * the current vector and retry; when the vector keeps naming the same node the
  * request is UNROUTABLE and the waiter is told so.
@@ -943,8 +1082,8 @@ static void h_redirect(struct dlm_req_fsm *f, struct dq_ev *e)
 		e->st = DLM_REQ_E_NOLOCK;
 		return;
 	}
-	if (f->ops->record_master(f->ops->ctx, p.resnam, r->req_lkid,
-				  e->master_csid) != 0) {
+	if (f->ops->record_master(f->ops->ctx, p.resnam, p.resnam_len,
+				  r->req_lkid, e->master_csid) != 0) {
 		e->st = DLM_REQ_E_INVAL;
 		return;
 	}
@@ -992,7 +1131,8 @@ static void h_assume(struct dlm_req_fsm *f, struct dq_ev *e)
 		e->st = DLM_REQ_E_NOLOCK;
 		return;
 	}
-	if (f->ops->assume_mastery(f->ops->ctx, p.resnam, r->req_lkid) != 0) {
+	if (f->ops->assume_mastery(f->ops->ctx, p.resnam, p.resnam_len,
+				   r->req_lkid) != 0) {
 		e->st = DLM_REQ_E_INVAL;
 		return;
 	}
@@ -1039,6 +1179,14 @@ static void h_timeout_request(struct dlm_req_fsm *f, struct dq_ev *e)
 	}
 	if (e->st == DLM_REQ_E_NOLOCK) {
 		dq_free(r);   /* the lock went away under us: abandon quietly */
+		return;
+	}
+	if (e->st == DLM_REQ_E_XITION) {
+		/* NOT a spent rung (rd vms-c55): the ladder is for requests
+		 * that cannot be answered, and this one has not been asked
+		 * yet. The transition's own end releases it. */
+		dq_held(f, r);
+		e->st = DLM_REQ_OK;
 		return;
 	}
 	/*
@@ -1132,6 +1280,7 @@ static const dq_handler_t dq_table[DLM_REQ_ST__COUNT][DLM_REQ_EV__COUNT] = {
 		[DLM_REQ_EV_DEQ]       = h_post_deq,
 		[DLM_REQ_EV_GRANT]     = h_grant,
 		[DLM_REQ_EV_DENY]      = h_deny_lookup,
+		[DLM_REQ_EV_QUEUED]    = h_queued,
 		[DLM_REQ_EV_REDIRECT]  = h_redirect,
 		[DLM_REQ_EV_ASSUME]    = h_assume,
 		[DLM_REQ_EV_TIMEOUT]   = h_timeout_request,
@@ -1144,6 +1293,7 @@ static const dq_handler_t dq_table[DLM_REQ_ST__COUNT][DLM_REQ_EV__COUNT] = {
 		[DLM_REQ_EV_DEQ]       = h_post_deq,
 		[DLM_REQ_EV_GRANT]     = h_grant,
 		[DLM_REQ_EV_DENY]      = h_deny_master,
+		[DLM_REQ_EV_QUEUED]    = h_queued,
 		[DLM_REQ_EV_REDIRECT]  = h_redirect,
 		[DLM_REQ_EV_ASSUME]    = h_assume,
 		[DLM_REQ_EV_TIMEOUT]   = h_timeout_request,
@@ -1154,6 +1304,9 @@ static const dq_handler_t dq_table[DLM_REQ_ST__COUNT][DLM_REQ_EV__COUNT] = {
 		[DLM_REQ_EV_CONVERT]   = h_post_convert_granted,
 		[DLM_REQ_EV_DEQ]       = h_post_deq,
 		[DLM_REQ_EV_GRANT]     = h_grant_dup,
+		[DLM_REQ_EV_QUEUED]    = h_queued,   /* a CONVERT queued on a
+						      * lock still held at its
+						      * old mode (rd vms-cab) */
 		[DLM_REQ_EV_BLKAST]    = h_blkast,
 		[DLM_REQ_EV_TIMEOUT]   = h_timeout_granted,
 		[DLM_REQ_EV_PEER_GONE] = h_peer_gone_granted
@@ -1209,8 +1362,10 @@ static int dq_ops_ok(const struct dlm_req_fsm *f)
 	       o->grant_recv != (int (*)(void *,
 					 const struct vms_dlm_proxy_grant *))0 &&
 	       o->record_master != (int (*)(void *, const char *, uint32_t,
+					    uint32_t,
 					    vms_csid_t))0 &&
-	       o->assume_mastery != (int (*)(void *, const char *, uint32_t))0 &&
+	       o->assume_mastery != (int (*)(void *, const char *, uint32_t,
+					     uint32_t))0 &&
 	       o->blkast_deliver != (int (*)(void *, uint32_t))0;
 }
 
@@ -1237,6 +1392,19 @@ enum dlm_req_status dlm_req_fsm_dir_remove(struct dlm_req_fsm *f,
 	if (p->op != VMS_DLM_POST_DIR_REMOVE) {
 		f->dir_removes_refused++;
 		return DLM_REQ_E_INVAL;
+	}
+	if (dq_transition_active(f)) {
+		/*
+		 * DROPPED, not held (rd vms-c55, header §"THE TRANSITION
+		 * HOLD"). Phase 1 of a transition discards all directory
+		 * information cluster-wide (Davis p. 7-40/7-41, p. 6-33), so
+		 * the entry this removal names stops existing whether or not
+		 * it is sent -- and after the rebuild this executive holds no
+		 * fact about it to assert. A removal has no sleeper behind it
+		 * and nothing to re-read, so there is nothing to retain.
+		 */
+		f->dir_removes_dropped_xition++;
+		return DLM_REQ_E_XITION;
 	}
 	if (p->dst_csid == 0u) {
 		f->dir_removes_refused++;
@@ -1321,6 +1489,18 @@ enum dlm_req_status dlm_req_fsm_post(struct dlm_req_fsm *f,
  * foreign master rewrites the field. So the envelope's answer is used when
  * there is one, and body[20] only when there is not.
  */
+/* The ANSWER's outcome, as the table's event. Three outcomes, three events --
+ * and QUEUED is its own, because reporting it as either of the others is a
+ * claim about a lock (held / refused) that the master did not make. */
+static enum dlm_req_event dq_event_for(enum vms_dlm_enq_outcome outcome)
+{
+	if (outcome == VMS_DLM_ENQ_GRANTED)
+		return DLM_REQ_EV_GRANT;
+	if (outcome == VMS_DLM_ENQ_QUEUED)
+		return DLM_REQ_EV_QUEUED;
+	return DLM_REQ_EV_DENY;
+}
+
 static struct dlm_req *dq_match_reply(struct dlm_req_fsm *f,
 				      uint32_t correlated_lkid,
 				      const struct vms_dlm_enq_response *rsp)
@@ -1368,11 +1548,7 @@ enum dlm_req_status dlm_req_fsm_reply(struct dlm_req_fsm *f,
 	dq_bzero(&e, (uint32_t)sizeof(e));
 	e.rsp = &rsp;
 	e.from_csid = from_csid;
-	return dq_dispatch(f, r,
-			   rsp.outcome == VMS_DLM_ENQ_GRANTED
-				   ? DLM_REQ_EV_GRANT
-				   : DLM_REQ_EV_DENY,
-			   &e);
+	return dq_dispatch(f, r, dq_event_for(rsp.outcome), &e);
 }
 
 /* One small entry per event that has no grounded frame shape to parse. */
@@ -1476,7 +1652,8 @@ uint32_t dlm_req_fsm_peer_gone(struct dlm_req_fsm *f, vms_csid_t csid)
  * request and the DENY reply shape echo it, a GRANT does not (spec §4(f).1).
  * The frame-taking entry reaches this through the body splice, so there is one
  * reader of a name, not two. */
-static int dq_body_name(const uint8_t *body, uint32_t len, char *out)
+static int dq_body_name(const uint8_t *body, uint32_t len, char *out,
+			uint32_t *out_len)
 {
 	struct vms_dlm_enq_request req;
 	struct vms_dlm_enq_response rsp;
@@ -1488,18 +1665,21 @@ static int dq_body_name(const uint8_t *body, uint32_t len, char *out)
 		if (req.name_len == 0u)
 			return -1;
 		dq_name_to_cstr(req.name, req.name_len, out);
+		*out_len = req.name_len;
 		return 0;
 	}
 	if (vms_dlm_rebuild_parse_body(body, len, &rec) == VMS_CODEC_OK) {
 		if (rec.name_len == 0u)
 			return -1;
 		dq_name_to_cstr(rec.name, rec.name_len, out);
+		*out_len = rec.name_len;
 		return 0;
 	}
 	if (vms_dlm_enq_response_parse_body(body, len, &rsp) == VMS_CODEC_OK) {
 		if (rsp.name_len == 0u)
 			return -1;
 		dq_name_to_cstr(rsp.name, rsp.name_len, out);
+		*out_len = rsp.name_len;
 		return 0;
 	}
 	return -1;
@@ -1523,11 +1703,13 @@ uint32_t dlm_req_fsm_observe_body(struct dlm_req_fsm *f, const uint8_t *body,
 	char name[VMS_DLM_NAME_MAX + 1u];
 	struct vms_dlm_res_ident id;
 	uint32_t hash = 0u;
+	uint32_t name_len = 0u;
 
 	if (f == (struct dlm_req_fsm *)0 || body == (const uint8_t *)0)
 		return 0u;
 	if (f->ops == (const struct dlm_req_ops *)0 ||
-	    f->ops->learn_dir_hash == (int (*)(void *, const char *, uint16_t,
+	    f->ops->learn_dir_hash == (int (*)(void *, const char *, uint32_t,
+					       uint16_t,
 					       uint8_t, uint32_t))0)
 		return 0u;
 	if (vms_dlm_dir_hash_parse_body(body, len, &hash) != VMS_CODEC_OK)
@@ -1542,10 +1724,13 @@ uint32_t dlm_req_fsm_observe_body(struct dlm_req_fsm *f, const uint8_t *body,
 	 */
 	if (vms_dlm_res_ident_parse_body(body, len, &id) != VMS_CODEC_OK)
 		return 0u;
-	if (dq_body_name(body, len, name) != 0)
+	/* The name AND ITS COUNT, both off the same frame (rd vms-326): a value
+	 * filed under a C-string truncation of a binary name would sit on a
+	 * resource block no $ENQ ever asks about. */
+	if (dq_body_name(body, len, name, &name_len) != 0)
 		return 0u;
-	if (f->ops->learn_dir_hash(f->ops->ctx, name, id.group, id.mode,
-				   hash) != 0)
+	if (f->ops->learn_dir_hash(f->ops->ctx, name, name_len, id.group,
+				   id.mode, hash) != 0)
 		return 0u;
 	f->hashes_learned++;
 	return 1u;
@@ -1624,11 +1809,7 @@ enum dlm_req_status dlm_req_fsm_reply_body(struct dlm_req_fsm *f,
 	dq_bzero(&e, (uint32_t)sizeof(e));
 	e.rsp = &rsp;
 	e.from_csid = from_csid;
-	return dq_dispatch(f, r,
-			   rsp.outcome == VMS_DLM_ENQ_GRANTED
-				   ? DLM_REQ_EV_GRANT
-				   : DLM_REQ_EV_DENY,
-			   &e);
+	return dq_dispatch(f, r, dq_event_for(rsp.outcome), &e);
 }
 
 /*
@@ -1719,6 +1900,40 @@ uint32_t dlm_req_fsm_tick(struct dlm_req_fsm *f)
 		(void)dq_dispatch(f, r, DLM_REQ_EV_TIMEOUT, &e);
 		if (f->retransmits != before)
 			sent++;
+	}
+	return sent;
+}
+
+/*
+ * THE HOLD LIFTS (rd vms-c55). Make every outstanding unsettled request DUE
+ * and run one ordinary beat.
+ *
+ * Deliberately NOT a second transmit path: a released request must go out
+ * through the same dq_refill_transmit the ladder uses, so it is built from a
+ * FRESH read of the lock database under the NEW directory vector -- which is
+ * the whole reason it waited. Backdating `sent_ms` by one retry interval is
+ * the only state this touches, and the beat does the rest.
+ */
+uint32_t dlm_req_fsm_transition_ended(struct dlm_req_fsm *f)
+{
+	uint32_t i, now, sent;
+
+	if (f == (struct dlm_req_fsm *)0 || !dq_ops_ok(f))
+		return 0u;
+	now = dq_now(f);
+	for (i = 0u; i < DLM_REQ_MAX; i++) {
+		struct dlm_req *r = &f->req[i];
+
+		if (r->state == (uint8_t)DLM_REQ_ST_IDLE || r->settled)
+			continue;
+		r->sent_ms = now - DLM_REQ_RETRY_MS;
+	}
+	sent = dlm_req_fsm_tick(f);
+	f->xition_resumes += sent;
+	if (f->xition_hold_said) {
+		f->xition_hold_said = 0u;
+		dq_log(f, "%DLM, the VAXcluster state transition completed; "
+			  "held cross-node lock requests resume");
 	}
 	return sent;
 }

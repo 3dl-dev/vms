@@ -28,11 +28,6 @@ extern "C" {
 
 #define SYSEVT$C_ADD_ACTIVE_CPU     4   /* CPU added to active set */
 #define SYSEVT$C_DEL_ACTIVE_CPU     5   /* CPU removed from active set */
-#define SYSEVT$C_POWER_RESTORE      3   /* Power restored after outage */
-#define SYSEVT$C_NODE_ADDED         100 /* [OVMX] cluster node added (not in V8.4 $SYSEVTDEF) */
-#define SYSEVT$C_NODE_REMOVED       101 /* [OVMX] cluster node removed (not in V8.4 $SYSEVTDEF) */
-#define SYSEVT$C_VOL_MOUNT          6   /* Volume mounted */
-#define SYSEVT$C_VOL_DISMOUNT       7   /* Volume dismounted */
 
 /* ================================================================
  * SYSEVT$M_ — System event flag bits
@@ -41,7 +36,6 @@ extern "C" {
  * ================================================================ */
 
 #define SYSEVT$M_REPEAT_NOTIFY  0x00000001  /* Re-register after each event */
-#define SYSEVT$M_CLUSTER_WIDE   0x00000002  /* Receive cluster-wide events */
 
 #ifdef __cplusplus
 }

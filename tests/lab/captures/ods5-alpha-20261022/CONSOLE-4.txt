@@ -1,0 +1,302 @@
+This is serial port #0 on AXPbox Alpha Emulator
+
+
+OpenVMS PALcode V1.98-104, Tru64 UNIX PALcode V1.92-105
+
+starting console on CPU 0
+initialized idle PCB
+initializing semaphores
+initializing heap
+initial heap 240c0
+memory low limit = 1b0000 heap = 240c0, 17fc0
+initializing driver structures
+initializing idle process PID
+initializing file system
+initializing hardware
+initializing timer data structures
+lowering IPL
+CPU 0 speed is 800 MHz
+create dead_eater
+create poll
+create timer
+create powerup
+access NVRAM
+Memory size 256 MB
+testing memory
+..
+probe I/O subsystem
+probing hose 1, PCI
+probing hose 0, PCI
+probing PCI-to-ISA bridge, bus 1
+bus 0, slot 15 -- dqa -- Acer Labs M1543C IDE
+bus 0, slot 15 -- dqb -- Acer Labs M1543C IDE
+starting drivers
+entering idle loop
+*** system serial number not set. use set sys_serial_num command.
+Partition 0, Memory base: 000000000, size: 010000000
+initializing GCT/FRU at 1c8000
+Initializing dqa dqb 
+Memory Testing and Configuration Status
+  Array       Size       Base Address    Intlv Mode
+---------  ----------  ----------------  ----------
+    0        256Mb     0000000000000000    4-Way
+
+     256 MB of System Memory
+Testing the System
+AlphaServer ES40 Console V7.3-1, built on Feb 27 2007 at 12:57:47
+P00>>>boot dqa0
+(boot dqa0.0.0.15.0 -flags 0)
+block 0 of dqa0.0.0.15.0 is a valid boot block
+reading 1230 blocks from dqa0.0.0.15.0
+bootstrap code read in
+base = 200000, image_start = 0, image_bytes = 99c00(629760)
+initializing HWRPB at 2000
+initializing page table at ff56000
+initializing machine state
+setting affinity to the primary CPU
+jumping to bootstrap code
+
+
+    OpenVMS (TM) Alpha Operating System, Version V8.4    
+    © Copyright 1976-2010 Hewlett-Packard Development Company, L.P.
+
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 22-OCT-2026 05:12:37.34
+%RUN-S-PROC_ID, identification of created process is 00000104
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:54.82  %%%%%%%%%%%
+Operator _ALPHA1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:54.83  %%%%%%%%%%%
+Operator status for operator _ALPHA1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:54.85  %%%%%%%%%%%
+Logfile has been initialized by operator _ALPHA1$OPA0:
+Logfile is ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:54.86  %%%%%%%%%%%
+Operator status for operator ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 0000010A
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:55.20  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:55.20  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%RUN-S-PROC_ID, identification of created process is 0000010D
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:58.39  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:58.39  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:58.40  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:58.40  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:12:58.40  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting u
+p
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:13:00.81  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%ACME-I-SERVERSTART, ACME_SERVER starting
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:13:07.90  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+TDF-I-SETTDF TDF set new timezone differential
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:13:12.39  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$ALPHA1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:13:12.75  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:13:13.06  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Audit server starting up
+Event time:               22-OCT-2026 05:13:13.01
+PID:                      00000103        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS system is now executing the site-specific startup commands.
+
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%RUN-S-PROC_ID, identification of created process is 00000118
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:13:14.32  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SMHANDLER-S-STARTUP, server management event handler startup
+
+  SYSTEM       job terminated at 22-OCT-2026 05:13:14.57
+
+  Accounting information:
+  Buffered I/O count:               3601      Peak working set size:       7760
+  Direct I/O count:                 1504      Peak virtual size:         186192
+  Page faults:                      4072      Mounted volumes:                0
+  Charged CPU time:        0 00:00:10.17      Elapsed time:       0 00:00:37.35
+
+ Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4    
+
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+   Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4
+    Last interactive login on Wednesday,  5-AUG-2026 20:13:03.66
+
+Your password has expired; you must set a new password to log in
+
+
+New password: 
+Verification: 
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 05:14:30.71  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          System UAF record modification
+Event time:               22-OCT-2026 05:14:30.70
+PID:                      00000119        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Object class name:        FILE
+Object name:              SYS$COMMON:[SYSEXE]SYSUAF.DAT;1
+User record:              SYSTEM                          
+Password Date:            New:      22-OCT-2026 05:14
+                          Original:  5-AUG-2026 19:03
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=200/NOBROADCAST
+$ SET PROCESS/PARSE_STYLE=EXTENDED
+$ SET DEFAULT SYS$LOGIN
+$ WRITE SYS$OUTPUT "C20 [", F$PARSE("a b.t"), "][", F$PARSE("a^ b.t"), "]"
+C20 [SYS$SYSROOT:[SYSMGR]ab.t;][SYS$SYSROOT:[SYSMGR]a^_b.t;]
+$ WRITE SYS$OUTPUT "C21 [", F$PARSE("a!b.t"), "][", F$PARSE("a^!b.t"), "]"
+C21 [][SYS$SYSROOT:[SYSMGR]a^!b.t;]
+$ WRITE SYS$OUTPUT "C23 [", F$PARSE("a#b.t"), "][", F$PARSE("a^#b.t"), "]"
+C23 [][SYS$SYSROOT:[SYSMGR]a^#b.t;]
+$ WRITE SYS$OUTPUT "C24 [", F$PARSE("a$b.t"), "][", F$PARSE("a^$b.t"), "]"
+C24 [SYS$SYSROOT:[SYSMGR]a$b.t;][SYS$SYSROOT:[SYSMGR]a$b.t;]
+$ WRITE SYS$OUTPUT "C25 [", F$PARSE("a%b.t"), "][", F$PARSE("a^%b.t"), "]"
+C25 [SYS$SYSROOT:[SYSMGR]a%b.t;][SYS$SYSROOT:[SYSMGR]a^%b.t;]
+$ WRITE SYS$OUTPUT "C26 [", F$PARSE("a&b.t"), "][", F$PARSE("a^&b.t"), "]"
+C26 [][SYS$SYSROOT:[SYSMGR]a^&b.t;]
+$ WRITE SYS$OUTPUT "C27 [", F$PARSE("a'b.t"), "][", F$PARSE("a^'b.t"), "]"
+C27 [][SYS$SYSROOT:[SYSMGR]a^'b.t;]
+$ WRITE SYS$OUTPUT "C28 [", F$PARSE("a(b.t"), "][", F$PARSE("a^(b.t"), "]"
+C28 [][SYS$SYSROOT:[SYSMGR]a^(b.t;]
+$ WRITE SYS$OUTPUT "C29 [", F$PARSE("a)b.t"), "][", F$PARSE("a^)b.t"), "]"
+C29 [][SYS$SYSROOT:[SYSMGR]a^)b.t;]
+$ WRITE SYS$OUTPUT "C2A [", F$PARSE("a*b.t"), "][", F$PARSE("a^*b.t"), "]"
+C2A [SYS$SYSROOT:[SYSMGR]a*b.t;][]
+$ WRITE SYS$OUTPUT "C2B [", F$PARSE("a+b.t"), "][", F$PARSE("a^+b.t"), "]"
+C2B [][SYS$SYSROOT:[SYSMGR]a^+b.t;]
+$ WRITE SYS$OUTPUT "C2C [", F$PARSE("a,b.t"), "][", F$PARSE("a^,b.t"), "]"
+C2C [][SYS$SYSROOT:[SYSMGR]a^,b.t;]
+$ WRITE SYS$OUTPUT "C2D [", F$PARSE("a-b.t"), "][", F$PARSE("a^-b.t"), "]"
+C2D [SYS$SYSROOT:[SYSMGR]a-b.t;][SYS$SYSROOT:[SYSMGR]a-b.t;]
+$ WRITE SYS$OUTPUT "C2F [", F$PARSE("a/b.t"), "][", F$PARSE("a^/b.t"), "]"
+C2F [][SYS$SYSROOT:[SYSMGR]a^/b.t;]
+$ WRITE SYS$OUTPUT "C3A [", F$PARSE("a:b.t"), "][", F$PARSE("a^:b.t"), "]"
+C3A [][SYS$SYSROOT:[SYSMGR]a^:b.t;]
+$ WRITE SYS$OUTPUT "C3B [", F$PARSE("a;b.t"), "][", F$PARSE("a^;b.t"), "]"
+C3B [][SYS$SYSROOT:[SYSMGR]a^;b.t;]
+$ WRITE SYS$OUTPUT "C3C [", F$PARSE("a<b.t"), "][", F$PARSE("a^<b.t"), "]"
+C3C [][SYS$SYSROOT:[SYSMGR]a^<b.t;]
+$ WRITE SYS$OUTPUT "C3D [", F$PARSE("a=b.t"), "][", F$PARSE("a^=b.t"), "]"
+C3D [][SYS$SYSROOT:[SYSMGR]a^=b.t;]
+$ WRITE SYS$OUTPUT "C3E [", F$PARSE("a>b.t"), "][", F$PARSE("a^>b.t"), "]"
+C3E [][SYS$SYSROOT:[SYSMGR]a^>b.t;]
+$ WRITE SYS$OUTPUT "C3F [", F$PARSE("a?b.t"), "][", F$PARSE("a^?b.t"), "]"
+C3F [SYS$SYSROOT:[SYSMGR]a%b.t;][]
+$ WRITE SYS$OUTPUT "C40 [", F$PARSE("a@b.t"), "][", F$PARSE("a^@b.t"), "]"
+C40 [][SYS$SYSROOT:[SYSMGR]a^@b.t;]
+$ WRITE SYS$OUTPUT "C5B [", F$PARSE("a[b.t"), "][", F$PARSE("a^[b.t"), "]"
+C5B [][SYS$SYSROOT:[SYSMGR]a^[b.t;]
+$ WRITE SYS$OUTPUT "C5C [", F$PARSE("a\b.t"), "][", F$PARSE("a^\b.t"), "]"
+C5C [][SYS$SYSROOT:[SYSMGR]a^\b.t;]
+$ WRITE SYS$OUTPUT "C5D [", F$PARSE("a]b.t"), "][", F$PARSE("a^]b.t"), "]"
+C5D [][SYS$SYSROOT:[SYSMGR]a^]b.t;]
+$ WRITE SYS$OUTPUT "C5E [", F$PARSE("a^b.t"), "][", F$PARSE("a^^b.t"), "]"
+C5E [][SYS$SYSROOT:[SYSMGR]a^^b.t;]
+$ WRITE SYS$OUTPUT "C5F [", F$PARSE("a_b.t"), "][", F$PARSE("a^_b.t"), "]"
+C5F [SYS$SYSROOT:[SYSMGR]a_b.t;][SYS$SYSROOT:[SYSMGR]a^_b.t;]
+$ WRITE SYS$OUTPUT "C60 [", F$PARSE("a`b.t"), "][", F$PARSE("a^`b.t"), "]"
+C60 [][SYS$SYSROOT:[SYSMGR]a^`b.t;]
+$ WRITE SYS$OUTPUT "C7B [", F$PARSE("a{b.t"), "][", F$PARSE("a^{b.t"), "]"
+C7B [][SYS$SYSROOT:[SYSMGR]a^{b.t;]
+$ WRITE SYS$OUTPUT "C7C [", F$PARSE("a|b.t"), "][", F$PARSE("a^|b.t"), "]"
+C7C [][SYS$SYSROOT:[SYSMGR]a^|b.t;]
+$ WRITE SYS$OUTPUT "C7D [", F$PARSE("a}b.t"), "][", F$PARSE("a^}b.t"), "]"
+C7D [][SYS$SYSROOT:[SYSMGR]a^}b.t;]
+$ WRITE SYS$OUTPUT "C7E [", F$PARSE("a~b.t"), "][", F$PARSE("a^~b.t"), "]"
+C7E [SYS$SYSROOT:[SYSMGR]a~b.t;][SYS$SYSROOT:[SYSMGR]a~b.t;]
+$ WRITE SYS$OUTPUT "CDQ [", F$PARSE("a""b.t"), "][", F$PARSE("a^""b.t"), "]"
+CDQ [][SYS$SYSROOT:[SYSMGR]a^"b.t;]
+$ WRITE SYS$OUTPUT "H20 [", F$PARSE("a^20b.t"), "]"
+H20 [SYS$SYSROOT:[SYSMGR]a^_b.t;]
+$ WRITE SYS$OUTPUT "H5F [", F$PARSE("a^5Fb.t"), "]"
+H5F [SYS$SYSROOT:[SYSMGR]a_b.t;]
+$ WRITE SYS$OUTPUT "HE9 [", F$PARSE("a^E9b.t"), "]"
+HE9 [SYS$SYSROOT:[SYSMGR]aéb.t;]
+$ WRITE SYS$OUTPUT "H2B [", F$PARSE("a^2Bb.t"), "]"
+H2B [SYS$SYSROOT:[SYSMGR]a^+b.t;]
+$ WRITE SYS$OUTPUT "H41 [", F$PARSE("a^41b.t"), "]"
+H41 [SYS$SYSROOT:[SYSMGR]aAb.t;]
+$ WRITE SYS$OUTPUT "H61 [", F$PARSE("a^61b.t"), "]"
+H61 [SYS$SYSROOT:[SYSMGR]aab.t;]
+$ WRITE SYS$OUTPUT "C3 [", F$PARSE("ab.t^+u"), "][", F$PARSE("ab.t+u"), "]"
+C3 [SYS$SYSROOT:[SYSMGR]ab.t^+u;][]
+$ SET PROCESS/PARSE_STYLE=TRADITIONAL
+$ WRITE SYS$OUTPUT "T2B [", F$PARSE("a+b.t"), "][", F$PARSE("a^+b.t"), "]"
+T2B [][SYS$SYSROOT:[SYSMGR]A^+B.T;]
+$ WRITE SYS$OUTPUT "T7E [", F$PARSE("a~b.t"), "][", F$PARSE("a^~b.t"), "]"
+T7E [SYS$SYSROOT:[SYSMGR]A~B.T;][SYS$SYSROOT:[SYSMGR]A~B.T;]
+$ WRITE SYS$OUTPUT "T23 [", F$PARSE("a#b.t"), "][", F$PARSE("a^#b.t"), "]"
+T23 [][SYS$SYSROOT:[SYSMGR]A^#B.T;]
+$ WRITE SYS$OUTPUT "T26 [", F$PARSE("a&b.t"), "][", F$PARSE("a^&b.t"), "]"
+T26 [][SYS$SYSROOT:[SYSMGR]A^&B.T;]
+$ WRITE SYS$OUTPUT "END-OF-CAPTURE"
+END-OF-CAPTURE
+$ 

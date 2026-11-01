@@ -155,6 +155,18 @@ DNET_BROKER_API int dnet_broker_rsp_decode(const uint8_t *buf, size_t len,
  * monotonic counter (*state), skipping 0 (0 is the "no correlation" sentinel
  * dnet_broker_corr_match rejects). Returns the new id and advances *state.
  */
+/*
+ * dnet_broker_iosb_status - the status a NET: $QIO completion can carry. An
+ * IOSB's status is a WORD, so it holds a system-service (SS$, facility 0) code;
+ * a facility code such as RMS$_FLK (0x000182AA) would lose its facility bits
+ * and print as "%NONAME-E-NOMSG, Message number 000082AA". An RMS file-access
+ * failure is given as its SS$ form, the one VMS's file system itself returns:
+ * RMS$_FLK/RMS$_SHR -> SS$_ACCONFLICT, RMS$_PRV -> SS$_NOPRIV,
+ * RMS$_FNF/RMS$_DNF -> SS$_NOSUCHFILE, any other RMS failure -> SS$_FCPREADERR.
+ * A status that already fits a word is returned unchanged (rd vms-acf3).
+ */
+DNET_BROKER_API uint32_t dnet_broker_iosb_status(uint32_t st);
+
 DNET_BROKER_API uint32_t dnet_broker_corr_next(uint32_t *state);
 
 /*

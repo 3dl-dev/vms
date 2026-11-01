@@ -19,7 +19,7 @@ items:
      notes: "Works for C via the native host ABI; VMS's own item-list/arg-block conventions honored for descriptor args. Real, not verified — no cross-language oracle is gated."}
   - {id: cs$data-types, kind: feature, status: partial, authenticity: real, scope_1_0: in,
      vms: "Standard data types passed across the call boundary", evidence: src/libvms/include/descrip.h,
-     notes: "Descriptor classes S/D real and marshalled. descrip.h now DECLARES the full class enum (A/NCA/VS/VSA/SD/UBS/...) and dtype set, but no RTL operates on classes A (array) or VS (varying string) and packed decimal is unmarshalled (OTS$ CVT_T_P/CVT_P_T absent); VAX F/D/G/H float unsupported (IEEE only). These declared-but-unmarshalled types are what block Fortran/COBOL/BASIC cross-calls."}
+     notes: "Descriptor classes S/D real and marshalled. descrip.h now DECLARES the full class enum (A/NCA/VS/VSA/SD/UBS/...) and dtype set, but no RTL operates on classes A (array) or VS (varying string) and packed decimal is unmarshalled (LIB$CVT_DX_DX refuses DSC$K_DTYPE_P; OTS$DIV_PK_LONG/SHORT absent); VAX F/D/G/H float unsupported (IEEE only). These declared-but-unmarshalled types are what block Fortran/COBOL/BASIC cross-calls."}
   - {id: cs$condition-handling, kind: feature, status: partial, authenticity: advisory, scope_1_0: in,
      vms: "Condition-handling as part of the standard (handler search, unwind)", evidence: src/libvms/rtl/lib_signal.c,
      notes: "In-process handler stack, not a real machine-frame unwind; SYS$UNWIND simplified. Cross-ref chf facility. Advisory: tracked honestly, not a faked full unwind."}

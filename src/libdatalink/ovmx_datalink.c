@@ -30,7 +30,8 @@
 #include <sys/time.h>
 
 /* ============================================================================
- * TWO Linux backends, selected at COMPILE time (vms-7eb piece 2):
+ * TWO backends per host, selected at COMPILE time (vms-7eb piece 2; NetBSD
+ * joined in rd vms-9394):
  *
  *   SCS_DATALINK_VIA_EXECUTIVE defined  -> the EXECUTIVE backend, and ONLY it.
  *       The booted OVMX runtime builds this. The raw 0x6007 wire is carried by
@@ -121,169 +122,16 @@ int scs_datalink_primary_iface(char *out, size_t n)
     return found;
 }
 
-#if defined(SCS_DATALINK_VIA_EXECUTIVE)
-
-/* ---- EXECUTIVE backend: the raw L2 wire routes through /dev/vms ---------- */
-
-#include "vms_ioctl.h"   /* struct vms_l2_*_args */
-#include "kif_calls.h"   /* the executive transport seam (rd vms-bbde) */
-
-/* SCSD opens exactly one datalink for its whole run; a small fd->handle table
- * (sized like the NetBSD bpf table) keeps the executive handle + recv timeout
- * the /dev/vms fd alone cannot carry. */
-#define SCS_DATALINK_MAX_OPEN 4
-struct l2_slot { int in_use; int fd; uint32_t handle; uint32_t timeout_ms; };
-static struct l2_slot g_l2[SCS_DATALINK_MAX_OPEN];
-
-static struct l2_slot *l2_find(int fd)
-{
-    for (int i = 0; i < SCS_DATALINK_MAX_OPEN; i++)
-        if (g_l2[i].in_use && g_l2[i].fd == fd) return &g_l2[i];
-    return NULL;
-}
-static struct l2_slot *l2_alloc(int fd, uint32_t handle)
-{
-    for (int i = 0; i < SCS_DATALINK_MAX_OPEN; i++)
-        if (!g_l2[i].in_use) {
-            g_l2[i].in_use = 1; g_l2[i].fd = fd;
-            g_l2[i].handle = handle; g_l2[i].timeout_ms = 0;
-            return &g_l2[i];
-        }
-    return NULL;
-}
-
-const char *scs_datalink_backend(void) { return "executive"; }
-
-/* The VMS condition value of the last failed VMS_IOCTL_L2_OPEN (0 if none), so
- * a caller reports the executive's ACTUAL refusal instead of a guess from errno
- * (rd vms-1f69: every non-NOSUCHDEV status used to read as "NOPRIV"). */
-static uint32_t g_l2_last_status;
-uint32_t scs_datalink_last_status(void) { return g_l2_last_status; }
-/* Its secondary status: the host errno behind an SS$_ABORT (rd vms-b72). */
-static uint32_t g_l2_last_stv;
-uint32_t scs_datalink_last_stv(void) { return g_l2_last_stv; }
-
-int scs_datalink_open(const char *ifname, uint16_t ethertype)
-{
-    return scs_datalink_open_station(ifname, ethertype, NULL);
-}
-
-int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
-                              const uint8_t station[6])
-{
-    int fd = kif_xport_dev_open();
-    if (fd < 0) {                      /* no executive -> honest failure, never
-                                        * a silent AF_PACKET fallback: that code
-                                        * is not compiled into this binary. */
-        errno = -fd;
-        return -1;
-    }
-    /* The executive resolves the caller's process (vms_proc_find_or_err) -- the
-     * PCB its creator made (rd vms-2a5: nothing registers) -- then gates
-     * L2_OPEN on PHY_IO. A task the executive did not create is refused. */
-    struct vms_l2_open_args a;
-    memset(&a, 0, sizeof(a));
-    strncpy(a.ifname, ifname, sizeof(a.ifname) - 1);
-    a.ethertype = ethertype;
-    if (station)                       /* rd vms-1f69: the executive validates
-                                        * it and owns every send's source */
-        memcpy(a.station, station, sizeof(a.station));
-    long orc = kif_call(fd, KIF_SVC_L2_OPEN, &a);
-    if (orc < 0) { kif_xport_dev_close(fd); errno = (int)-orc; return -1; }
-    if (a.status != 1u) {          /* SS$_NORMAL == 1; anything else is honest
-                                    * refusal (SS$_NOPRIV 36 without PHY_IO,
-                                    * SS$_NOSUCHDEV 2312 for an absent iface,
-                                    * SS$_BADPARAM 20 for a refused station). */
-        kif_xport_dev_close(fd);
-        g_l2_last_status = a.status;
-        g_l2_last_stv = a.stv;
-        errno = (a.status == 2312u) ? ENODEV
-              : (a.status == 20u)   ? EINVAL
-              : (a.status == 36u)   ? EACCES : EIO;
-        return -1;
-    }
-    if (l2_alloc(fd, a.handle) == NULL) { kif_xport_dev_close(fd); errno = ENOMEM; return -1; }
-    return fd;
-}
-
-void scs_datalink_close(int fd)
-{
-    struct l2_slot *s = l2_find(fd);
-    if (s != NULL) {
-        struct vms_l2_close_args a;
-        memset(&a, 0, sizeof(a));
-        a.handle = s->handle;
-        (void)kif_call(fd, KIF_SVC_L2_CLOSE, &a);
-        memset(s, 0, sizeof(*s));
-    }
-    kif_xport_dev_close(fd);
-}
-
-ssize_t scs_datalink_send(int fd, int ifindex, uint16_t ethertype,
-                          const uint8_t dst_mac[6],
-                          const uint8_t *frame, size_t len)
-{
-    struct l2_slot *s = l2_find(fd);
-    if (s == NULL) { errno = EBADF; return -1; }
-    if (len > VMS_L2_MAXLEN) { errno = EMSGSIZE; return -1; }
-    struct vms_l2_send_args a;
-    memset(&a, 0, sizeof(a));
-    a.handle = s->handle;
-    a.ifindex = (uint32_t)ifindex;
-    a.ethertype = ethertype;
-    memcpy(a.dst_mac, dst_mac, 6);
-    a.len = (uint32_t)len;
-    memcpy(a.data, frame, len);
-    long r = kif_call(fd, KIF_SVC_L2_SEND, &a);
-    if (r < 0) { errno = (int)-r; return -1; }
-    if (a.status != 1u) { errno = EIO; return -1; }
-    return (ssize_t)a.len;
-}
-
-ssize_t scs_datalink_recv(int fd, uint8_t *buf, size_t buf_len)
-{
-    struct l2_slot *s = l2_find(fd);
-    if (s == NULL) { errno = EBADF; return -1; }
-    struct vms_l2_recv_args a;
-    memset(&a, 0, sizeof(a));
-    a.handle = s->handle;
-    a.timeout_ms = s->timeout_ms;
-    long r = kif_call(fd, KIF_SVC_L2_RECV, &a);
-    if (r < 0) { errno = (int)-r; return -1; }
-    if (a.status != 1u) { errno = EAGAIN; return -1; }  /* nothing before the
-                                        * timeout -> the same "come back later"
-                                        * the AF_PACKET recv() path signals. */
-    size_t n = a.len;
-    if (n > buf_len) n = buf_len;
-    memcpy(buf, a.data, n);
-    return (ssize_t)n;
-}
-
-int scs_datalink_set_recv_timeout(int fd, int seconds)
-{
-    struct l2_slot *s = l2_find(fd);
-    if (s == NULL) { errno = EBADF; return -1; }
-    s->timeout_ms = (uint32_t)seconds * 1000u;
-    return 0;
-}
-
-int scs_datalink_set_recv_timeout_ms(int fd, int ms)
-{
-    struct l2_slot *s = l2_find(fd);
-    if (s == NULL) { errno = EBADF; return -1; }
-    s->timeout_ms = (uint32_t)(ms > 0 ? ms : 1);
-    return 0;
-}
-
-#else  /* !SCS_DATALINK_VIA_EXECUTIVE -- the AF_PACKET PROBE backend */
+#if !defined(SCS_DATALINK_VIA_EXECUTIVE)
 
 /* ---- AF_PACKET PROBE backend: a clean-room RE / ORACLE INSTRUMENT ONLY ----
  * This opens a userspace AF_PACKET raw socket directly, which needs CAP_NET_RAW
  * (or the ambient capabilities a lab pod grants an exec'd process). It is the
  * kubectl-exec'd wire-mining tool that OBSERVES a real VAX's cluster wire -- it
  * is NOT "OVMX running", and a run of it NEVER counts as a booted OVMX joining
- * a cluster. The booted runtime compiles SCS_DATALINK_VIA_EXECUTIVE above
- * instead, and this raw-socket code is then absent from that binary entirely. */
+ * a cluster. The booted runtime compiles SCS_DATALINK_VIA_EXECUTIVE (the
+ * executive backend at the foot of this file) instead, and this raw-socket
+ * code is then absent from that binary entirely. */
 
 #include <netpacket/packet.h>
 
@@ -385,7 +233,7 @@ int scs_datalink_set_recv_timeout_ms(int fd, int ms)
     return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 }
 
-#endif  /* SCS_DATALINK_VIA_EXECUTIVE (executive backend) vs AF_PACKET probe */
+#endif  /* !SCS_DATALINK_VIA_EXECUTIVE: the AF_PACKET probe (Linux) */
 
 #elif defined(__NetBSD__)
 
@@ -400,6 +248,7 @@ int scs_datalink_set_recv_timeout_ms(int fd, int ms)
 #include <sys/ioctl.h>
 #include <sys/time.h>
 
+#if !defined(SCS_DATALINK_VIA_EXECUTIVE)   /* the bpf(4) backend (lab/host) */
 /*
  * The bpf read-side buffer table. bpf(4): "the packet ... is preceded by a
  * ... struct bpf_hdr" and "more than one packet may be transferred to the
@@ -601,6 +450,8 @@ void scs_datalink_close(int fd)
     close(fd);
 }
 
+#endif  /* !SCS_DATALINK_VIA_EXECUTIVE */
+
 int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6])
 {
     struct ifaddrs *ifap = NULL;
@@ -665,6 +516,7 @@ int scs_datalink_primary_iface(char *out, size_t n)
     return 0;
 }
 
+#if !defined(SCS_DATALINK_VIA_EXECUTIVE)
 /*
  * datalink_send_netbsd - THE NetBSD transport primitive, named for the same
  * census-attribution reason datalink_send_linux() above is: exactly one
@@ -764,6 +616,176 @@ int scs_datalink_set_recv_timeout_ms(int fd, int ms)
     return ioctl(fd, BIOCSRTIMEOUT, &tv);
 }
 
+#endif  /* !SCS_DATALINK_VIA_EXECUTIVE: the bpf(4) backend */
+
 #else
 #error "scs_datalink: no backend for this platform (only __linux__ and __NetBSD__ are implemented)"
 #endif
+
+
+#if defined(SCS_DATALINK_VIA_EXECUTIVE)
+/* ============================================================================
+ * THE EXECUTIVE BACKEND -- substrate-neutral (rd vms-1f69; NetBSD since rd
+ * vms-9394). The raw L2 wire goes through /dev/vms VMS_IOCTL_L2_*: the
+ * EXECUTIVE owns the datalink (an AF_PACKET socket in the Linux vms.ko, an
+ * in-kernel ifnet binding in the NetBSD vms.kmod -- src/kernel-core/vms_l2.c
+ * over exec_l2_*), gated on the VMS PHY_IO privilege. It names no host socket
+ * or bpf(4) call, so the SAME code is the booted NETACP's datalink on OVMX/x86
+ * and OVMX/VAX; only the interface LOOKUPS above are per-host. A binary built
+ * with it contains neither the AF_PACKET probe nor the bpf backend: there is
+ * no runtime fallback (Rule 9 / INV-6).
+ * ==========================================================================*/
+
+/* ---- EXECUTIVE backend: the raw L2 wire routes through /dev/vms ---------- */
+
+#include "vms_ioctl.h"   /* struct vms_l2_*_args */
+#include "kif_calls.h"   /* the executive transport seam (rd vms-bbde) */
+
+/* SCSD opens exactly one datalink for its whole run; a small fd->handle table
+ * (sized like the NetBSD bpf table) keeps the executive handle + recv timeout
+ * the /dev/vms fd alone cannot carry. */
+#define SCS_DATALINK_MAX_OPEN 4
+struct l2_slot { int in_use; int fd; uint32_t handle; uint32_t timeout_ms; };
+static struct l2_slot g_l2[SCS_DATALINK_MAX_OPEN];
+
+static struct l2_slot *l2_find(int fd)
+{
+    for (int i = 0; i < SCS_DATALINK_MAX_OPEN; i++)
+        if (g_l2[i].in_use && g_l2[i].fd == fd) return &g_l2[i];
+    return NULL;
+}
+static struct l2_slot *l2_alloc(int fd, uint32_t handle)
+{
+    for (int i = 0; i < SCS_DATALINK_MAX_OPEN; i++)
+        if (!g_l2[i].in_use) {
+            g_l2[i].in_use = 1; g_l2[i].fd = fd;
+            g_l2[i].handle = handle; g_l2[i].timeout_ms = 0;
+            return &g_l2[i];
+        }
+    return NULL;
+}
+
+const char *scs_datalink_backend(void) { return "executive"; }
+
+/* The VMS condition value of the last failed VMS_IOCTL_L2_OPEN (0 if none), so
+ * a caller reports the executive's ACTUAL refusal instead of a guess from errno
+ * (rd vms-1f69: every non-NOSUCHDEV status used to read as "NOPRIV"). */
+static uint32_t g_l2_last_status;
+uint32_t scs_datalink_last_status(void) { return g_l2_last_status; }
+/* Its secondary status: the host errno behind an SS$_ABORT (rd vms-b72). */
+static uint32_t g_l2_last_stv;
+uint32_t scs_datalink_last_stv(void) { return g_l2_last_stv; }
+
+int scs_datalink_open(const char *ifname, uint16_t ethertype)
+{
+    return scs_datalink_open_station(ifname, ethertype, NULL);
+}
+
+int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
+                              const uint8_t station[6])
+{
+    int fd = kif_xport_dev_open();
+    if (fd < 0) {                      /* no executive -> honest failure, never
+                                        * a silent AF_PACKET fallback: that code
+                                        * is not compiled into this binary. */
+        errno = -fd;
+        return -1;
+    }
+    /* The executive resolves the caller's process (vms_proc_find_or_err) -- the
+     * PCB its creator made (rd vms-2a5: nothing registers) -- then gates
+     * L2_OPEN on PHY_IO. A task the executive did not create is refused. */
+    struct vms_l2_open_args a;
+    memset(&a, 0, sizeof(a));
+    strncpy(a.ifname, ifname, sizeof(a.ifname) - 1);
+    a.ethertype = ethertype;
+    if (station)                       /* rd vms-1f69: the executive validates
+                                        * it and owns every send's source */
+        memcpy(a.station, station, sizeof(a.station));
+    long orc = kif_call(fd, KIF_SVC_L2_OPEN, &a);
+    if (orc < 0) { kif_xport_dev_close(fd); errno = (int)-orc; return -1; }
+    if (a.status != 1u) {          /* SS$_NORMAL == 1; anything else is honest
+                                    * refusal (SS$_NOPRIV 36 without PHY_IO,
+                                    * SS$_NOSUCHDEV 2312 for an absent iface,
+                                    * SS$_BADPARAM 20 for a refused station). */
+        kif_xport_dev_close(fd);
+        g_l2_last_status = a.status;
+        g_l2_last_stv = a.stv;
+        errno = (a.status == 2312u) ? ENODEV
+              : (a.status == 20u)   ? EINVAL
+              : (a.status == 36u)   ? EACCES : EIO;
+        return -1;
+    }
+    if (l2_alloc(fd, a.handle) == NULL) { kif_xport_dev_close(fd); errno = ENOMEM; return -1; }
+    return fd;
+}
+
+void scs_datalink_close(int fd)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s != NULL) {
+        struct vms_l2_close_args a;
+        memset(&a, 0, sizeof(a));
+        a.handle = s->handle;
+        (void)kif_call(fd, KIF_SVC_L2_CLOSE, &a);
+        memset(s, 0, sizeof(*s));
+    }
+    kif_xport_dev_close(fd);
+}
+
+ssize_t scs_datalink_send(int fd, int ifindex, uint16_t ethertype,
+                          const uint8_t dst_mac[6],
+                          const uint8_t *frame, size_t len)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    if (len > VMS_L2_MAXLEN) { errno = EMSGSIZE; return -1; }
+    struct vms_l2_send_args a;
+    memset(&a, 0, sizeof(a));
+    a.handle = s->handle;
+    a.ifindex = (uint32_t)ifindex;
+    a.ethertype = ethertype;
+    memcpy(a.dst_mac, dst_mac, 6);
+    a.len = (uint32_t)len;
+    memcpy(a.data, frame, len);
+    long r = kif_call(fd, KIF_SVC_L2_SEND, &a);
+    if (r < 0) { errno = (int)-r; return -1; }
+    if (a.status != 1u) { errno = EIO; return -1; }
+    return (ssize_t)a.len;
+}
+
+ssize_t scs_datalink_recv(int fd, uint8_t *buf, size_t buf_len)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    struct vms_l2_recv_args a;
+    memset(&a, 0, sizeof(a));
+    a.handle = s->handle;
+    a.timeout_ms = s->timeout_ms;
+    long r = kif_call(fd, KIF_SVC_L2_RECV, &a);
+    if (r < 0) { errno = (int)-r; return -1; }
+    if (a.status != 1u) { errno = EAGAIN; return -1; }  /* nothing before the
+                                        * timeout -> the same "come back later"
+                                        * the AF_PACKET recv() path signals. */
+    size_t n = a.len;
+    if (n > buf_len) n = buf_len;
+    memcpy(buf, a.data, n);
+    return (ssize_t)n;
+}
+
+int scs_datalink_set_recv_timeout(int fd, int seconds)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    s->timeout_ms = (uint32_t)seconds * 1000u;
+    return 0;
+}
+
+int scs_datalink_set_recv_timeout_ms(int fd, int ms)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    s->timeout_ms = (uint32_t)(ms > 0 ? ms : 1);
+    return 0;
+}
+
+#endif  /* SCS_DATALINK_VIA_EXECUTIVE */

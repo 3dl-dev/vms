@@ -50,6 +50,7 @@
 
 #include "descrip.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "stsdef.h"
 #include "libclidef.h"
 #include "clitable.h"
@@ -710,8 +711,8 @@ uint32_t cli$dcl_parse(const struct dsc$descriptor_s *command,
                     qi = q2; negated = 1;
                 }
             }
-            if (qi == -2) { rc = SS$_IVQUAL; goto parsed; } /* ambiguous */
-            if (qi < 0)   { rc = SS$_IVQUAL; goto parsed; } /* unknown qualifier */
+            if (qi == -2) { rc = CLI$_IVQUAL; goto parsed; } /* ambiguous */
+            if (qi < 0)   { rc = CLI$_IVQUAL; goto parsed; } /* unknown qualifier */
 
             struct cli_parsed *e = &ents[qi];
             e->specified = 1;

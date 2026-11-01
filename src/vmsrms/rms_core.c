@@ -484,13 +484,12 @@ static int rms_acp_spec_parse(const char *spec_in, struct rms_acp_spec *s)
         }
         if (rl == 0)
             return -1;                       /* no filename component */
-        if (rl >= sizeof(s->name)) rl = sizeof(s->name) - 1;
-        for (size_t i = 0; i < rl; i++) {
-            char c = rest[i];
-            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-            s->name[i] = c;
-        }
-        s->name[rl] = '\0';
+        /* The ACP's form of the name (rd vms-b9c): upper-cased under
+         * PARSE_STYLE=TRADITIONAL as before, case kept under EXTENDED, the ^
+         * escapes of the expanded string taken out ("c^+^+config.h" is the
+         * 11 bytes c++config.h on disk). */
+        if (rms_acp_name(rest, rl, s->name, sizeof(s->name)) < 0)
+            return -1;
     }
     return 0;
 }
@@ -515,6 +514,33 @@ static int rms_acp_spec_parse(const char *spec_in, struct rms_acp_spec *s)
  * path, never a POSIX fallback). Returns the candidate count, or -1 on a
  * malformed/empty spec.
  */
+/*
+ * rms_splice_name - put the file-name part ("name.type;ver", everything after
+ * the directory) of the ORIGINAL spec back onto a composed candidate. The
+ * candidate composer (vmsfs_compose_ods2_candidates) resolves the device and
+ * directory logicals but reparses the name with the ODS-2-era parser, which
+ * upper-cases it and refuses a name longer than 39 characters; the name is
+ * RMS's to carry through unchanged (rd vms-b9c: an EXTENDED name keeps its
+ * case and its ^ escapes until rms_acp_name takes them out).
+ */
+static const char *rms_name_part(const char *spec)
+{
+    const char *p = strrchr(spec, ']');
+    const char *q = strrchr(spec, '>');
+    if (q && (!p || q > p)) p = q;
+    if (!p) p = strrchr(spec, ':');
+    return p ? p + 1 : spec;
+}
+
+void rms_splice_name(char *cand, size_t cap, const char *orig)
+{
+    char *cn = (char *)rms_name_part(cand);
+    const char *on = rms_name_part(orig);
+    size_t head = (size_t)(cn - cand);
+    if (head + strlen(on) < cap)
+        memcpy(cn, on, strlen(on) + 1);
+}
+
 static int rms_acp_specs_from_fab(struct FAB *fab, struct rms_acp_spec *specs,
                                   int max)
 {
@@ -529,6 +555,7 @@ static int rms_acp_specs_from_fab(struct FAB *fab, struct rms_acp_spec *specs,
 
     int out = 0;
     for (int i = 0; i < n && out < max; i++) {
+        rms_splice_name(cands[i], sizeof cands[i], spec);
         if (rms_acp_spec_parse(cands[i], &specs[out]) == 0)
             out++;
     }
@@ -563,23 +590,25 @@ uint32_t rms_acp_resolve_did(uint32_t chan, const char *dirpath,
     if (strcmp(work, "000000") == 0)
         return SS$_NORMAL;
 
-    for (tok = strtok_r(work, ".", &save); tok;
-         tok = strtok_r(NULL, ".", &save)) {
+    (void)save;
+    for (tok = work; tok && *tok; ) {
         struct vms_acp_access_args a;
         uint32_t st;
-        size_t tl = strlen(tok);
+        size_t tl = 0;
         char nm[VMS_ACP_NAME_SIZE];
+        char *next;
 
-        if (tl == 0)
-            continue;
+        /* one component: up to the next UNESCAPED '.' (an extended directory
+         * name may hold "^." -- rd vms-b9c) */
+        while (tok[tl] && !(tok[tl] == '.' && (tl == 0 || tok[tl - 1] != '^')))
+            tl++;
+        next = tok[tl] ? tok + tl + 1 : NULL;
+        if (tl == 0) { tok = next; continue; }
         if (tl > VMS_ACP_NAME_SIZE - 5) tl = VMS_ACP_NAME_SIZE - 5;
-        for (size_t i = 0; i < tl; i++) {
-            char c = tok[i];
-            if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
-            nm[i] = c;
-        }
-        nm[tl] = '\0';
+        if (rms_acp_name(tok, tl, nm, sizeof(nm) - 4) < 0)
+            return SS$_BADPARAM;              /* a UCS-2 component (rd vms-f1a2) */
         strncat(nm, ".DIR", sizeof(nm) - strlen(nm) - 1);
+        tok = next;
 
         memset(&a, 0, sizeof(a));
         a.chan    = chan;
@@ -759,7 +788,12 @@ static uint32_t rms_file_lock_acquire(rms_file_t *h, uint8_t fac, uint8_t shr)
     uint32_t lkid = 0, st;
 
     rms_file_lock_resnam(h, resnam);
-    st = vms_kif_enq(0, mode, LCK_M_NOQUEUE, resnam, 0, 0, 0, 0, &lkid, NULL);
+    /* resnam_len 0: a NUL-terminated text name, measured by the executive.
+     * The byte-exact VMS form -- 'RMS$' + the 6 FID bytes + 0x02 + the
+     * 12-byte volume label + three NULs, which NEEDS the count -- is rd
+     * vms-326's second half. */
+    st = vms_kif_enq(0, mode, LCK_M_NOQUEUE, resnam, 0, 0, 0, 0, 0, &lkid,
+                     NULL);
     if ($VMS_STATUS_SUCCESS(st))
         h->access_lkid = lkid;
     return st;
@@ -997,7 +1031,9 @@ rms_file_t *rms_open_named_handle_kind_prot(const char *vms_spec, int want_write
 
             if (st_out)
                 *st_out = $VMS_STATUS_SUCCESS(last) ? RMS$_DNF
-                                                   : rms_acp_open_status(last);
+                        : (last == SS$_BADFILENAME || last == SS$_BADFILEVER)
+                          ? RMS$_CRE    /* the volume refused the name (rd vms-b9c) */
+                          : rms_acp_open_status(last);
             return NULL;
         }
     }
@@ -1329,6 +1365,100 @@ uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath)
     return rc;
 #else
     (void)vmsspec; (void)destpath;
+    return RMS$_ACC;
+#endif
+}
+
+/*
+ * rms_read_over_acp - the whole of a file's GENUINE bytes, read off the mounted
+ * ODS-2 volume through the executive Files-11 ACP into a malloc'd buffer (the
+ * caller frees it): IO$_READVBLK over /dev/vms, the same read rms_stage_over_acp
+ * does into a staged file. DCL DUMP is its reader (vms-5303e): a DUMP reads the
+ * file's bytes whatever its record format -- GNU as writes its EVAX object as
+ * rfm=udf, which no record ($GET) path serves -- through the volume, never a
+ * POSIX read of a /vms path (Rule 9 / INV-6). Status and `vmsspec` as there. An
+ * empty file gives *buf == NULL, *len == 0 and RMS$_NORMAL.
+ */
+uint32_t rms_read_over_acp(const char *vmsspec, uint8_t **buf, uint64_t *len)
+{
+    if (!vmsspec || !buf || !len)
+        return RMS$_FAB;
+    *buf = NULL;
+    *len = 0;
+#if defined(OVMX_HAVE_ACP)
+    if (rms_acp_absent())
+        return RMS$_ACC;
+
+    struct FAB tfab = cc$rms_fab;
+    struct rms_acp_spec specs[RMS_ACP_MAX_CANDS];
+    struct vms_acp_access_args a;
+    uint32_t chan = 0, st = SS$_NOSUCHFILE;
+    int ncand, got = 0;
+
+    tfab.fab$l_fna = (char *)vmsspec;
+    tfab.fab$b_fns = (uint8_t)strlen(vmsspec);
+    ncand = rms_acp_specs_from_fab(&tfab, specs, RMS_ACP_MAX_CANDS);
+    if (ncand < 0)
+        return RMS$_SYN;
+    for (int i = 0; i < ncand && !got; i++) {
+        struct rms_acp_spec *sp = &specs[i];
+        chan = 0;
+        st = vms_kif_acp_assign(sp->devnam, &chan);
+        if (!$VMS_STATUS_SUCCESS(st))
+            continue;
+        memset(&a, 0, sizeof(a));
+        a.chan = chan;
+        st = rms_acp_resolve_did(chan, sp->dirpath,
+                                 &a.did_num, &a.did_seq, &a.did_rvn, &a.did_nmx);
+        if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); continue; }
+        a.version = sp->version;
+        strncpy(a.name, sp->name, VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_access(&a);
+        if (!$VMS_STATUS_SUCCESS(st)) { vms_kif_dassgn(chan); continue; }
+        got = 1;
+    }
+    if (!got)
+        return rms_acp_open_status(st);
+
+    uint32_t efblk = a.attr.efblk;
+    uint64_t total = efblk ? (uint64_t)(efblk - 1u) * 512u + a.attr.ffbyte : 0;
+    uint32_t rc = RMS$_NORMAL;
+    uint8_t *mem = NULL;
+    if (total) {
+        mem = malloc((size_t)total);
+        if (!mem)
+            rc = RMS$_DME;
+    }
+    uint64_t got_bytes = 0;
+    uint32_t vbn = 1;
+    while (rc == RMS$_NORMAL && got_bytes < total) {
+        uint8_t blk[512];
+        struct vms_acp_rw_args r;
+        memset(&r, 0, sizeof(r));
+        r.chan = chan; r.vbn = vbn; r.offset = 0; r.length = 512;
+        r.buffer = (uint64_t)(uintptr_t)blk;
+        st = vms_kif_acp_readvb(&r);
+        if (!$VMS_STATUS_SUCCESS(st) || r.xferred == 0) {
+            rc = $VMS_STATUS_SUCCESS(st) ? SS$_ABORT : rms_acp_open_status(st);
+            break;
+        }
+        uint64_t chunk = total - got_bytes;
+        if (chunk > r.xferred) chunk = r.xferred;
+        if (chunk > sizeof(blk)) chunk = sizeof(blk);
+        memcpy(mem + got_bytes, blk, (size_t)chunk);
+        got_bytes += chunk;
+        vbn++;
+    }
+    vms_kif_acp_deaccess(chan);
+    vms_kif_dassgn(chan);
+    if (rc != RMS$_NORMAL) {
+        free(mem);
+        return rc;
+    }
+    *buf = mem;
+    *len = total;
+    return RMS$_NORMAL;
+#else
     return RMS$_ACC;
 #endif
 }

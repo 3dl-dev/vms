@@ -80,6 +80,24 @@ vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t 
 	out->mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
 	out->req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
+	/* body[20:24] is ONE cell carrying one of two things, and a RECEIVER
+	 * cannot tell which from the bytes -- only the sender knows whether a
+	 * master had named a handle yet. So the parse reports it as the master
+	 * handle (what every path that consumes a parsed request wants) and
+	 * leaves the builder's PID slot empty rather than guessing. */
+	out->req_pid = 0u;
+	/*
+	 * THE PARENT SPAN, body[36:44] (rd vms-b67a): reported as it is, so a
+	 * parsed request says whether it is a ROOT (both zero -- 74,730 of the
+	 * corpus's 74,737) or a SUB-LOCK (both non-zero -- 7 of 7, and never a
+	 * half-filled pair). Reported, not vouched for: the engine decides what
+	 * it may do with a parent an inbound request names, and this is also what
+	 * makes a round trip through parse+build byte-exact for both shapes.
+	 */
+	out->parent_own_lkid =
+		vms_wire_get_le32(&v, VMS_OFB_DLM_PARENT_SPAN);
+	out->parent_master_lkid =
+		vms_wire_get_le32(&v, VMS_OFB_DLM_PARENT_SPAN + 4u);
 	/* body[128:132]: the SENDER's own directory hash for the name (rd
 	 * vms-4fb, Davis p. 6-50); the flag is what tells the caller it may be
 	 * learned at all, because "0" and "absent" are different facts. */
@@ -133,6 +151,27 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	 */
 	if (!req->res_ident_valid)
 		return VMS_CODEC_E_INVAL;
+	/*
+	 * body[20:24] MUST NOT GO OUT ZERO (rd vms-c55). The cell is the master's
+	 * handle once one exists and the REQUESTING PROCESS's id before that; a
+	 * real VMS directory answers a zero cell body[34] = 0xfe (12 of 12 in the
+	 * corpus, 0 of 19,377 nonzero ones) and a 0xfe is the last frame a real
+	 * VAX sent before each captured LOCKMGRERR. A caller that holds neither
+	 * value holds no requester, so this is refused here -- the same shape as
+	 * the codec's refusal of lock id 0 -- rather than emitted as a zero.
+	 */
+	if (req->master_lkid == 0u && req->req_pid == 0u)
+		return VMS_CODEC_E_INVAL;
+	/*
+	 * THE PARENT SPAN IS BOTH-OR-NEITHER (rd vms-b67a). Both zero is a ROOT
+	 * request and that is what a root means on the wire; both non-zero is a
+	 * sub-lock, which 7 of 7 real sub requests carry. A HALF-FILLED pair is
+	 * refused: body[40:44] = 0 on a sub-lock reads to the master as a root,
+	 * and it would create a SECOND root for the name -- the double-mastering
+	 * this item measured from the other side.
+	 */
+	if ((req->parent_own_lkid == 0u) != (req->parent_master_lkid == 0u))
+		return VMS_CODEC_E_INVAL;
 
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
@@ -142,7 +181,13 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, opcode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, req->mode);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req->req_lkid);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, req->master_lkid);
+	/* The master's handle when the master has named one, and the requesting
+	 * process's id until then (the struct's census note). One cell, two
+	 * executive reads, and the caller supplied both -- the choice is made
+	 * here, in the codec, because which one the wire carries is a wire rule. */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID,
+			  req->master_lkid != 0u ? req->master_lkid
+						 : req->req_pid);
 	/*
 	 * body[128:132] ONLY when the caller holds a WIRE-LEARNED hash for this
 	 * root name. No `else` branch, on purpose: a zero written here would be
@@ -158,6 +203,18 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	 * group-qualified resource would make the directory node scan for a
 	 * resource nobody has -- the same class of error as a zero hash.
 	 */
+	/*
+	 * body[36:44]: THE PARENT PAIR, written only for a sub-lock. A ROOT
+	 * request leaves the span as the caller's zeroed frame found it, which is
+	 * what 74,730 of the corpus's 74,737 real requests carry there
+	 * (dlm_sublock_census: 7 of them name a sub-resource).
+	 */
+	if (req->parent_own_lkid != 0u) {
+		vms_wire_put_le32(&w, VMS_OFF_DLM_PARENT_SPAN,
+				  req->parent_own_lkid);
+		vms_wire_put_le32(&w, VMS_OFF_DLM_PARENT_SPAN + 4u,
+				  req->parent_master_lkid);
+	}
 	vms_wire_put_le16(&w, VMS_OFF_DLM_RES_GROUP, req->res_group);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, req->res_acmode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, req->name_len);
@@ -196,6 +253,35 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t
 		return VMS_CODEC_E_CLASS;
 
 	out->valblk_present = 0;
+
+	/*
+	 * THE QUEUED ANSWER COMES FIRST (rd vms-85f), because it is the one
+	 * shape both discriminators below get WRONG: body[34] = 0xfb with the
+	 * requested mode and the resource name echoed back reads as a GRANT to
+	 * the grant/deny test, and reporting it as a grant tells the requesting
+	 * process it holds a lock the master has only queued.
+	 *
+	 * body[34] is the universal cat-0x82 outcome byte (see the header), and
+	 * 0xfb is QUEUED on both shapes a master queues: the first ENQ (110
+	 * real pairs, dlm_queued_answer_census.py) and the CONVERT (rd
+	 * vms-cab). Nothing else in the corpus's outcome set carries it, and no
+	 * grant does -- 49,556 of 49,556 grants carry 0xfa.
+	 */
+	if (vms_wire_get_u8(&v, VMS_OFB_DLM_RESULT_STAMP) ==
+	    VMS_DLM_REPLY_QUEUED) {
+		out->req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+		out->master_lkid = vms_wire_get_le32(&v,
+						     VMS_OFB_DLM_MASTER_LKID);
+		if (!vms_wire_view_ok(&v))
+			return v.err;
+		out->outcome = VMS_DLM_ENQ_QUEUED;
+		out->granted_mode = 0;
+		out->granted_mode_present = 0;
+		out->name_len = 0;   /* the name rides back, but nothing holds
+				      * this resource yet: there is no grant to
+				      * name. */
+		return VMS_CODEC_OK;
+	}
 
 	lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
@@ -290,7 +376,6 @@ vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
 					  uint32_t *written)
 {
 	vms_wire_view_t v;
-	vms_wire_buf_t w;
 	uint8_t cat, op, len;
 	uint32_t i;
 
@@ -318,22 +403,33 @@ vms_codec_status_t vms_dlm_op0f_ack_build(const uint8_t *req_body,
 
 	if (frame == (uint8_t *)0)
 		return VMS_CODEC_OK;           /* identity only */
-	vms_wire_buf_init(&w, frame, cap);
-	if (!vms_wire_buf_ok(&w))
-		return VMS_CODEC_E_INVAL;
-	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
-			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
-	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_0F_ACK);
-	if (new_master)
-		for (i = 0u; i < 4u; i++)
-			vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG + i, 0u);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
-	if (!vms_wire_buf_ok(&w))
-		return w.err;
-	if (written != (uint32_t *)0)
-		*written = vms_wire_buf_len(&w);
-	return VMS_CODEC_OK;
+	/*
+	 * ONE BUILDER FOR ALL FOUR ANSWERED STEPS (rd vms-380 rule 1). This
+	 * used to write the whole 32-bit grant record at body[32:36]; the
+	 * generic builder writes only body[34], which is byte-identical on
+	 * every real op-0x0f (70/70 carry 01 00 .. 00 there, pinned by
+	 * test_codec_remaster) and is the only rule the 246-pair corpus
+	 * supports for op 0x0e/0x10/0x14, where body[32], [33] and [35] take
+	 * 21, 6 and 10 distinct values.
+	 */
+	return vms_dlm_rm_ack_build(req_body, req_len, new_master, frame, cap,
+				    written);
+}
+
+/*
+ * THE GRANT RECORD, written in ONE place for both the builders that carry it:
+ * a master's ENQ/CONVERT grant (38 of 38 real grants) and a new master's 82/01
+ * answer to an op-0x12 remaster record (416 of 416). body[28] = 0x10, body[29]
+ * = 0, body[32:36] = 01 00 fa 00 -- the outcome byte at body[34] included.
+ * body[30:32] is NOT written here: a grant clears it and an op-0x12 answer's
+ * root form carries a cell this codec cannot name (rd vms-380 rule 2), so each
+ * builder states that pair itself.
+ */
+static void dlm_put_grant_record(vms_wire_buf_t *w)
+{
+	vms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);
+	vms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG + 1u, 0u); /* body[29], 38/38 */
+	vms_wire_put_le32(w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
 }
 
 vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
@@ -394,11 +490,9 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 	 * the requester's own, echoed -- the correlation. */
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
 	/* The grant record, on every grant (38/38). */
-	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG + 1u, 0); /* body[29], 38/38 */
+	dlm_put_grant_record(&w);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, 0);          /* cleared, 38/38 */
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u, 0);     /* body[31], 38/38 */
-	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);
 	/*
 	 * body[36:52] -- THE MASTER RESOURCE'S VALUE BLOCK, the span the op-0x06
 	 * write grounds and the dlm-grant-valblk specimen proves a real grant
@@ -446,6 +540,115 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 		vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK + i,
 				valblk != (const uint8_t *)0 ? valblk[i] : 0u);
 
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/*
+ * Does this REQUEST name a parent lock? body[36:44] is the pair (own parent
+ * lkid, parent's master lkid) on a sub-lock request and all zero on a root one
+ * (tools/cluster/dlm_sublock_census.py). It decides whether a queued answer is
+ * buildable at all -- see the QUEUED RECORD section of the header.
+ */
+static int dlm_req_names_parent(vms_wire_view_t *v)
+{
+	uint32_t i;
+
+	for (i = 0u; i < VMS_DLM_PARENT_SPAN_LEN; i++) {
+		if (vms_wire_get_u8(v, VMS_OFB_DLM_PARENT_SPAN + i) != 0u)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * THE QUEUED RECORD, written in one place: body[28], body[29] and body[32:36].
+ * 17 of 17 real root answers carry 00 00 fb 00 at body[32:36]; body[28:30] has
+ * two real forms and no grounded determinant, so the commonest is written and
+ * recorded as a deviation (header, QUEUED RECORD).
+ */
+static void dlm_put_queued_record(vms_wire_buf_t *w)
+{
+	vms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_QUEUED_FLAG_VAL);
+	vms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG + 1u,
+			VMS_DLM_QUEUED_FLAG2_VAL);
+	vms_wire_put_le32(w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_QUEUED_REC_VAL);
+}
+
+/*
+ * Everything that must hold before this node may answer "queued" at all. Each
+ * refusal is a thing this executive would otherwise have to assert without
+ * holding it -- see the declaration in the header for what each one means.
+ */
+static vms_codec_status_t dlm_queued_answer_admit(vms_wire_view_t *v,
+						  uint32_t master_lkid,
+						  uint32_t req_lkid)
+{
+	uint8_t cat = vms_wire_get_u8(v, VMS_OFB_DLM_CAT);
+	uint8_t op = vms_wire_get_u8(v, VMS_OFB_DLM_OP);
+	uint32_t req_own = vms_wire_get_le32(v, VMS_OFB_DLM_REQ_LKID);
+
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_ENQ)
+		return VMS_CODEC_E_CLASS;
+	if (master_lkid == VMS_DLM_LKID_UNSET || req_lkid == VMS_DLM_LKID_UNSET)
+		return VMS_CODEC_E_INVAL;
+	if (req_lkid != req_own)
+		return VMS_CODEC_E_INVAL;
+	if (dlm_req_names_parent(v))
+		return VMS_CODEC_E_CLASS;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_enq_response_build_queued(const uint8_t *req_body,
+						     uint32_t req_len,
+						     uint32_t master_lkid,
+						     uint32_t req_lkid,
+						     uint8_t *frame, uint32_t cap,
+						     uint32_t *written)
+{
+	vms_wire_view_t v;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	st = dlm_queued_answer_admit(&v, master_lkid, req_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	/*
+	 * THE ANSWER IS THE REQUEST, ECHOED (the same discipline as the grant
+	 * and the queued CONVERT, rd vms-b5b0): the requester's own handle at
+	 * body[24:28], the mode it asked for at body[30] and the name it asked
+	 * about all ride back because they are NOT rewritten -- 17 of 17 real
+	 * root answers leave them alone. The opcode stays 0x01.
+	 */
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
+	/* The handle the ENGINE minted for the LKB it really queued. 17 of 17
+	 * real answers rewrite this cell: a queued requester is told its
+	 * master-side handle now, not when the grant comes. */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
+	/* The requester's own handle AS THE ENGINE RECORDED IT. Equal to the
+	 * echoed bytes by the admission check above, and written from the
+	 * executive so the field is a lock-database read rather than a byte
+	 * carried across frames (struct vms_dlm_master_result). */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req_lkid);
+	dlm_put_queued_record(&w);
+	/* body[52:54]: the SCS-layer word this codec does not own, zeroed as
+	 * the queued CONVERT's answer zeroes it. */
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 52u, 0u);
+	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 53u, 0u);
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
@@ -603,9 +806,30 @@ vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len
 	return VMS_CODEC_OK;
 }
 
+/* body offsets this family adds. Frame-absolute first, body-relative derived,
+ * so the two spellings can never drift (see the header's note). */
+#define VMS_OFF_DLM_RM_TXN         76u  /* body[4:8]   0 => a notification   */
+#define VMS_OFF_DLM_RM_PARENT_H    108u /* body[36:40] parent HOLDER lkid    */
+#define VMS_OFF_DLM_RM_PARENT_M    112u /* body[40:44] parent NEW-MASTER lkid*/
+#define VMS_OFF_DLM_RM_VALBLK_SEQ  124u /* body[52:56] the value-block seq   */
+/* The op-0x12 RECORD's own copy of the resource's value block and sequence --
+ * body[88:104] and body[104:108]. Not the same span as the ANSWER's: see the
+ * header's rule 2, measured 420/420. */
+#define VMS_OFF_DLM_RM_REC_VALBLK  160u /* body[88:104] the holder's block   */
+#define VMS_OFF_DLM_RM_REC_VALSEQ  176u /* body[104:108] its sequence        */
+
+#define VMS_OFB_DLM_RM_TXN        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_TXN)
+#define VMS_OFB_DLM_RM_SEQ        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_SEQ)
+#define VMS_OFB_DLM_RM_PARENT_H   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_PARENT_H)
+#define VMS_OFB_DLM_RM_PARENT_M   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_PARENT_M)
+#define VMS_OFB_DLM_RM_VALBLK_SEQ VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_VALBLK_SEQ)
+#define VMS_OFB_DLM_RM_REC_VALBLK VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_REC_VALBLK)
+#define VMS_OFB_DLM_RM_REC_VALSEQ VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_REC_VALSEQ)
+
 /* ------------------------------------------------------------------ *
  * The directory role (rd vms-8219) -- see the header for the grounding.
  * ------------------------------------------------------------------ */
+
 
 /* Which frames name a resource FOR A DIRECTORY, and is this one of them? */
 static int dlm_names_for_directory(vms_wire_view_t *v, uint8_t op)
@@ -633,6 +857,28 @@ int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
 		return dlm_names_for_directory(&v, op) &&
 		       vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN) != 0u &&
 		       vms_wire_view_ok(&v);
+	/*
+	 * THE op-0x14 THIS NODE SENDS once it has adopted a tree (rd vms-ed5).
+	 * It faces a real VMS member BY DEFINITION -- the old master and the
+	 * holders that just handed the tree over are real VMS nodes, and a
+	 * departing one WAITS for it (that wait is the ci.6 evacuation gate).
+	 *
+	 * Admitted on its SHAPE and not on its opcode: it must name a resource
+	 * (68 of 68 real op-0x14s carry a name length of 1..31) and carry zero
+	 * at body[40:44] (68 of 68). Those two are what distinguish the frame
+	 * vms_dlm_rm_held_build produces -- six named fields and a residue span
+	 * written with the configured fill -- from any other body that happens
+	 * to say 0x14, and the second of them is the one named field the RA7
+	 * residue pattern must not touch, so a pattern that overran it would be
+	 * refused HERE as well as by its own negative control.
+	 */
+	if (op == VMS_DLM_WIREOP_RM_14) {
+		uint8_t nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+		uint32_t z = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_M);
+
+		return vms_wire_view_ok(&v) && nlen != 0u &&
+		       nlen < VMS_DLM_NAME_MAX && z == 0u;
+	}
 	return op == VMS_DLM_WIREOP_ENQ || op == VMS_DLM_WIREOP_CONVERT ||
 	       op == VMS_DLM_WIREOP_CONVERT_VALBLK ||
 	       op == VMS_DLM_WIREOP_DEQ;
@@ -649,8 +895,27 @@ int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len)
 	nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
 	if (!vms_wire_view_ok(&v))
 		return 0;
-	return cat == VMS_DLM_CAT_REQUEST && op == VMS_DLM_WIREOP_DIR_REMOVE &&
-	       nlen != 0u;
+	if (cat != VMS_DLM_CAT_REQUEST)
+		return 0;
+	/*
+	 * THE RELEASE IS A NOTIFICATION TOO (rd vms-194 D1), and on its OPCODE
+	 * alone -- a release carries no name (the codec refuses to read one:
+	 * the bytes a real $DEQ leaves at body[46:] belong to whatever last
+	 * used the buffer), so there is no shape left to admit it on.
+	 *
+	 * MEASURED, tools/cluster/dlm_deq_census.py over every committed pcap:
+	 *   real op-0x03 frames carrying a transaction at body[4:8]  0 of 40,960
+	 *   cat-0x82 op-0x03 ANSWERS anywhere in the corpus                   0
+	 * Nobody answers a release, and no real sender opens a transaction on
+	 * one. OVMX opened one on all 11 of its own, which minted a token on
+	 * the CSB, assigned it to a message no peer will ever answer, and left
+	 * it open -- the envelope-inconsistency class that produced CNXMGRERR
+	 * on a real node (ovmx-never-crashes-a-peer, crash vector 1), in the
+	 * one frame family that has already bugchecked two lab VAXes.
+	 */
+	if (op == VMS_DLM_WIREOP_DEQ)
+		return 1;
+	return op == VMS_DLM_WIREOP_DIR_REMOVE && nlen != 0u;
 }
 
 vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,
@@ -1022,10 +1287,11 @@ vms_codec_status_t vms_dlm_deq_parse_body(const uint8_t *body, uint32_t len,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	/* body[30]: the mode the lock is released FROM. The mode byte's
-	 * offset is the ac4-grounded one; the vms-c03 DEQ reads 0x00 (NL)
-	 * there, matching the mode its own op-0x01 grant assigned. */
-	d.mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	/* body[30]: REPORTED, NOT NAMED. The driven arm (rd vms-194) shows it
+	 * is not the mode the lock is released from -- a real node writes 0
+	 * there for every held mode NL..EX -- so the parse side hands the
+	 * caller what the frame carried and nothing else. */
+	d.rel_cell = vms_wire_get_u8(&v, VMS_OFB_DLM_DEQ_REL_CELL);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
@@ -1053,7 +1319,15 @@ vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
 			       d->master_lkid);
 	if (st != VMS_CODEC_OK)
 		return st;
-	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, d->mode);
+	/* body[30] AND ITS MIRROR body[32]: the MEASURED cell, never the lock
+	 * mode (rd vms-194 (c)). The driven arm's nine releases -- every held
+	 * mode NL..EX, a co-holder, and the roles swapped -- all carry 0, and
+	 * body[32] equals body[30] on 41,049 of 41,049 real releases. The
+	 * caller's `rel_cell` is deliberately NOT consulted: it is what an
+	 * inbound release carried, and echoing it would put a peer's byte on
+	 * this node's wire. */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL2, VMS_DLM_DEQ_REL_CELL);
 	/* The name span is deliberately left untouched: a real DEQ carries
 	 * no resource name, so writing one would be adding a field the
 	 * reference does not have. */
@@ -1503,5 +1777,384 @@ vms_codec_status_t vms_dlm_seq_put(uint8_t *body, uint32_t cap, uint16_t n)
 	body[VMS_OFF_DLM_SEQ_ONE - VMS_OFF_SYSAP_BODY + 1u] = (uint8_t)(VMS_DLM_SEQ_ONE_VAL >> 8);
 	body[VMS_OFF_DLM_SEQ - VMS_OFF_SYSAP_BODY] = (uint8_t)(n & 0xffu);
 	body[VMS_OFF_DLM_SEQ - VMS_OFF_SYSAP_BODY + 1u] = (uint8_t)(n >> 8);
+	return VMS_CODEC_OK;
+}
+
+/* ==========================================================================
+ * LOCK-TREE REMASTERING (rd vms-380). Field map, evidence and the three
+ * rules: vms_cluster_codec_dlm.h, "LOCK-TREE REMASTERING ON THE WIRE".
+ * ========================================================================== */
+
+/* The remastering family's body offsets are declared at the top of this file,
+ * beside the opcode table, because vms_dlm_shape_fit_for_any_member() needs
+ * one of them (the op-0x14's body[40:44]) long before this section. */
+
+/* The residue spans of an op-0x14: everything the 63-frame census does not
+ * name. body[12:16] is excluded because the CM stamps the DLM sequence there;
+ * body[40:48] and body[48:48+L] are named fields. */
+#define VMS_DLM_RM14_RESIDUE_A_OFF   10u   /* body[10:12] */
+#define VMS_DLM_RM14_RESIDUE_A_LEN    2u
+#define VMS_DLM_RM14_RESIDUE_B_OFF   16u   /* body[16:40] */
+#define VMS_DLM_RM14_RESIDUE_B_LEN   24u
+
+/*
+ * THE RECORD'S OWN VALUE BLOCK (rd vms-ed5). An op-0x12 carries the holder's
+ * copy of the resource's value block at body[88:104] and its SEQUENCE at
+ * body[104:108], and the 82/01 answer's body[36:56] is that span -- 3,336 of
+ * 3,521 real pairs, ROOT and sub alike (header rule 2). PRESENT is "the span is
+ * not twenty zeros": in 2,702 of 2,702 records with a non-zero block the
+ * sequence is non-zero too, and in 804 of the 819 with a zero block it is zero,
+ * so the two agree and neither is read as an assertion about the other. ABSENT leaves the
+ * resource's block alone -- twenty zeros presented as a value block is the
+ * placeholder INV-6 forbids.
+ */
+static vms_codec_status_t dlm_rm_rec_valblk_get(vms_wire_view_t *v,
+						struct vms_dlm_rm_lock_rec *r)
+{
+	uint32_t i;
+	uint8_t any = 0u;
+
+	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++) {
+		r->valblk[i] = vms_wire_get_u8(v, VMS_OFB_DLM_RM_REC_VALBLK + i);
+		if (r->valblk[i] != 0u)
+			any = 1u;
+	}
+	r->valblk_seq = vms_wire_get_le32(v, VMS_OFB_DLM_RM_REC_VALSEQ);
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	if (r->valblk_seq != 0u)
+		any = 1u;
+	r->valblk_present = any;
+	if (!any)
+		r->valblk_seq = 0u;
+	return VMS_CODEC_OK;
+}
+
+/* Is this op one of the five remaster steps that name a resource? */
+static int dlm_rm_is_step_op(uint8_t op)
+{
+	return op == VMS_DLM_WIREOP_RM_0E || op == VMS_DLM_WIREOP_RM_0F ||
+	       op == VMS_DLM_WIREOP_RM_10 || op == VMS_DLM_WIREOP_RM_11 ||
+	       op == VMS_DLM_WIREOP_RM_13;
+}
+
+/* Is this op one whose answer is the 82/15 echo (rule 1)? */
+static int dlm_rm_is_acked_op(uint8_t op)
+{
+	return op == VMS_DLM_WIREOP_RM_0E || op == VMS_DLM_WIREOP_RM_0F ||
+	       op == VMS_DLM_WIREOP_RM_10 || op == VMS_DLM_WIREOP_RM_14;
+}
+
+/*
+ * The resource identity + directory hash a remaster frame names. Shared by the
+ * step parser and the op-0x12 record parser, so one name-length rule applies
+ * to both. Does NOT gate on the opcode: each caller has already done that.
+ */
+static vms_codec_status_t dlm_rm_ident_get(vms_wire_view_t *v,
+					   struct vms_dlm_res_ident *out)
+{
+	struct vms_dlm_res_ident id;
+	vms_codec_status_t st;
+
+	id.group = vms_wire_get_le16(v, VMS_OFB_DLM_RES_GROUP);
+	id.mode = vms_wire_get_u8(v, VMS_OFB_DLM_RES_MODE);
+	id.hash = vms_wire_get_le32(v, VMS_OFB_DLM_DIR_HASH);
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	st = dlm_name_get(v, &id.name_len, id.name);
+	if (st != VMS_CODEC_OK)
+		return st;
+	if (id.name_len == 0u || id.name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_RANGE;
+	*out = id;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_rm_step_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_rm_step *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_rm_step s;
+	uint8_t cat, op;
+	uint32_t txn;
+	vms_codec_status_t st;
+
+	if (out == (struct vms_dlm_rm_step *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || !dlm_rm_is_step_op(op))
+		return VMS_CODEC_E_CLASS;
+
+	txn = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_TXN);
+	s.dlm_seq = vms_wire_get_le16(&v, VMS_OFB_DLM_RM_SEQ);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	st = dlm_rm_ident_get(&v, &s.id);
+	if (st != VMS_CODEC_OK)
+		return st;
+	s.op = op;
+	s.notification = (uint8_t)(txn == 0u ? 1u : 0u);
+	*out = s;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_rm_step_parse(const uint8_t *frame, uint32_t len,
+					 const struct vms_frame_info *fi,
+					 struct vms_dlm_rm_step *out)
+{
+	if (frame == (const uint8_t *)0 || fi == (const struct vms_frame_info *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	return vms_dlm_rm_step_parse_body(frame + VMS_OFF_SYSAP_BODY,
+					  len - VMS_OFF_SYSAP_BODY, out);
+}
+
+vms_codec_status_t vms_dlm_rm_lock_rec_parse_body(const uint8_t *body,
+						  uint32_t len,
+						  struct vms_dlm_rm_lock_rec *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_rm_lock_rec r;
+	uint8_t cat, op;
+	vms_codec_status_t st;
+
+	if (out == (struct vms_dlm_rm_lock_rec *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_RM_12)
+		return VMS_CODEC_E_CLASS;
+
+	r.holder_epid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
+	r.holder_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+	r.flags = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_FLAG);
+	r.granted_mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	r.requested_mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE + 1u);
+	r.parent_holder_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_H);
+	r.parent_master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_M);
+	r.dlm_seq = vms_wire_get_le16(&v, VMS_OFB_DLM_RM_SEQ);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	st = dlm_rm_ident_get(&v, &r.id);
+	if (st != VMS_CODEC_OK)
+		return st;
+	st = dlm_rm_rec_valblk_get(&v, &r);
+	if (st != VMS_CODEC_OK)
+		return st;
+	/* A lock whose handle is 0 is not a lock, and an adoption may not
+	 * install one: the same refusal every lock-id field in this codec
+	 * makes (the fc8540ae lesson in this file's header). */
+	if (r.holder_lkid == VMS_DLM_LKID_UNSET)
+		return VMS_CODEC_E_RANGE;
+	r.is_root = (uint8_t)((r.parent_holder_lkid == 0u &&
+			       r.parent_master_lkid == 0u) ? 1u : 0u);
+	*out = r;
+	return VMS_CODEC_OK;
+}
+
+/*
+ * RULE 1. The answer is the request with body[8], body[9] and body[34]
+ * rewritten -- and, for an op-0x0f answered by the NEW master, body[28:32]
+ * cleared. Nothing else: 246 of 246 real pairs.
+ */
+vms_codec_status_t vms_dlm_rm_ack_build(const uint8_t *req_body,
+					uint32_t req_len, int new_master,
+					uint8_t *frame, uint32_t cap,
+					uint32_t *written)
+{
+	vms_wire_view_t v;
+	vms_wire_buf_t w;
+	uint8_t cat, op;
+	uint32_t i;
+
+	if (req_body == (const uint8_t *)0 || frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || !dlm_rm_is_acked_op(op))
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_RM_ACK);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RESULT_STAMP, VMS_DLM_REPLY_GRANTED);
+	/* The new master's extra step, op-0x0f ONLY (rd vms-cab, 60/65 vs the
+	 * 5 plain-member answers that keep it). */
+	if (new_master != 0 && op == VMS_DLM_WIREOP_RM_0F)
+		for (i = 0u; i < 4u; i++)
+			vms_wire_put_u8(&w, VMS_OFF_DLM_DIR_MASTER + i, 0u);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_rm_ack_ident(const uint8_t *ans_body, uint32_t len,
+					struct vms_dlm_res_ident *out)
+{
+	vms_wire_view_t v;
+	uint8_t cat, op;
+
+	if (out == (struct vms_dlm_res_ident *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, ans_body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != vms_wire_response_category(VMS_DLM_CAT_REQUEST) ||
+	    op != VMS_DLM_WIREOP_RM_ACK)
+		return VMS_CODEC_E_CLASS;
+	return dlm_rm_ident_get(&v, out);
+}
+
+/*
+ * RULE 2. The 82/01 answer to an op-0x12 is the GRANT record this codec
+ * already grounds on 38/38 real grants, carrying the handle THIS engine
+ * minted and -- on the tree's root -- the resource's own value block and its
+ * sequence, read back off the RSB.
+ */
+vms_codec_status_t
+vms_dlm_rm_lock_answer_build(const uint8_t *req_body, uint32_t req_len,
+			     const struct vms_dlm_rm_lock_answer *a,
+			     uint8_t *frame, uint32_t cap, uint32_t *written)
+{
+	vms_wire_view_t v;
+	vms_wire_buf_t w;
+	uint8_t cat, op;
+	uint32_t i;
+
+	if (req_body == (const uint8_t *)0 || frame == (uint8_t *)0 ||
+	    a == (const struct vms_dlm_rm_lock_answer *)0)
+		return VMS_CODEC_E_INVAL;
+	if (a->master_lkid == VMS_DLM_LKID_UNSET)
+		return VMS_CODEC_E_INVAL;
+	if (req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_RM_12)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	/* The record, echoed: body[24:28] (the holder's own handle) and
+	 * everything past body[56] are the sender's bytes and stay its bytes. */
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, a->master_lkid);
+	/* The grant record (38/38 real grants; 420/420 real 0x12 answers). */
+	dlm_put_grant_record(&w);
+	/* body[30:32]: the grant's cleared pair, unless the caller holds a
+	 * real executive value for the root form (header rule 2). */
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE,
+			a->root_ctx_valid ? a->root_ctx[0] : 0u);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u,
+			a->root_ctx_valid ? a->root_ctx[1] : 0u);
+	/* body[36:56]: the value block and its sequence, or twenty zeros --
+	 * written LAST so this span owns every byte of itself, including the
+	 * request's identity and name bytes that lie under it. */
+	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+		vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK + i,
+				a->valblk_present ? a->valblk[i] : 0u);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_RM_VALBLK_SEQ,
+			  a->valblk_present ? a->valblk_seq : 0u);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/*
+ * Every byte of an op-0x14's body is one THIS builder wrote: zero the whole
+ * body first, so no caller's stack can reach the wire through a span the
+ * builder later decides not to fill.
+ */
+static void dlm_rm14_blank_body(vms_wire_buf_t *w)
+{
+	uint32_t i;
+
+	for (i = 0u; i < VMS_CM_BODY_LEN; i++)
+		vms_wire_put_u8(w, VMS_OFF_SYSAP_BODY + i, 0u);
+}
+
+/*
+ * RULE 3. An op-0x14 asserts the tree's identity, its name and its directory
+ * hash, and fills every other byte with `residue_fill` (0 = the vms-42de
+ * ruling's zeros; a non-zero value is RA7's second fixed pattern).
+ * body[12:16] is left zero for the CM's DLM-sequence stamp.
+ */
+vms_codec_status_t vms_dlm_rm_held_build(const struct vms_dlm_rm_held *h,
+					 uint8_t *frame, uint32_t cap,
+					 uint32_t *written)
+{
+	vms_wire_buf_t w;
+	uint32_t i;
+
+	if (h == (const struct vms_dlm_rm_held *)0 || frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (h->id.name_len == 0u || h->id.name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	dlm_rm14_blank_body(&w);
+
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_RM_14);
+	vms_wire_put_le16(&w, VMS_OFF_DLM_RES_GROUP, h->id.group);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, h->id.mode);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, h->id.name_len);
+	for (i = 0u; i < h->id.name_len; i++)
+		vms_wire_put_u8(&w, VMS_OFF_DLM_NAME + i, h->id.name[i]);
+	if (h->hash_known != 0u)
+		vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, h->id.hash);
+
+	/* The residue spans, last, so a non-zero RA7 pattern cannot land on a
+	 * named field: body[10:12], body[16:40] and the name's tail. */
+	if (h->residue_fill != 0u) {
+		for (i = 0u; i < VMS_DLM_RM14_RESIDUE_A_LEN; i++)
+			vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY +
+					VMS_DLM_RM14_RESIDUE_A_OFF + i,
+					h->residue_fill);
+		for (i = 0u; i < VMS_DLM_RM14_RESIDUE_B_LEN; i++)
+			vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY +
+					VMS_DLM_RM14_RESIDUE_B_OFF + i,
+					h->residue_fill);
+		for (i = (uint32_t)h->id.name_len;
+		     VMS_OFF_DLM_NAME + i < VMS_OFF_DLM_DIR_HASH; i++)
+			vms_wire_put_u8(&w, VMS_OFF_DLM_NAME + i,
+					h->residue_fill);
+	}
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
 	return VMS_CODEC_OK;
 }

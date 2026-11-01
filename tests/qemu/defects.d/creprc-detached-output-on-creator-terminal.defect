@@ -1,0 +1,25 @@
+# creprc-detached-output-on-creator-terminal -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC of a DETACHED process binds its SYS\$OUTPUT/SYS\$ERROR to what the creator named or to the null device -- never to the creator's terminal (rd vms-5843)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_creprc_detached_output";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "When the output spec cannot be opened (a VMS file spec, no /vms passthrough), the mutation skips the null-device fallback, so the detached process keeps the creator's descriptors -- the shape that put NETACP's DECNETD-I- lines on OPA0: on a booted node. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+a detached process whose output names a VMS file $CREPRC cannot open writes nothing on its creator's terminal
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal)/{n;s|^                if (fd < 0 \&\& detached)$|                if (0 \&\& fd < 0 \&\& detached) /* NEGCTL creprc-detached-output-on-creator-terminal */|}' "$_file"
+    :
+}

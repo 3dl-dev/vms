@@ -53,9 +53,11 @@ that drives SYSGEN (`USE CURRENT` / `SET SCSNODE`… / `WRITE CURRENT`) to autho
 `STARTUP.EXE` (above). This author → reboot → adopt round-trip is proven end to
 end, on a real boot, by
 [`tests/qemu/test_cluster_config_lan_e2e.sh`](../tests/qemu/test_cluster_config_lan_e2e.sh):
-after the procedure authors a new `SCSNODE` and the node reboots, the boot
-console announces `%OVMX-I-SCSNODE, node name … set from SYS$SYSTEM:OVMXVMSSYS.PAR`
-and `F$GETSYI("NODENAME")` (the live node name) reads the authored value.
+after the procedure authors a new `SCSNODE` and the node reboots,
+`SYS$MANAGER:OPERATOR.LOG` records `%OVMX-I-SCSNODE, node name … set from
+SYS$SYSTEM:OVMXVMSSYS.PAR` (an operator-log record, not a console line -- a VMS
+boot console prints none; `TYPE SYS$MANAGER:OPERATOR.LOG` shows it) and
+`F$GETSYI("NODENAME")` (the live node name) reads the authored value.
 
 To change this node's identity, run the procedure and pick **CHANGE** (menu
 option 2), which reconfigures the local node without altering `VAXCLUSTER`; pick

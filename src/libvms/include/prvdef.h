@@ -71,9 +71,6 @@ extern "C" {
 /* Convenience: all privileges */
 #define PRV$M_ALL           (~(uint64_t)0)
 
-/* Named privilege sets commonly used in VMS */
-#define PRV$M_NOACCESS      0                     /* No special privileges */
-
 /* ================================================================
  * Privilege bit positions (PRV$V_ constants)
  * ================================================================ */
@@ -145,7 +142,6 @@ extern "C" {
  * SYS$SYSTEM:SYSDEF.STB; see docs/oracle/vax73-privileges.md §2 for the
  * verbatim EVALUATE transcript.
  * ================================================================ */
-
 
 /* ================================================================
  * PRVDEF - the privilege mask as a structure with one bit-field per

@@ -139,7 +139,7 @@ trap cleanup EXIT
 
 OK=1
 
-if wait_for '%OVMX-I-EXEC' 60; then rc=0; else rc=1; OK=0; fi
+if wait_for ' - OpenVMS-compatible' 60; then rc=0; else rc=1; OK=0; fi
 record "executive attached" "$rc"
 
 if [ "$OK" -eq 1 ]; then
@@ -262,6 +262,39 @@ if [ "$OK" -eq 1 ]; then
     fi
 fi
 
+# --- rd vms-158d: OVMX's boot narration is in OPERATOR.LOG, not on OPA0: ----
+# A real VMS boot console prints no "executive attached", "mounting system
+# disk", "system disk mounted", "node name set" or "system identity" line, so
+# PID 1 and PROVISION file them as operator-log records. They must be THERE --
+# re-routed, never dropped -- and NOT on the boot console.
+if [ "$OK" -eq 1 ]; then
+    CMD_OFFSET=$(wc -c <"$CONSOLE_LOG")
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'
+    if wait_for '$ ' 30 "$CMD_OFFSET"; then rc=0; else rc=1; fi
+    record "TYPE SYS\$MANAGER:OPERATOR.LOG returns" "$rc"
+    OPLOG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
+    for want in '%OVMX-I-EXEC, VMS executive attached on /dev/vms' \
+                '%OVMX-I-SYSDISK, mounting system disk VDA0:' \
+                '%OVMX-I-MOUNTED, system disk VDA0: mounted' \
+                '%OVMX-I-SCSNODE, node name ' \
+                '%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive'; do
+        if printf '%s' "$OPLOG" | grep >/dev/null -F "$want"; then r1=0; else r1=1; fi
+        record "OPERATOR.LOG carries the boot record '$want'" "$r1"
+        if printf '%s' "$BOOT_LOG" | grep >/dev/null -F "$want"; then r1=1; else r1=0; fi
+        record "the boot console does NOT carry '$want' (no VMS console prints it)" "$r1"
+    done
+
+    # Unconfigured DECnet: STARTNET launched no NETACP (it prints no launch
+    # line of its own any more, so ask the executive's process table).
+    CMD_OFFSET=$(wc -c <"$CONSOLE_LOG")
+    send 'SHOW SYSTEM'
+    if wait_for '$ ' 30 "$CMD_OFFSET"; then rc=0; else rc=1; fi
+    record "SHOW SYSTEM returns" "$rc"
+    SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
+    if printf '%s' "$SEG" | grep >/dev/null -E '^[0-9A-Fa-f]{8} +NETACP'; then r1=1; else r1=0; fi
+    record "STARTNET launched NO NETACP on an unconfigured boot (SHOW SYSTEM lists none)" "$r1"
+fi
+
 cleanup
 trap - EXIT
 echo ""
@@ -303,7 +336,7 @@ if printf '%s' "$BOOT_LOG" | grep >/dev/null -F 'DECnet Phase IV -- Startup (STA
 record "STARTNET is SILENT on an unconfigured boot (no DECnet startup announcement -- faithful: real VMS runs no STARTNET unconfigured)" "$rc"
 
 if printf '%s' "$BOOT_LOG" | grep >/dev/null -F '%DECNET-I-STARTNET'; then rc=1; else rc=0; fi
-record "STARTNET launches NO NETACP on an unconfigured boot (no %DECNET-I-STARTNET on the console)" "$rc"
+record "no %DECNET-I-STARTNET on the console (STARTNET prints no launch line of its own, rd vms-158d)" "$rc"
 
 if printf '%s' "$BOOT_LOG" | grep >/dev/null -E '%DCL-[EF]-ABORT'; then rc=1; else rc=0; fi
 record "STARTNET leaves NO %DCL-E-ABORT on the boot console (config check is a DCL F\$SEARCH, not a foreground probe)" "$rc"

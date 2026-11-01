@@ -433,6 +433,10 @@ RUN cd /src/repo && CC=gcc sh tests/qemu/mk_corpus_native.sh /src/repo
 # (acp_rw / acp_mount / ...), which mount + read this volume through the real
 # executive ACP (the retired vmsfs.ko "ods2ro" VFS presentation used to be here).
 COPY tests/ods2/real_vax_ods2.dsk /ods2_real.img
+# A REAL ODS-5 volume made by OpenVMS Alpha V8.4 (rd vms-7e7e): run_tests.sh
+# copies it onto VDA500: (vdf) for test_syssvc_acp_ods5. Provenance:
+# tests/lab/captures/ods5-alpha-20261022/RESULTS.md.
+COPY tests/lab/captures/ods5-alpha-20261022/ods5t.dsk /ods5_real.img
 COPY tests/ods2/ovmxdir_hello.golden /hello.golden
 
 # GENERATED multi-version ODS-2 volume for the $SEARCH proof (vms-a0b, epic
@@ -750,6 +754,25 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     sh /src/repo/tests/lab/ci6/mk_evacwl_native.sh /src/repo \
         /initramfs/vms/SYS0/SYSCOMMON/SYSLIB \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/EVACWL.EXE && \
+    # RMHOLD.EXE (rd vms-c2b): the remaster arms' holder program -- the OVMX
+    # mirror of the real VAX oracle's RMHOLD.MAR. Built HERE for the same
+    # reason EVACWL is: it links --use the very SYS$LIBRARY copies the suite
+    # then stages on the system volume, and .vms$imp binds by symbol-vector
+    # INDEX. Two producers only (DECC$SHR + LIBVMS$SHR), so cc is enough --
+    # no TCC step. test_syssvc_ci6_rmhold.c activates it.
+    # IMGACT_INTERP_PATH: THIS harness stages the activator at
+    # /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE (two steps above), while
+    # build-static's LINK.EXE bakes a BOOTED node's /run/ovmx-boot/IMGACT.EXE --
+    # and an image whose activator the host kernel cannot open exec-fails ENOENT
+    # before any OVMX code runs. That is exactly how test_syssvc_ci6_rmhold's
+    # child died silently on its first CI run, so the path is stated here and
+    # the recipe refuses a mismatch.
+    IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
+    sh /src/repo/tests/lab/ci6/mk_rmhold_native.sh \
+        /src/repo/build-static/bin/LINK.EXE \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RMHOLD.EXE \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMS$SHR.EXE' && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers

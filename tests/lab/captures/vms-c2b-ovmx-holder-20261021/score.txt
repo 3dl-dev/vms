@@ -1,0 +1,24 @@
+score_remaster: the COMMITTED codec against a real VAX's own answers
+    ok 02/0e -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0e -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=1): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=1): byte-exact over body[4:132]
+    ok 02/10 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/10 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0e -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=1): byte-exact over body[4:132]
+    ok 02/10 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0e -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=1): byte-exact over body[4:132]
+    ok 02/10 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+
+score_remaster: 18 pair(s): 18 byte-exact, 0 mismatched, 0 refused
+  the two cells rd vms-380 does not name (op-0x12 answer body[30:34]): 0 byte(s) agreed, 0 differed
+  SUB records: 0 whose body[88:108] is twenty zeros (so their answer carries none), 0 carrying a real value block
+  PASS: every pair is byte-exact outside the unnamed cells

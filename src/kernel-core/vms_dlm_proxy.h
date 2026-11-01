@@ -115,9 +115,50 @@ struct vms_dlm_proxy_post {
 	                        * be resolved by the directory node             */
 	uint32_t master_lkid;  /* the master's handle for this lock; 0 until the
 	                        * master's own reply named it                   */
+	/*
+	 * THE REQUESTING PROCESS'S ID (rd vms-c55), read off the LKB's own PCB at
+	 * post time. It rides here for the same reason `dir_hash` does: the wire
+	 * arm must be able to place it at body[20:24] -- which carries the
+	 * requesting PID until a master has named a handle -- WITHOUT deriving
+	 * it, and the only non-deriving source is an executive read while the LKB
+	 * still exists. 0 only for a lock with no process behind it, and the
+	 * codec then refuses the frame rather than sending the zero cell a real
+	 * VMS directory answers 0xfe.
+	 */
+	uint32_t req_pid;
+	/*
+	 * THE PARENT THIS SUB-LOCK HANGS UNDER (rd vms-b67a), both halves read
+	 * off the LKB at post time like every other field here: `parent_own_lkid`
+	 * is this node's own handle for the parent, `parent_master_lkid` the
+	 * handle that parent's MASTER gave it. The request's body[36:44] is that
+	 * pair, and 7 real VAX-to-VAX sub-lock requests carry it byte-for-byte
+	 * from the parent's own grant (tools/cluster/dlm_sublock_census.py).
+	 *
+	 * BOTH ZERO for a ROOT request, which is what a root MEANS on the wire --
+	 * so a half-filled pair is refused by the codec rather than sent, and a
+	 * sub-lock whose parent has no master handle yet never reaches this
+	 * struct (vms_enq_core_ex refuses the $ENQ).
+	 */
+	uint32_t parent_own_lkid;
+	uint32_t parent_master_lkid;
 	uint32_t lkmode;       /* requested mode, read from the LKB             */
 	uint32_t flags;        /* LCK_M_* the requester supplied, read from the LKB */
-	char     resnam[32];   /* the RSB's name                                */
+	char     resnam[32];   /* the RSB's name -- COUNTED, see resnam_len      */
+	/*
+	 * HOW MANY OF THOSE BYTES ARE THE NAME (rd vms-326).
+	 *
+	 * A VMS resource name is counted and may be BINARY: RMS's file-access
+	 * lock is 'RMS$' + the 6-byte file id + 0x02 + the 12-byte volume label
+	 * + three NULs, 26 bytes (1,130 real cat-0x02 frames,
+	 * tools/cluster/dlm_rms_name_hash_check.py). The wire carries the count at
+	 * body[47] and the bytes at body[48..], so the post carries both -- a
+	 * NUL-terminated field would have put the 7-byte truncation on the wire
+	 * and asked the directory node about a resource nobody has.
+	 *
+	 * Read off the RESOURCE BLOCK at post time, like the name itself:
+	 * `res->name_len`. Always 1..31 on a post the engine made.
+	 */
+	uint8_t  resnam_len;
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];  /* the LKB's value block (a write
 	                        * crossing carries it; otherwise zeros)         */
 
@@ -177,6 +218,33 @@ struct vms_dlm_proxy_post {
 	 * it, exactly like `to_directory` and `dir_hash_known`.
 	 */
 	uint8_t  write_valblk;
+
+	/*
+	 * DOES THIS NODE ITSELF MASTER THE RESOURCE? (rd vms-3ac)
+	 *
+	 * Read off the RESOURCE BLOCK at post time -- `res->master_csid ==
+	 * vms_local_csid` -- and it is a REFUSAL CONDITION, not information: a
+	 * proxy transmission about a resource THIS node masters has nowhere
+	 * honest to go, and the engine declines to post it (dlm_proxy_post).
+	 *
+	 * IT IS HERE BECAUSE A REAL VAX BUGCHECKED. 2026-10-21, lab labc2b
+	 * (tests/lab/captures/vms-3ac-invlockid-20261021): a real V7.3 node
+	 * remastered a tree ONTO this node, this node's own lock in that tree
+	 * stayed a proxy pointing at the OLD master, and the lock's release
+	 * sent that old master a cat-0x02 op-0x03 $DEQ naming the handle it had
+	 * minted before the move. The old master no longer had an RSB for the
+	 * resource, and
+	 *
+	 *     **** Fatal BUG CHECK, version = V7.3   INVLOCKID, Invalid lock id
+	 *          R1 = 370004A7
+	 *
+	 * is what a V7.3 node does with a lock id it cannot resolve. R1 was the
+	 * handle in that frame. `dlm_proxy_post` already refused a zero lock id
+	 * for exactly this reason ("a placeholder lock id bugchecked a real VAX
+	 * with INVLOCKID"); this is the same floor for a handle that was real
+	 * once and is addressed at a node that cannot have it any more.
+	 */
+	uint8_t  self_mastered;
 };
 
 /*
@@ -249,6 +317,16 @@ struct vms_dlm_dir_local {
  * the wait, because the engine owns the LKB (vms_dlm_scs.h SS5). It returns
  * SS$_NORMAL when the request is queued for transmission, or an SS$_ status.
  */
+/*
+ * THE REPORT OF A QUEUE THIS NODE ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd).
+ * Two values, both of them this executive's own: see `grant_advanced` below for
+ * why there are only two.
+ */
+struct vms_dlm_grant_advance {
+	uint32_t csid;          /* the system whose request is now granted  */
+	uint32_t master_lkid;   /* THIS node's handle for that lock         */
+};
+
 struct vms_dlm_requester_ops {
 	uint32_t (*post)(void *ctx, const struct vms_dlm_proxy_post *p);
 
@@ -405,6 +483,39 @@ struct vms_dlm_requester_ops {
 	 */
 	uint32_t (*dir_claim_self)(void *ctx, const struct vms_dlm_dir_ask *q);
 
+	/*
+	 * A QUEUE THIS NODE JUST ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd).
+	 *
+	 * A release on THIS node -- a $DEQ, an image rundown, a $DEQALL sweep,
+	 * a quorum regain -- can flip a cross-node waiter from queued to
+	 * GRANTED, and the lock really is granted afterwards. Until this op
+	 * existed the engine told nobody, so the peer whose lock it was waited
+	 * for ever: measured twice on real hardware (2026-10-09 vaxlab-3 and
+	 * 2026-10-21, tests/lab/captures/vms-3ac-promote-20261021), a real
+	 * VAX's process in RWSCS that even STOP could not complete. The
+	 * cross-node release path has always reported it (the master seam's
+	 * `deferred_grant`); this is the same fact from the LOCAL door.
+	 *
+	 * WHAT IT CARRIES IS DELIBERATELY THE KEY AND NOTHING ELSE: the system,
+	 * and THIS node's own handle for the lock it granted that system. No
+	 * mode, no requester handle, no frame. The implementation reads those
+	 * back through vms_lock_dlm_grant_advance_read() when it is about to
+	 * send, so the grant asserts a lock that exists THEN -- the same
+	 * refill-at-send-time discipline `post` follows, and the reason a work
+	 * item may cross a context switch at all.
+	 *
+	 * CONTEXT: called with NO RESOURCE LOCK HELD (the op-0x04 removal's
+	 * rule). It still must not block and must not re-enter the lock
+	 * manager: the shipping implementation queues one work item to the fork
+	 * thread and returns.
+	 *
+	 * ABSENT (NULL) MEANS NO CLUSTER ARM. The flip is then COUNTED
+	 * (vms_lock_dlm_grant_flips_unreported()), never silently dropped: a
+	 * node that granted a lock it could not announce is a fact an operator
+	 * must be able to read.
+	 */
+	void (*grant_advanced)(void *ctx, const struct vms_dlm_grant_advance *g);
+
 	void *ctx;
 };
 
@@ -439,8 +550,34 @@ struct vms_dlm_requester_ops {
  * offset or the "one hash per name, cluster-wide" property the whole scheme
  * rests on.
  */
-uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t group,
-				     uint8_t mode, uint32_t dir_hash);
+/*
+ * `resnam_len` is the name's COUNTED length, as the frame carried it at
+ * body[47] (rd vms-326). A VMS resource name may contain NULs, and a value
+ * filed under the C-string prefix of one would sit on a resource block no
+ * $ENQ ever names. 0 means "the NUL-terminated string in resnam".
+ */
+uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t resnam_len,
+				     uint16_t group, uint8_t mode,
+				     uint32_t dir_hash);
+
+/*
+ * vms_lock_dlm_dir_hash_of - the directory hash value this executive HOLDS for
+ * an identity, for a frame that must carry one (rd vms-ed5: the op-0x14 that
+ * announces an adopted tree, body[128:132], 68 of 68 real frames).
+ *
+ * A READ, never a determination made for the asking: the RSB's own `dir_hash`,
+ * which is either a value a system in this cluster put on the wire and
+ * `_learn_dir_hash` recorded, or -- for a root name inside the PROVEN coverage
+ * -- the one `vms_dlm_name_hash_proven()` determined for this exact identity
+ * and the directory routing already stored (the same `dir_hash_for_routing`
+ * read `dir_resolve` makes, so this frame can never carry a value the ROUTING
+ * would not). An identity outside that coverage is REFUSED, not extrapolated.
+ * Returns 1 and writes *out only then;
+ * returns 0 -- and the caller leaves the field ZERO, never minted -- for an
+ * identity this executive holds no value for. Creates no resource.
+ */
+int vms_lock_dlm_dir_hash_of(const char *resnam, uint32_t resnam_len,
+			     uint16_t group, uint8_t mode, uint32_t *out);
 
 /* How many learned hashes disagreed with a value already held for that name
  * (see above). Instrumentation for the FC-P4.2 offset check; a diagnostic
@@ -461,6 +598,34 @@ uint32_t vms_lock_dlm_dir_hash_computed_wrong(void);
  * mastered resource was freed, and those it could not hand over. */
 uint32_t vms_lock_dlm_dir_removes_posted(void);
 uint32_t vms_lock_dlm_dir_removes_unposted(void);
+
+/*
+ * HOW MANY PROXY TRANSMISSIONS WERE REFUSED BECAUSE THIS NODE MASTERS THE
+ * RESOURCE (rd vms-3ac) -- see `self_mastered` above. A nonzero reading is not
+ * an error: it is this node declining to tell another node about a lock that
+ * node cannot have, which is the alternative to the INVLOCKID bugcheck that
+ * put the check here. It SHOULD fall to zero once a tree handed to this node
+ * also converts this node's own locks on it out of proxy state; until then the
+ * number is the size of that gap, and a diagnostic reads it.
+ */
+uint32_t vms_lock_dlm_proxy_self_mastered(void);
+
+/*
+ * QUEUES THIS NODE ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd) -- the three
+ * readings of `grant_advanced` above, since this executive started.
+ *
+ *   _reported()    a flip really handed to the wire arm;
+ *   _unreported()  a flip with NO arm bound. Not an error on a node that is
+ *                  not clustered; on one that is, it is the measured hang;
+ *   _overflow()    cross-node waiters beyond the snapshot's fixed bound on a
+ *                  single release. Those are still GRANTED in the lock
+ *                  database and still answered on the requester's next ask --
+ *                  the pre-existing behaviour -- and the number says how often
+ *                  that happened rather than leaving it invisible.
+ */
+uint32_t vms_lock_dlm_grant_flips_reported(void);
+uint32_t vms_lock_dlm_grant_flips_unreported(void);
+uint32_t vms_lock_dlm_grant_flips_overflow(void);
 
 /*
  * HOW MANY RESOURCES THIS EXECUTIVE COULD NOT ROUTE, and so mastered on THIS
@@ -579,7 +744,8 @@ uint32_t vms_lock_dlm_proxy_fail(uint32_t req_lkid, uint32_t status);
  * handle names a proxy on a different resource than `resnam` -- a mismatch that
  * would mean acting on an answer about some other lock.
  */
-uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid);
+uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t resnam_len,
+				     uint32_t req_lkid);
 
 /*
  * OUTCOME 2 (Davis p. 6-31): the directory node answered "the master is X".
@@ -607,7 +773,8 @@ uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t req_lkid);
  * proxy's resource). A `master_csid` of 0 is refused: "unmastered" is what 0
  * MEANS in this engine, so it is not an answer.
  */
-uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t req_lkid,
+uint32_t vms_lock_dlm_record_master(const char *resnam, uint32_t resnam_len,
+				    uint32_t req_lkid,
 				    uint32_t master_csid);
 
 /*

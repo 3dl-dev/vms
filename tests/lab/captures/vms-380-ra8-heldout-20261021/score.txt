@@ -1,0 +1,30 @@
+score_remaster: the COMMITTED codec against a real VAX's own answers
+    ok 02/0e -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=1): byte-exact over body[4:132]
+    ok 02/10 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0e -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=1): byte-exact over body[4:132]
+    ok 02/10 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0e -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=1): byte-exact over body[4:132]
+    ok 02/0f -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/10 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ROOT answer: body[30:32] = f1 01, value block PRESENT (16 non-zero bytes), sequence 1
+    ok 02/12 -> 82/01 (ROOT): byte-exact over body[4:132] outside the two unnamed cells
+    sub  answer: body[30:32] = 00 00, body[36:56] all zero (0 non-zero bytes)
+    ok 02/12 -> 82/01 (sub): byte-exact over body[4:132] outside the two unnamed cells
+    sub  answer: body[30:32] = 00 00, body[36:56] all zero (0 non-zero bytes)
+    ok 02/12 -> 82/01 (sub): byte-exact over body[4:132] outside the two unnamed cells
+    sub  answer: body[30:32] = 00 00, body[36:56] all zero (0 non-zero bytes)
+    ok 02/12 -> 82/01 (sub): byte-exact over body[4:132] outside the two unnamed cells
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+    ok 02/14 -> 82/15 (new_master=0): byte-exact over body[4:132]
+
+score_remaster: 20 pair(s): 20 byte-exact, 0 mismatched, 0 refused
+  the two cells rd vms-380 does not name (op-0x12 answer body[30:34]): 6 byte(s) agreed, 10 differed
+  real SUB answers' body[36:56]: 3 all-zero (what this codec writes), 0 carrying a busy master's residual buffer
+  PASS: every pair is byte-exact outside the unnamed cells

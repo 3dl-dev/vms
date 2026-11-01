@@ -300,6 +300,11 @@ static void test_ack_build(void)
 		 "  body[8] == category 0x04");
 	ct_check(built[VMS_OFB_CM_TXN] == 0 && built[VMS_OFB_CM_TXN + 1] == 0,
 		 "  body[4:6] == 0 (no payload)");
+	/* rd vms-ac4f: the conformance gate's copy. This is the single largest
+	 * class of frame an OVMX node puts on a real VAX's wire -- 256 of the
+	 * 298 frames no row described across every committed capture -- and
+	 * every byte of it past the envelope is zero on purpose. */
+	conf_dump("cm_ack", VMS_OFF_SYSAP_BODY, "-", built, VMS_CM_BODY_LEN);
 }
 
 /* ---- group 2: the allowlist -------------------------------------------- */

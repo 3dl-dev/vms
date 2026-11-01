@@ -1,0 +1,26 @@
+# capture-shape-ratchet.tsv -- the (category, opcode) shapes an OVMX node is
+# observed putting on a real wire that frame-grounding.tsv does not describe a
+# byte of YET (rd vms-ac4f).
+#
+# THE RATCHET, enforced by run_capture_gate.py over every committed capture:
+#   * a shape that appears uncovered and is NOT listed here reds the gate -- a
+#     new shape ships grounded or does not ship;
+#   * a row here for a shape the table now covers reds the gate too -- remove
+#     it. The list only ever shrinks, and the end state is empty.
+#
+# A row is NOT permission. It is a debt with a name on it: the frame is going
+# in front of a real VAX's executive with nobody having checked a byte.
+#
+# columns: category<TAB>opcode<TAB>frames seen<TAB>why not grounded yet
+#
+# History: 2026-10-14 the gate described 5 of 908 frames one demo run sent.
+# 2026-10-15: the directory answer and the rebuild echo were reachable but
+# unmapped (fixed), the lock request was grounded (rd vms-c55) and the ack was
+# grounded, taking the committed captures from 8 shapes / 298 frames to 7 / 42.
+01	01	11	cat-0x01 op-0x01, the joiner's cluster PARAMETERS record (VMS_CM_OP_PARAMS, VOTES/EXPECTED_VOTES). Emitted by the join FSM's originations; no row set written yet. Ground it beside op-0x14 (cm_model), which is the same family and already has rows.
+01	02	4	cat-0x01 op-0x02, the joiner's CONFIG/topology record (VMS_CM_OP_CONFIG), the third of the ordered three a joiner speaks first (spec sec 4(o)). Same family as the two above; no row set yet.
+01	0b	11	cat-0x01 op-0x0b, the joiner-initiated BARRIER step (VMS_CM_OP_BARRIER). Carries a step index this node holds in its own barrier state, so its rows need `state:` rules and an emitter that records them.
+81	03	3	cat-0x81 op-0x03, this node's ANSWER to the coordinator's membership COMMIT. The request half (cm_commit) has 12 rows; the answer half has none. Likely an echo, which would make it cheap -- but 'likely' is why it is on this list and not in the table.
+81	05	9	cat-0x81 op-0x05, this node's ANSWER to a MEMBERSHIP RECORD (VMS_CM_OP_MEMBREC, spec sec 5c). Same shape of gap as 0x81/0x03.
+81	09	3	cat-0x81 op-0x09, this node's ANSWER to a class-0x02 ADD transition open (VMS_CM_OP_XITION_ADD). Same shape of gap as 0x81/0x03.
+86	00	1	cat-0x86 op-0x00, this node's ANSWER to the cat-0x06 close/poll, which carries OVMX's HONEST OS-IDENTITY string ('VMX Vx.y'). Deliberately not a VMS identity, so its row must be a `deviation` with the identity ruling cited and a real VAX recorded accepting it -- write it with that evidence, not as a const.

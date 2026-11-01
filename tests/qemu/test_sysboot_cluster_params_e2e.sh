@@ -98,6 +98,26 @@ fi
 
 PASS=0
 FAIL=0
+# sysgen_count: the number of parameters a SYSGEN / SYSBOOT> session said it
+# LOADED, read out of its own transcript. THE COUNT IS NEVER A LITERAL HERE:
+# "31 parameters written" was the shipped set's size, not a property, so one
+# added parameter (OVMX_RM_RESIDUE_FILL, rd vms-6ad1) reddened four gates in a
+# change that altered nothing about SYSGEN. What this gate MEANS to assert is
+# that WRITE persists exactly the set that was LOADED. Returns 1 with no output
+# when the log carries no count, so the caller fails loudly.
+sysgen_count() {
+    local log="${1:?log}" n
+    # -a IS LOAD-BEARING (measured in merge-group run 39698326725): a QEMU
+    # console log carries NUL bytes, so GNU grep calls it BINARY and -o prints
+    # NOTHING even though the line is there. Every other reader in this file
+    # uses -q, where binary detection still exits 0 on a match, which is why
+    # only the reader that needs the TEXT was bitten -- it returned empty, and
+    # four checks compared against an empty string.
+    n=$(grep -aoE '%SYSGEN-I-(DEF)?LOADED, [0-9]+ ' "$log" 2>/dev/null \
+        | tail -1 | grep -aoE '[0-9]+' | tail -1)
+    [ -n "$n" ] || return 1
+    printf '%s\n' "$n"
+}
 record() {
     local desc="$1" rc="$2"
     if [ "$rc" -eq 0 ]; then echo "  PASS: $desc"; PASS=$((PASS + 1))
@@ -173,6 +193,16 @@ if [ "$rc" -eq 0 ]; then
     check "SYSBOOT>: SHOW SCSSYSTEMID renders its numeric Max (65535)" "$POS_LOG" '65535'
     check "SYSBOOT>: SHOW SCSSYSTEMID row is tagged numeric (Dec)" "$POS_LOG" '  Dec'
 
+    # HOW MANY PARAMETERS THIS SESSION IS WORKING ON, in the session's own
+    # words. The prompt's entry load is deliberately SILENT
+    # (sysboot_load_working_set runs before the prompt exists), so USE CURRENT
+    # -- which reloads the same seeded ;1 the prompt already read -- is what
+    # makes the count observable. The WRITE assertion below is derived from it
+    # instead of spelling out a literal.
+    send 'USE CURRENT'; sleep 1
+    if NPAR=$(sysgen_count "$POS_LOG"); then npc=0; else npc=1; fi
+    record "SYSBOOT>: USE CURRENT reported how many parameters the seed carries" "$npc"
+
     # Author the cluster identity: a string node name and a numeric system id.
     send 'SET SCSNODE CLUX'; sleep 1
     check "SYSBOOT>: SET SCSNODE (string) changed OVMX -> CLUX" "$POS_LOG" \
@@ -183,12 +213,11 @@ if [ "$rc" -eq 0 ]; then
         '%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1027'
 
     # Persist: a REAL new vmsfs version ;2 over the seed's ;1 (same primitive
-    # SYSGEN WRITE CURRENT uses). 31 params, matching the seeded set count
-    # (vms-c3b added RECNXINTERVAL to the authored cluster set).
+    # SYSGEN WRITE CURRENT uses), carrying exactly the set USE CURRENT loaded.
     send 'WRITE'; sleep 1
-    if waitfor '%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2' 20 "$POS_LOG"; then
+    if [ "$npc" -eq 0 ] && waitfor "%SYSGEN-I-WRITTEN, $NPAR parameters written to SYS\$SYSTEM:OVMXVMSSYS.PAR;2" 20 "$POS_LOG"; then
         rc=0; else rc=1; fi
-    record "SYSBOOT>: WRITE minted OVMXVMSSYS.PAR;2 (real vmsfs version)" "$rc"
+    record "SYSBOOT>: WRITE persisted all $NPAR loaded parameters, minting OVMXVMSSYS.PAR;2 (real vmsfs version)" "$rc"
 
     # Resume the boot with the authored params in effect.
     send 'CONTINUE'; sleep 1
@@ -201,13 +230,12 @@ if [ "$rc" -eq 0 ]; then
     # this must WAIT for the exact line (like the WRITE assertion above and the
     # sibling test_boot_scsnode_hostname_e2e.sh's line), never one-shot grep it
     # too early. The line must still name CLUX (assertion strength unchanged).
-    if waitfor '%OVMX-I-SCSNODE, node name CLUX set from SYS$SYSTEM:OVMXVMSSYS.PAR' 90 "$POS_LOG"; then
-        rc=0; else rc=1; fi
-    record "boot: %OVMX-I-SCSNODE console line names the authored CLUX" "$rc"
-
+    # rd vms-158d: the announce is an OPERATOR.LOG record now (no VMS boot
+    # console prints it); it is read back from the log after login, below.
     wake_login "$POS_LOG"
     if waitfor 'Username:' 120 "$POS_LOG"; then rc=0; else rc=1; fi
     record "boot: reaches the login prompt after CONTINUE" "$rc"
+    check "boot: the console carries no OVMX node-name line" "$POS_LOG" "%OVMX-I-SCSNODE" absent
 fi
 
 if [ "$rc" -eq 0 ]; then
@@ -221,6 +249,11 @@ if [ "$rc" -eq 0 ]; then
     send 'SHOW SYMBOL HOSTP'; sleep 1
     check "in-guest: F\$GETSYI(NODENAME) reads the authored CLUX (real hostname)" \
         "$POS_LOG" 'HOSTP = "CLUX"'
+    # rd vms-158d: PID 1's node-name record is an OPERATOR.LOG record (a real
+    # VMS boot console prints no such line) -- read it back the VMS way.
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 3
+    check "in-guest: OPERATOR.LOG records the node name CLUX set from the .PAR" \
+        "$POS_LOG" "%OVMX-I-SCSNODE, node name CLUX set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 
     # NUMERIC param in effect: dcl_lexical.c reads the OVMXVMSSYS.PAR store
     # fresh and sees the ;2 the SYSBOOT> WRITE minted. F$GETSYI returns an

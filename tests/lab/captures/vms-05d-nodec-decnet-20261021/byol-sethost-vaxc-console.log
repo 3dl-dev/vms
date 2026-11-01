@@ -1,0 +1,31 @@
+SET HOST OVMXA
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-13 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMX V0.7-13 - OpenVMS-compatible
+    Last interactive login on 21-OCT-2026 16:22:35.00
+$ WRITE SYS$OUTPUT "WHO=",F$GETSYI("NODENAME")
+WHO=OVMX
+$ SHOW TERMINAL
+Terminal: _RTA0:      Device_Type: LA36          Owner: SYSTEM
+Remote Port Info: VAXC::SYSTEM
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          No Tab
+   Wrap               Hardcopy           No Remote          No Eightbit
+   Broadcast          No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        Line Editing                          No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     No ANSI_CRT        No Regis           No Block_mode
+   No Advanced_video  No Edit_mode       No DEC_CRT         No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input
+$ LOGOUT
+  SYSTEM       logged out 
+%REM-S-END, control returned to node VAXC::
+$ 

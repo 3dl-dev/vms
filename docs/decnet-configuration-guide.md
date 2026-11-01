@@ -178,15 +178,18 @@ table yet, so an object you `DEFINE` appears under `LIST`, not under `SHOW`.
 
 ### The remote-node database
 
-`SET`/`DEFINE NODE` add or update an entry; `LIST KNOWN NODES` / `LIST NODE`
-read it back (`SHOW KNOWN NODES` / `SHOW NODE` show NETACP's view of it,
-merged with its adjacencies and the links it holds); `CLEAR`/`PURGE NODE`
-remove one. This database is what
-`SET HOST <node>` and a `NODE::` filespec resolve a name or address through
-(`decnet$node-database`, implemented).
+As on VMS there are two copies. `DEFINE NODE` adds or updates an entry in the
+PERMANENT database (`SYS$SYSTEM:NETNODE_REMOTE.DAT`), and `PURGE NODE` removes
+one; `LIST KNOWN NODES` / `LIST NODE` read it. NETACP loads its VOLATILE copy
+from it when the network starts, and the running network works only from that
+copy: `SET HOST <node>` and a `NODE::` filespec resolve through it, and
+`SHOW KNOWN NODES` / `SHOW NODE` show it, merged with NETACP's adjacencies and
+the links it holds. `SET NODE` / `CLEAR NODE` change the volatile copy of the
+running NETACP (OPER required) and are lost when it restarts; with the network
+not running they fail, as `SHOW` does (`decnet$node-database`, implemented).
 
 ```
-$ NCP SET NODE 1.2 NAME VAX2
+$ NCP DEFINE NODE 1.2 NAME VAX2
 $ NCP LIST KNOWN NODES
 
 Known Node Permanent Summary
@@ -238,8 +241,12 @@ LPBETA phase) finds `SYS$SYSTEM:NETNODE_LOCAL.DAT` and starts NETACP
 (`SYS$SYSTEM:DECNETD.EXE`) detached. NETACP self-sources its address from that
 file, opens its datalink through the executive on the primary NIC, and sends
 endnode hellos. It needs `PHY_IO`, which it inherits from its creator (SYSTEM);
-without it the executive refuses the datalink with `SS$_NOPRIV`, logged to
-`SYS$MANAGER:NETACP.LOG`. On an unconfigured node STARTNET is a silent no-op.
+without it the executive refuses the datalink with `SS$_NOPRIV` and NETACP exits
+(`SHOW SYSTEM` then lists no NETACP). NETACP runs with no terminal: its own
+status lines go to `SYS$MANAGER:NETACP.LOG`, its `/OUTPUT` and `/ERROR` file, a
+new version each time NETACP starts, never to the console. Read it with
+`$ TYPE SYS$MANAGER:NETACP.LOG`. Its first line names the datalink it opened
+(`DECNETD-I-DATALINK`). On an unconfigured node STARTNET is a silent no-op.
 
 ## 3. Remote interactive login — SET HOST
 

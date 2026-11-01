@@ -96,9 +96,6 @@ extern "C" {
  * created in user mode is only visible at user mode.
  * ================================================================ */
 
-#define LNM$C_KERNEL        0   /* Kernel mode */
-#define LNM$C_EXEC          1   /* Executive mode */
-#define LNM$C_SUPERVISOR    2   /* Supervisor mode */
 #define LNM$C_USER          3   /* User mode */
 
 /* PSL access mode aliases (commonly used in VMS code) */

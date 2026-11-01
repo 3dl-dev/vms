@@ -1,0 +1,7 @@
+        .TITLE  PXS256  OVMX exit-status probe: DECC$__POSIX_EXIT(256)
+        .PSECT  CCODE,EXE,NOWRT,QUAD
+        .ENTRY  PXS256,^M<>
+        PUSHL   #256
+        CALLS   #1,G^DECC$__POSIX_EXIT
+        RET
+        .END    PXS256

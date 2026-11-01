@@ -1,0 +1,414 @@
+{
+ "label": "page-order-throttled4",
+ "order": "A,B,C",
+ "gap": 5000,
+ "throttle": 4,
+ "url": "http://localhost:8123/demo/cluster/",
+ "samples": [
+  {
+   "t": 16,
+   "sca": {},
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 387
+  },
+  {
+   "t": 31,
+   "sca": {},
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 46,
+   "sca": {
+    "VAXC": 2
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 61,
+   "sca": {
+    "VAXC": 15
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 76,
+   "sca": {
+    "VAXC": 67,
+    "OVMXA": 56
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 91,
+   "sca": {
+    "VAXC": 366,
+    "OVMXA": 478,
+    "OVMXB": 91
+   },
+   "member": {
+    "OVMXA": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c5"
+    ],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXA"
+   ],
+   "lost": {
+    "OVMXA": [
+     "0:1989"
+    ],
+    "OVMXB": [
+     "0:1989"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 106,
+   "sca": {
+    "VAXC": 366,
+    "OVMXA": 521,
+    "OVMXB": 142
+   },
+   "member": {
+    "OVMXA": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c5"
+    ],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXA"
+   ],
+   "lost": {
+    "OVMXA": [
+     "0:1989"
+    ],
+    "OVMXB": [
+     "0:1989"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 121,
+   "sca": {
+    "VAXC": 366,
+    "OVMXA": 550,
+    "OVMXB": 179
+   },
+   "member": {
+    "OVMXA": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c5"
+    ],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXA"
+   ],
+   "lost": {
+    "OVMXA": [
+     "0:1989"
+    ],
+    "OVMXB": [
+     "0:1989"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 136,
+   "sca": {
+    "VAXC": 366,
+    "OVMXA": 582,
+    "OVMXB": 219
+   },
+   "member": {
+    "OVMXA": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c5"
+    ],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXA"
+   ],
+   "lost": {
+    "OVMXA": [
+     "0:1989"
+    ],
+    "OVMXB": [
+     "0:1989"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 151,
+   "sca": {
+    "VAXC": 366,
+    "OVMXA": 614,
+    "OVMXB": 262
+   },
+   "member": {
+    "OVMXA": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c5"
+    ],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXA"
+   ],
+   "lost": {
+    "OVMXA": [
+     "0:1989"
+    ],
+    "OVMXB": [
+     "0:1989"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  },
+  {
+   "t": 167,
+   "sca": {
+    "VAXC": 366,
+    "OVMXA": 646,
+    "OVMXB": 305
+   },
+   "member": {
+    "OVMXA": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c5"
+    ],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXA"
+   ],
+   "lost": {
+    "OVMXA": [
+     "0:1989"
+    ],
+    "OVMXB": [
+     "0:1989"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 1042
+  }
+ ],
+ "verdict": "BUGCHECK: {\"VAXC\":\"*** Fatal BUG CHECK\"}",
+ "restarts": {
+  "OVMXA": 0,
+  "OVMXB": 0,
+  "VAXC": 0
+ },
+ "member": {
+  "OVMXA": true
+ },
+ "added": {
+  "OVMXA": [
+   "0x7c3",
+   "0x7c5"
+  ],
+  "OVMXB": [],
+  "VAXC": []
+ },
+ "lost": {
+  "OVMXA": [
+   "0:1989"
+  ],
+  "OVMXB": [
+   "0:1989"
+  ]
+ },
+ "vaxc_admitted": [
+  "OVMXA"
+ ],
+ "ovmx_founded": {},
+ "bugchecks": {
+  "VAXC": "*** Fatal BUG CHECK"
+ },
+ "sca": {
+  "VAXC": 366,
+  "OVMXA": 646,
+  "OVMXB": 305
+ },
+ "cn3": false,
+ "lost_unnamed": {
+  "OVMXA": 1,
+  "OVMXB": 2
+ },
+ "repaint_stalls": {},
+ "panel_started": {
+  "OVMXB": true,
+  "VAXC": true
+ },
+ "panel_watchdog_fired": {
+  "OVMXB": false,
+  "VAXC": false
+ },
+ "substrate_noise": {},
+ "nodeA_worker": {
+  "workerSpawned": true,
+  "pipeReady": true,
+  "firstOut": true,
+  "nicTxCount": 656,
+  "nicRxCount": 676,
+  "nicRxDeliverOk": 676,
+  "workerTicks": 166,
+  "acpOk": true
+ },
+ "username_at": {},
+ "login_sent": {},
+ "login_failed": {},
+ "dcl_at": {},
+ "ovmx_versions": {
+  "OVMXA": [
+   "V0.7-10"
+  ],
+  "OVMXB": [
+   "V0.7-7"
+  ]
+ },
+ "want_version": "V0.7-10",
+ "login_bound_s": 2400,
+ "after_waited": {},
+ "_tkLast": 166,
+ "_tkAt": 1792101483197,
+ "worstDriftMs": 1042,
+ "vis": "visible"
+}

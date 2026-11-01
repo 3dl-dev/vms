@@ -253,7 +253,7 @@ CAP_EVIDENCE="$(cat "$HOST_CAP_EVID" 2>/dev/null)"
 
 echo ""
 echo "=========================================="
-echo "  identity on the wire: $(strings -a "$HOST_PCAP" 2>/dev/null | grep -oE 'OVMX[A-Z0-9]{2,}' | sort -u | tr '\n' ' ')"
+echo "  identity on the wire: $(strings -a "$HOST_PCAP" 2>/dev/null | grep -a -oE 'OVMX[A-Z0-9]{2,}' | sort -u | tr '\n' ' ')"
 echo "  artifacts: node=$HOST_NODE_LOG  pcap=$HOST_PCAP  caps=$HOST_CAP_EVID  vax1=$HOSTL/vax1.log"
 lj_booted_gate_verdict "$SCSNODE" "$OVMX_SC" "$VAX_SC" "$CN_FINAL" "$HOST_PCAP" "$CAP_EVIDENCE"
 V=$?

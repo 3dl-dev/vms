@@ -42,9 +42,20 @@ DF="$REPO/tests/netbsd/Dockerfile"
 MK="$KMOD/Makefile"
 
 # resolve a basename to its repo-relative path in one of the two module dirs
+# src/kernel headers the NetBSD module reaches through its `-idirafter
+# ../kernel' (src/kernel-netbsd/Makefile, rd vms-9394). Deliberately an explicit
+# list, NOT a whole-directory fallback: src/kernel is the Linux tree, and only
+# these substrate-neutral ABI headers are ever meant to be found there.
+KDIR="$REPO/src/kernel"
+KDIR_AFTER="vms_l2.h vms_l2_station.h"
+
 resolve() {
     if   [ -f "$KMOD/$1" ]; then echo "src/kernel-netbsd/$1"
     elif [ -f "$CORE/$1" ]; then echo "src/kernel-core/$1"
+    else
+        for k in $KDIR_AFTER; do
+            if [ "$1" = "$k" ] && [ -f "$KDIR/$1" ]; then echo "src/kernel/$1"; fi
+        done
     fi
 }
 

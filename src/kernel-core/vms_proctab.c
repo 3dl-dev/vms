@@ -171,6 +171,11 @@ static void proc_fill_info(const struct vms_proc *proc,
                             ? VMS_PROC_T_INTERACTIVE : VMS_PROC_T_OTHER;
     }
 
+    /* JPI$_PARSE_STYLE_PERM / _IMAGE (rd vms-0b0): the PCB's file-name parse
+     * styles, set by $SET_PROCESS_PROPERTIESW; below the redaction return with
+     * the rest of what a caller may only read of a process it may $GETJPI. */
+    info->parse_style  = (uint8_t)((proc->parse_style_perm  == VMS_PARSE_STYLE_EXTENDED ? VMS_PROCINFO_PS_PERM_EXTENDED  : 0u) |
+                                   (proc->parse_style_image == VMS_PARSE_STYLE_EXTENDED ? VMS_PROCINFO_PS_IMAGE_EXTENDED : 0u));
     info->linux_pid    = (uint32_t)proc->linux_pid;
     info->uic          = proc->uic;
     info->current_mode = proc->current_mode;
@@ -1469,6 +1474,16 @@ out:
     return 0;
 }
 
+/* C-facility C$_EXIT range: (cond & ~control & ~severity) = 0x0035A000 + (n << 3),
+ * n = 1..255 (see vms_ioctl_setexit). */
+static uint32_t vms_cond_posix_exit_code(uint32_t cond)
+{
+    uint32_t m = cond & 0x0FFFFFF8u;
+    if (m >= 0x0035A008u && m <= 0x0035A7F8u)
+        return (m - 0x0035A000u) >> 3;
+    return (cond & VMS_STS_M_SUCCESS) ? 0u : 1u;
+}
+
 /*
  * vms_ioctl_setexit - record `condition` as the caller's image completion
  * $STATUS and report the derived success/severity + POSIX exit code.
@@ -1521,11 +1536,16 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg)
 
     args.success  = (uint8_t)(args.condition & VMS_STS_M_SUCCESS);
     args.severity = (uint8_t)(args.condition & VMS_STS_M_SEVERITY);
-    /* OVMX design choice (CLAUDE.md Rule 8): POSIX has one 8-bit exit code
-     * and no VMS counterpart, so the mapping is ours -- 0 when the VMS
-     * success bit is set, else nonzero. The full condition value remains
-     * the authoritative status; this is the lossy Linux-side echo. */
-    args.exit_code = (args.condition & VMS_STS_M_SUCCESS) ? 0u : 1u;
+    /* The Linux-side echo of the status (the full condition value remains
+     * the authoritative $STATUS): what a DEC C parent's wait()/waitpid()
+     * reports as WEXITSTATUS, since that wait is the substrate's. A C RTL
+     * exit status -- the C-facility condition DEC C __posix_exit(n) and the
+     * GCC start-up's return-from-main build, %X0035A001 + (n << 3), with n = 1
+     * an inhibited error %X1035A00A (oracle: vms-599,
+     * tests/lab/captures/decc-exit-alpha-20261021) -- gives back n, which is
+     * what GCC's driver reads from cc1/as/ld on a VMS host (vms-5b3). Any
+     * other condition: 0 when the success bit is set, else 1. */
+    args.exit_code = vms_cond_posix_exit_code(args.condition);
     args.status = SS__NORMAL;
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -1718,6 +1738,49 @@ long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg)
     if (args.set) {
         memset(proc->ddir, 0, sizeof(proc->ddir));
         memcpy(proc->ddir, args.newdir, strnlen(args.newdir, sizeof(proc->ddir) - 1));
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_pprop - $SET_PROCESS_PROPERTIESW (rd vms-b9c): the caller's OWN
+ * file-name parse style. Self-targeted; the executive owns the value, so every
+ * image the process runs (RMS reading it on each $PARSE) sees the style DCL
+ * set. PARSE_STYLE_PERM stores the permanent style and the current image's;
+ * PARSE_STYLE_TEMP the current image's only. oldvalue is the property's value
+ * before the call. Any other property or value: SS$_BADPARAM, nothing stored.
+ */
+long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_pprop_args args;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if ((args.property != VMS_PPROP_PARSE_STYLE_PERM &&
+         args.property != VMS_PPROP_PARSE_STYLE_TEMP) ||
+        (args.set && args.value != VMS_PARSE_STYLE_TRADITIONAL &&
+         args.value != VMS_PARSE_STYLE_EXTENDED)) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    exec_lock(&vms_proc_hash_lock);
+    if (args.property == VMS_PPROP_PARSE_STYLE_PERM) {
+        args.oldvalue = proc->parse_style_perm;
+        if (args.set) {
+            proc->parse_style_perm  = (uint8_t)args.value;
+            proc->parse_style_image = (uint8_t)args.value;
+        }
+    } else {
+        args.oldvalue = proc->parse_style_image;
+        if (args.set)
+            proc->parse_style_image = (uint8_t)args.value;
     }
     exec_unlock(&vms_proc_hash_lock);
     args.status = SS__NORMAL;

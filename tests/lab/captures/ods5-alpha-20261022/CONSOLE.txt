@@ -1,0 +1,1386 @@
+This is serial port #0 on AXPbox Alpha Emulator
+
+
+OpenVMS PALcode V1.98-104, Tru64 UNIX PALcode V1.92-105
+
+starting console on CPU 0
+initialized idle PCB
+initializing semaphores
+initializing heap
+initial heap 240c0
+memory low limit = 1b0000 heap = 240c0, 17fc0
+initializing driver structures
+initializing idle process PID
+initializing file system
+initializing hardware
+initializing timer data structures
+lowering IPL
+CPU 0 speed is 800 MHz
+create dead_eater
+create poll
+create timer
+create powerup
+access NVRAM
+Memory size 256 MB
+testing memory
+..
+probe I/O subsystem
+probing hose 1, PCI
+probing hose 0, PCI
+probing PCI-to-ISA bridge, bus 1
+bus 0, slot 15 -- dqa -- Acer Labs M1543C IDE
+bus 0, slot 15 -- dqb -- Acer Labs M1543C IDE
+starting drivers
+entering idle loop
+*** system serial number not set. use set sys_serial_num command.
+Partition 0, Memory base: 000000000, size: 010000000
+initializing GCT/FRU at 1c8000
+Initializing dqa dqb 
+Memory Testing and Configuration Status
+  Array       Size       Base Address    Intlv Mode
+---------  ----------  ----------------  ----------
+    0        256Mb     0000000000000000    4-Way
+
+     256 MB of System Memory
+Testing the System
+AlphaServer ES40 Console V7.3-1, built on Feb 27 2007 at 12:57:47
+P00>>>boot dqa0
+(boot dqa0.0.0.15.0 -flags 0)
+block 0 of dqa0.0.0.15.0 is a valid boot block
+reading 1230 blocks from dqa0.0.0.15.0
+bootstrap code read in
+base = 200000, image_start = 0, image_bytes = 99c00(629760)
+initializing HWRPB at 2000
+initializing page table at ff56000
+initializing machine state
+setting affinity to the primary CPU
+jumping to bootstrap code
+
+
+    OpenVMS (TM) Alpha Operating System, Version V8.4    
+    © Copyright 1976-2010 Hewlett-Packard Development Company, L.P.
+
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 22-OCT-2026 02:59:33.22
+%RUN-S-PROC_ID, identification of created process is 00000104
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:50.32  %%%%%%%%%%%
+Operator _ALPHA1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:50.33  %%%%%%%%%%%
+Operator status for operator _ALPHA1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:50.34  %%%%%%%%%%%
+Logfile has been initialized by operator _ALPHA1$OPA0:
+Logfile is ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:50.34  %%%%%%%%%%%
+Operator status for operator ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 0000010A
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:50.53  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:50.53  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%RUN-S-PROC_ID, identification of created process is 0000010D
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:52.56  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:52.57  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:52.57  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:52.57  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:52.58  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting u
+p
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:53.64  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%ACME-I-SERVERSTART, ACME_SERVER starting
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 02:59:59.83  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+TDF-I-SETTDF TDF set new timezone differential
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:00:00.23  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$ALPHA1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:00:00.56  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:00:00.76  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Audit server starting up
+Event time:               22-OCT-2026 03:00:00.73
+PID:                      00000103        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS system is now executing the site-specific startup commands.
+
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%RUN-S-PROC_ID, identification of created process is 00000117
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:00:01.60  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SMHANDLER-S-STARTUP, server management event handler startup
+
+  SYSTEM       job terminated at 22-OCT-2026 03:00:01.76
+
+  Accounting information:
+  Buffered I/O count:               3601      Peak working set size:       7760
+  Direct I/O count:                 1504      Peak virtual size:         186192
+  Page faults:                      4072      Mounted volumes:                0
+  Charged CPU time:        0 00:00:06.54      Elapsed time:       0 00:00:28.62
+
+ Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4    
+
+Username: STEM
+Password: 
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:03:38.13  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Local interactive login failure
+Event time:               22-OCT-2026 03:03:38.13
+PID:                      00000118        
+Process name:             _OPA0:          
+Username:                 <login>         
+Terminal name:            OPA0:, _OPA0:
+Status:                   %LOGIN-F-NOSUCHUSER, no such user
+
+User authorization failure
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+   Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4
+    Last interactive login on Wednesday,  5-AUG-2026 20:13:03.66
+
+Your password has expired; you must set a new password to log in
+
+
+New password: 
+Verification: 
+New password verification error; please try again
+Verification: 
+New password verification error; please try again
+Verification: 
+Password length must be between 8 and 32 characters; password not changed
+Please try again or press <CTRL/Y> to abort login
+
+
+New password: 
+Verification: 
+New password verification error; please try again
+Verification: 
+Password length must be between 8 and 32 characters; password not changed
+Please try again or press <CTRL/Y> to abort login
+
+
+New password: 
+Verification: 
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:04:35.46  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          System UAF record modification
+Event time:               22-OCT-2026 03:04:35.46
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Object class name:        FILE
+Object name:              SYS$COMMON:[SYSEXE]SYSUAF.DAT;1
+User record:              SYSTEM                          
+Password Date:            New:      22-OCT-2026 03:04
+                          Original:  5-AUG-2026 19:03
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT F$GETSYI("ARCH_NAME")+" / "+F$GETSYI("VERSION")
+Alpha / V8.4    
+$ @SYS$STARTUP:LD$STARTUP
+$ LD CREATE SYS$SYSDEVICE:[000000]ODS5T.DSK/SIZE=2000/CONTIGUOUS
+$ LD CONNECT SYS$SYSDEVICE:[000000]ODS5T.DSK LDA1:
+$ INITIALIZE/STRUCTURE=5 LDA1: ODS5T
+$ MOUNT/SYSTEM LDA1: ODS5T
+%MOUNT-I-MOUNTED, ODS5T mounted on _ALPHA1$LDA1:
+$ SET PROCESS/PARSE_STYLE=EXTENDED
+$ CREATE/DIRECTORY LDA1:[TEST]
+$ SET DEFAULT LDA1:[TEST]
+$ OPEN/WRITE F "c++config.h"
+%DCL-E-OPENOUT, error opening LDA1:"C++CONFIG.H".; as output
+-RMS-F-FNM, error in file name
+$ WRITE F "#define CXXCONFIG 1"
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+$ CLOSE F
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+$ OPEN/WRITE F "libstdc++.a"
+%DCL-E-OPENOUT, error opening LDA1:"LIBSTDC++.A".; as output
+-RMS-F-FNM, error in file name
+$ OPEN/WRITE F c++config.h
+%DCL-W-NOCCAT, parameter concatenation not allowed - check use of plus (+)
+ \c+\
+$ WRITE F "#define CXXCONFIG 1"
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+$ CLOSE F
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+$ DIRECTORY/FILE_ID
+%DIRECT-W-NOFILES, no files found
+$ SHOW PROCESS
+
+22-OCT-2026 03:05:31.56   User: SYSTEM           Process ID:   00000118
+                          Node: ALPHA1           Process name: "SYSTEM"
+
+Terminal:           OPA0:
+User Identifier:    [SYSTEM]
+Base priority:      4
+Default file spec:  LDA1:[TEST]
+Number of Kthreads: 1 (System-wide limit: 1)
+
+Devices allocated:  ALPHA1$OPA0:
+ 
+Soft CPU Affinity: off
+$ OPEN/WRITE F c^+^+config.h
+$ WRITE F "#define CXXCONFIG 1"
+$ CLOSE F
+$ DIRECTORY/FILE_ID
+
+Directory LDA1:[TEST]
+
+c^+^+config.h;1      (12,1,0)              
+
+Total of 1 file.
+$ WRITE F "#define CXXCONFIG 1"
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+$ CLOSE F
+%DCL-W-UNDFIL, file has not been opened by DCL - check logical name
+$ COPY NL: libstdc^+^+.a
+$ COPY NL: MixedCase.Txt
+$ COPY NL: a.b.c.d
+$ COPY NL: caf^E9.txt
+$ COPY NL: ^U4E2D.txt
+$ COPY NL: this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header
+$ COPY NL: PLAIN.TXT
+$ COPY NL: a^_b.txt
+$ COPY NL: README
+$ DIRECTORY/FILE_ID
+
+Directory LDA1:[TEST]
+
+a^_b.txt;1           (20,1,0)              
+a^.b^.c.d;1          (15,1,0)              
+c^+^+config.h;1      (12,1,0)              
+café.txt;1           (16,1,0)              
+libstdc^+^+.a;1      (13,1,0)              
+MixedCase.Txt;1      (14,1,0)              
+PLAIN.TXT;1          (19,1,0)              
+README.;1            (21,1,0)              
+this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header;1
+                     (18,1,0)              
+^U4E2D.txt;1         (17,1,0)              
+
+Total of 10 files.
+$ DIRECTORY/FULL c^+^+config.h
+
+Directory LDA1:[TEST]
+
+c^+^+config.h;1               File ID:  (12,1,0)              
+Size:            1/1          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:32.73
+Revised:    22-OCT-2026 03:05:34.96 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:32.73
+Attributes: 22-OCT-2026 03:05:34.96
+Modified:   22-OCT-2026 03:05:32.73
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 1, Extend: 0, Global buffer count: 0, No version limit
+Record format:      VFC, 2 byte header, maximum 0 bytes, longest 19 bytes
+Record attributes:  Print file carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 1 file, 1/1 block.
+$ DUMP/HEADER/BLOCKS=COUNT=0 c^+^+config.h
+
+Dump of file LDA1:[TEST]c^+^+config.h;1 on 22-OCT-2026 03:05:56.17
+File ID (12,1,0)   End of file block 1 / Allocated 1
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           255
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          5, 1
+    File identification:                  (12,1,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable with fixed control
+        File organization:                Sequential
+        Record attributes:                Print carriage control
+        Record size:                      19
+        Highest block:                    1
+        End of file block:                1
+        End of file byte:                 24
+        Bucket size:                      0
+        Fixed control area size:          2
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                2
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (11,1,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    File entry linkcount:                 0
+    Highest block written:                1
+    Client attributes:                    None
+
+Identification area
+    File name type:                       ISL-1
+    File name length:                     13
+    File name:                            c++config.h;1
+    Revision number:                      1
+    Creation date:                        22-OCT-2026 03:05:32.73
+    Revision date:                        22-OCT-2026 03:05:32.73
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+    Last access date:                     22-OCT-2026 03:05:32.73
+    Last attribute change date:           22-OCT-2026 03:05:34.96
+    Extended RMS record attributes:       <none specified>
+    File length hints
+        Record count:                     1
+        Data byte count:                  19
+
+Map area
+    Retrieval pointers
+        Count:          1        LBN:         32
+
+Dump of file LDA1:[TEST]c^+^+config.h;1 on 22-OCT-2026 03:05:56.17
+File ID (12,1,0)   End of file block 1 / Allocated 1
+
+
+Checksum:                                 23939
+$ DUMP/HEADER/BLOCKS=COUNT=0 this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header
+
+Dump of file LDA1:[TEST]this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header;1 on 22-OCT-2026 03:05:57.83
+File ID (18,1,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      115
+    Access control area offset:           255
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          5, 1
+    File identification:                  (18,1,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      0
+        Highest block:                    0
+        End of file block:                1
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                0
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (11,1,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    File entry linkcount:                 0
+    Highest block written:                0
+    Client attributes:                    None
+
+Identification area
+    File name type:                       ISL-1
+    File name length:                     73
+    File name:                            this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header;1
+    Revision number:                      1
+    Creation date:                        22-OCT-2026 03:05:48.57
+    Revision date:                        22-OCT-2026 03:05:48.57
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+    Last access date:                     22-OCT-2026 03:05:48.57
+    Last attribute change date:           22-OCT-2026 03:05:48.57
+    Extended RMS record attributes:       <none specified>
+    File length hints
+        Record count:                     <none specified>
+        Data byte count:                  <none specified>
+
+Map area
+    Retrieval pointers
+
+
+Dump of file LDA1:[TEST]this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header;1 on 22-OCT-2026 03:05:57.83
+File ID (18,1,0)   End of file block 0 / Allocated 0
+
+Checksum:                                 34308
+$ DUMP/HEADER/BLOCKS=COUNT=0 ^U4E2D.txt
+
+Dump of file LDA1:[TEST]^U4E2D.txt;1 on 22-OCT-2026 03:05:58.63
+File ID (17,1,0)   End of file block 0 / Allocated 0
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           255
+    Reserved area offset:                 255
+    Extension segment number:             0
+    Structure level and version:          5, 1
+    File identification:                  (17,1,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Variable
+        File organization:                Sequential
+        Record attributes:                Implied carriage control
+        Record size:                      0
+        Highest block:                    0
+        End of file block:                1
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              0
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 <none specified>
+    Caching attribute:                    Writethrough
+    Map area words in use:                0
+    Access mode:                          0
+    File owner UIC:                       [SYSTEM]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (11,1,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    File entry linkcount:                 0
+    Highest block written:                0
+    Client attributes:                    None
+
+Identification area
+    File name type:                       UCS-2
+    File name length:                     14
+    File name:                            N-...t.x.t.;.1
+    Revision number:                      1
+    Creation date:                        22-OCT-2026 03:05:47.09
+    Revision date:                        22-OCT-2026 03:05:47.09
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+    Last access date:                     22-OCT-2026 03:05:47.09
+    Last attribute change date:           22-OCT-2026 03:05:47.10
+    Extended RMS record attributes:       <none specified>
+    File length hints
+        Record count:                     <none specified>
+        Data byte count:                  <none specified>
+
+Map area
+    Retrieval pointers
+
+
+Dump of file LDA1:[TEST]^U4E2D.txt;1 on 22-OCT-2026 03:05:58.63
+File ID (17,1,0)   End of file block 0 / Allocated 0
+
+Checksum:                                 52103
+$ DUMP/DIRECTORY LDA1:[000000]TEST.DIR
+
+Dump of file LDA1:[000000]TEST.DIR;1 on 22-OCT-2026 03:05:59.95
+File ID (11,1,0)   End of file block 1 / Allocated 1
+
+Virtual block number 1 (00000001), 512 (0200) bytes
+
+0000  Directory Entry:
+0000    Size:             20
+0002    Version limit:    32767
+0004    Type:             0  (FID)
+0004    Name type:        1  (ISL-1)
+0005    Name count:       7
+0006    Name:             a b.txt
+000E    Version:     1    FID:  (20,1,0)
+
+0016  Directory Entry:
+0016    Size:             20
+0018    Version limit:    32767
+001A    Type:             0  (FID)
+001A    Name type:        1  (ISL-1)
+001B    Name count:       7
+001C    Name:             a.b.c.d
+0024    Version:     1    FID:  (15,1,0)
+
+002C  Directory Entry:
+002C    Size:             24
+002E    Version limit:    32767
+0030    Type:             0  (FID)
+0030    Name type:        1  (ISL-1)
+0031    Name count:       11
+0032    Name:             c++config.h
+003E    Version:     1    FID:  (12,1,0)
+
+0046  Directory Entry:
+0046    Size:             20
+0048    Version limit:    32767
+004A    Type:             0  (FID)
+004A    Name type:        1  (ISL-1)
+004B    Name count:       8
+004C    Name:             café.txt
+0054    Version:     1    FID:  (16,1,0)
+
+005C  Directory Entry:
+005C    Size:             24
+005E    Version limit:    32767
+0060    Type:             0  (FID)
+0060    Name type:        1  (ISL-1)
+0061    Name count:       11
+0062    Name:             libstdc++.a
+006E    Version:     1    FID:  (13,1,0)
+
+0076  Directory Entry:
+0076    Size:             26
+0078    Version limit:    32767
+007A    Type:             0  (FID)
+007A    Name type:        0  (ODS-2)
+007B    Name count:       13
+007C    Name:             MixedCase.Txt
+008A    Version:     1    FID:  (14,1,0)
+
+0092  Directory Entry:
+
+Dump of file LDA1:[000000]TEST.DIR;1 on 22-OCT-2026 03:05:59.95
+File ID (11,1,0)   End of file block 1 / Allocated 1
+
+0092    Size:             22
+0094    Version limit:    32767
+0096    Type:             0  (FID)
+0096    Name type:        0  (ODS-2)
+0097    Name count:       9
+0098    Name:             PLAIN.TXT
+00A2    Version:     1    FID:  (19,1,0)
+
+00AA  Directory Entry:
+00AA    Size:             20
+00AC    Version limit:    32767
+00AE    Type:             0  (FID)
+00AE    Name type:        0  (ODS-2)
+00AF    Name count:       7
+00B0    Name:             README.
+00B8    Version:     1    FID:  (21,1,0)
+
+00C0  Directory Entry:
+00C0    Size:             84
+00C2    Version limit:    32767
+00C4    Type:             0  (FID)
+00C4    Name type:        1  (ISL-1)
+00C5    Name count:       71
+00C6    Name:             this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header
+010E    Version:     1    FID:  (18,1,0)
+
+0116  Directory Entry:
+0116    Size:             22
+0118    Version limit:    32767
+011A    Type:             0  (FID)
+011A    Name type:        3  (UCS-2)
+011B    Name count:       10
+                          N-...t.x.t
+0126    Version:     1    FID:  (17,1,0)
+
+012E  End of records (-1)
+$ TYPE C^+^+CONFIG.H
+#define CXXCONFIG 1
+$ DIRECTORY MIXEDCASE.TXT
+
+Directory LDA1:[TEST]
+
+MixedCase.Txt;1     
+
+Total of 1 file.
+$ SET PROCESS/PARSE_STYLE=TRADITIONAL
+$ DIRECTORY
+
+Directory LDA1:[TEST]
+
+a^_b.txt;1          a^.b^.c.d;1         c^+^+config.h;1     café.txt;1         
+libstdc^+^+.a;1     MixedCase.Txt;1     PLAIN.TXT;1         README.;1          
+this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header;1
+^U4E2D.txt;1        
+
+Total of 10 files.
+$ TYPE c^+^+config.h
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \^\
+$ DIRECTORY/FULL [000000]
+
+Directory LDA1:[000000]
+
+000000.DIR;1                  File ID:  (4,4,0)               
+Size:            1/2          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 2, Extend: 0, Global buffer count: 0, No default version limit, Contiguous, Directory file
+Record format:      Variable length, maximum 512 bytes, longest 512 bytes
+Record attributes:  No carriage control, Non-spanned
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:E
+Access Cntrl List:  None
+Client attributes:  None
+
+BACKUP.SYS;1                  File ID:  (8,8,0)               
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, Version limit: 1
+Record format:      Fixed length 64 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+BADBLK.SYS;1                  File ID:  (3,3,0)               
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, Version limit: 1
+Record format:      Fixed length 512 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+BADLOG.SYS;1                  File ID:  (9,9,0)               
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, Version limit: 1
+Record format:      Fixed length 16 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+BITMAP.SYS;1                  File ID:  (2,2,0)               
+Size:            2/2          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 2, Extend: 0, Global buffer count: 0, Version limit: 1, Contiguous
+Record format:      Fixed length 512 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+CONTIN.SYS;1                  File ID:  (7,7,0)               
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, Version limit: 1
+Record format:      Fixed length 512 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+CORIMG.SYS;1                  File ID:  (5,5,0)               
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, Version limit: 1
+Record format:      Fixed length 512 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+INDEXF.SYS;1                  File ID:  (1,1,0)               
+Size:           93/93         Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 93, Extend: 0, Global buffer count: 0, Version limit: 1, Contiguous best try
+Record format:      Fixed length 512 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+SECURITY.SYS;1                File ID:  (10,10,0)             
+Size:            1/6          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:13.26 (2)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:13.26
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  No_caching
+File attributes:    Allocation: 6, Extend: 0, Global buffer count: 0, Version limit: 1, Contiguous
+Record format:      Fixed length 512 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+TEST.DIR;1                    File ID:  (11,1,0)              
+Size:            1/1          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:15.70
+Revised:    22-OCT-2026 03:05:15.70 (0)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:15.70
+Attributes: 22-OCT-2026 03:05:15.70
+Modified:   22-OCT-2026 03:05:15.70
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 1, Extend: 0, Global buffer count: 0, No default version limit, Contiguous, Directory file
+Record format:      Variable length, maximum 512 bytes, longest 512 bytes
+Record attributes:  No carriage control, Non-spanned
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWE, Owner:RWE, Group:RE, World:E
+Access Cntrl List:  None
+Client attributes:  None
+
+VOLSET.SYS;1                  File ID:  (6,6,0)               
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:08.07
+Revised:    22-OCT-2026 03:05:08.07 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   <None specified>
+Attributes: <None specified>
+Modified:   22-OCT-2026 03:05:08.07
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, Version limit: 1
+Record format:      Fixed length 64 byte records
+Record attributes:  None
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 11 files, 98/104 blocks.
+$ SET PROCESS/PARSE_STYLE=EXTENDED
+$ DIRECTORY/FULL
+
+Directory LDA1:[TEST]
+
+a^_b.txt;1                    File ID:  (20,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:50.88
+Revised:    22-OCT-2026 03:05:50.88 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:50.88
+Attributes: 22-OCT-2026 03:05:50.88
+Modified:   22-OCT-2026 03:05:50.88
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+a^.b^.c.d;1                   File ID:  (15,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:44.80
+Revised:    22-OCT-2026 03:05:44.80 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:44.80
+Attributes: 22-OCT-2026 03:05:44.80
+Modified:   22-OCT-2026 03:05:44.80
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+c^+^+config.h;1               File ID:  (12,1,0)              
+Size:            1/1          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:32.73
+Revised:    22-OCT-2026 03:05:34.96 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:32.73
+Attributes: 22-OCT-2026 03:05:34.96
+Modified:   22-OCT-2026 03:05:32.73
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 1, Extend: 0, Global buffer count: 0, No version limit
+Record format:      VFC, 2 byte header, maximum 0 bytes, longest 19 bytes
+Record attributes:  Print file carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+café.txt;1                    File ID:  (16,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:45.93
+Revised:    22-OCT-2026 03:05:45.93 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:45.93
+Attributes: 22-OCT-2026 03:05:45.93
+Modified:   22-OCT-2026 03:05:45.93
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+libstdc^+^+.a;1               File ID:  (13,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:42.50
+Revised:    22-OCT-2026 03:05:42.50 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:42.50
+Attributes: 22-OCT-2026 03:05:42.50
+Modified:   22-OCT-2026 03:05:42.50
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+MixedCase.Txt;1               File ID:  (14,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:43.66
+Revised:    22-OCT-2026 03:05:43.66 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:43.66
+Attributes: 22-OCT-2026 03:05:43.66
+Modified:   22-OCT-2026 03:05:43.66
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+PLAIN.TXT;1                   File ID:  (19,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:49.72
+Revised:    22-OCT-2026 03:05:49.72 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:49.72
+Attributes: 22-OCT-2026 03:05:49.72
+Modified:   22-OCT-2026 03:05:49.72
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+README.;1                     File ID:  (21,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:52.03
+Revised:    22-OCT-2026 03:05:52.03 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:52.03
+Attributes: 22-OCT-2026 03:05:52.03
+Modified:   22-OCT-2026 03:05:52.03
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+this_is_a_long_extended_file_name_well_past_the_ods2_limit_of_39.header;1         File ID:  (18,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:48.57
+Revised:    22-OCT-2026 03:05:48.57 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:48.57
+Attributes: 22-OCT-2026 03:05:48.57
+Modified:   22-OCT-2026 03:05:48.57
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+^U4E2D.txt;1                  File ID:  (17,1,0)              
+Size:            0/0          Owner:    [SYSTEM]
+Created:    22-OCT-2026 03:05:47.09
+Revised:    22-OCT-2026 03:05:47.10 (1)
+Expires:    <None specified>
+Backup:     <No backup recorded>
+Effective:  <None specified>
+Recording:  <None specified>
+Accessed:   22-OCT-2026 03:05:47.09
+Attributes: 22-OCT-2026 03:05:47.10
+Modified:   22-OCT-2026 03:05:47.09
+Linkcount:  1
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 0, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 0 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 10 files, 1/1 block.
+$ SET DEFAULT SYS$LOGIN
+$ DISMOUNT LDA1:
+$ LD DISCONNECT LDA1:
+$ LD CREATE SYS$SYSDEVICE:[000000]ODS5E.DSK/SIZE=2000/CONTIGUOUS
+$ LD CONNECT SYS$SYSDEVICE:[000000]ODS5E.DSK LDA2:
+$ INITIALIZE/STRUCTURE=5 LDA2: ODS5E
+$ LD DISCONNECT LDA2:
+$ DUMP/HEADER/BLOCKS=COUNT=0 SYS$SYSDEVICE:[000000]ODS5T.DSK
+
+Dump of file SYS$SYSDEVICE:[000000]ODS5T.DSK;1 on 22-OCT-2026 03:06:30.95
+File ID (5542,1,0)   End of file block 2000 / Allocated 2000
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           245
+    Reserved area offset:                 245
+    Extension segment number:             0
+    Structure level and version:          5, 1
+    File identification:                  (5542,1,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Fixed
+        File organization:                Sequential
+        Record attributes:                <none specified>
+        Record size:                      512
+        Highest block:                    2000
+        End of file block:                2001
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              512
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 Contiguous, MoveFile disabled
+    Caching attribute:                    No_caching
+    Map area words in use:                3
+    Access mode:                          0
+    File owner UIC:                       [1,1]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (4,4,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    File entry linkcount:                 1
+    Highest block written:                2000
+    Client attributes:                    None
+
+Identification area
+    File name type:                       ODS-2
+    File name length:                     11
+    File name:                            ODS5T.DSK;1
+    Revision number:                      4
+    Creation date:                        22-OCT-2026 03:05:02.45
+    Revision date:                        22-OCT-2026 03:05:02.45
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+    Last access date:                     22-OCT-2026 03:05:02.45
+    Last attribute change date:           22-OCT-2026 03:05:02.48
+    Extended RMS record attributes:       <none specified>
+    File length hints
+        Record count:                     0 (Invalidated)
+        Data byte count:                  0 (Invalidated)
+
+Map area
+    Retrieval pointers
+        Count:       2000        LBN:    1827088
+
+Dump of file SYS$SYSDEVICE:[000000]ODS5T.DSK;1 on 22-OCT-2026 03:06:30.95
+File ID (5542,1,0)   End of file block 2000 / Allocated 2000
+
+
+User reserved area
+    00000001  "...."
+    00000000  "...."
+    00000000  "...."
+    00000000  "...."
+    00000000  "...."
+
+Checksum:                                 29866
+$ DUMP/HEADER/BLOCKS=COUNT=0 SYS$SYSDEVICE:[000000]ODS5E.DSK
+
+Dump of file SYS$SYSDEVICE:[000000]ODS5E.DSK;1 on 22-OCT-2026 03:06:32.37
+File ID (5543,1,0)   End of file block 2000 / Allocated 2000
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           245
+    Reserved area offset:                 245
+    Extension segment number:             0
+    Structure level and version:          5, 1
+    File identification:                  (5543,1,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Fixed
+        File organization:                Sequential
+        Record attributes:                <none specified>
+        Record size:                      512
+        Highest block:                    2000
+        End of file block:                2001
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              512
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 Contiguous, MoveFile disabled
+    Caching attribute:                    No_caching
+    Map area words in use:                3
+    Access mode:                          0
+    File owner UIC:                       [1,1]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (4,4,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    File entry linkcount:                 1
+    Highest block written:                2000
+    Client attributes:                    None
+
+Identification area
+    File name type:                       ODS-2
+    File name length:                     11
+    File name:                            ODS5E.DSK;1
+    Revision number:                      4
+    Creation date:                        22-OCT-2026 03:06:26.21
+    Revision date:                        22-OCT-2026 03:06:26.21
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+    Last access date:                     22-OCT-2026 03:06:26.21
+    Last attribute change date:           22-OCT-2026 03:06:28.20
+    Extended RMS record attributes:       <none specified>
+    File length hints
+        Record count:                     0 (Invalidated)
+        Data byte count:                  0 (Invalidated)
+
+Map area
+    Retrieval pointers
+        Count:       2000        LBN:    1829088
+
+Dump of file SYS$SYSDEVICE:[000000]ODS5E.DSK;1 on 22-OCT-2026 03:06:32.37
+File ID (5543,1,0)   End of file block 2000 / Allocated 2000
+
+
+User reserved area
+    00000001  "...."
+    00000000  "...."
+    00000000  "...."
+    00000000  "...."
+    00000000  "...."
+
+Checksum:                                 59865
+$ SHOW DEVICE/FULL SYS$SYSDEVICE
+
+Disk ALPHA1$DQA0:, device type alpha1-sys.img, is online, mounted, file-oriented
+    device, shareable, available to cluster, error logging is enabled.
+
+    Error count                    0    Operations completed               3725
+    Owner process                 ""    Owner UIC                      [SYSTEM]
+    Owner process ID        00000000    Dev Prot            S:RWPL,O:RWPL,G:R,W
+    Reference count               98    Default buffer size                 512
+    Total blocks            18874368    Sectors per track                    65
+    Total cylinders             4400    Tracks per cylinder                  66
+    Logical Volume Size     18874368    Expansion Size Limit         4261348350
+
+    Volume label          "ALPHASYS"    Relative volume number                0
+    Cluster size                  16    Transaction count                   208
+    Free blocks             16826720    Maximum files allowed          16711679
+    Extend quantity                5    Mount count                           1
+    Mount status              System    Cache name      "_ALPHA1$DQA0:XQPCACHE"
+    Extent cache size             64    Max blocks in extent cache      1682672
+    File ID cache size            64    Blocks in extent cache          1683712
+    Quota cache size               0    Maximum buffers in FCP cache       1034
+    Volume owner UIC           [1,1]    Vol Prot    S:RWCD,O:RWCD,G:RWCD,W:RWCD
+
+  Volume Status:  ODS-5, subject to mount verification, protected subsystems
+      enabled, file high-water marking, write-through XFC caching enabled,
+      write-through XQP caching enabled, hard links enabled, special files
+      enabled.
+
+$ WRITE SYS$OUTPUT "END-OF-CAPTURE"
+END-OF-CAPTURE
+$ 

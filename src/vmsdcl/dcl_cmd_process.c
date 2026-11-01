@@ -27,6 +27,8 @@
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
+#include "climsgdef.h"
+#include "dcl/vms_messages.h"
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
 #include "vmsqueue.h"
@@ -842,17 +844,14 @@ static void run_creprc_failed(uint32_t status)
  * excepts them, so the table stays a faithful copy of what HELP prints
  * rather than a copy pre-filtered to this one use.
  *
- * A qualifier in NEITHER topic (RUN/NOSUCHQUAL) is not this code's
- * business: on the oracle DCL itself rejects it before RUN is entered
+ * A qualifier in NEITHER topic (RUN/NOSUCHQUAL): on the oracle DCL itself
+ * rejects it before RUN is entered (run_bad_qualifier(), vms-097)
  * -- "%DCL-W-IVQUAL, unrecognized qualifier - check validity,
  * spelling, and placement" (VAX1, same session). The same is true of an
  * abbreviation that resolves to more than one of these names --
  * "%DCL-W-ABKEYW, ambiguous qualifier or keyword - supply more
  * characters" for RUN/P (VAX1, 2026-07-31, captures/
- * run-qualifier-abbrev-vax1-2026-07-31.txt). OVMX's DCL parser
- * validates no qualifier against any command's table, for any command;
- * that is a parser-wide gap, and inventing a RUN-only answer for it
- * here would be a third answer to a question VMS answers elsewhere.
+ * run-qualifier-abbrev-vax1-2026-07-31.txt).
  */
 static const char *const run_process_qualifiers[] = {
     "ACCOUNTING", "AST_LIMIT", "AUTHORIZE", "BUFFER_LIMIT",
@@ -919,11 +918,8 @@ static const char *const run_image_qualifiers[] = {
  * none of them or matches more than one. UNRESOLVED IS NOT DECIDED HERE:
  * on the oracle DCL refuses the command outright, with %DCL-W-IVQUAL for
  * an unknown qualifier and %DCL-W-ABKEYW for an ambiguous abbreviation,
- * BEFORE RUN is entered. OVMX's parser validates no qualifier against
- * any command's table, for any command, so neither refusal exists
- * anywhere in DCL; producing one here for RUN alone would answer for one
- * command a question VMS answers for the whole language. The gap is
- * reported, not patched over.
+ * BEFORE RUN is entered; run_bad_qualifier() issues both refusals, ahead
+ * of everything else in cmd_run (vms-097).
  */
 static const char *run_resolve_qualifier(const char *given)
 {
@@ -986,6 +982,50 @@ static const char *run_qualifier_value(const struct dcl_command *cmd,
             return cmd->qualifiers[i].value[0] ? cmd->qualifiers[i].value : NULL;
     }
     return NULL;
+}
+
+/*
+ * run_bad_qualifier - DCL's own verdict on a RUN qualifier, BEFORE RUN is
+ * entered (ORACLE-PINNED, VAX V7.3, see run_resolve_qualifier above): a name
+ * matching no RUN qualifier is %DCL-W-IVQUAL, a prefix matching more than one
+ * is %DCL-W-ABKEYW. An exact full name is never ambiguous. Returns the
+ * status after printing the message, or 0 when every qualifier resolves.
+ */
+static uint32_t run_bad_qualifier(const struct dcl_command *cmd)
+{
+    for (int i = 0; i < cmd->qualifier_count; i++) {
+        const char *given = cmd->qualifiers[i].name;
+        size_t glen = strlen(given);
+        int hits = 0, exact = 0;
+        if (glen == 0) continue;
+        for (size_t j = 0; j < sizeof(run_process_qualifiers) / sizeof(run_process_qualifiers[0]); j++) {
+            if (strncasecmp(given, run_process_qualifiers[j], glen) == 0) {
+                hits++;
+                if (strlen(run_process_qualifiers[j]) == glen) exact = 1;
+            }
+        }
+        for (size_t j = 0; j < sizeof(run_image_qualifiers) / sizeof(run_image_qualifiers[0]); j++) {
+            if (strncasecmp(given, run_image_qualifiers[j], glen) == 0) {
+                hits++;
+                if (strlen(run_image_qualifiers[j]) == glen) exact = 1;
+            }
+        }
+        if (hits == 0) {
+            dcl_error("DCL", 0, "IVQUAL",
+                      "unrecognized qualifier - check validity, spelling, "
+                      "and placement\n \\%s%s\\",
+                      cmd->qualifiers[i].negated ? "NO" : "", given);
+            return CLI$_IVQUAL;
+        }
+        if (hits > 1 && !exact) {
+            dcl_error("DCL", 0, "ABKEYW",
+                      "ambiguous qualifier or keyword - supply more "
+                      "characters\n \\%s%s\\",
+                      cmd->qualifiers[i].negated ? "NO" : "", given);
+            return CLI$_ABKEYW;
+        }
+    }
+    return 0;
 }
 
 /*
@@ -1278,10 +1318,17 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
     const char *q;
     if ((q = run_qualifier_value(cmd, "INPUT")) && *q)
         dcl_resolve_path(ctx, q, in_path, sizeof(in_path));
+    /* /OUTPUT and /ERROR go to $CREPRC as the VMS file spec they name (DCL's
+     * device/directory defaults filled in), exactly what VMS hands the new
+     * process as SYS$OUTPUT / SYS$ERROR: $CREPRC binds a device (OPA0:, NL:)
+     * itself and gives a DETACHED process a FILE as those logical names, which
+     * its image writes through RMS (rd vms-c89). Translating it to a host path
+     * here named the retired /vms passthrough -- a file that never appeared on
+     * the ODS-2 volume. A substrate path ('/', './') passes through as given. */
     if ((q = run_qualifier_value(cmd, "OUTPUT")) && *q)
-        dcl_resolve_path(ctx, q, out_path, sizeof(out_path));
+        dcl_rms_effective_spec(ctx, q, out_path, sizeof(out_path));
     if ((q = run_qualifier_value(cmd, "ERROR")) && *q)
-        dcl_resolve_path(ctx, q, err_path, sizeof(err_path));
+        dcl_rms_effective_spec(ctx, q, err_path, sizeof(err_path));
 
     const char *prcnam = run_qualifier_value(cmd, "PROCESS_NAME");
 
@@ -1755,6 +1802,7 @@ int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
     return 0;
 }
 
+
 /*
  * SYS$INPUT-from-procedure (vms-1a9). See dcl_cmd.h for the VMS-behaviour
  * citation. When an image is activated inside a command procedure, its
@@ -1766,26 +1814,29 @@ int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
  * fork()+execve() child read the procedure lines. Interactive DCL leaves the
  * terminal on fd 0.
  */
-void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
+int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
 {
     si->saved_fd0 = -1;
     if (!ctx || ctx->proc_depth < 0)
-        return;                     /* interactive: SYS$INPUT = terminal */
-    FILE *fp = ctx->proc_stack[ctx->proc_depth].fp;
+        return 0;                   /* interactive: SYS$INPUT = terminal */
+    struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
     if (!fp)
-        return;
+        return 0;
 
-    /* tmpfile() is an unlinked, auto-deleted regular file: no pipe-buffer
-     * deadlock even if the image never reads, and an honest EOF when the data
-     * block is empty (the RUN line is immediately followed by a '$'-line). If
-     * it cannot be created we fail open -- leave SYS$INPUT untouched rather
-     * than fake a stream (INV-DCL). */
-    FILE *tf = tmpfile();
-    if (!tf)
-        return;
+    /* The block is gathered in MEMORY and delivered on fd 0 by
+     * dcl_sysinput_install(): /dev/null for an empty block (the RUN line is
+     * immediately followed by a '$'-line -- an honest EOF), a pipe filled
+     * before the image starts for a small one, and a checked scratch file only
+     * for a block too big for a pipe. It used to be an unconditional tmpfile():
+     * on NetBSD /tmp is a tmpfs, which refuses every write (ENOSPC) below 4 MB
+     * of available memory, and the unchecked fputs() handed the image a
+     * truncated block with no error (rd vms-f47, same cause as vms-97c2). */
+    char *blk = NULL;
+    size_t blk_len = 0, blk_cap = 0;
+    int blk_bad = 0;
 
     char line[DCL_MAX_LINE];
-    long pos = ftell(fp);
+    long pos = dcl_pf_tell(fp);
     /* DECK/EOD explicit in-stream data (vms-3983). Normally the input block
      * ends at the first '$'-command line; DECK suspends that so a block may
      * itself contain '$'-lines, ending only at the EOD sentinel. Reference:
@@ -1793,7 +1844,7 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
      * "$EOD"; DECK/DOLLAR=string names a different one. */
     int  deck_mode = 0;
     char deck_term[48] = "EOD";
-    while (fgets(line, sizeof(line), fp)) {
+    while (dcl_pf_gets(line, sizeof(line), fp)) {
         const char *p = line;
         while (*p == ' ' || *p == '\t')
             p++;
@@ -1810,7 +1861,7 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                      q[tl] == ' '  || q[tl] == '\t')) {
                     deck_mode = 0;   /* consume the EOD line, feed nothing */
                     ctx->proc_stack[ctx->proc_depth].line_number++;
-                    pos = ftell(fp);
+                    pos = dcl_pf_tell(fp);
                     continue;
                 }
             }
@@ -1841,12 +1892,12 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                 }
                 deck_mode = 1;   /* consume the DECK line, feed nothing */
                 ctx->proc_stack[ctx->proc_depth].line_number++;
-                pos = ftell(fp);
+                pos = dcl_pf_tell(fp);
                 continue;
             }
             /* Next DCL command terminates the image's input. Put the stream
              * back at the start of this line so the parent loop reads it. */
-            fseek(fp, pos, SEEK_SET);
+            dcl_pf_seek(fp, pos, SEEK_SET);
             break;
         }
         /* Data line fed to the image's SYS$INPUT. VMS DCL performs apostrophe
@@ -1865,29 +1916,41 @@ void dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
          * substitution-free blocks is unchanged. */
         char subst[DCL_MAX_LINE];
         dcl_sym_substitute(line, subst, sizeof(subst));
-        fputs(subst, tf);
-        ctx->proc_stack[ctx->proc_depth].line_number++;
-        pos = ftell(fp);
-    }
-    fflush(tf);
-    rewind(tf);
+        {
+            size_t sl = strlen(subst);
 
-    int tfd = fileno(tf);
-    si->saved_fd0 = dup(0);
-    if (si->saved_fd0 < 0 || dup2(tfd, 0) < 0) {
-        /* Could not install the redirection: undo any partial state and leave
-         * fd 0 as it was. */
-        if (si->saved_fd0 >= 0) {
-            close(si->saved_fd0);
-            si->saved_fd0 = -1;
+            if (blk_len + sl + 1 > blk_cap) {
+                size_t ncap = blk_cap ? blk_cap * 2 : 1024;
+                char *nb;
+
+                while (ncap < blk_len + sl + 1)
+                    ncap *= 2;
+                nb = realloc(blk, ncap);
+                if (!nb)
+                    blk_bad = 1;
+                else {
+                    blk = nb;
+                    blk_cap = ncap;
+                }
+            }
+            if (!blk_bad) {
+                memcpy(blk + blk_len, subst, sl);
+                blk_len += sl;
+            }
         }
-        fclose(tf);
-        return;
+        ctx->proc_stack[ctx->proc_depth].line_number++;
+        pos = dcl_pf_tell(fp);
     }
-    /* fd 0 now shares the temp file's open description; closing tf's own fd
-     * does not disturb fd 0, and the unlinked file goes away when fd 0 is
-     * later restored. */
-    fclose(tf);
+    if (blk_bad) {
+        free(blk);
+        dcl_error("DCL", 4, "SYSINPUT", "insufficient memory for the procedure's input block");
+        return SS$_INSFMEM;
+    }
+    int rc = dcl_sysinput_install(si, blk, blk_len);
+    free(blk);
+    if (rc != 0)
+        dcl_error("DCL", 4, "SYSINPUT", "cannot provide SYS$INPUT for the image");
+    return rc != 0 ? SS$_INSFMEM : 0;
 }
 
 void dcl_sysinput_restore(struct dcl_sysinput *si)
@@ -1918,13 +1981,30 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
                                     const char *display_name,
                                     const char *linux_path, char *argv[]);
 
+/* The command an image handed over with LIB$DO_COMMAND (at most 255 chars). */
+static char dcl_do_command[256];
+static int  dcl_do_command_pending;
+
+int dcl_execute_line(const char *line);
+
 int dcl_activate_image(struct dcl_context *ctx, const char *display_name,
                        const char *linux_path, char *argv[])
 {
     struct dcl_sysinput si;
-    dcl_sysinput_setup(ctx, &si);
+    int srt = dcl_sysinput_setup(ctx, &si);
+    if (srt)
+        return srt;
+    dcl_do_command_pending = 0;
     int rc = dcl_activate_image_inner(ctx, display_name, linux_path, argv);
     dcl_sysinput_restore(&si);
+    /* LIB$DO_COMMAND: the image has exited; its command executes now, and its
+     * status is the one this activation reports. */
+    if (dcl_do_command_pending) {
+        char line[sizeof dcl_do_command];
+        memcpy(line, dcl_do_command, sizeof line);
+        dcl_do_command_pending = 0;
+        rc = dcl_execute_line(line);
+    }
     return rc;
 }
 
@@ -1972,6 +2052,18 @@ void dcl_cli_handler(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
     case OVMX_CLI_OP_DELETE:
         rs->status = dcl_sym_delete(name, scope) == 0 ? SS$_NORMAL
                                                       : LIB$_NOSUCHSYM;
+        break;
+    case OVMX_CLI_OP_DO_COMMAND:
+        /* LIB$DO_COMMAND: kept until the image exits, then executed by
+         * dcl_activate_image at this command level. */
+        if (rq->value_len > sizeof dcl_do_command - 1) {
+            rs->status = LIB$_INVARG;
+            break;
+        }
+        memcpy(dcl_do_command, rq->value, rq->value_len);
+        dcl_do_command[rq->value_len] = '\0';
+        dcl_do_command_pending = 1;
+        rs->status = SS$_NORMAL;
         break;
     default:
         rs->status = SS$_BADPARAM;
@@ -2611,6 +2703,13 @@ int cmd_run(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
+    /* DCL refuses an unknown or ambiguous qualifier before RUN is entered. */
+    {
+        uint32_t bad = run_bad_qualifier(cmd);
+        if (bad)
+            return bad;
+    }
+
     /* BEFORE the image parameter is examined: a qualifier OVMX cannot
      * honour is refused, not silently dropped. This is first because
      * "/UIC=[300,1]" is lexed into a qualifier plus a stray parameter,
@@ -2797,13 +2896,16 @@ int cmd_spawn(struct dcl_command *cmd)
         have_tmp = 1;
         char line[DCL_MAX_LINE + 2];
         int wl = snprintf(line, sizeof(line), "%s\n", command_text);
-        for (int off = 0; off < wl; ) {
-            ssize_t w = write(tfd, line + off, (size_t)(wl - off));
-            if (w < 0) { if (errno == EINTR) continue; break; }
-            if (w == 0) break;
-            off += (int)w;
-        }
+        int wrc = dcl_write_all(tfd, line, (size_t)wl);
         close(tfd);
+        if (wrc != 0) {
+            /* The scratch file could not take the command (rd vms-f47: tmpfs
+             * refuses writes below 4 MB of available memory): a subprocess
+             * given a truncated command would run the wrong thing. */
+            unlink(cmd_tmp);
+            dcl_error("DCL", 4, "CREPRC", "cannot create process: no room for its command");
+            return SS$_INSFMEM;
+        }
         in_d   = dsc_from_str(cmd_tmp);
         in_arg = &in_d;
     }

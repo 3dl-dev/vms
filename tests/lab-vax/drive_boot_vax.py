@@ -80,9 +80,19 @@ from vaxharness import HARNESS_ERROR, PROOF_FAILED, DCL_PROMPT
 # this substrate any more -- the VAX console carries the VMS personality only,
 # so the first OVMX line is the executive attach. What replaces it is the
 # console-quiet check below (SUBSTRATE_MARKERS), which has teeth of its own.
-MS_EXEC    = "VMS executive attached on /dev/vms"           # /dev/vms open
+# rd vms-158d: the executive-attached and system-disk-mounted lines are
+# OPERATOR.LOG records now, NOT console lines -- a real VMS boot console prints
+# neither. The console milestones are what VMS prints:
+#   - the product banner, which PID 1 prints only once the executive is attached
+#     and the system process established (so it IS the attach proof, "exec");
+#   - the mount is proven by what PID 1 can only print AFTER the Files-11 ACP
+#     mounted DUA0:: either %STDRV-I-STARTUP (an installed system was found on
+#     it) or the installed-system halt "... is not an installed OVMX system
+#     volume" (mounted, but no DCL.EXE). A volume that will not mount halts
+#     "... would not mount" instead (MS_MOUNT_FAIL).
 MS_BANNER  = "OpenVMS-compatible"                           # product banner
-MS_MOUNTED = "system disk DUA0: mounted"                    # ODS-2 mounted
+MS_EXEC    = MS_BANNER                                      # printed after attach
+MS_MOUNT_FAIL = "would not mount"                           # ACP $MOUNT refused
 
 # vms-7b15: the SINGLE-disk evidence line. In the single-disk layout the ODS-2
 # volume is PARTITION 'e' of the same MSCP disk (ra0) VMB booted the NetBSD root
@@ -169,7 +179,16 @@ MS_PROVISION_IVLOGNAM = "%DCL-E-IVLOGNAM"
 # line is the deterministic proof PROVISION.EXE activated + ran (the boundary the
 # vmsfs vnode pager closed). Its ABSENCE is the stale-volume / pager regression
 # (PROVISION.EXE "missing" -> %OVMX-F-EXECINIT). No brackets -> literal regex.
-MS_PROVISION_RUNNING = r"system identity SYSTEM"
+# rd vms-158d: PROVISION's "system identity SYSTEM [1,4] established by the
+# executive" is an OPERATOR.LOG record now, not a console line (a VMS boot
+# console prints none). PROVISION halts the boot itself (%OVMX-F-EXECINIT) if the
+# system process is not SYSTEM, so the proof it ran is the first thing only it
+# can lead to: its ownership pass (%OVMX-W-OWNER, the e7a regression signal) or
+# the STARTUP DCL it becomes producing output -- the site-startup announcement,
+# a LNMFAIL/IVLOGNAM loop, or the login prompt. ZERO-WIDTH (a lookahead): the
+# match consumes nothing, so STEP 2 still sees every one of those lines.
+MS_PROVISION_RUNNING = (r"(?=%OVMX-W-OWNER|The OVMX system is now executing|"
+                        r"%DCL-E-LNMFAIL|%DCL-E-IVLOGNAM|Username:)")
 # rd vms-e7a: positive forward-progress evidence PAST provision_ownership() --
 # STARTUP.COM's own announcement (distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/
 # STARTUP.COM) that the STDRV phase is running SYSTARTUP_VMS.COM. Reaching
@@ -477,6 +496,15 @@ def start_single_user(a, vmm_args, boot_deadline, cmd_timeout):
     child.sendline("fsck -y / 2>&1 | tail -1")
     child.expect(r"# ", timeout=cmd_timeout)
     child.sendline("mount -u -w /")
+    child.expect(r"# ")
+    # rd vms-b06: give this build session today's date, as the operator gives
+    # a VMS installation its date. The VAX TODR holds no year: NetBSD takes it
+    # from the root filesystem's last write, and every filesystem this session
+    # writes (the shipped OVMX/VAX root among them) carries this clock as that
+    # year. Without it the session ran at NetBSD's built-in 1-JAN-2010 and
+    # stamped 2010 on the disk, so every OVMX/VAX boot -- SIMH and the browser
+    # demo -- came up in 2010.
+    child.sendline("date -u %s" % time.strftime("%Y%m%d%H%M.%S", time.gmtime()))
     child.expect(r"# ")
     child.sendline("stty -echo 2>/dev/null; true")
     child.expect(r"# ")
@@ -843,7 +871,7 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
     if negctl:
         vmm_args = []
         log("NEGATIVE CONTROL: booting WITHOUT the ODS-2 volume -- the "
-            "'%s' milestone MUST NOT appear" % MS_MOUNTED)
+            "mount-proof milestone (installed-system halt or STDRV) MUST NOT appear")
     else:
         ods2_abs = os.path.abspath(ods2_img)
         vmm_args = ["set rq1 ra92", "attach rq1 " + ods2_abs]
@@ -862,53 +890,40 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
         # ovmx_init IS init: no shell, no login. Watch the console for the
         # milestone lines in order. Each expect has the boot deadline; a
         # milestone that never arrives times out -> honest failure.
-        want_order = [("exec", MS_EXEC), ("banner", MS_BANNER)]
-        if not negctl:
-            want_order.append(("mounted", MS_MOUNTED))
-
         try:
-            for key, pat in want_order:
-                child.expect(pat, timeout=boot_deadline)
-                seen[key] = True
-                _scan_substrate(child, seen)
-                log("MILESTONE: saw %r" % pat)
+            child.expect(MS_BANNER, timeout=boot_deadline)
+            seen["exec"] = seen["banner"] = True
+            _scan_substrate(child, seen)
+            log("MILESTONE: saw %r (the executive is attached)" % MS_BANNER)
         except pexpect.TIMEOUT:
             log("timed out waiting for a boot milestone; saw=%s" % sorted(seen))
         except pexpect.EOF:
             log("SIMH exited before a boot milestone appeared; saw=%s"
                 % sorted(seen))
 
-        if negctl:
-            # TEETH: with no ODS-2 volume the mount MUST fail, so the MOUNTED
-            # line must NOT appear. Race MOUNTED against the honest mount-fail
-            # halt -- if MOUNTED wins, the gate has no teeth (recorded in `seen'
-            # and caught by main); if the halt wins, MOUNTED was correctly
-            # absent.
+        # The mount: race what PID 1 prints only after a SUCCESSFUL ACP mount
+        # (the installed-system halt on this flat volume, or STDRV) against the
+        # honest mount-fail halt. In negctl the mount MUST fail -- if a
+        # mounted-proof line wins there, the gate has no teeth (recorded in
+        # `seen' and caught by main).
+        if seen.get("banner"):
             try:
                 # No pexpect.EOF in the list (anita's expect wrapper crashes on a
                 # matched EOF/TIMEOUT sentinel -- see STEP 1/2); EOF is caught below.
-                idx = child.expect([MS_MOUNTED, r"%OVMX-F-SYSINIT",
-                                    r"%OVMX-F-EXECINIT"], timeout=300)
-                if idx == 0:
+                idx = child.expect([MS_INSTALLED_GATE_FAIL, MS_STDRV,
+                                    MS_MOUNT_FAIL, r"%OVMX-F-EXECINIT"],
+                                   timeout=300 if negctl else boot_deadline)
+                _scan_substrate(child, seen)
+                if idx in (0, 1):
                     seen["mounted"] = True
-                    log("post-milestone: MOUNTED appeared with NO ODS-2 volume "
-                        "(the mount gate has NO teeth)")
+                    log("MILESTONE: the system disk MOUNTED (PID 1 got past the "
+                        "ACP mount: %r)" % ([MS_INSTALLED_GATE_FAIL, MS_STDRV][idx]))
                 else:
-                    log("post-milestone: mount correctly FAILED without an "
-                        "ODS-2 volume; MOUNTED did not appear (teeth confirmed)")
+                    log("post-milestone: the mount FAILED (%s)"
+                        % ("ACP $MOUNT refused" if idx == 2 else "EXECINIT halt"))
             except (pexpect.TIMEOUT, pexpect.EOF, Exception):
-                log("post-milestone: no MOUNTED and no halt within window (or SIMH "
-                    "exited); treating MOUNTED as absent")
-        else:
-            # For the record + the "what's missing for DCL" report: capture the
-            # honest post-milestone halt (require_installed_system: DCL absent).
-            try:
-                child.expect([r"%OVMX-F-SYSINIT", r"%OVMX-F-EXECINIT",
-                              r"%OVMX-E-", r">>>"], timeout=180)
-                log("post-milestone console: ovmx_init reached its honest "
-                    "installed-system halt (expected -- DCL is vms-d59)")
-            except Exception:
-                pass
+                log("post-milestone: no mount proof and no halt within window (or "
+                    "SIMH exited); treating MOUNTED as absent")
     finally:
         _hard_kill(child)
 
@@ -989,17 +1004,17 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
         # Pre-mount milestones, same order as do_prove. (Single-disk mode used
         # to also wait for vms.kmod's "DUA0: -> ra0e" printf here; under the
         # OVMX_QUIET kernel that line is in dmesg only -- see MS_DUA0_RA0E.)
-        premount = [("exec", MS_EXEC), ("banner", MS_BANNER),
-                    ("mounted", MS_MOUNTED)]
-        for key, pat in premount:
-            try:
-                child.expect(pat, timeout=boot_deadline)
-                seen[key] = True
-                _scan_substrate(child, seen)
-                log("MILESTONE: saw %r" % pat)
-            except (pexpect.TIMEOUT, pexpect.EOF):
-                log("did not reach milestone %r; saw=%s" % (pat, sorted(seen)))
-                return seen
+        # rd vms-158d: the banner is the executive-attach proof; the mount is
+        # proven by the gate race below (STDRV or the installed-system halt are
+        # both printed only after the ACP mounted DUA0:).
+        try:
+            child.expect(MS_BANNER, timeout=boot_deadline)
+            seen["exec"] = seen["banner"] = True
+            _scan_substrate(child, seen)
+            log("MILESTONE: saw %r (the executive is attached)" % MS_BANNER)
+        except (pexpect.TIMEOUT, pexpect.EOF):
+            log("did not reach milestone %r; saw=%s" % (MS_BANNER, sorted(seen)))
+            return seen
 
         # The decisive race: does the installed-system gate HALT (DCL.EXE
         # absent), or does the boot reach %STDRV-I-STARTUP (past the gate,
@@ -1007,9 +1022,14 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
         try:
             # No pexpect.EOF in the list (anita crashes on a matched EOF sentinel);
             # EOF/TIMEOUT are caught below and reported as an unresolved gate.
-            idx = child.expect([MS_STDRV, MS_INSTALLED_GATE_FAIL],
+            idx = child.expect([MS_STDRV, MS_INSTALLED_GATE_FAIL, MS_MOUNT_FAIL],
                                timeout=boot_deadline)
             _scan_substrate(child, seen)
+            if idx == 2:
+                log("the system disk did NOT mount (%r); saw=%s"
+                    % (MS_MOUNT_FAIL, sorted(seen)))
+                return seen
+            seen["mounted"] = True
             if idx == 0:
                 seen["stdrv"] = True
                 log("MILESTONE: saw %r -- PAST the installed-system gate; PID 1 "
@@ -1042,9 +1062,8 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                 _scan_substrate(child, seen)
                 if idx == 0:
                     seen["provision_running"] = True
-                    log("MILESTONE: %r -- PROVISION.EXE demand-paged off the ODS-2 "
-                        "volume and RUNS; executive established SYSTEM identity"
-                        % MS_PROVISION_RUNNING)
+                    log("MILESTONE: PROVISION.EXE demand-paged off the ODS-2 "
+                        "volume and RUNS (its STARTUP DCL is producing output)")
                 else:
                     why = {1: "%OVMX-F-EXECINIT (SYS$SYSTEM:PROVISION.EXE did not resolve)",
                            2: "%OVMX-E-NOIMG (activation failed)"}.get(idx, "unknown")
@@ -1357,6 +1376,15 @@ def do_acceptance(a, boot_deadline, single_rq0_type):
     raw_f = open(raw_path, "wb", buffering=0)
 
     vmm_args = ["set rq0 " + single_rq0_type] if single_rq0_type else []
+    # rd vms-9394: OVMX_VAX_SIMH_EXTRA -- extra SIMH config lines, ';'-separated,
+    # inserted before the disks attach (anita's start_simh). Unset by default
+    # (every existing caller is byte-identical). The DECnet pair test uses it to
+    # put the DELQA (XQ, qt0 under NetBSD) on a UDP L2 segment shared with an
+    # OVMX/x86 node, e.g. "set xq mac=08:00:2B:AA:00:43;attach xq udp:P1:H:P2".
+    extra = env("OVMX_VAX_SIMH_EXTRA")
+    if extra:
+        vmm_args += [ln.strip() for ln in extra.split(";") if ln.strip()]
+        log("ACCEPTANCE: extra SIMH config: %s" % " | ".join(vmm_args[1:] if single_rq0_type else vmm_args))
     log("ACCEPTANCE: booting ONE disk on rq0 (%s) and bridging its console to "
         "the shared DCL/SHOW battery via RAW=%s FIFO=%s (deadline %ds)"
         % (single_rq0_type or "default", raw_path, fifo_path, boot_deadline))
@@ -1471,10 +1499,16 @@ def main():
         log("FAIL: install ISO not found at %s (run lab-vax install first)" % iso_path)
         return HARNESS_ERROR
 
+    # rd vms-83d: OVMX_VAX_MEMORY (e.g. "16M") boots the ACCEPTANCE run on a
+    # smaller VAX than anita's default, so a footprint regression on the 16 MB
+    # demo node (Node B) is caught in CI instead of in the visitor gate. Applied
+    # to the acceptance boot only: the install/assemble sessions need the default.
+    vax_mem = env("OVMX_VAX_MEMORY", "") if mode == "acceptance" else ""
     a = anita.Anita(
         dist=anita.ISO(iso_path, sets=sets),
         workdir=workdir,
         persist=True,
+        **({"memory_size": vax_mem} if vax_mem else {}),
     )
 
     child = None

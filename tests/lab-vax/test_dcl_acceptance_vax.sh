@@ -44,10 +44,8 @@
 #   NETBSD_WORKDIR                        single-disk workdir (default /cache/single-work).
 #   OVMX_SINGLE_RQ0_TYPE                  SIMH rq0 sizing (default RAUSER=340).
 #   BOOT_TIMEOUT / CMD_TIMEOUT / ACCEPT_TIMEOUT   battery + whole-run bounds.
-#   EXPECT_HOST_YEAR                      1 pins the host year in SHOW TIME (default);
-#                                         set 0 if the SIMH VAX guest clock proves
-#                                         to read off the host (measured on first
-#                                         boot -- the Alpha emulator-RTC pattern).
+#   EXPECT_HOST_YEAR                      1: SHOW TIME must show the host's year and
+#                                         today's date (rd vms-b06; always 1 here).
 set -uo pipefail
 
 log() { echo "[vax-accept] $*"; }
@@ -77,10 +75,14 @@ export EXPECTED_COMPAT_VERSION="$CVER"
 # rd vms-76c3: F$GETSYI("ARCH_NAME") on a __vax__ build -> ovmx_hw_arch() = "VAX".
 export EXPECTED_ARCH_NAME="VAX"
 
-# VOLUME_LABEL tracks master_system_volume's vmsfs_master --ods2 label; verify.
-export VOLUME_LABEL="OVMXSYS"
-if ! grep -qE "ods2 master .* $VOLUME_LABEL " "$REPO/tests/lab-vax/run-boot.sh" 2>/dev/null; then
-    log "WARNING: run-boot.sh no longer masters the VAX system volume as '$VOLUME_LABEL' -- update VOLUME_LABEL"
+# VOLUME_LABEL tracks master_system_volume's vmsfs_master --ods2 label. It is
+# the SAME knob (rd vms-3ea): run-boot.sh masters with $SYSVOL_LABEL, default
+# OVMXSYS, so a build that gives this node its own label asserts that label
+# here rather than the default. Reading one variable is what keeps the battery
+# and the mastering from drifting apart.
+export VOLUME_LABEL="${SYSVOL_LABEL:-OVMXSYS}"
+if ! grep -qE 'ods2 master .*\$\{SYSVOL_LABEL\}' "$REPO/tests/lab-vax/run-boot.sh" 2>/dev/null; then
+    log "WARNING: run-boot.sh no longer masters the VAX system volume from \$SYSVOL_LABEL -- update VOLUME_LABEL"
 fi
 
 # SYSDEV: OVMX/NetBSD-vax names its MSCP system disk DUA0: -- the authentic
@@ -93,17 +95,22 @@ if ! grep -qE 'DUA0.* is PRIMARY' "$REPO/src/kernel-netbsd/vms_blockdev_netbsd.c
     log "WARNING: vms_blockdev_netbsd.c no longer names the VAX system disk '$SYSDEV' as PRIMARY -- update SYSDEV"
 fi
 
+# rd vms-9394: the battery's executive-datalink proof opens a REAL interface for
+# an interactive DECNETD image. On x86_64/Alpha that is the Linux loopback "lo";
+# on this rail it is the DELQA, qt0 -- NetBSD's lo0 is not an Ethernet, and the
+# NetBSD executive's L2 binding takes Ethernet interfaces only.
+export DNET_DATALINK_IFACE="${DNET_DATALINK_IFACE:-qt0}"
+
 export CMD_TIMEOUT="${CMD_TIMEOUT:-30}"
 export BOOT_TIMEOUT="${BOOT_TIMEOUT:-300}"
-# SIMH's VAX TOY clock starts at a FIXED default epoch (measured: 1-JAN-2010),
-# NOT the host clock -- OVMX faithfully reports that guest hardware clock, so
-# pinning the host year here would test SIMH's RTC config, not OVMX faithfulness.
-# This is the SAME emulator-RTC case Alpha handles (tools/cross-alpha/
-# run-boot-alpha.sh sets EXPECT_HOST_YEAR=0 for qemu-system-alpha's off RTC).
-# The shared battery's SHOW TIME anti-fabrication teeth stay in force regardless:
-# it still asserts a plausible current-century year (20XX -- rejects 1970/19XX),
-# an HH:MM:SS time, and a non-vacuous negctl. This is NOT a weakening.
-export EXPECT_HOST_YEAR=0
+# rd vms-b06: the VAX guest clock IS the host clock. SIMH loads the KA655 TODR
+# with the host's time of year at power on; the year comes from the root
+# filesystem, which the build session now writes with today's date
+# (drive_boot_vax.py start_single_user). The 1-JAN-2010 this rail used to show
+# was NetBSD's built-in default leaking through a 2010-stamped root FFS, not
+# SIMH -- an OVMX/VAX bug, now fixed, so the battery pins the host year AND
+# today's date here exactly as on x86_64/aarch64.
+export EXPECT_HOST_YEAR=1
 # --- The shared battery's CONSOLE LOGIN-SEQUENCE gate (vms-3e9 a/b/c) ---------
 # console_login_acceptance() in the shared battery proves, on THIS rail, that:
 #   (a) the console prints the system-identification line before "Username:";
@@ -194,11 +201,55 @@ run_cmd() {
 # --- run the SHARED battery (no errexit: it relies on grep exit codes) --------
 PASS=0
 FAIL=0
+FLOOR_KB="${OVMX_VAX_FREE_FLOOR_KB:-}"
+# The floor leg boots a deliberately small VAX (16M): the full battery does not
+# fit it, so that leg stops after login and measures there (rd vms-83d).
+if [ -n "$FLOOR_KB" ] && [ -n "${OVMX_VAX_MEMORY:-}" ]; then
+    export OVMX_BATTERY_STOP_AFTER_LOGIN=1
+fi
 set +e
 # shellcheck source=../qemu/lib/dcl_acceptance_battery.sh
 . "$BATTERY"
 run_dcl_acceptance_battery
 BRC=$?
+
+# rd vms-83d: FREE-MEMORY FLOOR. The 16 MB VAX demo node (Node B) starved at
+# boot -- free memory ~20 KB, tmpfs refusing writes ('No space left on device'),
+# a console that never offered Username: -- and no gate noticed until the
+# visitor matrix. OVMX_VAX_FREE_FLOOR_KB (set by the 16 MB CI leg together with
+# OVMX_VAX_MEMORY=16M) asserts that, after boot and login (the 16M leg stops
+# there), SHOW MEMORY (the executive's own uvm figures) still reports at least that
+# much Free. A footprint regression now reds here, not in the visitor gate.
+if [ -n "$FLOOR_KB" ]; then
+    run_cmd 'SHOW MEMORY'
+    FREE_PAGES=$(printf '%s\n' "$SEG" | awk '/Main Memory \(/ { for (i = 1; i <= NF; i++) if ($i ~ /^\(.*Mb\)$/) { print $(i+2); exit } }')
+    TOTAL_PAGES=$(printf '%s\n' "$SEG" | awk '/Main Memory \(/ { for (i = 1; i <= NF; i++) if ($i ~ /^\(.*Mb\)$/) { print $(i+1); exit } }')
+    if [ -z "$FREE_PAGES" ] || [ -z "$TOTAL_PAGES" ]; then
+        FAIL=$((FAIL + 1))
+        echo "  FAIL: free-memory floor: could not read Main Memory Total/Free from SHOW MEMORY"
+        printf '%s\n' "$SEG" | tail -12
+    else
+        FREE_KB=$((FREE_PAGES / 2))
+        TOTAL_KB=$((TOTAL_PAGES / 2))
+        log "SHOW MEMORY after the battery: total ${TOTAL_KB} KB, free ${FREE_KB} KB (floor ${FLOOR_KB} KB)"
+        if [ -n "${OVMX_VAX_MEMORY:-}" ]; then
+            want=$(( ${OVMX_VAX_MEMORY%[Mm]} * 1024 ))
+            # The kernel image and reserved pages come off the top; the total
+            # must still show the node was really booted this small.
+            if [ "$TOTAL_KB" -gt "$want" ]; then
+                FAIL=$((FAIL + 1))
+                echo "  FAIL: free-memory floor: guest reports ${TOTAL_KB} KB total, more than the ${want} KB it was booted with"
+            fi
+        fi
+        if [ "$FREE_KB" -ge "$FLOOR_KB" ]; then
+            PASS=$((PASS + 1))
+            echo "  PASS: free-memory floor: ${FREE_KB} KB free >= ${FLOOR_KB} KB"
+        else
+            FAIL=$((FAIL + 1))
+            echo "  FAIL: free-memory floor: ${FREE_KB} KB free < ${FLOOR_KB} KB on a ${TOTAL_KB} KB node (rd vms-83d)"
+        fi
+    fi
+fi
 
 exec 6>&-
 sleep 2

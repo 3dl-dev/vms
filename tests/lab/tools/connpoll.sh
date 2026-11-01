@@ -93,5 +93,5 @@ tail -c +$START_BYTE "$T/vax$NODE.log" | tr -d '\000' \
 log "CM census:"
 grep -ao 'SCSD-T-CMIN, cat 0x[0-9a-f]* op 0x[0-9a-f]*' "$W/scsd-$TAG.log" \
   | sed 's/SCSD-T-CMIN, //' | sort | uniq -c | sort -rn | tee -a "$S"
-log "identity on the wire: $(strings -a "$W/d94-$TAG.pcap" | grep -oE 'OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
+log "identity on the wire: $(strings -a "$W/d94-$TAG.pcap" | grep -a -oE 'OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
 echo "===$TAG-DONE===" >> "$S"

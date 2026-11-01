@@ -184,6 +184,14 @@ int main(void)
     CHECK(gst == SS$_NORMAL && devclass == DC$_TERM,
           "this process can still read the device");
 
+    /* DVI$_AVL ("device is available") is $DVIDEF code 98 on V7.3 and V8.4
+     * (docs/oracle/*-starlet-defs/DVIDEF.txt); a device the executive lists
+     * answers 1 through it. */
+    uint32_t avl = 0;
+    uint32_t ast = getdvi_l("OPA0:", (uint16_t)DVI$_AVL, &avl);
+    /* negctl: getdvi-avl-not-answered */
+    CHECK(ast == SS$_NORMAL && avl == 1, "sys$getdvi OPA0: DVI$_AVL (98) answers 1 (available)");
+
     /* The NIC device face ETH0: (vms-9d2, epic vms-67f L0): the PUBLIC
      * sys$getdvi resolves it in the executive table and reports the LAN device
      * class DC$_SCOM. The guest has one virtio-net NIC (run_tests.sh); the

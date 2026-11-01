@@ -1,0 +1,310 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/lab/k8s-labs/labrm8/vax3/vax.ini-1> attach nvr /lab/k8s-labs/labrm8/vax3/data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/lab/k8s-labs/labrm8/vax3/vax.ini-19> attach rq0 /lab/k8s-labs/labrm8/data/d0.dsk
+%SIM-INFO: RQ0: '/lab/k8s-labs/labrm8/data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: SYSDSK1      Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/labrm8/vax3/vax.ini-20> attach rq1 /lab/k8s-labs/labrm8/data/d1.dsk
+%SIM-INFO: RQ1: '/lab/k8s-labs/labrm8/data/d1.dsk' Contains ODS2 File system
+%SIM-INFO: RQ1: Volume Name: VAX1DATA     Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/labrm8/vax3/vax.ini-21> attach -r rq2 /lab/media/openvms073.iso
+%SIM-INFO: RQ2: Unit is read only
+%SIM-INFO: RQ2: '/lab/media/openvms073.iso' Contains ODS2 File system
+%SIM-INFO: RQ2: Volume Name: VAXVMS073    Format: DECFILE11B   Sectors In Volume: 1067894
+/lab/k8s-labs/labrm8/vax3/vax.ini-22> attach -r rq3 /lab/media/openvms-internet-product-suite-v11.iso
+%SIM-INFO: RQ3: Unit is read only
+%SIM-INFO: RQ3: '/lab/media/openvms-internet-product-suite-v11.iso' Contains ODS2 File system
+%SIM-INFO: RQ3: Volume Name: OVMSIPS11    Format: DECFILE11B   Sectors In Volume: 800000
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/lab/k8s-labs/labrm8/vax3/local.ini-2> at xq tap:tap3
+%SIM-INFO: Eth: opened OS device tap3
+/lab/k8s-labs/labrm8/vax3/local.ini-3> att dz 2003,speed=*32
+%SIM-INFO: Listening on port 2003
+/lab/k8s-labs/labrm8/vax3/vax.ini-26> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655X-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..
+
+?53 2 0A FF 00 0000
+
+P1=00000002  P2=00000028  P3=00002711  P4=00D40077  P5=00000000
+P6=FFFFFFFF  P7=00000000  P8=00000000  P9=00000000 P10=20051CE0
+r0=00000000  r1=20140110  r2=A734FE6A  r3=000300A5  r4=A734FE74
+r5=2004E8F9  r6=00018678  r7=000186C8  r8=0001ADB1 ERF=80000000
+30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Normal operation not possible.
+
+>>>^U
+>>>B/R5:20000000 DUA0
+[drv:boot-echo-verified attempt 1 'B/R5:20000000 DUA0']
+
+(BOOT/R5:20000000 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-W-SYSBOOT Can not map SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  sending VAXcluster membership request to system VAX2
+%CNXMAN,  now a VAXcluster member -- system VAX3
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 21-OCT-2026 14:45:51.96
+%INSTALL-E-OPENIN, error opening DISK$SYSDSK1:<SYS2.SYSCOMMON.SYSLIB>CXXL$MSG_SHR.EXE; as input
+-RMS-E-FNF, file not found
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20600208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.39  %%%%%%%%%%%
+Operator _VAX3$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.39  %%%%%%%%%%%
+Operator status for operator _VAX3$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.41  %%%%%%%%%%%
+Logfile has been initialized by operator _VAX3$OPA0:
+Logfile is VAX3::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;2
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.41  %%%%%%%%%%%
+Operator status for operator VAX3::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;2
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.41  %%%%%%%%%%%
+14:45:51.75 Node VAX3 (csid 00010003) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.41  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.41  %%%%%%%%%%%
+Operator _VAX2$OPA0: has been enabled, username SYSTEM
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2060020E
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.55  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.55  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.56  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.56  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.57  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.57  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.57  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.57  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.69  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.69  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.69  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.69  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.70  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:57.99  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX3.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:45:58.08  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX3
+Security alarm (SECURITY) and security audit (SECURITY) on VAX3, system id: 1027
+Auditable event:          Audit server starting up
+Event time:               21-OCT-2026 14:45:58.06
+PID:                      20600204        
+Username:                 SYSTEM          
+
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODENAME"\
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODEMAME"\
+You have not yet configured your DECnet permanent database.  You must
+either use NCP to define your DECnet database, or invoke the command
+procedure SYS$MANAGER:NETCONFIG.COM, which will do it for you.
+
+%TCPIP-I-INFO, TCP/IP Services startup beginning at 21-OCT-2026 14:46:00.28
+%TCPIP-I-NORMAL, timezone information verified
+%RUN-S-PROC_ID, identification of created process is 20600213
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:46:00.55  %%%%%%%%%%%
+Message from user INTERnet on VAX3
+INTERnet Loaded
+
+%TCPIP-E-CONFIGERROR, error processing configuration request
+-TCPIP-E-INETERROR, internet interface error
+-RMS-E-RNF, record not found
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:46:01.74  %%%%%%%%%%%
+Message from user Proxy Server on VAX3
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%TCPIP-S-STARTDONE, TCP/IP Kernel startup completed
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-S-STARTDONE, TCPIP$PROXY startup completed
+%TCPIP-E-STARTERROR, error starting FTP service
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-E-STARTFAIL, failed to start TCPIP$FTP
+-TCPIP-E-ENABLERR, error enabling service
+%TCPIP-S-STARTDONE, TCPIP$FTP_CLIENT startup completed
+%TCPIP-E-STARTERROR, error starting TELNET service
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-E-STARTFAIL, failed to start TCPIP$TELNET
+-TCPIP-E-ENABLERR, error enabling service
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at 21-OCT-2026 14:46:03.41
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX3)
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at 21-OCT-2026 14:46:05.95
+
+  Accounting information:
+  Buffered I/O count:            2396         Peak working set size:    1558
+  Direct I/O count:               895         Peak page file size:      8712
+  Page faults:                  12943         Mounted volumes:             1
+  Charged CPU time:           0 00:00:06.48   Elapsed time:     0 00:00:14.03
+%%%%%%%%%%%  OPCOM  21-OCT-2026 14:47:38.53  %%%%%%%%%%%    (from node VAX2   at 21-OCT-2026 14:47:38.47)
+Message from user AUDIT$SERVER on VAX2
+Security alarm (SECURITY) and security audit (SECURITY) on VAX2, system id: 1026
+Auditable event:          Local interactive login failure
+Event time:               21-OCT-2026 14:47:38.47
+PID:                      20400216        
+Process name:             _OPA0:          
+Username:                 SYSTEM          
+Terminal name:            OPA0:, _OPA0:
+Status:                   %LOGIN-F-INVPWD, invalid password
+
+
+VAX/VMS V7.3      node VAX3
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3
+    Last interactive login on Wednesday, 21-OCT-2026 14:47
+    Last non-interactive login on Wednesday, 21-OCT-2026 14:46[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ WRITE SYS$OUTPUT "LOGIN_OK"
+LOGIN_OK
+$ RMH :== $SYS$COMMON:[SYSMGR]RMHOLD
+$ SPAWN/NOWAIT/PROCESS=HOLD3 RMH 001WRMT8
+%DCL-S-SPAWNED, process HOLD3 spawned
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=RMT8
+Address of RSB:  8799AE40  GGMODE:       CR  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       CR                                  
+Sub-RSB count:          3  FGMODE:       CR                                  
+Lock Count:             2  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 38544D52   RMT8....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 040004BF  CR 00000000-FFFFFFFF         390004B8  NL 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ STOP HOLD3
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX3  21-OCT-2026 14:54:17.47  Uptime  0 00:08:39
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20600201 SWAPPER         HIB     16        0   0 00:00:00.07         0      0   
+20600206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.03       209    325   
+20600207 CONFIGURE       HIB     10       17   0 00:00:00.02       130    206   
+20600208 LANACP          HIB     13       45   0 00:00:00.03       410    583   
+2060020A IPCACP          HIB     10        6   0 00:00:00.00        96    183   
+2060020B ERRFMT          HIB      8       27   0 00:00:00.01       149    227   
+2060020C CACHE_SERVER    HIB     16        6   0 00:00:00.00        82    141   
+2060020D OPCOM           HIB      7       89   0 00:00:00.01       301    134   
+2060020E AUDIT_SERVER    HIB      9       46   0 00:00:00.05       448    797   
+2060020F JOB_CONTROL     HIB      9       36   0 00:00:00.02       213    399   
+20600210 SECURITY_SERVER HIB     10       25   0 00:00:00.05      1689   1328   
+20600211 SMISERVER       HIB      9       35   0 00:00:00.02       349    555   
+20600212 TP_SERVER       HIB      9       42   0 00:00:00.01       202    323   
+20600213 TCPIP$INETACP   HIB     10       40   0 00:00:00.04       252    163   
+20600215 SYSTEM          CUR      7      318   0 00:00:00.43      6315    374   
+$ 

@@ -85,7 +85,7 @@ run_seg() { local o w=0; o=$(wc -c <"$2"); send "$1"
     sleep 2; seg=$(tail -c "+$((o + 1))" "$2" | tr -d '\r'); }
 has() { printf '%s\n' "$seg" | grep >/dev/null -F -- "$1"; }
 frames_with() { [ -s "$2" ] || { echo 0; return; }
-    od -An -v -tx1 "$2" | tr -d ' \n' | grep -o "$1" | wc -l; }
+    od -An -v -tx1 "$2" | tr -d ' \n' | grep -a -o "$1" | wc -l; }
 
 DISK=/tmp/dn-startnet-e2e.img
 LOG1=/tmp/dn-startnet-boot1.log
@@ -178,10 +178,14 @@ wake_login "$LOG2"
 if waitfor 'Username:' "$BOOT_TIMEOUT" "$LOG2"; then rc=0; else rc=1; fi
 record "boot 2: reaches the login prompt" "$rc"
 boot2_up=$rc
-if grep -qaF '%DECNET-I-STARTNET' "$LOG2"; then rc=0; else rc=1; fi
-record "boot 2: boot-time STARTNET found NETNODE_LOCAL.DAT and launched NETACP (%DECNET-I-STARTNET)" "$rc"
-if grep -qaE '%DECNET-E-STARTNET|%RUN-F-CREPRC' "$LOG2"; then rc=1; else rc=0; fi
-record "boot 2: no refused launch (%DECNET-E-STARTNET / %RUN-F-CREPRC absent)" "$rc"
+# rd vms-158d: STARTNET prints no launch line of its own -- a real VMS console
+# shows only RUN's %RUN-S-PROC_ID and NETACP's OPCOM "DECnet starting". That
+# NETACP was launched and runs is SHOW SYSTEM's to say (below), and its OPCOM
+# record is read back from OPERATOR.LOG.
+if grep -qaE '%DECNET-[IE]-STARTNET|DECnet Phase IV -- Startup' "$LOG2"; then rc=1; else rc=0; fi
+record "boot 2: STARTNET puts no OVMX launch line on the console (rd vms-158d)" "$rc"
+if grep -qaF '%RUN-F-CREPRC' "$LOG2"; then rc=1; else rc=0; fi
+record "boot 2: no refused launch (%RUN-F-CREPRC absent)" "$rc"
 
 if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: SYSTEM logs in" 0
@@ -194,7 +198,15 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: SHOW SYSTEM lists a RUNNING NETACP ${NETACP_SETTLE}s after boot (it exits on any datalink failure)" "$rc"
     if printf '%s\n' "$seg" | grep >/dev/null -F 'Process Name'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the SHOW SYSTEM segment is real output (its 'Process Name' column header is present)" "$rc"
-    netacp_pid=$(printf '%s\n' "$seg" | grep -oE '^[0-9A-F]{8} NETACP( |$)' | head -1 | cut -c1-8)
+    netacp_pid=$(printf '%s\n' "$seg" | grep -a -oE '^[0-9A-F]{8} NETACP( |$)' | head -1 | cut -c1-8)
+
+    # rd vms-158d: NETACP announced itself the VMS way -- OPCOM, "DECnet
+    # starting" -- and OPERATOR.LOG carries it.
+    off=$(wc -c <"$LOG2")
+    send 'TYPE SYS$MANAGER:OPERATOR.LOG'; sleep 6
+    seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECnet starting'; then rc=0; else rc=1; fi
+    record "boot 2: OPERATOR.LOG carries NETACP's OPCOM message 'DECnet starting'" "$rc"
 
     # rd vms-dda: an outbound link from a user process, brokered through the
     # RUNNING boot-time NETACP over $ASSIGN _NET: + $QIO (the DCL battery VM has
@@ -207,6 +219,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
         # Diagnostics only (the verdicts below are unchanged): interrupt the
         # stuck image and show what NETACP logged while the proof ran.
         printf '\031' >&4; sleep 3
+        netacp_log_off=${netacp_log_off:-$(wc -c <"$LOG2")}
         send 'TYPE SYS$MANAGER:NETACP.LOG'; sleep 8
     fi
     seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
@@ -261,7 +274,7 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
        && has '   Object   Number  File/PID                   User Id          Password' \
        && printf '%s\n' "$seg" | grep >/dev/null -xF '  FAL           17  FAL.EXE'; then rc=0; else rc=1; fi
     record "boot 2: NCP SHOW KNOWN OBJECTS lists NETACP's FAL 17 FAL.EXE (byte-identical to the real VAX row) under the VAX heading" "$rc"
-    cterm_pid=$(printf '%s\n' "$seg" | grep -oE '^  CTERM         42  [0-9A-F]{8}$' | cut -c21-28)
+    cterm_pid=$(printf '%s\n' "$seg" | grep -a -oE '^  CTERM         42  [0-9A-F]{8}$' | cut -c21-28)
     if [ -n "$cterm_pid" ] && [ -n "${netacp_pid:-}" ] && [ "$cterm_pid" = "$netacp_pid" ]; then rc=0; else rc=1; fi
     record "boot 2: SHOW KNOWN OBJECTS' CTERM 42 row carries the PID of the NETACP serving it ($cterm_pid), the PID SHOW SYSTEM lists for NETACP (${netacp_pid:-none})" "$rc"
     run_seg 'NCP SHOW OBJECT FAL' "$LOG2" 'Object Volatile Summary' 30
@@ -270,6 +283,34 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
 
     if grep -qaF '%NCP-F-' <(tail -c "+$((off + 1))" "$LOG2"); then rc=1; else rc=0; fi
     record "boot 2: no %NCP-F- failure while NETACP is serving" "$rc"
+
+    # rd vms-5843: SET HOST to a node the database does not know says VMS's
+    # SS$_NOSUCHNODE (652, "remote node is unknown") once, and nothing about
+    # an image the user never ran. It said "%SYSTEM-W-NOSUCHDEV, no such
+    # device" and then "%DCL-E-ABORT, image SYS$SYSTEM:DECNETD.EXE exited
+    # with error status %X00000001".
+    run_seg 'SET HOST NOSUCH' "$LOG2" 'NOSUCHNODE' 45
+    if has '%SYSTEM-F-NOSUCHNODE, remote node is unknown'; then rc=0; else rc=1; fi
+    record "boot 2: SET HOST to an unknown node says %SYSTEM-F-NOSUCHNODE, remote node is unknown" "$rc"
+    if has 'DCL-E-ABORT' || has 'NOSUCHDEV'; then rc=1; else rc=0; fi
+    record "boot 2: ... and no %DCL-E-ABORT image line or NOSUCHDEV under it" "$rc"
+
+    # rd vms-c89: STARTNET runs NETACP /DETACHED /OUTPUT=/ERROR=
+    # SYS$MANAGER:NETACP.LOG. As on VMS, that file IS its SYS$OUTPUT: created
+    # through RMS when the image starts, every line a record. Its first report
+    # names the datalink it opened, so a NETACP.LOG that TYPE reads back with
+    # that line is the file this boot's NETACP wrote.
+    # Done LAST: the console before it is what the vms-5843 chatter check
+    # below scans, and TYPE shows NETACP's lines on the terminal on purpose.
+    off=$(wc -c <"$LOG2")
+    netacp_log_off=$off
+    send 'TYPE SYS$MANAGER:NETACP.LOG'; sleep 6
+    seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-DATALINK, datalink open on' &&
+       printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-STARTED, NETACP up'; then rc=0; else rc=1; fi
+    record "boot 2: SYS\$MANAGER:NETACP.LOG (NETACP's /OUTPUT, written through RMS) carries its DATALINK and STARTED reports (vms-c89)" "$rc"
+    if printf '%s\n' "$seg" | grep >/dev/null -E '%TYPE-W-SEARCHFAIL|%RMS-E-FNF'; then rc=1; else rc=0; fi
+    record "boot 2: TYPE finds NETACP.LOG (no SEARCHFAIL / FNF)" "$rc"
 else
     record "boot 2: SYSTEM logs in" 1
 fi
@@ -278,6 +319,19 @@ kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 n2=$(frames_with "$HELLO_142" "$PCAP2")
 if [ "$n2" -ge 1 ]; then rc=0; else rc=1; fi
 record "boot 2: the wire carries Phase IV endnode hellos to AB-00-00-03-00-00 SOURCED FROM AA-00-04-00-2A-04, ethertype 0x6003 (count=$n2)" "$rc"
+
+# rd vms-5843: NETACP is a DETACHED process with no terminal. Its own status
+# lines (datalink open, started, per-hello, CTERM listen, broker) must never
+# appear on the operator console -- they used to, because $CREPRC left it on
+# the creator's descriptors when its /OUTPUT file spec could not be opened,
+# and on a booted node a hello line landed on OPA0: every 15 s, in the middle
+# of the login prompt. Read over the whole boot-2 console, which spans many
+# hello periods (the run above sleeps NETACP_SETTLE alone).
+# rd vms-c89: the scan stops where this script TYPEs SYS$MANAGER:NETACP.LOG,
+# which shows NETACP's lines on the terminal because it was asked to.
+nchat=$(head -c "${netacp_log_off:-$(wc -c <"$LOG2")}" "$LOG2" | grep -acE 'DECNETD-I-(DATALINK|STARTED|HELLOSENT|ADJINIT|CTERMLISTEN|BROKER),' || true)
+if [ "${nchat:-0}" -eq 0 ]; then rc=0; else rc=1; fi
+record "boot 2: NETACP's own status lines never reach the operator console (detached, no terminal; $nchat found)" "$rc"
 
 if [ "$FAIL" -ne 0 ]; then
     echo "--- boot 1 log ---"; cat "$LOG1"

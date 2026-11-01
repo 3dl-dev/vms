@@ -105,7 +105,7 @@ run_cmd() {
 }
 
 # --- Boot to login ----------------------------------------------------------
-if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+if wait_for ' - OpenVMS-compatible' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
 w=0
 until grep -qaF 'Username:' "$LOG" 2>/dev/null || [ "$w" -ge "$BOOT_TIMEOUT" ]; do
     send ''; sleep 1; w=$((w + 1))
@@ -205,6 +205,25 @@ if printf '%s\n' "$SEG" | grep >/dev/null -F 'OVMX_CLI_LOCAL = "local from image
     ok "LIB\$SET_SYMBOL from an image left a LOCAL symbol in DCL (vms-cded)"
 else
     bad "the image's local symbol is not in DCL's table: $(printf '%s' "$SEG" | tr '\n' ' ') (vms-cded)"
+fi
+
+# 5. LIB$DO_COMMAND. The image hands DCL a command and exits without returning;
+#    DCL executes it once the image is gone (LIB$ Manual, LIB$DO_COMMAND).
+run_cmd 'OVMX_DOCMD_MARK = "docmd ran"'
+run_cmd 'OVMX_DOCMD = "SHOW SYMBOL OVMX_DOCMD_MARK"'
+run_cmd 'RUN SYS$SYSTEM:SYMSET.EXE'
+echo "----- verbatim: RUN SYS\$SYSTEM:SYMSET.EXE (OVMX_DOCMD) -----"
+printf '%s\n' "$SEG"
+echo "-----------------------------------------------"
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'OVMX_DOCMD_MARK = "docmd ran"'; then
+    ok "LIB\$DO_COMMAND from an image: DCL executed the command after the image exited"
+else
+    bad "LIB\$DO_COMMAND: DCL did not execute the image's command"
+fi
+if printf '%s\n' "$SEG" | grep >/dev/null -F 'do_command returned'; then
+    bad "LIB\$DO_COMMAND returned to the image instead of ending it"
+else
+    ok "LIB\$DO_COMMAND did not return control to the image"
 fi
 
 echo ""

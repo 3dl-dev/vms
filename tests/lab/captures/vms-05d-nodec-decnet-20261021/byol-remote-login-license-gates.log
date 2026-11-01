@@ -1,0 +1,47 @@
+== run 3: VAX-VMS base license not loaded on VAXC (only DVNETRTG). OVMXA console: ==
+$ SET HOST VAXCSET HOST VAXC
+21-Oct-2026 16:15:05 DECNETD-I-LINKCI, process 10000005: Connect Initiate to 1.965 object 42
+21-Oct-2026 16:15:05 DECNETD-I-LINKOUT, outbound link to 1.965 object 42 is RUN for process 10000005
+
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: SYSTEM21-Oct-2026 16:15:05 DECNETD-I-ADJINIT, heard 1.965 (initializing) on circuit ETH-0
+SYSTEM
+
+Password: OVMXCLUSTER121-Oct-2026 16:15:06 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
+OVMXCLUSTER1
+
+No license is active for this software product%REM-S-END, control returned to node OVMXA::
+21-Oct-2026 16:15:07 DECNETD-I-LINKEND, outbound link to 1.965 (object 42) for process 10000005 ended (its process disconnected)
+
+== run 4: DVNETRTG + VAX-VMS loaded, VAXCLUSTER not. OVMXA console: ==
+$ SET HOST VAXCSET HOST VAXC
+21-Oct-2026 16:18:33 DECNETD-I-LINKCI, process 10000005: Connect Initiate to 1.965 object 42
+21-Oct-2026 16:18:33 DECNETD-I-LINKOUT, outbound link to 1.965 object 42 is RUN for process 10000005
+
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: SYSTEMSYSTEM
+
+Password: OVMXCLUSTER121-Oct-2026 16:18:34 DECNETD-I-HELLOSENT, endnode-hello circuit ETH-0 seq=3 bytes=60
+OVMXCLUSTER1
+
+DEC VMSCLUSTER license is not active%REM-S-END, 
+== run 4: VAXC console (security audit of the refused remote login): ==
+%%%%%%%%%%%  OPCOM  21-OCT-2026 16:18:35.07  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Remote interactive login failure
+Event time:               21-OCT-2026 16:18:35.06
+PID:                      20200218        
+Process name:             _RTA1:          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            _RTA1:, OVMXA::SYSTEM
+Image name:               VAXC$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Remote nodename:          OVMXA           
+Remote node id:           1025 (1.1)
+Remote username:          SYSTEM
+Status:                   %LOGIN-F-NOVAXCLUSTER, DEC VMSCLUSTER license is not active

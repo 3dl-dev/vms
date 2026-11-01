@@ -61,6 +61,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include "ovmx_layout.h"          /* VMS_OPERATOR_LOG */
 #include "ovmx_console.h"         /* OVMX_CONSOLE_LINUX_PATH: OPA0:'s node (rd vms-137e) */
 #include "vmsfs/filespec.h"       /* vmsfs_to_linux_path for OPERATOR.LOG */
+#include "opcom_exec_line.h"      /* rd vms-c56: executive lines filed as they are */
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -68,6 +69,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include <sys/module.h>
 #include <sys/reboot.h>
 #include <sys/statvfs.h>
+#include <sys/sysctl.h>
 #include <fs/tmpfs/tmpfs_args.h>
 #include <fs/ptyfs/ptyfs.h>
 #include <miscfs/procfs/procfs.h>
@@ -80,6 +82,7 @@ typedef int ovmx_boot_netbsd_backend_not_selected;
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /* The NetBSD host path for the OVMX ODS-2 system disk (DKA0:) -- the
@@ -246,8 +249,21 @@ static void klog_append_operator_log(const char *line)
     if (!f)
         return;                                 /* best-effort */
 
-    fputs(line, f);
-    fclose(f);
+    /* Checked (rd vms-f47): /tmp is a tmpfs, which refuses writes below 4 MB of
+     * available memory, and the on-volume log can refuse too. Still best-effort
+     * for boot, but a refusal is said once rather than lost without a word. */
+    {
+        static int reported;
+        int bad = (fputs(line, f) == EOF);
+
+        if (fclose(f) != 0)
+            bad = 1;
+        if (bad && !reported) {
+            reported = 1;
+            fprintf(stderr, "%%OVMX-W-OPCOM, operator log write refused (%s): "
+                    "boot records will be missing\n", strerror(errno));
+        }
+    }
 }
 
 static void *klog_thread_main(void *arg)
@@ -291,15 +307,36 @@ static void *klog_thread_main(void *arg)
         char *ln;
         for (ln = strtok_r(raw, "\n", &save); ln; ln = strtok_r(NULL, "\n", &save)) {
             char out[600];
+            const char *ex;
             if (*ln == '\0')
                 continue;
-            snprintf(out, sizeof out, "%%SYSKRNL-I-KERNEL, %s\n", ln);
+            /* rd vms-c56: an executive operator line ("%CNXMAN, ...",
+             * "%DLM, ...") is already VMS-form and the executive's, not
+             * NetBSD's -- filed as it is, past the message buffer's stamp
+             * (opcom_exec_line.h). Everything else is the substrate's. */
+            ex = opcom_exec_line(ln);
+            if (ex != NULL)
+                snprintf(out, sizeof out, "%s\n", ex);
+            else
+                snprintf(out, sizeof out, "%%SYSKRNL-I-KERNEL, %s\n", ln);
             klog_append_operator_log(out);
         }
     }
 
     close(kfd);
     return NULL;
+}
+
+/* rd vms-c56: one operator line from PID 1 itself (a diagnostic with no VMS
+ * console form), filed where the bridge files the executive's. */
+void ovmx_boot_operator_log(const char *line)
+{
+    char out[600];
+
+    if (line == NULL || *line == '\0')
+        return;
+    snprintf(out, sizeof out, "%s\n", line);
+    klog_append_operator_log(out);
 }
 
 void ovmx_boot_start_console_log_bridge(void)
@@ -663,6 +700,31 @@ void ovmx_boot_stop_console_log_bridge(void)
 {
     /* NetBSD credentials are per process: the klog reader leaves root with
      * PID 1 (rd vms-137e). Nothing to stop. */
+}
+
+/*
+ * The boot date check (rd vms-b06). A VAX TODR holds no year; the NetBSD
+ * kernel takes the year from the root filesystem's last write and rejects a
+ * result before 2021 or behind that write as "preposterous", falling back to
+ * the filesystem time (or its built-in 1-JAN-2010 12:00). It used to do that
+ * silently. tools/cross-vax/netbsd-ovmx-todr.patch publishes its verdict as
+ * kern.ovmx_toy_valid; a kernel without the patch has no such node, and this
+ * reports -1 ("does not say") rather than inventing a verdict.
+ */
+int ovmx_boot_system_time_valid(void)
+{
+    int v = 0;
+    size_t len = sizeof(v);
+
+    if (sysctlbyname("kern.ovmx_toy_valid", &v, &len, NULL, 0) != 0)
+        return -1;
+    return v != 0;
+}
+
+/* clock_settime(2) as PID 1; the kernel writes the TODR back (resettodr). */
+int ovmx_boot_set_system_time(const struct timespec *ts)
+{
+    return clock_settime(CLOCK_REALTIME, ts);
 }
 
 #endif /* __NetBSD__ */

@@ -135,6 +135,12 @@ uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
  */
 uint32_t rms_stage_over_acp(const char *vmsspec, const char *destpath);
 
+/* rms_read_over_acp (OVMX, vms-5303e) - all of `vmsspec`'s GENUINE bytes, read
+ * through the Files-11 ACP into a malloc'd buffer (free() it). Same status
+ * contract as rms_stage_over_acp; an empty file is RMS$_NORMAL with *buf NULL and
+ * *len 0. DCL DUMP's reader: it shows a file's bytes whatever its record format. */
+uint32_t rms_read_over_acp(const char *vmsspec, uint8_t **buf, uint64_t *len);
+
 /* rms_executive_absent (OVMX, vms-5f0) - 1 when /dev/vms / the Files-11 ACP is
  * unreachable (host ctest, plain-container gates, netbsd-vax cross), 0 when the
  * executive is present. The single source DCL's host-defer shares with RMS's own

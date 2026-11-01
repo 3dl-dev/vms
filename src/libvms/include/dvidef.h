@@ -30,6 +30,12 @@ extern "C" {
 
 /* ================================================================
  * DVI$_ item codes for SYS$GETDVI / SYS$GETDVIW / LIB$GETDVI
+ *
+ * Every code here is a real $DVIDEF value (docs/oracle/vax73-starlet-defs/
+ * DVIDEF.txt, alpha84-starlet-defs/DVIDEF.txt). Ten codes that are in neither
+ * (DVI$_BLOCKSIZE, _PATH_COUNT, _LABEL_STATUS, _MNTVERNCPY, _SERVED,
+ * _MSCP_SERVED, _AVAILABLE, _DUAL_PORT, _FOR_ODS2, _FOR_ODS5) were removed;
+ * "device available" is DVI$_AVL.
  * ================================================================ */
 
 /* Device identification */
@@ -62,7 +68,6 @@ extern "C" {
 #define DVI$_SECTORS            0x0024  /* Sectors per track (L) */
 #define DVI$_TRACKS             0x0026  /* Tracks per cylinder (L) */
 #define DVI$_CYLINDERS          0x0028  /* Cylinders on volume (L) */
-#define DVI$_BLOCKSIZE          0x001D  /* Block size in bytes (L) */
 
 /* Mount / access status */
 #define DVI$_MOUNTCNT           0x0038  /* Mount count (number of accessors) (L) */
@@ -82,10 +87,8 @@ extern "C" {
 
 /* Multipath */
 #define DVI$_AVAILABLE_PATH_COUNT 0x1A6 /* Number of available paths (L) */
-#define DVI$_PATH_COUNT         0x0051  /* Total path count (L) */
 
 /* Media / label */
-#define DVI$_LABEL_STATUS       0x0060  /* Label status (L) */
 #define DVI$_MEDIA_NAME         0x0116  /* Media name string (T) */
 #define DVI$_MEDIA_TYPE         0x0118  /* Media type (L) */
 #define DVI$_MEDIA_ID           0x011A  /* Media ID (L) */
@@ -94,14 +97,8 @@ extern "C" {
  * DVI$_ boolean item codes (return 1/0 in a longword)
  * ================================================================ */
 
-#define DVI$_MNTVERNCPY         0x0070  /* Volume has been verified (L, boolean) */
 #define DVI$_CONCEALED          0x0044  /* Device is concealed (L, boolean) */
-#define DVI$_SERVED             0x0072  /* Device is served (L, boolean) */
-#define DVI$_MSCP_SERVED        0x0073  /* Device is MSCP served (L, boolean) */
-#define DVI$_AVAILABLE          0x0074  /* Device is available (L, boolean) */
-#define DVI$_DUAL_PORT          0x0075  /* Device has dual porting (L, boolean) */
-#define DVI$_FOR_ODS2           0x0076  /* Formatted for ODS-2 (L, boolean) */
-#define DVI$_FOR_ODS5           0x0077  /* Formatted for ODS-5 (L, boolean) */
+#define DVI$_AVL                0x0062  /* Device is available (L, boolean) -- V7.3/V8.4 $DVIDEF 98 */
 
 #ifdef __cplusplus
 }

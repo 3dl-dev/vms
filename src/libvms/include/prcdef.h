@@ -95,8 +95,6 @@ extern "C" {
 #define PRC$V_PARSE_EXTENDED       20
 #define PRC$V_INHERIT_PERSONA      21
 #define PRC$V_LOGIN                6
-#define PRC$V_LOGINOUT             30  /* [OVMX] */
-#define PRC$V_NOCLISYM             29  /* [OVMX] */
 #define PRC$V_HOME_RAD             22  /* [OVMX] */
 
 /* $CREPRC item-list codes (V7.3 $PRCDEF) */
@@ -107,43 +105,6 @@ extern "C" {
 #define PRC$_OUTPUT_ATT            4
 #define PRC$_ERROR_ATT             5
 #define PRC$_CLASS                 6
-
-/* ================================================================
- * Process scheduling classes
- * ================================================================ */
-
-#define PRC$K_NORMAL        0   /* Normal scheduling */
-#define PRC$K_REALTIME      1   /* Real-time scheduling */
-
-/* ================================================================
- * Process state constants
- *
- * These describe the current execution state of a process,
- * as reported by $GETJPI.
- * ================================================================ */
-
-#define PRC$K_STATE_CEF     1   /* Common event flag wait */
-#define PRC$K_STATE_COM     2   /* Computable */
-#define PRC$K_STATE_COMO    3   /* Computable, outswapped */
-#define PRC$K_STATE_CUR     4   /* Current (executing) */
-#define PRC$K_STATE_FPG     5   /* Free page wait */
-#define PRC$K_STATE_HIB     6   /* Hibernating */
-#define PRC$K_STATE_HIBO    7   /* Hibernating, outswapped */
-#define PRC$K_STATE_LEF     8   /* Local event flag wait */
-#define PRC$K_STATE_LEFO    9   /* Local event flag wait, outswapped */
-#define PRC$K_STATE_MWAIT   10  /* Mutex/resource wait */
-#define PRC$K_STATE_PFW     11  /* Page fault wait */
-#define PRC$K_STATE_SUSP    12  /* Suspended */
-#define PRC$K_STATE_SUSPO   13  /* Suspended, outswapped */
-#define PRC$K_STATE_COLPG   14  /* Collided page wait */
-
-/* ================================================================
- * Process base priority limits
- * ================================================================ */
-
-#define PRC$K_MIN_PRIO      0   /* Minimum priority */
-#define PRC$K_MAX_PRIO      31  /* Maximum priority */
-#define PRC$K_RT_MIN_PRIO   16  /* Minimum real-time priority */
 
 /* ================================================================
  * UIC (User Identification Code) structure
@@ -199,7 +160,6 @@ typedef struct _uic UIC;
 #define JPI$_PROCPRIV       0x0204  /* Process privileges (quadword) */
 #define JPI$_RIGHTS_SIZE    0x0331  /* Rights list size (longword) */
 #define JPI$_RIGHTSLIST     0x0326  /* Rights list (array) */
-#define JPI$_DFPROT         0x011B  /* Default protection (word) */
 #define JPI$_DFDEV          0x011C  /* Default device (string) */
 #define JPI$_DFDIR          0x011D  /* Default directory (string) */
 #define JPI$_PRIB           0x0309  /* Base priority (longword) */

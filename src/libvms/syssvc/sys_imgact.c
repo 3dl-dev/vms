@@ -242,6 +242,12 @@ void imgact_image_exit(int code)
     _exit(code);
 }
 
+/* Nonzero while an in-process image is running (imgact_activate.h). */
+int imgact_inproc_active(void)
+{
+    return g_inproc_active != 0;
+}
+
 /*
  * Enter an image at its SysV `_start` with rsp pointing at a constructed initial
  * process stack, on a separate User-mode stack in the P0 window (design §A.6.4

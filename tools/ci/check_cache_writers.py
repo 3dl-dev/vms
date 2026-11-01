@@ -35,9 +35,9 @@ def main(argv):
             is_matrix = isinstance(strat, dict) and strat.get("matrix") is not None
             for st in job.get("steps") or []:
                 ct = str((st.get("with") or {}).get("cache-to") or "")
-                if "type=gha" not in ct:
+                if "type=gha" not in ct and "type=registry" not in ct:
                     continue
-                m = re.search(r"scope=([\w.-]+)", ct)
+                m = re.search(r"(?:scope=|ovmx-cache:)([\w.-]+)", ct)
                 scope = m.group(1) if m else "(default)"
                 where = "%s:%s" % (os.path.basename(f), jid)
                 writers.setdefault(scope, []).append(where)

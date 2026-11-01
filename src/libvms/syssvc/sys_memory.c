@@ -36,13 +36,19 @@
  * OVMX-USERSPACE: sys$crmpsc (vms-e0a) -- MAP_SHARED mmap of an fd taken from
  *     the caller's own pcb->channels[]; the global section NAME (gsdnam) is
  *     discarded, so no two processes can name the same section.
- * OVMX-USERSPACE: sys$dgblsc (vms-e0a) -- validates gsdnam and returns
- *     SS$_NORMAL; no global section database exists to delete from.
+ * OVMX-PARTIAL: sys$dgblsc (vms-d91) -- exec: vms_kif_gblsc_delete answers;
+ *     SS$_NOSUCHDEV with no executive (one runtime, no userspace answer for
+ *     system-wide state).
+ * OVMX-LOCAL: sys$dgblsc -- the SS$_NOSUCHSEC answer itself is not looked up in
+ *     the executive: no executive global-section registry exists yet and
+ *     sys$crmpsc discards the section name, so no named global section can
+ *     exist to delete.
  * OVMX-USERSPACE: sys$purgws (vms-e0a) -- validates the range and returns
  *     SS$_NORMAL; nothing is purged and no working set is consulted.
- * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- validates the range, echoes it back
- *     in retadr and returns SS$_NORMAL; no pages are locked.
- * OVMX-USERSPACE: sys$ulwset (vms-e0a) -- the same, for unlocking.
+ * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- mlock() of the page-rounded range in
+ *     the calling process only (via sys$lckpag); no VMS working-set list or
+ *     WSQUOTA exists, so the lock is the Linux VMM's, not an executive entry.
+ * OVMX-USERSPACE: sys$ulwset (vms-e0a) -- munlock() of the same (via sys$ulkpag).
  * OVMX-USERSPACE: sys$lckpag (vms-44a) -- mlock() of the page-rounded range in
  *     the calling process only; the lock is the Linux VMM's, not an executive
  *     balance-set entry, so no other process or $GETJPI can see it.
@@ -59,6 +65,7 @@
 #include <errno.h>
 #include "starlet.h"
 #include "va_rangedef.h"
+#include "vms_kif.h"
 
 /* VMS page size is 512 bytes (Alpha/Itanium may use larger, but 512 is the classic) */
 #define VMS_PAGE_SIZE 512
@@ -287,10 +294,10 @@ uint32_t sys$deltva_64(const GENERIC_64 *region_id_64, void *inadr_64,
  * sys$dgblsc - Delete global section.
  *
  * See the doc comment in starlet.h: OVMX has no cross-process named
- * global-section registry, so this validates its arguments and returns
- * success (the "mark for deletion, actual deletion happens once all
- * mapping processes delete their VA ranges" semantic is a no-op here
- * because there is no registry entry to mark).
+ * global-section registry (sys$crmpsc discards gsdnam), so no section by
+ * that name can exist. Honest answer per the VMS System Services Reference:
+ * SS$_NOSUCHSEC, "the specified global section does not exist" -- never a
+ * success that deleted nothing (vms-d91).
  */
 uint32_t sys$dgblsc(uint32_t flags, const struct dsc$descriptor_s *gsdnam,
                     void *ident) {
@@ -298,55 +305,29 @@ uint32_t sys$dgblsc(uint32_t flags, const struct dsc$descriptor_s *gsdnam,
 
     if (!gsdnam || !gsdnam->dsc$a_pointer) return SS$_BADPARAM;
 
-    return SS$_NORMAL;
+    /* Global sections are system-wide state: the executive answers (vms-d91). */
+    char nm[256];
+    uint32_t n = gsdnam->dsc$w_length < sizeof nm - 1 ? gsdnam->dsc$w_length : (uint32_t)sizeof nm - 1;
+    memcpy(nm, gsdnam->dsc$a_pointer, n);
+    nm[n] = 0;
+    return vms_kif_gblsc_delete(nm);
 }
 
 /*
- * sys$lkwset - Lock pages into working set.
+ * sys$lkwset / sys$ulwset - lock / unlock pages in the working set (vms-18c2).
  *
- * See the doc comment in starlet.h: OVMX is demand-paged by the Linux
- * VMM (no adjustable working set to lock pages into), so this validates
- * the range, echoes it to retadr, and returns success.
+ * The Linux VMM has no VMS working-set list, so the nearest real lock is the
+ * resident-page lock $LCKPAG already performs: the pages are mlock()ed (or
+ * munlock()ed) for real, the page-rounded range comes back in retadr, a host
+ * refusal is SS$_NOPRIV and an unmapped range SS$_ACCVIO. Not a validated
+ * no-op any more. (SS$_LKWSETFUL is still never returned: no WSQUOTA.)
  */
 uint32_t sys$lkwset(const void *inadr, void *retadr, uint32_t acmode) {
-    (void)acmode;
-    if (!inadr) return SS$_BADPARAM;
-
-    const void **in = (const void **)inadr;
-    uintptr_t start = (uintptr_t)in[0];
-    uintptr_t end = (uintptr_t)in[1];
-    if (end < start) return SS$_BADPARAM;
-
-    if (retadr) {
-        void **ret = (void **)retadr;
-        ret[0] = (void *)start;
-        ret[1] = (void *)end;
-    }
-
-    return SS$_NORMAL;
+    return sys$lckpag(inadr, retadr, acmode);
 }
 
-/*
- * sys$ulwset - Unlock pages from working set.
- *
- * Companion no-op to sys$lkwset above.
- */
 uint32_t sys$ulwset(const void *inadr, void *retadr, uint32_t acmode) {
-    (void)acmode;
-    if (!inadr) return SS$_BADPARAM;
-
-    const void **in = (const void **)inadr;
-    uintptr_t start = (uintptr_t)in[0];
-    uintptr_t end = (uintptr_t)in[1];
-    if (end < start) return SS$_BADPARAM;
-
-    if (retadr) {
-        void **ret = (void **)retadr;
-        ret[0] = (void *)start;
-        ret[1] = (void *)end;
-    }
-
-    return SS$_NORMAL;
+    return sys$ulkpag(inadr, retadr, acmode);
 }
 
 /*

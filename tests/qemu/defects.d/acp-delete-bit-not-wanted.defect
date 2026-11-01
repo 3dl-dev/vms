@@ -1,0 +1,30 @@
+# acp-delete-bit-not-wanted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "Deleting or renaming a file needs the DELETE (D) right on it, not write (Files-11 ACP protection gate)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_delete_prot";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The ACP's IO\$_DELETE / IO\$_MODIFY!MOVE asks vms_prot_check_acl() for VMS_PROT_ACC_DELETE on the file. The mutation asks for read+write instead (the pre-fix rule), so SYSPRV deletes S:RWE,O:RWE DELNOD.DAT: the delete is not refused, and the rename that follows finds no file (not SS\$_NOPRIV). The directory-W check is separate and stays green. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+deleting a file whose protection grants no D is SS$_NOPRIV, write notwithstanding
+renaming a file whose protection grants no D is SS$_NOPRIV
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one acp_check_want(..., VMS_PROT_ACC_DELETE) call (delete/rename).
+        sed -i 's|status = acp_check_want(proc, vol, &sc->fh, VMS_PROT_ACC_DELETE);|status = acp_check_access(proc, vol, \&sc->fh, 1); /* NEGCTL acp-delete-bit-not-wanted */|' "$_file"
+    :
+}

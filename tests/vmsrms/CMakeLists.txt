@@ -394,6 +394,7 @@ set_tests_properties(vmsrms_meta_org PROPERTIES
 add_executable(test_crtl_filespec
     test_crtl_filespec.c
     ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c
 )
 target_include_directories(test_crtl_filespec PRIVATE
     ${VMS_RMS_INCLUDE_DIR}
@@ -401,11 +402,34 @@ target_include_directories(test_crtl_filespec PRIVATE
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_INCLUDE_DIR}
 )
-target_link_libraries(test_crtl_filespec PRIVATE vmsrms vmsfs vmslnm pthread)
+target_link_libraries(test_crtl_filespec PRIVATE vmsrms vms vmsfs vmslnm pthread)
 add_test(NAME vmsrms_crtl_filespec COMMAND test_crtl_filespec)
 set_tests_properties(vmsrms_crtl_filespec PROPERTIES
     LABELS "unit;rms;crtl"
     TIMEOUT 30
+)
+
+# rd vms-da9b: the same translator under the DEC C EFS switches, replayed
+# against the real OpenVMS Alpha V8.4 decc$to_vms / decc$translate_vms
+# (tests/lab/captures/ods5-alpha-20261022/CONSOLE-5.txt, five switch settings
+# x eighteen names). crtl_features.c supplies the switch table.
+add_executable(test_crtl_efs_oracle
+    test_crtl_efs_oracle.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c
+)
+target_include_directories(test_crtl_efs_oracle PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_crtl_efs_oracle PRIVATE vmsrms vms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_crtl_efs_oracle COMMAND test_crtl_efs_oracle)
+set_tests_properties(vmsrms_crtl_efs_oracle PROPERTIES
+    LABELS "unit;rms;crtl;ods5"
+    TIMEOUT 30
+    ENVIRONMENT "ODS5_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022"
 )
 
 # vms-0ae: RMS merges a relative directory ([.X], [-], []) with the process
@@ -415,3 +439,39 @@ target_include_directories(test_rms_default_dir PRIVATE ${VMS_RMS_INCLUDE_DIR} $
 target_link_libraries(test_rms_default_dir PRIVATE vmsrms vmsfs vmslnm pthread)
 add_test(NAME vmsrms_default_dir COMMAND test_rms_default_dir)
 set_tests_properties(vmsrms_default_dir PROPERTIES LABELS "unit;rms" TIMEOUT 30)
+
+# vms-5303e: rms_read_over_acp (DCL DUMP's reader) is fail-honest -- RMS$_ACC with
+# no executive, never a POSIX read of the named path standing in for the volume.
+add_executable(test_read_over_acp test_read_over_acp.c)
+target_include_directories(test_read_over_acp PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_read_over_acp PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_read_over_acp COMMAND test_read_over_acp)
+set_tests_properties(vmsrms_read_over_acp PROPERTIES
+    LABELS "unit;rms"
+    TIMEOUT 30
+)
+
+# rd vms-b9c: RMS $PARSE's name engine replays the real OpenVMS Alpha V8.4
+# F$PARSE probes line by line (tests/lab/captures/ods5-alpha-20261022/
+# CONSOLE-3.txt, CONSOLE-4.txt): extended-specification escapes, the parse
+# style's case rule, multi-dot names, 236/237-character names.
+add_executable(test_rms_parse_ods5 test_rms_parse_ods5.c)
+target_include_directories(test_rms_parse_ods5 PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_rms_parse_ods5 PRIVATE vmsrms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_parse_ods5 COMMAND test_rms_parse_ods5)
+set_tests_properties(vmsrms_parse_ods5 PROPERTIES
+    LABELS "unit;rms;ods5"
+    TIMEOUT 30
+    ENVIRONMENT "ODS5_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022"
+)

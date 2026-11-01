@@ -1,0 +1,28 @@
+# lkwset-noop -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$LKWSET page locking (src/libvms/syssvc/sys_memory.c, vms-18c2)";;
+        targets)      echo "libvms/syssvc/sys_memory.c";;
+        suites_red)   echo "test_syssvc_lkwset";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$lkwset stops locking: it checks only that a range was given and returns SS\$_NORMAL with nothing locked and no range returned -- the pre-vms-18c2 no-op that reported a lock it never took.";;
+        require_fail) cat <<'EOF2'
+$LKWSET really locked the pages: VmLck grew by the range
+retadr is the page-rounded range actually locked, not an echo of the input
+$LKWSET of an unmapped range is refused, not SS$_NORMAL
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    return sys\$lckpag(inadr, retadr, acmode);$|    return inadr ? SS$_NORMAL : SS$_BADPARAM; /* NEGCTL lkwset-noop */|' "$_file"
+    :
+}

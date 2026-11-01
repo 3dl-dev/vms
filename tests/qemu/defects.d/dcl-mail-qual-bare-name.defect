@@ -1,0 +1,27 @@
+# dcl-mail-qual-bare-name -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL MAIL qualifier forwarding (src/vmsdcl/dcl_cmd_misc.c cmd_mail, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_misc.c";;
+        suites_red)   echo "test_syssvc_dcl_mail_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cmd_mail forwards the qualifier as a bare name again (no slash), so MAIL.EXE takes SUBJECT=hi for the recipient.";;
+        require_fail) cat <<'EOF2'
+MAIL/SUBJECT=.. reaches MAIL.EXE as /SUBJECT=value
+the qualifier name is not mistaken for the recipient
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|"/%s=%s",$|"%s=%s", /* NEGCTL dcl-mail-qual-bare-name */|' "$_file"
+    :
+}

@@ -80,6 +80,7 @@
 #define SS$_ILLIOFUNC    244
 #define SS$_BUGCHECK     676
 #define SS$_NOSUCHDEV    2312
+#define SS$_NOSUCHSEC    2424   /* %SYSTEM-W-NOSUCHSEC (mirrors ssdef.h, rd vms-d91) */
 #define SS$_NOSUCHFILE   2320
 #define SS$_ENDOFFILE    2160
 #define SS$_IVCHAN       316

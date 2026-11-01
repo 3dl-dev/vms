@@ -98,9 +98,10 @@ echo
 # here too so one job proves the whole aggregate; the ten names marked
 # DRIFT are rd vms-e1d's full parity-drift image set, now all closed.
 # DECNETD.EXE joined the aggregate with rd vms-f40 (the image an inbound
-# $ SET HOST arrives at), so it is verified here too: its datalink is
-# substrate-abstracted (src/libdatalink: AF_PACKET on Linux, bpf(4) on
-# NetBSD), which is exactly the claim this ELF32-vax check tests.
+# $ SET HOST arrives at), so it is verified here too: its datalink is the
+# EXECUTIVE's on every booted rail (src/libdatalink's executive backend over
+# /dev/vms VMS_IOCTL_L2_*, PHY_IO -- NetBSD/VAX included since rd vms-9394),
+# which this ELF32-vax build compiles and links.
 IMAGES="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE DECNETD.EXE"
 DRIFT_IMAGES="HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE"
 

@@ -216,7 +216,7 @@ boot_and_login() {
     [ "$key" = "A" ] && fd=4 || fd=5
     eval "exec $fd>\"$fifo\""
 
-    wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}" \
+    wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}" \
         && ok "node $key: executive attached (real vms.ko)" \
         || bad "node $key: executive never attached"
     send_to "$fd" ''
@@ -244,7 +244,7 @@ boot_and_login() {
     qemu_boot "$key" "$tap" "$disk" "$log" "$fifo" \
               "$((BOOT_TIMEOUT + FORM_WAIT + 180))"
     eval "exec $fd>\"$fifo\""
-    wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}" \
+    wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}" \
         || dump_and_die "node $key: boot2 executive never attached"
     send_to "$fd" ''
     wait_for_in "$log" 'Username:' "$BOOT_TIMEOUT" 0 "${QPID_[$key]}" \
@@ -257,6 +257,13 @@ boot_and_login() {
 DISK_A=/tmp/cluster-conn-a.img
 DISK_B=/tmp/cluster-conn-b.img
 rm -f "$DISK_A" "$DISK_B"; cp "$DISTRIB_IMG" "$DISK_A"; cp "$DISTRIB_IMG" "$DISK_B"
+# rd vms-3ea: each node's system disk gets its own label, <SCSNODE>SYS (the
+# real VAX's form: SCSNODE VAXC -> VAXCSYS). Both copies of the one kit carry
+# OVMXSYS, and the label is the Files-11 cluster lock namespace, so two
+# members' DIFFERENT disks would otherwise share one clusterwide resource.
+# SET VOLUME/LABEL's on-disk effect, offline: vmsfs_master relabel.
+vmsfs_master --ods2 relabel "$DISK_A" NODEASYS || { echo "FAIL: relabel node A's system disk" >&2; exit 1; }
+vmsfs_master --ods2 relabel "$DISK_B" NODEBSYS || { echo "FAIL: relabel node B's system disk" >&2; exit 1; }
 
 boot_and_login A "$TAP_A" "$DISK_A" NODEA 1040
 boot_and_login B "$TAP_B" "$DISK_B" NODEB 1041
@@ -326,9 +333,9 @@ for k in A B; do
         # allocator refuses to do until the glue seeds it from the port's real
         # incarnation (SCS_ERR_NOCONID). A seed of 0 is itself a legal value,
         # so asserting conid_epoch != 0 would be a coin flip, not a check.
-        echo "    (conid_epoch as the allocator holds it: $(grep '^conid_epoch=' "$out" | head -1))"
+        echo "    (conid_epoch as the allocator holds it: $(grep -a '^conid_epoch=' "$out" | head -1))"
     else
-        bad "node $k: CLUSTER_DIAG_CONN row SCS says SCS is not up (status=$(grep '^status=' "$out" | head -1))"
+        bad "node $k: CLUSTER_DIAG_CONN row SCS says SCS is not up (status=$(grep -a '^status=' "$out" | head -1))"
     fi
 
     walk="/tmp/cluster-conn-cdt-${k}.txt"

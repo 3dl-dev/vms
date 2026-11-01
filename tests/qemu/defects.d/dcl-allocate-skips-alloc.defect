@@ -1,0 +1,30 @@
+# dcl-allocate-skips-alloc -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL ALLOCATE allocates through \$ALLOC (the executive's device table), not by announcing it";;
+        targets)      echo "vmsdcl/dcl_cmd_io.c";;
+        suites_red)   echo "test_syssvc_dcl_allocate";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cmd_allocate() asks \$ALLOC and reports what it answers. The mutation skips the call and composes the physical name itself, so ALLOCATE still prints %DCL-I-ALLOC but the executive never records the allocation: SHOW DEVICE reads plain Online, and an ALLOCATE of a device another process holds is announced instead of refused with DEVALLOC. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+SHOW DEVICE then reads Online alloc (the executive holds the allocation)
+ALLOCATE of a device another process holds is %SYSTEM-W-DEVALLOC
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one sys$alloc call in cmd_allocate.
+        sed -i 's|uint32_t st = sys\$alloc(&dd, &plen, &pd, 0, 0);|uint32_t st = (plen = (uint16_t)snprintf(phys, sizeof phys, "_%s:", dev), SS$_NORMAL); /* NEGCTL dcl-allocate-skips-alloc */|' "$_file"
+    :
+}

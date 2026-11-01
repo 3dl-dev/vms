@@ -336,7 +336,7 @@ expect_red "$INIT_C" "3b(d) return before the halt makes the halt unreachable" \
 
 # (e) probe-and-release: the open succeeds, halts on failure, and then hands the
 # descriptor back, so vms.ko is no longer pinned and rmmod succeeds mid-life.
-sed -i 's#^    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\\n");$#    close(executive_fd);\n    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\\n");#' "$INIT_C"
+sed -i 's#^    boot_oplog("%%OVMX-I-EXEC, VMS executive attached on /dev/vms");$#    close(executive_fd);\n    boot_oplog("%%OVMX-I-EXEC, VMS executive attached on /dev/vms");#' "$INIT_C"
 expect_red "$INIT_C" "3b(e) descriptor closed again -- probe-and-release, not a pin" \
     "$R_CLOSE" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 
@@ -605,7 +605,7 @@ expect_red "$MBX_C" "5(b) sys_mailbox.c rebuilds a private socketpair mailbox" \
 # (c) DEVICE TABLE: $GETDVI answers device state from the host again (statvfs),
 # the classify_device()+statvfs() fake that reported devices the executive
 # never had.
-sed -i 's|^#define VMS_BLOCK_SIZE  512$|#define VMS_BLOCK_SIZE  512\nstatic int __devfake(void){ struct statvfs __v; return statvfs("/", \&__v); }|' "$DEV_C"
+sed -i 's|^#include "vms_kif.h"        /\* pulls in struct vms_devinfo, VMS_DEVNAM_SIZE \*/$|&\nstatic int __devfake(void){ struct statvfs __v; return statvfs("/", \&__v); }|' "$DEV_C"
 expect_red "$DEV_C" "5(c) sys_device.c fabricates device state from host statvfs" \
     "$R_FK_DEV" "$R_FK_EF" "$R_FK_MBX" "$R_FK_LNM" "$R_FK_PRV"
 

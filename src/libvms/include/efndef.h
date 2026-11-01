@@ -41,42 +41,6 @@ extern "C" {
  */
 #define EFN$C_ENF           128     /* No event flag (do not set any EF); V7.3 $EFNDEF */
 
-/* ================================================================
- * Local event flag cluster boundaries
- *
- * Each cluster holds 32 event flags.  Local clusters are private
- * to the process; common clusters are shared.
- * ================================================================ */
-
-#define EFN$C_LOCAL_MIN     0       /* First local event flag number */
-#define EFN$C_LOCAL_MAX     63      /* Last local event flag number */
-
-#define EFN$C_CLUSTER_0_MIN 0       /* Local cluster 0: flags  0-31 */
-#define EFN$C_CLUSTER_0_MAX 31
-#define EFN$C_CLUSTER_1_MIN 32      /* Local cluster 1: flags 32-63 */
-#define EFN$C_CLUSTER_1_MAX 63
-
-/* ================================================================
- * Common event flag cluster boundaries
- *
- * Common event flags are associated with a named common event
- * flag cluster (CEFC) shared between cooperating processes.
- * ================================================================ */
-
-#define EFN$C_COMMON_MIN    64      /* First common event flag number */
-#define EFN$C_COMMON_MAX    127     /* Last common event flag number */
-
-#define EFN$C_CLUSTER_2_MIN 64      /* Common cluster 2: flags  64-95 */
-#define EFN$C_CLUSTER_2_MAX 95
-#define EFN$C_CLUSTER_3_MIN 96      /* Common cluster 3: flags 96-127 */
-#define EFN$C_CLUSTER_3_MAX 127
-
-/* ================================================================
- * Event flag cluster size
- * ================================================================ */
-
-#define EFN$C_CLUSTER_SIZE  32      /* Flags per cluster */
-
 #ifdef __cplusplus
 }
 #endif

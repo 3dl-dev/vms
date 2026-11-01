@@ -48,6 +48,7 @@
 #include "rms_textfile.h"    /* rms_textfile_* -- RMS text I/O over the Files-11 ACP (vms-274) */
 #include "../vmstcpip/mgmt/tcpip_service_db.h" /* TCPIP {SET,SHOW,ENABLE,DISABLE,DELETE} SERVICE engine (#878, vms-71b) */
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "ovmx_subprocess.h"   /* children are subprocesses the executive made (rd vms-1f8) */
 #include "ovmx_layout.h"
 #include "vms/logical.h"
@@ -354,6 +355,15 @@ int cmd_sort(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/*
+ * DUMP reads the file's bytes through the Files-11 ACP (rms_read_over_acp), as
+ * TYPE reads it through RMS: whatever the file's record format -- GNU as's EVAX
+ * object is rfm=udf, which no $GET path serves -- and never as a POSIX fopen() of
+ * a /vms path (INV-6). It used to fopen() the translated path, which on the
+ * product runtime is not where the volume's files are: DUMP of any file written
+ * through RMS answered %RMS-E-FNF (vms-5303e). The executive-absent host defer is
+ * the same one TYPE has (rms_executive_absent(), a kernel-mounted unit).
+ */
 int cmd_dump(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -363,11 +373,41 @@ int cmd_dump(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
+    uint8_t *data = NULL;
+    uint64_t dlen = 0;
+    char eff[1024];
+    uint32_t rst = RMS$_ACC;
+    int have = 0;
+    const char *name_src = NULL;
     char linux_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
 
-    FILE *fp = fopen(linux_path, "rb");
-    if (!fp) {
+    if (dcl_rms_effective_spec(ctx, cmd->params[0], eff, sizeof(eff)) == 0 &&
+        !rms_executive_absent()) {
+        rst = rms_read_over_acp(eff, &data, &dlen);
+        have = (rst == RMS$_NORMAL);
+        name_src = eff;
+    }
+    if (!have && (rms_executive_absent() ||
+                  vmsfs_device_spec_kernel_mounted(cmd->params[0]))) {
+        dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+        FILE *fp = fopen(linux_path, "rb");
+        if (fp) {
+            size_t cap = 4096, n = 0, r;
+            data = malloc(cap);
+            while (data && (r = fread(data + n, 1, cap - n, fp)) > 0) {
+                n += r;
+                if (n == cap) {
+                    uint8_t *g = realloc(data, cap *= 2);
+                    if (!g) { free(data); data = NULL; }
+                    else data = g;
+                }
+            }
+            fclose(fp);
+            if (data) { dlen = n; have = 1; name_src = linux_path; }
+        }
+    }
+    if (!have) {
+        free(data);
         dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
         return SS$_NOSUCHFILE;
     }
@@ -379,23 +419,28 @@ int cmd_dump(struct dcl_command *cmd)
 
     /* VMS DUMP header */
     char vms_name[256];
-    const char *bn = strrchr(linux_path, '/');
-    if (bn) bn++; else bn = linux_path;
+    const char *bn = name_src;
+    const char *sl = strrchr(name_src, '/');
+    const char *br = strrchr(name_src, ']');
+    const char *co = strrchr(name_src, ':');
+    if (sl) bn = sl + 1;
+    else if (br) bn = br + 1;
+    else if (co) bn = co + 1;
     size_t i;
-    for (i = 0; bn[i] && i < sizeof(vms_name)-1; i++)
+    for (i = 0; bn[i] && bn[i] != ';' && i < sizeof(vms_name)-1; i++)
         vms_name[i] = (char)toupper((unsigned char)bn[i]);
     vms_name[i] = '\0';
 
     printf("\nDump of file SYS$DISK:[]%s;1\n\n", vms_name);
     printf("File ID (0,0,0)  End of file block 0  Offset 0\n\n");
 
-    unsigned char buf[16];
-    long offset = 0;
-    size_t n;
+    uint64_t offset = 0;
     long block = 0;
     int in_block_start = 1;
 
-    while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
+    while (offset < dlen) {
+        size_t n = (size_t)(dlen - offset < 16 ? dlen - offset : 16);
+        const uint8_t *buf = data + offset;
         /* Print block header at start of each 512-byte block */
         if (in_block_start || (offset % 512 == 0)) {
             if (offset > 0 && offset % 512 == 0) {
@@ -410,7 +455,7 @@ int cmd_dump(struct dcl_command *cmd)
         }
 
         /* Print offset (VMS style: relative to start of current block) */
-        long block_offset = offset % 512;
+        long block_offset = (long)(offset % 512);
         printf("%08lX ", block_offset);
 
         /* Hex bytes (4 groups of 4, space between) */
@@ -430,10 +475,10 @@ int cmd_dump(struct dcl_command *cmd)
         }
         printf("\n");
 
-        offset += (long)n;
+        offset += n;
     }
 
-    fclose(fp);
+    free(data);
     printf("\n");
 
     return SS$_NORMAL;
@@ -536,6 +581,21 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
             bin = staged_path;
     }
 
+    /*
+     * LAZY STAGING (rd vms-83d): a utility the boot bridge did NOT pre-stage
+     * (MAIL, MONITOR, INITIALIZE, PRODUCT, LIBRARIAN, HELP, TCC, LINK) is read
+     * off the ODS-2 volume over the ACP NOW, into this user's private staging
+     * directory -- the same lazy path RUN takes (dcl_resolve_activatable). The
+     * boot no longer holds every utility image in RAM (tmpfs) on a 16 MB VAX.
+     */
+    char lazy_path[PATH_MAX];
+    if (!bin && ctx) {
+        const char *resolved = (sys_path[0] ? sys_path : def_path);
+        if (dcl_resolve_activatable(ctx, vms_spec, resolved, lazy_path,
+                                    sizeof(lazy_path)))
+            bin = lazy_path;
+    }
+
     /* Set argv[0] to resolved path or exe_name for PATH search */
     argv[0] = (char *)(bin ? bin : exe_name);
 
@@ -544,7 +604,9 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
      * lines) reads SYS$INPUT from the procedure, not the terminal. Set up
      * before the fork so the child inherits fd 0; restore on every return. */
     struct dcl_sysinput si;
-    dcl_sysinput_setup(ctx, &si);
+    int srt = dcl_sysinput_setup(ctx, &si);
+    if (srt)
+        return srt;
 
     uint32_t status = SS$_NORMAL;
     int pcb_hold[2];
@@ -639,8 +701,21 @@ int cmd_mail(struct dcl_command *cmd)
     char *argv[64] = {NULL};
     int argc = 0;
     argv[argc++] = NULL; /* placeholder */
-    for (int i = 0; i < cmd->qualifier_count && argc < 62; i++)
-        argv[argc++] = cmd->qualifiers[i].name;
+    /* MAIL.EXE reads "/NAME=value" tokens (vms_mail.c main). The parser strips
+     * the '/' and '=' into qualifiers[], so rebuild the token: forwarding the
+     * bare name made MAIL/SUBJECT="x" user hand MAIL.EXE the word SUBJECT as
+     * the recipient and drop the subject (vms-097). */
+    char qual_bufs[8][340];
+    int nq = 0;
+    for (int i = 0; i < cmd->qualifier_count && argc < 62 && nq < 8; i++) {
+        if (cmd->qualifiers[i].value[0])
+            snprintf(qual_bufs[nq], sizeof qual_bufs[nq], "/%s=%s",
+                     cmd->qualifiers[i].name, cmd->qualifiers[i].value);
+        else
+            snprintf(qual_bufs[nq], sizeof qual_bufs[nq], "/%s",
+                     cmd->qualifiers[i].name);
+        argv[argc++] = qual_bufs[nq++];
+    }
     for (int i = 0; i < cmd->param_count && argc < 62; i++) {
         if (cmd->params[i][0] != '\0')
             argv[argc++] = cmd->params[i];
@@ -2707,6 +2782,53 @@ static int cmd_tcpip_show_service(struct dcl_command *cmd)
 /*
  * TCPIP - TCP/IP Services command with SHOW and SET subcommands.
  */
+/*
+ * Per-sub-command qualifier tables for the TCPIP umbrella (vms-097). TCPIP's
+ * qualifiers belong to the sub-command (and its object: SET ROUTE, SHOW
+ * INTERFACE, ...), so each (verb, object) pair lists EXACTLY the qualifiers
+ * its handler reads and anything else is %DCL-W-IVQUAL rather than silently
+ * dropped. /SYSTEM on SET NAME_SERVICE is the one scope OVMX has (the config
+ * is system-wide), so it is honoured by construction.
+ */
+#define TQ_END { NULL, 0, 0, NULL, NULL }
+#define TQ_FLAG(n) { n, CDU_VT_NONE, 0, NULL, NULL }
+#define TQ_VAL(n)  { n, CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }
+static const struct dcl_qual_def tq_none[] = { TQ_END };
+static const struct dcl_qual_def tq_full[] = { TQ_FLAG("FULL"), TQ_END };
+static const struct dcl_qual_def tq_set_host[] = { TQ_VAL("ADDRESS"), TQ_END };
+static const struct dcl_qual_def tq_set_nameservice[] = {
+    TQ_FLAG("SYSTEM"), TQ_VAL("SERVER"), TQ_VAL("DOMAIN"), TQ_FLAG("REAPPLY"), TQ_END };
+static const struct dcl_qual_def tq_set_interface[] = {
+    TQ_VAL("HOST"), TQ_VAL("NETWORK_MASK"), TQ_FLAG("REAPPLY"), TQ_END };
+static const struct dcl_qual_def tq_set_route[] = {
+    TQ_VAL("GATEWAY"), TQ_FLAG("DEFAULT"), TQ_VAL("DESTINATION"),
+    TQ_VAL("NETWORK_MASK"), TQ_FLAG("REAPPLY"), TQ_END };
+static const struct dcl_qual_def tq_set_service[] = {
+    TQ_VAL("PORT"), TQ_VAL("FILE"), TQ_VAL("USER_NAME"),
+    TQ_FLAG("ENABLE"), TQ_FLAG("DISABLE"), TQ_END };
+
+static const struct {
+    const char *verb;  int vmin;       /* TCPIP <verb> */
+    const char *what;  int wmin;       /* TCPIP <verb> <what>; NULL = verb only */
+    const struct dcl_qual_def *quals;
+} tcpip_subcmd_quals[] = {
+    { "REAPPLY", 3, NULL,            0, tq_none },
+    { "SHOW",    2, "INTERFACE",     3, tq_full },
+    { "SHOW",    2, "ROUTE",         3, tq_none },
+    { "SHOW",    2, "HOST",          3, tq_none },
+    { "SHOW",    2, "VERSION",       3, tq_none },
+    { "SHOW",    2, "CONFIGURATION", 4, tq_none },
+    { "SHOW",    2, "SERVICE",       4, tq_none },
+    { "SET",     2, "HOST",          3, tq_set_host },
+    { "SET",     2, "NAME_SERVICE",  4, tq_set_nameservice },
+    { "SET",     2, "INTERFACE",     3, tq_set_interface },
+    { "SET",     2, "ROUTE",         3, tq_set_route },
+    { "SET",     2, "SERVICE",       3, tq_set_service },
+    { "ENABLE",  2, "SERVICE",       4, tq_none },
+    { "DISABLE", 3, "SERVICE",       4, tq_none },
+    { "DELETE",  3, "SERVICE",       4, tq_none },
+};
+
 int cmd_tcpip(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1) {
@@ -2715,6 +2837,22 @@ int cmd_tcpip(struct dcl_command *cmd)
     }
 
     const char *subcmd = cmd->params[0];
+
+    for (size_t t = 0; t < sizeof tcpip_subcmd_quals / sizeof tcpip_subcmd_quals[0]; t++) {
+        if (!dcl_match_command(subcmd, tcpip_subcmd_quals[t].verb,
+                               tcpip_subcmd_quals[t].vmin))
+            continue;
+        if (tcpip_subcmd_quals[t].what &&
+            (cmd->param_count < 2 ||
+             !dcl_match_command(cmd->params[1], tcpip_subcmd_quals[t].what,
+                                tcpip_subcmd_quals[t].wmin)))
+            continue;
+        struct dcl_verb shim = { .quals = tcpip_subcmd_quals[t].quals };
+        uint32_t qs = dcl_validate_qualifiers(&shim, cmd);
+        if (qs != SS$_NORMAL)
+            return (int)qs;
+        break;
+    }
 
     if (dcl_match_command(subcmd, "REAPPLY", 3)) {
         /* TCPIP REAPPLY -- reapply persisted config from the ACP stores (vms-b97);
@@ -2747,7 +2885,7 @@ int cmd_tcpip(struct dcl_command *cmd)
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SHOW keyword - \\%s\\", what);
-        return SS$_IVKEYW;
+        return CLI$_IVKEYW;
     }
 
     if (dcl_match_command(subcmd, "SET", 2)) {
@@ -2773,7 +2911,7 @@ int cmd_tcpip(struct dcl_command *cmd)
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SET keyword - \\%s\\", what);
-        return SS$_IVKEYW;
+        return CLI$_IVKEYW;
     }
 
     if (dcl_match_command(subcmd, "ENABLE", 2) ||
@@ -2795,7 +2933,7 @@ int cmd_tcpip(struct dcl_command *cmd)
 
     dcl_error("TCPIP", 2, "IVKEYW",
               "unrecognized TCPIP keyword - \\%s\\", subcmd);
-    return SS$_IVKEYW;
+    return CLI$_IVKEYW;
 }
 
 /* ================================================================== */
@@ -3247,10 +3385,16 @@ int cmd_attach(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
- * CONVERT - Convert file format (basic file copy with record counting).
+ * CONVERT - record-for-record copy of a text file (vms-558e).
  *
  * CONVERT input-file output-file
- * /FDL=fdl-file — accepted but ignored with informational message
+ *
+ * Without /FDL the output keeps the input's records and attributes, which a
+ * text-file copy does faithfully, and -- as on VMS -- the command is silent
+ * on success. /FDL asks for a RECORD-FORMAT CONVERSION (organization, record
+ * format, keys) that OVMX does not perform: DCL rejects it as an unrecognized
+ * qualifier (%DCL-W-IVQUAL, via q_convert) before this runs, never accepted and
+ * ignored, and nothing is written.
  */
 int cmd_convert(struct dcl_command *cmd)
 {
@@ -3259,11 +3403,6 @@ int cmd_convert(struct dcl_command *cmd)
     if (cmd->param_count < 2) {
         dcl_error("CONVERT", 2, "NOINPFIL", "missing input and/or output file");
         return SS$_BADPARAM;
-    }
-
-    /* Check /FDL qualifier — accepted but not implemented */
-    if (dcl_has_qualifier(cmd, "FDL")) {
-        printf("%%CONVERT-I-FDL, /FDL qualifier accepted but ignored in this implementation\n");
     }
 
     char src_path[1024], dst_path[1024];
@@ -3285,16 +3424,15 @@ int cmd_convert(struct dcl_command *cmd)
 
     /* Copy line by line, counting records */
     char line[4096];
-    long records = 0;
-    while (fgets(line, sizeof(line), src)) {
+    while (fgets(line, sizeof(line), src))
         fputs(line, dst);
-        records++;
-    }
 
     fclose(src);
-    fclose(dst);
-
-    printf("%%CONVERT-S-CONVERTED, %ld records converted\n", records);
+    int werr = ferror(dst);
+    if (fclose(dst) != 0 || werr) {
+        dcl_error("CONVERT", 2, "WRITEERR", "error writing %s", cmd->params[1]);
+        return SS$_FILACCERR;
+    }
     return SS$_NORMAL;
 }
 
@@ -3386,114 +3524,43 @@ int cmd_install(struct dcl_command *cmd)
 /*
  * LINK - Link object modules into an executable image.
  *
- * LINK file1[,file2,...]
- * /EXECUTABLE=name — output executable name
- * /MAP — produce link map
+ *   LINK[/EXECUTABLE[=spec]] [/NOINFORMATIONALS] file[/qual][,file...] ...
  *
- * Wraps the system linker (cc).
+ * The verb's argument tail goes to SYS$SYSTEM:LINK.EXE exactly as typed; the
+ * linker reads the VMS command syntax itself (src/vmslink/vms_cli.c), as OpenVMS
+ * LINK reads its own command line. (This was a wrapper around the host `cc`; it
+ * wrote an image no OVMX activator could run.) The qualifier table in
+ * dcl_builtin.c keeps DCL's %DCL-W-IVQUAL for anything LINK.EXE does not know.
  */
 int cmd_link(struct dcl_command *cmd)
 {
-    struct dcl_context *ctx = dcl_get_context();
-
-    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
-        dcl_error("LINK", 2, "NOFILES", "no input files specified");
-        return SS$_BADPARAM;
-    }
-
-    /* Collect input files — params may be comma-separated */
-    char *input_files[64];
-    int input_count = 0;
-    char resolved[64][1024];
-
-    for (int i = 0; i < cmd->param_count && input_count < 64; i++) {
-        if (cmd->params[i][0] == '\0') continue;
-
-        /* Split on commas */
-        char temp[DCL_MAX_LINE];
-        strncpy(temp, cmd->params[i], sizeof(temp) - 1);
-        temp[sizeof(temp) - 1] = '\0';
-
-        char *tok = strtok(temp, ",");
-        while (tok && input_count < 64) {
-            while (*tok == ' ') tok++;
-            if (*tok) {
-                dcl_resolve_path(ctx, tok, resolved[input_count],
-                                 sizeof(resolved[input_count]));
-                input_files[input_count] = resolved[input_count];
-                input_count++;
-            }
-            tok = strtok(NULL, ",");
-        }
-    }
-
-    if (input_count == 0) {
-        dcl_error("LINK", 2, "NOFILES", "no input files specified");
-        return SS$_BADPARAM;
-    }
-
-    /* Determine output name */
-    char output_name[1024];
-    const char *exe_val = dcl_qualifier_value(cmd, "EXECUTABLE");
-    if (exe_val && exe_val[0]) {
-        dcl_resolve_path(ctx, exe_val, output_name, sizeof(output_name));
-    } else {
-        /* Default: first input name without extension + .EXE */
-        strncpy(output_name, input_files[0], sizeof(output_name) - 1);
-        output_name[sizeof(output_name) - 1] = '\0';
-        char *dot = strrchr(output_name, '.');
-        if (dot) *dot = '\0';
-        strncat(output_name, ".EXE", sizeof(output_name) - strlen(output_name) - 1);
-    }
-
-    /* Check /MAP qualifier */
-    int want_map = dcl_has_qualifier(cmd, "MAP");
-    char map_name[1024] = {0};
-    if (want_map) {
-        strncpy(map_name, output_name, sizeof(map_name) - 1);
-        map_name[sizeof(map_name) - 1] = '\0';
-        char *dot = strrchr(map_name, '.');
-        if (dot) *dot = '\0';
-        strncat(map_name, ".MAP", sizeof(map_name) - strlen(map_name) - 1);
-    }
-
-    /* Print linking message */
-    printf("%%LINK-I-LINK, linking %s...\n", output_name);
-
-    /* Build cc command: cc -o output input1 input2 ... [-Wl,-Map,mapfile] */
-    char *argv[128];
+    char *argv[DCL_MAX_PARAMS * 4 + 8] = {NULL};
     int argc = 0;
-    argv[argc++] = "cc";
-    argv[argc++] = "-o";
-    argv[argc++] = output_name;
-    for (int i = 0; i < input_count && argc < 120; i++)
-        argv[argc++] = input_files[i];
-    if (want_map) {
-        static char map_flag[1100];
-        snprintf(map_flag, sizeof(map_flag), "-Wl,-Map,%s", map_name);
-        argv[argc++] = map_flag;
+    argv[argc++] = NULL;                      /* placeholder for the resolved image */
+
+    /* split the raw tail on blanks outside double quotes */
+    static char tail[sizeof(cmd->raw_tail) + 1];
+    snprintf(tail, sizeof tail, "%s", cmd->raw_tail);
+    char *p = tail;
+    while (*p && argc < (int)(sizeof argv / sizeof argv[0]) - 1) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+        char *start = p;
+        int inq = 0;
+        while (*p && (inq || (*p != ' ' && *p != '\t'))) {
+            if (*p == '"') inq = !inq;
+            p++;
+        }
+        if (*p) *p++ = '\0';
+        argv[argc++] = start;
     }
     argv[argc] = NULL;
 
-    /* The linker runs in a subprocess the executive made (rd vms-1f8). */
-    pid_t pid = ovmx_subprocess_fork(NULL, NULL);
-    if (pid == 0) {
-        execvp("cc", argv);
-        _exit(127);
-    } else if (pid > 0) {
-        int wstatus;
-        waitpid(pid, &wstatus, 0);
-        if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0) {
-            printf("%%LINK-I-DONE, %s linked successfully\n", output_name);
-            return SS$_NORMAL;
-        } else {
-            dcl_error("LINK", 2, "FAILED", "error linking image");
-            return SS$_ABORT;
-        }
-    } else {
-        dcl_error("LINK", 4, "CREPRC", "cannot create linker process");
-        return SS$_ABORT;
+    if (argc < 2) {
+        dcl_error("LINK", 2, "NOFILES", "no input files specified");
+        return SS$_BADPARAM;
     }
+    return dcl_exec_utility("LINK.EXE", "LINK", argv, argc);
 }
 
 /* ================================================================== */

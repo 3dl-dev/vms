@@ -23,7 +23,6 @@
 #define OPC$_RQ_ENABLE  101 /* [OVMX] enable operator terminal (not a V7.3 request type) */
 #define OPC$_RQ_DISABLE 102 /* [OVMX] disable operator terminal (not a V7.3 request type) */
 #define OPC$_RQ_STATUS  6   /* Request operator status */
-#define OPC$_RQ_LOGFIL  103 /* [OVMX] change operator log file (not a V7.3 request type) */
 
 /* ================================================================
  * OPC$ Operator Class Bitmasks (opc$b_ms_target / OPC$M_NM_*)

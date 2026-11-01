@@ -245,9 +245,17 @@ uint32_t vms_kif_dlcefc(const char *name);
  * Lock Manager (3d)
  * ================================================================ */
 
-/* Enqueue lock request. Returns lock ID in *lkid */
+/*
+ * Enqueue lock request. Returns lock ID in *lkid.
+ *
+ * `resnam_len` IS THE NAME'S COUNT (rd vms-326). A VMS resource name is a
+ * counted 1..31-byte string that may contain NULs -- RMS's file-access lock
+ * carries three -- so $ENQ passes the descriptor's own dsc$w_length here and
+ * the executive keys the resource on exactly those bytes. 0 means "the
+ * NUL-terminated string in resnam", which is what an ASCII caller states.
+ */
 uint32_t vms_kif_enq(uint32_t efn, uint32_t lkmode, uint32_t flags,
-                      const char *resnam, uint32_t parid,
+                      const char *resnam, uint32_t resnam_len, uint32_t parid,
                       uint64_t astadr, uint64_t astprm,
                       uint64_t blkastadr,
                       uint32_t *lkid, uint8_t *valblk);
@@ -833,6 +841,9 @@ uint32_t vms_kif_setcli(uint32_t cliflag, const char *command);
 
 /* $SETDFPROT -- process default file protection, held by the executive. */
 uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot);
+/* $SET_PROCESS_PROPERTIESW executive half (rd vms-b9c): one process property
+ * (PPROP$C_ code; the parse style today) read and optionally set. */
+uint32_t vms_kif_pprop(uint32_t property, const uint32_t *newvalue, uint32_t *oldvalue);
 /* $SETDDIR: the executive-held process default directory (rd vms-872). */
 uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap);
 /* The process rights list (vms-7d5a, VMS_IOCTL_RIGHTS): $GRANTID / $REVOKID. op = VMS_RIGHTS_OP_GRANT / _REVOKE; pid 0 = the caller. */
@@ -1184,6 +1195,21 @@ uint32_t vms_kif_mbx_create(int permanent, uint32_t maxmsg, uint32_t bufquo,
  * unrelated process uses to reach a mailbox it did not create. SS$_NOSUCHDEV
  * if no such mailbox exists. */
 uint32_t vms_kif_mbx_assign(const char *devnam, uint32_t *exec_chan);
+
+/* $DGBLSC through the executive (rd vms-d91): SS$_NOSUCHDEV when /dev/vms is
+ * unreachable, else SS$_NOSUCHSEC (no named global section is ever registered). */
+uint32_t vms_kif_gblsc_delete(const char *name);
+
+/* vms_kif_task_fork - the substrate task a process service ($CREPRC, LIB$SPAWN) forks
+ * and then has the executive register as a VMS process. Creator: the task id; new
+ * task: 0; failure: -errno. (vms-65a; the C RTL has no fork to offer.)
+ *
+ * OVMX-UNWIRED: vms_kif_task_fork (vms-65a) -- its caller is ovmx_alpha_fork() in
+ * ovmx_host_absent.h, compiled only by the OpenVMS-calling-standard (Alpha) build of
+ * sys$creprc, which this census's host compile database does not contain; the x86 and
+ * aarch64 builds call the C library's fork(). Proved in the guest by the xgcclink gate
+ * (alpha-xgcclink): system() -> LIB$SPAWN -> $CREPRC returns an odd status. */
+int vms_kif_task_fork(void);
 
 /* $DELMBX: mark the mailbox behind `exec_chan` for deletion. Does not
  * deassign `exec_chan` itself -- see vms_mbx.c's header. */

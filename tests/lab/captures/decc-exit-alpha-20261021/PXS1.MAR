@@ -1,0 +1,7 @@
+        .TITLE  PXS1  OVMX exit-status probe: DECC$__POSIX_EXIT(1)
+        .PSECT  CCODE,EXE,NOWRT,QUAD
+        .ENTRY  PXS1,^M<>
+        PUSHL   #1
+        CALLS   #1,G^DECC$__POSIX_EXIT
+        RET
+        .END    PXS1

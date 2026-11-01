@@ -99,6 +99,12 @@
  * WRITE/SETMODE/BIND structs and numbers, byte-identical to vms_ioctl.h. */
 #include "vms_tt_nb.h"
 
+/* The executive L2 (raw datalink) contract (rd vms-9394): the VMS_IOCTL_L2_*
+ * arg structs and numbers src/kernel-core/vms_l2.c copies, the station-address
+ * policy it enforces, and VMS_PRV_M_PHY_IO it gates on -- included from the ONE
+ * definition in src/kernel/vms_l2.h (see vms_l2_nb.h). */
+#include "vms_l2_nb.h"
+
 /* ================================================================
  * VMS status codes -- the subset the event-flag facility returns. Values match
  * src/kernel/vms_internal.h exactly (ORACLE-PINNED there, vms-2a8/vms-8019).
@@ -108,6 +114,8 @@
 #define SS__WASSET   9             /* SS$_WASSET */
 #define SS__INSFMEM  292           /* SS$_INSFMEM */
 #define SS__DUPLNAM  148           /* SS$_DUPLNAM (INSTALL ADD of an installed file) */
+#define SS__BADFILENAME 2072       /* SS$_BADFILENAME (ACP: name too long, rd vms-7e7e) */
+#define SS__BADFILEVER  2080       /* SS$_BADFILEVER (ACP: a second '.' on ODS-2, rd vms-b9c) */
 #define SS__ILLEFC   236           /* SS$_ILLEFC */
 #define SS__UNASEFC  564           /* SS$_UNASEFC */
 /* Access-mode + AST subset (P4-A). Values match src/kernel/vms_internal.h
@@ -157,6 +165,10 @@
 #define SS__SYNCH       1673       /* SS$_SYNCH (granted synchronously) */
 #define SS__CANCELGRANT 8508       /* SS$_CVTUNGRANT (conversion could not be granted) */
 #define SS__UNSUPPORTED 3658       /* SS$_UNSUPPORTED (remote DLM path -- 0.4) */
+/* SS$_IVBUFLEN (invalid buffer length): $ENQ's answer to a resource name of 0
+ * or more than 31 bytes (rd vms-326). Value matches src/kernel/vms_internal.h
+ * exactly. */
+#define SS__IVBUFLEN    844
 /* Logical-name subset (rd vms-72da). Values match src/kernel/vms_internal.h
  * exactly. SS__IVLOGNAM (340) comes from vms_proctab_nb.h. SUPERSEDE/NOLOGNAM
  * are public $SSDEF; SS__EXLNMQUOTA is the ONE value not yet in ssdef.h --
@@ -490,6 +502,15 @@ struct vms_lock_entry {
 	                                     * is a follow-on (vms-489). Mirror of the
 	                                     * Linux vms_internal.h field. */
 	/*
+	 * THE PARENT'S MASTER HANDLE (rd vms-b67a): the second half of the
+	 * (own, master) pair a sub-lock request carries at body[36:44], read off
+	 * the PARENT LKB at $ENQ. 0 for a root lock and for a sub-lock under a
+	 * local parent; a proxy parent with no master handle yet makes the $ENQ
+	 * refuse rather than leave this 0 on a frame. Mirror of the Linux
+	 * vms_internal.h field; see there for the full reasoning.
+	 */
+	uint32_t            parent_master_lkid;
+	/*
 	 * PROXY LKB (FC-P4.4) -- the requester-side image of a lock mastered on
 	 * ANOTHER node (Davis p. 6-52's *process copy*). See the Linux twin
 	 * (src/kernel/vms_internal.h) for the full per-field rationale this file
@@ -516,6 +537,12 @@ struct vms_lock_entry {
 struct vms_lock_resource {
 	exec_hash_node_t    hash_node;      /* link in the global resource hash */
 	char                name[32];
+	/* How many of those bytes are the name (rd vms-326): a VMS resource name
+	 * is COUNTED and may contain NULs (RMS's file-access lock is 26 bytes
+	 * with three of them), so the block carries the count and every lookup
+	 * matches on it. Mirror of the Linux twin (src/kernel/vms_internal.h),
+	 * where the full note lives. */
+	uint8_t             name_len;
 	/* The rest of the resource's identity -- UIC group (0 for a
 	 * LCK$M_SYSTEM name) and access mode, the two values that qualify a VMS
 	 * resource name and that the directory hash is computed over (rd
@@ -531,6 +558,9 @@ struct vms_lock_resource {
 	                                     * granting algorithm walks granted and
 	                                     * waiting only. Mirror of the Linux twin. */
 	uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
+	/* THE VALUE BLOCK'S SEQUENCE (rd vms-ed5). Mirror of the Linux twin,
+	 * whose comment carries the grounding and the open item (rd vms-85c1). */
+	uint32_t            valblk_seq;
 	exec_lock_t         lock;
 	int                 refcount;
 	struct vms_lock_resource *parent;
@@ -567,7 +597,10 @@ struct vms_lock_resource {
 	uint8_t             dir_valid;
 	uint32_t            dir_gen;
 	uint32_t            dir_csid;       /* directory node CSID; 0 = this node */
-	uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */
+	uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */	/* rd vms-c55: the directory node that was TOLD this node masters this
+	 * resource (its lookup answer was "you master it"); 0 = no directory
+	 * holds an entry for it. A removal is sent only to that node. */
+	uint32_t            dir_told_csid;
 };
 
 /* The global resource-database hash. vms_lock.c lays down the bucket array with
@@ -759,6 +792,11 @@ struct vms_proc {
 	 * with dfprot; "" = never set. */
 	char                ddir[VMS_DDIR_SIZE];
 
+	/* $SET_PROCESS_PROPERTIESW parse style (VMS_IOCTL_PPROP, rd vms-b9c),
+	 * as src/kernel/vms_internal.h: permanent and current-image style. */
+	uint8_t             parse_style_perm;
+	uint8_t             parse_style_image;
+
 	/* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
 	 * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
 	 * privilege mask. Same hash_lock as the identity fields. */
@@ -832,6 +870,19 @@ struct vms_proc {
 	 * (vms-6a7f); the NetBSD glue does not yet call vms_acp_release_all() in
 	 * this build's process-teardown path (mirrored in vms_netbsd.c). */
 	exec_list_head_t    file_channels;    /* struct vms_acp_chan (defined in vmsfs_acp.c) */
+
+	/*
+	 * L2 (raw datalink) handles (rd vms-9394) -- the executive datalink a
+	 * non-root NETACP opens with PHY_IO (src/kernel-core/vms_l2.c, the SAME
+	 * source the Linux vms.ko builds). Same fields and meaning as
+	 * src/kernel/vms_internal.h: a separate list on its OWN lock, NOT the
+	 * chan_lock/next_chan space (an L2 handle is not a $ASSIGN channel), the
+	 * handle numbers drawn from l2_next_handle under l2_lock. Released at
+	 * process death by vms_l2_release_all() (vms_proc_free_claimed).
+	 */
+	exec_list_head_t    l2_channels;      /* struct vms_l2_handle (vms_l2.c) */
+	exec_lock_t         l2_lock;
+	uint32_t            l2_next_handle;
 
 	/* Deferred-free head (P4-A, rd vms-ca7). The reaper unlinks a dead PCB under
 	 * vms_proc_hash_lock (exec_hash_del_rcu) and reclaims it through
@@ -1278,6 +1329,21 @@ long vms_ioctl_term_getrpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_setchar(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
+
+/*
+ * Executive L2 datalink (rd vms-9394): src/kernel-core/vms_l2.c, the same
+ * facility the Linux vms.ko dispatches. The substrate half (exec_l2_*) is the
+ * in-kernel ifnet binding in vms_socket_netbsd.c; vms_l2_netbsd_init() sets up
+ * its locks at module load and vms_l2_netbsd_fini() undoes its interface
+ * interposition at module unload.
+ */
+long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_l2_close(struct vms_proc *proc, unsigned long arg);
+void vms_l2_release_all(struct vms_proc *proc);
+void vms_l2_netbsd_init(void);
+void vms_l2_netbsd_fini(void);
 /*
  * Internal (non-ioctl) resolve of a canonical disk-unit name to its backing
  * (major,minor) so the Files-11 ACP's $MOUNT can read the home block/SCB.
@@ -1489,6 +1555,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);

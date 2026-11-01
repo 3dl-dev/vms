@@ -260,6 +260,18 @@ if(BUILD_TOOLS)
         LABELS "integration;ods2;vmsfs;tools"
         TIMEOUT 60
     )
+    # rd vms-3ea: `vmsfs_master relabel` (SET VOLUME/LABEL's on-disk effect) --
+    # the per-node system-disk label every multi-node path provisions with.
+    add_test(NAME ods2_relabel
+             COMMAND ${CMAKE_COMMAND} -E env
+                     VMSFS_MASTER=$<TARGET_FILE:vmsfs_master>
+                     ODS2_REAL_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/real_vax_ods2.dsk
+                     ODS5_REAL_FIXTURE=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022/ods5t.dsk
+                     sh ${CMAKE_CURRENT_SOURCE_DIR}/test_ods2_relabel.sh)
+    set_tests_properties(ods2_relabel PROPERTIES
+        LABELS "integration;ods2;vmsfs;tools"
+        TIMEOUT 60
+    )
 endif()
 
 # vms-263e: file header creation/revision dates and the revision count.
@@ -270,4 +282,35 @@ add_test(NAME ods2_dates COMMAND test_ods2_dates)
 set_tests_properties(ods2_dates PROPERTIES
     LABELS "unit;ods2;vmsfs"
     TIMEOUT 30
+)
+
+# rd vms-7e7e (epic vms-810): the codec against REAL OpenVMS Alpha V8.4 ODS-5
+# volumes (INITIALIZE/STRUCTURE=5 on the lab-Alpha, copied out byte for byte;
+# tests/lab/captures/ods5-alpha-20261022/RESULTS.md). Level-5 home/SCB, FI5
+# ident decode, typed directory scan, the ODS-5 name type + order rules, a
+# byte-identical rebuild of the real directories, level-5 header build/rename,
+# with negative controls (ODS-2 mode must NOT reproduce the real directory).
+add_executable(test_ods5_real test_ods5_real.c)
+target_include_directories(test_ods5_real PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods5_real PRIVATE ods2)
+
+add_test(NAME ods5_real_image COMMAND test_ods5_real)
+set_tests_properties(ods5_real_image PROPERTIES
+    LABELS "unit;ods2;ods5;vmsfs"
+    TIMEOUT 30
+    ENVIRONMENT "ODS5_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022;ODS2_REAL_FIXTURE=${CMAKE_CURRENT_SOURCE_DIR}/real_vax_ods2.dsk"
+)
+
+# rd vms-7e7e: the volume WRITER (vmsfs_master's engine) at structure level 5
+# recreates the real Alpha V8.4 ODS-5 [TEST] directory record for record and
+# its file headers' layout and FI5 names; level-2 output must not match.
+add_executable(test_ods5_write test_ods5_write.c)
+target_include_directories(test_ods5_write PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods5_write PRIVATE ods2)
+
+add_test(NAME ods5_write COMMAND test_ods5_write)
+set_tests_properties(ods5_write PROPERTIES
+    LABELS "unit;ods2;ods5;vmsfs"
+    TIMEOUT 30
+    ENVIRONMENT "ODS5_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022"
 )

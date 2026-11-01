@@ -1,0 +1,25 @@
+# creprc-detached-output-vms-file-not-written -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC of a DETACHED process whose /OUTPUT names a VMS file gives it that file as SYS\$OUTPUT, and its image writes its lines there through RMS (rd vms-c89)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_creprc_detached_output";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation skips defining SYS\$OUTPUT for a detached process whose output names a VMS file, so the process keeps only the null device -- the shape that left NETACP.LOG unwritten on a booted node. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+a detached process whose /OUTPUT names a VMS file writes its SYS$OUTPUT lines as records of that file (read back through RMS)
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (creprc-detached-output-vms-file-not-written)/{n;s|^                if (fd < 0 \&\& detached \&\& creprc_is_vms_file_spec(path))$|                if (0 \&\& fd < 0 \&\& detached \&\& creprc_is_vms_file_spec(path)) /* NEGCTL creprc-detached-output-vms-file-not-written */|}' "$_file"
+    :
+}

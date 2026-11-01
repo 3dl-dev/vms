@@ -59,7 +59,7 @@ wait_for(){ # pattern limit-seconds
     return 1
 }
 
-if wait_for '%OVMX-I-EXEC' 120; then
+if wait_for ' - OpenVMS-compatible' 120; then
     ok "executive attached on a real cold boot (vms.ko)"
 else
     bad "executive never attached within 120s"

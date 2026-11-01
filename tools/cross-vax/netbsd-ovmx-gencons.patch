@@ -1,0 +1,25 @@
+--- a/sys/arch/vax/vax/gencons.c
++++ b/sys/arch/vax/vax/gencons.c
+@@ -222,8 +222,21 @@
+ 	struct tty *tp = sc->gencn_tty;
+ 	int i;
+ 
+-	if (sc->alive == 0)
++	if (sc->alive == 0) {
++		/*
++		 * OVMX: the console line is closed (its session leader exited
++		 * and the vnode was revoked) but the receiver's interrupt is
++		 * still enabled. Returning WITHOUT reading RXDB leaves RCSR
++		 * DONE set, so the request is never withdrawn: on real
++		 * hardware it re-asserts at once and livelocks the CPU at
++		 * IPL 14; on an edge-modelled simulator it is simply never
++		 * raised again and the console receives nothing from then on
++		 * (rd vms-25f). Take the character and drop it, as a closed
++		 * line does.
++		 */
++		(void)mfpr(pr_rxdb[sc->unit]);
+ 		return;
++	}
+ 	i = mfpr(pr_rxdb[sc->unit]) & 0377; /* Mask status flags etc... */
+ 	KERNEL_LOCK(1, NULL);
+ 

@@ -169,7 +169,7 @@ fi
 # and the login prompt. Timestamps, PIDs, and everything else about full
 # message TEXT are deliberately not compared here -- see this file's header.
 RAW_SEQ=$(printf '%s\n' "$CLEAN" | \
-    grep -oE '%[A-Z][A-Z0-9_]*-[A-Z]-[A-Z0-9_]+|OpenVMX V[0-9]|Username:' | \
+    grep -a -oE '%[A-Z][A-Z0-9_]*-[A-Z]-[A-Z0-9_]+|OpenVMX V[0-9]|Username:' | \
     sed -E 's/^OpenVMX V[0-9]$/__BANNER__/; s/^Username:$/__USERNAME__/')
 
 # Trim to the first __USERNAME__ (inclusive): the boot phase this test is
@@ -200,14 +200,17 @@ SEQ=$(printf '%s\n' "$RAW_SEQ" | sed -n '1,/^__USERNAME__$/p')
 # measurably interleaved JOB_CONTROL's own LOGINOUT "Username:" prompt with
 # STARTUP.COM's still-running console output; this test is what caught
 # that (docs/design-boot-faithful.md §3.8 records the full account).
+#
+# rd vms-158d: OVMX's own boot narration -- %OVMX-I-EXEC (executive attached;
+# PROVISION's system identity), %OVMX-I-SYSDISK, %OVMX-I-MOUNTED and
+# %OVMX-I-SCSNODE -- is NOT on the console any more: a real VMS boot console
+# prints no such lines (tests/lab/captures/vms-c56-console-chatter-20261021/
+# C.console.txt), so they are operator-log records (SYS$MANAGER:OPERATOR.LOG,
+# asserted by tests/qemu/test_job_control_console.sh). What remains is the
+# banner, STDRV, RUN's own line for JOB_CONTROL, and the login prompt.
 read -r -d '' EXPECTED <<'EOF' || true
-%OVMX-I-EXEC
 __BANNER__
-%OVMX-I-SYSDISK
-%OVMX-I-MOUNTED
-%OVMX-I-SCSNODE
 %STDRV-I-STARTUP
-%OVMX-I-EXEC
 %RUN-S-PROC_ID
 __USERNAME__
 EOF

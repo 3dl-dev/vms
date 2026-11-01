@@ -103,6 +103,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/lib_tparse.c
     rtl/lib_common.c
     rtl/lib_eventflags.c
+    rtl/lib_lun.c
     rtl/str_routines.c
     rtl/mth_routines.c
     rtl/ots_routines.c

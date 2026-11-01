@@ -577,6 +577,23 @@ if(BUILD_TESTS)
     set_tests_properties(guide_drift_negctl PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # vms-906: a test that reads a VALUE out of a console log must be
+    # BINARY-SAFE. One missing `-a` on a `grep -o` reddened two e2e gates and
+    # took a whole merge group down with them (run 39698326725): a console log
+    # carries NUL bytes, GNU grep then calls the file binary, and -o prints
+    # NOTHING while the line is right there. Whether it fires depends on where
+    # the NUL lands, so the same code passes or fails run to run -- a gate
+    # whose verdict depends on byte timing. This lint is the class, closed:
+    # `-o` must carry `-a`, and a captured LINE from a file operand must too.
+    # The selftest plants one violation of each rule and requires the lint to
+    # red, so an always-OK linter cannot pass. Pure text -- no docker, no QEMU.
+    add_test(NAME binary_safe_readers_lint
+        COMMAND python3
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/ci/lint_binary_safe_readers.py
+                --selftest ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(binary_safe_readers_lint PROPERTIES
+        LABELS "integration;test-flaky" TIMEOUT 60)
+
     # vms-44a (roadmap R2): docs/corpus-scoreboard.md is generated from the
     # committed corpus baselines + written reasons; stale page or a non-running
     # program without a reason fails. Pure text/JSON -- no docker, no QEMU.
@@ -721,6 +738,24 @@ if(BUILD_TESTS)
     set_tests_properties(merge_queue_gates_complete PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # Red-main bot (tools/ci/red_main_bot.py): re-run-once flake rule, bisect,
+    # revert PR naming the culprit, refusals -- against a fake gh/git.
+    add_test(NAME red_main_bot_gate
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_red_main_bot.py
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(red_main_bot_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
+
+    # CI-speed tiers: tools/ci/ci_tiers.py decides which heavy legs a queue /
+    # PR / nightly / tag event owes (negctl map fails closed), and
+    # tools/ci/pre_tag_verify.py refuses a tag SHA with no green full run.
+    add_test(NAME ci_tiers_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_ci_tiers.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(ci_tiers_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 120)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.
@@ -755,6 +790,15 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_gen_release_notes.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(gen_release_notes_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
+    # tools/cut-release.sh resolves an ANNOTATED release tag to its commit, not
+    # the tag object (V0.7-11's first publish refused its own aarch64 set over
+    # exactly that). Pure shell + git; no docker, no network.
+    add_test(NAME cut_release_resolve_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_cut_release_resolve.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(cut_release_resolve_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
     # vms-791 (0.4 installer Tier-0): the VMSFS media-mastering tool must
@@ -1215,6 +1259,21 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_labjoin_booted_negctl.sh)
     set_tests_properties(labjoin_booted_negctl PROPERTIES
         LABELS "integration;cluster" TIMEOUT 60)
+
+    # A lab fire cannot boot a node onto NO CLUSTER'S WIRE (rd vms-daa). The
+    # cluster group number is what the LAVC HELLO multicast address is built
+    # from, so a group-0 initramfs -- which is what an ordinary image build
+    # produces -- puts the node on AB-00-04-01-00-00: it transmits into the
+    # void, receives nothing and never joins, with no failure and no console
+    # line saying why (measured on lab-2 vaxlab-4). ovmx_fire.sh checked the
+    # build's provenance and the frame-conformance gate but never this, and it
+    # cost a whole run. Hermetic: four tiny initramfs images built with the
+    # project's own record writer, no pod and no boot. Carries its own negative
+    # control (a checker without the group-0 test must stop refusing).
+    add_test(NAME lab_fire_cluster_group
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_fire_cluster_group.sh)
+    set_tests_properties(lab_fire_cluster_group PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 120)
 
     # The lab node image's vax.ini keeps SIMH's timer catch-up OFF (rd vms-549c):
     # with catch-up on, a host stall overflowed the timer calibration (Current

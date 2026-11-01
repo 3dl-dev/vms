@@ -2748,6 +2748,374 @@ static void test_e09_dir_remove_on_the_wire(void)
 	conf_dump("dlm_dir_remove", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
+/*
+ * rd vms-c55 / rd vms-ac4f: THE LOCK REQUEST, composed the way the shipping
+ * send path composes it -- the codec's body, then the cluster's DLM sequence,
+ * then the connection manager's envelope on the destination's CSB -- so the
+ * conformance gate's `dlm_enq_req` rows read the bytes a real VAX is handed
+ * and not a builder's half-frame. The FIELD VALUES here are the ones the
+ * engine reads off a real LKB and RSB (dlm_proxy_fill_post); what this pins is
+ * that every one of the 132 bytes is described by a row and lands where the
+ * row says.
+ */
+static void test_c55_enq_request_on_the_wire(void)
+{
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[224];
+	uint32_t written = 0;
+	uint16_t sent0;
+
+	printf("\n-- rd vms-c55: the lock request's 132 bytes, all described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&r, 0, sizeof(r));
+	r.mode            = 5u;              /* EX, as the ACP's volume lock  */
+	r.req_lkid        = 0x01000064u;     /* this node's own handle        */
+	r.req_pid         = 0x10000021u;     /* the owning PCB's process id   */
+	r.dir_hash        = 0x650412f2u;
+	r.dir_hash_valid  = 1u;
+	r.res_group       = 1u;
+	r.res_acmode      = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len        = 10u;
+	memcpy(r.name, "RMS$4F.1.0", 10);
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence, as on every DLM message");
+	ct_check(!vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "a request is NOT a notification: its envelope opens a transaction");
+	sent0 = m->cm_send_msg;
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_REQUEST);
+	ct_check(m->cm_send_msg != sent0,
+		 "it takes the dialogue's next send-msg#");
+	ct_check(b[4] != 0 || b[5] != 0 || b[6] != 0 || b[7] != 0,
+		 "*** body[4:8] names a transaction -- a request IS answered ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
+		 "namelen=%u,hash=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
+		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash);
+	conf_dump("dlm_enq_req", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
+/* One little-endian longword out of a composed body, so the assertion below
+ * reads the WIRE and not the struct it was built from. */
+static uint32_t le32_at(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+	       ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/*
+ * rd vms-b67a: THE SAME REQUEST WHEN IT NAMES A PARENT -- a SUB-LOCK.
+ *
+ * Only ROOT resources are in the lock directory (Davis p. 6-29) and a resource
+ * TREE HAS ONE MASTER, so this frame is addressed to the PARENT's master and
+ * carries the pair (own parent handle, parent's master handle) at body[36:44].
+ * Two spans therefore differ from the root form and get their own rows: that
+ * pair, and body[128:132], which this node writes ZERO because the hash indexes
+ * a directory a sub-resource is not in and which was never asked about the name
+ * (Rule 8). The values below are a REAL pair, from the 2026-10-22 driven arm.
+ */
+static void test_b67a_sublock_request_on_the_wire(void)
+{
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[256];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-b67a: the SUB-LOCK request's 132 bytes, all "
+	       "described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&r, 0, sizeof(r));
+	r.mode            = 2u;              /* CW, as RMHOLD's sub-locks     */
+	r.req_lkid        = 0x0100036au;     /* this node's own handle        */
+	r.req_pid         = 0x10000031u;
+	/* THE PARENT PAIR. VAX2's own root handle and VAX1's master handle for
+	 * it, which VAX1's SDA printed as the sub-lock's "Par. id: 3C000695"
+	 * (tests/lab/captures/vms-b67a-sublock-arm-20261022, landing with the
+	 * arm's own evidence). */
+	r.parent_own_lkid    = 0x59000076u;
+	r.parent_master_lkid = 0x3c000695u;
+	/* NO HASH: a sub-resource is not in the directory. */
+	r.dir_hash_valid  = 0u;
+	r.res_group       = 1u;
+	r.res_acmode      = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len        = 2u;
+	memcpy(r.name, "S0", 2);
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence");
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_REQUEST);
+	ct_check(le32_at(b + 36u) == r.parent_own_lkid &&
+		 le32_at(b + 40u) == r.parent_master_lkid,
+		 "*** body[36:44] is the PARENT PAIR, which is what makes this a "
+		 "sub-lock and not a second root of the same name ***");
+	ct_check(b[128] == 0 && b[129] == 0 && b[130] == 0 && b[131] == 0,
+		 "*** and body[128:132] is ZERO: the hash indexes a directory "
+		 "this resource is not in, and no directory was ever asked "
+		 "about the name (Rule 8) ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
+		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
+		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid);
+	conf_dump("dlm_enq_req_sub", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
+/*
+ * rd vms-85f: THE QUEUED ANSWER, composed the way the shipping REPLY path
+ * composes it -- the codec's body, the cluster's DLM sequence, then the
+ * connection manager's RESPONSE envelope on the requester's CSB
+ * (vms_cnxman.c's dlm reply leg). This is a frame OVMX had never emitted
+ * before, and the never-crash rule is explicit that a new frame type reaches a
+ * real VAX only behind an automated conformance gate -- so every one of its 132
+ * bytes gets a row here.
+ *
+ * The REQUEST it answers is composed by the shipping request builder, so the
+ * echoed cells are a real OVMX request's cells and not a hand-laid buffer.
+ */
+static void test_85f_queued_answer_on_the_wire(void)
+{
+	/* The handle an engine minted for the LKB it really queued, in the
+	 * grounded lkid form (seq << 24 | idx, minted_form_census.py). */
+	const uint32_t MASTER_LKID = 0x1d000412u;
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t req[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *ab = ans + VMS_OFF_SYSAP_BODY;
+	char state[256];
+	uint32_t written = 0;
+	uint16_t sent0;
+
+	printf("\n-- rd vms-85f: the queued answer's 132 bytes, all described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&r, 0, sizeof(r));
+	r.mode            = 5u;              /* EX, the evacuation's own mode */
+	r.req_lkid        = 0x07000412u;     /* the requester's own handle    */
+	r.req_pid         = 0x10000031u;
+	r.dir_hash        = 0x650412f2u;
+	r.dir_hash_valid  = 1u;
+	r.res_group       = 1u;
+	r.res_acmode      = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len        = 13u;
+	memcpy(r.name, "EVAC$WORKLOAD", 13);
+
+	memset(req, 0, sizeof(req));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, req,
+					   sizeof(req), &written) ==
+		 VMS_CODEC_OK, "the request this master is about to queue");
+
+	/* The requester's own envelope, so the transaction this answer echoes
+	 * is a real one and not a zero. */
+	cnxman_envelope_originate(m, req + VMS_OFF_SYSAP_BODY,
+				  CNXMAN_ENV_REQUEST);
+	memset(ans, 0, sizeof(ans));
+	ct_check(vms_dlm_enq_response_build_queued(req + VMS_OFF_SYSAP_BODY,
+						   VMS_CM_BODY_LEN, MASTER_LKID,
+						   r.req_lkid, ans, sizeof(ans),
+						   &written) == VMS_CODEC_OK,
+		 "the queued answer's body");
+	ct_check(vms_dlm_seq_put(ab, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK,
+		 "the cluster's DLM sequence, as on every DLM message");
+	sent0 = m->cm_send_msg;
+	cnxman_envelope_originate(m, ab, CNXMAN_ENV_RESPONSE);
+	ct_check(m->cm_send_msg != sent0,
+		 "it takes the dialogue's next send-msg#");
+	ct_check(memcmp(ab + 4u, req + VMS_OFF_SYSAP_BODY + 4u, 4u) == 0 &&
+		 (ab[4] | ab[5] | ab[6] | ab[7]) != 0u,
+		 "*** and body[4:8] is the REQUEST's own transaction, echoed: "
+		 "the answer is correlated to what it answers ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,mlkid=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
+		 "namelen=%u,hash=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)MASTER_LKID,
+		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash);
+	conf_dump("dlm_enq_ans_queued", 72u, state, ab, VMS_CM_BODY_LEN);
+}
+
+/*
+ * rd vms-194 D1: THE RELEASE OPENS NO TRANSACTION.
+ *
+ * MEASURED by tools/cluster/dlm_deq_census.py over every committed pcap: 0 of
+ * 9,858 real cat-0x02 op-0x03 frames carry a transaction at body[4:8], and the
+ * corpus holds ZERO cat-0x82 op-0x03 answers anywhere. A release is a
+ * NOTIFICATION. OVMX opened a transaction on all 11 of its own, which minted a
+ * token on the CSB, assigned it to a message no peer will ever answer, and left
+ * it open -- the envelope-inconsistency class that produced CNXMGRERR on a real
+ * node, in the one frame family that has already bugchecked two lab VAXes.
+ *
+ * This drives the SHIPPING predicate the send path turns on
+ * (vms_dlm_body_is_notification -> cnxman_dlm_send's CNXMAN_ENV_NOTIFY branch)
+ * and the real envelope writer, so what is proven is the choice the wire sees.
+ */
+static void test_194_release_opens_no_transaction(void)
+{
+	struct vms_dlm_deq d;
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	uint32_t written = 0;
+	uint16_t sent0;
+
+	printf("\n-- rd vms-194 D1: a RELEASE is a notification, so it opens no "
+	       "transaction --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&d, 0, sizeof(d));
+	d.req_lkid    = 0x01000349u;   /* this node's own handle   */
+	d.master_lkid = 0x160004a7u;   /* the master's, off the LKB */
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the release's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence, as on every DLM "
+		 "message");
+	ct_check(vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "*** the shipping predicate calls a release a NOTIFICATION: "
+		 "nobody answers one (0 answers in the 41,049 real releases' "
+		 "corpus) ***");
+	sent0 = m->cm_send_msg;
+	/* THE CHOICE, not the writer: this is cnxman_dlm_send's own expression,
+	 * so a predicate that stopped calling a release a notification would
+	 * redden the body[4:8] assertion below and not only the one above. */
+	cnxman_envelope_originate(m, b,
+				  vms_dlm_body_is_notification(b,
+							       VMS_CM_BODY_LEN)
+					  ? CNXMAN_ENV_NOTIFY
+					  : CNXMAN_ENV_REQUEST);
+	ct_check(m->cm_send_msg != sent0,
+		 "  it still takes the dialogue's next send-msg# (it is a CM "
+		 "message)");
+	ct_check(b[4] == 0u && b[5] == 0u && b[6] == 0u && b[7] == 0u,
+		 "*** and body[4:8] is ZERO: no token is minted on the CSB for "
+		 "a message no peer will ever answer ***");
+
+	/* AND THE DISCRIMINATION IS REAL: the REQUEST on the same connection
+	 * still opens one, because a request IS answered. */
+	memset(&r, 0, sizeof(r));
+	r.mode = 5u;
+	r.req_lkid = 0x01000349u;
+	r.req_pid = 0x10000021u;
+	r.dir_hash = 0x650412f2u;
+	r.dir_hash_valid = 1u;
+	r.res_ident_valid = 1u;
+	r.name_len = 4u;
+	memcpy(r.name, "RA7T", 4);
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "a request on the same resource");
+	ct_check(!vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "  ...is NOT a notification");
+	cnxman_envelope_originate(m, b,
+				  vms_dlm_body_is_notification(b,
+							       VMS_CM_BODY_LEN)
+					  ? CNXMAN_ENV_NOTIFY
+					  : CNXMAN_ENV_REQUEST);
+	ct_check(b[4] != 0u || b[5] != 0u || b[6] != 0u || b[7] != 0u,
+		 "*** and DOES open a transaction -- the predicate separates "
+		 "the two, it does not blanket them ***");
+}
+
+/*
+ * rd vms-194 (d): THE RELEASE'S 132 BYTES, ALL DESCRIBED -- composed the way
+ * the shipping send path composes it (the codec's body, the cluster's DLM
+ * sequence, then the connection manager's envelope on the destination's CSB,
+ * through cnxman_dlm_send's OWN notification expression), so the conformance
+ * gate's `dlm_deq` rows read the bytes a real VAX is handed.
+ *
+ * The field values are the ones the engine reads off a real LKB
+ * (dlm_proxy_fill_post -> dq_build_deq): the two handles and nothing else.
+ * `rel_cell` is set to EX on purpose -- the value the OLD builder would have
+ * put at body[30] -- so the dump proves the shipping composer writes the
+ * measured cell and not a lock mode.
+ */
+static void test_194_release_on_the_wire(void)
+{
+	struct vms_dlm_deq d;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[160];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-194 (d): the release's 132 bytes, all described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&d, 0, sizeof(d));
+	d.master_lkid = 0x160004a7u;   /* the master's handle, off the LKB  */
+	d.req_lkid    = 0x01000349u;   /* this node's own handle            */
+	d.rel_cell    = VMS_LCK_EX;    /* parse-only: must NOT reach a byte */
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK,
+		 "the cluster's DLM sequence, as on every DLM message");
+	cnxman_envelope_originate(m, b,
+				  vms_dlm_body_is_notification(b,
+							       VMS_CM_BODY_LEN)
+					  ? CNXMAN_ENV_NOTIFY
+					  : CNXMAN_ENV_REQUEST);
+	ct_check(b[4] == 0u && b[5] == 0u && b[6] == 0u && b[7] == 0u,
+		 "the shipping composer opens no transaction on it");
+	ct_check(b[VMS_OFB_DLM_DEQ_REL_CELL] == 0u,
+		 "*** body[30] on the wire is the measured 0, not the EX the "
+		 "caller's parse-only cell carried (rd vms-194) ***");
+	snprintf(state, sizeof(state), "seq=%u,masterlkid=%u,ownlkid=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)d.master_lkid,
+		 (unsigned)d.req_lkid);
+	conf_dump("dlm_deq", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -2772,6 +3140,11 @@ int main(void)
 	test_the_go_is_a_notification();
 	test_52d_startup_query_answered_from_csb();
 	test_e09_dir_remove_on_the_wire();
+	test_c55_enq_request_on_the_wire();
+	test_b67a_sublock_request_on_the_wire();
+	test_85f_queued_answer_on_the_wire();
+	test_194_release_opens_no_transaction();
+	test_194_release_on_the_wire();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();

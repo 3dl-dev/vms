@@ -1091,6 +1091,32 @@ uint32_t cnxman_club_recount_members(struct vms_club *club)
 	return n;
 }
 
+uint32_t cnxman_club_other_member_csids(const struct vms_club *club,
+				       vms_csid_t *out, uint32_t max)
+{
+	uint32_t i, n = 0u;
+
+	if (club == NULL || out == NULL)
+		return 0u;
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *c = &club->csb[i];
+
+		if (!c->in_use || (c->flags & VMS_CSB_F_SELECTED) == 0u)
+			continue;
+		if (!c->csid_valid || c->csid == 0u)
+			continue;
+		/* The local system's own CSB is one of the SELECTED set
+		 * (recount_members above says so); it is not an "other". */
+		if (club->local_csid_valid && c->csid == club->local_csid)
+			continue;
+		if (n >= max)
+			return max + 1u;
+		out[n] = c->csid;
+		n++;
+	}
+	return n;
+}
+
 /* ==========================================================================
  * Learning
  * ========================================================================== */
@@ -1715,6 +1741,18 @@ void cnxman_csb_dialogue_unsent(struct vms_csb *csb)
 	if (csb == NULL)
 		return;
 	csb->cm_send_msg = (uint16_t)(csb->cm_send_msg - 1u);
+}
+
+int cnxman_csb_refused_send_keeps_number(int abort_status,
+					 int refusal_known,
+					 int port_was_refuser,
+					 int32_t port_rc, int32_t held_rc)
+{
+	if (!abort_status)
+		return 0;
+	if (!refusal_known || !port_was_refuser)
+		return 1;
+	return port_rc == held_rc;
 }
 
 void cnxman_csb_transaction_opened(struct vms_csb *csb)

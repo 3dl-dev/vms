@@ -174,7 +174,10 @@ dlm-pending-overflow-overwrites
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
+dlm-sublock-looked-up-in-the-directory
+dlm-sublock-parent-pair-zeroed
 dlm-dir-matched-by-name-alone
+dlm-resource-name-keyed-by-c-string
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
 dlm-requester-drops-the-untransmitted-post
@@ -188,6 +191,17 @@ dlm-grant-record-omitted
 dlm-echo-guard-never-caps
 dlm-deadlock-search-follows-remote-holders
 dlm-queued-convert-answered-as-granted
+dlm-queued-enq-not-answered
+dlm-queued-answer-read-as-granted
+dlm-queued-sublock-answered-anyway
+dlm-local-release-tells-nobody
+dlm-rundown-release-tells-nobody
+dlm-grant-advance-uncounted
+dlm-convert-tells-the-converter-only
+dlm-release-opens-a-transaction
+dlm-release-carries-the-lock-mode
+dlm-local-convert-grants-nobody
+dlm-local-convert-tells-nobody
 dlm-op0f-member-answers-as-new-master
 codec-mscp-gus-tail2-invented
 mscp-cl-glue-device-name-leaked
@@ -244,10 +258,14 @@ join-k10-close-withheld
 join-k5-close-withheld
 csb-0b01-answer-ignores-join-order
 guard-ignores-category-0b
+refused-send-always-keeps-number
+dir-remove-unregistered-entry
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
 arm-dirrm-races-the-lookup
+dlm-request-pid-cell-zeroed
+dlm-request-pid-not-read-from-pcb
 join-lnm-db-corrupt-not-reported
 lnm-unsync-still-serves
 pe-blk-frame-unringed
@@ -266,7 +284,24 @@ dlm-adopt-lvb-zeroes-the-block
 dlm-convert-by-name
 cnxman-db-pull-ignores-ready
 join-db-ready-unlearned
-codec-params-ready-ignores-flag"
+codec-params-ready-ignores-flag
+dlm-request-not-held-in-transition
+dlm-dir-remove-sent-in-transition
+dlm-transition-hold-spends-the-ladder
+dlm-transition-hold-is-silent
+arm-transition-never-releases-the-hold
+dlm-rm-ack-rewrites-the-grant-record
+dlm-rm-lock-answer-echoes-the-handle
+dlm-rm-lock-answer-invents-a-valblk
+dlm-rm-14-leaks-the-caller-buffer
+dlm-rm-14-pattern-overruns-a-field
+dlm-rm-lock-answer-record-omitted
+dlm-rm-held-before-the-last-end
+dlm-rm-held-to-a-member-that-reported-nothing
+dlm-rm-open-answered-when-refused
+dlm-rm-half-tree-left-adopted
+dlm-rm-held-reported-though-unsent
+dlm-rm-role-claimed-without-an-adoption"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -313,6 +348,7 @@ kernel-core/vms_dlm_ldwv.c
 kernel-core/vms_dlm_pending.c
 kernel-core/vms_dlm_scs.c
 kernel-core/vms_dlm_scs_fsm.c
+kernel-core/vms_dlm_rm_fsm.c
 kernel-core/vms_mscp_cl.c
 kernel-core/vms_mscp_cl_conn_fsm.c
 kernel-core/vms_mscp_cl_fsm.c
@@ -578,6 +614,41 @@ EOF
                       ;;
         esac;;
 
+    dlm-sublock-looked-up-in-the-directory)
+        case "$_f" in
+        facility)     echo "SUB-LOCK ROUTING (vms_lock.c vms_enq_core_ex, rd vms-b67a): a lock whose PARID names a parent goes to the PARENT'S MASTER, because only ROOT resources are in the lock directory (Davis p. 6-29) and a resource tree has one master";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the sub-resource stops inheriting its tree's master, so dlm_resolve_master falls through to the DIRECTORY path and the sub NAME is looked up as if it were a root -- exactly what shipped before. MEASURED COST at two real V7.3 VAXes 2026-10-21 (tests/lab/captures/vms-c2b-ovmx-holder-20261021): OVMX held the ROOT of a tree VAX1 mastered, then sent S0/S1/S2 to VAX2 (the directory) under each sub name's own derived hash, was answered 'no entry', and MASTERED THEM LOCALLY -- reporting lock ids 0100034B/4C/4D granted at CW that VAX1's SDA does not list. A grant no master gave, and one sub-resource name mastered on two nodes at once.";;
+        require_fail) hd_lines <<'EOF'
+the sub-lock's request was posted
+*** and it goes to the PARENT'S MASTER -- never to the directory, as 7 of 7 real sub-lock requests do ***
+  ...and it is NOT a directory lookup
+*** body[36:40] is OUR OWN handle for the parent, read off the parent LKB ***
+*** body[40:44] is the handle THE PARENT'S MASTER gave it -- the pair that parent's own grant carried ***
+  and NO hash is asserted for a sub name nobody was asked about (Rule 8)
+the posted name is the sub-resource's own
+body[30] is the sub-lock's own requested mode
+its request was posted too
+EOF
+                      ;;
+        esac;;
+
+    dlm-sublock-parent-pair-zeroed)
+        case "$_f" in
+        facility)     echo "THE PARENT SPAN IS BOTH-OR-NEITHER (vms_cluster_codec_dlm.c vms_dlm_enq_request_build, rd vms-b67a): body[36:44] is (own parent handle, parent's master handle) and a half-filled pair never leaves";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the both-or-neither refusal is removed, so a sub-lock request can go out with body[40:44] = 0. ZERO THERE IS WHAT A ROOT MEANS -- every one of the corpus's 74,730 root requests carries it, and 7 of 7 real sub requests carry both halves non-zero -- so a master receiving one would read a sub-lock as a ROOT and create a SECOND root for the name. That is the same double-mastering rd vms-b67a measured, reached by a different door.";;
+        require_fail) hd_lines <<'EOF'
+*** a parent named with NO master handle: REFUSED. Zero at body[40:44] reads to the master as a ROOT and would create a second root for the name ***
+  ...and a master handle with no parent of our own: refused too
+EOF
+                      ;;
+        esac;;
+
     dlm-own-directory-not-consulted)
         case "$_f" in
         facility)     echo "the ENGINE's consultation of THIS NODE's own lock directory before it masters anything (dlm_route_own_directory(), rd vms-025): a name some other system already masters is routed THERE, never mastered a second time here";;
@@ -637,6 +708,21 @@ EOF
         require_fail) hd_lines <<'EOF'
 a removal from a system that is not the master removes nothing
 the master's removal does
+EOF
+                      ;;
+        esac;;
+
+    dlm-resource-name-keyed-by-c-string)
+        case "$_f" in
+        facility)     echo "the engine's COUNTED resource-name key (res_name_eq() + resource_hash_key(), rd vms-326): a VMS resource name is 1..31 counted bytes that MAY CONTAIN NULs, so two names that differ only after an embedded NUL are two resources";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the two places that KEY a resource by its name -- the hash bucket and the equality test -- are put back to the C-string spelling they had before rd vms-326: the bucket hashes up to the name's first NUL and the comparison is a strncmp. That is one property (the name is keyed by its COUNT) disarmed in the two places that implement it, and it reinstates a measured defect: VMS names an RMS file-access lock 'RMS\$' + 6 FID bytes + 0x02 + a 12-byte volume label + three NULs, so the SAME file id on two DIFFERENT volumes compares equal at its first NUL and becomes ONE cluster-wide resource -- node A writing one file then refuses node B's read of another (rd vms-acf3), and the 7-byte truncation is what goes on the wire, where it hashes to a value no real VAX ever sent (0 of 1,130, tools/cluster/dlm_rms_name_hash_check.py).";;
+        require_fail) hd_lines <<'EOF'
+*** ...and carries all 26 bytes, NULs included ***
+*** and the two identities have DIFFERENT directory hashes: the truncation had one ***
+*** the VAX1DATA name is granted at EX at the same time: two files, two resources ***
 EOF
                       ;;
         esac;;
@@ -746,7 +832,7 @@ EOF
         targets)      echo "kernel-core/vms_cluster_codec_dlm.h";;
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
-        why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place.";;
+        why)          echo "the two handle offsets are swapped back to the reading this codec shipped with. That reading cost a 65,356-frame request storm against a real VAX V7.3 node in 63.7 s (1026/s): VAX1 could not match OVMX's grant to its own lock, because its handle was nowhere in the frame, so it re-sent -- and OVMX answered 65,340 times. An operator stopped it. The byte-for-byte reproduction of a real master's grant (test_real_grant_is_reproduced, on a captured request/grant pair) is what now holds the slots in place. Since rd vms-85f the QUEUED answer reddens too: its admission check compares the engine's recorded requester handle against the one the request carries at body[24:28], so a swapped slot makes it refuse to answer at all.";;
         require_fail) hd_lines <<'EOF'
   body[20:24] == 0x080001cd, the MASTER's handle -- which is why a release names its lock here: the GRANT assigned this requester
   body[20:24] == 0x0a0003a4, the MASTER's handle
@@ -768,6 +854,17 @@ EOF
 *** body[24:28] is THE REQUESTER's own handle (0x090003cd -- a value no master ever sent it) ***
 *** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
 *** the grant ECHOES the requester's handle -- which is the correlation OVMX was breaking ***
+builds back from the typed struct
+every CITED byte of the real specimen is byte-exact
+  OVMX writes the commonest real form (0x14/0x00, 0x00) -- inside the measured envelope, and a deviation row
+  and it reads both handles out of the real frame
+  body[36:44] stays zero: a ROOT answer names no parent
+  either half of body[36:44] makes it a sub-lock request
+  the mode the requester asked for (EX) rides back, not cleared
+*** a queued SUB-LOCK request is REFUSED, not answered with a minted S0 address ***
+OVMX builds the queued answer for pair A
+OVMX builds the queued answer for pair B
+the built queued answer equals the real master's, byte for byte
 EOF
                       ;;
         esac;;
@@ -779,10 +876,17 @@ EOF
         suites_red)   echo "test_codec_dlm";;
         isolation)    echo "isolated";;
         why)          echo "the grant record is left out of a built grant, exactly as the lab build did. Without it body[34] -- the position a directory answer carries 0xf9/0xf8 in and a grant 0xfa -- reads 0x00, a value no real answer carries: the requester has no outcome to read. 38 of 38 real grants in the reference capture carry the record.";;
+        # THE SET SHRANK ON PURPOSE (rd vms-380). It used to include the two
+        # op-0x0f answers, because vms_dlm_op0f_ack_build wrote this same
+        # record. The narrowed answer builder writes only body[34] (246 of 246
+        # real answers rewrite nothing else), so this mutation CANNOT reach the
+        # op-0x0f answers any more and naming them would be a lie about what it
+        # does. Those two assertions still run, and they stay mutation-covered
+        # by dlm-op0f-member-answers-as-new-master and by
+        # dlm-rm-ack-rewrites-the-grant-record. The op-0x12 answer's half of
+        # this one writer has its own control, dlm-rm-lock-answer-record-omitted.
         require_fail) hd_lines <<'EOF'
 *** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
-*** the new master's op-0x0f answer equals the real VAX's, byte for byte after the envelope ***
-*** a member's op-0x0f answer equals the real VAX's, body[28:32] KEPT ***
 EOF
                       ;;
         esac;;
@@ -844,6 +948,164 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** the queued-CONVERT answer equals the real VAX master's, byte for byte after the envelope ***
   ... outcome byte 0xfb (queued)
+EOF
+                      ;;
+        esac;;
+
+    dlm-local-release-tells-nobody)
+        case "$_f" in
+        facility)     echo "THE LOCAL RELEASE's half of a deferred GRANT (vms_lock.c vms_deq_core -> dlm_flips_*, rd vms-28bd): a \$DEQ that flips a cross-node waiter to granted NOTIFIES the wire arm, so the peer whose lock it is gets told";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the \$DEQ path goes back to advancing the queue in silence, which is what shipped before. MEASURED COST, twice on real hardware: 2026-10-09 on vaxlab-3 and 2026-10-21 (tests/lab/captures/vms-3ac-promote-20261021). Both times this executive GRANTED the lock -- \$GETLKI reads the mode back -- and told nobody, and the real VAX's process sat in RWSCS where even STOP could not complete it. It is the ci.6 evacuation's own sequence: OVMX holds the workload lock, a real VAX queues behind it, OVMX's holder ends.";;
+        require_fail) hd_lines <<'EOF'
+*** the engine told the arm exactly once that it advanced a queue for another system ***
+  and counted it as reported
+  naming the SYSTEM and this node's own handle for its lock -- and nothing else
+*** and that key produces a GRANT FRAME: the lock reads back as granted for that system, and the requester's own retained body is what carries it ***
+  the four values are the lock database's, read at send time
+  including the mode the engine really granted (EX)
+*** and the frame the peer receives is a GRANT naming its own handle and ours ***
+*** ...and the flip nobody could be told about is COUNTED, not dropped ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rundown-release-tells-nobody)
+        case "$_f" in
+        facility)     echo "THE RUNDOWN / \$DEQALL SWEEP's half of it (vms_lock.c lock_teardown_locked -> dlm_flips_append, rd vms-28bd): the sweep carries each resource's flips out to lock_sweep_run's blockable context and reports them there";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the sweep stops carrying its flips out, so an image RUNDOWN advances a cross-node queue in silence while an explicit \$DEQ still reports it. That is the door the evacuation actually uses -- the workload holder EXITS, it does not \$DEQ -- so a fix that covered only the \$DEQ path would read as fixed and hang in the demo.";;
+        require_fail) hd_lines <<'EOF'
+*** the RUNDOWN / $DEQALL SWEEP door reports the flip too -- reported from the sweep's own blockable context, not the $DEQ path ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-grant-advance-uncounted)
+        case "$_f" in
+        facility)     echo "THE COUNT OF A FLIP NOBODY COULD BE TOLD ABOUT (vms_lock.c dlm_flips_report, rd vms-28bd): with no wire arm bound the grant still happened, and the fact that it could not be announced is published";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the counter bump goes, so a node that granted a lock it could never announce looks exactly like a node that had nothing to announce. That is the anti-LARP tripwire for this whole item: the DEFECT it replaces was silence, and silence that is not counted is indistinguishable from correctness (INV-6, and the same discipline as deferred_grants_owed).";;
+        require_fail) hd_lines <<'EOF'
+*** ...and the flip nobody could be told about is COUNTED, not dropped ***
+*** ...and the grant nobody could be told about is COUNTED ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-release-opens-a-transaction)
+        case "$_f" in
+        facility)     echo "THE RELEASE's ENVELOPE (vms_cluster_codec_dlm.c vms_dlm_body_is_notification, rd vms-194 D1): an op-0x03 is a NOTIFICATION, so the connection manager opens no transaction for it";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "the release goes back to being treated as a message somebody answers, so every one mints a transaction token on the CSB, assigns it to a message no peer will ever answer, and leaves it open. MEASURED (tools/cluster/dlm_deq_census.py over every committed pcap): 0 of 9,858 real releases carry a transaction at body[4:8] and the corpus holds ZERO cat-0x82 op-0x03 answers -- while OVMX opened one on 11 of 11 of its own. It is the envelope-inconsistency class the ovmx-never-crashes-a-peer memory names as crash vector 1 (the one that produced CNXMGRERR), in the one frame family that has already bugchecked two lab VAXes.";;
+        require_fail) hd_lines <<'EOF'
+*** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in the 41,049 real releases' corpus) ***
+*** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
+the shipping composer opens no transaction on it
+EOF
+                      ;;
+        esac;;
+
+    dlm-release-carries-the-lock-mode)
+        case "$_f" in
+        facility)     echo "body[30] OF A RELEASE (vms_cluster_codec_dlm.c vms_dlm_deq_build, rd vms-194 D2/D3): the MEASURED cell, written by the builder itself, never the lock mode the caller holds";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the builder goes back to putting the LKB's lock mode at body[30], which is how a release of an EX lock carried a 5. DRIVEN ON REAL HARDWARE (tests/lab/captures/vms-194-release-arm-20261021): nine releases on a real two-node V7.3 cluster, one variable each -- the held mode over all six of NL/CR/CW/PR/PW/EX, a non-NULL co-holder, and the roles swapped -- and body[30] reads 0 in every one, so it is NOT the mode. The corpus bounds it the same way: 41,049 real releases carry only 0 or 1. It is the minted-value class that has already bugchecked two lab VAXes (rd vms-239 r17/r19, rd vms-3ac), in the one frame family that did it.";;
+        require_fail) hd_lines <<'EOF'
+*** body[30] is the MEASURED cell, never the lock mode: the arm's nine releases all carry 0 ***
+  ...and the caller's parse-only rel_cell is NOT echoed onto this node's wire
+EOF
+                      ;;
+        esac;;
+
+    dlm-local-convert-grants-nobody)
+        case "$_f" in
+        facility)     echo "THE LOCAL DOWN-CONVERT's grant pass (vms_lock.c vms_ioctl_convert's immediate branch, rd vms-9db): giving strength back runs try_grant_waiters, as it does at every other call site";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_host";;
+        isolation)    echo "isolated";;
+        why)          echo "the branch goes back to setting granted_mode and unlocking, which is how it shipped: the ONLY one of the six try_grant_waiters call sites that ran no pass. A process holding EX that converts DOWN to CR then frees strength and grants NOBODY -- not a remote waiter and not a LOCAL one -- and the waiting request sits on res->waiting until some unrelated event on that resource runs the pass. MEASURED on two local processes against the real engine before the fix (test_lock_host.c: the waiter's own synchronous \$ENQW never returned).";;
+        require_fail) hd_lines <<'EOF'
+*** the DOWN-CONVERT GRANTED THE WAITER: freeing strength runs the grant pass, as it does at every other call site (rd vms-9db) ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-local-convert-tells-nobody)
+        case "$_f" in
+        facility)     echo "THE LOCAL DOWN-CONVERT's notification (vms_lock.c vms_ioctl_convert, rd vms-9db + rd vms-28bd): a peer this convert granted is TOLD, from outside the resource lock";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the grant still happens and the peer is never told -- the rd vms-28bd silence by one more door. It is the evacuation's own shape: this node masters the workload's tree, a real VAX is queued for EX behind a local holder, and the holder DEMOTES rather than exiting (what a process that keeps the file open but drops write access does). The peer's process would sit in RWSCS on a lock this node's database already says it holds.";;
+        require_fail) hd_lines <<'EOF'
+*** ...and the peer is TOLD: a local convert is a release door like every other ***
+  naming the peer and the handle this node granted it
+*** ...and the grant nobody could be told about is COUNTED ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-convert-tells-the-converter-only)
+        case "$_f" in
+        facility)     echo "THE INBOUND CONVERT's half of it (vms_lock.c vms_lock_dlm_xnode_convert, rd vms-28bd): a remote holder's DOWN-conversion frees strength, so a THIRD system's queued request is granted -- and the convert's own answer goes to the CONVERTER, with nowhere to carry that grant";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "the door the code's OWN comment calls 'the whole point of the evacuation path' goes back to granting in silence. A real VAX demoting EX to CR on a resource OVMX masters -- which is what DISMOUNT does -- grants the other VAX's queued request, and that VAX is never told. The item's door list did not name this one; the test found it, and leaving one silent door while fixing three would read as fixed and hang in the demo.";;
+        require_fail) hd_lines <<'EOF'
+*** ...and peer B is TOLD -- the convert's own answer goes to peer A and has nowhere to carry peer B's grant ***
+  naming peer B and the handle this node granted it, not the converter's
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-enq-not-answered)
+        case "$_f" in
+        facility)     echo "the immediate answer to a first ENQ this master QUEUED (vms_dlm_scs.c dlm_arm_reply_queued -> vms_dlm_enq_response_build_queued, rd vms-85f): a real master answers 0xfb at once, and the arm must CALL it";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "the queued branch goes back to saying nothing at all, which is what shipped before. MEASURED COST on real hardware 2026-10-21 20:48-20:52 UTC (tests/lab/captures/vms-3ac-promote-20261021): OVMX mastered RA7T and held its root at CR, VAX2's \$ENQW EX reached it as the master -- and OVMX sent NO DLM frame at all. VAX2's process sat in RWSCS and 'STOP HOLD2' could not complete it. The lock was really queued in OVMX's database; only the answer was missing.";;
+        require_fail) hd_lines <<'EOF'
+*** the QUEUED outcome really REACHES the answer -- the branch calls it, it does not merely define it ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-answer-read-as-granted)
+        case "$_f" in
+        facility)     echo "READING a master's 0xfb (vms_cluster_codec_dlm.c vms_dlm_enq_response_parse_body, rd vms-85f): the QUEUED outcome is resolved BEFORE the grant/deny shape test, because a queued answer has a non-zero mode byte and an echoed name and would otherwise read as a GRANT";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated to the codec's own suite, which is where the anchor is asserted against a REAL master's captured answer; the same property is also asserted in test_dlm_deq_reachable (section 11) against this node's own emitted frame, so that suite reddens too and the driver is not asked to score it";;
+        why)          echo "the queued branch is removed, so a real VAX master's 'I have QUEUED your request' is reported to this node's requester FSM as GRANTED -- and the waiting process is told it holds a lock no master gave it (INV-6). It is the mirror of the emit defect: OVMX would both fail to say 0xfb and mis-read one.";;
+        require_fail) hd_lines <<'EOF'
+*** the parser calls it QUEUED, not GRANTED: a 0xfb must never be reported as a lock this node holds ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-queued-sublock-answered-anyway)
+        case "$_f" in
+        facility)     echo "the SUB-LOCK refusal in the queued answer (vms_cluster_codec_dlm.c dlm_req_names_parent, rd vms-85f): a request that names a parent is not answered at all, because all 93 real answers to one carry the master's own S0 address at body[40:44]";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "the parent-span test always says 'no parent', so a queued SUB-LOCK request is answered with body[40:44] left as the REQUESTER's parent-master handle -- a cell this executive does not hold, in the one frame family that has already bugchecked two lab VAXes. The honest alternative exists and is counted (queued_unanswerable).";;
+        require_fail) hd_lines <<'EOF'
+*** a queued SUB-LOCK request is REFUSED, not answered with a minted S0 address ***
+  either half of body[36:44] makes it a sub-lock request
 EOF
                       ;;
         esac;;
@@ -1169,6 +1431,186 @@ EOF
 EOF
                       ;;
         esac;;
+
+    dlm-request-not-held-in-transition)
+        case "$_f" in
+        facility)     echo "a cross-node lock request raised while a cluster state transition is running is HELD until it completes (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "dq_may_transmit() stops holding, so OVMX puts lock traffic into a peer's rebuild again -- the one thing that separates the three captures in which a real OpenVMS VAX V7.3 bugchecked LOCKMGRERR (a cat-0x02 request at barrier step 1, 3 of 3) from the eleven clean case-runs (0 of 11, 26 requests, all outside a transition). Real nodes put nothing but the op-0x0d rebuild record inside a transition.";;
+        require_fail) hd_lines <<'EOF'
+*** nothing went on the wire during the transition ***
+the hold was counted where it was decided
+still nothing on the wire
+*** and the $ENQW was NOT failed: a transition makes lock activity wait, it does not fail it ***
+  the request is still outstanding after 15 beats
+*** the hold named itself on the console exactly ONCE, across sixteen held transmissions ***
+*** the end of the transition releases the held request ***
+one frame, now, went out
+*** built from a FRESH read: the handle the LKB holds NOW, not the one it held when the post arrived ***
+the release was counted
+  and the release said so too -- one line each way, so a console shows the whole episode
+EOF
+                      ;;
+        esac;;
+
+    dlm-dir-remove-sent-in-transition)
+        case "$_f" in
+        facility)     echo "a directory-entry removal raised during a transition is DROPPED, counted, never sent into the rebuild (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_req_fsm_dir_remove() emits into a running transition again -- the exact frame (cat-0x02 op-0x04 for RMS\$4F.1.0 at barrier step 1) that precedes the op-0x19 and the LOCKMGRERR in every frame-level crash specimen. Phase 1 discards all directory information cluster-wide, so there is no fact left to assert.";;
+        require_fail) hd_lines <<'EOF'
+the removal is refused by the transition, and says so
+*** no cat-0x02 op-0x04 reached the wire during the rebuild ***
+and it is counted
+none was sent
+the wire stayed empty
+  one frame
+EOF
+                      ;;
+        esac;;
+
+    dlm-transition-hold-spends-the-ladder)
+        case "$_f" in
+        facility)     echo "a transition HOLD costs a request no rung of the retransmit ladder: VMS makes lock activity wait, it does not fail it (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "dq_held() advances tries like a failed attempt, so a transition longer than five beats walks a perfectly routable request off the end of the ladder and FAILS a sleeping \$ENQW with a timeout status -- an error where a real VAX would simply have waited.";;
+        require_fail) hd_lines <<'EOF'
+*** and the $ENQW was NOT failed: a transition makes lock activity wait, it does not fail it ***
+  the request is still outstanding after 15 beats
+*** the end of the transition releases the held request ***
+one frame, now, went out
+it parses as a grounded op 0x01
+*** built from a FRESH read: the handle the LKB holds NOW, not the one it held when the post arrived ***
+the release was counted
+  and it still names THIS node's own proxy handle
+  at the mode the LKB really asks for
+EOF
+                      ;;
+        esac;;
+
+    dlm-transition-hold-is-silent)
+        case "$_f" in
+        facility)     echo "a node holding lock requests for a transition SAYS so on its console, once per episode (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "the hold stops naming itself, so a node stalled waiting for a rebuild looks identical to a node that lost the request -- which is exactly the ambiguity that cost a whole demo-gate fire to attribute when the OVMX/VAX node sat between the STARTUP.COM hand-off and the site-startup line.";;
+        require_fail) hd_lines <<'EOF'
+*** the hold named itself on the console exactly ONCE, across sixteen held transmissions ***
+  and the release said so too -- one line each way, so a console shows the whole episode
+EOF
+                      ;;
+        esac;;
+
+    arm-transition-never-releases-the-hold)
+        case "$_f" in
+        facility)     echo "the end of a transition releases what the hold held, AFTER the new directory vector has been applied (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_arm_transition_end() stops telling the requester FSM the hold has lifted, so every request the transition held waits out a full retry beat instead -- and nothing guarantees it is released under the vector the transition just rebuilt.";;
+        require_fail) hd_lines <<'EOF'
+*** a held request is released only AFTER the new directory vector has been applied ***
+EOF
+                      ;;
+        esac;;
+    dlm-rm-ack-rewrites-the-grant-record)
+        case "$_f" in
+        facility)     echo "the 82/15 answer to a remaster step is the request with body[8], body[9] and body[34] rewritten and NOTHING else (rd vms-380 rule 1; 246 of 246 real pairs)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the answer also writes the 32-bit grant record at body[32:36], as the old op-0x0f-only builder did. On an op-0x0f that is invisible (70/70 real requests carry 01 00 .. 00 there); on an op-0x0e or op-0x10 it overwrites the sender's own body[32], [33] and [35], which take 21, 6 and 10 distinct values across the corpus -- OVMX asserting a value nobody sent, in an answer a real VAX echoes.";;
+        require_fail) hd_lines <<'EOF'
+*** the answer equals the real VAX's, byte for byte past the envelope ***
+  body[32] is the REQUEST'S byte, not the grant's 0x01
+  body[35] is the REQUEST'S byte too
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-lock-answer-echoes-the-handle)
+        case "$_f" in
+        facility)     echo "the 82/01 answer to an op-0x12 carries at body[20:24] the lock id THIS engine minted, read back off the LKB it created (rd vms-380 rule 2; SDA-matched in RA2, RA5 and RA6)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the answer stops writing the handle the adoption minted, so body[20:24] stays the HOLDER's own EPID, echoed. The holder then records a master handle that names nothing on this node, and its next CONVERT or DEQ on that lock arrives for a lock id this master never issued -- the fc8540ae INVLOCKID shape, one step removed.";;
+        require_fail) hd_lines <<'EOF'
+*** the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+*** the sub grant equals the real VAX's, byte for byte past the envelope ***
+*** HELD OUT: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+*** PRE-REGISTERED, THIRD TOPOLOGY: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-lock-answer-invents-a-valblk)
+        case "$_f" in
+        facility)     echo "a value block rides an op-0x12 answer only when the RSB really holds one; sixteen zeros presented as a value block is the placeholder INV-6 forbids (rd vms-380 rule 2)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the answer writes the caller's valblk span whatever valblk_present says, so a SUB-resource grant -- 408 of 408 of which carry zeros on the real wire -- hands the holder a value block for a resource that has none.";;
+        require_fail) hd_lines <<'EOF'
+valblk_present 0 writes NO value block and NO sequence, whatever the struct holds
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-14-leaks-the-caller-buffer)
+        case "$_f" in
+        facility)     echo "an op-0x14 asserts six fields and ZEROS every other byte (the rd vms-42de ruling: residue is emitted as zeros, never OVMX kernel memory)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the builder stops blanking the body, so every span it does not fill is whatever the caller's frame buffer held -- which on a real executive is its own kernel memory. That is the exact value class that bugchecked two real lab VAXes (vms-239 r17/r19) and the thing the rd vms-42de ruling exists to forbid.";;
+        require_fail) hd_lines <<'EOF'
+*** every byte outside the six fields is ZERO -- the rd vms-42de ruling, not OVMX kernel memory ***
+  body[12:16] is left for the CM's own DLM-sequence stamp
+  body[40:44] = 0, the real frame's (68/68)
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-lock-answer-record-omitted)
+        case "$_f" in
+        facility)     echo "the 82/01 answer to an op-0x12 carries the GRANT RECORD -- body[28]=0x10, body[29]=0, body[32:36]=01 00 fa 00 (rd vms-380 rule 2; 416 of 416 real answers)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the op-0x12 answer stops writing the grant record, so the holder gets an answer with no outcome byte at all -- the ev5 request-storm shape (rd vms-b5b0), here against a holder that is mid-remaster and has nothing else to go on. dlm-grant-record-omitted covers the same record on the ENQ/CONVERT grant path; this is the second consumer of the one writer.";;
+        require_fail) hd_lines <<'EOF'
+*** the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+*** the sub grant equals the real VAX's, byte for byte past the envelope ***
+*** HELD OUT: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+*** PRE-REGISTERED, THIRD TOPOLOGY: the root grant equals the real VAX's everywhere but the cells rd vms-380 cannot name ***
+  body[28] = 0x10, the grant flag (420/420 real)
+  body[34] = 0xfa, granted
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-14-pattern-overruns-a-field)
+        case "$_f" in
+        facility)     echo "RA7's second fixed pattern lands in the op-0x14's residue spans and nowhere else, so the two fires differ in exactly one variable (rd vms-6ad1)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_remaster";;
+        isolation)    echo "isolated";;
+        why)          echo "the residue span runs four bytes long and covers body[40:44], which 63 of 63 real op-0x14s carry as zero. The RA7 fire would then differ from its control in a NAMED field as well as the residue, and whatever the VAX did could not be attributed to either -- a proof that proves nothing, which is worse than no proof.";;
+        require_fail) hd_lines <<'EOF'
+*** not one named field moves when the pattern changes ***
+  body[40:44] stays 0 under the pattern (68/68 real)
+EOF
+                      ;;
+        esac;;
+
     cnxman-dir-remove-opens-txn)
         case "$_f" in
         facility)     echo "a directory-entry removal is a notification: its envelope opens no transaction (rd vms-e09, R3)";;
@@ -1192,6 +1634,34 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** acking the peer's 0x0b/0x06 (its send 4) goes out ***
   nothing refused
+EOF
+                      ;;
+        esac;;
+
+    refused-send-always-keeps-number)
+        case "$_f" in
+        facility)     echo "a CM send the port did not take hands its send-msg# back; only a frame the port HOLDS keeps it (rd vms-fb0)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_refused_send_keeps_number() answers the number stands for every SS-dollar-ABORT, so a send the port refused for want of credit keeps its send-msg#. Run 39072069037: three such sends left a 218 to 222 hole and the real VAX took a fatal CNXMGRERR.";;
+        require_fail) hd_lines <<'EOF'
+port NOCREDIT (window spent): the number is handed back
+port RINGFULL: the number is handed back
+port UNSAFE (wire-safety guard): the number is handed back
+EOF
+                      ;;
+        esac;;
+
+    dir-remove-unregistered-entry)
+        case "$_f" in
+        facility)     echo "a master tells a directory node to drop an entry only when that directory node holds one for the resource (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_dir_remove_fill() no longer requires that a directory answered the resource's lookup, so a resource mastered before the cluster committed a vector is removed from a directory that never held it. The real V7.3 answers cat-0x02 op-0x19 and bugchecks LOCKMGRERR (4 of 4 captured crashes).";;
+        require_fail) hd_lines <<'EOF'
+*** a resource mastered before any directory held an entry for it is NOT removed from the directory ***
 EOF
                       ;;
         esac;;
@@ -1274,6 +1744,41 @@ EOF
         why)          echo "dlm_arm_post() stops dropping the staged removal, so the pair that preceded a real OpenVMS VAX's LOCKMGRERR goes back on the wire: a cat-0x02 op-0x04 removal for a resource and, milliseconds later, a lookup for that same name and hash.";;
         require_fail) hd_lines <<'EOF'
 *** a request for a resource drops that resource's staged directory removal, before the request is queued ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-request-pid-cell-zeroed)
+        case "$_f" in
+        facility)     echo "a cross-node lock request carries the REQUESTING PROCESS's id at body[20:24] until a master names a handle, and never a zero (rd vms-c55)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_enq_request_build() goes back to writing only the master handle at body[20:24], so a fresh request leaves it zero -- which is what a real OpenVMS VAX V7.3 directory answers body[34] = 0xfe to (12 of 12 zero-cell answers in the corpus, 0 of 19,370 nonzero ones), the last frame it sent before each captured LOCKMGRERR.";;
+        require_fail) hd_lines <<'EOF'
+body[20:24] == the LKB's master handle, or its requesting PID while there is none
+...and body[20:24] is never zero
+EOF
+                      ;;
+        esac;;
+
+    dlm-request-pid-not-read-from-pcb)
+        case "$_f" in
+        facility)     echo "the requesting process's id on a cross-node request is READ OFF THAT PROCESS'S PCB at post time, not supplied from anywhere else (rd vms-c55, INV-6)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_deq_reachable";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_proxy_fill_post() stops reading the owning PCB's process id, so the post carries neither a master handle nor a requester and the codec refuses the frame -- the lock request reaches no wire at all. The executive read is what makes the cell real rather than a value the wire arm invented.";;
+        require_fail) hd_lines <<'EOF'
+the lookup (op 0x01) went to the directory node
+two frames total: the ENQ, and now the RELEASE
+*** the second frame is a grounded op-0x03 $DEQ ***
+  addressed to the MASTER, never a directory node
+the frame parses as a grounded op-0x03
+the ENQ, then the rundown RELEASE
+*** rundown emitted a real op-0x03 $DEQ ***
+  the codec REFUSED to build it -- the placeholder that bugchecked a real VAX cannot reach a wire
+the lookup went to the directory node
 EOF
                       ;;
         esac;;
@@ -2351,6 +2856,104 @@ EOF
                       ;;
         esac;;
 
+    dlm-rm-held-before-the-last-end)
+        case "$_f" in
+        facility)     echo "rule W2 (rd vms-ed5): the new master sends NO op-0x14 until EVERY member owed an end-of-records has sent one -- 0 of 7 multi-op-0x13 remaster episodes in the corpus interleave";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_owed_complete() returns true as soon as ONE member has reported instead of all of them, so the FIRST op-0x13 closes the adoption and announces the tree. On a real cluster the old master's 0x13 can arrive BEFORE a holder's records (measured in the pre-registered RA8 arm), so this node would close the transaction and then REFUSE four locks a real VAX still believes it holds -- the holder waits forever on a lock its own database says it has.";;
+        require_fail) hd_lines <<'EOF'
+  *** one to each system that sent an op-0x13 ***
+  *** the adoption is NOT closed: the holder has not reported (RA8's interleave) ***
+  *** the tree is not announced at all while a member still owes an end-of-records ***
+  *** two op-0x14s, after the last op-0x13 ***
+  and is really adopted
+  and no op-0x14 has gone out
+  and the executive still counts the completion as unreported
+  both op-0x14s counted unsent
+  it is struck
+  nothing sent
+  the HOLDER's end-of-records closes it
+  the bystander reports too -- it holds nothing and still sends one (RA8's CACHE$ episode)
+  the holder still owes one
+  the holder's record still lands
+  three op-0x14s now go out
+  with three members and two reports the tree is still waiting
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-held-to-a-member-that-reported-nothing)
+        case "$_f" in
+        facility)     echo "rule W1 (rd vms-ed5): an op-0x14 goes to each system that sent an op-0x13 and to NOBODY else -- 61 of 61 remaster episodes, 0 of 68 frames to a system that reported nothing";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_send_held()'s 'if (!t->done[i]) continue;' is dropped, so the tree is announced to every member of the owed set rather than to the ones that reported. The frame reaches a system that was never part of this hand-over -- a shape no real new master has been watched to send to it, which is exactly what RULE C and ovmx-never-crashes-a-peer forbid, and after a departure it is addressed at a system that has LEFT.";;
+        require_fail) hd_lines <<'EOF'
+  *** and only the old master -- the one system that reported -- is told ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-open-answered-when-refused)
+        case "$_f" in
+        facility)     echo "an op-0x0e this node cannot adopt is NOT acknowledged (rd vms-ed5): the 82/15 is this node saying it will take the tree";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_h_open() stages the acknowledgement before testing whether the adoption engine opened anything, so a node with no delivery proc, no cluster identity of its own, or no free tree slot still tells the old master 'yes, I am your new master'. The old master then hands over a tree NOBODY holds: its holders' locks live on a node that has no record of them, and a departing master waits for an op-0x14 that can never come.";;
+        require_fail) hd_lines <<'EOF'
+  *** nothing is answered: the old master is not told this node will take a tree it cannot hold ***
+  and it is counted
+  the step is REFUSED
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-half-tree-left-adopted)
+        case "$_f" in
+        facility)     echo "a tree that cannot be adopted WHOLE is adopted NOT AT ALL (rd vms-ed5 / vms-14fd): a refused record gives the whole tree back to its old master";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_h_record() stops calling rm_abandon() when the engine refuses a record, so the tree stays open with the locks adopted SO FAR. This node then serves that tree as its master while missing locks a holder still believes it holds -- it will grant an incompatible mode over them, which is the one failure a lock manager must never have.";;
+        require_fail) hd_lines <<'EOF'
+  *** the WHOLE tree is given back to its old master ***
+  no tree is open here any more
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-held-reported-though-unsent)
+        case "$_f" in
+        facility)     echo "a completion is reported only when its op-0x14s REALLY went out (rd vms-ed5): vms_lock_dlm_adopt_unreported() is the published gap";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_complete()'s 'if (sent != 0u)' guard on adopt_reported() is forced true, so a tree whose announcements ALL failed to transmit is still counted as reported. The executive then publishes a clean zero for the completions nobody was told about, and the one number a lab run reads to find a stranded old master goes silent.";;
+        require_fail) hd_lines <<'EOF'
+  *** and the completion is NOT reported: a frame that did not go out is not an announcement ***
+  and reported as unreported
+EOF
+                      ;;
+        esac;;
+
+    dlm-rm-role-claimed-without-an-adoption)
+        case "$_f" in
+        facility)     echo "the op-0x0f answer's NEW MASTER role is read off this node's own open adoption (rd vms-ed5 / vms-cab), never off the frame";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_remaster_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_h_role() answers as the NEW MASTER unconditionally, so a plain member clears body[28:32] in its 82/15. The remastering node is told a second system took the role its real new master has, which is the 3-node rule rd vms-cab's held-out captures established and the 2-node ones hid (memory heldout-proof-must-vary-topology).";;
+        require_fail) hd_lines <<'EOF'
+  *** body[28:32] is KEPT: this node is not the new master and does not claim to be ***
+  no new-master role was asserted
+EOF
+                      ;;
+        esac;;
+
     dlm-adopt-parent-not-verified)
         case "$_f" in
         facility)     echo "the remaster adoption's refusal to let an op-0x12 record choose which lock its sub-resource hangs under (rd vms-14fd: body[40:44] names a handle THIS engine minted, so it is LOOKED UP and checked against the adoption and the holder, never trusted)";;
@@ -2383,11 +2986,11 @@ EOF
 
     dlm-adopt-unreported-not-counted)
         case "$_f" in
-        facility)     echo "the COUNT of adoptions this node completed but could not report to the old master (rd vms-14fd, INV-6: the op-0x14's body[20:24] and body[28:40] are ungrounded, so the gap is published as a number rather than left silent)";;
+        facility)     echo "the COUNT of adoptions this node completed but nobody was told about -- completed minus reported (rd vms-14fd, re-derived by rd vms-ed5: the gap is published as a number rather than left silent, whether it is the whole of `completed` or none of it)";;
         targets)      echo "kernel-core/vms_lock.c";;
         suites_red)   echo "test_dlm_adopt";;
         isolation)    echo "isolated";;
-        why)          echo "vms_lock_dlm_adopt_end()'s 'vms_dlm_adopt_unreported_n++;' is dropped. The adoption still completes and still sends nothing -- only the tripwire that says so goes silent, so an executive that has adopted a hundred trees and told the old masters about none of them reports a clean zero. A gap nobody counts is a gap nobody closes.";;
+        why)          echo "vms_lock_dlm_adopt_unreported()'s 'completed minus reports' subtraction is replaced by a flat 0. Every adoption still completes and the wire arm still reports whatever it really reported -- only the tripwire that says how many completions NOBODY was told about goes silent, so an executive that adopted a hundred trees and announced none of them reports a clean zero. A gap nobody counts is a gap nobody closes.";;
         require_fail) hd_lines <<'EOF'
 and ONE adoption went unreported to the old master -- body[20:24] and body[28:40] of the op-0x14 are not grounded, so no frame is sent
 the gap is exactly 'all of them', stated as a number
@@ -2485,14 +3088,82 @@ apply_edit() {
         sed -i 's|#define VMS_OFF_DLM_REQ_LKID       96u|#define VMS_OFF_DLM_REQ_LKID       92u /* NEGCTL */|' "$_file";;
 
     dlm-grant-record-omitted)
-        # The record's two writes in the grant builder. Removing the flag write
-        # removes the anchor, so a second apply cannot match.
-        sed -i 's|\tvms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
-        sed -i 's|\tvms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
+        # The record is written in ONE place now (dlm_put_grant_record, rd
+        # vms-380), used by the ENQ/CONVERT grant builder and by the op-0x12
+        # answer builder. Removing the flag write removes the anchor, so a
+        # second apply cannot match.
+        sed -i 's|\tvms_wire_put_u8(w, VMS_OFF_DLM_GRANT_FLAG, VMS_DLM_GRANT_FLAG_VAL);|\t/* NEGCTL dlm-grant-record-omitted */|' "$_file"
+        sed -i 's|\tvms_wire_put_le32(w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL);|\t/* NEGCTL */|' "$_file";;
 
     dlm-op0f-member-answers-as-new-master)
-        # The role test guards the clearing write, in exactly one place.
-        sed -i 's|^\tif (new_master)$|\tif (1) /* NEGCTL dlm-op0f-member-answers-as-new-master */|' "$_file";;
+        # The role test guards the clearing write, in exactly one place -- now
+        # the shared remaster-step answer builder (rd vms-380), which also
+        # gates it on the opcode. Dropping the role half makes a plain member
+        # answer in the new master's form; the opcode half stays, so only the
+        # op-0x0f answer is corrupted and the defect is still one variable.
+        sed -i 's|^\tif (new_master != 0 \&\& op == VMS_DLM_WIREOP_RM_0F)$|\tif (op == VMS_DLM_WIREOP_RM_0F) /* NEGCTL dlm-op0f-member-answers-as-new-master */|' "$_file";;
+
+    dlm-local-release-tells-nobody)
+        # vms_deq_core's snapshot is the only one taken into `flips`; zeroing
+        # the set instead leaves the comparison and the report well-defined and
+        # finding nothing, which is exactly the old silence.
+        sed -i 's|^    dlm_flips_snapshot_locked(res, \&flips);$|    memset(\&flips, 0, sizeof(flips)); /* NEGCTL dlm-local-release-tells-nobody */|' "$_file";;
+
+    dlm-rundown-release-tells-nobody)
+        # The sweep's one carry-out line (the quorum resume appends to `all`,
+        # not `f`, so this text is unique to lock_teardown_locked).
+        sed -i 's|        dlm_flips_append(f, \&mine);|        /* NEGCTL dlm-rundown-release-tells-nobody */|' "$_file";;
+
+    dlm-release-opens-a-transaction)
+        # The release's own admission line, unique in this file.
+        sed -i 's|^\tif (op == VMS_DLM_WIREOP_DEQ)$|\tif (0) /* NEGCTL dlm-release-opens-a-transaction */|' "$_file";;
+
+    dlm-release-carries-the-lock-mode)
+        # The release builder's own measured-cell line, unique in this file.
+        sed -i 's|^\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
+
+    dlm-local-convert-grants-nobody)
+        # The immediate convert branch's grant pass. Distinguished from the
+        # other sites by the snapshot line that precedes it in the same
+        # branch, so this defect and dlm-local-convert-tells-nobody cannot
+        # mutate each other's line.
+        perl -0pi -e 's|        dlm_flips_snapshot_locked\(res, &flips\);\n        try_grant_waiters\(res\);\n        dlm_flips_keep_granted_locked\(res, &flips\);\n\n        exec_unlock|        /* NEGCTL dlm-local-convert-grants-nobody */\n        memset(&flips, 0, sizeof(flips));\n\n        exec_unlock|' "$_file";;
+
+    dlm-local-convert-tells-nobody)
+        # The same branch's REPORT, left out while the grant pass stays.
+        perl -0pi -e 's|        exec_unlock\(&res->lock\);\n        dlm_flips_report\(&flips\);\n\n        args\.lk_status|        exec_unlock(&res->lock);\n        /* NEGCTL dlm-local-convert-tells-nobody */\n\n        args.lk_status|' "$_file";;
+
+    dlm-convert-tells-the-converter-only)
+        # The INBOUND convert's snapshot. Three doors now call the same three
+        # lines (vms_deq_core at 4-space indent, vms_ioctl_convert and this
+        # one at 8), so indentation alone no longer picks one out: this is
+        # anchored on the `req->queued = 0;` that follows it, which only the
+        # inbound path has. Without the anchor this defect also mutated rd
+        # vms-9db's local-convert door and reddened its assertions too.
+        # ONLY the snapshot goes: try_grant_waiters stays, so the THIRD
+        # system is still GRANTED and the defect is exactly "granted in
+        # silence". `flips` is memset at entry, so the compare that follows
+        # finds nothing to report -- which is the silence this control is
+        # about, and keeping the grant is what stops it reddening the
+        # database assertion as well.
+        perl -0pi -e 's|        dlm_flips_snapshot_locked\(res, &flips\);\n        try_grant_waiters\(res\);\n        dlm_flips_keep_granted_locked\(res, &flips\);\n        req->queued = 0;|        /* NEGCTL dlm-convert-tells-the-converter-only */\n        try_grant_waiters(res);\n        dlm_flips_keep_granted_locked(res, &flips);\n        req->queued = 0;|' "$_file";;
+
+    dlm-grant-advance-uncounted)
+        # The one counter bump for a flip with no arm bound.
+        sed -i 's|            vms_dlm_grant_flips_unreported_n++;|            /* NEGCTL dlm-grant-advance-uncounted */|' "$_file";;
+
+    dlm-queued-enq-not-answered)
+        # The one call that answers it. Removing it removes the anchor.
+        sed -i 's|\t\treturn dlm_arm_reply_queued(d, in, \&res, wireop, reply);|\t\td->queued_no_reply++; return 0; /* NEGCTL dlm-queued-enq-not-answered */|' "$_file";;
+
+    dlm-queued-answer-read-as-granted)
+        # The parse's queued branch turns on one comparison, unique in this
+        # file; making it never match removes the anchor.
+        sed -i 's|\tif (vms_wire_get_u8(\&v, VMS_OFB_DLM_RESULT_STAMP) ==|\tif (0 \&\& vms_wire_get_u8(\&v, VMS_OFB_DLM_RESULT_STAMP) == /* NEGCTL dlm-queued-answer-read-as-granted */|' "$_file";;
+
+    dlm-queued-sublock-answered-anyway)
+        # The parent-span test's own call, unique in this file.
+        sed -i 's|\tif (dlm_req_names_parent(v))|\tif (0) /* NEGCTL dlm-queued-sublock-answered-anyway */|' "$_file";;
 
     dlm-queued-convert-answered-as-granted)
         # The queued outcome is written in exactly one place.
@@ -2561,6 +3232,16 @@ apply_edit() {
         # `vms_res_blocks < VMS_DLM_LEARN_RES_CAP;` is unique in this file.
         sed -i 's|vms_res_blocks < VMS_DLM_LEARN_RES_CAP;|1; /* NEGCTL dlm-learner-unbounded */|' "$_file";;
 
+    dlm-sublock-looked-up-in-the-directory)
+        # The one call that gives a sub-resource its tree's master. Replacing
+        # the inheritance with a no-op restores the old routing and consumes
+        # the anchor, so a second apply cannot match.
+        sed -i 's|        uint32_t pst = enq_sub_adopt_tree_master(res, pfacts.master_csid);|        uint32_t pst = SS__NORMAL; /* NEGCTL dlm-sublock-looked-up-in-the-directory */|' "$_file";;
+
+    dlm-sublock-parent-pair-zeroed)
+        # The both-or-neither refusal is one expression, unique in this file.
+        sed -i 's|\tif ((req->parent_own_lkid == 0u) != (req->parent_master_lkid == 0u))|\tif (0) /* NEGCTL dlm-sublock-parent-pair-zeroed */|' "$_file";;
+
     dlm-own-directory-not-consulted)
         # `if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))`
         # is unique in this file.
@@ -2623,6 +3304,19 @@ apply_edit() {
         # already gone, so cmd_apply's pristine-compare reports BROKEN
         # FIXTURE rather than silently moving on to the second occurrence.
         sed -i '/^\tldwv_survey_club(club, &s);$/,/^\t\treturn st;$/ s|club->ldwv_build_refused++;|/* NEGCTL ldwv-refusal-uncounted: the refusal is not counted */|' "$_file";;
+
+    dlm-resource-name-keyed-by-c-string)
+        # The two lines that KEY a resource by its name, back to their
+        # pre-rd-vms-326 C-string spelling: the comparison becomes a strncmp
+        # (which stops at the first NUL in either name) and the hash bucket is
+        # taken over the name's strnlen. BOTH are needed and neither alone
+        # changes any behaviour -- the counted hash puts two same-prefix names
+        # in different buckets, so the strncmp is never even reached, and the
+        # counted comparison keeps them apart inside one bucket, so a strnlen
+        # hash is harmless on its own. Together they are the defect that was
+        # measured against real hardware.
+        sed -i 's|    return memcmp(res->name, k->name, k->name_len) == 0;|    return strncmp(res->name, k->name, 32) == 0; /* NEGCTL dlm-resource-name-keyed-by-c-string */|' "$_file"
+        sed -i 's|    size_t i, n = name_len;|    size_t i, n = strnlen(name, 32); /* NEGCTL dlm-resource-name-keyed-by-c-string */\n\n    (void)name_len;|' "$_file";;
 
     dlm-lkid-guard-disabled)
         # dlm_lkid_pair_put()'s guard is split across two source lines
@@ -3005,6 +3699,60 @@ apply_edit() {
     codec-params-ready-ignores-flag)
         # the READY test is unique in this file.
         sed -i 's/(p->flags \& VMS_CM_PFLAGS_READY) != 0u \&\& p->members != 0u;/p->members != 0u; \/\* NEGCTL codec-params-ready-ignores-flag \*\//' "$_file";;
+
+    dlm-request-not-held-in-transition)
+        # The ONE hold in dq_may_transmit. Short-circuited rather than deleted
+        # so both predicates stay REFERENCED (-Werror=unused-function). The
+        # edit consumes its anchor.
+        sed -i 's|^\tif (dq_op_waits_for_rebuild(wireop) \&\& dq_transition_active(f)) {$|\tif (0 \&\& dq_op_waits_for_rebuild(wireop) \&\& dq_transition_active(f)) { /* NEGCTL dlm-request-not-held-in-transition */|' "$_file";;
+
+    dlm-dir-remove-sent-in-transition)
+        # The ONE bare `if (dq_transition_active(f)) {` -- dlm_req_fsm_dir_
+        # remove's. The compound one in dq_may_transmit does not match.
+        sed -i 's|^\tif (dq_transition_active(f)) {$|\tif (0 \&\& dq_transition_active(f)) { /* NEGCTL dlm-dir-remove-sent-in-transition */|' "$_file";;
+
+    dlm-transition-hold-spends-the-ladder)
+        # dq_held's one comment line, which is there to be this anchor.
+        sed -i 's|^\t/\* tries is deliberately untouched -- see the note above. \*/$|\tif (r->tries < 0xffu) r->tries++; /* NEGCTL dlm-transition-hold-spends-the-ladder */|' "$_file";;
+
+    dlm-transition-hold-is-silent)
+        # The one call that names the hold. Short-circuited rather than
+        # deleted so dq_say_held stays REFERENCED (-Werror=unused-function).
+        sed -i 's|^\t\tdq_say_held(f);$|\t\tif (0) dq_say_held(f); /* NEGCTL dlm-transition-hold-is-silent */|' "$_file";;
+
+    arm-transition-never-releases-the-hold)
+        # The one release call, at the end of dlm_arm_transition_end().
+        sed -i 's|^\t(void)dlm_req_fsm_transition_ended(\&d->req);$|\t/* NEGCTL arm-transition-never-releases-the-hold */|' "$_file";;
+    dlm-rm-ack-rewrites-the-grant-record)
+        # The outcome-byte write in vms_dlm_rm_ack_build is unique in this file;
+        # the injection appends the grant-record write the old op-0x0f-only
+        # builder did, so a second apply cannot match (the anchor is consumed).
+        sed -i 's|^\tvms_wire_put_u8(\&w, VMS_OFF_DLM_RESULT_STAMP, VMS_DLM_REPLY_GRANTED);$|\tvms_wire_put_le32(\&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_GRANT_REC_VAL); /* NEGCTL dlm-rm-ack-rewrites-the-grant-record */|' "$_file";;
+
+    dlm-rm-lock-answer-echoes-the-handle)
+        # The one write of the minted handle, in vms_dlm_rm_lock_answer_build.
+        sed -i 's|^\tvms_wire_put_le32(\&w, VMS_OFF_DLM_MASTER_LKID, a->master_lkid);$|\t/* NEGCTL dlm-rm-lock-answer-echoes-the-handle */|' "$_file";;
+
+    dlm-rm-lock-answer-invents-a-valblk)
+        # The opt-in that keeps a value block off a resource that has none.
+        sed -i 's|a->valblk_present ? a->valblk\[i\] : 0u);|a->valblk[i]); /* NEGCTL dlm-rm-lock-answer-invents-a-valblk */|' "$_file";;
+
+    dlm-rm-14-leaks-the-caller-buffer)
+        # The one call that blanks an op-0x14's body before it is filled.
+        sed -i 's|^\tdlm_rm14_blank_body(\&w);$|\tif (0) dlm_rm14_blank_body(\&w); /* NEGCTL dlm-rm-14-leaks-the-caller-buffer */|' "$_file";;
+
+    dlm-rm-lock-answer-record-omitted)
+        # The one call that writes the grant record in the op-0x12 answer
+        # builder (the ENQ/CONVERT grant builder has its own call site, which
+        # dlm-grant-record-omitted covers through the shared writer).
+        # The comment above it is unique in this file, so `n` steps onto
+        # exactly the one call site and nothing else matches on a re-apply.
+        sed -i '\|420/420 real 0x12 answers|{n;s|.*|\t/* NEGCTL dlm-rm-lock-answer-record-omitted */|}' "$_file";;
+
+    dlm-rm-14-pattern-overruns-a-field)
+        # The residue span's own length, declared once.
+        sed -i 's|^#define VMS_DLM_RM14_RESIDUE_B_LEN   24u$|#define VMS_DLM_RM14_RESIDUE_B_LEN   28u /* NEGCTL dlm-rm-14-pattern-overruns-a-field */|' "$_file";;
+
     cnxman-dir-remove-opens-txn)
         # `cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);` is unique in this file.
         sed -i 's|^		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);$|		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST); /* NEGCTL cnxman-dir-remove-opens-txn */|' "$_file";;
@@ -3012,6 +3760,14 @@ apply_edit() {
     guard-ignores-category-0b)
         # `	case 0x0bu:` is unique in this file.
         sed -i 's|^	case 0x0bu:$|	case 0x7fu: /* NEGCTL guard-ignores-category-0b */|' "$_file";;
+
+    refused-send-always-keeps-number)
+        # `	return port_rc == held_rc;` is unique in this file.
+        sed -i 's#^	return port_rc == held_rc;$#	return (port_rc == held_rc) || 1; /* NEGCTL refused-send-always-keeps-number */#' "$_file";;
+
+    dir-remove-unregistered-entry)
+        # `if (res->dir_told_csid == 0u || res->dir_told_csid != dir)` is unique in this file.
+        sed -i 's#if (res->dir_told_csid == 0u || res->dir_told_csid != dir)#if (0 \&\& res->dir_told_csid != dir) /* NEGCTL dir-remove-unregistered-entry */#' "$_file";;
 
     pe-blk-frame-unringed)
         # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.
@@ -3042,6 +3798,16 @@ apply_edit() {
     arm-dirrm-races-the-lookup)
         # The one call on the post path. The edit consumes its anchor.
         sed -i 's|^\tdlm_arm_dirrm_drop_for(d, p);|\t/* NEGCTL arm-dirrm-races-the-lookup */|' "$_file";;
+
+    dlm-request-pid-cell-zeroed)
+        # The ternary's PID arm, in the one builder that writes body[20:24] on
+        # a request. The edit CONSUMES its anchor.
+        sed -i 's|: req->req_pid);|: 0u);  /* NEGCTL dlm-request-pid-cell-zeroed */|' "$_file";;
+
+    dlm-request-pid-not-read-from-pcb)
+        # The one executive read of the owning PCB's process id on the post
+        # path. The edit CONSUMES its anchor.
+        sed -i 's|^    p->req_pid     = (lock->proc != NULL) ? lock->proc->vms_pid : 0u;$|    /* NEGCTL dlm-request-pid-not-read-from-pcb */|' "$_file";;
 
     join-lnm-db-corrupt-unanswered)
         # The one answer call at the end of join_lnm_db_pulled(). The edit
@@ -3091,6 +3857,37 @@ apply_edit() {
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;
 
+    dlm-rm-held-before-the-last-end)
+        # `t->n_done == t->n_owed` occurs once (rm_owed_complete).
+        sed -i 's@^\treturn t->n_owed != 0u \&\& t->n_done == t->n_owed;$@\treturn t->n_done != 0u; /* NEGCTL dlm-rm-held-before-the-last-end */@' "$_file";;
+
+    dlm-rm-held-to-a-member-that-reported-nothing)
+        # rm_send_held's rule-W1 filter, the only test of `done[i]` against
+        # REPORTED. Disarmed, the tree is announced to every member of the
+        # owed set -- including one that has LEFT the cluster.
+        sed -i 's@^\t\tif (t->done\[i\] != VMS_DLM_RM_OWED_REPORTED)$@\t\tif (0) /* NEGCTL dlm-rm-held-to-a-member-that-reported-nothing */@' "$_file";;
+
+    dlm-rm-open-answered-when-refused)
+        # rm_h_open's engine test: the call still happens and its answer is
+        # thrown away, so the acknowledgement is staged whatever it said.
+        sed -i 's@^\tif (!f->ops->adopt_open(f->ops->ctx, \&slot->tree)) {$@\t(void)f->ops->adopt_open(f->ops->ctx, \&slot->tree); if (0) { /* NEGCTL dlm-rm-open-answered-when-refused */@' "$_file";;
+
+    dlm-rm-half-tree-left-adopted)
+        # rm_abandon's body is made a no-op at its first statement (its
+        # `undone` declaration, unique in this file), so the CALL SITE still
+        # references it and the mutated tree builds clean under -Werror.
+        sed -i 's@^\tuint32_t undone = 0u;$@\tuint32_t undone = 0u; if (1) { (void)undone; return; } /* NEGCTL dlm-rm-half-tree-left-adopted */@' "$_file";;
+
+    dlm-rm-held-reported-though-unsent)
+        # rm_complete's guard on the report. A comma expression, not a
+        # self-comparison: `sent` stays read and -Wtautological-compare has
+        # nothing to say.
+        sed -i 's@^\tif (sent != 0u)$@\tif (((void)sent, 1)) /* NEGCTL dlm-rm-held-reported-though-unsent */@' "$_file";;
+
+    dlm-rm-role-claimed-without-an-adoption)
+        # rm_h_role's role read: the second arm of the only ternary here.
+        sed -i 's@ST_OPEN) ? 1 : 0;$@ST_OPEN) ? 1 : 1; /* NEGCTL dlm-rm-role-claimed-without-an-adoption */@' "$_file";;
+
     dlm-adopt-parent-not-verified)
         # dlm_adopt_parent_res()'s condition spans two lines. Absorbing the
         # FIRST line's trailing `||` into `0 &&` disarms BOTH lineage checks
@@ -3109,9 +3906,10 @@ apply_edit() {
         sed -i 's@^        root->master_csid = prev;$@        (void)prev; /* NEGCTL dlm-adopt-abort-leaves-mastery */@' "$_file";;
 
     dlm-adopt-unreported-not-counted)
-        # `vms_dlm_adopt_unreported_n++;` occurs once (its declaration spells
-        # the name without the `++`, so it cannot match).
-        sed -i 's@^    vms_dlm_adopt_unreported_n++;$@    /* NEGCTL dlm-adopt-unreported-not-counted */@' "$_file";;
+        # Re-anchored by rd vms-ed5: the gap is no longer a counter of its own
+        # but `completed` minus `reports`, so the way to silence it is to make
+        # the READ answer zero. The subtraction occurs once.
+        sed -i 's@^    return completed - reported;$@    (void)completed; (void)reported; return 0u; /* NEGCTL dlm-adopt-unreported-not-counted */@' "$_file";;
 
     dlm-adopt-lvb-zeroes-the-block)
         # `if (r->valblk_present)` appears twice (dlm_adopt_alloc_lkb's LKB

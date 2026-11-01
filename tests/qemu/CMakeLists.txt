@@ -128,6 +128,14 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
        NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
         continue()
     endif()
+    # test_syssvc_ci6_rmhold drives RMHOLD.EXE, the remaster arms' holder
+    # program (tests/lab/ci6/mk_rmhold_native.sh) -- a VMS-native image on the
+    # same LINK.EXE backend, so the same arch condition applies for the same
+    # reason (rd vms-c2b).
+    if(_name STREQUAL "test_syssvc_ci6_rmhold" AND
+       NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|aarch64|arm64)$")
+        continue()
+    endif()
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 
@@ -196,12 +204,26 @@ foreach(_anchored
         # seam (tcpip_service_db.h -> rms_textfile_write_line/append_line/getline),
         # so it needs the same force-bind as tcpip_config_acp or every store/read
         # returns -1 with no honest RMS status.
-        test_syssvc_tcpip_service_db)
+        test_syssvc_tcpip_service_db
+        # test_syssvc_rms_textfile_threads (rd vms-acf3): rms_textfile from two
+        # threads (append + open/getline/close); only through the weak seam.
+        test_syssvc_rms_textfile_threads)
     if(TARGET ${_anchored})
         target_sources(${_anchored} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
     endif()
 endforeach()
+
+# test_syssvc_creprc_detached_output (rd vms-c89): its subjects are this same
+# binary, created DETACHED with /OUTPUT naming a VMS file; the image-start
+# routine that writes such a SYS$OUTPUT through RMS (sysoutput_rms.c) must be in
+# the subject image, and it reaches RMS through the rms_textfile weak seam, so
+# the suite carries the rms_acp_bind anchor too (pthread: every suite links it).
+if(TARGET test_syssvc_creprc_detached_output)
+    target_sources(test_syssvc_creprc_detached_output PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/libvms/rtl/sysoutput_rms.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
+endif()
 
 # test_syssvc_tcpip_inetd (R4 G1, rd vms-8bd / vms-1f8): the suite compiles the
 # identity resolver TU (tcpip_inetd_ident.c) and needs sysuaf.h on its include
@@ -220,6 +242,15 @@ endif()
 if(TARGET test_syssvc_crtl_features)
     target_sources(test_syssvc_crtl_features PRIVATE
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c)
+endif()
+
+# test_syssvc_crtl_efs (rd vms-da9b): the DEC C feature table and the UNIX<->
+# OpenVMS name translator (crtl_features.c, crtl_filespec.c), driven with the
+# DECC$EFS_* logicals against the real ODS-5 volume.
+if(TARGET test_syssvc_crtl_efs)
+    target_sources(test_syssvc_crtl_efs PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_features.c
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_filespec.c)
 endif()
 
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
@@ -1222,6 +1253,17 @@ set_tests_properties(decnet_startnet_boot_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 1500)
+# decnet_sethost_pair_boot_e2e (rd vms-a353): two booted DECnet nodes on one
+# segment; SET HOST A -> B never shows the remote password on A's console, and
+# %REM-S-END lands on its own line. Same opt-in; ci-release-e2e.yml runs it.
+add_test(
+    NAME decnet_sethost_pair_boot_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_decnet_sethost_pair_boot_e2e.sh
+)
+set_tests_properties(decnet_sethost_pair_boot_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 1800)
 # ---------------------------------------------------------------------------
 # run_status_e2e (vms-707): boot the real runtime, log in, RUN SYS$SYSTEM:RC3.EXE,
 # and assert the reworked DCL RUN fork path (waitid(WNOWAIT) peek -> executive

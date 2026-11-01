@@ -1,0 +1,27 @@
+# dcl-tcpip-tool-quals-accept-all -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL TELNET/FTP qualifier validation (src/vmsdcl/dcl_builtin.c q_ftp/q_none, vms-097)";;
+        targets)      echo "vmsdcl/dcl_builtin.c";;
+        suites_red)   echo "test_syssvc_dcl_tcpip_tool_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "TELNET goes back to accept-all: its empty qualifier table is unwired, so TELNET/ZQBOGUS silently drops the qualifier and connects instead of %DCL-W-IVQUAL.";;
+        require_fail) cat <<'EOF2'
+TELNET/ZQBOGUS and FTP/ZQBOGUS are %DCL-W-IVQUAL naming the qualifier
+TELNET/ZQBOGUS never reaches the client (no connection attempt)
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^      "TELNET remote terminal client (over TCP/IP Services BGn:)", q_none },$|      "TELNET remote terminal client (over TCP/IP Services BGn:)" }, /* NEGCTL dcl-tcpip-tool-quals-accept-all */|' "$_file"
+    :
+}

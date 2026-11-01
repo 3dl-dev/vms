@@ -23,7 +23,7 @@ SRC = ".github/workflows/ci.yml"
 CHANGES_OUTPUT_KEYS = [
     "core", "toolchain", "kernel", "boot", "release", "netbsd", "netbsd_vax",
     "exec_netbsd_vax", "aarch64_boot", "compat_surface", "libcrypto",
-    "openssh", "alpha_toolchain", "alpha_boot_runtime", "alpha_activation",
+    "openssh", "alpha_toolchain", "alpha_boot_runtime", "alpha_activation", "alpha_selfhost",
     "vax_toolchain", "tcpip",
 ]
 

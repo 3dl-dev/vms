@@ -37,9 +37,11 @@
 //     login the site publishes). It never logs in to the real VAX: Node C
 //     offering Username: is the proof its startup completed.
 //
-// PASS BAR: every run in the matrix reaches CN=3 -- both OVMX nodes' own CNXMAN
-// naming all three systems AND the real VAX admitting both in its own words --
-// with no bugcheck, a quiet OVMX/VAX console, AND every node usable within
+// PASS BAR: every run in the matrix reaches CN=3 -- both OVMX nodes announcing
+// their own membership in VMS's words AND the real VAX admitting both in its
+// own words, then each OVMX node's own SHOW CLUSTER holding all three as
+// MEMBER (rd vms-c56) -- with no bugcheck, a quiet OVMX/VAX console, no OVMX
+// console line a real VAX would not print (rd vms-c56), AND every node usable within
 // LOGIN_BOUND_S of the first click -- each OVMX node at a logged-in DCL `$`,
 // the real VAX offering Username: (rd vms-db1: a real VAX can be a member and
 // still hang in its startup, a dead console to a visitor). The matrix includes
@@ -66,7 +68,8 @@ import fs from 'node:fs';
 import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal,
          silentNeverStarts, isPass, isQuiet, observeNodeAWorker, nodeAStallWhy,
          observeLogin, loginAction, allReady, USERNAME, AFTER_WAIT_MS, parseLoginHint,
-         productVersionOf, versionWhy } from './gate-eval.mjs';
+         productVersionOf, versionWhy, driveLoginStep, LOGIN_NODES, driveClusterView,
+         clusterViewWhy, chatterWhy } from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
@@ -197,19 +200,32 @@ async function typeTo(page, who, text) {
 
 // One login step per node per poll (rd vms-db1). Nothing before CN=3.
 async function driveLogins(page, R, el, lastWake) {
-  for (const w of NODES) {
-    const act = loginAction(R, w);
-    if (act === 'wake' && el - (lastWake[w] ?? -1e9) >= WAKE_EVERY_S) {
-      lastWake[w] = el;
-      await typeTo(page, w, '\r');
-    } else if (act === 'login') {
-      R.login_sent[w] = (R.transcript[w] || '').length;
-      log(`  ${w}: offered Username: -- logging in as ${userFor(w)}`);
-      await typeTo(page, w, userFor(w) + '\r');
-      await sleep(2500);
-      await typeTo(page, w, passFor(w) + '\r');
-    }
-  }
+  // Every keystroke the gate sends is recorded per node (rd vms-25f): when,
+  // what kind (a password is never recorded), whether typeTo reported it
+  // delivered, and how much the console grew in the second after a bare RETURN.
+  // That splits "the RETURN never reached the node" (delivered=false, or
+  // grew=0 on a node that is otherwise alive) from "the node got it and
+  // never restarted its login" -- the two are indistinguishable from the
+  // console log alone. What the gate asserts is unchanged.
+  const record = async (w, t) => {
+    const wake = t === '\r';
+    const before = wake ? (await rawConsoleOf(page, w)).length : 0;
+    const delivered = await typeTo(page, w, t);
+    let grew = null;
+    if (wake) { await sleep(1000); grew = (await rawConsoleOf(page, w)).length - before; }
+    (R.keystrokes = R.keystrokes || {});
+    (R.keystrokes[w] = R.keystrokes[w] || []).push(
+      { el, kind: wake ? 'RETURN' : `text(${t.replace(/\r$/, '').length})`, delivered, grew });
+    if (wake) log(`  ${w}: wake RETURN at t=${el}s delivered=${delivered} console grew ${grew} chars`);
+    return delivered;
+  };
+  const io = {
+    type: record,
+    read: (w) => consoleOf(page, w, R),
+    sleep, log,
+    user: userFor, pass: passFor,
+  };
+  for (const w of NODES) await driveLoginStep(R, w, el, lastWake, WAKE_EVERY_S, io);
 }
 
 // Bring a panel into the viewport. A pcjs panel below the fold STOPS
@@ -351,7 +367,7 @@ async function oneRun(spec, idx) {
       })).catch(() => ({}));
       R.worstDriftMs = health.drift; R.vis = health.vis; R.sca = hub;
       if (isCN3(R)) R.cn3 = true;
-      R.samples.push({ t: el, sca: hub, member: { ...R.member }, added: { ...R.added },
+      R.samples.push({ t: el, sca: hub, member: { ...R.member },
                        vaxc_admitted: [...R.vaxc_admitted], lost: { ...R.lost },
                        restarts: { ...R.restarts },
                        vis: health.vis, worstDriftMs: health.drift });
@@ -360,7 +376,7 @@ async function oneRun(spec, idx) {
       // (rd vms-4ff), and silent once it starts talking.
       const aState = hub.OVMXA ? '' : ` nodeA=${JSON.stringify(R.nodeA_worker)}`;
       log(`  t=${el}s vis=${health.vis} drift=${health.drift}ms sca=${JSON.stringify(hub)} ` +
-          `added=${JSON.stringify(R.added)} vaxcAdm=${JSON.stringify(R.vaxc_admitted)} ` +
+          `member=${JSON.stringify(R.member)} vaxcAdm=${JSON.stringify(R.vaxc_admitted)} ` +
           `lost=${JSON.stringify(R.lost)} stalls=${JSON.stringify(R.repaint_stalls)}${aState}` +
           (R.cn3 ? ` username=${JSON.stringify(R.username_at)} dcl=${JSON.stringify(R.dcl_at)}` : ''));
       fs.writeFileSync(`${dir}/result.json`, asJson(R));
@@ -369,6 +385,18 @@ async function oneRun(spec, idx) {
       if (Object.keys(R.login_failed).length) break;
       await driveLogins(page, R, el, lastWake);
       await sleep(15000);
+    }
+
+    // rd vms-c56: every OVMX node holds all three systems as members -- read
+    // from its OWN SHOW CLUSTER, typed at the DCL prompt the gate logged in
+    // to. (A VMS node's console does not announce a later node's arrival, so
+    // this is where the executive's own view is read, not a log line.)
+    if (R.cn3 && allReady(R)) {
+      const io = { type: (w, t) => typeTo(page, w, t), read: (w) => consoleOf(page, w, R), sleep, log };
+      for (const w of LOGIN_NODES) {
+        const view = await driveClusterView(R, w, io);
+        log(`  ${w}: SHOW CLUSTER members ${JSON.stringify(view)}`);
+      }
     }
 
     const elEnd = Math.round((Date.now() - t0) / 1000);
@@ -380,6 +408,7 @@ async function oneRun(spec, idx) {
     await samplePanelHealth(page, R);
     await sampleNodeAWorker(page, R);
     R.verdict = verdictOf(R);
+    for (const m of R.login_retry_log || []) log(`  login retried -- ${m}`);   // slowness stays visible (rd vms-25f)
     await page.screenshot({ path: `${dir}/final.png`, fullPage: true }).catch(() => {});
   } finally {
     fs.writeFileSync(`${dir}/result.json`, asJson(R));
@@ -418,7 +447,9 @@ await (async () => {
     log(`--> ${rows[i].label}: ${r.verdict}`);
     results.push({ label: rows[i].label, order: r.order, gap: rows[i].gap,
                    throttle: rows[i].throttle, verdict: r.verdict, cn3: r.cn3,
-                   added: r.added, vaxc_admitted: r.vaxc_admitted, restarts: r.restarts,
+                   member: r.member, cluster_view: r.cluster_view, cluster_view_why: clusterViewWhy(r),
+                   chatter: r.chatter, chatter_why: chatterWhy(r),
+                   vaxc_admitted: r.vaxc_admitted, restarts: r.restarts,
                    ovmx_founded: r.ovmx_founded, bugchecks: r.bugchecks, lost: r.lost,
                    repaint_stalls: r.repaint_stalls, lost_unnamed: r.lost_unnamed,
                    substrate_noise: r.substrate_noise, quiet: isQuiet(r), pass: isPass(r),

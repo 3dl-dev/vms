@@ -88,7 +88,7 @@
 /* FIB$L_ACCTL access-control flag + the IO$_ACCESS name buffer size --
  * byte-identical to src/kernel/vms_acp.h. */
 #define VMS_ACP_ACCTL_WRITE   0x00000001u
-#define VMS_ACP_NAME_SIZE     80
+#define VMS_ACP_NAME_SIZE     256
 
 /* ================================================================
  * Argument structs -- byte-identical to src/kernel/vms_acp.h. The shared
@@ -181,7 +181,7 @@ struct vms_acp_rw_args {
 #define VMS_ACP_CTL_SEARCH    1u    /* wildcard directory context ($SEARCH) */
 
 /* Resultant-name buffer (P3/P4) -- byte-identical to src/kernel/vms_acp.h. */
-#define VMS_ACP_RESNAM_SIZE   84
+#define VMS_ACP_RESNAM_SIZE   264
 
 struct vms_acp_acpcontrol_args {
 	uint32_t chan;             /* in: file-class channel ($ASSIGN of the volume) */
@@ -422,15 +422,15 @@ _Static_assert(sizeof(struct vms_acp_assign_args) == 24,
                "vms_acp_assign_args changed size -- VMS_IOCTL_ACP_ASSIGN ABI break");
 _Static_assert(sizeof(struct vms_acp_fileattr) == 88,
                "vms_acp_fileattr changed size -- IO$_ACCESS ATR ABI break");
-_Static_assert(sizeof(struct vms_acp_access_args) == 224,
+_Static_assert(sizeof(struct vms_acp_access_args) == 400,
                "vms_acp_access_args changed size -- VMS_IOCTL_ACP_ACCESS ABI break");
 _Static_assert(sizeof(struct vms_acp_deaccess_args) == 8,
                "vms_acp_deaccess_args changed size -- VMS_IOCTL_ACP_DEACCESS ABI break");
 _Static_assert(sizeof(struct vms_acp_rw_args) == 48,
                "vms_acp_rw_args changed size -- ACP READVBLK/WRITEVBLK ABI break");
-_Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 200,
+_Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 556,
                "vms_acp_acpcontrol_args changed size -- VMS_IOCTL_ACP_ACPCONTROL ABI break");
-_Static_assert(sizeof(struct vms_acp_fileop_args) == 360,
+_Static_assert(sizeof(struct vms_acp_fileop_args) == 712,
                "vms_acp_fileop_args changed size -- VMS_IOCTL_ACP_FILEOP ABI break");
 _Static_assert(VMS_IOCTL_ACP_FILEOP != VMS_IOCTL_ACP_ACPCONTROL,
                "FILEOP/ACPCONTROL must stay distinct on nr 0x6F (size-distinct _IOWR)");

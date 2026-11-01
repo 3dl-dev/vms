@@ -1,0 +1,30 @@
+# lib-movtuc-stop-untranslated -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "LIB\$MOVTUC compares the TRANSLATED source character with the stop character";;
+        targets)      echo "libvms/rtl/lib_strconv.c";;
+        suites_red)   echo "test_syssvc_lib_movtuc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lib\$movtuc() tests the translated character (table[src]) against the stop character, as the RTL Library manual specifies. The mutation compares the raw source byte instead, so a source 'q' that upcases to the stop 'Q' is never seen: the routine returns 0 and translates past it. A source byte that already equals the stop character still stops, so the other assertions stay green. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the stop test is on the TRANSLATED character ('q' upcases to the stop 'Q')
+only the translated prefix before the stop character is written
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: "if (c == stopc) {" occurs once, in lib$movtuc.
+        sed -i 's|        if (c == stopc) {|        if ((unsigned char)src->dsc$a_pointer[i] == stopc) { /* NEGCTL lib-movtuc-stop-untranslated */|' "$_file"
+    :
+}

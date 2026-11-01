@@ -69,7 +69,7 @@ CFLAGS=(
     -DOVMX_KBACKEND_NETBSD -nostdinc
     -isystem "$KL" -isystem "$SYS" -isystem "$SYS/arch" -isystem "$SYS/../common/include"
     -D_KERNEL -D_MODULE -DSYSCTL_INCLUDE_DESCR -DKDTRACE_HOOKS
-    -I"$KMOD" -I"$CORE"
+    -I"$KMOD" -I"$CORE" -idirafter "$REPO/src/kernel"
     -Wno-unknown-warning-option
 )
 
@@ -165,6 +165,11 @@ SRCS=(
     "$CORE/vms_cnxman_join_fsm.c"
     "$CORE/vms_cnxman_diag.c"
     "$CORE/vms_cnxman.c"
+    # rd vms-9394: the executive L2 datalink -- the substrate-neutral facility
+    # and the NetBSD exec_l2_* binding under it -- join this per-PR gate in the
+    # same commit they join the Makefile's SRCS.
+    "$KMOD/vms_socket_netbsd.c"
+    "$CORE/vms_l2.c"
 )
 
 # ---- teeth check ---------------------------------------------------------

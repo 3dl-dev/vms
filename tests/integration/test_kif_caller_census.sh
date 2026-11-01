@@ -848,7 +848,7 @@ norm_path() {
 # named by every `# <line> "<file>"` linemarker. Unsorted; the caller sorts.
 # ---------------------------------------------------------------------------
 pp_origins() {
-    grep -oE '^# [0-9]+ "[^"]*"' | sed -e 's/^# [0-9]* "//' -e 's/"$//' | norm_path
+    grep -a -oE '^# [0-9]+ "[^"]*"' | sed -e 's/^# [0-9]* "//' -e 's/"$//' | norm_path
 }
 
 # ---------------------------------------------------------------------------
@@ -1530,14 +1530,14 @@ fi
 # ---------------------------------------------------------------------------
 {
     strip_comments < "$KIF_H" \
-        | grep -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
+        | grep -a -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
         | sed -E 's/[ \t]*\($//'
     # The preprocessed closure. Namespaced, like the raw reading it joins:
     # a prototype is a vms_kif_ name here or it is not a prototype of this
     # interface. Comments are gone before this reads, which is why the
     # closure reading needs no strip_comments of its own.
     pp_regions keep "$SRC_ROOT/" /dev/null < "$WORK/kifh.i" | cut -f3- \
-        | grep -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
+        | grep -a -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
         | sed -E 's/[ \t]*\($//'
 } | sort -u > "$WORK/protos"
 
@@ -1699,10 +1699,10 @@ if [ ! -f "$IOCTL_H" ]; then
     status=1
 else
     strip_comments < "$IOCTL_H" \
-        | grep -oE '^[ \t]*#[ \t]*define[ \t]+VMS_IOCTL_[A-Z0-9_]+' \
-        | grep -oE 'VMS_IOCTL_[A-Z0-9_]+' | sort -u > "$WORK/opcodes"
+        | grep -a -oE '^[ \t]*#[ \t]*define[ \t]+VMS_IOCTL_[A-Z0-9_]+' \
+        | grep -a -oE 'VMS_IOCTL_[A-Z0-9_]+' | sort -u > "$WORK/opcodes"
     strip_comments < "$KIF_C" \
-        | grep -oE 'VMS_IOCTL_[A-Z0-9_]+' | sort -u > "$WORK/opcodes_issued"
+        | grep -a -oE 'VMS_IOCTL_[A-Z0-9_]+' | sort -u > "$WORK/opcodes_issued"
 
     n_opcodes=$(grep -c . "$WORK/opcodes" || true)
     if [ "$n_opcodes" -eq 0 ]; then
@@ -1729,10 +1729,10 @@ else
     # vms_ioctl_getjpi), so the wrapper that names one is that path's only door
     # out of userspace -- and deleting it strands nothing at opcode grain.
     strip_comments < "$IOCTL_H" \
-        | grep -oE '^[ \t]*#[ \t]*define[ \t]+VMS_[A-Z0-9_]+_SEL_[A-Z0-9_]+' \
-        | grep -oE 'VMS_[A-Z0-9_]+_SEL_[A-Z0-9_]+' | sort -u > "$WORK/selectors"
+        | grep -a -oE '^[ \t]*#[ \t]*define[ \t]+VMS_[A-Z0-9_]+_SEL_[A-Z0-9_]+' \
+        | grep -a -oE 'VMS_[A-Z0-9_]+_SEL_[A-Z0-9_]+' | sort -u > "$WORK/selectors"
     strip_comments < "$KIF_C" \
-        | grep -oE 'VMS_[A-Z0-9_]+_SEL_[A-Z0-9_]+' | sort -u > "$WORK/selectors_used"
+        | grep -a -oE 'VMS_[A-Z0-9_]+_SEL_[A-Z0-9_]+' | sort -u > "$WORK/selectors_used"
 
     n_selectors=$(grep -c . "$WORK/selectors" || true)
     n_sel_named=$(comm -12 "$WORK/selectors" "$WORK/selectors_used" | grep -c . || true)
@@ -2131,7 +2131,7 @@ grep -n 'OVMX-UNWIRED:' "$KIF_H" > "$WORK/decl_lines" 2>/dev/null || true
 while IFS= read -r dl; do
     [ -n "$dl" ] || continue
     parsed=$(printf '%s\n' "$dl" \
-             | grep -oE 'OVMX-UNWIRED:[ \t]*vms_kif_[A-Za-z0-9_]+[ \t]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)' \
+             | grep -a -oE 'OVMX-UNWIRED:[ \t]*vms_kif_[A-Za-z0-9_]+[ \t]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)' \
              || true)
     if [ -z "$parsed" ]; then
         echo "FAIL: malformed unwired declaration: $dl"
@@ -2141,8 +2141,8 @@ while IFS= read -r dl; do
         status=1
         continue
     fi
-    name=$(printf '%s\n' "$parsed" | grep -oE 'vms_kif_[A-Za-z0-9_]+')
-    item=$(printf '%s\n' "$parsed" | grep -oE 'vms-[0-9a-z]+(\.[0-9a-z]+)?')
+    name=$(printf '%s\n' "$parsed" | grep -a -oE 'vms_kif_[A-Za-z0-9_]+')
+    item=$(printf '%s\n' "$parsed" | grep -a -oE 'vms-[0-9a-z]+(\.[0-9a-z]+)?')
     printf '%s %s\n' "$name" "$item" >> "$WORK/declared"
 done < "$WORK/decl_lines"
 

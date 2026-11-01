@@ -73,6 +73,10 @@
  */
 #define SS__DUPLNAM     148         /* duplicate process name (ssdef.h SS$_DUPLNAM) */
 #define SS__NONEXPR     2280        /* nonexistent process (ssdef.h SS$_NONEXPR) */
+#define SS__BADFILENAME 2072        /* SS$_BADFILENAME, docs/oracle/alpha84-starlet-defs/SSDEF.txt; the
+                                     * XQP's answer to a 237-character ODS-5 name (rd vms-7e7e) */
+#define SS__BADFILEVER  2080        /* SS$_BADFILEVER, same oracle: a second '.' in a new ODS-2
+                                     * name (rd vms-b9c) */
 #define SS__IVLOGNAM    340         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
 #define SS__NOPRIV      0x00000024
 #define SS__NOOPER      10388       /* SS$_NOOPER (STARLET $SSDEF) */
@@ -162,6 +166,13 @@
 #define SS__SYNCH       1673        /* granted synchronously (ssdef.h SS$_SYNCH) */
 #define SS__CANCELGRANT 8508        /* conversion cancelled (ssdef.h SS$_CVTUNGRANT) */
 #define SS__VALNOTVALID 2544        /* value block not valid (ssdef.h SS$_VALNOTVALID) */
+/* An invalid buffer length (ssdef.h SS$_IVBUFLEN == 844, the value this tree
+ * already ships for the name; NOT re-derived here, same discipline as the
+ * block above). $ENQ's answer to a resource name of 0 or more than 31 bytes
+ * -- observed, and the refusal src/libvms/syssvc/sys_lock.c makes on the
+ * descriptor before the ioctl; the executive makes the same one on the count
+ * it is handed (rd vms-326). */
+#define SS__IVBUFLEN     844
 
 /*
  * SS__UNSUPPORTED -- this tree's existing src/libvms/include/ssdef.h value
@@ -555,6 +566,26 @@ struct vms_lock_entry {
                                          * parent-child AUTO-RELEASE cascade is a
                                          * follow-on (vms-489), not wired here. */
     /*
+     * THE PARENT'S MASTER HANDLE (rd vms-b67a), for a sub-lock whose parent is
+     * a lock the CLUSTER holds. The request that carries this lock to its
+     * master names its parent by the PAIR (our handle for the parent, the
+     * master's handle for the parent) at body[36:44] -- grounded on 7 real
+     * VAX-to-VAX sub-lock requests, where the pair is byte-for-byte the pair
+     * that parent's own grant carried. `parent_id` above is the first half;
+     * this is the second, READ OFF THE PARENT LKB by vms_enq_core_ex while it
+     * still holds a reference on it, because the only other way to reach it at
+     * post time would be to take the PARENT resource's lock while holding the
+     * CHILD's.
+     *
+     * 0 for a root lock and for a sub-lock under a LOCAL parent (which this
+     * node masters, so no request leaves). A sub-lock under a proxy parent
+     * whose grant has not arrived cannot be composed at all -- a zero here is
+     * what a ROOT record means on the wire, and a master that received one
+     * would create a SECOND root for the name -- so vms_enq_core_ex refuses
+     * that $ENQ rather than letting this field be 0 on a frame.
+     */
+    uint32_t            parent_master_lkid;
+    /*
      * PROXY LKB (FC-P4.4, design SS3.4 + hard call 7; Davis p. 6-52's *process
      * copy*). proxy == 1 marks the requester-side image of a lock this node
      * does NOT master: the executive holds a real lock block for it -- so
@@ -602,6 +633,25 @@ struct vms_lock_resource {
     struct hlist_node   hash_node;      /* in global resource hash */
     char                name[32];
     /*
+     * HOW MANY OF THOSE BYTES ARE THE NAME (rd vms-326).
+     *
+     * A VMS RESOURCE NAME IS COUNTED, NOT TERMINATED, and may contain NULs:
+     * RMS names a file-access lock 'RMS$' + the 6-byte file id + 0x02 + the
+     * 12-byte space-padded volume label + three NULs (26 bytes, measured on
+     * 1,130 real cat-0x02 frames -- tools/cluster/dlm_rms_name_hash_check.py).
+     * Measuring this block's name with strnlen instead would make every
+     * same-file-id name on every volume ONE resource, which is what refused a
+     * reader of one file on behalf of a writer of another (rd vms-acf3), and
+     * would put a 7-byte truncation at body[47:55] on the wire.
+     *
+     * 1..31, set at creation from the counted name the caller stated and never
+     * changed; it is part of the identity every lookup matches on (`struct
+     * res_key`). The byte after the name is kept NUL so a diagnostic printf of
+     * an ASCII name is still safe. Mirror in src/kernel-netbsd/vms_internal.h
+     * and tests/cluster/host/lock_host_internal.h.
+     */
+    uint8_t             name_len;
+    /*
      * THE REST OF THE RESOURCE'S IDENTITY (rd vms-b5b0). A VMS resource name is
      * QUALIFIED: two $ENQs name the same resource only if they agree on the
      * name, the parent, the ACCESS MODE, and the UIC GROUP -- and the group is
@@ -627,6 +677,23 @@ struct vms_lock_resource {
                                          * waiting only, so it can never grant a
                                          * lock the cluster masters elsewhere. */
     uint8_t             valblk[LCK_VALBLK_SIZE]; /* resource value block */
+    /*
+     * THE VALUE BLOCK'S SEQUENCE (rd vms-ed5). A real V7.3 node carries one
+     * beside every resource value block and puts it on the wire: a lock-tree
+     * remaster's op-0x12 record carries the holder's block at body[88:104] and
+     * this number at body[104:108], and the new master's 82/01 answer returns
+     * both -- 420 of 420 real pairs (vms_cluster_codec_dlm.h rule 2). Without
+     * it an adopted resource could only answer a sequence of 0 where the
+     * holder said 0x15a, which tells the holder its block was reset.
+     *
+     * TODAY ONLY AN ADOPTION SETS IT (vms_lock.c dlm_adopt_link_lkb), read
+     * off the record that handed the resource over. That a value-block WRITE
+     * must also advance it is real VMS behaviour this executive does not have
+     * yet; it is rd vms-85c1, and until then this field is only ever what a
+     * remaster was told, never a number this node invented. Mirror in
+     * src/kernel-netbsd/vms_internal.h.
+     */
+    uint32_t            valblk_seq;
     spinlock_t          lock;
     int                 refcount;
     struct vms_lock_resource *parent;
@@ -672,7 +739,10 @@ struct vms_lock_resource {
     uint8_t             dir_valid;
     uint32_t            dir_gen;
     uint32_t            dir_csid;       /* directory node CSID; 0 = this node */
-    uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */
+    uint32_t            master_csid;    /* mastering node CSID; 0 = unmastered */    /* rd vms-c55: the directory node that was TOLD this node masters this
+     * resource (its lookup answer was "you master it"); 0 = no directory
+     * holds an entry for it. A removal is sent only to that node. */
+    uint32_t            dir_told_csid;
 };
 
 /* Per-process VMS state */
@@ -895,6 +965,10 @@ struct vms_proc {
      */
     struct list_head    l2_channels;    /* struct vms_l2_handle */
     spinlock_t          l2_lock;
+    uint32_t            l2_next_handle; /* last L2 handle number minted for
+                                         * this process, under l2_lock (the
+                                         * substrate-neutral vms_l2.c, rd
+                                         * vms-9394) */
 
     /*
      * Files-11 (ODS-2) ACP file-class channels (vms-149, epic vms-208). A
@@ -1049,6 +1123,13 @@ struct vms_proc {
     /* $SETDDIR: the process default directory (VMS_IOCTL_DDIR); inherited at
      * REGISTER_CONTINUE like dfprot. "" = never set. Same hash_lock. */
     char                ddir[VMS_DDIR_SIZE];
+
+    /* $SET_PROCESS_PROPERTIESW parse style (VMS_IOCTL_PPROP, rd vms-b9c):
+     * PARSE_STYLE$C_TRADITIONAL (0) or _EXTENDED (1). parse_style_perm is the
+     * process's permanent style, parse_style_image the current image's; a new
+     * image (REGISTER_CONTINUE) starts at the permanent one. Same hash_lock. */
+    uint8_t             parse_style_perm;
+    uint8_t             parse_style_image;
 
     /* The process rights list (VMS_IOCTL_RIGHTS, vms-7d5a): identifiers held besides
      * the UIC, matched by the ACP's ACL check. Inherited at REGISTER_CONTINUE with the
@@ -1582,6 +1663,7 @@ long vms_ioctl_setcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
@@ -1751,9 +1833,11 @@ void vms_bg_inherit(struct vms_proc *child, struct vms_proc *parent);
 
 /*
  * L2 (raw datalink) socket surface (vms-7eb, auth slice of vms-1e4; vms_l2.h).
- * Like BGn:, the L2 driver is Linux host-socket glue (src/kernel/
- * exec_kbackend_linux.h's exec_l2_* seam), so vms_module.c dispatches its
- * ioctls and calls vms_l2_release_all at process teardown directly. Unlike
+ * The facility (src/kernel-core/vms_l2.c) is substrate-neutral since rd
+ * vms-9394 and also builds into the NetBSD vms.kmod; on this substrate its
+ * exec_l2_* seam is an AF_PACKET socket (exec_kbackend_linux.h), and
+ * vms_module.c dispatches its ioctls and calls vms_l2_release_all at process
+ * teardown directly. Unlike
  * BGn: there is no fork/exec inheritance for L2 handles in this increment --
  * out of scope for the auth-gate slice (vms-1e4); a process that forks starts
  * with none, exactly as a freshly registered process does today.

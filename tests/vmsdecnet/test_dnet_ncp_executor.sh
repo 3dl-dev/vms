@@ -94,11 +94,32 @@ out="$(ncp SET EXECUTOR ADDRESS 1.43)"; rc=$?
 export OVMX_DECNET_EXECUTOR="$TMP/netnode_local.dat"
 
 # --- node database through the same store -------------------------------------
-ncp SET NODE 1.1 NAME VAX1 >/dev/null && ok "SET NODE 1.1 NAME VAX1 exits 0" || bad "SET NODE failed"
+# rd vms-acf3: the VMS split. DEFINE NODE writes the PERMANENT database (the
+# file NETACP loads at network start); SET NODE changes the RUNNING NETACP's
+# VOLATILE one, so with no NETACP it fails the way SHOW does and the file is
+# untouched.
+ncp DEFINE NODE 1.1 NAME VAX1 >/dev/null && ok "DEFINE NODE 1.1 NAME VAX1 exits 0" || bad "DEFINE NODE failed"
 out="$(ncp LIST KNOWN NODES)"
 grep -qE "^1\.1 +VAX1" <<<"$out" \
     && ok "LIST KNOWN NODES (new invocation) lists 1.1 VAX1" \
     || bad "LIST KNOWN NODES: $out"
+out="$(ncp SET NODE 1.2 NAME VAX2 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q "%NCP-F-OPEFAI" <<<"$out" \
+    && ok "SET NODE with no NETACP fails %NCP-F-OPEFAI (no volatile database to change)" \
+    || bad "SET NODE with no NETACP should fail OPEFAI (rc=$rc): $out"
+out="$(ncp LIST KNOWN NODES)"
+if grep -qE "^1\.2 +VAX2" <<<"$out"; then bad "SET NODE wrote the permanent database: $out"
+else ok "SET NODE did not write the permanent database (LIST does not show 1.2 VAX2)"; fi
+out="$(ncp CLEAR NODE VAX1 2>&1)"; rc=$?
+[ "$rc" -ne 0 ] && grep -q "%NCP-F-OPEFAI" <<<"$out" && ncp LIST KNOWN NODES | grep >/dev/null -E "^1\.1 +VAX1" \
+    && ok "CLEAR NODE with no NETACP fails %NCP-F-OPEFAI and leaves the permanent database alone" \
+    || bad "CLEAR NODE with no NETACP (rc=$rc): $out"
+ncp DEFINE NODE 1.3 NAME VAX3 >/dev/null
+ncp PURGE NODE VAX3 >/dev/null; rc=$?
+out="$(ncp LIST KNOWN NODES)"
+if [ "$rc" -eq 0 ] && ! grep -qE "^1\.3 +VAX3" <<<"$out" && grep -qE "^1\.1 +VAX1" <<<"$out"; then
+    ok "PURGE NODE VAX3 removes it from the permanent database (VAX1 kept)"
+else bad "PURGE NODE (rc=$rc): $out"; fi
 grep -q "OVMX layout, not VMS NETNODE_REMOTE.DAT" "$OVMX_DECNET_NODEDB" \
     && ok "the node database labels its layout as OVMX's" \
     || bad "node database lacks the OVMX-layout label"

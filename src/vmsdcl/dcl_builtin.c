@@ -122,6 +122,29 @@ static const struct dcl_qual_def q_search[] = {
     { "STATISTICS", CDU_VT_NONE, 0,               NULL, NULL },
     QUAL_END
 };
+
+/* LIBRARY (vms-097): the qualifiers cmd_library and its OBJECT/HELP/TEXT
+ * handlers act on. /REPLACE is insert-or-replace (the insert path replaces a
+ * same-named module), /TEXT is the default library type. /COMPRESS is real
+ * for OBJECT libraries (cmd_library rewrites the container, honouring
+ * /OUTPUT) and refused for the rest; /VAX is honoured only on the VAX rail
+ * (cmd_library), where the VAX format is the target's. Anything else (/MACRO /GLOBALS
+ * /LOG /NAMES ...) is not implemented and is %DCL-W-IVQUAL (INV-DCL sec 3). */
+static const struct dcl_qual_def q_library[] = {
+    { "CREATE",   CDU_VT_VALUE, 0, NULL, NULL },
+    { "INSERT",   CDU_VT_NONE,  0, NULL, NULL },
+    { "REPLACE",  CDU_VT_NONE,  0, NULL, NULL },
+    { "DELETE",   CDU_VT_VALUE, 0, NULL, NULL },
+    { "EXTRACT",  CDU_VT_VALUE, 0, NULL, NULL },
+    { "LIST",     CDU_VT_VALUE, 0, NULL, NULL },
+    { "OUTPUT",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "HELP",     CDU_VT_NONE,  0, NULL, NULL },
+    { "OBJECT",   CDU_VT_NONE,  0, NULL, NULL },
+    { "TEXT",     CDU_VT_NONE,  0, NULL, NULL },
+    { "COMPRESS", CDU_VT_VALUE, 0, NULL, NULL },
+    { "VAX",      CDU_VT_NONE,  0, NULL, NULL },
+    QUAL_END
+};
 static const struct dcl_qual_def q_purge[] = {
     { "LOG",     CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
     { "CONFIRM", CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
@@ -301,6 +324,25 @@ static const struct dcl_qual_def q_deassign[] = {
     { "EXECUTIVE_MODE",          CDU_VT_NONE, 0, NULL, NULL },
     QUAL_END
 };
+/* READ: only the qualifiers cmd_read honours (dcl_cmd_io.c). The rest of the
+ * DCL Dictionary set (/DELETE /INDEX /KEY /MATCH /NOLOCK)
+ * is not implemented, so DCL rejects it as an unrecognized qualifier rather
+ * than accept it and silently do something else (vms-097). */
+static const struct dcl_qual_def q_read[] = {
+    { "END_OF_FILE", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "ERROR",       CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PROMPT",      CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "TIME_OUT",    CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+
+/* MAIL forwards its qualifiers to MAIL.EXE, which honours exactly /SUBJECT
+ * (vms_mail.c); anything else it silently ignored. Declaring the table makes
+ * the rest %DCL-W-IVQUAL instead of dropped (vms-097, INV-DCL sec 3). */
+static const struct dcl_qual_def q_mail[] = {
+    { "SUBJECT", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
 static const struct dcl_qual_def q_open[] = {
     { "READ",   CDU_VT_NONE, 0, NULL, NULL },
     { "WRITE",  CDU_VT_NONE, 0, NULL, NULL },
@@ -336,8 +378,10 @@ static const struct dcl_qual_def q_attach[] = {
     { "IDENTIFICATION", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     QUAL_END
 };
+/* No qualifiers: /FDL (a real record-format conversion) is not implemented, so
+ * DCL rejects it as %DCL-W-IVQUAL like any qualifier the verb does not take,
+ * rather than minting a CONVERT message VMS does not have (vms-558e). */
 static const struct dcl_qual_def q_convert[] = {
-    { "FDL", CDU_VT_VALUE, 0, NULL, NULL },
     QUAL_END
 };
 static const struct dcl_qual_def q_reply[] = {
@@ -377,13 +421,29 @@ static const struct dcl_qual_def q_analyze[] = {
     { "SYSTEM",         CDU_VT_NONE, 0, NULL, NULL },
     QUAL_END
 };
-/* LINK (DCL Dictionary: LINK). cmd_link() honours /EXECUTABLE=name (output
- * image name) and /MAP (produce a link map, /NOMAP the default); it forks the
- * system linker for both. The wider LINK grammar (/SHAREABLE, /DEBUG,
- * /SYSLIB, ...) is a follow-up -- not forwarded today, so honestly rejected. */
+/* LINK (DCL Dictionary: LINK). cmd_link() hands SYS$SYSTEM:LINK.EXE the command
+ * tail as typed; LINK.EXE (src/vmslink/vms_cli.c) acts on /EXECUTABLE, /OPTIONS,
+ * /LIBRARY, /SHAREABLE (as an options-file or file qualifier), /INFORMATIONALS and
+ * the debug/traceback/library-search qualifiers, and refuses with a message the ones
+ * it cannot honour (/MAP, /FULL, /CROSS_REFERENCE, /SHAREABLE as an image kind).
+ * The table lets DCL accept exactly the qualifiers LINK.EXE then judges; a
+ * qualifier outside it draws %DCL-W-IVQUAL here. */
 static const struct dcl_qual_def q_link[] = {
-    { "EXECUTABLE", CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
-    { "MAP",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "EXECUTABLE",       CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "SHAREABLE",        CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "MAP",              CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "FULL",             CDU_VT_NONE,  0,               NULL, NULL },
+    { "CROSS_REFERENCE",  CDU_VT_NONE,  0,               NULL, NULL },
+    { "DEBUG",            CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "TRACEBACK",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "INFORMATIONALS",   CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "OPTIONS",          CDU_VT_NONE,  0,               NULL, NULL },
+    { "LIBRARY",          CDU_VT_NONE,  0,               NULL, NULL },
+    { "INCLUDE",          CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
+    { "SELECTIVE_SEARCH", CDU_VT_NONE,  0,               NULL, NULL },
+    { "SYSLIB",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "SYSSHR",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "USERLIBRARY",      CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
     QUAL_END
 };
 /* PRODUCT (DCL Dictionary: PRODUCT). cmd_product() honours /SOURCE=kit and
@@ -425,9 +485,42 @@ static const struct dcl_qual_def q_ping[] = {
     QUAL_END
 };
 
+/* TELNET reads NO qualifier (host and port are parameters), so an empty table:
+ * any qualifier is %DCL-W-IVQUAL rather than silently dropped (vms-097). FTP
+ * reads exactly the qualifiers below (cmd_ftp); every other one is honestly
+ * %DCL-W-IVQUAL until implemented (INV-DCL sec 3). */
+static const struct dcl_qual_def q_ftp[] = {
+    { "PORT",     CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "USER",     CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PASSWORD", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "GET",      CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PUT",      CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "REMOTE",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "OUTPUT",   CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+
+/* WRITE honours /SYMBOL (the record is the named symbol's value) and
+ * /ERROR=label (branch like GOTO on failure) -- cmd_write. /UPDATE (RMS
+ * $UPDATE of the last record read) is not implemented and stays %DCL-W-IVQUAL
+ * (vms-097, INV-DCL sec 3). */
+static const struct dcl_qual_def q_write[] = {
+    { "SYMBOL", CDU_VT_NONE,  0,            NULL, NULL },
+    { "ERROR",  CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+
+/* ALLOCATE logs by default (/NOLOG suppresses the %DCL-I-ALLOC line). */
+static const struct dcl_qual_def q_allocate[] = {
+    { "LOG", CDU_VT_NONE, CDU_Q_NEGATABLE, NULL, NULL },
+    QUAL_END
+};
+
 static struct dcl_verb builtin_verbs[] = {
     { "ACCOUNTING",  cmd_accounting,  CDU_F_ABBREV | CDU_F_QUALIFIER, 4,
       "Display login accounting information for the current user", q_none },
+    { "ALLOCATE",    cmd_allocate,    CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Allocate a device to this process", q_allocate },
     { "ANALYZE",     cmd_analyze,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
       "Analyze system components", q_analyze },
     { "APPEND",      cmd_append,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -448,6 +541,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Copy a file", q_copy },
     { "CREATE",      cmd_create,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Create a new file (or directory with /DIRECTORY)", q_create },
+    { "DEALLOCATE",  cmd_deallocate,  CDU_F_ABBREV | CDU_F_PARAM, 4,
+      "Deallocate a device this process allocated", q_none },
     { "DEASSIGN",    cmd_deassign,    CDU_F_ABBREV | CDU_F_PARAM, 4,
       "Deassign (remove) a logical name", q_deassign },
     { "DEFINE",      cmd_define,      CDU_F_ABBREV | CDU_F_PARAM, 4,
@@ -467,7 +562,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
       "Terminate a command procedure or session", q_none },
     { "FTP",         cmd_ftp,         CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "FTP file transfer client (/GET, /PUT over TCP/IP Services BGn:)" },
+      "FTP file transfer client (/GET, /PUT over TCP/IP Services BGn:)", q_ftp },
     /* HELP takes accept-all qualifiers (quals == NULL, not q_none): a slash
      * token after HELP is a command-qualifier TOPIC to look up (e.g.
      * HELP DIRECTORY QUALIFIERS /EXCLUDE), exactly as VMS HELP treats it, so
@@ -482,13 +577,13 @@ static struct dcl_verb builtin_verbs[] = {
     { "INITIALIZE",  cmd_initialize,  CDU_F_ABBREV | CDU_F_PARAM, 4,
       "Format a volume with VMSFS structure", q_none },
     { "LIBRARY",     cmd_library,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "Manage text, help, and object libraries" },
+      "Manage text, help, and object libraries", q_library },
     { "LINK",        cmd_link,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Link object modules into executable image", q_link },
     { "LOGOUT",      cmd_logout,      CDU_F_ABBREV, 2,
       "Terminate an interactive session", q_none },
     { "MAIL",      cmd_mail,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
-      "Send and receive electronic mail messages" },
+      "Send and receive electronic mail messages", q_mail },
     { "MONITOR",   cmd_monitor,   CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Display real-time system activity statistics", q_none },
     { "MOUNT",       cmd_mount,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -510,7 +605,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "RECALL",    cmd_recall,    CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Show or re-execute commands from command history", q_recall },
     { "READ",        cmd_read,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
-      "Read a record from a file into a symbol" },
+      "Read a record from a file into a symbol", q_read },
     { "RENAME",      cmd_rename,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Change the name and/or location of a file", q_rename },
     { "REPLY",       cmd_reply,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -540,13 +635,13 @@ static struct dcl_verb builtin_verbs[] = {
     { "TCPIP",       cmd_tcpip,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "TCP/IP Services network management commands" },
     { "TELNET",      cmd_telnet,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
-      "TELNET remote terminal client (over TCP/IP Services BGn:)" },
+      "TELNET remote terminal client (over TCP/IP Services BGn:)", q_none },
     { "TYPE",        cmd_type,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display the contents of a file", q_type },
     { "WAIT",        cmd_wait,        CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Wait for a specified time interval", q_none },
-    { "WRITE",       cmd_write,       CDU_F_ABBREV | CDU_F_PARAM, 2,
-      "Write a record to a file" },
+    { "WRITE",       cmd_write,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
+      "Write a record to a file", q_write },
 };
 
 static int builtin_count = (int)(sizeof(builtin_verbs) / sizeof(builtin_verbs[0]));

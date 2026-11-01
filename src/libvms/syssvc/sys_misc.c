@@ -15,6 +15,7 @@
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
  * OVMX-PARTIAL: sys$setdfprot (vms-44a) -- exec: the default file protection is the executive's per-process attribute (VMS_IOCTL_DFPROT): set in one process, a REGISTER_CONTINUE child inherits it, and nothing in this file holds the value (tests/qemu/test_syssvc_setdfprot.c reads it back across that inheritance).
  * OVMX-LOCAL: sys$setdfprot -- the RMS$_NORMAL status mapping (the Alpha V8.4 lab's service returns RMS$_NORMAL, not SS$_NORMAL). The setdfprot-not-stored negative control now anchors the executive half; the status mapping is the local half, so it stays PARTIAL.
+ * OVMX-EXECUTIVE: sys$set_process_propertiesw (vms-b9c) proof=tests/qemu/test_syssvc_pprop.c -- the parse style is the executive's per-process attribute (VMS_IOCTL_PPROP -> vms_ioctl_pprop, kernel-core/vms_proctab.c): stored in the PCB, read back by RMS on every $PARSE, inherited by the next image; nothing in this file holds it.
  * OVMX-USERSPACE: sys$get_entropy (vms-44a) -- getrandom(2) (arc4random_buf on BSD): the host kernel's
  *     CSPRNG, not an executive entropy pool; the bytes are real entropy.
  * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
@@ -61,6 +62,7 @@
 #include <sys/random.h>
 #endif
 #include <errno.h>
+#include <ctype.h>
 #include <time.h>
 #include "ovmx_async.h"
 #include "starlet.h"
@@ -154,6 +156,34 @@ uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot)
 }
 
 /*
+ * sys$set_process_propertiesw - set a process property (rd vms-b9c).
+ *
+ * The public OpenVMS form: three null arguments, the PPROP$C_ property code, its
+ * new value, an optional receiver of the previous value, a buffer size and flags
+ * (the last two are for properties OVMX does not implement). Implemented: the
+ * file-name parse style -- PPROP$C_PARSE_STYLE_PERM (the process's) and
+ * PPROP$C_PARSE_STYLE_TEMP (the current image's), values PARSE_STYLE$C_TRADITIONAL
+ * / _EXTENDED (docs/oracle/alpha84-starlet-defs/PPROPDEF.txt). The value is the
+ * executive's; RMS reads it on each $PARSE. Any other property: SS$_BADPARAM
+ * (not implemented here, said so rather than pretended).
+ */
+uint32_t sys$set_process_propertiesw(void *nullarg1, void *nullarg2, void *nullarg3,
+                                     uint32_t property, uint64_t value,
+                                     uint64_t *prev_value, uint64_t buffer_size,
+                                     uint32_t flags)
+{
+    uint32_t v = (uint32_t)value, old = 0, st;
+
+    (void)nullarg1; (void)nullarg2; (void)nullarg3; (void)buffer_size; (void)flags;
+    if (value > 0xFFFFFFFFull)
+        return SS$_BADPARAM;
+    st = vms_kif_pprop(property, &v, &old);
+    if ((st & 1) && prev_value)
+        *prev_value = old;
+    return st;
+}
+
+/*
  * sys$getsyi - Get system information.
  *
  * Returns information about the system via an item list. Supported items:
@@ -169,6 +199,31 @@ uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot)
  *   SYI$_CLUSTER_NODES - Cluster node count (1 for standalone; no live
  *                        cluster wire yet, see vms-ci.3)
  */
+/*
+ * ovmx_booted_scsnode - the SCSNODE this system booted with, from the executive
+ * (rd vms-433). Declared in ovmx_identity.h, which ovmx_node_name() builds on.
+ * Returns 1 with `out` filled (upper case, NUL-terminated) when the executive
+ * holds one; 0 when there is no executive or no SCSNODE was loaded -- the
+ * caller then falls back, never inventing a name here.
+ */
+int ovmx_booted_scsnode(char *out, size_t out_len)
+{
+    struct vms_cluster_getsyi_args a;
+    if (!out || out_len < 2)
+        return 0;
+    memset(&a, 0, sizeof a);
+    if (!$VMS_STATUS_SUCCESS(vms_kif_cluster_getsyi(&a)) || a.scsnode_len == 0 ||
+        a.scsnode_len > sizeof a.scsnode)
+        return 0;
+    size_t n = a.scsnode_len < out_len - 1 ? a.scsnode_len : out_len - 1;
+    for (size_t i = 0; i < n; i++)
+        out[i] = (char)toupper((unsigned char)a.scsnode[i]);
+    out[n] = '\0';
+    while (n > 0 && (out[n - 1] == ' ' || out[n - 1] == '\0'))
+        out[--n] = '\0';
+    return n > 0;
+}
+
 /* Wildcard-walk context value meaning "the node just returned was the last". */
 #define SYI_WILD_DONE 0xFFFFFFFEu
 
@@ -226,8 +281,7 @@ static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
         want[wl] = '\0';
         if (wl && want[wl - 1] == ':') want[--wl] = '\0';
         if (wl && want[wl - 1] == ':') want[--wl] = '\0';
-        if (sysgen_read_string("SCSNODE", own, sizeof own) != 0)
-            strcpy(own, "OVMX");
+        ovmx_node_name(own, sizeof own);     /* the ONE node name, rd vms-433 */
         if (strcasecmp(want, own) != 0)
             return SS$_NOSUCHNODE;
     }
@@ -251,16 +305,18 @@ static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
             return SS$_NOMORENODE;
     }
 
-    struct utsname uts;
-    uname(&uts);
-
     for (const struct item_list_3 *item = itmlst;
          item->buflen != 0 || item->item_code != 0; item++) {
         switch (item->item_code) {
             case SYI$_NODENAME: {
-                uint16_t len = (uint16_t)strlen(uts.nodename);
+                /* rd vms-433: the node's name is its SCSNODE, the same value
+                 * SYI$_SCSNODE and every SHOW surface give -- not the
+                 * substrate hostname (one name everywhere). */
+                char node[SYSGEN_STRVAL_LEN];
+                ovmx_node_name(node, sizeof node);
+                uint16_t len = (uint16_t)strlen(node);
                 if (len > item->buflen) len = item->buflen;
-                if (item->bufaddr) memcpy(item->bufaddr, uts.nodename, len);
+                if (item->bufaddr) memcpy(item->bufaddr, node, len);
                 if (item->retlen) *item->retlen = len;
                 break;
             }
@@ -370,14 +426,10 @@ static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
             }
 
             case SYI$_SCSNODE: {
-                /* Configured cluster node identity (SYSGEN SCSNODE) —
-                 * distinct from SYI$_NODENAME (Linux hostname). Falls
-                 * back to the OVMX default when SYSGEN is unconfigured. */
+                /* The SCSNODE this system booted with (rd vms-433):
+                 * ovmx_node_name(), the one source every surface uses. */
                 char node[SYSGEN_STRVAL_LEN];
-                if (sysgen_read_string("SCSNODE", node, sizeof(node)) != 0) {
-                    strncpy(node, "OVMX", sizeof(node) - 1);
-                    node[sizeof(node) - 1] = '\0';
-                }
+                ovmx_node_name(node, sizeof(node));
                 uint16_t len = (uint16_t)strlen(node);
                 if (len > item->buflen) len = item->buflen;
                 if (item->bufaddr) memcpy(item->bufaddr, node, len);

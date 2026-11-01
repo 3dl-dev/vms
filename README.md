@@ -99,10 +99,10 @@ Files-11 ODS-2 over the executive ACP with binary SYSUAF/Purdy login (**0.5**).
 See [the release roadmap to 1.0](docs/release-roadmap-to-1.0.md) for the full
 milestone ladder and current state.
 
-First-class release architectures are **x86_64, Alpha (LP64), and VAX** (on the
-NetBSD substrate). Every release is co-released across these three through a
-shared build/release gate. **aarch64** builds and boots from source, and CI
-proves it boots, but releases do not carry aarch64 artifacts yet (vms-0ad0).
+First-class release architectures are **x86_64, aarch64, Alpha (LP64), and VAX**
+(on the NetBSD substrate). Every release is co-released across these four through
+a shared build/release gate. Bootable aarch64 downloads ship from V0.7-11 on, and
+the release-acceptance gate boots them (vms-0ad0).
 
 OpenVMX runs as a bootable QEMU VM — the VMS-native runtime (image activation via
 `IMGACT.EXE`, linking via `LINK.EXE`, musl userland) — where `vms.ko` provides the

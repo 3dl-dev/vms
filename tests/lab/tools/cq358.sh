@@ -58,7 +58,7 @@ arm(){  # <tag> <store> <ident> <duration> <exit: grace|kill> <settle>
   local T0=$(date +%s)
   while [ $(( $(date +%s) - T0 )) -lt "$dur" ]; do shot "SHOW CLUSTER/NODE=$id" "$tag J+$(( $(date +%s)-T0 ))s"; done
   local prop=$(proposed "$id")
-  local adm=$(kx grep -aoE 'READMITMAP-SUMMARY.*admitted=[0-9]+' $L/scsd-cq$tag.log 2>/dev/null | grep -oE 'admitted=[0-9]+' | head -1)
+  local adm=$(kx grep -aoE 'READMITMAP-SUMMARY.*admitted=[0-9]+' $L/scsd-cq$tag.log 2>/dev/null | grep -a -oE 'admitted=[0-9]+' | head -1)
   log "$tag: PROPOSED=$prop  ($adm)  first-join reference"
   if [ "$mode" = kill ]; then kx pkill -9 -f SCSD.EXE 2>/dev/null; log "$tag: === SIGKILL crash (bare VC break) ==="
   else log "$tag: === graceful --duration exit (SCS DISCONNECT) ==="; fi

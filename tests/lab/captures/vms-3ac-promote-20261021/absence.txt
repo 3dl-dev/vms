@@ -1,0 +1,5 @@
+vms-3ac promote fire -- counted over the UNTRIMMED capture
+  SCS-MSG frames in the capture:            2047
+  ...originated by the OVMX node (e501):    130
+  ...of those, cat-0x02 op-0x03 (a $DEQ):   0   <-- P2: the crashing fire had THREE
+  ...originated by OVMX after 20:48:37:     2   <-- VAX2's EX request was never answered

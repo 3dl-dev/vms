@@ -1,0 +1,70 @@
+name: Alpha stage-2 C/C++ toolchain cache (GHCR)
+description: >-
+  Replaces actions/cache for .cxxtc (the stage-2 alpha-dec-vms GCC/libstdc++,
+  ~2 h cold). GitHub's 10 GB cache cap evicted it; GHCR does not. The toolchain is
+  stored as a scratch image ghcr.io/<owner>/ovmx-cxx-toolchain:<key>.
+  mode=fetch  : pull it into ./.cxxtc if present (output hit=true|false).
+  mode=publish: if it was not fetched and the gate built it, push it. Never fails the job.
+inputs:
+  mode:
+    description: fetch | publish
+    required: true
+  key:
+    description: "hashFiles(...) over the toolchain's inputs"
+    required: true
+  hit:
+    description: "publish only: the fetch step's hit output"
+    required: false
+    default: "false"
+outputs:
+  hit:
+    description: "fetch: whether the toolchain image was pulled"
+    value: ${{ steps.fetch.outputs.hit }}
+runs:
+  using: composite
+  steps:
+    - name: Fetch the stage-2 toolchain from GHCR
+      id: fetch
+      if: ${{ inputs.mode == 'fetch' }}
+      shell: bash
+      env:
+        KEY: ${{ inputs.key }}
+        OWNER: ${{ github.repository_owner }}
+        GH_TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+      run: |
+        owner=$(echo "$OWNER" | tr 'A-Z' 'a-z')
+        ref="ghcr.io/${owner}/ovmx-cxx-toolchain:${KEY:0:20}"
+        echo "hit=false" >> "$GITHUB_OUTPUT"
+        echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null 2>&1 || true
+        if docker pull -q "$ref" >/dev/null 2>&1; then
+          cid=$(docker create "$ref" /none)
+          mkdir -p .cxxtc
+          docker cp "$cid:/." .cxxtc
+          docker rm "$cid" >/dev/null
+          if [ -x .cxxtc/cxx/bin/alpha-dec-vms-g++ ]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+            echo "stage-2 toolchain restored from $ref"
+          else
+            echo "::warning::toolchain image $ref lacks cxx/bin/alpha-dec-vms-g++; rebuilding"
+            rm -rf .cxxtc
+          fi
+        else
+          echo "no prebuilt stage-2 toolchain at $ref; the gate will build it"
+        fi
+    - name: Publish the stage-2 toolchain to GHCR
+      if: ${{ inputs.mode == 'publish' && inputs.hit != 'true' }}
+      shell: bash
+      continue-on-error: true
+      env:
+        KEY: ${{ inputs.key }}
+        OWNER: ${{ github.repository_owner }}
+      run: |
+        [ -x .cxxtc/cxx/bin/alpha-dec-vms-g++ ] || { echo "no built toolchain to publish"; exit 0; }
+        owner=$(echo "$OWNER" | tr 'A-Z' 'a-z')
+        ref="ghcr.io/${owner}/ovmx-cxx-toolchain:${KEY:0:20}"
+        sudo chown -R "$(id -u):$(id -g)" .cxxtc
+        printf 'FROM scratch\nCOPY . /\n' > /tmp/Dockerfile.cxxtc
+        docker build -q -t "$ref" -f /tmp/Dockerfile.cxxtc .cxxtc
+        docker push -q "$ref"
+        echo "published $ref"

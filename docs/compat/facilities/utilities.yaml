@@ -11,10 +11,10 @@ summary: >
   utilities are real; SORT does real /KEY field-based sorting (vms-e76), and the
   remaining record/data utilities (BACKUP, CONVERT) are honestly partial on
   their advanced qualifiers rather than full VMS-parity implementations.
-  Re-censused 2026-09-14 against origin/main: unchanged in substance; CONVERT is
-  still the one facade-risk row (line-by-line copy printing CONVERTED); evidence
-  lines re-anchored. PRODUCT stays verified (install-boot-e2e gate).
-last_reviewed: 2026-09-14
+  Re-censused 2026-09-14 against origin/main: unchanged in substance; CONVERT was
+  the one facade-risk row; it no longer claims a conversion it does not perform
+  (vms-558e); evidence lines re-anchored. PRODUCT stays verified (install-boot-e2e gate).
+last_reviewed: 2026-10-19
 items:
   - id: utilities$authorize
     kind: utility
@@ -74,7 +74,7 @@ items:
     authenticity: advisory
     vms: "LIBRARY — object/text librarian utility"
     evidence: src/vmsdcl/dcl_library.c
-    notes: "Routes by parameter count rather than the full LIBRARIAN grammar; documented, not a lie. Partial slice exercised by tests/dcl/test_library.sh (not a full-coverage oracle)."
+    notes: "Routes by parameter count rather than the full LIBRARIAN grammar; documented, not a lie. Qualifiers are validated (q_library, dcl_builtin.c): CREATE INSERT REPLACE DELETE EXTRACT LIST OUTPUT HELP OBJECT TEXT COMPRESS VAX; everything else is %DCL-W-IVQUAL (tests/dcl/test_library_qualifier_validation.sh, tests/qemu/test_syssvc_dcl_library_quals.c, defects.d/dcl-library-quals-accept-all.defect). /COMPRESS is REAL for OBJECT libraries: it reads the members and writes the library to /OUTPUT (else over the input); an object library has no reclaimable space to begin with -- every insert/replace/delete rewrites the whole ar container, proven by tests/dcl/test_library_compress.sh (a library after a replace/replace/delete history is byte-identical to a fresh one of the surviving members) -- and /COMPRESS on a TEXT/HELP library, or combined with another operation, is %DCL-W-IVQUAL (defects.d/dcl-library-compress-noop.defect). /VAX selects the VAX object-library format: honoured only on the VAX rail where it is the target format, otherwise %DCL-W-IVQUAL rather than a silently non-VAX library. Partial slice exercised by tests/dcl/test_library.sh (not a full-coverage oracle)."
 
   - id: utilities$backup
     kind: utility
@@ -112,10 +112,10 @@ items:
   - id: utilities$convert
     kind: utility
     status: partial
-    authenticity: facade-risk
+    authenticity: advisory
     vms: "CONVERT — file/record-format conversion utility"
-    evidence: src/vmsdcl/dcl_cmd_misc.c:3158
-    notes: "/FDL emits an honest %CONVERT-I-FDL 'accepted but ignored' informational (dcl_cmd_misc.c:3127), but the body is a line-by-line fgets/fputs copy that prints '%CONVERT-S-CONVERTED, N records converted' (dcl_cmd_misc.c:3158) — claiming a record-format conversion it did not perform. Real RMS record-format CONVERT tracked vms-558e. Still facade-risk."
+    evidence: src/vmsdcl/dcl_cmd_misc.c
+    notes: "Proof tests/qemu/test_syssvc_convert_dcl.c + tests/dcl/test_convert_honest.sh + defects.d/dcl-convert-claims-converted.defect. A plain CONVERT is a record-for-record text copy and silent on success (as VMS); /FDL (real organization/record-format/key conversion) is rejected as %DCL-W-IVQUAL (an unrecognized qualifier) and writes nothing. Real RMS record-format CONVERT (indexed/relative, FDL-driven) is not implemented. Was facade-risk: accepted /FDL, ignored it, and printed %CONVERT-S-CONVERTED (vms-558e)."
 
   - id: utilities$analyze-disk-structure
     kind: utility

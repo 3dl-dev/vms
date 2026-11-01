@@ -34,6 +34,7 @@
 #include "dcl/dcl_cmd.h"
 #include "dcl/dcl_rms.h"
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
 #include "starlet.h"
@@ -1032,10 +1033,11 @@ static const char *show_process_target_qual(const struct dcl_command *cmd)
  *                      priority; the old code printed the literal 4 for
  *                      every process. Same answer as SHOW SYSTEM's Pri
  *                      column above.
- *   Devices allocated: absent, which is exactly what VMS prints for a
- *                      process with none (Section 3.1 -- AUDIT_SERVER
- *                      has no such section). OVMX allocates no devices
- *                      to a process in the executive.
+ *   Devices allocated: printed from the executive's device table: every
+ *                      row whose owner is the target (rd vms-c31; see
+ *                      show_process_devices()). Absent for a process
+ *                      that owns none, exactly as VMS (Section 3.1 --
+ *                      AUDIT_SERVER has no such section).
  *   Privileges:        VMS PRINTS NO SUCH LINE. Plain SHOW PROCESS says
  *                      nothing whatever about privileges; they live
  *                      behind /PRIVILEGES (Section 2.2, and
@@ -1060,6 +1062,48 @@ static const char *show_process_target_qual(const struct dcl_command *cmd)
  * numbers come from the TARGET's executive row instead of the caller's
  * getgid()/getuid(); vms-2e48 added the identifier resolve.
  */
+/*
+ * "Devices allocated:" (rd vms-c31) -- the devices the target OWNS, read
+ * from the executive's device table (vms_kif_devscan), never from anything
+ * the process says about itself.
+ *
+ * ORACLE (VAX1, OpenVMS VAX V7.3, 2026-10-21, docs/oracle/vax73-show-
+ * system-process.md Section 2.3): VMS lists every device the process owns,
+ * not only the ones it ALLOCATEd -- the login terminal it merely holds a
+ * channel to is there ("VAX1$OPA0:", "VAX1$RTA1:" for a SET HOST session).
+ * The section is preceded by a blank line; the first device follows the
+ * 20-column label, each further device sits on its own line at column 20:
+ *
+ *     Devices allocated:  VAX1$OPA0:
+ *                         VAX1$LPA0:
+ *                         VAX1$TTD3:
+ *
+ * A process that owns nothing gets no section at all (Section 3.1). The
+ * name is the one $GETDVI DVI$_FULLDEVNAM answers for the same row; OVMX's
+ * full name carries no "node$" prefix yet (the vms-dv1 remainder, shared
+ * with $GETDVI rather than patched here alone). A devscan that fails prints
+ * nothing -- no device is ever invented.
+ */
+static void show_process_devices(uint32_t tgt_pid)
+{
+    struct vms_devinfo info;
+    uint32_t index = 0;
+    int shown = 0;
+
+    if (tgt_pid == 0)
+        return;
+    while (vms_kif_devscan(&index, &info) == SS$_NORMAL) {
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+        if (info.owner_pid != tgt_pid || info.devnam[0] == '\0')
+            continue;
+        if (shown == 0)
+            printf("\n%-20s%s\n", "Devices allocated:", info.devnam);
+        else
+            printf("%-20s%s\n", "", info.devnam);
+        shown++;
+    }
+}
+
 static int cmd_show_process(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -1356,6 +1400,8 @@ static int cmd_show_process(struct dcl_command *cmd)
     printf("%-20s%s\n", "Default file spec:",
            is_self ? ctx->default_dir : "Not available");
 
+    show_process_devices(tgt_pid);
+
     /*
      * ---- /ALL: THE SOURCEABLE EXTRA SECTIONS, AND ONLY THOSE ----
      *
@@ -1374,8 +1420,8 @@ static int cmd_show_process(struct dcl_command *cmd)
      * is sourceable and inventing a plausible one is the exact facade this
      * item exists to remove (Rule 10 -- match VMS, or do not expose it):
      *
-     *   Devices allocated:  the executive allocates no devices to a
-     *                       process (already absent from the plain body).
+     *   Devices allocated:  printed by the plain body (show_process_devices),
+     *                       which is where VMS puts it under /ALL too.
      *   Process Quotas:     OVMX's /QUOTAS block is a hardcoded, invented
      *                       set of numbers identical on every system
      *                       (its own pre-existing defect, tracked with
@@ -1782,7 +1828,7 @@ static int cmd_show_symbol(struct dcl_command *cmd)
             dcl_error("DCL", 0, "IVQUAL",
                       "unrecognized qualifier - check validity, spelling, "
                       "and placement\n \\%s\\", q);
-            return SS$_IVQUAL;
+            return CLI$_IVQUAL;
         }
     }
     if (cmd->param_count >= 2) {
@@ -2584,7 +2630,7 @@ static int cmd_show_memory(struct dcl_command *cmd)
 {
     /* Section selection. Default (no specific qualifier) == /FULL: every
      * section for which OVMX has a real source. */
-    int q_phys  = dcl_has_qualifier(cmd, "PHYSICAL");
+    int q_phys  = dcl_has_qualifier(cmd, "PHYSICAL_MEMORY");
     int q_pool  = dcl_has_qualifier(cmd, "POOL");
     int q_files = dcl_has_qualifier(cmd, "FILES");
     int q_slots = dcl_has_qualifier(cmd, "SLOTS");
@@ -4401,6 +4447,68 @@ static int cmd_show_cpu(struct dcl_command *cmd)
 /*                          SHOW Dispatcher                            */
 /* ================================================================== */
 
+/*
+ * Per-sub-verb qualifier tables for the SHOW umbrella (vms-097). SHOW's
+ * qualifiers belong to the sub-verb (param[0]); each entry lists EXACTLY the
+ * qualifiers that sub-verb's handler reads, and anything else is
+ * %DCL-W-IVQUAL instead of being silently dropped (a /OUTPUT=file that sent
+ * the report to the terminal anyway was the commonest lie). TIME keeps its
+ * oracle-pinned %DCL-W-NOQUAL, SYMBOL its own IVQUAL, and CLUSTER is the
+ * cluster lane's: none of the three is listed here.
+ */
+#define SHQ_END { NULL, 0, 0, NULL, NULL }
+#define SHQ_FLAG(n) { n, CDU_VT_NONE, 0, NULL, NULL }
+static const struct dcl_qual_def shq_none[] = { SHQ_END };
+static const struct dcl_qual_def shq_logical[] = {
+    SHQ_FLAG("FULL"), SHQ_FLAG("PROCESS"), SHQ_FLAG("JOB"),
+    SHQ_FLAG("GROUP"), SHQ_FLAG("SYSTEM"),
+    { "TABLE", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }, SHQ_END };
+static const struct dcl_qual_def shq_system[] = {
+    { "IDENTIFICATION", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }, SHQ_END };
+static const struct dcl_qual_def shq_process[] = {
+    SHQ_FLAG("ALL"), SHQ_FLAG("PRIVILEGES"), SHQ_FLAG("QUOTAS"),
+    { "IDENTIFICATION", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL }, SHQ_END };
+static const struct dcl_qual_def shq_full[] = { SHQ_FLAG("FULL"), SHQ_END };
+static const struct dcl_qual_def shq_memory[] = {
+    SHQ_FLAG("FILES"), SHQ_FLAG("FULL"), SHQ_FLAG("PHYSICAL_MEMORY"),
+    SHQ_FLAG("POOL"), SHQ_FLAG("SLOTS"), SHQ_END };
+static const struct dcl_qual_def shq_cpu[] = {
+    SHQ_FLAG("BRIEF"), SHQ_FLAG("FULL"), SHQ_FLAG("SUMMARY"), SHQ_END };
+static const struct dcl_qual_def shq_queue[] = {
+    SHQ_FLAG("ALL"), SHQ_FLAG("FULL"), SHQ_END };
+
+static const struct {
+    const char *name;
+    int min_abbrev;
+    const struct dcl_qual_def *quals;
+} show_subverb_quals[] = {
+    { "DEFAULT",     3, shq_none },
+    { "LOGICAL",     3, shq_logical },
+    { "SYSTEM",      3, shq_system },
+    { "PROCESS",     3, shq_process },
+    { "USERS",       1, shq_full },
+    { "ACL",         3, shq_none },
+    { "PROTECTION",  3, shq_none },
+    { "DEVICE",      3, shq_full },
+    { "DEVICES",     3, shq_full },
+    { "MEMORY",      3, shq_memory },
+    { "CPU",         3, shq_cpu },
+    { "STATUS",      4, shq_none },
+    { "TERMINAL",    4, shq_none },
+    { "TRANSLATION", 5, shq_none },
+    { "LICENSE",     3, shq_none },
+    { "NETWORK",     3, shq_none },
+    { "ERROR",       3, shq_none },
+    { "WORKING_SET", 4, shq_none },
+    { "ACCOUNTING",  3, shq_none },
+    { "AUDIT",       3, shq_none },
+    { "QUOTA",       3, shq_none },
+    { "ROOT",        3, shq_none },
+    { "QUEUE",       3, shq_queue },
+    { "ENTRY",       3, shq_none },
+    { "INTRUSION",   3, shq_none },
+};
+
 int cmd_show(struct dcl_command *cmd)
 {
     if (cmd->param_count < 1) {
@@ -4409,6 +4517,19 @@ int cmd_show(struct dcl_command *cmd)
     }
 
     const char *subcmd = cmd->params[0];
+
+    if (!dcl_match_command(subcmd, "TIME", 1)) {
+        for (size_t t = 0; t < sizeof show_subverb_quals / sizeof show_subverb_quals[0]; t++) {
+            if (dcl_match_command(subcmd, show_subverb_quals[t].name,
+                                  show_subverb_quals[t].min_abbrev)) {
+                struct dcl_verb shim = { .quals = show_subverb_quals[t].quals };
+                uint32_t qs = dcl_validate_qualifiers(&shim, cmd);
+                if (qs != SS$_NORMAL)
+                    return (int)qs;
+                break;
+            }
+        }
+    }
 
     if (dcl_match_command(subcmd, "TIME", 1))
         return cmd_show_time(cmd);
@@ -4495,5 +4616,5 @@ int cmd_show(struct dcl_command *cmd)
     kw[sizeof(kw) - 1] = '\0';
     dcl_error("DCL", 0, "IVKEYW",
               "unrecognized keyword - check validity and spelling\n \\%s\\", kw);
-    return SS$_IVKEYW;
+    return CLI$_IVKEYW;
 }

@@ -6,7 +6,7 @@
 #       (dcl_validate_qualifiers(), src/vmsdcl/dcl_parser.c) rejects any
 #       qualifier not in the verb's table BEFORE the handler runs.
 #
-# --- Unknown qualifiers on retrofit verbs -> %DCL-W-IVQUAL ($STATUS=2288) ---
+# --- Unknown qualifiers on retrofit verbs -> %DCL-W-IVQUAL ($STATUS=%X00038240, CLI$_IVQUAL) ---
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \BOGUS\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
@@ -15,16 +15,16 @@
 # EXPECT: contains: \FROBNICATE\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \NOTAREALQUAL\
-# EXPECT: contains:$STATUS = "%X000008F0"
+# EXPECT: contains:$STATUS = "%X00038240"
 # EXPECT_NOT: contains:$STATUS = "%X00000001"
 #
-# --- Bad keyword on a keyword-typed qualifier -> %DCL-W-IVKEYW ($STATUS=2292) ---
+# --- Bad keyword on a keyword-typed qualifier -> %DCL-W-IVKEYW ($STATUS=%X00038060, CLI$_IVKEYW) ---
 # DIRECTORY/DATE is declared CDU_VT_KEYWORD; OVMX honours only the MODIFIED
 # timestamp it can surface from stat(2), so any other keyword is rejected with
 # the authentic IVKEYW rather than silently mapped to mtime (INV-DCL sec 3).
 # EXPECT: contains:%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling - \CREATED\
 # EXPECT: contains:%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling - \BOGUSKW\
-# EXPECT: contains:$STATUS = "%X000008F4"
+# EXPECT: contains:$STATUS = "%X00038060"
 #
 # --- Legitimate qualifiers on the SAME verbs still pass (not a blanket reject) ---
 # EXPECT_NOT: regex:IVQUAL.*\\LOG\\

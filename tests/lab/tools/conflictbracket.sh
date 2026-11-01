@@ -142,7 +142,7 @@ win vax2 "$OFF2" > "$W/$TAG.vax2.txt"
 say "SHOW CLUSTER" 5
 POSTCLUSTER=$(win vax1 "$OFF1" | grep -aoE 'OVMX[A-Z0-9]{2}|VAX[0-9]' | sort -u | tr '\n' ' ')
 log "known systems AFTER: $POSTCLUSTER"
-log "identity on the wire: $(strings -a "$HOSTL/1ae-$TAG.pcap" 2>/dev/null | grep -oE 'OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
+log "identity on the wire: $(strings -a "$HOSTL/1ae-$TAG.pcap" 2>/dev/null | grep -a -oE 'OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
 CONF=no; [ "$C1" -gt 0 ] || [ "$C2" -gt 0 ] && CONF=yes
 log "RESULT $TAG CONFLICT=$CONF NODE=$NODE SYSID=$SYSID vax1_hits=$C1 vax2_hits=$C2 joined=$joined"
 [ -n "$CLINE" ] && log "  conflict line: $CLINE"

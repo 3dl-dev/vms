@@ -117,7 +117,6 @@ extern "C" {
 #define UAI$C_PREFERRED_ALGORITHM    127
 #define UAI$C_CUST_ALGORITHM         128
 #define UAI$C_MAX_PWD_LENGTH         32
-#define UAI$C_CUST                   128   /* historic OVMX spelling of UAI$C_CUST_ALGORITHM */
 
 /* ---- UAI$M_ flag masks of the UAI$_FLAGS longword (V7.3 $UAIDEF) ---- */
 #define UAI$M_DISCTLY                0x00000001

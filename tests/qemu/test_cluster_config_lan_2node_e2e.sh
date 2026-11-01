@@ -55,6 +55,15 @@
 # through VMS_IOCTL_CLUSTER_DIAG_CSB / _MEMBER_GET (INV-6) -- an equally
 # executive-backed, just DCL-surfaced, source of truth.
 #
+# SUPERSEDED IN PART (rd vms-151, then rd vms-c56). The finding above predates
+# vms-151, which found PID 1's console sink one level too low for the
+# executive's OPA0: lines and fixed it; they reach this console now. Since
+# vms-c56 only the lines a VMS console prints get there, in VMS's own form
+# ("%CNXMAN,  now a VAXcluster member -- system OVMXB"), and every executive
+# diagnostic goes to OPERATOR.LOG -- this gate asserts both (search
+# check_console_vms_faithful). Membership itself is still read from SHOW
+# CLUSTER, the executive's table.
+#
 # =============================================================================
 # WHY SHOW CLUSTER/CLUSTER's "Nodes" LINE, NOT F$GETSYI("CLUSTER_NODES")
 # =============================================================================
@@ -170,6 +179,37 @@ check_re() {
     local desc="$1" log="$2" pattern="$3"
     if grep -qaE -- "$pattern" "$log" 2>/dev/null; then record "$desc" 0; else record "$desc" 1; fi
 }
+check_re_absent() {
+    local desc="$1" log="$2" pattern="$3"
+    if grep -qaE -- "$pattern" "$log" 2>/dev/null; then
+        record "$desc" 1
+        grep -naE -- "$pattern" "$log" 2>/dev/null | head -5 | sed 's/^/      | /'
+    else
+        record "$desc" 0
+    fi
+}
+# rd vms-c56: OPA0: carries only what a VMS console prints. The executive's
+# DIAGNOSTICS ("%CNXMAN, no coordinator CSID seen yet ...", "%PEA0, channel
+# verified", "%DLM, refusing a lock message ...") go to OPERATOR.LOG -- one
+# space after the comma is OVMX's diagnostic form, two is VMS's console form
+# ("%CNXMAN,  now a VAXcluster member -- system X"); and no executive line
+# carries a printk uptime stamp. (Linux's own early-boot lines DO carry stamps
+# on this boot -- loglevel=7, before PID 1 turns stamps off -- so the stamp
+# check is on executive lines only.)
+check_console_vms_faithful() {  # label log
+    local label="$1" log="$2" pea0
+    check_re_absent "$label: no executive diagnostic on the console (%CNXMAN/%DLM/%MSCP_CL/%SCS with OVMX's one-space form)" \
+        "$log" '%(CNXMAN|DLM|MSCP_CL|SCS), [^ ]'
+    pea0=$(grep -aE '%PEA0, ' "$log" 2>/dev/null | grep -avF 'Port has Closed Virtual Circuit - REMOTE NODE ' | head -3)
+    if [ -z "$pea0" ]; then
+        record "$label: no PEDRIVER diagnostic on the console (%PEA0, channel verified ...)" 0
+    else
+        record "$label: no PEDRIVER diagnostic on the console (%PEA0, channel verified ...)" 1
+        printf '%s\n' "$pea0" | sed 's/^/      | /'
+    fi
+    check_re_absent "$label: no executive line carries a printk uptime stamp" \
+        "$log" '\[ *[0-9]+\.[0-9]+\] *%(CNXMAN|PEA0|DLM|MSCP_CL|SCS|SYSINIT),'
+}
 waitfor() {  # pattern limit-seconds log pid
     local pat="$1" lim="${2:-60}" log="$3" pid="$4" w=0
     while [ $w -lt $((lim * 4)) ]; do
@@ -211,6 +251,24 @@ B_FIFO=/tmp/ccl2-b.in
 rm -f "$A_DISK" "$B_DISK" "$A_LOG1" "$A_LOG2" "$B_LOG1" "$B_LOG2" "$A_FIFO" "$B_FIFO"
 cp "$DISTRIB_IMG" "$A_DISK"
 cp "$DISTRIB_IMG" "$B_DISK"
+
+# rd vms-3ea: EACH NODE'S SYSTEM DISK GETS ITS OWN LABEL. Both disks are copies
+# of one kit mastered OVMXSYS, and the label is the Files-11 cluster lock
+# namespace (the executive names a volume's locks "F11B$<kind><label>"), so two
+# members booting it as-is put their two DIFFERENT local disks behind ONE
+# clusterwide resource -- measured: node A's TYPE SYS$MANAGER:OPERATOR.LOG
+# answered a false -RMS-E-FNF while B was active (run 39764316363). The label
+# is given the way VMS gives one -- set at INITIALIZE, changed with SET
+# VOLUME/LABEL -- by the offline SET VOLUME/LABEL step (vmsfs_master relabel),
+# in the form the real VAX uses (SCSNODE VAXC -> VAXCSYS): <SCSNODE>SYS.
+LABEL_A="${NODE_A}SYS"
+LABEL_B="${NODE_B}SYS"
+command -v vmsfs_master >/dev/null 2>&1 \
+    || { echo "FATAL: vmsfs_master (provisioning tool) is not in this image"; exit 1; }
+vmsfs_master --ods2 relabel "$A_DISK" "$LABEL_A" \
+    || { echo "FATAL: could not give node A's system disk the label $LABEL_A"; exit 1; }
+vmsfs_master --ods2 relabel "$B_DISK" "$LABEL_B" \
+    || { echo "FATAL: could not give node B's system disk the label $LABEL_B"; exit 1; }
 
 # ==========================================================================
 # drive_configure_add - the documented procedure's ADD path (menu choice 1),
@@ -345,8 +403,9 @@ wake_login "$A_LOG2" "$AP" 4
 if waitfor 'Username:' 180 "$A_LOG2" "$AP"; then rc=0; else rc=1; fi
 record "node A boot2 (reboot): reaches the login prompt" "$rc"
 
-check "node A boot2: %OVMX-I-SCSNODE console line names the authored $NODE_A" \
-    "$A_LOG2" "%OVMX-I-SCSNODE, node name $NODE_A set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+# rd vms-158d: the node-name record is OPERATOR.LOG's (no VMS boot console
+# prints it): absent here, read back from the log after login below.
+check "node A boot2: the console carries no OVMX node-name line" "$A_LOG2" "%OVMX-I-SCSNODE" absent
 
 if [ "$rc" -eq 0 ]; then
     printf 'SYSTEM\r' >&4; sleep 1
@@ -358,6 +417,14 @@ if [ "$rc" -eq 0 ]; then
     printf 'SHOW SYMBOL HOSTA\r' >&4; sleep 1
     check "node A boot2: F\$GETSYI(NODENAME) reads $NODE_A (adopted live hostname)" \
         "$A_LOG2" "HOSTA = \"$NODE_A\""
+    # rd vms-3ea: the executive mounted THIS node's own volume -- the label
+    # is read back from the mounted volume, not from this script. (VOLNAM
+    # comes back as the home block's 12-byte, space-padded field, so the
+    # match is on the label and not on a closing quote.)
+    printf 'VOLA = F$GETDVI("SYS$SYSDEVICE","VOLNAM")\r' >&4; sleep 1
+    printf 'SHOW SYMBOL VOLA\r' >&4; sleep 1
+    check "node A boot2: its system disk is mounted with its own label $LABEL_A" \
+        "$A_LOG2" "VOLA = \"$LABEL_A"
 fi
 
 # ==========================================================================
@@ -428,8 +495,9 @@ wake_login "$B_LOG2" "$BP" 6
 if waitfor 'Username:' 180 "$B_LOG2" "$BP"; then rc=0; else rc=1; fi
 record "node B boot2 (reboot): reaches the login prompt" "$rc"
 
-check "node B boot2: %OVMX-I-SCSNODE console line names the authored $NODE_B" \
-    "$B_LOG2" "%OVMX-I-SCSNODE, node name $NODE_B set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+# rd vms-158d: the node-name record is OPERATOR.LOG's (no VMS boot console
+# prints it): absent here, read back from the log after login below.
+check "node B boot2: the console carries no OVMX node-name line" "$B_LOG2" "%OVMX-I-SCSNODE" absent
 
 if [ "$rc" -eq 0 ]; then
     printf 'SYSTEM\r' >&6; sleep 1
@@ -441,6 +509,10 @@ if [ "$rc" -eq 0 ]; then
     printf 'SHOW SYMBOL HOSTB\r' >&6; sleep 1
     check "node B boot2: F\$GETSYI(NODENAME) reads $NODE_B (adopted live hostname)" \
         "$B_LOG2" "HOSTB = \"$NODE_B\""
+    printf 'VOLB = F$GETDVI("SYS$SYSDEVICE","VOLNAM")\r' >&6; sleep 1
+    printf 'SHOW SYMBOL VOLB\r' >&6; sleep 1
+    check "node B boot2: its system disk is mounted with its own label $LABEL_B" \
+        "$B_LOG2" "VOLB = \"$LABEL_B"
 fi
 
 if [ "$NEGCTL" = "1" ]; then
@@ -484,6 +556,12 @@ if [ "$NEGCTL" = "1" ]; then
         "$B_LOG2" "Local CSID          (not yet assigned by the cluster)"
     check "NEGCTL: node B's SHOW CLUSTER never shows a MEMBER row" \
         "$B_LOG2" "MEMBER " absent
+    check_console_vms_faithful "NEGCTL: node A" "$A_LOG2"
+    check_console_vms_faithful "NEGCTL: node B" "$B_LOG2"
+    check_re_absent "NEGCTL: node A's console never announces a membership it does not hold" \
+        "$A_LOG2" '%CNXMAN,  now a VAXcluster member'
+    check_re_absent "NEGCTL: node B's console never announces a membership it does not hold" \
+        "$B_LOG2" '%CNXMAN,  now a VAXcluster member'
 
     if [ "$FAIL" -ne 0 ]; then
         echo "--- node A boot2 log (tail) ---"; tail -n 80 "$A_LOG2"
@@ -560,6 +638,33 @@ check_re "node A: SHOW CLUSTER lists node B ($NODE_B or its SCSSYSTEMID $ID_B) a
 printf 'SHOW CLUSTER/CLUSTER\r' >&4 2>/dev/null; sleep 3
 check_re "node A: SHOW CLUSTER/CLUSTER shows a real minted Local CSID (it founded, not fabricated)" \
     "$A_LOG2" "Local CSID +[0-9A-Fa-f]{8}"
+
+# rd vms-c56: each console announces the cluster the way a VMS console does,
+# and carries nothing else from the executive. Node A FOUNDED: VMS's founder
+# prints "proposing formation of a VAXcluster" and then its own membership.
+# Node B JOINED: VMS's joiner prints the membership request and its own
+# membership, naming itself (the real VAX's console:
+# tests/lab/captures/vms-52d-0b01-oracle-20261013/armA-vax2-console.log).
+check "node A: console announces the formation in VMS's words" \
+    "$A_LOG2" "%CNXMAN,  proposing formation of a VAXcluster"
+check "node A: console announces its own membership in VMS's words" \
+    "$A_LOG2" "%CNXMAN,  now a VAXcluster member -- system $NODE_A"
+check "node B: console announces its own membership in VMS's words" \
+    "$B_LOG2" "%CNXMAN,  now a VAXcluster member -- system $NODE_B"
+check "node B: SYSINIT's own line while it joins" \
+    "$B_LOG2" "%SYSINIT, waiting to form or join a VMScluster system"
+check_console_vms_faithful "node A" "$A_LOG2"
+check_console_vms_faithful "node B" "$B_LOG2"
+
+# rd vms-158d: each node's node-name record is in its OPERATOR.LOG (read last:
+# TYPE puts the log's executive diagnostics on the console, which the checks
+# above must not see).
+printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&4 2>/dev/null; sleep 3
+check "node A boot2: OPERATOR.LOG records the node name $NODE_A set from the .PAR" \
+    "$A_LOG2" "%OVMX-I-SCSNODE, node name $NODE_A set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
+printf 'TYPE SYS$MANAGER:OPERATOR.LOG\r' >&6 2>/dev/null; sleep 3
+check "node B boot2: OPERATOR.LOG records the node name $NODE_B set from the .PAR" \
+    "$B_LOG2" "%OVMX-I-SCSNODE, node name $NODE_B set from SYS\$SYSTEM:OVMXVMSSYS.PAR"
 
 # Never-crash-a-peer: neither console shows a bugcheck/panic anywhere in the run.
 for LABEL in "node A" "node B"; do

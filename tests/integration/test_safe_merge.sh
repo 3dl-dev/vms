@@ -44,6 +44,7 @@ sm() { PATH="$T/bin:$PATH" sh tools/ci/safe_merge.sh "$@" >"$T/out" 2>&1; echo $
 git checkout -q main
 rc=$(sm 1 --dry-run)
 [ "$rc" = 0 ] && ok "fresh, green PR passes (dry run)" || { bad "fresh green -> 0 (got $rc)"; cat "$T/out"; }
+grep -q "heavy gates: not required" "$T/out" && ! grep -q "heavy gates the PR skipped" "$T/out" && ok "the per-skipped-check dispatch requirement is off by default (the queue is the gate)" || bad "heavy step must be opt-in"
 
 rc=$(ROLLUP=red sm 1 --dry-run)
 [ "$rc" = 1 ] && grep -q "REFUSED: PR checks not green" "$T/out" && ok "a failed PR check is refused" || bad "red rollup -> refused (got $rc)"

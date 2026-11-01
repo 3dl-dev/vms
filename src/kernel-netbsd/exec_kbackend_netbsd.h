@@ -986,26 +986,19 @@ int  exec_socket_listen(exec_socket_t s, int backlog);
 int  exec_socket_accept(exec_socket_t s, exec_socket_t *out);
 
 /* ================================================================
- * SS13  Host AF_PACKET raw datalink socket (vms-7eb, auth slice of vms-1e4).
+ * SS13  Host raw datalink (vms-7eb, auth slice of vms-1e4) -- REAL on NetBSD
+ *       since rd vms-9394.
  *
- * Substrate-neutrality anchor for the exec_l2_* seam -- these declarations
- * prove the SS13 contract (exec_kbackend.h) is EXPRESSIBLE in NetBSD terms
- * (the signatures name no Linux type), but the DEFINITIONS in
- * vms_socket_netbsd.c are honest CONTRACT-ONLY STUBS, not a real NetBSD
- * binding, because NetBSD has no in-kernel socket(9) domain for raw Ethernet
- * frames the way Linux has AF_PACKET -- the real NetBSD primitive for this is
- * BPF (bpfopen/bpf_setif/bpfwrite/bpfread, a wholly different attach-to-
- * interface design, not a socket at all), which is out of this increment's
- * scope. Each stub touches no device internals and reports failure (-1),
- * naming its real source here (INV-6 / Rule 11: it opens nothing and
- * fabricates nothing) -- the same posture the block-I/O and NIC-lookup
- * contract-only stubs above take. As with exec_socket_* above, the only
- * caller (src/kernel-core/vms_l2.c) is NOT in this module's SRCS (vms_l2.c
- * stays a Linux build for now, exactly as vms_bg.c does -- see vms_bg.c's own
- * header for why: struct vms_proc's per-facility channel lists that are host-
- * socket-coupled are wired substrate-by-substrate, and L2's is Linux-only
- * until a genuine NetBSD BPF binding lands), so these are unresolved-but-
- * unreferenced decls, type-check contract only. */
+ * The signatures name no Linux type, and the DEFINITIONS in vms_socket_netbsd.c
+ * are a genuine NetBSD binding: NetBSD has no in-kernel socket(9) domain for raw
+ * Ethernet frames (Linux's AF_PACKET), so an L2 handle is an exec_socket_t
+ * holder over a per-handle receive ring bound to one interface + ethertype --
+ * frames taken by an `_if_input' interposer on a promiscuous NIC (the DECnet
+ * Phase IV station address is not the NIC's), sent with if_transmit_lock(9).
+ * The caller is src/kernel-core/vms_l2.c, now substrate-neutral and in this
+ * module's SRCS: a non-root NETACP opens its DECnet datalink through the
+ * executive (PHY_IO), never through bpf(4). See vms_socket_netbsd.c's SS13
+ * header for the receive design and why pfil(9) cannot carry it. */
 int  exec_l2_open(const char *ifname, uint16_t ethertype,
 		  uint32_t *out_ifindex, exec_socket_t *out);
 int  exec_l2_hwaddr(const char *ifname, uint8_t mac[6]);
@@ -1083,37 +1076,66 @@ uint64_t exec_ticks_ms(void);
  * that it is deliberately NON-interruptible. */
 void exec_wait_ms(uint32_t ms);
 
-/* SS18: the executive's operator (OPA0:) lines -- "%CNXMAN, ...", "%PEA0, ..."
- * -- on the NetBSD console, which is OPA0: on the VAX rail.
+/* SS18: the executive's operator lines on the NetBSD console, which is OPA0:
+ * on the VAX rail -- ROUTED (rd vms-c56).
+ *
+ * Every line goes to the kernel message buffer, with the kernel's usual
+ * timestamp: dmesg keeps the full record, and the /dev/klog bridge in PID 1
+ * (src/ovmx_init/ovmx_boot_netbsd.c) files it in OPERATOR.LOG. Only a CONSOLE
+ * line -- a console message VMS itself prints, in VMS's form
+ * (src/kernel-core/vms_cluster_opa0.h) -- is ALSO written to the console, and
+ * the way VMS writes one: started on a fresh line, with no "[  83.27]" stamp
+ * (NOTSTAMP), and with no trailing newline, the same convention PID 1's own
+ * "\n%FAC-S-IDENT, text" lines follow, so the two never run together. Every
+ * other line (the connection manager's, PEDRIVER's and the lock manager's
+ * diagnostics) is a diagnostic and does not go on OPA0:. Re-routed, never
+ * dropped.
  *
  * rd vms-553: the OVMX NetBSD/vax kernel is built with OVMX_QUIET
  * (tools/cross-vax/netbsd-ovmx-quiet.patch), which keeps the kernel's own
  * printf(9) chatter in the message buffer only, so the console carries the VMS
- * personality rather than NetBSD's boot. These lines ARE that personality, so
- * they carry TOCONSOP, the patch's "operator line" flag, and still reach the
- * console. They are written twice on purpose: once to the message buffer with
- * the kernel's usual timestamp (dmesg keeps the full record), and once to the
- * console WITHOUT it (NOTSTAMP) -- a VMS operator line has no "[  83.27]"
- * prefix. On a kernel without the patch TOCONSOP is an unknown bit that
- * kprintf ignores, and this degrades to an ordinary console printf.
- * __printflike keeps the compiler checking every call site, the reason this
- * used to be a macro. */
+ * personality rather than NetBSD's boot. The console write carries TOCONSOP,
+ * the patch's "operator line" flag, so it still reaches the console. On a
+ * kernel without the patch TOCONSOP is an unknown bit that kprintf ignores,
+ * and this degrades to an ordinary console printf. __printflike keeps the
+ * compiler checking every call site, the reason this used to be a macro. */
 #include <sys/kprintf.h>   /* TOCONS, TOLOG, NOTSTAMP */
+#include "vms_cluster_opa0.h"
 #ifndef TOCONSOP
 #define TOCONSOP 0x4000    /* == netbsd-ovmx-quiet.patch's sys/kprintf.h value */
 #endif
+static inline void exec_console_opa0_put(const char *fmt, ...) __printflike(1, 2);
+static inline void
+exec_console_opa0_put(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vprintf_flags(TOCONS | TOCONSOP | NOTSTAMP, fmt, ap);
+	va_end(ap);
+}
+
 static inline void exec_console_printf(const char *fmt, ...) __printflike(1, 2);
 static inline void
 exec_console_printf(const char *fmt, ...)
 {
+	char line[VMS_OPA0_LINE_MAX];
+	size_t n;
 	va_list ap;
 
 	va_start(ap, fmt);
 	vprintf_flags(TOLOG, fmt, ap);
 	va_end(ap);
+
 	va_start(ap, fmt);
-	vprintf_flags(TOCONS | TOCONSOP | NOTSTAMP, fmt, ap);
+	vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
+	if (!vms_opa0_is_console_line(line))
+		return;
+	n = strlen(line);
+	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+		line[--n] = '\0';
+	exec_console_opa0_put("\n%s", line);
 }
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

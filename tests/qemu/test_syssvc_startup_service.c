@@ -1300,22 +1300,16 @@ int main(void)
          * refused by DCL before RUN is entered:
          *   %DCL-W-ABKEYW, ambiguous qualifier or keyword - supply more characters
          *    \PR\
-         * OVMX's parser validates no qualifier against any command's
-         * table, for ANY command, so neither that refusal nor the
-         * %DCL-W-IVQUAL one for an unknown qualifier exists anywhere in
-         * DCL. Answering it inside RUN alone would answer for one
-         * command a question VMS answers for the whole language, so the
-         * gap is left where it is -- and asserted here, as it BEHAVES,
-         * so that it is a measured fact rather than a remark in a commit
-         * message. */
+         * run_bad_qualifier() now issues that refusal (vms-097); the image
+         * must not run. */
         clear_touch();
         run_dcl(AMBIG_COM, outA, sizeof(outA), &exit_st);
         printf("  (RUN/PR=4 -- ambiguous: PRIORITY, PRIVILEGES, "
                "PROCESS_NAME)\n%s\n", outA);
-        /* negctl-knockon: run-image-qualifier-refused */
-        CHECK(touched() && strstr(outA, "ABKEYW") == NULL,
-              "parser-wide gap: an ambiguous abbreviation is not resolved, and "
-              "OVMX has no %DCL-W-ABKEYW to refuse it with");
+        /* negctl: dcl-run-quals-unvalidated */
+        CHECK(!touched() && strstr(outA, "%DCL-W-ABKEYW") != NULL,
+              "an ambiguous RUN abbreviation is refused %DCL-W-ABKEYW "
+              "before RUN is entered, and the image does not run (oracle)");
     }
 
     /* ---------------------------------------------------------------

@@ -1,0 +1,580 @@
+This is serial port #0 on AXPbox Alpha Emulator
+
+
+OpenVMS PALcode V1.98-104, Tru64 UNIX PALcode V1.92-105
+
+starting console on CPU 0
+initialized idle PCB
+initializing semaphores
+initializing heap
+initial heap 240c0
+memory low limit = 1b0000 heap = 240c0, 17fc0
+initializing driver structures
+initializing idle process PID
+initializing file system
+initializing hardware
+initializing timer data structures
+lowering IPL
+CPU 0 speed is 800 MHz
+create dead_eater
+create poll
+create timer
+create powerup
+access NVRAM
+Memory size 256 MB
+testing memory
+..
+probe I/O subsystem
+probing hose 1, PCI
+probing hose 0, PCI
+probing PCI-to-ISA bridge, bus 1
+bus 0, slot 15 -- dqa -- Acer Labs M1543C IDE
+bus 0, slot 15 -- dqb -- Acer Labs M1543C IDE
+starting drivers
+entering idle loop
+*** system serial number not set. use set sys_serial_num command.
+Partition 0, Memory base: 000000000, size: 010000000
+initializing GCT/FRU at 1c8000
+Initializing dqa dqb 
+Memory Testing and Configuration Status
+  Array       Size       Base Address    Intlv Mode
+---------  ----------  ----------------  ----------
+    0        256Mb     0000000000000000    4-Way
+
+     256 MB of System Memory
+Testing the System
+AlphaServer ES40 Console V7.3-1, built on Feb 27 2007 at 12:57:47
+P00>>>boot dqa0
+(boot dqa0.0.0.15.0 -flags 0)
+block 0 of dqa0.0.0.15.0 is a valid boot block
+reading 1230 blocks from dqa0.0.0.15.0
+bootstrap code read in
+base = 200000, image_start = 0, image_bytes = 99c00(629760)
+initializing HWRPB at 2000
+initializing page table at ff56000
+initializing machine state
+setting affinity to the primary CPU
+jumping to bootstrap code
+
+
+    OpenVMS (TM) Alpha Operating System, Version V8.4    
+    © Copyright 1976-2010 Hewlett-Packard Development Company, L.P.
+
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 22-OCT-2026 04:20:42.35
+%RUN-S-PROC_ID, identification of created process is 00000104
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:20:59.78  %%%%%%%%%%%
+Operator _ALPHA1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:20:59.78  %%%%%%%%%%%
+Operator status for operator _ALPHA1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:20:59.79  %%%%%%%%%%%
+Logfile has been initialized by operator _ALPHA1$OPA0:
+Logfile is ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:20:59.80  %%%%%%%%%%%
+Operator status for operator ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 0000010A
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:00.11  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:00.12  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%RUN-S-PROC_ID, identification of created process is 0000010D
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:02.22  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:02.22  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:02.26  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:02.27  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:02.28  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting u
+p
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:03.61  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%ACME-I-SERVERSTART, ACME_SERVER starting
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:12.55  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+TDF-I-SETTDF TDF set new timezone differential
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:14.41  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$ALPHA1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:14.77  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:15.08  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Audit server starting up
+Event time:               22-OCT-2026 04:21:15.03
+PID:                      00000103        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS system is now executing the site-specific startup commands.
+
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%RUN-S-PROC_ID, identification of created process is 00000118
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:21:16.29  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SMHANDLER-S-STARTUP, server management event handler startup
+
+  SYSTEM       job terminated at 22-OCT-2026 04:21:16.53
+
+  Accounting information:
+  Buffered I/O count:               3602      Peak working set size:       7760
+  Direct I/O count:                 1504      Peak virtual size:         186192
+  Page faults:                      4072      Mounted volumes:                0
+  Charged CPU time:        0 00:00:09.92      Elapsed time:       0 00:00:34.30
+
+ Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4    
+
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+   Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4
+    Last interactive login on Wednesday,  5-AUG-2026 20:13:03.66
+
+Your password has expired; you must set a new password to log in
+
+
+New password: 
+Verification: 
+Error reading command input
+Timeout period expired
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:22:48.86  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Local interactive login failure
+Event time:               22-OCT-2026 04:22:48.84
+PID:                      00000119        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+
+ Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4    
+
+Username: SET TERMINAL/PAGE=0/WIDTH=200/NOBROADCAST
+Too many parameters - reenter command with fewer parameters
+ \TERMINAL\
+Username: @SYS$STARTUP:LD$STARTUP
+Password: 
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:23:13.03  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Local interactive login failure
+Event time:               22-OCT-2026 04:23:13.03
+PID:                      0000011A        
+Process name:             _OPA0:          
+Username:                 <login>         
+Terminal name:            OPA0:, _OPA0:
+Status:                   %LOGIN-F-NOSUCHUSER, no such user
+
+User authorization failure
+Username: INITIALIZE/STRUCTURE=5 LDA1: R5
+Unrecognized qualifier - check validity, spelling, and placement
+ \STRUCTURE\
+Username: MOUNT/SYSTEM LDA1: R5
+Unrecognized qualifier - check validity, spelling, and placement
+ \SYSTEM\
+Username: LD CREATE SYS$SYSDEVICE:[000000]R2.DSK/SIZE=1000/CONTIGUOUS
+Too many parameters - reenter command with fewer parameters
+ \CREATE\
+Username: LD CONNECT SYS$SYSDEVICE:[000000]R2.DSK LDA2:
+Too many parameters - reenter command with fewer parameters
+ \CONNECT\
+Username: INITIALIZE LDA2: R2
+Too many parameters - reenter command with fewer parameters
+ \LDA2\
+Username: MOUNT/SYSTEM LDA2: R2
+Unrecognized qualifier - check validity, spelling, and placement
+ \SYSTEM\
+Username: SET PROCESS/PARSE_STYLE=EXTENDED
+Too many parameters - reenter command with fewer parameters
+ \PROCESS\
+Username: CREATE/DIRECTORY LDA1:[TEST]
+Unrecognized qualifier - check validity, spelling, and placement
+ \DIRECTORY\
+Username: SET DEFAULT LDA1:[TEST]
+Too many parameters - reenter command with fewer parameters
+ \DEFAULT\
+Username: COPY NL: c^+^+config.h
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: COPY NL: a.b.c.d
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: COPY NL: MixedCase.Txt
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: COPY NL: caf^E9.txt
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: COPY NL: ^U4E2D.txt
+Too many parameters - reenter command with fewer parameters
+ \NL\
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:24:14.38  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Local interactive login failure
+Event time:               22-OCT-2026 04:24:14.37
+PID:                      0000011A        
+Process name:             _OPA0:          
+Username:                 <login>         
+Terminal name:            OPA0:, _OPA0:
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+User authorization failure
+Username: COPY NL: libstdc^+^+.a
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: WRITE SYS$OUTPUT "R1 [", F$PARSE("c^+^+config.h"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R3 [", F$PARSE("a.b.c.d"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R5 [", F$PARSE("a.b.c.d",,,"NAME"), "][", F$PARSE("a
+.b.c.d",,,"TYPE"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R6 [", F$SEARCH("C^+^+CONFIG.H"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R11 [", F$PARSE("c++config.h"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R11B [", F$SEARCH("c++config.h"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "RM [", F$PARSE("MixedCase.Txt"), "][", F$SEARCH("mix
+edcase.txt"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "RL [", F$SEARCH("CAF^C9.TXT"), "][", F$PARSE("caf^E9
+.txt"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "RU [", F$SEARCH("^U4E2D.txt"), "][", F$PARSE("^u4e2d
+.TXT"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "RS [", F$SEARCH("a^_b.txt"), "][", F$PARSE("a^ b.txt
+"), "][", F$PARSE("a b.txt"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:25:16.04  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Local interactive login failure
+Event time:               22-OCT-2026 04:25:16.03
+PID:                      0000011A        
+Process name:             _OPA0:          
+Username:                 <login>         
+Terminal name:            OPA0:, _OPA0:
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+User authorization failure
+
+ Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4    
+
+Username: WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: N = F$FAO("!232*g") + ".hpp"
+Too many parameters - reenter command with fewer parameters
+ \F$FAO\
+Username: N2 = F$FAO("!233*g") + ".hpp"
+Too many parameters - reenter command with fewer parameters
+ \F$FAO\
+Username: WRITE SYS$OUTPUT "R8 [", F$LENGTH(N), "][", F$LENGTH(F$PARSE(N)), "]["
+, F$LENGTH(N2), "][", F$LENGTH(F$PARSE(N2)), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: COPY NL: 'N'
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: COPY NL: 'N2'
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: WRITE SYS$OUTPUT "R8S [", F$LENGTH(F$SEARCH("g*.hpp")), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: SET PROCESS/PARSE_STYLE=TRADITIONAL
+Too many parameters - reenter command with fewer parameters
+ \PROCESS\
+Username: WRITE SYS$OUTPUT "R2 [", F$PARSE("c^+^+config.h"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R4 [", F$PARSE("a.b.c.d"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: WRITE SYS$OUTPUT "R2B [", F$PARSE("MixedCase.Txt"), "][", F$SEARCH("mi
+xedcase.txt"), "][", F$SEARCH("c^+^+config.h"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:26:17.81  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Local interactive login failure
+Event time:               22-OCT-2026 04:26:17.81
+PID:                      0000011B        
+Process name:             _OPA0:          
+Username:                 <login>         
+Terminal name:            OPA0:, _OPA0:
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+User authorization failure
+Username: SET DEFAULT LDA2:[000000]
+Too many parameters - reenter command with fewer parameters
+ \DEFAULT\
+Username: WRITE SYS$OUTPUT "R9 [", F$PARSE("c^+^+config.h"), "][", F$PARSE("a.b.
+c.d"), "][", F$PARSE("MixedCase.Txt"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: COPY NL: c^+^+config.h
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: COPY NL: a.b.c.d
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: COPY NL: lower.txt
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: COPY NL: MixedCase.Txt
+Too many parameters - reenter command with fewer parameters
+ \NL\
+Username: DIRECTORY LDA2:[000000]*.TXT
+Too many parameters - reenter command with fewer parameters
+ \LDA2\
+Username: WRITE SYS$OUTPUT "R10 [", F$SEARCH("lower.txt"), "][", F$SEARCH("LOWER
+.TXT"), "]"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: SET DEFAULT SYS$LOGIN
+Too many parameters - reenter command with fewer parameters
+ \DEFAULT\
+Username: WRITE SYS$OUTPUT "END-OF-CAPTURE"
+Too many parameters - reenter command with fewer parameters
+ \SYS$OUTPUT\
+Username: 
+Error reading command input
+Timeout period expired
+
+ Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4    
+
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+   Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4
+    Last interactive login on Wednesday,  5-AUG-2026 20:13:03.66
+
+Your password has expired; you must set a new password to log in
+
+
+New password: 
+Verification: 
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 04:33:54.18  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          System UAF record modification
+Event time:               22-OCT-2026 04:33:54.17
+PID:                      0000011C        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Object class name:        FILE
+Object name:              SYS$COMMON:[SYSEXE]SYSUAF.DAT;1
+User record:              SYSTEM                          
+Password Date:            New:      22-OCT-2026 04:33
+                          Original:  5-AUG-2026 19:03
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=200/NOBROADCAST
+$ @SYS$STARTUP:LD$STARTUP
+$ LD CREATE SYS$SYSDEVICE:[000000]R5.DSK/SIZE=2000/CONTIGUOUS
+$ LD CONNECT SYS$SYSDEVICE:[000000]R5.DSK LDA1:
+$ INITIALIZE/STRUCTURE=5 LDA1: R5
+$ MOUNT/SYSTEM LDA1: R5
+%MOUNT-I-MOUNTED, R5 mounted on _ALPHA1$LDA1:
+$ LD CREATE SYS$SYSDEVICE:[000000]R2.DSK/SIZE=1000/CONTIGUOUS
+$ LD CONNECT SYS$SYSDEVICE:[000000]R2.DSK LDA2:
+$ INITIALIZE LDA2: R2
+$ MOUNT/SYSTEM LDA2: R2
+%MOUNT-I-MOUNTED, R2 mounted on _ALPHA1$LDA2:
+$ SET PROCESS/PARSE_STYLE=EXTENDED
+$ CREATE/DIRECTORY LDA1:[TEST]
+$ SET DEFAULT LDA1:[TEST]
+$ COPY NL: c^+^+config.h
+$ COPY NL: a.b.c.d
+$ COPY NL: MixedCase.Txt
+$ COPY NL: caf^E9.txt
+$ COPY NL: ^U4E2D.txt
+$ COPY NL: a^_b.txt
+$ COPY NL: libstdc^+^+.a
+$ WRITE SYS$OUTPUT "R1 [", F$PARSE("c^+^+config.h"), "]"
+R1 [LDA1:[TEST]c^+^+config.h;]
+$ WRITE SYS$OUTPUT "R3 [", F$PARSE("a.b.c.d"), "]"
+R3 [LDA1:[TEST]a^.b^.c.d;]
+$ WRITE SYS$OUTPUT "R5 [", F$PARSE("a.b.c.d",,,"NAME"), "][", F$PARSE("a.b.c.d",,,"TYPE"), "]"
+R5 [a^.b^.c][.d]
+$ WRITE SYS$OUTPUT "R6 [", F$SEARCH("C^+^+CONFIG.H"), "]"
+R6 [LDA1:[TEST]c^+^+config.h;1]
+$ WRITE SYS$OUTPUT "R11 [", F$PARSE("c++config.h"), "]"
+R11 []
+$ WRITE SYS$OUTPUT "R11B [", F$SEARCH("c++config.h"), "]"
+R11B []
+$ WRITE SYS$OUTPUT "RM [", F$PARSE("MixedCase.Txt"), "][", F$SEARCH("mixedcase.txt"), "]"
+RM [LDA1:[TEST]MixedCase.Txt;][LDA1:[TEST]MixedCase.Txt;1]
+$ WRITE SYS$OUTPUT "RL [", F$SEARCH("CAF^C9.TXT"), "][", F$PARSE("caf^E9.txt"), "]"
+RL [LDA1:[TEST]café.txt;1][LDA1:[TEST]café.txt;]
+$ WRITE SYS$OUTPUT "RU [", F$SEARCH("^U4E2D.txt"), "][", F$PARSE("^u4e2d.TXT"), "]"
+RU [LDA1:[TEST]^U4E2D.txt;1][LDA1:[TEST]^U4E2D.TXT;]
+$ WRITE SYS$OUTPUT "RS [", F$SEARCH("a^_b.txt"), "][", F$PARSE("a^ b.txt"), "][", F$PARSE("a b.txt"), "]"
+RS [LDA1:[TEST]a^_b.txt;1][LDA1:[TEST]a^_b.txt;][LDA1:[TEST]ab.txt;]
+$ WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+R7 [LDA1:[TEST]a^_b.txt;1]
+$ WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+R7 [LDA1:[TEST]a^.b^.c.d;1]
+$ WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+R7 [LDA1:[TEST]c^+^+config.h;1]
+$ WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+R7 [LDA1:[TEST]café.txt;1]
+$ WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+R7 [LDA1:[TEST]libstdc^+^+.a;1]
+$ WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+R7 [LDA1:[TEST]MixedCase.Txt;1]
+$ WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+R7 [LDA1:[TEST]^U4E2D.txt;1]
+$ WRITE SYS$OUTPUT "R7 [", F$SEARCH("*.*;*",1), "]"
+R7 []
+$ N = F$FAO("!232*g") + ".hpp"
+$ N2 = F$FAO("!233*g") + ".hpp"
+$ WRITE SYS$OUTPUT "R8 [", F$LENGTH(N), "][", F$LENGTH(F$PARSE(N)), "][", F$LENGTH(N2), "][", F$LENGTH(F$PARSE(N2)), "]"
+R8 [236][248][237][249]
+$ COPY NL: 'N'
+$ COPY NL: 'N2'
+%COPY-E-OPENOUT, error opening LDA1:[TEST]gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+ggggggggggggggggggggggggggggggggggggggggggggggggggggggg
+-RMS-E-CRE, ACP file create failed
+-SYSTEM-W-BADFILENAME, bad file name syntax
+%COPY-W-NOTCOPIED, NL:[].; not copied
+$ WRITE SYS$OUTPUT "R8S [", F$LENGTH(F$SEARCH("g*.hpp")), "]"
+R8S [249]
+$ SET PROCESS/PARSE_STYLE=TRADITIONAL
+$ WRITE SYS$OUTPUT "R2 [", F$PARSE("c^+^+config.h"), "]"
+R2 [LDA1:[TEST]C^+^+CONFIG.H;]
+$ WRITE SYS$OUTPUT "R4 [", F$PARSE("a.b.c.d"), "]"
+R4 [LDA1:[TEST]A^.B^.C.D;]
+$ WRITE SYS$OUTPUT "R2B [", F$PARSE("MixedCase.Txt"), "][", F$SEARCH("mixedcase.txt"), "][", F$SEARCH("c^+^+config.h"), "]"
+R2B [LDA1:[TEST]MIXEDCASE.TXT;][LDA1:[TEST]MixedCase.Txt;1][LDA1:[TEST]c^+^+config.h;1]
+$ SET PROCESS/PARSE_STYLE=EXTENDED
+$ SET DEFAULT LDA2:[000000]
+$ WRITE SYS$OUTPUT "R9 [", F$PARSE("c^+^+config.h"), "][", F$PARSE("a.b.c.d"), "][", F$PARSE("MixedCase.Txt"), "]"
+R9 [LDA2:[000000]c^+^+config.h;][LDA2:[000000]a^.b^.c.d;][LDA2:[000000]MixedCase.Txt;]
+$ COPY NL: c^+^+config.h
+%COPY-E-OPENOUT, error opening LDA2:[000000]c^+^+config.h; as output
+-RMS-E-CRE, ACP file create failed
+-SYSTEM-W-BADFILENAME, bad file name syntax
+%COPY-W-NOTCOPIED, NL:[].; not copied
+$ COPY NL: a.b.c.d
+%COPY-E-OPENOUT, error opening LDA2:[000000]a^.b^.c.d; as output
+-RMS-E-CRE, ACP file create failed
+-SYSTEM-W-BADFILEVER, bad file version number
+%COPY-W-NOTCOPIED, NL:[].; not copied
+$ COPY NL: lower.txt
+$ COPY NL: MixedCase.Txt
+$ DIRECTORY LDA2:[000000]*.TXT
+
+Directory LDA2:[000000]
+
+LOWER.TXT;1         MIXEDCASE.TXT;1     
+
+Total of 2 files.
+$ WRITE SYS$OUTPUT "R10 [", F$SEARCH("lower.txt"), "][", F$SEARCH("LOWER.TXT"), "]"
+R10 [LDA2:[000000]LOWER.TXT;1][LDA2:[000000]LOWER.TXT;1]
+$ SET DEFAULT SYS$LOGIN
+$ WRITE SYS$OUTPUT "END-OF-CAPTURE"
+END-OF-CAPTURE
+$ 

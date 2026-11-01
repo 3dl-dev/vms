@@ -43,12 +43,20 @@ export const AFTER_WAIT_MS = 1200000;
 // The three system ids the roster declares (mk_democonfig.py DEMO_ROSTER).
 export const WANT = ['0x7c3', '0x7c4', '0x7c5'];
 
-// What each node says on its own console.
-export const MEMBER = /%CNXMAN,\s*this node is now a VAXcluster member/;
+// What each node says on its own console -- in the words VMS itself prints
+// there (rd vms-c56). A joining VMS node announces its own membership, naming
+// itself: "%CNXMAN,  now a VAXcluster member -- system VAX2" (two spaces;
+// tests/lab/captures/vms-52d-0b01-oracle-20261013/armA-vax2-console.log, and
+// VAXC's own console in the demo). It prints nothing on its console when a
+// LATER node joins -- that is OPCOM's, from the coordinator -- so who else each
+// OVMX node holds as a member is read from its own SHOW CLUSTER (clusterViewOf
+// below), the executive's table, after the gate has logged in.
+export const MEMBER = /%CNXMAN,\s+now a VAXcluster member -- system ([A-Z0-9$_]{1,6})/g;
 // Must NEVER appear on an OVMX node: the OVMX pair is non-voting and cannot
-// found a cluster. If it does, the roster regressed (rd vms-1a1).
-export const FOUNDED = /%CNXMAN,\s*this node has quorum by its own votes/;
-export const ADDED = /%CNXMAN, system 0*([0-9a-f]+) was added to the cluster/g;
+// found a cluster. If it does, the roster regressed (rd vms-1a1). VMS's console
+// form for founding is "proposing formation of a VAXcluster"; the older OVMX
+// wording is still caught.
+export const FOUNDED = /%CNXMAN,\s+proposing formation of a VAXcluster|%CNXMAN,\s*this node has quorum by its own votes|%CNXMAN,\s*the systems this node can see have quorum/;
 export const VADD = /proposing addition of system (\S+)|proposed addition of node (\S+)/g;
 // Who a node says it lost, in the node's OWN words. The real VAX names the
 // peer ("%CNXMAN,  lost connection to system OVMXB"); OVMX's connection manager
@@ -214,8 +222,15 @@ export function observe(R, who, screen) {
   R.transcript[who] = joinScrollback(R.transcript[who], screen);
   const t = R.transcript[who];
   R.restarts[who] = restartsIn(t);
-  if (MEMBER.test(t)) R.member[who] = true;
-  R.added[who] = setOf(t, ADDED).map((h) => '0x' + h.replace(/^0x/, ''));
+  // A member in its OWN words: the line must name this node, not another.
+  if (setOf(t, MEMBER).includes(who)) R.member[who] = true;
+  if (LOGIN_NODES.includes(who)) {
+    const view = clusterViewOf(t);
+    if (view) R.cluster_view[who] = view;
+    // rd vms-c56: the console carries only what a VMS console would.
+    const chat = consoleChatter(t);
+    if (chat.length) R.chatter[who] = chat.slice(0, 20); else delete R.chatter[who];
+  }
   const lost = setOf(t, LOST);
   if (lost.length) R.lost[who] = lost;
   const unnamed = (t.match(LOST_UNNAMED) || []).length;
@@ -238,12 +253,15 @@ export function observe(R, who, screen) {
   return R;
 }
 
-// The pass bar: both OVMX nodes' own connection managers name all three
-// systems, AND the real VAX admitted both of them in its own words. Nothing
-// here is inferred from the other nodes' consoles.
+// The membership bar, as each node says it in VMS's own words (rd vms-c56):
+// both OVMX nodes announce that THEY are now VAXcluster members, AND the real
+// VAX proposed the addition of each of them by name. Nothing here is inferred
+// from another node's console. That every OVMX node holds ALL THREE systems as
+// members is the executive's own table -- its SHOW CLUSTER -- read once the
+// gate is logged in (clusterViewWhy, part of isPass).
 export const isCN3 = (R) =>
-  NODES.slice(0, 2).every((w) => WANT.every((id) => (R.added[w] || []).includes(id))) &&
-  (R.vaxc_admitted || []).length >= 2;
+  LOGIN_NODES.every((w) => !!(R.member || {})[w]) &&
+  LOGIN_NODES.every((w) => (R.vaxc_admitted || []).includes(w));
 
 // Did revealing a panel expose the page defect in rd vms-0bc?
 //
@@ -270,7 +288,10 @@ export const wantsReveal = (env = {}) => env.REVEAL === '1' && env.NO_REVEAL !==
 
 // A fresh, empty set of observations.
 export const newObservations = () => ({
-  transcript: {}, restarts: {}, member: {}, added: {}, lost: {},
+  transcript: {}, restarts: {}, member: {}, lost: {},
+  // rd vms-c56: the MEMBER rows of each OVMX node's own SHOW CLUSTER, and the
+  // console lines a real VAX would not print, per OVMX node.
+  cluster_view: {}, chatter: {},
   vaxc_admitted: [], ovmx_founded: {}, bugchecks: {}, sca: {}, cn3: false, lost_unnamed: {},
   // How many times a panel's console only advanced after it was scrolled into
   // view -- the page defect in rd vms-0bc, counted rather than hidden.
@@ -446,6 +467,7 @@ export function observeLogin(R, who, el) {
     const after = t.slice(sent);
     if (AUTH_FAIL.test(after)) R.login_failed[who] = true;
     else if (after.length && atDcl(t)) R.dcl_at[who] = el;
+    else if (LOGIN_EXPIRED.test(after)) forgetLogin(R, who, 'the login prompt timed out after the login was typed');
   }
   return R;
 }
@@ -465,6 +487,112 @@ export function loginAction(R, who) {
   return USERNAME.test(lastLineOf((R.transcript || {})[who])) ? 'login' : 'wake';
 }
 
+// An OVMX console's login prompt does not wait for ever: Username: is abandoned
+// after 20 s of guest time ("Error reading command input / Timeout period
+// expired"), the line goes quiet, and the NEXT RETURN brings a fresh banner and
+// prompt. A gate that strikes RETURN and then reads the console again a whole
+// poll later (15 s of sleep plus three panel reveals) sees the prompt only after
+// it has timed out again, and never types the user name (rd vms-124: OVMXB
+// offered Username: in 8 of 8 cases and was never logged in to). So after a
+// wake the gate looks again every WAKE_FOLLOWUP_MS and logs in the moment the
+// prompt is the last line. What it asserts is unchanged.
+export const WAKE_FOLLOWUP_POLLS = 12;
+export const WAKE_FOLLOWUP_MS = 1000;
+
+// A visitor who types a user name and finds the console answering with a FRESH
+// "Username:" (the first prompt had already expired when the keys landed), or
+// with "Timeout period expired", presses RETURN and starts over: that is what
+// VMS does and what OVMX reproduces faithfully (LGI_RETRY_TMO, 20 s -- rd
+// vms-29e). The gate used to type the user name, sleep, type the password and
+// never look again, so ONE late landing -- on a guest that is slow under CPU
+// throttling -- left the password to be taken as a user name and the node
+// stranded at "Username: MANAGER / Password: / Timeout" with nobody typing
+// any more (rd vms-25f: not a wedged console -- the executive's terminal driver
+// was bound, idle and healthy; the gate had stopped sending anything).
+// Now the password is sent only once the console says "Password:", and a login
+// that expires or lands out of step is retried -- at most LOGIN_RETRIES times
+// per node, each COUNTED in R.login_retries and logged, so slowness stays
+// visible. What the gate ASSERTS is unchanged: a DCL "$" within the bound.
+export const LOGIN_RETRIES = 3;
+export const PASSWORD_WAIT_POLLS = 12;
+export const PASSWORD_WAIT_MS = 1000;
+export const PASSWORD_PROMPT = /Password:/;
+export const LOGIN_EXPIRED = /Timeout period expired/;
+
+async function typeLogin(R, who, el, io) {
+  const sentAt = (R.transcript[who] || '').length;
+  R.login_sent[who] = sentAt;
+  io.log(`  ${who}: offered Username: -- logging in as ${io.user(who)}`);
+  await io.type(who, io.user(who) + '\r');
+  let ready = false;
+  for (let i = 0; i < PASSWORD_WAIT_POLLS; i++) {
+    await io.sleep(PASSWORD_WAIT_MS);
+    observe(R, who, await io.read(who));
+    const after = String((R.transcript[who] || '')).slice(sentAt);
+    if (PASSWORD_PROMPT.test(after)) { ready = true; break; }
+    if (LOGIN_EXPIRED.test(after) || AUTH_FAIL.test(after)) break;
+    // a FRESH prompt: the typed name was taken as the wake keystroke of a new session
+    if (/Username:\s*$/.test(lastLineOf(after)) && /Username:/.test(after)) break;
+  }
+  if (!ready) return retryLogin(R, who, io, 'no Password: prompt after the user name');
+  await io.type(who, io.pass(who) + '\r');
+  return 'login';
+}
+
+// Forget a login attempt that did not land so loginAction wakes the console and
+// logs in again. Bounded; every retry is counted and said (R.login_retry_log).
+function retryLogin(R, who, io, why) {
+  if (!forgetLogin(R, who, why)) return 'login';       // out of retries: fail honestly
+  const n = R.login_retries[who];
+  if (io) io.log(`  ${who}: login did not land (${why}); starting over like a visitor (retry ${n}/${LOGIN_RETRIES})`);
+  return 'retry';
+}
+
+export function forgetLogin(R, who, why) {
+  R.login_retries = R.login_retries || {};
+  R.login_retry_log = R.login_retry_log || [];
+  const n = R.login_retries[who] || 0;
+  if (n >= LOGIN_RETRIES) return false;
+  R.login_retries[who] = n + 1;
+  R.login_retry_log.push(`${who}: ${why} (retry ${n + 1}/${LOGIN_RETRIES})`);
+  delete R.login_sent[who];
+  return true;
+}
+
+// One login step for one node. `io` is the transport: { type(who, text),
+// read(who) -> the node's screen, sleep(ms), user(who), pass(who), log(msg) }.
+export async function driveLoginStep(R, who, el, lastWake, wakeEveryS, io) {
+  let act = loginAction(R, who);
+  if (act === 'wake' && el - (lastWake[who] ?? -1e9) >= wakeEveryS) {
+    lastWake[who] = el;
+    await io.type(who, '\r');
+    act = null;
+    if (LOGIN_NODES.includes(who)) {
+      for (let i = 0; i < WAKE_FOLLOWUP_POLLS && act !== 'login'; i++) {
+        await io.sleep(WAKE_FOLLOWUP_MS);
+        observe(R, who, await io.read(who));
+        observeLogin(R, who, el);
+        act = loginAction(R, who);
+        if (act !== 'login' && act !== 'wake') break;     // logged in, or nothing to do
+      }
+    }
+  }
+  if (act === 'login') {
+    const r = await typeLogin(R, who, el, io);
+    if (r === 'retry') {
+      // A login that did not land is started over at once (a visitor presses
+      // RETURN again), not a whole poll later. Each retry spends one of
+      // LOGIN_RETRIES, so the recursion is bounded.
+      lastWake[who] = -1e9;
+      observe(R, who, await io.read(who));
+      observeLogin(R, who, el);
+      return driveLoginStep(R, who, el, lastWake, wakeEveryS, io);
+    }
+    return r;
+  }
+  return act;
+}
+
 // When a node became usable (seconds since the first click), or undefined: an
 // OVMX node at its logged-in DCL prompt, the real VAX at Username:.
 export const readyAt = (R, w) =>
@@ -481,7 +609,8 @@ export const allReady = (R, boundS = Infinity) =>
 // not been the bar since V0.7-6 (quiet), nor since V0.7-9 (rd vms-db1: a real
 // VAX that is a member and never offers Username: is a dead demo).
 export const isPass = (R, boundS = R.login_bound_s ?? Infinity) =>
-  !!R.cn3 && isQuiet(R) && allReady(R, boundS) && versionWhy(R) === null;
+  !!R.cn3 && isQuiet(R) && allReady(R, boundS) && versionWhy(R) === null &&
+  clusterViewWhy(R) === null && chatterWhy(R) === null;
 
 // Why a clustered run did not have every node usable, in observed terms.
 function loginWhy(R, boundS) {
@@ -509,22 +638,37 @@ export function verdictOf(R) {
     return `REGRESSION: an OVMX node founded a cluster (${Object.keys(R.ovmx_founded)}) ` +
            `-- the OVMX nodes must be NON-VOTING (rd vms-1a1)`;
   }
-  if (Object.keys(R.bugchecks || {}).length) return `BUGCHECK: ${JSON.stringify(R.bugchecks)}`;
+  if (Object.keys(R.bugchecks || {}).length) {
+    // A bugcheck seen beside a node that is not the build under test says
+    // nothing about the build under test, and must say so where a reader of
+    // the verdict will see it (rd vms-4f4: case-filtered hunts ran a V0.7-7
+    // Node B, and their BUGCHECK lines read as findings about the new build).
+    const stale = versionWhy(R);
+    return `BUGCHECK: ${JSON.stringify(R.bugchecks)}` +
+           (stale ? ` -- and NOT THE BUILD UNDER TEST: ${stale}` : '');
+  }
 
   if (R.cn3) {
     if (!isQuiet(R)) return `CN=3 but NOT QUIET: ${noiseWhy(R)}`;
     const stale = versionWhy(R);
     if (stale) return `CN=3 but NOT THE BUILD UNDER TEST: ${stale}`;
     const boundS = R.login_bound_s ?? Infinity;
-    return allReady(R, boundS) ? 'CN=3' : `CN=3 but NOT EVERY NODE USABLE: ${loginWhy(R, boundS)}`;
+    if (!allReady(R, boundS)) return `CN=3 but NOT EVERY NODE USABLE: ${loginWhy(R, boundS)}`;
+    const view = clusterViewWhy(R);
+    if (view) return `CN=3 but NOT EVERY MEMBER IN SHOW CLUSTER: ${view}`;
+    const chat = chatterWhy(R);
+    return chat ? `CN=3 but CONSOLE CHATTER: ${chat}` : 'CN=3';
   }
   const why = [];
-  for (const w of NODES.slice(0, 2)) {
-    const miss = WANT.filter((id) => !(R.added[w] || []).includes(id));
-    if (miss.length) why.push(`${w} never named ${miss.join(',')}`);
+  for (const w of LOGIN_NODES) {
+    if (!(R.member || {})[w]) why.push(`${w} never said "now a VAXcluster member -- system ${w}"`);
   }
   const adm = R.vaxc_admitted || [];
-  if (adm.length < 2) why.push(`the real VAX admitted ${adm.length ? adm.join('+') : 'nobody'}`);
+  const unadmitted = LOGIN_NODES.filter((w) => !adm.includes(w));
+  if (unadmitted.length) {
+    why.push(`the real VAX admitted ${adm.length ? adm.join('+') : 'nobody'}` +
+             (adm.length ? ` (not ${unadmitted.join('+')})` : ''));
+  }
   for (const w of NODES) if ((R.restarts || {})[w]) why.push(`${w} restarted ${R.restarts[w]}x`);
   const quiet = NODES.filter((w) => !(R.sca || {})[w]);
   if (quiet.length) why.push(`no SCA frames from ${quiet.join(',')}`);
@@ -541,6 +685,8 @@ export function verdictOf(R) {
     why.push(`panels that only repainted once revealed: ${JSON.stringify(stalls)} (rd vms-0bc)`);
   }
   if (!isQuiet(R)) why.push(noiseWhy(R));
+  const chat = chatterWhy(R);
+  if (chat) why.push(`console chatter: ${chat}`);
   const stale = versionWhy(R);
   if (stale) why.push(`not the build under test: ${stale}`);
   const silent = silentNeverStarts(R, ['OVMXB', 'VAXC'].filter((w) => w in (R.panel_started || {})));
@@ -548,4 +694,213 @@ export function verdictOf(R) {
     why.push(`SILENT never-start (no console, no watchdog): ${silent.join(',')} (rd vms-bfdd)`);
   }
   return `NOT CN=3: ${why.join('; ')}`;
+}
+
+// ---- rd vms-c56: an OVMX console carries only what a VMS console carries ----
+//
+// MEASURED on the live V0.7-13 demo (tests/lab/captures/
+// vms-c56-console-chatter-20261021/): both OVMX consoles carried the
+// executive's own diagnostics -- "[   37.218759] %CNXMAN, no coordinator CSID
+// seen yet ...", "%DLM, refusing a lock message (cat 0x02 op 0x01) ...",
+// "%PEA0, channel verified" -- on the Username: line and at the DCL prompt,
+// while the real VAX beside them printed three short %CNXMAN lines. The fix is
+// at the source (the executive routes diagnostics to OPERATOR.LOG,
+// src/kernel-core/vms_cluster_opa0.h); this is the assertion that keeps it so.
+//
+// A console line FAILS when it carries
+//   (a) a substrate printk uptime stamp, "[   37.218759]" -- VMS has none; or
+//   (b) a message identifier ("%FAC," or "%FAC-S-IDENT,") that a real VMS
+//       console never showed: not in VMS_CONSOLE_IDS (every one of which a
+//       real VAX printed -- the unit test re-reads the captures to prove it)
+//       and not OVMX's own boot narration (OVMX_BOOT_IDS -- EMPTY since rd
+//       vms-158d, kept only so the rule reads the same if it is ever needed);
+//       an identifier with no leading '%' ("DECNETD-E-NOSOCKET, ...") is still
+//       an identifier, and is judged the same way; or
+//   (c) a cluster-facility line (%CNXMAN, %PEA0, %SYSINIT -- facilities VMS
+//       prints with no severity) that is not one of the FORMS a real VAX
+//       printed, word for word, two spaces and all.
+// The firmware / page prelude before the OS's first line (SeaBIOS, iPXE, the
+// KA655 self-test, the page's own NIC line) is not the OS's console and is not
+// judged.
+
+// Message identifiers seen on a real OpenVMS VAX V7.3 console in this repo --
+// the demo's own Node C (C.console.txt above) and the VAX lab captures
+// (tests/lab/captures/**/VAXC*.log, *vax<N>*.log). The unit test re-reads those
+// captures: every identifier here must be on one -- the list is the captures',
+// not anybody's opinion. An identifier a real VAX printed that is not here yet
+// fails CLOSED (a gate run names it); add it with the capture that shows it.
+export const VMS_CONSOLE_IDS = [
+  // cluster, boot, startup
+  'CNXMAN', 'PEA0', 'SYSINIT', 'VAXcluster-I-LOADSECDB', 'MSCPLOAD-I-LOADMSCP',
+  'MSCPLOAD-I-CONFIGSCAN', 'STDRV-I-STARTUP', 'STARTUP-I-AUDITCONTINUE', 'CSP-I-DIFSWVER',
+  'SET-I-NEWAUDSRV', 'SET-I-INTSET', 'SET-W-NOTSET', 'RUN-S-PROC_ID', 'DCL-S-SPAWNED',
+  'INSTALL-E-OPENIN', 'MOUNT-I-MOUNTED', 'MOUNT-I-REBUILD',
+  'MOUNT-W-RMTMNTFAIL', 'SMG-W-GBLNOTCRE', 'DECW-W-NODEVICE', 'JBC-E-OPENERR',
+  'LICENSE-F-EMTLDB', 'LICENSE-E-NOAUTH', 'LICENSE-W-NOLOAD', 'LICENSE-F-EXCEEDED',
+  'LICENSE-I-NOLICENSE',
+  'SECSRV-E-NOPROXYDB', 'SECSRV-I-SERVERSTARTINGU', 'SECSRV-I-CIASTARTINGUP',
+  'SECSRV-I-CIACRECLUDB', 'SECSRV-I-CIAEXISTCLU', 'SECSRV-I-PROXYSHUTDOWN',
+  'SECSRV-I-CIASHUTDOWN', 'SECSRV-I-SERVERSHUTDOWN',
+  'TCPIP-S-STARTDONE', 'TCPIP-I-NORMAL', 'TCPIP-I-INFO', 'TCPIP-I-STARTNAME',
+  'TCPIP-I-STARTCOMM', 'TCPIP-I-SETPROTP', 'TCPIP-I-SERVLOADED', 'TCPIP-I-LOADSERV',
+  'TCPIP-I-DEFINTE', 'TCPIP-I-SETLOCAL', 'TCPIP-E-PROXYERROR', 'TCPIP-E-STARTFAIL',
+  'TCPIP-E-STARTERROR', 'TCPIP-E-CONFIGERROR', 'NCP-I-NOINFO', 'NCP-W-UNRCMP', 'NCP-W-OPEFAI',
+  // shutdown
+  'SHUTDOWN-I-STOPUSER', 'SHUTDOWN-I-STOPSMISRV', 'SHUTDOWN-I-STOPSECSRV',
+  'SHUTDOWN-I-STOPQUEUES', 'SHUTDOWN-I-STOPAUDIT', 'SHUTDOWN-I-SHUTNET', 'SHUTDOWN-I-REMOVE',
+  'SHUTDOWN-I-OPERATOR', 'SHUTDOWN-I-DISMOUNT', 'SHUTDOWN-I-DISLOGINS', 'DISM-W-RMTDSMFAIL',
+  'DISM-W-CANNOTDMT', 'DISM-W-DSMCLUFAIL', 'DISM-W-USERFILES',
+  // login and DCL
+  'LOGIN-F-CMDINPUT', 'LOGIN-F-NOSUCHUSER', 'LOGIN-F-DISUSER', 'LOGIN-F-INVPWD',
+  'LOGIN-S-LOGOPRCON', 'LOGIN-I-NOVAXCLUSTER', 'REM-S-END',
+  'DCL-W-IVVERB', 'DCL-W-PARMDEL', 'DCL-I-SUPERSEDE', 'DCL-W-NOVALU', 'DCL-W-IVQUAL',
+  'DCL-W-IVCHAR', 'DCL-W-DIRECT', 'DCL-E-OPENIN', 'DIRECT-W-NOFILES', 'SHOW-S-NOTRAN',
+  'SEARCH-W-OPENIN', 'SEARCH-E-NOFILE', 'DELETE-W-SEARCHFAIL', 'DELETE-W-FILNOTDEL',
+  'CREATE-E-DIRNOTCRE', 'DIRECT-E-OPENIN', 'RENAME-E-OPENIN', 'RENAME-E-SEARCHFAIL',
+  'TYPE-W-OPENIN', 'TYPE-W-SEARCHFAIL', 'UAF-I-RDBADDMSGU', 'UAF-I-MDFYMSG', 'UAF-I-DONEMSG', 'UAF-I-ADDMSG',
+  'UAF-I-RDBNOMODS', 'UAF-I-RDBDONEMSG', 'SDA-E-NORSBNAM', 'SDA-F-OPENIN', 'SYSMAN-I-ENV',
+  'CLI-W-IVKEYW',
+  'RMS-E-FNF', 'SYSTEM-F-DUPLNAM', 'SYSTEM-F-IVADDR', 'SYSTEM-F-NOLOGTAB',
+  'SYSTEM-F-NOLOGNAM', 'SYSTEM-F-DEVNOTMOUNT',
+];
+
+// OVMX's own boot narration allowed on the console, which no VMS console
+// prints. EMPTY (rd vms-158d): the executive-attached, system-disk mount,
+// node-name and system-identity lines now go to OPERATOR.LOG, and STARTNET
+// prints only what RUN prints; NETACP reports "DECnet starting" to OPCOM. An
+// entry here would be debt with an rd item, never a convenience.
+export const OVMX_BOOT_IDS = [];
+
+// The forms the cluster facilities take on a real VAX console (C.console.txt;
+// vms-52d-0b01-oracle-20261013, vms-ci6-evac-20261009, vms-fcb-lockdirwt-
+// 20261004 and vms-dfe-blackout-recovery-20260925 VAX consoles).
+const NODE_NAME = '[A-Z0-9$_]{1,6}';
+// "%CNXMAN,  <phrase> <NODE>"
+export const CNXMAN_NAMED_FORMS = [
+  'sending VAXcluster membership request to system', 'received VAXcluster membership request from system',
+  'proposing addition of system', 'now a VAXcluster member -- system', 'lost connection to system',
+  'timed-out lost connection to system', 'removed from VAXcluster system',
+  're-established connection to system', 'established connection to system',
+  'have connection to system', 'discovered system',
+];
+// "%CNXMAN,  <phrase>"
+export const CNXMAN_PLAIN_FORMS = [
+  'proposing formation of a VAXcluster', 'completing VAXcluster state transition',
+  'proposing reconfiguration of the VAXcluster', 'aborting VAXcluster state transition',
+  'quorum lost, blocking activity', 'quorum regained, resuming activity',
+  'proposing modification of quorum or quorum disk membership',
+];
+const reEsc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+export const CLUSTER_FORMS = [
+  new RegExp(`^%CNXMAN,  (?:${CNXMAN_NAMED_FORMS.map(reEsc).join('|')}) ${NODE_NAME}$`),
+  new RegExp(`^%CNXMAN,  (?:${CNXMAN_PLAIN_FORMS.map(reEsc).join('|')})$`),
+  new RegExp(`^%PEA0, (?:Port has Closed Virtual Circuit - REMOTE NODE ${NODE_NAME}|` +
+    `Excessive packet losses on LAN Path from \\S+ to \\S+ on REMOTE NODE ${NODE_NAME})$`),
+  /^%SYSINIT, waiting to form or join a VMScluster system$/,
+];
+const FORM_FACILITIES = ['CNXMAN', 'PEA0', 'SYSINIT'];
+
+export const PRINTK_STAMP = /\[\s*\d+\.\d+\]/;
+const MSG_ID = /%([A-Za-z][A-Za-z0-9$_]*(?:-[A-Z]-[A-Z0-9$_]+)?),/g;
+// A message identifier written WITHOUT its '%' at the start of a line
+// ("DECNETD-E-NOSOCKET, bpf datalink open ... failed", V0.7-13 Node B). A DCL
+// continuation line starts with '-' ("-RMS-E-FNF, ...") and is not this.
+const BARE_ID = /^\s*([A-Z][A-Z0-9$_]*-[A-Z]-[A-Z0-9$_]+),/;
+// Where the OS's own console starts: the substrate banner, the product banner,
+// or (older images) the executive's first line. Before it is firmware and the
+// page.
+const OS_START = /OVMX\/\S+ -- SYSKRNL|%OVMX-I-|OpenVMX V\d+\.\d+/;
+
+// The console lines a real VMS console would not carry, each as
+// {line, why}, in order, once each. [] is the claim.
+export function consoleChatter(text) {
+  let t = String(text || '').replace(/\r/g, '').replace(/\u0000/g, '');
+  const start = t.search(OS_START);
+  if (start > 0) t = t.slice(t.lastIndexOf('\n', start) + 1);
+  const allowed = new Set([...VMS_CONSOLE_IDS, ...OVMX_BOOT_IDS]);
+  const out = [];
+  const seen = new Set();
+  const flag = (line, why) => {
+    const key = `${why}\u0000${line}`;
+    if (!seen.has(key)) { seen.add(key); out.push({ line, why }); }
+  };
+  for (const raw of t.split('\n')) {
+    const line = raw.replace(/[\s█]+$/u, '');
+    if (!line) continue;
+    if (PRINTK_STAMP.test(line)) flag(line, 'substrate printk timestamp');
+    const bare = BARE_ID.exec(line);
+    if (bare && !allowed.has(bare[1])) flag(line, `${bare[1]} is not a message a VMS console prints`);
+    for (const m of line.matchAll(MSG_ID)) {
+      const id = m[1];
+      if (!allowed.has(id)) { flag(line, `%${id} is not a message a VMS console prints`); continue; }
+      if (FORM_FACILITIES.includes(id)) {
+        const msg = line.slice(m.index).replace(/\s+$/, '');
+        if (!CLUSTER_FORMS.some((re) => re.test(msg))) flag(line, `not a form VMS prints for %${id}`);
+      }
+    }
+  }
+  return out;
+}
+
+// Why the OVMX consoles are not VMS-faithful, or null when they are.
+export function chatterWhy(R) {
+  const parts = [];
+  for (const w of LOGIN_NODES) {
+    const c = (R.chatter || {})[w] || [];
+    if (c.length) parts.push(`${w} ${c.length}+ line(s), first ${JSON.stringify(c[0].line)} (${c[0].why})`);
+  }
+  return parts.length ? `${parts.join('; ')} (rd vms-c56)` : null;
+}
+
+// The MEMBER rows of the LAST SHOW CLUSTER table a console printed, as node
+// names, or null if it printed none. The executive's own table -- the CSBs it
+// holds (src/vmsdcl/dcl_cmd_show.c) -- not a log line:
+//   | NODE   | CSID     | SOFTWARE        | STATUS           |
+//   | OVMXB  | 00010003 | VMX V0.7        | MEMBER           |
+export const SHOW_CLUSTER_HEAD = 'View of Cluster from system ID';
+const SHOW_CLUSTER_ROW = /^\|\s*([A-Z0-9$_]{1,6})\s*\|\s*[0-9A-Fa-f]{8}\s*\|[^|\n]*\|\s*MEMBER\s*\|/gm;
+export function clusterViewOf(text) {
+  const t = String(text || '');
+  const at = t.lastIndexOf(SHOW_CLUSTER_HEAD);
+  if (at < 0) return null;
+  const tail = t.slice(at);
+  const end = tail.search(/\n\$ /);
+  const table = end > 0 ? tail.slice(0, end) : tail;
+  return [...new Set([...table.matchAll(SHOW_CLUSTER_ROW)].map((m) => m[1]))];
+}
+
+// Why some OVMX node's own SHOW CLUSTER does not hold all three systems as
+// members, or null when every one does. This is the bar the old console-line
+// count ("system 7c4 was added") stood for, now read from the executive.
+export function clusterViewWhy(R) {
+  const why = [];
+  for (const w of LOGIN_NODES) {
+    const view = (R.cluster_view || {})[w];
+    if (!view) { why.push(`${w} showed no SHOW CLUSTER`); continue; }
+    const miss = NODES.filter((n) => !view.includes(n));
+    if (miss.length) why.push(`${w}'s SHOW CLUSTER lacks ${miss.join(',')} as MEMBER`);
+  }
+  return why.length ? why.join('; ') : null;
+}
+
+// One OVMX node's SHOW CLUSTER, typed at its logged-in DCL prompt the way a
+// visitor would, once the cluster has formed and the node is usable. Waits for
+// the table and the prompt after it; tries at most VIEW_TRIES times. `io` is
+// the same transport driveLoginStep takes.
+export const VIEW_TRIES = 3;
+export const VIEW_WAIT_POLLS = 20;
+export const VIEW_WAIT_MS = 1000;
+export async function driveClusterView(R, who, io) {
+  for (let n = 0; n < VIEW_TRIES; n++) {
+    const from = String((R.transcript || {})[who] || '').length;
+    io.log(`  ${who}: SHOW CLUSTER`);
+    await io.type(who, 'SHOW CLUSTER\r');
+    for (let i = 0; i < VIEW_WAIT_POLLS; i++) {
+      await io.sleep(VIEW_WAIT_MS);
+      observe(R, who, await io.read(who));
+      const after = String(R.transcript[who] || '').slice(from);
+      if (after.includes(SHOW_CLUSTER_HEAD) && atDcl(after)) return clusterViewOf(after);
+    }
+  }
+  return null;
 }

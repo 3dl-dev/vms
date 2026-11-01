@@ -89,15 +89,12 @@ jobs:
   # md from silently diverging -- someone edits a status in the YAML and
   # forgets to regenerate, or hand-patches the md directly.
   #
-  # `render_compat.py --check` only validates vocab/schema (status/
-  # authenticity/kind against docs/compat/domains.yaml, cross-refs, evidence
-  # paths) -- it does NOT compare its output against the tracked md, so it
-  # cannot catch drift by itself. This job adds that comparison: regenerate,
-  # then diff the fresh render against the committed file. The generated
-  # header carries a "Generated <today>" date stamp that changes on every
-  # run regardless of content, so both sides of the diff have that one line
-  # stripped first -- otherwise the gate would redden on pure calendar
-  # rollover, which is not the drift this gate exists to catch.
+  # This job validates the YAML (vocab/schema/cross-refs) and that it
+  # renders. The md drift comparison is the ledger.yml drift gate (a required
+  # check): a compat PR edits only the YAML; the tracked md is a dated
+  # snapshot refreshed by `render_compat.py --publish`, and a PR that touches
+  # it must make it an exact render (no hand-edits). PRs no longer regenerate
+  # it -- its rollup table made every pair of queued compat PRs conflict.
   #
   # In-repo and network-free (no rd, no external calls), so this is cleanly
   # CI-gateable, unlike tools/roadmap/reconcile.py --check (needs `rd`, which
@@ -202,17 +199,6 @@ jobs:
       - name: Validate compat surface YAML (schema/vocab)
         run: python3 tools/compat/render_compat.py --check
 
-      - name: Detect drift between docs/compat/*.yaml and the generated register
-        run: |
-          set -e
-          cp docs/compatibility-surface.md /tmp/compat-surface-tracked.md
-          python3 tools/compat/render_compat.py
-          if ! diff -u <(grep -v '^> Generated ' /tmp/compat-surface-tracked.md) \
-                       <(grep -v '^> Generated ' docs/compatibility-surface.md); then
-            echo "::error::docs/compatibility-surface.md has drifted from docs/compat/*.yaml (single ledger, INV-LEDGER). Run 'python3 tools/compat/render_compat.py' and commit the regenerated file."
-            exit 1
-          fi
-          echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
   # -----------------------------------------------------------------------
   # Job: cluster core includes gate (FC-P0.1)
   #
@@ -434,6 +420,17 @@ jobs:
       # pre-quiet Node B capture (teeth) and a quiet VMS console (no false red).
       - name: Run console-quiet (substrate_lines) self-tests
         run: python3 -m pytest tests/lab-vax/test_substrate_quiet.py -v
+
+      # rd vms-25f: the closed-console receive-interrupt patch (a closed line must
+      # still read RXDB), pinned against the upstream gencons.c (teeth + applies).
+      - name: Run gencons closed-console patch self-tests
+        run: python3 -m pytest tests/lab-vax/test_gencons_patch.py -v
+
+      # rd vms-b06: the TOY-clock patch (TODR year rollover + kern.ovmx_toy_valid),
+      # the REAL NetBSD 10.1 clock code compiled on the host, unpatched (teeth: the
+      # 1-JAN-2010 boot) and patched; plus the build session's date.
+      - name: Run TOY-clock (todr) patch self-tests
+        run: python3 -m pytest tests/lab-vax/test_todr_patch.py -v
   # -----------------------------------------------------------------------
   # Job: NetBSD/amd64 console driver self-test (rd vms-d83 / vms-d984)
   #
@@ -510,6 +507,9 @@ jobs:
     needs: changes
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push the main-only registry layer cache
     timeout-minutes: 30
 
     steps:
@@ -527,8 +527,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-aarch64-boot:latest
-          cache-from: type=gha,scope=aarch64-boot
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=aarch64-boot' || '' }}  # scope aarch64-boot's one writer (rd vms-14da)
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:aarch64-boot
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:aarch64-boot,mode=max,ignore-error=true' || '' }}  # scope aarch64-boot's one writer (rd vms-14da)
 
       - name: Boot arm64 kernel under qemu-system-aarch64, run OVMX EM_AARCH64 init as PID 1
         run: |
@@ -576,9 +576,35 @@ jobs:
   # must not (negative control). This is the arm64 executive rung the boot-to-
   # login (vms-32aa) and the aarch64 cut (vms-b58) stand on.
   # -----------------------------------------------------------------------
+  kernel-base-a64-cross:
+    name: Prebuilt arm64 kernel base, cross-built (GHCR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/kernel-base.yml
+    with:
+      platform: linux/amd64
+      targetarch: arm64
+      tag: arm64x2
+
+  kernel-base-a64-native:
+    name: Prebuilt arm64 kernel base, native (GHCR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/kernel-base.yml
+    with:
+      runner: ubuntu-24.04-arm
+      platform: linux/arm64
+      tag: arm64n
+
   aarch64-kernel-vmsko:
     name: aarch64 OVMX kernel + vms.ko -- cross-built, boots, /dev/vms (vms-a07)
-    needs: changes
+    needs: [changes, kernel-base-a64-cross]
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -592,7 +618,9 @@ jobs:
       - name: Cross-build the arm64 OVMX kernel + vms.ko (kernel-out stage)
         run: |
           set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
           docker buildx build -f distro/Dockerfile.bootable --platform linux/arm64 \
+            --build-arg KERNEL_BASE=${{ needs.kernel-base-a64-cross.outputs.ref }} \
             --target kernel-out --output type=local,dest="$RUNNER_TEMP/kout" .
           ls -la "$RUNNER_TEMP/kout"
           test "$(cat "$RUNNER_TEMP/kout/karch")" = arm64
@@ -607,7 +635,7 @@ jobs:
     # qemu-system-aarch64 -machine virt: executive attached, Username:, SYSTEM
     # login, the PARTS RMS demo, and PRODUCT SHOW PRODUCT == ovmx_identity.h.
     name: aarch64 bootable set -- builds, boots to login, PARTS, version (vms-32aa)
-    needs: changes
+    needs: [changes, kernel-base-a64-native]
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 90
@@ -621,7 +649,9 @@ jobs:
       - name: Build the arm64 bootable set natively (Dockerfile.bootable, TARGETARCH=arm64)
         run: |
           set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
           docker buildx build -f distro/Dockerfile.bootable --platform linux/arm64 \
+            --build-arg KERNEL_BASE=${{ needs.kernel-base-a64-native.outputs.ref }} \
             --load -t ovmx-boot-a64:ci .
 
       - name: Extract the boot artifacts
@@ -1191,9 +1221,17 @@ jobs:
   # (vms-9ef) — does not yet build. SSH-login CI coverage returns with that
   # port. tests/uat/vms_session_test.sh is retained for that bring-up.
   # -----------------------------------------------------------------------
+  kernel-base:
+    name: Prebuilt kernel base (GHCR)
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/kernel-base.yml
+
   uat-session:
     name: VMS User Acceptance Test
-    needs: changes
+    needs: [changes, kernel-base]
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -1213,6 +1251,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
+      - name: Log in to ghcr.io (pull the prebuilt kernel base)
+        continue-on-error: true
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Build bootable image (uses GHA layer cache)
         uses: docker/build-push-action@v6
         with:
@@ -1221,7 +1263,9 @@ jobs:
           push: false
           load: true
           tags: ovmx-boot:latest
-          cache-from: type=gha
+          build-args: |
+            KERNEL_BASE=${{ needs.kernel-base.outputs.ref }}
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main
           # import only: persistent-boot is this scope's one writer (rd vms-14da)
 
       - name: Run UAT session on the real runtime (QEMU console)
@@ -1260,6 +1304,9 @@ jobs:
       - conformance
       - corpus-conformance
       - static-analysis
+      - kernel-base
+      - kernel-base-a64-cross
+      - kernel-base-a64-native
       - uat-session
     runs-on: ubuntu-latest
     timeout-minutes: 5

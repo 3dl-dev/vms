@@ -26,20 +26,11 @@ extern "C" {
 #define PPROP$C_PARSE_STYLE_PERM    1   /* Permanent filename parse style */
 #define PPROP$C_PARSE_STYLE_TEMP    0   /* Temporary filename parse style */
 
-/* ================================================================
- * PPROP$K_ — Process property value codes
- *
- * Used as values for PPROP$C_PARSE_STYLE_* properties.
- * ================================================================ */
-
-#define PPROP$K_PARSE_TRADITIONAL   0   /* Traditional VMS filename parsing */
-#define PPROP$K_PARSE_EXTENDED      1   /* Extended (ODS-5) filename parsing */
-
-/* ================================================================
- * PPROP$M_ — Flag bits for sys$set_process_properties flags argument
- * ================================================================ */
-
-#define PPROP$M_NOAUDIT             0x00000001  /* Suppress audit record */
+/* Parse-style values (docs/oracle/alpha84-starlet-defs/PPROPDEF.txt). */
+#define PARSE_STYLE$C_TRADITIONAL   0
+#define PARSE_STYLE$C_EXTENDED      1
+#define PARSE_STYLE$C_ODS2          0
+#define PARSE_STYLE$C_ODS5          1
 
 #ifdef __cplusplus
 }

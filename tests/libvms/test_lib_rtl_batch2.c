@@ -9,6 +9,7 @@
  *   lib$add_times lib$sub_times lib$cvt_vectim            (date/time)
  *   lib$scopy_r_dx lib$cvt_dx_dx                          (string/desc copy)
  *   lib$movtc lib$tra_asc_ebc lib$tra_ebc_asc             (translation)
+ *   lib$movtuc                                            (translate until)
  *   lib$currency lib$digit_sep lib$radix_point            (locale)
  *   (plus sys$bintim's new delta-time parsing)
  *
@@ -248,6 +249,56 @@ static void test_translate(void)
 }
 
 /* ------------------------------------------------------------------ */
+static void test_movtuc(void)
+{
+    printf("Testing lib$movtuc...\n");
+
+    char out[10];
+    struct dsc$descriptor_s src = { 6, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"abc.de" };
+    struct dsc$descriptor_s stop = { 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"." };
+    struct dsc$descriptor_s fill = { 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"*" };
+    struct dsc$descriptor_s tbl = { 256, DSC$K_DTYPE_T, DSC$K_CLASS_S, &LIB$AB_UPCASE };
+    struct dsc$descriptor_s dst = { 10, DSC$K_DTYPE_T, DSC$K_CLASS_S, out };
+
+    memset(out, '#', sizeof out);
+    check(lib$movtuc(&src, &stop, &tbl, &dst, &fill) == 4,
+          "movtuc returns the 1-based position of the stop character");
+    check(memcmp(out, "ABC*******", 10) == 0,
+          "movtuc translates up to the stop char, never writes it, fills the rest");
+
+    memset(out, '#', sizeof out);
+    check(lib$movtuc(&src, &stop, &tbl, &dst, NULL) == 4, "movtuc without fill returns 4");
+    check(memcmp(out, "ABC#######", 10) == 0,
+          "movtuc without fill leaves the remainder unchanged");
+
+    /* The comparison is on the TRANSLATED character: 'q' upcases to 'Q'. */
+    struct dsc$descriptor_s src2 = { 5, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"xyqzw" };
+    struct dsc$descriptor_s stopq = { 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"Q" };
+    memset(out, '#', sizeof out);
+    check(lib$movtuc(&src2, &stopq, &tbl, &dst, &fill) == 3,
+          "movtuc stops on the translated character, not the source byte");
+    check(memcmp(out, "XY********", 10) == 0, "movtuc wrote only the translated prefix");
+
+    /* Not found: whole source translated, 0 returned, remainder filled. */
+    struct dsc$descriptor_s stopz = { 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"!" };
+    memset(out, '#', sizeof out);
+    check(lib$movtuc(&src2, &stopz, &tbl, &dst, &fill) == 0,
+          "movtuc returns 0 when the stop character is not found");
+    check(memcmp(out, "XYQZW*****", 10) == 0,
+          "movtuc translates the whole source and pads to the destination length");
+
+    /* Destination shorter than source: translation stops at its end. */
+    struct dsc$descriptor_s shortd = { 2, DSC$K_DTYPE_T, DSC$K_CLASS_S, out };
+    memset(out, '#', sizeof out);
+    check(lib$movtuc(&src2, &stopq, &tbl, &shortd, &fill) == 0,
+          "movtuc ends at the destination's end before reaching the stop char");
+    check(memcmp(out, "XY#", 3) == 0, "movtuc never writes past the destination");
+
+    check(lib$movtuc(&src, &stop, &tbl, NULL, &fill) == (uint32_t)-1,
+          "movtuc returns -1 when there is no destination to write");
+}
+
+/* ------------------------------------------------------------------ */
 static void test_locale(void)
 {
     printf("Testing lib$currency / lib$digit_sep / lib$radix_point...\n");
@@ -277,6 +328,7 @@ int main(void)
     test_datetime();
     test_string_copy();
     test_translate();
+    test_movtuc();
     test_locale();
 
     printf("\n%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);

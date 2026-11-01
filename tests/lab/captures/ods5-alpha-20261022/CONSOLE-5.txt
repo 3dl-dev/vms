@@ -1,0 +1,559 @@
+This is serial port #0 on AXPbox Alpha Emulator
+
+
+OpenVMS PALcode V1.98-104, Tru64 UNIX PALcode V1.92-105
+
+starting console on CPU 0
+initialized idle PCB
+initializing semaphores
+initializing heap
+initial heap 240c0
+memory low limit = 1b0000 heap = 240c0, 17fc0
+initializing driver structures
+initializing idle process PID
+initializing file system
+initializing hardware
+initializing timer data structures
+lowering IPL
+CPU 0 speed is 800 MHz
+create dead_eater
+create poll
+create timer
+create powerup
+access NVRAM
+Memory size 256 MB
+testing memory
+..
+probe I/O subsystem
+probing hose 1, PCI
+probing hose 0, PCI
+probing PCI-to-ISA bridge, bus 1
+bus 0, slot 15 -- dqa -- Acer Labs M1543C IDE
+bus 0, slot 15 -- dqb -- Acer Labs M1543C IDE
+starting drivers
+entering idle loop
+*** system serial number not set. use set sys_serial_num command.
+Partition 0, Memory base: 000000000, size: 010000000
+initializing GCT/FRU at 1c8000
+Initializing dqa dqb 
+Memory Testing and Configuration Status
+  Array       Size       Base Address    Intlv Mode
+---------  ----------  ----------------  ----------
+    0        256Mb     0000000000000000    4-Way
+
+     256 MB of System Memory
+Testing the System
+AlphaServer ES40 Console V7.3-1, built on Feb 27 2007 at 12:57:47
+P00>>>boot dqa0
+(boot dqa0.0.0.15.0 -flags 0)
+block 0 of dqa0.0.0.15.0 is a valid boot block
+reading 1230 blocks from dqa0.0.0.15.0
+bootstrap code read in
+base = 200000, image_start = 0, image_bytes = 99c00(629760)
+initializing HWRPB at 2000
+initializing page table at ff56000
+initializing machine state
+setting affinity to the primary CPU
+jumping to bootstrap code
+
+
+    OpenVMS (TM) Alpha Operating System, Version V8.4    
+    © Copyright 1976-2010 Hewlett-Packard Development Company, L.P.
+
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 22-OCT-2026 07:43:31.34
+%RUN-S-PROC_ID, identification of created process is 00000104
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:48.79  %%%%%%%%%%%
+Operator _ALPHA1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:48.80  %%%%%%%%%%%
+Operator status for operator _ALPHA1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:48.86  %%%%%%%%%%%
+Logfile has been initialized by operator _ALPHA1$OPA0:
+Logfile is ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:48.86  %%%%%%%%%%%
+Operator status for operator ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 0000010A
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:49.14  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:49.15  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%RUN-S-PROC_ID, identification of created process is 0000010D
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:51.42  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:51.46  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:51.46  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:51.47  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:51.47  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting u
+p
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:52.61  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%ACME-I-SERVERSTART, ACME_SERVER starting
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:43:59.55  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+TDF-I-SETTDF TDF set new timezone differential
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:44:00.16  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$ALPHA1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:44:00.64  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:44:00.94  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Audit server starting up
+Event time:               22-OCT-2026 07:44:00.89
+PID:                      00000103        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS system is now executing the site-specific startup commands.
+
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%RUN-S-PROC_ID, identification of created process is 00000117
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:44:02.16  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SMHANDLER-S-STARTUP, server management event handler startup
+
+  SYSTEM       job terminated at 22-OCT-2026 07:44:02.38
+
+  Accounting information:
+  Buffered I/O count:               3601      Peak working set size:       7760
+  Direct I/O count:                 1504      Peak virtual size:         186192
+  Page faults:                      4072      Mounted volumes:                0
+  Charged CPU time:        0 00:00:09.82      Elapsed time:       0 00:00:31.17
+
+ Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4    
+
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+   Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4
+    Last interactive login on Wednesday,  5-AUG-2026 20:13:03.66
+
+Your password has expired; you must set a new password to log in
+
+
+New password: 
+Verification: 
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 07:45:35.56  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          System UAF record modification
+Event time:               22-OCT-2026 07:45:35.56
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Object class name:        FILE
+Object name:              SYS$COMMON:[SYSEXE]SYSUAF.DAT;1
+User record:              SYSTEM                          
+Password Date:            New:      22-OCT-2026 07:45
+                          Original:  5-AUG-2026 19:03
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=200/NOBROADCAST
+$ SET DEFAULT SYS$LOGIN
+$ CREATE TOVMS.MAR
+        .TITLE  TOVMS
+        .PSECT  DATA,NOEXE,WRT,LONG
+U1:     .ASCIZ  |bits/c++config.h|
+U2:     .ASCIZ  |c++config.h|
+U3:     .ASCIZ  |a.b.c.d|
+U4:     .ASCIZ  |libstdc++.a|
+U5:     .ASCIZ  |dir/sub/MixedCase.Txt|
+U6:     .ASCIZ  |file|
+U7:     .ASCIZ  |a b.txt|
+U8:     .ASCIZ  |x~y.h|
+U9:     .ASCIZ  |foo.tar.gz|
+U10:    .ASCIZ  |/sys$login/c++config.h|
+U11:    .ASCIZ  |include/c++/14.2.0/bits/c++config.h|
+V1:     .ASCIZ  |LDA1:[TEST]c^+^+config.h;1|
+V2:     .ASCIZ  |[.bits]c^+^+config.h|
+V3:     .ASCIZ  |a^.b^.c.d|
+V4:     .ASCIZ  |[TEST]MixedCase.Txt;2|
+V5:     .ASCIZ  |README.|
+V6:     .ASCIZ  |[.x^.y]z.h|
+V7:     .ASCIZ  |[.a^_b]c^_d.txt|
+SEP:    .ASCIZ  |--|
+UNAMES: .ADDRESS U1,U2,U3,U4,U5,U6,U7,U8,U9,U10,U11
+        .LONG   0
+VNAMES: .ADDRESS V1,V2,V3,V4,V5,V6,V7
+        .LONG   0
+OUTD:   .WORD   0
+        .BYTE   14,1
+        .ADDRESS 0
+        .PSECT  CODE,EXE,NOWRT
+        .ENTRY  PUTZ,^M<R2,R3>
+        MOVL    4(AP),R2
+        CLRL    R3
+10$:    TSTB    (R2)[R3]
+        BEQL    20$
+        INCL    R3
+        BRB     10$
+20$:    MOVW    R3,OUTD
+        MOVL    R2,OUTD+4
+        PUSHAB  OUTD
+        CALLS   #1,G^LIB$PUT_OUTPUT
+        RET
+        .ENTRY  ACTION,^M<>
+        PUSHL   4(AP)
+        CALLS   #1,PUTZ
+        MOVL    #1,R0
+        RET
+        .ENTRY  START,^M<R2,R4>
+        MOVAL   UNAMES,R2
+30$:    MOVL    (R2)+,R4
+        BEQL    40$
+        PUSHAB  SEP
+        CALLS   #1,PUTZ
+        PUSHL   R4
+        CALLS   #1,PUTZ
+        PUSHL   #0
+        PUSHL   #0
+        PUSHAL  ACTION
+        PUSHL   R4
+        CALLS   #4,G^DECC$TO_VMS
+        BRB     30$
+40$:    MOVAL   VNAMES,R2
+50$:    MOVL    (R2)+,R4
+        BEQL    60$
+        PUSHAB  SEP
+        CALLS   #1,PUTZ
+        PUSHL   R4
+        CALLS   #1,PUTZ
+        PUSHL   R4
+        CALLS   #1,G^DECC$TRANSLATE_VMS
+        TSTL    R0
+        BEQL    50$
+        PUSHL   R0
+        CALLS   #1,PUTZ
+        BRB     50$
+60$:    MOVL    #1,R0
+        RET
+        .END    START
+*EXIT*
+$ 
+$ MACRO TOVMS
+$ LINK TOVMS
+$ WRITE SYS$OUTPUT "RUN-DEFAULT"
+RUN-DEFAULT
+$ RUN TOVMS
+--
+bits/c++config.h
+--
+c++config.h
+--
+a.b.c.d
+--
+libstdc++.a
+--
+dir/sub/MixedCase.Txt
+[.DIR.SUB]MIXEDCASE.TXT
+--
+file
+FILE
+--
+a b.txt
+--
+x~y.h
+--
+foo.tar.gz
+--
+/sys$login/c++config.h
+--
+include/c++/14.2.0/bits/c++config.h
+--
+LDA1:[TEST]c^+^+config.h;1
+--
+[.bits]c^+^+config.h
+--
+a^.b^.c.d
+--
+[TEST]MixedCase.Txt;2
+/sys$disk/test/mixedcase.txt.2
+--
+README.
+readme.
+--
+[.x^.y]z.h
+--
+[.a^_b]c^_d.txt
+$ DEFINE DECC$EFS_CHARSET ENABLE
+$ WRITE SYS$OUTPUT "RUN-EFS_CHARSET"
+RUN-EFS_CHARSET
+$ RUN TOVMS
+--
+bits/c++config.h
+[.BITS]C^+^+CONFIG.H
+--
+c++config.h
+C^+^+CONFIG.H
+--
+a.b.c.d
+A^.B^.C.D
+--
+libstdc++.a
+LIBSTDC^+^+.A
+--
+dir/sub/MixedCase.Txt
+[.DIR.SUB]MIXEDCASE.TXT
+--
+file
+FILE
+--
+a b.txt
+A^_B.TXT
+--
+x~y.h
+X~Y.H
+--
+foo.tar.gz
+FOO^.TAR.GZ
+--
+/sys$login/c++config.h
+SYS$LOGIN:C^+^+CONFIG.H
+--
+include/c++/14.2.0/bits/c++config.h
+[.INCLUDE.C^+^+.14^.2^.0.BITS]C^+^+CONFIG.H
+--
+LDA1:[TEST]c^+^+config.h;1
+/lda1/test/c++config.h.1
+--
+[.bits]c^+^+config.h
+./bits/c++config.h
+--
+a^.b^.c.d
+a.b.c.d
+--
+[TEST]MixedCase.Txt;2
+/sys$disk/test/mixedcase.txt.2
+--
+README.
+readme.
+--
+[.x^.y]z.h
+./x.y/z.h
+--
+[.a^_b]c^_d.txt
+./a b/c d.txt
+$ DEFINE DECC$EFS_CASE_PRESERVE ENABLE
+$ WRITE SYS$OUTPUT "RUN-EFS_CHARSET+CASE_PRESERVE"
+RUN-EFS_CHARSET+CASE_PRESERVE
+$ RUN TOVMS
+--
+bits/c++config.h
+[.bits]c^+^+config.h
+--
+c++config.h
+c^+^+config.h
+--
+a.b.c.d
+a^.b^.c.d
+--
+libstdc++.a
+libstdc^+^+.a
+--
+dir/sub/MixedCase.Txt
+[.dir.sub]MixedCase.Txt
+--
+file
+file
+--
+a b.txt
+a^_b.txt
+--
+x~y.h
+x~y.h
+--
+foo.tar.gz
+foo^.tar.gz
+--
+/sys$login/c++config.h
+sys$login:c^+^+config.h
+--
+include/c++/14.2.0/bits/c++config.h
+[.include.c^+^+.14^.2^.0.bits]c^+^+config.h
+--
+LDA1:[TEST]c^+^+config.h;1
+/LDA1/TEST/c++config.h.1
+--
+[.bits]c^+^+config.h
+./bits/c++config.h
+--
+a^.b^.c.d
+a.b.c.d
+--
+[TEST]MixedCase.Txt;2
+/sys$disk/TEST/MixedCase.Txt.2
+--
+README.
+README.
+--
+[.x^.y]z.h
+./x.y/z.h
+--
+[.a^_b]c^_d.txt
+./a b/c d.txt
+$ DEFINE DECC$FILENAME_UNIX_REPORT ENABLE
+$ WRITE SYS$OUTPUT "RUN-EFS_CHARSET+CASE_PRESERVE+UNIX_REPORT"
+RUN-EFS_CHARSET+CASE_PRESERVE+UNIX_REPORT
+$ RUN TOVMS
+--
+bits/c++config.h
+[.bits]c^+^+config.h
+--
+c++config.h
+c^+^+config.h
+--
+a.b.c.d
+a^.b^.c.d
+--
+libstdc++.a
+libstdc^+^+.a
+--
+dir/sub/MixedCase.Txt
+[.dir.sub]MixedCase.Txt
+--
+file
+file
+--
+a b.txt
+a^_b.txt
+--
+x~y.h
+x~y.h
+--
+foo.tar.gz
+foo^.tar.gz
+--
+/sys$login/c++config.h
+sys$login:c^+^+config.h
+--
+include/c++/14.2.0/bits/c++config.h
+[.include.c^+^+.14^.2^.0.bits]c^+^+config.h
+--
+LDA1:[TEST]c^+^+config.h;1
+/LDA1/TEST/c++config.h.1
+--
+[.bits]c^+^+config.h
+./bits/c++config.h
+--
+a^.b^.c.d
+a.b.c.d
+--
+[TEST]MixedCase.Txt;2
+/sys$disk/TEST/MixedCase.Txt.2
+--
+README.
+README.
+--
+[.x^.y]z.h
+./x.y/z.h
+--
+[.a^_b]c^_d.txt
+./a b/c d.txt
+$ DEASSIGN DECC$EFS_CHARSET
+$ DEASSIGN DECC$EFS_CASE_PRESERVE
+$ WRITE SYS$OUTPUT "RUN-UNIX_REPORT-ONLY"
+RUN-UNIX_REPORT-ONLY
+$ RUN TOVMS
+--
+bits/c++config.h
+--
+c++config.h
+--
+a.b.c.d
+--
+libstdc++.a
+--
+dir/sub/MixedCase.Txt
+[.DIR.SUB]MIXEDCASE.TXT
+--
+file
+FILE
+--
+a b.txt
+--
+x~y.h
+--
+foo.tar.gz
+--
+/sys$login/c++config.h
+--
+include/c++/14.2.0/bits/c++config.h
+--
+LDA1:[TEST]c^+^+config.h;1
+--
+[.bits]c^+^+config.h
+--
+a^.b^.c.d
+--
+[TEST]MixedCase.Txt;2
+/sys$disk/test/mixedcase.txt.2
+--
+README.
+readme.
+--
+[.x^.y]z.h
+--
+[.a^_b]c^_d.txt
+$ DEASSIGN DECC$FILENAME_UNIX_REPORT
+$ WRITE SYS$OUTPUT "END-OF-CAPTURE"
+END-OF-CAPTURE
+$ 

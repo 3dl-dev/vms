@@ -23,6 +23,22 @@ __VMS_ABI_EXTERN_C_BEGIN
 
 int SYS$PARSE(void *fab, ...);
 int SYS$SEARCH(void *fab, ...);
+/* The file and record services (src/vmsrms/rms_vmsabi.c), each taking the
+ * optional completion-AST pair (err, suc) as trailing arguments. */
+int SYS$OPEN(void *fab, ...);
+int SYS$CREATE(void *fab, ...);
+int SYS$ERASE(void *fab, ...);
+int SYS$CLOSE(void *fab, ...);
+int SYS$MODIFY(void *fab, ...);
+int SYS$CONNECT(void *rab, ...);
+int SYS$DISCONNECT(void *rab, ...);
+int SYS$GET(void *rab, ...);
+int SYS$PUT(void *rab, ...);
+int SYS$FIND(void *rab, ...);
+int SYS$UPDATE(void *rab, ...);
+int SYS$DELETE(void *rab, ...);
+int SYS$REWIND(void *rab, ...);
+int SYS$FLUSH(void *rab, ...);
 
 __VMS_ABI_EXTERN_C_END
 

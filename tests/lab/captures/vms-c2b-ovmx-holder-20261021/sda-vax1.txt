@@ -1,0 +1,116 @@
+SDA> SHOW RESOURCE/NAME=RA7T
+Address of RSB:  879B45C0  GGMODE:       CR  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       CR                                  
+Sub-RSB count:          3  FGMODE:       CR                                  
+Lock Count:             1  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 54374152   RA7T....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 20000684  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+SDA> SHOW RESOURCE/NAME=RA7T
+Address of RSB:  879B45C0  GGMODE:       CR  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       CR                                  
+Sub-RSB count:          3  FGMODE:       CR                                  
+Lock Count:             2  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 54374152   RA7T....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 160004A7  CR 00000000-FFFFFFFF         20000684  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+SDA> SHOW LOCK 160004A7
+  [... global SHOW LOCK dump elided; the RA7T entries follow verbatim ...]
+Lock id:  160004A7   PID:     00000000   Flags:                           
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      87984100   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 54374152    RA7T....  Status:  MSTCPY                  
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Master copy of lock 01000349 on system 00010003
+Lock id:  20000684   PID:     0001001C   Flags:   VALBLK  CONVERT SYSTEM  
+Par. id:  00000000   SUBLCKs:        3                                    
+LKB:      8797A300   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 54374152    RA7T....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Local copy  
+
+SDA> SHOW RESOURCE/NAME=RA7T
+Address of RSB:  879B45C0  GGMODE:       CR  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       CR                                  
+Sub-RSB count:          3  FGMODE:       CR                                  
+Lock Count:             2  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 54374152   RA7T....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 2B000375  CR 00000000-FFFFFFFF         20000684  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+SDA> SHOW RESOURCE/NAME=S0
+Address of RSB:  879DC640  GGMODE:       CW  Status: VALID                   
+Parent RSB:      879B45C0  CGMODE:       CW                                  
+Sub-RSB count:          0  FGMODE:       CW                                  
+Lock Count:             1  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 00003053   S0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 12000451  CW 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+SDA> SHOW RESOURCE/NAME=RA7T
+%SDA-E-NORSBNAM, no resource block with specified name
+

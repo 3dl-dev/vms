@@ -15,13 +15,28 @@ defect_meta() {
         # and none of them is "blind" -- they test a different property. Round
         # 1 listed all four here, which let the printed attribution claim cover
         # three suites that could not have contributed to it.
-        suites_red)   echo "test_kmod_lock";;
+        # test_syssvc_ci6_rmhold ADDED (rd vms-c2b), and for the SAME reason
+        # test_kmod_lock is here and the other three are not: it asserts the
+        # FLIPPED DIRECTION ITSELF. RMHOLD.EXE holds the root of a tree at CR
+        # and the suite then asks for EX with LCK$M_NOQUEUE and requires a
+        # REFUSAL -- which is compat[EX][CR] read out loud. With the entry
+        # flipped the request is granted and that assertion fails.
+        #
+        # DERIVED FROM THE ASSERTION, not from a negctl run (this host cannot
+        # run the QEMU harness): the suite's own check calls sys$enqw(EX,
+        # LCK$M_NOQUEUE) on a resource a live child holds at CR and requires
+        # !(status & 1). Nothing else in the suite touches the matrix, so the
+        # claim is exactly one assertion -- the narrowest this entry can get,
+        # which is the discipline the paragraph above is about. The per-facility
+        # negctl shard is what MEASURES it.
+        suites_red)   echo "test_kmod_lock test_syssvc_ci6_rmhold";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
         why)          echo "compat[EX][CR] flipped 0 -> 1: an exclusive request is granted against a held concurrent-read lock. THE vms-e4d PRECEDENT, mechanised -- one entry of one matrix, nothing else.";;
         require_fail) cat <<'EOF'
 ENQ EX+NOQUEUE denied (CR held)
+an EX request with LCK$M_NOQUEUE is REFUSED while RMHOLD holds CR (the holder blocks, so it really holds)
 EOF
                       ;;
         knock_on_fail) echo "";;

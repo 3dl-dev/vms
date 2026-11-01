@@ -29,12 +29,6 @@ extern "C" {
 #define CLUEVT$C_ADD        1   /* A node was added to the cluster */
 #define CLUEVT$C_REMOVE     2   /* A node was removed from the cluster */
 
-/* ================================================================
- * CLUEVT$M_ — Cluster event flag bits
- * ================================================================ */
-
-#define CLUEVT$M_REPEAT     0x00000001  /* Repeat notification after each event */
-
 #ifdef __cplusplus
 }
 #endif

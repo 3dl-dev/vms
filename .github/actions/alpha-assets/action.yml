@@ -1,0 +1,121 @@
+name: Alpha executive/kernel + userland assets (GHCR)
+description: >-
+  The Linux/Alpha kernel tree with vms.ko (build-vmsko-alpha.sh, ~5 min) and the
+  Alpha userland cross-build are independent of any gate's payload. alpha-assets
+  builds them once per source hash and publishes them as a scratch image
+  ghcr.io/<owner>/ovmx-alpha-assets:<hash>; each gate restores them into
+  .boot-cache/alpha-modgp-gate/{vmsko,userland}, where run-module-gp-activation-
+  alpha.sh finds them cached and skips the build. A missing image just means the
+  gate builds them itself, exactly as before.
+  mode=fetch   restore (output hit=true|false)
+  mode=publish build via ASSETS_ONLY (if not already published) and push
+inputs:
+  mode:
+    required: true
+    description: fetch | publish
+outputs:
+  hit:
+    description: "fetch: whether the assets were restored; publish: whether they already existed"
+    value: ${{ steps.key.outputs.hit }}
+runs:
+  using: composite
+  steps:
+    - name: Source hash of the asset inputs
+      id: key
+      shell: bash
+      env:
+        OWNER: ${{ github.repository_owner }}
+        GH_TOKEN: ${{ github.token }}
+        ACTOR: ${{ github.actor }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -u
+        h=$(git ls-files -s CMakeLists.txt src third-party tools distro/rootfs distro/rootfs-alpha | sha256sum | cut -c1-20)
+        owner=$(echo "$OWNER" | tr 'A-Z' 'a-z')
+        ref="ghcr.io/${owner}/ovmx-alpha-assets:${h}"
+        # The built Linux/Alpha kernel tree depends only on the build script, the
+        # kernel patches and the cross image -- not on the OVMX sources -- so it
+        # has its own, rarely-changing key and vms.ko is rebuilt on top of it.
+        kh=$(git ls-files -s tools/cross-alpha/build-vmsko-alpha.sh tools/cross-alpha/patches tools/cross-alpha/Dockerfile | sha256sum | cut -c1-20)
+        kref="ghcr.io/${owner}/ovmx-alpha-kbase:${kh}"
+        echo "ref=$ref" >> "$GITHUB_OUTPUT"
+        echo "kref=$kref" >> "$GITHUB_OUTPUT"
+        echo "hit=false" >> "$GITHUB_OUTPUT"
+        echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null 2>&1 || true
+        root=".boot-cache/alpha-modgp-gate"
+        if [ "$MODE" = fetch ]; then
+          if docker pull -q "$ref" >/dev/null 2>&1; then
+            cid=$(docker create "$ref" /none)
+            mkdir -p "$root"
+            docker cp "$cid:/vmsko" "$root/vmsko"
+            docker cp "$cid:/userland" "$root/userland"
+            docker rm "$cid" >/dev/null
+            if [ -f "$root/vmsko/vms.ko" ] && [ -x "$root/userland/bin/STARTUP.EXE" ]; then
+              echo "hit=true" >> "$GITHUB_OUTPUT"; echo "restored $ref"
+            else
+              echo "::warning::$ref incomplete; gate will rebuild"; rm -rf "$root"
+            fi
+          else
+            echo "no prebuilt alpha assets at $ref; the gate builds them"
+          fi
+        else
+          docker buildx imagetools inspect "$ref" >/dev/null 2>&1 && echo "hit=true" >> "$GITHUB_OUTPUT" || true
+        fi
+    - name: Restore the prebuilt Linux/Alpha kernel tree (kernel base)
+      id: kbase
+      if: ${{ inputs.mode == 'publish' && steps.key.outputs.hit != 'true' }}
+      shell: bash
+      run: |
+        root="$PWD/.boot-cache/alpha-modgp-gate"
+        echo "hit=false" >> "$GITHUB_OUTPUT"
+        if docker pull -q "${{ steps.key.outputs.kref }}" >/dev/null 2>&1; then
+          cid=$(docker create "${{ steps.key.outputs.kref }}" /none)
+          mkdir -p "$root"
+          docker cp "$cid:/vmsko" "$root/vmsko"
+          docker rm "$cid" >/dev/null
+          if [ -f "$root/vmsko/linux-6.6.52/.ovmx-kernel-built" ]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"; echo "restored kernel base ${{ steps.key.outputs.kref }}"
+          else
+            rm -rf "$root/vmsko"
+          fi
+        fi
+    - name: Build the assets (ASSETS_ONLY)
+      if: ${{ inputs.mode == 'publish' && steps.key.outputs.hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        root="$PWD/.boot-cache/alpha-modgp-gate"
+        mkdir -p "$root"
+        ASSETS_ONLY=1 VMSKO_WORK="$root/vmsko" USERLAND="$root/userland" WORK="$root/boot" \
+          tools/cross-alpha/build-alpha-bootimage.sh
+        [ -f "$root/vmsko/vms.ko" ] && [ -x "$root/userland/bin/STARTUP.EXE" ]
+    - name: Publish the kernel base (first build of this kernel/patch set)
+      if: ${{ inputs.mode == 'publish' && steps.key.outputs.hit != 'true' && steps.kbase.outputs.hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        root="$PWD/.boot-cache/alpha-modgp-gate"
+        # the tree + vmlinux only: no vms.ko / module source copy / tarball
+        sudo chown -R "$(id -u):$(id -g)" "$root"
+        printf 'src\nvms.ko\nbuild-vms.log\n*.tar.xz\n' > "$root/vmsko/.dockerignore"
+        printf 'FROM scratch\nCOPY . /vmsko\n' > "$root/Dockerfile.kbase"
+        docker build -q -t "${{ steps.key.outputs.kref }}" -f "$root/Dockerfile.kbase" "$root/vmsko"
+        docker push -q "${{ steps.key.outputs.kref }}"
+        rm -f "$root/vmsko/.dockerignore"
+        echo "published ${{ steps.key.outputs.kref }}"
+    - name: Publish the assets (kernel base layers + this source's vms.ko and userland)
+      if: ${{ inputs.mode == 'publish' && steps.key.outputs.hit != 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        root="$PWD/.boot-cache/alpha-modgp-gate"
+        sudo chown -R "$(id -u):$(id -g)" "$root"
+        ctx="$(mktemp -d)"
+        cp "$root/vmsko/vms.ko" "$ctx/vms.ko"
+        mv "$root/userland" "$ctx/userland"
+        # FROM the kernel base: its (multi-GB) layers are already in the registry,
+        # so only vms.ko and the userland are pushed.
+        printf 'FROM %s\nCOPY vms.ko /vmsko/vms.ko\nCOPY userland /userland\n' "${{ steps.key.outputs.kref }}" > "$ctx/Dockerfile"
+        docker build -q -t "${{ steps.key.outputs.ref }}" "$ctx"
+        docker push -q "${{ steps.key.outputs.ref }}"
+        echo "published ${{ steps.key.outputs.ref }}"

@@ -14,6 +14,8 @@
 #   5. assert (via the project's ODS-2 reader + mk_democonfig.parse_sysgen_store):
 #        magic == 0x53595347, VAXCLUSTER == 2, SCSNODE == OVMXA
 #   6. assert disk integrity: exactly OVMXVMSSYS.PAR;2 added, nothing removed
+#   7. rd vms-3ea: the output volume carries the node's OWN label, OVMXASYS
+#      (<SCSNODE>SYS), not the kit's OVMXSYS -- and --label overrides it
 #
 # Requires: cc, qemu-img, python3 (all already present on the dev host; NO
 # installs -- all scratch lands under a /tmp workdir).
@@ -63,8 +65,9 @@ grep -q "PASS: OUTPUT sysdisk carries the injected config" "$WORK/inject.log" \
 echo "5. disk-integrity list-diff (exactly OVMXVMSSYS.PAR;2 added, none removed)"
 qemu-img convert -O raw "$WORK/out.qcow2" "$WORK/out.raw"
 "$WORK/vmsfs_master" --ods2 list "$WORK/out.raw" > "$WORK/list-after.txt"
-sort "$WORK/list-before.txt" > "$WORK/before.sorted"
-sort "$WORK/list-after.txt"  > "$WORK/after.sorted"
+# The volume line (label) is asserted on its own in step 6; the diff is files.
+grep -v '^%MASTER-I-VOLUME' "$WORK/list-before.txt" | sort > "$WORK/before.sorted"
+grep -v '^%MASTER-I-VOLUME' "$WORK/list-after.txt"  | sort > "$WORK/after.sorted"
 ADDED=$(comm -13 "$WORK/before.sorted" "$WORK/after.sorted")
 REMOVED=$(comm -23 "$WORK/before.sorted" "$WORK/after.sorted")
 echo "   added:   $ADDED"
@@ -74,5 +77,24 @@ echo "$ADDED" | grep -q 'OVMXVMSSYS.PAR;2' \
 [ "$(echo "$ADDED" | grep -c .)" -eq 1 ] \
     || { echo "FAIL: more than one file changed on the volume"; exit 1; }
 
+echo "6. rd vms-3ea: the node's system disk carries its OWN label"
+grep -q '^%MASTER-I-VOLUME, OVMXSYS ' "$WORK/list-before.txt" \
+    || { echo "FAIL: the stock fixture is not labelled OVMXSYS"; cat "$WORK/list-before.txt" | head -1; exit 1; }
+grep -q '^%MASTER-I-VOLUME, OVMXASYS ' "$WORK/list-after.txt" \
+    || { echo "FAIL: node OVMXA's sysdisk is not labelled OVMXASYS"; head -1 "$WORK/list-after.txt"; exit 1; }
+grep -q 'volume label = OVMXASYS' "$WORK/inject.log" \
+    || { echo "FAIL: the injector's own read-back did not report the label"; exit 1; }
+"$DEMO/inject-ods2-config.sh" "$WORK/sysdisk.qcow2" "$WORK/out2.qcow2" \
+    --scsnode OVMXB --scssystemid 1988 --label NODEBDISK > "$WORK/inject2.log" 2>&1 \
+    || { echo "FAIL: injector with --label exited non-zero"; cat "$WORK/inject2.log"; exit 1; }
+qemu-img convert -O raw "$WORK/out2.qcow2" "$WORK/out2.raw"
+"$WORK/vmsfs_master" --ods2 list "$WORK/out2.raw" | grep -q '^%MASTER-I-VOLUME, NODEBDISK ' \
+    || { echo "FAIL: --label NODEBDISK was not applied"; exit 1; }
+if "$DEMO/inject-ods2-config.sh" "$WORK/sysdisk.qcow2" "$WORK/out3.qcow2" \
+    --scsnode OVMXB --scssystemid 1988 --label 'not.valid' > "$WORK/inject3.log" 2>&1; then
+    echo "FAIL: an invalid --label produced a sysdisk"; exit 1
+fi
+
 echo "PASS: ODS-2 config injection places VAXCLUSTER=2 SYS\$SYSTEM:OVMXVMSSYS.PAR;2,"
-echo "      reads back byte-exact via the project reader, and disturbs nothing else."
+echo "      reads back byte-exact via the project reader, disturbs no other file,"
+echo "      and gives the node's system disk its own label (OVMXASYS, rd vms-3ea)."

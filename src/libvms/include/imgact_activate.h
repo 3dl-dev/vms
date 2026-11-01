@@ -122,4 +122,9 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
  */
 void imgact_image_exit(int code);
 
+/* Nonzero while an in-process image is running: a library routine that must end
+ * the image (LIB$DO_COMMAND) unwinds through imgact_image_exit then, and calls
+ * SYS$EXIT otherwise. */
+int imgact_inproc_active(void);
+
 #endif /* _IMGACT_ACTIVATE_H */

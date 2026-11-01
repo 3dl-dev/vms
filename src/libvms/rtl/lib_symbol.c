@@ -22,11 +22,16 @@
  * LIB$_INVSYMNAM otherwise (observed on VAX V7.3 and Alpha V8.4,
  * docs/oracle/semantics/rtl/). Names are case-blind (upcased).
  *
+ * LIB$DO_COMMAND hands DCL a command over the same channel; DCL executes it
+ * once this image has exited, and the image exits at once (it does not
+ * return to its caller).
+ *
  * Reference: OpenVMS RTL Library (LIB$) Manual -
- *            LIB$SET_SYMBOL, LIB$DELETE_SYMBOL, LIB$GET_SYMBOL
+ *            LIB$SET_SYMBOL, LIB$DELETE_SYMBOL, LIB$GET_SYMBOL, LIB$DO_COMMAND
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -38,6 +43,12 @@
 #include "descrip.h"
 #include "lib$routines.h"
 #include "ovmx_cli.h"
+#include "starlet.h"          /* sys$exit */
+#include "imgact_activate.h"  /* in-process image exit */
+/* Weak, as lib_misc.c's RMS seams: a LIBVMS$SHR composed without the image
+ * activator (the alpha list omits sys_imgact) cannot run an image in-process. */
+#pragma weak imgact_inproc_active
+#pragma weak imgact_image_exit
 
 #define SYM_MAX_NAME  256
 #define SYM_MAX_VALUE OVMX_CLI_VALUE_MAX
@@ -356,4 +367,41 @@ uint32_t lib$get_symbol(
     if (table_type)
         *table_type = rsp.table;
     return SS$_NORMAL;
+}
+
+/*
+ * lib$do_command - Execute Command (LIB$ Manual): stop the image and have the
+ * CLI execute `command` (at most 255 characters). On success it does not
+ * return: the image exits with SS$_NORMAL and DCL then executes the command at
+ * its current command level, so $STATUS is the command's. It returns only on
+ * failure:
+ *   LIB$_NOCLI   no CLI activated this image;
+ *   LIB$_INVARG  the command is longer than the documented 255 characters
+ *                (OVMX's refusal of what VMS documents as the maximum);
+ *   the CLI's own refusal, or LIB$_UNECLIERR if it went away mid-call.
+ */
+uint32_t lib$do_command(const struct dsc$descriptor_s *command)
+{
+    if (!command || (command->dsc$w_length && !command->dsc$a_pointer))
+        return SS$_BADPARAM;
+    if (command->dsc$w_length > 255)
+        return LIB$_INVARG;
+
+    struct ovmx_cli_req req;
+    struct ovmx_cli_rsp rsp;
+    memset(&req, 0, sizeof req);
+    req.op = OVMX_CLI_OP_DO_COMMAND;
+    req.value_len = command->dsc$w_length;
+    memcpy(req.value, command->dsc$a_pointer, req.value_len);
+    if (!cli_call(&req, &rsp))
+        return LIB$_NOCLI;
+    if (!(rsp.status & 1))
+        return rsp.status;
+    fflush(NULL);
+    /* End the image: an in-process image unwinds back to DCL (its process is
+     * DCL's); any other runs SYS$EXIT, exit handlers and all. */
+    if (imgact_inproc_active && imgact_image_exit && imgact_inproc_active())
+        imgact_image_exit(0);
+    sys$exit(SS$_NORMAL);
+    return SS$_NORMAL;                      /* not reached */
 }

@@ -1,0 +1,7 @@
+        .TITLE  EXSBIG  OVMX exit-status probe: DECC$EXIT(%X1000002C)
+        .PSECT  CCODE,EXE,NOWRT,QUAD
+        .ENTRY  EXSBIG,^M<>
+        PUSHL   #^X1000002C
+        CALLS   #1,G^DECC$EXIT
+        RET
+        .END    EXSBIG

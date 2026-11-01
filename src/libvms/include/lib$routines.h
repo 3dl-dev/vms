@@ -321,6 +321,23 @@ uint32_t lib$sig_to_stop(
 );
 
 /**
+ * lib$match_cond - Match a condition value against a list of condition values
+ *
+ * Compares the condition code of match_cond (STS$V_COND_ID, bits 3..27: the
+ * facility and message number) with that of each condition in the list,
+ * ignoring severity and the control bits. Up to eight condition values may be
+ * listed; omitted trailing arguments pad with 0 (see the pad macro below).
+ *
+ * @return  1-based index of the first listed condition that matches, or 0
+ */
+uint32_t lib$match_cond(
+    const uint32_t *match_cond,
+    const uint32_t *c1, const uint32_t *c2, const uint32_t *c3,
+    const uint32_t *c4, const uint32_t *c5, const uint32_t *c6,
+    const uint32_t *c7, const uint32_t *c8
+);
+
+/**
  * lib$establish - Establish a condition handler
  *
  * @param handler  Pointer to handler routine
@@ -573,6 +590,29 @@ uint32_t lib$movtc(
 );
 
 /**
+ * lib$movtuc - Move translated until character (VAX MOVTUC).
+ *
+ * @param src    Source string descriptor
+ * @param stop   Stop-character descriptor (first byte; compared with the
+ *               TRANSLATED source character, and never written)
+ * @param table  256-byte translation table descriptor
+ * @param dst    Destination string descriptor
+ * @param fill   Optional fill descriptor (first byte, untranslated); NULL
+ *               leaves the remainder of the destination unchanged
+ *
+ * @return  1-based source position of the character that translated to
+ *          the stop character; 0 if not found; -1 if the destination
+ *          cannot be written
+ */
+uint32_t lib$movtuc(
+    const struct dsc$descriptor_s *src,
+    const struct dsc$descriptor_s *stop,
+    const struct dsc$descriptor_s *table,
+    struct dsc$descriptor_s *dst,
+    const struct dsc$descriptor_s *fill
+);
+
+/**
  * lib$tra_asc_ebc - Translate an ASCII string to EBCDIC (CP037).
  * lib$tra_ebc_asc - Translate an EBCDIC string to ASCII (CP037).
  */
@@ -729,6 +769,15 @@ uint32_t lib$getsyi(
 /* ================================================================
  * Symbol and CLI Routines
  * ================================================================ */
+
+/**
+ * lib$do_command - Execute Command: stop the image and have the CLI execute
+ * the command (<= 255 characters). Does not return on success.
+ *
+ * @return  LIB$_NOCLI with no CLI; LIB$_INVARG if longer than 255; the CLI's
+ *          refusal otherwise
+ */
+uint32_t lib$do_command(const struct dsc$descriptor_s *command);
 
 /**
  * lib$get_symbol - Get value of a CLI symbol
@@ -1196,6 +1245,33 @@ uint32_t lib$free_ef(
  */
 uint32_t lib$reserve_ef(
     const uint32_t *efn
+);
+
+/* ================================================================
+ * Logical Unit Number Routines
+ * ================================================================ */
+
+/**
+ * lib$get_lun - Allocate one logical unit number from the processwide pool
+ *
+ * @param lun  Receives the allocated unit, or -1 if none was available
+ *
+ * @return  SS$_NORMAL, or LIB$_INSLUN when the pool is exhausted
+ */
+uint32_t lib$get_lun(
+    int32_t *lun
+);
+
+/**
+ * lib$free_lun - Return a unit LIB$GET_LUN allocated
+ *
+ * @param lun  The unit number, as LIB$GET_LUN returned it
+ *
+ * @return  SS$_NORMAL, LIB$_LUNALRFRE if it is not allocated, or
+ *          LIB$_LUNRESSYS if it is outside the pool LIB$GET_LUN manages
+ */
+uint32_t lib$free_lun(
+    const int32_t *lun
 );
 
 /* ================================================================
@@ -1774,6 +1850,7 @@ uint32_t lib$traverse_tree(
 #ifndef OVMX_NO_PAD_MACROS
 #include "ovmx_optargs.h"
 /* Omitted trailing arguments pad with 0 (VMS argument-count semantics). */
+#define lib$match_cond(...) OVMX_PAD_9(lib$match_cond, __VA_ARGS__)
 #define lib$spawn(...) OVMX_PAD_13(lib$spawn, __VA_ARGS__)
 #define lib$find_file(...) OVMX_PAD_7(lib$find_file, __VA_ARGS__)
 #define lib$rename_file(...) OVMX_PAD_12(lib$rename_file, __VA_ARGS__)

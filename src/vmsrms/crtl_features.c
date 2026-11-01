@@ -12,6 +12,18 @@
  *       FAB with SHRGET|SHRPUT instead of no sharing, so a second fopen of a file
  *       already open for write succeeds (RMS CW lock) instead of failing on the
  *       Files-11 file-access lock (RMS EX lock).
+ *   DECC$EFS_CHARSET (0..1, default 0)  the UNIX<->OpenVMS name translator
+ *       (crtl_filespec.c: decc$to_vms, decc$translate_vms, and the file layer's own
+ *       translation) writes and reads extended (ODS-5) names with ^ escapes; off, a
+ *       UNIX name that ODS-2 cannot carry is refused (rd vms-da9b, observed on
+ *       OpenVMS Alpha V8.4: tests/lab/captures/ods5-alpha-20261022 session 5).
+ *   DECC$EFS_CASE_PRESERVE (0..1, default 0)  the same translator keeps case; off,
+ *       it upper-cases toward OpenVMS and lower-cases toward UNIX (same capture).
+ *
+ * Each switch takes its first value from the logical name of the same name
+ * ("ENABLE" / "DISABLE", or a number in range), read once, before the first
+ * query or set -- the way the DEC C RTL reads its feature logicals when the
+ * image starts.
  *
  * A name the table does not carry is -1/EINVAL even when DEC C knows it: asking for a
  * switch OVMX does not implement must not look like success. Programs that set a list of
@@ -32,7 +44,9 @@
  */
 #include <errno.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "rms/crtl_features.h"
 
@@ -51,13 +65,72 @@ struct feature {
  */
 #if defined(OVMX_CRTL_NO_RMS_VENEER)
 #define FILE_SHARING_NAME NULL
+#define EFS_CHARSET_NAME NULL
+#define EFS_CASE_PRESERVE_NAME NULL
 #else
 #define FILE_SHARING_NAME "DECC$FILE_SHARING"
+#define EFS_CHARSET_NAME "DECC$EFS_CHARSET"
+#define EFS_CASE_PRESERVE_NAME "DECC$EFS_CASE_PRESERVE"
 #endif
 
 static struct feature features[OVMX_CRTL_FEAT_COUNT] = {
     [OVMX_CRTL_FEAT_FILE_SHARING - 1] = { FILE_SHARING_NAME, 0, 1, 0, 0 },
+    [OVMX_CRTL_FEAT_EFS_CHARSET - 1] = { EFS_CHARSET_NAME, 0, 1, 0, 0 },
+    [OVMX_CRTL_FEAT_EFS_CASE_PRESERVE - 1] = { EFS_CASE_PRESERVE_NAME, 0, 1, 0, 0 },
 };
+
+#if !defined(OVMX_CRTL_NO_RMS_VENEER)
+#include <stdint.h>
+#include "descrip.h"
+#include "starlet.h"
+#include "lnmdef.h"
+
+/* The feature's logical name, if defined: "ENABLE" -> 1, "DISABLE" -> 0, a
+ * decimal number as itself; anything else (or no such name) leaves it alone. */
+static void feature_from_logical(struct feature *f)
+{
+    static const char tab[] = "LNM$FILE_DEV";
+    struct dsc$descriptor_s dtab = { sizeof tab - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)tab };
+    struct dsc$descriptor_s dnam = { 0, DSC$K_DTYPE_T, DSC$K_CLASS_S, NULL };
+    char buf[64];
+    uint16_t rl = 0;
+    struct item_list_3 il[2];
+    int v = -1;
+
+    memset(il, 0, sizeof il);
+    il[0].item_code = LNM$_STRING;
+    il[0].buflen = sizeof buf - 1;
+    il[0].bufaddr = buf;
+    il[0].retlen = &rl;
+    dnam.dsc$w_length = (uint16_t)strlen(f->name);
+    dnam.dsc$a_pointer = (char *)f->name;
+    if (!(sys$trnlnm(NULL, &dtab, &dnam, NULL, il) & 1))
+        return;
+    buf[rl < sizeof buf ? rl : sizeof buf - 1] = '\0';
+    if (strcasecmp(buf, "ENABLE") == 0)
+        v = 1;
+    else if (strcasecmp(buf, "DISABLE") == 0)
+        v = 0;
+    else if (buf[0] >= '0' && buf[0] <= '9')
+        v = atoi(buf);
+    if (v >= f->min && v <= f->max)
+        f->cur = v;
+}
+#endif
+
+/* Read the feature logicals once, before the first query or set. */
+static void features_init(void)
+{
+    static int done;
+    if (done)
+        return;
+    done = 1;
+#if !defined(OVMX_CRTL_NO_RMS_VENEER)
+    for (int i = 0; i < OVMX_CRTL_FEAT_COUNT; i++)
+        if (features[i].name)
+            feature_from_logical(&features[i]);
+#endif
+}
 
 static int reentrancy_level = OVMX_C_MULTITHREAD;
 
@@ -71,6 +144,7 @@ static struct feature *by_index(int index)
 int ovmx_crtl_feature_get_index(const char *name)
 {
     int i;
+    features_init();
 
     if (!name) {
         errno = EINVAL;
@@ -85,6 +159,7 @@ int ovmx_crtl_feature_get_index(const char *name)
 
 const char *ovmx_crtl_feature_get_name(int index)
 {
+    features_init();
     struct feature *f = by_index(index);
 
     if (!f) {
@@ -96,6 +171,7 @@ const char *ovmx_crtl_feature_get_name(int index)
 
 int ovmx_crtl_feature_get_value(int index, int mode)
 {
+    features_init();
     struct feature *f = by_index(index);
 
     if (!f || (mode != 0 && mode != 1)) {
@@ -107,6 +183,7 @@ int ovmx_crtl_feature_get_value(int index, int mode)
 
 int ovmx_crtl_feature_set_value(int index, int mode, int value)
 {
+    features_init();
     struct feature *f = by_index(index);
 
     if (!f || (mode != 0 && mode != 1) || value < f->min || value > f->max) {
@@ -123,6 +200,7 @@ int ovmx_crtl_feature_set_value(int index, int mode, int value)
 /* The C RTL file layer's query: the CURRENT value of a feature it honours. */
 int ovmx_crtl_feature_current(int index)
 {
+    features_init();
     struct feature *f = by_index(index);
 
     return f ? f->cur : 0;

@@ -297,7 +297,7 @@ run_harness() {
 
 # suite_rc <name> -> prints the rc, or "MISSING"
 suite_rc() {
-    _line=$(grep -F "=== SUITE $1 rc=" "$OUTFILE" | tail -1)
+    _line=$(grep -a -F "=== SUITE $1 rc=" "$OUTFILE" | tail -1)
     if [ -z "$_line" ]; then echo MISSING; return; fi
     printf '%s' "$_line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p'
 }
@@ -644,7 +644,7 @@ for defect in $DEFECT_LIST; do
             [ -f "$OUTFILE.raw" ] && cp "$OUTFILE.raw" "$_ddir/$defect.console.raw.txt" 2>/dev/null || true
             echo "  guest console of the death kept in $_ddir/$defect.console.txt"
         }
-        _dm=$(grep -n -m1 -e '--- dmesg' -e 'KERNEL MODULE TESTS FAILED' "$OUTFILE" | cut -d: -f1)
+        _dm=$(grep -a -n -m1 -e '--- dmesg' -e 'KERNEL MODULE TESTS FAILED' "$OUTFILE" | cut -d: -f1)
         if [ -n "$_dm" ] && [ "$_dm" -gt 1 ]; then
             echo "  --- the 80 console lines BEFORE the failure dump (line $_dm of $(wc -l < "$OUTFILE")) ---"
             head -n "$((_dm - 1))" "$OUTFILE" | tail -n 80 | sed 's/^/  | /'

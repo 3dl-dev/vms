@@ -31,6 +31,7 @@ extern double strtod(const char *, char **);
 extern char *strsep(char **, const char *);
 extern char *strtok_r(char *, const char *, char **);
 extern void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
+extern unsigned int times(void *);   /* struct tms: four 32-bit clock_t members */
 
 /* A statically initialised procedure value of an IMPORTED routine: a 32-bit
  * cross-image (REFLONG) import cell IMGACT fills at activation (vms-reflong). */
@@ -99,11 +100,20 @@ int main(int argc, char **argv)
     qsort(v, 6, sizeof v[0], cmp);
     ok_sort = v[0] == 1 && v[1] == 2 && v[5] == 9;
 
+    /* vms-5303e: times() fills the caller's 16-byte struct tms (32-bit clock_t);
+     * the 32 bytes the Linux-Alpha kernel writes once ran over whatever sat
+     * above it (gas main's PV/RA slots). Guards above the struct must hold. */
+    struct { unsigned int t[4]; unsigned int guard[4]; } tg = {
+        { 0, 0, 0, 0 }, { 0x5a5a5a5au, 0x5a5a5a5au, 0x5a5a5a5au, 0x5a5a5a5au } };
+    times(tg.t);
+    int ok_times = tg.guard[0] == 0x5a5a5a5au && tg.guard[1] == 0x5a5a5a5au &&
+                   tg.guard[2] == 0x5a5a5a5au && tg.guard[3] == 0x5a5a5a5au;
+
     free(big);
     free(z);
     int ok_fnptr = len_fn("OVMX!") == 5;
-    int ok = ok_fnptr && p32 && ok_str && ok_mem && ok_alloc && ok_strto && ok_tok && ok_sort;
-    printf("OVMX p32 test: ptr32=%d str=%d mem=%d alloc=%d strto=%d tok=%d sort=%d fnptr=%d argc=%d\n",
-           p32, ok_str, ok_mem, ok_alloc, ok_strto, ok_tok, ok_sort, ok_fnptr, argc);
+    int ok = ok_times && ok_fnptr && p32 && ok_str && ok_mem && ok_alloc && ok_strto && ok_tok && ok_sort;
+    printf("OVMX p32 test: ptr32=%d str=%d mem=%d alloc=%d strto=%d tok=%d sort=%d fnptr=%d argc=%d times=%d\n",
+           p32, ok_str, ok_mem, ok_alloc, ok_strto, ok_tok, ok_sort, ok_fnptr, argc, ok_times);
     return ok ? 7 : 3;
 }

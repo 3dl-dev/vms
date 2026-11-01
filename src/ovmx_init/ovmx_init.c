@@ -98,6 +98,7 @@
  * the NetBSD backend is vms-f2e. See ovmx_boot.h and docs/design-p4-netbsd-vax-
  * boot.md (GAP-C). */
 #include "ovmx_boot.h"
+#include "boot_time.h"         /* the boot date check (rd vms-b06) */
 #if defined(OVMX_BOOT_ACP_BRIDGE)
 /* ACP-read bootstrap bridge (vms-5f0): PID 1 stages the first-hop execve'd
  * images (IMGACT/PROVISION/DCL/JOB_CONTROL/LOGINOUT) off the genuine ODS-2
@@ -406,6 +407,27 @@ static void provision_disk_mount_points(void)
  */
 static int executive_fd = -1;
 
+/*
+ * boot_oplog - one line of PID 1's own boot narration, filed in the operator
+ * log and NOT printed on OPA0: (rd vms-158d). A real VMS boot console prints no
+ * "executive attached", "mounting system disk", "system disk mounted" or "node
+ * name set" line (the real VAX's console: tests/lab/captures/
+ * vms-c56-console-chatter-20261021/C.console.txt) -- so OVMX's own facts about
+ * those steps go where VMS puts an operator's record, through the boot seam's
+ * operator-log op (ovmx_boot_operator_log, rd vms-c56). Nothing is dropped.
+ */
+static void boot_oplog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void boot_oplog(const char *fmt, ...)
+{
+    char line[256];
+    va_list ap;
+
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    ovmx_boot_operator_log(line);
+}
+
 /* When set before executive_attach(), the executive is attached SILENTLY: the
  * %OVMX-I-EXEC console line is suppressed and executive_announce() emits it
  * later. The conversational boot path (vms-46c) must attach the executive BEFORE
@@ -421,7 +443,7 @@ static int executive_announce_deferred = 0;
  * executive_announce_deferred was set (the conversational path, after SYSBOOT>). */
 static void executive_announce(void)
 {
-    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
+    boot_oplog("%%OVMX-I-EXEC, VMS executive attached on /dev/vms");
 }
 
 /*
@@ -499,7 +521,7 @@ static void executive_attach(void)
     if (executive_announce_deferred)
         return;                 /* conversational path: %OVMX-I-EXEC deferred to
                                  * executive_announce() after the SYSBOOT> prompt */
-    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
+    boot_oplog("%%OVMX-I-EXEC, VMS executive attached on /dev/vms");
 }
 
 /*
@@ -725,8 +747,8 @@ static void bare_metal_init(void)
                 "the system disk is not present; OVMX does not install one at boot");
         }
 
-        printf("%%OVMX-I-SYSDISK, mounting system disk %s\n",
-               ovmx_boot_system_disk_unit());
+        boot_oplog("%%OVMX-I-SYSDISK, mounting system disk %s",
+                   ovmx_boot_system_disk_unit());
 
         /* Mount the system disk via the substrate's own mechanism. The boot
          * seam keeps ovmx_init.c substrate-neutral -- ONE source, no #ifdef
@@ -756,8 +778,8 @@ static void bare_metal_init(void)
                 "OVMX does not initialize or install it at boot");
         }
 
-        printf("%%OVMX-I-MOUNTED, system disk %s mounted\n",
-               ovmx_boot_system_disk_unit());
+        boot_oplog("%%OVMX-I-MOUNTED, system disk %s mounted",
+                   ovmx_boot_system_disk_unit());
 
         /* Publish the DISCOVERED system device (vms-9f5) so every child --
          * imgact.c, lnm_defaults.c, DCL -- resolves SYS$SYSDEVICE to the disk
@@ -842,10 +864,10 @@ static void bare_metal_init(void)
      * above, announced now), the banner, then the mount lines. */
     executive_announce();
     print_banner_once();
-    printf("%%OVMX-I-SYSDISK, mounting system disk %s\n",
-           ovmx_boot_system_disk_unit());
-    printf("%%OVMX-I-MOUNTED, system disk %s mounted\n",
-           ovmx_boot_system_disk_unit());
+    boot_oplog("%%OVMX-I-SYSDISK, mounting system disk %s",
+               ovmx_boot_system_disk_unit());
+    boot_oplog("%%OVMX-I-MOUNTED, system disk %s mounted",
+               ovmx_boot_system_disk_unit());
 
     /* vms.ko is loaded (executive_attach() above, silent); emit the taint mask
      * readout, gated on the ovmx.taintreport boot flag (vms-566). */
@@ -1000,39 +1022,27 @@ static void stage_boot_images(void)
      * optional never masks a broken volume.
      */
     static const char *const utils[] = {
-        "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "MAIL.EXE",
-        "MONITOR.EXE", "INITIALIZE.EXE", "PRODUCT.EXE", "LIBRARIAN.EXE",
-        "HELP.EXE", "SCSD.EXE",
+        /* Boot/startup needs these resident: STARTUP.COM runs INSTALL and
+         * SYSGEN, SYSTARTUP runs AUTHORIZE, the cluster daemon is SCSD, and
+         * NETACP $CREPRCs the network servers and DECNETD (a $CREPRC has no lazy
+         * staging path). Every OTHER SYS$SYSTEM utility (MAIL, MONITOR,
+         * INITIALIZE, PRODUCT, LIBRARIAN, HELP, TCC, LINK) is staged on first
+         * use by DCL (dcl_exec_utility -> dcl_resolve_activatable), not here:
+         * the staging directory is a tmpfs, i.e. RAM, and holding all of them
+         * took ~40% of a 16 MB VAX's free memory at boot (rd vms-83d/4029/97c2:
+         * ENOSPC, get_pventry panic, a console that never offers Username:). */
+        "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "SCSD.EXE",
         /* OVMX/VAX: the native image activator DCL execs for an image LINKed
          * on real OpenVMS VAX (vms-b869); absent elsewhere. */
         "NATIVEACT.EXE",
         /* The DECnet FAL network server (rd vms-d85): NETACP $CREPRCs it with
-         * the authenticated user's UIC for each inbound file access, and
-         * $CREPRC execve()s -- the same SYSEXE-utility class as above. */
+         * the authenticated user's UIC for each inbound file access. */
         "FAL.EXE",
         /* The DECnet MAIL-11 network server (rd vms-47fd): NETACP $CREPRCs it
-         * under the MAIL object account for each inbound NODE::USER mail --
-         * the same server-image class as FAL.EXE. Without it on the exec
-         * stage, a booted node refuses every inbound mail (NOIMAGE). */
+         * under the MAIL object account for each inbound NODE::USER mail. */
         "MAIL_SERVER.EXE",
-        /* NETACP's own image (rd vms-c6d1): DECNETD.EXE $CREPRCs a copy of
-         * itself as an unprivileged request-mailbox probe in the booted
-         * brokered-link proof -- the same $CREPRC/execve server-image class.
-         * (STARTNET's RUN/DETACHED reaches it through DCL's lazy ACP staging;
-         * a $CREPRC from NETACP has no such path.) */
+        /* NETACP's own image (rd vms-c6d1). */
         "DECNETD.EXE",
-        /* OVMX-native toolchain (vms-104). The MMK self-host path defines
-         * TCC :== $SYS$SYSTEM:TCC.EXE and LNK :== $SYS$SYSTEM:LINK.EXE (the
-         * descrip.mms toolchain verbs) and fork()+execve()s each (a plain
-         * static image is not in-process-eligible,
-         * so dcl_activate_image forks it) -- exactly the SYSEXE-utility class
-         * above, so they stage the SAME way: bytes off the genuine ODS-2 volume
-         * through the ACP (INV-6), rewritten to the staged copy by
-         * dcl_resolve_activatable_acp / dcl_exec_utility when /vms is absent.
-         * BEST-EFFORT like the rest: a system disk that does not ship the
-         * toolchain (a minimal, non-self-hosting install) skips them honestly.
-         * LIBRARIAN.EXE is already staged above (it is also a SYSEXE utility). */
-        "TCC.EXE", "LINK.EXE",
     };
     for (size_t i = 0; i < sizeof(utils) / sizeof(utils[0]); i++) {
         char acp_path[512], dest[512];
@@ -1207,7 +1217,7 @@ static void read_boot_parameters(void)
         const char *node = sysboot_get_string(&conversational_boot_params, "SCSNODE");
         if (node && node[0] != '\0') {
             sethostname(node, strlen(node));
-            printf("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR\n",
+            boot_oplog("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR",
                    node);
             return;
         }
@@ -1253,7 +1263,7 @@ static void read_boot_parameters(void)
 
     if (have_node) {
         sethostname(node, strlen(node));
-        printf("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR\n",
+        boot_oplog("%%OVMX-I-SCSNODE, node name %s set from SYS$SYSTEM:OVMXVMSSYS.PAR",
                node);
         return;
     }
@@ -1474,6 +1484,17 @@ static uint32_t load_cluster_sysgen_params(void)
      */
     args.clean_depart_off = clean_depart_requested() ? 0 : 1;
 
+    /*
+     * OVMX_RM_RESIDUE_FILL (rd vms-ed5, for rd vms-6ad1's RA7) -- the byte the
+     * executive writes across the op-0x14 residue span. ABSENT leaves the
+     * zero-filled 0, which IS this knob's faithful value (the vms-42de
+     * ruling's zeros), so there is no default to resolve and no negation.
+     * Only an operator who writes a pattern into OVMXVMSSYS.PAR gets one, and
+     * only RA7 ever does.
+     */
+    if (sysgen_read_param("OVMX_RM_RESIDUE_FILL", &u32) == 0 && u32 <= 0xffu)
+        args.ovmx_rm_residue_fill = (uint8_t)u32;
+
     if (sysgen_read_string("DISK_QUORUM", strval, sizeof(strval)) == 0 && strval[0] != '\0')
         sysgen_str_into(strval, args.disk_quorum, sizeof(args.disk_quorum),
                         &args.disk_quorum_len);
@@ -1542,10 +1563,16 @@ static uint32_t load_cluster_sysgen_params(void)
  * from the ioctl's status, so this cannot announce a membership the executive
  * does not hold (INV-6).
  *
- * The "waiting to form or join an OpenVMS Cluster" wording is VMS's own line
- * for a VAXCLUSTER=2 node with nowhere to join yet; the executive logs it too
- * (vms_cnxman.c), and it is repeated on the console because OPA0: is where
- * SYSINIT puts it and the executive's log is not OPA0: on either substrate.
+ * rd vms-c56: OPA0: carries only what VMS prints there. For a node that is
+ * still forming or joining, VMS's SYSINIT prints "%SYSINIT, waiting to form or
+ * join a VMScluster system" (the real VAX's own console in the demo,
+ * tests/lab/captures/vms-c56-console-chatter-20261021/C.console.txt, and every
+ * VAX lab capture), so that is the console line, word for word. Every other
+ * state has no SYSINIT console line on VMS -- a member announces itself
+ * through CNXMAN ("%CNXMAN,  now a VAXcluster member -- system X", printed by
+ * the executive) -- so OVMX's own wording for it goes to the operator log
+ * (ovmx_boot_operator_log), together with the connection manager's wording for
+ * the joining state. Nothing is dropped.
  */
 /*
  * report_cluster_group - which cluster group this node's port is in, and
@@ -1578,33 +1605,38 @@ static void report_cluster_group(void)
     if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL || !a.port.port_open)
         return;
 
-    if (a.port.cluster_group_valid) {
-        printf("%%CNXMAN, cluster group %u (CLUSTER_AUTHORIZE)\n",
-               (unsigned)a.port.cluster_group);
-        return;
-    }
-    printf("%%CNXMAN, cluster group %u is NOT CONFIGURED (no CLUSTER_AUTHORIZE"
-           " record): this system cannot reach a real cluster\n",
-           (unsigned)a.port.cluster_group);
+    /* rd vms-c56: no VMS console form, so the operator log, not OPA0:. */
+    char line[160];
+
+    if (a.port.cluster_group_valid)
+        snprintf(line, sizeof line, "%%CNXMAN, cluster group %u (CLUSTER_AUTHORIZE)",
+                 (unsigned)a.port.cluster_group);
+    else
+        snprintf(line, sizeof line,
+                 "%%CNXMAN, cluster group %u is NOT CONFIGURED (no CLUSTER_AUTHORIZE"
+                 " record): this system cannot reach a real cluster",
+                 (unsigned)a.port.cluster_group);
+    ovmx_boot_operator_log(line);
 }
 
 static void report_cluster_state(uint32_t state)
 {
     switch (state) {
     case OVMX_CLUSTER_STATE_MEMBER:
-        printf("%%CNXMAN, this system is a member of an OpenVMS Cluster\n");
+        ovmx_boot_operator_log("%CNXMAN, this system is a member of an OpenVMS Cluster");
         break;
     case OVMX_CLUSTER_STATE_JOINING:
-        printf("%%CNXMAN, waiting to form or join an OpenVMS Cluster\n");
+        ovmx_boot_operator_log("%CNXMAN, waiting to form or join an OpenVMS Cluster");
+        printf("%%SYSINIT, waiting to form or join a VMScluster system\n");
         break;
     case OVMX_CLUSTER_STATE_STANDALONE:
-        printf("%%CNXMAN, no OpenVMS Cluster is present; running standalone\n");
+        ovmx_boot_operator_log("%CNXMAN, no OpenVMS Cluster is present; running standalone");
         break;
     case OVMX_CLUSTER_STATE_PORT_UP:
         /* The port is up but the connection manager reported no state of its
          * own -- honest, and distinct from STANDALONE. */
-        printf("%%CNXMAN, the cluster port is up; this system has not joined"
-               " a cluster\n");
+        ovmx_boot_operator_log("%CNXMAN, the cluster port is up; this system has not"
+                               " joined a cluster");
         break;
     default:
         fprintf(stderr,
@@ -1866,6 +1898,55 @@ static void print_stdrv_begun(void)
 }
 
 /*
+ * boot_ensure_system_time - ask the operator for the date when the boot has
+ * no valid one, as VMS does (rd vms-b06).
+ *
+ * A VAX TOY clock holds no year. VMS keeps the year with the system image and,
+ * when the time it derives is not valid, stops and asks
+ * (docs/oracle/installation-media-vax73-alpha84.md §1):
+ *
+ *     PLEASE ENTER DATE AND TIME
+ *      (DD-MMM-YYYY  HH:MM)  07-AUG-2026 15:00
+ *
+ * The substrate says whether it trusts the time it set
+ * (ovmx_boot_system_time_valid). When it does not, the boot asks instead of
+ * running on a made-up date: the demo's Node B used to come up at 1-JAN-2010
+ * without a word. An answer that does not parse is asked again, as VMS asks
+ * again. With the console at EOF nothing can be typed; the boot says the
+ * clock is not set and goes on.
+ *
+ * Called from display_boot_banner() between the product line and the date
+ * line, so the date the banner prints is the one the operator gave.
+ */
+static void boot_ensure_system_time(void)
+{
+    char line[128];
+
+    if (!ovmx_boot_time_needs_operator(ovmx_boot_system_time_valid()))
+        return;
+
+    for (;;) {
+        struct timespec ts;
+
+        fputs(OVMX_BOOT_DATE_PROMPT, stdout);
+        fflush(stdout);
+        if (!fgets(line, (int)sizeof(line), stdin)) {
+            printf("\n%%OVMX-W-NOTIME, no date and time entered; "
+                   "the system clock is not set\n");
+            return;
+        }
+        if (!ovmx_boot_parse_datetime(line, &ts))
+            continue;
+        if (ovmx_boot_set_system_time(&ts) != 0) {
+            printf("%%OVMX-E-SETTIME, cannot set the system time: %s\n",
+                   strerror(errno));
+            return;
+        }
+        return;
+    }
+}
+
+/*
  * The OS identification banner (product name/version + copyright block).
  *
  * BANNER-FIRST (vms-1fb, docs/design-boot-faithful.md §2.5/§3.5/§4 item 3).
@@ -1902,12 +1983,15 @@ static void print_stdrv_begun(void)
 static void display_boot_banner(void)
 {
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
-    localtime_r(&ts.tv_sec, &tm);
 
     printf("\n");
     printf("    %s\n", ovmx_product_banner());
+    fflush(stdout);
+    boot_ensure_system_time();
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    localtime_r(&ts.tv_sec, &tm);
     printf("    %2d-%s-%04d %02d:%02d:%02d.%02d\n\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,

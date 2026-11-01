@@ -165,6 +165,49 @@ extern "C" {
 #define VMS_DLM_WIREOP_0F_ACK       0x15u
 
 /*
+ * THE REMASTER STEP OPCODES (rd vms-380), and the one COLLISION in this table.
+ *
+ * A real V7.3 lock-tree remaster, O = old master, N = the chosen new master,
+ * H = any other member that holds a lock in the tree (measured sequence,
+ * three controlled arms with SDA truth: RA2/RA4 in tests/lab/captures/
+ * vms-380-remaster-arms-20261011, RA5 and RA6 in vms-50d-ra{5,6}-14cells-
+ * 20261013, plus every remaster in the 122 committed cluster captures):
+ *
+ *   O -> N   0x0e, 0x0f, 0x10        each ANSWERED cat 0x82 op 0x15
+ *   O -> H   0x0f (answered), 0x11   0x11 is a NOTIFICATION (5/5 carry
+ *                                    body[4:8] = 0 and none is answered)
+ *   H -> N   0x12 x k, ROOT first then its sub-resources, each ANSWERED
+ *            cat 0x82 op 0x01 -- the new master's GRANT for that lock
+ *   O -> N   0x12 x k for the locks O itself holds (same answer)
+ *   H -> N   0x13, O -> N 0x13       end-of-records, NOTIFICATIONS (68/68
+ *                                    carry body[4:8] = 0, none answered)
+ *   N -> O   0x14, N -> H 0x14       answered cat 0x82 op 0x15
+ *
+ * These spellings are deliberately NUMERIC, like VMS_DLM_WIREOP_0F above: the
+ * ROLE of each step in the sequence is measured, the VMS name for it is not
+ * published, and inventing one ("RM_PREPARE") would put a claim in the code
+ * that no capture supports.
+ *
+ * ***** op 0x0e IS ALSO VMS_DLM_WIREOP_DLKSRCH, AND THAT IS A DEFECT. *****
+ * The DLKSRCH block at the bottom of this header says op-0x0e's "body layout
+ * is this op's to define" because op 0x0e was believed free. It is not: 60
+ * real VAX-to-VAX cat-0x02 op-0x0e frames in the committed corpus are
+ * remaster steps, each answered 82/15. An OVMX DLKSRCH frame sent to a real
+ * VAX would be read as a remaster step for whatever name its name span held.
+ * Nothing emits one today (vms_dlm_dlksrch_build has no caller outside its own
+ * tests), so this is a LATENT collision, tracked as its own item -- but no new
+ * code may route op 0x0e by opcode alone and call it either thing.
+ */
+#define VMS_DLM_WIREOP_RM_0E        0x0eu  /* O -> N, first step; = DLKSRCH!   */
+#define VMS_DLM_WIREOP_RM_0F        VMS_DLM_WIREOP_0F
+#define VMS_DLM_WIREOP_RM_10        0x10u  /* O -> N                           */
+#define VMS_DLM_WIREOP_RM_11        0x11u  /* O -> other member, notification  */
+#define VMS_DLM_WIREOP_RM_12        0x12u  /* -> N, one record per lock        */
+#define VMS_DLM_WIREOP_RM_13        0x13u  /* -> N, end of records, notification*/
+#define VMS_DLM_WIREOP_RM_14        0x14u  /* N -> O and N -> each holder      */
+#define VMS_DLM_WIREOP_RM_ACK       VMS_DLM_WIREOP_0F_ACK /* the 82/15 answer  */
+
+/*
  * Opcodes -- GROUNDED by the vms-c03 capture set (see the file doc comment's
  * supersession note). The values that used to live at 0x03 and 0x04 in this
  * table ("commit" and "completion") were phantoms; these are what a real
@@ -338,7 +381,66 @@ enum vms_lck_mode {
 struct vms_dlm_enq_request {
 	uint8_t  mode;              /* LKB requested mode (CONVERT: the NEW mode) */
 	uint32_t master_lkid;       /* body[20:24], see doc comment above     */
+	/*
+	 * THE REQUESTING PROCESS'S ID, which body[20:24] carries INSTEAD when no
+	 * master handle exists yet -- the "PID-form placeholder" the block above
+	 * already describes. It is a separate field because the two are different
+	 * executive reads: `master_lkid` is the master's handle, recorded on the
+	 * LKB by the master's own reply, and `req_pid` is the id of the process
+	 * whose $ENQ this is, read off that process's PCB at post time.
+	 *
+	 * CENSUS, every committed capture (tests/lab/captures, 21,499 cat-0x02
+	 * op-0x01 requests from real VMS senders):
+	 *   20,368  a PID-form value (high byte 0x20, low word < 0x1000)
+	 *    1,116  a master lock id (the requester already had one)
+	 *       15  zero (0.07%)
+	 * and what a real directory ANSWERS a zero: of 19,377 answers whose
+	 * echoed cell is nonzero, NONE carries body[34] = 0xfe; of the 44 whose
+	 * cell is zero, 12 do -- i.e. 0xfe answers a zero cell and nothing else,
+	 * 12 of 12. A 0xfe is the last DLM frame a real VAX V7.3 sent before each
+	 * of the two frame-level LOCKMGRERR specimens (tests/lab/captures/
+	 * vms-c55-lockmgrerr-20261014 and -20261015). Before this field existed
+	 * OVMX wrote zero on 100% of its requests (181 of 181 across nine demo
+	 * case-runs); real VMS writes zero on 0.07%. Every figure here is
+	 * re-derived from the corpus by tools/cluster/dlm_pid_cell_census.py
+	 * --selftest, which ctest runs, so they cannot quietly go stale.
+	 */
+	uint32_t req_pid;           /* body[20:24] when master_lkid is 0      */
 	uint32_t req_lkid;          /* body[24:28], see doc comment above     */
+	/*
+	 * THE PARENT SPAN, body[36:44] -- A SUB-LOCK GOES TO ITS PARENT'S MASTER
+	 * (rd vms-b67a).
+	 *
+	 * MEASURED, tools/cluster/dlm_sublock_census.py over every committed
+	 * capture (pinned by ctest cluster_host_dlm_sublock_census): of the real
+	 * cat-0x02 op-0x01 requests in the corpus, SEVEN name a sub-resource --
+	 * from two different real senders at two different modes -- and every one
+	 * of them
+	 *   W1  is addressed to the node that GRANTED ITS PARENT, never to a
+	 *       directory node, and is never answered 0xf9 ("you master it");
+	 *   W2  carries at body[36:40] the sender's OWN handle for the parent and
+	 *       at body[40:44] that parent's MASTER handle -- byte-for-byte the
+	 *       pair the parent's own grant carried at body[24:28]/body[20:24];
+	 *   W3  carries the sub-lock's requested mode at body[30], like a root.
+	 * The op-0x12 remaster RECORD says the same thing about the same two
+	 * cells (rd vms-33a: every ROOT record zero there, every SUB record
+	 * non-zero), which is why the engine's adoption record already calls the
+	 * second half `parent_master_lkid`.
+	 *
+	 * BOTH ZERO IS A ROOT REQUEST, and that is what a root MEANS here. So the
+	 * builder refuses a HALF-filled pair: a master receiving body[40:44] = 0
+	 * for a sub-lock would read it as a root and create a SECOND root for the
+	 * name -- the double-mastering rd vms-b67a measured from the other side.
+	 *
+	 * body[128:132] IS NOT WRITTEN ON A SUB REQUEST, and the reason is in the
+	 * DIRECTORY HASH section below: a real sub request does carry four bytes
+	 * there, but the value is not a function of the name this executive can
+	 * learn or compute (Rule 8), and no directory was ever asked about a
+	 * sub-resource -- so there is nothing for this node to write but zero,
+	 * recorded as a `deviation` row rather than passed off as a hash.
+	 */
+	uint32_t parent_own_lkid;   /* body[36:40], 0 on a ROOT request       */
+	uint32_t parent_master_lkid;/* body[40:44], 0 on a ROOT request       */
 	uint8_t  name_len;
 	uint8_t  name[VMS_DLM_NAME_MAX];
 
@@ -396,7 +498,18 @@ struct vms_dlm_enq_request {
  */
 enum vms_dlm_enq_outcome {
 	VMS_DLM_ENQ_GRANTED = 0,
-	VMS_DLM_ENQ_DENIED
+	VMS_DLM_ENQ_DENIED,
+	/*
+	 * THE MASTER QUEUED IT (rd vms-85f). body[34] = 0xfb -- the universal
+	 * cat-0x82 outcome byte, read BEFORE either shape discriminator below,
+	 * because a queued answer has a non-zero mode byte and an echoed name
+	 * and the grant/deny test would therefore read it as a GRANT. OVMX did
+	 * read it as a grant until this outcome existed: a lock a real master
+	 * had only QUEUED was reported to the requesting process as held, which
+	 * is a grant no master gave (INV-6). The lock is NOT held; the grant
+	 * arrives later as its own 0xfa frame.
+	 */
+	VMS_DLM_ENQ_QUEUED
 };
 
 struct vms_dlm_enq_response {
@@ -524,6 +637,38 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
  * out lock-id 0 is not a grant) and E_CLASS for a body that is not a cat-0x02
  * op-0x01/op-0x07 request.
  */
+/*
+ * vms_dlm_enq_response_build_queued - the immediate answer to a first ENQ
+ * (op 0x01) a master QUEUED (rd vms-85f).
+ *
+ * The request echoed, the category made a response, the opcode left 0x01, the
+ * QUEUED record written at body[28]/[29]/[32:36], body[52:54] zeroed -- and the
+ * two HANDLES taken from the caller because they are executive reads, not
+ * bytes carried from the frame: `master_lkid` is the handle this engine minted
+ * for the LKB it really put on the waiting queue, and `req_lkid` is the
+ * requester's own handle AS THE ENGINE RECORDED IT on that LKB.
+ *
+ * Grounded cell by cell by tools/cluster/dlm_queued_answer_census.py -- see the
+ * QUEUED RECORD section above for every figure.
+ *
+ * REFUSES, rather than asserting something this node does not hold:
+ *   E_CLASS  a body that is not a cat-0x02 op-0x01 request;
+ *   E_INVAL  a zero master_lkid or req_lkid (the fc8540ae rule: an answer that
+ *            names lock 0 names nothing);
+ *   E_INVAL  a req_lkid that is not the handle the request itself carries at
+ *            body[24:28] -- the engine recorded a different lock, so this is
+ *            not that requester's answer;
+ *   E_CLASS  a SUB-LOCK request (body[36:44] names a parent): all 93 real
+ *            answers to one rewrite body[40:44] with the master's own S0
+ *            address, a value this executive does not hold.
+ */
+vms_codec_status_t vms_dlm_enq_response_build_queued(const uint8_t *req_body,
+						     uint32_t req_len,
+						     uint32_t master_lkid,
+						     uint32_t req_lkid,
+						     uint8_t *frame, uint32_t cap,
+						     uint32_t *written);
+
 /* The immediate answer to a CONVERT a master QUEUED: the request echoed, cat
  * 0x82, body[34] = 0xfb, body[52:54] left zero (rd vms-cab). */
 vms_codec_status_t vms_dlm_convert_response_build_queued(const uint8_t *req_body,
@@ -735,9 +880,20 @@ vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,
 					    uint8_t *frame, uint32_t cap,
 					    uint32_t *written);
 
-/* Is this body a DLM NOTIFICATION, one the receiver never answers, so its
- * envelope must open no transaction (body[4:8] = 0)? Nonzero only for the named
- * op-0x04 directory-entry removal (rd vms-e09, R3). */
+/*
+ * Is this body a DLM NOTIFICATION, one the receiver never answers, so its
+ * envelope must open no transaction (body[4:8] = 0)?
+ *
+ * TWO SHAPES, each on its own evidence:
+ *   - the named op-0x04 directory-entry removal (rd vms-e09, R3);
+ *   - the op-0x03 RELEASE (rd vms-194 D1), on its opcode alone because a
+ *     release carries no name. MEASURED by tools/cluster/dlm_deq_census.py:
+ *     0 of 40,960 real releases carry a transaction, and the corpus holds
+ *     ZERO cat-0x82 op-0x03 answers (9,858 when the rule was first read; rd
+ *     vms-e80 widened the walker to the `.pcap.gz` captures and the figure
+ *     grew 4.2x without an exception). See the implementation for what OVMX's
+ *     own 15 releases cost.
+ */
 int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len);
 
 /*
@@ -934,6 +1090,7 @@ vms_codec_status_t vms_dlm_seq_put(uint8_t *body, uint32_t cap, uint16_t n);
 #define VMS_OFF_DLM_SEND_MSG        72u /* body[0:2]  LE u16, own send-msg# */
 #define VMS_OFF_DLM_ACK_MSG         74u /* body[2:4]  LE u16, ack of peer's */
 #define VMS_OFF_DLM_RESULT_STAMP   106u /* body[34]   u8, unconditional     */
+#define VMS_OFB_DLM_RESULT_STAMP VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RESULT_STAMP)
 
 #define VMS_DLM_RESULT_STAMP_REBUILD 0xf9u /* op 0x0d reply, EVERY specimen */
 /* INFERRED (spec §4(p)): op 0x01/0x07/0x15 replies use 0xfa here instead --
@@ -1166,6 +1323,54 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 #define VMS_DLM_GRANT_FLAG_VAL            0x10u  /* body[28], 38/38           */
 #define VMS_DLM_GRANT_REC_VAL             0x00fa0001u /* body[32:36], 38/38   */
 
+/*
+ * ===========================================================================
+ * THE SAME RECORD WHEN THE MASTER QUEUED THE REQUEST INSTEAD (rd vms-85f)
+ *
+ * GROUNDED by tools/cluster/dlm_queued_answer_census.py over the committed
+ * corpus: 110 real -> real cat-0x02 op-0x01 requests whose answer carries
+ * body[34] = 0xfb, paired by the transaction token at body[4:8]. A real master
+ * ANSWERS A QUEUED ENQ AT ONCE -- the request echoed, the category made a
+ * response, the opcode left 0x01 -- and the answer rewrites exactly fifteen
+ * body offsets. Measured at 2 distinct masters, from 7 requesters, in 7
+ * captures, at 2 requested modes.
+ *
+ *   body[28]    = 0x14 (9 of 17) or 0x54 (8 of 17) -- the GRANT's 0x10 with
+ *                 bit 0x04 set. Every one of the 49,556 GRANTED answers in the
+ *                 same corpus carries 0x10 and never 0x14/0x54, so bit 0x04
+ *                 distinguishes a queue from a grant. WHAT SELECTS 0x54 IS NOT
+ *                 GROUNDED and is not guessed: this codec writes 0x14, the
+ *                 commonest real form (87 of 110 overall), and the choice is a
+ *                 `deviation` row in frame-grounding.tsv. (One relation was
+ *                 OBSERVED and is recorded as observed, not used: the
+ *                 request's own body[29] separates the two over all 110 pairs
+ *                 -- 4 distinct inputs, which is not a one-variable diff.)
+ *   body[29]    = 0x00 (11 of 17) or 0x02 (6 of 17). Same treatment: 0x00.
+ *   body[32:36] = 00 00 fb 00, 17 of 17 -- the record, with the universal
+ *                 outcome byte at body[34]. (A grant's is 01 00 fa 00.)
+ *   body[30]      is NOT rewritten: the requested mode rides back unchanged,
+ *                 which is the opposite of a grant (where it is cleared).
+ *   body[24:28]   is NOT rewritten either: the requester's own handle is what
+ *                 it correlates the answer by.
+ *   body[36:44]   stays ZERO on all 17 ROOT answers -- and that is the whole
+ *                 reason this answer can be built at all. The 93 answers to a
+ *                 SUB-LOCK request (one whose body[36:44] names a parent) all
+ *                 rewrite body[40:44] with a value whose high byte is 0x87: an
+ *                 S0 address, the master's own kernel memory. THIS EXECUTIVE
+ *                 DOES NOT HOLD THAT, so a queued sub-lock request stays the
+ *                 honest counted silence (the builder refuses it) until a
+ *                 driven arm grounds the cell.
+ *   body[52:54] = 00 00. body[53] is 0 on all 17; body[52] is a small number
+ *                 0..4 that no request cell predicts, so this codec writes 0 --
+ *                 the same choice vms_dlm_convert_response_build_queued makes,
+ *                 and a `deviation` row.
+ *   body[0:4]/body[8] belong to the CM envelope and the category.
+ * ===========================================================================
+ */
+#define VMS_DLM_QUEUED_FLAG_VAL           0x14u  /* body[28]: 0x10 | 0x04     */
+#define VMS_DLM_QUEUED_FLAG2_VAL          0x00u  /* body[29]                  */
+#define VMS_DLM_QUEUED_REC_VAL            0x00fb0000u /* body[32:36], 17/17  */
+
 /* THE UNIVERSAL cat-0x82 OUTCOME BYTE at body[34] (rd vms-b5b0). The directory
  * answers' 0xf9/0xf8 are declared with the directory role above; this is the
  * third value, and the one a master's GRANT carries. */
@@ -1196,11 +1401,44 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * real: this codec refuses VMS_DLM_LKID_UNSET in either, on the parse side
  * as well as the build side. A release naming lock 0 is not a release, and
  * a peer that acted on one would be acting on nothing.
+ *
+ * body[30] IS NOT THE LOCK MODE, and this codec used to write one there.
+ * THE DRIVEN ARM (rd vms-194 (a), tests/lab/captures/
+ * vms-194-release-arm-20261021): nine arms on a real two-node V7.3 cluster,
+ * one release each, one variable per arm -- the HELD MODE over all six of
+ * NL/CR/CW/PR/PW/EX, a non-NULL co-holder, and the roles swapped so the
+ * sender and the master change places. body[30] reads 0 in EVERY ONE, so a
+ * real node releasing an EX lock does NOT put 5 there. The corpus bounds it
+ * the same way: 41,049 real releases carry only 0 or 1, and the 11 this
+ * executive sent before the fix carried the lock mode -- {1, 5}, out of the
+ * envelope the moment the lock was above CR, in the one frame family that has
+ * already bugchecked two lab VAXes (rd vms-3ac).
+ *
+ * WHAT SELECTS THE 1 THAT 8,904 OF THE CORPUS'S RELEASES CARRY IS NOT KNOWN
+ * AND IS NOT GUESSED. It is not the held mode, not a co-holder and not the
+ * role -- the arm separated all three. The remaining matrix candidates are a
+ * value block flushed on the release and sub-locks under the root, which need
+ * the arm's deferred second pass (arms V and S). Within that one capture a
+ * sub-lock release and a value block each coincided with the 1 on 73 of 73,
+ * but corpus-wide neither holds (96.9% and 89.8%), so neither is a rule.
+ *
+ * So `rel_cell` is PARSE-ONLY: it reports what an inbound release carried,
+ * and the builder writes the measured VMS_DLM_DEQ_REL_CELL at body[30] AND at
+ * body[32] -- equal, which is what 41,049 of 41,049 real releases carry.
  */
+#define VMS_DLM_DEQ_REL_CELL   0u
+/* body[30] and its mirror body[32] on a release. The second offset is the one
+ * the GRANT record calls a per-lock serial (VMS_OFF_DLM_VALBLK_SERIAL); on a
+ * release it equals body[30] in every real frame, which is why it is named
+ * here against the release rather than reused by meaning. */
+#define VMS_OFF_DLM_DEQ_REL_CELL   VMS_OFF_DLM_MODE
+#define VMS_OFF_DLM_DEQ_REL_CELL2  VMS_OFF_DLM_VALBLK_SERIAL
+#define VMS_OFB_DLM_DEQ_REL_CELL   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DEQ_REL_CELL)
+
 struct vms_dlm_deq {
 	uint32_t req_lkid;     /* body[20:24]: our own handle, post-grant   */
 	uint32_t master_lkid;  /* body[24:28]: the master's handle          */
-	uint8_t  mode;         /* body[30]:    the mode being released      */
+	uint8_t  rel_cell;     /* body[30]: PARSE-ONLY (see above)          */
 };
 
 /*
@@ -1316,6 +1554,305 @@ vms_codec_status_t vms_dlm_valblk_convert_build(const struct vms_dlm_valblk_conv
  * ------------------------------------------------------------------ */
 extern const struct vms_wire_allow_entry vms_dlm_allow_rows[];
 extern const struct vms_wire_allow_table vms_dlm_allow_table;
+
+/* ==========================================================================
+ * LOCK-TREE REMASTERING ON THE WIRE (rd vms-380, under rd vms-50d)
+ *
+ * The opcode table at the top of this header has the measured sequence. This
+ * block is the CODEC for it: the parsers for the steps a real old master and a
+ * real holder send, the two ANSWER builders, and the op-0x14 builder.
+ *
+ * THE EVIDENCE, and it is the whole corpus rather than one arm. Every capture
+ * under tests/lab/captures (157 files, `.pcap` and `.pcap.gz` alike since rd
+ * vms-e80 -- the 32 gzipped ones were invisible to the walker before, and they
+ * are four fifths of the frames) walked for cat-0x02 op-0x0e..0x14 and its
+ * answer, paired by the SCS transaction id at body[4:8]:
+ *
+ *     02/0e -> 82/15   809 pairs        02/11   386 notifications
+ *     02/0f -> 82/15 1,196 pairs        02/13 1,181 notifications
+ *     02/10 -> 82/15   799 pairs        02/12 -> 82/01  3,521 pairs
+ *     02/14 -> 82/15 1,175 pairs                (792 ROOT, 2,729 sub)
+ *
+ * ---------------------------------------------------------------------------
+ * RULE 1 -- THE 82/15 ANSWER SETS THREE BYTES, AND THE REST IS NOT A RULE.
+ *
+ * Over all 3,979 answered steps the answer carries
+ *   body[0:4]  the CM's send/ack message numbers (the envelope, not ours)
+ *   body[8]    0x82     3,979/3,979
+ *   body[9]    0x15     3,979/3,979
+ *   body[34]   0xfa     3,979/3,979 -- the universal cat-0x82 outcome byte
+ * and for op 0x0f ONLY, a NEW MASTER (the member that has an open remaster for
+ * that tree) also clears body[28:32]: 811 of 1,195 pairs clear it, the rest are
+ * the plain-member role and keep it (rd vms-cab grounds the same rule on 3,299
+ * pairs).
+ *
+ * THE REST OF THE BODY IS THE REQUEST ECHOED IN 3,531 of the 3,979, AND IT IS
+ * NOT AN INVARIANT. The first reading of this rule said "the request VERBATIM
+ * except those bytes, and NOTHING else", on the 262 pairs the walker then saw.
+ * The widened corpus has 448 answers that differ elsewhere -- 445 of them
+ * answering an op-0x14, all inside two captures -- and the differing bytes
+ * carry unrelated message text (one answer's name span reads ":39.50  ",
+ * another's "MSCP$SIGNAL"): the answering node's own send buffer. So the echo
+ * is what a reused receive buffer looks like, and a RECIPIENT may read only the
+ * cells above. This codec's builders echo, which is the commonest real form;
+ * nothing in this codec may DEPEND on an inbound 82/15 echoing anything.
+ *
+ * THAT IS A NARROWER REWRITE THAN vms_dlm_op0f_ack_build USED TO DO. It wrote
+ * the whole 32-bit grant record at body[32:36]; this builder writes only
+ * body[34]. The two are byte-identical on every real op-0x0f (70/70 carry
+ * 01 00 .. 00 there), which test_codec_remaster pins -- but they are NOT
+ * identical on an op-0x0e or op-0x10, where body[32], [33] and [35] take 21,
+ * 6 and 10 distinct values. Echoing is the rule the corpus supports; writing a
+ * constant into a cell a real answer echoes would assert a value nobody sent.
+ *
+ * ---------------------------------------------------------------------------
+ * RULE 2 -- THE 82/01 ANSWER TO AN op-0x12 IS A GRANT, AND NOTHING NEW.
+ *
+ * The new master answers each 0x12 record with the GRANT RECORD this header
+ * already grounds on 38/38 real ENQ grants (see VMS_DLM_GRANT_FLAG_VAL):
+ *   body[20:24]  the lock id THIS engine minted for the record -- read back
+ *                off the LKB it names (vms_dlm_adopt_lock_result.master_lkid)
+ *   body[24:28]  the holder's own lock id, ECHOED: the correlation
+ *   body[28]     0x10         3,509/3,521    body[29] 0  3,521/3,521
+ *   body[30:32]  0, 0         2,549/2,729 on SUB records
+ *   body[32:36]  the grant record, body[34] = 0xfa  3,521/3,521
+ *   body[36:52]  the resource's VALUE BLOCK; body[52:56] its SEQUENCE. It is
+ *                THE SPAN THE RECORD ITSELF CARRIED AT body[88:108] -- 3,336
+ *                of 3,521 real pairs, ROOT (784/792) and sub (2,552/2,729)
+ *                alike (rd vms-ed5 measured it on the 420 pairs the walker
+ *                then read; rd vms-e80 widened the corpus to the 32 `.pcap.gz`
+ *                captures and the figure became a ratio: the 185 exceptions
+ *                are in three captures, two of them arms whose own RESULTS.md
+ *                records a node wedged and removed by the survivors. Before
+ *                that, the reading called a sub answer's span "a busy
+ *                master's residual buffer" on 390 of them and wrote twenty
+ *                zeros, which was wrong in exactly those 390). Of the records
+ *                that CARRY a block, 2,702 of 2,702 carry a non-zero sequence
+ *                with it. The holder's record is where an adopted
+ *                resource's block comes from, SDA-matched on the new master
+ *                after the move (`RMLVB-0123456789` seq 1 in the controlled
+ *                arms; live F11B$ blocks at seq 0x131/0x15a in two others),
+ *                so this cell is a READ-BACK of the RSB the adoption engine
+ *                just filled -- vms_dlm_adopt.h -- and not an echo. A record
+ *                whose span is twenty zeros leaves the resource's block
+ *                ALONE and its answer carries twenty zeros, which is what 811
+ *                of the 819 such real answers carry.
+ *   body[56:132] echoed, the holder's own bytes -- which is why the block
+ *                appears TWICE in a real answer: once at body[36:56] from the
+ *                RSB and once at body[88:108] inside the echo.
+ *
+ * TWO CELLS ARE NOT NAMED, and neither is guessed:
+ *
+ *   body[30:32]  f1 01 on 698 of 792 real ROOT answers, f0 01 on 88 more, and
+ *                six oddities in the two distressed captures (f2 01 once,
+ *                05 02 four times, 04 00 once); 0, 0 on 2,549 of 2,729 SUB
+ *                answers -- the 180 exceptions all read 02 00 and all come
+ *                from one capture -- and 38 of 38 plain ENQ
+ *                grants. It is not residue -- it correlates with the frame's
+ *                role and it is near-constant across four unrelated clusters
+ *                -- but no capture and no SDA page names what it IS. So it
+ *                rides exactly like the BLKAST mode-context pair above:
+ *                `root_ctx_valid` opt-in, and a caller with no real
+ *                executive value for it gets the grant's 0, 0.
+ *   body[32:34]  0x0001 on 1,302 of 3,521 real answers -- the value the GRANT
+ *                record grounds, 38/38 -- zero on 819, and a PER-REMASTER
+ *                number on the rest: 0x0365 across every one of RMT6's answers,
+ *                0x036e across every one of RMT7's eleven minutes later,
+ *                0x04d3 across every one of RA8's (whose N->O op-0x14
+ *                carries 0x04d2 in the same cell), 0x07b8 in RA2. The same number reappears as the low half of
+ *                that node's op-0x14 body[20:24], so it is a handle in a
+ *                second, node-local index space this executive does not have.
+ *                This codec writes the grounded 0x0001.
+ *
+ * THE HELD-OUT CAPTURE IS WHAT CAUGHT body[32:34]: it reads 0x0001 in every
+ * RA5 answer, so a derivation on RA5 alone would have called it constant.
+ * Both cells are `deviation` rows in tests/cluster/conformance/
+ * frame-grounding.tsv, so the gate reports them on every fire rather than
+ * leaving them a silent difference.
+ *
+ * ---------------------------------------------------------------------------
+ * RULE 3 -- THE op-0x14 ASSERTS SIX FIELDS AND ZEROES THE REST (rd vms-42de).
+ *
+ * The vms-42de ruling (2026-10-13) split the 0x14's body into MEANINGFUL cells
+ * (emitted from executive state) and RESIDUE cells (emitted as ZEROS, never
+ * OVMX kernel addresses, never copied from another frame), and named
+ * body[20:24], [24:28], [28] and [34] as probably meaningful on the strength
+ * of RA5 and RA6 -- six frames.
+ *
+ * AT n=68 THOSE FOUR CELLS ARE RESIDUE TOO, and the evidence is the kind the
+ * ruling asked for -- the span carries, verbatim, the records of OTHER message
+ * types:
+ *   23 of 68 carry a stale GRANT RECORD there (body[28]=0x10, body[29:32]=0,
+ *      body[32]=0x01, body[34]=0xfa -- this header's own 38/38 grant shape)
+ *   26 of 68 carry a stale DIRECTORY ANSWER (body[34]=0xf9 "you master it"),
+ *      18 of them with a VAX S0 kernel address at body[29:32] (0x87xxxxxx, the
+ *      same range as that system's own RSBs and LKBs)
+ *   one carries the ASCII text `DIRECTORY   ` at body[24:40]
+ *   the rest match neither
+ * Role does not predict them: within ONE remaster window, from one new master
+ * to the one old master, both shapes appear. body[28] is 0x10 in 27 of 58
+ * frames to the old master and body[34] is 0xfa in 28 of 58 -- so RA6's
+ * "0x10/0xfa to the old master, 0x80/0xf9 to the holder" was a six-frame
+ * accident -- and RA8 (tests/lab/captures/vms-380-ra8-heldout-20261021, a
+ * PRE-REGISTERED controlled arm) settled it from three nodes at once: of its
+ * three remasters, RMT8's two op-0x14s follow RA6's rule exactly while the
+ * middle remaster's two are EXACTLY INVERTED, body[28] taking a fourth value
+ * (0xd0). (Reported to the lane conductor under the ruling's clause 4, in the
+ * direction that makes OVMX assert LESS.)
+ *
+ * What a real 0x14 does hold, over all 68:
+ *   body[8:10]     02 14            68/68
+ *   body[12:16]    0x0001 + the cluster DLM rebuild sequence (rd vms-64b),
+ *                  which the CONNECTION MANAGER stamps on every DLM message
+ *                  from club state -- so this builder leaves it zero
+ *   body[40:44]    0                68/68
+ *   body[44:48]    the tree's identity: group, access mode, name length
+ *   body[48:48+L]  the root resource name
+ *   body[128:132]  the directory hash for that name
+ * Everything else is the residue span, and this builder writes
+ * `residue_fill` (0 = the ruling's zeros) across every byte of it. The second
+ * fixed pattern RA7 (rd vms-6ad1) must fire is that field set non-zero -- so
+ * the proof arm needs no code change, and the knob is the only reason it is
+ * not a literal zero-fill.
+ * ========================================================================== */
+
+/*
+ * A remaster STEP that names a resource: op 0x0e, 0x0f, 0x10, 0x11 or 0x13.
+ * `notification` is 1 when body[4:8] is zero, i.e. the sender opened no
+ * transaction and will never be answered (every real 0x11 and 0x13: 68/68).
+ */
+struct vms_dlm_rm_step {
+	struct vms_dlm_res_ident id;  /* body[44:48+L] and body[128:132]     */
+	uint16_t dlm_seq;             /* body[14:16], the rebuild sequence    */
+	uint8_t  op;                  /* body[9], as received                 */
+	uint8_t  notification;        /* 1 => body[4:8] == 0                  */
+};
+
+/*
+ * Parse one remaster step. VMS_CODEC_E_CLASS for any other (cat, op),
+ * VMS_CODEC_E_RANGE for a name length outside 1..31. `*out` written only on
+ * VMS_CODEC_OK.
+ */
+vms_codec_status_t vms_dlm_rm_step_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_rm_step *out);
+vms_codec_status_t vms_dlm_rm_step_parse(const uint8_t *frame, uint32_t len,
+					 const struct vms_frame_info *fi,
+					 struct vms_dlm_rm_step *out);
+
+/*
+ * ONE LOCK, as the op-0x12 record that hands it over names it. Cell
+ * provenance is RA2/RA4/RA5/RA6, each SDA-named on the node the index belongs
+ * to; `holder_csid` is deliberately ABSENT because it is the connection
+ * manager's identification of the sender and never a body field.
+ *
+ * This is the wire half of struct vms_dlm_adopt_lock_rec (vms_dlm_adopt.h);
+ * the arm copies field for field and adds the sender's CSID.
+ */
+struct vms_dlm_rm_lock_rec {
+	struct vms_dlm_res_ident id;   /* THIS lock's resource identity       */
+	uint32_t holder_epid;          /* body[20:24], a PID on the holder    */
+	uint32_t holder_lkid;          /* body[24:28], the holder's own handle */
+	uint32_t parent_holder_lkid;   /* body[36:40], 0 on the ROOT record   */
+	uint32_t parent_master_lkid;   /* body[40:44], 0 on the ROOT record;
+					* a handle WE minted for the parent    */
+	uint16_t dlm_seq;              /* body[14:16]                         */
+	uint8_t  flags;                /* body[28], as received               */
+	uint8_t  granted_mode;         /* body[30], LCK$K_                    */
+	uint8_t  requested_mode;       /* body[31], LCK$K_                    */
+	uint8_t  is_root;              /* 1 iff body[36:44] is all zero       */
+	/*
+	 * THE HOLDER'S OWN COPY OF THE RESOURCE'S VALUE BLOCK (rd vms-ed5):
+	 * body[88:104] and its SEQUENCE at body[104:108]. `valblk_present` is
+	 * "that span is not twenty zeros" -- never a flag byte, because
+	 * body[28] does not predict it (0x4a and 0x4b carry a block without
+	 * bit 0x10, 0x7e has bit 0x10 and carries none). This is the ONLY
+	 * place the adopted resource's block can come from, and it is what
+	 * makes the 82/01 answer's body[36:56] a read-back of the RSB rather
+	 * than an echo (rule 2).
+	 */
+	uint8_t  valblk_present;
+	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];
+	uint32_t valblk_seq;
+};
+
+/* Parse an op-0x12 record. VMS_CODEC_E_CLASS for any other (cat, op). */
+vms_codec_status_t vms_dlm_rm_lock_rec_parse_body(const uint8_t *body,
+						  uint32_t len,
+						  struct vms_dlm_rm_lock_rec *out);
+
+/*
+ * THE 82/15 ANSWER to an op-0x0e / 0x0f / 0x10 / 0x14 (rule 1 above).
+ * `new_master` selects the op-0x0f role and is ignored for the other three:
+ * only an op-0x0f answer clears body[28:32], and a caller may only pass 1
+ * when this node really does hold an open remaster for that tree.
+ * VMS_CODEC_E_CLASS for any other frame.
+ */
+vms_codec_status_t vms_dlm_rm_ack_build(const uint8_t *req_body,
+					uint32_t req_len, int new_master,
+					uint8_t *frame, uint32_t cap,
+					uint32_t *written);
+
+/*
+ * THE IDENTITY AN 82/15 ANSWER NAMES (rd vms-ed5). The answer is the request
+ * echoed, so it still carries the tree's identity -- which is how this node
+ * recognises the answer to an op-0x14 of its own without inventing a
+ * correlation the connection manager does not surface. VMS_CODEC_E_CLASS for
+ * anything that is not a cat-0x82 op-0x15.
+ */
+vms_codec_status_t vms_dlm_rm_ack_ident(const uint8_t *ans_body, uint32_t len,
+					struct vms_dlm_res_ident *out);
+
+/*
+ * WHAT THIS ENGINE DID WITH ONE op-0x12 RECORD -- every field read back off
+ * the objects it created, which is what makes the answer an executive read.
+ * Fill it from struct vms_dlm_adopt_lock_result; `valblk`/`valblk_seq` are the
+ * RSB's own block and sequence and ride only when `valblk_present` is set (a
+ * sub-resource record has none, and sixteen zeros presented as a value block
+ * is the placeholder INV-6 forbids).
+ */
+struct vms_dlm_rm_lock_answer {
+	uint32_t master_lkid;                     /* body[20:24], OURS, != 0 */
+	uint32_t valblk_seq;                      /* body[52:56]             */
+	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];  /* body[36:52]            */
+	uint8_t  valblk_present;
+	/*
+	 * body[30:32] on a ROOT answer -- NOT NAMED, opt-in (rule 2 above).
+	 * Zero here writes the grant's 0, 0, which is what the codec does
+	 * until a controlled arm names the cell.
+	 */
+	uint8_t  root_ctx_valid;
+	uint8_t  root_ctx[2];
+};
+
+/*
+ * Build the 82/01 answer to an op-0x12 (rule 2 above). Refuses
+ * VMS_DLM_LKID_UNSET in `master_lkid` -- the fc8540ae lesson in this file's
+ * header -- and VMS_CODEC_E_CLASS for any frame that is not a cat-0x02 op-0x12.
+ */
+vms_codec_status_t
+vms_dlm_rm_lock_answer_build(const uint8_t *req_body, uint32_t req_len,
+			     const struct vms_dlm_rm_lock_answer *a,
+			     uint8_t *frame, uint32_t cap, uint32_t *written);
+
+/*
+ * THE op-0x14 THIS NODE SENDS once it has adopted a tree (rule 3 above). Six
+ * fields, all executive reads, and `residue_fill` across every other byte.
+ *
+ * `hash_known` 0 leaves body[128:132] zero rather than mint a hash: the same
+ * asymmetry the directory hash has everywhere else in this codec.
+ * body[12:16] is left zero for the connection manager's own DLM-sequence
+ * stamp (cnxman_dlm_seq_stamp), exactly like every other DLM body this codec
+ * builds.
+ */
+struct vms_dlm_rm_held {
+	struct vms_dlm_res_ident id;  /* the TREE's root identity + hash      */
+	uint8_t  hash_known;          /* 0 => body[128:132] stays zero        */
+	uint8_t  residue_fill;        /* rd vms-6ad1 (RA7) control; 0 = zeros */
+};
+
+vms_codec_status_t vms_dlm_rm_held_build(const struct vms_dlm_rm_held *h,
+					 uint8_t *frame, uint32_t cap,
+					 uint32_t *written);
 
 /* ==========================================================================
  * DLKSRCH -- distributed deadlock search (H11, rd vms-d55 / vms-ec75).

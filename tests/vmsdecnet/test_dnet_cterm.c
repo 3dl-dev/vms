@@ -1473,9 +1473,91 @@ static void test_write_render_real_vax(void)
     }
 }
 
+/*
+ * rd vms-a353: THE TERMINAL ECHOES AS THE HOST'S START READ SAYS. The $ SET
+ * HOST client is the CTERM terminal; it echoes typed input itself, per the
+ * Start Read's N (no-echo) and T (terminator-echo) flags, and the host never
+ * sends the typed text back (no host->client frame in the oracle pcap carries
+ * the typed SYSTEM or the password). A Password: read must echo NOTHING.
+ */
+/* Real VAX host, Password: Start Read (docs/oracle/vax-sethost-cterm.pcap
+ * frame 71): FLAGS 0x00b808 -- the Username: read's 0x00b008 plus N. */
+static const uint8_t k_oracle_sr_password[] = {
+    0x09, 0x00, 0x1d, 0x00, 0x02, 0x08, 0xb8, 0x00, 0x80, 0x00, 0x0c,
+    0x00, 0x14, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d,
+    0x0a, 'P', 'a', 's', 's', 'w', 'o', 'r', 'd', ':', ' '
+};
+/* OVMX's own CTERM host, Password: Start Read (two booted x86 nodes,
+ * 2026-10-21): FLAGS 0x009808. */
+static const uint8_t k_ovmx_sr_password[] = {
+    0x09, 0x00, 0x1c, 0x00, 0x02, 0x08, 0x98, 0x00, 0x0a, 0x01, 0x0b,
+    0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d,
+    'P', 'a', 's', 's', 'w', 'o', 'r', 'd', ':', ' '
+};
+/* ... and its "$ " / Username: reads: FLAGS 0x009008 (echo). */
+static const uint8_t k_ovmx_sr_echo[] = {
+    0x09, 0x00, 0x13, 0x00, 0x02, 0x08, 0x90, 0x00, 0x35, 0x01, 0x02,
+    0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, '$', ' '
+};
+
+static void test_start_read_echo(void)
+{
+    printf("[echo] rd vms-a353 the terminal echoes per the host's Start Read\n");
+    int e = -1, te = -1;
+
+    check(dnet_cterm_start_read_echo(k_oracle_write_username,
+              sizeof k_oracle_write_username, &e, &te) == DNET_CTERM_OK &&
+          e == 1 && te == 1,
+          "VAX Username: read (FLAGS 0x00b008) -> echo typed input and the terminator");
+    check(dnet_cterm_start_read_echo(k_oracle_sr_password,
+              sizeof k_oracle_sr_password, &e, &te) == DNET_CTERM_OK &&
+          e == 0 && te == 0,
+          "VAX Password: read (FLAGS 0x00b808, N set) -> echo NOTHING");
+    check(dnet_cterm_start_read_echo(k_ovmx_sr_password,
+              sizeof k_ovmx_sr_password, &e, &te) == DNET_CTERM_OK &&
+          e == 0 && te == 0,
+          "OVMX host Password: read (FLAGS 0x009808) -> echo NOTHING");
+    check(dnet_cterm_start_read_echo(k_ovmx_sr_echo,
+              sizeof k_ovmx_sr_echo, &e, &te) == DNET_CTERM_OK &&
+          e == 1 && te == 1,
+          "OVMX host \"$ \" read (FLAGS 0x009008) -> echo");
+
+    /* The classifier and the echo answer agree on what a Start Read is. */
+    {
+        enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
+        uint8_t txt[64]; size_t tl = 0;
+        check(dnet_cterm_found_terminal_rx(k_oracle_sr_password,
+                  sizeof k_oracle_sr_password, &tk, txt, sizeof txt, &tl, NULL)
+                  == DNET_CTERM_OK && tk == DNET_CTERM_TK_START_READ &&
+              tl == 12 && memcmp(txt, "\r\nPassword: ", 12) == 0,
+              "the Password: Start Read is still classified START_READ with its prompt");
+    }
+
+    /* Not a Start Read, or too short to carry FLAGS: refused, and the answer
+     * is NO echo -- a malformed frame never makes a password visible. */
+    e = te = -1;
+    check(dnet_cterm_start_read_echo(k_oracle_readattr_solicit,
+              sizeof k_oracle_readattr_solicit, &e, &te) == DNET_CTERM_EINVAL &&
+          e == 0 && te == 0,
+          "a non-Start-Read message is refused and reads as no-echo");
+    for (size_t cut = 0; cut < 8; cut++) {
+        e = te = -1;
+        int rc = dnet_cterm_start_read_echo(k_oracle_sr_password, cut, &e, &te);
+        if (rc == DNET_CTERM_OK || e != 0 || te != 0) {
+            check(0, "a Start Read truncated before its FLAGS is refused as no-echo");
+            break;
+        }
+        if (cut == 7)
+            check(1, "a Start Read truncated before its FLAGS is refused as no-echo");
+    }
+    check(dnet_cterm_start_read_echo(NULL, 0, &e, &te) == DNET_CTERM_EINVAL,
+          "a NULL buffer is refused");
+}
+
 int main(void)
 {
     printf("test_dnet_cterm: DECnet Phase IV CTERM (Command Terminal / SET HOST)\n");
+    test_start_read_echo();
     test_codec();
     test_sc_connect();
     test_foundation_oracle();

@@ -108,6 +108,9 @@ static inline void strscpy(char *dst, const char *src, size_t size)
 #define SS__SYNCH       1673         /* SS$_SYNCH */
 #define SS__CANCELGRANT 3626         /* SS$_CVTUNGRANT */
 #define SS__UNSUPPORTED 3658         /* SS$_UNSUPPORTED */
+/* SS$_IVBUFLEN -- $ENQ's answer to a resource name of 0 or more than 31
+ * bytes (rd vms-326). Mirror of src/kernel/vms_internal.h. */
+#define SS__IVBUFLEN    844
 
 /* ================================================================
  * Lock-manager sizing constants (real values, copied from
@@ -153,6 +156,10 @@ struct vms_proc {
 	exec_lock_t          lock_list_lock;
 
 	uint64_t             cur_privs;     /* SYSLCK for an LCK$M_SYSTEM $ENQ (vms-768) */
+	/* The executive's own process id. The lock manager reads it to fill
+	 * body[20:24] on a cross-node request that has no master handle yet
+	 * (rd vms-c55, dlm_proxy_fill_post). */
+	uint32_t             vms_pid;
 	/* (group << 16) | member, as the real twin spells it. The lock manager
 	 * reads the GROUP half: it qualifies every resource name a $ENQ without
 	 * LCK$M_SYSTEM creates (rd vms-b5b0). */
@@ -194,6 +201,9 @@ struct vms_lock_entry {
 	uint32_t                  req_csid;
 	uint32_t                  req_lkid;
 	uint32_t                  parent_id;
+	/* The parent's MASTER handle, for a sub-lock under a proxy parent (rd
+	 * vms-b67a) -- the second half of the pair body[36:44] carries. */
+	uint32_t                  parent_master_lkid;
 	/* PROXY LKB (FC-P4.4) -- see src/kernel/vms_internal.h for the per-field
 	 * rationale; this file mirrors field presence/type, not byte layout. */
 	uint8_t                   proxy;
@@ -208,6 +218,9 @@ struct vms_lock_entry {
 struct vms_lock_resource {
 	exec_hash_node_t          hash_node;
 	char                      name[32];
+	/* How many of those bytes are the name (rd vms-326): a VMS resource name
+	 * is counted and may contain NULs. Mirror of src/kernel/vms_internal.h. */
+	uint8_t                   name_len;
 	/* The rest of the resource's identity: UIC group (0 for a LCK$M_SYSTEM
 	 * name) and access mode -- the two values that qualify a VMS resource
 	 * name and that its directory hash is computed over (rd vms-b5b0). */
@@ -217,6 +230,9 @@ struct vms_lock_resource {
 	exec_list_head_t          waiting;
 	exec_list_head_t          proxies;        /* FC-P4.4 proxy queue */
 	uint8_t                   valblk[LCK_VALBLK_SIZE];
+	/* THE VALUE BLOCK'S SEQUENCE (rd vms-ed5). Mirror of the two substrate
+	 * twins; src/kernel/vms_internal.h carries the grounding. */
+	uint32_t                  valblk_seq;
 	exec_lock_t               lock;
 	int                       refcount;
 	struct vms_lock_resource *parent;
@@ -248,6 +264,7 @@ struct vms_lock_resource {
 	uint32_t            dir_gen;
 	uint32_t                  dir_csid;
 	uint32_t                  master_csid;
+	uint32_t                  dir_told_csid;   /* rd vms-c55 */
 };
 
 /* ================================================================
@@ -288,6 +305,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_enum_waits(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dlm_get_granted(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                      struct vms_dlm_xnode_args *req);
 /*

@@ -454,6 +454,32 @@ struct vms_dlm_scs_view {
 					 /* this master -- the state that owes a  */
 					 /* BLKAST                                */
 	/*
+	 * ...AND WHETHER THE REQUESTER WAS TOLD (rd vms-85f). A real master
+	 * answers a request it queued AT ONCE, body[34] = 0xfb, and a real VAX
+	 * that gets no answer waits in RWSCS for ever -- a process STOP cannot
+	 * even complete (measured on hardware 2026-10-21). These two split the
+	 * count above: `queued_answered` is an 0xfb that really went back,
+	 * `queued_unanswerable` is the honest silence that is left -- a queued
+	 * SUB-LOCK request, whose answer would have to carry the master's own
+	 * S0 address at body[40:44] (93 of 93 real ones do, and this executive
+	 * does not hold it). Published rather than silent, the same discipline
+	 * as `deferred_grants_owed`.
+	 */
+	uint32_t queued_answered;
+	uint32_t queued_unanswerable;
+	/*
+	 * A QUEUE THIS NODE ADVANCED FOR ANOTHER SYSTEM, from a LOCAL release
+	 * (rd vms-28bd): a $DEQ, an image rundown, a $DEQALL sweep or a quorum
+	 * regain that flipped a cross-node waiter to granted. `in` is what the
+	 * ENGINE told this arm; `stale` is the subset whose lock was no longer a
+	 * granted master-side lock for that system by the time the fork thread
+	 * read it back, so there was nothing to announce. The announcement
+	 * itself lands in `deferred_grants_sent` with the cross-node release's,
+	 * because it is the same frame.
+	 */
+	uint32_t grant_advances_in;
+	uint32_t grant_advances_stale;
+	/*
 	 * THE ARM'S HONEST DECLINE. A cat-0x02 body this arm could not read as
 	 * any shape it serves -- including an op-0x03 whose lock ids the codec
 	 * refuses. It is NO LONGER where a peer's $DEQ lands: since rd vms-c72
@@ -464,6 +490,33 @@ struct vms_dlm_scs_view {
 	uint32_t unparsed;              /* inbound cat-02 bodies this arm could  */
 					 /* not parse                             */
 	uint32_t foreign_refused;       /* RULE C: the sender is not proven ours */
+
+	/*
+	 * LOCK-TREE REMASTERING, THE NEW MASTER'S SIDE (rd vms-ed5,
+	 * vms_dlm_rm_fsm.h). Every one of these is a thing that really
+	 * happened here, and the pair that matters for the ci.6 evacuation
+	 * gate is the last two: `rm_trees_held` is how many trees a real VAX
+	 * handed this node and this node really took, and
+	 * `rm_held_unreported` is how many of those nobody was told about --
+	 * the gap, published as a number rather than left silent (the same
+	 * discipline as `deferred_grants_owed` above).
+	 */
+	uint32_t rm_opens;              /* trees a real VAX handed us, opened   */
+	uint32_t rm_opens_refused;      /* ...and the ones NOT taken: no slot,  */
+					 /* no nameable membership, or the engine */
+					 /* would not open the adoption          */
+	uint32_t rm_records_adopted;    /* op-0x12 records that became a real   */
+					 /* master-side LKB here                 */
+	uint32_t rm_records_refused;    /* ...and the ones that took the WHOLE  */
+					 /* tree back to its old master          */
+	uint32_t rm_ends_seen;          /* op-0x13 end-of-records accepted      */
+	uint32_t rm_trees_held;         /* adoptions this node really completed */
+	uint32_t rm_held_sent;          /* op-0x14s really put on the wire      */
+	uint32_t rm_held_unsent;        /* ...owed and not sent, counted        */
+	uint32_t rm_held_unreported;    /* completed adoptions nobody was told  */
+					 /* about: the engine's own completed    */
+					 /* minus reported (vms_dlm_adopt.h)     */
+	uint32_t rm_notifications;      /* op-0x11: another member took a tree  */
 
 	/*
 	 * THE CONNECTION MANAGER'S OWN COUNT OF THE SAME TRAFFIC -- a SECOND,
@@ -505,11 +558,12 @@ struct vms_dlm_scs_view {
 	uint32_t posts_lock_gone;       /* refill found no proxy: abandoned     */
 	uint32_t posts_refused;         /* the FSM refused: nothing was sent    */
 };
-/* 144 since rd vms-f87 added deferred_grants_sent: a fixed-width ABI struct
+/* 184 since rd vms-ed5 added the ten remaster counters (144 before): a
+ * fixed-width ABI struct
  * whose size is PINNED, so a field added here fails to build until both
  * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
  * and this number are updated together. */
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 144,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 200,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

@@ -63,8 +63,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "opcom_kmsg.h"
+#include "opcom_exec_line.h"   /* rd vms-c56: shared with the NetBSD /dev/klog bridge */
 
 static int failures = 0;
 
@@ -174,6 +176,62 @@ static void test_seed_from_spool(void)
     }
 }
 
+/* rd vms-f47: the boot-message spool lives in /tmp, a tmpfs on NetBSD that
+ * refuses writes below 4 MB of available memory. A spool append must say so. */
+static void test_spool_refusal(void)
+{
+    char path[] = "/tmp/opcom_spool_testXXXXXX";
+    int fd = mkstemp(path);
+    FILE *rf;
+    char got[64] = "";
+    int full_fd = open("/dev/full", 1 /* O_WRONLY */);
+
+    printf("\n--- spool append is checked (rd vms-f47) ---\n");
+    /* NEGATIVE CONTROL: /dev/full opens fine and only the write fails, which is
+     * exactly what the old open()+unchecked write() could not tell. */
+    if (full_fd < 0) {
+        printf("  FAIL: /dev/full is not available for the negative control\n");
+        failures++;
+    } else {
+        ssize_t w = write(full_fd, "x", 1);
+        if (w == 1) {
+            printf("  FAIL: NEGCTL: a write to /dev/full succeeded\n");
+            failures++;
+        } else {
+            printf("  PASS: NEGCTL: open() of the refusing spool succeeds, only write() fails\n");
+        }
+        close(full_fd);
+    }
+    if (fd < 0) {
+        printf("  FAIL: no scratch dir\n");
+        failures++;
+        return;
+    }
+    close(fd);
+    if (opcom_kmsg_spool_append(path, "%OVMX-I-KMOD, one\n") == 0 &&
+        opcom_kmsg_spool_append(path, "%OVMX-I-KMOD, two\n") == 0) {
+        rf = fopen(path, "r");
+        if (rf) {
+            size_t n = fread(got, 1, sizeof got - 1, rf);
+            got[n] = '\0';
+            fclose(rf);
+        }
+        if (strcmp(got, "%OVMX-I-KMOD, one\n%OVMX-I-KMOD, two\n") == 0)
+            printf("  PASS: an accepted append lands whole, in order\n");
+        else { printf("  FAIL: spool content '%s'\n", got); failures++; }
+    } else {
+        printf("  FAIL: append to a writable spool failed\n");
+        failures++;
+    }
+    unlink(path);
+    {
+        int rc = opcom_kmsg_spool_append("/dev/full", "%OVMX-I-KMOD, lost\n");
+        if (rc == -28 /* ENOSPC */)
+            printf("  PASS: a refused spool append is REPORTED (-ENOSPC), not dropped silently\n");
+        else { printf("  FAIL: refused append returned %d\n", rc); failures++; }
+    }
+}
+
 int main(void)
 {
     printf("=== test_opcom_kmsg: /dev/kmsg -> OPERATOR.LOG reformatter ===\n");
@@ -273,8 +331,49 @@ int main(void)
     check_drop("bare 'vms: ' with no body text is never routed", 6, "vms: ");
     check_drop("bare 'vmsfs: ' with no body text is never routed", 6, "vmsfs: ");
 
+    /* --- 6b. rd vms-c56: the EXECUTIVE's own operator lines -- the
+     *     diagnostics exec_console_printf() keeps off OPA0: at NOTICE, and the
+     *     console lines it prints at ERR -- are filed in OPERATOR.LOG as they
+     *     are: already VMS-form, the executive's, never re-styled SYSKRNL. --- */
+    check_operator_log("executive diagnostic at NOTICE -> OPERATOR.LOG verbatim",
+                        5, "%CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned",
+                        "%CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned\n");
+    check_operator_log("executive DLM diagnostic -> OPERATOR.LOG verbatim",
+                        5, "%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001",
+                        "%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001\n");
+    check_operator_log("executive console line (kmsg-escaped leading newline) -> verbatim",
+                        3, "\\x0a%CNXMAN,  now a VAXcluster member -- system OVMXA",
+                        "%CNXMAN,  now a VAXcluster member -- system OVMXA\n");
+    check_operator_log("a facility-severity-ident executive line -> verbatim",
+                        5, "%CNXMAN-I-NODEPART, OVMX_CLEAN_DEPART is set",
+                        "%CNXMAN-I-NODEPART, OVMX_CLEAN_DEPART is set\n");
+    check_drop("an executive line at kernel DEBUG is still dropped", 7,
+               "%CNXMAN, a debug trace");
+    /* ... and nothing that merely starts with '%' is mistaken for one. */
+    check_operator_log("a kernel line starting '%' but not a facility stays SYSKRNL",
+                        4, "%5 of buffers used",
+                        "%SYSKRNL-W-KERNEL, %5 of buffers used\n");
+    /* The NetBSD /dev/klog form: the message buffer's uptime stamp first. */
+    {
+        const char *ex = opcom_exec_line("[    83.2700000] %PEA0, channel verified");
+        if (ex && strcmp(ex, "%PEA0, channel verified") == 0) {
+            printf("  PASS: NetBSD-stamped executive line recognised past its stamp\n");
+        } else {
+            printf("  FAIL: NetBSD-stamped executive line not recognised (%s)\n", ex ? ex : "(null)");
+            failures++;
+        }
+        if (opcom_exec_line("[    83.2700000] mainbus0 (root)") == NULL) {
+            printf("  PASS: a stamped NetBSD kernel line is not an executive line\n");
+        } else {
+            printf("  FAIL: a stamped NetBSD kernel line was taken for an executive line\n");
+            failures++;
+        }
+    }
+
     /* --- 7. the seed path: spool -> genuine OPERATOR.LOG, lossless (vms-98c2) - */
     test_seed_from_spool();
+
+    test_spool_refusal();
 
     printf("\n=== test_opcom_kmsg: %d failed ===\n", failures);
     return failures == 0 ? 0 : 1;

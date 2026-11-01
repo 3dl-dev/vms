@@ -1,0 +1,120 @@
+
+%NIC-CFG, initramfs=nodeA/initramfs-ovmx-nodeA.cpio.gz sysdisk=nodeA/sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFD0EE0+0EF30EE0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-10 - OpenVMS-compatible
+    15-OCT-2026 21:55:56.18
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR[   64.775068] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   64.839683] %CNXMAN, waiting to form or join an OpenVMS Cluster
+
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 15-OCT-2026 21:56:27.96[   65.795463] %DLM, no lock directory vector is committed yet: resources locked now are mastered on THIS NODE ONLY until a cluster transition completes
+[   67.583263] %PEA0, channel verified
+[   67.664513] %PEA0, virtual circuit open
+[   67.930513] %CNXMAN, a connection manager was discovered on the interconnect
+[   67.962838] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   68.142703] %CNXMAN, the cluster opened the VMS$VAXcluster connection to this node
+[   69.586673] %CNXMAN, sending VAXcluster membership request to system VAXC
+[   69.598338] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   69.743273] %CNXMAN, the cluster assigned this node a cluster system id
+[   69.780663] %CNXMAN, the cluster assigned this node a cluster system id
+[   69.845023] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   71.108348] %PEA0, channel verified
+[   71.135073] %PEA0, virtual circuit open
+[   72.105988] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   72.399408] %CNXMAN, this node is a member of the cluster
+[   72.408713] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   72.415473] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 [not this implementation]
+[   72.427383] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=1 (this node)
+[   72.455653] %CNXMAN, VAXcluster state transition in progress
+[   72.459738] %CNXMAN, this node is now a VAXcluster member
+[   72.463563] %CNXMAN, lock directory weight vector, by member (compare with SDA SHOW CLUSTER on a VMS member):
+[   72.467718] %CNXMAN,   csid=00010001 slot=1 lockdirwt=0 entries=1 [not this implementation]
+[   72.472268] %CNXMAN,   csid=00010002 slot=2 lockdirwt=0 entries=1 (this node)
+[   72.476458] %CNXMAN, system 00000000000007c3 was added to the cluster
+[   72.481763] %CNXMAN, system 00000000000007c5 was added to the cluster
+[   72.579838] %DLM, refusing a lock message (cat 0x02 op 0x19) from system 0x10001: it has not proved it runs this implementation
+[   72.662668] %PEA0, peer announced departure, channel closed
+[   72.665738] %PEA0, peer departed, virtual circuit closed
+[   72.673473] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[   72.682263] %CNXMAN, lost connection to a cluster member, reconnecting
+[   72.687983] %CNXMAN, lost the VMS$VAXcluster connection to a cluster member
+[   72.693063] %CNXMAN, quorum lost, blocking activity
+[   72.696723] vms: SCS path lost to system 0:1989 -> SS$ 132
+[   93.696508] %CNXMAN, transition already in progress, deferring
+[   94.732733] %CNXMAN, transition already in progress, deferring
+[   95.751113] %CNXMAN, transition already in progress, deferring
+[   96.773593] %CNXMAN, transition already in progress, deferring
+[   97.791918] %CNXMAN, transition already in progress, deferring
+[   98.816043] %CNXMAN, transition already in progress, deferring
+[   99.842283] %CNXMAN, transition already in progress, deferring
+[  100.868033] %CNXMAN, transition already in progress, deferring
+[  101.890553] %CNXMAN, transition already in progress, deferring
+[  102.912728] %CNXMAN, transition already in progress, deferring
+[  103.941853] %CNXMAN, transition already in progress, deferring
+[  104.963929] %CNXMAN, transition already in progress, deferring
+[  105.984584] %CNXMAN, transition already in progress, deferring
+[  107.010544] %CNXMAN, transition already in progress, deferring
+[  108.034434] %CNXMAN, transition already in progress, deferring
+[  109.057944] %CNXMAN, transition already in progress, deferring
+[  110.088299] %CNXMAN, transition already in progress, deferring
+[  111.104104] %CNXMAN, transition already in progress, deferring
+[  112.131384] %CNXMAN, transition already in progress, deferring
+[  113.156054] %CNXMAN, transition already in progress, deferring
+[  114.180833] %CNXMAN, transition already in progress, deferring
+[  115.203649] %CNXMAN, transition already in progress, deferring
+[  116.225359] %CNXMAN, transition already in progress, deferring
+[  117.259154] %CNXMAN, transition already in progress, deferring
+[  118.274079] %CNXMAN, transition already in progress, deferring
+[  119.310254] %CNXMAN, transition already in progress, deferring
+[  120.323439] %CNXMAN, transition already in progress, deferring
+[  121.351829] %CNXMAN, transition already in progress, deferring
+[  122.367239] %CNXMAN, transition already in progress, deferring
+[  123.395489] %CNXMAN, transition already in progress, deferring
+[  124.424704] %CNXMAN, transition already in progress, deferring
+[  125.439414] %CNXMAN, transition already in progress, deferring
+[  126.468278] %CNXMAN, transition already in progress, deferring
+[  127.492554] %CNXMAN, transition already in progress, deferring
+[  128.514843] %CNXMAN, transition already in progress, deferring
+[  129.536174] %CNXMAN, transition already in progress, deferring
+[  130.563374] %CNXMAN, transition already in progress, deferring
+[  131.586304] %CNXMAN, transition already in progress, deferring
+[  132.615814] %CNXMAN, transition already in progress, deferring
+[  133.637659] %CNXMAN, transition already in progress, deferring
+[  134.655239] %CNXMAN, transition already in progress, deferring
+[  135.681089] %CNXMAN, transition already in progress, deferring
+[  136.708104] %CNXMAN, transition already in progress, deferring
+[  137.730144] %CNXMAN, transition already in progress, deferring
+[  138.753684] %CNXMAN, transition already in progress, deferring
+[  139.776419] %CNXMAN, transition already in progress, deferring
+[  140.799349] %CNXMAN, transition already in progress, deferring
+[  141.829099] %CNXMAN, transition already in progress, deferring
+[  142.854759] %CNXMAN, transition already in progress, deferring
+[  143.874079] %CNXMAN, transition already in progress, deferring
+[  144.901014] %CNXMAN, transition already in progress, deferring
+[  145.920624] %CNXMAN, transition already in progress, deferring
+[  146.947584] %CNXMAN, transition already in progress, deferring
+[  147.976634] %CNXMAN, transition already in progress, deferring
+[  148.992834] %CNXMAN, transition already in progress, deferring
+[  150.017869] %CNXMAN, transition already in progress, deferring
+[  151.041769] %CNXMAN, transition already in progress, deferring
+[  152.063084] %CNXMAN, transition already in progress, deferring
+[  153.087079] %CNXMAN, transition already in progress, deferring
+[  154.112064] %CNXMAN, transition already in progress, deferring
+[  155.142469] %CNXMAN, transition already in progress, deferring
+[  156.163374] %CNXMAN, transition already in progress, deferring
+[  157.183019] %CNXMAN, transition already in progress, deferring
+[  158.208109] %CNXMAN, transition already in progress, deferring

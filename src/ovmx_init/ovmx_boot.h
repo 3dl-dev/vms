@@ -111,6 +111,18 @@ int ovmx_boot_mount_kernel_filesystems(void);
  */
 void ovmx_boot_start_console_log_bridge(void);
 
+/*
+ * ovmx_boot_operator_log - file one of PID 1's own operator lines in the
+ * operator log, NOT on the console (rd vms-c56). For a boot diagnostic that
+ * has no VMS console form: a VMS console carries only what VMS prints there,
+ * and everything else the boot has to say goes where VMS puts it. `line` is a
+ * whole "%FACILITY, text" line without a trailing newline. Linux: the spool
+ * PROVISION.EXE seeds SYS$MANAGER:OPERATOR.LOG from (opcom_kmsg.c). NetBSD:
+ * OPERATOR.LOG directly, through the same writer as the /dev/klog bridge.
+ * Best-effort, never fails boot.
+ */
+void ovmx_boot_operator_log(const char *line);
+
 /* ovmx_boot_stop_console_log_bridge - before PID 1 leaves substrate root
  * (rd vms-137e). Linux: end and join the kmsg reader thread (credentials are
  * per thread there, and the executive changes identity only for a single-
@@ -156,7 +168,9 @@ void ovmx_boot_note_threads(char *buf, size_t bufsz);
  * is ovmx_boot_open_executive()).
  *
  * Linux: SYSLOG_ACTION_CONSOLE_LEVEL via syslog(2), falling back to writing
- * /proc/sys/kernel/printk's console_loglevel field. NetBSD: vms-f2e -- no
+ * /proc/sys/kernel/printk's console_loglevel field. Also turns off printk's
+ * console timestamps (/sys/module/printk/parameters/time), so the lines that
+ * do reach OPA0: carry no "[   37.218759]" uptime stamp (rd vms-c56). NetBSD: vms-f2e -- no
  * runtime-adjustable console print-level equivalent exists on that backend
  * yet; documented no-op there, never a faked success.
  */
@@ -304,6 +318,27 @@ int ovmx_boot_prepare_stage_dir(const char *dir);
  * reboot(RB_HALT | RB_POWERDOWN, NULL) (vms-f2e).
  */
 void ovmx_boot_power_off(void);
+
+/*
+ * ovmx_boot_system_time_valid - does the substrate vouch for the system time
+ * it set at boot (rd vms-b06)? 1 yes, 0 no, -1 the substrate does not say.
+ *
+ * NetBSD: kern.ovmx_toy_valid, which tools/cross-vax/netbsd-ovmx-todr.patch
+ * sets from the kernel's own TOY-clock verdict (a VAX TODR holds no year; the
+ * kernel takes it from the root filesystem and rejects a result it cannot
+ * trust). -1 on a NetBSD kernel without that patch. Linux: -1 -- its RTC
+ * carries the year and the kernel does not report a verdict.
+ */
+int ovmx_boot_system_time_valid(void);
+
+/*
+ * ovmx_boot_set_system_time - set the system clock to the time the operator
+ * entered at the boot date prompt. Returns 0 or -1 with errno. Both backends:
+ * clock_settime(CLOCK_REALTIME); on NetBSD/vax the kernel also writes the
+ * TODR (resettodr), as VMS does when the time is set.
+ */
+struct timespec;
+int ovmx_boot_set_system_time(const struct timespec *ts);
 
 #ifdef __cplusplus
 }

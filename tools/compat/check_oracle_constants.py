@@ -47,7 +47,7 @@ def _load_dir(root, rel):
             m = re.match(r"\$EQU\s+(\S+)\s+(-?(?:0x)?[0-9A-Fa-f]+)\s*$", ln)
             if m and _value_kind(m.group(1)):
                 try:
-                    d.setdefault(m.group(1), int(m.group(2), 0) if m.group(2).lower().startswith(("0x", "-0x")) else int(m.group(2), 10))
+                    d.setdefault(m.group(1).upper(), int(m.group(2), 0) if m.group(2).lower().startswith(("0x", "-0x")) else int(m.group(2), 10))
                 except ValueError:
                     pass
     return d
@@ -67,8 +67,8 @@ def tree(root):
         for f in sorted(glob.glob(os.path.join(root, hd, "*.h"))):
             for ln in open(f, errors="ignore"):
                 m = re.match(r"\s*#\s*define\s+([A-Za-z0-9_]+\$[A-Za-z0-9_$]*)\s+\(?\s*(0[xX][0-9a-fA-F]+|\d+)[uUlL]*\s*\)?\s*(?:/\*.*)?$", ln)
-                if m and m.group(1) not in d:
-                    d[m.group(1)] = int(m.group(2), 0)
+                if m and m.group(1).upper() not in d:
+                    d[m.group(1).upper()] = int(m.group(2), 0)
     return d
 
 

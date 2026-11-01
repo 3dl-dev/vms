@@ -1,0 +1,74 @@
+VAX1 (OpenVMS VAX V7.3), vaxlab-0, 2026-10-21, console OPA0: logged in as SYSTEM.
+Read through ovmx-lab-console; carriage returns stripped by the reader. Verbatim.
+
+1. The RTL help on the node (HELP/NOPROMPT/OUTPUT=... then TYPE):
+
+    LIB$GET_LUN
+
+         The Get Logical Unit Number routine allocates one logical unit
+         number from a processwide pool. If a unit is available, its
+         number is returned to the caller. Otherwise, an error is returned
+         as the function value.
+
+         Format
+
+           LIB$GET_LUN  logical-unit-number
+
+      Returns
+
+           OpenVMS usage:cond_value
+           type:         longword (unsigned)
+           access:       write only
+           mechanism:    by value
+
+      Argument
+
+        logical-unit-number
+
+           OpenVMS usage:longword_signed
+           type:         longword integer (signed)
+           access:       write only
+           mechanism:    by reference
+
+           Allocated logical unit number or -1 if none was available. The
+           logical-unit-number argument is the address of a longword into
+           which LIB$GET_LUN returns the value of the allocated logical
+           unit. LIB$GET_LUN can allocate logical unit numbers 100 through
+           119 on VAX, and 100 through 299 on Alpha.
+
+2. LUNTST.MAR (this directory; our own MACRO-32, typed in with CREATE) calls
+   LIB$GET_LUN until it fails, then LIB$FREE_LUN on 100, 100 again, 5 and 150,
+   then LIB$GET_LUN once more. Each line is "unit status" (!SL !XL):
+
+$ MACRO/OBJECT=SYS$LOGIN:LUNTST SYS$LOGIN:LUNTST
+$ LINK/EXECUTABLE=SYS$LOGIN:LUNTST SYS$LOGIN:LUNTST
+$ RUN SYS$LOGIN:LUNTST
+119 00000001
+118 00000001
+117 00000001
+116 00000001
+115 00000001
+114 00000001
+113 00000001
+112 00000001
+111 00000001
+110 00000001
+109 00000001
+108 00000001
+107 00000001
+106 00000001
+105 00000001
+104 00000001
+103 00000001
+102 00000001
+101 00000001
+100 00000001
+-1 001582B4
+100 00000001
+100 001582BC
+5 001582C4
+150 001582C4
+100 00000001
+$
+
+Lab left as found: DELETE SYS$LOGIN:LUNTST.*;*,LUNHELP*.TXT;* then LOGOUT.

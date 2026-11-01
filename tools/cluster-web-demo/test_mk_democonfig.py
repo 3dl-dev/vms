@@ -94,14 +94,16 @@ class TestSysgenStore(unittest.TestCase):
         self.assertEqual(p["LOCKDIRWT"]["current"], 0)
         self.assertEqual(p["QDSKVOTES"]["current"], 0)
 
-    def test_seed_actually_omits_them(self):
-        """Guard the premise: the shipped seed IS incomplete (E61), so the
-        completeness this tool adds is real, not a straw man."""
+    def test_seed_carries_them(self):
+        """The shipped seed now agrees with the SYSGEN factory table (#1841,
+        vms-c2b gate: factory table == shipped seed), so it carries all six
+        parameters it used to omit (E61). Guard that, so a regression to an
+        incomplete seed is caught here rather than at boot."""
         seed = open(_SEED, "rb").read()
         for name in ("LOCKDIRWT", "QDSKVOTES", "TIMVCFAIL", "NISCS_MAX_PKTSZ",
                      "MSCP_LOAD", "MSCP_SERVE_ALL"):
-            self.assertIsNone(_find_record_base(seed, name),
-                              "seed unexpectedly already has %s" % name)
+            self.assertIsNotNone(_find_record_base(seed, name),
+                                 "seed is missing %s" % name)
 
     def test_rejects_bad_scsnode(self):
         with self.assertRaises(ValueError):
@@ -339,5 +341,139 @@ class TestRosterUniqueness(unittest.TestCase):
                 "in the roster, or quorum cannot be met even at CN=3 (rd vms-1a1)")
 
 
+class TestSystemDiskLabelsAreUniquePerNode(unittest.TestCase):
+    """rd vms-3ea: no two cluster members may master their system disks with
+    one ODS-2 volume label.
+
+    WHY THIS IS A TEST AND NOT A COMMENT. The label is the Files-11 lock
+    namespace: acp_vol_resnam_kind() (src/kernel-core/vmsfs_acp.c) spells a
+    volume's locks "F11B$<kind><label>", so two members whose DIFFERENT local
+    system disks carry one label contend on ONE clusterwide resource for
+    unrelated local I/O -- and vms_lock_acp_vol_ex() takes that resource EX
+    with LCK$M_SYNC and no LCK$M_NOQUEUE, an unbounded wait. It was observed
+    on the wire in visitor-gate run 38760989407: BOTH OVMX members put
+    "F11B$sOVMXSYS" on the LAN, for two disks neither of which is served to
+    the other. VMS does not permit two cluster-visible volumes with one label.
+
+    The check is on the BUILD CONFIGURATION, which is where the defect lives:
+    every image was mastered with the hardcoded default.
+    """
+
+    REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    def _read(self, rel):
+        with open(os.path.join(self.REPO, rel), "r", encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_vax_mastering_label_is_a_knob_not_a_literal(self):
+        """run-boot.sh must master from $SYSVOL_LABEL, so a per-node label can
+        be given at build time. A re-hardcoded literal reddens this."""
+        s = self._read("tests/lab-vax/run-boot.sh")
+        self.assertIn('SYSVOL_LABEL="${SYSVOL_LABEL:-OVMXSYS}"', s,
+                      "run-boot.sh no longer declares the SYSVOL_LABEL knob")
+        self.assertNotIn("ods2 master /out/'\"$(basename \"${SYSVOL_IMG}\")\"' OVMXSYS", s,
+                         "the system volume is mastered with a hardcoded label again")
+        self.assertEqual(
+            s.count("' '\"${SYSVOL_LABEL}\"' /tmp/stage 64"), 3,
+            "all three vmsfs_master sites must take the label from the knob")
+
+    def test_node_b_is_built_with_its_own_label(self):
+        """cluster-demo-nodeB.yml must give the clustered Node B a label of its
+        own, derived from its SCSNODE -- the form the one real system on this
+        wire uses (SCSNODE VAXC labels its system disk VAXCSYS)."""
+        s = self._read(".github/workflows/cluster-demo-nodeB.yml")
+        self.assertIn('export SYSVOL_LABEL="${NODE_B_SCSNODE}SYS"', s,
+                      "Node B is no longer built with a per-node system-disk label")
+
+    def test_the_label_is_PLUMBED_into_the_acceptance_container(self):
+        """MEASURED GAP, not a hypothetical (vms run 38811663322). Declaring
+        the knob and reading it is not enough: the battery runs INSIDE the lab
+        container, so unless run_acceptance_session passes SYSVOL_LABEL through
+        `docker run -e`, it silently defaults and the battery asserts OVMXSYS
+        against a disk mastered OVMXBSYS. That is exactly what happened, and
+        the source-text assertions below did NOT catch it -- so the plumbing
+        gets its own assertion."""
+        s = self._read("tests/lab-vax/run-boot.sh")
+        self.assertIn('-e SYSVOL_LABEL="${SYSVOL_LABEL}"', s,
+                      "run_acceptance_session no longer passes the volume "
+                      "label into the container the battery runs in")
+
+    def test_the_acceptance_battery_reads_the_same_knob(self):
+        """A battery that asserts a hardcoded label would go red on a per-node
+        build, and the temptation would be to weaken the battery. It reads the
+        knob instead, so the two cannot drift apart."""
+        s = self._read("tests/lab-vax/test_dcl_acceptance_vax.sh")
+        self.assertIn('export VOLUME_LABEL="${SYSVOL_LABEL:-OVMXSYS}"', s,
+                      "the VAX acceptance battery hardcodes a volume label again")
+
+    def test_node_b_label_differs_from_the_default_node_a_is_built_with(self):
+        """The whole point: Node A (Dockerfile.bootable / the x86 image) is
+        mastered with the default, so Node B's must not resolve to it."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "mk_democonfig", os.path.join(self.REPO, "tools/cluster-web-demo/mk_democonfig.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        node_b = mod.DEMO_NODE_B["name"]
+        self.assertTrue(node_b, "DEMO_NODE_B has no SCSNODE")
+        self.assertNotEqual(node_b + "SYS", "OVMXSYS",
+                            "Node B's derived label collides with the default "
+                            "every other OVMX image is mastered with")
+        self.assertLessEqual(len(node_b + "SYS"), 12,
+                             "an ODS-2 volume label is 12 characters")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDecnetRoster(unittest.TestCase):
+    """rd vms-5843: the roster says which nodes are DECnet nodes and what NCP
+    must tell each one; NCP.EXE writes the databases from these commands."""
+
+    def test_nodes_have_distinct_area1_addresses(self):
+        addrs = [n["decnet"] for n in M.DEMO_ROSTER]
+        self.assertEqual(len(set(addrs)), len(addrs))
+        for addr in addrs:
+            area, node = (int(x) for x in addr.split("."))
+            self.assertEqual(area, 1)
+            self.assertTrue(1 <= node <= 1023)
+
+    def test_every_decnet_address_is_its_scssystemid(self):
+        # rd vms-05d: real VMS STARTNET refuses a cluster member whose DECnet
+        # address != SCSSYSTEMID (%DECdtm-W-ADDRNEQ / "DECnet not started."),
+        # so every roster address is derived, not chosen.
+        for n in M.DEMO_ROSTER:
+            area, node = (int(x) for x in n["decnet"].split("."))
+            self.assertEqual((area << 10) | node, n["id"], n["name"])
+            self.assertTrue(M.decnet_address_matches_id(n), n["name"])
+        self.assertEqual([n["decnet"] for n in (M.DEMO_NODE_A, M.DEMO_NODE_B, M.DEMO_NODE_C)],
+                         ["1.963", "1.964", "1.965"])
+
+    def test_address_check_rejects_a_mismatch(self):
+        self.assertFalse(M.decnet_address_matches_id(dict(M.DEMO_NODE_C, decnet="1.3")))
+        self.assertTrue(M.decnet_address_matches_id(dict(M.DEMO_NODE_C, decnet=None)))
+
+    def test_each_node_defines_every_other_node(self):
+        for me in M.DEMO_ROSTER:
+            peers = [n for n in M.DEMO_ROSTER if n is not me]
+            cmds = M.decnet_ncp_commands(me["name"])
+            self.assertEqual(cmds[:3], ["SET EXECUTOR ADDRESS %s" % me["decnet"],
+                                        "SET EXECUTOR NAME %s" % me["name"],
+                                        "SET EXECUTOR STATE ON"])
+            self.assertEqual(cmds[3:], ["DEFINE NODE %s NAME %s" % (p["decnet"], p["name"])
+                                        for p in peers])
+
+    def test_ovmx_nodes_define_vaxc(self):
+        for me in (M.DEMO_NODE_A, M.DEMO_NODE_B):
+            self.assertIn("DEFINE NODE 1.965 NAME VAXC", M.decnet_ncp_commands(me["name"]))
+
+    def test_node_without_decnet_refused(self):
+        roster = [dict(M.DEMO_NODE_A), dict(M.DEMO_NODE_C, decnet=None)]
+        with self.assertRaises(ValueError):
+            M.decnet_ncp_commands("VAXC", roster)
+        self.assertEqual(M.decnet_ncp_commands("OVMXA", roster)[3:], [])
+
+    def test_unknown_node_refused(self):
+        with self.assertRaises(ValueError):
+            M.decnet_ncp_commands("NOSUCH")

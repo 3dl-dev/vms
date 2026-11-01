@@ -69,6 +69,10 @@ struct fake_lkb {
 	uint32_t master_csid;   /* 0 == unmastered, which is what makes a post
 				 * a DIRECTORY lookup (dlm_proxy_fill_post)   */
 	uint32_t master_lkid;
+	/* The requesting process's id, which body[20:24] carries until the
+	 * master names a handle (rd vms-c55). Real on the LKB: dlm_proxy_fill_post
+	 * reads it off the owning PCB. */
+	uint32_t req_pid;
 	uint32_t lkmode;
 	uint32_t flags;
 	char     resnam[32];
@@ -110,9 +114,15 @@ struct fake_engine {
 	uint32_t refills;
 	uint32_t record_master_calls;
 	char     record_master_name[40];
+	/* The name's COUNT the FSM handed the engine (rd vms-326). Recorded
+	 * because the engine keys the resource on it: a requester that handed
+	 * over a C-string truncation of a binary name would have the engine
+	 * record mastery of a resource nobody locked. */
+	uint32_t record_master_len;
 	vms_csid_t record_master_csid;
 	uint32_t assume_calls;
 	char     assume_name[40];
+	uint32_t assume_len;
 	uint32_t grant_calls;
 	struct vms_dlm_proxy_grant last_grant;
 	int      grant_refuse;
@@ -121,10 +131,17 @@ struct fake_engine {
 	int      blkast_refuse;
 	uint32_t learn_calls;
 	char     learn_name[40];
+	uint32_t learn_len;
 	uint32_t learn_hash;
 	uint32_t fail_calls;
 	uint32_t fail_lkid;
 	enum dlm_req_fail_reason fail_why;
+
+	/* Is a cluster state transition running? The CLUB's own flag, as the
+	 * arm reads it (rd vms-c55). The test moves it exactly as a barrier
+	 * does: set at the open, cleared at the last release. */
+	int      transition_active;
+	uint32_t transition_calls;
 
 	uint32_t now_ms;
 	uint32_t logs;
@@ -175,9 +192,15 @@ static int fe_refill(void *ctx, uint32_t req_lkid, uint32_t op,
 	out->req_lkid    = e->lkb.lkid;
 	out->master_csid = e->lkb.master_csid;
 	out->master_lkid = e->lkb.master_lkid;
+	out->req_pid     = e->lkb.req_pid;
 	out->lkmode      = e->lkb.lkmode;
 	out->flags       = e->lkb.flags;
+	/* The name AND ITS COUNT, as the real engine's dlm_proxy_fill_post
+	 * reads them off the RSB (rd vms-326). The fake LKB's name is an ASCII
+	 * C string, so its count is its strlen -- and the FSM must take the
+	 * count from here, never re-measure the bytes. */
 	memcpy(out->resnam, e->lkb.resnam, sizeof(out->resnam));
+	out->resnam_len = (uint8_t)strlen(e->lkb.resnam);
 	memcpy(out->valblk, e->lkb.valblk, VMS_DLM_VALBLK_LEN);
 	out->dir_hash       = e->lkb.dir_hash;
 	out->dir_hash_known = e->lkb.hash_known;
@@ -203,7 +226,16 @@ static uint32_t fe_dir_generation(void *ctx)
 	return ((struct fake_engine *)ctx)->dir_generation;
 }
 
-static int fe_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int fe_transition_active(void *ctx)
+{
+	struct fake_engine *e = ctx;
+
+	e->transition_calls++;
+	return e->transition_active;
+}
+
+static int fe_record_master(void *ctx, const char *resnam,
+			    uint32_t resnam_len, uint32_t req_lkid,
 			    vms_csid_t master_csid)
 {
 	struct fake_engine *e = ctx;
@@ -213,13 +245,15 @@ static int fe_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
 	e->record_master_calls++;
 	snprintf(e->record_master_name, sizeof(e->record_master_name), "%s",
 		 resnam);
+	e->record_master_len = resnam_len;
 	e->record_master_csid = master_csid;
 	/* what vms_lock_dlm_record_master really does */
 	e->lkb.master_csid = master_csid;
 	return 0;
 }
 
-static int fe_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int fe_assume(void *ctx, const char *resnam, uint32_t resnam_len,
+		     uint32_t req_lkid)
 {
 	struct fake_engine *e = ctx;
 
@@ -227,6 +261,7 @@ static int fe_assume(void *ctx, const char *resnam, uint32_t req_lkid)
 		return -1;
 	e->assume_calls++;
 	snprintf(e->assume_name, sizeof(e->assume_name), "%s", resnam);
+	e->assume_len = resnam_len;
 	e->lkb.master_csid = CSID_SELF;   /* promoted: we master it now */
 	return 0;
 }
@@ -264,13 +299,14 @@ static int fe_blkast(void *ctx, uint32_t req_lkid)
 	return 0;
 }
 
-static int fe_learn(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
-		    uint32_t hash)
+static int fe_learn(void *ctx, const char *resnam, uint32_t resnam_len,
+		    uint16_t group, uint8_t mode, uint32_t hash)
 {
 	struct fake_engine *e = ctx;
 
 	e->learn_calls++;
 	snprintf(e->learn_name, sizeof(e->learn_name), "%s", resnam);
+	e->learn_len = resnam_len;
 	e->learn_hash = hash;
 	e->learn_group = group;
 	e->learn_mode = mode;
@@ -305,6 +341,7 @@ static void fe_reset(const char *resnam, uint32_t lkmode, uint32_t hash,
 	memset(&g, 0, sizeof(g));
 	g.lkb.exists = 1;
 	g.lkb.lkid = 0x2001u;
+	g.lkb.req_pid = 0x10000021u;   /* the owning process, as a PCB holds it */
 	g.lkb.lkmode = lkmode;
 	g.lkb.master_csid = master_csid;
 	g.lkb.dir_hash = hash;
@@ -319,6 +356,7 @@ static void fe_reset(const char *resnam, uint32_t lkmode, uint32_t hash,
 	g_ops.refill_post = fe_refill;
 	g_ops.dir_resolve = fe_dir_resolve;
 	g_ops.dir_generation = fe_dir_generation;
+	g_ops.transition_active = fe_transition_active;
 	g_ops.record_master = fe_record_master;
 	g_ops.assume_mastery = fe_assume;
 	g_ops.grant_recv = fe_grant;
@@ -505,9 +543,26 @@ static void check_frame_traces_to_lkb(const struct sent_frame *s,
 	snprintf(what, sizeof(what), "%s: body[30] == the LKB's mode", label);
 	ct_check_eq_u32(req.mode, l->lkmode, what);
 
-	snprintf(what, sizeof(what),
-		 "%s: body[24:28] == the LKB's master handle", label);
-	ct_check_eq_u32(req.master_lkid, l->master_lkid, what);
+	/*
+	 * body[20:24] is ONE cell with two sources on the LKB, and which one it
+	 * carries is itself part of the function from the lock database to the
+	 * frame (rd vms-c55): the MASTER's handle once the master has named one,
+	 * and the REQUESTING PROCESS's id until then. It is never zero -- a real
+	 * VMS directory answers a zero cell body[34] = 0xfe (12 of 12 in the
+	 * corpus) and that answer preceded every captured LOCKMGRERR.
+	 */
+	/* Stated WITHOUT the scenario prefix every other check here carries, so
+	 * the text is a literal in this file: the negative-control manifest
+	 * (host_defects.sh dlm-request-pid-cell-zeroed) names the assertions its
+	 * mutation must redden, and its self-test checks each one exists in the
+	 * suite's source. Several scenarios reddening the same line is a set of
+	 * one, which is what run_host_negctl.sh compares. */
+	ct_check_eq_u32(req.master_lkid,
+			l->master_lkid != 0u ? l->master_lkid : l->req_pid,
+			"body[20:24] == the LKB's master handle, or its "
+			"requesting PID while there is none");
+	ct_check(req.master_lkid != 0u,
+		 "...and body[20:24] is never zero");
 
 	snprintf(what, sizeof(what), "%s: body[47..] == the RSB's name", label);
 	ct_check(req.name_len == (uint8_t)namelen &&
@@ -575,10 +630,21 @@ static void check_deq_traces_to_lkb(const struct sent_frame *s,
 		 "own grant recorded -- never a placeholder)", label);
 	ct_check_eq_u32(d.master_lkid, l->master_lkid, what);
 
+	/* body[30] IS NOT THE MODE (rd vms-194's driven arm: nine real
+	 * releases, every held mode NL..EX, all 0). This assertion used to
+	 * read `d.rel_cell == l->lkmode`, which pinned the defect; it now
+	 * demands the measured 0 AND -- when the LKB is above NL -- that the
+	 * mode is demonstrably NOT on the wire. */
 	snprintf(what, sizeof(what),
-		 "%s: body[30] == the mode the LKB holds as it is released",
+		 "%s: body[30] == 0, the measured cell, NOT the LKB's mode",
 		 label);
-	ct_check_eq_u32(d.mode, l->lkmode, what);
+	ct_check_eq_u32(d.rel_cell, 0u, what);
+	if (l->lkmode != 0u) {
+		snprintf(what, sizeof(what),
+			 "%s: ...and the LKB's mode %u is nowhere in it",
+			 label, (unsigned)l->lkmode);
+		ct_check(d.rel_cell != l->lkmode, what);
+	}
 
 	snprintf(what, sizeof(what),
 		 "%s: the resource NAME is NOT on the wire -- a DEQ names its "
@@ -620,6 +686,9 @@ static void compose_request_body(uint8_t *body, uint32_t req_lkid, uint8_t mode)
 	rq.name_len = 8u;
 	memcpy(rq.name, "OVMXREQ1", 8);
 	rq.res_ident_valid = 1u;
+	/* a real member's request carries its requesting PID at body[20:24]
+	 * (rd vms-c55 census: 20,368 of 21,499 real op-0x01 requests) */
+	rq.req_pid = 0x20200204u;
 	memset(reqframe, 0, sizeof(reqframe));
 	(void)vms_dlm_enq_request_build(&rq, VMS_DLM_WIREOP_ENQ, reqframe,
 					(uint32_t)sizeof(reqframe), &written);
@@ -876,7 +945,6 @@ static void test_granted_lock_is_usable_and_releasable(void)
 	memset(&d, 0, sizeof(d));
 	d.req_lkid = g.lkb.lkid;
 	d.master_lkid = 0x0C0FFEE0u;
-	d.mode = VMS_LCK_NL;
 	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &len) ==
 		 VMS_CODEC_OK,
 		 "the codec builds a grounded op-0x03 for real handles");
@@ -1846,6 +1914,9 @@ static void test_observe_learns_the_hash(void)
 	req.res_ident_valid = 1u;
 	req.name_len = (uint8_t)strlen("F11B$aSYSDSK1");
 	memcpy(req.name, "F11B$aSYSDSK1", req.name_len);
+	/* a real member's request carries its requesting PID at body[20:24]
+	 * (rd vms-c55 census: 20,368 of 21,499 real op-0x01 requests) */
+	req.req_pid = 0x20200204u;
 
 	memset(&link, 0, sizeof(link));
 	memset(frame, 0, sizeof(frame));
@@ -2224,11 +2295,205 @@ static void test_relq_survives_the_lkb(void)
 	ct_check(parse_deq(&g.sent[n], &d) == 0, "  it parses through the codec");
 	ct_check_eq_u32(d.master_lkid, 0x0DEFACE0u,
 			"  naming the master's handle the LKB held at release");
-	ct_check_eq_u32(d.mode, VMS_LCK_CR,
-			"  and the mode it was really released at");
+	ct_check_eq_u32(d.rel_cell, 0u,
+			"  carrying the measured body[30], not the CR the LKB "
+			"was really released at (rd vms-194)");
 	ct_check_eq_u32(g_fsm.releases_sent, 1u, "counted as sent");
 	ct_check_eq_u32(g_fsm.releases_no_wire_op, 0u, "and not as a gap");
 	check_only_grounded_opcodes_were_sent("staged release");
+}
+
+/* ==========================================================================
+ * THE TRANSITION HOLD (rd vms-c55)
+ *
+ * MEASURED, and this is what these three tests encode. Over all 122 pcaps in
+ * tests/lab/captures, real DEC-OUI senders only, the DLM traffic inside a
+ * cluster state transition is the op-0x0d rebuild record and its cat-0x82
+ * echo and essentially nothing else; every non-0x0d cat-0x02 frame a real node
+ * put inside one flew at barrier step 10, 11 or 12 OF 12, and none at steps
+ * 1-5. OVMX sent a DIRECTORY REMOVAL at step 1 in 3 of 3 captures in which a
+ * real OpenVMS VAX V7.3 then bugchecked LOCKMGRERR, and in 0 of 11 clean
+ * case-runs that carried 26 OVMX-originated cat-0x02 requests -- all of them
+ * outside a transition.
+ * ========================================================================== */
+
+static void dir_remove_post(struct vms_dlm_proxy_post *p, vms_csid_t dst)
+{
+	memset(p, 0, sizeof(*p));
+	p->op = VMS_DLM_POST_DIR_REMOVE;
+	p->dst_csid = dst;
+	p->req_csid = CSID_SELF;
+	p->res_group = 0u;
+	p->res_acmode = 0u;
+	p->dir_hash = g.lkb.dir_hash;
+	p->dir_hash_known = g.lkb.hash_known;
+	memcpy(p->resnam, g.lkb.resnam, sizeof(p->resnam));
+	p->resnam_len = (uint8_t)strlen(g.lkb.resnam);
+}
+
+/*
+ * A request posted DURING a transition waits for it, and the wait costs it no
+ * rung of the retransmit ladder -- a hold is not a failed attempt.
+ */
+static void test_transition_holds_the_request(void)
+{
+	struct vms_dlm_proxy_post p;
+	struct vms_dlm_enq_request req;
+	uint8_t opcode = 0;
+	uint32_t beats;
+
+	printf("-- a lock request posted during a cluster state transition is "
+	       "HELD, not sent\n");
+	fe_reset("RMS$4F.1.0", VMS_LCK_PR, 0x650412f2u, 1, CSID_MASTER);
+	g.lkb.master_lkid = 0x0A0A0A0Au;
+	g.transition_active = 1;       /* the barrier opened */
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "the post is ACCEPTED: the request is outstanding");
+	ct_check_eq_u32(g.n_sent, 0u,
+			"*** nothing went on the wire during the transition "
+			"***");
+	ct_check_eq_u32(g_fsm.posts_held_xition, 1u,
+			"the hold was counted where it was decided");
+	ct_check_eq_u32(g_fsm.posts_deferred, 0u,
+			"and NOT as a send refusal -- nothing refused it");
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
+			"the request block survives, the way a deferral's does");
+
+	/* Beat past the whole ladder: a hold must not spend it. */
+	for (beats = 0u; beats < (uint32_t)DLM_REQ_MAX_TRIES * 3u; beats++) {
+		g.now_ms += DLM_REQ_RETRY_MS + 1u;
+		(void)dlm_req_fsm_tick(&g_fsm);
+	}
+	ct_check_eq_u32(g.n_sent, 0u, "still nothing on the wire");
+	ct_check_eq_u32(g.fail_calls, 0u,
+			"*** and the $ENQW was NOT failed: a transition makes "
+			"lock activity wait, it does not fail it ***");
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
+			"  the request is still outstanding after 15 beats");
+	/*
+	 * THE HOLD SAYS SO, ONCE. A node stalled on a held lock request must be
+	 * readable from its console -- the whole reason #1714's refusal
+	 * diagnostic exists -- and a line per held request inside one rebuild
+	 * would be a storm.
+	 */
+	ct_check_eq_u32(g.logs, 1u,
+			"*** the hold named itself on the console exactly ONCE, "
+			"across sixteen held transmissions ***");
+
+	/* The executive's truth moves while the request waits. */
+	g.lkb.master_lkid = 0x0B0B0B0Bu;
+
+	g.transition_active = 0;       /* the coordinator released step 12 */
+	ct_check_eq_u32(dlm_req_fsm_transition_ended(&g_fsm), 1u,
+			"*** the end of the transition releases the held "
+			"request ***");
+	ct_check_eq_u32(g.n_sent, 1u, "one frame, now, went out");
+	ct_check(parse_request(&g.sent[0], &opcode, &req) == 0 &&
+		 opcode == VMS_DLM_WIREOP_ENQ, "it parses as a grounded op 0x01");
+	ct_check_eq_u32(req.master_lkid, 0x0B0B0B0Bu,
+			"*** built from a FRESH read: the handle the LKB holds "
+			"NOW, not the one it held when the post arrived ***");
+	ct_check_eq_u32(g_fsm.xition_resumes, 1u, "the release was counted");
+	ct_check_eq_u32(req.req_lkid, g.lkb.lkid,
+			"  and it still names THIS node's own proxy handle");
+	ct_check_eq_u32(req.mode, g.lkb.lkmode,
+			"  at the mode the LKB really asks for");
+	ct_check_eq_u32(g.logs, 2u,
+			"  and the release said so too -- one line each way, "
+			"so a console shows the whole episode");
+	check_only_grounded_opcodes_were_sent("transition hold");
+}
+
+/*
+ * A DIRECTORY-ENTRY REMOVAL raised during a transition is DROPPED, not queued.
+ * Phase 1 discards all directory information cluster-wide (Davis pp. 7-40/
+ * 7-41, p. 6-33), so the entry it names stops existing either way -- and after
+ * the rebuild this executive holds no fact about it to assert.
+ */
+static void test_transition_drops_a_directory_removal(void)
+{
+	struct vms_dlm_proxy_post p;
+
+	printf("-- a directory-entry removal raised during a transition is "
+	       "DROPPED, counted\n");
+	fe_reset("RMS$4F.1.0", VMS_LCK_PR, 0x650412f2u, 1, CSID_MASTER);
+	g.transition_active = 1;
+
+	dir_remove_post(&p, CSID_DIR);
+	ct_check(dlm_req_fsm_dir_remove(&g_fsm, &p) == DLM_REQ_E_XITION,
+		 "the removal is refused by the transition, and says so");
+	ct_check_eq_u32(g.n_sent, 0u,
+			"*** no cat-0x02 op-0x04 reached the wire during the "
+			"rebuild ***");
+	ct_check_eq_u32(g_fsm.dir_removes_dropped_xition, 1u, "and it is counted");
+	ct_check_eq_u32(g_fsm.dir_removes_sent, 0u, "none was sent");
+
+	g.transition_active = 0;
+	ct_check_eq_u32(dlm_req_fsm_transition_ended(&g_fsm), 0u,
+			"*** and it is not re-sent afterwards: it was dropped, "
+			"not queued ***");
+	ct_check_eq_u32(g.n_sent, 0u, "the wire stayed empty");
+
+	/* The control: outside a transition the SAME post emits the removal. */
+	dir_remove_post(&p, CSID_DIR);
+	ct_check(dlm_req_fsm_dir_remove(&g_fsm, &p) == DLM_REQ_OK,
+		 "outside a transition the same removal goes out");
+	ct_check_eq_u32(g.n_sent, 1u, "  one frame");
+	ct_check_eq_u32(sent_opcode(&g.sent[0]), VMS_DLM_WIREOP_DIR_REMOVE,
+			"  a grounded op-0x04");
+}
+
+/*
+ * ...but a RELEASE still goes. Giving a lock back is how the cluster is left
+ * in a state the rebuild can use -- the same carve-out vms_dlm_quorum.h makes
+ * for a release during a quorum hang.
+ */
+static void test_transition_lets_a_release_through(void)
+{
+	struct vms_dlm_proxy_post p;
+	struct vms_dlm_deq d;
+
+	printf("-- a $DEQ is NOT held by a transition\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_CR, 0x00adu, 1, CSID_MASTER);
+	g.lkb.master_lkid = 0x0DEFACE0u;
+	g.transition_active = 1;
+
+	release_post(&p, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "the release post is accepted");
+	ct_check_eq_u32(g.n_sent, 1u,
+			"*** and the op-0x03 went out DURING the transition "
+			"***");
+	ct_check_eq_u32(sent_opcode(&g.sent[0]), VMS_DLM_WIREOP_DEQ,
+			"  a grounded op-0x03 $DEQ");
+	ct_check(parse_deq(&g.sent[0], &d) == 0, "  it parses through the codec");
+	ct_check_eq_u32(d.master_lkid, 0x0DEFACE0u,
+			"  naming the handle the LKB really holds");
+	ct_check_eq_u32(g_fsm.posts_held_xition, 0u, "nothing was held");
+}
+
+/*
+ * ...and a node with no connection manager at all (the op unbound) holds
+ * nothing: the standalone degradation, same shape as a NULL requester ops
+ * block.
+ */
+static void test_no_transition_op_holds_nothing(void)
+{
+	struct vms_dlm_proxy_post p;
+
+	printf("-- with no transition op bound, nothing is ever held\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_CR, 0x00aeu, 1, CSID_MASTER);
+	g.transition_active = 1;          /* would hold, if anything asked */
+	g_ops.transition_active = NULL;
+	dlm_req_fsm_init(&g_fsm, &g_ops);
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK, "the post is taken");
+	ct_check_eq_u32(g.n_sent, 1u, "and the frame went out");
+	ct_check_eq_u32(g_fsm.posts_held_xition, 0u, "nothing was held");
+	ct_check_eq_u32(g.transition_calls, 0u, "nothing was even asked");
 }
 
 int main(void)
@@ -2263,5 +2528,9 @@ int main(void)
 	test_relq_snapshot_is_the_lkb_read();
 	test_relq_refusals();
 	test_relq_survives_the_lkb();
+	test_transition_holds_the_request();
+	test_transition_drops_a_directory_removal();
+	test_transition_lets_a_release_through();
+	test_no_transition_op_holds_nothing();
 	return ct_summary("test_dlm_requester");
 }

@@ -62,17 +62,28 @@ The tag is public and cannot be taken back, so everything that can fail is run
 1. **Freeze.** Push the cut commit to `release-verify-<version>` and dispatch the
    heavy legs on it (Kernel Executive, Alpha, VAX, Release E2E). Merge the bump PR
    through the queue.
-2. **Demo visitor gate before the tag.** Run the cluster demo's visitor matrix on
+2. **Rehearse release.yml on an annotated tag.** The heavy legs cut a branch;
+   only release.yml cuts a tag, so a path that exists only there would
+   otherwise run for the first time on the public tag. Run
+   `tools/release-rehearsal.sh --ref release-verify-<version>`. It pushes a
+   throwaway annotated tag `rehearse/<version>-<sha7>`, dispatches release.yml
+   with `rehearsal=true` (cut-aarch64, `cut-release.sh --ref <tag>`, the notes
+   check, and a `publish-release.sh --dry-run`; nothing is created on GitHub),
+   waits for it, and always deletes the tag. Repeat it on the merge commit if
+   the queue folded in other PRs. V0.7-11's first publish failed on a path no
+   pre-tag leg had run: `cut-release.sh` resolved the annotated tag to its tag
+   object instead of its commit.
+3. **Demo visitor gate before the tag.** Run the cluster demo's visitor matrix on
    the frozen build. Use openvmx-site's `track-cluster-demo` in preflight mode:
    `gh workflow run track-cluster-demo.yml --repo 3dl-dev/openvmx-site -f tag=<version> -f ref=release-verify-<version> -f preflight=true`.
    Node A is built from that ref and the gate runs that ref's matcher. Nothing is
    deployed or pinned. The requirement is **0 VAX bugchecks across every order**.
    OVMX never crashes a peer. Report every case's verdict as it is. (V0.7-9's gate
    ran only after its tag, and V0.7-9 shipped crashing a real VAX: vms-f4e.)
-3. **Green by the tagged SHA.** The tag goes on the bump PR's queue merge commit.
+4. **Green by the tagged SHA.** The tag goes on the bump PR's queue merge commit.
    Its merge-queue and push runs must be green. A run on the verify branch alone
    is not enough, because the queue can fold in PRs that landed in between.
-4. **Notes are the tagged SHA's.** `release.yml` generates them with
+5. **Notes are the tagged SHA's.** `release.yml` generates them with
    `gen_release_notes.py --ref <tag>`, and `tools/check_release_notes.py` fails the
    publish unless they list exactly `git log <previous tag>..<tag>`. After the tag,
    the reconcile PR regenerates the in-tree `docs/RELEASE-NOTES-<version>.md` the

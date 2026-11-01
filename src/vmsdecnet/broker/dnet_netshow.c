@@ -110,6 +110,69 @@ DNET_NETSHOW_API int dnet_netshow_req_decode(const uint8_t *buf, size_t len,
     return DNET_NETSHOW_OK;
 }
 
+/* ---------------------------- node control ---------------------------- */
+DNET_NETSHOW_API int dnet_netctl_req_encode(const struct dnet_netctl_req *q,
+                                            uint8_t *buf, size_t cap, size_t *outlen)
+{
+    if (!q || !buf || (q->kind != DNET_NETCTL_SET_NODE && q->kind != DNET_NETCTL_CLEAR_NODE))
+        return DNET_NETSHOW_EINVAL;
+    size_t nl = strnlen(q->name, sizeof q->name);
+    if (nl > DNET_NETSHOW_NAMEMAX)
+        return DNET_NETSHOW_EBADLEN;
+    if (cap < DNET_NETCTL_REQ_LEN)
+        return DNET_NETSHOW_ENOSPACE;
+    memset(buf, 0, DNET_NETCTL_REQ_LEN);
+    buf[0] = DNET_NETCTL_VERSION;
+    buf[1] = q->kind;
+    ns_put16(buf + 2, q->addr);
+    memcpy(buf + 4, q->name, nl);
+    if (outlen)
+        *outlen = DNET_NETCTL_REQ_LEN;
+    return DNET_NETSHOW_OK;
+}
+
+DNET_NETSHOW_API int dnet_netctl_is_req(const uint8_t *buf, size_t len)
+{
+    return buf && len >= 1 && buf[0] == DNET_NETCTL_VERSION;
+}
+
+DNET_NETSHOW_API int dnet_netctl_req_decode(const uint8_t *buf, size_t len,
+                                            struct dnet_netctl_req *out)
+{
+    if (!buf || !out)
+        return DNET_NETSHOW_EINVAL;
+    memset(out, 0, sizeof *out);
+    if (len < DNET_NETCTL_REQ_LEN)
+        return DNET_NETSHOW_ETRUNC;
+    if (len > DNET_NETCTL_REQ_LEN)
+        return DNET_NETSHOW_EBADLEN;
+    if (buf[0] != DNET_NETCTL_VERSION)
+        return DNET_NETSHOW_EVERS;
+    if (buf[1] != DNET_NETCTL_SET_NODE && buf[1] != DNET_NETCTL_CLEAR_NODE)
+        return DNET_NETSHOW_EINVAL;
+    const uint8_t *nm = buf + 4;
+    size_t nl = 0;
+    while (nl < DNET_NETSHOW_NAMEMAX + 1u && nm[nl])
+        nl++;
+    if (nl > DNET_NETSHOW_NAMEMAX)          /* no NUL within the field */
+        return DNET_NETSHOW_EBADLEN;
+    out->kind = buf[1];
+    out->addr = ns_get16(buf + 2);
+    memcpy(out->name, nm, nl);
+    out->name[nl] = '\0';
+    return DNET_NETSHOW_OK;
+}
+
+DNET_NETSHOW_API uint32_t dnet_netctl_send(dnet_netshow_query_fn query, void *ctx,
+                                           const struct dnet_netctl_req *q)
+{
+    uint8_t req[DNET_NETCTL_REQ_LEN], rsp[64];
+    size_t qn = 0, rn = 0;
+    if (!query || dnet_netctl_req_encode(q, req, sizeof req, &qn) != DNET_NETSHOW_OK)
+        return DNET_NETSHOW_ST_BADREC;
+    return query(ctx, req, qn, rsp, sizeof rsp, &rn);
+}
+
 /* ------------------------------ response ------------------------------ */
 static size_t ns_entry_len(uint8_t entity)
 {

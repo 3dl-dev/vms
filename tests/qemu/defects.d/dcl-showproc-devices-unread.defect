@@ -1,0 +1,30 @@
+# dcl-showproc-devices-unread -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SHOW PROCESS Devices allocated: is read from the executive's device-owner rows";;
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_showproc_devices";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "show_process_devices() walks vms_kif_devscan and prints every row the target owns. The mutation drops the call, so SHOW PROCESS goes back to never printing the section: a process that holds two devices reads exactly like one that holds none. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+Devices allocated: names the first owned device at column 20
+the second owned device sits alone on the next line at column 20
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one call in cmd_show_process.
+        sed -i 's|^    show_process_devices(tgt_pid);$|    show_process_devices(0); /* NEGCTL dcl-showproc-devices-unread */|' "$_file"
+    :
+}

@@ -48,6 +48,10 @@
 # link-native-cmake-x86_64 job uses; OVMX_LINK_NATIVE auto-detects ON only
 # when `$CC -dumpmachine` reports an aarch64/x86_64 *-musl triple, which
 # Ubuntu's musl-gcc wrapper does not.
+# Where kernel-build starts from: the local kernel-base stage by default, or a
+# prebuilt kernel-base image from the registry (CI). See the kernel-build stage.
+ARG KERNEL_BASE=kernel-base
+
 FROM alpine:3.20 AS link-native
 
 RUN apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers
@@ -203,7 +207,7 @@ RUN --mount=type=secret,id=ovmx_module_signing_key \
 # and what every existing build gets) runs exactly the x86_64 commands it always
 # did; TARGETARCH=arm64 cross-builds the same pinned, patched kernel and its
 # in-tree signed vms.ko with aarch64-linux-gnu-, using ovmx-arm64.config.
-FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS kernel-build
+FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS kernel-base
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG TARGETARCH
@@ -334,7 +338,15 @@ RUN bash /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh /usr/src/linux /tmp
 # COPY --from keys on the copied file's CONTENT, so every layer below now
 # depends on exactly this key: a new key rebuilds them all, and nothing built
 # with one key can be served on top of another.
-COPY --from=modkey /modkey/ovmx-module-signing-key.pem /usr/src/linux/ovmx-module-signing-key.pem
+# kernel-base is a SHARED, PUBLISHED artifact (CI pushes it to GHCR), so it never
+# holds the real signing key: it is built against a throwaway placeholder key
+# that is deleted when the base is finished (asserted below). The real key
+# (secret or ephemeral, from the modkey stage) is injected in the kernel-build
+# stage, which re-embeds its certificate in the kernel and signs the modules.
+RUN openssl req -new -nodes -utf8 -sha256 -x509 -newkey rsa:2048 -days 2 \
+        -subj "/CN=OVMX kernel-base placeholder (discarded)/" \
+        -keyout /usr/src/linux/ovmx-module-signing-key.pem -out /tmp/placeholder.crt && \
+    cat /tmp/placeholder.crt >> /usr/src/linux/ovmx-module-signing-key.pem && rm -f /tmp/placeholder.crt
 
 # Curated config: x86_64 defconfig + the OVMX boot fragment, reconciled with
 # olddefconfig. The fragment (distro/kernel/ovmx-x86_64.config) is the
@@ -390,6 +402,70 @@ RUN . /etc/ovmx-karch.env && \
     make -s ARCH=$KARCH CROSS_COMPILE=$KCROSS kernelrelease > /kernel-out/kernelrelease && \
     echo "$KARCH" > /kernel-out/karch && \
     echo "Built OVMX kernel ($KARCH): $(cat /kernel-out/kernelrelease), $KIMG $(ls -lh /kernel-out/vmlinuz | awk '{print $5}'), TS=$KBUILD_BUILD_TIMESTAMP"
+
+# Strip the private key from the base before it can be published, and prove it
+# (kbuild only ever reads it from the CONFIG_MODULE_SIG_KEY path, and writes the
+# public certificate to certs/signing_key.x509).
+RUN cd /usr/src/linux && rm -f ovmx-module-signing-key.pem certs/signing_key.pem && \
+    left=$(find -H /usr/src/linux /usr/src/linux/certs /kernel-out /tmp -maxdepth 1 \( -name '*.pem' -o -name '*.p12' -o -name '*.key' \) 2>/dev/null) && \
+    [ -z "$left" ] || { echo "FAIL: key material survives in kernel-base: $left"; exit 1; } && \
+    ! grep -l 'PRIVATE KEY' certs/signing_key.x509 2>/dev/null && echo "OK: kernel-base carries no private key"
+
+# -- kernel-build stage (incremental on top of kernel-base) -----------------
+# CI speed (rd: CI-speed lane A). Everything above is `kernel-base`: pinned
+# Linux source + patches + .config + the OVMX driver overlay, fully compiled.
+# It depends on (Linux version, patches, config fragments, overlay script,
+# drivers-ovmx scaffold, signing key) and NOT on the churning src/kernel sources
+# vms.ko is made from, so CI builds it once per content hash and pushes it to
+# GHCR (see .github/workflows/build-image.yml); jobs then pass
+#   --build-arg KERNEL_BASE=ghcr.io/3dl-dev/ovmx-kernel-base:<hash>
+# and only this stage runs: it re-stages the current OVMX sources into the SAME
+# in-tree drivers/ovmx (so vms.ko is still built in-tree, intree=Y, signed by the
+# kernel's own key) and rebuilds only what changed -- seconds, not ~7 minutes.
+# With no build-arg KERNEL_BASE is the local kernel-base stage above, so a plain
+# `docker build` (and the cut-release reproducibility gate) is unchanged in
+# content: the incremental pass over unchanged sources is a no-op.
+FROM --platform=$BUILDPLATFORM ${KERNEL_BASE} AS kernel-build
+ARG SOURCE_DATE_EPOCH=0
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+WORKDIR /usr/src/linux
+# The REAL module-signing key (modkey stage), placed now so the kernel embeds
+# ITS certificate and the modules are signed with it. The base was built against
+# a discarded placeholder: touch the key and drop the generated certificate files
+# so kbuild regenerates the keyring, relinks vmlinux and rebuilds the bzImage.
+COPY --from=modkey /modkey/ovmx-module-signing-key.pem /usr/src/linux/ovmx-module-signing-key.pem
+RUN touch ovmx-module-signing-key.pem && rm -f certs/signing_key.x509 certs/x509_certificate_list certs/system_certificates.o certs/built-in.a
+COPY src/kernel                          /tmp/ovmx-src/src/kernel
+COPY src/kernel-core                     /tmp/ovmx-src/src/kernel-core
+COPY src/vmsfs                           /tmp/ovmx-src/src/vmsfs
+COPY distro/kernel/drivers-ovmx          /tmp/ovmx-src/distro/kernel/drivers-ovmx
+COPY distro/kernel/overlay-ovmx-drivers.sh /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh
+# Stage the overlay into a scratch tree (the overlay script rm -rf's its target,
+# which would throw away the base's compiled objects), then sync only the files
+# that differ into the real drivers/ovmx: make rebuilds exactly the changed
+# sources (plus the keyring and the relink the new key forces), and files the
+# sources no longer ship are removed.
+RUN . /etc/ovmx-karch.env && \
+    mkdir -p /tmp/kt/drivers && touch /tmp/kt/Makefile && \
+    cp drivers/Kconfig drivers/Makefile /tmp/kt/drivers/ && \
+    bash /tmp/ovmx-src/distro/kernel/overlay-ovmx-drivers.sh /tmp/kt /tmp/ovmx-src && \
+    (cd /tmp/kt/drivers/ovmx && find . -type f) | while read -r f; do \
+        if ! cmp -s "/tmp/kt/drivers/ovmx/$f" "drivers/ovmx/$f"; then \
+            mkdir -p "$(dirname "drivers/ovmx/$f")" && cp "/tmp/kt/drivers/ovmx/$f" "drivers/ovmx/$f"; \
+            echo "  changed: $f"; \
+        fi; \
+    done && \
+    (cd drivers/ovmx && find . -type f \( -name '*.c' -o -name '*.h' -o -name Kbuild -o -name Kconfig -o -name Makefile \)) | while read -r f; do \
+        [ -e "/tmp/kt/drivers/ovmx/$f" ] || { rm -f "drivers/ovmx/$f"; echo "  removed: $f"; }; \
+    done && \
+    rm -rf /tmp/kt && \
+    export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}")" && \
+    export KBUILD_BUILD_USER=ovmx KBUILD_BUILD_HOST=ovmx && \
+    make ARCH=$KARCH CROSS_COMPILE=$KCROSS -j"$(nproc)" $KIMG modules && \
+    cp $KIMG_PATH /kernel-out/vmlinuz && \
+    make -s ARCH=$KARCH CROSS_COMPILE=$KCROSS kernelrelease > /kernel-out/kernelrelease && \
+    echo "$KARCH" > /kernel-out/karch && \
+    echo "Incremental OVMX kernel pass ($KARCH): $(cat /kernel-out/kernelrelease)"
 
 # Harvest the IN-TREE-built OVMX modules (vms-934) and prove they are BOTH
 # in-tree (vms-934) AND signed (vms-ff5) right here, fail-closed.
@@ -1435,6 +1511,12 @@ COPY --from=builder /boot/ovmx-os.kit /boot/ovmx-os.kit
 # release-manifest.json from the actual shipped kit, without needing
 # ovmx_kit_pack on the release host.
 COPY --from=builder /boot/ovmx-os.kit.manifest.txt /boot/ovmx-os.kit.manifest.txt
+# Provisioning tool (rd vms-3ea), build/test tooling only (Rule 9), never on the
+# media and never run at boot: every multi-node gate boots N copies of the ONE
+# ovmx-distrib.img, and each copy must get its own volume label before it boots
+# (`vmsfs_master --ods2 relabel <disk> <SCSNODE>SYS` -- SET VOLUME/LABEL's
+# on-disk effect), because the label is the Files-11 cluster lock namespace.
+COPY --from=builder /src/build-static/bin/vmsfs_master /usr/local/bin/vmsfs_master
 # Negative controls for test_executive_integral.sh only — never a runtime.
 COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz

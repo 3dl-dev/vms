@@ -61,7 +61,7 @@ jobs:
           build-args: |
             CLUSTER_AUTH_GROUP=${{ github.event.inputs.cluster_auth_group }}
             CLUSTER_AUTH_PASSWORD=${{ github.event.inputs.cluster_auth_password }}
-          cache-from: type=gha
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main
           # import only: persistent-boot is this scope's one writer (rd vms-14da)
 
       - name: Extract /boot artifacts from the built image

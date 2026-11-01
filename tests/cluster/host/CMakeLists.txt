@@ -96,6 +96,17 @@ cluster_host_test(fuzz_codec_seed       fuzz_codec_seed.c)
 cluster_host_test(test_codec_hello      test_codec_hello.c)
 cluster_host_test(test_codec_vc         test_codec_vc.c)
 cluster_host_test(test_codec_dlm        test_codec_dlm.c)
+# rd vms-380: lock-tree remastering on the wire (0e/0f/10/11/12/13/14), every
+# positive assertion byte-exact against a real VAX V7.3 frame, plus a held-out
+# topology and one negative control per cell the codec decides.
+cluster_host_test(test_codec_remaster   test_codec_remaster.c)
+# rd vms-380 RA8 / rd vms-6ad1 RA7: score a FRESH remaster capture with the
+# SHIPPING builders, so a held-out proof tests the codec and not a script that
+# re-implements it. Reads `remaster_census.py --pairs` on stdin. Not a ctest --
+# it needs a capture -- but it is built with the suite so it cannot rot.
+add_executable(score_remaster score_remaster.c)
+target_include_directories(score_remaster PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(score_remaster PRIVATE cluster_host_codec)
 # rd vms-66fe / vms-c6e: the derived resource-name hash against 1216 values
 # real OpenVMS VAX nodes put on the wire -- derivation split AND the held-out
 # split frozen before the derivation began.
@@ -430,6 +441,26 @@ set_tests_properties(cluster_host_defects_selftest PROPERTIES
 # booted-node R4 readback (SYSGEN SHOW, CLUSTER_DIAG) is deferred to the lab.
 cluster_host_cnxman_test(test_cluster_sysgen_load test_cluster_sysgen_load.c)
 
+# ---- rd vms-c56: which executive operator lines go on OPA0: ----
+# The ONE routing decision both substrates' exec_console_printf() make, and the
+# VMS console form of the connection manager's events
+# (src/kernel-core/vms_cluster_opa0.h, pure). Grounded against real VMS
+# consoles in tests/lab/captures and against the FSMs' own source text, so it
+# reads the tree: OVMX_SOURCE_DIR.
+add_executable(test_cluster_opa0 test_cluster_opa0.c)
+target_include_directories(test_cluster_opa0 PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_cluster_opa0 PRIVATE
+    OVMX_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+add_test(NAME cluster_host_test_cluster_opa0 COMMAND test_cluster_opa0)
+set_tests_properties(cluster_host_test_cluster_opa0 PROPERTIES
+    LABELS "unit;cluster;cluster_host"
+    TIMEOUT 30
+)
+
 # ---- FC-P0.11: the VAXCLUSTER boot-path gate (port up) ----
 # The ONE function (src/libvms/include/cluster_boot_gate.h) ovmx_init.c's
 # start_cluster_port() calls before issuing VMS_IOCTL_CLUSTER_START, compiled
@@ -714,6 +745,7 @@ target_compile_definitions(test_scs_glue_conn PRIVATE
 # which is what makes the R1 rung a sub-second host loop.
 add_library(cluster_host_dlm STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_scs_fsm.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_rm_fsm.c   # rd vms-ed5: the remaster table
 )
 target_include_directories(cluster_host_dlm PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_dlm PUBLIC OVMX_CLUSTER_HOST)
@@ -738,6 +770,32 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME cluster_host_test_dlm_requester COMMAND test_dlm_requester)
 set_tests_properties(cluster_host_test_dlm_requester PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 30
+)
+
+# ---- rd vms-ed5: the NEW MASTER's remaster table (vms_dlm_rm_fsm.c) ----
+# Every inbound frame is a clean-room specimen of ONE real remaster episode
+# (rm5-remaster.pcap's RMT5), replayed into the table in capture order against
+# a FAKE adoption engine whose minted handle is MUTATED between frames -- so a
+# table that cached one, echoed the holder's, or derived one from a counter goes
+# red. It also pins rules W1/W2 (who gets an op-0x14, and when) as behaviour;
+# tools/cluster/remaster_census.py --selftest pins them on the corpus.
+add_executable(test_dlm_remaster_arm test_dlm_remaster_arm.c)
+target_link_libraries(test_dlm_remaster_arm PRIVATE
+    cluster_host_dlm
+    cluster_host_fixture
+)
+target_include_directories(test_dlm_remaster_arm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(test_dlm_remaster_arm PRIVATE
+    OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+    OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_remaster_arm PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_remaster_arm COMMAND test_dlm_remaster_arm)
+set_tests_properties(cluster_host_test_dlm_remaster_arm PROPERTIES
     LABELS "unit;cluster;cluster_host;lock;dlm"
     TIMEOUT 30
 )
@@ -780,7 +838,9 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_mscp_cl_io_fsm.c    # FC-P7.1
     hdr_alone_vms_mscp_cl_conn_fsm.c  # FC-P7.1 (E64 connect admission)
     hdr_alone_vms_dlm_scs_fsm.c       # FC-P4.6
+    hdr_alone_vms_dlm_rm_fsm.c        # rd vms-ed5
     hdr_alone_vms_cluster_emit_guard.c # E82
+    hdr_alone_vms_cluster_opa0.c      # rd vms-c56
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)
@@ -972,7 +1032,12 @@ set_tests_properties(cluster_host_test_lock_quorum_hang PROPERTIES
 # cluster_host_dlm (the FSM + codec, built -DOVMX_CLUSTER_HOST). The two meet
 # only in this test's own TU, which names vms_internal.h and vms_dlm_scs_fsm.h
 # together -- possible since the codec's opcodes were renamed WIREOP (vms-fa7).
-add_executable(test_dlm_deq_reachable test_dlm_deq_reachable.c vms_frame_compose.c)
+# rd vms-28bd adds vms_dlm_pending.c to its own sources (it lives in
+# cluster_host_cnxman, which this test deliberately does not link): the
+# deferred grant a LOCAL release owes is built from the requester's OWN
+# retained frame, so proving that end to end needs the real table.
+add_executable(test_dlm_deq_reachable test_dlm_deq_reachable.c vms_frame_compose.c
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_pending.c)
 target_include_directories(test_dlm_deq_reachable PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
     ${OVMX_CLUSTER_CORE_DIR}
@@ -1120,10 +1185,41 @@ set_tests_properties(cluster_host_test_mscp_cl_conn PROPERTIES
 add_test(NAME cluster_frame_conformance_gate
     COMMAND bash "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_gate.sh"
         "${CMAKE_BINARY_DIR}/bin" mscp_cmd scs_conreq_mscp cm_commit cm_model
+        dlm_dir_remove dlm_dir_ans_you dlm_dir_ans_redir cm_dlm_op0d_echo
+        dlm_enq_req cm_ack
+        # rd vms-b67a: the SAME request when it names a PARENT. Its own type
+        # because two spans differ from the root form -- the parent pair at
+        # body[36:44] and the hash cell this node writes zero -- and a row
+        # cannot be both forms at once.
+        dlm_enq_req_sub
+        # rd vms-85f: the QUEUED answer. A frame type OVMX had never emitted,
+        # required here so the never-crash rule's own condition holds -- no new
+        # frame type reaches a real VAX before the gate can see every byte.
+        dlm_enq_ans_queued
+        # rd vms-380: the remaster shapes. dlm_rm_14 and dlm_rm_14_ra7 are the
+        # two forms rd vms-6ad1 (RA7) fires, and they are required HERE so the
+        # gate refuses to let either ship ungrounded.
+        dlm_rm_ack dlm_rm_ack_nm dlm_rm_lock_ans dlm_rm_14 dlm_rm_14_ra7
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
     TIMEOUT 120
+)
+
+# ---- The LOCK BLOCK's three twins must declare the same fields (rd vms-b67a).
+# struct vms_lock_entry is declared once per substrate plus once for the host
+# bed, by hand. Only the HOST twin's omission is caught by a compiler here, so a
+# field added on Linux and forgotten on NetBSD builds clean and fails far from
+# the change. Pure Python over this repo's own headers; the checker's own header
+# records the omission that made it exist.
+add_test(NAME cluster_host_lkb_twins
+    COMMAND ${CMAKE_COMMAND} -E env
+        python3 "${CMAKE_SOURCE_DIR}/tools/ci/check_lkb_twins.py"
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_lkb_twins PROPERTIES
+    LABELS "unit;cluster;cluster_host;abi"
+    TIMEOUT 30
 )
 
 add_test(NAME cluster_host_wire_safety_audit
@@ -1151,6 +1247,214 @@ add_test(NAME cluster_host_scs_join_timeline
 set_tests_properties(cluster_host_scs_join_timeline PROPERTIES
     LABELS "unit;cluster;cluster_host;scs"
     TIMEOUT 60
+)
+
+# ---- rd vms-c55: what real VMS puts in the DLM request's body[20:24] -------
+# The cell is the MASTER's lock id once one exists and the REQUESTING PROCESS's
+# id until then, and it is never zero -- which matters because a real OpenVMS
+# directory answers a zero cell body[34] = 0xfe, and a 0xfe was the last DLM
+# frame a real VAX V7.3 sent before each captured LOCKMGRERR. The codec header
+# and tests/lab/captures/vms-c55-lockmgrerr-20261015 both quote these figures;
+# --selftest re-derives every one of them from the committed corpus, so a
+# number in a comment cannot drift away from the bytes it came from.
+add_test(NAME cluster_host_dlm_pid_cell_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_pid_cell_census.py" --selftest
+)
+set_tests_properties(cluster_host_dlm_pid_cell_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 120
+)
+
+# ---- rd vms-380: the LOCK-TREE REMASTERING census. Every figure the codec's
+# "LOCK-TREE REMASTERING ON THE WIRE" block and the dlm_rm_* grounding rows
+# quote -- 262 of 262 answers rewriting only body[8], [9] and [34]; 420 of 420
+# op-0x12 answers carrying the grant record; the 23/26/18 split that classifies
+# the op-0x14's body[20:40] as residue -- re-derived from the committed pcaps,
+# so a number in a comment cannot drift away from the bytes it came from.
+add_test(NAME cluster_host_remaster_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/remaster_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_remaster_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
+# ---- rd vms-33a: what a HOLDER's op-0x12 record carries. The other half of the
+# remaster census: remaster_census.py measures the new master's ANSWER (which
+# OVMX builds today), this one measures the RECORD a real holder SENDS -- which
+# OVMX must build before a real new master stops waiting forever for its
+# op-0x13. Pins the 420/9/411 split, the cells every real record agrees on, and
+# the parent-pair rule that tells a ROOT record from a SUB one.
+add_test(NAME cluster_host_rec12_holder_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/rec12_holder_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_rec12_holder_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
+# ---- rd vms-3ac (d): what a REAL cat-0x02 op-0x03 RELEASE carries, and where
+# OVMX's own release differs. This is the frame that bugchecked a real V7.3 node
+# with INVLOCKID, and the census is what bounds the values OVMX may put in it:
+# 9,858 real releases, 0 of them opening a transaction, 0 answers to a release
+# anywhere in the corpus, body[30] only ever 0 or 1, and body[32] == body[30]
+# on every one. The selftest pins those, because the three deviations they
+# measure (rd vms-194) are quoted in the item and in the grounding rows.
+add_test(NAME cluster_host_dlm_deq_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_deq_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_deq_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
+# ---- rd vms-b67a: how a REAL node asks for a SUB-LOCK. The item is that OVMX
+# looks a sub-resource up in the lock DIRECTORY under its own hash and then
+# masters it locally -- a grant no master gave, and one name mastered twice.
+# This census is the measured rule the fix is built from: all 7 real sub-lock
+# requests in the corpus, from two senders at two modes, are addressed to the
+# PARENT'S MASTER and carry the pair (own parent lkid, parent's master lkid) at
+# body[36:44]. The selftest pins it because the item quotes it.
+# ---- rd vms-326: WHAT A REAL VAX CALLS AN RMS FILE-ACCESS LOCK, and the one
+# reason OVMX cannot say it yet. Classifies every RMS$ name in the corpus by who
+# ORIGINATED it (an answer echoes the requester's name, so the sender is the
+# wrong attribution): every real-originated name is the 26-byte binary form, and
+# every short text-form name is OVMX's own -- which real VAXes have ANSWERED, so
+# OVMX's form reached a real cluster's behaviour and not just its wire. Pins the
+# per-byte map, the (group, access mode) identity that routes it, and the
+# BLOCKER: all 64 real names contain a NUL, so the C-string resource name this
+# executive carries truncates them at byte 4, 7 or 8 -- one of them to 'RMS$'
+# alone, which every such file on every volume would then share.
+add_test(NAME cluster_host_dlm_rms_name_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_rms_name_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_rms_name_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;rms"
+    TIMEOUT 180
+)
+
+add_test(NAME cluster_host_dlm_sublock_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_sublock_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_sublock_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
+# ---- rd vms-326: DOES THE PROVEN HASH FUNCTION ANSWER FOR A BINARY NAME, and
+# is its answer the one the real VAX put on the wire? The counted-name change
+# makes the executive hash a resource's 26 counted bytes instead of the 7-byte
+# prefix its first NUL ended, and routing a lookup by a WRONG value is the grant
+# storm. So the value is checked against the real thing: every real cat-0x02
+# frame in the corpus naming an RMS file-access lock, computed value vs
+# body[128:132]. A black-box (input, output) check against values VMS broadcast
+# in the clear -- the same evidence class the function was determined from
+# (Baron's rd vms-dc2 ruling). The name FORM itself is pinned separately by
+# cluster_host_dlm_rms_name_census.
+add_test(NAME cluster_host_dlm_rms_name_hash
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_rms_name_hash_check.py"
+        --selftest "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_rms_name_hash PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;rms"
+    TIMEOUT 300
+)
+
+# ---- rd vms-85f: what a REAL master answers to an op-0x01 IT QUEUED. OVMX
+# answered nothing at all, so a real VAX's $ENQW on a resource OVMX masters and
+# holds at a conflicting mode sat in RWSCS and STOP could not complete it
+# (measured on hardware, tests/lab/captures/vms-3ac-promote-20261021). The
+# census is what makes the answer buildable without a guess: 110 real->real
+# queued pairs, 17 of them for a ROOT request, and those 17 rewrite exactly 15
+# body offsets -- NONE of which is a cell this executive cannot hold. The 93
+# SUB-LOCK answers do carry one (an S0 address at body[40:44]), which is why a
+# queued sub-lock request stays silent and counted. The selftest pins every
+# figure quoted in the codec header and in the dlm_enq_ans_queued rows.
+add_test(NAME cluster_host_dlm_queued_answer_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_queued_answer_census.py"
+        --selftest "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_queued_answer_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 600
+)
+
+# ---- rd vms-c55: what a node puts on the lock connection DURING a transition
+# The transition hold in vms_dlm_scs_fsm.c is justified by a census, not by a
+# reading of the book: over every committed pcap, no real VMS node put a
+# non-0x0d lock message on the wire at barrier steps 1-5, the one capture that
+# holds a whole 12-step barrier carries exactly 307 op-0x0d records and 307
+# echoes inside it and nothing else, and both frame-level LOCKMGRERR specimens
+# have OVMX originating a removal at step 1 and a lookup at step 2. --selftest
+# re-derives all of it from the committed captures, so the figures in the
+# header comment and in the fix's own grounding cannot drift from the bytes.
+add_test(NAME cluster_host_transition_dlm_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/transition_dlm_census.py" --selftest
+)
+set_tests_properties(cluster_host_transition_dlm_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 300
+)
+
+# ---- rd vms-ac4f: the frame-conformance gate asked of a BOOTED node --------
+# cluster_frame_conformance_gate above asks "do the senders ctest can drive
+# emit grounded bytes?". This asks the question a bugcheck asks: of everything
+# an OVMX node really put in front of a real VAX's executive, in every capture
+# this repo has committed, which frames does the table describe and do the
+# described ones hold? Plus the RATCHET -- an undescribed shape must be named
+# in capture-shape-ratchet.tsv, and a row there for a shape now covered is
+# stale, so the list only shrinks and the end state is empty. The --selftest
+# proves the gate can fail on each of those three rules; a gate that cannot
+# fail would let the next ungrounded shape through silently.
+add_test(NAME cluster_capture_conformance_gate
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_capture_gate.py"
+)
+set_tests_properties(cluster_capture_conformance_gate PROPERTIES
+    LABELS "unit;cluster;cluster_host;crash-safety"
+    TIMEOUT 180
+)
+
+add_test(NAME cluster_capture_conformance_gate_selftest
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tests/cluster/conformance/run_capture_gate.py"
+        --selftest
+)
+set_tests_properties(cluster_capture_conformance_gate_selftest PROPERTIES
+    LABELS "unit;cluster;cluster_host;crash-safety;negctl"
+    TIMEOUT 120
+)
+
+# ---- rd vms-6e6: body[28:30] of a DLM lock request is a FIELD, not residue --
+# OVMX's builder writes zero there. For most spans that is right -- a real
+# request leaves residue and rd vms-42de says this node sends zeros rather than
+# its own kernel memory -- but a real request is zero at body[28:30] only 36
+# times in 21,496, because the value is decided by the RESOURCE FAMILY, which a
+# stale buffer cannot do. --selftest pins that table against the committed
+# corpus so the item's numbers cannot drift from the bytes they came from. It
+# says only what the bytes ARE: which bit means which $ENQ option is unpublished
+# and may only be assigned by a driven one-variable capture.
+add_test(NAME cluster_host_dlm_request_flags_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_request_flags_census.py" --selftest
+)
+set_tests_properties(cluster_host_dlm_request_flags_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 120
 )
 
 # ---- rd vms-94a: the executive's CLUSTERWIDE logical-name tables -----------

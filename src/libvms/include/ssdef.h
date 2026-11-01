@@ -88,6 +88,12 @@ extern "C" {
  * quotas not enabled on this volume". $STATUS = %X000003D4 (low 3 bits = 4 = F). */
 #define SS$_QFNOTACT        980     /* Disk quotas not enabled on this volume (%SYSTEM-F-QFNOTACT) */
 #define SS$_ABORT           44      /* Abort */
+/* The XQP's answer to a name the volume cannot hold (rd vms-b9c): Alpha V8.4
+ * $SSDEF (docs/oracle/alpha84-starlet-defs/SSDEF.txt), observed as
+ * -SYSTEM-W-BADFILENAME / -BADFILEVER under -RMS-E-CRE (ODS-5 capture
+ * RESULTS.md session 3). */
+#define SS$_BADFILENAME     2072    /* Bad file name syntax */
+#define SS$_BADFILEVER      2080    /* Bad file version number */
 
 /* ================================================================
  * Warning status codes (severity = 0)
@@ -230,6 +236,19 @@ extern "C" {
 #define SS$_DEVMOUNT        108    /* Device already mounted */
 #define SS$_DEVNOTMOUNT     124    /* Device not mounted */
 #define SS$_NOSUCHFILE      2320    /* No such file */
+/* ORACLE-PINNED: docs/oracle/vax73-starlet-defs/SSDEF.txt ($EQU SS$_ACCONFLICT 2048,
+ * $EQU SS$_FCPREADERR 2184); msgcat 0x800 %SYSTEM-W-ACCONFLICT "file access
+ * conflict", 0x888 %SYSTEM-W-FCPREADERR "file processor read error". The SS$
+ * forms of an RMS file-access failure, for a word-wide IOSB (rd vms-acf3). */
+#ifndef SS$_ACCONFLICT
+#define SS$_ACCONFLICT      2048    /* File access conflict */
+#endif
+#ifndef SS$_FCPREADERR
+#define SS$_FCPREADERR      2184    /* File processor read error */
+#endif
+/* ORACLE-PINNED: docs/oracle/vax73-starlet-defs/SSDEF.txt + alpha84 ($EQU SS$_NOSUCHSEC 2424);
+ * msgcat 0x978 %SYSTEM-W-NOSUCHSEC "no such (global) section" (rd vms-d91). */
+#define SS$_NOSUCHSEC       2424    /* No such (global) section */
 
 /* ================================================================
  * Additional commonly-used status codes
@@ -405,13 +424,8 @@ extern "C" {
 #define SS$_NOWRITER        9420    /* No writer on mailbox */
 #define SS$_NOMSG           2184    /* No message */
 
-/* ================================================================
- * CLI-related status codes
- * ================================================================ */
-
-#define SS$_IVVERB          2284    /* Invalid verb */
-#define SS$_IVQUAL          2288    /* Invalid qualifier */
-#define SS$_IVKEYW          2292    /* Invalid keyword */
+/* (No SS$_IVVERB/IVQUAL/IVKEYW: those are CLI$_ conditions, climsgdef.h.
+ * 2288 is SS$_NONLOCAL in the V7.3/V8.4 $SSDEF.) */
 
 /* ================================================================
  * Miscellaneous status codes

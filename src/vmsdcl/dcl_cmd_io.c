@@ -19,10 +19,15 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/vms_messages.h"
 #include "dcl/dcl_rms.h"   /* vms-5f0: OPEN/READ/WRITE/CLOSE ride RMS (ACP), not fopen */
 #include "ssdef.h"
+#include "climsgdef.h"
 #include "rmsdef.h"
 #include "vms/logical.h"
+#include "starlet.h"          /* sys$alloc / sys$dalloc */
+#include "descrip.h"
+#include "msgdef.h"
 #include "vmsfs/filespec.h"
 
 /* vms-5f0: a channel slot is free when it holds no stream and no RMS handle. */
@@ -625,7 +630,39 @@ int cmd_close(struct dcl_command *cmd)
  * READ - Read a line from a file channel into a symbol.
  */
 
+static int read_impl(struct dcl_command *cmd);
+
+extern int dcl_find_label(struct dcl_pf *fp, const char *label);
+
+/*
+ * READ with /END_OF_FILE=label and /ERROR=label (VSI DCL Dictionary, READ):
+ * at end of file control passes to the /END_OF_FILE label, and on any other
+ * failure (a timeout included) to the /ERROR label -- like GOTO, quietly,
+ * with the READ itself succeeding. With no label for the condition it is
+ * reported and the status returned, as before. Outside a command procedure
+ * there is nothing to branch to, so the condition is reported as usual.
+ */
 int cmd_read(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    int st = read_impl(cmd);
+    if (st & 1)
+        return st;
+
+    int eof = (st == (int)SS$_ENDOFFILE || st == (int)RMS$_EOF);
+    const char *label = eof ? dcl_qualifier_value(cmd, "END_OF_FILE") : NULL;
+    if (!label || !*label)
+        label = dcl_qualifier_value(cmd, "ERROR");
+    if (label && *label && ctx->proc_depth >= 0) {
+        struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
+        if (dcl_find_label(fp, label) == 0)
+            return SS$_NORMAL;
+        dcl_error("DCL", 2, "USGOTO", "target of GOTO not found - \\%s\\", label);
+    }
+    return st;
+}
+
+static int read_impl(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
@@ -861,6 +898,12 @@ static const char *write_arg_tail(const char *raw_tail)
     if (!raw_tail) return NULL;
     const char *p = raw_tail;
     while (*p == ' ' || *p == '\t') p++;
+    /* skip any leading /QUALIFIER tokens (WRITE/SYMBOL chan sym): they were
+     * parsed into cmd->qualifiers and are not part of the expression */
+    while (*p == '/') {
+        while (*p && *p != ' ' && *p != '\t') p++;
+        while (*p == ' ' || *p == '\t') p++;
+    }
     /* skip the channel token */
     while (*p && *p != ' ' && *p != '\t') p++;
     while (*p == ' ' || *p == '\t') p++;
@@ -871,7 +914,31 @@ static const char *write_arg_tail(const char *raw_tail)
  * WRITE - Write text to a file channel.
  */
 
+static int write_impl(struct dcl_command *cmd);
+
+/*
+ * WRITE with /ERROR=label (VSI DCL Dictionary, WRITE): when the write fails,
+ * control passes to the label like GOTO, quietly, the WRITE itself succeeding.
+ * With no label (or outside a command procedure) the failure is reported and
+ * its status returned, as before.
+ */
 int cmd_write(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    int st = write_impl(cmd);
+    if (st & 1)
+        return st;
+    const char *label = dcl_qualifier_value(cmd, "ERROR");
+    if (label && *label && ctx->proc_depth >= 0) {
+        struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
+        if (dcl_find_label(fp, label) == 0)
+            return SS$_NORMAL;
+        dcl_error("DCL", 2, "USGOTO", "target of GOTO not found - \\%s\\", label);
+    }
+    return st;
+}
+
+static int write_impl(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
@@ -907,7 +974,20 @@ int cmd_write(struct dcl_command *cmd)
      * out verbatim and never routed them through the evaluator. */
     char text[DCL_MAX_VALUE];
     const char *arglist = have_prompted ? prompted : write_arg_tail(cmd->raw_tail);
-    if (arglist) {
+    if (dcl_has_qualifier(cmd, "SYMBOL")) {
+        /* WRITE/SYMBOL channel symbol-name: the record is the VALUE of the
+         * named symbol (a record longer than a literal can carry), not an
+         * expression (VSI DCL Dictionary, WRITE /SYMBOL). */
+        const char *symname = (cmd->param_count >= 2) ? cmd->params[1] : NULL;
+        const char *sv = symname ? dcl_sym_get(symname) : NULL;
+        if (!sv) {
+            dcl_error("DCL", 0, "UNDSYM",
+                      "undefined symbol - check validity and spelling\n \\%s\\",
+                      symname ? symname : "");
+            return (int)CLI$_UNDSYM;
+        }
+        snprintf(text, sizeof(text), "%s", sv);
+    } else if (arglist) {
         extern uint32_t dcl_eval_last_failure(void);
         write_eval_arglist(ctx, arglist, text, sizeof(text));
         /* an expression that failed (its message is out) writes nothing
@@ -1008,3 +1088,117 @@ int cmd_write(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* ================================================================== */
+/*                    Device allocation                                */
+/* ================================================================== */
+
+/* /NOLOG given explicitly (ALLOCATE logs by default). */
+static int dcl_nolog(const struct dcl_command *cmd)
+{
+    for (int i = 0; i < cmd->qualifier_count; i++) {
+        const char *q = cmd->qualifiers[i].name;
+        size_t n = strlen(q);
+        if (cmd->qualifiers[i].negated && n >= 1 && n <= 3 && strncasecmp(q, "LOG", n) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* A device or logical name with its trailing colon(s) removed, upcased. */
+static void dcl_devname_arg(const char *in, char *out, size_t outsz)
+{
+    size_t n = 0;
+    for (; in[n] && n < outsz - 1; n++)
+        out[n] = (char)toupper((unsigned char)in[n]);
+    while (n > 0 && out[n - 1] == ':')
+        n--;
+    out[n] = '\0';
+}
+
+/* A $ALLOC / $DALLOC refusal is reported as the system message for its
+ * condition value ($GETMSG), e.g. "%SYSTEM-W-DEVALLOC, device already
+ * allocated to another user" as the VAX V7.3 console printed for ALLOCATE
+ * OPA0: (docs/oracle/vax73-terminal-device.md 7.2). */
+static void dcl_report_device_status(uint32_t st)
+{
+    char msg[256];
+    uint16_t len = 0;
+    struct dsc$descriptor_s md = { sizeof msg - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, msg };
+    if (sys$getmsg(st, &len, &md, MSG$M_ALL, NULL) & 1) {
+        msg[len] = '\0';
+        fprintf(stderr, "%s\n", msg);
+    }
+}
+
+/*
+ * ALLOCATE - Allocate a device to this process (DCL Dictionary, ALLOCATE).
+ * Format: ALLOCATE device-name[:] [logical-name[:]] [/[NO]LOG]
+ *
+ * $ALLOC decides (the executive's device table, vms-44a). On success
+ * /LOG (the default) prints "%DCL-I-ALLOC, <physical name> allocated" as the
+ * OpenVMS VAX V7.3 console did for ALLOCATE OPA0: (docs/oracle/
+ * vax73-terminal-device.md section 4); a logical-name parameter becomes a
+ * process logical name for the physical name. A refusal prints the system
+ * message (%SYSTEM-W-DEVALLOC, observed) and is the command's status.
+ * Not implemented, and refused as %DCL-W-IVQUAL by the verb's table:
+ * /GENERIC and a list of candidate devices.
+ */
+int cmd_allocate(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+        dcl_error("DCL", 0, "INSFPRM",
+                  "missing command parameters - supply all required parameters");
+        return SS$_BADPARAM;
+    }
+    char dev[256], phys[256];
+    dcl_devname_arg(cmd->params[0], dev, sizeof dev);
+    struct dsc$descriptor_s dd = { (uint16_t)strlen(dev), DSC$K_DTYPE_T, DSC$K_CLASS_S, dev };
+    struct dsc$descriptor_s pd = { sizeof phys - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, phys };
+    uint16_t plen = 0;
+
+    uint32_t st = sys$alloc(&dd, &plen, &pd, 0, 0);
+    if (!(st & 1)) {
+        dcl_report_device_status(st);
+        return (int)st;
+    }
+    phys[plen < sizeof phys ? plen : sizeof phys - 1] = '\0';
+
+    if (cmd->param_count >= 2 && cmd->params[1][0] != '\0') {
+        char lnm[256];
+        dcl_devname_arg(cmd->params[1], lnm, sizeof lnm);
+        lnm_manager_t *mgr = lnm_get_manager();
+        uint32_t ls = mgr ? lnm_create(mgr, "LNM$PROCESS_TABLE", lnm, phys, 0, LNM_MODE_SUPER)
+                          : SS$_NOLOGTAB;
+        if (ls != SS$_NORMAL && ls != SS$_SUPERSEDE) {
+            dcl_error("DCL", 2, "LNMFAIL", "failed to create logical name \\%s\\", lnm);
+            return (int)ls;
+        }
+    }
+    if (!dcl_nolog(cmd))
+        printf("%%DCL-I-ALLOC, %s allocated\n", phys);
+    return SS$_NORMAL;
+}
+
+/*
+ * DEALLOCATE - Give back a device this process allocated (DCL Dictionary,
+ * DEALLOCATE). Format: DEALLOCATE device-name[:]. Silent on success; a device
+ * this process has not allocated is %SYSTEM-W-DEVNOTALLOC ($DALLOC's answer).
+ * Not implemented, and refused as %DCL-W-IVQUAL by the verb's table: /ALL.
+ */
+int cmd_deallocate(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+        dcl_error("DCL", 0, "INSFPRM",
+                  "missing command parameters - supply all required parameters");
+        return SS$_BADPARAM;
+    }
+    char dev[256];
+    dcl_devname_arg(cmd->params[0], dev, sizeof dev);
+    struct dsc$descriptor_s dd = { (uint16_t)strlen(dev), DSC$K_DTYPE_T, DSC$K_CLASS_S, dev };
+    uint32_t st = sys$dalloc(&dd, 0);
+    if (!(st & 1)) {
+        dcl_report_device_status(st);
+        return (int)st;
+    }
+    return SS$_NORMAL;
+}

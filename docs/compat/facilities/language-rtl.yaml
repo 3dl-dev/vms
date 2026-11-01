@@ -16,7 +16,7 @@ items:
   - {id: for$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
      vms: "Fortran RTL — formatted/list-directed I/O, intrinsics, VAX-float", notes: "0 files on origin/main. Operator scope call (vms-082)."}
   - {id: cob$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
-     vms: "COBOL RTL — record I/O, packed-decimal arithmetic, ACCEPT/DISPLAY", notes: "0 files. Depends on OTS$ packed-decimal (OTS$CVT_T_P/CVT_P_T absent per ots.yaml)."}
+     vms: "COBOL RTL — record I/O, packed-decimal arithmetic, ACCEPT/DISPLAY", notes: "0 files. Depends on OTS$ packed decimal (DSC$K_DTYPE_P unsupported by LIB$CVT_DX_DX; OTS$DIV_PK_LONG/SHORT absent)."}
   - {id: bas$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
      vms: "BASIC RTL — PRINT/INPUT, string dynamics, virtual arrays", notes: "0 files. Depends on varying-string descriptors (DSC$K_CLASS_VS declared in descrip.h but unmarshalled)."}
   - {id: pas$, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
@@ -26,4 +26,4 @@ items:
   - {id: language-rtl$shared, kind: subsystem, status: partial, authenticity: real, scope_1_0: in,
      vms: "Language-independent RTL floor (LIB$/STR$/MTH$/OTS$) every language links",
      evidence: docs/compat/facilities/ots.yaml,
-     notes: "Catalogued in domain A. Partial: OTS$ packed-decimal conversions (OTS$CVT_T_P/CVT_P_T) and descriptor classes A/VS are absent — exactly the pieces COBOL/BASIC/Fortran need. Real for what is present (STR$/LIB$ common cases), not a facade."}
+     notes: "Catalogued in domain A. Partial: packed-decimal conversion (DSC$K_DTYPE_P in LIB$CVT_DX_DX; OTS$DIV_PK_LONG/SHORT) and descriptor classes A/VS are absent — exactly the pieces COBOL/BASIC/Fortran need. Real for what is present (STR$/LIB$ common cases), not a facade."}

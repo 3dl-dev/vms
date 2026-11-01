@@ -33,6 +33,8 @@
 #        src/vmsrms/rms_core.c    (the RMS ACP arm: $ASSIGN/IO$_ACCESS/DID walk)
 #        src/vmsrms/rms_io.c      (READVBLK/WRITEVBLK/truncate over the ACP)
 #        src/vmsrms/rms_search.c  (ACP wildcard search / ACPCONTROL)
+#        src/vmsrms/rms_parse.c   (the name engine and the RMS<->ACP name forms,
+#                                  rms_acp_name / rms_name_from_disk, rd vms-b9c)
 #        src/imgact/imgact_acp.c  (the shared ACP file-access walk)
 #        src/ovmx_init/ovmx_boot_acp_read.c    (PID 1's staging bridge)
 #        src/ovmx_init/ovmx_boot_sysgen_acp.c  (OVMXVMSSYS.PAR over the ACP)
@@ -166,6 +168,7 @@ CFLAGS="--sysroot=$SYSROOT -O2 -Wall -Wextra \
 CLOSURE="src/vmsrms/rms_core.c
 src/vmsrms/rms_io.c
 src/vmsrms/rms_search.c
+src/vmsrms/rms_parse.c
 src/imgact/imgact_acp.c
 src/ovmx_init/ovmx_boot_acp_read.c
 src/ovmx_init/ovmx_boot_sysgen_acp.c
@@ -183,7 +186,7 @@ for f in $CLOSURE; do
     "$CC" $CFLAGS $INC -c "$SRC/$f" -o "$obj" \
         || fail "$f does not compile ILP32-clean for $TARGET with the ACP arms on"
 done
-echo "OK: all 9 ACP-read closure translation units compile for $TARGET"
+echo "OK: all 10 ACP-read closure translation units compile for $TARGET"
 echo
 
 # ---------------------------------------------------------------------------
@@ -197,7 +200,7 @@ for f in $CLOSURE; do
     echo "$fmt" | grep -qi 'elf32-vax' \
         || fail "$(basename "$obj") is not elf32-vax ($fmt)"
 done
-echo "OK: 9/9 objects are elf32-vax"
+echo "OK: 10/10 objects are elf32-vax"
 echo
 
 # ---------------------------------------------------------------------------
@@ -320,7 +323,7 @@ echo
 # ---------------------------------------------------------------------------
 echo "=== proof 6: ACP-read closure is self-consistent (partial link) ==="
 "$LD" -r -o "$OUT/acp_read_closure.o" \
-    "$OUT/rms_core.o" "$OUT/rms_io.o" "$OUT/rms_search.o" \
+    "$OUT/rms_core.o" "$OUT/rms_io.o" "$OUT/rms_search.o" "$OUT/rms_parse.o" \
     "$OUT/imgact_acp.o" "$OUT/ovmx_boot_acp_read.o" \
     "$OUT/ovmx_boot_sysgen_acp.o" "$OUT/ovmx_boot_netbsd.o" \
     "$OUT/ovmx_init.o" "$OUT/sysboot.o" \

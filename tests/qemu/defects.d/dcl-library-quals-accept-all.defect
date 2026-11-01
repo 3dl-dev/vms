@@ -1,0 +1,27 @@
+# dcl-library-quals-accept-all -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL LIBRARY qualifier validation (src/vmsdcl/dcl_builtin.c q_library, vms-097)";;
+        targets)      echo "vmsdcl/dcl_builtin.c";;
+        suites_red)   echo "test_syssvc_dcl_library_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "LIBRARY goes back to accept-all: the q_library table is unwired from the verb, so LIBRARY/ZQONE and the unimplemented /MACRO are silently dropped instead of %DCL-W-IVQUAL.";;
+        require_fail) cat <<'EOF2'
+LIBRARY/ZQONE is %DCL-W-IVQUAL
+LIBRARY/MACRO (not implemented) is %DCL-W-IVQUAL, not silently dropped
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^      "Manage text, help, and object libraries", q_library },$|      "Manage text, help, and object libraries" }, /* NEGCTL dcl-library-quals-accept-all */|' "$_file"
+    :
+}

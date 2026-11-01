@@ -54,7 +54,6 @@ typedef struct _ieee IEEE;
 #define IEEE$C_PM_NO_CHANGE     (-1)   /* Do not change precision mode */
 #define IEEE$C_PM_SINGLE        0   /* Single precision (24-bit mantissa) */
 #define IEEE$C_PM_DOUBLE        2   /* Double precision (53-bit mantissa) */
-#define IEEE$C_PM_EXTENDED      3   /* Extended precision (64-bit mantissa) */
 
 /* ================================================================
  * IEEE$C_RM_ — Rounding mode constants

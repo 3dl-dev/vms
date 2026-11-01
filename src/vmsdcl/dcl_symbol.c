@@ -21,13 +21,45 @@
 #define SYM_MAX_VALUE   4096
 
 /* Symbol entry */
+/* Sized to the symbol, not to the worst case (rd vms-25f/83d): the entry used
+ * to embed 255+4096 bytes of name/value, so every symbol cost ~4.4 KB resident
+ * (calloc zero-fills it) and a login session's few hundred symbols held ~2 MB
+ * of a 16 MB VAX. Name is a trailing flexible array; the value is a separate
+ * allocation sized to its length (grown, never shrunk, on update). */
 struct sym_entry {
-    char name[SYM_MAX_NAME + 1];
-    char value[SYM_MAX_VALUE + 1];
+    char *value;
+    size_t cap;     /* bytes allocated for value, including the NUL */
     int  scope;     /* DCL_SYM_LOCAL or DCL_SYM_GLOBAL */
     int  type;      /* DCL_SYM_STRING or DCL_SYM_INTEGER */
     struct sym_entry *next;
+    char name[];    /* upper-cased, at most SYM_MAX_NAME chars */
 };
+
+static void sym_free_entry(struct sym_entry *e)
+{
+    free(e->value);
+    free(e);
+}
+
+/* Store `value` (truncated to SYM_MAX_VALUE) in e. 0 ok, -1 out of memory.
+ * `value` may alias e->value; the copy completes before the old buffer goes. */
+static int sym_store_value(struct sym_entry *e, const char *value)
+{
+    size_t n = strnlen(value, SYM_MAX_VALUE);
+    if (e->value && n + 1 <= e->cap) {
+        memmove(e->value, value, n);
+        e->value[n] = '\0';
+        return 0;
+    }
+    char *nv = malloc(n + 1);
+    if (!nv) return -1;
+    memcpy(nv, value, n);
+    nv[n] = '\0';
+    free(e->value);
+    e->value = nv;
+    e->cap = n + 1;
+    return 0;
+}
 
 /*
  * Local symbols are per command-procedure level. VMS gives each command
@@ -103,7 +135,7 @@ static void free_frame(struct sym_frame *fr)
         struct sym_entry *e = fr->buckets[i];
         while (e) {
             struct sym_entry *next = e->next;
-            free(e);
+            sym_free_entry(e);
             e = next;
         }
         fr->buckets[i] = NULL;
@@ -125,7 +157,7 @@ void dcl_sym_cleanup(void)
         struct sym_entry *e = global_table[i];
         while (e) {
             struct sym_entry *next = e->next;
-            free(e);
+            sym_free_entry(e);
             e = next;
         }
         global_table[i] = NULL;
@@ -232,14 +264,14 @@ int dcl_sym_set(const char *name, const char *value, int scope)
     /* Check if already exists at the target table */
     struct sym_entry *e = sym_find(table, name);
     if (e) {
-        strncpy(e->value, value, SYM_MAX_VALUE);
-        e->value[SYM_MAX_VALUE] = '\0';
+        if (sym_store_value(e, value) != 0) return -1;
         e->type = DCL_SYM_STRING;
         return 0;
     }
 
     /* Create new entry */
-    e = calloc(1, sizeof(*e));
+    size_t nlen = strnlen(name, SYM_MAX_NAME);
+    e = calloc(1, sizeof(*e) + nlen + 1);
     if (!e) return -1;
 
     /* Store name in uppercase */
@@ -249,8 +281,7 @@ int dcl_sym_set(const char *name, const char *value, int scope)
     }
     e->name[i] = '\0';
 
-    strncpy(e->value, value, SYM_MAX_VALUE);
-    e->value[SYM_MAX_VALUE] = '\0';
+    if (sym_store_value(e, value) != 0) { free(e); return -1; }
     e->scope = scope;
     e->type = DCL_SYM_STRING;
 
@@ -390,7 +421,7 @@ int dcl_sym_delete(const char *name, int scope)
         if (strcasecmp((*pp)->name, name) == 0) {
             struct sym_entry *del = *pp;
             *pp = del->next;
-            free(del);
+            sym_free_entry(del);
             return 0;
         }
         pp = &(*pp)->next;

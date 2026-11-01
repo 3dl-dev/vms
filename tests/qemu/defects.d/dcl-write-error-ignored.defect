@@ -1,0 +1,27 @@
+# dcl-write-error-ignored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL WRITE/ERROR=label (src/vmsdcl/dcl_cmd_io.c cmd_write, vms-097)";;
+        targets)      echo "vmsdcl/dcl_cmd_io.c";;
+        suites_red)   echo "test_syssvc_dcl_write_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "WRITE/ERROR=label stops branching: the label is never consulted, so a failed WRITE falls through.";;
+        require_fail) cat <<'EOF2'
+WRITE/ERROR=ERRL branched to ERRL when the write failed
+control did not fall through past the failed WRITE
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    const char \*label = dcl_qualifier_value(cmd, "ERROR");$|    const char *label = NULL; /* NEGCTL dcl-write-error-ignored */|' "$_file"
+    :
+}

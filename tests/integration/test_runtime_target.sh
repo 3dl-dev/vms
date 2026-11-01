@@ -456,7 +456,7 @@ else
         # 3b-backend below; here we only require the POLICY function to capture
         # it and (b)-(h) to prove its failure branch is terminal and pinned.
         openvar=$(printf '%s\n' "$body" \
-            | grep -oE '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*ovmx_boot_open_executive[[:space:]]*\(' \
+            | grep -a -oE '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*ovmx_boot_open_executive[[:space:]]*\(' \
             | head -1 | sed -E 's/[[:space:]]*=.*//')
 
         if [ -z "$openvar" ]; then
@@ -668,11 +668,11 @@ direct=$(grep -rnE 'vms_kif_open[[:space:]]*\([[:space:]]*\)[[:space:]]*(<|>|=|!
 # one-line form of each shape is a recorded control in the negctl suite.
 indirect=""
 for f in $(grep -rlE 'vms_kif_open[[:space:]]*\(' --include=*.c --include=*.h "$SRC_ROOT/src" 2>/dev/null); do
-    vars=$(grep -oE '\b[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*vms_kif_open[[:space:]]*\([[:space:]]*\)' "$f" \
+    vars=$(grep -a -oE '\b[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*vms_kif_open[[:space:]]*\([[:space:]]*\)' "$f" \
             | sed -E 's/[[:space:]]*=.*//' | sort -u)
     [ -n "$vars" ] || continue
     # Line-numbered file with ONLY the capture fragments blanked out.
-    scan=$(grep -n '' "$f" \
+    scan=$(grep -a -n '' "$f" \
            | sed -E 's/[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*vms_kif_open[[:space:]]*\([[:space:]]*\)//g')
     for v in $vars; do
         [ -n "$v" ] || continue

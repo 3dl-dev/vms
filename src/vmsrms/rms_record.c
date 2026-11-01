@@ -213,7 +213,11 @@ static uint32_t rms_reclock_after_locate(struct FAB *fab, struct RAB *rab,
     rms_record_lock_resnam(h, (uint64_t)rab->_last_rec_offset, resnam);
 
     uint32_t lkid = 0;
-    uint32_t st = vms_kif_enq(0, LCK_K_EXMODE, LCK_M_NOQUEUE, resnam,
+    /* resnam_len 0: this name is a NUL-terminated text spelling, so the
+     * executive measures it (rd vms-326). The record-lock resource's real VMS
+     * form is not yet grounded; the FILE-access lock's is, and that is where
+     * the counted binary form lands first. */
+    uint32_t st = vms_kif_enq(0, LCK_K_EXMODE, LCK_M_NOQUEUE, resnam, 0,
                               h->access_lkid, 0, 0, 0, &lkid, NULL);
 
     if (rop & RAB$M_RLK) {

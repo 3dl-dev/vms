@@ -54,7 +54,7 @@ kx pkill -9 -f SCSD.EXE 2>/dev/null; log "F1 SIGKILL crash"; sleep 6
 SIDE=$(kx sh -c "test -r /lab/sid.sysgen.cluster && echo yes || echo no")
 log "R sidecar=$SIDE (rejoin form) -- FAST return $ID"
 daemon 45 R; sample 45 R
-XR=$(kx grep -aoE 'READMITMAP-SUMMARY.*admitted=[0-9]+' $L/scsd-sidR.log 2>/dev/null | grep -oE 'admitted=[0-9]+' | head -1)
+XR=$(kx grep -aoE 'READMITMAP-SUMMARY.*admitted=[0-9]+' $L/scsd-sidR.log 2>/dev/null | grep -a -oE 'admitted=[0-9]+' | head -1)
 PR=$(kx sh -c "cat $L/vax$NODE.log" 2>/dev/null | tr -d '\000' | sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' | grep -ac "proposing addition of system $ID")
 log "R (rejoin-form fast return): proposing_count=$PR readmit=[$XR]"
 kx pkill -9 -f SCSD.EXE 2>/dev/null

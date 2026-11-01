@@ -49,9 +49,85 @@ jobs:
   #   Boot 2: same disk  → STARTUP.EXE detects installed system, skips install
   # Proves install-once / boot-many persistence across reboots.
   # -----------------------------------------------------------------------
+  kernel-base:
+    name: Prebuilt kernel base (GHCR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/kernel-base.yml
+
+  # CI speed (lane A): the bootable image is built ONCE per SHA here and pushed
+  # to GHCR; every default-image job below pulls it (.github/actions/boot-image)
+  # instead of rebuilding it (~10 min x 13 jobs). The image content is identical
+  # to what each job built for itself: same Dockerfile, same context, default
+  # build-args. Falls back to a per-job build if the pull fails.
+  build-image:
+    name: Build bootable image once per SHA (GHCR)
+    needs: [changes, kernel-base]
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+      kernel-base: ${{ needs.kernel-base.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Log in to ghcr.io
+        continue-on-error: true
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Image ref for this SHA
+        id: ref
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
+          echo "image=ghcr.io/${owner}/ovmx-boot:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "cache=ghcr.io/${owner}/ovmx-boot-cache:main" >> "$GITHUB_OUTPUT"
+
+      - name: Already built for this SHA?
+        id: have
+        run: |
+          if docker buildx imagetools inspect "${{ steps.ref.outputs.image }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build + push the bootable image
+        if: ${{ steps.have.outputs.exists != 'true' }}
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.ref.outputs.image }}
+          build-args: |
+            KERNEL_BASE=${{ needs.kernel-base.outputs.ref }}
+          cache-from: |
+            type=registry,ref=${{ steps.ref.outputs.cache }}
+            type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main
+          cache-to: ${{ github.ref == 'refs/heads/main' && format('type=registry,ref={0},mode=max,ignore-error=true', steps.ref.outputs.cache) || '' }}
+
+      - name: Verify the image is pullable
+        id: final
+        run: |
+          # Consumers fall back to building it themselves if this is absent.
+          docker buildx imagetools inspect "${{ steps.ref.outputs.image }}" >/dev/null 2>&1 \
+            || echo "::warning::bootable image not in GHCR; consumers will build it themselves (slow path)"
+
   persistent-boot:
     name: Persistent Boot Smoke Test
-    needs: changes
+    needs: [changes, kernel-base, build-image]
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -76,27 +152,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: ./.github/actions/setup-buildx
 
+      - name: Log in to ghcr.io (pull the prebuilt kernel base)
+        continue-on-error: true
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
       - name: Build bootable image
         id: build
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # THE ONE WRITER of the default-scope layer cache (rd vms-14da). Fifteen
-          # jobs build distro/Dockerfile.bootable; when all of them exported
-          # mode=max to the same gha scope on every main push, they overwrote one
-          # another's cache index concurrently, and the index ended up naming
-          # blobs that no build had touched lately -- the first the repository's
-          # over-quota cache evicted. A later build then hit a cached layer whose
-          # blob was gone and failed ("blob sha256:... not found", main
-          # 05b10f164). One writer, which reads the same scope first, only ever
-          # names blobs it just uploaded or just downloaded; every other job
-          # imports only.
-          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: Run persistent boot smoke test
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -135,7 +200,9 @@ jobs:
       # docs/oracle/keystroke/known-diff.d/ fails, and so does a listed
       # difference that now matches -- the list only shrinks.
       - name: Keystroke oracle — OVMX terminal vs real OpenVMS (vms-370)
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        # CI-speed tier: queue runs it when the console/terminal/boot is
+        # touched; nightly, dispatch and the pre-tag verify always run it.
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && needs.changes.outputs.keystroke == 'true' }}
         run: |
           KS_ENSURE_WAIT=8 tests/qemu/test_keystroke_oracle.sh keystroke-out
 
@@ -313,7 +380,7 @@ jobs:
   aarch64-release-set:
     name: aarch64 release set -- tools/cut-release-aarch64.sh on an arm64 runner (vms-b58)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 150
     steps:
@@ -363,35 +430,22 @@ jobs:
   # filter so ordinary PRs that do not touch release-engineering surfaces
   # don't pay for it, and still runs in full on push/merge_group/schedule.
   # -----------------------------------------------------------------------
-  cut-release-reproducible:
-    name: cut-release is byte-reproducible + boots (vms-d73)
-    needs: [changes, aarch64-release-set]
-    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
-    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
-    # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+  # CI-speed (lane B): cut A and cut B are INDEPENDENT builds (--no-cache, same
+  # commit, same module-signing key), so they run as parallel jobs instead of
+  # back to back (~21 min saved on the critical path). The ephemeral signing key
+  # is minted once per run and shared with both cut jobs as a 1-day artifact.
+  # It is a THROWAWAY key: it signs only these two test cuts, never a shipped
+  # artifact (release.yml uses secrets.OVMX_MODULE_SIGNING_KEY), so it is not
+  # encrypted. (It was encrypted with GITHUB_TOKEN, but that token differs per
+  # job, so the cut jobs intermittently failed with "bad decrypt" -- vms-3c36.)
+  release-sign-key:
+    name: mint ephemeral module-signing key for the reproducibility cuts
+    needs: [changes]
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 150
-
+    timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
-      # (host-side and inside `docker run`) use it instead of TCG.
-      - name: Enable KVM
-        uses: ./.github/actions/enable-kvm
-
-      - name: Set up Docker Buildx
-        uses: ./.github/actions/setup-buildx
-
-      # The module signing key is the one remaining random build input (vms-
-      # secret-signing-key). It is NEVER committed. Mint ONE ephemeral key here
-      # and feed it to BOTH cuts via OVMX_MODULE_SIGNING_KEY, so the signatures/
-      # keyring are identical between them -- which is exactly what this gate
-      # asserts -- without any private key living in git. The key is scoped to
-      # this job and never persisted.
-      - name: Mint one ephemeral module-signing key for both cuts
+      - name: Mint one ephemeral (throwaway) module-signing key
         run: |
           set -euo pipefail
           KEYDIR="${{ runner.temp }}/ovmx-sign"
@@ -400,26 +454,119 @@ jobs:
             -subj "/CN=OVMX ephemeral module signing key (reproducibility gate)/" \
             -keyout "$KEYDIR/key.pem" -out "$KEYDIR/cert.pem"
           cat "$KEYDIR/key.pem" "$KEYDIR/cert.pem" > "$KEYDIR/signing.pem"
-          echo "OVMX_MODULE_SIGNING_KEY=$KEYDIR/signing.pem" >> "$GITHUB_ENV"
-          echo "Minted ephemeral signing key for both cuts (job-scoped, never persisted)."
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-sign-key
+          path: ${{ runner.temp }}/ovmx-sign/signing.pem
+          retention-days: 1
+          if-no-files-found: error
 
-      # First independent cut. --no-cache on both cuts is the point: this
-      # proves the BUILD is reproducible, not that BuildKit's cache is.
+
+  cut-release-a:
+    name: cut release A (clean tree, no cache; parallel with the other cut)
+    needs: [changes, aarch64-release-set, release-sign-key]
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+      - name: Fetch the ephemeral module-signing key
+        uses: actions/download-artifact@v4
+        with:
+          name: release-sign-key
+          path: ${{ runner.temp }}/ovmx-sign
+      - name: Use the shared ephemeral signing key
+        run: echo "OVMX_MODULE_SIGNING_KEY=${{ runner.temp }}/ovmx-sign/signing.pem" >> "$GITHUB_ENV"
       - name: Fetch the aarch64 release set (aarch64-release-set job)
         uses: actions/download-artifact@v4
         with:
           name: aarch64-release-set
           path: ${{ runner.temp }}/aarch64-prebuilt
-
       - name: Cut release A (clean tree, no cache)
-        id: cut_a
         run: |
           tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-a" --aarch64-dir "${{ runner.temp }}/aarch64-prebuilt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-cut-a
+          path: ${{ github.workspace }}/dist/release-a/
+          retention-days: 1
+          if-no-files-found: error
 
-      - name: Cut release B (independent clean tree, no cache)
-        id: cut_b
+  cut-release-b:
+    name: cut release B (clean tree, no cache; parallel with the other cut)
+    needs: [changes, aarch64-release-set, release-sign-key]
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+      - name: Fetch the ephemeral module-signing key
+        uses: actions/download-artifact@v4
+        with:
+          name: release-sign-key
+          path: ${{ runner.temp }}/ovmx-sign
+      - name: Use the shared ephemeral signing key
+        run: echo "OVMX_MODULE_SIGNING_KEY=${{ runner.temp }}/ovmx-sign/signing.pem" >> "$GITHUB_ENV"
+      - name: Fetch the aarch64 release set (aarch64-release-set job)
+        uses: actions/download-artifact@v4
+        with:
+          name: aarch64-release-set
+          path: ${{ runner.temp }}/aarch64-prebuilt
+      - name: Cut release B (clean tree, no cache)
         run: |
           tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-b" --aarch64-dir "${{ runner.temp }}/aarch64-prebuilt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-cut-b
+          path: ${{ github.workspace }}/dist/release-b/
+          retention-days: 1
+          if-no-files-found: error
+
+  cut-release-reproducible:
+    name: cut-release is byte-reproducible + boots (vms-d73)
+    needs: [changes, cut-release-a, cut-release-b]
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only.
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      - name: Fetch cut A
+        uses: actions/download-artifact@v4
+        with:
+          name: release-cut-a
+          path: ${{ github.workspace }}/dist/release-a
+      - name: Fetch cut B
+        uses: actions/download-artifact@v4
+        with:
+          name: release-cut-b
+          path: ${{ github.workspace }}/dist/release-b
+
+      # Both cuts succeeded (needs:), so the assertions below always run.
+      - id: cut_a
+        run: echo "cut A produced by the cut-release-a job"
+      - id: cut_b
+        run: echo "cut B produced by the cut-release-b job"
+
 
       # CO-RELEASE GATE PROOF (vms-ca5, epic vms-f10): tools/cut-release.sh
       # now builds VAX (netbsd-vax/elf32-vax) artifacts UNCONDITIONALLY as
@@ -571,11 +718,11 @@ jobs:
   # -----------------------------------------------------------------------
   upgrade-e2e:
     name: install -> UPGRADE -> boot e2e (vms-f05)
-    needs: [changes, aarch64-release-set]
+    needs: [changes, aarch64-release-set, build-image]
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -613,15 +760,10 @@ jobs:
           cmake --build build -j"$(nproc)" --target vms_initialize vmsfs_master
 
       - name: Build bootable image (qemu tooling only -- boots the two cuts' own artifacts)
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: install -> UPGRADE -> boot e2e
         id: upgrade_e2e
@@ -661,7 +803,7 @@ jobs:
   # -----------------------------------------------------------------------
   install-boot-e2e:
     name: install /DESTINATION -> boot the installed target -> login (vms-96ec)
-    needs: changes
+    needs: [changes, build-image]
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -689,15 +831,10 @@ jobs:
           cmake --build build -j"$(nproc)" --target vms_initialize
 
       - name: Build bootable image (qemu tooling + the OS kit staged at SYS$UPDATE:)
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: install /DESTINATION -> boot installed target -> login
         id: install_boot_e2e
@@ -748,7 +885,7 @@ jobs:
   # -----------------------------------------------------------------------
   release-install-e2e:
     name: R1 release e2e — media→menu install→separate container→login→PRODUCT SHOW (vms-37f)
-    needs: changes
+    needs: [changes, build-image]
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -776,15 +913,10 @@ jobs:
           cmake --build build -j"$(nproc)" --target vms_initialize
 
       - name: Build bootable image (qemu tooling + install media + the OS kit)
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: media -> menu install -> separate container -> login -> PRODUCT SHOW (incl. the no-flush negative control)
         id: release_install
@@ -837,11 +969,11 @@ jobs:
   # -----------------------------------------------------------------------
   release-acceptance-e2e:
     name: Release-acceptance gate — boot the CUT artifact, verify shipped version (vms-a86f)
-    needs: [changes, aarch64-release-set]
+    needs: [changes, aarch64-release-set, build-image]
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    if: ${{ needs.changes.outputs.heavy_release == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
 
@@ -907,17 +1039,12 @@ jobs:
           echo "OK: all $n Alpha co-release artifacts present in the acceptance bundle"
 
       - name: Build bootable image (qemu tooling only -- boots the cut bundle's own artifacts)
-        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
         id: build
-        uses: docker/build-push-action@v6
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: Release-acceptance gate — boot the cut artifact, run the PARTS scenario, verify the shipped version
         if: ${{ !cancelled() && steps.cut.outcome == 'success' && steps.build.outcome == 'success' }}
@@ -1034,7 +1161,7 @@ jobs:
           # Reuses the shared gha layer cache: only the late test-overlay layer
           # differs from the shipped build, so the kernel + build-static layers are
           # cache hits (fast rebuilds), the reason CI beats a cold rail build here.
-          cache-from: type=gha
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main
           # import only: persistent-boot is this scope's one writer (rd vms-14da)
 
       - name: Daytime cold-boot proof — INETD launches DAYTIME (ACP-stage), :13 answers RFC 867
@@ -1096,7 +1223,7 @@ jobs:
   # -----------------------------------------------------------------------
   dcl-acceptance-e2e:
     name: DCL/SHOW acceptance gate — boot, run the commands a user types, assert VMS-faithful output
-    needs: changes
+    needs: [changes, build-image]
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -1114,15 +1241,10 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: DCL/SHOW acceptance gate — boot, log in, run the battery, assert VMS-faithful output
         run: |
@@ -1155,6 +1277,24 @@ jobs:
           fi
           exit "$rc"
 
+      # rd vms-a353: TWO booted DECnet nodes on one segment (QEMU socket
+      # netdev). SET HOST A -> B: A's console OUTPUT never shows B's password
+      # (the CTERM Start Read for Password: is no-echo; negative control: the
+      # Username: read does echo), and %REM-S-END starts its own line. Same
+      # image as above. A SKIP (77) is a hard failure.
+      - name: DECnet SET HOST pair — no remote password echo, %REM-S-END on its own line (vms-a353)
+        if: ${{ always() }}
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_decnet_sethost_pair_boot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: decnet_sethost_pair_boot_e2e SKIPPED in CI — it must actually boot two nodes and SET HOST." >&2
+            exit 1
+          fi
+          exit "$rc"
+
   # -----------------------------------------------------------------------
   # console-newline-spam-e2e (vms-dec): the boot-console coverage CI lacked.
   # Every other boot gate waits for "Username:" and only THEN feeds input, so
@@ -1166,7 +1306,7 @@ jobs:
   # (tests/qemu/test_console_boot_no_newline_spam.sh).
   console-newline-spam-e2e:
     name: "Console boot — no echoed-RETURN newline spam before Username: (vms-dec)"
-    needs: changes
+    needs: [changes, build-image]
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -1184,15 +1324,10 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: Console newline-spam gate — hammer RETURN during boot, assert no echoed blank-line spam
         run: |
@@ -1222,7 +1357,7 @@ jobs:
   # boot/e2e battery stays in the non-PR persistent-boot tier.
   device-discovery-alternate-disk-e2e:
     name: "Alternate-disk boot — 2nd-disk device discovery reaches login (vms-9f5)"
-    needs: changes
+    needs: [changes, build-image]
     if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -1240,15 +1375,10 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: Alternate-disk boot — system on the second disk reaches login (vms-9f5)
         run: |
@@ -1508,7 +1638,7 @@ jobs:
   # -----------------------------------------------------------------------
   parts-demo-e2e:
     name: PARTS 0.2 Demo E2E (real boot, RMS load, DIRECTORY corroboration)
-    needs: changes
+    needs: [changes, build-image]
     # vms-fb8 tier-split: heavy PARTS demo e2e runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -1529,15 +1659,10 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: PARTS 0.2 demo e2e — boot, install, run, verify
         run: |
@@ -1570,7 +1695,7 @@ jobs:
   # -----------------------------------------------------------------------
   boot-scsnode-hostname-e2e:
     name: SCSNODE -> real hostname across reboot (vms-b6a7)
-    needs: changes
+    needs: [changes, build-image]
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -1591,15 +1716,10 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: SCSNODE -> hostname e2e — boot, SYSGEN, reboot, verify
         run: |
@@ -1634,7 +1754,7 @@ jobs:
   # -----------------------------------------------------------------------
   sysboot-cluster-params-e2e:
     name: SYSBOOT> authors cluster params (vms-46c gap #2)
-    needs: changes
+    needs: [changes, build-image]
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -1655,15 +1775,10 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: SYSBOOT> cluster-param e2e — author at prompt, boot, verify in-guest
         run: |
@@ -1685,8 +1800,8 @@ jobs:
   # VMS-faithful operator procedure -- @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM, the
   # CHANGE path from docs/cluster-configuration-guide.md -- INTERACTIVELY over
   # the console on a real booted OVMX, then reboots the same disk, and the
-  # running system ADOPTS the authored SCSNODE: the boot console's own
-  # %OVMX-I-SCSNODE line names it and F$GETSYI("NODENAME") (the live Linux
+  # running system ADOPTS the authored SCSNODE: the boot's own
+  # %OVMX-I-SCSNODE record (SYS$MANAGER:OPERATOR.LOG, rd vms-158d) names it and F$GETSYI("NODENAME") (the live Linux
   # hostname PID 1 sethostname()'d from the authored SCSNODE) reads it back,
   # with F$GETSYI("SCSNODE") and SYSGEN USE CURRENT agreeing. Where
   # boot-scsnode-hostname-e2e types the SYSGEN commands by hand and the host
@@ -1699,7 +1814,7 @@ jobs:
   # -----------------------------------------------------------------------
   cluster-config-lan-e2e:
     name: CLUSTER_CONFIG_LAN.COM author -> reboot -> adopt (vms-23b9)
-    needs: changes
+    needs: [changes, build-image]
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
@@ -1720,15 +1835,10 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: CLUSTER_CONFIG_LAN.COM e2e — run the procedure, reboot, verify adoption
         run: |
@@ -1756,7 +1866,7 @@ jobs:
   # -----------------------------------------------------------------------
   cluster-config-lan-2node-e2e:
     name: 2-node cluster via @CLUSTER_CONFIG_LAN.COM (ADD) -> found/join (vms-23b9 rung 2)
-    needs: changes
+    needs: [changes, build-image]
     if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -1774,15 +1884,10 @@ jobs:
         uses: ./.github/actions/setup-buildx
 
       - name: Build bootable image
-        uses: docker/build-push-action@v6
+        uses: ./.github/actions/boot-image
         with:
-          context: .
-          file: distro/Dockerfile.bootable
-          push: false
-          load: true
-          tags: ovmx-boot:latest
-          cache-from: type=gha
-          # import only: persistent-boot is this scope's one writer (rd vms-14da)
+          image: ${{ needs.build-image.outputs.image }}
+          kernel-base: ${{ needs.build-image.outputs.kernel-base }}
 
       - name: 2-node cluster e2e — configure both nodes, form/join, verify CN=2
         run: |
@@ -1805,8 +1910,13 @@ jobs:
     if: ${{ always() }}
     needs:
       - changes
+      - kernel-base
+      - build-image
       - persistent-boot
       - aarch64-release-set
+      - release-sign-key
+      - cut-release-a
+      - cut-release-b
       - cut-release-reproducible
       - upgrade-e2e
       - install-boot-e2e

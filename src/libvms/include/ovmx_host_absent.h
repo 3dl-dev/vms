@@ -10,7 +10,8 @@
  * reference at 0 and a service that reached one jumped to address 0. In that
  * build each name below fails honestly instead (-1, errno ENOSYS), and the
  * service takes the failure path it already has for a host that refuses the
- * call. Other builds are unchanged: this header defines nothing there.
+ * call. fork is the exception: the process creation services get the substrate's
+ * fork from libvmssys (vms_kif_task_fork). Other builds are unchanged: this header defines nothing there.
  * Include it after the system headers.
  */
 #ifndef OVMX_HOST_ABSENT_H
@@ -35,6 +36,19 @@ static inline int ovmx_host_absent(void)
 #undef setpriority
 #undef sched_yield
 #undef fork
+/* fork() is not a DEC C name, but a process service creates its task with the
+ * substrate's fork and then has the executive register it as a VMS process
+ * (VMS_IOCTL_CREPRC_PCB). That task creation is libvmssys's: vms_kif_task_fork. */
+extern int vms_kif_task_fork(void);
+static inline int ovmx_alpha_fork(void)
+{
+    int r = vms_kif_task_fork();
+    if (r < 0) {
+        errno = -r;
+        return -1;
+    }
+    return r;
+}
 #define timer_create(c, s, t)       ((void)(c), (void)(s), (void)(t), ovmx_host_absent())
 #define timer_settime(t, f, n, o)   ((void)(t), (void)(f), (void)(n), (void)(o), ovmx_host_absent())
 #define timer_delete(t)             ((void)(t), ovmx_host_absent())
@@ -43,7 +57,7 @@ static inline int ovmx_host_absent(void)
 #define tcflush(fd, q)              ((void)(fd), (void)(q), ovmx_host_absent())
 #define setpriority(w, i, n)        ((void)(w), (void)(i), (void)(n), ovmx_host_absent())
 #define sched_yield()               ovmx_host_absent()
-#define fork()                      ovmx_host_absent()
+#define fork()                      ovmx_alpha_fork()
 #else
 #define OVMX_HOST_ABSENT 0
 #endif

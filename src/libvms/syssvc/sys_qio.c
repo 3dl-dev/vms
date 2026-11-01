@@ -81,6 +81,7 @@ extern int vms_uring_submit_rw(int fd, void *buf, uint32_t len, uint64_t offset,
                                 void (*astadr)(uint32_t), uint32_t astprm);
 extern int vms_uring_wait_completion(void);
 extern int vms_uring_process_completions(void);
+extern int vms_uring_cancel_fd(int fd);
 
 /*
  * Try to ensure io_uring is initialized; returns 1 if available, 0 if not.
@@ -560,6 +561,16 @@ void vms$$qio_cancel_chan(uint16_t chan)
 void vms$$qio_cancel_chan(uint16_t chan) { (void)chan; }
 #endif /* __linux__ */
 
+/* $CANCEL support, io_uring half (vms-c8c): every request queued on the
+ * channel's descriptor is cancelled in the kernel and completes with
+ * SS$_CANCEL in its IOSB (+ event flag + AST). */
+void vms$$qio_cancel_uring(uint16_t chan)
+{
+    int fd = vms$$chan_to_fd(chan);
+    if (fd >= 0)
+        (void)vms_uring_cancel_fd(fd);
+}
+
 /*
  * qio_mailbox_op - IO$_READVBLK/WRITEVBLK for a MAILBOX channel (vms-d44).
  *
@@ -866,7 +877,9 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
  *   IO$_READVBLK  p1 = buffer, p2 = size; waits for a message. With IO$M_NOW it
  *                 completes at once, SS$_ENDOFFILE when none is buffered.
  *   IO$_DEACCESS  disconnect.
- *   IO$_ACPCONTROL a READ-ONLY query of NETACP's volatile database (NCP SHOW,
+ *   IO$_ACPCONTROL a query of NETACP's volatile database (NCP SHOW) or a change
+ *                 to its volatile node database (NCP SET/CLEAR NODE, dnet_netctl,
+ *                 OPER checked by NETACP; rd vms-acf3) -- (NCP SHOW,
  *                 DCL SHOW NETWORK -- rd vms-30e): p1 = buffer, p2 = its size,
  *                 p3 = the length of the query the caller placed at p1 (a
  *                 dnet_netshow request). NETACP's snapshot record overwrites the
@@ -1077,6 +1090,10 @@ static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         }
     }
 
+    /* The IOSB status is a WORD: a facility status (an RMS$_ code NETACP got
+     * reading a file) is given as its SS$ form, never truncated into a
+     * "%NONAME-E-NOMSG" number (rd vms-acf3). */
+    st = dnet_broker_iosb_status(st);
     if (iosb) {
         iosb->iosb$w_status = (uint16_t)st;
         iosb->iosb$w_bcnt = (xfer > 65535) ? 65535 : (uint16_t)xfer;

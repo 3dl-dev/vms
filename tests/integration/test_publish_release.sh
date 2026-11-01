@@ -112,7 +112,7 @@ grep -q "^gh release create $TAG_CORE " "$GH_LOG" \
     || { cat "$GH_LOG"; fail "case1: did not call 'gh release create $TAG_CORE'"; }
 ok "good bundle -> gh release create under the version-derived tag ($TAG_CORE)"
 
-CREATE_LINE="$(grep '^gh release create' "$GH_LOG")"
+CREATE_LINE="$(grep -a '^gh release create' "$GH_LOG")"
 for asset in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit \
              ovmx-os.kit.manifest.txt SHA256SUMS release-manifest.json; do
     case "$CREATE_LINE" in
@@ -233,7 +233,7 @@ GH_RELEASE_EXISTS=0 "$REPO/tools/publish-release.sh" --bundle-dir "$MULTI" \
     || { cat "$WORK/out6.txt"; fail "case6: publisher failed on a valid multi-arch bundle"; }
 ok "multi-arch bundle (colliding per-arch basenames) publishes without error"
 
-CREATE6="$(grep '^gh release create' "$GH_LOG")"
+CREATE6="$(grep -a '^gh release create' "$GH_LOG")"
 # The colliding basenames must have been namespaced by arch dir.
 for want in STARTUP-VAX.EXE STARTUP-ALPHA.EXE DCL-VAX.EXE DCL-ALPHA.EXE; do
     case "$CREATE6" in

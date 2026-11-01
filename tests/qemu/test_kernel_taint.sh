@@ -259,8 +259,10 @@ echo "[... console truncated ...]"
 echo ""
 
 # Positive: the executive actually loaded (so a clean mask is meaningful).
-check "vms.ko loaded (executive attached)"          "$OUT" "%OVMX-I-EXEC" present
-check "system disk mounted (Files-11 ACP in vms.ko)" "$OUT" "%OVMX-I-MOUNTED" present
+check "vms.ko loaded (executive attached)"          "$OUT" " - OpenVMS-compatible" present
+# rd vms-158d: STDRV begins only after the Files-11 ACP mounted the system disk
+# and read an installed system from it (the mount line is an OPERATOR.LOG record).
+check "system disk mounted (Files-11 ACP in vms.ko)" "$OUT" "%STDRV-I-STARTUP, OpenVMX startup begun" present
 
 # THE DURABLE ASSERTION: the numeric mask, read from the real proc file by the
 # booted PID 1. Extract "%OVMX-I-TAINT, kernel taint mask = <N> ...".

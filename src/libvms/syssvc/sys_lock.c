@@ -262,11 +262,33 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
         status = vms_kif_convert(lkid, lkmode, kflags,
                                   (uint64_t)(uintptr_t)blkastadr, valblk);
     } else {
-        char name[32] = "";
-        if (resnam && resnam->dsc$a_pointer)
-            dsc$strncpy(name, resnam, sizeof(name));
+        /*
+         * THE DESCRIPTOR'S OWN COUNT GOES TO THE EXECUTIVE (rd vms-326).
+         *
+         * $ENQ takes the resource name as a counted descriptor, and VMS's own
+         * components put NUL bytes inside one: RMS names a file-access lock
+         * 'RMS$' + the 6-byte file id + 0x02 + the 12-byte space-padded
+         * volume label + three NULs (26 bytes, measured on 1,130 real
+         * cat-0x02 frames). `dsc$strncpy` NUL-terminated it into a C string
+         * and the count was lost, so such a name reached the lock manager as
+         * its 7-byte prefix -- one cluster-wide resource for every file of
+         * that file id on every volume (rd vms-acf3). The bytes are copied
+         * counted and the count travels with them.
+         *
+         * The length was already checked above (1..31, SS$_IVBUFLEN).
+         */
+        char name[32];
+        uint32_t name_len = 0;
 
-        status = vms_kif_enq(efn, lkmode, kflags, name, parid,
+        memset(name, 0, sizeof(name));
+        if (resnam && resnam->dsc$a_pointer) {
+            name_len = resnam->dsc$w_length;
+            if (name_len > sizeof(name))
+                name_len = sizeof(name);
+            memcpy(name, resnam->dsc$a_pointer, name_len);
+        }
+
+        status = vms_kif_enq(efn, lkmode, kflags, name, name_len, parid,
                               (uint64_t)(uintptr_t)astadr, astprm,
                               (uint64_t)(uintptr_t)blkastadr,
                               &lkid, valblk);

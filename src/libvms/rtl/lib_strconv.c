@@ -4,6 +4,7 @@
  *
  * Implements:
  *   lib$movtc                       - move translated characters (VAX MOVTC)
+ *   lib$movtuc                      - move translated until char (VAX MOVTUC)
  *   lib$tra_asc_ebc / lib$tra_ebc_asc - ASCII<->EBCDIC translation
  *   lib$scopy_r_dx                  - copy string by reference to descriptor
  *   lib$cvt_dx_dx                   - convert (numeric/text) descriptor to text
@@ -162,6 +163,53 @@ uint32_t lib$movtc(const struct dsc$descriptor_s *src,
         dst->dsc$a_pointer[i] = fillc;
     }
     return (src->dsc$w_length > dst->dsc$w_length) ? LIB$_STRTRU : SS$_NORMAL;
+}
+
+/*
+ * lib$movtuc - Move translated until character (VAX MOVTUC semantics).
+ *
+ * Per the RTL Library (LIB$) Manual: each source character indexes the
+ * 256-byte table; the TRANSLATED character is compared with the first
+ * byte of stop-character, and on a match translation ends without
+ * writing it.  Translation also ends when the source or the destination
+ * is exhausted.  If fill-character is supplied, the remainder of the
+ * destination (from where translation ended) is set to its first byte,
+ * untranslated; if it is omitted, the remainder is left unchanged.
+ *
+ * Returns the relative (1-based) position in the source of the character
+ * that translated to the stop character, 0 if the stop character was not
+ * found, and -1 if destination-string cannot be written.
+ */
+uint32_t lib$movtuc(const struct dsc$descriptor_s *src,
+                    const struct dsc$descriptor_s *stop,
+                    const struct dsc$descriptor_s *table,
+                    struct dsc$descriptor_s *dst,
+                    const struct dsc$descriptor_s *fill) {
+    if (!dst || (dst->dsc$w_length && !dst->dsc$a_pointer))
+        return (uint32_t)-1;
+    if (!src || !stop || !table || !stop->dsc$a_pointer || !table->dsc$a_pointer ||
+        (src->dsc$w_length && !src->dsc$a_pointer))
+        return 0;
+
+    const unsigned char *t = (const unsigned char *)table->dsc$a_pointer;
+    unsigned char stopc = (unsigned char)stop->dsc$a_pointer[0];
+    uint16_t n = (src->dsc$w_length < dst->dsc$w_length)
+                     ? src->dsc$w_length : dst->dsc$w_length;
+    uint32_t pos = 0;
+    uint16_t i;
+    for (i = 0; i < n; i++) {
+        unsigned char c = t[(unsigned char)src->dsc$a_pointer[i]];
+        if (c == stopc) {
+            pos = (uint32_t)i + 1;
+            break;
+        }
+        dst->dsc$a_pointer[i] = (char)c;
+    }
+    if (fill && fill->dsc$a_pointer) {
+        for (uint16_t j = i; j < dst->dsc$w_length; j++)
+            dst->dsc$a_pointer[j] = fill->dsc$a_pointer[0];
+    }
+    return pos;
 }
 
 /*

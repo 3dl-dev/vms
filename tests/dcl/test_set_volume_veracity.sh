@@ -7,7 +7,7 @@
 # EXPECT: contains:DCL-ALIVE
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \BOGUS\
-# EXPECT: contains:$STATUS = "%X000008F0"
+# EXPECT: contains:$STATUS = "%X00038240"
 # EXPECT: contains:%SET-E-DEVNOTMNT, device is not mounted - _VDA300:
 # EXPECT: contains:$STATUS = "%X0000007C"
 # EXPECT_NOT: contains:%SET-I-NOTIMPL

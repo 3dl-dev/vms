@@ -25,6 +25,7 @@ void dcl_lexer_init(dcl_lexer_t *lex, const char *input)
     lex->line = 1;
     lex->col = 1;
     lex->at_line_start = 1;
+    lex->ext_names = 0;
 }
 
 /*
@@ -394,9 +395,11 @@ int dcl_lexer_next(dcl_lexer_t *lex, dcl_token_t *token)
         /* Not a dot operator; fall through to word scanning */
     }
 
-    /* Word: alphanumeric, $, _, ., :, *, %, ~ (for filespecs) */
+    /* Word: alphanumeric, $, _, ., :, *, %, ~ (for filespecs); under
+     * PARSE_STYLE=EXTENDED also a '^' escape (rd vms-0b0) */
     if (isalnum((unsigned char)c) || c == '_' || c == '$' || c == '.'
-        || c == '*' || c == '%' || c == '~' || c == '[' || c == ']') {
+        || c == '*' || c == '%' || c == '~' || c == '[' || c == ']'
+        || (c == '^' && lex->ext_names)) {
         size_t vi = 0;
         int had_colon = 0;
         while (lex->pos < lex->length) {
@@ -408,6 +411,19 @@ int dcl_lexer_next(dcl_lexer_t *lex, dcl_token_t *token)
                 if (vi < sizeof(token->value) - 1)
                     token->value[vi++] = ch;
                 lex_advance(lex);
+            } else if (ch == '^' && lex->ext_names) {
+                /* An ODS-5 escape (rd vms-0b0; lab-Alpha V8.4 under
+                 * PARSE_STYLE=EXTENDED: COPY NL: libstdc^+^+.a, a^_b.txt):
+                 * the '^' and the one character after it, whatever it is,
+                 * belong to the filespec word. RMS reads the escape. */
+                if (vi < sizeof(token->value) - 1)
+                    token->value[vi++] = ch;
+                lex_advance(lex);
+                if (lex->pos < lex->length && lex_peek(lex) != '\n' && lex_peek(lex) != '\0') {
+                    if (vi < sizeof(token->value) - 1)
+                        token->value[vi++] = lex_peek(lex);
+                    lex_advance(lex);
+                }
             } else if (ch == ';') {
                 /* VMS file version delimiter appearing INSIDE a filespec word:
                  * ';', ';N', ';*' or ';-N'. DCL's only comment character is

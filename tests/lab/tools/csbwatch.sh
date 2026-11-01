@@ -106,7 +106,7 @@ kx pkill -f SCSD.EXE 2>/dev/null
 wait $SCSDP 2>/dev/null; wait $TCPD 2>/dev/null
 
 log "XITDONE=$(kx grep -ac XITDONE $L/scsd-$TAG.log 2>/dev/null)  RETX=$(kx grep -ac 'RETRANSMIT 0x7b' $L/scsd-$TAG.log 2>/dev/null)"
-log "identity on the wire: $(strings -a "$HOSTL/d94-$TAG.pcap" 2>/dev/null | grep -oE 'OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
+log "identity on the wire: $(strings -a "$HOSTL/d94-$TAG.pcap" 2>/dev/null | grep -a -oE 'OVMX[A-Z0-9]{2}' | sort -u | tr '\n' ' ')"
 if kubectl -n $NS exec "$POD" -- test -r "/lab/$TAG.sysgen.cluster" 2>/dev/null; then
   kubectl -n $NS cp "$POD:/lab/$TAG.sysgen.cluster" "$STORE.cluster" >/dev/null 2>&1
   log "pulled prior-admission sidecar back ($(wc -c < "$STORE.cluster" 2>/dev/null) bytes)"

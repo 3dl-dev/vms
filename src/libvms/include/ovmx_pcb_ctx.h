@@ -18,4 +18,8 @@
 struct vms_pcb;
 struct vms_pcb *vms$$pcb_for_service(void);
 #define vms_pcb_get() vms$$pcb_for_service()
+/* The first half of $EXIT: run (and take off the list) the declared exit
+ * handlers. sys$exit, and IMGACT when an image's main returns (vms-1c83). */
+#include <stdint.h>
+uint32_t vms$$run_exit_handlers(uint32_t code);
 #endif

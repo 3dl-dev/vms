@@ -101,6 +101,14 @@ extern "C" {
 #define LIB$_INSEF          0x00158294  /* Insufficient event flags */
 #define LIB$_EF_ALRRES      0x001582A4  /* Event flag already reserved */
 
+/* Logical-unit allocator status codes (LIB$GET_LUN/FREE_LUN). Values from the
+ * VAX V7.3 $LIBDEF (docs/oracle/vax73-starlet-defs/LIBDEF.txt) -- the same
+ * values LIB$GET_LUN / LIB$FREE_LUN returned on VAX1 (2026-10-21,
+ * tests/lab/captures/lib-lun-20261021/). */
+#define LIB$_INSLUN         0x001582B4  /* Insufficient logical unit numbers */
+#define LIB$_LUNALRFRE      0x001582BC  /* Logical unit number already free */
+#define LIB$_LUNRESSYS      0x001582C4  /* Logical unit number reserved to system */
+
 /* Severe/fatal (severity = 4) */
 #define LIB$_BUGCHECK       0x00158004  /* Internal consistency failure */
 #define LIB$_INPSTRTRU      0x0015821C  /* Input string was truncated

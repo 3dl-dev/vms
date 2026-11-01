@@ -58,6 +58,8 @@ enum dnet_store_db {
 #define DNET_STORE_EINVAL (-1)
 #define DNET_STORE_ECORRUPT (-2)  /* the database exists but does not parse      */
 #define DNET_STORE_EWRITE (-3)    /* could not write it (no executive/ACP volume) */
+#define DNET_STORE_EREAD  (-4)    /* it is there but could not be read: the RMS
+                                     status is dnet_store_last_rms_status()     */
 
 /* The VMS file specification of database `db` (always the VMS name). */
 const char *dnet_store_vms_spec(enum dnet_store_db db);
@@ -102,6 +104,9 @@ int dnet_store_load_executor(struct dnet_executor *x);
 int dnet_store_save_executor(const struct dnet_executor *x);
 
 /* Load/save the remote node + object databases (same absent/corrupt rules). */
+/* The RMS status behind the last DNET_STORE_EREAD (rd vms-acf3). */
+uint32_t dnet_store_last_rms_status(void);
+
 int dnet_store_load_nodes(struct dnet_nodedb *db);
 int dnet_store_save_nodes(const struct dnet_nodedb *db);
 int dnet_store_load_objects(struct dnet_objectdb *db);

@@ -10,16 +10,16 @@ tier: 1
 plan_ref: vms-d37
 summary: >
   The 3 SYS$ logical-name entry points (CRELNM/DELLNM/TRNLNM) are all
-  implemented. LNM$SYSTEM is executive-resident: create/delete/translate go
-  through /dev/vms (vms_kif_lnm_define/_delete/_translate) so a name defined
-  in LNM$SYSTEM by one process is visible to every other process on the node,
-  with no per-process fallback if the executive is absent (fails honestly
-  with SS$_NOSUCHDEV, per Rule 9/INV-6). LNM$PROCESS/JOB/GROUP tables remain
-  process-private in a local logical_table[] array; JOB/GROUP executive
-  residency (making them visible across the processes of a job/group, as on
-  real VMS) is the deferred half of vms-d37.
-last_reviewed: 2026-09-14
+  implemented, and every table they reach is the executive's: LNM$PROCESS,
+  LNM$JOB, LNM$GROUP and LNM$SYSTEM are VMS_LNM_TBL_* tables in vms.ko
+  (sys_logical.c tab_exec_id), reached through /dev/vms. LNM$SYSTEM is shared
+  node-wide, LNM$GROUP by the processes of a UIC group and LNM$JOB by a job
+  tree (vms-aba), and the clusterwide tables are executive state too
+  (vms-94a). With no executive a call fails honestly (SS$_NOSUCHDEV). Re-census
+  2026-10-21: the summary still described process-private PROCESS/JOB/GROUP
+  tables in a local logical_table[], which no longer exists.
+last_reviewed: 2026-10-21
 items:
-  - {id: sys$crelnm, kind: routine, status: partial, authenticity: real, vms: "Create or supersede a logical name in a table", evidence: src/libvms/syssvc/sys_logical.c, notes: "LNM$SYSTEM is executive-resident via /dev/vms; LNM$PROCESS/JOB/GROUP remain process-private (JOB/GROUP executive residency deferred)"}
-  - {id: sys$dellnm, kind: routine, status: partial, authenticity: real, vms: "Delete a logical name from a table", evidence: src/libvms/syssvc/sys_logical.c, notes: "same LNM$SYSTEM-executive / PROCESS-JOB-GROUP-local split as sys$crelnm"}
-  - {id: sys$trnlnm, kind: routine, status: partial, authenticity: real, vms: "Translate a logical name (walks PROCESS -> JOB -> GROUP -> SYSTEM search order)", evidence: src/libvms/syssvc/sys_logical.c, notes: "SYSTEM step reads the executive's read-only mmap arena; PROCESS/JOB/GROUP steps read process-private logical_table[]"}
+  - {id: sys$crelnm, kind: routine, status: implemented, authenticity: real, vms: "Create or supersede a logical name in a table", evidence: src/libvms/syssvc/sys_logical.c, notes: "Every table is executive-resident (PROCESS, JOB, GROUP, SYSTEM, clusterwide). Proof tests/qemu/test_syssvc_lnm_groupjob.c (a name is visible inside its group/job scope and not outside it; negctl defects.d/lnm-delete-noop), test_syssvc_lnm_crossproc.c (negctl defects.d/lnm-group-scope-collapsed), test_syssvc_lnm_system.c; semantic oracle lnm family 87 cases, 1 known difference (LNM.TRN.SYSSCR) in CI run 39562817462."}
+  - {id: sys$dellnm, kind: routine, status: implemented, authenticity: real, vms: "Delete a logical name from a table", evidence: src/libvms/syssvc/sys_logical.c, notes: "Deletes from the executive table, as sys$crelnm creates in it. Proof as sys$crelnm."}
+  - {id: sys$trnlnm, kind: routine, status: implemented, authenticity: real, vms: "Translate a logical name (walks PROCESS -> JOB -> GROUP -> SYSTEM search order)", evidence: src/libvms/syssvc/sys_logical.c, notes: "Each step of the search order is a vms_kif_lnm_lookup of that executive table. Proof as sys$crelnm."}

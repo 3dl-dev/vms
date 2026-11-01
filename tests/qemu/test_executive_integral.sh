@@ -137,7 +137,7 @@ fi
 cp "$DISTRIB_IMG" "$DISK_A"
 OUT_A=$(run_qemu "$INITRD_OK" "$DISK_A")
 
-check "Boot A: executive attached" "$OUT_A" '%OVMX-I-EXEC'
+check "Boot A: executive attached" "$OUT_A" ' - OpenVMS-compatible'
 check "Boot A: system came up (boot banner)" "$OUT_A" "$EXPECTED_BOOT_BANNER"
 check "Boot A: no executive-image load error" "$OUT_A" '%EXECINIT, error loading system file' absent
 check "Boot A: no OVMX-facility exec halt" "$OUT_A" '%OVMX-F-EXECINIT' absent

@@ -1,0 +1,19 @@
+== tools/cluster/pcap_to_conformance.py over the OVMX node's own frames ==
+pcap_to_conformance: 15 frame(s) emitted from 52:54:00:00:e5:01
+pcap_to_conformance: no table type for cat 02 op 03 (1 frame(s)) -- NOT guessed
+pcap_to_conformance: no table type for cat 82 op 01 (1 frame(s)) -- NOT guessed
+pcap_to_conformance: no table type for cat 82 op 15 (3 frame(s)) -- NOT guessed
+pcap_to_conformance: no table type for cat 86 op 00 (1 frame(s)) -- NOT guessed
+
+== the two op-0x14s OVMXE originated, in conformance-dump format ==
+dlm_rm_14 72 group=0,acmode=3,namelen=4,hash=0xeb6f253c 10000e00010008000214000001000200000000000000000000000000000000000000000000000000000000000000030452413754000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003c256feb
+dlm_rm_14 72 group=0,acmode=3,namelen=4,hash=0xeb6f253c 7300180101000b000214000001000200000000000000000000000000000000000000000000000000000000000000030452413754000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003c256feb
+
+== tools/cluster/frame_conformance.py over them ==
+frame_conformance: 2 frames, types {'dlm_rm_14': 2}
+  FAIL frame 1 (dlm_rm_14): abs 72+4 = 10000e00 fails row 260 (const const:0): == 0x0
+  FAIL frame 1 (dlm_rm_14): abs 76+4 = 01000800 fails row 261 (const const:0): == 0x0
+  FAIL frame 1 (dlm_rm_14): abs 84+4 = 01000200 fails row 265 (const const:0): == 0x0
+  FAIL frame 2 (dlm_rm_14): abs 72+4 = 73001801 fails row 260 (const const:0): == 0x0
+  FAIL frame 2 (dlm_rm_14): abs 76+4 = 01000b00 fails row 261 (const const:0): == 0x0
+frame_conformance: 6 failure(s)

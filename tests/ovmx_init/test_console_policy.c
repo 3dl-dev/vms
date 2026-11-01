@@ -94,6 +94,14 @@ int main(void)
     check("the executive's OPA0: level is the ERR level",
           OVMX_OPA0_PRINTK_LEVEL, LVL_ERR);
 
+    /* 5. rd vms-c56: the executive's DIAGNOSTIC lines stay off OPA0: ... */
+    reaches("the executive's diagnostic level stays off the muted console",
+            OVMX_OPLOG_PRINTK_LEVEL, 0);
+    /* ... and stay where the kmsg bridge files them in OPERATOR.LOG
+     *     (opcom_kmsg_classify drops INFO and DEBUG). */
+    check("the executive's diagnostic level is the NOTICE level",
+          OVMX_OPLOG_PRINTK_LEVEL, LVL_NOTICE);
+
     /* ... and the predicate itself is the Linux rule, not a tautology: a
      *     record AT the console level is dropped, one below it is printed. */
     check("a record at the console level is dropped",

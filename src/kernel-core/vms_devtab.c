@@ -3354,6 +3354,16 @@ long vms_ioctl_cluster_getsyi(struct vms_proc *proc, unsigned long arg)
             args.hw_model_len = (uint8_t)n;
         }
     }
+    /* rd vms-433: the SCSNODE this system booted with, from the parameters
+     * VMS_IOCTL_SYSGEN_LOAD committed -- the one node name every surface
+     * shows. Read under the fork mutex like the CLUB projection above. */
+    vms_cluster_fork_enter(cl);
+    if (cl->params.scsnode_len != 0u &&
+        cl->params.scsnode_len <= sizeof(args.scsnode)) {
+        memcpy(args.scsnode, cl->params.scsnode, cl->params.scsnode_len);
+        args.scsnode_len = (uint8_t)cl->params.scsnode_len;
+    }
+    vms_cluster_fork_leave(cl);
     args.status = SS__NORMAL;
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -3417,6 +3427,10 @@ static void sysgen_load_args_to_params(const struct vms_sysgen_load_args *args,
     out->alloclass = args->alloclass;
     out->mscp_load = args->mscp_load;
     out->mscp_serve_all = args->mscp_serve_all;
+    /* OVMX_RM_RESIDUE_FILL (rd vms-ed5): a POSITIVE sense, so it carries
+     * straight through -- 0 in a zero-filled args struct is the faithful
+     * value (the vms-42de ruling's zeros). */
+    out->ovmx_rm_residue_fill = args->ovmx_rm_residue_fill;
 
     /*
      * OVMX_CLEAN_DEPART (rd vms-abd): THE ONE FIELD WHOSE SENSE IS UNDONE HERE.

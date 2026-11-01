@@ -814,15 +814,14 @@ uint32_t sys$deltva_64(
  * sys$deltva_64) - this call only marks intent. OVMX does not maintain
  * a cross-process named-global-section registry (sys$mgblsc/
  * sys$mgblsc_64/sys$mgblsc_gpfn_64 are not implemented - see
- * docs/conformance-gap-report.md), so this validates its arguments and
- * returns success without a registry lookup, consistent with how
- * sys$purgws above documents an equivalent honest simplification.
+ * docs/conformance-gap-report.md), so no named section can exist: this
+ * validates its arguments and returns SS$_NOSUCHSEC (vms-d91).
  *
  * @param flags   Section flags (SEC$M_SYSGBL etc. - ignored)
  * @param gsdnam  Descriptor of the global section name (required)
  * @param ident   Optional section version identification
  *
- * @return  SS$_NORMAL on success, SS$_BADPARAM if gsdnam is missing
+ * @return  SS$_NOSUCHSEC (no registry), SS$_BADPARAM if gsdnam is missing
  */
 uint32_t sys$dgblsc(
     uint32_t flags,
@@ -839,15 +838,10 @@ uint32_t sys$dgblsc(
  *
  * @return  SS$_NORMAL on success, SS$_BADPARAM if inadr is NULL
  *
- * OVMX processes are demand-paged by the Linux VMM rather than a
- * VMS-style adjustable working set with a lockable resident-page list
- * (see sys$purgws above for the same tradeoff), so there is no
- * WSQUOTA-bounded lock to perform; OVMX validates the range, echoes it
- * to retadr, and returns success without further action. Because OVMX
- * has no working-set quota, this never returns the real VMS
- * SS$_LKWSETFUL condition (exceeded lockable-page quota) - flagged in
- * vms-fb3 findings since that status value was not independently
- * cross-verified against a second source this session.
+ * OVMX has no VMS-style working-set list; the pages containing the range are
+ * locked into physical memory (mlock, as sys$lckpag) and the page-rounded
+ * range actually locked is returned in retadr. A host refusal is SS$_NOPRIV,
+ * an unmapped range SS$_ACCVIO. SS$_LKWSETFUL is never returned (no WSQUOTA).
  */
 uint32_t sys$lkwset(
     const void *inadr,
@@ -864,8 +858,7 @@ uint32_t sys$lkwset(
  *
  * @return  SS$_NORMAL on success, SS$_BADPARAM if inadr is NULL
  *
- * Companion no-op to sys$lkwset above - see that comment for the
- * demand-paging rationale.
+ * Companion to sys$lkwset above: munlock of the page-rounded range.
  */
 uint32_t sys$ulwset(
     const void *inadr,
@@ -1698,6 +1691,10 @@ uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcna
 /** sys$canwak - Cancel scheduled wakeups of the target (pidadr NULL = self) */
 uint32_t sys$canwak(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam);
 
+/** sys$process_scan - Build a process-selection context for $GETJPI
+ *  (item codes and flags: pscandef.h) */
+uint32_t sys$process_scan(uint32_t *pidctx, void *itmlst);
+
 /** sys$alloc - Allocate a device (phylen/phybuf receive the physical name) */
 uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
                    struct dsc$descriptor_s *phybuf, uint32_t acmode,
@@ -1780,6 +1777,11 @@ uint32_t sys$clrast(void);
 
 /** sys$setdfprot - Set/read the process default file protection (executive-resident); returns RMS$_NORMAL */
 uint32_t sys$setdfprot(const uint16_t *newprot, uint16_t *oldprot);
+/** sys$set_process_propertiesw - set a process property (PPROP$C_; the parse style, rd vms-b9c) */
+uint32_t sys$set_process_propertiesw(void *nullarg1, void *nullarg2, void *nullarg3,
+                                     uint32_t property, uint64_t value,
+                                     uint64_t *prev_value, uint64_t buffer_size,
+                                     uint32_t flags);
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

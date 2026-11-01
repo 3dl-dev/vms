@@ -1,0 +1,90 @@
+captures: 1   answered pairs: {'0e/15': 3, '0f/15': 5, '10/15': 3, '12/01': 4, '14/15': 5}   notifications: {'11': 2, '13': 5}
+
+=== 02/0e -> 82/15   n=3
+   body[  8] rewritten   3/  3   answer values {'82': 3}
+   body[  9] rewritten   3/  3   answer values {'15': 3}
+
+=== 02/0f -> 82/15   n=5
+   body[  8] rewritten   5/  5   answer values {'82': 5}
+   body[  9] rewritten   5/  5   answer values {'15': 5}
+   body[ 28] rewritten   3/  5   answer values {'00': 3, '03': 1, '01': 1}
+   body[ 30] rewritten   3/  5   answer values {'00': 3, '01': 2}
+   body[ 34] rewritten   5/  5   answer values {'fa': 5}
+
+=== 02/10 -> 82/15   n=3
+   body[  8] rewritten   3/  3   answer values {'82': 3}
+   body[  9] rewritten   3/  3   answer values {'15': 3}
+
+=== 02/14 -> 82/15   n=5
+   body[  8] rewritten   5/  5   answer values {'82': 5}
+   body[  9] rewritten   5/  5   answer values {'15': 5}
+   body[ 34] rewritten   2/  5   answer values {'fa': 5}
+
+=== 02/12 -> 82/01 (ROOT records)   n=1
+   body[  8] rewritten   1/  1   answer values {'82': 1}
+   body[  9] rewritten   1/  1   answer values {'01': 1}
+   body[ 20] rewritten   1/  1   answer values {'23': 1}
+   body[ 21] rewritten   1/  1   answer values {'09': 1}
+   body[ 22] rewritten   1/  1   answer values {'00': 1}
+   body[ 23] rewritten   1/  1   answer values {'01': 1}
+   body[ 28] rewritten   1/  1   answer values {'10': 1}
+   body[ 30] rewritten   1/  1   answer values {'f1': 1}
+   body[ 32] rewritten   1/  1   answer values {'d3': 1}
+   body[ 33] rewritten   1/  1   answer values {'04': 1}
+   body[ 34] rewritten   1/  1   answer values {'fa': 1}
+   body[ 36] rewritten   1/  1   answer values {'52': 1}
+   body[ 37] rewritten   1/  1   answer values {'4d': 1}
+   body[ 38] rewritten   1/  1   answer values {'4c': 1}
+   body[ 39] rewritten   1/  1   answer values {'56': 1}
+   body[ 40] rewritten   1/  1   answer values {'42': 1}
+   body[ 41] rewritten   1/  1   answer values {'2d': 1}
+   body[ 42] rewritten   1/  1   answer values {'30': 1}
+   body[ 43] rewritten   1/  1   answer values {'31': 1}
+   body[ 44] rewritten   1/  1   answer values {'32': 1}
+   body[ 45] rewritten   1/  1   answer values {'33': 1}
+   body[ 46] rewritten   1/  1   answer values {'34': 1}
+   body[ 47] rewritten   1/  1   answer values {'35': 1}
+   body[ 48] rewritten   1/  1   answer values {'36': 1}
+   body[ 49] rewritten   1/  1   answer values {'37': 1}
+   body[ 50] rewritten   1/  1   answer values {'38': 1}
+   body[ 51] rewritten   1/  1   answer values {'39': 1}
+   body[ 52] rewritten   1/  1   answer values {'01': 1}
+   body[ 53] rewritten   1/  1   answer values {'00': 1}
+   body[ 54] rewritten   1/  1   answer values {'00': 1}
+   body[ 55] rewritten   1/  1   answer values {'00': 1}
+
+=== 02/12 -> 82/01 (sub records)   n=3
+   body[  8] rewritten   3/  3   answer values {'82': 3}
+   body[  9] rewritten   3/  3   answer values {'01': 3}
+   body[ 20] rewritten   3/  3   answer values {'24': 1, '25': 1, '26': 1}
+   body[ 21] rewritten   3/  3   answer values {'09': 3}
+   body[ 22] rewritten   3/  3   answer values {'00': 3}
+   body[ 23] rewritten   3/  3   answer values {'01': 3}
+   body[ 28] rewritten   3/  3   answer values {'10': 3}
+   body[ 30] rewritten   3/  3   answer values {'00': 3}
+   body[ 31] rewritten   3/  3   answer values {'00': 3}
+   body[ 32] rewritten   3/  3   answer values {'d3': 3}
+   body[ 33] rewritten   3/  3   answer values {'04': 3}
+   body[ 34] rewritten   3/  3   answer values {'fa': 3}
+   body[ 36] rewritten   3/  3   answer values {'00': 3}
+   body[ 39] rewritten   3/  3   answer values {'00': 3}
+   body[ 40] rewritten   3/  3   answer values {'00': 3}
+   body[ 41] rewritten   3/  3   answer values {'00': 3}
+   body[ 43] rewritten   3/  3   answer values {'00': 3}
+   body[ 46] rewritten   3/  3   answer values {'00': 3}
+   body[ 47] rewritten   3/  3   answer values {'00': 3}
+   body[ 48] rewritten   3/  3   answer values {'00': 3}
+   body[ 49] rewritten   3/  3   answer values {'00': 3}
+   body[ 50] rewritten   3/  3   answer values {'00': 3}
+   body[ 51] rewritten   3/  3   answer values {'00': 3}
+   body[ 52] rewritten   3/  3   answer values {'00': 3}
+   body[ 53] rewritten   3/  3   answer values {'00': 3}
+   body[ 54] rewritten   3/  3   answer values {'00': 3}
+   body[ 55] rewritten   3/  3   answer values {'00': 3}
+
+=== op-0x14 body[20:40], classified (rd vms-42de residue test)
+   total                          5
+   stale_grant_record             0
+   stale_directory_answer         2
+   with_vax_s0_kernel_address     0
+   neither                        3

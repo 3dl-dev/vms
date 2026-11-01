@@ -48,6 +48,10 @@ libvms_add_test(test_libvms_lib_vm
 libvms_add_test(test_libvms_lib_bitops
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_bitops.c)
 
+# Test 3b: lib$match_cond -- condition-code match (severity/control bits ignored)
+libvms_add_test(test_libvms_lib_match_cond
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_match_cond.c)
+
 # Test 4: str$copy_dx / str$concat / str$compare / str$trim / str$upcase / str$match_wild
 libvms_add_test(test_libvms_str_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_str_routines.c)
@@ -118,6 +122,10 @@ libvms_add_test(test_libvms_lib_rtl
 
 # Test 7: vms-cd4 conformance-gap batch — dynamic descriptors, simplified
 # logical-name/CLI-symbol wrappers, sys$purgws, sys$getutc
+# $PROCESS_SCAN item-list handling (the walk itself is the QEMU suite's)
+libvms_add_test(test_libvms_process_scan
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_process_scan.c)
+
 libvms_add_test(test_libvms_lib_symtab
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_symtab.c)
 
@@ -181,6 +189,19 @@ add_test(NAME test_libvms_sysuaf_record COMMAND test_libvms_sysuaf_record)
 # SCSSYSTEMID round-trip through the typed SYSGEN store, sys$getsyi)
 libvms_add_test(test_libvms_sysgen_identity
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysgen_identity.c)
+
+# Test 10b: rd vms-c2b -- a parameter the executive READS must exist in the
+# store that SHIPS. Reads the real distro/rootfs OVMXVMSSYS.PAR through the
+# runtime reader; the path arrives in a generated header (see the .h.in).
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/sysgen_store_path.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/sysgen_store_path.h
+    @ONLY
+)
+libvms_add_test(test_libvms_sysgen_shipped_store
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysgen_shipped_store.c)
+target_include_directories(test_libvms_sysgen_shipped_store PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR})
 
 # Test 11: vms-e652 (INV-1) — system-identity SSOT + SYS$ANNOUNCE/SYS$WELCOME.
 # Not via libvms_add_test(): the banner resolver translates logical names and
@@ -573,7 +594,8 @@ add_test(NAME test_libvms_struct_layout_gate
 # incidental vms_kif_procscan() reference. _DEFAULT_SOURCE for localtime_r.
 add_executable(test_libvms_ctrl_t_status
     ${CMAKE_CURRENT_SOURCE_DIR}/test_ctrl_t_status.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c)
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_memfile.c)
 target_include_directories(test_libvms_ctrl_t_status PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
     ${VMS_INCLUDE_DIR}
@@ -612,3 +634,8 @@ libvms_add_test(test_libvms_utc
 # OPCDEF header: the 24-bit target-class mask (bytes 1..3) and the oracle offsets.
 libvms_add_test(test_libvms_opcdef_layout
     ${CMAKE_CURRENT_SOURCE_DIR}/test_opcdef_layout.c)
+
+# LIB$GET_LUN / LIB$FREE_LUN: the processwide logical-unit pool, against the
+# order and statuses observed on VAX1 (tests/lab/captures/lib-lun-20261021/).
+libvms_add_test(test_libvms_lib_lun
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_lun.c)

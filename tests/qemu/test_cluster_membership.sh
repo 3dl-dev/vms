@@ -215,7 +215,7 @@ boot_and_login() {
               "$((BOOT_TIMEOUT * 2 + FORM_WAIT + 180))"
     eval "exec $fd>\"$fifo\""
 
-    wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}" \
+    wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}" \
         && ok "node $key: executive attached (real vms.ko)" \
         || bad "node $key: executive never attached"
     send_to "$fd" ''
@@ -243,7 +243,7 @@ boot_and_login() {
     qemu_boot "$key" "$tap" "$disk" "$log" "$fifo" \
               "$((BOOT_TIMEOUT + FORM_WAIT + 180))"
     eval "exec $fd>\"$fifo\""
-    wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}" \
+    wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}" \
         || dump_and_die "node $key: boot2 executive never attached"
     send_to "$fd" ''
     wait_for_in "$log" 'Username:' "$BOOT_TIMEOUT" 0 "${QPID_[$key]}" \
@@ -257,6 +257,10 @@ for i in 0 1 2; do
     k="${KEYS[$i]}"
     disk="/tmp/cluster-mem-${k}.img"
     rm -f "$disk"; cp "$DISTRIB_IMG" "$disk"
+    # rd vms-3ea: this node's own system-disk label, <SCSNODE>SYS (see
+    # tests/qemu/test_cluster_config_lan_2node_e2e.sh for why).
+    vmsfs_master --ods2 relabel "$disk" "${SCSNODES[$i]}SYS" \
+        || { echo "FAIL: relabel node $k's system disk" >&2; exit 1; }
     boot_and_login "$k" "${TAPS[$i]}" "$disk" "${SCSNODES[$i]}" "${SYSIDS[$i]}"
 done
 
@@ -314,13 +318,13 @@ for k in "${KEYS[@]}"; do
     if grep -q '^status=1$' "$out"; then
         ok "node $k: CNXMAN is UP -- the ioctl answers SS\$_NORMAL from real struct vms_club state"
     else
-        bad "node $k: CLUSTER_DIAG_CSB row CLUB says CNXMAN is not up (status=$(grep '^status=' "$out" | head -1)) -- expected once FC-P3.9 wires vms_cnxman_start() into CLUSTER_START"
+        bad "node $k: CLUSTER_DIAG_CSB row CLUB says CNXMAN is not up (status=$(grep -a '^status=' "$out" | head -1)) -- expected once FC-P3.9 wires vms_cnxman_start() into CLUSTER_START"
     fi
 
     walk="/tmp/cluster-mem-csb-${k}.txt"
     if read_diag "$k" '-walk 32' >"$walk" 2>/dev/null; then
         echo "node $k CSB rows:"; sed 's/^/    /' "$walk" | head -60
-        rows=$(grep '^csb_rows=' "$walk" | tail -1 | cut -d= -f2)
+        rows=$(grep -a '^csb_rows=' "$walk" | tail -1 | cut -d= -f2)
         NODES_SEEN_[$k]="${rows:-0}"
         grep -q '^csid=00000000$' "$walk" \
             && bad "node $k: a CSB row reports csid 0 without its valid flag -- INV-6/E30 tripwire" \

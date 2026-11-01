@@ -1,0 +1,42 @@
+MCR NCP LIST KNOWN NODES
+ 
+ 
+Known Node Permanent Summary as of 21-OCT-2026 20:21:20
+ 
+Executor node = 1.965 (VAXC)
+ 
+State                    = on
+
+ 
+Remote node =   1.963 (OVMXA)
+ 
+No information available
+
+ 
+Remote node =   1.964 (OVMXB)
+ 
+No information available
+
+ 
+Remote node =   1.965 (VAXC)
+ 
+No information available
+
+ 
+$ MCR NCP LIST EXECUTOR CHARACTERISTICS
+ 
+ 
+Node Permanent Characteristics as of 21-OCT-2026 20:21:25
+ 
+Executor node = 1.965 (VAXC)
+ 
+Management version       = V4.0.0
+Type                     = nonrouting IV
+Maximum address          = 1023
+
+ 
+$ SHOW LICENSE
+
+Active licenses on node VAXC:
+%SHOW-I-NOLICENSE, no licenses exist
+$ 

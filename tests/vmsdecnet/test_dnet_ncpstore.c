@@ -145,6 +145,24 @@ int main(void)
               "the node database round-trips (name resolution intact)");
         CHECK(file_has(pn, "OVMX layout, not VMS NETNODE_REMOTE.DAT"),
               "the node file labels its layout as OVMX's");
+
+        /* rd vms-acf3: a node database that is THERE but cannot be read is a
+         * read failure, never an empty database (which made every node
+         * "unknown" and SET HOST say SS$_NOSUCHNODE). A directory in the
+         * database's place opens but every read of it fails. */
+        const char *saved = getenv("OVMX_DECNET_NODEDB");
+        char keep[512];
+        snprintf(keep, sizeof keep, "%s", saved ? saved : "");
+        setenv("OVMX_DECNET_NODEDB", "/", 1);
+        struct dnet_nodedb c;
+        int lrc = dnet_store_load_nodes(&c);
+        CHECK(lrc == DNET_STORE_EREAD && dnet_store_last_rms_status() != 0,
+              "an unreadable node database loads as DNET_STORE_EREAD with an RMS status, not as an empty database");
+        CHECK(c.count == 0, "... and yields no nodes (nothing guessed)");
+        setenv("OVMX_DECNET_NODEDB", "/nonexistent-acf3/NODES.DAT", 1);
+        CHECK(dnet_store_load_nodes(&c) == DNET_STORE_OK && c.count == 0,
+              "an ABSENT node database is still an empty one (unconfigured)");
+        setenv("OVMX_DECNET_NODEDB", keep, 1);
     }
     {
         struct dnet_objectdb a, b;

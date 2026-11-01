@@ -66,6 +66,17 @@ int cluster_sysgen_credits(const struct vms_cluster *cl, uint8_t *out)
 	return 1;
 }
 
+/* OVMX_RM_RESIDUE_FILL (rd vms-ed5) -- see vms_cluster_sysgen.h, and struct
+ * vms_cluster_params for why the knob exists at all. An executive that never
+ * loaded its parameters emits the ruling's zeros, which is the honest answer
+ * for a node nobody configured a pattern into. */
+uint8_t cluster_sysgen_rm_residue_fill(const struct vms_cluster *cl)
+{
+	if (cl == NULL || !cl->params_valid)
+		return 0u;
+	return cl->params.ovmx_rm_residue_fill;
+}
+
 /* OVMX_CLEAN_DEPART (rd vms-abd) -- see vms_cluster_sysgen.h for the contract,
  * including why an executive that never loaded its parameters answers 0. */
 int cluster_sysgen_clean_depart(const struct vms_cluster *cl)

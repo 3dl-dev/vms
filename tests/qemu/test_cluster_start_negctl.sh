@@ -165,7 +165,7 @@ boot_node() {
     QPID=$!
     exec 4>"$FIFO"
 
-    if wait_for '%OVMX-I-EXEC' 60; then ok "$tap: executive attached (real vms.ko)"; else bad "$tap: executive never attached"; fi
+    if wait_for ' - OpenVMS-compatible' 60; then ok "$tap: executive attached (real vms.ko)"; else bad "$tap: executive never attached"; fi
     send ''
     if wait_for 'Username:' "$BOOT_TIMEOUT"; then
         ok "$tap: boot reaches the login prompt"

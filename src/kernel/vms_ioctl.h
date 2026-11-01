@@ -459,7 +459,48 @@ struct vms_enq_args {
     uint32_t lkmode;            /* requested lock mode (0-5) */
     uint32_t flags;             /* LCK_M_* flags */
     uint32_t parid;             /* parent lock ID (0 for root) */
-    char     resnam[32];        /* resource name (null-terminated) */
+    char     resnam[32];        /* resource name; see resnam_len below */
+    /*
+     * HOW MANY BYTES OF `resnam` ARE THE NAME (rd vms-326).
+     *
+     * A VMS RESOURCE NAME IS COUNTED AND MAY BE BINARY. $ENQ takes it as a
+     * character-string DESCRIPTOR of 1..31 bytes (system services reference),
+     * and VMS's own components put NULs inside one: RMS names a file-access
+     * lock 'RMS$' + the 6-byte file id + 0x02 + the 12-byte space-padded
+     * volume label + three NUL bytes -- 26 bytes, measured on 1,130 real
+     * cat-0x02 frames from real OpenVMS VAX nodes (tools/cluster/
+     * dlm_rms_name_hash_check.py, pinned by ctest
+     * cluster_host_dlm_rms_name_hash). A NUL-TERMINATED name cannot
+     * express that, and the consequence is not cosmetic: two files with the
+     * same file id on two different volumes produced the SAME 7-byte
+     * truncation, so one cluster-wide resource served both and a read of one
+     * file was refused by a writer of the other (rd vms-acf3).
+     *
+     * 0 MEANS "THE NUL-TERMINATED STRING IN `resnam`", which is what every
+     * caller with an ASCII name states and the only thing the executive could
+     * read before this field existed; the engine measures it with strnlen and
+     * the result is identical for a name with no embedded NUL. A caller with
+     * a BINARY name MUST state the count -- $ENQ (src/libvms/syssvc/
+     * sys_lock.c) always passes the descriptor's own dsc$w_length, so a name
+     * that arrives counted stays counted all the way to body[47:48+n] on the
+     * wire.
+     *
+     * Above 31 is SS$_IVBUFLEN, the same refusal $ENQ makes on the
+     * descriptor (observed; see sys_lock.c do_enq).
+     *
+     * AND WHY THE EXPLICIT PAD BESIDE IT. This struct holds uint64_t fields,
+     * which the two substrates align differently: LP64 Linux/amd64 aligns a
+     * 64-bit scalar to 8, NetBSD/VAX (ILP32) to 4. A SINGLE 4-byte field added
+     * in front of the three uint64_t handles therefore grows the struct by 8
+     * on amd64 and by 4 on VAX -- 112 against 108 -- and the two sides of
+     * /dev/vms must agree on one layout (the _Static_asserts in
+     * src/kernel-netbsd/vms_lock_nb.h are what catch a drift; this pair is
+     * what the NetBSD/vax cross-compile measured). Two 4-byte fields keep
+     * `astadr` on an 8-byte boundary on both, so the size is 112 everywhere.
+     * The pad is zero and nothing reads it.
+     */
+    uint32_t resnam_len;
+    uint32_t pad_resnam;        /* zero; keeps the layout data-model-stable */
     uint64_t astadr;            /* completion AST address */
     uint64_t astprm;            /* AST parameter */
     uint64_t blkastadr;         /* blocking AST address */
@@ -490,7 +531,16 @@ struct vms_getlki_args {
     uint32_t granted_mode;      /* return: current granted mode */
     uint32_t requested_mode;    /* return: requested mode (if waiting) */
     uint32_t parent_id;         /* return: parent lock ID */
-    char     resnam[32];        /* return: resource name */
+    char     resnam[32];        /* return: resource name (see resnam_len) */
+    /*
+     * HOW MANY BYTES OF `resnam` THE NAME IS (rd vms-326). $GETLKI's
+     * LKI$_RESNAM is a counted string, and a resource name may contain NULs
+     * (the RMS file-access lock does -- see struct vms_enq_args.resnam_len),
+     * so a readback that only returned 32 bytes and a NUL could not tell a
+     * 26-byte binary name from its 7-byte prefix. This is the resource
+     * block's own `name_len`, never a strnlen of the copy.
+     */
+    uint32_t resnam_len;
     uint8_t  valblk[LCK_VALBLK_SIZE]; /* return: value block */
     uint32_t status;            /* return: SS$_ status */
     uint32_t grant_count;       /* return: LKI$_GRANTCOUNT -- the resource's
@@ -725,7 +775,17 @@ struct vms_dlm_xnode_args {
      */
     uint16_t res_group;
     uint8_t  res_mode;
-    uint8_t  pad_res;
+    /*
+     * ...AND HOW MANY BYTES OF `resnam` THE NAME IS (rd vms-326). A resource
+     * name is COUNTED on the wire (body[47] is its length) and may contain
+     * NULs, so a cross-node request about an RMS file-access lock cannot be
+     * carried by a NUL-terminated field. The WIRE ARM states the count it
+     * parsed out of the frame (src/kernel-core/vms_dlm_scs.c); 0 means "the
+     * NUL-terminated string in resnam", exactly as in struct vms_enq_args.
+     *
+     * Carved out of the former pad_res -- same size, no ABI change.
+     */
+    uint8_t  resnam_len;
 };
 _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
                "vms_dlm_xnode_args changed size -- VMS_IOCTL_DLM_XNODE ABI break");
@@ -1285,11 +1345,20 @@ struct vms_cluster_getsyi_args {
      * with or without a connection manager. */
     uint8_t  hw_model_len;
     uint8_t  hw_model[31];
+    /* SYI$_NODENAME / SYI$_SCSNODE (rd vms-433): the SCSNODE this system
+     * BOOTED with -- the value VMS_IOCTL_SYSGEN_LOAD committed to the
+     * executive -- so every surface names the node the way its cluster peers
+     * do. Not the parameter FILE (it can be edited after boot, and a process
+     * may be unable to read it), and never the substrate hostname. Counted,
+     * not NUL-terminated; 0 = no SCSNODE was loaded. Answered with or without
+     * a connection manager. */
+    uint8_t  scsnode_len;
+    uint8_t  scsnode[7];       /* VMS_SCSNODE_MAX (6) + 1 */
 };
-_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 68,
+_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 76,
                "vms_cluster_getsyi_args changed size -- VMS_IOCTL_CLUSTER_GETSYI ABI break");
 #define VMS_IOCTL_CLUSTER_GETSYI _IOWR(VMS_IOC_MAGIC, 0x6c, struct vms_cluster_getsyi_args)
-_Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC044566Cu,
+_Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC04C566Cu,
                "VMS_IOCTL_CLUSTER_GETSYI encodes differently than the reference build");
 
 /*
@@ -1449,8 +1518,25 @@ struct vms_dlm_scs_view_wire {
     uint32_t deferred_grants_owed;
     uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
     uint32_t queued_no_reply;
+    uint32_t queued_answered;          /* ...and the 0xfb that went back (85f) */
+    uint32_t queued_unanswerable;      /* ...and the honest silence left       */
+    uint32_t grant_advances_in;        /* a LOCAL release advanced a cross-node */
+    uint32_t grant_advances_stale;     /* ...queue; and the ones with no lock  */
     uint32_t unparsed;
     uint32_t foreign_refused;
+    /* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5) -- the pair
+     * that matters for the ci.6 evacuation gate is rm_trees_held and
+     * rm_held_unreported. See vms_cluster_snapshot.h. */
+    uint32_t rm_opens;
+    uint32_t rm_opens_refused;
+    uint32_t rm_records_adopted;
+    uint32_t rm_records_refused;
+    uint32_t rm_ends_seen;
+    uint32_t rm_trees_held;
+    uint32_t rm_held_sent;
+    uint32_t rm_held_unsent;
+    uint32_t rm_held_unreported;
+    uint32_t rm_notifications;
     /* The connection manager's own, independent count of the same traffic. */
     uint32_t leg_sends;
     uint32_t leg_sends_refused;
@@ -1464,7 +1550,7 @@ struct vms_dlm_scs_view_wire {
     uint32_t posts_lock_gone;
     uint32_t posts_refused;
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 144,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 200,
                "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
 
 struct vms_cluster_diag_dlm_args {
@@ -1472,7 +1558,7 @@ struct vms_cluster_diag_dlm_args {
     uint32_t pad0;
     struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
 };
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 208,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 /*
  * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
@@ -1485,12 +1571,22 @@ _Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
  * the encoded value moved 0xC080566E -> 0xC090566E -- deliberately, with this
  * assert updated in the same commit. rd vms-727 then appended
  * `valblk_writes_received` (144 -> 148), moving it 0xC090566E -> 0xC094566E --
- * again deliberately, in this commit. A diagnostic image built from another
+ * again deliberately. rd vms-ed5 then appended the ten REMASTER counters
+ * (148 -> 192), moving it 0xC094566E -> 0xC0C0566E -- deliberately, in that
+ * commit. rd vms-85f then appended `queued_answered` and
+ * `queued_unanswerable` (192 -> 200), moving it 0xC0C0566E -> 0xC0C8566E --
+ * deliberately, in that commit: a fire has to be able to read WHETHER a queued
+ * requester was answered, which is the defect that wedged a real VAX. rd
+ * vms-28bd then appended `grant_advances_in` and `grant_advances_stale`
+ * (200 -> 208), moving it 0xC0C8566E -> 0xC0D0566E -- the other half of the
+ * same hang: whether a LOCAL release that advanced a cross-node queue reached
+ * the arm at all.
+ * A diagnostic image built from another
  * tree therefore fails LOUDLY (ENOTTY) rather than reading a shorter row as
  * data, which is the behaviour this assert exists to guarantee.
  */
 #define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
-_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC098566Eu,
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC0D0566Eu,
                "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
 
 /*
@@ -1548,7 +1644,19 @@ struct vms_sysgen_load_args {
     uint8_t  alloclass;             /* in: ALLOCLASS                              */
     uint8_t  mscp_load;             /* in: MSCP_LOAD                              */
     uint8_t  mscp_serve_all;        /* in: MSCP_SERVE_ALL                         */
-    uint8_t  pad1[3];
+    /*
+     * OVMX_RM_RESIDUE_FILL's wire half (rd vms-ed5, for rd vms-6ad1's RA7),
+     * carved out of this struct's former `pad1[3]' -- so the struct's SIZE and
+     * every _Static_assert below it are UNCHANGED and no ABI moved, exactly as
+     * `clean_depart_off' below was. The NetBSD mirror in
+     * src/kernel-netbsd/vms_lock_nb.h carries the identical field.
+     *
+     * The sense is POSITIVE here and needs no inversion: 0 -- what every caller
+     * that zero-fills the struct supplies -- IS the faithful value (the
+     * vms-42de ruling's zeros across the op-0x14 residue span).
+     */
+    uint8_t  ovmx_rm_residue_fill;  /* in: the op-0x14 residue byte; 0 = zeros   */
+    uint8_t  pad1[2];
 
     uint32_t niscs_max_pktsz;       /* in: NISCS_MAX_PKTSZ (clamped by the port)  */
 
@@ -2646,7 +2754,10 @@ struct vms_procinfo {
                            * below proc_fill_info()'s redaction early return,
                            * so a redacted row carries the OTHER default. Fits
                            * the existing padding -- struct stays 216 bytes. */
-    uint8_t  pad[1];
+    uint8_t  parse_style; /* VMS_PROCINFO_PS_* (rd vms-0b0): bit 0 the permanent file-name
+                           * parse style is EXTENDED, bit 1 the current image's is. Withheld
+                           * (0) on a redacted row. Was the last padding byte: the struct
+                           * stays 216 bytes. */
     uint64_t cur_privs;                 /* current (process) privileges */
     uint64_t perm_privs;                /* authorized (permanent) privileges */
     char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */
@@ -3304,6 +3415,32 @@ struct vms_ddir_args {
 #define VMS_IOCTL_DDIR      _IOWR(VMS_IOC_MAGIC, 0x5F, struct vms_ddir_args)
 
 /*
+ * $SET_PROCESS_PROPERTIESW -- a process property (rd vms-b9c): the file-name
+ * PARSE STYLE, a per-process attribute of the executive's PCB like $SETDFPROT's
+ * default protection. `property` is the PPROP$C_ code
+ * (docs/oracle/alpha84-starlet-defs/PPROPDEF.txt): PARSE_STYLE_PERM (1) sets
+ * the permanent style and the current image's; PARSE_STYLE_TEMP (0) the current
+ * image's only. `value` is PARSE_STYLE$C_TRADITIONAL (0) or _EXTENDED (1);
+ * `oldvalue` always returns the value of that property in force before the
+ * call. Any other property or value is SS$_BADPARAM. An image activated in the
+ * same process starts with the permanent style. OVMX design choice (Rule 8):
+ * the byte layout of this ioctl.
+ */
+#define VMS_PPROP_PARSE_STYLE_TEMP   0u   /* PPROP$C_PARSE_STYLE_TEMP */
+#define VMS_PPROP_PARSE_STYLE_PERM   1u   /* PPROP$C_PARSE_STYLE_PERM */
+#define VMS_PARSE_STYLE_TRADITIONAL  0u   /* PARSE_STYLE$C_TRADITIONAL */
+#define VMS_PARSE_STYLE_EXTENDED     1u   /* PARSE_STYLE$C_EXTENDED */
+struct vms_pprop_args {
+    uint32_t property;  /* in:  PPROP$C_ code */
+    uint32_t set;       /* in:  nonzero = store value */
+    uint32_t value;     /* in:  the new value */
+    uint32_t oldvalue;  /* out: the value in force before this call */
+    uint32_t status;    /* return: SS$_ status */
+    uint32_t pad;
+};
+#define VMS_IOCTL_PPROP     _IOWR(VMS_IOC_MAGIC, 0x77, struct vms_pprop_args)
+
+/*
  * The PROCESS RIGHTS LIST (vms-7d5a): the identifiers a process holds besides its
  * UIC, executive state like the privilege mask -- $GRANTID adds one, $REVOKID removes
  * one, and the Files-11 ACP's ACL check (vmsfs_acp.c acp_proc_holds) matches an
@@ -3444,6 +3581,8 @@ struct vms_native_page0_args {
  * and with them the GETJPI and PROCSCAN request numbers a third time.
  * Same discipline, same reason.
  */
+#define VMS_PROCINFO_PS_PERM_EXTENDED  0x01u  /* JPI$_PARSE_STYLE_PERM is EXTENDED */
+#define VMS_PROCINFO_PS_IMAGE_EXTENDED 0x02u  /* JPI$_PARSE_STYLE_IMAGE is EXTENDED */
 _Static_assert(sizeof(struct vms_procinfo) == 216,
                "vms_procinfo layout changed: process-table ioctl ABI break");
 _Static_assert(sizeof(struct vms_setprn_args) == 72,
@@ -3474,6 +3613,10 @@ _Static_assert(sizeof(struct vms_ddir_args) == 8 + 2 * VMS_DDIR_SIZE,
                "vms_ddir_args layout changed: VMS_IOCTL_DDIR ABI break");
 _Static_assert(VMS_IOCTL_DDIR == 0xC208565Fu,
                "VMS_IOCTL_DDIR encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_pprop_args) == 24,
+               "vms_pprop_args layout changed: VMS_IOCTL_PPROP ABI break");
+_Static_assert(VMS_IOCTL_PPROP == 0xC0185677u,
+               "VMS_IOCTL_PPROP encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
                "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
 _Static_assert(sizeof(struct vms_pri_args) == 24,

@@ -8,8 +8,9 @@ tier: 1
 plan_ref: vms-801
 summary: >
   VMS ships ~10 event-flag services; OVMX declares 10, all implemented and
-  real, backed by vms.ko and cross-process proven. SYS$DCLEF (declare/create
-  a common event-flag cluster) is absent.
+  real, backed by vms.ko and cross-process proven. A common event-flag
+  cluster is created by SYS$ASCEFC itself (there is no separate create
+  service; a SYS$DCLEF row was removed 2026-10-21 as it names no VMS service).
 last_reviewed: 2026-09-14
 items:
   - {id: sys$setef, kind: routine, status: implemented, authenticity: real, vms: "Set an event flag", evidence: src/libvms/syssvc/sys_event.c, notes: "cross-process proven via vms.ko"}
@@ -22,4 +23,3 @@ items:
   - {id: sys$ascefc, kind: routine, status: implemented, authenticity: real, vms: "Associate with a common event-flag cluster", evidence: src/libvms/syssvc/sys_event.c}
   - {id: sys$dacefc, kind: routine, status: implemented, authenticity: real, vms: "Disassociate from a common event-flag cluster", evidence: src/libvms/syssvc/sys_event.c}
   - {id: sys$dlcefc, kind: routine, status: implemented, authenticity: real, vms: "Delete a common event-flag cluster", evidence: src/libvms/syssvc/sys_event.c}
-  - {id: sys$dclef, kind: routine, status: absent, authenticity: n/a, vms: "Declare/create an event-flag cluster"}

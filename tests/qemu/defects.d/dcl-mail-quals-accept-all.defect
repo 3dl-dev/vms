@@ -1,0 +1,26 @@
+# dcl-mail-quals-accept-all -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL MAIL qualifier validation (src/vmsdcl/dcl_builtin.c q_mail, vms-097)";;
+        targets)      echo "vmsdcl/dcl_builtin.c";;
+        suites_red)   echo "test_syssvc_dcl_mail_quals";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "MAIL goes back to accept-all: q_mail is unwired, so MAIL/ZQBOGUS is silently forwarded instead of %DCL-W-IVQUAL.";;
+        require_fail) cat <<'EOF2'
+MAIL/ZQBOGUS is %DCL-W-IVQUAL naming the qualifier
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^      "Send and receive electronic mail messages", q_mail },$|      "Send and receive electronic mail messages" }, /* NEGCTL dcl-mail-quals-accept-all */|' "$_file"
+    :
+}

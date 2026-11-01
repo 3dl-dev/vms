@@ -50,7 +50,7 @@ checked=0
 # "not tracked" here regardless of whether the shim is actually committed on
 # that worktree's own branch -- a guaranteed false positive, not a real gap.
 # Same exclusion convention as test_runtime_target.sh.
-refs=$(grep -rhEo '[A-Za-z0-9_]+_no_python3\.cmake' --include=CMakeLists.txt \
+refs=$(grep -a -rhEo '[A-Za-z0-9_]+_no_python3\.cmake' --include=CMakeLists.txt \
     --exclude-dir=.claude . 2>/dev/null | sort -u)
 
 if [ -z "$refs" ]; then

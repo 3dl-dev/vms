@@ -171,8 +171,11 @@ echo "$OUT_POS" | head -40
 echo "[... truncated ...]"
 echo ""
 
-check "positive: executive attached"          "$OUT_POS" "%OVMX-I-EXEC"
-check "positive: system disk VDA0: mounted"    "$OUT_POS" "%OVMX-I-MOUNTED"
+check "positive: executive attached"          "$OUT_POS" " - OpenVMS-compatible"
+# rd vms-158d: the mount is proven by STDRV (below), which begins only after the
+# ACP mounted VDA0: and found an installed system; the %OVMX-I-MOUNTED record is
+# OPERATOR.LOG's, not the console's.
+check "positive: no OVMX mount narration on the console" "$OUT_POS" "%OVMX-I-MOUNTED" absent
 check "positive: STDRV begun printed"          "$OUT_POS" "%STDRV-I-STARTUP, OpenVMX startup begun"
 check "positive: reaches the login prompt"     "$OUT_POS" "Username:"
 # The strip: none of the install/initialize/overlay lines may appear.
@@ -248,7 +251,7 @@ echo "$OUT_NEG" | head -40
 echo "[... truncated ...]"
 echo ""
 
-check "negative: executive attached (halt is AFTER the executive)" "$OUT_NEG" "%OVMX-I-EXEC"
+check "negative: executive attached (halt is AFTER the executive)" "$OUT_NEG" " - OpenVMS-compatible"
 check "negative: honest OVMX-facility SYSINIT halt"                 "$OUT_NEG" "%OVMX-F-SYSINIT"
 # Either honest halt is acceptable: the blank disk fails to mount as vmsfs, or
 # (were an empty volume to mount) it carries no SYS$SYSTEM:DCL.EXE. Both name

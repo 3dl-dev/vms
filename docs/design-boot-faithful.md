@@ -326,9 +326,21 @@ fixed here (out of `ovmx_init.c`), and not load-bearing for
 `test_boot_conformance.sh` (its sequence extraction keys on `%FACILITY-`
 tokens, which this free-text line has none of).
 
-The full pinned boot-facility sequence `test_boot_conformance.sh` diffs
+**Superseded by rd vms-158d (2026-10-21).** The OVMX-labelled narration in the
+table above -- `%OVMX-I-EXEC` (attach, and PROVISION's system identity),
+`%OVMX-I-SYSDISK`, `%OVMX-I-MOUNTED`, `%OVMX-I-SCSNODE` -- is no longer printed
+on the console at all: a real VMS boot console prints no such lines (the demo's
+real VAX V7.3, `tests/lab/captures/vms-c56-console-chatter-20261021/C.console.txt`),
+so they are `SYS$MANAGER:OPERATOR.LOG` records (PID 1's `boot_oplog` through the
+`ovmx_boot_operator_log` seam op; PROVISION over RMS). STARTNET.COM likewise
+prints no banner or launch line; NETACP sends "DECnet starting" to OPCOM. The
+pinned console sequence is now banner → `%STDRV-I-STARTUP` → `%RUN-S-PROC_ID`
+→ `Username:`, and the visitor gate's console-chatter assertion allows no OVMX
+identifier at all. The history below is kept as it was measured.
+
+The full pinned boot-facility sequence `test_boot_conformance.sh` diffed
 against (flagless boot, mastered disk, up to the login prompt), measured
-against a real QEMU boot rather than assumed, is, in order: `%OVMX-I-EXEC`
+against a real QEMU boot rather than assumed, was, in order: `%OVMX-I-EXEC`
 (executive attach, `ovmx_init.c`) → banner → `%OVMX-I-SYSDISK` →
 `%OVMX-I-MOUNTED` → `%OVMX-I-SCSNODE` → `%STDRV-I-STARTUP` → a *second*
 `%OVMX-I-EXEC` (PROVISION.EXE's "system identity ... established by the

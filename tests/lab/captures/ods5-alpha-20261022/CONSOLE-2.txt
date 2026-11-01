@@ -1,0 +1,534 @@
+This is serial port #0 on AXPbox Alpha Emulator
+
+
+OpenVMS PALcode V1.98-104, Tru64 UNIX PALcode V1.92-105
+
+starting console on CPU 0
+initialized idle PCB
+initializing semaphores
+initializing heap
+initial heap 240c0
+memory low limit = 1b0000 heap = 240c0, 17fc0
+initializing driver structures
+initializing idle process PID
+initializing file system
+initializing hardware
+initializing timer data structures
+lowering IPL
+CPU 0 speed is 800 MHz
+create dead_eater
+create poll
+create timer
+create powerup
+access NVRAM
+Memory size 256 MB
+testing memory
+..
+probe I/O subsystem
+probing hose 1, PCI
+probing hose 0, PCI
+probing PCI-to-ISA bridge, bus 1
+bus 0, slot 15 -- dqa -- Acer Labs M1543C IDE
+bus 0, slot 15 -- dqb -- Acer Labs M1543C IDE
+starting drivers
+entering idle loop
+*** system serial number not set. use set sys_serial_num command.
+Partition 0, Memory base: 000000000, size: 010000000
+initializing GCT/FRU at 1c8000
+Initializing dqa dqb 
+Memory Testing and Configuration Status
+  Array       Size       Base Address    Intlv Mode
+---------  ----------  ----------------  ----------
+    0        256Mb     0000000000000000    4-Way
+
+     256 MB of System Memory
+Testing the System
+AlphaServer ES40 Console V7.3-1, built on Feb 27 2007 at 12:57:47
+P00>>>boot dqa0
+(boot dqa0.0.0.15.0 -flags 0)
+block 0 of dqa0.0.0.15.0 is a valid boot block
+reading 1230 blocks from dqa0.0.0.15.0
+bootstrap code read in
+base = 200000, image_start = 0, image_bytes = 99c00(629760)
+initializing HWRPB at 2000
+initializing page table at ff56000
+initializing machine state
+setting affinity to the primary CPU
+jumping to bootstrap code
+
+
+    OpenVMS (TM) Alpha Operating System, Version V8.4    
+    © Copyright 1976-2010 Hewlett-Packard Development Company, L.P.
+
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 22-OCT-2026 03:14:46.22
+%RUN-S-PROC_ID, identification of created process is 00000104
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:01.57  %%%%%%%%%%%
+Operator _ALPHA1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:01.57  %%%%%%%%%%%
+Operator status for operator _ALPHA1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:02.85  %%%%%%%%%%%
+Logfile has been initialized by operator _ALPHA1$OPA0:
+Logfile is ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:02.85  %%%%%%%%%%%
+Operator status for operator ALPHA1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 0000010A
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:03.81  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:03.82  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%RUN-S-PROC_ID, identification of created process is 0000010D
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:06.29  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:06.31  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:06.32  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:06.32  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:06.32  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting u
+p
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:07.44  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%ACME-I-SERVERSTART, ACME_SERVER starting
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:13.63  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+TDF-I-SETTDF TDF set new timezone differential
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:14.00  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$ALPHA1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:14.34  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC OPENVMS-ALPHA use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:14.56  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          Audit server starting up
+Event time:               22-OCT-2026 03:15:14.53
+PID:                      00000103        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS system is now executing the site-specific startup commands.
+
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%RUN-S-PROC_ID, identification of created process is 00000117
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:15.40  %%%%%%%%%%%
+Message from user SYSTEM on ALPHA1
+%SMHANDLER-S-STARTUP, server management event handler startup
+
+  SYSTEM       job terminated at 22-OCT-2026 03:15:15.56
+
+  Accounting information:
+  Buffered I/O count:               3601      Peak working set size:       7760
+  Direct I/O count:                 1504      Peak virtual size:         186192
+  Page faults:                      4072      Mounted volumes:                0
+  Charged CPU time:        0 00:00:06.65      Elapsed time:       0 00:00:29.42
+
+ Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4    
+
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+   Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4
+    Last interactive login on Wednesday,  5-AUG-2026 20:13:03.66
+
+Your password has expired; you must set a new password to log in
+
+
+New password: 
+Verification: 
+
+%%%%%%%%%%%  OPCOM  22-OCT-2026 03:15:45.59  %%%%%%%%%%%
+Message from user AUDIT$SERVER on ALPHA1
+Security alarm (SECURITY) and security audit (SECURITY) on ALPHA1, system id: 20
+49
+Auditable event:          System UAF record modification
+Event time:               22-OCT-2026 03:15:45.58
+PID:                      00000118        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               ALPHA1$DQA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Object class name:        FILE
+Object name:              SYS$COMMON:[SYSEXE]SYSUAF.DAT;1
+User record:              SYSTEM                          
+Password Date:            New:      22-OCT-2026 03:15
+                          Original:  5-AUG-2026 19:03
+Posix UID:                -2              
+Posix GID:                -2 (%XFFFFFFFE) 
+[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ @SYS$STARTUP:LD$STARTUP
+$ LD CREATE SYS$SYSDEVICE:[000000]ODS5S.DSK/SIZE=1000/CONTIGUOUS
+$ LD CONNECT SYS$SYSDEVICE:[000000]ODS5S.DSK LDA1:
+$ INITIALIZE/STRUCTURE=5 LDA1: ODS5S
+$ MOUNT/SYSTEM LDA1: ODS5S
+%MOUNT-I-MOUNTED, ODS5S mounted on _ALPHA1$LDA1:
+$ SET PROCESS/PARSE_STYLE=EXTENDED
+$ CREATE/DIRECTORY LDA1:[S]
+$ SET DEFAULT LDA1:[S]
+$ COPY NL: E.txt
+$ COPY NL: f.txt
+$ COPY NL: ^E9.txt
+$ COPY NL: ^C92.txt
+$ COPY NL: ^FF.txt
+$ COPY NL: ^U0100.txt
+$ COPY NL: ^U4E2D.txt
+$ COPY NL: a^U4E2D.txt
+$ COPY NL: ^U00E9^U4E2D.txt
+$ COPY NL: z.txt
+$ COPY NL: ^^.txt
+$ COPY NL: ~.txt
+$ COPY NL: _.txt
+$ COPY NL: e.TXT
+$ DIRECTORY/FILE_ID
+
+Directory LDA1:[S]
+
+a^U4E2D.txt;1        (19,1,0)              
+E.txt;2              (25,1,0)              
+E.txt;1              (12,1,0)              
+f.txt;1              (13,1,0)              
+z.txt;1              (21,1,0)              
+^^.txt;1             (22,1,0)              
+_.txt;1              (24,1,0)              
+~.txt;1              (23,1,0)              
+È.txt;1              (14,1,0)              
+…2.txt;1             (15,1,0)              
+È^U4E2D.txt;1        (20,1,0)              
+^U0100.txt;1         (17,1,0)              
+^FF.txt;1            (16,1,0)              
+^U4E2D.txt;1         (18,1,0)              
+
+Total of 14 files.
+$ DIRECTORY ^C9.TXT
+
+Directory LDA1:[S]
+
+È.txt;1             
+
+Total of 1 file.
+$ DUMP/DIRECTORY LDA1:[000000]S.DIR
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Dump of file LDA1:[000000]S.DIR;1 on 22-OCT-2026 03:16:25.48
+File ID (11,1,0)   End of file block 1 / Allocated 1
+
+Virtual block number 1 (00000001), 512 (0200) bytes
+
+0000  Directory Entry:
+0000    Size:             24
+0002    Version limit:    32767
+0004    Type:             0  (FID)
+0004    Name type:        3  (UCS-2)
+0005    Name count:       12
+                          .aN-...t.x.t
+0012    Version:     1    FID:  (19,1,0)
+
+001A  Directory Entry:
+001A    Size:             26
+001C    Version limit:    32767
+001E    Type:             0  (FID)
+001E    Name type:        0  (ODS-2)
+001F    Name count:       5
+0020    Name:             E.txt
+0026    Version:     2    FID:  (25,1,0)
+002E    Version:     1    FID:  (12,1,0)
+
+0036  Directory Entry:
+0036    Size:             18
+0038    Version limit:    32767
+003A    Type:             0  (FID)
+003A    Name type:        0  (ODS-2)
+003B    Name count:       5
+003C    Name:             f.txt
+0042    Version:     1    FID:  (13,1,0)
+
+004A  Directory Entry:
+004A    Size:             18
+004C    Version limit:    32767
+004E    Type:             0  (FID)
+004E    Name type:        0  (ODS-2)
+004F    Name count:       5
+0050    Name:             z.txt
+0056    Version:     1    FID:  (21,1,0)
+
+005E  Directory Entry:
+005E    Size:             18
+0060    Version limit:    32767
+0062    Type:             0  (FID)
+0062    Name type:        1  (ISL-1)
+0063    Name count:       5
+0064    Name:             ^.txt
+006A    Version:     1    FID:  (22,1,0)
+
+0072  Directory Entry:
+0072    Size:             18
+0074    Version limit:    32767
+0076    Type:             0  (FID)
+0076    Name type:        0  (ODS-2)
+0077    Name count:       5
+0078    Name:             _.txt
+007E    Version:     1    FID:  (24,1,0)
+
+
+
+
+
+
+
+
+
+
+
+
+
+Dump of file LDA1:[000000]S.DIR;1 on 22-OCT-2026 03:16:25.48
+File ID (11,1,0)   End of file block 1 / Allocated 1
+
+0086  Directory Entry:
+0086    Size:             18
+0088    Version limit:    32767
+008A    Type:             0  (FID)
+008A    Name type:        1  (ISL-1)
+008B    Name count:       5
+008C    Name:             ~.txt
+0092    Version:     1    FID:  (23,1,0)
+
+009A  Directory Entry:
+009A    Size:             18
+009C    Version limit:    32767
+009E    Type:             0  (FID)
+009E    Name type:        1  (ISL-1)
+009F    Name count:       5
+00A0    Name:             È.txt
+00A6    Version:     1    FID:  (14,1,0)
+
+00AE  Directory Entry:
+00AE    Size:             18
+00B0    Version limit:    32767
+00B2    Type:             0  (FID)
+00B2    Name type:        1  (ISL-1)
+00B3    Name count:       6
+00B4    Name:             …2.txt
+00BA    Version:     1    FID:  (15,1,0)
+
+00C2  Directory Entry:
+00C2    Size:             24
+00C4    Version limit:    32767
+00C6    Type:             0  (FID)
+00C6    Name type:        3  (UCS-2)
+00C7    Name count:       12
+                          .ÈN-...t.x.t
+00D4    Version:     1    FID:  (20,1,0)
+
+00DC  Directory Entry:
+00DC    Size:             22
+00DE    Version limit:    32767
+00E0    Type:             0  (FID)
+00E0    Name type:        3  (UCS-2)
+00E1    Name count:       10
+                          .....t.x.t
+00EC    Version:     1    FID:  (17,1,0)
+
+00F4  Directory Entry:
+00F4    Size:             18
+00F6    Version limit:    32767
+00F8    Type:             0  (FID)
+00F8    Name type:        1  (ISL-1)
+00F9    Name count:       5
+00FA    Name:             ..txt
+0100    Version:     1    FID:  (16,1,0)
+
+0108  Directory Entry:
+0108    Size:             22
+010A    Version limit:    32767
+
+
+
+
+
+
+
+
+
+
+
+
+Dump of file LDA1:[000000]S.DIR;1 on 22-OCT-2026 03:16:25.48
+File ID (11,1,0)   End of file block 1 / Allocated 1
+
+010C    Type:             0  (FID)
+010C    Name type:        3  (UCS-2)
+010D    Name count:       10
+                          N-...t.x.t
+0118    Version:     1    FID:  (18,1,0)
+
+0120  End of records (-1)
+$ SET DEFAULT SYS$LOGIN
+$ DISMOUNT LDA1:
+$ LD DISCONNECT LDA1:
+$ DUMP/HEADER/BLOCKS=COUNT=0 SYS$SYSDEVICE:[000000]ODS5S.DSK
+
+
+
+
+
+
+
+
+
+
+Dump of file SYS$SYSDEVICE:[000000]ODS5S.DSK;1 on 22-OCT-2026 03:16:30.37
+File ID (5542,1,0)   End of file block 1000 / Allocated 1008
+
+                             File Header
+
+Header area
+    Identification area offset:           40
+    Map area offset:                      100
+    Access control area offset:           245
+    Reserved area offset:                 245
+    Extension segment number:             0
+    Structure level and version:          5, 1
+    File identification:                  (5542,1,0)
+    Extension file identification:        (0,0,0)
+    VAX-11 RMS attributes
+        Record type:                      Fixed
+        File organization:                Sequential
+        Record attributes:                <none specified>
+        Record size:                      512
+        Highest block:                    1008
+        End of file block:                1001
+        End of file byte:                 0
+        Bucket size:                      0
+        Fixed control area size:          0
+        Maximum record size:              512
+        Default extension size:           0
+        Global buffer count:              0
+        Directory version limit:          0
+    File characteristics:                 Contiguous, MoveFile disabled
+    Caching attribute:                    No_caching
+    Map area words in use:                3
+    Access mode:                          0
+    File owner UIC:                       [1,1]
+    File protection:                      S:RWED, O:RWED, G:RE, W:
+    Back link file identification:        (4,4,0)
+    Journal control flags:                <none specified>
+    Active recovery units:                None
+    File entry linkcount:                 1
+    Highest block written:                1008
+    Client attributes:                    None
+
+Identification area
+    File name type:                       ODS-2
+    File name length:                     11
+    File name:                            ODS5S.DSK;1
+    Revision number:                      4
+    Creation date:                        22-OCT-2026 03:15:58.84
+    Revision date:                        22-OCT-2026 03:15:58.84
+    Expiration date:                      <none specified>
+    Backup date:                          <none specified>
+    Last access date:                     22-OCT-2026 03:15:58.84
+    Last attribute change date:           22-OCT-2026 03:15:59.90
+    Extended RMS record attributes:       <none specified>
+    File length hints
+        Record count:                     0 (Invalidated)
+        Data byte count:                  0 (Invalidated)
+
+Map area
+    Retrieval pointers
+        Count:       1008        LBN:     928368
+
+
+
+
+
+
+
+
+
+
+
+
+Dump of file SYS$SYSDEVICE:[000000]ODS5S.DSK;1 on 22-OCT-2026 03:16:30.37
+File ID (5542,1,0)   End of file block 1000 / Allocated 1008
+
+
+User reserved area
+    00000001  "...."
+    00000000  "...."
+    00000000  "...."
+    00000000  "...."
+    00000000  "...."
+
+Checksum:                                 9401
+$ WRITE SYS$OUTPUT "END-OF-CAPTURE"
+END-OF-CAPTURE
+$ 

@@ -167,7 +167,7 @@ fi
 # ("%%%%%%%%%%%  OPCOM  <ts>  %%%%%%%%%%%"), then "Request N, from user U
 # on N", then the message body. Both header lines are skipped so BODY is
 # the actual payload, not either header line.
-BODY=$(grep -v '^%%%%%%%%%%%  OPCOM  ' "$RECORD" | grep -vE '^Request [0-9]+, from user ' | grep -v '^[[:space:]]*$' | head -1)
+BODY=$(grep -a -v '^%%%%%%%%%%%  OPCOM  ' "$RECORD" | grep -vE '^Request [0-9]+, from user ' | grep -v '^[[:space:]]*$' | head -1)
 
 check() {
     if [ "$1" = "ok" ]; then

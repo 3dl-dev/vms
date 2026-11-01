@@ -222,7 +222,7 @@ else
     record "PXE option ROM suppressed (no network-boot pause)" "$rc"
 
     # NIC did not break boot: the executive still attaches.
-    if grep -aq '%OVMX-I-EXEC' "$CONSOLE_LOG"; then rc=0; else rc=1; fi
+    if grep -aq ' - OpenVMS-compatible' "$CONSOLE_LOG"; then rc=0; else rc=1; fi
     record "executive still attaches with the NIC present (no boot regression)" "$rc"
 
     rm -f "$CONSOLE_LOG"; rm -rf "$(dirname "$DISK")"

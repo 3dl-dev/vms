@@ -123,7 +123,20 @@ struct vms_enq_args {
 	uint32_t lkmode;            /* in: requested lock mode (0-5) */
 	uint32_t flags;             /* in: LCK_M_* flags */
 	uint32_t parid;             /* in: parent lock ID (0 for root) */
-	char     resnam[32];        /* in: resource name (null-terminated) */
+	char     resnam[32];        /* in: resource name; see resnam_len below */
+	/* HOW MANY BYTES OF `resnam` ARE THE NAME (rd vms-326). A VMS resource
+	 * name is COUNTED (a 1..31-byte descriptor) and may be BINARY: RMS's
+	 * file-access lock is 26 bytes with three NULs in it, measured on 1,130
+	 * real cat-0x02 frames. 0 means "the NUL-terminated string in resnam",
+	 * which is what an ASCII caller states; above 31 is SS$_IVBUFLEN.
+	 * `pad_resnam` is zero and nothing reads it: it keeps `astadr` 8-byte
+	 * aligned on BOTH data models, so this struct is 112 bytes on LP64
+	 * amd64 and on ILP32 VAX alike (one 4-byte field alone would make it
+	 * 112 and 108 -- the drift the asserts at the foot of this file exist
+	 * to catch, and did). Mirror of src/kernel/vms_ioctl.h, where the full
+	 * note lives. */
+	uint32_t resnam_len;
+	uint32_t pad_resnam;
 	uint64_t astadr;            /* in: completion AST address */
 	uint64_t astprm;            /* in: AST parameter */
 	uint64_t blkastadr;         /* in: blocking AST address */
@@ -149,7 +162,11 @@ struct vms_getlki_args {
 	uint32_t granted_mode;      /* return: current granted mode */
 	uint32_t requested_mode;    /* return: requested mode (if waiting) */
 	uint32_t parent_id;         /* return: parent lock ID */
-	char     resnam[32];        /* return: resource name */
+	char     resnam[32];        /* return: resource name (see resnam_len) */
+	/* HOW MANY BYTES OF `resnam` THE NAME IS (rd vms-326): the resource
+	 * block's own name_len, so a 26-byte binary name reads back whole and not
+	 * as its 7-byte prefix. Mirror of src/kernel/vms_ioctl.h. */
+	uint32_t resnam_len;
 	uint8_t  valblk[LCK_VALBLK_SIZE]; /* return: value block */
 	uint32_t status;            /* return: SS$_ status */
 	uint32_t grant_count;       /* return: LKI$_GRANTCOUNT, the resource's
@@ -244,7 +261,11 @@ struct vms_dlm_xnode_args {
 	 * twin (src/kernel/vms_ioctl.h), where the full note lives. */
 	uint16_t res_group;
 	uint8_t  res_mode;
-	uint8_t  pad_res;
+	/* ...and how many bytes of `resnam` the name is (rd vms-326), stated by
+	 * the wire arm out of the frame it parsed; 0 means the NUL-terminated
+	 * string. Carved out of the former pad_res -- same size, no ABI change.
+	 * Mirror of src/kernel/vms_ioctl.h. */
+	uint8_t  resnam_len;
 };
 
 /*
@@ -628,8 +649,24 @@ struct vms_dlm_scs_view_wire {
 	uint32_t deferred_grants_owed;
 	uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
 	uint32_t queued_no_reply;
+	uint32_t queued_answered;          /* ...and the 0xfb that went back (85f) */
+	uint32_t queued_unanswerable;      /* ...and the honest silence left       */
+	uint32_t grant_advances_in;        /* a LOCAL release advanced a cross-node */
+	uint32_t grant_advances_stale;     /* ...queue; and the ones with no lock  */
 	uint32_t unparsed;
 	uint32_t foreign_refused;
+	/* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5). Mirror of
+	 * src/kernel/vms_ioctl.h; see vms_cluster_snapshot.h. */
+	uint32_t rm_opens;
+	uint32_t rm_opens_refused;
+	uint32_t rm_records_adopted;
+	uint32_t rm_records_refused;
+	uint32_t rm_ends_seen;
+	uint32_t rm_trees_held;
+	uint32_t rm_held_sent;
+	uint32_t rm_held_unsent;
+	uint32_t rm_held_unreported;
+	uint32_t rm_notifications;
 	uint32_t leg_sends;
 	uint32_t leg_sends_refused;
 	uint32_t leg_frames_rx;
@@ -684,7 +721,11 @@ struct vms_sysgen_load_args {
 	uint8_t  alloclass;
 	uint8_t  mscp_load;
 	uint8_t  mscp_serve_all;
-	uint8_t  pad1[3];
+	/* OVMX_RM_RESIDUE_FILL (rd vms-ed5): the op-0x14 residue byte, carved
+	 * out of the former pad1[3] so this struct's size is unchanged. Mirror
+	 * of src/kernel/vms_ioctl.h, whose comment carries the rationale. */
+	uint8_t  ovmx_rm_residue_fill;
+	uint8_t  pad1[2];
 
 	uint32_t niscs_max_pktsz;
 
@@ -759,6 +800,8 @@ struct vms_cluster_getsyi_args {
 	uint8_t  node_csid_valid;
 	uint8_t  hw_model_len;     /* SYI$_HW_NAME, rd vms-21be */
 	uint8_t  hw_model[31];
+	uint8_t  scsnode_len;      /* SYI$_NODENAME/SCSNODE, the booted SCSNODE, rd vms-433 */
+	uint8_t  scsnode[7];
 };
 
 /* ================================================================
@@ -810,11 +853,14 @@ struct vms_cluster_getsyi_args {
  * address, so a size drift is an ABI break. These MUST match src/kernel/
  * vms_ioctl.h exactly (measured on amd64/LP64).
  */
-_Static_assert(sizeof(struct vms_enq_args) == 104,
+/* 104 -> 112 when rd vms-326 added `resnam_len`: a resource name is counted,
+ * and the executive could not express a binary one without it. */
+_Static_assert(sizeof(struct vms_enq_args) == 112,
                "vms_enq_args changed size -- VMS_IOCTL_ENQ/CONVERT ABI break");
 _Static_assert(sizeof(struct vms_deq_args) == 28,
                "vms_deq_args changed size -- VMS_IOCTL_DEQ ABI break");
-_Static_assert(sizeof(struct vms_getlki_args) == 72,
+/* 72 -> 76 with rd vms-326's `resnam_len` ($GETLKI's LKI$_RESNAM is counted). */
+_Static_assert(sizeof(struct vms_getlki_args) == 76,
                "vms_getlki_args changed size -- VMS_IOCTL_GETLKI ABI break");
 _Static_assert(sizeof(struct vms_resmaster_args) == 64,
                "vms_resmaster_args changed size -- VMS_IOCTL_GET_RESMASTER ABI break");
@@ -844,7 +890,7 @@ _Static_assert(sizeof(struct vms_cluster_start_args) == 12,
                "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
 _Static_assert(sizeof(struct vms_cluster_stop_args) == 16,
                "vms_cluster_stop_args changed size -- VMS_IOCTL_CLUSTER_STOP ABI break");
-_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 68,
+_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 76,
                "vms_cluster_getsyi_args changed size -- VMS_IOCTL_CLUSTER_GETSYI ABI break");
 _Static_assert(sizeof(struct vms_scs_view_wire) == 32,
                "vms_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
@@ -866,9 +912,9 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 144,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 200,
                "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 152,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 208,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

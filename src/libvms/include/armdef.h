@@ -28,13 +28,6 @@ extern "C" {
 #define ARM$M_EXECUTE       0x00000004  /* Execute access */
 #define ARM$M_DELETE        0x00000008  /* Delete access */
 #define ARM$M_CONTROL       0x00000010  /* Control (change protection) access */
-#define ARM$M_EXTEND        0x00000020  /* Extend access */
-
-/* ================================================================
- * ARM$K_ — Access rights mask size constant
- * ================================================================ */
-
-#define ARM$K_LENGTH        4   /* Size of access rights mask (bytes) */
 
 #ifdef __cplusplus
 }

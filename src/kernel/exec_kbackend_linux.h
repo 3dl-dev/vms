@@ -69,9 +69,11 @@
  * FC-P0.2 -- they are not needed to fix a size. */
 #include <linux/kthread.h>        /* struct task_struct (exec_kthread_t) */
 #include <linux/timer.h>          /* struct timer_list (exec_timer_t) */
+#include <linux/kernel.h>         /* vsnprintf (exec_console_printf) */
 #include <linux/printk.h>         /* printk / KERN_ERR (exec_console_printf) */
 #include <linux/build_bug.h>      /* static_assert (the console-level invariant) */
 #include "ovmx_console_policy.h"  /* OVMX_OPA0_PRINTK_LEVEL vs PID 1's mute */
+#include "vms_cluster_opa0.h"     /* rd vms-c56: which operator lines are OPA0: lines */
 /* vms-9d2 (primary Ethernet net device -> ETH0:) backing headers. */
 #include <linux/netdevice.h>      /* struct net_device, for_each_netdev, netif_carrier_ok */
 #include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
@@ -1809,19 +1811,49 @@ static inline void exec_wait_ms(uint32_t ms)
 }
 
 /*
- * A macro, not a function: it forwards the caller's format string straight to
- * printk so the compiler's -Wformat checks the call site.
+ * SS18 exec_console_printf -- one executive operator line, ROUTED (rd vms-c56).
  *
- * THE LEVEL IS NOT A LOCAL CHOICE (rd vms-151). KERN_ERR is what the OPA0:
+ * A console line (vms_cluster_opa0.h: a console message VMS itself prints, in
+ * VMS's form) goes to OPA0: at KERN_ERR, started on a fresh line the way VMS
+ * starts a console message, so it never lands on the end of a Username: or a
+ * DCL prompt. Every other line is a diagnostic: it goes to the kernel log at
+ * KERN_NOTICE, below the console sink PID 1 sets, and from there to
+ * OPERATOR.LOG through the /dev/kmsg bridge (src/ovmx_init/opcom_kmsg.c). It is
+ * re-routed, never dropped: dmesg and OPERATOR.LOG both still carry it.
+ *
+ * THE LEVELS ARE NOT A LOCAL CHOICE (rd vms-151). KERN_ERR is what the OPA0:
  * lines have always been emitted at, but the number that matters is the one
  * PID 1 lowers the console sink to -- and when the two disagreed by one, the
- * executive spoke to a console that dropped every word. Both now come from
- * ovmx_console_policy.h, which asserts that this level survives that sink;
- * static_assert below binds the level named there to the one this macro
- * actually passes, so the two cannot drift apart silently.
+ * executive spoke to a console that dropped every word. Both levels come from
+ * ovmx_console_policy.h, which asserts the console level survives that sink and
+ * the diagnostic level does not; the static_asserts below bind the levels named
+ * there to the ones this function actually passes.
+ *
+ * __printf keeps -Wformat on every call site, as the macro this replaces did.
  */
 static_assert(OVMX_OPA0_PRINTK_LEVEL == LOGLEVEL_ERR,
-	      "ovmx_console_policy.h names a level this macro does not emit");
-#define exec_console_printf(fmt, ...) printk(KERN_ERR fmt, ##__VA_ARGS__)
+	      "ovmx_console_policy.h names a console level this op does not emit");
+static_assert(OVMX_OPLOG_PRINTK_LEVEL == LOGLEVEL_NOTICE,
+	      "ovmx_console_policy.h names a diagnostic level this op does not emit");
+
+static inline __printf(1, 2) void exec_console_printf(const char *fmt, ...)
+{
+	char head[VMS_OPA0_LINE_MAX];
+	struct va_format vaf;
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(head, sizeof(head), fmt, ap);
+	va_end(ap);
+
+	va_start(ap, fmt);
+	vaf.fmt = fmt;
+	vaf.va = &ap;
+	if (vms_opa0_is_console_line(head))
+		printk(KERN_ERR "\n%pV", &vaf);
+	else
+		printk(KERN_NOTICE "%pV", &vaf);
+	va_end(ap);
+}
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

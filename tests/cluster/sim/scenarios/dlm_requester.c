@@ -382,18 +382,18 @@ static uint32_t fsm_dir_generation(void *ctx)
 	return vms_ldwv_generation(&g_sys[SIM_OVMX].cl.club.ldwv);
 }
 
-static int fsm_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int fsm_record_master(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid,
 			     vms_csid_t master_csid)
 {
 	(void)ctx;
-	return vms_lock_dlm_record_master(resnam, req_lkid, master_csid) ==
+	return vms_lock_dlm_record_master(resnam, resnam_len, req_lkid, master_csid) ==
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
-static int fsm_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int fsm_assume(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid)
 {
 	(void)ctx;
-	return vms_lock_dlm_assume_mastery(resnam, req_lkid) ==
+	return vms_lock_dlm_assume_mastery(resnam, resnam_len, req_lkid) ==
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
@@ -410,11 +410,11 @@ static int fsm_blkast(void *ctx, uint32_t req_lkid)
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
-static int fsm_learn(void *ctx, const char *resnam, uint16_t group,
+static int fsm_learn(void *ctx, const char *resnam, uint32_t resnam_len, uint16_t group,
 		     uint8_t mode, uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	return vms_lock_dlm_learn_dir_hash(resnam, resnam_len, group, mode, hash) ==
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
@@ -438,6 +438,18 @@ static void fsm_fail(void *ctx, uint32_t req_lkid, enum dlm_req_fail_reason why)
 
 	(void)ctx;
 	(void)vms_lock_dlm_proxy_fail(req_lkid, st);
+}
+
+/*
+ * IS A TRANSITION RUNNING? The REAL CLUB's own flag on the OVMX system in this
+ * rig -- the same byte vms_cnxman_barrier_fsm.c sets at a transition open and
+ * clears at the last release, and the same one the shipping arm reads. The
+ * scenario moves it the way a barrier does; nothing here models the answer.
+ */
+static int fsm_transition_active(void *ctx)
+{
+	(void)ctx;
+	return g_sys[SIM_OVMX].cl.club.transition_active != 0u;
 }
 
 static uint32_t fsm_now(void *ctx)
@@ -499,6 +511,7 @@ static void bind_everything(void)
 	g_fsm_ops.refill_post = fsm_refill;
 	g_fsm_ops.dir_resolve = fsm_dir_resolve;
 	g_fsm_ops.dir_generation = fsm_dir_generation;
+	g_fsm_ops.transition_active = fsm_transition_active;
 	g_fsm_ops.record_master = fsm_record_master;
 	g_fsm_ops.assume_mastery = fsm_assume;
 	g_fsm_ops.grant_recv = fsm_grant;
@@ -533,6 +546,15 @@ static void proc_init(struct vms_proc *p)
 	exec_lock_init(&p->mode_lock);
 	exec_lock_init(&p->lock_list_lock);
 	exec_list_head_init(&p->locks);
+	/* Every PCB the executive makes carries a process id, and the lock
+	 * manager puts it at body[20:24] of a cross-node request that has no
+	 * master handle yet (rd vms-c55). A PCB with none is one the executive
+	 * never made, so the harness gives each one its own. */
+	{
+		static uint32_t next_vms_pid = 0x10000001u;
+
+		p->vms_pid = next_vms_pid++;
+	}
 	for (i = 0; i < 4; i++) {
 		exec_lock_init(&p->ast[i].lock);
 		exec_list_head_init(&p->ast[i].pending);
@@ -585,6 +607,9 @@ static void wire_teaches_hash(const char *resnam, uint32_t hash)
 	req.res_ident_valid = 1u;
 	req.name_len = (uint8_t)strlen(resnam);
 	memcpy(req.name, resnam, req.name_len);
+	/* body[20:24]: the scripted VMS node's REQUESTING PID until a master
+	 * names a handle (rd vms-c55) */
+	req.req_pid = 0x20200204u;
 
 	memset(&link, 0, sizeof(link));
 	memset(frame, 0, sizeof(frame));
@@ -1112,6 +1137,76 @@ static void a_refused_send_is_retried_and_granted_for_real(void)
 	check_no_phantom_frames("refused send, retried");
 }
 
+/*
+ * A TRANSITION HOLDS A REAL $ENQ AND THE REAL ENGINE GRANTS IT AFTERWARDS
+ * (rd vms-c55).
+ *
+ * The R1 leg proves the FSM holds and releases against a fake engine. What one
+ * node cannot prove there is the thing this change could plausibly break: that
+ * holding a frame does not strand the REAL $ENQW vms_lock.c put to sleep on
+ * its proxy LKB. Here the engine is the shipping one, the CLUB is a real CLUB,
+ * and the lock is read back through $GETLKI.
+ */
+static void a_transition_holds_a_real_enq_and_then_grants_it(void)
+{
+	struct vms_getlki_args gk;
+	uint32_t hash = 0;
+	uint32_t lkid = 0, st;
+
+	printf("--- a cluster state transition holds the request, and the "
+	       "engine grants it when the transition ends ---\n");
+	reset_wire();
+
+	ct_check(hash_routing_to(g_csid[1], &hash) == 0,
+		 "a wire value the vector routes to VAXB");
+	g_sim_master = g_csid[0];
+	g_sim_master_lkid = 0x00BEEF02u;
+	wire_teaches_hash("F11B$sOVMXSYS", hash);
+
+	/* The barrier opens: the real CLUB flag, set the way the FSM sets it. */
+	g_sys[SIM_OVMX].cl.club.transition_active = 1u;
+
+	st = do_enq("F11B$sOVMXSYS", LCK_K_EXMODE, &lkid);
+	ct_check(st == (uint32_t)SS__NORMAL && lkid != 0u,
+		 "$ENQ creates the proxy LKB and the post is accepted");
+	ct_check_eq_u32(g_wire_n, 0u,
+			"*** NOTHING reached the LAN during the transition ***");
+	ct_check(dlm_req_fsm_find(&g_fsm, lkid) != NULL,
+		 "the requester arm still holds the request");
+
+	do_getlki(lkid, &gk);
+	ct_check_eq_u32(gk.granted_mode, (uint32_t)LCK_K_NLMODE,
+			"the real proxy is pending, granted nothing");
+
+	/* Beat past the whole ladder: the hold must not spend it. */
+	{
+		uint32_t i;
+
+		for (i = 0; i < (uint32_t)DLM_REQ_MAX_TRIES * 3u; i++) {
+			g_clock.now_ms += (uint64_t)DLM_REQ_RETRY_MS + 1u;
+			(void)dlm_req_fsm_tick(&g_fsm);
+		}
+	}
+	ct_check_eq_u32(g_wire_n, 0u, "still nothing on the LAN");
+	ct_check(dlm_req_fsm_find(&g_fsm, lkid) != NULL,
+		 "*** and the request was NOT failed off the ladder ***");
+	do_getlki(lkid, &gk);
+	ct_check_eq_u32(gk.granted_mode, (uint32_t)LCK_K_NLMODE,
+			"  the real $ENQ is still waiting, not errored");
+
+	/* The coordinator releases the last step. */
+	g_sys[SIM_OVMX].cl.club.transition_active = 0u;
+	ct_check(dlm_req_fsm_transition_ended(&g_fsm) >= 1u,
+		 "*** the end of the transition releases the held request ***");
+	ct_check(g_wire_n >= 1u, "and a real frame reached the LAN");
+
+	do_getlki(lkid, &gk);
+	ct_check_eq_u32(gk.status, (uint32_t)SS__NORMAL, "$GETLKI succeeds");
+	ct_check_eq_u32(gk.granted_mode, (uint32_t)LCK_K_EXMODE,
+			"*** and the REAL engine granted the lock at EX ***");
+	check_no_phantom_frames("transition hold");
+}
+
 int main(void)
 {
 	printf("== FC-P4.6 R2: the requester against a simulated cluster ==\n");
@@ -1135,6 +1230,7 @@ int main(void)
 	misaddressed_inbound_is_redirected();
 	master_departs_mid_request();
 	a_refused_send_is_retried_and_granted_for_real();
+	a_transition_holds_a_real_enq_and_then_grants_it();
 
 	return ct_summary("dlm_requester");
 }

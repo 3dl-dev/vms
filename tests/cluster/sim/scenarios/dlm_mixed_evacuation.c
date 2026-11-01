@@ -384,18 +384,19 @@ static int o_fsm_dir_resolve(void *ctx, uint32_t hash, vms_csid_t *out)
 	return 0;
 }
 
-static int o_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int o_record_master(void *ctx, const char *resnam,
+			   uint32_t resnam_len, uint32_t req_lkid,
 			   vms_csid_t master)
 {
 	(void)ctx;
-	return vms_lock_dlm_record_master(resnam, req_lkid, (uint32_t)master) ==
+	return vms_lock_dlm_record_master(resnam, resnam_len, req_lkid, (uint32_t)master) ==
 	       SS__NORMAL ? 0 : -1;
 }
 
-static int o_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int o_assume(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid)
 {
 	(void)ctx;
-	return vms_lock_dlm_assume_mastery(resnam, req_lkid) == SS__NORMAL ?
+	return vms_lock_dlm_assume_mastery(resnam, resnam_len, req_lkid) == SS__NORMAL ?
 	       0 : -1;
 }
 
@@ -411,11 +412,11 @@ static int o_blkast(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int o_learn(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
-		   uint32_t hash)
+static int o_learn(void *ctx, const char *resnam, uint32_t resnam_len,
+		   uint16_t group, uint8_t mode, uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	return vms_lock_dlm_learn_dir_hash(resnam, resnam_len, group, mode, hash) ==
 	       SS__NORMAL ? 0 : -1;
 }
 
@@ -445,6 +446,15 @@ static void proc_init(struct vms_proc *p)
 	exec_lock_init(&p->mode_lock);
 	exec_lock_init(&p->lock_list_lock);
 	exec_list_head_init(&p->locks);
+	/* Every PCB the executive makes carries a process id, and the lock
+	 * manager puts it at body[20:24] of a cross-node request that has no
+	 * master handle yet (rd vms-c55). A PCB with none is one the executive
+	 * never made, so the harness gives each one its own. */
+	{
+		static uint32_t next_vms_pid = 0x10000001u;
+
+		p->vms_pid = next_vms_pid++;
+	}
 	for (i = 0; i < 4; i++) {
 		exec_lock_init(&p->ast[i].lock);
 		exec_list_head_init(&p->ast[i].pending);
@@ -526,6 +536,9 @@ static int vax_enq_frame(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
 	r.res_group = WL_GROUP;
 	r.res_acmode = WL_MODE;
 	r.res_ident_valid = 1u;
+	/* body[20:24]: the scripted VMS node's REQUESTING PID until a master
+	 * names a handle (rd vms-c55) */
+	r.req_pid = 0x20200204u;
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	return vms_dlm_enq_request_build(&r, opcode, frame, VMS_CM_FRAME_LEN,
 					 &written) == VMS_CODEC_OK ? 0 : -1;
@@ -549,7 +562,8 @@ static enum vms_dlm_dir_outcome vax_lookup(const uint8_t *frame,
 		for (i = 0u; i < id.name_len && id.name[i] != 0u; i++)
 			nm[i] = (char)id.name[i];
 		nm[i] = '\0';
-		(void)vms_lock_dlm_learn_dir_hash(nm, id.group, id.mode, hash);
+		/* The COUNT this harness copied, like the real arm (rd vms-326). */
+		(void)vms_lock_dlm_learn_dir_hash(nm, i, id.group, id.mode, hash);
 	}
 	return vms_dlm_dir_lookup(&o.dir, &id, from, (vms_csid_t)CSID_OVMX,
 				  out_master);

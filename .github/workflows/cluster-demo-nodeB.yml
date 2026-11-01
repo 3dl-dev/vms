@@ -106,7 +106,7 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/netbsd-ovmx-quiet.patch', 'tools/cross-vax/netbsd-ovmx-gencons.patch', 'tools/cross-vax/netbsd-ovmx-todr.patch', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/kernel/vms_l2.h', 'src/kernel/vms_l2_station.h', 'src/ovmx_init/**', 'src/libvms/**', 'src/libvmssys/**', 'src/vmsprocess/**', 'src/vmslnm/**', 'src/vmsfs/**', 'src/vmsrms/**', 'src/vmsqueue/**', 'src/imgact/**') }}
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -139,7 +139,7 @@ jobs:
           push: false
           load: true
           tags: ovmx-cross-vax:latest
-          cache-from: type=gha,scope=cross-vax
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-vax
 
       - name: Node B identity from the roster (mk_democonfig.py DEMO_NODE_B)
         if: matrix.node == 'B'
@@ -185,12 +185,29 @@ jobs:
       # own login probe is not CI-covered and times out after "Welcome" on this
       # rail at V0.7-10 (runs 38598276981, 38601013446) while acceptance passes on
       # the same SHA, so the battery is the proof used here.
+      # rd vms-3ea: THE SYSTEM DISK'S ODS-2 LABEL IS PER NODE. The label is the
+      # Files-11 lock namespace (acp_vol_resnam_kind spells this volume's locks
+      # "F11B$<kind><label>"), so two members whose different system disks carry
+      # one label contend on one clusterwide resource for unrelated local I/O.
+      # Every OVMX image was mastered OVMXSYS, which is correct for one node and
+      # is the duplicate-label administrator error VMS does not permit for two.
+      # The form follows the one real system we have on the wire: SCSNODE VAXC
+      # labels its system disk VAXCSYS, so Node B's is <SCSNODE>SYS. The
+      # single-node demo disk has no cluster identity and keeps the default.
       - name: Build + boot the disk (run-boot.sh acceptance; fails unless DCL works)
         env:
           CROSS_IMAGE: ovmx-cross-vax
           LAB_IMAGE: ovmx-vax-lab
+          OVMX_NODE: ${{ matrix.node }}
         run: |
           set -o pipefail
+          # Node B's own label, from the roster's SCSNODE (already in the
+          # environment). The single-node disk joins no cluster, so it keeps
+          # run-boot.sh's default and this exports nothing for it.
+          if [ "$OVMX_NODE" = B ]; then
+            export SYSVOL_LABEL="${NODE_B_SCSNODE}SYS"
+            echo "system-disk ODS-2 label for this node: $SYSVOL_LABEL (rd vms-3ea)"
+          fi
           tests/lab-vax/run-boot.sh acceptance 2>&1 | tee "$RUNNER_TEMP/demo-build.log"
 
       - name: Write Node B's cluster identity into the booted disk's ODS-2 partition
@@ -216,6 +233,11 @@ jobs:
             --scsnode "$NODE_B_SCSNODE" --scssystemid "$NODE_B_SCSSYSTEMID" \
             --votes "$NODE_B_VOTES" --expected-votes "$NODE_B_EXPECTED_VOTES" \
             --vaxcluster "$NODE_B_VAXCLUSTER"
+          # DECnet (rd vms-5843): the roster's DECnet address and peers, written
+          # by this ref's own NCP.EXE onto the same ODS-2 partition, so Node B's
+          # boot-time STARTNET starts NETACP and SET HOST OVMXA/OVMXB works.
+          sh tools/cluster-web-demo/inject-decnet-config.sh "$W/e.qcow2" "$W/e.qcow2" \
+            --scsnode "$NODE_B_SCSNODE"
           qemu-img convert -O raw "$W/e.qcow2" "$W/e.new"
           [ "$(stat -c%s "$W/e.new")" = "$(stat -c%s "$W/e.raw")" ] || { echo "injected partition changed size"; exit 1; }
           dd if="$W/e.new" of="$IMG" bs=512 seek="$E_OFF" conv=notrunc status=none

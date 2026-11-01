@@ -95,8 +95,10 @@ ods2_status_t ods2_home_parse(const void *block, size_t block_len,
                ODS2_FORMAT_STRING, ODS2_FORMAT_LEN) != 0)
         return ODS2_ERR_FORMAT;
 
+    /* Strict: a structure level this codec reads -- ODS-2 (0x0201) or, rd
+     * vms-7e7e, ODS-5 (0x0501, observed on a real Alpha V8.4 volume). */
     if (strict_level &&
-        le16(b + offsetof(ods2_home_t, hm2_struclev)) != ODS2_STRUCLEV_V2)
+        !ODS2_STRUCLEV_OK(le16(b + offsetof(ods2_home_t, hm2_struclev))))
         return ODS2_ERR_FORMAT;
 
     /* Byte-for-byte copy: on-disk layout == struct layout by construction. */
@@ -146,7 +148,7 @@ ods2_status_t ods2_scb_parse(const void *block, size_t block_len,
     if (stored != calc)
         return ODS2_ERR_CHECKSUM;
 
-    if (le16(b + offsetof(ods2_scb_t, scb_struclev)) != ODS2_STRUCLEV_V2)
+    if (!ODS2_STRUCLEV_OK(le16(b + offsetof(ods2_scb_t, scb_struclev))))
         return ODS2_ERR_FORMAT;
 
     memcpy(out, b, sizeof(*out));
@@ -219,6 +221,140 @@ const ods2_ident_t *ods2_fh2_ident(const void *header_block)
         return NULL;
 
     return (const ods2_ident_t *)(b + (size_t)id_off_words * 2);
+}
+
+/* ================================================================
+ * ODS-5 names (rd vms-7e7e). Every rule below is from the real Alpha V8.4
+ * ODS-5 volumes in tests/lab/captures/ods5-alpha-20261022/ (RESULTS.md R4-R8).
+ * ================================================================ */
+
+/* R7: the upper-case fold the directory order and lookups use. a-z and the
+ * Latin-1 lower-case letters fold to upper case; U+00FF folds to U+0178 (its
+ * Unicode upper case, which is where the real directory sorted it). U+00B5 to
+ * U+039C is the same Unicode mapping, not probed. Everything else is itself. */
+unsigned ods5_fold(unsigned c)
+{
+    if (c >= 'a' && c <= 'z')
+        return c - 0x20u;
+    if (c >= 0xE0u && c <= 0xFEu && c != 0xF7u)
+        return c - 0x20u;
+    if (c == 0xFFu)
+        return 0x178u;
+    if (c == 0xB5u)
+        return 0x39Cu;
+    return c;
+}
+
+static int ods5_odschar(unsigned char c)
+{
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '$' || c == '-' || c == '_';
+}
+
+/* R6: the name type a NEW 8-bit "name.type" gets -- ODS-2 when it is a legal
+ * ODS-2 name ignoring case (<=39 '.' <=39 of A-Z a-z 0-9 $ - _), else ISL-1. */
+unsigned ods5_name_type(const char *name, unsigned len)
+{
+    unsigned i, dots = 0, part = 0;
+
+    if (!name || len == 0)
+        return ODS5_NAMETYPE_ISL1;
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (c == '.') {
+            if (++dots > 1)
+                return ODS5_NAMETYPE_ISL1;
+            part = 0;
+            continue;
+        }
+        if (!ods5_odschar(c) || ++part > 39)
+            return ODS5_NAMETYPE_ISL1;
+    }
+    return ODS5_NAMETYPE_ODS2;
+}
+
+/* Character i of a stored name: a byte for ODS-2/ISL-1, a little-endian
+ * 16-bit unit for UCS-2. */
+static unsigned ods5_char_at(const uint8_t *s, unsigned nametype, unsigned i)
+{
+    if (nametype == ODS5_NAMETYPE_UCS2)
+        return (unsigned)s[2u * i] | ((unsigned)s[2u * i + 1u] << 8);
+    return s[i];
+}
+
+int ods5_name_cmp(const void *a, unsigned alen, unsigned atype,
+                  const void *b, unsigned blen, unsigned btype)
+{
+    const uint8_t *pa = (const uint8_t *)a, *pb = (const uint8_t *)b;
+    unsigned na = (atype == ODS5_NAMETYPE_UCS2) ? alen / 2u : alen;
+    unsigned nb = (btype == ODS5_NAMETYPE_UCS2) ? blen / 2u : blen;
+    unsigned i, n = na < nb ? na : nb;
+
+    for (i = 0; i < n; i++) {
+        unsigned ca = ods5_fold(ods5_char_at(pa, atype, i));
+        unsigned cb = ods5_fold(ods5_char_at(pb, btype, i));
+        if (ca != cb)
+            return ca < cb ? -1 : 1;
+    }
+    if (na != nb)
+        return na < nb ? -1 : 1;
+    return 0;
+}
+
+/* Header-layout-neutral ident read: FI2 for a level-2 header, FI5 (R4) for a
+ * level-5 one. A UCS-2 name is returned as its raw little-endian bytes. */
+ods2_status_t ods2_fh2_ident_get(const void *header_block, ods2_hdr_ident_t *out)
+{
+    const uint8_t *b = (const uint8_t *)header_block;
+    unsigned idoff, mpoff;
+
+    if (!header_block || !out)
+        return ODS2_ERR_ARGS;
+    memset(out, 0, sizeof(*out));
+    idoff = (unsigned)b[offsetof(ods2_fh2_t, fh2_idoffset)] * 2u;
+    mpoff = (unsigned)b[offsetof(ods2_fh2_t, fh2_mpoffset)] * 2u;
+
+    if (ODS2_IS_ODS5(le16(b + offsetof(ods2_fh2_t, fh2_struclev)))) {
+        const uint8_t *id = b + idoff;
+        unsigned nl;
+
+        if (idoff == 0 || idoff + ODS5_IDENT_MIN > ODS2_BLOCK_SIZE || mpoff < idoff)
+            return ODS2_ERR_FORMAT;
+        nl = id[offsetof(ods5_ident_t, fi5_namelen)];
+        if (ODS5_IDENT_FIXED + nl > mpoff - idoff || nl >= sizeof(out->name))
+            return ODS2_ERR_FORMAT;
+        out->nametype = id[offsetof(ods5_ident_t, fi5_control)] & 0x7u;
+        out->revision = le16(id + offsetof(ods5_ident_t, fi5_revision));
+        memcpy(out->credate, id + offsetof(ods5_ident_t, fi5_credate), 8);
+        memcpy(out->revdate, id + offsetof(ods5_ident_t, fi5_revdate), 8);
+        memcpy(out->expdate, id + offsetof(ods5_ident_t, fi5_expdate), 8);
+        memcpy(out->bakdate, id + offsetof(ods5_ident_t, fi5_bakdate), 8);
+        memcpy(out->name, id + ODS5_IDENT_FIXED, nl);
+        out->namelen = nl;
+        return ODS2_OK;
+    } else {
+        const ods2_ident_t *id = ods2_fh2_ident(header_block);
+        char tmp[sizeof(id->fi2_filename) + sizeof(id->fi2_filenamext)];
+        unsigned n;
+
+        if (!id || idoff == 0)
+            return ODS2_ERR_FORMAT;
+        memcpy(tmp, id->fi2_filename, sizeof(id->fi2_filename));
+        memcpy(tmp + sizeof(id->fi2_filename), id->fi2_filenamext,
+               sizeof(id->fi2_filenamext));
+        n = sizeof(tmp);
+        while (n > 0 && (tmp[n - 1] == ' ' || tmp[n - 1] == '\0'))
+            n--;
+        memcpy(out->name, tmp, n);
+        out->namelen  = n;
+        out->nametype = ODS5_NAMETYPE_ODS2;
+        out->revision = le16((const uint8_t *)id + offsetof(ods2_ident_t, fi2_revision));
+        memcpy(out->credate, id->fi2_credate, 8);
+        memcpy(out->revdate, id->fi2_revdate, 8);
+        memcpy(out->expdate, id->fi2_expdate, 8);
+        memcpy(out->bakdate, id->fi2_bakdate, 8);
+        return ODS2_OK;
+    }
 }
 
 /*
@@ -359,6 +495,20 @@ ods2_status_t ods2_volume_read_header(const ods2_volume_t *vol,
     idx_lbn = vol->home.hm2_ibmaplbn + vol->home.hm2_ibmapsize;
     hdr_lbn = idx_lbn + (fid_num - 1);
 
+    /* Past file 1, map the header's INDEXF.SYS VBN through the index file's
+     * own extents: a volume INITIALIZEd by VMS holds only the first headers in
+     * the extent after the index bitmap (on the real Alpha ODS-5 volume, files
+     * 1-16; file 17 on is a later extent). idx_lbn + (N-1) is right only there. */
+    if (fid_num > 1) {
+        const uint8_t *ixf = ods2_volume_block(vol, idx_lbn);
+        if (!ixf)
+            return ODS2_ERR_RANGE;
+        /* An index file whose map does not reach this VBN (a minimal image
+         * with no INDEXF retrieval pointers) keeps the plain arithmetic --
+         * the reader's behaviour before the map was consulted. */
+        (void)ods2_indexf_header_lbn(&vol->home, ixf, fid_num, &hdr_lbn);
+    }
+
     hdr = ods2_volume_block(vol, hdr_lbn);
     if (!hdr)
         return ODS2_ERR_RANGE;
@@ -369,6 +519,54 @@ ods2_status_t ods2_volume_read_header(const ods2_volume_t *vol,
 
     memcpy(header_out, hdr, ODS2_BLOCK_SIZE);
     return ODS2_OK;
+}
+
+/* VBN -> LBN through a header's retrieval pointers. */
+struct vbn_map_ctx { uint32_t want, seen, lbn; int found; };
+
+static int vbn_map_cb(const ods2_extent_t *ext, void *ctx)
+{
+    struct vbn_map_ctx *c = (struct vbn_map_ctx *)ctx;
+
+    if (c->want <= c->seen + ext->count) {
+        c->lbn = ext->lbn + (c->want - c->seen - 1u);
+        c->found = 1;
+        return 1;
+    }
+    c->seen += ext->count;
+    return 0;
+}
+
+ods2_status_t ods2_fh2_map_vbn(const void *header_block, uint32_t vbn, uint32_t *lbn_out)
+{
+    struct vbn_map_ctx c = { vbn, 0, 0, 0 };
+    ods2_status_t st;
+
+    if (!header_block || !lbn_out || vbn == 0)
+        return ODS2_ERR_ARGS;
+    st = ods2_fh2_map_walk(header_block, vbn_map_cb, &c, NULL);
+    if (st != ODS2_OK)
+        return st;
+    if (!c.found)
+        return ODS2_ERR_RANGE;
+    *lbn_out = c.lbn;
+    return ODS2_OK;
+}
+
+ods2_status_t ods2_indexf_header_lbn(const ods2_home_t *home, const void *indexf_header,
+                                     uint32_t fid_num, uint32_t *lbn_out)
+{
+    ods2_fh2_t tmp;
+    ods2_status_t st;
+
+    if (!home || !indexf_header || !lbn_out || fid_num < 1)
+        return ODS2_ERR_ARGS;
+    st = ods2_fh2_parse(indexf_header, ODS2_BLOCK_SIZE, &tmp);
+    if (st != ODS2_OK)
+        return st;
+    return ods2_fh2_map_vbn(indexf_header,
+                            (uint32_t)home->hm2_ibmapvbn + home->hm2_ibmapsize + (fid_num - 1u),
+                            lbn_out);
 }
 
 /* ---- directory listing ---- */
@@ -388,12 +586,20 @@ struct dir_walk_ctx {
  * version, fid}. Shared by the in-memory walker (dir_scan_block below) and
  * the block-backed one (ods2_bdev_list_dir); returns 1 if `cb` asked to stop.
  */
-int ods2_dir_block_scan(const void *dir_block, ods2_dir_cb cb, void *ctx)
+/*
+ * The one directory-record decoder. `tcb` (typed) sees every record with its
+ * ODS-5 name type (RESULTS.md R5: bits 3..5 of dir_flags). `cb` (the 8-bit
+ * callback every ODS-2 consumer uses) sees the ODS-2 and ISL-1 records; a
+ * UCS-2 record is not an 8-bit name, so it is not handed to `cb` as one. No
+ * ODS-2 volume carries a UCS-2 record, so ODS-2 behaviour is unchanged.
+ */
+static int dir_block_scan_any(const void *dir_block, ods2_dir_cb cb,
+                              ods2_dir_tcb tcb, void *ctx)
 {
     const uint8_t *blk = (const uint8_t *)dir_block;
     unsigned off = 0;
 
-    if (!dir_block || !cb)
+    if (!dir_block || (!cb && !tcb))
         return 0;
 
     while (off + 6 <= ODS2_BLOCK_SIZE) {
@@ -426,15 +632,31 @@ int ods2_dir_block_scan(const void *dir_block, ods2_dir_cb cb, void *ctx)
             fid.fid_rvn = blk[val_off + 6];
             fid.fid_nmx = blk[val_off + 7];
 
-            if (cb((const char *)(blk + name_off), namecount,
-                   version, &fid, ctx))
-                return 1;
+            if (tcb) {
+                if (tcb((const char *)(blk + name_off), namecount,
+                        ODS5_DIR_NAMETYPE(blk[off + 4]), version, &fid, ctx))
+                    return 1;
+            } else if (ODS5_DIR_NAMETYPE(blk[off + 4]) != ODS5_NAMETYPE_UCS2) {
+                if (cb((const char *)(blk + name_off), namecount,
+                       version, &fid, ctx))
+                    return 1;
+            }
             val_off += (unsigned)sizeof(ods2_dir_ent_t);
         }
 
         off = rec_end;
     }
     return 0;
+}
+
+int ods2_dir_block_scan(const void *dir_block, ods2_dir_cb cb, void *ctx)
+{
+    return dir_block_scan_any(dir_block, cb, NULL, ctx);
+}
+
+int ods2_dir_block_scan_typed(const void *dir_block, ods2_dir_tcb tcb, void *ctx)
+{
+    return dir_block_scan_any(dir_block, NULL, tcb, ctx);
 }
 
 /* Decode one directory data block's records (in-memory walk thread). */

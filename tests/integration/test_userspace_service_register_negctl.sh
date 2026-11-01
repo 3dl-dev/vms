@@ -1200,12 +1200,12 @@ sed -n 's/.*errors\[++nerr\] = "\([A-Z][^"]*: \).*/\1/p' "$GATE" | sort -u >> "$
 # the cited file. Pulled from the gate's own literal text the same way, so a
 # renamed message desyncs this check instead of slipping past it.
 sed -n "s/.*printf '\([A-Z][^:]*: \)%s.*/\1/p" "$GATE" | sort -u >> "$WORK/derived"
-grep -oE 'malformed OVMX declaration' "$GATE" | sort -u >> "$WORK/derived"
+grep -a -oE 'malformed OVMX declaration' "$GATE" | sort -u >> "$WORK/derived"
 # The errors[] array, the printf paths and decl_bad cover the PER-SERVICE
 # properties; the gate also has three FAIL paths that are not about any one
 # service -- it refusing to run at all, and the floor.
-grep -oE 'this gate scans the product tree\.' "$GATE" | sort -u >> "$WORK/derived"
-grep -oE 'the source scan produced no facts at all\.' "$GATE" | sort -u >> "$WORK/derived"
+grep -a -oE 'this gate scans the product tree\.' "$GATE" | sort -u >> "$WORK/derived"
+grep -a -oE 'the source scan produced no facts at all\.' "$GATE" | sort -u >> "$WORK/derived"
 # The exported-symbol scan's own broken-scan path (vms-f26). Like the two
 # above it is an echo, not an errors[] entry, because it aborts the run rather
 # than accusing a service.
@@ -1217,10 +1217,10 @@ grep -oE 'the source scan produced no facts at all\.' "$GATE" | sort -u >> "$WOR
 # first and NOT the second. That is deliberate: "no compiler" is a
 # PREREQUISITE failure, the same class as this file's own `command -v cmp`
 # check, and no mutation of the TREE provokes it.
-grep -oE 'BROKEN SYMBOL SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
+grep -a -oE 'BROKEN SYMBOL SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
 # The ioctl bridge's own broken-scan path (vms-ecf round 3), same shape: an
 # echo that aborts the run rather than accusing a service.
-grep -oE 'BROKEN IOCTL BRIDGE: ' "$GATE" | sort -u >> "$WORK/derived"
+grep -a -oE 'BROKEN IOCTL BRIDGE: ' "$GATE" | sort -u >> "$WORK/derived"
 # The build-set scan's own refusal (vms-c19), same shape again. THE PREFIX IS
 # SHARED THREE WAYS, exactly as "BROKEN SYMBOL SCAN: " is shared two ways: the
 # gate spells it for an unreadable configure (provoked by a control above), for
@@ -1229,13 +1229,13 @@ grep -oE 'BROKEN IOCTL BRIDGE: ' "$GATE" | sort -u >> "$WORK/derived"
 # first only. "cmake is absent" is a PREREQUISITE failure that no mutation of
 # the TREE provokes; the unparseable-json path is provoked by nothing here and
 # is named as an open gap rather than claimed.
-grep -oE 'BROKEN BUILD-SET SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
+grep -a -oE 'BROKEN BUILD-SET SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
 # The gate's own source has to spell this one "sys\$" (escaped for the shell
 # double-quote it lives in); what actually prints at runtime is "sys$", with
 # no backslash. Normalize the same way so this line matches the fixture's
 # real output below instead of failing on a backslash that only exists on
 # disk.
-grep -oF 'THE FLOOR: zero sys\$ services found in the product compile set.' "$GATE" \
+grep -a -oF 'THE FLOOR: zero sys\$ services found in the product compile set.' "$GATE" \
     | sed 's/\\\$/$/' | sort -u >> "$WORK/derived"
 
 

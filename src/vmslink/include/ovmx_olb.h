@@ -120,14 +120,16 @@ static inline unsigned char *olb__slurp(const char *path, size_t *out_size)
  * A non-existent file returns OLB_ERR_OPEN; the caller decides whether that is
  * an error (INSERT into a missing library) or an empty set.
  */
-static inline int olb_read(const char *path, struct olb_member **members,
-                           uint32_t *count)
+/*
+ * olb_parse - the same parse over an archive image already in memory (vms-8ca):
+ * DCL LIBRARY reads the .OLB through the Files-11 ACP into a buffer, so it needs
+ * the parse without the file read. Takes ownership of `abuf` (frees it).
+ */
+static inline int olb_parse(unsigned char *abuf, size_t asize,
+                            struct olb_member **members, uint32_t *count)
 {
     *members = NULL;
     *count = 0;
-
-    size_t asize = 0;
-    unsigned char *abuf = olb__slurp(path, &asize);
     if (!abuf) return OLB_ERR_OPEN;
 
     if (asize < OLB_AR_MAGIC_LEN ||
@@ -215,6 +217,15 @@ static inline int olb_read(const char *path, struct olb_member **members,
     return OLB_OK;
 }
 
+static inline int olb_read(const char *path, struct olb_member **members,
+                           uint32_t *count)
+{
+    size_t asize = 0;
+    unsigned char *abuf = olb__slurp(path, &asize);
+    if (!abuf) { *members = NULL; *count = 0; return OLB_ERR_OPEN; }
+    return olb_parse(abuf, asize, members, count);
+}
+
 /* Free a member array returned by olb_read. */
 static inline void olb_free(struct olb_member *members, uint32_t count)
 {
@@ -261,9 +272,16 @@ static inline void olb__put(struct olb__obuf *b, const void *src, size_t n)
  *
  * Returns OLB_OK or a negative OLB_ERR_*.
  */
-static inline int olb_write(const char *path, const struct olb_member *members,
-                            uint32_t count)
+/*
+ * olb_build - assemble the complete .OLB image in memory (vms-8ca): on OLB_OK,
+ * *out is a malloc'd buffer of *outlen bytes the caller writes and frees. DCL
+ * LIBRARY writes it through RMS; olb_write below flushes it to a path.
+ */
+static inline int olb_build(const struct olb_member *members, uint32_t count,
+                            unsigned char **out, size_t *outlen)
 {
+    *out = NULL;
+    *outlen = 0;
     /* Build the long-name string table for any name that will not fit the
      * 16-byte field as "name/" (i.e. strlen > 15). */
     char *longtab = NULL;
@@ -337,7 +355,25 @@ static inline int olb_write(const char *path, const struct olb_member *members,
         if (members[i].len & 1) olb__put(&ob, &pad, 1);
     }
 
-    if (ob.err) { rc = OLB_ERR_MEM; goto done; }
+    if (ob.err) {
+        rc = OLB_ERR_MEM;
+        free(ob.p);
+    } else {
+        *out = ob.p;
+        *outlen = ob.len;
+    }
+
+    free(longtab);
+    free(longoff);
+    return rc;
+}
+
+static inline int olb_write(const char *path, const struct olb_member *members,
+                            uint32_t count)
+{
+    struct olb__obuf ob = { NULL, 0, 0, 0 };
+    int rc = olb_build(members, count, &ob.p, &ob.len);
+    if (rc != OLB_OK) return rc;
 
     /* Flush the assembled image in one shot. */
 #ifdef OVMX_OLB_RMS_IO
@@ -348,16 +384,16 @@ static inline int olb_write(const char *path, const struct olb_member *members,
 #else
     {
         FILE *fp = fopen(path, "wb");
-        if (!fp) { rc = OLB_ERR_OPEN; goto done; }
-        if (ob.len && fwrite(ob.p, 1, ob.len, fp) != ob.len) rc = OLB_ERR_IO;
-        if (fclose(fp) != 0 && rc == OLB_OK) rc = OLB_ERR_IO;
+        if (!fp) {
+            rc = OLB_ERR_OPEN;
+        } else {
+            if (ob.len && fwrite(ob.p, 1, ob.len, fp) != ob.len) rc = OLB_ERR_IO;
+            if (fclose(fp) != 0 && rc == OLB_OK) rc = OLB_ERR_IO;
+        }
     }
 #endif
 
-done:
     free(ob.p);
-    free(longtab);
-    free(longoff);
     return rc;
 }
 

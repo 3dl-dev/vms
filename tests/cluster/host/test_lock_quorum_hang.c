@@ -142,6 +142,15 @@ static void proc_init(struct vms_proc *p)
 	exec_lock_init(&p->mode_lock);
 	exec_lock_init(&p->lock_list_lock);
 	exec_list_head_init(&p->locks);
+	/* Every PCB the executive makes carries a process id, and the lock
+	 * manager puts it at body[20:24] of a cross-node request that has no
+	 * master handle yet (rd vms-c55). A PCB with none is one the executive
+	 * never made, so the harness gives each one its own. */
+	{
+		static uint32_t next_vms_pid = 0x10000001u;
+
+		p->vms_pid = next_vms_pid++;
+	}
 	for (i = 0; i < 4; i++) {
 		exec_lock_init(&p->ast[i].lock);
 		exec_list_head_init(&p->ast[i].pending);

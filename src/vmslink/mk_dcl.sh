@@ -121,7 +121,7 @@ INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 # dcl_mbx added by vms-786 (mailbox-backed SYS$INPUT/SYS$OUTPUT).
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
 dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_disk_logical \
-dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script \
+dcl_editor dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script dcl_memfile \
 dcl_messages dcl_library dcl_help dcl_mbx"
 
 echo "mk_dcl: LINK.EXE=$LINK_EXE  CC=$CC"

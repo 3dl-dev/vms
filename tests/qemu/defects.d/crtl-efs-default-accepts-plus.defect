@@ -1,0 +1,31 @@
+# crtl-efs-default-accepts-plus -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DEC C RTL UNIX->OpenVMS name translation obeys DECC\$EFS_CHARSET: at the default a name ODS-2 cannot carry is refused, as the real Alpha V8.4 C RTL refused it (rd vms-da9b, ods5-alpha-20261022 session 5)";;
+        targets)      echo "vmsrms/crtl_filespec.c";;
+        suites_red)   echo "test_syssvc_crtl_efs";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "put_comp() ^-escapes a character ODS-2 cannot carry only under DECC\$EFS_CHARSET ('else if (efs && c >= 0x20 && c != 0x7F)') and refuses it otherwise. The mutation drops the efs condition, so the translator escapes c++config.h even with the switch off -- an extended name the real C RTL refuses at its defaults. With the switch on nothing changes, so only the default-behaviour assertion reddens.";;
+        require_fail) cat <<'EOF2'
+... and the UNIX name with '+' is refused (EINVAL), as the real C RTL refused it
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  cat <<'EOF2'
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        } else if (efs \&\& c >= 0x20 \&\& c != 0x7F) {$|        } else if (c >= 0x20 \&\& c != 0x7F) { /* NEGCTL crtl-efs-default-accepts-plus */|' "$_file"
+
+    :
+}

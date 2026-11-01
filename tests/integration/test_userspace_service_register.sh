@@ -699,7 +699,7 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
     # declared it. See register_buildset.awk for where this list is consumed.
     INSTALLED_TARGETS="$WORK/installed_targets"
     _cmakelists_z \
-        | xargs -0 grep -hoE 'install\([[:space:]]*TARGETS[[:space:]]+[^)]*\)' 2>/dev/null \
+        | xargs -0 grep -a -hoE 'install\([[:space:]]*TARGETS[[:space:]]+[^)]*\)' 2>/dev/null \
         | sed -E 's/^install\([[:space:]]*TARGETS[[:space:]]*//' \
         | sed -E 's/[[:space:]]+(RUNTIME|LIBRARY|ARCHIVE|OBJECTS|FRAMEWORK|BUNDLE|PUBLIC_HEADER|PRIVATE_HEADER|RESOURCE|FILE_SET|EXPORT).*$//' \
         | sed -E 's/\)[[:space:]]*$//' \
@@ -767,7 +767,7 @@ if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
     : > "$OFF_OPTS"
     if [ -f "$WORK/cmk/CMakeCache.txt" ]; then
         DECLARED_OPTS=$(_cmakelists_z \
-            | xargs -0 grep -hoE '^[[:space:]]*option\([[:space:]]*[A-Za-z0-9_]+' 2>/dev/null \
+            | xargs -0 grep -a -hoE '^[[:space:]]*option\([[:space:]]*[A-Za-z0-9_]+' 2>/dev/null \
             | sed -E 's/^[[:space:]]*option\([[:space:]]*//' | sort -u)
         for _opt in $DECLARED_OPTS; do
             grep -qE "^${_opt}:BOOL=OFF\$" "$WORK/cmk/CMakeCache.txt" && printf '%s\n' "$_opt" >> "$OFF_OPTS"
@@ -892,6 +892,12 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # and only compiles inside the extracted musl tree. Its real compile runs in
 # build-musl.sh and its behaviour is proven by the alpha vfork gate. Anchored +
 # file-level, like lite_malloc.c above.
+# tools/cross-alpha-vms/musl-arch/src/exit/alpha-dec-vms/exit.c and
+# .../src/stdio/alpha-dec-vms/__stdio_exit.c (vms-599) are the same kind again
+# (src/<dir>/$(ARCH)/ replaces the generic file): they include musl's INTERNAL
+# "libc.h"/"stdio_impl.h" and define only exit() / __stdio_exit(), no sys$ symbol.
+# Its real compile + the exit nm gate run in build-musl.sh; the alpha crtl-fd gate
+# proves the behaviour. Anchored + file-level.
 # src/vmsrms/crtl_rms_fd.c (vms-b90) is the C RTL file layer DECC$SHR's
 # RMS-backed pass links: it hooks the musl-arch syscall funnel and fills musl's
 # arch-internal struct kstat (musl-arch kstat.h), so it only compiles against
@@ -908,12 +914,16 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # vms_abi_headers.c and tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test.c,
 # include those headers and are excluded for the same reason (their compiles:
 # run_vms_abi_headers.sh and the vmsabi-rms gate).
+# tools/cross-alpha-vms/include-surface/hostabi_bfd_shapes.c (vms-5303e) includes the
+# host-ABI <rms.h>/<starlet.h> (src/libvms/include/hostabi/), the VMS layout a program
+# built for the OVMX/Alpha host sees; the native scan has no such layout. Its compile is
+# run_vms_abi_headers.sh (with a control that the same TU fails without hostabi/).
 # src/vmslink/ovmx_decc_stat.c and tools/cross-alpha-vms/joint-e2e/
 # crtl_fd_test.c (vms-28d part 2) are written against the DEC C struct stat of
 # the alpha-dec-vms client headers (musl-arch bits/stat.h: st_ino[3], st_fab_*,
 # the __OVMX_DECC_STAT_FIELDS list); a host libc has neither. They define no
 # sys$ service; their real compiles are mk_decc_shr.sh and the crtl-fd gate.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^src/vmsrms/crtl_rms_fd\.c$|^src/vmsrms/rms_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/vms_abi_headers\.c$|^tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test\.c$|^src/vmslink/ovmx_decc_stat\.c$|^tools/cross-alpha-vms/joint-e2e/crtl_fd_test\.c$|^src/libvms/syssvc/sys_vmsabi\.c$"
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^tools/cross-alpha-vms/musl-arch/src/exit/alpha-dec-vms/exit\.c$|^tools/cross-alpha-vms/musl-arch/src/stdio/alpha-dec-vms/__stdio_exit\.c$|^src/vmsrms/crtl_rms_fd\.c$|^src/vmsrms/rms_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/vms_abi_headers\.c$|^tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test\.c$|^src/vmslink/ovmx_decc_stat\.c$|^tools/cross-alpha-vms/joint-e2e/crtl_fd_test\.c$|^src/libvms/syssvc/sys_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/hostabi_bfd_shapes\.c$"
 
 SYMCC=""
 for _c in cc gcc; do
@@ -1109,7 +1119,7 @@ while IFS= read -r rawline; do
     [ -n "$rawline" ] || continue
     dfile=${rawline%%:*}
     good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-USERSPACE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | grep -a -oE 'OVMX-USERSPACE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*[^[:space:]]' \
         | head -1)
     if [ -n "$good" ]; then
         dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-USERSPACE:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
@@ -1118,7 +1128,7 @@ while IFS= read -r rawline; do
         continue
     fi
     good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-PARTIAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*exec:[[:space:]]*[^[:space:]]' \
+        | grep -a -oE 'OVMX-PARTIAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*exec:[[:space:]]*[^[:space:]]' \
         | head -1)
     if [ -n "$good" ]; then
         dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-PARTIAL:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
@@ -1127,7 +1137,7 @@ while IFS= read -r rawline; do
         continue
     fi
     good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-LOCAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | grep -a -oE 'OVMX-LOCAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
         | head -1)
     if [ -n "$good" ]; then
         dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-LOCAL:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
@@ -1135,7 +1145,7 @@ while IFS= read -r rawline; do
         continue
     fi
     good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-EXECUTIVE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*proof=[^[:space:]]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | grep -a -oE 'OVMX-EXECUTIVE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*proof=[^[:space:]]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
         | head -1)
     if [ -n "$good" ]; then
         dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-EXECUTIVE:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')

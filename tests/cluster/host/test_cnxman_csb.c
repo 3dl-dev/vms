@@ -2042,6 +2042,38 @@ static void test_an_abandoned_connect_can_be_dialled_again(void)
 			"again ***");
 }
 
+/*
+ * rd vms-fb0 -- A REFUSED SEND KEEPS ITS send-msg# ONLY WHEN THE PORT HOLDS THE
+ * FRAME. Run 39072069037: OVMXA's port window was spent (10 of 10), three CM
+ * sends were refused with no credit, SCS answered SS$_ABORT for all of them
+ * (it answers that for every transport refusal) and the numbers were kept, so
+ * the next frame to the real VAX skipped 218 -> 222 and it took CNXMGRERR.
+ */
+static void test_fb0_only_a_held_frame_keeps_its_number(void)
+{
+	const int32_t HELD = -6, NOCREDIT = -2, RINGFULL = -3, UNSAFE = -7;
+
+	printf("-- rd vms-fb0: a refused send keeps its number only if held --\n");
+	/* the port's TXFAIL holds the frame in its ladder: the number stands */
+	ct_check(cnxman_csb_refused_send_keeps_number(1, 1, 1, HELD, HELD) == 1,
+		 "port TXFAIL (frame held in the ring): the number stands");
+	/* every other port refusal took nothing: the number comes back */
+	ct_check(cnxman_csb_refused_send_keeps_number(1, 1, 1, NOCREDIT, HELD) == 0,
+		 "port NOCREDIT (window spent): the number is handed back");
+	ct_check(cnxman_csb_refused_send_keeps_number(1, 1, 1, RINGFULL, HELD) == 0,
+		 "port RINGFULL: the number is handed back");
+	ct_check(cnxman_csb_refused_send_keeps_number(1, 1, 1, UNSAFE, HELD) == 0,
+		 "port UNSAFE (wire-safety guard): the number is handed back");
+	/* a refusal SCS made itself took nothing either */
+	ct_check(cnxman_csb_refused_send_keeps_number(0, 1, 0, 0, HELD) == 0,
+		 "a non-ABORT refusal: the number is handed back");
+	/* who refused is unknown: the earlier behaviour, never a guess */
+	ct_check(cnxman_csb_refused_send_keeps_number(1, 0, 0, 0, HELD) == 1,
+		 "ABORT with no refusal record: the number stands");
+	ct_check(cnxman_csb_refused_send_keeps_number(1, 1, 0, 0, HELD) == 1,
+		 "ABORT the port did not refuse: the number stands");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
@@ -2074,6 +2106,7 @@ int main(void)
 	test_a_new_incarnation_retires_the_old_block();
 	test_f297_the_accept_data_settles_a_redial();
 	test_an_abandoned_connect_can_be_dialled_again();
+	test_fb0_only_a_held_frame_keeps_its_number();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");
 }

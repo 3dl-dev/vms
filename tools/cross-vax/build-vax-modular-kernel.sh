@@ -88,6 +88,42 @@ else
   echo "applied netbsd-ovmx-quiet.patch (OVMX_QUIET kernel option + quiet /boot)"
 fi
 
+# --- rd vms-25f: a closed console must still take its receive character -------
+# NetBSD's gencnrint() returns WITHOUT reading RXDB when the console line is
+# closed (sc->alive == 0). OVMX closes the console whenever a session leader
+# exits (the vnode is revoked), while the receiver's interrupt stays enabled, so a
+# key struck in that window left RCSR DONE set for good: no further interrupt, no
+# further input (the wake RETURN of a timed-out login was the usual one). The
+# patch reads and drops the character, as a closed line does. Idempotent.
+GENCONS_PATCH="${GENCONS_PATCH:-/src/tools/cross-vax/netbsd-ovmx-gencons.patch}"
+[ -f "$GENCONS_PATCH" ] || { echo "FAIL: $GENCONS_PATCH not found"; exit 2; }
+if grep -q 'rd vms-25f' "$SRC/sys/arch/vax/vax/gencons.c"; then
+  echo "netbsd-ovmx-gencons.patch already applied"
+else
+  patch -d "$SRC" -p1 --dry-run -s < "$GENCONS_PATCH" \
+    || { echo "FAIL: netbsd-ovmx-gencons.patch does not apply to $SRC"; exit 1; }
+  patch -d "$SRC" -p1 -s < "$GENCONS_PATCH"
+  echo "applied netbsd-ovmx-gencons.patch (closed console reads and drops RXDB)"
+fi
+
+# --- rd vms-b06: the TOY clock's year, and saying when there is no valid time --
+# A VAX TODR holds no year; the kernel takes it from the root filesystem's last
+# write. netbsd-ovmx-todr.patch (1) counts a TODR reading that is earlier in the
+# year than that write in the following year (SIMH and pcjs load the TODR with
+# the host's time of year at power on), and (2) publishes the kernel's verdict on
+# the boot time as kern.ovmx_toy_valid, so PID 1 asks for the date, as VMS does,
+# instead of the boot running on NetBSD's silent 1-JAN-2010 fallback. Idempotent.
+TODR_PATCH="${TODR_PATCH:-/src/tools/cross-vax/netbsd-ovmx-todr.patch}"
+[ -f "$TODR_PATCH" ] || { echo "FAIL: $TODR_PATCH not found"; exit 2; }
+if grep -q 'ovmx_toy_valid' "$SRC/sys/kern/kern_todr.c"; then
+  echo "netbsd-ovmx-todr.patch already applied"
+else
+  patch -d "$SRC" -p1 --dry-run -s < "$TODR_PATCH" \
+    || { echo "FAIL: netbsd-ovmx-todr.patch does not apply to $SRC"; exit 1; }
+  patch -d "$SRC" -p1 -s < "$TODR_PATCH"
+  echo "applied netbsd-ovmx-todr.patch (TODR year rollover + kern.ovmx_toy_valid)"
+fi
+
 # --- custom kernel config: GENERIC + the module framework (idempotent) -------
 CONF="$SRC/sys/arch/vax/conf/OVMX"
 if [ ! -f "$CONF" ]; then

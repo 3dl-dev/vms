@@ -75,8 +75,8 @@
 
 struct node {
     int          is_dir;
-    char         name[VMSFS_NAME_MAX + 1];   /* component name (upcased) */
-    char         type[VMSFS_TYPE_MAX + 1];   /* file type; "" for dirs */
+    char         name[ODS5_NAME_MAX + 1];    /* component name (upcased; as is on --ods5) */
+    char         type[ODS5_NAME_MAX + 1];    /* file type; "" for dirs */
 
     uint32_t     fid;
     uint16_t     version;                    /* 1 for files, 0 for dirs */
@@ -120,9 +120,36 @@ static void node_add_child(struct node *dir, struct node *child)
  * The last '.' separates name from type; no dot means an empty type.
  * Directories carry the whole basename as the name and an empty type.
  */
+/* Structure level of the volume do_master_ods2 lays down: ODS-2 by default,
+ * ODS-5 with --ods5 (rd vms-7e7e) -- a level-5 home block and SCB, the reserved
+ * files ODS-2 headers, every mastered file and directory a level-5 header and
+ * ODS-5 directory records, as INITIALIZE/STRUCTURE=5 on the real Alpha leaves
+ * them (tests/lab/captures/ods5-alpha-20261022/RESULTS.md). */
+static uint16_t g_master_struclev = ODS2_STRUCLEV_V2;
+
 static int split_name_type(const char *base, int is_dir,
                            char *name, char *type)
 {
+    /* rd vms-408: an ODS-5 volume holds a host name as it is -- its case, its
+     * '+', its extra dots, up to 236 characters (RESULTS.md R4-R6) -- so
+     * libstdc++'s bits/c++config.h is mastered under that name, not an ODS-2
+     * stand-in. The last '.' still starts a file's type. */
+    if (ODS2_IS_ODS5(g_master_struclev)) {
+        const char *d5 = is_dir ? NULL : strrchr(base, '.');
+        size_t n5 = (d5 && d5 != base) ? (size_t)(d5 - base) : strlen(base);
+        if (strlen(base) > ODS5_NAME_MAX - (is_dir ? 4u : 0u)) {
+            fprintf(stderr, "%%MASTER-E-NAMLONG, name longer than ODS-5's 236 characters: %s\n", base);
+            return -1;
+        }
+        memcpy(name, base, n5);
+        name[n5] = '\0';
+        if (d5 && d5 != base)
+            strcpy(type, d5 + 1);
+        else
+            type[0] = '\0';
+        return 0;
+    }
+
     const char *dot = is_dir ? NULL : strrchr(base, '.');
     size_t nlen, tlen;
     size_t i;
@@ -1081,17 +1108,17 @@ static int read_host_file(const char *path, uint64_t size,
  * (extension), no dot; content bytes are verbatim in BOTH cases. */
 
 /* Construct a node's on-disk directory-entry name: "NAME.DIR" for a directory,
- * "NAME.TYPE" (or bare "NAME" when the type is empty) for a file -- exactly the
+ * "NAME.TYPE" for a file -- "NAME." when the type is empty: an ODS-2 directory
+ * record always spells the '.', and RMS looks a null-type file up as "NAME."
+ * (vms-5b3: libstdc++'s <cstdio>, <string> ... were unreachable) -- exactly the
  * spelling ods2_wvolume_create_dir/create_file_raw + dir_insert expect and the
  * reader resolves back (a "SYS0" path component is the entry "SYS0.DIR"). */
 static void ods2_entry_name(const struct node *n, char *out, size_t outsz)
 {
     if (n->is_dir)
         snprintf(out, outsz, "%s.DIR", n->name);
-    else if (n->type[0])
-        snprintf(out, outsz, "%s.%s", n->name, n->type);
     else
-        snprintf(out, outsz, "%s", n->name);
+        snprintf(out, outsz, "%s.%s", n->name, n->type);
 }
 
 /* Recursively create every child of `dir` (already created, FID `dir_fid`) on
@@ -1102,7 +1129,7 @@ static void ods2_entry_name(const struct node *n, char *out, size_t outsz)
 static int emit_tree_ods2(ods2_wvolume_t *wvol, const struct node *dir,
                           ods2_fid_t dir_fid)
 {
-    char entry[VMSFS_NAME_MAX + VMSFS_TYPE_MAX + 8];
+    char entry[2 * ODS5_NAME_MAX + 8];
     ods2_status_t st;
 
     for (size_t i = 0; i < dir->nchild; i++) {
@@ -1239,12 +1266,14 @@ static int do_master_ods2(const char *image, const char *label,
     }
 
     ods2_format_params_t params;
+    memset(&params, 0, sizeof(params));
     params.total_blocks = total_blocks;
     params.maxfiles     = maxfiles;
     params.volname      = label;
 
     ods2_wvolume_t wvol;
-    ods2_status_t st = ods2_wvolume_format_bdev(fd, span, &params, &wvol);
+    ods2_status_t st = ods2_wvolume_format_bdev_ex(fd, span, &params, &wvol,
+                                                   g_master_struclev);  /* --ods5: vms-7e7e */
     if (st != ODS2_OK) {
         fprintf(stderr, "%%MASTER-F-FORMAT, ODS-2 format failed: %s\n",
                 ods2_strerror(st));
@@ -1274,8 +1303,8 @@ static int do_master_ods2(const char *image, const char *label,
     close(fd);
 
     if (rc == 0)
-        printf("%%MASTER-I-DONE, mastered %s (volume %.12s, ODS-2)\n",
-               image, label);
+        printf("%%MASTER-I-DONE, mastered %s (volume %.12s, %s)\n",
+               image, label, ODS2_IS_ODS5(g_master_struclev) ? "ODS-5" : "ODS-2");
     return rc;
 }
 
@@ -1382,8 +1411,9 @@ static int do_list_ods2(const char *image)
         return 1;
     }
 
-    printf("%%MASTER-I-VOLUME, %.12s (%u blocks, DECFILE11B)\n",
-           bv.home.hm2_volname, bv.nblocks);
+    printf("%%MASTER-I-VOLUME, %.12s (%u blocks, DECFILE11B, structure level %u)\n",
+           bv.home.hm2_volname, bv.nblocks,
+           (unsigned)ODS2_STRUCLEV_LEVEL(bv.home.hm2_struclev));
 
     const char *comps[ODS2_LIST_MAXDEPTH + 1];
     ods2_list_recurse(&bv, comps, 0, "[000000]", 0);
@@ -1392,16 +1422,81 @@ static int do_list_ods2(const char *image)
     return 0;
 }
 
+/* ---- ODS-2 relabel (rd vms-3ea): SET VOLUME/LABEL, offline.
+ *
+ * A Files-11 volume's label is set at INITIALIZE and changed afterwards with
+ * SET VOLUME/LABEL. It is also the Files-11 cluster lock namespace -- the
+ * executive names this volume's locks "F11B$<kind><label>" -- so two cluster
+ * members whose DIFFERENT system disks carry one label share one clusterwide
+ * resource. One mastered kit boots every node; this gives each node's copy of
+ * it its own label at provisioning time, with the codec's own home-block and
+ * SECURITY.SYS writers (ods2_bdev_relabel). Re-reads the volume afterwards and
+ * fails unless the label it now reports is the one asked for. ---- */
+static int do_relabel_ods2(const char *image, const char *label)
+{
+    if (ods2_label_valid(label) == 0) {
+        fprintf(stderr, "%%MASTER-F-BADLABEL, volume label must be 1-12 chars"
+                        " of A-Z 0-9 $ _ - (got \"%s\")\n", label);
+        return 1;
+    }
+    int fd = open(image, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "%%MASTER-F-OPENIN, cannot open %s: %s\n",
+                image, strerror(errno));
+        return 1;
+    }
+    ods2_bdev_t bv;
+    ods2_status_t st = ods2_bdev_open(&bv, fd, 0 /* auto-detect */);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-NOTODS2, %s is not a genuine ODS-2 volume: %s\n",
+                image, ods2_strerror(st));
+        close(fd);
+        return 1;
+    }
+    char old[13];
+    st = ods2_bdev_relabel(&bv, label, old);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-RELABEL, %s was not relabelled (nothing written): %s\n",
+                image, ods2_strerror(st));
+        close(fd);
+        return 1;
+    }
+    if (fsync(fd) < 0)
+        fprintf(stderr, "%%MASTER-W-FSYNC, sync warning: %s\n", strerror(errno));
+
+    /* Read it back through a fresh open: what MOUNT will see. */
+    ods2_bdev_t chk;
+    st = ods2_bdev_open(&chk, fd, 0);
+    char now[13];
+    memcpy(now, chk.home.hm2_volname, 12);
+    now[12] = '\0';
+    for (size_t n = 12; n > 0 && now[n - 1] == ' '; n--)
+        now[n - 1] = '\0';
+    close(fd);
+    if (st != ODS2_OK || strcmp(now, label) != 0) {
+        fprintf(stderr, "%%MASTER-F-VERIFY, %s reads back as \"%s\" (%s), not \"%s\"\n",
+                image, now, ods2_strerror(st), label);
+        return 1;
+    }
+    printf("%%MASTER-I-RELABEL, %s: volume %s is now %s\n", image, old, label);
+    return 0;
+}
+
 static void usage(void)
 {
     fprintf(stderr,
         "Usage:\n"
-        "  vmsfs_master [--ods2|--vmfs] master  <image> <volume-label> <source-dir> [size-in-MB]\n"
-        "  vmsfs_master [--ods2]        list    <image>\n"
+        "  vmsfs_master [--ods2|--ods5|--vmfs] master  <image> <volume-label> <source-dir> [size-in-MB]\n"
+        "  vmsfs_master [--ods2|--ods5]        list    <image>\n"
+        "  vmsfs_master [--ods2|--ods5]        relabel <image> <volume-label>\n"
         "  vmsfs_master                 extract <image> <output-dir>   (VMFS only)\n"
         "\n"
         "  --ods2 masters/lists a genuine ODS-2 (Files-11 L2, DECFILE11B) volume\n"
-        "         (vms-5eb R6-build); default and OVMX_MASTER_ODS2=0 use VMFS.\n");
+        "         (vms-5eb R6-build); default and OVMX_MASTER_ODS2=0 use VMFS.\n"
+        "  --ods5 masters a genuine ODS-5 (Files-11 L5) volume, the equivalent of\n"
+        "         INITIALIZE/STRUCTURE=5 (vms-7e7e); list reads either level.\n"
+        "  relabel gives an existing ODS-2/ODS-5 volume a new label offline --\n"
+        "         SET VOLUME/LABEL's on-disk effect (rd vms-3ea).\n");
 }
 
 int main(int argc, char *argv[])
@@ -1417,6 +1512,11 @@ int main(int argc, char *argv[])
 
     int argi = 1;
     if (argc > argi && strcmp(argv[argi], "--ods2") == 0) { use_ods2 = 1; argi++; }
+    else if (argc > argi && strcmp(argv[argi], "--ods5") == 0) {
+        use_ods2 = 1;
+        g_master_struclev = ODS2_STRUCLEV_V5;
+        argi++;
+    }
     else if (argc > argi && strcmp(argv[argi], "--vmfs") == 0) { use_ods2 = 0; argi++; }
 
     if (argc <= argi) { usage(); return 1; }
@@ -1443,6 +1543,10 @@ int main(int argc, char *argv[])
     } else if (strcmp(argv[argi], "list") == 0) {
         if (argc - argi != 2) { usage(); return 1; }
         return use_ods2 ? do_list_ods2(argv[argi + 1]) : do_list(argv[argi + 1]);
+    } else if (strcmp(argv[argi], "relabel") == 0) {
+        if (argc - argi != 3) { usage(); return 1; }
+        /* ODS-2/ODS-5 only: a VMFS image has no Files-11 home block. */
+        return do_relabel_ods2(argv[argi + 1], argv[argi + 2]);
     }
 
     usage();

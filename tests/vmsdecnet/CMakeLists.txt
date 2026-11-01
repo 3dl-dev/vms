@@ -108,6 +108,14 @@ target_include_directories(test_l2_station PRIVATE ${CMAKE_SOURCE_DIR}/src/kerne
 target_compile_options(test_l2_station PRIVATE -Werror)
 add_test(NAME vmsdecnet_l2_station_unit COMMAND test_l2_station)
 
+# rd vms-9394: the receive-ring bookkeeping of the NetBSD executive L2 binding
+# (src/kernel-core/vms_l2_ring.h), the same header vms.kmod runs under its rx
+# mutex -- FIFO order, drop-oldest on overflow, wrap-around, ethertype field.
+add_executable(test_l2_ring test_l2_ring.c)
+target_include_directories(test_l2_ring PRIVATE ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_options(test_l2_ring PRIVATE -Werror)
+add_test(NAME vmsdecnet_l2_ring_unit COMMAND test_l2_ring)
+
 # rd vms-1f69: the EXECUTIVE datalink backend the booted DECNETD links
 # (ovmx_datalink_exec): names itself, and with no /dev/vms fails honestly with
 # no AF_PACKET fallback compiled in.

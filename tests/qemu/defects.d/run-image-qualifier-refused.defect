@@ -33,19 +33,14 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 RUN/NODEB is not refused as a subprocess request: the image runs
-parser-wide gap: an ambiguous abbreviation is not resolved, and OVMX has no %DCL-W-ABKEYW to refuse it with
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
-Both are P10 cases and both are this same over-refusal reaching one spelling
-further. The first is /NODEB, the abbreviation of the RUN (Image) qualifier
+The knock-on is /NODEB, the abbreviation of the RUN (Image) qualifier
 require_fail names in full: a refusal keyed on "any qualifier at all" cannot
-distinguish them, so it swallows both. The second is /PR, which resolves to no
-single qualifier and therefore reaches RUN as a qualifier the command does not
-act on; counting qualifiers instead of identifying them refuses it as a
-subprocess request and the image does not run. Neither is a second defect --
-they are the same operand, and no finer mutation exists: the mutated
-expression is one comparison.
+distinguish them, so it swallows both. Neither is a second defect -- they are
+the same operand, and no finer mutation exists: the mutated expression is one
+comparison.
 EOF
                       ;;
         esac

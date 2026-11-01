@@ -303,6 +303,22 @@ run_case() {
     if waitfor 'Username:' 120 "$log2"; then rc=0; else rc=1; fi
     record "$tag boot 2: reaches the login prompt" "$rc"
 
+    # rd vms-158d: the system process's identity record is an OPERATOR.LOG
+    # record, not a console line (a VMS boot console prints none) -- read it
+    # back the VMS way. The log keeps every boot's records; this boot's is the
+    # LAST one.
+    if [ "$rc" -eq 0 ]; then
+        send 'SYSTEM'; sleep 1
+        send 'MANAGER'; sleep 3
+        # The same login wait boot 1 uses: the DCL prompt, not a fixed sleep
+        # (a TYPE typed before it lands in LOGIN's terminal inquiry).
+        if waitfor 'Welcome to OpenVMX' 60 "$log2" && waitfor '$ ' 90 "$log2"; then
+            send 'TYPE SYS$MANAGER:OPERATOR.LOG'
+            waitfor 'system identity ' 60 "$log2" >/dev/null 2>&1 || true
+            sleep 3
+        fi
+    fi
+
     kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 
     # THE ASSERTION THE OPERATOR'S FAILURE WAS. Whole-log grep is safe: this is
@@ -314,12 +330,13 @@ run_case() {
     # And the positive half: an identity was actually established, with the
     # right values. Asserting only the absence of the halt would pass on a boot
     # that never got as far as trying.
-    if grep -qF 'system identity SYSTEM [1,4] established by the executive' "$log2"; then
+    if grep -aF 'system identity ' "$log2" | tail -1 | \
+         grep -qF '%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive'; then
         rc=0
     else
         rc=1
     fi
-    record "$tag boot 2: SYSTEM [1,4] established by the executive" "$rc"
+    record "$tag boot 2: SYSTEM [1,4] established by the executive (this boot's OPERATOR.LOG record)" "$rc"
 
     if [ "$rc" -ne 0 ] || grep >/dev/null -F '%OVMX-F-EXECINIT' "$log2"; then
         echo "--- $tag boot 2 log ---"

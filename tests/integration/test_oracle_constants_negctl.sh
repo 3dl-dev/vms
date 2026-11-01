@@ -24,6 +24,10 @@ mk; echo 'SS$_NORMAL 3 1' >> "$TMP/t/docs/oracle/constants-known-mismatch.txt"
 red "a known-mismatch entry that already matches"
 mk; sed -i 's/^\(#define ATR\$C_ASCNAME[[:space:]]*\)16$/\1 61/' "$TMP/t/src/libvms/include/vms/atrdef.h"
 red "a wrong value for ATR\$C_ASCNAME in the VMS-layout vms/atrdef.h"
+# The oracle spells some modules in lower case (pscan$_USERNAME); VMS symbols
+# are case-blind, so an upper-case tree name is still checked against it.
+mk; sed -i 's/^\(#define PSCAN\$_USERNAME[[:space:]]*\)23$/\1 6/' "$TMP/t/src/libvms/include/pscandef.h"
+red "a wrong value for PSCAN\$_USERNAME (oracle module spelled in lower case)"
 # vms/atrdef.h is generated: a hand edit must fail the generator check.
 cp "$SRC/src/libvms/include/vms/atrdef.h" "$TMP/atrdef.keep"
 sed -i 's/^\(#define ATR\$C_ASCNAME[[:space:]]*\)16$/\1 61/' "$SRC/src/libvms/include/vms/atrdef.h"

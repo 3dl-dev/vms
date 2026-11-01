@@ -70,7 +70,7 @@ elif grep -qE '^[^!]*SCS_STARTUP\.COM' "$VMSDAT"; then
     fail "VMS\$VMS.DAT still registers a cluster startup component" \
          "a cluster that starts from a DCL phase is a different operating" \
          "system: SYSINIT joins BEFORE the system disk is mounted." \
-         "$(grep -nE '^[^!]*SCS_STARTUP\.COM' "$VMSDAT" | sed 's/^/       | /')"
+         "$(grep -a -nE '^[^!]*SCS_STARTUP\.COM' "$VMSDAT" | sed 's/^/       | /')"
 else
     echo "  OK: VMS\$VMS.DAT registers no cluster startup component"
 fi

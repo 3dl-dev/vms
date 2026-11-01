@@ -135,40 +135,14 @@ static unsigned int vfork_create_subprocess(pid_t pid)
     return a.status;
 }
 
-/* Run `spec` with arguments args[0..nargs) and environment `envp`. */
-static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **envp)
+/* Create the subprocess that runs the IMGACT launcher line `av`: the task is
+ * forked and held, the executive creates its PCB, and only then is it released to
+ * execve(). Returns the task's pid, or -1 with errno set (no subprocess exists). */
+static pid_t spawn_subprocess(char **av, char **envp)
 {
-    char **av = malloc((nargs + 3) * sizeof *av);
-    if (!av) {
-        errno = ENOMEM;
-        return -1;
-    }
-    av[0] = OVMX_IMGACT_LAUNCHER;
-    av[1] = (char *)spec;
-    for (size_t i = 0; i < nargs; i++)
-        av[2 + i] = args[i];
-    av[2 + nargs] = 0;
-    if (!envp)
-        envp = __environ;
-
-    if (!vblk.active) {
-        execve(OVMX_IMGACT_LAUNCHER, av, envp);
-        int e = errno;
-        free(av);
-        errno = e;
-        return -1;
-    }
-    /* The new process exists in the executive before it runs anything: the
-     * task is held on `hold` until its PCB is made (or refused). */
     int hold[2];
-    if (pipe(hold) != 0) {
-        int e = errno;
-        free(av);
-        vfork_restore_fds();
-        vblk.active = 0;
-        errno = e;
+    if (pipe(hold) != 0)
         return -1;
-    }
     (void)fcntl(hold[0], F_SETFD, FD_CLOEXEC);
     (void)fcntl(hold[1], F_SETFD, FD_CLOEXEC);
     pid_t pid = fork();
@@ -194,19 +168,53 @@ static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **e
         do { n = write(hold[1], &go, 1); } while (n < 0 && errno == EINTR);
     }
     close(hold[1]);
+    if (pid < 0) {
+        errno = e;
+        return -1;
+    }
+    if (!(st & 1u)) {
+        /* The executive made no process: reap the held task. */
+        while (waitpid(pid, 0, 0) < 0 && errno == EINTR)
+            ;
+        errno = (st == 0x908u) ? ENODEV : EPERM;
+        return -1;
+    }
+    return pid;
+}
+
+/* Run `spec` with arguments args[0..nargs) and environment `envp`. */
+static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **envp)
+{
+    char **av = malloc((nargs + 3) * sizeof *av);
+    if (!av) {
+        errno = ENOMEM;
+        return -1;
+    }
+    av[0] = OVMX_IMGACT_LAUNCHER;
+    av[1] = (char *)spec;
+    for (size_t i = 0; i < nargs; i++)
+        av[2 + i] = args[i];
+    av[2 + nargs] = 0;
+    if (!envp)
+        envp = __environ;
+
+    if (!vblk.active) {
+        execve(OVMX_IMGACT_LAUNCHER, av, envp);
+        int e = errno;
+        free(av);
+        errno = e;
+        return -1;
+    }
+    /* The new process exists in the executive before it runs anything: the
+     * task is held until its PCB is made (or refused). */
+    pid_t pid = spawn_subprocess(av, envp);
+    int e = errno;
     free(av);
     vfork_restore_fds();
     vblk.active = 0;
     if (pid < 0) {
         errno = e;
         return -1;                      /* no subprocess: exec*() fails */
-    }
-    if (!(st & 1u)) {
-        /* The executive made no process: reap the held task, exec*() fails. */
-        while (waitpid(pid, 0, 0) < 0 && errno == EINTR)
-            ;
-        errno = (st == 0x908u) ? ENODEV : EPERM;
-        return -1;
     }
     longjmp(vblk.jb, (int)pid);         /* back to the vfork() point */
 }

@@ -69,8 +69,9 @@ int main(void)
     uint32_t vda_maj = 0, vda_min = 0, vdb_maj = 0, vdb_min = 0;
     uint32_t vdc_maj = 0, vdc_min = 0, vdd_maj = 0, vdd_min = 0;
     uint32_t vde_maj = 0, vde_min = 0;
+    uint32_t vdf_maj = 0, vdf_min = 0;
     uint32_t sda_maj = 0, sda_min = 0;
-    int have_vda, have_vdb, have_vdc, have_vdd, have_vde, have_sda;
+    int have_vda, have_vdb, have_vdc, have_vdd, have_vde, have_vdf, have_sda;
 
     printf("=== test_kmod_disk: the executive names the machine's disks ===\n");
 
@@ -94,11 +95,14 @@ int main(void)
     have_vdc = (stat_devt("/dev/vdc", &vdc_maj, &vdc_min) == 0);
     have_vdd = (stat_devt("/dev/vdd", &vdd_maj, &vdd_min) == 0);
     have_vde = (stat_devt("/dev/vde", &vde_maj, &vde_min) == 0);
+    /* rd vms-7e7e added a sixth, vdf -> VDA500: (the real Alpha ODS-5 volume). */
+    have_vdf = (stat_devt("/dev/vdf", &vdf_maj, &vdf_min) == 0);
     CHECK(have_vda, "/dev/vda is present (first virtio disk attached to the guest)");
     CHECK(have_vdb, "/dev/vdb is present (second virtio disk attached to the guest)");
     CHECK(have_vdc, "/dev/vdc is present (third virtio disk attached to the guest)");
     CHECK(have_vdd, "/dev/vdd is present (fourth virtio disk attached to the guest)");
     CHECK(have_vde, "/dev/vde is present (fifth virtio disk attached to the guest)");
+    CHECK(have_vdf, "/dev/vdf is present (sixth virtio disk attached to the guest)");
     /* run_tests.sh also attaches ONE real virtio-scsi disk (vms-ddc / vms-47d):
      * this is the non-virtio-blk disk the executive's probe must ALSO enumerate,
      * so that SHOW DEVICE is not hollow on bare-metal boots (where the system
@@ -180,6 +184,20 @@ int main(void)
           "VDA400: backing dev_t matches /dev/vde as userspace stat()s it");
 
     /* --------------------------------------------------------------
+     * 5b. VDA500: is the sixth disk, vdf (the real Alpha V8.4 ODS-5 volume
+     *     test_syssvc_acp_ods5 mounts; rd vms-7e7e added it to run_tests.sh).
+     * -------------------------------------------------------------- */
+    memset(backing, 0, sizeof(backing));
+    maj = min = 0;
+    status = vms_kif_disk_resolve("VDA500:", backing, sizeof(backing), &maj, &min);
+    CHECK(status == SS_NORMAL,
+          "VDA500: exists in the executive's table (the sixth disk)");
+    CHECK(strcmp(backing, "vdf") == 0,
+          "VDA500: backing device is vdf (the executive's enumeration)");
+    CHECK(have_vdf && maj == vdf_maj && min == vdf_min,
+          "VDA500: backing dev_t matches /dev/vdf as userspace stat()s it");
+
+    /* --------------------------------------------------------------
      * 6. SDA0: is the non-virtio-blk disk -- the real proof that the probe
      *    reaches beyond /dev/vd*. It must exist in the executive's table,
      *    back onto /dev/sda, and resolve to the SAME major:minor userspace
@@ -201,11 +219,11 @@ int main(void)
      * 7. Negative controls -- a resolver that always succeeded would be
      *    indistinguishable from one that works.
      * -------------------------------------------------------------- */
-    /* Five virtio disks are attached (vda..vde), so there is no sixth unit. */
+    /* Six virtio disks are attached (vda..vdf), so there is no seventh unit. */
     memset(backing, 0, sizeof(backing));
-    status = vms_kif_disk_resolve("VDA500:", backing, sizeof(backing), &maj, &min);
+    status = vms_kif_disk_resolve("VDA600:", backing, sizeof(backing), &maj, &min);
     CHECK(status == SS_NOSUCHDEV,
-          "a disk unit that does not exist reports SS$_NOSUCHDEV (no sixth disk attached)");
+          "a disk unit that does not exist reports SS$_NOSUCHDEV (no seventh disk attached)");
     /* Only ONE virtio-scsi disk is attached, so SDA100: (a second) must miss. */
     memset(backing, 0, sizeof(backing));
     status = vms_kif_disk_resolve("SDA100:", backing, sizeof(backing), &maj, &min);

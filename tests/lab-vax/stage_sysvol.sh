@@ -80,9 +80,17 @@
 #     $STATUS to the console) and every *.EXE in <dir> is staged into
 #     SYS$SYSTEM next to the boot images. Used only by run-boot.sh status-gate;
 #     never by a shipped volume. Not combinable with --distribution.
+#   (d) --sysexe-extra <dir> (rd vms-9394): every regular file in <dir> is
+#     staged into SYS$SYSTEM as-is (a text .DAT is mastered RFM=STMLF like any
+#     other). Used only by run-boot.sh decnet-pair to lay down the node's DECnet
+#     executor + node databases (SYS$SYSTEM:NETNODE_LOCAL.DAT /
+#     NETNODE_REMOTE.DAT, the files NCP SET/DEFINE writes) so boot-time STARTNET
+#     finds a configured node; never by a shipped volume. Refuses to replace a
+#     file the tree already carries.
 #
 # Usage: stage_sysvol.sh [--distribution --kit <OVMX-OS-VAX.KIT>]
 #                        [--status-proof <proof-images-dir>] \
+#                        [--sysexe-extra <dir>] \
 #                        <images-dir> <repo-root> <stage-out-dir>
 #   <images-dir> must contain the six ELF32-vax boot images by name:
 #     DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE
@@ -97,12 +105,14 @@ set -euo pipefail
 DISTRIBUTION=0
 KIT=""
 STATUS_PROOF_DIR=""
+SYSEXE_EXTRA_DIR=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --distribution) DISTRIBUTION=1; shift ;;
         --kit)          KIT="${2:?--kit requires a path to OVMX-OS-VAX.KIT}"; shift 2 ;;
         --kit=*)        KIT="${1#--kit=}"; shift ;;
         --status-proof) STATUS_PROOF_DIR="${2:?--status-proof requires a proof-images dir}"; shift 2 ;;
+        --sysexe-extra) SYSEXE_EXTRA_DIR="${2:?--sysexe-extra requires a dir}"; shift 2 ;;
         --)             shift; break ;;
         -*)             echo "[stage_sysvol] FATAL: unknown flag: $1" >&2; exit 1 ;;
         *)              break ;;
@@ -213,6 +223,22 @@ if [ -n "$STATUS_PROOF_DIR" ]; then
     for name in $(sed -n 's/^\$[[:space:]]*RUN[[:space:]]\{1,\}SYS\$SYSTEM:\([A-Za-z0-9_$]*\).*/\1/p' "$SYSMGR/SYSTARTUP_VMS.COM"); do
         [ -f "$SYSEXE/$name.EXE" ] || die "proof SYSTARTUP RUNs SYS\$SYSTEM:$name but $name.EXE is not staged"
     done
+fi
+
+# 3c. --sysexe-extra only (rd vms-9394): extra SYS$SYSTEM files (the DECnet
+#     pair test's executor/node databases). Never replaces a staged file.
+if [ -n "$SYSEXE_EXTRA_DIR" ]; then
+    [ -d "$SYSEXE_EXTRA_DIR" ] || die "--sysexe-extra dir does not exist: $SYSEXE_EXTRA_DIR"
+    n=0
+    for src in "$SYSEXE_EXTRA_DIR"/*; do
+        [ -f "$src" ] || continue
+        [ ! -e "$SYSEXE/$(basename "$src")" ] \
+            || die "--sysexe-extra file $(basename "$src") would replace a file already in SYS\$SYSTEM"
+        cp "$src" "$SYSEXE/$(basename "$src")"
+        echo "[stage_sysvol]   + SYS\$SYSTEM:$(basename "$src") (--sysexe-extra)"
+        n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] || die "no files in --sysexe-extra dir $SYSEXE_EXTRA_DIR"
 fi
 
 # 4. Sanity: the boot gate marker (DCL.EXE) and the startup image PID 1 execs

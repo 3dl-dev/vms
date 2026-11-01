@@ -1,0 +1,30 @@
+# dcl-fmode-from-terminal -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "F\$MODE reports the executive's JPI\$_MODE for the process, not DCL's guess from its input";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_dcl_fmode";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lex_mode() reads \$GETJPI JPI\$_MODE. The mutation restores the former answer -- INTERACTIVE if DCL's input is a terminal, else BATCH -- so a login subprocess and a detached process fed from a pipe both claim BATCH. F\$GETJPI(...,\"MODE\") for another process is unaffected. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+F$MODE() is F$GETJPI("","MODE"), and not BATCH (no batch job is running)
+a detached process's F$MODE() is OTHER
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one lex_jpi_mode(0, ...) call, in lex_mode().
+        sed -i 's#uint32_t st = lex_jpi_mode(0, result, result_size);#uint32_t st = (snprintf(result, result_size, "%s", ctx->interactive ? "INTERACTIVE" : "BATCH"), SS$_NORMAL); /* NEGCTL dcl-fmode-from-terminal */#' "$_file"
+    :
+}

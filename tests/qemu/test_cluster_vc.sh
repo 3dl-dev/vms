@@ -197,7 +197,7 @@ boot_and_login() {
     local fd; [ "$key" = "A" ] && fd=4 || fd=5
     eval "exec $fd>\"$fifo\""
 
-    if wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}"; then
+    if wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}"; then
         ok "node $key: executive attached (real vms.ko)"
     else
         bad "node $key: executive never attached"
@@ -244,7 +244,7 @@ boot_and_login() {
         -no-reboot <"$fifo" >"$log" 2>&1 &
     QPID_[$key]=$!
     eval "exec $fd>\"$fifo\""
-    wait_for_in "$log" '%OVMX-I-EXEC' 60 0 "${QPID_[$key]}" \
+    wait_for_in "$log" ' - OpenVMS-compatible' 60 0 "${QPID_[$key]}" \
         || dump_and_die "node $key: boot2 executive never attached"
     send_to "$fd" ''
     wait_for_in "$log" 'Username:' "$BOOT_TIMEOUT" 0 "${QPID_[$key]}" \
@@ -260,6 +260,13 @@ boot_and_login() {
 DISK_A=/tmp/cluster-vc-a.img
 DISK_B=/tmp/cluster-vc-b.img
 rm -f "$DISK_A" "$DISK_B"; cp "$DISTRIB_IMG" "$DISK_A"; cp "$DISTRIB_IMG" "$DISK_B"
+# rd vms-3ea: each node's system disk gets its own label, <SCSNODE>SYS (the
+# real VAX's form: SCSNODE VAXC -> VAXCSYS). Both copies of the one kit carry
+# OVMXSYS, and the label is the Files-11 cluster lock namespace, so two
+# members' DIFFERENT disks would otherwise share one clusterwide resource.
+# SET VOLUME/LABEL's on-disk effect, offline: vmsfs_master relabel.
+vmsfs_master --ods2 relabel "$DISK_A" NODEASYS || { echo "FAIL: relabel node A's system disk" >&2; exit 1; }
+vmsfs_master --ods2 relabel "$DISK_B" NODEBSYS || { echo "FAIL: relabel node B's system disk" >&2; exit 1; }
 
 boot_and_login A "$TAP_A" "$DISK_A" NODEA 1030
 boot_and_login B "$TAP_B" "$DISK_B" NODEB 1031

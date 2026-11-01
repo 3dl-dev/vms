@@ -187,7 +187,8 @@ for sym in ovmx_boot_kernel_filesystems_mounted ovmx_boot_mount_kernel_filesyste
            ovmx_boot_start_console_log_bridge ovmx_boot_load_module \
            ovmx_boot_open_executive ovmx_boot_system_disk_dev \
            ovmx_boot_system_disk_present \
-           ovmx_boot_power_off; do
+           ovmx_boot_power_off \
+           ovmx_boot_system_time_valid ovmx_boot_set_system_time; do
     if ! "$TARGET-nm" "$OUT/ovmx_boot_netbsd.o" | grep -qE " T $sym\$"; then
         echo "FAIL: ovmx_boot_netbsd.o does not define $sym"
         exit 1

@@ -57,6 +57,9 @@ on:
       alpha_activation:
         description: 'alpha_activation (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.alpha_activation }}
+      alpha_selfhost:
+        description: 'alpha_selfhost (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.alpha_selfhost }}
       vax_toolchain:
         description: 'vax_toolchain (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.vax_toolchain }}
@@ -69,6 +72,21 @@ on:
       vax_login:
         description: 'vax_login (see ci-changes.yml decide step)'
         value: ${{ jobs.changes.outputs.vax_login }}
+      heavy_release:
+        description: 'heavy_release (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.heavy_release }}
+      alpha_selfhost_tier:
+        description: 'alpha_selfhost_tier (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.alpha_selfhost_tier }}
+      keystroke:
+        description: 'keystroke (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.keystroke }}
+      decnet:
+        description: 'decnet (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.decnet }}
+      negctl_select:
+        description: 'negctl_select (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.negctl_select }}
 
 permissions:
   contents: read
@@ -101,13 +119,21 @@ jobs:
       alpha_toolchain: ${{ steps.decide.outputs.alpha_toolchain }}
       alpha_boot_runtime: ${{ steps.decide.outputs.alpha_boot_runtime }}
       alpha_activation: ${{ steps.decide.outputs.alpha_activation }}
+      alpha_selfhost: ${{ steps.decide.outputs.alpha_selfhost }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
       tcpip: ${{ steps.decide.outputs.tcpip }}
       aarch64_kernel: ${{ steps.decide.outputs.aarch64_kernel }}
       vax_login: ${{ steps.decide.outputs.vax_login }}
+      heavy_release: ${{ steps.tiers.outputs.heavy_release }}
+      alpha_selfhost_tier: ${{ steps.tiers.outputs.alpha_selfhost_tier }}
+      keystroke: ${{ steps.tiers.outputs.keystroke }}
+      decnet: ${{ steps.tiers.outputs.decnet }}
+      negctl_select: ${{ steps.tiers.outputs.negctl_select }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - name: Path filter (PR only)
         id: filter
@@ -214,6 +240,31 @@ jobs:
             # fires the per-PR alpha-boot-mount N=3 activation gate + the cheap
             # alpha-activation-selftest below. Kept scoped so non-Alpha PRs pay
             # nothing.
+            # vms-5303e: the long VMS-hosted GCC pipeline gates (host GCC + GNU as
+            # built over this C RTL, run on OVMX/Alpha). Only the files that can
+            # change their result; nightly + dispatch + pre-tag verify run them
+            # unconditionally.
+            alpha_selfhost:
+              - '.github/workflows/ci-alpha.yml'
+              - 'tools/cross-alpha-vms/selfhost/**'
+              - 'tools/cross-alpha-vms/joint-e2e/asrun_test.c'
+              - 'tools/cross-alpha-vms/joint-e2e/drvrun_test.c'
+              - 'tools/cross-alpha-vms/joint-e2e/lnkrun_test.c'
+              - 'tools/cross-alpha-vms/joint-e2e/drvlnk_test.c'
+              - 'tools/cross-alpha-vms/patches/**'
+              - 'tools/cross-alpha/run-module-gp-activation-alpha.sh'
+              - 'tools/cross-alpha/build-alpha-bootimage.sh'
+              - 'tools/cross-alpha/SYSTARTUP_VMS_AS_PROOF.COM'
+              - 'tools/cross-alpha/SYSTARTUP_VMS_DRV_PROOF.COM'
+              - 'tools/cross-alpha/SYSTARTUP_VMS_LNK_PROOF.COM'
+              - 'tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM'
+              - 'src/vmsdcl/**'
+              - 'tools/cross-alpha/cmp_obj_dump.py'
+              - 'src/vmslink/**'
+              - 'src/libvms/**'
+              - 'src/vmsrms/**'
+              - 'src/imgact/**'
+              - 'src/vmsdcl/dcl_cmd_misc.c'
             alpha_activation:
               - '.github/workflows/**'
               - 'src/kernel/**'
@@ -485,6 +536,7 @@ jobs:
               echo "alpha_toolchain=${{ steps.filter.outputs.alpha_toolchain }}"
               echo "alpha_boot_runtime=${{ steps.filter.outputs.alpha_boot_runtime }}"
               echo "alpha_activation=${{ steps.filter.outputs.alpha_activation }}"
+              echo "alpha_selfhost=${{ steps.filter.outputs.alpha_selfhost }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
               echo "tcpip=${{ steps.filter.outputs.tcpip }}"
               echo "aarch64_kernel=${{ steps.filter.outputs.aarch64_kernel }}"
@@ -507,9 +559,25 @@ jobs:
               echo "alpha_toolchain=true"
               echo "alpha_boot_runtime=true"
               echo "alpha_activation=true"
+              echo "alpha_selfhost=true"
               echo "vax_toolchain=true"
               echo "tcpip=true"
               echo "aarch64_kernel=true"
               echo "vax_login=true"
             } >> "$GITHUB_OUTPUT"
           fi
+
+      # CI-speed tiers (tools/ci/ci_tiers.py): the HEAVY legs (release cuts +
+      # e2e, per-facility executive negctl, Alpha cc1/C++ self-host, keystroke
+      # oracle) are out of the PR path. nightly (schedule) / workflow_dispatch /
+      # a release-tag push run them all; the merge queue runs each only when
+      # its area is touched (negctl: a fail-closed path-to-facility map); a
+      # push to a branch runs none (the queue tested that exact tree).
+      - name: Decide heavy tiers (nightly/pre-tag full; queue by path; push none)
+        id: tiers
+        run: |
+          python3 tools/ci/ci_tiers.py \
+            --event "${{ github.event_name }}" \
+            --ref "${{ github.ref }}" \
+            --base "${{ github.event.merge_group.base_sha }}" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"

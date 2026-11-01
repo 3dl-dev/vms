@@ -145,12 +145,16 @@ items:
 1. **`docs/compatibility-surface.md`** — the internal comprehensive register: per-domain sections,
    per-facility tables, rollup counts (status + authenticity breakdown, and V1
    met/in-progress/not-started counts per facility/domain — no percentages),
-   and a top-line dashboard. Regenerated, never hand-edited.
+   and a top-line dashboard. Regenerated, never hand-edited. The tracked copy is a dated
+   snapshot refreshed by `render_compat.py --publish`; compat PRs edit only the YAML
+   (a per-PR regen made every pair of queued compat PRs conflict on the rollup table).
 2. **`build/compat-surface.json`** — the machine export: the flat list of every item plus rollups,
    consumed by (a) the website and (b) the corpus-compat lookup tool. This is the artifact that
    makes "is symbol X supported?" a lookup.
 
-`--check` mode (for CI): validates every facility file against the vocabularies, requires
+`--check` mode (for CI): validates every facility file against the vocabularies, requires that
+the YAML renders, and (with `--base`, on PRs) that a change touching the tracked md leaves it an
+exact render; requires
 `verified_against` when `status: verified`, warns when an `implemented`/`verified` item's
 `evidence` file is absent on the current tree (drift signal), and warns on `last_reviewed` older
 than a threshold. It does **not** auto-flip status — status is a human observation — but it makes

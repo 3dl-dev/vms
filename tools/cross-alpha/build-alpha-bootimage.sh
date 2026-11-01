@@ -84,6 +84,15 @@ if [ "$_force" = "1" ] || [ ! -x "$USERLAND/bin/STARTUP.EXE" ]; then
         cmake --build /b -j"$(nproc)" >/b/build-all.log 2>&1
     '
 fi
+# ASSETS_ONLY=1 (CI, .github/workflows/ci-alpha.yml alpha-assets): stop here. The
+# executive modules/kernel tree (step 0) and the userland (step 1) depend only on
+# the source tree, not on any gate's payload, so CI builds them ONCE per source
+# hash and every gate restores them instead of recompiling Linux/Alpha (~5 min).
+if [ "${ASSETS_ONLY:-0}" = "1" ]; then
+    echo "== ASSETS_ONLY: executive modules/kernel + userland ready; stopping before payload staging =="
+    exit 0
+fi
+
 # NOTE (vms-410): OVMX_STATIC=ON stays here deliberately. This CMake configure
 # targets alpha-linux-gnu (glibc, no OVMX runtime ld.so on the target disk) --
 # it builds the boot-critical PROVISION/JOB_CONTROL/LOGINOUT/DCL chain, which
@@ -142,6 +151,10 @@ else
 fi
 
 mkdir -p "$WORK"
+# The system disk's size in MB (128 unless a gate stages more: the self-host
+# proofs carry cc1, cc1plus and the C/C++ headers, vms-5b3).
+DISK_MB=${OVMX_ALPHA_DISK_MB:-128}
+case "$DISK_MB" in ''|*[!0-9]*) echo "FAIL: OVMX_ALPHA_DISK_MB=$DISK_MB is not a size in MB"; exit 1;; esac
 
 echo "== assemble the Alpha boot image (disk master + initramfs + kernel bake) =="
 docker run --rm --memory=8g --cpus="$(nproc)" \
@@ -151,6 +164,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
   -v "$USERLAND":/userland:ro \
   -v "$WORK":/work "$IMG" bash -euo pipefail -c '
     KV="'"$KV"'"
+    DISK_MB="'"$DISK_MB"'"
     export ARCH=alpha CROSS_COMPILE=alpha-linux-gnu-
     export QEMU_LD_PREFIX=/usr/alpha-linux-gnu
     BIN=/userland/bin
@@ -233,6 +247,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # caller). No apostrophes / literal \$ escaped: this whole block runs inside
     # the assemble docker bash -c single-quote.
     JOINT=/work/joint
+    MASTER_FMT=--ods2
     if [ -f "$JOINT/joint_e2e.exe" ] && [ -f "$JOINT/DECC\$SHR.EXE" ] && [ -f "$JOINT/LIBOTS_SHR.EXE" ]; then
         echo "-- staging JOINT-E2E port-image proof onto the ODS-2 volume --"
         cp "$JOINT/joint_e2e.exe"   "$SYSEXE/JOINT_E2E.EXE"
@@ -297,6 +312,85 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_CC1_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (CC1): cc1.exe -> SYS\$SYSEXE:CC1.EXE; launcher joint_e2e.exe -> SYS\$SYSEXE; full RMS producer graph -> SYS\$SHARE; CC1-proof SYSTARTUP (DCL writer + DCL TYPE reader) staged"
+            elif [ -f "$JOINT/AS_PROOF" ]; then
+                # vms-5303e: the VMS-hosted cc1 then GNU as, run in sequence by
+                # the launcher JOINT_E2E (vfork+execv) on a DCL-written source.
+                [ -f "$JOINT/cc1.exe" ] || { echo "FAIL: AS_PROOF without $JOINT/cc1.exe"; exit 1; }
+                [ -f "$JOINT/as.exe" ] || { echo "FAIL: AS_PROOF without $JOINT/as.exe"; exit 1; }
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_AS_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (AS): cc1.exe -> SYS\$SYSEXE:CC1.EXE, as.exe -> SYS\$SYSEXE:AS.EXE; launcher joint_e2e.exe -> SYS\$SYSEXE; AS-proof SYSTARTUP (DCL writer + DCL DUMP reader) staged"
+            elif [ -f "$JOINT/DRV_PROOF" ]; then
+                # vms-1eb: the REAL GCC driver (xgcc.exe) runs cc1 and as itself.
+                for _f in xgcc cc1 as; do
+                    [ -f "$JOINT/$_f.exe" ] || { echo "FAIL: DRV_PROOF without $JOINT/$_f.exe"; exit 1; }
+                done
+                cp "$JOINT/xgcc.exe" "$SYSEXE/XGCC.EXE"
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRV_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (DRIVER): xgcc/cc1/as.exe -> SYS\$SYSEXE; launcher joint_e2e.exe -> SYS\$SYSEXE; DRV-proof SYSTARTUP staged"
+            elif [ -f "$JOINT/DRL_PROOF" ]; then
+                # vms-65a: the REAL GCC driver compiles and links: cc1, as, ld (the port wrapper
+                # around the VMS link command) and LINK.EXE beside it.
+                for _f in xgcc cc1 as ld link; do
+                    [ -f "$JOINT/$_f.exe" ] || { echo "FAIL: DRL_PROOF without $JOINT/$_f.exe"; exit 1; }
+                done
+                cp "$JOINT/xgcc.exe" "$SYSEXE/XGCC.EXE"
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                cp "$JOINT/ld.exe" "$SYSEXE/LD.EXE"
+                cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
+                [ -f "$JOINT/ar.exe" ] && cp "$JOINT/ar.exe" "$SYSEXE/AR.EXE"
+                # vms-5b3: C++ -- cc1plus and the g++ driver (xg++, staged as GXX.EXE).
+                # vms-408: the 32-bit libstdc++ under its own name, libstdc++.a, which the
+                # driver -lstdc++ finds: this proof masters an ODS-5 system disk (below)
+                [ -f "$JOINT/cc1plus.exe" ] && cp "$JOINT/cc1plus.exe" "$SYSEXE/CC1PLUS.EXE"
+                [ -f "$JOINT/gxx.exe" ] && cp "$JOINT/gxx.exe" "$SYSEXE/GXX.EXE"
+                [ -f "$JOINT/libstdc++.a" ] && cp "$JOINT/libstdc++.a" "$SYSEXE/libstdc++.a"
+                MASTER_FMT=--ods5
+                for _f in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do
+                    [ -f "$JOINT/$_f" ] || { echo "FAIL: DRL_PROOF without $JOINT/$_f"; exit 1; }
+                    cp "$JOINT/$_f" "$SYSEXE/$(echo "$_f" | tr a-z A-Z)"
+                done
+                [ -f "$JOINT/STARLET.a" ] || { echo "FAIL: DRL_PROOF without STARLET.a"; exit 1; }
+                cp "$JOINT/STARLET.a" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/STARLET.A"
+                # the C system headers ([USR.INCLUDE]) and the compiler own ([GNU.LIB.GCC.ALPHA-DEC-VMS.14_2_0.INCLUDE]):
+                # where the driver looks by default (logicals USR and GNU, defined by the proof SYSTARTUP)
+                if [ -d "$JOINT/inc/usr/include" ]; then
+                    mkdir -p "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0"
+                    cp -r "$JOINT/inc/usr/include" "$ST/vms/SYS0/SYSCOMMON/USR/INCLUDE"
+                    cp -r "$JOINT/inc/gnu/gcc-include" "$ST/vms/SYS0/SYSCOMMON/GNU/LIB/GCC/ALPHA-DEC-VMS/14_2_0/INCLUDE"
+                    # vms-9a0: the GCC source + generated headers, the response file -> GCCSRC:[...]
+                    if [ -d "$JOINT/gccsrc" ]; then
+                        cp -r "$JOINT/gccsrc" "$ST/vms/SYS0/SYSCOMMON/GCCSRC"
+                    fi
+                    # vms-408: the C++ headers as GCC installs them (bits/c++config.h ...) -> GNU:[CXX]
+                    if [ -d "$JOINT/inc/gnu/cxx" ]; then
+                        cp -r "$JOINT/inc/gnu/cxx" "$ST/vms/SYS0/SYSCOMMON/GNU/CXX"
+                    fi
+                    echo "   JOINT-E2E (HEADERS): $(find "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU" -type f | wc -l) header file(s) -> [USR.INCLUDE], [GNU.LIB.GCC.ALPHA-DEC-VMS.14_2_0.INCLUDE]"
+                fi
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (DRIVER LINK): xgcc/cc1/as/ld/link.exe + start files + libgcc.a -> SYS\$SYSEXE; STARLET.A -> SYS\$LIBRARY; DRL-proof SYSTARTUP staged"
+            elif [ -f "$JOINT/LNK_PROOF" ]; then
+                # vms-e40: cc1 -> as -> LINK (all VMS-hosted) -> RUN the result.
+                for _f in cc1 as link; do
+                    [ -f "$JOINT/$_f.exe" ] || { echo "FAIL: LNK_PROOF without $JOINT/$_f.exe"; exit 1; }
+                done
+                [ -f "$JOINT/crt0.obj" ] && [ -f "$JOINT/STARLET.a" ] || { echo "FAIL: LNK_PROOF without crt0.obj/STARLET.a"; exit 1; }
+                cp "$JOINT/cc1.exe" "$SYSEXE/CC1.EXE"
+                cp "$JOINT/as.exe" "$SYSEXE/AS.EXE"
+                cp "$JOINT/link.exe" "$SYSEXE/LINK.EXE"
+                cp "$JOINT/crt0.obj" "$SYSEXE/CRT0.OBJ"
+                cp "$JOINT/STARLET.a" "$SYSEXE/STARLET.A"
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_LNK_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (LINK): cc1/as/link.exe + crt0.obj + STARLET.a -> SYS\$SYSEXE; LNK-proof SYSTARTUP staged"
             elif [ -f "$JOINT/VMSABI_PROOF" ]; then
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VMSABI_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
@@ -343,13 +437,16 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     #    genuine system disk".  --ods2 + 128 MB is what makes it a real
     #    installed system disk the flip mounts.
     #########################################################################
-    echo "-- master ovmx-distrib-alpha.img (genuine ODS-2, 128 MB) --"
-    timeout 300 qemu-alpha "$BIN/vmsfs_master" --ods2 master \
-        /work/ovmx-distrib-alpha.img OVMXSYS "$ST/vms" 128
+    echo "-- master ovmx-distrib-alpha.img (genuine ODS-2, $DISK_MB MB) --"
+    # vms-408: the driver-link proof masters ODS-5 (MASTER_FMT, set where it is staged): its
+    # C++ headers and libstdc++.a carry names ODS-2 cannot hold. Every other image: ODS-2.
+    echo "-- master format: $MASTER_FMT"
+    timeout 300 qemu-alpha "$BIN/vmsfs_master" "$MASTER_FMT" master \
+        /work/ovmx-distrib-alpha.img OVMXSYS "$ST/vms" "$DISK_MB"
     # Verify: the ODS-2 reader has no `extract`; presence-gate via `--ods2 list`
     # exactly as the x86_64 Dockerfile.bootable path does.
     echo "-- verify: --ods2 list carries the login chain --"
-    timeout 300 qemu-alpha "$BIN/vmsfs_master" --ods2 list /work/ovmx-distrib-alpha.img > /work/distrib-list.txt
+    timeout 300 qemu-alpha "$BIN/vmsfs_master" "$MASTER_FMT" list /work/ovmx-distrib-alpha.img > /work/distrib-list.txt
     head -40 /work/distrib-list.txt
     # IMGACT.EXE + JOB_CONTROL.EXE included: the boot-image staging bridge
     # (ovmx_init.c stage_boot_images) requires all five first-hop images on the

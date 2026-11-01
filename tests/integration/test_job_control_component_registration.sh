@@ -47,7 +47,7 @@ else
     # An active (non-comment) line naming JOB_CONTROL_STARTUP.COM, in the
     # "phase-name  procedure-filespec" shape RUN_COMPONENTS parses
     # (STARTUP.COM's own header, sec3.3/sec3.4).
-    REG_LINE=$(grep -v '^!' "$VMSVMS_DAT" | grep 'JOB_CONTROL_STARTUP\.COM')
+    REG_LINE=$(grep -a -v '^!' "$VMSVMS_DAT" | grep 'JOB_CONTROL_STARTUP\.COM')
     if [ -z "$REG_LINE" ]; then
         echo "FAIL: $VMSVMS_DAT has no active JOB_CONTROL_STARTUP.COM registration"
         status=1

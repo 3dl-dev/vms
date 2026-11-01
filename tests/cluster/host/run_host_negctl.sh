@@ -73,15 +73,19 @@ fail_set() {
 configure_and_build() {
     _root="$1"; _build="$2"; _target="$3"
     if [ ! -f "$_build/CMakeCache.txt" ]; then
+        _launcher=""
+        if command -v ccache >/dev/null 2>&1; then
+            _launcher="-DCMAKE_C_COMPILER_LAUNCHER=ccache"
+        fi
         if ! cmake -S "$_root" -B "$_build" \
-                -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON \
+                -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON $_launcher \
                 >"$_build.cfg.log" 2>&1; then
             echo "FATAL: cmake configure of $_root failed:" >&2
             cat "$_build.cfg.log" >&2
             return 1
         fi
     fi
-    if ! cmake --build "$_build" --target "$_target" -j"$(nproc)" \
+    if ! cmake --build "$_build" --target $_target -j"${BUILD_JOBS:-$(nproc)}" \
             >"$_build.build.log" 2>&1; then
         echo "FATAL: cmake build of $_target (from $_root) failed:" >&2
         cat "$_build.build.log" >&2
@@ -112,6 +116,13 @@ declare -A POSCTL_OK
 
 positive_control() {
     _suite="$1"
+
+    # Worker mode: the parent already ran every distinct positive control
+    # (once, on the unmodified tree) and left a marker per red suite.
+    if [ -n "${OVMX_NEGCTL_WORKER:-}" ]; then
+        [ ! -e "$OVMX_NEGCTL_POSCTL_DIR/$_suite.red" ]
+        return $?
+    fi
 
     if [ -n "${POSCTL_DONE[$_suite]:-}" ]; then
         return $([ -n "${POSCTL_OK[$_suite]:-}" ] && echo 0 || echo 1)
@@ -173,32 +184,52 @@ run_defect() {
     # -----------------------------------------------------------------------
     # Inject the defect into a WORKING COPY of the tree and rebuild.
     # -----------------------------------------------------------------------
-    _work=$(mktemp -d) || return 1
+    # Persistent working tree: one rsync + one cmake configure per WORKER (not
+    # per defect). Each defect is injected into the tree, the ONE suite is
+    # rebuilt incrementally (only the mutated TU recompiles), and the mutated
+    # files are restored from the real checkout afterwards.
+    if [ -n "${OVMX_NEGCTL_WORKER_DIR:-}" ]; then
+        _work="$OVMX_NEGCTL_WORKER_DIR"
+        _persist=1
+    else
+        _work=$(mktemp -d) || return 1
+        _persist=0
+    fi
     _rc=0
 
-    if ! rsync -a \
-            --exclude='.git' --exclude='build' --exclude='.worktrees' \
-            --exclude='.ready' --exclude='.joint-e2e-*' \
-            "$REPO_ROOT/" "$_work/repo/"; then
-        echo "FATAL: could not copy $REPO_ROOT to a working copy" >&2
-        rm -rf "$_work"
-        return 1
+    if [ ! -d "$_work/repo/src" ]; then
+        mkdir -p "$_work"
+        if ! rsync -a \
+                --exclude='.git' --exclude='/build' --exclude='/build-*' --exclude='/dist' --exclude='.worktrees' \
+                --exclude='.ready' --exclude='.joint-e2e-*' \
+                "$REPO_ROOT/" "$_work/repo/"; then
+            echo "FATAL: could not copy $REPO_ROOT to a working copy" >&2
+            [ "$_persist" -eq 1 ] || rm -rf "$_work"
+            return 1
+        fi
     fi
+
+    _restore() {
+        for _t in $_targets; do
+            cp "$REPO_ROOT/src/$_t" "$_work/repo/src/$_t"
+        done
+        [ "$_persist" -eq 1 ] || rm -rf "$_work"
+    }
 
     if ! "$DEFECTS_SH" apply "$_d" "$_work/repo/src"; then
         echo "FATAL: host_defects.sh could not inject '$_d' -- see its own error above" >&2
-        rm -rf "$_work"
+        _restore
         return 1
     fi
 
     _mut_build="$_work/build"
     if ! configure_and_build "$_work/repo" "$_mut_build" "$_suite"; then
-        rm -rf "$_work"
+        _restore
         return 1
     fi
     if [ ! -x "$_mut_build/bin/$_suite" ]; then
         echo "FATAL: $_mut_build/bin/$_suite was not produced by the mutated build" >&2
-        rm -rf "$_work"
+        _restore
         return 1
     fi
 
@@ -245,7 +276,7 @@ run_defect() {
     # against every file the defect NAMED as a target, not one hardcoded path.
     # -------------------------------------------------------------------
     step "revert"
-    rm -rf "$_work"
+    _restore
     _dirty=""
     for _t in $_targets; do
         _f="src/$_t"
@@ -264,24 +295,89 @@ run_defect() {
     return $_rc
 }
 
-for d in $DEFECT_LIST; do
-    if run_defect "$d"; then
-        echo ""
-        echo "VERDICT: PASS -- $d's suite is a real mutation-tested gate."
+run_serial_loop() {
+    for d in "$@"; do
+        if run_defect "$d"; then
+            echo ""
+            echo "VERDICT: PASS -- $d's suite is a real mutation-tested gate."
+        else
+            echo ""
+            echo "VERDICT: FAIL -- $d: see the FATAL/FAIL lines above."
+            RC=1
+        fi
+    done
+}
+
+summary() {
+    echo ""
+    echo "===================================================================="
+    if [ "$RC" -eq 0 ]; then
+        echo "OVERALL: PASS -- every defect in {$DEFECT_LIST} reddens exactly its"
+        echo "  require_fail set and nothing else, with the real tree left clean."
     else
-        echo ""
-        echo "VERDICT: FAIL -- $d: see the FATAL/FAIL lines above."
-        RC=1
+        echo "OVERALL: FAIL -- see the per-defect VERDICT lines above."
+    fi
+    echo "===================================================================="
+}
+
+# Worker process (spawned below): runs its slice of defects in a persistent tree.
+if [ -n "${OVMX_NEGCTL_WORKER:-}" ]; then
+    run_serial_loop $DEFECT_LIST
+    exit $RC
+fi
+
+NDEFECTS=$(printf '%s\n' $DEFECT_LIST | grep -c .)
+JOBS="${OVMX_HOST_NEGCTL_JOBS:-$(nproc)}"
+[ "$JOBS" -gt "$NDEFECTS" ] && JOBS=$NDEFECTS
+if [ "$JOBS" -le 1 ]; then
+    run_serial_loop $DEFECT_LIST
+    summary
+    exit $RC
+fi
+
+# ---- parallel mode ----------------------------------------------------------
+# Phase 1: every DISTINCT suite is built once (single cmake invocation) and run
+# as a positive control against the UNMODIFIED tree; a red suite leaves a
+# marker so its defects fail without being tried.
+SCRATCH=$(mktemp -d)
+trap 'rm -rf "$SCRATCH"' EXIT
+SUITES=$(for d in $DEFECT_LIST; do "$DEFECTS_SH" field "$d" suites_red; done | grep . | sort -u)
+mkdir -p "$SCRATCH/posctl"
+step "POSITIVE CONTROLS (once per distinct suite): $(echo $SUITES | wc -w) suites"
+if ! configure_and_build "$REPO_ROOT" "$BUILD_DIR" "$(echo $SUITES)"; then
+    exit 1
+fi
+for _suite in $SUITES; do
+    _out=$("$BUILD_DIR/bin/$_suite" 2>&1); _prc=$?
+    if [ "$_prc" -ne 0 ] || [ -n "$(printf '%s\n' "$_out" | fail_set)" ]; then
+        printf '%s\n' "$_out"
+        echo "FATAL: positive control for $_suite is NOT all-green (rc=$_prc)" >&2
+        touch "$SCRATCH/posctl/$_suite.red"
     fi
 done
 
-echo ""
-echo "===================================================================="
-if [ "$RC" -eq 0 ]; then
-    echo "OVERALL: PASS -- every defect in {$DEFECT_LIST} reddens exactly its"
-    echo "  require_fail set and nothing else, with the real tree left clean."
-else
-    echo "OVERALL: FAIL -- see the per-defect VERDICT lines above."
-fi
-echo "===================================================================="
+# Phase 2: JOBS workers, round-robin slices, each with a persistent tree.
+step "NEGATIVE CONTROLS: $NDEFECTS defects across $JOBS parallel workers"
+export BUILD_JOBS=2
+i=0
+for d in $DEFECT_LIST; do
+    echo "$d" >> "$SCRATCH/slice.$((i % JOBS))"
+    i=$((i + 1))
+done
+for w in $(seq 0 $((JOBS - 1))); do
+    (
+        OVMX_NEGCTL_WORKER=$w OVMX_NEGCTL_POSCTL_DIR="$SCRATCH/posctl" \
+        OVMX_NEGCTL_WORKER_DIR="$SCRATCH/w$w" \
+        bash "$0" $(cat "$SCRATCH/slice.$w") >"$SCRATCH/log.$w" 2>&1
+        echo $? >"$SCRATCH/rc.$w"
+    ) &
+done
+wait
+for w in $(seq 0 $((JOBS - 1))); do
+    echo ""; echo "######## worker $w ########"
+    cat "$SCRATCH/log.$w"
+    [ "$(cat "$SCRATCH/rc.$w")" -eq 0 ] || RC=1
+done
+if ls "$SCRATCH/posctl/"*.red >/dev/null 2>&1; then RC=1; fi
+summary
 exit $RC

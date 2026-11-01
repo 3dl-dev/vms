@@ -14,16 +14,34 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import * as GATE from '../gate-eval.mjs';
 const {
-  joinScrollback, observe, isCN3, verdictOf, newObservations, restartsIn, setOf, ADDED, MATRIX,
+  joinScrollback, observe, isCN3, verdictOf, newObservations, restartsIn, setOf, MEMBER, MATRIX,
   isRepaintStall, silentNeverStarts,
 } = GATE;
 
-const CN3_LINES = (self, a, b) => [
-  '%CNXMAN, this node is now a VAXcluster member',
-  `%CNXMAN, system 00000000000007${self} was added to the cluster`,
-  `%CNXMAN, system 00000000000007${a} was added to the cluster`,
-  `%CNXMAN, system 00000000000007${b} was added to the cluster`,
+// What a joining OVMX node prints on its own console, in VMS's words (rd
+// vms-c56) -- the roster's system ids map to the demo's node names.
+const NAME_OF = { c3: 'OVMXA', c4: 'OVMXB', c5: 'VAXC' };
+const CN3_LINES = (self) => [
+  '%SYSINIT, waiting to form or join a VMScluster system',
+  '%CNXMAN,  sending VAXcluster membership request to system VAXC',
+  `%CNXMAN,  now a VAXcluster member -- system ${NAME_OF[self]}`,
 ].join('\n') + '\n';
+
+// An OVMX node's own SHOW CLUSTER, as DCL prints it (the V0.7-13 Node B
+// console, tests/lab/captures/vms-c56-console-chatter-20261021/B.console.txt).
+const SHOW_CLUSTER = (self, rows = ['OVMXB', 'OVMXA', 'VAXC']) => [
+  '$ SHOW CLUSTER',
+  `View of Cluster from system ID 1988 node: ${self}    01-JAN-2010 12:12:25`,
+  '',
+  '+---------------------------------------------------------------+',
+  '|                 SYSTEMS                |      MEMBERS         |',
+  '|----------------------------------------+----------------------|',
+  '| NODE   | CSID     | SOFTWARE        | STATUS           |',
+  '|--------+----------+-----------------+------------------|',
+  ...rows.map((n, i) => `| ${n.padEnd(6)} | 0001000${3 - i} | ${n === self ? 'VMX V0.7       ' : '               '} | MEMBER           |`),
+  '+---------------------------------------------------------------+',
+  '$ ',
+].join('\n');
 
 const VAXC_ADMITS = 'proposing addition of system OVMXA\nproposing addition of system OVMXB\n';
 
@@ -49,6 +67,8 @@ function loggedInEverywhere(R, at = 600) {
     R.login_sent[w] = R.transcript[w].length;
     observe(R, w, 'SYSTEM\nPassword:\n Welcome to OpenVMS\n$ ');
     GATE.observeLogin(R, w, at);
+    // rd vms-c56: then the gate reads the node's own SHOW CLUSTER.
+    if (GATE.LOGIN_NODES.includes(w)) observe(R, w, '\n' + SHOW_CLUSTER(w));
   }
   return R;
 }
@@ -56,13 +76,12 @@ function loggedInEverywhere(R, at = 600) {
 test('a scrollback that scrolls does not un-join a node', () => {
   const R = newObservations();
   observe(R, 'OVMXA', CN3_LINES('c3', 'c4', 'c5'));
-  assert.deepEqual(new Set(R.added.OVMXA), new Set(['0x7c3', '0x7c4', '0x7c5']));
+  assert.equal(R.member.OVMXA, true);
 
   // The terminal trims: the cluster lines are gone from the SCREEN, and 1200
   // lines of DCL have taken their place. The observation must not shrink.
-  observe(R, 'OVMXA', '$ SHOW CLUSTER\n'.repeat(40));
-  assert.deepEqual(new Set(R.added.OVMXA), new Set(['0x7c3', '0x7c4', '0x7c5']),
-    'a node does not un-join because its console scrolled');
+  observe(R, 'OVMXA', '$ SHOW TIME\n'.repeat(40));
+  assert.equal(R.member.OVMXA, true, 'a node does not un-join because its console scrolled');
 });
 
 test('joinScrollback appends only the new tail', () => {
@@ -122,7 +141,7 @@ test('restartsIn counts power-ons after the first', () => {
   assert.equal(restartsIn('KA655-B V5.3, VMB 2.7\nx\nKA655-B V5.3, VMB 2.7'), 1);
 });
 
-test('CN=3 needs BOTH OVMX nodes naming all three AND the real VAX admitting both', () => {
+test('CN=3 needs BOTH OVMX nodes announcing their membership AND the real VAX admitting both', () => {
   const R = cn3Observations();
   assert.equal(isCN3(R), true);
   R.cn3 = true;
@@ -133,15 +152,77 @@ test('CN=3 needs BOTH OVMX nodes naming all three AND the real VAX admitting bot
   noVaxc.vaxc_admitted = [];
   assert.equal(isCN3(noVaxc), false, 'the real VAX admitting nobody is not CN=3');
 
+  const oneAdmitted = cn3Observations();
+  oneAdmitted.vaxc_admitted = ['OVMXA', 'OVMXA'];
+  assert.equal(isCN3(oneAdmitted), false, 'the real VAX must admit EACH OVMX node by name');
+
   const oneShort = cn3Observations();
-  oneShort.added.OVMXA = ['0x7c3', '0x7c4'];
-  assert.equal(isCN3(oneShort), false, 'a node that never saw the third system is not CN=3');
+  delete oneShort.member.OVMXB;
+  assert.equal(isCN3(oneShort), false, 'a node that never said it is a member is not CN=3');
+
+  // A node does not become a member by printing ANOTHER node's membership.
+  const R2 = newObservations();
+  observe(R2, 'OVMXA', '%CNXMAN,  now a VAXcluster member -- system OVMXB\n');
+  assert.equal(R2.member.OVMXA, undefined);
+  // ... nor by the OVMX diagnostic the console no longer carries.
+  observe(R2, 'OVMXA', '%CNXMAN, this node is now a VAXcluster member\n');
+  assert.equal(R2.member.OVMXA, undefined);
+});
+
+test('rd vms-c56: every OVMX node must hold all three systems as MEMBER in its OWN SHOW CLUSTER', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  assert.equal(GATE.isPass(R), true, 'control');
+  assert.deepEqual(R.cluster_view.OVMXA, ['OVMXB', 'OVMXA', 'VAXC']);
+
+  // OVMXA joined before OVMXB and never learned of it: its table lacks OVMXB.
+  observe(R, 'OVMXA', '\n' + SHOW_CLUSTER('OVMXA', ['OVMXA', 'VAXC']));
+  assert.equal(GATE.isPass(R), false, 'the LAST table a node printed is its view');
+  assert.equal(verdictOf(R), "CN=3 but NOT EVERY MEMBER IN SHOW CLUSTER: OVMXA's SHOW CLUSTER lacks OVMXB as MEMBER");
+
+  // A node that never printed SHOW CLUSTER is not assumed to hold anybody.
+  const N = cn3Observations();
+  N.cn3 = true;
+  loggedInEverywhere(N);
+  delete N.cluster_view.OVMXB;
+  assert.equal(GATE.isPass(N), false);
+  assert.match(verdictOf(N), /OVMXB showed no SHOW CLUSTER/);
+
+  // A row whose STATUS is not MEMBER is not a member.
+  const t = SHOW_CLUSTER('OVMXA').replace('| VAXC   | 00010001 |                 | MEMBER           |',
+                                          '| VAXC   | 00010001 |                 | BRK_NON_MEMBER   |');
+  assert.deepEqual(GATE.clusterViewOf(t), ['OVMXB', 'OVMXA']);
+  assert.equal(GATE.clusterViewOf('no table here'), null);
+});
+
+test('driveClusterView types SHOW CLUSTER at the prompt and reads the table back', async () => {
+  const R = newObservations();
+  let screen = '$ ';
+  const typed = [];
+  const io = {
+    type: async (w, t) => { typed.push(t); screen += SHOW_CLUSTER('OVMXA').slice(2); },
+    read: async () => screen, sleep: async () => {}, log: () => {},
+  };
+  observe(R, 'OVMXA', screen);
+  const view = await GATE.driveClusterView(R, 'OVMXA', io);
+  assert.deepEqual(typed, ['SHOW CLUSTER\r']);
+  assert.deepEqual(view, ['OVMXB', 'OVMXA', 'VAXC']);
+  assert.deepEqual(R.cluster_view.OVMXA, view);
 });
 
 test('an OVMX node founding a cluster is a REGRESSION, named as one', () => {
   const R = cn3Observations();
   observe(R, 'OVMXA', '%CNXMAN, this node has quorum by its own votes\n');
   assert.match(verdictOf(R), /^REGRESSION: an OVMX node founded a cluster \(OVMXA\)/);
+  // ... and in the words VMS prints for it on the console (rd vms-c56).
+  const V = cn3Observations();
+  observe(V, 'OVMXB', '%CNXMAN,  proposing formation of a VAXcluster\n');
+  assert.match(verdictOf(V), /^REGRESSION: an OVMX node founded a cluster \(OVMXB\)/);
+  // The real VAX founding is how the demo is meant to form.
+  const C = cn3Observations();
+  observe(C, 'VAXC', '%CNXMAN,  proposing formation of a VAXcluster\n');
+  assert.doesNotMatch(verdictOf(C), /REGRESSION/);
 });
 
 test('a bugcheck outranks every other reading', () => {
@@ -152,19 +233,19 @@ test('a bugcheck outranks every other reading', () => {
 });
 
 test('a failure is reported as what was SEEN, never as a diagnosis', () => {
-  // The real run this comes from: both OVMX nodes were members, the real VAX
-  // transmitted SCA frames the whole time and then restarted, and node A never
-  // learned of the third system. Calling that "the OVMX pair clustered and the
-  // real VAX admitted nobody" asserted a cause the evidence did not carry.
+  // The real run this comes from: the real VAX transmitted SCA frames the
+  // whole time and then restarted, and one OVMX node never got in. Calling
+  // that "the OVMX pair clustered and the real VAX admitted nobody" asserted a
+  // cause the evidence did not carry.
   const R = newObservations();
-  observe(R, 'OVMXA', CN3_LINES('c3', 'c4', 'c4'));
+  observe(R, 'OVMXA', '%SYSINIT, waiting to form or join a VMScluster system\n');
   observe(R, 'OVMXB', CN3_LINES('c4', 'c3', 'c5'));
   observe(R, 'VAXC', 'KA655-B V5.3, VMB 2.7\nx\nKA655-B V5.3, VMB 2.7\n');
   R.sca = { OVMXA: 10, OVMXB: 20, VAXC: 30 };
 
   const v = verdictOf(R);
   assert.match(v, /^NOT CN=3:/);
-  assert.match(v, /OVMXA never named 0x7c5/);
+  assert.match(v, /OVMXA never said "now a VAXcluster member -- system OVMXA"/);
   assert.match(v, /the real VAX admitted nobody/);
   assert.match(v, /VAXC restarted 1x/);
   assert.doesNotMatch(v, /SPLIT BRAIN/i, 'the gate must not diagnose, only report');
@@ -176,9 +257,11 @@ test('a node the hub never heard from is named', () => {
   assert.match(verdictOf(R), /no SCA frames from VAXC/);
 });
 
-test('the ADDED pattern reads a CNXMAN system id', () => {
-  assert.deepEqual(setOf('%CNXMAN, system 00000000000007c3 was added to the cluster', ADDED),
-                   ['7c3']);
+test('the MEMBER pattern reads the node VMS names, in VMS\'s own form', () => {
+  // The real VAX's own line (C.console.txt) and an OVMX node's, two spaces each.
+  assert.deepEqual(setOf('%CNXMAN,  now a VAXcluster member -- system VAXC', MEMBER), ['VAXC']);
+  assert.deepEqual(setOf('%CNXMAN,  now a VAXcluster member -- system OVMXA\r\n', MEMBER), ['OVMXA']);
+  assert.deepEqual(setOf('%CNXMAN, this node is now a VAXcluster member', MEMBER), []);
 });
 
 // visitor-gate.mjs cannot be imported here -- it pulls in playwright and drives
@@ -503,6 +586,7 @@ test('the real VAX passes on offering Username:, and is never logged in to', () 
     R.login_sent[w] = R.transcript[w].length;
     observe(R, w, 'SYSTEM\nPassword:\n$ ');
     GATE.observeLogin(R, w, 420);
+    observe(R, w, '\n' + SHOW_CLUSTER(w));
   }
   observe(R, 'VAXC', 'Username: ');
   GATE.observeLogin(R, 'VAXC', 600);
@@ -619,6 +703,26 @@ test('a clustered, usable run with a STALE OVMX node fails, and names it', () =>
     'CN=3 but NOT THE BUILD UNDER TEST: OVMXB announced V0.7-7 -- the build under test is V0.7-10');
 });
 
+test('a BUGCHECK beside a STALE OVMX node says it is not the build under test (vms-4f4)', () => {
+  const R = newObservations();
+  R.want_version = UNDER_TEST;
+  observe(R, 'OVMXA', BANNER() + CN3_LINES('c3', 'c4', 'c5'));
+  observe(R, 'OVMXB', BANNER('V0.7-7') + CN3_LINES('c4', 'c3', 'c5'));
+  observe(R, 'VAXC', VAXC_ADMITS + '**** FATAL BUGCHECK LOCKMGRERR ****\n');
+  R.cn3 = true;
+  assert.equal(GATE.isPass(R), false);
+  assert.match(verdictOf(R),
+    /^BUGCHECK: .* -- and NOT THE BUILD UNDER TEST: OVMXB announced V0\.7-7 -- the build under test is V0\.7-10$/);
+  // Control: the same bugcheck with every node at the version under test is a
+  // plain BUGCHECK verdict, with no staleness clause.
+  const C = newObservations();
+  C.want_version = UNDER_TEST;
+  observe(C, 'OVMXA', BANNER() + CN3_LINES('c3', 'c4', 'c5'));
+  observe(C, 'OVMXB', BANNER() + CN3_LINES('c4', 'c3', 'c5'));
+  observe(C, 'VAXC', VAXC_ADMITS + '**** FATAL BUGCHECK LOCKMGRERR ****\n');
+  assert.match(verdictOf(C), /^BUGCHECK: \{[^}]*\}$/);
+});
+
 test('a node that announces the right version AND an old one (a mixed image) fails', () => {
   const R = cn3Observations();
   R.cn3 = true;
@@ -655,4 +759,323 @@ test('the version a node announced survives its console scrolling', () => {
   observe(R, 'OVMXB', '$ SHOW SYSTEM\n'.repeat(4000));
   assert.deepEqual(R.ovmx_versions.OVMXB, [UNDER_TEST]);
   assert.equal(GATE.versionWhy(R), null);
+});
+
+// ---- rd vms-124: the login prompt that times out between two polls ----------
+
+// A console whose Username: is abandoned after `idleS` seconds, goes quiet, and
+// shows a fresh banner + prompt on the next RETURN -- an OVMX login session.
+function idleCycleGuest(idleS) {
+  // stage: 'quiet' (waiting for the wake RETURN) -> 'user' (Username:) ->
+  // 'pass' (Password:) -> 'dcl'. Each prompt is abandoned after idleS seconds.
+  const g = { now: 0, since: null, quiet: true, stage: 'quiet', screen: 'boot done\n', typed: [] };
+  g.advance = (s) => {
+    g.now += s;
+    if ((g.stage === 'user' || g.stage === 'pass') && g.since !== null && g.now - g.since >= idleS) {
+      g.screen += '\nError reading command input\nTimeout period expired\n';
+      g.quiet = true; g.stage = 'quiet'; g.since = null;
+    }
+  };
+  g.type = (text) => {
+    g.typed.push(text);
+    if (g.stage === 'quiet') {
+      if (text.endsWith('\r')) {          // RETURN, or any first line, wakes the session
+        g.screen += '\n Welcome to the OpenVMX VAX Operating System\n\nUsername: ';
+        g.quiet = false; g.stage = 'user'; g.since = g.now;
+      }
+    } else if (g.stage === 'user') {
+      g.screen += text.replace(/\r$/, '') + '\nPassword: ';
+      g.stage = 'pass'; g.since = g.now;
+    } else if (g.stage === 'pass') {
+      g.screen += '\n Welcome to OpenVMX V0.7-12 - OpenVMS-compatible\n$ ';
+      g.stage = 'dcl'; g.since = null;
+    }
+  };
+  return g;
+}
+
+async function runLoginPolicy({ followUp, pollS }) {
+  const g = idleCycleGuest(20);
+  const R = cn3Observations();
+  R.cn3 = true;
+  const lastWake = {};
+  const io = {
+    type: async (w, t) => g.type(t),
+    read: async () => g.screen,
+    sleep: async (ms) => g.advance(ms / 1000),
+    user: () => 'SYSTEM', pass: () => 'MANAGER', log: () => {},
+  };
+  for (let el = 0; el < 600 && !R.login_sent.OVMXB; el += pollS) {
+    observe(R, 'OVMXB', g.screen);
+    GATE.observeLogin(R, 'OVMXB', el);
+    if (followUp) {
+      await GATE.driveLoginStep(R, 'OVMXB', el, lastWake, 20, io);
+    } else {
+      // the gate as it was: strike RETURN, then look again only a poll later
+      const act = GATE.loginAction(R, 'OVMXB');
+      if (act === 'wake' && el - (lastWake.OVMXB ?? -1e9) >= 20) { lastWake.OVMXB = el; g.type('\r'); }
+      else if (act === 'login') { R.login_sent.OVMXB = R.transcript.OVMXB.length; g.type('SYSTEM\r'); }
+    }
+    g.advance(pollS);
+  }
+  return { sent: R.login_sent.OVMXB !== undefined, typed: g.typed };
+}
+
+test('NEGATIVE CONTROL: waking then re-reading a poll later never reaches a 20 s Username: (rd vms-124)', async () => {
+  const r = await runLoginPolicy({ followUp: false, pollS: 25 });
+  assert.equal(r.sent, false, 'the old cadence is slower than the prompt lifetime: it never logs in');
+});
+
+test('a wake is followed up fast enough to log in inside the prompt lifetime (rd vms-124)', async () => {
+  const r = await runLoginPolicy({ followUp: true, pollS: 25 });
+  assert.equal(r.sent, true, 'OVMXB is logged in to');
+  assert.deepEqual(r.typed.slice(-2), ['SYSTEM\r', 'MANAGER\r']);
+});
+
+test('the real VAX is woken but never followed up or logged in to (rd vms-124)', async () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  const typed = [];
+  const io = { type: async (w, t) => typed.push([w, t]), read: async () => '', sleep: async () => {},
+               user: () => 'U', pass: () => 'P', log: () => {} };
+  const act = await GATE.driveLoginStep(R, 'VAXC', 100, {}, 20, io);
+  assert.equal(act, null);
+  assert.deepEqual(typed, [['VAXC', '\r']]);
+});
+
+// ---- rd vms-25f: a login that lands after the prompt expired ----------------
+//
+// OVMXB's console ended "Username: MANAGER / Password: / Timeout period
+// expired" and then went silent for the rest of the run. Not a wedged console:
+// the user name arrived after the 20 s Username: window had closed, the fresh
+// session took it as its wake keystroke, the password became the user name, and
+// the gate -- which typed once and never looked again -- sent nothing more.
+
+function loginRig({ lateS = 0, retriesSpent = false } = {}) {
+  const g = idleCycleGuest(20);
+  const R = cn3Observations();
+  R.cn3 = true;
+  if (retriesSpent) R.login_retries = { OVMXB: GATE.LOGIN_RETRIES };
+  const lastWake = {};
+  let late = lateS;
+  const io = {
+    type: async (w, t) => {
+      if (late && t !== '\r') { g.advance(late); late = 0; }   // the keys land late, once
+      g.type(t);
+    },
+    read: async () => g.screen,
+    sleep: async (ms) => g.advance(ms / 1000),
+    user: () => 'SYSTEM', pass: () => 'MANAGER', log: () => {},
+  };
+  const step = async (el) => {
+    observe(R, 'OVMXB', g.screen);
+    GATE.observeLogin(R, 'OVMXB', el);
+    return GATE.driveLoginStep(R, 'OVMXB', el, lastWake, 20, io);
+  };
+  return { g, R, step };
+}
+
+test('a user name that lands after Username: expired is retried and logs in (rd vms-25f)', async () => {
+  const { g, R, step } = loginRig({ lateS: 25 });
+  await step(0);
+  observe(R, 'OVMXB', g.screen);
+  GATE.observeLogin(R, 'OVMXB', 5);
+  assert.equal(R.login_retries.OVMXB, 1, 'one retry was needed and counted');
+  assert.ok(R.login_retry_log.length === 1, 'the retry is said, not hidden');
+  assert.equal(R.dcl_at.OVMXB, 5, 'and the node reached its DCL prompt');
+  assert.deepEqual(g.typed.filter((t) => t !== '\r').slice(-2), ['SYSTEM\r', 'MANAGER\r']);
+  assert.doesNotMatch(g.screen, /Username: MANAGER/, 'the password was never taken as a user name');
+});
+
+test('NEGATIVE CONTROL: with its retries spent the same late landing strands the node, as it did (rd vms-25f)', async () => {
+  const { g, R, step } = loginRig({ lateS: 25, retriesSpent: true });
+  await step(0);
+  observe(R, 'OVMXB', g.screen);
+  GATE.observeLogin(R, 'OVMXB', 5);
+  assert.equal(R.dcl_at.OVMXB, undefined, 'never reaches DCL: the retry is what recovers it');
+  assert.equal(GATE.isPass(R), false);
+});
+
+test('a login that lands first time is not counted as a retry (rd vms-25f)', async () => {
+  const { g, R, step } = loginRig();
+  await step(0);
+  observe(R, 'OVMXB', g.screen);
+  GATE.observeLogin(R, 'OVMXB', 5);
+  assert.equal(R.dcl_at.OVMXB, 5);
+  assert.equal(R.login_retries, undefined);
+});
+
+test('observeLogin starts a login over when the console timed it out after it was typed (rd vms-25f)', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  observe(R, 'OVMXB', 'x\nUsername: ');
+  GATE.observeLogin(R, 'OVMXB', 1);
+  R.login_sent.OVMXB = R.transcript.OVMXB.length;
+  observe(R, 'OVMXB', 'x\nUsername: SYSTEM\nPassword: \nError reading command input\nTimeout period expired\n');
+  GATE.observeLogin(R, 'OVMXB', 30);
+  assert.equal(R.login_sent.OVMXB, undefined, 'forgotten: the next poll wakes the console and logs in again');
+  assert.equal(R.login_retries.OVMXB, 1);
+  assert.equal(GATE.loginAction(R, 'OVMXB'), 'wake');
+});
+
+// ---- rd vms-c56: an OVMX console carries only what a VMS console carries ----
+
+const CAPTURES = new URL('../../../tests/lab/captures/', import.meta.url);
+const C56 = (f) => fs.readFileSync(new URL(`vms-c56-console-chatter-20261021/${f}`, CAPTURES), 'utf8');
+
+// Every real-VMS console in the lab captures: the real VAXen's own consoles
+// (VAXC, vax1, vax2, vax3 ...), never an OVMX node's.
+function realVmsConsoles() {
+  const out = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = new URL(e.name + (e.isDirectory() ? '/' : ''), dir);
+      if (e.isDirectory()) walk(p);
+      else if (/^(VAXC[^/]*\.(log|txt)|[^/]*vax\d[^/]*\.(log|txt)|C\.console\.txt)$/i.test(e.name) &&
+               !/ovmx/i.test(e.name)) out.push(p);
+    }
+  };
+  walk(CAPTURES);
+  return out;
+}
+
+test('rd vms-c56: the V0.7-13 OVMX consoles FAIL the chatter assertion, and say why', () => {
+  for (const [f, who] of [['A.console.txt', 'OVMXA'], ['B.console.txt', 'OVMXB']]) {
+    const c = GATE.consoleChatter(C56(f));
+    assert.ok(c.length > 10, `${who}: expected the V0.7-13 chatter, got ${c.length}`);
+    const whys = c.map((x) => x.why).join('\n');
+    assert.match(whys, /not a form VMS prints for %CNXMAN/, `${who}: non-VMS %CNXMAN lines`);
+    assert.match(whys, /%DLM is not a message a VMS console prints/, `${who}: %DLM lines`);
+    assert.match(whys, /not a form VMS prints for %PEA0/, `${who}: "%PEA0, channel verified"`);
+  }
+  const a = GATE.consoleChatter(C56('A.console.txt'));
+  assert.ok(a.some((x) => x.why === 'substrate printk timestamp' &&
+                          x.line === "[   37.218759] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned"),
+            'node A: the Linux printk stamp, on the exact line the field report quoted');
+  const b = GATE.consoleChatter(C56('B.console.txt'));
+  assert.ok(b.some((x) => x.line.startsWith('%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001')),
+            'node B: the %DLM refusal that landed at the logged-in DCL prompt');
+});
+
+test('rd vms-c56: the REAL VAX\'s own console passes the same assertion -- the allowlist is VMS\'s', () => {
+  assert.deepEqual(GATE.consoleChatter(C56('C.console.txt')), []);
+  // ... and so does every real VAX console in the lab captures.
+  const files = realVmsConsoles();
+  assert.ok(files.length >= 50, `expected the VAX lab captures, found ${files.length}`);
+  for (const f of files) {
+    const text = fs.readFileSync(f, 'latin1');
+    const bad = GATE.consoleChatter(text).filter((x) => !/%OVMX|\bOVMX[A-Z]?\b.*-- SYSKRNL/.test(x.line));
+    // A capture file is one console; a real VAX's never carries a printk stamp
+    // or an OVMX-only line. Lines glued by a capture tool (two messages with no
+    // newline between) are not a VMS form and are skipped by name below.
+    // A line the capture cut short ("%CNXMAN,  proposing addition of s"), or
+    // ran the lab host's own output into ("...blocking activityarp: local IP
+    // address ..."), is a VMS form mangled by the capture, not another message.
+    const forms = [...GATE.CNXMAN_NAMED_FORMS, ...GATE.CNXMAN_PLAIN_FORMS].map((p) => `%CNXMAN,  ${p}`);
+    const cutShort = (x) => { const m = x.line.trim(); return forms.some((f) => f.startsWith(m) || m.startsWith(f)); };
+    // Which identifiers a real VAX prints at its prompt grows with every capture
+    // (any DCL command's messages); that list is grounded in the test below. What
+    // every real VAX console must ALSO satisfy is the rest of the rule: no printk
+    // stamp, and the cluster facilities only in VMS's forms.
+    const formOrStamp = bad.filter((x) => !/is not a message a VMS console prints$/.test(x.why));
+    const unglued = formOrStamp.filter((x) => (x.line.match(/%[A-Za-z]/g) || []).length === 1 &&
+                                      !/[^\x20-\x7e]/.test(x.line) && !cutShort(x));
+    assert.deepEqual(unglued, [], `real VAX console ${f.pathname.split('/captures/')[1]}`);
+  }
+});
+
+test('rd vms-c56: every allowlisted identifier and form is one a real VAX printed', () => {
+  const corpus = realVmsConsoles().map((f) => fs.readFileSync(f, 'latin1')).join('\n');
+  for (const id of GATE.VMS_CONSOLE_IDS) {
+    assert.ok(corpus.includes(`%${id},`), `%${id}, is on no real VAX console in tests/lab/captures`);
+  }
+
+  for (const p of GATE.CNXMAN_NAMED_FORMS) assert.ok(corpus.includes(`%CNXMAN,  ${p} `), p);
+  for (const p of GATE.CNXMAN_PLAIN_FORMS) assert.ok(corpus.includes(`%CNXMAN,  ${p}`), p);
+  assert.ok(corpus.includes('%PEA0, Port has Closed Virtual Circuit - REMOTE NODE '));
+  assert.ok(corpus.includes('%PEA0, Excessive packet losses on LAN Path from '));
+  assert.ok(corpus.includes('%SYSINIT, waiting to form or join a VMScluster system'));
+  // OVMX's own boot narration is listed apart, and is NOT claimed to be VMS's.
+  for (const id of GATE.OVMX_BOOT_IDS) assert.ok(!GATE.VMS_CONSOLE_IDS.includes(id), id);
+});
+
+test('rd vms-c56/vms-158d: the console the fix produces passes', () => {
+  // Node A after vms-158d: the substrate line, the product banner, SYSINIT,
+  // STDRV, the connection manager's VMS lines, RUN's own line, the login.
+  const after = [
+    'OVMX/Linux -- SYSKRNL (Linux kernel)',
+    '',
+    '    OpenVMX V0.7-14 - OpenVMS-compatible',
+    '    21-OCT-2026 15:05:36.62',
+    '',
+    '%SYSINIT, waiting to form or join a VMScluster system',
+    '%STDRV-I-STARTUP, OpenVMX startup begun at 21-OCT-2026 15:05:49.85',
+    '%CNXMAN,  sending VAXcluster membership request to system VAXC',
+    '%CNXMAN,  now a VAXcluster member -- system OVMXA',
+    '%RUN-S-PROC_ID, identification of created process is 10000003',
+    ' Welcome to the OpenVMX X86_64 Operating System, Version V0.7-14 (OpenVMS-compatible)',
+    'Username: SYSTEM',
+    '$ ',
+  ].join('\n');
+  // The firmware and the page's own line before the OS are not the OS's console.
+  assert.deepEqual(GATE.consoleChatter('%NIC-CFG, initramfs=x mac=y\nSeaBIOS (version 1)\n' + after), []);
+  // Node B (NetBSD/VAX) has no substrate line: its console starts at the banner.
+  assert.deepEqual(GATE.consoleChatter('KA655-B V5.3, VMB 2.7\n>>>B DUA0\n' + after.split('\n').slice(1).join('\n')), []);
+});
+
+test('rd vms-158d: no OVMX boot narration is allowed on the console any more', () => {
+  assert.deepEqual(GATE.OVMX_BOOT_IDS, [], 'the allowlist is empty: the gate is strict');
+  const one = (line) => GATE.consoleChatter('    OpenVMX V0.7-14 - OpenVMS-compatible\n' + line).map((x) => x.why);
+  for (const [line, id] of [
+    ['%OVMX-I-EXEC, VMS executive attached on /dev/vms', 'OVMX-I-EXEC'],
+    ['%OVMX-I-SYSDISK, mounting system disk VDA0:', 'OVMX-I-SYSDISK'],
+    ['%OVMX-I-MOUNTED, system disk VDA0: mounted', 'OVMX-I-MOUNTED'],
+    ['%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR', 'OVMX-I-SCSNODE'],
+    ['%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive', 'OVMX-I-EXEC'],
+    ['%DECNET-I-STARTNET, NETACP launched detached to serve inbound $ SET HOST.', 'DECNET-I-STARTNET'],
+  ]) assert.deepEqual(one(line), [`%${id} is not a message a VMS console prints`], line);
+  // An identifier with no '%' is still an identifier (V0.7-13 Node B, STARTNET).
+  assert.deepEqual(one("DECNETD-E-NOSOCKET, bpf datalink open on 'qe0' (0x6003) failed: Permission denied"),
+                   ['DECNETD-E-NOSOCKET is not a message a VMS console prints']);
+  assert.deepEqual(one(' DECNETD-I-DATALINK, datalink open on ETH0'),
+                   ['DECNETD-I-DATALINK is not a message a VMS console prints']);
+  // ... but a DCL continuation line ("-RMS-E-FNF, ...") is VMS's own form.
+  assert.deepEqual(one('-RMS-E-FNF, file not found'), []);
+  const b = GATE.consoleChatter(C56('B.console.txt'));
+  assert.ok(b.some((x) => x.why === 'DECNETD-E-NOSOCKET is not a message a VMS console prints'),
+            'V0.7-13 Node B: the bare DECNETD-E-NOSOCKET line is caught');
+  assert.ok(b.some((x) => x.why === '%OVMX-I-EXEC is not a message a VMS console prints'),
+            'V0.7-13 Node B: its boot narration is caught');
+});
+
+test('rd vms-c56: each forbidden kind is caught on its own (no blanket pass)', () => {
+  const one = (line) => GATE.consoleChatter('    OpenVMX V0.7-14 - OpenVMS-compatible\n' + line).map((x) => x.why);
+  assert.deepEqual(one('[   37.218759] %CNXMAN,  now a VAXcluster member -- system OVMXA'),
+                   ['substrate printk timestamp'], 'a VMS form with a printk stamp');
+  assert.deepEqual(one('%CNXMAN, now a VAXcluster member -- system OVMXA'),
+                   ['not a form VMS prints for %CNXMAN'], 'ONE space after the comma is not VMS\'s');
+  assert.deepEqual(one('%CNXMAN,  now a VAXcluster member -- system ovmxa'),
+                   ['not a form VMS prints for %CNXMAN'], 'a node name VMS would not print');
+  assert.deepEqual(one('%PEA0, virtual circuit open'), ['not a form VMS prints for %PEA0']);
+  assert.deepEqual(one('%MSCP_CL, the member answered NOT PRESENT HERE'),
+                   ['%MSCP_CL is not a message a VMS console prints']);
+  assert.deepEqual(one('%OVMX-W-CLUSTERPORT, cluster port did not start'),
+                   ['%OVMX-W-CLUSTERPORT is not a message a VMS console prints']);
+  assert.deepEqual(one('%CNXMAN,  proposing formation of a VAXcluster'), []);
+});
+
+test('rd vms-c56: chatter on an OVMX console fails a run that otherwise passes; the real VAX is not held to it', () => {
+  const R = cn3Observations();
+  R.cn3 = true;
+  loggedInEverywhere(R);
+  assert.equal(GATE.isPass(R), true, 'control');
+  observe(R, 'VAXC', '%CNXMAN,  completing VAXcluster state transition\n');
+  assert.equal(GATE.isPass(R), true, 'the real VAX\'s own lines are VMS by definition');
+  observe(R, 'OVMXB', '\n%DLM, refusing a lock message (cat 0x02 op 0x01) from system 0x10001\n$ ');
+  assert.equal(GATE.isPass(R), false);
+  assert.match(verdictOf(R), /^CN=3 but CONSOLE CHATTER: OVMXB 1\+ line\(s\), first "%DLM, refusing a lock message/);
+  // And a run that did not form names it among its reasons.
+  const N = newObservations();
+  observe(N, 'OVMXA', '%OVMX-I-EXEC, x\n[   37.2] %PEA0, channel verified\n');
+  assert.match(verdictOf(N), /console chatter: OVMXA/);
 });

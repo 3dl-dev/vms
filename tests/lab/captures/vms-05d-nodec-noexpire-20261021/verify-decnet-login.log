@@ -1,0 +1,120 @@
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:24:08.57  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAXC.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:24:08.72  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Audit server starting up
+Event time:               21-OCT-2026 20:24:08.71
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%%%%%%%%%%%  OPCOM  21-OCT-2026 20:24:08.99  %%%%%%%%%%%
+Message from user DECNET on VAXC
+DECnet starting
+
+%RUN-S-PROC_ID, identification of created process is 20200213
+%NCP-W-OPEFAI, Operation failure  
+Circuit = QNA-0
+%SYSTEM-F-NOLICENSE, operation requires software license
+%NCP-I-NOINFO, No information in database
+%RUN-S-PROC_ID, identification of created process is 20200215
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at 21-OCT-2026 20:24:11.34
+
+  Accounting information:
+  Buffered I/O count:            1500         Peak working set size:    1556
+  Direct I/O count:               599         Peak page file size:      4924
+  Page faults:                   7328         Mounted volumes:             0
+  Charged CPU time:           0 00:00:01.51   Elapsed time:     0 00:00:07.42
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: SYSTEM
+Password: 
+%LICENSE-I-NOLICENSE, no license is active for this software product
+%LOGIN-I-NOVAXCLUSTER, DEC VMSCLUSTER license is not active
+%LOGIN-S-LOGOPRCON, login allowed from OPA0:
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC
+    Last interactive login on Wednesday, 21-OCT-2026 20:21[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET DEFAULT SYS$SYSTEM
+$ MCR AUTHORIZE SHOW SYSTEM
+
+Username: SYSTEM                           Owner:  SYSTEM MANAGER
+Account:  SYSTEM                           UIC:    [1,4] ([SYSTEM])
+CLI:      DCL                              Tables: DCLTABLES
+Default:  SYS$SYSROOT:[SYSMGR]
+LGICMD:   LOGIN
+Flags: 
+Primary days:   Mon Tue Wed Thu Fri        
+Secondary days:                     Sat Sun
+No access restrictions
+Expiration:            (none)    Pwdminimum:  8   Login Fails:     0
+Pwdlifetime:           (none)    Pwdchange:  23-SEP-2026 18:44 
+Last Login: 21-OCT-2026 20:24 (interactive),            (none) (non-interactive)
+Maxjobs:         0  Fillm:       300  Bytlm:        32768
+Maxacctjobs:     0  Shrfillm:      0  Pbytlm:           0
+Maxdetach:       0  BIOlm:        40  JTquota:       4096
+Prclm:          10  DIOlm:        40  WSdef:          256
+Prio:            4  ASTlm:        50  WSquo:          512
+Queprio:         0  TQElm:        30  WSextent:      2048
+CPU:        (none)  Enqlm:       200  Pgflquo:      40960
+Authorized Privileges: 
+  ACNT      ALLSPOOL  ALTPRI    AUDIT     BUGCHK    BYPASS    CMEXEC    CMKRNL
+  IMPERSONATDIAGNOSE  DOWNGRADE EXQUOTA   GROUP     GRPNAM    GRPPRV    IMPORT
+  LOG_IO    MOUNT     NETMBX    OPER      PFNMAP    PHY_IO    PRMCEB    PRMGBL
+  PRMMBX    PSWAPM    READALL   SECURITY  SETPRV    SHARE     SHMEM     SYSGBL
+  SYSLCK    SYSNAM    SYSPRV    TMPMBX    UPGRADE   VOLPRO    WORLD
+Default Privileges: 
+  ACNT      ALLSPOOL  ALTPRI    AUDIT     BUGCHK    BYPASS    CMEXEC    CMKRNL
+  IMPERSONATDIAGNOSE  DOWNGRADE EXQUOTA   GROUP     GRPNAM    GRPPRV    IMPORT
+  LOG_IO    MOUNT     NETMBX    OPER      PFNMAP    PHY_IO    PRMCEB    PRMGBL
+  PRMMBX    PSWAPM    READALL   SECURITY  SETPRV    SHARE     SHMEM     SYSGBL
+  SYSLCK    SYSNAM    SYSPRV    TMPMBX    UPGRADE   VOLPRO    WORLD
+$ MCR NCP LIST KNOWN NODES
+ 
+ 
+Known Node Permanent Summary as of 21-OCT-2026 20:24:38
+ 
+Executor node = 1.965 (VAXC)
+ 
+State                    = on
+
+ 
+Remote node =   1.963 (OVMXA)
+ 
+No information available
+
+ 
+Remote node =   1.964 (OVMXB)
+ 
+No information available
+
+ 
+Remote node =   1.965 (VAXC)
+ 
+No information available
+
+ 
+$ 

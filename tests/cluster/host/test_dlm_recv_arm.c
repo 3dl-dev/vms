@@ -79,6 +79,15 @@ static void proc_init(struct vms_proc *p)
 	exec_lock_init(&p->mode_lock);
 	exec_lock_init(&p->lock_list_lock);
 	exec_list_head_init(&p->locks);
+	/* Every PCB the executive makes carries a process id, and the lock
+	 * manager puts it at body[20:24] of a cross-node request that has no
+	 * master handle yet (rd vms-c55). A PCB with none is one the executive
+	 * never made, so the harness gives each one its own. */
+	{
+		static uint32_t next_vms_pid = 0x10000001u;
+
+		p->vms_pid = next_vms_pid++;
+	}
 	for (i = 0; i < 4; i++) {
 		exec_lock_init(&p->ast[i].lock);
 		exec_list_head_init(&p->ast[i].pending);
@@ -148,19 +157,19 @@ static int h_dir_resolve(void *ctx, uint32_t hash16, vms_csid_t *out_csid)
 
 static uint32_t h_dir_generation(void *ctx) { (void)ctx; return 1u; }
 
-static int h_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
+static int h_record_master(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid,
 			   vms_csid_t master_csid)
 {
 	(void)ctx;
-	return vms_lock_dlm_record_master(resnam, req_lkid,
+	return vms_lock_dlm_record_master(resnam, resnam_len, req_lkid,
 					  (uint32_t)master_csid) == SS__NORMAL ?
 	       0 : -1;
 }
 
-static int h_assume(void *ctx, const char *resnam, uint32_t req_lkid)
+static int h_assume(void *ctx, const char *resnam, uint32_t resnam_len, uint32_t req_lkid)
 {
 	(void)ctx;
-	return vms_lock_dlm_assume_mastery(resnam, req_lkid) == SS__NORMAL ?
+	return vms_lock_dlm_assume_mastery(resnam, resnam_len, req_lkid) == SS__NORMAL ?
 	       0 : -1;
 }
 
@@ -183,11 +192,12 @@ static int h_blkast_deliver(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int h_learn(void *ctx, const char *resnam, uint16_t group, uint8_t mode,
+static int h_learn(void *ctx, const char *resnam, uint32_t resnam_len,
+			  uint16_t group, uint8_t mode,
 		   uint32_t hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, group, mode, hash) ==
+	return vms_lock_dlm_learn_dir_hash(resnam, resnam_len, group, mode, hash) ==
 	       SS__NORMAL ? 0 : -1;
 }
 
@@ -274,7 +284,7 @@ static void wire_learn(const char *resnam)
 		hash = (uint16_t)((hash << 1) ^ (uint8_t)*c);
 	/* ...under the identity this test's processes enqueue at (uic 0, access
 	 * mode 0): a learned value belongs to an identity (rd vms-b5b0). */
-	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, hash);
+	(void)vms_lock_dlm_learn_dir_hash(resnam, 0u, 0u, 0u, hash);
 }
 
 /*
@@ -306,6 +316,9 @@ static int build_grant_for(uint32_t req_lkid, uint32_t master_lkid,
 	rq.mode = (uint8_t)mode;
 	rq.req_lkid = req_lkid;       /* OUR handle, in the requester's slot */
 	rq.master_lkid = 0u;          /* a fresh ENQ knows no master handle  */
+	/* body[20:24]: a real member's REQUESTING PID until the master names a
+	 * handle (rd vms-c55; 20,368 of 21,499 real op-0x01 requests) */
+	rq.req_pid = 0x20200204u;
 	rq.name_len = (uint8_t)n;
 	memcpy(rq.name, resnam, n);
 	rq.res_ident_valid = 1u;
@@ -545,7 +558,8 @@ static int build_deq(uint8_t *frame, uint32_t req_lkid, uint32_t master_lkid,
 	memset(&d, 0, sizeof(d));
 	d.req_lkid = req_lkid;
 	d.master_lkid = master_lkid;
-	d.mode = mode;
+	(void)mode;    /* body[30] is not the mode: the builder writes the
+			* measured cell itself (rd vms-194) */
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	return vms_dlm_deq_build(&d, frame, VMS_CM_FRAME_LEN, &written) ==
 	       VMS_CODEC_OK ? 0 : -1;
@@ -573,7 +587,8 @@ static void deq_body_to_master_request(const uint8_t *body, uint32_t from_csid,
 	out->req_csid = from_csid;
 	out->req_lkid = q.req_lkid;
 	out->master_lkid = q.master_lkid;
-	out->lkmode = q.mode;
+	/* and NO MODE: the arm stopped passing body[30] in as one (rd
+	 * vms-194), because it is not a mode and the DEQ seam reads none. */
 }
 
 /* The resource identity the simulated peer's frames carry (rd vms-b5b0): a

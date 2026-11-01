@@ -15,6 +15,7 @@
  * There is no third arm: no /etc/ovmx default, no "try RMS then fall back to a
  * Linux file" (Rule 9 / INV-6).
  */
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,8 @@
 
 #include "dnet_ncpstore.h"
 #include "rms_textfile.h"
+#include "rmsdef.h"
+#include "ssdef.h"
 
 static const char *const k_spec[3] = {
     "SYS$SYSTEM:NETNODE_LOCAL.DAT",
@@ -65,6 +68,14 @@ const char *dnet_store_location(enum dnet_store_db db)
 
 /* --- generic line I/O over the chosen backend ----------------------------- */
 
+/* The RMS status of the last DNET_STORE_EREAD (rd vms-acf3). */
+static uint32_t store_last_rms_st;
+
+uint32_t dnet_store_last_rms_status(void)
+{
+    return store_last_rms_st;
+}
+
 typedef int (*line_fn)(void *ctx, const char *line);   /* 0 ok, <0 corrupt */
 
 /* Read every record of `db`. Absent -> DNET_STORE_OK with no callbacks. */
@@ -75,8 +86,12 @@ static int store_read(enum dnet_store_db db, line_fn fn, void *ctx)
 
     if (host) {
         FILE *f = fopen(host, "r");
-        if (!f)
-            return DNET_STORE_OK;              /* absent == empty */
+        if (!f) {
+            if (errno == ENOENT)
+                return DNET_STORE_OK;          /* absent == empty */
+            store_last_rms_st = RMS$_ACC;      /* there, but not readable */
+            return DNET_STORE_EREAD;
+        }
         int rc = DNET_STORE_OK;
         while (fgets(line, sizeof(line), f)) {
             if (fn(ctx, line) < 0) {
@@ -84,23 +99,43 @@ static int store_read(enum dnet_store_db db, line_fn fn, void *ctx)
                 break;
             }
         }
+        if (rc == DNET_STORE_OK && ferror(f)) {  /* a read that failed part way */
+            store_last_rms_st = RMS$_RER;
+            rc = DNET_STORE_EREAD;
+        }
         fclose(f);
         return rc;
     }
 
-    /* The VMS file. rms_textfile_open() returns NULL for an absent file AND
-     * when the file layer is unreachable; both read as "no database" here --
-     * the honest failure for an unreachable file layer is on the WRITE, which
-     * cannot succeed without it (the same split tcpip_service_db.h makes). */
-    rms_textfile_t *tf = rms_textfile_open(k_spec[db]);
-    if (!tf)
-        return DNET_STORE_OK;
+    /* The VMS file. Only a file (or directory) that is NOT THERE -- or no
+     * file layer at all in this image (SS$_NOSUCHDEV: no executive, the
+     * unconfigured case the write side then refuses honestly) -- reads as
+     * "no database". A file that is there but could not be opened, or a read
+     * that failed part way, is DNET_STORE_EREAD with the RMS status in
+     * dnet_store_last_rms_status() -- never an empty or partial database: a
+     * transient open failure used to make every node "unknown" and SET HOST
+     * say SS$_NOSUCHNODE for a node the database lists (rd vms-acf3). */
+    uint32_t st = 0;
+    rms_textfile_t *tf = rms_textfile_open_st(k_spec[db], &st);
+    if (!tf) {
+        if (st == RMS$_FNF || st == RMS$_DNF || st == SS$_NOSUCHDEV)
+            return DNET_STORE_OK;
+        store_last_rms_st = st;
+        return DNET_STORE_EREAD;
+    }
     int rc = DNET_STORE_OK;
     int too_long = 0;
     while (rms_textfile_getline(tf, line, sizeof(line), &too_long) == 1) {
         if (too_long || fn(ctx, line) < 0) {
             rc = DNET_STORE_ECORRUPT;
             break;
+        }
+    }
+    if (rc == DNET_STORE_OK) {
+        st = rms_textfile_last_status(tf);
+        if (st != RMS$_EOF) {
+            store_last_rms_st = st;
+            rc = DNET_STORE_EREAD;
         }
     }
     rms_textfile_close(tf);

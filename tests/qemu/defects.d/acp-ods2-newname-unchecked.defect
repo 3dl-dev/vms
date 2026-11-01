@@ -1,0 +1,38 @@
+# acp-ods2-newname-unchecked -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "Files-11 ACP on an ODS-2 volume: a new name is stored upper case and a name ODS-2 cannot hold is refused (SS\$_BADFILENAME / SS\$_BADFILEVER), as the real XQP does (rd vms-b9c, ods5-alpha-20261022 RESULTS.md R9/R10)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rms_ods5";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_ods2_newname() returns early for an ODS-5 volume and otherwise upper-cases the new name and refuses characters and dots ODS-2 cannot hold. The mutation makes it return SS\$_NORMAL at once for every volume, so an EXTENDED RMS create of c^+^+config.h on the ODS-2 volume succeeds (a name no real ODS-2 volume can carry) and a lower-case name is stored lower case. Every ODS-5 path, and every ODS-2 create that RMS already upper-cased (TRADITIONAL), is untouched.";;
+        require_fail) cat <<'EOF2'
+EXTENDED $CREATE c^+^+config.h on ODS-2 is RMS$_CRE (real: -SYSTEM-W-BADFILENAME)
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EXTENDED $CREATE lower.txt on ODS-2 is stored LOWER.TXT;1 (real R10)
+EOF2
+                      ;;
+        knock_on_why)  cat <<'EOF2'
+THE SAME UNCHECKED ODS-2 NAME, THE UPPER-CASING HALF. Without the rule the
+lower-case name reaches the ODS-2 directory as typed, so the listing shows
+lower.txt;1 instead of the LOWER.TXT;1 the real volume stores.
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # ANCHORED to acp_ods2_newname()'s ODS-5 early return, the only line in
+        # the file that is exactly this text; making the test always true skips
+        # the ODS-2 rule for every volume. Gone after substitution (no-op re-apply).
+        sed -i 's|^    if (ODS2_IS_ODS5(vol->struclev))$|    if (1 \|\| ODS2_IS_ODS5(vol->struclev)) /* NEGCTL acp-ods2-newname-unchecked */|' "$_file"
+
+    :
+}

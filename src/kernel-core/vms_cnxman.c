@@ -78,6 +78,7 @@
 #include "vms_cluster_fork.h"  /* FC-P0.5: cf_timer_*, fork_enter/leave */
 #include "vms_cluster_snapshot.h"
 #include "vms_cluster_sysgen.h" /* E78: SYSGEN CLUSTER_CREDITS, the VC grant */
+#include "vms_cluster_opa0.h"   /* rd vms-c56: the console forms of CNXMAN events */
 #include "vms_scs.h"            /* the SYSAP surface this glue registers on */
 #include "vms_scs_fsm.h"        /* enum scs_close_reason (E29) */
 #include "vms_cluster_codec_dlm.h" /* rd vms-1ee: VMS_DLM_CAT_REQUEST, the DLM leg */
@@ -608,9 +609,25 @@ static int cnxman_cm_send(struct vms_cnxman *cn, vms_conid_t conid,
 			  const uint8_t *body, uint32_t len)
 {
 	int st = scs_send_msg(cn->cl->scs, conid, body, len);
+	int keeps = 0;
 
-	if (st != (int)SS__NORMAL && st != (int)SS__ABORT && body != NULL &&
-	    len >= 2u) {
+	if (st != (int)SS__NORMAL && body != NULL && len >= 2u) {
+		struct scs_send_refusal r;
+		int known = 0;
+
+		/* rd vms-fb0: SS$_ABORT is every transport refusal; only the
+		 * port's TXFAIL holds the frame. Ask the CDT who refused. */
+		if (st == (int)SS__ABORT) {
+			memset(&r, 0, sizeof(r));
+			known = (scs_send_refusal(cn->cl->scs, conid, &r) ==
+				 (int)SS__NORMAL);
+		}
+		keeps = cnxman_csb_refused_send_keeps_number(
+			st == (int)SS__ABORT, known,
+			known ? r.port_was_refuser : 0,
+			known ? r.port_rc : 0, (int32_t)PE_VC_SEND_TXFAIL);
+	}
+	if (st != (int)SS__NORMAL && !keeps && body != NULL && len >= 2u) {
 		struct vms_csb *csb = csb_by_conid(&cn->cl->club, conid);
 		uint16_t sent = (uint16_t)(body[0] | (uint16_t)body[1] << 8);
 
@@ -703,15 +720,30 @@ static uint64_t cnxman_ops_now_vms(void *ctx)
 	return exec_time_now_vms();
 }
 
-/* The %CNXMAN / %VAXcluster OPA0: lines. Every join/barrier/coordinator/
+/* The connection manager's operator lines. Every join/barrier/coordinator/
  * recnx/CSB-ladder call site already composes the whole "%CNXMAN, ..." string
  * (grepped across all five .c files at review time); this is the one place
- * that reaches the console, exactly as scs_ops_log does for SCS. */
+ * they leave the stack, exactly as scs_ops_log does for SCS.
+ *
+ * rd vms-c56: each of those lines is a DIAGNOSTIC -- exec_console_printf()
+ * routes it to the operator log, not OPA0: (vms_cluster_opa0.h). When the
+ * event it reports is one a VMS node announces on its console, the console
+ * line VMS prints for it follows, in VMS's own form, named from this node's
+ * own SCSNODE (vms_opa0_cnxman_form()). Message text and routing only: no
+ * state is read here but the node's own name. */
 static void cnxman_ops_log(void *ctx, const char *msg)
 {
-	(void)ctx;
-	if (msg != NULL)
-		exec_console_printf("%s\n", msg);
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	char opa0[VMS_OPA0_LINE_MAX];
+
+	if (msg == NULL)
+		return;
+	exec_console_printf("%s\n", msg);
+	if (cn != NULL && cn->cl != NULL &&
+	    vms_opa0_cnxman_form(msg, (const char *)cn->cl->params.scsnode,
+				 cn->cl->params.scsnode_len, opa0,
+				 (unsigned int)sizeof(opa0)))
+		exec_console_printf("%s\n", opa0);
 }
 
 static void cnxman_ops_bind(struct vms_cnxman *cn)
@@ -1935,9 +1967,12 @@ int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
 	}
 	/* An origination the peer WILL answer, so this dialogue mints a fresh
 	 * transaction token for it (E85) and assigns the next send-msg#. A
-	 * NOTIFICATION -- the directory-entry removal, which no VMS node ever
-	 * answers (rd vms-e09, R3) -- opens no transaction: body[4:8] stays 0,
-	 * as on every real removal. */
+	 * NOTIFICATION opens no transaction: body[4:8] stays 0, as on every
+	 * real one. Two shapes are notifications -- the directory-entry removal
+	 * (rd vms-e09, R3) and, since rd vms-194, the op-0x03 RELEASE: 0 of
+	 * 40,960 real releases carry a transaction and the corpus holds zero
+	 * answers to one, so a token minted on a release was assigned to a
+	 * message nobody would ever answer and left open on the CSB. */
 	if (vms_dlm_body_is_notification(cn->dlm_tx, VMS_CM_BODY_LEN))
 		cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_NOTIFY);
 	else

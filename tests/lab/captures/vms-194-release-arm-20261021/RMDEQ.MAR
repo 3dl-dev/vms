@@ -1,0 +1,139 @@
+ .TITLE RMDEQ
+; RMDEQ "<r><v><n><name>" -- rd vms-194 driven RELEASE arm (D2/D3).
+;
+; ONE LOCK OP PER CAPTURE, one variable per arm, which is the method
+; docs/cluster-protocol-spec.md 4(f).1 grounded the request's mode byte with
+; (the ac4-* captures). This program's whole purpose is to put ONE op-0x03
+; RELEASE on the wire with every other variable held fixed, so body[30] and
+; body[32] can be read as a function of the one thing that changed.
+;
+;   r = root lock mode digit (0 NL .. 5 EX) -- the mode the lock is HELD at
+;       when it is released. THE VARIABLE of arms R0..R5.
+;   v = V: set LCK$M_VALBLK on the $DEQ and write the known 16-byte pattern
+;          first (a value-block flush on the release);
+;       '-': no VALBLK anywhere. THE VARIABLE of arm V.
+;   n = number of sub-locks (0-9) named S0..S(n-1) under the root, taken at the
+;       SAME mode as the root. THE VARIABLE of arm S. Releasing the root
+;       cascades them, so n > 0 also produces the sub-lock releases.
+;   name = root resource name (system-wide)
+;
+; SEQUENCE, and the pause is deliberate: acquire, then WAIT for the operator
+; (a 10-second $SCHDWK/$HIBER pair, long enough to see the acquire's frames end
+; in the capture), then release the root and EXIT. A capture of one run
+; therefore holds exactly one acquire burst, a quiet gap, and one release burst
+; -- which is what makes the release's cells readable without pairing logic.
+;
+; Ground truth for every arm is read AFTERWARDS with SDA SHOW LOCK /
+; SHOW RESOURCE on both nodes, before the process exits, exactly as RMHOLD's
+; arms do: this program asserts nothing about the lock, it only drives it.
+ $LCKDEF
+ $SSDEF
+ .PSECT DAT,WRT,NOEXE,LONG
+RLKSB: .BLKB 24
+SLKSB: .BLKB 240
+CMDBUF: .BLKB 100
+CMDDSC: .WORD 100
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS CMDBUF
+CMDLEN: .WORD 0
+ .WORD 0
+RMODE: .LONG 0
+NSUB: .LONG 0
+DAYTIM: .BLKQ 1
+RESDSC: .WORD 0
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS 0
+SUBNAM: .ASCII /S0/
+SUBDSC: .WORD 2
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS SUBNAM
+PAT: .ASCII /RMDQV-0123456789/
+WAITIM: .ASCII /0 00:00:10.00/
+WAITDSC: .WORD 13
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS WAITIM
+ .PSECT COD,EXE,NOWRT
+ .ENTRY RMDEQ,^M<R2,R3,R4,R5,R6,R7,R8>
+ PUSHAW CMDLEN
+ PUSHL #0
+ PUSHAB CMDDSC
+ CALLS #3,G^LIB$GET_FOREIGN
+ MOVZBL CMDBUF,R0
+ SUBL2 #^A/0/,R0
+ MOVL R0,RMODE
+ MOVZBL CMDBUF+2,R0
+ SUBL2 #^A/0/,R0
+ MOVL R0,NSUB
+ MOVZWL CMDLEN,R1
+ SUBL2 #3,R1
+ MOVW R1,RESDSC
+ MOVAB CMDBUF+3,RESDSC+4
+;
+; THE ACQUIRE. With 'V' the lock is taken WITH LCK$M_VALBLK so the flush on the
+; release is legal; without it, no VALBLK is ever named, which is the whole
+; point of the V/'-' pair.
+;
+ CMPB CMDBUF+1,#^A/V/
+ BEQL 20$
+ $ENQW_S EFN=#1,LKMODE=RMODE,LKSB=RLKSB,-
+  FLAGS=#LCK$M_SYSTEM,RESNAM=RESDSC
+ BRB 30$
+20$: $ENQW_S EFN=#1,LKMODE=RMODE,LKSB=RLKSB,-
+  FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK>,RESNAM=RESDSC
+30$: BLBS R0,31$
+ BRW 90$
+;
+; THE SUB-LOCKS, at the same mode as the root (n > 0 only).
+;
+31$: CLRL R6
+ MOVAB SLKSB,R7
+10$: CMPL R6,NSUB
+ BGEQ 50$
+ ADDB3 #^A/0/,R6,SUBNAM+1
+ $ENQW_S EFN=#1,LKMODE=RMODE,LKSB=(R7),RESNAM=SUBDSC,-
+  PARID=RLKSB+4
+ BLBS R0,12$
+ BRW 90$
+12$: ADDL2 #24,R7
+ INCL R6
+ BRB 10$
+;
+; THE QUIET GAP. Ten seconds of nothing from this process, so the acquire's
+; frames and the release's are separated in the capture by an interval no other
+; DLM traffic on this cluster fills.
+;
+50$: PUSHAQ DAYTIM
+ PUSHAB WAITDSC
+ CALLS #2,G^SYS$BINTIM
+ BLBS R0,52$
+ BRW 90$
+52$: $SETIMR_S DAYTIM=DAYTIM,EFN=#2
+ BLBS R0,54$
+ BRW 90$
+54$: $WAITFR_S EFN=#2
+;
+; *** THE RELEASE -- THE ONE FRAME THIS PROGRAM EXISTS TO PRODUCE. ***
+; With 'V' the known pattern is written into the LKSB's value block first and
+; LCK$M_VALBLK is set on the $DEQ, so the release carries a flush.
+;
+ CMPB CMDBUF+1,#^A/V/
+ BEQL 60$
+ $DEQ_S LKID=RLKSB+4
+ BRB 70$
+60$: MOVC3 #16,PAT,RLKSB+8
+ $DEQ_S LKID=RLKSB+4,VALBLK=RLKSB+8,-
+  FLAGS=#LCK$M_VALBLK
+70$: BLBS R0,80$
+ BRW 90$
+;
+; Hold the process alive after the release so SDA can be run on both nodes
+; against the state the release left, then exit on the operator's ^Y.
+;
+80$: $HIBER_S
+ BRB 80$
+90$: RET
+ .END RMDEQ

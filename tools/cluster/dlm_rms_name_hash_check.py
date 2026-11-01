@@ -164,6 +164,14 @@ def report(paths):
 
 
 def selftest(repo):
+    """Pin the figures this census grounds.
+
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+    """
     paths = rc.walk_inputs([os.path.join(repo, 'tests', 'lab', 'captures')])
     rows = rms_named_requests(paths)
     ok = True
@@ -175,7 +183,7 @@ def selftest(repo):
         print('  [%s] %s: %r%s' % ('PASS' if good else 'FAIL', name, got,
                                    '' if good else ' (want %r)' % (want,)))
 
-    check('real RMS-named cat-0x02 requests in the corpus', len(rows), 1130)
+    check('real RMS-named cat-0x02 requests in the corpus', len(rows), 1133)
     check('...of them op-0x01 directory lookups',
           sum(1 for _c, _i, _n, b in rows if b[9] == 0x01), 578)
     # The identity the value is computed over, and the length -- both inside

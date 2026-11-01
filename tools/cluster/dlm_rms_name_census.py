@@ -161,6 +161,14 @@ def report(paths):
 
 
 def selftest(repo):
+    """Pin the figures this census grounds.
+
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+    """
     paths = rc.walk_inputs([os.path.join(repo, 'tests', 'lab', 'captures')])
     ok = True
 
@@ -179,7 +187,7 @@ def selftest(repo):
     check('distinct real-ORIGINATED RMS$ names', len(real), 64)
     check('*** ...all of them the 26-byte binary form ***', len(pop), 64)
     check('frames carrying a real-originated RMS$ name',
-          sum(real.values()), 1888)
+          sum(real.values()), 1894)
     # rd vms-083's arm capture added a FIFTH OVMX-originated text name --
     # that node's own RMS lock during its boot. The figure is re-derived
     # with the corpus, exactly as the denominators above are.

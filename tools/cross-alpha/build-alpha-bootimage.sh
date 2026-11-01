@@ -369,6 +369,10 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                     if [ -d "$JOINT/gccsrc" ]; then
                         cp -r "$JOINT/gccsrc" "$ST/vms/SYS0/SYSCOMMON/GCCSRC"
                     fi
+                    # vms-b85: objects the CI shards compiled on OVMX -> GCCOBJ:[...]
+                    if [ -d "$JOINT/gccobj" ]; then
+                        cp -r "$JOINT/gccobj" "$ST/vms/SYS0/SYSCOMMON/GCCOBJ"
+                    fi
                     # vms-408: the C++ headers as GCC installs them (bits/c++config.h ...) -> GNU:[CXX]
                     if [ -d "$JOINT/inc/gnu/cxx" ]; then
                         cp -r "$JOINT/inc/gnu/cxx" "$ST/vms/SYS0/SYSCOMMON/GNU/CXX"

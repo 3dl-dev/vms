@@ -717,6 +717,15 @@ int main(void)
      *     and the second must be the subject's. Before this item the
      *     parameter was ignored entirely and both printed the caller.
      * --------------------------------------------------------------- */
+    /* rd vms-1f7: THIS process gives the subject a base priority (3, below
+     * the authorized 4, so no ALTPRI is needed); SHOW PROCESS, run by DCL,
+     * must report it (P6). A-writes / B-reads: the value can only reach the
+     * display through the executive's row for the subject. */
+    {
+        uint32_t prev = 0, spid = subject;
+        uint32_t pst = sys$setpri(&spid, NULL, 3, &prev, 0, NULL);
+        CHECK(pst == SS$_NORMAL, "sys$setpri gave the subject base priority 3");
+    }
     snprintf(script, sizeof(script),
              "SHOW PROCESS\nSHOW PROCESS %s\nLOGOUT\n", SUBJECT_NAME);
     CHECK(run_dcl(script, -1, NULL, out, sizeof(out)) == 0,
@@ -803,8 +812,27 @@ int main(void)
               "SHOW PROCESS prints Terminal: with an EMPTY value for a process with no terminal (oracle Section 2)");
         CHECK(tl && ul && tl < ul, "Terminal: precedes User Identifier: (oracle order)");
     }
-    CHECK(strstr(out, "Base priority:") == NULL,
-          "SHOW PROCESS prints no invented Base priority:");
+    /* Base priority: IS printed since rd vms-1f7, from the executive's row
+     * (VMS_IOCTL_PRI). The oracle order is User Identifier:, Base priority:,
+     * Default file spec: (docs/oracle/golden/vax-show-process.golden). The
+     * SUBJECT's section (after its header, hdr2) must carry the 3 this
+     * process set above -- never the literal 4 the deleted code printed for
+     * every process. */
+    {
+        const char *h2 = line_containing(out, "Process ID:");
+        const char *n2 = h2 ? strchr(h2, '\n') : NULL;
+        const char *subj = n2 ? line_containing(n2 + 1, "Process ID:") : NULL;
+        const char *bp = subj ? line_starting(subj, "Base priority:") : NULL;
+        const char *ul = subj ? line_starting(subj, "User Identifier:") : NULL;
+        const char *df = subj ? line_starting(subj, "Default file spec:") : NULL;
+        /* negctl: dcl-showproc-prib-not-read */
+        CHECK(bp != NULL && label_value_at(bp, "Base priority:", PROC_LABEL_WIDTH, "3"),
+              "SHOW PROCESS <subject> prints Base priority: 3 -- the base "
+              "priority another process set, read from the executive");
+        CHECK(ul && bp && df && ul < bp && bp < df,
+              "Base priority: sits between User Identifier: and Default file "
+              "spec: (oracle order)");
+    }
     CHECK(strstr(out, "Privileges:") == NULL,
           "SHOW PROCESS prints no Privileges: line -- VMS has none");
     CHECK(strstr(out, "Process quotas:") == NULL,

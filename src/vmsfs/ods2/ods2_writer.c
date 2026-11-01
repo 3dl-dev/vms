@@ -1831,8 +1831,55 @@ ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
  * Block / FID allocation
  * ================================================================ */
 
+static ods2_status_t wv_alloc_bump(ods2_wvolume_t *wvol, uint32_t count,
+                                   uint32_t *lbn_out);
+
 ods2_status_t ods2_wvolume_alloc_blocks(ods2_wvolume_t *wvol,
                                         uint32_t count, uint32_t *lbn_out)
+{
+    uint32_t k;
+
+    if (!wvol || !lbn_out || count == 0)
+        return ODS2_ERR_ARGS;
+    /* A run freed earlier first (first fit), then the watermark. */
+    for (k = 0; k < wvol->nfreed; k++) {
+        if (wvol->freed_cnt[k] >= count) {
+            uint32_t lbn = wvol->freed_lbn[k], b;
+            wvol->freed_lbn[k] += count;
+            wvol->freed_cnt[k] -= count;
+            if (wvol->freed_cnt[k] == 0) {
+                wvol->nfreed--;
+                wvol->freed_lbn[k] = wvol->freed_lbn[wvol->nfreed];
+                wvol->freed_cnt[k] = wvol->freed_cnt[wvol->nfreed];
+            }
+            for (b = 0; b < count; b++)        /* no stale bytes in a reused block */
+                memset(wblk(wvol, lbn + b), 0, ODS2_BLOCK_SIZE);
+            storage_bitmap_mark_used(wvol, lbn, count);
+            *lbn_out = lbn;
+            if (wvol->is_bdev && wvol->io_error != ODS2_OK)
+                return wvol->io_error;
+            return ODS2_OK;
+        }
+    }
+    return wv_alloc_bump(wvol, count, lbn_out);
+}
+
+/* Return a run to BITMAP.SYS and to the runs alloc_blocks hands out again. */
+static void wv_free_run(ods2_wvolume_t *wvol, uint32_t lbn, uint32_t count)
+{
+    uint32_t b;
+    for (b = 0; b < count; b++)
+        ods2_bitmap_set(wvol, wvol->bitmap_scb_lbn + 1, lbn + b, 1);
+    if (wvol->nfreed < ODS2_WV_FREED_MAX) {
+        wvol->freed_lbn[wvol->nfreed] = lbn;
+        wvol->freed_cnt[wvol->nfreed] = count;
+        wvol->nfreed++;
+    }
+}
+
+/* The bump allocator: `count` blocks at the watermark. */
+static ods2_status_t wv_alloc_bump(ods2_wvolume_t *wvol, uint32_t count,
+                                   uint32_t *lbn_out)
 {
     uint32_t lbn;
 
@@ -2556,7 +2603,7 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
         uint32_t grown_lbn;
         if (wvol->next_free_lbn == s->lbns[blocks_before - 1] + 1) {
             /* the next free block follows the directory: it stays one run */
-            st = ods2_wvolume_alloc_blocks(wvol, extra, &grown_lbn);
+            st = wv_alloc_bump(wvol, extra, &grown_lbn);
             if (st != ODS2_OK)
                 goto done;
             for (k = 0; k < extra; k++)
@@ -2570,11 +2617,17 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
              * its old blocks return to BITMAP.SYS. Appending a separate
              * extent per growth instead filled the header's map area after
              * ~70 growths (rd vms-465: a 1000-file source directory). */
-            st = ods2_wvolume_alloc_blocks(wvol, nblk, &grown_lbn);
+            st = wv_alloc_bump(wvol, nblk, &grown_lbn);
             if (st != ODS2_OK)
                 goto done;
-            for (k = 0; k < blocks_before; k++)
-                ods2_bitmap_set(wvol, wvol->bitmap_scb_lbn + 1, s->lbns[k], 1);
+            /* the old blocks, as the contiguous runs they were */
+            for (k = 0; k < blocks_before; ) {
+                uint32_t r = 1;
+                while (k + r < blocks_before && s->lbns[k + r] == s->lbns[k] + r)
+                    r++;
+                wv_free_run(wvol, s->lbns[k], r);
+                k += r;
+            }
             nlbn = 0;
             for (k = 0; k < nblk; k++)
                 s->lbns[nlbn++] = grown_lbn + k;

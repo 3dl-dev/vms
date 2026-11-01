@@ -102,7 +102,13 @@ def report(paths):
 
 def selftest(repo):
     """Pin what rd vms-b67a's fix is built from. If the corpus grows these
-    move, and the item and the grounding rows move with them."""
+    move, and the item and the grounding rows move with them.
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+"""
     paths = rc.walk_inputs([os.path.join(repo, 'tests', 'lab', 'captures')])
     real, ovmx = enq_requests(paths)
     subs = sub_requests(real)
@@ -121,7 +127,7 @@ def selftest(repo):
     # modes, with the same 3 parent pairs. rd vms-b67a's grounding is unchanged
     # by 3.5x the corpus -- and the sample is still 7, which is why that item's
     # fix is built from the ROUTING rule and not from a cell's value range.
-    check('real lock requests in the corpus', len(real), 74895)   # was 21,499, then 74,894
+    check('real lock requests in the corpus', len(real), 75031)   # was 21,499, then 74,894, 74,895
     check('real requests naming a sub-resource', len(subs), 7)
     check('distinct senders of one', len({s for s, _d, _b, _p in subs}), 2)
     check('distinct sub-lock modes at body[30]',

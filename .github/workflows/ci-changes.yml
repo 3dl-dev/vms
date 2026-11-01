@@ -260,6 +260,10 @@ jobs:
               - 'tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM'
               - 'src/vmsdcl/**'
               - 'tools/cross-alpha/cmp_obj_dump.py'
+              # the proofs master their system volume with this writer, and run
+              # the toolchain over it (a writer change reshapes every file's extents)
+              - 'src/vmsfs/**'
+              - 'tools/vmsfs_master.c'
               - 'src/vmslink/**'
               - 'src/libvms/**'
               - 'src/vmsrms/**'

@@ -176,9 +176,9 @@ POS_OCT='positive: Octal is the 11-digit longword 00040000200'
 # It must redden three of the four checks -- and NOT the positive hex one,
 # because 00800080 rendered identically before and after the fix. That green
 # check is the whole reason the defect survived: the hex column looked right.
-sed 's/Hex = %08lX  Octal = %011lo\\n",$/Hex = %08lX  Octal = %012lo\\n",/; s/^                       upper_name, v, lw, lw);$/                       upper_name, v, v, v);/' \
+sed 's/Hex = %08lX  Octal = %011lo\\n",$/Hex = %08lX  Octal = %012lo\\n",/; s/^                       upper_name, eq, v, lw, lw);$/                       upper_name, eq, v, v, v);/' \
     "$WORK/dcl_cmd_show.c.orig" > "$SHOW_C"
-if grep -qF 'Octal = %012lo' "$SHOW_C" && grep -qF 'upper_name, v, v, v);' "$SHOW_C"; then
+if grep -qF 'Octal = %012lo' "$SHOW_C" && grep -qF 'upper_name, eq, v, v, v);' "$SHOW_C"; then
     expect_red "A: the defect as it shipped (64-bit render, 12-digit octal)" \
 "$NEG_HEX
 $NEG_OCT
@@ -209,9 +209,9 @@ fi
 # back to the unmasked 64-bit value. It must redden the negative hex check and
 # ONLY it -- both positive checks stay green, which is the item's claim that "a
 # positive-only test cannot see the sign extension" turned into a measurement.
-sed 's/^                       upper_name, v, lw, lw);$/                       upper_name, v, v, lw);/' \
+sed 's/^                       upper_name, eq, v, lw, lw);$/                       upper_name, eq, v, v, lw);/' \
     "$WORK/dcl_cmd_show.c.orig" > "$SHOW_C"
-if grep -qF 'upper_name, v, v, lw);' "$SHOW_C"; then
+if grep -qF 'upper_name, eq, v, v, lw);' "$SHOW_C"; then
     expect_red "C: octal fixed, sign extension left (only a NEGATIVE can see it)" \
 "$NEG_HEX"
 else

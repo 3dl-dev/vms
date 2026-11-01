@@ -32,7 +32,7 @@
 # $STATUS is displayed VMS-style "%Xhhhhhhhh" (vms-3983), so the SS$_NORMAL lie
 # now reads "%X00000001" rather than decimal "1" — the guard tracks the
 # authentic representation so it stays able to catch a fake.
-# EXPECT_NOT: contains:$STATUS = "%X00000001"
+# EXPECT_NOT: contains:$STATUS == "%X00000001"
 # EXPECT_NOT: contains:%STOP-S-
 # --- malformed /IDENTIFICATION: honest parse-time refusal, not silently
 #     accepted (the old code would have accepted ANY qualifier value,

@@ -30,8 +30,8 @@
 # EXPECT: contains: \ZQWAIT\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \ZQCLOSE\
-# EXPECT: contains:$STATUS = "%X00038240"
-# EXPECT_NOT: contains:$STATUS = "%X00000001"
+# EXPECT: contains:$STATUS == "%X00038240"
+# EXPECT_NOT: contains:$STATUS == "%X00000001"
 #
 # --- Real qualifiers on the SAME verbs still pass (not a blanket reject) ---
 # The positive-control lines below use each verb's real qualifier and must NOT

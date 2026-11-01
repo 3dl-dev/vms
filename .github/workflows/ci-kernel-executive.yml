@@ -1738,7 +1738,17 @@ jobs:
         # max-parallel batches -- a newly added control is provable without
         # waiting on the whole matrix. This list is the ONLY line to touch;
         # revisit (raise again) as the manifest grows.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+        #
+        # 22 -> 40 (vms-6bf, 2026-11-01). The manifest is 301 defects (13.7 per
+        # shard at 22). MEASURED over the last 40 merged PRs: 35 of the 40
+        # merge-queue runs selected ALL defects (any guest-visible path fails
+        # the map closed, correctly -- every defect re-runs every suite and
+        # checks the red set for equality), the 22 shards all started within
+        # 0.2 min, and the slowest shard (36-44 min, ~1.8 min/defect) WAS the
+        # queue's critical path (queue median 40.3 min). Runners were not the
+        # bound (enterprise plan; at most 7 concurrent queue runs seen), so
+        # 301 / 40 = ~7.5 per shard -> ~14 min + the ~4 min image restore.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
 
     steps:
       - name: Checkout

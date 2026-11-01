@@ -206,11 +206,11 @@ check_status_reports_failure() {
     # %X000002A4 here can only come from this command's own executive read
     # failing, not from something upstream. $STATUS is displayed in the VMS
     # "%Xhhhhhhhh" representation (vms-3983), not decimal.
-    if grep -qF '$STATUS = "%X000002A4"' "$WORK/out2"; then
+    if grep -qF '$STATUS == "%X000002A4"' "$WORK/out2"; then
         echo "  OK: $label set \$STATUS = %X000002A4 (SS\$_BUGCHECK) though it printed nothing"
     else
         fail "$label did not leave \$STATUS carrying the ioctl failure" \
-             "expected '\$STATUS = \"%X000002A4\"' in SHOW SYMBOL \$STATUS output; got:" \
+             "expected '\$STATUS == \"%X000002A4\"' in SHOW SYMBOL \$STATUS output; got:" \
              "$(sed 's/^/       | /' "$WORK/out2")"
     fi
 }

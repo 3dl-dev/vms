@@ -127,6 +127,19 @@ set_tests_properties(ods2_dirgrow PROPERTIES
     TIMEOUT 30
 )
 
+# rd vms-465: a directory stays ONE contiguous extent (FH2$M_CONTIG) however
+# it grows -- 1500 interleaved create_file + dir_insert into one directory, as
+# a GCC source tree or a build's object directory does.
+add_executable(test_ods2_dircontig test_ods2_dircontig.c)
+target_include_directories(test_ods2_dircontig PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_dircontig PRIVATE ods2)
+
+add_test(NAME ods2_dircontig COMMAND test_ods2_dircontig)
+set_tests_properties(ods2_dircontig PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 60
+)
+
 # vms-6ef (R4 of the real-ODS-2-runtime epic vms-5eb): INITIALIZE writes a
 # GENUINE ODS-2 volume. Proves the ODS-2 method INITIALIZE uses produces a
 # real Files-11 volume the block-backed reader (R1) parses clean + that the

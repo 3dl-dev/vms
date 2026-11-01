@@ -2554,11 +2554,31 @@ ods2_status_t ods2_wvolume_dir_insert(ods2_wvolume_t *wvol,
     if (nblk > blocks_before) {
         uint32_t extra = nblk - blocks_before;
         uint32_t grown_lbn;
-        st = ods2_wvolume_alloc_blocks(wvol, extra, &grown_lbn);
-        if (st != ODS2_OK)
-            goto done;
-        for (k = 0; k < extra; k++)
-            s->lbns[nlbn++] = grown_lbn + k;
+        if (wvol->next_free_lbn == s->lbns[blocks_before - 1] + 1) {
+            /* the next free block follows the directory: it stays one run */
+            st = ods2_wvolume_alloc_blocks(wvol, extra, &grown_lbn);
+            if (st != ODS2_OK)
+                goto done;
+            for (k = 0; k < extra; k++)
+                s->lbns[nlbn++] = grown_lbn + k;
+        } else {
+            /* A directory file is contiguous (FH2$M_CONTIG, set by
+             * create_dir): when the blocks after it are taken (a file's
+             * data was allocated since it last grew), it moves to a fresh
+             * run of the size it now needs -- the sorted stream is laid
+             * from `flat` below, so nothing is copied block to block -- and
+             * its old blocks return to BITMAP.SYS. Appending a separate
+             * extent per growth instead filled the header's map area after
+             * ~70 growths (rd vms-465: a 1000-file source directory). */
+            st = ods2_wvolume_alloc_blocks(wvol, nblk, &grown_lbn);
+            if (st != ODS2_OK)
+                goto done;
+            for (k = 0; k < blocks_before; k++)
+                ods2_bitmap_set(wvol, wvol->bitmap_scb_lbn + 1, s->lbns[k], 1);
+            nlbn = 0;
+            for (k = 0; k < nblk; k++)
+                s->lbns[nlbn++] = grown_lbn + k;
+        }
     }
 
     /* Lay the sorted stream into the (possibly grown) block set. Each block

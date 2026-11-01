@@ -116,6 +116,17 @@ fi
 echo "   OK: PT_INTERP=IMGACT.EXE (the OVMX image activator, not ld.elf_so)"
 
 echo
+echo "== ASSERT: PT_NOTE carries the NetBSD OS-version note (rd vms-d4a) =="
+# The NetBSD kernel execs an ELF executable only when a PT_NOTE carries this
+# note (sys/kern/exec_elf.c netbsd_elf_signature); without it execve() is
+# ENOEXEC and IMGACT.EXE is never reached.
+$VAXREADELF -lW "$IMG" | grep -q "NOTE" \
+    || { echo "FAIL: no PT_NOTE program header"; exit 1; }
+$VAXREADELF -nW "$IMG" | grep -E "NetBSD.*IDENT 1001000000" \
+    || { echo "FAIL: no NetBSD IDENT note (namesz 7, type 1, version 1001000000)"; $VAXREADELF -nW "$IMG"; exit 1; }
+echo "   OK: PT_NOTE NetBSD IDENT 10.1"
+
+echo
 echo "== ASSERT: crt0 at the entry point (VAX argc/argv recovery + calls main + calls exit) =="
 # The entry bytes must be the synthesized VAX crt0: it opens with `movl (sp),r0`
 # (opcode 0xd0, the argc load) and issues two `calls` (opcode 0xfb) — one to

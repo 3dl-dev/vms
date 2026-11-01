@@ -126,6 +126,8 @@ echo "=== 4. readelf-shape assertions (the vms-099 P3a/P3b done-condition bar, r
 INTERP=$("$VAXREADELF" -lW "$CONSUMER" | sed -n 's/.*Requesting program interpreter: \(.*\)\]/\1/p')
 echo "   PT_INTERP = $INTERP"
 [ "$INTERP" = "$INTERP_WANT" ] || die "CONSUMER.EXE PT_INTERP is '$INTERP', want '$INTERP_WANT'"
+"$VAXREADELF" -nW "$CONSUMER" | grep -qE "NetBSD.*IDENT" \
+    || die "CONSUMER.EXE carries no NetBSD IDENT note -- the NetBSD kernel would refuse it ENOEXEC"
 # objcopy the raw section bytes rather than grepping readelf -x's hex dump --
 # a name can straddle that dump's fixed 16-byte-per-line boundary and be
 # missed by a naive line-grep even though it is genuinely present (same

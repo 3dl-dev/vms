@@ -339,6 +339,33 @@ static void ovmx_store_ptr(uint8_t *p, uint64_t v)
 # endif
 #endif
 
+/*
+ * The NetBSD OS-version ELF note (elf32-vax executables only). The NetBSD
+ * kernel execs an ELF executable as a native program only when one of its
+ * PT_NOTE segments carries this note (sys/kern/exec_elf.c
+ * netbsd_elf_signature); without it execve() fails ENOEXEC before the
+ * PT_INTERP (IMGACT.EXE) is ever opened. It is the note every NetBSD crti.o
+ * carries in .note.netbsd.ident: namesz 7 ("NetBSD\0", padded to 8), descsz 4,
+ * type 1 (NT_NETBSD_IDENT), desc = the __NetBSD_Version__ the image targets.
+ * OVMX_NETBSD_OSVERSION defaults to the pinned substrate, NetBSD 10.1
+ * (tests/netbsd/netbsd_version.env).
+ */
+#ifndef OVMX_NETBSD_OSVERSION
+# define OVMX_NETBSD_OSVERSION 1001000000u
+#endif
+#define OVMX_NETBSD_NOTE_SZ (12 + 8 + 4)
+static void emit_netbsd_note(unsigned char *p)
+{
+    const uint32_t hdr[3] = { 7, 4, 1 };   /* namesz, descsz, NT_NETBSD_IDENT */
+    const uint32_t ver = OVMX_NETBSD_OSVERSION;
+    for (int w = 0; w < 3; w++)            /* little-endian (VAX), byte-wise */
+        for (int b = 0; b < 4; b++)
+            p[w * 4 + b] = (unsigned char)(hdr[w] >> (8 * b));
+    memcpy(p + 12, "NetBSD\0\0", 8);
+    for (int b = 0; b < 4; b++)
+        p[20 + b] = (unsigned char)(ver >> (8 * b));
+}
+
 /* --------------------------------------------------------------------------
  * Declared universal symbols (from SYMBOL_VECTOR=).
  * -------------------------------------------------------------------------- */
@@ -2547,6 +2574,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     /* shareable: PT_LOAD (+ PT_TLS). executable: PT_PHDR, PT_INTERP, PT_LOAD
      * (+ PT_TLS) — the kernel maps the executable and reads PT_INTERP=IMGACT. */
     int      nph      = is_exec ? (3 + (has_tls ? 1 : 0)) : (has_tls ? 2 : 1);
+    /* elf32-vax executable: + PT_NOTE carrying the NetBSD OS-version note
+     * (OVMX_NETBSD_NOTE_SZ, below). */
+    int      has_osnote = 0;
+#ifdef OVMX_LINK_ELF32
+    has_osnote = is_exec;
+#endif
+    nph += has_osnote;
     uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf_Phdr), 16);
 
     /* executable: the PT_INTERP string (IMGACT.EXE), placed in the loaded range
@@ -2556,6 +2590,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         off_interp = cur;
         interp_sz  = strlen(IMGACT_INTERP) + 1;
         cur = ALIGN_UP(cur + interp_sz, 16);
+    }
+    /* elf32-vax executable: the NetBSD OS-version note, file offset == vaddr
+     * like the PT_INTERP string. */
+    uint64_t off_osnote = 0;
+    if (has_osnote) {
+        off_osnote = cur;
+        cur = ALIGN_UP(cur + OVMX_NETBSD_NOTE_SZ, 16);
     }
 
     /* Place every input section of a bucket contiguously, recording each
@@ -2962,6 +3003,14 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         ph[ti].p_filesz = tdata_sz; ph[ti].p_memsz = tls_memsz; ph[ti].p_align = tls_align;
     }
     if (is_exec) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
+    if (has_osnote) {
+        int ni = nph - 1;
+        ph[ni].p_type = PT_NOTE; ph[ni].p_flags = PF_R;
+        ph[ni].p_offset = off_osnote; ph[ni].p_vaddr = off_osnote; ph[ni].p_paddr = off_osnote;
+        ph[ni].p_filesz = OVMX_NETBSD_NOTE_SZ; ph[ni].p_memsz = OVMX_NETBSD_NOTE_SZ;
+        ph[ni].p_align = 4;
+        emit_netbsd_note(img + off_osnote);
+    }
 
     /* Copy each placed PROGBITS section (text/rodata/data/init_array) to its
      * vaddr. SHT_INIT_ARRAY's file-resident bytes are the pre-relocation

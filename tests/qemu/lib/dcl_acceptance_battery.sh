@@ -792,6 +792,14 @@ run_dcl_acceptance_battery() {
     must_have  "$SEG" 'SYSTEM' "SHOW SYSTEM: lists the SYSTEM process"
     must_have  "$SEG" 'JOB_CONTROL' "SHOW SYSTEM [vms-f62]: lists the JOB_CONTROL process (the boot's job controller)"
     must_match "$SEG" '[0-9A-Fa-f]{8}' "SHOW SYSTEM: shows 8-hex-digit VMS PIDs"
+    # rd vms-66e: every row has a process name -- a nameless row is what a
+    # visitor saw first on the demo (the boot task, PID 1). VMS lists none.
+    if printf '%s\n' "$SEG" | tr -d '\r' | grep -qE '^[0-9A-F]{8} {2,}[0-9]+ [0-9]{2}:'; then
+        bad "SHOW SYSTEM [vms-66e]: a row has no process name (PID then blanks then CPU)"
+    else
+        ok "SHOW SYSTEM [vms-66e]: every row carries a process name"
+    fi
+    must_match "$SEG" '^0*1 +STARTUP ' "SHOW SYSTEM [vms-66e]: the boot task names itself STARTUP, after its image, as VMS's startup process is named"
     # vms-d4ef/#883: JOB_CONTROL and the interactive SYSTEM login are DISTINCT
     # executive processes -- distinct PIDs, not the old fork+execl shared-pid alias.
     local JC_PID SYS_PID

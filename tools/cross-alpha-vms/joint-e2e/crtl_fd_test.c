@@ -209,6 +209,81 @@ int main(int argc, char **argv)
               strcmp(l2, "SECOND RECORD\n") == 0,
           21, "a DCL OPEN/WRITE record file reads back as newline-terminated lines");
 
+    /* 8a. The same record file the way libiberty's expandargv reads a GCC
+     *     response file (@file, rd vms-465): fseek to the end, ftell, back to
+     *     the start, fread that many bytes. The position at the end of a record
+     *     file is not the byte count fread delivers (DEC C: an end-of-file
+     *     position, the stored bytes), but it is no smaller, so the short read
+     *     returns the whole text, without an error. */
+    f = fopen(INF, "r");
+    char whole[256];
+    long endpos = -1;
+    size_t rd = 0;
+    int sk_end = -1, sk_set = -1, rerr = 1;
+    memset(whole, 0, sizeof whole);
+    if (f) {
+        sk_end = fseek(f, 0L, SEEK_END);
+        endpos = ftell(f);
+        sk_set = fseek(f, 0L, SEEK_SET);
+        if (endpos > 0 && endpos < (long)sizeof whole)
+            rd = fread(whole, 1, (size_t)endpos, f);
+        rerr = ferror(f);
+        fclose(f);
+    }
+    printf("CFD: DCL file as @file: fseek(END)=%d ftell=%ld fseek(SET)=%d fread=%lu ferror=%d\n",
+           sk_end, endpos, sk_set, (unsigned long)rd, rerr);
+    check(f != NULL && sk_end == 0 && sk_set == 0 && endpos >= 29 && rd == 29 && !rerr &&
+              memcmp(whole, "WRITTEN BY DCL\nSECOND RECORD\n", 29) == 0,
+          48, "a DCL record file: fseek(SEEK_END) + ftell + rewind + fread reads it whole");
+
+    /* 8a2. The machine's memory, as libiberty's physmem_total() asks it (GCC's
+     *      garbage-collector heuristics; rd vms-465): the boot gives the guest
+     *      1 GB, so more than half of that is physical memory. */
+    long phys = sysconf(_SC_PHYS_PAGES), psz = sysconf(_SC_PAGESIZE);
+    double mem = (double)phys * (double)psz;
+    printf("CFD: sysconf(_SC_PHYS_PAGES)=%ld _SC_PAGESIZE=%ld -> %.0f MB\n", phys, psz, mem / 1048576.0);
+    check(phys > 0 && psz == 8192 && mem >= 512.0 * 1048576.0 && mem <= 64.0 * 1073741824.0, 49,
+          "sysconf(_SC_PHYS_PAGES) * _SC_PAGESIZE is the machine's memory");
+
+    /* 8a3. Many small sequential writes -- an assembler file as cc1 writes it,
+     *      through stdio's buffer -- land whole (the layer buffers them into
+     *      multiblock $WRITEs, rd vms-465). */
+    {
+        int wfd = open(DIRSPEC "CFDWB.TXT", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        char chunk[37];
+        unsigned long total = 0, bad = 0;
+        int i;
+        for (i = 0; wfd >= 0 && i < 4000; i++) {
+            int k;
+            for (k = 0; k < 36; k++)
+                chunk[k] = (char)('a' + (i + k) % 26);
+            chunk[36] = '\n';
+            if (write(wfd, chunk, sizeof chunk) != (long)sizeof chunk)
+                break;
+            total += sizeof chunk;
+        }
+        if (wfd >= 0)
+            close(wfd);
+        FILE *rf2 = fopen(DIRSPEC "CFDWB.TXT", "r");
+        char rl[64];
+        long lines = 0;
+        while (rf2 && fgets(rl, sizeof rl, rf2)) {
+            int k;
+            for (k = 0; k < 36; k++)
+                if (rl[k] != (char)('a' + (lines + k) % 26))
+                    bad++;
+            lines++;
+        }
+        if (rf2)
+            fclose(rf2);
+        struct stat ws;
+        int wst = stat(DIRSPEC "CFDWB.TXT", &ws);
+        printf("CFD: 4000 writes of 37 bytes -> %lu bytes, read back %ld lines, %lu wrong, size %ld\n",
+               total, lines, bad, wst == 0 ? (long)ws.st_size : -1L);
+        check(total == 4000ul * 37 && lines == 4000 && bad == 0 && wst == 0 && ws.st_size == (long)total, 50,
+              "4000 small sequential writes read back whole, byte for byte");
+    }
+
     /* 8b. fgetname (vms-4ba3): the stream's full file specification, in VMS
      *     form and, with format 0, UNIX form -- what GCC's vmsdbgout.cc asks. */
     f = fopen(OUTF, "r");

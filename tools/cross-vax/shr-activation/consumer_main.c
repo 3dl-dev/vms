@@ -26,6 +26,7 @@
  */
 #include <stdio.h>
 #include <stdint.h>
+#include <unistd.h>
 
 /* purdy_s_hash's RTL signature (src/libvms/include/purdy.h), restated so the
  * cross-compile pulls in none of that header's other machinery. */
@@ -39,6 +40,9 @@ int consumer_body(void)
 	static const char user[] = "A1ORA";
 	const unsigned short salt = 0x4D63u;
 	static const uint64_t want = 0x716CBDC03C071C59ull;
+
+	static const char entered[] = "OVMX-VAX-SHR-ACT: entered\n";
+	(void)write(1, entered, sizeof entered - 1);   /* reached, before the call */
 
 	uint64_t got = purdy_s_hash(pw, sizeof(pw) - 1, user, salt);
 

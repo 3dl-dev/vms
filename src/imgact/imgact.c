@@ -59,6 +59,19 @@
 #ifndef AT_EXECFN
 #define AT_EXECFN 31
 #endif
+/* NetBSD hands the interpreter the exec'd path as AT_SUN_EXECNAME, not Linux's
+ * AT_EXECFN (sys/kern/exec_elf.c elf_populate_auxv). rd vms-d4a. */
+#ifndef AT_SUN_EXECNAME
+#define AT_SUN_EXECNAME 2014
+#endif
+
+/* rd vms-d4a DIAGNOSTIC (gate-private, default off): one stderr line per
+ * activation step, to locate a fault in IMGACT's first VAX runs. */
+#ifdef OVMX_IMGACT_STEP_TRACE
+# define IMGACT_STEP(s) sys_write(2, "%IMGACT-I-STEP, " s "\n", sizeof("%IMGACT-I-STEP, " s "\n") - 1)
+#else
+# define IMGACT_STEP(s) ((void)0)
+#endif
 
 #ifndef O_RDONLY
 #define O_RDONLY 0
@@ -2856,6 +2869,7 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	struct imgsrc src;
 	if (imgsrc_open(&src, execfn) < 0)
 		die_imgnotfnd(execfn);
+	IMGACT_STEP("image opened over the ACP");
 	/* vms-035: a main image linked at a fixed P0 address (bias 0, wholly below
 	 * P1) gets its shareables placed in P0 directly above it, as on VMS. */
 #if defined(__alpha__)
@@ -2943,6 +2957,7 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 			? (exe_base + exe_wimp_addr) : 0;
 	}
 	imgsrc_close(&src);
+	IMGACT_STEP("image sections read");
 	if (!ok)
 		die_imgfmterr("IMAGE.EXE");
 
@@ -2952,8 +2967,10 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	const struct ovmx_imp_header *ih =
 		(const struct ovmx_imp_header *)(exe_base + imp_addr);
 	bind_imports(exe_base, ih, "IMAGE.EXE");
+	IMGACT_STEP("imports bound");
 
 	imgact_finish_producers();
+	IMGACT_STEP("producers finished");
 
 	/* Register this executable's DWARF .eh_frame with libgcc's unwinder BEFORE
 	 * its .init_array runs (vms-70d): libstdc++'s eh_alloc emergency-pool ctor
@@ -3940,6 +3957,9 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 		case AT_PHNUM:  at_phnum  = (long)a->a_un.a_val; break;
 		case AT_ENTRY:  at_entry  = a->a_un.a_val; break;
 		case AT_EXECFN: at_execfn = (const char *)a->a_un.a_val; break;
+#if defined(__NetBSD__)
+		case AT_SUN_EXECNAME: at_execfn = (const char *)a->a_un.a_val; break;
+#endif
 		default: break;
 		}
 	}
@@ -3957,7 +3977,10 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 			if (sp_ph[i].p_type == PT_PHDR)
 				self_base = at_phdr - sp_ph[i].p_vaddr;
 	}
+	IMGACT_STEP("entered, auxv parsed");
+	if (!at_execfn) IMGACT_STEP("no exec path in auxv");
 	self_relocate(self_base);
+	IMGACT_STEP("self-relocated");
 #if defined(__alpha__)
 	/* An unaligned reference is fixed up SILENTLY, as OpenVMS Alpha does by
 	 * default: the substrate kernel's per-trap "unaligned trap at ..."
@@ -3978,6 +4001,7 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	 * g_acp_sysdevice). Runtime-discovered, not a compile-time literal
 	 * (vms-29ff/vms-47d). */
 	imgact_discover_sysdevice(envp);
+	IMGACT_STEP("system device discovered");
 
 	/* vms-fb4: run as the process's main program (no interpreter base) --
 	 * activate argv[1] off the volume; the image sees argv from there on. */
@@ -4038,9 +4062,11 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	 * IMGACT only needs to relocate it and load its shareable images.
 	 * (This departs from design spec §2 step 3, which describes IMGACT
 	 * mapping the executable — the kernel does that for the main image.) */
+	IMGACT_STEP("program headers mapped");
 	ElfW(Phdr) *ephdr = (ElfW(Phdr) *)at_phdr;
 	int ephnum = (int)at_phnum;
 	unsigned long ebias = exec_bias(ephdr, ephnum, at_phdr);
+	IMGACT_STEP("load bias computed");
 
 	ElfW(Dyn) *edyn = 0;
 	for (int i = 0; i < ephnum; i++)
@@ -4061,6 +4087,7 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 			imgact_vms_standard_activate(ebias, at_execfn);
 		/* Opt-in executive-boundary AUDIT tracer, armed last (vms-617). */
 		imgact_maybe_boundary_audit(envp, at_execfn);
+		IMGACT_STEP("transferring to the image");
 		return at_entry;   /* OVMX-SysV / legacy: unchanged tail-jump */
 	}
 

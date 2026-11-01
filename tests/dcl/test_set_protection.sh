@@ -11,11 +11,11 @@
 # VMS-side protection read ever saw (vms-1fb7, AGENTS.md "one runtime").
 #
 # EXPECT: contains:%SYSTEM-W-NOSUCHDEV, no such device available
-# EXPECT: contains:$STATUS = "%X00000908"
+# EXPECT: contains:$STATUS == "%X00000908"
 # EXPECT: contains:REALMODE_ALPHA=600
 # EXPECT: contains:REALMODE_BETA=640
 # EXPECT_NOT: contains:%RMS-E-PRV
-# EXPECT_NOT: contains:$STATUS = "%X00000001"
+# EXPECT_NOT: contains:$STATUS == "%X00000001"
 #
 # A protection code naming an unknown category is CLI$_IVKEYW, naming it
 # (VAX1, tests/lab/captures/set-protection-20261021/: SET PROTECTION=(Q:R) ->
@@ -24,7 +24,7 @@
 # shows here without an executive.
 # EXPECT: contains:%DCL-W-IVKEYW, unrecognized keyword - check validity and spelling
 # EXPECT: contains: \Q\
-# EXPECT: contains:$STATUS = "%X00038060"
+# EXPECT: contains:$STATUS == "%X00038060"
 # EXPECT_NOT: contains:BADPROT
 VMSDCL="${VMSDCL:-vmsdcl}"
 TDIR=$(mktemp -d)

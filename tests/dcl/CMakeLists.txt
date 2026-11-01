@@ -65,6 +65,29 @@ set_tests_properties(dcl-parse-at-param PROPERTIES
     LABELS "dcl;parser;unit"
 )
 
+# A comma inside '[...]' is part of the word, so a UIC is one DCL value
+# (rd vms-1fb7): SET FILE/OWNER_UIC=[144,144], SET UIC [1,4]. Hermetic, the
+# same shape as test_parse_at_param.
+add_executable(test_parse_uic_bracket
+    test_parse_uic_bracket.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_parser.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_lexer.c
+    ${CMAKE_SOURCE_DIR}/src/libvms/rtl/str_util.c
+)
+target_include_directories(test_parse_uic_bracket PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    ${VMS_INCLUDE_DIR}
+)
+target_compile_definitions(test_parse_uic_bracket PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+add_test(NAME dcl-parse-uic-bracket COMMAND test_parse_uic_bracket)
+set_tests_properties(dcl-parse-uic-bracket PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;parser;unit"
+)
+
 # DCL parameters under the file-name parse style (rd vms-0b0): a '^' escape is
 # part of a filespec under PARSE_STYLE=EXTENDED and refused (PARMDEL) under
 # TRADITIONAL, as lab-Alpha V8.4 does (tests/lab/captures/ods5-alpha-20261022).

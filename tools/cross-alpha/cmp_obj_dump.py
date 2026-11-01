@@ -11,6 +11,8 @@ import os, re, sys
 BEGIN = os.environ.get("CMP_BEGIN", "AS-PROOF: === INDEPENDENT READER: DCL DUMP HELLO.OBJ ===")
 END = os.environ.get("CMP_END", "AS-PROOF: DUMP-STATUS=")
 
+STAMP = re.compile(rb"[ \d]\d-[A-Za-z]{3}-\d{4} \d\d:\d\d")
+
 def dumped(log):
     out, on = bytearray(), False
     for line in open(log, "rb").read().decode("latin-1").splitlines():
@@ -37,7 +39,10 @@ def main():
     # "18-Oct-2026 08:02" from ctime(), the VMS branch (SYS$ASCTIM, which a VMS
     # host runs) "18-OCT-2006 08:08" in upper case, from the guest's own clock. Any
     # DD-MMM-YYYY HH:MM string in either object is a time stamp and is not compared.
-    stamp = re.compile(rb"\d\d-[A-Za-z]{3}-\d{4} \d\d:\d\d")
+    # Both spellings pad a one-digit day with a SPACE (" 1-Nov-2026", " 1-NOV-2006"),
+    # so the day is [ \d]\d: with \d\d every self-host leg went red on the 1st-9th
+    # of each month (CI / Alpha nightly, 2026-11-01).
+    stamp = STAMP
     stamps = 0
     for blob in (a, got):
         for m in stamp.finditer(blob):
@@ -75,4 +80,5 @@ def main():
     print(f"  identical outside {len(volatile)} time-stamp bytes ({stamps} date strings, plus what two reference runs vary)")
     return 0
 
-sys.exit(main())
+if __name__ == "__main__":
+    sys.exit(main())

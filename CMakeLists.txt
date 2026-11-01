@@ -756,6 +756,14 @@ if(BUILD_TESTS)
     set_tests_properties(ci_tiers_gate PROPERTIES
         LABELS "integration;release" TIMEOUT 120)
 
+    # The Alpha self-host legs' object comparator masks the EMH time stamp in
+    # both spellings on every day of the month (a one-digit day reddened them).
+    add_test(NAME cmp_obj_dump_stamp_gate
+        COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_cmp_obj_dump.py
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(cmp_obj_dump_stamp_gate PROPERTIES
+        LABELS "integration" TIMEOUT 60)
+
     # Negative controls for the above -- proves the checker actually goes red
     # on an oversized workflow file and respects the threshold boundary,
     # rather than reporting OK no matter what it is handed.

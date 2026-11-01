@@ -263,7 +263,7 @@ def selftest(repo):
     # that obeys the real rule in two cells the older fifteen broke --
     # body[4:8] opens NO transaction and body[30] is 0. Both are called out
     # where they are pinned below.
-    check('real releases in the corpus', len(real), 41788)        # was 9,858
+    check('real releases in the corpus', len(real), 41837)        # was 9,858
     check('OVMX releases in the corpus', len(ovmx), 16)           # was 11
 
     # 1. THE ENVELOPE. A release is a NOTIFICATION: no real sender opens a
@@ -311,13 +311,13 @@ def selftest(repo):
     # 5. The spans a real sender leaves as its own stale buffer, counted so a
     #    `const:0` row for them is a measured choice and not an assumption.
     check('real releases with an all-zero body[16:20]',
-          sum(1 for b in real if b[16:20] == b'\0' * 4), 23882)   # was 5,700
+          sum(1 for b in real if b[16:20] == b'\0' * 4), 23899)   # was 5,700
     check('real releases with an all-zero body[36:44]',
           sum(1 for b in real if b[36:44] == b'\0' * 8), 1458)    # was 354
     check('real releases with ffffffff at body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22815)  # was 5,117
+          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22839)  # was 5,117
     check('real releases with an all-zero body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\0' * 4), 16474)    # was 4,095
+          sum(1 for b in real if b[124:128] == b'\0' * 4), 16488)    # was 4,095
 
     # 6. THE DRIVEN ARM (rd vms-194 (a)), read back off its committed capture.
     #    Nine arms, one release each, one variable per arm: the held mode over

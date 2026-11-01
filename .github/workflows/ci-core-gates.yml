@@ -369,6 +369,9 @@ jobs:
       - name: Run image_parity.py self-tests (prove the gate has teeth)
         run: python3 -m pytest tests/tools/test_image_parity_gate.py -v
 
+      - name: Run cmp_obj_dump.py self-tests (the Alpha self-host gates' DUMP comparator masks only time stamps, any day)
+        run: python3 -m pytest tests/tools/test_cmp_obj_dump.py -v
+
       - name: Run the live cross-arch image-parity gate
         run: python3 tools/parity/image_parity.py
   # -----------------------------------------------------------------------

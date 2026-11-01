@@ -214,13 +214,54 @@ static uint32_t normalize_devnam(const char *in, char *out, size_t outsz)
     return SS__NORMAL;
 }
 
-/* Caller holds vms_device_list_lock. */
+/*
+ * devtab_full_name - a unit's DVI$_FULLDEVNAM without its underscore (rd vms-1f7):
+ * the physical name prefixed by the allocation class or this node's SCSNODE as
+ * vms_devtab_fullnam.h composes it. Before SYSGEN_LOAD it is the physical name.
+ */
+static void devtab_full_name(const char *devnam, uint32_t devclass,
+                             uint32_t devchar2, char *out, size_t outsz)
+{
+    const struct vms_cluster *cl = vms_cluster_node();
+    const int loaded = cl->params_valid != 0u;
+
+    if (vms_devtab_full_name(devnam, devclass, devchar2,
+                             loaded ? (const char *)cl->params.scsnode : NULL,
+                             loaded ? cl->params.scsnode_len : 0u,
+                             loaded ? cl->params.alloclass : 0u,
+                             out, (unsigned int)outsz) < 0)
+        strscpy(out, devnam, outsz);
+}
+
+/*
+ * Caller holds vms_device_list_lock. `devnam` is normalize_devnam()'s form.
+ *
+ * A unit is found by its physical name, or by its FULL name: VMS accepts
+ * "VAX1$OPA0:" / "_$2$DUA0:" wherever it accepts "OPA0:" -- F$DEVICE hands
+ * back the full name and F$GETDVI must take it (rd vms-256; tests/lab/captures/
+ * fulldevnam-standalone-20261101/, where every F$GETDVI(D,...) in the device
+ * walk was given the _VAX1$... name F$DEVICE returned). Only THIS node's
+ * prefix matches: another node's "VAX2$OPA0:" is not a unit here.
+ */
 static struct vms_device *devtab_lookup_locked(const char *devnam)
 {
     struct vms_device *dev;
+    const char *p;
 
     exec_list_for_each_entry(dev, &vms_device_list, list) {
         if (strcmp(dev->devnam, devnam) == 0)
+            return dev;
+    }
+    for (p = devnam; *p && *p != '$'; p++)
+        ;
+    if (*p != '$')
+        return NULL;
+    exec_list_for_each_entry(dev, &vms_device_list, list) {
+        char full[VMS_FULLDEVNAM_SIZE];
+
+        devtab_full_name(dev->devnam, dev->devclass, dev->devchar2,
+                         full, sizeof(full));
+        if (strcmp(full, devnam) == 0)
             return dev;
     }
     return NULL;
@@ -2534,17 +2575,8 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
      * vms_devtab_fullnam.h. Before SYSGEN_LOAD there is no node name to
      * prefix and the full name is the physical name; nothing is invented.
      */
-    {
-        const struct vms_cluster *cl = vms_cluster_node();
-        const int loaded = cl->params_valid != 0u;
-
-        if (vms_devtab_full_name(info->devnam, info->devclass, dev->devchar2,
-                                 loaded ? (const char *)cl->params.scsnode : NULL,
-                                 loaded ? cl->params.scsnode_len : 0u,
-                                 loaded ? cl->params.alloclass : 0u,
-                                 info->fulldevnam, sizeof(info->fulldevnam)) < 0)
-            strscpy(info->fulldevnam, info->devnam, sizeof(info->fulldevnam));
-    }
+    devtab_full_name(info->devnam, info->devclass, dev->devchar2,
+                     info->fulldevnam, sizeof(info->fulldevnam));
 }
 
 long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg)

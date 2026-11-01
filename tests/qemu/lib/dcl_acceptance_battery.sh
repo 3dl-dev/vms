@@ -663,6 +663,29 @@ run_dcl_acceptance_battery() {
     must_have     "$SEG" 'GETDVICLS=1' "F\$GETDVI DEVCLASS [vms-050]: $SYSDEV is DC\$_DISK (1) from the executive, not a name-substring guess"
     negctl        "$SEG" 'GETDVICLS' "F\$GETDVI DEVCLASS"
 
+    # --- device NAMES: physical vs full, as VAX V7.3 prints them (rd vms-1f7/256)
+    # tests/lab/captures/fulldevnam-standalone-20261101/ (a VAXCLUSTER 0 node):
+    # F$GETDVI("OPA0:","DEVNAM") = _OPA0:, FULLDEVNAM = _VAX1$OPA0:, NLA0:'s
+    # FULLDEVNAM = _NLA0: (no DEV$M_NNM), F$DEVICE returns the full name and
+    # F$GETDVI accepts it back. The node is THIS node's SCSNODE, compared in
+    # DCL so no literal node name is assumed; a blank SCSNODE reds below.
+    run_cmd 'FDN_N = F$EDIT(F$GETSYI("SCSNODE"),"TRIM")'
+    run_cmd 'WRITE SYS$OUTPUT "[FDNODE:" + FDN_N + "]"'
+    must_not_have "$SEG" '[FDNODE:]' "device names [vms-1f7]: the executive answers a non-blank SCSNODE to prefix with"
+    run_cmd 'WRITE SYS$OUTPUT "[FDN:" + F$GETDVI("OPA0:","DEVNAM") + "]"'
+    must_have     "$SEG" '[FDN:_OPA0:]' "F\$GETDVI DEVNAM [vms-256]: the physical name with VMS's underscore, _OPA0:"
+    run_cmd 'IF F$GETDVI("OPA0:","FULLDEVNAM") .EQS. "_" + FDN_N + "$OPA0:" THEN WRITE SYS$OUTPUT "[FDFULL:" + "OK]"'
+    must_have     "$SEG" '[FDFULL:OK]' "F\$GETDVI FULLDEVNAM [vms-1f7]: _<SCSNODE>\$OPA0:, node-prefixed by DEV\$M_NNM"
+    run_cmd 'WRITE SYS$OUTPUT "[FDNL:" + F$GETDVI("NLA0:","FULLDEVNAM") + "]"'
+    must_have     "$SEG" '[FDNL:_NLA0:]' "F\$GETDVI FULLDEVNAM [vms-1f7]: NLA0: carries no node prefix (DEV\$M_NNM clear)"
+    run_cmd 'FDN_D = F$DEVICE("OPA*")'
+    run_cmd 'IF FDN_D .EQS. "_" + FDN_N + "$OPA0:" THEN WRITE SYS$OUTPUT "[FDDEV:" + "OK]"'
+    must_have     "$SEG" '[FDDEV:OK]' "F\$DEVICE [vms-256]: returns the full name _<SCSNODE>\$OPA0:"
+    run_cmd 'WRITE SYS$OUTPUT "[FDRT:" + F$GETDVI(FDN_D,"DEVNAM") + "]"'
+    must_have     "$SEG" '[FDRT:_OPA0:]' "F\$GETDVI [vms-256]: accepts the full name F\$DEVICE returned"
+    run_cmd 'WRITE SYS$OUTPUT "[FDEND:" + F$DEVICE("OPA*") + "]"'
+    must_have     "$SEG" '[FDEND:]' "F\$DEVICE [vms-256]: the walk ends with an empty name (a loop over it terminates)"
+
     # --- F$GETQUI honours the caller's queue selection (vms-050) ------------
     # NOTE: this battery runs under `set -u`, so every literal F$GETQUI inside a
     # DOUBLE-quoted ok/bad description string is written F\$GETQUI -- an

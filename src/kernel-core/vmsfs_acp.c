@@ -636,6 +636,21 @@ static int acp_fault_take(uint32_t major, uint32_t minor)
     exec_unlock(&acp_fault_lock);
     return fire;
 }
+
+/* True while faults are armed for (major,minor): a multi-block run then goes
+ * block by block through acp_bdev_read, so every injected fault lands on the
+ * one-block op it was armed for, as before runs existed. */
+static int acp_fault_armed(uint32_t major, uint32_t minor)
+{
+    int armed = 0;
+
+    if (!acp_fault_lock_ready)
+        return 0;
+    exec_lock(&acp_fault_lock);
+    armed = acp_fault_count && acp_fault_major == major && acp_fault_minor == minor;
+    exec_unlock(&acp_fault_lock);
+    return armed;
+}
 #endif /* OVMX_KTEST_FAULT_INJECT */
 
 /*
@@ -706,20 +721,24 @@ static int acp_bdev_read(uint32_t major, uint32_t minor, uint64_t lbn,
 }
 
 /* A run of `nblk` consecutive LBNs in one transfer (rd vms-465). Nonzero when
- * the run cannot be read this way -- a served (MSCP) unit, the fault-injection
- * test build, a failed transfer: the caller then reads block by block through
- * acp_bdev_read, which charges any genuine error to the unit. */
+ * the run cannot be read this way -- a served (MSCP) unit, a test build with a
+ * fault armed on the unit, a failed transfer: the caller then reads block by
+ * block through acp_bdev_read, which charges any genuine error to the unit.
+ *
+ * rd vms-943: the test build (OVMX_KTEST_FAULT_INJECT, which the QEMU suites
+ * and the Alpha self-host rail load) used to refuse every run here, so on
+ * those kernels an image activation still read its tens of MB one 512-byte
+ * bio at a time. It now refuses only while a fault is armed for the unit. */
 static int acp_bdev_read_run(uint32_t major, uint32_t minor, uint64_t lbn,
                              uint32_t nblk, void *buf)
 {
 #if defined(OVMX_KTEST_FAULT_INJECT)
-    (void)major; (void)minor; (void)lbn; (void)nblk; (void)buf;
-    return -1;
-#else
+    if (acp_fault_armed(major, minor))
+        return -1;
+#endif
     if (major == VMS_DEVTAB_SERVED_MAJOR)
         return -1;
     return exec_blockdev_read_run(major, minor, lbn, nblk, buf);
-#endif
 }
 
 static int acp_bdev_write(uint32_t major, uint32_t minor, uint64_t lbn,

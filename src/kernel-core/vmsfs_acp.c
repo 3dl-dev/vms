@@ -567,6 +567,23 @@ static int acp_bdev_read(uint32_t major, uint32_t minor, uint64_t lbn,
     return rc;
 }
 
+/* A run of `nblk` consecutive LBNs in one transfer (rd vms-465). Nonzero when
+ * the run cannot be read this way -- a served (MSCP) unit, the fault-injection
+ * test build, a failed transfer: the caller then reads block by block through
+ * acp_bdev_read, which charges any genuine error to the unit. */
+static int acp_bdev_read_run(uint32_t major, uint32_t minor, uint64_t lbn,
+                             uint32_t nblk, void *buf)
+{
+#if defined(OVMX_KTEST_FAULT_INJECT)
+    (void)major; (void)minor; (void)lbn; (void)nblk; (void)buf;
+    return -1;
+#else
+    if (major == VMS_DEVTAB_SERVED_MAJOR)
+        return -1;
+    return exec_blockdev_read_run(major, minor, lbn, nblk, buf);
+#endif
+}
+
 static int acp_bdev_write(uint32_t major, uint32_t minor, uint64_t lbn,
                           const void *buf, size_t buflen)
 {
@@ -1405,7 +1422,25 @@ struct acp_dirfind {
     int         matched;
     uint16_t    best_ver;
     ods2_fid_t  best_fid;
+    int         ods5;       /* the directory is in ODS-5 (case-blind) order */
 };
+
+/* Directory order of a stored 8-bit name against the C-string name sought, on
+ * an ODS-5 volume: the case-blind code-point order the writer keeps records in
+ * (ods5_name_cmp, RESULTS.md R7). <0 / 0 / >0. */
+static int acp_name_cmp_ci(const char *name, unsigned name_len, const char *want)
+{
+    unsigned i;
+    for (i = 0; i < name_len; i++) {
+        unsigned a = ods5_fold((unsigned char)name[i]), b;
+        if (want[i] == '\0')
+            return 1;                   /* the stored name is longer */
+        b = ods5_fold((unsigned char)want[i]);
+        if (a != b)
+            return a < b ? -1 : 1;
+    }
+    return want[name_len] == '\0' ? 0 : -1;
+}
 
 /* ods2_dir_cb: one call per {name, version, fid} in a directory data block. */
 static int acp_dirfind_scan_cb(const char *name, unsigned name_len,
@@ -1413,8 +1448,14 @@ static int acp_dirfind_scan_cb(const char *name, unsigned name_len,
 {
     struct acp_dirfind *c = (struct acp_dirfind *)ctx;
 
-    if (!acp_name_eq_ci(name, name_len, c->want))
+    if (!acp_name_eq_ci(name, name_len, c->want)) {
+        /* An ODS-5 directory is in name order: past the place the name would
+         * sort, it is not there (and every version of a name it holds is
+         * behind us) -- stop, as the XQP does, instead of reading the rest. */
+        if (c->ods5 && acp_name_cmp_ci(name, name_len, c->want) > 0)
+            return 1;
         return 0;                       /* keep scanning */
+    }
     if (c->want_ver != 0) {
         if (version == c->want_ver) {
             c->matched = 1;
@@ -1475,6 +1516,7 @@ static uint32_t acp_dir_find(struct vms_acp_volume *vol, const uint8_t *dirhdr,
 
     find.want = name;
     find.want_ver = want_ver;
+    find.ods5 = (acp_vol_dirflags(vol) & ODS2_DIRF_ODS5) != 0;
     find.matched = 0;
     find.best_ver = 0;
     memset(&find.best_fid, 0, sizeof(find.best_fid));
@@ -2592,6 +2634,7 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
     struct acp_chan_snap *snap;
     uint8_t *blk;
     uint32_t status, valid, start_byte, avail, want, done_bytes;
+    uint8_t *run_buf = NULL;
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -2629,6 +2672,11 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
     want = args.length < avail ? args.length : avail;   /* clamp at EOF */
 
     done_bytes = 0;
+    /* rd vms-465: a stretch of the file whose blocks are physically
+     * consecutive is read as one transfer (EXEC_BLOCKDEV_RUN_MAX blocks at a
+     * time) -- a disk driver's multi-block request -- not a bio per block. */
+    run_buf = (want > ACP_BLOCK_SIZE)
+              ? exec_zalloc((size_t)EXEC_BLOCKDEV_RUN_MAX * ACP_BLOCK_SIZE) : NULL;
     while (done_bytes < want) {
         uint32_t pos = start_byte + done_bytes;
         uint32_t cur_vbn = pos / ACP_BLOCK_SIZE + 1u;
@@ -2643,13 +2691,38 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
                                              * has a hole: honest corruption */
             args.status = SS__DEVNOTMOUNT;
             args.xferred = done_bytes;
+            if (run_buf) exec_free(run_buf);
             exec_free(snap);
             goto out;
+        }
+        if (run_buf) {
+            uint32_t need = (blk_off + (want - done_bytes) + ACP_BLOCK_SIZE - 1u) / ACP_BLOCK_SIZE;
+            uint32_t run = 1;
+            while (run < need && run < EXEC_BLOCKDEV_RUN_MAX &&
+                   acp_window_map_vbn(snap->win, snap->win_n, cur_vbn + run) == lbn + run)
+                run++;
+            if (run > 1 && acp_bdev_read_run(snap->backing_major, snap->backing_minor,
+                                             lbn, run, run_buf) == 0) {
+                uint32_t span = run * ACP_BLOCK_SIZE - blk_off;
+                if (span > want - done_bytes)
+                    span = want - done_bytes;
+                if (exec_copyout((void *)(uintptr_t)(args.buffer + done_bytes),
+                                 run_buf + blk_off, span)) {
+                    args.status = SS__ACCVIO;
+                    args.xferred = done_bytes;
+                    exec_free(run_buf);
+                    exec_free(snap);
+                    goto out;
+                }
+                done_bytes += span;
+                continue;
+            }
         }
         if (acp_bdev_read(snap->backing_major, snap->backing_minor,
                                      lbn, blk, ACP_BLOCK_SIZE) != 0) {
             args.status = SS__DEVNOTMOUNT;
             args.xferred = done_bytes;
+            if (run_buf) exec_free(run_buf);
             exec_free(snap);
             goto out;
         }
@@ -2657,6 +2730,7 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
                          blk + blk_off, chunk)) {
             args.status = SS__ACCVIO;
             args.xferred = done_bytes;
+            if (run_buf) exec_free(run_buf);
             exec_free(snap);
             goto out;
         }
@@ -2667,6 +2741,7 @@ long vms_ioctl_acp_readvb(struct vms_proc *proc, unsigned long arg)
     args.new_hiblk = acp_win_hiblk(snap->win, snap->win_n);
     args.new_efblk = snap->efblk;
     args.status = SS__NORMAL;
+    if (run_buf) exec_free(run_buf);
     exec_free(snap);
     VMS_IO_COUNT(&proc->io_direct, 1u);   /* JPI$_DIRIO (rd vms-bd71) */
 
@@ -2721,15 +2796,35 @@ static uint32_t acp_fh2_self_fidnum(const uint8_t *hdr)
  * writer is acceptable for now and stated rather than faked (CLAUDE.md Rule 10):
  * no in-kernel flock stand-in is built; the DLM lock supersedes this.
  */
+static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
+                                    struct acp_rw_scratch *s,
+                                    uint32_t need, uint32_t hint, uint32_t *lbn_out);
+
 static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
                                  struct acp_rw_scratch *s,
                                  uint32_t need, uint32_t *lbn_out)
+{
+    return acp_bitmap_alloc_at(snap, s, need, 0, lbn_out);
+}
+
+/*
+ * acp_bitmap_alloc_at - a run of `need` free blocks from BITMAP.SYS, searched
+ * from LBN `hint` first (rd vms-465): an extension asks for the blocks right
+ * after the file's last extent, so a growing file stays one extent when they
+ * are free -- the XQP's contiguous-best-try -- and the search reads the one
+ * bitmap block it starts in instead of every block from LBN 1 up to the free
+ * space. When nothing is free from the hint on, the search wraps to LBN 1 and
+ * runs up to the hint (first fit). hint 0 is a plain first-fit search.
+ */
+static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
+                                    struct acp_rw_scratch *s,
+                                    uint32_t need, uint32_t hint, uint32_t *lbn_out)
 {
     struct acp_winbuild wb;
     struct acp_win_ext  bmwin[ACP_WINDOW_MAX];
     uint32_t bmhdr_lbn;
     uint32_t b, run_start = 0, run_len = 0, cur_bmvbn = 0;
-    uint32_t i;
+    uint32_t i, pass, lo, hi;
     int loaded = 0, found = 0;
 
     if (need == 0)
@@ -2750,41 +2845,77 @@ static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
         wb.n == 0)
         return SS__DEVNOTMOUNT;
 
-    /* Scan for a run of `need` consecutive free blocks. Bit 0 (LBN 0, the boot
-     * block) is never a data block; the reserved region is already marked used
-     * in the bitmap, so the scan simply skips it. */
-    for (b = 1; b < snap->volsize; b++) {
-        uint32_t bmvbn = 2u + b / ODS2_SBM_BITS_PER_BLOCK;
-        uint32_t lbn;
+    if (hint < 1 || hint >= snap->volsize)
+        hint = 1;
+    /* Scan for a run of `need` consecutive free blocks: [hint, volsize), then
+     * [1, hint + need) (a run may not wrap). Bit 0 (LBN 0, the boot block) is
+     * never a data block; the reserved region is already marked used in the
+     * bitmap, so the scan simply skips it. */
+    for (pass = 0; pass < 2 && !found; pass++) {
+        lo = pass == 0 ? hint : 1u;
+        hi = pass == 0 ? snap->volsize
+                       : (hint + need < snap->volsize ? hint + need : snap->volsize);
+        if (pass == 1 && hint == 1)
+            break;                          /* the first pass covered it all */
+        run_len = 0;
+        for (b = lo; b < hi; b++) {
+            uint32_t bmvbn = 2u + b / ODS2_SBM_BITS_PER_BLOCK;
+            uint32_t lbn;
 
-        if (!loaded || bmvbn != cur_bmvbn) {
-            lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
-            if (lbn == 0)
-                break;                      /* past the bitmap's coverage */
-            if (acp_bdev_read(snap->backing_major, snap->backing_minor,
-                                         lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
-                return SS__DEVNOTMOUNT;
-            cur_bmvbn = bmvbn;
-            loaded = 1;
-        }
-        if (ods2_sbm_block_bit_free(s->bmblk, b % ODS2_SBM_BITS_PER_BLOCK)) {
-            if (run_len == 0)
-                run_start = b;
-            run_len++;
-            if (run_len == need) {
-                found = 1;
-                break;
+            if (!loaded || bmvbn != cur_bmvbn) {
+                lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
+                if (lbn == 0)
+                    break;                  /* past the bitmap's coverage */
+                if (acp_bdev_read(snap->backing_major, snap->backing_minor,
+                                             lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
+                    return SS__DEVNOTMOUNT;
+                cur_bmvbn = bmvbn;
+                loaded = 1;
             }
-        } else {
-            run_len = 0;
+            /* A whole longword of the bitmap at once where it can be: 32
+             * allocated blocks are skipped, 32 free ones join the run
+             * (rd vms-465: the search crossed a million bits one call each). */
+            if ((b % 32u) == 0 && b + 32u <= hi) {
+                uint32_t wi = (b % ODS2_SBM_BITS_PER_BLOCK) / 32u;
+                const uint8_t *wp = s->bmblk + (size_t)wi * 4u;
+                uint32_t w = (uint32_t)wp[0] | ((uint32_t)wp[1] << 8) |
+                             ((uint32_t)wp[2] << 16) | ((uint32_t)wp[3] << 24);
+                if (w == 0u) {
+                    run_len = 0;
+                    b += 31u;
+                    continue;
+                }
+                if (w == 0xFFFFFFFFu && need - run_len >= 32u) {
+                    if (run_len == 0)
+                        run_start = b;
+                    run_len += 32u;
+                    b += 31u;
+                    if (run_len == need) {
+                        found = 1;
+                        break;
+                    }
+                    continue;
+                }
+            }
+            if (ods2_sbm_block_bit_free(s->bmblk, b % ODS2_SBM_BITS_PER_BLOCK)) {
+                if (run_len == 0)
+                    run_start = b;
+                run_len++;
+                if (run_len == need) {
+                    found = 1;
+                    break;
+                }
+            } else {
+                run_len = 0;
+            }
         }
     }
     if (!found)
         return SS__DEVICEFULL;              /* no contiguous free run -- honest */
 
-    /* Mark the run allocated (bit -> 0), one bitmap block RMW per bit (need is
-     * small); roll back on a write failure so no block leaks. */
-    for (i = 0; i < need; i++) {
+    /* Mark the run allocated (bit -> 0): one read-modify-write per bitmap
+     * block the run touches. */
+    for (i = 0; i < need; ) {
         uint32_t bit = run_start + i;
         uint32_t bmvbn = 2u + bit / ODS2_SBM_BITS_PER_BLOCK;
         uint32_t lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
@@ -2794,7 +2925,10 @@ static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
                                      lbn, s->bmblk, ACP_BLOCK_SIZE) != 0) {
             return SS__DEVNOTMOUNT;
         }
-        ods2_sbm_block_alloc(s->bmblk, bit % ODS2_SBM_BITS_PER_BLOCK);
+        do {
+            ods2_sbm_block_alloc(s->bmblk, (run_start + i) % ODS2_SBM_BITS_PER_BLOCK);
+            i++;
+        } while (i < need && 2u + (run_start + i) / ODS2_SBM_BITS_PER_BLOCK == bmvbn);
         if (acp_bdev_write(snap->backing_major, snap->backing_minor,
                                       lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
             return SS__DEVNOTMOUNT;
@@ -2912,8 +3046,10 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
 #if defined(OVMX_ODS2_KERNEL)
         uint32_t need = last_vbn - old_hiblk;
         uint32_t alloc_lbn = 0;
+        /* contiguous-best-try: the blocks right after the file's last extent */
+        uint32_t hint = lwin_n ? lwin[lwin_n - 1u].lbn + lwin[lwin_n - 1u].count : 0u;
 
-        status = acp_bitmap_alloc(snap, s, need, &alloc_lbn);
+        status = acp_bitmap_alloc_at(snap, s, need, hint, &alloc_lbn);
         if (status != SS__NORMAL) {
             args.status = status;           /* SS$_DEVICEFULL / SS$_DEVNOTMOUNT */
             exec_free(s);

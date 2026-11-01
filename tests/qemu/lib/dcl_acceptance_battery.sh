@@ -1082,6 +1082,7 @@ run_dcl_acceptance_battery() {
     golden_diff_report vax-show-memory  HOLLOW  vms-352   # missing Dynamic Memory + Paging File sections (OVMX has pool+pagefile)
     golden_diff_report vax-show-system  HOLLOW  vms-6b8e  # SHOW SYSTEM omits the State/Pri/I/O columns
     golden_diff_report vax-show-device  MISSING vms-ddc   # %SYSTEM-W-NOSUCHDEV (device-name model, ties vms-9f5)
+    golden_diff_report vax-show-users   HOLLOW  vms-6a1   # SHOW USERS + /FULL: banner product word, month and node masked (INV-0)
 
     # =======================================================================
     # DECnet CTERM (vms-f40) -- an inbound $ SET HOST reaches an AUTHENTICATED

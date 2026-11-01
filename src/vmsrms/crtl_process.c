@@ -180,10 +180,13 @@ struct crtl_exh {
 static struct crtl_exh crtl_exh_blk;
 static unsigned int crtl_exh_status;
 
+extern void ovmx_crtl_fd_flush_all(void);                    /* crtl_rms_fd.c */
+
 static void crtl_exit_handler(unsigned int *status)
 {
     (void)status;
     __ovmx_crtl_rundown();
+    ovmx_crtl_fd_flush_all();   /* stdio's last bytes reach the volume (RMS rundown) */
 }
 
 /* Called once per image, from decc$main (crtl_rms_fd.c, ovmx_crtl_fd_main). */

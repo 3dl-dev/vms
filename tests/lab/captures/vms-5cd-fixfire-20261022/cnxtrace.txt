@@ -1,0 +1,26 @@
+rd vms-5cd fire d5cd1: the DLM diagnostic row on OVMXE.
+Read TWICE through RUN SYS$SYSTEM:CNXTRACE (VMS_IOCTL_CLUSTER_DIAG_DLM, 0xC0E4566E):
+  (a) after arm 1 step 8 (the local release), 04:23Z
+  (b) at the end of both arms, 04:28Z
+Both blocks below, in order, copied out of console-ovmxe.log.
+
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=1 lockdirwt=0 gen=3 proxy_lkbs=1
+%CNXTRACE-I-DLMREQ, requests sent=6 received=3 grants sent=0 received=1 declined=1
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=2 answered=2 unanswerable=0 unparsed=0 foreign=1
+%CNXTRACE-I-DLMRECV, releases received=1 refused=0  blkasts unparsed=0  deferred grants sent=0 owed=1  local advances=1 stale=0
+%CNXTRACE-I-DLMRM, trees opened=1 refused=0  records adopted=0 refused=0  ends=1
+%CNXTRACE-I-DLMRMHELD, trees held=0  op-0x14 sent=0 unsent=0  completions unreported=0  other-master notices=0
+%CNXTRACE-I-DLMOWED, owed grants by door: keep_refused=0 table_overflow=0 no_body=0 send_failed=1
+%CNXTRACE-I-DLMHOLDOWN, grants withheld by a proxy lock of ours=2
+%CNXTRACE-I-DLMPOST, posts queued=12 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=11 refused=0 frames_rx=14 replies_sent=5 declined=1
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=1 lockdirwt=0 gen=3 proxy_lkbs=1
+%CNXTRACE-I-DLMREQ, requests sent=8 received=4 grants sent=0 received=2 declined=2
+%CNXTRACE-I-DLMEMIT, releases sent=1 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=2 answered=2 unanswerable=0 unparsed=0 foreign=2
+%CNXTRACE-I-DLMRECV, releases received=2 refused=0  blkasts unparsed=0  deferred grants sent=0 owed=1  local advances=1 stale=0
+%CNXTRACE-I-DLMRM, trees opened=1 refused=0  records adopted=0 refused=0  ends=1
+%CNXTRACE-I-DLMRMHELD, trees held=0  op-0x14 sent=0 unsent=0  completions unreported=0  other-master notices=0
+%CNXTRACE-I-DLMOWED, owed grants by door: keep_refused=0 table_overflow=0 no_body=0 send_failed=1
+%CNXTRACE-I-DLMHOLDOWN, grants withheld by a proxy lock of ours=2
+%CNXTRACE-I-DLMPOST, posts queued=14 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=14 refused=0 frames_rx=18 replies_sent=5 declined=2

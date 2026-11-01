@@ -303,15 +303,15 @@ def _checker():
 def _selftest_shapes(sh, check):
     """The populations rd vms-f4c0 quotes, and OVMX's wrong one beside them."""
     real_s = sh[('REAL', 's', SUB_LEN)]
-    check('real F11B$s is 10 bytes, a per-file SUB-lock', real_s.frames, 37465)  # +49 with #1582's lab-bed replay (vms-025)
-    check('...distinct names', len(real_s.names), 590)
+    check('real F11B$s is 10 bytes, a per-file SUB-lock', real_s.frames, 38094)  # +49 with #1582's lab-bed replay (vms-025); +629 with #1900's captures
+    check('...distinct names', len(real_s.names), 591)  # +1 with #1900's captures
     check('...every one of them carries a parent pair',
           real_s.with_parent, real_s.frames)
     check('...identity is (group 0, access mode 0 = KERNEL), N of N',
           real_s.ident[(0, 0)], real_s.frames)
     check('...requested at PW on all but the NL registrations',
           (real_s.modes[4], real_s.modes[0], len(real_s.modes)),
-          (37354, 111, 2))
+          (37956, 138, 2))  # #1900's captures: +602 PW, +27 NL
     check('a real node NEVER originates an 18-byte F11B$s',
           [k for k in sh if k[0] == 'REAL' and k[1] == 's' and k[2] != SUB_LEN],
           [])
@@ -319,11 +319,12 @@ def _selftest_shapes(sh, check):
     ovmx_s = sh[('OVMX', 's', ROOT_VOL_LEN)]
     # 39 frames since rd vms-083's captures joined the corpus (#1891: 31 -> 39,
     # the same single name and identity); the real-VAX figures did not move.
-    check('OVMX F11B$s is 18 bytes, a per-VOLUME ROOT', ovmx_s.frames, 39)
+    # 49 since #1900's captures (39 -> 49, the same single name and identity).
+    check('OVMX F11B$s is 18 bytes, a per-VOLUME ROOT', ovmx_s.frames, 49)
     check('...distinct names', len(ovmx_s.names), 1)
     check('...it carries NO parent pair', ovmx_s.with_parent, 0)
     check('...and its identity is the enqueuing process\'s, not (0,0)',
-          ovmx_s.ident.most_common(1), [((1, 3), 39)])
+          ovmx_s.ident.most_common(1), [((1, 3), 49)])
     check('OVMX never originates the real 10-byte shape',
           [k for k in sh if k[0] == 'OVMX' and k[2] == SUB_LEN], [])
 
@@ -348,7 +349,7 @@ def _selftest_parent(paths, check):
           len({parent for _k, parent in resolved}), 4)
     check('no handle in the corpus carried two different names', ambiguous, 0)
     check('unresolved (the volume lock predates the capture)',
-          dict(unresolved), {'s': 11486, 'c': 4})
+          dict(unresolved), {'s': 12115, 'c': 6})  # #1900's captures: +629 s, +2 c
     check('F11B$c hangs under the same per-volume root',
           sorted({parent for kind, parent in resolved if kind == 'c'}),
           [b'F11B$vDATA2       ', b'F11B$vSYSDSK1     ',
@@ -366,13 +367,13 @@ def _selftest_parent(paths, check):
 def _selftest_numbers(paths, check):
     """(a): the 4 bytes, and what the corpus cannot discriminate."""
     subs, roots, labels = file_numbers(paths)
-    check('distinct sub-lock file numbers', len(subs), 590)
+    check('distinct sub-lock file numbers', len(subs), 591)  # +1 with #1900's captures
     check('bytes 2 and 3 of the number are ZERO on every one of them -- so '
           'this corpus CANNOT discriminate the FID nmx extension',
           sum(1 for n in subs if n[2] or n[3]), 0)
     check('the numbers live in the Files-11 file-number range',
           (min(le32(n) for n in subs), max(le32(n) for n in subs)), (1, 6289))
-    check('distinct 22-byte-root file numbers', len(roots), 528)
+    check('distinct 22-byte-root file numbers', len(roots), 529)  # +1 with #1900's captures
     check('...and nearly all of them are also serialized on, which is what '
           'makes the 22-byte root a PER-FILE lock too',
           len(roots & subs), 510)

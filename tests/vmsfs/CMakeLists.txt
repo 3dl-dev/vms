@@ -32,3 +32,12 @@ set_tests_properties(vmsfs_searchlist_open PROPERTIES
     LABELS "unit;vmsfs;lnm"
     TIMEOUT 30
 )
+
+# vms-943: the Files-11 ACP block cache vms.ko runs (src/kernel-core/vms_acp_cache.h)
+# -- a block written underneath reads back new, a read that raced a write is
+# not kept, $MOUNT/$DISMOUNT drop a unit's blocks.
+add_executable(test_acp_cache test_acp_cache.c)
+target_include_directories(test_acp_cache PRIVATE ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_options(test_acp_cache PRIVATE -Werror -Wall)
+add_test(NAME vmsfs_acp_cache COMMAND test_acp_cache)
+set_tests_properties(vmsfs_acp_cache PROPERTIES LABELS "unit;vmsfs" TIMEOUT 30)

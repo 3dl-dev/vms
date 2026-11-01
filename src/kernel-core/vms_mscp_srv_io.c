@@ -32,6 +32,7 @@
 #include "vms_mscp_srv_fsm.h"  /* MSCP_SRV_BLOCK_SIZE, enum mscp_srv_io_op    */
 #include "vms_mscp_srv.h"      /* MSCP_SRV_XFER_BLOCKS -- the slot's ceiling  */
 #include "vms_mscp_srv_io.h"
+#include "vms_acp_serve.h"    /* rd vms-943: the ACP block cache forgets a written block */
 
 /*
  * ONE SET OF OPERATION CODES, TWO SPELLINGS, ASSERTED. The submitter names them
@@ -102,10 +103,14 @@ static uint32_t srvio_write(const struct cf_io *io)
 	uint32_t i;
 
 	for (i = 0; i < io->arg3; i++) {
-		if (exec_blockdev_write_block(io->arg0, io->arg1,
-					      (uint64_t)io->arg2 + (uint64_t)i,
-					      buf + (i * MSCP_SRV_BLOCK_SIZE),
-					      MSCP_SRV_BLOCK_SIZE) != 0)
+		int rc = exec_blockdev_write_block(io->arg0, io->arg1,
+						   (uint64_t)io->arg2 + (uint64_t)i,
+						   buf + (i * MSCP_SRV_BLOCK_SIZE),
+						   MSCP_SRV_BLOCK_SIZE);
+
+		vms_acp_cache_wrote_block(io->arg0, io->arg1,
+					  (uint64_t)io->arg2 + (uint64_t)i);
+		if (rc != 0)
 			return (uint32_t)(i + 1u);
 	}
 	return 0u;

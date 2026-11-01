@@ -42,6 +42,7 @@
 #include "vms_acp_serve.h"   /* FC-P6.3: the MSCP server's read-only view */
 #include "vms_prot.h"        /* vms_prot_check: the executive's one protection decision */
 #include "vms_mscp_cl.h"     /* rd vms-4822: served units' blocks, from the class driver */
+#include "vms_acp_cache.h"   /* rd vms-943: the ACP's header/directory block cache */
 
 /* The served-volume projection restates the unit-name width so it can compile
  * in the host rung too (vms_acp_serve.h's own note). THIS file sees both, so
@@ -226,10 +227,104 @@ struct vms_acp_chan {
 EXEC_LIST_HEAD(vms_acp_vol_list);
 exec_lock_t vms_acp_vol_lock;
 
+/*
+ * rd vms-943: the ACP's block cache (src/kernel-core/vms_acp_cache.h says what
+ * it keeps and the coherence rules). ACP_CACHE_NSET sets of VMS_ACP_CACHE_WAYS
+ * blocks: 8192 blocks, 4 MB, allocated a set at a time at module load. If the
+ * allocation fails the ACP runs uncached -- every read goes to the disk.
+ */
+#define ACP_CACHE_NSET 512u
+static struct vms_acp_cache acp_cache;
+static struct vms_acp_cache_set **acp_cache_sets;
+static exec_lock_t acp_cache_lock;
+static int acp_cache_lock_ready;
+
+static void acp_cache_setup(void)
+{
+    uint32_t i;
+
+    exec_lock_init(&acp_cache_lock);
+    acp_cache_lock_ready = 1;
+    vms_acp_cache_init(&acp_cache, NULL, ACP_CACHE_NSET);
+    acp_cache_sets = exec_zalloc(ACP_CACHE_NSET * sizeof(*acp_cache_sets));
+    if (!acp_cache_sets)
+        return;
+    for (i = 0; i < ACP_CACHE_NSET; i++) {
+        acp_cache_sets[i] = exec_zalloc(sizeof(struct vms_acp_cache_set));
+        if (!acp_cache_sets[i]) {
+            while (i--)
+                exec_free(acp_cache_sets[i]);
+            exec_free(acp_cache_sets);
+            acp_cache_sets = NULL;
+            return;
+        }
+    }
+    vms_acp_cache_init(&acp_cache, acp_cache_sets, ACP_CACHE_NSET);
+}
+
+static void acp_cache_teardown(void)
+{
+    uint32_t i;
+
+    if (!acp_cache_lock_ready)
+        return;
+    exec_lock(&acp_cache_lock);
+    vms_acp_cache_init(&acp_cache, NULL, ACP_CACHE_NSET);
+    exec_unlock(&acp_cache_lock);
+    if (acp_cache_sets) {
+        for (i = 0; i < ACP_CACHE_NSET; i++)
+            exec_free(acp_cache_sets[i]);
+        exec_free(acp_cache_sets);
+        acp_cache_sets = NULL;
+    }
+    acp_cache_lock_ready = 0;
+    exec_lock_destroy(&acp_cache_lock);
+}
+
+/* The cache is used only while this node is in no cluster and is not trying to
+ * join one (VAXCLUSTER=0, or no cluster found): another member could write a
+ * shared disk underneath it. The first time the node is seen anywhere else,
+ * everything cached is dropped. Caller holds acp_cache_lock. */
+static int acp_cache_usable_locked(uint32_t major)
+{
+    const struct vms_cluster *cl = vms_cluster_node();
+
+    if (!acp_cache.set || major == VMS_DEVTAB_SERVED_MAJOR)
+        return 0;
+    if (cl && cl->state != VMS_CLUSTER_OFF && cl->state != VMS_CLUSTER_STANDALONE) {
+        vms_acp_cache_drop_all(&acp_cache);
+        acp_cache.set = NULL;           /* off for the rest of this boot */
+        return 0;
+    }
+    return 1;
+}
+
+/* Every write of a volume block -- the ACP's own, and the MSCP server's on
+ * behalf of a remote node -- after the transfer, successful or not. */
+void vms_acp_cache_wrote_block(uint32_t major, uint32_t minor, uint64_t lbn)
+{
+    if (!acp_cache_lock_ready)
+        return;
+    exec_lock(&acp_cache_lock);
+    vms_acp_cache_wrote(&acp_cache, major, minor, lbn);
+    exec_unlock(&acp_cache_lock);
+}
+
+static void acp_cache_drop_unit(uint32_t major, uint32_t minor)
+{
+    if (!acp_cache_lock_ready)
+        return;
+    exec_lock(&acp_cache_lock);
+    vms_acp_cache_drop_unit(&acp_cache, major, minor);
+    exec_unlock(&acp_cache_lock);
+}
+
 void vms_acp_init(void)
 {
     exec_lock_init(&vms_acp_vol_lock);
-    pr_info("vms: ODS-2 ACP mounted-volume table initialized\n");
+    acp_cache_setup();
+    pr_info("vms: ODS-2 ACP mounted-volume table initialized (block cache %u blocks)\n",
+            acp_cache_sets ? ACP_CACHE_NSET * VMS_ACP_CACHE_WAYS : 0u);
 }
 
 void vms_acp_cleanup(void)
@@ -243,6 +338,7 @@ void vms_acp_cleanup(void)
     }
     exec_unlock(&vms_acp_vol_lock);
     exec_lock_destroy(&vms_acp_vol_lock);
+    acp_cache_teardown();
 }
 
 /*
@@ -576,8 +672,33 @@ static int acp_bdev_read(uint32_t major, uint32_t minor, uint64_t lbn,
 #endif
     if (major == VMS_DEVTAB_SERVED_MAJOR)
         rc = acp_served_io(minor, lbn, buf, buflen, 0);
-    else
+    else {
+        /* rd vms-943: a header or directory block read a moment ago is in
+         * the executive's block cache; fetched from the disk, it is kept
+         * unless a write raced the read (vms_acp_cache.h). */
+        unsigned long long gen = 0;
+        int cacheable = acp_cache_lock_ready && buflen == ACP_BLOCK_SIZE;
+
+        if (cacheable) {
+            exec_lock(&acp_cache_lock);
+            cacheable = acp_cache_usable_locked(major);
+            if (cacheable && vms_acp_cache_lookup(&acp_cache, major, minor, lbn,
+                                                  (unsigned char *)buf)) {
+                exec_unlock(&acp_cache_lock);
+                return 0;
+            }
+            gen = vms_acp_cache_gen(&acp_cache);
+            exec_unlock(&acp_cache_lock);
+        }
         rc = exec_blockdev_read_block(major, minor, lbn, buf, buflen);
+        if (rc == 0 && cacheable) {
+            exec_lock(&acp_cache_lock);
+            if (acp_cache_usable_locked(major))
+                vms_acp_cache_fill(&acp_cache, major, minor, lbn,
+                                   (const unsigned char *)buf, gen);
+            exec_unlock(&acp_cache_lock);
+        }
+    }
 
     if (rc != 0)
         vms_devtab_note_io_error(major, minor);
@@ -613,8 +734,10 @@ static int acp_bdev_write(uint32_t major, uint32_t minor, uint64_t lbn,
 #endif
     if (major == VMS_DEVTAB_SERVED_MAJOR)
         rc = acp_served_io(minor, lbn, (void *)buf, buflen, 1);
-    else
+    else {
         rc = exec_blockdev_write_block(major, minor, lbn, buf, buflen);
+        vms_acp_cache_wrote_block(major, minor, lbn);   /* rd vms-943 */
+    }
 
     if (rc != 0)
         vms_devtab_note_io_error(major, minor);
@@ -830,6 +953,10 @@ long vms_ioctl_acp_mount(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
+    /* rd vms-943: whatever this unit held before (another medium, a volume
+     * since written by something other than this ACP) is not read from cache. */
+    acp_cache_drop_unit(backing_major, backing_minor);
+
     /* Allocate before validating -- exec_zalloc may sleep (as may the reads). */
     vol = exec_zalloc(sizeof(*vol));
     if (!vol)
@@ -952,6 +1079,7 @@ long vms_ioctl_acp_dmount(struct vms_proc *proc, unsigned long arg)
      * the PID-1-mounted system disk, dismount and rundown are both PID 1.
      */
     vms_lock_acp_vol_release(proc, vol->vol_lkid);
+    acp_cache_drop_unit(vol->backing_major, vol->backing_minor);   /* rd vms-943 */
     exec_free(vol);
 
     args.status = SS__NORMAL;

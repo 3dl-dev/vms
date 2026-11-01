@@ -17,9 +17,9 @@
  *   - NFILES interleaved create_file + dir_insert into one directory all succeed;
  *   - the directory header maps exactly ONE extent and keeps FH2$M_CONTIG;
  *   - the reader lists all NFILES entries, each with its own FID;
- *   - the blocks the directory left are free in BITMAP.SYS (no lost blocks):
- *     the extent's blocks are allocated, the next block after it (first data
- *     block of nothing) is consistent with the bump allocator's end.
+ *   - the directory's blocks are allocated in BITMAP.SYS, and the blocks it
+ *     moved off went back and were reused by later files: less than one copy
+ *     of the directory is left free below the high-water mark.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -173,11 +173,17 @@ int main(void)
                 in_use += lbn_free(&vol, bitmap_lbn, ec.e[0].lbn + k) == 0;
             CHECK_EQ(in_use, ec.n == 1 ? ec.e[0].count : 0,
                      "the directory's blocks are allocated in BITMAP.SYS");
-            /* blocks the directory moved off are free again: below the
-             * directory's run some block must have been released */
-            for (k = 0; ec.n == 1 && k < ec.e[0].lbn; k++)
+            /* the blocks the directory moved off went back to BITMAP.SYS and
+             * were handed out again to the files created after the move: what
+             * is still free below the high-water mark is less than one copy of
+             * the directory (the runs the last moves left), not a hole per
+             * move that a later first-fit allocation would scatter a growing
+             * file across */
+            for (k = 1; k < wvol.next_free_lbn; k++)
                 freed += lbn_free(&vol, bitmap_lbn, k) == 1;
-            CHECK(freed > 0, "the directory's old blocks returned to BITMAP.SYS");
+            printf("  free below the high-water mark: %u blocks\n", freed);
+            CHECK(ec.n == 1 && freed < ec.e[0].count,
+                  "the directory's old blocks were reused, no trail of holes");
         }
     }
 

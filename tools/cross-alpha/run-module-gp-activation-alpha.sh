@@ -701,12 +701,16 @@ assert_cc1() {
 # for the same source and arguments, and (d) no activation error or abnormal
 # termination.
 assert_cc1b() {
-  local log="$1" ref="$2" ref2="$3" ntu="$4"
+  # <found-ok>: 1 when the objects were made by the CI shards (rd vms-b85) and
+  # staged on this volume -- then a compile may say FOUND instead of running.
+  local log="$1" ref="$2" ref2="$3" ntu="$4" found_ok="${5:-0}"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   [ -s "$ref" ] && [ -s "$ref2" ] || { echo "  FAIL: no reference assembly"; return 1; }
   local tu_ok tu_bad end_ok=0 link_ok=0 ar_ok=0 c1_ok=0 c2_ok=0 same=0 same2=0 got got2
-  tu_ok=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] " | awk '{print $3}' | sort -u | wc -l)
-  tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] " || true)
+  local okpat="^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] "
+  [ "$found_ok" = 1 ] && okpat="^CC1B: TU [0-9]+/$ntu (%X[0-9A-F]*[13579BDF]|FOUND) "
+  tu_ok=$(tr -d '\r' < "$log" | grep -aE "$okpat" | awk '{print $3}' | sort -u | wc -l)
+  tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "$okpat" || true)
   tr -d '\r' < "$log" | grep -aqxE "CC1B: END FAILS=0 .*" && end_ok=1
   tr -d '\r' < "$log" | grep -aqE "^CC1B: LINK %X[0-9A-F]*[13579BDF] " && link_ok=1
   [ "$(tr -d '\r' < "$log" | grep -acE '^CC1B: AR .* FAILS=0$')" -ge 1 ] && ar_ok=1
@@ -731,6 +735,20 @@ assert_cc1b() {
   [ "$tu_ok" -eq "$ntu" ] && [ "$tu_bad" -eq 0 ] && [ "$end_ok" -eq 1 ] && [ "$ar_ok" -eq 1 ] && [ "$link_ok" -eq 1 ] \
     && [ "$c1_ok" -eq 1 ] && [ "$c2_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
+}
+
+# assert_cc1b_shard <console-log> <ntu> -- rd vms-b85: one CI shard of the cc1
+# build. PASS iff every one of the shard's <ntu> compiles ran in this boot with a
+# success status, the procedure ended with no failure, and nothing faulted.
+assert_cc1b_shard() {
+  local log="$1" ntu="$2" tu_ok tu_bad end_ok=0 errs
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  tu_ok=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] " | awk '{print $3}' | sort -u | wc -l)
+  tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] " || true)
+  tr -d '\r' < "$log" | grep -aqxE "CC1B: END FAILS=0 .*" && end_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|ACCVIO|terminated abnormally|signal 1[012]|signal [46]" "$log" 2>/dev/null || true)
+  echo "  shard: compiles that succeeded : $tu_ok of $ntu ; failed or not run here : $tu_bad ; ended with no failure : $end_ok ; faults : $([ -n "$errs" ] && echo yes || echo none)"
+  [ "$tu_ok" -eq "$ntu" ] && [ "$tu_bad" -eq 0 ] && [ "$end_ok" -eq 1 ] && [ -z "$errs" ]
 }
 
 assert_mf() {
@@ -1251,7 +1269,8 @@ run_boot_a() {
     '
   set -e
   docker rm -f "$cname" >/dev/null 2>&1 || true
-  rm -f "$WORK/modgpA.img"
+  # BOOT_KEEP_IMG=1: keep the disk the boot wrote (a cc1build shard's objects are read off it)
+  [ -n "${BOOT_KEEP_IMG:-}" ] || rm -f "$WORK/modgpA.img"
   [ -f "$WORK/modgpA.log" ] || die "BOOT A produced no console log (qemu-system-alpha never started?)"
   # vms-035: the image is linked at OpenVMS Alpha's P0 base (LINK.EXE's default
   # for an executable, or JOINT_LINK_BASE) and must have activated with itself
@@ -2632,10 +2651,22 @@ PYEOF3
     mkb %X00000001 3 0 %X00000001 "$_st/ref.s" "$_st/ref.s" > "$_st/diffasm2.log"
     : > "$_st/empty.s"; mkb %X00000001 3 0 %X00000001 "$_st/empty.s" "$_st/ref2.s" > "$_st/notyped.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:CC1PLUS terminated abnormally (signal 11)'; } > "$_st/crash.log"
-    for _c in "pass:0" "missingtu:1" "tufail:1" "linkfail:1" "diffasm:1" "diffasm2:1" "notyped:1" "crash:1"; do
+    mkb FOUND 3 0 %X00000001 "$_st/ref.s" "$_st/ref2.s" > "$_st/found.log"
+    for _c in "pass:0" "missingtu:1" "tufail:1" "linkfail:1" "diffasm:1" "diffasm2:1" "notyped:1" "crash:1" "found:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_cc1b "$_st/$_n.log" "$_st/ref.s" "$_st/ref2.s" 3 >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  cc1build selftest $_n: PASS"; else echo "  cc1build selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    # rd vms-b85: objects the CI shards made may be FOUND only when they were staged
+    for _c in "found:0" "pass:0" "tufail:1" "linkfail:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_cc1b "$_st/$_n.log" "$_st/ref.s" "$_st/ref2.s" 3 1 >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  cc1build selftest staged-$_n: PASS"; else echo "  cc1build selftest staged-$_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    for _c in "pass:0" "missingtu:1" "tufail:1" "found:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_cc1b_shard "$_st/$_n.log" 3 >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  cc1build selftest shard-$_n: PASS"; else echo "  cc1build selftest shard-$_n: FAIL"; _fails=$((_fails+1)); fi
     done
     rm -rf "$_st"
     [ "$_fails" -eq 0 ] || die "cc1build selftest failed -- assert_cc1b cannot be trusted"
@@ -2651,7 +2682,7 @@ PYEOF3
       '  printf ("hello from cc1 on OVMX %d\n", sq (7));' '  return 0;' '}' > "$GATE_ROOT/cc1bimg/hello.c"
     tar xf "$_hg/gccsrc.tar" -C "$GATE_ROOT/cc1bimg" gccsrc/PLAN
     python3 -I "$REPO/tools/cross-alpha-vms/selfhost/gen-cc1-build.py" "$GATE_ROOT/cc1bimg/gccsrc/PLAN/REC" \
-      "$GATE_ROOT/cc1bimg/gccsrc/PLAN/ROOTS" "$GATE_ROOT/cc1bimg/BUILD_CC1.COM" ${CC1B_ONLY:+--only "$CC1B_ONLY"} --trace "${CC1B_TRACE:-1}" ${CC1B_EXTRA:+--extra "$CC1B_EXTRA"} ${CC1B_PICK:+--pick "$CC1B_PICK"} \
+      "$GATE_ROOT/cc1bimg/gccsrc/PLAN/ROOTS" "$GATE_ROOT/cc1bimg/BUILD_CC1.COM" ${CC1B_ONLY:+--only "$CC1B_ONLY"} --trace "${CC1B_TRACE:-1}" ${CC1B_EXTRA:+--extra "$CC1B_EXTRA"} ${CC1B_PICK:+--pick "$CC1B_PICK"} ${CC1B_SHARD:+--shard "$CC1B_SHARD"} \
       | tee "$GATE_ROOT/cc1bimg/gen.log" || die "gen-cc1-build.py failed"
     _ntu=$(grep -oE '^gen-cc1-build: [0-9]+ compiles' "$GATE_ROOT/cc1bimg/gen.log" | awk '{print $2}')
     [ -n "$_ntu" ] && [ "$_ntu" -gt 0 ] || die "BUILD_CC1.COM has no compiles"
@@ -2696,6 +2727,15 @@ PYEOF3
     tar xf "$_hg/gccsrc.tar" -C "$WORK/joint/gccsrc" --strip-components=1 --exclude=gccsrc/PLAN
     cp "$GATE_ROOT/cc1bimg/BUILD_CC1.COM" "$WORK/joint/gccsrc/BUILD_CC1.COM"
     cp "$GATE_ROOT/cc1bimg/hello.c" "$WORK/joint/gccsrc/HELLO.C"
+    # rd vms-b85: CC1B_OBJ_IN=<dir> -- the objects the CI shards compiled on OVMX
+    # (each shard job's own boot, its log asserted there), staged as GCCOBJ:[...]
+    rm -rf "$WORK/joint/gccobj"
+    if [ -n "${CC1B_OBJ_IN:-}" ]; then
+      [ -n "${CC1B_SHARD:-}" ] && die "CC1B_OBJ_IN and CC1B_SHARD are two different jobs"
+      [ -d "$CC1B_OBJ_IN" ] || die "CC1B_OBJ_IN=$CC1B_OBJ_IN is not a directory"
+      cp -r "$CC1B_OBJ_IN" "$WORK/joint/gccobj"
+      log "staged $(find "$WORK/joint/gccobj" -type f | wc -l) shard objects as GCCOBJ:[...]"
+    fi
     rm -f "$WORK/joint/"*_PROOF; : > "$WORK/joint/CC1B_PROOF"
     assemble_boot_image
     log "step 3: BOOT A -- BUILD_CC1.COM builds cc1 on the REAL executive ($_ntu compiles; up to ${BOOT_TIMEOUT}s)"
@@ -2705,9 +2745,31 @@ PYEOF3
       export BOOT_QEMU_EXTRA="-gdb tcp:127.0.0.1:1234" BOOT_PEEK="1234 S $CC1B_SAMPLE"
       cp "$REPO/tools/cross-alpha/gdb_peek.pl" "$WORK/gdb_peek.pl"
     fi
+    [ -n "${CC1B_SHARD:-}" ] && export BOOT_KEEP_IMG=1
     run_boot_a
     tr -d '\r' < "$WORK/modgpA.log" | grep -aE '^CC1B|CC1B-PROOF' | tail -40 | sed 's/^/  | /' || true
-    if assert_cc1b "$WORK/modgpA.log" "$GATE_ROOT/cc1bimg/ref.s" "$GATE_ROOT/cc1bimg/ref2.s" "$_ntu"; then
+    if [ -n "${CC1B_SHARD:-}" ]; then
+      # rd vms-b85: one shard -- its compiles all ran here; its objects leave on the host
+      _out="${CC1B_OBJ_OUT:-$GATE_ROOT/cc1b-shard-objs}"
+      if ! assert_cc1b_shard "$WORK/modgpA.log" "$_ntu"; then
+        rm -f "$WORK/modgpA.img"
+        echo "FAIL: cc1build shard $CC1B_SHARD did not compile all $_ntu of its sources. Full log: $WORK/modgpA.log"
+        tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
+        exit 1
+      fi
+      rm -rf "$_out"; mkdir -p "$_out"
+      docker run --rm -v "$USERLAND":/userland:ro -v "$WORK":/work -v "$_out":/out "$BOOT_IMG" \
+        qemu-alpha /userland/bin/vmsfs_master --ods5 extract /work/modgpA.img /out/gccobj SYS0.SYSCOMMON.GCCOBJ \
+        || { rm -f "$WORK/modgpA.img"; die "could not read the shard's objects off its volume"; }
+      rm -f "$WORK/modgpA.img"
+      _nobj=$(find "$_out/gccobj" -type f \( -name '*.obj' -o -name '*.OBJ' -o -name '*.o' \) | wc -l)
+      [ "$_nobj" -ge "$_ntu" ] || die "the shard compiled $_ntu sources but its volume holds $_nobj objects"
+      echo ""
+      echo "PASS: cc1build shard $CC1B_SHARD -- $_ntu cc1 sources compiled on OVMX/Alpha by the native"
+      echo "      toolchain; $_nobj objects read off its volume to $_out/gccobj"
+      exit 0
+    fi
+    if assert_cc1b "$WORK/modgpA.log" "$GATE_ROOT/cc1bimg/ref.s" "$GATE_ROOT/cc1bimg/ref2.s" "$_ntu" "$([ -n "${CC1B_OBJ_IN:-}" ] && echo 1 || echo 0)"; then
       echo ""
       echo "PASS: cc1 was BUILT on OVMX/Alpha by the native toolchain ($_ntu compiles by GCC/GXX,"
       echo "      libraries by AR -> LIBRARY, linked by GXX -> LINK), and the built cc1 writes the"

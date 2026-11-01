@@ -27,7 +27,10 @@ The trees on OVMX (rooted logicals the proof defines):
 link): a timing probe. --trace N types the response file of the first N
 compiles. --extra ARG (repeatable) adds ARG to every compile (a diagnosis:
 -ftime-report). --pick REGEX keeps only the compiles whose object name
-matches (a probe of chosen sources; no archives, no link).
+matches (a probe of chosen sources; no archives, no link). --shard K/N keeps
+every Nth compile from the Kth (1-based) in GCC's build order, no archives and
+no link: one of N CI jobs that build cc1 together (rd vms-b85); the job that
+links finds every object made and compiles none of them again.
 """
 import os
 import sys
@@ -134,7 +137,17 @@ def dcl_str(s):
 
 def main():
     argv = sys.argv[1:]
-    only, trace, extra, pick = None, 0, [], None
+    only, trace, extra, pick, shard = None, 0, [], None, None
+    if "--shard" in argv:
+        k = argv.index("--shard")
+        try:
+            sk, sn = (int(x) for x in argv[k + 1].split("/"))
+        except ValueError:
+            sys.exit("gen-cc1-build: --shard K/N")
+        if not 1 <= sk <= sn:
+            sys.exit("gen-cc1-build: --shard K/N needs 1 <= K <= N")
+        shard = (sk, sn)
+        del argv[k:k + 2]
     if "--pick" in argv:
         k = argv.index("--pick")
         pick = argv[k + 1]
@@ -239,6 +252,9 @@ def main():
         import re
         todo = [o for o in todo if re.search(pick, os.path.basename(o))]
         only = only or len(todo)
+    if shard:
+        todo = [o for i, o in enumerate(todo) if i % shard[1] == shard[0] - 1]
+        only = only or len(todo)
     if only:
         todo = todo[:only]
     dirs = sorted({os.path.dirname(v) for v in objdir.values()})
@@ -271,7 +287,11 @@ def main():
         label = os.path.relpath(absn(rec["cwd"], src[-1]), r["SRC"]) if src else vo
         vdir, vname = vo.split("/")[2], vo.split("/")[3]
         w("$! %d/%d %s" % (n, len(todo), label))
-        w("$ IF F$SEARCH(\"GCCOBJ:[%s]%s\") .NES. \"\" THEN GOTO C%d" % (vdir, vname, n))
+        w("$ IF F$SEARCH(\"GCCOBJ:[%s]%s\") .EQS. \"\" THEN GOTO M%d" % (vdir, vname, n))
+        # made before (an earlier run of this procedure, or a CI shard): said so
+        w("$ WRITE SYS$OUTPUT \"CC1B: TU %d/%d FOUND %s\"" % (n, len(todo), label))
+        w("$ GOTO C%d" % n)
+        w("$M%d:" % n)
         w("$ OPEN/WRITE R GCCOBJ:[000000]TU.RSP")
         for a in args:
             w("$ WRITE R %s" % dcl_str(rsp_quote(a)))

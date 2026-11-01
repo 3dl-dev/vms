@@ -147,8 +147,8 @@ void opcom_kmsg_stop(void);
 /*
  * The post-startup follower (rd vms-394e). The boot seed writes the highest
  * kernel-log sequence number it filed to OPCOM_KMSG_SEEDED_MARK; a thread of
- * JOB_CONTROL files every routed kernel-log record after it into OPERATOR.LOG
- * for the life of the system (until OPCOM exists, rd vms-798). See
+ * OPCOM (rd vms-798) files every routed kernel-log record after it into
+ * OPERATOR.LOG for the life of the system. See
  * opcom_kmsg.c.
  */
 #define OPCOM_KMSG_SEEDED_MARK "/tmp/.ovmx-opcom-seeded"

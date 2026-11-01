@@ -719,7 +719,7 @@ waitfor "%DISMOUNT-I-DISMOUNTED, _VDA100: dismounted" 60 "$B_LOG2" "$BP" || true
 # rd vms-394e: node A finished its startup -- and PID 1 ended its kernel-log
 # bridge -- long before node B booted, so A's coordinator lines for B's
 # admission are executive records emitted AFTER startup. The post-startup
-# kernel-log intake (a JOB_CONTROL thread) files them in OPERATOR.LOG.
+# kernel-log intake (an OPCOM thread) files them in OPERATOR.LOG.
 # The log holds every boot's records (each boot's kernel spool included), so
 # TYPE takes a while on a serial console: wait for the records, bounded, not a
 # fixed sleep.

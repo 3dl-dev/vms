@@ -570,12 +570,9 @@ unsigned long long opcom_kmsg_seed_operator_log(void (*emit)(const char *line))
  * transition when another node joins -- reached only the kernel ring (dmesg),
  * never the operator log.
  *
- * WHO RUNS IT. On VMS this is OPCOM's job. OVMX has no OPCOM yet (rd vms-798:
- * the $SNDOPR mailbox, operator-terminal broadcast, REPLY/ENABLE), and a
- * process that only copied the kernel log and called itself OPCOM would be a
- * placeholder in SHOW SYSTEM. So the follower runs as a thread of JOB_CONTROL
- * -- a real, long-lived system process that holds the SYSTEM identity, links
- * RMS and is never root -- until vms-798 gives it its home. It reads the kernel
+ * WHO RUNS IT. On VMS this is OPCOM's job, and OVMX's OPCOM (rd vms-798,
+ * src/ovmx_opcom) runs the follower as a thread -- a long-lived system process
+ * that holds the SYSTEM identity, links RMS and is never root. It reads the kernel
  * log as an ordinary process (/dev/kmsg is readable without privilege when
  * dmesg is not restricted) and appends every routed record to
  * SYS$MANAGER:OPERATOR.LOG over RMS, with the bridge's own classification.

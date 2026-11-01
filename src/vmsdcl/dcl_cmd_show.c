@@ -1029,10 +1029,11 @@ static const char *show_process_target_qual(const struct dcl_command *cmd)
  *    for the target, which records the terminal $CREPRC bound; see the
  *    body below. The former VMS_TERMINAL environment-variable facade is
  *    not read.)
- *   Base priority:     VMS prints it. The executive holds no VMS
- *                      priority; the old code printed the literal 4 for
- *                      every process. Same answer as SHOW SYSTEM's Pri
- *                      column above.
+ *   (Base priority: IS printed since rd vms-1f7 -- the BASE priority the
+ *    executive holds for the target, the value $GETJPI JPI$_PRIB and
+ *    $SETPRI read and write (vms-768). It is not SHOW SYSTEM's Pri column,
+ *    which is the CURRENT priority a scheduler would vary; that stays
+ *    unprinted.)
  *   Devices allocated: printed from the executive's device table: every
  *                      row whose owner is the target (rd vms-c31; see
  *                      show_process_devices()). Absent for a process
@@ -1388,6 +1389,19 @@ static int cmd_show_process(struct dcl_command *cmd)
             printf("%-20s%s\n", "Terminal:", tdev);
     }
     printf("%-20s%s\n", "User Identifier:", uicbuf);
+
+    /*
+     * Base priority: (rd vms-1f7), the base priority the EXECUTIVE holds for
+     * the target (VMS_IOCTL_PRI, the state $SETPRI and JPI$_PRIB share). The
+     * oracle prints it after User Identifier: (docs/oracle/golden/vax-show-
+     * process.golden). A read the executive refuses prints no line -- no
+     * priority is ever assumed.
+     */
+    {
+        uint32_t prib = 0;
+        if (vms_kif_pri(VMS_PRI_OP_GET, tgt_pid, &prib, NULL, NULL) & 1)
+            printf("%-20s%u\n", "Base priority:", (unsigned)prib);
+    }
 
     /*
      * "Not available" is VMS's OWN literal for a default directory it

@@ -175,9 +175,13 @@ static int loginout_tt_read(const char *prompt, char *buf, size_t bufsiz,
     buf[(st & 1) ? n : 0] = '\0';
     if (st == SS$_TIMEOUT) {
         /* The oracle's report (rd vms-29e): the prompt line ended, then the
-         * two lines -- written through the same driver. */
+         * two lines -- written through the same driver. Each is a record:
+         * its line feed BEFORE it, its carriage return after, so the report
+         * ends on the CR and the next output pays the line feed (VAX V7.3
+         * keystroke TA.USERNAME U: "...Timeout period expired<CR>", then
+         * "<BEL><LF><CR><LF>" at the next RETURN) -- rd vms-bd71. */
         static const char report[] =
-            "\r\n" LOGIN_MSG_CMDINPUT "\r\n" LOGIN_MSG_TIMEOUT "\r\n";
+            "\r\n" LOGIN_MSG_CMDINPUT "\r\n" LOGIN_MSG_TIMEOUT "\r";
         static char rbuf[sizeof(report)];
         memcpy(rbuf, report, sizeof(report));
         (void)sys$qiow(0, lgi_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0, rbuf,
@@ -189,6 +193,30 @@ static int loginout_tt_read(const char *prompt, char *buf, size_t bufsiz,
     if (iosb[3] && iosb[2] == 26 && n == 0)
         return LOGIN_READ_EOF;          /* ^Z: end of input */
     return LOGIN_READ_OK;
+}
+
+/* The wake keystroke came through the terminal driver (rd vms-bd71). */
+static int lgi_woke_on_tt;
+
+/*
+ * Take one TERMINATED line already waiting in the type-ahead buffer, unechoed,
+ * without waiting for one: a zero-second timed read (rd vms-bd71). Returns 1
+ * when a whole line was there, 0 otherwise (the read timed out at once, with
+ * nothing or only part of a line, which is consumed -- the Username: read
+ * would purge it). Writes nothing on its own timeout, unlike the prompt reads.
+ */
+static int loginout_tt_take_waiting_line(char *buf, size_t bufsiz)
+{
+    uint16_t iosb[4];
+    uint32_t st;
+
+    memset(iosb, 0, sizeof(iosb));
+    st = sys$qiow(0, lgi_tt_chan,
+                  IO$_READVBLK | IO$M_NOECHO | IO$M_TRMNOECHO | IO$M_TIMED,
+                  iosb, NULL, 0, buf, (uint32_t)(bufsiz - 1), 0, 0, 0, 0);
+    if (st & 1)
+        st = iosb[0];
+    return st == SS$_NORMAL;
 }
 
 static int read_prompt_response(const char *prompt, char *buf, size_t bufsiz,
@@ -810,8 +838,10 @@ static int console_login(void)
                                           IO$M_NOECHO | IO$M_TRMNOECHO, 0);
                 if (wr == LOGIN_READ_EOF)
                     return 1;          /* the line went away: nobody there */
-                if (wr == LOGIN_READ_OK)
+                if (wr == LOGIN_READ_OK) {
+                    lgi_woke_on_tt = 1;
                     break;
+                }
             }
         } else {
             char c;
@@ -862,11 +892,26 @@ static int console_login(void)
      * "<BEL><LF><CR><LF>VAX/VMS V7.3 ..."). Written raw, so it does not open
      * a record -- rd vms-bd71. */
     if (loginout_at_operator_terminal() && loginout_tt_chan()) {
-        static const char bel = '\a';
+        static char bels[8];
         uint16_t biosb[4];
+        unsigned nbel = 1;
+        /* ONE BELL PER LINE STRUCK BEFORE Username: (VAX V7.3 keystroke
+         * TA.USERNAME U): "<RETURN>SYSTEM<RETURN>" in one burst rings
+         * <BEL><BEL>; a single RETURN (LOGIN.BANNER U), or a name typed at
+         * a human pace whose first key woke the line, rings one. Every
+         * further line already waiting in the type-ahead buffer is taken
+         * here, unechoed, by a zero-second timed read -- it was going to be
+         * purged by the Username: read anyway, and is never used as input. */
+        if (lgi_woke_on_tt) {
+            static char tbuf[128];
+            while (nbel < sizeof(bels) &&
+                   loginout_tt_take_waiting_line(tbuf, sizeof(tbuf)))
+                nbel++;
+        }
+        memset(bels, '\a', nbel);
         fflush(stdout);
         (void)sys$qiow(0, lgi_tt_chan, IO$_WRITEVBLK, biosb, NULL, 0,
-                       (void *)&bel, 1, 0, 0, 0, 0);
+                       bels, nbel, 0, 0, 0, 0);
     }
     loginout_display_system_identification(stdout, OVMX_PRODUCT_NAME,
                                            ovmx_hw_arch(),

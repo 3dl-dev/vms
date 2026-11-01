@@ -7,13 +7,14 @@
 # for rms_textfile's weak seam to bind in a static link. The post-startup
 # kernel-log intake (rd vms-394e) is not in OPCOM yet: held behind rd vms-3ea /
 # vms-326 (see docs/design-opcom-executive-logging.md sec 9).
+# The anchor is on EVERY substrate: OPCOM files OPERATOR.LOG through
+# rms_textfile on NetBSD too, and without it the NetBSD/VAX OPCOM's weak
+# sys$create/sys$put stay NULL, so every append failed silently and the VAX
+# DECnet pair found no OPERATOR.LOG at all (merge-queue run 41337307028).
 add_executable(ovmx_opcom
     ovmx_opcom.c
+    ${CMAKE_SOURCE_DIR}/src/ovmx_provision/provision_rms_bind.c
 )
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_sources(ovmx_opcom PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/ovmx_provision/provision_rms_bind.c)
-endif()
 
 target_include_directories(ovmx_opcom PRIVATE
     ${VMS_INCLUDE_DIR}

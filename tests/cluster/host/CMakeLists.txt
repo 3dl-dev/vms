@@ -848,6 +848,31 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(cluster_host_hdr_alone PRIVATE -Wall -Wextra)
 endif()
 
+# ---- rd vms-5cd: the OTHER substrate's ioctl mirror, compiled ----------------
+# src/kernel-netbsd/vms_lock_nb.h pins every CLUSTER_DIAG args struct with a
+# _Static_assert, and nothing in the host build compiled it -- so on 2026-10-22
+# its vms_cluster_diag_dlm_args assert was found 16 bytes stale while the row it
+# mirrors had moved. An assert that is never compiled is not a tripwire. Its own
+# object library because src/kernel-netbsd and src/kernel both carry a
+# vms_internal.h: the two include paths must not meet in one target.
+add_library(cluster_host_hdr_alone_nb OBJECT
+    hdr_alone_vms_lock_nb.c           # rd vms-5cd
+)
+target_include_directories(cluster_host_hdr_alone_nb PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/kernel-netbsd")
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_hdr_alone_nb PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME cluster_host_headers_alone_netbsd
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}
+            --target cluster_host_hdr_alone_nb --config $<CONFIG>
+)
+set_tests_properties(cluster_host_headers_alone_netbsd PROPERTIES
+    LABELS "unit;cluster;cluster_host;abi"
+    TIMEOUT 60
+)
+
 # A "did it compile" gate for an OBJECT library: `cmake --build --target <name>`,
 # which ctest invokes directly. This is the host-includability proof, registered
 # UNCONDITIONALLY: a build failure here must be a RED ctest result.

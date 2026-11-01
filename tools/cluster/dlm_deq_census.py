@@ -226,7 +226,14 @@ def report(paths):
 
 def selftest(repo):
     """Pin the figures rd vms-3ac's (d) and the `dlm_deq` grounding rows rest
-    on. If the corpus grows these move, and whatever quotes them moves too."""
+    on. If the corpus grows these move, and whatever quotes them moves too.
+
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+    """
     paths = rc.walk_inputs([os.path.join(repo, 'tests', 'lab', 'captures')])
     real, ovmx = deq_frames(paths)
     answers = deq_answers(paths)
@@ -243,7 +250,7 @@ def selftest(repo):
     # is 32 more captures: the real releases went 9,858 -> 40,960 and the OVMX
     # ones 11 -> 15; this arm's own capture then added 89 more (41,049). Every figure below is re-derived over the WHOLE corpus, and
     # each note says what it moved from.
-    check('real releases in the corpus', len(real), 41049)        # was 9,858
+    check('real releases in the corpus', len(real), 41098)        # was 9,858
     check('OVMX releases in the corpus', len(ovmx), 15)           # was 11
 
     # 1. THE ENVELOPE. A release is a NOTIFICATION: no real sender opens a
@@ -283,13 +290,13 @@ def selftest(repo):
     # 5. The spans a real sender leaves as its own stale buffer, counted so a
     #    `const:0` row for them is a measured choice and not an assumption.
     check('real releases with an all-zero body[16:20]',
-          sum(1 for b in real if b[16:20] == b'\0' * 4), 23402)   # was 5,700
+          sum(1 for b in real if b[16:20] == b'\0' * 4), 23419)   # was 5,700
     check('real releases with an all-zero body[36:44]',
           sum(1 for b in real if b[36:44] == b'\0' * 8), 1458)    # was 354
     check('real releases with ffffffff at body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22413)  # was 5,117
+          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22437)  # was 5,117
     check('real releases with an all-zero body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\0' * 4), 16388)    # was 4,095
+          sum(1 for b in real if b[124:128] == b'\0' * 4), 16402)    # was 4,095
 
     # 6. THE DRIVEN ARM (rd vms-194 (a)), read back off its committed capture.
     #    Nine arms, one release each, one variable per arm: the held mode over

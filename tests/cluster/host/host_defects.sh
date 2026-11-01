@@ -174,6 +174,7 @@ dlm-pending-overflow-overwrites
 dlm-dir-remove-by-anyone
 dlm-learner-unbounded
 dlm-own-directory-not-consulted
+dlm-master-unserved-said-as-not-mastered
 dlm-sublock-looked-up-in-the-directory
 dlm-sublock-parent-pair-zeroed
 dlm-dir-matched-by-name-alone
@@ -615,6 +616,20 @@ EOF
                       ;;
         esac;;
 
+    dlm-master-unserved-said-as-not-mastered)
+        case "$_f" in
+        facility)     echo "a resource this node DOES master and could not serve is counted and said as THAT (dlm_arm_dir_master_unserved(), rd vms-025), never as a resource it does not master";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_scs.c is not host-linkable (it names exec_kbackend.h and the fork API), so its properties are proved by a source-scan of the SHIPPING file. The mutation puts the pre-rd-vms-025 text and counter back: a directory lookup for a resource the engine's own vms_lock_dlm_name_mastered_here() reads 1 for is counted as dir_self_held and printed as 'a resource this node itself holds locks on and does not master'. That line is the OPPOSITE of what the executive read, and a real-VAX lab spent a whole run chasing the fault it named.";;
+        require_fail) hd_lines <<'EOF'
+a resource this node DOES master and could not serve is counted apart from one it does not master
+... and SAID as that, never as 'does not master'
+EOF
+                      ;;
+        esac;;
+
     dlm-sublock-looked-up-in-the-directory)
         case "$_f" in
         facility)     echo "SUB-LOCK ROUTING (vms_lock.c vms_enq_core_ex, rd vms-b67a): a lock whose PARID names a parent goes to the PARENT'S MASTER, because only ROOT resources are in the lock directory (Davis p. 6-29) and a resource tree has one master";;
@@ -677,6 +692,12 @@ one frame left this node
 *** and the mastery is RECORDED in this node's own directory -- which is what stops the next asker being told to master it ***
 *** the directory answers THIS NODE MASTERS IT (p. 6-51), not 'you master it' ***
   nothing was answered 'you master it'
+  and the identity that value is OF: group 1 (body[44:46])
+  carrying the value VAX1 ITSELF put on the wire for that name -- the LEARNED one, never a recomputed one
+  the engine claims no mastery
+  user mode (body[46])
+*** addressed to VAX1, the master its own frame told us about ***
+*** and the resource's MASTER is VAX1 -- this node did NOT master it a second time ***
 EOF
                       ;;
         esac;;
@@ -3275,6 +3296,14 @@ apply_edit() {
     dlm-sublock-parent-pair-zeroed)
         # The both-or-neither refusal is one expression, unique in this file.
         sed -i 's|\tif ((req->parent_own_lkid == 0u) != (req->parent_master_lkid == 0u))|\tif (0) /* NEGCTL dlm-sublock-parent-pair-zeroed */|' "$_file";;
+
+    dlm-master-unserved-said-as-not-mastered)
+        # Both anchors are unique in this file and both are CONSUMED by the
+        # edit, so a second apply cannot match. The counter goes back to
+        # dir_self_held and the message's middle literal back to the text that
+        # asserts the opposite of the engine's own read.
+        sed -i 's|\td->dir_master_unserved++;|\td->dir_self_held++; /* NEGCTL dlm-master-unserved-said-as-not-mastered */|' "$_file"
+        sed -i 's|"resource this node MASTERS, and it could not be served as "|"resource this node itself holds locks on and does not "|' "$_file";;
 
     dlm-own-directory-not-consulted)
         # `if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))`

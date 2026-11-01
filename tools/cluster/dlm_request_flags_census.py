@@ -183,7 +183,13 @@ def cmd_spans(paths):
 
 def selftest():
     """Pin the table rd vms-6e6 reasons from. If the corpus grows these move,
-    and the item's numbers must move with them."""
+    and the item's numbers must move with them.
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+"""
     paths = captures([CORPUS])
     ok = True
 
@@ -196,18 +202,18 @@ def selftest():
 
     n, hit = cmd_spans(paths)
     print("-- body[28:30] and body[31:44] are NOT residue; the other two are")
-    check("real op-0x01 requests", n, 21656)
-    check("body[10:12] zero (residue, as OVMX assumes)", hit["body[10:12]"], 16691)
-    check("body[16:20] zero (residue, as OVMX assumes)", hit["body[16:20]"], 17171)
+    check("real op-0x01 requests", n, 21792)
+    check("body[10:12] zero (residue, as OVMX assumes)", hit["body[10:12]"], 16785)
+    check("body[16:20] zero (residue, as OVMX assumes)", hit["body[16:20]"], 17283)
     check("body[28:30] zero -- a real request almost never is",
-          hit["body[28:30]"], 36)
-    check("body[31:44] zero -- nor is this one", hit["body[31:44]"], 1650)
+          hit["body[28:30]"], 37)
+    check("body[31:44] zero -- nor is this one", hit["body[31:44]"], 1655)
 
     fam = cmd_family(paths)
     print("-- and body[28:30] is decided by the resource FAMILY")
-    for name, want_val, want_n in (("F11B$a", 0x007d, 5045),
-                                   ("F11B$s", 0x0239, 7994),
-                                   ("CACHE$cm", 0x0e70, 1606),
+    for name, want_val, want_n in (("F11B$a", 0x007d, 5089),
+                                   ("F11B$s", 0x0239, 8037),
+                                   ("CACHE$cm", 0x0e70, 1607),
                                    ("RMS$", 0x0e19, 152),
                                    ("LMF$", 0x0011, 122)):
         check("%s -> 0x%04x" % (name, want_val), fam[name][want_val], want_n)

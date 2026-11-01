@@ -327,7 +327,10 @@ int main(int argc, char **argv)
     /* negctl: acp-modify-prot-needs-only-write */
     check(as_child(argv[0], fid_other, 0xFFFF) == SS$_NOPRIV,
           "a world-writable file's protection is refused to a non-owner without CONTROL (SS$_NOPRIV)");
+    prot = 0xDEAD;
     st = header_of(chan, "PRO1FB7.TXT", &prot, NULL, NULL);
+    printf("  (PRO1FB7.TXT after the refused change: access %%X%08X, header protection %04X)\n",
+           (unsigned)st, (unsigned)prot);
     /* negctl: acp-modify-prot-needs-only-write */
     check((st & 1) && prot == 0x0000, "and its header protection is unchanged");
     check(as_child(argv[0], fid_mine, 0xEE00) & 1,

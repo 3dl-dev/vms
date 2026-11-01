@@ -211,6 +211,11 @@ STATUS_PROOF_EXPECT=(
   # installed known image (/PRIVILEGED=CMKRNL); it must have dropped CMKRNL
   # before it mapped the image -- the line is the executive's record of it.
   "HELLONOCMK|%X00000001|%NATIVEACT-I-TRACE, CMKRNL held=0"
+  # rd vms-d4a (vms-404 P4): an OVMX LINK.EXE --executable image activated by
+  # IMGACT.EXE, whose one cross-image import -- purdy_s_hash from the shipped
+  # LIBVMS\$SHR.EXE -- returns the real OpenVMS VAX "VAX V1" Purdy vector
+  # (docs/oracle/purdy-hash-vectors.md). It returns 0 only on that value.
+  "CONSUMER|%X00000001|OVMX-VAX-SHR-ACT: purdy=0x716cbdc03c071c59"
 )
 
 # assert_status_proof <console-log> -- THE TEETH of the status gate. For every
@@ -1303,7 +1308,25 @@ build_status_proof_images() {
     cp "${REPO}/tests/native-images/vax/${img}.EXE" "${STATUS_PROOF_IMAGES_DIR}/"
   done
   cp "${REPO}/tests/native-images/vax/HELLO.MAR" "${STATUS_PROOF_IMAGES_DIR}/NOTIMG.EXE"
-  for img in STSNORM.EXE STSCOND.EXE NATIVEACT.EXE; do
+  # rd vms-d4a: the cross-shareable activation proof -- CONSUMER.EXE and the
+  # activator it names (IMGACT.EXE) join SYS$SYSTEM; the shipped LIBVMS$SHR.EXE
+  # it imports from goes to SYS$SHARE (the SYSLIB/ subdirectory, which
+  # stage_sysvol.sh --status-proof lays into SYS$SHARE).
+  log "cross-building the shareable-activation proof (IMGACT.EXE, LIBVMS\$SHR.EXE, CONSUMER.EXE)"
+  local shr_out="${STATUS_PROOF_IMAGES_DIR}.shr"
+  rm -rf "${shr_out}"; mkdir -p "${shr_out}"
+  cid="ovmx-status-shr-$$"; rc=0
+  set +e
+  timeout --kill-after="${TIMEOUT_GRACE}" "${KBUILD_TIMEOUT}" \
+    docker run --rm --name "${cid}" -v "${REPO}:/src:ro" -v "${shr_out}:/out" \
+      --entrypoint sh "${CROSS_IMAGE}" /src/tools/cross-vax/build-shr-activation-vax.sh /src /out
+  rc=$?; set -e
+  [ "${rc}" -eq 0 ] || { docker kill "${cid}" >/dev/null 2>&1 || true; die "shareable-activation proof build failed/timed out (rc=${rc})"; }
+  mkdir -p "${STATUS_PROOF_IMAGES_DIR}/SYSLIB"
+  cp "${shr_out}/CONSUMER.EXE" "${shr_out}/IMGACT.EXE" "${STATUS_PROOF_IMAGES_DIR}/"
+  cp "${shr_out}/LIBVMS\$SHR.EXE" "${STATUS_PROOF_IMAGES_DIR}/SYSLIB/"
+  rm -rf "${shr_out}"
+  for img in STSNORM.EXE STSCOND.EXE NATIVEACT.EXE CONSUMER.EXE IMGACT.EXE "SYSLIB/LIBVMS\$SHR.EXE"; do
     [ -f "${STATUS_PROOF_IMAGES_DIR}/${img}" ] || die "status proof image ${img} was not produced"
   done
   log "status proof images: $(ls "${STATUS_PROOF_IMAGES_DIR}" | tr '\n' ' ')"

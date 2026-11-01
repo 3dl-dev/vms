@@ -78,7 +78,8 @@
 #     tree, except that SYSTARTUP_VMS.COM is tests/lab-vax/
 #     SYSTARTUP_VMS_STATUS_PROOF.COM (RUNs proof images and WRITEs their
 #     $STATUS to the console) and every *.EXE in <dir> is staged into
-#     SYS$SYSTEM next to the boot images. Used only by run-boot.sh status-gate;
+#     SYS$SYSTEM next to the boot images (every *.EXE in <dir>/SYSLIB into
+#     SYS$SHARE). Used only by run-boot.sh status-gate;
 #     never by a shipped volume. Not combinable with --distribution.
 #   (d) --sysexe-extra <dir> (rd vms-9394): every regular file in <dir> is
 #     staged into SYS$SYSTEM as-is (a text .DAT is mastered RFM=STMLF like any
@@ -220,6 +221,18 @@ if [ -n "$STATUS_PROOF_DIR" ]; then
         n=$((n + 1))
     done
     [ "$n" -gt 0 ] || die "no *.EXE proof images in $STATUS_PROOF_DIR"
+    # A proof shareable (rd vms-d4a: LIBVMS$SHR.EXE) goes to SYS$SHARE, where
+    # the image activator looks for it.
+    if [ -d "$STATUS_PROOF_DIR/SYSLIB" ]; then
+        SYSLIB="$STAGE/SYS0/SYSCOMMON/SYSLIB"
+        mkdir -p "$SYSLIB"
+        for src in "$STATUS_PROOF_DIR"/SYSLIB/*.EXE; do
+            [ -f "$src" ] || continue
+            [ ! -e "$SYSLIB/$(basename "$src")" ] \
+                || die "proof shareable $(basename "$src") would replace a file already in SYS\$SHARE"
+            cp "$src" "$SYSLIB/$(basename "$src")"
+        done
+    fi
     for name in $(sed -n 's/^\$[[:space:]]*RUN[[:space:]]\{1,\}SYS\$SYSTEM:\([A-Za-z0-9_$]*\).*/\1/p' "$SYSMGR/SYSTARTUP_VMS.COM"); do
         [ -f "$SYSEXE/$name.EXE" ] || die "proof SYSTARTUP RUNs SYS\$SYSTEM:$name but $name.EXE is not staged"
     done

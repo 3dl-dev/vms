@@ -69,5 +69,14 @@ $ SET PROCESS/PRIVILEGE=NOCMKRNL
 $ WRITE SYS$OUTPUT "STATUS-PROOF: === RUN HELLONOCMK ==="
 $ RUN SYS$SYSTEM:HELLO
 $ WRITE SYS$OUTPUT "STATUS-PROOF: HELLONOCMK-STATUS=''$STATUS'"
+$!
+$! rd vms-d4a (vms-404 P4): an image LINKed by OVMX LINK.EXE --executable for
+$! VAX (PT_INTERP = the staged IMGACT.EXE), whose one cross-image import is
+$! purdy_s_hash from SYS$SHARE:LIBVMS$SHR.EXE. IMGACT.EXE resolves it through
+$! the shareable's symbol vector; the image prints the hash and exits 0 only
+$! when it is the real OpenVMS VAX value.
+$ WRITE SYS$OUTPUT "STATUS-PROOF: === RUN CONSUMER ==="
+$ RUN SYS$SYSTEM:CONSUMER
+$ WRITE SYS$OUTPUT "STATUS-PROOF: CONSUMER-STATUS=''$STATUS'"
 $ WRITE SYS$OUTPUT "STATUS-PROOF: === END ==="
 $ EXIT

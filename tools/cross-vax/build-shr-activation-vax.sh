@@ -19,7 +19,7 @@
 #                    and force-binds no `exit` import (which would demand a
 #                    C-RTL producer the VAX Decision-A substrate has none of),
 #                    and the NetBSD/vax libc.a is pulled STATICALLY for
-#                    printf/_exit so those never become imports.
+#                    write/_exit so those never become imports.
 #
 # PT_INTERP. LINKVAX.EXE is built with IMGACT_INTERP_PATH=/run/ovmx-boot/
 # IMGACT.EXE, the same path the CMake `vmslink` target bakes into every
@@ -79,15 +79,15 @@ echo "OK: $LINKVAX"
 echo
 
 echo "=== 3. CONSUMER.EXE -- elf32-vax executable; ONLY .vms\$imp import = purdy_s_hash from LIBVMS\$SHR ==="
-# Freestanding entry (start_vax.S) + the C body (consumer_main.c, printf).
+# Freestanding entry (start_vax.S) + the C body (consumer_main.c, write(2)).
 "$VAXCC" -fPIC -O2 -c -o "$BUILD_DIR/start_vax.o" "$HERE/start_vax.S"
 "$VAXCC" -fPIC -O2 -c -o "$BUILD_DIR/consumer_main.o" "$HERE/consumer_main.c"
 # Static NetBSD/vax libc, pulled selectively by LINKVAX (.OLB = selective, the
 # same policy build-vax-shareable-graph.sh uses for LIBVMS$SHR's own libc deps).
 cp "$SYSROOT/usr/lib/libc.a" "$BUILD_DIR/libc.OLB"
 # emutls.o from libgcc: VAX gcc lowers __thread (libc's errno) to EMULATED TLS
-# via __emutls_get_address; printf's first-call buffer setup reaches errno, so
-# this MUST be defined or the C-RTL channel faults. libgcc.a as a whole
+# via __emutls_get_address; the write(2) stub's error path (cerror) sets errno,
+# so this MUST be defined. libgcc.a as a whole
 # whole-archives at the wrong grain (MULDEF vs libc's compiler-support members,
 # build-vax-shareable-graph.sh §libgcc); pull ONLY emutls.o into its own .OLB.
 LIBGCC="$("$VAXCC" -print-libgcc-file-name)"
@@ -99,7 +99,7 @@ mkdir -p "$BUILD_DIR/gccbits"
 
 CONSUMER="$OUT/CONSUMER.EXE"
 # --allow-undefined: the statically pulled libc leaves NetBSD process-startup
-# globals (__progname/__ps_strings/environ/_end) undefined -- not on printf's
+# globals (__progname/__ps_strings/environ/_end) undefined -- not on write's
 # path, deferred to 0 exactly as build-vax-shareable-graph.sh defers them for
 # LIBVMS$SHR. --use LIBVMS$SHR is the ONE producer; NO gate-private producer.
 "$LINKVAX" --executable --allow-undefined --use "$LIBVMS_SHR" \

@@ -8,7 +8,18 @@
  * cross-image import is `purdy_s_hash` from the SHIPPED LIBVMS$SHR.EXE
  * (tools/cross-vax/build-vax-shareable-graph.sh, rd vms-c7f7). Its entry is
  * start_vax.S's freestanding `_start`; the NetBSD/vax libc.a is pulled
- * statically for printf/_exit, so purdy_s_hash is the only cross-shareable bind.
+ * statically for the write(2)/_exit(2) syscall stubs only, so purdy_s_hash is
+ * the only cross-shareable bind.
+ *
+ * Why write(2) and not printf. The image is entered by IMGACT, not by NetBSD's
+ * crt0, so libc's process-startup globals (environ, __progname, __ps_strings)
+ * are never set up -- LINKVAX defers them to 0 -- and printf's stdio path
+ * (first-call buffer allocation, locale) runs on libc state crt0 would have
+ * initialised. The first gate run that reached this image (rd vms-d4a) printed
+ * the `entered` marker and then took signal 11 with no purdy line. The value
+ * is therefore formatted here and written with the bare syscall, which needs
+ * none of libc's startup state; the `returned` marker separates a fault in the
+ * cross-image call from one after it.
  *
  * THE VALUE-SENSITIVE ASSERTION. purdy_s_hash (src/libvms/rtl/purdy.c) is the
  * VMS Purdy password hash, imported through the shareable's `.vms$sv` -- not
@@ -24,7 +35,6 @@
  * and $STATUS %X00000001 (the image returns 0 only on the golden value; DCL
  * maps a nonzero POSIX exit to SS$_ABORT, %X0000002C).
  */
-#include <stdio.h>
 #include <stdint.h>
 #include <unistd.h>
 
@@ -46,9 +56,15 @@ int consumer_body(void)
 
 	uint64_t got = purdy_s_hash(pw, sizeof(pw) - 1, user, salt);
 
-	printf("OVMX-VAX-SHR-ACT: purdy=0x%08lx%08lx\n",
-	       (unsigned long)(got >> 32), (unsigned long)(got & 0xffffffffu));
-	/* _start calls _exit, which does not flush stdio. */
-	fflush(stdout);
+	static const char back[] = "OVMX-VAX-SHR-ACT: returned from purdy_s_hash\n";
+	(void)write(1, back, sizeof back - 1);         /* the cross-image call returned */
+
+	/* "OVMX-VAX-SHR-ACT: purdy=0x" + 16 lowercase hex digits + "\n" */
+	static const char hex[] = "0123456789abcdef";
+	char line[] = "OVMX-VAX-SHR-ACT: purdy=0x0000000000000000\n";
+	char *d = line + sizeof "OVMX-VAX-SHR-ACT: purdy=0x" - 1;
+	for (int i = 0; i < 16; i++)
+		d[i] = hex[(unsigned)(got >> (60 - 4 * i)) & 0xfu];
+	(void)write(1, line, sizeof line - 1);
 	return (got == want) ? 0 : 1;
 }

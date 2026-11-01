@@ -39,6 +39,16 @@
 #   has no `extract`, and the demo ships only the finished sysdisk, not the
 #   /system-stage/vms tree a re-master needs.
 #
+# THE VOLUME LABEL (rd vms-3ea): the node's system disk also gets ITS OWN ODS-2
+#   label here, <SCSNODE>SYS by default (the form the real VAX on the demo's
+#   wire uses: SCSNODE VAXC -> VAXCSYS). The label is the Files-11 cluster lock
+#   namespace -- the executive names the volume's locks "F11B$<kind><label>" --
+#   so every node booting a copy of the one release sysdisk (mastered OVMXSYS)
+#   would otherwise share one clusterwide resource with every other node's
+#   DIFFERENT disk. VMS sets a label at INITIALIZE and changes it with SET
+#   VOLUME/LABEL; the release disk is already initialized, so this is the SET
+#   VOLUME/LABEL step, done offline with the codec's own ods2_bdev_relabel.
+#
 # DOES NOT BOOT AN EMULATOR. Pure offline byte placement + read-back proof.
 # Standard host tools only (python3, cc, qemu-img); NO host installs -- all
 # build output + scratch images land under a /tmp workdir.
@@ -57,7 +67,8 @@ usage() {
     cat >&2 <<EOF
 usage: $PROG <in-sysdisk> <out-sysdisk> \\
              --scsnode NAME --scssystemid N \\
-             [--votes N] [--expected-votes N] [--alloclass N] [--vaxcluster N]
+             [--votes N] [--expected-votes N] [--alloclass N] [--vaxcluster N] \\
+             [--label VOLUME-LABEL]
 
 Writes VAXCLUSTER OVMXVMSSYS.PAR onto the ODS-2 SYSTEM DISK (SYS\$SYSTEM, as a
 new higher file version), so the booted OVMX/x86 node comes up cluster-
@@ -68,6 +79,9 @@ and the project's own src/vmsfs/ods2 codec for the ODS-2 write + read-back.
 CLUSTER_AUTHORIZE.DAT is NOT handled here (it stays in the initramfs, injected
 by inject-cluster-config.sh); '--group' therefore does not apply.
 
+--label is the system disk's ODS-2 volume label (default <SCSNODE>SYS, rd
+vms-3ea): each cluster member's system disk needs its own.
+
 Defaults: --votes 1 --expected-votes 2 --alloclass 0 --vaxcluster 2
 EOF
     exit 2
@@ -77,7 +91,7 @@ EOF
 IN=$1; OUT=$2; shift 2
 
 SCSNODE=""; SCSSYSTEMID=""
-VOTES=1; EXPVOTES=2; ALLOCLASS=0; VAXCLUSTER=2
+VOTES=1; EXPVOTES=2; ALLOCLASS=0; VAXCLUSTER=2; LABEL=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -87,6 +101,7 @@ while [ $# -gt 0 ]; do
         --expected-votes) EXPVOTES=$2; shift 2 ;;
         --alloclass)      ALLOCLASS=$2; shift 2 ;;
         --vaxcluster)     VAXCLUSTER=$2; shift 2 ;;
+        --label)          LABEL=$2; shift 2 ;;
         -h|--help)        usage ;;
         *) echo "$PROG: unknown argument: $1" >&2; usage ;;
     esac
@@ -94,6 +109,7 @@ done
 
 [ -n "$SCSNODE" ] || { echo "$PROG: --scsnode is required" >&2; usage; }
 [ -n "$SCSSYSTEMID" ] || { echo "$PROG: --scssystemid is required" >&2; usage; }
+[ -n "$LABEL" ] || LABEL="${SCSNODE}SYS"
 [ -f "$IN" ] || { echo "$PROG: input sysdisk not found: $IN" >&2; exit 1; }
 [ -f "$MK_DEMOCONFIG" ] || { echo "$PROG: mk_democonfig.py not found" >&2; exit 1; }
 [ -f "$INJECTOR_SRC" ] || { echo "$PROG: ods2_inject_sysgen.c not found" >&2; exit 1; }
@@ -135,6 +151,10 @@ qemu-img convert -O raw "$IN_ABS" "$WORK/sysdisk.raw"
 echo "== $PROG: injecting SYS\$SYSTEM:OVMXVMSSYS.PAR onto the ODS-2 disk =="
 "$INJ" inject "$WORK/sysdisk.raw" "$WORK/OVMXVMSSYS.PAR"
 
+# --- (4b) the node's own volume label (rd vms-3ea, SET VOLUME/LABEL offline) ---
+echo "== $PROG: labelling the system disk $LABEL (rd vms-3ea) =="
+"$INJ" relabel "$WORK/sysdisk.raw" "$LABEL"
+
 # --- (5) raw -> output sysdisk.qcow2 (same as track-release.yml) ---------------
 echo "== $PROG: converting injected raw -> $OUT_ABS (qcow2) =="
 qemu-img convert -O qcow2 "$WORK/sysdisk.raw" "$OUT_ABS"
@@ -143,6 +163,12 @@ qemu-img convert -O qcow2 "$WORK/sysdisk.raw" "$OUT_ABS"
 echo "== $PROG: read-back verify from the OUTPUT sysdisk (project's ODS-2 reader) =="
 qemu-img convert -O raw "$OUT_ABS" "$WORK/verify.raw"
 "$INJ" readback "$WORK/verify.raw" "$WORK/readback.par"
+GOT_LABEL=$("$INJ" label "$WORK/verify.raw")
+if [ "$GOT_LABEL" != "$LABEL" ]; then
+    echo "$PROG: FATAL -- OUTPUT sysdisk's volume label reads back '$GOT_LABEL', not '$LABEL'" >&2
+    exit 1
+fi
+echo "   volume label = $GOT_LABEL (rd vms-3ea)"
 "$PYTHON" - "$HERE" "$WORK/readback.par" "$SCSNODE" "$VAXCLUSTER" <<'PY'
 import sys
 here, parfile, want_scsnode, want_vax = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
@@ -161,4 +187,4 @@ print("PASS: OUTPUT sysdisk carries the injected config on the ODS-2 volume")
 PY
 
 echo "== $PROG: done -> $OUT_ABS =="
-echo "   SCSNODE=$SCSNODE SCSSYSTEMID=$SCSSYSTEMID VOTES=$VOTES EXPECTED_VOTES=$EXPVOTES VAXCLUSTER=$VAXCLUSTER"
+echo "   SCSNODE=$SCSNODE SCSSYSTEMID=$SCSSYSTEMID VOTES=$VOTES EXPECTED_VOTES=$EXPVOTES VAXCLUSTER=$VAXCLUSTER LABEL=$LABEL"

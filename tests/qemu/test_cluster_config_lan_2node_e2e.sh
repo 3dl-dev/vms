@@ -252,6 +252,24 @@ rm -f "$A_DISK" "$B_DISK" "$A_LOG1" "$A_LOG2" "$B_LOG1" "$B_LOG2" "$A_FIFO" "$B_
 cp "$DISTRIB_IMG" "$A_DISK"
 cp "$DISTRIB_IMG" "$B_DISK"
 
+# rd vms-3ea: EACH NODE'S SYSTEM DISK GETS ITS OWN LABEL. Both disks are copies
+# of one kit mastered OVMXSYS, and the label is the Files-11 cluster lock
+# namespace (the executive names a volume's locks "F11B$<kind><label>"), so two
+# members booting it as-is put their two DIFFERENT local disks behind ONE
+# clusterwide resource -- measured: node A's TYPE SYS$MANAGER:OPERATOR.LOG
+# answered a false -RMS-E-FNF while B was active (run 39764316363). The label
+# is given the way VMS gives one -- set at INITIALIZE, changed with SET
+# VOLUME/LABEL -- by the offline SET VOLUME/LABEL step (vmsfs_master relabel),
+# in the form the real VAX uses (SCSNODE VAXC -> VAXCSYS): <SCSNODE>SYS.
+LABEL_A="${NODE_A}SYS"
+LABEL_B="${NODE_B}SYS"
+command -v vmsfs_master >/dev/null 2>&1 \
+    || { echo "FATAL: vmsfs_master (provisioning tool) is not in this image"; exit 1; }
+vmsfs_master --ods2 relabel "$A_DISK" "$LABEL_A" \
+    || { echo "FATAL: could not give node A's system disk the label $LABEL_A"; exit 1; }
+vmsfs_master --ods2 relabel "$B_DISK" "$LABEL_B" \
+    || { echo "FATAL: could not give node B's system disk the label $LABEL_B"; exit 1; }
+
 # ==========================================================================
 # drive_configure_add - the documented procedure's ADD path (menu choice 1),
 # run interactively over an already-open console fifo. $1=fd $2=log $3=pid
@@ -399,6 +417,14 @@ if [ "$rc" -eq 0 ]; then
     printf 'SHOW SYMBOL HOSTA\r' >&4; sleep 1
     check "node A boot2: F\$GETSYI(NODENAME) reads $NODE_A (adopted live hostname)" \
         "$A_LOG2" "HOSTA = \"$NODE_A\""
+    # rd vms-3ea: the executive mounted THIS node's own volume -- the label
+    # is read back from the mounted volume, not from this script. (VOLNAM
+    # comes back as the home block's 12-byte, space-padded field, so the
+    # match is on the label and not on a closing quote.)
+    printf 'VOLA = F$GETDVI("SYS$SYSDEVICE","VOLNAM")\r' >&4; sleep 1
+    printf 'SHOW SYMBOL VOLA\r' >&4; sleep 1
+    check "node A boot2: its system disk is mounted with its own label $LABEL_A" \
+        "$A_LOG2" "VOLA = \"$LABEL_A"
 fi
 
 # ==========================================================================
@@ -483,6 +509,10 @@ if [ "$rc" -eq 0 ]; then
     printf 'SHOW SYMBOL HOSTB\r' >&6; sleep 1
     check "node B boot2: F\$GETSYI(NODENAME) reads $NODE_B (adopted live hostname)" \
         "$B_LOG2" "HOSTB = \"$NODE_B\""
+    printf 'VOLB = F$GETDVI("SYS$SYSDEVICE","VOLNAM")\r' >&6; sleep 1
+    printf 'SHOW SYMBOL VOLB\r' >&6; sleep 1
+    check "node B boot2: its system disk is mounted with its own label $LABEL_B" \
+        "$B_LOG2" "VOLB = \"$LABEL_B"
 fi
 
 if [ "$NEGCTL" = "1" ]; then

@@ -106,13 +106,12 @@ $ RUN VDA0:[SYSTMP]TWO.EXE
 $ WRITE SYS$OUTPUT "DRL-PROOF: TWO-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $!
 $! vms-5b3: C++. GCC 14 is written in C++, so cc1 built on OVMX needs cc1plus and libstdc++
-$! here. The g++ driver (xg++, GXX.EXE: ODS-2 names have no '+') runs CC1PLUS.EXE, as and
-$! ld; LINK searches SYS$SYSTEM:LIBSTDCXX.A, the 32-bit libstdc++. The C++ headers are on
-$! ODS-2 names under GNU:[CXX]: -remap has the preprocessor read each directory's
-$! HEADER.GCC, which pairs a name the source includes (bits/c++config.h) with the name the
-$! file has (CXXCONFIG.H) -- GCC's own mechanism for file systems that restrict names.
-$! -nostdlib++ and the library named last: the -lstdc++ the driver adds would look for
-$! libstdc++.a, a name ODS-2 cannot hold.
+$! here. The g++ driver (xg++, staged as GXX.EXE) runs CC1PLUS.EXE, as and ld.
+$! vms-408: this system volume is ODS-5, so the C++ headers are under GNU:[CXX] as GCC
+$! installs them (bits/c++config.h) and the 32-bit libstdc++ is SYS$SYSTEM:libstdc++.a,
+$! which the -lstdc++ the driver adds finds. DECC$EFS_CHARSET lets the C RTL hand RMS
+$! a name with '+' in it (c^+^+config.h), as the DEC C RTL does when it is defined.
+$ DEFINE/SYSTEM DECC$EFS_CHARSET ENABLE
 $ WRITE SYS$OUTPUT "DRL-PROOF: === C++: the native g++ compiles a C++ program ==="
 $ OPEN/WRITE HC VDA0:[SYSTMP]CXXHELLO.CC
 $ WRITE HC "#include <cstdio>"
@@ -144,9 +143,13 @@ $ WRITE HC "  delete b;"
 $ WRITE HC "  return 0;"
 $ WRITE HC "}"
 $ CLOSE HC
-$ DIRECTORY GNU:[CXX]STRING.,GNU:[CXX.ALPHA-DEC-VMS.BITS]CXXCONFIG.H,GNU:[CXX.ALPHA-DEC-VMS.BITS]HEADER.GCC
+$! the names as stored (wildcards: no '^', which PARSE_STYLE=TRADITIONAL refuses;
+$! one spec per command: rd vms-991)
+$ DIRECTORY GNU:[CXX]STRING.
+$ DIRECTORY GNU:[CXX.ALPHA-DEC-VMS.BITS]C*CONFIG.H
+$ DIRECTORY SYS$SYSTEM:LIBSTDC*.A
 $ GXX := $SYS$SYSTEM:GXX.EXE
-$ GXX -BSYS$SYSTEM: -L/SYS$SYSTEM -remap -nostdinc++ -isystem /GNU/CXX -isystem /GNU/CXX/ALPHA-DEC-VMS -nostdlib++ -x c++ VDA0:[SYSTMP]CXXHELLO.CC -o VDA0:[SYSTMP]CXXHELLO.EXE -x none SYS$SYSTEM:LIBSTDCXX.A
+$ GXX -BSYS$SYSTEM: -L/SYS$SYSTEM -nostdinc++ -isystem /GNU/CXX -isystem /GNU/CXX/ALPHA-DEC-VMS -x c++ VDA0:[SYSTMP]CXXHELLO.CC -o VDA0:[SYSTMP]CXXHELLO.EXE
 $ WRITE SYS$OUTPUT "DRL-PROOF: BUILD-CXX-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === INDEPENDENT READER: DCL DUMP CXXHELLO.EXE ==="
 $ DUMP VDA0:[SYSTMP]CXXHELLO.EXE

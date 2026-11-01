@@ -2423,7 +2423,7 @@ PYEOF3
     # rooted logical GCCSRC). Everything after the driver name is in a response file the
     # driver reads (@file), so the case of every argument is exactly as written.
     printf '%s\n' "-fno-PIE -DIN_GCC_FRONTEND -O2 -DIN_GCC -fno-exceptions -fno-rtti -fasynchronous-unwind-tables -W -Wall -Wno-narrowing -Wwrite-strings -Wcast-qual -Wmissing-format-attribute -Wconditionally-supported -Woverloaded-virtual -pedantic -Wno-long-long -Wno-variadic-macros -Wno-overlength-strings -DHAVE_CONFIG_H -fno-PIE -I/GCCSRC/BLD/gcc -I/GCCSRC/SRC/gcc -I/GCCSRC/SRC/gcc/c -I/GCCSRC/SRC/include -I/GCCSRC/SRC/libcpp/include -I/GCCSRC/SRC/libcody -I/GCCSRC/HOST/include -I/GCCSRC/SRC/libdecnumber -I/GCCSRC/SRC/libdecnumber/dpd -I/GCCSRC/BLD/libdecnumber -I/GCCSRC/SRC/libbacktrace" > "$GATE_ROOT/drlimg/cc1tu.flags"
-    printf '%s\n' "-BSYS\$SYSTEM: -remap -nostdinc++ -isystem /GNU/CXX -isystem /GNU/CXX/ALPHA-DEC-VMS $(cat "$GATE_ROOT/drlimg/cc1tu.flags") -x c++ -c VDA0:[SYSTMP]C-LANG.CC -o VDA0:[SYSTMP]C-LANG.OBJ" \
+    printf '%s\n' "-BSYS\$SYSTEM: -nostdinc++ -isystem /GNU/CXX -isystem /GNU/CXX/ALPHA-DEC-VMS $(cat "$GATE_ROOT/drlimg/cc1tu.flags") -x c++ -c VDA0:[SYSTMP]C-LANG.CC -o VDA0:[SYSTMP]C-LANG.OBJ" \
       > "$GATE_ROOT/drlimg/cc1tu.rsp"
     docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/drlimg:/img" -v "$_hg:/hg:ro" \
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
@@ -2466,17 +2466,18 @@ PYEOF3
           [ "$n" = 1 ] && sleep 3
         done
         cp r1/two.exe ref1c.exe; cp r2/two.exe ref2c.exe
-        # vms-5b3: the C++ program, by the cross g++ against the 32-bit libstdc++ (the
-        # library named on the command line, as the native link names LIBSTDCXX.A)
+        # vms-5b3: the C++ program, by the cross g++ against the 32-bit libstdc++. vms-408:
+        # the driver own -lstdc++ finds libstdc++.a in -L, as the native g++ finds it in
+        # SYS$SYSTEM (no -nostdlib++, no library named by hand)
         GXX=/out/cxx/bin/alpha-dec-vms-g++; P32=/out/cxx/p32
         cp cxxhello.cc "VDA0:[SYSTMP]CXXHELLO.CC"
         for n in 1 2; do
-          $GXX -nostdinc++ -isystem $P32/include/c++/14_2_0 -isystem $P32/include/c++/14_2_0/alpha-dec-vms -nostdlib++ \
-            -x c++ "VDA0:[SYSTMP]CXXHELLO.CC" -o r$n/cxxhello.exe -x none $P32/lib/libstdc++.a
+          $GXX -nostdinc++ -isystem $P32/include/c++/14_2_0 -isystem $P32/include/c++/14_2_0/alpha-dec-vms -L$P32/lib \
+            -x c++ "VDA0:[SYSTMP]CXXHELLO.CC" -o r$n/cxxhello.exe
           [ "$n" = 1 ] && sleep 3
         done
         cp r1/cxxhello.exe ref1d.exe; cp r2/cxxhello.exe ref2d.exe
-        cp $P32/lib/libstdc++.a libstdcxx.a
+        cp $P32/lib/libstdc++.a libstdc++.a
         rm -rf cxx-src; cp -rL $P32/include/c++/14_2_0 cxx-src
         # vms-9a0: the cc1 source file, by the cross g++ over the same /GCCSRC tree
         mkdir -p /GCCSRC && tar xf /hg/gccsrc.tar -C /GCCSRC --strip-components=1
@@ -2496,16 +2497,17 @@ PYEOF3
     [ -s "$GATE_ROOT/drlimg/ref1.exe" ] || die "the cross driver wrote no reference image"
     [ -s "$GATE_ROOT/drlimg/ref1d.exe" ] || die "the cross g++ wrote no C++ reference image"
     [ -s "$GATE_ROOT/drlimg/ref1e.obj" ] || die "the cross g++ wrote no c-lang.obj reference"
-    # the C++ headers on ODS-2 names, with the header.gcc maps g++ -remap reads (c++config.h ...)
-    # (into a tree this user owns: drlimg/ is written by the container)
+    # vms-408: the C++ headers as GCC installs them (bits/c++config.h ...), names and all: the
+    # system volume of this proof is ODS-5 (into a tree this user owns: drlimg/ is written by
+    # the container)
     rm -rf "$GATE_ROOT/cxxinc"
-    python3 -I "$REPO/tools/cross-alpha-vms/selfhost/ods2-header-tree.py" "$GATE_ROOT/drlimg/cxx-src" "$GATE_ROOT/cxxinc" --relative-pairs "$GATE_ROOT/cxx-relpairs.txt" \
-      || die "the C++ header tree cannot be placed on ODS-2 names"
+    cp -r "$GATE_ROOT/drlimg/cxx-src" "$GATE_ROOT/cxxinc"
+    [ -f "$GATE_ROOT/cxxinc/alpha-dec-vms/bits/c++config.h" ] || die "the C++ header tree has no alpha-dec-vms/bits/c++config.h"
     cp "$GATE_ROOT/drlimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
     cp "$_hg/xgcc.exe" "$WORK/joint/xgcc.exe"; cp "$_hg/cc1.exe" "$WORK/joint/cc1.exe"; cp "$_hg/ld.exe" "$WORK/joint/ld.exe"
     cp "$_as" "$WORK/joint/as.exe"; cp "$_ln" "$WORK/joint/link.exe"; cp "$_hg/ar.exe" "$WORK/joint/ar.exe"
     cp "$_hg/cc1plus.exe" "$WORK/joint/cc1plus.exe"; cp "$_hg/gxx.exe" "$WORK/joint/gxx.exe"
-    cp "$GATE_ROOT/drlimg/libstdcxx.a" "$WORK/joint/libstdcxx.a"
+    cp "$GATE_ROOT/drlimg/libstdc++.a" "$WORK/joint/libstdc++.a"
     for _p in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do cp "$GATE_ROOT/drlimg/$_p" "$WORK/joint/$_p"; done
     [ -s "$_jr/STARLET.a" ] || die "no STARLET.a in $_jr"
     cp "$_jr/STARLET.a" "$WORK/joint/STARLET.a"
@@ -2519,10 +2521,6 @@ PYEOF3
     rm -rf "$WORK/joint/gccsrc"; mkdir -p "$WORK/joint/gccsrc"
     tar xf "$_hg/gccsrc.tar" -C "$WORK/joint/gccsrc" --strip-components=1
     cp "$GATE_ROOT/drlimg/cc1tu.rsp" "$WORK/joint/gccsrc/cc1tu.rsp"
-    # every GCC include directory is searched (-I) before the C++ headers: each gets the
-    # C++ tree's dir/name pairs, so <bits/c++config.h> there is absent, not an invalid
-    # ODS-2 name (the ODS-2 layout; vms-408 drops it with ODS-5)
-    find "$WORK/joint/gccsrc" -type d -exec cp "$GATE_ROOT/cxx-relpairs.txt" {}/header.gcc \;
     : > "$WORK/joint/DRL_PROOF"
     assemble_boot_image
     log "step 3: BOOT A -- the GCC driver compiles and links on the REAL executive, then DCL RUNs HELLO.EXE (up to ${BOOT_TIMEOUT}s)"

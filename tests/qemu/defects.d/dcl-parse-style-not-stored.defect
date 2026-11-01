@@ -1,0 +1,38 @@
+# dcl-parse-style-not-stored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SET PROCESS/PARSE_STYLE stores the parse style in the executive (\$SET_PROCESS_PROPERTIESW), where F\$GETJPI, RMS and DCL read it (rd vms-0b0)";;
+        targets)      echo "vmsdcl/dcl_cmd_set.c";;
+        suites_red)   echo "test_syssvc_dcl_ods5";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cmd_set_process() calls \$SET_PROCESS_PROPERTIESW PPROP\$C_PARSE_STYLE_PERM with the keyword's style. The mutation never makes the call, so SET PROCESS/PARSE_STYLE=EXTENDED is accepted and does nothing: the PCB keeps TRADITIONAL and F\$GETJPI reads it so. The keyword check (IVKEYW) is the qualifier table's and is untouched.";;
+        require_fail) cat <<'EOF2'
+SET PROCESS/PARSE_STYLE=EXTENDED: F$GETJPI PARSE_STYLE_PERM / _IMAGE read EXTENDED
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EXTENDED: TYPE C^+^+CONFIG.H prints the record the real system wrote
+EXTENDED: OPEN/WRITE dcl^+^+0b0.h created it under its own name (DIRECTORY: dcl^+^+0b0.h;1)
+EXTENDED: OPEN/WRITE Dcl0b0Mixed.Txt kept its case (DIRECTORY: Dcl0b0Mixed.Txt;1)
+EXTENDED: TYPE DCL^+^+0B0.H finds it case-blind
+EOF2
+                      ;;
+        knock_on_why)  cat <<'EOF2'
+THE STYLE NEVER CHANGED. Every EXTENDED step after it runs under TRADITIONAL:
+the '^' commands are refused PARMDEL, so nothing is typed or created.
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one PARSE_STYLE_PERM $SET_PROCESS_PROPERTIESW call in
+        # cmd_set_process(). Gone after substitution (no-op re-apply).
+        sed -i 's#uint32_t st = sys$set_process_propertiesw(NULL, NULL, NULL, PPROP$C_PARSE_STYLE_PERM,#uint32_t st = 1 ? SS$_NORMAL : sys$set_process_propertiesw(NULL, NULL, NULL, PPROP$C_PARSE_STYLE_PERM, /* NEGCTL dcl-parse-style-not-stored */#' "$_file"
+    :
+}

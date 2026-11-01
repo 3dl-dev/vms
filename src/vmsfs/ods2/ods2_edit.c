@@ -1187,3 +1187,65 @@ ods2_status_t ods2_fh2_touch_revision(void *header_block, uint64_t now)
         ed_put64(id + o.att, now);
     return ODS2_OK;
 }
+
+/*
+ * ods2_label_valid - is `label` a volume label INITIALIZE would write?
+ * 1..12 characters from A-Z, 0-9, '$', '_' and '-' (the OpenVMS DCL
+ * Dictionary's INITIALIZE "volume-label" parameter: "1 to 12 alphanumeric
+ * characters", the dollar sign, underscore and hyphen included). Lowercase is
+ * not accepted here: DCL upcases the parameter before it reaches the volume,
+ * and the codec writes what it is given. Returns the length, or 0 if invalid.
+ */
+size_t ods2_label_valid(const char *label)
+{
+    size_t n;
+
+    if (!label)
+        return 0;
+    for (n = 0; label[n] != '\0'; n++) {
+        char c = label[n];
+        if (n >= 12)
+            return 0;
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+              c == '$' || c == '_' || c == '-'))
+            return 0;
+    }
+    return n;
+}
+
+/*
+ * ods2_home_set_label - write a new volume label into a home block and reseal
+ * both of its checksums (rd vms-3ea). The label is the 12-byte, space-padded
+ * hm2_volname field at byte 472 ([N] struct HOME); it sits inside the 255
+ * words checksum2 covers and outside the 29 checksum1 covers, so only checksum2
+ * actually changes -- both are recomputed anyway, so a block whose checksum1
+ * was already wrong is never "fixed" into looking valid: the block must parse
+ * (both checksums, "DECFILE11B  ", a readable structure level) BEFORE it is
+ * touched, and ODS2_ERR_* is returned with the buffer unmodified otherwise.
+ *
+ * This is the on-disk half of SET VOLUME/LABEL (the label of a Files-11 volume
+ * is set at INITIALIZE and changed later with SET VOLUME/LABEL); the caller
+ * sequences the block I/O, for every home block the volume carries.
+ */
+ods2_status_t ods2_home_set_label(void *home_block, const char *label)
+{
+    uint8_t *b = (uint8_t *)home_block;
+    ods2_home_t parsed;
+    size_t n;
+    ods2_status_t st;
+
+    if (!home_block || !label)
+        return ODS2_ERR_ARGS;
+    n = ods2_label_valid(label);
+    if (n == 0)
+        return ODS2_ERR_ARGS;
+    st = ods2_home_parse(b, ODS2_BLOCK_SIZE, &parsed, 1);
+    if (st != ODS2_OK)
+        return st;
+
+    memset(b + offsetof(ods2_home_t, hm2_volname), ' ', 12);
+    memcpy(b + offsetof(ods2_home_t, hm2_volname), label, n);
+    ed_put16(b + offsetof(ods2_home_t, hm2_checksum1), ods2_checksum(b, 29));
+    ed_put16(b + offsetof(ods2_home_t, hm2_checksum2), ods2_block_checksum(b));
+    return ODS2_OK;
+}

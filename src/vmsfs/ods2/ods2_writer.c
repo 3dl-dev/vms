@@ -931,6 +931,141 @@ ods2_status_t ods2_security_build(uint8_t block[ODS2_BLOCK_SIZE],
     return ODS2_OK;
 }
 
+/*
+ * ods2_security_set_label - re-key a SECURITY.SYS VBN1 profile block to a new
+ * volume label (rd vms-3ea). The block carries the label it was built for
+ * (ods2_security_build, [F6]); a relabel that left it naming the old label
+ * would produce a volume no INITIALIZE ever wrote. Only the shape this codec
+ * KNOWS is rewritten: the block must be byte-for-byte what
+ * ods2_security_build() makes for its own embedded label and owner UIC (the
+ * "zero ACL entries" profile INITIALIZE writes -- the real VAX and Alpha
+ * fixtures both carry it). Anything else (a volume whose profile was later
+ * given ACEs) is ODS2_ERR_FORMAT and the buffer is left untouched: refusing is
+ * honest, rewriting bytes this codec does not understand is not.
+ */
+ods2_status_t ods2_security_set_label(uint8_t block[ODS2_BLOCK_SIZE],
+                                      const char *label)
+{
+    uint8_t expect[ODS2_BLOCK_SIZE];
+    char old[13];
+    ods2_uic_t owner;
+    ods2_status_t st;
+
+    if (!block || !label)
+        return ODS2_ERR_ARGS;
+    if (ods2_label_valid(label) == 0)
+        return ODS2_ERR_ARGS;
+    st = ods2_security_parse(block, ODS2_BLOCK_SIZE, old, sizeof(old), &owner);
+    if (st != ODS2_OK)
+        return st;
+    st = ods2_security_build(expect, old, owner);
+    if (st != ODS2_OK)
+        return st;
+    if (memcmp(expect, block, ODS2_BLOCK_SIZE) != 0)
+        return ODS2_ERR_FORMAT;
+    return ods2_security_build(block, label, owner);
+}
+
+/*
+ * ods2_bdev_relabel - give a volume a new label, offline: the effect of
+ * SET VOLUME/LABEL on a volume that is not mounted (rd vms-3ea). On a
+ * Files-11 volume the label lives in three places this codec writes when it
+ * formats one: the primary home block (LBN hm2_homelbn), the alternate home
+ * block (hm2_alhomelbn), and the SECURITY.SYS VBN1 profile. All three are read
+ * and edited in memory first, and nothing is written unless every one of them
+ * parsed and agreed on the current label -- a volume is never left half
+ * relabelled by a refusal. `old_out` (13 bytes, may be NULL) gets the label the
+ * volume had.
+ *
+ * Every byte layout is the codec's existing one (ods2_home_set_label,
+ * ods2_security_set_label); this only sequences the block I/O, through the
+ * same seam the reader uses.
+ */
+ods2_status_t ods2_bdev_relabel(ods2_bdev_t *bv, const char *label,
+                                char old_out[13])
+{
+    uint8_t home1[ODS2_BLOCK_SIZE], home2[ODS2_BLOCK_SIZE];
+    uint8_t sech[ODS2_BLOCK_SIZE], sec[ODS2_BLOCK_SIZE];
+    ods2_home_t h2;
+    char old[13], secold[13];
+    uint32_t lbn1, lbn2, sec_lbn;
+    size_t n;
+    int have_alt;
+    ods2_status_t st;
+
+    if (!bv || !label)
+        return ODS2_ERR_ARGS;
+    if (ods2_label_valid(label) == 0)
+        return ODS2_ERR_ARGS;
+
+    /* The current label, trimmed of its space padding. */
+    memcpy(old, bv->home.hm2_volname, 12);
+    old[12] = '\0';
+    for (n = 12; n > 0 && (old[n - 1] == ' ' || old[n - 1] == '\0'); n--)
+        old[n - 1] = '\0';
+
+    lbn1 = bv->home.hm2_homelbn ? bv->home.hm2_homelbn : 1u;
+    lbn2 = bv->home.hm2_alhomelbn;
+    have_alt = (lbn2 != 0 && lbn2 != lbn1);
+
+    st = ods2_blk_read(ODS2_BDEV_DEV(bv), bv->nblocks, lbn1, home1, sizeof(home1));
+    if (st != ODS2_OK)
+        return st;
+    st = ods2_home_set_label(home1, label);
+    if (st != ODS2_OK)
+        return st;
+    if (have_alt) {
+        st = ods2_blk_read(ODS2_BDEV_DEV(bv), bv->nblocks, lbn2, home2, sizeof(home2));
+        if (st != ODS2_OK)
+            return st;
+        st = ods2_home_parse(home2, sizeof(home2), &h2, 1);
+        if (st != ODS2_OK)
+            return st;
+        if (memcmp(h2.hm2_volname, bv->home.hm2_volname, 12) != 0)
+            return ODS2_ERR_FORMAT;     /* the two home blocks disagree */
+        st = ods2_home_set_label(home2, label);
+        if (st != ODS2_OK)
+            return st;
+    }
+
+    st = ods2_bdev_read_header(bv, ODS2_FID_SECURITY, sech, sizeof(sech));
+    if (st != ODS2_OK)
+        return st;
+    st = ods2_fh2_map_vbn(sech, 1, &sec_lbn);
+    if (st != ODS2_OK)
+        return st;
+    st = ods2_blk_read(ODS2_BDEV_DEV(bv), bv->nblocks, sec_lbn, sec, sizeof(sec));
+    if (st != ODS2_OK)
+        return st;
+    st = ods2_security_parse(sec, sizeof(sec), secold, sizeof(secold), NULL);
+    if (st != ODS2_OK)
+        return st;
+    if (strcmp(secold, old) != 0)
+        return ODS2_ERR_FORMAT;         /* SECURITY.SYS names another label */
+    st = ods2_security_set_label(sec, label);
+    if (st != ODS2_OK)
+        return st;
+
+    /* Everything parsed and agreed: write. Alternate first, primary last, so
+     * an interrupted relabel leaves the primary (the one MOUNT reads) intact. */
+    if (have_alt) {
+        st = ods2_blk_write(ODS2_BDEV_DEV(bv), bv->nblocks, lbn2, home2, sizeof(home2));
+        if (st != ODS2_OK)
+            return st;
+    }
+    st = ods2_blk_write(ODS2_BDEV_DEV(bv), bv->nblocks, sec_lbn, sec, sizeof(sec));
+    if (st != ODS2_OK)
+        return st;
+    st = ods2_blk_write(ODS2_BDEV_DEV(bv), bv->nblocks, lbn1, home1, sizeof(home1));
+    if (st != ODS2_OK)
+        return st;
+
+    memcpy(bv->home.hm2_volname, home1 + offsetof(ods2_home_t, hm2_volname), 12);
+    if (old_out)
+        memcpy(old_out, old, sizeof(old));
+    return ODS2_OK;
+}
+
 /* ================================================================
  * Home block construction. [S]/[N] see ods2.h + PROVENANCE addendum.
  * ================================================================ */

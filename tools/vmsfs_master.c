@@ -1422,18 +1422,81 @@ static int do_list_ods2(const char *image)
     return 0;
 }
 
+/* ---- ODS-2 relabel (rd vms-3ea): SET VOLUME/LABEL, offline.
+ *
+ * A Files-11 volume's label is set at INITIALIZE and changed afterwards with
+ * SET VOLUME/LABEL. It is also the Files-11 cluster lock namespace -- the
+ * executive names this volume's locks "F11B$<kind><label>" -- so two cluster
+ * members whose DIFFERENT system disks carry one label share one clusterwide
+ * resource. One mastered kit boots every node; this gives each node's copy of
+ * it its own label at provisioning time, with the codec's own home-block and
+ * SECURITY.SYS writers (ods2_bdev_relabel). Re-reads the volume afterwards and
+ * fails unless the label it now reports is the one asked for. ---- */
+static int do_relabel_ods2(const char *image, const char *label)
+{
+    if (ods2_label_valid(label) == 0) {
+        fprintf(stderr, "%%MASTER-F-BADLABEL, volume label must be 1-12 chars"
+                        " of A-Z 0-9 $ _ - (got \"%s\")\n", label);
+        return 1;
+    }
+    int fd = open(image, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "%%MASTER-F-OPENIN, cannot open %s: %s\n",
+                image, strerror(errno));
+        return 1;
+    }
+    ods2_bdev_t bv;
+    ods2_status_t st = ods2_bdev_open(&bv, fd, 0 /* auto-detect */);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-NOTODS2, %s is not a genuine ODS-2 volume: %s\n",
+                image, ods2_strerror(st));
+        close(fd);
+        return 1;
+    }
+    char old[13];
+    st = ods2_bdev_relabel(&bv, label, old);
+    if (st != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-RELABEL, %s was not relabelled (nothing written): %s\n",
+                image, ods2_strerror(st));
+        close(fd);
+        return 1;
+    }
+    if (fsync(fd) < 0)
+        fprintf(stderr, "%%MASTER-W-FSYNC, sync warning: %s\n", strerror(errno));
+
+    /* Read it back through a fresh open: what MOUNT will see. */
+    ods2_bdev_t chk;
+    st = ods2_bdev_open(&chk, fd, 0);
+    char now[13];
+    memcpy(now, chk.home.hm2_volname, 12);
+    now[12] = '\0';
+    for (size_t n = 12; n > 0 && now[n - 1] == ' '; n--)
+        now[n - 1] = '\0';
+    close(fd);
+    if (st != ODS2_OK || strcmp(now, label) != 0) {
+        fprintf(stderr, "%%MASTER-F-VERIFY, %s reads back as \"%s\" (%s), not \"%s\"\n",
+                image, now, ods2_strerror(st), label);
+        return 1;
+    }
+    printf("%%MASTER-I-RELABEL, %s: volume %s is now %s\n", image, old, label);
+    return 0;
+}
+
 static void usage(void)
 {
     fprintf(stderr,
         "Usage:\n"
         "  vmsfs_master [--ods2|--ods5|--vmfs] master  <image> <volume-label> <source-dir> [size-in-MB]\n"
         "  vmsfs_master [--ods2|--ods5]        list    <image>\n"
+        "  vmsfs_master [--ods2|--ods5]        relabel <image> <volume-label>\n"
         "  vmsfs_master                 extract <image> <output-dir>   (VMFS only)\n"
         "\n"
         "  --ods2 masters/lists a genuine ODS-2 (Files-11 L2, DECFILE11B) volume\n"
         "         (vms-5eb R6-build); default and OVMX_MASTER_ODS2=0 use VMFS.\n"
         "  --ods5 masters a genuine ODS-5 (Files-11 L5) volume, the equivalent of\n"
-        "         INITIALIZE/STRUCTURE=5 (vms-7e7e); list reads either level.\n");
+        "         INITIALIZE/STRUCTURE=5 (vms-7e7e); list reads either level.\n"
+        "  relabel gives an existing ODS-2/ODS-5 volume a new label offline --\n"
+        "         SET VOLUME/LABEL's on-disk effect (rd vms-3ea).\n");
 }
 
 int main(int argc, char *argv[])
@@ -1480,6 +1543,10 @@ int main(int argc, char *argv[])
     } else if (strcmp(argv[argi], "list") == 0) {
         if (argc - argi != 2) { usage(); return 1; }
         return use_ods2 ? do_list_ods2(argv[argi + 1]) : do_list(argv[argi + 1]);
+    } else if (strcmp(argv[argi], "relabel") == 0) {
+        if (argc - argi != 3) { usage(); return 1; }
+        /* ODS-2/ODS-5 only: a VMFS image has no Files-11 home block. */
+        return do_relabel_ods2(argv[argi + 1], argv[argi + 2]);
     }
 
     usage();

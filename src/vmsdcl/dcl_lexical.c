@@ -1460,6 +1460,13 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
             snprintf(result, result_size, "%-12.12s", info.username);
         else
             result[0] = '\0';
+    } else if (strcmp(s, "PARSE_STYLE_PERM") == 0 || strcmp(s, "PARSE_STYLE_IMAGE") == 0) {
+        /* JPI$_PARSE_STYLE_PERM / _IMAGE (rd vms-0b0): the permanent and the
+         * current image's file-name parse style from the executive's row,
+         * "TRADITIONAL" or "EXTENDED" (OpenVMS DCL Dictionary, F$GETJPI). */
+        uint8_t bit = strcmp(s, "PARSE_STYLE_PERM") == 0 ? VMS_PROCINFO_PS_PERM_EXTENDED
+                                                          : VMS_PROCINFO_PS_IMAGE_EXTENDED;
+        snprintf(result, result_size, "%s", (info.parse_style & bit) ? "EXTENDED" : "TRADITIONAL");
     } else if (strcmp(s, "PRCNAM") == 0) {
         strncpy(result, info.prcnam, result_size - 1);
     } else if (strcmp(s, "PID") == 0) {

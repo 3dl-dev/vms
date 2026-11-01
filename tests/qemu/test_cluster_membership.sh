@@ -257,6 +257,10 @@ for i in 0 1 2; do
     k="${KEYS[$i]}"
     disk="/tmp/cluster-mem-${k}.img"
     rm -f "$disk"; cp "$DISTRIB_IMG" "$disk"
+    # rd vms-3ea: this node's own system-disk label, <SCSNODE>SYS (see
+    # tests/qemu/test_cluster_config_lan_2node_e2e.sh for why).
+    vmsfs_master --ods2 relabel "$disk" "${SCSNODES[$i]}SYS" \
+        || { echo "FAIL: relabel node $k's system disk" >&2; exit 1; }
     boot_and_login "$k" "${TAPS[$i]}" "$disk" "${SCSNODES[$i]}" "${SYSIDS[$i]}"
 done
 

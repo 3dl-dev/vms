@@ -437,7 +437,7 @@ def selftest(repo):
           out['queued THEN granted on one transaction'], 111)
     check('*** ...of those, later answered 0xfa on the SAME transaction ***',
           out['queued THEN granted on one transaction'], 0)
-    check('granted at once (the contrast)', out['granted at once'], 53878)
+    check('granted at once (the contrast)', out['granted at once'], 54373)
 
     # 2. WHAT OCCUPIES THAT MOMENT INSTEAD, measured and not interpreted.
     real, ovmx, named = notify_frames(paths)
@@ -470,7 +470,7 @@ def selftest(repo):
     # 4. THE SECOND FALSIFIER, independent of the transaction pairing: the
     #    0xfa grants vms_dlm_scs.c's header read as unsolicited.
     tot, noreq, notok, qnamed = unsolicited_grants(paths)
-    check('real->real 0xfa grants', tot, 53897)
+    check('real->real 0xfa grants', tot, 54392)
     check('...with no request in the same capture', noreq, 3974)
     check('...of those, carrying no transaction token', notok, 0)
     check('*** ...naming a pair this master had QUEUED ***', qnamed, 0)

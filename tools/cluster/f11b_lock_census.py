@@ -317,11 +317,13 @@ def _selftest_shapes(sh, check):
           [])
 
     ovmx_s = sh[('OVMX', 's', ROOT_VOL_LEN)]
-    check('OVMX F11B$s is 18 bytes, a per-VOLUME ROOT', ovmx_s.frames, 31)
+    # 39 frames since rd vms-083's captures joined the corpus (#1891: 31 -> 39,
+    # the same single name and identity); the real-VAX figures did not move.
+    check('OVMX F11B$s is 18 bytes, a per-VOLUME ROOT', ovmx_s.frames, 39)
     check('...distinct names', len(ovmx_s.names), 1)
     check('...it carries NO parent pair', ovmx_s.with_parent, 0)
     check('...and its identity is the enqueuing process\'s, not (0,0)',
-          ovmx_s.ident.most_common(1), [((1, 3), 31)])
+          ovmx_s.ident.most_common(1), [((1, 3), 39)])
     check('OVMX never originates the real 10-byte shape',
           [k for k in sh if k[0] == 'OVMX' and k[2] == SUB_LEN], [])
 

@@ -48,7 +48,7 @@
 // runs that boot Node C only after an OVMX node is up, since visitors choose
 // the order and that is the order that hung. THEN, once every node is usable,
 // what a VMS user does next must work (rd vms-5843/vms-6512): SHOW SYSTEM on
-// each OVMX node lists JOB_CONTROL and NETACP and every other system process
+// each OVMX node lists JOB_CONTROL, NETACP and OPCOM and every other system process
 // the real VAX runs is either shown or named in the gap ledger
 // (gate-eval.mjs SHOW_SYSTEM_GAPS, each with its rd item) -- a ledgered name
 // that appears fails too -- and SET HOST OVMXA->OVMXB and OVMXB->OVMXA each

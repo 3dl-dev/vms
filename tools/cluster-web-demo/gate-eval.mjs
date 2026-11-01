@@ -930,7 +930,7 @@ export const SHOW_SYSTEM_ORACLE = [
 
 // The ones every OVMX demo node must show: OVMX has the facility, and STARTUP
 // runs it as a detached process with its VMS name.
-export const SHOW_SYSTEM_REQUIRED = ['JOB_CONTROL', 'NETACP'];
+export const SHOW_SYSTEM_REQUIRED = ['JOB_CONTROL', 'NETACP', 'OPCOM'];
 
 // The honest ledger of the rest: OVMX does not have the facility, so the name
 // is ABSENT -- never a placeholder row. Each names the item that builds it. A
@@ -939,7 +939,7 @@ export const SHOW_SYSTEM_REQUIRED = ['JOB_CONTROL', 'NETACP'];
 export const SHOW_SYSTEM_GAPS = {
   SWAPPER: 'vms-8c04', CLUSTER_SERVER: 'vms-50d3', CONFIGURE: 'vms-0282',
   LANACP: 'vms-1998', IPCACP: 'vms-04d', ERRFMT: 'vms-d2c',
-  CACHE_SERVER: 'vms-4a3', OPCOM: 'vms-798', AUDIT_SERVER: 'vms-caf2',
+  CACHE_SERVER: 'vms-4a3', AUDIT_SERVER: 'vms-caf2',
   SECURITY_SERVER: 'vms-9d9', SMISERVER: 'vms-d87', TP_SERVER: 'vms-255',
   REMACP: 'vms-ca1', EVL: 'vms-d58',
 };

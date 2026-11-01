@@ -79,6 +79,7 @@ const OVMX_SHOW_SYSTEM = [
   '  Pid    Process Name          CPU         Page flts   Pages',
   '10000004 JOB_CONTROL        0 00:00:00.02         89     363',
   '10000001                    0 00:00:01.06         81     357',
+  '10000002 OPCOM              0 00:00:00.06        149     269',
   '10000003 NETACP             0 00:00:00.15       1311    1683',
   '10000005 SYSTEM             0 00:00:00.47       1098     876',
   ' $ ',
@@ -1112,8 +1113,8 @@ test('rd vms-c56: chatter on an OVMX console fails a run that otherwise passes; 
 
 test('SHOW SYSTEM rows parse as the node printed them, unnamed rows included', () => {
   const rows = GATE.parseShowSystem('junk\n' + OVMX_SHOW_SYSTEM);
-  assert.deepEqual(rows.map((r) => r.name), ['JOB_CONTROL', '', 'NETACP', 'SYSTEM']);
-  assert.equal(rows[2].pid, '10000003');
+  assert.deepEqual(rows.map((r) => r.name), ['JOB_CONTROL', '', 'OPCOM', 'NETACP', 'SYSTEM']);
+  assert.equal(rows[3].pid, '10000003');
   assert.equal(GATE.parseShowSystem('no table here'), null);
 });
 
@@ -1143,17 +1144,20 @@ test('the real VAX\'s own SHOW SYSTEM parses to the oracle list (VAXC capture, 2
   }
 });
 
-test('SHOW SYSTEM: JOB_CONTROL and NETACP are required, the gaps are honestly absent', () => {
+test('SHOW SYSTEM: JOB_CONTROL, NETACP and OPCOM are required, the gaps are honestly absent', () => {
   const ok = GATE.parseShowSystem(OVMX_SHOW_SYSTEM);
   assert.equal(GATE.showSystemWhy(ok), null);
   const noNet = ok.filter((r) => r.name !== 'NETACP');
   assert.match(GATE.showSystemWhy(noNet), /missing NETACP/);
+  // rd vms-798: OPCOM is a real facility now, so its absence fails the run
+  const noOpcom = ok.filter((r) => r.name !== 'OPCOM');
+  assert.match(GATE.showSystemWhy(noOpcom), /missing OPCOM/);
   assert.match(GATE.showSystemWhy(null), /no SHOW SYSTEM table/);
 });
 
 test('SHOW SYSTEM: a ledgered gap that appears fails -- a placeholder, or a ledger to move', () => {
-  const rows = [...GATE.parseShowSystem(OVMX_SHOW_SYSTEM), { pid: '10000009', name: 'OPCOM' }];
-  assert.match(GATE.showSystemWhy(rows), /shows OPCOM, which the gap ledger says OVMX lacks/);
+  const rows = [...GATE.parseShowSystem(OVMX_SHOW_SYSTEM), { pid: '10000009', name: 'AUDIT_SERVER' }];
+  assert.match(GATE.showSystemWhy(rows), /shows AUDIT_SERVER, which the gap ledger says OVMX lacks/);
 });
 
 test('a run whose SHOW SYSTEM falls short does not pass, and says why', () => {

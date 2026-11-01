@@ -320,8 +320,11 @@ int main(int argc, char **argv)
           "SET FILE/VERSION_LIMIT is refused SS$_UNSUPPORTED (%X00000E4A)");
 
     /* 6. CONTROL, not write: [100,100], unprivileged */
-    check(create_file(chan, "PRO1FB7.TXT", 1, 4, 0x0000, &fid_other) & 1,
-          "create PRO1FB7.TXT [1,4] with every category RWED (world-writable)");
+    /* (S:RWED,O:RWED,G:RWED,W:RWD) = 0x4000: world may WRITE it. Not 0x0000 --
+     * the ODS-2 header builder takes a zero protection to mean "the class
+     * default" (ods2_edit.c), so a created file cannot start at 0x0000. */
+    check(create_file(chan, "PRO1FB7.TXT", 1, 4, 0x4000, &fid_other) & 1,
+          "create PRO1FB7.TXT [1,4] (S:RWED,O:RWED,G:RWED,W:RWD) (world-writable)");
     check(create_file(chan, "PRM1FB7.TXT", 100, 100, 0xFF00, &fid_mine) & 1,
           "create PRM1FB7.TXT owned by [100,100]");
     /* negctl: acp-modify-prot-needs-only-write */
@@ -332,7 +335,7 @@ int main(int argc, char **argv)
     printf("  (PRO1FB7.TXT after the refused change: access %%X%08X, header protection %04X)\n",
            (unsigned)st, (unsigned)prot);
     /* negctl: acp-modify-prot-needs-only-write */
-    check((st & 1) && prot == 0x0000, "and its header protection is unchanged");
+    check((st & 1) && prot == 0x4000, "and its header protection is unchanged");
     check(as_child(argv[0], fid_mine, 0xEE00) & 1,
           "the owner (CONTROL by ownership) changes its own file's protection");
     st = header_of(chan, "PRM1FB7.TXT", &prot, NULL, NULL);

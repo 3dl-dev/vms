@@ -183,7 +183,13 @@ def cmd_spans(paths):
 
 def selftest():
     """Pin the table rd vms-6e6 reasons from. If the corpus grows these move,
-    and the item's numbers must move with them."""
+    and the item's numbers must move with them.
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+"""
     paths = captures([CORPUS])
     ok = True
 

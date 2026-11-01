@@ -226,7 +226,14 @@ def report(paths):
 
 def selftest(repo):
     """Pin the figures rd vms-3ac's (d) and the `dlm_deq` grounding rows rest
-    on. If the corpus grows these move, and whatever quotes them moves too."""
+    on. If the corpus grows these move, and whatever quotes them moves too.
+
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+    """
     paths = rc.walk_inputs([os.path.join(repo, 'tests', 'lab', 'captures')])
     real, ovmx = deq_frames(paths)
     answers = deq_answers(paths)

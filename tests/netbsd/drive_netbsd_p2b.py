@@ -244,7 +244,7 @@ def main():
                     # and `-I${.CURDIR}/../vmsfs/include' (vmsfs/ods2.h). Without
                     # this cp the ISO carries the header but the guest never sees
                     # it: `fatal error: vmsfs/ods2.h: No such file or directory'.
-                    "cp -R /mnt/kmod /mnt/probe /mnt/kernel-core /mnt/vmsfs /root/ovmx/ && "
+                    "cp -R /mnt/kmod /mnt/probe /mnt/kernel-core /mnt/kernel /mnt/vmsfs /root/ovmx/ && "
                     "umount /mnt && chmod -R u+w /root/ovmx && "
                     "ls -R /root/ovmx",
                     cmd_timeout)

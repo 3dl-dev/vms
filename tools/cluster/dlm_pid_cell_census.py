@@ -174,7 +174,13 @@ def cmd_answers(paths):
 def selftest():
     """Re-derive the three figures rd vms-c55 and the codec header cite. If the
     corpus grows these move, and the numbers in the source must move with them
-    -- which is the point of pinning them here."""
+    -- which is the point of pinning them here.
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+"""
     paths = captures([CORPUS])
     ok = True
 

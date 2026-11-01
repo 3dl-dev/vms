@@ -287,6 +287,19 @@ struct vms_dlm_scs {
 				       /* system matched to a request of OURS    */
 	uint32_t dir_self_mastered;   /* lookups answered by SERVING as master  */
 				       /* (p. 6-31 outcome (a)), not redirected  */
+	/*
+	 * A RESOURCE THIS NODE *DOES* MASTER AND COULD NOT SERVE (rd vms-025,
+	 * the 2026-10-09 lab finding). It used to be counted as
+	 * `dir_self_held` -- whose meaning, and whose console line, is "this
+	 * node holds locks on the name and does NOT master it". On the lab bed
+	 * that line was simply FALSE: the engine's own
+	 * vms_lock_dlm_name_mastered_here() read 1 on that node while the
+	 * console said the opposite, and the run was spent chasing the fault
+	 * the console named instead of the one it had. Mastered-and-unserved is
+	 * a different fact from not-mastered, so it is counted and said apart.
+	 */
+	uint32_t dir_master_unserved;
+	uint8_t  dir_said_master_unserved;
 	uint8_t  dir_said_self_held;
 	uint8_t  dir_said_unanswered;
 	uint8_t  dir_said_misaddressed;
@@ -2091,6 +2104,21 @@ static void dlm_arm_dir_say(struct vms_dlm_scs *d, uint8_t *said,
 }
 
 /*
+ * "WE MASTER IT, AND WE COULD NOT SERVE IT" -- the one line this node may
+ * print about a resource its own engine says it masters (rd vms-025). Counted
+ * apart from `dir_self_held`, whose line asserts the opposite of what the
+ * engine read on the lab bed. Said once per boot: a refused peer retries.
+ */
+static void dlm_arm_dir_master_unserved(struct vms_dlm_scs *d)
+{
+	d->dir_master_unserved++;
+	dlm_arm_dir_say(d, &d->dir_said_master_unserved,
+		"%DLM, a VMS system asked this node, its lock directory, for a "
+		"resource this node MASTERS, and it could not be served as "
+		"master: not answered");
+}
+
+/*
  * Is `hash` one of THIS node's directory entries by OUR vector? A vector
  * that is not built answers yes: nothing can be judged against it.
  *
@@ -2215,16 +2243,26 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 
 	/* p. 6-51 outcome (a) FIRST: a name this node masters is resolved as the
 	 * master, never answered from the directory table. */
-	if (dlm_arm_dir_name_mastered(id) &&
-	    dlm_arm_dir_serve_as_master(d, req, reply) == 0)
-		return 0;
+	if (dlm_arm_dir_name_mastered(id)) {
+		if (dlm_arm_dir_serve_as_master(d, req, reply) == 0)
+			return 0;
+		/*
+		 * WE DO MASTER IT and still could not serve it -- said as
+		 * THAT, and not as "this node ... does not master", which is
+		 * what this path used to fall through to and print (rd
+		 * vms-025). The read it contradicted was the engine's own.
+		 */
+		dlm_arm_dir_master_unserved(d);
+		return -1;
+	}
 
 	if (dlm_arm_dir_name_held(id)) {
 		/*
-		 * We hold locks on the name but do NOT master it (or cannot
-		 * serve as master in this configuration): some other system is
-		 * the master, so "you master it" would be false and a guess.
-		 * Not answered, counted, said once.
+		 * We hold locks on the name but do NOT master it: some other
+		 * system is the master, so "you master it" would be false and a
+		 * guess. Not answered, counted, said once. (A resource we DO
+		 * master can no longer reach here -- it is answered, or named
+		 * as mastered-and-unserved, above.)
 		 */
 		d->dir_self_held++;
 		dlm_arm_dir_say(d, &d->dir_said_self_held,
@@ -2254,11 +2292,7 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 		 * the engine read above, reached from the table instead. */
 		if (dlm_arm_dir_serve_as_master(d, req, reply) == 0)
 			return 0;
-		d->dir_self_held++;
-		dlm_arm_dir_say(d, &d->dir_said_self_held,
-			"%DLM, a VMS system asked this node, its lock directory, "
-			"for a resource this node masters and it could not be "
-			"served as master: not answered");
+		dlm_arm_dir_master_unserved(d);
 		return -1;
 	}
 	if (dlm_arm_dir_tr_redirect(d, req, o))
@@ -2806,6 +2840,68 @@ static void dlm_arm_transition_begin(void *ctx,
 	d->transitions_begun++;
 }
 
+/*
+ * HOW MANY OF THE WEIGHT VECTOR'S ENTRIES ARE THIS NODE'S OWN.
+ *
+ * p. 6-32 / struct vms_ldwv: a system's own entries read 0 in its own copy. An
+ * unbuilt vector answers 0, like every other read of it -- never a guess.
+ */
+static uint32_t dlm_arm_own_dir_entries(const struct vms_ldwv *v)
+{
+	uint32_t i, mine = 0u;
+
+	if (!v->valid)
+		return 0u;
+	for (i = 0u; i < v->n && i < VMS_LDWV_MAX_ENTRIES; i++) {
+		if (v->entry[i] == 0u)
+			mine++;
+	}
+	return mine;
+}
+
+/*
+ * WHERE THIS NODE STANDS IN THE DIRECTORY IT JUST REBUILT (rd vms-025, asked
+ * for by the real-VAX lab).
+ *
+ * The Lock Directory Weight Vector decides, for every root resource in the
+ * cluster, which system is its directory node (Davis p. 6-31/6-32) -- and on
+ * the 2026-10-09 lab bed nothing on OPA0: said what that vector had come out
+ * as, so a misconfiguration (an operator's LOCKDIRWT that never reached the
+ * executive) was invisible and had to be inferred from a refused lock.
+ *
+ * One line per state transition, which is exactly when the vector is refilled.
+ * Every number is READ off the vector that now stands: how many entries it
+ * holds, how many systems it represents, how many of those entries are this
+ * node's own, whether it rests on LOCKDIRWTs real members advertised or on the
+ * all-zero reading, and whether any member could not be proven to run this
+ * implementation. The arm formats it because the vector's own TU is pure and
+ * has no console.
+ */
+static void dlm_arm_say_ldwv(struct vms_dlm_scs *d)
+{
+	const struct vms_ldwv *v;
+
+	if (d->cl == NULL)
+		return;
+	v = &d->cl->club.ldwv;
+	if (!v->valid || v->n == 0u) {
+		dlm_arm_log(d, "%DLM, lock directory weight vector: NOT "
+			       "authoritative -- no root resource can be "
+			       "directed");
+		return;
+	}
+	exec_console_printf("%%DLM, lock directory weight vector: %u entries "
+			    "over %u systems, %u of them this node's; weights "
+			    "%s; %s\n",
+			    (unsigned)v->n, (unsigned)v->n_members,
+			    (unsigned)dlm_arm_own_dir_entries(v),
+			    v->weights_learned ? "advertised" :
+						 "all-zero (unadvertised)",
+			    v->any_foreign ?
+				"a member does not run this implementation" :
+				"every member runs this implementation");
+}
+
 static void dlm_arm_transition_end(void *ctx,
 				   const struct cnxman_transition *tr,
 				   int completed)
@@ -2817,6 +2913,7 @@ static void dlm_arm_transition_end(void *ctx,
 	if (d == NULL)
 		return;
 	d->transitions_ended++;
+	dlm_arm_say_ldwv(d);
 	/* A transition is one of the two moments the CLUB can have learned this
 	 * node's CSID (the other is genesis); tell the engine at once rather
 	 * than waiting for the next beat. */
@@ -3207,7 +3304,13 @@ static void dlm_arm_project_state(const struct vms_cluster *cl,
 				  const struct vms_dlm_scs *d,
 				  struct vms_dlm_scs_view *out)
 {
+	uint32_t own = dlm_arm_own_dir_entries(&cl->club.ldwv);
+
 	out->lockdirwt          = (uint8_t)cl->params.lockdirwt;
+	/* rd vms-025: DERIVED from the vector that stands, on every projection
+	 * -- never a configured flag (INV-6). Clamped to the byte it occupies;
+	 * the vector's own length is on the OPA0: transition line. */
+	out->directory_vector_own = (uint8_t)((own > 255u) ? 255u : own);
 	out->rebuild_generation = vms_ldwv_generation(&cl->club.ldwv);
 	/* "the VMS$VAXcluster CDT carrying cat-02 is open" -- read as the CLUB's
 	 * own member count being more than this node, which is exactly when

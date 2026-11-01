@@ -5,8 +5,8 @@
 # EXPECT: contains: \FDAFS\
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement
 # EXPECT: contains: \BOGUS\
-# EXPECT: contains:$STATUS = "%X00038240"
-# EXPECT_NOT: contains:$STATUS = "%X00000001"
+# EXPECT: contains:$STATUS == "%X00038240"
+# EXPECT_NOT: contains:$STATUS == "%X00000001"
 #
 # THE FINDING THIS GATES (docs/design-dcl-fidelity.md sec 2, INV-DCL sec 3).
 # struct dcl_verb (src/vmsdcl/include/dcl/cdu.h) carries only a boolean

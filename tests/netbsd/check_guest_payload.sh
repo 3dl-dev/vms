@@ -149,6 +149,56 @@ cmd_check() {
         exit 1
     fi
     echo "PASS: tests/netbsd/Dockerfile stages every source + local header the in-guest module build needs ($(printf '%s\n' $need | wc -l | tr -d ' ') files)"
+
+    # 4. staging in the Dockerfile is not enough: each in-guest driver copies
+    #    the ISO's top-level guest-src dirs into /root/ovmx by an explicit
+    #    `cp -R /mnt/<dir> ...' list. vms-9394 staged guest-src/kernel/ (vms_l2.h)
+    #    but no driver copied /mnt/kernel, so every nightly NetBSD/amd64 executive
+    #    leg died with `vms_l2_nb.h: fatal error: vms_l2.h: No such file' while
+    #    steps 1-3 passed. Every staged top-level dir must be copied.
+    cmd_drivers
+}
+
+# staged_topdirs <dockerfile> - the top-level dirs under /netbsd/guest-src/ that
+# any COPY line writes into (kmod, kernel-core, kernel, vmsfs, probe, ...).
+staged_topdirs() {
+    grep -E '^COPY[[:space:]]' "$1" | grep -oE '/netbsd/guest-src/[A-Za-z0-9_.-]+' \
+        | sed 's#/netbsd/guest-src/##' | sort -u
+}
+
+# check_driver_copies <dockerfile> <driver.py...> - every staged top-level dir
+# appears as `/mnt/<dir>' on each driver's `cp -R /mnt/...' line.
+check_driver_copies() {
+    df="$1"; shift
+    bad=0
+    dirs="$(staged_topdirs "$df")"
+    for drv in "$@"; do
+        line="$(grep -E 'cp -R /mnt/' "$drv" || true)"
+        if [ -z "$line" ]; then
+            echo "FAIL: $(basename "$drv") has no 'cp -R /mnt/...' staging line"; bad=1; continue
+        fi
+        for d in $dirs; do
+            case " $(printf '%s' "$line" | tr '"' ' ') " in
+                *" /mnt/$d "*) ;;
+                *) echo "FAIL: guest-src/$d is staged by the Dockerfile but $(basename "$drv") never copies /mnt/$d into /root/ovmx"; bad=1;;
+            esac
+        done
+    done
+    return "$bad"
+}
+
+cmd_drivers() {
+    drivers=""
+    for d in "$REPO"/tests/netbsd/drive_netbsd_p*.py; do
+        [ -f "$d" ] && grep -q 'cp -R /mnt/' "$d" && drivers="$drivers $d"
+    done
+    [ -n "$drivers" ] || { echo "FAIL: found no in-guest driver with a 'cp -R /mnt/' staging line"; exit 2; }
+    # shellcheck disable=SC2086
+    if ! check_driver_copies "$DF" $drivers; then
+        echo "  -> add the dir to the driver's 'cp -R /mnt/... /root/ovmx/' list"
+        exit 1
+    fi
+    echo "PASS: every in-guest driver copies every staged guest-src dir ($(staged_topdirs "$DF" | tr '\n' ' '))"
 }
 
 cmd_selftest() {
@@ -225,8 +275,29 @@ EOF
         echo "  ok: is_staged() requires an exact path match, not a substring"
     fi
 
+    # Fixture C: a driver that copies every staged top-level dir passes; one
+    # that omits /mnt/kernel (the vms-9394 miss) is reported.
+    cat >"$tmp/dirs.Dockerfile" <<'EOF'
+FROM scratch
+COPY src/kernel-netbsd/vms_netbsd.c /netbsd/guest-src/kmod/vms_netbsd.c
+COPY src/kernel/vms_l2.h src/kernel/vms_l2_station.h /netbsd/guest-src/kernel/
+COPY src/kernel-core/vms_lnm.c /netbsd/guest-src/kernel-core/
+EOF
+    echo '    "cp -R /mnt/kmod /mnt/kernel-core /mnt/kernel /root/ovmx/ && "' >"$tmp/good.py"
+    echo '    "cp -R /mnt/kmod /mnt/kernel-core /root/ovmx/ && "' >"$tmp/bad.py"
+    if check_driver_copies "$tmp/dirs.Dockerfile" "$tmp/good.py" >/dev/null; then
+        echo "  ok: a driver copying every staged dir passes"
+    else
+        echo "FAIL: check_driver_copies() rejected a driver that copies every staged dir"; rc=1
+    fi
+    if check_driver_copies "$tmp/dirs.Dockerfile" "$tmp/bad.py" >/dev/null; then
+        echo "FAIL: check_driver_copies() passed a driver that never copies /mnt/kernel"; rc=1
+    else
+        echo "  ok: a driver missing /mnt/kernel is reported (the vms-9394 miss)"
+    fi
+
     if [ "$rc" -eq 0 ]; then
-        echo "PASS: staged_files()/is_staged() correctly parse both COPY forms"
+        echo "PASS: staged_files()/is_staged() correctly parse both COPY forms + driver copies"
     fi
     return "$rc"
 }

@@ -180,7 +180,10 @@ def selftest(repo):
     check('*** ...all of them the 26-byte binary form ***', len(pop), 64)
     check('frames carrying a real-originated RMS$ name',
           sum(real.values()), 1888)
-    check('distinct OVMX-ORIGINATED RMS$ names', len(ovmx), 4)
+    # rd vms-083's arm capture added a FIFTH OVMX-originated text name --
+    # that node's own RMS lock during its boot. The figure is re-derived
+    # with the corpus, exactly as the denominators above are.
+    check('distinct OVMX-ORIGINATED RMS$ names', len(ovmx), 5)
     check('*** ...none of them the 26-byte form ***',
           sum(1 for nm in ovmx if len(nm) == FORM_LEN), 0)
     check('...their lengths', sorted({len(nm) for nm in ovmx}), [9, 10, 12])

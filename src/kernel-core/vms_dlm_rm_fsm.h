@@ -59,15 +59,49 @@
  * node that treated the first 0x13 as the end would have closed the adoption
  * and then refused four locks a real VAX still believes it holds.
  *
- * WHO IS OWED ONE, then? Every OTHER MEMBER OF THE CLUSTER. In every episode
- * the op-0x13 senders are exactly the SELECTED members other than the new
- * master -- including, in the RA8 CACHE$ episode, a member that held nothing
- * in the tree and sent no record at all. That set is not on the wire this node
- * can see (the 0x0f and 0x11 that tell the others are point-to-point), so it
- * is READ FROM THE CLUB (`ops->other_members`, p. 7-49's SELECTED set minus
- * this node) when the 0x0e opens the tree, and a member that LEAVES mid-tree
- * is struck from it (`vms_dlm_rm_member_departed`) rather than waited for
- * forever.
+ * WHO IS OWED ONE, then? NOT the whole club -- A MEMBER WITH NO ROLE IN THE
+ * TREE SENDS NOTHING, AND IS NOT EVEN TOLD. That used to read "every other
+ * member of the cluster", from a census of uncontrolled episodes; a member
+ * that owes nothing then leaves the tree un-HELD forever, which is the double
+ * grant of rd vms-5cd. It is now settled by a DRIVEN, PRE-REGISTERED
+ * ONE-VARIABLE ARM on two real OpenVMS VAX V7.3 nodes and one OVMX node
+ * (rd vms-083, tests/lab/captures/vms-083-dirnode-20261022): same three
+ * members, same LOCKDIRWTs 1/1/0, same holder at the same mode, same
+ * STOP-the-old-holder trigger, and ONE variable moved -- which node the tree's
+ * root NAME assigns as its DIRECTORY node, set by reading the DIRENTR off the
+ * real nodes' own SDA and verified on the wire. Four runs, both VAX role
+ * assignments:
+ *
+ *   directory is a THIRD member  ->  TWO op-0x13s: the old master AND the
+ *                                    directory node (which held NO lock and
+ *                                    sent NO record); the third member was
+ *                                    told by an op-0x0f and an op-0x11.
+ *   directory IS the old master  ->  ONE op-0x13, from the old master alone.
+ *                                    The remaining member got NO op-0x0f and
+ *                                    NO op-0x11 and sent nothing -- 180 s.
+ *
+ * So the owed set is COMPUTED FROM EXECUTIVE STATE, as three things this node
+ * genuinely holds, and never as a count or a majority:
+ *
+ *   1. THE OLD MASTER -- the system the 0x0e came FROM, as the connection
+ *      manager identified it (`in->from_csid`). A tree whose old master this
+ *      node cannot address is refused.
+ *   2. THE TREE'S DIRECTORY NODE -- `ops->dir_node`, which resolves the hash
+ *      the ENGINE holds for the root name through the connection manager's own
+ *      weight vector (the same two reads the requester path routes a lookup
+ *      with). Added only when it names a SELECTED member other than this node.
+ *      Not knowable -> not added, and the arm's own evidence for that
+ *      resolution being right is that OVMX's lookups for all four arm names
+ *      went to the node the real cluster's SDA named as that name's directory.
+ *   3. EVERY MEMBER THAT REALLY SENT A 0x12 RECORD -- a holder, added when its
+ *      record is adopted, because a holder's 0x13 follows its records.
+ *
+ * And because the prediction may be incomplete where this node holds no hash,
+ * a 0x13 from a SELECTED member that is not in the set is ADMITTED and acked
+ * rather than refused (counted separately): rule W1 is about the senders,
+ * which are a fact, where the owed set is a prediction. A member that LEAVES
+ * mid-tree is struck from it (`vms_dlm_rm_member_departed`) rather than waited
+ * for forever.
  *
  * ===========================================================================
  * INV-6, STRUCTURALLY: WHAT THIS FILE CAN AND CANNOT ASSERT
@@ -234,6 +268,23 @@ struct vms_dlm_rm_ops {
 			uint16_t group, uint8_t mode, uint32_t *out_hash);
 
 	/*
+	 * WHICH MEMBER IS THIS NAME'S DIRECTORY NODE? (rd vms-083.) The second
+	 * of the two systems that owe this tree an end-of-records, and the one
+	 * this node must not wait for when it is the old master itself.
+	 *
+	 * Behind this door are the SAME TWO READS the requester path routes a
+	 * directory lookup with, and no third: the hash the ENGINE holds for
+	 * the name (wire-learned or determined for routing -- never computed
+	 * for the asking, Rule 8) resolved through the connection manager's own
+	 * weight vector (Davis p. 6-31/6-32). Returns 1 and writes `*out_csid`
+	 * -- 0 meaning THIS node is the directory -- only when both reads
+	 * succeeded; 0 means this node cannot name it, and then the directory
+	 * is simply not waited for.
+	 */
+	int (*dir_node)(void *ctx, const char *resnam, uint32_t resnam_len,
+			uint16_t group, uint8_t mode, uint32_t *out_csid);
+
+	/*
 	 * STAGE the answer to the step being handled. RULE A (vms_dlm_scs.h):
 	 * nothing here sends a reply -- the connection manager sends it,
 	 * correlated with the transaction it answers.
@@ -309,7 +360,14 @@ struct vms_dlm_rm {
 	uint32_t records_duplicate;  /* ... retransmits, same handle returned  */
 	uint32_t records_refused;    /* ... refused: the tree was given back   */
 	uint32_t ends_seen;          /* 0x13 end-of-records accepted           */
-	uint32_t ends_unexpected;    /* 0x13 from a system owed nothing        */
+	uint32_t ends_unexpected;    /* 0x13 from a system that is no member   */
+	uint32_t ends_admitted;      /* 0x13 from a MEMBER the owed set did    */
+				     /* not predict: admitted and acked        */
+	uint32_t owed_dir_named;     /* trees whose directory node this node   */
+				     /* could name and therefore waits for     */
+	uint32_t owed_dir_unknown;   /* ... and the ones it could not: the     */
+				     /* directory is not waited for            */
+	uint32_t owed_overflow;      /* a member that would not fit the set    */
 	uint32_t trees_held;         /* adoptions this node really completed   */
 	uint32_t held_sent;          /* op-0x14s really put on the wire        */
 	uint32_t held_unsent;        /* op-0x14s owed and not sent (counted,   */

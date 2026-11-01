@@ -476,6 +476,11 @@ def selftest(root):
     # 792/795 -> 799/802). Six of the seven new episodes are the two real VAXes'
     # own CACHE$ hand-overs during the run; the seventh is RA7T moving onto the
     # OVMX node, and it satisfies W1 and W2 like the rest.
+    # 2026-11-01: rd vms-083's four-arm directory capture then landed in main
+    # (3,561/4,009 -> 3,593/4,041; 799/802 -> 804/807) -- five more episodes,
+    # the arm's own hand-overs, and the RULE HELD over all of them: the five new
+    # ones satisfy W1 too, and the 3 of 807 that do not are the same three the
+    # rule has always carried, not new ones.
     # 2026-10-22, again: +5 episodes and +24 answered steps from the rd vms-a4d7
     # GRANT-NOTIFY fire (3,570/4,018 -> 3,594/4,042; 799/802 -> 804/807). THREE
     # of the five are A4D1 and A4D2 moving onto the OVMX node and the VAXes'

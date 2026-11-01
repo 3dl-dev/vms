@@ -798,6 +798,50 @@ static inline int exec_blockdev_read_block(unsigned int major, unsigned int mino
 }
 
 /*
+ * READ `nblk` CONSECUTIVE 512-byte logical blocks from `lbn` (rd vms-465): one
+ * synchronous bio for the whole run instead of one per block, the way a disk
+ * driver transfers a multi-block request. The Files-11 ACP's IO$_READVBLK hands
+ * it the physically contiguous stretch of a file's extent (an image activation
+ * reads tens of MB this way); a single-block read is this with nblk 1. Returns
+ * 0 on success, nonzero on any failure; the caller then falls back to block by
+ * block. Uses the cached backing handle only (no open-per-call path): without
+ * it, -1, and the caller reads block by block. Same public block-layer APIs as
+ * the single-block read (Rule 8).
+ */
+#define EXEC_BLOCKDEV_RUN_MAX 128u     /* blocks per bio: 64 KiB */
+static inline int exec_blockdev_read_run(unsigned int major, unsigned int minor,
+					 uint64_t lbn, unsigned int nblk, void *buf)
+{
+	struct block_device *bdev;
+	struct bio bio;
+	struct bio_vec bvec;
+	struct page *page;
+	size_t len = (size_t)nblk * 512u;
+	unsigned int order;
+	int ret = -1;
+
+	if (!buf || nblk == 0 || nblk > EXEC_BLOCKDEV_RUN_MAX)
+		return -1;
+	bdev = exec_bdev_get_cached(MKDEV(major, minor));
+	if (!bdev)
+		return -1;
+	order = get_order(len);
+	page = alloc_pages(GFP_KERNEL, order);
+	if (!page)
+		return -1;
+	bio_init(&bio, bdev, &bvec, 1, REQ_OP_READ);
+	bio.bi_iter.bi_sector = (sector_t)lbn;   /* 512-byte units == ODS-2 LBN */
+	__bio_add_page(&bio, page, (unsigned int)len, 0);
+	if (submit_bio_wait(&bio) == 0) {
+		memcpy(buf, page_address(page), len);
+		ret = 0;
+	}
+	bio_uninit(&bio);
+	__free_pages(page, order);
+	return ret;
+}
+
+/*
  * WRITE one 512-byte logical block to a backing block device, the write twin of
  * exec_blockdev_read_block above -- for the Files-11 ODS-2 ACP IO$_WRITEVBLK /
  * implicit-extend path (vms-c60; see exec_kbackend.h). Opens the device

@@ -174,7 +174,13 @@ def cmd_answers(paths):
 def selftest():
     """Re-derive the three figures rd vms-c55 and the codec header cite. If the
     corpus grows these move, and the numbers in the source must move with them
-    -- which is the point of pinning them here."""
+    -- which is the point of pinning them here.
+    rd vms-025 (2026-11-01) added tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/
+    ev2-mixed-refusal.pcap to the corpus, so the TOTALS below grew. Every
+    structural figure -- the zero-valued rules and the per-family mappings --
+    is unchanged by it: the new capture carries no counter-example, only more
+    frames of families already measured here.
+"""
     paths = captures([CORPUS])
     ok = True
 
@@ -187,9 +193,9 @@ def selftest():
 
     c = cmd_census(paths)
     print('-- a fresh op-0x01 request names the PROCESS, later ops the HANDLE')
-    check('op-0x01 pid-shaped', c[(0x01, 'pid-shaped')], 20525)
-    check('op-0x01 zero', c[(0x01, 'zero')], 15)
-    check('op-0x03 lock-id', c[(0x03, 'lock-id')], 9875)
+    check('op-0x01 pid-shaped', c[(0x01, 'pid-shaped')], 20657)
+    check('op-0x01 zero', c[(0x01, 'zero')], 16)
+    check('op-0x03 lock-id', c[(0x03, 'lock-id')], 9923)
     check('op-0x03 zero', c[(0x03, 'zero')], 0)
 
     print('-- and the cell is per-PROCESS: one value, many resources')
@@ -202,7 +208,7 @@ def selftest():
     check('0xfe answers with a ZERO echoed cell', fe_zero, 12)
     check('0xfe answers with a NONZERO echoed cell', fe_nonzero, 0)
     check('answers to a NONZERO cell, all outcomes',
-          sum(n for (k, _s), n in a.items() if k == 'nonzero'), 19534)
+          sum(n for (k, _s), n in a.items() if k == 'nonzero'), 19626)
     check('answers to a ZERO cell, all outcomes',
           sum(n for (k, _s), n in a.items() if k == 'zero'), 44)
     return 0 if ok else 1

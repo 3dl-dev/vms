@@ -78,7 +78,7 @@ const OVMX_SHOW_SYSTEM = [
   'OpenVMX V0.7-13 - OpenVMS-compatible  on node OVMXA  21-OCT-2026 14:17:46.84  Uptime  0 00:02:59',
   '  Pid    Process Name          CPU         Page flts   Pages',
   '10000004 JOB_CONTROL        0 00:00:00.02         89     363',
-  '10000001                    0 00:00:01.06         81     357',
+  '10000001 STARTUP            0 00:00:01.06         81     357',   // rd vms-66e: the boot task, named
   '10000002 OPCOM              0 00:00:00.06        149     269',
   '10000003 NETACP             0 00:00:00.15       1311    1683',
   '10000005 SYSTEM             0 00:00:00.47       1098     876',
@@ -1111,9 +1111,9 @@ test('rd vms-c56: chatter on an OVMX console fails a run that otherwise passes; 
 // rd vms-6512: SHOW SYSTEM against the real VAX's system-process list.
 // ---------------------------------------------------------------------------
 
-test('SHOW SYSTEM rows parse as the node printed them, unnamed rows included', () => {
+test('SHOW SYSTEM rows parse as the node printed them', () => {
   const rows = GATE.parseShowSystem('junk\n' + OVMX_SHOW_SYSTEM);
-  assert.deepEqual(rows.map((r) => r.name), ['JOB_CONTROL', '', 'OPCOM', 'NETACP', 'SYSTEM']);
+  assert.deepEqual(rows.map((r) => r.name), ['JOB_CONTROL', 'STARTUP', 'OPCOM', 'NETACP', 'SYSTEM']);
   assert.equal(rows[3].pid, '10000003');
   assert.equal(GATE.parseShowSystem('no table here'), null);
 });
@@ -1153,6 +1153,14 @@ test('SHOW SYSTEM: JOB_CONTROL, NETACP and OPCOM are required, the gaps are hone
   const noOpcom = ok.filter((r) => r.name !== 'OPCOM');
   assert.match(GATE.showSystemWhy(noOpcom), /missing OPCOM/);
   assert.match(GATE.showSystemWhy(null), /no SHOW SYSTEM table/);
+});
+
+test('SHOW SYSTEM: a row with no process name fails (rd vms-66e)', () => {
+  const rows = [...GATE.parseShowSystem(OVMX_SHOW_SYSTEM), { pid: '00000001', name: '' }];
+  assert.match(GATE.showSystemWhy(rows), /unnamed process 00000001/);
+  const parsed = GATE.parseShowSystem('  Pid    Process Name          CPU\n00000001                    0 00:02:04.12        243     905\n');
+  assert.deepEqual(parsed, [{ pid: '00000001', name: '' }]);
+  assert.match(GATE.showSystemWhy(parsed), /unnamed process 00000001/);
 });
 
 test('SHOW SYSTEM: a ledgered gap that appears fails -- a placeholder, or a ledger to move', () => {

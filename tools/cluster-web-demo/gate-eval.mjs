@@ -964,6 +964,10 @@ export function showSystemWhy(rows) {
   if (!rows) return 'no SHOW SYSTEM table was printed';
   const names = new Set(rows.map((r) => r.name));
   const why = [];
+  // rd vms-66e: VMS lists no process without a name; a nameless row (the boot
+  // task, before it named itself STARTUP) is a placeholder a visitor sees.
+  const nameless = rows.filter((r) => !r.name).map((r) => r.pid);
+  if (nameless.length) why.push(`unnamed process ${nameless.join(',')}`);
   const missing = SHOW_SYSTEM_REQUIRED.filter((n) => !names.has(n));
   if (missing.length) why.push(`missing ${missing.join(',')}`);
   const placeholders = Object.keys(SHOW_SYSTEM_GAPS).filter((n) => names.has(n));

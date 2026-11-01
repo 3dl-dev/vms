@@ -12,7 +12,7 @@
 # A mistyped command refreshes $STATUS to an (even) error → IF .NOT. $STATUS catches it.
 # EXPECT: contains:STATUS_FALSE_ON_ERROR
 # $STATUS renders VMS-style "%Xhhhhhhhh", not decimal.
-# EXPECT: regex:\$STATUS = "%X0*1"
+# EXPECT: regex:\$STATUS == "%X0*1"
 # CALL passes P1/P2 into a fresh subroutine level.
 # EXPECT: contains:SUB_P1P2=[alpha][beta]
 # RETURN [status] sets $STATUS to the returned (even) value → caller sees failure.

@@ -172,7 +172,7 @@ check "prints the %PARTS-I-DONE completion message" \
       "the procedure aborting partway (SET NOON papering over a real failure)"
 
 check "SHOW SYMBOL PARTS reports the foreign-command definition" \
-      'PARTS = "\$SYS\$SYSTEM:PARTS\.EXE"' \
+      'PARTS == "\$SYS\$SYSTEM:PARTS\.EXE"' \
       "the :== assignment not landing as a GLOBAL symbol, or landing with the wrong value"
 
 # Ground-source: the file actually landed under SYS$SYSTEM: (vmsfs stores

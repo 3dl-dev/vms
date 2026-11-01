@@ -1,0 +1,242 @@
+VAX1 (OpenVMS VAX V7.3), vaxlab-0, 2026-10-21 23:4x, console OPA0: logged in as SYSTEM (rd vms-390).
+Each command was followed by SHOW SYMBOL $STATUS. Read through ovmx-lab-console; CRs stripped.
+Verbatim. Lab left as found (scratch files deleted afterwards, BROADCAST restored, logged out).
+
+$ WRITE SYS$OUTPUT "===S0==="
+===S0===
+$ SET TERMINAL/NOBROADCAST
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ COPY NL: OVMXS.TMP
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ TYPE OVMXS.TMP
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ DIRECTORY OVMXS.TMP
+
+Directory SYS$SYSROOT:[SYSMGR]
+
+OVMXS.TMP;1         
+
+Total of 1 file.
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ APPEND NL: OVMXS.TMP
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DIFFERENCES OVMXS.TMP OVMXS.TMP
+Number of difference sections found: 0
+Number of difference records found: 0
+
+DIFFERENCES /IGNORE=()/MERGED=1-
+    SYS$SYSROOT:[SYSMGR]OVMXS.TMP;1-
+    SYS$SYSROOT:[SYSMGR]OVMXS.TMP;1
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X006C8009"
+$ SEARCH OVMXS.TMP ZZZQ
+%SEARCH-I-NULLFILE, file SYS$SYSROOT:[SYSMGR]OVMXS.TMP;1 contains no records
+%SEARCH-I-NOMATCHES, no strings matched
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X08D78053"
+$ SORT OVMXS.TMP OVMXT.TMP
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ RENAME OVMXT.TMP OVMXU.TMP
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ PURGE OVMXS.TMP
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ DELETE OVMXU.TMP;*
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ DUMP/BLOCK=COUNT=0 OVMXS.TMP
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ CREATE/DIRECTORY [.OVMXSD]
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ SHOW TIME
+  21-OCT-2026 23:45:04
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ SHOW DEFAULT
+  SYS$SYSROOT:[SYSMGR]
+  =   SYS$SYSROOT:[SYSMGR]
+  =   SYS$COMMON:[SYSMGR]
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ SHOW LOGICAL SYS$LOGIN
+   "SYS$LOGIN" = "SYS$SYSROOT:[SYSMGR]" (LNM$JOB_879AA580)
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SHOW TRANSLATION SYS$LOGIN
+  SYS$LOGIN = "SYS$SYSROOT:[SYSMGR]"  (LNM$JOB_879AA580)
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ SHOW PROCESS
+
+21-OCT-2026 23:45:33.20   User: SYSTEM           Process ID:   2020021E
+                          Node: VAX1             Process name: "SYSTEM"
+
+Terminal:           OPA0:
+User Identifier:    [SYSTEM]
+Base priority:      4
+Default file spec:  SYS$SYSROOT:[SYSMGR]
+
+Devices allocated:  VAX1$OPA0:
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SHOW DEVICE OPA0:
+
+Device                  Device           Error
+ Name                   Status           Count
+OPA0:                   Online               0
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SHOW USERS
+      OpenVMS User Processes at 21-OCT-2026 23:45:47.78
+    Total number of users = 1,  number of processes = 1
+
+ Username  Node     Interactive  Subprocess   Batch
+ SYSTEM     VAX1            1
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SHOW STATUS
+  Status on  21-OCT-2026 23:45:55.52     Elapsed CPU :   0 00:00:00.60
+  Buff. I/O :      438    Cur. ws. :     512    Open files :         0
+  Dir. I/O :        44    Phys. Mem. :   436    Page Faults :     8505
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SHOW PROTECTION
+  SYSTEM=RWED, OWNER=RWED, GROUP=RE, WORLD=NO ACCESS
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ SHOW TERMINAL
+Terminal: _OPA0:      Device_Type: LA36          Owner: SYSTEM
+
+   Input:     300     LFfill:  0      Width: 132      Parity: None
+   Output:    300     CRfill:  0      Page:   24      
+
+Terminal Characteristics:
+   Interactive        Echo               Type_ahead         No Escape
+   No Hostsync        TTsync             Lowercase          No Tab
+   Wrap               Hardcopy           No Remote          No Eightbit
+   No Broadcast       No Readsync        No Form            Fulldup
+   No Modem           No Local_echo      No Autobaud        No Hangup
+   No Brdcstmbx       No DMA             No Altypeahd       Set_speed
+   No Commsync        Line Editing       Insert editing     No Fallback
+   No Dialup          No Secure server   No Disconnect      No Pasthru
+   No Syspassword     No SIXEL Graphics  No Soft Characters No Printer Port
+   Numeric Keypad     No ANSI_CRT        No Regis           No Block_mode
+   No Advanced_video  No Edit_mode       No DEC_CRT         No DEC_CRT2
+   No DEC_CRT3        No DEC_CRT4        No DEC_CRT5        No Ansi_Color
+   VMS Style Input
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SHOW MEMORY/FILES
+              System Memory Resources on 21-OCT-2026 23:46:18.58
+
+Paging File Usage (pages):                      Free  Reservable       Total
+  DISK$SYSDSK1:[SYS0.SYSEXE]SWAPFILE.SYS       46496       46496       46496    
+  DISK$SYSDSK1:[SYS0.SYSEXE]PAGEFILE.SYS      122000       81780      122000    
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SET DEFAULT SYS$LOGIN
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ SET PROMPT="$ "
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ SET PROTECTION=(S:RWED,O:RWED,G:RE,W)/DEFAULT
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00010001"
+$ SET TERMINAL/WIDTH=80
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SET PROCESS/NAME="SYSTEM"
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ SET MESSAGE/TEXT
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ DEFINE OVMXL SYS$LOGIN
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ ASSIGN SYS$LOGIN OVMXM
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DEASSIGN OVMXL
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DEASSIGN OVMXM
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ WRITE SYS$OUTPUT "W"
+W
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00010001"
+$ OVMXSYM = 1
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ OPEN/READ OVMXF OVMXS.TMP
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ CLOSE OVMXF
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00010001"
+$ ALLOCATE TTD3:
+%DCL-I-ALLOC, _$2$TTD3: allocated
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ DEALLOCATE TTD3:
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ WAIT 0:0:1
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ HELP/NOPROMPT/OUTPUT=NL: DCL
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ COPY NOSUCHQ.TMP X.TMP
+%COPY-E-OPENIN, error opening SYS$COMMON:[SYSMGR]NOSUCHQ.TMP; as input
+-RMS-E-FNF, file not found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X1067109A"
+$ TYPE NOSUCHQ.TMP
+%TYPE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCHQ.TMP;
+-RMS-E-FNF, file not found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10951238"
+$ DIRECTORY NOSUCHQ.TMP
+%DIRECT-W-NOFILES, no files found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10018290"
+$ DELETE NOSUCHQ.TMP;*
+%DELETE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCHQ.TMP;*
+-RMS-E-FNF, file not found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10931238"
+$ SHOW LOGICAL NOSUCHQLOG
+%SHOW-S-NOTRAN, no translation for logical name NOSUCHQLOG
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10788019"
+$ SET DEFAULT NOSUCHDEVQ:[X]
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00030001"
+$ DEASSIGN NOSUCHQLOG
+%SYSTEM-F-NOLOGNAM, no logical name match
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X000001BC"
+$ DELETE OVMXS.TMP;*
+%DELETE-W-SEARCHFAIL, error searching for NOSUCHDEVQ:[X]OVMXS.TMP;*
+-RMS-F-DEV, error in device name or inappropriate device type for operation
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10931238"
+$ DELETE OVMXSD.DIR;1
+%DELETE-W-SEARCHFAIL, error searching for NOSUCHDEVQ:[X]OVMXSD.DIR;1
+-RMS-F-DEV, error in device name or inappropriate device type for operation
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10931238"
+$ WRITE SYS$OUTPUT "===S1==="

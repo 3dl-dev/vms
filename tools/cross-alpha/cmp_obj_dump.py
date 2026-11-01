@@ -37,7 +37,8 @@ def main():
     # "18-Oct-2026 08:02" from ctime(), the VMS branch (SYS$ASCTIM, which a VMS
     # host runs) "18-OCT-2006 08:08" in upper case, from the guest's own clock. Any
     # DD-MMM-YYYY HH:MM string in either object is a time stamp and is not compared.
-    stamp = re.compile(rb"\d\d-[A-Za-z]{3}-\d{4} \d\d:\d\d")
+    # Both writers pad a one-digit day with a blank (" 1-NOV-2026"), as $ASCTIM does.
+    stamp = re.compile(rb"[ \d]\d-[A-Za-z]{3}-\d{4} \d\d:\d\d")
     stamps = 0
     for blob in (a, got):
         for m in stamp.finditer(blob):

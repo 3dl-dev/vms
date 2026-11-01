@@ -16,6 +16,10 @@
  *     vms_dlm_blkast_parse_body           (blocking AST)
  *     vms_dlm_valblk_convert_parse_body   (CONVERT carrying the value block)
  *     vms_dlm_grant_notify_parse_body     (the DEFERRED GRANT, cat-0x02 op-0x02)
+ *     vms_dlm_dir_answer_parse_body       (a DIRECTORY's answer to a lookup)
+ *     vms_dlm_res_ident_parse_body        (the resource identity a request names)
+ *     vms_dlm_rm_step_parse_body          (a remaster step, 0x0e/0x0f/0x10/0x13/0x14)
+ *     vms_dlm_rm_lock_rec_parse_body      (a remaster LOCK RECORD, op-0x12)
  *     vms_cm_params_parse                 (CNXMAN op-01 PARAMS, votes)
  * plus the frame-level entry (vms_frame_classify -> vms_dlm_*_parse), the real
  * inbound path (body = frame + VMS_OFF_SYSAP_BODY, so a short frame exercises
@@ -129,6 +133,17 @@ static int t_valblk(const uint8_t *b, uint32_t n, void *c)
  * never-crash rule exists to close. */
 static int t_grant_notify(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_grant_notify_parse_body(b, n, (struct vms_dlm_grant_notify *)c); }
+static int t_dir_answer(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_dir_answer_parse_body(b, n, (struct vms_dlm_dir_answer *)c); }
+static int t_res_ident(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_res_ident_parse_body(b, n, (struct vms_dlm_res_ident *)c); }
+/* rd vms-380: the REMASTER decoders. A departing VAX's 0x0e/0x0f/0x10/0x12/0x13
+ * and a new master's 0x14 are bytes a real peer chooses, and rd vms-6ad1 (RA7)
+ * is about to put this node in the role that receives all of them. */
+static int t_rm_step(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_rm_step_parse_body(b, n, (struct vms_dlm_rm_step *)c); }
+static int t_rm_lock_rec(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_rm_lock_rec_parse_body(b, n, (struct vms_dlm_rm_lock_rec *)c); }
 static int t_cm_params(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_cm_params_parse(b, n, (struct vms_cm_params *)c); }
 static int t_dlksrch(const uint8_t *b, uint32_t n, void *c)
@@ -204,6 +219,10 @@ int main(void)
     struct vms_dlm_blkast blk;
     struct vms_dlm_valblk_convert cv;
     struct vms_dlm_grant_notify gn;
+    struct vms_dlm_dir_answer da;
+    struct vms_dlm_res_ident ri;
+    struct vms_dlm_rm_step rms;
+    struct vms_dlm_rm_lock_rec rmlr;
     struct vms_cm_params cmp;
     struct vms_dlm_dlksrch_record dlk;
     uint32_t hash;
@@ -219,6 +238,10 @@ int main(void)
     fuzz_body(t_blkast,    &blk,  VMS_DLM_WIREOP_BLKAST,        "blkast_parse_body: 100k, no over-read/crash");
     fuzz_body(t_valblk,    &cv,   VMS_DLM_WIREOP_CONVERT_VALBLK,"valblk_convert_parse_body: 100k, no over-read/crash");
     fuzz_body(t_grant_notify, &gn, VMS_DLM_WIREOP_GRANT_NOTIFY, "grant_notify_parse_body: 100k, no over-read/crash");
+    fuzz_body(t_dir_answer, &da,  VMS_DLM_WIREOP_ENQ,           "dir_answer_parse_body: 100k, no over-read/crash");
+    fuzz_body(t_res_ident, &ri,   VMS_DLM_WIREOP_ENQ,           "res_ident_parse_body: 100k, no over-read/crash");
+    fuzz_body(t_rm_step,   &rms,  VMS_DLM_WIREOP_RM_10,         "rm_step_parse_body: 100k, no over-read/crash");
+    fuzz_body(t_rm_lock_rec, &rmlr, VMS_DLM_WIREOP_RM_12,       "rm_lock_rec_parse_body: 100k, no over-read/crash");
     fuzz_body(t_cm_params, &cmp,  0,                            "cm_params_parse: 100k, no over-read/crash");
     fuzz_body(t_dlksrch,   &dlk,  VMS_DLM_WIREOP_DLKSRCH,       "dlksrch_parse_body: 100k, no over-read/crash");
 

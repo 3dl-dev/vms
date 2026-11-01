@@ -1,0 +1,29 @@
+# dcl-showproc-prib-not-read -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SHOW PROCESS Base priority: is the target's base priority read from the executive (rd vms-1f7)";;
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_showproc";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cmd_show_process() reads the target's base priority with vms_kif_pri(VMS_PRI_OP_GET, tgt_pid, ...). The mutation reads pid 0 -- the CALLER -- so SHOW PROCESS <subject> prints DCL's own default 4 instead of the 3 another process set: the field looks right and describes the wrong process. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+SHOW PROCESS <subject> prints Base priority: 3 -- the base priority another process set, read from the executive
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one base-priority read in cmd_show_process.
+        sed -i 's|^        if (vms_kif_pri(VMS_PRI_OP_GET, tgt_pid, \&prib, NULL, NULL) \& 1)$|        if (vms_kif_pri(VMS_PRI_OP_GET, 0, \&prib, NULL, NULL) \& 1) /* NEGCTL dcl-showproc-prib-not-read */|' "$_file"
+    :
+}

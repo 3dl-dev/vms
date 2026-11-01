@@ -308,14 +308,31 @@ static struct vms_acp_volume *acp_vol_find_locked(const char *devnam)
  *   'v' -- the standing VOLUME lock a faithful MOUNT holds for the whole mount
  *          life (vms-25e), the cluster-wide "this volume is mounted here" marker
  *          the connection manager registers during a directory rebuild.
- *   'a' -- the volume-ALLOCATION lock.
+ *   'a' -- accepted by this builder; no call site in this ACP takes one.
  * Derived from the ODS-2 volume LABEL so a clustered / MSCP-served volume computes
  * the SAME resource name on every node that serves it -- the DLM resource is the
- * cluster-wide sync point. The namespace follows VMS's public files-lock naming
- * ("F11B$..."); the exact string is an OVMX design choice, not a claim of VMS
- * byte-wire fidelity (Rule 8). An unlabelled volume falls back to its backing
- * device numbers so it still serializes locally. Host-neutral (fixed-width fields,
- * no long/pointer/sizeof) -- kernel-core portable for the Alpha/VAX cross-check.
+ * cluster-wide sync point. An unlabelled volume falls back to its backing device
+ * numbers so it still serializes locally. Host-neutral (fixed-width fields, no
+ * long/pointer/sizeof) -- kernel-core portable for the Alpha/VAX cross-check.
+ *
+ * WHAT IS AND IS NOT FAITHFUL HERE, now MEASURED rather than left open
+ * (tools/cluster/f11b_lock_census.py, ctest cluster_host_f11b_lock_census,
+ * rd vms-f4c0; clean-room, from our own captures of a real VAX cluster):
+ *   - kind 'v' IS the real form: a real node's per-volume root lock is
+ *     "F11B$v" + the 12-byte SPACE-PADDED label, 18 bytes, and vol->volname is
+ *     the raw home-block hm2_volname, so this builds those same bytes.
+ *   - kind 's' IS NOT. A real VAX's XQP serializes PER FILE: a 10-byte
+ *     "F11B$s" + a little-endian file number, enqueued as a SUB-lock of the
+ *     kind-'v' root above (37,416 frames, 590 distinct names; every resolvable
+ *     one parented on an F11B$v root), at PW, with the identity (UIC group 0,
+ *     access mode 0 = KERNEL). This 18-byte per-VOLUME string is one lock for
+ *     the whole volume, so an OVMX node and a real node writing the SAME file
+ *     on a SHARED volume hold DIFFERENTLY NAMED locks and do not serialize
+ *     against each other at all. rd vms-f4c0 replaces it; it needs counted
+ *     resource names (rd vms-326 piece 1) because the real name carries NULs.
+ *   - the real per-file families this ACP takes NONE of: the 22-byte
+ *     "F11B$a" + label + file number root, and "F11B$c" (whose selector is not
+ *     known and is not guessed -- Rule 8).
  */
 static void acp_vol_resnam_kind(const struct vms_acp_volume *vol, char kind,
                                 char *out, size_t outsz)

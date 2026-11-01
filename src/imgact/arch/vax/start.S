@@ -17,7 +17,8 @@
 	.text
 
 /*
- * void _start(void)  —  interpreter entry (not called via CALLS; no entry mask)
+ * void _start(void)  —  interpreter entry (not called via CALLS; its leading
+ *                       .word is the mask NetBSD/vax's kernel skips, below)
  *
  * Capture the pristine initial SP, hand it to imgact_bootstrap(sp) (which
  * self-relocates IMGACT, binds the target + its symbol-vector shareables, and
@@ -30,6 +31,15 @@
 	.hidden _start
 	.type _start,@function
 _start:
+	/* The NetBSD/vax kernel enters an ELF image at e_entry + 2 (setregs:
+	 * `tf->tf_pc = pack->ep_entry + 2`), skipping the entry-mask word every
+	 * NetBSD/vax entry point opens with (the sysroot crt0's __start is
+	 * `.word 0x0101`; ld.elf_so's _rtld_start is ENTRY(_rtld_start, 0)).
+	 * Without this word the kernel's first instruction would be the third
+	 * byte of the movl below -- a garbage decode that faults before
+	 * imgact_bootstrap runs (rd vms-d4a). 0x0101 is two NOPs, so a transfer
+	 * to e_entry itself is equally safe. */
+	.word	0x0101
 	movl	%sp, %r6		/* r6 = pointer to initial process stack   */
 	pushl	%r6			/* arg1 = sp                               */
 	calls	$1, imgact_bootstrap	/* r0 = target entry point                 */

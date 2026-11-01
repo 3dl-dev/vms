@@ -15,6 +15,7 @@
  *     vms_dlm_deq_parse_body              ($DEQ release)
  *     vms_dlm_blkast_parse_body           (blocking AST)
  *     vms_dlm_valblk_convert_parse_body   (CONVERT carrying the value block)
+ *     vms_dlm_grant_notify_parse_body     (the DEFERRED GRANT, cat-0x02 op-0x02)
  *     vms_cm_params_parse                 (CNXMAN op-01 PARAMS, votes)
  * plus the frame-level entry (vms_frame_classify -> vms_dlm_*_parse), the real
  * inbound path (body = frame + VMS_OFF_SYSAP_BODY, so a short frame exercises
@@ -122,6 +123,12 @@ static int t_blkast(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_blkast_parse_body(b, n, (struct vms_dlm_blkast *)c); }
 static int t_valblk(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_valblk_convert_parse_body(b, n, (struct vms_dlm_valblk_convert *)c); }
+/* rd vms-a4d7: the DEFERRED GRANT a master sends when a lock it answered 0xfb
+ * QUEUED becomes grantable. Fuzzed WITH the decoder, not after it: a
+ * peer-receive decoder that reaches a released node unfuzzed is the gap the
+ * never-crash rule exists to close. */
+static int t_grant_notify(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_grant_notify_parse_body(b, n, (struct vms_dlm_grant_notify *)c); }
 static int t_cm_params(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_cm_params_parse(b, n, (struct vms_cm_params *)c); }
 static int t_dlksrch(const uint8_t *b, uint32_t n, void *c)
@@ -196,6 +203,7 @@ int main(void)
     struct vms_dlm_deq deq;
     struct vms_dlm_blkast blk;
     struct vms_dlm_valblk_convert cv;
+    struct vms_dlm_grant_notify gn;
     struct vms_cm_params cmp;
     struct vms_dlm_dlksrch_record dlk;
     uint32_t hash;
@@ -210,6 +218,7 @@ int main(void)
     fuzz_body(t_deq,       &deq,  VMS_DLM_WIREOP_DEQ,           "deq_parse_body: 100k, no over-read/crash");
     fuzz_body(t_blkast,    &blk,  VMS_DLM_WIREOP_BLKAST,        "blkast_parse_body: 100k, no over-read/crash");
     fuzz_body(t_valblk,    &cv,   VMS_DLM_WIREOP_CONVERT_VALBLK,"valblk_convert_parse_body: 100k, no over-read/crash");
+    fuzz_body(t_grant_notify, &gn, VMS_DLM_WIREOP_GRANT_NOTIFY, "grant_notify_parse_body: 100k, no over-read/crash");
     fuzz_body(t_cm_params, &cmp,  0,                            "cm_params_parse: 100k, no over-read/crash");
     fuzz_body(t_dlksrch,   &dlk,  VMS_DLM_WIREOP_DLKSRCH,       "dlksrch_parse_body: 100k, no over-read/crash");
 

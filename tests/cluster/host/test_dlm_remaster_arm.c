@@ -84,6 +84,12 @@ struct fake {
 	int      mastered;
 	int      hash_known;
 	uint32_t hash;
+	/* WHO IS THE NAME'S DIRECTORY NODE (rd vms-083): `dir_known` 0 is an
+	 * executive that cannot name it, and `dir_csid` 0 is THIS node. */
+	int      dir_known;
+	uint32_t dir_csid;
+	uint32_t dir_len;             /* the COUNT the FSM asked with */
+	uint32_t dir_asked;           /* how many times it asked      */
 	uint32_t next_lkid;           /* MUTATED: the handle the fake mints */
 	uint8_t  residue;
 
@@ -240,6 +246,24 @@ static int fk_hash(void *ctx, const char *resnam, uint32_t resnam_len,
 	return 1;
 }
 
+/* The tree's DIRECTORY NODE, as the real door composes it out of the engine's
+ * hash and the club's weight vector (rd vms-083). */
+static int fk_dir_node(void *ctx, const char *resnam, uint32_t resnam_len,
+		       uint16_t group, uint8_t mode, uint32_t *out)
+{
+	struct fake *f = (struct fake *)ctx;
+
+	(void)resnam;
+	(void)group;
+	(void)mode;
+	f->dir_len = resnam_len;
+	f->dir_asked++;
+	if (!f->dir_known)
+		return 0;
+	*out = f->dir_csid;
+	return 1;
+}
+
 static int fk_stage(void *ctx, const uint8_t *body, uint32_t len)
 {
 	struct fake *f = (struct fake *)ctx;
@@ -277,8 +301,8 @@ static void fk_log(void *ctx, const char *msg)
 
 static const struct vms_dlm_rm_ops g_ops_template = {
 	&g_f, fk_members, fk_open, fk_lock, fk_end, fk_abort, fk_tree_of_lkid,
-	fk_reported, fk_mastered, fk_hash, fk_stage, fk_send, fk_residue,
-	fk_log
+	fk_reported, fk_mastered, fk_hash, fk_dir_node, fk_stage, fk_send,
+	fk_residue, fk_log
 };
 
 static struct vms_dlm_rm_ops g_ops;
@@ -298,6 +322,16 @@ static void rig_reset(void)
 	g_f.mastered = 1;
 	g_f.hash_known = 1;
 	g_f.hash = 0xabcd1234u;
+	/*
+	 * THE DEFAULT RIG IS rd vms-083's ARM A -- the arrangement the driven
+	 * lab arm measured TWO op-0x13 senders in: the tree's directory node is
+	 * the THIRD member (H), not the old master. The owed set is then
+	 * {O, H} and every expectation written before the arm holds unchanged.
+	 * Arm B (the directory IS the old master, so the third member owes
+	 * nothing) is its own case below.
+	 */
+	g_f.dir_known = 1;
+	g_f.dir_csid = RMT_H_CSID;
 	g_f.next_lkid = 0x01000401u;
 	g_ops = g_ops_template;
 	g_ops.ctx = &g_f;
@@ -600,35 +634,29 @@ static void test_w1_one_0x14_per_0x13_and_no_others(void)
 	g_f.n_members = 3u;
 	(void)step("rm-0e-req", RMT_O_CSID);
 	(void)step("rm-13-notif", RMT_O_CSID);
-	(void)step("rm-13-notif", RMT_H_CSID);
-	ct_check_eq_u32(g_f.ends, 0,
-			"  with three members and two reports the tree is "
-			"still waiting");
+	ct_check_eq_u32(g_f.ends, 0, "  the DIRECTORY node has not reported");
 	ct_check_eq_u32(g_f.n_sent, 0, "  nothing sent");
 
-	ct_check(step("rm-13-notif", RMT_B_CSID) == VMS_DLM_RM_HANDLED,
-		 "  the bystander reports too -- it holds nothing and still "
-		 "sends one (RA8's CACHE$ episode)");
-	ct_check_eq_u32(g_f.n_sent, 3, "  three op-0x14s now go out");
+	ct_check(step("rm-13-notif", RMT_H_CSID) == VMS_DLM_RM_HANDLED,
+		 "  the directory node reports, holding nothing in the tree");
+	ct_check_eq_u32(g_f.n_sent, 2, "  two op-0x14s now go out");
 	ct_check(g_f.sent[0].csid == RMT_O_CSID &&
-		 g_f.sent[1].csid == RMT_H_CSID &&
-		 g_f.sent[2].csid == RMT_B_CSID,
+		 g_f.sent[1].csid == RMT_H_CSID,
 		 "  *** one to each system that sent an op-0x13 ***");
+	ct_check_eq_u32(g_rm.ends_admitted, 0, "  both were predicted");
 
 	printf("-- NEGATIVE CONTROL: a system that reported nothing gets "
 	       "nothing\n");
-	rig_reset();
-	g_f.members[2] = RMT_B_CSID;
-	g_f.n_members = 3u;
-	(void)step("rm-0e-req", RMT_O_CSID);
-	(void)step("rm-13-notif", RMT_O_CSID);
-	(void)step("rm-13-notif", RMT_H_CSID);
-	ct_check_eq_u32(g_f.n_sent, 0,
-			"  *** the tree is not announced at all while a member "
-			"still owes an end-of-records ***");
-	ct_check_eq_u32(g_f.reports, 0,
-			"  and the executive still counts the completion as "
-			"unreported");
+	ct_check(g_f.sent[0].csid != RMT_B_CSID &&
+		 g_f.sent[1].csid != RMT_B_CSID,
+		 "  *** the member with NO ROLE is sent nothing ***");
+
+	printf("-- and an op-0x13 that arrives for a tree ALREADY HELD is "
+	       "refused, not re-announced\n");
+	ct_check(step("rm-13-notif", RMT_B_CSID) == VMS_DLM_RM_REFUSED,
+		 "  the late end-of-records is refused");
+	ct_check_eq_u32(g_f.n_sent, 2, "  and no further op-0x14 goes out");
+	ct_check_eq_u32(g_f.ends, 1, "  the adoption is still closed once");
 
 	printf("-- an op-0x13 from a system owed nothing is counted, not "
 	       "acted on\n");
@@ -638,6 +666,111 @@ static void test_w1_one_0x14_per_0x13_and_no_others(void)
 		 "  a stranger's end-of-records is refused");
 	ct_check_eq_u32(g_rm.ends_unexpected, 1, "  and counted");
 	ct_check_eq_u32(g_f.ends, 0, "  the tree is untouched");
+}
+
+/* ==========================================================================
+ * rd vms-083: THE OWED SET IS THE ROLES, COMPUTED FROM EXECUTIVE STATE
+ *
+ * The driven one-variable arm (tests/lab/captures/vms-083-dirnode-20261022,
+ * two real OpenVMS VAX V7.3 nodes + one OVMX node, four runs, both VAX role
+ * assignments) moved ONE variable -- which node the tree's root name assigns
+ * as its directory node -- and measured:
+ *
+ *   directory is a THIRD member   ->  TWO op-0x13s (old master + directory)
+ *   directory IS the old master   ->  ONE op-0x13, and the remaining member
+ *                                     got no op-0x0f, no op-0x11 and sent
+ *                                     nothing for 180 s.
+ *
+ * These cases are that measurement, plus the three ways the resolution can
+ * fail honestly.
+ * ========================================================================== */
+static void test_vms083_owed_set_is_the_roles(void)
+{
+	printf("-- rd vms-083 ARM A: the directory is a THIRD member -- TWO "
+	       "systems owe an end-of-records\n");
+	rig_reset();
+	g_f.members[2] = RMT_B_CSID;
+	g_f.n_members = 3u;
+	g_f.dir_csid = RMT_H_CSID;
+	(void)step("rm-0e-req", RMT_O_CSID);
+	ct_check_eq_u32(g_rm.owed_dir_named, 1,
+			"  this node named the tree's directory node");
+	ct_check_eq_u32(g_f.dir_len, 4u,
+			"  and asked with the identity's own COUNT");
+	(void)step("rm-13-notif", RMT_O_CSID);
+	ct_check_eq_u32(g_f.n_sent, 0, "  the directory node still owes one");
+	(void)step("rm-13-notif", RMT_H_CSID);
+	ct_check_eq_u32(g_f.n_sent, 2, "  two op-0x14s, after the last 0x13");
+
+	printf("-- rd vms-083 ARM B: the directory IS the old master -- ONE "
+	       "system owes one, and the tree REACHES HELD on it\n");
+	rig_reset();
+	g_f.members[2] = RMT_B_CSID;
+	g_f.n_members = 3u;
+	g_f.dir_csid = RMT_O_CSID;      /* the one variable, moved */
+	(void)step("rm-0e-req", RMT_O_CSID);
+	ct_check(step("rm-13-notif", RMT_O_CSID) == VMS_DLM_RM_HANDLED,
+		 "  the old master's end-of-records is accepted");
+	ct_check_eq_u32(g_f.ends, 1,
+			"  *** the adoption CLOSES on that one report ***");
+	ct_check_eq_u32(vms_dlm_rm_trees_in_state(&g_rm, VMS_DLM_RM_ST_HELD), 1,
+			"  *** the tree reaches HELD: no double grant ***");
+	ct_check_eq_u32(g_f.n_sent, 1, "  one op-0x14");
+	ct_check_eq_u32(g_f.sent[0].csid, RMT_O_CSID,
+			"  to the one system that sent one");
+	ct_check_eq_u32(g_rm.held_unsent, 0, "  and none owed and unsent");
+
+	printf("-- a HOLDER joins the owed set when its own record is "
+	       "adopted\n");
+	rig_reset();
+	g_f.members[2] = RMT_B_CSID;
+	g_f.n_members = 3u;
+	g_f.dir_csid = RMT_O_CSID;      /* arm B: the seed is {O} alone */
+	(void)step("rm-0e-req", RMT_O_CSID);
+	ct_check(step("rm-12-root-req", RMT_H_CSID) == VMS_DLM_RM_HANDLED,
+		 "  the holder's record lands and is adopted");
+	(void)step("rm-13-notif", RMT_O_CSID);
+	ct_check_eq_u32(g_f.ends, 0,
+			"  *** the tree does NOT close: the holder owes one ***");
+	(void)step("rm-13-notif", RMT_H_CSID);
+	ct_check_eq_u32(g_f.ends, 1, "  its 0x13 closes the tree");
+	ct_check_eq_u32(g_f.n_sent, 2, "  and both reporters are told");
+
+	printf("-- an UNPREDICTED member's op-0x13 is ADMITTED, and acked\n");
+	rig_reset();
+	g_f.members[2] = RMT_B_CSID;
+	g_f.n_members = 3u;
+	g_f.dir_known = 0;              /* this node cannot name the directory */
+	(void)step("rm-0e-req", RMT_O_CSID);
+	ct_check_eq_u32(g_rm.owed_dir_unknown, 1,
+			"  the unknown directory is COUNTED, not guessed at");
+	ct_check(step("rm-13-notif", RMT_B_CSID) == VMS_DLM_RM_HANDLED,
+		 "  a selected member the seed did not name reports anyway");
+	ct_check_eq_u32(g_rm.ends_admitted, 1, "  counted as ADMITTED");
+	ct_check_eq_u32(g_f.n_sent, 0, "  the old master still owes one");
+	(void)step("rm-13-notif", RMT_O_CSID);
+	ct_check_eq_u32(g_f.n_sent, 2,
+			"  *** the admitted sender gets its op-0x14 too ***");
+
+	printf("-- NEGATIVE CONTROL: a directory resolution this node must "
+	       "NOT wait for\n");
+	rig_reset();
+	g_f.dir_csid = 0u;              /* THIS node is the directory */
+	(void)step("rm-0e-req", RMT_O_CSID);
+	ct_check_eq_u32(g_rm.owed_dir_unknown, 1,
+			"  this node does not owe ITSELF an end-of-records");
+	ct_check_eq_u32(g_f.ends, 0, "  nothing closed yet");
+	(void)step("rm-13-notif", RMT_O_CSID);
+	ct_check_eq_u32(g_f.ends, 1, "  the old master alone closes it");
+
+	rig_reset();
+	g_f.dir_csid = 0x000100ffu;     /* a CSID that is no member */
+	(void)step("rm-0e-req", RMT_O_CSID);
+	ct_check_eq_u32(g_rm.owed_dir_unknown, 1,
+			"  a directory CSID the CLUB does not list is skipped");
+	(void)step("rm-13-notif", RMT_O_CSID);
+	ct_check_eq_u32(g_f.ends, 1, "  and the tree still completes");
+	ct_check_eq_u32(g_f.n_sent, 1, "  with one op-0x14");
 }
 
 static void test_departure_strikes_the_owed_member(void)
@@ -889,6 +1022,7 @@ int main(void)
 	test_a_refused_record_takes_the_whole_tree_back();
 	test_w2_no_0x14_until_the_last_0x13();
 	test_w1_one_0x14_per_0x13_and_no_others();
+	test_vms083_owed_set_is_the_roles();
 	test_departure_strikes_the_owed_member();
 	test_the_held_frame();
 	test_not_mine_and_the_ack();

@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -40,8 +41,35 @@ static void check(int c, const char *m)
 
 struct ps_ile { uint16_t len, code; uint32_t val, flags; };
 
-/* String criteria travel as a 32-bit address (the item list's longword). */
-static char s_kid[] = "PSCANKID", s_mom[] = "PSCANMOM", s_wild[] = "PSCAN*", s_lower[] = "pscankid";
+/* String criteria travel as a 32-bit address (the item list's longword), so on
+ * VMS they live in 32-bit (P0/P1) space. An OVMX/Alpha image is linked above
+ * 4 GB (the Linux/Alpha text base is 0x120000000), so its statics are not: put
+ * the strings in a page mapped below 4 GB, where a VMS program's P0 data is.
+ * (With statics, the Alpha leg handed $PROCESS_SCAN truncated addresses and hung.) */
+static char *s_kid, *s_mom, *s_wild, *s_lower;
+
+static int low_strings(void)
+{
+    void *p = MAP_FAILED;
+#ifdef MAP_32BIT
+    p = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+#endif
+    for (uintptr_t hint = 0x10000000u; p == MAP_FAILED && hint < 0x100000000ull; hint += 0x10000000u) {
+        p = mmap((void *)hint, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p != MAP_FAILED && (uintptr_t)p >= 0x100000000ull) {
+            munmap(p, 4096);
+            p = MAP_FAILED;
+        }
+    }
+    if (p == MAP_FAILED)
+        return 0;
+    char *b = p;
+    s_kid = strcpy(b, "PSCANKID");
+    s_mom = strcpy(b + 16, "PSCANMOM");
+    s_wild = strcpy(b + 32, "PSCAN*");
+    s_lower = strcpy(b + 48, "pscankid");
+    return 1;
+}
 
 #define MAXSEL 16
 /* Run a scan; collect the PIDs it selects. Returns the $PROCESS_SCAN status. */
@@ -86,7 +114,12 @@ int main(void)
         printf("=== test_syssvc_process_scan: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
     }
-    check((uintptr_t)s_kid < 0x100000000ull, "the criterion strings lie in the low 4 GB");
+    int low = low_strings();
+    check(low && (uintptr_t)s_lower < 0x100000000ull, "the criterion strings lie in the low 4 GB");
+    if (!low) {
+        printf("=== test_syssvc_process_scan: %d passed, %d failed ===\n", pass, fail);
+        return 1;
+    }
 
     struct dsc$descriptor_s mom = { 8, DSC$K_DTYPE_T, DSC$K_CLASS_S, s_mom };
     check(sys$setprn(&mom) & 1, "this process is named PSCANMOM");

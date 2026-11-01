@@ -859,6 +859,25 @@ exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
 
 #endif /* !OVMX_ODS2_KERNEL (block I/O seam) */
 
+/* READ `nblk` consecutive blocks from `lbn` (rd vms-465; see the Linux twin):
+ * block by block through exec_blockdev_read_block here -- the NetBSD buffer
+ * cache already clusters device reads. 0 on success, nonzero on failure. */
+#define EXEC_BLOCKDEV_RUN_MAX 128u
+static __inline int
+exec_blockdev_read_run(unsigned int major_, unsigned int minor_,
+		       uint64_t lbn, unsigned int nblk, void *buf)
+{
+	unsigned int k;
+
+	if (!buf || nblk == 0 || nblk > EXEC_BLOCKDEV_RUN_MAX)
+		return -1;
+	for (k = 0; k < nblk; k++)
+		if (exec_blockdev_read_block(major_, minor_, lbn + k,
+					     (char *)buf + (size_t)k * 512u, 512u) != 0)
+			return -1;
+	return 0;
+}
+
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  *
  * BOUND (rd vms-613's SCS-on-VAX-in-browser spike: the real join proof empirically

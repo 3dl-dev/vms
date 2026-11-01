@@ -51,6 +51,9 @@ defect_apply() {
         # both. vms_enq_core_ex is defined before vms_ioctl_convert in this file,
         # so the range closes at the first following top-level `}` and leaves
         # vms_ioctl_convert's copy untouched.
-        sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file"
+        # RE-ANCHORED (vms-326 piece 2a): the bound now lives in
+        # vms_enq_core_ident(), the identity-carrying core; vms_enq_core_ex() is
+        # its identity-free wrapper, so the range starts at the core itself.
+        sed -i '/^static long vms_enq_core_ident/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file"
     :
 }

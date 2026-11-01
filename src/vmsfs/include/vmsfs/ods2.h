@@ -1490,6 +1490,14 @@ typedef struct ods2_wvolume {
      * scratch block would be a cross-process data race. One per wvolume.
      */
     uint8_t        wcache_scratch[ODS2_BLOCK_SIZE];
+    /* Runs freed while mastering (a directory that moved to a bigger run,
+     * rd vms-465), handed out again before the bump watermark so the volume
+     * is left without holes a later first-fit allocation would scatter a
+     * growing file across. */
+#define ODS2_WV_FREED_MAX 128
+    uint32_t       freed_lbn[ODS2_WV_FREED_MAX];
+    uint32_t       freed_cnt[ODS2_WV_FREED_MAX];
+    uint32_t       nfreed;
     ods2_status_t  io_error;        /* sticky I/O/capacity failure, checked
                                       * at the tail of every public entry
                                       * point so a pread/pwrite failure deep

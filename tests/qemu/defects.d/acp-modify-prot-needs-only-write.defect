@@ -25,6 +25,6 @@ EOF2
 
 defect_apply() {
         # UNIQUE TEXT: the need_control declaration in the IO$_MODIFY access check.
-        sed -i 's|^            int need_control = args.func == VMS_ACP_FOP_MODIFY \&\& (args.attr_ctl \& (VMS_ACP_ATTR_PROT \| VMS_ACP_ATTR_OWNER));$|            int need_control = 0; /* NEGCTL acp-modify-prot-needs-only-write */|' "$_file"
+        sed -i 's|^            int need_control = ap->func == VMS_ACP_FOP_MODIFY \&\& (ap->attr_ctl \& (VMS_ACP_ATTR_PROT \| VMS_ACP_ATTR_OWNER));$|            int need_control = 0; /* NEGCTL acp-modify-prot-needs-only-write */|' "$_file"
     :
 }

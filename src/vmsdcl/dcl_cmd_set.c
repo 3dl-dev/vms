@@ -1158,19 +1158,32 @@ static int cmd_set_protection(struct dcl_command *cmd)
     char linux_path[1024];
     dcl_resolve_path(ctx, filespec, linux_path, sizeof(linux_path));
 
+    /* One descriptor for the read and the write of the mode, so the file
+     * whose protection is merged is the file that is changed. */
     struct stat st;
-    if (stat(linux_path, &st) != 0) {
+    int fd = open(linux_path, O_RDONLY | O_NOFOLLOW);
+    if (fd < 0 && errno == ENOENT) {
         dcl_error("SET", 2, "SEARCHFAIL", "error searching for %s", filespec);
         set_print_cond(RMS$_FNF, 1);
         return (int)SET$_SEARCHFAIL_E;
     }
-    uint16_t vprot = vmsfs_mode_to_protection(st.st_mode);
-    if (vmsfs_parse_protection(prot_str, &vprot) != SS$_NORMAL)
-        return set_bad_protection(prot_str);
-    if (chmod(linux_path, vmsfs_protection_to_mode(vprot)) != 0) {
+    if (fd < 0 || fstat(fd, &st) != 0) {
+        if (fd >= 0)
+            close(fd);
         set_print_cond(SS$_NOPRIV, 0);
         return SS$_NOPRIV;
     }
+    uint16_t vprot = vmsfs_mode_to_protection(st.st_mode);
+    if (vmsfs_parse_protection(prot_str, &vprot) != SS$_NORMAL) {
+        close(fd);
+        return set_bad_protection(prot_str);
+    }
+    if (fchmod(fd, vmsfs_protection_to_mode(vprot)) != 0) {
+        close(fd);
+        set_print_cond(SS$_NOPRIV, 0);
+        return SS$_NOPRIV;
+    }
+    close(fd);
     return SS$_NORMAL;
 #endif
 }

@@ -285,6 +285,16 @@ if(BUILD_TOOLS)
         LABELS "integration;ods2;vmsfs;tools"
         TIMEOUT 60
     )
+    # rd vms-b85: `vmsfs_master --ods5 extract` -- a tree off a volume an OVMX
+    # boot wrote (the sharded cc1 build carries its objects this way).
+    add_test(NAME ods2_extract
+             COMMAND ${CMAKE_COMMAND} -E env
+                     VMSFS_MASTER=$<TARGET_FILE:vmsfs_master>
+                     sh ${CMAKE_CURRENT_SOURCE_DIR}/test_ods2_extract.sh)
+    set_tests_properties(ods2_extract PROPERTIES
+        LABELS "integration;ods2;vmsfs;tools"
+        TIMEOUT 60
+    )
 endif()
 
 # vms-263e: file header creation/revision dates and the revision count.

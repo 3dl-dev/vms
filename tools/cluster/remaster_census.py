@@ -387,7 +387,7 @@ def selftest(root):
                     if i not in (8, 9, 34) and not 28 <= i < 32)]
     exact_ratio('82/15 answers that differ from the request ONLY in body[8], '
                 '[9], [28:32] and [34]',
-                len(acked) - len(stray), len(acked), 3594, 4042)
+                len(acked) - len(stray), len(acked), 3626, 4074)
     exact_ratio('...of those, the ones answering an op-0x14 (the other 3 answer '
                 'an op-0x10)',
                 sum(1 for q, _a in stray if q[9] == 0x14), len(stray), 445, 448)
@@ -482,14 +482,16 @@ def selftest(root):
     # ones satisfy W1 too, and the 3 of 807 that do not are the same three the
     # rule has always carried, not new ones.
     # 2026-10-22, again: +5 episodes and +24 answered steps from the rd vms-a4d7
-    # GRANT-NOTIFY fire (3,570/4,018 -> 3,594/4,042; 799/802 -> 804/807). THREE
+    # GRANT-NOTIFY fire, re-derived here over the corpus AFTER rd vms-083's
+    # merge (3,593/4,041 -> 3,626/4,074; 804/807 -> 809/812). THREE
     # of the five are A4D1 and A4D2 moving onto the OVMX node and the VAXes'
     # own CACHE$ hand-overs, and the OVMX ones are the first episodes in the
     # corpus where the new master answered TWO op-0x13 senders and originated
-    # TWO op-0x14s -- rule W1's own shape, from this implementation.
+    # TWO op-0x14s -- rule W1's own shape, from this implementation. The 3 of
+    # 812 that do not satisfy W1 are still the same three.
     exact_ratio('episodes whose op-0x13 SENDERS are exactly its op-0x14 '
                 'RECIPIENTS (rule W1)', rt['sets_equal'], rt['episodes'],
-                804, 807)
+                809, 812)
     floor('episodes with more than one op-0x13', rt['multi13'], 383)
     exact_all('multi-op-0x13 episodes whose op-0x14s ALL follow the LAST '
               'op-0x13 (rule W2)', rt['multi13_batched'], rt['multi13'])
@@ -506,7 +508,7 @@ def selftest(root):
               at['episodes'])
     exact_ratio('episodes with a late op-0x12 once the overlapping ones are '
                 'counted too (the grouping, not the protocol)',
-                rt['record_after_last_13'], rt['episodes'], 172, 807)
+                rt['record_after_last_13'], rt['episodes'], 172, 812)
 
     # RULE 3: the op-0x14's body[20:40] is residue.
     c = classify_op14_residue(pairs)

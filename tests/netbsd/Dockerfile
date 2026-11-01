@@ -139,7 +139,7 @@ COPY src/vmsfs/include/vmsfs/ods2.h /netbsd/guest-src/vmsfs/include/vmsfs/ods2.h
 # NetBSD half of the cluster seam (exec_kbackend.h families SS14..SS18). vms_pe.c
 # is in src/kernel-netbsd/Makefile's SRCS from its first commit, so the in-guest
 # module build needs it and its kernel-core headers staged. ---
-COPY src/kernel-core/vms_pe.c src/kernel-core/vms_pe.h src/kernel-core/vms_scs.h src/kernel-core/vms_cnxman.h src/kernel-core/vms_dlm_scs.h src/kernel-core/vms_dlm_quorum.h src/kernel-core/vms_dlm_proxy.h src/kernel-core/vms_cluster.h src/kernel-core/vms_cluster_snapshot.h /netbsd/guest-src/kernel-core/
+COPY src/kernel-core/vms_pe.c src/kernel-core/vms_pe.h src/kernel-core/vms_scs.h src/kernel-core/vms_cnxman.h src/kernel-core/vms_dlm_scs.h src/kernel-core/vms_dlm_quorum.h src/kernel-core/vms_dlm_proxy.h src/kernel-core/vms_rms_lockname.h src/kernel-core/vms_cluster.h src/kernel-core/vms_cluster_snapshot.h /netbsd/guest-src/kernel-core/
 # --- FC-P3.6: the CLUB/CSB model + the CSB ten-state ladder, and the
 # RECNXINTERVAL/TIMVCFAIL reconnect loop. Both are in SRCS from their first
 # commit for the same reason vms_pe.c is, so the in-guest module build needs

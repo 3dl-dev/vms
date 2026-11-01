@@ -1422,6 +1422,137 @@ static int do_list_ods2(const char *image)
     return 0;
 }
 
+/* ---- ODS-2/ODS-5 extract (rd vms-b85): copy a directory tree off a volume an
+ * OVMX boot wrote, byte for byte, the highest version of each file under its
+ * on-disk name without the version (a CI shard's GCC objects travel to the job
+ * that links them this way). Reads only through the codec's block reader. */
+struct ods2_x_ent { char name[2 * ODS5_NAME_MAX + 8]; ods2_fid_t fid; uint16_t ver; };
+struct ods2_x_ctx { struct ods2_x_ent *e; unsigned n, cap; };
+
+static int ods2_x_cb(const char *name, unsigned name_len, uint16_t version,
+                     const ods2_fid_t *fid, void *vctx)
+{
+    struct ods2_x_ctx *x = vctx;
+    unsigned i;
+
+    if (name_len >= sizeof(x->e[0].name))
+        return 0;
+    for (i = 0; i < x->n; i++)            /* highest version only */
+        if (strlen(x->e[i].name) == name_len && memcmp(x->e[i].name, name, name_len) == 0) {
+            if (version > x->e[i].ver) { x->e[i].ver = version; x->e[i].fid = *fid; }
+            return 0;
+        }
+    if (x->n == x->cap) {
+        unsigned nc = x->cap ? x->cap * 2 : 64;
+        struct ods2_x_ent *ne = realloc(x->e, nc * sizeof(*ne));
+        if (!ne) return 1;
+        x->e = ne; x->cap = nc;
+    }
+    memcpy(x->e[x->n].name, name, name_len);
+    x->e[x->n].name[name_len] = '\0';
+    x->e[x->n].fid = *fid;
+    x->e[x->n].ver = version;
+    x->n++;
+    return 0;
+}
+
+static int ods2_x_tree(const ods2_bdev_t *bv, const uint8_t *dirhdr,
+                       const char *outdir, unsigned depth, unsigned long *nfiles)
+{
+    struct ods2_x_ctx x = { NULL, 0, 0 };
+    int rc = 0;
+
+    if (depth > ODS2_LIST_MAXDEPTH || (mkdir(outdir, 0755) != 0 && errno != EEXIST)) {
+        fprintf(stderr, "%%MASTER-F-MKDIR, %s: %s\n", outdir, strerror(errno));
+        return 1;
+    }
+    if (ods2_bdev_list_dir(bv, dirhdr, ods2_x_cb, &x) != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-READDIR, %s\n", outdir);
+        free(x.e);
+        return 1;
+    }
+    for (unsigned i = 0; i < x.n && rc == 0; i++) {
+        struct ods2_x_ent *e = &x.e[i];
+        uint8_t hdr[ODS2_BLOCK_SIZE];
+        ods2_fh2_t fh;
+        char path[4096];
+        size_t nl = strlen(e->name);
+
+        if (e->fid.fid_num == 4 && strcmp(e->name, "000000.DIR") == 0)
+            continue;                       /* the MFD's entry for itself */
+        if (ods2_bdev_read_header(bv, e->fid.fid_num, hdr, sizeof(hdr)) != ODS2_OK ||
+            ods2_fh2_parse(hdr, sizeof(hdr), &fh) != ODS2_OK) {
+            fprintf(stderr, "%%MASTER-F-HEADER, %s/%s\n", outdir, e->name);
+            rc = 1;
+            break;
+        }
+        if (nl > 4 && strcmp(e->name + nl - 4, ".DIR") == 0) {
+            snprintf(path, sizeof(path), "%s/%.*s", outdir, (int)(nl - 4), e->name);
+            rc = ods2_x_tree(bv, hdr, path, depth + 1, nfiles);
+            continue;
+        }
+        size_t cap = ods2_recattr_data_bytes(&fh.fh2_recattr), got = 0;
+        uint8_t *buf = malloc(cap ? cap : 1);
+        if (!buf || ods2_bdev_read_file(bv, hdr, buf, cap ? cap : 1, &got) != ODS2_OK) {
+            fprintf(stderr, "%%MASTER-F-READFILE, %s/%s\n", outdir, e->name);
+            free(buf);
+            rc = 1;
+            break;
+        }
+        snprintf(path, sizeof(path), "%s/%s", outdir, e->name);
+        if (nl > 1 && path[strlen(path) - 1] == '.')   /* "NAME." -- a null type */
+            path[strlen(path) - 1] = '\0';
+        FILE *f = fopen(path, "wb");
+        if (!f || fwrite(buf, 1, got, f) != got || fclose(f) != 0) {
+            fprintf(stderr, "%%MASTER-F-WRITE, %s: %s\n", path, strerror(errno));
+            rc = 1;
+        }
+        free(buf);
+        (*nfiles)++;
+    }
+    free(x.e);
+    return rc;
+}
+
+/* extract <image> <out-dir> [DIR[.SUB...]]: the tree under that directory
+ * (default [000000]) */
+static int do_extract_ods2(const char *image, const char *outdir, const char *dirspec)
+{
+    const char *comps[ODS2_LIST_MAXDEPTH + 1];
+    char spec[1024];
+    unsigned nd = 0;
+    uint8_t dirhdr[ODS2_BLOCK_SIZE];
+    unsigned long nfiles = 0;
+    int fd = open(image, O_RDONLY), rc;
+    ods2_bdev_t bv;
+
+    if (fd < 0) {
+        fprintf(stderr, "%%MASTER-F-OPENIN, cannot open %s: %s\n", image, strerror(errno));
+        return 1;
+    }
+    if (ods2_bdev_open(&bv, fd, 0) != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-NOTODS2, %s is not a genuine ODS-2/ODS-5 volume\n", image);
+        close(fd);
+        return 1;
+    }
+    if (dirspec && *dirspec) {
+        snprintf(spec, sizeof(spec), "%s", dirspec);
+        for (char *t = strtok(spec, "."); t && nd < ODS2_LIST_MAXDEPTH; t = strtok(NULL, "."))
+            comps[nd++] = t;
+    }
+    if (ods2_bdev_resolve_dir(&bv, nd ? comps : NULL, nd, NULL, dirhdr, sizeof(dirhdr)) != ODS2_OK) {
+        fprintf(stderr, "%%MASTER-F-NODIR, no directory [%s] on %s\n", dirspec ? dirspec : "000000", image);
+        close(fd);
+        return 1;
+    }
+    rc = ods2_x_tree(&bv, dirhdr, outdir, 0, &nfiles);
+    close(fd);
+    if (rc == 0)
+        printf("%%MASTER-I-EXTRACTED, %lu files from [%s] to %s\n", nfiles,
+               dirspec && *dirspec ? dirspec : "000000", outdir);
+    return rc;
+}
+
 /* ---- ODS-2 relabel (rd vms-3ea): SET VOLUME/LABEL, offline.
  *
  * A Files-11 volume's label is set at INITIALIZE and changed afterwards with
@@ -1489,7 +1620,8 @@ static void usage(void)
         "  vmsfs_master [--ods2|--ods5|--vmfs] master  <image> <volume-label> <source-dir> [size-in-MB]\n"
         "  vmsfs_master [--ods2|--ods5]        list    <image>\n"
         "  vmsfs_master [--ods2|--ods5]        relabel <image> <volume-label>\n"
-        "  vmsfs_master                 extract <image> <output-dir>   (VMFS only)\n"
+        "  vmsfs_master                 extract <image> <output-dir>   (VMFS)\n"
+        "  vmsfs_master [--ods2|--ods5] extract <image> <output-dir> [DIR[.SUB...]]\n"
         "\n"
         "  --ods2 masters/lists a genuine ODS-2 (Files-11 L2, DECFILE11B) volume\n"
         "         (vms-5eb R6-build); default and OVMX_MASTER_ODS2=0 use VMFS.\n"
@@ -1536,9 +1668,13 @@ int main(int argc, char *argv[])
             ? do_master_ods2(argv[argi + 1], argv[argi + 2], argv[argi + 3], size_mb)
             : do_master(argv[argi + 1], argv[argi + 2], argv[argi + 3], size_mb);
     } else if (strcmp(argv[argi], "extract") == 0) {
+        if (use_ods2) {
+            /* rd vms-b85: a tree off a genuine ODS-2/ODS-5 volume */
+            if (argc - argi != 3 && argc - argi != 4) { usage(); return 1; }
+            return do_extract_ods2(argv[argi + 1], argv[argi + 2],
+                                   argc - argi == 4 ? argv[argi + 3] : NULL);
+        }
         if (argc - argi != 3) { usage(); return 1; }
-        /* extract is VMFS-only; the genuine-ODS-2 read path is ods2_bdev_* via
-         * `list`, which the runtime flip (RMS/DCL) consumes directly. */
         return do_extract(argv[argi + 1], argv[argi + 2]);
     } else if (strcmp(argv[argi], "list") == 0) {
         if (argc - argi != 2) { usage(); return 1; }

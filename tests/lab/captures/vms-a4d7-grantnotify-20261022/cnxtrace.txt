@@ -1,0 +1,24 @@
+rd vms-a4d7 fire a4d2: the DLM diagnostic row on OVMXE, read through
+RUN SYS$SYSTEM:CNXTRACE (the executive's own counters), copied out of console-ovmxe.log.
+
+=== (a) after ARM 1's local release, 07:29Z ===
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=1 lockdirwt=0 gen=3 proxy_lkbs=1
+%CNXTRACE-I-DLMREQ, requests sent=7 received=1 grants sent=0 received=1 declined=1
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=1 answered=1 unanswerable=0 unparsed=0 foreign=1
+%CNXTRACE-I-DLMRECV, releases received=0 refused=0  blkasts unparsed=0  deferred grants sent=1 owed=0  local advances=1 stale=0
+%CNXTRACE-I-DLMRM, trees opened=1 refused=0  records adopted=0 refused=0  ends=2
+%CNXTRACE-I-DLMRMHELD, trees held=1  op-0x14 sent=2 unsent=0  completions unreported=0  other-master notices=0
+%CNXTRACE-I-DLMOWED, owed grants by door: keep_refused=0 table_overflow=0 refused=0 send_failed=0
+%CNXTRACE-I-DLMHOLDOWN, grants withheld by a proxy lock of ours=0
+%CNXTRACE-I-DLMPOST, posts queued=12 unqueued=0 lock_gone=0 refused=0
+
+=== (b) after BOTH arms, 07:33Z ===
+%CNXTRACE-I-DLMREQ, requests sent=9 received=3 grants sent=0 received=2 declined=2
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=2 answered=2 unanswerable=0 unparsed=0 foreign=2
+%CNXTRACE-I-DLMRECV, releases received=1 refused=0  blkasts unparsed=0  deferred grants sent=2 owed=0  local advances=2 stale=0
+%CNXTRACE-I-DLMRM, trees opened=2 refused=0  records adopted=0 refused=0  ends=4
+%CNXTRACE-I-DLMRMHELD, trees held=2  op-0x14 sent=4 unsent=0  completions unreported=0  other-master notices=0
+%CNXTRACE-I-DLMOWED, owed grants by door: keep_refused=0 table_overflow=0 refused=0 send_failed=0
+%CNXTRACE-I-DLMHOLDOWN, grants withheld by a proxy lock of ours=0
+%CNXTRACE-I-DLMPOST, posts queued=14 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=20 refused=0 frames_rx=28 replies_sent=8 declined=2

@@ -378,12 +378,16 @@ def selftest(root):
     # buffer. The echo is what a reused receive buffer looks like, not a
     # protocol invariant. OVMX's builder echoes, which is the commonest real
     # form (3,527 of 3,975); what a RECIPIENT may read is only the cells above.
+    # 2026-10-22: rd vms-5cd's fix fire added THREE more answered steps (the
+    # 0e/0f/10 hand-over OVMX answered, 3,570 of 4,018) and all three echo
+    # exactly, so the ratio moved by +3/+3 and the 445-of-448 stray split did
+    # not move at all.
     stray = [(q, a) for q, a in acked
              if any(q[i] != a[i] for i in range(4, BODY_LEN)
                     if i not in (8, 9, 34) and not 28 <= i < 32)]
     exact_ratio('82/15 answers that differ from the request ONLY in body[8], '
                 '[9], [28:32] and [34]',
-                len(acked) - len(stray), len(acked), 3563, 4011)
+                len(acked) - len(stray), len(acked), 3626, 4074)
     exact_ratio('...of those, the ones answering an op-0x14 (the other 3 answer '
                 'an op-0x10)',
                 sum(1 for q, _a in stray if q[9] == 0x14), len(stray), 445, 448)
@@ -467,9 +471,27 @@ def selftest(root):
     if rt['op14_without_a_13']:
         bad.append('%d op-0x14(s) went to a system that had sent no op-0x13 '
                    '(rule W1)' % rt['op14_without_a_13'])
+    # 2026-10-22: +7 episodes and +30 answered steps when the rd vms-85f /
+    # vms-28bd fire capture joined the corpus (3,531/3,979 -> 3,561/4,009;
+    # 792/795 -> 799/802). Six of the seven new episodes are the two real VAXes'
+    # own CACHE$ hand-overs during the run; the seventh is RA7T moving onto the
+    # OVMX node, and it satisfies W1 and W2 like the rest.
+    # 2026-11-01: rd vms-083's four-arm directory capture then landed in main
+    # (3,561/4,009 -> 3,593/4,041; 799/802 -> 804/807) -- five more episodes,
+    # the arm's own hand-overs, and the RULE HELD over all of them: the five new
+    # ones satisfy W1 too, and the 3 of 807 that do not are the same three the
+    # rule has always carried, not new ones.
+    # 2026-10-22, again: +5 episodes and +24 answered steps from the rd vms-a4d7
+    # GRANT-NOTIFY fire, re-derived here over the corpus AFTER rd vms-083's
+    # merge (3,593/4,041 -> 3,626/4,074; 804/807 -> 809/812). THREE
+    # of the five are A4D1 and A4D2 moving onto the OVMX node and the VAXes'
+    # own CACHE$ hand-overs, and the OVMX ones are the first episodes in the
+    # corpus where the new master answered TWO op-0x13 senders and originated
+    # TWO op-0x14s -- rule W1's own shape, from this implementation. The 3 of
+    # 812 that do not satisfy W1 are still the same three.
     exact_ratio('episodes whose op-0x13 SENDERS are exactly its op-0x14 '
                 'RECIPIENTS (rule W1)', rt['sets_equal'], rt['episodes'],
-                797, 800)
+                809, 812)
     floor('episodes with more than one op-0x13', rt['multi13'], 383)
     exact_all('multi-op-0x13 episodes whose op-0x14s ALL follow the LAST '
               'op-0x13 (rule W2)', rt['multi13_batched'], rt['multi13'])
@@ -486,7 +508,7 @@ def selftest(root):
               at['episodes'])
     exact_ratio('episodes with a late op-0x12 once the overlapping ones are '
                 'counted too (the grouping, not the protocol)',
-                rt['record_after_last_13'], rt['episodes'], 172, 800)
+                rt['record_after_last_13'], rt['episodes'], 172, 812)
 
     # RULE 3: the op-0x14's body[20:40] is residue.
     c = classify_op14_residue(pairs)

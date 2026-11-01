@@ -42,9 +42,9 @@
  * OVMX-PARTIAL: sys$alloc (vms-44a) -- exec: the device is resolved in the
  *     executive's device table and the allocation CLAIM is the executive's
  *     (vms_kif_alloc), so a second process is refused SS$_DEVALLOC.
- * OVMX-LOCAL: sys$alloc -- the physical-name echo (phylen/phybuf) is the table
- *     row's name with the leading underscore VMS prints; acmode/flags are not
- *     consulted.
+ * OVMX-LOCAL: sys$alloc -- the physical-name echo (phylen/phybuf) is the
+ *     executive's FULL name for the row with the leading underscore VMS
+ *     prints; acmode/flags are not consulted.
  * OVMX-PARTIAL: sys$dalloc (vms-44a) -- exec: the release is the executive's
  *     (vms_kif_dalloc; SS$_DEVNOTALLOC if this process does not hold it).
  * OVMX-LOCAL: sys$dalloc -- only the descriptor-to-string copy and the device
@@ -122,15 +122,17 @@ static void fill_dvi_item(const struct item_list_3 *item,
     case DVI$_DEVNAM:
     case DVI$_FULLDEVNAM:
     case DVI$_ALLDEVNAM: {
-        /* Single-node system: the full name is the physical name. A cluster
-         * node prefix ("node$") is a documented remainder (vms-dv1).
-         * DVI$_DEVNAM is the PHYSICAL name, which VMS writes with its leading
+        /* DVI$_DEVNAM is the PHYSICAL name, which VMS writes with its leading
          * underscore: "_NLA0:" (DVI.DEVNAM.NLA0, docs/oracle/semantics/info/;
-         * rd vms-de3a). */
-        char nm[VMS_DEVNAM_SIZE + 2];
-        snprintf(nm, sizeof nm, "%s%s",
-                 (item->item_code == DVI$_DEVNAM && info->devnam[0] != '_') ? "_" : "",
-                 info->devnam);
+         * rd vms-de3a). DVI$_FULLDEVNAM and DVI$_ALLDEVNAM are the FULL name
+         * the executive composed -- "_VAX1$OPA0:", "_$2$DUA0:", "_NLA0:" --
+         * also with the underscore (rd vms-1f7; docs/oracle/
+         * vax73-device-full-name.md). */
+        const char *src = item->item_code == DVI$_DEVNAM ? info->devnam : info->fulldevnam;
+        char nm[VMS_FULLDEVNAM_SIZE + 2];
+        if (src[0] == '\0')
+            src = info->devnam;
+        snprintf(nm, sizeof nm, "%s%s", src[0] != '_' ? "_" : "", src);
         uint16_t len = (uint16_t)strlen(nm);
         if (len > item->buflen) len = item->buflen;
         if (item->bufaddr) memcpy(item->bufaddr, nm, len);
@@ -703,8 +705,12 @@ uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
         return st;
 
     if (phybuf && phybuf->dsc$a_pointer) {
-        char phys[VMS_DEVNAM_SIZE + 2];
-        int len = snprintf(phys, sizeof(phys), "_%s", info.devnam);
+        /* VMS echoes the FULL name: "%DCL-I-ALLOC, _VAX1$OPA0: allocated",
+         * standalone and clustered alike (rd vms-1f7). */
+        char phys[VMS_FULLDEVNAM_SIZE + 2];
+        info.fulldevnam[VMS_FULLDEVNAM_SIZE - 1] = '\0';
+        int len = snprintf(phys, sizeof(phys), "_%s",
+                           info.fulldevnam[0] ? info.fulldevnam : info.devnam);
         if (len > 0) {
             uint16_t l = (uint16_t)len;
             (void)lib$scopy_r_dx(&l, phys, phybuf);

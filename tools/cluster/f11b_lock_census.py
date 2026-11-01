@@ -303,7 +303,7 @@ def _checker():
 def _selftest_shapes(sh, check):
     """The populations rd vms-f4c0 quotes, and OVMX's wrong one beside them."""
     real_s = sh[('REAL', 's', SUB_LEN)]
-    check('real F11B$s is 10 bytes, a per-file SUB-lock', real_s.frames, 37416)
+    check('real F11B$s is 10 bytes, a per-file SUB-lock', real_s.frames, 37465)  # +49 with #1582's lab-bed replay (vms-025)
     check('...distinct names', len(real_s.names), 590)
     check('...every one of them carries a parent pair',
           real_s.with_parent, real_s.frames)
@@ -311,7 +311,7 @@ def _selftest_shapes(sh, check):
           real_s.ident[(0, 0)], real_s.frames)
     check('...requested at PW on all but the NL registrations',
           (real_s.modes[4], real_s.modes[0], len(real_s.modes)),
-          (37305, 111, 2))
+          (37354, 111, 2))
     check('a real node NEVER originates an 18-byte F11B$s',
           [k for k in sh if k[0] == 'REAL' and k[1] == 's' and k[2] != SUB_LEN],
           [])
@@ -348,7 +348,7 @@ def _selftest_parent(paths, check):
           len({parent for _k, parent in resolved}), 4)
     check('no handle in the corpus carried two different names', ambiguous, 0)
     check('unresolved (the volume lock predates the capture)',
-          dict(unresolved), {'s': 11437, 'c': 4})
+          dict(unresolved), {'s': 11486, 'c': 4})
     check('F11B$c hangs under the same per-volume root',
           sorted({parent for kind, parent in resolved if kind == 'c'}),
           [b'F11B$vDATA2       ', b'F11B$vSYSDSK1     ',

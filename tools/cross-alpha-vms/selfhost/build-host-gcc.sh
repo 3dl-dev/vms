@@ -68,6 +68,7 @@ lib mpc mpc-1.3.1 --with-gmp=$H --with-mpfr=$H
 echo "== gcc (build=$B host=$T target=$T, all-gcc)"
 mkdir -p $O/b-gcc && cd $O/b-gcc
 export ax_cv_cxx_compile_cxx11_FOR_BUILD=yes CONFIG_SITE=/src/tools/cross-alpha-vms/cxx/config.site
+[ -f Makefile ] || rm -rf $O/plan
 [ -f Makefile ] || ../src/gcc-14.2.0/configure --build=$B --host=$T --target=$T --prefix=/gnu \
     --enable-languages=c,c++ --disable-nls --disable-bootstrap --disable-shared --disable-lto \
     --disable-plugin --disable-fixincludes \
@@ -83,6 +84,17 @@ make -j1 configure-host > configure-host.log 2>&1 || { tail -30 configure-host.l
 # build of GCC 14 would have to. GCC's sources are unchanged.
 grep -q '^CFLAGS-cp/module.o += -D_USE_STD_STAT' gcc/Makefile \
     || echo 'CFLAGS-cp/module.o += -D_USE_STD_STAT' >> gcc/Makefile
+# vms-465: every compile, archive and link GCC's Makefiles run for all-gcc is
+# recorded (planlog: working directory, program, arguments) on its way to the
+# real program; gen-cc1-build.py turns cc1's part of it into the DCL procedure
+# that builds cc1 on OVMX. The programs and their arguments are unchanged.
+# A make over a kept build tree reruns only what is out of date, so the records
+# of the build that ran the rest are kept; a freshly configured tree starts them
+# anew (gen-cc1-build.py takes the latest record of each output).
+PB=$O/planbin; rm -rf $PB; [ -f $O/plan/.configured ] || rm -rf $O/plan; mkdir -p $PB $O/plan
+: > $O/plan/.configured
+for p in $T-gcc $T-g++ ar; do ln -s /src/tools/cross-alpha-vms/selfhost/planlog $PB/$p; done
+OVMX_PLAN_LOG=$O/plan PATH=$PB:$PATH \
 make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.log | sort -t: -k3 -u | head -40; exit 1; }
 # ld.exe is the port's own linker wrapper (config/vms/vms-ld.c): it writes an options
 # file and runs the VMS `link` command, the program the driver calls to link (vms-65a);
@@ -101,11 +113,37 @@ S=$O/src/gcc-14.2.0
       \( -path gcc/testsuite -o -path gcc/jit -o -path gcc/doc -o -path gcc/po \) -prune \
       -o -type f \( -name '*.h' -o -name '*.def' -o -name '*.hh' \) -print ) > $O/gccsrc.list
 ( cd $S && tar cf - -T $O/gccsrc.list ) | ( cd $G/SRC && tar xf - )
-mkdir -p $G/SRC/gcc/c && cp $S/gcc/c/c-lang.cc $G/SRC/gcc/c/
 ( cd $O/b-gcc/gcc && find . -maxdepth 1 -type f \( -name '*.h' -o -name '*.def' \) -print | tar cf - -T - ) \
     | ( mkdir -p $G/BLD/gcc && cd $G/BLD/gcc && tar xf - )
 mkdir -p $G/BLD/libdecnumber && cp $O/b-gcc/libdecnumber/*.h $G/BLD/libdecnumber/
 cp -r $H/include $G/HOST/include
+# vms-465: the sources of every compile recorded above, and every file beside
+# them (a .cc that #includes a sibling .cc or .inc), and the headers of each
+# compile's working directory (its -I., e.g. libbacktrace's config.h), from the source tree (SRC/)
+# and the build tree (BLD/: insn-*.cc, gtype-desc.cc, options.cc, ... and each
+# library's config.h); the records (PLAN/REC/); and the host GMP/MPFR/MPC
+# libraries cc1 links (HOST/lib), installed prerequisites as on a VMS system.
+( cd $O/plan && for r in *.rec; do
+    tr '\0' '\n' < "$r" | awk 'NR==2 { cwd = $0 } NR==3 { tool = $0 }
+      NR>3 { a[NR] = $0; if ($0 == "-c") c = 1 }
+      END { if (!c || tool == "ar") exit
+            print cwd "/-"
+            for (i in a) if (a[i] ~ /\.(c|cc)$/ && a[i-1] != "-o") print (a[i] ~ /^\// ? a[i] : cwd "/" a[i]) }'
+  done ) | xargs -r realpath -m | xargs -r -n1 dirname | sort -u > $O/plan.dirs
+while read -r d; do
+  case "$d" in
+    $S/*)        rel=${d#$S/};        dst=$G/SRC/$rel ;;
+    $O/b-gcc/*)  rel=${d#$O/b-gcc/};  dst=$G/BLD/$rel ;;
+    *) echo "build-host-gcc: FAIL a compiled source outside the source and build trees: $d"; exit 1 ;;
+  esac
+  mkdir -p "$dst"
+  find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.cc' -o -name '*.h' -o -name '*.def' -o -name '*.inc' -o -name '*.tab' \) \
+    -exec cp -p {} "$dst/" \;
+done < $O/plan.dirs
+mkdir -p $G/PLAN/REC && cp $O/plan/*.rec $G/PLAN/REC/
+mkdir -p $G/HOST/lib && cp $H/lib/libgmp.a $H/lib/libmpfr.a $H/lib/libmpc.a $G/HOST/lib/
+# the trees the records name, so the generator can map their paths
+printf '%s\n' "SRC=$S" "BLD=$O/b-gcc" "HOST=$H" "P32=$X/p32" > $G/PLAN/ROOTS
 ( cd $O && tar cf gccsrc.tar gccsrc ) && rm -rf $G
 echo "   gccsrc.tar: $(tar tf $O/gccsrc.tar | grep -vc '/$') files"
 ls -la $O/*.exe $O/gccsrc.tar

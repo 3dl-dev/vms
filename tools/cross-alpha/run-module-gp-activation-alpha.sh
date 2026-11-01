@@ -73,6 +73,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh driver-gate   # vms-1eb: the VMS-hosted xgcc driver runs cc1+as on OVMX; DCL DUMP of the EVAX object == cross driver object
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh link-gate     # vms-e40: cc1 -> as -> LINK.EXE (all VMS-hosted) -> RUN HELLO.EXE on OVMX/Alpha
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh xgcclink-gate # vms-65a: the VMS-hosted xgcc driver compiles AND links hello.c on OVMX/Alpha (cc1, as, ld -> DCL LINK -> LINK.EXE); RUN prints
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1build-gate # vms-465: BUILD_CC1.COM builds GCC's cc1 on OVMX/Alpha with the native toolchain (GCC/GXX, AR -> LIBRARY, GXX -> LINK); the built cc1 writes the cross cc1's assembly for hello.c (hours under TCG)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh as-gate       # vms-5303e: VMS-hosted cc1 then GNU as run on OVMX; DCL DUMP of the EVAX object == cross-assembled object
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
@@ -690,6 +691,48 @@ assert_cc1() {
   return 1
 }
 
+# assert_cc1b <console-log> <ref.s> <ref2.s> <ntu> -- THE TEETH for the vms-465 proof
+# (`cc1build-gate'): cc1 BUILT ON OVMX. PASS iff (a) BUILD_CC1.COM ran every one of
+# its <ntu> compiles in this boot or found its object from an earlier one, every
+# compile it ran returned success, and it ended with no failure, (b) the archives
+# were made and cc1 was linked with a success status, (c) the cc1 built here
+# compiled HELLO.C at -O0 and -O2 with a success status, and DCL TYPE -- not the
+# image -- shows assembly identical, line for line, to what the cross cc1 writes
+# for the same source and arguments, and (d) no activation error or abnormal
+# termination.
+assert_cc1b() {
+  local log="$1" ref="$2" ref2="$3" ntu="$4"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  [ -s "$ref" ] && [ -s "$ref2" ] || { echo "  FAIL: no reference assembly"; return 1; }
+  local tu_ok tu_bad end_ok=0 link_ok=0 ar_ok=0 c1_ok=0 c2_ok=0 same=0 same2=0 got got2
+  tu_ok=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] " | awk '{print $3}' | sort -u | wc -l)
+  tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] " || true)
+  tr -d '\r' < "$log" | grep -aqxE "CC1B: END FAILS=0 .*" && end_ok=1
+  tr -d '\r' < "$log" | grep -aqE "^CC1B: LINK %X[0-9A-F]*[13579BDF] " && link_ok=1
+  [ "$(tr -d '\r' < "$log" | grep -acE '^CC1B: AR .* FAILS=0$')" -ge 1 ] && ar_ok=1
+  grep -aqE 'CC1B-PROOF: CC1-STATUS=%X[0-9A-F]*[13579BDF] ' "$log" && c1_ok=1
+  grep -aqE 'CC1B-PROOF: CC1O2-STATUS=%X[0-9A-F]*[13579BDF] ' "$log" && c2_ok=1
+  got=$(mktemp); got2=$(mktemp)
+  awk '/CC1B-PROOF: === INDEPENDENT READER: DCL TYPE HELLO.S ===/{f=1; next} /CC1B-PROOF: TYPE-STATUS=/{f=0} f' "$log" \
+    | tr -d '\r' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > "$got"
+  awk '/CC1B-PROOF: === INDEPENDENT READER: DCL TYPE HELLO2.S ===/{f=1; next} /CC1B-PROOF: TYPE2-STATUS=/{f=0} f' "$log" \
+    | tr -d '\r' | sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' > "$got2"
+  [ -s "$got" ] && diff -q <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref") "$got" >/dev/null && same=1
+  [ -s "$got2" ] && diff -q <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref2") "$got2" >/dev/null && same2=1
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|ACCVIO|terminated abnormally|signal 1[012]|signal [46]" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) compiles that succeeded : $tu_ok of $ntu ; failed : $tu_bad ; ended with no failure : $end_ok"
+  echo "  (b) archives made : $ar_ok ; cc1 linked : $link_ok"
+  echo "  (c) the built cc1 ran (-O0, -O2) : $c1_ok $c2_ok ; DCL TYPE HELLO.S == cross cc1 : same=$same ; HELLO2.S (-O2) : same=$same2"
+  [ "$same" -eq 1 ] || diff <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref") "$got" 2>/dev/null | head -12 | sed 's/^/      /'
+  echo "  (d) no activation err : ok=$err_ok"
+  rm -f "$got" "$got2"
+  [ "$tu_ok" -eq "$ntu" ] && [ "$tu_bad" -eq 0 ] && [ "$end_ok" -eq 1 ] && [ "$ar_ok" -eq 1 ] && [ "$link_ok" -eq 1 ] \
+    && [ "$c1_ok" -eq 1 ] && [ "$c2_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -1139,7 +1182,7 @@ run_boot_a() {
       # OVMX_IMGACT_SEAM=1: surface the EXECUTIVE-recorded completion $STATUS per
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
-      timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
+      timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m '"${BOOT_MEM_MB:-1024}"' -vga none -nic none \
           -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot '"${BOOT_QEMU_EXTRA:-}"' <"$FIFO" > modgpA.raw 2>&1 &
@@ -1243,6 +1286,43 @@ OVMX-SEAM: image=JOINT_E2E.EXE flavor=VMS_STD $STATUS=0x0035A019
 %DCL-E-ABORT, abort
 JOINT-E2E-PROOF: STATUS=%X0035A019 SEVERITY=1
 EOF
+}
+
+# selfhost_toolchain -- the native toolchain the self-host proofs stage (vms-65a, vms-465):
+# the stage-2 C/C++ cross toolchain, and GCC, GNU as and LINK.EXE built for the
+# alpha-dec-vms host. Sets _tc, _jr, _hg, _as, _ln.
+selfhost_toolchain() {
+  _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"; _jr="$GATE_ROOT/joint-n3"
+  if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+    log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
+    mkdir -p "$_tc"
+    docker run --rm --network none -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+      bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+      || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
+  fi
+  mkdir -p "$GATE_ROOT/hostgcc" "$GATE_ROOT/hostas" "$GATE_ROOT/hostlink"
+  log "step 1c2: GCC for the alpha-dec-vms host (cached or built, network disabled)"
+  if [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/ld.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/ar.exe" ] \
+     && [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1plus.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/gxx.exe" ] \
+     && [ -s "$GATE_ROOT/hostgcc/host-gcc/gccsrc.tar" ]; then log "host GCC restored from cache"; else
+  docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
+    bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
+    || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
+  fi
+  log "step 1c3: GNU as for the alpha-dec-vms host (cached or built)"
+  if [ -s "$GATE_ROOT/hostas/host-as/out/as.exe" ]; then log "host as restored from cache"; else
+  docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostas:/w" "$VMS_IMG" \
+    bash /src/tools/cross-alpha-vms/selfhost/build-host-as.sh > "$GATE_ROOT/host-as.log" 2>&1 \
+    || { tail -60 "$GATE_ROOT/host-as.log"; die "host GNU as build failed -- see $GATE_ROOT/host-as.log"; }
+  fi
+  log "step 1c4: LINK.EXE for the alpha-dec-vms host (always rebuilt: it is this change's subject)"
+  rm -rf "$GATE_ROOT/hostlink/host-link"
+  docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostlink:/w" "$VMS_IMG" \
+    bash /src/tools/cross-alpha-vms/selfhost/build-host-link.sh > "$GATE_ROOT/host-link.log" 2>&1 \
+    || { tail -60 "$GATE_ROOT/host-link.log"; die "host LINK.EXE build failed -- see $GATE_ROOT/host-link.log"; }
+  _hg="$GATE_ROOT/hostgcc/host-gcc"; _as="$GATE_ROOT/hostas/host-as/out/as.exe"; _ln="$GATE_ROOT/hostlink/host-link/link.exe"
+  [ -s "$_as" ] && [ -s "$_ln" ] && [ -s "$_hg/xgcc.exe" ] && [ -s "$_hg/ld.exe" ] && [ -s "$_hg/ar.exe" ] \
+    && [ -s "$_hg/cc1plus.exe" ] && [ -s "$_hg/gxx.exe" ] || die "no host xgcc.exe / ld.exe / as.exe / link.exe / cc1plus.exe / gxx.exe"
 }
 
 selftest() {
@@ -2336,37 +2416,7 @@ PYEOF2
     [ "$_fails" -eq 0 ] || die "xgcclink selftest failed -- assert_drl cannot be trusted"
     echo ""
     build_joint_images
-    _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"; _jr="$GATE_ROOT/joint-n3"
-    if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
-      log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long)"
-      mkdir -p "$_tc"
-      docker run --rm --network none -v "$REPO:/src:ro" -v "$_jr:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
-        bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
-        || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed"; }
-    fi
-    mkdir -p "$GATE_ROOT/hostgcc" "$GATE_ROOT/hostas" "$GATE_ROOT/hostlink"
-    log "step 1c2: GCC for the alpha-dec-vms host (cached or built, network disabled)"
-    if [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/ld.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/ar.exe" ] \
-       && [ -s "$GATE_ROOT/hostgcc/host-gcc/cc1plus.exe" ] && [ -s "$GATE_ROOT/hostgcc/host-gcc/gxx.exe" ] \
-       && [ -s "$GATE_ROOT/hostgcc/host-gcc/gccsrc.tar" ]; then log "host GCC restored from cache"; else
-    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostgcc:/w" "$VMS_IMG" \
-      bash /src/tools/cross-alpha-vms/selfhost/build-host-gcc.sh > "$GATE_ROOT/host-gcc.log" 2>&1 \
-      || { tail -60 "$GATE_ROOT/host-gcc.log"; die "host GCC build failed -- see $GATE_ROOT/host-gcc.log"; }
-    fi
-    log "step 1c3: GNU as for the alpha-dec-vms host (cached or built)"
-    if [ -s "$GATE_ROOT/hostas/host-as/out/as.exe" ]; then log "host as restored from cache"; else
-    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostas:/w" "$VMS_IMG" \
-      bash /src/tools/cross-alpha-vms/selfhost/build-host-as.sh > "$GATE_ROOT/host-as.log" 2>&1 \
-      || { tail -60 "$GATE_ROOT/host-as.log"; die "host GNU as build failed -- see $GATE_ROOT/host-as.log"; }
-    fi
-    log "step 1c4: LINK.EXE for the alpha-dec-vms host (always rebuilt: it is this change's subject)"
-    rm -rf "$GATE_ROOT/hostlink/host-link"
-    docker run --rm --network none -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/hostlink:/w" "$VMS_IMG" \
-      bash /src/tools/cross-alpha-vms/selfhost/build-host-link.sh > "$GATE_ROOT/host-link.log" 2>&1 \
-      || { tail -60 "$GATE_ROOT/host-link.log"; die "host LINK.EXE build failed -- see $GATE_ROOT/host-link.log"; }
-    _hg="$GATE_ROOT/hostgcc/host-gcc"; _as="$GATE_ROOT/hostas/host-as/out/as.exe"; _ln="$GATE_ROOT/hostlink/host-link/link.exe"
-    [ -s "$_as" ] && [ -s "$_ln" ] && [ -s "$_hg/xgcc.exe" ] && [ -s "$_hg/ld.exe" ] && [ -s "$_hg/ar.exe" ] \
-      && [ -s "$_hg/cc1plus.exe" ] && [ -s "$_hg/gxx.exe" ] || die "no host xgcc.exe / ld.exe / as.exe / link.exe / cc1plus.exe / gxx.exe"
+    selfhost_toolchain
     log "step 1d: the launcher, the start files and the reference image (the cross driver on the same source, twice)"
     mkdir -p "$GATE_ROOT/drlimg"
     # vms-5b3: the C++ program the native g++ builds on OVMX. SYSTARTUP_VMS_DRL_PROOF.COM
@@ -2519,7 +2569,7 @@ PYEOF3
     cp -r "$GATE_ROOT/cxxinc" "$WORK/joint/inc/gnu/cxx"
     # vms-9a0: GCC's source + generated headers and the response file -> GCCSRC (SYS$COMMON:[GCCSRC])
     rm -rf "$WORK/joint/gccsrc"; mkdir -p "$WORK/joint/gccsrc"
-    tar xf "$_hg/gccsrc.tar" -C "$WORK/joint/gccsrc" --strip-components=1
+    tar xf "$_hg/gccsrc.tar" -C "$WORK/joint/gccsrc" --strip-components=1 --exclude=gccsrc/PLAN
     cp "$GATE_ROOT/drlimg/cc1tu.rsp" "$WORK/joint/gccsrc/cc1tu.rsp"
     : > "$WORK/joint/DRL_PROOF"
     assemble_boot_image
@@ -2536,6 +2586,135 @@ PYEOF3
       exit 0
     fi
     echo "FAIL: the VMS-hosted xgcc compile + link proof did not pass. Full log: $WORK/modgpA.log"
+    tail -80 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  cc1build-gate)
+    # vms-465: GCC's cc1 BUILT ON OVMX/Alpha by the native toolchain. BUILD_CC1.COM
+    # (selfhost/gen-cc1-build.py, from the compile/archive/link commands GCC's own
+    # Makefiles ran for cc1 -- planlog records them in build-host-gcc.sh) compiles
+    # every cc1 source with GCC.EXE/GXX.EXE (CC1.EXE, CC1PLUS.EXE, AS.EXE), makes the
+    # libraries with AR.EXE (LIBRARY) and links cc1.exe with GXX.EXE (ld -> LINK).
+    # The cc1 built there then compiles hello.c at -O0 and -O2; DCL TYPE of what it
+    # wrote must equal what the cross cc1 writes. Long under TCG: hours, not minutes.
+    MILESTONE_MAIN=drvlnk_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    # GCC's source and build trees, 724 objects, their libraries, cc1 twice over
+    export OVMX_ALPHA_DISK_MB="${CC1B_DISK_MB:-1536}"
+    export BOOT_MEM_MB="${CC1B_MEM_MB:-2048}"
+    # this proof runs no JOINT_E2E: the P0 claim is read off the driver's own seam
+    export P0_SEAM_IMAGE=XGCC
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    BOOT_TIMEOUT="${CC1B_BOOT_TIMEOUT:-172800}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))
+    _st=$(mktemp -d); _fails=0
+    printf '\t.set noat\n\t.text\nmain:\n\tret $31,($26),1\n' > "$_st/ref.s"
+    printf '\t.set noat\n\t.text\nmain:\n\tclr $0\n\tret $31,($26),1\n' > "$_st/ref2.s"
+    mkb() {  # mkb <tu-status> <ntu-printed> <end> <link> <type1-file> <type2-file>
+      local n
+      for n in $(seq 1 "$2"); do printf 'CC1B: TU %d/3 %s  1-NOV-2026 10:00:00.00  1-NOV-2026 10:01:00.00 gcc/x%d.cc\r\n' "$n" "$1" "$n"; done
+      printf '%s\r\n' "CC1B: COMPILED FAILS=0" "CC1B: AR /GCCOBJ/BACKEND/libbackend.a 3 members FAILS=0" \
+        "CC1B: LINK $4  1-NOV-2026 10:02:00.00  1-NOV-2026 10:03:00.00" "CC1B: END FAILS=$3  1-NOV-2026 10:03:00.00" \
+        "CC1B-PROOF: BUILD-STATUS=%X00000001 SEVERITY=1" "CC1B-PROOF: CC1-STATUS=%X00000001 SEVERITY=1" \
+        "CC1B-PROOF: === INDEPENDENT READER: DCL TYPE HELLO.S ==="
+      sed 's/$/\r/' "$5"
+      printf '%s\r\n' "CC1B-PROOF: TYPE-STATUS=%X00000001 SEVERITY=1" "CC1B-PROOF: CC1O2-STATUS=%X00000001 SEVERITY=1" \
+        "CC1B-PROOF: === INDEPENDENT READER: DCL TYPE HELLO2.S ==="
+      sed 's/$/\r/' "$6"
+      printf '%s\r\n' "CC1B-PROOF: TYPE2-STATUS=%X00000001 SEVERITY=1" "CC1B-PROOF: === END ==="
+    }
+    sed 's/ret \$31/ret $30/' "$_st/ref.s" > "$_st/bad.s"
+    mkb %X00000001 3 0 %X00000001 "$_st/ref.s" "$_st/ref2.s" > "$_st/pass.log"
+    mkb %X00000001 2 0 %X00000001 "$_st/ref.s" "$_st/ref2.s" > "$_st/missingtu.log"
+    mkb %X1035A00A 3 1 %X00000001 "$_st/ref.s" "$_st/ref2.s" > "$_st/tufail.log"
+    mkb %X00000001 3 0 %X0000002C "$_st/ref.s" "$_st/ref2.s" > "$_st/linkfail.log"
+    mkb %X00000001 3 0 %X00000001 "$_st/bad.s" "$_st/ref2.s" > "$_st/diffasm.log"
+    mkb %X00000001 3 0 %X00000001 "$_st/ref.s" "$_st/ref.s" > "$_st/diffasm2.log"
+    : > "$_st/empty.s"; mkb %X00000001 3 0 %X00000001 "$_st/empty.s" "$_st/ref2.s" > "$_st/notyped.log"
+    { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:CC1PLUS terminated abnormally (signal 11)'; } > "$_st/crash.log"
+    for _c in "pass:0" "missingtu:1" "tufail:1" "linkfail:1" "diffasm:1" "diffasm2:1" "notyped:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_cc1b "$_st/$_n.log" "$_st/ref.s" "$_st/ref2.s" 3 >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  cc1build selftest $_n: PASS"; else echo "  cc1build selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "cc1build selftest failed -- assert_cc1b cannot be trusted"
+    [ -n "${CC1B_SELFTEST_ONLY:-}" ] && { echo "cc1build selftest only: PASS"; exit 0; }
+    echo ""
+    build_joint_images
+    selfhost_toolchain
+    tar tf "$_hg/gccsrc.tar" gccsrc/PLAN/ROOTS >/dev/null 2>&1 \
+      || die "gccsrc.tar carries no PLAN/ (the compile records): a host GCC from before vms-465 -- clear $GATE_ROOT/hostgcc"
+    log "step 1d: BUILD_CC1.COM from the records, the start files, the reference assembly (the cross cc1)"
+    rm -rf "$GATE_ROOT/cc1bimg"; mkdir -p "$GATE_ROOT/cc1bimg"
+    printf '%s\n' 'int printf (const char *, ...);' 'static int sq (int x) { return x * x; }' 'int main (void)' '{' \
+      '  printf ("hello from cc1 on OVMX %d\n", sq (7));' '  return 0;' '}' > "$GATE_ROOT/cc1bimg/hello.c"
+    tar xf "$_hg/gccsrc.tar" -C "$GATE_ROOT/cc1bimg" gccsrc/PLAN
+    python3 -I "$REPO/tools/cross-alpha-vms/selfhost/gen-cc1-build.py" "$GATE_ROOT/cc1bimg/gccsrc/PLAN/REC" \
+      "$GATE_ROOT/cc1bimg/gccsrc/PLAN/ROOTS" "$GATE_ROOT/cc1bimg/BUILD_CC1.COM" ${CC1B_ONLY:+--only "$CC1B_ONLY"} --trace "${CC1B_TRACE:-1}" ${CC1B_EXTRA:+--extra "$CC1B_EXTRA"} ${CC1B_PICK:+--pick "$CC1B_PICK"} \
+      | tee "$GATE_ROOT/cc1bimg/gen.log" || die "gen-cc1-build.py failed"
+    _ntu=$(grep -oE '^gen-cc1-build: [0-9]+ compiles' "$GATE_ROOT/cc1bimg/gen.log" | awk '{print $2}')
+    [ -n "$_ntu" ] && [ "$_ntu" -gt 0 ] || die "BUILD_CC1.COM has no compiles"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/cc1bimg:/img" \
+      -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" bash -c '
+        set -e
+        G=/out/cxx/bin/alpha-dec-vms-gcc
+        $G -O1 -o /img/joint_e2e.exe /src/tools/cross-alpha-vms/joint-e2e/drvlnk_test.c
+        for f in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do
+          p=$($G -print-file-name=$f); [ -f "$p" ] || { echo "no $f ($p)"; exit 1; }
+          cp "$p" /img/$f
+        done
+        cd /img && cp hello.c "VDA0:[SYSTMP]HELLO.C"
+        C1=$($G -print-prog-name=cc1)
+        $C1 -quiet -nostdinc -dumpbase hello.c "VDA0:[SYSTMP]HELLO.C" -o ref.s
+        $C1 -quiet -nostdinc -O2 -dumpbase hello.c "VDA0:[SYSTMP]HELLO.C" -o ref2.s
+        P32=/out/cxx/p32
+        cp $P32/lib/libstdc++.a libstdc++.a
+        rm -rf cxx-src; cp -rL $P32/include/c++/14_2_0 cxx-src
+        mkdir -p inc/usr inc/gnu
+        cp -rL /out/cxx/sysroot/usr/include inc/usr/include
+        cp -rL "$($G -print-file-name=include)" inc/gnu/gcc-include' \
+      > "$GATE_ROOT/cc1b-ref.log" 2>&1 || { tail -40 "$GATE_ROOT/cc1b-ref.log"; die "launcher link / reference compile failed"; }
+    [ -s "$GATE_ROOT/cc1bimg/ref.s" ] && [ -s "$GATE_ROOT/cc1bimg/ref2.s" ] || die "the cross cc1 wrote no reference assembly"
+    rm -rf "$GATE_ROOT/cxxinc"; cp -r "$GATE_ROOT/cc1bimg/cxx-src" "$GATE_ROOT/cxxinc"
+    cp "$GATE_ROOT/cc1bimg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
+    cp "$_hg/xgcc.exe" "$WORK/joint/xgcc.exe"; cp "$_hg/cc1.exe" "$WORK/joint/cc1.exe"; cp "$_hg/ld.exe" "$WORK/joint/ld.exe"
+    cp "$_as" "$WORK/joint/as.exe"; cp "$_ln" "$WORK/joint/link.exe"; cp "$_hg/ar.exe" "$WORK/joint/ar.exe"
+    cp "$_hg/cc1plus.exe" "$WORK/joint/cc1plus.exe"; cp "$_hg/gxx.exe" "$WORK/joint/gxx.exe"
+    cp "$GATE_ROOT/cc1bimg/libstdc++.a" "$WORK/joint/libstdc++.a"
+    for _p in crt0.o crtbegin.o crtend.o vms-dwarf2eh.o libgcc.a; do cp "$GATE_ROOT/cc1bimg/$_p" "$WORK/joint/$_p"; done
+    [ -s "$_jr/STARLET.a" ] || die "no STARLET.a in $_jr"
+    cp "$_jr/STARLET.a" "$WORK/joint/STARLET.a"
+    for _p in "DECC\$SHR" LIBOTS_SHR LIBVMSRMS\$SHR LIBVMS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSPROCESS\$SHR LIBVMSSYS\$SHR; do
+      [ -s "$_jr/$_p.EXE" ] || die "no $_p.EXE in $_jr"
+      cp "$_jr/$_p.EXE" "$WORK/joint/$_p.EXE"
+    done
+    rm -rf "$WORK/joint/inc"; cp -r "$GATE_ROOT/cc1bimg/inc" "$WORK/joint/inc"
+    cp -r "$GATE_ROOT/cxxinc" "$WORK/joint/inc/gnu/cxx"
+    # GCC's trees -> GCCSRC (SYS$COMMON:[GCCSRC]); the records stay on the host
+    rm -rf "$WORK/joint/gccsrc"; mkdir -p "$WORK/joint/gccsrc"
+    tar xf "$_hg/gccsrc.tar" -C "$WORK/joint/gccsrc" --strip-components=1 --exclude=gccsrc/PLAN
+    cp "$GATE_ROOT/cc1bimg/BUILD_CC1.COM" "$WORK/joint/gccsrc/BUILD_CC1.COM"
+    cp "$GATE_ROOT/cc1bimg/hello.c" "$WORK/joint/gccsrc/HELLO.C"
+    rm -f "$WORK/joint/"*_PROOF; : > "$WORK/joint/CC1B_PROOF"
+    assemble_boot_image
+    log "step 3: BOOT A -- BUILD_CC1.COM builds cc1 on the REAL executive ($_ntu compiles; up to ${BOOT_TIMEOUT}s)"
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    # CC1B_SAMPLE="INTERVAL_MS COUNT": a guest-PC profile of the build (gdb_peek.pl S) in $WORK/peek.log
+    if [ -n "${CC1B_SAMPLE:-}" ]; then
+      export BOOT_QEMU_EXTRA="-gdb tcp:127.0.0.1:1234" BOOT_PEEK="1234 S $CC1B_SAMPLE"
+      cp "$REPO/tools/cross-alpha/gdb_peek.pl" "$WORK/gdb_peek.pl"
+    fi
+    run_boot_a
+    tr -d '\r' < "$WORK/modgpA.log" | grep -aE '^CC1B|CC1B-PROOF' | tail -40 | sed 's/^/  | /' || true
+    if assert_cc1b "$WORK/modgpA.log" "$GATE_ROOT/cc1bimg/ref.s" "$GATE_ROOT/cc1bimg/ref2.s" "$_ntu"; then
+      echo ""
+      echo "PASS: cc1 was BUILT on OVMX/Alpha by the native toolchain ($_ntu compiles by GCC/GXX,"
+      echo "      libraries by AR -> LIBRARY, linked by GXX -> LINK), and the built cc1 writes the"
+      echo "      same assembly for hello.c, -O0 and -O2, as the cross cc1."
+      exit 0
+    fi
+    echo "FAIL: the cc1-built-on-OVMX proof did not pass. Full log: $WORK/modgpA.log"
     tail -80 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

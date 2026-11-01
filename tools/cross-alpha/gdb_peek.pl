@@ -3,11 +3,14 @@
 # gdbstub (vms-5303e). Diagnostics only: stop the guest at one user-mode PC, print
 # registers and a memory window each time it is hit, and let the guest run on.
 #   gdb_peek.pl PORT PC HEXADDR_REG_NAME LEN OUTFILE
+#   gdb_peek.pl PORT S INTERVAL_MS COUNT OUTFILE   (a profile: COUNT samples of pc, ra,
+#                                                  one every INTERVAL_MS -- rd vms-465)
 # e.g. gdb_peek.pl 1234 0x1bd234 r16 232 /work/peek.log  (dump LEN bytes at register's value)
 use strict; use warnings; use IO::Socket::INET;
 my ($port, $pc, $reg, $len, $out) = @ARGV;
 my $watch = ($pc eq 'W');
-$pc = $watch ? 0 : hex($pc);
+my $sample = ($pc eq 'S');
+$pc = ($watch || $sample) ? 0 : hex($pc);
 my %regno = map { ("r$_" => $_) } 0 .. 31;
 open(my $log, '>', $out) or die; select((select($log), $| = 1)[0]);
 my $s;
@@ -27,6 +30,22 @@ sub recv_pkt {
 }
 sub le64 { my $h = shift; my $v = 0; for (my $i = 14; $i >= 0; $i -= 2) { $v = ($v << 8) | hex(substr($h, $i, 2)) } $v }
 send_pkt('?'); recv_pkt();
+if ($sample) {
+    # the guest is stopped on attach: run it, then interrupt it every INTERVAL_MS
+    my ($ms, $count) = ($reg, $len);
+    send_pkt('c');
+    for my $n (1 .. $count) {
+        select(undef, undef, undef, $ms / 1000);
+        print $s "\x03";
+        my $stop = recv_pkt(); last unless defined $stop;
+        send_pkt('g'); my $g = recv_pkt(); last unless defined $g;
+        printf $log "S %d pc=%#x ra=%#x\n", $n, le64(substr($g, 64 * 16, 16)), le64(substr($g, 26 * 16, 16));
+        send_pkt('c');
+    }
+    print $s "\x03"; recv_pkt();
+    send_pkt('D'); recv_pkt();
+    exit 0;
+}
 if ($watch) {
     # gdb_peek.pl PORT W HEXADDR LEN OUTFILE: a write watchpoint on LEN bytes at HEXADDR
     my $wa = hex($reg);

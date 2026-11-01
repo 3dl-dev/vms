@@ -383,7 +383,7 @@ def selftest(root):
                     if i not in (8, 9, 34) and not 28 <= i < 32)]
     exact_ratio('82/15 answers that differ from the request ONLY in body[8], '
                 '[9], [28:32] and [34]',
-                len(acked) - len(stray), len(acked), 3561, 4009)
+                len(acked) - len(stray), len(acked), 3593, 4041)
     exact_ratio('...of those, the ones answering an op-0x14 (the other 3 answer '
                 'an op-0x10)',
                 sum(1 for q, _a in stray if q[9] == 0x14), len(stray), 445, 448)
@@ -472,9 +472,14 @@ def selftest(root):
     # 792/795 -> 799/802). Six of the seven new episodes are the two real VAXes'
     # own CACHE$ hand-overs during the run; the seventh is RA7T moving onto the
     # OVMX node, and it satisfies W1 and W2 like the rest.
+    # 2026-11-01: rd vms-083's four-arm directory capture then landed in main
+    # (3,561/4,009 -> 3,593/4,041; 799/802 -> 804/807) -- five more episodes,
+    # the arm's own hand-overs, and the RULE HELD over all of them: the five new
+    # ones satisfy W1 too, and the 3 of 807 that do not are the same three the
+    # rule has always carried, not new ones.
     exact_ratio('episodes whose op-0x13 SENDERS are exactly its op-0x14 '
                 'RECIPIENTS (rule W1)', rt['sets_equal'], rt['episodes'],
-                799, 802)
+                804, 807)
     floor('episodes with more than one op-0x13', rt['multi13'], 383)
     exact_all('multi-op-0x13 episodes whose op-0x14s ALL follow the LAST '
               'op-0x13 (rule W2)', rt['multi13_batched'], rt['multi13'])
@@ -491,7 +496,7 @@ def selftest(root):
               at['episodes'])
     exact_ratio('episodes with a late op-0x12 once the overlapping ones are '
                 'counted too (the grouping, not the protocol)',
-                rt['record_after_last_13'], rt['episodes'], 172, 802)
+                rt['record_after_last_13'], rt['episodes'], 172, 807)
 
     # RULE 3: the op-0x14's body[20:40] is residue.
     c = classify_op14_residue(pairs)

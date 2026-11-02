@@ -2493,7 +2493,7 @@ PYEOF3
     # -- the same path for the cross g++ (a container directory) and the native one (the
     # rooted logical GCCSRC). Everything after the driver name is in a response file the
     # driver reads (@file), so the case of every argument is exactly as written.
-    printf '%s\n' "-fno-PIE -DIN_GCC_FRONTEND -O2 -DIN_GCC -fno-exceptions -fno-rtti -fasynchronous-unwind-tables -W -Wall -Wno-narrowing -Wwrite-strings -Wcast-qual -Wmissing-format-attribute -Wconditionally-supported -Woverloaded-virtual -pedantic -Wno-long-long -Wno-variadic-macros -Wno-overlength-strings -DHAVE_CONFIG_H -fno-PIE -I/GCCSRC/BLD/gcc -I/GCCSRC/SRC/gcc -I/GCCSRC/SRC/gcc/c -I/GCCSRC/SRC/include -I/GCCSRC/SRC/libcpp/include -I/GCCSRC/SRC/libcody -I/GCCSRC/HOST/include -I/GCCSRC/SRC/libdecnumber -I/GCCSRC/SRC/libdecnumber/dpd -I/GCCSRC/BLD/libdecnumber -I/GCCSRC/SRC/libbacktrace" > "$GATE_ROOT/drlimg/cc1tu.flags"
+    printf '%s\n' "-fno-PIE -DIN_GCC_FRONTEND -O2 -DIN_GCC -fno-exceptions -fno-rtti -fasynchronous-unwind-tables -W -Wall -Wno-narrowing -Wwrite-strings -Wcast-qual -Wmissing-format-attribute -Wconditionally-supported -Woverloaded-virtual -pedantic -Wno-long-long -Wno-variadic-macros -Wno-overlength-strings -DHAVE_CONFIG_H -fno-PIE -I/GCCSRC/BLD/gcc -I/GCCSRC/SRC/gcc-14.2.0/gcc -I/GCCSRC/SRC/gcc-14.2.0/gcc/c -I/GCCSRC/SRC/gcc-14.2.0/include -I/GCCSRC/SRC/gcc-14.2.0/libcpp/include -I/GCCSRC/SRC/gcc-14.2.0/libcody -I/GCCSRC/HOST/include -I/GCCSRC/SRC/gcc-14.2.0/libdecnumber -I/GCCSRC/SRC/gcc-14.2.0/libdecnumber/dpd -I/GCCSRC/BLD/libdecnumber -I/GCCSRC/SRC/gcc-14.2.0/libbacktrace" > "$GATE_ROOT/drlimg/cc1tu.flags"
     printf '%s\n' "-BSYS\$SYSTEM: -nostdinc++ -isystem /GNU/CXX -isystem /GNU/CXX/ALPHA-DEC-VMS $(cat "$GATE_ROOT/drlimg/cc1tu.flags") -x c++ -c VDA0:[SYSTMP]C-LANG.CC -o VDA0:[SYSTMP]C-LANG.OBJ" \
       > "$GATE_ROOT/drlimg/cc1tu.rsp"
     docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/drlimg:/img" -v "$_hg:/hg:ro" \
@@ -2552,7 +2552,7 @@ PYEOF3
         rm -rf cxx-src; cp -rL $P32/include/c++/14_2_0 cxx-src
         # vms-9a0: the cc1 source file, by the cross g++ over the same /GCCSRC tree
         mkdir -p /GCCSRC && tar xf /hg/gccsrc.tar -C /GCCSRC --strip-components=1
-        cp /GCCSRC/SRC/gcc/c/c-lang.cc "VDA0:[SYSTMP]C-LANG.CC"
+        cp /GCCSRC/SRC/gcc-14.2.0/gcc/c/c-lang.cc "VDA0:[SYSTMP]C-LANG.CC"
         for n in 1 2; do
           $GXX -nostdinc++ -isystem $P32/include/c++/14_2_0 -isystem $P32/include/c++/14_2_0/alpha-dec-vms \
             $(cat cc1tu.flags) -x c++ -c "VDA0:[SYSTMP]C-LANG.CC" -o r$n/c-lang.obj
@@ -2679,6 +2679,8 @@ PYEOF3
     selfhost_toolchain
     tar tf "$_hg/gccsrc.tar" gccsrc/PLAN/ROOTS >/dev/null 2>&1 \
       || die "gccsrc.tar carries no PLAN/ (the compile records): a host GCC from before vms-465 -- clear $GATE_ROOT/hostgcc"
+    tar tf "$_hg/gccsrc.tar" gccsrc/SRC/gcc-14.2.0/gcc/config/alpha/alpha.md >/dev/null 2>&1 \
+      || die "gccsrc.tar has GCC's sources outside SRC/gcc-14.2.0/ or no alpha.md: a host GCC from before vms-2eb -- clear $GATE_ROOT/hostgcc"
     log "step 1d: BUILD_CC1.COM from the records, the start files, the reference assembly (the cross cc1)"
     rm -rf "$GATE_ROOT/cc1bimg"; mkdir -p "$GATE_ROOT/cc1bimg"
     printf '%s\n' 'int printf (const char *, ...);' 'static int sq (int x) { return x * x; }' 'int main (void)' '{' \

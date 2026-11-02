@@ -103,16 +103,20 @@ for e in cc1 cc1plus xgcc cpp ld ar; do cp gcc/$e.exe $O/$e.exe; done
 cp gcc/xg++.exe $O/gxx.exe
 # vms-9a0: what compiling a cc1 source file needs, as one tree (GCCSRC/): GCC's
 # (every front end's .def too: the generated all-tree.def includes them all)
-# source headers and the sources compiled natively (SRC/), the headers this
+# source headers and the sources compiled natively (SRC/gcc-14.2.0/), the headers this
 # build generated (BLD/: auto-host.h, config.h, tm.h, options.h, insn-*.h ...),
 # and GMP/MPFR/MPC's (HOST/include). The gate stages it on the OVMX system disk
-# and gives the cross g++ the same tree at the same path.
-G=$O/gccsrc; rm -rf $G; mkdir -p $G/SRC $G/BLD $G/HOST
-S=$O/src/gcc-14.2.0
+# and gives the cross g++ the same tree at the same path. SRC/ is this build's
+# src/ and keeps GCC's source directory under its real name, gcc-14.2.0: from a
+# compile's working directory (BLD/gcc = b-gcc/gcc) the paths the build wrote into
+# the sources it generated (insn-emit-*.cc's #line "../../src/gcc-14.2.0/gcc/config/
+# alpha/alpha.md") name the same files as on this host (vms-2eb).
+G=$O/gccsrc; S=$O/src/gcc-14.2.0; GS=$G/SRC/gcc-14.2.0
+rm -rf $G; mkdir -p $GS $G/BLD $G/HOST
 ( cd $S && find gcc include libcpp/include libdecnumber libbacktrace libcody \
       \( -path gcc/testsuite -o -path gcc/jit -o -path gcc/doc -o -path gcc/po \) -prune \
       -o -type f \( -name '*.h' -o -name '*.def' -o -name '*.hh' -o -name '*.tcc' -o -name '*.inl' \) -print ) > $O/gccsrc.list
-( cd $S && tar cf - -T $O/gccsrc.list ) | ( cd $G/SRC && tar xf - )
+( cd $S && tar cf - -T $O/gccsrc.list ) | ( cd $GS && tar xf - )
 # (and the target hook tables genhooks writes one level down: common/, c-family/)
 ( cd $O/b-gcc/gcc && { find . -maxdepth 1 -type f \( -name '*.h' -o -name '*.def' \) -print;
     find . -mindepth 2 -maxdepth 2 -type f -name '*-target-hooks-def.h' -print; } | tar cf - -T - ) \
@@ -134,7 +138,7 @@ cp -r $H/include $G/HOST/include
   done ) | xargs -r realpath -m | xargs -r -n1 dirname | sort -u > $O/plan.dirs
 while read -r d; do
   case "$d" in
-    $S/*)        rel=${d#$S/};        dst=$G/SRC/$rel ;;
+    $S/*)        rel=${d#$S/};        dst=$GS/$rel ;;
     $O/b-gcc/*)  rel=${d#$O/b-gcc/};  dst=$G/BLD/$rel ;;
     *) echo "build-host-gcc: FAIL a compiled source outside the source and build trees: $d"; exit 1 ;;
   esac
@@ -142,10 +146,27 @@ while read -r d; do
   find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.cc' -o -name '*.h' -o -name '*.def' -o -name '*.inc' -o -name '*.tab' -o -name '*.tcc' -o -name '*.inl' \) \
     -exec cp -p {} "$dst/" \;
 done < $O/plan.dirs
+# vms-2eb: the files a generated source names by #line (the machine description
+# gen* read: insn-emit-*.cc, insn-attrtab.cc, insn-output.cc ... name alpha.md,
+# sync.md, common.md), under the name the line gives, from the directory the
+# source is compiled in (its own). On a VMS host GCC opens each one (vmsdbgout
+# full_name: fopen + fgetname); a missing one is fclose(NULL) and cc1plus dies.
+( cd $G/BLD && { grep -rHoE '^#line [0-9]+ "[^"]+"' --include='*.c' --include='*.cc' --include='*.h' . || true; } ) \
+  | sed -E 's/^([^:]*):#line [0-9]+ "(.*)"$/\1 \2/' | sort -u | while read -r src f; do
+  case "$f" in
+    /*) a=$f ;;
+    *)  a=$(cd "$O/b-gcc/$(dirname "$src")" && realpath -m "$f") ;;
+  esac
+  case "$a" in
+    $S/*) [ -f "$a" ] || { echo "build-host-gcc: FAIL $src: #line names a missing file: $f"; exit 1; }
+          mkdir -p "$GS/$(dirname "${a#$S/}")" && cp -p "$a" "$GS/${a#$S/}" ;;
+    *) echo "build-host-gcc: FAIL $src: #line names a file outside the source tree: $f"; exit 1 ;;
+  esac
+done
 mkdir -p $G/PLAN/REC && cp $O/plan/*.rec $G/PLAN/REC/
 mkdir -p $G/HOST/lib && cp $H/lib/libgmp.a $H/lib/libmpfr.a $H/lib/libmpc.a $G/HOST/lib/
 # the trees the records name, so the generator can map their paths
-printf '%s\n' "SRC=$S" "BLD=$O/b-gcc" "HOST=$H" "P32=$X/p32" > $G/PLAN/ROOTS
+printf '%s\n' "SRC=$O/src" "BLD=$O/b-gcc" "HOST=$H" "P32=$X/p32" > $G/PLAN/ROOTS
 ( cd $O && tar cf gccsrc.tar gccsrc ) && rm -rf $G
 echo "   gccsrc.tar: $(tar tf $O/gccsrc.tar | grep -vc '/$') files"
 ls -la $O/*.exe $O/gccsrc.tar

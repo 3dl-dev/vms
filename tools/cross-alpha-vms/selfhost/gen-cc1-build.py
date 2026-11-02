@@ -12,12 +12,15 @@ it names to every compile that made an object in it, and writes BUILD_CC1.COM:
 for each of those compiles, in the order GCC's build ran them, the same
 arguments (paths moved to the trees staged on the OVMX disk) in a response
 file the native driver reads (@file, so DCL changes the case of none of
-them); then the archives, made by the port's AR; then cc1, linked by the
-native g++ driver. Only the dependency-tracking options (-MT -MMD -MP -MF),
+them), each run in its record's working directory (SET DEFAULT), as make
+runs it, so a relative name GCC's build wrote into a generated source (a
+#line "../../src/gcc-14.2.0/gcc/config/alpha/alpha.md") names the same file;
+then the archives, made by the port's AR; then cc1, linked by the native g++
+driver. Only the dependency-tracking options (-MT -MMD -MP -MF),
 which write files for make to read, are left out: they do not change the code.
 
 The trees on OVMX (rooted logicals the proof defines):
-  /GCCSRC/SRC   GCC's source tree           (SRC=)
+  /GCCSRC/SRC   the source trees: gcc-14.2.0/ is GCC's  (SRC=, the host's src/)
   /GCCSRC/BLD   GCC's build tree (generated sources and headers)  (BLD=)
   /GCCSRC/HOST  GMP/MPFR/MPC, installed      (HOST=)
   /GCCOBJ/<lib> the objects and archives this procedure writes
@@ -82,6 +85,13 @@ class Mapper:
             if a == host or a.startswith(host + "/"):
                 return vms + a[len(host):]
         sys.exit("gen-cc1-build: a path outside the staged trees: %s (cwd %s)" % (p, cwd))
+
+    def vms_dir(self, cwd):
+        """a working directory as the DCL directory spec SET DEFAULT takes:
+        /GCCSRC/BLD/gcc -> GCCSRC:[BLD.gcc] (a dot in a name is ^.)"""
+        parts = self.path(cwd, ".").strip("/").split("/")
+        sub = [x.replace("^", "^^").replace(".", "^.") for x in parts[1:]]
+        return "%s:[%s]" % (parts[0], ".".join(sub) if sub else "000000")
 
     def compile_args(self, rec, out_vms):
         """the record's arguments as the native driver gets them"""
@@ -279,6 +289,7 @@ def main():
     w("$ GXX := $SYS$SYSTEM:GXX.EXE")
     w("$ AR := $SYS$SYSTEM:AR.EXE")
     w("$ FAILS = 0")
+    w("$ D0 = F$ENVIRONMENT(\"DEFAULT\")")
     for d in dirs:
         w("$ CREATE/DIRECTORY GCCOBJ:[%s]" % d.split("/")[2])
     w("$ T1 = F$TIME()")
@@ -303,6 +314,7 @@ def main():
         w("$ CLOSE R")
         if n <= trace:
             w("$ TYPE GCCOBJ:[000000]TU.RSP")
+        w("$ SET DEFAULT %s" % m.vms_dir(rec["cwd"]))
         w("$ T0 = F$TIME()")
         w("$ %s @GCCOBJ:[000000]TU.RSP" % drv)
         w("$ S = $STATUS")
@@ -313,6 +325,7 @@ def main():
         w("$ IF S .EQ. 1 .AND. F$SEARCH(\"GCCOBJ:[%s]%s\") .EQS. \"\" THEN S = %%X10000002" % (vdir, vname))
         w("$ WRITE SYS$OUTPUT \"CC1B: TU %d/%d ''S' ''T0' ''T1' %s\"" % (n, len(todo), label))
         w("$ IF S .NE. 1 THEN FAILS = FAILS + 1")
+        w("$ SET DEFAULT 'D0'")
         w("$ DELETE GCCOBJ:[000000]TU.RSP;*")
         w("$C%d:" % n)
     if not only:

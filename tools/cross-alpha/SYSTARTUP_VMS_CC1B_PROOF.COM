@@ -4,7 +4,7 @@ $! Staged onto the system volume by tools/cross-alpha/build-alpha-bootimage.sh
 $! ONLY when the CC1B_PROOF marker is present; the product rootfs-alpha file is
 $! never modified.
 $!
-$! GCCSRC:[SRC...] is GCC 14.2's source tree, GCCSRC:[BLD...] the sources and
+$! GCCSRC:[SRC.GCC-14^.2^.0...] is GCC 14.2's source tree, GCCSRC:[BLD...] the sources and
 $! headers its build generates, GCCSRC:[HOST...] GMP/MPFR/MPC as installed.
 $! GCCSRC:[000000]BUILD_CC1.COM (gen-cc1-build.py) runs every compile GCC's own
 $! Makefiles run for cc1 with the native driver (XGCC.EXE / GXX.EXE -> CC1.EXE /
@@ -23,11 +23,13 @@ $! the C RTL hands RMS names with '+' (c^+^+config.h) when this is defined, as t
 $ DEFINE/SYSTEM DECC$EFS_CHARSET ENABLE
 $! the trees as the ACP sees them: a file deep in the largest source directory
 $ DIRECTORY GCCSRC:[000000]
-$ DIRECTORY GCCSRC:[SRC]
-$ DIRECTORY/SIZE GCCSRC:[SRC.GCC]GIMPLE-MATCH-HEAD.CC
-$ DIRECTORY/SIZE GCCSRC:[SRC.GCC.C-FAMILY]C-COMMON.CC
-$ DIRECTORY/SIZE GCCSRC:[SRC.GCC.CONFIG.VMS]XM-VMS.H
+$ DIRECTORY GCCSRC:[SRC.GCC-14^.2^.0]
+$ DIRECTORY/SIZE GCCSRC:[SRC.GCC-14^.2^.0.GCC]GIMPLE-MATCH-HEAD.CC
+$ DIRECTORY/SIZE GCCSRC:[SRC.GCC-14^.2^.0.GCC.C-FAMILY]C-COMMON.CC
+$ DIRECTORY/SIZE GCCSRC:[SRC.GCC-14^.2^.0.GCC.CONFIG.VMS]XM-VMS.H
 $ DIRECTORY/SIZE GCCSRC:[BLD.GCC]CONFIG.H
+$! a machine description the generated insn-*.cc name by #line, from their directory (vms-2eb)
+$ DIRECTORY/SIZE GCCSRC:[SRC.GCC-14^.2^.0.GCC.CONFIG.ALPHA]ALPHA.MD
 $ WRITE SYS$OUTPUT "CC1B-PROOF: === BUILD: @GCCSRC:[000000]BUILD_CC1 ==="
 $ @GCCSRC:[000000]BUILD_CC1
 $ WRITE SYS$OUTPUT "CC1B-PROOF: BUILD-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"

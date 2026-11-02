@@ -160,10 +160,10 @@ $ WRITE SYS$OUTPUT "DRL-PROOF: CXX-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $!
 $! vms-9a0: one real source file of cc1 -- gcc/c/c-lang.cc -- compiled here by the native
 $! g++, with the flags GCC's own build gives it, over GCC's source and generated headers
-$! (GCCSRC:[SRC...], [BLD...], [HOST.INCLUDE]). The arguments are in a response file the
+$! (GCCSRC:[SRC.GCC-14^.2^.0...], [BLD...], [HOST.INCLUDE]). The arguments are in a response file the
 $! driver reads (@file), as typed by the build, so DCL changes none of them.
 $ DEFINE/SYSTEM/TRANSLATION_ATTRIBUTES=CONCEALED GCCSRC SYS$COMMON:[GCCSRC.]
-$ COPY GCCSRC:[SRC.GCC.C]C-LANG.CC VDA0:[SYSTMP]C-LANG.CC
+$ COPY GCCSRC:[SRC.GCC-14^.2^.0.GCC.C]C-LANG.CC VDA0:[SYSTMP]C-LANG.CC
 $ GXX @GCCSRC:[000000]CC1TU.RSP
 $ WRITE SYS$OUTPUT "DRL-PROOF: BUILD-TU-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === INDEPENDENT READER: DCL DUMP C-LANG.OBJ ==="

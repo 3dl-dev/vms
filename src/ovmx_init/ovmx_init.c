@@ -467,6 +467,38 @@ static void executive_announce(void)
  * conversational path prints the %OVMX-I-EXEC line later via executive_announce());
  * otherwise it is emitted inline here.
  */
+
+/* PROBE rd vms-66e (NOT FOR MERGE): print PID 1's own row and every process
+ * table row with vms_pid 1 or name STARTUP, so the VAX SHOW SYSTEM nameless
+ * 00000001 row can be traced to its source. */
+static char probe66e_last[1024];
+static void probe66e(const char *where, int only_on_change)
+{
+    struct vms_procinfo self, pi;
+    char buf[1024];
+    size_t n = 0;
+    uint32_t idx = 0, gst;
+    memset(&self, 0, sizeof self);
+    gst = vms_kif_getjpi_self(&self);
+    self.prcnam[sizeof self.prcnam - 1] = '\0';
+    n += (size_t)snprintf(buf + n, sizeof buf - n, "self getpid %d getjpi %08X vms_pid %08X lpid %u name \"%s\";",
+                          (int)getpid(), (unsigned)gst, (unsigned)self.vms_pid, (unsigned)self.linux_pid, self.prcnam);
+    while (n < sizeof buf - 100 && (vms_kif_procscan(&idx, &pi) & 1)) {
+        pi.prcnam[sizeof pi.prcnam - 1] = '\0';
+        if (only_on_change && pi.vms_pid != 1 && pi.linux_pid != 1 &&
+            strcmp(pi.prcnam, "STARTUP") != 0)
+            continue;
+        n += (size_t)snprintf(buf + n, sizeof buf - n, " [%u:%08X/%u/%s/r%u]", (unsigned)idx,
+                              (unsigned)pi.vms_pid, (unsigned)pi.linux_pid, pi.prcnam, (unsigned)pi.redacted);
+    }
+    if (only_on_change && strcmp(buf, probe66e_last) == 0)
+        return;
+    memcpy(probe66e_last, buf, sizeof buf);
+    fprintf(stderr, "\n%%OVMX-I-PROBE66E, %s: %s\n", where, buf);
+    fflush(stderr);
+}
+static volatile sig_atomic_t probe66e_tick = 0;
+static void probe66e_alarm(int sig) { (void)sig; probe66e_tick = 1; }
 static void executive_attach(void)
 {
     if (executive_fd >= 0)
@@ -531,7 +563,9 @@ static void executive_attach(void)
      * to grant. A refused name is reported, never papered over.
      */
     {
+        probe66e("before setprn", 0);
         uint32_t pst = vms_kif_setprn("STARTUP");
+        probe66e("after setprn", 0);
         if (!(pst & 1))
             boot_oplog("%%OVMX-W-NOPRCNAM, the boot task could not name itself STARTUP"
                        " (status %08X)", (unsigned)pst);
@@ -2275,8 +2309,11 @@ int main(void)
      * deliberately starts none of its own -- see the NOTE ON SERVICES
      * above. */
     print_stdrv_begun();
+    probe66e("before OPCOM", 0);
     start_opcom();                       /* rd vms-798: OPCOM before the site startup */
+    probe66e("before run_startup", 0);
     run_startup();
+    probe66e("after run_startup", 0);
 
     /*
      * LEAVE SUBSTRATE ROOT (rd vms-137e, epic vms-8e6). Startup is complete;
@@ -2313,6 +2350,7 @@ int main(void)
      * otherwise anticipate. Kept for the same reason the other two fallback
      * call sites are: never reach STDRV/STARTUP.COM output without the
      * banner already shown, on ANY path. */
+    probe66e("after leaving substrate root", 0);
     print_banner_once();
     fflush(stdout);
     fflush(stderr);
@@ -2341,8 +2379,20 @@ int main(void)
      * already does the reaping; JOB_CONTROL and everything it creates are
      * not PID 1's children and are never waited on here -- see the comment
      * this replaced, and the NOTE ON SERVICES above). */
+    {
+        struct sigaction sa_al;
+        memset(&sa_al, 0, sizeof sa_al);
+        sa_al.sa_handler = probe66e_alarm;
+        sigaction(SIGALRM, &sa_al, NULL);
+        alarm(5);
+    }
     while (!shutdown_requested) {
         pause();
+        if (probe66e_tick) {
+            probe66e_tick = 0;
+            probe66e("idle", 1);
+            alarm(5);
+        }
     }
 
     /*

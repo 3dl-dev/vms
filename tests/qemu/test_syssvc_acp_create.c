@@ -488,6 +488,69 @@ int main(void)
         check($VMS_STATUS_SUCCESS(st), "IO$_DELETE TSTSUB.DIR (restore fixture directory state)");
     }
 
+    /* --- rd vms-465: two files growing side by side, a block at a time. Each
+     * extension of one lands right after the other's last block, so a file
+     * that took "the next free run" grew one extent per write and hit the
+     * channel window's ACP_WINDOW_MAX (24) extents: SS$_DEVICEFULL. An
+     * extension that cannot continue the file starts where it has room to
+     * grow (as much again as the file holds), so both files reach 60 blocks
+     * and read back block for block. --- */
+    {
+        struct vms_acp_fileop_args fa, fb;
+        struct vms_acp_rw_args w;
+        uint32_t ca = 0, cb = 0, sa, sb;
+        uint8_t blk[512], got[512];
+        unsigned n, k, okw = 1, okr = 1, nmax = 60;
+
+        st = vms_kif_acp_assign(ODS2_UNIT, &ca);
+        sa = vms_kif_acp_assign(ODS2_UNIT, &cb);
+        check($VMS_STATUS_SUCCESS(st) && $VMS_STATUS_SUCCESS(sa) && ca && cb,
+              "two more file-class channels for the side-by-side growth case");
+        sa = create_file(ca, "GROWA.TST", 0, VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS, 1, &fa);
+        sb = create_file(cb, "GROWB.TST", 0, VMS_ACP_M_CREATE | VMS_ACP_M_ACCESS, 1, &fb);
+        check($VMS_STATUS_SUCCESS(sa) && $VMS_STATUS_SUCCESS(sb),
+              "IO$_CREATE GROWA.TST and GROWB.TST, each accessed for write");
+        for (n = 1; n <= nmax && okw; n++) {
+            for (k = 0; k < 2; k++) {
+                memset(blk, (int)(n * 2u + k), sizeof(blk));
+                memset(&w, 0, sizeof(w));
+                w.chan = k ? cb : ca;
+                w.vbn = n;
+                w.length = 512;
+                w.buffer = (uint64_t)(uintptr_t)blk;
+                st = vms_kif_acp_writevb(&w);
+                if (!$VMS_STATUS_SUCCESS(st)) {
+                    printf("  INFO: WRITEVBLK %s VBN %u -> %%X%08X\n", k ? "GROWB" : "GROWA", n, st);
+                    okw = 0;
+                    break;
+                }
+            }
+        }
+        check(okw, "60 interleaved one-block extensions of two files all succeed "
+                   "(neither file runs out of window extents)");
+        for (n = 1; n <= nmax && okw; n++) {
+            for (k = 0; k < 2; k++) {
+                memset(&w, 0, sizeof(w));
+                w.chan = k ? cb : ca;
+                w.vbn = n;
+                w.length = 512;
+                w.buffer = (uint64_t)(uintptr_t)got;
+                memset(blk, (int)(n * 2u + k), sizeof(blk));
+                if (!$VMS_STATUS_SUCCESS(vms_kif_acp_readvb(&w)) || memcmp(got, blk, 512) != 0)
+                    okr = 0;
+            }
+        }
+        check(okw && okr, "every block of both files reads back as written");
+        (void)vms_kif_acp_deaccess(ca);
+        (void)vms_kif_acp_deaccess(cb);
+        sa = delete_file(ca, "GROWA.TST", 1, &fa);
+        sb = delete_file(cb, "GROWB.TST", 1, &fb);
+        check($VMS_STATUS_SUCCESS(sa) && $VMS_STATUS_SUCCESS(sb),
+              "IO$_DELETE GROWA.TST and GROWB.TST (restore fixture)");
+        (void)vms_kif_dassgn(ca);
+        (void)vms_kif_dassgn(cb);
+    }
+
     (void)vms_kif_dassgn(chan);
     st = vms_kif_acp_dmount(ODS2_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$DISMOUNT removes the ODS-2 volume");

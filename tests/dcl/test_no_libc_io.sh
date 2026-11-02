@@ -7,7 +7,9 @@
 # (dcl_cmd_io.c) and @-procedure execution (dcl_script.c's procedure open) must
 # reach files only through RMS and the terminal only through $QIO; a stdio
 # stream coming back in either fails here. Every other file's count is pinned
-# to tests/dcl/libc_io_baseline.txt and may only shrink.
+# to tests/dcl/libc_io_baseline.txt and may only shrink. A count below its
+# baseline is reported, not failed, so PRs that remove sites concurrently in
+# the merge queue do not break each other; any growth fails.
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 bad=0
 for pat in 'fopen\s*\(' 'fdopen\s*\(' 'freopen\s*\(' 'fgets\s*\(' '\bdup2?\s*\('; do
@@ -22,9 +24,9 @@ while read -r f n; do
     b=$(grep -v '^#' "$base" | awk -v f="$f" '$1==f{print $2}')
     b=${b:-0}
     if [ "$n" -gt "$b" ]; then echo "$f: $n libc I/O sites, baseline $b (a new libc drop)"; bad=1
-    elif [ "$n" -lt "$b" ]; then echo "$f: $n libc I/O sites, baseline $b -- lower the baseline"; bad=1; fi
+    elif [ "$n" -lt "$b" ]; then echo "note: $f: $n libc I/O sites, below baseline $b -- lower it"; fi
 done <<< "$now"
 grep -v '^#' "$base" | while read -r f b; do
-    printf '%s\n' "$now" | grep -q "^$f " || { echo "$f: 0 libc I/O sites, baseline $b -- lower the baseline"; exit 1; }
-done || bad=1
+    printf '%s\n' "$now" | grep -q "^$f " || echo "note: $f: 0 libc I/O sites, baseline $b -- drop the line"
+done
 if [ "$bad" = 0 ]; then echo LIBC_IO_RATCHET_OK; else echo LIBC_IO_RATCHET_FAIL; fi

@@ -13,19 +13,24 @@
  *                decc$$vfork_setjmp(decc$$vfork_jmpbuf()) (the C RTL's setjmp
  *                on the context's jump buffer, in the CALLER's frame, so it
  *                can return a second time).
- *   exec*()   -> in a vfork context: create a SUBPROCESS the way $CREPRC
- *                does (rd vms-1f8): fork the task and hold it, have the
- *                executive create its PCB (the creator's identity, a VMS PID
- *                of its own; KIF_SVC_CREPRC_PCB), then release it to
- *                execve() IMGACT.EXE with the image spec and
- *                arguments; IMGACT activates the image off the ODS-2 volume
- *                through the ACP (imgact.c, vms-fb4 launcher) and decc$main
- *                hands the arguments to its main(). The parent's descriptor
- *                table is restored to the vfork-time snapshot (descriptor work
- *                done "in the child" between vfork and exec is the child's),
- *                and control returns to the vfork() point with the PID.
- *                Outside a vfork context the calling process is replaced by the
- *                image (execve of the same IMGACT launcher), the POSIX meaning.
+ *   exec*()   -> in a vfork context: create a SUBPROCESS through SYS$CREPRC
+ *                (rd vms-e70f; src/vmsrms/crtl_exec.c): the image, the creator's
+ *                identity, a VMS PID the executive assigns, the creator's open
+ *                streams as they are now (DEC C: inherited at exec time), and
+ *                the argument and environment vectors handed over through the
+ *                C RTL's exec mailbox, which the child's decc$main reads. The
+ *                parent's descriptor table is then restored to the vfork-time
+ *                snapshot (descriptor work done "in the child" between vfork and
+ *                exec is the child's), and control returns to the vfork() point
+ *                with the subprocess's VMS PID. wait()/waitpid() collect it from
+ *                the executive (crtl_exec.c).
+ *                Outside a vfork context DEC C runs the image in a subprocess,
+ *                waits for it and exits the caller with its completion.
+ *                The subprocess functions live in the RMS-backed pass of
+ *                DECC$SHR, the one linked --use LIBVMS$SHR (where SYS$CREPRC is);
+ *                the bootstrap pass has no SYS$CREPRC to call, and its exec*()
+ *                fails honestly (ENOSYS) rather than creating a process the
+ *                executive did not.
  *
  * ARGUMENT VECTORS are arrays of the CLIENT's pointers: 32-bit entry points
  * (decc$$exec*32) for the DEC C default pointer size, 64-bit ones
@@ -35,10 +40,9 @@
  * type so a 64-bit caller's array is never misread.) argv[0] is not passed
  * on: the created image's argv[0] is its image spec, as DEC C supplies it.
  *
- * NOT YET: wait status is the Linux one (the image's VMS condition maps to its
- * POSIX exit code through IMGACT's $EXIT); _exit() in a vfork context (an exec
- * that failed) ends the calling process, as DEC C's own documentation warns
- * against; one vfork context per process (DECC$SHR is a non-TLS producer).
+ * NOT YET: _exit() in a vfork context (an exec that failed) ends the calling
+ * process, as DEC C's own documentation warns against; one vfork context per
+ * process (DECC$SHR is a non-TLS producer).
  */
 #if defined(__alpha) && defined(__VMS)
 
@@ -49,11 +53,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/wait.h>
-#include "ovmx_layout.h"               /* OVMX_BOOT_STAGE_DIR */
-#include "kif_calls.h"                 /* the executive, through the transport seam */
 
-#define OVMX_IMGACT_LAUNCHER  OVMX_BOOT_STAGE_DIR "/IMGACT.EXE"
+/* crtl_exec.c, in the RMS-backed pass only (weak: absent in the bootstrap). */
+extern unsigned int ovmx_crtl_exec_create(const char *spec, char *const *args,
+                                          size_t nargs, char *const *envp)
+    __attribute__((__weak__));
+extern void ovmx_crtl_exec_replace(unsigned int pid) __attribute__((__weak__));
 extern char **__environ;
 #define VFORK_MAX_FD          256
 #define VFORK_SAVE_BASE       768      /* snapshot copies live above any client fd */
@@ -116,103 +121,34 @@ static char *p32(unsigned int a)
     return (char *)(unsigned long)(int)a;    /* sign-extended longword */
 }
 
-/* Make the held task `pid` a subprocess of the caller: the executive creates
- * its PCB (rd vms-1f8 / vms-9f32). Returns the executive's VMS status;
- * SS$_NOSUCHDEV (0x908) when there is no executive to ask. */
-static unsigned int vfork_create_subprocess(pid_t pid)
-{
-    struct vms_creprc_pcb_args a;
-    int h = kif_xport_dev_open();
-    if (h < 0)
-        return 0x908u;                  /* SS$_NOSUCHDEV */
-    memset(&a, 0, sizeof a);
-    a.child_pid = (unsigned int)pid;
-    a.flags = VMS_CREPRC_PCB_SUBPROCESS;
-    a.status = 0x2Cu;                   /* SS$_ABORT unless the executive answers */
-    if (kif_call(h, KIF_SVC_CREPRC_PCB, &a) < 0)
-        a.status = 0x908u;
-    kif_xport_dev_close(h);
-    return a.status;
-}
-
-/* Create the subprocess that runs the IMGACT launcher line `av`: the task is
- * forked and held, the executive creates its PCB, and only then is it released to
- * execve(). Returns the task's pid, or -1 with errno set (no subprocess exists). */
-static pid_t spawn_subprocess(char **av, char **envp)
-{
-    int hold[2];
-    if (pipe(hold) != 0)
-        return -1;
-    (void)fcntl(hold[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(hold[1], F_SETFD, FD_CLOEXEC);
-    pid_t pid = fork();
-    if (pid == 0) {
-        char go = 0;
-        ssize_t n;
-        close(hold[1]);
-        do { n = read(hold[0], &go, 1); } while (n < 0 && errno == EINTR);
-        close(hold[0]);
-        if (go != 'g')
-            _exit(125);                 /* not made a VMS process: never runs */
-        execve(OVMX_IMGACT_LAUNCHER, av, envp);
-        _exit(127);
-    }
-    int e = errno;
-    close(hold[0]);
-    unsigned int st = 0;
-    if (pid > 0) {
-        char go;
-        ssize_t n;
-        st = vfork_create_subprocess(pid);
-        go = (st & 1u) ? 'g' : 'x';
-        do { n = write(hold[1], &go, 1); } while (n < 0 && errno == EINTR);
-    }
-    close(hold[1]);
-    if (pid < 0) {
-        errno = e;
-        return -1;
-    }
-    if (!(st & 1u)) {
-        /* The executive made no process: reap the held task. */
-        while (waitpid(pid, 0, 0) < 0 && errno == EINTR)
-            ;
-        errno = (st == 0x908u) ? ENODEV : EPERM;
-        return -1;
-    }
-    return pid;
-}
-
 /* Run `spec` with arguments args[0..nargs) and environment `envp`. */
 static int ovmx_exec_image(const char *spec, char **args, size_t nargs, char **envp)
 {
-    char **av = malloc((nargs + 3) * sizeof *av);
-    if (!av) {
-        errno = ENOMEM;
-        return -1;
-    }
-    av[0] = OVMX_IMGACT_LAUNCHER;
-    av[1] = (char *)spec;
-    for (size_t i = 0; i < nargs; i++)
-        av[2 + i] = args[i];
-    av[2 + nargs] = 0;
     if (!envp)
         envp = __environ;
-
-    if (!vblk.active) {
-        execve(OVMX_IMGACT_LAUNCHER, av, envp);
-        int e = errno;
-        free(av);
-        errno = e;
+    if (!ovmx_crtl_exec_create) {
+        /* The bootstrap C RTL: no SYS$CREPRC to create a process with. */
+        if (vblk.active) {
+            vfork_restore_fds();
+            vblk.active = 0;
+        }
+        errno = ENOSYS;
         return -1;
     }
-    /* The new process exists in the executive before it runs anything: the
-     * task is held until its PCB is made (or refused). */
-    pid_t pid = spawn_subprocess(av, envp);
+    unsigned int pid = ovmx_crtl_exec_create(spec, args, nargs, envp);
     int e = errno;
-    free(av);
+    if (!vblk.active) {
+        if (!pid) {
+            errno = e;
+            return -1;
+        }
+        ovmx_crtl_exec_replace(pid);    /* waits, then exits with its status */
+        errno = EIO;
+        return -1;
+    }
     vfork_restore_fds();
     vblk.active = 0;
-    if (pid < 0) {
+    if (!pid) {
         errno = e;
         return -1;                      /* no subprocess: exec*() fails */
     }

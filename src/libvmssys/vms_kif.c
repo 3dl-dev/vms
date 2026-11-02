@@ -165,6 +165,18 @@ uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid)
  * success (CLAUDE.md Rules 9 and 10; tests/integration/test_runtime_target.sh
  * rejects a branch on it).
  */
+/*
+ * vms_kif_substrate_pid (rd vms-e70f) -- the SUBSTRATE task id of the calling
+ * process: the key the executive's table is indexed by, which $CREPRC's
+ * creation handshake hands the creator. It is not a VMS process id and is never
+ * shown to a VMS program as one: the C RTL's getpid() is the VMS PID ($GETJPI
+ * JPI$_PID), so OVMX's own substrate bookkeeping asks for this explicitly.
+ */
+uint32_t vms_kif_substrate_pid(void)
+{
+    return (uint32_t)vms_sys_getpid();
+}
+
 static void kif_bind(void)
 {
     vms_pid_t pid = vms_sys_getpid();

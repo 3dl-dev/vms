@@ -1851,9 +1851,17 @@ int (*__ovmx_crtl_fab_query)(int fd, int dirfd, const char *path,
  * C RTL's per-image entry turns the RMS file layer on, then runs the C RTL's
  * own argument/environment setup. */
 extern void ovmx_crtl_declare_exit_handler(void);   /* crtl_process.c */
+#include "ovmx_activation.h"                        /* struct ovmx_imghdr */
+#include "crtl_exec.h"                              /* ovmx_crtl_exec_context */
+extern char **__environ;
 extern void ovmx_decc_main_crtl(void *, void *, void *, void *, unsigned int,
                                 unsigned int, int *, int *, int *)
     __asm__("decc$main");
+
+/* vms-e70f: an image a DEC C exec*() created takes its arguments and its
+ * environment from the context its creator left in the C RTL's exec mailbox
+ * (crtl_exec.c), handed to decc$main as the image header's argument vector. */
+static struct ovmx_imghdr crtl_exec_ih;
 
 void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
                        void *image_file_desc, unsigned int linkflag,
@@ -1862,6 +1870,30 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
     TR("crtlfd: main enter", 0);
     ovmx_crtl_fd_install();
     ovmx_crtl_declare_exit_handler();   /* vms-1c83: $EXIT runs the C RTL down */
+    {
+        int xc = 0;
+        char **xa = 0, **xe = 0;
+        if (ovmx_crtl_exec_context(&xc, &xa, &xe)) {
+            char **v = malloc(((size_t)xc + 2) * sizeof *v);
+            if (v) {
+                const struct ovmx_imghdr *ih = imghdr;
+                memset(&crtl_exec_ih, 0, sizeof crtl_exec_ih);
+                if (ih) {
+                    crtl_exec_ih.flags = ih->flags;
+                    crtl_exec_ih.image_base = ih->image_base;
+                }
+                v[0] = "";                  /* decc$main's argv[0] is the image spec */
+                for (int i = 0; i < xc; i++)
+                    v[1 + i] = xa[i];
+                v[1 + xc] = 0;
+                crtl_exec_ih.version = OVMX_IMGHDR_VERSION;
+                crtl_exec_ih.argc = (uint32_t)xc + 1u;
+                crtl_exec_ih.argv = v;
+                imghdr = &crtl_exec_ih;
+                __environ = xe;
+            }
+        }
+    }
     ovmx_decc_main_crtl(progxfer, cli_util, imghdr, image_file_desc, linkflag,
                         cliflag, argc, argv, envp);
     TR("crtlfd: decc$main returned", 0);

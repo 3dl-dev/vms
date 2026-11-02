@@ -372,6 +372,9 @@ jobs:
               - 'tests/qemu/lib/**'
               - 'tools/oracle/surfaces/**'
               - 'docs/oracle/golden/**'
+              # the VAX boot-image link scripts (#1913/#1920 changed only these)
+              - 'tools/cross-vax/build-*-vax.sh'
+              - 'tools/cross-vax/weak-seams.sh'
             netbsd_vax:
               - '.github/workflows/**'
               - 'tests/lab-vax/**'

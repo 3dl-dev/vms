@@ -445,14 +445,25 @@ cluster_host_cnxman_test(test_cnxman_genesis_negctl test_cnxman_genesis_negctl.c
 # tests/cluster/host/run_host_negctl.sh, which rebuilds and runs the real
 # target and is therefore NOT wired to a bare `ctest` invocation (see its own
 # header; it runs as its own CI step in the Build & Test job).
-add_test(
-    NAME cluster_host_defects_selftest
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/host_defects.sh selftest ${CMAKE_SOURCE_DIR}
-)
-set_tests_properties(cluster_host_defects_selftest PROPERTIES
-    LABELS "unit;cluster;cluster_host;negctl"
-    TIMEOUT 30
-)
+# rd vms-278: the walk over every defect runs as four shards (selftest K/4)
+# plus the whole-table checks (selftest table), five parallel tests. As one
+# test it took ~60 s wall under a loaded `ctest -j16` against this TIMEOUT.
+foreach(_hd_sel 1/4 2/4 3/4 4/4 table)
+    string(REPLACE "/4" "" _hd_suffix "${_hd_sel}")
+    if(_hd_sel STREQUAL "table")
+        set(_hd_name cluster_host_defects_selftest)
+    else()
+        set(_hd_name cluster_host_defects_selftest_${_hd_suffix})
+    endif()
+    add_test(
+        NAME ${_hd_name}
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/host_defects.sh selftest ${CMAKE_SOURCE_DIR} ${_hd_sel}
+    )
+    set_tests_properties(${_hd_name} PROPERTIES
+        LABELS "unit;cluster;cluster_host;negctl"
+        TIMEOUT 30
+    )
+endforeach()
 
 # ---- FC-P0.10: cluster SYSGEN parameters loaded into struct vms_cluster ----
 # Same host-pure discipline: vms_cluster_sysgen.c takes no kernel header and no

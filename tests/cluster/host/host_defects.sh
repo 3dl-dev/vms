@@ -3473,7 +3473,7 @@ EOF
 
     dlm-adopt-unreported-not-counted)
         case "$_f" in
-        facility)     echo "the COUNT of adoptions this node completed but nobody was told about -- completed minus reported (rd vms-14fd, re-derived by rd vms-ed5: the gap is published as a number rather than left silent, whether it is the whole of `completed` or none of it)";;
+        facility)     echo "the COUNT of adoptions this node completed but nobody was told about -- completed minus reported (rd vms-14fd, re-derived by rd vms-ed5: the gap is published as a number rather than left silent, whether it is the whole of \`completed\` or none of it)";;
         targets)      echo "kernel-core/vms_lock.c";;
         suites_red)   echo "test_dlm_adopt";;
         isolation)    echo "isolated";;
@@ -4638,14 +4638,34 @@ cmd_coverage() {
 # run anything -- that claim belongs to run_host_negctl.sh alone.
 # ---------------------------------------------------------------------------
 cmd_selftest() {
-    [ $# -eq 1 ] || { echo "usage: host_defects.sh selftest <repo-root>" >&2; return 2; }
+    [ $# -eq 1 ] || [ $# -eq 2 ] ||
+        { echo "usage: host_defects.sh selftest <repo-root> [K/N|table]" >&2; return 2; }
+    # rd vms-278: `K/N` runs only the per-defect injection checks of every
+    # N-th defect starting at the K-th; `table` runs only the checks that read
+    # the whole table (require_fail texts, the coverage negative control). So
+    # ctest runs the ~1700-exec walk as N+1 parallel tests of ~1/N the work
+    # each, which keeps every one inside its TIMEOUT on a loaded host however
+    # many defects this file grows to. No argument: everything, as before.
+    _st_k=1; _st_n=1; _st_do_defects=1; _st_do_table=1
+    case "${2:-}" in
+        "") ;;
+        table) _st_do_defects=0;;
+        [1-9]/[1-9]|[1-9]/[1-9][0-9]|[1-9][0-9]/[1-9][0-9])
+            _st_k="${2%/*}"; _st_n="${2#*/}"; _st_do_table=0
+            [ "$_st_k" -le "$_st_n" ] || { echo "selftest: shard $2: K > N" >&2; return 2; };;
+        *) echo "selftest: bad selection '$2' (want K/N or table)" >&2; return 2;;
+    esac
     _st_repo="$1"
     _st_root="$_st_repo/src"
     _st_tests="$_st_repo/tests/cluster/host"
     _st_tmp=$(mktemp -d) || return 2
     _st_rc=0
 
+    _st_i=0
     for _st_d in $DEFECTS; do
+        [ "$_st_do_defects" -eq 1 ] || break
+        _st_i=$((_st_i + 1))
+        [ $(( (_st_i - 1) % _st_n )) -eq $((_st_k - 1)) ] || continue
         # Field reads go through a scratch file and the `read` builtin, not a
         # $(...) each: six forks per defect were most of this loop's cost on a
         # loaded host (rd vms-8c59).
@@ -4718,6 +4738,13 @@ cmd_selftest() {
     # this catches a typo, not a C parse. The (suite, defect, text) triples
     # are gathered with shell builtins and checked by ONE awk, instead of a
     # printf|tr|tr pipeline per text (rd vms-8c59).
+    if [ "$_st_do_table" -eq 0 ]; then
+        rm -rf "$_st_tmp"
+        [ "$_st_rc" -eq 0 ] &&
+            echo "PASS: shard $_st_k/$_st_n: every defect in it injects into the current tree and its re-apply is refused"
+        return $_st_rc
+    fi
+
     : >"$_st_tmp/needles"
     for _st_d in $DEFECTS; do
         defect_field "$_st_d" suites_red >"$_st_tmp/field"

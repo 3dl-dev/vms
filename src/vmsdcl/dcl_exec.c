@@ -1309,6 +1309,11 @@ static int cond_compare(cond_parser_t *cp)
     if (strcasecmp(lval, "TRUE") == 0)  return 1;
     if (strcasecmp(lval, "FALSE") == 0) return 0;
     if (lval[0] == '\0') return 0;
+    /* A string that is not an integer is true when it begins with T or Y
+     * ("YES"), false otherwise ("NO", "abc") -- DCL's string-to-integer rule
+     * (VAX V7.3, docs/oracle/semantics/flow/ FLOW.IF.STRING.YES). */
+    if (!dcl_str_is_int(lval) && !dcl_sym_get(lval))
+        return (int)(dcl_str_to_int(lval) & 1);
 
     /* A bare numeric IF operand is TRUE iff its low bit is set (odd), FALSE if
      * even -- NOT "non-zero". This is the whole reason `IF $STATUS` detects
@@ -1602,6 +1607,34 @@ static int dcl_verb_takes_long_list(const char *verb, const struct dcl_command *
     return 0;
 }
 
+/* 1 if an IF's text (after the verb) has THEN as a word: a one-line IF. */
+static int dcl_if_has_then(const char *rest)
+{
+    for (const char *p = rest; *p; p++)
+        if ((p == rest || p[-1] == ' ' || p[-1] == '\t') &&
+            strncasecmp(p, "THEN", 4) == 0 &&
+            (p[4] == '\0' || p[4] == ' ' || p[4] == '\t'))
+            return 1;
+    return 0;
+}
+
+/* A GOTO or GOSUB target that is not found ends the procedure level, SET
+ * NOON or not, with %X10038148 (VAX V7.3, docs/oracle/semantics/flow/
+ * FLOW.GOTO.MISSING, FLOW.GOTO.MISSING.NOON, FLOW.GOSUB.MISSING). */
+static int dcl_label_not_found(struct dcl_context *ctx, const char *label)
+{
+    char up[256];
+    size_t i;
+    for (i = 0; label[i] && i < sizeof(up) - 1; i++)
+        up[i] = (char)toupper((unsigned char)label[i]);
+    up[i] = '\0';
+    dcl_error("DCL", 0, "USGOTO",
+              "target of GOTO not found - check spelling and presence of label\n \\%s\\", up);
+    ctx->exit_requested = 1;
+    ctx->exit_status = (int)DCL_CLI_USGOTO_EXIT;
+    return (int)DCL_CLI_USGOTO_EXIT;
+}
+
 int dcl_execute_command(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -1614,6 +1647,24 @@ int dcl_execute_command(struct dcl_command *cmd)
         if (strcasecmp(cmd->verb, "ELSE") != 0 &&
             strcasecmp(cmd->verb, "ENDIF") != 0 &&
             strcasecmp(cmd->verb, "IF") != 0) {
+            return SS$_NORMAL;
+        }
+        /* An IF inside a skipped block is skipped WHOLE: a one-line IF does
+         * nothing, and a block IF opens a block whose THEN and ELSE parts are
+         * both skipped -- its condition is never evaluated (VAX V7.3,
+         * docs/oracle/semantics/flow/ FLOW.IF.NESTED.SKIPPED). */
+        if (strcasecmp(cmd->verb, "IF") == 0) {
+            if (dcl_if_has_then(cmd->rest))
+                return SS$_NORMAL;
+            if (ctx->if_depth >= DCL_MAX_NEST) {
+                dcl_error("DCL", 4, "NESTLEV", "maximum IF nesting level exceeded");
+                return SS$_BADPARAM;
+            }
+            ctx->if_stack[ctx->if_depth].in_if = 1;
+            ctx->if_stack[ctx->if_depth].condition_true = 1;  /* ELSE stays skipped */
+            ctx->if_stack[ctx->if_depth].in_else = 0;
+            ctx->if_stack[ctx->if_depth].skip = 1;
+            ctx->if_depth++;
             return SS$_NORMAL;
         }
     }
@@ -1689,9 +1740,12 @@ int dcl_execute_command(struct dcl_command *cmd)
 
         int cond_result = eval_condition(ctx, condition);
 
-        if (found_then && then_cmd[0]) {
-            /* Single-line IF: IF cond THEN cmd */
-            if (cond_result) {
+        if (found_then) {
+            /* Single-line IF: IF cond THEN cmd. THEN at the end of the IF
+             * line is a one-line IF with no command -- NOT a block: a later
+             * ELSE is then out of place (VAX V7.3, docs/oracle/semantics/flow/
+             * FLOW.IF.THEN.EOL). A block IF puts THEN on its own line. */
+            if (cond_result && then_cmd[0]) {
                 return dcl_execute_line(then_cmd);
             }
             return SS$_NORMAL;
@@ -1713,8 +1767,11 @@ int dcl_execute_command(struct dcl_command *cmd)
 
     if (strcasecmp(cmd->verb, "ELSE") == 0) {
         if (ctx->if_depth <= 0) {
-            dcl_error("DCL", 2, "NOIFBLK", "ELSE without IF");
-            return SS$_BADPARAM;
+            /* VAX V7.3: %DCL-E-INVIFNEST, status %X0003894A
+             * (docs/oracle/semantics/flow/ FLOW.IF.THEN.EOL) */
+            dcl_error("DCL", 2, "INVIFNEST",
+                      "invalid IF-THEN-ELSE nesting structure or data inconsistency");
+            return 0x0003894A;
         }
         ctx->if_stack[ctx->if_depth - 1].in_else = 1;
         ctx->if_stack[ctx->if_depth - 1].skip =
@@ -1742,11 +1799,8 @@ int dcl_execute_command(struct dcl_command *cmd)
             return SS$_BADPARAM;
         }
         struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
-        if (dcl_find_label(fp, cmd->params[0]) != 0) {
-            dcl_error("DCL", 2, "USGOTO",
-                      "target of GOTO not found - \\%s\\", cmd->params[0]);
-            return SS$_BADPARAM;
-        }
+        if (dcl_find_label(fp, cmd->params[0]) != 0)
+            return dcl_label_not_found(ctx, cmd->params[0]);
         return SS$_NORMAL;
     }
 
@@ -1774,9 +1828,7 @@ int dcl_execute_command(struct dcl_command *cmd)
 
         if (dcl_find_label(fp, cmd->params[0]) != 0) {
             ctx->gosub_depth--;
-            dcl_error("DCL", 2, "USGOTO",
-                      "target of GOSUB not found - \\%s\\", cmd->params[0]);
-            return SS$_BADPARAM;
+            return dcl_label_not_found(ctx, cmd->params[0]);
         }
         return SS$_NORMAL;
     }
@@ -1795,30 +1847,30 @@ int dcl_execute_command(struct dcl_command *cmd)
             dcl_pf_seek(fp, ctx->gosub_stack[ctx->gosub_depth].file_offset, SEEK_SET);
             ctx->proc_stack[ctx->proc_depth].line_number =
                 ctx->gosub_stack[ctx->gosub_depth].line_number;
-            return SS$_NORMAL;
-        }
-
-        if (ctx->proc_depth < 0) {
-            /* Interactive: RETURN has nothing to return from. */
-            dcl_error("DCL", 2, "NOGOSUB", "RETURN without GOSUB");
-            return SS$_BADPARAM;
-        }
-
-        /* Return from the current SUBROUTINE / procedure level with an optional
-         * status. RETURN with no operand uses $STATUS. */
-        int rstatus = (int)ctx->last_status;
-        if (cmd->param_count >= 1 && cmd->params[0][0]) {
-            int iok;
-            long v = dcl_parse_int(cmd->params[0], &iok);
-            if (!iok) {
-                const char *sv = dcl_sym_get(cmd->params[0]);
-                v = sv ? dcl_parse_int(sv, &iok) : 0;
+            /* $STATUS after RETURN is its operand, or with none the status
+             * of the last command with STS$M_INHIB_MSG set (VAX V7.3,
+             * docs/oracle/semantics/flow/ FLOW.GOSUB.RETURN.STATUS/.PLAIN). */
+            const char *expr = cmd->raw_tail[0] ? cmd->raw_tail
+                             : (cmd->param_count >= 1 ? cmd->params[0] : "");
+            uint32_t rst = ctx->last_status | 0x10000000u;
+            if (expr[0]) {
+                char val[DCL_MAX_VALUE];
+                dcl_eval_expr_string(ctx, expr, val, sizeof val);
+                rst = (uint32_t)dcl_str_to_int(val);
             }
-            if (iok) rstatus = (int)v;
+            dcl_set_status(ctx, (int)rst);
+            return (int)rst;
         }
-        ctx->return_status = rstatus;
-        ctx->return_requested = 1;
-        return SS$_NORMAL;
+
+        /* RETURN with no GOSUB open at this level is ignored, also in a
+         * CALLed SUBROUTINE -- it is EXIT that ends one (VAX V7.3, no message:
+         * docs/oracle/semantics/flow/ FLOW.RETURN.NOGOSUB). */
+        if (ctx->proc_depth >= 0)
+            return (int)ctx->last_status;
+
+        /* Interactive: RETURN has nothing to return from. */
+        dcl_error("DCL", 2, "NOGOSUB", "RETURN without GOSUB");
+        return SS$_BADPARAM;
     }
 
     if (strcasecmp(cmd->verb, "CALL") == 0) {
@@ -1826,12 +1878,48 @@ int dcl_execute_command(struct dcl_command *cmd)
             dcl_error("DCL", 2, "NOLAB", "no subroutine label specified in CALL");
             return SS$_BADPARAM;
         }
-        /* params[0] = label; params[1..] = P1..P8 passed to the subroutine. */
+        /* params[0] = label; params[1..] = P1..P8 passed to the subroutine.
+         * A parameter is upcased unless quoted: CALL SP abc "b c" gives P1
+         * "ABC" and P2 "b c" (VAX V7.3, docs/oracle/semantics/flow/
+         * FLOW.CALL.PARAMS/.QUOTED). The parsed params have lost which were
+         * quoted, so they are re-split from the raw command tail. */
+        static char pbuf[9][DCL_MAX_VALUE];
         char *params[8] = {NULL};
-        int pcount = cmd->param_count - 1;
+        int n = 0;
+        const char *t = cmd->raw_tail;
+        while (*t && n < 9) {
+            while (*t == ' ' || *t == '\t') t++;
+            if (!*t) break;
+            size_t o = 0;
+            int inq = 0, whole = (*t == '"');
+            while (*t && (inq || (*t != ' ' && *t != '\t'))) {
+                char ch = *t++;
+                if (ch == '"') {
+                    if (inq && *t == '"') {             /* "" inside quotes */
+                        if (!whole && o < DCL_MAX_VALUE - 1) pbuf[n][o++] = '"';
+                        if (o < DCL_MAX_VALUE - 1) pbuf[n][o++] = '"';
+                        t++;
+                        continue;
+                    }
+                    inq = !inq;
+                    if (!inq && *t && *t != ' ' && *t != '\t') whole = 0;
+                    if (!whole && o < DCL_MAX_VALUE - 1) pbuf[n][o++] = '"';
+                    continue;
+                }
+                if (o < DCL_MAX_VALUE - 1)
+                    pbuf[n][o++] = inq ? ch : (char)toupper((unsigned char)ch);
+            }
+            pbuf[n][o] = '\0';
+            n++;
+        }
+        if (n < 1) {
+            dcl_error("DCL", 2, "NOLAB", "no subroutine label specified in CALL");
+            return SS$_BADPARAM;
+        }
+        int pcount = n - 1;
         for (int i = 0; i < pcount && i < 8; i++)
-            params[i] = cmd->params[i + 1];
-        return dcl_call_subroutine(cmd->params[0], pcount, params);
+            params[i] = pbuf[i + 1];
+        return dcl_call_subroutine(pbuf[0], pcount, params);
     }
 
     if (strcasecmp(cmd->verb, "SUBROUTINE") == 0) {

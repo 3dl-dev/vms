@@ -18,11 +18,12 @@ last_reviewed: 2026-11-02
 items:
   - id: dcl-scripting$if-then-goto
     kind: feature
-    status: implemented
+    status: verified
     authenticity: real
     vms: "IF/THEN, GOTO, GOSUB, labels"
     evidence: src/vmsdcl/dcl_script.c
-    notes: "Real. Exercised by tests/dcl/test_if_then.sh, test_parser_goto.sh, test_script_labels.sh — plain functional self-tests. IF conditions evaluate expression operands with VMS precedence (+ - * / above the comparisons, rd vms-c17a): the ifx semantic-oracle family (docs/oracle/semantics/ifx/vax73.txt, 19 cases captured on VAX V7.3) is byte-gated on the booted executive (test_semantic_oracle.sh) and on the host (tests/dcl/test_if_expression_oracle.sh). GOTO/GOSUB/labels have no oracle gate, so the row stays implemented."
+    verified_against: "docs/oracle/semantics/ifx/vax73.txt (IF conditions) + docs/oracle/semantics/flow/vax73.txt (30 cases, VAX V7.3, captured twice, identical) via tests/dcl/test_if_expression_oracle.sh, tests/dcl/test_flow_oracle.sh + tests/qemu/test_semantic_oracle.sh"
+    notes: "IF conditions evaluate expression operands with VMS precedence (ifx family, rd vms-c17a). The flow family byte-gates the rest: GOTO forward, backward, case-blind and to a label named by a symbol; a command after a label on its own line runs when GOTO lands there; a missing GOTO/GOSUB/CALL target ends the procedure level with %X10038148 even under SET NOON (%DCL-W-USGOTO, %DCL-W-USCALL); GOSUB nesting, RETURN's status (its operand, or $STATUS with STS$M_INHIB_MSG), RETURN with no GOSUB ignored; block IF/THEN/ELSE/ENDIF including an IF nested in a skipped block, THEN at the end of the IF line being a one-line IF (a later ELSE is %DCL-E-INVIFNEST); string conditions (\"YES\" true, \"abc\" false)."
 
   - id: dcl-scripting$on-condition
     kind: feature
@@ -35,11 +36,12 @@ items:
 
   - id: dcl-scripting$call-subroutine
     kind: command
-    status: implemented
+    status: verified
     authenticity: real
     vms: "CALL / SUBROUTINE / ENDSUBROUTINE"
-    evidence: src/vmsdcl/dcl_exec.c:1367
-    notes: "CALL gives the subroutine a new command level with its own P1-P8 and local-symbol frame; SUBROUTINE/ENDSUBROUTINE markers at dcl_exec.c:1367/1377; RETURN pops the level and propagates status (dcl_script.c). Exercised by tests/dcl/test_scripting_status_call_deck.sh (SUB_P1P2, RETURN_STATUS_PROPAGATED). A block's labels are local to it: a GOTO in one SUBROUTINE never lands on a same-named label in another block or at the procedure level (VAX V7.3, on family ON.ONESHOT; dcl_script.c dcl_find_label_in)."
+    evidence: src/vmsdcl/dcl_script.c
+    verified_against: "docs/oracle/semantics/flow/vax73.txt (FLOW.CALL.*) + docs/oracle/semantics/on/vax73.txt (every case runs in a CALLed SUBROUTINE) via tests/dcl/test_flow_oracle.sh, tests/dcl/test_on_condition_oracle.sh + tests/qemu/test_semantic_oracle.sh"
+    notes: "CALL gives the subroutine a new command level with its own P1-P8 and local-symbol frame; it reads its caller's locals but its own assignments stay local. Unquoted CALL parameters are upcased, quoted ones keep case and blanks; $STATUS after CALL is the subroutine's exit status; a missing target is %DCL-W-USCALL and ends the calling level with %X10038148. A block's labels are local to it (ON.ONESHOT; dcl_find_label_in)."
 
   - id: dcl-scripting$deck-eod
     kind: feature

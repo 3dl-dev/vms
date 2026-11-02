@@ -1,0 +1,31 @@
+# decc-socket-read-via-musl -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "C RTL descriptor calls on a socket as \$QIO (src/vmstcpip/sockets/ovmx_decc_sockets.c, vms-99f): DECC\$SHR's read()/decc\$read on a socket descriptor is IO\$_READVBLK on its BG channel, never musl's read(2) on a Linux descriptor; the system-call audit counts any read/write-family syscall on a socket descriptor.";;
+        targets)      echo "vmstcpip/sockets/ovmx_decc_sockets.c";;
+        suites_red)   echo "test_syssvc_decc_socket";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_decc_read() stops dispatching a socket descriptor to IO\$_READVBLK and hands it to musl's read(2) -- the libc drop the item removed. SOCKECHO's read() then reaches the descriptor that reserves the socket's number: the audit counts a read(2) on a socket descriptor and the read-back of the second echo fails. recv(), poll(), select() and the server leg (recv) stay on the \$QIO path and stay green.";;
+        require_fail) cat <<'EOF2'
+SOCKECHO (linked against DECC$SHR) completed every socket step
+bytes round-tripped through the executive listener BYTE-EXACT
+ZERO read/write-family syscalls on a socket descriptor and ZERO poll/select syscalls: socket I/O and readiness are $QIOs on the BG channel (executive ioctls only)
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Anchored on the UNIQUE NEGCTL line in ovmx_decc_read(); after
+        # substitution the anchor no longer matches, so a second apply is a no-op.
+        sed -i 's|    if (d) return sock_recv(d, buf, len, 0);   /\* NEGCTL decc-socket-read-via-musl \*/|    (void)d;   /* NEGCTL decc-socket-read-via-musl (applied) */|' "$_file"
+
+    :
+}

@@ -46,6 +46,7 @@
 #include "dcl/help.h"
 #include "dcl/dcl_rms.h"     /* dcl_rms_read_* -- the HELP ACP read seam (vms-4ac) */
 #include "rms_textfile.h"    /* rms_textfile_* -- RMS text I/O over the Files-11 ACP (vms-274) */
+#include "../vmstcpip/services/tcpip_qio.h"   /* tcpip_qiow: one $QIOW on a BGn: channel (SHOW INTERFACE, vms-99f) */
 #include "../vmstcpip/mgmt/tcpip_service_db.h" /* TCPIP {SET,SHOW,ENABLE,DISABLE,DELETE} SERVICE engine (#878, vms-71b) */
 #include "ssdef.h"
 #include "climsgdef.h"
@@ -56,6 +57,8 @@
 #include "opcdef.h"
 #include "ovmx_accounting.h"
 #include "starlet.h"
+#include "iodef.h"       /* IO$_SENSEMODE / IO$K_BG_SENSE_IFLIST (SHOW INTERFACE, vms-99f) */
+#include "descrip.h"
 #include "ovmx_identity.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/device.h"
@@ -2048,26 +2051,101 @@ static const char *tcpip_map_interface(const char *linux_name,
 }
 
 /*
- * Build a mapping table of Linux interface names → VMS device names.
- * Scans /sys/class/net/ to enumerate interfaces.
+ * Build a mapping table of substrate interface names -> VMS device names, from
+ * the EXECUTIVE'S interface list (rd vms-99f): $ASSIGN a BGn: channel, create
+ * its socket (IO$_SETMODE), and ask the executive for the interfaces of the
+ * network stack that socket lives in (IO$_SENSEMODE interface list,
+ * IO$K_BG_SENSE_IFLIST) -- the TCP/IP Services way, never /sys/class/net, a host
+ * socket or SIOCGIF* from this process. Each entry carries the executive's live
+ * values (flags, MTU, IPv4 address/mask, link-layer address). Returns the count;
+ * *status gets the VMS status (SS$_NOSUCHDEV with no executive -- no listing).
  */
-#define TCPIP_MAX_IFACES 32
+#define TCPIP_MAX_IFACES VMS_BG_IFLIST_MAX
 
 struct tcpip_ifmap {
     char linux_name[IFNAMSIZ];
     char vms_name[16];
+    struct vms_bg_ifent ent;
 };
 
-static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries)
+static int tcpip_ifent_cmp(const void *a, const void *b)
+{
+    return strcmp(((const struct vms_bg_ifent *)a)->name,
+                  ((const struct vms_bg_ifent *)b)->name);
+}
+
+static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries,
+                             uint32_t *status)
+{
+    struct vms_bg_ifent ents[VMS_BG_IFLIST_MAX];
+    uint16_t chan = 0;
+    uint32_t count = 0, st;
+
+    static const char devname[] = "TCPIP$DEVICE:";
+    struct dsc$descriptor_s dev;
+    struct _iosb iosb;
+
+    memset(ents, 0, sizeof(ents));
+    dev.dsc$w_length  = (uint16_t)(sizeof(devname) - 1);
+    dev.dsc$b_dtype   = DSC$K_DTYPE_T;
+    dev.dsc$b_class   = DSC$K_CLASS_S;
+    dev.dsc$a_pointer = (char *)devname;
+    st = sys$assign(&dev, &chan, 0, NULL);                 /* $ASSIGN TCPIP$DEVICE: */
+    if (st & 1) {
+        memset(&iosb, 0, sizeof(iosb));
+        uint32_t st2 = tcpip_qiow(chan, IO$_SETMODE, &iosb, NULL, 0, 0);
+        if (st2 & 1) {
+            memset(&iosb, 0, sizeof(iosb));
+            st2 = tcpip_qiow(chan, IO$_SENSEMODE, &iosb, ents,
+                             (uint32_t)sizeof(ents), IO$K_BG_SENSE_IFLIST);
+            if (st2 & 1)
+                count = iosb.iosb$w_bcnt;
+        }
+        (void)sys$dassgn(chan);
+        st = st2;
+    }
+    if (status) *status = st;
+    if (!(st & 1))
+        return 0;
+
+    /* Sort for stable ordering (the VMS unit numbers follow it) */
+    qsort(ents, (size_t)count, sizeof(ents[0]), tcpip_ifent_cmp);
+
+    /* Map names */
+    int se_idx = 0, ew_idx = 0, tn_idx = 0, xx_idx = 0;
+    int n = (count < (uint32_t)max_entries) ? (int)count : max_entries;
+    for (int i = 0; i < n; i++) {
+        ents[i].name[sizeof(ents[i].name) - 1] = '\0';
+        map[i].ent = ents[i];
+        strncpy(map[i].linux_name, ents[i].name, IFNAMSIZ - 1);
+        map[i].linux_name[IFNAMSIZ - 1] = '\0';
+        const char *vn = tcpip_map_interface(ents[i].name,
+                                              &se_idx, &ew_idx,
+                                              &tn_idx, &xx_idx);
+        strncpy(map[i].vms_name, vn, sizeof(map[i].vms_name) - 1);
+        map[i].vms_name[sizeof(map[i].vms_name) - 1] = '\0';
+    }
+    return n;
+}
+
+/*
+ * SHOW ROUTE's name map (UNCHANGED by rd vms-99f, which moved only SHOW/SET
+ * INTERFACE onto the executive's list): SHOW ROUTE still reads the substrate's
+ * /proc/net/route and maps its interface names by a /sys/class/net scan --
+ * Linux-substrate introspection, disclosed in the dcl-tcpip-verb register row.
+ * Moving the routing table into the executive is a separate follow-on.
+ */
+#define TCPIP_ROUTE_MAX_IFACES 32
+
+static int tcpip_build_route_ifmap(struct tcpip_ifmap *map, int max_entries)
 {
     DIR *d = opendir("/sys/class/net");
     if (!d) return 0;
 
-    /* First pass: collect interface names */
-    char names[TCPIP_MAX_IFACES][IFNAMSIZ];
+    char names[TCPIP_ROUTE_MAX_IFACES][IFNAMSIZ];
     int count = 0;
     struct dirent *ent;
-    while ((ent = readdir(d)) != NULL && count < TCPIP_MAX_IFACES) {
+    while ((ent = readdir(d)) != NULL && count < TCPIP_ROUTE_MAX_IFACES) {
         if (ent->d_name[0] == '.') continue;
         strncpy(names[count], ent->d_name, IFNAMSIZ - 1);
         names[count][IFNAMSIZ - 1] = '\0';
@@ -2075,17 +2153,15 @@ static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries)
     }
     closedir(d);
 
-    /* Sort for stable ordering */
     qsort(names, (size_t)count, IFNAMSIZ, (int(*)(const void *, const void *))strcmp);
 
-    /* Map names */
     int se_idx = 0, ew_idx = 0, tn_idx = 0, xx_idx = 0;
     int n = (count < max_entries) ? count : max_entries;
     for (int i = 0; i < n; i++) {
+        memset(&map[i].ent, 0, sizeof(map[i].ent));
         strncpy(map[i].linux_name, names[i], IFNAMSIZ - 1);
         map[i].linux_name[IFNAMSIZ - 1] = '\0';
-        const char *vn = tcpip_map_interface(names[i],
-                                              &se_idx, &ew_idx,
+        const char *vn = tcpip_map_interface(names[i], &se_idx, &ew_idx,
                                               &tn_idx, &xx_idx);
         strncpy(map[i].vms_name, vn, sizeof(map[i].vms_name) - 1);
         map[i].vms_name[sizeof(map[i].vms_name) - 1] = '\0';
@@ -2123,85 +2199,57 @@ static const char *tcpip_lookup_linux_name(const struct tcpip_ifmap *map,
 
 /*
  * TCPIP SHOW INTERFACE [/FULL] - Display network interfaces with VMS names.
+ * Every value is the executive's (tcpip_build_ifmap above); with no executive
+ * the command fails honestly (%TCPIP-E-NOEXEC, SS$_NOSUCHDEV) -- it never falls
+ * back to listing the host's interfaces.
  */
 static int cmd_tcpip_show_interface(struct dcl_command *cmd)
 {
     struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
-    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+    uint32_t st = 0;
+    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES, &st);
 
     int full = dcl_has_qualifier(cmd, "FULL");
+
+    if (st == SS$_NOSUCHDEV) {
+        printf("%%TCPIP-E-NOEXEC, executive absent -- the interface list cannot be read\n");
+        return SS$_NOSUCHDEV;
+    }
+    if (!(st & 1)) {
+        printf("%%TCPIP-E-IFLIST, cannot read the interface list from the executive (status %u)\n",
+               (unsigned)st);
+        return (int)st;
+    }
 
     printf("\n");
     printf("%-12s%-17s%-17s%-7s%s\n",
            "Interface", "IP Address", "Network Mask", "MTU", "State");
 
-    int sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) {
-        printf("%%TCPIP-E-SOCKERR, cannot open socket\n");
-        return SS$_BADPARAM;
-    }
-
     for (int i = 0; i < ifcount; i++) {
-        struct ifreq ifr;
-        memset(&ifr, 0, sizeof(ifr));
-        strncpy(ifr.ifr_name, ifmap[i].linux_name, IFNAMSIZ - 1);
+        const struct vms_bg_ifent *e = &ifmap[i].ent;
+        struct in_addr a;
 
-        /* IP address */
+        /* IP address / netmask: "*" when the interface has no IPv4 address */
         char ip_str[INET_ADDRSTRLEN] = "*";
-        if (ioctl(sock, SIOCGIFADDR, &ifr) == 0) {
-            struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
-            inet_ntop(AF_INET, &addr->sin_addr, ip_str, sizeof(ip_str));
-        }
-
-        /* Netmask */
         char mask_str[INET_ADDRSTRLEN] = "*";
-#if defined(__linux__)
-        /* SIOCGIFNETMASK returns the mask in the ifr_netmask union member on
-         * Linux. NetBSD's struct ifreq has no ifr_netmask; the OVMX TCP/IP
-         * engine is the Linux substrate (vms-67f, AF_INET). On netbsd-vax the
-         * netmask readout is not wired here -- shown honestly as "*" rather
-         * than fabricated. */
-        if (ioctl(sock, SIOCGIFNETMASK, &ifr) == 0) {
-            struct sockaddr_in *mask = (struct sockaddr_in *)&ifr.ifr_netmask;
-            inet_ntop(AF_INET, &mask->sin_addr, mask_str, sizeof(mask_str));
-        }
-#endif
-
-        /* MTU */
-        int mtu = 0;
-        if (ioctl(sock, SIOCGIFMTU, &ifr) == 0) {
-            mtu = ifr.ifr_mtu;
-        }
-
-        /* Flags (up/down) */
-        const char *state = "Down";
-        if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
-            if (ifr.ifr_flags & IFF_UP)
-                state = "Up";
+        if (e->addr != 0) {
+            a.s_addr = e->addr;
+            inet_ntop(AF_INET, &a, ip_str, sizeof(ip_str));
+            a.s_addr = e->mask;
+            inet_ntop(AF_INET, &a, mask_str, sizeof(mask_str));
         }
 
         printf("%-12s%-17s%-17s%-7d%s\n",
-               ifmap[i].vms_name, ip_str, mask_str, mtu, state);
+               ifmap[i].vms_name, ip_str, mask_str, (int)e->mtu,
+               (e->flags & IFF_UP) ? "Up" : "Down");
 
-#if defined(__linux__)
-        /* SIOCGIFHWADDR + ifr_hwaddr are Linux-only (NetBSD reads the link-layer
-         * address via getifaddrs/AF_LINK, not an ifreq ioctl). The Linux
-         * substrate is the OVMX TCP/IP engine (vms-67f); on netbsd-vax the
-         * /FULL hardware-address line is simply omitted -- honest, not faked. */
-        if (full) {
-            /* Show hardware address */
-            if (ioctl(sock, SIOCGIFHWADDR, &ifr) == 0) {
-                unsigned char *hw = (unsigned char *)ifr.ifr_hwaddr.sa_data;
-                printf("             Hardware address: %02X-%02X-%02X-%02X-%02X-%02X\n",
-                       hw[0], hw[1], hw[2], hw[3], hw[4], hw[5]);
-            }
+        if (full && e->hwlen == 6) {
+            printf("             Hardware address: %02X-%02X-%02X-%02X-%02X-%02X\n",
+                   e->hwaddr[0], e->hwaddr[1], e->hwaddr[2],
+                   e->hwaddr[3], e->hwaddr[4], e->hwaddr[5]);
         }
-#else
-        (void)full;
-#endif
     }
 
-    close(sock);
     printf("\n");
     return SS$_NORMAL;
 }
@@ -2213,8 +2261,8 @@ static int cmd_tcpip_show_route(struct dcl_command *cmd)
 {
     (void)cmd;
 
-    struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
-    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+    struct tcpip_ifmap ifmap[TCPIP_ROUTE_MAX_IFACES];
+    int ifcount = tcpip_build_route_ifmap(ifmap, TCPIP_ROUTE_MAX_IFACES);
 
     FILE *fp = fopen("/proc/net/route", "r");
     if (!fp) {
@@ -2565,10 +2613,15 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
 
     /* Map VMS device name to Linux interface */
     struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
-    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+    uint32_t ifst = 0;
+    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES, &ifst);
     const char *linux_if = tcpip_lookup_linux_name(ifmap, ifcount, ifname);
 
-    if (!linux_if) {
+    /* No executive: the interface list (and so the device name) cannot be
+     * resolved, and nothing can be applied -- say so, then persist as before. */
+    if (ifst == SS$_NOSUCHDEV) {
+        printf("%%TCPIP-W-NOSUCHDEV, the executive is not present -- the interface cannot be configured\n");
+    } else if (!linux_if) {
         dcl_error("TCPIP", 2, "NOSUCHDEV",
                   "unknown interface - \\%s\\", ifname);
         return SS$_BADPARAM;
@@ -2579,7 +2632,7 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
      * executive performs it as the kernel; no OVMX process holds the
      * substrate's CAP_NET_ADMIN. Each request is the substrate's own
      * struct ifreq. Without the privilege the setting is only persisted. */
-    {
+    if (linux_if) {
         struct ifreq ifr;
         int err = 0;
         uint32_t st;

@@ -246,6 +246,79 @@ struct vms_bg_datafd_args {
     uint32_t status;        /* out */
 };
 
+/*
+ * IO$_SENSEMODE (interface-list subfunction) -- the executive's own list of the
+ * node's network interfaces, the TCP/IP Services view behind TCPIP SHOW
+ * INTERFACE (on VMS a SENSEMODE ioctl on a BGn: socket channel, SIOCGIFCONF-
+ * style). Issued on a BG channel whose socket exists (IO$_SETMODE first); the
+ * executive walks the network stack the CHANNEL'S SOCKET lives in and copies,
+ * per interface, the name, flags, MTU, the first IPv4 address/mask (network
+ * order; 0 when the interface has none) and the link-layer address. Every value
+ * is READ FROM THE EXECUTIVE'S OWN NETWORK STACK at the time of the call, never
+ * synthesized: an interface with no IPv4 address reports addr 0, not a guess.
+ * At most VMS_BG_IFLIST_MAX entries are returned; `count` is the number filled.
+ * The interface NAME is the substrate's own (lo, eth0, qe0 ...): mapping it to a
+ * VMS device name (LO0, SE0 ...) is the caller's presentation. OVMX design
+ * choice (Rule 8): the fixed-array wire form is ours.
+ */
+/*
+ * IO$_SENSEMODE (readiness subfunction) -- wait until one of a set of this
+ * process's BG channels is ready, the executive half of the C RTL's select() /
+ * poll() on sockets (rd vms-99f). The caller names up to VMS_BG_SELECT_MAX
+ * channels, each with the conditions it waits for (VMS_BG_RDY_*), and a timeout:
+ * 0 = sense the current state and return at once, < 0 = wait without limit,
+ * > 0 = milliseconds. The executive asks each channel's socket for its state and,
+ * when none is ready, sleeps on the sockets' own wait queues until one changes or
+ * the time runs out. On return `revents` is each channel's ready set (ERR/HUP are
+ * reported whether asked or not) and `nready` the count of channels with a
+ * nonzero set. status: SS$_NORMAL (nready may be 0 on timeout), SS$_IVCHAN for a
+ * channel this process does not hold or whose socket was never created (its
+ * revents is VMS_BG_RDY_NVAL), SS$_ABORT when a signal interrupted the wait.
+ * Nothing is synthesized: every bit is the host socket's own poll state.
+ * OVMX design choice (Rule 8): the public TCP/IP Services docs describe
+ * select() over BGn: channels, not a byte layout; this fixed array is ours.
+ */
+#define VMS_BG_SELECT_MAX 64u
+#define VMS_BG_RDY_IN    0x1u   /* data (or a connection to accept, or EOF) */
+#define VMS_BG_RDY_OUT   0x2u   /* room to send */
+#define VMS_BG_RDY_ERR   0x4u   /* pending error */
+#define VMS_BG_RDY_HUP   0x8u   /* peer closed / connection gone */
+#define VMS_BG_RDY_NVAL  0x10u  /* not a channel with a socket */
+
+struct vms_bg_selent {
+    uint32_t chan;          /* in */
+    uint16_t events;        /* in: VMS_BG_RDY_IN | VMS_BG_RDY_OUT */
+    uint16_t revents;       /* out */
+};
+
+struct vms_bg_select_args {
+    uint32_t n;             /* in: entries used (<= VMS_BG_SELECT_MAX) */
+    int32_t  timeout_ms;    /* in: 0 = sense only, < 0 = no limit */
+    uint32_t status;        /* out */
+    uint32_t nready;        /* out */
+    struct vms_bg_selent ent[VMS_BG_SELECT_MAX];
+};
+
+#define VMS_BG_IFLIST_MAX 16u
+
+struct vms_bg_ifent {
+    char     name[16];      /* substrate interface name, NUL-terminated */
+    uint32_t flags;         /* IFF_* (IFF_UP = 0x1, IFF_LOOPBACK = 0x8 ...) */
+    uint32_t mtu;
+    uint32_t addr;          /* first IPv4 address, network order (0 = none) */
+    uint32_t mask;          /* its netmask, network order (0 = none) */
+    uint8_t  hwaddr[6];     /* link-layer address (first hwlen bytes valid) */
+    uint16_t hwlen;         /* 0..6 */
+};
+
+struct vms_bg_iflist_args {
+    uint32_t chan;          /* in */
+    uint32_t status;        /* out */
+    uint32_t max;           /* in: entries the caller can take (<= VMS_BG_IFLIST_MAX) */
+    uint32_t count;         /* out: entries filled */
+    struct vms_bg_ifent ent[VMS_BG_IFLIST_MAX];   /* out */
+};
+
 #define VMS_IOCTL_BG_CREATE   _IOWR(VMS_IOC_MAGIC, 0x80, struct vms_bg_create_args)
 #define VMS_IOCTL_BG_SETMODE  _IOWR(VMS_IOC_MAGIC, 0x81, struct vms_bg_chanonly_args)
 #define VMS_IOCTL_BG_CONNECT  _IOWR(VMS_IOC_MAGIC, 0x82, struct vms_bg_connect_args)
@@ -313,6 +386,13 @@ struct vms_bg_datafd_args {
 #define VMS_IOCTL_BGCONN_GETNAME  _IOWR(VMS_IOC_MAGIC, 0x90, struct vms_bg_name_args)
 #define VMS_IOCTL_BGCONN_SOCKOPT  _IOWR(VMS_IOC_MAGIC, 0x91, struct vms_bg_sockopt_args)
 
+/* IO$_SENSEMODE interface list (see struct vms_bg_iflist_args). 0x92..0x9a are
+ * taken (L2, rights, pri, brkauth, procctl, creprc_pcb); 0x8f is reserved by
+ * the parallel BGn: UDP branch. */
+#define VMS_IOCTL_BG_IFLIST       _IOWR(VMS_IOC_MAGIC, 0x9b, struct vms_bg_iflist_args)
+/* IO$_SENSEMODE readiness wait (see struct vms_bg_select_args). */
+#define VMS_IOCTL_BG_SELECT       _IOWR(VMS_IOC_MAGIC, 0x9c, struct vms_bg_select_args)
+
 /*
  * Freeze the shared layouts -- see vms_mbx.h's identical note for why this
  * matters: both sides of /dev/vms compile these structs separately and pass
@@ -341,5 +421,13 @@ _Static_assert(sizeof(struct vms_bg_accept_args) == 24,
                "vms_bg_accept_args changed size -- VMS_IOCTL_BG_ACCEPT ABI break");
 _Static_assert(sizeof(struct vms_bg_datafd_args) == 12,
                "vms_bg_datafd_args changed size -- VMS_IOCTL_BG_MATERIALIZE_FD ABI break");
+_Static_assert(sizeof(struct vms_bg_ifent) == 40,
+               "vms_bg_ifent changed size -- VMS_IOCTL_BG_IFLIST ABI break");
+_Static_assert(sizeof(struct vms_bg_iflist_args) == 16 + 40 * VMS_BG_IFLIST_MAX,
+               "vms_bg_iflist_args changed size -- VMS_IOCTL_BG_IFLIST ABI break");
+_Static_assert(sizeof(struct vms_bg_selent) == 8,
+               "vms_bg_selent changed size -- VMS_IOCTL_BG_SELECT ABI break");
+_Static_assert(sizeof(struct vms_bg_select_args) == 16 + 8 * VMS_BG_SELECT_MAX,
+               "vms_bg_select_args changed size -- VMS_IOCTL_BG_SELECT ABI break");
 
 #endif /* _VMS_BG_H */

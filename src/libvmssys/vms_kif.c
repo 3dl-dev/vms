@@ -19,10 +19,6 @@
 #include "vms_syscall.h"
 #include "vms_string.h"
 #include "vms_errno.h"
-#if defined(__NetBSD__)
-#include <errno.h>
-#include <sys/wait.h>     /* vms_kif_substrate_reap */
-#endif
 
 /* File descriptor for /dev/vms — thread-local so each thread opens/closes
  * independently.  Callers must invoke vms_kif_open() before using any KIF
@@ -169,44 +165,6 @@ uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid)
  * success (CLAUDE.md Rules 9 and 10; tests/integration/test_runtime_target.sh
  * rejects a branch on it).
  */
-/*
- * vms_kif_substrate_pid (rd vms-e70f) -- the SUBSTRATE task id of the calling
- * process: the key the executive's table is indexed by, which $CREPRC's
- * creation handshake hands the creator. It is not a VMS process id and is never
- * shown to a VMS program as one: the C RTL's getpid() is the VMS PID ($GETJPI
- * JPI$_PID), so OVMX's own substrate bookkeeping asks for this explicitly.
- */
-uint32_t vms_kif_substrate_pid(void)
-{
-    return (uint32_t)vms_sys_getpid();
-}
-
-/*
- * vms_kif_substrate_reap (rd vms-e70f) -- collect the substrate task `pid` this
- * process forked for $CREPRC/LIB$SPAWN, waiting for it: the substrate half of
- * process creation, beneath the VMS layer. The C RTL's wait()/waitpid() are the
- * VMS ones (a subprocess's completion from the executive), so the services that
- * own a substrate child reap it through here. Returns the pid, or -1.
- */
-int vms_kif_substrate_reap(uint32_t pid, int *wstatus, int options)
-{
-#if defined(__NetBSD__)
-    for (;;) {
-        pid_t r = waitpid((pid_t)pid, wstatus, options);
-        if (r < 0 && errno == EINTR)
-            continue;
-        return (int)r;
-    }
-#else
-    for (;;) {
-        long r = (long)vms_sys_wait4((vms_pid_t)pid, wstatus, options, 0);
-        if (r == -4 /* EINTR */)
-            continue;
-        return r < 0 ? -1 : (int)r;
-    }
-#endif
-}
-
 static void kif_bind(void)
 {
     vms_pid_t pid = vms_sys_getpid();
@@ -2435,40 +2393,6 @@ uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *user
     return args.status;
 }
 
-/*
- * $CREPRC's creation record (rd vms-416d): one op on the executive object the
- * creator and the task it forked synchronise through (VMS_CREPRC_SYNC_*). The
- * waiting ops are re-entered on a signal, as $WAITFR is (kif_wait_call): a
- * signal the CALLER catches must not decide what $CREPRC says about the child.
- * Each op is idempotent, so re-issuing it after -EINTR changes nothing.
- * `pid`, `value` and `vms_pid` are in/out (NULL: 0 in, discarded out).
- */
-uint32_t vms_kif_creprc_sync(uint32_t op, uint32_t *rec, uint32_t *pid,
-                             uint32_t *value, uint32_t *vms_pid)
-{
-    struct vms_creprc_sync_args args;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.op = op;
-    args.rec = rec ? *rec : 0;
-    args.pid = pid ? *pid : 0;
-    args.value = value ? *value : 0;
-    args.vms_pid = vms_pid ? *vms_pid : 0;
-
-    /* NEGCTL-ANCHORED (creprc-handshake-eintr) */
-    KIF_WAIT_CALL(VMS_IOCTL_CREPRC_SYNC, &args);
-
-    if (rec)
-        *rec = args.rec;
-    if (pid)
-        *pid = args.pid;
-    if (value)
-        *value = args.value;
-    if (vms_pid)
-        *vms_pid = args.vms_pid;
-    return args.status;
-}
-
 /* $DELPRC / $FORCEX / $SUSPND / $RESUME, authorized and delivered by the
  * executive (rd vms-8e9). op = VMS_PROCCTL_*; pid 0 = the caller. */
 uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code)
@@ -3752,17 +3676,6 @@ uint32_t vms_kif_mbx_chkacc(const char *devnam, uint32_t target_vms_pid,
     return args.status;
 }
 
-/* ================================================================
- * INET pseudo-device BGn: (vms-527)
- *
- * Thin marshalling wrappers over the VMS_IOCTL_BG_* driver in vms.ko
- * (src/kernel/vms_bg.c), the exact analogue of the vms_kif_mbx_* wrappers
- * above: bind to /dev/vms (honest SS$_NOSUCHDEV if the executive is absent --
- * INV-6, never a userspace socket fallback), issue one ioctl, hand back the
- * driver's own status. There is NO userspace socket here; the socket lives in
- * the executive.
- * ================================================================ */
-
 /* Same bind-and-check as mbx_bind_ok(): SS$_NOSUCHDEV when /dev/vms is absent
  * is the honest state for an executive device whose driver is unreachable. */
 static int bg_bind_ok(void)
@@ -3771,355 +3684,7 @@ static int bg_bind_ok(void)
     return vms_dev_fd >= 0;
 }
 
-uint32_t vms_kif_bg_create(uint32_t *exec_chan, uint32_t *unit,
-                           char *devnam, uint32_t devnam_sz)
-{
-    struct vms_bg_create_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-
-    KIF_CALL(VMS_IOCTL_BG_CREATE, &args);
-
-    if (args.status & 1) {
-        if (exec_chan) *exec_chan = args.chan;
-        if (unit) *unit = args.unit;
-        if (devnam && devnam_sz > 0) {
-            vms_strncpy(devnam, args.devnam, devnam_sz - 1);
-            devnam[devnam_sz - 1] = '\0';
-        }
-    }
-    return args.status;
-}
-
-uint32_t vms_kif_bg_setmode(uint32_t exec_chan)
-{
-    struct vms_bg_chanonly_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-
-    KIF_CALL(VMS_IOCTL_BG_SETMODE, &args);
-
-    return args.status;
-}
-
-uint32_t vms_kif_bg_setmode_icmp(uint32_t exec_chan)
-{
-    struct vms_bg_chanonly_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-
-    KIF_CALL(VMS_IOCTL_BG_SETMODE_ICMP, &args);
-
-    return args.status;
-}
-
-uint32_t vms_kif_bg_setmode_udp(uint32_t exec_chan)
-{
-    struct vms_bg_chanonly_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-
-    KIF_CALL(VMS_IOCTL_BG_SETMODE_UDP, &args);
-
-    return args.status;
-}
-
-uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
-                            uint16_t port, uint32_t addr)
-{
-    struct vms_bg_connect_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.sin_family = family;
-    args.sin_port = port;   /* network byte order, caller's responsibility */
-    args.sin_addr = addr;   /* network byte order */
-
-    KIF_CALL(VMS_IOCTL_BG_CONNECT, &args);
-
-    return args.status;
-}
-
-uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
-                         uint32_t *actlen)
-{
-    struct vms_bg_io_args args;
-
-    if (!buf)
-        return SS$_BADPARAM;
-    if (len > VMS_BG_IOCTL_MAXLEN)
-        return SS$_BADPARAM;
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.len = len;
-    vms_memcpy(args.data, buf, len);
-
-    KIF_CALL(VMS_IOCTL_BG_SEND, &args);
-
-    if ((args.status & 1) && actlen) *actlen = args.len;
-    return args.status;
-}
-
-uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
-                         uint32_t *actlen)
-{
-    return vms_kif_bg_recv_ex(exec_chan, buf, bufsz, actlen, 0);
-}
-
-/* now != 0: IO$M_NOW -- SS$_ENDOFFILE and no bytes when nothing is queued. */
-uint32_t vms_kif_bg_recv_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
-                            uint32_t *actlen, int now)
-{
-    struct vms_bg_io_args args;
-    uint32_t n;
-
-    if (!buf)
-        return SS$_BADPARAM;
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.len = (bufsz > VMS_BG_IOCTL_MAXLEN) ? VMS_BG_IOCTL_MAXLEN : bufsz;
-    args.flags = now ? 1u : 0u;
-
-    KIF_CALL(VMS_IOCTL_BG_RECV, &args);
-
-    if (args.status & 1) {
-        n = args.len;
-        if (n > bufsz) n = bufsz;
-        if (n > VMS_BG_IOCTL_MAXLEN) n = VMS_BG_IOCTL_MAXLEN;
-        vms_memcpy(buf, args.data, n);
-        if (actlen) *actlen = args.len;
-    }
-    return args.status;
-}
-
-uint32_t vms_kif_bg_deaccess(uint32_t exec_chan)
-{
-    struct vms_bg_chanonly_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-
-    KIF_CALL(VMS_IOCTL_BG_DEACCESS, &args);
-
-    return args.status;
-}
-
-uint32_t vms_kif_bg_dassgn(uint32_t exec_chan)
-{
-    struct vms_bg_chanonly_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-
-    KIF_CALL(VMS_IOCTL_BG_DASSGN, &args);
-
-    return args.status;
-}
-
-uint32_t vms_kif_bg_pollfd(uint32_t exec_chan, int *out_fd)
-{
-    struct vms_bg_pollfd_args args;
-
-    if (out_fd)
-        *out_fd = -1;
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.fd = -1;
-
-    KIF_CALL(VMS_IOCTL_BG_POLLFD, &args);
-
-    if ((args.status & 1) && out_fd)
-        *out_fd = args.fd;
-    return args.status;
-}
-
-/*
- * Materialize the channel's executive socket as a REAL, data-carrying fd (RUNG-3b).
- * Unlike vms_kif_bg_pollfd's readiness-only fd, the fd returned here has real
- * read/write that route to the executive socket, and NO O_CLOEXEC so it survives
- * execve -- the primitive the --wrap dup2/dup uses to hand a BGn: connection to a
- * ported daemon's exec'd child. Fail-honest: no /dev/vms -> SS$_NOSUCHDEV; bad
- * channel / no socket -> SS$_IVCHAN (from the executive). Never a fabricated fd.
- */
-uint32_t vms_kif_bg_materialize_fd(uint32_t exec_chan, int *out_fd)
-{
-    struct vms_bg_datafd_args args;
-
-    if (out_fd)
-        *out_fd = -1;
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.fd = -1;
-
-    KIF_CALL(VMS_IOCTL_BG_MATERIALIZE_FD, &args);
-
-    if ((args.status & 1) && out_fd)
-        *out_fd = args.fd;
-    return args.status;
-}
-
-uint32_t vms_kif_bg_getname(uint32_t exec_chan, uint32_t which,
-                            uint16_t *family, uint16_t *port, uint32_t *addr)
-{
-    struct vms_bg_name_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.which = which;
-
-    KIF_CALL(VMS_IOCTL_BG_GETNAME, &args);
-
-    if (args.status & 1) {
-        if (family) *family = args.sin_family;
-        if (port)   *port   = args.sin_port;
-        if (addr)   *addr   = args.sin_addr;
-    }
-    return args.status;
-}
-
-/* Server path (vms-698). bind reads the effective local address back (ephemeral
- * port); accept installs the connection onto a second, pre-$ASSIGNed BG channel
- * (accept_exec_chan) and returns the peer address. /dev/vms absent -> SS$_NOSUCHDEV. */
-uint32_t vms_kif_bg_bind(uint32_t exec_chan, uint16_t family, uint16_t port,
-                         uint32_t addr, uint16_t *out_port, uint32_t *out_addr)
-{
-    struct vms_bg_bind_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.sin_family = family;
-    args.sin_port = port;   /* network byte order (0 = ephemeral) */
-    args.sin_addr = addr;   /* network byte order (0 = INADDR_ANY) */
-
-    KIF_CALL(VMS_IOCTL_BG_BIND, &args);
-
-    if (args.status & 1) {  /* effective local address read back */
-        if (out_port) *out_port = args.sin_port;
-        if (out_addr) *out_addr = args.sin_addr;
-    }
-    return args.status;
-}
-
-uint32_t vms_kif_bg_listen(uint32_t exec_chan, int backlog)
-{
-    struct vms_bg_listen_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.backlog = backlog;
-
-    KIF_CALL(VMS_IOCTL_BG_LISTEN, &args);
-
-    return args.status;
-}
-
-uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
-                           uint16_t *family, uint16_t *port, uint32_t *addr)
-{
-    struct vms_bg_accept_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.listen_chan = listen_exec_chan;
-    args.accept_chan = accept_exec_chan;
-
-    KIF_CALL(VMS_IOCTL_BG_ACCEPT, &args);
-
-    if (args.status & 1) {  /* peer address */
-        if (family) *family = args.sin_family;
-        if (port)   *port   = args.sin_port;
-        if (addr)   *addr   = args.sin_addr;
-    }
-    return args.status;
-}
-
-uint32_t vms_kif_bg_setsockopt(uint32_t exec_chan, int level, int optname,
-                               int optval)
-{
-    struct vms_bg_sockopt_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.op = 0;                        /* set */
-    args.level = level;
-    args.optname = optname;
-    args.optval = optval;
-
-    KIF_CALL(VMS_IOCTL_BG_SOCKOPT, &args);
-
-    return args.status;
-}
-
-uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
-                               int *out_optval)
-{
-    struct vms_bg_sockopt_args args;
-
-    if (!bg_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.chan = exec_chan;
-    args.op = 1;                        /* get */
-    args.level = level;
-    args.optname = optname;
-
-    KIF_CALL(VMS_IOCTL_BG_SOCKOPT, &args);
-
-    if ((args.status & 1) && out_optval)
-        *out_optval = args.optval;
-    return args.status;
-}
+#include "vms_kif_bg_ops.h"
 
 /* ================================================================
  * L2 (raw datalink) socket surface (vms-7eb, auth slice of vms-1e4)
@@ -4414,10 +3979,7 @@ uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args)
         return SS$_NOSUCHDEV;
 
     args->status = 0;
-    /* Re-entered past a signal (rd vms-b6e): the executive ends a wait for
-     * the volume lock when a signal is pending, having changed nothing, so the
-     * signal's AST runs and the I/O is re-issued -- never an error. */
-    KIF_WAIT_CALL(VMS_IOCTL_ACP_WRITEVBLK, args);
+    KIF_CALL(VMS_IOCTL_ACP_WRITEVBLK, args);
     return args->status;
 }
 
@@ -4446,10 +4008,7 @@ uint32_t vms_kif_acp_fileop(struct vms_acp_fileop_args *args)
     args->name[VMS_ACP_NAME_SIZE - 1] = '\0';
     args->status = 0;
 
-    /* Re-entered past a signal (rd vms-b6e): the executive ends a wait for
-     * the volume lock when a signal is pending, having changed nothing, so the
-     * signal's AST runs and the I/O is re-issued -- never an error. */
-    KIF_WAIT_CALL(VMS_IOCTL_ACP_FILEOP, args);
+    KIF_CALL(VMS_IOCTL_ACP_FILEOP, args);
 
     return args->status;
 }

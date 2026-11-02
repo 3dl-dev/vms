@@ -1,0 +1,29 @@
+# bg-iflist-mask-zeroed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "TCP/IP Services interface list -- IO\$_SENSEMODE interface-list subfunction on a BGn: channel (vms_ioctl_bg_iflist, VMS_IOCTL_BG_IFLIST) in the executive BGn: driver (src/kernel-core/vms_bg.c, rd vms-99f). The executive walks the network stack the channel's socket lives in (exec_socket_iflist) and returns each interface's live name/flags/MTU/IPv4 address+mask/link-layer address; DCL TCPIP SHOW INTERFACE renders it. With no executive SHOW INTERFACE fails %TCPIP-E-NOEXEC (SS\$_NOSUCHDEV), never a host listing.";;
+        targets)      echo "kernel-core/vms_bg.c";;
+        suites_red)   echo "test_syssvc_dcl_tcpip_iflist";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_iflist() copies each interface's netmask from the executive's walk into the wire entry. The mutation zeroes it, so SHOW INTERFACE shows 0.0.0.0 as every mask -- reddening exactly the LO0 255.0.0.0 and SE0 255.255.255.0 mask assertions, while the addresses, MTUs, states, hardware address and row count (each copied separately) stay green. One field zeroed.";;
+        require_fail) cat <<'EOF2'
+LO0 netmask is 255.0.0.0
+SE0 netmask is 255.255.255.0
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Anchored on the UNIQUE NEGCTL line in vms_ioctl_bg_iflist(); after
+        # substitution the anchor no longer matches, so a second apply is a no-op.
+        sed -i 's|        o->mask = ent\[i\]\.mask;   /\* NEGCTL bg-iflist-mask-zeroed \*/|        o->mask = 0;   /* NEGCTL bg-iflist-mask-zeroed (applied) */|' "$_file"
+    :
+}

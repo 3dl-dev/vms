@@ -1768,6 +1768,111 @@ static void e3ea_the_master_forgets_an_idle_resource(void)
 	mixed_down();
 }
 
+/* A's whole sequence on the e2e: its own lock, the peer's request SERVED as
+ * master, the peer's release, then its own release. */
+static void e3ea_served_then_released_leaves_no_master(void)
+{
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	struct vms_dlm_master_request mr;
+	struct vms_dlm_master_result res, rel;
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	uint32_t lkid = 0, h;
+
+	printf("-- rd vms-3ea: served the peer, both released, no master --\n");
+	mixed_up(1u, 0u);
+	proc_init(&app);
+	h = e3ea_computed_hash();
+
+	ct_check(do_enq(&app, E3EA_NAME, LCK_K_NLMODE, 0u, &lkid) ==
+		 SS__NORMAL, "this node's own NL lock");
+	ct_check(vax_build_enq(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
+			       (uint8_t)LCK_K_NLMODE, E3EA_NAME, h) == 0,
+		 "the peer's NL request");
+	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
+		 VMS_DLM_DIR_ANSWER_SELF, "  answered: this node masters it");
+	vax_served_as_master(frame, CSID_VAX, 0u, &res);
+	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
+		 res.master_lkid != 0u, "  and GRANTED, as the master");
+
+	memset(&mr, 0, sizeof(mr));
+	mr.op = VMS_DLM_MREQ_DEQ;
+	mr.req_csid = CSID_VAX;
+	mr.req_lkid = VAX_LKID_1;
+	mr.master_lkid = res.master_lkid;
+	memset(&rel, 0, sizeof(rel));
+	ct_check(vms_lock_dlm_master_serve(&mr, &rel) == SS__NORMAL &&
+		 rel.outcome == (uint8_t)VMS_DLM_MASTER_RELEASED,
+		 "the peer releases its lock at this master");
+	ct_check(do_deq(&app, lkid) == SS__NORMAL, "this node releases its own");
+
+	ct_check(vms_lock_dlm_name_mastered_here(E3EA_NAME, 0u, OVMX_RES_GROUP,
+						 OVMX_RES_MODE) == 0,
+		 "*** nobody holds it: this node does not master it ***");
+	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
+		 VMS_DLM_DIR_ANSWER_YOU && master == CSID_VAX,
+		 "*** and the peer's next lookup is told YOU MASTER IT ***");
+	mixed_down();
+}
+
+/* The claim goes even when a peer's frame has since changed the value the
+ * name routes by: the claim was made under the OLD value's directory (this
+ * node), and re-resolving with the new one must not leave it behind. */
+static void e3ea_the_claim_goes_after_the_wire_moved_the_value(void)
+{
+	static const char *const names[] = {
+		"E3EA$CLAIM1", "E3EA$CLAIM2", "E3EA$CLAIM3", "E3EA$CLAIM4",
+		"E3EA$CLAIM5", "E3EA$CLAIM6", "E3EA$CLAIM7", "E3EA$CLAIM8",
+		"E3EA$CLAIMA", "E3EA$CLAIMB", "E3EA$CLAIMC", "E3EA$CLAIMD",
+		"F11B$vOVMXDATA", "F11B$vOVMXSRCH", "F11B$vOVMXSYS",
+		"F11B$vOVMXASYS", "F11B$vOVMXBSYS", "E3EA$X", "E3EA$Y",
+	};
+	struct vms_dlm_res_ident selfid;
+	struct vms_proc app;
+	vms_csid_t master = 0, d = 0;
+	const char *N;
+	uint32_t lkid = 0, h = 0, x = 0, k;
+
+	printf("-- rd vms-3ea: the self-claim goes even after the wire moved "
+	       "the value --\n");
+	mixed_up(0u, 0u);             /* the V7.3 default: one entry each */
+	proc_init(&app);
+	N = a_name_directed_at((vms_csid_t)CSID_OVMX, names,
+			       (uint32_t)(sizeof(names) / sizeof(names[0])));
+	ct_check(N != NULL, "a name the vector directs HERE");
+	if (N == NULL) {
+		mixed_down();
+		return;
+	}
+	(void)vms_dlm_name_hash_proven(OVMX_RES_GROUP, OVMX_RES_MODE,
+				       (const uint8_t *)N, (uint32_t)strlen(N),
+				       &h);
+	for (k = 1u; k < 64u; k++) {
+		x = h ^ (k << 16);
+		if (vms_ldwv_resolve(&g.cl.club.ldwv, vms_ldwv_key(x), &d) ==
+		    VMS_LDWV_OK && d == (vms_csid_t)CSID_VAX)
+			break;
+	}
+	ct_check(d == (vms_csid_t)CSID_VAX, "a value that directs at the peer");
+
+	ct_check(do_enq(&app, N, LCK_K_NLMODE, 0u, &lkid) == SS__NORMAL &&
+		 lkid != 0u, "this node masters the name and claims it");
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash(N, 0u, OVMX_RES_GROUP,
+						    OVMX_RES_MODE, x),
+			SS__NORMAL, "a peer's frame states another value");
+	ct_check(do_deq(&app, lkid) == SS__NORMAL, "the last lock goes");
+
+	memset(&selfid, 0, sizeof(selfid));
+	selfid.group = OVMX_RES_GROUP;
+	selfid.mode = OVMX_RES_MODE;
+	selfid.name_len = (uint8_t)strlen(N);
+	memcpy(selfid.name, N, selfid.name_len);
+	ct_check(vms_dlm_dir_lookup_ident(&g.dir, &selfid, &master, NULL,
+					  NULL) == VMS_DLM_DIR_IDENT_NONE,
+		 "*** this node's own claim is gone all the same ***");
+	mixed_down();
+}
+
 /* The same rule for a block that IS kept: a hash some system put on the wire
  * keeps the block (resource_release), but it is data about the name, never a
  * claim to master it. */
@@ -1879,6 +1984,8 @@ int main(void)
 	e3ea_the_master_forgets_an_idle_resource();
 	e3ea_the_requester_forgets_a_released_master();
 	e3ea_a_kept_block_keeps_no_master();
+	e3ea_served_then_released_leaves_no_master();
+	e3ea_the_claim_goes_after_the_wire_moved_the_value();
 
 	return ct_summary("test_dlm_mixed_master");
 }

@@ -1203,10 +1203,10 @@ static int dlm_dir_remove_fill(const struct vms_lock_resource *res,
 }
 
 /*
- * rd vms-3ea: THE DIRECTORY-NODE TWIN OF THE REMOVAL ABOVE. When the freed root
- * resource was mastered HERE and the vector names THIS node its directory, the
- * entry is in this node's own table (dir_claim_self, at first use) and nothing
- * goes on the wire -- but the entry must still go: left behind, it answers the
+ * rd vms-3ea: THE DIRECTORY-NODE TWIN OF THE REMOVAL ABOVE. When an idle root
+ * resource was mastered HERE, any claim of it in this node's own table
+ * (dir_claim_self, at first use) must go -- nothing goes on the wire for it --
+ * because, left behind, it answers the
  * next system's lookup "this node masters it", and the engine masters a
  * resource nobody here holds. Same facts as dlm_dir_remove_fill, read off the
  * block before it is freed. Caller holds vms_res_hash_lock; the op takes only
@@ -1216,25 +1216,27 @@ static void dlm_dir_release_self(const struct vms_lock_resource *res)
 {
     struct vms_dlm_requester_ops ops = dlm_req_ops_get();
     struct vms_dlm_dir_ask q;
-    uint32_t dir = 0;
 
     if (res->master_csid == 0 || res->master_csid != vms_local_csid)
         return;
-    if (!res->hash_known || res->name_len == 0u || res->parent != NULL)
+    if (res->name_len == 0u || res->parent != NULL)
+        return;                 /* only a ROOT resource is ever claimed */
+    if (ops.dir_release_self == NULL)
         return;
-    if (ops.dir_release_self == NULL || ops.dir_resolve == NULL)
-        return;
-    if (ops.dir_resolve(ops.ctx, res->dir_hash, &dir) != SS__NORMAL)
-        return;
-    if (dir != 0 && dir != vms_local_csid)
-        return;                 /* a remote directory: the DIR_REMOVE post */
-
+    /*
+     * NOT gated on re-resolving the directory. The claim was made under the
+     * value the name routed by THEN; a peer's frame may since have replaced it
+     * (dir_hash_store's "the function was wrong" path), and the new value can
+     * direct elsewhere -- which left the claim behind, measured. The table
+     * removes only an entry naming THIS node, so asking unconditionally can
+     * take nothing away from anybody else.
+     */
     memset(&q, 0, sizeof(q));
     q.name = res->name;
     q.name_len = res->name_len;
     q.group = res->res_group;
     q.mode = res->res_mode;
-    q.hash = res->dir_hash;
+    q.hash = res->hash_known ? res->dir_hash : 0u;
     (void)ops.dir_release_self(ops.ctx, &q);
 }
 

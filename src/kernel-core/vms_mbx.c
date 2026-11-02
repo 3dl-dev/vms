@@ -1082,3 +1082,40 @@ void vms_mbx_release_all(struct vms_proc *proc)
         exec_free(ch);
     }
 }
+
+/*
+ * vms_mbx_devinfo - $GETDVI of a mailbox unit (rd vms-a66e). A mailbox is not
+ * a struct vms_device row, so the device table's $GETDVI asks here when the
+ * name is no row of its own: the MBAn: unit's physical name, DC$_MAILBOX /
+ * DT$_MBX (the $DCDEF class and type of a mailbox), the unit's channel count,
+ * its creator's PID and UIC (the owner), and DVI$_DEVBUFSIZ its maximum
+ * message size (I/O User's Reference, Mailbox Driver). Nothing else is filled:
+ * a value this table does not keep is left 0 ("not recorded"), not composed.
+ * Returns SS__NORMAL, SS__NOSUCHDEV (no such unit) or the name's parse status.
+ */
+uint32_t vms_mbx_devinfo(const char *devnam_in, struct vms_devinfo *info)
+{
+    char devnam[VMS_DEVNAM_SIZE];
+    struct vms_mailbox *mbx;
+    uint32_t st = mbx_normalize_devnam(devnam_in, devnam, sizeof(devnam));
+
+    if (st != SS__NORMAL)
+        return SS__NOSUCHDEV;
+    exec_lock(&vms_mbx_list_lock);
+    mbx = mbx_find_locked(devnam);
+    if (mbx) {
+        memset(info, 0, sizeof(*info));
+        exec_lock(&mbx->lock);
+        strscpy(info->devnam, mbx->devnam, sizeof(info->devnam));
+        strscpy(info->fulldevnam, mbx->devnam, sizeof(info->fulldevnam));
+        info->devclass  = 160;              /* DC$_MAILBOX */
+        info->devtype   = 1;                /* DT$_MBX */
+        info->refcnt    = mbx->refcnt;
+        info->owner_pid = mbx->owner_vms_pid;
+        info->owner_uic = mbx->owner_uic;
+        info->devbufsiz = mbx->maxmsg;
+        exec_unlock(&mbx->lock);
+    }
+    exec_unlock(&vms_mbx_list_lock);
+    return mbx ? SS__NORMAL : SS__NOSUCHDEV;
+}

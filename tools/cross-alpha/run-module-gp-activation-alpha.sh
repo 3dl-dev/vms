@@ -976,6 +976,23 @@ assert_crtlfd() {
     tr -d '\r' < "$log" | grep >/dev/null -aF "CFDX: $_call atexit-ran" \
       || { echo "  assert_crtlfd: main returning $_call: the atexit function did not run" >&2; return 1; }
   done
+  # vms-a66e: the C RTL's terminal and pipe descriptors are VMS channels. stdout
+  # is a channel to the console terminal (getname names OPA0:); pipe() is a
+  # mailbox that SHOW DEVICE, run by system() while the pipe is open, finds in
+  # the executive's device table; one message per write, end of file on close;
+  # /proc is not a C RTL name.
+  local _dv _mb _sd
+  _dv=$(tr -d '\r' < "$log")
+  printf '%s\n' "$_dv" | grep >/dev/null -aE "^CFDDEV: stdout=_?OPA0: isatty=1$" \
+    || { echo "  assert_crtlfd: stdout is not a channel to the terminal (getname(1) is not OPA0:)" >&2; return 1; }
+  _mb=$(printf '%s\n' "$_dv" | grep -aoE "^CFDDEV: pipe=_?MBA[0-9]+: messages=abc\|defg$" | grep -oE "MBA[0-9]+:" | head -1)
+  [ -n "$_mb" ] || { echo "  assert_crtlfd: pipe() is not a mailbox carrying one message per write" >&2; return 1; }
+  _sd=$(printf '%s\n' "$_dv" | awk '/^CFDDEV: === SHOW DEVICE /{f=1;next} /^CFDDEV: === END SHOW DEVICE/{f=0} f{print}')
+  printf '%s\n' "$_sd" | grep -aq "NOSUCHDEV" && { echo "  assert_crtlfd: SHOW DEVICE does not know the pipe's mailbox" >&2; return 1; }
+  printf '%s\n' "$_sd" | grep >/dev/null -aE "(^|[ _])$_mb" \
+    || { echo "  assert_crtlfd: SHOW DEVICE did not list the pipe's mailbox $_mb" >&2; return 1; }
+  printf '%s\n' "$_dv" | grep >/dev/null -aE "^CFDDEV: eof=yes proc=ENOENT$" \
+    || { echo "  assert_crtlfd: pipe end-of-file or the /proc refusal is wrong" >&2; return 1; }
   return 0
 }
 
@@ -3244,7 +3261,21 @@ EOF
       for _x in "ret 0:%X00000001" "ret 3:%X0035A019"; do
         echo "CFDX: ${_x%%:*} flushed-by-exitCFDX: ${_x%%:*} atexit-ranCRTLFD-EXIT: ${_x%%:*} STATUS=${_x##*:}"
       done
+      printf 'CFDDEV: stdout=_OPA0: isatty=1\r\n'
+      echo "CFDDEV: pipe=_MBA7: messages=abc|defg"
+      echo "CFDDEV: === SHOW DEVICE _MBA7: ==="
+      echo "Device                  Device           Error"
+      echo " Name                   Status           Count"
+      echo "MBA7:                   Online               0"
+      echo "CFDDEV: === END SHOW DEVICE (1) ==="
+      echo "CFDDEV: eof=yes proc=ENOENT"
     } > "$_st/pass.log"
+    # vms-a66e negative controls: the raw kernel path (stdout not a channel, a
+    # kernel pipe, /proc opened), and a mailbox SHOW DEVICE does not have.
+    sed 's/CFDDEV: stdout=_OPA0: isatty=1/CFDDEV: stdout=<none> isatty=1/' "$_st/pass.log" > "$_st/ttkernel.log"
+    sed 's/CFDDEV: pipe=_MBA7: messages=abc|defg/CFDDEV: pipe=<none> messages=WRONG/' "$_st/pass.log" > "$_st/pipekernel.log"
+    sed 's/MBA7:                   Online               0/%SYSTEM-W-NOSUCHDEV, no such device available/' "$_st/pass.log" > "$_st/nombx.log"
+    sed 's/proc=ENOENT/proc=OPENED/' "$_st/pass.log" > "$_st/procopen.log"
     # vms-599 negative controls: musl's exit (exit(1) a POSIX failure, nothing recorded),
     # a __posix_exit that does not encode, and an exit that skips the stdio flush
     sed 's/CRTLFD-EXIT: exit 1 STATUS=%X00000001/CRTLFD-EXIT: exit 1 STATUS=%X0000002C/' "$_st/pass.log" > "$_st/muslexit.log"
@@ -3259,7 +3290,7 @@ EOF
     grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
     sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
     sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
-    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1"; do
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1" "ttkernel:1" "pipekernel:1" "nombx:1" "procopen:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -3271,7 +3302,7 @@ EOF
     assemble_boot_image
     log "step 3: BOOT A -- the C RTL file layer over RMS on the REAL executive"
     run_boot_a
-    grep -aE "CFD:|CFDX:|CRTLFD-EXIT:|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    grep -aE "CFD:|CFDX:|CFDDEV:|MBA[0-9]+:|CRTLFD-EXIT:|CRTLFD-DEV:|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-|%SYSTEM-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_crtlfd "$WORK/modgpA.log"; then
       echo ""
       echo "PASS: a 32-bit DEC C program's stdio and descriptor calls ran over RMS on the"

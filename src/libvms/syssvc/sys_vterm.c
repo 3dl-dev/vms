@@ -36,6 +36,7 @@
 #include <unistd.h>
 
 #include "ovmx_vterm.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "ssdef.h"
 #include "vms_kif.h"
 
@@ -97,6 +98,7 @@ static const char *vterm_strip_dev_prefix(const char *path)
 
 uint32_t ovmx_vterm_create(char *devnam, size_t devnam_size, int *master_fd)
 {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     char slave[256];
     const char *backing;
     int mfd;

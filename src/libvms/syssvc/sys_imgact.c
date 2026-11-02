@@ -56,6 +56,7 @@
 #include <sys/mman.h>
 
 #include "ssdef.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "vms_kif.h"
 #include "imgact_activate.h"
 #include "ovmx_image.h"       /* .vms$imp / .vms$rel section names + structs */
@@ -720,6 +721,7 @@ static int imgact_producer_needs_crtl(const struct ovmx_sv_header *sv)
  */
 static uint32_t imgact_map_producer(const char *soname)
 {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     Elf64_Ehdr eh;
     Elf64_Phdr ph[IMGACT_MAXPHDR];
     char path[256];
@@ -871,6 +873,7 @@ uint32_t imgact_activate(const char *path, long a0, long a1,
                          const struct imgact_critp1 *critp1,
                          int *image_rc)
 {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     Elf64_Ehdr eh;
     Elf64_Phdr ph[IMGACT_MAXPHDR];
     int fd, i;

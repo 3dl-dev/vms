@@ -72,4 +72,10 @@ $ WRITE SYS$OUTPUT "CRTLFD-EXIT: ret 0 STATUS=''$STATUS'"
 $ CFD ret 3
 $ WRITE SYS$OUTPUT "CRTLFD-EXIT: ret 3 STATUS=''$STATUS'"
 $!
+$! vms-a66e: stdout on the terminal is a channel to it; pipe() is a mailbox the
+$! executive's device table carries (SHOW DEVICE, run from inside the image while
+$! the pipe is open); /proc is not a C RTL name.
+$ CFD dev
+$ WRITE SYS$OUTPUT "CRTLFD-DEV: STATUS=''$STATUS'"
+$!
 $ EXIT

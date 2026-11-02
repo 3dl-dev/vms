@@ -43,6 +43,7 @@
 #include <ctype.h>
 #include <strings.h>
 #include "starlet.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "descrip.h"
 #include "lnmdef.h"
 #include "vms/pcb.h"
@@ -302,10 +303,12 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
         return 1;
     }
 
-    /* Mailbox device MBA<n>: */
-    if (strncmp(upper, "MBA", 3) == 0 && upper[3] != '\0') {
+    /* Mailbox device MBA<n>:, or its physical name _MBA<n>: (the form
+     * $GETDVI DVI$_DEVNAM hands back; rd vms-a66e) */
+    const char *mu = upper[0] == '_' ? upper + 1 : upper;
+    if (strncmp(mu, "MBA", 3) == 0 && mu[3] != '\0') {
         char *endp;
-        long unit = strtol(upper + 3, &endp, 10);
+        long unit = strtol(mu + 3, &endp, 10);
         if (*endp == '\0' && unit >= 0) {
             result->is_mailbox = 1;
             result->mbx_unit = (int)unit;
@@ -492,6 +495,7 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
                       uint32_t acmode,
                       const struct dsc$descriptor_s *mbxnam,
                       uint32_t flags) {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     (void)acmode;
     (void)mbxnam;
     (void)flags;   /* ASSIGN$M_* options: none changes what a channel is here */

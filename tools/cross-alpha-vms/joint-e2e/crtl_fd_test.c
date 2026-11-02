@@ -41,6 +41,7 @@
 #define STAT_SIZE_RELIABLE(ST) ((ST).st_fab_rfm != FAB_C_VAR)
 
 void __posix_exit(int);     /* DEC C; <stdlib.h> declares it only under _POSIX_EXIT */
+char *getname(int, char *, ...);    /* DEC C <unixio.h>: a descriptor's file or device */
 
 static int fails;
 static int first_fail;
@@ -78,6 +79,44 @@ int main(int argc, char **argv)
         setvbuf(stdout, NULL, _IOFBF, BUFSIZ);
         printf("CFDX: ret %s flushed-by-exit", argv[2]);
         return (int)strtol(argv[2], NULL, 0);
+    }
+    if (argc >= 2 && strcmp(argv[1], "dev") == 0) {
+        /* vms-a66e: the C RTL's terminal and pipe descriptors are VMS channels,
+         * and no C RTL name reaches the substrate's file system. stdout is
+         * SYS$OUTPUT, a channel to the terminal (getname names it); pipe() is a
+         * mailbox pair that SHOW DEVICE, run by system() while it is open, finds
+         * in the executive's device table; each write is one message and close
+         * of the write end is end of file; /proc is an RMS name RMS does not
+         * have. (openat() is no DEC C RTL entry; test_syssvc_crtl_devfd
+         * covers a directory descriptor.) */
+        char so[256], mb[256], cmd[300], b[64];
+        int p[2], tty = isatty(1);
+        if (!getname(1, so, 1))
+            strcpy(so, "<none>");
+        int pr = pipe(p);
+        if (pr != 0 || !getname(p[0], mb, 1))
+            strcpy(mb, "<none>");
+        int w1 = pr ? -1 : (int)write(p[1], "abc", 3);
+        int w2 = pr ? -1 : (int)write(p[1], "defg", 4);
+        int r1 = pr ? -1 : (int)read(p[0], b, sizeof b);
+        int r2 = pr ? -1 : (int)read(p[0], b + 8, sizeof b - 8);
+        int msgs = w1 == 3 && w2 == 4 && r1 == 3 && memcmp(b, "abc", 3) == 0 &&
+                   r2 == 4 && memcmp(b + 8, "defg", 4) == 0;
+        printf("CFDDEV: stdout=%s isatty=%d\n", so, tty);
+        printf("CFDDEV: pipe=%s messages=%s\n", mb, msgs ? "abc|defg" : "WRONG");
+        printf("CFDDEV: === SHOW DEVICE %s ===\n", mb);
+        snprintf(cmd, sizeof cmd, "SHOW DEVICE %s", mb);
+        int sst = system(cmd);
+        printf("CFDDEV: === END SHOW DEVICE (%d) ===\n", sst);
+        int eof = pr ? -1 : (close(p[1]) == 0 ? (int)read(p[0], b, sizeof b) : -1);
+        if (!pr)
+            close(p[0]);
+        errno = 0;
+        int pf = open("/proc/self/status", O_RDONLY);
+        int pe = errno;
+        printf("CFDDEV: eof=%s proc=%s\n", eof == 0 ? "yes" : "no",
+               pf < 0 && pe == ENOENT ? "ENOENT" : "OPENED");
+        return 0;
     }
     if (argc >= 3 && (strcmp(argv[1], "exit") == 0 || strcmp(argv[1], "pexit") == 0)) {
         int n = (int)strtol(argv[2], NULL, 0);

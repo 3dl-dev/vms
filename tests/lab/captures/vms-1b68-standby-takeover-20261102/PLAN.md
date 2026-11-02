@@ -71,3 +71,42 @@ stays 1 and VAX2 + OVMXE (1 vote) stay quorate after VAX1's REMOVE_NODE departur
   left, and the departure would carry no queued lock. The item's case is a master that leaves
   holding its locks. Predictions P1a, P1b, P2, P4 are unchanged; the survivors' directory/master
   is whichever node the rebuild picks (VAX2 or OVMXE). P3 is unchanged.
+
+## Addendum 4 (re-fire, before any OVMX node boots; supersedes addenda 2 and 3 for this fire)
+Rebased onto #1961 65e34db74 (main + vms-0db/vms-1b68 sender + OVMX_FIRE_VOTES). Fresh pod, CPU
+request 200m, limit 4; the CPU the fire actually used is recorded with the results.
+
+Votes. The first fire lost quorum (VAX1 1 + OVMXE 1 = 2, quorum 2; halting VAX1 left 1). This fire
+boots OVMXE with OVMX_FIRE_VOTES=2 and OVMX_FIRE_EXPVOTES=3: VAX1 1 + VAX2 0 + OVMXE 2 = 3, quorum 2,
+and VAX2 + OVMXE keep 2 after VAX1 leaves. Re-read VOTES/EXPECTED_VOTES with F$GETSYI on both VAXes
+and CLUSTER_VOTES/CLUSTER_QUORUM after OVMXE joins, and commit them as addendum 5 before the arms.
+
+Departure shape: VAX1 `SHUTDOWN` with REMOVE_NODE -- the shape of the real capture in
+tests/lab/captures/vms-0db-waiting-records-20261102 arm B (VAX1 the master leaves by SHUTDOWN
+REMOVE_NODE; the survivors' converting and waiting records were rebuilt by op-0x08, 14:01:03Z).
+Addendum 3's objection to SHUTDOWN (VAX1's own holder is stopped first and would grant the queue)
+is answered by putting the BLOCKING holders on VAX2, a survivor, as arm B of that capture did.
+VAX1 holds only an NL lock that makes it the first requester and so the master.
+
+- Arm A (waiter), resource WKL3 (LCK$M_SYSTEM): VAX1 `RMH 000-WKL3` (NL, first, masters);
+  VAX2 `RMH 300-WKL3` (PR granted); OVMXE `RMH 500-WKL3` (EX, waits behind VAX2's PR).
+- Arm B (converter), resource EVAC$WORKLOAD (group 0, no LCK$M_SYSTEM, so RMH cannot stand in):
+  VAX1 `EVACWL STANDBY NL=99999` (NL, first, masters, never converts during the fire); VAX2
+  `EVACWL` (EX granted); OVMXE `EVACWL STANDBY` (NL granted, convert NL->EX waits behind VAX2).
+- SDA on VAX1 before SHUTDOWN shows both resources mastered on VAX1 with OVMXE's waiting EX and
+  converting NL->EX queued. If VAX1's shutdown remasters a tree off VAX1 before the departure
+  (op-0x12, as the capture notes), record which; OVMXE's queued record then travels in op-0x12.
+
+Predictions (cells per vms-0db):
+- P1. OVMXE's waiter and converter each go out in exactly one holder record (op-0x08 in the
+  departure rebuild, or op-0x12 if remastered first) with [30]=05, [31]=00, [110]=ff (waiter) /
+  00 (converter, [28] carries 02), [108]=04, read off its LKB; each is answered (0xf9 or 0xfa).
+- P2. After the departure both stay QUEUED (VAX2 still holds PR / EX): no SS$_UNSUPPORTED, no
+  grant. SDA on VAX2 shows each resource's new master with OVMXE's requests on the waiting /
+  conversion queue.
+- P3. STOP/ID VAX2's two holders: OVMXE's RMH prints WKL3 granted EX, and EVACWL on OVMXE prints
+  that it took EVAC$WORKLOAD EX.
+- P4. No Fatal / CNXMGRERR / LOCKMGRERR / INVLOCKID on any console; neither survivor shows
+  "quorum lost".
+
+STOP RULE unchanged: any VAX bugcheck -> stop, keep console + pcap, identify the frame, report.

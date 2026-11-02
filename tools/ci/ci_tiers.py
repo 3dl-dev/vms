@@ -20,6 +20,7 @@ Prints `key=value` lines (GITHUB_OUTPUT format):
   keystroke       true|false
   decnet          true|false
   vax_boot        true|false
+  vax_acceptance  true|false
   negctl_select   ALL | (empty = none) | space-separated defect names
 
 negctl_select is a PATH-TO-FACILITY map that FAILS CLOSED: a changed path that
@@ -128,6 +129,28 @@ TIERS = {
         "src/vmslink/mk_loginout.sh",
         "src/vmslink/loginout_rms_bind.c",
         "distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/**",
+    ],
+    # Full-memory VAX DCL/SHOW battery (ci-vax vax-dcl-acceptance, rd vms-365):
+    # the 16 MB leg (`vax_boot`) stops after login, so a battery check is run
+    # ONLY by this job. #1940 changed the battery's RUN/DETACHED [vms-365] check
+    # and DECNETD together and reached main untested on the VAX. In the queue
+    # when the battery, its VAX driver, the goldens it diffs, or the DECnet /
+    # NETACP sources the battery's DECnet checks exercise are touched.
+    "vax_acceptance": [
+        ".github/workflows/ci-vax.yml",
+        ".github/workflows/ci-changes.yml",
+        "tools/ci/ci_tiers.py",
+        # the battery, its verdict helpers, and the goldens it diffs against
+        "tests/qemu/lib/**",
+        "tools/oracle/surfaces/**",
+        "docs/oracle/golden/**",
+        # the VAX driver of the battery
+        "tests/lab-vax/run-boot.sh",
+        "tests/lab-vax/test_dcl_acceptance_vax.sh",
+        "tests/lab-vax/drive_boot_vax.py",
+        # DECnet / NETACP (DECNETD, NCP, the NET: device) and its startup
+        "src/vmsdecnet/**",
+        "distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTNET.COM",
     ],
     # Keystroke oracle: the console, terminal driver and boot path.
     "keystroke": [
@@ -265,18 +288,18 @@ def changed_files(repo, base):
 def decide(event, ref, files, table_fn):
     res = {"heavy_release": "false", "alpha_selfhost_tier": "false",
            "keystroke": "false", "decnet": "false", "vax_boot": "false",
-           "negctl_select": ""}
+           "vax_acceptance": "false", "negctl_select": ""}
     if is_full(event, ref):
         return {"heavy_release": "true", "alpha_selfhost_tier": "true",
                 "keystroke": "true", "decnet": "true", "vax_boot": "true",
-                "negctl_select": "ALL"}
+                "vax_acceptance": "true", "negctl_select": "ALL"}
     if event == "push":
         return res  # the queue already tested this exact tree
     if files is None:  # could not compute: fail closed (queue / PR only)
         if event == "merge_group":
             return {"heavy_release": "true", "alpha_selfhost_tier": "true",
                     "keystroke": "true", "decnet": "true", "vax_boot": "true",
-                "negctl_select": "ALL"}
+                    "vax_acceptance": "true", "negctl_select": "ALL"}
         return res
     if event == "merge_group":
         res["alpha_selfhost_tier"] = "true" if matches_any(files, TIERS["alpha_selfhost_tier"]) else "false"
@@ -284,6 +307,7 @@ def decide(event, ref, files, table_fn):
         res["keystroke"] = "true" if matches_any(files, TIERS["keystroke"]) else "false"
         res["decnet"] = "true" if matches_any(files, TIERS["decnet"]) else "false"
         res["vax_boot"] = "true" if matches_any(files, TIERS["vax_boot"]) else "false"
+        res["vax_acceptance"] = "true" if matches_any(files, TIERS["vax_acceptance"]) else "false"
         try:
             res["negctl_select"] = negctl_select(files, table_fn())
         except Exception as e:  # noqa: BLE001 -- fail closed
@@ -314,7 +338,7 @@ def main():
         print("ci_tiers: cannot compute changed files (%s)" % e, file=sys.stderr)
     res = decide(a.event, a.ref, files, lambda: defect_table(a.repo))
     for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "decnet", "vax_boot",
-              "negctl_select"):
+              "vax_acceptance", "negctl_select"):
         print("%s=%s" % (k, res[k]))
 
 

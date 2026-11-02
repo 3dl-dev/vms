@@ -282,6 +282,46 @@ static void scenario_fail_honest(void)
     sys$deq(lksb.lksb$l_lkid, NULL, 0, 0);
 }
 
+/* ================================================================
+ * Scenario: a BINARY resource name (rd vms-c06d). RMS's file-access lock
+ * name holds NUL bytes (a FID), so LKI$_RESNAM must return the name's own
+ * byte count, NULs included -- not stop at the first NUL.
+ * ================================================================ */
+static void scenario_binary_resnam(void)
+{
+    printf("--- scenario: binary resource name with NULs (rd vms-c06d) ---\n");
+    static const char bin[12] = { 'O','V','M','X','$', 0x00, 0x07, 0x00, 'B','I','N', 0x00 };
+    struct dsc$descriptor_s d;
+    d.dsc$w_length = sizeof bin;
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = (char *)bin;
+    struct lksb_caller lksb = {0};
+    uint32_t est = sys$enqw(0, LCK$K_EXMODE, &lksb, 0, &d, 0, NULL, 0, NULL, 0, 0, 0);
+    CHECK(est & 1, "setup: sys$enqw EX on a 12-byte name with NUL bytes succeeds");
+    if (!(est & 1))
+        return;
+    char rname[32];
+    memset(rname, 0x5A, sizeof rname);
+    uint16_t rlen = 0xFFFF;
+    ILE3 itms[] = { { sizeof(rname), LKI$_RESNAM, rname, &rlen }, ILE3_TERMINATOR };
+    uint32_t lkidarg = lksb.lksb$l_lkid;
+    uint32_t gst = sys$getlkiw(0, &lkidarg, itms, NULL, 0, 0, 0);
+    CHECK(gst & 1, "sys$getlkiw LKI$_RESNAM on the binary-named lock succeeds");
+    /* negctl: getlki-resnam-cstring */
+    CHECK(rlen == sizeof bin,
+          "LKI$_RESNAM's return length is the name's own 12 bytes, not its 5-byte prefix before the first NUL");
+    CHECK(memcmp(rname, bin, sizeof bin) == 0,
+          "LKI$_RESNAM returns every byte of the binary name, NULs included");
+    char small[4];
+    uint16_t slen = 0;
+    ILE3 sitm[] = { { sizeof(small), LKI$_RESNAM, small, &slen }, ILE3_TERMINATOR };
+    gst = sys$getlkiw(0, &lkidarg, sitm, NULL, 0, 0, 0);
+    CHECK((gst & 1) && slen == sizeof small && memcmp(small, bin, sizeof small) == 0,
+          "a 4-byte buffer gets the name's first 4 bytes and a return length of 4");
+    sys$deq(lksb.lksb$l_lkid, NULL, 0, 0);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -307,6 +347,7 @@ int main(void)
     scenario_single_holder();
     scenario_two_holders();
     scenario_fail_honest();
+    scenario_binary_resnam();
 
     printf("=== test_syssvc_getlki: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

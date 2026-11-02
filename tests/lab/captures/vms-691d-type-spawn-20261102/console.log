@@ -1,0 +1,179 @@
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX1
+    Last interactive login on Thursday, 30-JUL-2026 09:00\Z
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET DEFAULT SYS$LOGIN
+$ CREATE TA.TXT
+alpha one
+alpha two
+*EXIT*
+$ CREATE TB.TXT
+bravo one
+*EXIT*
+$ CREATE TC.COM
+$ SHOW SYMBOL TCX
+$ WRITE SYS$OUTPUT "from TC"
+*EXIT*
+$ TCX = "tcx-sym"
+$ WRITE SYS$OUTPUT "===TYPE-BEGIN==="
+===TYPE-BEGIN===
+$ TYPE TA.TXT,TB.TXT
+alpha one
+alpha two
+ 
+SYS$SYSROOT:[SYSMGR]TB.TXT;1
+ 
+bravo one
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ TYPE TA.TXT,NOSUCH.TXT,TB.TXT
+alpha one
+alpha two
+%TYPE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCH.TXT;
+-RMS-E-FNF, file not found
+ 
+SYS$SYSROOT:[SYSMGR]TB.TXT;1
+ 
+bravo one
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10951238"
+$ TYPE NOSUCH.TXT,TA.TXT
+%TYPE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCH.TXT;
+-RMS-E-FNF, file not found
+ 
+SYS$SYSROOT:[SYSMGR]TA.TXT;1
+ 
+alpha one
+alpha two
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10951238"
+$ TYPE TA.TXT,TB
+alpha one
+alpha two
+ 
+SYS$SYSROOT:[SYSMGR]TB.TXT;1
+ 
+bravo one
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ TYPE TA.TXT+TB.TXT
+alpha one
+alpha two
+ 
+SYS$SYSROOT:[SYSMGR]TB.TXT;1
+ 
+bravo one
+$ TYPE TA.TXT
+alpha one
+alpha two
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ TYPE TA.TXT,TA.TXT
+alpha one
+alpha two
+ 
+SYS$SYSROOT:[SYSMGR]TA.TXT;1
+ 
+alpha one
+alpha two
+$ TYPE TA.TXT,TB.TXT/PAGE
+alpha one
+alpha two
+Press RETURN to continue
+WRITE SYS$OUTPUT "===TYPE-END==="
+SYS$SYSROOT:[SYSMGR]TB.TXT;1
+ 
+bravo one
+$ WRITE SYS$OUTPUT "===SPAWN-BEGIN==="
+===SPAWN-BEGIN===
+$ SPAWN/INPUT=NL:/OUTPUT=S1.LOG SHOW SYMBOL TCX
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%DCL-S-ATTACHED, terminal now attached to process SYSTEM_1
+%DCL-S-RETURNED, control returned to process SYSTEM
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ TYPE S1.LOG
+  TCX = "tcx-sym"
+$ SPAWN/OUTPUT=S2.LOG FOOBAR
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%DCL-S-ATTACHED, terminal now attached to process SYSTEM_1
+%DCL-S-RETURNED, control returned to process SYSTEM
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00038090"
+$ TYPE S2.LOG
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \FOOBAR\
+$ SPAWN/NOWAIT/OUTPUT=S3.LOG @TC.COM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ TYPE S3.LOG
+  TCX = "tcx-sym"
+from TC
+$ CREATE IN.COM
+$ WRITE SYS$OUTPUT "from IN"
+*EXIT*
+$ SPAWN/INPUT=IN.COM/OUTPUT=S4.LOG
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%DCL-S-ATTACHED, terminal now attached to process SYSTEM_1
+%DCL-S-RETURNED, control returned to process SYSTEM
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00010001"
+$ TYPE S4.LOG
+from IN
+$ SPAWN/INPUT=IN.COM/OUTPUT=S5.LOG WRITE SYS$OUTPUT "from CMD"
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%DCL-S-ATTACHED, terminal now attached to process SYSTEM_1
+%DCL-S-RETURNED, control returned to process SYSTEM
+$ TYPE S5.LOG
+from CMD
+from IN
+$ SPAWN/INPUT=NOSUCH.COM SHOW TIME
+%RMS-E-FNF, file not found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00018292"
+$ SPAWN/NOWAIT/INPUT=NL:/OUTPUT=S6.LOG SHOW SYMBOL TCX
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ TYPE S6.LOG
+  TCX = "tcx-sym"
+$ WRITE SYS$OUTPUT "===SPAWN-END==="
+===SPAWN-END===
+$ TYPE NOSUCH.TXT
+%TYPE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCH.TXT;
+-RMS-E-FNF, file not found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10951238"
+$ TYPE TA.TXT,NOSUCH.TXT
+alpha one
+alpha two
+%TYPE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCH.TXT;
+-RMS-E-FNF, file not found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10951238"
+$ TYPE NOSUCH.TXT,TA.TXT,NOSUCH2.TXT
+%TYPE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCH.TXT;
+-RMS-E-FNF, file not found
+ 
+SYS$SYSROOT:[SYSMGR]TA.TXT;1
+ 
+alpha one
+alpha two
+%TYPE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR]NOSUCH2.TXT;
+-RMS-E-FNF, file not found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10951238"
+$ TYPE TA.TXT,,TB.TXT
+%DCL-W-NULFIL, missing or invalid file specification - respecify
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X000380E0"
+$ TYPE TA.TXT TB.TXT
+%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters
+ \TB\
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00038098"
+$ 

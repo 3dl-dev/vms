@@ -1,0 +1,25 @@
+# creprc-subprocess-output-file-on-creator-terminal -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC of a SUBPROCESS whose output names a VMS file gives it that file as SYS\$OUTPUT (SPAWN/OUTPUT=file), never its creator's terminal (rd vms-691d)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_dcl_spawn_io";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation honours a VMS-file output only for a DETACHED process again, so a SPAWNed subprocess keeps its creator's stream: its output lands on the creator's terminal and the /OUTPUT file is never created -- the V0.7-14 shape seen in the vms-1b68 re-fire. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+SPAWN/OUTPUT=file: the subprocess's output is a record of that file (read through RMS)
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i '/NEGCTL-ANCHORED (creprc-subprocess-output-file-on-creator-terminal)/{n;s|^                int vfile = fd < 0 \&\& creprc_is_vms_file_spec(path);$|                int vfile = fd < 0 \&\& detached \&\& creprc_is_vms_file_spec(path); /* NEGCTL creprc-subprocess-output-file-on-creator-terminal */|}' "$_file"
+    :
+}

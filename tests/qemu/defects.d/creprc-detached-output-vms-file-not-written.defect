@@ -20,6 +20,6 @@ EOT
 }
 
 defect_apply() {
-        sed -i '/NEGCTL-ANCHORED (creprc-detached-output-vms-file-not-written)/{n;s|^                if (fd < 0 \&\& detached \&\& creprc_is_vms_file_spec(path))$|                if (0 \&\& fd < 0 \&\& detached \&\& creprc_is_vms_file_spec(path)) /* NEGCTL creprc-detached-output-vms-file-not-written */|}' "$_file"
+        sed -i '/NEGCTL-ANCHORED (creprc-detached-output-vms-file-not-written)/{n;s|^                if (vfile)$|                if (0 \&\& vfile) /* NEGCTL creprc-detached-output-vms-file-not-written */|}' "$_file"
     :
 }

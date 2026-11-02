@@ -20,6 +20,6 @@ EOT
 }
 
 defect_apply() {
-        sed -i '/NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal)/{n;s|^                if (fd < 0 \&\& detached)$|                if (0 \&\& fd < 0 \&\& detached) /* NEGCTL creprc-detached-output-on-creator-terminal */|}' "$_file"
+        sed -i '/NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal)/{n;s|^                if (fd < 0 \&\& (detached \|\| vfile))$|                if (0 \&\& fd < 0 \&\& (detached \|\| vfile)) /* NEGCTL creprc-detached-output-on-creator-terminal */|}' "$_file"
     :
 }

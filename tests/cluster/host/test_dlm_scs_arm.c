@@ -158,6 +158,29 @@ static void arm_bindings(void)
 	    "stop: the engine goes back to purely local operation");
 	has("cnxman_set_dlm(cl, NULL)",
 	    "stop: the connection manager stops handing it messages");
+
+	/* rd vms-2fa: THE REBUILD WINDOW is the barrier's own state, read
+	 * against this node's own LOCKDIRWT, and the barrier holds on it. */
+	has("d->role.barrier_released = dlm_arm_barrier_released;",
+	    "rd vms-2fa: the barrier tells the arm every release");
+	has("d->role.rebuild_outstanding = dlm_arm_rebuild_outstanding;",
+	    "rd vms-2fa: ...and reads what its next frame waits for");
+	has("vms_dlm_rm_rb_barrier_released(&d->rm, step,\n"
+	    "\t\t\t\t       (uint32_t)d->cl->params.lockdirwt,",
+	    "*** rd vms-2fa: R is chosen off THIS node's own SYSGEN LOCKDIRWT, "
+	    "never a constant ***");
+	has("(!d->cl->club.transition_active ||\n"
+	    "\t\tvms_dlm_rm_rb_window_open(&d->rm));",
+	    "*** rd vms-2fa: inside a transition the rebuild runs only while "
+	    "the window is open (test_dlm_rebuild's rb_ready mirrors this) ***");
+	before("vms_dlm_rm_rb_window_close(&d->rm);\n\tvms_dlm_rm_rb_kick(&d->rm);",
+	       "static void dlm_arm_member_departed(",
+	       "rd vms-2fa: the transition's end shuts the window BEFORE its "
+	       "kick, so nothing goes out after the barrier");
+	has("(void)vms_dlm_rm_rb_expire(&d->rm, dlm_arm_now_ms(d),\n"
+	    "\t\t\t\t(uint32_t)d->cl->club.recnxinterval * 1000u);",
+	    "rd vms-2fa: an unanswered record is bounded by the cluster's own "
+	    "RECNXINTERVAL, on the arm's beat");
 	has("vms_lock_dlm_set_delivery_proc(NULL)",
 	    "stop: the delivery-proc registration is cleared");
 
@@ -929,6 +952,12 @@ static void cnxman_legs(void)
 	       "cnxman_dlm_rx(cn, &env, body, len",
 	       "the DLM receive leg runs AFTER the join/barrier/coordinator, so "
 	       "the barrier keeps the op-0x0d record it owns in a transition");
+	before("cnxman_dlm_rx(cn, &env, body, len",
+	       "cnxman_barrier_rebuild_retry(&cn->barrier);",
+	       "rd vms-2fa: after a DLM frame (maybe the last answer) the held "
+	       "step report is retried...");
+	has("cnxman_coord_rebuild_retry(&cn->coord);",
+	    "rd vms-2fa: ...and the held release");
 	before("cnxman_dlm_rx(cn, &env, body, len",
 	       "cn->frames_unrouted++",
 	       "... and BEFORE the unrouted counter, so DLM traffic is not "

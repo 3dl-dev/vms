@@ -346,10 +346,17 @@ static int d_ho_valblk(void *ctx, const struct vms_dlm_adopt_valblk *v)
 	return vms_lock_dlm_handover_valblk(v) == SS__NORMAL;
 }
 
+/* The arm's rb_ready (vms_dlm_scs.c dlm_arm_rb_ready, source-scanned by
+ * test_dlm_scs_arm): the vector is built, and either no transition is
+ * running or the rebuild window is open. */
+static int g_in_transition;
+static struct vms_dlm_rm g_rm;
+
 static int d_rb_ready(void *ctx)
 {
 	(void)ctx;
-	return g_ready;
+	return g_ready &&
+	       (!g_in_transition || vms_dlm_rm_rb_window_open(&g_rm));
 }
 
 static int d_rb_tree_next(void *ctx, uint32_t dep,
@@ -387,22 +394,18 @@ static int d_rb_install(void *ctx, const struct vms_dlm_adopt_lock_rec *r,
 }
 
 /*
- * THE REBUILD STEP (rd vms-bcb). Every real op-0x08 goes inside the barrier's
- * rebuild step; the executive leaves this door UNBOUND (= closed) until a
- * barrier FSM holds that step. Sections 1-3 bind it OPEN: they pin what a
- * record carries and how the table paces it once it may be sent. Section 4
- * leaves it unbound, exactly as the executive does.
+ * THE REBUILD WINDOW (rd vms-bcb, vms-2fa). Every real op-0x08 goes out after
+ * the barrier release of step R (5 for a weighted sender, 6 for a weight-0
+ * one) and before the sender's next barrier frame; the barrier FSMs tell the
+ * table each release (vms_dlm_rm_rb_barrier_released). Sections 1-3 open it
+ * as a weight-0 node's release 6 does, before the departure: they pin what a
+ * record carries and how the table paces it once it may be sent. Section 5
+ * never opens it (the record lab33a sent after release 12); section 7 drives
+ * the releases one by one.
  */
 static int g_bind_window = 1;
 
-static int d_rb_window(void *ctx)
-{
-	(void)ctx;
-	return 1;
-}
-
 static struct vms_dlm_rm_ops g_ops;
-static struct vms_dlm_rm g_rm;
 
 static void table_up(uint32_t m0, uint32_t m1)
 {
@@ -426,12 +429,15 @@ static void table_up(uint32_t m0, uint32_t m1)
 	g_ops.ho_rehome = d_ho_rehome;
 	g_ops.ho_valblk = d_ho_valblk;
 	g_ops.rb_ready = d_rb_ready;
-	g_ops.rb_window = g_bind_window ? d_rb_window : NULL;
 	g_ops.rb_tree_next = d_rb_tree_next;
 	g_ops.rb_dir_entry = d_rb_dir_entry;
 	g_ops.rb_dir_claim = d_rb_dir_claim;
 	g_ops.rb_install = d_rb_install;
 	vms_dlm_rm_init(&g_rm, &g_ops);
+	if (g_bind_window)
+		vms_dlm_rm_rb_barrier_released(&g_rm,
+					       vms_dlm_rb_release_step(0u), 0u,
+					       0u);
 	/* VAX1 is already gone from the CLUB when its departure is told. */
 	g_members[0] = m0;
 	g_members[1] = m1;
@@ -1059,7 +1065,7 @@ static void test_lab33a_no_record_outside_the_rebuild_step(void)
 
 	printf("-- rd vms-bcb: lab33a replayed -- no op-0x08 outside the "
 	       "rebuild step\n");
-	g_bind_window = 0;                 /* the executive's binding */
+	g_bind_window = 0;                 /* no release R: the window shut */
 
 	/* OVMXE holds DEPT, mastered by VAX1; VAX2 is DEPT's directory. */
 	(void)engine_up(CSID_OVMXE, 0x10000005u);
@@ -1211,6 +1217,214 @@ static void test_which_pair_the_record_relays(void)
 	engine_down();
 }
 
+
+/* ================================================================== *
+ * 7. THE WINDOW RIDES THE BARRIER (rd vms-2fa; tests/lab/captures/
+ *    vms-2fa-rebuild-step-20261102). The releases arrive one at a time,
+ *    as the barrier FSMs tell them; the record must go out on release R
+ *    and on no other -- R = 6 for a weight-0 sender (arm 3b, lab33a's
+ *    role: frames 21 release 6, 22 the ROOT, 23 the 0xf9, 24 step 7) and
+ *    5 for a weighted one (arm 2: 796 of 796 after release 5).
+ * ================================================================== */
+#define RB_NOW0   1000u               /* the table's clock at release R  */
+#define RB_RECNX  20000u              /* RECNXINTERVAL 20 s, in ms       */
+
+/* OVMXE holds DEPT at CR, VAX1 masters it and leaves; VAX2 is the directory.
+ * The departure is told at the GO, before release 1, as the arm tells it. */
+static uint32_t lab33a_role(void)
+{
+	uint32_t root;
+
+	g_bind_window = 0;
+	(void)engine_up(CSID_OVMXE, 0x10000005u);
+	table_up(CSID_VAX2, 0u);
+	g_bind_window = 1;
+	root = enq("DEPT", LCK_K_CRMODE, 0u);
+	ct_check(root != 0u && vax1_grants(root, 0x0b000439u),
+		 "OVMXE's DEPT root at CR is a proxy naming VAX1");
+	g_dir_of_names = CSID_VAX2;
+	g_in_transition = 1;               /* told at the GO, mid-transition */
+	vax1_departs();
+	return root;
+}
+
+/* The transition's end, as the arm runs it: the window shut, then a kick. */
+static void transition_ends(void)
+{
+	g_in_transition = 0;
+	vms_dlm_rm_rb_window_close(&g_rm);
+	vms_dlm_rm_rb_kick(&g_rm);
+}
+
+/* Release `from`..`to`, recording how many records were on the wire after
+ * each. */
+static void releases(uint32_t from, uint32_t to, uint32_t ldw,
+		     uint32_t *sent_after)
+{
+	uint32_t n;
+
+	for (n = from; n <= to; n++) {
+		vms_dlm_rm_rb_barrier_released(&g_rm, n, ldw, RB_NOW0);
+		sent_after[n] = g_n_sent;
+	}
+}
+
+static void test_the_window_rides_the_barrier(void)
+{
+	uint32_t sent_after[13], root, n;
+	uint8_t ans[VMS_CM_BODY_LEN];
+
+	printf("-- rd vms-2fa: the record goes out on release R and on no "
+	       "other\n");
+	ct_check_eq_u32(vms_dlm_rb_release_step(0u), 6u,
+			"R for a weight-0 node is 6 (588 of 588 real records)");
+	ct_check_eq_u32(vms_dlm_rb_release_step(1u), 5u,
+			"R for a weighted node is 5 (1,377 of 1,377)");
+	ct_check_eq_u32(vms_dlm_rb_release_step(3u), 5u,
+			"  any non-zero weight");
+
+	/* --- arm 3b / lab33a: a weight-0 survivor --- */
+	memset(sent_after, 0, sizeof(sent_after));
+	root = lab33a_role();
+	ct_check_eq_u32(g_n_sent, 0u, "the departure (at the GO) sends nothing");
+	releases(1u, 5u, 0u, sent_after);
+	{
+		/* Literal labels: the negctl manifest names them. */
+		static const char *const early[6] = { "",
+			"*** release 1: no record yet (an EARLY record is "
+			"outside every real one) ***",
+			"*** release 2: no record yet (an EARLY record is "
+			"outside every real one) ***",
+			"*** release 3: no record yet (an EARLY record is "
+			"outside every real one) ***",
+			"*** release 4: no record yet (an EARLY record is "
+			"outside every real one) ***",
+			"*** release 5: no record yet (an EARLY record is "
+			"outside every real one) ***" };
+
+		for (n = 1u; n <= 5u; n++)
+			ct_check_eq_u32(sent_after[n], 0u, early[n]);
+	}
+	ct_check(!vms_dlm_rm_rb_window_open(&g_rm), "  the window is shut");
+	releases(6u, 6u, 0u, sent_after);
+	ct_check_eq_u32(sent_after[6], 1u,
+			"*** release 6: the ROOT goes out NOW (arm 3b frame 22), "
+			"not at the transition's end (lab33a frame 7801) ***");
+	ct_check(g_n_sent == 1u && g_sent[0].csid == CSID_VAX2 &&
+		 g_sent[0].body[8] == 0x02 && g_sent[0].body[9] == 0x08 &&
+		 le32(g_sent[0].body + 24) == root,
+		 "  a cat-0x02 op-0x08 ROOT for our DEPT lock, to the directory "
+		 "VAX2");
+	ct_check_eq_u32(vms_dlm_rm_rb_outstanding(&g_rm), 1u,
+			"*** ONE record unanswered: what the barrier holds step 7 "
+			"on ***");
+	answer_for(ans, ra1b_vax2_rmt1_ans, root);
+	ct_check(vms_dlm_rm_rb_answer(&g_rm, CSID_VAX2, 0x82, 0x01, ans,
+				      VMS_CM_BODY_LEN) == 1,
+		 "VAX2's 0xf9 (frame 23) is the answer");
+	ct_check_eq_u32(vms_dlm_rm_rb_outstanding(&g_rm), 0u,
+			"*** answered: nothing outstanding, step 7 may go ***");
+	ct_check_eq_u32(g_rm.rb_mastered, 1u, "  OVMXE now masters DEPT");
+	releases(7u, 12u, 0u, sent_after);
+	ct_check(!vms_dlm_rm_rb_window_open(&g_rm),
+		 "release 7 shut the window");
+	ct_check_eq_u32(g_n_sent, 1u, "  and nothing more went out through "
+			"release 12");
+	transition_ends();
+	ct_check_eq_u32(g_n_sent, 1u, "  nor at the transition's end");
+	ct_check_eq_u32(g_rm.rb_out_of_window, 0u,
+			"  and no tree was stopped for the step");
+	ct_check_eq_u32(g_rm.rb_windows_opened, 1u, "one window, at release 6");
+	engine_down();
+
+	/* --- arm 2: the same holder, its own LOCKDIRWT 1 --- */
+	memset(sent_after, 0, sizeof(sent_after));
+	root = lab33a_role();
+	releases(1u, 4u, 1u, sent_after);
+	ct_check_eq_u32(sent_after[4], 0u,
+			"weighted: nothing through release 4");
+	releases(5u, 5u, 1u, sent_after);
+	ct_check_eq_u32(sent_after[5], 1u,
+			"*** weighted: the ROOT goes out on release 5 (arm 2, "
+			"796 of 796) ***");
+	answer_for(ans, ra1b_vax2_rmt1_ans, root);
+	(void)vms_dlm_rm_rb_answer(&g_rm, CSID_VAX2, 0x82, 0x01, ans,
+				   VMS_CM_BODY_LEN);
+	releases(6u, 12u, 1u, sent_after);
+	ct_check_eq_u32(g_n_sent, 1u,
+			"  and release 6 is just another release to it");
+	transition_ends();
+	engine_down();
+}
+
+/* A barrier that did NOT hold: release R+1 arrives with a record still out,
+ * and the answer comes after it. The next record (the sub) must not go. */
+static void test_no_record_after_the_window_shuts(void)
+{
+	uint32_t root, s0;
+	uint8_t ans[VMS_CM_BODY_LEN];
+
+	printf("-- rd vms-2fa: an answer after release R+1 sends nothing "
+	       "more\n");
+	g_bind_window = 0;
+	(void)engine_up(CSID_VAX2, 0x20400217u);
+	table_up(CSID_VAX3, 0u);
+	g_bind_window = 1;
+	root = enq("RMT1", LCK_K_PRMODE, 0u);
+	(void)vax1_grants(root, 0x05000024u);
+	s0 = enq("S0", LCK_K_CRMODE, root);
+	ct_check(s0 != 0u && vax1_grants(s0, 0x0600070au),
+		 "RMT1 PR with S0 CR under it, granted by VAX1");
+	g_dir_of_names = CSID_VAX3;
+	g_in_transition = 1;
+	vax1_departs();
+	vms_dlm_rm_rb_barrier_released(&g_rm, 6u, 0u, RB_NOW0);
+	ct_check_eq_u32(g_n_sent, 1u, "release 6: the ROOT goes");
+	vms_dlm_rm_rb_barrier_released(&g_rm, 7u, 0u, RB_NOW0);
+	ct_check(!vms_dlm_rm_rb_window_open(&g_rm), "release 7 shuts it");
+	answer_for(ans, ra1b_vax3_rmt1_ans, root);   /* a real 0xfa */
+	ct_check(vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01, ans,
+				      VMS_CM_BODY_LEN) == 1,
+		 "the late 0xfa re-homes the root");
+	ct_check_eq_u32(g_n_sent, 1u,
+			"*** the SUB it would release is NOT sent: the window "
+			"is shut ***");
+	ct_check_eq_u32(g_rm.rb_out_of_window, 1u, "  the tree stopped, counted");
+	transition_ends();
+	engine_down();
+}
+
+/* An answer that never comes: bounded by the cluster's RECNXINTERVAL. */
+static void test_an_unanswered_record_is_bounded(void)
+{
+	uint32_t stopped0;
+
+	printf("-- rd vms-2fa: a record nobody answers holds the barrier for "
+	       "RECNXINTERVAL, no longer\n");
+	(void)lab33a_role();
+	vms_dlm_rm_rb_barrier_released(&g_rm, 6u, 0u, RB_NOW0);
+	ct_check_eq_u32(vms_dlm_rm_rb_outstanding(&g_rm), 1u,
+			"release 6: one record out");
+	stopped0 = vms_dlm_rm_rb_stopped(&g_rm);
+	ct_check_eq_u32(vms_dlm_rm_rb_expire(&g_rm, RB_NOW0 + RB_RECNX - 1u,
+					     RB_RECNX), 0u,
+			"  a moment short of RECNXINTERVAL: still held");
+	ct_check_eq_u32(vms_dlm_rm_rb_expire(&g_rm, RB_NOW0 + 5000u, 0u), 0u,
+			"  no interval, no expiry");
+	ct_check_eq_u32(vms_dlm_rm_rb_outstanding(&g_rm), 1u, "  still one");
+	ct_check_eq_u32(vms_dlm_rm_rb_expire(&g_rm, RB_NOW0 + RB_RECNX,
+					     RB_RECNX), 1u,
+			"*** at RECNXINTERVAL the tree is stopped ***");
+	ct_check_eq_u32(vms_dlm_rm_rb_outstanding(&g_rm), 0u,
+			"  nothing outstanding: the barrier goes on");
+	ct_check_eq_u32(g_rm.rb_answer_expired, 1u, "  counted");
+	ct_check_eq_u32(vms_dlm_rm_rb_stopped(&g_rm), stopped0 + 1u,
+			"  in the stopped total");
+	ct_check_eq_u32(g_n_sent, 1u, "  and nothing was re-sent");
+	transition_ends();
+	engine_down();
+}
+
 int main(void)
 {
 	printf("test_dlm_rebuild: the failover rebuild, on the real lock "
@@ -1221,5 +1435,8 @@ int main(void)
 	test_what_stops_a_rebuild();
 	test_lab33a_no_record_outside_the_rebuild_step();
 	test_which_pair_the_record_relays();
+	test_the_window_rides_the_barrier();
+	test_no_record_after_the_window_shuts();
+	test_an_unanswered_record_is_bounded();
 	return ct_summary("test_dlm_rebuild");
 }

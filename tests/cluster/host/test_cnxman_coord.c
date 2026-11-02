@@ -1287,6 +1287,111 @@ static void test_release_held_for_outstanding_rebuild_records(void)
 	ct_check_eq_u32(g.c.step, 2, "and the barrier advances");
 }
 
+
+/*
+ * THE COORDINATOR'S OWN RECORDS (rd vms-2fa; arm 1: VAX3 the weight-0
+ * coordinator, release 6, 281 op-0x08 records, every one answered, then
+ * release 7). The window opens when THIS node has sent release R to everybody;
+ * release R+1 waits for the last answer even once every member reported R+1.
+ */
+static uint32_t g_crb_open_on, g_crb_records, g_crb_outstanding;
+static uint32_t g_crb_told[16], g_crb_rel_when[16], g_crb_n_told;
+
+static uint32_t crb_released(void *ctx, const struct cnxman_transition *tr,
+			     uint32_t step)
+{
+	(void)ctx; (void)tr;
+	if (g_crb_n_told < 16u) {
+		g_crb_told[g_crb_n_told] = step;
+		g_crb_rel_when[g_crb_n_told] =
+			count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER_REL);
+		g_crb_n_told++;
+	}
+	if (step == g_crb_open_on)
+		g_crb_outstanding = g_crb_records;
+	return g_crb_outstanding;
+}
+
+static uint32_t crb_outstanding(void *ctx)
+{
+	(void)ctx;
+	return g_crb_outstanding;
+}
+
+static const struct dlm_scs_role_ops crb_dlm_ops = {
+	.transition_begin    = bed_dlm_begin,
+	.transition_end      = bed_dlm_end,
+	.barrier_released    = crb_released,
+	.rebuild_outstanding = crb_outstanding,
+	.ctx                 = &g,
+};
+
+static void report_all(uint32_t step)
+{
+	report_step(CSB_VAX1, step);
+	report_step(CSB_VAX2, step);
+	report_step(bed_join_csb(2), step);
+}
+
+static void test_coordinator_holds_its_release_for_its_records(void)
+{
+	uint32_t r, n, i;
+
+	printf("\n-- rd vms-2fa: the coordinator's own rebuild records hold "
+	       "its release R+1 --\n");
+	for (r = 5u; r <= 6u; r++) {
+		bed_init(2);
+		g_crb_open_on = r;
+		g_crb_records = 281u;
+		g_crb_outstanding = 0u;
+		g_crb_n_told = 0u;
+		cnxman_coord_set_dlm(&g.c, &crb_dlm_ops);
+		drive_add_to_barrier(2);
+		for (n = 1u; n <= r; n++)
+			report_all(n);
+		ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG,
+					   VMS_CM_OP_BARRIER_REL), 3u * r,
+				"  releases 1..R went to all three, unheld");
+		ct_check_eq_u32(g_crb_outstanding, 281u,
+				"  release R opened the window: 281 records out");
+		report_all(r + 1u);
+		ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG,
+					   VMS_CM_OP_BARRIER_REL), 3u * r,
+				r == 5u ?
+				"*** R=5: everybody reported 6, but release 6 "
+				"is HELD for our records ***" :
+				"*** R=6: everybody reported 7, but release 7 "
+				"is HELD for our records ***");
+		ct_check(g.c.rebuild_holds >= 1u, "  the hold is counted");
+		cnxman_coord_timer(&g.c);
+		cnxman_coord_rebuild_retry(&g.c);
+		ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG,
+					   VMS_CM_OP_BARRIER_REL), 3u * r,
+				"  neither the beat nor a retry releases it while "
+				"one is unanswered");
+		g_crb_outstanding = 0u;           /* the last answer */
+		cnxman_coord_rebuild_retry(&g.c);
+		ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG,
+					   VMS_CM_OP_BARRIER_REL),
+				3u * (r + 1u),
+				"*** answered: release R+1 goes to everybody ***");
+		for (n = r + 2u; n <= CNXMAN_COORD_BARRIER_STEPS; n++)
+			report_all(n);
+		ct_check(g.c.state == (uint8_t)CNXMAN_COORD_COMPLETE,
+			 "  and the transition completes");
+		ct_check_eq_u32(g_crb_n_told, CNXMAN_COORD_BARRIER_STEPS - 1u,
+				"  the lock manager was told releases 1..11");
+		for (i = 0u; i < g_crb_n_told; i++) {
+			if (g_crb_told[i] != i + 1u ||
+			    g_crb_rel_when[i] != 3u * (i + 1u))
+				break;
+		}
+		ct_check_eq_u32(i, g_crb_n_told,
+				"  *** each told AFTER that release reached "
+				"every member, in order ***");
+	}
+}
+
 /* ==========================================================================
  * 7. COLLISIONS AND LOSSES -- book pp. 7-32/7-41/7-42
  * ========================================================================== */
@@ -3221,6 +3326,7 @@ int main(void)
 	test_retransmitted_step_is_reacknowledged();
 
 	test_release_held_for_outstanding_rebuild_records();
+	test_coordinator_holds_its_release_for_its_records();
 
 	test_collision_before_the_go_hands_off();
 	test_collision_after_the_go_is_past_the_point_of_no_return();

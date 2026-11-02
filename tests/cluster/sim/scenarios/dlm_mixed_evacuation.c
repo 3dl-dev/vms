@@ -616,7 +616,7 @@ static int vax_grants(uint32_t our_lkid, uint32_t vax_master_lkid, uint8_t mode)
 		return -1;
 	memset(frame, 0, sizeof(frame));
 	if (vms_dlm_enq_response_build_grant(o.last, VMS_CM_BODY_LEN,
-					     vax_master_lkid, NULL, frame,
+					     vax_master_lkid, NULL, 0u, frame,
 					     (uint32_t)sizeof(frame),
 					     &written) != VMS_CODEC_OK)
 		return -1;
@@ -1067,7 +1067,7 @@ static void a_grantable_remote_request_is_answered_correlatably(void)
 	memset(reply, 0, sizeof(reply));
 	ct_check(vms_dlm_enq_response_build_grant(body_of(frame),
 						  VMS_CM_BODY_LEN,
-						  res.master_lkid, NULL, reply,
+						  res.master_lkid, NULL, 0u, reply,
 						  (uint32_t)sizeof(reply),
 						  &written) == VMS_CODEC_OK,
 		 "the grant frame is built from the request and the engine's "
@@ -1185,7 +1185,7 @@ static void a_queued_vms_waiter_is_granted_when_the_holder_releases(void)
 	 * the same handle from the engine's own DEQ result,
 	 * `deferred_master_lkid`.) */
 	ct_check(vms_dlm_enq_response_build_grant(kept, n, queued_master_lkid,
-						  NULL, reply,
+						  NULL, 0u, reply,
 						  (uint32_t)sizeof(reply),
 						  &written) == VMS_CODEC_OK,
 		 "the deferred grant builds from it");

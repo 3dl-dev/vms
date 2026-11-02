@@ -251,7 +251,22 @@ void cnxman_quorum_recompute(struct vms_club *club)
 					    sum_votes);
 
 	club->cevotes = new_cevotes;
-	club->quorum = cnxman_quorum_of_cevotes(new_cevotes);
+	/*
+	 * ...UNLESS THE LAST TRANSITION'S COORDINATOR SAID OTHERWISE (rd
+	 * vms-c350). p. 7-42 task 2 makes the coordinator's proposed quorum the
+	 * effective one, and between transitions nothing changes it (p. 7-4:
+	 * quorum moves at transitions). A quorum adjustment -- REMOVE_NODE,
+	 * SET CLUSTER/EXPECTED_VOTES (pp. 7-31, 7-47) -- is exactly a proposal
+	 * BELOW (CEVOTES+2)/2, so re-deriving it here would undo it on this
+	 * node alone and leave this node blocking while the cluster runs on.
+	 * Measured: after VAX1's REMOVE_NODE, VAX2 proposed and held QUORUM 1
+	 * with max{EV} still 3. The availability test below is unchanged:
+	 * present votes against the quorum in force.
+	 */
+	if (club->quorum_coord_valid)
+		club->quorum = club->quorum_coord;
+	else
+		club->quorum = cnxman_quorum_of_cevotes(new_cevotes);
 	club->expected_votes = (uint16_t)max_expected;
 	club->quorum_lost = (uint8_t)(present_votes < (uint32_t)club->quorum);
 

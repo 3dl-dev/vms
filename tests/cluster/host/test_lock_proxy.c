@@ -1567,6 +1567,115 @@ static void rms326_the_executive_takes_the_file_lock(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * rd vms-3ea: AN NL REQUEST THE MASTER GRANTS WAKES ITS $ENQW.
+ *
+ * MEASURED (diagnostic run 41389303326, the 2-node CLUSTER_CONFIG_LAN e2e):
+ * node B's $MOUNT of a volume whose label node A already had mounted never
+ * returned. CNXTRACE on B read `requests sent=1 grants received=1
+ * proxy_lkbs=1` and on A `received=1 grants sent=1`: the master answered,
+ * the wire arm took the grant -- and the $ENQW of the standing F11B$v<label>
+ * lock (NL) slept on. The engine's grant receive woke a waiter only for a
+ * mode ABOVE NL, because its ioctl ancestry used NL to mean "queued-reply".
+ * The wire arm never hands it a queued reply (the FSM's 0xfb event calls no
+ * grant_recv), so through that door an NL grant IS a grant.
+ *
+ * Driven exactly as the MOUNT path drives it: vms_lock_acp_vol_standing on a
+ * thread, the master's grant through vms_lock_dlm_proxy_grant_recv -- the
+ * door the wire arm uses -- carrying no mode (38 of 38 real grants clear
+ * body[30]). The wait is bounded HERE, in the test, so a regression fails
+ * instead of hanging the suite.
+ * ================================================================ */
+struct standing_result {
+	struct vms_proc *proc;
+	uint32_t         status;
+	uint32_t         lkid;
+	volatile int     done;
+};
+
+static void *standing_thread(void *arg)
+{
+	struct standing_result *r = arg;
+
+	wire_learn("F11B$vOVMXDATA");
+	r->status = vms_lock_acp_vol_standing(r->proc, "F11B$vOVMXDATA",
+					      &r->lkid);
+	r->done = 1;
+	return NULL;
+}
+
+static void e3ea_nl_grant_wakes_the_standing_lock(void)
+{
+	struct vms_dlm_proxy_post post;
+	struct vms_dlm_proxy_grant g;
+	struct standing_result sr;
+	struct vms_proc proc;
+	pthread_t th;
+	int i;
+
+	printf("--- rd vms-3ea: the master's grant of an NL $ENQW wakes it ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	memset(&sr, 0, sizeof(sr));
+	sr.proc = &proc;
+	if (pthread_create(&th, NULL, standing_thread, &sr) != 0) {
+		ct_check(0, "pthread_create for the standing-lock $ENQW");
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check(fm_wait_posts(1, &post),
+		 "the standing NL request was POSTED to the cluster");
+	ct_check_eq_u32(post.lkmode, LCK_K_NLMODE, "the posted mode is NL");
+	usleep(30 * 1000);
+	ct_check(!sr.done, "the $ENQW is asleep until the master answers");
+
+	/* The master's grant, as the wire arm's FSM hands it to the engine. */
+	memset(&g, 0, sizeof(g));
+	g.req_lkid = post.req_lkid;
+	g.master_lkid = 0x00006666u;
+	g.master_csid = CSID_MASTER;
+	ct_check_eq_u32(vms_lock_dlm_proxy_grant_recv(&g), SS__NORMAL,
+			"the master's GRANT of the NL request is accepted");
+
+	for (i = 0; i < 400 && !sr.done; i++)
+		usleep(5 * 1000);
+	ct_check(sr.done,
+		 "*** the NL $ENQW WOKE on the master's grant (was: slept forever, "
+		 "node B's MOUNT hang) ***");
+	if (!sr.done) {
+		/* The waiter cannot be unblocked; leave it rather than tear the
+		 * engine down under a sleeping thread. The check above failed. */
+		pthread_detach(th);
+		return;
+	}
+	pthread_join(th, NULL);
+	ct_check(sr.status == SS__NORMAL && sr.lkid == post.req_lkid,
+		 "the standing lock is granted, under the proxy's own handle");
+
+	/* The refusal path's release: a DEQ posted to the master, never waited
+	 * on, and the proxy is gone. */
+	ct_check_eq_u32(vms_lock_acp_vol_release(&proc, sr.lkid), SS__NORMAL,
+			"the refusal path's release returns without waiting");
+	ct_check(fm_wait_posts(2, &post), "the release was posted");
+	ct_check_eq_u32(post.op, VMS_DLM_OP_DEQ, "posted op is DEQ");
+	ct_check_eq_u32(post.master_lkid, 0x00006666u,
+			"the release names the master's handle, as the master gave it");
+	ct_check_eq_u32(post.dst_csid, CSID_MASTER,
+			"the release is addressed to the master");
+	ct_check_eq_u32(do_deq(&proc, sr.lkid), SS__IVLOCKID,
+			"the proxy is gone after the release");
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -1584,5 +1693,6 @@ int main(void)
 	b67a_sublock_goes_to_the_parents_master();
 	b67a_sublock_refuses_a_parent_with_no_master_handle();
 	rms326_the_executive_takes_the_file_lock();
+	e3ea_nl_grant_wakes_the_standing_lock();
 	return ct_summary("test_lock_proxy");
 }

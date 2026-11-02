@@ -100,6 +100,13 @@ cluster_host_test(test_codec_dlm        test_codec_dlm.c)
 # positive assertion byte-exact against a real VAX V7.3 frame, plus a held-out
 # topology and one negative control per cell the codec decides.
 cluster_host_test(test_codec_remaster   test_codec_remaster.c)
+# rd vms-20c: the op-0x0d record decoded and REBUILT against every real record
+# in four uncompressed captures (1592 records, 2- and 3-node, VAX and OVMX
+# receivers): the cited span byte-identical, zero elsewhere, and the hash at
+# body[128:132] equal to the product's vms_dlm_name_hash of the identity.
+cluster_host_test(test_codec_dirreg     test_codec_dirreg.c)
+target_compile_definitions(test_codec_dirreg PRIVATE
+    OVMX_CAPTURE_DIR="${CMAKE_SOURCE_DIR}/tests/lab/captures")
 # rd vms-380 RA8 / rd vms-6ad1 RA7: score a FRESH remaster capture with the
 # SHIPPING builders, so a held-out proof tests the codec and not a script that
 # re-implements it. Reads `remaster_census.py --pairs` on stdin. Not a ctest --
@@ -1094,6 +1101,34 @@ set_tests_properties(cluster_host_test_dlm_deq_reachable PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-26e: RA7 fire A on the REAL engine. A tree adopted from a real
+# VAX keeps the value block the old master's op-0x1a carried, and the new
+# master's grant puts it -- and its sequence -- on the wire. The four frames
+# are capture fixtures (manifest-gated loader); a control replays the same
+# sequence without the op-0x1a and must reproduce the captured defect.
+add_executable(test_dlm_adopt_valblk test_dlm_adopt_valblk.c)
+target_include_directories(test_dlm_adopt_valblk PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_adopt_valblk PRIVATE
+    OVMX_CLUSTER_HOST
+    OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+    OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+)
+target_link_libraries(test_dlm_adopt_valblk PRIVATE
+    cluster_host_lock cluster_host_dlm cluster_host_fixture Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_adopt_valblk PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_adopt_valblk COMMAND test_dlm_adopt_valblk)
+set_tests_properties(cluster_host_test_dlm_adopt_valblk PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- rd vms-c72: the op-0x03/op-0x04 RECEIVE half really moves lock state ----
 # The mirror of test_dlm_deq_reachable above, on the same two library recipes
 # and for the same reason: the emit was proven and the RECEIVE was declined
@@ -1331,6 +1366,22 @@ set_tests_properties(cluster_host_remaster_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-20c: what a real op-0x0d record carries. Re-derives, from every
+# committed capture, the field map the codec's "THE op-0x0d RECORD'S FIELD MAP"
+# block quotes: 16800 of 16800 records carry the hash of their own identity,
+# and between two uses of one sender buffer nothing outside the identity, the
+# hash and the envelope changes (16147 of 16406) -- op-0x0d is a directory
+# registration, not a lock-state record.
+add_test(NAME cluster_host_dlm_dirreg_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_dirreg_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_dirreg_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
 # ---- rd vms-33a: what a HOLDER's op-0x12 record carries. The other half of the
 # remaster census: remaster_census.py measures the new master's ANSWER (which
 # OVMX builds today), this one measures the RECORD a real holder SENDS -- which
@@ -1343,6 +1394,26 @@ add_test(NAME cluster_host_rec12_holder_census
         "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(cluster_host_rec12_holder_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
+# ---- rd vms-874f: what a SURVIVING HOLDER sends when a lock tree's master
+# leaves. Each lock it holds in that tree goes to the new master as a cat-0x02
+# op-0x08 rebuild record -- ROOT first, then each SUB carrying the parent's
+# lkid on the new master, the 82/01 answer saying 0xf9 (the requester masters
+# the tree) or 0xfa (a master exists and granted). OVMX sends none, which is why
+# its locks die with a departed master. Pins the 550/338 ROOT/SUB split, the
+# parent-pair rule (338 of 338), the answer kinds (149/398/338), RA1b's RMT1
+# tree against SDA, and that the rd vms-629 SYS$SYS_ID lookup is the same
+# message -- so the sender and answerer are built from figures that cannot
+# drift from the bytes.
+add_test(NAME cluster_host_dlm_rebuild08_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_rebuild08_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_rebuild08_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;crash-safety"
     TIMEOUT 180
 )

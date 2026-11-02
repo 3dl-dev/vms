@@ -248,6 +248,7 @@ struct cnxman_barrier {
 	 * with no barrier: no real participant steps and no real coordinator
 	 * releases in one (rd vms-6e3). */
 	uint32_t merges_completed;
+	uint32_t proposals_taken;   /* opens whose own proposed QUORUM was taken (rd vms-c350) */
 
 	/*
 	 * THE COMMITS -- incremented ONLY by barrier_finish(), i.e. only on a

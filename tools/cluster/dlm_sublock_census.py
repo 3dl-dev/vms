@@ -169,7 +169,7 @@ def selftest(repo):
     # own four-arm capture, merged from main, one more): its arms hold
     # a ROOT only, so the numerator below is unmoved at 10 while the
     # denominator grows again -- the same shape rd vms-e80's 3.5x widening had.
-    check('real lock requests in the corpus', len(real), 76303)   # was 21,499; +3 with rd vms-6ad1's RA7 fires, all ROOT requests
+    check('real lock requests in the corpus', len(real), 76308)   # was 21,499; +4 with the rd vms-874f RA1b departure capture; +3 with rd vms-6ad1's RA7 fires, all ROOT requests; +1 with rd vms-93fa arm 1 (VAX1 -> VAX2, a ROOT request)
     check('real requests naming a sub-resource', len(subs), 10)   # was 7
     check('distinct senders of one', len({s for s, _d, _b, _p in subs}), 3)
     check('distinct sub-lock modes at body[30]',

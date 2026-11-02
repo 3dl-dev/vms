@@ -187,7 +187,7 @@ def selftest(repo):
     check('distinct real-ORIGINATED RMS$ names', len(real), 64)
     check('*** ...all of them the 26-byte binary form ***', len(pop), 64)
     check('frames carrying a real-originated RMS$ name',
-          sum(real.values()), 1894)
+          sum(real.values()), 1905)   # +11 from the rd vms-874f RA1b departure capture
     # rd vms-083's arm capture added a FIFTH OVMX-originated text name --
     # that node's own RMS lock during its boot. The figure is re-derived
     # with the corpus, exactly as the denominators above are.

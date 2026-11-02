@@ -49,6 +49,14 @@ struct vms_proc {
 static inline void exec_membar_producer(void) { __sync_synchronize(); }
 static inline void *exec_arena_alloc(size_t n) { return calloc(1, n ? n : 1); }
 static inline void exec_arena_free(void *p) { free(p); }
+/* rd vms-c01: the arena is backed as it fills. lnm_host_arena_cap, when not 0,
+ * is the most this backend will back -- a host test's "out of memory". */
+extern size_t lnm_host_arena_cap;
+static inline size_t exec_arena_grow(void *p, size_t need)
+{
+	(void)p;
+	return (lnm_host_arena_cap && need > lnm_host_arena_cap) ? lnm_host_arena_cap : need;
+}
 
 int  vms_lnm_init(void);
 long vms_ioctl_lnm_define(struct vms_proc *proc, unsigned long arg);

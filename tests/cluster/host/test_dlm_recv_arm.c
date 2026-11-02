@@ -330,7 +330,7 @@ static int build_grant_for(uint32_t req_lkid, uint32_t master_lkid,
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	return vms_dlm_enq_response_build_grant(reqframe + VMS_OFF_SYSAP_BODY,
 						VMS_CM_BODY_LEN, master_lkid,
-						NULL, frame,
+						NULL, 0u, frame,
 						VMS_CM_FRAME_LEN, &written) ==
 	       VMS_CODEC_OK ? 0 : -1;
 }

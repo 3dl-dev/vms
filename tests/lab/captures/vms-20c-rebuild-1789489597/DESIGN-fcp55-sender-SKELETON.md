@@ -1,5 +1,15 @@
 # FC-P5.5 design SKELETON — the survivor-side cat-0x02 op-0x0d REBUILD sender (vms-20c)
 
+> **SUPERSEDED 2026-11-02 (rd vms-20c re-scope).** The twin test this document asked for was run
+> against all 307 rejoin frames and 16,800 corpus records: an op-0x0d carries NO lock-holder field
+> (no mode, lkid, CSID, parent or value block). A sender writes only the envelope, `02 0d`, `0x0001`+
+> rebuild sequence, the resource identity at body[44:48+L] and its directory hash at body[128:132];
+> body[16:44] and the tail are message-buffer residue. op-0x0d is a master's DIRECTORY REGISTRATION.
+> Field map and evidence: docs/cluster-protocol-spec.md "The op-0x0d record's field map";
+> tools/cluster/dlm_dirreg_census.py --selftest; tests/cluster/host/test_codec_dirreg.c. The
+> `sda-before-vax1.txt` / `sda-*-vax2.txt` files this directory's README lists were never committed.
+
+
 Status: SKELETON for the ⭐⭐ conductor review. Mechanism + executive-read contract are
 authored from the GROUNDED capture (this directory). The exact op-0x0d field map and the
 code-integration points are PLACEHOLDERS to fill from (a) the conductor's grounded op-0x0d

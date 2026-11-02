@@ -29,6 +29,7 @@
 #endif
 #include <arpa/inet.h>
 #include <limits.h>
+#include <poll.h>
 /* NOTE: no <mntent.h>. The mount table is parsed by hand from /proc/mounts with
  * fopen/fgets (dcl_unit_is_mounted below) -- getmntent(3)/setmntent(3) are a
  * glibc-only convenience with no musl-static symbol, and <mntent.h> does not
@@ -61,6 +62,7 @@
 #include "vmsfs/device.h"
 #include "ovmx_layout.h"
 #include "vms_kif.h"
+#include "ovmx_status.h"    /* vms_status_string: TELNET-E-NOCONN secondary */
 
 /* TELNET / FTP client engines (vms-dbb) -- the SAME header the QEMU proof
  * (tests/qemu/test_syssvc_tcpip_client.c) drives, so the shipped verb and the
@@ -4235,15 +4237,131 @@ static int tcpip_tool_resolve(const char *facility, const char *host,
     return 0;
 }
 
+/*
+ * TELNET is FULL-DUPLEX, as the VMS TELNET client is: whatever the server sends
+ * is shown as it arrives, while the user types. One loop waits on the BGn:
+ * socket's readiness (the executive's readiness fd, vms_kif_bg_pollfd -- the
+ * fd carries no data, every byte still moves through the executive's
+ * IO$_READVBLK / IO$_WRITEVBLK) and polls the terminal's type-ahead through the
+ * executive terminal driver (dcl_tt_getc). The connection is the executive's
+ * BGn: unit reached by its executive channel (vms_kif_bg_*), the same way
+ * dcl_mbx.c reaches a mailbox, because that channel is what the readiness fd is
+ * minted from.
+ *
+ * Modes (RFC 857/858 as a VMS TELNET client does them): a server that WILL
+ * ECHO puts the session in CHARACTER mode -- each key goes out as typed and the
+ * server echoes it; otherwise LINE mode -- the terminal driver echoes and edits
+ * the line, which goes out at RETURN. A RETURN is sent as CR LF (RFC 854
+ * end-of-line). The escape character CTRL/] gives a "TELNET> " prompt: QUIT,
+ * EXIT or CLOSE ends the session, anything else resumes it. A session also ends
+ * when the server closes the connection.
+ */
+#define TELNET_ESCAPE 0x1D              /* CTRL/] */
+
+struct telnet_sess {
+    uint32_t xchan;                     /* executive BGn: channel */
+    struct tcpip_telnet_state tn;
+    unsigned char out[TCPIP_XFER_MAX];
+    uint32_t olen;
+};
+
+static uint32_t telnet_xsend(struct telnet_sess *ts, const unsigned char *b, uint32_t n)
+{
+    while (n > 0) {
+        uint32_t chunk = n > TCPIP_XFER_MAX ? TCPIP_XFER_MAX : n, act = 0;
+        uint32_t st = vms_kif_bg_send(ts->xchan, b, chunk, &act);
+        if (!(st & 1))
+            return st;
+        if (act == 0)
+            return SS$_ABORT;
+        b += act;
+        n -= act;
+    }
+    return SS$_NORMAL;
+}
+
+/* Queue user bytes for the server: 0xFF doubled (RFC 854), RETURN as CR LF. */
+static uint32_t telnet_put(struct telnet_sess *ts, const char *b, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)b[i];
+        if (ts->olen + 2 > sizeof ts->out) {
+            uint32_t st = telnet_xsend(ts, ts->out, ts->olen);
+            ts->olen = 0;
+            if (!(st & 1))
+                return st;
+        }
+        if (c == '\r' || c == '\n') {
+            ts->out[ts->olen++] = '\r';
+            ts->out[ts->olen++] = '\n';
+            continue;
+        }
+        if (c == TN_IAC)
+            ts->out[ts->olen++] = TN_IAC;
+        ts->out[ts->olen++] = c;
+    }
+    return SS$_NORMAL;
+}
+
+static uint32_t telnet_flush(struct telnet_sess *ts)
+{
+    uint32_t st = SS$_NORMAL;
+    if (ts->olen)
+        st = telnet_xsend(ts, ts->out, ts->olen);
+    ts->olen = 0;
+    return st;
+}
+
+/* One read from the server: show its data, answer its negotiation. Returns 1
+ * while the connection is open, 0 when the server closed it, -1 on an error. */
+static int telnet_from_server(struct telnet_sess *ts)
+{
+    unsigned char in[TCPIP_XFER_MAX];
+    unsigned char data[TCPIP_XFER_MAX];
+    unsigned char reply[96];
+    uint32_t got = 0, off = 0;
+    uint32_t st = vms_kif_bg_recv(ts->xchan, in, sizeof in, &got);
+
+    if (!(st & 1))
+        return -1;
+    if (got == 0)
+        return 0;
+    while (off < got) {
+        uint32_t dl = 0, rl = 0;
+        off += tcpip_telnet_filter(&ts->tn, in + off, got - off, data, sizeof data,
+                                   &dl, reply, sizeof reply, &rl);
+        if (dl)
+            fwrite(data, 1, dl, stdout);
+        if (rl && !(telnet_xsend(ts, reply, rl) & 1))
+            return -1;
+    }
+    fflush(stdout);
+    return 1;
+}
+
+/* CTRL/] -- the local command prompt. Returns 1 to end the session. */
+static int telnet_escape(void)
+{
+    char cmdl[64];
+    size_t i = 0;
+    int n = dcl_tt_read("\r\nTELNET> ", 10, cmdl, sizeof cmdl, 0, 0, NULL);
+    if (n < 0)
+        return n == DCL_TT_EOF;         /* CTRL/Z at the prompt: exit */
+    while (cmdl[i] == ' ' || cmdl[i] == '\t')
+        i++;
+    return tcpip_tool_iprefix(cmdl + i, "QUIT") || tcpip_tool_iprefix(cmdl + i, "EXIT") ||
+           tcpip_tool_iprefix(cmdl + i, "CLOSE");
+}
+
 int cmd_telnet(struct dcl_command *cmd)
 {
-    struct tcpip_conn conn;
+    struct telnet_sess *ts;
     uint32_t addr_be = 0;
     uint16_t port = 23;
-    char buf[1024];
-    char line[1024];
-    uint32_t got = 0;
-    uint32_t st;
+    uint32_t unit = 0, st;
+    char devnam[32];
+    int pfd = -1, ttmode, pending, closed_by = 0;
 
     if (cmd->param_count < 1) {
         dcl_error("TELNET", 2, "NOHOST", "missing host - supply an address to connect to");
@@ -4259,39 +4377,237 @@ int cmd_telnet(struct dcl_command *cmd)
         }
     }
 
+    ts = calloc(1, sizeof *ts);
+    if (!ts) {
+        dcl_error("TELNET", 2, "INSFMEM", "insufficient memory");
+        return SS$_INSFMEM;
+    }
+    tcpip_telnet_init(&ts->tn);
+
     printf("%%TELNET-I-TRYING, trying %s port %u ...\n", cmd->params[0], (unsigned)port);
-    st = tcpip_connect(&conn, addr_be, port);
+    fflush(stdout);
+    st = vms_kif_bg_create(&ts->xchan, &unit, devnam, sizeof devnam);
+    if (st & 1) {
+        st = vms_kif_bg_setmode(ts->xchan);
+        if (st & 1)
+            st = vms_kif_bg_connect(ts->xchan, 2 /* AF_INET */, tcpip_port_be(port), addr_be);
+        if (!(st & 1))
+            vms_kif_bg_dassgn(ts->xchan);
+    }
     if (!(st & 1)) {
-        if (st == SS$_NOSUCHDEV)
+        if (st == SS$_NOSUCHDEV) {
             dcl_error("TELNET", 2, "NONET",
                       "TCP/IP Services (BGn: executive device) is not available");
-        else
+        } else {
+            char sec[256];
             dcl_error("TELNET", 2, "NOCONN",
                       "cannot connect to %s port %u", cmd->params[0], (unsigned)port);
+            if (vms_status_string(st, sec, sizeof sec) > 0 && sec[0] == '%') {
+                sec[0] = '-';
+                fprintf(stderr, "%s\n", sec);
+            }
+        }
+        free(ts);
         return st;
     }
     printf("Connected to %s.\n", cmd->params[0]);
+    printf("%%TELNET-I-ESCAPE, escape character is ^]\n");
+    fflush(stdout);
 
-    /* Initial server banner, telnet option negotiation stripped. */
-    st = tcpip_telnet_recv(&conn, buf, sizeof(buf) - 1, &got);
-    if ((st & 1) && got) { fwrite(buf, 1, got, stdout); fflush(stdout); }
+    if (!(vms_kif_bg_pollfd(ts->xchan, &pfd) & 1))
+        pfd = -1;
+    /* the executive terminal driver, or (a host build with none) plain stdin;
+     * a key already typed is kept, not lost to the probe */
+    pending = dcl_tt_getc(1);
+    ttmode = pending != -2;
+    if (pending < 0)
+        pending = -1;
 
-    /* Half-duplex line loop over SYS$INPUT. */
-    while (fgets(line, sizeof(line), stdin)) {
-        if (tcpip_tool_iprefix(line, "quit") || tcpip_tool_iprefix(line, "exit"))
+    for (;;) {
+        struct pollfd pf[2];
+        int np = 0, r;
+
+        if (pfd >= 0) {
+            pf[np].fd = pfd; pf[np].events = POLLIN; pf[np].revents = 0; np++;
+        }
+        if (!ttmode) {
+            pf[np].fd = STDIN_FILENO; pf[np].events = POLLIN; pf[np].revents = 0; np++;
+        }
+        r = poll(pf, (nfds_t)np, ttmode ? 50 : -1);
+        if (r < 0 && errno != EINTR)
             break;
-        st = tcpip_telnet_send(&conn, line, (uint32_t)strlen(line));
-        if (!(st & 1)) break;
-        got = 0;
-        st = tcpip_telnet_recv(&conn, buf, sizeof(buf) - 1, &got);
-        if (!(st & 1) || got == 0) break;
-        fwrite(buf, 1, got, stdout);
-        fflush(stdout);
+        if (pfd < 0 || (r > 0 && (pf[0].revents & (POLLIN | POLLHUP | POLLERR)))) {
+            int k = telnet_from_server(ts);
+            if (k <= 0) {
+                closed_by = k == 0 ? 1 : 2;
+                break;
+            }
+        }
+
+        if (ttmode) {
+            int c, quit = 0;
+            /* everything typed since the last pass, at once */
+            while ((c = pending >= 0 ? pending : dcl_tt_getc(1)) >= 0) {
+                pending = -1;
+                if (c == TELNET_ESCAPE) {
+                    if (!(telnet_flush(ts) & 1) || telnet_escape()) {
+                        quit = 1;
+                        break;
+                    }
+                    continue;
+                }
+                if (tcpip_telnet_remote_echo(&ts->tn)) {
+                    char ch = (char)c;
+                    if (!(telnet_put(ts, &ch, 1) & 1)) { quit = 1; break; }
+                } else {
+                    /* LINE mode: the terminal driver echoes and edits the
+                     * rest of the line; the key just read starts it. */
+                    char first[2] = { (char)c, 0 };
+                    char line[1024];
+                    int n;
+                    if (c == '\r' || c == '\n') {
+                        n = 0;
+                        line[0] = '\0';
+                        fputs("\r\n", stdout);
+                    } else {
+                        n = dcl_tt_read_ini("", 0, first, line, sizeof line, NULL);
+                        fputs("\r\n", stdout);
+                    }
+                    fflush(stdout);
+                    if (n == DCL_TT_EOF || n == DCL_TT_GONE) { quit = 1; break; }
+                    if (n < 0)
+                        continue;
+                    if (!(telnet_put(ts, line, (size_t)n) & 1) || !(telnet_put(ts, "\r", 1) & 1)) {
+                        quit = 1;
+                        break;
+                    }
+                }
+            }
+            if (c == -2)
+                quit = 1;               /* the terminal is gone */
+            if (!(telnet_flush(ts) & 1))
+                quit = 1;
+            if (quit)
+                break;
+        } else if (r > 0 && (pf[np - 1].revents & (POLLIN | POLLHUP))) {
+            char line[1024];
+            if (!fgets(line, sizeof line, stdin))
+                break;                  /* end of input ends the session */
+            if (!(telnet_put(ts, line, strlen(line)) & 1) || !(telnet_flush(ts) & 1))
+                break;
+        }
     }
 
-    tcpip_close(&conn);
-    printf("%%TELNET-I-SESSEND, connection to %s closed\n", cmd->params[0]);
+    if (pfd >= 0)
+        close(pfd);
+    vms_kif_bg_deaccess(ts->xchan);
+    vms_kif_bg_dassgn(ts->xchan);
+    free(ts);
+    if (closed_by == 2)
+        dcl_error("TELNET", 2, "LINKLOST", "connection to %s lost", cmd->params[0]);
+    printf("%%TELNET-I-SESSEND, connection to %s closed%s\n", cmd->params[0],
+           closed_by == 1 ? " by the remote host" : "");
     return SS$_NORMAL;
+}
+
+/*
+ * The local side of an FTP transfer goes through RMS over the Files-11 ACP, as
+ * every DCL file command does (dcl_rms.h) -- never fopen() on a substrate path,
+ * which reaches no file on the booted system. A binary (TYPE I) RETR is stored
+ * the way VMS TCP/IP Services FTP stores an image transfer: fixed-length
+ * 512-byte records, the last one padded with zeros. A STOR sends the file's
+ * records back to back. Both stream, so the size is not bounded by memory.
+ */
+#define FTP_REC 512u
+
+struct ftp_local {
+    struct dcl_rms_writer *w;           /* RETR into a file */
+    struct dcl_rms_reader *r;           /* STOR from a file */
+    unsigned char rec[FTP_REC];         /* RETR: the record being filled */
+    uint32_t fill;
+    char *pend;                         /* STOR: record bytes not yet sent */
+    uint32_t plen, ppos;
+    int eof;
+    uint32_t err;                       /* the RMS/SS status that stopped it */
+};
+
+static uint32_t ftp_sink_rms(void *arg, const unsigned char *buf, uint32_t len)
+{
+    struct ftp_local *l = (struct ftp_local *)arg;
+    while (len > 0) {
+        uint32_t take = FTP_REC - l->fill;
+        if (take > len)
+            take = len;
+        memcpy(l->rec + l->fill, buf, take);
+        l->fill += take;
+        buf += take;
+        len -= take;
+        if (l->fill == FTP_REC) {
+            if (dcl_rms_write_record(l->w, (const char *)l->rec, FTP_REC) != 0) {
+                l->err = dcl_rms_write_status(l->w, NULL);
+                return SS$_ABORT;
+            }
+            l->fill = 0;
+        }
+    }
+    return SS$_NORMAL;
+}
+
+static uint32_t ftp_sink_stdout(void *arg, const unsigned char *buf, uint32_t len)
+{
+    (void)arg;
+    return fwrite(buf, 1, len, stdout) == len ? SS$_NORMAL : SS$_ABORT;
+}
+
+static uint32_t ftp_source_rms(void *arg, unsigned char *buf, uint32_t cap, uint32_t *got)
+{
+    struct ftp_local *l = (struct ftp_local *)arg;
+    uint32_t n = 0;
+
+    while (n < cap) {
+        if (l->ppos >= l->plen) {
+            int eof = 0;
+            int len;
+            if (l->eof)
+                break;
+            len = dcl_rms_read_record(l->r, l->pend, 65535, &eof);
+            if (len < 0) {
+                l->eof = 1;
+                if (!eof) {
+                    l->err = SS$_ABORT;
+                    return SS$_ABORT;   /* a hard read error, not end-of-file */
+                }
+                break;
+            }
+            l->plen = (uint32_t)len;
+            l->ppos = 0;
+            continue;
+        }
+        {
+            uint32_t take = l->plen - l->ppos;
+            if (take > cap - n)
+                take = cap - n;
+            memcpy(buf + n, l->pend + l->ppos, take);
+            l->ppos += take;
+            n += take;
+        }
+    }
+    *got = n;
+    return SS$_NORMAL;
+}
+
+static void ftp_report(const char *ident, const char *what, const char *name, uint32_t st)
+{
+    char sec[256];
+    if (st == SS$_NOSUCHDEV) {
+        dcl_error("FTP", 2, "NONET", "TCP/IP Services (BGn: executive device) is not available");
+        return;
+    }
+    dcl_error("FTP", 2, ident, "%s of %s failed", what, name);
+    if (st && vms_status_string(st, sec, sizeof sec) > 0 && sec[0] == '%') {
+        sec[0] = '-';
+        fprintf(stderr, "%s\n", sec);
+    }
 }
 
 int cmd_ftp(struct dcl_command *cmd)
@@ -4329,71 +4645,72 @@ int cmd_ftp(struct dcl_command *cmd)
     }
 
     if (get && get[0]) {
-        size_t cap = 1u << 20;                 /* 1 MiB transfer cap (increment) */
-        unsigned char *buf = malloc(cap);
-        uint32_t glen = 0;
-        uint32_t st;
-        const char *out;
+        struct ftp_local l;
+        const char *out = dcl_qualifier_value(cmd, "OUTPUT");
+        uint32_t total = 0, st, rst = 0;
 
-        if (!buf) { dcl_error("FTP", 2, "INSFMEM", "insufficient memory"); return SS$_BADPARAM; }
-        st = tcpip_ftp_get(addr_be, port, user, pass, get, buf, (uint32_t)cap, &glen);
-        if (!(st & 1)) {
-            free(buf);
-            if (st == SS$_NOSUCHDEV)
-                dcl_error("FTP", 2, "NONET", "TCP/IP Services (BGn: executive device) is not available");
-            else
-                dcl_error("FTP", 2, "GETERR", "RETR of %s failed", get);
-            return st;
-        }
-        out = dcl_qualifier_value(cmd, "OUTPUT");
+        memset(&l, 0, sizeof l);
         if (out && out[0]) {
-            char lpath[PATH_MAX];
-            FILE *f;
-            dcl_resolve_path(ctx, out, lpath, sizeof(lpath));
-            f = fopen(lpath, "wb");
-            if (!f) { free(buf); dcl_error("FTP", 2, "OPENOUT", "cannot open output file %s", out); return SS$_BADPARAM; }
-            fwrite(buf, 1, glen, f);
-            fclose(f);
-            printf("%%FTP-S-RETR, %u bytes retrieved to %s\n", (unsigned)glen, out);
+            l.w = dcl_rms_write_create(ctx, out, FAB$C_FIX, 0, FTP_REC, &rst);
+            if (!l.w) {
+                ftp_report("OPENOUT", "create", out, rst);
+                return rst ? (int)rst : SS$_ABORT;
+            }
+            st = tcpip_ftp_retr(addr_be, port, user, pass, get, ftp_sink_rms, &l, &total);
+            if ((st & 1) && l.fill) {                    /* the padded last record */
+                memset(l.rec + l.fill, 0, FTP_REC - l.fill);
+                if (dcl_rms_write_record(l.w, (const char *)l.rec, FTP_REC) != 0) {
+                    l.err = dcl_rms_write_status(l.w, NULL);
+                    st = SS$_ABORT;
+                }
+            }
+            {
+                uint32_t cst = dcl_rms_write_close(l.w);
+                if ((st & 1) && !(cst & 1)) { l.err = cst; st = cst; }
+            }
+            if (!(st & 1)) {
+                ftp_report("GETERR", "RETR", get, l.err ? l.err : st);
+                return st;
+            }
+            printf("%%FTP-S-RETR, %u bytes retrieved to %s\n", (unsigned)total, out);
         } else {
-            fwrite(buf, 1, glen, stdout);
-            printf("\n%%FTP-S-RETR, %u bytes retrieved from %s\n", (unsigned)glen, get);
+            st = tcpip_ftp_retr(addr_be, port, user, pass, get, ftp_sink_stdout, NULL, &total);
+            if (!(st & 1)) {
+                ftp_report("GETERR", "RETR", get, st);
+                return st;
+            }
+            printf("\n%%FTP-S-RETR, %u bytes retrieved from %s\n", (unsigned)total, get);
         }
-        free(buf);
         return SS$_NORMAL;
     }
 
     /* /PUT */
     {
-        char lpath[PATH_MAX];
-        FILE *f;
-        size_t cap = 1u << 20;
-        unsigned char *buf;
-        size_t n;
-        const char *remote;
-        uint32_t st;
+        struct ftp_local l;
+        const char *remote = dcl_qualifier_value(cmd, "REMOTE");
+        uint32_t total = 0, st, rst = 0;
 
-        dcl_resolve_path(ctx, put, lpath, sizeof(lpath));
-        f = fopen(lpath, "rb");
-        if (!f) { dcl_error("FTP", 2, "OPENIN", "cannot open local file %s", put); return SS$_BADPARAM; }
-        buf = malloc(cap);
-        if (!buf) { fclose(f); dcl_error("FTP", 2, "INSFMEM", "insufficient memory"); return SS$_BADPARAM; }
-        n = fread(buf, 1, cap, f);
-        fclose(f);
-
-        remote = dcl_qualifier_value(cmd, "REMOTE");
         if (!remote || !remote[0]) remote = put;
-
-        st = tcpip_ftp_put(addr_be, port, user, pass, remote, buf, (uint32_t)n);
-        free(buf);
+        memset(&l, 0, sizeof l);
+        l.r = dcl_rms_read_open(ctx, put, &rst);
+        if (!l.r) {
+            ftp_report("OPENIN", "open", put, rst);
+            return rst ? (int)rst : SS$_ABORT;
+        }
+        l.pend = malloc(65536);
+        if (!l.pend) {
+            dcl_rms_read_close(l.r);
+            dcl_error("FTP", 2, "INSFMEM", "insufficient memory");
+            return SS$_INSFMEM;
+        }
+        st = tcpip_ftp_stor(addr_be, port, user, pass, remote, ftp_source_rms, &l, &total);
+        dcl_rms_read_close(l.r);
+        free(l.pend);
         if (!(st & 1)) {
-            if (st == SS$_NOSUCHDEV)
-                dcl_error("FTP", 2, "NONET", "TCP/IP Services (BGn: executive device) is not available");
-            else
-                dcl_error("FTP", 2, "PUTERR", "STOR of %s failed", remote);
+            ftp_report("PUTERR", "STOR", remote, l.err ? l.err : st);
             return st;
         }
-        printf("%%FTP-S-STOR, %u bytes stored to %s\n", (unsigned)n, remote);
+        printf("%%FTP-S-STOR, %u bytes stored to %s\n", (unsigned)total, remote);
         return SS$_NORMAL;
     }
 }

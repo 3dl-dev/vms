@@ -383,6 +383,10 @@ int main(void)
             CHECK(!(st & 1) && conn.chan == 0 && !conn.connected,
                   "TELNET/FTP connect to a port nobody listens on FAILS (the IOSB status), and the"
                   " channel is released -- never a connection reported open");
+            /* rd vms-d0c4: the refusal is the condition TCP/IP Services reports
+             * for ECONNREFUSED, not a generic abort. */
+            CHECK(st == SS$_REJECT,
+                  "the refused connect completes SS$_REJECT (connection refused)");
             if (st & 1)
                 tcpip_close(&conn);
         }

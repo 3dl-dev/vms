@@ -271,6 +271,29 @@ long vms_ioctl_bg_setmode_udp(struct vms_proc *proc, unsigned long arg)
  * The address arrives as the first eight bytes of a sockaddr_in, port and v4
  * addr already in network byte order; the backend builds the host sockaddr.
  */
+/*
+ * The VMS condition for a finished connect (rd vms-d0c4). A refused connect, an
+ * unreachable network and a timeout are different answers a TCP/IP Services
+ * program acts on differently (TELNET says "connection refused" versus "network
+ * unreachable"), so they are mapped, not folded into SS$_ABORT; any other
+ * failure stays SS$_ABORT. The backend returns -errno on Linux and +errno on
+ * NetBSD, so the sign is normalised first.
+ */
+static uint32_t vms_bg_connect_status(int rc)
+{
+    int e = rc < 0 ? -rc : rc;
+
+    if (e == 0)
+        return SS__NORMAL;
+    if (e == ECONNREFUSED)
+        return SS__REJECT;
+    if (e == ENETUNREACH || e == EHOSTUNREACH)
+        return SS__UNREACHABLE;
+    if (e == ETIMEDOUT)
+        return SS__TIMEOUT;
+    return SS__ABORT;
+}
+
 long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_bg_connect_args args;
@@ -293,7 +316,7 @@ long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg)
     }
 
     rc = exec_socket_connect(sock, args.sin_family, args.sin_port, args.sin_addr);
-    args.status = rc ? SS__ABORT : SS__NORMAL;
+    args.status = vms_bg_connect_status(rc);
 
 out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))

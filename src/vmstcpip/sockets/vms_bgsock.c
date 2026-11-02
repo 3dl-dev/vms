@@ -163,7 +163,12 @@ static int bg_status_to_errno(uint32_t st)
 {
     if (st == SS$_NOSUCHDEV)
         return ENODEV;                  /* no executive INET device (Rule 9) */
-    return ECONNREFUSED;
+    /* the executive's connect completions (rd vms-d0c4) */
+    if (st == SS$_UNREACHABLE)
+        return ENETUNREACH;
+    if (st == SS$_TIMEOUT)
+        return ETIMEDOUT;
+    return ECONNREFUSED;                /* SS$_REJECT, and any other failure */
 }
 
 /* Lazily create and cache the channel's readiness fd (executive-resident poll

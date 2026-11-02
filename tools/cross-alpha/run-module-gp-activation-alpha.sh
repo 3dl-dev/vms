@@ -1385,6 +1385,10 @@ run_boot_a() {
       log "P0 layout confirmed: ${p0img}.EXE and its shareables activated in P0 (base ${JOINT_LINK_BASE:-0x10000})"
     else
       grep -aE "OVMX-SEAM:" "$WORK/modgpA.log" | sed 's/^/  /' || true
+      # No seam line at all = the image never ran: show the console tail so the
+      # CI log says where the boot stopped (a timeout, a bugcheck, a DCL error).
+      grep -aqE "OVMX-SEAM:" "$WORK/modgpA.log" \
+        || { echo "  -- console tail (no OVMX-SEAM line) --"; tail -n 80 "$WORK/modgpA.log" | sed 's/^/  | /'; }
       die "P0 image (base ${JOINT_LINK_BASE:-0x10000}) but the activation seam does not report p0=1 (an image or shareable landed outside P0)"
     fi
   fi

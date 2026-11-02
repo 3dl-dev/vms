@@ -171,7 +171,7 @@ if [ "$MODE" = share ]; then
 	wait_for vax1 "MOUNT-I-MOUNTED, $LABEL mounted" 60 || die "VAX1 could not mount $VDEV"
 	send vax1 "CREATE/DIRECTORY $VDEV[$DIR]" 5
 	send vax1 "DEFINE/SYSTEM EVAC\$DATA $VDEV[$DIR]"
-	send "$OCON" 'SHOW DEVICE' 8	# OVMX: SHOW DEVICE D is NOSUCHDEV (no generic prefix)
+	send "$OCON" 'SHOW DEVICE D' 8	# vms-582: a prefix matches past the VAX1$ node prefix
 	if [ "$DRY" = 1 ]; then ODEV=${CI6_OVMX_DEV:-VAX1\$DUA16386:}
 	elif [ -z "${CI6_OVMX_DEV:-}" ]; then ODEV=$(ovmx_mscp_dev "$VUNIT"); fi
 	[ -n "$ODEV" ] && [ "$ODEV" != VDA100: ] || die "$OVMX lists no MSCP unit for VAX1 unit $VUNIT"

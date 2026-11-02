@@ -78,7 +78,7 @@ dry=$(CI6_DRY=1 "$S" share podx "$T/dry" 2>&1)
 order=$(echo "$dry" | grep -nE 'MOUNT/SYSTEM \$2\$DUA2|MOUNT/SYSTEM VAX1\$DUA|SHOW RESOURCE/NAME="F11B\$vEVAC5FA     "|EVACWL 10$|STOP EVACVAX1|DISMOUNT VAX1|ANALYZE/DISK_STRUCTURE' | cut -d: -f1 | paste -sd' ')
 n=$(echo "$order" | wc -w); sorted=$(echo "$order" | tr ' ' '\n' | sort -n | paste -sd' ')
 [ "$n" -ge 7 ] && [ "$order" = "$sorted" ] || bad "share dry-run order: VAX1 mount, OVMX mount, SDA, writes, STOP, OVMX dismount, ANALYZE (got lines '$order')"
-echo "$dry" | grep -q 'SHOW DEVICE D$' && bad "share asks OVMX for SHOW DEVICE D (NOSUCHDEV on OVMX)"
+echo "$dry" | grep -q 'SHOW DEVICE D$' || bad "share discovers OVMX's MSCP unit with SHOW DEVICE D (vms-582: the prefix matches past the VAX1$ node prefix)"
 
 [ $fail = 0 ] && echo "PASS: ci6_evac.sh grade-share -- fixture PASS, 11 negative controls FAIL their criterion, the 2026-11-02 capture FAILs S2,S3,S4"
 exit $fail

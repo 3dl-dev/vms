@@ -43,6 +43,7 @@ TYPE_OF = {
     (0x02, 0x14): 'dlm_rm_14',
     (0x02, 0x12): 'dlm_rm_12',   # rd vms-33a: the holder's records
     (0x02, 0x13): 'dlm_rm_13',   # ...and its end-of-records
+    (0x02, 0x08): 'dlm_rm_08',   # rd vms-874f: a survivor's failover rebuild record
     (0x01, 0x03): 'cm_commit',
     (0x01, 0x14): 'cm_model',
     (0x04, 0x00): 'cm_ack',

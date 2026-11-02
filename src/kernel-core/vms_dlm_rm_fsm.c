@@ -738,7 +738,7 @@ static void rm_ho_fire(struct vms_dlm_rm *f, uint32_t from_csid,
 	}
 	h = rm_ho_slot(f, &step->id, from_csid, VMS_DLM_HO_ST_ARMED);
 	if (h == (struct vms_dlm_ho_tree *)0) {
-		/* No 0x0f named the new master (394 of 394 real op-0x11s had
+		/* No 0x0f named the new master (665 of 665 real op-0x11s had
 		 * one first): this node cannot address one, and does not
 		 * guess. */
 		f->ho_unarmed++;
@@ -769,6 +769,273 @@ static int rm_ho_valblk(struct vms_dlm_rm *f,
 		return 0;
 	f->ho_valblks_taken++;
 	return 1;
+}
+
+/* ==========================================================================
+ * 4c. THE FAILOVER REBUILD (rd vms-874f) -- vms_dlm_rm_fsm.h states the
+ * machine, vms_cluster_codec_dlm.h R1..R4 the measurements behind it.
+ * ========================================================================== */
+
+/* Every door the rebuild needs: the table's, the holder's (describe and
+ * re-home), and its own. */
+static int rm_rb_ok(const struct vms_dlm_rm *f)
+{
+	return rm_ho_ok(f) && f->ops->rb_ready != 0 &&
+	       f->ops->rb_tree_next != 0 && f->ops->rb_dir_entry != 0 &&
+	       f->ops->rb_dir_claim != 0 && f->ops->rb_install != 0;
+}
+
+static void rm_rb_free(struct vms_dlm_rb_tree *t)
+{
+	rm_bzero(t, (uint32_t)sizeof(*t));
+}
+
+/* The wire identity of an engine tree: group, mode, counted name. */
+static void rm_rb_ident(const struct vms_dlm_adopt_tree *t,
+			struct vms_dlm_res_ident *id)
+{
+	uint32_t i;
+
+	rm_bzero(id, (uint32_t)sizeof(*id));
+	id->group = t->res_group;
+	id->mode = t->res_mode;
+	id->name_len = t->resnam_len;
+	for (i = 0u; i < t->resnam_len && i < VMS_DLM_NAME_MAX &&
+		    i < sizeof(t->resnam); i++)
+		id->name[i] = (uint8_t)t->resnam[i];
+}
+
+static void rm_rb_stop(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t,
+		       const char *why)
+{
+	t->state = (uint8_t)VMS_DLM_RB_ST_STOPPED;
+	t->await_lkid = 0u;
+	rm_say(f, why);
+}
+
+/* Record that this node now MASTERS the tree by a rebuild: the authority a
+ * survivor's later ROOT record is admitted under. Reuses the slot for the same
+ * identity, then a free one, then the oldest (slot 0) -- a bounded table. */
+static void rm_rbm_note(struct vms_dlm_rm *f, const struct vms_dlm_res_ident *id,
+			uint32_t departed)
+{
+	struct vms_dlm_rb_mastered *m = (struct vms_dlm_rb_mastered *)0;
+	uint32_t i;
+
+	for (i = 0u; i < VMS_DLM_RB_TREES; i++) {
+		if (f->rbm[i].used && rm_ident_eq(&f->rbm[i].id, id)) {
+			m = &f->rbm[i];
+			break;
+		}
+	}
+	for (i = 0u; m == (struct vms_dlm_rb_mastered *)0 &&
+		    i < VMS_DLM_RB_TREES; i++) {
+		if (!f->rbm[i].used)
+			m = &f->rbm[i];
+	}
+	if (m == (struct vms_dlm_rb_mastered *)0)
+		m = &f->rbm[0];
+	m->id = *id;
+	m->departed = departed;
+	m->used = 1u;
+}
+
+static int rm_rbm_has(const struct vms_dlm_rm *f,
+		      const struct vms_dlm_res_ident *id)
+{
+	uint32_t i;
+
+	for (i = 0u; i < VMS_DLM_RB_TREES; i++) {
+		if (f->rbm[i].used && rm_ident_eq(&f->rbm[i].id, id))
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * THIS NODE BECOMES THE TREE'S MASTER (a 0xf9, or this node is the directory
+ * and nobody has claimed it). Through the ADOPTION ENGINE: open, then close at
+ * once -- the close is what turns every proxy of ours in the tree into a local
+ * lock (rd vms-3ac), and there are no records to wait for from the departed
+ * master. Survivors' records arrive afterwards and are installed by
+ * vms_dlm_rm_rb_record. 1 when the engine really did both.
+ */
+static int rm_rb_become_master(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
+{
+	uint32_t n = 0u;
+
+	if (!f->ops->adopt_open(f->ops->ctx, &t->tree)) {
+		f->rb_master_refused++;
+		return 0;
+	}
+	if (!f->ops->adopt_end(f->ops->ctx, &t->tree, &n)) {
+		uint32_t undone = 0u;
+
+		(void)f->ops->adopt_abort(f->ops->ctx, &t->tree, &undone);
+		f->rb_master_refused++;
+		return 0;
+	}
+	rm_rbm_note(f, &t->id, t->tree.old_master_csid);
+	f->rb_mastered++;
+	return 1;
+}
+
+/*
+ * SEND THE NEXT RECORD THIS TREE OWES, or finish it. Every cell is read from
+ * the engine NOW (vms_lock_dlm_handover_next: our next proxy still naming the
+ * departed master, root first, a sub only once its parent names `dst`).
+ */
+static void rm_rb_pump(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
+{
+	struct vms_dlm_handover_rec r;
+	struct vms_dlm_rm_lock_rec w;
+	uint32_t i;
+
+	rm_bzero(&r, (uint32_t)sizeof(r));
+	if (!f->ops->ho_next(f->ops->ctx, &t->tree, t->dst, &r)) {
+		/* Nothing of ours left naming the departed master. */
+		f->rb_trees_done++;
+		rm_rb_free(t);
+		return;
+	}
+	rm_bzero(&w, (uint32_t)sizeof(w));
+	w.id.group = r.res_group;
+	w.id.mode = r.res_mode;
+	w.id.name_len = r.resnam_len;
+	for (i = 0u; i < r.resnam_len && i < VMS_DLM_NAME_MAX; i++)
+		w.id.name[i] = (uint8_t)r.resnam[i];
+	w.id.hash = r.dir_hash;
+	w.holder_epid = r.holder_epid;
+	w.holder_lkid = r.holder_lkid;
+	w.parent_holder_lkid = r.parent_lkid;
+	w.parent_master_lkid = r.parent_master_lkid;
+	w.granted_mode = r.granted_mode;
+	w.requested_mode = r.requested_mode;
+	w.valblk_present = r.valblk_present;
+	w.valblk_seq = r.valblk_seq;
+	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+		w.valblk[i] = r.valblk[i];
+	/* A SUB record carries no hash this node may assert (its real value is
+	 * neither its own name's hash nor its parent's -- the census): only a
+	 * ROOT carries the one the engine holds. */
+	if (vms_dlm_rb_rec_build(&w, (r.hash_known && r.parent_lkid == 0u) ?
+				 1 : 0, f->txframe,
+				 (uint32_t)sizeof(f->txframe),
+				 (uint32_t *)0) != VMS_CODEC_OK) {
+		f->codec_failures++;
+		f->rb_records_unsent++;
+		rm_rb_stop(f, t, "%DLM, a lock this node holds in a tree whose "
+				 "master left could not be described: that "
+				 "tree's rebuild is stopped (see the DLM "
+				 "counters)");
+		return;
+	}
+	if (f->ops->send(f->ops->ctx, t->dst, f->txframe + VMS_OFF_SYSAP_BODY,
+			 VMS_CM_BODY_LEN) != 0) {
+		f->rb_records_unsent++;
+		rm_rb_stop(f, t, "%DLM, a rebuild record for a tree whose "
+				 "master left could not be sent: that tree's "
+				 "rebuild is stopped (see the DLM counters)");
+		return;
+	}
+	f->rb_records_sent++;
+	t->await_lkid = r.holder_lkid;
+	t->await_root = (uint8_t)(r.parent_lkid == 0u ? 1u : 0u);
+	t->state = (uint8_t)VMS_DLM_RB_ST_AWAIT;
+}
+
+/*
+ * TAKE UP ONE ORPHANED TREE (R2): find where its ROOT record goes, or become
+ * its master when this node is its directory and nobody else has claimed it.
+ */
+static void rm_rb_start(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t,
+			const struct vms_dlm_adopt_tree *tree)
+{
+	char nm[VMS_DLM_NAME_MAX + 1u];
+	uint32_t dir = 0u, master = 0u;
+	int e;
+
+	rm_rb_free(t);
+	t->tree = *tree;
+	rm_rb_ident(tree, &t->id);
+	f->rb_trees_started++;
+	rm_ident_to_name(&t->id, nm, (uint32_t)sizeof(nm));
+	if (!f->ops->dir_node(f->ops->ctx, nm, t->id.name_len, t->id.group,
+			      t->id.mode, &dir)) {
+		f->rb_unaddressable++;
+		rm_rb_stop(f, t, "%DLM, a tree whose master left has no "
+				 "directory this node can name: its locks "
+				 "there are not rebuilt (see the DLM counters)");
+		return;
+	}
+	if (dir != 0u) {
+		if (dir == tree->old_master_csid || !rm_is_member(f, dir)) {
+			f->rb_unaddressable++;
+			rm_rb_stop(f, t, "%DLM, a tree whose master left names "
+					 "a directory that is not a member: its "
+					 "locks there are not rebuilt");
+			return;
+		}
+		t->dst = dir;
+		rm_rb_pump(f, t);
+		return;
+	}
+	/* THIS NODE is the directory. Its own entry says who is master now. */
+	{
+		struct vms_dlm_res_ident id = t->id;
+		uint32_t hash = 0u;
+
+		if (f->ops->dir_hash(f->ops->ctx, nm, id.name_len, id.group,
+				     id.mode, &hash))
+			id.hash = hash;
+		e = f->ops->rb_dir_entry(f->ops->ctx, &id, &master);
+		if (e == 1) {
+			if (master != 0u && master != tree->old_master_csid &&
+			    rm_is_member(f, master)) {
+				/* RA1b: the directory-holder addresses the
+				 * master it has just answered 0xf9. */
+				t->dst = master;
+				rm_rb_pump(f, t);
+				return;
+			}
+			f->rb_unaddressable++;
+			rm_rb_stop(f, t, "%DLM, this node's directory names a "
+					 "master for a tree whose master left "
+					 "that is not a member: not rebuilt");
+			return;
+		}
+		/* No entry (or our own): THIS node masters it -- then says so
+		 * in its own directory, so a survivor's ROOT that arrives next
+		 * is served by the master and never answered 0xf9 again. */
+		if (!rm_rb_become_master(f, t)) {
+			rm_rb_stop(f, t, "%DLM, this node could not become the "
+					 "master of a tree whose master left: "
+					 "its locks there are not rebuilt (see "
+					 "the DLM counters)");
+			return;
+		}
+		if (e == 0 && !f->ops->rb_dir_claim(f->ops->ctx, &id)) {
+			f->rb_claim_failed++;
+			rm_say(f, "%DLM, this node masters a rebuilt tree it "
+				  "directs and could not record that in its "
+				  "own directory (see the DLM counters)");
+		}
+	}
+	rm_rb_free(t);
+}
+
+static void rm_rb_forget_departed(struct vms_dlm_rm *f, uint32_t i)
+{
+	uint32_t d = f->rb_departed[i], k;
+
+	f->rb_departed[i] = 0u;
+	/* Its stopped trees are not retried: their identities only mattered as
+	 * the scan's exclusions while the scan was still running. */
+	for (k = 0u; k < VMS_DLM_RB_TREES; k++) {
+		if (f->rb[k].state == (uint8_t)VMS_DLM_RB_ST_STOPPED &&
+		    f->rb[k].tree.old_master_csid == d)
+			rm_rb_free(&f->rb[k]);
+	}
 }
 
 /* ==========================================================================
@@ -1351,6 +1618,41 @@ void vms_dlm_rm_member_departed(struct vms_dlm_rm *f, uint32_t csid)
 
 	if (f == (struct vms_dlm_rm *)0 || csid == 0u || !rm_ops_ok(f))
 		return;
+	/*
+	 * THE FAILOVER REBUILD (rd vms-874f). A tree whose records are going to
+	 * the system that left has nobody to answer them: stopped, counted.
+	 * Then the departed system is recorded as a master whose trees this
+	 * node may hold locks in, and the rebuild is kicked (it waits, inside,
+	 * for a directory it can resolve).
+	 */
+	for (i = 0u; i < VMS_DLM_RB_TREES; i++) {
+		if (f->rb[i].state == (uint8_t)VMS_DLM_RB_ST_AWAIT &&
+		    f->rb[i].dst == csid) {
+			f->rb_dst_departed++;
+			rm_rb_stop(f, &f->rb[i], "%DLM, the system a rebuild "
+						 "was reporting to left: that "
+						 "tree's rebuild is stopped");
+		}
+	}
+	for (i = 0u; i < VMS_DLM_RB_DEPARTED; i++) {
+		if (f->rb_departed[i] == csid)
+			break;
+	}
+	if (i == VMS_DLM_RB_DEPARTED) {
+		for (i = 0u; i < VMS_DLM_RB_DEPARTED; i++) {
+			if (f->rb_departed[i] == 0u) {
+				f->rb_departed[i] = csid;
+				f->rb_departures++;
+				break;
+			}
+		}
+		if (i == VMS_DLM_RB_DEPARTED) {
+			f->rb_departed_full++;
+			rm_say(f, "%DLM, too many masters left at once to track: "
+				  "this node's locks in one departed master's "
+				  "trees are not rebuilt");
+		}
+	}
 	/* A hand-over whose NEW master left has nobody to report to. One
 	 * whose OLD master left goes on: the new master still waits for it. */
 	for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
@@ -1377,6 +1679,7 @@ void vms_dlm_rm_member_departed(struct vms_dlm_rm *f, uint32_t csid)
 		if (rm_owed_complete(t))
 			rm_complete(f, t);
 	}
+	vms_dlm_rm_rb_kick(f);
 }
 
 int vms_dlm_rm_is_new_master(const struct vms_dlm_rm *f,
@@ -1425,4 +1728,226 @@ uint32_t vms_dlm_rm_trees_in_state(const struct vms_dlm_rm *f,
 			n++;
 	}
 	return n;
+}
+
+/* ==========================================================================
+ * 7b. THE FAILOVER REBUILD'S PUBLIC DOORS (rd vms-874f)
+ * ========================================================================== */
+
+void vms_dlm_rm_rb_kick(struct vms_dlm_rm *f)
+{
+	struct vms_dlm_adopt_tree skip[VMS_DLM_RB_TREES];
+	struct vms_dlm_adopt_tree t;
+	uint32_t i, k, n;
+
+	if (f == (struct vms_dlm_rm *)0)
+		return;
+	for (i = 0u; i < VMS_DLM_RB_DEPARTED && f->rb_departed[i] == 0u; i++)
+		;
+	if (i == VMS_DLM_RB_DEPARTED)
+		return;                       /* nobody left: nothing to do */
+	if (!rm_rb_ok(f)) {
+		f->rb_unbound++;
+		return;
+	}
+	if (!f->ops->rb_ready(f->ops->ctx))
+		return;                       /* no directory yet: wait      */
+	for (i = 0u; i < VMS_DLM_RB_DEPARTED; i++) {
+		uint32_t dep = f->rb_departed[i];
+
+		if (dep == 0u)
+			continue;
+		for (;;) {
+			struct vms_dlm_rb_tree *slot =
+				(struct vms_dlm_rb_tree *)0;
+
+			for (k = 0u, n = 0u; k < VMS_DLM_RB_TREES; k++) {
+				if (f->rb[k].state ==
+				    (uint8_t)VMS_DLM_RB_ST_FREE) {
+					if (slot == (struct vms_dlm_rb_tree *)0)
+						slot = &f->rb[k];
+				} else if (f->rb[k].tree.old_master_csid ==
+					   dep) {
+					skip[n++] = f->rb[k].tree;
+				}
+			}
+			if (!f->ops->rb_tree_next(f->ops->ctx, dep, skip, n,
+						  &t)) {
+				rm_rb_forget_departed(f, i);
+				break;
+			}
+			if (slot == (struct vms_dlm_rb_tree *)0) {
+				f->rb_no_slot++;
+				return;       /* a finishing tree kicks again */
+			}
+			rm_rb_start(f, slot, &t);
+		}
+	}
+}
+
+int vms_dlm_rm_rb_answer(struct vms_dlm_rm *f, uint32_t from_csid,
+			 uint8_t category, uint8_t opcode,
+			 const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_rm_lock_grant g;
+	struct vms_dlm_rb_tree *t = (struct vms_dlm_rb_tree *)0;
+	uint32_t i;
+
+	if (f == (struct vms_dlm_rm *)0 || body == (const uint8_t *)0 ||
+	    len < VMS_CM_BODY_LEN || from_csid == 0u || !rm_rb_ok(f))
+		return 0;
+	if (category != (uint8_t)(VMS_DLM_CAT_REQUEST |
+				  VMS_WIRE_RESPONSE_BIT) ||
+	    opcode != (uint8_t)VMS_DLM_WIREOP_ENQ)
+		return 0;
+	if (vms_dlm_rm_lock_grant_parse_body(body, len, &g) != VMS_CODEC_OK)
+		return 0;
+	for (i = 0u; i < VMS_DLM_RB_TREES; i++) {
+		if (f->rb[i].state == (uint8_t)VMS_DLM_RB_ST_AWAIT &&
+		    f->rb[i].dst == from_csid &&
+		    f->rb[i].await_lkid == g.holder_lkid) {
+			t = &f->rb[i];
+			break;
+		}
+	}
+	if (t == (struct vms_dlm_rb_tree *)0)
+		return 0;
+
+	/* 0xf9: THIS NODE now masters the tree -- only ever the answer to the
+	 * tree's first ROOT record (149 of 149 real ones). No sub follows. */
+	if (g.outcome == (uint8_t)VMS_DLM_DIR_YOU_MASTER && t->await_root &&
+	    t->records == 0u) {
+		if (!rm_rb_become_master(f, t)) {
+			rm_rb_stop(f, t, "%DLM, told to master a tree whose "
+					 "master left, and the adoption could "
+					 "not be made: not rebuilt");
+		} else {
+			rm_rb_free(t);
+		}
+		vms_dlm_rm_rb_kick(f);
+		return 1;
+	}
+	/* 0xfa: the answerer masters it and minted the handle. Anything else --
+	 * or a lock the engine will not re-home -- STOPS the tree. */
+	if (!g.granted ||
+	    !f->ops->ho_rehome(f->ops->ctx, g.holder_lkid,
+			       t->tree.old_master_csid, t->dst,
+			       g.master_lkid)) {
+		f->rb_answers_refused++;
+		rm_rb_stop(f, t, "%DLM, a rebuild record was not granted, or "
+				 "the lock moved: that tree's rebuild is "
+				 "stopped (see the DLM counters)");
+		vms_dlm_rm_rb_kick(f);
+		return 1;
+	}
+	f->rb_answers++;
+	t->records++;
+	t->await_lkid = 0u;
+	rm_rb_pump(f, t);
+	if (t->state == (uint8_t)VMS_DLM_RB_ST_FREE)
+		vms_dlm_rm_rb_kick(f);
+	return 1;
+}
+
+enum vms_dlm_rm_status vms_dlm_rm_rb_record(struct vms_dlm_rm *f,
+					    uint32_t from_csid,
+					    const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_rm_lock_rec w;
+	struct vms_dlm_adopt_lock_rec r;
+	struct vms_dlm_adopt_lock_result res;
+	struct vms_dlm_rm_lock_answer a;
+	uint32_t i;
+
+	if (f == (struct vms_dlm_rm *)0 || body == (const uint8_t *)0 ||
+	    !rm_rb_ok(f))
+		return VMS_DLM_RM_NOT_MINE;
+	if (vms_dlm_rb_rec_parse_body(body, len, &w) != VMS_CODEC_OK)
+		return VMS_DLM_RM_NOT_MINE;
+	/* A ROOT is ours to serve only for a tree this node came to master by
+	 * a rebuild; any other is a directory lookup (rd vms-629). */
+	if (w.is_root && !rm_rbm_has(f, &w.id))
+		return VMS_DLM_RM_NOT_MINE;
+	if (from_csid == 0u || !rm_is_member(f, from_csid)) {
+		f->rb_in_refused++;
+		return VMS_DLM_RM_REFUSED;
+	}
+	rm_bzero(&r, (uint32_t)sizeof(r));
+	for (i = 0u; i < w.id.name_len && i < sizeof(r.resnam); i++)
+		r.resnam[i] = (char)w.id.name[i];
+	r.resnam_len = w.id.name_len;
+	r.holder_csid = from_csid;
+	r.holder_lkid = w.holder_lkid;
+	r.parent_master_lkid = w.parent_master_lkid;
+	r.res_group = w.id.group;
+	r.res_mode = w.id.mode;
+	r.ident_valid = 1u;
+	r.granted_mode = w.granted_mode;
+	r.requested_mode = w.requested_mode;
+	r.valblk_present = w.valblk_present;
+	r.valblk_seq = w.valblk_seq;
+	for (i = 0u; i < VMS_DLM_VALBLK_LEN && i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+		r.valblk[i] = w.valblk[i];
+	rm_bzero(&res, (uint32_t)sizeof(res));
+	if (!f->ops->rb_install(f->ops->ctx, &r, &res) ||
+	    res.master_lkid == 0u) {
+		f->rb_in_refused++;
+		rm_say(f, "%DLM, a surviving system's rebuild record could not "
+			  "be installed here: not answered (see the DLM "
+			  "counters)");
+		return VMS_DLM_RM_REFUSED;
+	}
+	/* THE ANSWER, off what the engine created (the 0x12 grant's rule). */
+	rm_bzero(&a, (uint32_t)sizeof(a));
+	a.master_lkid = res.master_lkid;
+	a.valblk_present = res.valblk_present;
+	a.valblk_seq = res.valblk_seq;
+	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN && i < VMS_DLM_VALBLK_LEN; i++)
+		a.valblk[i] = res.valblk[i];
+	if (vms_dlm_rm_lock_answer_build(body, len, &a, f->txframe,
+					 (uint32_t)sizeof(f->txframe),
+					 (uint32_t *)0) != VMS_CODEC_OK) {
+		f->codec_failures++;
+		return VMS_DLM_RM_REFUSED;
+	}
+	if (f->ops->stage_reply(f->ops->ctx, f->txframe + VMS_OFF_SYSAP_BODY,
+				VMS_CM_BODY_LEN) != 0) {
+		f->rb_in_refused++;
+		return VMS_DLM_RM_REFUSED;
+	}
+	f->rb_in_installed++;
+	return VMS_DLM_RM_HANDLED;
+}
+
+void vms_dlm_rm_rb_transition_begin(struct vms_dlm_rm *f)
+{
+	uint32_t i;
+
+	if (f == (struct vms_dlm_rm *)0)
+		return;
+	for (i = 0u; i < VMS_DLM_RB_TREES; i++)
+		rm_bzero(&f->rbm[i], (uint32_t)sizeof(f->rbm[i]));
+}
+
+uint32_t vms_dlm_rm_rb_in_state(const struct vms_dlm_rm *f,
+				enum vms_dlm_rb_state st)
+{
+	uint32_t i, n = 0u;
+
+	if (f == (const struct vms_dlm_rm *)0)
+		return 0u;
+	for (i = 0u; i < VMS_DLM_RB_TREES; i++) {
+		if (f->rb[i].state == (uint8_t)st)
+			n++;
+	}
+	return n;
+}
+
+uint32_t vms_dlm_rm_rb_stopped(const struct vms_dlm_rm *f)
+{
+	if (f == (const struct vms_dlm_rm *)0)
+		return 0u;
+	return f->rb_departed_full + f->rb_unbound + f->rb_records_unsent +
+	       f->rb_answers_refused + f->rb_master_refused +
+	       f->rb_unaddressable + f->rb_dst_departed + f->rb_in_refused;
 }

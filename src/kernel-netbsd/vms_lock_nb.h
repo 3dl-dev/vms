@@ -693,6 +693,13 @@ struct vms_dlm_scs_view_wire {
 	uint32_t rm_ho_answers;
 	uint32_t rm_ho_ends_sent;
 	uint32_t rm_ho_stopped;
+	/* The failover rebuild (rd vms-874f). Mirror of src/kernel/vms_ioctl.h;
+	 * see vms_cluster_snapshot.h. */
+	uint32_t rm_rb_records_sent;
+	uint32_t rm_rb_answers;
+	uint32_t rm_rb_mastered;
+	uint32_t rm_rb_installed;
+	uint32_t rm_rb_stopped;
 };
 
 struct vms_cluster_diag_dlm_args {
@@ -929,7 +936,7 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 236,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 256,
                "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 /*
  * 228 = the row (220) + status + pad0. The row grew again here: rd vms-5cd adds
@@ -938,7 +945,7 @@ _Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 236,
  * vms-28bd's four owed-grant counters, after this very assert was found 16
  * bytes stale), so a number that does not move with the row is a RED host test.
  */
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 244,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 264,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

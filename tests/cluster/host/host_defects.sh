@@ -309,7 +309,10 @@ dlm-rm-owed-set-is-the-whole-club
 dlm-rm-open-answered-when-refused
 dlm-rm-half-tree-left-adopted
 dlm-rm-held-reported-though-unsent
-dlm-rm-role-claimed-without-an-adoption"
+dlm-rm-role-claimed-without-an-adoption
+dlm-rebuild-0xf9-not-adopted
+dlm-rebuild-record-sent-as-op12
+dlm-rebuild-install-ignores-compat"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3112,6 +3115,62 @@ EOF
                       ;;
         esac;;
 
+    dlm-rebuild-0xf9-not-adopted)
+        case "$_f" in
+        facility)     echo "the failover rebuild's 0xf9 (rd vms-874f): the directory told THIS node it now masters a tree whose master LEFT, and the table adopts it through the adoption engine -- whose close turns every proxy of ours in it into a local lock -- and records the authority under which survivors' records are then installed";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rm_rb_answer()'s 0xf9 branch is disarmed, so a 0xf9 is read as a refused record: the tree stops, this node never becomes its master, its own locks stay proxies naming a master that has left, and the other survivor's records have nowhere to be installed. The tree is mastered nowhere: RA1b's RMT1 with OVMX as VAX2.";;
+        require_fail) hd_lines <<'EOF'
+  *** its 0xfa equals VAX2's real one: the echo, body[28]=0x10, the tail ***
+  and nothing new installed
+  body[20:24]: a handle THIS engine minted
+  every proxy of ours in the tree is a LOCAL lock now -- nothing left naming VAX1
+  the engine says so
+*** THIS node now masters RMT1, through the adoption engine ***
+*** an EX record over the PR this node holds is NOT installed: never a second incompatible grant ***
+*** four of VAX3's locks exist here now, as master-side locks held for VAX3 ***
+*** it equals VAX2's REAL 0xfa on every named cell: 82/01, VAX3's lkid echoed, body[28]=0x10, 0xfa, and RMLVB-0123456789 at sequence 1 read back off the RSB the record wrote ***
+VAX3's real ROOT record is installed and answered
+VAX3's real SUB record is installed under its root and answered
+a ROOT from a system that is no member is REFUSED
+a retransmitted ROOT is answered again...
+EOF
+                      ;;
+        esac;;
+
+    dlm-rebuild-record-sent-as-op12)
+        case "$_f" in
+        facility)     echo "the failover rebuild record's OPCODE (rd vms-874f): a survivor describes its lock in a departed master's tree with op 0x08 (888 of 888 real records), never with the remaster hand-over's op 0x12";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_rb_pump() builds its record with the op-0x12 builder: every cell is right but the opcode, so a real VAX directory receives a remaster record for a hand-over nobody opened instead of the failover rebuild record, and the survivor's locks die with the master exactly as before rd vms-874f.";;
+        require_fail) hd_lines <<'EOF'
+  a SUB record, body[36:40] our own root lkid
+  a cat-0x02 op-0x08
+*** EVERY NAMED CELL equals VAX2's real ROOT record: PID 0x20400217, own lkid, PR/PR, no parent, identity, tail, the tree hash ***
+*** EVERY NAMED CELL equals VAX3's real ROOT record: PID 0x20600216, own lkid, CR/CR, no parent, the identity, body[110] and the tail, the tree hash ***
+*** EVERY NAMED CELL equals VAX3's real SUB record (PID, CW/CW, the parent pair, identity, tail) ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rebuild-install-ignores-compat)
+        case "$_f" in
+        facility)     echo "the new master's install of a survivor's rebuild record (vms_lock_dlm_rebuild_lock(), rd vms-874f): a lock no longer COMPATIBLE with what the resource holds here is not installed and not answered";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "the compatibility check is short-circuited, so a survivor's EX record is installed over the PR this node already holds and answered 0xfa: two incompatible grants on one resource, the rd vms-5cd double grant, reached through the rebuild.";;
+        require_fail) hd_lines <<'EOF'
+  nothing was installed by any of them
+*** an EX record over the PR this node holds is NOT installed: never a second incompatible grant ***
+EOF
+                      ;;
+        esac;;
+
     dlm-rm-role-claimed-without-an-adoption)
         case "$_f" in
         facility)     echo "the op-0x0f answer's NEW MASTER role is read off this node's own open adoption (rd vms-ed5 / vms-cab), never off the frame";;
@@ -4148,6 +4207,18 @@ apply_edit() {
         # self-comparison: `sent` stays read and -Wtautological-compare has
         # nothing to say.
         sed -i 's@^\tif (sent != 0u)$@\tif (((void)sent, 1)) /* NEGCTL dlm-rm-held-reported-though-unsent */@' "$_file";;
+
+    dlm-rebuild-0xf9-not-adopted)
+        # `if (g.outcome == (uint8_t)VMS_DLM_DIR_YOU_MASTER && t->await_root &&` is unique.
+        sed -i 's|if (g.outcome == (uint8_t)VMS_DLM_DIR_YOU_MASTER \&\& t->await_root \&\&|if (0 \&\& g.outcome == (uint8_t)VMS_DLM_DIR_YOU_MASTER \&\& t->await_root \&\& /* NEGCTL dlm-rebuild-0xf9-not-adopted */|' "$_file";;
+
+    dlm-rebuild-record-sent-as-op12)
+        # `if (vms_dlm_rb_rec_build(&w, (r.hash_known` is unique.
+        sed -i 's|if (vms_dlm_rb_rec_build(\&w, (r.hash_known|if (vms_dlm_rm_lock_rec_build(\&w, (r.hash_known|' "$_file";;
+
+    dlm-rebuild-install-ignores-compat)
+        # `ok = dup != NULL ||` is unique.
+        sed -i 's#    ok = dup != NULL ||#    ok = 1 || dup != NULL || /* NEGCTL dlm-rebuild-install-ignores-compat */#' "$_file";;
 
     dlm-rm-role-claimed-without-an-adoption)
         # rm_h_role's role read: the second arm of the only ternary here.

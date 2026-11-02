@@ -849,6 +849,8 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  * vms-874f-failover-rebuild-20261011.
  */
 #define VMS_DLM_WIREOP_DIR_LOOKUP_TR 0x08u
+/* The same opcode, named for what rd vms-874f measured it to be. */
+#define VMS_DLM_WIREOP_REBUILD_REC   VMS_DLM_WIREOP_DIR_LOOKUP_TR
 
 /* ------------------------------------------------------------------ *
  * RULE C's PER-FRAME HALF (rd vms-b5b0)
@@ -2036,7 +2038,8 @@ struct vms_dlm_rm_lock_answer {
 };
 
 /*
- * Build the 82/01 answer to an op-0x12 (rule 2 above). Refuses
+ * Build the 82/01 answer to an op-0x12 (rule 2 above) -- or to an op-0x08
+ * failover-rebuild record (rd vms-874f R3). Refuses
  * VMS_DLM_LKID_UNSET in `master_lkid` -- the fc8540ae lesson in this file's
  * header -- and VMS_CODEC_E_CLASS for any frame that is not a cat-0x02 op-0x12.
  */
@@ -2112,28 +2115,28 @@ vms_codec_status_t vms_dlm_rm_valblk_parse_body(const uint8_t *body,
  * --selftest (the `holder` figures), over every capture in tests/lab/captures:
  *
  *   H1  every member a real old master sends an op-0x11 is first sent an
- *       op-0x0f FOR THE SAME TREE (394 of 394), and that op-0x0f's body[28:32]
- *       NAMES THE NEW MASTER: CSID-shaped (0x0001000n) in all 1,257 op-0x0f's
- *       an old master sent; in all 17 captures with more than one new master
+ *       op-0x0f FOR THE SAME TREE (665 of 665), and that op-0x0f's body[28:32]
+ *       NAMES THE NEW MASTER: CSID-shaped (0x0001000n) in all 1,807 op-0x0f's
+ *       an old master sent; in all 18 captures with more than one new master
  *       it takes exactly one value per new master and a different value for
  *       each; and in the SDA-named RA8 arm it is VAX1's CSID 00010001, the
  *       new master's. It is also the one cell the NEW MASTER's 82/15 answer
  *       clears (rd vms-cab) -- the cell that names it.
  *   H2  every op-0x11 recipient sends the new master an op-0x13, after the
- *       op-0x11 (391 of 391 in the episodes that complete), INCLUDING the 15
+ *       op-0x11 (662 of 662 in the episodes that complete), INCLUDING the 16
  *       that sent no record at all. So "who sends 0x13" is: whoever was sent
  *       an op-0x11. (The new master's own wait set -- vms_dlm_rm_fsm.h --
  *       is the same fact from the other end, rd vms-083.)
  *   H3  in every episode the records can be attributed to (7 of 7), the
  *       holder's records follow the op-0x11 and precede its op-0x13; and
- *       2,991 of 3,522 real records go out with no earlier record of the same
+ *       3,086 of 3,941 real records go out with no earlier record of the same
  *       holder still unanswered -- one at a time is the commonest real pacing,
  *       and a SUB record cannot go earlier anyway: it carries its parent's
  *       NEW-MASTER handle at body[40:44], which only that parent's 82/01
  *       returns.
- *   H4  a holder's op-0x13 carries body[28] = 0 (391 of 391); the old master's
- *       carries 1 or 2 (841 of 841) -- the cell says which role sent it. Its
- *       body[128:132] is the tree's directory hash (391 of 391 equal the
+ *   H4  a holder's op-0x13 carries body[28] = 0 (662 of 662); the old master's
+ *       carries 1 or 2 (1,112 of 1,112) -- the cell says which role sent it. Its
+ *       body[128:132] is the tree's directory hash (662 of 662 equal the
  *       op-0x0e's). Every other cell past the identity is the sender's stale
  *       buffer (the last 82/01 answer's grant record, kernel addresses), and
  *       the vms-42de ruling's direction applies: this node sends zeros there.
@@ -2196,6 +2199,51 @@ struct vms_dlm_rm_lock_grant {
 vms_codec_status_t vms_dlm_rm_lock_grant_parse_body(const uint8_t *body,
 						    uint32_t len,
 						    struct vms_dlm_rm_lock_grant *out);
+
+/* ==========================================================================
+ * THE FAILOVER REBUILD RECORD (rd vms-874f) -- op 0x08, the op-0x12 record's
+ * twin. The capture, the census and what it does NOT cover are in
+ * tests/lab/captures/vms-874f-failover-rebuild-20261011/README.md; every
+ * figure below is pinned by tools/cluster/dlm_rebuild08_census.py --selftest.
+ *
+ *   R1  When a tree's MASTER LEAVES, each SURVIVING HOLDER that is not the
+ *       new master sends one op-0x08 per lock it holds in the tree, ROOT
+ *       first. Every cell this codec writes sits at the op-0x12 record's
+ *       offset: body[20:24] the owning PID in the controlled RA1b holders
+ *       (VAX3's 0x20600216, as in RA5's op-0x12), body[24:28] the holder's own
+ *       lkid (the answer echoes it 888/888), body[30]/[31] the mode,
+ *       body[36:40]/[40:44] the parent pair (zero on a ROOT), body[44:48+] the
+ *       identity, body[88:108] the block and its sequence, body[110] = 01 and
+ *       the 00000000 ffffffff tail at body[112:128] (550/550 ROOT, 338/338
+ *       SUB), body[128:132] the ROOT's directory hash (550/550).
+ *   R2  The ROOT goes to the tree's DIRECTORY node -- or, when the sender IS
+ *       the directory, to the master it has just answered 0xf9 (RA1b: 121 of
+ *       262 0xfa ROOT answers).
+ *   R3  The answer is always an 82/01 paired by transaction. body[34] 0xf9:
+ *       the requester now MASTERS the tree (149 ROOT) -- and sends no SUB
+ *       record; 0xfa: a master exists and granted the lock, body[20:24] its
+ *       lkid (398 ROOT, 338 SUB). The 0xfa answer is the op-0x12 grant
+ *       (vms_dlm_rm_lock_answer_build), and vms_dlm_rm_lock_grant_parse_body
+ *       reads it.
+ *   R4  Each SUB goes to the SAME node, after its parent's answer, carrying
+ *       the parent's own lkid at body[36:40] and that answer's body[20:24] at
+ *       body[40:44] (338 of 338), and only when the parent was answered 0xfa.
+ * ========================================================================== */
+
+/* BUILD one op-0x08 record from a lock this node holds -- the op-0x12 builder's
+ * contract and refusals exactly (vms_dlm_rm_lock_rec_build), with op 0x08. */
+vms_codec_status_t vms_dlm_rb_rec_build(const struct vms_dlm_rm_lock_rec *r,
+					int hash_known, uint8_t *frame,
+					uint32_t cap, uint32_t *written);
+
+/*
+ * PARSE an inbound op-0x08 record -- a PEER-RECEIVE decoder (fuzzed,
+ * tests/cluster/host/fuzz_codec_dlm.c). The op-0x12 parser's cells and
+ * refusals (a zero own handle is E_RANGE); VMS_CODEC_E_CLASS for anything but a
+ * cat-0x02 op-0x08.
+ */
+vms_codec_status_t vms_dlm_rb_rec_parse_body(const uint8_t *body, uint32_t len,
+					     struct vms_dlm_rm_lock_rec *out);
 
 /* ==========================================================================
  * DLKSRCH -- distributed deadlock search (H11, rd vms-d55 / vms-ec75).

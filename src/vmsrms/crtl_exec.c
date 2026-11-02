@@ -74,6 +74,9 @@ extern uint32_t lib$wait(const void *seconds, const uint32_t *flags, const uint3
 /* LIB$GET_EF / the executive's completion notification and termination record
  * (LIBVMS$SHR / LIBVMSSYS$SHR -- the same two LIB$SPAWN/NOWAIT uses). */
 extern uint32_t lib$get_ef(uint32_t *efn);
+/* crtl_devfd.c; weak: an image (a test) built without the device layer has no
+ * C RTL pipe ends to hand over */
+extern int ovmx_crtl_devfd_give(long long fd, char *dev, size_t devsz) __attribute__((__weak__));
 extern uint32_t vms_kif_spawn_notify(uint32_t child_vms_pid, uint32_t efn,
                                      uint64_t astadr, uint64_t astprm, int *completed);
 extern uint32_t vms_kif_getexit_pid(uint32_t vms_pid, uint32_t *condition,
@@ -187,7 +190,21 @@ uint32_t ovmx_crtl_exec_create(const char *spec, char *const *args, size_t nargs
 
     uint32_t pid = 0;
     struct dsc$descriptor_s img = sdsc(spec, strlen(spec));
-    uint32_t st = sys$creprc(&pid, &img, 0, 0, 0, 0, 0, 0, 0, 0, 0, PRC$M_HIBER);
+    /* vms-a66e: a standard descriptor that is a pipe end (a mailbox,
+     * crtl_devfd.c) is the subprocess's SYS$INPUT / SYS$OUTPUT / SYS$ERROR,
+     * named to $CREPRC as DEC C names it; the write end is the subprocess's to
+     * end. Any other stream the subprocess inherits as it is. */
+    char sdev[3][64];
+    struct dsc$descriptor_s sd[3];
+    const struct dsc$descriptor_s *sp[3] = { 0, 0, 0 };
+    for (int i = 0; i < 3; i++) {
+        if (ovmx_crtl_devfd_give && ovmx_crtl_devfd_give(i, sdev[i], sizeof sdev[i]) &&
+            strncmp(sdev[i] + (sdev[i][0] == '_'), "MBA", 3) == 0) {
+            sd[i] = sdsc(sdev[i], strlen(sdev[i]));
+            sp[i] = &sd[i];
+        }
+    }
+    uint32_t st = sys$creprc(&pid, &img, sp[0], sp[1], sp[2], 0, 0, 0, 0, 0, 0, PRC$M_HIBER);
     if (!(st & 1) || !pid) {
         free(rec);
         errno = errno_of(st);

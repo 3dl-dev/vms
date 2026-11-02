@@ -504,6 +504,22 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -I/src/tests/qemu \
         /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
     /src/tests/qemu/mkimage_ods2_imgact /ods2_imgact.img 1
+
+# GENERATED cluster-factor-3 ODS-2 volume for the extend-in-clusters proof (rd
+# vms-563). mkimage_ods2_cluster3.c formats with the same writer, lays down
+# [000000]FILLER.DAT and EVAC.DAT, then converts the volume to cluster factor 3
+# (tests/ods2/ods2_cluster_fixture.h). Staged as /ods2_cluster3.img, which
+# run_tests.sh puts on the virtio-scsi disk (SDA0:); test_syssvc_acp_cluster3
+# $MOUNTs it and extends EVAC.DAT.
+COPY tests/qemu/mkimage_ods2_cluster3.c /src/tests/qemu/
+COPY tests/ods2/ods2_cluster_fixture.h /src/tests/ods2/
+RUN gcc -O2 -Wall -I/src/vmsfs/include -I/src/tests/ods2 \
+        -o /src/tests/qemu/mkimage_ods2_cluster3 \
+        /src/tests/qemu/mkimage_ods2_cluster3.c \
+        /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
+        /src/vmsfs/ods2/ods2_edit.c \
+        /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
+    /src/tests/qemu/mkimage_ods2_cluster3 /ods2_cluster3.img
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \
     if [ ! -e /boot/vmlinuz ]; then \

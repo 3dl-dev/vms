@@ -203,9 +203,22 @@ cluster_host_fuzz(fuzz_codec_blk)
 # parse, the shipping directory table asked WITH the vector's answer, and the
 # answer builder -- fuzzed with random bodies, table state and directed-ness.
 # The table TU is compiled into the fuzz itself so the sanitizer covers it.
+# The table TU is its OWN object library rather than a source of the fuzz
+# target: cluster_host_fuzz's quoted -DOVMX_FIXTURE_DIR="..." would otherwise
+# land in vms_dlm_dir.c's compile command as a backslash escape, which the
+# product-TU census (kif_caller_census) refuses to word-split.
+add_library(cluster_host_dlm_dir_fuzz OBJECT
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_dlm_dir.c)
+target_include_directories(cluster_host_dlm_dir_fuzz PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_definitions(cluster_host_dlm_dir_fuzz PRIVATE OVMX_CLUSTER_HOST)
+if(OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+    target_compile_options(cluster_host_dlm_dir_fuzz PRIVATE
+        -fsanitize=address,undefined)
+endif()
 cluster_host_fuzz(fuzz_dlm_dir_directed)
 target_sources(fuzz_dlm_dir_directed PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_dlm_dir.c)
+    $<TARGET_OBJECTS:cluster_host_dlm_dir_fuzz>)
 target_include_directories(fuzz_dlm_dir_directed PRIVATE
     ${CMAKE_SOURCE_DIR}/src/kernel-core)
 target_compile_definitions(fuzz_dlm_dir_directed PRIVATE OVMX_CLUSTER_HOST)

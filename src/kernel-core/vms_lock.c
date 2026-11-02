@@ -1274,10 +1274,26 @@ static void resource_release(struct vms_lock_resource *res)
          * database grow without bound for a process that locks many distinct
          * names.
          */
-        if (!has_valblk && !(res->hash_known && !res->hash_computed)) {
-            parent = res->parent;
+        /*
+         * rd vms-3ea: NOBODY HOLDS IT, SO NOBODY MASTERS IT (Davis p. 6-31:
+         * the master's RSB goes with the last lock, and with it the directory
+         * entry). That is true whether or not this block is kept below for
+         * its value block or a learned hash -- what is kept is DATA about the
+         * name, never a claim about who masters it. So the directory is told
+         * (or this node's own entry dropped) and the mastery forgotten here,
+         * for every idle block; the next $ENQ resolves the master afresh.
+         * Measured: a block kept with its master made node A, which held
+         * nothing, grant node B's next request for its volume label.
+         */
+        if (res->master_csid != 0) {
             dir_remove = dlm_dir_remove_fill(res, &rm);
             dlm_dir_release_self(res);
+            res->master_csid = 0;
+            res->dir_told_csid = 0;
+            res->dir_valid = 0;
+        }
+        if (!has_valblk && !(res->hash_known && !res->hash_computed)) {
+            parent = res->parent;
             exec_hash_del(&res->hash_node);
             vms_res_blocks--;
             resource_free(res);

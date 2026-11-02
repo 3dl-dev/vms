@@ -1768,6 +1768,50 @@ static void e3ea_the_master_forgets_an_idle_resource(void)
 	mixed_down();
 }
 
+/* The same rule for a block that IS kept: a hash some system put on the wire
+ * keeps the block (resource_release), but it is data about the name, never a
+ * claim to master it. */
+static void e3ea_a_kept_block_keeps_no_master(void)
+{
+	const char *N = "E3EA$KEPT";
+	struct vms_dlm_res_ident selfid;
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	uint32_t lkid = 0, held = 0;
+	const uint32_t WIRE = 0x3ea05a5au;   /* a value the "wire" stated */
+
+	printf("-- rd vms-3ea: a block kept for a learned hash keeps no "
+	       "master --\n");
+	mixed_up(1u, 0u);             /* every name is directed HERE */
+	proc_init(&app);
+
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash(N, 0u, OVMX_RES_GROUP,
+						    OVMX_RES_MODE, WIRE),
+			SS__NORMAL, "a peer's frame stated a value for the name");
+	ct_check(do_enq(&app, N, LCK_K_NLMODE, 0u, &lkid) == SS__NORMAL &&
+		 lkid != 0u, "this node takes a lock and masters the name");
+	ct_check(vms_lock_dlm_name_mastered_here(N, 0u, OVMX_RES_GROUP,
+						 OVMX_RES_MODE) == 1,
+		 "  while it holds the lock");
+	ct_check(do_deq(&app, lkid) == SS__NORMAL, "the last lock goes");
+
+	ct_check(vms_lock_dlm_dir_hash_of(N, 0u, OVMX_RES_GROUP, OVMX_RES_MODE,
+					  &held) == 1 && held == WIRE,
+		 "the block is KEPT, with the value the wire stated");
+	ct_check(vms_lock_dlm_name_mastered_here(N, 0u, OVMX_RES_GROUP,
+						 OVMX_RES_MODE) == 0,
+		 "*** but it claims no master: nobody holds the resource ***");
+	memset(&selfid, 0, sizeof(selfid));
+	selfid.group = OVMX_RES_GROUP;
+	selfid.mode = OVMX_RES_MODE;
+	selfid.name_len = (uint8_t)strlen(N);
+	memcpy(selfid.name, N, selfid.name_len);
+	ct_check(vms_dlm_dir_lookup_ident(&g.dir, &selfid, &master, NULL,
+					  NULL) == VMS_DLM_DIR_IDENT_NONE,
+		 "*** and this node's directory no longer names itself ***");
+	mixed_down();
+}
+
 static void e3ea_the_requester_forgets_a_released_master(void)
 {
 	struct vms_proc app;
@@ -1834,6 +1878,7 @@ int main(void)
 
 	e3ea_the_master_forgets_an_idle_resource();
 	e3ea_the_requester_forgets_a_released_master();
+	e3ea_a_kept_block_keeps_no_master();
 
 	return ct_summary("test_dlm_mixed_master");
 }

@@ -1,8 +1,9 @@
 # vms-0db: a real holder sends its WAITING and CONVERTING locks, and says which they are
 
-`PLAN.md` and `RMWAIT.MAR` were committed and pushed before the pod existed (dce2781fa). Each of
-the four addenda was committed before the firing it describes (0da4a10bd, f624a53f4, 01efe556a,
-3ff1fac6c). Pod `lab0db` (`ovmx-vaxlab:7`, 1500m/2Gi, requests == limits), three real OpenVMS
+`PLAN.md` and `RMWAIT.MAR` were committed and pushed before the pod existed (fdc0608b8). Each of
+the four addenda was committed before the firing it describes (d2b415f8a, 90039173a, 601e2091d,
+22fa9e1d3). Those are the SHAs after the rebase onto main. As first pushed, they were dce2781fa,
+0da4a10bd, f624a53f4, 01efe556a and 3ff1fac6c. Pod `lab0db` (`ovmx-vaxlab:7`, 1500m/2Gi, requests == limits), three real OpenVMS
 VAX V7.3 nodes, no OVMX node: **OVMX emitted nothing at a real VAX.** The pod and its lab
 directory were deleted after the run.
 

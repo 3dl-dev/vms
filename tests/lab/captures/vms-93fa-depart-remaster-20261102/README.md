@@ -44,7 +44,11 @@ No bugcheck on any console. VAX1 was not rebooted.
    (FC-P5.5): no survivor told a new master about OVMX's lock. Only a CR was
    held here. An EX on the OVMX side would have let VAX2 be granted an
    incompatible lock: a double grant.
-3. **Quorum after `REMOVE_NODE` is wrong on both sides** (rd vms-c350).
+3. **OVMX's quorum after `REMOVE_NODE` was wrong** (rd vms-c350). VAX2's was
+   right. VAX2 has VOTES 0 in this lab (its own PARAMS), so `CLUSTER_VOTES=1` is
+   OVMXE's vote. The departing VAX's class-0x04 open proposed QUORUM 1 at
+   body[22:24], and OVMX re-derived 2 from its own EXPECTED_VOTES 3. Fixed and
+   lab-proven in `tests/lab/captures/vms-c350-quorum-adjust-20261102/`.
 
 So vms-93fa cannot pass by arrangement alone. Making the departure hand OVMX the
 tree needs finding (1). Making OVMX's lock survive needs vms-20c's survivor

@@ -54,9 +54,9 @@ struct vms_getsyi_cluster_view {
 	 * cnxman_club_recount_members(), p. 7-49's SELECTED-flag count). */
 	uint32_t cluster_nodes;
 
-	/* SYI$_CLUSTER_VOTES: THIS system's own advertised VOTES, the SYSGEN
-	 * value STARTUP.EXE loaded (design SS3.5's VMS_IOCTL_SYSGEN_LOAD) --
-	 * always known once the params struct exists, never a peer's value. */
+	/* SYI$_CLUSTER_VOTES: the votes of the cluster's reachable members,
+	 * this system's included (club->present_votes, rd vms-b6f) -- what a
+	 * real V7.3 reports. 0 until this node's member recompute has run. */
 	uint16_t cluster_votes;
 
 	/* SYI$_CLUSTER_QUORUM: club->quorum, FC-P3.7's own computed field. */

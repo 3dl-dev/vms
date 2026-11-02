@@ -1332,7 +1332,7 @@ struct vms_cluster_getsyi_args {
     uint32_t cluster_ftime_lo;      /* return: SYI$_CLUSTER_FTIME low word    */
     uint32_t cluster_ftime_hi;      /* return: ... high word                  */
     uint32_t node_csid;             /* return: SYI$_NODE_CSID (0 = unassigned)*/
-    uint16_t cluster_votes;         /* return: SYI$_CLUSTER_VOTES (ours)      */
+    uint16_t cluster_votes;         /* return: SYI$_CLUSTER_VOTES (cluster) */
     uint16_t cluster_quorum;        /* return: SYI$_CLUSTER_QUORUM            */
     uint8_t  cluster_member;        /* return: SYI$_CLUSTER_MEMBER, 0 or 1    */
     uint8_t  cluster_fsysid_valid;  /* return: 0 = the CLUB has not learned it*/

@@ -789,6 +789,12 @@ struct vms_club {
 	uint16_t quorum;             /* cluster quorum */
 	uint16_t expected_votes;     /* computed expected votes */
 	uint16_t qdisk_votes;        /* votes assigned to the quorum disk */
+	/* rd vms-b6f: the votes of the members reachable NOW -- the sum the
+	 * availability test compares with QUORUM, kept so SYI$_CLUSTER_VOTES
+	 * can report the CLUSTER's votes as VMS does (VAX2, VOTES 0, read
+	 * CLUSTER_VOTES=1 with OVMXE's one vote in the cluster; 4 with
+	 * 1+0+3; 3 once the 1 left). 0 until a member's recompute runs. */
+	uint16_t present_votes;
 
 	/* ---- proposed data cells (p. 7-48): written during a transition,
 	 * ignored outside one, copied to the effective cells above at Phase 2

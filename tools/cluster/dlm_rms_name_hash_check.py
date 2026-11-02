@@ -185,8 +185,8 @@ def selftest(repo):
 
     # +1 from the rd vms-874f RA1b departure capture: an op-0x0d directory
     # registration after the departure, and its body[128:132] is the computed
-    # hash like every other row.
-    check('real RMS-named cat-0x02 requests in the corpus', len(rows), 1134)
+    # hash like every other row. +1 from rd vms-2fa's arm captures, likewise.
+    check('real RMS-named cat-0x02 requests in the corpus', len(rows), 1135)
     check('...of them op-0x01 directory lookups',
           sum(1 for _c, _i, _n, b in rows if b[9] == 0x01), 578)
     # The identity the value is computed over, and the length -- both inside

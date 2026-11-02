@@ -843,10 +843,15 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  * (the requester now masters the tree, and sends no subs) or 0xfa (a master
  * exists: body[20:24] is the new master's lkid, which each SUB then carries at
  * body[40:44]). The SYS$SYS_ID lookup above is a ROOT record of this kind. Every
- * figure (550 ROOT / 338 SUB records over ten captures, the parent pair 338 of
- * 338) is pinned by tools/cluster/dlm_rebuild08_census.py --selftest; capture
- * and the topologies NOT covered: tests/lab/captures/
- * vms-874f-failover-rebuild-20261011.
+ * figure (1,590 ROOT / 376 SUB records over thirteen captures, the parent pair
+ * 376 of 376) is pinned by tools/cluster/dlm_rebuild08_census.py --selftest;
+ * capture and the topologies NOT covered: tests/lab/captures/
+ * vms-874f-failover-rebuild-20261011. WHEN (rd vms-2fa, 1,965 of 1,965 real
+ * records with their barrier in the capture): inside the departure's
+ * transition, after the release (cat-0x01 op-0x0c) of step 5 if the SENDER's
+ * own LOCKDIRWT is non-zero, else of step 6, every record answered before the
+ * sender's next step report or release -- tests/lab/captures/
+ * vms-2fa-rebuild-step-20261102.
  */
 #define VMS_DLM_WIREOP_DIR_LOOKUP_TR 0x08u
 

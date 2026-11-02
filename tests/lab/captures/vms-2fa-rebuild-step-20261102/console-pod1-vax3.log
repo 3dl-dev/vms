@@ -1,0 +1,1025 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/lab/k8s-labs/lab2fa/vax3/vax.ini-1> attach nvr /lab/k8s-labs/lab2fa/vax3/data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/lab/k8s-labs/lab2fa/vax3/vax.ini-19> attach rq0 /lab/k8s-labs/lab2fa/data/d0.dsk
+%SIM-INFO: RQ0: '/lab/k8s-labs/lab2fa/data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: SYSDSK1      Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/lab2fa/vax3/vax.ini-20> attach rq1 /lab/k8s-labs/lab2fa/data/d1.dsk
+%SIM-INFO: RQ1: '/lab/k8s-labs/lab2fa/data/d1.dsk' Contains ODS2 File system
+%SIM-INFO: RQ1: Volume Name: VAX1DATA     Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/lab2fa/vax3/vax.ini-21> attach -r rq2 /lab/media/openvms073.iso
+%SIM-INFO: RQ2: Unit is read only
+%SIM-INFO: RQ2: '/lab/media/openvms073.iso' Contains ODS2 File system
+%SIM-INFO: RQ2: Volume Name: VAXVMS073    Format: DECFILE11B   Sectors In Volume: 1067894
+/lab/k8s-labs/lab2fa/vax3/vax.ini-22> attach -r rq3 /lab/media/openvms-internet-product-suite-v11.iso
+%SIM-INFO: RQ3: Unit is read only
+%SIM-INFO: RQ3: '/lab/media/openvms-internet-product-suite-v11.iso' Contains ODS2 File system
+%SIM-INFO: RQ3: Volume Name: OVMSIPS11    Format: DECFILE11B   Sectors In Volume: 800000
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/lab/k8s-labs/lab2fa/vax3/local.ini-2> at xq tap:tap3
+%SIM-INFO: Eth: opened OS device tap3
+/lab/k8s-labs/lab2fa/vax3/local.ini-3> att dz 2003,speed=*32
+%SIM-INFO: Listening on port 2003
+/lab/k8s-labs/lab2fa/vax3/vax.ini-26> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655X-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..
+
+?53 2 0A FF 00 0000
+
+P1=00000002  P2=00000028  P3=0000270E  P4=00D40077  P5=00000000
+P6=FFFFFFFF  P7=00000000  P8=00000000  P9=00000000 P10=20051CE0
+r0=00000000  r1=20140110  r2=AD4ABF29  r3=00030088  r4=AD4ABF33
+r5=2004E8F9  r6=00018678  r7=000186C8  r8=0001ADAE ERF=80000000
+30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Normal operation not possible.
+
+>>>^U
+>>>B/R5:20000001 DUA0
+[drv:boot-echo-verified attempt 1 'B/R5:20000001 DUA0']
+
+(BOOT/R5:20000001 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+SYSBOOT>  SET LOCKDIRWT 0
+
+SYSBOOT>  SHOW LOCKDIRWT
+Parameter Name            Current    Default     Min.     Max.     Unit  Dynamic
+--------------            -------    -------    -------  -------   ----  -------
+LOCKDIRWT                       0          0         0       255 Pure-numbe 
+
+SYSBOOT>  CONTINUE
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-W-SYSBOOT Can not map SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  sending VAXcluster membership request to system VAX2
+%CNXMAN,  now a VAXcluster member -- system VAX3
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at  2-NOV-2026 10:20:56.88
+%INSTALL-E-OPENIN, error opening DISK$SYSDSK1:<SYS2.SYSCOMMON.SYSLIB>CXXL$MSG_SHR.EXE; as input
+-RMS-E-FNF, file not found
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20600208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.39  %%%%%%%%%%%
+Operator _VAX3$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.39  %%%%%%%%%%%
+Operator status for operator _VAX3$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.43  %%%%%%%%%%%
+Logfile has been initialized by operator _VAX3$OPA0:
+Logfile is VAX3::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;2
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.43  %%%%%%%%%%%
+Operator status for operator VAX3::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;2
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.43  %%%%%%%%%%%
+10:20:57.57 Node VAX3 (csid 00010003) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.44  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.44  %%%%%%%%%%%
+Operator _VAX2$OPA0: has been enabled, username SYSTEM
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2060020E
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.73  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.73  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.76  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.76  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.76  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.77  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.78  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.78  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:02.99  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:03.00  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:03.00  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:03.01  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:03.02  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:03.61  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX3.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:03.83  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX3
+Security alarm (SECURITY) and security audit (SECURITY) on VAX3, system id: 1027
+Auditable event:          Audit server starting up
+Event time:                2-NOV-2026 10:21:03.78
+PID:                      20600204        
+Username:                 SYSTEM          
+
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODENAME"\
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODEMAME"\
+You have not yet configured your DECnet permanent database.  You must
+either use NCP to define your DECnet database, or invoke the command
+procedure SYS$MANAGER:NETCONFIG.COM, which will do it for you.
+
+%TCPIP-I-INFO, TCP/IP Services startup beginning at  2-NOV-2026 10:21:05.47
+%TCPIP-I-NORMAL, timezone information verified
+%RUN-S-PROC_ID, identification of created process is 20600213
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:05.76  %%%%%%%%%%%
+Message from user INTERnet on VAX3
+INTERnet Loaded
+
+%TCPIP-E-CONFIGERROR, error processing configuration request
+-TCPIP-E-INETERROR, internet interface error
+-RMS-E-RNF, record not found
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:21:07.19  %%%%%%%%%%%
+Message from user Proxy Server on VAX3
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%TCPIP-S-STARTDONE, TCP/IP Kernel startup completed
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-S-STARTDONE, TCPIP$PROXY startup completed
+%TCPIP-E-STARTERROR, error starting FTP service
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-E-STARTFAIL, failed to start TCPIP$FTP
+-TCPIP-E-ENABLERR, error enabling service
+%TCPIP-S-STARTDONE, TCPIP$FTP_CLIENT startup completed
+%TCPIP-E-STARTERROR, error starting TELNET service
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-E-STARTFAIL, failed to start TCPIP$TELNET
+-TCPIP-E-ENABLERR, error enabling service
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at  2-NOV-2026 10:21:09.07
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX3)
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+  SYSTEM       job terminated at  2-NOV-2026 10:21:13.40
+
+  Accounting information:
+  Buffered I/O count:            2416         Peak working set size:    1652
+  Direct I/O count:               900         Peak page file size:      8712
+  Page faults:                  13013         Mounted volumes:             1
+  Charged CPU time:           0 00:00:06.76   Elapsed time:     0 00:00:16.55
+
+VAX/VMS V7.3      node VAX3
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3
+    Last interactive login on Monday,  2-NOV-2026 10:22[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ 
+$ SYSTEM
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ system
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ 
+$ SYSTEM
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ WRITE SYS$OUTPUT F$GETSYI("NODENAME")," LDW=",F$GETSYI("LOCKDIRWT")," CN=",F$GETSYI("CLUSTER_NODES")
+VAX3 LDW=0 CN=3
+$ WRITE SYS$OUTPUT "MK26801800"
+MK26801800
+$ RMH :== $SYS$SYSTEM:RMHOLD
+$ WRITE SYS$OUTPUT "MK30377518"
+MK30377518
+$ SPAWN/NOWAIT/PROCESS=RMHV3 RMH 111-DEPT
+%DCL-S-SPAWNED, process RMHV3 spawned
+$ WRITE SYS$OUTPUT "MK30936002"
+MK30936002
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=DEPT
+Address of RSB:  87A23B80  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          1  FGMODE:       NL                                  
+Lock Count:             1  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 54504544   DEPT....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 30000308  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ 
+
+SHUTDOWN message on VAX3 from user SYSTEM at _VAX1$OPA0:   10:29:18
+VAX1 will shut down in 0 minutes; back up later.  Please log off node VAX1.
+vms-2fa arm1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:18.50  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:19.84)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:18.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:19.86)
+Message from user INTERnet on VAX1
+INTERnet ACP Error during process startup, Nolisten Service Disabled - FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:18.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:19.86)
+Message from user INTERnet on VAX1
+INTERnet ACP Deactivate FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:19.11  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:20.37)
+Message from user DECNET on VAX1
+DECnet shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:26.53  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:27.92)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server shutting down
+Event time:                2-NOV-2026 10:29:27.92
+PID:                      2020021A        
+Username:                 SYSTEM          
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:27.05  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:28.22)
+Message from user SYSTEM on VAX1
+_VAX1$OPA0:, VAX1 shutdown was requested by the operator.
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:27.06  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:27.28  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:28.54)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASHUTDOWN, breakin detection and evasion processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:27.28  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:28.54)
+Message from user SYSTEM on VAX1
+%SECSRV-I-PROXYSHUTDOWN, proxy processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:29:27.54  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:29:28.98)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSHUTDOWN, security server shutting down
+
+$ 
+%CNXMAN,  lost connection to system VAX1
+%CNXMAN,  timed-out lost connection to system VAX1
+$ 
+%CNXMAN,  proposing reconfiguration of the VAXcluster
+$ 
+%CNXMAN,  removed from VAXcluster system VAX1
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%CNXMAN,  quorum lost, blocking activity
+$ ANALYZE/SYSTEM
+%CNXMAN,  discovered system VAX1
+%CNXMAN,  established connection to system VAX1
+%CNXMAN,  received VAXcluster membership request from system VAX1
+%CNXMAN,  proposing addition of system VAX1
+%CNXMAN,  completing VAXcluster state transition
+%CNXMAN,  quorum regained, resuming activity
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.77  %%%%%%%%%%%
+10:29:40.51 Node VAX3 (csid 00010003) lost connection to node VAX1
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.77  %%%%%%%%%%%
+10:29:40.51 Node VAX3 (csid 00010003) timed-out lost connection to node VAX1
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.77  %%%%%%%%%%%
+10:29:43.29 Node VAX3 (csid 00010003) proposed reconfiguration of the VAXcluster
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.77  %%%%%%%%%%%
+10:29:43.29 Node VAX1 (csid 00010001) has been removed from the VAXcluster
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.78  %%%%%%%%%%%
+10:29:43.29 Node VAX3 (csid 00010003) completed VAXcluster state transition
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.78  %%%%%%%%%%%
+10:29:44.81 Node VAX3 (csid 00010003) lost quorum, blocking activity
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.78  %%%%%%%%%%%
+10:54:07.28 Node VAX3 (csid 00010003) received VAXcluster membership request from node VAX1
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.78  %%%%%%%%%%%
+10:54:07.28 Node VAX3 (csid 00010003) proposed addition of node VAX1
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.78  %%%%%%%%%%%
+10:54:07.29 Node VAX3 (csid 00010003) completed VAXcluster state transition
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:07.79  %%%%%%%%%%%
+10:54:07.31 Node VAX3 (csid 00010003) regained quorum, proceeding
+
+
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=DEPT
+Address of RSB:  87A23B80  GGMODE:       CR  Status: INVALID                 
+Parent RSB:      00000000  CGMODE:       CR                                  
+Sub-RSB count:          1  FGMODE:       CR                                  
+Lock Count:             1  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 54504544   DEPT....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000002
+
+Granted queue (Lock ID / Gr mode / Range):
+ 30000308  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ 
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=DEPT
+Address of RSB:  87A23B80  GGMODE:       CR  Status: INVALID                 
+Parent RSB:      00000000  CGMODE:       CR                                  
+Sub-RSB count:          1  FGMODE:       CR                                  
+Lock Count:             1  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 54504544   DEPT....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000002
+
+Granted queue (Lock ID / Gr mode / Range):
+ 30000308  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:08.89  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 10:54:07.78)
+10:29:40.32 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:08.89  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 10:54:07.78)
+10:29:40.32 Node VAX2 (csid 00010002) timed-out lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.45  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.78  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.71)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.78  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.71)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.80  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.72)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.80  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.72)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.80  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.72)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.81  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.72)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.81  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.72)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:13.81  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.72)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:14.02  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.80)
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:14.03  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.81)
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:14.03  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.81)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:14.03  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.81)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:14.05  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:13.81)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:14.91  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:14.05)
+Message from user SYSTEM on VAX1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:15.18  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:14.11)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server starting up
+Event time:                2-NOV-2026 10:54:14.10
+PID:                      20800204        
+Username:                 SYSTEM          
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:15.67  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:14.34)
+Message from user DECNET on VAX1
+DECnet starting
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:15.78  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:14.52)
+Message from user DECNET on VAX1
+Error opening permanent proxy database
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:18.27  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:18.44)
+Message from user INTERnet on VAX1
+INTERnet Loaded
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:18.88  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:19.20)
+Message from user DECNET on VAX1
+DECnet event 4.10, circuit up
+From node 1.1 (VAX1),  1-JAN-1977 00:00:53.64
+Circuit QNA-0
+
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:19.39  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:19.54)
+Message from user INTERnet on VAX1
+INTERnet Started
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:19.39  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:19.55)
+Message from user INTERnet on VAX1
+INTERnet ACP Created INTERnet interface: QE0
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:19.53  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:19.61)
+Message from user Proxy Server on VAX1
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:21.05  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:20.86)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:21.05  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:20.86)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:54:21.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:54:21.55)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate TELNET Server 
+
+$ 
+%CNXMAN,  lost connection to system VAX1
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE VAX1           
+
+$ 
+%CNXMAN,  quorum lost, blocking activity
+$ 
+%CNXMAN,  re-established connection to system VAX1
+$ 
+%CNXMAN,  quorum regained, resuming activity
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.50  %%%%%%%%%%%
+10:56:31.90 Node VAX3 (csid 00010003) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.50  %%%%%%%%%%%
+10:56:36.80 Node VAX3 (csid 00010003) lost quorum, blocking activity
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.50  %%%%%%%%%%%
+10:56:37.40 Node VAX3 (csid 00010003) re-established connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.51  %%%%%%%%%%%
+10:56:37.50 Node VAX3 (csid 00010003) regained quorum, proceeding
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.51  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 10:56:37.17)
+10:56:33.57 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:56:26.25)
+10:56:26.24 Node VAX1 (csid 00010004) lost connection to node VAX2
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:56:26.47)
+10:56:26.47 Node VAX1 (csid 00010004) lost connection to node VAX3
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.51  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 10:56:37.17)
+10:56:37.07 Node VAX2 (csid 00010002) re-established connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:56:26.70)
+10:56:26.70 Node VAX1 (csid 00010004) re-established connection to node VAX2
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:56:37.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:56:26.93)
+10:56:26.92 Node VAX1 (csid 00010004) re-established connection to node VAX3
+
+$ WRITE SYS$OUTPUT F$GETSYI("NODENAME")," LDW=",F$GETSYI("LOCKDIRWT")," CN=",F$GETSYI("CLUSTER_NODES")," Q=",F$GETSYI("CLUSTER_QUORU
+M")," V=",F$GETSYI("CLUSTER_VOTES")," VOTES=",F$GETSYI("VOTES")
+VAX3 LDW=0 CN=3 Q=1 V=1 VOTES=0
+$ WRITE SYS$OUTPUT "MK04009341"
+MK04009341
+$ SPAWN/NOWAIT/PROCESS=RMHV3B RMH 111-DEPV
+%DCL-S-SPAWNED, process RMHV3B spawned
+$ WRITE SYS$OUTPUT "MK04935957"
+MK04935957
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=DEPV
+Address of RSB:  8799B900  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          1  FGMODE:       NL                                  
+Lock Count:             1  CSID:   00010004                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 56504544   DEPV....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 07000353  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ 
+
+SHUTDOWN message on VAX3 from user SYSTEM at _VAX1$OPA0:   10:58:12
+VAX1 will shut down in 0 minutes; back up later.  Please log off node VAX1.
+vms-2fa arm3
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:12.90  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:02.18)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:12.91  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:02.20)
+Message from user INTERnet on VAX1
+INTERnet ACP Error during process startup, Nolisten Service Disabled - FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:12.91  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:02.20)
+Message from user INTERnet on VAX1
+INTERnet ACP Deactivate FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:13.05  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:02.34)
+Message from user DECNET on VAX1
+DECnet shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:24.62  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:14.07)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server shutting down
+Event time:                2-NOV-2026 10:58:14.07
+PID:                      20800219        
+Username:                 SYSTEM          
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:26.00  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:14.71)
+Message from user SYSTEM on VAX1
+_VAX1$OPA0:, VAX1 shutdown was requested by the operator.
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:26.03  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:26.07  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:14.81)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASHUTDOWN, breakin detection and evasion processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:26.07  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:14.81)
+Message from user SYSTEM on VAX1
+%SECSRV-I-PROXYSHUTDOWN, proxy processing is shutting down
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 10:58:26.26  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 10:58:15.21)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSHUTDOWN, security server shutting down
+
+$ 
+%CNXMAN,  lost connection to system VAX1
+%CNXMAN,  timed-out lost connection to system VAX1
+$ 
+%CNXMAN,  removed from VAXcluster system VAX1
+$ 
+%CNXMAN,  quorum lost, blocking activity
+$ 
+%CNXMAN,  discovered system VAX1
+$ 
+%CNXMAN,  established connection to system VAX1
+$ 
+%CNXMAN,  received VAXcluster membership request from system VAX1
+$ 
+%CNXMAN,  proposing addition of system VAX1
+$ 
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%CNXMAN,  quorum regained, resuming activity
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:33.77  %%%%%%%%%%%
+10:58:36.12 Node VAX3 (csid 00010003) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:33.77  %%%%%%%%%%%
+10:58:36.12 Node VAX3 (csid 00010003) timed-out lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:33.77  %%%%%%%%%%%
+10:58:39.06 Node VAX1 (csid 00010004) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:33.77  %%%%%%%%%%%
+10:58:40.82 Node VAX3 (csid 00010003) lost quorum, blocking activity
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:33.77  %%%%%%%%%%%
+11:00:33.48 Node VAX3 (csid 00010003) received VAXcluster membership request from node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:33.78  %%%%%%%%%%%
+11:00:33.48 Node VAX3 (csid 00010003) proposed addition of node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:33.78  %%%%%%%%%%%
+11:00:33.49 Node VAX3 (csid 00010003) completed VAXcluster state transition
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:33.78  %%%%%%%%%%%
+11:00:33.52 Node VAX3 (csid 00010003) regained quorum, proceeding
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:34.69  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 11:00:33.78)
+10:58:36.04 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:34.69  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 11:00:33.78)
+10:58:36.04 Node VAX2 (csid 00010002) timed-out lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:34.69  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 11:00:33.78)
+10:58:38.94 Node VAX2 (csid 00010002) proposed reconfiguration of the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:34.70  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 11:00:33.78)
+10:58:38.94 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:40.68  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.12  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:40.99)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.12  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:40.99)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.16  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:40.99)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.16  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:40.99)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.17  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.00)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.17  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.00)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.19  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.00)
+Message from user SYSTEM on VAX1
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.19  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.00)
+Message from user SYSTEM on VAX1
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.50  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.16)
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.18)
+Message from user SYSTEM on VAX1
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.19)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.51  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.19)
+Message from user SYSTEM on VAX1
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:41.54  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:41.23)
+Message from user SYSTEM on VAX1
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:42.57  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:42.44)
+Message from user SYSTEM on VAX1
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX1.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:42.91  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:42.88)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server starting up
+Event time:                2-NOV-2026 11:00:42.80
+PID:                      20A00204        
+Username:                 SYSTEM          
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:43.52  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:43.57)
+Message from user DECNET on VAX1
+DECnet starting
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:43.64  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:43.69)
+Message from user DECNET on VAX1
+Error opening permanent proxy database
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:46.94  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:45.91)
+Message from user INTERnet on VAX1
+INTERnet Loaded
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:47.65  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:47.35)
+Message from user INTERnet on VAX1
+INTERnet Started
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:47.65  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:47.36)
+Message from user INTERnet on VAX1
+INTERnet ACP Created INTERnet interface: QE0
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:47.82  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:47.51)
+Message from user Proxy Server on VAX1
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:48.33  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:48.24)
+Message from user DECNET on VAX1
+DECnet event 4.10, circuit up
+From node 1.1 (VAX1),  1-JAN-1977 00:00:53.64
+Circuit QNA-0
+
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:49.68  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:49.69)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate FTP Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:49.68  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:49.69)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:00:50.25  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:00:50.26)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate TELNET Server 
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:02:23.59  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:02:21.84)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:                2-NOV-2026 11:02:21.83
+PID:                      20A00219        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+$ 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 11:03:40.57  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 11:03:38.83)
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Local interactive login failure
+Event time:                2-NOV-2026 11:03:38.83
+PID:                      20A0021A        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               $2$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+$ SPAWN/NOWAIT/PROCESS=RMHV3C RMH 111-DEPW
+%DCL-S-SPAWNED, process RMHV3C spawned
+$ WRITE SYS$OUTPUT "MK62563276"
+MK62563276
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=DEPW
+Address of RSB:  879A8E00  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          1  FGMODE:       NL                                  
+Lock Count:             1  CSID:   00010005                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 57504544   DEPW....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 300000F0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ 
+%CNXMAN,  lost connection to system VAX1
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE VAX1           
+
+$ 
+%CNXMAN,  quorum lost, blocking activity
+$ 
+%CNXMAN,  timed-out lost connection to system VAX1
+$ 
+%CNXMAN,  removed from VAXcluster system VAX1
+$ 

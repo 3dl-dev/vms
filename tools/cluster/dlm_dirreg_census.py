@@ -235,10 +235,12 @@ def selftest(repo):
 # two senders and two receivers the corpus had not seen, and 184 slot pairs,
 # every one with its residue unchanged -- the field map did not move.
 CORPUS = {
-    'captures': 24, 'records': 16994, 'senders': 17, 'receivers': 18,
-    'receivers_ovmx': 6, 'slot_pairs': 16590,
-    'slot_pairs_residue_unchanged': 16331, 'moved_after_other_use': 141,
-    'moved_no_visible_use': 118, 'group_nonzero': 63,
+    # rd vms-2fa's arm1/arm2 captures add 2 captures, 98 records, 2 senders,
+    # 2 receivers, 83 same-slot pairs (all residue-unchanged), 1 non-zero UIC.
+    'captures': 26, 'records': 17092, 'senders': 19, 'receivers': 20,
+    'receivers_ovmx': 6, 'slot_pairs': 16673,
+    'slot_pairs_residue_unchanged': 16414, 'moved_after_other_use': 141,
+    'moved_no_visible_use': 118, 'group_nonzero': 64,
 }
 
 

@@ -1429,8 +1429,8 @@ set_tests_properties(cluster_host_rec12_holder_census PROPERTIES
 # op-0x08 rebuild record -- ROOT first, then each SUB carrying the parent's
 # lkid on the new master, the 82/01 answer saying 0xf9 (the requester masters
 # the tree) or 0xfa (a master exists and granted). OVMX sends none, which is why
-# its locks die with a departed master. Pins the 550/338 ROOT/SUB split, the
-# parent-pair rule (338 of 338), the answer kinds (149/398/338), RA1b's RMT1
+# its locks die with a departed master. Pins the 1590/376 ROOT/SUB split, the
+# parent-pair rule (376 of 376), the answer kinds (409/1178/376), RA1b's RMT1
 # tree against SDA, and that the rd vms-629 SYS$SYS_ID lookup is the same
 # message -- so the sender and answerer are built from figures that cannot
 # drift from the bytes.
@@ -1440,6 +1440,23 @@ add_test(NAME cluster_host_dlm_rebuild08_census
         "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(cluster_host_dlm_rebuild08_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
+# ---- rd vms-2fa: WHEN a survivor sends its op-0x08 records. OVMX's one record
+# after barrier release 12 bugchecked a real VAX LOCKMGRERR (rd vms-bcb). Every
+# real record (1,965 with their barrier in a capture) follows the release of
+# step 5 if the SENDER's own LOCKDIRWT is non-zero, of step 6 if it is zero, and
+# is answered before the sender's next step report or release. The vms-2fa arms
+# flip only VAX3's weight in one lab and move its records from 6 to 5. The
+# selftest reddens on any constant release (5, 6 or 12).
+add_test(NAME cluster_host_dlm_rebuild_step
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tests/lab/captures/vms-2fa-rebuild-step-20261102/rebuild_step.py"
+        --selftest "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_rebuild_step PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;crash-safety"
     TIMEOUT 180
 )

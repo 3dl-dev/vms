@@ -55,6 +55,18 @@ Addresses: VAX1 sends as `aa:00:04:00:01:04`, VAX2 as `08:00:2b:b8:36:ea` and VA
 
 The corpus holds 888 op-0x08 records in ten captures. Every sender is a real VAX.
 
+> **Update, rd vms-2fa (2026-11-02).** `../vms-2fa-rebuild-step-20261102` adds three captures.
+> The corpus is now 1,966 records (1,590 ROOT, 376 SUB), and the census selftest pins the
+> current figures. The figures below are the 2026-10-11 corpus. Every rule still holds except
+> two statements:
+>
+> - "body[30] is the higher" is false for one record: arm1's CACHE$ ROOT has body[30] 0 and
+>   body[31] 3. All 24 records that differ are system locks.
+> - The 0xfa body[28] exceptions are no longer all in RA1b. The arms add 0x14 ×11 and 0x18 ×4.
+>
+> The new captures also ground **when** a survivor sends: after barrier release 5 if its own
+> LOCKDIRWT is non-zero, and after release 6 if it is zero.
+
 - **ROOT and SUB records.** A SUB has a non-zero body[36:44]. There are 550 ROOT records and
   338 SUB records. Each SUB's body[36:40] is the sender's own lkid for a ROOT it sent earlier,
   and its body[40:44] is that ROOT's answer body[20:24]. This holds for all 338. The SUB goes

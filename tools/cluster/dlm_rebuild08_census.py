@@ -269,12 +269,18 @@ def selftest(repo):
     #    oracle-3node-fault-f1 3-VAX, a node KILLED; ci6 run16 VAX1 SHUTDOWN
     #    REMOVE_NODE with OVMX the only directory (its answers are OVMX-built and
     #    excluded from every answer figure). Formations: the four SYS$SYS_ID
-    #    samples (rd vms-629). NOT COVERED: three or more survivors, a sub of a
-    #    sub, an Alpha sender.
+    #    samples (rd vms-629). rd vms-2fa (one pod, VAX3 the sender, VAX1 the
+    #    departing master): arm1 LOCKDIRWT 1/1/0 SHUTDOWN REMOVE_NODE, arm3b
+    #    0/1/0 VAX1's simulator stopped, arm2 1/1/1 stopped (both survivors
+    #    send); each trimmed to the departure's barrier. NOT COVERED: three or
+    #    more survivors, a sub of a sub, an Alpha sender.
     per = sorted((os.path.relpath(p, root).replace(os.sep, '/'), len(r),
                   sum(1 for x in r if is_root(x['q'])),
                   len({x['src'] for x in r})) for p, r in caps.items())
     check('captures carrying op-0x08 (path, records, ROOT, senders)', per, [
+        ('vms-2fa-rebuild-step-20261102/arm1-departure.pcap.gz', 281, 263, 1),
+        ('vms-2fa-rebuild-step-20261102/arm2-departure.pcap.gz', 796, 776, 2),
+        ('vms-2fa-rebuild-step-20261102/arm3b-departure.pcap.gz', 1, 1, 1),
         ('vms-629-op08-20261005/cf1-op08.pcap', 1, 1, 1),
         ('vms-6d3d-coldform-ev2-20260924/coldform-ev2-formation.pcap', 1, 1, 1),
         ('vms-874f-failover-rebuild-20261011/ra1b-departure.pcap.gz', 416, 395, 2),
@@ -287,7 +293,7 @@ def selftest(repo):
         ('vms-ci6-evac-20261010/run16/wire.pcap.gz', 3, 3, 1),
     ])
     n = m['root'] + m['sub']
-    check('records (ROOT, SUB)', (m['root'], m['sub']), (550, 338))
+    check('records (ROOT, SUB)', (m['root'], m['sub']), (1590, 376))
     check('...every one sent by a real DEC interface', m['real_sender'], n)
 
     # 1. THE ANSWER: always 82/01, paired by transaction, echoing the holder's
@@ -299,33 +305,42 @@ def selftest(repo):
           m['answer_by_real'], n - 3)
     check('real answer status by kind',
           sorted(('%s/%02x' % k, v) for k, v in status.items()),
-          [('root/f9', 149), ('root/fa', 398), ('sub/fa', 338)])
+          [('root/f9', 409), ('root/fa', 1178), ('sub/fa', 376)])
     check('0xf9 ROOT answers that echo body[20:24] (no new-master handle)',
           m['root_youmaster_echo_20'], m['root_youmaster_real'])
     check('0xfa answers that REWRITE body[20:24] (the new master\'s lkid), '
           'ROOT and SUB', (m['root_granted_b20_new'], m['sub_granted_b20_new']),
-          (398, 338))
-    check('0xfa answers with body[28] == 0x10 (ROOT, SUB); the 8 ROOT '
-          'exceptions are 0x14 x5 / 0x18 x3, all RA1b',
-          (m['root_granted_b28_10'], m['sub_granted_b28_10']), (390, 336))
+          (1178, 376))
+    check('0xfa answers with body[28] == 0x10 (ROOT, SUB); the 23 ROOT '
+          'exceptions are 0x14 x16 / 0x18 x7, in RA1b and the vms-2fa arms',
+          (m['root_granted_b28_10'], m['sub_granted_b28_10']), (1155, 373))
 
     odd28 = collections.Counter(
         (os.path.basename(p), r['a'][28]) for p, recs in caps.items() for r in recs
         if is_root(r['q']) and r['a'] is not None and is_real(r['dst'])
         and r['a'][34] == ST_GRANTED and r['a'][28] != 0x10)
     check('...the exceptions, by capture and value', sorted(odd28.items()),
-          [(('ra1b-departure.pcap.gz', 0x14), 5),
+          [(('arm1-departure.pcap.gz', 0x14), 5),
+           (('arm1-departure.pcap.gz', 0x18), 4),
+           (('arm2-departure.pcap.gz', 0x14), 6),
+           (('ra1b-departure.pcap.gz', 0x14), 5),
            (('ra1b-departure.pcap.gz', 0x18), 3)])
 
     # 2. THE RECORD's cells.
     check('ROOT records whose body[128:132] is refhash(own identity)',
           m['hash_ok'], m['root'])
-    check('body[30] == body[31] (the 8 that differ are system locks, '
-          'body[30] the higher; which is granted is NOT grounded)',
-          m['modes_equal'], n - 8)
-    check('...and in every one of the 8, body[30] > body[31]',
-          sum(1 for recs in caps.values() for r in recs
-              if r['q'][30] > r['q'][31]), 8)
+    #    rd vms-2fa FALSIFIED the old "body[30] is always the higher": arm1's
+    #    CACHE$ ROOT (record frame 101) carries body[30] 0 < body[31] 3. Every
+    #    differing record is still a system lock (CACHE$, AUDRSV$, UCX$, MSCP$);
+    #    neither cell is named.
+    check('body[30] == body[31] (the 24 that differ are system locks; '
+          'which is granted is NOT grounded)',
+          m['modes_equal'], n - 24)
+    check('...of the 24, body[30] > body[31] / body[30] < body[31]',
+          (sum(1 for recs in caps.values() for r in recs
+               if r['q'][30] > r['q'][31]),
+           sum(1 for recs in caps.values() for r in recs
+               if r['q'][30] < r['q'][31])), (23, 1))
 
     # 3. THE SUB RULE: the parent pair, and the order.
     check('SUB records whose parent (own earlier record, body[24:28] == '

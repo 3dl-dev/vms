@@ -864,6 +864,13 @@ uint32_t vms_kif_dfprot(const uint16_t *newprot, uint16_t *oldprot);
 /* $SET_PROCESS_PROPERTIESW executive half (rd vms-b9c): one process property
  * (PPROP$C_ code; the parse style today) read and optionally set. */
 uint32_t vms_kif_pprop(uint32_t property, const uint32_t *newvalue, uint32_t *oldvalue);
+/* The login data LOGINOUT leaves for the CLI (rd vms-838b, VMS_IOCTL_LGI).
+ * op VMS_LGI_OP_SET stores *flags / *uaf_flags / lgicmd (LOGINOUT only: CMKRNL,
+ * in a login process); VMS_LGI_OP_GET reads the caller's own into them, lgicmd
+ * NUL-terminated within lgicmd_size. A spec longer than VMS_LGICMD_SIZE-1 is
+ * SS$_BADPARAM, never clipped. */
+uint32_t vms_kif_lgi(uint32_t op, uint32_t *flags, uint32_t *uaf_flags,
+                     char *lgicmd, uint32_t lgicmd_size);
 /* $SETDDIR: the executive-held process default directory (rd vms-872). */
 uint32_t vms_kif_ddir(const char *newdir, char *olddir, uint32_t oldcap);
 /* The process rights list (vms-7d5a, VMS_IOCTL_RIGHTS): $GRANTID / $REVOKID. op = VMS_RIGHTS_OP_GRANT / _REVOKE; pid 0 = the caller. */

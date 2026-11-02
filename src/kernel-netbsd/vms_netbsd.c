@@ -1501,6 +1501,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DFPROT:
 	case VMS_IOCTL_DDIR:
 	case VMS_IOCTL_PPROP:
+	case VMS_IOCTL_LGI:
 	case VMS_IOCTL_RIGHTS:
 	case VMS_IOCTL_PRI:
 	case VMS_IOCTL_BRKAUTH:
@@ -1545,6 +1546,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_ddir(proc, (unsigned long)uarg);             break;
 		case VMS_IOCTL_PPROP:
 			r = vms_ioctl_pprop(proc, (unsigned long)uarg);            break;
+		case VMS_IOCTL_LGI:
+			r = vms_ioctl_lgi(proc, (unsigned long)uarg);              break;
 		case VMS_IOCTL_RIGHTS:
 			r = vms_ioctl_rights(proc, (unsigned long)uarg);           break;
 		case VMS_IOCTL_PRI:

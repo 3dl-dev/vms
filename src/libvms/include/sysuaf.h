@@ -476,6 +476,10 @@ int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password);
  */
 int sysuaf_interactive_login_permitted(const sysuaf_record_t *rec);
 int sysuaf_account_captive(const sysuaf_record_t *rec);
+/* The account's login flags as $GETUAI UAI$_FLAGS returns them (rd vms-838b):
+ * the binary uaf$l_flags longword, plus any flag the view's FLAGS names carry.
+ * LOGINOUT hands this to the executive for DCL (VMS_IOCTL_LGI). NULL -> 0. */
+uint32_t sysuaf_record_uaf_flags(const sysuaf_record_t *rec);
 
 /*
  * PASSWORD-EXPIRATION ENFORCEMENT (vms-c6df), a THIRD login gate distinct from

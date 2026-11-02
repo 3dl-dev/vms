@@ -175,13 +175,13 @@ send vax1 'DISMOUNT/CLUSTER $2$DUA1:' 45
 send vax1 'SHOW DEVICE $2$DUA1:' 5
 send "$OCON" 'MOUNT VDA100: VAX1DATA' 10
 wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 || die "$OVMX never continued the workload"
-tl "TAKEOVER: $(since "$OCON" | grep -o "EVACWL: $OVMX took.*" | tail -1)"
+tl "TAKEOVER: $(since "$OCON" | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
 
 # ---- STEP 5: the exclusion probe, while OVMX holds EX -----------------------------
 [ "$DRY" = 1 ] || sleep 20
 tl "STEP 5 VAX2: EVPROBE (\$ENQW EX NOQUEUE EVAC\$WORKLOAD)"
 send vax2 'EVPROBE' 10
-tl "PROBE: $(since vax2 | grep -o 'EVPROBE: .*' | tail -1)"
+tl "PROBE: $(since vax2 | grep -ao 'EVPROBE: .*' | tail -1)"
 
 # ---- STEP 6: VAX1 leaves the cluster ----------------------------------------------
 tl "STEP 6 VAX1: SHUTDOWN, REMOVE_NODE"

@@ -2775,9 +2775,18 @@ PYEOF3
       docker run --rm -v "$USERLAND":/userland:ro -v "$WORK":/work -v "$_out":/out "$BOOT_IMG" \
         qemu-alpha /userland/bin/vmsfs_master --ods5 extract /work/modgpA.img /out/gccobj SYS0.SYSCOMMON.GCCOBJ \
         || { rm -f "$WORK/modgpA.img"; die "could not read the shard's objects off its volume"; }
+      # every object the shard's procedure names is on the host, by name (case-blind)
+      grep -oE 'F\$SEARCH\("GCCOBJ:\[[^]]+\][^"]+"' "$WORK/joint/gccsrc/BUILD_CC1.COM" \
+        | sed -E 's/.*GCCOBJ:\[([^]]+)\]([^"]+)"/\1\/\2/' | tr a-z A-Z | sort -u > "$GATE_ROOT/cc1b-want.txt"
+      ( cd "$_out/gccobj" && find . -type f | sed 's|^\./||' | tr a-z A-Z | sort -u ) > "$GATE_ROOT/cc1b-got.txt"
+      _miss=$(comm -23 "$GATE_ROOT/cc1b-want.txt" "$GATE_ROOT/cc1b-got.txt")
+      _nobj=$(wc -l < "$GATE_ROOT/cc1b-got.txt")
+      if [ -n "$_miss" ]; then
+        echo "  objects the shard compiled that are not on its volume:"; echo "$_miss" | sed 's/^/    /'
+        [ -n "${CC1B_KEEP_IMG:-}" ] && echo "  (volume kept: $WORK/modgpA.img)" || rm -f "$WORK/modgpA.img"
+        die "the shard compiled $_ntu sources but $(echo "$_miss" | wc -l) of their objects are not on its volume"
+      fi
       rm -f "$WORK/modgpA.img"
-      _nobj=$(find "$_out/gccobj" -type f \( -name '*.obj' -o -name '*.OBJ' -o -name '*.o' \) | wc -l)
-      [ "$_nobj" -ge "$_ntu" ] || die "the shard compiled $_ntu sources but its volume holds $_nobj objects"
       echo ""
       echo "PASS: cc1build shard $CC1B_SHARD -- $_ntu cc1 sources compiled on OVMX/Alpha by the native"
       echo "      toolchain; $_nobj objects read off its volume to $_out/gccobj"

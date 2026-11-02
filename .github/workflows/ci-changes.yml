@@ -84,6 +84,9 @@ on:
       decnet:
         description: 'decnet (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.decnet }}
+      vax_boot:
+        description: 'vax_boot (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.vax_boot }}
       negctl_select:
         description: 'negctl_select (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.negctl_select }}
@@ -128,6 +131,7 @@ jobs:
       alpha_selfhost_tier: ${{ steps.tiers.outputs.alpha_selfhost_tier }}
       keystroke: ${{ steps.tiers.outputs.keystroke }}
       decnet: ${{ steps.tiers.outputs.decnet }}
+      vax_boot: ${{ steps.tiers.outputs.vax_boot }}
       negctl_select: ${{ steps.tiers.outputs.negctl_select }}
     steps:
       - name: Checkout
@@ -363,6 +367,11 @@ jobs:
               - 'src/ovmx_provision/**'
               - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/**'
               - 'tests/lab-vax/**'
+              # rd vms-236: the battery the VAX acceptance legs run, and the
+              # goldens it diffs (a golden graduation reds every demo build).
+              - 'tests/qemu/lib/**'
+              - 'tools/oracle/surfaces/**'
+              - 'docs/oracle/golden/**'
             netbsd_vax:
               - '.github/workflows/**'
               - 'tests/lab-vax/**'

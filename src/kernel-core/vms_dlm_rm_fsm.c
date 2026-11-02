@@ -621,6 +621,8 @@ static void rm_ho_pump(struct vms_dlm_rm *f, struct vms_dlm_ho_tree *h)
 		w.parent_master_lkid = r.parent_master_lkid;
 		w.granted_mode = r.granted_mode;
 		w.requested_mode = r.requested_mode;
+		w.queue_state = r.queue_state;     /* rd vms-0db: body[110] */
+		w.flags = r.rec_flags;             /* ...and body[28]       */
 		w.valblk_present = r.valblk_present;
 		w.valblk_seq = r.valblk_seq;
 		for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
@@ -805,12 +807,34 @@ static void rm_rb_ident(const struct vms_dlm_adopt_tree *t,
 		id->name[i] = (uint8_t)t->resnam[i];
 }
 
+/* rd vms-1b68: a rebuild ENDED for `tree` -- whatever waiting survivor of
+ * ours it did not carry to a new master is ended now, never left waiting. */
+static void rm_rb_end_unsent(struct vms_dlm_rm *f,
+			     const struct vms_dlm_adopt_tree *tree)
+{
+	if (f->ops->rb_unsent != (uint32_t (*)(void *,
+				 const struct vms_dlm_adopt_tree *))0)
+		f->rb_waiters_ended += f->ops->rb_unsent(f->ops->ctx, tree);
+}
+
+/* ...and every survivor still naming `csid`, in any tree: a departure no
+ * rebuild will run for. */
+static void rm_rb_end_departed(struct vms_dlm_rm *f, uint32_t csid)
+{
+	struct vms_dlm_adopt_tree all;
+
+	rm_bzero(&all, (uint32_t)sizeof(all));
+	all.old_master_csid = csid;          /* ident_valid 0: every tree */
+	rm_rb_end_unsent(f, &all);
+}
+
 static void rm_rb_stop(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t,
 		       const char *why)
 {
 	t->state = (uint8_t)VMS_DLM_RB_ST_STOPPED;
 	t->await_lkid = 0u;
 	rm_say(f, why);
+	rm_rb_end_unsent(f, &t->tree);
 }
 
 /* Record that this node now MASTERS the tree by a rebuild: the authority a
@@ -913,8 +937,10 @@ static void rm_rb_pump(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
 
 	rm_bzero(&r, (uint32_t)sizeof(r));
 	if (!f->ops->ho_next(f->ops->ctx, &t->tree, t->dst, &r)) {
-		/* Nothing of ours left naming the departed master. */
+		/* Nothing of ours left this node can describe naming the
+		 * departed master: any waiter still naming it is ended. */
 		f->rb_trees_done++;
+		rm_rb_end_unsent(f, &t->tree);
 		rm_rb_free(t);
 		return;
 	}
@@ -935,6 +961,8 @@ static void rm_rb_pump(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
 	w.parent_master_lkid = r.parent_master_lkid;
 	w.granted_mode = r.granted_mode;
 	w.requested_mode = r.requested_mode;
+	w.queue_state = r.queue_state;             /* rd vms-0db: body[110] */
+	w.flags = r.rec_flags;                     /* ...and body[28]       */
 	w.valblk_present = r.valblk_present;
 	w.valblk_seq = r.valblk_seq;
 	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
@@ -1215,6 +1243,7 @@ static void rm_fill_rec(const struct rm_in *in,
 	out->ident_valid = 1u;
 	out->granted_mode = in->rec->granted_mode;
 	out->requested_mode = in->rec->requested_mode;
+	out->queue_state = in->rec->queue_state;   /* rd vms-0db */
 	out->valblk_present = in->rec->valblk_present;
 	out->valblk_seq = in->rec->valblk_seq;
 	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
@@ -1675,6 +1704,7 @@ void vms_dlm_rm_member_departed(struct vms_dlm_rm *f, uint32_t csid)
 			rm_say(f, "%DLM, too many masters left at once to track: "
 				  "this node's locks in one departed master's "
 				  "trees are not rebuilt");
+			rm_rb_end_departed(f, csid);
 		}
 	}
 	/* A hand-over whose NEW master left has nobody to report to. One
@@ -1772,6 +1802,11 @@ void vms_dlm_rm_rb_kick(struct vms_dlm_rm *f)
 		return;                       /* nobody left: nothing to do */
 	if (!rm_rb_ok(f)) {
 		f->rb_unbound++;
+		/* No rebuild can run: no survivor waits for one (rd vms-1b68). */
+		for (i = 0u; i < VMS_DLM_RB_DEPARTED; i++) {
+			if (f->rb_departed[i] != 0u)
+				rm_rb_end_departed(f, f->rb_departed[i]);
+		}
 		return;
 	}
 	if (!f->ops->rb_ready(f->ops->ctx))
@@ -1908,6 +1943,7 @@ enum vms_dlm_rm_status vms_dlm_rm_rb_record(struct vms_dlm_rm *f,
 	r.ident_valid = 1u;
 	r.granted_mode = w.granted_mode;
 	r.requested_mode = w.requested_mode;
+	r.queue_state = w.queue_state;             /* rd vms-0db */
 	r.valblk_present = w.valblk_present;
 	r.valblk_seq = w.valblk_seq;
 	for (i = 0u; i < VMS_DLM_VALBLK_LEN && i < VMS_DLM_VALBLK_WIRE_LEN; i++)
@@ -1993,6 +2029,11 @@ void vms_dlm_rm_rb_window_close(struct vms_dlm_rm *f)
 		return;
 	f->rb_window_open = 0u;
 	f->rb_window_step = 0u;
+	/* rd vms-1b68: every survivor's record that was coming is in -- the
+	 * waiters this node now masters are decided once. */
+	if (f->ops != (const struct vms_dlm_rm_ops *)0 &&
+	    f->ops->rb_settle != (void (*)(void *))0)
+		f->ops->rb_settle(f->ops->ctx);
 }
 
 int vms_dlm_rm_rb_window_open(const struct vms_dlm_rm *f)

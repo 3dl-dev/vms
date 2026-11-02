@@ -1991,9 +1991,16 @@ struct vms_dlm_rm_lock_rec {
 					* a handle WE minted for the parent    */
 	uint16_t dlm_seq;              /* body[14:16]                         */
 	uint8_t  flags;                /* body[28], as received               */
-	uint8_t  granted_mode;         /* body[30], LCK$K_                    */
-	uint8_t  requested_mode;       /* body[31], LCK$K_                    */
+	uint8_t  granted_mode;         /* body[31], LCK$K_ (rd vms-0db)       */
+	uint8_t  requested_mode;       /* body[30], LCK$K_ (rd vms-0db)       */
 	uint8_t  is_root;              /* 1 iff body[36:44] is all zero       */
+	/*
+	 * WHICH QUEUE THE LOCK IS ON at its holder (rd vms-0db): enum
+	 * vms_dlm_rb_queue, body[110], read and written only through
+	 * vms_dlm_rb_rec_modes (below). `flags` is body[28] as received and,
+	 * on a non-granted record built here, VMS_DLM_REC_FLAG_*.
+	 */
+	uint8_t  queue_state;
 	/*
 	 * THE HOLDER'S OWN COPY OF THE RESOURCE'S VALUE BLOCK (rd vms-ed5):
 	 * body[88:104] and its SEQUENCE at body[104:108]. `valblk_present` is
@@ -2270,6 +2277,69 @@ vms_codec_status_t vms_dlm_rb_rec_build(const struct vms_dlm_rm_lock_rec *r,
  */
 vms_codec_status_t vms_dlm_rb_rec_parse_body(const uint8_t *body, uint32_t len,
 					     struct vms_dlm_rm_lock_rec *out);
+
+/* ==========================================================================
+ * WHICH QUEUE A HOLDER'S LOCK IS ON -- op-0x12 AND op-0x08 alike (rd vms-0db,
+ * vms-1b68). tests/lab/captures/vms-0db-waiting-records-20261102/README.md;
+ * pinned by tools/cluster/dlm_waiting_record_census.py --selftest.
+ *
+ * A real holder sends ONE record per LKB it owns in the tree -- granted,
+ * converting and waiting alike -- and the record says which:
+ *   body[30]   the LKB's REQUESTED mode
+ *   body[31]   its GRANTED mode; 0 on a lock never granted (waiting)
+ *   body[110]  its QUEUE: 0x01 granted, 0x00 converting, 0xff waiting -- the
+ *              ONLY cell that separates the states (a granted, down-converted
+ *              lock keeps its earlier request: (5,1) at 0x01)
+ *   body[108]  0x04 on every non-granted record (42/42). Ten real GRANTED
+ *              system locks carry 0x04/0x08 there for a reason no capture
+ *              names, so a granted record OVMX builds carries 0.
+ *   body[28]   the lock's flags as SDA names them: VALBLK 0x01, CONVERT
+ *              0x02, SYSTEM 0x10 (VMS_DLM_REC_FLAG_*). Written on a
+ *              non-granted record; a granted record OVMX builds keeps the 0 it
+ *              has always carried (see the rd vms-1b68 note in the builder).
+ * The answer to either is an 82/01 0xfa whose body[28] is 0x10 | the record's
+ * body[108] (5,694 of 5,694), echoing body[30:32] for a non-granted record.
+ *
+ * vms_dlm_rb_rec_modes is the ONE place these cells are encoded or decoded;
+ * both builders and both parsers go through it. `encode` 1: `m` -> `c`;
+ * `encode` 0: `c` -> `m`, VMS_CODEC_E_RANGE for a body[110] outside the three
+ * named values or a mode above LCK$K_EXMODE. VMS_CODEC_E_INVAL for a NULL.
+ * ========================================================================== */
+enum vms_dlm_rb_queue {
+	VMS_DLM_RB_Q_GRANTED = 0,     /* on the granted queue                 */
+	VMS_DLM_RB_Q_WAITING,         /* a fresh request queued at the master */
+	VMS_DLM_RB_Q_CONVERTING,      /* granted, a convert queued            */
+	VMS_DLM_RB_Q__COUNT
+};
+
+#define VMS_DLM_RB_WIRE_GRANTED     0x01u  /* body[110]                     */
+#define VMS_DLM_RB_WIRE_CONVERTING  0x00u
+#define VMS_DLM_RB_WIRE_WAITING     0xffu
+#define VMS_DLM_RB_C108_QUEUED      0x04u  /* body[108], non-granted 42/42  */
+
+/* body[28] of a record: the lock's flags, as SDA names them. */
+#define VMS_DLM_REC_FLAG_VALBLK     0x01u
+#define VMS_DLM_REC_FLAG_CONVERT    0x02u
+#define VMS_DLM_REC_FLAG_SYSTEM     0x10u
+#define VMS_DLM_REC_FLAGS_NAMED     0x13u
+
+struct vms_dlm_rb_modes {
+	uint8_t queue_state;          /* enum vms_dlm_rb_queue                */
+	uint8_t granted_mode;         /* LCK$K_; 0 on a waiting lock          */
+	uint8_t requested_mode;       /* LCK$K_                               */
+	uint8_t flags;                /* VMS_DLM_REC_FLAG_*                   */
+};
+
+struct vms_dlm_rb_mode_cells {
+	uint8_t c28;                  /* body[28]                             */
+	uint8_t c30;                  /* body[30]                             */
+	uint8_t c31;                  /* body[31]                             */
+	uint8_t c108;                 /* body[108]                            */
+	uint8_t c110;                 /* body[110]                            */
+};
+
+vms_codec_status_t vms_dlm_rb_rec_modes(int encode, struct vms_dlm_rb_modes *m,
+					struct vms_dlm_rb_mode_cells *c);
 
 /* ==========================================================================
  * DLKSRCH -- distributed deadlock search (H11, rd vms-d55 / vms-ec75).

@@ -1888,6 +1888,82 @@ static void test_peer_gone(void)
 	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 0u, "block released");
 }
 
+/*
+ * rd vms-1b68: a request the master QUEUED (0xfb) whose proxy the engine
+ * preserves for the failover rebuild keeps its block when the master leaves,
+ * so the next master's grant still finds it; one the engine does not preserve
+ * is failed PATHLOST exactly as before.
+ */
+static uint32_t g_q_lkid, g_q_csid, g_q_master;
+static int g_survive;
+
+static void fe_queued(void *ctx, uint32_t req_lkid, vms_csid_t csid,
+		      uint32_t master_lkid)
+{
+	(void)ctx;
+	g_q_lkid = req_lkid;
+	g_q_csid = (uint32_t)csid;
+	g_q_master = master_lkid;
+}
+
+static int fe_survives(void *ctx, uint32_t req_lkid)
+{
+	(void)ctx;
+	return g_survive && req_lkid == g_q_lkid;
+}
+
+static void queued_at_master(void)
+{
+	struct vms_dlm_proxy_post p;
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint32_t len;
+
+	fe_reset("WQRB", VMS_LCK_EX, 0x0122u, 1, CSID_MASTER);
+	g_ops.queued = fe_queued;
+	g_ops.survives = fe_survives;
+	g_q_lkid = g_q_csid = g_q_master = 0u;
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+	len = make_deny(frame, g.lkb.lkid, 0x07000404u, "WQRB");
+	frame[VMS_OFF_SYSAP_BODY + 34] = 0xfbu;          /* QUEUED */
+	(void)dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len);
+}
+
+static void test_survivor_keeps_its_block(void)
+{
+	printf("-- rd vms-1b68: a queued request outlives its master for the "
+	       "rebuild\n");
+	g_survive = 1;
+	queued_at_master();
+	ct_check(g_fsm.queued_rx == 1u && g_q_lkid == g.lkb.lkid &&
+		 g_q_csid == CSID_MASTER && g_q_master == 0x07000404u,
+		 "the 0xfb is told to the engine: our lock, the master, its "
+		 "handle");
+	ct_check_eq_u32(dlm_req_fsm_peer_gone(&g_fsm, CSID_MASTER), 1u,
+			"the master leaves");
+	ct_check(g.fail_calls == 0u && dlm_req_fsm_outstanding(&g_fsm) == 1u &&
+		 g_fsm.survivors_kept == 1u,
+		 "*** the survivor's block is KEPT and its waiter not failed "
+		 "***");
+	ct_check(dlm_req_fsm_rehomed(&g_fsm, g.lkb.lkid, CSID_DIR) ==
+		 DLM_REQ_OK && g_fsm.survivors_rehomed == 1u,
+		 "  the new master's 0xfa re-points it");
+	ct_check_eq_u32(g_fsm.req[0].dst_csid == CSID_DIR ? 1u : 0u, 1u,
+			"  ...at the new master");
+	ct_check(dlm_req_fsm_forget(&g_fsm, g.lkb.lkid) == DLM_REQ_OK &&
+		 dlm_req_fsm_outstanding(&g_fsm) == 0u &&
+		 dlm_req_fsm_forget(&g_fsm, g.lkb.lkid) == DLM_REQ_E_NOLOCK,
+		 "  an engine-ended survivor's block is dropped, once");
+
+	g_survive = 0;
+	queued_at_master();
+	(void)dlm_req_fsm_peer_gone(&g_fsm, CSID_MASTER);
+	ct_check(g.fail_calls == 1u && g.fail_why == DLM_REQ_FAIL_PATHLOST &&
+		 dlm_req_fsm_outstanding(&g_fsm) == 0u,
+		 "*** one the engine does not preserve fails PATHLOST, as "
+		 "before ***");
+}
+
 /* ==========================================================================
  * 15. E49: the hash is LEARNED from a frame that carries both halves
  * ========================================================================== */
@@ -2519,6 +2595,7 @@ int main(void)
 	test_retransmit_idempotency();
 	test_duplicate_grant();
 	test_peer_gone();
+	test_survivor_keeps_its_block();
 	test_observe_learns_the_hash();
 	test_refusals();
 	test_lock_gone();

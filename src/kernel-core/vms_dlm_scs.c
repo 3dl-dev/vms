@@ -627,6 +627,22 @@ static void dlm_arm_dir_do_drop_master(struct vms_dlm_scs *d, vms_csid_t csid)
 	exec_unlock(&d->dir_lock);
 }
 
+/* rd vms-1b68: the master QUEUED a request of ours (0xfb) -- recorded on the
+ * proxy; and the one survival test, the engine's. */
+static void dlm_arm_queued(void *ctx, uint32_t req_lkid, vms_csid_t master_csid,
+			   uint32_t master_lkid)
+{
+	(void)ctx;
+	(void)vms_lock_dlm_proxy_queued_recv(req_lkid, (uint32_t)master_csid,
+					     master_lkid);
+}
+
+static int dlm_arm_survives(void *ctx, uint32_t req_lkid)
+{
+	(void)ctx;
+	return vms_lock_dlm_proxy_survives(req_lkid);
+}
+
 static void dlm_arm_bind_req_ops(struct vms_dlm_scs *d)
 {
 	d->req_ops.send            = dlm_arm_send;
@@ -640,6 +656,8 @@ static void dlm_arm_bind_req_ops(struct vms_dlm_scs *d)
 	d->req_ops.blkast_deliver  = dlm_arm_blkast_deliver;
 	d->req_ops.learn_dir_hash  = dlm_arm_learn_dir_hash;
 	d->req_ops.fail            = dlm_arm_fail;
+	d->req_ops.queued          = dlm_arm_queued;
+	d->req_ops.survives        = dlm_arm_survives;
 	d->req_ops.now_ms          = dlm_arm_now_ms;
 	d->req_ops.log             = dlm_arm_log;
 	d->req_ops.ctx             = d;
@@ -2722,10 +2740,20 @@ static int dlm_arm_ho_rehome(void *ctx, uint32_t holder_lkid,
 			     uint32_t old_master_csid, uint32_t new_master_csid,
 			     uint32_t new_master_lkid)
 {
-	(void)ctx;
-	return vms_lock_dlm_handover_rehome(holder_lkid, old_master_csid,
-					    new_master_csid,
-					    new_master_lkid) == SS__NORMAL ? 1 : 0;
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (vms_lock_dlm_handover_rehome(holder_lkid, old_master_csid,
+					 new_master_csid,
+					 new_master_lkid) != SS__NORMAL)
+		return 0;
+	/* rd vms-1b68: a QUEUED request of ours (a waiting or converting
+	 * record, rd vms-0db) now waits at the new master, which will grant it
+	 * by this key. A granted lock's block -- or none -- is re-pointed or
+	 * absent alike; neither sends anything. */
+	if (d != NULL)
+		(void)dlm_req_fsm_rehomed(&d->req, holder_lkid,
+					  (vms_csid_t)new_master_csid);
+	return 1;
 }
 
 static int dlm_arm_ho_valblk(void *ctx, const struct vms_dlm_adopt_valblk *v)
@@ -2800,6 +2828,25 @@ static int dlm_arm_rb_install(void *ctx, const struct vms_dlm_adopt_lock_rec *r,
 	return vms_lock_dlm_rebuild_lock(r, out) == SS__NORMAL ? 1 : 0;
 }
 
+/* rd vms-1b68: the survivors a rebuild of `t` did not carry are ended by the
+ * engine, and their requester blocks dropped with them. */
+static uint32_t dlm_arm_rb_unsent(void *ctx, const struct vms_dlm_adopt_tree *t)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+	uint32_t ids[DLM_REQ_MAX], n, i;
+
+	n = vms_lock_dlm_rebuild_fail_unsent(t, ids, DLM_REQ_MAX);
+	for (i = 0u; d != NULL && i < n && i < DLM_REQ_MAX; i++)
+		(void)dlm_req_fsm_forget(&d->req, ids[i]);
+	return n;
+}
+
+static void dlm_arm_rb_settle(void *ctx)
+{
+	(void)ctx;
+	(void)vms_lock_dlm_rebuild_settle();
+}
+
 static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 {
 	d->rm_ops.ctx                = d;
@@ -2826,6 +2873,8 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.rb_dir_entry       = dlm_arm_rb_dir_entry;
 	d->rm_ops.rb_dir_claim       = dlm_arm_rb_dir_claim;
 	d->rm_ops.rb_install         = dlm_arm_rb_install;
+	d->rm_ops.rb_unsent          = dlm_arm_rb_unsent;
+	d->rm_ops.rb_settle          = dlm_arm_rb_settle;
 	vms_dlm_rm_init(&d->rm, &d->rm_ops);
 }
 

@@ -175,6 +175,16 @@ static uint32_t vms_prev_local_csid;
  * Written only through vms_lock_dlm_set_requester_ops under this lock.
  */
 static struct vms_dlm_requester_ops vms_dlm_req_ops;
+
+/*
+ * A FAILOVER REBUILD IS COLLECTING RECORDS (rd vms-1b68). Set when a departure
+ * preserved a waiting proxy of ours or an inbound record installed a queued
+ * lock; cleared by vms_lock_dlm_rebuild_settle, which then decides every
+ * waiter once. Written under a resource lock, read under one; a racy read can
+ * only defer a grant to the settle or let one through early -- never invent
+ * one.
+ */
+static int vms_dlm_rebuild_hold;
 static exec_lock_t vms_dlm_req_ops_lock;
 
 /*
@@ -3721,6 +3731,7 @@ static uint32_t convert_proxy_request(struct vms_proc *proc,
     lock->flags = a->flags;
     lock->waiting = 1;            /* pending AT THE MASTER, again */
     lock->grant_state = 0;
+    lock->queued_master_lkid = 0u;  /* not yet queued by the master (vms-1b68) */
     dst = lock->master_csid ? lock->master_csid : res->master_csid;
     dlm_proxy_fill_post(lock, res, VMS_DLM_POST_CONVERT, dst, &post);
     /*
@@ -3841,6 +3852,119 @@ uint32_t vms_lock_dlm_proxy_fail(uint32_t req_lkid, uint32_t status)
     return SS__NORMAL;
 }
 
+/* ================================================================
+ * A WAITING PROXY THAT OUTLIVES ITS MASTER (rd vms-1b68 / vms-0db)
+ * ================================================================
+ *
+ * A proxy WAITING at a master -- a fresh $ENQ the master queued (0xfb), or a
+ * convert queued on a lock the master granted -- is a lock in that master's
+ * queue. A real holder describes it to the tree's next master with the rest of
+ * its locks, in an op-0x12 hand-over and an op-0x08 rebuild alike, and says
+ * which queue it is on (body[110], tests/lab/captures/
+ * vms-0db-waiting-records-20261102). OVMX does the same for a waiter the
+ * master really ACKNOWLEDGED; one it never answered has no copy at the master
+ * to describe and ends SS$_UNSUPPORTED when that master leaves.
+ */
+
+/* enum vms_dlm_rb_queue, read off WHICH QUEUE the LKB is on -- never off a
+ * mode comparison: 0 granted, 2 converting (a granted lock with a convert
+ * pending), 1 waiting (a fresh request, never granted). */
+static uint8_t dlm_proxy_queue_state(const struct vms_lock_entry *l)
+{
+    if (!l->waiting)
+        return 0u;
+    return (uint8_t)((l->flags & LCK_M_CONVERT) ? 2u : 1u);
+}
+
+/* The rank of that queue in a holder's record order (rd vms-0db PA5):
+ * granted, then converting, then waiting. */
+static uint32_t dlm_proxy_queue_rank(const struct vms_lock_entry *l)
+{
+    uint8_t qs = dlm_proxy_queue_state(l);
+
+    return qs == 0u ? 0u : (qs == 2u ? 1u : 2u);
+}
+
+/* body[28] of the LKB's record: its flags as VMS names them (VALBLK 0x01,
+ * CONVERT 0x02, SYSTEM 0x10) -- vms_ioctl.h numbers them differently. */
+static uint8_t dlm_proxy_rec_flags(const struct vms_lock_entry *l)
+{
+    uint8_t f = 0u;
+
+    if (l->flags & LCK_M_VALBLK)
+        f |= 0x01u;
+    if (l->flags & LCK_M_CONVERT)
+        f |= 0x02u;
+    if (l->flags & LCK_M_SYSTEM)
+        f |= 0x10u;
+    return f;
+}
+
+/* The one survival test (vms_dlm_proxy.h vms_lock_dlm_proxy_survives).
+ * Caller holds res->lock. */
+static int dlm_proxy_survives_locked(const struct vms_lock_entry *l)
+{
+    if (!l->proxy || !l->waiting || l->grant_state != 0 ||
+        l->queued_master_lkid == VMS_DLM_LKID_UNSET || l->master_csid == 0u)
+        return 0;
+    /* A converting lock was granted, so its master named a handle. */
+    if ((l->flags & LCK_M_CONVERT) && l->master_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    return 1;
+}
+
+/* A proxy of ours a hand-over or rebuild record may describe: granted with
+ * its master's handle, or a waiter the master acknowledged. */
+static int dlm_proxy_describable_locked(const struct vms_lock_entry *l)
+{
+    return l->waiting ? dlm_proxy_survives_locked(l)
+                      : l->master_lkid != VMS_DLM_LKID_UNSET;
+}
+
+uint32_t vms_lock_dlm_proxy_queued_recv(uint32_t req_lkid, uint32_t master_csid,
+                                        uint32_t master_lkid)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    uint32_t st = SS__IVLOCKID;
+
+    if (req_lkid == VMS_DLM_LKID_UNSET || master_lkid == VMS_DLM_LKID_UNSET ||
+        master_csid == 0u)
+        return SS__BADPARAM;
+    lock = dlm_proxy_find(req_lkid);
+    if (lock == NULL)
+        return SS__IVLOCKID;
+    res = lock->resource;
+    exec_lock(&res->lock);
+    if (lock->waiting && lock->grant_state == 0) {
+        lock->queued_master_lkid = master_lkid;
+        lock->master_csid = master_csid;   /* the system that queued it */
+        st = SS__NORMAL;
+    }
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return st;
+}
+
+int vms_lock_dlm_proxy_survives(uint32_t req_lkid)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    int ok;
+
+    if (req_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    lock = dlm_proxy_find(req_lkid);
+    if (lock == NULL)
+        return 0;
+    res = lock->resource;
+    exec_lock(&res->lock);
+    ok = dlm_proxy_survives_locked(lock);
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return ok;
+}
+
 /*
  * dlm_proxy_stops_being_one_locked - the fields that stop an LKB from being a
  * requester-side IMAGE of a lock somebody else masters. Caller holds res->lock
@@ -3894,7 +4018,11 @@ static void dlm_promote_proxy_locked(struct vms_lock_resource *res,
     lock->waiting     = 1;
     lock->grant_state = 0;
     exec_list_add_tail(&lock->res_waiting, &res->waiting);
-    try_grant_waiters(res);
+    /* rd vms-1b68: while a failover rebuild is collecting the survivors'
+     * records, a waiter is not decided against a half-rebuilt tree -- the
+     * settle at the window's close decides it with every record in. */
+    if (!vms_dlm_rebuild_hold)
+        try_grant_waiters(res);
 }
 
 /*
@@ -4754,6 +4882,8 @@ static int dlm_adopt_rec_ok(const struct vms_dlm_adopt_lock_rec *r)
         return 0;
     if (r->granted_mode == LCK_K_NLMODE && r->requested_mode == LCK_K_NLMODE)
         return 0;
+    if (r->queue_state > 2u)
+        return 0;
     return 1;
 }
 
@@ -4814,6 +4944,11 @@ static struct vms_lock_entry *dlm_adopt_dup_locked(struct vms_lock_resource *res
     struct vms_lock_entry *l;
 
     exec_list_for_each_entry(l, &res->granted, res_granted) {
+        if (!l->proxy && l->req_csid == r->holder_csid &&
+            l->req_lkid == r->holder_lkid)
+            return l;
+    }
+    exec_list_for_each_entry(l, &res->waiting, res_waiting) {
         if (!l->proxy && l->req_csid == r->holder_csid &&
             l->req_lkid == r->holder_lkid)
             return l;
@@ -4939,7 +5074,25 @@ static void dlm_adopt_link_lkb(struct vms_lock_resource *res,
          * holder its value block was reset. */
         res->valblk_seq = r->valblk_seq;
     }
-    exec_list_add_tail(&lock->res_granted, &res->granted);
+    /*
+     * ON THE QUEUE THE HOLDER SAID (rd vms-0db, body[110]): a real new master
+     * puts a converting record on its conversion queue and a waiting one on
+     * its waiting queue, still blocked (PA7, PB3). Neither is granted here:
+     * the rebuild's settle (vms_lock_dlm_rebuild_settle) decides them once
+     * every survivor's record is in.
+     */
+    if (r->queue_state == 0u) {
+        exec_list_add_tail(&lock->res_granted, &res->granted);
+    } else {
+        lock->waiting = 1;
+        lock->grant_state = 0;
+        if (r->queue_state == 1u)
+            lock->granted_mode = LCK_K_NLMODE;   /* never granted: body[31] 0 */
+        else
+            lock->flags |= LCK_M_CONVERT;        /* a conversion, held at [31] */
+        exec_list_add_tail(&lock->res_waiting, &res->waiting);
+        vms_dlm_rebuild_hold = 1;
+    }
     exec_unlock(&res->lock);
 }
 
@@ -5404,12 +5557,13 @@ static struct vms_lock_resource *dlm_handover_root_locked(
  * a snapshot (lock id and parent id), for the reason the header gives.
  */
 static int dlm_handover_scan(const struct vms_dlm_adopt_tree *t,
-                             uint32_t after, uint32_t *lkid,
+                             uint64_t after, uint64_t *key,
                              uint32_t *parent_id)
 {
     struct vms_lock_resource *root, *res;
     int bkt, found = 0;
-    uint32_t best = 0u, best_parent = 0u;
+    uint64_t best = 0u;
+    uint32_t best_parent = 0u;
 
     exec_lock(&vms_res_hash_lock);
     root = dlm_handover_root_locked(t);
@@ -5421,12 +5575,19 @@ static int dlm_handover_scan(const struct vms_dlm_adopt_tree *t,
                 continue;
             exec_lock(&res->lock);
             exec_list_for_each_entry(l, &res->proxies, res_proxy) {
-                if (l->waiting || l->master_csid != t->old_master_csid ||
-                    l->master_lkid == VMS_DLM_LKID_UNSET ||
-                    l->lkid <= after)
+                uint64_t k;
+
+                if (l->master_csid != t->old_master_csid ||
+                    !dlm_proxy_describable_locked(l))
                     continue;
-                if (!found || l->lkid < best) {
-                    best = l->lkid;
+                /* QUEUE ORDER (rd vms-0db): granted, converting, waiting
+                 * -- then lock id. A tree of granted locks only keeps the
+                 * lock-id order it always had. */
+                k = ((uint64_t)dlm_proxy_queue_rank(l) << 32) | l->lkid;
+                if (k <= after)
+                    continue;
+                if (!found || k < best) {
+                    best = k;
                     best_parent = l->parent_id;
                     found = 1;
                 }
@@ -5436,7 +5597,7 @@ static int dlm_handover_scan(const struct vms_dlm_adopt_tree *t,
     }
     exec_unlock(&vms_res_hash_lock);
     if (found) {
-        *lkid = best;
+        *key = best;
         *parent_id = best_parent;
     }
     return found;
@@ -5485,9 +5646,8 @@ static int dlm_handover_fill(uint32_t lkid, const struct vms_dlm_adopt_tree *t,
     res = lock->resource;
     if (res != NULL) {
         exec_lock(&res->lock);
-        if (lock->proxy && !lock->waiting &&
+        if (lock->proxy && dlm_proxy_describable_locked(lock) &&
             lock->master_csid == t->old_master_csid &&
-            lock->master_lkid != VMS_DLM_LKID_UNSET &&
             res->name_len >= 1u && res->name_len <= sizeof(out->resnam)) {
             memset(out, 0, sizeof(*out));
             memcpy(out->resnam, res->name, res->name_len);
@@ -5500,7 +5660,12 @@ static int dlm_handover_fill(uint32_t lkid, const struct vms_dlm_adopt_tree *t,
             out->holder_epid = (lock->proc != NULL) ? lock->proc->vms_pid : 0u;
             out->parent_lkid = lock->parent_id;
             out->parent_master_lkid = lock->parent_id != 0u ? parent_handle : 0u;
-            out->granted_mode = (uint8_t)lock->granted_mode;
+            /* rd vms-0db: the queue the LKB is on, its flags, and the
+             * granted mode a WAITING lock does not have (body[31] = 0). */
+            out->queue_state = dlm_proxy_queue_state(lock);
+            out->rec_flags = dlm_proxy_rec_flags(lock);
+            out->granted_mode = out->queue_state == 1u
+                                    ? 0u : (uint8_t)lock->granted_mode;
             out->requested_mode = (uint8_t)lock->requested_mode;
             /* THE BLOCK RIDES ONLY WITH ITS SEQUENCE; every real record
              * that carries a block carries a non-zero sequence (op-0x12
@@ -5542,15 +5707,17 @@ int vms_lock_dlm_handover_next(const struct vms_dlm_adopt_tree *t,
                                uint32_t new_master_csid,
                                struct vms_dlm_handover_rec *out)
 {
-    uint32_t after = 0u, lkid = 0u, parent_id = 0u;
+    uint64_t after = 0u, key = 0u;
+    uint32_t lkid, parent_id = 0u;
 
     if (t == NULL || out == NULL || !dlm_adopt_tree_ok(t) ||
         new_master_csid == 0u || new_master_csid == t->old_master_csid)
         return 0;
-    while (dlm_handover_scan(t, after, &lkid, &parent_id)) {
+    while (dlm_handover_scan(t, after, &key, &parent_id)) {
         uint32_t handle = 0u;
 
-        after = lkid;
+        after = key;
+        lkid = (uint32_t)key;
         /* PARENT BEFORE CHILD: a sub-record carries its parent's NEW-master
          * handle, which exists only once that parent's 82/01 came back. */
         if (parent_id != 0u &&
@@ -5709,8 +5876,10 @@ static int dlm_rebuild_res_orphaned(const struct vms_lock_resource *res,
     if (res->parent != NULL)
         return 0;
     exec_list_for_each_entry(l, &res->proxies, res_proxy) {
-        if (!l->waiting && l->master_csid == csid &&
-            l->master_lkid != VMS_DLM_LKID_UNSET)
+        if (l->master_csid != csid)
+            continue;
+        /* ...or a waiter that survived the departure (rd vms-1b68). */
+        if (dlm_proxy_describable_locked(l))
             return 1;
     }
     return 0;
@@ -5785,7 +5954,8 @@ int vms_lock_dlm_name_proxy_master(const char *resnam, uint32_t resnam_len,
 
         exec_lock(&res->lock);
         exec_list_for_each_entry(l, &res->proxies, res_proxy) {
-            if (!l->waiting && l->master_csid != 0u) {
+            if (l->master_csid != 0u &&
+                (!l->waiting || dlm_proxy_survives_locked(l))) {
                 *out_csid = l->master_csid;
                 found = 1;
                 break;
@@ -5809,6 +5979,8 @@ static int dlm_rebuild_rec_ok(const struct vms_dlm_adopt_lock_rec *r)
     if (r->holder_csid == 0u || r->holder_lkid == VMS_DLM_LKID_UNSET)
         return 0;
     if (r->granted_mode > LCK_K_EXMODE || r->requested_mode > LCK_K_EXMODE)
+        return 0;
+    if (r->queue_state > 2u)
         return 0;
     return 1;
 }
@@ -5894,7 +6066,7 @@ uint32_t vms_lock_dlm_rebuild_lock(const struct vms_dlm_adopt_lock_rec *r,
      * since (it mastered the tree first). A lock that no longer fits is NOT
      * installed and NOT answered -- the double grant of rd vms-5cd is worse
      * than the holder's wait. */
-    ok = dup != NULL ||
+    ok = dup != NULL || r->queue_state != 0u ||   /* queued: not a grant */
          (granted_queue_compatible(res, r->granted_mode, NULL) &&
           held_proxies_compatible(res, r->granted_mode, NULL));
     exec_unlock(&res->lock);
@@ -6021,6 +6193,18 @@ static int dlm_adopt_find_lock_of_gen(uint32_t gen, uint32_t *master_lkid,
             *csid = l->req_csid;
             found = 1;
             break;
+        }
+        /* ...and a converting or waiting one (rd vms-0db). */
+        if (!found) {
+            exec_list_for_each_entry(l, &res->waiting, res_waiting) {
+                if (l->proxy || l->adopt_gen != gen)
+                    continue;
+                *master_lkid = l->lkid;
+                *req_lkid = l->req_lkid;
+                *csid = l->req_csid;
+                found = 1;
+                break;
+            }
         }
         exec_unlock(&res->lock);
         if (found)
@@ -7694,6 +7878,14 @@ static void dlm_proxies_master_departed(struct vms_lock_resource *res,
             continue;
         if (!p->waiting || p->grant_state != 0)
             continue;                  /* granted: preserved for the rebuild */
+        /* rd vms-1b68: a waiter the master ACKNOWLEDGED is a lock in its
+         * queue -- preserved for the rebuild, which re-sends it (rd
+         * vms-0db) and ends it if no record of it is answered
+         * (vms_lock_dlm_rebuild_fail_unsent). */
+        if (dlm_proxy_survives_locked(p)) {
+            vms_dlm_rebuild_hold = 1;
+            continue;
+        }
         p->grant_state = SS__UNSUPPORTED;
         exec_cv_broadcast(&p->wait_wq);
     }
@@ -7902,6 +8094,91 @@ void vms_lock_quorum_resume(void)
     }
     exec_unlock(&vms_res_hash_lock);
     dlm_flips_report(&all);
+}
+
+/*
+ * vms_lock_dlm_rebuild_settle - THE REBUILD WINDOW CLOSED (rd vms-1b68;
+ * contract in vms_dlm_adopt.h). Every survivor's record that was going to
+ * arrive has arrived, so the waiters this node now masters -- its own promoted
+ * ones and the queued locks other survivors re-sent -- are decided ONCE, by the
+ * ordinary try_grant_waiters, and a cross-node waiter granted here is TOLD
+ * through the same flip report a release uses (rd vms-28bd). Nothing happens
+ * when no rebuild held a waiter, so a cluster with no queued locks sees no
+ * change at all.
+ */
+uint32_t vms_lock_dlm_rebuild_settle(void)
+{
+    struct vms_lock_resource *res;
+    struct dlm_flips all, mine;
+    int bkt;
+
+    if (vms_dlm_rebuild_hold == 0)
+        return 0u;
+    memset(&all, 0, sizeof(all));
+    exec_lock(&vms_res_hash_lock);
+    vms_dlm_rebuild_hold = 0;
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        exec_lock(&res->lock);
+        if (!exec_list_empty(&res->waiting)) {
+            dlm_flips_snapshot_locked(res, &mine);
+            try_grant_waiters(res);
+            dlm_flips_keep_granted_locked(res, &mine);
+            dlm_flips_append(&all, &mine);
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    dlm_flips_report(&all);
+    return 1u;
+}
+
+/*
+ * vms_lock_dlm_rebuild_fail_unsent - END THE SURVIVORS NO RECORD CARRIED (rd
+ * vms-1b68; contract in vms_dlm_adopt.h). Every waiting proxy of ours that
+ * survived `t->old_master_csid`'s departure and STILL names it -- within the
+ * tree `t` names, or anywhere when `t->ident_valid` is 0 -- is ended
+ * SS$_UNSUPPORTED, exactly as the departure would have ended it before. A
+ * re-homed survivor names its new master and is left alone. Up to `max` of the
+ * ended lock ids go to `lkids` (so the requester FSM can drop their blocks);
+ * the return is how many were ended.
+ */
+uint32_t vms_lock_dlm_rebuild_fail_unsent(const struct vms_dlm_adopt_tree *t,
+                                          uint32_t *lkids, uint32_t max)
+{
+    struct vms_lock_resource *res, *root = NULL;
+    uint32_t n = 0u;
+    int bkt;
+
+    if (t == NULL || t->old_master_csid == 0u)
+        return 0u;
+    exec_lock(&vms_res_hash_lock);
+    if (t->ident_valid) {
+        root = dlm_handover_root_locked(t);
+        if (root == NULL) {
+            exec_unlock(&vms_res_hash_lock);
+            return 0u;
+        }
+    }
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        struct vms_lock_entry *l;
+
+        if (root != NULL && !dlm_res_within_tree(res, root))
+            continue;
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(l, &res->proxies, res_proxy) {
+            if (l->master_csid != t->old_master_csid ||
+                !dlm_proxy_survives_locked(l))
+                continue;
+            l->grant_state = SS__UNSUPPORTED;
+            exec_cv_broadcast(&l->wait_wq);
+            if (lkids != NULL && n < max)
+                lkids[n] = l->lkid;
+            n++;
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return n;
 }
 
 long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)

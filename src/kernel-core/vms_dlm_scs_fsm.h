@@ -411,6 +411,20 @@ struct dlm_req_ops {
 	/* No answer is coming: end the proxy's wait with a real status. */
 	void (*fail)(void *ctx, uint32_t req_lkid, enum dlm_req_fail_reason why);
 
+	/*
+	 * rd vms-1b68. OPTIONAL (NULL = the behaviour before it). `queued`: the
+	 * master `master_csid` (the 0xfb's SCA source) QUEUED our request and
+	 * named `master_lkid` -- production
+	 * vms_lock_dlm_proxy_queued_recv. `survives`: does the proxy outlive its
+	 * master's departure, to be re-sent to the tree's next master (rd
+	 * vms-0db)? Production vms_lock_dlm_proxy_survives. A request that
+	 * survives keeps its block when its target leaves, so the next master's
+	 * grant still finds it; one that does not is failed PATHLOST as before.
+	 */
+	void (*queued)(void *ctx, uint32_t req_lkid, vms_csid_t master_csid,
+		       uint32_t master_lkid);
+	int  (*survives)(void *ctx, uint32_t req_lkid);
+
 	uint32_t (*now_ms)(void *ctx);
 	void     (*log)(void *ctx, const char *msg);
 	void    *ctx;
@@ -578,6 +592,9 @@ struct dlm_req_fsm {
 	uint32_t ignored_events;         /* an empty [state][event] cell       */
 	uint32_t timeouts_failed;        /* the ladder was spent               */
 	uint32_t peers_gone;
+	uint32_t survivors_kept;         /* a queued request outlived its master
+					  * for the rebuild (rd vms-1b68)      */
+	uint32_t survivors_rehomed;      /* ...and its next master took it     */
 
 	/* THE TRANSITION HOLD (§8). Three facts, each counted where it is
 	 * decided, so a transcript shows how much lock traffic a transition
@@ -748,10 +765,28 @@ enum dlm_req_status dlm_req_fsm_blkast_body(struct dlm_req_fsm *f,
 					    const uint8_t *body, uint32_t len);
 
 /* A member left the cluster. Every request outstanding at it is FAILED with a
- * real path-lost status, so no $ENQW waits for an answer that cannot come. A
- * GRANTED request is left alone -- the engine's own departure path owns what
- * happens to a lock whose master is gone. Returns how many were failed. */
+ * real path-lost status, so no $ENQW waits for an answer that cannot come --
+ * EXCEPT one the master QUEUED whose proxy the engine preserves for the
+ * failover rebuild (ops `survives`, rd vms-1b68): its block is kept for the
+ * next master's grant. A GRANTED request is left alone -- the engine's own
+ * departure path owns what happens to a lock whose master is gone. Returns how
+ * many departure events were handled. */
 uint32_t dlm_req_fsm_peer_gone(struct dlm_req_fsm *f, vms_csid_t csid);
+
+/*
+ * A SURVIVING REQUEST HAS A NEW MASTER (rd vms-1b68): its rebuild/hand-over
+ * record was answered 0xfa by `new_csid`, so that is where the request now
+ * waits. Re-points the block; nothing is sent. DLM_REQ_E_NOLOCK when no block
+ * names `req_lkid`.
+ */
+enum dlm_req_status dlm_req_fsm_rehomed(struct dlm_req_fsm *f,
+					uint32_t req_lkid, vms_csid_t new_csid);
+
+/* DROP a block whose proxy the ENGINE has already ended (rd vms-1b68: a
+ * survivor no rebuild record carried). Nothing is sent and `fail` is not
+ * called again. DLM_REQ_E_NOLOCK when there is none. */
+enum dlm_req_status dlm_req_fsm_forget(struct dlm_req_fsm *f,
+				       uint32_t req_lkid);
 
 /*
  * THE HASH LEARNER (integration note E49). Called for EVERY inbound cat-0x02

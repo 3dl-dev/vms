@@ -50,4 +50,33 @@ if python3 "$CHECK" "$TABLE" "$DUMP.neg" > /dev/null; then
 	exit 1
 fi
 echo "run_gate.sh: negative control refused the corrupted frame, as it must"
+
+# Negative control 2 (rd vms-1b68): a WAITING holder record (queue ff, read off
+# its LKB) with body[30]/[31] SWAPPED -- the granted mode where the requested
+# one belongs, the pre-vms-0db naming. Only a gate whose state comes from the
+# LKB, not the frame, can refuse it. Then the same record with body[110]
+# stating GRANTED.
+for mut in swap queue; do
+python3 - "$DUMP" "$DUMP.neg" "$mut" <<'EOF'
+import sys
+out=open(sys.argv[2],'w'); done=False
+for line in open(sys.argv[1]):
+    p=line.split()
+    if not done and len(p)==4 and p[0]=='dlm_rm_08' and 'queue=0xff' in p[2]:
+        b=bytearray.fromhex(p[3])
+        if sys.argv[3]=='swap':
+            b[30],b[31]=b[31],b[30]
+        else:
+            b[110]=0x01
+        line=' '.join(p[:3]+[b.hex()])+'\n'; done=True
+    out.write(line)
+sys.exit(0 if done else 1)
+EOF
+[ $? -eq 0 ] || { echo "run_gate.sh: NEGATIVE CONTROL 2 ($mut) found no waiting record to corrupt" >&2; exit 1; }
+if python3 "$CHECK" "$TABLE" "$DUMP.neg" > /dev/null; then
+	echo "run_gate.sh: NEGATIVE CONTROL 2 FAILED -- a waiting record with $mut passed" >&2
+	exit 1
+fi
+echo "run_gate.sh: negative control refused a waiting record with $mut, as it must"
+done
 exit 0

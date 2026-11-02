@@ -311,6 +311,100 @@ static void fuzz_rb_rec(void)
                            "a resource (1..31) and a non-zero own handle");
 }
 
+/* rd vms-0db / vms-1b68: THE QUEUE CELLS a holder's record carries --
+ * body[28] flags, body[30] requested, body[31] granted, body[108], body[110]
+ * the queue -- through the op-0x08 AND op-0x12 parsers, the 82/01 answer this
+ * node builds over the record, and the builder's round trip. Class gate,
+ * name length and own handle are planted; body[110] is one of the three named
+ * queues 3/4 of the time. An accepted record must name a queue body[110]
+ * names, modes body[30]/[31] name and none above EX; its answer must carry
+ * body[28] = 0x10 | body[108] and, for a queued record, echo body[30:32]; and
+ * re-building it must give the same queue and modes back. */
+static void fuzz_rb_queue_cells(void)
+{
+    static const uint8_t q[3] = { 0x01u, 0x00u, 0xffu };
+    struct vms_dlm_rm_lock_rec r, back;
+    struct vms_dlm_rm_lock_answer a;
+    uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+    uint8_t reb[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+    uint32_t ok = 0, queued = 0, bad = 0;
+
+    memset(&a, 0, sizeof(a));
+    a.master_lkid = 0x020004efu;
+    for (int i = 0; i < ITERS; i++) {
+        uint8_t scratch[VMS_CM_BODY_LEN + 8];
+        uint32_t n = (uint32_t)(rand() % (VMS_CM_BODY_LEN + 9));
+        int op12 = i & 1;
+        vms_codec_status_t st;
+
+        fill_random(scratch, n);
+        if ((rand() & 7) && n > DLM_OP_BODY_OFF) {
+            scratch[DLM_OP_BODY_OFF - 1] = 0x02;
+            scratch[DLM_OP_BODY_OFF] = op12 ? VMS_DLM_WIREOP_RM_12
+                                            : VMS_DLM_WIREOP_REBUILD_REC;
+            if (n > 47)
+                scratch[47] = (uint8_t)(1 + rand() % 31);
+            if (n > 31 && (rand() & 3)) {
+                scratch[30] = (uint8_t)(rand() % 6);
+                scratch[31] = (uint8_t)(rand() % 6);
+            }
+            if (n > 110 && (rand() & 3))
+                scratch[110] = q[rand() % 3];
+        }
+        uint8_t *body = exact(scratch, n);
+        st = op12 ? vms_dlm_rm_lock_rec_parse_body(body, n, &r)
+                  : vms_dlm_rb_rec_parse_body(body, n, &r);
+        if (st == VMS_CODEC_OK) {
+            ok++;
+            if (r.queue_state >= VMS_DLM_RB_Q__COUNT ||
+                r.requested_mode != body[30] || r.granted_mode != body[31] ||
+                r.requested_mode > VMS_LCK_EX || r.granted_mode > VMS_LCK_EX ||
+                r.flags != body[28] ||
+                (body[110] == 0x01u) != (r.queue_state == VMS_DLM_RB_Q_GRANTED) ||
+                (body[110] == 0xffu) != (r.queue_state == VMS_DLM_RB_Q_WAITING) ||
+                (body[110] == 0x00u) != (r.queue_state == VMS_DLM_RB_Q_CONVERTING))
+                bad++;
+            if (r.queue_state != VMS_DLM_RB_Q_GRANTED)
+                queued++;
+            if (n >= VMS_CM_BODY_LEN) {
+                const uint8_t *ab = ans + VMS_OFF_SYSAP_BODY;
+
+                if (vms_dlm_rm_lock_answer_build(body, n, &a, ans,
+                                                 sizeof(ans), NULL) !=
+                        VMS_CODEC_OK ||
+                    ab[28] != (uint8_t)(0x10u | body[108]) ||
+                    ab[34] != 0xfau ||
+                    (r.queue_state != VMS_DLM_RB_Q_GRANTED &&
+                     (ab[30] != body[30] || ab[31] != body[31])))
+                    bad++;
+            }
+            /* The builder's round trip: same queue, same requested mode,
+             * and the granted mode a waiting lock does not have. */
+            if ((op12 ? vms_dlm_rm_lock_rec_build(&r, 0, reb, sizeof(reb),
+                                                  NULL)
+                      : vms_dlm_rb_rec_build(&r, 0, reb, sizeof(reb), NULL)) ==
+                VMS_CODEC_OK) {
+                st = op12 ? vms_dlm_rm_lock_rec_parse_body(
+                                reb + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, &back)
+                          : vms_dlm_rb_rec_parse_body(
+                                reb + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, &back);
+                if (st != VMS_CODEC_OK || back.queue_state != r.queue_state ||
+                    back.requested_mode != r.requested_mode ||
+                    back.granted_mode != (r.queue_state == VMS_DLM_RB_Q_WAITING
+                                              ? 0u : r.granted_mode))
+                    bad++;
+            }
+        }
+        free(body);
+    }
+    ct_check(ok > 0 && queued > 0, "rb queue cells: 100k op-0x08/op-0x12 "
+             "(7/8 planted), no over-read/crash, queued records REACHED");
+    ct_check(bad == 0, "rb queue cells: every accepted record's queue is "
+             "body[110]'s, its modes body[30]/[31]'s; its answer carries "
+             "0x10|body[108] and echoes a queued record's modes; it "
+             "rebuilds to itself");
+}
+
 /* rd vms-20c: the op-0x0d RECORD parser, with its class gates planted so the
  * identity reader behind them is actually reached: cat 0x02 / op 0x0d at
  * body[8:10] and 0x0001 at body[12:14], a name length that is usually in range,
@@ -386,6 +480,7 @@ int main(void)
     fuzz_dir_reg();
     fuzz_rm_holder();
     fuzz_rb_rec();
+    fuzz_rb_queue_cells();
     fuzz_frame();
 
     return ct_summary("fuzz_codec_dlm");

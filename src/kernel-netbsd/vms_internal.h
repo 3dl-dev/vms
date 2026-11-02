@@ -514,6 +514,9 @@ struct vms_lock_entry {
 	 * vms_internal.h field; see there for the full reasoning.
 	 */
 	uint32_t            parent_master_lkid;
+	/* The master's handle off its 0xfb QUEUED answer (rd vms-1b68). Mirror
+	 * of the Linux vms_internal.h field; see there. */
+	uint32_t            queued_master_lkid;
 	/*
 	 * PROXY LKB (FC-P4.4) -- the requester-side image of a lock mastered on
 	 * ANOTHER node (Davis p. 6-52's *process copy*). See the Linux twin

@@ -322,7 +322,14 @@ dlm-rebuild-record-drops-the-granted-valblk
 dlm-rebuild-record-stale-seq-after-own-write
 dlm-f9-promotion-drops-the-valblk
 dlm-rebuild-record-overwrites-a-later-pair
-grant-notify-drops-the-valblk"
+grant-notify-drops-the-valblk
+dlm-0db-queue-read-from-modes
+dlm-0db-answer-ignores-body108
+dlm-1b68-waiter-ended-at-departure
+dlm-1b68-waiter-not-described
+dlm-1b68-waiter-granted-before-settle
+dlm-1b68-survivor-never-ended
+dlm-1b68-survivor-block-dropped"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3129,6 +3136,129 @@ EOF
                       ;;
         esac;;
 
+    dlm-0db-queue-read-from-modes)
+        case "$_f" in
+        facility)     echo "the holder record's QUEUE STATE (vms_dlm_rb_rec_modes, rd vms-0db): body[110] -- 01 granted, 00 converting, ff waiting -- is the ONLY cell that says which queue a lock is on; the modes never decide it (a granted, down-converted lock is (5,1) at 01)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "the decoder reads the queue off the modes instead of body[110] (equal modes => granted, else converting), so a real granted down-converted lock is read as converting and a real waiting record (5,0) as converting: the new master queues locks on the wrong queue.";;
+        require_fail) hd_lines <<'EOF'
+  and reads back WAITING, requested EX, granted 0
+*** (5,1) at [110] 01 is GRANTED at CR: the modes never decide the queue ***
+a body[110] naming no queue is REFUSED
+a record whose body[110] names no queue is not taken
+EOF
+                      ;;
+        esac;;
+
+    dlm-0db-answer-ignores-body108)
+        case "$_f" in
+        facility)     echo "the 82/01 answer to a holder record (vms_dlm_rm_lock_answer_build, rd vms-0db): body[28] is 0x10 | the record's body[108] -- 0x14 for a converting or waiting record -- on all 5,694 real 0xfa answers";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "the answer's body[28] is the grant record's constant 0x10 whatever the record's body[108] says, so a real VAX holder is answered 0x10 for a queued record it sent with 0x04.";;
+        require_fail) hd_lines <<'EOF'
+*** answered 0xfa, body[28] 0x14, its (body[30], body[31]) echoed ***
+*** its answer: 0xfa, body[28] 0x14, body[30:32] echoed ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-1b68-waiter-ended-at-departure)
+        case "$_f" in
+        facility)     echo "a WAITING or CONVERTING proxy the departed master ACKNOWLEDGED survives the departure for the rebuild (dlm_proxies_master_departed, rd vms-1b68)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "the departure sweep's survivor skip is disarmed, so a waiter the master queued is ended SS\$_UNSUPPORTED at the departure exactly as before rd vms-1b68, and the rebuild has nothing to re-send.";;
+        require_fail) hd_lines <<'EOF'
+  VAX3's 0xfa re-homes it, still converting
+  one lock installed, on the waiting queue
+  the tree is done and no waiter was ended
+  the window's close grants nothing VAX3 masters
+*** VAX1 left and the queued conversion is NOT ended ***
+*** VAX1 left and the queued waiter is NOT ended ***
+*** a survivor whose rebuild stopped ends SS$_UNSUPPORTED: no eternal wait ***
+*** answered 0xfa, body[28] 0x14, its (body[30], body[31]) echoed ***
+*** its record: (5,3), [110] 00, [108] 04, [28] CONVERT ***
+*** our EX waiter is NOT granted before the survivors' records are in ***
+*** still waiting, now at VAX3 ***
+*** the window closes: our waiter, first in the queue, is GRANTED EX ***
+*** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
+VAX3's WAITING record is installed
+this node masters RMT1 now; nothing is sent
+EOF
+                      ;;
+        esac;;
+
+    dlm-1b68-waiter-not-described)
+        case "$_f" in
+        facility)     echo "a waiter the master acknowledged is DESCRIBED in its holder's record (dlm_proxy_describable_locked, rd vms-0db: one record per LKB, granted, converting and waiting alike)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "a waiting proxy is never describable, so the hand-over and the rebuild skip it as before rd vms-0db: the new master never learns of it and it is ended when the rebuild ends.";;
+        require_fail) hd_lines <<'EOF'
+  VAX3's 0xfa re-homes it, still converting
+  one lock installed, on the waiting queue
+  the tree is done and no waiter was ended
+  the window's close grants nothing VAX3 masters
+*** answered 0xfa, body[28] 0x14, its (body[30], body[31]) echoed ***
+*** its record: (5,3), [110] 00, [108] 04, [28] CONVERT ***
+*** still waiting, now at VAX3 ***
+*** the window closes: our waiter, first in the queue, is GRANTED EX ***
+*** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
+VAX3's WAITING record is installed
+this node masters RMT1 now; nothing is sent
+EOF
+                      ;;
+        esac;;
+
+    dlm-1b68-waiter-granted-before-settle)
+        case "$_f" in
+        facility)     echo "a waiter of ours promoted by a rebuild 0xf9 is decided only at the rebuild window's close, with every survivor's record in (dlm_promote_proxy_locked, rd vms-1b68)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "the promotion grants at once, before the other survivors' records are installed: a waiter can be granted over a lock a later record names.";;
+        require_fail) hd_lines <<'EOF'
+*** our EX waiter is NOT granted before the survivors' records are in ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-1b68-survivor-never-ended)
+        case "$_f" in
+        facility)     echo "no eternal wait (rm_rb_end_unsent, rd vms-1b68): a survivor whose rebuild record was not answered -- stopped, out of window, no rebuild possible -- is ended SS\$_UNSUPPORTED";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "the rebuild's end never ends the survivors it did not carry: a waiter whose tree's rebuild stopped waits for ever on a master that left.";;
+        require_fail) hd_lines <<'EOF'
+  ...and so does one no rebuild can carry at all
+*** a survivor whose rebuild stopped ends SS$_UNSUPPORTED: no eternal wait ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-1b68-survivor-block-dropped)
+        case "$_f" in
+        facility)     echo "the requester FSM keeps a QUEUED request's block when its master leaves and the engine preserves the proxy (dq_survives, rd vms-1b68), so the next master's grant still finds it";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "every request at a departed master is failed PATHLOST, survivors included: the engine keeps the proxy for the rebuild but its \$ENQW is ended under it.";;
+        require_fail) hd_lines <<'EOF'
+  ...at the new master
+  an engine-ended survivor's block is dropped, once
+  the new master's 0xfa re-points it
+*** the survivor's block is KEPT and its waiter not failed ***
+EOF
+                      ;;
+        esac;;
+
     dlm-rebuild-0xf9-not-adopted)
         case "$_f" in
         facility)     echo "the failover rebuild's 0xf9 (rd vms-874f): the directory told THIS node it now masters a tree whose master LEFT, and the table adopts it through the adoption engine -- whose close turns every proxy of ours in it into a local lock -- and records the authority under which survivors' records are then installed";;
@@ -3176,13 +3306,14 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_rb_pump() builds its record with the op-0x12 builder: every cell is right but the opcode, so a real VAX directory receives a remaster record for a hand-over nobody opened instead of the failover rebuild record, and the survivor's locks die with the master exactly as before rd vms-874f.";;
         require_fail) hd_lines <<'EOF'
-  a cat-0x02 op-0x08 ROOT for our DEPT lock, to the directory VAX2
   a SUB record, body[36:40] our own root lkid
   a cat-0x02 op-0x08
+  a cat-0x02 op-0x08 ROOT for our DEPT lock, to the directory VAX2
 *** EVERY NAMED CELL equals VAX2's real ROOT record: PID 0x20400217, own lkid, PR/PR, no parent, identity, tail, the tree hash ***
 *** EVERY NAMED CELL equals VAX3's real ROOT record: PID 0x20600216, own lkid, CR/CR, no parent, the identity, body[110] and the tail, the tree hash ***
 *** EVERY NAMED CELL equals VAX3's real SUB record (PID, CW/CW, the parent pair, identity, tail) ***
 the ROOT goes to VAX2 carrying RMLVB-0123456789 at 1 (lab874f frame 5322)
+*** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -4426,6 +4557,27 @@ apply_edit() {
         # self-comparison: `sent` stays read and -Wtautological-compare has
         # nothing to say.
         sed -i 's@^\tif (sent != 0u)$@\tif (((void)sent, 1)) /* NEGCTL dlm-rm-held-reported-though-unsent */@' "$_file";;
+
+    dlm-0db-queue-read-from-modes)
+        sed -i 's|^\tswitch (c->c110) {$|\tswitch (c->c30 == c->c31 ? 0x01u : 0x00u) { /* NEGCTL dlm-0db-queue-read-from-modes */|' "$_file";;
+
+    dlm-0db-answer-ignores-body108)
+        sed -i 's@^\tif (c108 != 0u)$@\tif (0 \&\& c108 != 0u) /* NEGCTL dlm-0db-answer-ignores-body108 */@' "$_file";;
+
+    dlm-1b68-waiter-ended-at-departure)
+        sed -i 's|^        if (dlm_proxy_survives_locked(p)) {$|        if (0 \&\& dlm_proxy_survives_locked(p)) { /* NEGCTL dlm-1b68-waiter-ended-at-departure */|' "$_file";;
+
+    dlm-1b68-waiter-not-described)
+        sed -i 's|^    return l->waiting ? dlm_proxy_survives_locked(l)$|    return l->waiting ? 0 /* NEGCTL dlm-1b68-waiter-not-described */|' "$_file";;
+
+    dlm-1b68-waiter-granted-before-settle)
+        sed -i 's|^    if (!vms_dlm_rebuild_hold)$|    if (1) /* NEGCTL dlm-1b68-waiter-granted-before-settle */|' "$_file";;
+
+    dlm-1b68-survivor-never-ended)
+        sed -i 's|^\tif (f->ops->rb_unsent != (uint32_t (\*)(void \*,$|\tif (0 \&\& f->ops->rb_unsent != (uint32_t (*)(void *, /* NEGCTL dlm-1b68-survivor-never-ended */|' "$_file";;
+
+    dlm-1b68-survivor-block-dropped)
+        sed -i 's|^\treturn r->settled \&\&$|\treturn 0 \&\& r->settled \&\& /* NEGCTL dlm-1b68-survivor-block-dropped */|' "$_file";;
 
     dlm-rebuild-0xf9-not-adopted)
         # `if (g.outcome == (uint8_t)VMS_DLM_DIR_YOU_MASTER && t->await_root &&` is unique.

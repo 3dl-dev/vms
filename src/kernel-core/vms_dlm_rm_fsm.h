@@ -363,6 +363,17 @@ struct vms_dlm_rm_ops {
 	int (*rb_dir_claim)(void *ctx, const struct vms_dlm_res_ident *id);
 	int (*rb_install)(void *ctx, const struct vms_dlm_adopt_lock_rec *r,
 			  struct vms_dlm_adopt_lock_result *out);
+	/*
+	 * rd vms-1b68, both OPTIONAL. `rb_unsent`: a rebuild of `t` ENDED
+	 * (done, stopped, or -- ident_valid 0 -- never startable for
+	 * t->old_master_csid): end every waiting survivor still naming the
+	 * departed master SS$_UNSUPPORTED (vms_lock_dlm_rebuild_fail_unsent,
+	 * plus the requester FSM's block). Returns how many. `rb_settle`: the
+	 * window closed -- decide the waiters this node masters once
+	 * (vms_lock_dlm_rebuild_settle).
+	 */
+	uint32_t (*rb_unsent)(void *ctx, const struct vms_dlm_adopt_tree *t);
+	void (*rb_settle)(void *ctx);
 };
 
 /* ==========================================================================
@@ -658,6 +669,8 @@ struct vms_dlm_rm {
 	uint8_t  rb_window_step;     /* the R that opened it                  */
 	uint8_t  rb_window_pad[2];
 	uint32_t rb_no_slot;         /* trees left waiting: every slot busy   */
+	uint32_t rb_waiters_ended;   /* survivors no record carried, ended    */
+				     /* SS$_UNSUPPORTED (rd vms-1b68)         */
 	uint32_t rb_in_installed;    /* survivors' records installed + 0xfa   */
 	uint32_t rb_in_refused;      /* ...refused by the engine: unanswered  */
 };

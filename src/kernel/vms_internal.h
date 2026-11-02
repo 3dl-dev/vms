@@ -599,6 +599,17 @@ struct vms_lock_entry {
      */
     uint32_t            parent_master_lkid;
     /*
+     * ON A WAITING PROXY: the handle the master named when it QUEUED this
+     * request -- body[20:24] of its 0xfb answer (rd vms-1b68). Non-zero is the
+     * proof the master really holds the request in a queue, which is what lets
+     * a survivor re-send it to the tree's new master if that master leaves.
+     * 0 = never acknowledged (or granted since). Never put on a frame by the
+     * requester paths; `master_lkid` stays UNSET until a grant. Mirror in
+     * src/kernel-netbsd/vms_internal.h and tests/cluster/host/
+     * lock_host_internal.h.
+     */
+    uint32_t            queued_master_lkid;
+    /*
      * PROXY LKB (FC-P4.4, design SS3.4 + hard call 7; Davis p. 6-52's *process
      * copy*). proxy == 1 marks the requester-side image of a lock this node
      * does NOT master: the executive holds a real lock block for it -- so

@@ -36,7 +36,7 @@ def load_table(path):
     return rows
 
 
-def applies(row, typ, frame_abs):
+def applies(row, typ, frame_abs, state):
     if row['type'] != typ:
         return False
     if row['sel'] == '*':
@@ -44,6 +44,13 @@ def applies(row, typ, frame_abs):
     if row['sel'].startswith('op='):
         op = int(row['sel'][3:], 16)
         return frame_abs.get(80) == op
+    if row['sel'].startswith('st:'):
+        # st:<key>=<hex>: the row applies to a frame whose emitting test
+        # recorded that EXECUTIVE fact (rd vms-1b68: a holder record's queue,
+        # read off the LKB, never off the frame). A frame with no such fact
+        # is covered by no row of this kind, so its bytes go uncovered.
+        key, _, val = row['sel'][3:].partition('=')
+        return key in state and int(state[key], 0) == int(val, 16)
     sys.exit("grounding line %d: unknown selector %r" % (row['line'], row['sel']))
 
 
@@ -104,7 +111,7 @@ def main(argv):
         seen_types[typ] += 1
         cover = [0] * len(b)
         for row in rows:
-            if not applies(row, typ, frame_abs):
+            if not applies(row, typ, frame_abs, state):
                 continue
             lo = row['off'] - base
             if lo < 0 or lo + row['len'] > len(b):

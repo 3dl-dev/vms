@@ -2255,6 +2255,18 @@ struct vms_tt_brkthru_args {
     uint32_t status;                   /* out: SS$_ */
 };
 
+/* VMS_IOCTL_TT_TYPAHD (rd vms-d3cd): $QIO IO$_SENSEMODE!IO$M_TYPEAHDCNT on a
+ * terminal channel -- how many characters wait in the class driver's
+ * type-ahead buffer, and the first of them (I/O User's Reference, "Terminal
+ * Driver", sense mode: type-ahead count). The caller's own channel; no
+ * privilege. Nothing is consumed. */
+struct vms_tt_typahd_args {
+    uint32_t chan;              /* in: the executive channel */
+    uint32_t count;             /* out: characters in the type-ahead buffer */
+    uint32_t first;             /* out: the first of them (0 when none) */
+    uint32_t status;            /* out: SS$_ */
+};
+
 #define VMS_IOCTL_TT_READ     _IOWR(VMS_IOC_MAGIC, 0xA0, struct vms_tt_read_args)
 #define VMS_IOCTL_TT_WRITE    _IOWR(VMS_IOC_MAGIC, 0xA1, struct vms_tt_write_args)
 #define VMS_IOCTL_TT_SETMODE  _IOWR(VMS_IOC_MAGIC, 0xA2, struct vms_tt_mode_args)
@@ -2262,6 +2274,7 @@ struct vms_tt_brkthru_args {
 #define VMS_IOCTL_TT_SENSE    _IOWR(VMS_IOC_MAGIC, 0xA4, struct vms_tt_sense_args)
 #define VMS_IOCTL_TT_OOBAST   _IOWR(VMS_IOC_MAGIC, 0xA5, struct vms_tt_oobast_args)
 #define VMS_IOCTL_TT_BRKTHRU  _IOWR(VMS_IOC_MAGIC, 0xA6, struct vms_tt_brkthru_args)
+#define VMS_IOCTL_TT_TYPAHD   _IOWR(VMS_IOC_MAGIC, 0xA7, struct vms_tt_typahd_args)
 
 /* The NetBSD twin (src/kernel-netbsd/vms_tt_nb.h) asserts the same layout and
  * numbers on ILP32 VAX; these are the reference-build values. */
@@ -2293,6 +2306,10 @@ _Static_assert(sizeof(struct vms_tt_brkthru_args) == 536,
                "struct vms_tt_brkthru_args changed size");
 _Static_assert(VMS_IOCTL_TT_BRKTHRU == 0xC21856A6u,
                "VMS_IOCTL_TT_BRKTHRU encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_typahd_args) == 16,
+               "struct vms_tt_typahd_args changed size");
+_Static_assert(VMS_IOCTL_TT_TYPAHD == 0xC01056A7u,
+               "VMS_IOCTL_TT_TYPAHD encodes differently here than on the reference build");
 
 /*
  * Resolve a DISK unit to the Linux block device the executive enumerated it

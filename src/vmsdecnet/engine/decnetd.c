@@ -48,8 +48,8 @@
 #include <errno.h>
 #include <fcntl.h>      /* open(/dev/urandom): the NETACP link-handle secret */
 #include <net/if.h>      /* if_nametoindex() */
-#include <ifaddrs.h>    /* getifaddrs(): auto-detect the primary NIC (no argv) */
-#include <poll.h>       /* the --cterm-server loop waits on wire + session */
+#include <ifaddrs.h>    /* probe build: host NIC auto-detect (the executive build names ETH0:) */
+#include <poll.h>       /* the --fal-proc-accept-test pump only (selftest; rd vms-d3cd) */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
 #include <stdio.h>
@@ -98,9 +98,10 @@
 #include "iodef.h"          /* IO$_READVBLK/WRITEVBLK/SETMODE + IO$K_TT_PASSALL      */
 #include "lnmdef.h"         /* LNM$C_USER: the DNET$NETACP_REQ logical (rd vms-dda)   */
 
-/* The executive terminal channel's backing fd, so the client can poll() the
- * datalink AND the terminal for readiness in one wait -- readiness only; every
- * byte still MOVES through $QIO on the assigned channel (vms-f54, vms-1c57). */
+/* The terminal channel's backing fd. Since rd vms-d3cd nothing waits on it:
+ * readiness is the terminal driver's type-ahead count ($QIO IO$_SENSEMODE!
+ * IO$M_TYPEAHDCNT). It is still consulted once, to learn whether SYS$INPUT is
+ * a terminal at all (sethost_open_terminal). */
 extern int vms$$chan_to_fd(uint16_t chan);
 
 /* The process context the system services need for their channel table. An
@@ -154,6 +155,88 @@ static int decnet_autodetect_iface(char *buf, size_t sz)
     if (!buf || sz == 0)
         return 0;
     return scs_datalink_primary_iface(buf, sz) == 0 && buf[0] != '\0';
+}
+
+/*
+ * THE LAN UNIT, THE VMS WAY (rd vms-d3cd). The booted NETACP (the executive
+ * datalink build) does no host interface enumeration -- no socket(AF_INET) +
+ * SIOCGIF*, no getifaddrs, no if_nametoindex. It names the executive's LAN
+ * controller unit ETH0: (the EWA0:-style DC$_SCOM row the executive entered
+ * for the primary NIC) and asks it, as a VMS program asks a LAN device:
+ * $ASSIGN ETH0:, $QIOW IO$_SENSEMODE, and the hardware address is the
+ * NMA$C_PCLI_HWA entry of the extended characteristics (sys_qio.c
+ * qio_lan_op). The datalink itself is opened on that VMS name too, and the
+ * executive resolves the host interface privately (VMS_IOCTL_L2_OPEN).
+ */
+#define DECNETD_LAN_UNIT "ETH0:"
+
+static int decnetd_executive_datalink(void)
+{
+    return strcmp(scs_datalink_backend(), "executive") == 0;
+}
+
+/* Is `n` a VMS device name (carries a ':'), not a host interface name? */
+static int decnetd_is_vms_devnam(const char *n)
+{
+    return n && strchr(n, ':') != NULL;
+}
+
+/* $QIOW IO$_SENSEMODE on ETH0: -> its hardware address. Returns the VMS
+ * status: the $ASSIGN's, the $QIOW's, the IOSB's, or SS$_NOSUCHDEV when the
+ * extended characteristics carry no hardware address. */
+static uint32_t decnetd_lan_sense_hwaddr(uint8_t mac_out[6])
+{
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    struct dsc$descriptor_s dev;
+    dev.dsc$w_length = (uint16_t)strlen(DECNETD_LAN_UNIT);
+    dev.dsc$b_dtype = DSC$K_DTYPE_T;
+    dev.dsc$b_class = DSC$K_CLASS_S;
+    dev.dsc$a_pointer = (char *)DECNETD_LAN_UNIT;
+    uint16_t ch = 0;
+    uint32_t st = sys$assign(&dev, &ch, 0, NULL);
+    if (!(st & 1))
+        return st;
+    uint8_t chars[8];
+    uint8_t ext[64];
+    struct dsc$descriptor_s xd;
+    xd.dsc$w_length = (uint16_t)sizeof ext;
+    xd.dsc$b_dtype = DSC$K_DTYPE_T;
+    xd.dsc$b_class = DSC$K_CLASS_S;
+    xd.dsc$a_pointer = (char *)ext;
+    struct _iosb iosb;
+    memset(&iosb, 0, sizeof iosb);
+    memset(ext, 0, sizeof ext);
+    /* P2 is the extended-characteristics descriptor; OVMX takes it in P4 when
+     * a longword P2 cannot hold its address (sys_qio.c qio_lan_op, Rule 8). */
+    st = sys$qiow(0, ch, IO$_SENSEMODE, &iosb, NULL, 0, chars, sizeof chars,
+                  0, (uintptr_t)&xd, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    (void)sys$dassgn(ch);
+    if (!(st & 1))
+        return st;
+    /* Walk the parameter entries for NMA$C_PCLI_HWA (1160, string). */
+    size_t n = iosb.iosb$w_bcnt <= sizeof ext ? iosb.iosb$w_bcnt : sizeof ext;
+    size_t i = 0;
+    while (i + 2 <= n) {
+        uint16_t id = (uint16_t)(ext[i] | (ext[i + 1] << 8));
+        i += 2;
+        if (id & 0x1000u) {                    /* NMA$M_PTY_STR: word count + bytes */
+            if (i + 2 > n) break;
+            uint16_t len = (uint16_t)(ext[i] | (ext[i + 1] << 8));
+            i += 2;
+            if (i + len > n) break;
+            if ((id & 0x0FFFu) == 1160u && len == 6) {
+                memcpy(mac_out, ext + i, 6);
+                return SS$_NORMAL;
+            }
+            i += len;
+        } else {
+            i += 4;                            /* a longword value */
+        }
+    }
+    return SS$_NOSUCHDEV;
 }
 
 /* A monotonic seconds tick -- the unit the engine's T3/listen timers use. */
@@ -2709,9 +2792,9 @@ static int dnet_recv_route(struct dnet_engine *eng, int sock, unsigned ifindex,
  * negotiates characteristics, then bridges the LOCAL VMS terminal channel to the
  * remote session -- terminal keystrokes ($QIO read) -> CTERM Read Data, remote
  * CTERM Write -> terminal ($QIO write) -- until the host unbinds, the link drops,
- * or the run ends. It poll()s the terminal channel's fd AND the datalink for
- * READINESS (bytes still MOVE through $QIO) so the HELLO cadence + link tick keep
- * firing. On teardown control returns with the canonical %REM-S-END.
+ * or the run ends. It waits on the datalink receive (the executive's bounded
+ * timeout) and asks the terminal driver for type-ahead (rd vms-d3cd) -- no poll()
+ * on host descriptors -- so the HELLO cadence + link tick keep firing. On teardown control returns with the canonical %REM-S-END.
  */
 /*
  * The format-2 SRCNAME group/user codes for the $ SET HOST Connect Initiate.
@@ -3019,7 +3102,7 @@ static void sethost_on_term_input(struct sh_ctx *x)
         return;
     }
     /* Read the keystrokes through the VMS terminal channel ($QIO), never a raw
-     * read on fd 0. poll() only told us bytes are ready. */
+     * read on fd 0. */
     uint32_t rst = sys$qiow(0, x->ch_in, IO$_READVBLK, &iosb, NULL, 0,
                             inbuf, (uint32_t)sizeof(inbuf), 0, 0, 0, 0);
     uint32_t rn = (rst & 1) ? iosb.iosb$l_dev_depend : 0;
@@ -3051,6 +3134,47 @@ static void sethost_on_term_input(struct sh_ctx *x)
             x->read_pending = 0;
         }
     }
+}
+
+/*
+ * WAITING THE VMS WAY (rd vms-d3cd). The SET HOST client used to poll() the
+ * substrate descriptor behind its terminal channel (and, standalone, the
+ * datalink). It now asks the TERMINAL DRIVER: $QIOW IO$_SENSEMODE!
+ * IO$M_TYPEAHDCNT on the TT: channel says whether a line has been started in
+ * the type-ahead buffer, and the client then reads it with $QIOW, exactly as
+ * the poll used to gate it. Between turns it waits on a timer event flag
+ * ($SETIMR + $WAITFR), never nanosleep/poll on a host descriptor.
+ */
+#define DECNETD_WAIT_EFN 22u    /* a local event flag (1..23 are the image's) */
+
+static void decnetd_wait_ms(unsigned ms)
+{
+    /* a VMS delta time: negative, in 100 ns units */
+    uint64_t delta = (uint64_t)(-(int64_t)ms * 10000);
+    if (sys$setimr(DECNETD_WAIT_EFN, &delta, NULL, 0, 0) & 1)
+        (void)sys$waitfr(DECNETD_WAIT_EFN);
+}
+
+/* Is the local side ready to supply input? A TERMINAL (TT: channel): the
+ * driver's type-ahead count is nonzero. A non-terminal SYS$INPUT (a file or
+ * pipe a harness feeds): only when the host has solicited a read -- the
+ * read then waits in $QIOW for the next record, which is what a VMS image
+ * reading a file does. */
+static int sethost_term_ready(struct sh_ctx *x)
+{
+    if (!x->ch_tt)
+        return x->read_pending;
+    uint8_t tc[8];
+    struct _iosb iosb;
+    memset(tc, 0, sizeof tc);
+    memset(&iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, x->ch_tt, IO$_SENSEMODE | IO$M_TYPEAHDCNT, &iosb,
+                           NULL, 0, tc, (uint32_t)sizeof tc, 0, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    if (!(st & 1))
+        return 1;      /* the driver cannot say: let the read report it */
+    return (tc[0] | (tc[1] << 8)) != 0;
 }
 
 /* Assign the LOCAL VMS terminal channels (the anti-LARP core): SYS$INPUT for
@@ -3193,7 +3317,8 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
 
     if (sethost_open_terminal(&x) != 0)
         return 1;
-    int term_fd = vms$$chan_to_fd(x.ch_in);   /* poll() readiness only */
+    /* The wire wait: a frame, or 20 ms (then the terminal is looked at). */
+    (void)scs_datalink_set_recv_timeout_ms(sock, 20);
 
     uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX];
     size_t flen = 0;
@@ -3235,24 +3360,10 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             break;
         }
 
-        struct pollfd pfd[2];
-        int nfd = 0;
-        pfd[nfd].fd = sock;          pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
-        if (sethost_wants_input(&x) && term_fd >= 0) {
-            pfd[nfd].fd = term_fd;   pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
-        }
-        int pr = poll(pfd, (nfds_t)nfd, 1000);
-        if (pr < 0) {
-            if (errno == EINTR)
-                continue;
-            fprintf(stderr, "DECNETD-E-POLL, poll failed: %s\n", strerror(errno));
-            x.rc = 1;
-            break;
-        }
-        if (pr == 0)
-            continue;
-
-        if (pfd[0].revents & POLLIN) {
+        /* rd vms-d3cd: the datalink receive itself is the wait (bounded by
+         * the executive's receive timeout set above), then the terminal
+         * driver is asked for type-ahead -- no poll() on host descriptors. */
+        {
             int ev = dnet_recv_route(eng, sock, ifindex, now, rxbuf, sizeof(rxbuf));
             if (ev < 0) {
                 fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n",
@@ -3307,7 +3418,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             }
         }
 
-        if (nfd > 1 && (pfd[1].revents & (POLLIN | POLLHUP)))
+        if (!x.done && sethost_wants_input(&x) && sethost_term_ready(&x))
             sethost_on_term_input(&x);
     }
 
@@ -4800,8 +4911,7 @@ static void netcli_idle(struct netcli *c)
         if (c->io->idle) c->io->idle(c->io->ctx);
         return;
     }
-    struct timespec ts = { 0, 5 * 1000 * 1000 };
-    nanosleep(&ts, NULL);
+    decnetd_wait_ms(5);     /* $SETIMR + $WAITFR (rd vms-d3cd) */
 }
 
 /* The DAP presentation transport over a _NET: link (COPY's FAL client). */
@@ -5119,7 +5229,6 @@ static int run_set_host_net(struct netcli *c, const char *target, const char *lo
     x.quiet = 1;                        /* VMS SET HOST shows only the remote */
     if (sethost_open_terminal(&x) != 0)
         return 1;
-    int term_fd = vms$$chan_to_fd(x.ch_in);
 
     char ncb[64];
     int n = snprintf(ncb, sizeof ncb, "%s::\"%d=\"", target, DNET_CTERM_OBJECT);
@@ -5172,15 +5281,12 @@ static int run_set_host_net(struct netcli *c, const char *target, const char *lo
         }
         if (x.done)
             break;
-        if (sethost_wants_input(&x) && term_fd >= 0) {
-            struct pollfd pfd = { term_fd, POLLIN, 0 };
-            int pr = poll(&pfd, 1, 20);
-            if (pr > 0 && (pfd.revents & (POLLIN | POLLHUP)))
-                sethost_on_term_input(&x);
-        } else {
-            struct timespec ts = { 0, 20 * 1000 * 1000 };
-            nanosleep(&ts, NULL);
-        }
+        /* rd vms-d3cd: ask the terminal driver for type-ahead, then wait on
+         * a timer event flag -- never poll() the substrate descriptor. */
+        if (sethost_wants_input(&x) && sethost_term_ready(&x))
+            sethost_on_term_input(&x);
+        else
+            decnetd_wait_ms(20);
     }
     sethost_finish(&x, local_node);
     (void)netcli_op(c, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &xf);
@@ -9200,7 +9306,12 @@ int main(int argc, char **argv)
      * fails honestly. */
     static char ifname_auto[IF_NAMESIZE];
     int ifname_detected = 0;     /* did auto-detection actually pick a NIC?   */
-    if (!ifname_explicit && decnet_autodetect_iface(ifname_auto, sizeof(ifname_auto))) {
+    /* rd vms-d3cd: the executive build names the LAN UNIT, never a host
+     * interface it would have to enumerate: ETH0: is the executive's own
+     * record of the primary NIC, the one _NET: rides. */
+    if (!ifname_explicit && decnetd_executive_datalink()) {
+        ifname = DECNETD_LAN_UNIT;
+    } else if (!ifname_explicit && decnet_autodetect_iface(ifname_auto, sizeof(ifname_auto))) {
         ifname = ifname_auto;
         ifname_detected = 1;
     }
@@ -9296,6 +9407,7 @@ int main(int argc, char **argv)
          * no socket is opened here. */
         printf("Datalink interface = %s%s\n", ifname,
                ifname_explicit ? " (--iface)"
+               : decnetd_is_vms_devnam(ifname) ? " (the executive's LAN unit)"
                : ifname_detected ? " (auto-detected primary NIC)"
                : " (compiled default; no usable NIC detected)");
         /* Which raw-L2 path this binary was BUILT with (rd vms-1f69) -- a
@@ -9383,19 +9495,53 @@ int main(int argc, char **argv)
     fflush(stdout);
     if (argc == 1)                   /* the detached NETACP STARTNET launched */
         netacp_opcom_starting();
-    unsigned ifindex = if_nametoindex(ifname);
-    if (ifindex == 0) {
-        fprintf(stderr, "DECNETD-E-NOIFACE, unknown interface '%s': %s\n",
-                ifname, strerror(errno));
-        scs_datalink_close(sock);
-        return 1;
-    }
+    /* rd vms-d3cd: on the executive build the interface index is the one the
+     * executive answered for this open, and the hardware address comes from
+     * the LAN unit by $QIO IO$_SENSEMODE (or, for a diagnostic --iface on a
+     * host interface name, from the same executive open) -- no host
+     * interface lookup. The probe build keeps its host lookups. */
+    unsigned ifindex = 0;
     uint8_t hw_mac[6] = {0};
-    if (scs_datalink_get_hwaddr(ifname, hw_mac) != 0) {
-        fprintf(stderr, "DECNETD-E-NOHWADDR, cannot read HW address of '%s': %s\n",
-                ifname, strerror(errno));
-        scs_datalink_close(sock);
-        return 1;
+    if (decnetd_executive_datalink()) {
+        int xi = scs_datalink_ifindex(sock);
+        ifindex = xi > 0 ? (unsigned)xi : 0;
+        if (ifindex == 0) {
+            fprintf(stderr, "DECNETD-E-NOIFACE, the executive answered no interface"
+                            " for '%s'\n", ifname);
+            scs_datalink_close(sock);
+            return 1;
+        }
+        if (decnetd_is_vms_devnam(ifname)) {
+            uint32_t hst = decnetd_lan_sense_hwaddr(hw_mac);
+            if (!(hst & 1)) {
+                char why[128] = "";
+                (void)vms_status_string(hst, why, sizeof why);
+                fprintf(stderr, "DECNETD-E-NOHWADDR, $QIO IO$_SENSEMODE of %s"
+                                " failed: %s (status %%X%08X)\n", ifname,
+                        why, (unsigned)hst);
+                scs_datalink_close(sock);
+                return 1;
+            }
+        } else if (scs_datalink_open_hwaddr(sock, hw_mac) != 0) {
+            fprintf(stderr, "DECNETD-E-NOHWADDR, the executive answered no HW"
+                            " address for '%s'\n", ifname);
+            scs_datalink_close(sock);
+            return 1;
+        }
+    } else {
+        ifindex = if_nametoindex(ifname);
+        if (ifindex == 0) {
+            fprintf(stderr, "DECNETD-E-NOIFACE, unknown interface '%s': %s\n",
+                    ifname, strerror(errno));
+            scs_datalink_close(sock);
+            return 1;
+        }
+        if (scs_datalink_get_hwaddr(ifname, hw_mac) != 0) {
+            fprintf(stderr, "DECNETD-E-NOHWADDR, cannot read HW address of '%s': %s\n",
+                    ifname, strerror(errno));
+            scs_datalink_close(sock);
+            return 1;
+        }
     }
     /* Wake the receive loop about once a second so the T3 cadence and the
      * listen-timer sweep still fire on an idle wire (as scsd does). */

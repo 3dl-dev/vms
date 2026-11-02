@@ -758,6 +758,10 @@ uint32_t vms_kif_tt_oobast(uint32_t chan, uint32_t which, uint64_t astadr,
 /* Write a broadcast to terminal `devnam` through its class driver, breaking
  * through a read in progress (rd vms-53a). OPER. */
 uint32_t vms_kif_tt_brkthru(const char *devnam, const void *msg, uint32_t len);
+/* $QIO IO$_SENSEMODE!IO$M_TYPEAHDCNT on terminal channel `chan` (rd vms-d3cd). */
+uint32_t vms_kif_tt_typahd(uint32_t chan, uint32_t *count, uint32_t *first);
+/* $QIO IO$_SENSEMODE on a channel to the LAN unit ETH0: (rd vms-d3cd). */
+uint32_t vms_kif_lan_sense(uint32_t chan, uint8_t hwaddr[6], uint32_t *link_up);
 /* Attach the substrate tty open on `ttyfd` to terminal unit `devnam` as its
  * port (STARTUP for OPA0:, LOGINOUT for its session terminal). CMKRNL. */
 uint32_t vms_kif_tt_attach(int ttyfd, const char *devnam);

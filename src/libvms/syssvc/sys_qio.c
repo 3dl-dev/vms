@@ -49,6 +49,7 @@
 #include "dcdef.h"
 #include "ovmx_host_absent.h" /* POSIX timers/termios/... the OpenVMS C RTL lacks */
 #include "trmdef.h"        /* IO$M_EXTEND item list (rd vms-eb3d) */
+#include "descrip.h"        /* the LAN sense-mode P2 descriptor (rd vms-d3cd) */
 
 /*
  * The caller's IOSB, as this file writes it (rd vms-40fb). A VMS IOSB is a
@@ -1299,18 +1300,105 @@ static int qio_completes_at_once(int fd)
  * / vms_kif_ttsetmode) -- never a process-local model (INV-6).
  */
 #define TT_SPEED_9600 15
-static int qio_chan_is_terminal(uint16_t chan, uint32_t *exec_chan_out,
-                                struct vms_devinfo *info)
-{
-    uint32_t ec = vms$$chan_exec_chan(chan);
-    if (ec == 0) return 0;
-    if (!(vms_kif_getdvi_chan(ec, info) & 1)) return 0;
-    if (info->devclass != DC$_TERM) return 0;
-    *exec_chan_out = ec;
-    return 1;
-}
 
 void vms$$deliver_pending_asts(void);        /* sys_ast.c */
+
+/*
+ * LAN CONTROLLER $QIO (rd vms-d3cd). A channel to the LAN unit ETH0: (the
+ * EWA0:-style DC$_SCOM row the executive enters for the primary NIC; _NET:,
+ * also DC$_SCOM, was routed to qio_net_op before this) answers IO$_SENSEMODE
+ * from the EXECUTIVE (VMS_IOCTL_LAN_SENSE), as the VMS LAN driver does:
+ *
+ *   P1  the characteristics quadword: byte 0 the device class (DC$_SCOM),
+ *       byte 1 the device type, word 2 the maximum message size;
+ *   P2  the address of a descriptor of the EXTENDED characteristics buffer,
+ *       filled with parameter entries -- a word parameter ID and, when its
+ *       string bit (NMA$M_PTY_STR, 0x1000) is set, a word count and the
+ *       bytes, else a longword value (I/O User's Reference, "LAN Device
+ *       Drivers", sense mode). Returned: NMA$C_PCLI_HWA (1160, the DNA
+ *       Network Management line parameter HARDWARE ADDRESS). IOSB word 1 is
+ *       the byte count written there.
+ *
+ * OVMX, labelled (Rule 8): P2 is a longword in OVMX's $QIO, too narrow for a
+ * 64-bit image's address, so the descriptor may be named by P4 instead (the
+ * same convention as the terminal OUTBAND mask, rd vms-f8c). Any other
+ * function is SS$_ILLIOFUNC: the frame path is the executive datalink
+ * (VMS_IOCTL_L2_*), not yet this channel's READ/WRITE -- refused, not faked.
+ */
+#define LAN_NMA_PTY_STR   0x1000u
+#define LAN_NMA_PCLI_HWA  1160u
+#define LAN_MAX_MSG       1500u
+
+/* The device class of an executive-resident channel (one $GETDVI by channel,
+ * shared by the terminal and LAN dispatch), or -1 for a channel with no
+ * executive channel behind it. */
+static int qio_chan_exec_class(uint16_t chan, uint32_t *exec_chan_out,
+                               struct vms_devinfo *info)
+{
+    uint32_t ec = vms$$chan_exec_chan(chan);
+    if (ec == 0) return -1;
+    if (!(vms_kif_getdvi_chan(ec, info) & 1)) return -1;
+    *exec_chan_out = ec;
+    return (int)info->devclass;
+}
+
+static uint32_t qio_lan_op(uint32_t ec, const struct vms_devinfo *info,
+                           uint32_t func, void *iosb_ptr, void *p1, uint32_t p2,
+                           uintptr_t p4, uint32_t efn, void (*astadr)(uint32_t),
+                           uint32_t astprm)
+{
+    qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
+    if ((func & IO$M_FCODE) != IO$_SENSEMODE) {
+        if (iosb) memset(iosb, 0, sizeof *iosb);
+        return SS$_ILLIOFUNC;
+    }
+    uint8_t hw[6];
+    uint32_t link_up = 0;
+    uint32_t st = vms_kif_lan_sense(ec, hw, &link_up);
+    if (!(st & 1)) {
+        if (iosb) { memset(iosb, 0, sizeof *iosb); iosb->iosb$w_status = (uint16_t)st; }
+        if ((efn & 0xFFu) < 128) sys$setef(efn);
+        if (astadr) astadr(astprm);
+        return SS$_NORMAL;
+    }
+    if (p1) {
+        uint8_t b[8];
+        memset(b, 0, sizeof b);
+        b[0] = (uint8_t)info->devclass;
+        b[1] = (uint8_t)info->devtype;
+        b[2] = (uint8_t)(LAN_MAX_MSG & 0xFF);
+        b[3] = (uint8_t)(LAN_MAX_MSG >> 8);
+        memcpy(p1, b, sizeof b);
+    }
+    uint16_t written = 0;
+    uintptr_t dp = p4 ? p4 : (uintptr_t)p2;
+    uint32_t ist = SS$_NORMAL;
+    if (dp) {
+        const struct dsc$descriptor_s *d = (const struct dsc$descriptor_s *)dp;
+        uint8_t *out = (uint8_t *)d->dsc$a_pointer;
+        uint16_t cap = d->dsc$w_length;
+        uint16_t id = (uint16_t)(LAN_NMA_PCLI_HWA | LAN_NMA_PTY_STR);
+        if (!out || cap < 4u + sizeof hw) {
+            ist = SS$_BUFFEROVF;
+        } else {
+            out[0] = (uint8_t)(id & 0xFF);
+            out[1] = (uint8_t)(id >> 8);
+            out[2] = (uint8_t)sizeof hw;
+            out[3] = 0;
+            memcpy(out + 4, hw, sizeof hw);
+            written = (uint16_t)(4u + sizeof hw);
+        }
+    }
+    if (iosb) {
+        memset(iosb, 0, sizeof *iosb);
+        iosb->iosb$w_status = (uint16_t)ist;
+        iosb->iosb$w_bcnt = written;
+    }
+    if ((efn & 0xFFu) < 128) sys$setef(efn);
+    if (astadr) astadr(astprm);
+    return SS$_NORMAL;
+}
+
 
 static void tt_iosb(void *iosb_ptr, uint32_t st, uint16_t w1, uint16_t w2, uint16_t w3)
 {
@@ -1333,6 +1421,25 @@ static uint32_t qio_terminal_op(uint16_t chan, int fd, uint32_t ec,
     switch (base) {
     case IO$_SENSEMODE:
     case IO$_SENSECHAR: {
+        if (base == IO$_SENSEMODE && (func & IO$M_TYPEAHDCNT)) {
+            /* rd vms-d3cd: the type-ahead count (I/O User's Reference,
+             * "Terminal Driver", IO$M_TYPEAHDCNT): P1 receives a quadword --
+             * word 0 the number of characters in the type-ahead buffer,
+             * byte 2 the first of them, the rest zero. Nothing is consumed. */
+            uint32_t cnt = 0, first = 0;
+            uint32_t st = vms_kif_tt_typahd(ec, &cnt, &first);
+            if (!(st & 1)) { tt_iosb(iosb_ptr, st, 0, 0, 0); return st; }
+            if (p1 && p2 > 0) {
+                uint8_t b[8];
+                memset(b, 0, sizeof b);
+                b[0] = (uint8_t)(cnt & 0xFF);
+                b[1] = (uint8_t)((cnt >> 8) & 0xFF);
+                b[2] = (uint8_t)first;
+                memcpy(p1, b, p2 < sizeof b ? p2 : sizeof b);
+            }
+            tt_iosb(iosb_ptr, SS$_NORMAL, 0, 0, 0);
+            break;
+        }
         if (p1 && p2 > 0) {
             uint8_t b[12];
             /* IO$_SENSECHAR answers the PERMANENT width and page, SENSEMODE
@@ -1585,7 +1692,12 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
     {
         uint32_t tec = 0;
         struct vms_devinfo tinfo;
-        if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
+        int tclass = qio_chan_exec_class(chan, &tec, &tinfo);
+        /* rd vms-d3cd: the LAN unit ETH0: (DC$_SCOM; _NET: was routed above) */
+        if (tclass == DC$_SCOM)
+            return qio_lan_op(tec, &tinfo, func, iosb_ptr, p1, p2, p4, efn,
+                              astadr, astprm);
+        if (tclass == DC$_TERM) {
             /* the terminal's I/O is the executive driver's: no descriptor
              * is needed (rd vms-f8c) */
             int tfd = vms$$chan_to_fd(chan);
@@ -1661,7 +1773,12 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
     {
         uint32_t tec = 0;
         struct vms_devinfo tinfo;
-        if (qio_chan_is_terminal(chan, &tec, &tinfo)) {
+        int tclass = qio_chan_exec_class(chan, &tec, &tinfo);
+        /* rd vms-d3cd: the LAN unit ETH0: (DC$_SCOM; _NET: was routed above) */
+        if (tclass == DC$_SCOM)
+            return qio_lan_op(tec, &tinfo, func, iosb_ptr, p1, p2, p4, efn,
+                              astadr, astprm);
+        if (tclass == DC$_TERM) {
             /* the terminal's I/O is the executive driver's: no descriptor
              * is needed (rd vms-f8c) */
             int tfd = vms$$chan_to_fd(chan);

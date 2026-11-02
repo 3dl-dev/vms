@@ -202,6 +202,16 @@ int main(void)
     screen(m, scr, sizeof(scr), 300);
     /* negctl: tt-typeahead-echoed-on-receipt */
     CHECK(scr[0] == '\0', "characters typed with no read outstanding are NOT echoed (held in type-ahead)");
+    /* rd vms-d3cd: IO$_SENSEMODE!IO$M_TYPEAHDCNT -- the count and the first
+     * character, consuming nothing (the SET HOST client asks this instead of
+     * poll()ing the substrate descriptor). */
+    {
+        uint32_t cnt = 99, first = 0;
+        st = vms_kif_tt_typahd(chan, &cnt, &first);
+        /* negctl: tt-typahd-count-zero */
+        CHECK(st == SS_NORMAL && cnt == 3 && first == 'a',
+              "TYPEAHDCNT reports the 3 characters waiting in type-ahead, the first 'a'");
+    }
     rd_start(&r, chan, 0, "P> ", 0);
     msleep(200);
     type(m, "\r");
@@ -212,6 +222,14 @@ int main(void)
           "the read returns the type-ahead 'abc' and the RETURN terminator");
     CHECK(strcmp(scr, "P> abc\r\n") == 0,
           "the prompt is written FIRST, then the type-ahead is echoed as it is consumed, then CR LF");
+    {
+        uint32_t cnt = 99, first = 99;
+        st = vms_kif_tt_typahd(chan, &cnt, &first);
+        CHECK(st == SS_NORMAL && cnt == 0 && first == 0,
+              "TYPEAHDCNT after the read consumed the line reports 0 (sensing consumed nothing earlier)");
+        st = vms_kif_tt_typahd(0xFFFFu, &cnt, &first);
+        CHECK(st != SS_NORMAL, "TYPEAHDCNT on a channel the process does not hold is refused");
+    }
     if (strcmp(scr, "P> abc\r\n") != 0)
         printf("      screen was [%s]\n", scr);
 

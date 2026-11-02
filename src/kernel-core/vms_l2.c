@@ -127,6 +127,37 @@ static bool l2_priv_check(uint64_t cur_privs, uint32_t *status)
  * ioctl handlers
  * ================================================================ */
 
+/* Is `n` a VMS device name ("ETH0:", "_ETH0:") rather than a host interface
+ * name? A host interface name never carries a ':' terminator. */
+static int l2_is_vms_devnam(const char *n)
+{
+    size_t i;
+
+    for (i = 0; n[i] != '\0'; i++)
+        if (n[i] == ':')
+            return 1;
+    return 0;
+}
+
+/* Does the VMS device name `n` name the LAN controller unit ETH0:? Case-blind,
+ * an optional leading '_' (the physical-name form). */
+static int l2_devnam_is_lan(const char *n)
+{
+    static const char lan[] = "ETH0:";
+    size_t i;
+
+    if (n[0] == '_')
+        n++;
+    for (i = 0; lan[i] != '\0'; i++) {
+        char c = n[i];
+        if (c >= 'a' && c <= 'z')
+            c = (char)(c - 'a' + 'A');
+        if (c != lan[i])
+            return 0;
+    }
+    return n[i] == '\0';
+}
+
 /*
  * VMS_IOCTL_L2_OPEN -- open a kernel AF_PACKET/SOCK_RAW socket bound to the
  * requested interface/ethertype (exec_l2_open), gated on PHY_IO. On success,
@@ -153,8 +184,10 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
     exec_socket_t sock;
     uint32_t ifindex = 0;
     uint8_t nic[6];
+    char ifname[VMS_NETIF_SIZE > sizeof(args.ifname) ? VMS_NETIF_SIZE : sizeof(args.ifname)];
     int rc;
 
+    memset(ifname, 0, sizeof(ifname));
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
@@ -168,11 +201,29 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
      * past the buffer. */
     args.ifname[sizeof(args.ifname) - 1] = '\0';
 
+    /* A VMS DEVICE NAME (rd vms-d3cd): "ETH0:" names the LAN controller unit
+     * the executive entered for the primary NIC; the executive resolves it to
+     * the host interface it recorded for that unit (vms_devtab_eth0_netif), so
+     * a VMS program opens its datalink by the VMS name and never learns -- or
+     * has to discover through host interface enumeration -- the host name
+     * (INV-4). The name the caller passed is what it reads back. A device name
+     * that is not the LAN unit is SS$_NOSUCHDEV. */
+    if (l2_is_vms_devnam(args.ifname)) {
+        if (!l2_devnam_is_lan(args.ifname) ||
+            vms_devtab_eth0_netif(ifname, sizeof(ifname)) != SS__NORMAL ||
+            ifname[0] == '\0') {
+            args.status = SS__NOSUCHDEV;
+            goto out;
+        }
+    } else {
+        memcpy(ifname, args.ifname, sizeof(args.ifname));
+    }
+
     /* Resolve the NIC's hwaddr first: it is both the default station and the
      * one non-Phase-IV address a caller may name. No such interface -> the
      * same honest SS$_NOSUCHDEV exec_l2_open would have returned. */
     memset(nic, 0, sizeof(nic));
-    if (exec_l2_hwaddr(args.ifname, nic) != 0) {
+    if (exec_l2_hwaddr(ifname, nic) != 0) {
         args.status = SS__NOSUCHDEV;
         goto out;
     }
@@ -188,7 +239,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    rc = exec_l2_open(args.ifname, args.ethertype, &ifindex, &sock);
+    rc = exec_l2_open(ifname, args.ethertype, &ifindex, &sock);
     if (rc) {
         /* rd vms-b72: the host errno behind it is the STV. */
         args.status = (rc == -ENODEV) ? SS__NOSUCHDEV : SS__ABORT;
@@ -374,4 +425,56 @@ void vms_l2_release_all(struct vms_proc *proc)
         exec_socket_release(h->sock);
         exec_free(h);
     }
+}
+
+/*
+ * VMS_IOCTL_LAN_SENSE (rd vms-d3cd) -- $QIO IO$_SENSEMODE on a channel to the
+ * LAN controller unit. The caller's channel must name the LAN unit ETH0:
+ * (DC$_SCOM with a host interface behind it; PEA0:, the cluster port riding
+ * the same NIC, is not a LAN controller and is refused); the executive answers that
+ * interface's hardware address and the carrier state it recorded. The
+ * interface name itself stays the executive's (INV-4). No privilege: VMS
+ * lets any holder of a channel to a LAN device sense it.
+ */
+#define L2_DC_SCOM 32u   /* DC$_SCOM (dcdef.h; vms_devtab.c DC__SCOM) */
+
+long vms_ioctl_lan_sense(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_lan_sense_args a;
+    struct vms_device *dev;
+    char netif[VMS_NETIF_SIZE];
+    uint32_t link_up = 0;
+
+    memset(&a, 0, sizeof(a));
+    if (exec_copyin(&a, (const void *)arg, sizeof(a)))
+        return -EFAULT;
+    memset(a.hwaddr, 0, sizeof(a.hwaddr));
+    a.link_up = 0;
+    a.pad = 0;
+
+    dev = vms_devtab_chan_device(proc, a.chan);
+    if (!dev) {
+        a.status = SS__IVCHAN;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    strscpy(netif, dev->netif, sizeof(netif));
+    link_up = dev->link_up;
+    exec_unlock(&dev->lock);
+    if (dev->devclass != L2_DC_SCOM || netif[0] == '\0' ||
+        !l2_devnam_is_lan(dev->devnam)) {
+        a.status = SS__IVDEVNAM;   /* not a LAN controller unit */
+        goto out;
+    }
+    if (exec_l2_hwaddr(netif, a.hwaddr) != 0) {
+        memset(a.hwaddr, 0, sizeof(a.hwaddr));
+        a.status = SS__DEVOFFLINE;  /* the interface behind the unit is gone */
+        goto out;
+    }
+    a.link_up = link_up ? 1u : 0u;
+    a.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &a, sizeof(a)))
+        return -EFAULT;
+    return 0;
 }

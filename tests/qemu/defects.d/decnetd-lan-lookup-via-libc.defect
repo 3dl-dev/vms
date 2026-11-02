@@ -1,0 +1,27 @@
+# decnetd-lan-lookup-via-libc -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the booted NETACP (DECNETD.EXE, executive datalink) learns its interface index and LAN address from the executive (\$QIO IO\$_SENSEMODE on ETH0:, VMS_IOCTL_L2_OPEN), never by Linux libc interface lookup (decnetd.c, rd vms-d3cd)";;
+        targets)      echo "vmsdecnet/engine/decnetd.c";;
+        suites_red)   echo "test_syssvc_decnetd_syscall_audit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "main()'s executive branch takes the interface index the executive answered for the open (\`int xi = scs_datalink_ifindex(sock);\`). The mutation looks one up through libc instead (\`if_nametoindex(\"lo\")\`, an AF_UNIX socket + SIOCGIFINDEX -- the pre-vms-d3cd libc drop): the trace sees the SIOCGIF ioctl. Non-fatal: the lookup succeeds, the NETACP runs its loop and exits 0 (its hellos go out on lo), so only the lookup assertion reddens. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+NO host interface lookup: no socket(AF_INET/INET6/PACKET/NETLINK), no SIOCGIF* ioctl
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        int xi = scs_datalink_ifindex(sock);$|        int xi = (int)if_nametoindex("lo"); /* NEGCTL decnetd-lan-lookup-via-libc */|' "$_file"
+    :
+}

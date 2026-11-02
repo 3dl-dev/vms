@@ -1740,6 +1740,24 @@ uint32_t vms_kif_tt_brkthru(const char *devnam, const void *msg, uint32_t len)
     return args.status;
 }
 
+/*
+ * vms_kif_tt_typahd - $QIO IO$_SENSEMODE!IO$M_TYPEAHDCNT on executive terminal
+ * channel `chan` (rd vms-d3cd): the type-ahead count and its first character.
+ */
+uint32_t vms_kif_tt_typahd(uint32_t chan, uint32_t *count, uint32_t *first)
+{
+    struct vms_tt_typahd_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+
+    KIF_CALL(VMS_IOCTL_TT_TYPAHD, &args);
+
+    if (count) *count = args.count;
+    if (first) *first = args.first;
+    return args.status;
+}
+
 uint32_t vms_kif_tt_sense(const char *devnam, uint32_t *state)
 {
     struct vms_tt_sense_args args;
@@ -3959,6 +3977,29 @@ uint32_t vms_kif_l2_open(const char *ifname, uint16_t ethertype,
         if (out_handle)  *out_handle  = args.handle;
         if (out_ifindex) *out_ifindex = args.ifindex;
         if (hwaddr)       vms_memcpy(hwaddr, args.hwaddr, sizeof(args.hwaddr));
+    }
+    return args.status;
+}
+
+/*
+ * vms_kif_lan_sense - $QIO IO$_SENSEMODE on executive channel `chan` to the
+ * LAN controller unit ETH0: (rd vms-d3cd): its hardware address and carrier.
+ */
+uint32_t vms_kif_lan_sense(uint32_t chan, uint8_t hwaddr[6], uint32_t *link_up)
+{
+    struct vms_lan_sense_args args;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+
+    KIF_CALL(VMS_IOCTL_LAN_SENSE, &args);
+
+    if (args.status & 1) {
+        if (hwaddr)  vms_memcpy(hwaddr, args.hwaddr, sizeof(args.hwaddr));
+        if (link_up) *link_up = args.link_up;
     }
     return args.status;
 }

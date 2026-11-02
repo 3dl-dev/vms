@@ -1,0 +1,27 @@
+# lan-sense-hwaddr-not-reported -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$QIO IO\$_SENSEMODE on the LAN unit ETH0: answers the controller's hardware address from the executive (VMS_IOCTL_LAN_SENSE, vms_l2.c, rd vms-d3cd)";;
+        targets)      echo "kernel-core/vms_l2.c";;
+        suites_red)   echo "test_syssvc_lan_sense";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_lan_sense() reads the interface's address through the executive's L2 seam (\`if (exec_l2_hwaddr(netif, a.hwaddr) != 0) {\`). The mutation skips the read and leaves the zeroed buffer as a success: a booted NETACP would record a MAC no NIC has. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+the sensed hardware address is a real Ethernet interface's address (sysfs)
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (exec_l2_hwaddr(netif, a.hwaddr) != 0) {$|    if (0) { /* NEGCTL lan-sense-hwaddr-not-reported */|' "$_file"
+    :
+}

@@ -177,6 +177,17 @@ int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6]);
 int scs_datalink_primary_iface(char *out, size_t n);
 
 /*
+ * scs_datalink_ifindex / scs_datalink_open_hwaddr (rd vms-d3cd) - the interface
+ * index and hardware address the EXECUTIVE answered when `fd` was opened
+ * (VMS_IOCTL_L2_OPEN), so an executive-build caller does no host interface
+ * lookup. The executive build only; the probe/bpf builds return -1, ENOSYS.
+ * In the executive build scs_datalink_get_hwaddr/primary_iface likewise return
+ * -1, ENOSYS: it compiles no host interface enumeration.
+ */
+int scs_datalink_ifindex(int fd);
+int scs_datalink_open_hwaddr(int fd, uint8_t mac_out[6]);
+
+/*
  * scs_datalink_send - transmit a fully-built Ethernet frame (scsd.c's
  * frame builders already set every header field, including the source and
  * destination MAC) out `fd`.

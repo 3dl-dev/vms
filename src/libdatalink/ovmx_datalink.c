@@ -51,7 +51,12 @@
  * backend. Only the raw-L2 open/send/recv/close/timeout differ.
  * ==========================================================================*/
 
-/* ---- SHARED non-privileged interface lookups (both backends) ------------- */
+/* ---- HOST interface lookups (the probe build ONLY, rd vms-d3cd) ----------
+ * Host interface ENUMERATION (socket(AF_INET)+SIOCGIF*, if_nameindex) is a
+ * Linux libc path, not a VMS one. The executive build does not compile it: a
+ * booted NETACP names the LAN unit ETH0: to the executive and reads its
+ * address with $QIO IO$_SENSEMODE (definitions at the foot of this file). */
+#if !defined(SCS_DATALINK_VIA_EXECUTIVE)
 
 int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6])
 {
@@ -121,6 +126,8 @@ int scs_datalink_primary_iface(char *out, size_t n)
     }
     return found;
 }
+
+#endif  /* !SCS_DATALINK_VIA_EXECUTIVE: host interface lookups */
 
 #if !defined(SCS_DATALINK_VIA_EXECUTIVE)
 
@@ -452,6 +459,7 @@ void scs_datalink_close(int fd)
 
 #endif  /* !SCS_DATALINK_VIA_EXECUTIVE */
 
+#if !defined(SCS_DATALINK_VIA_EXECUTIVE)   /* host lookups: the probe build only (rd vms-d3cd) */
 int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6])
 {
     struct ifaddrs *ifap = NULL;
@@ -515,6 +523,8 @@ int scs_datalink_primary_iface(char *out, size_t n)
     }
     return 0;
 }
+
+#endif  /* !SCS_DATALINK_VIA_EXECUTIVE: host interface lookups */
 
 #if !defined(SCS_DATALINK_VIA_EXECUTIVE)
 /*
@@ -645,7 +655,8 @@ int scs_datalink_set_recv_timeout_ms(int fd, int ms)
  * (sized like the NetBSD bpf table) keeps the executive handle + recv timeout
  * the /dev/vms fd alone cannot carry. */
 #define SCS_DATALINK_MAX_OPEN 4
-struct l2_slot { int in_use; int fd; uint32_t handle; uint32_t timeout_ms; };
+struct l2_slot { int in_use; int fd; uint32_t handle; uint32_t timeout_ms;
+                 uint32_t ifindex; uint8_t hwaddr[6]; };
 static struct l2_slot g_l2[SCS_DATALINK_MAX_OPEN];
 
 static struct l2_slot *l2_find(int fd)
@@ -715,7 +726,10 @@ int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
               : (a.status == 36u)   ? EACCES : EIO;
         return -1;
     }
-    if (l2_alloc(fd, a.handle) == NULL) { kif_xport_dev_close(fd); errno = ENOMEM; return -1; }
+    struct l2_slot *sl = l2_alloc(fd, a.handle);
+    if (sl == NULL) { kif_xport_dev_close(fd); errno = ENOMEM; return -1; }
+    sl->ifindex = a.ifindex;                  /* the executive's answers */
+    memcpy(sl->hwaddr, a.hwaddr, sizeof(sl->hwaddr));
     return fd;
 }
 
@@ -786,6 +800,58 @@ int scs_datalink_set_recv_timeout_ms(int fd, int ms)
     if (s == NULL) { errno = EBADF; return -1; }
     s->timeout_ms = (uint32_t)(ms > 0 ? ms : 1);
     return 0;
+}
+
+/* rd vms-d3cd: the interface index and hardware address the EXECUTIVE answered
+ * for this open (VMS_IOCTL_L2_OPEN) -- no host interface lookup. */
+int scs_datalink_ifindex(int fd)
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    return (int)s->ifindex;
+}
+
+int scs_datalink_open_hwaddr(int fd, uint8_t mac_out[6])
+{
+    struct l2_slot *s = l2_find(fd);
+    if (s == NULL) { errno = EBADF; return -1; }
+    memcpy(mac_out, s->hwaddr, 6);
+    return 0;
+}
+
+/* rd vms-d3cd: the executive build enumerates no host interfaces. A caller
+ * names the LAN unit ETH0: (VMS_IOCTL_L2_OPEN resolves it) and senses its
+ * address through $QIO; these host lookups refuse honestly. */
+int scs_datalink_get_hwaddr(const char *ifname, uint8_t mac_out[6])
+{
+    (void)ifname; (void)mac_out;
+    errno = ENOSYS;
+    return -1;
+}
+
+int scs_datalink_primary_iface(char *out, size_t n)
+{
+    (void)out; (void)n;
+    errno = ENOSYS;
+    return -1;
+}
+
+#else  /* !SCS_DATALINK_VIA_EXECUTIVE: the probe/bpf builds */
+
+/* The open's executive answers exist only in the executive build; a probe
+ * build looks its interface up on the host (decnetd's probe branch). */
+int scs_datalink_ifindex(int fd)
+{
+    (void)fd;
+    errno = ENOSYS;
+    return -1;
+}
+
+int scs_datalink_open_hwaddr(int fd, uint8_t mac_out[6])
+{
+    (void)fd; (void)mac_out;
+    errno = ENOSYS;
+    return -1;
 }
 
 #endif  /* SCS_DATALINK_VIA_EXECUTIVE */

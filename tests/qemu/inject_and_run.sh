@@ -171,6 +171,14 @@ echo "--- rebuilding TCPIP\$DAYTIME.EXE (the subject test_syssvc_tcpip_daytime d
 ( cd /src/repo && cmake --build build-static --target vms_tcpip_daytime \
                         --parallel "$(nproc)" ) || exit 4
 
+# DECNETD.EXE is a SUBJECT test_syssvc_decnetd_syscall_audit traces (rd
+# vms-d3cd), not a suite -- and decnetd-lan-lookup-via-libc targets
+# src/vmsdecnet/engine/decnetd.c, compiled into DECNETD.EXE. Rebuilt
+# unconditionally, same reason as the subjects above.
+echo "--- rebuilding DECNETD.EXE (the subject test_syssvc_decnetd_syscall_audit traces) ---"
+( cd /src/repo && cmake --build build-static --target decnetd_exe \
+                        --parallel "$(nproc)" ) || exit 4
+
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing
@@ -230,6 +238,11 @@ chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE \
 cp '/src/repo/build-static/bin/TCPIP$DAYTIME.EXE' \
    '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
 chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
+# DECNETD.EXE at SYS$SYSTEM (rd vms-d3cd): the audited NETACP, refreshed so a
+# defect in decnetd.c reaches the traced binary.
+cp /src/repo/build-static/bin/DECNETD.EXE \
+   /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || exit 4
 for f in /src/tests/qemu/test_*; do
     [ -x "$f" ] && cp "$f" /initramfs/tests/
 done

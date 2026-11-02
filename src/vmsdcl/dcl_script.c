@@ -82,6 +82,9 @@ static int label_line(const char *line, char *lbl, size_t lblsz)
  *                labels, outside any block nested in it, up to its
  *                ENDSUBROUTINE.
  */
+/* Where the line of the label dcl_find_label_in() last found starts. */
+static long dcl_label_line_start;
+
 int dcl_find_label_in(struct dcl_pf *fp, const char *label, long scope)
 {
     if (!fp || !label) return -1;
@@ -91,7 +94,10 @@ int dcl_find_label_in(struct dcl_pf *fp, const char *label, long scope)
 
     char line[DCL_MAX_LINE], lbl[256];
     int depth = 0;
+    long start = dcl_pf_tell(fp);
     while (dcl_pf_gets(line, sizeof(line), fp)) {
+        long this_line = start;
+        start = dcl_pf_tell(fp);
         int kind = label_line(line, lbl, sizeof lbl);
         if (kind < 0) {
             if (depth == 0 && scope >= 0)
@@ -99,8 +105,10 @@ int dcl_find_label_in(struct dcl_pf *fp, const char *label, long scope)
             if (depth > 0) depth--;
             continue;
         }
-        if (depth == 0 && lbl[0] && strcasecmp(lbl, label) == 0)
+        if (depth == 0 && lbl[0] && strcasecmp(lbl, label) == 0) {
+            dcl_label_line_start = this_line;
             return 0;   /* found - file pointer is now after this line */
+        }
         if (kind > 0)
             depth++;
     }
@@ -116,7 +124,13 @@ int dcl_find_label(struct dcl_pf *fp, const char *label)
     if (ctx->proc_depth >= 0 && ctx->proc_stack[ctx->proc_depth].is_subroutine &&
         ctx->proc_stack[ctx->proc_depth].fp == fp)
         scope = ctx->proc_stack[ctx->proc_depth].sub_start;
-    return dcl_find_label_in(fp, label, scope);
+    if (dcl_find_label_in(fp, label, scope) != 0)
+        return -1;
+    /* GOTO/GOSUB go TO the label's line, so a command on it after the label
+     * (L: SP_T == ...) runs (VAX V7.3, docs/oracle/semantics/flow/
+     * FLOW.LABEL.SAMELINE); a line holding only the label is a no-op. */
+    dcl_pf_seek(fp, dcl_label_line_start, SEEK_SET);
+    return 0;
 }
 
 /*
@@ -269,8 +283,13 @@ static int dcl_run_proc_lines(struct dcl_context *ctx, struct dcl_pf *fp)
 
                 /* Default action (no ON armed): exit the procedure on ERROR (2)
                  * or SEVERE/FATAL (4); a WARNING (0) does not stop. */
-                if (severity >= 2)
+                if (severity >= 2) {
+                    /* the message was shown: the level's status says so
+                     * (VAX V7.3: %X1003894A after INVIFNEST,
+                     * docs/oracle/semantics/flow/ FLOW.IF.THEN.EOL) */
+                    status |= 0x10000000;
                     break;
+                }
             }
         }
     }
@@ -318,9 +337,19 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
      * level, a CALLed block included. */
     if (dcl_find_label_in(fp, label, -1) != 0) {
         dcl_pf_seek(fp, resume_off, SEEK_SET);
-        dcl_error("DCL", 2, "USGOTO",
-                  "target of CALL not found - \\%s\\", label);
-        return SS$_BADPARAM;
+        /* VAX V7.3: %DCL-W-USCALL, and the CALLing level ends -- SET NOON or
+         * not -- with %X10038148 (docs/oracle/semantics/flow/
+         * FLOW.CALL.MISSING). */
+        char up[256];
+        size_t i;
+        for (i = 0; label[i] && i < sizeof(up) - 1; i++)
+            up[i] = (char)toupper((unsigned char)label[i]);
+        up[i] = '\0';
+        dcl_error("DCL", 0, "USCALL",
+                  "CALL target %s either missing, misspelled, or inaccessible", up);
+        ctx->exit_requested = 1;
+        ctx->exit_status = (int)DCL_CLI_USGOTO_EXIT;
+        return (int)DCL_CLI_USGOTO_EXIT;
     }
 
     /* Push a new command level that shares the file stream. */

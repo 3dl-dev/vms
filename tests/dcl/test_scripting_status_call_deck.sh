@@ -15,7 +15,11 @@
 # EXPECT: regex:\$STATUS == "%X0*1"
 # CALL passes P1/P2 into a fresh subroutine level.
 # EXPECT: contains:SUB_P1P2=[alpha][beta]
-# RETURN [status] sets $STATUS to the returned (even) value → caller sees failure.
+# EXIT [status] ends the subroutine and sets $STATUS to that (even) value ->
+# caller sees failure. (RETURN ends a GOSUB, not a CALLed SUBROUTINE: VAX V7.3
+# ignores a RETURN with no GOSUB open, docs/oracle/semantics/flow/
+# FLOW.RETURN.NOGOSUB. The parameters are quoted because CALL upcases an
+# unquoted one, FLOW.CALL.PARAMS.)
 # EXPECT: contains:RETURN_STATUS_PROPAGATED
 # A local defined in the subroutine does NOT leak back to the caller.
 # EXPECT: contains:LOCAL_ISOLATED
@@ -43,7 +47,7 @@ $ NOSUCHVERB_XYZZY
 $ IF .NOT. $STATUS THEN WRITE SYS$OUTPUT "STATUS_FALSE_ON_ERROR"
 $!
 $! --- CALL / SUBROUTINE / RETURN [status] with a fresh local scope ---
-$ CALL WORKER alpha beta
+$ CALL WORKER "alpha" "beta"
 $ IF .NOT. $STATUS THEN WRITE SYS$OUTPUT "RETURN_STATUS_PROPAGATED"
 $ IF F$TYPE(SUBLOCAL) .EQS. "" THEN WRITE SYS$OUTPUT "LOCAL_ISOLATED"
 $!
@@ -66,7 +70,7 @@ $!
 $ WORKER: SUBROUTINE
 $ WRITE SYS$OUTPUT "SUB_P1P2=[''P1'][''P2']"
 $ SUBLOCAL = 99
-$ RETURN %X10000012
+$ EXIT %X10000012
 $ ENDSUBROUTINE
 EOF
 

@@ -110,10 +110,12 @@ output=$(echo "ENDIF" | $VMSDCL 2>&1)
 check_vms_format "endif without if" "$output"
 assert_ident "endif without if" "%DCL-E-NOIFBLK" "$output"
 
-# Test 8: ELSE without IF -> %DCL-E-NOIFBLK
+# Test 8: ELSE without IF -> %DCL-E-INVIFNEST (VAX V7.3: "%DCL-E-INVIFNEST,
+# invalid IF-THEN-ELSE nesting structure or data inconsistency",
+# docs/oracle/semantics/flow/ FLOW.IF.THEN.EOL, status %X0003894A)
 output=$(echo "ELSE" | $VMSDCL 2>&1)
 check_vms_format "else without if" "$output"
-assert_ident "else without if" "%DCL-E-NOIFBLK" "$output"
+assert_ident "else without if" "%DCL-E-INVIFNEST" "$output"
 
 # Test 9: GOTO with no label -> %DCL-E-NOLAB
 output=$(echo "GOTO" | $VMSDCL 2>&1)

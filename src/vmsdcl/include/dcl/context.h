@@ -1,6 +1,12 @@
 #ifndef __DCL_CONTEXT_H
 #define __DCL_CONTEXT_H
 
+/* The status a command procedure level ends with when a GOTO, GOSUB or CALL
+ * target is not found: CLI$_USGOTO with STS$M_INHIB_MSG -- the level ends
+ * whether or not SET NOON is in effect (VAX V7.3, docs/oracle/semantics/flow/
+ * FLOW.GOTO.MISSING*, FLOW.GOSUB.MISSING, FLOW.CALL.MISSING). */
+#define DCL_CLI_USGOTO_EXIT 0x10038148u
+
 #include "dcl/dcl_memfile.h"
 #include <stdint.h>
 #include <stdio.h>

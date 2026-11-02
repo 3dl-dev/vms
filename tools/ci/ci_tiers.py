@@ -51,6 +51,7 @@ TIERS = {
         "tools/cross-alpha/build-alpha-bootimage.sh",
         "tools/cross-alpha/build-vmsko-alpha.sh",
         "tools/cross-alpha/release-vmsko.sh",
+        "tools/cross-alpha/Dockerfile",
         "distro/rootfs-alpha/**",
         "tools/publish-release.sh",
         "tools/gen_release_notes.py",

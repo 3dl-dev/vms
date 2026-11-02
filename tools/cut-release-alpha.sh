@@ -256,7 +256,7 @@ if grep -q 'OVMX_ALPHA_RELEASE' "$BOOTIMG" 2>/dev/null; then
         log "-> $OUT_DIR/$f"
         IMAGE_NAMES+=("$f")
     done
-    file "$OUT_DIR/vmlinux-boot" | grep -qi 'alpha' || fail "vmlinux-boot is not an Alpha ELF kernel"
+    grep -qi 'alpha' <<<"$(file "$OUT_DIR/vmlinux-boot")" || fail "vmlinux-boot is not an Alpha ELF kernel"
 else
     log "%CUT-ALPHA-I-PREBOOTSET: this tree predates the Alpha bootable release set (no OVMX_ALPHA_RELEASE in build-alpha-bootimage.sh) -- no bootable set for this historical cut"
 fi

@@ -92,6 +92,9 @@ struct fake {
 	uint32_t dir_asked;           /* how many times it asked      */
 	uint32_t next_lkid;           /* MUTATED: the handle the fake mints */
 	uint8_t  residue;
+	int      valblk_ok;           /* rd vms-26e: the engine takes the 0x1a */
+	uint32_t valblks;             /* ...how many times it was asked       */
+	struct vms_dlm_adopt_valblk last_valblk;
 
 	/* what really happened */
 	uint32_t opens, ends, aborts, reports;
@@ -293,6 +296,15 @@ static uint8_t fk_residue(void *ctx)
 	return ((struct fake *)ctx)->residue;
 }
 
+static int fk_valblk(void *ctx, const struct vms_dlm_adopt_valblk *v)
+{
+	struct fake *f = (struct fake *)ctx;
+
+	f->last_valblk = *v;
+	f->valblks++;
+	return f->valblk_ok;
+}
+
 static void fk_log(void *ctx, const char *msg)
 {
 	(void)ctx;
@@ -302,7 +314,7 @@ static void fk_log(void *ctx, const char *msg)
 static const struct vms_dlm_rm_ops g_ops_template = {
 	&g_f, fk_members, fk_open, fk_lock, fk_end, fk_abort, fk_tree_of_lkid,
 	fk_reported, fk_mastered, fk_hash, fk_dir_node, fk_stage, fk_send,
-	fk_residue, fk_log
+	fk_residue, fk_valblk, fk_log
 };
 
 static struct vms_dlm_rm_ops g_ops;
@@ -333,6 +345,7 @@ static void rig_reset(void)
 	g_f.dir_known = 1;
 	g_f.dir_csid = RMT_H_CSID;
 	g_f.next_lkid = 0x01000401u;
+	g_f.valblk_ok = 1;
 	g_ops = g_ops_template;
 	g_ops.ctx = &g_f;
 	vms_dlm_rm_init(&g_rm, &g_ops);
@@ -1000,6 +1013,52 @@ static void test_slots(void)
 			"  the engine was opened exactly that many times");
 }
 
+/* ==========================================================================
+ * rd vms-26e: THE op-0x1a goes to the engine, cell for cell, and is never
+ * answered
+ * ========================================================================== */
+static void test_op1a_reaches_the_engine(void)
+{
+	const struct vms_fixture *f = fixture("ra7a-02-1a-valblk");
+	enum vms_dlm_rm_status st;
+
+	printf("-- rd vms-26e: RA7 fire A's real op-0x1a reaches the engine\n");
+	ct_check(f != NULL, "  the ra7a-02-1a-valblk specimen loads");
+	if (f == NULL)
+		return;
+	rig_reset();
+	st = step("ra7a-02-1a-valblk", RMT_O_CSID);
+	ct_check(st == VMS_DLM_RM_HANDLED, "  the engine took it: HANDLED");
+	ct_check_eq_u32(g_f.valblks, 1u, "  the engine was asked once");
+	ct_check_eq_u32(g_f.last_valblk.from_csid, RMT_O_CSID,
+			"  ...by the CM's own sender identity");
+	ct_check_eq_u32(g_f.last_valblk.master_lkid, le32(fxbody(f) + 20),
+			"  ...naming the sender's handle, body[20:24]");
+	ct_check_eq_u32(g_f.last_valblk.holder_lkid, le32(fxbody(f) + 24),
+			"  ...and ours, body[24:28]");
+	ct_check(g_f.last_valblk.valblk_present &&
+		 memcmp(g_f.last_valblk.valblk, fxbody(f) + 36, 16) == 0 &&
+		 g_f.last_valblk.valblk_seq == le32(fxbody(f) + 52),
+		 "  *** the block and sequence are the frame's body[36:56] ***");
+	ct_check_eq_u32(g_f.n_staged, 0u,
+			"  *** a NOTIFICATION: nothing is answered ***");
+	ct_check_eq_u32(g_f.n_sent, 0u, "  and nothing is sent");
+	ct_check_eq_u32(g_rm.valblks_taken, 1u, "  counted as taken");
+
+	printf("-- NEGATIVE CONTROL: an op-0x1a the engine refuses\n");
+	rig_reset();
+	g_f.valblk_ok = 0;
+	ct_check(step("ra7a-02-1a-valblk", RMT_O_CSID) == VMS_DLM_RM_REFUSED,
+		 "  REFUSED");
+	ct_check_eq_u32(g_rm.valblks_refused, 1u, "  and counted");
+	ct_check_eq_u32(g_f.n_staged, 0u, "  still nothing answered");
+	ct_check(vms_dlm_rm_step(&g_rm, 0u, 0x02u, 0x1au, fxbody(f),
+				 VMS_CM_BODY_LEN) == VMS_DLM_RM_REFUSED &&
+		 g_f.valblks == 1u,
+		 "  from a sender the CM cannot name: refused, engine not "
+		 "asked");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -1027,6 +1086,7 @@ int main(void)
 	test_the_held_frame();
 	test_not_mine_and_the_ack();
 	test_slots();
+	test_op1a_reaches_the_engine();
 
 	return ct_summary("test_dlm_remaster_arm");
 }

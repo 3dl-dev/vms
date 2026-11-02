@@ -247,7 +247,7 @@ static uint32_t make_grant_frame(uint8_t *frame, const uint8_t *reqbody,
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	(void)vms_frame_compose_link(&link, frame, VMS_CM_FRAME_LEN, &written);
 	(void)vms_dlm_enq_response_build_grant(reqbody, reqlen, master_lkid,
-					       NULL, frame, VMS_CM_FRAME_LEN,
+					       NULL, 0u, frame, VMS_CM_FRAME_LEN,
 					       &written);
 	return VMS_CM_FRAME_LEN;
 }

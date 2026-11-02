@@ -774,6 +774,58 @@ static void test_op14_role_rule_is_false(void)
 		 "  body[40:44] = 0 in both (68/68 in the corpus)");
 }
 
+/*
+ * rd vms-26e: THE op-0x1a, parsed off RA7 fire A's real frame 15 -- the old
+ * master VAX1 telling the new master the value block of the lock it holds.
+ */
+static void test_op1a_valblk_parse(void)
+{
+	const struct vms_fixture *f = fixture("ra7a-02-1a-valblk");
+	const struct vms_fixture *rec = fixture("rm-12-root-req");
+	struct vms_dlm_rm_valblk v;
+	uint8_t body[VMS_CM_BODY_LEN];
+
+	printf("-- rd vms-26e: the op-0x1a is the old master's value block\n");
+	ct_check(f != NULL && rec != NULL, "both specimens load");
+	if (f == NULL || rec == NULL)
+		return;
+	memset(&v, 0xa5, sizeof(v));
+	ct_check(vms_dlm_rm_valblk_parse_body(fxbody(f), VMS_CM_BODY_LEN, &v) ==
+		 VMS_CODEC_OK, "  the real op-0x1a parses");
+	ct_check_eq_u32(v.master_lkid, 0x0700065fu,
+			"  body[20:24]: VAX1's handle -- the one its frame-8 "
+			"grant gave OVMXE");
+	ct_check_eq_u32(v.holder_lkid, 0x01000361u,
+			"  body[24:28]: OVMXE's own handle for the lock");
+	ct_check(memcmp(v.valblk, "RMLVB-0123456789", 16) == 0,
+		 "  body[36:52]: RMLVB-0123456789, VAX1's RSB block");
+	ct_check_eq_u32(v.valblk_seq, 1u, "  body[52:56]: its sequence, 1");
+	ct_check_eq_u32(v.valblk_present, 1u, "  so a block is PRESENT");
+
+	memcpy(body, fxbody(f), sizeof(body));
+	memset(body + 36, 0, 20);
+	ct_check(vms_dlm_rm_valblk_parse_body(body, sizeof(body), &v) ==
+		 VMS_CODEC_OK && v.valblk_present == 0u,
+		 "  twenty zeros there are an ABSENT block, never data");
+	body[52] = 2u;
+	ct_check(vms_dlm_rm_valblk_parse_body(body, sizeof(body), &v) ==
+		 VMS_CODEC_OK && v.valblk_present == 1u && v.valblk_seq == 2u,
+		 "  a sequence with a zero block is still a block");
+
+	ct_check(vms_dlm_rm_valblk_parse_body(fxbody(rec), VMS_CM_BODY_LEN,
+					      &v) == VMS_CODEC_E_CLASS,
+		 "  an op-0x12 is not an op-0x1a (E_CLASS)");
+	memcpy(body, fxbody(f), sizeof(body));
+	body[8] = 0x82u;
+	ct_check(vms_dlm_rm_valblk_parse_body(body, sizeof(body), &v) ==
+		 VMS_CODEC_E_CLASS, "  nor is a cat-0x82 (E_CLASS)");
+	ct_check(vms_dlm_rm_valblk_parse_body(fxbody(f), VMS_CM_BODY_LEN - 1u,
+					      &v) == VMS_CODEC_E_SHORT,
+		 "  a short body is refused (E_SHORT)");
+	ct_check(vms_dlm_rm_valblk_parse_body(NULL, VMS_CM_BODY_LEN, &v) ==
+		 VMS_CODEC_E_INVAL, "  NULL is refused (E_INVAL)");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -802,5 +854,6 @@ int main(void)
 	test_ra8_third_topology();
 	test_op14_role_rule_is_false();
 	test_negative_controls();
+	test_op1a_valblk_parse();
 	return ct_summary("test_codec_remaster");
 }

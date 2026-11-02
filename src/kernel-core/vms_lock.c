@@ -237,6 +237,9 @@ static uint32_t         vms_dlm_adopt_reports_n;
 /* THIS NODE's OWN locks that an adoption converted out of proxy state
  * (rd vms-3ac, the completeness fix). Guarded by vms_dlm_adopt_lock_g. */
 static uint32_t         vms_dlm_adopt_promotions_n;
+/* op-0x1a value blocks that really landed on a resource (rd vms-26e). Guarded
+ * by vms_dlm_adopt_lock_g. */
+static uint32_t         vms_dlm_adopt_valblks_n;
 /*
  * How many PROXY POSTS were refused because THIS node masters the resource
  * (rd vms-3ac -- the INVLOCKID bugcheck a real V7.3 node took on a release
@@ -301,6 +304,7 @@ int vms_lock_init(void)
     vms_dlm_adoptions_refused_n = 0u;
     vms_dlm_adopt_reports_n = 0u;
     vms_dlm_adopt_promotions_n = 0u;
+    vms_dlm_adopt_valblks_n = 0u;
     /* ...and the posts refused because this node masters the resource
      * (rd vms-3ac): also "since this executive started". */
     vms_dlm_proxy_self_mastered_n = 0u;
@@ -4157,30 +4161,42 @@ static int dlm_master_fill_args(const struct vms_dlm_master_request *r,
 /*
  * THE LVB READ CROSSING, master side (vms-727). Read the master RESOURCE's
  * current value block by the master lock-id -- READ ONLY: it takes the resource
- * lock, copies res->valblk, and touches nothing. Returns 1 when the block is
- * non-zero (the resource genuinely holds a value block), 0 otherwise. A grant
+ * lock, copies res->valblk and res->valblk_seq, and touches nothing. Returns 1
+ * when the block or its sequence is non-zero (the resource genuinely holds a
+ * value block), 0 otherwise; `*seq_out` is the sequence on a 1. A grant
  * returns the block only on a 1, so the requester never receives sixteen zeros
  * dressed as data (INV-6). This never sets LCK_M_VALBLK and so never travels the
  * write path -- reading the LVB back to a requester must not perturb it.
  */
-static uint8_t dlm_master_read_valblk(uint32_t master_lkid, uint8_t *out)
+static uint8_t dlm_master_read_valblk(uint32_t master_lkid, uint8_t *out,
+                                      uint32_t *seq_out)
 {
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
     int i;
     uint8_t has = 0u;
+    uint32_t seq;
 
     memset(out, 0, LCK_VALBLK_SIZE);
+    *seq_out = 0u;
     lock = lock_find_by_id(master_lkid);
     if (lock == NULL)
         return 0u;
     res = lock->resource;
     exec_lock(&res->lock);
     memcpy(out, res->valblk, LCK_VALBLK_SIZE);
+    seq = res->valblk_seq;
     exec_unlock(&res->lock);
     lock_put(lock);
     for (i = 0; i < LCK_VALBLK_SIZE; i++)
         if (out[i]) { has = 1u; break; }
+    /* rd vms-26e: the SEQUENCE rides with the block, read under the same lock.
+     * A sequence with an all-zero block is still a block (the rule
+     * dlm_adopt_fill_result states), so it is returned too. */
+    if (seq != 0u)
+        has = 1u;
+    if (has)
+        *seq_out = seq;
     return has;
 }
 
@@ -4229,7 +4245,8 @@ static void dlm_master_result_enq(uint32_t status,
         out->granted_mode = mode;
         /* The LVB read crossing (vms-727): return the resource's block when it
          * holds one, so the requester's grant carries the master's LVB back. */
-        out->valblk_present = dlm_master_read_valblk(a->master_lkid, out->valblk);
+        out->valblk_present = dlm_master_read_valblk(a->master_lkid, out->valblk,
+                                                     &out->valblk_seq);
         return;
     }
     out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
@@ -4885,11 +4902,14 @@ static void dlm_adopt_clear_gen(uint32_t gen)
  * instead of failing honestly, and nothing is left for the fail-safe to catch.
  *
  * WHAT IS NOT DONE HERE, deliberately: the resource's VALUE BLOCK is not
- * installed from the promoted lock's own copy. Whether a real new master takes
- * the block from its own granted lock when no op-0x12 record carried one is NOT
- * GROUNDED -- the corpus has no episode where the new master was the only
- * holder -- and rd vms-89dc is the arm that measures it. Guessing it would write
- * a value this executive was never told, which is the fabrication INV-6 forbids.
+ * installed from the promoted lock's own copy. That copy is what the lock's
+ * GRANT returned, and the resource's block may have been written since. The
+ * new master is TOLD the block instead: the old master sends it an op-0x1a for
+ * every lock it holds in the tree, carrying the old RSB's block and sequence
+ * (rd vms-26e: 1112 such frames in the corpus, RA7 fire A the controlled one),
+ * and vms_lock_dlm_adopt_valblk() below writes it onto the resource while the
+ * adoption is open -- so by the time this sweep runs the block is already the
+ * one the old master held, and nothing here has to guess it.
  */
 
 /*
@@ -5027,6 +5047,72 @@ static uint32_t dlm_adopt_promote_own_locks(const struct vms_lock_resource *root
             n++;
         }
     }
+    return n;
+}
+
+/*
+ * THE OLD MASTER'S VALUE BLOCK FOR A LOCK OF OURS (rd vms-26e, op 0x1a). The
+ * contract is in vms_dlm_adopt.h; the shape of it is: find OUR proxy by our own
+ * handle, find the OPEN adoption whose tree holds its resource and whose old
+ * master is the sender, re-check the proxy's recorded master and handle under
+ * the resource lock, then write the RESOURCE's block and sequence.
+ *
+ * LOCK ORDER is the adoption entry points' own: vms_dlm_adopt_lock_g, then
+ * res->lock. dlm_proxy_find takes and drops the lock-id lock before either, and
+ * the reference it returns keeps the resource -- and so its parent chain, which
+ * dlm_res_within_tree walks -- alive.
+ */
+uint32_t vms_lock_dlm_adopt_valblk(const struct vms_dlm_adopt_valblk *v)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    struct dlm_adoption *a;
+    uint32_t st = SS__IVLOCKID;
+
+    if (v == NULL || v->from_csid == 0u ||
+        v->holder_lkid == VMS_DLM_LKID_UNSET ||
+        v->master_lkid == VMS_DLM_LKID_UNSET)
+        return SS__BADPARAM;
+
+    lock = dlm_proxy_find(v->holder_lkid);
+    if (lock == NULL)
+        return SS__IVLOCKID;      /* no proxy of ours by that handle */
+    res = lock->resource;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    exec_list_for_each_entry(a, &vms_dlm_adoptions, link) {
+        if (a->aborting || a->old_master_csid != v->from_csid)
+            continue;
+        if (!dlm_res_within_tree(res, a->root))
+            continue;
+
+        exec_lock(&res->lock);
+        /* Still a proxy, still the sender's lock, still the sender's handle:
+         * a frame naming somebody else's lock writes nothing. */
+        if (lock->proxy && lock->master_csid == v->from_csid &&
+            lock->master_lkid == v->master_lkid) {
+            if (v->valblk_present) {
+                memcpy(res->valblk, v->valblk, LCK_VALBLK_SIZE);
+                res->valblk_seq = v->valblk_seq;
+                vms_dlm_adopt_valblks_n++;
+            }
+            st = SS__NORMAL;
+        }
+        exec_unlock(&res->lock);
+        break;
+    }
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    lock_put(lock);
+    return st;
+}
+
+uint32_t vms_lock_dlm_adopt_valblks_applied(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    n = vms_dlm_adopt_valblks_n;
+    exec_unlock(&vms_dlm_adopt_lock_g);
     return n;
 }
 

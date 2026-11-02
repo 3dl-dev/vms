@@ -1101,6 +1101,34 @@ set_tests_properties(cluster_host_test_dlm_deq_reachable PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-26e: RA7 fire A on the REAL engine. A tree adopted from a real
+# VAX keeps the value block the old master's op-0x1a carried, and the new
+# master's grant puts it -- and its sequence -- on the wire. The four frames
+# are capture fixtures (manifest-gated loader); a control replays the same
+# sequence without the op-0x1a and must reproduce the captured defect.
+add_executable(test_dlm_adopt_valblk test_dlm_adopt_valblk.c)
+target_include_directories(test_dlm_adopt_valblk PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_adopt_valblk PRIVATE
+    OVMX_CLUSTER_HOST
+    OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+    OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+)
+target_link_libraries(test_dlm_adopt_valblk PRIVATE
+    cluster_host_lock cluster_host_dlm cluster_host_fixture Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_adopt_valblk PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_adopt_valblk COMMAND test_dlm_adopt_valblk)
+set_tests_properties(cluster_host_test_dlm_adopt_valblk PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- rd vms-c72: the op-0x03/op-0x04 RECEIVE half really moves lock state ----
 # The mirror of test_dlm_deq_reachable above, on the same two library recipes
 # and for the same reason: the emit was proven and the RECEIVE was declined

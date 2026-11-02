@@ -1403,6 +1403,7 @@ static int dlm_arm_reply_grant(struct vms_dlm_scs *d,
 	 */
 	if (vms_dlm_enq_response_build_grant(in->body, in->len, r->master_lkid,
 					     r->valblk_present ? r->valblk : NULL,
+					     r->valblk_seq,
 					     d->txframe,
 					     (uint32_t)sizeof(d->txframe),
 					     &written) != VMS_CODEC_OK) {
@@ -2443,6 +2444,14 @@ static int dlm_arm_rm_adopt_abort(void *ctx, const struct vms_dlm_adopt_tree *t,
 	return vms_lock_dlm_adopt_abort(t, n_undone) == SS__NORMAL ? 1 : 0;
 }
 
+/* rd vms-26e: the op-0x1a's value block, checked and written by the ENGINE. */
+static int dlm_arm_rm_adopt_valblk(void *ctx,
+				   const struct vms_dlm_adopt_valblk *v)
+{
+	(void)ctx;
+	return vms_lock_dlm_adopt_valblk(v) == SS__NORMAL ? 1 : 0;
+}
+
 static int dlm_arm_rm_tree_of_lkid(void *ctx, uint32_t master_lkid,
 				   struct vms_dlm_adopt_tree *out)
 {
@@ -2566,6 +2575,7 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.stage_reply        = dlm_arm_rm_stage;
 	d->rm_ops.send               = dlm_arm_rm_send;
 	d->rm_ops.residue_fill       = dlm_arm_rm_residue_fill;
+	d->rm_ops.adopt_valblk       = dlm_arm_rm_adopt_valblk;
 	d->rm_ops.log                = dlm_arm_rm_log;
 	vms_dlm_rm_init(&d->rm, &d->rm_ops);
 }

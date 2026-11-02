@@ -298,10 +298,18 @@ struct vms_dlm_master_result {
 	 * grant reply so the requester's $ENQ(VALBLK)/$GETLKI reads it back. A
 	 * resource with no block leaves this 0 and the reply carries none:
 	 * sixteen zeros presented as an LVB is the placeholder INV-6 forbids.
+	 *
+	 * `valblk_seq` is THAT BLOCK'S SEQUENCE, read off the same RSB under the
+	 * same lock (rd vms-26e): a real grant carries it at body[52:56], and a
+	 * block that rides without it tells the requester its block was reset.
+	 * A resource holding a sequence with an all-zero block still HAS a block
+	 * (vms_lock.c dlm_adopt_fill_result's rule), so either one sets
+	 * `valblk_present`.
 	 */
 	uint8_t  valblk_present;
 	uint8_t  valblk_pad[3];
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
+	uint32_t valblk_seq;
 };
 
 /*

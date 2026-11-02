@@ -21,6 +21,7 @@
  *     vms_dlm_dir_reg_parse_body          (the op-0x0d record, rd vms-20c)
  *     vms_dlm_rm_step_parse_body          (a remaster step, 0x0e/0x0f/0x10/0x13/0x14)
  *     vms_dlm_rm_lock_rec_parse_body      (a remaster LOCK RECORD, op-0x12)
+ *     vms_dlm_rm_valblk_parse_body        (a remaster's VALUE BLOCK, op-0x1a)
  *     vms_cm_params_parse                 (CNXMAN op-01 PARAMS, votes)
  * plus the frame-level entry (vms_frame_classify -> vms_dlm_*_parse), the real
  * inbound path (body = frame + VMS_OFF_SYSAP_BODY, so a short frame exercises
@@ -147,6 +148,10 @@ static int t_rm_step(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_rm_step_parse_body(b, n, (struct vms_dlm_rm_step *)c); }
 static int t_rm_lock_rec(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_rm_lock_rec_parse_body(b, n, (struct vms_dlm_rm_lock_rec *)c); }
+/* rd vms-26e: the op-0x1a, the old master's value block for one lock of ours,
+ * which this node now parses whenever a real VAX remasters a tree onto it. */
+static int t_rm_valblk(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_rm_valblk_parse_body(b, n, (struct vms_dlm_rm_valblk *)c); }
 static int t_cm_params(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_cm_params_parse(b, n, (struct vms_cm_params *)c); }
 static int t_dlksrch(const uint8_t *b, uint32_t n, void *c)
@@ -197,9 +202,10 @@ static void fuzz_grant_valblk(void)
     struct vms_dlm_enq_response resp;
     for (int i = 0; i < ITERS; i++) {
         uint8_t scratch[64];
-        /* 0..55 spans: below the marker (n<=28), below the value block
-         * (28<n<36), a TRUNCATED value block (36<=n<52), and the full 52. */
-        uint32_t n = (uint32_t)(rand() % 56);
+        /* 0..59 spans: below the marker (n<=28), below the value block
+         * (28<n<36), a TRUNCATED value block (36<=n<52), a TRUNCATED
+         * sequence (52<=n<56, rd vms-26e) and the full 56. */
+        uint32_t n = (uint32_t)(rand() % 60);
         fill_random(scratch, n);
         if (n > DLM_OP_BODY_OFF) scratch[DLM_OP_BODY_OFF] = VMS_DLM_WIREOP_ENQ;
         if (n > 28) scratch[28] = 0x10;                        /* marker byte  */
@@ -258,6 +264,7 @@ int main(void)
     struct vms_dlm_dir_reg dreg;
     struct vms_dlm_rm_step rms;
     struct vms_dlm_rm_lock_rec rmlr;
+    struct vms_dlm_rm_valblk rmvb;
     struct vms_cm_params cmp;
     struct vms_dlm_dlksrch_record dlk;
     uint32_t hash;
@@ -277,6 +284,7 @@ int main(void)
     fuzz_body(t_res_ident, &ri,   VMS_DLM_WIREOP_ENQ,           "res_ident_parse_body: 100k, no over-read/crash");
     fuzz_body(t_rm_step,   &rms,  VMS_DLM_WIREOP_RM_10,         "rm_step_parse_body: 100k, no over-read/crash");
     fuzz_body(t_rm_lock_rec, &rmlr, VMS_DLM_WIREOP_RM_12,       "rm_lock_rec_parse_body: 100k, no over-read/crash");
+    fuzz_body(t_rm_valblk, &rmvb, VMS_DLM_WIREOP_RM_1A,         "rm_valblk_parse_body: 100k, no over-read/crash");
     fuzz_body(t_cm_params, &cmp,  0,                            "cm_params_parse: 100k, no over-read/crash");
     fuzz_body(t_dlksrch,   &dlk,  VMS_DLM_WIREOP_DLKSRCH,       "dlksrch_parse_body: 100k, no over-read/crash");
 

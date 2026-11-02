@@ -708,7 +708,7 @@ static uint32_t make_grant_vb(uint8_t *frame, uint32_t req_lkid,
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	(void)vms_frame_compose_link(&link, frame, VMS_CM_FRAME_LEN, &written);
 	(void)vms_dlm_enq_response_build_grant(reqbody, VMS_CM_BODY_LEN,
-					       master_lkid, valblk, frame,
+					       master_lkid, valblk, 0u, frame,
 					       VMS_CM_FRAME_LEN, &written);
 	/* The builder writes the response category itself (0x82): a grant that
 	 * had to be stamped a reply afterwards was the old shape. */

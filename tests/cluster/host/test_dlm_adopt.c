@@ -722,6 +722,56 @@ static void abort_undoes_exactly_its_own(void)
 }
 
 /* ==========================================================================
+ * 8b. ...AND GIVES THE MASTERY BACK EVEN WHILE THE ROOT IS STILL REFERENCED
+ *
+ * rd vms-3ea made an IDLE resource block forget its master (resource_release),
+ * so in section 8 the root's mastery goes whether or not the abort restores
+ * it. That covers only a root nothing else references. A sub-resource that
+ * outlives its last lock -- here because its record carried a real value
+ * block -- keeps its reference on the root, so the root is NOT idle after the
+ * undo and resource_release never touches its master. Only the abort's own
+ * restore gives the mastery back then.
+ * ========================================================================== */
+static void abort_restores_mastery_of_a_referenced_root(void)
+{
+	struct vms_dlm_adopt_tree t = tree_of(TREE_NAME);
+	struct vms_dlm_adopt_lock_rec r;
+	struct vms_dlm_adopt_lock_result o;
+	struct vms_resmaster_args rm;
+	struct vms_getlki_args lki;
+	uint32_t root, s0, n = 0;
+
+	printf("-- 8b. an abandoned adoption gives the mastery back while a sub-resource still references the root\n");
+	engine_up();
+
+	ct_check_eq_u32(vms_lock_dlm_adopt_open(&t), SS__NORMAL, "open (8b)");
+	r = rec_of(TREE_NAME, CSID_HOLDER, H_ROOT_LKID, 0, LCK_K_CRMODE);
+	(void)vms_lock_dlm_adopt_lock(&t, &r, &o);
+	root = o.master_lkid;
+	/* The SUB-lock carries the value block, so the S0 resource block is the
+	 * one preserved past its last lock -- and with it its parent reference. */
+	r = rec_of("S0", CSID_HOLDER, H_S0_LKID, root, LCK_K_CWMODE);
+	memcpy(r.valblk, RMLVB, LCK_VALBLK_SIZE);
+	r.valblk_present = 1u;
+	(void)vms_lock_dlm_adopt_lock(&t, &r, &o);
+	s0 = o.master_lkid;
+
+	ct_check_eq_u32(vms_lock_dlm_adopt_abort(&t, &n), SS__NORMAL, "abort (8b)");
+	ct_check_eq_u32(n, 2, "both installed locks released (8b)");
+	ct_check(!getlki(root, &lki), "the adopted root lock is gone (8b)");
+	ct_check(!getlki(s0, &lki), "the adopted sub lock is gone (8b)");
+
+	rm = resmaster(TREE_NAME);
+	ct_check_eq_u32(rm.found, 1,
+			"the root block survives: the preserved sub-resource still references it");
+	ct_check_eq_u32(rm.master_csid, 0,
+			"*** a still-referenced root's mastery went back where it was ***");
+	ct_check_eq_u32(rm.is_local_master, 0,
+			"*** and this node does not claim a tree it holds nothing in ***");
+	engine_down();
+}
+
+/* ==========================================================================
  * 9. THE 0x14 THIS NODE DOES NOT SEND IS COUNTED, NOT HIDDEN (INV-6)
  * ========================================================================== */
 static void the_unreported_gap_is_a_number(void)
@@ -769,6 +819,7 @@ int main(void)
 	refuses_without_the_means();
 	lvb_absent_leaves_the_block_alone();
 	abort_undoes_exactly_its_own();
+	abort_restores_mastery_of_a_referenced_root();
 	the_unreported_gap_is_a_number();
 	return ct_summary("test_dlm_adopt");
 }

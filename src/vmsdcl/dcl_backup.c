@@ -9,6 +9,7 @@
  *   BACKUP /LIST input.BCK /SAVE_SET              - list saveset contents
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -216,12 +217,12 @@ static int backup_save(struct dcl_context *ctx, const char *input_spec,
             vms_spec[sizeof(vms_spec) - 1] = '\0';
         }
 
-        printf("%%BACKUP-S-COPIED, saving %s\n", vms_spec);
+        dcl_out_printf("%%BACKUP-S-COPIED, saving %s\n", vms_spec);
     }
 
     fclose(out);
 
-    printf("%%BACKUP-S-SAVESET, saveset %s created, %d file%s\n",
+    dcl_out_printf("%%BACKUP-S-SAVESET, saveset %s created, %d file%s\n",
            output_spec, file_count, file_count == 1 ? "" : "s");
 
     return SS$_NORMAL;
@@ -275,13 +276,13 @@ static int backup_list(struct dcl_context *ctx, const char *saveset_spec)
         "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
     };
 
-    printf("\nListing of save set %s\n", saveset_spec);
-    printf("Created %2d-%s-%04d %02d:%02d:%02d\n\n",
+    dcl_out_printf("\nListing of save set %s\n", saveset_spec);
+    dcl_out_printf("Created %2d-%s-%04d %02d:%02d:%02d\n\n",
            tm->tm_mday, months[tm->tm_mon], 1900 + tm->tm_year,
            tm->tm_hour, tm->tm_min, tm->tm_sec);
 
-    printf("%-40s %10s\n", "File name", "Size");
-    printf("%-40s %10s\n", "----------------------------------------",
+    dcl_out_printf("%-40s %10s\n", "File name", "Size");
+    dcl_out_printf("%-40s %10s\n", "----------------------------------------",
            "----------");
 
     uint32_t total_size = 0;
@@ -298,14 +299,14 @@ static int backup_list(struct dcl_context *ctx, const char *saveset_spec)
         uint32_t data_len;
         if (fread(&data_len, sizeof(data_len), 1, fp) != 1) break;
 
-        printf("%-40s %10u\n", name, data_len);
+        dcl_out_printf("%-40s %10u\n", name, data_len);
         total_size += data_len;
 
         /* Skip file data */
         if (fseek(fp, data_len, SEEK_CUR) != 0) break;
     }
 
-    printf("\nTotal of %u file%s, %u bytes\n",
+    dcl_out_printf("\nTotal of %u file%s, %u bytes\n",
            hdr.file_count, hdr.file_count == 1 ? "" : "s", total_size);
 
     fclose(fp);
@@ -415,13 +416,13 @@ static int backup_restore(struct dcl_context *ctx, const char *saveset_spec,
         }
 
         fclose(outfp);
-        printf("%%BACKUP-S-RESTORED, restoring %s\n", name);
+        dcl_out_printf("%%BACKUP-S-RESTORED, restoring %s\n", name);
         restored++;
     }
 
     fclose(fp);
 
-    printf("%%BACKUP-S-DONE, %d file%s restored\n",
+    dcl_out_printf("%%BACKUP-S-DONE, %d file%s restored\n",
            restored, restored == 1 ? "" : "s");
 
     return SS$_NORMAL;

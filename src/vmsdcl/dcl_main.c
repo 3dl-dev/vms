@@ -6,6 +6,7 @@
  * prompt, command line editing, history, and symbol substitution.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -341,10 +342,10 @@ static int dcl_emit_ctrl_t_status(void)
      * above). JPI$_IMAGNAME would be sourced here once OVMX tracks it. */
     if (dcl_format_ctrl_t_status(&info, node, "", time(NULL),
                                  line, sizeof(line)) & 1) {
-        fputs("\r\n", stdout);
-        fputs(line, stdout);
-        fputs("\r\n", stdout);
-        fflush(stdout);
+        dcl_out_fputs("\r\n");
+        dcl_out_fputs(line);
+        dcl_out_fputs("\r\n");
+        dcl_out_flush();
         return 1;
     }
     return 0;
@@ -384,9 +385,9 @@ static void dcl_ctrlt_ast(uint32_t ch)
     /* at the DCL level no image runs, and VMS names the CLI there: "(DCL)"
      * (VAX V7.3 keystroke OOB.PROMPT T/T2) */
     if (dcl_format_ctrl_t_status(&info, node, "(DCL)", time(NULL), line, sizeof(line)) & 1) {
-        fputs(line, stdout);
-        fputc('\n', stdout);
-        fflush(stdout);
+        dcl_out_fputs(line);
+        dcl_out_putc('\n');
+        dcl_out_flush();
     }
 }
 
@@ -965,16 +966,16 @@ int main(int argc, char *argv[])
                  * developer's host build run outside the OVMX runtime. Read
                  * the descriptor plainly; nothing reprograms it. */
                 static char fgets_buf[DCL_MAX_LINE];
-                printf("%s", dcl_ctx.prompt);
-                fflush(stdout);
+                dcl_out_printf("%s", dcl_ctx.prompt);
+                dcl_out_flush();
                 if (!fgets(fgets_buf, sizeof(fgets_buf), stdin)) {
                     if (feof(stdin) && !ferror(stdin) && isatty(STDIN_FILENO) &&
                         ++ctrlz_run <= 64) {
                         clearerr(stdin);
-                        printf("\n");
+                        dcl_out_printf("\n");
                         continue;
                     }
-                    printf("\n");
+                    dcl_out_printf("\n");
                     break;
                 }
                 ctrlz_run = 0;
@@ -1013,8 +1014,8 @@ int main(int argc, char *argv[])
                     if (cn >= 0) {
                         cont = strdup(ccbuf);
                     } else if (cn == DCL_TT_NODRIVER) {
-                        printf("_$ ");
-                        fflush(stdout);
+                        dcl_out_printf("_$ ");
+                        dcl_out_flush();
                         if (fgets(ccbuf, sizeof(ccbuf), stdin)) {
                             size_t clen = strlen(ccbuf);
                             if (clen > 0 && ccbuf[clen - 1] == '\n')

@@ -42,10 +42,10 @@ defect_apply() {
         # two-line Input:/Output:/LFfill:/CRfill:/Width:/Page:/Parity: block,
         # with the fields OVMX cannot source left blank -- ahead of the
         # characteristic grid. Same anchor as its sibling
-        # (printf("Terminal Characteristics:\n");, the only occurrence in the
-        # file) and the same trailing printf()->puts() substitution, so the
+        # (dcl_out_printf("Terminal Characteristics:\n");, the only occurrence in the
+        # file) and the same trailing dcl_out_printf()->dcl_out_puts() substitution, so the
         # literal anchor text does not survive the edit and a second apply
         # finds no match, which is the no-op the selftest requires.
-        sed -i 's|    printf("Terminal Characteristics:\\n");|    printf("   Input:            LFfill:         Width:%4u      Parity:\\n   Output:           CRfill:         Page: %4u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-oracle-shaped: restores the oracle-shaped two-line layout, unsourceable fields left blank */ puts("Terminal Characteristics:");|' "$_file"
+        sed -i 's|    dcl_out_printf("Terminal Characteristics:\\n");|    dcl_out_printf("   Input:            LFfill:         Width:%4u      Parity:\\n   Output:           CRfill:         Page: %4u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-oracle-shaped: restores the oracle-shaped two-line layout, unsourceable fields left blank */ dcl_out_puts("Terminal Characteristics:");|' "$_file"
     :
 }

@@ -6,6 +6,7 @@
  * device allocation table for SHOW USERS and SSH session management.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -182,8 +183,8 @@ int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
         return DCL_TT_NODRIVER;
     /* what DCL has written through stdio reaches the terminal before the
      * prompt does */
-    fflush(stdout);
-    fflush(stderr);
+    dcl_out_flush();
+    dcl_err_flush();
 
     static char pbuf[512];
     size_t plen = 0;
@@ -238,8 +239,8 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
         return DCL_TT_GONE;
     if (!dcl_tt_assign())
         return DCL_TT_NODRIVER;
-    fflush(stdout);
-    fflush(stderr);
+    dcl_out_flush();
+    dcl_err_flush();
     if (ilen > sizeof ibuf)
         ilen = sizeof ibuf;
     memcpy(pbuf, prompt, plen);
@@ -287,7 +288,7 @@ void dcl_tt_raw_write(const void *b, size_t n)
     uint16_t iosb[4];
     if (!n || !dcl_tt_assign())
         return;
-    fflush(stdout);
+    dcl_out_flush();
     (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK | IO$M_NOFORMAT, iosb, NULL, 0,
                    (void *)b, (uint32_t)n, 0, 0, 0, 0);
 }
@@ -297,7 +298,7 @@ void dcl_tt_qio_write(const void *b, size_t n)
     uint16_t iosb[4];
     if (!n || !dcl_tt_assign())
         return;
-    fflush(stdout);
+    dcl_out_flush();
     (void)sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
                    (void *)b, (uint32_t)n, 0, 0, 0, 0);
 }
@@ -321,8 +322,8 @@ int dcl_tt_put_record(const char *text, size_t n)
     memcpy(rec, text, n);
     rec[n++] = '\r';
     rec[n++] = '\n';
-    fflush(stdout);
-    fflush(stderr);
+    dcl_out_flush();
+    dcl_err_flush();
     uint32_t st = sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
                            rec, (uint32_t)n, 0, 0, 0, 0);
     return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
@@ -389,7 +390,7 @@ int dcl_page_begin(struct dcl_pager *pg)
     pg->save = -1;
     if (!isatty(STDOUT_FILENO) || !dcl_tt_assign())
         return 0;                       /* not a terminal: no pager */
-    fflush(stdout);
+    dcl_out_flush();
     /* A scratch file that cannot take data means no pager, and the listing goes
      * straight to the terminal -- never into a buffer that silently drops it
      * (rd vms-f47: tmpfs refuses writes below 4 MB of available memory). */
@@ -416,11 +417,11 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
 
     if (!pg->tmp)
         return;
-    fflush(stdout);
-    int page_werr = ferror(stdout);      /* the buffer filled mid-command */
-    clearerr(stdout);
+    dcl_out_flush();
+    int page_werr = dcl_out_error();      /* the buffer filled mid-command */
+    dcl_out_clearerr();
     if (page_werr)
-        fprintf(stderr, "%%DCL-W-PAGEFULL, output exceeded the paging buffer; the listing is incomplete\n");
+        dcl_err_printf("%%DCL-W-PAGEFULL, output exceeded the paging buffer; the listing is incomplete\n");
     dup2(pg->save, STDOUT_FILENO);
     close(pg->save);
     pg->save = -1;
@@ -437,10 +438,10 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
      * its own CR) */
     if (nlines <= page_len) {
         while (fgets(line, sizeof line, pg->tmp))
-            fputs(line, stdout);
+            dcl_out_fputs(line);
         for (long i = nlines; i < page_len; i++)
-            fputc('\n', stdout);
-        fflush(stdout);
+            dcl_out_putc('\n');
+        dcl_out_flush();
         fclose(pg->tmp);
         pg->tmp = NULL;
         return;
@@ -502,8 +503,8 @@ int dcl_tt_inquire(char *reply, size_t replysz)
 
     if (!dcl_tt_assign())
         return DCL_TT_NODRIVER;
-    fflush(stdout);
-    fflush(stderr);
+    dcl_out_flush();
+    dcl_err_flush();
     memset(mask, 0, sizeof mask);
     mask['c' >> 5] |= 1u << ('c' & 31);
     mask['Z' >> 5] |= 1u << ('Z' & 31);
@@ -564,8 +565,8 @@ int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
             return -1;
     }
     if (prompt && prompt[0]) {
-        fputs(prompt, stdout);
-        fflush(stdout);
+        dcl_out_fputs(prompt);
+        dcl_out_flush();
     }
     if (!fgets(buf, (int)bufsz, stdin))
         return -1;

@@ -85,6 +85,7 @@ set(VMSDCL_SOURCES
     dcl_library.c
     dcl_help.c
     dcl_mbx.c
+    dcl_out.c
 )
 
 if(VMSDCL_STANDALONE)

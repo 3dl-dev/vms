@@ -1,5 +1,5 @@
 #!/bin/bash
-# TEST: DCL does no new I/O through libc: the file verbs and @ have none, and no file's libc call count grows (libc-drop ratchet)
+# TEST: DCL does no new I/O through libc: the file verbs and @ have none, output goes only through the dcl_out.c sink, and no file's libc call count grows (libc-drop ratchet)
 # EXPECT: contains:LIBC_IO_RATCHET_OK
 # EXPECT_NOT: contains:LIBC_IO_RATCHET_FAIL
 #
@@ -18,6 +18,14 @@ for pat in 'fopen\s*\(' 'fdopen\s*\(' 'freopen\s*\(' 'fgets\s*\(' '\bdup2?\s*\('
 done
 hits=$(grep -nE 'fopen\s*\(' "$ROOT/src/vmsdcl/dcl_script.c" | grep -vE '^[0-9]+:\s*(\*|//|/\*)')
 [ -n "$hits" ] && { echo "dcl_script.c: @ opens a procedure with fopen: $hits"; bad=1; }
+# One output sink (vms-d4a0): SYS$OUTPUT and SYS$ERROR are written only by
+# dcl_out.c. Any other file writing stdio's stdout/stderr bypasses the sink.
+for f in "$ROOT"/src/vmsdcl/*.c; do
+    [ "$(basename "$f")" = dcl_out.c ] && continue
+    hits=$(grep -nE '(^|[^_a-zA-Z0-9.>$])(printf|puts|putchar|vprintf)\s*\(|\b(fputs|fputc|putc|fprintf|fwrite|vfprintf|fflush|setvbuf|ferror|clearerr)\s*\(.*\b(stdout|stderr)\b|=\s*(stdout|stderr)\b|,\s*(stdout|stderr)\s*\)' "$f" |
+        grep -vE '^[0-9]+:\s*(\*|//|/\*)')
+    [ -n "$hits" ] && { echo "$(basename "$f"): writes stdout/stderr outside the sink (dcl_out.c): $hits"; bad=1; }
+done
 base="$ROOT/tests/dcl/libc_io_baseline.txt"
 now=$(bash "$ROOT/tests/dcl/libc_io_census.sh" "$ROOT")
 while read -r f n; do

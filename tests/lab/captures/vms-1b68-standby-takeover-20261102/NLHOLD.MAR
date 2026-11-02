@@ -1,0 +1,23 @@
+ .TITLE NLHOLD
+; NLHOLD -- vms-1b68 re-fire, VAX1's arm B lock: the same $ENQW EVACWL.MAR's
+; STANDBY path makes first (EVAC$WORKLOAD, NL, no flags, so scoped to the
+; caller's UIC group), then hibernates WITHOUT converting. EVACWL.MAR has no
+; NL=<s> option (only EVACWL.C does); this is the VAX-side stand-in for
+; "EVACWL STANDBY NL=99999" (plan addendum 4/5).
+ $LCKDEF
+ .PSECT DAT,WRT,NOEXE,LONG
+LKSB: .BLKB 8
+RESNAM_D: .ASCID /EVAC$WORKLOAD/
+MSG: .ASCID /NLHOLD: EVAC$WORKLOAD NL granted -- hibernating/
+ .PSECT COD,EXE,NOWRT
+ .ENTRY START,^M<>
+ $ENQW_S EFN=#1,LKMODE=#LCK$K_NLMODE,LKSB=LKSB,RESNAM=RESNAM_D
+ BLBC R0,DONE
+ MOVZWL LKSB,R0
+ BLBC R0,DONE
+ PUSHAQ MSG
+ CALLS #1,G^LIB$PUT_OUTPUT
+HIB: $HIBER_S
+ BRB HIB
+DONE: RET
+ .END START

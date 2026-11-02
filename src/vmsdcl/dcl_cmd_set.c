@@ -3019,7 +3019,10 @@ int cmd_set(struct dcl_command *cmd)
             c->proc_stack[c->proc_depth].noon = 1;
         else
             c->noon_active = 1;
-        return SS$_NORMAL;
+        /* a DCL-internal command: $STATUS is the CLI success %X00030001, also
+         * right after a failing command (observed VAX V7.3, rd vms-d80:
+         * docs/oracle/semantics/sym/ SYM.STATUS.VALUE) */
+        return 0x00030001;
     }
     if (dcl_match_command(subcmd, "ON", 2)) {
         /* SET ON — restore $STATUS checking (the default) at this command
@@ -3029,7 +3032,7 @@ int cmd_set(struct dcl_command *cmd)
             c->proc_stack[c->proc_depth].noon = 0;
         else
             c->noon_active = 0;
-        return SS$_NORMAL;
+        return 0x00030001;   /* CLI success, as SET NOON (rd vms-d80) */
     }
     if (dcl_match_command(subcmd, "SYMBOL", 3))
         return cmd_set_symbol(cmd);

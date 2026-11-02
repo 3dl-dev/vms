@@ -659,7 +659,10 @@ run_dcl_acceptance_battery() {
     must_have     "$SEG" "GETDVIVOL=$VOLUME_LABEL" "F\$GETDVI VOLNAM [vms-050]: reports the REAL mounted ODS-2 label '$VOLUME_LABEL' (same value SHOW DEVICE read above), not a fabricated constant"
     negctl        "$SEG" 'GETDVIVOL' "F\$GETDVI VOLNAM"
 
-    run_cmd "WRITE SYS\$OUTPUT \"GETDVICLS=\" + F\$GETDVI(\"$SYSDEV\",\"DEVCLASS\")"
+    # DEVCLASS is an INTEGER item: "text" + an integer is integer addition on
+    # VMS ("x" + 1 = 1, docs/oracle/semantics/sym/ SYM.LEFTASSOC.STR.INT), so
+    # the value is made a string to be concatenated (rd vms-d80).
+    run_cmd "WRITE SYS\$OUTPUT \"GETDVICLS=\" + F\$STRING(F\$GETDVI(\"$SYSDEV\",\"DEVCLASS\"))"
     must_have     "$SEG" 'GETDVICLS=1' "F\$GETDVI DEVCLASS [vms-050]: $SYSDEV is DC\$_DISK (1) from the executive, not a name-substring guess"
     negctl        "$SEG" 'GETDVICLS' "F\$GETDVI DEVCLASS"
 

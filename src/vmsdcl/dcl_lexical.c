@@ -1033,19 +1033,18 @@ static int lex_type(struct dcl_context *ctx, const char *args,
         if (ctx) ctx->last_status = 0x00038080;
         return -1;
     }
-    const char *val = dcl_sym_get(s);
+    int stype = DCL_SYM_STRING;
+    const char *val = dcl_sym_get_typed(s, &stype);
     if (!val) {
         result[0] = '\0'; /* Undefined */
     } else {
-        /* INTEGER for an integer symbol or a string that IS a decimal integer
-         * ("-12"); STRING otherwise -- including "" and text that merely
-         * starts with blanks (observed LEX.STRING / LEX.ELEMENT.2 /
-         * LEX.EDIT.UPCASE). */
-        const char *q = val;
-        if (*q == '-' || *q == '+') q++;
-        int digits = 0;
-        while (isdigit((unsigned char)*q)) { q++; digits++; }
-        strncpy(result, (digits && *q == '\0') ? "INTEGER" : "STRING", result_size - 1);
+        /* INTEGER for an integer symbol or a string whose text IS a DCL
+         * integer ("-12", "007", and the radix forms "%X10" and $STATUS's
+         * "%X00030001"); STRING otherwise -- including "", "TRUE" and text
+         * that merely starts with blanks (observed LEX.STRING /
+         * LEX.ELEMENT.2 / LEX.EDIT.UPCASE; SYM.*.TYPE, rd vms-d80). */
+        int isint = (stype == DCL_SYM_INTEGER) || dcl_str_is_int(val);
+        strncpy(result, isint ? "INTEGER" : "STRING", result_size - 1);
     }
     result[result_size - 1] = '\0';
     return 0;

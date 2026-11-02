@@ -83,6 +83,8 @@ make_image MAIL_SERVER.EXE  M  6500
 make_image MAIL.EXE         R  6200
 # NCP.EXE (rd vms-5bb5): the DECnet network control program, staged beside it.
 make_image NCP.EXE          C  6000
+# RTPAD.EXE (rd vms-0a7 S2): the remote terminal pad DCL SET HOST activates.
+make_image RTPAD.EXE        T  5900
 # OPCOM.EXE (rd vms-798): the operator communication process PID 1 creates.
 make_image OPCOM.EXE        O  5800
 
@@ -115,12 +117,13 @@ echo "PASS: staged system tree round-trips master -> extract byte-exact"
 # ---------------------------------------------------------------------------
 ROOTED="SYS0/SYSCOMMON/SYSEXE"
 for f in DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE \
-         DECNETD.EXE SYSUAF.DAT RIGHTSLIST.DAT OVMXVMSSYS.PAR; do
+         DECNETD.EXE RTPAD.EXE SYSUAF.DAT RIGHTSLIST.DAT OVMXVMSSYS.PAR; do
     [ -f "$OUT/$ROOTED/$f" ] || fail "boot file absent from rooted SYSEXE after round-trip: $ROOTED/$f"
 done
 cmp -s "$IMAGES/DCL.EXE"       "$OUT/$ROOTED/DCL.EXE"       || fail "DCL.EXE not byte-exact at rooted path"
 cmp -s "$IMAGES/PROVISION.EXE" "$OUT/$ROOTED/PROVISION.EXE" || fail "PROVISION.EXE not byte-exact at rooted path"
 cmp -s "$IMAGES/DECNETD.EXE"   "$OUT/$ROOTED/DECNETD.EXE"   || fail "DECNETD.EXE not byte-exact at rooted path"
+cmp -s "$IMAGES/RTPAD.EXE"     "$OUT/$ROOTED/RTPAD.EXE"     || fail "RTPAD.EXE not byte-exact at rooted path"
 cmp -s "$REPO/distro/rootfs/vms/$ROOTED/SYSUAF.DAT" "$OUT/$ROOTED/SYSUAF.DAT" \
     || fail "SYSUAF.DAT not reused byte-exact"
 echo "PASS: DCL.EXE + PROVISION.EXE + DECNETD.EXE + SYSUAF.DAT present + byte-exact at rooted [SYS0.SYSCOMMON.SYSEXE]"

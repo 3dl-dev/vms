@@ -876,7 +876,7 @@ RUN . /etc/ovmx-arch.env && mkdir -p /system-stage/dev /system-stage/proc /syste
     # initramfs test_syssvc_mmk_build. (Plain `cp ... SYSEXE/` form so the
     # image-parity gate's cp-line scanner sees them -- the FATAL guard is the
     # separate `test -f` block below, which the scanner ignores.)
-    cp build-static/bin/LINK.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/sysexe/LINK.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/TCC.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/MMK.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     # NOTE (vms-992e): TCC's header closure (tinycc + musl <stdint.h>) is NOT

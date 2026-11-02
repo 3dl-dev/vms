@@ -34,6 +34,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <ctype.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <fcntl.h>
@@ -405,6 +407,13 @@ static void die(const char *msg)
     fprintf(stderr, "%%LINK-F-ERROR, %s\n", msg);
     exit(EXIT_FAILURE);
 }
+
+#define OVMX_LINK_C 1
+#include "link_cmd.h"   /* struct link_cmd: what every front end fills (rd vms-3cb1) */
+
+/* The link map (/MAP): written by map_*() below once the image is laid out. */
+static const struct link_cmd *g_map_cmd;
+
 
 /* Section bucket: input sections are classified + merged by ELF flags, not by
  * exact name, so gcc's split sections (.text.unlikely, .rodata.str1.8,
@@ -839,6 +848,7 @@ struct olb_pool {
     struct obj *mem;      /* parsed members (own buffers) */
     int         nmem;
     int        *pulled;   /* [nmem] 1 once moved into objs[] */
+    int         search;   /* searched for references (0: /INCLUDE only) */
 };
 
 /* Return non-zero if `path` names an OVMX object library by extension (.OLB,
@@ -896,6 +906,26 @@ static void load_olb_pool(const char *path, struct olb_pool *pool)
     free(abuf);
     pool->pulled = calloc((size_t)(pool->nmem ? pool->nmem : 1), sizeof(int));
     if (!pool->pulled) die("oom tracking .OLB members");
+}
+
+/* The member of POOL that holds module MODULE: the member name with any type
+ * (".OBJ", ".o") and a GNU trailing '/' removed, compared without case. -1 if
+ * the library has no such module. */
+static int olb_find_module(const struct olb_pool *pool, const char *module)
+{
+    size_t pl = strlen(pool->path), ml = strlen(module);
+    for (int m = 0; m < pool->nmem; m++) {
+        const char *lab = pool->mem[m].objname;       /* "path(member)" */
+        if (!lab || strncmp(lab, pool->path, pl) != 0 || lab[pl] != '(') continue;
+        const char *nm = lab + pl + 1;
+        size_t n = strlen(nm);
+        if (n && nm[n - 1] == ')') n--;
+        if (n && nm[n - 1] == '/') n--;
+        for (size_t d = 0; d < n; d++)
+            if (nm[d] == '.') { n = d; break; }
+        if (n == ml && strncasecmp(nm, module, n) == 0) return m;
+    }
+    return -1;
 }
 
 /* -------- minimal string set (open addressing, FNV-1a), keyed on names that
@@ -1013,6 +1043,7 @@ static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
         int pulled = 0;
         if (U.n) {
             for (int p = 0; p < npool; p++) {
+                if (!pools[p].search) continue;
                 for (int m = 0; m < pools[p].nmem; m++) {
                     if (pools[p].pulled[m]) continue;
                     if (member_satisfies(&pools[p].mem[m], &U)) {
@@ -1256,7 +1287,7 @@ static void load_producer(const char *path_in, struct producer *p)
     snprintf(p->name, sizeof p->name, "%s", base ? base + 1 : path);
 
     int fd = open(path, O_RDONLY);
-    if (fd < 0) die("cannot open producer image (--use)");
+    if (fd < 0) die("cannot open a shareable image to bind");
     struct stat st;
     if (fstat(fd, &st) < 0) die("fstat producer");
     p->buf = malloc(st.st_size);
@@ -1861,10 +1892,10 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx,
         {
             char buf[256];
             snprintf(buf, sizeof(buf),
-                     "unresolved external symbol '%s' (no --use'd shareable "
+                     "unresolved external symbol '%s' (no bound shareable "
                      "exports it as a universal; if it is a C RTL entry point "
                      "it must be appended to DECC$SHR's symbol vector -- "
-                     "vms-61f; pass --allow-undefined to record it as a "
+                     "vms-61f; link with undefined symbols allowed to record it as a "
                      "deferred import)", nm);
             die(buf);
         }
@@ -2256,6 +2287,135 @@ static int defined_placed(struct obj *objs, const char *name)
  * stack and calls main() then exit(). All the multi-object merge / reloc / GOT /
  * ABS64 .vms$rel / cross-image import logic is shared verbatim — a real main()
  * C program links exactly like a library does. */
+/* --------------------------------------------------------------------------
+ * The link map (/MAP[=file], /BRIEF), rd vms-3cb1.
+ *
+ * Section titles, their order and which of them /BRIEF keeps follow the public
+ * OpenVMS Linker Utility Manual ("Image Map" chapter): Object Module Synopsis,
+ * Symbols By Name (left out by /BRIEF), Image Synopsis, Link Run Statistics.
+ * The columns are what this linker knows for each entry. Program Section
+ * Synopsis, /FULL and /CROSS_REFERENCE are not produced (the CLI front end
+ * refuses /FULL and /CROSS_REFERENCE).
+ * -------------------------------------------------------------------------- */
+struct map_sym { const char *name; uint64_t value; const char *module; };
+
+static int map_sym_cmp(const void *a, const void *b)
+{
+    return strcmp(((const struct map_sym *)a)->name, ((const struct map_sym *)b)->name);
+}
+
+static void map_title(FILE *f, const char *t)
+{
+    size_t n = strlen(t);
+    fprintf(f, "\n%*s+", 40, "");
+    for (size_t i = 0; i < n + 2; i++) fputc('-', f);
+    fprintf(f, "+\n%*s! %s !\n%*s+", 40, "", t, 40, "");
+    for (size_t i = 0; i < n + 2; i++) fputc('-', f);
+    fprintf(f, "+\n\n");
+}
+
+/* The module name of an input: the file name without directory or type, upper
+ * case (an EVAX object carries its own, passed as `own`). */
+static void map_module_name(const char *file, const char *own, char *out, size_t sz)
+{
+    const char *b = file;
+    if (own && *own) b = own;
+    else {
+        const char *paren = strrchr(file, '(');
+        if (paren) b = paren + 1;           /* library(member) */
+        else
+            for (const char *q = b; *q; q++) if (*q == ']' || *q == ':' || *q == '/') b = q + 1;
+    }
+    size_t i = 0;
+    for (; b[i] && b[i] != '.' && b[i] != ')' && b[i] != '/' && i + 1 < sz; i++)
+        out[i] = (char)toupper((unsigned char)b[i]);
+    out[i] = 0;
+}
+
+static FILE *map_begin(void)
+{
+    FILE *f = fopen(g_map_cmd->map, "w");
+    if (!f) {
+        fprintf(stderr, "%%LINK-F-OPENOUT, error opening %s as output\n", g_map_cmd->map);
+        exit(EXIT_FAILURE);
+    }
+    map_title(f, "Object Module Synopsis");
+    fprintf(f, "%-31s  %s\n", "Module Name", "File");
+    fprintf(f, "%-31s  %s\n", "-----------", "----");
+    return f;
+}
+
+static void map_module(FILE *f, const char *file, const char *own)
+{
+    char m[64];
+    map_module_name(file, own, m, sizeof m);
+    fprintf(f, "%-31s  %s\n", m, file);
+}
+
+static void map_finish(FILE *f, struct map_sym *sy, int nsy, int nmod,
+                       struct producer *ps, int np, const char *out,
+                       int is_shareable, int nuniv)
+{
+    for (int i = 0; i < np; i++) {
+        char m[64];
+        map_module_name(ps[i].name, NULL, m, sizeof m);
+        fprintf(f, "%-31s  %s (shareable image)\n", m, ps[i].name);
+    }
+    if (!g_map_cmd->map_brief) {
+        map_title(f, "Symbols By Name");
+        qsort(sy, (size_t)nsy, sizeof *sy, map_sym_cmp);
+        fprintf(f, "%-31s  %-18s  %s\n", "Symbol", "Value", "Defined By");
+        fprintf(f, "%-31s  %-18s  %s\n", "------", "-----", "----------");
+        for (int i = 0; i < nsy; i++)
+            fprintf(f, "%-31s  %016llX    %s\n", sy[i].name,
+                    (unsigned long long)sy[i].value, sy[i].module);
+    }
+    map_title(f, "Image Synopsis");
+    fprintf(f, "Image name:                     %s\n", out);
+    fprintf(f, "Image type:                     %s\n", is_shareable ? "SHAREABLE" : "EXECUTABLE");
+    fprintf(f, "Object modules linked:          %d\n", nmod);
+    fprintf(f, "Shareable images bound:         %d\n", np);
+    if (is_shareable)
+        fprintf(f, "Symbol vector entries:          %d\n", nuniv);
+    map_title(f, "Link Run Statistics");
+    fprintf(f, "Global symbols defined:         %d\n", nsy);
+    fprintf(f, "Map file:                       %s\n", g_map_cmd->map);
+    if (fclose(f) != 0) {
+        fprintf(stderr, "%%LINK-F-WRITEERR, error writing %s\n", g_map_cmd->map);
+        exit(EXIT_FAILURE);
+    }
+}
+
+/* ELF link: the objects are laid out; their globals have image addresses. */
+static void map_write_elf(struct obj *objs, int nobj, struct producer *ps, int np,
+                          const char *out, int is_exec, int nuniv)
+{
+    if (!g_map_cmd) return;
+    FILE *f = map_begin();
+    struct map_sym *sy = NULL; int nsy = 0, cap = 0;
+    for (int i = 0; i < nobj; i++) {
+        map_module(f, objs[i].objname ? objs[i].objname : "?", NULL);
+        for (int k = 0; k < objs[i].nsym; k++) {
+            Elf_Sym *s = &objs[i].sym[k];
+            int bind = ELF_ST_BIND(s->st_info);
+            if (s->st_shndx == SHN_UNDEF || (bind != STB_GLOBAL && bind != STB_WEAK)) continue;
+            const char *nm = objs[i].str + s->st_name;
+            if (!nm[0]) continue;
+            if (nsy == cap) {
+                cap = cap ? cap * 2 : 256;
+                sy = realloc(sy, (size_t)cap * sizeof *sy);
+                if (!sy) die("oom writing the map");
+            }
+            sy[nsy].name = nm;
+            sy[nsy].value = (s->st_shndx == SHN_ABS) ? s->st_value : placed_addr(&objs[i], s);
+            sy[nsy].module = objs[i].objname ? objs[i].objname : "?";
+            nsy++;
+        }
+    }
+    map_finish(f, sy, nsy, nobj, ps, np, out, !is_exec, nuniv);
+    free(sy);
+}
+
 static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuniv,
                            uint32_t gk, uint32_t gmaj, uint32_t gmin,
                            int allow_undef, struct producer *ps, int np,
@@ -2286,7 +2446,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         int oi, ki;
         exe_start = sym_lookup("_start", &oi, &ki);
         if (!exe_start && !sym_lookup("main", &oi, &ki))
-            die("--executable object set defines neither _start nor main()");
+            die("the executable's object set defines neither _start nor main()");
     }
     int use_crt0 = is_exec && !exe_start;   /* synthesize crt0 for a main() prog */
 
@@ -2408,7 +2568,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         if (exit_imp < 0) {
             int pidx; uint32_t svidx;
             if (!find_universal(ps, np, "exit", &pidx, &svidx))
-                die("--executable needs exit() from a --use producer (DECC$SHR)");
+                die("an executable needs exit() from a bound shareable image (DECC$SHR)");
             if (nimp >= imp_cap) {
                 imp_cap = imp_cap ? imp_cap * 2 : 32;
                 imp = realloc(imp, (size_t)imp_cap * sizeof *imp);
@@ -2969,7 +3129,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * at _start directly; main() programs enter at the synthesized crt0. */
     if (is_exec)
         eh->e_entry = exe_start
-            ? resolve_named(objs, nobj, "_start", "--executable: _start not placed")
+            ? resolve_named(objs, nobj, "_start", "executable: _start not placed")
             : crt0_va;
 
     /* One PT_LOAD. RWX when it carries a writable GOT/TLSDESC/.data/.bss (the
@@ -3011,6 +3171,8 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         ph[ni].p_align = 4;
         emit_netbsd_note(img + off_osnote);
     }
+
+    map_write_elf(objs, nobj, ps, np, out, is_exec, nuniv);   /* /MAP (rd vms-3cb1) */
 
     /* Copy each placed PROGBITS section (text/rodata/data/init_array) to its
      * vaddr. SHT_INIT_ARRAY's file-resident bytes are the pre-relocation
@@ -3325,7 +3487,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * tail-calls exit(ret) to flush stdio and terminate. (vms-ba1) */
     if (use_crt0) {
         uint64_t main_va = resolve_named(objs, nobj, "main",
-            "--executable object set defines no main()");
+            "the executable's object set defines no main()");
         if (exit_imp < 0) die("internal: exit import missing for crt0");
 #ifdef OVMX_LINK_ELF32
         /* elf32-vax crt0 (vms-099). Same contract as the x86_64/aarch64 stubs:
@@ -3596,7 +3758,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
     if (nstrong)
-        link_info("%%LINK-I-IMPORT, %d cross-image import%s bound to --use "
+        link_info("%%LINK-I-IMPORT, %d cross-image import%s bound to shareable "
                 "producer%s (%d PLT stub%s + import GOT; resolved at activation "
                 "via .vms$imp)\n",
                 nstrong, nstrong==1?"":"s", np==1?"":"s",
@@ -4055,7 +4217,7 @@ static void evax_add_ximport(struct evax_input *in, int ii,
         return;
     }
     (*n_ximport)++;
-    link_info("%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to --use "
+    link_info("%%LINK-I-IMPORT, EVAX cross-image import '%s' bound to shareable "
             "producer %s [sv#%u], IMGACT-filled at image-relative 0x%llx (%s)\n",
             r->sym, producers[pidx].name, svidx, (unsigned long long)site_va,
             r->type == EVAX_R_LINKAGE ? "LINKAGE quad[0]" : "data pointer");
@@ -4270,7 +4432,7 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
             if (allow_undef) {
                 (*deferred)++;
                 fprintf(stderr, "%%LINK-W-UNDEF, EVAX reference to undefined symbol "
-                        "'%s' left 0 (--allow-undefined)\n", r->sym);
+                        "'%s' left 0 (undefined symbols allowed)\n", r->sym);
                 return;   /* leave the store slot 0 (ELF weak-undef semantics) */
             }
             fprintf(stderr, "%%LINK-F-UNDEF, EVAX: undefined symbol '%s' referenced "
@@ -4558,6 +4720,33 @@ static void evax_dump_universals(struct evax_input *in, int nin)
         }
 }
 
+/* EVAX link: every psect is placed (sec_base); write the map. */
+static void map_write_evax(struct evax_input *in, int nin, struct producer *ps, int np,
+                           const char *out, int is_shareable, int nuniv)
+{
+    if (!g_map_cmd) return;
+    FILE *f = map_begin();
+    struct map_sym *sy = NULL; int nsy = 0, cap = 0;
+    for (int i = 0; i < nin; i++) {
+        map_module(f, in[i].name ? in[i].name : "?", in[i].obj.module);
+        for (int k = 0; k < in[i].obj.nsym; k++) {
+            const struct evax_symbol *s = &in[i].obj.sym[k];
+            if (!s->defined || !s->name[0]) continue;
+            if (nsy == cap) {
+                cap = cap ? cap * 2 : 256;
+                sy = realloc(sy, (size_t)cap * sizeof *sy);
+                if (!sy) die("oom writing the map");
+            }
+            sy[nsy].name = s->name;
+            sy[nsy].value = evax_sym_value_addr(in, i, s);
+            sy[nsy].module = in[i].obj.module[0] ? in[i].obj.module : in[i].name;
+            nsy++;
+        }
+    }
+    map_finish(f, sy, nsy, nin, ps, np, out, is_shareable, nuniv);
+    free(sy);
+}
+
 static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                              const char *transfer,
                              struct univ *uv, int nuniv,
@@ -4566,10 +4755,10 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                              struct producer *producers, int np, const char *out)
 {
     if (!is_shareable && !transfer)
-        die("the EVAX/Alpha image needs --transfer SYMBOL (the main transfer "
+        die("the EVAX/Alpha image needs a transfer SYMBOL (the main transfer "
             "address; crt0 __main for a GCC-port image)");
     if (is_shareable && nuniv == 0)
-        die("the EVAX/Alpha shareable needs --symbol-vector (declared universals)");
+        die("the EVAX/Alpha shareable needs a SYMBOL_VECTOR (declared universals)");
 
     /* vms-f1a: reject a STRONG-vs-STRONG cross-object multiple definition of a
      * universal/global BEFORE layout/resolution (mirror of the ELF sym_insert
@@ -4722,7 +4911,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
          * single entry is the --transfer symbol's descriptor address. */
         int di; const struct evax_symbol *ds;
         if (evax_find_sym(in, nin, transfer, &di, &ds) < 0)
-            die("--transfer symbol is not defined by any input object");
+            die("the transfer symbol is not defined by any input object");
         transfer_va = evax_sym_value_addr(in, di, ds);
 
         /* vms-43c: an image that links the LIB$INITIALIZE dispatcher (pulled
@@ -4735,7 +4924,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         if (evax_find_sym(in, nin, "LIB$INITIALIZE", &li_i, &li_s) == 0 && li_s->is_proc) {
             if (!g_evax_vbase)
                 die("LIB$INITIALIZE needs a P0 image (its longword entries cannot "
-                    "hold relocatable addresses; drop --base 0)");
+                    "hold relocatable addresses; link at a P0 base)");
             libinit_va = evax_sym_value_addr(in, li_i, li_s);
             xfer_count = 2;
         }
@@ -5008,6 +5197,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             /* NULL content == all zero, already zeroed by calloc. */
         }
 
+    map_write_evax(in, nin, producers, np, out, is_shareable, nuniv);   /* /MAP */
+
     /* Stamp .vms$xfer (executable) or .vms$sv (shareable). */
     if (!is_shareable) {
         struct ovmx_xfer_header xh;
@@ -5136,7 +5327,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     }
     if (n_ximport)
         link_info("%%LINK-I-IMPORT, %d EVAX cross-image import%s bound to "
-                "--use producer%s (.vms$imp at 0x%llx, resolved at activation)\n",
+                "shareable image%s (.vms$imp at 0x%llx, resolved at activation)\n",
                 n_ximport, n_ximport == 1 ? "" : "s", np == 1 ? "" : "s",
                 (unsigned long long)off_imp);
     if (nrel > 0)
@@ -5462,72 +5653,47 @@ static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
 }
 
 
-#define OVMX_LINK_C 1
-#include "vms_cli.c"   /* the VMS command syntax (vms-ce4) */
+#ifdef OVMX_LINK_IMAGE
+#include "link_cli.c"        /* LINK.EXE: the VMS LINK command (rd vms-3cb1) */
+#else
+#include "link_buildtool.c"  /* the host build tool's front end */
+#endif
 
-int main(int argc, char **argv)
+static int link_run(struct link_cmd *c)
 {
-    if (vms_syntax(argc, argv)) {     /* LINK/EXECUTABLE=x file,... /OPTIONS (vms-ce4) */
-        int nargc = 0;
-        argv = vms_translate(argc, argv, &nargc);
-        argc = nargc;
-    }
-    const char *out = NULL;
-    const char **ins = calloc((size_t)argc, sizeof *ins);  /* <= argc inputs */
-    int nin = 0;
+    const char *out = c->out;
+    const char **ins = c->ins;
+    int nin = c->nin;
     static struct univ uv[MAX_UNIV];   /* static (BSS): MAX_UNIV*sizeof(univ) is
                                         * ~1MB with the R1b decc$ vector — off the stack. */
     int nuniv = 0;
-    int shareable = 0, executable = 0, allow_undef = 0;
-    struct producer *producers = calloc((size_t)argc, sizeof *producers);
+    int shareable = c->shareable, executable = c->executable, allow_undef = c->allow_undef;
+    struct producer *producers = calloc((size_t)c->nuse + 1, sizeof *producers);
     int np = 0;
-    const char *transfer = NULL;   /* EVAX/Alpha main transfer symbol (vms-cbe) */
-    const char **libs = calloc((size_t)argc, sizeof *libs);  /* --library FILE (vms-4d0) */
-    int *lib_pos = calloc((size_t)argc, sizeof *lib_pos);
-    int nlibs = 0;
+    const char *transfer = c->transfer;   /* EVAX/Alpha main transfer symbol (vms-cbe) */
+    const char **libs = c->libs;
+    int *lib_pos = c->lib_pos;
+    int nlibs = c->nlibs;
     uint32_t gk = OVMX_GSMATCH_EQUAL, gmaj = 0, gmin = 0;
-    if (!ins || !producers || !libs || !lib_pos) die("oom parsing arguments");
+    if (!producers) die("oom loading shareable images");
     memset(uv, 0, sizeof uv);
+    g_map_cmd = c->map ? c : NULL;
 
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
-            out = argv[++i];
-        } else if (strcmp(argv[i], "--shareable") == 0) {
-            shareable = 1;
-        } else if (strcmp(argv[i], "--executable") == 0) {
-            executable = 1;
-        } else if (strcmp(argv[i], "--allow-undefined") == 0) {
-            allow_undef = 1;
-        } else if (strcmp(argv[i], "--use") == 0 && i + 1 < argc) {
-            load_producer(argv[++i], &producers[np++]);
-        } else if (strcmp(argv[i], "--symbol-vector") == 0 && i + 1 < argc) {
-            nuniv = parse_symbol_vector(argv[++i], uv);
-        } else if (strcmp(argv[i], "--gsmatch") == 0 && i + 1 < argc) {
-            parse_gsmatch(argv[++i], &gk, &gmaj, &gmin);
-        } else if (strcmp(argv[i], "--base") == 0 && i + 1 < argc) {
-            /* vms-035: link the EVAX/Alpha executable at a fixed P0 address. */
-            char *e = NULL;
-            unsigned long long b = strtoull(argv[++i], &e, 0);
-            if (!e || *e || (b & 0xffff) || b >= OVMX_P0_TOP)
-                die("--base must be 0 (relocatable) or a 64 KB-aligned P0 address below 0x40000000");
-            g_evax_vbase = b;
-            g_evax_base_set = 1;
-        } else if (strcmp(argv[i], "--library") == 0 && i + 1 < argc) {
-            lib_pos[nlibs] = nin;        /* plain inputs before it (link order) */
-            libs[nlibs++] = argv[++i];   /* EVAX object library: searched (vms-4d0) */
-        } else if (strcmp(argv[i], "--transfer") == 0 && i + 1 < argc) {
-            transfer = argv[++i];   /* EVAX/Alpha main transfer address (vms-cbe) */
-        } else if (argv[i][0] == '-') {
-            fprintf(stderr, "%%LINK-W-IGNORED, unknown option %s\n", argv[i]);
-        } else {
-            ins[nin++] = argv[i];
-        }
+    for (int i = 0; i < c->nuse; i++)
+        load_producer(c->uses[i], &producers[np++]);
+    if (c->symvec)
+        nuniv = parse_symbol_vector(c->symvec, uv);
+    if (c->gsmatch)
+        parse_gsmatch(c->gsmatch, &gk, &gmaj, &gmin);
+    if (c->base_set) {
+        /* vms-035: link the EVAX/Alpha executable at a fixed P0 address. */
+        if ((c->base & 0xffff) || c->base >= OVMX_P0_TOP)
+            die("the base must be 0 (relocatable) or a 64 KB-aligned P0 address below 0x40000000");
+        g_evax_vbase = c->base;
+        g_evax_base_set = 1;
     }
-    if (nin == 0) die("no input (usage: LINK.EXE --shareable "
-                  "--symbol-vector \"f=PROCEDURE\" --gsmatch LEQUAL,1,0 [--allow-undefined] "
-                  "-o X.EXE a.o [b.o | lib.a ...] "
-                  "| LINK.EXE --executable --use LIB$SHR.EXE -o PROG.EXE prog.o)");
-    if (!out) die("no -o output");
+    if (nin == 0) die("no input file");
+    if (!out) die("no image file named");
 
     /* ---- Format dispatch (bead vms-cbe). An EVAX (Alpha/VMS) object — first
      * record is an EMH, never ELF magic — takes the dedicated Alpha path; an ELF
@@ -5544,6 +5710,12 @@ int main(int argc, char **argv)
          * this path.) The ELF path falls through and does its single traced read
          * per input in load_obj — so classifying ins[0] above uses a header peek
          * (or, for an archive, a first-member peek), not a counted slurp (vms-cbe). */
+        if (c->nincl) {
+            /* rd vms-3cb1 follow-up: module selection from an EVAX library */
+            fprintf(stderr, "%%LINK-F-NOTSUPP, /INCLUDE: the EVAX/Alpha link does not "
+                    "select library modules by name\n");
+            exit(EXIT_FAILURE);
+        }
         struct evax_input *ein = NULL;
         int nein = 0, cap_ein = 0;
         int *ein_after = calloc((size_t)nin + 1, sizeof *ein_after);  /* objects loaded before input i */
@@ -5594,15 +5766,15 @@ int main(int argc, char **argv)
             return 0;
         }
         if (shareable && g_evax_base_set && g_evax_vbase)
-            die("--base applies to an executable; a shareable is placed by IMGACT");
+            die("a base address applies to an executable; a shareable is placed by IMGACT");
         if (!shareable && !g_evax_base_set)
             g_evax_vbase = OVMX_P0_DEFAULT_BASE;   /* executables live in P0 */
         if (shareable) {
             if (executable)
-                die("specify at most one of --shareable / --executable");
+                die("the image is either shareable or executable, not both");
             if (nuniv == 0)
-                die("the EVAX/Alpha shareable needs --symbol-vector "
-                    "(e.g. --symbol-vector \"FOO=PROCEDURE,BAR=DATA\")");
+                die("the EVAX/Alpha shareable needs a SYMBOL_VECTOR "
+                    "(e.g. SYMBOL_VECTOR=(FOO=PROCEDURE,BAR=DATA))");
             emit_evax_shareable(ein, nein, uv, nuniv, gk, gmaj, gmin,
                                 allow_undef, producers, np, out);
         } else {
@@ -5610,41 +5782,74 @@ int main(int argc, char **argv)
         }
         return 0;
     }
-    if (nlibs)
-        die("--library searches EVAX/Alpha object libraries only");
+    /* An ELF link searches an object library (.OLB) named as a library, as it
+     * searches one named among the inputs (resolve_olbs). */
+    for (int l = 0; l < nlibs; l++) {
+        if (!file_is_olb(libs[l]))
+            die("an ELF link searches .OLB object libraries only");
+    }
     /* ELF object set: fall through to emit_shareable. load_obj does the single
      * byte-exact RMS read per input; no slurp happened above. */
 
     if (shareable == executable)
-        die("specify exactly one of --shareable / --executable");
+        die("the image is either shareable or executable, not both");
 
     if (executable && np == 0)
-        die("--executable needs at least one --use producer image (DECC$SHR)");
+        die("an executable image binds at least one shareable image (DECC$SHR)");
     if (!executable && nuniv == 0)
-        die("a shareable image needs --symbol-vector");
+        die("a shareable image needs a SYMBOL_VECTOR");
 
     /* ---- One or more objects and/or whole `.a` archives ----
      * Inputs grow dynamically; an archive expands to all of its object members
-     * in-process (whole-archive, no `ld -r`). Both --shareable and --executable
+     * in-process (whole-archive, no `ld -r`). A shareable and an executable
      * ingest inputs identically and run the SAME emit path (emit_shareable with
      * is_exec); an executable additionally synthesizes crt0 + PT_INTERP. (vms-004,
      * vms-ba1) */
     struct obj *objs = NULL; int nobj = 0, cap = 0;
-    struct olb_pool *pools = calloc((size_t)nin, sizeof *pools);
+    struct olb_pool *pools = calloc((size_t)(nin + nlibs + c->nincl + 1), sizeof *pools);
     int npool = 0;
-    if (nin && !pools) die("oom tracking object libraries");
-    for (int i = 0; i < nin; i++) {
-        if (file_is_olb(ins[i]))
+    if (!pools) die("oom tracking object libraries");
+    for (int i = 0, l = 0; i <= nin; i++) {
+        for (; l < nlibs && lib_pos[l] == i; l++) {        /* libraries, in place */
+            pools[npool].search = 1;
+            load_olb_pool(libs[l], &pools[npool++]);
+        }
+        if (i == nin) break;
+        if (file_is_olb(ins[i])) {
+            pools[npool].search = 1;
             load_olb_pool(ins[i], &pools[npool++]);     /* selective (.OLB) */
-        else if (file_is_archive(ins[i]))
+        } else if (file_is_archive(ins[i]))
             load_archive(ins[i], &objs, &nobj, &cap);   /* whole-archive (.a) */
         else
             load_obj(ins[i], push_obj(&objs, &nobj, &cap));
     }
+    /* /INCLUDE=(module,...): those modules of the library are linked whether or
+     * not anything references them (Linker manual, /INCLUDE). A library named
+     * only with /INCLUDE is not otherwise searched. */
+    for (int k = 0; k < c->nincl; k++) {
+        int p = 0;
+        while (p < npool && strcmp(pools[p].path, c->incl[k].lib) != 0) p++;
+        if (p == npool) {
+            if (!file_is_olb(c->incl[k].lib))
+                die("/INCLUDE takes modules from an .OLB object library");
+            pools[npool].search = 0;
+            load_olb_pool(c->incl[k].lib, &pools[npool++]);
+        }
+        int m = olb_find_module(&pools[p], c->incl[k].module);
+        if (m < 0) {
+            fprintf(stderr, "%%LINK-F-NOSUCHMOD, module %s not found in library %s\n",
+                    c->incl[k].module, c->incl[k].lib);
+            exit(EXIT_FAILURE);
+        }
+        if (!pools[p].pulled[m]) {
+            *push_obj(&objs, &nobj, &cap) = pools[p].mem[m];
+            pools[p].pulled[m] = 1;
+        }
+    }
     /* Search object libraries after the mandatory objects/archives, pulling only
      * the members that resolve outstanding references (vms-ca9). The selective
      * search is rooted at both the root objects' undefined refs AND the
-     * --symbol-vector universals, so a /SHAREABLE link whose only roots are its
+     * SYMBOL_VECTOR universals, so a /SHAREABLE link whose only roots are its
      * symbol vector (the VMS way — no explicit TU list) pulls the defining
      * modules from the .OLB alone (design-vms-native-shareable-build.md C.4.1). */
     if (npool)

@@ -42,17 +42,13 @@
 ! ---- macros ----------------------------------------------------------------
 CFLAGS  = -x c -c -ffreestanding -fno-builtin
 INCS    = -I OVMX$INCLUDE:
-RTLIBS  = --use SYS$LIBRARY:DECC$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMS$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMSPROCESS$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMSFS$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMSLNM$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMSRMS$SHR.EXE
+! The shareable images the driver binds are named in RTLIBS.OPT
+! (file/SHAREABLE lines of an options file, as on OpenVMS).
 OBJS    = VMS_MATH.OBJ VMS_STRING.OBJ VMS_SNPRINTF.OBJ
 
 ! ---- final image: the driver linked against the runtime library ------------
 OVMXRT.EXE : OVMXRTDRV.OBJ OVMXRT.OLB
-	LNK --executable $(RTLIBS) -o $(MMS$TARGET) OVMXRTDRV.OBJ OVMXRT.OLB
+	LNK /EXECUTABLE=$(MMS$TARGET)/NOSYSLIB/NOSYSSHR OVMXRTDRV.OBJ,OVMXRT.OLB/LIBRARY,RTLIBS.OPT/OPTIONS
 
 ! ---- the runtime library: archive the three freestanding objects -----------
 OVMXRT.OLB : $(OBJS)

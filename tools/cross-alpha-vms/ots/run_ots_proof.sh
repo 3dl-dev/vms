@@ -78,7 +78,7 @@ docker run --rm \
             grep -oE "undefined symbol '"'"'[^'"'"']+'"'"'" $W/link.err | grep "OTS\$" | sort -u
             exit 4
         fi
-        BOUND=$(sed -n "s/.*, \([0-9]\+\) EVAX cross-image imports bound to --use producer.*/\1/p" $W/link.err | tail -1)
+        BOUND=$(sed -n "s/.*, \([0-9]\+\) EVAX cross-image imports bound to shareable producer.*/\1/p" $W/link.err | tail -1)
         echo "== PROOF: OTS\$ references bound as cross-image imports (total=${BOUND:-?}); zero OTS\$ deferred =="
         echo "== remaining deferred residual (must be EMPTY as of vms-838a) =="
         # Display-only breakdown; guard the grep so a NO-MATCH (the success case,

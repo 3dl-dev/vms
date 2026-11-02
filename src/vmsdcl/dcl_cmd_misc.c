@@ -3893,8 +3893,8 @@ int cmd_install(struct dcl_command *cmd)
  *   LINK[/EXECUTABLE[=spec]] [/NOINFORMATIONALS] file[/qual][,file...] ...
  *
  * The verb's argument tail goes to SYS$SYSTEM:LINK.EXE exactly as typed; the
- * linker reads the VMS command syntax itself (src/vmslink/vms_cli.c), as OpenVMS
- * LINK reads its own command line. (This was a wrapper around the host `cc`; it
+ * linker obtains it from the CLI and parses it with CLI$DCL_PARSE against its
+ * LINK command table (src/vmslink/link_cli.c, rd vms-3cb1). (This was a wrapper around the host `cc`; it
  * wrote an image no OVMX activator could run.) The qualifier table in
  * dcl_builtin.c keeps DCL's %DCL-W-IVQUAL for anything LINK.EXE does not know.
  */
@@ -3926,7 +3926,23 @@ int cmd_link(struct dcl_command *cmd)
         dcl_error("LINK", 2, "NOFILES", "no input files specified");
         return SS$_BADPARAM;
     }
-    return dcl_exec_utility("LINK.EXE", "LINK", argv, argc);
+    /* LINK.EXE takes its command from the CLI (rd vms-3cb1): the raw tail is
+     * recorded in the executive CLI context, which the image's PCB inherits and
+     * LIB$GET_FOREIGN reads back, as for a foreign command. With no executive
+     * (host tooling) the same tail travels in VMS_FOREIGN_CMD, LIB$GET_FOREIGN's
+     * no-executive channel. The words stay in the activation vector for the
+     * OpenVMX/Alpha image, whose C RTL hands them to main(). The context is
+     * cleared once the image is done so no later image reads a stale line. */
+    uint32_t cli_st = vms_kif_setcli(1, cmd->raw_tail);
+    int have_exec = (cli_st & 1);
+    if (!have_exec)
+        setenv("VMS_FOREIGN_CMD", cmd->raw_tail, 1);
+    int st = dcl_exec_utility("LINK.EXE", "LINK", argv, argc);
+    if (have_exec)
+        (void)vms_kif_setcli(0, "");
+    else
+        unsetenv("VMS_FOREIGN_CMD");
+    return st;
 }
 
 /* ================================================================== */

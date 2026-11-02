@@ -189,3 +189,15 @@ set_tests_properties(dcl-memfile PROPERTIES
     TIMEOUT 60
     LABELS "dcl;unit"
 )
+
+# SHOW DEVICE <prefix> matches past a node / allocation-class prefix, so a
+# cluster's SHOW DEVICE D lists MSCP-served $2$DUA2: / VAX1$DUA2: (rd vms-582).
+add_executable(test_show_device_prefix test_show_device_prefix.c)
+target_include_directories(test_show_device_prefix PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+)
+add_test(NAME dcl-show-device-prefix COMMAND test_show_device_prefix)
+set_tests_properties(dcl-show-device-prefix PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;unit"
+)

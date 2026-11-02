@@ -1,0 +1,93 @@
+ .TITLE RMWAIT
+; RMWAIT "<r><s><k><name>" -- rd vms-0db: leave a lock WAITING or CONVERTING
+; in a lock tree, then hibernate, so a remaster (op-0x12) or a departure
+; rebuild (op-0x08) has one to carry. Companion to RMHOLD.MAR
+; (../vms-50d-ra5-14cells-20261013/), which only ever holds GRANTED locks.
+;   r, s = lock mode digits (0 NL .. 5 EX); name = root resource name (system)
+;   k = G: root granted at r, then sub W0 granted at s     (the W0 blocker)
+;   k = C: root granted at s, then $ENQ CONVERT root to r  (a CONVERTING root)
+;   k = Q: a NEW root request at r                         (a WAITING root)
+;   k = U: root granted at r, then a NEW sub W0 at s       (a WAITING sub)
+;   k = V: root granted at r, W0 granted CR, then $ENQ CONVERT W0 to s
+;                                                          (a CONVERTING sub)
+; The last request of C, Q, U and V is $ENQ (not $ENQW) without LCK$M_NOQUEUE:
+; it queues and the program never waits on it. Every earlier request is $ENQW.
+; Ground truth (lkids, queues, modes) is read with SDA SHOW RESOURCE and
+; SHOW PROCESS/LOCKS on each node.
+ $LCKDEF
+ $SSDEF
+ .PSECT DAT,WRT,NOEXE,LONG
+RLKSB: .BLKB 24
+SLKSB: .BLKB 24
+CMDBUF: .BLKB 100
+CMDDSC: .WORD 100
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS CMDBUF
+CMDLEN: .WORD 0
+ .WORD 0
+RMODE: .LONG 0
+SMODE: .LONG 0
+RESDSC: .WORD 0
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS 0
+SUBNAM: .ASCII /W0/
+SUBDSC: .WORD 2
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS SUBNAM
+ .PSECT COD,EXE,NOWRT
+ .ENTRY RMWAIT,^M<R2,R3,R4,R5,R6>
+ PUSHAW CMDLEN
+ PUSHL #0
+ PUSHAB CMDDSC
+ CALLS #3,G^LIB$GET_FOREIGN
+ MOVZBL CMDBUF,R0
+ SUBL2 #^A/0/,R0
+ MOVL R0,RMODE
+ MOVZBL CMDBUF+1,R0
+ SUBL2 #^A/0/,R0
+ MOVL R0,SMODE
+ MOVZWL CMDLEN,R1
+ SUBL2 #3,R1
+ MOVW R1,RESDSC
+ MOVAB CMDBUF+3,RESDSC+4
+ MOVZBL CMDBUF+2,R6
+ CMPB R6,#^A/Q/
+ BNEQ 10$
+ $ENQ_S EFN=#2,LKMODE=RMODE,LKSB=RLKSB,-
+  FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK>,RESNAM=RESDSC
+ BRW 80$
+10$: CMPB R6,#^A/C/
+ BNEQ 20$
+ $ENQW_S EFN=#1,LKMODE=SMODE,LKSB=RLKSB,-
+  FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK>,RESNAM=RESDSC
+ BLBS R0,12$
+ BRW 90$
+12$: $ENQ_S EFN=#2,LKMODE=RMODE,LKSB=RLKSB,-
+  FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK!LCK$M_CONVERT>
+ BRW 80$
+20$: $ENQW_S EFN=#1,LKMODE=RMODE,LKSB=RLKSB,-
+  FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK>,RESNAM=RESDSC
+ BLBS R0,22$
+ BRW 90$
+22$: CMPB R6,#^A/U/
+ BNEQ 30$
+ $ENQ_S EFN=#2,LKMODE=SMODE,LKSB=SLKSB,RESNAM=SUBDSC,PARID=RLKSB+4
+ BRW 80$
+30$: CMPB R6,#^A/V/
+ BNEQ 40$
+ $ENQW_S EFN=#1,LKMODE=#LCK$K_CRMODE,LKSB=SLKSB,RESNAM=SUBDSC,-
+  PARID=RLKSB+4
+ BLBS R0,32$
+ BRW 90$
+32$: $ENQ_S EFN=#2,LKMODE=SMODE,LKSB=SLKSB,FLAGS=#LCK$M_CONVERT
+ BRW 80$
+40$: $ENQW_S EFN=#1,LKMODE=SMODE,LKSB=SLKSB,RESNAM=SUBDSC,-
+  PARID=RLKSB+4
+80$: BLBC R0,90$
+85$: $HIBER_S
+ BRB 85$
+90$: RET
+ .END RMWAIT

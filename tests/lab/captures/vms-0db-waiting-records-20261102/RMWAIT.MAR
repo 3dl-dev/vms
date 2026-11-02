@@ -10,6 +10,10 @@
 ;   k = U: root granted at r, then a NEW sub W0 at s       (a WAITING sub)
 ;   k = V: root granted at r, W0 granted CR, then $ENQ CONVERT W0 to s
 ;                                                          (a CONVERTING sub)
+;   k = A: root granted at r, sub A0 granted at s, then wait 120 s, then 3,000
+;          rounds of converting A0 to NL and back to s, then hibernate
+;          (DELAYED ACTIVITY: its root is granted before any waiter queues, and
+;          the activity that moves the tree starts after they have queued)
 ; The last request of C, Q, U and V is $ENQ (not $ENQW) without LCK$M_NOQUEUE:
 ; it queues and the program never waits on it. Every earlier request is $ENQW.
 ; Ground truth (lkids, queues, modes) is read with SDA SHOW RESOURCE and
@@ -37,6 +41,12 @@ SUBDSC: .WORD 2
  .BYTE 14
  .BYTE 1
  .ADDRESS SUBNAM
+ACTNAM: .ASCII /A0/
+ACTDSC: .WORD 2
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS ACTNAM
+DELAY: .F_FLOATING 120.0
  .PSECT COD,EXE,NOWRT
  .ENTRY RMWAIT,^M<R2,R3,R4,R5,R6>
  PUSHAW CMDLEN
@@ -72,7 +82,20 @@ SUBDSC: .WORD 2
   FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK>,RESNAM=RESDSC
  BLBS R0,22$
  BRW 90$
-22$: CMPB R6,#^A/U/
+22$: CMPB R6,#^A/A/
+ BNEQ 24$
+ $ENQW_S EFN=#1,LKMODE=SMODE,LKSB=SLKSB,RESNAM=ACTDSC,-
+  PARID=RLKSB+4
+ BLBS R0,23$
+ BRW 90$
+23$: PUSHAF DELAY
+ CALLS #1,G^LIB$WAIT
+ MOVL #3000,R5
+25$: $ENQW_S EFN=#1,LKMODE=#LCK$K_NLMODE,LKSB=SLKSB,FLAGS=#LCK$M_CONVERT
+ $ENQW_S EFN=#1,LKMODE=SMODE,LKSB=SLKSB,FLAGS=#LCK$M_CONVERT
+ SOBGTR R5,25$
+ BRW 85$
+24$: CMPB R6,#^A/U/
  BNEQ 30$
  $ENQ_S EFN=#2,LKMODE=SMODE,LKSB=SLKSB,RESNAM=SUBDSC,PARID=RLKSB+4
  BRW 80$

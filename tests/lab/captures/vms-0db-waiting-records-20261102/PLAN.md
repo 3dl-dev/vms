@@ -152,3 +152,21 @@ of each remaster or departure window), console logs with the SDA truth before an
 census in `tools/cluster/` that pins the rule with `--selftest` and runs as a ctest. Every
 `tools/cluster/*census*.py --selftest` is re-run, and only the populations these pcaps move are
 re-pinned, each one named.
+
+## Addendum 1, registered 2026-11-02T13:11Z, after run A0 and before arm A fires
+
+**Run A0 (tree WQRA) was not captured, and is not scored.** The capture was to start at step 6.
+WQRA moved from VAX1 to VAX2 during the setup itself, from VAX2's activity, before VAX1's holder
+was stopped. SDA on VAX3 before step 6 already named VAX2 (CSID 00010002) as the master of every
+VAX3 lock, including the converting root C and the waiting root Q. SDA on VAX2 then showed WQRA
+mastered locally, with C (CR -> EX) on its conversion queue, Q (EX) on its waiting queue, and V
+and U likewise on W0's queues. So a remaster did carry them, but whether C and Q were queued
+before that move cannot be known without frames. The console logs are kept as .
+
+**Arm A is re-run as tree WQRC, with the capture started before step 1.** Run A0 also showed
+that any new root request (VAX2's activity processes ) would queue behind Q. So
+ gains a kind , committed with this addendum: root at r and a sub A0 at s, both
+granted at once; then a 120 s wait; then 3,000 rounds of A0 NL <-> s. Its root is granted before
+C and Q queue, and its activity starts after they have. Step 3 becomes four
+ on VAX2, and step 4 (C, Q on VAX3) follows within the 120 s. The STOP of VAX1's
+holder in step 6 is kept. Every prediction is unchanged, with WQRC for WQRA.

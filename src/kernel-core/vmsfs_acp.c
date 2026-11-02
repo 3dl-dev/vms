@@ -4861,6 +4861,15 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                 status = acp_dir_find(vol, sc->dirhdr, sc->rw.blk, ap->name,
                                       ap->version, &file_fid, &rver);
                 if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
+                /* A by-name IO$_DELETE that also names a FID (FIB$W_FID with
+                 * FIB$W_DID, as RMS $CLOSE DLT sends) removes the entry only
+                 * if it still names that file (rd vms-b739). */
+                if (ap->func == VMS_ACP_FOP_DELETE && (ap->fid_num || ap->fid_nmx) &&
+                    (file_fid.fid_num != ap->fid_num || file_fid.fid_nmx != ap->fid_nmx ||
+                     (ap->fid_seq && file_fid.fid_seq != ap->fid_seq))) {
+                    ap->status = SS__NOSUCHFILE;
+                    goto free_sc;
+                }
                 file_fidnum = ods2_fid_number(&file_fid);
             }
 

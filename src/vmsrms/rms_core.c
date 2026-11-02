@@ -713,6 +713,7 @@ static uint32_t rms_acp_open_file(struct rms_acp_spec *s, int want_write,
     h->did_num = a.did_num; h->did_seq = a.did_seq;
     h->did_rvn = a.did_rvn; h->did_nmx = a.did_nmx;
     h->version = a.out_version;    /* resolved version (WRITE ACTIVE reports it) */
+    strncpy(h->ent_name, s->name, sizeof(h->ent_name) - 1);
     rms_acp_seed_handle(h, &a.attr);
     *hp = h;
     return SS$_NORMAL;
@@ -1023,6 +1024,9 @@ rms_file_t *rms_open_named_handle_kind_prot(const char *vms_spec, int want_write
                 h->fid_num = fop.fid_num; h->fid_seq = fop.fid_seq;
                 h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;
                 h->version = fop.out_version;   /* the version the ACP minted */
+                h->did_num = d_num; h->did_seq = d_seq;
+                h->did_rvn = d_rvn; h->did_nmx = d_nmx;
+                strncpy(h->ent_name, sp->name, sizeof(h->ent_name) - 1);
                 h->eof   = (uint64_t)(fop.new_efblk ? (fop.new_efblk - 1u) : 0) * 512u
                            + fop.new_ffbyte;
                 h->hiblk = fop.new_hiblk;
@@ -2662,6 +2666,8 @@ static uint32_t rms_impl_create(void *fab_ptr)
         h->fid_rvn = fop.fid_rvn; h->fid_nmx = fop.fid_nmx;
         h->did_num = fop.did_num; h->did_seq = fop.did_seq;
         h->did_rvn = fop.did_rvn; h->did_nmx = fop.did_nmx;
+        h->version = fop.out_version;
+        strncpy(h->ent_name, sp.name, sizeof(h->ent_name) - 1);
         h->eof   = (uint64_t)(fop.new_efblk ? (fop.new_efblk - 1u) : 0) * 512u
                    + fop.new_ffbyte;
         h->hiblk = fop.new_hiblk;
@@ -2920,17 +2926,34 @@ static uint32_t rms_impl_close(void *fab_ptr)
         if (!deleting)
             rms_close_record_lrl(h);           /* vms-b447: FAT$W_RSIZE */
         if (deleting) {
-            /* Release the window, then deallocate the file by FID. */
+            /* Release the window, then delete the file. By directory, name
+             * and version when the handle knows its entry, as $ERASE does:
+             * the entry goes with the file (rd vms-b739; a by-FID delete
+             * freed the header and left NAME;N dangling in the directory).
+             * The FID rides along so the ACP removes the entry only if it
+             * still names THIS file; otherwise (or with no entry known)
+             * the file is deleted by FID alone. */
             struct vms_acp_fileop_args fop;
+            uint32_t dst = 0;
             if (h->accessed) { vms_kif_acp_deaccess(h->chan); h->accessed = 0; }
             memset(&fop, 0, sizeof(fop));
             fop.chan      = h->chan;
             fop.func      = VMS_ACP_FOP_DELETE;
             fop.modifiers = VMS_ACP_M_DELETE;
-            fop.fidmode   = 1;
             fop.fid_num   = h->fid_num; fop.fid_seq = h->fid_seq;
             fop.fid_rvn   = h->fid_rvn; fop.fid_nmx = h->fid_nmx;
-            (void)vms_kif_acp_fileop(&fop);
+            if (h->ent_name[0] != '\0' && h->version != 0) {
+                fop.did_num = h->did_num; fop.did_seq = h->did_seq;
+                fop.did_rvn = h->did_rvn; fop.did_nmx = h->did_nmx;
+                fop.version = h->version;
+                strncpy(fop.name, h->ent_name, VMS_ACP_NAME_SIZE - 1);
+                dst = vms_kif_acp_fileop(&fop);
+            }
+            if (!$VMS_STATUS_SUCCESS(dst)) {
+                fop.fidmode = 1;
+                fop.version = 0; fop.name[0] = '\0';
+                (void)vms_kif_acp_fileop(&fop);
+            }
         }
         rms_acp_close_handle(h);               /* deaccess (if any) + dassgn + free */
         fab->_rms_file = NULL;

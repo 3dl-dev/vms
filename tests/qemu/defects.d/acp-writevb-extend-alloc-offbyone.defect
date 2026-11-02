@@ -32,7 +32,11 @@ defect_apply() {
         # from the corrupted on-disk map) reads the wrong block. After the
         # substitution the anchor text carries the NEGCTL marker, so a second
         # application matches nothing -- the no-op the idempotency selftest requires.
-        sed -i 's|^        return ODS2_OK;                     /\* a no-op \*/$|        return ODS2_OK;                     /* a no-op (NEGCTL) */\n    lbn += 1u; /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file"
+        # The run's start is copied into cur_lbn when it is declared (the map
+        # encoder writes from cur_lbn since rd vms-465's format-2/3 rewrite), so
+        # the defect moves both: a bump of lbn alone only skipped the merge and
+        # the extent was still recorded at the right LBN.
+        sed -i 's|^        return ODS2_OK;                     /\* a no-op \*/$|        return ODS2_OK;                     /* a no-op (NEGCTL) */\n    lbn += 1u; cur_lbn = lbn; /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file"
 
     :
 }

@@ -163,6 +163,7 @@
 #define VMS_PROC_T_INTERACTIVE  1u  /* job root with a terminal (login) */
 #define VMS_PROC_T_SUBPROCESS   2u  /* belongs to a parent's job (SPAWN) */
 #define VMS_PROC_T_BATCH        3u  /* batch job root (reserved -- no engine yet) */
+#define VMS_PROC_T_NETWORK      4u  /* a network object's server process ($CREPRC PRC$M_NETWRK) and its job */
 
 /* ================================================================
  * Argument structs -- byte-identical to src/kernel/vms_ioctl.h. The shared
@@ -383,6 +384,7 @@ struct vms_getcli_args {
 #define VMS_CREPRC_PCB_DETACHED   1u
 #define VMS_CREPRC_PCB_CONTINUE   2u   /* DCL's image task: the SAME VMS process (rd vms-e50) */
 #define VMS_CREPRC_PCB_F_LOGIN    0x100u
+#define VMS_CREPRC_PCB_F_NETWORK  0x400u   /* detached: PRC$M_NETWRK, a network object's server (JPI$K_NETWORK) */
 #define VMS_CREPRC_PCB_F_IDENTITY 0x200u
 #define VMS_CREPRC_PCB_KIND(f)    ((f) & 0xFFu)
 struct vms_creprc_pcb_args {

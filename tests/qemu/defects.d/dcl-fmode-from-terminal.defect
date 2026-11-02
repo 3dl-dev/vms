@@ -16,9 +16,10 @@ a detached process's F$MODE() is OTHER
 EOF2
                       ;;
         knock_on_fail) cat <<'EOF2'
+a network process's F$MODE() is NETWORK
 EOF2
                       ;;
-        knock_on_why)  echo "";;
+        knock_on_why)  echo "The network process's DCL is fed from a pipe too, so the restored terminal guess calls it BATCH as well: the same mutation, read by a third process.";;
         esac
 
 }

@@ -607,10 +607,12 @@ static int pscan_crit_match(const struct vms_procinfo *info, const struct pscan_
     case PSCAN$_UIC:      return pscan_num_match(info->uic, c);
     case PSCAN$_MODE:
         return pscan_num_match(info->proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                             : info->proc_type == VMS_PROC_T_NETWORK ? JPI$K_NETWORK
                              : info->proc_type == VMS_PROC_T_OTHER ? JPI$K_OTHER
                              : JPI$K_INTERACTIVE, c);
     case PSCAN$_JOBTYPE:
         return pscan_num_match(info->proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                             : info->proc_type == VMS_PROC_T_NETWORK ? JPI$K_NETWORK
                              : info->terminal[0] ? JPI$K_LOCAL : JPI$K_DETACHED, c);
     case PSCAN$_PRI:
     case PSCAN$_PRIB:
@@ -851,6 +853,7 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                 /* An interactive job's processes (its SPAWNed subprocesses
                  * too) are INTERACTIVE; batch BATCH; a detached process OTHER. */
                 jpi_put_long(item, info.proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                                 : info.proc_type == VMS_PROC_T_NETWORK ? JPI$K_NETWORK
                                  : info.proc_type == VMS_PROC_T_OTHER ? JPI$K_OTHER
                                  : JPI$K_INTERACTIVE);
                 break;
@@ -858,6 +861,7 @@ static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                 /* A job on a terminal is LOCAL (OVMX's terminals are local
                  * lines); one without a terminal is DETACHED, or BATCH. */
                 jpi_put_long(item, info.proc_type == VMS_PROC_T_BATCH ? JPI$K_BATCH
+                                 : info.proc_type == VMS_PROC_T_NETWORK ? JPI$K_NETWORK
                                  : info.terminal[0] ? JPI$K_LOCAL : JPI$K_DETACHED);
                 break;
 
@@ -2109,6 +2113,10 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             uint32_t pflags = detached ? VMS_CREPRC_PCB_DETACHED : VMS_CREPRC_PCB_SUBPROCESS;
             if (loginout)
                 pflags |= VMS_CREPRC_PCB_F_LOGIN;
+            /* PRC$M_NETWRK: a network object's server process (NETACP creates
+             * FAL, MAIL, ...): JPI$_MODE / F$MODE() say NETWORK. */
+            if (detached && (stsflg & PRC$M_NETWRK))
+                pflags |= VMS_CREPRC_PCB_F_NETWORK;
             if (!detached && (uic != 0 || prvadr != NULL) && child_username[0])
                 pflags |= VMS_CREPRC_PCB_F_IDENTITY;
             go[0] = vms_kif_creprc_pcb(cpid, pflags,

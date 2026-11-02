@@ -1,0 +1,31 @@
+# creprc-netwrk-not-classified -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$CREPRC PRC\$M_NETWRK: the executive classifies a network object's server process NETWORK (JPI\$_MODE, JPI\$_JOBTYPE, F\$MODE)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_dcl_fmode";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_creprc_pcb() still accepts VMS_CREPRC_PCB_F_NETWORK and creates the row, but the mutation drops the 'np->network = 1;' that records it, so proc_fill_info() classifies the process by its missing terminal -- OTHER, DETACHED -- as before the flag existed. Unique statement; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+a PRC$M_NETWRK process's JPI$_MODE is NETWORK
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+a PRC$M_NETWRK process's JPI$_JOBTYPE is NETWORK
+a network process's F$MODE() is NETWORK
+EOF2
+                      ;;
+        knock_on_why)  echo "One unrecorded flag, read three ways: JPI\$_JOBTYPE comes from the same proc_type as JPI\$_MODE, and F\$MODE() in the network process's DCL is JPI\$_MODE read from inside it.";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one network-flag store, in vms_ioctl_creprc_pcb().
+        sed -i 's#            np->network = 1;#            { } /* NEGCTL creprc-netwrk-not-classified */#' "$_file"
+    :
+}

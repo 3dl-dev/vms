@@ -700,6 +700,7 @@ struct vms_proc {
 	uint64_t            perm_privs;       /* permanent (authorized) privileges */
 	uint32_t            subst_uid;      /* substrate uid the executive gave it, 0 = none (vms-ac48) */
 	uint64_t            image_privs;      /* the running installed image's (vms-bdc1) */
+	uint8_t             network;          /* $CREPRC PRC$M_NETWRK: a network object's server process (F$MODE NETWORK) */
 	uint8_t             login_images;     /* rd vms-a2c: image activations in which SETIDENT is allowed (a login process: 2 at creation) */
 	exec_lock_t         mode_lock;        /* guards current_mode/privs/image_* */
 

@@ -2635,8 +2635,11 @@ PYEOF3
     # GCC's source and build trees, 724 objects, their libraries, cc1 twice over
     export OVMX_ALPHA_DISK_MB="${CC1B_DISK_MB:-1536}"
     export BOOT_MEM_MB="${CC1B_MEM_MB:-2048}"
-    # this proof runs no JOINT_E2E: the P0 claim is read off the driver's own seam
-    export P0_SEAM_IMAGE=XGCC
+    # this proof runs no JOINT_E2E: the P0 claim is read off the toolchain's own
+    # seams -- XGCC (a C compile), GXX (a C++ compile, the link) or the built
+    # CC1. A link boot whose objects were all FOUND runs only GXX and CC1, so
+    # XGCC alone never matched and the gate died before assert_cc1b (rd vms-465).
+    export P0_SEAM_IMAGE='(XGCC|GXX|CC1)'
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     BOOT_TIMEOUT="${CC1B_BOOT_TIMEOUT:-172800}"; DOCKER_TIMEOUT=$((BOOT_TIMEOUT + 300))

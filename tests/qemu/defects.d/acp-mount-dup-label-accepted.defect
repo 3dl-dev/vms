@@ -1,0 +1,47 @@
+# acp-mount-dup-label-accepted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP \$MOUNT refuses a second volume of an already-mounted label (VMS %MOUNT-F-VOLALRMNT, returned as SS\$_DUPLNAM; the label is the volume's F11B\$<kind><label> lock namespace), rd vms-3ea";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_volalrmnt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_acp_mount() stops asking whether a volume of the same label is already in the mount table: acp_vol_find_label_locked() is replaced by a constant NULL at both its call sites (before the standing lock, and the publish-time race re-check), so \$MOUNT of VDA600: -- a second unit carrying the label OVMXSEARCH while VDA200: has it mounted -- SUCCEEDS and records a second volume behind the same F11B\$v/F11B\$s lock names. Every same-unit, different-label and free-label assertion stays green (none of them ever has two units of one label), so only the assertions that put two such units in play can tell.";;
+        require_fail) cat <<'EOF'
+$MOUNT of a SECOND unit carrying the mounted label OVMXSEARCH is refused (VOLALRMNT, SS$_DUPLNAM)
+and now the FIRST unit is the one refused while the second holds the label
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the refused second unit was not recorded ($DISMOUNT is SS$_NOSUCHDEV)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME ONE ROOT, OBSERVED A SECOND TIME. With the label check gone, the
+second unit's $MOUNT succeeds and RECORDS it; the very next assertion checks
+that the refusal recorded nothing by $DISMOUNTing the second unit and expecting
+SS$_NOSUCHDEV -- it is now in the table, so that $DISMOUNT returns SS$_NORMAL
+instead. One deleted check explains exactly these reds and no others: the
+idempotent same-unit remount, the different-label mount, the free-label mount
+and the cleanup never have two units of one label in the table at once.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        # ANCHORED to the call `acp_vol_find_label_locked(vol->volname)`, which
+        # occurs exactly twice in vmsfs_acp.c (the pre-lock check and the
+        # publish-time race re-check; the function's own definition has a
+        # different signature, `acp_vol_find_label_locked(const char *volname)`,
+        # so it is not matched). Both become a constant NULL, so no second
+        # volume of a mounted label is ever refused on this node. After
+        # substitution the call text is gone, so a second apply matches nothing
+        # (the no-op selftest requires).
+        sed -i 's|acp_vol_find_label_locked(vol->volname)|((struct vms_acp_volume *)0) /* NEGCTL acp-mount-dup-label-accepted */|g' "$_file"
+    :
+}

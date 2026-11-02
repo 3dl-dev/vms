@@ -1039,6 +1039,8 @@ static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx,
 					     struct vms_dlm_dir_local *out);
 static uint32_t dlm_arm_eng_dir_claim_self(void *ctx,
 					   const struct vms_dlm_dir_ask *q);
+static uint32_t dlm_arm_eng_dir_release_self(void *ctx,
+					     const struct vms_dlm_dir_ask *q);
 /* Defined with the fork-thread half it queues work for (rd vms-28bd). */
 static void dlm_arm_grant_advanced(void *ctx,
 				   const struct vms_dlm_grant_advance *g);
@@ -1062,6 +1064,7 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 	 * mean "no system masters it". */
 	d->eng_ops.dir_local_lookup = dlm_arm_eng_dir_local_lookup;
 	d->eng_ops.dir_claim_self   = dlm_arm_eng_dir_claim_self;
+	d->eng_ops.dir_release_self = dlm_arm_eng_dir_release_self;
 	/* rd vms-28bd: a LOCAL release that advances a cross-node queue. */
 	d->eng_ops.grant_advanced   = dlm_arm_grant_advanced;
 	d->eng_ops.ctx            = d;
@@ -1248,6 +1251,32 @@ static uint32_t dlm_arm_eng_dir_claim_self(void *ctx,
 	rc = vms_dlm_dir_claim_self(&d->dir, &id, (vms_csid_t)me);
 	exec_unlock(&d->dir_lock);
 	return rc == 0 ? (uint32_t)SS__NORMAL : (uint32_t)SS__INSFMEM;
+}
+
+/* THIS NODE NO LONGER MASTERS IT (rd vms-3ea) -- drop its own claim. Only an
+ * entry naming THIS node goes (vms_dlm_dir_remove matches the master), so an
+ * entry another system registered is never taken away by this call. */
+static uint32_t dlm_arm_eng_dir_release_self(void *ctx,
+					     const struct vms_dlm_dir_ask *q)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+	struct vms_dlm_res_ident id;
+	uint32_t me;
+	int rc;
+
+	if (d == NULL || q == NULL)
+		return SS__BADPARAM;
+	memset(&id, 0, sizeof(id));
+	if (dlm_arm_ask_to_ident(q, &id) != 0)
+		return SS__BADPARAM;
+	me = vms_lock_dlm_local_csid();
+	if (me == 0u)
+		return SS__UNSUPPORTED;
+
+	exec_lock(&d->dir_lock);
+	rc = vms_dlm_dir_remove(&d->dir, &id, (vms_csid_t)me);
+	exec_unlock(&d->dir_lock);
+	return rc == 0 ? (uint32_t)SS__NORMAL : (uint32_t)SS__IVLOCKID;
 }
 
 /* ==========================================================================
@@ -2066,8 +2095,9 @@ static int dlm_arm_handle_reply(struct vms_dlm_scs *d,
  *     lets the next asker become a second master too.
  * Both are counted and said once on the console.
  *
- * Only for a sender that is NOT this implementation: between OVMX nodes the
- * engine's own all-OVMX routing owns the directory (vms-3e3).
+ * Between OVMX nodes the engine's master path still serves what this node
+ * masters (vms-3e3); the directory answers an OVMX member only where the master
+ * path cannot -- a name nobody here holds (rd vms-3ea, dlm_arm_dir_takes_ours).
  * ========================================================================== */
 
 /*
@@ -2315,9 +2345,43 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 }
 
 /*
- * Directory traffic from a real VMS system. Returns 0 when handled (with or
- * without an answer staged), -1 when the message is not directory traffic or
- * is refused -- the caller then falls through to RULE C exactly as before.
+ * AN OVMX MEMBER'S DIRECTORY TRAFFIC THAT ONLY THE DIRECTORY CAN ANSWER (rd
+ * vms-3ea). Between OVMX members the engine's master path serves a request
+ * for a name this node masters, and that stays as it was. What it cannot do
+ * is p. 6-31 outcome 3: a ROOT lookup for a name this node's vector directs
+ * here, that this node neither masters nor holds. Served as master, the
+ * engine "masters on first use" a resource nobody here holds -- a resource
+ * no system holds has no master, and the requester is the one that masters
+ * it. Measured on the 2-node e2e: node A, holding nothing on F11B$vOVMXDATA
+ * after its DISMOUNT, granted node B's NL lock as master (grants sent 2),
+ * so B's MOUNT read A's long-gone volume as still mounted.
+ *
+ * So that one case gets the directory's answer, the same table and the same
+ * grounded builder a VMS system gets: "you master it" recorded under the
+ * asker, or the master the table holds. A removal from an OVMX master (the
+ * only member that can have been told "you master it" is now one) is that
+ * entry going. Everything else falls through to the master path unchanged.
+ * An unbuilt vector decides nothing here.
+ */
+static int dlm_arm_dir_takes_ours(struct vms_dlm_scs *d,
+				  const struct dlm_scs_request *req,
+				  const struct vms_dlm_res_ident *id)
+{
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_REMOVE)
+		return 1;
+	if (req->opcode != (uint8_t)VMS_DLM_WIREOP_ENQ)
+		return 0;
+	if (d->cl == NULL || !d->cl->club.ldwv.valid ||
+	    !dlm_arm_dir_is_ours(d, id->hash, 1))
+		return 0;
+	return !dlm_arm_dir_name_mastered(id) && !dlm_arm_dir_name_held(id);
+}
+
+/*
+ * Directory traffic from a real VMS system -- and the one OVMX case above.
+ * Returns 0 when handled (with or without an answer staged), -1 when the
+ * message is not directory traffic or is refused -- the caller then falls
+ * through to RULE C exactly as before.
  */
 static int dlm_arm_directory(struct vms_dlm_scs *d,
 			     const struct dlm_scs_request *req,
@@ -2325,11 +2389,13 @@ static int dlm_arm_directory(struct vms_dlm_scs *d,
 {
 	struct vms_dlm_res_ident id;
 
-	if (req->peer_is_ours || req->from_csid == 0u ||
+	if (req->from_csid == 0u ||
 	    req->category != (uint8_t)VMS_DLM_CAT_REQUEST)
 		return -1;
 	if (vms_dlm_res_ident_parse_body(req->body, req->len, &id) !=
 	    VMS_CODEC_OK)
+		return -1;
+	if (req->peer_is_ours && !dlm_arm_dir_takes_ours(d, req, &id))
 		return -1;
 	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_ENQ ||
 	    req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR)

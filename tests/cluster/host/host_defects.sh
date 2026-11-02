@@ -759,6 +759,9 @@ VAX2's answer is built
 VAX2's answer is consumed
 and the end-of-records follows
 this node's $ENQ at CR goes to the VAX and is granted
+while this node holds a lock, the directory answers THIS NODE MASTERS IT
+*** and its own directory entry for the name is dropped ***
+  answered: this node masters it
 EOF
                       ;;
         esac;;
@@ -1517,6 +1520,7 @@ EOF
         why)          echo "dlm_dir_remove_fill() never fills a removal, so a freed mastered resource leaves its directory entry behind. That is lab DC1b: VAX1 kept naming OVMXA as master of F11B\$sOVMXSYS, sent OVMXB there with an 0xf8, and OVMXA had nothing to serve.";;
         require_fail) hd_lines <<'EOF'
 *** freeing the mastered resource posts something ***
+*** and tells the directory to drop B's entry ***
 EOF
                       ;;
         esac;;
@@ -3185,10 +3189,10 @@ EOF
         targets)      echo "kernel-core/vms_lock.c";;
         suites_red)   echo "test_dlm_adopt";;
         isolation)    echo "isolated";;
-        why)          echo "vms_lock_dlm_adopt_abort()'s 'root->master_csid = prev;' restore is dropped. The release half still runs -- every lock the adoption installed really goes -- but the root resource block keeps naming THIS node as the tree's master. The executive then asserts mastery of a tree it holds nothing in, which is exactly the fabricated-mastery shape that made a real VAX install OVMX as master of resources it did not master.";;
+        why)          echo "vms_lock_dlm_adopt_abort()'s 'root->master_csid = prev;' restore is dropped. The release half still runs -- every lock the adoption installed really goes -- but the root resource block keeps naming THIS node as the tree's master. The executive then asserts mastery of a tree it holds nothing in, which is exactly the fabricated-mastery shape that made a real VAX install OVMX as master of resources it did not master. Since rd vms-3ea an IDLE root forgets its master in resource_release anyway, so the defect shows only on a root still referenced after the undo (test_dlm_adopt 8b: a preserved sub-resource holds it).";;
         require_fail) hd_lines <<'EOF'
-and mastery of the tree went back where it was
-this node no longer claims to master it
+*** a still-referenced root's mastery went back where it was ***
+*** and this node does not claim a tree it holds nothing in ***
 EOF
                       ;;
         esac;;

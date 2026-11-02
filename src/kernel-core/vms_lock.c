@@ -1209,6 +1209,44 @@ static int dlm_dir_remove_fill(const struct vms_lock_resource *res,
     return 1;
 }
 
+/*
+ * rd vms-3ea: THE DIRECTORY-NODE TWIN OF THE REMOVAL ABOVE. When an idle root
+ * resource was mastered HERE, any claim of it in this node's own table
+ * (dir_claim_self, at first use) must go -- nothing goes on the wire for it --
+ * because, left behind, it answers the
+ * next system's lookup "this node masters it", and the engine masters a
+ * resource nobody here holds. Same facts as dlm_dir_remove_fill, read off the
+ * block before it is freed. Caller holds vms_res_hash_lock; the op takes only
+ * its own leaf lock.
+ */
+static void dlm_dir_release_self(const struct vms_lock_resource *res)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    struct vms_dlm_dir_ask q;
+
+    if (res->master_csid == 0 || res->master_csid != vms_local_csid)
+        return;
+    if (res->name_len == 0u || res->parent != NULL)
+        return;                 /* only a ROOT resource is ever claimed */
+    if (ops.dir_release_self == NULL)
+        return;
+    /*
+     * NOT gated on re-resolving the directory. The claim was made under the
+     * value the name routed by THEN; a peer's frame may since have replaced it
+     * (dir_hash_store's "the function was wrong" path), and the new value can
+     * direct elsewhere -- which left the claim behind, measured. The table
+     * removes only an entry naming THIS node, so asking unconditionally can
+     * take nothing away from anybody else.
+     */
+    memset(&q, 0, sizeof(q));
+    q.name = res->name;
+    q.name_len = res->name_len;
+    q.group = res->res_group;
+    q.mode = res->res_mode;
+    q.hash = res->hash_known ? res->dir_hash : 0u;
+    (void)ops.dir_release_self(ops.ctx, &q);
+}
+
 static void resource_release(struct vms_lock_resource *res)
 {
     int i, has_valblk = 0, dir_remove = 0;
@@ -1245,9 +1283,26 @@ static void resource_release(struct vms_lock_resource *res)
          * database grow without bound for a process that locks many distinct
          * names.
          */
+        /*
+         * rd vms-3ea: NOBODY HOLDS IT, SO NOBODY MASTERS IT (Davis p. 6-31:
+         * the master's RSB goes with the last lock, and with it the directory
+         * entry). That is true whether or not this block is kept below for
+         * its value block or a learned hash -- what is kept is DATA about the
+         * name, never a claim about who masters it. So the directory is told
+         * (or this node's own entry dropped) and the mastery forgotten here,
+         * for every idle block; the next $ENQ resolves the master afresh.
+         * Measured: a block kept with its master made node A, which held
+         * nothing, grant node B's next request for its volume label.
+         */
+        if (res->master_csid != 0) {
+            dir_remove = dlm_dir_remove_fill(res, &rm);
+            dlm_dir_release_self(res);
+            res->master_csid = 0;
+            res->dir_told_csid = 0;
+            res->dir_valid = 0;
+        }
         if (!has_valblk && !(res->hash_known && !res->hash_computed)) {
             parent = res->parent;
-            dir_remove = dlm_dir_remove_fill(res, &rm);
             exec_hash_del(&res->hash_node);
             vms_res_blocks--;
             resource_free(res);
@@ -1459,8 +1514,17 @@ static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash,
 {
     if (res->hash_known) {
         if (res->dir_hash == dir_hash) {
-            if (!computed)
-                res->hash_computed = 0;   /* now also confirmed by the wire */
+            /*
+             * The wire AGREES with the value already held. Nothing changes --
+             * in particular a COMPUTED value stays computed (rd vms-3ea). It
+             * is still re-derivable from the identity, so it is still no
+             * reason to keep an idle block (resource_release): flipping it to
+             * "learned" here made every resource a peer had echoed back to us
+             * immortal, and the immortal block kept its MASTER, so a later
+             * $ENQ went to a master that held nothing -- a resource no system
+             * holds has no master (Davis p. 6-31) -- and node B's MOUNT read
+             * node A's long-gone volume as still mounted.
+             */
             return SS__NORMAL;
         }
         if (computed)
@@ -6861,15 +6925,20 @@ uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid)
  * never block the XQP, another writer, or another cluster node -- deadlock-free
  * and cluster-safe by construction. Released by vms_lock_acp_vol_release at
  * $DISMOUNT (or on the holder's rundown). Returns the executive status; on
- * SS$_NORMAL *lkid_out is the standing lock's handle for later registration.
+ * SS$_NORMAL *lkid_out is the standing lock's handle for later registration,
+ * and *remote_out (may be NULL) is 1 when the granted lock is a proxy -- the
+ * resource is mastered by ANOTHER member, which therefore already holds it
+ * (rd vms-3ea: $MOUNT's same-label check reads this).
  */
 uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
-                                   uint32_t *lkid_out)
+                                   uint32_t *lkid_out, int *remote_out)
 {
     struct vms_enq_args a;
 
     if (lkid_out)
         *lkid_out = 0;
+    if (remote_out)
+        *remote_out = 0;
     memset(&a, 0, sizeof(a));
     a.lkmode = LCK_K_NLMODE;    /* NL: a presence marker, holds nothing exclusive */
     a.flags  = LCK_M_SYNC;      /* $ENQW; an NL request grants immediately */
@@ -6881,6 +6950,21 @@ uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
         ;
     if (a.status == SS__NORMAL && lkid_out)
         *lkid_out = a.lkid;
+    /*
+     * rd vms-3ea: WHO MASTERS IT. A granted lock that is a PROXY (FC-P4.4)
+     * means another member already holds a lock on this resource -- the
+     * directory named that member as master because the resource exists there
+     * -- so another member has a volume of this label mounted. Read off the
+     * lock block the engine itself built; nothing is asked of the wire.
+     */
+    if (a.status == SS__NORMAL && remote_out) {
+        struct vms_lock_entry *lk = lock_find_by_id(a.lkid);
+
+        if (lk) {
+            *remote_out = lk->proxy ? 1 : 0;
+            lock_put(lk);
+        }
+    }
     return a.status;
 }
 

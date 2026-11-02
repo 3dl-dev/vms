@@ -3145,6 +3145,16 @@ int cmd_mount(struct dcl_command *cmd)
                   "device already mounted - _%s", dev_name);
         return SS$_DEVMOUNT;
     }
+    if (mst == SS$_DUPLNAM) {
+        /* rd vms-3ea: the executive found ANOTHER volume of this label already
+         * mounted -- on this node, or (for a local disk) on another cluster
+         * member. VMS's MOUNT says so in its own words; SS$_DUPLNAM is the
+         * grounded status the ACP carries it in (vmsfs_acp.c ACP_SS_VOLALRMNT). */
+        vms_kif_dalloc(dev_name);
+        dcl_error("MOUNT", 4, "VOLALRMNT",
+                  "another volume of same label already mounted");
+        return mst;
+    }
     if (!(mst & 1)) {
         vms_kif_dalloc(dev_name);
         dcl_error("OVMX", 4, "MOUNTFAIL",

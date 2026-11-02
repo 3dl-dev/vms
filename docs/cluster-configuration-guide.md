@@ -100,6 +100,21 @@ report the other as a `MEMBER`.
    the join to be refused outright (the lab documents this as `%PEA0, Remote
    System Conflicts with Known System`).
 
+   **Give each node's system disk its own volume label, too.** The ODS-2
+   label is the Files-11 cluster lock namespace (a volume's locks are named
+   `F11B$<kind><label>`), so two members whose *different* disks carry one
+   label serialize unrelated file-system writes against each other across the
+   LAN. The shipped kit is mastered `OVMXSYS`; a node booting its own copy of
+   it gets its own label before first boot — `vmsfs_master --ods2 relabel
+   <disk> <SCSNODE>SYS`, the on-disk effect of `SET VOLUME/LABEL` (the
+   `<SCSNODE>SYS` form is the real VAX's: SCSNODE `VAXC`, label `VAXCSYS`).
+   The 2-node gate above does exactly that. A *second* volume of a label
+   already mounted — on the same node, or a local disk whose label another
+   member has mounted — is refused by `MOUNT` with `%MOUNT-F-VOLALRMNT,
+   another volume of same label already mounted` (rd vms-3ea). The system disk
+   itself is mounted before the node joins, so that check does not reach it:
+   the per-node label is what keeps system disks apart.
+
 2. **Set `EXPECTED_VOTES` to the total votes the finished cluster will hold.**
    That is the VMS rule, and it is what decides quorum:
    `QUORUM = (EXPECTED_VOTES + 2) / 2`, integer. A two-node cluster with one

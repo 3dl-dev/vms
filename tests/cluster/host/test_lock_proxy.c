@@ -1590,6 +1590,7 @@ struct standing_result {
 	struct vms_proc *proc;
 	uint32_t         status;
 	uint32_t         lkid;
+	int              remote;
 	volatile int     done;
 };
 
@@ -1599,7 +1600,7 @@ static void *standing_thread(void *arg)
 
 	wire_learn("F11B$vOVMXDATA");
 	r->status = vms_lock_acp_vol_standing(r->proc, "F11B$vOVMXDATA",
-					      &r->lkid);
+					      &r->lkid, &r->remote);
 	r->done = 1;
 	return NULL;
 }
@@ -1676,6 +1677,121 @@ static void e3ea_nl_grant_wakes_the_standing_lock(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * rd vms-3ea: NODE B'S WHOLE SIDE OF THE 2-NODE E2E, REFUSED THEN ADMITTED.
+ *
+ * MEASURED (diagnostic run 41401687365): after node A dismounted OVMXDATA,
+ * node B's second MOUNT was refused again -- A, the label's DIRECTORY,
+ * holding nothing, served B's lookup as master. The directory half of the fix
+ * is the wire arm's (test_dlm_scs_arm.c); this is the requester half it
+ * relies on, driven through the doors the wire arm uses:
+ *   1. B's first standing lock is granted by A as master: a PROXY (refused).
+ *   2. B releases it -- and holds nothing, so B's next $ENQ must ask the
+ *      DIRECTORY again, not go straight to A as a master it remembers.
+ *   3. The directory answers "you master it" (0xf9 -> assume_mastery): the
+ *      lock is LOCAL, not a proxy, and the MOUNT is admitted.
+ *   4. B's DISMOUNT tells the directory to drop the entry it was given.
+ * ================================================================ */
+static int standing_wait(struct standing_result *sr)
+{
+	int i;
+
+	for (i = 0; i < 400 && !sr->done; i++)
+		usleep(5 * 1000);
+	return sr->done;
+}
+
+static void e3ea_refused_then_admitted_after_the_label_is_freed(void)
+{
+	struct vms_dlm_proxy_post post;
+	struct vms_dlm_proxy_grant g;
+	struct standing_result sr;
+	struct vms_proc proc;
+	pthread_t th;
+	int n;
+
+	printf("--- rd vms-3ea: B refused while A holds the label, admitted "
+	       "after ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	/* 1. A holds the label: its grant makes B's standing lock a proxy. */
+	memset(&sr, 0, sizeof(sr));
+	sr.proc = &proc;
+	if (pthread_create(&th, NULL, standing_thread, &sr) != 0) {
+		ct_check(0, "pthread_create (first MOUNT)");
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check(fm_wait_posts(1, &post) && post.to_directory &&
+		 post.dst_csid == CSID_DIRECTORY,
+		 "B's first standing lock asks the label's DIRECTORY");
+	memset(&g, 0, sizeof(g));
+	g.req_lkid = post.req_lkid;
+	g.master_lkid = 0x00007777u;
+	g.master_csid = CSID_DIRECTORY;   /* the directory is the master: it holds */
+	ct_check_eq_u32(vms_lock_dlm_proxy_grant_recv(&g), SS__NORMAL,
+			"A, directory and master, grants it");
+	if (!standing_wait(&sr)) {
+		ct_check(0, "the first standing $ENQW woke");
+		pthread_detach(th);
+		return;
+	}
+	pthread_join(th, NULL);
+	ct_check(sr.status == SS__NORMAL && sr.remote == 1,
+		 "the granted lock is a PROXY: VOLALRMNT");
+	ct_check_eq_u32(vms_lock_acp_vol_release(&proc, sr.lkid), SS__NORMAL,
+			"the refusal releases it");
+	ct_check(fm_wait_posts(2, &post) && post.op == VMS_DLM_POST_DEQ,
+		 "  (a DEQ to the master)");
+
+	/* 2./3. A has dismounted; B's MOUNT again. */
+	memset(&sr, 0, sizeof(sr));
+	sr.proc = &proc;
+	if (pthread_create(&th, NULL, standing_thread, &sr) != 0) {
+		ct_check(0, "pthread_create (second MOUNT)");
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check(fm_wait_posts(3, &post), "B's second standing lock is posted");
+	ct_check(post.op == VMS_DLM_POST_ENQ && post.to_directory &&
+		 post.dst_csid == CSID_DIRECTORY,
+		 "*** it asks the DIRECTORY again: B kept no master for a "
+		 "resource it holds nothing on ***");
+	ct_check_eq_u32(vms_lock_dlm_assume_mastery("F11B$vOVMXDATA", 0u,
+						    post.req_lkid),
+			SS__NORMAL,
+			"the directory answers 0xf9: nobody holds it, B masters it");
+	if (!standing_wait(&sr)) {
+		ct_check(0, "the second standing $ENQW woke");
+		pthread_detach(th);
+		return;
+	}
+	pthread_join(th, NULL);
+	ct_check(sr.status == SS__NORMAL && sr.lkid != 0u && sr.remote == 0,
+		 "*** the lock is LOCAL, not a proxy: the MOUNT is admitted ***");
+
+	/* 4. B's DISMOUNT: the entry the directory gave it goes. */
+	pthread_mutex_lock(&fm.lock);
+	n = fm.posts;
+	pthread_mutex_unlock(&fm.lock);
+	ct_check_eq_u32(vms_lock_acp_vol_release(&proc, sr.lkid), SS__NORMAL,
+			"B dismounts");
+	ct_check(fm_wait_posts(n + 1, &post) &&
+		 post.op == VMS_DLM_POST_DIR_REMOVE &&
+		 post.dst_csid == CSID_DIRECTORY,
+		 "*** and tells the directory to drop B's entry ***");
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -1694,5 +1810,6 @@ int main(void)
 	b67a_sublock_refuses_a_parent_with_no_master_handle();
 	rms326_the_executive_takes_the_file_lock();
 	e3ea_nl_grant_wakes_the_standing_lock();
+	e3ea_refused_then_admitted_after_the_label_is_freed();
 	return ct_summary("test_lock_proxy");
 }

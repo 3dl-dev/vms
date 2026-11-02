@@ -385,8 +385,33 @@ static void arm_bindings(void)
 	       "the directory role sits ABOVE RULE C (its answer is the real "
 	       "directory's byte-for-byte; test_dlm_dir.c)");
 	has("if (req->peer_is_ours || req->from_csid == 0u ||",
-	    "... and serves ONLY a system that is not this implementation, with "
-	    "a known CSID (between OVMX nodes the engine owns the directory)");
+	    "the mixed-held master doors serve ONLY a system that is not this "
+	    "implementation, with a known CSID");
+	/*
+	 * rd vms-3ea: BETWEEN OVMX MEMBERS THE DIRECTORY ANSWERS p. 6-31 OUTCOME
+	 * 3 TOO. An OVMX member's root lookup for a name this node directs and
+	 * neither masters nor holds used to fall through to the master path,
+	 * which mastered a resource nobody here held (the 2-node e2e: node A,
+	 * after its DISMOUNT, granted node B's F11B$vOVMXDATA as master). It is
+	 * now the directory's: "you master it", recorded under the asker -- and
+	 * every other OVMX request still reaches the master path unchanged.
+	 */
+	absent("if (req->peer_is_ours || req->from_csid == 0u ||\n"
+	       "\t    req->category != (uint8_t)VMS_DLM_CAT_REQUEST)\n"
+	       "\t\treturn -1;\n"
+	       "\tif (vms_dlm_res_ident_parse_body(req->body, req->len, &id) !=",
+	       "*** the directory role no longer turns every OVMX member away "
+	       "(that sent outcome 3 to the master path) ***");
+	has("if (req->peer_is_ours && !dlm_arm_dir_takes_ours(d, req, &id))",
+	    "an OVMX member's directory traffic is taken by one named predicate");
+	has("return !dlm_arm_dir_name_mastered(id) && !dlm_arm_dir_name_held(id);",
+	    "... which leaves a name this node masters or holds to the master "
+	    "path (never 'you master it' for a resource this node has)");
+	has("!d->cl->club.ldwv.valid ||\n\t    !dlm_arm_dir_is_ours(d, id->hash, 1))",
+	    "... and takes a lookup only for a name the BUILT vector directs "
+	    "here");
+	has("if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_REMOVE)\n\t\treturn 1;",
+	    "... and an OVMX master's removal of the entry it was given");
 	has("if (vms_dlm_dir_answer_build(req->body, req->len, status,",
 	    "every directory answer is built by the grounded builder");
 	/*

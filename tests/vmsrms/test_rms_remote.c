@@ -1,0 +1,462 @@
+/*
+ * test_rms_remote.c - RMS remote file access (rd vms-0a7 S1) against the
+ * exact DAP replies a real OpenVMS VAX V7.3 FAL sent, with DCL's DIRECTORY /
+ * TYPE output compared to what the VAX printed. Ported from
+ * tests/vmsdecnet/test_dnet_fal_dirtype.c (rd vms-6a4): the same captures,
+ * consoles and cases, now through $PARSE / $SEARCH / $OPEN / $GET / $CLOSE.
+ *
+ *   argv[1] tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/
+ *           falverbs-v2v-wire.txt     (VAX1 -> VAX2's FAL, account DNTEST)
+ *   argv[2] .../vax-to-vax-sys-login/falverbs-v2v-vax1-console.txt
+ *   argv[3] .../decnet-fal-verbs-20261008/falverbs-wire.txt (SYSTEM, DNTEST)
+ *   argv[4] .../decnet-fal-verbs-20261008/vax1-console.txt
+ *
+ * The logical link is RMS's link seam (rms_remote_set_link_ops) answering
+ * with the VAX FAL's own segments for that command's links, in order. Where
+ * the VAX client kept one link open for several files (each access opening
+ * with its own CONFIGURATION exchange) and RMS opens one link per $OPEN, the
+ * next link continues the same captured server stream. Missing capture = FAIL.
+ *
+ * NORMALISATION (only this): both captures are VAX<->VAX at DAP 7.2, so every
+ * segment after the CONFIGURATION carries a 2-byte trailer DAP 5.6 does not
+ * define; it is stripped (as test_dnet_fal_server.c does).
+ *
+ * Then the peer-receive bound: the NAME / ATTRIBUTES / DATA receive path is
+ * fed mutated and random FAL replies (built with ASan/UBSan where the
+ * toolchain has them; the RMS remote module and the codec are compiled into
+ * this test so the sanitizer instruments them), and a FAL that sends more
+ * names than RMS_REMOTE_MAXFILES.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "rms/rms.h"
+#include "rms_remote.h"
+#include "dcl/dcl_remote.h"
+#include "dnet_dap.h"
+#include "ssdef.h"
+#include "rmsdef.h"
+
+static int g_pass, g_fail;
+#define CHECK(c, msg) do { if (c) { g_pass++; printf("  ok: %s\n", msg); } \
+                           else { g_fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+/* ---------------- the capture (the nspdump reader of the FAL tests) ------ */
+#define MAXLINK 32
+#define MAXLSEG 32
+struct oseg { uint8_t b[1600]; size_t n; };
+struct olink {
+    unsigned id;
+    struct oseg cli[MAXLSEG]; int ncli;
+    struct oseg srv[MAXLSEG]; int nsrv;
+};
+static struct olink g_links[MAXLINK];
+static int g_nlinks;
+
+static struct olink *link_by_id(unsigned id)
+{ for (int i = 0; i < g_nlinks; i++) if (g_links[i].id == id) return &g_links[i]; return NULL; }
+
+static int load_wire(const char *path)
+{
+    g_nlinks = 0;
+    FILE *f = fopen(path, "r");
+    if (!f) { printf("  cannot open %s\n", path); return -1; }
+    char line[8192];
+    struct olink *cur = NULL;
+    while (fgets(line, sizeof line, f)) {
+        char dir[16], kind[16];
+        double t;
+        if (sscanf(line, "%lf %15s %15s", &t, dir, kind) != 3) continue;
+        char *colon = strchr(line, ':');
+        if (!colon) continue;
+        uint8_t b[1600]; size_t n = 0;
+        for (char *p = colon + 1; *p && n < sizeof b; ) {
+            while (*p == ' ') p++;
+            unsigned v;
+            if (p[0] == 'X' && p[1] == 'X') v = 'x';
+            else if (sscanf(p, "%2x", &v) != 1) break;
+            b[n++] = (uint8_t)v; p += 2;
+        }
+        int from_client = !strncmp(dir, "1.1->", 5);
+        if (!strcmp(kind, "RCI:") && n >= 9 && g_nlinks < MAXLINK) {
+            struct olink *L = &g_links[g_nlinks++];
+            memset(L, 0, sizeof *L);
+            L->id = b[3] | (b[4] << 8);
+        } else if (!strcmp(kind, "CC:") && n >= 5) {
+            cur = link_by_id(b[1] | (b[2] << 8));
+        } else if (!strcmp(kind, "DATA") && cur) {
+            int segno = 0;
+            if (sscanf(line, "%*f %*s DATA seg%d", &segno) != 1) continue;
+            if (segno >= 2) { if (n < 2) continue; n -= 2; }   /* DAP 7 trailer */
+            int *cnt = from_client ? &cur->ncli : &cur->nsrv;
+            if (*cnt >= MAXLSEG) continue;
+            struct oseg *o = from_client ? &cur->cli[*cnt] : &cur->srv[*cnt];
+            memcpy(o->b, b, n); o->n = n;
+            (*cnt)++;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+/* The block a console printed under `cmd`: every line after the first line
+ * equal to `cmd`, up to the next DCL prompt line ("$ " / "$"). */
+static char *console_block(const char *path, const char *cmd)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return NULL;
+    char line[1024];
+    int in = 0;
+    size_t cap = 8192, len = 0;
+    char *out = calloc(1, cap);
+    while (out && fgets(line, sizeof line, f)) {
+        if (!in) {
+            char c[1024];
+            snprintf(c, sizeof c, "%s\n", cmd);
+            if (!strcmp(line, c)) in = 1;
+            continue;
+        }
+        if (!strcmp(line, "$ \n") || !strcmp(line, "$\n")) break;
+        size_t l = strlen(line);
+        if (len + l + 1 > cap) break;
+        memcpy(out + len, line, l + 1);
+        len += l;
+    }
+    fclose(f);
+    if (out && !in) { free(out); out = NULL; }
+    return out;
+}
+
+/* ---------------- the link seam: a replay of the VAX FAL's links --------- */
+struct replay {
+    const struct olink *links[4]; int nlinks, next;
+    int pos[4];                         /* server segments served, per link */
+    uint32_t refuse;                    /* !0: every connect fails with it  */
+    int opens;
+    char sent_spec[DNET_DAP_MAX_SPEC + 1];   /* the first ACCESS filespec sent */
+    char ncb[4][256];                   /* each connect's NCB               */
+};
+struct rlink { struct replay *x; int li; };
+static struct replay g_rp;
+static struct rlink g_rl[64];
+
+static void *rp_open(void *ctx, const char *ncb, size_t len, uint32_t *st)
+{
+    struct replay *x = ctx;
+    if (x->opens < 4) snprintf(x->ncb[x->opens], sizeof x->ncb[0], "%.*s", (int)len, ncb);
+    if (x->refuse) { *st = x->refuse; return NULL; }
+    if (x->nlinks == 0 || x->opens >= 64) { *st = SS$_ABORT; return NULL; }
+    struct rlink *r = &g_rl[x->opens++];
+    r->x = x;
+    r->li = x->next < x->nlinks ? x->next++ : x->nlinks - 1;   /* else: the same stream */
+    *st = SS$_NORMAL;
+    return r;
+}
+static int rp_send(void *l, const uint8_t *seg, size_t len)
+{
+    struct rlink *r = l;
+    size_t off = 0;
+    while (off < len) {
+        struct dnet_dap_msg m; size_t used = 0;
+        if (dnet_dap_decode(seg + off, len - off, &m, &used) != DNET_DAP_OK || !used) break;
+        if (m.op == DNET_DAP_ACCESS && !r->x->sent_spec[0])
+            snprintf(r->x->sent_spec, sizeof r->x->sent_spec, "%s", m.u.access.filespec);
+        off += used;
+    }
+    return 0;
+}
+static int rp_recv(void *l, uint8_t *buf, size_t cap, size_t *len)
+{
+    struct rlink *r = l;
+    const struct olink *L = r->x->links[r->li];
+    if (r->x->pos[r->li] >= L->nsrv) return -1;
+    const struct oseg *o = &L->srv[r->x->pos[r->li]++];
+    if (o->n > cap) return -1;
+    memcpy(buf, o->b, o->n);
+    *len = o->n;
+    return 0;
+}
+static void rp_close(void *l) { (void)l; }
+static const struct rms_remote_link_ops g_rp_ops = { rp_open, rp_send, rp_recv, rp_close, &g_rp };
+
+static char *run_cmd(int type, const char *spec, int l0, int nl, uint32_t refuse, uint32_t *st)
+{
+    memset(&g_rp, 0, sizeof g_rp);
+    for (int i = 0; i < nl; i++) g_rp.links[i] = &g_links[l0 + i];
+    g_rp.nlinks = nl;
+    g_rp.refuse = refuse;
+    rms_remote_set_link_ops(&g_rp_ops);
+    char *buf = NULL; size_t bl = 0;
+    FILE *out = open_memstream(&buf, &bl);
+    if (!out) return NULL;
+    *st = type ? dcl_remote_type(out, spec) : dcl_remote_directory(out, spec);
+    fclose(out);
+    rms_remote_set_link_ops(NULL);
+    return buf;
+}
+
+static void oracle_case(const char *what, const char *console, const char *cmd,
+                        int type, const char *spec, int l0, int nl, uint32_t refuse,
+                        const char *want_spec)
+{
+    uint32_t st = 0;
+    char *want = console_block(console, cmd);
+    char *got = run_cmd(type, spec, l0, nl, refuse, &st);
+    int ok = want && got && !strcmp(want, got);
+    if (!ok)
+        printf("    --- VAX printed ---\n%s    --- OVMX printed ---\n%s    ---\n",
+               want ? want : "(no block)\n", got ? got : "(nothing)\n");
+    CHECK(ok, what);
+    if (want_spec) {
+        char m[300];
+        snprintf(m, sizeof m, "%s: the DIRECTORY LIST names %s, as the VAX's did", what, want_spec);
+        CHECK(!strcmp(g_rp.sent_spec, want_spec), m);
+    }
+    free(want); free(got);
+}
+
+/* ---------------- 1. RMS units: the spec, the NCB, the password ---------- */
+static void units(void)
+{
+    /* $PARSE: the expanded string shows the password as the word. */
+    struct FAB fab = cc$rms_fab;
+    struct NAM nam = cc$rms_nam;
+    char esa[256];
+    const char *spec = "VAX2\"SYSTEM s3cr3t\"::SYS$LOGIN:BRK*.TXT;*";
+    fab.fab$l_fna = (char *)spec; fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$l_nam = &nam;
+    nam.nam$l_esa = esa; nam.nam$b_ess = sizeof esa - 1;
+    uint32_t st = sys$parse(&fab, 0, 0);
+    esa[nam.nam$b_esl] = '\0';
+    CHECK(st == RMS$_NORMAL && !strcmp(esa, "VAX2\"SYSTEM password\"::SYS$LOGIN:BRK*.TXT;*"),
+          "$PARSE of node\"user pw\"::spec: the expanded string carries the word password");
+    CHECK((nam.nam$l_fnb & NAM$M_NODE) && (nam.nam$l_fnb & NAM$M_WILDCARD) &&
+          nam.nam$b_node == strlen("VAX2\"SYSTEM password\"::") &&
+          nam.nam$b_dev == strlen("SYS$LOGIN:") && nam.nam$b_name == 4 &&
+          nam.nam$b_type == 4 && nam.nam$b_ver == 2,
+          "$PARSE: NAM$M_NODE + wildcard, and the node/device/name/type/version fields");
+
+    /* $SEARCH over a refused connect: the NCB carried the real password,
+     * the result is RMS$_FND with the connect's failure as the STV. */
+    memset(&g_rp, 0, sizeof g_rp);
+    g_rp.refuse = SS$_INVLOGIN;
+    rms_remote_set_link_ops(&g_rp_ops);
+    st = sys$search(&fab, 0, 0);
+    CHECK(st == RMS_REMOTE_FND && fab.fab$l_stv == SS$_INVLOGIN,
+          "$SEARCH, connect refused: RMS$_FND, STV = the connect failure");
+    CHECK(!strcmp(g_rp.ncb[0], "VAX2\"SYSTEM s3cr3t\"::\"17=\""),
+          "the NCB is node\"user password\"::\"17=\" (FAL, object 17)");
+    rms_search_end(&nam);
+
+    /* A resultant name re-opened: "password" stands for the real one. */
+    memset(&g_rp, 0, sizeof g_rp);
+    g_rp.refuse = SS$_INVLOGIN;
+    struct FAB of = cc$rms_fab;
+    const char *rsa = "VAX2\"SYSTEM password\"::SYS$SYSDEVICE:[SYSMGR]BRK1.TXT;1";
+    of.fab$l_fna = (char *)rsa; of.fab$b_fns = (uint8_t)strlen(rsa);
+    st = sys$open(&of, 0, 0);
+    CHECK(st == RMS_REMOTE_FND && !strcmp(g_rp.ncb[0], "VAX2\"SYSTEM s3cr3t\"::\"17=\""),
+          "$OPEN of a resultant name: the password this image gave is the one sent");
+
+    /* No access string; a proxy user alone. */
+    memset(&g_rp, 0, sizeof g_rp);
+    g_rp.refuse = SS$_NOSUCHNODE;
+    const char *s2 = "1.43::X.TXT";
+    of = cc$rms_fab; of.fab$l_fna = (char *)s2; of.fab$b_fns = (uint8_t)strlen(s2);
+    (void)sys$open(&of, 0, 0);
+    CHECK(!strcmp(g_rp.ncb[0], "1.43::\"17=\""), "no access string: the NCB is node::\"17=\"");
+    /* A multi-hop spec and an unterminated access string are refused. */
+    const char *bad[] = { "A::B::C.TXT", "A\"U P A X\"::C.TXT", "\"U\"::X" };
+    int all = 1;
+    for (int i = 0; i < 3; i++) {
+        of = cc$rms_fab; of.fab$l_fna = (char *)bad[i]; of.fab$b_fns = (uint8_t)strlen(bad[i]);
+        if (sys$open(&of, 0, 0) != RMS$_SYN) all = 0;
+    }
+    CHECK(all, "multi-hop, a four-field access string and a node-less spec: RMS$_SYN");
+    /* A local spec never reaches the link. */
+    memset(&g_rp, 0, sizeof g_rp);
+    CHECK(!rms_remote_is_spec("SYS$LOGIN:A.TXT", 15) &&
+          !rms_remote_is_spec("A\"x::y\"B", 8) && rms_remote_is_spec("N::", 3),
+          "rms_remote_is_spec: \"::\" outside a quoted string only");
+    rms_remote_set_link_ops(NULL);
+}
+
+/* ---------------- 3. peer-receive fuzz ------------------------------------ */
+struct fz { uint8_t seg[8][2048]; size_t n[8]; int nseg, pos; };
+static struct fz g_fa, g_fb;
+static int g_fz_next;
+static void *fz_open(void *c, const char *ncb, size_t l, uint32_t *st)
+{
+    (void)c; (void)ncb; (void)l;
+    if (g_fz_next >= 2) { *st = SS$_ABORT; return NULL; }
+    *st = SS$_NORMAL;
+    return g_fz_next++ ? &g_fb : &g_fa;
+}
+static int fz_send(void *l, const uint8_t *s, size_t n) { (void)l; (void)s; (void)n; return 0; }
+static int fz_recv(void *l, uint8_t *buf, size_t cap, size_t *len)
+{
+    struct fz *f = l;
+    if (f->pos >= f->nseg) return -1;
+    size_t n = f->n[f->pos]; if (n > cap) n = cap;
+    memcpy(buf, f->seg[f->pos++], n); *len = n;
+    return 0;
+}
+static void fz_close(void *l) { (void)l; }
+static const struct rms_remote_link_ops g_fz_ops = { fz_open, fz_send, fz_recv, fz_close, NULL };
+
+static uint32_t rnd_state = 0x0a7u;
+static uint32_t rnd(void) { rnd_state = rnd_state * 1103515245u + 12345u; return rnd_state >> 8; }
+
+static void fill_from(struct fz *f, const struct olink *L)
+{
+    memset(f, 0, sizeof *f);
+    for (int i = 0; i < L->nsrv && i < 8; i++) {
+        memcpy(f->seg[i], L->srv[i].b, L->srv[i].n);
+        f->n[i] = L->srv[i].n;
+        f->nseg++;
+    }
+}
+
+static void mutate(struct fz *f)
+{
+    int k = (int)(rnd() % 4) + 1;
+    while (k--) {
+        int s = (int)(rnd() % (unsigned)f->nseg);
+        switch (rnd() % 4) {
+        case 0: if (f->n[s]) f->seg[s][rnd() % f->n[s]] ^= (uint8_t)(1u << (rnd() % 8)); break;
+        case 1: if (f->n[s]) f->seg[s][rnd() % f->n[s]] = (uint8_t)rnd(); break;
+        case 2: f->n[s] = f->n[s] ? rnd() % f->n[s] : 0; break;          /* truncate */
+        case 3: {                                                          /* extend   */
+            size_t add = rnd() % 64;
+            for (size_t i = 0; i < add && f->n[s] < sizeof f->seg[0]; i++)
+                f->seg[s][f->n[s]++] = (uint8_t)rnd();
+            break; }
+        }
+    }
+}
+
+static void fuzz(void)
+{
+    FILE *devnull = fopen("/dev/null", "w");
+    if (!devnull) { CHECK(0, "fuzz: /dev/null opens"); return; }
+    rms_remote_set_link_ops(&g_fz_ops);
+    const struct olink *dir = &g_links[1], *tdl = &g_links[2], *topen = &g_links[3];
+    int runs = 0;
+    for (int it = 0; it < 20000; it++) {
+        g_fz_next = 0;
+        fill_from(&g_fa, dir); mutate(&g_fa);
+        (void)dcl_remote_directory(devnull, "VAX2::SYS$LOGIN:BRK*.TXT");
+        g_fz_next = 0;
+        fill_from(&g_fa, tdl); fill_from(&g_fb, topen);
+        if (rnd() & 1) mutate(&g_fa); else mutate(&g_fb);
+        (void)dcl_remote_type(devnull, "VAX2::SYS$LOGIN:BRK*.TXT");
+        runs += 2;
+    }
+    /* Pure noise after a good CONFIGURATION. */
+    for (int it = 0; it < 5000; it++) {
+        g_fz_next = 0;
+        fill_from(&g_fa, dir);
+        g_fa.n[1] = rnd() % sizeof g_fa.seg[1];
+        for (size_t i = 0; i < g_fa.n[1]; i++) g_fa.seg[1][i] = (uint8_t)rnd();
+        (void)dcl_remote_directory(devnull, "VAX2::X");
+        runs++;
+    }
+    rms_remote_set_link_ops(NULL);
+    fclose(devnull);
+    char m[120];
+    snprintf(m, sizeof m, "fuzz: %d mutated / random FAL replies parsed without a fault", runs);
+    CHECK(runs == 45000, m);
+}
+
+/* A FAL that names more files than RMS keeps. */
+struct flood { int sent_cfg, names, done; uint8_t cfg[64]; size_t cfgn; };
+static struct flood g_flood;
+static void *fl_open(void *c, const char *ncb, size_t l, uint32_t *st)
+{ (void)c; (void)ncb; (void)l; *st = SS$_NORMAL; return &g_flood; }
+static int fl_recv(void *c, uint8_t *buf, size_t cap, size_t *len)
+{
+    struct flood *f = c;
+    if (!f->sent_cfg) { memcpy(buf, f->cfg, f->cfgn); *len = f->cfgn; f->sent_cfg = 1; return 0; }
+    if (f->done) return -1;
+    size_t n = 0;
+    while (n + 40 < cap && f->names < RMS_REMOTE_MAXFILES + 100) {
+        char nm[32];
+        int l = snprintf(nm, sizeof nm, "F%06d.TXT;1", f->names++);
+        buf[n++] = 0x0f; buf[n++] = 0x02;            /* NAME, FLAGS.LENGTH */
+        buf[n++] = (uint8_t)(2 + l);
+        buf[n++] = 0x02;                              /* NAMETYPE file name */
+        buf[n++] = (uint8_t)l;
+        memcpy(buf + n, nm, (size_t)l); n += (size_t)l;
+    }
+    if (f->names >= RMS_REMOTE_MAXFILES + 100) {
+        buf[n++] = 0x07; buf[n++] = 0x00; buf[n++] = 0x02;    /* ACCESS COMPLETE */
+        f->done = 1;
+    }
+    *len = n;
+    return 0;
+}
+static const struct rms_remote_link_ops g_fl_ops = { fl_open, fz_send, fl_recv, fz_close, NULL };
+
+static void flood(void)
+{
+    memset(&g_flood, 0, sizeof g_flood);
+    if (g_links[1].nsrv < 1) { CHECK(0, "flood: a captured CONFIGURATION"); return; }
+    memcpy(g_flood.cfg, g_links[1].srv[0].b, g_links[1].srv[0].n);
+    g_flood.cfgn = g_links[1].srv[0].n;
+    rms_remote_set_link_ops(&g_fl_ops);
+    char *buf = NULL; size_t bl = 0;
+    FILE *out = open_memstream(&buf, &bl);
+    uint32_t st = out ? dcl_remote_directory(out, "N::*") : 0;
+    if (out) fclose(out);
+    rms_remote_set_link_ops(NULL);
+    char want[64];
+    snprintf(want, sizeof want, "\nTotal of %d files.\n", RMS_REMOTE_MAXFILES);
+    CHECK(st == RMS$_NORMAL && buf && strstr(buf, want),
+          "a FAL naming more files than RMS_REMOTE_MAXFILES: the listing stops at the bound");
+    free(buf);
+}
+
+int main(int argc, char **argv)
+{
+    if (argc < 5) {
+        printf("usage: %s v2v-wire v2v-console falverbs-wire vax1-console\n", argv[0]);
+        return 1;
+    }
+    printf("1. RMS units\n");
+    units();
+
+    printf("2. the real VAX's FAL, its console the oracle\n");
+    if (load_wire(argv[1]) != 0 || g_nlinks != 15) {
+        CHECK(0, "the VAX<->VAX SYS$LOGIN capture loads with its 15 links");
+    } else {
+        oracle_case("DIRECTORY VAX2::SYS$LOGIN:BRK*.TXT prints the VAX's listing",
+                    argv[2], "DIRECTORY VAX2::SYS$LOGIN:BRK*.TXT", 0,
+                    "VAX2::SYS$LOGIN:BRK*.TXT", 1, 1, 0, "SYS$LOGIN:BRK*.TXT;*");
+        oracle_case("TYPE VAX2::SYS$LOGIN:BRK*.TXT: two files with headers, BRKP OPENIN -RMS-E-PRV",
+                    argv[2], "TYPE VAX2::SYS$LOGIN:BRK*.TXT", 1,
+                    "VAX2::SYS$LOGIN:BRK*.TXT", 2, 2, 0, "SYS$LOGIN:BRK*.TXT;");
+        oracle_case("DIRECTORY VAX2::SYS$LOGIN:NOSUCH.TXT is %DIRECT-W-NOFILES",
+                    argv[2], "DIRECTORY VAX2::SYS$LOGIN:NOSUCH.TXT", 0,
+                    "VAX2::SYS$LOGIN:NOSUCH.TXT", 13, 1, 0, "SYS$LOGIN:NOSUCH.TXT;*");
+        printf("3. peer-receive bound\n");
+        fuzz();
+        flood();
+    }
+    if (load_wire(argv[3]) != 0 || g_nlinks != 17) {
+        CHECK(0, "the VAX1->VAX2 FAL verbs capture loads with its 17 links");
+    } else {
+        oracle_case("TYPE VAX2\"SYSTEM pw\"::...NOSUCH.TXT is SEARCHFAIL on the names the FAL sent",
+                    argv[4], "### TYPE VAX2\"SYSTEM xxxxxx\"::SYS$SYSROOT:[SYSMGR]NOSUCH.TXT", 1,
+                    "VAX2\"SYSTEM xxxxxx\"::SYS$SYSROOT:[SYSMGR]NOSUCH.TXT", 1, 1, 0, NULL);
+        oracle_case("TYPE VAX2::...PROT.TXT with the link refused: SEARCHFAIL, -RMS-E-FND, -SYSTEM-F-INVLOGIN",
+                    argv[4], "### TYPE VAX2::SYS$SYSROOT:[SYSMGR]PROT.TXT", 1,
+                    "VAX2::SYS$SYSROOT:[SYSMGR]PROT.TXT", 2, 0, SS$_INVLOGIN, NULL);
+        oracle_case("TYPE VAX2\"DNTEST pw\"::...PROT.TXT: OPENIN on the resultant, -RMS-E-FNF",
+                    argv[4], "### TYPE VAX2\"DNTEST xxxxxxxxxx\"::SYS$SYSROOT:[SYSMGR]PROT.TXT", 1,
+                    "VAX2\"DNTEST xxxxxxxxxx\"::SYS$SYSROOT:[SYSMGR]PROT.TXT", 10, 2, 0, NULL);
+    }
+
+    printf("\n%d passed, %d failed\n", g_pass, g_fail);
+    return g_fail ? 1 : 0;
+}

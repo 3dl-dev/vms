@@ -51,6 +51,7 @@
 
 #include <stdio.h>
 #include "rms_internal.h"
+#include "rms_remote.h"      /* RMS remote file access (rd vms-0a7) */
 #include <stdlib.h>
 #include <string.h>
 #include "rms/rms.h"
@@ -838,6 +839,7 @@ int rms_search_fid(void *nam_ptr, uint16_t *num, uint16_t *seq,
 
 void rms_search_end(void *nam_ptr)
 {
+    rms_remote_search_end(nam_ptr);    /* a node:: search's context (rd vms-0a7) */
 #if defined(OVMX_HAVE_ACP)
     struct NAM *nam = (struct NAM *)nam_ptr;
     if (nam && nam->nam$b_bid == NAM$C_BID && nam->nam$$l_context &&
@@ -858,5 +860,7 @@ void rms_search_end(void *nam_ptr)
  * ============================================================ */
 uint32_t sys$search(void *fab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_fab(fab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_search(fab), fab, err, suc);
     return rms_complete(rms_impl_search(fab), fab, err, suc);
 }

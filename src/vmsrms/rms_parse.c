@@ -49,6 +49,7 @@
 
 #include <stdio.h>
 #include "rms_internal.h"
+#include "rms_remote.h"      /* RMS remote file access (rd vms-0a7) */
 #include <string.h>
 #include "rms/rms.h"
 #include "vmsfs/filespec.h"
@@ -752,5 +753,7 @@ static uint32_t rms_impl_parse(void *fab_ptr)
  * ============================================================ */
 uint32_t sys$parse(void *fab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_fab(fab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_parse(fab), fab, err, suc);
     return rms_complete(rms_impl_parse(fab), fab, err, suc);
 }

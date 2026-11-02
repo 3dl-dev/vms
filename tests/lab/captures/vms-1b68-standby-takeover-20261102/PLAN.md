@@ -118,3 +118,11 @@ Pod lab1b68r (fresh, CPU request 200m / limit 4), OVMXE built from 5849a3396 (SO
 - VAX2:  VOTES=0 EXPECTED_VOTES=1 CLUSTER_VOTES=3 CLUSTER_QUORUM=2 CLUSTER_NODES=3
 - OVMXE: VOTES=2 EXPECTED_VOTES=3 CLUSTER_VOTES=3 CLUSTER_QUORUM=2 CLUSTER_NODES=3
 VAX1's departure leaves VAX2 0 + OVMXE 2 = 2 >= quorum 2. Arms proceed as addendum 4.
+
+## Addendum 6 (17:10Z, arms set, BEFORE the departure)
+SDA on VAX1 (both CSID 00000000, DIRENTR -- VAX1 masters both):
+- WKL3: granted 73000107 PR (VAX2 RMH 300), 5500064A NL (VAX1 RMH 000); waiting 32000682 EX (OVMXE RMH 500).
+- EVAC$WORKLOAD: granted 1100067C EX (VAX2 EVACWL), 02000679 NL (VAX1 NLHOLD); conversion
+  24000688 NL->EX (OVMXE EVACWL STANDBY).
+OVMXE arms were spawned from .COM files (SPAWN/NOWAIT @ARMx.COM); OVMX's SPAWN rejects /INPUT and
+ignored /OUTPUT (output reached OPA0). Departure next: VAX1 @SYS$SYSTEM:SHUTDOWN, option REMOVE_NODE.

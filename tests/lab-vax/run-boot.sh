@@ -561,8 +561,10 @@ build_boot_image_set() {
      && [ -f "${SYSVOL_IMAGES_DIR}/MAIL.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/NCP.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/ROOTAUDIT.EXE" ] \
-     && [ -f "${SYSVOL_IMAGES_DIR}/OPCOM.EXE" ]; then
+     && [ -f "${SYSVOL_IMAGES_DIR}/OPCOM.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/.shipped-stripped" ]; then
     log "boot image set present -- NOT rebuilding (set FORCE_SYSVOL_BUILD=1 to force)"; return 0; fi
+  rm -f "${SYSVOL_IMAGES_DIR}/.shipped-stripped"
   mkdir -p "${SYSVOL_IMAGES_DIR}"
   log "cross-building the full boot image set (STARTUP/PROVISION/DCL/JOB_CONTROL/LOGINOUT) for elf32-vax"
   docker run --rm -v "${REPO}:/src" -w /src -v "${SYSVOL_IMAGES_DIR}:/out" \
@@ -607,6 +609,34 @@ build_boot_image_set() {
   [ -f "${SYSVOL_IMAGES_DIR}/ROOTAUDIT.EXE" ] || die "ROOTAUDIT.EXE cross-build did not produce an elf32-vax image (rd vms-251b)"
   # OPCOM.EXE (rd vms-798): the operator communication process PID 1 creates.
   [ -f "${SYSVOL_IMAGES_DIR}/OPCOM.EXE" ] || die "OPCOM.EXE cross-build did not produce an elf32-vax image (rd vms-798)"
+  ship_stripped_images
+}
+
+# rd vms-c01: the images the SYSTEM volume ships carry no debug sections and no
+# static symbol table, as a VMS kit's SYS$SYSTEM images are linked /NODEBUG.
+# This is a memory fix, not a disk-space one. PID 1 stages the boot images off
+# the ODS-2 volume into the boot tmpfs (ovmx_init.c stage_boot_images), and tmpfs
+# is RAM that cannot be paged out on a VAX with no swap. The unstripped set was
+# ~3.7 MB of that RAM, ~0.9 MB of it debug info and symbols that no one reads at
+# run time, and it starved the 16 MB VAX (PROVISION SIGKILLed, %RUN-F-CREPRC).
+# The symbol-carrying copies stay beside the set, in unstripped/, for gdb.
+# Only what ld.elf_so maps or the image reads is kept (.dynsym, .vms$* stay).
+ship_stripped_images() {
+  log "stripping the shipped VAX images (debug + .symtab; unstripped copies kept in unstripped/) -- rd vms-c01"
+  docker run --rm -v "${SYSVOL_IMAGES_DIR}:/out" --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      mkdir -p /out/unstripped
+      for f in /out/*.EXE; do
+        b=$(basename "$f")
+        cp "$f" "/out/unstripped/$b"
+        vax--netbsdelf-strip --strip-all -o "$f" "/out/unstripped/$b"
+        if readelf -SW "$f" | grep -E "\.debug_|\.symtab" >/dev/null; then
+          echo "FATAL: $b still carries debug sections or a .symtab after strip" >&2; exit 1
+        fi
+        echo "  $b: $(stat -c%s "/out/unstripped/$b") -> $(stat -c%s "$f") bytes"
+      done
+      touch /out/.shipped-stripped' \
+    || die "stripping the shipped VAX images failed (rd vms-c01)"
 }
 
 # 3c (sysboot). Master the OVMX SYSTEM volume: build the host vmsfs_master, stage

@@ -1101,6 +1101,34 @@ set_tests_properties(cluster_host_test_dlm_deq_reachable PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-26e: RA7 fire A on the REAL engine. A tree adopted from a real
+# VAX keeps the value block the old master's op-0x1a carried, and the new
+# master's grant puts it -- and its sequence -- on the wire. The four frames
+# are capture fixtures (manifest-gated loader); a control replays the same
+# sequence without the op-0x1a and must reproduce the captured defect.
+add_executable(test_dlm_adopt_valblk test_dlm_adopt_valblk.c)
+target_include_directories(test_dlm_adopt_valblk PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_adopt_valblk PRIVATE
+    OVMX_CLUSTER_HOST
+    OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+    OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+)
+target_link_libraries(test_dlm_adopt_valblk PRIVATE
+    cluster_host_lock cluster_host_dlm cluster_host_fixture Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_adopt_valblk PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_adopt_valblk COMMAND test_dlm_adopt_valblk)
+set_tests_properties(cluster_host_test_dlm_adopt_valblk PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- rd vms-c72: the op-0x03/op-0x04 RECEIVE half really moves lock state ----
 # The mirror of test_dlm_deq_reachable above, on the same two library recipes
 # and for the same reason: the emit was proven and the RECEIVE was declined
@@ -1366,6 +1394,26 @@ add_test(NAME cluster_host_rec12_holder_census
         "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(cluster_host_rec12_holder_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
+# ---- rd vms-874f: what a SURVIVING HOLDER sends when a lock tree's master
+# leaves. Each lock it holds in that tree goes to the new master as a cat-0x02
+# op-0x08 rebuild record -- ROOT first, then each SUB carrying the parent's
+# lkid on the new master, the 82/01 answer saying 0xf9 (the requester masters
+# the tree) or 0xfa (a master exists and granted). OVMX sends none, which is why
+# its locks die with a departed master. Pins the 550/338 ROOT/SUB split, the
+# parent-pair rule (338 of 338), the answer kinds (149/398/338), RA1b's RMT1
+# tree against SDA, and that the rd vms-629 SYS$SYS_ID lookup is the same
+# message -- so the sender and answerer are built from figures that cannot
+# drift from the bytes.
+add_test(NAME cluster_host_dlm_rebuild08_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_rebuild08_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_rebuild08_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;crash-safety"
     TIMEOUT 180
 )

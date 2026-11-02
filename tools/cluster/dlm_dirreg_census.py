@@ -230,10 +230,14 @@ def selftest(repo):
 # in ovmx-B3-7-s8: the changed bytes carry other DLM messages' shapes (a grant
 # record's 0x10 ... 0xfa, a directory answer's 0xf9), i.e. the slot carried a
 # message this capture did not see -- not a field the op-0x0d writes.
+# rd vms-874f: the RA1b VAX-only departure capture adds 194 records (167+27,
+# the survivors' re-registration after a SHUTDOWN REMOVE_NODE), one capture,
+# two senders and two receivers the corpus had not seen, and 184 slot pairs,
+# every one with its residue unchanged -- the field map did not move.
 CORPUS = {
-    'captures': 23, 'records': 16800, 'senders': 15, 'receivers': 16,
-    'receivers_ovmx': 6, 'slot_pairs': 16406,
-    'slot_pairs_residue_unchanged': 16147, 'moved_after_other_use': 141,
+    'captures': 24, 'records': 16994, 'senders': 17, 'receivers': 18,
+    'receivers_ovmx': 6, 'slot_pairs': 16590,
+    'slot_pairs_residue_unchanged': 16331, 'moved_after_other_use': 141,
     'moved_no_visible_use': 118, 'group_nonzero': 63,
 }
 

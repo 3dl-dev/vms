@@ -273,6 +273,8 @@ static inline int exec_copyout(void *udst, const void *ksrc, size_t n)
 /* ---- 4. kernel memory ---- */
 static inline void *exec_zalloc(size_t n)        { return kzalloc(n, GFP_KERNEL); }
 static inline void *exec_zalloc_atomic(size_t n) { return kzalloc(n, GFP_ATOMIC); }
+static inline unsigned long long exec_physmem_bytes(void)
+{ return (unsigned long long)totalram_pages() << PAGE_SHIFT; }
 static inline void *exec_alloc(size_t n)         { return kmalloc(n, GFP_KERNEL); }
 static inline void  exec_free(void *p)           { kfree(p); }
 
@@ -1006,6 +1008,8 @@ static inline void exec_membar_consumer(void) { smp_rmb(); }
 typedef void *exec_arena_t;
 static inline void *exec_arena_alloc(size_t n) { return vmalloc_user(n); }
 static inline void  exec_arena_free(void *arena) { vfree(arena); }
+/* vmalloc_user backed the whole arena at allocation (rd vms-c01). */
+static inline size_t exec_arena_grow(void *arena, size_t need) { (void)arena; return need; }
 
 /* ================================================================
  * §12  Host TCP client socket (vms-9951; BGn: INET facility).

@@ -94,8 +94,12 @@ def selftest(repo):
     # captures: 420 -> 3,521 records (ROOT 9 -> 792, SUB 411 -> 2,729). Every
     # requester is still a real DEC OUI (2,780 aa0004 + 741 08002b); OVMX has
     # never sent an op-0x12, which is rd vms-33a's whole point.
-    check('records paired with an answer', len(recs), 3521)   # was 420
-    check('ROOT records', len(root), 792)                     # was 9
+    # rd vms-874f: the RA1b VAX-only departure capture adds 419 records, every
+    # one a ROOT record (the departing VAX1 hands CACHE$/F11B$/SYS$_/VCC$ roots
+    # to a survivor) -- SUB does not move, and neither does the constant-cell
+    # list below.
+    check('records paired with an answer', len(recs), 3940)   # was 420, 3521
+    check('ROOT records', len(root), 1211)                    # was 9, 792
     check('SUB records', len(sub), 2729)                      # was 411
 
     # The cells every real record agrees on, root and sub alike -- the ones a

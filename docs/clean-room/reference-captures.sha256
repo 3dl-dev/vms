@@ -138,3 +138,4 @@ cfd51bb68a6faa519a48d76f353e68cf9b29e9af338a3e7c33ac0352308a90b3  tests/lab/capt
 5902bee7bb3975cec6f22a82ad77fb3608634dc9ac70d99971b57fe6c3024047  tests/lab/captures/vms-025-mixed-dlm-refusal-20261009/ev2-mixed-refusal.pcap
 ea75844d803040d87ef4cd1a8e459ba3197ba82266f558e66203c9b79d2fb36f  tests/lab/captures/vms-c350-quorum-adjust-20261102/c350-removenode-cm.pcap
 cfcb0906884c46859c38dbdcd8aa64946eb2c8f0ead5ab9781a15fa69fe6b273  tests/lab/captures/vms-c350-quorum-adjust-20261102/labc350/labc350-cm.pcap
+5521711699d8032daa15bfbfd0bfc4365490478253572821fdae1596bf1a3448  tests/lab/captures/vms-6ad1-ra7-residue-20261021/fireA/trimmed.pcap.gz

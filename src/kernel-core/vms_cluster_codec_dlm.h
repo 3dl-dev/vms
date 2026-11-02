@@ -206,6 +206,18 @@ extern "C" {
 #define VMS_DLM_WIREOP_RM_13        0x13u  /* -> N, end of records, notification*/
 #define VMS_DLM_WIREOP_RM_14        0x14u  /* N -> O and N -> each holder      */
 #define VMS_DLM_WIREOP_RM_ACK       VMS_DLM_WIREOP_0F_ACK /* the 82/15 answer  */
+/*
+ * op 0x1a (rd vms-26e): O -> the holder of ONE lock in the tree, carrying the
+ * OLD MASTER'S copy of that lock's resource value block and its sequence. A
+ * NOTIFICATION (1205 of 1205 real ones carry body[4:8] = 0, none answered),
+ * and every one of them lies inside a remaster episode: after its sender's
+ * op-0x0e and before its sender's op-0x13 (1204 of 1205; the last capture ends
+ * mid-episode). 1112 go to the NEW MASTER, about the locks it holds itself; 93
+ * go to another holder, which then relays the same 20 bytes in its op-0x12
+ * record (43 of 43 records found: body[88:104] and body[104:108] equal the
+ * op-0x1a's body[36:52] and body[52:56]). See vms_dlm_rm_valblk_parse_body.
+ */
+#define VMS_DLM_WIREOP_RM_1A        0x1au  /* O -> holder, the lock's LVB      */
 
 /*
  * Opcodes -- GROUNDED by the vms-c03 capture set (see the file doc comment's
@@ -549,9 +561,15 @@ struct vms_dlm_enq_response {
 	 * had written. So `valblk_present` is set whenever the record is there,
 	 * and zeros in it are the master resource's zeros -- data for a resource
 	 * whose block is zero, not a placeholder.
+	 *
+	 * `valblk_seq` is that block's SEQUENCE, body[52:56] (rd vms-26e; the
+	 * cell the reproduction test used to exempt as "an SCS-layer word" --
+	 * it is 0x0be4 in the dlm-real-enq-grant specimen, beside a non-zero
+	 * block). Read whenever `valblk` is.
 	 */
 	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];
 	uint8_t  valblk_present;
+	uint32_t valblk_seq;
 };
 
 /*
@@ -677,10 +695,18 @@ vms_codec_status_t vms_dlm_convert_response_build_queued(const uint8_t *req_body
 							 uint32_t cap,
 							 uint32_t *written);
 
+/*
+ * A master's GRANT: the request echoed with the grant record, `master_lkid`
+ * at body[20:24], the master resource's value block at body[36:52] and THAT
+ * BLOCK'S SEQUENCE at body[52:56] (rd vms-26e: 36,153 of 36,153 real grants
+ * that return a non-zero block carry a non-zero sequence there). `valblk`
+ * NULL writes zeros in both; `valblk_seq` is then ignored.
+ */
 vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 						    uint32_t req_len,
 						    uint32_t master_lkid,
 						    const uint8_t *valblk,
+						    uint32_t valblk_seq,
 						    uint8_t *frame, uint32_t cap,
 						    uint32_t *written);
 
@@ -804,6 +830,23 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  * the other VAX answers 82/01 within 1.5 ms -- echo, body[34] = 0xf9 -- and the
  * barrier proceeds. Unanswered, the requester holds its next barrier release
  * forever.
+ *
+ * THAT IS ONE CASE OF A WIDER MESSAGE (rd vms-874f): op 0x08 is the FAILOVER
+ * REBUILD RECORD. When a lock tree's master leaves, every surviving holder
+ * re-sends each lock it holds in that tree, op-0x12-shaped: body[24:28] its own
+ * lkid, body[30]/[31] the mode, body[36:40] the parent's own lkid and
+ * body[40:44] the parent's lkid on the NEW master (both zero on a ROOT),
+ * body[88:108] the value block, body[128:132] a ROOT's directory hash (on a SUB
+ * a value that is neither its own name's hash nor its parent's). The
+ * ROOT goes first, to the tree's directory node -- or, when the sender IS the
+ * directory, to the master it has just installed. The 82/01 answer says 0xf9
+ * (the requester now masters the tree, and sends no subs) or 0xfa (a master
+ * exists: body[20:24] is the new master's lkid, which each SUB then carries at
+ * body[40:44]). The SYS$SYS_ID lookup above is a ROOT record of this kind. Every
+ * figure (550 ROOT / 338 SUB records over ten captures, the parent pair 338 of
+ * 338) is pinned by tools/cluster/dlm_rebuild08_census.py --selftest; capture
+ * and the topologies NOT covered: tests/lab/captures/
+ * vms-874f-failover-rebuild-20261011.
  */
 #define VMS_DLM_WIREOP_DIR_LOOKUP_TR 0x08u
 
@@ -2016,6 +2059,45 @@ struct vms_dlm_rm_held {
 vms_codec_status_t vms_dlm_rm_held_build(const struct vms_dlm_rm_held *h,
 					 uint8_t *frame, uint32_t cap,
 					 uint32_t *written);
+
+/*
+ * THE op-0x1a: the OLD MASTER'S value block for ONE lock a holder holds in the
+ * tree being handed over (rd vms-26e). Census over every capture in
+ * tests/lab/captures (1205 frames, 37 captures):
+ *
+ *   body[4:8]    0 -- a notification       1205/1205, none answered
+ *   body[20:24]  the OLD MASTER's handle for the lock and body[24:28] the
+ *                HOLDER's own: 712 of the 1205 match, pair for pair, an
+ *                earlier real 82/01 grant from the same sender to the same
+ *                holder; the other 493 name a pair no 82/01 in their
+ *                capture granted
+ *   body[36:52]  the resource's VALUE BLOCK, body[52:56] its SEQUENCE. A
+ *                holder that is not the new master relays exactly these 20
+ *                bytes in its op-0x12 record at body[88:108] (43 of 43); the
+ *                new master is told them here because it sends itself no
+ *                record. RA7 fire A (vms-6ad1-ra7-residue-20261021) is the
+ *                controlled case: the RMLVB-0123456789 block at sequence 1
+ *                that the old master's SDA shows.
+ *   body[47]     0 on 1188/1205: the frame names NO resource; the lock is
+ *                found by the holder's handle.
+ *
+ * `valblk_present` is "the 20-byte span is not all zero" -- the same rule the
+ * op-0x12 record's span follows (vms_dlm_rm_lock_rec): an ABSENT block leaves
+ * the resource's own alone. VMS_CODEC_E_CLASS for anything that is not a
+ * cat-0x02 op-0x1a; VMS_CODEC_E_SHORT for a body under VMS_CM_BODY_LEN.
+ */
+struct vms_dlm_rm_valblk {
+	uint32_t master_lkid;                     /* body[20:24], the SENDER's */
+	uint32_t holder_lkid;                     /* body[24:28], the holder's */
+	uint32_t valblk_seq;                      /* body[52:56]               */
+	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];  /* body[36:52]              */
+	uint8_t  valblk_present;
+	uint8_t  pad[3];
+};
+
+vms_codec_status_t vms_dlm_rm_valblk_parse_body(const uint8_t *body,
+						uint32_t len,
+						struct vms_dlm_rm_valblk *out);
 
 /* ==========================================================================
  * DLKSRCH -- distributed deadlock search (H11, rd vms-d55 / vms-ec75).

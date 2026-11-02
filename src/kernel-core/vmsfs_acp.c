@@ -229,52 +229,105 @@ exec_lock_t vms_acp_vol_lock;
 
 /*
  * rd vms-943: the ACP's block cache (src/kernel-core/vms_acp_cache.h says what
- * it keeps and the coherence rules). Up to ACP_CACHE_NSET sets of
- * VMS_ACP_CACHE_WAYS blocks: 8192 blocks (4 MB) on a 64-bit executive, 1024
+ * it keeps and the coherence rules): sets of VMS_ACP_CACHE_WAYS blocks, at most
+ * ACP_CACHE_NSET of them -- 8192 blocks (4 MB) on a 64-bit executive, 1024
  * (512 KB) on a 32-bit one, whose kernel address space is small (NetBSD/vax).
- * The sets are allocated without sleeping at module load; when memory is short
- * the table is halved until it fits, and if not even the smallest fits the ACP
- * runs uncached -- every read goes to the disk. Never a wait that could hang
- * the module load.
+ *
+ * rd vms-c01: SIZED TO THE MACHINE, as AUTOGEN sizes the XQP caches
+ * (ACP_HDRCACHE, ACP_DIRCACHE, ACP_MAPCACHE ...) on VMS. The cache is wired
+ * kernel memory nothing else can use, so it takes at most 1/ACP_CACHE_MEM_SHARE
+ * of physical memory: 16 sets (256 blocks, 137 KB) on a 16 MB VAX, where the
+ * fixed 1024-block table had cost 768 KB and starved the boot. A large machine
+ * still gets the full table. The sets are allocated several to a block of at
+ * most ACP_CACHE_CHUNK bytes, not one each: a set is 8.4 KB, which kmem rounds
+ * up to 12 KB (kmalloc to 16 KB), so per-set allocation wasted a third of the
+ * cache or more, and a block that size stays an easy allocation on any kernel.
+ *
+ * Allocated without sleeping at module load; when memory is short the table is
+ * halved until it fits, and if not even the smallest fits the ACP runs
+ * uncached -- every read goes to the disk. Never a wait that could hang the
+ * module load.
  */
 #define ACP_CACHE_NSET   (sizeof(void *) >= 8 ? 512u : 64u)
 #define ACP_CACHE_NSET_MIN 8u
+#define ACP_CACHE_MEM_SHARE 64u
+#define ACP_CACHE_CHUNK  65536u
+#define ACP_CACHE_PER_CHUNK \
+    (ACP_CACHE_CHUNK / sizeof(struct vms_acp_cache_set) ? \
+     ACP_CACHE_CHUNK / sizeof(struct vms_acp_cache_set) : 1u)
 static struct vms_acp_cache acp_cache;
 static struct vms_acp_cache_set **acp_cache_sets;
+static struct vms_acp_cache_set **acp_cache_chunks;  /* the blocks the sets live in */
+static uint32_t acp_cache_nchunk;
 static uint32_t acp_cache_nset;
 static exec_lock_t acp_cache_lock;
 static int acp_cache_lock_ready;
 
-static void acp_cache_free_sets(uint32_t n)
+static void acp_cache_free_sets(void)
 {
-    while (n--)
-        exec_free(acp_cache_sets[n]);
+    uint32_t c;
+
+    if (acp_cache_chunks) {
+        for (c = 0; c < acp_cache_nchunk; c++)
+            exec_free(acp_cache_chunks[c]);
+        exec_free(acp_cache_chunks);
+    }
     exec_free(acp_cache_sets);
+    acp_cache_chunks = NULL;
     acp_cache_sets = NULL;
+    acp_cache_nchunk = 0;
+}
+
+/* The largest power-of-two set count, within [ACP_CACHE_NSET_MIN,
+ * ACP_CACHE_NSET], whose sets fit in this machine's share. */
+static uint32_t acp_cache_nset_for_memory(void)
+{
+    unsigned long long share = exec_physmem_bytes() / ACP_CACHE_MEM_SHARE;
+    uint32_t n = ACP_CACHE_NSET;
+
+    while (n > ACP_CACHE_NSET_MIN &&
+           (unsigned long long)n * sizeof(struct vms_acp_cache_set) > share)
+        n /= 2u;
+    return n;
+}
+
+/* n sets in blocks of ACP_CACHE_PER_CHUNK; 0 if any allocation fails. */
+static int acp_cache_alloc_sets(uint32_t n)
+{
+    uint32_t per = (uint32_t)ACP_CACHE_PER_CHUNK;
+    uint32_t nchunk = (n + per - 1u) / per, c, i;
+
+    acp_cache_sets = exec_zalloc_atomic(n * sizeof(*acp_cache_sets));
+    acp_cache_chunks = exec_zalloc_atomic(nchunk * sizeof(*acp_cache_chunks));
+    if (!acp_cache_sets || !acp_cache_chunks)
+        return 0;
+    for (c = 0; c < nchunk; c++) {
+        uint32_t k = (c + 1u) * per <= n ? per : n - c * per;
+
+        acp_cache_chunks[c] = exec_zalloc_atomic(k * sizeof(struct vms_acp_cache_set));
+        if (!acp_cache_chunks[c])
+            return 0;
+        acp_cache_nchunk = c + 1u;
+        for (i = 0; i < k; i++)
+            acp_cache_sets[c * per + i] = &acp_cache_chunks[c][i];
+    }
+    return 1;
 }
 
 static void acp_cache_setup(void)
 {
-    uint32_t i, n;
+    uint32_t n;
 
     exec_lock_init(&acp_cache_lock);
     acp_cache_lock_ready = 1;
     vms_acp_cache_init(&acp_cache, NULL, 1u);
-    for (n = ACP_CACHE_NSET; n >= ACP_CACHE_NSET_MIN; n /= 2u) {
-        acp_cache_sets = exec_zalloc_atomic(n * sizeof(*acp_cache_sets));
-        if (!acp_cache_sets)
-            continue;
-        for (i = 0; i < n; i++) {
-            acp_cache_sets[i] = exec_zalloc_atomic(sizeof(struct vms_acp_cache_set));
-            if (!acp_cache_sets[i])
-                break;
-        }
-        if (i == n) {
+    for (n = acp_cache_nset_for_memory(); n >= ACP_CACHE_NSET_MIN; n /= 2u) {
+        if (acp_cache_alloc_sets(n)) {
             acp_cache_nset = n;
             vms_acp_cache_init(&acp_cache, acp_cache_sets, n);
             return;
         }
-        acp_cache_free_sets(i);
+        acp_cache_free_sets();
     }
     acp_cache_nset = 0;
 }
@@ -287,7 +340,7 @@ static void acp_cache_teardown(void)
     vms_acp_cache_init(&acp_cache, NULL, 1u);
     exec_unlock(&acp_cache_lock);
     if (acp_cache_sets)
-        acp_cache_free_sets(acp_cache_nset);
+        acp_cache_free_sets();
     acp_cache_nset = 0;
     acp_cache_lock_ready = 0;
     exec_lock_destroy(&acp_cache_lock);

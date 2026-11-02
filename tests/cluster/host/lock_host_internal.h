@@ -320,6 +320,12 @@ uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
                                uint32_t lkmode, uint32_t flags,
                                uint32_t *lkid_out);
 uint32_t vms_lock_rms_file_enq_no_label(void);
+/* The STANDING per-volume NL lock $MOUNT holds for the mount life (vms-25e;
+ * rd vms-3ea) and its release. Mirror of the
+ * src/kernel/vms_internal.h decls, where the full note lives. */
+uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
+                                   uint32_t *lkid_out);
+uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
 /*
  * Image rundown's lock release. In the real kernel this is called by
  * vms_access.c (image rundown) with PSL_C_USER; a host test calls it directly

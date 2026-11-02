@@ -187,6 +187,52 @@ uint32_t vms_lock_dlm_adopt_lock(const struct vms_dlm_adopt_tree *t,
 				 struct vms_dlm_adopt_lock_result *out);
 
 /*
+ * THE OLD MASTER'S VALUE BLOCK FOR ONE LOCK THIS NODE HOLDS IN THE TREE
+ * (rd vms-26e, the op-0x1a; vms_cluster_codec_dlm.h has the census).
+ *
+ * A holder that is not the new master relays the old master's block to the new
+ * master in its op-0x12 record. The NEW master sends itself no record, so for a
+ * lock it holds itself the only copy of the resource's value block it is ever
+ * given is this one -- and without it the tree it adopts has a zero block at
+ * sequence 0, which is what it then GRANTS: the RA7 fire-A defect, a real VAX
+ * reading Valblk 0 / Seqnum 0 where the tree's block was RMLVB-0123456789 at 1.
+ *
+ * Every cell is checked against what this executive really holds, never
+ * trusted:
+ *   holder_lkid   must name a PROXY LKB of ours (a master-side or local lock
+ *                 is not reachable through it);
+ *   from_csid     the CONNECTION MANAGER's identification of the sender, and
+ *                 it must be both that proxy's recorded master AND the old
+ *                 master of an OPEN adoption whose tree contains the proxy's
+ *                 resource -- so only the system really handing this node that
+ *                 tree can write its block;
+ *   master_lkid   must be the handle that master's own grant put on the proxy.
+ *
+ * Then, and only then, the RESOURCE's block and sequence are written. ABSENT
+ * (`valblk_present` 0) leaves the resource's block alone, the rule the op-0x12
+ * record follows. The lock's own copy (its LKSB value) is not touched: that is
+ * what its grant returned to the process, and this frame is about the RSB.
+ *
+ * Returns SS$_NORMAL when the lock and the adoption check out (the block
+ * written, or nothing to write); SS$_BADPARAM for a malformed call;
+ * SS$_IVLOCKID when the handles, the sender or the adoption do not.
+ */
+struct vms_dlm_adopt_valblk {
+	uint32_t from_csid;     /* the CM's identification of the sender      */
+	uint32_t master_lkid;   /* op-0x1a body[20:24]: the SENDER's handle    */
+	uint32_t holder_lkid;   /* op-0x1a body[24:28]: OUR handle             */
+	uint32_t valblk_seq;    /* op-0x1a body[52:56]                         */
+	uint8_t  valblk[VMS_DLM_VALBLK_LEN];   /* op-0x1a body[36:52]          */
+	uint8_t  valblk_present;
+	uint8_t  pad[3];
+};
+
+uint32_t vms_lock_dlm_adopt_valblk(const struct vms_dlm_adopt_valblk *v);
+
+/* How many op-0x1a blocks really landed on a resource, since boot. */
+uint32_t vms_lock_dlm_adopt_valblks_applied(void);
+
+/*
  * CLOSE the adoption of `t` (the 0x13 end-of-records). `*n_locks` (optional) is
  * how many locks the engine REALLY installed -- a counted observation, and the
  * number any later statement about this tree has to be consistent with.

@@ -48,7 +48,7 @@ static int rm_ops_ok(const struct vms_dlm_rm *f)
 	       o->adopt_tree_of_lkid != 0 && o->adopt_reported != 0 &&
 	       o->name_mastered_here != 0 && o->dir_hash != 0 &&
 	       o->dir_node != 0 && o->stage_reply != 0 && o->send != 0 &&
-	       o->residue_fill != 0 && o->log != 0;
+	       o->residue_fill != 0 && o->adopt_valblk != 0 && o->log != 0;
 }
 
 static void rm_say(const struct vms_dlm_rm *f, const char *msg)
@@ -827,6 +827,42 @@ static struct vms_dlm_rm_tree *rm_dispatch_slot(struct vms_dlm_rm *f,
 	return t;
 }
 
+/*
+ * op 0x1a -- the old master's value block for ONE lock this node holds in the
+ * tree (rd vms-26e). Every cell goes to the ENGINE, which checks it against the
+ * lock and the adoption it really holds; this table copies the parse and the
+ * connection manager's sender identification across and asserts nothing.
+ */
+static enum vms_dlm_rm_status rm_valblk(struct vms_dlm_rm *f,
+					uint32_t from_csid,
+					const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_rm_valblk w;
+	struct vms_dlm_adopt_valblk v;
+	uint32_t i;
+
+	if (from_csid == 0u || !rm_ops_ok(f))
+		return VMS_DLM_RM_REFUSED;
+	if (vms_dlm_rm_valblk_parse_body(body, len, &w) != VMS_CODEC_OK) {
+		f->codec_failures++;
+		return VMS_DLM_RM_REFUSED;
+	}
+	rm_bzero(&v, (uint32_t)sizeof(v));
+	v.from_csid = from_csid;
+	v.master_lkid = w.master_lkid;
+	v.holder_lkid = w.holder_lkid;
+	v.valblk_present = w.valblk_present;
+	v.valblk_seq = w.valblk_seq;
+	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+		v.valblk[i] = w.valblk[i];
+	if (!f->ops->adopt_valblk(f->ops->ctx, &v)) {
+		f->valblks_refused++;
+		return VMS_DLM_RM_REFUSED;
+	}
+	f->valblks_taken++;
+	return VMS_DLM_RM_HANDLED;
+}
+
 enum vms_dlm_rm_status vms_dlm_rm_step(struct vms_dlm_rm *f, uint32_t from_csid,
 				       uint8_t category, uint8_t opcode,
 				       const uint8_t *body, uint32_t len)
@@ -843,6 +879,8 @@ enum vms_dlm_rm_status vms_dlm_rm_step(struct vms_dlm_rm *f, uint32_t from_csid,
 		return VMS_DLM_RM_NOT_MINE;
 	if (category != (uint8_t)VMS_DLM_CAT_REQUEST)
 		return VMS_DLM_RM_NOT_MINE;
+	if (opcode == (uint8_t)VMS_DLM_WIREOP_RM_1A)
+		return rm_valblk(f, from_csid, body, len);
 	ev = rm_event_of(opcode);
 	if (ev < 0)
 		return VMS_DLM_RM_NOT_MINE;

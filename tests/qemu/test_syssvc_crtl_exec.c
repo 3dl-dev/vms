@@ -22,6 +22,10 @@
  *   C  a subprocess ending SS$_NORMAL gives status 0, through wait() for any.
  *   D  with no subprocess left, wait() fails ECHILD.
  *   E  the creator's own getpid() is its VMS PID ($GETJPI JPI$_PID).
+ *   F  an IMAGE TASK (CONTINUE: DCL's RUN shape, sharing its creator's VMS PID)
+ *      that execs a subprocess is the one told how it ended: its completion
+ *      and termination record go to the task that created it, not to another
+ *      row holding the same VMS PID.
  *
  * NEGATIVE CONTROL: tests/qemu/defects.d/crtl-exec-substrate-fork.defect puts
  * the substrate fork/execve/wait back; A's $GETJPI, getpid and completion code
@@ -171,6 +175,28 @@ static int creator_main(void)
     return fail ? 1 : 0;
 }
 
+/* F: the image task creates and waits; bounded, so a lost completion is a
+ * FAIL, not a hang. */
+static int image_task_main(void)
+{
+    (void)vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
+    char *args[] = { NULL };
+    char *env[] = { NULL };
+    uint32_t pid = ovmx_crtl_exec_create(DIR_ "/POSIX3", args, 0, env);
+    if (!pid)
+        return 2;
+    for (int i = 0; i < 400; i++) {
+        uint32_t cond = 0;
+        int r = ovmx_crtl_wait_cond((int)pid, &cond, 1);
+        if (r == (int)pid)
+            return cond == POSIX3 ? 0 : 3;
+        if (r < 0)
+            return 4;
+        usleep(50000);
+    }
+    return 5;
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -208,6 +234,17 @@ int main(int argc, char **argv)
     int ws = 0;
     waitpid(c, &ws, 0);
     CHECK(c > 0 && WIFEXITED(ws) && WEXITSTATUS(ws) == 0, "the creator's checks all held");
+
+    uint32_t kst = 0;
+    pid_t t = ovmx_fork_kind_st(VMS_CREPRC_PCB_CONTINUE, &kst);
+    if (t == 0)
+        _exit(image_task_main());
+    ws = 0;
+    if (t > 0)
+        waitpid(t, &ws, 0);
+    printf("  INFO: image task rc=%d (creprc_pcb %08X)\n", WIFEXITED(ws) ? WEXITSTATUS(ws) : -1, (unsigned)kst);
+    CHECK(t > 0 && WIFEXITED(ws) && WEXITSTATUS(ws) == 0,
+          "F: an image task sharing its creator's VMS PID gets its own subprocess's completion %X0035A019");
     printf("=== test_syssvc_crtl_exec: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

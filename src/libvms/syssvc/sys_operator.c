@@ -91,18 +91,12 @@ extern int vms$$chan_is_mailbox(uint16_t chan);
 /* Operator log file path */
 #include "ovmx_layout.h"
 /*
- * OPERATOR.LOG is written the VMS way now (vms-aac, epic vms-208 atomic flip):
- * one RMS $PUT-at-EOF record per line over the Files-11 ODS-2 ACP when the
- * on-volume log is writable (rms_textfile.c carries the RMS-over-ACP writer).
- * When it cannot be written -- no /dev/vms (host ctest / plain container /
- * netbsd-vax cross), OR /dev/vms present but SYS$MANAGER's system disk not
- * mounted/provisioned (early boot; an isolated executive, as in the
- * test_syssvc_* harness) -- the record is written the legacy host/console way
- * instead (open_operator_log_host() below), where real VMS OPCOM writes before
- * OPERATOR.LOG opens: OPCOM never silently drops an operator audit record. On a
- * booted system with a provisioned system disk the ACP $PUT succeeds and the
- * host writer is never reached. See operator_log_put_record() for the full
- * on-volume-first / console-fallback contract (Rule 9 / INV-6).
+ * OPERATOR.LOG is written the VMS way (vms-aac, epic vms-208): one RMS
+ * $PUT-at-EOF record per line over the Files-11 ODS-2 ACP. With the executive
+ * present that is the ONLY destination: a $PUT that fails is reported to the
+ * caller (SS$_FILACCERR) and the record is not diverted (rd vms-1f6). Only
+ * when there is no executive at all (host ctest, plain container) is the
+ * legacy host writer, open_operator_log_host(), used.
  */
 #include "rms_textfile.h"
 #include "vmsfs/filespec.h"
@@ -113,38 +107,15 @@ extern int vms$$chan_is_mailbox(uint16_t chan);
 #define OPERATOR_LOG_FALLBACK "/tmp/OPERATOR.LOG"
 
 /*
- * ON-VOLUME FIRST, CONSOLE/HOST FALLBACK (vms-aac, epic vms-208 atomic flip;
- * Rule 9 / INV-6). See operator_log_put_record() below for the writer that
- * carries this contract: OPCOM $PUTs the record over the Files-11 ODS-2 ACP
- * (rms_textfile_append_line -> RMS $PUT-at-EOF on the on-volume log) when the
- * on-volume OPERATOR.LOG is writable, and writes the legacy console/host log
- * when it is not -- exactly where real VMS OPCOM writes before OPERATOR.LOG
- * opens. rms_executive_absent() (below) only gates whether the ACP is reachable
- * AT ALL; whether SYS$MANAGER's volume is mounted/provisioned is settled by the
- * $PUT itself, not by a mount probe (the executive can hold a mounted ODS-2
- * volume that carries no writable SYS$MANAGER -- the test_syssvc_* harness's
- * fixture is exactly that, which is why a DKA0:-mount probe cannot answer this).
- *
  * rms_executive_absent() lives in LIBVMSRMS, which links LIBVMS (this file), so
  * it is referenced WEAKLY -- the same library-layering seam rms_textfile.c uses
- * for the RMS services. An image that links vmsrms (DCL, LOGINOUT, VMSSSHD,
- * PROVISION) binds the real probe; an image that does not has no ACP at all, so
- * "absent" is the correct reading and the legacy writer is used.
+ * for the RMS services. An image that does not link vmsrms has no ACP at all,
+ * so "absent" is the correct reading there.
  */
 #pragma weak rms_executive_absent
 extern int rms_executive_absent(void);
 
-/*
- * Is the Files-11 ODS-2 ACP reachable at all (i.e. is /dev/vms present in an
- * image that links LIBVMSRMS)? Returns 1 when it is not -- a host ctest, a
- * plain-container gate, the netbsd-vax cross, or an image that links no RMS
- * engine. This gates whether OPCOM even ATTEMPTS the on-volume log below; it is
- * NOT the whole answer, because /dev/vms being present does not mean
- * SYS$MANAGER:OPERATOR.LOG can be written -- the log's system disk may not be
- * mounted or provisioned (early boot, or an isolated executive as in the
- * test_syssvc_* harness). The write itself is what settles that, and OPCOM
- * defers to the host/console writer when it fails (see operator_log_put_record).
- */
+/* 1 when no ACP is reachable at all (no /dev/vms, or no RMS engine linked). */
 static int operator_log_executive_absent(void)
 {
     if (rms_executive_absent)
@@ -155,25 +126,8 @@ static int operator_log_executive_absent(void)
 /*
  * operator_log_put_record - append one OPCOM record (a banner line, a body-2
  * line, the message, and a blank separator) to SYS$MANAGER:OPERATOR.LOG.
- *
- * ON-VOLUME FIRST, CONSOLE/HOST FALLBACK (vms-aac / vms-censusident; Rule 9 /
- * INV-6). When /dev/vms is present OPCOM attempts the genuine flip path -- RMS
- * $PUT-at-EOF over the Files-11 ODS-2 ACP (rms_textfile_append_line). On a
- * booted system with a provisioned, mounted SYS$MANAGER that $PUT succeeds and
- * is the ONLY writer touched. When it cannot be written -- no /dev/vms, OR
- * /dev/vms present but SYS$MANAGER's volume is not mounted/provisioned (early
- * boot; the isolated test_syssvc_* executive, whose one mounted ODS-2 fixture
- * carries no writable SYS$MANAGER) -- the record is written the legacy
- * host/console way instead. That is exactly what real VMS OPCOM does before
- * OPERATOR.LOG is opened at startup, and it is the SAME shared host log the
- * executive-absent path already uses (open_operator_log_host, the writer
- * opcom_record_body_gate exercises): OPCOM never SILENTLY DROPS an operator
- * audit record. It is NOT the INV-6 per-process masquerade -- one shared file,
- * genuine stream-LF records, not a fabricated per-process success -- and once
- * the on-volume log is writable the host writer is never reached.
- *
- * Returns SS$_NORMAL if the record was written to either destination,
- * SS$_FILACCERR only when NEITHER could be opened.
+ * Executive present: over the ACP, or SS$_FILACCERR (rd vms-1f6). Executive
+ * absent: the legacy host writer. Returns SS$_NORMAL when written.
  */
 static FILE *open_operator_log_host(void);   /* defined below */
 
@@ -182,14 +136,19 @@ static uint32_t operator_log_put_record(const char *banner,
                                         const char *msgtext)
 {
     if (!operator_log_executive_absent()) {
-        /* /dev/vms present: try the genuine on-volume ACP log first. */
-        if (rms_textfile_append_line(OPERATOR_LOG_PATH, banner) == 0) {
-            rms_textfile_append_line(OPERATOR_LOG_PATH, line2);
-            rms_textfile_append_line(OPERATOR_LOG_PATH, msgtext);
-            rms_textfile_append_line(OPERATOR_LOG_PATH, "");
-            return SS$_NORMAL;
-        }
-        /* fall through: the ACP could not write the on-volume OPERATOR.LOG. */
+        /* /dev/vms present: the record goes to the on-volume OPERATOR.LOG over
+         * the ACP, or nowhere. When the $PUT fails the caller is TOLD
+         * (SS$_FILACCERR); the record is never diverted to a host file that
+         * shares no state with the volume -- that returned SS$_NORMAL for an
+         * operator-audit record nobody on the system could read (rd vms-1f6,
+         * INV-6 fail honest). Gate: tests/qemu/test_syssvc_ident.c scenario
+         * OPLOG-NOVOL; negative control defects.d/oplog-host-fallback.defect. */
+        if (rms_textfile_append_line(OPERATOR_LOG_PATH, banner) != 0 ||
+            rms_textfile_append_line(OPERATOR_LOG_PATH, line2) != 0 ||
+            rms_textfile_append_line(OPERATOR_LOG_PATH, msgtext) != 0 ||
+            rms_textfile_append_line(OPERATOR_LOG_PATH, "") != 0)
+            return SS$_FILACCERR;
+        return SS$_NORMAL;
     }
 
     FILE *log = open_operator_log_host();
@@ -203,7 +162,7 @@ static uint32_t operator_log_put_record(const char *banner,
 }
 
 /*
- * Open OPERATOR.LOG the legacy host way (executive absent): translate
+ * Open OPERATOR.LOG the legacy host way (executive ABSENT only): translate
  * SYS$MANAGER:OPERATOR.LOG through vmsfs and append, falling back to
  * /tmp/OPERATOR.LOG when that path is not writable. Returns an append-mode
  * FILE* or NULL.
@@ -507,9 +466,8 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
      * Write the record to SYS$MANAGER:OPERATOR.LOG: the genuine RMS $PUT-at-EOF
      * over the Files-11 ODS-2 ACP when the on-volume log is writable (one
      * stream-LF record per line, the first append $CREATEing it, a trailing
-     * blank reproducing OPCOM's inter-record separator), else the legacy
-     * host/console writer -- see operator_log_put_record() for the full
-     * on-volume-first / console-fallback contract (vms-aac; Rule 9 / INV-6).
+     * blank reproducing OPCOM's inter-record separator); with the executive
+     * present a failed $PUT is returned, never diverted (rd vms-1f6).
      */
     return operator_log_put_record(banner, reqline, msgtext);
 }

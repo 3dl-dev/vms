@@ -64,6 +64,11 @@
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"   /* processes this suite creates (rd vms-2a5) */
 #include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
+#include "descrip.h"
+#include "rms_textfile.h"    /* the on-volume OPERATOR.LOG, read back (vms-1f6) */
+#include "rms/rms.h"
+#include "starlet.h"
+#include "opcdef.h"
 
 #define ODS2_UNIT "VDA300:"  /* vdd: the generated system-disk ODS-2 fixture */
 
@@ -669,17 +674,53 @@ static char *const g_env[] = {
 #define G_UIC_STR  "13762571"
 
 /*
- * WHERE sys$sndopr'S RECORD LANDS. src/libvms/syssvc/sys_operator.c writes
- * SYS$MANAGER:OPERATOR.LOG and falls back to /tmp/OPERATOR.LOG when that
- * cannot be opened. SYS$MANAGER is SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]
- * (src/vmslnm/lnm_defaults.c) and VDA0: is SYSDISK_MOUNT, so the primary is
- * the path below. BOTH are staged and BOTH are read: which one wins is a
- * property of the image, and a check that guessed wrong would pass by looking
- * at an empty file.
+ * WHERE sys$sndopr'S RECORD LANDS (rd vms-1f6). With the executive present,
+ * src/libvms/syssvc/sys_operator.c $PUTs it to SYS$MANAGER:OPERATOR.LOG over
+ * the ACP or refuses (SS$_FILACCERR) -- it never diverts to a host file. The
+ * subprocess's SYS$SYSDEVICE is the $MOUNTed fixture, so SYS$MANAGER is
+ * G_OPLOG_VMS. SHIPPING is not SYSTEM and SYSMGR does not let it create a file
+ * (RMS$_CRE, as on VMS), so the scenario stages the log the way an operator
+ * would share one: SYSTEM $CREATEs it with W:RWE. Read back over RMS by THIS
+ * process. G_OPLOG_FALL is the host file the old code diverted to: it must
+ * stay empty.
  */
-#define G_OPLOG_DIR   "/vms/SYS0/SYSCOMMON/SYSMGR"
-#define G_OPLOG_PRIM  G_OPLOG_DIR "/OPERATOR.LOG"
+#define G_OPLOG_VMS   ODS2_UNIT "[SYS0.SYSCOMMON.SYSMGR]OPERATOR.LOG"
 #define G_OPLOG_FALL  "/tmp/OPERATOR.LOG"
+
+/*
+ * RMS FORCE-BIND ANCHOR. This is a static-musl link: libvms's rms_textfile
+ * layer (which sys$sndopr writes OPERATOR.LOG through, and which the reader
+ * below uses) reaches the RMS record services through `#pragma weak`, and a
+ * weak-undef reference does not extract an archive member. Without a strong
+ * reference to every service it needs, THIS process has no RMS file layer at
+ * all (SS$_NOSUCHDEV), so OPLOG-NOVOL would pass without ever reaching the ACP.
+ * Same mechanism as src/vmslink/dcl_rms_bind.c for DCL.EXE.
+ */
+__attribute__((used)) static void *const g_rms_bind[] = {
+    (void *)sys$open, (void *)sys$close, (void *)sys$connect,
+    (void *)sys$disconnect, (void *)sys$get, (void *)sys$put, (void *)sys$create,
+};
+
+/* $CREATE a new, empty, world-writable version of the on-volume log. */
+static int g_create_oplog(void)
+{
+    struct FAB fab = cc$rms_fab;
+    struct XABPRO pro = cc$rms_xabpro;
+    pro.xab$w_pro = 0x8800;              /* S:RWED,O:RWED,G:RWE,W:RWE */
+    fab.fab$l_fna = (char *)G_OPLOG_VMS;
+    fab.fab$b_fns = (uint8_t)strlen(G_OPLOG_VMS);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_STMLF;
+    fab.fab$b_fac = FAB$M_PUT;
+    fab.fab$l_xab = &pro;
+    uint32_t st = sys$create(&fab, 0, 0);
+    if (!(st & 1)) {
+        printf("  NOTE: $CREATE %s -> %08X\n", G_OPLOG_VMS, (unsigned)st);
+        return -1;
+    }
+    sys$close(&fab, 0, 0);
+    return 0;
+}
 
 static int g_stage_files(void)
 {
@@ -700,20 +741,12 @@ static int g_stage_files(void)
     mkdir(G_QDIR, 0777);
     chmod(G_QDIR, 0777);
 
-    /* Both candidate operator logs, emptied and made writable by an
-     * unprivileged process. Emptied because a record left by an earlier
-     * scenario would make the header assertions below true of somebody
-     * else's request. */
-    mkdir("/vms/SYS0", 0777);
-    mkdir("/vms/SYS0/SYSCOMMON", 0777);
-    mkdir(G_OPLOG_DIR, 0777);
-    chmod("/vms/SYS0", 0777);
-    chmod("/vms/SYS0/SYSCOMMON", 0777);
-    chmod(G_OPLOG_DIR, 0777);
-    fp = fopen(G_OPLOG_PRIM, "w");
-    if (fp) { fclose(fp); chmod(G_OPLOG_PRIM, 0666); }
-    fp = fopen(G_OPLOG_FALL, "w");
-    if (fp) { fclose(fp); chmod(G_OPLOG_FALL, 0666); }
+    /* A fresh, empty on-volume log (a record left by an earlier scenario
+     * would make the header assertions true of somebody else's request), and
+     * the host file the old fallback wrote, removed so any byte in it later
+     * is a diversion. */
+    if (g_create_oplog() != 0) return -1;
+    unlink(G_OPLOG_FALL);
 
     fp = fopen(G_LNXDIR "/JOB.TXT", "w");
     if (!fp) return -1;
@@ -738,27 +771,34 @@ static int g_stage_files(void)
  */
 static size_t g_read_operator_log(char *out, size_t outsz)
 {
-    static const char *paths[2] = { G_OPLOG_PRIM, G_OPLOG_FALL };
     size_t used = 0;
-    int i;
+    uint32_t st = 0;
+    char line[1024];
+    int too_long = 0;
+    rms_textfile_t *tf = rms_textfile_open_st(G_OPLOG_VMS, &st);
 
     out[0] = '\0';
-    for (i = 0; i < 2; i++) {
-        FILE *fp = fopen(paths[i], "r");
-        size_t n;
-        if (!fp) continue;
-        n = fread(out + used, 1, outsz - 1 - used, fp);
-        fclose(fp);
+    if (!tf) {
+        printf("  NOTE: open %s -> %08X\n", G_OPLOG_VMS, (unsigned)st);
+        return 0;
+    }
+    while (rms_textfile_getline(tf, line, sizeof line, &too_long) > 0) {
+        size_t n = strlen(line);
+        if (used + n + 2 >= outsz) break;
+        memcpy(out + used, line, n);
         used += n;
-        if (used >= outsz - 1) break;
+        out[used++] = '\n';
     }
+    rms_textfile_close(tf);
     out[used] = '\0';
-    {
-        size_t j;
-        for (j = 0; j < used; j++)
-            if (out[j] == '\0') out[j] = ' ';
-    }
     return used;
+}
+
+/* Bytes in the host file the old code diverted operator records to. */
+static long g_fallback_size(void)
+{
+    struct stat sb;
+    return stat(G_OPLOG_FALL, &sb) == 0 ? (long)sb.st_size : 0;
 }
 
 /*
@@ -768,12 +808,8 @@ static size_t g_read_operator_log(char *out, size_t outsz)
  */
 static void g_truncate_operator_logs(void)
 {
-    FILE *fp;
-
-    fp = fopen(G_OPLOG_PRIM, "w");
-    if (fp) { fclose(fp); chmod(G_OPLOG_PRIM, 0666); }
-    fp = fopen(G_OPLOG_FALL, "w");
-    if (fp) { fclose(fp); chmod(G_OPLOG_FALL, 0666); }
+    (void)g_create_oplog();     /* a new empty version: appends land in it */
+    unlink(G_OPLOG_FALL);
 }
 
 /*
@@ -956,6 +992,46 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
     while (waitpid(sess, &st, 0) < 0 && errno == EINTR)
         ;
     return 0;
+}
+
+/*
+ * OPLOG-NOVOL (rd vms-1f6). With the executive present and SYS$MANAGER naming
+ * a directory that does not exist, sys$sndopr's $PUT of OPERATOR.LOG fails.
+ * The caller must be TOLD (SS$_FILACCERR) and the record must not land in a
+ * host file: it used to fall back to /tmp/OPERATOR.LOG and return SS$_NORMAL,
+ * an operator-audit record nobody on the system could read.
+ */
+static void scenario_oplog_novol(void)
+{
+    lnm_manager_t *mgr = lnm_get_manager();
+    unlink(G_OPLOG_FALL);
+    uint32_t lst = lnm_create(mgr, LNM_JOB_TABLE, "SYS$MANAGER",
+                              ODS2_UNIT "[OVMXNOSUCHDIR]", LNM_ATTR_TERMINAL,
+                              LNM_MODE_EXEC);
+    CHECK($VMS_STATUS_SUCCESS(lst),
+          "OPLOG-NOVOL: SYS$MANAGER is pointed at a directory the volume does not have");
+
+    struct { struct opcdef h; char text[64]; } msg;
+    memset(&msg, 0, sizeof msg);
+    const char *t = "OVMX vms-1f6 probe";
+    memcpy((char *)&msg + OPC$K_MS_HDRLEN, t, strlen(t));
+    struct dsc$descriptor_s d;
+    d.dsc$w_length = (uint16_t)(OPC$K_MS_HDRLEN + strlen(t));
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = (char *)&msg;
+    uint32_t st = sys$sndopr(&d, 0);
+    printf("  NOTE: OPLOG-NOVOL sys$sndopr -> %08X\n", (unsigned)st);
+
+    /* negctl: oplog-host-fallback */
+    CHECK(st == SS$_FILACCERR,
+          "OPLOG-NOVOL: sys$sndopr returns SS$_FILACCERR when OPERATOR.LOG cannot be "
+          "written on the volume -- not SS$_NORMAL");
+    /* negctl: oplog-host-fallback */
+    CHECK(g_fallback_size() == 0,
+          "OPLOG-NOVOL: and the record is not diverted to the host file /tmp/OPERATOR.LOG");
+
+    (void)lnm_delete(mgr, LNM_JOB_TABLE, "SYS$MANAGER", LNM_MODE_EXEC);
 }
 
 static void scenario_g_subprocess_reports_the_executive_name(void)
@@ -1304,6 +1380,10 @@ static void scenario_g_subprocess_reports_the_executive_name(void)
     {
         static char oplog[16384];
         size_t oplen = g_read_operator_log(oplog, sizeof(oplog));
+
+        CHECK(g_fallback_size() == 0,
+              "G/OPCOM: no record was diverted to the host file /tmp/OPERATOR.LOG "
+              "(rd vms-1f6: the executive is present, so the on-volume log or nothing)");
         int total = 0, named;
 
         named = g_opcom_headers_naming(oplog, G_NAME, &total);
@@ -1912,6 +1992,7 @@ int main(void)
      *    subprocess the executive has not named (vms-f39, vms-f42d).
      * ---------------------------------------------------------------- */
     scenario_g_subprocess_reports_the_executive_name();
+    scenario_oplog_novol();
 
     printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

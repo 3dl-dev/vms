@@ -109,6 +109,11 @@ class Mapper:
                 out.append("-L/SYS$SYSTEM")
                 i += 1
                 continue
+            if x == "-I" and i + 1 < len(a):
+                # the separate form (libbacktrace's `-I ../../src/.../include')
+                out += ["-I", self.path(cwd, a[i + 1])]
+                i += 2
+                continue
             if x.startswith("-I") and len(x) > 2:
                 out.append("-I" + self.path(cwd, x[2:]))
                 i += 1

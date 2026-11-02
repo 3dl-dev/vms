@@ -229,54 +229,66 @@ exec_lock_t vms_acp_vol_lock;
 
 /*
  * rd vms-943: the ACP's block cache (src/kernel-core/vms_acp_cache.h says what
- * it keeps and the coherence rules). ACP_CACHE_NSET sets of VMS_ACP_CACHE_WAYS
- * blocks: 8192 blocks, 4 MB, allocated a set at a time at module load. If the
- * allocation fails the ACP runs uncached -- every read goes to the disk.
+ * it keeps and the coherence rules). Up to ACP_CACHE_NSET sets of
+ * VMS_ACP_CACHE_WAYS blocks: 8192 blocks (4 MB) on a 64-bit executive, 1024
+ * (512 KB) on a 32-bit one, whose kernel address space is small (NetBSD/vax).
+ * The sets are allocated without sleeping at module load; when memory is short
+ * the table is halved until it fits, and if not even the smallest fits the ACP
+ * runs uncached -- every read goes to the disk. Never a wait that could hang
+ * the module load.
  */
-#define ACP_CACHE_NSET 512u
+#define ACP_CACHE_NSET   (sizeof(void *) >= 8 ? 512u : 64u)
+#define ACP_CACHE_NSET_MIN 8u
 static struct vms_acp_cache acp_cache;
 static struct vms_acp_cache_set **acp_cache_sets;
+static uint32_t acp_cache_nset;
 static exec_lock_t acp_cache_lock;
 static int acp_cache_lock_ready;
 
+static void acp_cache_free_sets(uint32_t n)
+{
+    while (n--)
+        exec_free(acp_cache_sets[n]);
+    exec_free(acp_cache_sets);
+    acp_cache_sets = NULL;
+}
+
 static void acp_cache_setup(void)
 {
-    uint32_t i;
+    uint32_t i, n;
 
     exec_lock_init(&acp_cache_lock);
     acp_cache_lock_ready = 1;
-    vms_acp_cache_init(&acp_cache, NULL, ACP_CACHE_NSET);
-    acp_cache_sets = exec_zalloc(ACP_CACHE_NSET * sizeof(*acp_cache_sets));
-    if (!acp_cache_sets)
-        return;
-    for (i = 0; i < ACP_CACHE_NSET; i++) {
-        acp_cache_sets[i] = exec_zalloc(sizeof(struct vms_acp_cache_set));
-        if (!acp_cache_sets[i]) {
-            while (i--)
-                exec_free(acp_cache_sets[i]);
-            exec_free(acp_cache_sets);
-            acp_cache_sets = NULL;
+    vms_acp_cache_init(&acp_cache, NULL, 1u);
+    for (n = ACP_CACHE_NSET; n >= ACP_CACHE_NSET_MIN; n /= 2u) {
+        acp_cache_sets = exec_zalloc_atomic(n * sizeof(*acp_cache_sets));
+        if (!acp_cache_sets)
+            continue;
+        for (i = 0; i < n; i++) {
+            acp_cache_sets[i] = exec_zalloc_atomic(sizeof(struct vms_acp_cache_set));
+            if (!acp_cache_sets[i])
+                break;
+        }
+        if (i == n) {
+            acp_cache_nset = n;
+            vms_acp_cache_init(&acp_cache, acp_cache_sets, n);
             return;
         }
+        acp_cache_free_sets(i);
     }
-    vms_acp_cache_init(&acp_cache, acp_cache_sets, ACP_CACHE_NSET);
+    acp_cache_nset = 0;
 }
 
 static void acp_cache_teardown(void)
 {
-    uint32_t i;
-
     if (!acp_cache_lock_ready)
         return;
     exec_lock(&acp_cache_lock);
-    vms_acp_cache_init(&acp_cache, NULL, ACP_CACHE_NSET);
+    vms_acp_cache_init(&acp_cache, NULL, 1u);
     exec_unlock(&acp_cache_lock);
-    if (acp_cache_sets) {
-        for (i = 0; i < ACP_CACHE_NSET; i++)
-            exec_free(acp_cache_sets[i]);
-        exec_free(acp_cache_sets);
-        acp_cache_sets = NULL;
-    }
+    if (acp_cache_sets)
+        acp_cache_free_sets(acp_cache_nset);
+    acp_cache_nset = 0;
     acp_cache_lock_ready = 0;
     exec_lock_destroy(&acp_cache_lock);
 }
@@ -324,7 +336,7 @@ void vms_acp_init(void)
     exec_lock_init(&vms_acp_vol_lock);
     acp_cache_setup();
     pr_info("vms: ODS-2 ACP mounted-volume table initialized (block cache %u blocks)\n",
-            acp_cache_sets ? ACP_CACHE_NSET * VMS_ACP_CACHE_WAYS : 0u);
+            acp_cache_nset * VMS_ACP_CACHE_WAYS);
 }
 
 void vms_acp_cleanup(void)

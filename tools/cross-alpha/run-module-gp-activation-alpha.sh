@@ -979,6 +979,25 @@ assert_crtlfd() {
     tr -d '\r' < "$log" | grep >/dev/null -aF "CFDX: $_call atexit-ran" \
       || { echo "  assert_crtlfd: main returning $_call: the atexit function did not run" >&2; return 1; }
   done
+  # vms-593: the C RTL's clock is the system time and its zone the SYS$TIMEZONE_*
+  # logicals: each DEFINE of the differential moves the next run's localtime(),
+  # with no TZ variable anywhere. The first run's time() (UTC, differential 0)
+  # lies between the two F$TIME stamps DCL printed around it.
+  local _t _d1 _d2 _u
+  _t=$(tr -d '\r' < "$log")
+  for _x in "zone=UTC +0000 jan=2026-01-15 12:00 UTC +0000 ctime=Thu Jan 15 12:00:00 2026" \
+            "zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026" \
+            "zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026"; do
+    printf '%s\n' "$_t" | grep -aF " $_x" | grep >/dev/null -aE "CRTLTIME: utc=[0-9-]{10} [0-9:]{8} zone=" \
+      || { echo "  assert_crtlfd: the C RTL's local time did not follow the differential: no '$_x'" >&2; return 1; }
+  done
+  _d1=$(printf '%s\n' "$_t" | grep -aoE "CRTLTIME-DCL: [0-9-]{10} [0-9:]{8}" | sed -n 1p | cut -c15-)
+  _d2=$(printf '%s\n' "$_t" | grep -aoE "CRTLTIME-DCL: [0-9-]{10} [0-9:]{8}" | sed -n 2p | cut -c15-)
+  _u=$(printf '%s\n' "$_t" | grep -aoE "CRTLTIME: utc=[0-9-]{10} [0-9:]{8}" | sed -n 1p | cut -c15-)
+  [ -n "$_d1" ] && [ -n "$_d2" ] && [ -n "$_u" ] \
+    || { echo "  assert_crtlfd: the F\$TIME stamps or the image's time() are missing" >&2; return 1; }
+  [ "$(printf '%s\n' "$_d1" "$_u" "$_d2" | LC_ALL=C sort | tr '\n' '|')" = "$_d1|$_u|$_d2|" ] \
+    || { echo "  assert_crtlfd: time() $_u is not the system time (F\$TIME $_d1 .. $_d2)" >&2; return 1; }
   return 0
 }
 
@@ -3244,7 +3263,17 @@ EOF
       for _x in "ret 0:%X00000001" "ret 3:%X0035A019"; do
         echo "CFDX: ${_x%%:*} flushed-by-exitCFDX: ${_x%%:*} atexit-ranCRTLFD-EXIT: ${_x%%:*} STATUS=${_x##*:}"
       done
+      echo "CRTLTIME-DCL: 2026-11-02 17:40:11.07"
+      echo "CRTLTIME: utc=2026-11-02 17:40:12 zone=UTC +0000 jan=2026-01-15 12:00 UTC +0000 ctime=Thu Jan 15 12:00:00 2026"
+      echo "CRTLTIME-DCL: 2026-11-02 17:40:13.52"
+      echo "CRTLTIME: utc=2026-11-02 17:40:14 zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026"
+      echo "CRTLTIME: utc=2026-11-02 17:40:15 zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026"
     } > "$_st/pass.log"
+    # vms-593 negative controls: the differential is not followed (musl's UTC), the
+    # TZ variable is read, and a time() that is not the system time.
+    sed 's/zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026/zone=UTC +0000 jan=2026-01-15 12:00 UTC +0000 ctime=Thu Jan 15 12:00:00 2026/' "$_st/pass.log" > "$_st/tdfignored.log"
+    sed 's/zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026/zone=XXX +0700 jan=2026-01-15 19:00 XXX +0700 ctime=Thu Jan 15 19:00:00 2026/' "$_st/pass.log" > "$_st/tzread.log"
+    sed 's/CRTLTIME: utc=2026-11-02 17:40:12/CRTLTIME: utc=2026-11-02 18:40:12/' "$_st/pass.log" > "$_st/clockoff.log"
     # vms-599 negative controls: musl's exit (exit(1) a POSIX failure, nothing recorded),
     # a __posix_exit that does not encode, and an exit that skips the stdio flush
     sed 's/CRTLFD-EXIT: exit 1 STATUS=%X00000001/CRTLFD-EXIT: exit 1 STATUS=%X0000002C/' "$_st/pass.log" > "$_st/muslexit.log"
@@ -3259,7 +3288,7 @@ EOF
     grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
     sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
     sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
-    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1"; do
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1" "tdfignored:1" "tzread:1" "clockoff:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -3271,7 +3300,7 @@ EOF
     assemble_boot_image
     log "step 3: BOOT A -- the C RTL file layer over RMS on the REAL executive"
     run_boot_a
-    grep -aE "CFD:|CFDX:|CRTLFD-EXIT:|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    grep -aE "CFD:|CFDX:|CRTLFD-EXIT:|CRTLTIME|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_crtlfd "$WORK/modgpA.log"; then
       echo ""
       echo "PASS: a 32-bit DEC C program's stdio and descriptor calls ran over RMS on the"

@@ -72,4 +72,22 @@ $ WRITE SYS$OUTPUT "CRTLFD-EXIT: ret 0 STATUS=''$STATUS'"
 $ CFD ret 3
 $ WRITE SYS$OUTPUT "CRTLFD-EXIT: ret 3 STATUS=''$STATUS'"
 $!
+$! vms-593: the C RTL's clock is the system time and its zone the SYS$TIMEZONE_*
+$! logicals. DCL's F$TIME (the system time, $GETTIM) is printed next to the
+$! image's time() (as UTC; the differential is 0 there); then the differential
+$! changes and the image's localtime() must follow it. No TZ variable exists.
+$ DEFINE SYS$TIMEZONE_DIFFERENTIAL "0"
+$ DEFINE SYS$TIMEZONE_NAME "UTC"
+$ WRITE SYS$OUTPUT "CRTLTIME-DCL: ''F$CVTIME(F$TIME(),"COMPARISON")'"
+$ CFD time
+$ WRITE SYS$OUTPUT "CRTLTIME-DCL: ''F$CVTIME(F$TIME(),"COMPARISON")'"
+$ DEFINE SYS$TIMEZONE_DIFFERENTIAL "19800"
+$ DEFINE SYS$TIMEZONE_NAME "IST"
+$ CFD time
+$ DEFINE SYS$TIMEZONE_DIFFERENTIAL "-18000"
+$ DEFINE SYS$TIMEZONE_NAME "EST"
+$ CFD time
+$ DEASSIGN SYS$TIMEZONE_DIFFERENTIAL
+$ DEASSIGN SYS$TIMEZONE_NAME
+$!
 $ EXIT

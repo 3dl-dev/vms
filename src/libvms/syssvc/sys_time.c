@@ -27,9 +27,11 @@
  *            Whether OpenVMS answers those in process context is UNPINNED; that
  *            item's outcome is the pin, not a rewrite.
  *
- * OVMX-USERSPACE: sys$gettim (vms-642) -- clock_gettime(CLOCK_REALTIME)
- *     converted to VMS 100ns ticks; the host clock, not an executive EXE$GQ_
- *     system time cell, so no system-time base can be set or observed.
+ * OVMX-USERSPACE: sys$gettim (vms-642) -- the substrate kernel's realtime
+ *     clock read through libvmssys (vms_substrate_systime, vms-593) in VMS 100ns
+ *     ticks; the host clock, not an executive EXE$GQ_ system time cell, so no
+ *     system-time base can be set or observed. Never the C RTL's clock_gettime:
+ *     DECC$SHR's time()/clock_gettime() are served by $GETUTC (vms-593).
  * OVMX-PARTIAL: sys$getutc (vms-44a) -- exec: the system TDF is the executive's
  *     SYS$TIMEZONE_DIFFERENTIAL logical, read through $TRNLNM.
  * OVMX-LOCAL: sys$getutc -- the same host clock read, laid out as the
@@ -94,6 +96,7 @@
 #include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
 #include "efndef.h"     /* EFN$C_ENF */
 #include "ovmx_utc.h"   /* ovmx_timegm: no C RTL timegm on OpenVMS */
+#include "vms_kif.h"    /* vms_substrate_systime: the system clock (vms-593) */
 
 /* The per-request host timers below are POSIX timers (timer_create), which the
  * OpenVMS C RTL does not have, and their expiry runs a handler the kernel
@@ -139,17 +142,13 @@ static int vms_to_unix_time(uint64_t vmstime, struct timespec *ts) {
 /*
  * sys$gettim - Get current system time in VMS format.
  *
- * Uses clock_gettime(CLOCK_REALTIME) for nanosecond precision,
- * then converts to VMS 100-nanosecond ticks.
+ * The system time is vms_substrate_systime's (libvmssys): the one clock every time
+ * service here reports. It must not be the C RTL's clock_gettime(), which on
+ * OVMX is itself $GETUTC (src/vmsrms/crtl_time.c, vms-593).
  */
 uint32_t sys$gettim(uint64_t *timadr) {
     if (!timadr) return SS$_BADPARAM;
-
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    *timadr = unix_to_vms_time(&ts);
-
-    return SS$_NORMAL;
+    return vms_substrate_systime(timadr);
 }
 
 /*
@@ -173,7 +172,10 @@ uint32_t sys$numtim(uint16_t timbuf[7], const uint64_t *timadr) {
     if (timadr) {
         if (vms_to_unix_time(*timadr, &ts) < 0) return SS$_BADPARAM;
     } else {
-        clock_gettime(CLOCK_REALTIME, &ts);
+        uint64_t now;
+        uint32_t st = vms_substrate_systime(&now);
+        if (!(st & 1)) return st;
+        if (vms_to_unix_time(now, &ts) < 0) return SS$_BADPARAM;
     }
 
     struct tm tm_result;
@@ -860,9 +862,10 @@ static int utc_system_tdf(void)
 uint32_t (sys$getutc)(void *utcadr)
 {
     if (!utcadr) return SS$_BADPARAM;
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    utc_put(utcadr, unix_to_vms_time(&ts) + UTC_EPOCH_OFFSET, utc_system_tdf());
+    uint64_t now;
+    uint32_t st = vms_substrate_systime(&now);
+    if (!(st & 1)) return st;
+    utc_put(utcadr, now + UTC_EPOCH_OFFSET, utc_system_tdf());
     return SS$_NORMAL;
 }
 

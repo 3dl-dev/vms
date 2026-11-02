@@ -1,0 +1,35 @@
+# crtl-time-falls-to-linux -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the C RTL's clock and time zone are \$GETUTC and the SYS\$TIMEZONE_* logicals (vms-593)";;
+        targets)      echo "vmsrms/crtl_time.c";;
+        suites_red)   echo "test_syssvc_crtl_time";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The C RTL layer's install sets musl's two time hooks. The mutation leaves both unset, so time()/clock_gettime() fall back to the substrate kernel's clock and localtime() to musl's no-VMS-zone UTC: a DEFINE of SYS\$TIMEZONE_DIFFERENTIAL no longer moves localtime(). The clock checks stay green (the substrate clock is what \$GETUTC reads until the executive keeps the system time, rd vms-642). Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOR'
+TDF 19800: the next localtime() is UTC+05:30, zone IST
+TDF 19800: strftime() gives 2026-01-15 17:30 IST +0530
+TDF 19800: ctime() gives Thu Jan 15 17:30:00 2026
+TDF -18000: localtime() is UTC-05:00, zone EST
+the rule: July is daylight time, UTC-04:00 EDT
+the rule: January is standard time, UTC-05:00 EST
+a disagreeing rule is not used: UTC+01:00 CET
+EOR
+                      ;;
+        knock_on_fail) cat <<'EOR'
+EOR
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i -e 's#^    __ovmx_clock_hook = ct_clock;$#    (void)ct_clock; /* NEGCTL crtl-time-falls-to-linux */#' \
+               -e 's#^    __ovmx_tz_hook = ct_zone;$#    (void)ct_zone; /* NEGCTL crtl-time-falls-to-linux */#' "$_file"
+    :
+}

@@ -286,6 +286,15 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 uint32_t vms_kif_getlki_resnam(uint32_t lkid, uint8_t resnam[32],
                                uint32_t *resnam_len);
 
+/* vms_substrate_systime -- the system time as a VMS quadword (100 ns ticks since
+ * 17-NOV-1858), the one clock SYS$GETTIM/SYS$GETUTC report (vms-593). Read
+ * from the substrate kernel's realtime clock through this layer's own kernel
+ * call -- never through the C RTL, whose clock_gettime()/time() are themselves
+ * served by $GETUTC (src/vmsrms/crtl_time.c). The executive keeps no
+ * system-time cell yet (rd vms-642); when it does, this is the one place that
+ * changes. SS$_NORMAL, or SS$_ABORT when the substrate clock cannot be read. */
+uint32_t vms_substrate_systime(uint64_t *vmstime);
+
 /* vms_kif_getlki_parent -- vms_kif_getlki plus the lock's PARENT lkid (0 for
  * a root lock) and the resource's GRANTCOUNT (vms-b71), the #GETLKI fields
  * the kernel already fills but the original wrapper never surfaced. Same

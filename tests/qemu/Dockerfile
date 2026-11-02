@@ -242,6 +242,9 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 # C RTL file layer over RMS (src/vmsrms/crtl_rms_fd.c, -DOVMX_CRTL_FD_STATIC=ON
 # below). With no layer installed every system call traps exactly as before.
 COPY src/crtl-musl-x86_64/ /src/crtl-musl-x86_64/
+# vms-593: the musl time overlays (one source with the Alpha DECC$SHR's), at the
+# path build-musl.sh finds relative to itself.
+COPY tools/cross-alpha-vms/musl-arch/src/time/alpha-dec-vms/ /tools/cross-alpha-vms/musl-arch/src/time/alpha-dec-vms/
 RUN sh /src/crtl-musl-x86_64/build-musl.sh /usr/lib/x86_64-linux-musl
 COPY . /src/repo/
 #

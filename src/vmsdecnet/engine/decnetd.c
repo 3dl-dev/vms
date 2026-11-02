@@ -98,24 +98,19 @@
 #include "iodef.h"          /* IO$_READVBLK/WRITEVBLK/SETMODE + IO$K_TT_PASSALL      */
 #include "lnmdef.h"         /* LNM$C_USER: the DNET$NETACP_REQ logical (rd vms-dda)   */
 
-/* The terminal channel's backing fd. Since rd vms-d3cd nothing waits on it:
- * readiness is the terminal driver's type-ahead count ($QIO IO$_SENSEMODE!
- * IO$M_TYPEAHDCNT). It is still consulted once, to learn whether SYS$INPUT is
- * a terminal at all (sethost_open_terminal). */
-extern int vms$$chan_to_fd(uint16_t chan);
 
 /* The process context the system services need for their channel table. An
  * OVMX image activated by the executive already holds one; a DECNETD.EXE run
- * standalone (the veth test harness) does not, so the --set-host client
- * establishes one itself before it $ASSIGNs its terminal -- the same bootstrap
+ * standalone (a test harness) does not, so it establishes one itself before
+ * it $ASSIGNs a channel -- the same bootstrap
  * vmssshd and DCL do (src/vmsssh/vmssshd.c, src/vmsdcl/dcl_main.c). */
 struct vms_pcb;
 extern struct vms_pcb *vms_pcb_get(void);
 extern struct vms_pcb *vms_pcb_init(uint64_t initial_privs);
 
-/* The live --set-host CI's nonzero format-2 source group/user codes, sourced
- * from the running process (vms-15a/a70). Defined with run_set_host_loop; the
- * --set-host-src-codes-selftest above it asserts the codes are nonzero. */
+/* A CTERM CI's nonzero format-2 source group/user codes, sourced from the
+ * running process (vms-15a/a70) when NETACP has no requester identity; the
+ * --set-host-src-codes-selftest asserts the codes are nonzero. */
 static void sethost_src_codes(uint16_t *grp, uint16_t *usr);
 
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
@@ -1852,8 +1847,8 @@ done:
  * ================ --set-host-src-codes-selftest (vms-15a/a70) ===============
  * The live $ SET HOST client must NOT emit the zero/zero format-2 source codes
  * real OpenVMS session control silently discards. This proves the CI the live
- * --set-host path builds -- sethost_src_codes() feeding the exact
- * dnet_cterm_sc_connect_build() call in run_set_host_loop -- carries a NONZERO
+ * NETACP builds for SET HOST (RTPAD.EXE's link) -- sethost_src_codes() feeding
+ * dnet_cterm_sc_connect_build() in broker_open_connect -- carries a NONZERO
  * group AND a nonzero user sourced from the running process, and round-trips as
  * a well-formed format-2 connect to CTERM object 42. Runs anywhere: with no
  * /dev/vms the codes come from the POSIX identity fallback (still nonzero).
@@ -2624,39 +2619,10 @@ static int run_isolation_test(void)
 }
 
 /*
- * ================== $ SET HOST OUTBOUND CLIENT (rd vms-f54) ==================
- *
- * The CLIENT half of $ SET HOST: an OVMX node opens a CTERM terminal session to
- * a REMOTE node's Session Control object 42, and the remote's LOGINOUT
- * authenticates the user FRESH (the carried username is proxy/accounting only --
- * see dnet_cterm_sc_connect_build). The local interactive terminal rides the NSP
- * logical link until the remote session logs out, then control returns with the
- * canonical "%REM-S-END, control returned to node <NODE>::" (oracle
- * docs/oracle/vax-sethost-cterm.console.txt).
- *
- * ANTI-LARP TERMINAL I/O (the standing invariant for this lane): the client runs
- * in the user's interactive process, so it does its LOCAL terminal I/O through
- * its VMS terminal CHANNELS -- $ASSIGN SYS$INPUT / SYS$OUTPUT, and TT: (the
- * job's terminal unit) when SYS$INPUT is that terminal -- and $QIO
- * IO$_READVBLK / IO$_WRITEVBLK to move bytes: the SAME executive terminal path
- * a console login or an RTAn: device uses. It NEVER calls tcsetattr/cfmakeraw
- * on fd 0/1, and it contains NO fork/exec/openpty/dup2.
- *
- * WHO ECHOES (rd vms-a353). In CTERM the TERMINAL echoes what is typed, as the
- * host's Start Read says (AA-DY88A-TK 4.16.3: N = no echo, T = echo the
- * terminator); the host never sends the typed text back -- in the oracle no
- * host->client frame carries the typed username or password, and a real VAX
- * client shows "Username: SYSTEM" but a blank "Password: " (docs/oracle/
- * vax-sethost-cterm.*; tests/lab/captures/decnet-sethost-inbound-20261005/
- * vax1-console.txt). So each Start Read becomes ONE local terminal read on the
- * TT: channel, issued by the executive terminal driver with the Start Read's
- * echo: IO$M_NOECHO when N is set, IO$M_TRMNOECHO when T is clear. The driver
- * -- not this program, not the substrate tty -- echoes and edits the line,
- * exactly as it does for a local LOGINOUT. (The earlier design asked for
- * IO$K_TT_PASSALL on the SYS$INPUT channel and relied on the remote for echo;
- * that channel carries no executive terminal channel, so the request was a
- * silent no-op, the line discipline echoed every read, and the remote
- * Password: was shown in clear on the originating terminal.)
+ * The $ SET HOST CLIENT is SYS$SYSTEM:RTPAD.EXE (src/vmsdecnet/rtpad/, rd vms-0a7
+ * S2): DCL activates it from its command tables, and it reaches the remote's
+ * CTERM object through this NETACP's _NET: link pool. DECNETD.EXE no longer
+ * carries a client role.
  */
 
 static void sethost_mkdesc(struct dsc$descriptor_s *d, const char *s)
@@ -2665,63 +2631,6 @@ static void sethost_mkdesc(struct dsc$descriptor_s *d, const char *s)
     d->dsc$b_dtype = DSC$K_DTYPE_T;
     d->dsc$b_class = DSC$K_CLASS_S;
     d->dsc$a_pointer = (char *)s;
-}
-
-/* Write a NUL-terminated string to the local terminal through its VMS output
- * channel ($QIO IO$_WRITEVBLK). `record` != 0 writes it as ONE VMS RECORD
- * (carriage control " ", P4 = 0x20): the terminal driver puts it on a line of
- * its own -- a new line before it, rendered for wherever the cursor is, and a
- * carriage return after -- the way VMS writes a message to a terminal. */
-static void sethost_term_write(uint16_t chan, const char *s, int record)
-{
-    struct _iosb iosb;
-    fflush(stdout);
-    (void)sys$qiow(0, chan, IO$_WRITEVBLK, &iosb, NULL, 0,
-                   (void *)s, (uint32_t)strlen(s), 0, record ? 0x20 : 0, 0, 0);
-}
-
-/* HELLO cadence + link give-up/retransmit tick, then flush any FSM PDU. */
-static void dnet_periodic(struct dnet_engine *eng, int sock, unsigned ifindex,
-                          dnet_tick_t now)
-{
-    if (dnet_engine_hello_due(eng, now)) {
-        uint8_t frame[DNET_FRAME_MAX];
-        size_t flen = 0;
-        if (dnet_engine_build_hello_frame(eng, frame, sizeof(frame), &flen)
-                == DNET_ENGINE_OK &&
-            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
-                              DNET_HELLO_MCAST, frame, flen) >= 0)
-            dnet_engine_hello_emitted(eng, now);
-    }
-    dnet_engine_tick(eng, now);
-    if (eng->link_active) {
-        uint8_t frame[DNET_FRAME_MAX];
-        size_t tlen = 0;
-        int thas = 0;
-        if (dnet_engine_link_tick(eng, now, frame, sizeof(frame), &tlen, &thas)
-                == DNET_ENGINE_OK && thas) {
-            uint8_t dst[DNET_ADDR_LEN];
-            memcpy(dst, frame, DNET_ADDR_LEN);
-            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, tlen);
-        }
-    }
-}
-
-/* Ship one CTERM PDU as an NSP data segment on the live link: the FSM builds the
- * data frame (its own sequence/addressing, executive-backed), then it goes out
- * to the peer's DECnet id (frame[0..5], the routing dst the FSM wrote). */
-static int cterm_link_send(struct dnet_engine *eng, int sock, unsigned ifindex,
-                           const uint8_t *pdu, size_t plen, dnet_tick_t now)
-{
-    uint8_t frame[DNET_FRAME_MAX];
-    size_t flen = 0;
-    if (dnet_engine_link_send(eng, pdu, plen, frame, sizeof(frame), &flen, now)
-            != DNET_ENGINE_OK)
-        return -1;
-    uint8_t dst[DNET_ADDR_LEN];
-    memcpy(dst, frame, DNET_ADDR_LEN);
-    return scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, flen)
-               < 0 ? -1 : 0;
 }
 
 /* Receive one frame and route it: an NSP long-data frame addressed to us drives
@@ -2787,16 +2696,6 @@ static int dnet_recv_route(struct dnet_engine *eng, int sock, unsigned ifindex,
 }
 
 /*
- * --set-host AREA.NODE : the CTERM TERMINAL (the $ SET HOST client). Opens the
- * logical link to the peer's CTERM object (42), binds a terminal session,
- * negotiates characteristics, then bridges the LOCAL VMS terminal channel to the
- * remote session -- terminal keystrokes ($QIO read) -> CTERM Read Data, remote
- * CTERM Write -> terminal ($QIO write) -- until the host unbinds, the link drops,
- * or the run ends. It waits on the datalink receive (the executive's bounded
- * timeout) and asks the terminal driver for type-ahead (rd vms-d3cd) -- no poll()
- * on host descriptors -- so the HELLO cadence + link tick keep firing. On teardown control returns with the canonical %REM-S-END.
- */
-/*
  * The format-2 SRCNAME group/user codes for the $ SET HOST Connect Initiate.
  *
  * vms-15a/a70: a CTERM CI whose format-2 source descriptor carries group 0 AND
@@ -2835,315 +2734,9 @@ static void sethost_src_codes(uint16_t *grp, uint16_t *usr)
     *usr = u;
 }
 
-/* ---------------------------------------------------------------------------
- * The $ SET HOST client's link-independent half (rd vms-dda). The CTERM client
- * FSM, the local terminal channels and the prompt-gated input queue are the
- * same whichever way the logical link is reached: the standalone engine over
- * the datalink (a host/lab instrument), or -- the booted runtime -- a _NET:
- * channel whose link NETACP owns. Only sh_link_send differs.
- * ------------------------------------------------------------------------- */
-struct netcli;
-static uint32_t netcli_op(struct netcli *c, uint16_t op, const void *in, size_t inlen,
-                          void *out, size_t outcap, size_t *xfer);
-
-struct sh_ctx {
-    struct dnet_cterm_session term;
-    struct dnet_cterm_inq inq;
-    int read_pending, session_bound_ever, stdin_eof, rc, done;
-    int skip_lf;                        /* CTERM Write "newline" flag state  */
-    int quiet;                          /* a user's SET HOST: no DECNETD-I chatter */
-    int rd_echo, rd_term_echo;          /* the pending Start Read's echo (vms-a353) */
-    uint16_t ch_in, ch_out;
-    uint16_t ch_tt;                     /* TT:, when SYS$INPUT is the terminal; 0 = not */
-    /* the link: the standalone engine (eng/sock/ifindex) OR a _NET: channel */
-    struct dnet_engine *eng;
-    int sock;
-    unsigned ifindex;
-    struct netcli *nc;
-    const char *where;                  /* circuit / "NETACP" for the log lines */
-    uint8_t cpdu[DNET_CTERM_MAX_PDU];
-};
-
-static int sh_link_send(struct sh_ctx *x, const uint8_t *pdu, size_t n)
-{
-    if (x->nc) {
-        size_t xf = 0;
-        return (netcli_op(x->nc, DNET_BROKER_OP_SEND, pdu, n, NULL, 0, &xf) & 1) ? 0 : -1;
-    }
-    return cterm_link_send(x->eng, x->sock, x->ifindex, pdu, n, monotonic_sec());
-}
-
-static int sethost_send_queued_line(struct sh_ctx *x)
-{
-    uint8_t line[DNET_CTERM_MAX_DATA];
-    size_t linelen = 0;
-    if (!dnet_cterm_inq_dequeue(&x->inq, line, sizeof(line), &linelen))
-        return 0;
-    size_t clen = 0;
-    if (dnet_cterm_found_read_data_build(line, linelen, 0x0d, x->cpdu, sizeof x->cpdu,
-                                         &clen) != 0)
-        return -1;
-    if (sh_link_send(x, x->cpdu, clen) != 0)
-        return -1;
-    x->term.reads_sent++;
-    return 1;
-}
-
-/* Show what the host wrote. On a terminal the bytes go to the terminal unit
- * as they are ($QIO IO$_WRITEVBLK, no carriage control): the host already
- * formatted them for a terminal, and the driver tracks where they leave the
- * cursor -- which is what puts %REM-S-END on a line of its own (rd vms-a353).
- * Off a terminal they go to SYS$OUTPUT. */
-static void sethost_show(struct sh_ctx *x, const uint8_t *b, size_t n)
-{
-    struct _iosb iosb;
-    (void)sys$qiow(0, x->ch_tt ? x->ch_tt : x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
-                   (void *)b, (uint32_t)n, 0, 0, 0, 0);
-}
-
-/* The link is RUN: arm the CTERM client FSM and wait for the host, which
- * speaks first (rd vms-6165). */
-static void sethost_on_bound_msg(struct sh_ctx *x, const uint8_t *data, size_t len);
-
-static void sethost_on_linkup(struct sh_ctx *x)
-{
-    if (dnet_cterm_client_open(&x->term) != 0) {
-        fprintf(stderr, "DECNETD-E-CTERMOPEN, could not arm CTERM client foundation\n");
-        x->rc = 1; x->done = 1;
-    }
-}
-
-/* One CTERM segment from the host. */
-static void sethost_on_data(struct sh_ctx *x, const uint8_t *data, size_t len)
-{
-    size_t clen = 0;
-    if (dnet_cterm_state_of(&x->term) == DNET_CTERM_S_BINDING) {
-        /* FOUNDATION PHASE (rd vms-6165): consume the host's foundation
-         * message, then drain every client reply now due (client seg-1, then
-         * the seg-2/3/4 burst). WIDTH/PAGE are the captured 132/24 so every
-         * emitted byte is oracle-exact. */
-        int prog = 0;
-        if (dnet_cterm_client_found_rx(&x->term, data, len, &prog) != DNET_CTERM_OK)
-            return;
-        for (;;) {
-            int frc = dnet_cterm_client_found_next(&x->term, 132, 24, x->cpdu,
-                                                   sizeof x->cpdu, &clen);
-            if (frc != DNET_CTERM_OK || clen == 0)
-                break;
-            if (sh_link_send(x, x->cpdu, clen) != 0) {
-                fprintf(stderr, "DECNETD-E-FOUND, could not send a CTERM foundation reply\n");
-                x->rc = 1; x->done = 1;
-                break;
-            }
-        }
-        if (!x->done && dnet_cterm_is_bound(&x->term) && !x->session_bound_ever) {
-            x->session_bound_ever = 1;
-            if (!x->quiet) {
-                log_ts(stdout);
-                printf(" DECNETD-I-BOUND, CTERM foundation negotiated -- terminal session"
-                       " BOUND on %s\n", x->where);
-                fflush(stdout);
-            }
-        }
-        return;
-    }
-
-    /* BOUND: real terminal I/O inside 09 Common Data messages. ONE segment
-     * carries SEVERAL CTERM messages, each LENGTH-prefixed (AA-DY89A-TK); a
-     * real VAX packs a whole screen of Writes into one. Each is handled on its
-     * own -- reading the segment as one message put every following LENGTH
-     * word on the screen as a stray character (seen live: OVMX SET HOST VAX1). */
-    struct dnet_cth_cd_iter it;
-    if (dnet_cth_cd_iter_init(&it, data, len) != DNET_CTH_OK)
-        return;
-    const uint8_t *sub;
-    size_t sublen;
-    while (!x->done && dnet_cth_cd_iter_next(&it, &sub, &sublen) == 1) {
-        if (sublen == 0)
-            continue;
-        if (sub[0] == 0x07) {                     /* Write: render it properly */
-            uint8_t shown[DNET_CTERM_MAX_DATA + 512];
-            size_t sn = 0;
-            x->term.writes_recv++;
-            if (dnet_cterm_write_render(sub, sublen, &x->skip_lf, shown,
-                                        sizeof shown, &sn) == 0 && sn) {
-                sethost_show(x, shown, sn);
-            }
-            continue;
-        }
-        uint8_t one[4 + DNET_CTERM_MAX_DATA + 64];
-        if (sublen + 4 > sizeof one)
-            continue;
-        one[0] = 0x09; one[1] = 0x00;
-        one[2] = (uint8_t)(sublen & 0xff); one[3] = (uint8_t)(sublen >> 8);
-        memcpy(one + 4, sub, sublen);
-        sethost_on_bound_msg(x, one, sublen + 4);
-    }
-}
-
-/* One BOUND-phase CTERM message (re-wrapped in its own 09 envelope). */
-static void sethost_on_bound_msg(struct sh_ctx *x, const uint8_t *data, size_t len)
-{
-    size_t clen = 0;
-    enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
-    uint8_t txt[DNET_CTERM_MAX_DATA];
-    size_t txtlen = 0;
-    uint8_t rhandle[4] = { 0, 0, 0, 0 };
-    if (dnet_cterm_found_terminal_rx(data, len, &tk, txt, sizeof(txt), &txtlen,
-                                     rhandle) != DNET_CTERM_OK)
-        return;
-    if (tk == DNET_CTERM_TK_WRITE) {
-        x->term.writes_recv++;
-        if (txtlen)
-            sethost_show(x, txt, txtlen);
-    } else if (tk == DNET_CTERM_TK_START_READ) {
-        /* rd vms-6165: a 02-08 is PROMPT-AND-READ -- display the prompt text,
-         * THEN answer with exactly one input line. One solicit -> one line,
-         * never more, never before this arrives.
-         *
-         * rd vms-a353: the read's echo is the HOST's to choose (N / T flags);
-         * a flags field that does not parse reads as no-echo. */
-        x->term.writes_recv++;
-        (void)dnet_cterm_start_read_echo(data, len, &x->rd_echo, &x->rd_term_echo);
-        if (txtlen)
-            sethost_show(x, txt, txtlen);
-        if (x->ch_tt) {
-            /* A TERMINAL: the line is read NOW, by the terminal driver, with
-             * this read's echo (sethost_on_term_input). Type-ahead typed
-             * before the solicit waits, unechoed, in the driver until then --
-             * so a password typed early is never echoed by an earlier read. */
-            x->read_pending = 1;
-            return;
-        }
-        /* Not a terminal (a pipe or a file): nothing is echoed; the lines are
-         * queued as they arrive and one is released per solicit. */
-        int srr = sethost_send_queued_line(x);
-        if (srr < 0) {
-            fprintf(stderr, "DECNETD-E-READDATA, could not send CTERM Read Data\n");
-            x->rc = 1; x->done = 1;
-        } else {
-            x->read_pending = (srr == 0);
-        }
-    } else if (tk == DNET_CTERM_TK_READ_ATTR) {
-        /* Host solicited terminal characteristics: answer with the oracle
-         * read-characteristics reply, echoing its handle. */
-        if (dnet_cterm_found_client_readchar_build(rhandle, x->cpdu, sizeof x->cpdu,
-                                                   &clen) == 0)
-            (void)sh_link_send(x, x->cpdu, clen);
-    }
-    /* TK_OTHER / TK_NONE: NSP-ack only, nothing to display or answer. */
-}
-
-/* Does the client want local input now? On a terminal only while a host
- * Start Read is outstanding (the driver keeps type-ahead until then); from a
- * pipe whenever it is readable (lines are queued, released per solicit). */
-static int sethost_wants_input(const struct sh_ctx *x)
-{
-    if (!dnet_cterm_is_bound(&x->term) || x->stdin_eof)
-        return 0;
-    return x->ch_tt ? x->read_pending : 1;
-}
-
-/* Satisfy the outstanding Start Read from the TERMINAL: one read by the
- * executive terminal driver, echoing exactly as the Start Read asked (rd
- * vms-a353), answered with one Read Data carrying the line and the terminator
- * the driver ended it with. */
-static void sethost_read_terminal_line(struct sh_ctx *x)
-{
-    uint8_t line[DNET_CTERM_MAX_DATA];
-    struct _iosb iosb;
-    uint32_t func = IO$_READVBLK;
-
-    if (!x->rd_echo)
-        func |= IO$M_NOECHO;
-    if (!x->rd_term_echo)
-        func |= IO$M_TRMNOECHO;
-    memset(&iosb, 0, sizeof iosb);
-    uint32_t rst = sys$qiow(0, x->ch_tt, func, &iosb, NULL, 0,
-                            line, (uint32_t)sizeof(line), 0, 0, 0, 0);
-    uint32_t est = (rst & 1) ? iosb.iosb$w_status : rst;
-    if (!(est & 1)) {
-        /* A read the driver aborted (CTRL/Y) leaves the solicit outstanding
-         * for the next line. Anything else -- the terminal hung up, its port
-         * is gone -- stops reading it but keeps the link: the session still
-         * ends on the host's Unbind or a link drop, never on the local side
-         * by itself (rd vms-6165). */
-        if (est != SS$_ABORT)
-            x->stdin_eof = 1;
-        return;
-    }
-    size_t n = iosb.iosb$w_bcnt;
-    if (n > sizeof line)
-        n = sizeof line;
-    /* IOSB words 2/3: the terminator character and its size. A read that ended
-     * without one (the buffer filled) is sent with CR, as a full line. */
-    uint8_t term = (iosb.iosb$l_dev_depend >> 16) ? (uint8_t)(iosb.iosb$l_dev_depend & 0xff)
-                                                  : 0x0d;
-    size_t clen = 0;
-    if (dnet_cterm_found_read_data_build(line, n, term, x->cpdu, sizeof x->cpdu,
-                                         &clen) != 0 ||
-        sh_link_send(x, x->cpdu, clen) != 0) {
-        fprintf(stderr, "DECNETD-E-READDATA, could not send CTERM Read Data\n");
-        x->rc = 1; x->done = 1;
-        return;
-    }
-    x->term.reads_sent++;
-    x->read_pending = 0;
-}
-
-/* The local terminal is readable: read it through its VMS channel. */
-static void sethost_on_term_input(struct sh_ctx *x)
-{
-    uint8_t inbuf[DNET_CTERM_MAX_DATA];
-    struct _iosb iosb;
-    if (x->ch_tt) {
-        if (x->read_pending)
-            sethost_read_terminal_line(x);
-        return;
-    }
-    /* Read the keystrokes through the VMS terminal channel ($QIO), never a raw
-     * read on fd 0. */
-    uint32_t rst = sys$qiow(0, x->ch_in, IO$_READVBLK, &iosb, NULL, 0,
-                            inbuf, (uint32_t)sizeof(inbuf), 0, 0, 0, 0);
-    uint32_t rn = (rst & 1) ? iosb.iosb$l_dev_depend : 0;
-    if ((rst & 1) && rn > 0) {
-        /* rd vms-6165: local keystrokes are BUFFERED, never sent immediately --
-         * CTERM input is prompt-gated. */
-        (void)dnet_cterm_inq_feed(&x->inq, inbuf, (size_t)rn);
-    } else {
-        /* Local EOF or a channel error: stop polling for more input but KEEP
-         * THE LINK UP -- whatever is already queued is still dequeued one line
-         * per solicit, and the host's remaining output still drains. The
-         * session ends on the host's Unbind, a link drop, or --duration --
-         * NEVER on stdin EOF by itself (rd vms-6165 lab iter 2). */
-        x->stdin_eof = 1;
-        dnet_cterm_inq_eof(&x->inq);
-        log_ts(stdout);
-        printf(" DECNETD-I-EOF, local input closed -- %zu byte(s) still queued,"
-               " draining remote output on %s\n", x->inq.len, x->where);
-        fflush(stdout);
-    }
-    /* A host solicit may already be waiting on a line that was not available
-     * yet -- satisfy it now if the queue (or EOF) supplied one. */
-    if (x->read_pending) {
-        int srr = sethost_send_queued_line(x);
-        if (srr < 0) {
-            fprintf(stderr, "DECNETD-E-READDATA, could not send CTERM Read Data\n");
-            x->rc = 1; x->done = 1;
-        } else if (srr == 1) {
-            x->read_pending = 0;
-        }
-    }
-}
-
 /*
- * WAITING THE VMS WAY (rd vms-d3cd). The SET HOST client used to poll() the
- * substrate descriptor behind its terminal channel (and, standalone, the
- * datalink). It now asks the TERMINAL DRIVER: $QIOW IO$_SENSEMODE!
- * IO$M_TYPEAHDCNT on the TT: channel says whether a line has been started in
- * the type-ahead buffer, and the client then reads it with $QIOW, exactly as
- * the poll used to gate it. Between turns it waits on a timer event flag
- * ($SETIMR + $WAITFR), never nanosleep/poll on a host descriptor.
+ * WAITING THE VMS WAY (rd vms-d3cd): a timer event flag ($SETIMR + $WAITFR),
+ * never nanosleep/poll on a host descriptor.
  */
 #define DECNETD_WAIT_EFN 22u    /* a local event flag (1..23 are the image's) */
 
@@ -3153,289 +2746,6 @@ static void decnetd_wait_ms(unsigned ms)
     uint64_t delta = (uint64_t)(-(int64_t)ms * 10000);
     if (sys$setimr(DECNETD_WAIT_EFN, &delta, NULL, 0, 0) & 1)
         (void)sys$waitfr(DECNETD_WAIT_EFN);
-}
-
-/* Is the local side ready to supply input? A TERMINAL (TT: channel): the
- * driver's type-ahead count is nonzero. A non-terminal SYS$INPUT (a file or
- * pipe a harness feeds): only when the host has solicited a read -- the
- * read then waits in $QIOW for the next record, which is what a VMS image
- * reading a file does. */
-static int sethost_term_ready(struct sh_ctx *x)
-{
-    if (!x->ch_tt)
-        return x->read_pending;
-    uint8_t tc[8];
-    struct _iosb iosb;
-    memset(tc, 0, sizeof tc);
-    memset(&iosb, 0, sizeof iosb);
-    uint32_t st = sys$qiow(0, x->ch_tt, IO$_SENSEMODE | IO$M_TYPEAHDCNT, &iosb,
-                           NULL, 0, tc, (uint32_t)sizeof tc, 0, 0, 0, 0);
-    if (st & 1)
-        st = iosb.iosb$w_status;
-    if (!(st & 1))
-        return 1;      /* the driver cannot say: let the read report it */
-    return (tc[0] | (tc[1] << 8)) != 0;
-}
-
-/* Assign the LOCAL VMS terminal channels (the anti-LARP core): SYS$INPUT for
- * keystrokes, SYS$OUTPUT for screen writes. All terminal I/O goes through these
- * channels via $QIO -- never raw termios on fd 0/1. */
-static int sethost_open_terminal(struct sh_ctx *x)
-{
-    if (!vms_pcb_get())
-        vms_pcb_init(0);
-    struct dsc$descriptor_s din, dout;
-    sethost_mkdesc(&din, "SYS$INPUT:");
-    sethost_mkdesc(&dout, "SYS$OUTPUT:");
-    if (!(sys$assign(&din, &x->ch_in, 0, NULL) & 1) ||
-        !(sys$assign(&dout, &x->ch_out, 0, NULL) & 1)) {
-        fprintf(stderr, "DECNETD-E-NOTERMCHAN, could not $ASSIGN the local"
-                        " terminal (SYS$INPUT/SYS$OUTPUT)\n");
-        if (x->ch_in) sys$dassgn(x->ch_in);
-        x->ch_in = 0;
-        return -1;
-    }
-    /* rd vms-a353: when SYS$INPUT is the job's terminal, read it through a
-     * channel to the TERMINAL UNIT (TT:) -- the executive terminal driver's
-     * channel, on which a read takes IO$M_NOECHO. Without it a remote
-     * Password: read would be echoed, so a terminal whose channel cannot be
-     * had refuses SET HOST rather than show a password. */
-    {
-        int fd = vms$$chan_to_fd(x->ch_in);
-        if (fd >= 0 && isatty(fd)) {
-            struct dsc$descriptor_s dtt;
-            sethost_mkdesc(&dtt, "TT:");
-            uint32_t st = sys$assign(&dtt, &x->ch_tt, 0, NULL);
-            if (!(st & 1)) {
-                fprintf(stderr, "DECNETD-E-NOTERMCHAN, could not $ASSIGN the"
-                                " terminal (TT:), status %u\n", st);
-                x->ch_tt = 0;
-                sys$dassgn(x->ch_in); sys$dassgn(x->ch_out);
-                x->ch_in = x->ch_out = 0;
-                return -1;
-            }
-        }
-    }
-    return 0;
-}
-
-static void sethost_close_terminal(struct sh_ctx *x)
-{
-    if (x->ch_tt) sys$dassgn(x->ch_tt);
-    sys$dassgn(x->ch_in);
-    sys$dassgn(x->ch_out);
-    x->ch_tt = x->ch_in = x->ch_out = 0;
-}
-
-/* Restore the terminal, unbind a bound session, say %REM-S-END. The caller
- * then releases the link. */
-static void sethost_finish(struct sh_ctx *x, const char *local_node)
-{
-    if (dnet_cterm_is_bound(&x->term)) {
-        size_t clen = 0;
-        if (dnet_cterm_unbind(&x->term, DNET_CTERM_UNBIND_NORMAL, x->cpdu,
-                              sizeof x->cpdu, &clen) == 0)
-            (void)sh_link_send(x, x->cpdu, clen);
-    }
-    /* CONTROL RETURNS with the canonical VMS message (oracle docs/oracle/
-     * vax-sethost-cterm.console.txt): the LOCAL node is the node control
-     * returns to -- only once a session was actually established. */
-    if (x->session_bound_ever) {
-        char msg[96];
-        if (x->ch_tt) {
-            /* rd vms-a353: ON ITS OWN LINE, as VMS shows it -- "SYSTEM logged
-             * out at ..." then "%REM-S-END, ..." beneath it. The remote's last
-             * output ends with a bare CR (its line feed owed), so the message
-             * goes as a record: the driver starts it on a new line rendered
-             * for where the cursor is (LF after a CR, CR LF mid-line). */
-            snprintf(msg, sizeof(msg),
-                     "%%REM-S-END, control returned to node %s::", local_node);
-            sethost_term_write(x->ch_tt, msg, 1);
-        } else {
-            snprintf(msg, sizeof(msg),
-                     "%%REM-S-END, control returned to node %s::\n", local_node);
-            sethost_term_write(x->ch_out, msg, 0);
-        }
-    }
-    if (x->quiet)
-        return;
-    log_ts(stdout);
-    printf(" DECNETD-I-SETHOSTEND, SET HOST session ended: cterm writes_recv=%lu"
-           " reads_sent=%lu on %s\n", x->term.writes_recv, x->term.reads_sent, x->where);
-    fflush(stdout);
-}
-
-static int sethost_ctx_init(struct sh_ctx *x)
-{
-    memset(x, 0, sizeof *x);
-    if (dnet_cterm_session_init(&x->term, DNET_CTERM_ROLE_TERMINAL) != 0) {
-        fprintf(stderr, "DECNETD-E-CTERMINIT, terminal session init failed\n");
-        return -1;
-    }
-    /* rd vms-6165: CTERM input is PROMPT-DRIVEN -- buffered here, released ONE
-     * LINE PER HOST SOLICIT. */
-    dnet_cterm_inq_init(&x->inq);
-    return 0;
-}
-
-static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
-                             const char *peer_s, const char *user)
-{
-    unsigned parea = 0, pnode = 0;
-    if (parse_addr(peer_s, &parea, &pnode) != 0) {
-        fprintf(stderr, "DECNETD-E-BADPEER, --set-host wants AREA.NODE"
-                        " (1..63 . 1..1023)\n");
-        return 1;
-    }
-    static struct sh_ctx x;
-    if (sethost_ctx_init(&x) != 0)
-        return 1;
-    x.eng = eng; x.sock = sock; x.ifindex = ifindex;
-    static char where[DNET_DEVNAME_MAX + 16];
-    snprintf(where, sizeof where, "circuit %s", eng->circuit);
-    x.where = where;
-    /* The access-control username is the explicit --user (VMS SET HOST/USERNAME=
-     * analog), defaulting to SYSTEM. It is NEVER read from the process
-     * environment (vms-cb5 identity-environment census), and it is proxy /
-     * accounting information only -- the REMOTE LOGINOUT authenticates fresh. */
-    if (!user || !*user)
-        user = "SYSTEM";
-    uint8_t sc[128];
-    size_t sclen = 0;
-    /* The format-2 source group/user codes are the running process's own
-     * identity (executive UIC, else POSIX id) -- NONZERO, so VMS session
-     * control dispatches the CI to the CTERM server instead of discarding it
-     * (vms-15a/a70). See sethost_src_codes(). */
-    uint16_t src_grp = 0, src_usr = 0;
-    sethost_src_codes(&src_grp, &src_usr);
-    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, user, src_grp, src_usr,
-                                    "", "", "",
-                                    sc, sizeof(sc), &sclen) != 0) {
-        fprintf(stderr, "DECNETD-E-SCBUILD, CTERM connect-data build failed\n");
-        return 1;
-    }
-
-    if (sethost_open_terminal(&x) != 0)
-        return 1;
-    /* The wire wait: a frame, or 20 ms (then the terminal is looked at). */
-    (void)scs_datalink_set_recv_timeout_ms(sock, 20);
-
-    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX];
-    size_t flen = 0;
-    dnet_tick_t now = monotonic_sec();
-    if (dnet_engine_link_open(eng, parea, pnode, dnet_client_lla(), sc, sclen, 1459, 1,
-                              DNET_NSP_VER_41, frame, sizeof(frame), &flen, now)
-            != DNET_ENGINE_OK) {
-        fprintf(stderr, "DECNETD-E-NOCONNECT, could not open a logical link"
-                        " to %u.%u\n", parea, pnode);
-        sethost_close_terminal(&x);
-        return 1;
-    }
-    {
-        uint8_t dst[DNET_ADDR_LEN];
-        dnet_id_from_addr(parea, pnode, dst);
-        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, flen);
-    }
-    log_ts(stdout);
-    printf(" DECNETD-I-SETHOST, $ SET HOST %u.%u -- Connect Initiate sent to"
-           " CTERM object %d on circuit %s\n",
-           parea, pnode, DNET_CTERM_OBJECT, eng->circuit);
-    fflush(stdout);
-
-    while (!g_stop && !x.done) {
-        now = monotonic_sec();
-        dnet_periodic(eng, sock, ifindex, now);
-
-        /* Connect-Initiate give-up: the FSM closed the link before we ever
-         * bound -- the peer never answered. Report honestly and stop. */
-        if (eng->link_active &&
-            dnet_link_state_of(&eng->link) == DNET_LINK_CLOSED &&
-            dnet_cterm_state_of(&x.term) == DNET_CTERM_S_CLOSED) {
-            log_ts(stdout);
-            printf(" DECNETD-W-UNREACH, peer %u.%u did not answer -- SET HOST"
-                   " abandoned\n", parea, pnode);
-            fflush(stdout);
-            eng->link_active = 0;
-            x.rc = 1;
-            break;
-        }
-
-        /* rd vms-d3cd: the datalink receive itself is the wait (bounded by
-         * the executive's receive timeout set above), then the terminal
-         * driver is asked for type-ahead -- no poll() on host descriptors. */
-        {
-            int ev = dnet_recv_route(eng, sock, ifindex, now, rxbuf, sizeof(rxbuf));
-            if (ev < 0) {
-                fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n",
-                        strerror(errno));
-                x.rc = 1;
-                break;
-            }
-            switch (ev) {
-            case DNET_LINK_EV_CONNECT_CONF:
-                log_ts(stdout);
-                printf(" DECNETD-I-LINKUP, logical link to %u.%u is RUN --"
-                       " sending NSP link-service (credit) then awaiting host"
-                       " foundation\n", parea, pnode);
-                fflush(stdout);
-                /* rd vms-6165: NSP requires the INITIATOR to send a LINK SERVICE
-                 * right after the CC -- it acks the CC + opens the flow-control
-                 * window, and ONLY THEN does a real VAX send its foundation
-                 * data. This is the NSP layer; foundation CONTENT stays
-                 * host-first. */
-                {
-                    uint8_t lsf[DNET_FRAME_MAX];
-                    size_t lslen = 0;
-                    if (dnet_engine_link_service(eng, lsf, sizeof(lsf), &lslen, now)
-                            == DNET_ENGINE_OK) {
-                        uint8_t dst[DNET_ADDR_LEN];
-                        memcpy(dst, lsf, DNET_ADDR_LEN);   /* routing dst the FSM wrote */
-                        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
-                                          dst, lsf, lslen);
-                    } else {
-                        fprintf(stderr, "DECNETD-E-LINKSVC, could not send NSP"
-                                        " link-service credit grant\n");
-                        x.rc = 1; x.done = 1;
-                        break;
-                    }
-                }
-                sethost_on_linkup(&x);
-                break;
-            case DNET_LINK_EV_DATA:
-                sethost_on_data(&x, eng->rx_data, eng->rx_datalen);
-                break;
-            case DNET_LINK_EV_DISCONNECT:
-            case DNET_LINK_EV_DISCONNECT_CONF:
-                log_ts(stdout);
-                printf(" DECNETD-I-LINKDOWN, logical link closed on circuit %s\n",
-                       eng->circuit);
-                fflush(stdout);
-                eng->link_active = 0;
-                x.done = 1;
-                break;
-            default:
-                break;
-            }
-        }
-
-        if (!x.done && sethost_wants_input(&x) && sethost_term_ready(&x))
-            sethost_on_term_input(&x);
-    }
-
-    sethost_finish(&x, eng->node_name);
-    if (eng->link_active &&
-        dnet_link_state_of(&eng->link) != DNET_LINK_CLOSED) {
-        size_t dl = 0;
-        if (dnet_engine_link_close(eng, DNET_LINK_REASON_NORMAL, frame,
-                                   sizeof(frame), &dl, monotonic_sec())
-                == DNET_ENGINE_OK) {
-            uint8_t dst[DNET_ADDR_LEN];
-            memcpy(dst, frame, DNET_ADDR_LEN);
-            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, dl);
-        }
-    }
-    sethost_close_terminal(&x);
-    return x.rc;
 }
 
 /*
@@ -5211,89 +4521,6 @@ static int run_fal_verb_net(int verb, const char *arg, int password_fd)
     return 1;
 }
 
-/*
- * $ SET HOST through NETACP (the booted runtime): IO$_ACCESS to the CTERM
- * object (42) on `target`, then the same CTERM client handlers as the
- * standalone path, reading the link with IO$_READVBLK|IO$M_NOW between polls of
- * the local terminal. The connect's source identity is this process's, filled
- * in by NETACP from the executive (so --user does not apply here); the REMOTE
- * LOGINOUT authenticates fresh either way.
- */
-static int run_set_host_net(struct netcli *c, const char *target, const char *local_node)
-{
-    static struct sh_ctx x;
-    if (sethost_ctx_init(&x) != 0)
-        return 1;
-    x.nc = c;
-    x.where = "a NETACP-brokered _NET: link";
-    x.quiet = 1;                        /* VMS SET HOST shows only the remote */
-    if (sethost_open_terminal(&x) != 0)
-        return 1;
-
-    char ncb[64];
-    int n = snprintf(ncb, sizeof ncb, "%s::\"%d=\"", target, DNET_CTERM_OBJECT);
-    size_t xf = 0;
-    uint32_t st = (n > 0 && (size_t)n < sizeof ncb)
-        ? netcli_op(c, DNET_BROKER_OP_OPEN, ncb, (size_t)n, NULL, 0, &xf) : SS$_BADPARAM;
-    if (!(st & 1)) {
-        /* VMS SET HOST reports only the reason the link failed -- the
-         * condition's text from the system message catalog ($GETMSG), so
-         * SS$_NOSUCHNODE reads "%SYSTEM-F-NOSUCHNODE, remote node is unknown"
-         * and not "%SYSTEM-F-0051, message number 652" (rd vms-5843). */
-        char why[256] = "";
-        uint16_t wlen = 0;
-        struct dsc$descriptor_s wd;
-        wd.dsc$w_length = (uint16_t)(sizeof why - 1);
-        wd.dsc$b_dtype = DSC$K_DTYPE_T;
-        wd.dsc$b_class = DSC$K_CLASS_S;
-        wd.dsc$a_pointer = why;
-        if (sys$getmsg(st, &wlen, &wd, 15, NULL) & 1)
-            why[wlen] = '\0';
-        else
-            why[0] = '\0';
-        printf("%s\n", why[0] ? why : "%SYSTEM-F-ABORT, abort");
-        fflush(stdout);
-        sethost_close_terminal(&x);
-        /* The message is said once, here; $STATUS carries the condition with
-         * STS$M_INHIB_MSG, as a VMS command that already reported its failure
-         * leaves it. A bare return 1 made DCL add "%DCL-E-ABORT, image
-         * SYS$SYSTEM:DECNETD.EXE exited with error status %X00000001" under
-         * the real reason -- an image name a SET HOST user never ran (rd
-         * vms-5843). */
-        sys$exit(st | 0x10000000u);
-        return 1;
-    }
-    sethost_on_linkup(&x);
-
-    while (!g_stop && !x.done) {
-        for (int k = 0; k < 64 && !x.done; k++) {
-            uint8_t buf[DNET_NSP_MAX_DATA];
-            size_t got = 0;
-            st = netcli_op(c, DNET_BROKER_OP_RECV | DNET_BROKER_OPF_NOW, NULL, 0,
-                           buf, sizeof buf, &got);
-            if (st == SS$_ENDOFFILE)
-                break;
-            if (!(st & 1)) {
-                x.done = 1;
-                break;
-            }
-            sethost_on_data(&x, buf, got);
-        }
-        if (x.done)
-            break;
-        /* rd vms-d3cd: ask the terminal driver for type-ahead, then wait on
-         * a timer event flag -- never poll() the substrate descriptor. */
-        if (sethost_wants_input(&x) && sethost_term_ready(&x))
-            sethost_on_term_input(&x);
-        else
-            decnetd_wait_ms(20);
-    }
-    sethost_finish(&x, local_node);
-    (void)netcli_op(c, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &xf);
-    sethost_close_terminal(&x);
-    return x.rc;
-}
-
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -5379,17 +4606,8 @@ static void usage(const char *argv0)
         "                      for an explicit ROUTER that should also serve.\n"
         "  --no-cterm-server   do NOT serve inbound $ SET HOST -- route only. For a\n"
         "                      routing/capture invocation that wants no LOGINOUT\n"
-        "                      surface. (A --router or --set-host invocation is\n"
-        "                      already routing/client-only unless serve is pinned.)\n"
-        "  --set-host A.N      $ SET HOST CLIENT: open a CTERM terminal session\n"
-        "                      to Session Control object 42 on remote node A.N and\n"
-        "                      bridge THIS process's VMS terminal channel to it\n"
-        "                      ($ASSIGN SYS$INPUT/SYS$OUTPUT + $QIO -- never raw\n"
-        "                      termios). The remote LOGINOUT authenticates fresh;\n"
-        "                      control returns with %%REM-S-END on LOGOUT.\n"
-        "  --user NAME         with --set-host: CTERM access-control username\n"
-        "                      (default SYSTEM; proxy/accounting only -- the\n"
-        "                      remote authenticates fresh; never from the env).\n"
+        "                      surface. (A --router invocation is already\n"
+        "                      routing-only unless serve is pinned.)\n"
         "  --fal-selftest      run the FAL/COPY honest-floor proof and exit (no\n"
         "                      executive needed): a COPY client emits a real\n"
         "                      object-17 connect carrying the access-control\n"
@@ -9110,8 +8328,6 @@ int main(int argc, char **argv)
      * off for a routing/capture invocation. */
     int cterm_server = 1;
     int cterm_server_explicit = 0;        /* did the caller pin serve on/off?      */
-    const char *set_host_to = NULL;       /* --set-host A.N : CTERM terminal client */
-    const char *set_host_user = "SYSTEM"; /* --user : CTERM access-control name      */
     int fal_self_test = 0;
     int fal_accept_test = 0;
     int fal_proc_accept_test = 0;
@@ -9150,8 +8366,6 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--isolation-test")) isolation_test = 1;
         else if (!strcmp(argv[i], "--cterm-server")) { cterm_server = 1; cterm_server_explicit = 1; }
         else if (!strcmp(argv[i], "--no-cterm-server")) { cterm_server = 0; cterm_server_explicit = 1; }
-        else if (!strcmp(argv[i], "--set-host") && i + 1 < argc) set_host_to = argv[++i];
-        else if (!strcmp(argv[i], "--user") && i + 1 < argc)     set_host_user = argv[++i];
         else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
         else if (!strcmp(argv[i], "--fal-accept-test")) fal_accept_test = 1;
         else if (!strcmp(argv[i], "--fal-proc-accept-test")) fal_proc_accept_test = 1;
@@ -9237,10 +8451,10 @@ int main(int argc, char **argv)
     /* --copy (run_copy_loop) needs the live datalink; dispatched after the socket
      * is opened, beside the --set-host client (below). */
 
-    /* A router routes and a --set-host CLIENT bridges a terminal; neither is a
-     * NETACP that serves inbound object-42 sessions unless the caller pins it on.
-     * The persistent ENDNODE daemon serves by default (see cterm_server above). */
-    if ((router_mode || set_host_to) && !cterm_server_explicit)
+    /* A router routes; it is not a NETACP that serves inbound object-42
+     * sessions unless the caller pins it on. The persistent ENDNODE daemon
+     * serves by default (see cterm_server above). SET HOST is RTPAD.EXE. */
+    if (router_mode && !cterm_server_explicit)
         cterm_server = 0;
 
     /* OUTBOUND CLIENTS GO THROUGH NETACP (rd vms-dda). On VMS every logical link
@@ -9252,29 +8466,10 @@ int main(int argc, char **argv)
      * executive datalink backend) that is an honest failure -- DECnet is not
      * started -- never a private engine; only the host/lab AF_PACKET instrument
      * build still runs its own engine (it has no NETACP to defer to). */
-    if (copy_src || set_host_to) {
+    if (copy_src) {
         int nr = netacp_running();
-        if (nr == 1 && !ifname_explicit) {
-            if (copy_src)
-                return run_copy_net(copy_src, copy_dst, copy_password_fd);
-            struct netcli c;
-            if (netcli_assign(&c) != 0)
-                return 1;
-            struct dnet_executor ex;
-            const char *local = "0";
-            static char lname[DNET_NODEDB_NAMEMAX + 8];
-            if (dnet_store_load_executor(&ex) == DNET_STORE_OK) {
-                if (ex.name[0])
-                    snprintf(lname, sizeof lname, "%s", ex.name);
-                else if (ex.have_addr)
-                    snprintf(lname, sizeof lname, "%u.%u", dnet_area_of(ex.addr),
-                             dnet_node_of(ex.addr));
-                if (lname[0]) local = lname;
-            }
-            int r = run_set_host_net(&c, set_host_to, local);
-            sys$dassgn(c.chan);
-            return r;
-        }
+        if (nr == 1 && !ifname_explicit)
+            return run_copy_net(copy_src, copy_dst, copy_password_fd);
         if (strcmp(scs_datalink_backend(), "executive") == 0 && !ifname_explicit) {
             fprintf(stderr, "DECNETD-E-NONETACP, no NETACP is serving logical links"
                             " on this node (SS$_DEVOFFLINE): outbound DECnet links are"
@@ -9318,7 +8513,6 @@ int main(int argc, char **argv)
 
     /* SELF-SOURCE the executor address from the node's DECnet configuration
      * (executor.dat, rd vms-f54) whenever --address was not given -- for the
-     * --set-host CLIENT (so DCL's SET HOST wiring need not know it), for the
      * persistent NETACP daemon SYS$MANAGER:STARTNET.COM starts with no argv
      * (rd vms-a70 direction B), and for --show-executor. If executor.dat is
      * absent the NOADDRESS error below fires -- DECnet is simply not configured
@@ -9612,10 +8806,6 @@ int main(int argc, char **argv)
                " (routing only)\n");
     fflush(stdout);
 
-    /* --set-host CLIENT (rd vms-f54): the OUTBOUND half of $ SET HOST. It opens
-     * a CTERM terminal session to object 42 on the remote node and bridges THIS
-     * process's VMS terminal channel to it, then returns -- it owns its own loop
-     * and never falls through to the routing/inbound loop below. */
     /* --copy CLIENT (rd vms-ea8): the OUTBOUND $ COPY over the live datalink. It
      * opens an object-17 FAL logical link to the remote node, drives the DAP
      * transfer, and returns -- it owns its own transfer and never falls through
@@ -9623,30 +8813,6 @@ int main(int argc, char **argv)
     if (copy_src) {
         int r = run_copy_loop(&eng, sock, ifindex, copy_src, copy_dst,
                               copy_password_fd);
-        scs_datalink_close(sock);
-        return r;
-    }
-
-    if (set_host_to) {
-        unsigned ta = 0, tn = 0;
-        int rrc = sethost_resolve_target(set_host_to, &ta, &tn);
-        if (rrc == -2) {
-            fprintf(stderr, "DECNETD-E-NODEDB, --set-host: cannot read the node"
-                            " database to resolve '%s' (status %08X)\n",
-                    set_host_to, (unsigned)dnet_store_last_rms_status());
-            scs_datalink_close(sock);
-            return 1;
-        }
-        if (rrc != 0) {
-            fprintf(stderr, "DECNETD-E-NOSUCHNODE, --set-host: cannot resolve"
-                            " node '%s' (not area.node, and not a NAME in the"
-                            " node database)\n", set_host_to);
-            scs_datalink_close(sock);
-            return 1;
-        }
-        char tbuf[16];
-        snprintf(tbuf, sizeof(tbuf), "%u.%u", ta, tn);
-        int r = run_set_host_loop(&eng, sock, ifindex, tbuf, set_host_user);
         scs_datalink_close(sock);
         return r;
     }

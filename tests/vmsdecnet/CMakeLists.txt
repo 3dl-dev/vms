@@ -305,3 +305,22 @@ add_test(NAME vmsdecnet_startnet_gate
          COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_decnetd_startnet_gate.sh)
 set_tests_properties(vmsdecnet_startnet_gate PROPERTIES
     ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:decnetd_exe>")
+
+# rd vms-0a7 S2: RTPAD.EXE's CTERM terminal side (rtpad_session) replayed against
+# real VAX V7.3 host sessions (byte-identical client segments, no-echo Password:,
+# %REM-S-END), a file SYS$INPUT, a refused send, and 300k mutated host segments
+# (peer-receive fuzz) under ASan/UBSan where available.
+add_executable(test_rtpad_session test_rtpad_session.c)
+target_link_libraries(test_rtpad_session PRIVATE rtpad_session)
+target_include_directories(test_rtpad_session PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(test_rtpad_session PRIVATE -Werror)
+if(OVMX_NODESPEC_SANITIZE_OK)
+    target_compile_options(test_rtpad_session PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_rtpad_session PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_rtpad_session COMMAND test_rtpad_session)
+# rd vms-0a7 S2: RTPAD.EXE and its CTERM codec reach nothing but VMS services (no
+# libc I/O, stdio, isatty/termios, poll, pipe, thread, sleep) and take no argv;
+# the negative control plants each violation and must see it caught.
+add_test(NAME vmsdecnet_rtpad_no_libc
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test_rtpad_no_libc.sh)

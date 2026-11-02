@@ -178,6 +178,11 @@ echo "--- rebuilding TCPIP\$DAYTIME.EXE (the subject test_syssvc_tcpip_daytime d
 echo "--- rebuilding DECNETD.EXE (the subject test_syssvc_decnetd_syscall_audit traces) ---"
 ( cd /src/repo && cmake --build build-static --target decnetd_exe \
                         --parallel "$(nproc)" ) || exit 4
+# RTPAD.EXE: the SET HOST subject test_syssvc_sethost_syscall_audit traces (rd
+# vms-0a7 S2). Rebuilt unconditionally, as DECNETD.EXE above.
+echo "--- rebuilding RTPAD.EXE (the subject test_syssvc_sethost_syscall_audit traces) ---"
+( cd /src/repo && cmake --build build-static --target rtpad_exe \
+                        --parallel "$(nproc)" ) || exit 4
 
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
@@ -243,6 +248,9 @@ chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || exit 4
 cp /src/repo/build-static/bin/DECNETD.EXE \
    /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || exit 4
+cp /src/repo/build-static/bin/RTPAD.EXE \
+   /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RTPAD.EXE || exit 4
 for f in /src/tests/qemu/test_*; do
     [ -x "$f" ] && cp "$f" /initramfs/tests/
 done

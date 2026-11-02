@@ -167,6 +167,9 @@ struct dfile {
     char          *rbuf;
     unsigned int   rlen, roff;
     int            reof;            /* end of file seen                         */
+    /* write side of a terminal: the line not yet ended by a newline */
+    char          *obuf;
+    unsigned int   olen;
 };
 
 static struct dfile *dfd[DFD_MAX];
@@ -284,10 +287,14 @@ static unsigned int mbx_write_eof(unsigned short chan)
     return st;
 }
 
+static void tt_flush_line(struct dfile *df, int record);
+
 static void dfile_release(struct dfile *df)
 {
     if (--df->refs > 0)
         return;
+    if (df->kind == DF_TT)
+        tt_flush_line(df, 1);
     /* the last write end of a pipe this process still owns: end of file for
      * the reader. A write end handed to a subprocess is the subprocess's to end
      * (its C RTL ends it when the image runs down), and a standard stream is a
@@ -297,7 +304,16 @@ static void dfile_release(struct dfile *df)
         (void)mbx_write_eof(df->chan);
     (void)sys$dassgn(df->chan);
     free(df->rbuf);
+    free(df->obuf);
     free(df);
+}
+
+/* Every terminal descriptor's waiting text, as it is (a read is coming). */
+static void tt_prompt_all(void)
+{
+    for (int fd = 0; fd < DFD_MAX; fd++)
+        if (dfd[fd] && dfd[fd]->kind == DF_TT && dfd[fd]->olen)
+            tt_flush_line(dfd[fd], 0);
 }
 
 void ovmx_crtl_devfd_unbind(long long fd)
@@ -312,30 +328,65 @@ void ovmx_crtl_devfd_unbind(long long fd)
 
 /* ------------------------------------------------------------ terminal ---- */
 
-/* A program's bytes to its terminal: each newline a record boundary, CR LF on
- * the line as the terminal driver's carriage control has it (a VMS terminal
- * write carries its own CR LF; the driver adds none to a $QIO's bytes). */
+/* A program's bytes to its terminal, as the DEC C RTL writes a terminal: each
+ * newline ends a RECORD, and a record goes out with the terminal driver's
+ * implied carriage control (IO$_WRITEVBLK, P4 " ": a new line before it, a
+ * carriage return after) -- so a program's lines and DCL's interleave on the
+ * screen as they do on VMS. Text not yet ended by a newline waits in the line
+ * buffer; it goes out as a record at close, at image rundown and when it fills,
+ * and as it is (a prompt) before the program reads the terminal. */
+#define TT_OBUF 512u
+
+static unsigned int tt_qio(struct dfile *df, const char *b, unsigned int n, int record)
+{
+    unsigned short iosb[4] = { 0, 0, 0, 0 };
+    unsigned int st = sys$qiow(0, df->chan, IO_WRITEVBLK, iosb, 0, 0, (void *)b, n, 0,
+                               record ? 0x20u : 0u, 0, 0);
+    if ((st & 1) && !(iosb[0] & 1))
+        st = iosb[0];
+    return st;
+}
+
+static unsigned int tt_put_record(struct dfile *df)
+{
+    unsigned int st;
+    if (df->olen)
+        st = tt_qio(df, df->obuf, df->olen, 1);
+    else
+        st = tt_qio(df, "\n", 1, 0);   /* an empty record: the line feed owed */
+    df->olen = 0;
+    return st;
+}
+
+/* Text waiting for its newline goes out: as a record (close, rundown), or as
+ * it is (before a read: the prompt the program wrote). */
+static void tt_flush_line(struct dfile *df, int record)
+{
+    if (!df->olen)
+        return;
+    if (record)
+        (void)tt_put_record(df);
+    else {
+        (void)tt_qio(df, df->obuf, df->olen, 0);
+        df->olen = 0;
+    }
+}
+
 static long long tt_write(struct dfile *df, const char *buf, uint64_t n)
 {
-    char out[1024];
-    uint64_t i = 0;
-    while (i < n) {
-        unsigned int k = 0;
-        while (i < n && k < sizeof out - 2) {
-            if (buf[i] == '\n') {
-                out[k++] = '\r';
-                out[k++] = '\n';
-            } else {
-                out[k++] = buf[i];
-            }
-            i++;
+    if (!df->obuf && !(df->obuf = malloc(TT_OBUF)))
+        return -ENOMEM;
+    for (uint64_t i = 0; i < n; i++) {
+        unsigned int st = 1;
+        if (buf[i] == '\n')
+            st = tt_put_record(df);
+        else {
+            df->obuf[df->olen++] = buf[i];
+            if (df->olen == TT_OBUF)
+                st = tt_put_record(df);  /* a line longer than the buffer */
         }
-        unsigned short iosb[4] = { 0, 0, 0, 0 };
-        unsigned int st = sys$qiow(0, df->chan, IO_WRITEVBLK, iosb, 0, 0, out, k, 0, 0, 0, 0);
-        if ((st & 1) && !(iosb[0] & 1))
-            st = iosb[0];
         if (!(st & 1))
-            return i > k ? (long long)(i - k) : -st_errno(st);
+            return i ? (long long)i : -st_errno(st);
     }
     return (long long)n;
 }
@@ -343,10 +394,13 @@ static long long tt_write(struct dfile *df, const char *buf, uint64_t n)
 /* One line from the terminal: the terminal driver's read (echo, line editing,
  * the terminator). A carriage return ends the line and reads as '\n'; CTRL/Z
  * is end of file, as the DEC C RTL reads it. */
+static void tt_prompt_all(void);
+
 static int tt_fill(struct dfile *df)
 {
     if (!df->rbuf && !(df->rbuf = malloc(TT_RDMAX + 1)))
         return -ENOMEM;
+    tt_prompt_all();                    /* a prompt written without a newline */
     unsigned short iosb[4] = { 0, 0, 0, 0 };
     unsigned int st = sys$qiow(0, df->chan, IO_READVBLK, iosb, 0, 0,
                                df->rbuf, TT_RDMAX, 0, 0, 0, 0);
@@ -705,9 +759,11 @@ long long ovmx_crtl_devfd_call(long long n, long long a1, long long a2, long lon
         *handled = 1;
         return d_ioctl(df, (unsigned long)a2, (void *)(uintptr_t)a3);
     case SYS_fsync: case SYS_fdatasync:
-        if (!dget(a1)) return 0;
+        if (!(df = dget(a1))) return 0;
         *handled = 1;
-        return 0;                   /* every write was a completed $QIOW */
+        if (df->kind == DF_TT)
+            tt_flush_line(df, 1);
+        return 0;                   /* every other write was a completed $QIOW */
     case SYS_ftruncate: case SYS_fchmod: case SYS_flock: case SYS_fallocate:
     case SYS_getdents64:
         if (!dget(a1)) return 0;
@@ -754,6 +810,11 @@ static int std_device(const char *lognam, char *out, size_t outsz)
         }
         if (!rl || strlen(v) >= sizeof cur)
             return 0;
+        /* an equivalence that is no VMS name (TT's host-line spelling in a
+         * process without a terminal row) ends the chain: the name before it
+         * is what $ASSIGN resolves (TT: -> the console terminal) */
+        if (v[0] == '/')
+            break;
         memmove(cur, v, strlen(v) + 1);
     }
     n = strlen(cur);
@@ -765,10 +826,19 @@ static int std_device(const char *lognam, char *out, size_t outsz)
     return 1;
 }
 
+/* The substrate's own TCGETS: on Linux/Alpha it is _IOR('t', 19, struct
+ * termios), not the generic number musl-arch's headers carry (the C RTL's own
+ * TIOCGWINSZ/TCGETS are answered here, from the channel, never by the kernel). */
+#if defined(__alpha__)
+#define SUBSTRATE_TCGETS 0x402c7413
+#else
+#define SUBSTRATE_TCGETS TCGETS
+#endif
+
 static int line_is_terminal(int fd)
 {
     char t[128];                                 /* struct termios, generously */
-    return rawsys(SYS_ioctl, fd, TCGETS, (long long)(uintptr_t)t) == 0;
+    return rawsys(SYS_ioctl, fd, SUBSTRATE_TCGETS, (long long)(uintptr_t)t) == 0;
 }
 
 /* A host pipe: the creator pumps this stream into the mailbox from a pipe of
@@ -791,22 +861,32 @@ void ovmx_crtl_devfd_bind_stdio(void)
         unsigned int cls = 0;
         if (dfd[fd] || !std_device(names[fd], dev, sizeof dev))
             continue;
-        if (!dvi_long(0, dev, DVI_DEVCLASS, &cls))
-            continue;
-        if (cls == DC_TERM) {
-            if (!line_is_terminal(fd))
-                continue;                       /* redirected underneath */
-        } else if (cls == DC_MAILBOX) {
-            if (line_is_host_pipe(fd))
-                continue;                       /* pumped from a host pipe */
-        } else {
-            continue;                           /* a file: RMS's, not ours */
-        }
         struct devfd_dsc d;
         unsigned short chan = 0;
         dsc(&d, dev, strlen(dev));
         if (!(sys$assign(&d, &chan, 0, 0, 0) & 1))
             continue;
+        if (!dvi_long(chan, 0, DVI_DEVCLASS, &cls)) {
+            /* a terminal channel's class, as its driver senses it */
+            unsigned char b[12];
+            unsigned short iosb[4] = { 0, 0, 0, 0 };
+            unsigned int st = sys$qiow(0, chan, IO_SENSEMODE, iosb, 0, 0, b, sizeof b,
+                                       0, 0, 0, 0);
+            cls = ((st & 1) && (iosb[0] & 1)) ? b[0] : 0;
+        }
+        if (cls == DC_TERM) {
+            if (!line_is_terminal(fd))
+                cls = 0;                        /* redirected underneath */
+        } else if (cls == DC_MAILBOX) {
+            if (line_is_host_pipe(fd))
+                cls = 0;                        /* pumped from a host pipe */
+        } else {
+            cls = 0;                            /* a file: RMS's, not ours */
+        }
+        if (cls != DC_TERM && cls != DC_MAILBOX) {
+            (void)sys$dassgn(chan);
+            continue;
+        }
         struct dfile *df = dfile_new(cls == DC_TERM ? DF_TT : DF_MBX, chan,
                                      fd == 0 ? O_RDONLY : O_WRONLY);
         if (!df) {
@@ -871,6 +951,9 @@ void ovmx_crtl_devfd_rundown(void)
     if (done)
         return;
     done = 1;
+    for (int fd = 0; fd < DFD_MAX; fd++)
+        if (dfd[fd] && dfd[fd]->kind == DF_TT)
+            tt_flush_line(dfd[fd], 1);  /* the last line, as a record */
     for (int fd = 1; fd < 3; fd++) {
         struct dfile *df = dfd[fd];
         if (!df || df->kind != DF_MBX || !df->stdbound || df->handed)

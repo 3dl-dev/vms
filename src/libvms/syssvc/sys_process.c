@@ -2074,6 +2074,11 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 /* NEGCTL-ANCHORED (creprc-detached-output-vms-file-not-written) */
                 if (fd < 0 && detached && creprc_is_vms_file_spec(path))
                     creprc_define_stream("SYS$OUTPUT", path);
+                /* A mailbox (a DEC C pipe end exec*() hands over, rd vms-a66e)
+                 * is the new process's SYS$OUTPUT, as on VMS; its C RTL writes
+                 * it through $QIO (src/vmsrms/crtl_devfd.c). */
+                if (fd < 0 && creprc_is_mailbox(path))
+                    creprc_define_stream("SYS$OUTPUT", path);
                 /* NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal) */
                 if (fd < 0 && detached)
                     fd = open("/dev/null", O_WRONLY);
@@ -2087,6 +2092,8 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 dsc$strncpy(path, error, sizeof(path));
                 int fd = creprc_open_outstream(path);
                 if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                    creprc_define_stream("SYS$ERROR", path);
+                if (fd < 0 && creprc_is_mailbox(path))
                     creprc_define_stream("SYS$ERROR", path);
                 if (fd < 0 && detached)
                     fd = open("/dev/null", O_WRONLY);

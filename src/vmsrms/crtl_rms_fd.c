@@ -1884,7 +1884,7 @@ int ovmx_crtl_creat(const char *name, mode_t mode, ...)
  * A stream that is not an RMS file (a pipe, a terminal, /dev/null) has no
  * file specification here: a null pointer, errno EINVAL. */
 char *ovmx_decc_fgetname(FILE *fp, char *buf, ...) __asm__("decc$fgetname");
-static char *fd_getname(int fd, char *buf, int vms_format);
+static char *fd_getname(int fd, char *buf, int vms_format, int devices);
 
 char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
 {
@@ -1898,7 +1898,7 @@ char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
         errno = EINVAL;
         return NULL;
     }
-    return fd_getname(fileno(fp), buf, vms_format);
+    return fd_getname(fileno(fp), buf, vms_format, 0);
 }
 
 /* DEC C getname(fd, buffer [, format]) (rd vms-a66e): the same for a
@@ -1914,15 +1914,17 @@ char *ovmx_crtl_getname(int fd, char *buf, ...)
         errno = EINVAL;
         return NULL;
     }
-    return fd_getname(fd, buf, vms_format);
+    return fd_getname(fd, buf, vms_format, 1);
 }
 
 extern int ovmx_crtl_devfd_name(long long fd, char *buf, size_t sz);
 
-static char *fd_getname(int fd, char *buf, int vms_format)
+/* devices: getname() names a terminal or mailbox descriptor's device;
+ * fgetname() stays the file specification of an RMS file (NULL otherwise). */
+static char *fd_getname(int fd, char *buf, int vms_format, int devices)
 {
     char dev[64];
-    if (ovmx_crtl_devfd_name(fd, dev, sizeof dev) == 1) {
+    if (devices && ovmx_crtl_devfd_name(fd, dev, sizeof dev) == 1) {
         if (vms_format || ovmx_crtl_vms_to_unix(dev, buf, 256) != 0)
             memcpy(buf, dev, strlen(dev) + 1);
         return buf;

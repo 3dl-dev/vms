@@ -312,7 +312,8 @@ dlm-rm-held-reported-though-unsent
 dlm-rm-role-claimed-without-an-adoption
 dlm-rebuild-0xf9-not-adopted
 dlm-rebuild-record-sent-as-op12
-dlm-rebuild-install-ignores-compat"
+dlm-rebuild-install-ignores-compat
+dlm-rebuild-sent-outside-the-step"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3175,6 +3176,24 @@ EOF
                       ;;
         esac;;
 
+    dlm-rebuild-sent-outside-the-step)
+        case "$_f" in
+        facility)     echo "the failover rebuild's PHASE (rd vms-bcb): an op-0x08 record goes on the wire only inside the transition's rebuild step (887 of 887 real records sent after the barrier release of step 5 or 6 and answered before the next release); outside it the tree is stopped, counted";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "rm_rb_in_window() always says open, so the survivor sends its ROOT record at the transition's end, after the barrier's twelfth release -- the frame (lab33a pcap 7801) on which a real OpenVMS VAX V7.3 bugchecked LOCKMGRERR.";;
+        require_fail) hd_lines <<'EOF'
+*** NO op-0x08 goes to VAX2 after the barrier (the old sender's frame 7801 bugchecked it) ***
+  nothing counted as sent
+  the tree is stopped for the step it missed, counted
+  in the stopped total
+*** the directory-holder sends none outside the step either ***
+  counted
+EOF
+                      ;;
+        esac;;
+
     dlm-rm-role-claimed-without-an-adoption)
         case "$_f" in
         facility)     echo "the op-0x0f answer's NEW MASTER role is read off this node's own open adoption (rd vms-ed5 / vms-cab), never off the frame";;
@@ -4223,6 +4242,10 @@ apply_edit() {
     dlm-rebuild-install-ignores-compat)
         # `ok = dup != NULL ||` is unique.
         sed -i 's#    ok = dup != NULL ||#    ok = 1 || dup != NULL || /* NEGCTL dlm-rebuild-install-ignores-compat */#' "$_file";;
+
+    dlm-rebuild-sent-outside-the-step)
+        # `if (f->ops->rb_window != 0 && f->ops->rb_window(f->ops->ctx))` is unique.
+        sed -i 's|if (f->ops->rb_window != 0 \&\& f->ops->rb_window(f->ops->ctx))|if (1) /* NEGCTL dlm-rebuild-sent-outside-the-step */|' "$_file";;
 
     dlm-rm-role-claimed-without-an-adoption)
         # rm_h_role's role read: the second arm of the only ternary here.

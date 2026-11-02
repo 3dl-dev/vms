@@ -320,8 +320,8 @@ static const struct vms_dlm_rm_ops g_ops_template = {
 	fk_reported, fk_mastered, fk_hash, fk_dir_node, fk_stage, fk_send,
 	fk_residue, fk_valblk, fk_log, NULL, NULL, NULL,
 	/* rd vms-874f: the rebuild doors, unbound here too (test_dlm_rebuild
-	 * binds them). */
-	NULL, NULL, NULL, NULL, NULL
+	 * binds them); rd vms-bcb's rebuild-step door among them. */
+	NULL, NULL, NULL, NULL, NULL, NULL
 };
 
 static struct vms_dlm_rm_ops g_ops;

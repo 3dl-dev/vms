@@ -246,6 +246,27 @@ def interleaved_0d(path, recs):
                if b[8] == CAT_REQ and b[9] == 0x0d and lo < idx < hi)
 
 
+def barrier_steps(path, recs):
+    """rd vms-bcb: for each op-0x08 record, the step of the LAST barrier release
+    (cat-0x01 op-0x0c, its step index at body[16]) before it, and whether its
+    answer arrived before the NEXT release. Returns (Counter of last-release
+    step, Counter of 'closed' verdicts)."""
+    rel = [(idx, b[16]) for idx, _s, _d, b in rc.sca_bodies(path)
+           if b[8] == 0x01 and b[9] == 0x0c and len(b) > 16]
+    steps, closed = collections.Counter(), collections.Counter()
+    for r in recs:
+        before = [st for idx, st in rel if idx < r['idx']]
+        steps[before[-1] if before else None] += 1
+        after = [idx for idx, _st in rel if idx > r['idx']]
+        if not before:
+            closed['no barrier in the capture'] += 1
+        elif r['a_idx'] is not None and after and r['a_idx'] < after[0]:
+            closed['answered before the next release'] += 1
+        else:
+            closed['other'] += 1
+    return steps, closed
+
+
 def selftest(repo):
     """Pin the figures rd vms-874f's sender and answerer are built from. A
     corpus change has to move these deliberately, and whatever quotes them
@@ -399,6 +420,39 @@ def selftest(repo):
     # 7. PHASE: no op-0x0d registration lies inside a capture's op-0x08 run.
     check('op-0x0d frames between the first and last op-0x08, all captures',
           sum(interleaved_0d(p, r) for p, r in caps.items()), 0)
+
+    # 8. THE BARRIER STEP (rd vms-bcb). Every record whose barrier is in the
+    #    capture is sent after the release of step 5 (RA1b, f1, a formation)
+    #    or step 6 (E4, E5, E5b, run16, formations), and answered before the
+    #    next release -- inside the transition, never after it. None follows a
+    #    release of step 7 or later; OVMX's one record after the release of
+    #    step 12 (lab33a) bugchecked a real VAX LOCKMGRERR. WHICH of 5 or 6 a
+    #    departure takes is not separated by this corpus (RA1b/f1 vs E5/E5b
+    #    both step the directory vector), so no sender may choose one yet.
+    per_step = collections.Counter()
+    verdict = collections.Counter()
+    for p, recs in caps.items():
+        st, cl = barrier_steps(p, recs)
+        for k, v in st.items():
+            per_step[(os.path.basename(p), k)] += v
+        verdict.update(cl)
+    check('op-0x08 records by the last barrier release before them',
+          sorted(per_step.items(), key=lambda kv: (kv[0][0], str(kv[0][1]))), [
+              (('cf1-op08.pcap', None), 1),
+              (('coldform-ev2-formation.pcap', 5), 1),
+              (('heldout-E4.pcap.gz', 6), 137),
+              (('heldout-E5.pcap.gz', 6), 158),
+              (('heldout-E5b.pcap.gz', 6), 6),
+              (('heldout1.pcap.gz', 6), 1),
+              (('heldout2.pcap.gz', 6), 1),
+              (('oracle-3node-fault-f1.pcap.gz', 5), 164),
+              (('ra1b-departure.pcap.gz', 5), 416),
+              (('wire.pcap.gz', 6), 3),
+          ])
+    check('...answered before the next release (inside the step)',
+          sorted(verdict.items()),
+          [('answered before the next release', 887),
+           ('no barrier in the capture', 1)])
 
     print('dlm_rebuild08_census selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1

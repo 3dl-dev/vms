@@ -353,6 +353,24 @@ struct vms_dlm_rm_ops {
 	 *                  the tree's master; 1 = SS$_NORMAL.
 	 */
 	int (*rb_ready)(void *ctx);
+	/*
+	 * `rb_window`      1 only while this node is INSIDE a state
+	 *                  transition's rebuild step, where every real record
+	 *                  is sent (rd vms-bcb): after the barrier release of
+	 *                  step 5 or 6 and answered before the next release
+	 *                  (887 of 887 real records whose barrier is in the
+	 *                  capture, six departures, dlm_rebuild08_census.py
+	 *                  --selftest section 8). None is ever sent after the
+	 *                  barrier: the one OVMX sent there (lab33a, after
+	 *                  release 12) bugchecked a real VAX V7.3 LOCKMGRERR.
+	 *                  UNBOUND = CLOSED, and the executive leaves it
+	 *                  unbound: neither barrier FSM holds a step for a
+	 *                  rebuild yet, and which step (6 or 7) a departure
+	 *                  of a directory node takes is not grounded. A tree
+	 *                  whose record would go to another system is STOPPED,
+	 *                  counted (`rb_out_of_window`) and said.
+	 */
+	int (*rb_window)(void *ctx);
 	int (*rb_tree_next)(void *ctx, uint32_t departed_csid,
 			    const struct vms_dlm_adopt_tree *skip,
 			    uint32_t n_skip, struct vms_dlm_adopt_tree *out);
@@ -430,6 +448,9 @@ struct vms_dlm_ho_tree {
  *                    ORPHANED tree of ours (a granted proxy still naming D).
  *                    Its directory node X is resolved the way every lookup
  *                    is (the `dir_node` door):
+ *                    A record that would go to ANOTHER system goes only
+ *                    inside the transition's rebuild step (`rb_window`,
+ *                    rd vms-bcb); outside it the tree is STOPPED, counted.
  *                      X another member  -> the ROOT record goes to X (R2);
  *                      X is THIS node    -> its own directory is asked: an
  *                        entry naming another member M (a survivor it has
@@ -609,6 +630,8 @@ struct vms_dlm_rm {
 	uint32_t rb_unaddressable;   /* no directory/master this node may     */
 				     /* address: STOPPED, nothing sent        */
 	uint32_t rb_dst_departed;    /* trees stopped: their destination left */
+	uint32_t rb_out_of_window;   /* trees stopped: a record would have    */
+				     /* gone out outside the rebuild step     */
 	uint32_t rb_no_slot;         /* trees left waiting: every slot busy   */
 	uint32_t rb_in_installed;    /* survivors' records installed + 0xfa   */
 	uint32_t rb_in_refused;      /* ...refused by the engine: unanswered  */

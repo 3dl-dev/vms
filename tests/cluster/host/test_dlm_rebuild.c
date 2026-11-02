@@ -365,6 +365,21 @@ static int d_rb_install(void *ctx, const struct vms_dlm_adopt_lock_rec *r,
 	return vms_lock_dlm_rebuild_lock(r, o) == SS__NORMAL;
 }
 
+/*
+ * THE REBUILD STEP (rd vms-bcb). Every real op-0x08 goes inside the barrier's
+ * rebuild step; the executive leaves this door UNBOUND (= closed) until a
+ * barrier FSM holds that step. Sections 1-3 bind it OPEN: they pin what a
+ * record carries and how the table paces it once it may be sent. Section 4
+ * leaves it unbound, exactly as the executive does.
+ */
+static int g_bind_window = 1;
+
+static int d_rb_window(void *ctx)
+{
+	(void)ctx;
+	return 1;
+}
+
 static struct vms_dlm_rm_ops g_ops;
 static struct vms_dlm_rm g_rm;
 
@@ -390,6 +405,7 @@ static void table_up(uint32_t m0, uint32_t m1)
 	g_ops.ho_rehome = d_ho_rehome;
 	g_ops.ho_valblk = d_ho_valblk;
 	g_ops.rb_ready = d_rb_ready;
+	g_ops.rb_window = g_bind_window ? d_rb_window : NULL;
 	g_ops.rb_tree_next = d_rb_tree_next;
 	g_ops.rb_dir_entry = d_rb_dir_entry;
 	g_ops.rb_dir_claim = d_rb_dir_claim;
@@ -990,6 +1006,76 @@ static void test_codec_round_trip(void)
 		 VMS_CODEC_E_INVAL, "a HALF parent pair is never built");
 }
 
+/* ================================================================== *
+ * 4. rd vms-bcb: LAB33A, REPLAYED. VAX1 (LOCKDIRWT 1) masters DEPT; OVMXE
+ *    (CSID 00010003, LOCKDIRWT 0) holds DEPT's root at CR with no subs; VAX2
+ *    (LOCKDIRWT 1) is DEPT's directory and, once VAX1 leaves, the only other
+ *    member. VAX1 SHUTDOWN REMOVE_NODE. The old sender put ONE op-0x08 ROOT
+ *    on the wire to VAX2 at the transition's end -- after the barrier's
+ *    release of step 12 -- and VAX2 bugchecked LOCKMGRERR (pcap frame 7801).
+ *    Every real op-0x08 is sent after the release of step 5 or 6 and answered
+ *    before the next release (887/887, dlm_rebuild08_census.py section 8).
+ * ================================================================== */
+#define CSID_OVMXE 0x00010003u
+
+static void test_lab33a_no_record_outside_the_rebuild_step(void)
+{
+	uint32_t root;
+
+	printf("-- rd vms-bcb: lab33a replayed -- no op-0x08 outside the "
+	       "rebuild step\n");
+	g_bind_window = 0;                 /* the executive's binding */
+
+	/* OVMXE holds DEPT, mastered by VAX1; VAX2 is DEPT's directory. */
+	(void)engine_up(CSID_OVMXE, 0x10000005u);
+	table_up(CSID_VAX2, 0u);
+	root = enq("DEPT", LCK_K_CRMODE, 0u);
+	ct_check(root != 0u && vax1_grants(root, 0x0b000439u),
+		 "OVMXE's DEPT root at CR is a proxy naming VAX1");
+	g_dir_of_names = CSID_VAX2;
+	vax1_departs();                    /* the transition's end kicks it */
+	vms_dlm_rm_rb_kick(&g_rm);         /* ...and so does the beat       */
+	ct_check_eq_u32(g_n_sent, 0u,
+			"*** NO op-0x08 goes to VAX2 after the barrier (the old "
+			"sender's frame 7801 bugchecked it) ***");
+	ct_check_eq_u32(g_rm.rb_records_sent, 0u, "  nothing counted as sent");
+	ct_check_eq_u32(g_rm.rb_out_of_window, 1u,
+			"  the tree is stopped for the step it missed, counted");
+	ct_check_eq_u32(g_rm.rb_trees_started, 1u,
+			"  ...and not retried by the next kick");
+	ct_check(vms_dlm_rm_rb_stopped(&g_rm) >= 1u, "  in the stopped total");
+	engine_down();
+
+	/* The same, with OVMXE as DEPT's directory and its own entry naming a
+	 * surviving master (RA1b's directory-holder case): still no record. */
+	(void)engine_up(CSID_OVMXE, 0x10000005u);
+	table_up(CSID_VAX2, 0u);
+	root = enq("DEPT", LCK_K_CRMODE, 0u);
+	(void)vax1_grants(root, 0x0b000439u);
+	g_dir_of_names = 0u;
+	{
+		struct vms_dlm_res_ident id;
+		uint32_t h = 0u;
+
+		memset(&id, 0, sizeof(id));
+		id.mode = 3u;
+		id.name_len = 4u;
+		memcpy(id.name, "DEPT", 4u);
+		if (vms_lock_dlm_dir_hash_of("DEPT", 4u, 0u, 3u, &h))
+			id.hash = h;
+		ct_check(vms_dlm_dir_claim_self(&g_dir, &id, CSID_VAX2) == 0,
+			 "OVMXE's own directory names VAX2 DEPT's master");
+	}
+	vax1_departs();
+	ct_check_eq_u32(g_n_sent, 0u,
+			"*** the directory-holder sends none outside the step "
+			"either ***");
+	ct_check_eq_u32(g_rm.rb_out_of_window, 1u, "  counted");
+	engine_down();
+
+	g_bind_window = 1;
+}
+
 int main(void)
 {
 	printf("test_dlm_rebuild: the failover rebuild, on the real lock "
@@ -998,5 +1084,6 @@ int main(void)
 	test_as_vax3_the_directory_holder();
 	test_as_vax2_told_to_master();
 	test_what_stops_a_rebuild();
+	test_lab33a_no_record_outside_the_rebuild_step();
 	return ct_summary("test_dlm_rebuild");
 }

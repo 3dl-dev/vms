@@ -945,6 +945,25 @@ static void rm_rb_pump(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
 }
 
 /*
+ * MAY A REBUILD RECORD GO ON THE WIRE NOW (rd vms-bcb)? Only inside the
+ * transition's rebuild step (the `rb_window` door). Outside it the tree is
+ * STOPPED, counted and said -- this node's locks there are not rebuilt, which
+ * is a loss this node owns; a record a real VAX receives outside that step is
+ * a LOCKMGRERR bugcheck on the receiver (lab33a, 2026-11-02).
+ */
+static int rm_rb_in_window(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
+{
+	if (f->ops->rb_window != 0 && f->ops->rb_window(f->ops->ctx))
+		return 1;
+	f->rb_out_of_window++;
+	rm_rb_stop(f, t, "%DLM, a tree whose master left would be rebuilt "
+			 "by a record outside the state transition's rebuild "
+			 "step, which this node does not yet take part in: its "
+			 "locks there are not rebuilt (see the DLM counters)");
+	return 0;
+}
+
+/*
  * TAKE UP ONE ORPHANED TREE (R2): find where its ROOT record goes, or become
  * its master when this node is its directory and nobody else has claimed it.
  */
@@ -977,7 +996,8 @@ static void rm_rb_start(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t,
 			return;
 		}
 		t->dst = dir;
-		rm_rb_pump(f, t);
+		if (rm_rb_in_window(f, t))
+			rm_rb_pump(f, t);
 		return;
 	}
 	/* THIS NODE is the directory. Its own entry says who is master now. */
@@ -995,7 +1015,8 @@ static void rm_rb_start(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t,
 				/* RA1b: the directory-holder addresses the
 				 * master it has just answered 0xf9. */
 				t->dst = master;
-				rm_rb_pump(f, t);
+				if (rm_rb_in_window(f, t))
+					rm_rb_pump(f, t);
 				return;
 			}
 			f->rb_unaddressable++;
@@ -1949,5 +1970,6 @@ uint32_t vms_dlm_rm_rb_stopped(const struct vms_dlm_rm *f)
 		return 0u;
 	return f->rb_departed_full + f->rb_unbound + f->rb_records_unsent +
 	       f->rb_answers_refused + f->rb_master_refused +
-	       f->rb_unaddressable + f->rb_dst_departed + f->rb_in_refused;
+	       f->rb_unaddressable + f->rb_dst_departed + f->rb_in_refused +
+	       f->rb_out_of_window;
 }

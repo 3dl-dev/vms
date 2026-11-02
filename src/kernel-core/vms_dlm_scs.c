@@ -2810,6 +2810,10 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.ho_rehome          = dlm_arm_ho_rehome;
 	d->rm_ops.ho_valblk          = dlm_arm_ho_valblk;
 	d->rm_ops.rb_ready           = dlm_arm_rb_ready;
+	/* `rb_window` stays UNBOUND = CLOSED (rd vms-bcb): every real op-0x08
+	 * goes inside the barrier's rebuild step, and neither barrier FSM holds
+	 * a step for one yet. A record sent after the barrier bugchecked a real
+	 * VAX (LOCKMGRERR); a tree that would need one is stopped, counted. */
 	d->rm_ops.rb_tree_next       = dlm_arm_rb_tree_next;
 	d->rm_ops.rb_dir_entry       = dlm_arm_rb_dir_entry;
 	d->rm_ops.rb_dir_claim       = dlm_arm_rb_dir_claim;

@@ -2438,6 +2438,21 @@ uint32_t vms_kif_p0_map(uint64_t base, uint64_t limit)
     return args.status;
 }
 
+uint32_t vms_kif_va(struct vms_va_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_VA, args);
+
+    return args->status;
+}
+
 uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit)
 {
     struct vms_p0_args args;

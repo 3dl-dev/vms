@@ -1382,6 +1382,18 @@ static void vms_proc_copy_identity(struct vms_proc *proc, struct vms_proc *paren
      * keeps its creator's current privileges as its own (rd vms-bdc1). */
     proc->image_privs = share_pid ? parent->image_privs : 0;
     spin_unlock(&parent->mode_lock);
+
+    /*
+     * The authorized quota block (rd vms-bc53). An image task (share_pid: DCL's
+     * RUN, the SAME VMS process) runs under the process's own quotas, so it
+     * carries the block LOGINOUT sourced -- its $EXPREG/C RTL heap is charged
+     * against that PGFLQUOTA. A subprocess gets its quotas from $CREPRC's quota
+     * list / the job, which OVMX does not source yet: it stays unsourced.
+     */
+    if (share_pid) {
+        proc->quota_valid = parent->quota_valid;
+        proc->quota = parent->quota;
+    }
 }
 
 
@@ -1460,6 +1472,9 @@ static void vms_proc_init_state(struct vms_proc *proc)
      * behind "P0 deleted on rundown, P1 survives", not decoration.
      * kmem_cache_zalloc() above already zeroed p1_base/p1_limit. */
     spin_lock_init(&proc->p1_lock);
+
+    /* Virtual address space record (rd vms-bc53): created on first use. */
+    mutex_init(&proc->va_lock);
 }
 
 /*
@@ -1695,6 +1710,10 @@ void vms_proc_free_claimed(struct vms_proc *proc)
      * dropping each mounted volume's assigned-channel refcount -- exactly as
      * the mailbox and BG channels above. */
     vms_acp_release_all(proc);
+
+    /* Drop the $EXPREG/$CRETVA record (rd vms-bc53); the pages themselves
+     * die with the address space. */
+    vms_va_release(proc);
 
     /* Clear this process's $SETCLUEVT registration, if any (FC-P3.8) -- a
      * no-op when the cluster stack never started or this process never
@@ -2127,6 +2146,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_p0_map(proc, arg);
     case VMS_IOCTL_P0_UNMAP:
         return vms_ioctl_p0_unmap(proc, arg);
+
+    /* Process virtual address space: $EXPREG/$CRETVA/$DELTVA (rd vms-bc53) */
+    case VMS_IOCTL_VA:
+        return vms_ioctl_va(proc, arg);
 
     /* P1 control region (vms-68f.ii, same design, increment (ii)) */
     case VMS_IOCTL_P1_MAP:

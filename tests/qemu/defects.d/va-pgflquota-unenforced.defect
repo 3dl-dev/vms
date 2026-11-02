@@ -1,0 +1,40 @@
+# va-pgflquota-unenforced -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "process virtual address space: \$EXPREG/\$CRETVA charge PGFLQUOTA and refuse past it (VMS_IOCTL_VA, rd vms-bc53)";;
+        targets)      echo "kernel/vms_va.c";;
+        suites_red)   echo "test_syssvc_va";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "va_quota_check() treats every process as having no sourced quota: the executive still charges and reports, but never refuses. One condition, forced.";;
+        require_fail) cat <<'EOF'
+child: a heap request past PGFLQUOTA is refused SS$_EXQUOTA by the executive
+child: SYS$EXPREG past PGFLQUOTA is SS$_EXQUOTA too
+child: 16 KB at a time, the heap gets exactly 8 before SS$_EXQUOTA
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+child: ... and nothing was charged for the refused request
+child: $DELTVA of the heap's pages returns their charge
+the quota child's checks all passed
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+All three follow from the requests that should have been refused succeeding.
+The 128 KB heap request and the 512-pagelet SYS$EXPREG are now granted and
+charged, so the charge after the refused request is no longer 128 pagelets,
+and deleting the first 64 KB cannot bring it back to 0 (the two granted ranges
+are still held). The parent sees the child exit non-zero.
+EOF
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (!proc->quota_valid)$|    if (1) /* NEGCTL va-pgflquota-unenforced */|' "$_file"
+    :
+}

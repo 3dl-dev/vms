@@ -233,6 +233,15 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
         $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" -o "$ALPHA_VFORK_OBJ" \
         "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vfork.c"
+    # vms-bc53: the C RTL heap's address space -- mallocng's glue (musl-arch
+    # src/malloc/mallocng/glue.h) calls ovmx$vm_expreg/ovmx$vm_deltva, which ask
+    # the executive's $EXPREG/$DELTVA through the same transport seam. No decc$
+    # universal, so the vector is unchanged.
+    ALPHA_VM_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_vm.o"
+    # shellcheck disable=SC2086
+    "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+        $ALPHA_MUSL_INC -I"$LIBVMS_INC_VF" -I"$LIBVMSSYS_DIR_VF" -o "$ALPHA_VM_OBJ" \
+        "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_vm.c"
     ALPHA_KIFX_OBJ="$ALPHA_BOOT_DIR/kif_transport_linux.o"
     ALPHA_KIFS_OBJ="$ALPHA_BOOT_DIR/syscall_vms.o"
     # shellcheck disable=SC2086
@@ -570,7 +579,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     [ -n "${ALPHA_CRTL_VMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_VMS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
-    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_KIFX_OBJ" "$ALPHA_KIFS_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" "$ALPHA_VFORK_OBJ" "$ALPHA_VM_OBJ" "$ALPHA_KIFX_OBJ" "$ALPHA_KIFS_OBJ" "$ALPHA_STAT_OBJ" ${ALPHA_VENEER_OBJ:-}
     rm -rf "$ALPHA_BOOT_DIR"
     [ -n "${VENEER_DIR:-}" ] && rm -rf "$VENEER_DIR"
     echo "mk_decc_shr: created $OUT (alpha/EVAX)"

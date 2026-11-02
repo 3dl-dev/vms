@@ -917,6 +917,16 @@ uint32_t vms_kif_p0_map(uint64_t base, uint64_t limit);
  * resource release -- channels, P0 locks, image ASTs -- is increment v.) */
 uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
 
+/*
+ * vms_kif_va - one process virtual-address-space service (rd vms-bc53):
+ * $EXPREG / $CRETVA / $DELTVA / the accounting query, as `args->op`
+ * (VMS_VA_*, vms_ioctl.h). The executive maps or deletes the pages and charges
+ * PGFLQUOTA; args comes back with the range affected and the accounting.
+ * Returns the service's VMS status (also in args->status); SS$_NOSUCHDEV with
+ * no executive -- there is no userspace fallback.
+ */
+uint32_t vms_kif_va(struct vms_va_args *args);
+
 /* ================================================================
  * P1 control region (vms-68f.ii, in-process image activation foundation,
  * increment (ii))

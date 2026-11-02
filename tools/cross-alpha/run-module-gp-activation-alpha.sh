@@ -67,6 +67,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate # vms-f49 rung 4: veneer write + INDEPENDENT ODS-2 File-ID reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-vm-gate # vms-bc53: the DEC C heap is executive $EXPREG P0 charged to PGFLQUOTA (logged-in SYSTEM: malloc NULL/ENOMEM, SYS$EXPREG SS$_EXQUOTA)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate     # vms-3b3f: .EXE LINKed on real OpenVMS Alpha runs unchanged (SYS$QIOW/LIB$PUT_OUTPUT via SYS$PUBLIC_VECTORS/LIBRTL)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output
@@ -932,6 +933,24 @@ assert_vmsabi() {
   return 0
 }
 
+# assert_crtlvm <console-log> -- THE TEETH for the vms-bc53 heap proof
+# (`crtl-vm-gate' mode). PASS iff the image, run in a logged-in SYSTEM session
+# (PGFLQUOTA sourced from SYSUAF), (a) ran out of heap before its 400 MB bound
+# with malloc NULL / errno ENOMEM, (b) then had SYS$EXPREG refused SS$_EXQUOTA by
+# the executive (the heap and $EXPREG are one charge), (c) got both back after
+# free, and (d) did not crash. A heap still on Linux mmap fails (a) and (b).
+assert_crtlvm() {
+  local log="$1" line
+  tr -d '\r' < "$log" | grep -aq "^OVMX CRTL-VM test: OK" || { echo "  assert_crtlvm: the image did not report OK" >&2; return 1; }
+  grep -aqE "%DCL-F-ABORT|terminated abnormally" "$log" && { echo "  assert_crtlvm: the image crashed" >&2; return 1; }
+  line=$(tr -d '\r' < "$log" | grep -a "^CRTLVM: heap exhausted after" | tail -1)
+  printf '%s\n' "$line" | grep -qE "after ([1-9]|[1-9][0-9]|[1-3][0-9][0-9]) MB: malloc NULL errno=ENOMEM, then SYS\\\$EXPREG %X0000001C$" \
+    || { echo "  assert_crtlvm: no ENOMEM exhaustion below the bound followed by SS\$_EXQUOTA: '$line'" >&2; return 1; }
+  tr -d '\r' < "$log" | grep -aqE "^CRTLVM: after free: SYS\\\$EXPREG %X[0-9A-F]{7}[13579BDF], malloc 1 MB ok$" \
+    || { echo "  assert_crtlvm: the charge did not come back after free" >&2; return 1; }
+  return 0
+}
+
 # assert_crtlfd <console-log> -- THE TEETH for the vms-b90 C RTL file-layer
 # proof (`crtl-fd-gate' mode). PASS iff (a) the image ran every check and said
 # so ("OVMX CRTL-FD test: OK", which it prints only with zero failed checks:
@@ -1265,6 +1284,42 @@ run_boot_a() {
               send LOGOUT
           else
               echo "NATIVE-SP: SYSTEM/MANAGER login did not reach the banner" >> modgpA.raw
+          fi
+      fi
+      # LOGIN_CMDS_FILE (the crtl-vm gate, vms-bc53): log in SYSTEM/MANAGER on
+      # OPA0: and send each command line of the file after its first, which is
+      # the marker that ends the session. A login process is the one whose
+      # quotas LOGINOUT sourced from SYSUAF.
+      LCF="'"${LOGIN_CMDS_FILE:-}"'"
+      if [ -n "$LCF" ] && [ -f "$LCF" ] && grep -qaF "Username:" modgpA.raw 2>/dev/null; then
+          lsend()    { printf "%s\r" "$1" >&6 2>/dev/null || true; }
+          lwaitpat() {
+              local pat="$1" lim="$2" since="${3:-0}" w=0
+              while [ "$w" -lt "$lim" ]; do
+                  tail -c "+$((since + 1))" modgpA.raw 2>/dev/null | grep >/dev/null -aF -- "$pat" && return 0
+                  kill -0 "$QP" 2>/dev/null || return 1
+                  sleep 1; w=$((w + 1))
+              done
+              return 1
+          }
+          LEND=$(head -1 "$LCF")
+          OFF=$(wc -c < modgpA.raw)
+          lsend SYSTEM
+          lwaitpat "Password:" 60 "$OFF" && lsend MANAGER
+          if lwaitpat "Welcome to OpenVMX" 120 "$OFF"; then
+              lwaitpat "\$ " 60 "$OFF" || true
+              sleep 2
+              tail -n +2 "$LCF" | while IFS= read -r LC; do
+                  OFF=$(wc -c < modgpA.raw)
+                  lsend "$LC"
+                  lwaitpat "\$ " 60 "$OFF" || true
+                  sleep 1
+              done
+              lwaitpat "$LEND" 900 0 || echo "LOGIN-RUN: the session did not reach $LEND" >> modgpA.raw
+              sleep 2
+              lsend LOGOUT
+          else
+              echo "LOGIN-RUN: SYSTEM/MANAGER login did not reach the banner" >> modgpA.raw
           fi
       fi
       exec 6>&-
@@ -3279,6 +3334,63 @@ EOF
       exit 0
     fi
     echo "FAIL: the C RTL file layer did not work end to end. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  crtl-vm-gate)
+    # vms-bc53: the DEC C heap's address space is the executive's. MILESTONE
+    # image crtl_vm_test.c is an ordinary 32-bit DEC C program; SYSTARTUP runs it
+    # once with no argument (a boot process: no sourced quota, so it only checks
+    # P0 placement). The proof run is in a SYSTEM login on OPA0: -- LOGINOUT
+    # sources PGFLQUOTA from SYSUAF -- as the foreign command `CRTLVM quota`.
+    MILESTONE_MAIN=crtl_vm_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    export JOINT_MAIN_MUSL_HEADERS=1
+    export JOINT_USE_LIBVMS=1           # SYS$EXPREG lives in LIBVMS$SHR
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    _st=$(mktemp -d); _fails=0
+    {
+      echo "CRTLVM: small+large malloc in P0=1"
+      echo "CRTLVM: heap exhausted after 18 MB: malloc NULL errno=ENOMEM, then SYS\$EXPREG %X0000001C"
+      echo "CRTLVM: after free: SYS\$EXPREG %X00000001, malloc 1 MB ok"
+      echo "OVMX CRTL-VM test: OK (the heap is P0 charged to PGFLQUOTA)"
+      echo "CRTLVM-END"
+    } > "$_st/pass.log"
+    # the heap on Linux mmap: it runs to the bound and $EXPREG still has room
+    sed 's/after 18 MB: malloc NULL errno=ENOMEM, then SYS\$EXPREG %X0000001C/after 400 MB: malloc NULL errno=other, then SYS$EXPREG %X00000001/' "$_st/pass.log" > "$_st/linuxheap.log"
+    # the heap charged nothing: it ran out of P0 (VASFULL) instead of quota
+    sed 's/then SYS\$EXPREG %X0000001C/then SYS$EXPREG %X00000001/' "$_st/pass.log" > "$_st/nocharge.log"
+    sed 's/errno=ENOMEM/errno=other/' "$_st/pass.log" > "$_st/noerrno.log"
+    sed 's/after free: SYS\$EXPREG %X00000001/after free: SYS$EXPREG %X0000001C/' "$_st/pass.log" > "$_st/nocredit.log"
+    sed 's/test: OK (the heap/test: FAILED (the heap/' "$_st/pass.log" > "$_st/checkfail.log"
+    { cat "$_st/pass.log"; echo "%DCL-F-ABORT, image terminated abnormally"; } > "$_st/crash.log"
+    for _c in "pass:0" "linuxheap:1" "nocharge:1" "noerrno:1" "nocredit:1" "checkfail:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_crtlvm "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  crtlvm selftest $_n: PASS"; else echo "  crtlvm selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "crtlvm selftest failed -- assert_crtlvm cannot be trusted"
+    [ "${CRTLVM_SELFTEST_ONLY:-0}" = 1 ] && { echo "PASS: crtlvm selftest only"; exit 0; }
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    # The login session's commands: first line is the END marker to wait for.
+    printf '%s\n' "CRTLVM-END" 'CRTLVM :== $SYS$SYSTEM:JOINT_E2E.EXE' "CRTLVM quota" > "$WORK/login_cmds.txt"
+    export LOGIN_CMDS_FILE=/work/login_cmds.txt
+    log "step 3: BOOT A -- the DEC C heap on the REAL executive, in a SYSTEM login"
+    run_boot_a
+    grep -aE "CRTLVM|OVMX CRTL-VM|LOGIN-RUN:|%DCL-|%IMGACT|%SYSTEM-|fatal signal" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_crtlvm "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: a DEC C program's heap ran out at its PGFLQUOTA (malloc NULL, ENOMEM) and"
+      echo "      the executive then refused SYS\$EXPREG SS\$_EXQUOTA: the heap is VMS address"
+      echo "      space charged to the process's quota, given back by free."
+      exit 0
+    fi
+    echo "FAIL: the DEC C heap is not the executive's \$EXPREG address space. Full log: $WORK/modgpA.log"
     tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

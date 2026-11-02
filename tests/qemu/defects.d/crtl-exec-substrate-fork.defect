@@ -31,7 +31,7 @@ EOF2
 }
 
 defect_apply() {
-        sed -i 's|^#include <string.h>$|#include <string.h>\n#include <unistd.h>\n#include <sys/wait.h>|' "$_file"
+        sed -i 's|^#include <string.h>$|#include <string.h> /* NEGCTL crtl-exec-substrate-fork */\n#include <unistd.h>\n#include <sys/wait.h>|' "$_file"
         sed -i 's|^    uint32_t st = sys\$creprc(&pid, &img, 0, 0, 0, 0, 0, 0, 0, 0, 0, PRC\$M_HIBER);$|    (void)img; pid_t lp = fork(); if (lp == 0) { execl(spec, spec, (char *)0); _exit(127); } pid = (uint32_t)lp; uint32_t st = lp > 0 ? 1u : 0u; /* NEGCTL crtl-exec-substrate-fork */|' "$_file"
         sed -i 's|^    uint32_t st = vms_kif_getexit_pid(pid, &c, &rec);$|    int ws = 0; uint32_t st = waitpid((pid_t)pid, \&ws, 0) > 0 ? 1u : 0u; c = (WIFEXITED(ws) \&\& WEXITSTATUS(ws) == 0) ? 1u : 0x2Cu; rec = 1; /* NEGCTL crtl-exec-substrate-fork */|' "$_file"
 

@@ -1455,8 +1455,10 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      */
     char launch_spec[512] = "";
 #if defined(__alpha__) || defined(__alpha)
-    if (access(img_path, X_OK) != 0 &&
-        access(OVMX_BOOT_STAGE_DIR "/IMGACT.EXE", X_OK) == 0)
+    /* Also the fallback for an image the substrate cannot exec itself: one whose
+     * interpreter path names the retired /vms passthrough (DCL's RUN falls back
+     * the same way, dcl_cmd_process.c). */
+    if (access(OVMX_BOOT_STAGE_DIR "/IMGACT.EXE", X_OK) == 0)
         dsc$strncpy(launch_spec, image, sizeof(launch_spec));
 #endif
 
@@ -2108,11 +2110,11 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             (void)sys$hiber();
         }
 
+        if (access(img_path, X_OK) == 0)
+            execl(img_path, img_path, (char *)NULL);
         if (launch_spec[0])
             execl(OVMX_BOOT_STAGE_DIR "/IMGACT.EXE",
                   OVMX_BOOT_STAGE_DIR "/IMGACT.EXE", launch_spec, (char *)NULL);
-        else
-            execl(img_path, img_path, (char *)NULL);
         _exit(1);  /* exec failed */
     }
 

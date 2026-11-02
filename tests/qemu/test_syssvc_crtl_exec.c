@@ -135,6 +135,7 @@ static int creator_main(void)
         n += r;
     line[n] = 0;
     uint32_t target = pid;
+    /* negctl: crtl-exec-substrate-fork */
     CHECK(pid && jpi_pid(&target) == pid,
           "A: $GETJPI answers the subprocess's VMS PID while it lives");
     CHECK(strncmp(line, "ARGS-OK ", 8) == 0,

@@ -1,0 +1,30 @@
+# oplog-host-fallback -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "where sys\$sndopr's record goes when the executive is present and the ACP cannot write SYS\$MANAGER:OPERATOR.LOG (src/libvms/syssvc/sys_operator.c operator_log_put_record, rd vms-1f6)";;
+        targets)      echo "libvms/syssvc/sys_operator.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$sndopr goes back to diverting the operator record to a host file (the vmsfs path, then /tmp/OPERATOR.LOG) when the on-volume \$PUT fails, and returns SS\$_NORMAL: an operator-audit record nobody on the system can read, reported as written (rd vms-1f6, INV-6).";;
+        require_fail) cat <<'EOF'
+OPLOG-NOVOL: sys$sndopr returns SS$_FILACCERR when OPERATOR.LOG cannot be written on the volume -- not SS$_NORMAL
+OPLOG-NOVOL: and the record is not diverted to the host file /tmp/OPERATOR.LOG
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i '/rms_textfile_append_line(OPERATOR_LOG_PATH, "") != 0)/{n;s|return SS\$_FILACCERR;|goto host_fallback; /* NEGCTL oplog-host-fallback */|}' "$_file"
+        # The label only once, so a second apply changes nothing (selftest).
+        grep -q '^host_fallback: ;$' "$_file" ||
+            sed -i 's|^    FILE \*log = open_operator_log_host();$|host_fallback: ;\n    FILE *log = open_operator_log_host();|' "$_file"
+    :
+}

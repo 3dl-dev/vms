@@ -1186,6 +1186,14 @@ uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
                                uint32_t *lkid_out);
 uint32_t vms_lock_rms_file_enq_no_label(void);
 uint32_t vms_lock_rms_file_release(struct vms_proc *proc, uint32_t lkid);
+/* THE XQP'S PER-FILE SERIALIZATION LOCK (rd vms-d63). Mirror of the
+ * src/kernel/vms_internal.h decls, where the full note lives (#928). */
+uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
+                               uint32_t vresnam_len, uint32_t fidnum,
+                               uint8_t *vb_out, uint32_t *par_lkid_out,
+                               uint32_t *lkid_out);
+uint32_t vms_lock_acp_file_ser_release(struct vms_proc *proc, uint32_t par_lkid,
+                                       uint32_t lkid, const uint8_t *vb);
 /* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
  * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
  * $DISMOUNT as the cluster-registration presence marker. Released with

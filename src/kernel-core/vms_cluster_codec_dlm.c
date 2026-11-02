@@ -1481,6 +1481,18 @@ vms_codec_status_t vms_dlm_deq_parse_body(const uint8_t *body, uint32_t len,
 	 * there for every held mode NL..EX -- so the parse side hands the
 	 * caller what the frame carried and nothing else. */
 	d.rel_cell = vms_wire_get_u8(&v, VMS_OFB_DLM_DEQ_REL_CELL);
+	/* rd vms-d63: a release marked 1 carries the value block it writes at
+	 * body[36:52]; one marked anything else carries a stale buffer there,
+	 * which is never read as a block. */
+	d.write_valblk = (uint8_t)(d.rel_cell == VMS_DLM_DEQ_REL_CELL_VALBLK);
+	{
+		uint32_t i;
+
+		for (i = 0u; i < 16u; i++)
+			d.valblk[i] = d.write_valblk
+				? vms_wire_get_u8(&v, VMS_OFB_DLM_VALBLK + i)
+				: 0u;
+	}
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
@@ -1515,8 +1527,23 @@ vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
 	 * caller's `rel_cell` is deliberately NOT consulted: it is what an
 	 * inbound release carried, and echoing it would put a peer's byte on
 	 * this node's wire. */
-	vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL2, VMS_DLM_DEQ_REL_CELL);
+	/* rd vms-d63: a release that WRITES its value block carries the cell 1
+	 * (at both places) and the block at body[36:52] -- the form 1,472 of
+	 * 1,496 real writing releases had their block stored by the master
+	 * with (vms_cluster_codec_dlm.h, struct vms_dlm_deq). */
+	if (d->write_valblk) {
+		uint32_t i;
+
+		vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL,
+				VMS_DLM_DEQ_REL_CELL_VALBLK);
+		vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL2,
+				VMS_DLM_DEQ_REL_CELL_VALBLK);
+		for (i = 0u; i < 16u; i++)
+			vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK + i, d->valblk[i]);
+	} else {
+		vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);
+		vms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL2, VMS_DLM_DEQ_REL_CELL);
+	}
 	/* The name span is deliberately left untouched: a real DEQ carries
 	 * no resource name, so writing one would be adding a field the
 	 * reference does not have. */

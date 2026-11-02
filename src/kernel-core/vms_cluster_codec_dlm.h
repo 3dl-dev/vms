@@ -1543,6 +1543,8 @@ vms_codec_status_t vms_dlm_dir_reg_build(const struct vms_dlm_res_ident *id,
  * body[32] -- equal, which is what 41,837 of 41,837 real releases carry.
  */
 #define VMS_DLM_DEQ_REL_CELL   0u
+/* rd vms-d63: the cell a release that WRITES its value block carries. */
+#define VMS_DLM_DEQ_REL_CELL_VALBLK 1u
 /* body[30] and its mirror body[32] on a release. The second offset is the one
  * the GRANT record calls a per-lock serial (VMS_OFF_DLM_VALBLK_SERIAL); on a
  * release it equals body[30] in every real frame, which is why it is named
@@ -1559,6 +1561,30 @@ struct vms_dlm_deq {
 	uint32_t req_lkid;     /* body[24:28]: our own handle, post-grant   */
 	uint32_t master_lkid;  /* body[20:24]: the master's handle          */
 	uint8_t  rel_cell;     /* body[30]: PARSE-ONLY (see above)          */
+	/*
+	 * THE VALUE BLOCK A RELEASE WRITES (rd vms-d63). A real XQP releases
+	 * its per-file serialization lock (F11B$s, held PW with LCK$M_VALBLK)
+	 * with a $DEQ that CARRIES the lock's 16-byte value block at
+	 * body[36:52] and the cell 1 at body[30]/body[32]; the master stores
+	 * that block, and the next grant of the resource hands it out. Measured
+	 * by tools/cluster/f11b_ser_valblk_census.py (pinned by ctest):
+	 *   - 34,577 real F11B$s releases carry a non-zero body[36:52]; on
+	 *     30,829 it is byte-for-byte the block the master granted that lock,
+	 *     on 3,748 it differs -- the releases that WROTE;
+	 *   - of the writes whose NEXT grant of the same resource is on the
+	 *     wire, the master stored the released block on 1,472 of 1,496 that
+	 *     carried the cell 1, and on 12 of 323 that carried 0.
+	 * So the cell is the "this release writes its value block" mark, and it
+	 * is what this codec writes when `write_valblk` is set: 1 at body[30]
+	 * and at its mirror body[32], the block at body[36:52]. Unset, the
+	 * frame is the measured no-write release (cell 0, no block), exactly as
+	 * before. The parse side reports `write_valblk` = (cell == 1) and the
+	 * block that rode with it; it is the MASTER's engine that decides
+	 * whether the lock it holds for the sender may write (PW/EX with
+	 * LCK$M_VALBLK), never this codec.
+	 */
+	uint8_t  write_valblk; /* build: emit cell 1 + block; parse: cell==1 */
+	uint8_t  valblk[16];   /* body[36:52]: the released value block     */
 };
 
 /*

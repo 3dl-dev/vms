@@ -3221,6 +3221,67 @@ static void test_194_release_on_the_wire(void)
 	conf_dump("dlm_deq", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
+
+/*
+ * rd vms-d63: THE RELEASE THAT WRITES ITS VALUE BLOCK, 132 bytes, all
+ * described -- composed the way the shipping send path composes it (the
+ * codec's body with write_valblk, as dq_build_deq fills it from a post the
+ * engine marked, then the DLM sequence, then the envelope), so the gate's
+ * `dlm_deq_vb` rows read the bytes a real VAX master is handed. The block is
+ * the ACP's: header counter 3, data counter 1, eight zero bytes -- what
+ * vms_f11b_ser_next leaves after a header write on a block granted (2,1).
+ */
+static void test_d63_valblk_release_on_the_wire(void)
+{
+	static const uint8_t vb[16] = { 3, 0, 0, 0, 1, 0, 0, 0 };
+	struct vms_dlm_deq d;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[200];
+	uint32_t written = 0;
+	unsigned long long lo = 0, hi = 0;
+	int i;
+
+	printf("\n-- rd vms-d63: the value-block release's 132 bytes, all "
+	       "described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&d, 0, sizeof(d));
+	d.master_lkid = 0x070006a0u;   /* the master's handle, off the LKB  */
+	d.req_lkid    = 0x01000388u;   /* this node's own handle            */
+	d.write_valblk = 1u;
+	memcpy(d.valblk, vb, sizeof(vb));
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence");
+	cnxman_envelope_originate(m, b,
+				  vms_dlm_body_is_notification(b,
+							       VMS_CM_BODY_LEN)
+					  ? CNXMAN_ENV_NOTIFY
+					  : CNXMAN_ENV_REQUEST);
+	ct_check(b[4] == 0u && b[5] == 0u && b[6] == 0u && b[7] == 0u,
+		 "a value-block release is still a notification: no transaction");
+	ct_check(b[VMS_OFB_DLM_DEQ_REL_CELL] == 1u && b[32] == 1u,
+		 "*** body[30] and body[32] carry the write mark 1 ***");
+	for (i = 7; i >= 0; i--) {
+		lo = (lo << 8) | vb[i];
+		hi = (hi << 8) | vb[8 + i];
+	}
+	snprintf(state, sizeof(state),
+		 "seq=%u,masterlkid=%u,ownlkid=%u,vblo=0x%llx,vbhi=0x%llx",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)d.master_lkid,
+		 (unsigned)d.req_lkid, lo, hi);
+	conf_dump("dlm_deq_vb", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 /*
  * rd vms-a4d7: THE DEFERRED GRANT'S 132 BYTES, ALL DESCRIBED.
  *
@@ -3319,6 +3380,7 @@ int main(void)
 	test_194_release_opens_no_transaction();
 	test_a4d7_grant_notify_on_the_wire();
 	test_194_release_on_the_wire();
+	test_d63_valblk_release_on_the_wire();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();

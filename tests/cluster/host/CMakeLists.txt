@@ -1399,6 +1399,9 @@ add_test(NAME cluster_frame_conformance_gate
         # tree's new master, its 0xfa answers -- emitted by test_dlm_rebuild
         # replaying RA1b's RMT1 tree on the real engine.
         dlm_rm_08 dlm_rm_08_ans
+        # rd vms-d63: the release that WRITES its value block -- the cell 1
+        # and the F11B$s block at body[36:52] -- emitted by test_cnxman_coord.
+        dlm_deq_vb
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
@@ -1666,6 +1669,24 @@ add_test(NAME cluster_host_f11b_lock_census
         "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(cluster_host_f11b_lock_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;files11"
+    TIMEOUT 180
+)
+
+# ---- rd vms-d63: what the XQP's per-file serialization lock (F11B$s) carries
+# in its VALUE BLOCK and how a real release WRITES it, measured over every
+# capture: two counters (the HEADER counter and the DATA counter, read off the
+# one capture whose MSCP writes and XQP locks share a wire), bytes 8..15 zero;
+# a real $DEQ carries the lock's block at body[36:52], and the master stores it
+# when the release is marked 1 at body[30] (>= 98%) and not when marked 0
+# (<= 5%). Grounds src/kernel-core/vms_f11b_ser.h and the op-0x03 builder's
+# value-block form (vms_cluster_codec_dlm.h struct vms_dlm_deq).
+add_test(NAME cluster_host_f11b_ser_valblk_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/f11b_ser_valblk_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_f11b_ser_valblk_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;files11"
     TIMEOUT 180
 )

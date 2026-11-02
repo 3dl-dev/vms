@@ -42,6 +42,7 @@
 #include "exec_hash.h"        /* exec_hash_* (the resource database)          */
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
 #include "vms_rms_lockname.h"   /* the RMS file-access lock's name + identity (rd vms-326) */
+#include "vms_f11b_ser.h"      /* the XQP per-file serialization lock (rd vms-d63) */
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
 #include "vms_dlm_master.h"   /* the MASTER-side door + the delivery proc      */
 #include "vms_dlm_adopt.h"    /* the REMASTER ADOPTION seam (rd vms-14fd)      */
@@ -504,14 +505,23 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
      * with LCK$M_VALBLK set. Target mode need not be NL -- a real VAX EX->CR
      * demote emitted op-0x06 -- so the test is "requested < granted", not
      * "requested == NL". An up-convert or a read-mode holder writes nothing
-     * (a real VAX ignored a write attempted from a CR holder). Only CONVERT
-     * is claimed here; a DEQ-time value-block write was not captured and is
-     * not asserted, so a DEQ still crosses as a plain op-0x03.
+     * (a real VAX ignored a write attempted from a CR holder).
+     *
+     * AND A RELEASE OF A WRITE-MODE HOLDER (rd vms-d63): a real XQP's $DEQ of
+     * its PW F11B$s lock carries the lock's value block, marked written, and
+     * the master stores it (tools/cluster/f11b_ser_valblk_census.py: 1,472 of
+     * 1,496 marked writes stored, 12 of 323 unmarked). $DEQ writes the block
+     * of a lock held at PW or EX, as a conversion down from those modes does;
+     * a lock still WAITING holds no mode it could write from.
      */
-    p->write_valblk = (op == VMS_DLM_POST_CONVERT &&
-                       (lock->flags & LCK_M_VALBLK) &&
-                       lock->granted_mode >= LCK_K_PWMODE &&
-                       lock->requested_mode < lock->granted_mode) ? 1u : 0u;
+    p->write_valblk = ((op == VMS_DLM_POST_CONVERT &&
+                        (lock->flags & LCK_M_VALBLK) &&
+                        lock->granted_mode >= LCK_K_PWMODE &&
+                        lock->requested_mode < lock->granted_mode) ||
+                       (op == VMS_DLM_POST_DEQ &&
+                        (lock->flags & LCK_M_VALBLK) &&
+                        !lock->waiting &&
+                        lock->granted_mode >= LCK_K_PWMODE)) ? 1u : 0u;
     /*
      * ...and whether THIS NODE masters the resource (rd vms-3ac). Read off the
      * RSB here, like everything else, because this is the one place that holds
@@ -7621,6 +7631,140 @@ uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
 }
 
 /*
+ * ================================================================
+ * THE XQP'S PER-FILE SERIALIZATION LOCK (rd vms-d63)
+ * ================================================================
+ *
+ * "F11B$s" + the file number, a SUB-lock of "F11B$v" + the volume label, at
+ * (UIC group 0, KERNEL mode), taken PW with LCK$M_VALBLK around an operation
+ * on one file and released with the value block that says what the operation
+ * changed (src/kernel-core/vms_f11b_ser.h carries the measurement and the
+ * counter rules). It is how a node that caches a file's header -- a real VAX
+ * does -- learns that ANOTHER node changed it: without it OVMX's header/EOF
+ * update never reached VAX1's cached FCB, and VAX1 wrote over OVMX's records.
+ *
+ * THE PARENT IS THE CALLER'S OWN. The engine hangs a sub-lock only under a
+ * lock the same process holds (vms_enq_core_ident: plock->proc == proc), and
+ * the ACP runs in whichever process issued the I/O, while the volume's
+ * standing F11B$v lock belongs to the process that MOUNTed it. So each
+ * operation takes its own NL lock on the same F11B$v resource -- NL holds
+ * nothing and blocks nobody (the standing lock's own reasoning, below) -- and
+ * hangs the F11B$s lock under it; both go at the release. On the wire that is
+ * an NL request to the volume's master and a PW sub-lock request to the same
+ * node, the shape of a real XQP's traffic (rd vms-f4c0: every resolvable real
+ * F11B$s request is parented on an F11B$v root).
+ *
+ * THE IDENTITY IS STATED HERE, as the RMS file-access lock's is (rd vms-326):
+ * the XQP's locks are the executive's, not the issuing process's, and the
+ * identity is part of the resource (the directory hash covers it).
+ *
+ * DEADLOCK: the volume lock is NL (grants at once, blocks nobody); the
+ * sub-lock is the only one waited on, and the ACP takes it with its own
+ * volume-sync lock held and no other F11B$s lock held, the one ordering every
+ * ACP path uses. A VAX holding PW on the same file is a bounded critical
+ * section on the VAX; the wait ends when it releases.
+ */
+static const struct dlm_enq_ident vms_f11b_ser_ident = {
+    (uint16_t)VMS_F11B_SER_GROUP, (uint8_t)VMS_F11B_SER_ACMODE
+};
+
+uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
+                               uint32_t vresnam_len, uint32_t fidnum,
+                               uint8_t *vb_out, uint32_t *par_lkid_out,
+                               uint32_t *lkid_out)
+{
+    struct vms_enq_args a;
+    uint8_t name[VMS_F11B_SER_NAME_LEN];
+    uint32_t par = 0;
+
+    if (par_lkid_out)
+        *par_lkid_out = 0;
+    if (lkid_out)
+        *lkid_out = 0;
+    if (proc == NULL || vresnam == NULL || vresnam_len == 0u ||
+        vresnam_len > 31u || fidnum == 0u || vb_out == NULL)
+        return SS__BADPARAM;
+
+    /* The parent: NL on the volume's F11B$v resource, in this process. */
+    memset(&a, 0, sizeof(a));
+    a.lkmode = LCK_K_NLMODE;
+    a.flags = LCK_M_SYNC;
+    memcpy(a.resnam, vresnam, vresnam_len);
+    a.resnam_len = vresnam_len;
+    /* An interrupted wait is re-entered, never reported (vms_lock_acp_vol_ex). */
+    while (vms_enq_core_ident(proc, &a, NULL, &vms_f11b_ser_ident) != 0)
+        ;
+    if (!(a.status & 1u)) {
+        if (a.lkid)
+            (void)vms_lock_acp_vol_release(proc, a.lkid);
+        return a.status;
+    }
+    par = a.lkid;
+
+    /* The file's serialization lock: PW, with its value block. */
+    (void)vms_f11b_ser_name(fidnum, name, (uint32_t)sizeof(name));
+    memset(&a, 0, sizeof(a));
+    a.lkmode = LCK_K_PWMODE;
+    a.flags = LCK_M_SYNC | LCK_M_VALBLK;
+    a.parid = par;
+    memcpy(a.resnam, name, VMS_F11B_SER_NAME_LEN);
+    a.resnam_len = VMS_F11B_SER_NAME_LEN;   /* counted: the name has NULs */
+    while (vms_enq_core_ident(proc, &a, NULL, &vms_f11b_ser_ident) != 0)
+        ;
+    if (!(a.status & 1u)) {
+        if (a.lkid)
+            (void)vms_lock_acp_vol_release(proc, a.lkid);
+        (void)vms_lock_acp_vol_release(proc, par);
+        return a.status;
+    }
+    memcpy(vb_out, a.valblk, VMS_F11B_SER_VALBLK_LEN);
+    if (par_lkid_out)
+        *par_lkid_out = par;
+    if (lkid_out)
+        *lkid_out = a.lkid;
+    return SS__NORMAL;
+}
+
+/*
+ * Release what vms_lock_acp_file_ser took, WRITING `vb` (the block the
+ * operation computed with vms_f11b_ser_next) as the $DEQ of a PW holder
+ * does: into the resource when this node masters it, on the release frame to
+ * the master when another node does (body[36:52], marked written -- the form
+ * a real XQP's release has). A zero handle is a no-op, so a caller can
+ * release unconditionally at its single exit.
+ */
+uint32_t vms_lock_acp_file_ser_release(struct vms_proc *proc, uint32_t par_lkid,
+                                       uint32_t lkid, const uint8_t *vb)
+{
+    uint32_t st = SS__NORMAL;
+
+    if (lkid != 0u) {
+        struct vms_lock_entry *lk = lock_find_by_id(lkid);
+
+        if (lk) {
+            if (vb != NULL && lk->proc == proc) {
+                struct vms_lock_resource *res = lk->resource;
+
+                exec_lock(&res->lock);
+                if ((lk->flags & LCK_M_VALBLK) && !lk->waiting &&
+                    lk->granted_mode >= LCK_K_PWMODE)
+                    memcpy(lk->valblk, vb, LCK_VALBLK_SIZE);
+                exec_unlock(&res->lock);
+            }
+            lock_put(lk);
+        }
+        st = vms_lock_acp_vol_release(proc, lkid);
+    }
+    if (par_lkid != 0u) {
+        uint32_t pst = vms_lock_acp_vol_release(proc, par_lkid);
+
+        if (st == SS__NORMAL)
+            st = pst;
+    }
+    return st;
+}
+
+/*
  * vms_ioctl_convert - Convert lock mode ($ENQ with LCK$M_CONVERT)
  *
  * Changes the mode of an existing granted lock. If the new mode
@@ -8645,7 +8789,11 @@ static uint32_t vms_lock_dlm_xnode_deq(struct vms_dlm_xnode_args *req)
      * a cross-node $ENQ -- is a later rung: it needs the GRANT reply to carry
      * the LVB and the requester's origin record to surface it.)
      */
-    if ((req->flags & LCK_M_VALBLK) && !lock->waiting)
+    /* rd vms-d63: only a holder at a WRITE mode writes, whatever its frame
+     * said -- the master's own LKB is what knows the mode, and a peer's NL
+     * or CR lock must not overwrite a block it was never entitled to set. */
+    if ((req->flags & LCK_M_VALBLK) && !lock->waiting &&
+        lock->granted_mode >= LCK_K_PWMODE)
         memcpy(res->valblk, req->valblk, LCK_VALBLK_SIZE);
     lock_unlink_from_res(lock);
 

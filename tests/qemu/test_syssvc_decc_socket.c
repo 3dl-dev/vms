@@ -492,6 +492,7 @@ int main(void)
     CHECK(au.exited && au.total > 0 && au.fdio_sock == 0 && au.waits == 0,
           "ZERO read/write-family syscalls on a socket descriptor and ZERO poll/select syscalls: "
           "socket I/O and readiness are $QIOs on the BG channel (executive ioctls only)");
+    /* negctl: bg-select-revents-dropped */
     CHECK(has(out, "SOCKECHO: PASS a non-blocking recv() with nothing sent fails EAGAIN") &&
           has(out, "SOCKECHO: PASS the select() timeout was waited out") &&
           has(out, "SOCKECHO: PASS poll() wakes when the bytes arrive") &&

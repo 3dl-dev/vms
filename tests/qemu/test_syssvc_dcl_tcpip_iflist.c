@@ -310,7 +310,7 @@ int main(void)
     CHECK(have_se && nic_ip[0] && strcmp(se.ip, nic_ip) == 0 && strcmp(se.ip, NIC_ADDR) == 0,
           "SE0 address equals the NIC's live address (" NIC_ADDR ", read back by SIOCGIFADDR)");
     /* negctl: bg-iflist-mask-zeroed */
-    CHECK(have_se && strcmp(se.mask, NIC_MASK) == 0, "SE0 netmask is " NIC_MASK);
+    CHECK(have_se && strcmp(se.mask, NIC_MASK) == 0, "SE0 netmask is 255.255.255.0");
     CHECK(have_se && nic_mtu[0] && se.mtu == atoi(nic_mtu) && se.mtu == NIC_MTU,
           "SE0 MTU equals /sys/class/net/<nic>/mtu (1432, not a default)");
     CHECK(have_se && strcmp(se.state, "Up") == 0, "SE0 state is Up");

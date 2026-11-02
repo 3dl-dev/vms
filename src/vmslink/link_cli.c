@@ -360,11 +360,13 @@ static int lcli_same_leaf(const char *a, const char *b)
 
 /* An implicit library/shareable is added when it exists and the command did not
  * already name a file of that name. */
-static int lcli_implicit_ok(const struct link_cmd *c, const char *spec)
+static int lcli_implicit_ok(const struct link_cmd *c, const char *spec, int shareable)
 {
     for (int i = 0; i < c->nuse; i++) if (lcli_same_leaf(c->uses[i], spec)) return 0;
     for (int i = 0; i < c->nlibs; i++) if (lcli_same_leaf(c->libs[i], spec)) return 0;
-    FILE *f = fopen(spec, "rb");
+    char rp[512];
+    /* a shareable is looked for where binding it would open it */
+    FILE *f = fopen(shareable ? resolve_producer_path(spec, rp, sizeof rp) : spec, "rb");
     if (!f) return 0;
     fclose(f);
     return 1;
@@ -529,9 +531,9 @@ int main(int argc, char **argv)
         static const char *const shr[] = { "SYS$SHARE:DECC$SHR.EXE", "SYS$SHARE:LIBOTS_SHR.EXE",
                                            "SYS$SHARE:LIBVMSRMS$SHR.EXE", "SYS$SHARE:LIBVMS$SHR.EXE", NULL };
         for (int i = 0; shr[i]; i++)
-            if (lcli_implicit_ok(&c, shr[i])) lc_use(&c, shr[i]);
+            if (lcli_implicit_ok(&c, shr[i], 1)) lc_use(&c, shr[i]);
     }
-    if (!nosyslib && lcli_implicit_ok(&c, "SYS$LIBRARY:STARLET.A"))
+    if (!nosyslib && lcli_implicit_ok(&c, "SYS$LIBRARY:STARLET.A", 0))
         lc_library(&c, "SYS$LIBRARY:STARLET.A");
     /* The GCC port's startup module defines __main; the VMS object format
      * carries no transfer-address record for this producer, so name it. */

@@ -111,19 +111,23 @@ link '/SHAREABLE=v8b.exe/MAP=brief.map/BRIEF a.obj,lib.olb/LIBRARY,sv/OPT' 2>/de
 grep -q '! Object Module Synopsis !' brief.map && ! grep -q 'Symbols By Name' brief.map \
     && ok "/MAP=file/BRIEF: synopsis, no Symbols By Name" || bad "/BRIEF map"
 
-# 9. the implicit search (/SYSSHR default): an installed SYS$SHARE:DECC$SHR.EXE is bound
-# without being named, after what the command names; /NOSYSSHR switches it off; a file
-# the command already names is not added twice. (On this host the logical names are
-# files literally so named in the current directory.)
-cp gnu.exe 'SYS$SHARE:DECC$SHR.EXE'
-link '/SHAREABLE=i1.exe/MAP=i1.map a.obj,b.obj,c.obj,sv/OPT' 2>/dev/null || true
-grep -q 'SYS$SHARE:DECC$SHR.EXE (shareable image)\|DECC$SHR.EXE (shareable image)' i1.map && ok "installed DECC\$SHR is bound without being named" || bad "implicit SYS\$SHARE:DECC\$SHR missing"
+# 9. the implicit search (/SYSSHR default): the installed SYS$SHARE:DECC$SHR.EXE (where
+# binding opens it: /run/ovmx-boot or the SYS$SYSROOT tree) is bound without being named;
+# /NOSYSSHR switches it off; a shareable of that name the command names is not added twice.
+SYSDECC=""
+for d in /run/ovmx-boot /vms/SYS0/SYSCOMMON/SYSLIB; do [ -r "$d/DECC\$SHR.EXE" ] && { SYSDECC="$d/DECC\$SHR.EXE"; break; }; done
+link '/SHAREABLE=i1.exe/MAP=i1.map a.obj,b.obj,c.obj,sv/OPT' 2>i1.err || true
+if [ -n "$SYSDECC" ]; then
+    grep -q 'DECC$SHR.EXE (shareable image)' i1.map && ok "installed DECC\$SHR ($SYSDECC) is bound without being named" || bad "implicit SYS\$SHARE:DECC\$SHR missing"
+else
+    [ -s i1.map ] && ! grep -q '(shareable image)' i1.map && ok "no DECC\$SHR installed: nothing bound implicitly" || { bad "implicit search with nothing installed"; cat i1.err; }
+fi
 link '/SHAREABLE=i2.exe/MAP=i2.map/NOSYSSHR a.obj,b.obj,c.obj,sv/OPT' 2>/dev/null || true
-grep -q 'shareable image)' i2.map && bad "/NOSYSSHR still bound a shareable" || ok "/NOSYSSHR binds none"
-printf '%s\n' 'a.obj' 'b.obj' 'c.obj' 'SYS$SHARE:DECC$SHR.EXE/SHAREABLE' 'SYMBOL_VECTOR=(foo=PROCEDURE,bar=PROCEDURE)' > i3.opt
-link '/SHAREABLE=i3.exe/MAP=i3.map i3/OPT' 2>/dev/null || true
-[ "$(grep -ci 'decc.shr.exe (shareable image)' i3.map)" = 1 ] && ok "a shareable the options file names is not added a second time" || bad "named shareable added twice"
-rm -f 'SYS$SHARE:DECC$SHR.EXE'
+[ -s i2.map ] && ! grep -q '(shareable image)' i2.map && ok "/NOSYSSHR binds none" || bad "/NOSYSSHR still bound a shareable"
+cp gnu.exe 'DECC$SHR.EXE'
+printf '%s\n' 'a.obj' 'b.obj' 'c.obj' 'DECC$SHR.EXE/SHAREABLE' 'SYMBOL_VECTOR=(foo=PROCEDURE,bar=PROCEDURE)' > i3.opt
+link '/SHAREABLE=i3.exe/MAP=i3.map i3/OPT' 2>i3.err || true
+[ "$(grep -ci 'decc.shr.exe (shareable image)' i3.map 2>/dev/null)" = 1 ] && ok "a DECC\$SHR the options file names is bound once, not again implicitly" || { bad "named shareable bound twice / not at all"; cat i3.err; }
 
 # 10. CLUSTER=name,,,file: the file is linked ahead of the command's own files
 $T --shareable --symbol-vector "$SV" --gsmatch LEQUAL,1,0 -o gnu10.exe c.obj a.obj b.obj 2>/dev/null

@@ -14,6 +14,7 @@
  * the names link.c supplies. Included by link.c (OVMX_LINK_C), none of this. */
 void die(const char *msg);
 static int g_noinform;
+const char *resolve_producer_path(const char *path, char *out, size_t sz);
 #endif
 
 /* --------------------------------------------------------------------------

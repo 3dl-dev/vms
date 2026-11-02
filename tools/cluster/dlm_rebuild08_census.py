@@ -393,7 +393,11 @@ def selftest(repo):
     per = sorted((os.path.relpath(p, root).replace(os.sep, '/'), len(r),
                   sum(1 for x in r if is_root(x['q'])),
                   len({x['src'] for x in r})) for p, r in caps.items())
+    #    rd vms-0db arm B (one pod, VAX1 the departing master, LOCKDIRWT
+    #    1/1/1, SHUTDOWN REMOVE_NODE): VAX3 holds converting and waiting locks
+    #    in WQRB, and both survivors send.
     check('captures carrying op-0x08 (path, records, ROOT, senders)', per, [
+        ('vms-0db-waiting-records-20261102/armB-departure-WQRB.pcap.gz', 255, 234, 2),
         ('vms-2fa-rebuild-step-20261102/arm1-departure.pcap.gz', 281, 263, 1),
         ('vms-2fa-rebuild-step-20261102/arm2-departure.pcap.gz', 796, 776, 2),
         ('vms-2fa-rebuild-step-20261102/arm3b-departure.pcap.gz', 1, 1, 1),
@@ -409,7 +413,7 @@ def selftest(repo):
         ('vms-ci6-evac-20261010/run16/wire.pcap.gz', 3, 3, 1),
     ])
     n = m['root'] + m['sub']
-    check('records (ROOT, SUB)', (m['root'], m['sub']), (1590, 376))
+    check('records (ROOT, SUB)', (m['root'], m['sub']), (1824, 397))   # +234/+21 rd vms-0db
     check('...every one sent by a real DEC interface', m['real_sender'], n)
 
     # 1. THE ANSWER: always 82/01, paired by transaction, echoing the holder's
@@ -421,15 +425,20 @@ def selftest(repo):
           m['answer_by_real'], n - 3)
     check('real answer status by kind',
           sorted(('%s/%02x' % k, v) for k, v in status.items()),
-          [('root/f9', 409), ('root/fa', 1178), ('sub/fa', 376)])
+          [('root/f9', 480), ('root/fa', 1341), ('sub/fa', 397)])
     check('0xf9 ROOT answers that echo body[20:24] (no new-master handle)',
           m['root_youmaster_echo_20'], m['root_youmaster_real'])
     check('0xfa answers that REWRITE body[20:24] (the new master\'s lkid), '
           'ROOT and SUB', (m['root_granted_b20_new'], m['sub_granted_b20_new']),
-          (1178, 376))
+          (1341, 397))
     check('0xfa answers with body[28] == 0x10 (ROOT, SUB); the 23 ROOT '
           'exceptions are 0x14 x16 / 0x18 x7, in RA1b and the vms-2fa arms',
-          (m['root_granted_b28_10'], m['sub_granted_b28_10']), (1155, 373))
+          (m['root_granted_b28_10'], m['sub_granted_b28_10']), (1308, 391))
+    #    rd vms-0db NAMED THEM: the 0xfa answer's body[28] is 0x10 | the
+    #    record's body[108] (5,694 of 5,694 real 0xfa answers,
+    #    dlm_waiting_record_census.py). A CONVERTING or WAITING record carries
+    #    0x04 there, so it is answered 0x14; the F11B$a 0x18s answer records
+    #    with 0x08 there.
 
     odd28 = collections.Counter(
         (os.path.basename(p), r['a'][28]) for p, recs in caps.items() for r in recs
@@ -439,6 +448,8 @@ def selftest(repo):
           [(('arm1-departure.pcap.gz', 0x14), 5),
            (('arm1-departure.pcap.gz', 0x18), 4),
            (('arm2-departure.pcap.gz', 0x14), 6),
+           (('armB-departure-WQRB.pcap.gz', 0x14), 7),
+           (('armB-departure-WQRB.pcap.gz', 0x18), 3),
            (('ra1b-departure.pcap.gz', 0x14), 5),
            (('ra1b-departure.pcap.gz', 0x18), 3)])
 
@@ -446,17 +457,21 @@ def selftest(repo):
     check('ROOT records whose body[128:132] is refhash(own identity)',
           m['hash_ok'], m['root'])
     #    rd vms-2fa FALSIFIED the old "body[30] is always the higher": arm1's
-    #    CACHE$ ROOT (record frame 101) carries body[30] 0 < body[31] 3. Every
-    #    differing record is still a system lock (CACHE$, AUDRSV$, UCX$, MSCP$);
-    #    neither cell is named.
-    check('body[30] == body[31] (the 24 that differ are system locks; '
-          'which is granted is NOT grounded)',
-          m['modes_equal'], n - 24)
-    check('...of the 24, body[30] > body[31] / body[30] < body[31]',
+    #    CACHE$ ROOT (record frame 101) carries body[30] 0 < body[31] 3.
+    #    rd vms-0db GROUNDED BOTH CELLS against SDA: body[30] is the LKB's
+    #    REQUESTED mode and body[31] its GRANTED mode (0 on a waiting lock);
+    #    body[110] is its queue state (01 granted, 00 converting, ff waiting).
+    #    A granted lock that was converted keeps the earlier request, so the
+    #    modes differing is not by itself a pending request
+    #    (dlm_waiting_record_census.py). +11 differing with arm B: its four
+    #    converting/waiting WQRB locks and seven system locks.
+    check('body[30] == body[31] (35 differ: requested vs granted mode)',
+          m['modes_equal'], n - 35)
+    check('...of the 35, body[30] > body[31] / body[30] < body[31]',
           (sum(1 for recs in caps.values() for r in recs
                if r['q'][30] > r['q'][31]),
            sum(1 for recs in caps.values() for r in recs
-               if r['q'][30] < r['q'][31])), (23, 1))
+               if r['q'][30] < r['q'][31])), (34, 1))
 
     # 3. THE SUB RULE: the parent pair, and the order.
     check('SUB records whose parent (own earlier record, body[24:28] == '

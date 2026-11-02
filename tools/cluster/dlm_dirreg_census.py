@@ -237,9 +237,11 @@ def selftest(repo):
 CORPUS = {
     # rd vms-2fa's arm1/arm2 captures add 2 captures, 98 records, 2 senders,
     # 2 receivers, 83 same-slot pairs (all residue-unchanged), 1 non-zero UIC.
-    'captures': 26, 'records': 17092, 'senders': 19, 'receivers': 20,
-    'receivers_ovmx': 6, 'slot_pairs': 16673,
-    'slot_pairs_residue_unchanged': 16414, 'moved_after_other_use': 141,
+    # rd vms-0db's arm-B departure adds 1 capture, 254 records, 2 senders,
+    # 2 receivers and 244 same-slot pairs, every one residue-unchanged.
+    'captures': 27, 'records': 17346, 'senders': 21, 'receivers': 22,
+    'receivers_ovmx': 6, 'slot_pairs': 16917,
+    'slot_pairs_residue_unchanged': 16658, 'moved_after_other_use': 141,
     'moved_no_visible_use': 118, 'group_nonzero': 64,
 }
 

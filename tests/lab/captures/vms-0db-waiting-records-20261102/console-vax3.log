@@ -1,0 +1,1865 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/lab/k8s-labs/lab0db/vax3/vax.ini-1> attach nvr /lab/k8s-labs/lab0db/vax3/data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/lab/k8s-labs/lab0db/vax3/vax.ini-19> attach rq0 /lab/k8s-labs/lab0db/data/d0.dsk
+%SIM-INFO: RQ0: '/lab/k8s-labs/lab0db/data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: SYSDSK1      Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/lab0db/vax3/vax.ini-20> attach rq1 /lab/k8s-labs/lab0db/data/d1.dsk
+%SIM-INFO: RQ1: '/lab/k8s-labs/lab0db/data/d1.dsk' Contains ODS2 File system
+%SIM-INFO: RQ1: Volume Name: VAX1DATA     Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/lab0db/vax3/vax.ini-21> attach -r rq2 /lab/media/openvms073.iso
+%SIM-INFO: RQ2: Unit is read only
+%SIM-INFO: RQ2: '/lab/media/openvms073.iso' Contains ODS2 File system
+%SIM-INFO: RQ2: Volume Name: VAXVMS073    Format: DECFILE11B   Sectors In Volume: 1067894
+/lab/k8s-labs/lab0db/vax3/vax.ini-22> attach -r rq3 /lab/media/openvms-internet-product-suite-v11.iso
+%SIM-INFO: RQ3: Unit is read only
+%SIM-INFO: RQ3: '/lab/media/openvms-internet-product-suite-v11.iso' Contains ODS2 File system
+%SIM-INFO: RQ3: Volume Name: OVMSIPS11    Format: DECFILE11B   Sectors In Volume: 800000
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/lab/k8s-labs/lab0db/vax3/local.ini-2> at xq tap:tap3
+%SIM-INFO: Eth: opened OS device tap3
+/lab/k8s-labs/lab0db/vax3/local.ini-3> att dz 2003,speed=*32
+%SIM-INFO: Listening on port 2003
+/lab/k8s-labs/lab0db/vax3/vax.ini-26> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655X-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..
+
+?53 2 0A FF 00 0000
+
+P1=00000002  P2=00000028  P3=0000270E  P4=00D40077  P5=00000000
+P6=FFFFFFFF  P7=00000000  P8=00000000  P9=00000000 P10=20051CE0
+r0=00000000  r1=20140110  r2=AD59E86B  r3=00030072  r4=AD59E875
+r5=2004E8F9  r6=00018678  r7=000186C8  r8=0001ADAE ERF=80000000
+30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Normal operation not possible.
+
+>>>^U
+>>>B/R5:20000000 DUA0
+[drv:boot-echo-verified attempt 1 'B/R5:20000000 DUA0']
+
+(BOOT/R5:20000000 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-W-SYSBOOT Can not map SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  sending VAXcluster membership request to system VAX2
+%CNXMAN,  now a VAXcluster member -- system VAX3
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at  2-NOV-2026 13:07:05.64
+%INSTALL-E-OPENIN, error opening DISK$SYSDSK1:<SYS2.SYSCOMMON.SYSLIB>CXXL$MSG_SHR.EXE; as input
+-RMS-E-FNF, file not found
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20600208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.45  %%%%%%%%%%%
+Operator _VAX3$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.45  %%%%%%%%%%%
+Operator status for operator _VAX3$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.49  %%%%%%%%%%%
+Logfile has been initialized by operator _VAX3$OPA0:
+Logfile is VAX3::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;2
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.49  %%%%%%%%%%%
+Operator status for operator VAX3::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;2
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.50  %%%%%%%%%%%
+13:07:05.22 Node VAX3 (csid 00010003) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.50  %%%%%%%%%%%
+Operator _VAX2$OPA0: has been enabled, username SYSTEM
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2060020E
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.92  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.92  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.95  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.95  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.96  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.96  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.98  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.98  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.30  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.31  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.32  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.32  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.33  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:14.30  %%%%%%%%%%%
+Message from user SYSTEM on VAX3
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX3.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:14.50  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:14.62  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX3
+Security alarm (SECURITY) and security audit (SECURITY) on VAX3, system id: 1027
+Auditable event:          Audit server starting up
+Event time:                2-NOV-2026 13:07:14.56
+PID:                      20600204        
+Username:                 SYSTEM          
+
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODENAME"\
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODEMAME"\
+You have not yet configured your DECnet permanent database.  You must
+either use NCP to define your DECnet database, or invoke the command
+procedure SYS$MANAGER:NETCONFIG.COM, which will do it for you.
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:15.71  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 13:07:16.42)
+Message from user INTERnet on VAX2
+INTERnet Loaded
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:16.64  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:18.04)
+Message from user DECNET on VAX1
+DECnet event 4.10, circuit up
+From node 1.1 (VAX1),  1-JAN-1977 00:00:53.64
+Circuit QNA-0
+
+
+
+%TCPIP-I-INFO, TCP/IP Services startup beginning at  2-NOV-2026 13:07:16.71
+%TCPIP-I-NORMAL, timezone information verified
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:16.91  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 13:07:17.55)
+Message from user INTERnet on VAX2
+INTERnet Started
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:16.93  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 13:07:17.56)
+Message from user INTERnet on VAX2
+INTERnet ACP Created INTERnet interface: QE0
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.07  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 13:07:17.70)
+Message from user Proxy Server on VAX2
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%RUN-S-PROC_ID, identification of created process is 20600213
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.22  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:18.59)
+Message from user INTERnet on VAX1
+INTERnet Loaded
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.30  %%%%%%%%%%%
+Message from user INTERnet on VAX3
+INTERnet Loaded
+
+%TCPIP-E-CONFIGERROR, error processing configuration request
+-TCPIP-E-INETERROR, internet interface error
+-RMS-E-RNF, record not found
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:18.48  %%%%%%%%%%%
+Message from user Proxy Server on VAX3
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%TCPIP-S-STARTDONE, TCP/IP Kernel startup completed
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:18.55  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:20.17)
+Message from user INTERnet on VAX1
+INTERnet Started
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:18.55  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:20.19)
+Message from user INTERnet on VAX1
+INTERnet ACP Created INTERnet interface: QE0
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:18.57  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 13:07:19.54)
+Message from user INTERnet on VAX2
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:18.60  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 13:07:19.55)
+Message from user INTERnet on VAX2
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:18.67  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:20.47)
+Message from user Proxy Server on VAX1
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:19.03  %%%%%%%%%%%    (from node VAX2   at  2-NOV-2026 13:07:20.02)
+Message from user INTERnet on VAX2
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-S-STARTDONE, TCPIP$PROXY startup completed
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:21.31  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:22.61)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:21.31  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:22.61)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%TCPIP-E-STARTERROR, error starting FTP service
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-E-STARTFAIL, failed to start TCPIP$FTP
+-TCPIP-E-ENABLERR, error enabling service
+%TCPIP-S-STARTDONE, TCPIP$FTP_CLIENT startup completed
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:22.08  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:23.55)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-E-STARTERROR, error starting TELNET service
+-SYSTEM-F-DEVINACT, device inactive
+%TCPIP-E-STARTFAIL, failed to start TCPIP$TELNET
+-TCPIP-E-ENABLERR, error enabling service
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at  2-NOV-2026 13:07:22.35
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX3)
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+  SYSTEM       job terminated at  2-NOV-2026 13:07:27.85
+
+  Accounting information:
+  Buffered I/O count:            2396         Peak working set size:    1548
+  Direct I/O count:               897         Peak page file size:      8712
+  Page faults:                  12223         Mounted volumes:             1
+  Charged CPU time:           0 00:00:08.42   Elapsed time:     0 00:00:22.33
+
+VAX/VMS V7.3      node VAX3
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3
+    Last interactive login on Thursday, 30-JUL-2026 09:00[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT F$GETSYI("NODENAME")," LDW=",F$GETSYI("LOCKDIRWT")," CN=",F$GETSYI("CLUSTER_NODES")," CSID=",F$GETSYI("NODE_CSID"
+)
+VAX3 LDW=1 CN=3 CSID=00010003
+$ WRITE SYS$OUTPUT "MK1381821885""Z"
+MK1381821885"Z
+$ RMH :== $SYS$SYSTEM:RMHOLD
+$ WRITE SYS$OUTPUT "MK3235220793""Z"
+MK3235220793"Z
+$ RMW :== $SYS$SYSTEM:RMWAIT
+$ WRITE SYS$OUTPUT "MK3228832097""Z"
+MK3228832097"Z
+$ SPAWN/NOWAIT/PROCESS=AH RMH 112-WQRA
+%DCL-S-SPAWNED, process AH spawned
+$ WRITE SYS$OUTPUT "MK174435031""Z"
+MK174435031"Z
+$ SPAWN/NOWAIT/PROCESS=AG RMW 11GWQRA
+%DCL-S-SPAWNED, process AG spawned
+$ WRITE SYS$OUTPUT "MK3261911809""Z"
+MK3261911809"Z
+$ SPAWN/NOWAIT/PROCESS=AV RMW 15VWQRA
+%DCL-S-SPAWNED, process AV spawned
+$ WRITE SYS$OUTPUT "MK1721011112""Z"
+MK1721011112"Z
+$ SPAWN/NOWAIT/PROCESS=AU RMW 15UWQRA
+%DCL-S-SPAWNED, process AU spawned
+$ WRITE SYS$OUTPUT "MK67701291""Z"
+MK67701291"Z
+$ SPAWN/NOWAIT/PROCESS=AC RMW 51CWQRA
+%DCL-S-SPAWNED, process AC spawned
+$ WRITE SYS$OUTPUT "MK212319747""Z"
+MK212319747"Z
+$ SPAWN/NOWAIT/PROCESS=AQ RMW 50QWQRA
+%DCL-S-SPAWNED, process AQ spawned
+$ WRITE SYS$OUTPUT "MK2711612029""Z"
+MK2711612029"Z
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX3   2-NOV-2026 13:09:31.40  Uptime  0 00:03:28
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20600201 SWAPPER         HIB     16        0   0 00:00:00.05         0      0   
+20600206 CLUSTER_SERVER  HIB     13       11   0 00:00:00.04       248    515   
+20600207 CONFIGURE       HIB     10       16   0 00:00:00.03       130    206   
+20600208 LANACP          HIB     13       41   0 00:00:00.06       402    678   
+2060020A IPCACP          HIB     10        6   0 00:00:00.00        97    183   
+2060020B ERRFMT          HIB      8       27   0 00:00:00.04       149    227   
+2060020C CACHE_SERVER    HIB     16        9   0 00:00:00.01        82    141   
+2060020D OPCOM           HIB      9      107   0 00:00:00.06       221    275   
+2060020E AUDIT_SERVER    HIB      8       41   0 00:00:00.06       460    816   
+2060020F JOB_CONTROL     HIB     10       29   0 00:00:00.02       213    399   
+20600210 SECURITY_SERVER HIB     10       23   0 00:00:00.08       769   1271   
+20600211 SMISERVER       HIB      9       35   0 00:00:00.10       329    749   
+20600212 TP_SERVER       HIB      8       21   0 00:00:00.03       203    323   
+20600213 TCPIP$INETACP   HIB     10       40   0 00:00:00.07       253    163   
+20600215 SYSTEM          CUR      7      507   0 00:00:00.23      5529    491   
+20600216 AH              HIB      4       58   0 00:00:00.02       255    252  S
+20600217 AG              HIB      4       58   0 00:00:00.02       254    251  S
+20600218 AV              HIB      4       57   0 00:00:00.02       254    249  S
+20600219 AU              HIB      4       56   0 00:00:00.02       256    250  S
+2060021A AC              HIB      4       56   0 00:00:00.03       255    251  S
+2060021B AQ              HIB      4       56   0 00:00:00.02       255    251  S
+$ WRITE SYS$OUTPUT "MK289714737""Z"
+MK289714737"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRA
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             6  CSID:   00010002                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 41525157   WQRA....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 0A0003E1  CR 00000000-FFFFFFFF         070003E0  CR 00000000-FFFFFFFF
+ 070003DB  CR 00000000-FFFFFFFF         420003C0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 0A0003E3  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 070003E5  EX 00000000-FFFFFFFF
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  879A6200  GGMODE:       NL  Status: VALID                   
+Parent RSB:      87993240  CGMODE:       NL                                  
+Sub-RSB count:          0  FGMODE:       NL                                  
+Lock Count:             3  CSID:   00010002                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 2300009B  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 080003DF  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 0B0003E2  EX 00000000-FFFFFFFF
+SDA> SHOW PROCESS/LOCKS AH
+Lock data:
+
+Lock id:  420003C0   PID:     00010016   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        2                                    
+LKB:      879898C0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 41525157    WQRA....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003EA on system 00010002
+
+Lock data:
+
+Lock id:  1C0003D3   PID:     00010016   Flags:                           
+Par. id:  420003C0   SUBLCKs:        0                                    
+LKB:      8798F740   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003053    S0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003EF on system 00010002
+
+Lock data:
+
+Lock id:  1B0000AB   PID:     00010016   Flags:                           
+Par. id:  420003C0   SUBLCKs:        0                                    
+LKB:      87979E40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003153    S1......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003EE on system 00010002
+
+SDA> SHOW PROCESS/LOCKS AG
+Lock data:
+
+Lock id:  070003DB   PID:     00010017   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      8797D5C0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 41525157    WQRA....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003E9 on system 00010002
+
+Lock data:
+
+Lock id:  2300009B   PID:     00010017   Flags:                           
+Par. id:  070003DB   SUBLCKs:        0                                    
+LKB:      87977EC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003EB on system 00010002
+
+SDA> SHOW PROCESS/LOCKS AV
+Lock data:
+
+Lock id:  080003DF   PID:     00010018   Flags:   CONVERT                 
+Par. id:  070003E0   SUBLCKs:        0                                    
+LKB:      87985340   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0000                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:  ASYNC                   
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003EC on system 00010002
+
+Lock data:
+
+Lock id:  070003E0   PID:     00010018   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      8798A4C0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 41525157    WQRA....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003E8 on system 00010002
+
+SDA> SHOW PROCESS/LOCKS AU
+Lock data:
+
+Lock id:  0B0003E2   PID:     00010019   Flags:                           
+Par. id:  0A0003E1   SUBLCKs:        0                                    
+LKB:      8798A5C0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0001                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:  ASYNC                   
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003ED on system 00010002
+
+Lock data:
+
+Lock id:  0A0003E1   PID:     00010019   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      87987840   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 41525157    WQRA....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003E7 on system 00010002
+
+SDA> SHOW PROCESS/LOCKS AC
+Lock data:
+
+Lock id:  0A0003E3   PID:     0001001A   Flags:   VALBLK  CONVERT SYSTEM  
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      8798ABC0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0000                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 41525157    WQRA....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010003F0 on system 00010002
+
+SDA> SHOW PROCESS/LOCKS AQ
+Lock data:
+
+Lock id:  070003E5   PID:     0001001B   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      8797A940   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0001                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 41525157    WQRA....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 020003F3 on system 00010002
+
+SDA> EXIT
+$ STOP AQ
+$ WRITE SYS$OUTPUT "MK187817022""Z"
+MK187817022"Z
+$ STOP AC
+$ WRITE SYS$OUTPUT "MK983126341""Z"
+MK983126341"Z
+$ STOP AU
+$ WRITE SYS$OUTPUT "MK110296889""Z"
+MK110296889"Z
+$ STOP AV
+$ WRITE SYS$OUTPUT "MK1900613036""Z"
+MK1900613036"Z
+$ STOP AG
+$ WRITE SYS$OUTPUT "MK187521974""Z"
+MK187521974"Z
+$ STOP AH
+$ WRITE SYS$OUTPUT "MK1225714363""Z"
+MK1225714363"Z
+$ SPAWN/NOWAIT/PROCESS=CH RMH 112-WQRC
+%DCL-S-SPAWNED, process CH spawned
+$ WRITE SYS$OUTPUT "MK14525672""Z"
+MK14525672"Z
+$ SPAWN/NOWAIT/PROCESS=CG RMW 11GWQRC
+%DCL-S-SPAWNED, process CG spawned
+$ WRITE SYS$OUTPUT "MK1634225420""Z"
+MK1634225420"Z
+$ SPAWN/NOWAIT/PROCESS=CV RMW 15VWQRC
+%DCL-S-SPAWNED, process CV spawned
+$ WRITE SYS$OUTPUT "MK271993180""Z"
+MK271993180"Z
+$ SPAWN/NOWAIT/PROCESS=CU RMW 15UWQRC
+%DCL-S-SPAWNED, process CU spawned
+$ WRITE SYS$OUTPUT "MK288925862""Z"
+MK288925862"Z
+$ SPAWN/NOWAIT/PROCESS=CC RMW 51CWQRC
+%DCL-S-SPAWNED, process CC spawned
+$ WRITE SYS$OUTPUT "MK1978623184""Z"
+MK1978623184"Z
+$ SPAWN/NOWAIT/PROCESS=CQ RMW 50QWQRC
+%DCL-S-SPAWNED, process CQ spawned
+$ WRITE SYS$OUTPUT "MK35191816""Z"
+MK35191816"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             6  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 0A0003F2  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 070003F4  EX 00000000-FFFFFFFF
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  879A6200  GGMODE:       NL  Status: VALID                   
+Parent RSB:      87993240  CGMODE:       NL                                  
+Sub-RSB count:          0  FGMODE:       NL                                  
+Lock Count:             3  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 28000363  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 080003ED  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 080003EF  EX 00000000-FFFFFFFF
+SDA> SHOW PROCESS/LOCKS CH
+Lock data:
+
+Lock id:  060000E0   PID:     0001001C   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        2                                    
+LKB:      87983FC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 2E0008EB on system 00010001
+
+Lock data:
+
+Lock id:  060003DC   PID:     0001001C   Flags:                           
+Par. id:  060000E0   SUBLCKs:        0                                    
+LKB:      87977740   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003053    S0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 3D0008EC on system 00010001
+
+Lock data:
+
+Lock id:  050000E8   PID:     0001001C   Flags:                           
+Par. id:  060000E0   SUBLCKs:        0                                    
+LKB:      87985240   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003153    S1......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 4B000608 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS CG
+Lock data:
+
+Lock id:  100003DB   PID:     0001001D   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      8797D5C0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 26000489 on system 00010001
+
+Lock data:
+
+Lock id:  28000363   PID:     0001001D   Flags:                           
+Par. id:  100003DB   SUBLCKs:        0                                    
+LKB:      8798EB40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 010008F3 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS CV
+Lock data:
+
+Lock id:  080003ED   PID:     0001001E   Flags:   CONVERT                 
+Par. id:  070003EE   SUBLCKs:        0                                    
+LKB:      87987840   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0000                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:  ASYNC                   
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 020008F5 on system 00010001
+
+Lock data:
+
+Lock id:  070003EE   PID:     0001001E   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      87978440   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 070008F4 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS CU
+Lock data:
+
+Lock id:  080003EF   PID:     0001001F   Flags:                           
+Par. id:  070003F0   SUBLCKs:        0                                    
+LKB:      879739C0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0001                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:  ASYNC                   
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 020008F7 on system 00010001
+
+Lock data:
+
+Lock id:  070003F0   PID:     0001001F   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      87981F40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 070008F6 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS CC
+Lock data:
+
+Lock id:  0A0003F2   PID:     00010020   Flags:   VALBLK  CONVERT SYSTEM  
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      8797F040   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0000                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 08000902 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS CQ
+Lock data:
+
+Lock id:  070003F4   PID:     00010021   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      87980640   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0001                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 08000903 on system 00010001
+
+SDA> EXIT
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX3   2-NOV-2026 13:13:50.22  Uptime  0 00:07:47
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20600201 SWAPPER         HIB     16        0   0 00:00:00.05         0      0   
+20600206 CLUSTER_SERVER  HIB     13       11   0 00:00:00.04       248    515   
+20600207 CONFIGURE       HIB     10       16   0 00:00:00.03       130    206   
+20600208 LANACP          HIB     13       41   0 00:00:00.06       402    678   
+2060020A IPCACP          HIB     10        6   0 00:00:00.00        97    183   
+2060020B ERRFMT          HIB      8       27   0 00:00:00.04       149    227   
+2060020C CACHE_SERVER    HIB     16        9   0 00:00:00.01        82    141   
+2060020D OPCOM           HIB      7      111   0 00:00:00.06       301    139   
+2060020E AUDIT_SERVER    HIB      9       42   0 00:00:00.06       460    816   
+2060020F JOB_CONTROL     HIB     10       40   0 00:00:00.02       213    399   
+20600210 SECURITY_SERVER HIB     10       23   0 00:00:00.08       769   1271   
+20600211 SMISERVER       HIB      9       35   0 00:00:00.10       329    749   
+20600212 TP_SERVER       HIB      8       44   0 00:00:00.04       203    323   
+20600213 TCPIP$INETACP   HIB     10       40   0 00:00:00.07       253    163   
+20600215 SYSTEM          CUR      7     1421   0 00:00:00.55      8268    354   
+2060021C CH              HIB      9       57   0 00:00:00.02       256    252  S
+2060021D CG              HIB      9       58   0 00:00:00.02       255    252  S
+2060021E CV              HIB      9       56   0 00:00:00.02       254    250  S
+2060021F CU              HIB      9       56   0 00:00:00.02       254    250  S
+20600220 CC              HIB      9       56   0 00:00:00.02       255    252  S
+20600221 CQ              HIB      9       56   0 00:00:00.02       255    252  S
+$ WRITE SYS$OUTPUT "MK2739723962""Z"
+MK2739723962"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             6  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 0A0003F2  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 070003F4  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             6  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 0A0003F2  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 070003F4  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ STOP CC
+$ WRITE SYS$OUTPUT "MK3069110732""Z"
+MK3069110732"Z
+$ STOP CQ
+$ WRITE SYS$OUTPUT "MK8996251""Z"
+MK8996251"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             4  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             4  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ SPAWN/NOWAIT/PROCESS=CC2 RMW 51CWQRC
+%DCL-S-SPAWNED, process CC2 spawned
+$ WRITE SYS$OUTPUT "MK13520502""Z"
+MK13520502"Z
+$ SPAWN/NOWAIT/PROCESS=CQ2 RMW 50QWQRC
+%DCL-S-SPAWNED, process CQ2 spawned
+$ WRITE SYS$OUTPUT "MK102223419""Z"
+MK102223419"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             6  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0003
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 6B0003F3  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 340003F4  EX 00000000-FFFFFFFF
+SDA> SHOW PROCESS/LOCKS CC2
+Lock data:
+
+Lock id:  6B0003F3   PID:     00010022   Flags:   VALBLK  CONVERT SYSTEM  
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      8797CEC0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0002                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0700090D on system 00010001
+
+SDA> SHOW PROCESS/LOCKS CQ2
+Lock data:
+
+Lock id:  340003F4   PID:     00010023   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      87980640   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0003                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0600090E on system 00010001
+
+SDA> EXIT
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             6  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0003
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 6B0003F3  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 340003F4  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ STOP CC2
+$ WRITE SYS$OUTPUT "MK1598716971""Z"
+MK1598716971"Z
+$ STOP CQ2
+$ WRITE SYS$OUTPUT "MK845931005""Z"
+MK845931005"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             4  CSID:   00010002                                  
+BLKAST count:           0  RQSEQNM:    0003
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  87993240  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             4  CSID:   00010002                                  
+BLKAST count:           0  RQSEQNM:    0003
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 070003F0  CR 00000000-FFFFFFFF         070003EE  CR 00000000-FFFFFFFF
+ 100003DB  CR 00000000-FFFFFFFF         060000E0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  879A6200  GGMODE:       NL  Status: VALID                   
+Parent RSB:      87993240  CGMODE:       NL                                  
+Sub-RSB count:          0  FGMODE:       NL                                  
+Lock Count:             3  CSID:   00010002                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 28000363  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 080003ED  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 080003EF  EX 00000000-FFFFFFFF
+SDA> SHOW PROCESS/LOCKS CH
+Lock data:
+
+Lock id:  060000E0   PID:     0001001C   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        2                                    
+LKB:      87983FC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 1F0003E4 on system 00010002
+
+Lock data:
+
+Lock id:  060003DC   PID:     0001001C   Flags:                           
+Par. id:  060000E0   SUBLCKs:        0                                    
+LKB:      87977740   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003053    S0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0100040F on system 00010002
+
+Lock data:
+
+Lock id:  050000E8   PID:     0001001C   Flags:                           
+Par. id:  060000E0   SUBLCKs:        0                                    
+LKB:      87985240   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003153    S1......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0100040E on system 00010002
+
+SDA> SHOW PROCESS/LOCKS CG
+Lock data:
+
+Lock id:  100003DB   PID:     0001001D   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      8797D5C0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 150003FB on system 00010002
+
+Lock data:
+
+Lock id:  28000363   PID:     0001001D   Flags:                           
+Par. id:  100003DB   SUBLCKs:        0                                    
+LKB:      8798EB40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0100040B on system 00010002
+
+SDA> SHOW PROCESS/LOCKS CV
+Lock data:
+
+Lock id:  080003ED   PID:     0001001E   Flags:   CONVERT                 
+Par. id:  070003EE   SUBLCKs:        0                                    
+LKB:      87987840   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0000                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:  ASYNC                   
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0100040C on system 00010002
+
+Lock data:
+
+Lock id:  070003EE   PID:     0001001E   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      87978440   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 480003FD on system 00010002
+
+SDA> SHOW PROCESS/LOCKS CU
+Lock data:
+
+Lock id:  080003EF   PID:     0001001F   Flags:                           
+Par. id:  070003F0   SUBLCKs:        0                                    
+LKB:      879739C0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0001                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:  ASYNC                   
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0100040D on system 00010002
+
+Lock data:
+
+Lock id:  070003F0   PID:     0001001F   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      87981F40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 43525157    WQRC....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 13000401 on system 00010002
+
+SDA> EXIT
+$ SPAWN/NOWAIT/PROCESS=EH RMH 112-WQRE
+%DCL-S-SPAWNED, process EH spawned
+$ WRITE SYS$OUTPUT "MK522818785""Z"
+MK522818785"Z
+$ SPAWN/NOWAIT/PROCESS=EC RMW 51CWQRE
+%DCL-S-SPAWNED, process EC spawned
+$ WRITE SYS$OUTPUT "MK3199232760""Z"
+MK3199232760"Z
+$ SPAWN/NOWAIT/PROCESS=EQ RMW 50QWQRE
+%DCL-S-SPAWNED, process EQ spawned
+$ WRITE SYS$OUTPUT "MK208611409""Z"
+MK208611409"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRE
+Address of RSB:  879C0E40  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          2  FGMODE:       NL                                  
+Lock Count:             3  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 45525157   WQRE....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 4F0003F4  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 300003F9  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 070003FC  EX 00000000-FFFFFFFF
+SDA> SHOW PROCESS/LOCKS EH
+Lock data:
+
+Lock id:  4F0003F4   PID:     00010024   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        2                                    
+LKB:      87980640   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 45525157    WQRE....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 26000903 on system 00010001
+
+Lock data:
+
+Lock id:  460003F8   PID:     00010024   Flags:                           
+Par. id:  4F0003F4   SUBLCKs:        0                                    
+LKB:      87975B40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003053    S0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 160008F7 on system 00010001
+
+Lock data:
+
+Lock id:  100003FB   PID:     00010024   Flags:                           
+Par. id:  4F0003F4   SUBLCKs:        0                                    
+LKB:      8797CEC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003153    S1......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 690008E8 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS EC
+Lock data:
+
+Lock id:  300003F9   PID:     00010025   Flags:   VALBLK  CONVERT SYSTEM  
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      8797D9C0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0000                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 45525157    WQRE....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0C000914 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS EQ
+Lock data:
+
+Lock id:  070003FC   PID:     00010026   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      87977EC0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0001                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 45525157    WQRE....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 08000915 on system 00010001
+
+SDA> EXIT
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRE
+Address of RSB:  879C0E40  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          2  FGMODE:       NL                                  
+Lock Count:             3  CSID:   00010002                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 45525157   WQRE....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 4F0003F4  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 300003F9  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 070003FC  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ STOP CH
+$ WRITE SYS$OUTPUT "MK1426018012""Z"
+MK1426018012"Z
+$ STOP CG
+$ WRITE SYS$OUTPUT "MK1304223052""Z"
+MK1304223052"Z
+$ STOP CV
+$ WRITE SYS$OUTPUT "MK1733620947""Z"
+MK1733620947"Z
+$ STOP CU
+$ WRITE SYS$OUTPUT "MK1621630346""Z"
+MK1621630346"Z
+$ STOP EH
+$ WRITE SYS$OUTPUT "MK1489724391""Z"
+MK1489724391"Z
+$ STOP EC
+$ WRITE SYS$OUTPUT "MK122584531""Z"
+MK122584531"Z
+$ STOP EQ
+$ WRITE SYS$OUTPUT "MK2656623399""Z"
+MK2656623399"Z
+$ SHOW SYSTEM/SUBPROCESS
+$ WRITE SYS$OUTPUT "MK2427015029""Z"
+MK2427015029"Z
+$ WRITE SYS$OUTPUT F$GETSYI("NODENAME")," LDW=",F$GETSYI("LOCKDIRWT")," CN=",F$GETSYI("CLUSTER_NODES")
+VAX3 LDW=1 CN=3
+$ WRITE SYS$OUTPUT "MK225243314""Z"
+MK225243314"Z
+$ SPAWN/NOWAIT/PROCESS=BH RMH 112-WQRB
+%DCL-S-SPAWNED, process BH spawned
+$ WRITE SYS$OUTPUT "MK2889927529""Z"
+MK2889927529"Z
+$ SPAWN/NOWAIT/PROCESS=BG RMW 11GWQRB
+%DCL-S-SPAWNED, process BG spawned
+$ WRITE SYS$OUTPUT "MK207591379""Z"
+MK207591379"Z
+$ SPAWN/NOWAIT/PROCESS=BV RMW 15VWQRB
+%DCL-S-SPAWNED, process BV spawned
+$ WRITE SYS$OUTPUT "MK700924506""Z"
+MK700924506"Z
+$ SPAWN/NOWAIT/PROCESS=BU RMW 15UWQRB
+%DCL-S-SPAWNED, process BU spawned
+$ WRITE SYS$OUTPUT "MK1105215252""Z"
+MK1105215252"Z
+$ SPAWN/NOWAIT/PROCESS=BC RMW 51CWQRB
+%DCL-S-SPAWNED, process BC spawned
+$ WRITE SYS$OUTPUT "MK2276416525""Z"
+MK2276416525"Z
+$ SPAWN/NOWAIT/PROCESS=BQ RMW 50QWQRB
+%DCL-S-SPAWNED, process BQ spawned
+$ WRITE SYS$OUTPUT "MK2688415683""Z"
+MK2688415683"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRB
+Address of RSB:  879B6040  GGMODE:       NL  Status: DIRENTR VALID           
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             6  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 42525157   WQRB....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 07000401  CR 00000000-FFFFFFFF         170003F0  CR 00000000-FFFFFFFF
+ 0D0003EE  CR 00000000-FFFFFFFF         270000AB  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 07000403  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 07000404  EX 00000000-FFFFFFFF
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  879A4880  GGMODE:       NL  Status: VALID                   
+Parent RSB:      879B6040  CGMODE:       NL                                  
+Sub-RSB count:          0  FGMODE:       NL                                  
+Lock Count:             3  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 100003FC  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 3D0003F2  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 08000400  EX 00000000-FFFFFFFF
+SDA> SHOW PROCESS/LOCKS BH
+Lock data:
+
+Lock id:  270000AB   PID:     00010027   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        2                                    
+LKB:      87979E40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 42525157    WQRB....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 08000919 on system 00010001
+
+Lock data:
+
+Lock id:  300003D3   PID:     00010027   Flags:                           
+Par. id:  270000AB   SUBLCKs:        0                                    
+LKB:      8798F740   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003053    S0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 6F000904 on system 00010001
+
+Lock data:
+
+Lock id:  310003FD   PID:     00010027   Flags:                           
+Par. id:  270000AB   SUBLCKs:        0                                    
+LKB:      8798DA40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003153    S1......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 7A0008F1 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS BG
+Lock data:
+
+Lock id:  0D0003EE   PID:     00010028   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      87978440   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 42525157    WQRB....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0A000595 on system 00010001
+
+Lock data:
+
+Lock id:  100003FC   PID:     00010028   Flags:                           
+Par. id:  0D0003EE   SUBLCKs:        0                                    
+LKB:      87977EC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 63000608 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS BV
+Lock data:
+
+Lock id:  3D0003F2   PID:     00010029   Flags:   CONVERT                 
+Par. id:  170003F0   SUBLCKs:        0                                    
+LKB:      8797F040   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0000                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:  ASYNC                   
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 4B000903 on system 00010001
+
+Lock data:
+
+Lock id:  170003F0   PID:     00010029   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      87981F40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 42525157    WQRB....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0C00090A on system 00010001
+
+SDA> SHOW PROCESS/LOCKS BU
+Lock data:
+
+Lock id:  08000400   PID:     0001002A   Flags:                           
+Par. id:  07000401   SUBLCKs:        0                                    
+LKB:      8797D5C0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0001                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 00003057    W0......  Status:  ASYNC                   
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0200091B on system 00010001
+
+Lock data:
+
+Lock id:  07000401   PID:     0001002A   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        1                                    
+LKB:      87977E40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 42525157    WQRB....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0700091A on system 00010001
+
+SDA> SHOW PROCESS/LOCKS BC
+Lock data:
+
+Lock id:  07000403   PID:     0001002B   Flags:   VALBLK  CONVERT SYSTEM  
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      8798DCC0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0000                                     
+
+Converting to   EX   00000000-FFFFFFFF
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 42525157    WQRB....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 07000920 on system 00010001
+
+SDA> SHOW PROCESS/LOCKS BQ
+Lock data:
+
+Lock id:  07000404   PID:     0001002C   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        0                                    
+LKB:      8797CEC0   BLKAST:  00000000                                    
+PRIORTY:      0000   RQSEQNM:     0001                                     
+
+Waiting for     EX   00000000-FFFFFFFF
+
+Resource:      00000000 42525157    WQRB....  Status:  ASYNC                   
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 04000922 on system 00010001
+
+SDA> EXIT
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRB
+Address of RSB:  879B6040  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          3  FGMODE:       NL                                  
+Lock Count:             6  CSID:   00010002                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 42525157   WQRB....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 07000401  CR 00000000-FFFFFFFF         170003F0  CR 00000000-FFFFFFFF
+ 0D0003EE  CR 00000000-FFFFFFFF         270000AB  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 07000403  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 07000404  EX 00000000-FFFFFFFF
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  879A4880  GGMODE:       NL  Status: VALID                   
+Parent RSB:      879B6040  CGMODE:       NL                                  
+Sub-RSB count:          0  FGMODE:       NL                                  
+Lock Count:             3  CSID:   00010002                                  
+BLKAST count:           0  RQSEQNM:    0001
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 100003FC  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 3D0003F2  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 08000400  EX 00000000-FFFFFFFF
+SDA> SHOW PROCESS/LOCKS BH
+Lock data:
+
+Lock id:  270000AB   PID:     00010027   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        2                                    
+LKB:      87979E40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 42525157    WQRB....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 020004EC on system 00010002
+
+Lock data:
+
+Lock id:  300003D3   PID:     00010027   Flags:                           
+Par. id:  270000AB   SUBLCKs:        0                                    
+LKB:      8798F740   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003053    S0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 020004F7 on system 00010002
+
+Lock data:
+
+Lock id:  310003FD   PID:     00010027   Flags:                           
+Par. id:  270000AB   SUBLCKs:        0                                    
+LKB:      8798DA40   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003153    S1......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 020004F5 on system 00010002
+
+SDA> SHOW PROCE
+%SYSTEM-W-DATAOVERUN, data overrun
+Status : 02040009 res,inquan,phdres,inter
+Status2: 00000000 
+PCB address              879E3280    JIB address              8795B940
+PHD address              89388800    Swapfile disk address    00000000
+Master internal PID      00010015    Subprocess count                6
+Internal PID             00010027    Creator internal PID     00010015
+Extended PID             20600227    Creator extended PID     20600215
+State                       HIB      Termination mailbox          0077
+Current priority                9    AST's enabled                KESU
+Base priority                   4    AST's active                 NONE
+UIC                [00001,000004]    AST's remaining                98
+Mutex count                     0    Buffered I/O count/limit      100/100
+Waiting EF cluster              0    Direct I/O count/limit        100/100
+Starting wait time       1B001B1B    BUFIO byte count/limit      45504/45504
+Event flag wait mask     0000000D    # open files allowed left     293
+Local EF cluster 0       E0000003    Timer entries allowed left     30
+Local EF cluster 1       00000000    Active page table count         0
+Global cluster 2 pointer 00000000    Process WS page count         208
+Global cluster 3 pointer 00000000    Global WS page count           44
+SDA> EXIT
+$ 

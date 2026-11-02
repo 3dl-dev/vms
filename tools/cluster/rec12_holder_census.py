@@ -205,9 +205,13 @@ def selftest(repo):
     # one a ROOT record (the departing VAX1 hands CACHE$/F11B$/SYS$_/VCC$ roots
     # to a survivor) -- SUB does not move, and neither does the constant-cell
     # list below.
-    check('records paired with an answer', len(recs), 3940)   # was 420, 3521
-    check('ROOT records', len(root), 1211)                    # was 9, 792
-    check('SUB records', len(sub), 2729)                      # was 411
+    # rd vms-0db: the two activity-remaster arms (WQRC, WQRE) add 16 records
+    # (ROOT 9, SUB 7), four of them a holder's CONVERTING or WAITING lock --
+    # dlm_waiting_record_census.py states that rule. The constant-cell list
+    # below does not move.
+    check('records paired with an answer', len(recs), 3956)   # was 420, 3521, 3940
+    check('ROOT records', len(root), 1220)                    # was 9, 792, 1211
+    check('SUB records', len(sub), 2736)                      # was 411, 2729
 
     # The cells every real record agrees on, root and sub alike -- the ones a
     # builder may write as constants, and the only ones.
@@ -260,28 +264,29 @@ def selftest(repo):
     # H1..H4 quotes and the holder half of vms_dlm_rm_fsm.c implements.
     h = holder_figures(paths)
     pin = [
-        ('0x11', 665),
-        ('0x11 after a 0x0f for the tree to that member', 665),   # H1
-        ('0x0f from the old master', 1807),
-        ('0x0f naming a CSID-shaped member', 1807),                # H1
+        # rd vms-0db's WQRC/WQRE arms: +2 episodes, every figure moving with them
+        ('0x11', 667),
+        ('0x11 after a 0x0f for the tree to that member', 667),   # H1
+        ('0x0f from the old master', 1811),
+        ('0x0f naming a CSID-shaped member', 1811),                # H1
         ('captures with >1 new master', 18),
         ('...where body[28:32] is one value per new master, distinct', 18),
-        ('0x11 recipients (completed episodes)', 662),             # H2
-        ('...that send the new master a 0x13', 662),
-        ('...after the 0x11', 662),
+        ('0x11 recipients (completed episodes)', 664),             # H2
+        ('...that send the new master a 0x13', 664),
+        ('...after the 0x11', 664),
         ('...that sent no record at all', 16),
-        ('attributable holders with records', 7),                  # H3
-        ('...records after the 0x11 and before its 0x13', 7),
-        ('records', 3941),
-        ('records sent with none of that holder unanswered', 3086),
-        ('holder 0x13', 662),                                      # H4
-        ('holder 0x13 with body[28] = 0', 662),
-        ('holder 0x13 carrying the 0x0e hash', 662),
-        ('old-master 0x13', 1112),
-        ('old-master 0x13 with body[28] in {1,2}', 1112),
-        ('op-0x1a a holder relays', 259),
-        ('...after a 0x0f to that holder', 259),
-        ('...relayed byte for byte at body[88:108]', 251),
+        ('attributable holders with records', 9),                  # H3
+        ('...records after the 0x11 and before its 0x13', 9),
+        ('records', 3957),
+        ('records sent with none of that holder unanswered', 3102),
+        ('holder 0x13', 664),                                      # H4
+        ('holder 0x13 with body[28] = 0', 664),
+        ('holder 0x13 carrying the 0x0e hash', 664),
+        ('old-master 0x13', 1114),
+        ('old-master 0x13 with body[28] in {1,2}', 1114),
+        ('op-0x1a a holder relays', 264),
+        ('...after a 0x0f to that holder', 264),
+        ('...relayed byte for byte at body[88:108]', 256),
     ]
     for name, want in pin:
         check('holder: ' + name, h[name], want)

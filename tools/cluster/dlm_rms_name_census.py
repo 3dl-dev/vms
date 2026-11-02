@@ -184,10 +184,10 @@ def selftest(repo):
 
     # 1. WHO USES WHICH FORM. This is the figure the item turns on: the binary
     #    form is what a real node ORIGINATES, and the text form is OVMX's own.
-    check('distinct real-ORIGINATED RMS$ names', len(real), 65)  # +1 with the rd vms-2fa arm captures
-    check('*** ...all of them the 26-byte binary form ***', len(pop), 65)  # +1 with the rd vms-2fa arm captures
+    check('distinct real-ORIGINATED RMS$ names', len(real), 66)  # +1 with the rd vms-2fa arm captures; +1 with the rd vms-0db arms
+    check('*** ...all of them the 26-byte binary form ***', len(pop), 66)  # +1 with the rd vms-2fa arm captures; +1 with the rd vms-0db arms
     check('frames carrying a real-originated RMS$ name',
-          sum(real.values()), 1922)   # +11 from the rd vms-874f RA1b departure capture; +17 with the rd vms-2fa arm captures
+          sum(real.values()), 1936)   # +11 from the rd vms-874f RA1b departure capture; +17 with the rd vms-2fa arm captures; +14 with the rd vms-0db arms
     # rd vms-083's arm capture added a FIFTH OVMX-originated text name --
     # that node's own RMS lock during its boot. The figure is re-derived
     # with the corpus, exactly as the denominators above are.
@@ -204,7 +204,7 @@ def selftest(repo):
           list(cells[8]), [0])
     check('name[9] (the FID\'s nmx) likewise', list(cells[9]), [0])
     check('name[10] distinct values', sorted(cells[10]), [0, 2])
-    check('*** name[10] == 0x02 ***', cells[10][2], 64)  # +1 with the rd vms-2fa arm captures
+    check('*** name[10] == 0x02 ***', cells[10][2], 65)  # +1 with the rd vms-2fa arm captures; +1 with the rd vms-0db arms
     check('name[19:23] are all SPACE',
           all(list(cells[o]) == [0x20] for o in range(19, 23)), True)
     check('name[23:26] are all NUL',
@@ -226,7 +226,7 @@ def selftest(repo):
     check('*** ...and how many truncate to \'RMS$\' alone (4 bytes) ***',
           sum(1 for nm in pop if nm.index(b'\0') == 4), 1)
     check('...to 7 bytes', sum(1 for nm in pop if nm.index(b'\0') == 7), 37)
-    check('...to 8 bytes', sum(1 for nm in pop if nm.index(b'\0') == 8), 27)  # +1 with the rd vms-2fa arm captures
+    check('...to 8 bytes', sum(1 for nm in pop if nm.index(b'\0') == 8), 28)  # +1 with the rd vms-2fa arm captures; +1 with the rd vms-0db arms
 
     # 4. THE IDENTITY, which is not in the name and routes it.
     ident = {(int.from_bytes(b[OFF_GROUP:OFF_GROUP + 2], 'little'),

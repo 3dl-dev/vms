@@ -263,7 +263,7 @@ def selftest(repo):
     # that obeys the real rule in two cells the older fifteen broke --
     # body[4:8] opens NO transaction and body[30] is 0. Both are called out
     # where they are pinned below.
-    check('real releases in the corpus', len(real), 41844)        # was 9,858; +2 from the rd vms-874f RA1b departure capture; +5 with the rd vms-2fa arm captures
+    check('real releases in the corpus', len(real), 41845)        # was 9,858; +2 from the rd vms-874f RA1b departure capture; +5 with the rd vms-2fa arm captures; +1 with the rd vms-0db arms
     check('OVMX releases in the corpus', len(ovmx), 16)           # was 11
 
     # 1. THE ENVELOPE. A release is a NOTIFICATION: no real sender opens a
@@ -311,11 +311,11 @@ def selftest(repo):
     # 5. The spans a real sender leaves as its own stale buffer, counted so a
     #    `const:0` row for them is a measured choice and not an assumption.
     check('real releases with an all-zero body[16:20]',
-          sum(1 for b in real if b[16:20] == b'\0' * 4), 23900)   # was 5,700; +1 (vms-874f)
+          sum(1 for b in real if b[16:20] == b'\0' * 4), 23901)   # was 5,700; +1 (vms-874f); +1 (vms-0db)
     check('real releases with an all-zero body[36:44]',
-          sum(1 for b in real if b[36:44] == b'\0' * 8), 1459)    # was 354; +1 with the rd vms-2fa arm captures
+          sum(1 for b in real if b[36:44] == b'\0' * 8), 1460)    # was 354; +1 with the rd vms-2fa arm captures; +1 (vms-0db)
     check('real releases with ffffffff at body[124:128]',
-          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22844)  # was 5,117; +1 (vms-874f); +4 with the rd vms-2fa arm captures
+          sum(1 for b in real if b[124:128] == b'\xff' * 4), 22845)  # was 5,117; +1 (vms-874f); +4 with the rd vms-2fa arm captures; +1 (vms-0db)
     check('real releases with an all-zero body[124:128]',
           sum(1 for b in real if b[124:128] == b'\0' * 4), 16490)    # was 4,095; +1 (vms-874f); +1 with the rd vms-2fa arm captures
 

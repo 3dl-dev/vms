@@ -208,7 +208,7 @@ def selftest():
     check('0xfe answers with a ZERO echoed cell', fe_zero, 12)
     check('0xfe answers with a NONZERO echoed cell', fe_nonzero, 0)
     check('answers to a NONZERO cell, all outcomes',
-          sum(n for (k, _s), n in a.items() if k == 'nonzero'), 20292)
+          sum(n for (k, _s), n in a.items() if k == 'nonzero'), 20308)   # +16 with the rd vms-0db arms
     check('answers to a ZERO cell, all outcomes',
           sum(n for (k, _s), n in a.items() if k == 'zero'), 44)
     return 0 if ok else 1

@@ -273,6 +273,8 @@ static inline int exec_copyout(void *udst, const void *ksrc, size_t n)
 /* ---- 4. kernel memory ---- */
 static inline void *exec_zalloc(size_t n)        { return kzalloc(n, GFP_KERNEL); }
 static inline void *exec_zalloc_atomic(size_t n) { return kzalloc(n, GFP_ATOMIC); }
+static inline unsigned long long exec_physmem_bytes(void)
+{ return (unsigned long long)totalram_pages() << PAGE_SHIFT; }
 static inline void *exec_alloc(size_t n)         { return kmalloc(n, GFP_KERNEL); }
 static inline void  exec_free(void *p)           { kfree(p); }
 

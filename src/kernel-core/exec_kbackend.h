@@ -230,6 +230,10 @@
  *   void  exec_free(void *p)            free an exec_{z,}alloc/exec_zalloc_atomic
  *                                       block (the backend recovers the size
  *                                       where its free needs one).
+ *   unsigned long long exec_physmem_bytes(void)
+ *                                       the machine's physical memory, for a
+ *                                       facility that sizes a cache to it the
+ *                                       way AUTOGEN sizes VMS's (rd vms-c01).
  *
  * 5. Host-task binding  (Phase F; called ONLY from the process table +, later,
  *    the device/module glue -- the host-task coupling is concentrated in those

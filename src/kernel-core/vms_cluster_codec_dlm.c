@@ -2304,6 +2304,30 @@ vms_codec_status_t vms_dlm_rm_ack_ident(const uint8_t *ans_body, uint32_t len,
 }
 
 /*
+ * An INBOUND op-0x14 (rd vms-bc51): the tree it names, for a HOLDER that sent
+ * its op-0x13 to that new master and owes the 82/15. The identity cells are
+ * the ones every remaster step carries (dlm_rm_ident_get); nothing else of the
+ * frame is read -- RA7 proved its residue span is not meaningful.
+ */
+vms_codec_status_t vms_dlm_rm_held_ident(const uint8_t *body, uint32_t len,
+					 struct vms_dlm_res_ident *out)
+{
+	vms_wire_view_t v;
+	uint8_t cat, op;
+
+	if (out == (struct vms_dlm_res_ident *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_RM_14)
+		return VMS_CODEC_E_CLASS;
+	return dlm_rm_ident_get(&v, out);
+}
+
+/*
  * RULE 2. The 82/01 answer to an op-0x12 is the GRANT record this codec
  * already grounds on 38/38 real grants, carrying the handle THIS engine
  * minted and -- on the tree's root -- the resource's own value block and its

@@ -2008,6 +2008,11 @@ vms_codec_status_t vms_dlm_rm_ack_build(const uint8_t *req_body,
 vms_codec_status_t vms_dlm_rm_ack_ident(const uint8_t *ans_body, uint32_t len,
 					struct vms_dlm_res_ident *out);
 
+/* The tree an INBOUND op-0x14 names (rd vms-bc51): a holder's key for the
+ * 82/15 it owes. E_CLASS for anything but cat 0x02 op 0x14. */
+vms_codec_status_t vms_dlm_rm_held_ident(const uint8_t *body, uint32_t len,
+					 struct vms_dlm_res_ident *out);
+
 /*
  * WHAT THIS ENGINE DID WITH ONE op-0x12 RECORD -- every field read back off
  * the objects it created, which is what makes the answer an executive read.

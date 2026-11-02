@@ -26,6 +26,8 @@
  *                                          record, rd vms-33a)
  *     vms_dlm_rm_0f_new_master            (the new master an op-0x0f names,
  *                                          rd vms-33a)
+ *     vms_dlm_rm_held_ident               (the tree an INBOUND op-0x14 names,
+ *                                          the holder's 82/15 key, rd vms-bc51)
  *     vms_cm_params_parse                 (CNXMAN op-01 PARAMS, votes)
  * plus the frame-level entry (vms_frame_classify -> vms_dlm_*_parse), the real
  * inbound path (body = frame + VMS_OFF_SYSAP_BODY, so a short frame exercises
@@ -233,29 +235,36 @@ static void fuzz_grant_valblk(void)
 static void fuzz_rm_holder(void)
 {
     struct vms_dlm_rm_lock_grant g;
-    uint32_t csid, ok_grant = 0, ok_0f = 0;
+    struct vms_dlm_res_ident hid;
+    uint32_t csid, ok_grant = 0, ok_0f = 0, ok_14 = 0;
 
     for (int i = 0; i < ITERS; i++) {
         uint8_t scratch[160];
         uint32_t n = (uint32_t)(rand() % 161);
-        int which = i & 1;
+        int which = i % 3;
 
         fill_random(scratch, n);
         if ((rand() & 3) && n > DLM_OP_BODY_OFF) {
-            scratch[DLM_OP_BODY_OFF - 1] = which ? 0x82 : 0x02;
-            scratch[DLM_OP_BODY_OFF] = which ? VMS_DLM_WIREOP_ENQ
-                                             : VMS_DLM_WIREOP_RM_0F;
+            scratch[DLM_OP_BODY_OFF - 1] = which == 1 ? 0x82 : 0x02;
+            scratch[DLM_OP_BODY_OFF] = which == 1 ? VMS_DLM_WIREOP_ENQ :
+                                       which == 0 ? VMS_DLM_WIREOP_RM_0F :
+                                                    VMS_DLM_WIREOP_RM_14;
         }
         uint8_t *body = exact(scratch, n);
-        if (which) {
+        if (which == 1) {
             if (vms_dlm_rm_lock_grant_parse_body(body, n, &g) == VMS_CODEC_OK)
                 ok_grant++;
-        } else {
+        } else if (which == 0) {
             if (vms_dlm_rm_0f_new_master(body, n, &csid) == VMS_CODEC_OK)
                 ok_0f++;
+        } else {
+            if (vms_dlm_rm_held_ident(body, n, &hid) == VMS_CODEC_OK)
+                ok_14++;
         }
         free(body);
     }
+    ct_check(ok_14 > 0, "rm_held_ident: 100k (a third planted), no "
+                        "over-read/crash, and REACHED (non-vacuous)");
     ct_check(ok_grant > 0, "rm_lock_grant_parse_body: 100k (half planted), "
                            "no over-read/crash, and REACHED (non-vacuous)");
     ct_check(ok_0f > 0, "rm_0f_new_master: 100k (half planted), no "

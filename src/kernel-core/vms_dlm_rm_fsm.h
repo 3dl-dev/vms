@@ -373,6 +373,7 @@ enum vms_dlm_ho_state {
 	VMS_DLM_HO_ST_FREE = 0,
 	VMS_DLM_HO_ST_ARMED,      /* the 0x0f named N; the 0x11 has not come */
 	VMS_DLM_HO_ST_AWAIT,      /* a record is out; its 82/01 is not in     */
+	VMS_DLM_HO_ST_ENDED,      /* the 0x13 is out; N's 0x14 is not in yet  */
 	VMS_DLM_HO_ST__COUNT
 };
 
@@ -480,6 +481,8 @@ struct vms_dlm_rm {
 				     /* would not re-home: the tree STOPS     */
 	uint32_t ho_ends_sent;       /* op-0x13s really on the wire           */
 	uint32_t ho_ends_unsent;     /* ...owed and not sent                  */
+	uint32_t ho_held_acked;      /* N's op-0x14 to us, answered 82/15     */
+	uint32_t ho_held_unacked;    /* ...an 82/15 owed and not staged       */
 	uint32_t ho_departed;        /* hand-overs dropped: N left            */
 	uint32_t ho_valblks_taken;   /* op-0x1a blocks taken as a holder      */
 };

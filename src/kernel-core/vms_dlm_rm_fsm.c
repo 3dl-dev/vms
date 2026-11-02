@@ -561,6 +561,17 @@ static void rm_ho_arm(struct vms_dlm_rm *f, uint32_t from_csid,
 			}
 		}
 	}
+	/* Every slot busy: one that only waits for a 0x14 to answer is the one
+	 * given up (its hand-over is complete; only the courtesy is lost). */
+	if (h == (struct vms_dlm_ho_tree *)0) {
+		for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
+			if (f->ho[i].state == (uint8_t)VMS_DLM_HO_ST_ENDED) {
+				h = &f->ho[i];
+				f->ho_held_unacked++;
+				break;
+			}
+		}
+	}
 	if (h == (struct vms_dlm_ho_tree *)0) {
 		f->ho_no_slot++;
 		rm_say(f, "%DLM, a lock-tree hand-over could not be tracked "
@@ -664,10 +675,50 @@ static void rm_ho_pump(struct vms_dlm_rm *f, struct vms_dlm_ho_tree *h)
 		f->ho_ends_unsent++;
 		rm_say(f, "%DLM, the end-of-records for a tree's new master "
 			  "could not be sent (see the DLM counters)");
-	} else {
-		f->ho_ends_sent++;
+		rm_ho_free(h);
+		return;
 	}
-	rm_ho_free(h);
+	f->ho_ends_sent++;
+	/*
+	 * THE NEW MASTER ANSWERS THE 0x13 WITH AN op-0x14, AND THAT IS OWED AN
+	 * 82/15 (rule W1: one 0x14 per 0x13 sender; RA2's holder VAX3 answered
+	 * VAX2's). Lab33a, 2026-11-02: this node freed the slot here, left the
+	 * real new master's 0x14 unanswered, and VAX2's tree sat RM_IP/RM_WAIT
+	 * until the next release of it bugchecked VAX2. The slot stays, ENDED,
+	 * so that 0x14 -- from THIS new master, for THIS tree -- is answered.
+	 */
+	h->state = (uint8_t)VMS_DLM_HO_ST_ENDED;
+}
+
+/*
+ * op 0x14 from a NEW MASTER this node sent its op-0x13 to: answer it 82/15
+ * (the grounded echo, dlm_rm_ack) and close the hand-over. Returns 1 when the
+ * 0x14 was this node's to answer.
+ */
+static int rm_ho_held(struct vms_dlm_rm *f, uint32_t from_csid,
+		      const struct vms_dlm_res_ident *id,
+		      const uint8_t *body, uint32_t len)
+{
+	uint32_t i;
+
+	for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
+		struct vms_dlm_ho_tree *h = &f->ho[i];
+
+		if (h->state != (uint8_t)VMS_DLM_HO_ST_ENDED ||
+		    h->new_master != from_csid || !rm_ident_eq(&h->id, id))
+			continue;
+		if (rm_stage_ack(f, body, len, 0) != 0) {
+			f->ho_held_unacked++;
+			rm_say(f, "%DLM, a tree's new master announced it holds "
+				  "the tree and the answer could not be sent "
+				  "(see the DLM counters)");
+		} else {
+			f->ho_held_acked++;
+		}
+		rm_ho_free(h);
+		return 1;
+	}
+	return 0;
 }
 
 /* op 0x11 from the old master: FIRE the hand-over its 0x0f armed. */
@@ -1130,6 +1181,22 @@ enum vms_dlm_rm_status vms_dlm_rm_step(struct vms_dlm_rm *f, uint32_t from_csid,
 		rm_ho_fire(f, from_csid, &step);
 		return VMS_DLM_RM_HANDLED;
 	}
+	/*
+	 * op 0x14 TO A HOLDER (rd vms-bc51): the new master this node reported
+	 * its locks to says it holds the tree. The new-master side never
+	 * receives a 0x14 (it sends them), so this is the only 0x14 this table
+	 * answers; any other is not this node's.
+	 */
+	if (opcode == (uint8_t)VMS_DLM_WIREOP_RM_14) {
+		struct vms_dlm_res_ident hid;
+
+		if (from_csid == 0u || !rm_ops_ok(f))
+			return VMS_DLM_RM_NOT_MINE;
+		if (vms_dlm_rm_held_ident(body, len, &hid) != VMS_CODEC_OK)
+			return VMS_DLM_RM_NOT_MINE;
+		return rm_ho_held(f, from_csid, &hid, body, len) ?
+		       VMS_DLM_RM_HANDLED : VMS_DLM_RM_NOT_MINE;
+	}
 	ev = rm_event_of(opcode);
 	if (ev < 0)
 		return VMS_DLM_RM_NOT_MINE;
@@ -1289,8 +1356,10 @@ void vms_dlm_rm_member_departed(struct vms_dlm_rm *f, uint32_t csid)
 	for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
 		if (f->ho[i].state != (uint8_t)VMS_DLM_HO_ST_FREE &&
 		    f->ho[i].new_master == csid) {
+			/* An ENDED slot's hand-over is complete: nothing stopped. */
+			if (f->ho[i].state != (uint8_t)VMS_DLM_HO_ST_ENDED)
+				f->ho_departed++;
 			rm_ho_free(&f->ho[i]);
-			f->ho_departed++;
 		}
 	}
 	for (i = 0u; i < VMS_DLM_RM_TREES; i++) {

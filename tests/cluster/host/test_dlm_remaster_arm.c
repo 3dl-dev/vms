@@ -1384,12 +1384,46 @@ static void test_holder_reports_its_locks_root_first(void)
 	ct_check_eq_u32(g_rm.ho_records_sent, 2u, "  counted: 2 records");
 	ct_check_eq_u32(g_rm.ho_answers, 2u, "  ...2 answered and re-homed");
 	ct_check_eq_u32(g_rm.ho_ends_sent, 1u, "  ...1 end-of-records");
-	ct_check_eq_u32(vms_dlm_rm_ho_in_state(&g_rm, VMS_DLM_HO_ST_FREE),
-			VMS_DLM_HO_TREES, "  and the slot is free again");
+	ct_check_eq_u32(vms_dlm_rm_ho_in_state(&g_rm, VMS_DLM_HO_ST_ENDED), 1u,
+			"  *** the slot waits, ENDED, for the new master's op-0x14 "
+			"(lab33a: freeing it here left VAX2's 0x14 unanswered) ***");
 	ct_check(vms_dlm_rm_ho_answer(&g_rm, RMT_N_CSID, 0x82u, 0x01u,
 				      fxbody(sub_ans), VMS_CM_BODY_LEN) == 0,
 		 "  a late duplicate answer is not consumed (the reply path "
 		 "counts it as unmatched)");
+
+	/* rd vms-bc51: VAX2's real op-0x14 to the holder, and VAX3's real
+	 * 82/15 to it (rm5-remaster.pcap frames 36/37). */
+	{
+		const struct vms_fixture *h14 = fixture("rm-14-holder-req");
+		const struct vms_fixture *h15 = fixture("rm-14-holder-ans");
+		uint32_t staged0 = g_f.n_staged;
+
+		ct_check(vms_dlm_rm_step(&g_rm, RMT_O_CSID, 0x02u, 0x14u,
+					 fxbody(h14), VMS_CM_BODY_LEN) !=
+			 VMS_DLM_RM_HANDLED,
+			 "  an op-0x14 for the tree from a system that is NOT "
+			 "the new master is not this holder's to answer");
+		ct_check_eq_u32(g_f.n_staged, staged0, "    (nothing staged)");
+		ct_check(vms_dlm_rm_step(&g_rm, RMT_N_CSID, 0x02u, 0x14u,
+					 fxbody(h14), VMS_CM_BODY_LEN) ==
+			 VMS_DLM_RM_HANDLED,
+			 "*** the NEW MASTER's real op-0x14 is answered ***");
+		ct_check_eq_u32(g_f.n_staged, staged0 + 1u,
+				"  one 82/15 staged");
+		ct_check(memcmp(g_f.staged + 4, fxbody(h15) + 4,
+				VMS_CM_BODY_LEN - 4u) == 0,
+			 "  *** byte-for-byte VAX3's real 82/15 outside the "
+			 "envelope body[0:4] ***");
+		ct_check_eq_u32(g_rm.ho_held_acked, 1u, "  counted: 1 acked");
+		ct_check_eq_u32(vms_dlm_rm_ho_in_state(&g_rm,
+						       VMS_DLM_HO_ST_FREE),
+				VMS_DLM_HO_TREES, "  and the slot is free again");
+		ct_check(vms_dlm_rm_step(&g_rm, RMT_N_CSID, 0x02u, 0x14u,
+					 fxbody(h14), VMS_CM_BODY_LEN) !=
+			 VMS_DLM_RM_HANDLED,
+			 "  a repeated op-0x14 is not answered twice");
+	}
 }
 
 static void test_holder_with_nothing_still_ends(void)

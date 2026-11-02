@@ -2627,11 +2627,25 @@ static uint32_t rms_impl_create(void *fab_ptr)
                     fab->fab$l_sts = RMS$_FEX;
                     return RMS$_FEX;
                 }
+                /* by directory, name and version, as $ERASE does: the entry
+                 * goes with the file. A by-FID delete left NAME;N in the
+                 * directory, and the new NAME;N then failed RMS$_CRE (rd vms-465:
+                 * LIBRARY /REPLACE superseding LIBBACKEND.A;1). */
                 dop.chan = chan;
                 dop.func = VMS_ACP_FOP_DELETE;
                 dop.modifiers = VMS_ACP_M_DELETE;
-                dop.fidmode = 1;
-                (void)vms_kif_acp_fileop(&dop);
+                dop.did_num = fop.did_num; dop.did_seq = fop.did_seq;
+                dop.did_rvn = fop.did_rvn; dop.did_nmx = fop.did_nmx;
+                dop.version = sp.version;
+                strncpy(dop.name, sp.name, VMS_ACP_NAME_SIZE - 1);
+                st = vms_kif_acp_fileop(&dop);
+                if (!$VMS_STATUS_SUCCESS(st)) {
+                    free(h); vms_kif_dassgn(chan);
+                    rms_nam_fill(fab, NULL, 0, NULL, 0);
+                    fab->fab$l_stv = st;
+                    fab->fab$l_sts = RMS$_CRE;
+                    return RMS$_CRE;
+                }
             }
         }
         fop.version = sp.version;            /* 0: highest existing + 1 */

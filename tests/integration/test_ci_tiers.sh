@@ -100,6 +100,39 @@ o=$(tier push refs/heads/main tools/cross-vax/build-vmsdcl-vax.sh)
 o=$(tier schedule refs/heads/main docs/x.md)
 [ "$(get "$o" vax_boot)" = true ] && ok "nightly runs the VAX battery" || bad "vax_boot nightly"
 
+# vax_acceptance tier (ci-vax vax-dcl-acceptance, rd vms-365): the full-memory
+# VAX battery is the only job that runs the battery's checks on the VAX (the 16 MB
+# leg stops after login); #1940 changed one with DECNETD and the queue never ran it.
+o=$(tier merge_group q tests/qemu/lib/dcl_acceptance_battery.sh src/vmsdecnet/engine/decnetd.c)
+[ "$(get "$o" vax_acceptance)" = true ] && ok "queue: #1940's change set (battery + DECNETD) runs the full-memory VAX battery" || bad "vax_acceptance 1940"
+o=$(tier merge_group q tests/qemu/lib/dcl_acceptance_battery.sh)
+[ "$(get "$o" vax_acceptance)" = true ] && ok "queue: a battery change runs the full-memory VAX battery" || bad "vax_acceptance battery"
+o=$(tier merge_group q src/vmsdecnet/engine/decnetd.c)
+[ "$(get "$o" vax_acceptance)" = true ] && ok "queue: a DECNETD/NETACP change runs the full-memory VAX battery" || bad "vax_acceptance netacp"
+o=$(tier merge_group q distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTNET.COM)
+[ "$(get "$o" vax_acceptance)" = true ] && ok "queue: a NETACP startup change runs the full-memory VAX battery" || bad "vax_acceptance startnet"
+o=$(tier merge_group q docs/oracle/golden/vax-show-process.txt)
+[ "$(get "$o" vax_acceptance)" = true ] && ok "queue: a golden change runs the full-memory VAX battery" || bad "vax_acceptance golden"
+o=$(tier merge_group q tests/lab-vax/test_dcl_acceptance_vax.sh)
+[ "$(get "$o" vax_acceptance)" = true ] && ok "queue: the battery's VAX driver change runs it" || bad "vax_acceptance driver"
+o=$(tier merge_group q docs/foo.md src/kernel-core/vms_access.c src/ovmx_opcom/ovmx_opcom.c)
+[ "$(get "$o" vax_acceptance)" = false ] && ok "queue: an unrelated change does not run the full-memory VAX battery" || bad "vax_acceptance unrelated"
+o=$(tier pull_request refs/pull/1/merge src/vmsdecnet/engine/decnetd.c tests/qemu/lib/dcl_acceptance_battery.sh)
+[ "$(get "$o" vax_acceptance)" = false ] && ok "vax_acceptance is a queue tier (not on PRs)" || bad "vax_acceptance pr"
+o=$(tier push refs/heads/main src/vmsdecnet/engine/decnetd.c)
+[ "$(get "$o" vax_acceptance)" = false ] && ok "push to main does not re-run the full-memory VAX battery" || bad "vax_acceptance push"
+o=$(tier schedule refs/heads/main docs/x.md)
+[ "$(get "$o" vax_acceptance)" = true ] && ok "nightly runs the full-memory VAX battery" || bad "vax_acceptance nightly"
+o=$(tier push refs/tags/V0.9 docs/x.md)
+[ "$(get "$o" vax_acceptance)" = true ] && ok "a release-tag push runs the full-memory VAX battery" || bad "vax_acceptance tag"
+# the workflow wiring: ci-changes exports the output and the job reads it in merge_group
+grep -q "vax_acceptance: \${{ steps.tiers.outputs.vax_acceptance }}" "$ROOT/.github/workflows/ci-changes.yml" \
+  && grep -q "value: \${{ jobs.changes.outputs.vax_acceptance }}" "$ROOT/.github/workflows/ci-changes.yml" \
+  && ok "ci-changes.yml exports vax_acceptance" || bad "ci-changes vax_acceptance output"
+awk '/^  vax-dcl-acceptance:/{f=1} f&&/^    if:/{print; exit}' "$ROOT/.github/workflows/ci-vax.yml" \
+  | grep -q "github.event_name == 'merge_group' && needs.changes.outputs.vax_acceptance == 'true'" \
+  && ok "ci-vax vax-dcl-acceptance runs in the queue on vax_acceptance" || bad "ci-vax vax-dcl-acceptance merge_group condition"
+
 # keystroke / alpha selfhost area
 o=$(tier merge_group q src/kernel-core/vms_tt.c)
 [ "$(get "$o" keystroke)" = true ] && ok "queue: terminal driver change runs the keystroke oracle" || bad "keystroke area"

@@ -1244,7 +1244,11 @@ jobs:
       packages: read
       contents: read
     needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
-    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # In the MERGE QUEUE when the change touches the battery, its VAX driver,
+    # the goldens it diffs, or DECnet/NETACP (tools/ci/ci_tiers.py
+    # `vax_acceptance`, rd vms-365): the 16 MB leg stops after login, so this
+    # is the only job that runs the battery's checks on the VAX.
+    if: ${{ ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true')) || (github.event_name == 'merge_group' && needs.changes.outputs.vax_acceptance == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:

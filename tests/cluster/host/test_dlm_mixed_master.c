@@ -279,6 +279,19 @@ static uint32_t eng_dir_claim_self(void *ctx, const struct vms_dlm_dir_ask *q)
 	       (uint32_t)SS__NORMAL : (uint32_t)SS__INSFMEM;
 }
 
+/* rd vms-3ea: the engine's "this node no longer masters it" -- the SAME table
+ * call the shipping arm makes (dlm_arm_eng_dir_release_self). */
+static uint32_t eng_dir_release_self(void *ctx, const struct vms_dlm_dir_ask *q)
+{
+	struct vms_dlm_res_ident id;
+
+	(void)ctx;
+	if (q == NULL || ask_to_ident(q, &id) != 0)
+		return SS__BADPARAM;
+	return vms_dlm_dir_remove(&g.dir, &id, (vms_csid_t)CSID_OVMX) == 0 ?
+	       (uint32_t)SS__NORMAL : (uint32_t)SS__IVLOCKID;
+}
+
 static uint32_t eng_dir_resolve(void *ctx, uint32_t dir_hash, uint32_t *out)
 {
 	vms_csid_t csid = 0;
@@ -469,6 +482,7 @@ static void mixed_up(uint8_t ovmx_wt, uint8_t vax_wt)
 	g.eng_ops.dir_all_ours     = eng_dir_all_ours;
 	g.eng_ops.dir_local_lookup = eng_dir_local_lookup;
 	g.eng_ops.dir_claim_self   = eng_dir_claim_self;
+	g.eng_ops.dir_release_self = eng_dir_release_self;
 	g.eng_ops.ctx              = &g;
 	vms_lock_dlm_set_requester_ops(&g.eng_ops);
 
@@ -1674,6 +1688,125 @@ static void a_departure_never_touches_a_local_lock(void)
 	mixed_down();
 }
 
+
+/* ==========================================================================
+ * rd vms-3ea: A RESOURCE NOBODY HOLDS HAS NO MASTER (Davis p. 6-31).
+ *
+ * MEASURED on the 2-node CLUSTER_CONFIG_LAN e2e (dispatch run 41391191761):
+ * node A mounted OVMXDATA and dismounted it, and node B's MOUNT of its own
+ * OVMXDATA volume was STILL refused %MOUNT-F-VOLALRMNT -- B's request for
+ * F11B$vOVMXDATA was granted through a proxy, mastered by a node that held no
+ * lock on it. Two engine facts made the idle resource block immortal and left
+ * its master on it:
+ *   - a value a peer's frame CONFIRMED (the peer echoes the hash it was sent)
+ *     flipped the block from "computed" to "learned", and a learned value is
+ *     a preservation reason (resource_release);
+ *   - the master's own directory claim (dir_claim_self) was never dropped.
+ * Both halves below read the engine's own state after the last $DEQ.
+ * ========================================================================== */
+#define E3EA_NAME "F11B$vOVMXDATA"
+
+static uint32_t e3ea_computed_hash(void)
+{
+	uint32_t h = 0u;
+
+	ct_check(vms_dlm_name_hash(OVMX_RES_GROUP, OVMX_RES_MODE,
+				   (const uint8_t *)E3EA_NAME,
+				   (uint32_t)strlen(E3EA_NAME), &h) ==
+		 VMS_DLM_HASH_OK, "the proven function covers the identity");
+	return h;
+}
+
+static void e3ea_the_master_forgets_an_idle_resource(void)
+{
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	struct vms_dlm_res_ident selfid;
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	uint32_t lkid = 0, h, held = 0;
+
+	printf("-- rd vms-3ea: the master and directory forgets a resource "
+	       "nobody holds --\n");
+	mixed_up(1u, 0u);             /* every name is directed HERE */
+	proc_init(&app);
+	h = e3ea_computed_hash();
+
+	ct_check(do_enq(&app, E3EA_NAME, LCK_K_NLMODE, 0u, &lkid) ==
+		 SS__NORMAL && lkid != 0u,
+		 "this node takes the standing NL lock and masters the name");
+
+	/* The peer's lookup, carrying the SAME value this node computed. */
+	ct_check(vax_build_enq(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
+			       (uint8_t)LCK_K_NLMODE, E3EA_NAME, h) == 0,
+		 "the peer's op-0x01 is built with the agreeing value");
+	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
+		 VMS_DLM_DIR_ANSWER_SELF && master == CSID_OVMX,
+		 "while this node holds a lock, the directory answers "
+		 "THIS NODE MASTERS IT");
+
+	ct_check(do_deq(&app, lkid) == SS__NORMAL, "the last local lock goes");
+
+	ct_check(vms_lock_dlm_dir_hash_of(E3EA_NAME, 0u, OVMX_RES_GROUP,
+					  OVMX_RES_MODE, &held) == 0,
+		 "*** the idle resource block is GONE: a value the wire only "
+		 "confirmed is no reason to keep it ***");
+	ct_check(vms_lock_dlm_name_mastered_here(E3EA_NAME, 0u, OVMX_RES_GROUP,
+						 OVMX_RES_MODE) == 0,
+		 "*** this node no longer claims mastery of it ***");
+	memset(&selfid, 0, sizeof(selfid));
+	selfid.group = OVMX_RES_GROUP;
+	selfid.mode = OVMX_RES_MODE;
+	selfid.name_len = (uint8_t)strlen(E3EA_NAME);
+	memcpy(selfid.name, E3EA_NAME, selfid.name_len);
+	ct_check(vms_dlm_dir_lookup_ident(&g.dir, &selfid, &master, NULL,
+					  NULL) == VMS_DLM_DIR_IDENT_NONE,
+		 "*** and its own directory entry for the name is dropped ***");
+	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
+		 VMS_DLM_DIR_ANSWER_YOU && master == CSID_VAX,
+		 "*** so the peer's next lookup is answered YOU MASTER IT, "
+		 "not 'this node masters it' ***");
+	mixed_down();
+}
+
+static void e3ea_the_requester_forgets_a_released_master(void)
+{
+	struct vms_proc app;
+	uint32_t lkid = 0, held = 0, sent, h;
+
+	printf("-- rd vms-3ea: a requester whose last lock is released "
+	       "forgets the master --\n");
+	mixed_up(0u, 1u);             /* every name is directed at the peer */
+	proc_init(&app);
+	h = e3ea_computed_hash();
+
+	ct_check(do_enq(&app, E3EA_NAME, LCK_K_NLMODE, 0u, &lkid) ==
+		 SS__NORMAL && lkid != 0u,
+		 "the $ENQ leaves as a lookup at the peer (a proxy LKB)");
+	ct_check_eq_u32((uint32_t)g.last_dst, CSID_VAX,
+			"  addressed to the peer");
+	/* The peer's grant echoes our request -- hash included, so the learner
+	 * sees a value that AGREES with the one this node computed. */
+	ct_check(vax_grants(lkid, 0x0a0b0e3au, (uint8_t)LCK_K_NLMODE) == 0,
+		 "the peer's grant is taken by the FSM");
+	/* ...and any later frame of the peer's naming the identity carries the
+	 * SAME value: the learner records it as a confirmation (the arm's
+	 * observe_body does exactly this for every inbound request). */
+	ct_check_eq_u32(vms_lock_dlm_learn_dir_hash(E3EA_NAME, 0u,
+						    OVMX_RES_GROUP,
+						    OVMX_RES_MODE, h),
+			SS__NORMAL, "the peer confirms the value on the wire");
+	sent = g.n_sent;
+	ct_check(do_deq(&app, lkid) == SS__NORMAL,
+		 "the proxy is released (a DEQ to the master)");
+	ct_check(g.n_sent >= sent, "  (the release is the arm's to send)");
+
+	ct_check(vms_lock_dlm_dir_hash_of(E3EA_NAME, 0u, OVMX_RES_GROUP,
+					  OVMX_RES_MODE, &held) == 0,
+		 "*** the idle block is gone, and with it the master it was "
+		 "told: the next $ENQ asks the directory again ***");
+	mixed_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_mixed_master (rd vms-025 / vms-db2a / vms-c27: "
@@ -1698,6 +1831,9 @@ int main(void)
 
 	the_vax_departing_releases_its_locks();
 	a_departure_never_touches_a_local_lock();
+
+	e3ea_the_master_forgets_an_idle_resource();
+	e3ea_the_requester_forgets_a_released_master();
 
 	return ct_summary("test_dlm_mixed_master");
 }

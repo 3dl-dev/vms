@@ -1202,6 +1202,42 @@ static int dlm_dir_remove_fill(const struct vms_lock_resource *res,
     return 1;
 }
 
+/*
+ * rd vms-3ea: THE DIRECTORY-NODE TWIN OF THE REMOVAL ABOVE. When the freed root
+ * resource was mastered HERE and the vector names THIS node its directory, the
+ * entry is in this node's own table (dir_claim_self, at first use) and nothing
+ * goes on the wire -- but the entry must still go: left behind, it answers the
+ * next system's lookup "this node masters it", and the engine masters a
+ * resource nobody here holds. Same facts as dlm_dir_remove_fill, read off the
+ * block before it is freed. Caller holds vms_res_hash_lock; the op takes only
+ * its own leaf lock.
+ */
+static void dlm_dir_release_self(const struct vms_lock_resource *res)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    struct vms_dlm_dir_ask q;
+    uint32_t dir = 0;
+
+    if (res->master_csid == 0 || res->master_csid != vms_local_csid)
+        return;
+    if (!res->hash_known || res->name_len == 0u || res->parent != NULL)
+        return;
+    if (ops.dir_release_self == NULL || ops.dir_resolve == NULL)
+        return;
+    if (ops.dir_resolve(ops.ctx, res->dir_hash, &dir) != SS__NORMAL)
+        return;
+    if (dir != 0 && dir != vms_local_csid)
+        return;                 /* a remote directory: the DIR_REMOVE post */
+
+    memset(&q, 0, sizeof(q));
+    q.name = res->name;
+    q.name_len = res->name_len;
+    q.group = res->res_group;
+    q.mode = res->res_mode;
+    q.hash = res->dir_hash;
+    (void)ops.dir_release_self(ops.ctx, &q);
+}
+
 static void resource_release(struct vms_lock_resource *res)
 {
     int i, has_valblk = 0, dir_remove = 0;
@@ -1241,6 +1277,7 @@ static void resource_release(struct vms_lock_resource *res)
         if (!has_valblk && !(res->hash_known && !res->hash_computed)) {
             parent = res->parent;
             dir_remove = dlm_dir_remove_fill(res, &rm);
+            dlm_dir_release_self(res);
             exec_hash_del(&res->hash_node);
             vms_res_blocks--;
             resource_free(res);
@@ -1452,8 +1489,17 @@ static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash,
 {
     if (res->hash_known) {
         if (res->dir_hash == dir_hash) {
-            if (!computed)
-                res->hash_computed = 0;   /* now also confirmed by the wire */
+            /*
+             * The wire AGREES with the value already held. Nothing changes --
+             * in particular a COMPUTED value stays computed (rd vms-3ea). It
+             * is still re-derivable from the identity, so it is still no
+             * reason to keep an idle block (resource_release): flipping it to
+             * "learned" here made every resource a peer had echoed back to us
+             * immortal, and the immortal block kept its MASTER, so a later
+             * $ENQ went to a master that held nothing -- a resource no system
+             * holds has no master (Davis p. 6-31) -- and node B's MOUNT read
+             * node A's long-gone volume as still mounted.
+             */
             return SS__NORMAL;
         }
         if (computed)

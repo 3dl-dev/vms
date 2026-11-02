@@ -484,6 +484,19 @@ struct vms_dlm_requester_ops {
 	uint32_t (*dir_claim_self)(void *ctx, const struct vms_dlm_dir_ask *q);
 
 	/*
+	 * THIS NODE NO LONGER MASTERS A ROOT RESOURCE IT IS THE DIRECTORY FOR
+	 * (rd vms-3ea): drop the record dir_claim_self made. Called when the
+	 * resource block is freed -- the last lock on it is gone, so the master's
+	 * RSB is gone (Davis p. 6-31: a resource nobody holds has no master) --
+	 * and the vector names THIS node as the directory. The remote-directory
+	 * twin of this is the DIR_REMOVE post. Without it the stale claim answers
+	 * the next system's lookup "this node masters it" and the engine masters
+	 * a resource nobody here holds. Optional (NULL: no table to clean). Same
+	 * leaf-lock contract as dir_claim_self.
+	 */
+	uint32_t (*dir_release_self)(void *ctx, const struct vms_dlm_dir_ask *q);
+
+	/*
 	 * A QUEUE THIS NODE JUST ADVANCED FOR ANOTHER SYSTEM (rd vms-28bd).
 	 *
 	 * A release on THIS node -- a $DEQ, an image rundown, a $DEQALL sweep,

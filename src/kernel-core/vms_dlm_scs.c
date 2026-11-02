@@ -1039,6 +1039,8 @@ static uint32_t dlm_arm_eng_dir_local_lookup(void *ctx,
 					     struct vms_dlm_dir_local *out);
 static uint32_t dlm_arm_eng_dir_claim_self(void *ctx,
 					   const struct vms_dlm_dir_ask *q);
+static uint32_t dlm_arm_eng_dir_release_self(void *ctx,
+					     const struct vms_dlm_dir_ask *q);
 /* Defined with the fork-thread half it queues work for (rd vms-28bd). */
 static void dlm_arm_grant_advanced(void *ctx,
 				   const struct vms_dlm_grant_advance *g);
@@ -1062,6 +1064,7 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 	 * mean "no system masters it". */
 	d->eng_ops.dir_local_lookup = dlm_arm_eng_dir_local_lookup;
 	d->eng_ops.dir_claim_self   = dlm_arm_eng_dir_claim_self;
+	d->eng_ops.dir_release_self = dlm_arm_eng_dir_release_self;
 	/* rd vms-28bd: a LOCAL release that advances a cross-node queue. */
 	d->eng_ops.grant_advanced   = dlm_arm_grant_advanced;
 	d->eng_ops.ctx            = d;
@@ -1248,6 +1251,32 @@ static uint32_t dlm_arm_eng_dir_claim_self(void *ctx,
 	rc = vms_dlm_dir_claim_self(&d->dir, &id, (vms_csid_t)me);
 	exec_unlock(&d->dir_lock);
 	return rc == 0 ? (uint32_t)SS__NORMAL : (uint32_t)SS__INSFMEM;
+}
+
+/* THIS NODE NO LONGER MASTERS IT (rd vms-3ea) -- drop its own claim. Only an
+ * entry naming THIS node goes (vms_dlm_dir_remove matches the master), so an
+ * entry another system registered is never taken away by this call. */
+static uint32_t dlm_arm_eng_dir_release_self(void *ctx,
+					     const struct vms_dlm_dir_ask *q)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+	struct vms_dlm_res_ident id;
+	uint32_t me;
+	int rc;
+
+	if (d == NULL || q == NULL)
+		return SS__BADPARAM;
+	memset(&id, 0, sizeof(id));
+	if (dlm_arm_ask_to_ident(q, &id) != 0)
+		return SS__BADPARAM;
+	me = vms_lock_dlm_local_csid();
+	if (me == 0u)
+		return SS__UNSUPPORTED;
+
+	exec_lock(&d->dir_lock);
+	rc = vms_dlm_dir_remove(&d->dir, &id, (vms_csid_t)me);
+	exec_unlock(&d->dir_lock);
+	return rc == 0 ? (uint32_t)SS__NORMAL : (uint32_t)SS__IVLOCKID;
 }
 
 /* ==========================================================================

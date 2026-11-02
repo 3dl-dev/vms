@@ -146,7 +146,7 @@ echo "=== 5. IMGACT.EXE (elf32-vax, -DOVMX_IMGACT=ON, rd vms-73b2/vms-33b) ==="
 IMGACT_BUILD="$BUILD_DIR/imgact-cmake"
 cmake -S "$SRC" -B "$IMGACT_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$SRC/tools/cross-vax/toolchain-vax-netbsd.cmake" \
-    -DOVMX_IMGACT=ON -DOVMX_IMGACT_STEP_TRACE=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF >/dev/null
+    -DOVMX_IMGACT=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF >/dev/null
 cmake --build "$IMGACT_BUILD" --target imgact >/dev/null
 IMGACT=$(find "$IMGACT_BUILD" -name IMGACT.EXE | head -1)
 [ -n "$IMGACT" ] && [ -s "$IMGACT" ] || die "IMGACT.EXE(vax) did not build"

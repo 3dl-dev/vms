@@ -3263,27 +3263,40 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
          * jsb resolver`), or CALLS reads the jump opcode as a mask (0xFF17 —
          * reserved bits set -> reserved-operand fault). (vms-099)
          *
-         * Layout (8 bytes, within the 12-byte reserved PLT slot):
+         * The import-GOT cell holds the producer's PROCEDURE ADDRESS -- the
+         * address of the callee's own entry-mask word, the value any VAX
+         * procedure pointer carries (the same cell a GOT32 address-of reference
+         * to the import reads, so it cannot hold anything else). CALLS has
+         * already consumed the stub's mask and built the frame by the time the
+         * stub's next instruction runs, so the stub must transfer to the
+         * callee's FIRST INSTRUCTION, cell + 2. Jumping to the cell value
+         * itself executes the callee's mask word as an instruction (rd vms-d4a:
+         * purdy_s_hash's mask 0x07c0 decodes as `addl2 #7, @(sp)+`, a write
+         * through the frame's zero handler longword -> SIGSEGV).
+         *
+         * Layout (the whole 12-byte reserved PLT slot):
          *   +0: .word 0x0ffc      entry mask saving r2-r11 (calls-enterable;
          *                          a superset of any callee's own save set, so
          *                          the caller's registers are preserved across
          *                          the bound callee's RET)
-         *   +2: 0x17 0xFF <disp>  jmp *disp(pc) — opcode 0x17 (jmp), mode 0xFF
-         *                          (longword-displacement-DEFERRED, PC-relative:
-         *                          target = *(PC+disp)), 4-byte displacement.
-         * The memory operand IS the import-GOT cell (imp[i].got_va), read
-         * indirectly exactly like the x86_64 `jmp *disp32(%rip)` stub — IMGACT
-         * fills the cell from .vms$imp at activation (P4 runtime). VAX PC after
-         * the operand = plt_va + 8 (2 mask + 1 opcode + 1 mode + 4 disp), so
-         * disp = got_va-(plt_va+8), the PC-past-the-field bias every VAX
-         * PC-relative form uses. (vms-19b, vms-099) */
+         *   +2: D0 EF <disp32> 50 movl L^cell(pc), r0 -- r0 = the procedure
+         *                          address IMGACT stored from .vms$imp; PC after
+         *                          the disp field = plt_va + 8, so
+         *                          disp = got_va - (plt_va + 8). r0 is a scratch
+         *                          (function-value) register, never an argument
+         *                          (arguments are reached through AP).
+         *   +9: 17 A0 02          jmp B^2(r0) -- the callee's first instruction,
+         *                          past its entry mask. (vms-19b, vms-099, vms-d4a) */
         {
             uint8_t *stub = img + imp[i].plt_va;
             stub[0] = 0xFCu; stub[1] = 0x0Fu;   /* .word 0x0ffc  ; entry mask r2-r11 */
-            stub[2] = 0x17u; stub[3] = 0xFFu;   /* jmp *disp(pc)                     */
+            stub[2] = 0xD0u; stub[3] = 0xEFu;   /* movl L^disp(pc), ...              */
             int32_t d = (int32_t)((int64_t)imp[i].got_va -
                                   (int64_t)(imp[i].plt_va + 8));
             memcpy(stub + 4, &d, 4);
+            stub[8] = 0x50u;                    /* ... r0                            */
+            stub[9] = 0x17u; stub[10] = 0xA0u;  /* jmp B^disp(r0)                    */
+            stub[11] = 0x02u;                   /*     disp = 2: past the callee mask */
         }
 #else
         if (g_out_machine == EM_X86_64) {

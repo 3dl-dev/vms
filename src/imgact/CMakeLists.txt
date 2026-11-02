@@ -108,13 +108,6 @@ target_compile_options(imgact PRIVATE
     -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables
 )
 
-# rd vms-d4a DIAGNOSTIC: gate-private, default OFF -- one stderr line per
-# activation step (IMGACT_STEP in imgact.c). Never set for a shipped IMGACT.EXE.
-option(OVMX_IMGACT_STEP_TRACE "vms-d4a: IMGACT activation step trace (diagnostic)" OFF)
-if(OVMX_IMGACT_STEP_TRACE)
-    target_compile_definitions(imgact PRIVATE OVMX_IMGACT_STEP_TRACE=1)
-endif()
-
 # Freestanding static-PIE link: no libc, no crt, custom entry, self-relocating.
 # -shared yields ET_DYN (a position-independent image the kernel can load as
 # PT_INTERP); the globally injected --dynamic-linker/--hash-style flags are

@@ -86,6 +86,8 @@ LIBVMS_A="$(build_dep libvms "$LIBVMS" vms libvms.a)"
 LIBVMSLNM_A="$(build_dep vmslnm "$VMSLNM" vmslnm libvmslnm.a)"
 LIBVMSFS_A="$(build_dep vmsfs "$VMSFS" vmsfs libvmsfs.a)"
 LIBVMSRMS_A="$(build_dep vmsrms "$VMSRMS" vmsrms libvmsrms.a)"
+. "$(dirname "$0")/weak-seams.sh"   # rd vms-1f7: the LIBVMSRMS weak seams
+seam_flags 1>&2
 LIBVMSQUEUE_A="$(build_dep vmsqueue "$VMSQUEUE" vmsqueue libvmsqueue.a)"
 echo "dependency stack built:"
 echo "  $LIBVMSSYS_A"
@@ -113,6 +115,7 @@ echo "=== proof 2: link a real vax--netbsdelf JOB_CONTROL.EXE ==="
 # OVMX image on this substrate takes.
 "$CC" --sysroot="$SYSROOT" \
     "$OUT/ovmx_job_control.o" \
+    $SEAM_FLAGS \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
@@ -129,4 +132,5 @@ echo "$HDR" | grep -qiF 'Digital VAX' \
     || { echo "FAIL: JOB_CONTROL.EXE Machine is not Digital VAX"; exit 1; }
 
 echo
+seam_check "$OUT/JOB_CONTROL.EXE"
 echo "=== ALL PROOFS PASSED: ovmx_job_control (JOB_CONTROL.EXE) builds and links for $TARGET ==="

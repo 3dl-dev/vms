@@ -713,8 +713,8 @@ assert_cc1b() {
   [ "$found_ok" = 1 ] && okpat="^CC1B: TU [0-9]+/$ntu (%X00000001|FOUND) "
   tu_ok=$(tr -d '\r' < "$log" | grep -aE "$okpat" | awk '{print $3}' | sort -u | wc -l)
   tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "$okpat" || true)
-  tr -d '\r' < "$log" | grep -aqxE "CC1B: END FAILS=0 .*" && end_ok=1
-  tr -d '\r' < "$log" | grep -aqE "^CC1B: LINK %X[0-9A-F]*[13579BDF] " && link_ok=1
+  tr -d '\r' < "$log" | grep -axE "CC1B: END FAILS=0 .*" >/dev/null && end_ok=1
+  tr -d '\r' < "$log" | grep -aE "^CC1B: LINK %X[0-9A-F]*[13579BDF] " >/dev/null && link_ok=1
   [ "$(tr -d '\r' < "$log" | grep -acE '^CC1B: AR .* FAILS=0$')" -ge 1 ] && ar_ok=1
   grep -aqE 'CC1B-PROOF: CC1-STATUS=%X[0-9A-F]*[13579BDF] ' "$log" && c1_ok=1
   grep -aqE 'CC1B-PROOF: CC1O2-STATUS=%X[0-9A-F]*[13579BDF] ' "$log" && c2_ok=1
@@ -747,7 +747,7 @@ assert_cc1b_shard() {
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   tu_ok=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/$ntu %X00000001 " | awk '{print $3}' | sort -u | wc -l)
   tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "^CC1B: TU [0-9]+/$ntu %X00000001 " || true)
-  tr -d '\r' < "$log" | grep -aqxE "CC1B: END FAILS=0 .*" && end_ok=1
+  tr -d '\r' < "$log" | grep -axE "CC1B: END FAILS=0 .*" >/dev/null && end_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|ACCVIO|terminated abnormally|internal compiler error|signal 1[012]|signal [456]" "$log" 2>/dev/null || true)
   echo "  shard: compiles that succeeded : $tu_ok of $ntu ; failed or not run here : $tu_bad ; ended with no failure : $end_ok ; faults : $([ -n "$errs" ] && echo yes || echo none)"
   [ "$tu_ok" -eq "$ntu" ] && [ "$tu_bad" -eq 0 ] && [ "$end_ok" -eq 1 ] && [ -z "$errs" ]

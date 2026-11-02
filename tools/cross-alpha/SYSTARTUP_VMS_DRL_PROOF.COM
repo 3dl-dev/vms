@@ -104,6 +104,11 @@ $ WRITE SYS$OUTPUT "DRL-PROOF: DUMP3-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === RUN THE BUILT PROGRAM: RUN TWO.EXE ==="
 $ RUN VDA0:[SYSTMP]TWO.EXE
 $ WRITE SYS$OUTPUT "DRL-PROOF: TWO-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
+$! vms-465: a link with an undefined symbol (two_b, TWOB.O left out) FAILS -- LINK's
+$! %LINK-F-UNDEF reaches the driver's $STATUS as an error, never as success.
+$ WRITE SYS$OUTPUT "DRL-PROOF: === LINK WITH AN UNDEFINED SYMBOL ==="
+$ GCC -BSYS$SYSTEM: -L/SYS$SYSTEM -nostdinc -x c VDA0:[SYSTMP]TWOMAIN.C -o VDA0:[SYSTMP]UNDEF.EXE -x none VDA0:[SYSTMP]TWOA.O
+$ WRITE SYS$OUTPUT "DRL-PROOF: UNDEF-LINK-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $!
 $! vms-5b3: C++. GCC 14 is written in C++, so cc1 built on OVMX needs cc1plus and libstdc++
 $! here. The g++ driver (xg++, staged as GXX.EXE) runs CC1PLUS.EXE, as and ld.

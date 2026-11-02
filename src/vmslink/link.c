@@ -403,7 +403,7 @@ static void link_info(const char *fmt, ...)
 static void die(const char *msg)
 {
     fprintf(stderr, "%%LINK-F-ERROR, %s\n", msg);
-    exit(1);
+    exit(EXIT_FAILURE);
 }
 
 /* Section bucket: input sections are classified + merged by ELF flags, not by
@@ -515,7 +515,7 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
 
     if (o->size < sizeof(Elf_Ehdr) || memcmp(o->buf, ELFMAG, SELFMAG) != 0) {
         fprintf(stderr, "%%LINK-F-ERROR, %s: input is not ELF\n", name);
-        exit(1);
+        exit(EXIT_FAILURE);
     }
     o->eh = (Elf_Ehdr *)o->buf;
     if (o->eh->e_ident[EI_CLASS] != OVMX_ELFCLASS)
@@ -1714,7 +1714,7 @@ static void sym_insert(struct obj *objs, const char *name, int oi, int ki,
                         name,
                         first_obj  ? first_obj  : "<unknown>",
                         second_obj ? second_obj : "<unknown>");
-                exit(1);
+                exit(EXIT_FAILURE);
             }
             return;
         }
@@ -2199,7 +2199,7 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj,
     }
     fprintf(stderr, "%%LINK-F-ERROR, TLS symbol not defined in any input "
                     ".tdata/.tbss: %s\n", name);
-    exit(1);
+    exit(EXIT_FAILURE);
     return 0;
 }
 
@@ -3140,7 +3140,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                     if (gi < 0) {
                         fprintf(stderr, "%%LINK-F-ERROR, internal: local GOT slot "
                                 "missing for symbol '%s' (reloc type %u)\n", nm, type);
-                        exit(1);
+                        exit(EXIT_FAILURE);
                     }
                     patch_got(type, insn, site, got[gi].va, rl->add);
                 } else {
@@ -3153,7 +3153,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                         if (gi < 0) {
                             fprintf(stderr, "%%LINK-F-ERROR, internal: GOT slot "
                                     "missing for symbol '%s' (reloc type %u)\n", nm, type);
-                            exit(1);
+                            exit(EXIT_FAILURE);
                         }
                         patch_got(type, insn, site, got[gi].va, rl->add);
                     }
@@ -4093,7 +4093,7 @@ static void evax_fold_globalvalue(struct evax_input *in, int ii,
                 "'%s' — a globalvalue is an absolute data constant, not a "
                 "call/entry target\n",
                 r->type == EVAX_R_LINKAGE ? "LINKAGE" : "CODEADDR", r->sym);
-        exit(1);
+        exit(EXIT_FAILURE);
     default:
         die("unexpected relocation type folding a globalvalue");
     }
@@ -4275,7 +4275,7 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
             }
             fprintf(stderr, "%%LINK-F-UNDEF, EVAX: undefined symbol '%s' referenced "
                     "by %s\n", r->sym, in[ii].name);
-            exit(1);
+            exit(EXIT_FAILURE);
         }
         S = evax_sym_value_addr(in, di, ds);   /* procedure descriptor / value */
         code_S = evax_sym_code_addr(in, di, ds);
@@ -4496,7 +4496,7 @@ static void evax_check_muldef(struct evax_input *in, int nin)
                                 nm,
                                 first_obj  ? first_obj  : "<unknown>",
                                 second_obj ? second_obj : "<unknown>");
-                        exit(1);
+                        exit(EXIT_FAILURE);
                     }
                     break;                          /* same input: not a dup        */
                 }
@@ -4774,7 +4774,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                 fprintf(stderr, "%%LINK-F-NOUNIV, EVAX shareable: universal '%s' "
                         "names internal symbol '%s' defined by no input object\n",
                         uv[i].name, uv[i].internal);
-                exit(1);
+                exit(EXIT_FAILURE);
             }
             /* PROCEDURE: the universal's value is the PROCEDURE DESCRIPTOR
              * (PDSC) — VMS's real "value" of a procedure symbol on Alpha
@@ -5307,7 +5307,7 @@ static void load_archive_evax(const char *path, struct evax_input **ein,
             if (evax_read(mb, (size_t)msize, &slot->obj) != 0) {
                 fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n",
                         slot->name, evax_last_error());
-                exit(1);
+                exit(EXIT_FAILURE);
             }
             members++;
         }
@@ -5569,7 +5569,7 @@ int main(int argc, char **argv)
             slot->name = ins[i];
             if (evax_read(b, sz, &slot->obj) != 0) {
                 fprintf(stderr, "%%LINK-F-EVAX, %s: %s\n", ins[i], evax_last_error());
-                exit(1);
+                exit(EXIT_FAILURE);
             }
         }
         ein_after[nin] = nein;

@@ -319,7 +319,7 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-    if (argc < 3) { usage(); return 1; }
+    if (argc < 3) { usage(); return EXIT_FAILURE; }
 
     const char *op = argv[1];
     char *lib = argv[2];
@@ -340,12 +340,12 @@ int main(int argc, char **argv)
         const char *out = NULL;
         for (int i = 1; i + 1 < nrest; i++)
             if (strcmp(rest[i], "-o") == 0) out = rest[i + 1];
-        if (!mod) { fprintf(stderr, "%%LIBRAR-E-NOMOD, no module name given\n"); return 1; }
+        if (!mod) { fprintf(stderr, "%%LIBRAR-E-NOMOD, no module name given\n"); return EXIT_FAILURE; }
         st = cmd_extract(lib, mod, out);
     } else {
         usage();
-        return 1;
+        return EXIT_FAILURE;
     }
 
-    return $VMS_STATUS_SUCCESS(st) ? 0 : 1;
+    return $VMS_STATUS_SUCCESS(st) ? 0 : EXIT_FAILURE;
 }

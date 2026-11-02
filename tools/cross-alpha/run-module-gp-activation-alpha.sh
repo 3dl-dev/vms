@@ -623,6 +623,10 @@ assert_drl() {
   awk '/DRL-PROOF: === RUN THE BUILT PROGRAM/{f=1; next} /DRL-PROOF: TWO-STATUS=/{f=0} f' "$log" | tr -d '\r' \
     | grep -x 'two 7 16' >/dev/null && ran3=1
   grep -aqE 'DRL-PROOF: TWO-STATUS=%X00000001 SEVERITY=1' "$log" && st3_ok=1
+  # vms-465: a link with an undefined symbol fails -- LINK's %LINK-F-UNDEF reaches $STATUS as an error
+  local undef_ok=0
+  grep -aqE 'DRL-PROOF: UNDEF-LINK-STATUS=%X[0-9A-F]*[02468ACE] SEVERITY=[024]' "$log" \
+    && grep -aqiE "%LINK-F-UNDEF, EVAX: undefined symbol 'two_b'" "$log" && undef_ok=1
   # vms-5b3: C++ -- the native g++ (cc1plus) compiles, LINK links against libstdc++, it runs
   CMP_BEGIN="DRL-PROOF: === INDEPENDENT READER: DCL DUMP CXXHELLO.EXE ===" CMP_END="DRL-PROOF: DUMP4-STATUS=" \
     python3 -I "$HERE/cmp_obj_dump.py" "$log" "$r1d" "$r2d" && same4=1
@@ -644,9 +648,10 @@ assert_drl() {
   echo "  (c3) HELLO2 (system headers, default search): DUMP == cross driver image : same=$same2 ; RUN printed the line : $ran2 ; success status : $st2_ok"
   echo "  (c4) native build (GCC + AR foreign commands, library, link): DUMP == cross build image : same=$same3 ; RUN printed the line : $ran3 ; success status : $st3_ok"
   echo "  (c5) C++ (native g++ -> cc1plus, LINK against libstdc++): DUMP == cross g++ image : same=$same4 ; RUN printed the line : $ran4 ; success status : $st4_ok"
+  echo "  (c6) a link with an undefined symbol fails (%LINK-F-UNDEF, error \$STATUS) : ok=$undef_ok"
   echo "  (c6) cc1 source TU (gcc/c/c-lang.cc) compiled by the native g++: DUMP == cross g++ object : same=$same5 ; success status : $st5_ok"
   echo "  (d) no activation err : ok=$err_ok"
-  [ "$same5" -eq 1 ] && [ "$st5_ok" -eq 1 ] && [ "$fail_seen" -eq 1 ] && [ "$same4" -eq 1 ] && [ "$ran4" -eq 1 ] && [ "$st4_ok" -eq 1 ] && [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$same3" -eq 1 ] && [ "$ran3" -eq 1 ] && [ "$st3_ok" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$same5" -eq 1 ] && [ "$st5_ok" -eq 1 ] && [ "$undef_ok" -eq 1 ] && [ "$fail_seen" -eq 1 ] && [ "$same4" -eq 1 ] && [ "$ran4" -eq 1 ] && [ "$st4_ok" -eq 1 ] && [ "$drv_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$same" -eq 1 ] && [ "$ran" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$sys_ok" -eq 1 ] && [ "$same2" -eq 1 ] && [ "$same3" -eq 1 ] && [ "$ran3" -eq 1 ] && [ "$st3_ok" -eq 1 ] && [ "$ran2" -eq 1 ] && [ "$st2_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -2388,6 +2393,8 @@ PYEOF2
         && printf '%s\r\n' "DRL-PROOF: DUMP3-STATUS=%X00000001 SEVERITY=1" \
         "DRL-PROOF: === RUN THE BUILT PROGRAM: RUN TWO.EXE ===" "${12-two 7 16}" \
         "DRL-PROOF: TWO-STATUS=${13:-%X00000001} SEVERITY=1" \
+        "%LINK-F-UNDEF, EVAX: undefined symbol 'two_b' referenced by VDA0:[SYSTMP]TWOMAIN.O" \
+        "DRL-PROOF: UNDEF-LINK-STATUS=${20:-%X1035A00A} SEVERITY=${21:-2}" \
         "DRL-PROOF: === INDEPENDENT READER: DCL DUMP CXXHELLO.EXE ===" \
         && sed 's/$/\r/' "$_st/${14:-good}.dump" \
         && printf '%s\r\n' "DRL-PROOF: DUMP4-STATUS=%X00000001 SEVERITY=1" \
@@ -2427,8 +2434,9 @@ PYEOF2
     _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 1 bad > "$_st/diffobj5.log"
     _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 1 short > "$_st/shortobj5.log"
     _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 1 good %X1035A00A > "$_st/tufail5.log"
+    _p13 good "cxx ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1" %X00000001 1 good %X00000001 %X00000001 1 > "$_st/undefok.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:LD terminated abnormally (signal 11)'; } > "$_st/crash.log"
-    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "diffexe3:1" "noout3:1" "wrongout3:1" "badstatus3:1" "diffexe2:1" "noout2:1" "wrongout2:1" "badstatus2:1" "diffexe4:1" "shortexe4:1" "noout4:1" "nocatch4:1" "noctor4:1" "badstatus4:1" "failunseen:1" "diffobj5:1" "shortobj5:1" "tufail5:1" "crash:1"; do
+    for _c in "pass:0" "noxgcc:1" "badseam:1" "wrongout:1" "noout:1" "badstatus:1" "diffexe:1" "shortexe:1" "syszero:1" "sysbadok:1" "diffexe3:1" "noout3:1" "wrongout3:1" "badstatus3:1" "diffexe2:1" "noout2:1" "wrongout2:1" "badstatus2:1" "diffexe4:1" "shortexe4:1" "noout4:1" "nocatch4:1" "noctor4:1" "badstatus4:1" "failunseen:1" "diffobj5:1" "shortobj5:1" "tufail5:1" "undefok:1" "crash:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_drl "$_st/$_n.log" "$_st/r1.exe" "$_st/r2.exe" "$_st/r1b.exe" "$_st/r2b.exe" "$_st/r1c.exe" "$_st/r2c.exe" "$_st/r1d.exe" "$_st/r2d.exe" "$_st/r1e.obj" "$_st/r2e.obj" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  xgcclink selftest $_n: PASS"; else echo "  xgcclink selftest $_n: FAIL"; _fails=$((_fails+1)); fi

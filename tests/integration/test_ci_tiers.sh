@@ -133,6 +133,20 @@ awk '/^  vax-dcl-acceptance:/{f=1} f&&/^    if:/{print; exit}' "$ROOT/.github/wo
   | grep -q "github.event_name == 'merge_group' && needs.changes.outputs.vax_acceptance == 'true'" \
   && ok "ci-vax vax-dcl-acceptance runs in the queue on vax_acceptance" || bad "ci-vax vax-dcl-acceptance merge_group condition"
 
+# alpha_syssvc tier (ci-alpha alpha-syssvc-suite): the queue runs the Alpha sys$
+# API suite when its own harness changes (#1893 broke the harness's quoting and
+# the suite first ran on main).
+o=$(tier merge_group q tools/cross-alpha/run-syssvc-tests-alpha.sh)
+[ "$(get "$o" alpha_syssvc)" = true ] && ok "queue: a syssvc harness change runs the Alpha sys\$ suite (#1893)" || bad "alpha_syssvc harness"
+o=$(tier merge_group q tools/cross-alpha/alpha-syssvc-baseline.txt)
+[ "$(get "$o" alpha_syssvc)" = true ] && ok "queue: a baseline change runs the Alpha sys\$ suite" || bad "alpha_syssvc baseline"
+o=$(tier merge_group q docs/foo.md src/vmsdecnet/engine/decnetd.c)
+[ "$(get "$o" alpha_syssvc)" = false ] && ok "queue: an unrelated change does not run the Alpha sys\$ suite" || bad "alpha_syssvc unrelated"
+o=$(tier push refs/heads/main tools/cross-alpha/run-syssvc-tests-alpha.sh)
+[ "$(get "$o" alpha_syssvc)" = false ] && ok "alpha_syssvc tier is false on push (push always runs the suite)" || bad "alpha_syssvc push"
+o=$(tier schedule refs/heads/main docs/x.md)
+[ "$(get "$o" alpha_syssvc)" = true ] && ok "nightly sets alpha_syssvc" || bad "alpha_syssvc nightly"
+
 # keystroke / alpha selfhost area
 o=$(tier merge_group q src/kernel-core/vms_tt.c)
 [ "$(get "$o" keystroke)" = true ] && ok "queue: terminal driver change runs the keystroke oracle" || bad "keystroke area"

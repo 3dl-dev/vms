@@ -4726,13 +4726,50 @@ static int run_copy_transport_selftest(void)
  * is world-readable in /proc/<pid>/cmdline under a fork/exec activation -- so a
  * password embedded in the COPY spec's access string is REFUSED here (the
  * command line carries at most NODE"username"::spec), and the password is read
- * from the inherited fd named by --password-fd, never crossing a process
- * boundary in the clear.
+ * from the temporary mailbox named by --password-mbx (rd vms-ad71), never
+ * argv or a host fd.
  */
+/*
+ * copy_read_password_mbx (rd vms-ad71) - the FAL password, from the temporary
+ * mailbox DCL created and wrote it into (dcl_cmd_file.c dnet_password_mailbox):
+ * $ASSIGN the unit, one $QIOW IO$_READVBLK!IO$M_NOW, $DASSGN. Never a host fd.
+ * A trailing CR/LF is stripped. password must hold DNET_SC_MAX_STR+1.
+ */
+static uint32_t copy_read_password_mbx(const char *mbx, char *password)
+{
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    struct dsc$descriptor_s d;
+    d.dsc$w_length = (uint16_t)strlen(mbx);
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = (char *)mbx;
+    uint16_t ch = 0;
+    uint32_t st = sys$assign(&d, &ch, 0, NULL);
+    if (!(st & 1))
+        return st;
+    struct _iosb iosb;
+    memset(&iosb, 0, sizeof iosb);
+    st = sys$qiow(0, ch, IO$_READVBLK | IO$M_NOW, &iosb, NULL, 0,
+                  password, DNET_SC_MAX_STR, 0, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    (void)sys$dassgn(ch);
+    if (!(st & 1)) {
+        memset(password, 0, DNET_SC_MAX_STR + 1);
+        return st;
+    }
+    size_t n = iosb.iosb$w_bcnt <= DNET_SC_MAX_STR ? iosb.iosb$w_bcnt : DNET_SC_MAX_STR;
+    password[n] = '\0';
+    while (n && (password[n - 1] == '\n' || password[n - 1] == '\r'))
+        password[--n] = '\0';
+    return SS$_NORMAL;
+}
+
 /* Parse the COPY plan, ENFORCE the credential posture, and read the password
- * from the inherited fd (never argv). Shared by the standalone datalink client
+ * from the DCL-created mailbox (never argv, never a host fd). Shared by the standalone datalink client
  * and the NETACP-brokered _NET: client. password must hold DNET_SC_MAX_STR+1. */
-static int copy_prepare(const char *src, const char *dst, int password_fd,
+static int copy_prepare(const char *src, const char *dst, const char *password_mbx,
                         struct dnet_copy_plan *plan, char *password)
 {
     memset(password, 0, DNET_SC_MAX_STR + 1);
@@ -4748,12 +4785,12 @@ static int copy_prepare(const char *src, const char *dst, int password_fd,
         fprintf(stderr, "DECNETD-E-COPYPW, the FAL password must not appear on the"
                         " command line (it would be world-readable in"
                         " /proc/<pid>/cmdline); pass NODE\"username\"::file and"
-                        " supply the password on the fd named by --password-fd\n");
+                        " supply the password in the mailbox named by --password-mbx\n");
         return 1;
     }
-    if (plan->has_access && password_fd < 0) {
+    if (plan->has_access && !password_mbx) {
         fprintf(stderr, "DECNETD-E-COPYPW, an access-control username was given"
-                        " but no --password-fd; refusing (no password source)\n");
+                        " but no --password-mbx; refusing (no password source)\n");
         return 1;
     }
 
@@ -4769,30 +4806,27 @@ static int copy_prepare(const char *src, const char *dst, int password_fd,
      * OVMX is a CLEAN-ROOM FAITHFUL reproduction (Rule 8) and cannot encrypt what
      * the wire protocol defines as cleartext -- the same property the shipped
      * inbound FAL server (decnet$fal, --fal-accept-test) already has. OVMX's own
-     * hardening is orthogonal and present: the password never touches argv (fd
-     * handoff), is bounded, and is wiped immediately after the connect is built. */
-    if (plan->has_access && password_fd >= 0) {
-        ssize_t got = read(password_fd, password, DNET_SC_MAX_STR); // codeql[cpp/cleartext-transmission]
-        if (got < 0) {
+     * hardening is orthogonal and present: the password never touches argv or a host fd (mailbox
+     * handoff, rd vms-ad71), is bounded, and is wiped immediately after the connect is built. */
+    if (plan->has_access && password_mbx) {
+        uint32_t pst = copy_read_password_mbx(password_mbx, password); // codeql[cpp/cleartext-transmission]
+        if (!(pst & 1)) {
             fprintf(stderr, "DECNETD-E-COPYPW, could not read the password from"
-                            " fd %d: %s\n", password_fd, strerror(errno));
+                            " the mailbox %s (status %%X%08X)\n", password_mbx,
+                    (unsigned)pst);
             return 1;
         }
-        password[got >= 0 ? (size_t)got : 0] = '\0';
-        size_t pl = strlen(password);
-        while (pl && (password[pl - 1] == '\n' || password[pl - 1] == '\r'))
-            password[--pl] = '\0';
     }
 
     return 0;
 }
 
 static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
-                         const char *src, const char *dst, int password_fd)
+                         const char *src, const char *dst, const char *password_mbx)
 {
     struct dnet_copy_plan plan;
     char password[DNET_SC_MAX_STR + 1];
-    if (copy_prepare(src, dst, password_fd, &plan, password) != 0)
+    if (copy_prepare(src, dst, password_mbx, &plan, password) != 0)
         return 1;
 
     /* Resolve the remote node NAME -> area.node (the node database the SET HOST
@@ -5059,11 +5093,11 @@ static int netcli_assign(struct netcli *c)
 }
 
 /* $ COPY through NETACP (the booted runtime). */
-static int run_copy_net(const char *src, const char *dst, int password_fd)
+static int run_copy_net(const char *src, const char *dst, const char *password_mbx)
 {
     struct dnet_copy_plan plan;
     char password[DNET_SC_MAX_STR + 1];
-    if (copy_prepare(src, dst, password_fd, &plan, password) != 0)
+    if (copy_prepare(src, dst, password_mbx, &plan, password) != 0)
         return 1;
     struct netcli c;
     if (netcli_assign(&c) != 0) {
@@ -5098,7 +5132,7 @@ static int run_copy_net(const char *src, const char *dst, int password_fd)
  *
  * DCL activates DECNETD.EXE --directory SPEC or --type SPEC on the caller's
  * process (the same activation as --copy; the password arrives on
- * --password-fd, never argv). Each FAL link is its own _NET: channel: a VMS
+ * --password-mbx, never argv or a host fd). Each FAL link is its own _NET: channel: a VMS
  * TYPE lists on one link and opens on another, so the linker hands out up to
  * two at once. With no NETACP serving, the link cannot open and the command
  * says so in VMS's words (SEARCHFAIL ... -SYSTEM-F-DEVOFFLINE), never a
@@ -5158,7 +5192,7 @@ static void falverb_close(void *v, struct dnet_dap_transport *t)
     }
 }
 
-static int run_fal_verb_net(int verb, const char *arg, int password_fd)
+static int run_fal_verb_net(int verb, const char *arg, const char *password_mbx)
 {
     /* DIRECTORY NODE:: lists the remote default directory: an empty file
      * part is *.*;* (the splitter refuses an empty one). */
@@ -5177,7 +5211,7 @@ static int run_fal_verb_net(int verb, const char *arg, int password_fd)
      * is the terminal. The password never rides argv. */
     static struct dnet_copy_plan plan;
     char password[DNET_SC_MAX_STR + 1];
-    if (copy_prepare(spec, "SYS$OUTPUT:", password_fd, &plan, password) != 0)
+    if (copy_prepare(spec, "SYS$OUTPUT:", password_mbx, &plan, password) != 0)
         return 1;
     static struct dnet_nodespec ns;
     memset(&ns, 0, sizeof ns);
@@ -5442,12 +5476,13 @@ static void usage(const char *argv0)
         "                      is NODE\"username\"::file (the remote), the other is\n"
         "                      local. The FAL PASSWORD is NEVER taken here -- it is\n"
         "                      a real credential and must not sit in argv (world-\n"
-        "                      readable /proc); supply it on --password-fd. The\n"
+        "                      readable /proc); supply it via --password-mbx. The\n"
         "                      outbound datalink transport is build-host-gated.\n"
         "  --directory SPEC    $ DIRECTORY NODE\"user\"::spec through NETACP's _NET:\n"
         "  --type SPEC         $ TYPE NODE\"user\"::spec through NETACP's _NET:\n"
-        "  --password-fd N     with --copy: read the FAL access-control password\n"
-        "                      from inherited fd N (never from argv or the env)\n",
+        "  --password-mbx MBX  with --copy/--directory/--type: read the FAL password\n"
+        "                      as one message from mailbox MBX (DCL's temporary\n"
+        "                      mailbox; never argv, the env or a host fd)\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT,
         (unsigned)DNET_ROUTER_PRIORITY_DEFAULT);
 }
@@ -9120,7 +9155,7 @@ int main(int argc, char **argv)
     int copy_xport_test = 0;              /* --copy-transport-selftest : COPY client pump floor */
     const char *copy_src = NULL;          /* --copy <src> <dst> : outbound FAL COPY      */
     const char *copy_dst = NULL;
-    int copy_password_fd = -1;            /* --password-fd N : the FAL password source   */
+    const char *copy_password_mbx = NULL; /* --password-mbx DNET$PASSWORD_MBX : the FAL password source (rd vms-ad71) */
     int falverb = 0;                      /* --directory / --type (rd vms-6a4)           */
     const char *falverb_spec = NULL;      /* ... NODE"user"::spec                        */
     int router_mode = 0;           /* --router: emit router-hellos, advertise L1 router */
@@ -9177,8 +9212,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--type") && i + 1 < argc) {
             falverb = DNET_FAL_VERB_TYPE; falverb_spec = argv[++i];
         }
-        else if (!strcmp(argv[i], "--password-fd") && i + 1 < argc)
-            copy_password_fd = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--password-mbx") && i + 1 < argc)
+            copy_password_mbx = argv[++i];
         else if (!strcmp(argv[i], "--router")) router_mode = 1;
         else if (!strcmp(argv[i], "--priority") && i + 1 < argc)
             router_priority = atoi(argv[++i]);
@@ -9233,7 +9268,7 @@ int main(int argc, char **argv)
     /* $ DIRECTORY / $ TYPE node:: are NETACP _NET: clients only; with no
      * NETACP the link open reports it in VMS's words (run_fal_verb_net). */
     if (falverb)
-        return run_fal_verb_net(falverb, falverb_spec, copy_password_fd);
+        return run_fal_verb_net(falverb, falverb_spec, copy_password_mbx);
     /* --copy (run_copy_loop) needs the live datalink; dispatched after the socket
      * is opened, beside the --set-host client (below). */
 
@@ -9256,7 +9291,7 @@ int main(int argc, char **argv)
         int nr = netacp_running();
         if (nr == 1 && !ifname_explicit) {
             if (copy_src)
-                return run_copy_net(copy_src, copy_dst, copy_password_fd);
+                return run_copy_net(copy_src, copy_dst, copy_password_mbx);
             struct netcli c;
             if (netcli_assign(&c) != 0)
                 return 1;
@@ -9622,7 +9657,7 @@ int main(int argc, char **argv)
      * to the routing/inbound loop below. */
     if (copy_src) {
         int r = run_copy_loop(&eng, sock, ifindex, copy_src, copy_dst,
-                              copy_password_fd);
+                              copy_password_mbx);
         scs_datalink_close(sock);
         return r;
     }

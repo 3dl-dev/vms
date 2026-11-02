@@ -278,6 +278,21 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     if has 'DCL-E-ABORT' || printf '%s\n' "$seg" | grep -vF 'TYPE 0"SYSTEM WRONGPW"' | grep >/dev/null -F 'WRONGPW'; then rc=1; else rc=0; fi
     record "NEGCTL boot 2: ... no image line, and the password is never echoed back in a message" "$rc"
 
+    # rd vms-ad71: DCL hands the password to DECNETD in a temporary VMS mailbox
+    # (no host pipe). DIRECTORY/TYPE above already prove it reaches FAL; COPY
+    # node:: is the third verb on the same path: the remote record lands in a
+    # local file through RMS, and a wrong password is refused, nothing copied.
+    run_seg 'COPY 0"SYSTEM MANAGER"::SYS$SYSROOT:[SYSMGR]NETLB_SRC.TXT SYS$SYSROOT:[SYSMGR]AD71_GOT.TXT' "$LOG2" '$ ' 120
+    run_seg 'TYPE SYS$SYSROOT:[SYSMGR]AD71_GOT.TXT' "$LOG2" 'local loopback' 30
+    if printf '%s\n' "$seg" | grep >/dev/null -xF 'NETACP-brokered _NET: COPY over the local loopback'; then rc=0; else rc=1; fi
+    record "boot 2: COPY 0\"SYSTEM MANAGER\"::file local -- the mailbox-carried password reaches FAL and the record is copied (vms-ad71)" "$rc"
+    run_seg 'COPY 0"SYSTEM WRONGPW"::SYS$SYSROOT:[SYSMGR]NETLB_SRC.TXT SYS$SYSROOT:[SYSMGR]AD71_BAD.TXT' "$LOG2" 'INVLOGIN' 120
+    if has 'INVLOGIN' && ! printf '%s\n' "$seg" | grep -vF 'COPY 0"SYSTEM WRONGPW"' | grep >/dev/null -F 'WRONGPW'; then rc=0; else rc=1; fi
+    record "boot 2: COPY with a bad password is refused INVLOGIN, the password never echoed (vms-ad71)" "$rc"
+    run_seg 'DIRECTORY SYS$SYSROOT:[SYSMGR]AD71_BAD.TXT' "$LOG2" '$ ' 30
+    if has 'AD71_BAD.TXT;'; then rc=1; else rc=0; fi
+    record "NEGCTL boot 2: ... and the refused COPY created no local file" "$rc"
+
     # (d) NCP SHOW + SHOW NETWORK read the RUNNING NETACP (rd vms-30e).
     send 'NCP :== $SYS$SYSTEM:NCP.EXE'; sleep 1
     run_seg 'NCP SHOW EXECUTOR' "$LOG2" 'Identification' 30

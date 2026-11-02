@@ -35,6 +35,8 @@
 #include "starlet.h"
 #include "ossdef.h"
 #include "descrip.h"
+#include "iodef.h"           /* rd vms-ad71: the password mailbox $QIO */
+#include "iosbdef.h"
 
 /* Directory entry for sorting in DIRECTORY command */
 struct dir_entry {
@@ -2279,6 +2281,59 @@ static int copy_spec_has_node(const char *s)
 }
 
 /*
+ * THE DECnet PASSWORD TRAVELS IN A VMS MAILBOX (rd vms-ad71). DCL strips the
+ * access-control password from a node"user password":: spec so it never
+ * appears in the image's argv. It used to hand it over a host pipe(2) whose fd
+ * number DECNETD.EXE inherited -- a credential on a Linux descriptor. Now DCL
+ * creates a TEMPORARY mailbox ($CREMBX, protection S:RWLP,O:RWLP,G,W -- only
+ * this process's owner and SYSTEM may assign it) under the job logical name
+ * DNET$PASSWORD_MBX, writes the password into it as one message ($QIOW
+ * IO$_WRITEVBLK!IO$M_NOW), and names it to DECNETD.EXE (--password-mbx), which $ASSIGNs it and reads the one
+ * message with $QIOW. DCL deassigns its channel when the image is done; a
+ * temporary mailbox goes away with its last channel.
+ *
+ * Returns SS$_NORMAL with *chan and unit[] filled, or the failing status (no
+ * executive -> no mailbox -> the caller refuses: there is no fallback that
+ * would put the password anywhere else).
+ */
+#define DNET_PW_MBX_PROT 0xFF00u    /* deny GROUP and WORLD every access */
+
+static uint32_t dnet_password_mailbox(const char *pw, uint16_t *chan,
+                                      char *unit, size_t unitsz)
+{
+    /* The mailbox is reached by its LOGICAL NAME ($CREMBX lognam: defined in
+     * LNM$TEMPORARY_MAILBOX, the job's table), which DECNETD.EXE -- this
+     * job's image -- $ASSIGNs; DCL runs one node:: command at a time. */
+    static const char lognam[] = "DNET$PASSWORD_MBX";
+    size_t pl = strlen(pw);
+    *chan = 0;
+    unit[0] = '\0';
+    if (sizeof lognam > unitsz)
+        return SS$_BADPARAM;
+    struct dsc$descriptor_s ld;
+    ld.dsc$w_length = (uint16_t)(sizeof lognam - 1);
+    ld.dsc$b_dtype = DSC$K_DTYPE_T;
+    ld.dsc$b_class = DSC$K_CLASS_S;
+    ld.dsc$a_pointer = (char *)lognam;
+    uint32_t st = sys$crembx(0, chan, 128, 256, DNET_PW_MBX_PROT, 0, &ld, 0, NULL);
+    if (!(st & 1))
+        return st;
+    struct _iosb iosb;
+    memset(&iosb, 0, sizeof iosb);
+    st = sys$qiow(0, *chan, IO$_WRITEVBLK | IO$M_NOW, &iosb, NULL, 0,
+                  (void *)pw, (uint32_t)pl, 0, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    if (!(st & 1)) {
+        sys$dassgn(*chan);
+        *chan = 0;
+        return st;
+    }
+    memcpy(unit, lognam, sizeof lognam);
+    return SS$_NORMAL;
+}
+
+/*
  * copy_dnet_split_access - strip the FAL access-control PASSWORD out of a COPY
  * spec so it never reaches the client's argv (world-readable in
  * /proc/<pid>/cmdline). NODE"user password [account]"::rest becomes
@@ -2376,21 +2431,17 @@ static int copy_dnet_activate(struct dcl_context *ctx, const char *src, const ch
     }
     const char *pw = src_pw[0] ? src_pw : (dst_pw[0] ? dst_pw : "");
 
-    int pfd[2] = { -1, -1 };
-    char fdbuf[16] = "";
+    uint16_t pwchan = 0;
+    char pwmbx[66] = "";
     if (pw[0]) {
-        if (pipe(pfd) != 0) {
-            printf("%%COPY-F-NETPIPE, could not set up the DECnet password channel\n");
-            return SS$_ABORT;
+        uint32_t mst = dnet_password_mailbox(pw, &pwchan, pwmbx, sizeof pwmbx);
+        if (!(mst & 1)) {
+            memset(src_pw, 0, sizeof src_pw);
+            memset(dst_pw, 0, sizeof dst_pw);
+            printf("%%COPY-F-NETPWMBX, could not create the DECnet password mailbox"
+                   " (status %%X%08X)\n", (unsigned)mst);
+            return mst;
         }
-        size_t pl = strlen(pw);
-        if (write(pfd[1], pw, pl) != (ssize_t)pl) {
-            close(pfd[0]); close(pfd[1]);
-            printf("%%COPY-F-NETPIPE, could not pass the DECnet password\n");
-            return SS$_ABORT;
-        }
-        close(pfd[1]);                 /* EOF follows the password */
-        snprintf(fdbuf, sizeof(fdbuf), "%d", pfd[0]);
     }
 
     char *argv[8];
@@ -2399,15 +2450,15 @@ static int copy_dnet_activate(struct dcl_context *ctx, const char *src, const ch
     argv[argc++] = "--copy";
     argv[argc++] = src_clean;
     argv[argc++] = dst_clean;
-    if (fdbuf[0]) {
-        argv[argc++] = "--password-fd";
-        argv[argc++] = fdbuf;
+    if (pwmbx[0]) {
+        argv[argc++] = "--password-mbx";
+        argv[argc++] = pwmbx;
     }
     argv[argc] = NULL;
 
     int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
 
-    if (pfd[0] >= 0) close(pfd[0]);
+    if (pwchan) sys$dassgn(pwchan);
     memset(src_pw, 0, sizeof src_pw);   /* wipe the password copies */
     memset(dst_pw, 0, sizeof dst_pw);
     return rc;
@@ -2418,8 +2469,8 @@ static int copy_dnet_activate(struct dcl_context *ctx, const char *src, const ch
  * `$ TYPE node::spec`. As for COPY, DCL activates SYS$SYSTEM:DECNETD.EXE on
  * this process (--directory / --type), which lists or reads the remote file
  * through the remote FAL (object 17) over NETACP's _NET: links and prints what
- * VMS prints. The password is stripped from the spec and handed over an
- * inherited pipe fd, never argv. `fac` is the command's message facility.
+ * VMS prints. The password is stripped from the spec and handed over a
+ * temporary mailbox (dnet_password_mailbox), never argv or a host fd. `fac` is the command's message facility.
  */
 static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *cmd,
                                   const char *mode, const char *fac)
@@ -2445,23 +2496,16 @@ static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *c
     char clean[1024], pw[128];
     copy_dnet_split_access(cmd->params[0], clean, sizeof(clean), pw, sizeof(pw));
 
-    int pfd[2] = { -1, -1 };
-    char fdbuf[16] = "";
+    uint16_t pwchan = 0;
+    char pwmbx[66] = "";
     if (pw[0]) {
-        if (pipe(pfd) != 0) {
+        uint32_t mst = dnet_password_mailbox(pw, &pwchan, pwmbx, sizeof pwmbx);
+        if (!(mst & 1)) {
             memset(pw, 0, sizeof pw);
-            printf("%%%s-F-NETPIPE, could not set up the DECnet password channel\n", fac);
-            return SS$_ABORT;
+            printf("%%%s-F-NETPWMBX, could not create the DECnet password mailbox"
+                   " (status %%X%08X)\n", fac, (unsigned)mst);
+            return mst;
         }
-        size_t pl = strlen(pw);
-        if (write(pfd[1], pw, pl) != (ssize_t)pl) {
-            close(pfd[0]); close(pfd[1]);
-            memset(pw, 0, sizeof pw);
-            printf("%%%s-F-NETPIPE, could not pass the DECnet password\n", fac);
-            return SS$_ABORT;
-        }
-        close(pfd[1]);
-        snprintf(fdbuf, sizeof(fdbuf), "%d", pfd[0]);
     }
     memset(pw, 0, sizeof pw);
 
@@ -2470,13 +2514,13 @@ static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *c
     argv[argc++] = linux_path;
     argv[argc++] = (char *)mode;
     argv[argc++] = clean;
-    if (fdbuf[0]) {
-        argv[argc++] = "--password-fd";
-        argv[argc++] = fdbuf;
+    if (pwmbx[0]) {
+        argv[argc++] = "--password-mbx";
+        argv[argc++] = pwmbx;
     }
     argv[argc] = NULL;
     int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
-    if (pfd[0] >= 0) close(pfd[0]);
+    if (pwchan) sys$dassgn(pwchan);
     return rc;
 }
 

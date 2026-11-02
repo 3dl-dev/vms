@@ -45,6 +45,8 @@ struct dcl_context {
                              * "EXIT"); "CONTINUE" means resume past the error */
         char params[8][256]; /* P1-P8 parameters */
         int  is_subroutine;  /* 1 = this level is a CALLed SUBROUTINE block */
+        long sub_start;      /* is_subroutine: file offset of the block's first
+                              * body line -- the scope its labels live in */
         int  gosub_base;     /* gosub_depth on entry: RETURN below this ends
                               * the level (subroutine/procedure), not a GOSUB */
     } proc_stack[DCL_MAX_NEST];

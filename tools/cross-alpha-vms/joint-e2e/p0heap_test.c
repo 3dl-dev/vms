@@ -86,13 +86,35 @@ int main(int argc, char **argv)
     check(m, 3u << 20, "mmap");
     if (m && !fill_ok(m, 3u << 20, 0x33)) mmap_ok = 0;
 
+    /* rd vms-465: a short-lived 1 MB mapping and a long-lived 64 KB one, 1200
+     * times over (about 1.2 GB of placements, more than P0 holds), then one
+     * 160 MB request. First fit reuses the freed range low and keeps the live
+     * blocks packed, so the top of P0 stays contiguous; the old next-fit cursor
+     * spread the live blocks over all of P0 (a hole every ~1 MB) and the large
+     * request failed -- GCC's cc1plus out of memory on gimple-match-8. */
+    int frag_ok = 1;
+    static void *keep[1200];
+    for (int i = 0; i < 1200; i++) {
+        void *t = mmap(0, 1u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        keep[i] = mmap(0, 64u << 10, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (t == MAP_FAILED || keep[i] == MAP_FAILED) { frag_ok = 0; if (keep[i] == MAP_FAILED) keep[i] = 0; }
+        else check(keep[i], 64u << 10, "keep");
+        if (t != MAP_FAILED) munmap(t, 1u << 20);
+    }
+    void *huge = mmap(0, 160u << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (huge == MAP_FAILED) { huge = 0; frag_ok = 0; }
+    check(huge, 160u << 20, "huge");
+    if (huge && !fill_ok(huge, 160u << 20, 0x55)) frag_ok = 0;
+    if (huge) munmap(huge, 160u << 20);
+    for (int i = 0; i < 1200; i++) if (keep[i]) munmap(keep[i], 64u << 10);
+
     for (int i = 0; i < 2000; i++) free(blk[i]);
     for (int i = 0; i < 4; i++) free(lg[i]);
     free(r);
     if (m) munmap(m, 3u << 20);
 
-    int ok = !bad && small_ok && large_ok && realloc_ok && mmap_ok;
-    printf("OVMX p0heap test: small=%d large=%d realloc=%d mmap=%d maxaddr=%#llx inP0=%d argc=%d\n",
-            small_ok, large_ok, realloc_ok, mmap_ok, maxaddr, bad == 0, argc);
+    int ok = !bad && small_ok && large_ok && realloc_ok && mmap_ok && frag_ok;
+    printf("OVMX p0heap test: small=%d large=%d realloc=%d mmap=%d frag=%d maxaddr=%#llx inP0=%d argc=%d\n",
+            small_ok, large_ok, realloc_ok, mmap_ok, frag_ok, maxaddr, bad == 0, argc);
     return ok ? 7 : 3;
 }

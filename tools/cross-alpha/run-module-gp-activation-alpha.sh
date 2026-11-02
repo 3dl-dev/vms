@@ -357,7 +357,7 @@ assert_p0heap() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
-  port_ok=$(grep -qaE 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x[0-3]?[0-9a-f]{1,7} inP0=1 ' "$log" && echo 1 || echo 0)
+  port_ok=$(grep -qaE 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 frag=1 maxaddr=0x[0-3]?[0-9a-f]{1,7} inP0=1 ' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
   if [ -n "$mile_hex" ]; then
@@ -1598,18 +1598,22 @@ EOF
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     _st=$(mktemp -d); _fails=0
-    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x9c10000 inP0=1 argc=1' \
+    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 frag=1 maxaddr=0x9c10000 inP0=1 argc=1' \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
-    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x20006010000 inP0=0 argc=1' \
+    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 frag=1 maxaddr=0x20006010000 inP0=0 argc=1' \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/high.log"
     printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
       'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
-    echo "-- p0heap selftest 1/3: every heap path inside P0 must PASS --"
+    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 frag=0 maxaddr=0x3ff10000 inP0=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/frag.log"
+    echo "-- p0heap selftest 1/4: every heap path inside P0 must PASS --"
     if assert_p0heap "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
-    echo "-- p0heap selftest 2/3: a heap above 4 GB (the substrate default) must FAIL --"
+    echo "-- p0heap selftest 2/4: a heap above 4 GB (the substrate default) must FAIL --"
     if assert_p0heap "$_st/high.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
-    echo "-- p0heap selftest 3/3: a crash must FAIL --"
+    echo "-- p0heap selftest 3/4: a crash must FAIL --"
     if assert_p0heap "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- p0heap selftest 4/4: a large request refused in a fragmented P0 (rd vms-465) must FAIL --"
+    if assert_p0heap "$_st/frag.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
     rm -rf "$_st"
     [ "$_fails" -eq 0 ] || die "p0heap selftest failed -- assert_p0heap cannot be trusted"
     echo ""

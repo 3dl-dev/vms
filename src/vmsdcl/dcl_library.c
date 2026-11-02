@@ -1022,20 +1022,22 @@ static int olb_insert_files(struct dcl_context *ctx, struct dcl_command *cmd,
                             int first, struct olb_member **members,
                             uint32_t *count, uint32_t *cap)
 {
-    for (int i = first; i < cmd->param_count; i++) {
+    /* the whole input list, past P8 included (rd vms-465) */
+    for (int i = first; i < dcl_param_total(cmd); i++) {
+        const char *in = dcl_param_at(cmd, i);
         size_t len = 0;
-        unsigned char *data = olb_file_read(ctx, cmd->params[i], &len);
+        unsigned char *data = olb_file_read(ctx, in, &len);
         if (!data) {
             dcl_error("LIBRARIAN", 2, "OPENIN",
-                      "error opening object file - %s", cmd->params[i]);
+                      "error opening object file - %s", in);
             return SS$_NOSUCHFILE;
         }
         char name[OLB_NAME_MAX + 1];
-        olb_module_name(cmd->params[i], name, sizeof name);
+        olb_module_name(in, name, sizeof name);
         if (name[0] == '\0') {
             free(data);
             dcl_error("LIBRARIAN", 2, "BADNAME",
-                      "cannot derive module name - %s", cmd->params[i]);
+                      "cannot derive module name - %s", in);
             return SS$_BADPARAM;
         }
 
@@ -1261,6 +1263,14 @@ static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
 /* Route an OBJECT-library (.OLB) LIBRARY command to the ar-container handlers. */
 static int olb_dispatch(struct dcl_context *ctx, struct dcl_command *cmd)
 {
+    /* Only an insert/replace/create takes an input list past P8 (rd vms-465). */
+    if (cmd->overflow_count > 0 &&
+        (dcl_has_qualifier(cmd, "DELETE") || dcl_has_qualifier(cmd, "EXTRACT") ||
+         dcl_has_qualifier(cmd, "LIST"))) {
+        dcl_error("DCL", 0, "MAXPARM",
+                  "too many parameters - reenter command with fewer parameters");
+        return CLI$_MAXPARM;
+    }
     if (dcl_has_qualifier(cmd, "CREATE"))  return olb_create(ctx, cmd);
     if (dcl_has_qualifier(cmd, "DELETE"))  return olb_delete_cmd(ctx, cmd);
     if (dcl_has_qualifier(cmd, "EXTRACT")) return olb_extract_cmd(ctx, cmd);
@@ -1333,6 +1343,13 @@ int cmd_library(struct dcl_command *cmd)
     if (cmd->param_count >= 1 &&
         lbr_get_type(cmd, cmd->params[0]) == LBR_TYPE_OBJECT) {
         return olb_dispatch(ctx, cmd);
+    }
+
+    /* TEXT/HELP libraries take no list past P8 (rd vms-465). */
+    if (cmd->overflow_count > 0) {
+        dcl_error("DCL", 0, "MAXPARM",
+                  "too many parameters - reenter command with fewer parameters");
+        return CLI$_MAXPARM;
     }
 
     /* HELP libraries (.HLB, or /HELP) compile a numbered-level .HLP source into

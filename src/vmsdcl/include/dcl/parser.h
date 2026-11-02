@@ -47,11 +47,24 @@ struct dcl_command {
                                             * command's argv without disturbing
                                             * the `rest` consumers (SPAWN, PIPE,
                                             * assignments). vms-615. */
+    /* rd vms-465: list elements past P8 (a comma list longer than the eight
+     * parameter slots, e.g. LIBRARY lib a,b,c,... from GCC's ar), NUL-separated
+     * in order. A built-in that takes a list reads them through dcl_param_total
+     * / dcl_param_at; every other built-in answers %DCL-W-MAXPARM rather than
+     * silently dropping them. overflow_lost: one did not fit (also MAXPARM). */
+    char overflow[DCL_MAX_LINE];
+    int  overflow_count;
+    int  overflow_len;
+    int  overflow_lost;
     uint32_t parse_status;                 /* rd vms-0b0: a parameter error the
                                             * parser found (CLI$_PARMDEL for a '^'
                                             * under PARSE_STYLE=TRADITIONAL),
                                             * reported when a built-in verb runs */
 };
+
+/* All positional parameters including list elements past P8 (rd vms-465). */
+int dcl_param_total(const struct dcl_command *cmd);
+const char *dcl_param_at(const struct dcl_command *cmd, int i);
 
 /* Parse a DCL command line into a command structure */
 int dcl_parse_line(const char *line, struct dcl_command *cmd);

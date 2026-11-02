@@ -1345,6 +1345,23 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
  * Execute a parsed DCL command line.
  * This is the main dispatch function.
  */
+/* rd vms-465: the built-ins that take a parameter list longer than P1-P8 whole. */
+static int dcl_verb_takes_long_list(const char *verb, const struct dcl_command *cmd)
+{
+    static const char *const whole[] = { "LIBRARY", "WRITE", "READ", "LINK", "PIPE" };
+    for (size_t i = 0; i < sizeof whole / sizeof whole[0]; i++)
+        if (strcmp(verb, whole[i]) == 0)
+            return 1;
+    if (strcmp(verb, "SET") == 0 && cmd->param_count >= 1) {
+        static const char *const set_tail[] = { "ACL", "PROTECTION", "TERMINAL" };
+        size_t n = strlen(cmd->params[0]);
+        for (size_t i = 0; n >= 3 && i < sizeof set_tail / sizeof set_tail[0]; i++)
+            if (n <= strlen(set_tail[i]) && strncasecmp(cmd->params[0], set_tail[i], n) == 0)
+                return 1;
+    }
+    return 0;
+}
+
 int dcl_execute_command(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -1680,6 +1697,19 @@ int dcl_execute_command(struct dcl_command *cmd)
                       "invalid parameter delimiter - check use of special characters\n \\^\\");
             dcl_set_status(ctx, (int)cmd->parse_status);
             return (int)cmd->parse_status;
+        }
+        /* rd vms-465: more parameters than P1-P8 hold. A built-in that reads
+         * them from params[] would run on a silently shortened list, so it
+         * answers %DCL-W-MAXPARM instead -- except LIBRARY (its input list
+         * through dcl_param_at) and the verbs that parse their own raw command
+         * tail and never saw the cut (WRITE, READ, LINK, PIPE, SET ACL /
+         * PROTECTION / TERMINAL). */
+        if ((cmd->overflow_count > 0 || cmd->overflow_lost) &&
+            (cmd->overflow_lost || !dcl_verb_takes_long_list(verb->name, cmd))) {
+            dcl_error("DCL", 0, "MAXPARM",
+                      "too many parameters - reenter command with fewer parameters");
+            dcl_set_status(ctx, CLI$_MAXPARM);
+            return CLI$_MAXPARM;
         }
         int qstatus = (verb->flags & CDU_F_COMMANDS) ? SS$_NORMAL
                                                      : dcl_validate_qualifiers(verb, cmd);

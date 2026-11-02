@@ -334,6 +334,9 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cp /work/tests/ods2_sysvol.img /work/d3.img
     cp /work/tests/ods2_imgact.img /work/d4.img
     cp /work/tests/ods5_real.img   /work/d5.img
+    # rd vms-3ea: a SECOND copy of the OVMXSEARCH volume on DKA600: -- the
+    # same-label unit test_syssvc_acp_volalrmnt's $MOUNT must refuse.
+    cp /work/tests/ods2_search.img /work/d6.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="
     # NO NIC: on clipper, a virtio-net-pci alongside the 5 virtio-blk fixture
@@ -352,12 +355,14 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
         -drive file=/work/d3.img,format=raw,if=none,id=d3 \
         -drive file=/work/d4.img,format=raw,if=none,id=d4 \
         -drive file=/work/d5.img,format=raw,if=none,id=d5 \
+        -drive file=/work/d6.img,format=raw,if=none,id=d6 \
         -device virtio-blk-pci,drive=d0,addr=0x3.0x0,multifunction=on \
         -device virtio-blk-pci,drive=d1,addr=0x3.0x1 \
         -device virtio-blk-pci,drive=d2,addr=0x3.0x2 \
         -device virtio-blk-pci,drive=d3,addr=0x3.0x3 \
         -device virtio-blk-pci,drive=d4,addr=0x3.0x4 \
         -device virtio-blk-pci,drive=d5,addr=0x3.0x5 \
+        -device virtio-blk-pci,drive=d6,addr=0x3.0x6 \
         2>&1 | tee /work/syssvc-boot.raw \
         | grep -avE "TSUNAMI machine check|tsunami_(read|write)" || true
     grep -avE "TSUNAMI machine check|tsunami_(read|write)" /work/syssvc-boot.raw > /work/syssvc-boot.log || true

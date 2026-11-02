@@ -440,8 +440,16 @@ static void arm_bindings(void)
 	    "and the diagnostic projection carries how many of the vector's "
 	    "entries are this node's (CNXTRACE dirvec_own=)");
 
-	has("if (dlm_arm_dir_name_held(id)) {",
-	    "a name THIS node holds locks on is never answered 'you master it'");
+	has("if (dlm_arm_dir_name_held(id) && !dlm_arm_dir_name_orphaned(d, req, id)) {",
+	    "a name THIS node holds locks on is never answered 'you master it' "
+	    "-- unless the master its proxies name has LEFT (rd vms-874f)");
+	/* rd vms-874f: that exception is exactly the failover rebuild's ROOT,
+	 * and only while the master our proxies name is no member. */
+	has("if (req->opcode != (uint8_t)VMS_DLM_WIREOP_REBUILD_REC)\n\t\treturn 0;",
+	    "... the exception is an op-0x08 rebuild record and nothing else");
+	has("if (master == vms_lock_dlm_local_csid() || dlm_arm_is_member(d, master))\n\t\treturn 0;",
+	    "... whose proxies name a master that is neither this node nor a "
+	    "member of the cluster");
 	has("o = dlm_arm_dir_ask(d, id, req->from_csid, &master);",
 	    "the outcome comes from this node's own directory entries");
 	has("vms_dlm_dir_lookup(&d->dir, id, from,",

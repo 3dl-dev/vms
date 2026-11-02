@@ -318,7 +318,10 @@ static void fk_log(void *ctx, const char *msg)
 static const struct vms_dlm_rm_ops g_ops_template = {
 	&g_f, fk_members, fk_open, fk_lock, fk_end, fk_abort, fk_tree_of_lkid,
 	fk_reported, fk_mastered, fk_hash, fk_dir_node, fk_stage, fk_send,
-	fk_residue, fk_valblk, fk_log, NULL, NULL, NULL
+	fk_residue, fk_valblk, fk_log, NULL, NULL, NULL,
+	/* rd vms-874f: the rebuild doors, unbound here too (test_dlm_rebuild
+	 * binds them). */
+	NULL, NULL, NULL, NULL, NULL
 };
 
 static struct vms_dlm_rm_ops g_ops;

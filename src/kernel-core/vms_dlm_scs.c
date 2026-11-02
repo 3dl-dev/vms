@@ -272,6 +272,9 @@ struct vms_dlm_scs {
 	uint32_t dir_tr_lookups;      /* op-0x08 barrier lookups answered     */
 	uint32_t dir_tr_redirect_held;/* op-0x08 whose answer would redirect: */
 				       /* that shape is unobserved, not sent   */
+	uint32_t dir_rb_orphan_answered; /* rd vms-874f: an op-0x08 ROOT for */
+				       /* a name we hold whose master LEFT,    */
+				       /* answered from the table              */
 
 	/*
 	 * THE MIXED-CLUSTER MASTER ROLE (rd vms-025 / vms-db2a). Every one of
@@ -2262,6 +2265,56 @@ static int dlm_arm_dir_serve_as_master(struct vms_dlm_scs *d,
 	return 0;
 }
 
+/* The CLUB's own answer to "is this system a member other than us" -- the
+ * same read the remaster table's `other_members` door makes. */
+static uint32_t dlm_arm_rm_other_members(void *ctx, uint32_t *csids,
+					 uint32_t max);
+
+static int dlm_arm_is_member(struct vms_dlm_scs *d, uint32_t csid)
+{
+	uint32_t csids[VMS_DLM_RM_MEMBERS];
+	uint32_t n, i;
+
+	if (csid == 0u)
+		return 0;
+	n = dlm_arm_rm_other_members(d, csids, VMS_DLM_RM_MEMBERS);
+	for (i = 0u; i < n && i < VMS_DLM_RM_MEMBERS; i++) {
+		if (csids[i] == csid)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * A FAILOVER REBUILD'S ROOT for a tree this node holds locks in and whose
+ * MASTER HAS LEFT (rd vms-874f). The "held, not mastered" refusal below exists
+ * because "you master it" would make a second master -- but here there is no
+ * first one: our proxies name a system that is no longer a member. RA1b's
+ * VAX3, the directory of RMT1 and a holder in it, answered VAX2's ROOT 0xf9
+ * from its table and then sent its own record to VAX2. So an op-0x08 for such a
+ * name is answered from the table, as any directory answers it.
+ */
+static int dlm_arm_dir_name_orphaned(struct vms_dlm_scs *d,
+				     const struct dlm_scs_request *req,
+				     const struct vms_dlm_res_ident *id)
+{
+	char nm[VMS_DLM_NAME_MAX + 1u];
+	uint32_t i, master = 0u;
+
+	if (req->opcode != (uint8_t)VMS_DLM_WIREOP_REBUILD_REC)
+		return 0;
+	for (i = 0u; i < id->name_len && i < VMS_DLM_NAME_MAX; i++)
+		nm[i] = (char)id->name[i];
+	nm[i] = '\0';
+	if (i == 0u || !vms_lock_dlm_name_proxy_master(nm, i, id->group,
+						       id->mode, &master))
+		return 0;
+	if (master == vms_lock_dlm_local_csid() || dlm_arm_is_member(d, master))
+		return 0;
+	d->dir_rb_orphan_answered++;
+	return 1;
+}
+
 static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			      const struct dlm_scs_request *req,
 			      const struct vms_dlm_res_ident *id,
@@ -2287,7 +2340,7 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 		return -1;
 	}
 
-	if (dlm_arm_dir_name_held(id)) {
+	if (dlm_arm_dir_name_held(id) && !dlm_arm_dir_name_orphaned(d, req, id)) {
 		/*
 		 * We hold locks on the name but do NOT master it: some other
 		 * system is the master, so "you master it" would be false and a
@@ -2397,6 +2450,15 @@ static int dlm_arm_directory(struct vms_dlm_scs *d,
 		return -1;
 	if (req->peer_is_ours && !dlm_arm_dir_takes_ours(d, req, &id))
 		return -1;
+	/* rd vms-874f: an op-0x08 SUB record names a sub-resource, never a root
+	 * a directory directs. It is the new master's to take, or nobody's. */
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR) {
+		struct vms_dlm_rm_lock_rec w;
+
+		if (vms_dlm_rb_rec_parse_body(req->body, req->len, &w) ==
+		    VMS_CODEC_OK && !w.is_root)
+			return -1;
+	}
 	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_ENQ ||
 	    req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR)
 		return dlm_arm_dir_lookup(d, req, &id, reply);
@@ -2664,6 +2726,68 @@ static int dlm_arm_ho_valblk(void *ctx, const struct vms_dlm_adopt_valblk *v)
 	return vms_lock_dlm_handover_valblk(v) == SS__NORMAL ? 1 : 0;
 }
 
+/*
+ * THE FAILOVER REBUILD'S DOORS (rd vms-874f) -- each one read of, or one write
+ * to, something that already exists: the CLUB's vector and transition flag,
+ * the engine's orphaned trees and its install of a survivor's lock, and this
+ * node's own directory table.
+ */
+static int dlm_arm_rb_ready(void *ctx)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (d == NULL || d->cl == NULL)
+		return 0;
+	return d->cl->club.ldwv.valid && !d->cl->club.transition_active;
+}
+
+static int dlm_arm_rb_tree_next(void *ctx, uint32_t departed_csid,
+				const struct vms_dlm_adopt_tree *skip,
+				uint32_t n_skip, struct vms_dlm_adopt_tree *out)
+{
+	(void)ctx;
+	return vms_lock_dlm_rebuild_tree_next(departed_csid, skip, n_skip, out);
+}
+
+static int dlm_arm_rb_dir_entry(void *ctx, const struct vms_dlm_res_ident *id,
+				uint32_t *master)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+	enum vms_dlm_dir_ident_outcome o;
+	vms_csid_t m = 0u;
+
+	if (d == NULL || id == NULL || master == NULL)
+		return 0;
+	exec_lock(&d->dir_lock);
+	o = vms_dlm_dir_lookup_ident(&d->dir, id, &m, NULL, NULL);
+	exec_unlock(&d->dir_lock);
+	if (o != VMS_DLM_DIR_IDENT_MASTER)
+		return 0;
+	*master = (uint32_t)m;
+	return (m == (vms_csid_t)vms_lock_dlm_local_csid()) ? 2 : 1;
+}
+
+static int dlm_arm_rb_dir_claim(void *ctx, const struct vms_dlm_res_ident *id)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+	uint32_t me = vms_lock_dlm_local_csid();
+	int rc;
+
+	if (d == NULL || id == NULL || me == 0u)
+		return 0;
+	exec_lock(&d->dir_lock);
+	rc = vms_dlm_dir_claim_self(&d->dir, id, (vms_csid_t)me);
+	exec_unlock(&d->dir_lock);
+	return rc == 0 ? 1 : 0;
+}
+
+static int dlm_arm_rb_install(void *ctx, const struct vms_dlm_adopt_lock_rec *r,
+			      struct vms_dlm_adopt_lock_result *out)
+{
+	(void)ctx;
+	return vms_lock_dlm_rebuild_lock(r, out) == SS__NORMAL ? 1 : 0;
+}
+
 static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 {
 	d->rm_ops.ctx                = d;
@@ -2685,6 +2809,11 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.ho_next            = dlm_arm_ho_next;
 	d->rm_ops.ho_rehome          = dlm_arm_ho_rehome;
 	d->rm_ops.ho_valblk          = dlm_arm_ho_valblk;
+	d->rm_ops.rb_ready           = dlm_arm_rb_ready;
+	d->rm_ops.rb_tree_next       = dlm_arm_rb_tree_next;
+	d->rm_ops.rb_dir_entry       = dlm_arm_rb_dir_entry;
+	d->rm_ops.rb_dir_claim       = dlm_arm_rb_dir_claim;
+	d->rm_ops.rb_install         = dlm_arm_rb_install;
 	vms_dlm_rm_init(&d->rm, &d->rm_ops);
 }
 
@@ -2838,6 +2967,39 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 				 req->len))
 		return 0;
 
+	/* ...AND THE ANSWER TO ONE OF OUR op-0x08 FAILOVER REBUILD RECORDS
+	 * (rd vms-874f): told apart the same way, by the record's destination
+	 * and the lock whose record is out. */
+	if (vms_dlm_rm_rb_answer(&d->rm, (uint32_t)req->from_csid,
+				 req->category, req->opcode, req->body,
+				 req->len))
+		return 0;
+
+	/*
+	 * A SURVIVOR'S op-0x08 REBUILD RECORD (rd vms-874f), when THIS node is
+	 * the tree's new master: a ROOT for a tree it came to master by a
+	 * rebuild, or a SUB under a lock it already holds for that survivor,
+	 * installed by the engine and answered 0xfa off the LKB it created. A
+	 * ROOT for any other tree is NOT_MINE and goes to the directory role
+	 * below, exactly as before; a SUB is never a directory lookup.
+	 */
+	if (req->category == (uint8_t)VMS_DLM_CAT_REQUEST &&
+	    req->opcode == (uint8_t)VMS_DLM_WIREOP_REBUILD_REC &&
+	    !req->peer_is_ours) {
+		enum vms_dlm_rm_status rb;
+
+		d->rm_req = req;
+		d->rm_reply = reply;
+		rb = vms_dlm_rm_rb_record(&d->rm, (uint32_t)req->from_csid,
+					  req->body, req->len);
+		d->rm_req = NULL;
+		d->rm_reply = NULL;
+		if (rb == VMS_DLM_RM_HANDLED)
+			return 0;
+		if (rb == VMS_DLM_RM_REFUSED)
+			return -1;
+	}
+
 	/* The 82/15 answer to an op-0x14 THIS node sent. Matched against a tree
 	 * this node really announced to that system; nothing is emitted. */
 	if (vms_dlm_rm_held_ack(&d->rm, (uint32_t)req->from_csid,
@@ -2968,6 +3130,9 @@ static void dlm_arm_transition_begin(void *ctx,
 	 * structural, not remembered. Counted so a transcript shows the boundary.
 	 */
 	d->transitions_begun++;
+	/* rd vms-874f: trees this node mastered by an EARLIER rebuild stop
+	 * admitting survivors' ROOT records. */
+	vms_dlm_rm_rb_transition_begin(&d->rm);
 }
 
 /*
@@ -3063,6 +3228,9 @@ static void dlm_arm_transition_end(void *ctx,
 	 * ordinary beat can send.
 	 */
 	(void)dlm_req_fsm_transition_ended(&d->req);
+	/* ...AND THE FAILOVER REBUILD (rd vms-874f): the directory resolves
+	 * again, so the trees of ours whose master left are taken up now. */
+	vms_dlm_rm_rb_kick(&d->rm);
 }
 
 static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)
@@ -3210,6 +3378,9 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 			return;   /* an identity this layer never armed */
 		dlm_arm_sync_local_csid(d);
 		(void)dlm_req_fsm_tick(&d->req);
+		/* rd vms-874f: a rebuild that was waiting for a directory, or
+		 * for a slot, is taken up on the beat too (idempotent). */
+		vms_dlm_rm_rb_kick(&d->rm);
 		dlm_arm_arm_beat(d);
 		return;
 	}
@@ -3491,6 +3662,13 @@ static void dlm_arm_project_remaster(const struct vms_dlm_scs *d,
 				   d->rm.ho_records_unsent +
 				   d->rm.ho_answers_refused +
 				   d->rm.ho_ends_unsent + d->rm.ho_departed;
+	/* THE FAILOVER REBUILD (rd vms-874f). The installs are the ENGINE's
+	 * count, read from it, beside the table's: two projections of one fact. */
+	out->rm_rb_records_sent  = d->rm.rb_records_sent;
+	out->rm_rb_answers       = d->rm.rb_answers;
+	out->rm_rb_mastered      = d->rm.rb_mastered;
+	out->rm_rb_installed     = vms_lock_dlm_rebuild_installed();
+	out->rm_rb_stopped       = vms_dlm_rm_rb_stopped(&d->rm);
 }
 
 int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)

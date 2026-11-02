@@ -245,6 +245,7 @@ static uint32_t         vms_dlm_adopt_valblks_n;
  * while this node was a holder. Guarded by vms_dlm_adopt_lock_g. */
 static uint32_t         vms_dlm_handover_rehomed_n;
 static uint32_t         vms_dlm_handover_valblks_n;
+static uint32_t         vms_dlm_rebuild_installed_n;   /* rd vms-874f */
 /*
  * How many PROXY POSTS were refused because THIS node masters the resource
  * (rd vms-3ac -- the INVLOCKID bugcheck a real V7.3 node took on a release
@@ -312,6 +313,7 @@ int vms_lock_init(void)
     vms_dlm_adopt_valblks_n = 0u;
     vms_dlm_handover_rehomed_n = 0u;
     vms_dlm_handover_valblks_n = 0u;
+    vms_dlm_rebuild_installed_n = 0u;
     /* ...and the posts refused because this node masters the resource
      * (rd vms-3ac): also "since this executive started". */
     vms_dlm_proxy_self_mastered_n = 0u;
@@ -5476,7 +5478,10 @@ uint32_t vms_lock_dlm_handover_rehome(uint32_t holder_lkid,
              * (rd vms-b67a) must name the parent's NEW handle too. */
             if (have_parent)
                 lock->parent_master_lkid = parent_handle;
-            if (res->master_csid == old_master_csid)
+            /* ...and the resource's own master: the old one, or NONE -- a
+             * departure sweep (vms_lock_dlm_member_departed) cleared it, and
+             * the failover rebuild (rd vms-874f) is what names the new one. */
+            if (res->master_csid == old_master_csid || res->master_csid == 0u)
                 res->master_csid = new_master_csid;
             st = SS__NORMAL;
         }
@@ -5547,6 +5552,249 @@ uint32_t vms_lock_dlm_handover_valblks(void)
 
     exec_lock(&vms_dlm_adopt_lock_g);
     n = vms_dlm_handover_valblks_n;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return n;
+}
+
+/* ================================================================
+ * THE FAILOVER REBUILD (rd vms-874f) -- the contract is vms_dlm_adopt.h
+ * ================================================================
+ *
+ * A tree's master LEFT the cluster. vms_lock_dlm_member_departed kept every
+ * GRANTED proxy of ours that named it (dlm_proxies_master_departed: "preserved
+ * for the rebuild") and cleared the resource's master. These are the engine's
+ * three reads and one write for what follows: which trees of ours are
+ * orphaned, which master our proxies on a root name, and -- on the side that
+ * becomes the tree's new master -- installing a surviving holder's lock from
+ * its op-0x08 record. Describing our own locks and re-homing them is the
+ * hand-over's _next/_rehome above, unchanged: an op-0x08 record carries the
+ * op-0x12 record's cells.
+ */
+
+/* A ROOT resource carrying a GRANTED proxy of ours that names `csid` as its
+ * master with that master's handle on it. Caller holds res->lock. */
+static int dlm_rebuild_res_orphaned(const struct vms_lock_resource *res,
+                                    uint32_t csid)
+{
+    const struct vms_lock_entry *l;
+
+    if (res->parent != NULL)
+        return 0;
+    exec_list_for_each_entry(l, &res->proxies, res_proxy) {
+        if (!l->waiting && l->master_csid == csid &&
+            l->master_lkid != VMS_DLM_LKID_UNSET)
+            return 1;
+    }
+    return 0;
+}
+
+static int dlm_rebuild_skipped(const struct vms_lock_resource *res,
+                               const struct vms_dlm_adopt_tree *skip,
+                               uint32_t n_skip)
+{
+    uint32_t i;
+
+    for (i = 0u; skip != NULL && i < n_skip; i++) {
+        if (res->res_group == skip[i].res_group &&
+            res->res_mode == skip[i].res_mode &&
+            res_name_is(res, skip[i].resnam, adopt_tree_name_len(&skip[i])))
+            return 1;
+    }
+    return 0;
+}
+
+int vms_lock_dlm_rebuild_tree_next(uint32_t departed_csid,
+                                   const struct vms_dlm_adopt_tree *skip,
+                                   uint32_t n_skip,
+                                   struct vms_dlm_adopt_tree *out)
+{
+    struct vms_lock_resource *res;
+    int bkt, found = 0;
+
+    if (out == NULL || departed_csid == 0u)
+        return 0;
+    memset(out, 0, sizeof(*out));
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        if (res->parent != NULL || dlm_rebuild_skipped(res, skip, n_skip))
+            continue;
+        exec_lock(&res->lock);
+        if (dlm_rebuild_res_orphaned(res, departed_csid) &&
+            res->name_len >= 1u && res->name_len <= sizeof(out->resnam)) {
+            memcpy(out->resnam, res->name, res->name_len);
+            out->resnam_len = (uint8_t)res->name_len;
+            out->res_group = res->res_group;
+            out->res_mode = res->res_mode;
+            out->ident_valid = 1u;
+            out->old_master_csid = departed_csid;
+            found = 1;
+        }
+        exec_unlock(&res->lock);
+        if (found)
+            break;
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+int vms_lock_dlm_name_proxy_master(const char *resnam, uint32_t resnam_len,
+                                   uint16_t group, uint8_t mode,
+                                   uint32_t *out_csid)
+{
+    struct res_key k;
+    struct vms_lock_resource *res;
+    int found = 0;
+
+    if (resnam == NULL || out_csid == NULL)
+        return 0;
+    k = res_key_counted(resnam, resnam_len, group, mode);
+    if (!res_name_len_ok(k.name_len))
+        return 0;
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find_key(&k);
+    if (res != NULL) {
+        const struct vms_lock_entry *l;
+
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(l, &res->proxies, res_proxy) {
+            if (!l->waiting && l->master_csid != 0u) {
+                *out_csid = l->master_csid;
+                found = 1;
+                break;
+            }
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+/* A rebuild record this executive can install. Unlike a remaster record an
+ * all-NL lock IS one (330 of 338 real op-0x08 SUB records are NL/NL): it is a
+ * real lock a real holder holds. */
+static int dlm_rebuild_rec_ok(const struct vms_dlm_adopt_lock_rec *r)
+{
+    if (r == NULL || !r->ident_valid)
+        return 0;
+    if (!res_name_len_ok(adopt_rec_name_len(r)))
+        return 0;
+    if (r->holder_csid == 0u || r->holder_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    if (r->granted_mode > LCK_K_EXMODE || r->requested_mode > LCK_K_EXMODE)
+        return 0;
+    return 1;
+}
+
+uint32_t vms_lock_dlm_rebuild_lock(const struct vms_dlm_adopt_lock_rec *r,
+                                   struct vms_dlm_adopt_lock_result *out)
+{
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *lock, *dup, *plock = NULL;
+    struct vms_proc *proc;
+    struct res_key k;
+    uint32_t parent_lkid = 0u;
+    int ok;
+
+    if (out == NULL)
+        return SS__BADPARAM;
+    memset(out, 0, sizeof(*out));
+    if (!dlm_rebuild_rec_ok(r))
+        return SS__BADPARAM;
+    if (vms_local_csid == 0u)
+        return SS__UNSUPPORTED;
+    proc = dlm_delivery_proc_get();
+    if (proc == NULL)
+        return SS__UNSUPPORTED;
+
+    k.name = r->resnam;
+    k.name_len = adopt_rec_name_len(r);
+    k.group = r->res_group;
+    k.mode = r->res_mode;
+    if (r->parent_master_lkid == VMS_DLM_LKID_UNSET) {
+        /* A ROOT: the resource must already exist here and be MASTERED here
+         * -- a rebuild record never creates a tree this node does not hold. */
+        k.parent = NULL;
+        exec_lock(&vms_res_hash_lock);
+        res = resource_find_key(&k);
+        ok = 0;
+        if (res != NULL) {
+            exec_lock(&res->lock);
+            ok = res->master_csid != 0u && dlm_master_is_us(res);
+            exec_unlock(&res->lock);
+        }
+        exec_unlock(&vms_res_hash_lock);
+        if (!ok)
+            return SS__IVLOCKID;
+    } else {
+        /* A SUB: its parent must be a MASTER-SIDE lock this engine holds FOR
+         * THE SAME HOLDER (its own handle, answered moments ago), on a
+         * resource this node masters. Looked up, never trusted. */
+        plock = lock_find_by_id(r->parent_master_lkid);
+        if (plock == NULL)
+            return SS__IVLOCKID;
+        ok = !plock->proxy && plock->req_csid == r->holder_csid &&
+             plock->resource != NULL;
+        if (ok) {
+            exec_lock(&plock->resource->lock);
+            ok = plock->resource->master_csid != 0u &&
+                 dlm_master_is_us(plock->resource);
+            exec_unlock(&plock->resource->lock);
+        }
+        if (!ok) {
+            lock_put(plock);
+            return SS__IVLOCKID;
+        }
+        parent_lkid = plock->lkid;
+        k.parent = plock->resource;
+    }
+    res = resource_find_or_create_key(&k);     /* may sleep; +1 reference */
+    if (plock != NULL)
+        lock_put(plock);
+    if (res == NULL)
+        return SS__INSFMEM;
+
+    lock = dlm_adopt_alloc_lkb(r, 0u, parent_lkid, proc);  /* may sleep */
+    if (lock == NULL) {
+        resource_release(res);
+        return SS__INSFMEM;
+    }
+
+    exec_lock(&res->lock);
+    dup = dlm_adopt_dup_locked(res, r);
+    /* NEVER A SECOND INCOMPATIBLE GRANT. The holder held this lock under the
+     * departed master, so it was compatible THERE; this node may have granted
+     * since (it mastered the tree first). A lock that no longer fits is NOT
+     * installed and NOT answered -- the double grant of rd vms-5cd is worse
+     * than the holder's wait. */
+    ok = dup != NULL ||
+         (granted_queue_compatible(res, r->granted_mode, NULL) &&
+          held_proxies_compatible(res, r->granted_mode, NULL));
+    exec_unlock(&res->lock);
+    if (dup != NULL) {
+        dlm_adopt_fill_result(dup, res, 1u, out);
+        lock_entry_free(lock);
+        resource_release(res);
+        return SS__NORMAL;
+    }
+    if (!ok) {
+        lock_entry_free(lock);
+        resource_release(res);
+        return SS__UNSUPPORTED;
+    }
+    dlm_adopt_link_lkb(res, lock, r);
+    dlm_adopt_fill_result(lock, res, 0u, out);
+    exec_lock(&vms_dlm_adopt_lock_g);
+    vms_dlm_rebuild_installed_n++;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return SS__NORMAL;
+}
+
+uint32_t vms_lock_dlm_rebuild_installed(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    n = vms_dlm_rebuild_installed_n;
     exec_unlock(&vms_dlm_adopt_lock_g);
     return n;
 }

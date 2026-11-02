@@ -8,12 +8,7 @@
  *   ALLOCATE OPA0: while another process holds it
  *                      -> "%SYSTEM-W-DEVALLOC, device already allocated to another
  *                         user" (section 7.2).
- * The name echoed is the device's FULL name (rd vms-1f7): VMS prints _VAX1$OPA0: on a
- * standalone node as on a clustered one (docs/oracle/vax73-device-full-name.md), so
- * OVMX's is "_" + the executive's full name -- "_<SCSNODE>$OPA0:" once STARTUP has
- * loaded SCSNODE, "_OPA0:" on an executive that has none to prefix. The test reads
- * the expected node from the executive ($GETSYI SYI$_SCSNODE's source) and checks
- * the composition itself, so neither form passes for the other.
+ * OVMX names the device without a node prefix (its $ALLOC physical name is "_OPA0:").
  * A logical-name parameter becomes a process logical name for the physical name;
  * DEALLOCATE gives the device back silently, and DEALLOCATE of a device this process
  * has not allocated is $DALLOC's SS$_DEVNOTALLOC.
@@ -31,9 +26,6 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
-
-/* src/libvms/syssvc/sys_misc.c: the SCSNODE the executive booted with. */
-int ovmx_booted_scsnode(char *out, size_t out_len);
 
 #define EXIT_SKIP 77
 #define DCL_PATH "/bin/DCL.EXE"
@@ -98,21 +90,6 @@ int main(void)
         return 1;
     }
 
-    /* 0. The executive's full name for OPA0: is <SCSNODE>$OPA0: (DEV$M_NNM). */
-    char node[16] = "", full[64], alloc_line[96], lnm_line[80];
-    struct vms_devinfo di;
-    memset(&di, 0, sizeof di);
-    CHECK(vms_kif_getdvi_devnam("OPA0:", &di) & 1, "$GETDVI reaches the executive's OPA0: row");
-    di.fulldevnam[VMS_FULLDEVNAM_SIZE - 1] = '\0';
-    if (!(ovmx_booted_scsnode(node, sizeof node) && node[0]))
-        node[0] = '\0';
-    snprintf(full, sizeof full, "%s%s%s", node, node[0] ? "$" : "", "OPA0:");
-    printf("  executive SCSNODE '%s', OPA0: full name '%s'\n", node, di.fulldevnam);
-    CHECK(strcmp(di.fulldevnam, full) == 0,
-          "the executive's full name for OPA0: is <SCSNODE>$OPA0: (bare OPA0: only with no SCSNODE loaded)");
-    snprintf(alloc_line, sizeof alloc_line, "%%DCL-I-ALLOC, _%s allocated", full);
-    snprintf(lnm_line, sizeof lnm_line, "LNM=_%s", full);
-
     /* 1. Allocate, see it, name it, give it back. */
     CHECK(run_dcl("ALLOCATE OPA0: ALLOCTERM\n"
                   "SHOW DEVICE OPA0:\n"
@@ -122,13 +99,13 @@ int main(void)
                   "SHOW DEVICE OPA0:\n", out, sizeof out) == 0,
           "DCL ran the ALLOCATE / DEALLOCATE probe");
     printf("  ---- ALLOCATE probe ----\n%s  ---- end ----\n", out);
-    CHECK(strstr(out, alloc_line) != NULL,
-          "ALLOCATE OPA0: reports %DCL-I-ALLOC, _<full name> allocated");
+    CHECK(strstr(out, "%DCL-I-ALLOC, _OPA0: allocated") != NULL,
+          "ALLOCATE OPA0: reports %DCL-I-ALLOC, _OPA0: allocated");
     /* negctl: dcl-allocate-skips-alloc */
     CHECK(strstr(out, "Online alloc") != NULL,
           "SHOW DEVICE then reads Online alloc (the executive holds the allocation)");
-    CHECK(strstr(out, lnm_line) != NULL,
-          "the logical-name parameter names the device by its full name");
+    CHECK(strstr(out, "LNM=_OPA0:") != NULL,
+          "the logical-name parameter names the physical device (_OPA0:)");
     {
         const char *after = strstr(out, "--AFTER--");
         /* negctl: dcl-deallocate-skips-dalloc */

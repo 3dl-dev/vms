@@ -1049,16 +1049,12 @@ run_dcl_acceptance_battery() {
     # full pipeline (model/MP-state/CPU-list are machine-varying values, masked; the
     # labelled structure MATCHes the oracle; DCL-Dictionary-pinned format):
     golden_diff        vax-show-cpu
-    # vms-1f7: SHOW PROCESS -- Terminal/Base priority/Devices allocated from the
-    # executive, the device named <SCSNODE>$OPA0: as standalone VAX V7.3 names it
-    # (docs/oracle/vax73-device-full-name.md). Graduated on PR #1908's run, which
-    # reported "now MATCHes the golden -- READY TO GRADUATE".
-    golden_diff        vax-show-process
     # NOT-yet-faithful (report-only) -- real structural gaps found by round-3's diff,
     # each routed to its fidelity item; graduates to the hard-gate list on the fix:
     golden_diff_report vax-show-memory  HOLLOW  vms-352   # missing Dynamic Memory + Paging File sections (OVMX has pool+pagefile)
     golden_diff_report vax-show-system  HOLLOW  vms-6b8e  # SHOW SYSTEM omits the State/Pri/I/O columns
     golden_diff_report vax-show-device  MISSING vms-ddc   # %SYSTEM-W-NOSUCHDEV (device-name model, ties vms-9f5)
+    golden_diff_report vax-show-process HOLLOW  vms-1f7   # omits Terminal/Base priority/Devices allocated; UIC not resolved to [SYSTEM]
 
     # =======================================================================
     # DECnet CTERM (vms-f40) -- an inbound $ SET HOST reaches an AUTHENTICATED

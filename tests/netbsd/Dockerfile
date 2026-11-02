@@ -113,7 +113,6 @@ COPY src/kernel-core/vms_lnm.c /netbsd/guest-src/kernel-core/vms_lnm.c
 # shared source the Linux vms.ko builds; listed in the Makefile SRCS, so the
 # in-guest module build needs it staged (the four-enumeration rule).
 COPY src/kernel-core/vms_devtab.c /netbsd/guest-src/kernel-core/vms_devtab.c
-COPY src/kernel-core/vms_devtab_fullnam.h /netbsd/guest-src/kernel-core/vms_devtab_fullnam.h
 COPY src/kernel-netbsd/vms_devtab_nb.h /netbsd/guest-src/kmod/vms_devtab_nb.h
 COPY src/kernel-core/vms_tt.c /netbsd/guest-src/kernel-core/vms_tt.c
 COPY src/kernel-core/vms_tt.h /netbsd/guest-src/kernel-core/vms_tt.h

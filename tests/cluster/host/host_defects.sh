@@ -755,6 +755,20 @@ the sub-lock's request was posted
 the posted name is the sub-resource's own
 body[30] is the sub-lock's own requested mode
 its request was posted too
+  and both handles
+  exactly four posts: 2 $ENQ, 2 $DEQ
+  naming its parent by the pair (own handle, master's handle)
+  the file's lock is released FIRST, at its master
+*** a PW $ENQ with LCK$M_VALBLK ***
+*** a SUB-lock: addressed to the tree's MASTER, not the directory ***
+*** and its release is MARKED as writing the value block ***
+*** carrying (3,1): the header counter VAX1 will compare with the 2 it cached -- the rd vms-d63 fix ***
+*** named 'F11B$s' + 0c 00 00 00, COUNTED: 10 bytes with their NULs ***
+*** the caller holds the MASTER's value block (2,1) ***
+the ACP's next block after a header write is (3,1)
+the file's lock was posted
+the master grants the file's lock, with its value block
+two releases were posted
 EOF
                       ;;
         esac;;
@@ -1029,6 +1043,8 @@ every CITED byte of the real specimen is byte-exact
 OVMX builds the queued answer for pair A
 OVMX builds the queued answer for pair B
 the built queued answer equals the real master's, byte for byte
+  body[20:24] the master's handle (VAX1's grant, frame 1475)
+  body[24:28] the releaser's own handle (frame 1474)
 EOF
                       ;;
         esac;;
@@ -1182,6 +1198,7 @@ EOF
 *** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in the 41,049 real releases' corpus) ***
 *** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
 the shipping composer opens no transaction on it
+a value-block release is still a notification: no transaction
 EOF
                       ;;
         esac;;

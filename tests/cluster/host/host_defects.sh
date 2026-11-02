@@ -3174,12 +3174,15 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "the departure sweep's survivor skip is disarmed, so a waiter the master queued is ended SS\$_UNSUPPORTED at the departure exactly as before rd vms-1b68, and the rebuild has nothing to re-send.";;
         require_fail) hd_lines <<'EOF'
+  VAX3's 0xfa re-homes it, still converting
   one lock installed, on the waiting queue
   the tree is done and no waiter was ended
   the window's close grants nothing VAX3 masters
+*** VAX1 left and the queued conversion is NOT ended ***
 *** VAX1 left and the queued waiter is NOT ended ***
 *** a survivor whose rebuild stopped ends SS$_UNSUPPORTED: no eternal wait ***
 *** answered 0xfa, body[28] 0x14, its (body[30], body[31]) echoed ***
+*** its record: (5,3), [110] 00, [108] 04, [28] CONVERT ***
 *** our EX waiter is NOT granted before the survivors' records are in ***
 *** still waiting, now at VAX3 ***
 *** the window closes: our waiter, first in the queue, is GRANTED EX ***
@@ -3198,10 +3201,12 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "a waiting proxy is never describable, so the hand-over and the rebuild skip it as before rd vms-0db: the new master never learns of it and it is ended when the rebuild ends.";;
         require_fail) hd_lines <<'EOF'
+  VAX3's 0xfa re-homes it, still converting
   one lock installed, on the waiting queue
   the tree is done and no waiter was ended
   the window's close grants nothing VAX3 masters
 *** answered 0xfa, body[28] 0x14, its (body[30], body[31]) echoed ***
+*** its record: (5,3), [110] 00, [108] 04, [28] CONVERT ***
 *** still waiting, now at VAX3 ***
 *** the window closes: our waiter, first in the queue, is GRANTED EX ***
 *** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
@@ -3301,13 +3306,14 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_rb_pump() builds its record with the op-0x12 builder: every cell is right but the opcode, so a real VAX directory receives a remaster record for a hand-over nobody opened instead of the failover rebuild record, and the survivor's locks die with the master exactly as before rd vms-874f.";;
         require_fail) hd_lines <<'EOF'
-  a cat-0x02 op-0x08 ROOT for our DEPT lock, to the directory VAX2
   a SUB record, body[36:40] our own root lkid
   a cat-0x02 op-0x08
+  a cat-0x02 op-0x08 ROOT for our DEPT lock, to the directory VAX2
 *** EVERY NAMED CELL equals VAX2's real ROOT record: PID 0x20400217, own lkid, PR/PR, no parent, identity, tail, the tree hash ***
 *** EVERY NAMED CELL equals VAX3's real ROOT record: PID 0x20600216, own lkid, CR/CR, no parent, the identity, body[110] and the tail, the tree hash ***
 *** EVERY NAMED CELL equals VAX3's real SUB record (PID, CW/CW, the parent pair, identity, tail) ***
 the ROOT goes to VAX2 carrying RMLVB-0123456789 at 1 (lab874f frame 5322)
+*** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -4556,7 +4562,7 @@ apply_edit() {
         sed -i 's|^\tswitch (c->c110) {$|\tswitch (c->c30 == c->c31 ? 0x01u : 0x00u) { /* NEGCTL dlm-0db-queue-read-from-modes */|' "$_file";;
 
     dlm-0db-answer-ignores-body108)
-        sed -i 's@(uint8_t)(VMS_DLM_GRANT_FLAG_VAL | c108));@(uint8_t)(VMS_DLM_GRANT_FLAG_VAL | (c108 \& 0u))); /* NEGCTL dlm-0db-answer-ignores-body108 */@' "$_file";;
+        sed -i 's@^\tif (c108 != 0u)$@\tif (0 \&\& c108 != 0u) /* NEGCTL dlm-0db-answer-ignores-body108 */@' "$_file";;
 
     dlm-1b68-waiter-ended-at-departure)
         sed -i 's|^        if (dlm_proxy_survives_locked(p)) {$|        if (0 \&\& dlm_proxy_survives_locked(p)) { /* NEGCTL dlm-1b68-waiter-ended-at-departure */|' "$_file";;

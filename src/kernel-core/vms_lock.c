@@ -5088,6 +5088,8 @@ static void dlm_adopt_link_lkb(struct vms_lock_resource *res,
         lock->grant_state = 0;
         if (r->queue_state == 1u)
             lock->granted_mode = LCK_K_NLMODE;   /* never granted: body[31] 0 */
+        else
+            lock->flags |= LCK_M_CONVERT;        /* a conversion, held at [31] */
         exec_list_add_tail(&lock->res_waiting, &res->waiting);
         vms_dlm_rebuild_hold = 1;
     }

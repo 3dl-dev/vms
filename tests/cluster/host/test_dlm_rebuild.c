@@ -465,27 +465,67 @@ static void answer_for(uint8_t *out, const uint8_t *real, uint32_t our_lkid)
 	put32(out + 24, our_lkid);
 }
 
+/*
+ * THE RECORD'S STATE, READ OFF THE LKB -- never off the frame (rd vms-1b68):
+ * the gate compares body[30]/[31]/[28]/[110] with these, so a builder that
+ * swapped the modes or mis-stated the queue goes red. `queue` is the wire
+ * value of the queue the LKB is on (01 granted, 00 converting, ff waiting).
+ */
+static const struct vms_lock_entry *lkb_of(struct vms_proc *p, uint32_t lkid)
+{
+	struct vms_lock_entry *l;
+
+	exec_list_for_each_entry(l, &p->locks, proc_list) {
+		if (l->lkid == lkid)
+			return l;
+	}
+	return NULL;
+}
+
+static void lkb_rec_state(const struct vms_lock_entry *l, char *st, size_t n)
+{
+	unsigned q, f = 0u;
+
+	if (l == NULL) {
+		snprintf(st, n, "nolkb=1");
+		return;
+	}
+	q = !l->waiting ? 0x01u : ((l->flags & LCK_M_CONVERT) ? 0x00u : 0xffu);
+	if (l->flags & LCK_M_VALBLK)
+		f |= 0x01u;
+	if (l->flags & LCK_M_CONVERT)
+		f |= 0x02u;
+	if (l->flags & LCK_M_SYSTEM)
+		f |= 0x10u;
+	snprintf(st, n, "grmode=%u,rqmode=%u,queue=0x%02x,recflags=0x%x",
+		 (unsigned)l->granted_mode, (unsigned)l->requested_mode, q, f);
+}
+
 static void dump08(const uint8_t *b, uint32_t lkid, uint32_t pid,
 		   uint32_t parent, uint32_t parent_master, uint32_t hash,
 		   uint32_t valblkseq)
 {
-	char st[256];
+	char st[320], ls[128];
 
+	lkb_rec_state(lkb_of(&g_proc, lkid), ls, sizeof(ls));
 	snprintf(st, sizeof(st),
-		 "lkid=0x%x,epid=0x%x,grmode=%u,rqmode=%u,parent_lkid=0x%x,"
+		 "lkid=0x%x,epid=0x%x,%s,parent_lkid=0x%x,"
 		 "parent_master=0x%x,group=0,acmode=3,namelen=%u,hash=0x%x,"
 		 "valblkseq=0x%x",
-		 lkid, pid, b[30], b[31], parent, parent_master, b[47], hash,
+		 lkid, pid, ls, parent, parent_master, b[47], hash,
 		 valblkseq);
 	conf_dump("dlm_rm_08", VMS_OFF_SYSAP_BODY, st, b, VMS_CM_BODY_LEN);
 }
 
+/* The answer's state off the LKB THIS engine installed for the record (its
+ * handle is body[20:24]): the queue it put the lock on, and its modes. */
 static void dump08ans(const uint8_t *a)
 {
-	char st[96];
+	char st[256], ls[128];
 
-	snprintf(st, sizeof(st), "lkid=0x%08x,valblkseq=0x%08x", le32(a + 20),
-		 le32(a + 52));
+	lkb_rec_state(lkb_of(&g_delivery, le32(a + 20)), ls, sizeof(ls));
+	snprintf(st, sizeof(st), "lkid=0x%08x,valblkseq=0x%08x,%s",
+		 le32(a + 20), le32(a + 52), ls);
 	conf_dump("dlm_rm_08_ans", VMS_OFF_SYSAP_BODY, st, a, VMS_CM_BODY_LEN);
 }
 
@@ -1824,6 +1864,9 @@ static void test_a_queued_waiter_is_rebuilt(void)
 		 g_sent[1].body[31] == 0u && g_sent[1].body[110] == 0xffu &&
 		 g_sent[1].body[108] == 0x04u && le32(g_sent[1].body + 36) == 0u,
 		 "*** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***");
+	/* The frame-conformance gate sees the waiting record (rd vms-1b68),
+	 * its state read off the waiter's own LKB. */
+	dump08(g_sent[1].body, w, g_proc.vms_pid, 0u, 0u, RMT1_HASH, 0u);
 	memset(&a, 0, sizeof(a));
 	a.master_lkid = VAX3_W_HANDLE;
 	ct_check(vms_dlm_rm_lock_answer_build(g_sent[1].body, VMS_CM_BODY_LEN,
@@ -1889,6 +1932,59 @@ static void test_a_queued_waiter_is_rebuilt(void)
 	(void)root;
 }
 
+/* rd vms-1b68: a CONVERSION VAX1 queued (PR -> EX on the lock it granted) is
+ * re-sent as a CONVERTING record -- (5,3), [110] 00, [108] 04, [28] CONVERT
+ * -- and VAX3's later grant completes it. */
+static void test_a_queued_conversion_is_rebuilt(void)
+{
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	struct vms_dlm_rm_lock_answer a;
+	struct vms_dlm_proxy_grant gr;
+	struct vms_enq_args e;
+	uint32_t root;
+
+	printf("-- rd vms-1b68: a conversion VAX1 queued is re-sent CONVERTING "
+	       "and granted by VAX3\n");
+	root = survivor_up();
+	memset(&e, 0, sizeof(e));
+	e.lkid = root;
+	e.lkmode = LCK_K_EXMODE;
+	e.flags = LCK_M_CONVERT;
+	(void)vms_ioctl_convert(&g_proc, (unsigned long)(void *)&e);
+	ct_check(e.status == SS__NORMAL && lk_state(root) == 0,
+		 "our PR -> EX conversion waits at VAX1");
+	ct_check_eq_u32(vms_lock_dlm_proxy_queued_recv(root, CSID_VAX1,
+						       0x05000024u),
+			SS__NORMAL, "  VAX1 queued it (0xfb)");
+	vax1_departs();
+	ct_check(lk_state(root) == 0 && vms_lock_dlm_proxy_survives(root),
+		 "*** VAX1 left and the queued conversion is NOT ended ***");
+	ct_check(g_n_sent == 1u && le32(g_sent[0].body + 24) == root &&
+		 g_sent[0].body[30] == 5u && g_sent[0].body[31] == 3u &&
+		 g_sent[0].body[110] == 0x00u && g_sent[0].body[108] == 0x04u &&
+		 g_sent[0].body[28] == 0x02u,
+		 "*** its record: (5,3), [110] 00, [108] 04, [28] CONVERT ***");
+	dump08(g_sent[0].body, root, g_proc.vms_pid, 0u, 0u, RMT1_HASH, 0u);
+	memset(&a, 0, sizeof(a));
+	a.master_lkid = 0x020004edu;            /* arm B: VAX2's converter */
+	(void)vms_dlm_rm_lock_answer_build(g_sent[0].body, VMS_CM_BODY_LEN, &a,
+					   ans, sizeof(ans), NULL);
+	ct_check(vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01,
+				      ans + VMS_OFF_SYSAP_BODY,
+				      VMS_CM_BODY_LEN) == 1 &&
+		 lk_state(root) == 0,
+		 "  VAX3's 0xfa re-homes it, still converting");
+	memset(&gr, 0, sizeof(gr));
+	gr.req_lkid = root;
+	gr.master_lkid = 0x020004edu;
+	gr.master_csid = CSID_VAX3;
+	gr.valblk_present = 1u;
+	(void)vms_lock_dlm_proxy_grant_recv(&gr);
+	ct_check(lk_state(root) == (int)SS__NORMAL,
+		 "*** VAX3's grant completes the conversion ***");
+	engine_down();
+}
+
 static void test_this_node_masters_the_waiter(void)
 {
 	uint8_t rec[VMS_CM_BODY_LEN];
@@ -1928,6 +2024,7 @@ static void test_this_node_masters_the_waiter(void)
 		 "echoed ***");
 	ct_check_eq_u32(vms_lock_dlm_rebuild_installed(), n0 + 1u,
 			"  one lock installed, on the waiting queue");
+	dump08ans(g_staged);       /* the gate: the answer to a WAITING record */
 	rec[110] = 0x02u;
 	ct_check_eq_u32(vms_dlm_rm_rb_record(&g_rm, CSID_VAX3, rec,
 					     VMS_CM_BODY_LEN),
@@ -1959,6 +2056,7 @@ int main(void)
 	test_ra1b_7400_the_later_sequence_stays();
 	test_codec_queue_states();
 	test_a_queued_waiter_is_rebuilt();
+	test_a_queued_conversion_is_rebuilt();
 	test_this_node_masters_the_waiter();
 	return ct_summary("test_dlm_rebuild");
 }

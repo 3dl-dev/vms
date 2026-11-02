@@ -1269,12 +1269,22 @@ static int ho_named_cells_match(const uint8_t *ours, const uint8_t *real,
 static void ho_dump12(const uint8_t *b)
 {
 	char st[256];
+	const struct ho_lock *l = NULL;
+	uint32_t i;
 
+	/* The modes and the queue off the (fake) ENGINE's lock the record names
+	 * -- never off the frame (rd vms-1b68), so a builder that swapped
+	 * body[30]/[31] cannot agree with itself. Every lock here is granted. */
+	for (i = 0; i < g_ho.n; i++)
+		if (g_ho.lk[i].lkid == le32(b + 24))
+			l = &g_ho.lk[i];
 	snprintf(st, sizeof(st),
-		 "lkid=0x%x,epid=0x%x,grmode=%u,rqmode=%u,parent_lkid=0x%x,"
+		 "lkid=0x%x,epid=0x%x,grmode=%u,rqmode=%u,queue=0x01,"
+		 "parent_lkid=0x%x,"
 		 "parent_master=0x%x,group=0,acmode=3,namelen=%u,hash=0x%x,"
 		 "valblkseq=0x%x",
-		 le32(b + 24), le32(b + 20), b[30], b[31], le32(b + 36),
+		 le32(b + 24), le32(b + 20), l ? l->grmode : 0xffu,
+		 l ? l->rqmode : 0xffu, le32(b + 36),
 		 le32(b + 40), b[47], le32(b + 128), le32(b + 104));
 	conf_dump("dlm_rm_12", VMS_OFF_SYSAP_BODY, st, b, VMS_CM_BODY_LEN);
 }

@@ -2495,16 +2495,17 @@ vms_dlm_rm_lock_answer_build(const uint8_t *req_body, uint32_t req_len,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, a->master_lkid);
-	/* The grant record (38/38 real grants; 420/420 real 0x12 answers) --
-	 * with body[28] = 0x10 | the record's body[108] (rd vms-0db: 5,694 of
-	 * 5,694 real 0xfa answers; 0x14 for a non-granted record). */
+	/* The grant record (38/38 real grants; 420/420 real 0x12 answers). */
 	dlm_put_grant_record(&w);
+	/* ...whose body[28] is 0x10 | the record's body[108] (rd vms-0db: 5,694
+	 * of 5,694 real 0xfa answers; 0x14 for a non-granted record). */
 	c108 = vms_wire_get_u8(&v, VMS_OFB_DLM_RM_REC_C108);
 	c110 = vms_wire_get_u8(&v, VMS_OFB_DLM_RM_REC_C110);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
-	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG,
-			(uint8_t)(VMS_DLM_GRANT_FLAG_VAL | c108));
+	if (c108 != 0u)
+		vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG,
+				(uint8_t)(VMS_DLM_GRANT_FLAG_VAL | c108));
 	/* body[30:32]: on a GRANTED record the grant's cleared pair, unless
 	 * the caller holds a real executive value for the root form (header
 	 * rule 2). A converting or waiting record's answer echoes its

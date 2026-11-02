@@ -1053,7 +1053,7 @@ assert_crtlfd() {
   _mb=$(printf '%s\n' "$_dv" | grep -aoE "^CFDDEV: pipe=_?MBA[0-9]+: messages=abc\|defg$" | grep -oE "MBA[0-9]+:" | head -1)
   [ -n "$_mb" ] || { echo "  assert_crtlfd: pipe() is not a mailbox carrying one message per write" >&2; return 1; }
   _sd=$(printf '%s\n' "$_dv" | awk '/^CFDDEV: === SHOW DEVICE /{f=1;next} /^CFDDEV: === END SHOW DEVICE/{f=0} f{print}')
-  printf '%s\n' "$_sd" | grep -aq "NOSUCHDEV" && { echo "  assert_crtlfd: SHOW DEVICE does not know the pipe's mailbox" >&2; return 1; }
+  printf '%s\n' "$_sd" | grep >/dev/null -a "NOSUCHDEV" && { echo "  assert_crtlfd: SHOW DEVICE does not know the pipe's mailbox" >&2; return 1; }
   printf '%s\n' "$_sd" | grep >/dev/null -aE "(^|[ _])$_mb" \
     || { echo "  assert_crtlfd: SHOW DEVICE did not list the pipe's mailbox $_mb" >&2; return 1; }
   printf '%s\n' "$_dv" | grep >/dev/null -aE "^CFDDEV: eof=yes proc=ENOENT$" \

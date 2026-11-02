@@ -91,6 +91,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/lib_datetime.c
     rtl/lib_timer.c
     rtl/lib_misc.c
+    rtl/ovmx_substrate.c
     rtl/lib_dyndesc.c
     rtl/lib_logical.c
     rtl/lib_dir.c

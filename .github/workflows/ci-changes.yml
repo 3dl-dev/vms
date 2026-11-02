@@ -90,6 +90,9 @@ on:
       vax_acceptance:
         description: 'vax_acceptance (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.vax_acceptance }}
+      alpha_syssvc:
+        description: 'alpha_syssvc (CI-speed tier, see tools/ci/ci_tiers.py)'
+        value: ${{ jobs.changes.outputs.alpha_syssvc }}
       negctl_select:
         description: 'negctl_select (CI-speed tier, see tools/ci/ci_tiers.py)'
         value: ${{ jobs.changes.outputs.negctl_select }}
@@ -136,6 +139,7 @@ jobs:
       decnet: ${{ steps.tiers.outputs.decnet }}
       vax_boot: ${{ steps.tiers.outputs.vax_boot }}
       vax_acceptance: ${{ steps.tiers.outputs.vax_acceptance }}
+      alpha_syssvc: ${{ steps.tiers.outputs.alpha_syssvc }}
       negctl_select: ${{ steps.tiers.outputs.negctl_select }}
     steps:
       - name: Checkout

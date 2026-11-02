@@ -2501,7 +2501,8 @@ jobs:
   alpha-syssvc-suite:
     name: OVMX/Alpha public sys$ API tier RUNS LP64 on qemu-system-alpha, no-new-vs-baseline (vms-341)
     needs: changes
-    if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # In the queue only when its own harness changes (ci_tiers.py alpha_syssvc).
+    if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'merge_group' && needs.changes.outputs.alpha_syssvc == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 

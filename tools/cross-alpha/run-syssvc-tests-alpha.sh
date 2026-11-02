@@ -335,7 +335,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     cp /work/tests/ods2_imgact.img /work/d4.img
     cp /work/tests/ods5_real.img   /work/d5.img
     # rd vms-3ea: a SECOND copy of the OVMXSEARCH volume on DKA600: -- the
-    # same-label unit test_syssvc_acp_volalrmnt's $MOUNT must refuse.
+    # same-label unit test_syssvc_acp_volalrmnt (its $MOUNT) must refuse.
     cp /work/tests/ods2_search.img /work/d6.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="

@@ -81,6 +81,20 @@ TIERS = {
         "tools/cross-alpha/run-module-gp-activation-alpha.sh",
         "tools/ci/ci_tiers.py",
     ],
+    # Alpha public sys$ API tier (ci-alpha alpha-syssvc-suite, ~150 min): runs on
+    # every push to main, and in the queue when its own HARNESS changes. #1893
+    # put an apostrophe in a comment inside the harness's single-quoted
+    # `bash -c` body; the queue never ran the suite, so the first run was on main
+    # (`MOUNT: unbound variable`) and main stayed red five commits.
+    "alpha_syssvc": [
+        ".github/workflows/ci-alpha.yml",
+        ".github/workflows/ci-changes.yml",
+        "tools/cross-alpha/run-syssvc-tests-alpha.sh",
+        "tools/cross-alpha/alpha-syssvc-baseline.txt",
+        "tools/cross-alpha/build-vmsko-alpha.sh",
+        "tools/cross-alpha/Dockerfile",
+        "tools/ci/ci_tiers.py",
+    ],
     # DECnet pair (ci-vax vax-decnet-pair, rd vms-9394): OVMX/VAX <-> OVMX/x86
     # SET HOST over NETACP on the executive datalink. Runs in the queue only
     # when DECnet, the raw-L2 datalink or NETACP's startup is touched.
@@ -288,18 +302,18 @@ def changed_files(repo, base):
 def decide(event, ref, files, table_fn):
     res = {"heavy_release": "false", "alpha_selfhost_tier": "false",
            "keystroke": "false", "decnet": "false", "vax_boot": "false",
-           "vax_acceptance": "false", "negctl_select": ""}
+           "vax_acceptance": "false", "alpha_syssvc": "false", "negctl_select": ""}
     if is_full(event, ref):
         return {"heavy_release": "true", "alpha_selfhost_tier": "true",
                 "keystroke": "true", "decnet": "true", "vax_boot": "true",
-                "vax_acceptance": "true", "negctl_select": "ALL"}
+                "vax_acceptance": "true", "alpha_syssvc": "true", "negctl_select": "ALL"}
     if event == "push":
         return res  # the queue already tested this exact tree
     if files is None:  # could not compute: fail closed (queue / PR only)
         if event == "merge_group":
             return {"heavy_release": "true", "alpha_selfhost_tier": "true",
                     "keystroke": "true", "decnet": "true", "vax_boot": "true",
-                    "vax_acceptance": "true", "negctl_select": "ALL"}
+                    "vax_acceptance": "true", "alpha_syssvc": "true", "negctl_select": "ALL"}
         return res
     if event == "merge_group":
         res["alpha_selfhost_tier"] = "true" if matches_any(files, TIERS["alpha_selfhost_tier"]) else "false"
@@ -308,6 +322,7 @@ def decide(event, ref, files, table_fn):
         res["decnet"] = "true" if matches_any(files, TIERS["decnet"]) else "false"
         res["vax_boot"] = "true" if matches_any(files, TIERS["vax_boot"]) else "false"
         res["vax_acceptance"] = "true" if matches_any(files, TIERS["vax_acceptance"]) else "false"
+        res["alpha_syssvc"] = "true" if matches_any(files, TIERS["alpha_syssvc"]) else "false"
         try:
             res["negctl_select"] = negctl_select(files, table_fn())
         except Exception as e:  # noqa: BLE001 -- fail closed
@@ -338,7 +353,7 @@ def main():
         print("ci_tiers: cannot compute changed files (%s)" % e, file=sys.stderr)
     res = decide(a.event, a.ref, files, lambda: defect_table(a.repo))
     for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "decnet", "vax_boot",
-              "vax_acceptance", "negctl_select"):
+              "vax_acceptance", "alpha_syssvc", "negctl_select"):
         print("%s=%s" % (k, res[k]))
 
 

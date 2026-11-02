@@ -475,6 +475,27 @@ static int dec_operand(struct dnet_dap_msg *m, struct rd *r)
             r->off += DNET_DAP_DATE_LEN;
         }
         if (BIT(mn, 3) && (rc = rd_b16(r, &m->u.datetime.rvn))) return rc;
+        /* Bits 7 and 8: the created and revised times as the VAX V7.3 FAL
+         * sends them (vax-to-vax-sys-login capture): each is a 16-byte UTC
+         * (DECdts) value -- 8 bytes of 100-ns ticks since 15-OCT-1582, a
+         * 6-byte inaccuracy, and 2 bytes holding the time-differential-factor
+         * (low 12 bits, signed minutes east of UTC) under a 4-bit version. The
+         * bits between (4-6) have no layout this codec knows, so the times are
+         * read only when none of them is set. */
+        if (!(mn & 0x70)) {
+            for (int i = 0; i < 2; i++) {
+                if (!BIT(mn, 7 + i)) continue;
+                if (r->len - r->off < 16) break;
+                uint64_t t = 0;
+                for (int b = 7; b >= 0; b--) t = (t << 8) | r->b[r->off + (size_t)b];
+                unsigned tw = (unsigned)r->b[r->off + 14] | ((unsigned)r->b[r->off + 15] << 8);
+                int tdf = (int)(tw & 0x0fff);
+                if (tdf & 0x0800) tdf -= 0x1000;
+                if (i == 0) { m->u.datetime.have_cdt64 = 1; m->u.datetime.cdt64 = t; m->u.datetime.cdt_tdf = (int16_t)tdf; }
+                else        { m->u.datetime.have_rdt64 = 1; m->u.datetime.rdt64 = t; m->u.datetime.rdt_tdf = (int16_t)tdf; }
+                r->off += 16;
+            }
+        }
         r->off = r->len;
         return DNET_DAP_OK;
     }

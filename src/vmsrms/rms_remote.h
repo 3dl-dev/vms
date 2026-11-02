@@ -27,6 +27,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "rms/rms.h"        /* struct rms_remote_fent / rms_remote_dirlist_full live there */
+
 #ifdef __cplusplus
 extern "C" {
 #endif

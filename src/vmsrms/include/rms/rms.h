@@ -123,6 +123,38 @@ struct rms_fileattr {
 uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out);
 
 /*
+ * rms_remote_dirlist_full (OVMX, rd vms-0a7 S1) - DIRECTORY/FULL of a node::
+ * spec: one DIRECTORY LIST that asks for each file's ATTRIBUTES, SUMMARY,
+ * DATE AND TIME and PROTECTION (the DISPLAY 0x839 a VAX V7.3 client sends), so
+ * the names and the attributes arrive together. A file the FAL names and then
+ * refuses (STATUS) is an entry with sts set; the client answers CONTINUE
+ * TRANSFER (skip) and the listing goes on. `fa` holds only what DAP carries:
+ * record format and attributes, MRS, longest record, VFC header size, EOF block
+ * / first free byte, allocation (HBK), extend (DEQ), the protection word, the
+ * owner UIC when numeric, the revision number. credate / revdate are VMS
+ * local-time quadwords (the FAL's UTC value plus its time differential
+ * factor). Nothing DAP does not carry is made up: the have_* members say what
+ * arrived. Implemented in src/vmsrms/rms_remote.c.
+ */
+struct rms_remote_fent {
+    char    *name;               /* node::volume:[directory]name.type;ver, display form */
+    uint32_t sts, stv;           /* 0: served; else the FAL's refusal of this file */
+    int      have_attr, have_cre, have_rev, have_prot, have_owner;
+    char     owner[44];          /* "[200,201]" when numeric, else as the FAL gave it */
+    struct rms_fileattr fa;
+};
+struct rms_remote_full {
+    struct rms_remote_fent *e;
+    size_t   n;
+    uint32_t end_sts, end_stv;   /* RMS$_NMF when the list ended, else its failure */
+    char     end_what[1100];     /* the expanded string at that failure */
+};
+/* RMS$_NORMAL when the exchange ran (see end_sts for how the list ended); else
+ * the failure to start it. Free with rms_remote_full_free. */
+uint32_t rms_remote_dirlist_full(const char *spec, struct rms_remote_full *out);
+void     rms_remote_full_free(struct rms_remote_full *f);
+
+/*
  * rms_stage_over_acp (OVMX, vms-104) - read `vmsspec`'s GENUINE bytes off the
  * mounted ODS-2 volume THROUGH the executive Files-11 ACP and write them to the
  * Linux path `destpath` (mode 0755). The bytes come from IO$_READVBLK over

@@ -336,6 +336,12 @@ struct dnet_dap_msg {
             char     cdt[DNET_DAP_DATE_LEN + 1], rdt[DNET_DAP_DATE_LEN + 1],
                      edt[DNET_DAP_DATE_LEN + 1];
             uint16_t rvn;
+            /* DATMENU bits 7 / 8 (DAP 7): created / revised as a UTC value --
+             * 100-ns ticks since 15-OCT-1582 and the time differential factor
+             * in minutes east of UTC. Decode only; never encoded. */
+            int      have_cdt64, have_rdt64;
+            uint64_t cdt64, rdt64;
+            int16_t  cdt_tdf, rdt_tdf;
         } datetime;
 
         struct {                       /* PROTECTION (sec. 3.16)               */

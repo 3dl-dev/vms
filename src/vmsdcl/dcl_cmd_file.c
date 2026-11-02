@@ -21,6 +21,7 @@
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
 #include "dcl/dcl_rms.h"          /* vms-481: file commands reach files via RMS/ACP */
+#include "dcl/dcl_remote.h"       /* rd vms-0a7: DIRECTORY/TYPE node:: over RMS */
 #include "dcl/vms_messages.h"
 #include "ssdef.h"
 #include "stsdef.h"
@@ -1181,8 +1182,7 @@ static int dir_deellipsize(const char *spec, char *out, size_t out_sz)
 
 static int cmd_directory_list(struct dcl_command *cmd);
 static int copy_spec_has_node(const char *s);
-static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *cmd,
-                                  const char *mode, const char *fac);
+static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(FILE *, const char *));
 
 /*
  * rd vms-ba2: DIRECTORY takes a P1 list. Consecutive elements in ONE directory
@@ -1286,9 +1286,10 @@ static int cmd_directory_list(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    /* DIRECTORY node::spec lists a remote directory through its FAL. */
+    /* DIRECTORY node::spec: RMS lists the remote directory ($PARSE/$SEARCH
+     * reach the node's FAL, rd vms-0a7). */
     if (cmd->param_count >= 1 && copy_spec_has_node(cmd->params[0]))
-        return dnet_fal_verb_activate(ctx, cmd, "--directory", "DIRECT");
+        return dcl_remote_verb(cmd, dcl_remote_directory);
 
     /* vms-481: DIRECTORY lists through the Files-11 ODS-2 ACP (sys$parse +
      * sys$search wildcard directory context + rms_file_attr), emitting the
@@ -1775,9 +1776,10 @@ int cmd_type(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* TYPE node::spec reads the remote file(s) through the remote FAL. */
+    /* TYPE node::spec: RMS reads the remote file(s) ($SEARCH, $OPEN, $GET
+     * reach the node's FAL, rd vms-0a7). */
     if (copy_spec_has_node(cmd->params[0]))
-        return dnet_fal_verb_activate(ctx, cmd, "--type", "TYPE");
+        return dcl_remote_verb(cmd, dcl_remote_type);
 
     /* vms-481: TYPE reads the file through RMS ($OPEN + sequential $GET), which
      * on the product runtime reaches the Files-11 ODS-2 ACP over /dev/vms -- not
@@ -2279,205 +2281,21 @@ static int copy_spec_has_node(const char *s)
 }
 
 /*
- * copy_dnet_split_access - strip the FAL access-control PASSWORD out of a COPY
- * spec so it never reaches the client's argv (world-readable in
- * /proc/<pid>/cmdline). NODE"user password [account]"::rest becomes
- * out_spec = NODE"user"::rest (the proxy username stays -- it is not secret) and
- * out_pw = the password, which the caller hands to the client over an inherited
- * pipe fd. A spec with no "..." access string is copied verbatim with out_pw="".
- * The account field (rarely used) is dropped here; a NODE"user"::file proxy
- * access (no password) passes through with an empty password.
+ * dcl_remote_verb (rd vms-0a7) - `$ DIRECTORY node::spec` / `$ TYPE
+ * node::spec`. RMS does the remote access (the password stays in this
+ * process, in the access-control string RMS puts in the NCB); `verb` lays the
+ * result out as VMS does. Only the plain form is served: a qualifier is
+ * refused honestly rather than silently dropped. A failure has been reported
+ * already, so $STATUS carries it with STS$M_INHIB_MSG.
  */
-static void copy_dnet_split_access(const char *spec, char *out_spec, size_t out_cap,
-                                   char *out_pw, size_t pw_cap)
+static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(FILE *, const char *))
 {
-    out_pw[0] = '\0';
-    const char *q1 = strchr(spec, '"');
-    const char *q2 = q1 ? strchr(q1 + 1, '"') : NULL;
-    if (!q1 || !q2) {                 /* no access string -- verbatim */
-        snprintf(out_spec, out_cap, "%s", spec);
-        return;
-    }
-    char acc[256];
-    size_t alen = (size_t)(q2 - (q1 + 1));
-    if (alen >= sizeof acc) alen = sizeof acc - 1;
-    memcpy(acc, q1 + 1, alen);
-    acc[alen] = '\0';
-
-    /* token 1 = user, token 2 = password (space-separated). */
-    char user[128] = "";
-    char *sp = acc;
-    while (*sp == ' ') sp++;
-    char *u = sp;
-    while (*sp && *sp != ' ') sp++;
-    size_t ulen = (size_t)(sp - u);
-    if (ulen >= sizeof user) ulen = sizeof user - 1;
-    memcpy(user, u, ulen);
-    user[ulen] = '\0';
-    while (*sp == ' ') sp++;
-    char *pw = sp, *pe = sp;
-    while (*pe && *pe != ' ') pe++;
-    size_t plen = (size_t)(pe - pw);
-    if (plen >= pw_cap) plen = pw_cap - 1;
-    memcpy(out_pw, pw, plen);
-    out_pw[plen] = '\0';
-
-    /* Rebuild NODE"user"::rest: node prefix (before q1) + "user" + rest (from q2+1). */
-    snprintf(out_spec, out_cap, "%.*s\"%s\"%s",
-             (int)(q1 - spec), spec, user, q2 + 1);
-}
-
-/*
- * copy_dnet_activate (rd vms-ea8) - the OUTBOUND $ COPY node::file bridge. A
- * NODE:: spec on either side is a DECnet FAL/DAP transfer: DCL activates
- * SYS$SYSTEM:DECNETD.EXE --copy <src> <dst> on the caller's process (the SAME
- * image activator RUN / SET HOST use), which opens a real object-17 logical link
- * over the datalink and drives the FAL COPY client (dnet_fal_client_put/get).
- * The FAL password is NEVER placed on argv: it is stripped from the spec and
- * handed to the client over an inherited pipe fd (--password-fd). When
- * DECNETD.EXE is not staged the command reports honestly (INV-6, no fake copy).
- */
-static int copy_dnet_activate(struct dcl_context *ctx, const char *src, const char *dst)
-{
-    const char *img_spec = "SYS$SYSTEM:DECNETD.EXE";
-    char linux_path[1024], resolved[1024];
-    dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
-    if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
-                                 resolved, sizeof(resolved))) {
-        printf("%%COPY-I-NETNOTAVAIL, DECnet file COPY (FAL/DAP object 17) is not"
-               " available on this system (SYS$SYSTEM:DECNETD.EXE is not staged)\n");
-        return SS$_ABORT;
-    }
-    strncpy(linux_path, resolved, sizeof(linux_path) - 1);
-    linux_path[sizeof(linux_path) - 1] = '\0';
-
-    char src_clean[1024], dst_clean[1024], src_pw[128], dst_pw[128];
-    copy_dnet_split_access(src, src_clean, sizeof(src_clean), src_pw, sizeof(src_pw));
-    copy_dnet_split_access(dst, dst_clean, sizeof(dst_clean), dst_pw, sizeof(dst_pw));
-
-    /*
-     * THE LOCAL SIDE IS THE USER'S FILE, IN THE USER'S DEFAULT DIRECTORY.
-     * DECNETD.EXE hands its local spec straight to RMS, which completes a
-     * missing device/directory from SYS$DISK's root -- not from this DCL's
-     * SET DEFAULT. Found live (booted OVMX, default SYS$SYSROOT:[SYSMGR]):
-     * `COPY 1.1"SYSTEM pw"::TOOVMX.TXT FROMVAX.TXT` reported success and the
-     * file landed in VDA0:[000000]. DCL completes the local spec the way its
-     * own file commands do (dcl_rms_effective_spec) before handing it over;
-     * the NODE:: side is the remote FAL's to resolve.
-     */
-    {
-        char *local = strstr(src_clean, "::") ? dst_clean : src_clean;
-        size_t localsz = (local == dst_clean) ? sizeof(dst_clean) : sizeof(src_clean);
-        char eff[1024];
-        if (!strstr(local, "::") &&
-            dcl_rms_effective_spec(ctx, local, eff, sizeof(eff)) == 0 && eff[0] &&
-            strlen(eff) < localsz)
-            memcpy(local, eff, strlen(eff) + 1);
-    }
-    const char *pw = src_pw[0] ? src_pw : (dst_pw[0] ? dst_pw : "");
-
-    int pfd[2] = { -1, -1 };
-    char fdbuf[16] = "";
-    if (pw[0]) {
-        if (pipe(pfd) != 0) {
-            printf("%%COPY-F-NETPIPE, could not set up the DECnet password channel\n");
-            return SS$_ABORT;
-        }
-        size_t pl = strlen(pw);
-        if (write(pfd[1], pw, pl) != (ssize_t)pl) {
-            close(pfd[0]); close(pfd[1]);
-            printf("%%COPY-F-NETPIPE, could not pass the DECnet password\n");
-            return SS$_ABORT;
-        }
-        close(pfd[1]);                 /* EOF follows the password */
-        snprintf(fdbuf, sizeof(fdbuf), "%d", pfd[0]);
-    }
-
-    char *argv[8];
-    int argc = 0;
-    argv[argc++] = linux_path;
-    argv[argc++] = "--copy";
-    argv[argc++] = src_clean;
-    argv[argc++] = dst_clean;
-    if (fdbuf[0]) {
-        argv[argc++] = "--password-fd";
-        argv[argc++] = fdbuf;
-    }
-    argv[argc] = NULL;
-
-    int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
-
-    if (pfd[0] >= 0) close(pfd[0]);
-    memset(src_pw, 0, sizeof src_pw);   /* wipe the password copies */
-    memset(dst_pw, 0, sizeof dst_pw);
-    return rc;
-}
-
-/*
- * dnet_fal_verb_activate (rd vms-6a4) - `$ DIRECTORY node::spec` and
- * `$ TYPE node::spec`. As for COPY, DCL activates SYS$SYSTEM:DECNETD.EXE on
- * this process (--directory / --type), which lists or reads the remote file
- * through the remote FAL (object 17) over NETACP's _NET: links and prints what
- * VMS prints. The password is stripped from the spec and handed over an
- * inherited pipe fd, never argv. `fac` is the command's message facility.
- */
-static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *cmd,
-                                  const char *mode, const char *fac)
-{
-    /* Only the plain form goes over the network; a qualifier is refused
-     * honestly rather than silently dropped. */
     if (cmd->qualifier_count > 0) {
         printf("%%SYSTEM-F-UNSUPPORTED, unsupported operation or function\n");
         return SS$_UNSUPPORTED;
     }
-    const char *img_spec = "SYS$SYSTEM:DECNETD.EXE";
-    char linux_path[1024], resolved[1024];
-    dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
-    if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
-                                 resolved, sizeof(resolved))) {
-        printf("%%%s-I-NETNOTAVAIL, DECnet file access (FAL/DAP object 17) is not"
-               " available on this system (SYS$SYSTEM:DECNETD.EXE is not staged)\n", fac);
-        return SS$_ABORT;
-    }
-    strncpy(linux_path, resolved, sizeof(linux_path) - 1);
-    linux_path[sizeof(linux_path) - 1] = '\0';
-
-    char clean[1024], pw[128];
-    copy_dnet_split_access(cmd->params[0], clean, sizeof(clean), pw, sizeof(pw));
-
-    int pfd[2] = { -1, -1 };
-    char fdbuf[16] = "";
-    if (pw[0]) {
-        if (pipe(pfd) != 0) {
-            memset(pw, 0, sizeof pw);
-            printf("%%%s-F-NETPIPE, could not set up the DECnet password channel\n", fac);
-            return SS$_ABORT;
-        }
-        size_t pl = strlen(pw);
-        if (write(pfd[1], pw, pl) != (ssize_t)pl) {
-            close(pfd[0]); close(pfd[1]);
-            memset(pw, 0, sizeof pw);
-            printf("%%%s-F-NETPIPE, could not pass the DECnet password\n", fac);
-            return SS$_ABORT;
-        }
-        close(pfd[1]);
-        snprintf(fdbuf, sizeof(fdbuf), "%d", pfd[0]);
-    }
-    memset(pw, 0, sizeof pw);
-
-    char *argv[8];
-    int argc = 0;
-    argv[argc++] = linux_path;
-    argv[argc++] = (char *)mode;
-    argv[argc++] = clean;
-    if (fdbuf[0]) {
-        argv[argc++] = "--password-fd";
-        argv[argc++] = fdbuf;
-    }
-    argv[argc] = NULL;
-    int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
-    if (pfd[0] >= 0) close(pfd[0]);
-    return rc;
+    uint32_t st = verb(stdout, cmd->params[0]);
+    return (st & 1) ? SS$_NORMAL : (int)(st | 0x10000000u);
 }
 
 /*
@@ -2630,19 +2448,17 @@ int cmd_copy(struct dcl_command *cmd)
     if (dcl_param_total(cmd) > dcl_slot_total(cmd) && dcl_slot_total(cmd) == 2)
         return copy_concat(ctx, cmd);
 
-    /* ---- DECnet file COPY (NODE"user pw"::file), rd vms-8c2 / vms-ea8 -----
-     * A node prefix on either side is a DECnet FAL/DAP transfer, NOT a local
-     * ODS-2 COPY. DCL activates the outbound FAL COPY client (SYS$SYSTEM:
-     * DECNETD.EXE --copy) on this process -- the same image activator SET HOST
-     * and RUN use -- which opens a real object-17 logical link over the datalink
-     * and drives dnet_fal_client_put/get (the transfer core proven byte-exact by
-     * DECNETD.EXE --copy-accept-test in the booted battery, and host-proven by
-     * --copy-transport-selftest). The FAL password is stripped from the spec and
-     * handed over an inherited pipe fd, never argv. With DECNETD.EXE unstaged the
-     * bridge reports honestly (INV-6, no fake copy). The live-wire proof against
-     * a real remote FAL is lab-gated (rd vms-a70/vms-101), as for SET HOST. */
-    if (copy_spec_has_node(cmd->params[0]) || copy_spec_has_node(cmd->params[1]))
-        return copy_dnet_activate(ctx, cmd->params[0], cmd->params[1]);
+    /* A node:: spec on either side (rd vms-0a7): RMS reaches the node's FAL
+     * ($SEARCH, $OPEN/$GET, $CREATE/$PUT) and dcl_remote_copy copies record by
+     * record; messages show the password as the word "password". */
+    if (copy_spec_has_node(cmd->params[0]) || copy_spec_has_node(cmd->params[1])) {
+        char sx[1024], dx[1024];
+        if (dcl_rms_effective_spec(ctx, cmd->params[0], sx, sizeof sx) != 0 ||
+            dcl_rms_effective_spec(ctx, cmd->params[1], dx, sizeof dx) != 0)
+            return RMS$_SYN;
+        uint32_t st = dcl_remote_copy(stdout, sx, dx, dcl_has_qualifier(cmd, "LOG"));
+        return (st & 1) ? SS$_NORMAL : (int)(st | 0x10000000u);
+    }
 
     int do_log      = dcl_has_qualifier(cmd, "LOG");
     int do_confirm  = dcl_has_qualifier(cmd, "CONFIRM");

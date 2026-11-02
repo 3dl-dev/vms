@@ -65,6 +65,10 @@ add_library(vmsrms ${OVMX_LIB_TYPE}
     rms_util.c
     lib_filectl.c
     sysgen_acp.c
+    # rd vms-0a7: RMS speaks DAP to a remote FAL for a node:: filespec;
+    # rms_dap.c compiles the pure DAP codec (src/vmsdecnet/dap) into RMS.
+    rms_remote.c
+    rms_dap.c
 )
 
 target_include_directories(vmsrms PUBLIC
@@ -92,6 +96,8 @@ target_include_directories(vmsrms PUBLIC
 # transitive vms -> vmsprocess -> libvmssys edge; netbsd-vax cross: libvmssys.a
 # inside the --start-group the per-image recipes already link).
 target_compile_definitions(vmsrms PRIVATE OVMX_HAVE_ACP)
+target_include_directories(vmsrms PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../vmsdecnet/dap/include)
 target_include_directories(vmsrms PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../libvmssys
     ${CMAKE_CURRENT_SOURCE_DIR}/../kernel)

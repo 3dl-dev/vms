@@ -475,3 +475,40 @@ set_tests_properties(vmsrms_parse_ods5 PROPERTIES
     TIMEOUT 30
     ENVIRONMENT "ODS5_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022"
 )
+
+# rd vms-0a7 (S1): RMS remote file access. $PARSE/$SEARCH/$OPEN/$GET/$CLOSE of
+# a node:: spec replay a real VAX V7.3 FAL's DAP replies, and DCL's DIRECTORY /
+# TYPE output must equal the VAX's console byte for byte (ported from
+# tests/vmsdecnet/test_dnet_fal_dirtype.c); then the DAP receive path is fuzzed.
+# A peer-receive parser: the RMS remote module, the DAP codec and the DCL layout
+# are compiled INTO the test so ASan/UBSan instrument them.
+include(CheckCSourceCompiles)
+set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+set(CMAKE_REQUIRED_LINK_OPTIONS "-fsanitize=address,undefined")
+check_c_source_compiles("int main(void){return 0;}" OVMX_RMS_REMOTE_SANITIZE_OK)
+unset(CMAKE_REQUIRED_FLAGS)
+unset(CMAKE_REQUIRED_LINK_OPTIONS)
+add_executable(test_rms_remote test_rms_remote.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/rms_remote.c
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/rms_dap.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_remote_file.c)
+target_include_directories(test_rms_remote PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsrms
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/dap/include
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR})
+target_link_libraries(test_rms_remote PRIVATE vmsrms vms)
+# -Wno-overflow: cc$rms_fab stores sizeof(struct FAB) (> 255) in fab$b_bln.
+set_source_files_properties(test_rms_remote.c PROPERTIES COMPILE_OPTIONS "-Werror;-Wno-overflow")
+if(OVMX_RMS_REMOTE_SANITIZE_OK)
+    target_compile_options(test_rms_remote PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_rms_remote PRIVATE -fsanitize=address,undefined)
+endif()
+set(_fv ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008)
+add_test(NAME vmsrms_remote_fal COMMAND test_rms_remote
+         ${_fv}/vax-to-vax-sys-login/falverbs-v2v-wire.txt
+         ${_fv}/vax-to-vax-sys-login/falverbs-v2v-vax1-console.txt
+         ${_fv}/falverbs-wire.txt
+         ${_fv}/vax1-console.txt)
+set_tests_properties(vmsrms_remote_fal PROPERTIES LABELS "unit;rms;decnet" TIMEOUT 300)

@@ -190,32 +190,6 @@ add_test(NAME vmsdecnet_fal_server_replay COMMAND test_dnet_fal_server
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/falverbs-v2v-wire.txt
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/live-bracket)
 
-# rd vms-6a4: $ DIRECTORY node:: / $ TYPE node:: -- the OVMX FAL CLIENT run
-# against the real VAX FAL's replies, its output compared byte for byte with
-# what the VAX's own console printed; then the NAME/DATA receive path fuzzed.
-# A peer-receive parser: built WITH ASan/UBSan where the toolchain has them.
-# The client sources are compiled INTO the test so the sanitizer instruments
-# the receive path itself, not only the test's own code.
-add_executable(test_dnet_fal_dirtype test_dnet_fal_dirtype.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_fal.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_fal_dirtype.c)
-target_include_directories(test_dnet_fal_dirtype PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include)
-target_link_libraries(test_dnet_fal_dirtype PRIVATE vmsdecnet_fal vmsdecnet_dap vmsdecnet_cterm vmsrms)
-# -Werror on the test's own TU (the compiled-in sources keep their library
-# warning set).
-set_source_files_properties(test_dnet_fal_dirtype.c PROPERTIES COMPILE_OPTIONS -Werror)
-if(OVMX_NODESPEC_SANITIZE_OK)
-    target_compile_options(test_dnet_fal_dirtype PRIVATE -fsanitize=address,undefined)
-    target_link_options(test_dnet_fal_dirtype PRIVATE -fsanitize=address,undefined)
-endif()
-set(_fv ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008)
-add_test(NAME vmsdecnet_fal_dirtype COMMAND test_dnet_fal_dirtype
-         ${_fv}/vax-to-vax-sys-login/falverbs-v2v-wire.txt
-         ${_fv}/vax-to-vax-sys-login/falverbs-v2v-vax1-console.txt
-         ${_fv}/falverbs-wire.txt
-         ${_fv}/vax1-console.txt)
-
 # rd vms-47fd: INBOUND DECnet MAIL-11 (object 27). Reads the real VAX V7.3
 # capture itself and replays every VAX1 segment through the OVMX receiver,
 # asserting VAX2's replies byte for byte (accepted message + NOSUCHUSR), then the

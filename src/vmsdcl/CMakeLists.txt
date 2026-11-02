@@ -69,6 +69,7 @@ set(VMSDCL_SOURCES
     dcl_cmd_show.c
     dcl_cmd_set.c
     dcl_cmd_file.c
+    dcl_remote_file.c
     dcl_cmd_process.c
     dcl_cmd_io.c
     dcl_cmd_misc.c

@@ -620,11 +620,29 @@ int dcl_merge_relative_dir(const char *defdir, const char *spec,
     return 0;
 }
 
+/* Does the spec name a node ("::" outside a quoted access string)? */
+static int spec_names_node(const char *s)
+{
+    int q = 0;
+    for (; *s; s++) {
+        if (*s == '"') { q = !q; continue; }
+        if (!q && s[0] == ':' && s[1] == ':') return 1;
+    }
+    return 0;
+}
+
 int dcl_rms_effective_spec(struct dcl_context *ctx, const char *spec,
                            char *out, size_t outsz)
 {
     if (!ctx || !spec || !out || outsz == 0)
         return -1;
+
+    /* A node:: spec is the remote node's to default (rd vms-0a7): RMS hands
+     * it to the node's FAL as given, never under this process's directory. */
+    if (spec_names_node(spec)) {
+        snprintf(out, outsz, "%s", spec);
+        return 0;
+    }
 
     if (spec[0] == '/' || (spec[0] == '.' && (spec[1] == '/' || spec[1] == '.'))) {
         strncpy(out, spec, outsz - 1);

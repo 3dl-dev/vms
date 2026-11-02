@@ -76,7 +76,6 @@
 #include "ovmx_status.h"     /* vms_status_string: the authentic %FAC-S-ID text */
 #include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
-#include "dnet_fal_dirtype.h" /* $ DIRECTORY / $ TYPE node:: (rd vms-6a4) */
 #include "dnet_ncpstore.h"  /* SYS$SYSTEM:NETNODE_*.DAT via RMS (rd vms-1f69) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "rms_io.h"         /* --fal-proc-accept-test: a fixture with an explicit protection */
@@ -4324,22 +4323,6 @@ static int cw_sp_rx(struct copy_wire *w, dnet_tick_t now)
     return (int)ev;
 }
 
-/* --- datalink substrate (the LIVE run_copy_loop path, lab-gated) --- */
-static int cw_dl_tx(struct copy_wire *w, const uint8_t *frame, size_t len)
-{
-    uint8_t dst[DNET_ADDR_LEN];
-    memcpy(dst, frame, DNET_ADDR_LEN);      /* the routing dst the FSM wrote */
-    return scs_datalink_send(w->dl_sock, (int)w->dl_if, DNET_ETHERTYPE,
-                             dst, frame, len) == 0 ? 0 : -1;
-}
-static int cw_dl_rx(struct copy_wire *w, dnet_tick_t now)
-{
-    uint8_t buf[DNET_FRAME_MAX];
-    /* dnet_recv_route filters our own echo + foreign/HELLO frames, drives the
-     * link FSM on an NSP frame for us, and ships any protocol reply itself. */
-    return dnet_recv_route(w->eng, w->dl_sock, w->dl_if, now, buf, sizeof buf);
-}
-
 /* The DAP presentation transport over copy_wire (the copy_wire twin of the
  * fal_xport used by --fal-accept-test). */
 struct copy_dap_ctx { struct copy_wire *w; };
@@ -4712,146 +4695,6 @@ static int run_copy_transport_selftest(void)
 }
 
 /*
- * run_copy_loop - the LIVE outbound $ COPY over the datalink (rd vms-ea8).
- *
- * Parses the copy plan, ENFORCES the credential posture (below), resolves the
- * remote node, then drives copy_client_run over the real datalink `sock`. The
- * transfer core is the code --copy-accept-test proves byte-exact; the only
- * lab-gated delta is reaching a real remote FAL over AF_PACKET (mirrors the
- * --set-host client, rd vms-a70 / vms-101).
- *
- * CREDENTIAL POSTURE (a DECIDED rule, not a facade): the FAL access-control
- * PASSWORD is a REAL credential (unlike SET HOST, where LOGINOUT authenticates
- * fresh and the connect password is empty). It MUST NOT appear on argv -- argv
- * is world-readable in /proc/<pid>/cmdline under a fork/exec activation -- so a
- * password embedded in the COPY spec's access string is REFUSED here (the
- * command line carries at most NODE"username"::spec), and the password is read
- * from the inherited fd named by --password-fd, never crossing a process
- * boundary in the clear.
- */
-/* Parse the COPY plan, ENFORCE the credential posture, and read the password
- * from the inherited fd (never argv). Shared by the standalone datalink client
- * and the NETACP-brokered _NET: client. password must hold DNET_SC_MAX_STR+1. */
-static int copy_prepare(const char *src, const char *dst, int password_fd,
-                        struct dnet_copy_plan *plan, char *password)
-{
-    memset(password, 0, DNET_SC_MAX_STR + 1);
-    int r = dnet_copy_plan(src, dst, plan);
-    if (r != DNET_CTERM_OK) {
-        fprintf(stderr, "DECNETD-E-COPYSPEC, could not parse the COPY specs"
-                        " (one side must be NODE\"user\"::file; status %d)\n", r);
-        return 1;
-    }
-
-    /* POSTURE: never accept the password on the command line. */
-    if (plan->password[0] != '\0') {
-        fprintf(stderr, "DECNETD-E-COPYPW, the FAL password must not appear on the"
-                        " command line (it would be world-readable in"
-                        " /proc/<pid>/cmdline); pass NODE\"username\"::file and"
-                        " supply the password on the fd named by --password-fd\n");
-        return 1;
-    }
-    if (plan->has_access && password_fd < 0) {
-        fprintf(stderr, "DECNETD-E-COPYPW, an access-control username was given"
-                        " but no --password-fd; refusing (no password source)\n");
-        return 1;
-    }
-
-    /* Read the password (if any) from the inherited fd, never from argv. Bounded;
-     * a trailing newline is stripped; the buffer is wiped after the transfer.
-     *
-     * CLEARTEXT TRANSMISSION (codeql cpp/cleartext-transmission, BY DESIGN):
-     * this password IS carried to the remote FAL in the object-17 Session Control
-     * CONNECT (copy_client_run -> dnet_cterm_sc_connect_build), where FAL
-     * authenticates it -- that is how DECnet Phase IV FAL access control works
-     * (the oracle §1 shows the credentials in the connect; the OPPOSITE of CTERM,
-     * whose connect creds are empty). DECnet Phase IV has NO transport encryption;
-     * OVMX is a CLEAN-ROOM FAITHFUL reproduction (Rule 8) and cannot encrypt what
-     * the wire protocol defines as cleartext -- the same property the shipped
-     * inbound FAL server (decnet$fal, --fal-accept-test) already has. OVMX's own
-     * hardening is orthogonal and present: the password never touches argv (fd
-     * handoff), is bounded, and is wiped immediately after the connect is built. */
-    if (plan->has_access && password_fd >= 0) {
-        ssize_t got = read(password_fd, password, DNET_SC_MAX_STR); // codeql[cpp/cleartext-transmission]
-        if (got < 0) {
-            fprintf(stderr, "DECNETD-E-COPYPW, could not read the password from"
-                            " fd %d: %s\n", password_fd, strerror(errno));
-            return 1;
-        }
-        password[got >= 0 ? (size_t)got : 0] = '\0';
-        size_t pl = strlen(password);
-        while (pl && (password[pl - 1] == '\n' || password[pl - 1] == '\r'))
-            password[--pl] = '\0';
-    }
-
-    return 0;
-}
-
-static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
-                         const char *src, const char *dst, int password_fd)
-{
-    struct dnet_copy_plan plan;
-    char password[DNET_SC_MAX_STR + 1];
-    if (copy_prepare(src, dst, password_fd, &plan, password) != 0)
-        return 1;
-
-    /* Resolve the remote node NAME -> area.node (the node database the SET HOST
-     * client uses too); no address is ever invented (INV-6). */
-    unsigned rarea = 0, rnode = 0;
-    int rrc = sethost_resolve_target(plan.node, &rarea, &rnode);
-    if (rrc == -2) {
-        fprintf(stderr, "DECNETD-E-NODEDB, COPY: cannot read the node database"
-                        " to resolve '%s' (status %08X)\n",
-                plan.node, (unsigned)dnet_store_last_rms_status());
-        return 1;
-    }
-    if (rrc != 0) {
-        fprintf(stderr, "DECNETD-E-NOSUCHNODE, COPY: cannot resolve node '%s'"
-                        " (not area.node, and not a NAME in the node database)\n",
-                plan.node);
-        return 1;
-    }
-
-    /* A process context is required for the local file's RMS channels, exactly
-     * as the --set-host client establishes one before $ASSIGN. */
-    if (!vms_pcb_get())
-        vms_pcb_init(0);
-
-    /* Bound the datalink recv so the synchronous DAP pump can drive CI retransmit
-     * / give-up timers rather than block forever waiting on an unreachable peer. */
-    struct timeval rcv_to = { 2, 0 };
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof rcv_to);
-
-    log_ts(stdout);
-    printf(" DECNETD-I-COPYPLAN, %s %s%s%s::%s <-> local %s (node %u.%u)\n",
-           plan.is_get ? "GET" : "PUT",
-           plan.node,
-           plan.has_access ? "\"" : "", plan.has_access ? plan.username : "",
-           plan.remote_spec, plan.local_spec, rarea, rnode);
-    fflush(stdout);
-
-    struct copy_wire w;
-    memset(&w, 0, sizeof w);
-    w.eng = eng; w.txf = cw_dl_tx; w.rxev = cw_dl_rx;
-    w.dl_sock = sock; w.dl_if = ifindex; w.synthetic = 0;
-
-    uint32_t status = copy_client_run(&w, rarea, rnode, &plan, password);
-    memset(password, 0, sizeof password);
-
-    log_ts(stdout);
-    if (status == SS$_NORMAL) {
-        printf(" DECNETD-I-COPYDONE, $ COPY %s completed (%08X)\n",
-               plan.is_get ? "GET" : "PUT", status);
-        fflush(stdout);
-        return 0;
-    }
-    printf(" DECNETD-W-COPYFAIL, $ COPY %s did not complete (status %08X) --"
-           " no file transferred (INV-6)\n", plan.is_get ? "GET" : "PUT", status);
-    fflush(stdout);
-    return 1;
-}
-
-/*
  * ================== THE _NET: CLIENT (rd vms-dda) ==================
  *
  * On a booted node the DCL COPY / SET HOST clients do NOT run a DECnet engine
@@ -5056,159 +4899,6 @@ static int netcli_assign(struct netcli *c)
         return -1;
     }
     return 0;
-}
-
-/* $ COPY through NETACP (the booted runtime). */
-static int run_copy_net(const char *src, const char *dst, int password_fd)
-{
-    struct dnet_copy_plan plan;
-    char password[DNET_SC_MAX_STR + 1];
-    if (copy_prepare(src, dst, password_fd, &plan, password) != 0)
-        return 1;
-    struct netcli c;
-    if (netcli_assign(&c) != 0) {
-        memset(password, 0, sizeof password);
-        return 1;
-    }
-    /* VMS COPY is SILENT on success; on failure it names the file and the
-     * reason (%COPY-E-OPENIN/OPENOUT, then the status, as a continuation
-     * line). The DECNETD-I progress chatter belongs to the standalone/lab
-     * path, never to a user's DCL COPY. */
-    uint32_t status = copy_client_run_net(&c, &plan, password);
-    memset(password, 0, sizeof password);
-    sys$dassgn(c.chan);
-    if (status == SS$_NORMAL)
-        return 0;
-    char why[256] = "";
-    (void)vms_status_string(status, why, sizeof why);
-    if (why[0] == '%') why[0] = '-';
-    if (plan.is_get)
-        printf("%%COPY-E-OPENIN, error opening %s::%s as input\n%s\n",
-               plan.node, plan.remote_spec, why[0] ? why : "");
-    else
-        printf("%%COPY-E-OPENOUT, error opening %s::%s as output\n%s\n"
-               "%%COPY-W-NOTCOPIED, %s not copied\n",
-               plan.node, plan.remote_spec, why[0] ? why : "", plan.local_spec);
-    fflush(stdout);
-    return 1;
-}
-
-/*
- * ============ $ DIRECTORY / $ TYPE node:: through NETACP (rd vms-6a4) ============
- *
- * DCL activates DECNETD.EXE --directory SPEC or --type SPEC on the caller's
- * process (the same activation as --copy; the password arrives on
- * --password-fd, never argv). Each FAL link is its own _NET: channel: a VMS
- * TYPE lists on one link and opens on another, so the linker hands out up to
- * two at once. With no NETACP serving, the link cannot open and the command
- * says so in VMS's words (SEARCHFAIL ... -SYSTEM-F-DEVOFFLINE), never a
- * private engine (INV-6).
- */
-struct falverb_link {
-    struct netcli c;
-    struct dnet_dap_transport t;
-    int used;
-};
-struct falverb_ctx {
-    const struct dnet_nodespec *ns;
-    const char *password;
-    int netacp;                         /* netacp_running() */
-    struct falverb_link links[2];
-};
-
-static struct dnet_dap_transport *falverb_open(void *v, uint32_t *st)
-{
-    struct falverb_ctx *x = v;
-    if (x->netacp != 1) {
-        *st = (x->netacp < 0) ? SS$_NOSUCHDEV : SS$_DEVOFFLINE;
-        return NULL;
-    }
-    struct falverb_link *L = NULL;
-    for (int i = 0; i < 2; i++)
-        if (!x->links[i].used) { L = &x->links[i]; break; }
-    if (!L) { *st = SS$_INSFMEM; return NULL; }
-    if (netcli_assign(&L->c) != 0) { *st = SS$_NOSUCHDEV; return NULL; }
-    uint32_t r = netcli_open_fal(&L->c, x->ns->node, x->ns->has_access, x->ns->username,
-                                 x->password, x->ns->account);
-    if (!(r & 1)) {
-        sys$dassgn(L->c.chan);
-        *st = r;
-        return NULL;
-    }
-    memset(&L->t, 0, sizeof L->t);
-    L->t.send = netcli_dap_send;
-    L->t.recv = netcli_dap_recv;
-    L->t.ctx = &L->c;
-    L->used = 1;
-    *st = SS$_NORMAL;
-    return &L->t;
-}
-
-static void falverb_close(void *v, struct dnet_dap_transport *t)
-{
-    struct falverb_ctx *x = v;
-    for (int i = 0; i < 2; i++) {
-        struct falverb_link *L = &x->links[i];
-        if (L->used && &L->t == t) {
-            size_t xf = 0;
-            (void)netcli_op(&L->c, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &xf);
-            sys$dassgn(L->c.chan);
-            L->used = 0;
-        }
-    }
-}
-
-static int run_fal_verb_net(int verb, const char *arg, int password_fd)
-{
-    /* DIRECTORY NODE:: lists the remote default directory: an empty file
-     * part is *.*;* (the splitter refuses an empty one). */
-    char spec[DNET_NODESPEC_MAXFILE + DNET_NODESPEC_MAXNODE + 64];
-    size_t al = strlen(arg);
-    if (al >= sizeof spec - 8) {
-        fprintf(stderr, "DECNETD-E-FALSPEC, the file specification is too long\n");
-        return 1;
-    }
-    memcpy(spec, arg, al + 1);
-    if (verb == DNET_FAL_VERB_DIRECTORY && al >= 2 && !strcmp(spec + al - 2, "::"))
-        memcpy(spec + al, "*.*;*", 6);
-
-    /* The node spec, the credential posture and the password read are
-     * COPY's own (copy_prepare): the remote side of a GET whose local side
-     * is the terminal. The password never rides argv. */
-    static struct dnet_copy_plan plan;
-    char password[DNET_SC_MAX_STR + 1];
-    if (copy_prepare(spec, "SYS$OUTPUT:", password_fd, &plan, password) != 0)
-        return 1;
-    static struct dnet_nodespec ns;
-    memset(&ns, 0, sizeof ns);
-    memcpy(ns.node, plan.node, sizeof ns.node);
-    memcpy(ns.username, plan.username, sizeof ns.username);
-    memcpy(ns.account, plan.account, sizeof ns.account);
-    memcpy(ns.filespec, plan.remote_spec, sizeof ns.filespec);
-    ns.has_access = plan.has_access;
-
-    char pfx[DNET_NODESPEC_MAXNODE + DNET_SC_MAX_STR + 32];
-    dnet_fal_display_prefix(ns.node, ns.username, ns.has_access, password[0] != '\0',
-                            pfx, sizeof pfx);
-
-    static struct falverb_ctx x;
-    memset(&x, 0, sizeof x);
-    x.ns = &ns;
-    x.password = password;
-    x.netacp = netacp_running();
-    struct dnet_fal_linker lk = { falverb_open, falverb_close, &x };
-    uint32_t st = (verb == DNET_FAL_VERB_DIRECTORY)
-        ? dnet_fal_directory(stdout, &lk, pfx, ns.filespec)
-        : dnet_fal_type(stdout, &lk, pfx, ns.filespec);
-    memset(password, 0, sizeof password);
-    fflush(stdout);
-    if (st & 1)
-        return 0;
-    /* The failure was said above, in VMS's words; $STATUS carries it with
-     * STS$M_INHIB_MSG so DCL adds no "image ... exited" line (as SET HOST,
-     * rd vms-5843). */
-    sys$exit(st | 0x10000000u);
-    return 1;
 }
 
 /*
@@ -9118,11 +8808,6 @@ int main(int argc, char **argv)
     int copy_self_test = 0;               /* --copy-selftest : COPY command-layer floor */
     int copy_accept_test = 0;             /* --copy-accept-test : full COPY transfer proof */
     int copy_xport_test = 0;              /* --copy-transport-selftest : COPY client pump floor */
-    const char *copy_src = NULL;          /* --copy <src> <dst> : outbound FAL COPY      */
-    const char *copy_dst = NULL;
-    int copy_password_fd = -1;            /* --password-fd N : the FAL password source   */
-    int falverb = 0;                      /* --directory / --type (rd vms-6a4)           */
-    const char *falverb_spec = NULL;      /* ... NODE"user"::spec                        */
     int router_mode = 0;           /* --router: emit router-hellos, advertise L1 router */
     int router_priority = 0;       /* --priority: DR-election priority (0 => DNA default 64) */
 
@@ -9167,18 +8852,6 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--copy-selftest")) copy_self_test = 1;
         else if (!strcmp(argv[i], "--copy-accept-test")) copy_accept_test = 1;
         else if (!strcmp(argv[i], "--copy-transport-selftest")) copy_xport_test = 1;
-        else if (!strcmp(argv[i], "--copy") && i + 2 < argc) {
-            copy_src = argv[++i];
-            copy_dst = argv[++i];
-        }
-        else if (!strcmp(argv[i], "--directory") && i + 1 < argc) {
-            falverb = DNET_FAL_VERB_DIRECTORY; falverb_spec = argv[++i];
-        }
-        else if (!strcmp(argv[i], "--type") && i + 1 < argc) {
-            falverb = DNET_FAL_VERB_TYPE; falverb_spec = argv[++i];
-        }
-        else if (!strcmp(argv[i], "--password-fd") && i + 1 < argc)
-            copy_password_fd = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--router")) router_mode = 1;
         else if (!strcmp(argv[i], "--priority") && i + 1 < argc)
             router_priority = atoi(argv[++i]);
@@ -9230,12 +8903,8 @@ int main(int argc, char **argv)
         return run_copy_transport_selftest();
     if (copy_accept_test)
         return run_copy_accept_test();
-    /* $ DIRECTORY / $ TYPE node:: are NETACP _NET: clients only; with no
-     * NETACP the link open reports it in VMS's words (run_fal_verb_net). */
-    if (falverb)
-        return run_fal_verb_net(falverb, falverb_spec, copy_password_fd);
-    /* --copy (run_copy_loop) needs the live datalink; dispatched after the socket
-     * is opened, beside the --set-host client (below). */
+    /* $ DIRECTORY / $ TYPE / $ COPY node:: are RMS's own remote access now
+     * (rd vms-0a7: src/vmsrms/rms_remote.c); no DECNETD client runs them. */
 
     /* A router routes and a --set-host CLIENT bridges a terminal; neither is a
      * NETACP that serves inbound object-42 sessions unless the caller pins it on.
@@ -9252,11 +8921,9 @@ int main(int argc, char **argv)
      * executive datalink backend) that is an honest failure -- DECnet is not
      * started -- never a private engine; only the host/lab AF_PACKET instrument
      * build still runs its own engine (it has no NETACP to defer to). */
-    if (copy_src || set_host_to) {
+    if (set_host_to) {
         int nr = netacp_running();
         if (nr == 1 && !ifname_explicit) {
-            if (copy_src)
-                return run_copy_net(copy_src, copy_dst, copy_password_fd);
             struct netcli c;
             if (netcli_assign(&c) != 0)
                 return 1;
@@ -9616,17 +9283,6 @@ int main(int argc, char **argv)
      * a CTERM terminal session to object 42 on the remote node and bridges THIS
      * process's VMS terminal channel to it, then returns -- it owns its own loop
      * and never falls through to the routing/inbound loop below. */
-    /* --copy CLIENT (rd vms-ea8): the OUTBOUND $ COPY over the live datalink. It
-     * opens an object-17 FAL logical link to the remote node, drives the DAP
-     * transfer, and returns -- it owns its own transfer and never falls through
-     * to the routing/inbound loop below. */
-    if (copy_src) {
-        int r = run_copy_loop(&eng, sock, ifindex, copy_src, copy_dst,
-                              copy_password_fd);
-        scs_datalink_close(sock);
-        return r;
-    }
-
     if (set_host_to) {
         unsigned ta = 0, tn = 0;
         int rrc = sethost_resolve_target(set_host_to, &ta, &tn);

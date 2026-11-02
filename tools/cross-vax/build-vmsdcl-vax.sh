@@ -121,6 +121,29 @@ fi
 echo "OK: no undefined readline symbols -- DCL's own non-readline line editor is used"
 echo
 
+# --- the WEAK SEAMS libvms reaches LIBVMSRMS through (rd vms-1f7) -----------
+# libvms declares its LIBVMSRMS entry points `#pragma weak` (rightslist.c,
+# sysuaf.c, rms_textfile.c, ...) so a bare LIBVMS unit test links without
+# LIBVMSRMS and takes the honest miss. In THIS static-archive link a weak
+# undefined reference does NOT pull its archive member in, so unless DCL also
+# references the symbol strongly it stays NULL -- and on the VAX disk that left
+# F$IDENTIFIER, SHOW PROCESS's "User Identifier:" and SHOW DEVICE's owner UIC
+# on the miss ([001,004], never [SYSTEM]) while the very same code linked by the
+# top-level CMake build resolved. Every weak symbol libvms leaves undefined that
+# LIBVMSRMS DEFINES is forced in with --undefined, and proof 3 below fails the
+# build if any is still weak in the linked image.
+WEAK_SEAMS=$("$TARGET-nm" "$LIBVMS_A" 2>/dev/null | awk '$1=="w"{print $2}' | sort -u)
+# Only LIBVMSRMS's: that is the library the seams name (the shared-library
+# runtimes bind exactly these when LIBVMSRMS$SHR is loaded). Other weak hooks
+# (e.g. the in-process image activator's) keep their own link decision.
+STACK_DEFS=$("$TARGET-nm" --defined-only "$LIBVMSRMS_A" 2>/dev/null | awk 'NF==3{print $3}' | sort -u)
+printf '%s\n' "$STACK_DEFS" > "$OUT/stack-defs.txt"
+FORCE_SEAMS=$(printf '%s\n' "$WEAK_SEAMS" | grep -Fx -f "$OUT/stack-defs.txt" || true)
+SEAM_FLAGS=""
+for s in $FORCE_SEAMS; do SEAM_FLAGS="$SEAM_FLAGS -Wl,--undefined=$s"; done
+echo "weak LIBVMS seams LIBVMSRMS defines (forced in): $(echo $FORCE_SEAMS)"
+test -n "$FORCE_SEAMS" || { echo "FAIL: found no weak LIBVMS seams -- the scan itself is broken"; exit 1; }
+
 # --- proof 2: link the REAL DCL.EXE over the full elf32-vax stack -----------
 echo "=== proof 2: link a real vax--netbsdelf DCL.EXE over the whole stack ==="
 # --whole-archive on libvmsdcl.a forces EVERY DCL object in, so any unresolved
@@ -130,6 +153,7 @@ echo "=== proof 2: link a real vax--netbsdelf DCL.EXE over the whole stack ==="
     -I"$VMS_INCLUDE" -I"$VMSPROCESS_INCLUDE" -I"$VMSLNM_INCLUDE" \
     -I"$VMSFS_INCLUDE" -I"$VMSRMS_INCLUDE" -I"$VMSDCL_INCLUDE" -I"$LIBVMSSYS" \
     -Wl,--whole-archive "$LIBDCL" -Wl,--no-whole-archive \
+    $SEAM_FLAGS \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
@@ -138,6 +162,22 @@ echo "=== proof 2: link a real vax--netbsdelf DCL.EXE over the whole stack ==="
 echo "--- linked executable ---"
 file "$OUT/DCL.EXE"
 "$TARGET-readelf" -h "$OUT/DCL.EXE" | grep -Ei 'Class|Data|Machine|Type'
+
+
+# --- proof 3: no LIBVMS seam the stack defines is left weak-NULL -----------
+echo "=== proof 3: every forced seam is DEFINED in DCL.EXE (none left weak) ==="
+STILL_WEAK=""
+for s in $FORCE_SEAMS; do
+    "$TARGET-nm" "$OUT/DCL.EXE" | awk -v s="$s" '$NF==s && ($(NF-1)=="T"||$(NF-1)=="D"||$(NF-1)=="B"||$(NF-1)=="R"){f=1} END{exit !f}' \
+        || STILL_WEAK="$STILL_WEAK $s"
+done
+if [ -n "$STILL_WEAK" ]; then
+    echo "FAIL: DCL.EXE leaves these LIBVMS seams weak-NULL:$STILL_WEAK"
+    exit 1
+fi
+echo "OK: all $(echo $FORCE_SEAMS | wc -w) seams are defined (e.g. ovmx_rightslist_idtoasc)"
+"$TARGET-nm" "$OUT/DCL.EXE" | grep -q ' T ovmx_rightslist_idtoasc$' \
+    || { echo "FAIL: ovmx_rightslist_idtoasc is not in DCL.EXE -- SHOW PROCESS cannot resolve a UIC"; exit 1; }
 
 echo
 echo "=== ALL PROOFS PASSED: vmsdcl builds and links a DCL.EXE for $TARGET ==="

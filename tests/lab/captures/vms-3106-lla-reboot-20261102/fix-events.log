@@ -1,0 +1,19 @@
+15:19:30 VAXC at Username:
+15:19:43 VAXC logged in
+15:19:54 VAXC licensed
+15:19:56 VAXC DECnet executor on
+15:20:17 mfix boot1: OVMXA logged in after 21s
+15:20:18 mfix boot1: NCP executor on=True
+15:20:19 mfix boot1: SET HOST VAXC -> Username: after 0.4s
+15:20:23 mfix boot1: remote WHO=
+15:20:23 VAXC links mfix boot1 session up | Known Link Volatile Summary as of  2-NOV-2026 15:20:23 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP            17577  SYSTEM
+15:20:27 mfix boot1: qemu KILLED mid-session (SIGKILL)
+15:20:46 mfix boot2: OVMXA logged in after 20s
+15:20:47 mfix boot2: NCP executor on=True
+15:20:48 VAXC links mfix boot2 before SET HOST (21s after kill) | Known Link Volatile Summary as of  2-NOV-2026 15:20:48 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP            17577  SYSTEM
+15:20:48 mfix boot2: SET HOST VAXC -> Username: after 0.3s
+15:20:52 mfix boot2: remote WHO="
+15:20:53 VAXC links mfix boot2 after SET HOST | Known Link Volatile Summary as of  2-NOV-2026 15:20:53 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP            17577  SYSTEM / 8194    1.963 (OVMXA)    20200215  REMACP            34967  SYSTEM
+15:20:53 mfix boot2: %REM-S-END,
+15:20:55 mfix boot2: qemu stopped
+15:20:55 RESULTS {"mfix": {"boot1": [true, 0.4], "boot2": [true, 0.3]}}

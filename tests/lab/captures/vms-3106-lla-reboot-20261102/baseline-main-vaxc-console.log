@@ -1,0 +1,249 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/w/vax.ini-1> attach nvr data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/w/vax.ini-8> attach rq0 data/d0.dsk
+%SIM-INFO: RQ0: 'data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: VAXCSYS      Format: DECFILE11B   Sectors In Volume: 2940951
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/w/vax.ini-14> attach xq udp:41001:127.0.0.1:41002
+%SIM-INFO: Eth: opened OS device udp:41001:127.0.0.1:41002
+/w/vax.ini-16> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at  2-NOV-2026 15:22:54.28
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20200208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:02.99  %%%%%%%%%%%
+Operator _VAXC$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:02.99  %%%%%%%%%%%
+Operator status for operator _VAXC$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:03.06  %%%%%%%%%%%
+Logfile has been initialized by operator _VAXC$OPA0:
+Logfile is VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;11
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:03.06  %%%%%%%%%%%
+Operator status for operator VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;11
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:03.07  %%%%%%%%%%%
+15:22:51.85 Node VAXC (csid 00000000) proposed formation of a VAXcluster
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:03.07  %%%%%%%%%%%
+15:22:51.85 Node VAXC (csid 00010001) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:03.08  %%%%%%%%%%%
+15:22:51.85 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:03.53  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:03.54  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+-RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:04.16  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-PROXYSTARTINGUP, proxy processing now starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:04.19  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:04.20  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:04.23  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%SMG-W-GBLNOTCRE, global section not created
+-SYSTEM-F-GPTFULL, global page table is full
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:06.01  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAXC.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:06.54  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Audit server starting up
+Event time:                2-NOV-2026 15:23:06.45
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:07.90  %%%%%%%%%%%
+Message from user DECNET on VAXC
+DECnet starting
+
+%RUN-S-PROC_ID, identification of created process is 20200213
+%NCP-I-NOINFO, No information in database
+%RUN-S-PROC_ID, identification of created process is 20200215
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at  2-NOV-2026 15:23:11.80
+
+  Accounting information:
+  Buffered I/O count:            1486         Peak working set size:    1601
+  Direct I/O count:               601         Peak page file size:      4924
+  Page faults:                   6938         Mounted volumes:             0
+  Charged CPU time:           0 00:00:08.97   Elapsed time:     0 00:00:17.69
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:23:13.30  %%%%%%%%%%%
+Message from user DECNET on VAXC
+DECnet event 4.10, circuit up
+From node 1.965 (VAXC),  1-JAN-1977 00:00:53.64
+Circuit QNA-0
+
+
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC
+    Last interactive login on Monday,  2-NOV-2026 15:20[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ 
+[bench: LICENSE REGISTER of DVNETRTG, VAX-VMS, VAXCLUSTER typed here from the lab PAKs. The console log is paused; PAK contents are REDACTED ENTIRELY.]
+
+$ LICENSE LOAD DVNETRTG
+%LICENSE-I-UNLOADED, DEC DVNETRTG has been unloaded
+%LICENSE-I-LOADED, DEC DVNETRTG was successfully loaded with 51200 units
+$ LICENSE LOAD VAX-VMS
+%LICENSE-I-UNLOADED, DEC VAX-VMS has been unloaded
+%LICENSE-I-LOADED, DEC VAX-VMS was successfully loaded with 0 units
+$ LICENSE LOAD VAXCLUSTER
+%LICENSE-I-UNLOADED, DEC VAXCLUSTER has been unloaded
+%LICENSE-I-LOADED, DEC VAXCLUSTER was successfully loaded with 51200 units
+$ SHOW LICENSE
+
+Active licenses on node VAXC:
+
+------- Product ID --------    ---- Rating ----- -- Version --
+Product            Producer    Units Avail Activ Version Release    Termination
+DVNETRTG           DEC         51200  0     0      0.0  (none)      18-DEC-2099 
+VAX-VMS            DEC             0  0     0      0.0  (none)      18-DEC-2099 
+VAXCLUSTER         DEC         51200  0     100    0.0  (none)      18-DEC-2099 
+$ @SYS$STARTUP:STARTNET
+%SYSGEN-E-NOUNLOAD, driver is not unloadable
+%SYSGEN-F-DEVACTIVE, device is active
+%RUN-F-CREPRC, process creation failed
+-SYSTEM-F-DUPLNAM, duplicate name
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM has been superseded
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM_NOSOFTID has been superseded
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM_SOFTID has been superseded
+%NCP-I-NOINFO, No information in database
+%RUN-F-CREPRC, process creation failed
+-SYSTEM-F-DUPLNAM, duplicate name
+$ MCR NCP SHOW EXECUTOR
+ 
+ 
+Node Volatile Summary as of  2-NOV-2026 15:23:39
+ 
+Executor node = 1.965 (VAXC)
+ 
+State                    = on
+Identification           = DECnet for OpenVMS VAX V7.3
+
+ 
+$ MCR NCP SHOW KNOWN CIRCUITS
+ 
+ 
+Known Circuit Volatile Summary as of  2-NOV-2026 15:23:39
+ 
+   Circuit          State                   Loopback     Adjacent
+                                              Name      Routing Node
+ 
+  QNA-0             on
+$ MCR NCP SHOW KNOWN LINKS
+ 
+ 
+Known Link Volatile Summary as of  2-NOV-2026 15:24:06
+ 
+   Link       Node           PID     Process     Remote link  Remote user
+ 
+  8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+$ MCR NCP SHOW KNOWN LINKS
+ 
+ 
+Known Link Volatile Summary as of  2-NOV-2026 15:24:34
+ 
+   Link       Node           PID     Process     Remote link  Remote user
+ 
+  8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+$ MCR NCP SHOW KNOWN LINKS
+ 
+ 
+Known Link Volatile Summary as of  2-NOV-2026 15:25:19
+ 
+   Link       Node           PID     Process     Remote link  Remote user
+ 
+  8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+$ MCR NCP SHOW EXECUTOR COUNTERS
+ 
+ 
+Node Counters as of  2-NOV-2026 15:25:21
+ 
+Executor node = 1.965 (VAXC)
+ 
+           2  Maximum logical links active
+           0  Aged packet loss
+           0  Node unreachable packet loss
+           0  Node out-of-range packet loss
+           0  Oversized packet loss
+           0  Packet format error
+           0  Partial routing update loss
+           0  Verification reject
+
+ 
+$ 

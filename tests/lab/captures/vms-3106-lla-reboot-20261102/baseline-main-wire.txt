@@ -1,0 +1,105 @@
+== baseline-main-boot1.pcap
+   17.890 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   17.894  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP CONN-ACK     dstaddr 0x2100
+   17.895  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP CC           dstaddr 0x2100 srcaddr 0x2001 (8193)  services 0x01 info 0x03 segsize 1459
+            data 00  |.|
+   17.897 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP LINK-SVC     dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  00 80 01 00  |....|
+   17.898  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP LINK-SVC     dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  00 80 01 00 00 00  |......|
+   17.900  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  00 80 01 10 01 02 04 00 07 00 10 00  |............|
+   17.900 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP OTHER-ACK    dstaddr 0x2001
+   17.901 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   17.931 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  01 80 01 00 04 02 04 00 07 00 00 00 00 00 00 00 00 00 00 00 00  |.....................|
+   17.932  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA-ACK     dstaddr 0x2100
+   17.933  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  01 80 02 10 09 00 17 00 01 00 01 04 00 00 00 00 00 00 00 00 00 01 02 10 1e 03 04 fe ff ef 00 06 ...  |................................|
+   17.935  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  01 80 03 00 09 00 07 00 0b 00 02 02 03 3b 00  |.............;.|
+   17.935 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   17.935 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   17.969 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  03 80 02 00 09 00 35 00 01 00 01 04 00 07 00 00 00 00 00 00 00 01 02 f2 03 02 02 c0 03 03 04 fe ...  |......5.........................|
+   17.969 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  03 80 03 00 09 00 0b 00 17 00 00 01 00 00 00 00 00 00 00  |...................|
+   17.974  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA-ACK     dstaddr 0x2100
+   17.974  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  02 80 04 10 09 00 0b 00 17 00 00 01 00 00 00 00 00 00 00  |...................|
+   17.974  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA-ACK     dstaddr 0x2100
+   17.975 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  03 80 04 00 09 00 16 00 13 0c 01 00 06 00 00 00 18 00 42 20 84 00 a0 02 00 18 00 32 00 00  |..................B .......2..|
+   17.975 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   17.975 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  03 80 04 00 09 00 16 00 13 0c 01 00 06 00 00 00 18 00 42 20 84 00 a0 02 00 18 00 32 00 00  |..................B .......2..|
+   17.975 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   17.987  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA-ACK     dstaddr 0x2100
+   18.021  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  04 80 05 10 09 00 05 00 07 72 02 01 0d 44 00 07 72 02 01 0d 20 57 65 6c 63 6f 6d 65 20 74 6f 20 ...  |.........r...D..r... Welcome to |
+   18.022 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   18.023  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  04 80 06 00 09 00 18 00 0f 00 a2 1b 00 00 27 00 0c 00 04 00 01 00 04 00 00 00 02 00 0c 00 00 00  |..............'.................|
+   18.023 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   18.079 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  06 80 05 00 09 00 1a 00 0f 00 a2 1b 00 00 01 00 06 00 00 00 18 00 42 20 84 00 a0 02 00 18 00 32 ...  |......................B .......2|
+   18.080  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA-ACK     dstaddr 0x2100
+   18.095  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  05 80 07 10 09 00 1d 00 02 08 b0 00 84 00 0c 00 14 00 0c 00 00 00 00 00 00 0d 0a 55 73 65 72 6e ...  |...........................Usern|
+   18.096 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   19.175 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  07 80 06 00 09 00 0f 00 03 00 00 00 00 00 06 00 53 59 53 54 45 4d 0d  |................SYSTEM.|
+   19.178  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA-ACK     dstaddr 0x2100
+   19.192  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  06 80 08 10 09 00 1d 00 02 08 b8 00 84 00 0c 00 14 00 0c 00 00 00 00 00 00 0d 0a 50 61 73 73 77 ...  |...........................Passw|
+   19.193 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   20.269 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  08 80 07 00 09 00 15 00 03 00 00 00 00 00 0c 00 58 58 0d  |................XX.|
+   20.275  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA-ACK     dstaddr 0x2100
+   20.420  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  07 80 09 10 09 00 4d 00 07 72 02 01 0d 20 57 65 6c 63 6f 6d 65 20 74 6f 20 4f 70 65 6e 56 4d 53 ...  |......M..r... Welcome to OpenVMS|
+   20.422  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  07 80 0a 00 09 00 07 00 0b 00 02 02 19 3b 29  |.............;)|
+   20.423 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   20.423 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   20.423 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   20.423 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   20.435  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  07 80 0b 10 09 00 07 00 0b 00 02 02 14 3f 03  |.............?.|
+   20.436 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   20.462  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  07 80 0c 10 09 00 16 00 02 08 90 0a 00 01 05 00 00 00 05 00 00 00 00 00 00 0d 0a 00 24 20  |............................$ |
+   20.482 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   22.606 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA         dstaddr 0x2001 srcaddr 0x2100 (8448)
+            nsp  0c 80 08 00 09 00 58 00 03 00 00 00 00 00 4f 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 ...  |......X.......O.WRITE SYS$OUTPUT|
+   22.607  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA-ACK     dstaddr 0x2100
+   22.610  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  08 80 0d 10 09 00 1c 00 07 72 02 01 0d 57 48 4f 3d 56 41 58 43 20 54 54 3d 5f 56 41 58 43 24 52 ...  |.........r...WHO=VAXC TT=_VAXC$R|
+   22.614  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP DATA         dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  08 80 0e 00 09 00 16 00 02 08 90 0a 00 01 05 00 00 00 05 00 00 00 00 00 00 0d 0a 00 24 20  |............................$ |
+   22.614 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   22.617 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP DATA-ACK     dstaddr 0x2001
+   (3 hello/routing-control frames not listed; 22 filter-dump duplicates dropped)
+== baseline-main-boot2.pcap
+   23.987 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   28.248 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   33.244 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   38.245 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   43.246 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   48.243 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   53.246 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   55.049  1.965(VAXC) -> 1.963(OVMXA) rflg 0x26 NSP LINK-SVC     dstaddr 0x2100 srcaddr 0x2001 (8193)
+            nsp  00 80 02 00 00 00  |......|
+   58.249 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   63.242 1.963(OVMXA) -> 1.965(VAXC)  rflg 0x2e NSP CI           dstaddr 0x0000 srcaddr 0x2100 (8448)  services 0x01 info 0x03 segsize 1459
+            data 00 2a 02 00 01 00 04 00 06 53 59 53 54 45 4d 27 00 00 00 00  |.*.......SYSTEM'....|
+   (9 hello/routing-control frames not listed; 13 filter-dump duplicates dropped)

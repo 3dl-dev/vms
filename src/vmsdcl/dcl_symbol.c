@@ -377,6 +377,28 @@ const char *dcl_sym_get_which(const char *name, int *scope)
 }
 
 /*
+ * dcl_sym_get_typed - dcl_sym_get(), also reporting the symbol's own type
+ * (DCL_SYM_STRING or DCL_SYM_INTEGER) in *type. A DCL symbol's type is the one
+ * it was given, never re-derived from its value text: $STATUS is the STRING
+ * "%X00030001" (rd vms-d80, docs/oracle/semantics/sym/).
+ */
+const char *dcl_sym_get_typed(const char *name, int *type)
+{
+    if (!name) return NULL;
+    int d = SYM_DOM_GENERAL;
+    struct sym_entry *e = sym_find(cur_local(), name);
+    if (!e && !sym_frames[sym_top].hide_outer_local[d]) {
+        for (int f = sym_top - 1; f >= 0 && !e; f--)
+            e = sym_find(sym_frames[f].buckets, name);
+    }
+    if (!e && !sym_frames[sym_top].hide_global[d])
+        e = sym_find(global_table, name);
+    if (!e) return NULL;
+    if (type) *type = e->type;
+    return e->value;
+}
+
+/*
  * Get a symbol value in the general (non-first-token) translation domain.
  * Searches local first, then global. Returns NULL if not found.
  */

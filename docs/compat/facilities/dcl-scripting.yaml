@@ -31,7 +31,7 @@ items:
     vms: "ON condition THEN ...; SET ON / SET NOON"
     evidence: src/vmsdcl/dcl_script.c
     verified_against: "docs/oracle/semantics/on/vax73.txt (33 cases, VAX V7.3) via tests/dcl/test_on_condition_oracle.sh + tests/qemu/test_semantic_oracle.sh"
-    notes: "The on semantic-oracle family runs the same procedure on VAX V7.3 and on OVMX and byte-compares the transcripts. It covers: the default action (ERROR/SEVERE exit, WARNING goes on); ON WARNING/ERROR/SEVERE_ERROR against every severity, where an armed ON replaces the default, so under ON SEVERE_ERROR an ERROR goes on; the action is one-shot, CONTINUE included; GOTO/EXIT/CONTINUE actions; SET NOON/SET ON, and ON after SET NOON turns checking back on; per-level scope (a CALLed level starts at the default whatever its caller set); EXIT's status as an expression; EXIT with no status returning $STATUS with STS$M_INHIB_MSG set. One case is a tracked known-diff that is not ON's: $STATUS is a STRING symbol on VMS (vms-d80)."
+    notes: "The on semantic-oracle family runs the same procedure on VAX V7.3 and on OVMX and byte-compares the transcripts. It covers: the default action (ERROR/SEVERE exit, WARNING goes on); ON WARNING/ERROR/SEVERE_ERROR against every severity, where an armed ON replaces the default, so under ON SEVERE_ERROR an ERROR goes on; the action is one-shot, CONTINUE included; GOTO/EXIT/CONTINUE actions; SET NOON/SET ON, and ON after SET NOON turns checking back on; per-level scope (a CALLed level starts at the default whatever its caller set); EXIT's status as an expression; EXIT with no status returning $STATUS with STS$M_INHIB_MSG set. The handler case reads $STATUS as the STRING it is on VMS (F$STRING($STATUS) = \"%X10000002\", rd vms-d80)."
 
   - id: dcl-scripting$call-subroutine
     kind: command
@@ -63,7 +63,16 @@ items:
     authenticity: real
     vms: "$STATUS holds a VMS condition code, conventionally displayed %Xhhhhhhhh"
     evidence: src/vmsdcl/dcl_exec.c:165
-    notes: "$STATUS is stored VMS-style as the 32-bit condition value and rendered %X%08X (dcl_set_status, dcl_exec.c:165/172); IF/arithmetic reads it radix-aware. Former facade-risk (plain decimal) retired."
+    notes: "$STATUS is a STRING symbol holding the 32-bit condition value rendered %X%08X (dcl_set_status); F$STRING($STATUS) is that string, and an operator that needs an integer converts it radix-aware (F$INTEGER($STATUS), $STATUS + 1, .NOT. $STATUS). Measured on VAX V7.3 by the sym semantic-oracle family (SYM.STATUS.*, see dcl-scripting$symbol-types). Former facade-risk (plain decimal) retired."
+
+  - id: dcl-scripting$symbol-types
+    kind: feature
+    status: verified
+    authenticity: real
+    vms: "A symbol is a STRING or an INTEGER; expressions convert between them by DCL's rules; full operator precedence including .NOT./.AND./.OR. and the comparisons"
+    evidence: src/vmsdcl/dcl_exec.c
+    verified_against: "docs/oracle/semantics/sym/vax73.txt (69 cases, VAX V7.3, captured twice, identical) via tests/dcl/test_sym_oracle.sh + tests/qemu/test_semantic_oracle.sh"
+    notes: "rd vms-d80. A symbol keeps the type it was given, never re-derived from its text: A = \"007\" is the string 007, $STATUS the string %X00030001. Two strings concatenate (\"5\" + \"5\" = 55); with one integer operand, and for * / unary minus .NOT. .AND. .OR. and the integer comparisons, a string is converted: a valid integer (decimal with leading zeros and blanks, %X/%O/%D) is its value, T/Y is 1, anything else 0. The logical operators are bitwise (1 .OR. 2 = 3, .NOT. 0 = -1); a comparison yields 1 or 0 and may appear in an assignment. F$TYPE answers INTEGER for a string whose text is a valid integer, radix forms included. String-valued lexicals (F$STRING, F$EXTRACT, F$FAO ...) stay strings. SET ON/NOON leave $STATUS %X00030001."
 
   - id: dcl-scripting$status-refresh
     kind: feature

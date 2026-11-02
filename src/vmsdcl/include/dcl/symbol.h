@@ -50,6 +50,14 @@ const char *dcl_sym_get_ex(const char *name, int domain);
 const char *dcl_sym_get(const char *name);
 /* dcl_sym_get, also reporting the table (DCL_SYM_LOCAL/GLOBAL) that answered. */
 const char *dcl_sym_get_which(const char *name, int *scope);
+/* dcl_sym_get, also reporting the symbol's type (DCL_SYM_STRING/INTEGER). */
+const char *dcl_sym_get_typed(const char *name, int *type);
+/* A string as an integer, as DCL converts one where an integer is needed: a
+ * valid integer (decimal, or %X/%O/%D/%B) is its value; otherwise a string
+ * that begins with T, t, Y or y is 1, and any other string is 0. */
+long dcl_str_to_int(const char *s);
+/* 1 if s is the text of a DCL integer (F$TYPE answers INTEGER for it). */
+int dcl_str_is_int(const char *s);
 int dcl_sym_get_int(const char *name, int32_t *value);
 
 /* Delete a symbol */

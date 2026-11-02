@@ -141,6 +141,38 @@ long dcl_parse_int(const char *s, int *ok)
 }
 
 /*
+ * dcl_str_to_int / dcl_str_is_int (rd vms-d80): a STRING used where DCL needs
+ * an integer -- an arithmetic operator with an integer operand, * and /, unary
+ * minus, an integer comparison, .NOT./.AND./.OR. -- is converted: a string
+ * that is a valid integer is its value ("%X00030001" -> 196609, " 5" -> 5,
+ * "007" -> 7, decimal), one that begins with T/t/Y/y is 1, and any other is 0
+ * ("abc", "FALSE", "no", ""). F$TYPE answers INTEGER for a string symbol whose
+ * text is a valid integer ("007", "%X10") and STRING otherwise ("TRUE").
+ * Measured on VAX V7.3: docs/oracle/semantics/sym/ (SYM.STR*, SYM.STATUS.*).
+ */
+long dcl_str_to_int(const char *s)
+{
+    int ok;
+    if (!s) return 0;
+    long v = dcl_parse_int(s, &ok);
+    if (ok) return v;
+    while (*s == ' ' || *s == '\t') s++;
+    char c = (char)toupper((unsigned char)*s);
+    return (c == 'T' || c == 'Y') ? 1 : 0;
+}
+
+int dcl_str_is_int(const char *s)
+{
+    if (!s || !*s || *s == ' ' || *s == '\t') return 0;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) return 0;
+    size_t n = strlen(s);
+    if (s[n - 1] == ' ' || s[n - 1] == '\t') return 0;
+    int ok;
+    (void)dcl_parse_int(s, &ok);
+    return ok;
+}
+
+/*
  * dcl_lexical_result_is_int (rd vms-dee/vms-9357): decide whether a lexical
  * function's string result should be treated as an INTEGER. It should ONLY when
  * the string is the CANONICAL representation of that integer -- i.e. it round-
@@ -238,6 +270,50 @@ static const char *val_to_str(expr_val_t *v, char *buf, size_t bufsz)
     return buf;
 }
 
+/* The value as an integer (a string is converted, dcl_str_to_int). DCL
+ * integers are 32-bit longwords: the result wraps as on VMS. */
+static long val_to_int(const expr_val_t *v)
+{
+    long iv = v->is_string ? dcl_str_to_int(v->sval) : v->ival;
+    return (long)(int32_t)(uint32_t)iv;
+}
+
+/* Expression grammar, lowest precedence first (DCL Dictionary, "Expressions";
+ * measured on VAX V7.3, docs/oracle/semantics/sym/ SYM.LOG.PREC.*):
+ *   .OR.  <  .AND.  <  .NOT.  <  comparisons  <  + -  <  * /  <  unary + -
+ * The logical operators are BITWISE on integers (1 .OR. 2 = 3, .NOT. 0 = -1);
+ * a comparison yields 1 or 0. */
+static expr_val_t parse_or(expr_parser_t *ep);
+
+/* Match a dot operator (".AND.") at the parser position, case-insensitive. */
+static size_t ep_match_dot(expr_parser_t *ep, const char *op)
+{
+    size_t n = strlen(op);
+    if (ep->pos + n > ep->len) return 0;
+    if (strncasecmp(ep->input + ep->pos, op, n) != 0) return 0;
+    return n;
+}
+
+/*
+ * 1 for a lexical function whose value is always a STRING (DCL Dictionary,
+ * each function's "Returns"): its result is never re-typed from its text.
+ * `call` is the call text ("F$STRING(...)").
+ */
+static int lexical_returns_string(const char *call)
+{
+    static const char *const fns[] = {
+        "F$STRING", "F$EXTRACT", "F$ELEMENT", "F$EDIT", "F$FAO", "F$TYPE",
+        "F$SEARCH", "F$PARSE", "F$CVTIME", "F$TIME", "F$USER", "F$PID",
+        "F$MESSAGE", "F$DELTA_TIME", "F$UNIQUE", "F$DIRECTORY", "F$MODE",
+        "F$PRIVILEGE", "F$SETPRV", "F$CSID",
+    };
+    size_t n = 0;
+    while (call[n] && call[n] != '(' && call[n] != ' ' && call[n] != '\t') n++;
+    for (size_t i = 0; i < sizeof(fns) / sizeof(fns[0]); i++)
+        if (strlen(fns[i]) == n && strncasecmp(call, fns[i], n) == 0) return 1;
+    return 0;
+}
+
 /*
  * Parse a primary (atom): number, quoted string, symbol reference, or
  * parenthesised sub-expression.
@@ -250,7 +326,7 @@ static expr_val_t parse_primary(expr_parser_t *ep)
     /* Parenthesised expression */
     if (c == '(') {
         ep_consume(ep); /* ( */
-        expr_val_t v = parse_expr(ep);
+        expr_val_t v = parse_or(ep);
         ep_skip_ws(ep);
         if (ep_peek(ep) == ')') ep_consume(ep);
         return v;
@@ -333,19 +409,27 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         char buf[DCL_MAX_VALUE];
         size_t bi = 0;
         int depth = 0;
+        int inq = 0, called = 0;
         while (ep->pos < ep->len) {
             char ch = ep->input[ep->pos];
-            if (ch == '(') depth++;
+            if (inq) {
+                if (ch == '"') inq = 0;   /* a doubled "" re-opens next char */
+            } else if (ch == '"') inq = 1;
+            else if (ch == '(') depth++;
             else if (ch == ')') {
                 if (depth == 0) break;
                 depth--;
+                if (depth == 0) called = 1;
             } else if (depth == 0 &&
                        (ch == ' ' || ch == '+' || ch == '-' ||
-                        ch == '*' || ch == '/')) {
+                        ch == '*' || ch == '/' || ch == '.')) {
                 if (ch != ' ') break;
             }
             if (bi < sizeof(buf) - 1) buf[bi++] = ch;
             ep->pos++;
+            /* the call ends at its own closing parenthesis: what follows
+             * (" .EQ. 3", " + 1") is the next operator (rd vms-d80) */
+            if (called) break;
         }
         buf[bi] = '\0';
         char result[DCL_MAX_VALUE];
@@ -356,9 +440,14 @@ static expr_val_t parse_primary(expr_parser_t *ep)
                 !eval_fail_status)
                 eval_fail_status = dcl_lexical_failure(ep->ctx);
         }
-        /* Coerce to int only for a CANONICAL integer; a formatted/zero-padded
-         * lexical result (F$PID's %08X pid) stays a string. Shared rule:
-         * dcl_lexical_result_is_int (rd vms-dee/vms-9357). */
+        /* A function that always returns a STRING keeps it a string, so
+         * F$STRING($STATUS) + "/" + F$STRING($SEVERITY) concatenates
+         * ("%X10000002/2", docs/oracle/semantics/on/ ON.HANDLER.STATUS, rd
+         * vms-d80). For the others, coerce to int only for a CANONICAL
+         * integer; a formatted/zero-padded result (F$PID's %08X pid) stays a
+         * string. Shared rule: dcl_lexical_result_is_int (rd vms-dee/vms-9357). */
+        if (lexical_returns_string(buf))
+            return make_str(result);
         long iv;
         if (dcl_lexical_result_is_int(result, &iv))
             return make_int(iv);
@@ -408,7 +497,8 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         }
         buf[bi] = '\0';
         char *endp;
-        long iv = strtol(buf, &endp, 0);
+        int hex = (strchr(buf, 'x') || strchr(buf, 'X'));
+        long iv = strtol(buf, &endp, hex ? 16 : 10);
         return make_int(iv);
     }
 
@@ -425,27 +515,20 @@ static expr_val_t parse_primary(expr_parser_t *ep)
         }
         word[wi] = '\0';
 
-        /* Look up as symbol first */
-        const char *val = dcl_sym_get(word);
+        /* Look up as symbol first. The value has the symbol's OWN type: a
+         * STRING symbol stays a string even when its text spells a number
+         * ($STATUS "%X00030001", "5", F$PID's "00000067") and is converted
+         * only where an operator needs an integer (val_to_int); an INTEGER
+         * symbol is an integer. Re-deriving the type from the text made
+         * F$STRING($STATUS) decimal and "5" + "5" ten (rd vms-d80, measured
+         * docs/oracle/semantics/sym/ SYM.STATUS.*, SYM.STRNUM.PLUS.STR). */
+        int stype = DCL_SYM_STRING;
+        const char *val = dcl_sym_get_typed(word, &stype);
         if (val) {
-            int iok;
-            long iv = dcl_parse_int(val, &iok);
-            if (iok) {
-                /* Coerce a symbol ref to int when its value is a CANONICAL integer
-                 * OR an explicit radix/signed literal -- $STATUS is stored
-                 * "%X00000001" and MUST stay int-usable for IF/arithmetic. A plain
-                 * zero-padded decimal string (F$PID's pid "00000001", no radix
-                 * marker) is a STRING and its form is preserved, so PID = F$PID(ctx)
-                 * then using PID keeps the %08X pid instead of collapsing to 1.
-                 * rd vms-9357. */
-                const char *t = val;
-                while (*t == ' ' || *t == '\t') t++;
-                int radix = (t[0] == '%') || (t[0] == '+') || (t[0] == '-') ||
-                            (t[0] == '0' && (t[1] == 'x' || t[1] == 'X'));
-                char canon[32];
-                snprintf(canon, sizeof(canon), "%ld", iv);
-                if (radix || strcmp(canon, val) == 0)
-                    return make_int(iv);
+            if (stype == DCL_SYM_INTEGER) {
+                int iok;
+                long iv = dcl_parse_int(val, &iok);
+                return make_int(iok ? iv : 0);
             }
             return make_str(val);
         }
@@ -464,9 +547,25 @@ static expr_val_t parse_primary(expr_parser_t *ep)
 /*
  * Parse multiplicative expression: factor (* | /) factor ...
  */
+/*
+ * Unary plus / minus: an integer operation (-"5" is -5, SYM.STRNUM.NEG).
+ */
+static expr_val_t parse_unary(expr_parser_t *ep)
+{
+    ep_skip_ws(ep);
+    char c = ep_peek(ep);
+    if (c == '-' || c == '+') {
+        ep_consume(ep);
+        expr_val_t v = parse_unary(ep);
+        long iv = val_to_int(&v);
+        return make_int(c == '-' ? -iv : iv);
+    }
+    return parse_primary(ep);
+}
+
 static expr_val_t parse_term(expr_parser_t *ep)
 {
-    expr_val_t left = parse_primary(ep);
+    expr_val_t left = parse_unary(ep);
 
     while (1) {
         ep_skip_ws(ep);
@@ -474,13 +573,12 @@ static expr_val_t parse_term(expr_parser_t *ep)
         if (op != '*' && op != '/') break;
         ep_consume(ep);
         ep_skip_ws(ep);
-        expr_val_t right = parse_primary(ep);
+        expr_val_t right = parse_unary(ep);
 
-        /* Integer-only operations */
-        if (left.is_string || right.is_string) {
-            /* Type error — leave left unchanged */
-            break;
-        }
+        /* Integer-only operations: a string operand is converted
+         * ("yes" * 1 = 1, "abc" * 1 = 0: SYM.STRYES.TIMES, SYM.STRALPHA.TIMES) */
+        left = make_int(val_to_int(&left));
+        right = make_int(val_to_int(&right));
         if (op == '*') {
             left.ival *= right.ival;
         } else {
@@ -515,10 +613,13 @@ static expr_val_t parse_expr(expr_parser_t *ep)
         ep_skip_ws(ep);
         expr_val_t right = parse_term(ep);
 
-        if (!left.is_string && !right.is_string) {
-            /* Integer arithmetic */
-            if (op == '+') left.ival += right.ival;
-            else           left.ival -= right.ival;
+        if (!left.is_string || !right.is_string) {
+            /* Integer arithmetic. With ONE string operand the string is
+             * converted ($STATUS + 1 = 196610, 2 + "3" = 5, "abc" + 1 = 1);
+             * only two strings concatenate / remove (SYM.INT.PLUS.STRNUM,
+             * SYM.STRALPHA.PLUS.INT, SYM.STRNUM.PLUS.STR). */
+            long l = val_to_int(&left), r = val_to_int(&right);
+            left = make_int(op == '+' ? l + r : l - r);
         } else {
             /* String semantics */
             char lbuf[64], rbuf[64];
@@ -561,6 +662,97 @@ static expr_val_t parse_expr(expr_parser_t *ep)
 }
 
 /*
+ * Comparisons: .EQ. .NE. .LT. .GT. .LE. .GE. compare integers (a string is
+ * converted: "10" .GT. "9" is 1); .EQS. ... .GES. compare strings (an integer
+ * is its decimal text: SP_I .EQS. "2" is 1, 10 .LTS. 9 is 1). The result is
+ * the integer 1 or 0 (SYM.CMP.*, SYM.STRNUM.EQ*, SYM.INT.EQS).
+ */
+static expr_val_t parse_cmp(expr_parser_t *ep)
+{
+    static const struct { const char *op; int str; int type; } ops[] = {
+        { ".EQS.", 1, 0 }, { ".NES.", 1, 1 }, { ".LTS.", 1, 2 },
+        { ".GTS.", 1, 3 }, { ".LES.", 1, 4 }, { ".GES.", 1, 5 },
+        { ".EQ.",  0, 0 }, { ".NE.",  0, 1 }, { ".LT.",  0, 2 },
+        { ".GT.",  0, 3 }, { ".LE.",  0, 4 }, { ".GE.",  0, 5 },
+    };
+    expr_val_t left = parse_expr(ep);
+    for (;;) {
+        ep_skip_ws(ep);
+        size_t i, adv = 0;
+        for (i = 0; i < sizeof(ops) / sizeof(ops[0]); i++)
+            if ((adv = ep_match_dot(ep, ops[i].op)) != 0) break;
+        if (!adv) break;
+        ep->pos += adv;
+        expr_val_t right = parse_expr(ep);
+        int c;
+        if (ops[i].str) {
+            char lb[32], rb[32];
+            c = strcmp(val_to_str(&left, lb, sizeof(lb)), val_to_str(&right, rb, sizeof(rb)));
+        } else {
+            long l = val_to_int(&left), r = val_to_int(&right);
+            c = (l > r) - (l < r);
+        }
+        int t = 0;
+        switch (ops[i].type) {
+        case 0: t = (c == 0); break;
+        case 1: t = (c != 0); break;
+        case 2: t = (c < 0);  break;
+        case 3: t = (c > 0);  break;
+        case 4: t = (c <= 0); break;
+        case 5: t = (c >= 0); break;
+        }
+        left = make_int(t);
+    }
+    return left;
+}
+
+/* .NOT. is the bitwise complement of the (converted) operand: .NOT. 0 = -1,
+ * .NOT. $STATUS = -196610 (SYM.LOG.NOT.ZERO, SYM.STATUS.NOT). */
+static expr_val_t parse_not(expr_parser_t *ep)
+{
+    ep_skip_ws(ep);
+    size_t adv = ep_match_dot(ep, ".NOT.");
+    if (adv) {
+        ep->pos += adv;
+        expr_val_t v = parse_not(ep);
+        return make_int((long)~(int32_t)val_to_int(&v));
+    }
+    return parse_cmp(ep);
+}
+
+static expr_val_t parse_and(expr_parser_t *ep)
+{
+    expr_val_t left = parse_not(ep);
+    for (;;) {
+        ep_skip_ws(ep);
+        size_t adv = ep_match_dot(ep, ".AND.");
+        if (!adv) break;
+        ep->pos += adv;
+        expr_val_t right = parse_not(ep);
+        left = make_int(val_to_int(&left) & val_to_int(&right));
+    }
+    return left;
+}
+
+static expr_val_t parse_or(expr_parser_t *ep)
+{
+    expr_val_t left = parse_and(ep);
+    for (;;) {
+        ep_skip_ws(ep);
+        size_t adv = ep_match_dot(ep, ".OR.");
+        if (!adv) break;
+        ep->pos += adv;
+        expr_val_t right = parse_and(ep);
+        left = make_int(val_to_int(&left) | val_to_int(&right));
+    }
+    return left;
+}
+
+/* 1 when the last eval_expr parsed its whole input (nothing but blanks after
+ * the expression), so a caller can tell an expression from loose text. */
+static int eval_consumed_all;
+
+/*
  * Evaluate a DCL expression string.
  * Performs symbol substitution then arithmetic/string evaluation.
  * Returns the result in *out_val.
@@ -579,7 +771,9 @@ static void eval_expr(struct dcl_context *ctx, const char *expr,
     ep.ctx   = ctx;
 
     eval_fail_status = 0;
-    *out_val = parse_expr(&ep);
+    *out_val = parse_or(&ep);
+    ep_skip_ws(&ep);
+    eval_consumed_all = (ep.pos >= ep.len);
 }
 
 /*
@@ -714,6 +908,23 @@ static int has_arith_op(const char *s)
         if (*p == ')') { depth--; continue; }
         if (depth == 0 && (*p == '+' || *p == '-' || *p == '*' || *p == '/'))
             return 1;
+    }
+    return 0;
+}
+
+/* 1 if s has a DCL dot operator (.EQ. .AND. .NOT. ...) outside quotes. */
+static int has_dot_op(const char *s)
+{
+    static const char *ops[] = {
+        ".EQS.", ".NES.", ".LTS.", ".GTS.", ".LES.", ".GES.", ".EQ.", ".NE.",
+        ".LT.", ".GT.", ".LE.", ".GE.", ".AND.", ".OR.", ".NOT.",
+    };
+    int in_quote = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p == '"') { in_quote = !in_quote; continue; }
+        if (in_quote || *p != '.') continue;
+        for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++)
+            if (strncasecmp(p, ops[i], strlen(ops[i])) == 0) return 1;
     }
     return 0;
 }
@@ -1225,6 +1436,35 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
         size_t len = strlen(trimmed);
         while (len > 0 && (trimmed[len - 1] == ' ' || trimmed[len - 1] == '\t'))
             trimmed[--len] = '\0';
+
+        /* The right-hand side of = / == is an EXPRESSION, and the symbol takes
+         * the TYPE of its value: A = "007" is the string "007", A = $STATUS
+         * the string "%X00030001", A = 1 .OR. 2 the integer 3 (rd vms-d80,
+         * docs/oracle/semantics/sym/). Text that is not one whole expression
+         * (A = two words) keeps the lenient literal handling below. */
+        if (trimmed[0] != '\0') {
+            expr_val_t r;
+            eval_expr(ctx, trimmed, &r);
+            if (eval_fail_status == DCL_CLI_EXPSYN) {
+                if (has_arith_op(trimmed) || has_dot_op(trimmed)) {
+                    /* the symbol is left as it was, as on VMS */
+                    dcl_error("DCL", 0, "EXPSYN",
+                              "invalid expression syntax - check operators and operands");
+                    return (int)eval_fail_status;
+                }
+            } else if (eval_fail_status) {
+                /* a lexical function failed: the symbol is left the null
+                 * string, $STATUS the error */
+                dcl_sym_set(cmd->verb, "", scope);
+                return (int)eval_fail_status;
+            } else if (eval_consumed_all) {
+                if (r.is_string)
+                    dcl_sym_set(cmd->verb, r.sval, scope);
+                else
+                    dcl_sym_set_int(cmd->verb, (int32_t)r.ival, scope);
+                return DCL_ASSIGN_NORMAL;
+            }
+        }
 
         /* Check if it's a lexical function with no operators */
         if (strncasecmp(trimmed, "F$", 2) == 0 && !has_arith_op(trimmed)) {

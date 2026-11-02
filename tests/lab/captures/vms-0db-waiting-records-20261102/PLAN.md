@@ -197,3 +197,26 @@ Predictions for this firing:
 - **PA2b:** VAX3 sends 9 op-0x12 records (CH root, S0, S1; CG root, W0; CV root, W0; CU root,
   W0). The CV and CU W0 records are the converting and the waiting sub. PA3-PA8 are scored on
   them as registered, for the sub only.
+
+## Addendum 3, registered after arm A's second firing and before its third
+
+**Second firing: the tree did not move either, with the root's queues empty.** CC and CQ were
+stopped at 13:23:22Z; SDA on VAX3 then showed Lock Count 4 and no conversion or waiting entry on
+WQRC's root. CM1-CM4 sent 12,000 more conversions to VAX1 (24,001 02/06 in the capture by
+13:31Z). SDA at 13:27:41Z and 13:32:30Z: still CSID 00010001. **PA1b fails.** So the first
+firing's non-move does not ground HN: the trigger failed, as PA1b said it would read.
+
+What differs from run A0, which did move: in A0, VAX1's own holder was still alive while VAX2's
+activity ran. In both WQRC firings, VAX1's holder had been stopped before any activity began
+(the STOP came first, the delayed activity 90 s later), so VAX1 kept mastering a tree in which it
+holds nothing.
+
+**Third firing, same tree and capture:** VAX1 takes WQRC again (`RMH 110-WQRC`, CO2, root CR),
+then VAX2 starts four more delayed-activity processes (`RMW 31AWQRC`, CP1-CP4), then VAX3 queues
+the root's converter and waiter again (`RMW 51CWQRC` CC2, `RMW 50QWQRC` CQ2). Nothing is stopped.
+SDA on VAX3 before the activity starts. V and U are still queued on W0.
+
+- **PA1c:** WQRC moves to VAX2 within 10 minutes of CP1-CP4's activity starting. If it moves,
+  PA2-PA8 are scored on this firing as registered (VAX3's records: CH 3, CG 2, CV 2, CU 2, CC2 1,
+  CQ2 1 = 11). If it does not, a fourth firing stops CC2 and CQ2 and starts four more
+  delayed-activity processes with CO2 still alive: a move then is HN for the root's queues.

@@ -139,6 +139,13 @@ foreach(_src ${QEMU_SYSSVC_SOURCES})
     qemu_syssvc_add_test(${_name} ${_src})
 endforeach()
 
+# test_syssvc_va (rd vms-bc53): the DEC C heap's VM entry points
+# (ovmx_decc_vm.c, what DECC$SHR's malloc calls) against the real executive.
+if(TARGET test_syssvc_va)
+    target_sources(test_syssvc_va PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmslink/ovmx_decc_vm.c)
+endif()
+
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
 # condition bridge. DELIBERATELY named test_arith_* (NOT test_syssvc_*): it is an
 # Alpha-only libvms RTL signal primitive, not a /dev/vms executive facility, so

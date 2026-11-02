@@ -190,6 +190,7 @@ vms-y := vms_module.o \
          ../vmsfs/ods2/ods2_edit.o \
          vms_p0.o \
          vms_p1.o \
+         vms_va.o \
          vms_bg_pollfd.o \
          vms_bg_datafd.o \
          ../kernel-core/vms_tt.o \

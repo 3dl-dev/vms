@@ -1289,6 +1289,11 @@ uint32_t vms_kif_bg_setmode(uint32_t exec_chan);
  * raw ICMP socket for PING (vms-80b), then drive it with the ordinary
  * connect/send/recv. Fails SS$_NOSUCHDEV with no executive. */
 uint32_t vms_kif_bg_setmode_icmp(uint32_t exec_chan);
+/* IO$_SETMODE (UDP subfunction) -- create the channel's host socket as an
+ * AF_INET/SOCK_DGRAM UDP socket (vms-a9e7, the DNS resolver's transport), then
+ * drive it with the ordinary connect/send/recv. Fails SS$_NOSUCHDEV with no
+ * executive. */
+uint32_t vms_kif_bg_setmode_udp(uint32_t exec_chan);
 /* IO$_ACCESS -- connect to a peer (sockaddr_in fields, network byte order). */
 uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
                             uint16_t port, uint32_t addr);
@@ -1319,7 +1324,9 @@ uint32_t vms_kif_bg_materialize_fd(uint32_t exec_chan, int *out_fd);
 uint32_t vms_kif_bg_getname(uint32_t exec_chan, uint32_t which,
                             uint16_t *family, uint16_t *port, uint32_t *addr);
 /* IO$_SETMODE socket-option subfunction -- apply an integer option (e.g.
- * TCP_NODELAY, SO_KEEPALIVE) to the REAL host kernel socket. */
+ * TCP_NODELAY, SO_KEEPALIVE) to the REAL host kernel socket. level
+ * VMS_BG_SOL_EXEC (vms_bg.h) carries an executive-defined option instead --
+ * VMS_BG_SO_RCVTIMEO_MS, the receive timeout (vms-a9e7). */
 uint32_t vms_kif_bg_setsockopt(uint32_t exec_chan, int level, int optname,
                                int optval);
 /* IO$_SENSEMODE socket-option subfunction -- read an integer option back off

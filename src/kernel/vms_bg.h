@@ -267,6 +267,33 @@ struct vms_bg_datafd_args {
 #define VMS_IOCTL_BG_SETMODE_ICMP _IOWR(VMS_IOC_MAGIC, 0x8e, struct vms_bg_chanonly_args)
 
 /*
+ * IO$_SETMODE (UDP subfunction) -- create an AF_INET/SOCK_DGRAM/IPPROTO_UDP host
+ * socket on the channel (vms-a9e7, the resolver's DNS transport). The exact
+ * vms-80b shape: chan-only args, a distinct request number, then the ORDINARY
+ * connect/send/recv/deaccess/dassgn ioctls -- a connected UDP socket moves one
+ * datagram per IO$_WRITEVBLK / IO$_READVBLK. The userspace $QIO surface selects
+ * it at IO$_SETMODE via the P2 socket-kind selector IO$K_SOCK_UDP (iodef.h).
+ */
+#define VMS_IOCTL_BG_SETMODE_UDP  _IOWR(VMS_IOC_MAGIC, 0x8f, struct vms_bg_chanonly_args)
+
+/*
+ * EXECUTIVE-LEVEL socket options on VMS_IOCTL_BG_SOCKOPT (vms-a9e7). The
+ * `level`/`optname` pair otherwise carries the SUBSTRATE's own numbers straight
+ * through to the host socket (the veneer's setsockopt). The receive timeout is
+ * different: it is set from the $QIO surface (IO$_SETMODE P4, the TCP/IP
+ * Services socket-option item list), which is freestanding and names no host
+ * socket header -- and SOL_SOCKET/SO_RCVTIMEO are numbered differently on Linux
+ * and NetBSD. So the executive defines its OWN level, chosen to collide with no
+ * substrate level (Linux SOL_SOCKET 1 / IPPROTO_IP 0 / IPPROTO_TCP 6; NetBSD
+ * SOL_SOCKET 0xffff), and the seam primitive exec_socket_set_rcvtimeo realises it
+ * per substrate. optval = the timeout in MILLISECONDS (0 = block indefinitely,
+ * the default every socket starts with). A READVBLK that times out completes
+ * SS$_TIMEOUT. OVMX design choice (Rule 8), labelled -- not a VMS value.
+ */
+#define VMS_BG_SOL_EXEC         0x4f56  /* 'OV': executive-defined option level */
+#define VMS_BG_SO_RCVTIMEO_MS   1       /* int ms; 0 = no timeout */
+
+/*
  * Socket-name / socket-option surface for a MATERIALIZED [bgconn] fd (vms-0cd).
  * These are issued on the materialized data fd ITSELF (its .unlocked_ioctl), NOT on
  * /dev/vms: after a wrapped daemon dup2()s the connection onto stdin/stdout and

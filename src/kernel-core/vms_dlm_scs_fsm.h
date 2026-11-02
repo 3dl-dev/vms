@@ -563,6 +563,9 @@ struct dlm_req_fsm {
 	uint32_t blkasts_unparsed;    /* an op-0x05 body the codec refused --  */
 				       /* wrong cat/op, or a zero lock id       */
 	uint32_t hashes_learned;      /* body[128:132] -> the resource block   */
+	uint32_t grant_notifies_rx;   /* a master's op-0x02 deferred grant     */
+				       /* parsed (rd vms-f29f)                 */
+	uint32_t grant_notifies_unparsed; /* ...and one the codec refused     */
 
 	/* The refusals -- each one a place this file declines to fabricate. */
 	uint32_t hash_unknown_refused;   /* a lookup with no wire-learned hash */
@@ -763,6 +766,18 @@ enum dlm_req_status dlm_req_fsm_blkast(struct dlm_req_fsm *f,
 enum dlm_req_status dlm_req_fsm_blkast_body(struct dlm_req_fsm *f,
 					    vms_csid_t from_csid,
 					    const uint8_t *body, uint32_t len);
+
+/*
+ * THE DEFERRED GRANT (rd vms-f29f): a master's cat-0x02 op-0x02, 132 bytes, for
+ * a request of ours it answered 0xfb QUEUED. Parsed by the codec, matched by
+ * the requester handle at body[24:28] (one this node minted), and dispatched to
+ * the GRANT cell an 82/01 grant uses. Nothing is sent. DLM_REQ_E_CODEC for a
+ * body the codec refuses, DLM_REQ_E_NOLOCK when it names no request of ours.
+ */
+enum dlm_req_status dlm_req_fsm_grant_notify_body(struct dlm_req_fsm *f,
+						  vms_csid_t from_csid,
+						  const uint8_t *body,
+						  uint32_t len);
 
 /* A member left the cluster. Every request outstanding at it is FAILED with a
  * real path-lost status, so no $ENQW waits for an answer that cannot come --

@@ -772,6 +772,24 @@ static void arm_bindings(void)
 	    "a request from a real VMS system served as MASTER is counted");
 	has("d->mixed_replies_taken++",
 	    "... and so is an answer from one, matched to a request of ours");
+	/*
+	 * rd vms-f29f: THE MASTER'S DEFERRED GRANT (cat-0x02 op-0x02) for a
+	 * request of ours reaches the FSM's body entry -- from ANY member, so
+	 * ABOVE RULE C, as the reply is. Declined, a real VAX1's grant of a lock
+	 * it had queued left the OVMX $ENQW asleep for ever (lab run vms-5fa);
+	 * what the FSM then does with it is driven against the real engine in
+	 * test_dlm_mixed_master.c.
+	 */
+	/* negctl: dlm-f29f-deferred-grant-declined-by-the-arm */
+	has("req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY) {\n"
+	    "\t\tif (dlm_req_fsm_grant_notify_body(&d->req, req->from_csid,",
+	    "*** a master's op-0x02 is routed to the FSM's deferred-grant "
+	    "entry ***");
+	before("dlm_req_fsm_grant_notify_body(&d->req, req->from_csid,",
+	       "if (!dlm_arm_peer_is_ours(d, req))",
+	       "  ABOVE RULE C: a real VAX master's grant is taken");
+	has("d->grant_notifies_taken++",
+	    "  and a deferred grant taken is counted");
 	has("VMS_WIRE_RESPONSE_BIT) &&\n\t    !req->peer_is_ours) {",
 	    "an unproven system's REPLY is taken in any configuration -- it has "
 	    "to be, since an OVMX $ENQ can now be addressed at its directory -- "

@@ -87,8 +87,10 @@
 			       * by for a resource no frame has named (rd
 			       * vms-b5b0) */
 
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 /* The executive globals vms_lock.c reads, and the AST hook it calls. */
 uint32_t vms_local_csid = 0x00010004u;
@@ -1107,6 +1109,312 @@ static void lab_arm_b_the_ovmx_enq_routes_at_the_vax(void)
 	ct_check_eq_u32(lki_granted_mode(&app, lkid), LCK_K_NLMODE,
 			"*** and NOTHING above NL is granted here: the lab's "
 			"second holder cannot happen ***");
+	mixed_down();
+}
+
+/*
+ * rd vms-f29f: THE MASTER GRANTS A REQUEST IT QUEUED, AND THE $ENQW WAKES.
+ *
+ * Lab run vms-5fa (2026-11-02, tests/lab/captures/vms-5fa-shared-volume-
+ * 20261102): VAX1 masters EVAC$WORKLOAD; OVMXE's $ENQW EX reaches it (frame
+ * 5781), is answered 0xfb QUEUED, and at 18:30:44.18 VAX1 grants it -- its SDA
+ * shows "Master copy of lock 0100040F on system 00010003" granted EX, its
+ * master handle 100006A4. The grant reached OVMXE as a cat-0x02 op-0x02. The
+ * OVMX process never woke: it never printed, never wrote EVAC.DAT, and its EX
+ * blocked every later requester.
+ *
+ * Driven here end to end through the shipping engine and FSM: a REAL $ENQW on
+ * its own thread, the master's QUEUED answer built by the shipping builder from
+ * the request OVMX really sent, and the deferred grant as a REAL VAX op-0x02
+ * (fixtures/dlm-grant-notify-b, a real master's EX grant of a lock it had
+ * queued) carrying the two handles of THIS exchange: VAX1's master handle from
+ * the lab, and the requester handle OVMX put on its own request.
+ */
+#define F29F_VAX1_MASTER_LKID 0x100006a4u  /* VAX1's handle, vms-5fa capture */
+
+struct f29f_waiter {
+	struct vms_proc *proc;
+	uint32_t status;
+	uint32_t lkid;
+	uint32_t lk_status;
+	volatile int done;
+};
+
+static void *f29f_enqw_thread(void *arg)
+{
+	struct f29f_waiter *w = (struct f29f_waiter *)arg;
+	struct vms_enq_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkmode = LCK_K_EXMODE;
+	a.flags = LCK_M_SYNC;
+	strscpy(a.resnam, EVAC_RESNAM, sizeof(a.resnam));
+	vms_ioctl_enq(w->proc, (unsigned long)(void *)&a);
+	w->status = a.status;
+	w->lkid = a.lkid;
+	w->lk_status = a.lk_status;
+	w->done = 1;
+	return NULL;
+}
+
+static int f29f_wait(volatile int *flag, volatile uint32_t *count,
+		     uint32_t want, int ticks)
+{
+	int i;
+
+	for (i = 0; i < ticks; i++) {
+		if (flag != NULL && *flag)
+			return 1;
+		if (count != NULL && *count >= want)
+			return 1;
+		usleep(5000);
+	}
+	return 0;
+}
+
+static uint32_t f29f_rd32(const uint8_t *b)
+{
+	return (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+	       ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+
+static void f29f_wr32(uint8_t *b, uint32_t v)
+{
+	b[0] = (uint8_t)v;
+	b[1] = (uint8_t)(v >> 8);
+	b[2] = (uint8_t)(v >> 16);
+	b[3] = (uint8_t)(v >> 24);
+}
+
+/* The real VAX op-0x02, its two handle cells set to this exchange's. */
+static int f29f_real_grant_notify(uint8_t *body, uint32_t master_lkid,
+				  uint32_t req_lkid)
+{
+	static struct vms_fixture fx;
+	char path[600];
+	char err[VMS_FIXTURE_ERRLEN] = "";
+
+	snprintf(path, sizeof(path), "%s/%s", OVMX_FIXTURE_DIR,
+		 "dlm-grant-notify-b.spec");
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, &fx, err,
+			     sizeof(err)) != 0 ||
+	    fx.origin != VMS_FIXTURE_ORIGIN_CAPTURE ||
+	    fx.wire_len != VMS_CM_FRAME_LEN) {
+		printf("       reason: %s\n", err);
+		return -1;
+	}
+	memcpy(body, fx.bytes + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
+	f29f_wr32(body + VMS_OFB_DLM_MASTER_LKID, master_lkid);
+	f29f_wr32(body + VMS_OFB_DLM_REQ_LKID, req_lkid);
+	return 0;
+}
+
+static void f29f_a_queued_enqw_wakes_on_the_masters_grant(void)
+{
+	const uint8_t *frame = evac_captured_frame();
+	uint8_t ans[VMS_CM_FRAME_LEN];
+	uint8_t gn[VMS_CM_BODY_LEN];
+	struct vms_resmaster_args rm;
+	struct f29f_waiter w;
+	struct vms_proc app;
+	pthread_t th;
+	vms_csid_t master = 0;
+	uint32_t written = 0, ovmx_lkid;
+	int woke;
+
+	printf("-- rd vms-f29f: VAX1 masters EVAC$WORKLOAD, QUEUES an OVMX "
+	       "$ENQW EX, then GRANTS it with an op-0x02 --\n");
+	if (frame == NULL)
+		return;
+	labbed_up(0u, 0u, 0u);
+	lab_proc_init(&app);
+
+	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
+		 VMS_DLM_DIR_ANSWER_YOU && master == CSID_VAX,
+		 "VAX1 masters EVAC$WORKLOAD (its captured lookup, recorded)");
+
+	memset(&w, 0, sizeof(w));
+	w.proc = &app;
+	ct_check(pthread_create(&th, NULL, f29f_enqw_thread, &w) == 0,
+		 "the OVMX process's $ENQW EX runs on its own thread");
+	ct_check(f29f_wait(NULL, &g.n_sent, 1u, 400),
+		 "its request leaves this node");
+	ct_check_eq_u32((uint32_t)g.last_dst, CSID_VAX,
+			"  addressed to VAX1, the master");
+	ovmx_lkid = f29f_rd32(g.last + VMS_OFB_DLM_REQ_LKID);
+	ct_check(ovmx_lkid != 0u,
+		 "  carrying the requester handle this executive minted");
+
+	/* VAX1's 0xfb: queued behind its own EX holder. */
+	memset(ans, 0, sizeof(ans));
+	ct_check(vms_dlm_enq_response_build_queued(g.last, VMS_CM_BODY_LEN,
+						   F29F_VAX1_MASTER_LKID,
+						   ovmx_lkid, ans,
+						   (uint32_t)sizeof(ans),
+						   &written) == VMS_CODEC_OK,
+		 "VAX1's QUEUED answer to that request builds");
+	ct_check(dlm_req_fsm_reply_body(&g.fsm, (vms_csid_t)CSID_VAX, 0u,
+					body_of(ans), VMS_CM_BODY_LEN) ==
+		 DLM_REQ_OK, "  and the FSM takes it");
+	ct_check(!f29f_wait(&w.done, NULL, 0u, 120),
+		 "QUEUED: the $ENQW is still waiting, past the deadlock "
+		 "re-scan interval -- not granted, and not SS$_DEADLOCK");
+
+	/* *** VAX1 GRANTS IT: the real op-0x02. *** */
+	ct_check(f29f_real_grant_notify(gn, F29F_VAX1_MASTER_LKID,
+					ovmx_lkid) == 0,
+		 "the real VAX op-0x02 specimen loads (an EX deferred grant)");
+	/* negctl: dlm-f29f-deferred-grant-not-read */
+	ct_check(dlm_req_fsm_grant_notify_body(&g.fsm, (vms_csid_t)CSID_VAX,
+					       gn, VMS_CM_BODY_LEN) ==
+		 DLM_REQ_OK,
+		 "*** the master's op-0x02 is TAKEN as the grant of a request "
+		 "of ours ***");
+	woke = f29f_wait(&w.done, NULL, 0u, 400);
+	if (!woke)
+		(void)vms_lock_dlm_proxy_fail(ovmx_lkid, SS__UNSUPPORTED);
+	ct_check(woke && w.status == SS__NORMAL,
+		 "*** and the $ENQW WAKES with SS$_NORMAL -- the lab's process "
+		 "slept for ever here ***");
+	pthread_join(th, NULL);
+	ct_check_eq_u32(w.lkid, ovmx_lkid, "  with the handle it asked under");
+	ct_check_eq_u32(lki_granted_mode(&app, ovmx_lkid), LCK_K_EXMODE,
+			"  $GETLKI: held at EX, the mode VAX1 granted");
+	read_resmaster(EVAC_RESNAM, &rm);
+	ct_check(rm.master_csid == CSID_VAX && rm.is_local_master == 0u,
+		 "  and the resource still has ONE master: VAX1");
+	ct_check_eq_u32(g.fsm.grant_notifies_rx, 1u,
+			"  one deferred grant read, counted");
+
+	/* The process goes on and RELEASES -- at VAX1, by VAX1's handle. */
+	g.n_sent = 0u;
+	ct_check(do_deq(&app, ovmx_lkid) == SS__NORMAL,
+		 "the process releases its EX");
+	ct_check(g.n_sent == 1u && g.last_dst == CSID_VAX &&
+		 g.last[VMS_OFB_DLM_OP] == (uint8_t)VMS_DLM_WIREOP_DEQ &&
+		 f29f_rd32(g.last + VMS_OFB_DLM_MASTER_LKID) ==
+		 F29F_VAX1_MASTER_LKID &&
+		 f29f_rd32(g.last + VMS_OFB_DLM_REQ_LKID) == ovmx_lkid,
+		 "*** the op-0x03 goes to VAX1 naming VAX1's OWN handle from "
+		 "the op-0x02 -- the release every later requester waited "
+		 "for ***");
+	mixed_down();
+}
+
+/* Its refusals: nothing is granted that the frame does not really grant. */
+static void f29f_an_op02_grants_nothing_it_does_not_name(void)
+{
+	const uint8_t *frame = evac_captured_frame();
+	uint8_t gn[VMS_CM_BODY_LEN];
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	uint32_t lkid = 0, ovmx_lkid;
+
+	printf("-- rd vms-f29f: an op-0x02 for no request of ours, or one the "
+	       "codec refuses, grants nothing --\n");
+	if (frame == NULL)
+		return;
+	labbed_up(0u, 0u, 0u);
+	lab_proc_init(&app);
+	(void)vax_lookup(frame, CSID_VAX, &master);
+	ct_check(do_enq(&app, EVAC_RESNAM, LCK_K_EXMODE, 0u, &lkid) ==
+		 SS__NORMAL && lkid != 0u, "an async OVMX $ENQ EX at VAX1");
+	ovmx_lkid = f29f_rd32(g.last + VMS_OFB_DLM_REQ_LKID);
+
+	ct_check(f29f_real_grant_notify(gn, F29F_VAX1_MASTER_LKID,
+					ovmx_lkid ^ 0x00ff0000u) == 0,
+		 "the real op-0x02, naming a handle this node never minted");
+	ct_check(dlm_req_fsm_grant_notify_body(&g.fsm, (vms_csid_t)CSID_VAX,
+					       gn, VMS_CM_BODY_LEN) ==
+		 DLM_REQ_E_NOLOCK, "  is refused: no request of ours");
+	ct_check(f29f_real_grant_notify(gn, F29F_VAX1_MASTER_LKID,
+					ovmx_lkid) == 0,
+		 "the real op-0x02 for OUR request ...");
+	gn[VMS_OFB_DLM_GRANT_NOTIFY_MODE] = (uint8_t)VMS_LCK_NL;
+	ct_check(dlm_req_fsm_grant_notify_body(&g.fsm, (vms_csid_t)CSID_VAX,
+					       gn, VMS_CM_BODY_LEN) ==
+		 DLM_REQ_E_CODEC,
+		 "  ... granting NL, which no real one does (387 of 387): "
+		 "refused by the codec");
+	ct_check_eq_u32(lki_granted_mode(&app, lkid), LCK_K_NLMODE,
+			"  and the lock is still NOT held");
+	mixed_down();
+}
+
+/*
+ * rd vms-f29f: THE PEER-RECEIVE FUZZ for the deferred-grant entry. 20,000
+ * mutations of the real VAX op-0x02 -- random bytes anywhere, random lengths
+ * (short ones included), the requester handle sometimes ours and sometimes not
+ * -- thrown at the shipping FSM with a real request outstanding at "VAX1".
+ * Nothing may crash, NOTHING may be sent (nobody answers an op-0x02), and the
+ * lock may be granted only by a frame the codec admits naming OUR handle.
+ */
+static uint32_t f29f_rng = 0x5fa0f29fu;
+
+static uint32_t f29f_rand(void)
+{
+	f29f_rng ^= f29f_rng << 13;
+	f29f_rng ^= f29f_rng >> 17;
+	f29f_rng ^= f29f_rng << 5;
+	return f29f_rng;
+}
+
+static void f29f_fuzz_the_deferred_grant_entry(void)
+{
+	const uint8_t *frame = evac_captured_frame();
+	uint8_t base[VMS_CM_BODY_LEN], gn[VMS_CM_BODY_LEN];
+	struct vms_dlm_grant_notify parsed;
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	uint32_t lkid = 0, ovmx_lkid, i, k, len, sent0;
+	uint32_t admitted_ours = 0, bad_grant = 0;
+	enum dlm_req_status st;
+
+	printf("-- rd vms-f29f: fuzz the deferred-grant receive (20,000 "
+	       "mutated real op-0x02 bodies) --\n");
+	if (frame == NULL)
+		return;
+	labbed_up(0u, 0u, 0u);
+	lab_proc_init(&app);
+	(void)vax_lookup(frame, CSID_VAX, &master);
+	ct_check(do_enq(&app, EVAC_RESNAM, LCK_K_EXMODE, 0u, &lkid) ==
+		 SS__NORMAL && lkid != 0u, "an async OVMX $ENQ EX at VAX1");
+	ovmx_lkid = f29f_rd32(g.last + VMS_OFB_DLM_REQ_LKID);
+	ct_check(f29f_real_grant_notify(base, F29F_VAX1_MASTER_LKID,
+					ovmx_lkid) == 0,
+		 "the real op-0x02 specimen loads");
+	sent0 = g.n_sent;
+
+	for (i = 0u; i < 20000u; i++) {
+		memcpy(gn, base, sizeof(gn));
+		for (k = f29f_rand() % 6u; k > 0u; k--)
+			gn[f29f_rand() % VMS_CM_BODY_LEN] = (uint8_t)f29f_rand();
+		if ((f29f_rand() & 3u) == 0u)
+			f29f_wr32(gn + VMS_OFB_DLM_REQ_LKID, f29f_rand());
+		len = (f29f_rand() & 7u) == 0u ?
+		      f29f_rand() % (VMS_CM_BODY_LEN + 1u) : VMS_CM_BODY_LEN;
+		/* Keep the lock pending: a mutation the codec admits for OUR
+		 * handle would grant it, and that is counted, not fuzzed past. */
+		if (vms_dlm_grant_notify_parse_body(gn, len, &parsed) ==
+		    VMS_CODEC_OK && parsed.req_lkid == ovmx_lkid) {
+			admitted_ours++;
+			continue;
+		}
+		st = dlm_req_fsm_grant_notify_body(&g.fsm, (vms_csid_t)CSID_VAX,
+						   gn, len);
+		if (st == DLM_REQ_OK)
+			bad_grant++;
+	}
+	ct_check_eq_u32(bad_grant, 0u,
+			"no body the codec refuses, or naming another handle, "
+			"is ever taken as a grant");
+	ct_check_eq_u32(g.n_sent - sent0, 0u,
+			"*** and NOTHING was sent: an op-0x02 is never "
+			"answered ***");
+	ct_check_eq_u32(lki_granted_mode(&app, lkid), LCK_K_NLMODE,
+			"the lock is still pending after 20,000 hostile frames");
+	ct_check(admitted_ours > 0u,
+		 "  (the mutator did reach admissible frames for our handle)");
 	mixed_down();
 }
 
@@ -2234,6 +2542,9 @@ int main(void)
 	the_captured_frame_and_the_held_out_value();
 	lab_arm_a_the_captured_enq_is_served_as_master();
 	lab_arm_b_the_ovmx_enq_routes_at_the_vax();
+	f29f_a_queued_enqw_wakes_on_the_masters_grant();
+	f29f_an_op02_grants_nothing_it_does_not_name();
+	f29f_fuzz_the_deferred_grant_entry();
 
 	vax_first_then_ovmx_routes_to_the_vax();
 	with_no_entry_the_enq_masters_locally();

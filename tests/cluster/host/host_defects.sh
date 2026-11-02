@@ -140,6 +140,8 @@
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+dlm-f29f-deferred-grant-not-read
+dlm-f29f-deferred-grant-declined-by-the-arm
 blk-port-op-not-stamped
 blk-send-data-not-confirmed
 rdev-dismount-absent-status-wrong
@@ -415,6 +417,38 @@ hd_lines() {
 defect_field() {
     _d="$1"; _f="$2"
     case "$_d" in
+
+    dlm-f29f-deferred-grant-not-read)
+        case "$_f" in
+        facility)     echo "a master's cat-0x02 op-0x02 DEFERRED GRANT for a request of ours that it answered 0xfb QUEUED (vms_dlm_scs_fsm.c dlm_req_fsm_grant_notify_body, rd vms-f29f) completes that request on the GRANT cell an 82/01 grant uses";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the entry parses the op-0x02 and finds our request, then answers NOLOCK instead of dispatching the grant -- what shipped before, when nothing read one. MEASURED COST 2026-11-02 (tests/lab/captures/vms-5fa-shared-volume-20261102): VAX1 granted OVMXE's queued EX on EVAC\$WORKLOAD (SDA: 'Master copy of lock 0100040F on system 00010003') and the OVMX process slept in \$ENQW for ever, its EX blocking every later requester.";;
+        require_fail) hd_lines <<'EOF2'
+*** the master's op-0x02 is TAKEN as the grant of a request of ours ***
+*** and the $ENQW WAKES with SS$_NORMAL -- the lab's process slept for ever here ***
+  with the handle it asked under
+  $GETLKI: held at EX, the mode VAX1 granted
+  and the resource still has ONE master: VAX1
+the process releases its EX
+*** the op-0x03 goes to VAX1 naming VAX1's OWN handle from the op-0x02 -- the release every later requester waited for ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-f29f-deferred-grant-declined-by-the-arm)
+        case "$_f" in
+        facility)     echo "the arm ROUTES a master's op-0x02 to the FSM's deferred-grant entry, from any member, above RULE C (vms_dlm_scs.c dlm_arm_handle_request, rd vms-f29f)";;
+        targets)      echo "kernel-core/vms_dlm_scs.c";;
+        suites_red)   echo "test_dlm_scs_arm";;
+        isolation)    echo "isolated";;
+        why)          echo "the op-0x02 branch never matches, so a real VAX master's deferred grant falls to RULE C and is declined (cn->dlm_declined) -- the lab's vms-5fa hang, with the FSM entry intact but unreachable.";;
+        require_fail) hd_lines <<'EOF2'
+*** a master's op-0x02 is routed to the FSM's deferred-grant entry ***
+EOF2
+                      ;;
+        esac;;
 
     quorum-form-set-ignores-peers)
         case "$_f" in
@@ -3667,6 +3701,14 @@ EOF
 apply_edit() {
     _file="$1"; _d="$2"
     case "$_d" in
+    dlm-f29f-deferred-grant-not-read)
+        # The GRANT dispatch with that exact spelling is unique in the file.
+        sed -i 's|\treturn dq_dispatch(f, r, DLM_REQ_EV_GRANT, \&e);|\treturn DLM_REQ_E_NOLOCK; /* NEGCTL dlm-f29f-deferred-grant-not-read */|' "$_file";;
+
+    dlm-f29f-deferred-grant-declined-by-the-arm)
+        # The opcode test is unique in vms_dlm_scs.c.
+        sed -i 's|\t    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY) {|\t    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY \&\& 0) { /* NEGCTL dlm-f29f-deferred-grant-declined-by-the-arm */|' "$_file";;
+
     quorum-form-set-ignores-peers)
         # The ONE unconditional add of a CSB's votes into the cold-formation
         # sum; making it conditional on the LOCAL flag is exactly the old

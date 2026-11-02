@@ -171,6 +171,34 @@ static uint64_t monotonic_ms(void)
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
+/*
+ * Entropy for this start's NSP logical-link addresses (rd vms-3106). It mixes
+ * the kernel RNG with the WALL clock and the pid. The monotonic clock is not
+ * used because it restarts at boot. So a node that reboots does not begin
+ * again at the address of a link a peer may still hold.
+ */
+static uint64_t dnet_lla_entropy(void)
+{
+    uint64_t e = 0;
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd >= 0) {
+        if (read(fd, &e, sizeof e) != (ssize_t)sizeof e) e = 0;
+        close(fd);
+    }
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    e ^= ((uint64_t)ts.tv_sec << 20) ^ (uint64_t)ts.tv_nsec ^ ((uint64_t)getpid() << 40);
+    return e;
+}
+
+/* The address a one-link client (SET HOST, COPY run straight over the datalink)
+ * uses for its link: a fresh per-start value, never a fixed constant. */
+static uint16_t dnet_client_lla(void)
+{
+    uint16_t cur = dnet_lla_seed(dnet_lla_entropy());
+    return dnet_lla_take(&cur, NULL, NULL);
+}
+
 static void log_ts(FILE *out)
 {
     struct timespec ts;
@@ -3169,7 +3197,7 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
     uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX];
     size_t flen = 0;
     dnet_tick_t now = monotonic_sec();
-    if (dnet_engine_link_open(eng, parea, pnode, 0x2001, sc, sclen, 1459, 1,
+    if (dnet_engine_link_open(eng, parea, pnode, dnet_client_lla(), sc, sclen, 1459, 1,
                               DNET_NSP_VER_41, frame, sizeof(frame), &flen, now)
             != DNET_ENGINE_OK) {
         fprintf(stderr, "DECNETD-E-NOCONNECT, could not open a logical link"
@@ -4268,7 +4296,7 @@ static uint32_t copy_client_run(struct copy_wire *w,
         return SS$_ABORT;
 
     dnet_tick_t now = cw_now(w);
-    if (dnet_engine_link_open(eng, remote_area, remote_node, 0x2001, conn, clen,
+    if (dnet_engine_link_open(eng, remote_area, remote_node, dnet_client_lla(), conn, clen,
                               1459, 1, DNET_NSP_VER_41, frame, sizeof frame,
                               &flen, now) != DNET_ENGINE_OK)
         return SS$_ABORT;
@@ -5667,6 +5695,23 @@ static void netacp_note_links(const struct netacp_slot *slots)
         g_netacp_links_hwm = used;
 }
 
+/* rd vms-3106: is `addr` the local address of a link a pool slot holds now? */
+static int netacp_lla_in_use(uint16_t addr, void *ctx)
+{
+    const struct netacp_slot *slots = ctx;
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        if (slots[i].used && slots[i].lk.link.local_addr == addr)
+            return 1;
+    return 0;
+}
+
+/* The next logical-link address for a new pool link. It wraps within
+ * [DNET_LLA_MIN, 0xFFFF] and never hands out an address a live slot holds. */
+static uint16_t netacp_take_lla(const struct netacp_slot *slots, uint16_t *next_lla)
+{
+    return dnet_lla_take(next_lla, netacp_lla_in_use, (void *)slots);
+}
+
 static void netacp_show_name(const struct dnet_nodedb *db, uint16_t addr, char *out)
 {
     const struct dnet_node_entry *e = db ? dnet_nodedb_by_addr(db, addr) : NULL;
@@ -6094,8 +6139,7 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
         sl->reply_unit = req->reply_unit;
         sl->handle     = netacp_new_handle();
         sl->last_req   = now;
-        uint16_t lla = (*next_lla)++;
-        if (*next_lla < 0x2100) *next_lla = 0x2100;
+        uint16_t lla = netacp_take_lla(slots, next_lla);
         uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
         int orc = dnet_engine_link_open(&sl->lk, ra, rn, lla, desc, dlen, 1459, 1,
                                         NETACP_NSP_VERSION, fr, sizeof fr, &fn, now);
@@ -6395,8 +6439,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
     }
     sl->used = 1;
     netacp_note_links(slots);
-    uint16_t lla = (*next_lla)++;
-    if (*next_lla < 0x2100) *next_lla = 0x2100;
+    uint16_t lla = netacp_take_lla(slots, next_lla);
     uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
     if ((obj == DNET_MAIL11_OBJECT
              ? dnet_engine_link_accept_data(&sl->lk, lla, m11_acc, m11_acclen, fr, sizeof fr,
@@ -7074,7 +7117,7 @@ static unsigned long g_nb_wire;            /* frames NETACP put on the wire   */
 static int g_nb_wire_fd = -1;              /* -1: discard (the bounds tests)  */
 static struct netacp_slot g_nbslots[NETACP_POOL_CAP];
 static struct dnet_engine g_nbnode;
-static uint16_t g_nb_lla = 0x2100;
+static uint16_t g_nb_lla = DNET_LLA_MIN;   /* the booted loopback proof: links never leave the node */
 
 static ssize_t nb_tx(int fd, int ifx, uint16_t et, const uint8_t *mac,
                      const uint8_t *f, size_t n)
@@ -9335,7 +9378,10 @@ int main(int argc, char **argv)
      * `used` word: one page). Only slots below MAXIMUM LINKS are ever
      * reached. */
     static struct netacp_slot slots[NETACP_POOL_CAP];
-    uint16_t next_lla = 0x2100;
+    /* rd vms-3106: this start's first link address is a fresh per-start
+     * point, so a peer still holding a link from before a restart does not
+     * mistake our first Connect Initiate for part of it. */
+    uint16_t next_lla = dnet_lla_seed(dnet_lla_entropy());
     netacp_vnodes_load();              /* the network starts: volatile <- permanent */
     memcpy(g_netacp_self, eng.my_id, 6);
     g_netacp_self_set = 1;

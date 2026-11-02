@@ -302,6 +302,30 @@ int dnet_link_rx(struct dnet_link *lk, const struct dnet_nsp_msg *in,
 int dnet_link_tick(struct dnet_link *lk, dnet_tick_t now,
                    struct dnet_nsp_msg *out, int *has_out);
 
+/*
+ * Logical-link address allocation (rd vms-3106).
+ *
+ * A peer keeps a link to us until its own NSP gives up on it. If this node
+ * restarts and its first new Connect Initiate carries the SRCADDR of a link the
+ * peer still holds, the peer takes the CI for part of that old link and drops it.
+ * Observed on real OpenVMS VAX V7.3: the CI was refused with reason 38, or got no
+ * answer at all, until the VAX's stale link was cleared
+ * (tests/lab/captures/vms-05d-nodec-decnet-20261021/). The NSP spec has
+ * addresses chosen so that a recently used address is not reused soon. Every
+ * OVMX start therefore begins at a per-start point, not at a fixed constant.
+ *
+ * dnet_lla_seed maps caller-supplied entropy (the kernel RNG mixed with the
+ * wall clock, so it differs across a reboot) to a starting address in
+ * [DNET_LLA_MIN, 0xFFFF]. dnet_lla_take returns the cursor's address and
+ * advances the cursor. It wraps within that range and skips any address that
+ * `in_use` reports is held by a live link. It returns 0 only when every address
+ * is in use. 0 is never a valid local address.
+ */
+#define DNET_LLA_MIN 0x2100u
+uint16_t dnet_lla_seed(uint64_t entropy);
+uint16_t dnet_lla_take(uint16_t *cursor,
+                       int (*in_use)(uint16_t addr, void *ctx), void *ctx);
+
 /* State accessors. */
 static inline enum dnet_link_state dnet_link_state_of(const struct dnet_link *lk)
 {

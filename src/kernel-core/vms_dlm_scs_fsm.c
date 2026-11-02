@@ -925,6 +925,9 @@ static void h_grant(struct dlm_req_fsm *f, struct dq_ev *e)
 	if (e->rsp->valblk_present) {
 		g.valblk_present = 1u;
 		dq_memcpy(g.valblk, e->rsp->valblk, VMS_DLM_VALBLK_WIRE_LEN);
+		/* ...and ITS SEQUENCE, body[52:56] (rd vms-8159): the engine
+		 * keeps the pair, and a failover record relays both. */
+		g.valblk_seq = e->rsp->valblk_seq;
 	}
 
 	if (f->ops->grant_recv(f->ops->ctx, &g) != 0) {

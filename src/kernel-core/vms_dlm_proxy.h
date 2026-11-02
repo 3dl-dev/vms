@@ -848,6 +848,16 @@ struct vms_dlm_proxy_grant {
 	uint8_t  valblk_present;
 	uint8_t  pad;
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
+	/*
+	 * THAT BLOCK'S SEQUENCE, body[52:56] of the grant (rd vms-26e: 36,153 of
+	 * 36,153 real grants returning a non-zero block carry a non-zero one).
+	 * Read only with `valblk_present`. The engine keeps it on the proxy LKB
+	 * beside the block (rd vms-8159), because a survivor's op-0x08 failover
+	 * record carries the block it was last granted WITH its sequence
+	 * (RA1b VAX3's RMT1: RMLVB-0123456789 at 1, SDA's master LVB) -- and the
+	 * new master installs both.
+	 */
+	uint32_t valblk_seq;
 };
 
 uint32_t vms_lock_dlm_proxy_grant_recv(const struct vms_dlm_proxy_grant *g);

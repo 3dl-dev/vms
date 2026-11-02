@@ -510,6 +510,19 @@ struct vms_lock_entry {
                                          * is the holder's, not a default. 0 =>
                                          * VMS's own fallback, the lock id. */
     uint8_t             valblk[LCK_VALBLK_SIZE];
+    /*
+     * ON A PROXY: the SEQUENCE of the block the MASTER last delivered to this
+     * lock -- read off its grant (body[52:56], beside the block at
+     * body[36:52]; vms_lock_dlm_proxy_grant_recv), never a number this node
+     * invented (rd vms-8159). It is what lets a survivor's op-0x08 failover
+     * record carry `valblk` at body[88:104] with it at body[104:108], as a
+     * real survivor does (RA1b VAX3: RMLVB-0123456789, 1). 0 = this node holds
+     * no master-delivered block for the lock: never granted one, or its own
+     * value-block WRITE replaced it (the sequence a write advances to is rd
+     * vms-85c1's, not invented here). Unused on a local lock. Mirror in
+     * src/kernel-netbsd/vms_internal.h.
+     */
+    uint32_t            valblk_seq;
     struct vms_lock_resource *resource;
     struct vms_proc     *proc;
     int                 waiting;        /* 1 if on waiting list */

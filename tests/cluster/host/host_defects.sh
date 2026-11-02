@@ -313,7 +313,9 @@ dlm-rm-role-claimed-without-an-adoption
 dlm-rebuild-0xf9-not-adopted
 dlm-rebuild-record-sent-as-op12
 dlm-rebuild-install-ignores-compat
-dlm-rebuild-sent-outside-the-step"
+dlm-rebuild-sent-outside-the-step
+dlm-rebuild-record-drops-the-granted-valblk
+dlm-rebuild-record-stale-seq-after-own-write"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3190,6 +3192,35 @@ EOF
                       ;;
         esac;;
 
+    dlm-rebuild-record-drops-the-granted-valblk)
+        case "$_f" in
+        facility)     echo "a holder keeps the value block AND sequence its master last GRANTED a lock (rd vms-8159), so a survivor's op-0x08 failover record carries them at body[88:108] after that master leaves, as RA1b's VAX2 and VAX3 RMT1 records do (RMLVB-0123456789 at 1)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_xnode_grant_apply() stops recording the grant's sequence, so the proxy holds no pair and the ROOT record goes out with twenty zeros -- the pre-vms-8159 sender. A VAX new master then rebuilds the RSB with no value block although every survivor held a valid one.";;
+        require_fail) hd_lines <<'EOF'
+*** body[88:108] equals VAX3's real ROOT record: the block VAX1 last GRANTED this lock, RMLVB-0123456789, at its sequence 1 -- read off the proxy LKB after the master left (rd vms-8159) ***
+*** body[88:108] equals VAX2's real ROOT record: RMLVB-0123456789 at 1, the pair VAX1 granted (rd vms-8159) ***
+*** the record carries the GRANT's block and sequence ***
+  a later grant is the master's word again
+EOF
+                      ;;
+        esac;;
+
+    dlm-rebuild-record-stale-seq-after-own-write)
+        case "$_f" in
+        facility)     echo "a holder's own value-block WRITE (an op-0x06 down-conversion) replaces the granted block, so the granted sequence stops describing it and the failover record carries no block (rd vms-8159; the sequence a write advances to is rd vms-85c1)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "convert_proxy_request() stops clearing the pair on a write, so the record relays this node's NEW bytes beside the master's OLD sequence -- a block the new master would install as if the master had granted it at that sequence.";;
+        require_fail) hd_lines <<'EOF'
+*** after this node's own WRITE the record carries NO block: the granted sequence no longer describes the bytes, and the sequence a write advances to is rd vms-85c1's -- never a stale sequence beside new bytes ***
+EOF
+                      ;;
+        esac;;
+
     dlm-rm-role-claimed-without-an-adoption)
         case "$_f" in
         facility)     echo "the op-0x0f answer's NEW MASTER role is read off this node's own open adoption (rd vms-ed5 / vms-cab), never off the frame";;
@@ -4242,6 +4273,14 @@ apply_edit() {
     dlm-rebuild-sent-outside-the-step)
         # `if (f->ops->rb_window != 0 && f->ops->rb_window(f->ops->ctx))` is unique.
         sed -i 's|if (f->ops->rb_window != 0 \&\& f->ops->rb_window(f->ops->ctx))|if (1) /* NEGCTL dlm-rebuild-sent-outside-the-step */|' "$_file";;
+
+    dlm-rebuild-record-drops-the-granted-valblk)
+        # `        if (seq_how == DLM_GRANT_SEQ_SET)` is unique.
+        sed -i 's|^        if (seq_how == DLM_GRANT_SEQ_SET)$|        if (0 \&\& seq_how == DLM_GRANT_SEQ_SET) /* NEGCTL dlm-rebuild-record-drops-the-granted-valblk */|' "$_file";;
+
+    dlm-rebuild-record-stale-seq-after-own-write)
+        # `    if (post.write_valblk)` is unique.
+        sed -i 's|^    if (post.write_valblk)$|    if (0 \&\& post.write_valblk) /* NEGCTL dlm-rebuild-record-stale-seq-after-own-write */|' "$_file";;
 
     dlm-rm-role-claimed-without-an-adoption)
         # rm_h_role's role read: the second arm of the only ternary here.

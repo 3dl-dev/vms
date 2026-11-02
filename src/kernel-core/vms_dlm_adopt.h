@@ -261,8 +261,10 @@ struct vms_dlm_handover_rec {
 	                               * master's own 82/01 named              */
 	uint8_t  granted_mode;        /* body[30]                              */
 	uint8_t  requested_mode;      /* body[31]                              */
-	uint8_t  valblk_present;      /* the RSB holds a block the old master
-	                               * sent (a non-zero sequence)            */
+	uint8_t  valblk_present;      /* the LKB holds a block its master
+	                               * told it -- an op-0x1a or its last
+	                               * grant -- with a non-zero sequence
+	                               * (rd vms-8159)                        */
 	uint8_t  hash_known;          /* the RSB holds a directory hash        */
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];  /* body[88:104]                  */
 	uint32_t valblk_seq;                  /* body[104:108]                 */

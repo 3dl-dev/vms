@@ -65,7 +65,12 @@ The corpus holds 888 op-0x08 records in ten captures. Every sender is a real VAX
     locks) body[30] is the higher; which one is the granted mode is **not grounded**.
   - body[44:48+] is the resource identity (group, access mode, length, name).
   - body[88:108] is the value block and sequence. A 0xfa ROOT answer returns it at
-    body[36:56] (387 of 398).
+    body[36:56] (387 of 398). It is what the holder's lock was last told: its
+    master's last grant (record equals the grant's body[36:56] in 500 of 508 op-0x08
+    and op-0x12 records), or an op-0x1a that supersedes it. RA1b's RMT1 records carry
+    RMLVB-0123456789 at sequence 1 from both survivors, the master's LVB in SDA. After
+    the holder's own op-0x06 write the record carries the written bytes (145 of 153)
+    at a sequence no frame delivers (rd vms-8159; section 9 of the census).
   - body[128:132] on a ROOT is refhash of its own identity (550 of 550). On a SUB it is neither
     its own name's hash nor its parent's, the same finding `dlm_sublock_census.py` has for the
     op-0x01 sub request.

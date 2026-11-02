@@ -1717,3 +1717,20 @@ set_tests_properties(cluster_host_test_lnm_cluster PROPERTIES
     LABELS "unit;cluster;cluster_host;lnm"
     TIMEOUT 30
 )
+
+# ---- rd vms-0db: a HOLDER's WAITING and CONVERTING locks in op-0x12 and
+# op-0x08. A real holder sends one record per LKB it owns in the tree, granted,
+# converting and waiting alike: body[30] the requested mode, body[31] the
+# granted mode (0 if never granted), body[110] the queue state (01 granted,
+# 00 converting, ff waiting), in queue order per resource. Every cell of the
+# vms-0db arms is checked against SDA, and the corpus rule (answer body[28] ==
+# 0x10 | record body[108]) is pinned.
+add_test(NAME cluster_host_dlm_waiting_record_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_waiting_record_census.py"
+        --selftest "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_waiting_record_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)

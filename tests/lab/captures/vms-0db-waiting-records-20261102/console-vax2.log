@@ -1,0 +1,991 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/lab/k8s-labs/lab0db/vax2/vax.ini-1> attach nvr /lab/k8s-labs/lab0db/vax2/data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/lab/k8s-labs/lab0db/vax2/vax.ini-19> attach rq0 /lab/k8s-labs/lab0db/data/d0.dsk
+%SIM-INFO: RQ0: '/lab/k8s-labs/lab0db/data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: SYSDSK1      Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/lab0db/vax2/vax.ini-20> attach rq1 /lab/k8s-labs/lab0db/data/d1.dsk
+%SIM-INFO: RQ1: '/lab/k8s-labs/lab0db/data/d1.dsk' Contains ODS2 File system
+%SIM-INFO: RQ1: Volume Name: VAX1DATA     Format: DECFILE11B   Sectors In Volume: 2940951
+/lab/k8s-labs/lab0db/vax2/vax.ini-21> attach -r rq2 /lab/media/openvms073.iso
+%SIM-INFO: RQ2: Unit is read only
+%SIM-INFO: RQ2: '/lab/media/openvms073.iso' Contains ODS2 File system
+%SIM-INFO: RQ2: Volume Name: VAXVMS073    Format: DECFILE11B   Sectors In Volume: 1067894
+/lab/k8s-labs/lab0db/vax2/vax.ini-22> attach -r rq3 /lab/media/openvms-internet-product-suite-v11.iso
+%SIM-INFO: RQ3: Unit is read only
+%SIM-INFO: RQ3: '/lab/media/openvms-internet-product-suite-v11.iso' Contains ODS2 File system
+%SIM-INFO: RQ3: Volume Name: OVMSIPS11    Format: DECFILE11B   Sectors In Volume: 800000
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/lab/k8s-labs/lab0db/vax2/local.ini-2> at xq tap:tap2
+%SIM-INFO: Eth: opened OS device tap2
+/lab/k8s-labs/lab0db/vax2/local.ini-4> att dz 2002,speed=*32
+%SIM-INFO: Listening on port 2002
+/lab/k8s-labs/lab0db/vax2/vax.ini-26> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655X-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>^U
+>>>B/R5:10000000 DUA0
+[drv:boot-echo-verified attempt 1 'B/R5:10000000 DUA0']
+
+(BOOT/R5:10000000 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-W-SYSBOOT Can not map SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  sending VAXcluster membership request to system VAX1
+%CNXMAN,  now a VAXcluster member -- system VAX2
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at  2-NOV-2026 13:07:04.50
+%CNXMAN,  received VAXcluster membership request from system VAX3
+%CNXMAN,  proposing addition of system VAX3
+%CNXMAN,  completing VAXcluster state transition
+%INSTALL-E-OPENIN, error opening DISK$SYSDSK1:<SYS1.SYSCOMMON.SYSLIB>CXXL$MSG_SHR.EXE; as input
+-RMS-E-FNF, file not found
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20400208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.36  %%%%%%%%%%%
+Operator _VAX2$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.36  %%%%%%%%%%%
+Operator status for operator _VAX2$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.38  %%%%%%%%%%%
+Logfile has been initialized by operator _VAX2$OPA0:
+Logfile is VAX2::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.38  %%%%%%%%%%%
+Operator status for operator VAX2::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.39  %%%%%%%%%%%
+13:07:03.65 Node VAX2 (csid 00010002) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.39  %%%%%%%%%%%
+13:07:04.87 Node VAX2 (csid 00010002) received VAXcluster membership request from node VAX3
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.39  %%%%%%%%%%%
+13:07:04.87 Node VAX2 (csid 00010002) proposed addition of node VAX3
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.39  %%%%%%%%%%%
+13:07:04.94 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2040020E
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.59  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.60  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.61  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.61  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.61  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.62  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+-LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.62  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.62  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.94  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.96  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.98  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:11.99  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:12.04  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.32  %%%%%%%%%%%
+Message from user SYSTEM on VAX2
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX2.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.39  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.52  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:12.92)
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for DW-MOTIF-UI-RUSSKIJ
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.52  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:12.92)
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.57  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:12.95)
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for INSTANTSQL
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.58  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:12.95)
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.58  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:12.96)
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for INTL-LEXICON-AMERICAN
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.59  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:12.96)
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.61  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:12.98)
+Message from user SYSTEM on VAX3
+%LICENSE-W-NOLOAD, license was not loaded for MULTINET
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.61  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:12.98)
+Message from user SYSTEM on VAX3
+%LICENSE-F-EXCEEDED, attempted usage exceeds active license limits
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:13.62  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX2
+Security alarm (SECURITY) and security audit (SECURITY) on VAX2, system id: 1026
+Auditable event:          Audit server starting up
+Event time:                2-NOV-2026 13:07:13.55
+PID:                      20400204        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODENAME"\
+%DCL-W-PARMDEL, invalid parameter delimiter - check use of special characters
+ \("NODEMAME"\
+You have not yet configured your DECnet permanent database.  You must
+either use NCP to define your DECnet database, or invoke the command
+procedure SYS$MANAGER:NETCONFIG.COM, which will do it for you.
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:14.03  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:13.30)
+Message from user SYSTEM on VAX3
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:14.06  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:13.31)
+Message from user SYSTEM on VAX3
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:14.06  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:13.32)
+Message from user SYSTEM on VAX3
+%SECSRV-I-CIAEXISTCLU, security server using existing cluster intrusion database
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:14.06  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:13.32)
+Message from user SYSTEM on VAX3
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:14.07  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:13.33)
+Message from user SYSTEM on VAX3
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:15.00  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:14.30)
+Message from user SYSTEM on VAX3
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAX3.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:15.39  %%%%%%%%%%%
+Operator _VAX3$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:15.50  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:14.62)
+Message from user AUDIT$SERVER on VAX3
+Security alarm (SECURITY) and security audit (SECURITY) on VAX3, system id: 1027
+Auditable event:          Audit server starting up
+Event time:                2-NOV-2026 13:07:14.56
+PID:                      20600204        
+Username:                 SYSTEM          
+
+
+%TCPIP-I-INFO, TCP/IP Services startup beginning at  2-NOV-2026 13:07:15.76
+%TCPIP-I-NORMAL, timezone information verified
+%RUN-S-PROC_ID, identification of created process is 20400213
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:16.42  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet Loaded
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.39  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:18.04)
+Message from user DECNET on VAX1
+DECnet event 4.10, circuit up
+From node 1.1 (VAX1),  1-JAN-1977 00:00:53.64
+Circuit QNA-0
+
+
+%TCPIP-I-SETLOCAL, setting domain and/or local host
+%TCPIP-I-STARTCOMM, starting communication
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.55  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet Started
+
+%TCPIP-I-SETPROTP, setting protocol parameters
+%TCPIP-I-DEFINTE, defining interfaces
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.56  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Created INTERnet interface: QE0
+
+%TCPIP-I-STARTNAME, starting name service
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.70  %%%%%%%%%%%
+Message from user Proxy Server on VAX2
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%TCPIP-S-STARTDONE, TCP/IP Kernel startup completed
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.79  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:18.59)
+Message from user INTERnet on VAX1
+INTERnet Loaded
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:17.82  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:17.30)
+Message from user INTERnet on VAX3
+INTERnet Loaded
+
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-E-PROXYERROR, error processing proxy request
+-TCPIP-W-NORECORD, information not found
+-RMS-E-RNF, record not found
+%TCPIP-I-LOADSERV, loading TCPIP server proxy information
+%TCPIP-I-SERVLOADED, auxiliary server loaded with 0 proxy records
+-TCPIP-I-SERVSKIP, skipped 0 communication proxy records
+-TCPIP-I-SERVTOTAL, total of 0 proxy records read
+%TCPIP-S-STARTDONE, TCPIP$PROXY startup completed
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:19.49  %%%%%%%%%%%    (from node VAX3   at  2-NOV-2026 13:07:18.48)
+Message from user Proxy Server on VAX3
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:19.53  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:20.17)
+Message from user INTERnet on VAX1
+INTERnet Started
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:19.53  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:20.19)
+Message from user INTERnet on VAX1
+INTERnet ACP Created INTERnet interface: QE0
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:19.54  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:19.55  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%TCPIP-S-STARTDONE, TCPIP$FTP startup completed
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:19.65  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:20.47)
+Message from user Proxy Server on VAX1
+Loading proxy server image TCPIP$PROXY_SERVICES
+
+%TCPIP-S-STARTDONE, TCPIP$FTP_CLIENT startup completed
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:20.02  %%%%%%%%%%%
+Message from user INTERnet on VAX2
+INTERnet ACP Activate TELNET Server 
+
+%TCPIP-S-STARTDONE, TCPIP$TELNET startup completed
+%TCPIP-S-STARTDONE, TCP/IP Services startup completed at  2-NOV-2026 13:07:20.44
+
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+%MOUNT-I-REBUILD, volume was improperly dismounted; rebuild in progress
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:21.43  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:22.61)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate FTP Server 
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:21.43  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:22.61)
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 13:07:22.29  %%%%%%%%%%%    (from node VAX1   at  2-NOV-2026 13:07:23.55)
+Message from user INTERnet on VAX1
+INTERnet ACP Activate TELNET Server 
+
+%MOUNT-W-RMTMNTFAIL, _$2$DUA1: failed to mount on node VAX3
+-MOUNT-F-VOLALRMNT, another volume of same label already mounted
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+%DECW-W-NODEVICE, No graphics device found on this system
+-DECW-I-NODECW, DECwindows graphics drivers will not be loaded
+  SYSTEM       job terminated at  2-NOV-2026 13:07:30.24
+
+  Accounting information:
+  Buffered I/O count:            2435         Peak working set size:    1692
+  Direct I/O count:              2350         Peak page file size:      8712
+  Page faults:                  13482         Mounted volumes:             1
+  Charged CPU time:           0 00:00:08.50   Elapsed time:     0 00:00:25.80
+
+VAX/VMS V7.3      node VAX2
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3
+    Last interactive login on Thursday, 30-JUL-2026 09:00[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT F$GETSYI("NODENAME")," LDW=",F$GETSYI("LOCKDIRWT")," CN=",F$GETSYI("CLUSTER_NODES")," CSID=",F$GETSYI("NODE_CSID"
+)
+VAX2 LDW=1 CN=3 CSID=00010002
+$ WRITE SYS$OUTPUT "MK1385522787""Z"
+MK1385522787"Z
+$ RMH :== $SYS$SYSTEM:RMHOLD
+$ WRITE SYS$OUTPUT "MK861830462""Z"
+MK861830462"Z
+$ RMW :== $SYS$SYSTEM:RMWAIT
+$ WRITE SYS$OUTPUT "MK4011773""Z"
+MK4011773"Z
+$ SPAWN/NOWAIT/PROCESS=AN1 RMH 312BWQRA
+%DCL-S-SPAWNED, process AN1 spawned
+$ WRITE SYS$OUTPUT "MK2767428436""Z"
+MK2767428436"Z
+$ SPAWN/NOWAIT/PROCESS=AN2 RMH 312BWQRA
+%DCL-S-SPAWNED, process AN2 spawned
+$ WRITE SYS$OUTPUT "MK303125765""Z"
+MK303125765"Z
+$ SPAWN/NOWAIT/PROCESS=AN3 RMH 312BWQRA
+%DCL-S-SPAWNED, process AN3 spawned
+$ WRITE SYS$OUTPUT "MK851226754""Z"
+MK851226754"Z
+$ SPAWN/NOWAIT/PROCESS=AN4 RMH 312BWQRA
+%DCL-S-SPAWNED, process AN4 spawned
+$ WRITE SYS$OUTPUT "MK2585016512""Z"
+MK2585016512"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRA
+Address of RSB:  87998240  GGMODE:       PR  Status: VALID   WTFULRG CVTFULR 
+Parent RSB:      00000000  CGMODE:       PR                                  
+Sub-RSB count:          3  FGMODE:       PR                                  
+Lock Count:            11  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0002
+
+Resource:      00000000 41525157   WQRA....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 010003EA  CR 00000000-FFFFFFFF         010003E9  CR 00000000-FFFFFFFF
+ 010003E8  CR 00000000-FFFFFFFF         010003E7  CR 00000000-FFFFFFFF
+ 010003E6  CR 00000000-FFFFFFFF         070003E5  PR 00000000-FFFFFFFF
+ 0A0003E1  PR 00000000-FFFFFFFF         070003DF  PR 00000000-FFFFFFFF
+ 17000093  PR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 010003F0  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 020003F3  EX 00000000-FFFFFFFF
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  87A62BC0  GGMODE:       CR  Status: VALID   WTFULRG CVTFULR 
+Parent RSB:      87998240  CGMODE:       CR                                  
+Sub-RSB count:          0  FGMODE:       CR                                  
+Lock Count:             3  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0002
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 010003EB  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 010003EC  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 010003ED  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ STOP AN1
+$ WRITE SYS$OUTPUT "MK271621725""Z"
+MK271621725"Z
+$ STOP AN2
+$ WRITE SYS$OUTPUT "MK273389903""Z"
+MK273389903"Z
+$ STOP AN3
+$ WRITE SYS$OUTPUT "MK245582283""Z"
+MK245582283"Z
+$ STOP AN4
+$ WRITE SYS$OUTPUT "MK168411590""Z"
+MK168411590"Z
+$ SPAWN/NOWAIT/PROCESS=CN1 RMW 31AWQRC
+%DCL-S-SPAWNED, process CN1 spawned
+$ WRITE SYS$OUTPUT "MK2880132447""Z"
+MK2880132447"Z
+$ SPAWN/NOWAIT/PROCESS=CN2 RMW 31AWQRC
+%DCL-S-SPAWNED, process CN2 spawned
+$ WRITE SYS$OUTPUT "MK1615312416""Z"
+MK1615312416"Z
+$ SPAWN/NOWAIT/PROCESS=CN3 RMW 31AWQRC
+%DCL-S-SPAWNED, process CN3 spawned
+$ WRITE SYS$OUTPUT "MK1618921643""Z"
+MK1618921643"Z
+$ SPAWN/NOWAIT/PROCESS=CN4 RMW 31AWQRC
+%DCL-S-SPAWNED, process CN4 spawned
+$ WRITE SYS$OUTPUT "MK308033104""Z"
+MK308033104"Z
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   2-NOV-2026 13:13:50.92  Uptime  0 00:08:03
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.05         0      0   
+20400206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.02       205    324   
+20400207 CONFIGURE       HIB     10       17   0 00:00:00.01       130    206   
+20400208 LANACP          HIB     13       42   0 00:00:00.04       411    525   
+2040020A IPCACP          HIB     10        6   0 00:00:00.01        97    183   
+2040020B ERRFMT          HIB      8       28   0 00:00:00.00       149    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      7      156   0 00:00:00.05       294    129   
+2040020E AUDIT_SERVER    HIB      9       42   0 00:00:00.07       519    711   
+2040020F JOB_CONTROL     HIB     10       37   0 00:00:00.01       214    399   
+20400210 SECURITY_SERVER HIB     10       22   0 00:00:00.19       774   1253   
+20400211 SMISERVER       HIB      9       35   0 00:00:00.06       330    602   
+20400212 TP_SERVER       HIB      8       44   0 00:00:00.06       202    323   
+20400213 TCPIP$INETACP   HIB     10       49   0 00:00:00.08       296    237   
+20400214 TCPIP$FTP_1     LEF     10      106   0 00:00:00.15      2124    812  N
+20400216 SYSTEM          CUR      7      737   0 00:00:00.81      6688    386   
+2040021B CN1             HIB      4       58   0 00:00:00.04       258    255  S
+2040021C CN2             HIB      4       56   0 00:00:00.04       259    254  S
+2040021D CN3             HIB      4       56   0 00:00:00.04       258    255  S
+2040021E CN4             HIB      4       56   0 00:00:00.05       257    253  S
+$ WRITE SYS$OUTPUT "MK1871032149""Z"
+MK1871032149"Z
+$ SPAWN/NOWAIT/PROCESS=CM1 RMW 31AWQRC
+%DCL-S-SPAWNED, process CM1 spawned
+$ WRITE SYS$OUTPUT "MK1437824425""Z"
+MK1437824425"Z
+$ SPAWN/NOWAIT/PROCESS=CM2 RMW 31AWQRC
+%DCL-S-SPAWNED, process CM2 spawned
+$ WRITE SYS$OUTPUT "MK191014631""Z"
+MK191014631"Z
+$ SPAWN/NOWAIT/PROCESS=CM3 RMW 31AWQRC
+%DCL-S-SPAWNED, process CM3 spawned
+$ WRITE SYS$OUTPUT "MK933921379""Z"
+MK933921379"Z
+$ SPAWN/NOWAIT/PROCESS=CM4 RMW 31AWQRC
+%DCL-S-SPAWNED, process CM4 spawned
+$ WRITE SYS$OUTPUT "MK2213530767""Z"
+MK2213530767"Z
+$ SPAWN/NOWAIT/PROCESS=CP1 RMW 31AWQRC
+%DCL-S-SPAWNED, process CP1 spawned
+$ WRITE SYS$OUTPUT "MK192965203""Z"
+MK192965203"Z
+$ SPAWN/NOWAIT/PROCESS=CP2 RMW 31AWQRC
+%DCL-S-SPAWNED, process CP2 spawned
+$ WRITE SYS$OUTPUT "MK3175415283""Z"
+MK3175415283"Z
+$ SPAWN/NOWAIT/PROCESS=CP3 RMW 31AWQRC
+%SYSTEM-F-EXQUOTA, process quota exceeded
+$ WRITE SYS$OUTPUT "MK2825014905""Z"
+MK2825014905"Z
+$ SPAWN/NOWAIT/PROCESS=CP4 RMW 31AWQRC
+%SYSTEM-F-EXQUOTA, process quota exceeded
+$ WRITE SYS$OUTPUT "MK298012275""Z"
+MK298012275"Z
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   2-NOV-2026 13:33:07.59  Uptime  0 00:27:19
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.06         0      0   
+20400206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.02       205    324   
+20400207 CONFIGURE       HIB     10       17   0 00:00:00.01       130    206   
+20400208 LANACP          HIB     13       42   0 00:00:00.04       411    525   
+2040020A IPCACP          HIB     10        6   0 00:00:00.01        97    183   
+2040020B ERRFMT          HIB      8       36   0 00:00:00.00       149    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      8      156   0 00:00:00.05       294    129   
+2040020E AUDIT_SERVER    HIB      9       42   0 00:00:00.07       519    711   
+2040020F JOB_CONTROL     HIB     10       37   0 00:00:00.01       214    399   
+20400210 SECURITY_SERVER HIB     10       22   0 00:00:00.19       774   1253   
+20400211 SMISERVER       HIB      9       35   0 00:00:00.06       330    602   
+20400212 TP_SERVER       HIB      8      121   0 00:00:00.06       202    323   
+20400213 TCPIP$INETACP   HIB     10       49   0 00:00:00.08       296    237   
+20400214 TCPIP$FTP_1     LEF     10      106   0 00:00:00.15      2124    812  N
+20400216 SYSTEM          CUR      7     1087   0 00:00:00.93      6799    391   
+2040021B CN1             HIB      4       58   0 00:00:00.24       258    255  S
+2040021C CN2             HIB      4       56   0 00:00:00.43       259    254  S
+2040021D CN3             HIB      4       56   0 00:00:00.40       258    255  S
+2040021E CN4             HIB      4       56   0 00:00:00.38       257    253  S
+2040021F CM1             HIB      4       56   0 00:00:00.25       258    255  S
+20400220 CM2             HIB      4       56   0 00:00:00.35       257    253  S
+20400221 CM3             HIB      4       56   0 00:00:00.37       258    255  S
+20400222 CM4             HIB      4       56   0 00:00:00.19       258    255  S
+20400223 CP1             HIB      4       56   0 00:00:00.06       258    255  S
+20400224 CP2             HIB      4       56   0 00:00:00.04       258    255  S
+$ WRITE SYS$OUTPUT "MK217264201""Z"
+MK217264201"Z
+$ SPAWN/NOWAIT/PROCESS=CR1 RMW 31AWQRC
+%SYSTEM-F-EXQUOTA, process quota exceeded
+$ WRITE SYS$OUTPUT "MK461024797""Z"
+MK461024797"Z
+$ SPAWN/NOWAIT/PROCESS=CR2 RMW 31AWQRC
+%SYSTEM-F-EXQUOTA, process quota exceeded
+$ WRITE SYS$OUTPUT "MK1998531419""Z"
+MK1998531419"Z
+$ SPAWN/NOWAIT/PROCESS=CR3 RMW 31AWQRC
+%SYSTEM-F-EXQUOTA, process quota exceeded
+$ WRITE SYS$OUTPUT "MK235629355""Z"
+MK235629355"Z
+$ SPAWN/NOWAIT/PROCESS=CR4 RMW 31AWQRC
+%SYSTEM-F-EXQUOTA, process quota exceeded
+$ WRITE SYS$OUTPUT "MK1051131806""Z"
+MK1051131806"Z
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   2-NOV-2026 13:38:59.05  Uptime  0 00:33:11
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.06         0      0   
+20400206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.02       205    324   
+20400207 CONFIGURE       HIB     10       17   0 00:00:00.01       130    206   
+20400208 LANACP          HIB     13       42   0 00:00:00.04       411    525   
+2040020A IPCACP          HIB     10        6   0 00:00:00.01        97    183   
+2040020B ERRFMT          HIB      8       40   0 00:00:00.00       149    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      8      156   0 00:00:00.05       294    129   
+2040020E AUDIT_SERVER    HIB      9       42   0 00:00:00.07       519    711   
+2040020F JOB_CONTROL     HIB     10       37   0 00:00:00.01       214    399   
+20400210 SECURITY_SERVER HIB     10       22   0 00:00:00.19       779   1258   
+20400211 SMISERVER       HIB      9       35   0 00:00:00.06       330    602   
+20400212 TP_SERVER       HIB      8      145   0 00:00:00.06       202    323   
+20400213 TCPIP$INETACP   HIB     10       49   0 00:00:00.08       296    237   
+20400214 TCPIP$FTP_1     LEF     10      106   0 00:00:00.15      2124    812  N
+20400216 SYSTEM          CUR      7     1149   0 00:00:01.02      6889    390   
+2040021B CN1             HIB      4       58   0 00:00:00.24       258    255  S
+2040021C CN2             HIB      4       56   0 00:00:00.43       259    254  S
+2040021D CN3             HIB      4       56   0 00:00:00.40       258    255  S
+2040021E CN4             HIB      4       56   0 00:00:00.38       257    253  S
+2040021F CM1             HIB      4       56   0 00:00:00.25       258    255  S
+20400220 CM2             HIB      4       56   0 00:00:00.35       257    253  S
+20400221 CM3             HIB      4       56   0 00:00:00.37       258    255  S
+20400222 CM4             HIB      4       56   0 00:00:00.19       258    255  S
+20400223 CP1             HIB      4       56   0 00:00:00.23       258    255  S
+20400224 CP2             HIB      4       56   0 00:00:00.21       258    255  S
+$ WRITE SYS$OUTPUT "MK652811462""Z"
+MK652811462"Z
+$ STOP CN1
+$ WRITE SYS$OUTPUT "MK197019499""Z"
+MK197019499"Z
+$ STOP CN2
+$ WRITE SYS$OUTPUT "MK6367784""Z"
+MK6367784"Z
+$ STOP CN3
+$ WRITE SYS$OUTPUT "MK198041659""Z"
+MK198041659"Z
+$ STOP CN4
+$ WRITE SYS$OUTPUT "MK2034128964""Z"
+MK2034128964"Z
+$ STOP CM1
+$ WRITE SYS$OUTPUT "MK3516098""Z"
+MK3516098"Z
+$ STOP CM2
+$ WRITE SYS$OUTPUT "MK2950317697""Z"
+MK2950317697"Z
+$ STOP CM3
+$ WRITE SYS$OUTPUT "MK1190215809""Z"
+MK1190215809"Z
+$ STOP CM4
+$ WRITE SYS$OUTPUT "MK2465031042""Z"
+MK2465031042"Z
+$ SPAWN/NOWAIT/PROCESS=CR1 RMW 31AWQRC
+%DCL-S-SPAWNED, process CR1 spawned
+$ WRITE SYS$OUTPUT "MK2083911076""Z"
+MK2083911076"Z
+$ SPAWN/NOWAIT/PROCESS=CR2 RMW 31AWQRC
+%DCL-S-SPAWNED, process CR2 spawned
+$ WRITE SYS$OUTPUT "MK196054174""Z"
+MK196054174"Z
+$ SPAWN/NOWAIT/PROCESS=CR3 RMW 31AWQRC
+%DCL-S-SPAWNED, process CR3 spawned
+$ WRITE SYS$OUTPUT "MK542830906""Z"
+MK542830906"Z
+$ SPAWN/NOWAIT/PROCESS=CR4 RMW 31AWQRC
+%DCL-S-SPAWNED, process CR4 spawned
+$ WRITE SYS$OUTPUT "MK795915400""Z"
+MK795915400"Z
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX2   2-NOV-2026 13:39:26.19  Uptime  0 00:33:38
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20400201 SWAPPER         HIB     16        0   0 00:00:00.08         0      0   
+20400206 CLUSTER_SERVER  HIB     14       11   0 00:00:00.02       205    324   
+20400207 CONFIGURE       HIB     10       17   0 00:00:00.01       130    206   
+20400208 LANACP          HIB     13       42   0 00:00:00.04       411    525   
+2040020A IPCACP          HIB     10        6   0 00:00:00.01        97    183   
+2040020B ERRFMT          HIB      8       40   0 00:00:00.00       149    227   
+2040020C CACHE_SERVER    HIB     16        9   0 00:00:00.00        83    141   
+2040020D OPCOM           HIB      8      156   0 00:00:00.05       294    129   
+2040020E AUDIT_SERVER    HIB      9       42   0 00:00:00.07       519    711   
+2040020F JOB_CONTROL     HIB      9       47   0 00:00:00.01       214    399   
+20400210 SECURITY_SERVER HIB     10       22   0 00:00:00.19       779   1258   
+20400211 SMISERVER       HIB      9       35   0 00:00:00.06       330    602   
+20400212 TP_SERVER       HIB      8      146   0 00:00:00.06       202    323   
+20400213 TCPIP$INETACP   HIB     10       49   0 00:00:00.08       296    237   
+20400214 TCPIP$FTP_1     LEF     10      106   0 00:00:00.15      2124    812  N
+20400216 SYSTEM          CUR      7     1434   0 00:00:01.12      6981    392   
+20400223 CP1             HIB      4       56   0 00:00:00.23       258    255  S
+20400224 CP2             HIB      4       56   0 00:00:00.21       258    255  S
+20400225 CR1             HIB      4       56   0 00:00:00.04       258    255  S
+20400226 CR2             HIB      4       56   0 00:00:00.05       258    255  S
+20400227 CR3             HIB      4       56   0 00:00:00.05       258    255  S
+20400228 CR4             HIB      4       56   0 00:00:00.04       257    253  S
+$ WRITE SYS$OUTPUT "MK2625921774""Z"
+MK2625921774"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRC
+Address of RSB:  879A1FC0  GGMODE:       PR  Status: DIRENTR VALID           
+Parent RSB:      00000000  CGMODE:       PR                                  
+Sub-RSB count:          4  FGMODE:       PR                                  
+Lock Count:            11  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 43525157   WQRC....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 1F0003E4  CR 00000000-FFFFFFFF         150003FB  CR 00000000-FFFFFFFF
+ 480003FD  CR 00000000-FFFFFFFF         13000401  CR 00000000-FFFFFFFF
+ 13000403  CR 00000000-FFFFFFFF         2B000406  PR 00000000-FFFFFFFF
+ 0E000400  PR 00000000-FFFFFFFF         0A0003EF  PR 00000000-FFFFFFFF
+ 20000409  PR 00000000-FFFFFFFF         07000408  PR 00000000-FFFFFFFF
+ 31000404  PR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  87A67E40  GGMODE:       CR  Status: VALID   WTFULRG CVTFULR 
+Parent RSB:      879A1FC0  CGMODE:       CR                                  
+Sub-RSB count:          0  FGMODE:       CR                                  
+Lock Count:             3  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0002
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 0100040B  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 0100040C  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 0100040D  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ STOP CP1
+$ WRITE SYS$OUTPUT "MK219162187""Z"
+MK219162187"Z
+$ STOP CP2
+$ WRITE SYS$OUTPUT "MK2467311879""Z"
+MK2467311879"Z
+$ SPAWN/NOWAIT/PROCESS=E1 RMW 31AWQRE
+%DCL-S-SPAWNED, process E1 spawned
+$ WRITE SYS$OUTPUT "MK96459705""Z"
+MK96459705"Z
+$ SPAWN/NOWAIT/PROCESS=E2 RMW 31AWQRE
+%DCL-S-SPAWNED, process E2 spawned
+$ WRITE SYS$OUTPUT "MK1869914057""Z"
+MK1869914057"Z
+$ SPAWN/NOWAIT/PROCESS=E3 RMW 31AWQRE
+%DCL-S-SPAWNED, process E3 spawned
+$ WRITE SYS$OUTPUT "MK1762931100""Z"
+MK1762931100"Z
+$ SPAWN/NOWAIT/PROCESS=E4 RMW 31AWQRE
+%DCL-S-SPAWNED, process E4 spawned
+$ WRITE SYS$OUTPUT "MK2014911095""Z"
+MK2014911095"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRE
+Address of RSB:  87995540  GGMODE:       PR  Status: DIRENTR VALID   WTFULRG 
+Parent RSB:      00000000  CGMODE:       PR          CVTFULR                 
+Sub-RSB count:          3  FGMODE:       PR                                  
+Lock Count:             8  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0002
+
+Resource:      00000000 45525157   WQRE....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 0A000415  CR 00000000-FFFFFFFF         20000407  CR 00000000-FFFFFFFF
+ 19000408  PR 00000000-FFFFFFFF         3C000404  PR 00000000-FFFFFFFF
+ 3A000405  PR 00000000-FFFFFFFF         1F000412  PR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 0A000416  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 01000417  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ STOP CR1
+$ WRITE SYS$OUTPUT "MK276417460""Z"
+MK276417460"Z
+$ STOP CR2
+$ WRITE SYS$OUTPUT "MK269471156""Z"
+MK269471156"Z
+$ STOP CR3
+$ WRITE SYS$OUTPUT "MK2826921500""Z"
+MK2826921500"Z
+$ STOP CR4
+$ WRITE SYS$OUTPUT "MK3108914744""Z"
+MK3108914744"Z
+$ STOP E1
+$ WRITE SYS$OUTPUT "MK263124096""Z"
+MK263124096"Z
+$ STOP E2
+$ WRITE SYS$OUTPUT "MK82934419""Z"
+MK82934419"Z
+$ STOP E3
+$ WRITE SYS$OUTPUT "MK220563941""Z"
+MK220563941"Z
+$ STOP E4
+$ WRITE SYS$OUTPUT "MK902110344""Z"
+MK902110344"Z
+$ SHOW SYSTEM/SUBPROCESS
+$ WRITE SYS$OUTPUT "MK2588624016""Z"
+MK2588624016"Z
+$ WRITE SYS$OUTPUT F$GETSYI("NODENAME")," LDW=",F$GETSYI("LOCKDIRWT")," CN=",F$GETSYI("CLUSTER_NODES")
+VAX2 LDW=1 CN=3
+$ WRITE SYS$OUTPUT "MK2813530058""Z"
+MK2813530058"Z
+$ SPAWN/NOWAIT/PROCESS=BN RMH 312-WQRB
+%DCL-S-SPAWNED, process BN spawned
+$ WRITE SYS$OUTPUT "MK20424869""Z"
+MK20424869"Z
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRB
+Address of RSB:  8794BA40  GGMODE:       NL  Status: VALID                   
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          2  FGMODE:       NL                                  
+Lock Count:             1  CSID:   00010001                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 42525157   WQRB....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 16000403  PR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> SHOW RESOURCE/NAME=W0
+%SDA-E-NORSBNAM, no resource block with specified name
+SDA> SHOW PROCESS/LOCKS BN
+Lock data:
+
+Lock id:  16000403   PID:     0001002D   Flags:   VALBLK  SYSTEM          
+Par. id:  00000000   SUBLCKs:        2                                    
+LKB:      879B4680   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      PR   00000000-FFFFFFFF
+
+Resource:      00000000 42525157    WQRB....  Status:                          
+ Length   04   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0700091C on system 00010001
+
+Lock data:
+
+Lock id:  17000401   PID:     0001002D   Flags:                           
+Par. id:  16000403   SUBLCKs:        0                                    
+LKB:      8797D540   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003053    S0......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0200091D on system 00010001
+
+Lock data:
+
+Lock id:  05000418   PID:     0001002D   Flags:                           
+Par. id:  16000403   SUBLCKs:        0                                    
+LKB:      8794EAC0   BLKAST:  00000000                                    
+PRIORTY:      0000                                                        
+
+Granted at      CR   00000000-FFFFFFFF
+
+Resource:      00000000 00003153    S1......  Status:                          
+ Length   02   00000000 00000000    ........                                   
+ User mode     00000000 00000000    ........                                   
+ System        00000000 00000000    ........                                   
+
+Process copy of lock 0100091F on system 00010001
+
+SDA> EXIT
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRB
+Address of RSB:  8794BA40  GGMODE:       PR  Status: VALID   WTFULRG CVTFULR 
+Parent RSB:      00000000  CGMODE:       PR                                  
+Sub-RSB count:          3  FGMODE:       PR                                  
+Lock Count:             7  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0002
+
+Resource:      00000000 42525157   WQRB....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 020004EC  CR 00000000-FFFFFFFF         020004EA  CR 00000000-FFFFFFFF
+ 020004E8  CR 00000000-FFFFFFFF         020004E6  CR 00000000-FFFFFFFF
+ 16000403  PR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 020004ED  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 020004EF  EX 00000000-FFFFFFFF
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  87A878C0  GGMODE:       CR  Status: INVALID WTFULRG CVTFULR 
+Parent RSB:      8794BA40  CGMODE:       CR                                  
+Sub-RSB count:          0  FGMODE:       CR                                  
+Lock Count:             3  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0002
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 020004F0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 020004F2  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 020004F3  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ ANALYZE/SYSTEM
+OpenVMS (TM) VAX System analyzer
+
+SDA> SHOW RESOURCE/NAME=WQRB
+Address of RSB:  8794BA40  GGMODE:       PR  Status: VALID   WTFULRG CVTFULR 
+Parent RSB:      00000000  CGMODE:       PR                                  
+Sub-RSB count:          3  FGMODE:       PR                                  
+Lock Count:             7  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0002
+
+Resource:      00000000 42525157   WQRB....  Valblk: 31302D42 564C4D52
+ Length    4   00000000 00000000   ........          39383736 35343332
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 020004EC  CR 00000000-FFFFFFFF         020004EA  CR 00000000-FFFFFFFF
+ 020004E8  CR 00000000-FFFFFFFF         020004E6  CR 00000000-FFFFFFFF
+ 16000403  PR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 020004ED  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 020004EF  EX 00000000-FFFFFFFF
+SDA> SHOW RESOURCE/NAME=W0
+Address of RSB:  87A878C0  GGMODE:       CR  Status: INVALID WTFULRG CVTFULR 
+Parent RSB:      8794BA40  CGMODE:       CR                                  
+Sub-RSB count:          0  FGMODE:       CR                                  
+Lock Count:             3  CSID:   00000000                                  
+BLKAST count:           0  RQSEQNM:    0002
+
+Resource:      00000000 00003057   W0......  Valblk: 00000000 00000000
+ Length    2   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000001
+
+Granted queue (Lock ID / Gr mode / Range):
+ 020004F0  CR 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+ 020004F2  CR 00000000-FFFFFFFF / EX 00000000-FFFFFFFF
+
+Waiting queue (Lock ID / Rq mode / Range):
+ 020004F3  EX 00000000-FFFFFFFF
+SDA> EXIT
+$ 

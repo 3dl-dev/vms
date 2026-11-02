@@ -441,10 +441,12 @@ static void lki_put_long(const struct item_list_3 *item, uint32_t v)
     if (item->retlen) *item->retlen = n;
 }
 
-/* A text item: the resource name, truncated to the caller's buffer. */
-static void lki_put_text(const struct item_list_3 *item, const char *s)
+/* LKI$_RESNAM: the resource name, a COUNTED byte string (rd vms-c06d) --
+ * `len` bytes, NULs included (RMS's file-access lock names hold binary FIDs),
+ * truncated to the caller's buffer. */
+static void lki_put_bytes(const struct item_list_3 *item, const uint8_t *s,
+                          size_t len)
 {
-    size_t len = strlen(s);
     uint16_t n = (uint16_t)(len > item->buflen ? item->buflen : len);
     if (item->bufaddr && n)
         memcpy(item->bufaddr, s, n);
@@ -514,6 +516,22 @@ static uint32_t getlki_impl(const uint32_t *lkidadr,
     if (!(status & 1))
         return status;
 
+    /* The name as the resource block counts it (vms_kif_getlki_resnam): the
+     * C-string copy above stops at the first NUL. Asked only when an item
+     * wants it. */
+    uint8_t name[32];
+    uint32_t name_len = 0;
+    for (const struct item_list_3 *it = itmlst; it->buflen || it->item_code; it++) {
+        if (it->item_code == LKI$_RESNAM) {
+            status = vms_kif_getlki_resnam(*lkidadr, name, &name_len);
+            if (!(status & 1))
+                return status;
+            if (name_len > sizeof name)
+                name_len = sizeof name;
+            break;
+        }
+    }
+
     for (const struct item_list_3 *item = itmlst;
          item->buflen != 0 || item->item_code != 0; item++) {
         switch (item->item_code) {
@@ -521,7 +539,7 @@ static uint32_t getlki_impl(const uint32_t *lkidadr,
                 lki_put_long(item, *lkidadr);
                 break;
             case LKI$_RESNAM:
-                lki_put_text(item, resnam);
+                lki_put_bytes(item, name, name_len);
                 break;
             case LKI$_GRANTCOUNT:
                 lki_put_long(item, grant_count);

@@ -1,0 +1,28 @@
+# getlki-resnam-cstring -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "SYS\$GETLKI/SYS\$GETLKIW's LKI\$_RESNAM as a COUNTED name (rd vms-c06d)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_getlki";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "getlki_impl returns LKI\$_RESNAM cut at its first NUL (strnlen of the counted name) -- the C-string copy vms-c06d replaced. A binary resource name (RMS's file-access lock holds a FID) then reads back as its prefix, so the binary-name scenario's length and byte checks redden; scenario 1's text name has no NUL and is unaffected. Unique statement in sys_lock.c; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF2'
+LKI$_RESNAM's return length is the name's own 12 bytes, not its 5-byte prefix before the first NUL
+LKI$_RESNAM returns every byte of the binary name, NULs included
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|lki_put_bytes(item, name, name_len);|lki_put_bytes(item, name, strnlen((const char *)name, name_len)); /* NEGCTL getlki-resnam-cstring */|' "$_file"
+
+    :
+}

@@ -281,8 +281,8 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 /* vms_kif_getlki_resnam -- the resource name as a COUNTED string (all 32
  * bytes + the resource's own length), for names with NULs in them (rd
  * vms-326).
- * OVMX-UNWIRED: vms_kif_getlki_resnam (vms-326) -- only the QEMU syssvc suite
- * reads it; sys$getlki's LKI$_RESNAM still copies the name as a C string. */
+ * WIRED (vms-c06d): sys$getlki's LKI$_RESNAM returns this counted name
+ * (src/libvms/syssvc/sys_lock.c getlki_impl). */
 uint32_t vms_kif_getlki_resnam(uint32_t lkid, uint8_t resnam[32],
                                uint32_t *resnam_len);
 

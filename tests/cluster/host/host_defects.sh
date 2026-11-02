@@ -798,6 +798,7 @@ EOF
   the engine does not claim mastery
 exactly one frame left this node
 *** addressed to the VAX the directory named ***
+  as an op-0x01 request
 *** carrying the hash the VAX ITSELF put on the wire for that name -- never a computed one ***
   and OUR OWN handle, the one this executive minted
 *** and NOTHING is granted yet: the requester waits for the VAX's master, it does not grant itself ***

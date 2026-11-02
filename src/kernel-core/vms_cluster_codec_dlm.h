@@ -1128,13 +1128,12 @@ vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 
 /*
  * Build a cat-0x02 op-0x0d rebuild-record REQUEST frame from a record.
- * SCAFFOLD (vms-20c, FC-P5.5): emits `rec->body` verbatim into abs [72,204)
- * -- the byte-identical round-trip that grounds the op-0x0d layout against
- * the captured real-VMS frames without naming the still-unpinned send fields
- * (mode/lkid/csid, §6-blocked). The survivor-side SENDER will replace the
- * verbatim body with a live-state field assembly once §6 pins those offsets;
- * this build is the entry point + the crash-guard round-trip harness. Writes
- * ONLY abs [72,204); `*written` receives 132. Same envelope division as the
+ * VERBATIM (vms-20c, FC-P5.5): emits `rec->body` unchanged into abs [72,204),
+ * the byte-identical round-trip of a CAPTURED record. It is not how OVMX
+ * originates one: the "send fields" (mode/lkid/csid) this was once waiting on
+ * do not exist in an op-0x0d at all -- see vms_dlm_dir_reg_build below, the
+ * field map it rests on, and the census that pins it. Writes ONLY abs
+ * [72,204); `*written` receives 132. Same envelope division as the
  * ENQ/response builders.
  */
 vms_codec_status_t
@@ -1165,6 +1164,73 @@ vms_codec_status_t
 vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 			       uint16_t own_send_msg, uint16_t ack_of_peer_send,
 			       uint8_t *frame, uint32_t cap, uint32_t *written);
+
+/*
+ * THE op-0x0d RECORD'S FIELD MAP (rd vms-20c, FC-P5.5) -- what a real sender
+ * WRITES, measured by tools/cluster/dlm_dirreg_census.py --selftest over every
+ * committed capture (23 captures, 16800 records, 15 real senders, 16 receivers
+ * of which 6 are OVMX; 2- and 3-node clusters) and twin-tested record by record
+ * against four uncompressed captures by tests/cluster/host/test_codec_dirreg.c:
+ *
+ *   body[0:8]      envelope: send/ack message numbers + the transaction
+ *                  (an op-0x0d IS answered: 16791 of 16800 carry an 82/0d)
+ *   body[8:10]     02 0d
+ *   body[12:16]    0x0001 + the cluster DLM rebuild sequence (rd vms-64b)
+ *   body[44:46]    UIC group (63 records non-zero)
+ *   body[46]       access mode (0 / 1 / 3 all occur)
+ *   body[47]       name length, 1..31
+ *   body[48:48+L]  the resource name
+ *   body[128:132]  the directory hash OF THAT IDENTITY: 16800 of 16800 equal
+ *                  the product hash (vms_dlm_hash.h) of (group, mode, name)
+ *
+ * NOTHING ELSE. A sender reuses one message buffer per open transaction
+ * (body[4:6]), and between two consecutive uses of one buffer every byte
+ * outside the set above is unchanged in 16147 of 16406 cases; of the other
+ * 259, 141 had another message use that buffer in between and 118 carry other
+ * messages' shapes (a grant record, a directory answer) from a use the capture
+ * did not see. body[16:44], body[48+L:128] and body[34] are the buffer's
+ * previous contents (body[34] is the 0xf9 the previous ANSWER stamped there).
+ *
+ * SO op-0x0d IS NOT A LOCK-STATE RECORD. There is no mode, no lock id, no CSID,
+ * no parent linkage and no value block in it: the "send fields" the FC-P5.5
+ * design was waiting to pin do not exist in this message. It is the MASTER
+ * registering a root resource it masters with that resource's DIRECTORY node
+ * at a transition (rd vms-8219), which the vms-20c rejoin capture shows from
+ * both ends: 307 of 307 records go from the survivor VAX1 to the rejoiner VAX2
+ * on one parity of (hash >> 16), the directory index of a two-entry vector,
+ * and afterwards VAX2 sends 223 op-0x01s naming those resources TO VAX1, the
+ * master, and VAX1 none to VAX2.
+ *
+ * The record is the identity a directory keys on, so the parse is the shared
+ * vms_dlm_res_ident reader plus the class checks, and the build writes the
+ * identity and the hash and ZERO everywhere else (never another message's
+ * leftovers, spec "Residue"). body[0:8] and body[12:16] are the connection
+ * manager's, exactly as for vms_dlm_dir_remove_build. The caller passes only a
+ * hash the executive holds for that identity (res->hash_known).
+ *
+ * NOT YET ADDRESSABLE AT A REAL VAX: vms_dlm_shape_fit_for_any_member() still
+ * says no to an op-0x0d body. No real VAX has been watched to accept an
+ * all-zero residue span from a sender (the nearest are 47 rejoin records whose
+ * residue is zero but for body[24] = 0x03, all answered by the real VAX2), and
+ * opening that gate is the lab proof's job, not this codec's.
+ */
+struct vms_dlm_dir_reg {
+	struct vms_dlm_res_ident id;     /* body[44:48+L], body[128:132]      */
+	uint16_t dlm_seq;                /* body[14:16]                       */
+};
+
+/* Parse a cat-0x02 op-0x0d REQUEST body. VMS_CODEC_E_CLASS for any other
+ * (cat, op) or a body[12:14] other than 0x0001, VMS_CODEC_E_RANGE for a name
+ * length outside 1..31. `*out` written only on VMS_CODEC_OK. */
+vms_codec_status_t vms_dlm_dir_reg_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_dir_reg *out);
+
+/* Build the op-0x0d body for `id` into abs [72,204) of `frame`: cat/op, the
+ * identity, the hash, zero elsewhere. VMS_CODEC_E_INVAL for an identity with no
+ * name or a name of 32+ bytes. `*written` receives the frame length. */
+vms_codec_status_t vms_dlm_dir_reg_build(const struct vms_dlm_res_ident *id,
+					 uint8_t *frame, uint32_t cap,
+					 uint32_t *written);
 
 /* ------------------------------------------------------------------ *
  * op 0x03 $DEQ, op 0x05 BLKAST, op 0x06 CONVERT-with-VALBLK

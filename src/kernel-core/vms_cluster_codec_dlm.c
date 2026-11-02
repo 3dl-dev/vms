@@ -992,6 +992,68 @@ vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,
 	return VMS_CODEC_OK;
 }
 
+vms_codec_status_t vms_dlm_dir_reg_build(const struct vms_dlm_res_ident *id,
+					 uint8_t *frame, uint32_t cap,
+					 uint32_t *written)
+{
+	vms_wire_buf_t w;
+	uint32_t i;
+
+	if (id == (const struct vms_dlm_res_ident *)0)
+		return VMS_CODEC_E_INVAL;
+	if (id->name_len == 0u || id->name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	/* rd vms-20c: a real sender writes ONLY the identity and its hash; the
+	 * rest of its buffer is a previous message's. Zero is what THIS builder
+	 * writes there, never a copy of anybody's leftovers. */
+	for (i = 0u; i < VMS_CM_BODY_LEN; i++)
+		vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + i, 0u);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_REBUILD);
+	vms_wire_put_le16(&w, VMS_OFF_DLM_RES_GROUP, id->group);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, id->mode);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, id->name_len);
+	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, id->name_len, id->name);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_dir_reg_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_dir_reg *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_dir_reg r;
+	vms_codec_status_t st;
+	uint8_t cat, op;
+	uint16_t one;
+
+	if (out == (struct vms_dlm_dir_reg *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	one = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_INV1);
+	r.dlm_seq = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_TYPE);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_REBUILD ||
+	    one != VMS_DLM_REBUILD_INV1_CONST)
+		return VMS_CODEC_E_CLASS;
+	st = vms_dlm_res_ident_parse_body(body, len, &r.id);
+	if (st != VMS_CODEC_OK)
+		return st;
+	*out = r;
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
 						uint32_t len,
 						struct vms_dlm_res_ident *out)

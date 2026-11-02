@@ -3848,8 +3848,11 @@ shape likewise does not generalise:
   landing mid-ASCII in two specimens — a fixed-offset stamp, not a payload field.
   INFERRED to be a per-opcode result code; `op 0x01/0x07/0x15` use `0xfa`.
 
-  **Request layout (GROUNDED):** `body[12:14]=0x0001` and `body[14:16]=0x0003`
-  invariant · `body[16]` = L1 length · `body[47]` = **resource-name length** ·
+  **Request layout (GROUNDED; corrected by rd vms-20c, see the op-0x0d field
+  map below):** `body[12:14]=0x0001` and `body[14:16]` = the cluster DLM
+  rebuild sequence (0x0003 in this join, 0x0004 in the vms-20c rejoin; not an
+  invariant) · `body[16]` is buffer residue, not an "L1 length" ·
+  `body[47]` = **resource-name length** ·
   `body[48 : 48+len]` = the **lock RESOURCE NAME** in ASCII + binary sub-key.
   Observed verbatim: `"F11B$aSYSDSK1     "`, `"CACHE$cmSYSDSK1     "`,
   `"VCC$vSYSDSK1     "`, `"SYS$_$2$DUA0:"`, `"SYS$SYS_ID"` — the documented
@@ -3873,6 +3876,76 @@ shape likewise does not generalise:
   > 3×** (measured, `ovmx-760-dlm-refused-20260730.pcap`). Step 5 *is* the
   > lock-rebuild barrier step — in the reference it is held for 89 ms while 216
   > of these transactions run.
+
+#### The op-`0x0d` record's field map: a directory REGISTRATION, not a lock record (GROUNDED, `vms-20c`, 2026-11-02)
+
+rd `vms-20c` (FC-P5.5) was signed on the premise that an op-`0x0d` describes a
+lock a survivor holds — mode, the holder's lock id and CSID, the master's lock
+id, a value block — at offsets in `body[16:48]` "to be pinned by a twin test
+against the 307 rejoin frames". The twin test was run, against those 307 and
+the whole committed corpus, and **the premise is false: the message carries no
+lock-holder field at all.** A real V7.3 sender writes exactly this:
+
+| body offset | field | evidence |
+|---|---|---|
+| `[0:8]` | envelope: send/ack message numbers, transaction (`[4:6]` names the sender's message buffer) | 16,791 / 16,800 records answered 82/0d |
+| `[8:10]` | `02 0d` | 16,800 / 16,800 |
+| `[12:14]` | `0x0001` | 16,800 / 16,800 |
+| `[14:16]` | the cluster DLM rebuild sequence (rd `vms-64b`) | 307 / 307 = 4 in the rejoin |
+| `[44:46]` | UIC group of the resource | 63 records non-zero |
+| `[46]` | access mode of the resource | 0, 1 and 3 all occur |
+| `[47]` | name length, 1..31 | 0 records outside 1..31; 7..30 observed |
+| `[48:48+L]` | resource name | 307 / 307 distinct in the rejoin |
+| `[128:132]` | the **directory hash of that identity** | **16,800 / 16,800** equal `vms_dlm_name_hash(group, mode, name)` |
+
+**Everything else is the buffer's previous contents.** A sender keeps one message
+buffer per open transaction (`body[4:6]`; six in the rejoin) and between two
+consecutive uses of one buffer **nothing outside the table changes in 16,147 of
+16,406 cases** (301 / 301 in the rejoin). Of the other 259, 141 had another
+message use that buffer in between, and 118 (117 of them in
+`oracle-3node-fault-f1.pcap.gz`) carry other messages' shapes — a grant record's
+`0x10 … 0xfa`, a directory answer's `0xf9` — from a use the capture did not see.
+`body[34]` is the `0xf9` the previous ANSWER stamped into the buffer; the
+`"DIRECTORY   "`, `"received VAXc"`, S0 addresses and `00 60 ee 78 de ff ff ff`
+(the op-`0x08` constant) earlier read as record content are all residue.
+
+**Who sends it to whom.** In the rejoin (`vms-20c-rebuild-1789489597`) all 307
+go from the survivor VAX1 to the rejoiner VAX2, all 307 on one parity of
+`hash >> 16` (the directory index of a two-entry vector), and afterwards VAX2
+sends 223 op-`0x01`s naming those resources **to VAX1** and VAX1 none to VAX2:
+VAX1 is their master, VAX2 their new directory node. Same reading as rd
+`vms-8219` on a different topology (434 / 434 root records to
+`entry[(hash >> 16) mod n]`). op-`0x0d` is **the master registering a root
+resource it masters with that resource's directory node at a transition**.
+
+**Twin test.** `tests/cluster/host/test_codec_dirreg.c` decodes every op-`0x0d`
+in four uncompressed captures (1,592 records: the 2-VAX rejoin; a 3-node run with
+two VAX senders and VAX + OVMX receivers; a VAX registering with two OVMX
+joiners; a third real pair), rebuilds each with `vms_dlm_dir_reg_build`, and
+requires the rebuilt `[8:10]`, `[44:48+L]` and `[128:132]` to equal the real
+bytes, zero elsewhere, and the hash to be the product function's — a one-byte
+name shift (the LOCKMGRERR mistake above) fails on all 1,592. The census
+`tools/cluster/dlm_dirreg_census.py --selftest` re-derives every figure in this
+section from the corpus.
+
+**What the corpus cannot vary.** No op-`0x0d` names a sub-resource (there is no
+parent span to vary — directory entries are for roots). No capture shows a lock
+HOLDER describing its locks to a new master after the master **crashed** while
+two or more members survived: in the rejoin VAX1 was the only survivor, and in
+`vms-93fa` the master left by `SHUTDOWN`, which remasters (op `0x0e`…`0x14`)
+before leaving. The wire message for that case is **not grounded**. The SDA
+oracle `sda-before-vax1.txt` named in that capture's README was never committed,
+so the earlier "304 / 307 correlate to VAX1's SDA" figure cannot be re-derived;
+the correlations above are in-capture instead.
+
+**What OVMX does with it.** Receives it as a registration
+(`dlm_arm_dir_register`) and answers it with the verbatim echo above. It can now
+**build** one from a resource identity and the hash the executive holds
+(`vms_dlm_dir_reg_build`), but `vms_dlm_shape_fit_for_any_member` still refuses
+an op-`0x0d` body: no real VAX has been watched to accept a zero residue span
+from a sender (the nearest: 47 rejoin records whose residue is zero but for
+`body[24] = 0x03`, all answered by the real VAX2), and that is the lab proof's
+to show.
 
 #### Residue: several "fields" are uninitialised buffer contents
 

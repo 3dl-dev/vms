@@ -707,8 +707,10 @@ assert_cc1b() {
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   [ -s "$ref" ] && [ -s "$ref2" ] || { echo "  FAIL: no reference assembly"; return 1; }
   local tu_ok tu_bad end_ok=0 link_ok=0 ar_ok=0 c1_ok=0 c2_ok=0 same=0 same2=0 got got2
-  local okpat="^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] "
-  [ "$found_ok" = 1 ] && okpat="^CC1B: TU [0-9]+/$ntu (%X[0-9A-F]*[13579BDF]|FOUND) "
+  # a compile succeeded only with SS$_NORMAL: GCC's exit(4), an internal compiler
+  # error, is %X0035A021 under DEC C __posix_exit -- success severity, a failure
+  local okpat="^CC1B: TU [0-9]+/$ntu %X00000001 "
+  [ "$found_ok" = 1 ] && okpat="^CC1B: TU [0-9]+/$ntu (%X00000001|FOUND) "
   tu_ok=$(tr -d '\r' < "$log" | grep -aE "$okpat" | awk '{print $3}' | sort -u | wc -l)
   tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "$okpat" || true)
   tr -d '\r' < "$log" | grep -aqxE "CC1B: END FAILS=0 .*" && end_ok=1
@@ -724,7 +726,7 @@ assert_cc1b() {
   [ -s "$got" ] && diff -q <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref") "$got" >/dev/null && same=1
   [ -s "$got2" ] && diff -q <(sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$ref2") "$got2" >/dev/null && same2=1
   local errs err_ok=1
-  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|ACCVIO|terminated abnormally|signal 1[012]|signal [46]" "$log" 2>/dev/null || true)
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|ACCVIO|terminated abnormally|internal compiler error|signal 1[012]|signal [456]" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
   echo "  (a) compiles that succeeded : $tu_ok of $ntu ; failed : $tu_bad ; ended with no failure : $end_ok"
   echo "  (b) archives made : $ar_ok ; cc1 linked : $link_ok"
@@ -743,10 +745,10 @@ assert_cc1b() {
 assert_cc1b_shard() {
   local log="$1" ntu="$2" tu_ok tu_bad end_ok=0 errs
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
-  tu_ok=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] " | awk '{print $3}' | sort -u | wc -l)
-  tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "^CC1B: TU [0-9]+/$ntu %X[0-9A-F]*[13579BDF] " || true)
+  tu_ok=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/$ntu %X00000001 " | awk '{print $3}' | sort -u | wc -l)
+  tu_bad=$(tr -d '\r' < "$log" | grep -aE "^CC1B: TU [0-9]+/[0-9]+ " | grep -avcE "^CC1B: TU [0-9]+/$ntu %X00000001 " || true)
   tr -d '\r' < "$log" | grep -aqxE "CC1B: END FAILS=0 .*" && end_ok=1
-  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|ACCVIO|terminated abnormally|signal 1[012]|signal [46]" "$log" 2>/dev/null || true)
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|ACCVIO|terminated abnormally|internal compiler error|signal 1[012]|signal [456]" "$log" 2>/dev/null || true)
   echo "  shard: compiles that succeeded : $tu_ok of $ntu ; failed or not run here : $tu_bad ; ended with no failure : $end_ok ; faults : $([ -n "$errs" ] && echo yes || echo none)"
   [ "$tu_ok" -eq "$ntu" ] && [ "$tu_bad" -eq 0 ] && [ "$end_ok" -eq 1 ] && [ -z "$errs" ]
 }
@@ -2652,7 +2654,8 @@ PYEOF3
     : > "$_st/empty.s"; mkb %X00000001 3 0 %X00000001 "$_st/empty.s" "$_st/ref2.s" > "$_st/notyped.log"
     { cat "$_st/pass.log"; printf '%s\r\n' '%DCL-F-ABORT, image SYS$SYSTEM:CC1PLUS terminated abnormally (signal 11)'; } > "$_st/crash.log"
     mkb FOUND 3 0 %X00000001 "$_st/ref.s" "$_st/ref2.s" > "$_st/found.log"
-    for _c in "pass:0" "missingtu:1" "tufail:1" "linkfail:1" "diffasm:1" "diffasm2:1" "notyped:1" "crash:1" "found:1"; do
+    mkb %X0035A021 3 0 %X00000001 "$_st/ref.s" "$_st/ref2.s" > "$_st/ice.log"
+    for _c in "pass:0" "missingtu:1" "tufail:1" "linkfail:1" "diffasm:1" "diffasm2:1" "notyped:1" "crash:1" "found:1" "ice:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_cc1b "$_st/$_n.log" "$_st/ref.s" "$_st/ref2.s" 3 >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  cc1build selftest $_n: PASS"; else echo "  cc1build selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -2663,7 +2666,7 @@ PYEOF3
       if assert_cc1b "$_st/$_n.log" "$_st/ref.s" "$_st/ref2.s" 3 1 >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  cc1build selftest staged-$_n: PASS"; else echo "  cc1build selftest staged-$_n: FAIL"; _fails=$((_fails+1)); fi
     done
-    for _c in "pass:0" "missingtu:1" "tufail:1" "found:1" "crash:1"; do
+    for _c in "pass:0" "missingtu:1" "tufail:1" "found:1" "crash:1" "ice:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_cc1b_shard "$_st/$_n.log" 3 >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  cc1build selftest shard-$_n: PASS"; else echo "  cc1build selftest shard-$_n: FAIL"; _fails=$((_fails+1)); fi

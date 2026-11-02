@@ -554,6 +554,7 @@ def selftest(repo):
               (('arm1-departure.pcap.gz', 6), 281),
               (('arm2-departure.pcap.gz', 5), 796),
               (('arm3b-departure.pcap.gz', 6), 1),
+              (('armB-departure-WQRB.pcap.gz', 5), 255),   # rd vms-0db, LDW 1/1/1
               (('cf1-op08.pcap', None), 1),
               (('coldform-ev2-formation.pcap', 5), 1),
               (('heldout-E4.pcap.gz', 6), 137),
@@ -567,7 +568,7 @@ def selftest(repo):
           ])
     check('...answered before the next release (inside the step)',
           sorted(verdict.items()),
-          [('answered before the next release', 1965),
+          [('answered before the next release', 2220),   # +255 rd vms-0db
            ('no barrier in the capture', 1)])
 
     # 9. THE VALUE BLOCK A SURVIVOR RELAYS (rd vms-8159). body[88:108] is the
@@ -586,9 +587,9 @@ def selftest(repo):
                  q[88:104] != b'\0' * 16, le32(q, 104) != 0)] += 1
     check('op-0x08 records by (kind, block non-zero, sequence non-zero)',
           sorted(blk.items()),
-          [(('ROOT', False, False), 1547), (('ROOT', False, True), 3),
-           (('ROOT', True, True), 40), (('SUB', False, False), 13),
-           (('SUB', False, True), 32), (('SUB', True, True), 331)])
+          [(('ROOT', False, False), 1766), (('ROOT', False, True), 4),
+           (('ROOT', True, True), 54), (('SUB', False, False), 20),
+           (('SUB', False, True), 42), (('SUB', True, True), 335)])   # +255 rd vms-0db arm B
     check('RA1b RMT1 tree body[88:108] (sender, lock, block, sequence)',
           [(r['src'].hex(), ident(r['q'])[2].decode(), r['q'][88:104],
             le32(r['q'], 104)) for r in rmt], [
@@ -616,13 +617,13 @@ def selftest(repo):
               (('ROOT', '1a', 'equal, absent'), 3),
               (('ROOT', 'grant', 'equal, absent'), 142),
               (('ROOT', 'grant', 'other'), 1),
-              (('ROOT', 'none seen', 'absent'), 1400),
-              (('ROOT', 'none seen', 'block'), 40),
+              (('ROOT', 'none seen', 'absent'), 1619),   # +219 rd vms-0db arm B
+              (('ROOT', 'none seen', 'block'), 55),      # +15
               (('ROOT', 'write', 'other'), 2),
               (('ROOT', 'write', 'written block'), 2),
               (('SUB', 'grant', 'other'), 5),
-              (('SUB', 'none seen', 'absent'), 11),
-              (('SUB', 'none seen', 'block'), 211),
+              (('SUB', 'none seen', 'absent'), 18),      # +7
+              (('SUB', 'none seen', 'block'), 225),      # +14
               (('SUB', 'write', 'other'), 6),
               (('SUB', 'write', 'written block'), 143)])
     check('op-0x12: the same rule (after an op-0x1a it; otherwise the grant)',
@@ -633,15 +634,15 @@ def selftest(repo):
               (('ROOT', 'grant', 'equal, absent'), 355),
               (('ROOT', 'grant', 'other'), 1),
               (('ROOT', 'none seen', 'absent'), 804),
-              (('ROOT', 'none seen', 'block'), 25),
+              (('ROOT', 'none seen', 'block'), 34),      # +9 rd vms-0db WQRC/WQRE
               (('ROOT', 'write', 'other'), 6),
               (('ROOT', 'write', 'written block'), 5),
               (('SUB', '1a', 'equal, a block'), 224),
-              (('SUB', '1a', 'equal, absent'), 14),
+              (('SUB', '1a', 'equal, absent'), 19),      # +5
               (('SUB', '1a', 'later sequence, same block'), 6),
               (('SUB', '1a', 'other'), 2),
               (('SUB', 'grant', 'other'), 1),
-              (('SUB', 'none seen', 'absent'), 25),
+              (('SUB', 'none seen', 'absent'), 27),      # +2
               (('SUB', 'none seen', 'block'), 2385),
               (('SUB', 'write', 'other'), 10),
               (('SUB', 'write', 'written block'), 62)])

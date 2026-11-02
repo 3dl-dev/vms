@@ -236,6 +236,48 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     if printf '%s\n' "$seg" | grep >/dev/null -F 'DECNETD-I-NETLOOP'; then rc=0; else rc=1; fi
     record "NEGCTL boot 2: the brokered-link segment is real output (the test's banner is present)" "$rc"
 
+    # rd vms-6a4: OVMX's own DCL DIRECTORY and TYPE of a node:: spec, through
+    # the same NETACP loopback to a FAL.EXE server process. The loopback proof
+    # above left SYS$SYSROOT:[SYSMGR]NETLB_SRC.TXT and NETLB_GOT.TXT, each
+    # holding one known record. The forms and messages are the real VAX's
+    # (tests/lab/captures/decnet-fal-verbs-20261008/).
+    run_seg 'DIRECTORY 0"SYSTEM MANAGER"::' "$LOG2" 'Total of' 120
+    if has 'Directory 0"SYSTEM password"::' && has 'NETLB_SRC.TXT;' && has 'NETLB_GOT.TXT;' \
+       && printf '%s\n' "$seg" | grep >/dev/null -E '^Total of [0-9]+ files?\.$'; then rc=0; else rc=1; fi
+    record "boot 2: DIRECTORY 0\"SYSTEM MANAGER\":: lists SYSTEM's remote login directory through NETACP + FAL.EXE: VAX header (password masked), the NETLB files, Total line (vms-6a4)" "$rc"
+    if has 'DCL-E-ABORT' || has 'DECNETD-'; then rc=1; else rc=0; fi
+    record "boot 2: ... with no image or DECNETD chatter under it" "$rc"
+    run_seg 'DIRECTORY 0"SYSTEM MANAGER"::SYS$SYSROOT:[SYSMGR]NETLB_*.TXT' "$LOG2" 'Total of' 120
+    if printf '%s\n' "$seg" | grep >/dev/null -E '^Directory 0"SYSTEM password"::.*\]$' \
+       && printf '%s\n' "$seg" | grep >/dev/null -E '^NETLB_GOT\.TXT;[0-9]+ +NETLB_SRC\.TXT;[0-9]+ +$' \
+       && has 'Total of 2 files.'; then rc=0; else rc=1; fi
+    record "boot 2: DIRECTORY of a remote wildcard prints the two names in 20-column cells and 'Total of 2 files.' (VAX layout)" "$rc"
+    run_seg 'DIRECTORY 0"SYSTEM MANAGER"::SYS$SYSROOT:[SYSMGR]NOSUCH_6A4.TXT' "$LOG2" 'NOFILES' 120
+    if has '%DIRECT-W-NOFILES, no files found' && ! has 'Total of'; then rc=0; else rc=1; fi
+    record "boot 2: DIRECTORY of a remote spec that matches nothing is %DIRECT-W-NOFILES" "$rc"
+    run_seg 'TYPE 0"SYSTEM MANAGER"::SYS$SYSROOT:[SYSMGR]NETLB_SRC.TXT' "$LOG2" 'local loopback' 120
+    if printf '%s\n' "$seg" | grep >/dev/null -xF 'NETACP-brokered _NET: COPY over the local loopback' \
+       && ! has '::SYS$SYSROOT:[SYSMGR]NETLB_SRC.TXT;'; then rc=0; else rc=1; fi
+    record "boot 2: TYPE 0\"SYSTEM MANAGER\"::file prints the remote file's record, with no per-file header for one named file (vms-6a4)" "$rc"
+    # Both files' records are the same line, so wait for the SRC header and
+    # then give the last record time to arrive before reading the segment.
+    off=$(wc -c <"$LOG2")
+    send 'TYPE 0"SYSTEM MANAGER"::SYS$SYSROOT:[SYSMGR]NETLB_*.TXT'
+    waitfor 'NETLB_SRC.TXT;' 120 "$LOG2"; sleep 8
+    seg=$(tail -c "+$((off + 1))" "$LOG2" | tr -d '\r')
+    if printf '%s\n' "$seg" | grep >/dev/null -E '^0"SYSTEM password"::.*NETLB_GOT\.TXT;[0-9]+$' \
+       && printf '%s\n' "$seg" | grep >/dev/null -E '^0"SYSTEM password"::.*NETLB_SRC\.TXT;[0-9]+$' \
+       && [ "$(printf '%s\n' "$seg" | grep -cxF 'NETACP-brokered _NET: COPY over the local loopback')" -ge 2 ]; then rc=0; else rc=1; fi
+    record "boot 2: TYPE of a remote wildcard prints each file under its own NODE::name header, records after (VAX form)" "$rc"
+    run_seg 'TYPE 0"SYSTEM WRONGPW"::SYS$SYSROOT:[SYSMGR]NETLB_SRC.TXT' "$LOG2" 'INVLOGIN' 120
+    if has '%TYPE-W-SEARCHFAIL, error searching for 0"SYSTEM password"::SYS$SYSROOT:[SYSMGR]NETLB_SRC.TXT;' \
+       && has '-RMS-E-FND, ACP file or directory lookup failed' \
+       && has '-SYSTEM-F-INVLOGIN, login information invalid at remote node' \
+       && ! has 'NETACP-brokered'; then rc=0; else rc=1; fi
+    record "boot 2: TYPE with a bad password: SEARCHFAIL, -RMS-E-FND, -SYSTEM-F-INVLOGIN as the VAX prints it, and no record shown" "$rc"
+    if has 'DCL-E-ABORT' || printf '%s\n' "$seg" | grep -vF 'TYPE 0"SYSTEM WRONGPW"' | grep >/dev/null -F 'WRONGPW'; then rc=1; else rc=0; fi
+    record "NEGCTL boot 2: ... no image line, and the password is never echoed back in a message" "$rc"
+
     # (d) NCP SHOW + SHOW NETWORK read the RUNNING NETACP (rd vms-30e).
     send 'NCP :== $SYS$SYSTEM:NCP.EXE'; sleep 1
     run_seg 'NCP SHOW EXECUTOR' "$LOG2" 'Identification' 30

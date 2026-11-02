@@ -76,6 +76,7 @@
 #include "ovmx_status.h"     /* vms_status_string: the authentic %FAC-S-ID text */
 #include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
+#include "dnet_fal_dirtype.h" /* $ DIRECTORY / $ TYPE node:: (rd vms-6a4) */
 #include "dnet_ncpstore.h"  /* SYS$SYSTEM:NETNODE_*.DAT via RMS (rd vms-1f69) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "rms_io.h"         /* --fal-proc-accept-test: a fixture with an explicit protection */
@@ -4806,23 +4807,26 @@ static int netcli_dap_recv(void *ctx, uint8_t *buf, size_t cap, size_t *outlen)
  * session, IO$_DEACCESS. Returns the FAL transfer status, or the IO$_ACCESS
  * failure (SS$_INVLOGIN when the remote refused the credentials, ...).
  */
-static uint32_t copy_client_run_net(struct netcli *c, const struct dnet_copy_plan *plan,
-                                    const char *password)
+/* IO$_ACCESS of the FAL object (17) on `node`, the access control in the NCB.
+ * Shared by $ COPY and $ DIRECTORY / $ TYPE node:: (rd vms-6a4). */
+static uint32_t netcli_open_fal(struct netcli *c, const char *node, int has_access,
+                                const char *username, const char *password,
+                                const char *account)
 {
     char ncb[DNET_NSP_MAX_DATA];
     const char *pw = password ? password : "";
     /* The NCB access string is blank-separated and quoted: a field that holds a
      * blank or a quote cannot be carried -- refuse rather than mis-split it. */
-    if (strpbrk(plan->username, " \"") || strpbrk(pw, " \"") ||
-        strpbrk(plan->account, " \"") || (plan->account[0] && !pw[0]))
+    if (strpbrk(username, " \"") || strpbrk(pw, " \"") ||
+        strpbrk(account, " \"") || (account[0] && !pw[0]))
         return SS$_BADPARAM;
     int n;
-    if (plan->has_access)
-        n = snprintf(ncb, sizeof ncb, "%s\"%s%s%s%s%s\"::\"%d=\"", plan->node,
-                     plan->username, pw[0] ? " " : "", pw,
-                     plan->account[0] ? " " : "", plan->account, DNET_FAL_OBJECT);
+    if (has_access)
+        n = snprintf(ncb, sizeof ncb, "%s\"%s%s%s%s%s\"::\"%d=\"", node,
+                     username, pw[0] ? " " : "", pw,
+                     account[0] ? " " : "", account, DNET_FAL_OBJECT);
     else
-        n = snprintf(ncb, sizeof ncb, "%s::\"%d=\"", plan->node, DNET_FAL_OBJECT);
+        n = snprintf(ncb, sizeof ncb, "%s::\"%d=\"", node, DNET_FAL_OBJECT);
     if (n < 0 || (size_t)n >= sizeof ncb) {
         memset(ncb, 0, sizeof ncb);
         return SS$_BADPARAM;
@@ -4830,6 +4834,15 @@ static uint32_t copy_client_run_net(struct netcli *c, const struct dnet_copy_pla
     size_t x = 0;
     uint32_t st = netcli_op(c, DNET_BROKER_OP_OPEN, ncb, (size_t)n, NULL, 0, &x);
     memset(ncb, 0, sizeof ncb);            /* it carried the password */
+    return st;
+}
+
+static uint32_t copy_client_run_net(struct netcli *c, const struct dnet_copy_plan *plan,
+                                    const char *password)
+{
+    uint32_t st = netcli_open_fal(c, plan->node, plan->has_access, plan->username,
+                                  password, plan->account);
+    size_t x = 0;
     if (!(st & 1))
         return st;
 
@@ -4939,6 +4952,137 @@ static int run_copy_net(const char *src, const char *dst, int password_fd)
                "%%COPY-W-NOTCOPIED, %s not copied\n",
                plan.node, plan.remote_spec, why[0] ? why : "", plan.local_spec);
     fflush(stdout);
+    return 1;
+}
+
+/*
+ * ============ $ DIRECTORY / $ TYPE node:: through NETACP (rd vms-6a4) ============
+ *
+ * DCL activates DECNETD.EXE --directory SPEC or --type SPEC on the caller's
+ * process (the same activation as --copy; the password arrives on
+ * --password-fd, never argv). Each FAL link is its own _NET: channel: a VMS
+ * TYPE lists on one link and opens on another, so the linker hands out up to
+ * two at once. With no NETACP serving, the link cannot open and the command
+ * says so in VMS's words (SEARCHFAIL ... -SYSTEM-F-DEVOFFLINE), never a
+ * private engine (INV-6).
+ */
+struct falverb_link {
+    struct netcli c;
+    struct dnet_dap_transport t;
+    int used;
+};
+struct falverb_ctx {
+    const struct dnet_nodespec *ns;
+    const char *password;
+    int netacp;                         /* netacp_running() */
+    struct falverb_link links[2];
+};
+
+static struct dnet_dap_transport *falverb_open(void *v, uint32_t *st)
+{
+    struct falverb_ctx *x = v;
+    if (x->netacp != 1) {
+        *st = (x->netacp < 0) ? SS$_NOSUCHDEV : SS$_DEVOFFLINE;
+        return NULL;
+    }
+    struct falverb_link *L = NULL;
+    for (int i = 0; i < 2; i++)
+        if (!x->links[i].used) { L = &x->links[i]; break; }
+    if (!L) { *st = SS$_INSFMEM; return NULL; }
+    if (netcli_assign(&L->c) != 0) { *st = SS$_NOSUCHDEV; return NULL; }
+    uint32_t r = netcli_open_fal(&L->c, x->ns->node, x->ns->has_access, x->ns->username,
+                                 x->password, x->ns->account);
+    if (!(r & 1)) {
+        sys$dassgn(L->c.chan);
+        *st = r;
+        return NULL;
+    }
+    memset(&L->t, 0, sizeof L->t);
+    L->t.send = netcli_dap_send;
+    L->t.recv = netcli_dap_recv;
+    L->t.ctx = &L->c;
+    L->used = 1;
+    *st = SS$_NORMAL;
+    return &L->t;
+}
+
+static void falverb_close(void *v, struct dnet_dap_transport *t)
+{
+    struct falverb_ctx *x = v;
+    for (int i = 0; i < 2; i++) {
+        struct falverb_link *L = &x->links[i];
+        if (L->used && &L->t == t) {
+            size_t xf = 0;
+            (void)netcli_op(&L->c, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &xf);
+            sys$dassgn(L->c.chan);
+            L->used = 0;
+        }
+    }
+}
+
+static int run_fal_verb_net(int verb, const char *arg, int password_fd)
+{
+    /* DIRECTORY NODE:: lists the remote default directory: an empty file
+     * part is *.*;* (the splitter refuses an empty one). */
+    char spec[DNET_NODESPEC_MAXFILE + DNET_NODESPEC_MAXNODE + 64];
+    size_t al = strlen(arg);
+    if (al >= sizeof spec - 8) {
+        fprintf(stderr, "DECNETD-E-FALSPEC, the file specification is too long\n");
+        return 1;
+    }
+    memcpy(spec, arg, al + 1);
+    if (verb == DNET_FAL_VERB_DIRECTORY && al >= 2 && !strcmp(spec + al - 2, "::"))
+        memcpy(spec + al, "*.*;*", 6);
+
+    static struct dnet_nodespec ns;
+    int r = dnet_nodespec_parse(spec, &ns);
+    if (r != DNET_CTERM_OK) {
+        fprintf(stderr, "DECNETD-E-FALSPEC, could not parse the node file specification"
+                        " (status %d)\n", r);
+        return 1;
+    }
+    /* POSTURE (as --copy): the password never rides argv. */
+    if (ns.password[0]) {
+        fprintf(stderr, "DECNETD-E-COPYPW, the FAL password must not appear on the"
+                        " command line; supply it on the fd named by --password-fd\n");
+        return 1;
+    }
+    char password[DNET_SC_MAX_STR + 1];
+    memset(password, 0, sizeof password);
+    if (ns.has_access && password_fd >= 0) {
+        ssize_t got = read(password_fd, password, DNET_SC_MAX_STR); // codeql[cpp/cleartext-transmission]
+        if (got < 0) {
+            fprintf(stderr, "DECNETD-E-COPYPW, could not read the password from"
+                            " fd %d: %s\n", password_fd, strerror(errno));
+            return 1;
+        }
+        password[got] = '\0';
+        size_t pl = strlen(password);
+        while (pl && (password[pl - 1] == '\n' || password[pl - 1] == '\r'))
+            password[--pl] = '\0';
+    }
+
+    char pfx[DNET_NODESPEC_MAXNODE + DNET_SC_MAX_STR + 32];
+    dnet_fal_display_prefix(ns.node, ns.username, ns.has_access, password[0] != '\0',
+                            pfx, sizeof pfx);
+
+    static struct falverb_ctx x;
+    memset(&x, 0, sizeof x);
+    x.ns = &ns;
+    x.password = password;
+    x.netacp = netacp_running();
+    struct dnet_fal_linker lk = { falverb_open, falverb_close, &x };
+    uint32_t st = (verb == DNET_FAL_VERB_DIRECTORY)
+        ? dnet_fal_directory(stdout, &lk, pfx, ns.filespec)
+        : dnet_fal_type(stdout, &lk, pfx, ns.filespec);
+    memset(password, 0, sizeof password);
+    fflush(stdout);
+    if (st & 1)
+        return 0;
+    /* The failure was said above, in VMS's words; $STATUS carries it with
+     * STS$M_INHIB_MSG so DCL adds no "image ... exited" line (as SET HOST,
+     * rd vms-5843). */
+    sys$exit(st | 0x10000000u);
     return 1;
 }
 
@@ -5179,6 +5323,8 @@ static void usage(const char *argv0)
         "                      a real credential and must not sit in argv (world-\n"
         "                      readable /proc); supply it on --password-fd. The\n"
         "                      outbound datalink transport is build-host-gated.\n"
+        "  --directory SPEC    $ DIRECTORY NODE\"user\"::spec through NETACP's _NET:\n"
+        "  --type SPEC         $ TYPE NODE\"user\"::spec through NETACP's _NET:\n"
         "  --password-fd N     with --copy: read the FAL access-control password\n"
         "                      from inherited fd N (never from argv or the env)\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT,
@@ -8839,6 +8985,8 @@ int main(int argc, char **argv)
     const char *copy_src = NULL;          /* --copy <src> <dst> : outbound FAL COPY      */
     const char *copy_dst = NULL;
     int copy_password_fd = -1;            /* --password-fd N : the FAL password source   */
+    int falverb = 0;                      /* --directory / --type (rd vms-6a4)           */
+    const char *falverb_spec = NULL;      /* ... NODE"user"::spec                        */
     int router_mode = 0;           /* --router: emit router-hellos, advertise L1 router */
     int router_priority = 0;       /* --priority: DR-election priority (0 => DNA default 64) */
 
@@ -8886,6 +9034,12 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--copy") && i + 2 < argc) {
             copy_src = argv[++i];
             copy_dst = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--directory") && i + 1 < argc) {
+            falverb = DNET_FAL_VERB_DIRECTORY; falverb_spec = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--type") && i + 1 < argc) {
+            falverb = DNET_FAL_VERB_TYPE; falverb_spec = argv[++i];
         }
         else if (!strcmp(argv[i], "--password-fd") && i + 1 < argc)
             copy_password_fd = atoi(argv[++i]);
@@ -8940,6 +9094,10 @@ int main(int argc, char **argv)
         return run_copy_transport_selftest();
     if (copy_accept_test)
         return run_copy_accept_test();
+    /* $ DIRECTORY / $ TYPE node:: are NETACP _NET: clients only; with no
+     * NETACP the link open reports it in VMS's words (run_fal_verb_net). */
+    if (falverb)
+        return run_fal_verb_net(falverb, falverb_spec, copy_password_fd);
     /* --copy (run_copy_loop) needs the live datalink; dispatched after the socket
      * is opened, beside the --set-host client (below). */
 

@@ -739,6 +739,8 @@ static int has_arith_op(const char *s)
  * -------------------------------------------------------------------------
  */
 
+static int has_arith_op(const char *s);
+
 /* Condition parser state */
 typedef struct {
     const char *input;
@@ -766,6 +768,42 @@ static size_t cp_match_op(cond_parser_t *cp, const char *op)
         if (toupper((unsigned char)cp->input[cp->pos + j]) != op[j]) return 0;
     }
     return oplen;
+}
+
+/*
+ * cp_paren_is_group - at a "(", is this a parenthesised CONDITION (true) or the
+ * start of a parenthesised arithmetic/string operand (false)? Find the matching
+ * ")" (outside quotes) and look at what follows it: the end of the condition,
+ * .AND., .OR. or another ")" ends a condition group; anything else (an operator
+ * of the operand, or a comparison) means the parentheses belong to an operand.
+ */
+static int cp_paren_is_group(const cond_parser_t *cp)
+{
+    size_t i = cp->pos;
+    int depth = 0, inq = 0;
+    for (; i < cp->len; i++) {
+        char c = cp->input[i];
+        if (inq) {
+            if (c == '"') {
+                if (i + 1 < cp->len && cp->input[i + 1] == '"') i++;
+                else inq = 0;
+            }
+            continue;
+        }
+        if (c == '"') { inq = 1; continue; }
+        if (c == '(') depth++;
+        else if (c == ')' && --depth == 0) break;
+    }
+    if (i >= cp->len)
+        return 1;                       /* unbalanced: keep the old reading */
+    i++;
+    while (i < cp->len && (cp->input[i] == ' ' || cp->input[i] == '\t'))
+        i++;
+    if (i >= cp->len || cp->input[i] == ')')
+        return 1;
+    cond_parser_t at = *cp;
+    at.pos = i;
+    return cp_match_op(&at, ".AND.") || cp_match_op(&at, ".OR.");
 }
 
 /* Forward declarations for recursive descent */
@@ -845,6 +883,30 @@ static void cp_eval_operand(cond_parser_t *cp, const char *raw,
     size_t slen = strlen(s);
     while (slen > 0 && (s[slen-1] == ' ' || s[slen-1] == '\t'))
         s[--slen] = '\0';
+
+    /* AN OPERAND IS AN EXPRESSION (rd vms-c17a). DCL's operator precedence
+     * puts + - * / above the comparisons, so in
+     *     IF X .EQS. "_" + N + "$OPA0:"
+     * the right operand is the concatenation, and in IF I + 1 .EQ. 3 the left
+     * one is the sum (measured on VAX V7.3: docs/oracle/semantics/ifx/). An
+     * operand with one of those operators outside quotes and parentheses is
+     * therefore evaluated by the SAME evaluator as the right-hand side of an
+     * assignment -- not unquoted as if `"_" + N + "$OPA0:"` were one string.
+     * The text was symbol-substituted above already, so the evaluator is not
+     * asked to substitute it again. */
+    if (slen > 0 && has_arith_op(s)) {
+        expr_parser_t ep;
+        ep.input = s;
+        ep.pos   = 0;
+        ep.len   = slen;
+        ep.ctx   = cp->cctx;
+        expr_val_t v = parse_expr(&ep);
+        char tmp[64];
+        const char *vs = val_to_str(&v, tmp, sizeof(tmp));
+        strncpy(buf, vs, bufsz - 1);
+        buf[bufsz - 1] = '\0';
+        return;
+    }
 
     /* Unquote */
     int was_quoted = 0;
@@ -947,8 +1009,12 @@ static int cond_compare(cond_parser_t *cp)
 {
     cp_skip_ws(cp);
 
-    /* Parenthesised sub-expression */
-    if (cp->pos < cp->len && cp->input[cp->pos] == '(') {
+    /* Parenthesised sub-expression -- unless the parentheses only group an
+     * arithmetic operand: in IF (1 + 2) * 3 .EQ. 9 the ")" is followed by an
+     * operator of the operand, so the whole of "(1 + 2) * 3" is the left
+     * operand (rd vms-c17a). A group followed by the end of the condition,
+     * .AND., .OR. or an enclosing ")" is a condition. */
+    if (cp->pos < cp->len && cp->input[cp->pos] == '(' && cp_paren_is_group(cp)) {
         cp->pos++; /* ( */
         int v = cond_or(cp);
         cp_skip_ws(cp);

@@ -29,7 +29,6 @@
 #endif
 #include <arpa/inet.h>
 #include <limits.h>
-#include <poll.h>
 /* NOTE: no <mntent.h>. The mount table is parsed by hand from /proc/mounts with
  * fopen/fgets (dcl_unit_is_mounted below) -- getmntent(3)/setmntent(3) are a
  * glibc-only convenience with no musl-static symbol, and <mntent.h> does not
@@ -4239,14 +4238,13 @@ static int tcpip_tool_resolve(const char *facility, const char *host,
 
 /*
  * TELNET is FULL-DUPLEX, as the VMS TELNET client is: whatever the server sends
- * is shown as it arrives, while the user types. One loop waits on the BGn:
- * socket's readiness (the executive's readiness fd, vms_kif_bg_pollfd -- the
- * fd carries no data, every byte still moves through the executive's
- * IO$_READVBLK / IO$_WRITEVBLK) and polls the terminal's type-ahead through the
- * executive terminal driver (dcl_tt_getc). The connection is the executive's
- * BGn: unit reached by its executive channel (vms_kif_bg_*), the same way
- * dcl_mbx.c reaches a mailbox, because that channel is what the readiness fd is
- * minted from.
+ * is shown as it arrives, while the user types. One loop serves both
+ * devices through VMS system services only (rd vms-a6b): the connection is
+ * $ASSIGNed TCPIP$DEVICE: and read with $QIOW IO$_READVBLK|IO$M_NOW (takes what
+ * has arrived, SS$_ENDOFFILE when nothing), the terminal is read with $QIOW
+ * IO$_READVBLK and a zero TRM$_TIMEOUT (dcl_tt_getc), and when both are quiet
+ * the loop waits on a $SETIMR timer event flag ($WAITFR). No poll(), select()
+ * or read() on a Linux fd appears anywhere on this path.
  *
  * Modes (RFC 857/858 as a VMS TELNET client does them): a server that WILL
  * ECHO puts the session in CHARACTER mode -- each key goes out as typed and the
@@ -4258,8 +4256,11 @@ static int tcpip_tool_resolve(const char *facility, const char *host,
  */
 #define TELNET_ESCAPE 0x1D              /* CTRL/] */
 
+#define TELNET_TICK_EFN 40u             /* local event flag the idle timer sets */
+#define TELNET_TICK_100NS 200000        /* 20 ms idle wait, as a delta time */
+
 struct telnet_sess {
-    uint32_t xchan;                     /* executive BGn: channel */
+    struct tcpip_conn conn;             /* $ASSIGNed TCPIP$DEVICE: channel */
     struct tcpip_telnet_state tn;
     unsigned char out[TCPIP_XFER_MAX];
     uint32_t olen;
@@ -4267,17 +4268,7 @@ struct telnet_sess {
 
 static uint32_t telnet_xsend(struct telnet_sess *ts, const unsigned char *b, uint32_t n)
 {
-    while (n > 0) {
-        uint32_t chunk = n > TCPIP_XFER_MAX ? TCPIP_XFER_MAX : n, act = 0;
-        uint32_t st = vms_kif_bg_send(ts->xchan, b, chunk, &act);
-        if (!(st & 1))
-            return st;
-        if (act == 0)
-            return SS$_ABORT;
-        b += act;
-        n -= act;
-    }
-    return SS$_NORMAL;
+    return tcpip_send_all(&ts->conn, b, n);
 }
 
 /* Queue user bytes for the server: 0xFF doubled (RFC 854), RETURN as CR LF. */
@@ -4314,15 +4305,18 @@ static uint32_t telnet_flush(struct telnet_sess *ts)
 }
 
 /* One read from the server: show its data, answer its negotiation. Returns 1
- * while the connection is open, 0 when the server closed it, -1 on an error. */
+ * when data arrived, 2 when nothing has, 0 when the server closed the
+ * connection, -1 on an error. */
 static int telnet_from_server(struct telnet_sess *ts)
 {
     unsigned char in[TCPIP_XFER_MAX];
     unsigned char data[TCPIP_XFER_MAX];
     unsigned char reply[96];
     uint32_t got = 0, off = 0;
-    uint32_t st = vms_kif_bg_recv(ts->xchan, in, sizeof in, &got);
+    uint32_t st = tcpip_recv_now(&ts->conn, in, sizeof in, &got);
 
+    if (st == SS$_ENDOFFILE)
+        return 2;
     if (!(st & 1))
         return -1;
     if (got == 0)
@@ -4359,9 +4353,9 @@ int cmd_telnet(struct dcl_command *cmd)
     struct telnet_sess *ts;
     uint32_t addr_be = 0;
     uint16_t port = 23;
-    uint32_t unit = 0, st;
-    char devnam[32];
-    int pfd = -1, ttmode, pending, closed_by = 0;
+    uint32_t st;
+    int pending, closed_by = 0;
+    uint64_t tick = (uint64_t)(-(int64_t)TELNET_TICK_100NS);
 
     if (cmd->param_count < 1) {
         dcl_error("TELNET", 2, "NOHOST", "missing host - supply an address to connect to");
@@ -4377,6 +4371,15 @@ int cmd_telnet(struct dcl_command *cmd)
         }
     }
 
+    /* the session is keyboard and screen: it needs the terminal. SYS$INPUT that
+     * is a file or pipe has no terminal channel to read keys from. */
+    pending = dcl_tt_getc(1);
+    if (pending == -2) {
+        dcl_error("TELNET", 2, "NOTERM",
+                  "TELNET needs an interactive terminal - SYS$INPUT is not one");
+        return SS$_NOSUCHDEV;
+    }
+
     ts = calloc(1, sizeof *ts);
     if (!ts) {
         dcl_error("TELNET", 2, "INSFMEM", "insufficient memory");
@@ -4386,14 +4389,7 @@ int cmd_telnet(struct dcl_command *cmd)
 
     printf("%%TELNET-I-TRYING, trying %s port %u ...\n", cmd->params[0], (unsigned)port);
     fflush(stdout);
-    st = vms_kif_bg_create(&ts->xchan, &unit, devnam, sizeof devnam);
-    if (st & 1) {
-        st = vms_kif_bg_setmode(ts->xchan);
-        if (st & 1)
-            st = vms_kif_bg_connect(ts->xchan, 2 /* AF_INET */, tcpip_port_be(port), addr_be);
-        if (!(st & 1))
-            vms_kif_bg_dassgn(ts->xchan);
-    }
+    st = tcpip_connect(&ts->conn, addr_be, port);
     if (!(st & 1)) {
         if (st == SS$_NOSUCHDEV) {
             dcl_error("TELNET", 2, "NONET",
@@ -4414,41 +4410,25 @@ int cmd_telnet(struct dcl_command *cmd)
     printf("%%TELNET-I-ESCAPE, escape character is ^]\n");
     fflush(stdout);
 
-    if (!(vms_kif_bg_pollfd(ts->xchan, &pfd) & 1))
-        pfd = -1;
-    /* the executive terminal driver, or (a host build with none) plain stdin;
-     * a key already typed is kept, not lost to the probe */
-    pending = dcl_tt_getc(1);
-    ttmode = pending != -2;
+    /* a key already typed is kept, not lost to the probe */
     if (pending < 0)
         pending = -1;
 
     for (;;) {
-        struct pollfd pf[2];
-        int np = 0, r;
+        int k = telnet_from_server(ts);
+        int busy = k == 1;
 
-        if (pfd >= 0) {
-            pf[np].fd = pfd; pf[np].events = POLLIN; pf[np].revents = 0; np++;
-        }
-        if (!ttmode) {
-            pf[np].fd = STDIN_FILENO; pf[np].events = POLLIN; pf[np].revents = 0; np++;
-        }
-        r = poll(pf, (nfds_t)np, ttmode ? 50 : -1);
-        if (r < 0 && errno != EINTR)
+        if (k == 0 || k < 0) {
+            closed_by = k == 0 ? 1 : 2;
             break;
-        if (pfd < 0 || (r > 0 && (pf[0].revents & (POLLIN | POLLHUP | POLLERR)))) {
-            int k = telnet_from_server(ts);
-            if (k <= 0) {
-                closed_by = k == 0 ? 1 : 2;
-                break;
-            }
         }
 
-        if (ttmode) {
+        {
             int c, quit = 0;
             /* everything typed since the last pass, at once */
             while ((c = pending >= 0 ? pending : dcl_tt_getc(1)) >= 0) {
                 pending = -1;
+                busy = 1;
                 if (c == TELNET_ESCAPE) {
                     if (!(telnet_flush(ts) & 1) || telnet_escape()) {
                         quit = 1;
@@ -4489,19 +4469,17 @@ int cmd_telnet(struct dcl_command *cmd)
                 quit = 1;
             if (quit)
                 break;
-        } else if (r > 0 && (pf[np - 1].revents & (POLLIN | POLLHUP))) {
-            char line[1024];
-            if (!fgets(line, sizeof line, stdin))
-                break;                  /* end of input ends the session */
-            if (!(telnet_put(ts, line, strlen(line)) & 1) || !(telnet_flush(ts) & 1))
-                break;
+        }
+
+        if (!busy) {
+            /* both devices are quiet: wait on a timer event flag */
+            sys$clref(TELNET_TICK_EFN);
+            if (sys$setimr(TELNET_TICK_EFN, &tick, NULL, 0, 0) & 1)
+                sys$waitfr(TELNET_TICK_EFN);
         }
     }
 
-    if (pfd >= 0)
-        close(pfd);
-    vms_kif_bg_deaccess(ts->xchan);
-    vms_kif_bg_dassgn(ts->xchan);
+    tcpip_close(&ts->conn);
     free(ts);
     if (closed_by == 2)
         dcl_error("TELNET", 2, "LINKLOST", "connection to %s lost", cmd->params[0]);

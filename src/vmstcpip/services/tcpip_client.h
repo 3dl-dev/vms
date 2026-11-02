@@ -268,6 +268,29 @@ static inline uint32_t tcpip_fill(struct tcpip_conn *c, uint32_t *got)
     return SS$_NORMAL;
 }
 
+/* IO$_READVBLK|IO$M_NOW (rd vms-a6b): take whatever has arrived, never wait.
+ * Returns SS$_ENDOFFILE with *got == 0 when nothing is queued (the IO$M_NOW
+ * convention of an empty mailbox read), SS$_NORMAL with *got == 0 on an
+ * orderly peer close, SS$_NORMAL with *got > 0 for data. A client that serves
+ * a terminal and the connection together waits on a timer event flag between
+ * these reads ($SETIMR + $WAITFR) -- it never poll()s a Linux fd. */
+static inline uint32_t tcpip_recv_now(struct tcpip_conn *c, void *buf,
+                                      uint32_t cap, uint32_t *got)
+{
+    struct _iosb iosb;
+    uint32_t st;
+
+    *got = 0;
+    memset(&iosb, 0, sizeof iosb);
+    st = sys$qiow(0, c->chan, IO$_READVBLK | IO$M_NOW, &iosb, NULL, 0,
+                  buf, cap, 0, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    if (st & 1)
+        *got = iosb.iosb$w_bcnt;
+    return st;
+}
+
 /* Read one raw byte off the stream (buffering as needed). Returns 1 on a byte
  * (in *out), 0 on EOF, -1 on error. */
 static inline int tcpip_getc(struct tcpip_conn *c, unsigned char *out)

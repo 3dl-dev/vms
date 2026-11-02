@@ -227,6 +227,31 @@ exec_socket_recv(exec_socket_t s, void *buf, size_t len)
 	return (long)(len - uio.uio_resid);     /* 0 = orderly peer close (EOF) */
 }
 
+/* IO$M_NOW: complete at once; -EAGAIN when nothing is queued. */
+long
+exec_socket_recv_now(exec_socket_t s, void *buf, size_t len)
+{
+	struct uio uio;
+	struct iovec iov;
+	int flags = MSG_DONTWAIT;
+	int rc;
+
+	iov.iov_base = buf;
+	iov.iov_len = len;
+	memset(&uio, 0, sizeof(uio));
+	uio.uio_iov = &iov;
+	uio.uio_iovcnt = 1;
+	uio.uio_offset = 0;
+	uio.uio_resid = len;
+	uio.uio_rw = UIO_READ;
+	UIO_SETUP_SYSSPACE(&uio);
+
+	rc = soreceive(s->so, NULL, &uio, NULL, NULL, &flags);
+	if (rc)
+		return -rc;
+	return (long)(len - uio.uio_resid);
+}
+
 int
 exec_socket_shutdown(exec_socket_t s)
 {

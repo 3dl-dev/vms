@@ -564,15 +564,22 @@ long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
     }
 
-    n = exec_socket_recv(sock, a->data, bufsz);
+    if (a->flags & VMS_BG_IOF_NOW)
+        n = exec_socket_recv_now(sock, a->data, bufsz);
+    else
+        n = exec_socket_recv(sock, a->data, bufsz);
     if (n < 0) {
+        int e = (int)-n;
         a->len = 0;
         /* A receive timeout armed through VMS_BG_SO_RCVTIMEO_MS ends the read
          * with no data: that is SS$_TIMEOUT, not an aborted I/O (vms-a9e7). A
          * socket with no timeout set never sees -EAGAIN here (the read blocks),
          * so TCP behaviour is unchanged. (EWOULDBLOCK == EAGAIN on both Linux
          * and NetBSD.) */
-        a->status = (n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT;
+        if ((e == EAGAIN || e == EWOULDBLOCK) && (a->flags & VMS_BG_IOF_NOW))
+            a->status = SS__ENDOFFILE;  /* IO$M_NOW, nothing queued (vms-a6b) */
+        else
+            a->status = (e == EAGAIN || e == EWOULDBLOCK) ? SS__TIMEOUT : SS__ABORT;
     } else {
         a->len = (uint32_t)n;
         a->status = SS__NORMAL;

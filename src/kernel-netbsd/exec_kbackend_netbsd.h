@@ -1001,6 +1001,7 @@ void exec_socket_release(exec_socket_t s);
 int  exec_socket_connect(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);
 long exec_socket_send(exec_socket_t s, const void *buf, size_t len);
 long exec_socket_recv(exec_socket_t s, void *buf, size_t len);
+long exec_socket_recv_now(exec_socket_t s, void *buf, size_t len);
 int  exec_socket_shutdown(exec_socket_t s);
 int  exec_socket_getname(exec_socket_t s, int peer, uint16_t *family, uint16_t *port_be, uint32_t *addr_be);
 int  exec_socket_setopt_int(exec_socket_t s, int level, int name, int val);

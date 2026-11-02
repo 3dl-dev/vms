@@ -1339,6 +1339,8 @@ uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
 uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
                          uint32_t *actlen);
 /* IO$_READVBLK -- receive into buf (<= bufsz); *actlen gets the bytes read. */
+uint32_t vms_kif_bg_recv_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                            uint32_t *actlen, int now);
 uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
                          uint32_t *actlen);
 /* IO$_DEACCESS -- shut the connection down both ways. */

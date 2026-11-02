@@ -2090,10 +2090,16 @@ int dcl_execute_command(struct dcl_command *cmd)
     }
 
     if (strcasecmp(cmd->verb, "ENDSUBROUTINE") == 0) {
-        /* End of a CALLed subroutine: return to the caller with $STATUS.
-         * Reached in normal flow (no active CALL), behave like EXIT. */
+        /* End of a CALLed subroutine: return to the caller with DCL's normal
+         * completion, CLI$_NORMAL (%X00030001) -- not the last command's
+         * status, and not EXIT's inhibit-marked one: on VAX V7.3 a subroutine
+         * whose last command is a CALL of a level that EXITs 1 (or a
+         * DIRECTORY that succeeded) still returns %X00030001
+         * (docs/oracle/semantics/srch/, every SRCH.* case; the flow/ and on/
+         * families' CALL cases agree). Reached in normal flow (no active
+         * CALL), behave like EXIT. */
         if (ctx->proc_depth >= 0 && ctx->proc_stack[ctx->proc_depth].is_subroutine) {
-            ctx->return_status = (int)ctx->last_status;
+            ctx->return_status = (int)0x00030001u;
             ctx->return_requested = 1;
             return SS$_NORMAL;
         }

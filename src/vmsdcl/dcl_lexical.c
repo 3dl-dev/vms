@@ -677,42 +677,30 @@ static int lex_license(struct dcl_context *ctx, const char *args,
 }
 
 /*
- * F$SEARCH wildcard context — tracks iterative directory scans.
- * One slot per unique filespec (up to 8 concurrent searches).
+ * F$SEARCH wildcard context -- one per STREAM.
+ *
+ * vms-481: F$SEARCH iterates the Files-11 ODS-2 ACP wildcard directory context
+ * (sys$parse + sys$search over /dev/vms) instead of an opendir()/readdir()
+ * snapshot of a /vms passthrough. Each stream holds the live executive search
+ * handle; each F$SEARCH call returns the NEXT match (genuine ODS-2 order, with
+ * a real File ID behind it), "" when the search is exhausted (RMS$_NMF),
+ * restarting on the next call.
+ *
+ * F$SEARCH(filespec [,stream-id]) keeps one search context per stream-id (an
+ * omitted stream-id is stream 0), and a call naming a different filespec than
+ * the stream's last restarts that stream with the new one (DCL Dictionary,
+ * F$SEARCH; rd vms-28c: the stream-id argument was read as part of the
+ * filespec, so F$SEARCH(spec, 7) never matched anything --
+ * docs/oracle/semantics/srch/).
  */
 #define FSEARCH_MAX_CTX  8
 
-/*
- * vms-481: F$SEARCH iterates the Files-11 ODS-2 ACP wildcard directory context
- * (sys$parse + sys$search over /dev/vms) instead of an opendir()/readdir()
- * snapshot of a /vms passthrough. One slot per unique filespec holds the live
- * executive search handle; each F$SEARCH call returns the NEXT match (genuine
- * ODS-2 order, with a real File ID behind it), "" when the directory is
- * exhausted (RMS$_NMF), restarting on the next call for the same spec.
- */
 static struct fsearch_ctx {
-    char    filespec[512];          /* the VMS filespec pattern (search key) */
+    int     used;
+    long    stream;                 /* the stream-id (0 when omitted) */
+    char    filespec[1024];         /* the stream's current filespec */
     struct dcl_rms_dir *dir;        /* the executive wildcard search over it */
 } fsearch_slots[FSEARCH_MAX_CTX];
-static int fsearch_initialized = 0;
-
-static void fsearch_init(void)
-{
-    if (!fsearch_initialized) {
-        memset(fsearch_slots, 0, sizeof(fsearch_slots));
-        fsearch_initialized = 1;
-    }
-}
-
-static struct fsearch_ctx *fsearch_find(const char *filespec)
-{
-    for (int i = 0; i < FSEARCH_MAX_CTX; i++) {
-        if (fsearch_slots[i].filespec[0] &&
-            strcmp(fsearch_slots[i].filespec, filespec) == 0)
-            return &fsearch_slots[i];
-    }
-    return NULL;
-}
 
 static void fsearch_slot_clear(struct fsearch_ctx *fsc)
 {
@@ -720,64 +708,60 @@ static void fsearch_slot_clear(struct fsearch_ctx *fsc)
     fsc->filespec[0] = '\0';
 }
 
-static struct fsearch_ctx *fsearch_alloc(const char *filespec)
+static struct fsearch_ctx *fsearch_stream(long stream)
 {
-    for (int i = 0; i < FSEARCH_MAX_CTX; i++) {
-        if (!fsearch_slots[i].filespec[0]) {
-            strncpy(fsearch_slots[i].filespec, filespec,
-                    sizeof(fsearch_slots[i].filespec) - 1);
-            fsearch_slots[i].dir = NULL;
+    for (int i = 0; i < FSEARCH_MAX_CTX; i++)
+        if (fsearch_slots[i].used && fsearch_slots[i].stream == stream)
+            return &fsearch_slots[i];
+    for (int i = 0; i < FSEARCH_MAX_CTX; i++)
+        if (!fsearch_slots[i].used) {
+            memset(&fsearch_slots[i], 0, sizeof fsearch_slots[i]);
+            fsearch_slots[i].used = 1;
+            fsearch_slots[i].stream = stream;
             return &fsearch_slots[i];
         }
-    }
-    /* No free slot — evict slot 0 (releasing its executive channel), shift. */
+    /* No free slot -- evict slot 0 (releasing its executive channel), shift. */
     fsearch_slot_clear(&fsearch_slots[0]);
     memmove(&fsearch_slots[0], &fsearch_slots[1],
             sizeof(fsearch_slots[0]) * (FSEARCH_MAX_CTX - 1));
     memset(&fsearch_slots[FSEARCH_MAX_CTX - 1], 0, sizeof(fsearch_slots[0]));
-    strncpy(fsearch_slots[FSEARCH_MAX_CTX - 1].filespec, filespec,
-            sizeof(fsearch_slots[0].filespec) - 1);
+    fsearch_slots[FSEARCH_MAX_CTX - 1].used = 1;
+    fsearch_slots[FSEARCH_MAX_CTX - 1].stream = stream;
     return &fsearch_slots[FSEARCH_MAX_CTX - 1];
 }
 
 /*
- * F$SEARCH(filespec) - Iterative wildcard file search over the ACP.
+ * F$SEARCH(filespec [,stream-id]) - Iterative wildcard file search over the ACP.
  *
- * First call with a given filespec opens the executive search and returns the
- * first match; subsequent calls return subsequent matches. Returns "" when
- * exhausted.
+ * The first call on a stream (or the first after its filespec changed or its
+ * search ran out) opens the executive search and returns the first match;
+ * subsequent calls return subsequent matches. Returns "" when exhausted.
  */
 static int lex_search(struct dcl_context *ctx, const char *args,
                       char *result, size_t result_size)
 {
+    struct lex_arg a[LEX_MAXARG];
+    char b0[32];
     result[0] = '\0';
-    if (!args) return 0;
+    int n = lex_args(args, a, LEX_MAXARG);
+    if (n < 1) return 0;
 
-    fsearch_init();
+    char s[1024];
+    snprintf(s, sizeof s, "%s", lex_str(&a[0], b0, sizeof b0));
+    long stream = (n >= 2 && a[1].present) ? a[1].ival : 0;
 
-    char spec[512];
-    strncpy(spec, args, sizeof(spec) - 1);
-    spec[sizeof(spec) - 1] = '\0';
-
-    /* Trim and unquote */
-    char *s = spec;
-    while (*s == ' ') s++;
-    size_t slen = strlen(s);
-    while (slen > 0 && (s[slen - 1] == ' ' || s[slen - 1] == '\t')) s[--slen] = '\0';
-    if (slen >= 2 && s[0] == '"' && s[slen - 1] == '"') {
-        s[slen - 1] = '\0'; s++; slen -= 2;
-    }
-
-    /* Uppercase for the slot key (ODS-2 is case-insensitive). */
-    char spec_upper[512];
-    for (size_t i = 0; s[i] && i < sizeof(spec_upper) - 1; i++)
+    /* The stream's filespec, compared case-blind (ODS-2 names are). */
+    char spec_upper[1024];
+    size_t i;
+    for (i = 0; s[i] && i < sizeof(spec_upper) - 1; i++)
         spec_upper[i] = (char)toupper((unsigned char)s[i]);
-    spec_upper[slen < sizeof(spec_upper) ? slen : sizeof(spec_upper) - 1] = '\0';
+    spec_upper[i] = '\0';
 
-    struct fsearch_ctx *fsc = fsearch_find(spec_upper);
-    if (!fsc) {
-        fsc = fsearch_alloc(spec_upper);
-        if (!fsc) return 0;
+    struct fsearch_ctx *fsc = fsearch_stream(stream);
+    if (fsc->dir && strcmp(fsc->filespec, spec_upper) != 0)
+        fsearch_slot_clear(fsc);            /* a new filespec restarts the stream */
+    if (!fsc->dir) {
+        snprintf(fsc->filespec, sizeof fsc->filespec, "%s", spec_upper);
         fsc->dir = dcl_rms_dir_open(ctx, s);
         if (!fsc->dir) { fsearch_slot_clear(fsc); return 0; }
     }

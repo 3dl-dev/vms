@@ -9,12 +9,19 @@ plan_ref: vms-801
 summary: >
   VMS filespec syntax (device:[directory]name.type;version), wildcards, and search-list
   translation. Wildcards, concealed/rooted logicals, and search-list file lookup are real;
-  the ellipsis wildcard is a documented advisory marker whose recursion lives in DIRECTORY,
-  not the translator.
-last_reviewed: 2026-09-14
+  the ellipsis wildcard [...] is walked by RMS $SEARCH over the Files-11 ACP, so F$SEARCH,
+  DIRECTORY, COPY, PURGE and DELETE all recurse the directory tree.
+last_reviewed: 2026-11-02
 items:
   - {id: filespec$wildcard, kind: feature, status: implemented, authenticity: real, vms: "Wildcard matching (* and %)", evidence: src/vmsfs/vmsfs_translate.c}
-  - {id: filespec$ellipsis, kind: feature, status: partial, authenticity: advisory, vms: "Ellipsis wildcard [...] (directory-tree recursion)", evidence: src/vmsfs/vmsfs_translate.c, notes: "directory-translate leaves it as a marker; recursion is handled by DIRECTORY's own layer, not the translator"}
+  - id: filespec$ellipsis
+    kind: feature
+    status: verified
+    authenticity: real
+    vms: "Ellipsis wildcard [...] (directory-tree recursion)"
+    evidence: src/vmsrms/rms_search.c
+    notes: "RMS $SEARCH walks the tree through the ACP ([...], [.A...], [...B], [.*...]), depth first, a directory's own files before its subdirectories, highest version unless ;*; F$SEARCH, DIRECTORY, COPY, PURGE and DELETE use it (rd vms-28c)"
+    verified_against: "docs/oracle/semantics/srch/vax73.txt -- 22 SRCH.* cases captured on OpenVMS VAX V7.3 (lab pod labsrch), byte-compared on the booted executive by the semantic-oracle gate (tests/qemu/test_semantic_oracle.sh + tools/oracle/semantic/semantic_diff.py, ci-release-e2e)"
   - {id: filespec$concealed_rooted, kind: feature, status: implemented, authenticity: real, vms: "Concealed/rooted device logical expansion", evidence: src/vmsfs/vmsfs_translate.c, notes: "expand_rooted_concealed_multi"}
   - {id: filespec$searchlist_lookup, kind: feature, status: implemented, authenticity: real, vms: "Search-list file lookup", evidence: src/vmsfs/vmsfs_translate.c, notes: "loops search-list members, first existing wins — not collapsed to equiv[0]"}
   - {id: filespec$searchlist_trnlnm, kind: feature, status: implemented, authenticity: real, vms: "Search-list enumeration via $TRNLNM/LNM$_INDEX", evidence: src/libvms/syssvc/sys_logical.c, notes: "honors LNM$_INDEX, returns LNM$_MAX_INDEX"}

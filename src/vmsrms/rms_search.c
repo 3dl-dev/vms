@@ -93,6 +93,25 @@ static void     rms_acp_search_end(void *nam_ptr);
  * $ASSIGNed channel); this context only holds the channel plus the pieces
  * needed to reconstruct the resultant VMS spec and the last matched FID.
  */
+/* The directory-tree walk (rd vms-28c): limits and the per-directory state. */
+#define ELL_MAXCOMP   16        /* components in a directory pattern            */
+#define ELL_COMPLEN   64
+#define ELL_MAXDEPTH  64        /* directories deep a walk goes                 */
+#define ELL_MAXSUB    4096      /* subdirectories one directory contributes     */
+struct ell_sub {
+    char     name[ELL_COMPLEN];           /* canonical, no ".DIR;1" */
+    uint16_t num, seq; uint8_t rvn, nmx;  /* the subdirectory's File ID */
+};
+struct ell_level {
+    uint16_t dn, ds; uint8_t dr, dx;      /* this directory's File ID */
+    char     rel[1100];                  /* path below the walk's start, "A.B" */
+    int      entered;                     /* subdirectories collected, files begun */
+    int      want_files;                  /* rel matches the pattern: list its files */
+    int      files_started, files_done;
+    struct ell_sub *subs;
+    int      nsub, isub;
+};
+
 struct acp_search_context {
     int      is_posix;          /* search_ctx_hdr discriminator: 0 == ACP     */
     uint32_t chan;              /* executive channel $ASSIGNed to the volume */
@@ -107,12 +126,26 @@ struct acp_search_context {
     /* The expanded string's device + directory ("SYS$SYSROOT:[SYSMGR]"), the
      * prefix of every resultant, and how many files this walk has returned
      * (none: RMS$_FNF, not RMS$_NMF, rd vms-42f8). */
-    char     esa_devdir[300];
+    char     esa_devdir[1500];
     uint8_t  esa_devlen, esa_dirlen;
     unsigned found;
     /* The searched directory's File ID (NAM$W_DID, vms-692). */
     uint16_t did_num, did_seq;
     uint8_t  did_rvn, did_nmx;
+    /* The directory-tree walk of a wildcard directory part -- the ellipsis
+     * "[...]", "[A...]", "[...B]", "[*...]" and "*"/"%" in a directory name
+     * (rd vms-28c). `wprefix` is then the literal PREFIX the walk starts
+     * from, `pcomp` the rest of the directory pattern, and `stack` the
+     * directories entered, deepest last. */
+    int      walk;
+    char     esa_dev[64];            /* the expanded string's device, "SYS$SYSROOT:" */
+    char     wprefix[300];           /* the walk start, as the expanded string names it */
+    char     matchdir[1400];        /* directory (no brackets) of the last match    */
+    int      npc;
+    char     pcomp[ELL_MAXCOMP][ELL_COMPLEN];   /* "..." stands for the ellipsis */
+    int      depth;
+    struct ell_level *stack;
+    char     fpat[VMS_ACP_NAME_SIZE];   /* the file-name pattern for each directory */
 };
 
 /*
@@ -215,7 +248,249 @@ static void search_ctx_free(struct acp_search_context *ctx)
 {
     if (!ctx) return;
     if (ctx->assigned) vms_kif_dassgn(ctx->chan);
+    for (int i = 0; ctx->stack && i < ctx->depth; i++)
+        free(ctx->stack[i].subs);
+    free(ctx->stack);
     free(ctx);
+}
+
+
+/* ---- the directory-tree walk: pattern, matching, descent (rd vms-28c) ---- */
+
+/* (the RMS shareable links against DECC$SHR's vector: no toupper/strcspn here) */
+static int ell_up(int c) { return (c >= 'a' && c <= 'z') ? c - 32 : c; }
+
+/* VMS wildcard match of one directory name: "*" any run, "%" one character,
+ * case-blind. */
+static int ell_wild(const char *p, const char *n)
+{
+    while (*p) {
+        if (*p == '*') {
+            while (*p == '*') p++;
+            if (!*p) return 1;
+            for (; *n; n++)
+                if (ell_wild(p, n)) return 1;
+            return 0;
+        }
+        if (!*n) return 0;
+        if (*p != '%' && ell_up((unsigned char)*p) != ell_up((unsigned char)*n))
+            return 0;
+        p++; n++;
+    }
+    return !*n;
+}
+
+static int ell_is_ell(const char *c) { return c[0] == '.' && c[1] == '.' && c[2] == '.'; }
+
+/* rel[0..nr) is a complete match of the pattern pc[0..np). "..." matches zero
+ * or more directory levels. */
+static int ell_full(char pc[][ELL_COMPLEN], int np, char rel[][ELL_COMPLEN], int nr)
+{
+    if (np == 0) return nr == 0;
+    if (ell_is_ell(pc[0])) {
+        for (int k = 0; k <= nr; k++)
+            if (ell_full(pc + 1, np - 1, rel + k, nr - k)) return 1;
+        return 0;
+    }
+    if (nr == 0) return 0;
+    return ell_wild(pc[0], rel[0]) && ell_full(pc + 1, np - 1, rel + 1, nr - 1);
+}
+
+/* some directory BELOW rel[0..nr) can still be a complete match. */
+static int ell_below(char pc[][ELL_COMPLEN], int np, char rel[][ELL_COMPLEN], int nr)
+{
+    if (np == 0) return 0;
+    if (ell_is_ell(pc[0])) return 1;
+    if (nr == 0) return 1;
+    return ell_wild(pc[0], rel[0]) && ell_below(pc + 1, np - 1, rel + 1, nr - 1);
+}
+
+/* "A.B.C" -> components; returns how many (at most ELL_MAXCOMP). */
+static int ell_split_rel(const char *rel, char out[][ELL_COMPLEN])
+{
+    int n = 0;
+    const char *p = rel;
+    while (*p && n < ELL_MAXCOMP) {
+        size_t l = 0, k;
+        while (p[l] && p[l] != '.') l++;
+        k = l >= ELL_COMPLEN ? ELL_COMPLEN - 1 : l;
+        memcpy(out[n], p, k); out[n][k] = '\0'; n++;
+        p += l;
+        if (*p == '.') p++;
+    }
+    return n;
+}
+
+/* Split a directory part ("SYSMGR.SRCHT...", no brackets) at its first wild
+ * component: the literal prefix ("SYSMGR.SRCHT") and the pattern components
+ * that follow. Returns 1 if the directory is wild (an ellipsis, "*" or "%"),
+ * 0 if it is a plain directory. */
+static int ell_split_dir(const char *dir, char *prefix, size_t psz,
+                         char pc[][ELL_COMPLEN], int *npc)
+{
+    char comp[ELL_MAXCOMP * 2][ELL_COMPLEN];
+    int n = 0, first = -1;
+    const char *p = dir;
+
+    *npc = 0; prefix[0] = '\0';
+    while (*p && n < ELL_MAXCOMP * 2) {
+        if (p[0] == '.' && p[1] == '.' && p[2] == '.') {
+            strcpy(comp[n++], "...");
+            p += 3;
+            if (*p == '.') p++;             /* "A....B": the dot after the ellipsis */
+            continue;
+        }
+        size_t l = 0;
+        while (p[l] && !(p[l] == '.' && (l == 0 || p[l - 1] != '^'))) l++;
+        if (l >= ELL_COMPLEN) l = ELL_COMPLEN - 1;
+        memcpy(comp[n], p, l); comp[n][l] = '\0'; n++;
+        p += l;
+        /* the dot after a name separates it from the next one -- unless it
+         * begins an ellipsis ("SRCHT..." is SRCHT then "...") */
+        if (*p == '.' && !(p[1] == '.' && p[2] == '.')) p++;
+    }
+    for (int i = 0; i < n; i++)
+        if (strpbrk(comp[i], "*%") || ell_is_ell(comp[i])) { first = i; break; }
+    if (first < 0) return 0;
+    for (int i = 0; i < first; i++) {
+        size_t o = strlen(prefix);
+        snprintf(prefix + o, psz - o, "%s%s", i ? "." : "", comp[i]);
+    }
+    for (int i = first; i < n && *npc < ELL_MAXCOMP; i++)
+        strcpy(pc[(*npc)++], comp[i]);
+    return 1;
+}
+
+/*
+ * ell_enter - first visit of a directory in the walk: collect its
+ * subdirectories (every *.DIR;1 entry, in the ACP's name order -- the
+ * executive holds ONE wildcard context per channel, so they are read out
+ * before the file search of this directory starts), and decide whether the
+ * directory's own files are wanted (its path below the start matches the
+ * pattern).
+ */
+static uint32_t ell_enter(struct acp_search_context *ctx, struct ell_level *lv)
+{
+    char rel[ELL_MAXCOMP][ELL_COMPLEN];
+    int nr = ell_split_rel(lv->rel, rel);
+    struct vms_acp_acpcontrol_args a;
+    int cap = 0;
+
+    lv->entered = 1;
+    lv->want_files = ell_full(ctx->pcomp, ctx->npc, rel, nr);
+    if (!ell_below(ctx->pcomp, ctx->npc, rel, nr) || ctx->depth >= ELL_MAXDEPTH)
+        return SS$_NORMAL;                      /* nothing below can match */
+
+    for (int first = 1;; first = 0) {
+        uint32_t st;
+        char nm[VMS_ACP_NAME_SIZE], canon[VMS_ACP_NAME_SIZE];
+        char *end;
+        size_t nl;
+
+        memset(&a, 0, sizeof a);
+        a.chan = ctx->chan;
+        a.func = VMS_ACP_CTL_SEARCH;
+        a.did_num = lv->dn; a.did_seq = lv->ds; a.did_rvn = lv->dr; a.did_nmx = lv->dx;
+        a.wcc_reset = (uint8_t)first;
+        if (first)
+            strncpy(a.pattern, "*.DIR;1", VMS_ACP_NAME_SIZE - 1);
+        st = vms_kif_acp_acpcontrol(&a);
+        if (st == SS$_NOMOREFILES) break;
+        if (st != SS$_NORMAL) return st;
+        end = strstr(a.resnam, ".DIR;");
+        if (!end) continue;
+        nl = (size_t)(end - a.resnam);
+        if (nl == 0 || nl >= sizeof nm) continue;
+        memcpy(nm, a.resnam, nl); nm[nl] = '\0';
+        if (!strcmp(nm, "000000")) continue;    /* the MFD names itself */
+        if (rms_name_from_disk(nm, nl, canon, sizeof canon) < 0)
+            snprintf(canon, sizeof canon, "%s", nm);
+        if (strlen(canon) >= ELL_COMPLEN) continue;
+        if (lv->nsub >= ELL_MAXSUB) break;
+        if (lv->nsub == cap) {
+            struct ell_sub *ns;
+            cap = cap ? cap * 2 : 16;
+            ns = realloc(lv->subs, (size_t)cap * sizeof *ns);
+            if (!ns) return SS$_INSFMEM;
+            lv->subs = ns;
+        }
+        strcpy(lv->subs[lv->nsub].name, canon);
+        lv->subs[lv->nsub].num = a.fid_num; lv->subs[lv->nsub].seq = a.fid_seq;
+        lv->subs[lv->nsub].rvn = a.fid_rvn; lv->subs[lv->nsub].nmx = a.fid_nmx;
+        lv->nsub++;
+    }
+    return SS$_NORMAL;
+}
+
+/*
+ * ell_next - the next file of the walk: this directory's matching files, then
+ * each subdirectory in turn, depth first (as VMS returns them). On SS$_NORMAL
+ * *a describes the match and ctx->matchdir names its directory; SS$_NOMOREFILES
+ * ends the walk. `pattern` is the file-name part for the ACP.
+ */
+static uint32_t ell_next(struct acp_search_context *ctx, const char *pattern,
+                         struct vms_acp_acpcontrol_args *a)
+{
+    for (;;) {
+        struct ell_level *lv;
+        uint32_t st;
+
+        if (ctx->depth == 0)
+            return SS$_NOMOREFILES;
+        lv = &ctx->stack[ctx->depth - 1];
+        if (!lv->entered) {
+            st = ell_enter(ctx, lv);
+            if (st != SS$_NORMAL) return st;
+        }
+        if (lv->want_files && !lv->files_done) {
+            memset(a, 0, sizeof *a);
+            a->chan = ctx->chan;
+            a->func = VMS_ACP_CTL_SEARCH;
+            a->did_num = lv->dn; a->did_seq = lv->ds; a->did_rvn = lv->dr; a->did_nmx = lv->dx;
+            if (!lv->files_started) {
+                a->wcc_reset = 1;
+                strncpy(a->pattern, pattern, VMS_ACP_NAME_SIZE - 1);
+                lv->files_started = 1;
+            }
+            st = vms_kif_acp_acpcontrol(a);
+            if (st == SS$_NORMAL) {
+                snprintf(ctx->matchdir, sizeof ctx->matchdir, "%s%s%s",
+                         ctx->wprefix, (ctx->wprefix[0] && lv->rel[0]) ? "." : "",
+                         lv->rel);
+                return SS$_NORMAL;
+            }
+            if (st != SS$_NOMOREFILES) return st;
+            lv->files_done = 1;
+            continue;
+        }
+        if (lv->isub < lv->nsub) {
+            struct ell_sub *sb = &lv->subs[lv->isub++];
+            struct ell_level *ch;
+            char rel[ELL_MAXCOMP][ELL_COMPLEN];
+            char crel[1100];
+            int nr, cyc = 0;
+
+            if (strlen(lv->rel) > 900) continue;      /* deeper than a spec can name */
+            snprintf(crel, sizeof crel, "%s%s%s", lv->rel, lv->rel[0] ? "." : "", sb->name);
+            nr = ell_split_rel(crel, rel);
+            if (!ell_below(ctx->pcomp, ctx->npc, rel, nr) &&
+                !ell_full(ctx->pcomp, ctx->npc, rel, nr))
+                continue;
+            for (int i = 0; i < ctx->depth; i++)       /* never re-enter an ancestor */
+                if (ctx->stack[i].dn == sb->num && ctx->stack[i].dr == sb->rvn &&
+                    ctx->stack[i].dx == sb->nmx)
+                    cyc = 1;
+            if (cyc || ctx->depth >= ELL_MAXDEPTH) continue;
+            ch = &ctx->stack[ctx->depth++];
+            memset(ch, 0, sizeof *ch);
+            ch->dn = sb->num; ch->ds = sb->seq; ch->dr = sb->rvn; ch->dx = sb->nmx;
+            snprintf(ch->rel, sizeof ch->rel, "%s", crel);
+            continue;
+        }
+        free(lv->subs);
+        lv->subs = NULL;
+        ctx->depth--;
+    }
 }
 
 /* Map an ACP SS$_ status to the RMS $SEARCH status (fail-honest). */
@@ -276,6 +551,32 @@ static uint32_t rms_acp_search(void *fab_ptr)
                      (int)nam->nam$b_dir, nam->nam$l_dir ? nam->nam$l_dir : "");
             ctx->esa_devlen = nam->nam$b_dev;
             ctx->esa_dirlen = nam->nam$b_dir;
+        }
+        if (nam->nam$l_dev && nam->nam$b_dev < sizeof ctx->esa_dev)
+            snprintf(ctx->esa_dev, sizeof ctx->esa_dev, "%.*s",
+                     (int)nam->nam$b_dev, nam->nam$l_dev);
+
+        /* A wildcard directory part ("[...]", "[A...]", "[...B]", "[*...]",
+         * "[A*]"): the walk starts at the literal prefix of the directory and
+         * the rest is matched against the directories found below it (rd
+         * vms-28c). The rest of this routine resolves the START directory
+         * exactly as for a plain spec. */
+        {
+            char *lb = strchr(expanded, '['), *rb = lb ? strchr(lb, ']') : NULL;
+            if (lb && rb && rb > lb + 1) {
+                char dir[300], prefix[300];
+                size_t dl = (size_t)(rb - lb - 1);
+                if (dl >= sizeof dir) dl = sizeof dir - 1;
+                memcpy(dir, lb + 1, dl); dir[dl] = '\0';
+                if (ell_split_dir(dir, prefix, sizeof prefix, ctx->pcomp, &ctx->npc)) {
+                    char tail[1024];
+                    snprintf(tail, sizeof tail, "%s", rb + 1);
+                    snprintf(lb + 1, sizeof expanded - (size_t)(lb + 1 - expanded),
+                             "%s]%s", prefix[0] ? prefix : "000000", tail);
+                    snprintf(ctx->wprefix, sizeof ctx->wprefix, "%s", prefix);
+                    ctx->walk = 1;
+                }
+            }
         }
 
         /* Resolve any concealed / rooted / directory device logical
@@ -348,6 +649,31 @@ static uint32_t rms_acp_search(void *fab_ptr)
             #undef VMS_SEARCH_MAX_CANDS
         }
 
+        /* A spec with no version names the HIGHEST version of each file
+         * ("*.DAT" finds PUR.DAT;2, not PUR.DAT;1 as well); only ";*" asks
+         * for every version (VAX V7.3, docs/oracle/semantics/srch/
+         * SRCH.ALL.DAT / SRCH.COPY, rd vms-28c). The ACP's search pattern
+         * says "highest" with ";0". */
+        {
+            size_t pl = strlen(pattern);
+            if (pl > 0 && pattern[pl - 1] == ';' && pl + 1 < sizeof pattern) {
+                pattern[pl] = '0'; pattern[pl + 1] = '\0';
+            } else if (!strchr(pattern, ';') && pl + 2 < sizeof pattern) {
+                pattern[pl] = ';'; pattern[pl + 1] = '0'; pattern[pl + 2] = '\0';
+            }
+        }
+
+        if (ctx->walk) {
+            ctx->stack = calloc(ELL_MAXDEPTH + 1, sizeof *ctx->stack);
+            if (!ctx->stack) {
+                search_ctx_free(ctx); nam->nam$$l_context = NULL;
+                fab->fab$l_sts = RMS$_DME; return RMS$_DME;
+            }
+            ctx->depth = 1;
+            ctx->stack[0].dn = dn; ctx->stack[0].ds = ds;
+            ctx->stack[0].dr = dr; ctx->stack[0].dx = dx;
+            strncpy(ctx->fpat, pattern, sizeof ctx->fpat - 1);
+        }
         memset(&a, 0, sizeof(a));
         a.chan = ctx->chan;
         a.func = VMS_ACP_CTL_SEARCH;
@@ -365,7 +691,10 @@ static uint32_t rms_acp_search(void *fab_ptr)
         a.wcc_reset = 0;
     }
 
-    st = vms_kif_acp_acpcontrol(&a);
+    if (ctx->walk)
+        st = ell_next(ctx, ctx->fpat, &a);
+    else
+        st = vms_kif_acp_acpcontrol(&a);
     if (st != SS$_NORMAL) {
         /* SS$_NOMOREFILES => RMS$_NMF, or RMS$_FNF when the walk found
          * nothing at all, with SS$_NOSUCHFILE in the STV, and the NAM's parts
@@ -397,6 +726,17 @@ static uint32_t rms_acp_search(void *fab_ptr)
     ctx->fid_num = a.fid_num; ctx->fid_seq = a.fid_seq;
     ctx->fid_rvn = a.fid_rvn; ctx->fid_nmx = a.fid_nmx;
     ctx->version = a.out_version;
+    if (ctx->walk) {
+        /* the directory the walk is in: the resultant names it, and a NAM$W_DID
+         * is the directory's own, not the walk's start */
+        struct ell_level *lv = &ctx->stack[ctx->depth - 1];
+        ctx->did_num = lv->dn; ctx->did_seq = lv->ds; ctx->did_rvn = lv->dr; ctx->did_nmx = lv->dx;
+        snprintf(ctx->esa_devdir, sizeof ctx->esa_devdir, "%s[%s]", ctx->esa_dev,
+                 ctx->matchdir[0] ? ctx->matchdir : "000000");
+        ctx->esa_dirlen = (uint8_t)(strlen(ctx->matchdir[0] ? ctx->matchdir : "000000") + 2);
+    } else {
+        snprintf(ctx->matchdir, sizeof ctx->matchdir, "%s", ctx->dirpath);
+    }
     /* ...and return it, with the searched directory's, in the NAM
      * (NAM$W_FID / NAM$W_DID, vms-6e28) -- the same ID rms_search_fid hands
      * DIRECTORY /FULL. */
@@ -412,9 +752,9 @@ static uint32_t rms_acp_search(void *fab_ptr)
          * resultant through rms_acp_name gets the on-disk bytes back */
         if (rms_name_from_disk(a.resnam, strlen(a.resnam), cres, sizeof cres) < 0)
             snprintf(cres, sizeof cres, "%s", a.resnam);
-        if (ctx->dirpath[0])
+        if (ctx->matchdir[0])
             n = snprintf(vms_result, sizeof(vms_result), "%s[%s]%s",
-                         ctx->devnam, ctx->dirpath, cres);
+                         ctx->devnam, ctx->matchdir, cres);
         else
             n = snprintf(vms_result, sizeof(vms_result), "%s[000000]%s",
                          ctx->devnam, cres);

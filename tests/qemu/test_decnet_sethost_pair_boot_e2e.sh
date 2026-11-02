@@ -170,13 +170,27 @@ if [ "$ra" -eq 0 ] && [ "$rb" -eq 0 ]; then
     # database now (PURGE): LIST no longer shows it, yet the SET HOST below
     # still resolves OVMXB -- from the volatile copy, reading no file.
     send A 'NCP :== $SYS$SYSTEM:NCP.EXE'; sleep 1     # this boot's session
+    # Each step is graded only once its output is complete: the command's
+    # next DCL prompt after it (never a fixed sleep -- a slow LIST once left
+    # the Summary header outside the slice and reddened a correct run).
     op=$(wc -c <"$LA")
-    send A 'NCP PURGE NODE OVMXB'; sleep 3
+    send A 'NCP PURGE NODE OVMXB'
+    waitafter A '$ ' 60 "$LA" "$op" || true
     ol=$(wc -c <"$LA")
-    send A 'NCP LIST KNOWN NODES'; sleep 4
+    send A 'NCP LIST KNOWN NODES'
+    lok=1
+    if waitafter A 'Known Node Permanent Summary' 60 "$LA" "$ol"; then
+        # the listing ends at the next prompt AFTER the header
+        hoff=$(tail -c "+$((ol + 1))" "$LA" | grep -abo -F 'Known Node Permanent Summary' |
+               head -n1 | cut -d: -f1)
+        waitafter A '$ ' 60 "$LA" "$((ol + hoff))" || lok=0
+    else
+        lok=0
+    fi
     pseg=$(tail -c "+$((op + 1))" "$LA" | head -c "$((ol - op))" | tr -d '\r')
     lseg=$(tail -c "+$((ol + 1))" "$LA" | tr -d '\r')
-    if printf '%s\n' "$lseg" | grep >/dev/null -E '^ *[0-9]+\.[0-9]+ +OVMXB *$' ||
+    if [ "$lok" -eq 0 ] ||
+       printf '%s\n' "$lseg" | grep >/dev/null -E '^ *[0-9]+\.[0-9]+ +OVMXB *$' ||
        ! printf '%s\n' "$lseg" | grep >/dev/null -F 'Known Node Permanent Summary' ||
        printf '%s\n' "$pseg" | grep >/dev/null -F '%NCP-E-'; then rc=1; else rc=0; fi
     record "A: NCP PURGE NODE OVMXB took it out of the permanent database (LIST no longer lists it)" "$rc"

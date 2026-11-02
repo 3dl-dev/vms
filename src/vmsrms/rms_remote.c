@@ -1137,12 +1137,14 @@ uint32_t rms_remote_get(void *rabp)
     if (rr_recv(&st->link, &m) < 0) return rab_ret(rab, RMS$_RER, SS$_ABORT);
     if (m.op == DNET_DAP_DATA) {
         size_t n = m.u.data.reclen <= sizeof m.u.data.rec ? m.u.data.reclen : sizeof m.u.data.rec;
+        /* A VFC record keeps its fixed-control bytes at the front, as OVMX's
+         * local RMS holds them (dnet_fal.h: "a VFC record still carries its fsz
+         * control bytes") and as the FAL sends and takes them in a DAP DATA
+         * record. Stripping them here lost them on a COPY node:: -> local ->
+         * node:: round trip: the 290-block BIG.TXT came back with every
+         * record's first two bytes eaten (vms-0a7 S1 run 4, BIGRT.TXT).
+         * Callers that print records skip fab$b_fsz themselves (TYPE). */
         const uint8_t *rec = m.u.data.rec;
-        if (st->attr.rfm == DNET_DAP_RFM_VFC) {      /* the fixed control area */
-            size_t skip = st->attr.fsz;
-            if (skip > n) skip = n;
-            rec += skip; n -= skip;
-        }
         rab->rab$l_rbf = rab->rab$l_ubf;
         if (!rab->rab$l_ubf && n) return rab_ret(rab, RMS$_RTB, 0);
         size_t c = n <= rab->rab$w_usz ? n : rab->rab$w_usz;

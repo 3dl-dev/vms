@@ -465,7 +465,7 @@ static void status_case(const char *what, int type, const char *spec, int l0, in
  * VAX3 is a destination FAL that accepts a PUT and, asked for the file's
  * attributes, answers with the ATTRIBUTES message the real VAX FAL sent for
  * BRK1.TXT (EBK 1, FFB 38, HBK 9: one block of nine allocated). */
-struct mk { int open; uint8_t seg[8][1600]; size_t n[8]; int nq, pos; };
+struct mk { int open, src; uint8_t seg[16][1600]; size_t n[16]; int nq, pos; };
 static struct mk g_mk[16];
 static int g_mk_n;
 static struct dnet_dap_msg g_brk1_attr;
@@ -474,16 +474,29 @@ static int g_have_brk1_attr;
 static void mk_q(struct mk *k, const struct dnet_dap_msg *m)
 {
     size_t n = 0;
-    if (k->nq >= 8) return;
+    if (k->nq >= 16) return;
     if (dnet_dap_encode(m, 0, k->seg[k->nq], sizeof k->seg[0], &n) == DNET_DAP_OK) k->n[k->nq++] = n;
+}
+/* VAX4: a FAL serving one VFC print file (2-byte fixed control 01 8D, as
+ * DCL OPEN/WRITE makes BIG.TXT on the VAX, S1 run 4) -- its records arrive in
+ * DAP DATA with the fixed control in front, as on the wire (wire.txt run 3:
+ * `00 01 8d 72 65 63 6f 72 64` = recnum 0, 01 8d, "record"). The DATA records
+ * VAX3 is sent are kept, to check the control survives a COPY. */
+#define VFC_NREC 3
+static uint8_t g_sink[8][128]; static size_t g_sinkn[8]; static int g_nsink;
+static void vfc_rec(int i, uint8_t *b, size_t *n)
+{
+    b[0] = 0x01; b[1] = 0x8d;
+    *n = 2 + (size_t)sprintf((char *)b + 2, "record %04d of the S1 long copy", i + 1);
 }
 static void *cp_open(void *c, const char *ncb, size_t len, uint32_t *st)
 {
-    if (strstr(ncb, "VAX3")) {
+    if (strstr(ncb, "VAX3") || strstr(ncb, "VAX4")) {
         if (g_mk_n >= 16) { *st = SS$_ABORT; return NULL; }
         struct mk *k = &g_mk[g_mk_n++];
         memset(k, 0, sizeof *k);
         k->open = 1;
+        k->src = strstr(ncb, "VAX4") != NULL;
         *st = SS$_NORMAL;
         return k;
     }
@@ -498,9 +511,51 @@ static int cp_send(void *l, const uint8_t *seg, size_t len)
     size_t used = 0;
     if (dnet_dap_decode(seg, len, &m, &used) != DNET_DAP_OK) return -1;
     memset(&r, 0, sizeof r);
+    if (k->src && m.op == DNET_DAP_ACCESS && m.u.access.accfunc == DNET_DAP_ACC_DIRLIST) {
+        static const struct { unsigned t; const char *s; } nm[] = {
+            { DNET_DAP_NT_VOLUME, "SYS$SYSDEVICE:" }, { DNET_DAP_NT_DIRECTORY, "[SYSMGR]" },
+            { DNET_DAP_NT_FILENAME, "BIG.TXT;1" } };
+        for (unsigned i = 0; i < 3; i++) {
+            memset(&r, 0, sizeof r);
+            r.op = DNET_DAP_NAME; r.u.name.nametype = nm[i].t;
+            snprintf(r.u.name.namespec, sizeof r.u.name.namespec, "%s", nm[i].s);
+            mk_q(k, &r);
+        }
+        memset(&r, 0, sizeof r);
+        r.op = DNET_DAP_ACCESS_COMPLETE; r.u.complete.cmpfunc = DNET_DAP_CMP_RESPONSE; mk_q(k, &r);
+        return 0;
+    }
+    if (k->src && m.op == DNET_DAP_ACCESS && m.u.access.accfunc == DNET_DAP_ACC_OPEN) {
+        r.op = DNET_DAP_ATTRIBUTES;
+        r.u.attr.menu = (1u << DNET_DAP_ATT_ORG) | (1u << DNET_DAP_ATT_RFM) |
+                        (1u << DNET_DAP_ATT_RAT) | (1u << DNET_DAP_ATT_FSZ);
+        r.u.attr.org = DNET_DAP_ORG_SEQ; r.u.attr.rfm = DNET_DAP_RFM_VFC;
+        r.u.attr.rat = DNET_DAP_RAT_PRN; r.u.attr.fsz = 2;
+        mk_q(k, &r);
+        memset(&r, 0, sizeof r); r.op = DNET_DAP_ACKNOWLEDGE; mk_q(k, &r);
+        return 0;
+    }
+    if (k->src && m.op == DNET_DAP_CONTROL && m.u.control.ctlfunc == DNET_DAP_CTL_GET) {
+        for (int i = 0; i < VFC_NREC; i++) {
+            memset(&r, 0, sizeof r);
+            r.op = DNET_DAP_DATA;
+            size_t n = 0; vfc_rec(i, r.u.data.rec, &n); r.u.data.reclen = (uint16_t)n;
+            mk_q(k, &r);
+        }
+        memset(&r, 0, sizeof r);
+        r.op = DNET_DAP_STATUS;
+        r.u.status.stscode = (uint16_t)((DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_EOF);
+        mk_q(k, &r);
+        return 0;
+    }
+    if (!k->src && m.op == DNET_DAP_DATA && g_nsink < 8) {
+        size_t n = m.u.data.reclen < sizeof g_sink[0] ? m.u.data.reclen : sizeof g_sink[0];
+        memcpy(g_sink[g_nsink], m.u.data.rec, n); g_sinkn[g_nsink++] = n;
+        return 0;
+    }
     switch (m.op) {
     case DNET_DAP_CONFIG:
-        if (k->nq < 8) { memcpy(k->seg[k->nq], g_links[1].srv[0].b, g_links[1].srv[0].n);
+        if (k->nq < 16) { memcpy(k->seg[k->nq], g_links[1].srv[0].b, g_links[1].srv[0].n);
                          k->n[k->nq++] = g_links[1].srv[0].n; }
         break;
     case DNET_DAP_ACCESS:
@@ -574,6 +629,41 @@ static void copy_blocks(void)
     free(buf);
 }
 
+/* A VFC print file keeps its fixed control through COPY node:: -> node::, and
+ * TYPE shows the text after it (S1 run 4: BIGRT.TXT came back with each
+ * record's first two bytes eaten -- "cord 0001" -- because $GET dropped the
+ * control and $PUT then sent the text where the FAL takes the control). */
+static void vfc_cases(void)
+{
+    memset(&g_rp, 0, sizeof g_rp);
+    g_mk_n = 0; g_nsink = 0;
+    rms_remote_set_link_ops(&g_cp_ops);
+    cap_begin(NULL);
+    uint32_t st = dcl_remote_copy("VAX4::SYS$SYSDEVICE:[SYSMGR]BIG.TXT", "VAX3::BIGRT.TXT", 0);
+    char *buf = cap_end();
+    int same = (st & 1) && g_nsink == VFC_NREC;
+    for (int i = 0; i < g_nsink && same; i++) {
+        uint8_t want[128]; size_t wn = 0;
+        vfc_rec(i, want, &wn);
+        same = g_sinkn[i] == wn && memcmp(g_sink[i], want, wn) == 0;
+    }
+    if (!same) printf("    --- COPY printed ---\n%s    --- st %08X, %d records ---\n",
+                      buf ? buf : "", (unsigned)st, g_nsink);
+    CHECK(same, "COPY of a VFC print file node:: -> node:: sends each record with its fixed control (01 8D + text), byte-identical");
+    free(buf);
+
+    g_mk_n = 0;
+    cap_begin(NULL);
+    st = dcl_remote_type("VAX4::SYS$SYSDEVICE:[SYSMGR]BIG.TXT");
+    buf = cap_end();
+    rms_remote_set_link_ops(NULL);
+    int ok = buf && strstr(buf, "record 0001 of the S1 long copy\nrecord 0002 of the S1 long copy\n") &&
+             !strchr(buf, 0x01) && !strchr(buf, (char)0x8d);
+    if (!ok) printf("    --- TYPE printed ---\n%s    ---\n", buf ? buf : "(nothing)\n");
+    CHECK(ok, "TYPE of a remote VFC print file shows the text after the fixed control");
+    free(buf);
+}
+
 /* DIRECTORY/FULL (the real VAX FAL's replies to a DIRLIST asking 0x839) is
  * the VAX's own listing, byte for byte; the VAX's request is what is sent. */
 static void full_cases(const char *console)
@@ -615,6 +705,7 @@ int main(int argc, char **argv)
         printf("2b. DIRECTORY/FULL, COPY/LOG blocks, $STATUS\n");
         full_cases(argv[2]);
         copy_blocks();
+        vfc_cases();
         /* $STATUS, from tests/lab/captures/vms-0a7-s1-20261102/events.log (VAXC L-cases). */
         status_case("DIRECTORY ...NOSUCH.TXT", 0, "VAX2::SYS$LOGIN:NOSUCH.TXT", 13, 1, 0, 0x10018290u);
         status_case("TYPE BRK*.TXT (BRKP OPENIN -RMS-E-PRV)", 1, "VAX2::SYS$LOGIN:BRK*.TXT", 2, 2, 0, 0x10951098u);

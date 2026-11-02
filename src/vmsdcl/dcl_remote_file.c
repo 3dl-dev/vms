@@ -585,7 +585,12 @@ uint32_t dcl_remote_type(const char *spec)
                 broke = (rab.rab$l_stv == SS$_ABORT);   /* the link broke: stop */
                 break;
             }
-            if (rab.rab$w_rsz) printf("%.*s", (int)rab.rab$w_rsz, rab.rab$l_rbf);
+            /* A VFC record starts with its fixed-control bytes (the print
+             * control of a print file); TYPE shows the data after them. */
+            size_t skip = (fab.fab$b_rfm == FAB$C_VFC) ? fab.fab$b_fsz : 0;
+            if (skip > rab.rab$w_rsz) skip = rab.rab$w_rsz;
+            if (rab.rab$w_rsz > skip)
+                printf("%.*s", (int)(rab.rab$w_rsz - skip), rab.rab$l_rbf + skip);
             putchar('\n');
         }
         (void)sys$close(&fab, 0, 0);

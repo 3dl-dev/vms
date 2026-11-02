@@ -1,0 +1,90 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCAE00+36F0AE00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> SET LOCKDIRWT 0
+%SYSGEN-I-SETPARAM, LOCKDIRWT changed from 0 to 0
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 41 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+
+    OpenVMX V0.7-14 - OpenVMS-compatible
+     2-NOV-2026 14:16:02.10
+
+%SYSINIT, waiting to form or join a VMScluster system
+%STDRV-I-STARTUP, OpenVMX startup begun at  2-NOV-2026 14:16:02.27
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 14:16:02.31  %%%%%%%%%%%
+Operator _OVMXE$OPA0: has been enabled, username SYSTEM
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 14:16:02.37  %%%%%%%%%%%
+Operator status for operator _OVMXE$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 10000004
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-14 (OpenVMS-compatible)
+
+Username: 
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMX V0.7-14 - OpenVMS-compatible
+%CNXMAN,  sending VAXcluster membership request to system VAX2
+
+%CNXMAN,  now a VAXcluster member -- system OVMXE
+[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT F$GETSYI("NODENAME")," LDW=",F$GETSYI("LOCKDIRWT")," VOTES=",F$GETSYI("VOTES")," NODES=",F$GETSYI("CLUSTER_NODES"
+)," CSID=",F$GETSYI("NODE_CSID")
+OVMXE LDW=0 VOTES=1 NODES=3 CSID=0
+$ CREATE HU.COM
+$ RMH :== $SYS$SYSTEM:RMHOLD
+$ RMH 110-DEPU
+*EXIT*
+$ TYPE HU.COM
+$ RMH :== $SYS$SYSTEM:RMHOLD
+$ RMH 110-DEPU
+$ SPAWN/NOWAIT/PROCESS=HOLDE @HU.COM
+%DCL-S-SPAWNED, process HOLDE spawned
+$ 
+RMHOLD: root 'DEPU' CR, 0 sub-lock(s) CR, w '-'
+$ 
+RMHOLD: root lkid 0100040F -- $GETLKIW failed, status %X00000014 (not answered)
+$ 
+RMHOLD: holding -- hibernating
+$ RMH :== $SYS$SYSTEM:RMHOLD
+$ RMH 110-DEPT
+RMHOLD: root 'DEPT' CR, 0 sub-lock(s) CR, w '-'
+RMHOLD: root lkid 01000410 -- $GETLKIW failed, status %X00000014 (not answered)
+RMHOLD: holding -- hibernating
+*INTERRUPT*
+
+%DCL-F-ABORT, image SYS$SYSTEM:RMHOLD terminated abnormally (signal 2)
+$ SHOW SYSTEM
+OpenVMX V0.7-14 - OpenVMS-compatible  on node OVMXE   2-NOV-2026 14:24:37.49  Uptime  0 00:09:00
+  Pid    Process Name          CPU         Page flts   Pages
+10000001 STARTUP            0 00:00:01.44        109     358
+10000005 SYSTEM             0 00:00:00.75       1141     855
+10000002 OPCOM              0 00:00:00.05        125     687
+10000004 JOB_CONTROL        0 00:00:00.40         96     352
+$ 

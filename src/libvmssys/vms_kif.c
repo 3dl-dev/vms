@@ -667,6 +667,28 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 }
 
 /*
+ * vms_kif_getlki_resnam (rd vms-326) -- the lock's resource name as the
+ * COUNTED string it is: all 32 bytes of the executive's copy and the resource
+ * block's own length. vms_kif_getlki's C-string copy stops at the first NUL,
+ * so a binary name (the RMS file-access lock carries three NULs and, often,
+ * NUL bytes in its file id) cannot be read back through it.
+ */
+uint32_t vms_kif_getlki_resnam(uint32_t lkid, uint8_t resnam[32],
+                               uint32_t *resnam_len)
+{
+    struct vms_getlki_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.lkid = lkid;
+
+    KIF_CALL(VMS_IOCTL_GETLKI, &args);
+
+    if (resnam) vms_memcpy(resnam, args.resnam, 32);
+    if (resnam_len) *resnam_len = args.resnam_len;
+    return args.status;
+}
+
+/*
  * vms_kif_getlki_parent (vms-0dd, extended vms-b71) -- a sibling of
  * vms_kif_getlki that ALSO surfaces args.parent_id and args.grant_count.
  * Same VMS_IOCTL_GETLKI ioctl, same kernel handler (no new op/ABI addition --
@@ -4097,6 +4119,30 @@ uint32_t vms_kif_acp_access(struct vms_acp_access_args *args)
     KIF_CALL(VMS_IOCTL_ACP_ACCESS, args);
 
     return args->status;
+}
+
+/* rd vms-326 piece 2b: the executive takes (or releases) the RMS file-access
+ * lock on the file accessed on `chan`; see src/kernel/vms_acp.h. */
+uint32_t vms_kif_acp_flock(uint32_t chan, uint32_t op, uint32_t lkmode,
+                           uint32_t *lkid)
+{
+    struct vms_acp_flock_args args;
+
+    if (lkid)
+        *lkid = 0;
+    if (!acp_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.op = op;
+    args.lkmode = lkmode;
+
+    KIF_CALL(VMS_IOCTL_ACP_FLOCK, &args);
+
+    if (lkid)
+        *lkid = args.lkid;
+    return args.status;
 }
 
 uint32_t vms_kif_acp_deaccess(uint32_t chan)

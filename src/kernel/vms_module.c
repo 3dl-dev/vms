@@ -2060,6 +2060,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_acp_access(proc, arg);
     case VMS_IOCTL_ACP_DEACCESS:
         return vms_ioctl_acp_deaccess(proc, arg);
+    case VMS_IOCTL_ACP_FLOCK:               /* rd vms-326 piece 2b */
+        return vms_ioctl_acp_flock(proc, arg);
     case VMS_IOCTL_ACP_READVBLK:
         return vms_ioctl_acp_readvb(proc, arg);
     case VMS_IOCTL_ACP_WRITEVBLK:

@@ -1477,6 +1477,7 @@ uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
                                uint32_t lkmode, uint32_t flags,
                                uint32_t *lkid_out);
 uint32_t vms_lock_rms_file_enq_no_label(void);
+uint32_t vms_lock_rms_file_release(struct vms_proc *proc, uint32_t lkid);
 /* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
  * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
  * $DISMOUNT as the cluster-registration presence marker (not serialization).
@@ -1792,6 +1793,7 @@ long vms_ioctl_acp_assign(struct vms_proc *proc, unsigned long arg);
  */
 long vms_ioctl_acp_access(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_acp_flock(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_acp_acpcontrol(struct vms_proc *proc, unsigned long arg);
 /*
  * IO$_READVBLK / IO$_WRITEVBLK (vms-c60): virtual-block transfer on an accessed

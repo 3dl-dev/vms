@@ -312,6 +312,76 @@ static void test_reader_beside_sharing_writer(void)
     sys$erase(&wfab, 0, 0);
 }
 
+
+/* ================================================================
+ * Test D (rd vms-326 piece 2b): the lock is the one a real VAX takes. The
+ * EXECUTIVE builds it from the accessed file's FID and the mounted volume's
+ * label: 'RMS$' + the 6 FID bytes (num LE, seq LE, rvn, nmx) + 0x02 + the
+ * 12-byte SPACE-padded label + three NULs, 26 bytes, counted -- the form every
+ * real node's RMS file-access lock carries on the wire (tests/lab/captures;
+ * tools/cluster/dlm_rms_name_census.py). Read back COUNTED, since the name
+ * carries NULs a C-string readback would stop at.
+ * ================================================================ */
+static void test_lock_is_the_vax_name(void)
+{
+    char spec[128];
+    struct FAB fab;
+    struct vms_getvol_args gv;
+    rms_file_t *h;
+    uint8_t name[32], want[26];
+    uint32_t st, len = 0, lkid, i, llen;
+
+    snprintf(spec, sizeof(spec), "%s[OVMXDIR]RMSLOCKD.DAT", ODS2_UNIT);
+    fab = cc$rms_fab;
+    fab.fab$l_fna = spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_STMLF;
+    fab.fab$b_fac = FAB$M_PUT;
+    fab.fab$b_shr = 0;
+    st = sys$create(&fab, 0, 0);
+    check(st == RMS$_NORMAL, "D: sys$create RMSLOCKD.DAT -> NORMAL");
+    if (st != RMS$_NORMAL) return;
+    h = (rms_file_t *)fab._rms_file;
+    lkid = fab_lkid(&fab);
+
+    memset(&gv, 0, sizeof(gv));
+    st = vms_kif_getvol(ODS2_UNIT, &gv);
+    check($VMS_STATUS_SUCCESS(st) && gv.mounted && gv.volnam[0] != '\0',
+          "D: the mounted volume has a label to name the lock with");
+
+    memset(want, 0, sizeof(want));
+    memcpy(want, "RMS$", 4);
+    want[4] = (uint8_t)(h->fid_num & 0xff);
+    want[5] = (uint8_t)(h->fid_num >> 8);
+    want[6] = (uint8_t)(h->fid_seq & 0xff);
+    want[7] = (uint8_t)(h->fid_seq >> 8);
+    want[8] = h->fid_rvn;
+    want[9] = h->fid_nmx;
+    want[10] = 0x02;
+    llen = (uint32_t)strnlen(gv.volnam, 12);
+    for (i = 0; i < 12; i++)
+        want[11 + i] = (uint8_t)(i < llen ? gv.volnam[i] : ' ');
+
+    memset(name, 0xAA, sizeof(name));
+    st = vms_kif_getlki_resnam(lkid, name, &len);
+    check(st == SS$_NORMAL, "D: GETLKI reads the file-access lock back");
+    check(len == 26, "D: the resource name is COUNTED, 26 bytes (it carries NULs)");
+    check(memcmp(name, want, 26) == 0,
+          "D: the name is 'RMS$' + FID + 0x02 + the SPACE-padded volume label + 3 NULs, byte for byte");
+    check(name[10] == 0x02 && name[23] == 0 && name[24] == 0 && name[25] == 0,
+          "D: separator 0x02 and the three-NUL tail are where a real VAX puts them");
+
+    sys$close(&fab, 0, 0);
+    st = vms_kif_getlki_resnam(lkid, name, &len);
+    check(st == SS$_IVLOCKID, "D: closing the file releases the executive's lock");
+
+    fab = cc$rms_fab;
+    fab.fab$l_fna = spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    sys$erase(&fab, 0, 0);
+}
+
 int main(void)
 {
     uint32_t st;
@@ -331,6 +401,7 @@ int main(void)
     test_conflicting_share();
     test_compatible_share();
     test_reader_beside_sharing_writer();
+    test_lock_is_the_vax_name();
 
     vms_kif_acp_dmount(ODS2_UNIT);
 

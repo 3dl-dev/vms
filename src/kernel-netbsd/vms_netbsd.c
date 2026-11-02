@@ -1295,6 +1295,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_ACP_ASSIGN:
 	case VMS_IOCTL_ACP_ACCESS:
 	case VMS_IOCTL_ACP_DEACCESS:
+	case VMS_IOCTL_ACP_FLOCK:
 	case VMS_IOCTL_ACP_ACPCONTROL:
 	case VMS_IOCTL_ACP_FILEOP:
 	case VMS_IOCTL_GETVOL:
@@ -1323,6 +1324,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_acp_access(proc, (unsigned long)uarg);     break;
 		case VMS_IOCTL_ACP_DEACCESS:
 			r = vms_ioctl_acp_deaccess(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_ACP_FLOCK:       /* rd vms-326 piece 2b */
+			r = vms_ioctl_acp_flock(proc, (unsigned long)uarg);      break;
 		case VMS_IOCTL_ACP_ACPCONTROL:
 			r = vms_ioctl_acp_acpcontrol(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_ACP_FILEOP:

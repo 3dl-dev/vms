@@ -2344,9 +2344,43 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 }
 
 /*
- * Directory traffic from a real VMS system. Returns 0 when handled (with or
- * without an answer staged), -1 when the message is not directory traffic or
- * is refused -- the caller then falls through to RULE C exactly as before.
+ * AN OVMX MEMBER'S DIRECTORY TRAFFIC THAT ONLY THE DIRECTORY CAN ANSWER (rd
+ * vms-3ea). Between OVMX members the engine's master path serves a request
+ * for a name this node masters, and that stays as it was. What it cannot do
+ * is p. 6-31 outcome 3: a ROOT lookup for a name this node's vector directs
+ * here, that this node neither masters nor holds. Served as master, the
+ * engine "masters on first use" a resource nobody here holds -- a resource
+ * no system holds has no master, and the requester is the one that masters
+ * it. Measured on the 2-node e2e: node A, holding nothing on F11B$vOVMXDATA
+ * after its DISMOUNT, granted node B's NL lock as master (grants sent 2),
+ * so B's MOUNT read A's long-gone volume as still mounted.
+ *
+ * So that one case gets the directory's answer, the same table and the same
+ * grounded builder a VMS system gets: "you master it" recorded under the
+ * asker, or the master the table holds. A removal from an OVMX master (the
+ * only member that can have been told "you master it" is now one) is that
+ * entry going. Everything else falls through to the master path unchanged.
+ * An unbuilt vector decides nothing here.
+ */
+static int dlm_arm_dir_takes_ours(struct vms_dlm_scs *d,
+				  const struct dlm_scs_request *req,
+				  const struct vms_dlm_res_ident *id)
+{
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_REMOVE)
+		return 1;
+	if (req->opcode != (uint8_t)VMS_DLM_WIREOP_ENQ)
+		return 0;
+	if (d->cl == NULL || !d->cl->club.ldwv.valid ||
+	    !dlm_arm_dir_is_ours(d, id->hash, 1))
+		return 0;
+	return !dlm_arm_dir_name_mastered(id) && !dlm_arm_dir_name_held(id);
+}
+
+/*
+ * Directory traffic from a real VMS system -- and the one OVMX case above.
+ * Returns 0 when handled (with or without an answer staged), -1 when the
+ * message is not directory traffic or is refused -- the caller then falls
+ * through to RULE C exactly as before.
  */
 static int dlm_arm_directory(struct vms_dlm_scs *d,
 			     const struct dlm_scs_request *req,
@@ -2354,11 +2388,13 @@ static int dlm_arm_directory(struct vms_dlm_scs *d,
 {
 	struct vms_dlm_res_ident id;
 
-	if (req->peer_is_ours || req->from_csid == 0u ||
+	if (req->from_csid == 0u ||
 	    req->category != (uint8_t)VMS_DLM_CAT_REQUEST)
 		return -1;
 	if (vms_dlm_res_ident_parse_body(req->body, req->len, &id) !=
 	    VMS_CODEC_OK)
+		return -1;
+	if (req->peer_is_ours && !dlm_arm_dir_takes_ours(d, req, &id))
 		return -1;
 	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_ENQ ||
 	    req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR)

@@ -767,7 +767,12 @@ int main(void)
      * buffer: the ring can evict early boot records before we run, which lost
      * SYSID/LNM/MBX from the log intermittently (vms-98c2); the spool never wraps.
      */
-    opcom_kmsg_seed_operator_log(provision_oplog_emit);
+    /* rd vms-394e: and say how far into the kernel log the seed filed, so
+     * the post-startup kernel-log intake (OPCOM's, see
+     * src/ovmx_opcom/ovmx_opcom.c) files everything after it --
+     * nothing twice, nothing missed. */
+    (void)opcom_kmsg_write_mark(OPCOM_KMSG_SEEDED_MARK,
+                                opcom_kmsg_seed_operator_log(provision_oplog_emit));
 #endif
 
     /*

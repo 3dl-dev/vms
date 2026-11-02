@@ -15,6 +15,12 @@ add_executable(ovmx_opcom
     ovmx_opcom.c
     ${CMAKE_SOURCE_DIR}/src/ovmx_provision/provision_rms_bind.c
 )
+# rd vms-394e: on Linux OPCOM also hosts the post-startup kernel-log intake
+# (PID 1's /dev/kmsg bridge ends with startup); NetBSD's PID-1 /dev/klog reader
+# keeps filing the kernel log itself.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(ovmx_opcom PRIVATE ${CMAKE_SOURCE_DIR}/src/ovmx_init/opcom_kmsg.c)
+endif()
 
 target_include_directories(ovmx_opcom PRIVATE
     ${VMS_INCLUDE_DIR}

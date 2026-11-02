@@ -182,7 +182,7 @@ static void the_deferred_grant_is_the_prompt_grant(void)
 	/* The grant this master WOULD have sent, had the lock been free. */
 	memset(prompt, 0, sizeof(prompt));
 	ct_check(vms_dlm_enq_response_build_grant(reqbody, VMS_CM_BODY_LEN,
-						  MASTER_LKID, NULL, prompt,
+						  MASTER_LKID, NULL, 0u, prompt,
 						  (uint32_t)sizeof(prompt),
 						  &written) == VMS_CODEC_OK,
 		 "the PROMPT grant builds");
@@ -196,7 +196,7 @@ static void the_deferred_grant_is_the_prompt_grant(void)
 	ct_check_eq_u32(n, (unsigned long)VMS_CM_BODY_LEN,
 			"the frame comes back when the queue advances");
 	memset(deferred, 0, sizeof(deferred));
-	ct_check(vms_dlm_enq_response_build_grant(kept, n, MASTER_LKID, NULL,
+	ct_check(vms_dlm_enq_response_build_grant(kept, n, MASTER_LKID, NULL, 0u,
 						  deferred,
 						  (uint32_t)sizeof(deferred),
 						  &written) == VMS_CODEC_OK,

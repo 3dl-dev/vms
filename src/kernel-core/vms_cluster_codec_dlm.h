@@ -206,6 +206,18 @@ extern "C" {
 #define VMS_DLM_WIREOP_RM_13        0x13u  /* -> N, end of records, notification*/
 #define VMS_DLM_WIREOP_RM_14        0x14u  /* N -> O and N -> each holder      */
 #define VMS_DLM_WIREOP_RM_ACK       VMS_DLM_WIREOP_0F_ACK /* the 82/15 answer  */
+/*
+ * op 0x1a (rd vms-26e): O -> the holder of ONE lock in the tree, carrying the
+ * OLD MASTER'S copy of that lock's resource value block and its sequence. A
+ * NOTIFICATION (1205 of 1205 real ones carry body[4:8] = 0, none answered),
+ * and every one of them lies inside a remaster episode: after its sender's
+ * op-0x0e and before its sender's op-0x13 (1204 of 1205; the last capture ends
+ * mid-episode). 1112 go to the NEW MASTER, about the locks it holds itself; 93
+ * go to another holder, which then relays the same 20 bytes in its op-0x12
+ * record (43 of 43 records found: body[88:104] and body[104:108] equal the
+ * op-0x1a's body[36:52] and body[52:56]). See vms_dlm_rm_valblk_parse_body.
+ */
+#define VMS_DLM_WIREOP_RM_1A        0x1au  /* O -> holder, the lock's LVB      */
 
 /*
  * Opcodes -- GROUNDED by the vms-c03 capture set (see the file doc comment's
@@ -549,9 +561,15 @@ struct vms_dlm_enq_response {
 	 * had written. So `valblk_present` is set whenever the record is there,
 	 * and zeros in it are the master resource's zeros -- data for a resource
 	 * whose block is zero, not a placeholder.
+	 *
+	 * `valblk_seq` is that block's SEQUENCE, body[52:56] (rd vms-26e; the
+	 * cell the reproduction test used to exempt as "an SCS-layer word" --
+	 * it is 0x0be4 in the dlm-real-enq-grant specimen, beside a non-zero
+	 * block). Read whenever `valblk` is.
 	 */
 	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];
 	uint8_t  valblk_present;
+	uint32_t valblk_seq;
 };
 
 /*
@@ -677,10 +695,18 @@ vms_codec_status_t vms_dlm_convert_response_build_queued(const uint8_t *req_body
 							 uint32_t cap,
 							 uint32_t *written);
 
+/*
+ * A master's GRANT: the request echoed with the grant record, `master_lkid`
+ * at body[20:24], the master resource's value block at body[36:52] and THAT
+ * BLOCK'S SEQUENCE at body[52:56] (rd vms-26e: 36,153 of 36,153 real grants
+ * that return a non-zero block carry a non-zero sequence there). `valblk`
+ * NULL writes zeros in both; `valblk_seq` is then ignored.
+ */
 vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 						    uint32_t req_len,
 						    uint32_t master_lkid,
 						    const uint8_t *valblk,
+						    uint32_t valblk_seq,
 						    uint8_t *frame, uint32_t cap,
 						    uint32_t *written);
 
@@ -804,6 +830,23 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  * the other VAX answers 82/01 within 1.5 ms -- echo, body[34] = 0xf9 -- and the
  * barrier proceeds. Unanswered, the requester holds its next barrier release
  * forever.
+ *
+ * THAT IS ONE CASE OF A WIDER MESSAGE (rd vms-874f): op 0x08 is the FAILOVER
+ * REBUILD RECORD. When a lock tree's master leaves, every surviving holder
+ * re-sends each lock it holds in that tree, op-0x12-shaped: body[24:28] its own
+ * lkid, body[30]/[31] the mode, body[36:40] the parent's own lkid and
+ * body[40:44] the parent's lkid on the NEW master (both zero on a ROOT),
+ * body[88:108] the value block, body[128:132] a ROOT's directory hash (on a SUB
+ * a value that is neither its own name's hash nor its parent's). The
+ * ROOT goes first, to the tree's directory node -- or, when the sender IS the
+ * directory, to the master it has just installed. The 82/01 answer says 0xf9
+ * (the requester now masters the tree, and sends no subs) or 0xfa (a master
+ * exists: body[20:24] is the new master's lkid, which each SUB then carries at
+ * body[40:44]). The SYS$SYS_ID lookup above is a ROOT record of this kind. Every
+ * figure (550 ROOT / 338 SUB records over ten captures, the parent pair 338 of
+ * 338) is pinned by tools/cluster/dlm_rebuild08_census.py --selftest; capture
+ * and the topologies NOT covered: tests/lab/captures/
+ * vms-874f-failover-rebuild-20261011.
  */
 #define VMS_DLM_WIREOP_DIR_LOOKUP_TR 0x08u
 
@@ -1128,13 +1171,12 @@ vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 
 /*
  * Build a cat-0x02 op-0x0d rebuild-record REQUEST frame from a record.
- * SCAFFOLD (vms-20c, FC-P5.5): emits `rec->body` verbatim into abs [72,204)
- * -- the byte-identical round-trip that grounds the op-0x0d layout against
- * the captured real-VMS frames without naming the still-unpinned send fields
- * (mode/lkid/csid, §6-blocked). The survivor-side SENDER will replace the
- * verbatim body with a live-state field assembly once §6 pins those offsets;
- * this build is the entry point + the crash-guard round-trip harness. Writes
- * ONLY abs [72,204); `*written` receives 132. Same envelope division as the
+ * VERBATIM (vms-20c, FC-P5.5): emits `rec->body` unchanged into abs [72,204),
+ * the byte-identical round-trip of a CAPTURED record. It is not how OVMX
+ * originates one: the "send fields" (mode/lkid/csid) this was once waiting on
+ * do not exist in an op-0x0d at all -- see vms_dlm_dir_reg_build below, the
+ * field map it rests on, and the census that pins it. Writes ONLY abs
+ * [72,204); `*written` receives 132. Same envelope division as the
  * ENQ/response builders.
  */
 vms_codec_status_t
@@ -1165,6 +1207,73 @@ vms_codec_status_t
 vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 			       uint16_t own_send_msg, uint16_t ack_of_peer_send,
 			       uint8_t *frame, uint32_t cap, uint32_t *written);
+
+/*
+ * THE op-0x0d RECORD'S FIELD MAP (rd vms-20c, FC-P5.5) -- what a real sender
+ * WRITES, measured by tools/cluster/dlm_dirreg_census.py --selftest over every
+ * committed capture (23 captures, 16800 records, 15 real senders, 16 receivers
+ * of which 6 are OVMX; 2- and 3-node clusters) and twin-tested record by record
+ * against four uncompressed captures by tests/cluster/host/test_codec_dirreg.c:
+ *
+ *   body[0:8]      envelope: send/ack message numbers + the transaction
+ *                  (an op-0x0d IS answered: 16791 of 16800 carry an 82/0d)
+ *   body[8:10]     02 0d
+ *   body[12:16]    0x0001 + the cluster DLM rebuild sequence (rd vms-64b)
+ *   body[44:46]    UIC group (63 records non-zero)
+ *   body[46]       access mode (0 / 1 / 3 all occur)
+ *   body[47]       name length, 1..31
+ *   body[48:48+L]  the resource name
+ *   body[128:132]  the directory hash OF THAT IDENTITY: 16800 of 16800 equal
+ *                  the product hash (vms_dlm_hash.h) of (group, mode, name)
+ *
+ * NOTHING ELSE. A sender reuses one message buffer per open transaction
+ * (body[4:6]), and between two consecutive uses of one buffer every byte
+ * outside the set above is unchanged in 16147 of 16406 cases; of the other
+ * 259, 141 had another message use that buffer in between and 118 carry other
+ * messages' shapes (a grant record, a directory answer) from a use the capture
+ * did not see. body[16:44], body[48+L:128] and body[34] are the buffer's
+ * previous contents (body[34] is the 0xf9 the previous ANSWER stamped there).
+ *
+ * SO op-0x0d IS NOT A LOCK-STATE RECORD. There is no mode, no lock id, no CSID,
+ * no parent linkage and no value block in it: the "send fields" the FC-P5.5
+ * design was waiting to pin do not exist in this message. It is the MASTER
+ * registering a root resource it masters with that resource's DIRECTORY node
+ * at a transition (rd vms-8219), which the vms-20c rejoin capture shows from
+ * both ends: 307 of 307 records go from the survivor VAX1 to the rejoiner VAX2
+ * on one parity of (hash >> 16), the directory index of a two-entry vector,
+ * and afterwards VAX2 sends 223 op-0x01s naming those resources TO VAX1, the
+ * master, and VAX1 none to VAX2.
+ *
+ * The record is the identity a directory keys on, so the parse is the shared
+ * vms_dlm_res_ident reader plus the class checks, and the build writes the
+ * identity and the hash and ZERO everywhere else (never another message's
+ * leftovers, spec "Residue"). body[0:8] and body[12:16] are the connection
+ * manager's, exactly as for vms_dlm_dir_remove_build. The caller passes only a
+ * hash the executive holds for that identity (res->hash_known).
+ *
+ * NOT YET ADDRESSABLE AT A REAL VAX: vms_dlm_shape_fit_for_any_member() still
+ * says no to an op-0x0d body. No real VAX has been watched to accept an
+ * all-zero residue span from a sender (the nearest are 47 rejoin records whose
+ * residue is zero but for body[24] = 0x03, all answered by the real VAX2), and
+ * opening that gate is the lab proof's job, not this codec's.
+ */
+struct vms_dlm_dir_reg {
+	struct vms_dlm_res_ident id;     /* body[44:48+L], body[128:132]      */
+	uint16_t dlm_seq;                /* body[14:16]                       */
+};
+
+/* Parse a cat-0x02 op-0x0d REQUEST body. VMS_CODEC_E_CLASS for any other
+ * (cat, op) or a body[12:14] other than 0x0001, VMS_CODEC_E_RANGE for a name
+ * length outside 1..31. `*out` written only on VMS_CODEC_OK. */
+vms_codec_status_t vms_dlm_dir_reg_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_dir_reg *out);
+
+/* Build the op-0x0d body for `id` into abs [72,204) of `frame`: cat/op, the
+ * identity, the hash, zero elsewhere. VMS_CODEC_E_INVAL for an identity with no
+ * name or a name of 32+ bytes. `*written` receives the frame length. */
+vms_codec_status_t vms_dlm_dir_reg_build(const struct vms_dlm_res_ident *id,
+					 uint8_t *frame, uint32_t cap,
+					 uint32_t *written);
 
 /* ------------------------------------------------------------------ *
  * op 0x03 $DEQ, op 0x05 BLKAST, op 0x06 CONVERT-with-VALBLK
@@ -1950,6 +2059,45 @@ struct vms_dlm_rm_held {
 vms_codec_status_t vms_dlm_rm_held_build(const struct vms_dlm_rm_held *h,
 					 uint8_t *frame, uint32_t cap,
 					 uint32_t *written);
+
+/*
+ * THE op-0x1a: the OLD MASTER'S value block for ONE lock a holder holds in the
+ * tree being handed over (rd vms-26e). Census over every capture in
+ * tests/lab/captures (1205 frames, 37 captures):
+ *
+ *   body[4:8]    0 -- a notification       1205/1205, none answered
+ *   body[20:24]  the OLD MASTER's handle for the lock and body[24:28] the
+ *                HOLDER's own: 712 of the 1205 match, pair for pair, an
+ *                earlier real 82/01 grant from the same sender to the same
+ *                holder; the other 493 name a pair no 82/01 in their
+ *                capture granted
+ *   body[36:52]  the resource's VALUE BLOCK, body[52:56] its SEQUENCE. A
+ *                holder that is not the new master relays exactly these 20
+ *                bytes in its op-0x12 record at body[88:108] (43 of 43); the
+ *                new master is told them here because it sends itself no
+ *                record. RA7 fire A (vms-6ad1-ra7-residue-20261021) is the
+ *                controlled case: the RMLVB-0123456789 block at sequence 1
+ *                that the old master's SDA shows.
+ *   body[47]     0 on 1188/1205: the frame names NO resource; the lock is
+ *                found by the holder's handle.
+ *
+ * `valblk_present` is "the 20-byte span is not all zero" -- the same rule the
+ * op-0x12 record's span follows (vms_dlm_rm_lock_rec): an ABSENT block leaves
+ * the resource's own alone. VMS_CODEC_E_CLASS for anything that is not a
+ * cat-0x02 op-0x1a; VMS_CODEC_E_SHORT for a body under VMS_CM_BODY_LEN.
+ */
+struct vms_dlm_rm_valblk {
+	uint32_t master_lkid;                     /* body[20:24], the SENDER's */
+	uint32_t holder_lkid;                     /* body[24:28], the holder's */
+	uint32_t valblk_seq;                      /* body[52:56]               */
+	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];  /* body[36:52]              */
+	uint8_t  valblk_present;
+	uint8_t  pad[3];
+};
+
+vms_codec_status_t vms_dlm_rm_valblk_parse_body(const uint8_t *body,
+						uint32_t len,
+						struct vms_dlm_rm_valblk *out);
 
 /* ==========================================================================
  * DLKSRCH -- distributed deadlock search (H11, rd vms-d55 / vms-ec75).

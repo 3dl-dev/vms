@@ -18,8 +18,10 @@
  *     vms_dlm_grant_notify_parse_body     (the DEFERRED GRANT, cat-0x02 op-0x02)
  *     vms_dlm_dir_answer_parse_body       (a DIRECTORY's answer to a lookup)
  *     vms_dlm_res_ident_parse_body        (the resource identity a request names)
+ *     vms_dlm_dir_reg_parse_body          (the op-0x0d record, rd vms-20c)
  *     vms_dlm_rm_step_parse_body          (a remaster step, 0x0e/0x0f/0x10/0x13/0x14)
  *     vms_dlm_rm_lock_rec_parse_body      (a remaster LOCK RECORD, op-0x12)
+ *     vms_dlm_rm_valblk_parse_body        (a remaster's VALUE BLOCK, op-0x1a)
  *     vms_cm_params_parse                 (CNXMAN op-01 PARAMS, votes)
  * plus the frame-level entry (vms_frame_classify -> vms_dlm_*_parse), the real
  * inbound path (body = frame + VMS_OFF_SYSAP_BODY, so a short frame exercises
@@ -135,6 +137,8 @@ static int t_grant_notify(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_grant_notify_parse_body(b, n, (struct vms_dlm_grant_notify *)c); }
 static int t_dir_answer(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_dir_answer_parse_body(b, n, (struct vms_dlm_dir_answer *)c); }
+static int t_dir_reg(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_dir_reg_parse_body(b, n, (struct vms_dlm_dir_reg *)c); }
 static int t_res_ident(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_res_ident_parse_body(b, n, (struct vms_dlm_res_ident *)c); }
 /* rd vms-380: the REMASTER decoders. A departing VAX's 0x0e/0x0f/0x10/0x12/0x13
@@ -144,6 +148,10 @@ static int t_rm_step(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_rm_step_parse_body(b, n, (struct vms_dlm_rm_step *)c); }
 static int t_rm_lock_rec(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_rm_lock_rec_parse_body(b, n, (struct vms_dlm_rm_lock_rec *)c); }
+/* rd vms-26e: the op-0x1a, the old master's value block for one lock of ours,
+ * which this node now parses whenever a real VAX remasters a tree onto it. */
+static int t_rm_valblk(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_rm_valblk_parse_body(b, n, (struct vms_dlm_rm_valblk *)c); }
 static int t_cm_params(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_cm_params_parse(b, n, (struct vms_cm_params *)c); }
 static int t_dlksrch(const uint8_t *b, uint32_t n, void *c)
@@ -194,9 +202,10 @@ static void fuzz_grant_valblk(void)
     struct vms_dlm_enq_response resp;
     for (int i = 0; i < ITERS; i++) {
         uint8_t scratch[64];
-        /* 0..55 spans: below the marker (n<=28), below the value block
-         * (28<n<36), a TRUNCATED value block (36<=n<52), and the full 52. */
-        uint32_t n = (uint32_t)(rand() % 56);
+        /* 0..59 spans: below the marker (n<=28), below the value block
+         * (28<n<36), a TRUNCATED value block (36<=n<52), a TRUNCATED
+         * sequence (52<=n<56, rd vms-26e) and the full 56. */
+        uint32_t n = (uint32_t)(rand() % 60);
         fill_random(scratch, n);
         if (n > DLM_OP_BODY_OFF) scratch[DLM_OP_BODY_OFF] = VMS_DLM_WIREOP_ENQ;
         if (n > 28) scratch[28] = 0x10;                        /* marker byte  */
@@ -210,6 +219,37 @@ static void fuzz_grant_valblk(void)
                 "(body[36:52], #1194/vms-727): 100k, no over-read/crash");
 }
 
+/* rd vms-20c: the op-0x0d RECORD parser, with its class gates planted so the
+ * identity reader behind them is actually reached: cat 0x02 / op 0x0d at
+ * body[8:10] and 0x0001 at body[12:14], a name length that is usually in range,
+ * and every truncation from 0 to 160 bytes. A real VAX chooses every one of
+ * these bytes. The count of accepted bodies is asserted non-zero, so a gate
+ * change that silently stops reaching the reader fails here instead of
+ * shipping a green fuzz of nothing. */
+static void fuzz_dir_reg(void)
+{
+    struct vms_dlm_dir_reg r;
+    uint32_t accepted = 0, outside = 0;
+    for (int i = 0; i < ITERS; i++) {
+        uint8_t scratch[160];
+        uint32_t n = (uint32_t)(rand() % 161);
+        fill_random(scratch, n);
+        if (n > 9)  { scratch[8] = 0x02; scratch[9] = VMS_DLM_WIREOP_REBUILD; }
+        if (n > 13 && (rand() & 7)) { scratch[12] = 0x01; scratch[13] = 0x00; }
+        if (n > 47 && (rand() & 3)) scratch[47] = (uint8_t)(rand() % 34);
+        uint8_t *body = exact(scratch, n);
+        if (vms_dlm_dir_reg_parse_body(body, n, &r) == VMS_CODEC_OK) {
+            accepted++;
+            if (r.id.name_len < 1 || r.id.name_len > 31 || 48u + r.id.name_len > n)
+                outside++;
+        }
+        free(body);
+    }
+    printf("  (dir_reg_parse_body accepted %u of %d planted bodies)\n", accepted, ITERS);
+    ct_check(accepted > 0, "dir_reg_parse_body: 100k planted+truncated, reached, no over-read/crash");
+    ct_check(outside == 0, "dir_reg_parse_body: every accepted name lies inside its body");
+}
+
 int main(void)
 {
     struct vms_dlm_enq_request req;
@@ -221,8 +261,10 @@ int main(void)
     struct vms_dlm_grant_notify gn;
     struct vms_dlm_dir_answer da;
     struct vms_dlm_res_ident ri;
+    struct vms_dlm_dir_reg dreg;
     struct vms_dlm_rm_step rms;
     struct vms_dlm_rm_lock_rec rmlr;
+    struct vms_dlm_rm_valblk rmvb;
     struct vms_cm_params cmp;
     struct vms_dlm_dlksrch_record dlk;
     uint32_t hash;
@@ -242,10 +284,14 @@ int main(void)
     fuzz_body(t_res_ident, &ri,   VMS_DLM_WIREOP_ENQ,           "res_ident_parse_body: 100k, no over-read/crash");
     fuzz_body(t_rm_step,   &rms,  VMS_DLM_WIREOP_RM_10,         "rm_step_parse_body: 100k, no over-read/crash");
     fuzz_body(t_rm_lock_rec, &rmlr, VMS_DLM_WIREOP_RM_12,       "rm_lock_rec_parse_body: 100k, no over-read/crash");
+    fuzz_body(t_rm_valblk, &rmvb, VMS_DLM_WIREOP_RM_1A,         "rm_valblk_parse_body: 100k, no over-read/crash");
     fuzz_body(t_cm_params, &cmp,  0,                            "cm_params_parse: 100k, no over-read/crash");
     fuzz_body(t_dlksrch,   &dlk,  VMS_DLM_WIREOP_DLKSRCH,       "dlksrch_parse_body: 100k, no over-read/crash");
 
+    fuzz_body(t_dir_reg,   &dreg, VMS_DLM_WIREOP_REBUILD,       "dir_reg_parse_body: 100k, no over-read/crash");
+
     fuzz_grant_valblk();
+    fuzz_dir_reg();
     fuzz_frame();
 
     return ct_summary("fuzz_codec_dlm");

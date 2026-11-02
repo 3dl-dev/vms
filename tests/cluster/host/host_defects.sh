@@ -938,7 +938,7 @@ EOF
 *** and carries the handle the MASTER assigned ***
 *** body[20:24] is the MASTER's handle slot, carrying the PID-form placeholder on a fresh ENQ ***
 *** body[24:28] is THE REQUESTER's own handle (0x090003cd -- a value no master ever sent it) ***
-*** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
+*** every byte of the real grant that this codec owns is reproduced exactly (128 of 132, the value block's sequence included) ***
 *** the grant ECHOES the requester's handle -- which is the correlation OVMX was breaking ***
 builds back from the typed struct
 every CITED byte of the real specimen is byte-exact
@@ -972,7 +972,7 @@ EOF
         # dlm-rm-ack-rewrites-the-grant-record. The op-0x12 answer's half of
         # this one writer has its own control, dlm-rm-lock-answer-record-omitted.
         require_fail) hd_lines <<'EOF'
-*** every byte of the real grant that this codec owns is reproduced exactly (126 of 132) ***
+*** every byte of the real grant that this codec owns is reproduced exactly (128 of 132, the value block's sequence included) ***
 EOF
                       ;;
         esac;;

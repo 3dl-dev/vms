@@ -303,6 +303,14 @@ struct vms_dlm_rm_ops {
 	 */
 	uint8_t (*residue_fill)(void *ctx);
 
+	/*
+	 * rd vms-26e: THE OLD MASTER'S VALUE BLOCK for one lock this node holds
+	 * in a tree it is adopting (the op-0x1a; vms_dlm_adopt.h
+	 * vms_lock_dlm_adopt_valblk). 1 when the ENGINE found that lock, the
+	 * open adoption and the sender all as the frame says, 0 otherwise.
+	 */
+	int (*adopt_valblk)(void *ctx, const struct vms_dlm_adopt_valblk *v);
+
 	/* The one-line-per-fact console voice. */
 	void (*log)(void *ctx, const char *msg);
 };
@@ -380,6 +388,9 @@ struct vms_dlm_rm {
 	uint32_t codec_failures;
 	uint32_t no_slot;            /* a 0x0e with every tree slot busy       */
 	uint32_t acks_received;      /* 82/15 answers to op-0x14s of ours      */
+	uint32_t valblks_taken;      /* op-0x1a the engine accepted (rd vms-26e)*/
+	uint32_t valblks_refused;    /* ... and the ones it did not: no lock,  */
+				     /* no open adoption, or not the sender's  */
 };
 
 /* ==========================================================================
@@ -398,8 +409,14 @@ void vms_dlm_rm_init(struct vms_dlm_rm *f, const struct vms_dlm_rm_ops *ops);
  * them, so this table cannot be handed a body that is not what the envelope
  * claimed.
  *
- * VMS_DLM_RM_NOT_MINE for anything that is not one of the five steps, so the
- * caller's own routing is unchanged by this file's presence.
+ * VMS_DLM_RM_NOT_MINE for anything that is not one of the five steps or the
+ * op-0x1a, so the caller's own routing is unchanged by this file's presence.
+ *
+ * THE op-0x1a (rd vms-26e) is not a table event: it names no tree, only a lock
+ * of ours, so it goes straight to the engine (`adopt_valblk`), which finds the
+ * tree from the lock. It is a NOTIFICATION -- 1205 of 1205 real ones are never
+ * answered -- so nothing is staged either way: HANDLED when the engine took
+ * it, REFUSED (counted) when it did not.
  */
 enum vms_dlm_rm_status vms_dlm_rm_step(struct vms_dlm_rm *f, uint32_t from_csid,
 				       uint8_t category, uint8_t opcode,

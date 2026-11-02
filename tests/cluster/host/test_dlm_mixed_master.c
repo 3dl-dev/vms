@@ -648,7 +648,7 @@ static int vax_grants(uint32_t ovmx_lkid, uint32_t vax_master_lkid, uint8_t mode
 		return -1;              /* nothing to answer */
 	memset(frame, 0, sizeof(frame));
 	if (vms_dlm_enq_response_build_grant(g.last, VMS_CM_BODY_LEN,
-					     vax_master_lkid, NULL, frame,
+					     vax_master_lkid, NULL, 0u, frame,
 					     (uint32_t)sizeof(frame),
 					     &written) != VMS_CODEC_OK)
 		return -1;

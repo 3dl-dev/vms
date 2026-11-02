@@ -231,6 +231,10 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	return VMS_CODEC_OK;
 }
 
+/* body[52:56] of a GRANT: its value block's sequence (rd vms-26e). The same
+ * cell VMS_OFF_DLM_RM_VALBLK_SEQ names on the op-0x12 answer below. */
+#define VMS_OFF_DLM_GRANT_VALSEQ   124u
+
 vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t len,
 					      struct vms_dlm_enq_response *out)
 {
@@ -253,6 +257,7 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t
 		return VMS_CODEC_E_CLASS;
 
 	out->valblk_present = 0;
+	out->valblk_seq = 0u;
 
 	/*
 	 * THE QUEUED ANSWER COMES FIRST (rd vms-85f), because it is the one
@@ -323,6 +328,8 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t
 		if (f == VMS_DLM_GRANT_FLAG_VAL && rec == VMS_DLM_GRANT_REC_VAL) {
 			vms_wire_get_bytes(&v, VMS_OFB_DLM_VALBLK,
 					   VMS_DLM_VALBLK_WIRE_LEN, out->valblk);
+			out->valblk_seq = vms_wire_get_le32(&v,
+				VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_VALSEQ));
 			if (!vms_wire_view_ok(&v))
 				return v.err;
 			out->outcome = VMS_DLM_ENQ_GRANTED;
@@ -436,6 +443,7 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 						    uint32_t req_len,
 						    uint32_t master_lkid,
 						    const uint8_t *valblk,
+						    uint32_t valblk_seq,
 						    uint8_t *frame, uint32_t cap,
 						    uint32_t *written)
 {
@@ -518,8 +526,7 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 	 * value block; writing the block LAST is what keeps both rules true at
 	 * once.
 	 *
-	 * body[52:54] is the SCS-layer word this codec does not own (see the
-	 * header): left zero, never minted.
+	 * body[52:56] is NOT the request's: it is the block's SEQUENCE, below.
 	 */
 	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_GROUP, 0);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_GROUP + 1u, 0);
@@ -539,6 +546,16 @@ vms_codec_status_t vms_dlm_enq_response_build_grant(const uint8_t *req_body,
 	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
 		vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK + i,
 				valblk != (const uint8_t *)0 ? valblk[i] : 0u);
+	/*
+	 * body[52:56] -- THAT BLOCK'S SEQUENCE (rd vms-26e). 50,490 real VAX
+	 * ENQ grants in tests/lab/captures: every one of the 36,153 that return
+	 * a non-zero block carries a non-zero sequence here, and 50,283 of the
+	 * 50,490 rewrite the span away from the request's bytes. RA7 fire A's
+	 * old master granted RMLVB-0123456789 with sequence 1 in it. So it is
+	 * the RSB's sequence, read back by the caller -- and 0 with no block.
+	 */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_VALSEQ,
+			  valblk != (const uint8_t *)0 ? valblk_seq : 0u);
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
@@ -989,6 +1006,68 @@ vms_codec_status_t vms_dlm_dir_remove_build(const struct vms_dlm_res_ident *id,
 		return w.err;
 	if (written != (uint32_t *)0)
 		*written = VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_dir_reg_build(const struct vms_dlm_res_ident *id,
+					 uint8_t *frame, uint32_t cap,
+					 uint32_t *written)
+{
+	vms_wire_buf_t w;
+	uint32_t i;
+
+	if (id == (const struct vms_dlm_res_ident *)0)
+		return VMS_CODEC_E_INVAL;
+	if (id->name_len == 0u || id->name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	/* rd vms-20c: a real sender writes ONLY the identity and its hash; the
+	 * rest of its buffer is a previous message's. Zero is what THIS builder
+	 * writes there, never a copy of anybody's leftovers. */
+	for (i = 0u; i < VMS_CM_BODY_LEN; i++)
+		vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + i, 0u);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_REBUILD);
+	vms_wire_put_le16(&w, VMS_OFF_DLM_RES_GROUP, id->group);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RES_MODE, id->mode);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, id->name_len);
+	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, id->name_len, id->name);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, id->hash);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_dir_reg_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_dir_reg *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_dir_reg r;
+	vms_codec_status_t st;
+	uint8_t cat, op;
+	uint16_t one;
+
+	if (out == (struct vms_dlm_dir_reg *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	one = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_INV1);
+	r.dlm_seq = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_TYPE);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_REBUILD ||
+	    one != VMS_DLM_REBUILD_INV1_CONST)
+		return VMS_CODEC_E_CLASS;
+	st = vms_dlm_res_ident_parse_body(body, len, &r.id);
+	if (st != VMS_CODEC_OK)
+		return st;
+	*out = r;
 	return VMS_CODEC_OK;
 }
 
@@ -2296,5 +2375,51 @@ vms_codec_status_t vms_dlm_rm_held_build(const struct vms_dlm_rm_held *h,
 		return w.err;
 	if (written != (uint32_t *)0)
 		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/*
+ * THE op-0x1a (rd vms-26e) -- see the header for the census. Every field is
+ * READ: the two handles say which lock, the 20-byte span is what the old
+ * master's RSB holds for it. Nothing here decides whether the block may be
+ * applied; that is the engine's, against the lock it actually holds.
+ */
+vms_codec_status_t vms_dlm_rm_valblk_parse_body(const uint8_t *body,
+						uint32_t len,
+						struct vms_dlm_rm_valblk *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_rm_valblk r;
+	uint8_t cat, op, any = 0u;
+	uint32_t i;
+
+	if (body == (const uint8_t *)0 || out == (struct vms_dlm_rm_valblk *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_RM_1A)
+		return VMS_CODEC_E_CLASS;
+
+	for (i = 0u; i < (uint32_t)sizeof(r); i++)
+		((uint8_t *)&r)[i] = 0u;
+	r.master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
+	r.holder_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++) {
+		r.valblk[i] = vms_wire_get_u8(&v, VMS_OFB_DLM_VALBLK + i);
+		if (r.valblk[i] != 0u)
+			any = 1u;
+	}
+	r.valblk_seq = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_VALBLK_SEQ);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (r.valblk_seq != 0u)
+		any = 1u;
+	r.valblk_present = any;
+	*out = r;
 	return VMS_CODEC_OK;
 }

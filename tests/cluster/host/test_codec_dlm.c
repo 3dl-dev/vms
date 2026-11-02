@@ -251,12 +251,16 @@ static void test_enq_grant(void)
  * that answered it 155 us later (dlm-real-enq-grant), both captured off the
  * same wire. Build a grant from the request with the master handle the real
  * master assigned and the block the real master returned, and demand EQUALITY
- * on all 132 body bytes except an explicitly named six:
+ * on all 132 body bytes except an explicitly named four:
  *
  *   body[0:4]    the CM's transaction envelope -- the wrapper's, not this
  *                codec's (every builder here leaves it alone)
- *   body[52:54]  the SCS-layer word this codec's own header already documents
- *                as "not the DLM codec's to reproduce"
+ *
+ * body[52:56] USED TO BE EXEMPT as "an SCS-layer word". It is not: it is the
+ * value block's SEQUENCE (rd vms-26e; 0x0be4 here, beside the non-zero block,
+ * and non-zero on 36,153 of 36,153 real grants that return a non-zero block).
+ * A master that answered it as zero is what left a real VAX reading Seqnum 0
+ * after an OVMX grant, so it is now reproduced like every other byte.
  *
  * A regression that touches ANY other byte -- or that stops writing the grant
  * record, or swaps the handles back -- reddens here.
@@ -272,8 +276,8 @@ static void test_real_grant_is_reproduced(void)
 	uint8_t opcode = 0;
 	uint8_t built[256];
 	uint32_t written = 0, i, diffs = 0;
-	/* body[0:4] (the CM envelope) and body[52:54] (the SCS word). */
-	static const int owned_elsewhere[] = { 0, 1, 2, 3, 52, 53 };
+	/* body[0:4] (the CM envelope). */
+	static const int owned_elsewhere[] = { 0, 1, 2, 3 };
 
 	printf("-- rd vms-b5b0: a REAL master's grant, reproduced byte-for-byte\n");
 	ct_check(rq != NULL && gr != NULL, "both real-capture fixtures load");
@@ -311,12 +315,16 @@ static void test_real_grant_is_reproduced(void)
 			"cleared in 38 of 38)");
 	ct_check_eq_u32((unsigned long)resp.valblk_present, 1u,
 			"  and it carries the master resource's value block");
+	ct_check_eq_u32(resp.valblk_seq, 0x00000be4u,
+			"*** and that block's SEQUENCE at body[52:56] (rd "
+			"vms-26e) ***");
 
 	/* *** THE REPRODUCTION *** */
 	memset(built, 0xAA, sizeof(built));
 	ct_check(vms_dlm_enq_response_build_grant(rq->bytes + VMS_OFF_SYSAP_BODY,
 						  VMS_CM_BODY_LEN,
 						  resp.master_lkid, resp.valblk,
+						  resp.valblk_seq,
 						  built, sizeof(built),
 						  &written) == VMS_CODEC_OK,
 		 "OVMX builds a grant from the real request");
@@ -340,27 +348,21 @@ static void test_real_grant_is_reproduced(void)
 	}
 	ct_check_eq_u32(diffs, 0u,
 			"*** every byte of the real grant that this codec owns "
-			"is reproduced exactly (126 of 132) ***");
-
-	/* And the two spans that are not this codec's are UNTOUCHED by it --
-	 * asserted positively, so a builder that started writing them would
-	 * redden rather than pass by being ignored. */
-	ct_check(built[VMS_OFF_SYSAP_BODY + 52] == 0u &&
-		 built[VMS_OFF_SYSAP_BODY + 53] == 0u,
-		 "  the SCS-layer word at body[52:54] is left zero, not minted");
+			"is reproduced exactly (128 of 132, the value block's "
+			"sequence included) ***");
 
 	/* A grant that hands out lock-id 0 is not a grant (the fc8540ae rule). */
 	ct_check(vms_dlm_enq_response_build_grant(rq->bytes + VMS_OFF_SYSAP_BODY,
 						  VMS_CM_BODY_LEN,
 						  VMS_DLM_LKID_UNSET,
-						  resp.valblk, built,
+						  resp.valblk, 0u, built,
 						  sizeof(built), &written) ==
 		 VMS_CODEC_E_INVAL,
 		 "  and a master handle of 0 is refused");
 	/* ...and a grant can only answer a request. */
 	ct_check(vms_dlm_enq_response_build_grant(gr->bytes + VMS_OFF_SYSAP_BODY,
 						  VMS_CM_BODY_LEN,
-						  resp.master_lkid, resp.valblk,
+						  resp.master_lkid, resp.valblk, 0u,
 						  built, sizeof(built),
 						  &written) == VMS_CODEC_E_CLASS,
 		 "  a grant cannot be built from another grant (E_CLASS)");
@@ -1252,7 +1254,7 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 		ct_check(rq != NULL &&
 			 vms_dlm_enq_response_build_grant(
 				 rq->bytes + VMS_OFF_SYSAP_BODY,
-				 VMS_CM_BODY_LEN, VMS_DLM_LKID_UNSET, NULL,
+				 VMS_CM_BODY_LEN, VMS_DLM_LKID_UNSET, NULL, 0u,
 				 built, sizeof(built), &written) ==
 			 VMS_CODEC_E_INVAL,
 			 "  vms_dlm_enq_response_build_grant refuses a master "
@@ -1559,7 +1561,7 @@ static void test_queued_convert_answer_is_the_real_one(void)
 	 * grants a conversion as 82/07, never as an ENQ grant 82/01. */
 	memset(frame, 0, sizeof(frame));
 	ct_check(vms_dlm_enq_response_build_grant(req, sizeof(req), 0x0001abcdu,
-						  NULL, frame, sizeof(frame),
+						  NULL, 0u, frame, sizeof(frame),
 						  &written) == VMS_CODEC_OK,
 		 "the CONVERT's grant builds");
 	ct_check_eq_u32(frame[VMS_OFF_SYSAP_BODY + 9u], 0x07u,

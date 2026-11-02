@@ -387,10 +387,18 @@ def selftest(root):
                     if i not in (8, 9, 34) and not 28 <= i < 32)]
     exact_ratio('82/15 answers that differ from the request ONLY in body[8], '
                 '[9], [28:32] and [34]',
-                len(acked) - len(stray), len(acked), 3626, 4074)
-    exact_ratio('...of those, the ones answering an op-0x14 (the other 3 answer '
+                len(acked) - len(stray), len(acked), 5121, 5797)
+    # 2026-11-02: rd vms-6ad1's three RA7 fires add 88 answered steps, all
+    # echoing exactly (the 448 strays did not move): 3,626/4,074 -> 3,714/4,162.
+    # 2026-11-02, rd vms-874f: the RA1b VAX-only departure capture adds 1,635
+    # answered steps and 228 more strays, the same class as the 448 -- 225
+    # answer an op-0x14, 3 an op-0x10, and the differing bytes are another
+    # message's text (an op-0x14 answer's name span reads "CACHE$cm..." where
+    # its request said "SYS$_$2$DUA0:"), the answering node's send buffer.
+    # 3,714/4,162 -> 5,121/5,797; 445/448 -> 670/676.
+    exact_ratio('...of those, the ones answering an op-0x14 (the other 6 answer '
                 'an op-0x10)',
-                sum(1 for q, _a in stray if q[9] == 0x14), len(stray), 445, 448)
+                sum(1 for q, _a in stray if q[9] == 0x14), len(stray), 670, 676)
     f0 = [(q, a) for (s, o, q, a) in pairs if s == 0x0f and o == 0x15]
     floor('op-0x0f answers that CLEAR body[28:32] (the new-master role)',
           sum(1 for _q, a in f0 if a[28:32] == b'\0\0\0\0'), 811)
@@ -413,8 +421,9 @@ def selftest(root):
     # 0x14 being the QUEUED form dlm_queued_answer_census measures, so an answer
     # to an op-0x12 is not unconditionally a GRANT. What selects it is NOT
     # guessed here (rd vms-dd87).
+    # rd vms-874f: +419 pairs from the RA1b departure capture, every one 0x10.
     exact_ratio('82/01 answers with body[28] == 0x10 (the grant flag)',
-                sum(1 for _q, a in g if a[28] == 0x10), len(g), 3509, 3521)
+                sum(1 for _q, a in g if a[28] == 0x10), len(g), 3928, 3940)
     subs = [(q, a) for q, a in g if not is_root_record(q)]
     exact_ratio('82/01 answers to a SUB record with body[30:32] == 0 0',
                 sum(1 for _q, a in subs if a[30] == 0 and a[31] == 0),
@@ -431,7 +440,7 @@ def selftest(root):
     root_forms = collections.Counter(bytes(a[30:32]) for _q, a in roots)
     exact_ratio('ROOT 82/01 answers carrying f0 01 or f1 01 at body[30:32]',
                 root_forms[b'\xf0\x01'] + root_forms[b'\xf1\x01'], len(roots),
-                786, 792)
+                1205, 1211)   # +419 ROOT answers (rd vms-874f), all f0/f1 01
     exact_all('ROOT 82/01 answers whose body[31] is 01 or whose body[30:32] is '
               'one of the three measured oddities',
               sum(1 for _q, a in roots
@@ -444,14 +453,15 @@ def selftest(root):
     # engine filled and not an echo. 185 exceptions, in three captures.
     exact_ratio("82/01 answers whose body[36:56] is the record's body[88:108]",
                 sum(1 for q, a in g if q[88:108] == a[36:56]), len(g),
-                3336, 3521)
+                3755, 3940)   # +419 (rd vms-874f), all 419 read back
     # ...and the 15 records whose value block and sequence disagree all
     # disagree the SAME way: a sequence with no value block behind it.
     exact_ratio('op-0x12 records whose value block and sequence agree on being '
                 'present (neither is read as an assertion about the other)',
                 sum(1 for q, _a in g
                     if (q[88:104] != b'\0' * 16) == (q[104:108] != b'\0' * 4)),
-                len(g), 3506, 3521)
+                len(g), 3923, 3940)   # +417/+419 (rd vms-874f); the 2 new
+                                      # disagreements are the same kind
     exact_all('...and every disagreement is a SEQUENCE with no value block',
               sum(1 for q, _a in g
                   if (q[88:104] != b'\0' * 16) == (q[104:108] != b'\0' * 4)
@@ -491,7 +501,17 @@ def selftest(root):
     # 812 that do not satisfy W1 are still the same three.
     exact_ratio('episodes whose op-0x13 SENDERS are exactly its op-0x14 '
                 'RECIPIENTS (rule W1)', rt['sets_equal'], rt['episodes'],
-                809, 812)
+                1099, 1104)   # +21 episodes in rd vms-6ad1's RA7 captures (3 RA7T + the VAXes' own CACHE$ hand-overs), every one W1
+    # rd vms-874f: the RA1b VAX-only 3-node departure adds 271 episodes, all
+    # VAX1 (the departing system) handing a tree to a survivor. 269 satisfy W1.
+    # The 2 that do not (F11B$aSYSDSK1, CACHE$cmSYSDSK1) are the SAME shape as
+    # the 3 already carried: VAX1 sent its op-0x13 (frames 6468, 6475) and its
+    # last frame in the capture is 6483, before the new master's op-0x14s went
+    # out at 6504/6506 -- only to the op-0x13 sender still in the cluster. The
+    # trim did not cause them: the window keeps every 0x6007 frame from before
+    # the first op-0x0e to after the last op-0x08, and both episodes lie inside
+    # it whole. The load-bearing half (no op-0x14 without an op-0x13) still
+    # holds over all of them.
     floor('episodes with more than one op-0x13', rt['multi13'], 383)
     exact_all('multi-op-0x13 episodes whose op-0x14s ALL follow the LAST '
               'op-0x13 (rule W2)', rt['multi13_batched'], rt['multi13'])
@@ -508,7 +528,7 @@ def selftest(root):
               at['episodes'])
     exact_ratio('episodes with a late op-0x12 once the overlapping ones are '
                 'counted too (the grouping, not the protocol)',
-                rt['record_after_last_13'], rt['episodes'], 172, 812)
+                rt['record_after_last_13'], rt['episodes'], 254, 1104)   # +82/+271, rd vms-874f   # RA7's captures added 21 episodes, none with a late record
 
     # RULE 3: the op-0x14's body[20:40] is residue.
     c = classify_op14_residue(pairs)

@@ -799,6 +799,23 @@ struct vms_club {
 	uint16_t proposed_members;
 	uint8_t  proposed_valid;     /* 0 outside a transition */
 	/*
+	 * THE COORDINATOR'S QUORUM (rd vms-c350). proposed_from_open: the
+	 * proposed QUORUM above was READ from the coordinator's own Phase-1
+	 * open (its body[22:24], rd vms-f297), not preloaded from this CLUB.
+	 * At Phase 2 that value becomes quorum_coord, and while quorum_coord_
+	 * valid is set the p. 7-6 recompute keeps it as the effective QUORUM
+	 * rather than re-deriving (CEVOTES+2)/2 over this node's own table:
+	 * a quorum ADJUSTMENT (SHUTDOWN/REMOVE_NODE, SET CLUSTER/EXPECTED_
+	 * VOTES -- the class-0x04 transition) lowers the cluster's quorum
+	 * below what that formula gives, and every member then holds the
+	 * coordinator's figure (measured: VAX2 CLUSTER_QUORUM=1 after a
+	 * REMOVE_NODE whose open carried 1, against max{EV}=3). Cleared when a
+	 * transition commits a proposal this node made itself.
+	 */
+	uint8_t  proposed_from_open;
+	uint8_t  quorum_coord_valid;
+	uint16_t quorum_coord;
+	/*
 	 * THIS NODE'S OWN TRANSITION CLASS (rd vms-6ec): the class of the latest
 	 * transition it took part in, whether it SENT the open as coordinator or
 	 * RECEIVED it as a member (a FORM it was a founder of counts too). The

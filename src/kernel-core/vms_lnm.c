@@ -68,19 +68,61 @@ static struct vms_lnm_arena *lnm_arena;
  */
 static exec_lock_t lnm_write_lock;
 
+/*
+ * rd vms-c01: THE ARENA HOLDS THE NAMES THAT EXIST, NOT ITS CAPACITY. On VMS a
+ * logical name is a block of paged pool the size of that name; a fixed table of
+ * VMS_LNM_MAX_ENTRIES 2.3 KB entries is 1.2 MB, and backing all of it at module
+ * load wired 1.2 MB of a 16 MB VAX for the ~100 names a booted system has. So
+ * the arena's VA is reserved whole (its layout, and what userspace maps, do not
+ * change), but it is backed only as far as the entries in use: max_entries is
+ * the backed slot count, readers already stop there, and lnm_alloc_slot backs
+ * LNM_GROW_ENTRIES more when every backed slot is taken, up to
+ * VMS_LNM_MAX_ENTRIES. A backend whose arena is backed whole at allocation (the
+ * Linux vmalloc_user one) reports every request as already met.
+ */
+#define LNM_INITIAL_ENTRIES 64u
+#define LNM_GROW_ENTRIES    16u
+
+static size_t lnm_entries_end(uint32_t n)
+{
+    return __builtin_offsetof(struct vms_lnm_arena, entries) +
+           (size_t)n * sizeof(struct vms_lnm_entry);
+}
+
+/* The number of whole entries inside `backed` bytes of arena. */
+static uint32_t lnm_entries_within(size_t backed)
+{
+    size_t hdr = __builtin_offsetof(struct vms_lnm_arena, entries);
+    size_t n;
+
+    if (backed <= hdr)
+        return 0;
+    n = (backed - hdr) / sizeof(struct vms_lnm_entry);
+    return n > VMS_LNM_MAX_ENTRIES ? VMS_LNM_MAX_ENTRIES : (uint32_t)n;
+}
+
 int vms_lnm_init(void)
 {
+    uint32_t backed;
+
     lnm_arena = exec_arena_alloc(sizeof(*lnm_arena));
     if (!lnm_arena)
         return -ENOMEM;
+    backed = lnm_entries_within(exec_arena_grow(lnm_arena,
+                                    lnm_entries_end(LNM_INITIAL_ENTRIES)));
+    if (backed == 0) {
+        exec_arena_free(lnm_arena);
+        lnm_arena = NULL;
+        return -ENOMEM;
+    }
 
     exec_lock_init(&lnm_write_lock);
 
-    /* exec_arena_alloc() zeroes the allocation. Fill the header. */
+    /* The backed part of the arena is zeroed. Fill the header. */
     lnm_arena->magic       = VMS_LNM_ARENA_MAGIC;
     lnm_arena->version     = VMS_LNM_ARENA_VERSION;
     lnm_arena->arena_size  = (uint32_t)sizeof(*lnm_arena);
-    lnm_arena->max_entries = VMS_LNM_MAX_ENTRIES;
+    lnm_arena->max_entries = backed;
     lnm_arena->entry_count = 0;
     lnm_arena->generation  = 0;   /* even == no write in flight */
 
@@ -318,17 +360,30 @@ void vms_lnm_forget_device(const char *devnam)
     exec_unlock(&lnm_write_lock);
 }
 
-/* First free slot, or NULL when the arena is full. */
+/* First free slot, or NULL when the arena is full. Caller holds
+ * lnm_write_lock. Every backed slot taken: back LNM_GROW_ENTRIES more (rd
+ * vms-c01), and publish them only once their pages are there and zeroed. */
 static struct vms_lnm_entry *lnm_alloc_slot(void)
 {
-    uint32_t i;
+    uint32_t i, old, want, got;
 
     for (i = 0; i < lnm_arena->max_entries; i++) {
         if (!lnm_arena->entries[i].in_use)
             return &lnm_arena->entries[i];
     }
 
-    return NULL;
+    old = lnm_arena->max_entries;
+    if (old >= VMS_LNM_MAX_ENTRIES)
+        return NULL;
+    want = old + LNM_GROW_ENTRIES;
+    if (want > VMS_LNM_MAX_ENTRIES)
+        want = VMS_LNM_MAX_ENTRIES;
+    got = lnm_entries_within(exec_arena_grow(lnm_arena, lnm_entries_end(want)));
+    if (got <= old)
+        return NULL;                  /* no memory to back another slot */
+    exec_membar_producer();
+    lnm_arena->max_entries = got;
+    return &lnm_arena->entries[old];
 }
 
 /*

@@ -55,3 +55,19 @@ VAX1 VOTES 1 EXPECTED_VOTES 1 LOCKDIRWT 1; VAX2 VOTES 0 EXPECTED_VOTES 1 LOCKDIR
 CLUSTER_QUORUM 1. (NODE_CSID read without a node argument returned the same value on both and is not
 recorded.) OVMXE boots VOTES 1 (ovmx_fire_node.sh), EXPECTED_VOTES 1 (OVMX_FIRE_EXPVOTES=1), so quorum
 stays 1 and VAX2 + OVMXE (1 vote) stay quorate after VAX1's REMOVE_NODE departure.
+
+## Addendum 3 (16:1xZ, arms set, BEFORE the departure)
+- Arm A runs on resource WKL2, not WKLD. WKLD was invalidated during setup: a console ^Y on VAX1
+  ended VAX1's holders, WKLD remastered to OVMXE, OVMXE's holder was then stopped, and VAX2's
+  directory kept naming OVMXE. VAX1's next $ENQ was redirected to OVMXE, answered 0xf9, and VAX1
+  mastered it locally; OVMXE's later $ENQ got "you master it" from VAX2. Result: two EX holders,
+  one per master (SDA on VAX1: WKLD EX granted, empty queues, while OVMXE's RMHOLD held EX).
+  Filed separately; the pcap stays out of the repo.
+- SDA on VAX1 before departure: WKL2 CSID 0 (VAX1 masters), DIRENTR, granted 5300067C EX, waiting
+  1A00067F EX (OVMXE). EVAC$WORKLOAD CSID 0, DIRENTR, granted 360004FA EX, conversion 7C000679 NL->EX
+  (OVMXE's EVACWL STANDBY).
+- Departure: VAX1 is HALTED at the SIMH console (^E, left at sim>), not SHUTDOWN. SHUTDOWN stops
+  VAX1's user processes first, so VAX1 itself would grant OVMXE's waiter and converter before it
+  left, and the departure would carry no queued lock. The item's case is a master that leaves
+  holding its locks. Predictions P1a, P1b, P2, P4 are unchanged; the survivors' directory/master
+  is whichever node the rebuild picks (VAX2 or OVMXE). P3 is unchanged.

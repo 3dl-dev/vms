@@ -140,17 +140,41 @@ static uint32_t status_to_cond(const struct dnet_dap_msg *m)
     return SS$_ABORT;
 }
 
+/* What a client access learned from the remote's setup reply: the file's
+ * ATTRIBUTES (when sent) and, on a refusal, the remote STATUS. */
+struct client_reply {
+    int      have_attr;
+    uint8_t  rfm, fsz;
+    uint16_t stscode;
+    uint64_t stv;
+};
+
 /* Wait for the end of a setup/connect reply: skip ATTRIBUTES / extended
- * attributes / NAME, stop on ACK (0) or STATUS (*cond set, 1). */
-static int await_ack(struct dnet_dap_transport *t, uint32_t *cond)
+ * attributes / NAME, stop on ACK (0) or STATUS (*cond set, 1). `r` (may be
+ * NULL) receives the record format of an ATTRIBUTES and a STATUS's codes. */
+static int await_ack_r(struct dnet_dap_transport *t, uint32_t *cond, struct client_reply *r)
 {
     struct dnet_dap_msg m;
     for (;;) {
         if (fal_recv(t, &m) < 0) { *cond = SS$_ABORT; return 1; }
         switch (m.op) {
         case DNET_DAP_ACKNOWLEDGE: return 0;
-        case DNET_DAP_STATUS:      *cond = status_to_cond(&m); return 1;
-        case DNET_DAP_ATTRIBUTES: case DNET_DAP_NAME: case DNET_DAP_KEYDEF:
+        case DNET_DAP_STATUS:
+            if (r) {
+                r->stscode = m.u.status.stscode;
+                r->stv = m.u.status.have_stv ? m.u.status.stv : 0;
+            }
+            *cond = status_to_cond(&m);
+            return 1;
+        case DNET_DAP_ATTRIBUTES:
+            if (r) {
+                r->have_attr = 1;
+                r->rfm = (m.u.attr.menu & (1u << DNET_DAP_ATT_RFM)) ? m.u.attr.rfm
+                                                                    : DNET_DAP_RFM_FIX;
+                r->fsz = (m.u.attr.menu & (1u << DNET_DAP_ATT_FSZ)) ? m.u.attr.fsz : 2;
+            }
+            continue;
+        case DNET_DAP_NAME: case DNET_DAP_KEYDEF:
         case DNET_DAP_ALLOC: case DNET_DAP_SUMMARY: case DNET_DAP_DATETIME:
         case DNET_DAP_PROTECTION: case DNET_DAP_ACL:
             continue;
@@ -1116,8 +1140,9 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
 
 /* Setup an access: ATTRIBUTES + ACCESS, then the remote's reply up to ACK,
  * then CONTROL(CONNECT) -> ACK. Returns SS$_NORMAL or the remote condition. */
-static uint32_t client_setup(struct dnet_dap_transport *t, uint8_t accfunc,
-                             const char *remote_spec, uint64_t fac)
+static uint32_t client_setup_r(struct dnet_dap_transport *t, uint8_t accfunc,
+                               const char *remote_spec, uint64_t fac,
+                               struct client_reply *r)
 {
     struct dnet_dap_msg m;
     uint32_t cond = SS$_ABORT;
@@ -1133,14 +1158,20 @@ static uint32_t client_setup(struct dnet_dap_transport *t, uint8_t accfunc,
     m.u.access.have_shr = 1;     m.u.access.shr = (fac == DNET_DAP_FB_GET) ? DNET_DAP_FB_GET : 0;
     m.u.access.have_display = 1; m.u.access.display = DNET_DAP_DSP_MAIN;
     if (fal_send(t, &m) < 0) return SS$_ABORT;
-    if (await_ack(t, &cond)) return cond;
+    if (await_ack_r(t, &cond, r)) return cond;
 
     memset(&m, 0, sizeof m);
     m.op = DNET_DAP_CONTROL;
     m.u.control.ctlfunc = DNET_DAP_CTL_CONNECT;
     if (fal_send(t, &m) < 0) return SS$_ABORT;
-    if (await_ack(t, &cond)) return cond;
+    if (await_ack_r(t, &cond, r)) return cond;
     return SS$_NORMAL;
+}
+
+static uint32_t client_setup(struct dnet_dap_transport *t, uint8_t accfunc,
+                             const char *remote_spec, uint64_t fac)
+{
+    return client_setup_r(t, accfunc, remote_spec, fac, NULL);
 }
 
 static int send_control_xfer(struct dnet_dap_transport *t, uint8_t func)
@@ -1289,13 +1320,16 @@ uint32_t dnet_fal_client_rename(const char *old_spec, const char *new_spec,
     return client_fileop(t, DNET_DAP_ACC_RENAME, old_spec, new_spec, stscode, stv);
 }
 
-uint32_t dnet_fal_client_dirlist(const char *spec, struct dnet_dap_transport *t,
-                                 char *names, size_t cap,
-                                 uint16_t *stscode, uint64_t *stv)
+/* rd vms-6a4: the DIRECTORY LIST client, one callback per NAME received, in
+ * wire order (a VMS FAL sends volume, directory, then each file name). The
+ * remote's terminating STATUS (the FNF of a search that matched nothing, a
+ * refusal) comes back in *stscode / *stv. */
+uint32_t dnet_fal_client_dirlist_cb(const char *spec, struct dnet_dap_transport *t,
+                                    dnet_fal_name_cb cb, void *ctx,
+                                    uint16_t *stscode, uint64_t *stv)
 {
     if (stscode) *stscode = 0;
     if (stv) *stv = 0;
-    if (names && cap) names[0] = '\0';
     if (!t || !t->send || !t->recv || !spec || strlen(spec) > DNET_DAP_MAX_SPEC)
         return SS$_BADPARAM;
     t->rxlen = t->rxoff = 0;
@@ -1309,11 +1343,11 @@ uint32_t dnet_fal_client_dirlist(const char *spec, struct dnet_dap_transport *t,
     for (;;) {
         if (fal_recv(t, &m) < 0) return SS$_ABORT;
         if (m.op == DNET_DAP_NAME) {
-            if (names && cap) {
-                size_t l = strlen(names);
-                snprintf(names + l, cap - l, "%u:%s|", (unsigned)m.u.name.nametype,
-                         m.u.name.namespec);
-            }
+            /* The decoder bounds namespec to DNET_DAP_MAX_SPEC; terminate it
+             * here too so a callback can never read past it. */
+            m.u.name.namespec[DNET_DAP_MAX_SPEC] = '\0';
+            if (cb && cb(ctx, (unsigned)m.u.name.nametype, m.u.name.namespec) < 0)
+                return SS$_ABORT;
             continue;
         }
         if (m.op == DNET_DAP_ACKNOWLEDGE || m.op == DNET_DAP_ATTRIBUTES) continue;
@@ -1325,4 +1359,87 @@ uint32_t dnet_fal_client_dirlist(const char *spec, struct dnet_dap_transport *t,
         }
         return SS$_ABORT;
     }
+}
+
+struct names_acc { char *names; size_t cap; };
+static int names_append(void *ctx, unsigned nametype, const char *spec)
+{
+    struct names_acc *a = ctx;
+    if (a->names && a->cap) {
+        size_t l = strlen(a->names);
+        snprintf(a->names + l, a->cap - l, "%u:%s|", nametype, spec);
+    }
+    return 0;
+}
+
+uint32_t dnet_fal_client_dirlist(const char *spec, struct dnet_dap_transport *t,
+                                 char *names, size_t cap,
+                                 uint16_t *stscode, uint64_t *stv)
+{
+    if (names && cap) names[0] = '\0';
+    struct names_acc a = { names, cap };
+    return dnet_fal_client_dirlist_cb(spec, t, names_append, &a, stscode, stv);
+}
+
+/* rd vms-6a4: `$ TYPE node::file` -- OPEN + GET of one remote file, each
+ * record handed to the sink instead of a local file. The access ends as a VMS
+ * client ends it: ACCESS COMPLETE(END OF STREAM), then (CLOSE), each answered
+ * by a RESPONSE (vax-to-vax-sys-login capture, TYPE link). The record format
+ * the remote's ATTRIBUTES gave reaches sink->begin before the first record. */
+uint32_t dnet_fal_client_get_cb(const char *remote_spec, struct dnet_dap_transport *t,
+                                const struct dnet_fal_get_sink *sink,
+                                uint16_t *stscode, uint64_t *stv)
+{
+    if (stscode) *stscode = 0;
+    if (stv) *stv = 0;
+    if (!t || !t->send || !t->recv || !remote_spec || !sink) return SS$_ABORT;
+    if (strlen(remote_spec) > DNET_DAP_MAX_SPEC) return SS$_BADPARAM;
+    t->rxlen = t->rxoff = 0;
+
+    if (config_exchange_client(t) < 0) return SS$_ABORT;
+    struct client_reply r;
+    memset(&r, 0, sizeof r);
+    uint32_t st = client_setup_r(t, DNET_DAP_ACC_OPEN, remote_spec, DNET_DAP_FB_GET, &r);
+    if (st != SS$_NORMAL) {
+        if (stscode) *stscode = r.stscode;
+        if (stv) *stv = r.stv;
+        return st;
+    }
+    if (sink->begin && sink->begin(sink->ctx, r.have_attr ? r.rfm : DNET_DAP_RFM_VAR,
+                                   r.have_attr ? r.fsz : 0) < 0)
+        return SS$_ABORT;
+    if (send_control_xfer(t, DNET_DAP_CTL_GET) < 0) return SS$_ABORT;
+
+    struct dnet_dap_msg m;
+    for (;;) {
+        if (fal_recv(t, &m) < 0) return SS$_ABORT;
+        if (m.op == DNET_DAP_DATA) {
+            size_t n = m.u.data.reclen <= sizeof m.u.data.rec ? m.u.data.reclen
+                                                               : sizeof m.u.data.rec;
+            if (sink->record && sink->record(sink->ctx, m.u.data.rec, n) < 0)
+                return SS$_ABORT;
+            continue;
+        }
+        if (m.op == DNET_DAP_STATUS) {
+            uint16_t sts = m.u.status.stscode;
+            if (DNET_DAP_MAC(sts) == DNET_DAP_MAC_XFER && DNET_DAP_MIC(sts) == DNET_DAP_MIC_EOF)
+                break;
+            if (stscode) *stscode = sts;
+            if (stv && m.u.status.have_stv) *stv = m.u.status.stv;
+            st = status_to_cond(&m);
+            (void)client_close(t);
+            return st;
+        }
+        return SS$_ABORT;
+    }
+    if (send_complete(t, DNET_DAP_CMP_EOS) < 0) return SS$_ABORT;
+    if (fal_recv(t, &m) < 0) return SS$_ABORT;
+    if (m.op == DNET_DAP_STATUS) {
+        if (stscode) *stscode = m.u.status.stscode;
+        if (stv && m.u.status.have_stv) *stv = m.u.status.stv;
+        return status_to_cond(&m);
+    }
+    if (m.op != DNET_DAP_ACCESS_COMPLETE || m.u.complete.cmpfunc != DNET_DAP_CMP_RESPONSE)
+        return SS$_ABORT;
+    return client_close(t);
 }

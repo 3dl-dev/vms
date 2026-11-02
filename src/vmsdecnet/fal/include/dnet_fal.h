@@ -261,6 +261,39 @@ uint32_t dnet_fal_client_dirlist(const char *spec, struct dnet_dap_transport *t,
                                  char *names, size_t cap,
                                  uint16_t *stscode, uint64_t *stv);
 
+/*
+ * rd vms-6a4: the DIRECTORY / TYPE node:: clients.
+ *
+ * dnet_fal_client_dirlist_cb - as dnet_fal_client_dirlist, but each NAME is
+ * handed to `cb(ctx, nametype, spec)` in wire order (a VMS FAL sends the
+ * volume NAME, the directory NAME, then a file-name NAME per file). `spec` is
+ * NUL-terminated and at most DNET_DAP_MAX_SPEC bytes; a callback returning < 0
+ * ends the listing (SS$_ABORT). The remote's terminating STATUS (FNF for a
+ * search that matched nothing, or a refusal) is returned in *stscode / *stv.
+ */
+typedef int (*dnet_fal_name_cb)(void *ctx, unsigned nametype, const char *spec);
+uint32_t dnet_fal_client_dirlist_cb(const char *spec, struct dnet_dap_transport *t,
+                                    dnet_fal_name_cb cb, void *ctx,
+                                    uint16_t *stscode, uint64_t *stv);
+
+/*
+ * dnet_fal_client_get_cb - OPEN + GET of one remote file whose records go to
+ * a sink rather than a local file (`$ TYPE node::file`). begin(ctx, rfm, fsz)
+ * runs once the remote has accepted the open, with the record format and VFC
+ * fixed-control size from its ATTRIBUTES; record(ctx, rec, len) runs per DATA
+ * record, verbatim (a VFC record still carries its fsz control bytes). Either
+ * returning < 0 aborts. SS$_NORMAL at end of file and a clean close; otherwise
+ * the condition, with a remote STATUS's STSCODE / STV in *stscode / *stv.
+ */
+struct dnet_fal_get_sink {
+    int  (*begin)(void *ctx, uint8_t rfm, uint8_t fsz);
+    int  (*record)(void *ctx, const uint8_t *rec, size_t len);
+    void  *ctx;
+};
+uint32_t dnet_fal_client_get_cb(const char *remote_spec, struct dnet_dap_transport *t,
+                                const struct dnet_fal_get_sink *sink,
+                                uint16_t *stscode, uint64_t *stv);
+
 #ifdef __cplusplus
 }
 #endif

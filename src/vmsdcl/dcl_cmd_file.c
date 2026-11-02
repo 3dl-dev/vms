@@ -1180,6 +1180,9 @@ static int dir_deellipsize(const char *spec, char *out, size_t out_sz)
 }
 
 static int cmd_directory_list(struct dcl_command *cmd);
+static int copy_spec_has_node(const char *s);
+static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *cmd,
+                                  const char *mode, const char *fac);
 
 int cmd_directory(struct dcl_command *cmd)
 {
@@ -1202,6 +1205,10 @@ int cmd_directory(struct dcl_command *cmd)
 static int cmd_directory_list(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+
+    /* DIRECTORY node::spec lists a remote directory through its FAL. */
+    if (cmd->param_count >= 1 && copy_spec_has_node(cmd->params[0]))
+        return dnet_fal_verb_activate(ctx, cmd, "--directory", "DIRECT");
 
     /* vms-481: DIRECTORY lists through the Files-11 ODS-2 ACP (sys$parse +
      * sys$search wildcard directory context + rms_file_attr), emitting the
@@ -1584,6 +1591,10 @@ int cmd_type(struct dcl_command *cmd)
         dcl_error("DCL", 2, "NOFILE", "missing file specification");
         return SS$_BADPARAM;
     }
+
+    /* TYPE node::spec reads the remote file(s) through the remote FAL. */
+    if (copy_spec_has_node(cmd->params[0]))
+        return dnet_fal_verb_activate(ctx, cmd, "--type", "TYPE");
 
     /* vms-481: TYPE reads the file through RMS ($OPEN + sequential $GET), which
      * on the product runtime reaches the Files-11 ODS-2 ACP over /dev/vms -- not
@@ -2214,6 +2225,73 @@ static int copy_dnet_activate(struct dcl_context *ctx, const char *src, const ch
     if (pfd[0] >= 0) close(pfd[0]);
     memset(src_pw, 0, sizeof src_pw);   /* wipe the password copies */
     memset(dst_pw, 0, sizeof dst_pw);
+    return rc;
+}
+
+/*
+ * dnet_fal_verb_activate (rd vms-6a4) - `$ DIRECTORY node::spec` and
+ * `$ TYPE node::spec`. As for COPY, DCL activates SYS$SYSTEM:DECNETD.EXE on
+ * this process (--directory / --type), which lists or reads the remote file
+ * through the remote FAL (object 17) over NETACP's _NET: links and prints what
+ * VMS prints. The password is stripped from the spec and handed over an
+ * inherited pipe fd, never argv. `fac` is the command's message facility.
+ */
+static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *cmd,
+                                  const char *mode, const char *fac)
+{
+    /* Only the plain form goes over the network; a qualifier is refused
+     * honestly rather than silently dropped. */
+    if (cmd->qualifier_count > 0) {
+        printf("%%SYSTEM-F-UNSUPPORTED, unsupported operation or function\n");
+        return SS$_UNSUPPORTED;
+    }
+    const char *img_spec = "SYS$SYSTEM:DECNETD.EXE";
+    char linux_path[1024], resolved[1024];
+    dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
+    if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
+                                 resolved, sizeof(resolved))) {
+        printf("%%%s-I-NETNOTAVAIL, DECnet file access (FAL/DAP object 17) is not"
+               " available on this system (SYS$SYSTEM:DECNETD.EXE is not staged)\n", fac);
+        return SS$_ABORT;
+    }
+    strncpy(linux_path, resolved, sizeof(linux_path) - 1);
+    linux_path[sizeof(linux_path) - 1] = '\0';
+
+    char clean[1024], pw[128];
+    copy_dnet_split_access(cmd->params[0], clean, sizeof(clean), pw, sizeof(pw));
+
+    int pfd[2] = { -1, -1 };
+    char fdbuf[16] = "";
+    if (pw[0]) {
+        if (pipe(pfd) != 0) {
+            memset(pw, 0, sizeof pw);
+            printf("%%%s-F-NETPIPE, could not set up the DECnet password channel\n", fac);
+            return SS$_ABORT;
+        }
+        size_t pl = strlen(pw);
+        if (write(pfd[1], pw, pl) != (ssize_t)pl) {
+            close(pfd[0]); close(pfd[1]);
+            memset(pw, 0, sizeof pw);
+            printf("%%%s-F-NETPIPE, could not pass the DECnet password\n", fac);
+            return SS$_ABORT;
+        }
+        close(pfd[1]);
+        snprintf(fdbuf, sizeof(fdbuf), "%d", pfd[0]);
+    }
+    memset(pw, 0, sizeof pw);
+
+    char *argv[8];
+    int argc = 0;
+    argv[argc++] = linux_path;
+    argv[argc++] = (char *)mode;
+    argv[argc++] = clean;
+    if (fdbuf[0]) {
+        argv[argc++] = "--password-fd";
+        argv[argc++] = fdbuf;
+    }
+    argv[argc] = NULL;
+    int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
+    if (pfd[0] >= 0) close(pfd[0]);
     return rc;
 }
 

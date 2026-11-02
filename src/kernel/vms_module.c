@@ -1580,6 +1580,7 @@ uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint3
     proc->pid_ref = cpid;               /* the reference find_get_pid took */
     proc->current_mode = PSL_C_USER;
     proc->owner_vms_pid = creator->vms_pid;
+    proc->owner_linux_pid = (uint32_t)creator->linux_pid;
     vms_proc_init_state(proc);
     /* BG channels (rd vms-2a5): an image task (CONTINUE) and a subprocess
      * take the creator's open BGn: channels, by number, host sockets

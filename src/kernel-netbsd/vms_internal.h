@@ -665,6 +665,7 @@ struct vms_termination {
 	uint8_t  has_status, compl_armed, compl_acmode, pad;
 	uint32_t compl_parent_pid, compl_efn;
 	uint64_t compl_astadr, compl_astprm;
+	uint32_t owner_linux_pid, compl_parent_linux_pid; /* rd vms-e70f */
 };
 
 struct vms_termrec {
@@ -823,6 +824,7 @@ struct vms_proc {
 	uint8_t             compl_armed;
 	uint8_t             compl_acmode;
 	uint32_t            compl_parent_pid;
+	uint32_t            compl_parent_linux_pid; /* rd vms-e70f */
 	uint32_t            compl_efn;
 	uint64_t            compl_astadr;
 	uint64_t            compl_astprm;
@@ -831,6 +833,7 @@ struct vms_proc {
 	 * records of this process's ended subprocesses. Same field set and
 	 * meaning as src/kernel/vms_internal.h. Guarded by vms_proc_hash_lock. */
 	uint32_t            owner_vms_pid;
+	uint32_t            owner_linux_pid;  /* the creating task (rd vms-e70f) */
 	struct vms_termrec  termrec[VMS_TERMREC_MAX];
 	uint32_t            termrec_next;
 

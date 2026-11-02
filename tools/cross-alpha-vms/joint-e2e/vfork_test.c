@@ -72,7 +72,11 @@ int main(int argc, char **argv)
             line[n++] = "0123456789ABCDEF"[(me >> sh) & 15];
         write(1, line, n);
         char go = 0;
-        read(0, &go, 1);                /* held until the parent has looked */
+        int gr = read(0, &go, 1);       /* held until the parent has looked */
+        char d[40] = "OVMX vfork child: go=? r=? exiting\n";
+        d[21] = go ? go : '0';
+        d[25] = (char)('0' + (gr & 7));
+        write(2, d, 35);
         exit(ok ? CHILD_STATUS : 3);
     }
 

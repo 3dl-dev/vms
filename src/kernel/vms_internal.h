@@ -768,6 +768,7 @@ struct vms_termination {
     uint8_t  has_status, compl_armed, compl_acmode, pad;
     uint32_t compl_parent_pid, compl_efn;
     uint64_t compl_astadr, compl_astprm;
+    uint32_t owner_linux_pid, compl_parent_linux_pid; /* the creating / arming TASK (rd vms-e70f) */
 };
 
 struct vms_termrec {
@@ -1086,6 +1087,7 @@ struct vms_proc {
     uint8_t             compl_armed;      /* 1 = a parent awaits this proc's exit */
     uint8_t             compl_acmode;     /* access mode to queue the AST at */
     uint32_t            compl_parent_pid; /* VMS PID to notify on exit */
+    uint32_t            compl_parent_linux_pid; /* ... and the task that armed it (rd vms-e70f) */
     uint32_t            compl_efn;        /* parent EF to set, or VMS_EF_NONE */
     uint64_t            compl_astadr;     /* parent completion AST routine (0=none) */
     uint64_t            compl_astprm;     /* parameter for the completion AST */
@@ -1101,6 +1103,10 @@ struct vms_proc {
      * SS$_NONEXPR). Guarded by vms_proc_hash_lock.
      */
     uint32_t            owner_vms_pid;
+    /* The creating TASK (rd vms-e70f): an image task (CONTINUE) shares its
+     * creator's VMS PID, so the PID alone does not say which row created this
+     * process; the termination record goes to the task that did. */
+    uint32_t            owner_linux_pid;
     struct vms_termrec  termrec[VMS_TERMREC_MAX];
     uint32_t            termrec_next;
 

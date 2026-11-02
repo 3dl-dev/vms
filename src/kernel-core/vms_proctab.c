@@ -425,6 +425,27 @@ static struct vms_proc *find_by_vms_pid(uint32_t vms_pid)
 }
 
 /*
+ * find_task_row - the row of process `vms_pid` that is the task `tgid` (rd
+ * vms-e70f). An image task (CONTINUE, DCL's RUN) shares its creator's VMS PID,
+ * so a VMS PID can name two rows; the one that created a subprocess, or armed
+ * its completion, is the one its termination record and completion belong to
+ * -- the row that will $WAITFR and GETEXIT. Falls back to the PID alone.
+ */
+static struct vms_proc *find_task_row(uint32_t vms_pid, uint32_t tgid)
+{
+    struct vms_proc *proc;
+    int bkt;
+
+    if (tgid) {
+        exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
+            if (proc->vms_pid == vms_pid && (uint32_t)proc->linux_pid == tgid)
+                return proc;
+        }
+    }
+    return find_by_vms_pid(vms_pid);
+}
+
+/*
  * vms_proc_access_identity - the UIC and ENABLED privileges the executive holds
  * for the process `vms_pid`, for an access decision made on its behalf (rd
  * vms-046: NETACP asking whether a requester could use the reply mailbox it
@@ -1302,7 +1323,7 @@ void vms_proc_deliver_abnormal_completion(struct vms_proc *child)
     if (!child->compl_armed)
         return;
 
-    parent   = find_by_vms_pid(child->compl_parent_pid);
+    parent   = find_task_row(child->compl_parent_pid, child->compl_parent_linux_pid);
     c_efn    = child->compl_efn;
     c_astadr = child->compl_astadr;
     c_astprm = child->compl_astprm;
@@ -1348,6 +1369,8 @@ void vms_proc_termination_capture(const struct vms_proc *victim,
     t->compl_armed      = victim->compl_armed;
     t->compl_acmode     = victim->compl_acmode;
     t->compl_parent_pid = victim->compl_parent_pid;
+    t->compl_parent_linux_pid = victim->compl_parent_linux_pid;
+    t->owner_linux_pid  = victim->owner_linux_pid;
     t->compl_efn        = victim->compl_efn;
     t->compl_astadr     = victim->compl_astadr;
     t->compl_astprm     = victim->compl_astprm;
@@ -1355,7 +1378,7 @@ void vms_proc_termination_capture(const struct vms_proc *victim,
 
 void vms_proc_termination_post_locked(const struct vms_termination *t)
 {
-    struct vms_proc *owner = t->owner_vms_pid ? find_by_vms_pid(t->owner_vms_pid) : NULL;
+    struct vms_proc *owner = t->owner_vms_pid ? find_task_row(t->owner_vms_pid, t->owner_linux_pid) : NULL;
 
     if (owner) {
         struct vms_termrec *r = &owner->termrec[owner->termrec_next % VMS_TERMREC_MAX];
@@ -1366,7 +1389,7 @@ void vms_proc_termination_post_locked(const struct vms_termination *t)
         r->has_status = t->has_status;
     }
     if (t->compl_armed) {
-        struct vms_proc *parent = find_by_vms_pid(t->compl_parent_pid);
+        struct vms_proc *parent = find_task_row(t->compl_parent_pid, t->compl_parent_linux_pid);
         if (parent)
             spawn_notify_deliver(parent, t->compl_efn, t->compl_astadr,
                                  t->compl_astprm, t->compl_acmode);
@@ -1464,6 +1487,7 @@ long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg)
         child->compl_armed      = 1;
         child->compl_acmode     = acmode;
         child->compl_parent_pid = proc->vms_pid;
+        child->compl_parent_linux_pid = (uint32_t)proc->linux_pid;
         child->compl_efn        = args.efn;
         child->compl_astadr     = args.astadr;
         child->compl_astprm     = args.astprm;
@@ -1526,7 +1550,7 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg)
      * nothing to notify -- no fabrication, no hang.
      */
     if (proc->compl_armed) {
-        struct vms_proc *parent = find_by_vms_pid(proc->compl_parent_pid);
+        struct vms_proc *parent = find_task_row(proc->compl_parent_pid, proc->compl_parent_linux_pid);
         uint32_t c_efn    = proc->compl_efn;
         uint64_t c_astadr = proc->compl_astadr;
         uint64_t c_astprm = proc->compl_astprm;

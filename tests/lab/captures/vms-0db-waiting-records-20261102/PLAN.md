@@ -220,3 +220,21 @@ SDA on VAX3 before the activity starts. V and U are still queued on W0.
   PA2-PA8 are scored on this firing as registered (VAX3's records: CH 3, CG 2, CV 2, CU 2, CC2 1,
   CQ2 1 = 11). If it does not, a fourth firing stops CC2 and CQ2 and starts four more
   delayed-activity processes with CO2 still alive: a move then is HN for the root's queues.
+
+## Addendum 4, registered after arm A's fourth firing and before a fifth
+
+**Third firing (CO2 alive, CC2/CQ2 queued on the root, two activity processes CP1/CP2; CP3/CP4
+failed to spawn on SYSTEM's subprocess quota): no move by 13:38:28Z.** **Fourth firing (CC2/CQ2
+stopped at 13:38:51Z, CN/CM stopped for quota, four processes CR1-CR4): WQRC moved VAX1 -> VAX2**
+(SDA on VAX3 at 13:44:36Z: CSID 00010002). The fourth firing's records are scored as registered
+in the README. Its root carried no waiter, so the root half of PA2/PA3/PA7 is scored on arm B.
+
+The third/fourth pair does not separate HN from the trigger: it changed the root's queues AND
+the activity (two processes vs four). A fifth firing removes that confound:
+
+- Tree `WQRE`, own capture `0db-armA5`. VAX1 `RMH 110WWQRE` (EO1, alive throughout). VAX3
+  `RMH 112-WQRE` (EH). VAX2 four `RMW 31AWQRE` (E1-E4), then VAX3 `RMW 51CWQRE` (EC) and
+  `RMW 50QWQRE` (EQ), both blocked by EH's CR and E1-E4's PR. Nothing is stopped.
+- **PA1e (HN):** with the old master's holder alive, four activity processes, and the root's
+  conversion and waiting queues non-empty, WQRE does NOT move within 10 minutes of the activity
+  starting. A move falsifies HN, and VAX3's EC and EQ records then score PA2/PA3 for the root.

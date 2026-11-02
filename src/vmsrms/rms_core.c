@@ -762,53 +762,47 @@ static uint32_t rms_fileshare_mode(uint8_t fac, uint8_t shr)
     return shr_write ? LCK_K_CWMODE : LCK_K_PWMODE;
 }
 
-/* rms_file_lock_resnam - the FID-named file-access resource: two opens of the
- * SAME file (same FID) contend on the SAME resource; different files never
- * do. "RMS$" + hex(fid_num|(fid_nmx<<16)) + "." + hex(fid_seq) + "." +
- * hex(fid_rvn), well under the 32-byte (incl. NUL) DLM resnam width. */
-static void rms_file_lock_resnam(const rms_file_t *h, char out[32])
-{
-    unsigned fidhi = (unsigned)h->fid_num | ((unsigned)h->fid_nmx << 16);
-    snprintf(out, 32, "RMS$%X.%X.%X", fidhi,
-             (unsigned)h->fid_seq, (unsigned)h->fid_rvn);
-}
-
 /*
- * rms_file_lock_acquire - the sys$open/sys$create seam: take the file-access
- * $ENQ named by the handle's FID, mode from rms_fileshare_mode(), NOQUEUE (a
- * conflict returns SS$_NOTQUEUED immediately rather than blocking). On grant,
- * stashes the lock ID on the handle (h->access_lkid) for rms_impl_close to
- * $DEQ. Returns the raw executive status: SS$_NORMAL on grant, SS$_NOTQUEUED
- * on a real DLM conflict, or the honest SS$_ error vms_kif_enq returned if
- * /dev/vms went away mid-open (never a silent local allow -- INV-6).
+ * rms_file_lock_acquire - the sys$open/sys$create seam: the file-access lock,
+ * mode from rms_fileshare_mode(), NOQUEUE (a conflict returns SS$_NOTQUEUED
+ * immediately rather than blocking).
+ *
+ * THE EXECUTIVE TAKES IT (rd vms-326 piece 2b). On VMS RMS runs at executive
+ * mode and names this lock 'RMS$' + the 6 FID bytes + 0x02 + the 12-byte volume
+ * label + three NULs, at access mode 1 in group 0 -- the identity every real
+ * node in a cluster uses, so two nodes opening one file contend and two files
+ * with one FID on two volumes do not. This library runs at mode 3 and cannot
+ * state that identity, so it hands the executive the CHANNEL its file is
+ * accessed on and its sharing decision; the executive builds the name from the
+ * accessed FID and the mounted volume's label and holds the lock on the
+ * channel (VMS_IOCTL_ACP_FLOCK). The lock ID comes back so the record locks
+ * (rms_record.c) can be taken UNDER it, as on VMS.
+ *
+ * Returns the raw executive status: SS$_NORMAL on grant, SS$_NOTQUEUED on a
+ * real DLM conflict, or the honest SS$_ error (never a silent local allow --
+ * INV-6).
  */
 static uint32_t rms_file_lock_acquire(rms_file_t *h, uint8_t fac, uint8_t shr)
 {
-    char resnam[32];
-    uint32_t mode = rms_fileshare_mode(fac, shr);
     uint32_t lkid = 0, st;
 
-    rms_file_lock_resnam(h, resnam);
-    /* resnam_len 0: a NUL-terminated text name, measured by the executive.
-     * The byte-exact VMS form -- 'RMS$' + the 6 FID bytes + 0x02 + the
-     * 12-byte volume label + three NULs, which NEEDS the count -- is rd
-     * vms-326's second half. */
-    st = vms_kif_enq(0, mode, LCK_M_NOQUEUE, resnam, 0, 0, 0, 0, 0, &lkid,
-                     NULL);
+    st = vms_kif_acp_flock(h->chan, VMS_ACP_FLOCK_OP_TAKE,
+                           rms_fileshare_mode(fac, shr), &lkid);
     if ($VMS_STATUS_SUCCESS(st))
         h->access_lkid = lkid;
     return st;
 }
 
-/* rms_file_lock_release - the sys$close seam: $DEQ the file-access lock this
- * handle holds (if any) and clear it. A handle that never acquired one (ACP
- * absent, or an internal rms_open_named_handle binary open) is a no-op. */
+/* rms_file_lock_release - the sys$close seam: the executive releases the
+ * file-access lock this handle's channel holds (if any), the record locks taken
+ * under it with it. A handle that never acquired one (ACP absent, or an
+ * internal rms_open_named_handle binary open) is a no-op. IO$_DEACCESS would
+ * release it anyway; doing it FIRST lets an accessor turned away RMS$_SHR in
+ * the meantime have the file as soon as this close begins. */
 static void rms_file_lock_release(rms_file_t *h)
 {
     if (h && h->access_lkid) {
-        /* LCK$M_DEQALL: the record locks held UNDER the file-access lock go
-         * with it -- a lock with sublocks is otherwise SS$_SUBLOCKS. */
-        vms_kif_deq(h->access_lkid, NULL, LCK_M_DEQALL);
+        (void)vms_kif_acp_flock(h->chan, VMS_ACP_FLOCK_OP_RELEASE, 0, NULL);
         h->access_lkid = 0;
     }
 }

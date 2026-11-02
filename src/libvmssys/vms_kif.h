@@ -278,6 +278,14 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
                           uint32_t *requested_mode, char *resnam,
                           uint8_t *valblk);
 
+/* vms_kif_getlki_resnam -- the resource name as a COUNTED string (all 32
+ * bytes + the resource's own length), for names with NULs in them (rd
+ * vms-326).
+ * OVMX-UNWIRED: vms_kif_getlki_resnam (vms-326) -- only the QEMU syssvc suite
+ * reads it; sys$getlki's LKI$_RESNAM still copies the name as a C string. */
+uint32_t vms_kif_getlki_resnam(uint32_t lkid, uint8_t resnam[32],
+                               uint32_t *resnam_len);
+
 /* vms_kif_getlki_parent -- vms_kif_getlki plus the lock's PARENT lkid (0 for
  * a root lock) and the resource's GRANTCOUNT (vms-b71), the #GETLKI fields
  * the kernel already fills but the original wrapper never surfaced. Same
@@ -1443,6 +1451,12 @@ uint32_t vms_kif_acp_assign(const char *devnam, uint32_t *exec_chan);
  * by tests/qemu/test_syssvc_acp_access.c and test_syssvc_rms_acp.c. */
 uint32_t vms_kif_acp_access(struct vms_acp_access_args *args);
 uint32_t vms_kif_acp_deaccess(uint32_t chan);
+/* The RMS file-access lock on the file accessed on `chan`, taken (op
+ * VMS_ACP_FLOCK_OP_TAKE, LCK$K_* `lkmode`, always NOQUEUE) or released
+ * (VMS_ACP_FLOCK_OP_RELEASE) by the EXECUTIVE, under the name and identity a
+ * real VAX uses (rd vms-326 piece 2b). *lkid receives the lock's ID (TAKE). */
+uint32_t vms_kif_acp_flock(uint32_t chan, uint32_t op, uint32_t lkmode,
+                           uint32_t *lkid);
 /*
  * Virtual-block transfer on an accessed file channel ({vbn,offset,length}
  * through the window); a write past EOF implicitly extends (BITMAP.SYS

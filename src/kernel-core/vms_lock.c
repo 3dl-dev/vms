@@ -6893,6 +6893,26 @@ uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
     return a.status;
 }
 
+/*
+ * vms_lock_rms_file_release - release the RMS file-access lock taken by
+ * vms_lock_rms_file_enq (rd vms-326 piece 2b), with LCK$M_DEQALL: RMS's record
+ * locks are taken UNDER the file-access lock, and a lock with sublocks is
+ * otherwise refused SS$_SUBLOCKS and stays -- closing a file releases its
+ * record locks with it, as RMS's close does on VMS. A zero lkid is a no-op.
+ */
+uint32_t vms_lock_rms_file_release(struct vms_proc *proc, uint32_t lkid)
+{
+    struct vms_deq_args d;
+
+    if (lkid == 0)
+        return SS__NORMAL;
+    memset(&d, 0, sizeof(d));
+    d.lkid = lkid;
+    d.flags = LCK_M_DEQALL;
+    vms_deq_core(proc, &d);
+    return d.status;
+}
+
 /* Release the volume lock taken by vms_lock_acp_vol_ex -- and the file-access
  * lock taken by vms_lock_rms_file_enq, which is the same act: a $DEQ of a lock
  * this executive holds for the caller. A zero lkid (the lock

@@ -162,6 +162,33 @@ struct vms_acp_deaccess_args {
 	uint32_t status;           /* out: SS$_ */
 };
 
+/*
+ * THE RMS FILE-ACCESS LOCK on the file accessed on a channel (rd vms-326 piece
+ * 2b). On VMS RMS runs at executive mode and, once the XQP has accessed a file,
+ * $ENQs the file-access lock 'RMS$' + FID + 0x02 + volume label at access mode
+ * 1, group 0. OVMX's RMS is a mode-3 library, so it cannot state that identity
+ * -- the executive takes the lock FOR it (vms_lock_rms_file_enq): userspace
+ * names only the CHANNEL (whose accessed file and mounted volume the executive
+ * already holds) and RMS's own sharing decision (the LCK$K_* mode); the request
+ * is always LCK$M_NOQUEUE, as RMS's is.
+ * The lock is held ON THE CHANNEL: OP_RELEASE, IO$_DEACCESS and $DASSGN all
+ * release it, with LCK$M_DEQALL so the record locks RMS took under it go too.
+ * `lkid` (out) is the lock's ID, which RMS names as the PARENT of its record
+ * locks. SS$_FILNOTACC: no file is accessed on the channel; SS$_BADPARAM: a
+ * lock is already held there, or the volume has no label to name it with;
+ * SS$_NOTQUEUED: another accessor holds the file (RMS$_SHR / RMS$_FLK).
+ */
+#define VMS_ACP_FLOCK_OP_TAKE    1u
+#define VMS_ACP_FLOCK_OP_RELEASE 2u
+struct vms_acp_flock_args {
+	uint32_t chan;             /* in: file-class channel with an accessed file */
+	uint32_t op;               /* in: VMS_ACP_FLOCK_OP_* */
+	uint32_t lkmode;           /* in (TAKE): LCK$K_* mode RMS decided */
+	uint32_t flags;            /* in: reserved -- the lock is always LCK$M_NOQUEUE */
+	uint32_t lkid;             /* out (TAKE): the lock's ID */
+	uint32_t status;           /* out: SS$_ */
+};
+
 struct vms_acp_rw_args {
 	uint32_t chan;        /* in: file-class channel with an accessed file */
 	uint32_t vbn;         /* in: starting virtual block number (1-based) */
@@ -333,6 +360,7 @@ struct vms_termlogin_args {
 #define VMS_IOCTL_ACP_ASSIGN    _IOWR(VMS_ACP_IOC_MAGIC, 0x6A, struct vms_acp_assign_args)
 #define VMS_IOCTL_ACP_ACCESS    _IOWR(VMS_ACP_IOC_MAGIC, 0x6B, struct vms_acp_access_args)
 #define VMS_IOCTL_ACP_DEACCESS  _IOWR(VMS_ACP_IOC_MAGIC, 0x6C, struct vms_acp_deaccess_args)
+#define VMS_IOCTL_ACP_FLOCK     _IOWR(VMS_ACP_IOC_MAGIC, 0x7D, struct vms_acp_flock_args)
 #define VMS_IOCTL_ACP_READVBLK  _IOWR(VMS_ACP_IOC_MAGIC, 0x6D, struct vms_acp_rw_args)
 #define VMS_IOCTL_ACP_WRITEVBLK _IOWR(VMS_ACP_IOC_MAGIC, 0x6E, struct vms_acp_rw_args)
 #define VMS_IOCTL_ACP_ACPCONTROL _IOWR(VMS_ACP_IOC_MAGIC, 0x6F, struct vms_acp_acpcontrol_args)
@@ -426,6 +454,8 @@ _Static_assert(sizeof(struct vms_acp_access_args) == 400,
                "vms_acp_access_args changed size -- VMS_IOCTL_ACP_ACCESS ABI break");
 _Static_assert(sizeof(struct vms_acp_deaccess_args) == 8,
                "vms_acp_deaccess_args changed size -- VMS_IOCTL_ACP_DEACCESS ABI break");
+_Static_assert(sizeof(struct vms_acp_flock_args) == 24,
+               "vms_acp_flock_args changed size -- VMS_IOCTL_ACP_FLOCK ABI break");
 _Static_assert(sizeof(struct vms_acp_rw_args) == 48,
                "vms_acp_rw_args changed size -- ACP READVBLK/WRITEVBLK ABI break");
 _Static_assert(sizeof(struct vms_acp_acpcontrol_args) == 556,

@@ -205,6 +205,10 @@ struct vms_acp_chan {
     uint32_t         acc_efblk;
     uint16_t         acc_ffbyte;
     uint16_t         acc_pad;
+    /* The RMS file-access lock on the accessed file (rd vms-326 piece 2b),
+     * taken by the executive for RMS (VMS_IOCTL_ACP_FLOCK) and released with
+     * the access: 0 = none held. */
+    uint32_t         flock_lkid;
     uint32_t         win_n;             /* extents in win[] */
     struct acp_win_ext win[ACP_WINDOW_MAX];
     /*
@@ -2613,6 +2617,100 @@ out:
  * accessed on the channel; SS$_IVCHAN if the channel is invalid. Needs no
  * codec, so it is unconditional.
  */
+/*
+ * VMS_IOCTL_ACP_FLOCK (rd vms-326 piece 2b): take or release the RMS
+ * file-access lock on the file accessed on `chan` -- see vms_acp.h. The name
+ * is built HERE from what the executive holds (the accessed FID and the mounted
+ * volume's label) and the identity is assigned by vms_lock_rms_file_enq, so a
+ * mode-3 caller supplies neither: it names a channel it owns and RMS's sharing
+ * decision, nothing else.
+ */
+long vms_ioctl_acp_flock(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_acp_flock_args args;
+    struct vms_acp_chan *ch;
+    uint16_t fnum = 0, fseq = 0;
+    uint8_t frvn = 0, fnmx = 0;
+    char label[13];
+    uint32_t label_len = 0, held = 0, lkid = 0, st;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.lkid = 0;
+
+    exec_lock(&proc->chan_lock);
+    ch = acp_chan_find_locked(proc, args.chan);
+    if (!ch) {
+        exec_unlock(&proc->chan_lock);
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+    if (args.op == VMS_ACP_FLOCK_OP_RELEASE) {
+        held = ch->flock_lkid;
+        ch->flock_lkid = 0;
+        exec_unlock(&proc->chan_lock);
+        args.status = held ? vms_lock_rms_file_release(proc, held) : SS__NORMAL;
+        goto out;
+    }
+    if (args.op != VMS_ACP_FLOCK_OP_TAKE) {
+        exec_unlock(&proc->chan_lock);
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    if (!ch->file_accessed) {
+        exec_unlock(&proc->chan_lock);
+        args.status = SS__FILNOTACC;
+        goto out;
+    }
+    if (ch->flock_lkid) {
+        exec_unlock(&proc->chan_lock);
+        args.status = SS__BADPARAM;     /* one accessed file, one lock */
+        goto out;
+    }
+    fnum = ch->acc_fid_num;
+    fseq = ch->acc_fid_seq;
+    frvn = ch->acc_fid_rvn;
+    fnmx = ch->acc_fid_nmx;
+    memcpy(label, ch->vol->volname, sizeof(label));
+    label[sizeof(label) - 1] = '\0';
+    exec_unlock(&proc->chan_lock);
+
+    while (label_len < 12u && label[label_len] != '\0')
+        label_len++;
+
+    /* Always LCK$M_NOQUEUE, and nothing else: RMS's file-access request never
+     * waits (a conflict is RMS$_FLK at once), and the in-executive enqueue
+     * must not hold a mode-3 caller in a wait it cannot interrupt -- nor
+     * accept a CONVERT or any other flag that would make it a different
+     * request from the one this service exists to make. */
+    st = vms_lock_rms_file_enq(proc, fnum, fseq, frvn, fnmx, label, label_len,
+                               args.lkmode, LCK_M_NOQUEUE, &lkid);
+    if (st & 1) {
+        /* Record it on the channel -- unless the file stopped being accessed
+         * there meanwhile (a racing IO$_DEACCESS or $DASSGN in this process),
+         * in which case the lock has nothing to protect and goes at once. */
+        exec_lock(&proc->chan_lock);
+        ch = acp_chan_find_locked(proc, args.chan);
+        if (ch && ch->file_accessed && ch->flock_lkid == 0 &&
+            ch->acc_fid_num == fnum && ch->acc_fid_seq == fseq &&
+            ch->acc_fid_rvn == frvn && ch->acc_fid_nmx == fnmx) {
+            ch->flock_lkid = lkid;
+            exec_unlock(&proc->chan_lock);
+            args.lkid = lkid;
+        } else {
+            exec_unlock(&proc->chan_lock);
+            (void)vms_lock_rms_file_release(proc, lkid);
+            st = SS__FILNOTACC;
+        }
+    }
+    args.status = st;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 #if defined(OVMX_ODS2_KERNEL)
 static uint32_t acp_fh2_self_fidnum(const uint8_t *hdr);
 #endif
@@ -2624,6 +2722,7 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
     uint32_t status;
     int was_write = 0, was_counted = 0;
     uint32_t fid_num = 0, hdr_lbn = 0, bmaj = 0, bmin = 0;
+    uint32_t flock_lkid = 0;
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -2644,6 +2743,8 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
             bmin = ch->vol->backing_minor;
         }
         was_counted = ch->acc_counted;
+        flock_lkid = ch->flock_lkid;
+        ch->flock_lkid = 0;
         ch->file_accessed = 0;
         ch->acc_write = 0;
         ch->acc_counted = 0;
@@ -2651,6 +2752,11 @@ long vms_ioctl_acp_deaccess(struct vms_proc *proc, unsigned long arg)
         status = SS__NORMAL;
     }
     exec_unlock(&proc->chan_lock);
+
+    /* The file is no longer accessed here, so its file-access lock goes with
+     * it (rd vms-326 piece 2b) -- an accessor turned away RMS$_SHR can now
+     * have it. Outside the channel lock: the DLM takes its own. */
+    (void)vms_lock_rms_file_release(proc, flock_lkid);
 
 #if defined(OVMX_ODS2_KERNEL)
     /* A file accessed for write was modified: its header's revision count goes
@@ -5335,6 +5441,10 @@ int vms_acp_dassgn(struct vms_proc *proc, uint32_t chan)
 
     if (!ch)
         return -ENOENT;
+
+    /* $DASSGN of a channel whose file was never deaccessed: the file-access
+     * lock it carries goes with the channel (rd vms-326 piece 2b). */
+    (void)vms_lock_rms_file_release(proc, ch->flock_lkid);
 
     exec_lock(&vms_acp_vol_lock);
     if (ch->vol->refcnt > 0)

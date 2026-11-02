@@ -11,7 +11,12 @@
 # EXPECT_NOT: contains:assign-fail
 VMSDCL="${VMSDCL:-vmsdcl}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-TDIR=$(mktemp -d)
+# Staged on the system disk: @ reaches a procedure only through RMS
+# $OPEN/$GET, never a host path (libc-drop vms-20c94).
+TNAME="dcl_t_$$"
+TDIR="/vms/$TNAME"
+VDIR="$(echo "$TNAME" | tr a-z A-Z)"
+mkdir -p "$TDIR"
 
 # Sub-procedure: parameter indexing (SRC = P'N'), bare-symbol loop terminator
 # (IF SRC .EQS. ""), object-list accumulation, ''SYM' inside quotes.
@@ -43,5 +48,5 @@ $ IF A .EQS. B THEN WRITE SYS$OUTPUT "ifbare-ok"
 $ WRITE SYS$OUTPUT "quote ''FILE'.C"
 EOF
 
-printf 'DEFINE TESTDIR "%s"\nSET DEFAULT TESTDIR:[000000]\n@loop.com ALPHA BETA GAMMA\n@eval.com\n' "$TDIR" | $VMSDCL 2>&1
+printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\n@loop.com ALPHA BETA GAMMA\n@eval.com\n' "$VDIR" | $VMSDCL 2>&1
 rm -rf "$TDIR"

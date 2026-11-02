@@ -128,6 +128,8 @@ int dcl_tt_read_ini(const char *prompt, size_t prompt_len, const char *ini,
                     char *buf, size_t bufsz, uint16_t *term_out);
 const char *dcl_recall_get(int back);
 int dcl_tt_inquire(char *reply, size_t replysz);
+/* One record to the terminal through $QIO IO$_WRITEVBLK; -1: no executive terminal. */
+int dcl_tt_put_record(const char *text, size_t n);
 
 /* /PAGE: gather a command's output, then show it a screen at a time (rd
  * vms-457). begin returns 0 when the output is not a terminal (no pager). */

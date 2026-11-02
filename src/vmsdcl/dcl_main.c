@@ -1089,10 +1089,7 @@ int main(int argc, char *argv[])
     vms_term_deallocate(dcl_ctx.terminal.device_name);
     /* Close any open channels (stdio streams AND RMS reader/writer handles). */
     for (int i = 0; i < 16; i++) {
-        if (dcl_ctx.channels[i].fp) {
-            fclose(dcl_ctx.channels[i].fp);
-            dcl_ctx.channels[i].fp = NULL;
-        }
+        dcl_ctx.channels[i].ppf = 0;
         if (dcl_ctx.channels[i].reader) {
             dcl_rms_read_close(dcl_ctx.channels[i].reader);
             dcl_ctx.channels[i].reader = NULL;

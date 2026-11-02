@@ -30,10 +30,21 @@
 #include "msgdef.h"
 #include "vmsfs/filespec.h"
 
+/* The name a READ/WRITE acts on: a channel OPENed on SYS$OUTPUT/SYS$ERROR/
+ * SYS$INPUT acts on that process-permanent logical name (vms-28db). */
+static const char *dcl_chan_ppf_name(const struct dcl_context *ctx, const char *name)
+{
+    static const char *const ppf_names[] = { NULL, "SYS$OUTPUT", "SYS$ERROR", "SYS$INPUT" };
+    for (int i = 0; i < 16; i++)
+        if (ctx->channels[i].ppf && strcasecmp(ctx->channels[i].name, name) == 0)
+            return ppf_names[ctx->channels[i].ppf];
+    return name;
+}
+
 /* vms-5f0: a channel slot is free when it holds no stream and no RMS handle. */
 static int dcl_chan_free(const struct dcl_context *ctx, int i)
 {
-    return ctx->channels[i].fp == NULL &&
+    return ctx->channels[i].ppf == 0 &&
            ctx->channels[i].reader == NULL &&
            ctx->channels[i].writer == NULL;
 }
@@ -42,7 +53,7 @@ static int dcl_chan_free(const struct dcl_context *ctx, int i)
  * reader/writer) and clear it. */
 static void dcl_chan_release(struct dcl_context *ctx, int i)
 {
-    if (ctx->channels[i].fp)     { fclose(ctx->channels[i].fp); ctx->channels[i].fp = NULL; }
+    ctx->channels[i].ppf = 0;    /* the process-permanent file itself stays open */
     if (ctx->channels[i].reader) { dcl_rms_read_close(ctx->channels[i].reader); ctx->channels[i].reader = NULL; }
     if (ctx->channels[i].writer) { (void)dcl_rms_write_close(ctx->channels[i].writer); ctx->channels[i].writer = NULL; }
     /* OPEN defined the channel name as a process logical name; CLOSE removes it */
@@ -561,9 +572,11 @@ int cmd_open(struct dcl_command *cmd)
     /* SYS$OUTPUT:/SYS$ERROR:/SYS$INPUT: name the process's standard streams,
      * not RMS files -- OPEN connects a channel to the current output/error/input
      * (VSI OpenVMS DCL Dictionary, OPEN). MMK's subprocess protocol OPENs
-     * SYS$OUTPUT: to write its end-of-command $STATUS marker there. dup() the
-     * underlying fd so a later CLOSE of the channel frees only this channel's
-     * handle, never the process's real standard stream. */
+     * SYS$OUTPUT: to write its end-of-command $STATUS marker there. The
+     * channel records which process-permanent file it is on, and READ/WRITE
+     * on it act on that logical name -- a file through RMS, a mailbox
+     * through the stream bound to it, the terminal through $QIO -- so CLOSE
+     * frees only the channel, never the process-permanent file (vms-28db). */
     {
         char norm[64];
         size_t nk = 0;
@@ -572,20 +585,13 @@ int cmd_open(struct dcl_command *cmd)
         norm[nk] = '\0';
         if (nk > 0 && norm[nk - 1] == ':') norm[--nk] = '\0';
 
-        int stdfd = -1;
-        if      (strcmp(norm, "SYS$OUTPUT") == 0) stdfd = STDOUT_FILENO;
-        else if (strcmp(norm, "SYS$ERROR")  == 0) stdfd = STDERR_FILENO;
-        else if (strcmp(norm, "SYS$INPUT")  == 0) stdfd = STDIN_FILENO;
+        int ppf = 0;
+        if      (strcmp(norm, "SYS$OUTPUT") == 0) ppf = 1;
+        else if (strcmp(norm, "SYS$ERROR")  == 0) ppf = 2;
+        else if (strcmp(norm, "SYS$INPUT")  == 0) ppf = 3;
 
-        if (stdfd >= 0) {
-            int dfd = dup(stdfd);
-            FILE *sfp = (dfd >= 0) ? fdopen(dfd, fmode) : NULL;
-            if (!sfp) {
-                if (dfd >= 0) close(dfd);
-                dcl_error("RMS", 2, "FNF", "error opening %s", filespec);
-                return SS$_NOSUCHFILE;
-            }
-            ctx->channels[slot].fp = sfp;
+        if (ppf) {
+            ctx->channels[slot].ppf = ppf;
             ctx->channels[slot].mode = mode;
             strncpy(ctx->channels[slot].name, channel_name,
                     sizeof(ctx->channels[0].name) - 1);
@@ -648,9 +654,9 @@ open_failed: {
         dcl_error("DCL", 2, mode == 0 ? "OPENIN" : "OPENOUT",
                   "error opening %s as %s", full, mode == 0 ? "input" : "output");
         if (rms_st == RMS$_FNF)
-            fprintf(stderr, "-RMS-E-FNF, file not found\n");
+            dcl_error_cont("RMS", 2, "FNF", "file not found");
         else
-            fprintf(stderr, "-RMS-E-STATUS, RMS status %%X%08X\n", rms_st);
+            dcl_error_cont("RMS", 2, "STATUS", "RMS status %%X%08X", rms_st);
         int ost = (int)(rms_st | DCL_STS_INHIB);
         dcl_branch_handled(ctx, dcl_qualifier_value(cmd, "ERROR"));
         return ost;
@@ -725,10 +731,10 @@ static int read_impl(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    const char *channel_name = cmd->params[0];
+    const char *channel_name = dcl_chan_ppf_name(ctx, cmd->params[0]);
     const char *symbol_name = cmd->params[1];
 
-    /* Find the channel (stdio stream OR RMS reader). */
+    /* Find the channel (an RMS reader, or one on a process-permanent file). */
     int ch = -1;
     for (int i = 0; i < 16; i++) {
         if (!dcl_chan_free(ctx, i) &&
@@ -737,7 +743,6 @@ static int read_impl(struct dcl_command *cmd)
             break;
         }
     }
-    FILE *fp = (ch >= 0) ? ctx->channels[ch].fp : NULL;
 
     /* Check for /PROMPT qualifier (read from SYS$INPUT) */
     const char *prompt = dcl_qualifier_value(cmd, "PROMPT");
@@ -772,7 +777,7 @@ static int read_impl(struct dcl_command *cmd)
      * SYS$INPUT is the process-permanent logical name for the default input
      * stream (VSI OpenVMS DCL Dictionary).
      */
-    if (!fp && strcasecmp(channel_name, "SYS$INPUT") == 0) {
+    if (strcasecmp(channel_name, "SYS$INPUT") == 0) {
         char equiv[1024];
         if (dcl_translate_logical("SYS$INPUT", equiv, sizeof(equiv)) == 0 &&
                 equiv[0] && !dcl_logical_is_terminal(equiv)) {
@@ -826,22 +831,8 @@ static int read_impl(struct dcl_command *cmd)
         dcl_error("DCL", 2, "READERR", "error reading %s", channel_name);
         return (int)RMS$_FAC;               /* opened for write, not read */
     }
-    if (!fp) {
-        dcl_error("DCL", 0, "UNDFIL", "file has not been opened by DCL - check logical name");
-        return (int)DCL_CLI_UNDFIL;
-    }
-
-    char line[4096];
-    if (!fgets(line, sizeof(line), fp)) {
-        return RMS$_EOF;
-    }
-
-    /* Remove trailing newline */
-    size_t len = strlen(line);
-    if (len > 0 && line[len - 1] == '\n') line[len - 1] = '\0';
-
-    dcl_sym_set(symbol_name, line, DCL_SYM_LOCAL);
-    return (int)DCL_CLI_NORMAL;
+    dcl_error("DCL", 0, "UNDFIL", "file has not been opened by DCL - check logical name");
+    return (int)DCL_CLI_UNDFIL;
 }
 
 /*
@@ -999,7 +990,7 @@ static int write_impl(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    const char *channel_name = cmd->params[0];
+    const char *channel_name = dcl_chan_ppf_name(ctx, cmd->params[0]);
 
     /* WRITE's argument list is an expression (or comma-separated list of
      * expressions) whose VALUE is written. Evaluate it ONCE, up front, through
@@ -1066,7 +1057,7 @@ static int write_impl(struct dcl_command *cmd)
         strcasecmp(channel_name, "SYS$ERROR") == 0) {
         int is_err = (strcasecmp(channel_name, "SYS$ERROR") == 0);
 
-        char equiv[1024];
+        char equiv[1024] = "";
         if (dcl_translate_logical(channel_name, equiv, sizeof(equiv)) == 0 &&
                 equiv[0] && !dcl_logical_is_terminal(equiv)) {
             /* A file SYS$OUTPUT/SYS$ERROR: the record is $PUT at the end of
@@ -1086,6 +1077,14 @@ static int write_impl(struct dcl_command *cmd)
             return (int)((cst & 1) ? RMS$_NORMAL : cst);
         }
 
+        /* The terminal: the record goes to the terminal driver with $QIO
+         * IO$_WRITEVBLK (vms-28db). Only a DCL with no executive terminal
+         * behind its output (the host test harness, a pipe) uses the
+         * process's own output stream, which all of its messages share. */
+        const char *eq = equiv + (equiv[0] == '_');
+        int is_mbx = strncasecmp(eq, "MBA", 3) == 0;
+        if (!is_mbx && dcl_tt_put_record(text, strlen(text)) == 0)
+            return SS$_NORMAL;
         FILE *out = is_err ? stderr : stdout;
         fprintf(out, "%s\n", text);
         return SS$_NORMAL;
@@ -1123,16 +1122,8 @@ static int write_impl(struct dcl_command *cmd)
         return (int)RMS$_NORMAL;
     }
 
-    FILE *fp = ctx->channels[ch].fp;
-    if (!fp) {
-        dcl_error("DCL", 2, "IVLOGNAM",
-                  "channel %s is not open", channel_name);
-        return SS$_BADPARAM;
-    }
-    fprintf(fp, "%s\n", text);
-    fflush(fp);
-
-    return SS$_NORMAL;
+    dcl_error("DCL", 0, "UNDFIL", "file has not been opened by DCL - check logical name");
+    return (int)DCL_CLI_UNDFIL;
 }
 
 /* ================================================================== */

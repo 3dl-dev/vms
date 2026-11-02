@@ -81,6 +81,16 @@ static int run_dcl(const char *script, char *out, size_t outsz)
 
 #define D "VDA0:[OVMXDIR.PLIST]"
 
+/* append to a fixed buffer; a fixture that would not fit is a test bug -- fail, never truncate */
+#define APPENDF(buf, u, ...) do { \
+        int n_ = snprintf((buf) + (u), sizeof (buf) - (u), __VA_ARGS__); \
+        if (n_ < 0 || (size_t)n_ >= sizeof (buf) - (u)) { \
+            printf("  FAIL: fixture script overflows %zu bytes\n", sizeof (buf)); \
+            return 1; \
+        } \
+        (u) += (size_t)n_; \
+    } while (0)
+
 static char out[16384];
 
 int main(void)
@@ -99,13 +109,11 @@ int main(void)
 
     /* the fixture: [OVMXDIR.PLIST] A..L.TXT (one record each) and [.SUB]B.TXT */
     static char setup[4096];
-    size_t u = (size_t)snprintf(setup, sizeof setup,
-        "CREATE/DIRECTORY " D "\nCREATE/DIRECTORY VDA0:[OVMXDIR.PLIST.SUB]\nSET DEFAULT " D "\n");
+    size_t u = 0;
+    APPENDF(setup, u, "CREATE/DIRECTORY " D "\nCREATE/DIRECTORY VDA0:[OVMXDIR.PLIST.SUB]\nSET DEFAULT " D "\n");
     for (char c = 'A'; c <= 'L'; c++)
-        u += (size_t)snprintf(setup + u, sizeof setup - u,
-            "OPEN/WRITE F %c.TXT\nWRITE F \"REC-%c\"\nCLOSE F\n", c, c);
-    u += (size_t)snprintf(setup + u, sizeof setup - u,
-        "OPEN/WRITE F [.SUB]B.TXT\nWRITE F \"SUB-B\"\nCLOSE F\nDIRECTORY\n");
+        APPENDF(setup, u, "OPEN/WRITE F %c.TXT\nWRITE F \"REC-%c\"\nCLOSE F\n", c, c);
+    APPENDF(setup, u, "OPEN/WRITE F [.SUB]B.TXT\nWRITE F \"SUB-B\"\nCLOSE F\nDIRECTORY\n");
     CHECK(run_dcl(setup, out, sizeof out) == 0, "DCL built the fixture");
     CHECK(strstr(out, "L.TXT;1") != NULL, "A..L.TXT exist in " D);
 

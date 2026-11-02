@@ -339,6 +339,33 @@ static void ovmx_store_ptr(uint8_t *p, uint64_t v)
 # endif
 #endif
 
+/*
+ * The NetBSD OS-version ELF note (elf32-vax executables only). The NetBSD
+ * kernel execs an ELF executable as a native program only when one of its
+ * PT_NOTE segments carries this note (sys/kern/exec_elf.c
+ * netbsd_elf_signature); without it execve() fails ENOEXEC before the
+ * PT_INTERP (IMGACT.EXE) is ever opened. It is the note every NetBSD crti.o
+ * carries in .note.netbsd.ident: namesz 7 ("NetBSD\0", padded to 8), descsz 4,
+ * type 1 (NT_NETBSD_IDENT), desc = the __NetBSD_Version__ the image targets.
+ * OVMX_NETBSD_OSVERSION defaults to the pinned substrate, NetBSD 10.1
+ * (tests/netbsd/netbsd_version.env).
+ */
+#ifndef OVMX_NETBSD_OSVERSION
+# define OVMX_NETBSD_OSVERSION 1001000000u
+#endif
+#define OVMX_NETBSD_NOTE_SZ (12 + 8 + 4)
+static void emit_netbsd_note(unsigned char *p)
+{
+    const uint32_t hdr[3] = { 7, 4, 1 };   /* namesz, descsz, NT_NETBSD_IDENT */
+    const uint32_t ver = OVMX_NETBSD_OSVERSION;
+    for (int w = 0; w < 3; w++)            /* little-endian (VAX), byte-wise */
+        for (int b = 0; b < 4; b++)
+            p[w * 4 + b] = (unsigned char)(hdr[w] >> (8 * b));
+    memcpy(p + 12, "NetBSD\0\0", 8);
+    for (int b = 0; b < 4; b++)
+        p[20 + b] = (unsigned char)(ver >> (8 * b));
+}
+
 /* --------------------------------------------------------------------------
  * Declared universal symbols (from SYMBOL_VECTOR=).
  * -------------------------------------------------------------------------- */
@@ -2547,6 +2574,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     /* shareable: PT_LOAD (+ PT_TLS). executable: PT_PHDR, PT_INTERP, PT_LOAD
      * (+ PT_TLS) — the kernel maps the executable and reads PT_INTERP=IMGACT. */
     int      nph      = is_exec ? (3 + (has_tls ? 1 : 0)) : (has_tls ? 2 : 1);
+    /* elf32-vax executable: + PT_NOTE carrying the NetBSD OS-version note
+     * (OVMX_NETBSD_NOTE_SZ, below). */
+    int      has_osnote = 0;
+#ifdef OVMX_LINK_ELF32
+    has_osnote = is_exec;
+#endif
+    nph += has_osnote;
     uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf_Phdr), 16);
 
     /* executable: the PT_INTERP string (IMGACT.EXE), placed in the loaded range
@@ -2556,6 +2590,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         off_interp = cur;
         interp_sz  = strlen(IMGACT_INTERP) + 1;
         cur = ALIGN_UP(cur + interp_sz, 16);
+    }
+    /* elf32-vax executable: the NetBSD OS-version note, file offset == vaddr
+     * like the PT_INTERP string. */
+    uint64_t off_osnote = 0;
+    if (has_osnote) {
+        off_osnote = cur;
+        cur = ALIGN_UP(cur + OVMX_NETBSD_NOTE_SZ, 16);
     }
 
     /* Place every input section of a bucket contiguously, recording each
@@ -2962,6 +3003,14 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         ph[ti].p_filesz = tdata_sz; ph[ti].p_memsz = tls_memsz; ph[ti].p_align = tls_align;
     }
     if (is_exec) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
+    if (has_osnote) {
+        int ni = nph - 1;
+        ph[ni].p_type = PT_NOTE; ph[ni].p_flags = PF_R;
+        ph[ni].p_offset = off_osnote; ph[ni].p_vaddr = off_osnote; ph[ni].p_paddr = off_osnote;
+        ph[ni].p_filesz = OVMX_NETBSD_NOTE_SZ; ph[ni].p_memsz = OVMX_NETBSD_NOTE_SZ;
+        ph[ni].p_align = 4;
+        emit_netbsd_note(img + off_osnote);
+    }
 
     /* Copy each placed PROGBITS section (text/rodata/data/init_array) to its
      * vaddr. SHT_INIT_ARRAY's file-resident bytes are the pre-relocation
@@ -3214,27 +3263,40 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
          * jsb resolver`), or CALLS reads the jump opcode as a mask (0xFF17 —
          * reserved bits set -> reserved-operand fault). (vms-099)
          *
-         * Layout (8 bytes, within the 12-byte reserved PLT slot):
+         * The import-GOT cell holds the producer's PROCEDURE ADDRESS -- the
+         * address of the callee's own entry-mask word, the value any VAX
+         * procedure pointer carries (the same cell a GOT32 address-of reference
+         * to the import reads, so it cannot hold anything else). CALLS has
+         * already consumed the stub's mask and built the frame by the time the
+         * stub's next instruction runs, so the stub must transfer to the
+         * callee's FIRST INSTRUCTION, cell + 2. Jumping to the cell value
+         * itself executes the callee's mask word as an instruction (rd vms-d4a:
+         * purdy_s_hash's mask 0x07c0 decodes as `addl2 #7, @(sp)+`, a write
+         * through the frame's zero handler longword -> SIGSEGV).
+         *
+         * Layout (the whole 12-byte reserved PLT slot):
          *   +0: .word 0x0ffc      entry mask saving r2-r11 (calls-enterable;
          *                          a superset of any callee's own save set, so
          *                          the caller's registers are preserved across
          *                          the bound callee's RET)
-         *   +2: 0x17 0xFF <disp>  jmp *disp(pc) — opcode 0x17 (jmp), mode 0xFF
-         *                          (longword-displacement-DEFERRED, PC-relative:
-         *                          target = *(PC+disp)), 4-byte displacement.
-         * The memory operand IS the import-GOT cell (imp[i].got_va), read
-         * indirectly exactly like the x86_64 `jmp *disp32(%rip)` stub — IMGACT
-         * fills the cell from .vms$imp at activation (P4 runtime). VAX PC after
-         * the operand = plt_va + 8 (2 mask + 1 opcode + 1 mode + 4 disp), so
-         * disp = got_va-(plt_va+8), the PC-past-the-field bias every VAX
-         * PC-relative form uses. (vms-19b, vms-099) */
+         *   +2: D0 EF <disp32> 50 movl L^cell(pc), r0 -- r0 = the procedure
+         *                          address IMGACT stored from .vms$imp; PC after
+         *                          the disp field = plt_va + 8, so
+         *                          disp = got_va - (plt_va + 8). r0 is a scratch
+         *                          (function-value) register, never an argument
+         *                          (arguments are reached through AP).
+         *   +9: 17 A0 02          jmp B^2(r0) -- the callee's first instruction,
+         *                          past its entry mask. (vms-19b, vms-099, vms-d4a) */
         {
             uint8_t *stub = img + imp[i].plt_va;
             stub[0] = 0xFCu; stub[1] = 0x0Fu;   /* .word 0x0ffc  ; entry mask r2-r11 */
-            stub[2] = 0x17u; stub[3] = 0xFFu;   /* jmp *disp(pc)                     */
+            stub[2] = 0xD0u; stub[3] = 0xEFu;   /* movl L^disp(pc), ...              */
             int32_t d = (int32_t)((int64_t)imp[i].got_va -
                                   (int64_t)(imp[i].plt_va + 8));
             memcpy(stub + 4, &d, 4);
+            stub[8] = 0x50u;                    /* ... r0                            */
+            stub[9] = 0x17u; stub[10] = 0xA0u;  /* jmp B^disp(r0)                    */
+            stub[11] = 0x02u;                   /*     disp = 2: past the callee mask */
         }
 #else
         if (g_out_machine == EM_X86_64) {

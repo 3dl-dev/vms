@@ -59,6 +59,11 @@
 #ifndef AT_EXECFN
 #define AT_EXECFN 31
 #endif
+/* NetBSD hands the interpreter the exec'd path as AT_SUN_EXECNAME, not Linux's
+ * AT_EXECFN (sys/kern/exec_elf.c elf_populate_auxv). rd vms-d4a. */
+#ifndef AT_SUN_EXECNAME
+#define AT_SUN_EXECNAME 2014
+#endif
 
 #ifndef O_RDONLY
 #define O_RDONLY 0
@@ -3940,6 +3945,9 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 		case AT_PHNUM:  at_phnum  = (long)a->a_un.a_val; break;
 		case AT_ENTRY:  at_entry  = a->a_un.a_val; break;
 		case AT_EXECFN: at_execfn = (const char *)a->a_un.a_val; break;
+#if defined(__NetBSD__)
+		case AT_SUN_EXECNAME: at_execfn = (const char *)a->a_un.a_val; break;
+#endif
 		default: break;
 		}
 	}

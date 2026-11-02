@@ -65,6 +65,24 @@ echo "$hdr" | grep -qi "Machine:.*VAX"        || { echo "FAIL: not Digital VAX";
 echo "$hdr" | grep -q "Type:.*DYN"           || { echo "FAIL: not ET_DYN"; exit 1; }
 echo "ok: elf32-vax ET_DYN"
 
+echo "== assert (vms-d4a): e_entry opens with the entry-mask word NetBSD/vax's kernel skips =="
+# NetBSD/vax setregs enters an image at e_entry + 2 (tf_pc = ep_entry + 2). An
+# entry point without a leading mask word is entered mid-instruction and faults
+# before imgact_bootstrap runs. The first two bytes at e_entry must be the mask
+# word, and the instruction at e_entry + 2 must be _start's `movl sp,r6`.
+entry=$("$RE" -h "$IMG" | sed -n 's/.*Entry point address: *0x\([0-9a-fA-F]*\).*/\1/p')
+[ -n "$entry" ] || { echo "FAIL: no e_entry in the ELF header"; exit 1; }
+startdis=$("$OD" -d "$IMG" | awk '/<_start>:/{f=1;next} f&&NF{print} f&&++n>=2{exit}')
+echo "$startdis"
+first=$(echo "$startdis" | sed -n 1p)
+second=$(echo "$startdis" | sed -n 2p)
+startva=$("$NM" "$IMG" | awk '$3=="_start"{print $1}')
+[ "$((0x$startva))" -eq "$((0x$entry))" ] || { echo "FAIL: e_entry 0x$entry is not _start (0x$startva)"; exit 1; }
+echo "$first"  | grep -q "\.word 0x0101" || { echo "FAIL: _start does not open with the .word 0x0101 entry mask"; exit 1; }
+echo "$second" | grep -qE "^ *$(printf '%x' $((0x$entry + 2))):.*movl sp,r6" \
+    || { echo "FAIL: the instruction at e_entry + 2 is not movl sp,r6"; exit 1; }
+echo "ok: e_entry = _start = mask word; e_entry + 2 = movl sp,r6"
+
 echo "== assert: no PT_INTERP (a static-PIE interpreter must not itself have one) =="
 if "$RE" -l "$IMG" | grep -qi "interpreter"; then
     echo "FAIL: IMGACT.EXE carries a PT_INTERP"; exit 1

@@ -1051,6 +1051,16 @@ static void stage_boot_images(void)
          * took ~40% of a 16 MB VAX's free memory at boot (rd vms-83d/4029/97c2:
          * ENOSPC, get_pventry panic, a console that never offers Username:). */
         "INSTALL.EXE", "SYSGEN.EXE", "AUTHORIZE.EXE", "SCSD.EXE",
+#if !defined(OVMX_BOOT_LINUX)
+        /* OVMX/VAX (rd vms-d4a): the OVMX image activator, when the volume
+         * carries one. The boot chain itself is Decision-A (ld.elf_so) and
+         * never needs it -- which is why it is not in the first-hop list
+         * above -- but an image LINKed with LINK.EXE --executable names
+         * OVMX_BOOT_STAGE_DIR/IMGACT.EXE as its PT_INTERP, and the kernel opens
+         * that path at execve before any OVMX code runs. Absent: skipped, and
+         * such an image fails its RUN with an honest activation error. */
+        "IMGACT.EXE",
+#endif
         /* OVMX/VAX: the native image activator DCL execs for an image LINKed
          * on real OpenVMS VAX (vms-b869); absent elsewhere. */
         "NATIVEACT.EXE",

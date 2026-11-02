@@ -845,6 +845,12 @@ if(BUILD_TESTS)
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab-vax/run-boot.sh status-selftest)
         set_tests_properties(vax_status_gate_selftest PROPERTIES
             LABELS "integration;netbsd-vax" TIMEOUT 60)
+        # The boot disk is re-assembled when STARTUP.EXE or vms.kmod changes:
+        # the install marker records what it installed (no docker, no boot).
+        add_test(NAME vax_boot_install_stamp_selftest
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab-vax/run-boot.sh boot-stamp-selftest)
+        set_tests_properties(vax_boot_install_stamp_selftest PROPERTIES
+            LABELS "integration;netbsd-vax" TIMEOUT 60)
     endif()
 
     # rd vms-251b: ROOTAUDIT.EXE names root processes, and the DCL acceptance

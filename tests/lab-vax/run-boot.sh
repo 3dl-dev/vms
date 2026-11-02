@@ -344,8 +344,56 @@ status_proof_selftest() {
   return 1
 }
 
-# The selftest alone needs no docker, no cache and no boot -- run it before the
+# THE BOOT DISK'S /sbin/init IS THE STARTUP.EXE IT WAS ASSEMBLED FROM. The
+# install marker used to be a bare touch file, so a cache assembled once kept
+# its OLD /sbin/init (and vms.kmod) through every later run, even with
+# FORCE_CROSS_BUILD=1 rebuilding STARTUP.EXE: a local acceptance run then
+# booted a STARTUP.EXE that predated OPCOM and $SETPRN and reported a nameless
+# PID 1 and no OPCOM row -- a symptom of the cache, not of the tree under test.
+# The marker now records what was installed; a different artifact means the
+# boot-work copy is re-cloned and re-assembled.
+boot_install_stamp() {  # [artifacts dir] -> stamp of the files install-boot installs
+  local d="${1:-${ARTIFACTS_DIR}}"
+  [ -f "$d/STARTUP.EXE" ] && [ -f "$d/vms.kmod" ] || { echo "missing"; return 0; }
+  cat "$d/STARTUP.EXE" "$d/vms.kmod" | sha256sum | cut -c1-32
+}
+boot_install_current() {  # <marker> [artifacts dir] -> 0 iff the marker records these artifacts
+  local want
+  want="$(boot_install_stamp "${2:-}")"
+  [ "$want" != "missing" ] && [ -f "$1" ] && [ "$(cat "$1")" = "$want" ]
+}
+boot_stamp_selftest() {
+  local t fails=0
+  t="$(mktemp -d)"
+  printf 'init-A' > "$t/STARTUP.EXE"; printf 'kmod-A' > "$t/vms.kmod"
+  _bexp() {  # <want: current|stale> <label>
+    local got=stale
+    boot_install_current "$t/marker" "$t" && got=current
+    if [ "$got" = "$1" ]; then echo "  boot-stamp selftest: $2 -> $got (expected)"
+    else echo "  boot-stamp selftest: $2 -> $got (WRONG, expected $1)"; fails=$((fails + 1)); fi
+  }
+  _bexp stale "no marker"
+  : > "$t/marker"
+  _bexp stale "legacy empty marker (the old touch file)"
+  boot_install_stamp "$t" > "$t/marker"
+  _bexp current "marker records these artifacts"
+  printf 'init-B' > "$t/STARTUP.EXE"
+  _bexp stale "STARTUP.EXE rebuilt"
+  boot_install_stamp "$t" > "$t/marker"; printf 'kmod-B' > "$t/vms.kmod"
+  _bexp stale "vms.kmod rebuilt"
+  rm -f "$t/vms.kmod"
+  _bexp stale "artifact missing"
+  rm -rf "$t"
+  [ "$fails" -eq 0 ] && { echo "=== boot-stamp selftest: a rebuilt artifact re-assembles the boot disk ==="; return 0; }
+  echo "=== boot-stamp selftest FAILED: $fails case(s) wrong ==="; return 1
+}
+
+# The selftests alone need no docker, no cache and no boot -- run them before the
 # shared build/assemble preamble below (which every booting mode needs).
+if [ "${MODE}" = "boot-stamp-selftest" ]; then
+  boot_stamp_selftest && exit 0
+  exit 1
+fi
 if [ "${MODE}" = "status-selftest" ]; then
   status_proof_selftest && exit 0
   exit 1
@@ -997,6 +1045,11 @@ ensure_modular_kernel() {
 
 # 6. clone the shared (MODULAR-kernel) disk to an ISOLATED boot-work copy.
 make_boot_copy() {
+  # An assembly from OTHER artifacts is stale: start again from a fresh clone.
+  if [ -f "${BOOT_INSTALL_MARKER}" ] && ! boot_install_current "${BOOT_INSTALL_MARKER}"; then
+    log "boot-work disk was assembled from a different STARTUP.EXE/vms.kmod -- re-cloning"
+    rm -f "${BOOT_COPY_MARKER}" "${BOOT_INSTALL_MARKER}"
+  fi
   if [ -f "${BOOT_COPY_MARKER}" ] && [ -f "${BOOT_WORKDIR}/wd0.img" ]; then
     log "isolated boot-disk copy present -- NOT re-copying"; return 0; fi
   [ -f "${CACHE_DIR}/anita-work/wd0.img" ] || die "shared disk missing; cannot copy"
@@ -1009,11 +1062,11 @@ make_boot_copy() {
 
 # 7. assemble ovmx_init + modules + nodes onto the boot-work copy (once).
 ensure_boot_install() {
-  if [ -f "${BOOT_INSTALL_MARKER}" ]; then
-    log "boot disk already assembled (ovmx_init installed) -- skipping"; return 0; fi
+  if boot_install_current "${BOOT_INSTALL_MARKER}"; then
+    log "boot disk already assembled from this STARTUP.EXE/vms.kmod -- skipping"; return 0; fi
   log "assembling the bootable disk (install STARTUP.EXE as /sbin/init, modules, nodes)"
   run_session install-boot /cache/boot-work || die "boot-disk assembly session failed"
-  touch "${BOOT_INSTALL_MARKER}"
+  boot_install_stamp > "${BOOT_INSTALL_MARKER}"
 }
 
 ensure_images
@@ -1531,5 +1584,5 @@ case "${MODE}" in
     run_status_gate && exit 0
     exit 1
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install | status-gate | status-gate-negctl | status-selftest)" ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install | status-gate | status-gate-negctl | status-selftest | boot-stamp-selftest)" ;;
 esac

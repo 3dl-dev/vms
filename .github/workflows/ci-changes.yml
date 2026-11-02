@@ -503,6 +503,7 @@ jobs:
               - 'src/kernel-core/**'
               - 'src/vmsfs/**'
               - 'tests/qemu-aarch64/**'
+              - 'tests/kernel-config/**'
             aarch64_boot:
               - '.github/workflows/**'
               - 'tests/qemu-aarch64/**'

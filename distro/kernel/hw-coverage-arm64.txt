@@ -1,0 +1,46 @@
+# Real-hardware driver coverage for the arm64 OVMX kernel (rd vms-c5f).
+# One module name per line ('-' == '_'). Each must be in the module tree
+# (modules.dep) or built into vmlinuz (modules.builtin) -- checked by
+# tests/kernel-config/check_kernel_budget.sh against the kernel-out artifacts.
+# Removing a line here to make the gate pass is a hardware-support descoping.
+# storage / boot path
+nvme
+ahci
+libahci
+ahci_platform
+sd_mod
+virtio_blk
+virtio_scsi
+mmc_core
+mpt3sas
+megaraid_sas
+usb_storage
+# wired NICs
+virtio_net
+e1000e
+igb
+r8169
+r8152
+mlx5_core
+stmmac
+dwmac_generic
+macb
+# USB / HID
+xhci_hcd
+xhci_pci
+ehci_pci
+usbhid
+hid_generic
+ftdi_sio
+# wireless / bluetooth
+iwlwifi
+ath10k_pci
+btusb
+# filesystems
+ext4
+vfat
+btrfs
+squashfs
+overlay
+fuse
+nfs

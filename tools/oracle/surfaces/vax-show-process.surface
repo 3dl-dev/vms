@@ -19,10 +19,7 @@ COMMANDS=(
 #      its month letters, so a golden captured in AUG never matched a run in
 #      any other month. The month is part of the capture-time date, the same
 #      volatile field as its digits; three capital letters are still required.
-#   3. the NODE PREFIX of each "Devices allocated:" name -- VAX "VAX1$OPA0:" vs
-#      OVMX's own "<SCSNODE>$OPA0:". VMS names a DEV$M_NNM unit by its node
-#      whether or not the system is a cluster member (rd vms-1f7, captured on
-#      a VAXCLUSTER 0 node: docs/oracle/vax73-device-full-name.md), so the
-#      prefix itself is REQUIRED -- the mask only accepts a non-empty name
-#      followed by '$', and a bare "OPA0:" (no prefix) still reds.
-MACHINE_MASK='s/(Node: +)[A-Z0-9#]+/\1<NODE>/; s/^( *#+)-[A-Z]{3}-(#+ )/\1-<MON>-\2/; s/^(Devices allocated: +)[A-Z0-9#_]+\$/\1<NODE>$/'
+# NOT masked: "Devices allocated:"'s device name. The oracle's carries the node
+# prefix (VAX1$OPA0:), OVMX's does not (the vms-dv1 remainder) -- a real
+# difference, so the gate keeps showing it.
+MACHINE_MASK='s/(Node: +)[A-Z0-9#]+/\1<NODE>/; s/^( *#+)-[A-Z]{3}-(#+ )/\1-<MON>-\2/'

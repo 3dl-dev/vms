@@ -2383,22 +2383,15 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
     memset(&vol, 0, sizeof(vol));
     (void)vms_kif_getvol(info.devnam, &vol);
 
-    if (strcmp(item, "DEVNAM") == 0) {
-        /* The executive's own physical name (e.g. "DKA0:"). No leading
-         * underscore is invented here (the executive does not store one, and
-         * F$DEVICE deliberately does not add one either -- see
-         * populate_device_list). */
+    if (strcmp(item, "DEVNAM") == 0 ||
+        strcmp(item, "FULLDEVNAM") == 0 ||
+        strcmp(item, "ALLDEVNAM") == 0) {
+        /* The executive's own physical name (e.g. "DKA0:"). Single node: the
+         * full/all name is the physical name -- a cluster node prefix is a
+         * documented remainder. No leading underscore is invented here (the
+         * executive does not store one, and F$DEVICE deliberately does not add
+         * one either -- see populate_device_list). */
         snprintf(result, result_size, "%s", info.devnam);
-    } else if (strcmp(item, "FULLDEVNAM") == 0 ||
-               strcmp(item, "ALLDEVNAM") == 0) {
-        /* The FULL name the executive composed, with the underscore VMS
-         * prints: F$GETDVI("OPA0:","FULLDEVNAM") is "_VAX1$OPA0:" on a
-         * standalone VAX V7.3 as on a clustered one, "_$2$DUA0:" for a disk
-         * on an ALLOCLASS 2 system, "_NLA0:" for the null device (rd vms-1f7;
-         * docs/oracle/vax73-device-full-name.md). */
-        info.fulldevnam[VMS_FULLDEVNAM_SIZE - 1] = '\0';
-        snprintf(result, result_size, "_%s",
-                 info.fulldevnam[0] ? info.fulldevnam : info.devnam);
     } else if (strcmp(item, "TT_ACCPORNAM") == 0) {
         /* A remote terminal's access port name, node::user (rd vms-2166),
          * from the executive's device row; "" for a local terminal or a

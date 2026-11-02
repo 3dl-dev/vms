@@ -32,19 +32,17 @@
 #                      alongside, so protecting THIS build is exactly what the
 #                      co-release gate exists to do for an Alpha-carrying cut.
 #
-# DELIBERATELY OUT OF SCOPE HERE (INV-6 honesty -- never claim an artifact is
-# more built than it is): the Alpha executive kernel module vms.ko.
-# Unlike the cross-compiled static ELF images above (naturally byte-reproducible,
-# no embedded wall-clock -- the same property that lets cut-release-vax.sh ship
-# its images with no SOURCE_DATE_EPOCH handling), the Linux/Alpha modules go
-# through kbuild, which embeds build-ids / vermagic / (optionally) a module
-# signature -- byte-reproducibility of THOSE under the cut-release-reproducible
-# gate needs its own SOURCE_DATE_EPOCH + deterministic-signing proof, exactly the
-# kind of runtime-parity split VAX itself draws between its R2 build gate and its
-# R3 modular-kernel/boot work. Shipping the modules here UNPROVEN would risk
-# reddening the P0 cut-release-reproducible gate on a module byte-diff, so they
-# are a tracked follow-on (rd child of vms-233b), not smuggled in. The
-# alpha-boot-login gate independently proves the Alpha modules build + boot.
+#   vms.ko           the Alpha executive module (rd vms-ec1; vmsfs.ko was retired,
+#                      vms-165 -- the Files-11 ACP lives inside vms.ko). Cross-built
+#                      by tools/cross-alpha/release-vmsko.sh against a sha256-pinned
+#                      Linux/Alpha 6.6.52 tree with the clock/user/host pinned from
+#                      SOURCE_DATE_EPOCH and the module built from a fixed path and
+#                      debug-stripped. The Alpha kernel config has no MODULE_SIG, so
+#                      the module is unsigned: no signature to make deterministic.
+#                      Byte-reproducibility is PROVEN, not assumed: the
+#                      cut-release-reproducible job cuts twice (--no-cache) and
+#                      cmp's every alpha/ artifact, vms.ko included; the
+#                      cut-release-alpha-gate job fails if vms.ko is absent.
 #
 # This script writes $OUT_DIR/alpha-artifact-manifest.txt: the flat, newline-
 # separated list of every artifact basename it actually shipped, in CMake's own
@@ -79,11 +77,12 @@
 #                               (required)
 #   --toolchain-image NAME     Tag for the built ovmx-cross-alpha image
 #                               (default: ovmx-cross-alpha:release)
+#   --source-date-epoch N      Reproducible-build clock for vms.ko (required)
 #   --no-cache                 Force a fresh (non-layer-cached) build of the
 #                               cross toolchain image
 #   -h|--help                  Show this help and exit
 #
-# Exit 0 = the full Alpha userspace artifact set was built and copied into
+# Exit 0 = the full Alpha userspace artifact set + vms.ko was built and copied into
 # --out-dir.
 
 set -euo pipefail
@@ -92,9 +91,10 @@ SRC_DIR=""
 OUT_DIR=""
 TOOLCHAIN_IMAGE="ovmx-cross-alpha:release"
 NO_CACHE=0
+SDE=""
 
 usage() {
-    sed -n '2,87p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,86p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -105,6 +105,8 @@ while [ $# -gt 0 ]; do
         --out-dir=*) OUT_DIR="${1#--out-dir=}"; shift ;;
         --toolchain-image) TOOLCHAIN_IMAGE="$2"; shift 2 ;;
         --toolchain-image=*) TOOLCHAIN_IMAGE="${1#--toolchain-image=}"; shift ;;
+        --source-date-epoch) SDE="$2"; shift 2 ;;
+        --source-date-epoch=*) SDE="${1#--source-date-epoch=}"; shift ;;
         --no-cache) NO_CACHE=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "cut-release-alpha.sh: unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -116,6 +118,7 @@ fail() { echo "cut-release-alpha: FATAL: $*" >&2; exit 1; }
 
 [ -n "$SRC_DIR" ] || fail "--src-dir is required"
 [ -n "$OUT_DIR" ] || fail "--out-dir is required"
+case "$SDE" in ''|*[!0-9]*) fail "--source-date-epoch must be a nonnegative integer, got: '$SDE'" ;; esac
 [ -d "$SRC_DIR" ] || fail "--src-dir does not exist: $SRC_DIR"
 [ -f "$SRC_DIR/tools/cross-alpha/Dockerfile" ] || fail "not an OVMX tree with Alpha support (no tools/cross-alpha/Dockerfile): $SRC_DIR"
 [ -f "$SRC_DIR/tools/cross-alpha/toolchain-alpha-linux.cmake" ] || fail "missing tools/cross-alpha/toolchain-alpha-linux.cmake in $SRC_DIR"
@@ -155,7 +158,7 @@ docker "${BUILD_ARGS[@]}"
 # --- Userspace images (ovmx-images CMake aggregate, EM_ALPHA/LP64) ------------
 # Also the OVMX_ALPHA_RELEASE_NEGCTL target -- fail loudly BEFORE spending the
 # build time, the same pattern cut-release-vax.sh's stage-3 negctl uses.
-log "=== stage 1/1: userspace images (ovmx-images CMake aggregate, EM_ALPHA) ==="
+log "=== stage 1/2: userspace images (ovmx-images CMake aggregate, EM_ALPHA) ==="
 if [ "$NEGCTL" = "1" ]; then
     fail "OVMX_ALPHA_RELEASE_NEGCTL: deliberately failing the userspace-image stage to prove the release-cut gate has teeth against a failed Alpha build"
 fi
@@ -207,6 +210,17 @@ while IFS= read -r container_path || [ -n "$container_path" ]; do
 done < "$IMAGE_MANIFEST"
 [ "${#IMAGE_NAMES[@]}" -gt 0 ] || fail "no images copied from install_manifest_ovmx-images.txt"
 log "ovmx-images aggregate: ${#IMAGE_NAMES[@]} images shipped (derived from install_manifest_ovmx-images.txt, not a hand list)"
+
+# --- Executive module vms.ko (rd vms-ec1) -------------------------------------
+log "=== stage 2/2: vms.ko (Linux/Alpha kernel + OVMX executive, SOURCE_DATE_EPOCH=$SDE) ==="
+KOUT="$WORK/vmsko"; mkdir -p "$KOUT"
+docker run --rm -e "SDE=$SDE" \
+    -v "$SRC_DIR:/src:ro" -v "$KOUT:/out" \
+    "$TOOLCHAIN_IMAGE" sh /src/tools/cross-alpha/release-vmsko.sh
+[ -s "$KOUT/vms.ko" ] || fail "vms.ko missing after the executive-module stage"
+cp "$KOUT/vms.ko" "$OUT_DIR/vms.ko"
+log "-> $OUT_DIR/vms.ko"
+IMAGE_NAMES+=("vms.ko")
 
 # --- Shipped-artifact manifest: the DERIVED "what actually shipped" list, every
 # image name from the CMake install manifest, in the order CMake installed them.

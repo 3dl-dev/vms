@@ -51,8 +51,8 @@
 #      GATE, one arch over (rd vms-233b, epic vms-f10): the byte-reproducible
 #      userspace ovmx-images aggregate, UNCONDITIONAL for any Alpha-capable tree
 #      (no --skip-alpha), with the identical pre-alpha historical-baseline
-#      exception (%CUT-ALPHA-I-PREALPHA). Alpha executive modules are a tracked
-#      follow-on (see cut-release-alpha.sh); alpha-boot-login proves them.
+#      exception (%CUT-ALPHA-I-PREALPHA). The Alpha executive module vms.ko ships in
+#      the same set (vms-ec1), its byte-reproducibility proven by the cut diff.
 #   9. Builds the aarch64 BOOTABLE release set (the x86_64 set, for arm64:
 #      vmlinuz Image, slim initramfs, ovmx-distrib.img, ovmx-os.kit) into
 #      OUT_DIR/aarch64/ via tools/cut-release-aarch64.sh -- or takes the set a
@@ -301,13 +301,10 @@ fi
 # protects an Alpha-carrying cut (e.g. the GCC lane's Alpha C-RTL DECC$SHR/
 # LIBOTS$SHR userland): if that build breaks, the cut reds here.
 #
-# SCOPE: the byte-reproducible userspace image set (ovmx-images aggregate). The
-# Alpha executive module (vms.ko) is a tracked follow-on (rd child of
-# vms-233b) -- kbuild module byte-reproducibility under cut-release-reproducible
-# needs its own SOURCE_DATE_EPOCH/deterministic-signing proof, the same
-# build-vs-runtime split VAX draws between its R2 build gate and R3 modular-kernel
-# work; alpha-boot-login independently proves the Alpha modules build + boot. See
-# cut-release-alpha.sh's header for the INV-6 honesty rationale.
+# SCOPE: the byte-reproducible userspace image set (ovmx-images aggregate) plus
+# the Alpha executive module vms.ko (rd vms-ec1), cross-built against a pinned
+# Linux/Alpha tree under SOURCE_DATE_EPOCH; cut-release-reproducible cmp's it
+# across two independent cuts. See cut-release-alpha.sh's header.
 #
 # HISTORICAL-BASELINE EXCEPTION (same as VAX): a ref that PREDATES Alpha
 # co-release support (no tools/cross-alpha/Dockerfile in the archived tree -- an
@@ -325,7 +322,7 @@ if [ ! -f "$SRC_DIR/tools/cross-alpha/Dockerfile" ]; then
 else
     ALPHA_OUT_DIR="$OUT_DIR/alpha"
     mkdir -p "$ALPHA_OUT_DIR"
-    CUT_RELEASE_ALPHA_ARGS=(--src-dir "$SRC_DIR" --out-dir "$ALPHA_OUT_DIR")
+    CUT_RELEASE_ALPHA_ARGS=(--src-dir "$SRC_DIR" --out-dir "$ALPHA_OUT_DIR" --source-date-epoch "$SOURCE_DATE_EPOCH")
     [ "$NO_CACHE" -eq 1 ] && CUT_RELEASE_ALPHA_ARGS+=(--no-cache)
     log "building Alpha (OVMX/Linux-Alpha/EM_ALPHA LP64) release artifacts -- co-release gate, no skip"
     "$SCRIPT_DIR/cut-release-alpha.sh" "${CUT_RELEASE_ALPHA_ARGS[@]}" \
@@ -559,7 +556,7 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
     printf '\n    ]\n'
     printf '  },\n'
     printf '  "alpha_release_parity": {\n'
-    printf '    "_note": "Alpha (OVMX/Linux-Alpha, EM_ALPHA/LP64) co-release artifacts (rd vms-233b, epic vms-f10: co-release parity across aarch64/x86_64/alpha/VAX). BUILD-ONLY (Rule 9 tooling, never a runtime claim): the byte-reproducible userspace ovmx-images aggregate, cross-built under the alpha-linux-gnu toolchain -- the same images alpha-boot-login boots. The Alpha executive module (vms.ko) is a tracked follow-on, deliberately NOT shipped here (kbuild byte-reproducibility needs its own proof, INV-6); alpha-boot-login independently proves it builds + boots. All files under alpha/.",\n'
+    printf '    "_note": "Alpha (OVMX/Linux-Alpha, EM_ALPHA/LP64) co-release artifacts (rd vms-233b, epic vms-f10: co-release parity across aarch64/x86_64/alpha/VAX). BUILD-ONLY (Rule 9 tooling, never a runtime claim): the byte-reproducible userspace ovmx-images aggregate, cross-built under the alpha-linux-gnu toolchain -- the same images alpha-boot-login boots. The Alpha executive module vms.ko (unsigned: the Alpha kernel config has no MODULE_SIG; cross-built under SOURCE_DATE_EPOCH, byte-reproducibility proven by the two-cut diff, vms-ec1) ships in the same set. No bootable Alpha image set yet. All files under alpha/.",\n'
     printf '    "skipped": %s,\n' "$([ -n "$ALPHA_SKIP_NOTE" ] && echo true || echo false)"
     if [ -n "$ALPHA_SKIP_NOTE" ]; then
         printf '    "skipped_reason": "%s",\n' "$ALPHA_SKIP_NOTE"

@@ -649,6 +649,20 @@ jobs:
               FAIL=1
             fi
           done
+          # vms-ec1: every Alpha artifact, the kbuild-built executive module
+          # vms.ko included, must be byte-identical across the two cuts -- and
+          # vms.ko must BE in the set (a missing module is a failure, not a skip).
+          grep -qx 'vms.ko' "$A/alpha/alpha-artifact-manifest.txt" \
+            || { echo "FAIL: alpha/vms.ko is not in alpha-artifact-manifest.txt (vms-ec1)"; FAIL=1; }
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            if cmp -s "$A/alpha/$f" "$B/alpha/$f"; then
+              echo "OK: alpha/$f is byte-identical across both cuts"
+            else
+              echo "FAIL: alpha/$f DIFFERS between the two independent cuts"
+              FAIL=1
+            fi
+          done < "$A/alpha/alpha-artifact-manifest.txt"
           [ "$FAIL" -eq 0 ] || { echo "Reproducibility check FAILED"; exit 1; }
           echo "All release artifacts + release notes + SHA256SUMS are byte-identical across two independent --no-cache cuts."
 
@@ -1520,9 +1534,9 @@ jobs:
   # protects an Alpha-carrying cut (the GCC lane's Alpha C-RTL DECC$SHR/LIBOTS$SHR
   # userland lands in exactly this image set): if that build breaks, the cut reds.
   #
-  # BUILD-ONLY (Rule 9): no boot here. SCOPE is the userspace image set; the Alpha
-  # executive module (vms.ko) is a tracked follow-on (see
-  # tools/cut-release-alpha.sh's header, INV-6). Same tier-split as the VAX gate:
+  # BUILD-ONLY (Rule 9): no boot here. SCOPE is the userspace image set plus the
+  # Alpha executive module vms.ko (vms-ec1; its reproducibility is cmp'd by
+  # cut-release-reproducible). Same tier-split as the VAX gate:
   # NON-PR events only.
   # -----------------------------------------------------------------------
   cut-release-alpha-gate:
@@ -1557,7 +1571,8 @@ jobs:
           set -euo pipefail
           tools/cut-release-alpha.sh \
             --src-dir "${{ github.workspace }}" \
-            --out-dir "${{ github.workspace }}/dist/alpha-gate-proof"
+            --out-dir "${{ github.workspace }}/dist/alpha-gate-proof" \
+            --source-date-epoch "$(git log -1 --format=%ct)"
           # The shipped set is DERIVED from alpha-artifact-manifest.txt (itself
           # derived from CMake's install_manifest_ovmx-images.txt), not a
           # hand-named list here -- so this check never goes stale when a new
@@ -1574,6 +1589,8 @@ jobs:
           done < "$MANIFEST"
           dir_count=$(find dist/alpha-gate-proof -maxdepth 1 -type f ! -name 'alpha-artifact-manifest.txt' | wc -l)
           [ "$dir_count" -eq "$n" ] || { echo "FAIL: $MANIFEST names $n artifacts but dist/alpha-gate-proof/ contains $dir_count files"; exit 1; }
+          grep -qx 'vms.ko' "$MANIFEST" || { echo "FAIL: vms.ko (the Alpha executive module, vms-ec1) is not in $MANIFEST"; exit 1; }
+          file dist/alpha-gate-proof/vms.ko | grep -qi 'alpha' || { echo "FAIL: dist/alpha-gate-proof/vms.ko is not an Alpha ELF object"; exit 1; }
           [ "$n" -ge 12 ] || { echo "FAIL: only $n Alpha release artifacts named in $MANIFEST -- expected at least the ovmx-images baseline of 12"; exit 1; }
           echo "PASS: all $n Alpha release artifacts named in $MANIFEST are present"
 
@@ -1582,6 +1599,7 @@ jobs:
           set +e
           RAW=$(OVMX_ALPHA_RELEASE_NEGCTL=1 tools/cut-release-alpha.sh \
                   --src-dir "${{ github.workspace }}" \
+                  --source-date-epoch 0 \
                   --out-dir "${{ github.workspace }}/dist/alpha-gate-negctl" 2>&1)
           rc=$?
           set -e

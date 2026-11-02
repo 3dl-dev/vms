@@ -36,6 +36,9 @@
 #include "rms/rms.h"         /* rms_read_over_acp, rms_executive_absent */
 #include "vmsfs/device.h"    /* vmsfs_device_spec_kernel_mounted */
 #include "ssdef.h"
+#include "starlet.h"          /* sys$getmsg: the reason under OPENOUT */
+#include "descrip.h"
+#include "msgdef.h"
 #include "climsgdef.h"
 #include "ovmx_olb.h"
 
@@ -921,24 +924,47 @@ static unsigned char *olb_file_read(struct dcl_context *ctx, const char *spec,
     return buf;
 }
 
+/* Why the last library write was refused: the RMS status and its secondary
+ * value (STV), which LIBRARIAN reports under %LIBRARIAN-E-OPENOUT as VMS does. */
+static uint32_t g_olb_why, g_olb_whystv;
+
+/* The refusal's messages, chained ('-' for '%'), after the OPENOUT message. */
+static void olb_print_reasons(void)
+{
+    uint32_t sts[2] = { g_olb_why, g_olb_whystv };
+    for (int i = 0; i < 2; i++) {
+        char m[256];
+        uint16_t n = 0;
+        struct dsc$descriptor_s md = { sizeof m - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, m };
+        if (!sts[i] || !(sys$getmsg(sts[i], &n, &md, MSG$M_ALL, NULL) & 1))
+            continue;
+        m[n] = '\0';
+        if (m[0] == '%') m[0] = '-';
+        fprintf(stderr, "%s\n", m);
+    }
+}
+
 /* Write `len` bytes as a new version of `spec`; 0 on success. Through RMS the
  * file is fixed-length with no record size, so each $PUT lands exactly its own
  * bytes (the byte-exact write LINK.EXE's image and LIBRARIAN.EXE's .OLB use). */
 static int olb_file_write(struct dcl_context *ctx, const char *spec,
                           const unsigned char *buf, size_t len)
 {
+    g_olb_why = g_olb_whystv = 0;
     if (!olb_host_defer(spec)) {
         uint32_t st = 0;
         struct dcl_rms_writer *w =
             dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
-        if (!w) return -1;
+        if (!w) { g_olb_why = st; return -1; }
         int rc = 0;
         for (size_t done = 0; done < len && rc == 0; ) {
             size_t chunk = len - done > 32768 ? 32768 : len - done;
             rc = dcl_rms_write_record(w, (const char *)buf + done, chunk);
             done += chunk;
         }
-        if (!(dcl_rms_write_close(w) & 1)) rc = -1;
+        if (rc) g_olb_why = dcl_rms_write_status(w, &g_olb_whystv);
+        uint32_t cst = dcl_rms_write_close(w);
+        if (!(cst & 1)) { if (!rc) g_olb_why = cst; rc = -1; }
         return rc;
     }
     char linux_path[1024];
@@ -1054,6 +1080,7 @@ static int olb_create(struct dcl_context *ctx, struct dcl_command *cmd)
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error creating library - %s", cmd->params[0]);
+        olb_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1080,6 +1107,7 @@ static int olb_insert(struct dcl_context *ctx, struct dcl_command *cmd)
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", cmd->params[0]);
+        olb_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1177,6 +1205,7 @@ static int olb_delete_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", cmd->params[0]);
+        olb_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1203,6 +1232,7 @@ static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", outspec && outspec[0] ? outspec : cmd->params[0]);
+        olb_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);

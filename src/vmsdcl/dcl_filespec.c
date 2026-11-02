@@ -775,6 +775,7 @@ struct dcl_rms_writer {
     struct RAB rab;
     char spec[1024];
     int  connected;
+    uint32_t put_sts, put_stv;   /* the last $PUT's status and secondary value */
 };
 
 struct dcl_rms_writer *dcl_rms_write_create(struct dcl_context *ctx, const char *spec,
@@ -820,7 +821,15 @@ int dcl_rms_write_record(struct dcl_rms_writer *w, const char *buf, size_t len)
     w->rab.rab$l_rbf = (char *)buf;
     w->rab.rab$w_rsz = (uint16_t)len;
     st = sys$put(&w->rab, 0, 0);
+    w->put_sts = st;
+    w->put_stv = w->rab.rab$l_stv;
     return (st == RMS$_NORMAL) ? 0 : -1;
+}
+
+uint32_t dcl_rms_write_status(const struct dcl_rms_writer *w, uint32_t *stv)
+{
+    if (stv) *stv = w ? w->put_stv : 0;
+    return w ? w->put_sts : RMS$_RAB;
 }
 
 uint32_t dcl_rms_write_close(struct dcl_rms_writer *w)

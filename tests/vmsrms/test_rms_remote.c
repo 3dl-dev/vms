@@ -216,7 +216,8 @@ static char *run_cmd(int type, const char *spec, int l0, int nl, uint32_t refuse
     g_rp.refuse = refuse;
     rms_remote_set_link_ops(&g_rp_ops);
     cap_begin(NULL);
-    *st = type ? dcl_remote_type(spec) : dcl_remote_directory(spec);
+    *st = type == 2 ? dcl_remote_directory_full(spec)
+        : type ? dcl_remote_type(spec) : dcl_remote_directory(spec);
     char *buf = cap_end();
     rms_remote_set_link_ops(NULL);
     return buf;
@@ -366,7 +367,7 @@ static void fuzz(void)
 {
     rms_remote_set_link_ops(&g_fz_ops);
     cap_begin("/dev/null");
-    const struct olink *dir = &g_links[1], *tdl = &g_links[2], *topen = &g_links[3];
+    const struct olink *full = &g_links[0], *dir = &g_links[1], *tdl = &g_links[2], *topen = &g_links[3];
     int runs = 0;
     for (int it = 0; it < 20000; it++) {
         g_fz_next = 0;
@@ -376,7 +377,10 @@ static void fuzz(void)
         fill_from(&g_fa, tdl); fill_from(&g_fb, topen);
         if (rnd() & 1) mutate(&g_fa); else mutate(&g_fb);
         (void)dcl_remote_type("VAX2::SYS$LOGIN:BRK*.TXT");
-        runs += 2;
+        g_fz_next = 0;
+        fill_from(&g_fa, full); mutate(&g_fa);       /* DIRECTORY/FULL: attributes, dates, protection */
+        (void)dcl_remote_directory_full("VAX2::SYS$LOGIN:BRK*.TXT");
+        runs += 3;
     }
     /* Pure noise after a good CONFIGURATION. */
     for (int it = 0; it < 5000; it++) {
@@ -391,7 +395,7 @@ static void fuzz(void)
     rms_remote_set_link_ops(NULL);
     char m[120];
     snprintf(m, sizeof m, "fuzz: %d mutated / random FAL replies parsed without a fault", runs);
-    CHECK(runs == 45000, m);
+    CHECK(runs == 65000, m);
 }
 
 /* A FAL that names more files than RMS keeps. */
@@ -441,6 +445,151 @@ static void flood(void)
     free(buf);
 }
 
+
+/* $STATUS: what DCL leaves after the command (the verb adds STS$M_INHIB_MSG
+ * when the failure has been reported), against what the live VAX V7.3 left. */
+static void status_case(const char *what, int type, const char *spec, int l0, int nl,
+                        uint32_t refuse, uint32_t want)
+{
+    uint32_t st = 0;
+    char *got = run_cmd(type, spec, l0, nl, refuse, &st);
+    uint32_t dcl = (st & 1) ? 1u : (st | 0x10000000u);
+    char m[300];
+    snprintf(m, sizeof m, "%s: $STATUS %%X%08X (the VAX's %%X%08X)", what, dcl, want);
+    CHECK(dcl == want, m);
+    free(got);
+}
+
+/* ---------------- COPY/LOG: the block count -------------------------------- */
+/* VAX2 is the real VAX FAL's captured replies (the TYPE links of the capture).
+ * VAX3 is a destination FAL that accepts a PUT and, asked for the file's
+ * attributes, answers with the ATTRIBUTES message the real VAX FAL sent for
+ * BRK1.TXT (EBK 1, FFB 38, HBK 9: one block of nine allocated). */
+struct mk { int open; uint8_t seg[8][1600]; size_t n[8]; int nq, pos; };
+static struct mk g_mk[16];
+static int g_mk_n;
+static struct dnet_dap_msg g_brk1_attr;
+static int g_have_brk1_attr;
+
+static void mk_q(struct mk *k, const struct dnet_dap_msg *m)
+{
+    size_t n = 0;
+    if (k->nq >= 8) return;
+    if (dnet_dap_encode(m, 0, k->seg[k->nq], sizeof k->seg[0], &n) == DNET_DAP_OK) k->n[k->nq++] = n;
+}
+static void *cp_open(void *c, const char *ncb, size_t len, uint32_t *st)
+{
+    if (strstr(ncb, "VAX3")) {
+        if (g_mk_n >= 16) { *st = SS$_ABORT; return NULL; }
+        struct mk *k = &g_mk[g_mk_n++];
+        memset(k, 0, sizeof *k);
+        k->open = 1;
+        *st = SS$_NORMAL;
+        return k;
+    }
+    return rp_open(c, ncb, len, st);
+}
+static int is_mk(const void *l) { return l >= (void *)g_mk && l < (void *)(g_mk + 16); }
+static int cp_send(void *l, const uint8_t *seg, size_t len)
+{
+    if (!is_mk(l)) return rp_send(l, seg, len);
+    struct mk *k = l;
+    struct dnet_dap_msg m, r;
+    size_t used = 0;
+    if (dnet_dap_decode(seg, len, &m, &used) != DNET_DAP_OK) return -1;
+    memset(&r, 0, sizeof r);
+    switch (m.op) {
+    case DNET_DAP_CONFIG:
+        if (k->nq < 8) { memcpy(k->seg[k->nq], g_links[1].srv[0].b, g_links[1].srv[0].n);
+                         k->n[k->nq++] = g_links[1].srv[0].n; }
+        break;
+    case DNET_DAP_ACCESS:
+        if (m.u.access.accfunc == DNET_DAP_ACC_OPEN && g_have_brk1_attr) mk_q(k, &g_brk1_attr);
+        r.op = DNET_DAP_ACKNOWLEDGE; mk_q(k, &r);
+        break;
+    case DNET_DAP_CONTROL:
+        if (m.u.control.ctlfunc == DNET_DAP_CTL_CONNECT) { r.op = DNET_DAP_ACKNOWLEDGE; mk_q(k, &r); }
+        break;
+    case DNET_DAP_ACCESS_COMPLETE:
+        r.op = DNET_DAP_ACCESS_COMPLETE; r.u.complete.cmpfunc = DNET_DAP_CMP_RESPONSE; mk_q(k, &r);
+        break;
+    default: break;
+    }
+    return 0;
+}
+static int cp_recv(void *l, uint8_t *buf, size_t cap, size_t *len)
+{
+    if (!is_mk(l)) return rp_recv(l, buf, cap, len);
+    struct mk *k = l;
+    if (k->pos >= k->nq || k->n[k->pos] > cap) return -1;
+    memcpy(buf, k->seg[k->pos], k->n[k->pos]);
+    *len = k->n[k->pos++];
+    return 0;
+}
+static void cp_close(void *l) { if (!is_mk(l)) rp_close(l); }
+static const struct rms_remote_link_ops g_cp_ops = { cp_open, cp_send, cp_recv, cp_close, &g_rp };
+
+static void copy_blocks(void)
+{
+    /* BRK1's ATTRIBUTES as the real VAX FAL sent it (the DIRECTORY/FULL link). */
+    g_have_brk1_attr = 0;
+    const struct olink *L0 = &g_links[0];
+    for (int i = 0; i < L0->nsrv && !g_have_brk1_attr; i++) {
+        size_t off = 0;
+        while (off < L0->srv[i].n) {
+            struct dnet_dap_msg m; size_t used = 0;
+            if (dnet_dap_decode(L0->srv[i].b + off, L0->srv[i].n - off, &m, &used) != DNET_DAP_OK || !used) break;
+            if (m.op == DNET_DAP_ATTRIBUTES) {
+                g_brk1_attr = m;
+                /* the VAX sets menu bit 21 (a later DAP's field); the codec does not encode it */
+                g_brk1_attr.u.attr.menu &= (1ull << (DNET_DAP_ATT_LAST_KNOWN + 1)) - 1;
+                g_have_brk1_attr = 1;
+                break;
+            }
+            off += used;
+        }
+    }
+    CHECK(g_have_brk1_attr && g_brk1_attr.u.attr.ebk == 1 && g_brk1_attr.u.attr.ffb != 0 &&
+          g_brk1_attr.u.attr.hbk == 9, "BRK1's captured ATTRIBUTES: EBK 1, FFB set, HBK 9");
+
+    memset(&g_rp, 0, sizeof g_rp);
+    g_rp.links[0] = &g_links[2]; g_rp.links[1] = &g_links[3]; g_rp.nlinks = 2;
+    g_mk_n = 0;
+    rms_remote_set_link_ops(&g_cp_ops);
+    cap_begin(NULL);
+    uint32_t st = dcl_remote_copy("VAX2::SYS$LOGIN:BRK*.TXT", "VAX3::DEST.TXT", 1);
+    char *buf = cap_end();
+    rms_remote_set_link_ops(NULL);
+    int n1 = 0;
+    for (const char *p = buf; p && (p = strstr(p, "%COPY-S-COPIED, ")) != NULL; p++) {
+        const char *e = strchr(p, '\n');
+        if (e && e - p > 11 && !strncmp(e - 11, " (1 block)", 10)) n1++;
+        else if (e && e - p > 10 && !strncmp(e - 10, " (1 block)", 10)) n1++;
+    }
+    if (n1 != 2) printf("    --- OVMX printed ---\n%s    ---\n", buf ? buf : "(nothing)\n");
+    CHECK(buf && n1 == 2, "COPY/LOG of two remote files: each %COPY-S-COPIED line ends \" (1 block)\", as the VAX's");
+    CHECK(buf && strstr(buf, "BRK1.TXT;1 copied to VAX3::DEST.TXT (1 block)\n") != NULL,
+          "COPY/LOG: the full line is \"... copied to <output> (1 block)\"");
+    (void)st;
+    free(buf);
+}
+
+/* DIRECTORY/FULL (the real VAX FAL's replies to a DIRLIST asking 0x839) is
+ * the VAX's own listing, byte for byte; the VAX's request is what is sent. */
+static void full_cases(const char *console)
+{
+    uint32_t st = 0;
+    char *want = console_block(console, "DIRECTORY/FULL VAX2::SYS$LOGIN:BRK*.TXT");
+    char *got = run_cmd(2, "VAX2::SYS$LOGIN:BRK*.TXT", 0, 1, 0, &st);
+    int ok = want && got && !strcmp(want, got);
+    if (!ok)
+        printf("    --- VAX printed ---\n%s    --- OVMX printed ---\n%s    ---\n",
+               want ? want : "(no block)\n", got ? got : "(nothing)\n");
+    CHECK(ok, "DIRECTORY/FULL VAX2::SYS$LOGIN:BRK*.TXT prints the VAX's listing (dates, protection, sizes, PRV line, totals)");
+    CHECK((st & 1) == 1, "DIRECTORY/FULL: success status");
+    free(want); free(got);
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 5) {
@@ -463,6 +612,14 @@ int main(int argc, char **argv)
         oracle_case("DIRECTORY VAX2::SYS$LOGIN:NOSUCH.TXT is %DIRECT-W-NOFILES",
                     argv[2], "DIRECTORY VAX2::SYS$LOGIN:NOSUCH.TXT", 0,
                     "VAX2::SYS$LOGIN:NOSUCH.TXT", 13, 1, 0, "SYS$LOGIN:NOSUCH.TXT;*");
+        printf("2b. DIRECTORY/FULL, COPY/LOG blocks, $STATUS\n");
+        full_cases(argv[2]);
+        copy_blocks();
+        /* $STATUS, from tests/lab/captures/vms-0a7-s1-20261102/events.log (VAXC L-cases). */
+        status_case("DIRECTORY ...NOSUCH.TXT", 0, "VAX2::SYS$LOGIN:NOSUCH.TXT", 13, 1, 0, 0x10018290u);
+        status_case("TYPE BRK*.TXT (BRKP OPENIN -RMS-E-PRV)", 1, "VAX2::SYS$LOGIN:BRK*.TXT", 2, 2, 0, 0x10951098u);
+        status_case("DIRECTORY, link refused INVLOGIN", 0, "VAX2::SYS$LOGIN:BRK*.TXT", 1, 0, SS$_INVLOGIN, 0x1001C02Au);
+        status_case("TYPE, link refused INVLOGIN (SEARCHFAIL)", 1, "VAX2::SYS$LOGIN:BRK1.TXT", 1, 0, SS$_INVLOGIN, 0x10951238u);
         printf("3. peer-receive bound\n");
         fuzz();
         flood();

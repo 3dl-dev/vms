@@ -34,8 +34,90 @@
 #include "descrip.h"
 
 #define RMS_FND 0x0001C02Au      /* RMS$_FND, catalog 0x0001C02A (not in rmsdef.h) */
+/* What DCL leaves in $STATUS (without STS$M_INHIB_MSG, which the caller adds)
+ * after a failure the live VAX V7.3 reported. DIRECTORY leaves the RMS status
+ * of the failed search -- not the STV under it -- so a wrong password is
+ * RMS$_FND (%X1001C02A) and an empty listing RMS$_FNF at warning severity
+ * (%X10018290). TYPE leaves its own message: %TYPE-W-OPENIN is %X10951098 and
+ * %TYPE-W-SEARCHFAIL %X10951238, whatever RMS error lies under them.
+ * (tests/lab/captures/vms-0a7-s1-20261102/events.log, VAXC L2c/L2d/L5a/L5b.) */
+#define TYPE_W_OPENIN     0x00951098u
+#define TYPE_W_SEARCHFAIL 0x00951238u
 #define DIR_COLS 4
 #define DIR_CELL 20
+
+/* ---- DIRECTORY/FULL texts, shared with the local DIRECTORY/FULL ---------- */
+
+/* Per-category access bits within a VMS protection nibble (set = DENIED). */
+#define FMT_PROT_R 0x01
+#define FMT_PROT_W 0x02
+#define FMT_PROT_E 0x04
+#define FMT_PROT_D 0x08
+
+/* "Record format:" text for a FAT record format (vms-a44), as OpenVMS VAX V7.3
+ * prints it (vax73-dirfull-recfmt.txt):
+ *   FIX  "Fixed length 20 byte records"
+ *   VAR  "Variable length, maximum 0 bytes, longest 32 bytes"
+ *   VFC  "VFC, 2 byte header, maximum 0 bytes, longest 32 bytes"
+ *   STM / STMLF / STMCR  "Stream" / "Stream_LF" / "Stream_CR", maximum, longest
+ *   UDF  "Undefined, maximum 0 bytes, longest 0 bytes" */
+void dcl_fmt_recfmt(uint8_t rfm, uint16_t mrs, uint16_t lrl, uint8_t fsz,
+                              char *out, size_t cap)
+{
+    const char *nm;
+    switch (rfm) {
+    case FAB$C_FIX:
+        snprintf(out, cap, "Fixed length %u byte records", (unsigned)mrs);
+        return;
+    case FAB$C_VFC:
+        snprintf(out, cap, "VFC, %u byte header, maximum %u bytes, longest %u bytes",
+                 (unsigned)fsz, (unsigned)mrs, (unsigned)lrl);
+        return;
+    case FAB$C_VAR:   nm = "Variable length"; break;
+    case FAB$C_STM:   nm = "Stream";          break;
+    case FAB$C_STMLF: nm = "Stream_LF";       break;
+    case FAB$C_STMCR: nm = "Stream_CR";       break;
+    default:          nm = "Undefined";       break;
+    }
+    snprintf(out, cap, "%s, maximum %u bytes, longest %u bytes", nm,
+             (unsigned)mrs, (unsigned)lrl);
+}
+
+/* "Record attributes:" text (vms-a44): the carriage-control attribute (Fortran /
+ * Carriage return / Print file carriage control), then ", Non-spanned" for BLK;
+ * "None" when neither is set. */
+void dcl_fmt_recattr(uint8_t rat, char *out, size_t cap)
+{
+    const char *cc = (rat & FAB$M_FTN) ? "Fortran carriage control"
+                   : (rat & FAB$M_CR)  ? "Carriage return carriage control"
+                   : (rat & FAB$M_PRN) ? "Print file carriage control" : NULL;
+    if (cc && (rat & FAB$M_BLK))      snprintf(out, cap, "%s, Non-spanned", cc);
+    else if (cc)                      snprintf(out, cap, "%s", cc);
+    else if (rat & FAB$M_BLK)         snprintf(out, cap, "Non-spanned");
+    else                              snprintf(out, cap, "None");
+}
+
+/* A VMS protection word in the long form DIRECTORY/FULL prints:
+ * "System:RWED, Owner:RWED, Group:RE, World:". A clear bit allows the access. */
+void dcl_fmt_prot_full(uint16_t prot, char *buf, size_t bufsize)
+{
+    static const char *cats[]  = { "System", "Owner", "Group", "World" };
+    static const int   shift[] = { 0, 4, 8, 12 };
+    size_t off = 0;
+    for (int i = 0; i < 4; i++) {
+        uint8_t bits = (uint8_t)((prot >> shift[i]) & 0x0F);
+        char acc[5]; int a = 0;
+        if (!(bits & FMT_PROT_R)) acc[a++] = 'R';
+        if (!(bits & FMT_PROT_W)) acc[a++] = 'W';
+        if (!(bits & FMT_PROT_E)) acc[a++] = 'E';
+        if (!(bits & FMT_PROT_D)) acc[a++] = 'D';
+        acc[a] = '\0';
+        int n = snprintf(buf + off, bufsize - off, "%s%s:%s",
+                         (i > 0) ? ", " : "", cats[i], acc);
+        if (n < 0 || (size_t)n >= bufsize - off) break;
+        off += (size_t)n;
+    }
+}
 
 /* ---- messages ---------------------------------------------------------- */
 
@@ -250,7 +332,7 @@ uint32_t dcl_remote_directory(const char *spec)
              * on what the remote had expanded, then why. */
             printf("%%DIRECT-E-OPENIN, error opening %s as input\n", f.esa);
             put_status(f.end_sts, f.end_stv);
-            ret = (f.end_sts == RMS_FND && f.end_stv) ? f.end_stv : f.end_sts;
+            ret = f.end_sts;          /* the RMS status, as the VAX leaves it (%X1001C02A) */
         }
     } else if (f.n == 0) {
         printf("%%DIRECT-W-NOFILES, no files found\n");
@@ -258,6 +340,188 @@ uint32_t dcl_remote_directory(const char *spec)
     }
     fflush(stdout);
     found_free(&f);
+    return ret;
+}
+
+
+/* ---- DIRECTORY/FULL ----------------------------------------------------------- */
+
+/* The text of a condition alone ("insufficient privilege or object protection
+ * violation"), as the VAX prints it after a name it could not describe. */
+static void msg_text(uint32_t cond, char *out, size_t cap)
+{
+    uint16_t tl = 0;
+    struct dsc$descriptor_s d;
+    d.dsc$w_length = (uint16_t)(cap - 1);
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = out;
+    (void)sys$getmsg(cond, &tl, &d, 1, NULL);
+    out[tl < cap ? tl : cap - 1] = '\0';
+}
+
+/* A VMS local-time quadword (100-ns ticks since 17-NOV-1858) as
+ * "dd-MMM-yyyy hh:mm:ss.cc". The time is already local, so no zone is applied. */
+static void full_date(const uint8_t q[8], char *out, size_t cap)
+{
+    static const char *const mon[] = { "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                                       "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
+    uint64_t t = 0;
+    for (int i = 7; i >= 0; i--) t = (t << 8) | q[i];
+    uint64_t secs = t / 10000000ull;
+    unsigned cs = (unsigned)((t % 10000000ull) / 100000ull);
+    int64_t days = (int64_t)(secs / 86400ull) - 40587;       /* day 0 of 1858 -> since 1970 */
+    unsigned sod = (unsigned)(secs % 86400ull);
+    /* days since 1970-01-01 -> civil date (proleptic Gregorian) */
+    int64_t z = days + 719468;
+    int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    unsigned doe = (unsigned)(z - era * 146097);
+    unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int64_t y = (int64_t)yoe + era * 400;
+    unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    unsigned mp = (5 * doy + 2) / 153;
+    unsigned d = doy - (153 * mp + 2) / 5 + 1;
+    unsigned m = mp < 10 ? mp + 3 : mp - 9;
+    if (m <= 2) y++;
+    snprintf(out, cap, "%2u-%s-%04lld %02u:%02u:%02u.%02u", d, mon[m - 1], (long long)y,
+             sod / 3600, sod / 60 % 60, sod % 60, cs);
+}
+
+/* The name.type;ver of a resultant: past the node, volume and directory. */
+static const char *name_part(const char *r) { return r + dir_part(r); }
+
+/* One served file, in the layout a VAX V7.3 prints for a remote file
+ * (tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/
+ * falverbs-v2v-vax1-console.txt). What DAP cannot carry is what the VAX prints
+ * for it over the network: no File ID, the shelving and caching states
+ * "(remote)", a global buffer count and version limit of 0. */
+static void full_entry(const struct rms_remote_fent *e, long *used, long *alloc)
+{
+    const struct rms_fileattr *a = &e->fa;
+    const char *nm = name_part(e->name);
+    int len = (int)strlen(nm);
+    printf("%s%*sFile ID:  None\n", nm, len < 30 ? 30 - len : 1, "");
+    long u = 0, al = 0;
+    if (e->have_attr) {
+        u = a->efblk ? (a->ffbyte ? (long)a->efblk : (long)a->efblk - 1) : 0;
+        al = (long)a->hiblk;
+        char sz[40];
+        snprintf(sz, sizeof sz, "%ld/%ld", u, al);
+        printf("Size:            %-13s", sz);
+        if (e->have_owner) printf("Owner:    %s", e->owner);
+        putchar('\n');
+    } else if (e->have_owner) {
+        printf("Owner:    %s\n", e->owner);
+    }
+    char dt[40];
+    if (e->have_cre) { full_date(a->credate, dt, sizeof dt); printf("Created:   %s\n", dt); }
+    else             printf("Created:   <None specified>\n");
+    if (e->have_rev) {
+        full_date(a->revdate, dt, sizeof dt);
+        printf("Revised:   %s (%u)\n", dt, (unsigned)a->revision);
+    } else {
+        printf("Revised:   <None specified>\n");
+    }
+    printf("Expires:   <None specified>\n");
+    printf("Backup:    <No backup recorded>\n");
+    printf("Effective: <None specified>\n");
+    printf("Recording: <None specified>\n");
+    if (e->have_attr) {
+        const char *org = a->org == FAB$C_REL ? "Relative" : a->org == FAB$C_IDX ? "Indexed"
+                        : a->org == FAB$C_SEQ ? "Sequential" : "Hashed";
+        printf("File organization:  %s\n", org);
+    }
+    printf("Shelved state:      (remote)\n");
+    printf("Caching attribute:  (remote)\n");
+    if (e->have_attr) {
+        char fmt[96], attr[96];
+        printf("File attributes:    Allocation: %ld, Extend: %u, Global buffer count: 0, "
+               "Version limit: 0\n", al, (unsigned)a->defext);
+        dcl_fmt_recfmt(a->rfm, a->mrs, a->lrl, a->vfcsize, fmt, sizeof fmt);
+        dcl_fmt_recattr(a->rat, attr, sizeof attr);
+        printf("Record format:      %s\n", fmt);
+        printf("Record attributes:  %s\n", attr);
+    }
+    printf("RMS attributes:     None\n");
+    printf("Journaling enabled: None\n");
+    if (e->have_prot) {
+        char pb[80];
+        dcl_fmt_prot_full(a->fileprot, pb, sizeof pb);
+        printf("File protection:    %s\n", pb);
+    }
+    printf("Access Cntrl List:  None\n");
+    printf("Client attributes:  None\n");
+    *used += u;
+    *alloc += al;
+}
+
+uint32_t dcl_remote_directory_full(const char *spec)
+{
+    char wire[NAM$C_MAXESS + 1];
+    if (!spec || default_spec(spec, 1, wire, sizeof wire) != 0) {
+        printf("%%DIRECT-E-OPENIN, error opening %s as input\n", spec ? spec : "");
+        put_status(RMS$_SYN, 0);
+        return RMS$_SYN;
+    }
+    struct rms_remote_full f;
+    uint32_t st = rms_remote_dirlist_full(wire, &f);
+    if (!(st & 1)) {
+        printf("%%DIRECT-E-OPENIN, error opening %s as input\n", spec);
+        put_status(st, 0);
+        fflush(stdout);
+        return st;
+    }
+    size_t groups = 0, total = 0;
+    long gused = 0, galloc = 0;
+    for (size_t i = 0; i < f.n; ) {
+        size_t pl = dir_part(f.e[i].name), j = i + 1;
+        while (j < f.n && dir_part(f.e[j].name) == pl && !strncmp(f.e[j].name, f.e[i].name, pl)) j++;
+        printf("\nDirectory %.*s\n\n", (int)pl, f.e[i].name);
+        long used = 0, alloc = 0;
+        int sep = 0;                       /* a blank line is owed after a full entry */
+        for (size_t k = i; k < j; k++) {
+            if (sep) putchar('\n');
+            sep = 0;
+            if (f.e[k].sts) {
+                char tx[300];
+                /* the VAX words the refusal with the system status under it (PRV over
+                 * SS$_NOPRIV: "insufficient privilege or object protection
+                 * violation"), else with the RMS one */
+                msg_text(f.e[k].stv ? f.e[k].stv : f.e[k].sts, tx, sizeof tx);
+                const char *nm = name_part(f.e[k].name);
+                printf("%-19s %s\n", nm, tx);
+            } else {
+                full_entry(&f.e[k], &used, &alloc);
+                sep = 1;
+            }
+        }
+        size_t n = j - i;
+        printf("\nTotal of %zu file%s, %ld/%ld block%s.\n", n, n == 1 ? "" : "s", used, alloc,
+               used == 1 ? "" : "s");
+        total += n; gused += used; galloc += alloc;
+        groups++;
+        i = j;
+    }
+    if (groups > 1)
+        printf("\nGrand total of %zu directories, %zu file%s, %ld/%ld block%s.\n", groups, total,
+               total == 1 ? "" : "s", gused, galloc, gused == 1 ? "" : "s");
+
+    uint32_t ret = RMS$_NORMAL;
+    if (f.end_sts != RMS$_NMF) {
+        if (f.n == 0 && f.end_sts == RMS$_FNF) {
+            printf("%%DIRECT-W-NOFILES, no files found\n");
+            ret = RMS$_FNF & ~7u;
+        } else {
+            printf("%%DIRECT-E-OPENIN, error opening %s as input\n", f.end_what);
+            put_status(f.end_sts, f.end_stv);
+            ret = f.end_sts;
+        }
+    } else if (f.n == 0) {
+        printf("%%DIRECT-W-NOFILES, no files found\n");
+        ret = RMS$_FNF & ~7u;
+    }
+    fflush(stdout);
+    rms_remote_full_free(&f);
     return ret;
 }
 
@@ -271,7 +535,7 @@ uint32_t dcl_remote_type(const char *spec)
             printf("%%TYPE-W-SEARCHFAIL, error searching for %s\n", spec ? spec : "");
             put_status(RMS$_SYN, 0);
         }
-        return RMS$_SYN;
+        return TYPE_W_SEARCHFAIL;
     }
     struct found f;
     (void)search_all(wire, &f);
@@ -279,10 +543,9 @@ uint32_t dcl_remote_type(const char *spec)
         uint32_t sts = f.end_sts == RMS$_NMF ? RMS$_FNF : f.end_sts;
         printf("%%TYPE-W-SEARCHFAIL, error searching for %s\n", f.esa);
         put_status(sts, f.end_stv);
-        uint32_t ret = (sts == RMS_FND && f.end_stv) ? f.end_stv : sts;
         fflush(stdout);
         found_free(&f);
-        return ret;
+        return TYPE_W_SEARCHFAIL;
     }
 
     int wild = is_wild(spec) || f.n > 1;
@@ -299,11 +562,8 @@ uint32_t dcl_remote_type(const char *spec)
         if (!(st & 1)) {
             printf("%%TYPE-W-OPENIN, error opening %s as input\n", what);
             put_status(st, fab.fab$l_stv);
-            if (st == RMS_FND) {               /* the link itself failed: stop */
-                ret = fab.fab$l_stv ? fab.fab$l_stv : st;
-                break;
-            }
-            ret = st;
+            ret = TYPE_W_OPENIN;
+            if (st == RMS_FND) break;          /* the link itself failed: stop */
             continue;
         }
         struct RAB rab = cc$rms_rab;
@@ -476,8 +736,20 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
         ret = st;
     }
     (void)sys$close(&in, 0, 0);
-    if ((ret & 1) && log)
-        printf("%%COPY-S-COPIED, %s copied to %s\n", src, dshow);
+    if ((ret & 1) && log) {
+        /* VMS ends the line with the output file's size: "(1 block)" /
+         * "(N blocks)", the blocks in use from the file's own attributes
+         * (EOF block, first free byte) -- what the ACP, or the remote FAL, says
+         * of the file just written. Where they cannot be had, no count is
+         * printed rather than a made-up one. */
+        struct rms_fileattr fa;
+        char cnt[40] = "";
+        if (rms_file_attr(rshow[0] ? rshow : dst, &fa) == RMS$_NORMAL) {
+            long used = fa.efblk ? (fa.ffbyte ? (long)fa.efblk : (long)fa.efblk - 1) : 0;
+            snprintf(cnt, sizeof cnt, " (%ld block%s)", used, used == 1 ? "" : "s");
+        }
+        printf("%%COPY-S-COPIED, %s copied to %s%s\n", src, dshow, cnt);
+    }
     return ret;
 }
 

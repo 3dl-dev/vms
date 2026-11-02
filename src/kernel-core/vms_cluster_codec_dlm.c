@@ -854,8 +854,10 @@ vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len
  * 432 of 792 ROOT records carry all four zero. Zero is that real form, written
  * for every record; on a SUB record it is a `deviation` row.
  */
-#define VMS_OFF_DLM_RM_REC_C110    182u /* body[110]                        */
-#define VMS_DLM_RM_REC_C110_VAL    0x01u
+#define VMS_OFF_DLM_RM_REC_C108    180u /* body[108] (rd vms-0db)           */
+#define VMS_OFB_DLM_RM_REC_C108 VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_REC_C108)
+#define VMS_OFF_DLM_RM_REC_C110    182u /* body[110], the queue (vms-0db)   */
+#define VMS_OFB_DLM_RM_REC_C110 VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_REC_C110)
 #define VMS_OFF_DLM_RM_REC_TAIL    184u /* body[112:128]                    */
 #define VMS_DLM_RM_REC_TAIL_LEN    16u
 /* body[28] of the holder's op-0x13: 0 in 662 of 662 (H4). */
@@ -2231,6 +2233,8 @@ static vms_codec_status_t dlm_lock_rec_parse_op(const uint8_t *body,
 {
 	vms_wire_view_t v;
 	struct vms_dlm_rm_lock_rec r;
+	struct vms_dlm_rb_modes m;
+	struct vms_dlm_rb_mode_cells c;
 	uint8_t cat, op;
 	vms_codec_status_t st;
 
@@ -2246,14 +2250,24 @@ static vms_codec_status_t dlm_lock_rec_parse_op(const uint8_t *body,
 
 	r.holder_epid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
 	r.holder_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
-	r.flags = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_FLAG);
-	r.granted_mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
-	r.requested_mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE + 1u);
+	c.c28 = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_FLAG);
+	c.c30 = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	c.c31 = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE + 1u);
+	c.c108 = vms_wire_get_u8(&v, VMS_OFB_DLM_RM_REC_C108);
+	c.c110 = vms_wire_get_u8(&v, VMS_OFB_DLM_RM_REC_C110);
 	r.parent_holder_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_H);
 	r.parent_master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_M);
 	r.dlm_seq = vms_wire_get_le16(&v, VMS_OFB_DLM_RM_SEQ);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
+	/* The queue, the modes and the flags: the one function (rd vms-0db). */
+	st = vms_dlm_rb_rec_modes(0, &m, &c);
+	if (st != VMS_CODEC_OK)
+		return st;
+	r.queue_state = m.queue_state;
+	r.granted_mode = m.granted_mode;
+	r.requested_mode = m.requested_mode;
+	r.flags = m.flags;
 	st = dlm_rm_ident_get(&v, &r.id);
 	if (st != VMS_CODEC_OK)
 		return st;
@@ -2268,6 +2282,68 @@ static vms_codec_status_t dlm_lock_rec_parse_op(const uint8_t *body,
 	r.is_root = (uint8_t)((r.parent_holder_lkid == 0u &&
 			       r.parent_master_lkid == 0u) ? 1u : 0u);
 	*out = r;
+	return VMS_CODEC_OK;
+}
+
+/*
+ * THE ONE PLACE A HOLDER RECORD'S QUEUE AND MODES ARE ENCODED OR DECODED (rd
+ * vms-0db; the rule is the header's). Both builders and both parsers come
+ * through here and nowhere else touches body[28]/[30]/[31]/[108]/[110] of an
+ * op-0x12 or op-0x08 record.
+ */
+vms_codec_status_t vms_dlm_rb_rec_modes(int encode, struct vms_dlm_rb_modes *m,
+					struct vms_dlm_rb_mode_cells *c)
+{
+	if (m == (struct vms_dlm_rb_modes *)0 ||
+	    c == (struct vms_dlm_rb_mode_cells *)0)
+		return VMS_CODEC_E_INVAL;
+	if (encode) {
+		if (m->granted_mode > (uint8_t)VMS_LCK_EX ||
+		    m->requested_mode > (uint8_t)VMS_LCK_EX)
+			return VMS_CODEC_E_INVAL;
+		c->c30 = m->requested_mode;
+		switch (m->queue_state) {
+		case VMS_DLM_RB_Q_GRANTED:
+			/* body[28] and body[108] stay the zeros every granted
+			 * record OVMX has sent carries (the header). */
+			c->c28 = 0u;
+			c->c31 = m->granted_mode;
+			c->c108 = 0u;
+			c->c110 = (uint8_t)VMS_DLM_RB_WIRE_GRANTED;
+			return VMS_CODEC_OK;
+		case VMS_DLM_RB_Q_CONVERTING:
+			c->c31 = m->granted_mode;
+			c->c110 = (uint8_t)VMS_DLM_RB_WIRE_CONVERTING;
+			break;
+		case VMS_DLM_RB_Q_WAITING:
+			c->c31 = 0u;          /* never granted (5,0)          */
+			c->c110 = (uint8_t)VMS_DLM_RB_WIRE_WAITING;
+			break;
+		default:
+			return VMS_CODEC_E_INVAL;
+		}
+		c->c28 = (uint8_t)(m->flags & VMS_DLM_REC_FLAGS_NAMED);
+		c->c108 = (uint8_t)VMS_DLM_RB_C108_QUEUED;
+		return VMS_CODEC_OK;
+	}
+	if (c->c30 > (uint8_t)VMS_LCK_EX || c->c31 > (uint8_t)VMS_LCK_EX)
+		return VMS_CODEC_E_RANGE;
+	switch (c->c110) {
+	case VMS_DLM_RB_WIRE_GRANTED:
+		m->queue_state = (uint8_t)VMS_DLM_RB_Q_GRANTED;
+		break;
+	case VMS_DLM_RB_WIRE_CONVERTING:
+		m->queue_state = (uint8_t)VMS_DLM_RB_Q_CONVERTING;
+		break;
+	case VMS_DLM_RB_WIRE_WAITING:
+		m->queue_state = (uint8_t)VMS_DLM_RB_Q_WAITING;
+		break;
+	default:
+		return VMS_CODEC_E_RANGE;   /* no named queue: not a lock */
+	}
+	m->requested_mode = c->c30;
+	m->granted_mode = c->c31;
+	m->flags = c->c28;
 	return VMS_CODEC_OK;
 }
 
@@ -2387,7 +2463,7 @@ vms_dlm_rm_lock_answer_build(const uint8_t *req_body, uint32_t req_len,
 {
 	vms_wire_view_t v;
 	vms_wire_buf_t w;
-	uint8_t cat, op;
+	uint8_t cat, op, c108, c110;
 	uint32_t i;
 
 	if (req_body == (const uint8_t *)0 || frame == (uint8_t *)0 ||
@@ -2419,14 +2495,26 @@ vms_dlm_rm_lock_answer_build(const uint8_t *req_body, uint32_t req_len,
 			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_ENQ);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, a->master_lkid);
-	/* The grant record (38/38 real grants; 420/420 real 0x12 answers). */
+	/* The grant record (38/38 real grants; 420/420 real 0x12 answers) --
+	 * with body[28] = 0x10 | the record's body[108] (rd vms-0db: 5,694 of
+	 * 5,694 real 0xfa answers; 0x14 for a non-granted record). */
 	dlm_put_grant_record(&w);
-	/* body[30:32]: the grant's cleared pair, unless the caller holds a
-	 * real executive value for the root form (header rule 2). */
-	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE,
-			a->root_ctx_valid ? a->root_ctx[0] : 0u);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u,
-			a->root_ctx_valid ? a->root_ctx[1] : 0u);
+	c108 = vms_wire_get_u8(&v, VMS_OFB_DLM_RM_REC_C108);
+	c110 = vms_wire_get_u8(&v, VMS_OFB_DLM_RM_REC_C110);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG,
+			(uint8_t)(VMS_DLM_GRANT_FLAG_VAL | c108));
+	/* body[30:32]: on a GRANTED record the grant's cleared pair, unless
+	 * the caller holds a real executive value for the root form (header
+	 * rule 2). A converting or waiting record's answer echoes its
+	 * (body[30], body[31]) -- left as the echo above put them (rd vms-0db). */
+	if (c110 == (uint8_t)VMS_DLM_RB_WIRE_GRANTED) {
+		vms_wire_put_u8(&w, VMS_OFF_DLM_MODE,
+				a->root_ctx_valid ? a->root_ctx[0] : 0u);
+		vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u,
+				a->root_ctx_valid ? a->root_ctx[1] : 0u);
+	}
 	/* body[36:56]: the value block and its sequence, or twenty zeros --
 	 * written LAST so this span owns every byte of itself, including the
 	 * request's identity and name bytes that lie under it. */
@@ -2645,6 +2733,9 @@ static vms_codec_status_t dlm_lock_rec_build_op(const struct vms_dlm_rm_lock_rec
 						uint32_t *written)
 {
 	vms_wire_buf_t w;
+	struct vms_dlm_rb_modes m;
+	struct vms_dlm_rb_mode_cells c;
+	vms_codec_status_t st;
 	uint32_t i;
 
 	if (r == (const struct vms_dlm_rm_lock_rec *)0 || frame == (uint8_t *)0)
@@ -2657,7 +2748,8 @@ static vms_codec_status_t dlm_lock_rec_build_op(const struct vms_dlm_rm_lock_rec
 	if (r->id.name_len == 0u || r->id.name_len >= VMS_DLM_NAME_MAX)
 		return VMS_CODEC_E_INVAL;
 	if (r->granted_mode > (uint8_t)VMS_LCK_EX ||
-	    r->requested_mode > (uint8_t)VMS_LCK_EX)
+	    r->requested_mode > (uint8_t)VMS_LCK_EX ||
+	    r->queue_state >= (uint8_t)VMS_DLM_RB_Q__COUNT)
 		return VMS_CODEC_E_INVAL;
 
 	vms_wire_buf_init(&w, frame, cap);
@@ -2668,8 +2760,18 @@ static vms_codec_status_t dlm_lock_rec_build_op(const struct vms_dlm_rm_lock_rec
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, op);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, r->holder_epid);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, r->holder_lkid);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, r->granted_mode);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u, r->requested_mode);
+	/* The queue, the modes and the flags: the one function (rd vms-0db),
+	 * for an op-0x12 and an op-0x08 alike. */
+	m.queue_state = r->queue_state;
+	m.granted_mode = r->granted_mode;
+	m.requested_mode = r->requested_mode;
+	m.flags = r->flags;
+	st = vms_dlm_rb_rec_modes(1, &m, &c);
+	if (st != VMS_CODEC_OK)
+		return st;
+	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_FLAG, c.c28);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, c.c30);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u, c.c31);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_RM_PARENT_H, r->parent_holder_lkid);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_RM_PARENT_M, r->parent_master_lkid);
 	dlm_rm_put_ident(&w, &r->id, hash_known);
@@ -2683,7 +2785,8 @@ static vms_codec_status_t dlm_lock_rec_build_op(const struct vms_dlm_rm_lock_rec
 		vms_wire_put_le32(&w, VMS_OFF_DLM_RM_REC_VALSEQ,
 				  r->valblk_seq);
 	}
-	vms_wire_put_u8(&w, VMS_OFF_DLM_RM_REC_C110, VMS_DLM_RM_REC_C110_VAL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RM_REC_C108, c.c108);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RM_REC_C110, c.c110);
 	for (i = 0u; i < VMS_DLM_RM_REC_TAIL_LEN; i++)
 		vms_wire_put_u8(&w, VMS_OFF_DLM_RM_REC_TAIL + i,
 				((i / 4u) & 1u) ? 0xffu : 0x00u);

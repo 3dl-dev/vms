@@ -19,6 +19,7 @@ Prints `key=value` lines (GITHUB_OUTPUT format):
   alpha_selfhost_tier  true|false
   keystroke       true|false
   decnet          true|false
+  vax_boot        true|false
   negctl_select   ALL | (empty = none) | space-separated defect names
 
 negctl_select is a PATH-TO-FACILITY map that FAILS CLOSED: a changed path that
@@ -95,6 +96,38 @@ TIERS = {
         "tests/lab-vax/run-boot.sh",
         "tests/lab-vax/test_decnet_pair_vax.py",
         "tools/ci/ci_tiers.py",
+    ],
+    # VAX demo-disk battery (ci-vax vax-acceptance-16mb + vax-sysboot-single,
+    # rd vms-236): the inputs of the OVMX/VAX boot image and of the DCL/SHOW
+    # battery the demo-disk builds (cluster-demo-nodeB) run. A queue entry that
+    # touches one boots the 16 MB VAX and the demo boot mode in the merge queue,
+    # so a battery/golden graduation (#1908) or a VAX image-link change that
+    # only breaks in combination with what landed ahead of it (#1913 + #1850)
+    # cannot merge with every demo build red. Others do not pay the SIMH boot.
+    "vax_boot": [
+        ".github/workflows/ci-vax.yml",
+        ".github/workflows/ci-changes.yml",
+        "tools/ci/ci_tiers.py",
+        # the battery, its verdict helpers, and the goldens it diffs against
+        "tests/qemu/lib/**",
+        "tools/oracle/surfaces/**",
+        "docs/oracle/golden/**",
+        # the VAX image builders (link scripts, weak seams, disk/kit staging)
+        "tools/cross-vax/**",
+        "tests/lab-vax/**",
+        # the boot processes and the login path every demo boot runs
+        "src/ovmx_init/**",
+        "src/ovmx_provision/**",
+        "src/ovmx_opcom/**",
+        "src/ovmx_job_control/**",
+        "src/vmsdcl/**",
+        "src/kernel-core/vms_tt*",
+        "src/kernel-netbsd/**",
+        "tools/vms_login.c",
+        "tools/loginout_display.c",
+        "src/vmslink/mk_loginout.sh",
+        "src/vmslink/loginout_rms_bind.c",
+        "distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/**",
     ],
     # Keystroke oracle: the console, terminal driver and boot path.
     "keystroke": [
@@ -231,22 +264,26 @@ def changed_files(repo, base):
 
 def decide(event, ref, files, table_fn):
     res = {"heavy_release": "false", "alpha_selfhost_tier": "false",
-           "keystroke": "false", "decnet": "false", "negctl_select": ""}
+           "keystroke": "false", "decnet": "false", "vax_boot": "false",
+           "negctl_select": ""}
     if is_full(event, ref):
         return {"heavy_release": "true", "alpha_selfhost_tier": "true",
-                "keystroke": "true", "decnet": "true", "negctl_select": "ALL"}
+                "keystroke": "true", "decnet": "true", "vax_boot": "true",
+                "negctl_select": "ALL"}
     if event == "push":
         return res  # the queue already tested this exact tree
     if files is None:  # could not compute: fail closed (queue / PR only)
         if event == "merge_group":
             return {"heavy_release": "true", "alpha_selfhost_tier": "true",
-                    "keystroke": "true", "decnet": "true", "negctl_select": "ALL"}
+                    "keystroke": "true", "decnet": "true", "vax_boot": "true",
+                "negctl_select": "ALL"}
         return res
     if event == "merge_group":
         res["alpha_selfhost_tier"] = "true" if matches_any(files, TIERS["alpha_selfhost_tier"]) else "false"
         res["heavy_release"] = "true" if matches_any(files, TIERS["heavy_release"]) else "false"
         res["keystroke"] = "true" if matches_any(files, TIERS["keystroke"]) else "false"
         res["decnet"] = "true" if matches_any(files, TIERS["decnet"]) else "false"
+        res["vax_boot"] = "true" if matches_any(files, TIERS["vax_boot"]) else "false"
         try:
             res["negctl_select"] = negctl_select(files, table_fn())
         except Exception as e:  # noqa: BLE001 -- fail closed
@@ -276,7 +313,8 @@ def main():
     except Exception as e:  # noqa: BLE001 -- fail closed
         print("ci_tiers: cannot compute changed files (%s)" % e, file=sys.stderr)
     res = decide(a.event, a.ref, files, lambda: defect_table(a.repo))
-    for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "decnet", "negctl_select"):
+    for k in ("heavy_release", "alpha_selfhost_tier", "keystroke", "decnet", "vax_boot",
+              "negctl_select"):
         print("%s=%s" % (k, res[k]))
 
 

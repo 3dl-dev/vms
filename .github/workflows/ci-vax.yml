@@ -1429,7 +1429,10 @@ jobs:
     # (vax_login: DCL, ovmx_init, the VAX harness) -- the paths whose footprint
     # decides whether the 16 MB demo node (Node B, a MicroVAX 3900 at 16 MB when
     # it starved) keeps headroom. rd vms-83d / vms-4029 / vms-25f.
-    if: ${{ !cancelled() && needs.netbsd-vax-substrate-prime.result == 'success' && (((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true')) || (github.event_name == 'pull_request' && needs.changes.outputs.vax_login == 'true')) }}
+    # In the MERGE QUEUE when the change touches the VAX boot image or the
+    # battery (tools/ci/ci_tiers.py `vax_boot`, rd vms-236): the queue tests the
+    # combined tree, which a PR run on an older base never saw.
+    if: ${{ !cancelled() && needs.netbsd-vax-substrate-prime.result == 'success' && (((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true')) || (github.event_name == 'pull_request' && needs.changes.outputs.vax_login == 'true') || (github.event_name == 'merge_group' && needs.changes.outputs.vax_boot == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -1524,7 +1527,9 @@ jobs:
     # Heavy tier (schedule / dispatch, as acceptance), PLUS any PR that touches
     # the VAX login path (vax_login: DCL, the terminal driver, LOGINOUT, the VAX
     # harness, boot scripts). Not on every merge (coordinator ruling 2026-10-14).
-    if: ${{ !cancelled() && needs.netbsd-vax-substrate-prime.result == 'success' && (((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true')) || (github.event_name == 'pull_request' && needs.changes.outputs.vax_login == 'true')) }}
+    # In the merge queue only for a `vax_boot` change (tools/ci/ci_tiers.py,
+    # rd vms-236), which is the boot mode the demo-disk builds use.
+    if: ${{ !cancelled() && needs.netbsd-vax-substrate-prime.result == 'success' && (((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true')) || (github.event_name == 'pull_request' && needs.changes.outputs.vax_login == 'true') || (github.event_name == 'merge_group' && needs.changes.outputs.vax_boot == 'true')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:

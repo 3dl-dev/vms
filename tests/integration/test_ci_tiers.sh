@@ -78,6 +78,28 @@ o=$(tier pull_request refs/pull/1/merge src/vmsdecnet/engine/decnetd.c)
 o=$(tier schedule refs/heads/main docs/x.md)
 [ "$(get "$o" decnet)" = true ] && ok "nightly runs the DECnet pair" || bad "decnet nightly"
 
+# vax_boot tier (ci-vax vax-acceptance-16mb + vax-sysboot-single, rd vms-236):
+# the demo-disk battery runs in the queue when the VAX boot image or the battery
+# is touched -- the two changes that reached main with every demo build red.
+o=$(tier merge_group q tests/qemu/lib/dcl_acceptance_battery.sh)
+[ "$(get "$o" vax_boot)" = true ] && ok "queue: a battery change runs the VAX demo-disk battery (#1908)" || bad "vax_boot battery"
+o=$(tier merge_group q tools/oracle/surfaces/vax-show-process.surface)
+[ "$(get "$o" vax_boot)" = true ] && ok "queue: an oracle surface change runs the VAX battery" || bad "vax_boot surface"
+o=$(tier merge_group q docs/oracle/golden/vax-show-process.txt)
+[ "$(get "$o" vax_boot)" = true ] && ok "queue: a golden change runs the VAX battery" || bad "vax_boot golden"
+o=$(tier merge_group q tools/cross-vax/build-vmsdcl-vax.sh)
+[ "$(get "$o" vax_boot)" = true ] && ok "queue: a VAX image link-script change runs the VAX battery (#1913)" || bad "vax_boot cross-vax"
+o=$(tier merge_group q src/ovmx_opcom/ovmx_opcom.c)
+[ "$(get "$o" vax_boot)" = true ] && ok "queue: a boot-process change runs the VAX battery (#1850)" || bad "vax_boot opcom"
+o=$(tier merge_group q docs/foo.md src/kernel-core/vms_access.c src/vmsdecnet/engine/decnetd.c)
+[ "$(get "$o" vax_boot)" = false ] && ok "queue: an unrelated change does not boot the VAX" || bad "vax_boot unrelated"
+o=$(tier pull_request refs/pull/1/merge tests/qemu/lib/dcl_acceptance_battery.sh)
+[ "$(get "$o" vax_boot)" = false ] && ok "vax_boot is a queue tier (PRs use ci-changes vax_login)" || bad "vax_boot pr"
+o=$(tier push refs/heads/main tools/cross-vax/build-vmsdcl-vax.sh)
+[ "$(get "$o" vax_boot)" = false ] && ok "push to main does not re-boot the VAX" || bad "vax_boot push"
+o=$(tier schedule refs/heads/main docs/x.md)
+[ "$(get "$o" vax_boot)" = true ] && ok "nightly runs the VAX battery" || bad "vax_boot nightly"
+
 # keystroke / alpha selfhost area
 o=$(tier merge_group q src/kernel-core/vms_tt.c)
 [ "$(get "$o" keystroke)" = true ] && ok "queue: terminal driver change runs the keystroke oracle" || bad "keystroke area"

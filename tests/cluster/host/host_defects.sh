@@ -142,6 +142,7 @@ SELF="$0"
 DEFECTS="coord-genesis-refusal-uncounted
 dlm-f29f-deferred-grant-not-read
 dlm-f29f-deferred-grant-declined-by-the-arm
+dlm-7649-f11b-lock-takes-the-mounters-identity
 blk-port-op-not-stamped
 blk-send-data-not-confirmed
 rdev-dismount-absent-status-wrong
@@ -452,6 +453,23 @@ EOF2
         why)          echo "the op-0x02 branch never matches, so a real VAX master's deferred grant falls to RULE C and is declined (cn->dlm_declined) -- the lab's vms-5fa hang, with the FSM entry intact but unreachable.";;
         require_fail) hd_lines <<'EOF2'
 *** a master's op-0x02 is routed to the FSM's deferred-grant entry ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-7649-f11b-lock-takes-the-mounters-identity)
+        case "$_f" in
+        facility)     echo "the Files-11 XQP's F11B\$v/F11B\$s locks are SYSTEM-WIDE KERNEL-MODE resources (UIC group 0, access mode 0), stated by the executive (vms_lock.c acp_f11b_enq, rd vms-7649) -- VAX1's SDA 'Kernel mode / System' and every captured F11B\$ frame";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_f11b_enq passes no stated identity, so the XQP's locks take the MOUNTing process's (UIC group 1, user mode) -- what shipped before. MEASURED COST 2026-11-02 (tests/lab/captures/vms-5fa-shared-volume-20261102): OVMXE's F11B\$vEVAC5FA request hashed to VAX2 instead of VAX1, VAX2 said 'you master it', and OVMX mastered a second copy of the volume lock, so the two nodes' XQPs never serialized.";;
+        require_fail) hd_lines <<'EOF2'
+*** addressed to VAX1, the resource's directory -- not VAX2, where the lab's went ***
+*** naming UIC group 0, system-wide -- not the mounter's group 1 ***
+*** at access mode 0, kernel -- not the mounter's user mode ***
+  with the proven hash of THAT identity
+*** the F11B$s request names (group 0, kernel) too ***
 EOF2
                       ;;
         esac;;
@@ -784,6 +802,7 @@ EOF
   the engine does not claim mastery
 exactly one frame left this node
 *** addressed to the VAX the directory named ***
+  as an op-0x01 request
 *** carrying the hash the VAX ITSELF put on the wire for that name -- never a computed one ***
   and OUR OWN handle, the one this executive minted
 *** and NOTHING is granted yet: the requester waits for the VAX's master, it does not grant itself ***
@@ -3839,6 +3858,10 @@ apply_edit() {
     dlm-f29f-deferred-grant-declined-by-the-arm)
         # The opcode test is unique in vms_dlm_scs.c.
         sed -i 's|\t    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY) {|\t    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY \&\& 0) { /* NEGCTL dlm-f29f-deferred-grant-declined-by-the-arm */|' "$_file";;
+
+    dlm-7649-f11b-lock-takes-the-mounters-identity)
+        # The XQP's one $ENQ door; its stated-identity argument is unique.
+        sed -i 's|    return vms_enq_core_ident(proc, a, NULL, \&vms_f11b_lock_ident);|    return vms_enq_core_ident(proc, a, NULL, NULL); /* NEGCTL dlm-7649-f11b-lock-takes-the-mounters-identity */|' "$_file";;
 
     quorum-form-set-ignores-peers)
         # The ONE unconditional add of a CSB's votes into the cold-formation

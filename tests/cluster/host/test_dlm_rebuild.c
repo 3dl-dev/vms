@@ -170,8 +170,14 @@ static uint32_t enq(const char *name, uint32_t mode, uint32_t parid)
 	return e.status == SS__NORMAL ? e.lkid : 0u;
 }
 
-/* VAX1 grants a lock of ours: a proxy naming VAX1 and its handle. */
-static int vax1_grants(uint32_t lkid, uint32_t vax1_lkid)
+/*
+ * VAX1 grants a lock of ours: a proxy naming VAX1 and its handle -- and, as
+ * every real grant does (rd vms-b5b0: 38 of 38), the grant record carrying the
+ * resource's value block at body[36:52] and its SEQUENCE at body[52:56]. A
+ * resource nobody wrote has block zero, sequence zero.
+ */
+static int vax1_grants_vb(uint32_t lkid, uint32_t vax1_lkid,
+			  const char *valblk, uint32_t seq)
 {
 	struct vms_dlm_proxy_grant g;
 
@@ -179,8 +185,23 @@ static int vax1_grants(uint32_t lkid, uint32_t vax1_lkid)
 	g.req_lkid = lkid;
 	g.master_lkid = vax1_lkid;
 	g.master_csid = CSID_VAX1;
+	g.valblk_present = 1u;
+	if (valblk != NULL)
+		memcpy(g.valblk, valblk, VMS_DLM_VALBLK_LEN);
+	g.valblk_seq = seq;
 	return vms_lock_dlm_proxy_grant_recv(&g) == SS__NORMAL;
 }
+
+static int vax1_grants(uint32_t lkid, uint32_t vax1_lkid)
+{
+	return vax1_grants_vb(lkid, vax1_lkid, NULL, 0u);
+}
+
+/* RA1b-truth.txt: VAX1's RMT1 LVB "RMLVB-0123456789", sequence 1 -- what its
+ * grants to VAX2 (PR) and VAX3 (CR), both taken LCK$M_VALBLK by RMHOLD.MAR
+ * after VAX1's own write, delivered. */
+#define RMT1_LVB      "RMLVB-0123456789"
+#define RMT1_LVB_SEQ  1u
 
 /* ------------------------------------------------------------------ *
  * The table's doors: the engine's, the test's CLUB, and a wire.
@@ -439,15 +460,17 @@ static void answer_for(uint8_t *out, const uint8_t *real, uint32_t our_lkid)
 }
 
 static void dump08(const uint8_t *b, uint32_t lkid, uint32_t pid,
-		   uint32_t parent, uint32_t parent_master, uint32_t hash)
+		   uint32_t parent, uint32_t parent_master, uint32_t hash,
+		   uint32_t valblkseq)
 {
 	char st[256];
 
 	snprintf(st, sizeof(st),
 		 "lkid=0x%x,epid=0x%x,grmode=%u,rqmode=%u,parent_lkid=0x%x,"
 		 "parent_master=0x%x,group=0,acmode=3,namelen=%u,hash=0x%x,"
-		 "valblkseq=0x0",
-		 lkid, pid, b[30], b[31], parent, parent_master, b[47], hash);
+		 "valblkseq=0x%x",
+		 lkid, pid, b[30], b[31], parent, parent_master, b[47], hash,
+		 valblkseq);
 	conf_dump("dlm_rm_08", VMS_OFF_SYSAP_BODY, st, b, VMS_CM_BODY_LEN);
 }
 
@@ -463,7 +486,7 @@ static void dump08ans(const uint8_t *a)
 /*
  * Every cell rd vms-874f NAMES equals the real record, with OUR own handles in
  * the two cells that carry them. The value block (body[88:108]) is checked by
- * the caller: this node relays none (the deferred half, stated there).
+ * the caller (rd vms-8159).
  */
 static int named_cells_equal(const uint8_t *ours, const uint8_t *real,
 			     uint32_t own, uint32_t own_parent, int with_hash)
@@ -512,8 +535,10 @@ static void test_as_vax3_the_directory_holder(void)
 	table_up(CSID_VAX2, 0u);
 
 	root = enq("RMT1", LCK_K_CRMODE, 0u);
-	ct_check(root != 0u && vax1_grants(root, VAX1_ROOT),
-		 "RMT1 at CR, granted by VAX1 (a real proxy)");
+	ct_check(root != 0u && vax1_grants_vb(root, VAX1_ROOT, RMT1_LVB,
+					      RMT1_LVB_SEQ),
+		 "RMT1 at CR, granted by VAX1 (a real proxy) with its block, "
+		 "RMLVB-0123456789 at sequence 1");
 	s0 = enq("S0", LCK_K_CWMODE, root);
 	s1 = enq("S1", LCK_K_CWMODE, root);
 	s2 = enq("S2", LCK_K_CWMODE, root);
@@ -556,7 +581,7 @@ static void test_as_vax3_the_directory_holder(void)
 		return;
 	table_up(CSID_VAX2, 0u);
 	root = enq("RMT1", LCK_K_CRMODE, 0u);
-	(void)vax1_grants(root, VAX1_ROOT);
+	(void)vax1_grants_vb(root, VAX1_ROOT, RMT1_LVB, RMT1_LVB_SEQ);
 	s0 = enq("S0", LCK_K_CWMODE, root);
 	s1 = enq("S1", LCK_K_CWMODE, root);
 	s2 = enq("S2", LCK_K_CWMODE, root);
@@ -616,17 +641,18 @@ static void test_as_vax3_the_directory_holder(void)
 		 "*** EVERY NAMED CELL equals VAX3's real ROOT record: PID "
 		 "0x20600216, own lkid, CR/CR, no parent, the identity, body[110] "
 		 "and the tail, the tree hash ***");
-	ct_check(memcmp(g_sent[0].body + 88, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-			"\0\0\0\0", 20) == 0,
-		 "  body[88:108] is twenty zeros: this node relays NO value block "
-		 "(it holds no sequence for one -- the deferred half; VAX3's "
-		 "carries RMLVB-0123456789 at 1)");
+	ct_check(memcmp(g_sent[0].body + 88, ra1b_vax3_rmt1_req + 88, 20) == 0,
+		 "*** body[88:108] equals VAX3's real ROOT record: the block "
+		 "VAX1 last GRANTED this lock, RMLVB-0123456789, at its sequence "
+		 "1 -- read off the proxy LKB after the master left (rd "
+		 "vms-8159) ***");
 	ct_check(vms_dlm_shape_fit_for_any_member(g_sent[0].body,
 						  VMS_CM_BODY_LEN),
 		 "  the connection manager would send it to a real VAX");
 	ct_check(!vms_dlm_body_is_notification(g_sent[0].body, VMS_CM_BODY_LEN),
 		 "  ...opening a transaction for its answer");
-	dump08(g_sent[0].body, root, g_proc.vms_pid, 0u, 0u, RMT1_HASH);
+	dump08(g_sent[0].body, root, g_proc.vms_pid, 0u, 0u, RMT1_HASH,
+	       RMT1_LVB_SEQ);
 
 	/* VAX2's REAL 0xfa for VAX3's root. */
 	answer_for(ans, ra1b_vax3_rmt1_ans, root);
@@ -655,7 +681,11 @@ static void test_as_vax3_the_directory_holder(void)
 		ct_check(memcmp(b + 128, "\0\0\0\0", 4) == 0,
 			 "  body[128:132] zero: a sub's value is not computable "
 			 "(Rule 8), never minted");
-		dump08(b, own, g_proc.vms_pid, root, 0x01000563u, 0u);
+		ct_check(memcmp(b + 88, real_sub[k] + 88, 20) == 0,
+			 "  body[88:108] twenty zeros, as VAX3's real SUB: VAX1 "
+			 "granted it a block of zeros at sequence 0, the absent "
+			 "form");
+		dump08(b, own, g_proc.vms_pid, root, 0x01000563u, 0u, 0u);
 		answer_for(ans, real_sub_ans[k], own);
 		ct_check(vms_dlm_rm_rb_answer(&g_rm, CSID_VAX2, 0x82, 0x01,
 					      ans, VMS_CM_BODY_LEN) == 1,
@@ -703,8 +733,9 @@ static void test_as_vax2_told_to_master(void)
 		return;
 	table_up(CSID_VAX3, 0u);
 	root = enq("RMT1", LCK_K_PRMODE, 0u);
-	ct_check(root != 0u && vax1_grants(root, 0x05000024u),
-		 "RMT1 at PR, granted by VAX1");
+	ct_check(root != 0u && vax1_grants_vb(root, 0x05000024u, RMT1_LVB,
+					      RMT1_LVB_SEQ),
+		 "RMT1 at PR, granted by VAX1 with RMLVB-0123456789 at 1");
 	s0 = enq("S0", LCK_K_CRMODE, root);
 	s1 = enq("S1", LCK_K_CRMODE, root);
 	ct_check(s0 && s1 &&
@@ -720,7 +751,11 @@ static void test_as_vax2_told_to_master(void)
 		 "*** EVERY NAMED CELL equals VAX2's real ROOT record: PID "
 		 "0x20400217, own lkid, PR/PR, no parent, identity, tail, "
 		 "the tree hash ***");
-	dump08(g_sent[0].body, root, g_proc.vms_pid, 0u, 0u, RMT1_HASH);
+	ct_check(memcmp(g_sent[0].body + 88, ra1b_vax2_rmt1_req + 88, 20) == 0,
+		 "*** body[88:108] equals VAX2's real ROOT record: "
+		 "RMLVB-0123456789 at 1, the pair VAX1 granted (rd vms-8159) ***");
+	dump08(g_sent[0].body, root, g_proc.vms_pid, 0u, 0u, RMT1_HASH,
+	       RMT1_LVB_SEQ);
 
 	/* VAX3's REAL 0xf9. */
 	answer_for(ans, ra1b_vax2_rmt1_ans, root);
@@ -1076,6 +1111,106 @@ static void test_lab33a_no_record_outside_the_rebuild_step(void)
 	g_bind_window = 1;
 }
 
+/* ================================================================== *
+ * 6. WHICH PAIR a holder's record relays (rd vms-8159): the master's last
+ *    word for the lock -- its grant, or an op-0x1a that supersedes it --
+ *    and NONE once this node's own write replaced the block.
+ * ================================================================== */
+static int record_pair(const struct vms_dlm_adopt_tree *t, uint32_t lkid,
+		       const char *want, uint32_t want_seq)
+{
+	struct vms_dlm_handover_rec hr;
+
+	memset(&hr, 0, sizeof(hr));
+	if (vms_lock_dlm_handover_next(t, CSID_VAX2, &hr) != 1 ||
+	    hr.holder_lkid != lkid)
+		return 0;
+	if (want == NULL)
+		return hr.valblk_present == 0u && hr.valblk_seq == 0u;
+	return hr.valblk_present == 1u && hr.valblk_seq == want_seq &&
+	       memcmp(hr.valblk, want, VMS_DLM_VALBLK_LEN) == 0;
+}
+
+static void test_which_pair_the_record_relays(void)
+{
+	struct vms_dlm_adopt_tree t;
+	struct vms_dlm_adopt_valblk v;
+	struct vms_enq_args e;
+	uint32_t lk;
+
+	printf("-- rd vms-8159: the value block a holder's record relays\n");
+	if (!engine_up(CSID_VAX3, 0x20600216u))
+		return;
+	memset(&t, 0, sizeof(t));
+	memcpy(t.resnam, "RMT1", 4);
+	t.resnam_len = 4u;
+	t.res_mode = 3u;
+	t.ident_valid = 1u;
+	t.old_master_csid = CSID_VAX1;
+
+	memset(&e, 0, sizeof(e));
+	e.lkmode = LCK_K_EXMODE;
+	e.flags = LCK_M_VALBLK;
+	strscpy(e.resnam, "RMT1", sizeof(e.resnam));
+	vms_ioctl_enq(&g_proc, (unsigned long)(void *)&e);
+	lk = e.status == SS__NORMAL ? e.lkid : 0u;
+	ct_check(lk != 0u && vax1_grants_vb(lk, VAX1_ROOT, "GRANTED-BLOCK-01",
+					    0x151u),
+		 "RMT1 at EX with LCK$M_VALBLK, granted by VAX1 with a block at "
+		 "sequence 0x151");
+	ct_check(record_pair(&t, lk, "GRANTED-BLOCK-01", 0x151u),
+		 "*** the record carries the GRANT's block and sequence ***");
+
+	memset(&v, 0, sizeof(v));
+	v.from_csid = CSID_VAX1;
+	v.master_lkid = VAX1_ROOT;
+	v.holder_lkid = lk;
+	v.valblk_present = 1u;
+	v.valblk_seq = 0x152u;
+	memcpy(v.valblk, "OP1A-SAYS-THIS-1", VMS_DLM_VALBLK_LEN);
+	ct_check_eq_u32(vms_lock_dlm_handover_valblk(&v), SS__NORMAL,
+			"VAX1's op-0x1a for the lock lands");
+	ct_check(record_pair(&t, lk, "OP1A-SAYS-THIS-1", 0x152u),
+		 "*** an op-0x1a SUPERSEDES the grant (251 of 259 real "
+		 "op-0x12s after one relay it) ***");
+	v.valblk_present = 0u;
+	v.valblk_seq = 0u;
+	memset(v.valblk, 0, sizeof(v.valblk));
+	(void)vms_lock_dlm_handover_valblk(&v);
+	ct_check(record_pair(&t, lk, NULL, 0u),
+		 "  an op-0x1a carrying none leaves the record the absent form "
+		 "(20 of 20 real records after a zero op-0x1a)");
+
+	ct_check(vax1_grants_vb(lk, VAX1_ROOT, "GRANTED-BLOCK-02", 0x160u) &&
+		 record_pair(&t, lk, "GRANTED-BLOCK-02", 0x160u),
+		 "  a later grant is the master's word again");
+
+	/* THIS node writes the block: EX -> NL with LCK$M_VALBLK. */
+	memset(&e, 0, sizeof(e));
+	e.lkid = lk;
+	e.lkmode = LCK_K_NLMODE;
+	e.flags = LCK_M_CONVERT | LCK_M_VALBLK;
+	memcpy(e.valblk, "WRITTEN-BY-OVMX!", VMS_DLM_VALBLK_LEN);
+	(void)vms_ioctl_convert(&g_proc, (unsigned long)(void *)&e);
+	ct_check_eq_u32(e.status, SS__NORMAL, "the down-conversion writing the "
+			"block goes to the master");
+	{
+		struct vms_dlm_proxy_grant g;
+
+		memset(&g, 0, sizeof(g));
+		g.req_lkid = lk;
+		g.master_lkid = VAX1_ROOT;
+		g.master_csid = CSID_VAX1;     /* a grant with no block record */
+		(void)vms_lock_dlm_proxy_grant_recv(&g);
+	}
+	ct_check(record_pair(&t, lk, NULL, 0u),
+		 "*** after this node's own WRITE the record carries NO block: "
+		 "the granted sequence no longer describes the bytes, and the "
+		 "sequence a write advances to is rd vms-85c1's -- never a stale "
+		 "sequence beside new bytes ***");
+	engine_down();
+}
+
 int main(void)
 {
 	printf("test_dlm_rebuild: the failover rebuild, on the real lock "
@@ -1085,5 +1220,6 @@ int main(void)
 	test_as_vax2_told_to_master();
 	test_what_stops_a_rebuild();
 	test_lab33a_no_record_outside_the_rebuild_step();
+	test_which_pair_the_record_relays();
 	return ct_summary("test_dlm_rebuild");
 }

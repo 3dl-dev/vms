@@ -3698,6 +3698,16 @@ static uint32_t convert_proxy_request(struct vms_proc *proc,
     lock->grant_state = 0;
     dst = lock->master_csid ? lock->master_csid : res->master_csid;
     dlm_proxy_fill_post(lock, res, VMS_DLM_POST_CONVERT, dst, &post);
+    /*
+     * A value-block WRITE replaces the block the master last granted with
+     * this caller's, so the sequence that came with the old one no longer
+     * describes what the LKB holds (rd vms-8159). What sequence the write
+     * advances to is rd vms-85c1's; until then this node holds NONE for the
+     * block, and a failover record carries the absent form rather than a
+     * stale sequence beside new bytes.
+     */
+    if (post.write_valblk)
+        lock->valblk_seq = 0u;
     exec_unlock(&res->lock);
 
     st = dlm_proxy_post(&post);
@@ -3705,6 +3715,10 @@ static uint32_t convert_proxy_request(struct vms_proc *proc,
         exec_lock(&res->lock);
         lock->requested_mode = held_mode;   /* still held at the old mode */
         lock->waiting = 0;
+        /* The caller's bytes were copied over the granted block above and
+         * no grant will replace them: no sequence describes them. */
+        if (a->flags & LCK_M_VALBLK)
+            lock->valblk_seq = 0u;
         exec_unlock(&res->lock);
         return st;
     }
@@ -3829,6 +3843,7 @@ static void dlm_proxy_stops_being_one_locked(struct vms_lock_entry *lock)
     lock->master_lkid = VMS_DLM_LKID_UNSET; /* no remote handle exists */
     lock->req_csid    = 0u;                 /* ...and it is nobody else's */
     lock->req_lkid    = VMS_DLM_LKID_UNSET;
+    lock->valblk_seq  = 0u;   /* a master's pair describes a PROXY (rd vms-8159) */
 }
 
 /*
@@ -3903,8 +3918,13 @@ uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t resnam_len,
  * handlers; declared here because the doors are part of the FC-P4.6 seam
  * block and belong beside the other three. */
 static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req);
+/* What a grant says about the SEQUENCE of the block it carries (rd vms-8159):
+ * the master's own (SET), nothing because it carried no block and the proxy's
+ * pair stands (KEEP), or nothing although it overwrites the block (NONE). */
+enum dlm_grant_seq { DLM_GRANT_SEQ_NONE, DLM_GRANT_SEQ_KEEP, DLM_GRANT_SEQ_SET };
 static uint32_t dlm_xnode_grant_apply(struct vms_dlm_xnode_args *req,
-                                      int granted);
+                                      int granted, enum dlm_grant_seq seq_how,
+                                      uint32_t valblk_seq);
 static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
                                                struct vms_dlm_xnode_args *req);
 
@@ -4033,7 +4053,16 @@ uint32_t vms_lock_dlm_proxy_grant_recv(const struct vms_dlm_proxy_grant *g)
      * forever on it (diagnostic run 41389303326: grants received=1,
      * proxy_lkbs=1). Only the ioctl door keeps "NL means queued-reply".
      */
-    return dlm_xnode_grant_apply(&args, 1);
+    /*
+     * ...AND THE BLOCK'S SEQUENCE (rd vms-8159). A grant that carried the
+     * master's block carries its sequence beside it, and the proxy keeps the
+     * PAIR: it is what this node's op-0x08 failover record relays if the
+     * master leaves. A grant that carried no block leaves the pair as it was.
+     */
+    return dlm_xnode_grant_apply(&args, 1,
+                                 g->valblk_present ? DLM_GRANT_SEQ_SET
+                                                   : DLM_GRANT_SEQ_KEEP,
+                                 g->valblk_seq);
 }
 
 /*
@@ -5398,14 +5427,28 @@ static int dlm_handover_fill(uint32_t lkid, const struct vms_dlm_adopt_tree *t,
             out->parent_master_lkid = lock->parent_id != 0u ? parent_handle : 0u;
             out->granted_mode = (uint8_t)lock->granted_mode;
             out->requested_mode = (uint8_t)lock->requested_mode;
-            /* THE BLOCK RIDES ONLY WITH ITS SEQUENCE. On a holder the
-             * resource's sequence is written by nothing but the old master's
-             * op-0x1a (vms_lock_dlm_handover_valblk), so a non-zero one IS a
-             * block the old master told this node; every real record that
-             * carries a block carries a non-zero sequence (2,702 of 2,702). */
-            if (res->valblk_seq != 0u) {
-                memcpy(out->valblk, res->valblk, LCK_VALBLK_SIZE);
-                out->valblk_seq = res->valblk_seq;
+            /* THE BLOCK RIDES ONLY WITH ITS SEQUENCE; every real record
+             * that carries a block carries a non-zero sequence (op-0x12
+             * 2,702 of 2,702; op-0x08 336 of 336). It is the pair the
+             * MASTER LAST TOLD THIS LOCK (lock->valblk / valblk_seq, rd
+             * vms-8159) -- executive state, never a template. By the
+             * holder's last event for the lock
+             * (tools/cluster/dlm_rebuild08_census.py section 9):
+             *
+             *  - an op-0x1a on a REMASTER, which vms_lock_dlm_handover_valblk
+             *    writes onto the LKB: the record relays it in 251 of 259 real
+             *    op-0x12s and 3 of 3 op-0x08s, zeros included;
+             *  - otherwise the master's last GRANT (its body[36:56]) -- all a
+             *    survivor has on a FAILOVER, where the master is gone: the
+             *    record equals it in 500 of 508 (the 8 others all
+             *    heldout-E5/E5b). RA1b: VAX3's and VAX2's RMT1 records carry
+             *    RMLVB-0123456789 at 1, the master's LVB in SDA;
+             *  - after this node's OWN write, none (convert_proxy_request):
+             *    real records carry the bytes written (145 of 153 op-0x08)
+             *    at a sequence no frame delivers -- rd vms-85c1. */
+            if (lock->valblk_seq != 0u) {
+                memcpy(out->valblk, lock->valblk, LCK_VALBLK_SIZE);
+                out->valblk_seq = lock->valblk_seq;
                 out->valblk_present = 1u;
             }
             if (res->hash_known) {
@@ -5522,6 +5565,16 @@ uint32_t vms_lock_dlm_handover_valblk(const struct vms_dlm_adopt_valblk *v)
                 memcpy(res->valblk, v->valblk, LCK_VALBLK_SIZE);
                 res->valblk_seq = v->valblk_seq;
                 wrote = 1;
+            }
+            /* ...and onto THIS LOCK, the pair its op-0x12 relays (rd
+             * vms-8159): the op-0x1a supersedes the lock's last grant, and
+             * one that carries no block leaves the record the absent form
+             * (20 of 20 real records after a zero op-0x1a are zeros). */
+            if (v->valblk_present) {
+                memcpy(lock->valblk, v->valblk, LCK_VALBLK_SIZE);
+                lock->valblk_seq = v->valblk_seq;
+            } else {
+                lock->valblk_seq = 0u;
             }
             st = SS__NORMAL;
         }
@@ -8301,7 +8354,10 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
 {
     /* The ioctl door (VMS_IOCTL_DLM_XNODE): its message carries no outcome of
      * its own, so a queued-reply is spelled lkmode == NL, as documented above. */
-    return dlm_xnode_grant_apply(req, req->lkmode > LCK_K_NLMODE);
+    /* This door's message carries no sequence: a block it grants is one
+     * this node holds no sequence for. */
+    return dlm_xnode_grant_apply(req, req->lkmode > LCK_K_NLMODE,
+                                 DLM_GRANT_SEQ_NONE, 0u);
 }
 
 /*
@@ -8311,7 +8367,8 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
  * says WHICH mode was granted; it never decides WHETHER (rd vms-3ea).
  */
 static uint32_t dlm_xnode_grant_apply(struct vms_dlm_xnode_args *req,
-                                      int granted)
+                                      int granted, enum dlm_grant_seq seq_how,
+                                      uint32_t valblk_seq)
 {
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
@@ -8368,8 +8425,20 @@ static uint32_t dlm_xnode_grant_apply(struct vms_dlm_xnode_args *req,
      * stale block. The bytes are the master's real res->valblk transported over
      * SCS, never fabricated (INV-6).
      */
-    if (granted)
+    if (granted) {
         memcpy(lock->valblk, req->valblk, LCK_VALBLK_SIZE);
+        /*
+         * ...WITH ITS SEQUENCE (rd vms-8159): the pair the master delivered,
+         * which a survivor's op-0x08 record relays after that master leaves
+         * (RA1b VAX3's RMT1 record: RMLVB-0123456789 at 1, the master's LVB
+         * as SDA read it). A grant that carried no block keeps the pair; a
+         * block granted with no sequence leaves none, never a made-up one.
+         */
+        if (seq_how == DLM_GRANT_SEQ_SET)
+            lock->valblk_seq = valblk_seq;
+        else if (seq_how == DLM_GRANT_SEQ_NONE)
+            lock->valblk_seq = 0u;
+    }
 
     /*
      * BLKAST WIRE (rung H6, vms-76d). When this GRANT establishes the proxy as a

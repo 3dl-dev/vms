@@ -267,6 +267,67 @@ def barrier_steps(path, recs):
     return steps, closed
 
 
+ZERO_PAIR = b'\0' * 20
+
+
+def holder_pairs(path, rec_op):
+    """rd vms-8159: WHERE a holder's record's value block and sequence
+    (body[88:108]) came from. For every cat-0x02 `rec_op` record (0x08 or
+    0x12) the holder's LAST wire event for that lock (sender, own lkid at
+    body[24:28]) before it is found:
+
+      grant  a cat-0x82 op-0x01/0x07 answer with body[34] == 0xfa TO the holder
+             naming the lkid -- not the answer to a 0x08/0x12 record itself;
+             the pair is its body[36:56];
+      1a     a cat-0x02 op-0x1a TO the holder naming the lkid; the pair is
+             its body[36:56];
+      write  a cat-0x02 op-0x06 FROM the holder naming the lkid (its own
+             value-block write); the bytes are its body[36:52]. No real
+             op-0x06 is answered, so no frame carries the sequence it makes.
+
+    Returns a Counter keyed (record kind, last event, verdict)."""
+    rows = list(rc.sca_bodies_with_src(path))
+    recs = {}
+    for idx, src, dst, b in rows:
+        if b[8] == CAT_REQ and b[9] in (0x08, 0x12) and b[4:8] != b'\0\0\0\0':
+            recs[(bytes(src), bytes(dst), bytes(b[4:8]))] = idx
+    rec_answers = set()
+    for idx, src, dst, b in rows:
+        if b[8] == CAT_ANS:
+            q = recs.get((bytes(dst), bytes(src), bytes(b[4:8])))
+            if q is not None and q < idx:
+                rec_answers.add(idx)
+    last = {}
+    out = collections.Counter()
+    for idx, src, dst, b in rows:
+        src, dst, lk = bytes(src), bytes(dst), bytes(b[24:28])
+        if (b[8] == CAT_ANS and b[9] in (0x01, 0x07) and b[34] == ST_GRANTED
+                and idx not in rec_answers):
+            last[(dst, lk)] = ('grant', bytes(b[36:56]))
+        elif b[8] == CAT_REQ and b[9] == 0x1a:
+            last[(dst, lk)] = ('1a', bytes(b[36:56]))
+        elif b[8] == CAT_REQ and b[9] == 0x06:
+            last[(src, lk)] = ('write', bytes(b[36:52]))
+        elif b[8] == CAT_REQ and b[9] == rec_op and (
+                rec_op == OP_REBUILD or b[4:8] != b'\0\0\0\0'):
+            kind = 'ROOT' if is_root(b) else 'SUB'
+            rec = bytes(b[88:108])
+            ev = last.get((src, lk))
+            if ev is None:
+                out[(kind, 'none seen', 'block' if rec != ZERO_PAIR else 'absent')] += 1
+                continue
+            what, pair = ev
+            if what == 'write':
+                v = 'written block' if rec[:16] == pair else 'other'
+            elif rec == pair:
+                v = 'equal, a block' if rec != ZERO_PAIR else 'equal, absent'
+            else:
+                v = 'later sequence, same block' if (
+                    rec[:16] == pair[:16] and le32(rec, 16) > le32(pair, 16)) else 'other'
+            out[(kind, what, v)] += 1
+    return out
+
+
 def selftest(repo):
     """Pin the figures rd vms-874f's sender and answerer are built from. A
     corpus change has to move these deliberately, and whatever quotes them
@@ -453,6 +514,82 @@ def selftest(repo):
           sorted(verdict.items()),
           [('answered before the next release', 887),
            ('no barrier in the capture', 1)])
+
+    # 9. THE VALUE BLOCK A SURVIVOR RELAYS (rd vms-8159). body[88:108] is the
+    #    block and sequence the holder's lock was last TOLD -- by its master's
+    #    grant, or an op-0x1a that supersedes it -- and never a block without
+    #    its sequence. ROOT and SUB alike: what decides it is the lock's own
+    #    history, not its place in the tree (RA1b's S0..S2, taken without
+    #    LCK$M_VALBLK under a written root, carry zeros; RMT1 carries
+    #    RMLVB-0123456789 at 1 from BOTH survivors -- the master's LVB in SDA,
+    #    the only value the holders were ever granted).
+    blk = collections.Counter()
+    for recs in caps.values():
+        for r in recs:
+            q = r['q']
+            blk[('ROOT' if is_root(q) else 'SUB',
+                 q[88:104] != b'\0' * 16, le32(q, 104) != 0)] += 1
+    check('op-0x08 records by (kind, block non-zero, sequence non-zero)',
+          sorted(blk.items()),
+          [(('ROOT', False, False), 532), (('ROOT', False, True), 1),
+           (('ROOT', True, True), 17), (('SUB', False, False), 9),
+           (('SUB', False, True), 10), (('SUB', True, True), 319)])
+    check('RA1b RMT1 tree body[88:108] (sender, lock, block, sequence)',
+          [(r['src'].hex(), ident(r['q'])[2].decode(), r['q'][88:104],
+            le32(r['q'], 104)) for r in rmt], [
+              ('08002bb836ea', 'RMT1', b'RMLVB-0123456789', 1),
+              ('08002b962ac4', 'RMT1', b'RMLVB-0123456789', 1),
+              ('08002b962ac4', 'S2', b'\0' * 16, 0),
+              ('08002b962ac4', 'S1', b'\0' * 16, 0),
+              ('08002b962ac4', 'S0', b'\0' * 16, 0)])
+    hp08, hp12 = collections.Counter(), collections.Counter()
+    for p in rc.walk_inputs([root]):
+        hp08.update(holder_pairs(p, OP_REBUILD))
+        hp12.update(holder_pairs(p, 0x12))
+    # The holder's LAST event for the lock decides it. After a grant the
+    # record IS that grant's body[36:56] in 500 of 508 (op-0x08 142 of 148,
+    # op-0x12 358 of 360); the wire shows only three of those with a NON-zero
+    # block (op-0x12 ROOTs) -- RA1b's two RMT1 records are the op-0x08 proof,
+    # against SDA rather than a captured grant, because the grants predate
+    # the window. After an op-0x1a the record is the op-0x1a's (op-0x08 3 of
+    # 3, op-0x12 251 of 259). After the holder's OWN op-0x06 write it carries
+    # the bytes written (op-0x08 145 of 153, op-0x12 67 of 83) with a sequence
+    # no frame delivers -- rd vms-85c1's, so OVMX sends the absent form there.
+    # The eight grant exceptions are all heldout-E5/E5b (a hung node removed).
+    check('op-0x08: the record against the holder\'s last event for the lock',
+          sorted(hp08.items()), [
+              (('ROOT', '1a', 'equal, absent'), 3),
+              (('ROOT', 'grant', 'equal, absent'), 142),
+              (('ROOT', 'grant', 'other'), 1),
+              (('ROOT', 'none seen', 'absent'), 385),
+              (('ROOT', 'none seen', 'block'), 15),
+              (('ROOT', 'write', 'other'), 2),
+              (('ROOT', 'write', 'written block'), 2),
+              (('SUB', 'grant', 'other'), 5),
+              (('SUB', 'none seen', 'absent'), 7),
+              (('SUB', 'none seen', 'block'), 177),
+              (('SUB', 'write', 'other'), 6),
+              (('SUB', 'write', 'written block'), 143)])
+    check('op-0x12: the same rule (after an op-0x1a it; otherwise the grant)',
+          sorted(hp12.items()), [
+              (('ROOT', '1a', 'equal, a block'), 7),
+              (('ROOT', '1a', 'equal, absent'), 6),
+              (('ROOT', 'grant', 'equal, a block'), 3),
+              (('ROOT', 'grant', 'equal, absent'), 355),
+              (('ROOT', 'grant', 'other'), 1),
+              (('ROOT', 'none seen', 'absent'), 804),
+              (('ROOT', 'none seen', 'block'), 25),
+              (('ROOT', 'write', 'other'), 6),
+              (('ROOT', 'write', 'written block'), 5),
+              (('SUB', '1a', 'equal, a block'), 224),
+              (('SUB', '1a', 'equal, absent'), 14),
+              (('SUB', '1a', 'later sequence, same block'), 6),
+              (('SUB', '1a', 'other'), 2),
+              (('SUB', 'grant', 'other'), 1),
+              (('SUB', 'none seen', 'absent'), 25),
+              (('SUB', 'none seen', 'block'), 2385),
+              (('SUB', 'write', 'other'), 10),
+              (('SUB', 'write', 'written block'), 62)])
 
     print('dlm_rebuild08_census selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1

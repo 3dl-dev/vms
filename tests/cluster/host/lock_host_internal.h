@@ -188,6 +188,7 @@ struct vms_lock_entry {
 	uint64_t                  blkastadr;
 	uint64_t                  blkastprm;      /* FC-P4.4 */
 	uint8_t                   valblk[LCK_VALBLK_SIZE];
+	uint32_t                  valblk_seq;     /* proxy: the master's pair, rd vms-8159 */
 	struct vms_lock_resource *resource;
 	struct vms_proc          *proc;
 	int                       waiting;

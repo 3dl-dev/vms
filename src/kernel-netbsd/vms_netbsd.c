@@ -1458,6 +1458,11 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		if (proc == NULL)
 			return ESRCH;
 		return vms_facility_errno(vms_ioctl_tt_brkthru(proc, (unsigned long)data));
+	case VMS_IOCTL_TT_TYPAHD:        /* rd vms-d3cd: IO$M_TYPEAHDCNT */
+		proc = vms_proc_find(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ESRCH;
+		return vms_facility_errno(vms_ioctl_tt_typahd(proc, (unsigned long)data));
 
 	case VMS_IOCTL_ACP_READVBLK:
 		return vms_acp_rw_bounce(l, data, 0);
@@ -1691,6 +1696,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_L2_SEND:
 	case VMS_IOCTL_L2_RECV:
 	case VMS_IOCTL_L2_CLOSE:
+	case VMS_IOCTL_LAN_SENSE:        /* rd vms-d3cd: IO$_SENSEMODE on ETH0: */
 		uarg = data;
 		proc = vms_proc_find(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1705,6 +1711,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_l2_recv(proc, (unsigned long)uarg);  break;
 		case VMS_IOCTL_L2_CLOSE:
 			r = vms_ioctl_l2_close(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_LAN_SENSE:
+			r = vms_ioctl_lan_sense(proc, (unsigned long)uarg); break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

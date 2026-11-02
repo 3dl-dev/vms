@@ -146,10 +146,29 @@ struct vms_l2_close_args {
     uint32_t status;        /* out */
 };
 
+/*
+ * VMS_IOCTL_LAN_SENSE (rd vms-d3cd) -- the executive half of $QIO
+ * IO$_SENSEMODE on a channel to the LAN controller unit (ETH0:, the
+ * EWA0:-style device vms_devtab enters for the primary NIC). The caller names
+ * its own $ASSIGNed channel; the executive answers the controller's hardware
+ * address and carrier state from its own record of the unit. The host
+ * interface NAME behind the unit is never returned (INV-4). No privilege: a
+ * sense of a device the caller holds a channel to, as on VMS. A channel to a
+ * device that is not a LAN unit is SS$_IVDEVNAM; no such channel SS$_IVCHAN.
+ */
+struct vms_lan_sense_args {
+    uint32_t chan;          /* in: the caller's executive channel to ETH0: */
+    uint32_t status;        /* out: SS$_ status */
+    uint8_t  hwaddr[6];     /* out: the controller's hardware address */
+    uint8_t  link_up;       /* out: 1 = carrier up */
+    uint8_t  pad;           /* zero */
+};
+
 #define VMS_IOCTL_L2_OPEN  _IOWR(VMS_IOC_MAGIC, 0x92, struct vms_l2_open_args)
 #define VMS_IOCTL_L2_SEND  _IOWR(VMS_IOC_MAGIC, 0x93, struct vms_l2_send_args)
 #define VMS_IOCTL_L2_RECV  _IOWR(VMS_IOC_MAGIC, 0x94, struct vms_l2_recv_args)
 #define VMS_IOCTL_L2_CLOSE _IOWR(VMS_IOC_MAGIC, 0x95, struct vms_l2_close_args)
+#define VMS_IOCTL_LAN_SENSE _IOWR(VMS_IOC_MAGIC, 0x9B, struct vms_lan_sense_args)
 
 /*
  * Freeze the shared layouts -- see vms_bg.h's identical note for why this
@@ -165,6 +184,10 @@ _Static_assert(sizeof(struct vms_l2_recv_args) == 2064,
                "vms_l2_recv_args changed size -- VMS_IOCTL_L2_RECV ABI break");
 _Static_assert(sizeof(struct vms_l2_close_args) == 8,
                "vms_l2_close_args changed size -- VMS_IOCTL_L2_CLOSE ABI break");
+_Static_assert(sizeof(struct vms_lan_sense_args) == 16,
+               "vms_lan_sense_args changed size -- VMS_IOCTL_LAN_SENSE ABI break");
+_Static_assert(VMS_IOCTL_LAN_SENSE == 0xC010569Bu,
+               "VMS_IOCTL_LAN_SENSE encodes differently here than on the reference build");
 
 _Static_assert(VMS_IOCTL_L2_OPEN == 0xC0305692u,
                "VMS_IOCTL_L2_OPEN encodes differently here than on the reference build");

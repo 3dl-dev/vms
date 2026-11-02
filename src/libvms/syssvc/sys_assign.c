@@ -111,6 +111,14 @@ struct vms_device_result {
      * (rd vms-799/vms-22c). No NIC / no executive -> SS$_NOSUCHDEV, no fake.
      */
     int  is_net;
+    /*
+     * rd vms-d3cd: nonzero if this name is the LAN controller unit ETH0: (the
+     * EWA0:-style device the executive enters for the primary NIC,
+     * vms_devtab_probe_nic). A pre-existing executive device granted through
+     * the generic executive assign; fd stays -1 and $QIO IO$_SENSEMODE routes
+     * to the executive (sys_qio.c qio_lan_op). No NIC -> no row -> NOSUCHDEV.
+     */
+    int  is_lan;
 };
 
 /*
@@ -155,6 +163,7 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
     result->is_bg = 0;
     result->is_file = 0;
     result->is_net = 0;
+    result->is_lan = 0;
 
     if (!name || !name[0])
         return 0;
@@ -345,6 +354,12 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
      */
     if (strcmp(upper, "_NET") == 0 || strcmp(upper, "NET") == 0) {
         result->is_net = 1;
+        return 1;
+    }
+
+    /* rd vms-d3cd: the LAN controller unit ETH0: (physical-name form _ETH0:). */
+    if (strcmp(upper, "_ETH0") == 0 || strcmp(upper, "ETH0") == 0) {
+        result->is_lan = 1;
         return 1;
     }
 
@@ -686,6 +701,36 @@ uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
             pcb->channels[slot].flags = PCB_CHAN_NET;
             pcb->channels[slot].mbx_peer_fd = -1;
             pcb->channels[slot].exec_chan = net_exec_chan;
+            strncpy(pcb->channels[slot].devnam, name,
+                    sizeof(pcb->channels[slot].devnam) - 1);
+            pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
+            *chan = pcb_slot_to_chan((uint32_t)slot);
+
+            pthread_mutex_unlock(&pcb->chan_lock);
+            return SS$_NORMAL;
+        }
+
+        if (devres.is_lan) {
+            /*
+             * rd vms-d3cd: $ASSIGN ETH0: -- a channel to the LAN controller
+             * unit through the GENERIC executive assign (the shareable
+             * DC$_SCOM row vms_devtab_probe_nic entered). The channel's fd
+             * stays -1: its $QIO is the executive's (qio_lan_op). No NIC, no
+             * executive -> SS$_NOSUCHDEV, never a per-process fake (INV-6).
+             */
+            uint32_t lan_exec_chan = 0;
+            uint32_t st = vms_kif_assign("ETH0:", &lan_exec_chan);
+            if (!(st & 1)) {
+                pthread_mutex_unlock(&pcb->chan_lock);
+                return SS$_NOSUCHDEV;
+            }
+
+            pcb->channels[slot].fd = -1;
+            pcb->channels[slot].in_use = 1;
+            pcb->channels[slot].ref_count = 1;
+            pcb->channels[slot].flags = 0;
+            pcb->channels[slot].mbx_peer_fd = -1;
+            pcb->channels[slot].exec_chan = lan_exec_chan;
             strncpy(pcb->channels[slot].devnam, name,
                     sizeof(pcb->channels[slot].devnam) - 1);
             pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';

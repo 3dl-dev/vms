@@ -1777,6 +1777,42 @@ out:
 }
 
 /*
+ * VMS_IOCTL_TT_TYPAHD (rd vms-d3cd): $QIO IO$_SENSEMODE!IO$M_TYPEAHDCNT --
+ * the number of characters in the type-ahead buffer and the first of them,
+ * read on the caller's own channel, consuming nothing. A program that must
+ * not block in a read (the SET HOST client relaying a remote session) asks
+ * this before it issues one, instead of waiting on the substrate descriptor.
+ */
+long vms_ioctl_tt_typahd(struct vms_proc *proc, unsigned long arg)
+{
+	struct vms_tt_typahd_args a;
+	struct vms_tt *tt;
+	uint32_t st = SS__NORMAL;
+
+	memset(&a, 0, sizeof(a));
+	if (exec_copyin(&a, (const void *)arg, sizeof(a)))
+		return -EFAULT;
+	a.count = 0;
+	a.first = 0;
+	tt = tt_from_chan(proc, a.chan, &st);
+	if (!tt) {
+		a.status = st;
+		goto out;
+	}
+	exec_lock(&tt->lock);
+	a.count = tt->ta_len;
+	if (tt->ta_len)
+		a.first = tt->ta[tt->ta_head];
+	exec_unlock(&tt->lock);
+	vms_tt_release(tt);
+	a.status = SS__NORMAL;
+out:
+	if (exec_copyout((void *)arg, &a, sizeof(a)))
+		return -EFAULT;
+	return 0;
+}
+
+/*
  * VMS_IOCTL_TT_OOBAST (rd vms-f0fb): $QIO IO$_SETMODE!IO$M_CTRLYAST /
  * IO$M_CTRLCAST / IO$M_OUTBAND on a channel to a terminal -- arm (astadr) or
  * disarm (0) an out-of-band AST (I/O User's Reference, "Terminal Driver").

@@ -1950,6 +1950,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_tt_oobast(proc, arg);
     case VMS_IOCTL_TT_BRKTHRU:        /* rd vms-53a: broadcast to a terminal */
         return vms_ioctl_tt_brkthru(proc, arg);
+    case VMS_IOCTL_TT_TYPAHD:         /* rd vms-d3cd: IO$M_TYPEAHDCNT */
+        return vms_ioctl_tt_typahd(proc, arg);
     case VMS_IOCTL_ALLOC:
         return vms_ioctl_alloc(proc, arg);
     case VMS_IOCTL_DALLOC:
@@ -2121,6 +2123,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_l2_recv(proc, arg);
     case VMS_IOCTL_L2_CLOSE:
         return vms_ioctl_l2_close(proc, arg);
+    case VMS_IOCTL_LAN_SENSE:         /* rd vms-d3cd: $QIO IO$_SENSEMODE on ETH0: */
+        return vms_ioctl_lan_sense(proc, arg);
 
     /* P0 program region (vms-68f.i, in-process image activation foundation) */
     case VMS_IOCTL_P0_MAP:

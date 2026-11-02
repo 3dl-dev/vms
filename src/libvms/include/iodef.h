@@ -91,6 +91,9 @@ extern "C" {
 #define IO$M_CTRLYAST       0x0080  /* 128  */
 #define IO$M_CTRLCAST       0x0100  /* 256  */
 #define IO$M_OUTBAND        0x0400  /* 1024 */
+/* IO$_SENSEMODE terminal modifier: the type-ahead count (rd vms-d3cd; same
+ * IODEF, IO$M_TYPEAHDCNT 64). */
+#define IO$M_TYPEAHDCNT     0x0040  /* 64   */
 
 /* File system modifiers */
 #define IO$M_ACCESS         0x0040  /* Bit 6: access mode */

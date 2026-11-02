@@ -1365,6 +1365,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_l2_close(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_lan_sense(struct vms_proc *proc, unsigned long arg);   /* rd vms-d3cd */
 void vms_l2_release_all(struct vms_proc *proc);
 void vms_l2_netbsd_init(void);
 void vms_l2_netbsd_fini(void);

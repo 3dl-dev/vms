@@ -1894,6 +1894,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_l2_close(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_lan_sense(struct vms_proc *proc, unsigned long arg);   /* rd vms-d3cd */
 /* Give back every L2 handle (and its host socket) a dying process holds. */
 void vms_l2_release_all(struct vms_proc *proc);
 

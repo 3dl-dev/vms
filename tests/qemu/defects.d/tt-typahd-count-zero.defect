@@ -1,0 +1,27 @@
+# tt-typahd-count-zero -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$QIO IO\$_SENSEMODE!IO\$M_TYPEAHDCNT reports the class driver's type-ahead count and first character (VMS_IOCTL_TT_TYPAHD, vms_tt.c, rd vms-d3cd)";;
+        targets)      echo "kernel-core/vms_tt.c";;
+        suites_red)   echo "test_kmod_tt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_tt_typahd() reads the type-ahead length under tt->lock (\`a.count = tt->ta_len;\`). The mutation reports none (\`a.count = 0;\`): a SET HOST client asking the driver would never see the user's keystrokes. Non-fatal. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+TYPEAHDCNT reports the 3 characters waiting in type-ahead, the first 'a'
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\ta.count = tt->ta_len;$|\ta.count = 0; /* NEGCTL tt-typahd-count-zero */|' "$_file"
+    :
+}

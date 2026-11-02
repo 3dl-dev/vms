@@ -1,0 +1,25 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod labc17 node VAX1, captured 2026-11-02 by
+#   tools/oracle/semantic/capture.py: comgen.py, the node's own DCL running the procedure with @, as SYSTEM.
+#   Observed output of the real system (clean-room Rule 8); nothing disassembled.
+# spec: tools/oracle/semantic/specs-dcl/ifx.py sha256=65fa7d070d53e4ae71fadf6c273cea0b0fdb34e5fd3765a151c10d86c3543fc5
+=== SEMPROBE ifx BEGIN ===
+IFX.CONCAT.RIGHT v=T
+IFX.CONCAT.LEFT v=T
+IFX.CONCAT.NES v=F
+IFX.CONCAT.LTS v=T
+IFX.CONCAT.QUOTEDPLUS v=T
+IFX.REMOVE v=T
+IFX.LEXICAL v=T
+IFX.ARITH.LEFT v=T
+IFX.ARITH.RIGHT v=T
+IFX.ARITH.MUL v=T
+IFX.ARITH.PREC v=T
+IFX.ARITH.PAREN v=T
+IFX.ARITH.NEG v=T
+IFX.ARITH.MINUS v=T
+IFX.INT.EQS v=T
+IFX.AND v=T
+IFX.OR v=T
+IFX.NOT.PAREN v=T
+IFX.FALSE v=F
+=== SEMPROBE ifx END ===

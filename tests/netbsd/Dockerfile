@@ -127,6 +127,8 @@ COPY src/kernel-core/exec_hash.h src/kernel-core/exec_rbtree.h /netbsd/guest-src
 # src/vmsfs/ods2 (Makefile .PATH ../vmsfs/ods2) and include "ods2_kcompat.h" +
 # "vmsfs/ods2.h" (-I../vmsfs/include). ---
 COPY src/kernel-core/vmsfs_acp.c /netbsd/guest-src/kernel-core/vmsfs_acp.c
+# rd vms-943: the ACP block cache vmsfs_acp.c includes
+COPY src/kernel-core/vms_acp_cache.h /netbsd/guest-src/kernel-core/vms_acp_cache.h
 COPY src/kernel-netbsd/vms_blockdev_netbsd.c src/kernel-netbsd/vms_socket_netbsd.c /netbsd/guest-src/kmod/
 # rd vms-9394: the executive L2 datalink -- the substrate-neutral facility, its
 # NetBSD contract header, and the ONE ABI definition it includes from src/kernel

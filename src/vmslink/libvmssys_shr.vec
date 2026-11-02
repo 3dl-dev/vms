@@ -336,3 +336,6 @@ vms_kif_gblsc_delete=PROCEDURE
 # released in V0.7-14
 vms_kif_pprop=PROCEDURE
 vms_kif_task_fork=PROCEDURE
+# released in V0.7-15
+vms_kif_acp_flock=PROCEDURE
+vms_kif_getlki_resnam=PROCEDURE

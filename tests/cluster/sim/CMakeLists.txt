@@ -169,12 +169,27 @@ target_include_directories(test_sim_cnxman_recover PRIVATE
 # STAYS UP -- proven as the shipping quorum ENFORCEMENT (cnxman_quorum_*, needs
 # cluster_host_cnxman) verdict on each survivor's own CLUB, corroborated by the
 # survivors HOLDING their PE circuits (cluster_sim_core) across the departure's
-# real last gasp. The workload itself and its lock remaster are a documented
-# stub (rd vms-sys / vms-1ee); the sequence + survivor-takeover preconditions +
-# "stays up" enforcement check are host-proven now. Same "add the file, then ONE
-# line here" path as dlm_directory above.
+# real last gasp. Since rd vms-1e58 the workload's LOCK is real too: the
+# survivor runs the shipping lock engine (cluster_host_lock, over the lock_shim
+# backend -- the recipe test_sim_dlm_mixed_evacuation below uses), masters the
+# workload's resource, and its queued standby is granted by the engine's own
+# departure sweep. The booted two-executive version is the genesis rig's `evac`
+# mode (tests/qemu/run_cluster_evac_ci.sh).
 cluster_sim_test(test_sim_rolling_evacuation scenarios/rolling_evacuation.c)
-target_link_libraries(test_sim_rolling_evacuation PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_rolling_evacuation BEFORE PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host/lock_shim
+)
+target_include_directories(test_sim_rolling_evacuation PRIVATE
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+)
+target_compile_definitions(test_sim_rolling_evacuation PRIVATE
+    OVMX_CLUSTER_HOST)
+target_link_libraries(test_sim_rolling_evacuation PRIVATE
+    cluster_host_dlm
+    cluster_host_cnxman
+    cluster_host_lock
+)
 
 # rd vms-b36's rung-R2 leg: a system the cluster NEVER ADMITTED loses its
 # connection and its whole p. 7-30 window runs out on the virtual clock, driven

@@ -336,7 +336,8 @@ dlm-5d6-rebuild-runs-in-quorum-hang
 dlm-5d6-hold-lifted-in-quorum-hang
 dlm-b4d-adopted-tree-dir-untold
 dlm-b4d-undirected-answers-you
-dlm-b4d-undirected-answers-you-fuzz"
+dlm-b4d-undirected-answers-you-fuzz
+dlm-departed-holder-locks-kept"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3800,6 +3801,20 @@ EOF
                       ;;
         esac;;
 
+    dlm-departed-holder-locks-kept)
+        case "$_f" in
+        facility)     echo "THE EVACUATION TAKEOVER (vms_lock.c vms_lock_dlm_member_departed, rd vms-4d3 / vms-1e58): when a member leaves, the locks this master holds FOR it are released through the real release path, which is what grants a survivor's waiter queued behind them";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_sim_rolling_evacuation";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_member_departed() keeps clearing directory answers and departed masters but no longer calls vms_lock_dlm_release_csid_locks(), so a departed system's EX lock stays GRANTED on the surviving master forever. The survivor's standby -- queued NL->EX behind it, exactly EVACWL's standby -- is never granted: the workload cannot be taken over, which is the ci.6 gate's whole point. The same mutation applied to the tree the genesis rig is built from turns its booted evac mode red at the takeover (tests/qemu/run_cluster_evac_ci.sh)";;
+        require_fail) hd_lines <<'EOF'
+*** takeover: OVMXA's queued standby is GRANTED EX once OVMXC leaves -- the workload runs on a survivor ***
+takeover: no lock is left held for the departed OVMXC
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -4850,6 +4865,11 @@ apply_edit() {
         # is a `case` label, not a return).
         sed -i 's@^        return VMS_DLM_OP_CONVERT;$@        return VMS_DLM_OP_ENQ; /* NEGCTL dlm-convert-by-name */@' "$_file";;
 
+    dlm-departed-holder-locks-kept)
+        # The sweep's one call into the release path is unique in the file
+        # (vms_lock_dlm_release_csid_locks' other callers pass a counter).
+        sed -i 's@^    (void)vms_lock_dlm_release_csid_locks(departed_csid, NULL);$@    (void)departed_csid; /* NEGCTL dlm-departed-holder-locks-kept */@' "$_file";;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -5080,6 +5100,13 @@ cmd_selftest() {
         defect_field "$_st_d" require_fail >"$_st_tmp/rf"
         for _st_suite_glob in $_st_suites; do
             _st_src="$_st_tests/$_st_suite_glob.c"
+            # A tests/cluster/sim scenario target (test_sim_<x>) has its
+            # source at tests/cluster/sim/scenarios/<x>.c (rd vms-1e58).
+            case "$_st_suite_glob" in
+            test_sim_*)
+                [ -f "$_st_src" ] ||
+                    _st_src="$_st_tests/../sim/scenarios/${_st_suite_glob#test_sim_}.c";;
+            esac
             [ -f "$_st_src" ] || { echo "FAIL: $_st_d: suites_red names '$_st_suite_glob' but $_st_src does not exist"; _st_rc=1; continue; }
             while IFS= read -r _st_txt; do
                 [ -n "$_st_txt" ] || continue

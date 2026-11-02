@@ -1,0 +1,454 @@
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/w/vax.ini-1> attach nvr data/nvram.bin
+%SIM-INFO: NVR: buffering file in memory
+/w/vax.ini-8> attach rq0 data/d0.dsk
+%SIM-INFO: RQ0: 'data/d0.dsk' Contains ODS2 File system
+%SIM-INFO: RQ0: Volume Name: VAXCSYS      Format: DECFILE11B   Sectors In Volume: 2940951
+Eth: libpcap.so failed to load, install libpcap to use pcap networking
+Eth: pcap_findalldevs warning: libpcap.so failed to load, install libpcap to use pcap networking
+/w/vax.ini-14> attach xq udp:41011:127.0.0.1:41012
+%SIM-INFO: Eth: opened OS device udp:41011:127.0.0.1:41012
+/w/vax.ini-16> b
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at  2-NOV-2026 15:55:04.46
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20200208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:13.77  %%%%%%%%%%%
+Operator _VAXC$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:13.77  %%%%%%%%%%%
+Operator status for operator _VAXC$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:13.87  %%%%%%%%%%%
+Logfile has been initialized by operator _VAXC$OPA0:
+Logfile is VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;7
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:13.90  %%%%%%%%%%%
+Operator status for operator VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;7
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:13.90  %%%%%%%%%%%
+15:55:01.85 Node VAXC (csid 00000000) proposed formation of a VAXcluster
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:13.90  %%%%%%%%%%%
+15:55:01.85 Node VAXC (csid 00010001) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:13.90  %%%%%%%%%%%
+15:55:01.85 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:14.28  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:14.29  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+-RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:14.85  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-PROXYSTARTINGUP, proxy processing now starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:14.85  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:14.87  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:14.89  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%SMG-W-GBLNOTCRE, global section not created
+-SYSTEM-F-GPTFULL, global page table is full
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:16.53  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAXC.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:17.04  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Audit server starting up
+Event time:                2-NOV-2026 15:55:16.97
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:18.09  %%%%%%%%%%%
+Message from user DECNET on VAXC
+DECnet starting
+
+%RUN-S-PROC_ID, identification of created process is 20200213
+%NCP-I-NOINFO, No information in database
+%RUN-S-PROC_ID, identification of created process is 20200215
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at  2-NOV-2026 15:55:22.55
+
+  Accounting information:
+  Buffered I/O count:            1486         Peak working set size:    1691
+  Direct I/O count:               601         Peak page file size:      4924
+  Page faults:                   6887         Mounted volumes:             0
+  Charged CPU time:           0 00:00:08.90   Elapsed time:     0 00:00:18.29
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:55:23.02  %%%%%%%%%%%
+Message from user DECNET on VAXC
+DECnet event 4.10, circuit up
+From node 1.965 (VAXC),  1-JAN-1977 00:00:53.64
+Circuit QNA-0
+
+
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAXC
+    Last interactive login on Monday,  2-NOV-2026 15:50
+    Last non-interactive login on Monday,  2-NOV-2026 15:51[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ 
+[bench: LICENSE REGISTER of DVNETRTG, VAX-VMS, VAXCLUSTER typed here from the lab PAKs. The console log is paused; PAK contents are REDACTED ENTIRELY.]
+
+$ LICENSE LOAD DVNETRTG
+%LICENSE-I-UNLOADED, DEC DVNETRTG has been unloaded
+%LICENSE-I-LOADED, DEC DVNETRTG was successfully loaded with 51200 units
+$ LICENSE LOAD VAX-VMS
+%LICENSE-I-UNLOADED, DEC VAX-VMS has been unloaded
+%LICENSE-I-LOADED, DEC VAX-VMS was successfully loaded with 0 units
+$ LICENSE LOAD VAXCLUSTER
+%LICENSE-I-UNLOADED, DEC VAXCLUSTER has been unloaded
+%LICENSE-I-LOADED, DEC VAXCLUSTER was successfully loaded with 51200 units
+$ @SYS$STARTUP:STARTNET
+%SYSGEN-E-NOUNLOAD, driver is not unloadable
+%SYSGEN-F-DEVACTIVE, device is active
+%RUN-F-CREPRC, process creation failed
+-SYSTEM-F-DUPLNAM, duplicate name
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM has been superseded
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM_NOSOFTID has been superseded
+%DCL-I-SUPERSEDE, previous value of MOM$SYSTEM_SOFTID has been superseded
+%NCP-I-NOINFO, No information in database
+%RUN-F-CREPRC, process creation failed
+-SYSTEM-F-DUPLNAM, duplicate name
+$ MCR NCP SHOW EXECUTOR
+ 
+ 
+Node Volatile Summary as of  2-NOV-2026 15:56:07
+ 
+Executor node = 1.965 (VAXC)
+ 
+State                    = on
+Identification           = DECnet for OpenVMS VAX V7.3
+
+ 
+$ SET DEFAULT SYS$SYSTEM
+$ MCR AUTHORIZE ADD DNTEST/PASSWORD=XX/UIC=[200,201]/DEVICE=SYS$SYSDEVICE:/DIRECTORY=[SYSMGR]/NOPWDEXPIRED/PWDLIFETIME=NONE/P
+RIVILEGES=(TMPMBX,NETMBX)/DEFPRIVILEGES=(TMPMBX,NETMBX)
+%UAF-E-UAEERR, invalid user name, user name already exists
+$ MCR AUTHORIZE MODIFY DNTEST/FLAGS=NODISUSER
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:56:08.32  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          System UAF record modification
+Event time:                2-NOV-2026 15:56:08.32
+PID:                      20200216        
+Process name:             SYSTEM          
+Username:                 SYSTEM          
+Process owner:            [SYSTEM]
+Terminal name:            OPA0:
+Image name:               VAXC$DUA0:[SYS0.SYSCOMMON.][SYSEXE]AUTHORIZE.EXE
+Object class name:        FILE
+Object name:              SYS$COMMON:[SYSEXE]SYSUAF.DAT;1
+User record:              DNTEST                          
+Flags:                    New:      (none)
+                          Original: DISUSER
+
+%UAF-I-MDFYMSG, user record(s) updated
+$ DELETE SYS$SYSDEVICE:[SYSMGR]BRK*.TXT;*,SYS$LOGIN:V2O*.TXT;*
+$ CREATE/DIRECTORY/OWNER=[200,201]/PROTECTION=(S:RWE,O:RWE,G:RE,W:RE) SYS$SYSDEVICE:[SYSMGR]
+%CREATE-I-EXISTS, SYS$SYSDEVICE:[SYSMGR] already exists
+$ SET SECURITY/PROTECTION=(S:RWE,O:RWE,G:RE,W:RE) SYS$SYSDEVICE:[000000]SYSMGR.DIR
+$ CREATE SYS$SYSDEVICE:[SYSMGR]BRK1.TXT
+bracket file one
+second record
+*EXIT*
+$ CREATE SYS$SYSDEVICE:[SYSMGR]BRK2.TXT
+bracket file two
+*EXIT*
+$ CREATE SYS$SYSDEVICE:[SYSMGR]BRKP.TXT
+protected file
+*EXIT*
+$ SET SECURITY/OWNER=[200,201]/PROTECTION=(S:RWED,O:RWED,G:RE,W) SYS$SYSDEVICE:[SYSMGR]BRK1.TXT
+$ SET SECURITY/OWNER=[200,201]/PROTECTION=(S:RWED,O:RWED,G:RE,W) SYS$SYSDEVICE:[SYSMGR]BRK2.TXT
+$ SET SECURITY/OWNER=[1,4]/PROTECTION=(S:RWED,O:RWED,G,W) SYS$SYSDEVICE:[SYSMGR]BRKP.TXT
+$ DIRECTORY/OWNER/PROTECTION/SIZE SYS$SYSDEVICE:[SYSMGR]BRK*.TXT
+
+Directory SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1                 1  [DNTEST]                         (RWED,RWED,RE,)
+BRK2.TXT;1                 1  [DNTEST]                         (RWED,RWED,RE,)
+BRKP.TXT;1                 1  [SYSTEM]                         (RWED,RWED,,)
+
+Total of 3 files, 3 blocks.
+$ DIRECTORY SYS$LOGIN:*.COM
+
+Directory SYS$COMMON:[SYSMGR]
+
+ALFMAINT.COM;1      AMDS$LOGICALS.COM;1 CLUSTER_CONFIG.COM;1
+CLUSTER_CONFIG_LAN.COM;1                DBLSTRTUP.COM;1     DCE$RPC_SHUTDOWN.COM;1
+DCE$RPC_STARTUP.COM;1                   DECW$STARTXTERMINAL.COM;1
+DNS$CHANGE_DEF_FILE.COM;1               DNS$CLIENT_STARTUP.COM;1
+DNS$CLIENT_STOP.COM;1                   ICC$ADD_REGISTRY_TABLE.COM;1
+ICC$CREATE_SECURITY_OBJECT.COM;1        LAT$SYSTARTUP.COM;1 LIB$DT_STARTUP.COM;1
+LOADNET.COM;1       LOGIN.COM;1         LTLOAD.COM;1        MAKEROOT.COM;1     
+NETCONFIG.COM;1     RTTLOAD.COM;1       SMISERVER.COM;1     STARTNET.COM;1     
+SYCONFIG.COM;1      SYLOGICALS.COM;1    SYLOGIN.COM;1       SYPAGSWPFILES.COM;1
+SYSECURITY.COM;1    SYSHUTDWN.COM;1     SYSTARTUP_V5.COM;1  SYSTARTUP_VMS.COM;2
+TFF$STARTUP.COM;1   TNT$UTILITY.COM;1   UTC$CONFIGURE_TDF.COM;1
+UTC$TIMEZONE_SETUP.COM;1                UTC$TIME_SETUP.COM;1
+
+Total of 36 files.
+$ SET DEFAULT SYS$LOGIN
+$ DIRECTORY/FULL SYS$SYSDEVICE:[SYSMGR]BRK1.TXT,BRK1RT.TXT
+
+Directory SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1                    File ID:  (1252,2,0)            
+Size:            1/9          Owner:    [DNTEST]
+Created:    2-NOV-2026 15:56:09.55
+Revised:    2-NOV-2026 15:56:14.62 (2)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 9, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 16 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+BRK1RT.TXT;1                  File ID:  (1264,64525,0)        
+Size:            1/9          Owner:    [DNTEST]
+Created:    2-NOV-2026 15:56:48.24
+Revised:    2-NOV-2026 15:56:48.33 (1)
+Expires:   <None specified>
+Backup:    <No backup recorded>
+Effective: <None specified>
+Recording: <None specified>
+File organization:  Sequential
+Shelved state:      Online 
+Caching attribute:  Writethrough
+File attributes:    Allocation: 9, Extend: 0, Global buffer count: 0, No version limit
+Record format:      Variable length, maximum 0 bytes, longest 16 bytes
+Record attributes:  Carriage return carriage control
+RMS attributes:     None
+Journaling enabled: None
+File protection:    System:RWED, Owner:RWED, Group:RE, World:
+Access Cntrl List:  None
+Client attributes:  None
+
+Total of 2 files, 2/18 blocks.
+$ DIFFERENCES SYS$SYSDEVICE:[SYSMGR]BRK1.TXT SYS$SYSDEVICE:[SYSMGR]BRK1RT.TXT
+Number of difference sections found: 0
+Number of difference records found: 0
+
+DIFFERENCES /IGNORE=()/MERGED=1-
+    SYS$SYSDEVICE:[SYSMGR]BRK1.TXT;1-
+    SYS$SYSDEVICE:[SYSMGR]BRK1RT.TXT;1
+$ DUMP/RECORDS SYS$SYSDEVICE:[SYSMGR]BRK1.TXT
+
+
+
+
+
+
+
+
+
+
+
+
+Dump of file SYS$SYSDEVICE:[SYSMGR]BRK1.TXT;1 on  2-NOV-2026 15:56:49.27
+File ID (1252,2,0)   End of file block 1 / Allocated 9
+
+Record number 1 (00000001), 16 (0010) bytes, RFA(0001,0000,0000)
+
+                                     656E6F20 656C6966 2074656B 63617262 bracket file one................ 000000
+
+Record number 2 (00000002), 13 (000D) bytes, RFA(0001,0000,0012)
+
+                                           64 726F6365 7220646E 6F636573 second record................... 000000
+$ DUMP/RECORDS SYS$SYSDEVICE:[SYSMGR]BRK1RT.TXT
+
+
+
+
+
+
+
+
+
+
+
+
+
+Dump of file SYS$SYSDEVICE:[SYSMGR]BRK1RT.TXT;1 on  2-NOV-2026 15:56:49.51
+File ID (1264,64525,0)   End of file block 1 / Allocated 9
+
+Record number 1 (00000001), 16 (0010) bytes, RFA(0001,0000,0000)
+
+                                     656E6F20 656C6966 2074656B 63617262 bracket file one................ 000000
+
+Record number 2 (00000002), 13 (000D) bytes, RFA(0001,0000,0012)
+
+                                           64 726F6365 7220646E 6F636573 second record................... 000000
+$ CHECKSUM SYS$SYSDEVICE:[SYSMGR]BRK1.TXT
+$ SHOW SYMBOL CHECKSUM$CHECKSUM
+  CHECKSUM$CHECKSUM = "742093723"
+$ CHECKSUM SYS$SYSDEVICE:[SYSMGR]BRK1RT.TXT
+$ SHOW SYMBOL CHECKSUM$CHECKSUM
+  CHECKSUM$CHECKSUM = "742093723"
+$ CREATE SYS$LOGIN:V2O.TXT
+vax to ovmx line one
+line two of the round trip
+*EXIT*
+$ COPY SYS$LOGIN:V2O.TXT OVMXA"SYSTEM XX"::V2O.TXT
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ COPY OVMXA"SYSTEM XX"::V2O.TXT SYS$LOGIN:V2O_BACK.TXT
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DIFFERENCES SYS$LOGIN:V2O.TXT SYS$LOGIN:V2O_BACK.TXT
+Number of difference sections found: 0
+Number of difference records found: 0
+
+DIFFERENCES /IGNORE=()/MERGED=1-
+    SYS$SYSROOT:[SYSMGR]V2O.TXT;1-
+    SYS$SYSROOT:[SYSMGR]V2O_BACK.TXT;1
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X006C8009"
+$ DUMP/RECORDS SYS$LOGIN:V2O.TXT
+
+
+
+
+
+
+
+
+
+
+
+
+Dump of file SYS$SYSROOT:[SYSMGR]V2O.TXT;1 on  2-NOV-2026 15:56:53.55
+File ID (1265,64525,0)   End of file block 1 / Allocated 9
+
+Record number 1 (00000001), 20 (0014) bytes, RFA(0001,0000,0000)
+
+                            656E6F20 656E696C 20786D76 6F206F74 20786176 vax to ovmx line one............ 000000
+
+Record number 2 (00000002), 26 (001A) bytes, RFA(0001,0000,0016)
+
+              7069 72742064 6E756F72 20656874 20666F20 6F777420 656E696C line two of the round trip...... 000000
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ DUMP/RECORDS SYS$LOGIN:V2O_BACK.TXT
+
+
+
+
+
+
+
+
+
+
+
+Dump of file SYS$SYSROOT:[SYSMGR]V2O_BACK.TXT;1 on  2-NOV-2026 15:56:53.81
+File ID (1266,64526,0)   End of file block 1 / Allocated 9
+
+Record number 1 (00000001), 20 (0014) bytes, RFA(0001,0000,0000)
+
+                            656E6F20 656E696C 20786D76 6F206F74 20786176 vax to ovmx line one............ 000000
+
+Record number 2 (00000002), 26 (001A) bytes, RFA(0001,0000,0016)
+
+              7069 72742064 6E756F72 20656874 20666F20 6F777420 656E696C line two of the round trip...... 000000
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ DIRECTORY OVMXA"SYSTEM XX"::
+
+Directory OVMXA"SYSTEM password"::SYS$SYSROOT:[SYSMGR]
+
+BRK1.TXT;1          CLUSTER_CONFIG.COM;1                    CLUSTER_CONFIG_LAN.COM;1
+LASTLOGIN_SYSTEM.DAT;1                  LOGIN.COM;1         NETACP.LOG;1       
+OPERATOR.LOG;2      OPERATOR.LOG;1      OVMX$INSTALL.COM;1  STARTNET.COM;1     
+STARTUP.COM;1       SYCONFIG.COM;1      SYLOGICALS.COM;1    SYLOGIN.COM;1      
+SYSTARTUP_VMS.COM;1 TCPIP$CONFIG.COM;1  V2O.TXT;1           
+
+Total of 17 files.
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DIRECTORY OVMXA"SYSTEM XX"::V2O.TXT
+
+Directory OVMXA"SYSTEM password"::SYS$SYSROOT:[SYSMGR]
+
+V2O.TXT;1           
+
+Total of 1 file.
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ 

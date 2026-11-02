@@ -84,6 +84,11 @@ measured over the committed corpus; none of it is interpreted.
       body[116:120] = ffffffff    387/387
       body[120:124] = 0           387/387
       body[124:128] = ffffffff    387/387
+      body[36:52]/[52:56]     THE RESOURCE'S VALUE BLOCK AND SEQUENCE (rd
+                              vms-427, section 7 below): the same block the
+                              master's last grant on that resource carried, 41
+                              of 42, at a later sequence; never zero where
+                              that grant had one
   Everything else is a real sender's STALE BUFFER and this node writes zero
   there (the rd vms-42de ruling), body[34] included: 0 is its modal real value
   (255 of 387) and the 0xfa/0xfb that appear there are not a status for this op
@@ -349,10 +354,10 @@ FIELD_MAP = (
 )
 
 # The spans a real sender leaves as it found them, which this node writes as
-# zero (rd vms-42de). The figure is how many of the population already read
+# zero (rd vms-42de). body[36:56] left this list with rd vms-427: it is the
+# resource's value block and sequence (deferred_grant_valblk below). The figure is how many of the population already read
 # zero there -- never N of N, which is exactly why the row is stated.
-RESIDUE_SPANS = ((10, 12), (16, 20), (32, 36), (36, 48), (48, 112),
-                 (128, 132))
+RESIDUE_SPANS = ((10, 12), (16, 20), (32, 36), (56, 112), (128, 132))
 
 
 def field_map_counts(pairs, allbodies):
@@ -372,6 +377,57 @@ def field_map_counts(pairs, allbodies):
 def residue_counts(allbodies):
     return [((lo, hi), sum(1 for b in allbodies if b[lo:hi] == b'\0' * (hi - lo)),
              len(allbodies)) for lo, hi in RESIDUE_SPANS]
+
+
+def _ident(body):
+    n = body[OFF_NAME_LEN]
+    return bytes(body[44:48 + n]) if 1 <= n <= 31 else None
+
+
+def deferred_grant_valblk(paths):
+    """rd vms-427: body[36:56] of each deferred grant (the 95), against the
+    pair the SAME master's last 0xfa grant on the SAME resource (an op-0x01
+    answer whose request names it, paired by transaction) returned before it.
+    Returns a Counter keyed (op-0x02 carries a block?, relation)."""
+    out = collections.Counter()
+    zero = b'\0' * 20
+    for p in paths:
+        frames = bodies(p)
+        req = {}
+        for idx, src, dst, b in frames:
+            if b[8] == REQ_CAT and b[9] == ENQ_OP and b[OFF_TXN] != b'\0' * 4:
+                req[(src, dst, bytes(b[OFF_TXN]))] = (idx, b)
+        queued, last = {}, {}
+        for idx, src, dst, b in frames:
+            if b[8] == ANS_CAT and b[9] == ENQ_OP and is_real(src) and is_real(dst):
+                q = req.get((dst, src, bytes(b[OFF_TXN])))
+                if q is None or q[0] > idx:
+                    continue
+                rid = _ident(q[1])
+                if b[OFF_STATUS] == QUEUED:
+                    queued[(src, dst, bytes(b[OFF_MASTER_H]),
+                            bytes(b[OFF_REQ_H]))] = (idx, rid)
+                elif b[OFF_STATUS] == GRANTED:
+                    last[(src, rid)] = bytes(b[36:56])
+            elif b[8] == REQ_CAT and b[9] == NOTIFY_OP and is_real(src):
+                k = (src, dst, bytes(b[OFF_MASTER_H]), bytes(b[OFF_REQ_H]))
+                if k not in queued or queued[k][0] > idx:
+                    continue
+                _qi, rid = queued.pop(k)
+                mine, prior = bytes(b[36:56]), last.get((src, rid))
+                if prior is None:
+                    rel = 'no earlier grant on the resource'
+                elif mine == prior:
+                    rel = 'equal to the last grant'
+                elif mine[:16] == prior[:16] and \
+                        int.from_bytes(mine[16:], 'little') > \
+                        int.from_bytes(prior[16:], 'little'):
+                    rel = 'same block, later sequence'
+                else:
+                    rel = 'other'
+                out[('block' if mine != zero else 'zero', rel)] += 1
+                last[(src, rid)] = mine
+    return out
 
 
 def report(paths):
@@ -493,8 +549,30 @@ def selftest(repo):
     #    where a real sender leaves its buffer, and none of these is N of N.
     for (lo, hi), hits, n in residue_counts(real):
         check('residue body[%d:%d] already zero' % (lo, hi), hits,
-              {(10, 12): 237, (16, 20): 179, (32, 36): 116, (36, 48): 266,
-               (48, 112): 16, (128, 132): 102}[(lo, hi)])
+              {(10, 12): 237, (16, 20): 179, (32, 36): 116, (56, 112): 20,
+               (128, 132): 102}[(lo, hi)])
+
+    # 7. THE VALUE BLOCK A DEFERRED GRANT CARRIES (rd vms-427). body[36:52]
+    #    and body[52:56] are NOT residue on the 95: where the master's last
+    #    grant on that resource carried a block, the op-0x02 carries the same
+    #    block at a later sequence (41 of 42; the one other changed its bytes
+    #    too), and no op-0x02 is zero where the last grant carried one (the 32
+    #    zero ones follow a zero grant). The later sequence is the master's
+    #    RSB moving on between the two (a release that wrote it). So the builder writes the master RSB's pair --
+    #    the read the 82/01 grant already makes (vms_lock.c
+    #    dlm_master_read_valblk). Measured, not named: every op-0x02 with a
+    #    block answers a request whose body[28] has bit 0x01 set (RMHOLD's
+    #    LCK$M_SYSTEM!LCK$M_VALBLK request reads 0x11 there), and every zero
+    #    one a request on a resource no grant showed a block for; the corpus
+    #    cannot separate "the requester asked" from "the resource has one".
+    vb = deferred_grant_valblk(paths)
+    check('deferred grants by (body[36:56], against the master\'s last grant '
+          'on the resource)', sorted(vb.items()), [
+              (('block', 'no earlier grant on the resource'), 5),
+              (('block', 'other'), 1),
+              (('block', 'same block, later sequence'), 41),
+              (('zero', 'equal to the last grant'), 32),
+              (('zero', 'no earlier grant on the resource'), 16)])
 
     print('\ndlm_late_grant_census selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1

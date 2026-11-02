@@ -1614,6 +1614,12 @@ struct vms_dlm_deq {
  *   body[124:128] = ffffffff -- all 387/387.
  *   body[47]      = 0: NO RESOURCE NAME, 95 of 95 (383 of 387 overall). The
  *                   message is keyed by HANDLES, so this builder writes no name.
+ *   body[36:52]     THE RESOURCE'S VALUE BLOCK, body[52:56] ITS SEQUENCE (rd
+ *                   vms-427): the master RSB's pair, as the 82/01 grant
+ *                   carries it. Where the master's last grant on the resource
+ *                   carried a block the op-0x02 carries the same block, 41 of
+ *                   42, and zero in none; the 48 zero ones follow a zero grant
+ *                   or none seen.
  * Every other span is a real sender's stale buffer and this node writes zero
  * there (the rd vms-42de ruling), body[34] included -- 0 is its modal real
  * value (255 of 387) and the 0xfa/0xfb that appear there are not a status for
@@ -1629,6 +1635,7 @@ struct vms_dlm_deq {
 #define VMS_OFF_DLM_GRANT_NOTIFY_FLAG2   101u                   /* body[29]  */
 #define VMS_OFF_DLM_GRANT_NOTIFY_MODE    VMS_OFF_DLM_MODE       /* body[30]  */
 #define VMS_OFF_DLM_GRANT_NOTIFY_REQMODE 103u                   /* body[31]  */
+#define VMS_OFF_DLM_GRANT_NOTIFY_VALBLK_SEQ 124u            /* body[52:56], rd vms-427 */
 #define VMS_OFF_DLM_GRANT_NOTIFY_TAIL1   188u            /* body[116:120]    */
 #define VMS_OFF_DLM_GRANT_NOTIFY_TAIL2   VMS_OFF_DLM_REQ_TAIL /* body[124:128] */
 #define VMS_OFB_DLM_GRANT_NOTIFY_FLAG  VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_NOTIFY_FLAG)
@@ -1645,6 +1652,20 @@ struct vms_dlm_grant_notify {
 	uint32_t req_lkid;      /* body[24:28]: the requester's own handle  */
 	uint8_t  granted_mode;  /* body[30]: the mode the engine granted    */
 	uint8_t  req_mode;      /* body[31]: the mode the LKB asked for     */
+	/*
+	 * THE RESOURCE'S VALUE BLOCK, body[36:52], AND ITS SEQUENCE, body[52:56]
+	 * (rd vms-427). Not residue on a deferred grant: where the master's last
+	 * grant on that resource carried a block, the real op-0x02 carries the
+	 * same block (41 of 42) and is zero in none
+	 * (tools/cluster/dlm_late_grant_census.py section 7) -- the pair the
+	 * immediate 82/01 grant returns at the same offsets. `valblk_present` 0
+	 * writes zeros in both: sixteen zeros presented as a block are the
+	 * placeholder INV-6 forbids. Read off the master RSB at the send
+	 * (vms_lock_dlm_grant_advance_read).
+	 */
+	uint8_t  valblk_present;
+	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];
+	uint32_t valblk_seq;
 };
 
 vms_codec_status_t

@@ -328,6 +328,40 @@ def holder_pairs(path, rec_op):
     return out
 
 
+def f9_holder_answers(caps):
+    """rd vms-427: for every 0xfa ROOT answer (body[28] 0x10) given by a node
+    that was EARLIER answered 0xf9 for the same identity, compare the pair the
+    answer returns (body[36:56]) with that node's OWN record's pair and the
+    incoming record's (both body[88:108]). Real senders and answerers only.
+    Returns a Counter keyed (relation of own to incoming, what the answer is)."""
+    out = collections.Counter()
+    for recs in caps.values():
+        won = {}
+        for r in recs:
+            a = r['a']
+            if (a is not None and is_root(r['q']) and a[34] == ST_YOU_MASTER
+                    and is_real(r['src']) and is_real(r['dst'])):
+                won[(r['src'], ident(r['q']))] = (r['idx'], bytes(r['q'][88:108]))
+        for r in recs:
+            a = r['a']
+            if (a is None or not is_root(r['q']) or a[34] != ST_GRANTED
+                    or a[28] != 0x10 or not is_real(r['dst'])):
+                continue
+            w = won.get((r['dst'], ident(r['q'])))
+            if w is None or w[0] > r['idx']:
+                continue
+            own, inc, ans = w[1], bytes(r['q'][88:108]), bytes(a[36:56])
+            if own == inc:
+                rel = 'own == incoming, %s' % (
+                    'absent' if own == ZERO_PAIR else 'a block')
+            else:
+                rel = 'own seq %s incoming seq' % (
+                    '<' if le32(own, 16) < le32(inc, 16) else '>')
+            out[(rel, 'own' if ans == own else
+                 'incoming' if ans == inc else 'other')] += 1
+    return out
+
+
 def selftest(repo):
     """Pin the figures rd vms-874f's sender and answerer are built from. A
     corpus change has to move these deliberately, and whatever quotes them
@@ -596,6 +630,26 @@ def selftest(repo):
               (('SUB', 'none seen', 'block'), 2385),
               (('SUB', 'write', 'other'), 10),
               (('SUB', 'write', 'written block'), 62)])
+
+    # 10. WHAT A HOLDER TOLD 0xf9 CARRIES ON THE RSB IT NOW MASTERS (rd
+    #     vms-427). Its own record's pair (body[88:108], the pair its lock was
+    #     last told -- section 9) is the block the RSB holds afterwards: every
+    #     later 0xfa ROOT answer it gives for that identity (the 0x10 shape)
+    #     returns its OWN pair, unless the incoming record's sequence is HIGHER,
+    #     and then the incoming one. RA1b frame 7400 is the case that separates
+    #     "keeps its own" from "takes the survivor's": own seq 2, incoming seq 1,
+    #     the answer returns seq 2. SDA agrees (vms-2fa arm 1): VAX3, told 0xf9
+    #     for DEPT, shows RMLVB-0123456789 on the RSB it then masters -- with
+    #     Seqnum 2 and status INVALID, which no frame in the window carries
+    #     (lab874f frame 5323 answers at seq 1; VAX2's SDA then reads 2 INVALID).
+    #     That post-window step is NOT grounded on the wire and not built.
+    f9 = f9_holder_answers(caps)
+    check('0xf9 holders\' later 0x10-shape 0xfa ROOT answers, by (own vs '
+          'incoming pair, what the answer returns)', sorted(f9.items()), [
+              (('own == incoming, a block', 'own'), 5),
+              (('own == incoming, absent', 'own'), 346),
+              (('own seq < incoming seq', 'incoming'), 3),
+              (('own seq > incoming seq', 'own'), 1)])
 
     print('dlm_rebuild08_census selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1

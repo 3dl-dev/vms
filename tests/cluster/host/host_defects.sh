@@ -319,7 +319,10 @@ dlm-rebuild-records-wait-past-release
 barrier-step-not-held-for-own-rebuild
 coord-release-not-held-for-own-rebuild
 dlm-rebuild-record-drops-the-granted-valblk
-dlm-rebuild-record-stale-seq-after-own-write"
+dlm-rebuild-record-stale-seq-after-own-write
+dlm-f9-promotion-drops-the-valblk
+dlm-rebuild-record-overwrites-a-later-pair
+grant-notify-drops-the-valblk"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3148,6 +3151,19 @@ VAX3's real ROOT record is installed and answered
 VAX3's real SUB record is installed under its root and answered
 a ROOT from a system that is no member is REFUSED
 a retransmitted ROOT is answered again...
+*** a HIGHER sequence replaces the RSB's (3 of 3 real answers return the incoming pair then) ***
+*** and the op-0x02 VAX2 receives carries it at body[36:52] with its sequence at body[52:56], as 41 of 42 real deferred grants carry the block their master's last grant did ***
+*** its 0xfa returns the RSB's pair at 2, not the record's 1 (RA1b frame 7400: own 2, incoming 1, answer 2) ***
+*** the 82/01 grant returns RMLVB-0123456789 at 1 ***
+*** the grant reads RMLVB-0123456789 at sequence 1 off the RSB OVMXE adopted -- its own lock's pair, not the zero block at 0 VAX2's SDA showed (lab874f, rd vms-427) ***
+VAX2's EX is now granted (lab874f D3)
+VAX2's EX on DEPT waits while OVMXE holds CR (lab874f D2)
+VAX2's PR on DEPT is granted at once beside OVMXE's CR
+VAX2's real 0xf9 (frame 5324): OVMXE now masters DEPT
+VAX3's real ROOT record (RMLVB at 1) is installed
+a record carrying the same block at 2 is installed
+the op-0x02 deferred grant builds
+told 0xf9 with its own pair at 2
 EOF
                       ;;
         esac;;
@@ -3166,6 +3182,7 @@ EOF
 *** EVERY NAMED CELL equals VAX2's real ROOT record: PID 0x20400217, own lkid, PR/PR, no parent, identity, tail, the tree hash ***
 *** EVERY NAMED CELL equals VAX3's real ROOT record: PID 0x20600216, own lkid, CR/CR, no parent, the identity, body[110] and the tail, the tree hash ***
 *** EVERY NAMED CELL equals VAX3's real SUB record (PID, CW/CW, the parent pair, identity, tail) ***
+the ROOT goes to VAX2 carrying RMLVB-0123456789 at 1 (lab874f frame 5322)
 EOF
                       ;;
         esac;;
@@ -3309,6 +3326,53 @@ EOF
 *** body[88:108] equals VAX2's real ROOT record: RMLVB-0123456789 at 1, the pair VAX1 granted (rd vms-8159) ***
 *** the record carries the GRANT's block and sequence ***
   a later grant is the master's word again
+*** and the op-0x02 VAX2 receives carries it at body[36:52] with its sequence at body[52:56], as 41 of 42 real deferred grants carry the block their master's last grant did ***
+*** its 0xfa returns the RSB's pair at 2, not the record's 1 (RA1b frame 7400: own 2, incoming 1, answer 2) ***
+*** the 82/01 grant returns RMLVB-0123456789 at 1 ***
+*** the grant reads RMLVB-0123456789 at sequence 1 off the RSB OVMXE adopted -- its own lock's pair, not the zero block at 0 VAX2's SDA showed (lab874f, rd vms-427) ***
+the ROOT goes to VAX2 carrying RMLVB-0123456789 at 1 (lab874f frame 5322)
+EOF
+                      ;;
+        esac;;
+
+    dlm-f9-promotion-drops-the-valblk)
+        case "$_f" in
+        facility)     echo "a holder told 0xf9 for a tree whose master LEFT installs its own lock's value block and sequence (the pair its master last granted, rd vms-8159) onto the RSB it now masters, so the next grant to a remote requester carries it (rd vms-427; vms-2fa arm 1's SDA)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_adopt_promote_lkid() stops seeding the RSB from the promoted proxy's pair: the RSB keeps zeros, and VAX2's EX on DEPT is granted with a zero block at sequence 0 -- exactly what VAX2's SDA showed in lab874f. RA1b frame 7400's case reddens with it: with nothing of its own on the RSB, the 0xf9 holder answers with the survivor's older pair.";;
+        require_fail) hd_lines <<'EOF'
+*** the grant reads RMLVB-0123456789 at sequence 1 off the RSB OVMXE adopted -- its own lock's pair, not the zero block at 0 VAX2's SDA showed (lab874f, rd vms-427) ***
+*** and the op-0x02 VAX2 receives carries it at body[36:52] with its sequence at body[52:56], as 41 of 42 real deferred grants carry the block their master's last grant did ***
+*** the 82/01 grant returns RMLVB-0123456789 at 1 ***
+*** its 0xfa returns the RSB's pair at 2, not the record's 1 (RA1b frame 7400: own 2, incoming 1, answer 2) ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-rebuild-record-overwrites-a-later-pair)
+        case "$_f" in
+        facility)     echo "a survivor's op-0x08 record does not overwrite a LATER value-block pair already on the RSB the new master holds (rd vms-427; RA1b frame 7400: own seq 2, incoming 1, the 0xfa returns 2)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_rsb_take_rebuild_pair_locked() stops comparing sequences, so a survivor's OLDER pair replaces the 0xf9 holder's newer one and every later grant hands out a stale block.";;
+        require_fail) hd_lines <<'EOF'
+*** its 0xfa returns the RSB's pair at 2, not the record's 1 (RA1b frame 7400: own 2, incoming 1, answer 2) ***
+EOF
+                      ;;
+        esac;;
+
+    grant-notify-drops-the-valblk)
+        case "$_f" in
+        facility)     echo "the deferred grant (op 0x02) carries the master RSB's value block at body[36:52] and its sequence at body[52:56] (rd vms-427: 41 of 42 real deferred grants carry the block their master's last grant did, none zero where it had one)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated to the codec's own suite, where the cell is asserted byte-exact against a REAL master's deferred grant (fixture dlm-grant-notify-c); test_dlm_rebuild asserts the same property on this node's own lab874f grant, so that suite reddens too and the driver is not asked to score it";;
+        why)          echo "vms_dlm_grant_notify_build() stops writing the block: VAX2's queued EX is granted by an op-0x02 with twenty zeros where a real master puts the resource's block, which is the zero block VAX2's SDA showed in lab874f.";;
+        require_fail) hd_lines <<'EOF'
+*** body[36:56], the resource's VALUE BLOCK and its SEQUENCE, byte-exact -- the zeros of a resource with none, or the block a real master carried (rd vms-427) ***
 EOF
                       ;;
         esac;;
@@ -4401,6 +4465,19 @@ apply_edit() {
     dlm-rebuild-record-drops-the-granted-valblk)
         # `        if (seq_how == DLM_GRANT_SEQ_SET)` is unique.
         sed -i 's|^        if (seq_how == DLM_GRANT_SEQ_SET)$|        if (0 \&\& seq_how == DLM_GRANT_SEQ_SET) /* NEGCTL dlm-rebuild-record-drops-the-granted-valblk */|' "$_file";;
+
+    dlm-f9-promotion-drops-the-valblk)
+        # The promotion's seeding call is the only line that opens with it
+        # and names lock->valblk.
+        sed -i 's|^            dlm_rsb_take_rebuild_pair_locked(res, lock->valblk,$|            if (0) /* NEGCTL dlm-f9-promotion-drops-the-valblk */ dlm_rsb_take_rebuild_pair_locked(res, lock->valblk,|' "$_file";;
+
+    dlm-rebuild-record-overwrites-a-later-pair)
+        # The sequence guard in dlm_rsb_take_rebuild_pair_locked() is unique.
+        sed -i 's|^    if (res->valblk_seq != 0u \&\& seq <= res->valblk_seq)$|    if (0 \&\& res->valblk_seq != 0u \&\& seq <= res->valblk_seq) /* NEGCTL dlm-rebuild-record-overwrites-a-later-pair */|' "$_file";;
+
+    grant-notify-drops-the-valblk)
+        # `	if (g->valblk_present) {` is unique in the codec.
+        sed -i 's|^\tif (g->valblk_present) {$|\tif (0 \&\& g->valblk_present) { /* NEGCTL grant-notify-drops-the-valblk */|' "$_file";;
 
     dlm-rebuild-record-stale-seq-after-own-write)
         # `    if (post.write_valblk)` is unique.

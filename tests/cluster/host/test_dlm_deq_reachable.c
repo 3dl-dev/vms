@@ -1704,10 +1704,16 @@ static int adv_grant_frame(const struct vms_dlm_grant_advance *g,
 	if (vms_lock_dlm_grant_advance_read(g->csid, g->master_lkid, out) !=
 	    SS__NORMAL)
 		return 0;
+	memset(&gn, 0, sizeof(gn));
 	gn.master_lkid  = out->deferred_master_lkid;
 	gn.req_lkid     = out->deferred_req_lkid;
 	gn.granted_mode = out->deferred_mode;
 	gn.req_mode     = out->deferred_req_mode;
+	/* ...and the RSB's value block, as dlm_arm_fill_grant_notify does
+	 * (rd vms-427). */
+	gn.valblk_present = out->valblk_present;
+	memcpy(gn.valblk, out->valblk, sizeof(gn.valblk));
+	gn.valblk_seq = out->valblk_seq;
 	memset(frame, 0, cap);
 	return vms_dlm_grant_notify_build(&gn, frame, cap, &written) ==
 	       VMS_CODEC_OK;

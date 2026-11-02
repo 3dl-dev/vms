@@ -3254,6 +3254,9 @@ static void test_a4d7_grant_notify_on_the_wire(void)
 		cnxman_club_dlm_seq_found(&g.cl.club);
 	m = cnxman_club_csb_at(&g.cl.club, 1u);
 
+	/* A resource with no value block: the block cells stay zero (rd
+	 * vms-427; test_dlm_rebuild drives the one that carries a block). */
+	memset(&gn, 0, sizeof(gn));
 	gn.master_lkid  = 0x1d000412u;
 	gn.req_lkid     = 0x07000412u;
 	gn.granted_mode = (uint8_t)VMS_LCK_EX;
@@ -3279,10 +3282,10 @@ static void test_a4d7_grant_notify_on_the_wire(void)
 		 "0 of 387 real op-0x02 frames carry one and no node answers "
 		 "one ***");
 	snprintf(state, sizeof(state),
-		 "seq=%u,mlkid=%u,lkid=%u,mode=%u,reqmode=%u",
+		 "seq=%u,mlkid=%u,lkid=%u,mode=%u,reqmode=%u,valblkseq=%u",
 		 (unsigned)g.cl.club.dlm_seq, (unsigned)gn.master_lkid,
 		 (unsigned)gn.req_lkid, (unsigned)gn.granted_mode,
-		 (unsigned)gn.req_mode);
+		 (unsigned)gn.req_mode, (unsigned)gn.valblk_seq);
 	conf_dump("dlm_grant_notify", 72u, state, b, VMS_CM_BODY_LEN);
 }
 

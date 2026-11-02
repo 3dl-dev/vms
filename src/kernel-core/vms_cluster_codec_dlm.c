@@ -1581,6 +1581,14 @@ vms_dlm_grant_notify_build(const struct vms_dlm_grant_notify *g,
 			VMS_DLM_GRANT_NOTIFY_FLAG2_VAL);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_NOTIFY_MODE, g->granted_mode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_GRANT_NOTIFY_REQMODE, g->req_mode);
+	/* The master RSB's value block and sequence, only when it has one (rd
+	 * vms-427); otherwise the zeros written above. */
+	if (g->valblk_present) {
+		vms_wire_put_bytes(&w, VMS_OFF_DLM_VALBLK, VMS_DLM_VALBLK_WIRE_LEN,
+				   g->valblk);
+		vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_NOTIFY_VALBLK_SEQ,
+				  g->valblk_seq);
+	}
 	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_NOTIFY_TAIL1,
 			  VMS_DLM_GRANT_NOTIFY_TAIL_VAL);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_NOTIFY_TAIL2,
@@ -1616,8 +1624,20 @@ vms_dlm_grant_notify_parse_body(const uint8_t *body, uint32_t len,
 		return st;
 	g.granted_mode = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_NOTIFY_MODE);
 	g.req_mode = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_NOTIFY_REQMODE);
+	vms_wire_get_bytes(&v, VMS_OFB_DLM_VALBLK, VMS_DLM_VALBLK_WIRE_LEN,
+			   g.valblk);
+	g.valblk_seq = vms_wire_get_le32(&v,
+		VMS_OFB_FROM_FRAME(VMS_OFF_DLM_GRANT_NOTIFY_VALBLK_SEQ));
 	if (!vms_wire_view_ok(&v))
 		return v.err;
+	{
+		uint32_t i;
+
+		g.valblk_present = (uint8_t)(g.valblk_seq != 0u);
+		for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+			if (g.valblk[i] != 0u)
+				g.valblk_present = 1u;
+	}
 	if (!dlm_grant_notify_modes_ok(&g))
 		return VMS_CODEC_E_RANGE;
 	*out = g;

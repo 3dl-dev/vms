@@ -1,0 +1,28 @@
+15:10:20 VAXC at Username:
+15:10:34 VAXC logged in
+15:10:46 VAXC licensed
+15:10:49 VAXC DECnet executor on
+15:11:25 cfg boot1: OVMXA logged in after 36s
+15:11:27 cfg boot1: NCP executor on=True
+15:11:28 cfg boot1: SET HOST VAXC -> Username: after 1.0s
+15:11:33 cfg boot1: remote WHO=",F$GETSYI("NODENAME
+15:11:34 VAXC links cfg boot1 session up | Known Link Volatile Summary as of  2-NOV-2026 15:11:33 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:11:37 cfg boot1: qemu KILLED mid-session (SIGKILL)
+15:12:16 cfg boot2: OVMXA logged in after 39s
+15:12:19 cfg boot2: NCP executor on=True
+15:12:19 VAXC links cfg boot2 before SET HOST (42s after kill) | Known Link Volatile Summary as of  2-NOV-2026 15:12:19 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:13:03 cfg boot2: SET HOST VAXC -> FAIL (%SYSTEM-F-TIMEOUT, ) after 44.2s
+15:13:03 VAXC links cfg boot2 after SET HOST | Known Link Volatile Summary as of  2-NOV-2026 15:13:03 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:13:06 cfg boot2: qemu stopped
+15:13:06 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:13:06 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:13:21 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:13:21 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:13:37 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:13:36 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:13:52 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:13:52 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:14:07 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:14:07 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:14:22 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:14:22 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:14:38 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:14:37 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:14:53 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:14:53 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:15:08 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:15:08 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:15:24 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:15:23 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:15:39 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:15:39 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    20200215  REMACP             8448  SYSTEM
+15:15:54 VAXC links cfg drain | Known Link Volatile Summary as of  2-NOV-2026 15:15:54 / Link       Node           PID     Process     Remote link  Remote user / 8193    1.963 (OVMXA)    00000000                     8448  SYSTEM

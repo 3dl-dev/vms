@@ -1,0 +1,61 @@
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID.80000001H:ECX.svm [bit 2]
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+
+    OpenVMX V0.7-14 - OpenVMS-compatible
+     2-NOV-2026 15:11:52.77
+
+%STDRV-I-STARTUP, OpenVMX startup begun at  2-NOV-2026 15:11:53.49
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:11:53.55  %%%%%%%%%%%
+Operator _OVMX$OPA0: has been enabled, username SYSTEM
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:11:54.34  %%%%%%%%%%%
+Operator status for operator _OVMX$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 10000004
+%RUN-S-PROC_ID, identification of created process is 10000005
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-14 (OpenVMS-compatible)
+
+Username: 
+
+Username: 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:11:59.57  %%%%%%%%%%%
+Message from user SYSTEM on OVMX
+DECnet starting
+Username: 
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMX V0.7-14 - OpenVMS-compatible
+    Last interactive login on  2-NOV-2026 15:11:11.00[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ DIRECTORY/SIZE/DATE SYS$SYSTEM:DECNETD.EXE;*
+
+Directory SYS$SYSROOT:[SYSEXE]
+
+DECNETD.EXE;1                             2033   2-NOV-2026 10:18:21.00
+
+Total of 1 file, 2033 blocks.
+$ NCP :== $SYS$SYSTEM:NCP.EXE
+$ NCP SHOW EXECUTOR
+
+
+Node Volatile Summary as of  2-NOV-2026 15:12:16
+
+Executor node = 1.963 (OVMXA)
+
+State                    = on
+Identification           = OVMX DECnet-compatible V0.7-14
+
+
+$ SET HOST VAXC
+%SYSTEM-F-TIMEOUT, 

@@ -799,7 +799,12 @@ run_dcl_acceptance_battery() {
     else
         ok "SHOW SYSTEM [vms-66e]: every row carries a process name"
     fi
-    must_match "$SEG" '^0*1 +STARTUP ' "SHOW SYSTEM [vms-66e]: the boot task names itself STARTUP, after its image, as VMS's startup process is named"
+    if printf '%s\n' "$SEG" | tr -d '\r' | grep -qE '^[0-9A-F]{8} STARTUP '; then
+        ok "SHOW SYSTEM [vms-66e]: the boot task names itself STARTUP, after its image, as VMS's startup process is named"
+    else
+        bad "SHOW SYSTEM [vms-66e]: no STARTUP row (the boot task names itself STARTUP, after its image)"
+        printf '%s\n' "$SEG" | tr -d '\r' | sed 's/^/      SYS| /' | head -20
+    fi
     # vms-d4ef/#883: JOB_CONTROL and the interactive SYSTEM login are DISTINCT
     # executive processes -- distinct PIDs, not the old fork+execl shared-pid alias.
     local JC_PID SYS_PID

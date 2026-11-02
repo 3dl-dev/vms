@@ -482,14 +482,17 @@ def selftest(repo):
     check('op-0x0d frames between the first and last op-0x08, all captures',
           sum(interleaved_0d(p, r) for p, r in caps.items()), 0)
 
-    # 8. THE BARRIER STEP (rd vms-bcb). Every record whose barrier is in the
-    #    capture is sent after the release of step 5 (RA1b, f1, a formation)
-    #    or step 6 (E4, E5, E5b, run16, formations), and answered before the
-    #    next release -- inside the transition, never after it. None follows a
-    #    release of step 7 or later; OVMX's one record after the release of
-    #    step 12 (lab33a) bugchecked a real VAX LOCKMGRERR. WHICH of 5 or 6 a
-    #    departure takes is not separated by this corpus (RA1b/f1 vs E5/E5b
-    #    both step the directory vector), so no sender may choose one yet.
+    # 8. THE BARRIER STEP (rd vms-bcb, grounded by rd vms-2fa). Every record
+    #    whose barrier is in the capture is sent inside the transition: after
+    #    the release of step 5 when the SENDER's own LOCKDIRWT is non-zero
+    #    (RA1b, f1, coldform, vms-2fa arm2), after the release of step 6 when
+    #    it is zero (E4, E5, E5b, run16, heldout1/2, vms-2fa arm1/arm3b), and
+    #    answered before the next release. vms-2fa flips only VAX3's weight in
+    #    one lab: 0 -> release 6 (arm1, arm3b), 1 -> release 5 (arm2). The
+    #    weight is not on the wire; the per-sender split is pinned by
+    #    tests/lab/captures/vms-2fa-rebuild-step-20261102/rebuild_step.py
+    #    --selftest. OVMX's one record after release 12 (lab33a) bugchecked a
+    #    real VAX LOCKMGRERR.
     per_step = collections.Counter()
     verdict = collections.Counter()
     for p, recs in caps.items():
@@ -499,6 +502,9 @@ def selftest(repo):
         verdict.update(cl)
     check('op-0x08 records by the last barrier release before them',
           sorted(per_step.items(), key=lambda kv: (kv[0][0], str(kv[0][1]))), [
+              (('arm1-departure.pcap.gz', 6), 281),
+              (('arm2-departure.pcap.gz', 5), 796),
+              (('arm3b-departure.pcap.gz', 6), 1),
               (('cf1-op08.pcap', None), 1),
               (('coldform-ev2-formation.pcap', 5), 1),
               (('heldout-E4.pcap.gz', 6), 137),
@@ -512,7 +518,7 @@ def selftest(repo):
           ])
     check('...answered before the next release (inside the step)',
           sorted(verdict.items()),
-          [('answered before the next release', 887),
+          [('answered before the next release', 1965),
            ('no barrier in the capture', 1)])
 
     # 9. THE VALUE BLOCK A SURVIVOR RELAYS (rd vms-8159). body[88:108] is the
@@ -531,9 +537,9 @@ def selftest(repo):
                  q[88:104] != b'\0' * 16, le32(q, 104) != 0)] += 1
     check('op-0x08 records by (kind, block non-zero, sequence non-zero)',
           sorted(blk.items()),
-          [(('ROOT', False, False), 532), (('ROOT', False, True), 1),
-           (('ROOT', True, True), 17), (('SUB', False, False), 9),
-           (('SUB', False, True), 10), (('SUB', True, True), 319)])
+          [(('ROOT', False, False), 1547), (('ROOT', False, True), 3),
+           (('ROOT', True, True), 40), (('SUB', False, False), 13),
+           (('SUB', False, True), 32), (('SUB', True, True), 331)])
     check('RA1b RMT1 tree body[88:108] (sender, lock, block, sequence)',
           [(r['src'].hex(), ident(r['q'])[2].decode(), r['q'][88:104],
             le32(r['q'], 104)) for r in rmt], [
@@ -561,13 +567,13 @@ def selftest(repo):
               (('ROOT', '1a', 'equal, absent'), 3),
               (('ROOT', 'grant', 'equal, absent'), 142),
               (('ROOT', 'grant', 'other'), 1),
-              (('ROOT', 'none seen', 'absent'), 385),
-              (('ROOT', 'none seen', 'block'), 15),
+              (('ROOT', 'none seen', 'absent'), 1400),
+              (('ROOT', 'none seen', 'block'), 40),
               (('ROOT', 'write', 'other'), 2),
               (('ROOT', 'write', 'written block'), 2),
               (('SUB', 'grant', 'other'), 5),
-              (('SUB', 'none seen', 'absent'), 7),
-              (('SUB', 'none seen', 'block'), 177),
+              (('SUB', 'none seen', 'absent'), 11),
+              (('SUB', 'none seen', 'block'), 211),
               (('SUB', 'write', 'other'), 6),
               (('SUB', 'write', 'written block'), 143)])
     check('op-0x12: the same rule (after an op-0x1a it; otherwise the grant)',

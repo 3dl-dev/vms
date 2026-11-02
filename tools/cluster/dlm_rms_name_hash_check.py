@@ -183,7 +183,10 @@ def selftest(repo):
         print('  [%s] %s: %r%s' % ('PASS' if good else 'FAIL', name, got,
                                    '' if good else ' (want %r)' % (want,)))
 
-    check('real RMS-named cat-0x02 requests in the corpus', len(rows), 1133)
+    # +1 from the rd vms-874f RA1b departure capture: an op-0x0d directory
+    # registration after the departure, and its body[128:132] is the computed
+    # hash like every other row.
+    check('real RMS-named cat-0x02 requests in the corpus', len(rows), 1134)
     check('...of them op-0x01 directory lookups',
           sum(1 for _c, _i, _n, b in rows if b[9] == 0x01), 578)
     # The identity the value is computed over, and the length -- both inside

@@ -830,6 +830,23 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  * the other VAX answers 82/01 within 1.5 ms -- echo, body[34] = 0xf9 -- and the
  * barrier proceeds. Unanswered, the requester holds its next barrier release
  * forever.
+ *
+ * THAT IS ONE CASE OF A WIDER MESSAGE (rd vms-874f): op 0x08 is the FAILOVER
+ * REBUILD RECORD. When a lock tree's master leaves, every surviving holder
+ * re-sends each lock it holds in that tree, op-0x12-shaped: body[24:28] its own
+ * lkid, body[30]/[31] the mode, body[36:40] the parent's own lkid and
+ * body[40:44] the parent's lkid on the NEW master (both zero on a ROOT),
+ * body[88:108] the value block, body[128:132] a ROOT's directory hash (on a SUB
+ * a value that is neither its own name's hash nor its parent's). The
+ * ROOT goes first, to the tree's directory node -- or, when the sender IS the
+ * directory, to the master it has just installed. The 82/01 answer says 0xf9
+ * (the requester now masters the tree, and sends no subs) or 0xfa (a master
+ * exists: body[20:24] is the new master's lkid, which each SUB then carries at
+ * body[40:44]). The SYS$SYS_ID lookup above is a ROOT record of this kind. Every
+ * figure (550 ROOT / 338 SUB records over ten captures, the parent pair 338 of
+ * 338) is pinned by tools/cluster/dlm_rebuild08_census.py --selftest; capture
+ * and the topologies NOT covered: tests/lab/captures/
+ * vms-874f-failover-rebuild-20261011.
  */
 #define VMS_DLM_WIREOP_DIR_LOOKUP_TR 0x08u
 

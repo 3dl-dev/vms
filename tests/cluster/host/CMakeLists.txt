@@ -1398,6 +1398,26 @@ set_tests_properties(cluster_host_rec12_holder_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-874f: what a SURVIVING HOLDER sends when a lock tree's master
+# leaves. Each lock it holds in that tree goes to the new master as a cat-0x02
+# op-0x08 rebuild record -- ROOT first, then each SUB carrying the parent's
+# lkid on the new master, the 82/01 answer saying 0xf9 (the requester masters
+# the tree) or 0xfa (a master exists and granted). OVMX sends none, which is why
+# its locks die with a departed master. Pins the 550/338 ROOT/SUB split, the
+# parent-pair rule (338 of 338), the answer kinds (149/398/338), RA1b's RMT1
+# tree against SDA, and that the rd vms-629 SYS$SYS_ID lookup is the same
+# message -- so the sender and answerer are built from figures that cannot
+# drift from the bytes.
+add_test(NAME cluster_host_dlm_rebuild08_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_rebuild08_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_rebuild08_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 180
+)
+
 # ---- rd vms-3ac (d): what a REAL cat-0x02 op-0x03 RELEASE carries, and where
 # OVMX's own release differs. This is the frame that bugchecked a real V7.3 node
 # with INVLOCKID, and the census is what bounds the values OVMX may put in it:

@@ -941,12 +941,12 @@ assert_vmsabi() {
 # free, and (d) did not crash. A heap still on Linux mmap fails (a) and (b).
 assert_crtlvm() {
   local log="$1" line
-  tr -d '\r' < "$log" | grep -aq "^OVMX CRTL-VM test: OK" || { echo "  assert_crtlvm: the image did not report OK" >&2; return 1; }
+  tr -d '\r' < "$log" | grep >/dev/null -a "^OVMX CRTL-VM test: OK" || { echo "  assert_crtlvm: the image did not report OK" >&2; return 1; }
   grep -aqE "%DCL-F-ABORT|terminated abnormally" "$log" && { echo "  assert_crtlvm: the image crashed" >&2; return 1; }
   line=$(tr -d '\r' < "$log" | grep -a "^CRTLVM: heap exhausted after" | tail -1)
-  printf '%s\n' "$line" | grep -qE "after ([1-9]|[1-9][0-9]|[1-3][0-9][0-9]) MB: malloc NULL errno=ENOMEM, then SYS\\\$EXPREG %X0000001C$" \
+  printf '%s\n' "$line" | grep >/dev/null -E "after ([1-9]|[1-9][0-9]|[1-3][0-9][0-9]) MB: malloc NULL errno=ENOMEM, then SYS\\\$EXPREG %X0000001C$" \
     || { echo "  assert_crtlvm: no ENOMEM exhaustion below the bound followed by SS\$_EXQUOTA: '$line'" >&2; return 1; }
-  tr -d '\r' < "$log" | grep -aqE "^CRTLVM: after free: SYS\\\$EXPREG %X[0-9A-F]{7}[13579BDF], malloc 1 MB ok$" \
+  tr -d '\r' < "$log" | grep >/dev/null -aE "^CRTLVM: after free: SYS\\\$EXPREG %X[0-9A-F]{7}[13579BDF], malloc 1 MB ok$" \
     || { echo "  assert_crtlvm: the charge did not come back after free" >&2; return 1; }
   return 0
 }

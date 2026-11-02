@@ -2835,9 +2835,9 @@ static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
  * runs up to the hint (first fit). hint 0 is a plain first-fit search.
  *
  * `room` (>= need; rd vms-465): when the blocks at the hint are taken, the run
- * is placed at the start of a free stretch of at least `room` blocks, so the
- * file can keep growing there in one extent instead of filling the holes other
- * files left one by one (a 20 MB assembler output written in 64 KB pieces
+ * is placed where `room` free blocks follow it (see the search order below),
+ * so the file can keep growing there in one extent instead of filling the
+ * holes other files left one by one (a 20 MB assembler output written in 64 KB pieces
  * across the holes of deleted temporaries outgrew the channel window's
  * ACP_WINDOW_MAX extents: SS$_DEVICEFULL, "I/O error" in the compiler). Only
  * when no such stretch exists does it take the first run of `need`.
@@ -2939,21 +2939,29 @@ static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
         hint = 1;
     if (room < need)
         room = need;
-    if (room > snap->volsize / 8u)
-        room = need > snap->volsize / 8u ? need : snap->volsize / 8u;
+    if (room > snap->volsize / 16u)
+        room = need > snap->volsize / 16u ? need : snap->volsize / 16u;
     /* 1. the blocks at the hint itself (the file's own continuation) */
     if (hint > 1 && hint + need <= snap->volsize) {
         found = acp_bitmap_find_run(snap, s, bmwin, wb.n, hint, hint + need, need, &run_start);
         if (found < 0)
             return SS__DEVNOTMOUNT;
     }
-    /* 2. the start of a stretch with room to grow, from the hint on, then from
-     *    LBN 1; 3. the first run of `need` (a run may not wrap). Bit 0 (LBN 0,
-     *    the boot block) is never a data block; the reserved region is already
-     *    marked used in the bitmap, so the scan simply skips it. */
-    for (tryroom = (room > need); !found && tryroom >= 0; tryroom--) {
-        uint32_t len = tryroom ? room : need;
+    /* 2. a free stretch of twice `room`, the run placed in its middle: the
+     *    `room` blocks after it stay free for this file to grow into, and the
+     *    `room` before it for whichever file the stretch's first blocks follow
+     *    (two files growing side by side each find their own continuation
+     *    free instead of leapfrogging one another a block at a time);
+     * 3. a stretch of `room`, the run at its start; 4. the first run of
+     *    `need` (a run may not wrap). Each from the hint on, then from LBN 1.
+     *    Bit 0 (LBN 0, the boot block) is never a data block; the reserved
+     *    region is already marked used in the bitmap, so the scan simply
+     *    skips it. */
+    for (tryroom = (room > need) ? 2 : 0; !found && tryroom >= 0; tryroom--) {
+        uint32_t len = tryroom == 2 ? 2u * room : tryroom == 1 ? room : need;
 
+        if (len > snap->volsize)
+            continue;
         found = acp_bitmap_find_run(snap, s, bmwin, wb.n, hint, snap->volsize, len, &run_start);
         if (!found && hint > 1)
             found = acp_bitmap_find_run(snap, s, bmwin, wb.n, 1u,
@@ -2961,6 +2969,8 @@ static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
                                         len, &run_start);
         if (found < 0)
             return SS__DEVNOTMOUNT;
+        if (found && tryroom == 2)
+            run_start += room;
     }
     if (!found)
         return SS__DEVICEFULL;              /* no contiguous free run -- honest */

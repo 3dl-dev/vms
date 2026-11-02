@@ -10,12 +10,12 @@
  * (0x200_0000_0000), so the musl heap lived above 4 GB.
  *
  * Every mapping request that leaves the address to the system (start == 0,
- * no MAP_FIXED) is therefore placed in P0 instead: next-fit from a cursor,
- * each candidate claimed with MAP_FIXED_NOREPLACE so an occupied range (an
- * image, a shareable, another mapping) is refused by the kernel and skipped,
- * never clobbered.  When P0 has no room the request fails with ENOMEM, as an
- * expansion of a full P0 region fails on VMS -- a high address would be a
- * pointer a 32-bit caller silently truncates.
+ * no MAP_FIXED) is therefore placed in P0 instead, at the LOWEST free range
+ * that fits (first fit from the floor, as P0 fills bottom-up on VMS; mmap.c),
+ * on the 64 KB granule, never over an image, a shareable or another mapping.
+ * When P0 has no room the request fails with ENOMEM, as an expansion of a
+ * full P0 region fails on VMS -- a high address would be a pointer a 32-bit
+ * caller silently truncates.
  */
 #ifndef OVMX_P0_REGION_H
 #define OVMX_P0_REGION_H

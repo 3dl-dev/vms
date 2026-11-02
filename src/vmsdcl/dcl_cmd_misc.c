@@ -4103,11 +4103,11 @@ int cmd_product(struct dcl_command *cmd)
  * (CLAUDE.md Rule 9 / INV-6). Command grammar is from the public VSI OpenVMS
  * TCP/IP Services documentation; the wire is IETF-standard (Rule 8).
  *
- * SCOPE (vms-dbb): loopback / a reachable-peer client. FTP is single-transfer
- * (/GET, /PUT), passive-mode; TELNET is a half-duplex line client (a blocking
- * $QIO recv precludes a concurrent reader -- full-duplex AST-driven I/O and an
- * interactive FTP> shell are later increments). Host names need the BIND
- * resolver (a later phase), so a host argument must be a dotted-quad literal.
+ * SCOPE (vms-dbb, vms-d0c4): proven against real servers outside the VM over
+ * the NIC (tests/qemu/test_tcpip_external_boot_e2e.sh). FTP is single-transfer
+ * (/GET, /PUT), passive-mode, binary -- an interactive FTP> shell is a later
+ * increment; TELNET is full duplex (below). Host names need the BIND resolver
+ * (a later phase), so a host argument must be a dotted-quad literal.
  */
 
 /* Parse an unsigned decimal port (1..65535); 0 = empty/invalid. */

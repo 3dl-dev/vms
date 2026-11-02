@@ -512,3 +512,9 @@ add_test(NAME vmsrms_remote_fal COMMAND test_rms_remote
          ${_fv}/falverbs-wire.txt
          ${_fv}/vax1-console.txt)
 set_tests_properties(vmsrms_remote_fal PROPERTIES LABELS "unit;rms;decnet" TIMEOUT 300)
+# rd vms-0a7: the RMS remote path reaches the network only through VMS services
+# ($ASSIGN/$QIOW on _NET:); no libc I/O, thread, pipe or poll. Carries its own
+# negative control (planted libc calls must be caught).
+add_test(NAME vmsrms_remote_no_libc
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_rms_remote_no_libc.sh)
+set_tests_properties(vmsrms_remote_no_libc PROPERTIES LABELS "unit;rms;decnet" TIMEOUT 60)

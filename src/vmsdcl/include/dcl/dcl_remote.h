@@ -10,17 +10,16 @@
 #define DCL_REMOTE_H
 
 #include <stdint.h>
-#include <stdio.h>
 
-/* Print the listing (or the failure, in VMS's words) to `out`. Returns the
+/* Print the listing (or the failure, in VMS's words) on SYS$OUTPUT. Returns the
  * command's VMS status; a failure has already been reported. */
-uint32_t dcl_remote_directory(FILE *out, const char *spec);
-uint32_t dcl_remote_type(FILE *out, const char *spec);
+uint32_t dcl_remote_directory(const char *spec);
+uint32_t dcl_remote_type(const char *spec);
 
 /* COPY with a node:: input or output: $SEARCH the input, then per file $OPEN
  * + $GET into $CREATE + $PUT. `src` / `dst` are the effective specs (the
  * caller completes a local side with the process default directory).
  * `log`: COPY/LOG. */
-uint32_t dcl_remote_copy(FILE *out, const char *src, const char *dst, int log);
+uint32_t dcl_remote_copy(const char *src, const char *dst, int log);
 
 #endif /* DCL_REMOTE_H */

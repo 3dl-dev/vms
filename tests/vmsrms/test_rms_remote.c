@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "rms/rms.h"
 #include "rms_remote.h"
@@ -128,6 +129,33 @@ static char *console_block(const char *path, const char *cmd)
     return out;
 }
 
+
+/* DCL writes on SYS$OUTPUT (stdout): capture it around one command. */
+static int g_saved_fd = -1;
+static FILE *g_cap;
+static void cap_begin(const char *path)
+{
+    fflush(stdout);
+    g_saved_fd = dup(1);
+    g_cap = path ? fopen(path, "w") : tmpfile();
+    if (g_cap) dup2(fileno(g_cap), 1);
+}
+static char *cap_end(void)
+{
+    fflush(stdout);
+    if (g_saved_fd >= 0) { dup2(g_saved_fd, 1); close(g_saved_fd); g_saved_fd = -1; }
+    if (!g_cap) return NULL;
+    long n = ftell(g_cap);
+    char *buf = NULL;
+    if (n >= 0 && (buf = calloc(1, (size_t)n + 1)) != NULL) {
+        rewind(g_cap);
+        if (fread(buf, 1, (size_t)n, g_cap) != (size_t)n) { free(buf); buf = NULL; }
+    }
+    fclose(g_cap);
+    g_cap = NULL;
+    return buf;
+}
+
 /* ---------------- the link seam: a replay of the VAX FAL's links --------- */
 struct replay {
     const struct olink *links[4]; int nlinks, next;
@@ -187,11 +215,9 @@ static char *run_cmd(int type, const char *spec, int l0, int nl, uint32_t refuse
     g_rp.nlinks = nl;
     g_rp.refuse = refuse;
     rms_remote_set_link_ops(&g_rp_ops);
-    char *buf = NULL; size_t bl = 0;
-    FILE *out = open_memstream(&buf, &bl);
-    if (!out) return NULL;
-    *st = type ? dcl_remote_type(out, spec) : dcl_remote_directory(out, spec);
-    fclose(out);
+    cap_begin(NULL);
+    *st = type ? dcl_remote_type(spec) : dcl_remote_directory(spec);
+    char *buf = cap_end();
     rms_remote_set_link_ops(NULL);
     return buf;
 }
@@ -338,19 +364,18 @@ static void mutate(struct fz *f)
 
 static void fuzz(void)
 {
-    FILE *devnull = fopen("/dev/null", "w");
-    if (!devnull) { CHECK(0, "fuzz: /dev/null opens"); return; }
     rms_remote_set_link_ops(&g_fz_ops);
+    cap_begin("/dev/null");
     const struct olink *dir = &g_links[1], *tdl = &g_links[2], *topen = &g_links[3];
     int runs = 0;
     for (int it = 0; it < 20000; it++) {
         g_fz_next = 0;
         fill_from(&g_fa, dir); mutate(&g_fa);
-        (void)dcl_remote_directory(devnull, "VAX2::SYS$LOGIN:BRK*.TXT");
+        (void)dcl_remote_directory("VAX2::SYS$LOGIN:BRK*.TXT");
         g_fz_next = 0;
         fill_from(&g_fa, tdl); fill_from(&g_fb, topen);
         if (rnd() & 1) mutate(&g_fa); else mutate(&g_fb);
-        (void)dcl_remote_type(devnull, "VAX2::SYS$LOGIN:BRK*.TXT");
+        (void)dcl_remote_type("VAX2::SYS$LOGIN:BRK*.TXT");
         runs += 2;
     }
     /* Pure noise after a good CONFIGURATION. */
@@ -359,11 +384,11 @@ static void fuzz(void)
         fill_from(&g_fa, dir);
         g_fa.n[1] = rnd() % sizeof g_fa.seg[1];
         for (size_t i = 0; i < g_fa.n[1]; i++) g_fa.seg[1][i] = (uint8_t)rnd();
-        (void)dcl_remote_directory(devnull, "VAX2::X");
+        (void)dcl_remote_directory("VAX2::X");
         runs++;
     }
+    free(cap_end());
     rms_remote_set_link_ops(NULL);
-    fclose(devnull);
     char m[120];
     snprintf(m, sizeof m, "fuzz: %d mutated / random FAL replies parsed without a fault", runs);
     CHECK(runs == 45000, m);
@@ -405,10 +430,9 @@ static void flood(void)
     memcpy(g_flood.cfg, g_links[1].srv[0].b, g_links[1].srv[0].n);
     g_flood.cfgn = g_links[1].srv[0].n;
     rms_remote_set_link_ops(&g_fl_ops);
-    char *buf = NULL; size_t bl = 0;
-    FILE *out = open_memstream(&buf, &bl);
-    uint32_t st = out ? dcl_remote_directory(out, "N::*") : 0;
-    if (out) fclose(out);
+    cap_begin(NULL);
+    uint32_t st = dcl_remote_directory("N::*");
+    char *buf = cap_end();
     rms_remote_set_link_ops(NULL);
     char want[64];
     snprintf(want, sizeof want, "\nTotal of %d files.\n", RMS_REMOTE_MAXFILES);

@@ -10,12 +10,12 @@
  *
  * The child (argv[1] == "child") checks the arguments it received, writes one
  * line carrying its own getpid() to the pipe, waits for the parent's go on its
- * stdin, and exits with %X1000002C (SS$_ABORT, message inhibited) -- an ERROR
- * completion. While it waits, the parent asks the executive about it: $GETJPI
+ * stdin, and returns 1 from main: its completion is %X1035A00A (the C RTL's
+ * C$_EXIT1 with error severity, message inhibited -- measured on OpenVMS Alpha
+ * V8.4, tests/lab/captures/decc-exit-alpha-20261021) -- an ERROR completion. While it waits, the parent asks the executive about it: $GETJPI
  * of the PID vfork() returned must answer that same PID (a VMS process), and
  * the child's own getpid() must be it. The parent then waits: the _VMS_WAIT
- * status (DECC$__VMS_WAITPID) must be the child's completion code %X1000002C and
- * the POSIX one (waitpid) must decode to WEXITSTATUS 0x2C. When every check
+ * status (DECC$__VMS_WAITPID) must be the child's completion code %X1035A00A. When every check
  * holds the parent exits with the child's completion, so DCL's $STATUS for the
  * parent carries it; any failure exits 3 instead.
  * The client <unistd.h> declarations are repeated here (the joint harness
@@ -55,7 +55,7 @@ int decc$$vfork_setjmp(void *) __attribute__((__returns_twice__));
 #define vfork() (decc$$alloc_vfork_blocks() >= 0 ? decc$$vfork_setjmp(decc$$vfork_jmpbuf()) : -1)
 int execv(const char *, cp32 const *) __asm__("decc$$execv32");
 
-#define CHILD_STATUS 0x1000002C          /* SS$_ABORT, message inhibited */
+#define CHILD_STATUS 0x1035A00A          /* main() returning 1: C$_EXIT1 as an error, message inhibited */
 
 int main(int argc, char **argv)
 {
@@ -77,7 +77,7 @@ int main(int argc, char **argv)
         d[21] = go ? go : '0';
         d[25] = (char)('0' + (gr & 7));
         write(2, d, 35);
-        exit(ok ? CHILD_STATUS : 3);
+        return ok ? 1 : 3;              /* main's return: the image's $EXIT */
     }
 
     int p[2], q[2];

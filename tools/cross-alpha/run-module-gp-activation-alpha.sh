@@ -441,20 +441,21 @@ assert_vfork() {
   # running an image with arguments; its output came back over the child-context
   # pipe, the parent's stdout was restored; $GETJPI answered the PID vfork()
   # returned while the child lived, the child's getpid() was that VMS PID, and
-  # DECC$__VMS_WAITPID collected the child's ERROR completion %X1000002C; the
-  # parent then exited with it, so DCL's $STATUS for the parent is %X1000002C.
+  # DECC$__VMS_WAITPID collected the child's ERROR completion %X1035A00A (main
+  # returned 1; the child's own activation seam shows it); the parent then exited
+  # with it, so DCL's $STATUS for the parent is %X1035A00A.
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   local port_ok seam st_hex st_ok=0
-  port_ok=$(grep -qaE 'OVMX vfork test: pid_ok=1 piped=1 jpi=1 getpid=1 vmswait=1 status=1000002C ' "$log" && echo 1 || echo 0)
+  port_ok=$(grep -qaE 'OVMX vfork test: pid_ok=1 piped=1 jpi=1 getpid=1 vmswait=1 status=1035A00A ' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   st_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
-  [ -n "$st_hex" ] && [ $(( st_hex )) -eq $(( 0x1000002C )) ] && st_ok=1
+  [ -n "$st_hex" ] && [ $(( st_hex )) -eq $(( 0x1035A00A )) ] && grep -qaF 'WRITE-STATUS=%X1035A00A' "$log" && st_ok=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
   echo "  (a) vfork/exec/\$GETJPI/getpid/wait : port_ok=$port_ok (want 1)"
-  echo "  (b) parent \$STATUS = child's       : ${seam:-<ABSENT>} (want 0x1000002c; ok=$st_ok)"
+  echo "  (b) parent \$STATUS = child's       : ${seam:-<ABSENT>} (want 0x1035a00a, and DCL WRITE-STATUS=%X1035A00A; ok=$st_ok)"
   echo "  (c) no activation err              : ok=$err_ok"
   [ "$port_ok" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
@@ -2828,8 +2829,9 @@ PYEOF3
     JOINT_CRTL_RMS_VENEER=1
     _st=$(mktemp -d); _fails=0
     export JOINT_USE_LIBVMS=1           # vms-e70f: the parent asks $GETJPI (LIBVMS$SHR)
-    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 piped=1 jpi=1 getpid=1 vmswait=1 status=1000002C argc=1' \
-      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x1000002c p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 piped=1 jpi=1 getpid=1 vmswait=1 status=1035A00A argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x1035a00a p0=1' > "$_st/pass.log"
+    echo 'VENEER-PROOF: WRITE-STATUS=%X1035A00A SEVERITY=2' >> "$_st/pass.log"
     printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 piped=1 jpi=0 getpid=0 vmswait=0 status=FFFFFFFF argc=1' \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x00000003 p0=1' > "$_st/noargs.log"
     printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \

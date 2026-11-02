@@ -2624,10 +2624,11 @@ static void imgact_vms_exit(unsigned long cond)
 		gx.select = VMS_JPI_SEL_SELF;   /* our own recorded $STATUS */
 		(void)kif_call(fd, KIF_SVC_GETEXIT, &gx);
 
-		/* basename of the activated image path (argv[0] the kernel set) */
+		/* basename of the activated image: a substrate path (argv[0] the
+		 * kernel set) or, in launch mode, a VMS spec (device:[dir]name). */
 		const char *base = g_argv0 ? g_argv0 : "";
 		for (const char *q = base; *q; q++)
-			if (*q == '/')
+			if (*q == '/' || *q == ':' || *q == ']' || *q == '>')
 				base = q + 1;
 
 		char hex[9];

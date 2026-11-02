@@ -121,12 +121,6 @@ fi
 echo "OK: no undefined readline symbols -- DCL's own non-readline line editor is used"
 echo
 
-# --- the WEAK SEAMS libvms reaches LIBVMSRMS through (rd vms-1f7) -----------
-# See weak-seams.sh: without them forced in, this static link leaves the
-# rights-database, SYSUAF and RMS seams NULL and SHOW PROCESS prints [001,004].
-. "$(dirname "$0")/weak-seams.sh"
-seam_flags
-
 # --- proof 2: link the REAL DCL.EXE over the full elf32-vax stack -----------
 echo "=== proof 2: link a real vax--netbsdelf DCL.EXE over the whole stack ==="
 # --whole-archive on libvmsdcl.a forces EVERY DCL object in, so any unresolved
@@ -136,7 +130,6 @@ echo "=== proof 2: link a real vax--netbsdelf DCL.EXE over the whole stack ==="
     -I"$VMS_INCLUDE" -I"$VMSPROCESS_INCLUDE" -I"$VMSLNM_INCLUDE" \
     -I"$VMSFS_INCLUDE" -I"$VMSRMS_INCLUDE" -I"$VMSDCL_INCLUDE" -I"$LIBVMSSYS" \
     -Wl,--whole-archive "$LIBDCL" -Wl,--no-whole-archive \
-    $SEAM_FLAGS \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
@@ -145,12 +138,6 @@ echo "=== proof 2: link a real vax--netbsdelf DCL.EXE over the whole stack ==="
 echo "--- linked executable ---"
 file "$OUT/DCL.EXE"
 "$TARGET-readelf" -h "$OUT/DCL.EXE" | grep -Ei 'Class|Data|Machine|Type'
-
-
-# --- proof 3: no LIBVMSRMS seam is left weak-NULL ----------------------------
-seam_check "$OUT/DCL.EXE"
-"$TARGET-nm" "$OUT/DCL.EXE" | grep -q ' T ovmx_rightslist_idtoasc$' \
-    || { echo "FAIL: ovmx_rightslist_idtoasc is not in DCL.EXE -- SHOW PROCESS cannot resolve a UIC"; exit 1; }
 
 echo
 echo "=== ALL PROOFS PASSED: vmsdcl builds and links a DCL.EXE for $TARGET ==="

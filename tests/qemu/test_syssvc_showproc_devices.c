@@ -174,17 +174,15 @@ int main(void)
     printf("  second device: %s\n", second);
 
     /* The order VMS walks is the I/O database's; OVMX's is the device table's. */
-    char first_dev[VMS_FULLDEVNAM_SIZE] = "", next_dev[VMS_FULLDEVNAM_SIZE] = "";
+    char first_dev[VMS_DEVNAM_SIZE] = "", next_dev[VMS_DEVNAM_SIZE] = "";
     {
         struct vms_devinfo info;
         uint32_t idx = 0;
         while (vms_kif_devscan(&idx, &info) == SS$_NORMAL) {
             info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
-            info.fulldevnam[VMS_FULLDEVNAM_SIZE - 1] = '\0';
             if (info.owner_pid != self) continue;
-            /* SHOW PROCESS names a device by its FULL name, VAX1$OPA0: (rd vms-1f7) */
-            if (!first_dev[0]) snprintf(first_dev, sizeof first_dev, "%s", info.fulldevnam);
-            else if (!next_dev[0]) snprintf(next_dev, sizeof next_dev, "%s", info.fulldevnam);
+            if (!first_dev[0]) snprintf(first_dev, sizeof first_dev, "%s", info.devnam);
+            else if (!next_dev[0]) snprintf(next_dev, sizeof next_dev, "%s", info.devnam);
         }
     }
 

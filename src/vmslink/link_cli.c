@@ -538,8 +538,11 @@ int main(int argc, char **argv)
     c.transfer = "__main";
 
     if (!ls.first_input) {
-        if (c.nin == 0) lcli_fatal("NOFILES", "no input file specified");
-        ls.first_input = c.ins[0];
+        /* modules a library supplies by /INCLUDE are input too; the image name
+         * then defaults from the library's */
+        if (c.nin) ls.first_input = c.ins[0];
+        else if (c.nincl) ls.first_input = c.incl[0].lib;
+        else lcli_fatal("NOFILES", "no input file specified");
     }
     c.out = image && *image ? lcli_default_type(image, ".exe")
                             : lcli_derived_name(ls.first_input, ".exe");

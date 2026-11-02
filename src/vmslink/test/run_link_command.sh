@@ -85,6 +85,12 @@ rm -f n.exe; if link '/SHAREABLE=n.exe a.obj,lib2.olb/INCLUDE=(B),sv/OPT' 2>n6.e
 rm -f n.exe; link '/SHAREABLE=n.exe a.obj,b.obj,lib2.olb/INCLUDE=(NOSUCH),sv/OPT' 2>n6b.err && bad "unknown /INCLUDE module accepted" || \
     { grep -q NOSUCHMOD n6b.err && [ ! -e n.exe ] && ok "unknown module: %LINK-F-NOSUCHMOD, no image" || bad "unknown module not reported"; }
 
+# 6b. a shareable whose only input is a module /INCLUDE takes from a library
+printf '%s\n' 'SYMBOL_VECTOR=(bar=PROCEDURE)' > c.opt
+$T --shareable --symbol-vector "bar=PROCEDURE" -o gnu6b.exe c.obj 2>/dev/null
+link '/SHAREABLE=v6b.exe lib2.olb/INCLUDE=(C),c/OPT' 2>v6b.err || true
+cmp -s gnu6b.exe v6b.exe && ok "/INCLUDE as the only input == build-tool image" || { bad "/INCLUDE-only shareable"; cat v6b.err; }
+
 # 7. /NOINFORMATIONALS silences %LINK-I-, the default does not
 grep -q '%LINK-I-' v5.err && ok "default link prints %LINK-I- messages" || bad "baseline has no %LINK-I- to silence"
 link '/NOINFORMATIONALS/SHAREABLE=v7.exe a.obj,lib.olb/LIBRARY,sv/OPT' 2>v7.err || true

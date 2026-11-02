@@ -5692,7 +5692,7 @@ static int link_run(struct link_cmd *c)
         g_evax_vbase = c->base;
         g_evax_base_set = 1;
     }
-    if (nin == 0) die("no input file");
+    if (nin == 0 && c->nincl == 0) die("no input file");
     if (!out) die("no image file named");
 
     /* ---- Format dispatch (bead vms-cbe). An EVAX (Alpha/VMS) object — first
@@ -5702,7 +5702,7 @@ static int link_run(struct link_cmd *c)
      * emits an EXECUTABLE (emit_evax_image, --transfer) by default, or a
      * SHAREABLE (emit_evax_shareable, --symbol-vector/--gsmatch) under
      * --shareable (bead vms-c65). ---- */
-    if (input_is_evax(ins[0])) {
+    if (input_is_evax(nin ? ins[0] : c->incl[0].lib)) {
         /* EVAX/Alpha path. Each input is a bare EVAX object OR a whole `.a`
          * archive of EVAX members (vms-7b96); an archive expands to all its
          * members in-process (whole-archive, no `ld -r`), exactly like the ELF

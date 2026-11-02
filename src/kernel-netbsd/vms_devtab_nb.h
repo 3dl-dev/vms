@@ -41,9 +41,6 @@
 #ifndef VMS_DEVNAM_SIZE
 #define VMS_DEVNAM_SIZE 16
 #endif
-#ifndef VMS_FULLDEVNAM_SIZE
-#define VMS_FULLDEVNAM_SIZE 24  /* rd vms-1f7; src/kernel/vms_ioctl.h */
-#endif
 #ifndef VMS_BACKING_SIZE
 #define VMS_BACKING_SIZE 16
 #endif
@@ -145,7 +142,6 @@ struct vms_devinfo {
 	uint32_t perm_width;   /* PERMANENT terminal width -- IO$_SENSECHAR's answer
 	                        * (SET TERMINAL/PERMANENT); rd vms-d900 */
 	uint32_t perm_page;    /* PERMANENT terminal page length */
-	char     fulldevnam[VMS_FULLDEVNAM_SIZE]; /* DVI$_FULLDEVNAM, no '_' (rd vms-1f7) */
 };
 
 /* $ALLOC / $DALLOC: allocate a device to this process, and give it back. */
@@ -256,15 +252,15 @@ struct vms_getvol_args {
  * ABI guards -- the SAME assertions src/kernel/vms_ioctl.h makes, re-made here
  * under the 32-bit VAX compiler (the whole point of a NetBSD twin).
  * ================================================================ */
-_Static_assert(sizeof(struct vms_devinfo) == 112,
+_Static_assert(sizeof(struct vms_devinfo) == 88,
                "struct vms_devinfo changed size -- kernel and userspace would disagree on device attribute offsets");
 _Static_assert(sizeof(struct vms_alloc_args) == 24,
                "struct vms_alloc_args changed size -- $ALLOC/$DALLOC would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_assign_args) == 24,
                "struct vms_assign_args changed size -- $ASSIGN would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_getdvi_args) == 128,
+_Static_assert(sizeof(struct vms_getdvi_args) == 104,
                "struct vms_getdvi_args changed size -- $GETDVI would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_devscan_args) == 120,
+_Static_assert(sizeof(struct vms_devscan_args) == 96,
                "struct vms_devscan_args changed size -- $DEVICE_SCAN would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_setmode_args) == 40,
                "struct vms_setmode_args changed size -- IO$_SETMODE would decode at the wrong offsets");
@@ -277,9 +273,9 @@ _Static_assert(VMS_IOCTL_SETTERM == 0xC0085645u,
                "VMS_IOCTL_SETTERM encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
                "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETDVI == 0xC0805652u,
+_Static_assert(VMS_IOCTL_GETDVI == 0xC0685652u,
                "VMS_IOCTL_GETDVI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0785653u,
+_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0605653u,
                "VMS_IOCTL_DEVSCAN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_TTSETMODE == 0xC0285654u,
                "VMS_IOCTL_TTSETMODE encodes differently here than on the reference build");

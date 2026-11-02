@@ -15,7 +15,7 @@ summary: >
   SET HOST is now a real outbound DECnet CTERM connection (vms-f54), upgraded
   from absent; SET/SHOW umbrella depth re-measured at 20 real SET sub-handlers /
   29 real SHOW sub-handlers.
-last_reviewed: 2026-11-01
+last_reviewed: 2026-10-19
 items:
   - id: dcl-verbs$breadth
     kind: feature
@@ -68,7 +68,7 @@ items:
     vms: "ALLOCATE / DEALLOCATE — device allocation verbs"
     scope_1_0: in
     evidence: src/vmsdcl/dcl_cmd_io.c
-    notes: "cmd_allocate / cmd_deallocate over $ALLOC / $DALLOC (the executive device table, vms-44a). ALLOCATE prints %DCL-I-ALLOC, <physical name> allocated (/NOLOG suppresses it), as the VAX V7.3 console did for ALLOCATE OPA0: (docs/oracle/vax73-terminal-device.md section 4); The name is the device's FULL name, as VMS prints it standalone or clustered (_VAX1$OPA0: -- the executive composes <SCSNODE>$ from the unit's DEV$M_NNM, rd vms-1f7, docs/oracle/vax73-device-full-name.md). A logical-name parameter becomes a process logical name for the physical name. Refusals print the system message: %SYSTEM-W-DEVALLOC (observed, section 7.2), %SYSTEM-W-DEVNOTALLOC from DEALLOCATE. Not implemented, refused as %DCL-W-IVQUAL: ALLOCATE/GENERIC, DEALLOCATE/ALL. $STATUS after a successful ALLOCATE is not measured; OVMX leaves SS$_NORMAL. Proof tests/qemu/test_syssvc_dcl_allocate.c + defects.d/dcl-allocate-skips-alloc.defect, dcl-deallocate-skips-dalloc.defect."
+    notes: "cmd_allocate / cmd_deallocate over $ALLOC / $DALLOC (the executive device table, vms-44a). ALLOCATE prints %DCL-I-ALLOC, <physical name> allocated (/NOLOG suppresses it), as the VAX V7.3 console did for ALLOCATE OPA0: (docs/oracle/vax73-terminal-device.md section 4); OVMX's physical name has no node prefix (_OPA0:, not _VAX1$OPA0:). A logical-name parameter becomes a process logical name for the physical name. Refusals print the system message: %SYSTEM-W-DEVALLOC (observed, section 7.2), %SYSTEM-W-DEVNOTALLOC from DEALLOCATE. Not implemented, refused as %DCL-W-IVQUAL: ALLOCATE/GENERIC, DEALLOCATE/ALL. $STATUS after a successful ALLOCATE is not measured; OVMX leaves SS$_NORMAL. Proof tests/qemu/test_syssvc_dcl_allocate.c + defects.d/dcl-allocate-skips-alloc.defect, dcl-deallocate-skips-dalloc.defect."
 
   - id: dcl-verbs$patch
     kind: command

@@ -1857,7 +1857,6 @@ _Static_assert(VMS_IOCTL_CLUSTER_STOP == 0xC010566Fu,
  * name form is ddcu:, e.g. OPA0:).
  */
 #define VMS_DEVNAM_SIZE 16
-#define VMS_FULLDEVNAM_SIZE 24  /* "<SCSNODE>$" or "$<alloclass>$" + a physical name (rd vms-1f7) */
 
 /*
  * Size of a disk unit's BACKING Linux block-device name (e.g. "vda"), NUL
@@ -2004,13 +2003,6 @@ struct vms_devinfo {
     uint32_t perm_width;   /* PERMANENT terminal width -- IO$_SENSECHAR's answer
                             * (SET TERMINAL/PERMANENT); rd vms-d900 */
     uint32_t perm_page;    /* PERMANENT terminal page length */
-    /*
-     * DVI$_FULLDEVNAM without its leading underscore (rd vms-1f7): the
-     * physical name prefixed by the allocation class ("$2$DUA0:") or the node
-     * ("VAX1$OPA0:") as the executive composes it from the unit's DEV$M_NNM
-     * and the loaded SCSNODE/ALLOCLASS (src/kernel-core/vms_devtab_fullnam.h).
-     */
-    char     fulldevnam[VMS_FULLDEVNAM_SIZE];
 };
 
 /*
@@ -2415,15 +2407,15 @@ struct vms_terminal_args {
  * These values are measured, not chosen: aarch64 and x86_64 agree,
  * because every field is a fixed-width type.
  */
-_Static_assert(sizeof(struct vms_devinfo) == 112,
+_Static_assert(sizeof(struct vms_devinfo) == 88,
                "struct vms_devinfo changed size -- kernel and userspace would disagree on device attribute offsets");
 _Static_assert(sizeof(struct vms_assign_args) == 24,
                "struct vms_assign_args changed size -- $ASSIGN would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_dassgn_args) == 8,
                "struct vms_dassgn_args changed size -- $DASSGN would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_getdvi_args) == 128,
+_Static_assert(sizeof(struct vms_getdvi_args) == 104,
                "struct vms_getdvi_args changed size -- $GETDVI would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_devscan_args) == 120,
+_Static_assert(sizeof(struct vms_devscan_args) == 96,
                "struct vms_devscan_args changed size -- $DEVICE_SCAN would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_setmode_args) == 40,
                "struct vms_setmode_args changed size -- IO$_SETMODE would decode at the wrong offsets");
@@ -2440,9 +2432,9 @@ _Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
                "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_DASSGN == 0xC0085651u,
                "VMS_IOCTL_DASSGN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETDVI == 0xC0805652u,
+_Static_assert(VMS_IOCTL_GETDVI == 0xC0685652u,
                "VMS_IOCTL_GETDVI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0785653u,
+_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0605653u,
                "VMS_IOCTL_DEVSCAN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_TTSETMODE == 0xC0285654u,
                "VMS_IOCTL_TTSETMODE encodes differently here than on the reference build");

@@ -3063,7 +3063,9 @@ static int delete_files_acp(struct dcl_context *ctx, const char *param,
         dcl_error("RMS", 2, "FNF", "file not found - %s", param);
         return SS$_NOSUCHFILE;
     }
-    return 0x00030001;   /* CLI$_NORMAL: what a DELETE leaves in $STATUS (VAX V7.3, docs/oracle/semantics/fio/) */
+    /* a DELETE leaves %X10000001 (SS$_NORMAL|STS$M_INHIB_MSG) in $STATUS (VAX V7.3,
+     * docs/oracle/semantics/fio/vax73-delete-status-probe.txt) */
+    return 0x10000001;
 }
 
 /* DELETE of one file specification (an element of DELETE's list). */
@@ -3239,7 +3241,7 @@ int cmd_delete(struct dcl_command *cmd)
     /* DELETE a,b,...: each element of the list in turn (the parser hands
      * them over as separate parameters); a failure on one does not stop the
      * rest, and $STATUS is the last failure (rd vms-ad5a). */
-    int rc = 0x00030001;   /* CLI$_NORMAL: what a DELETE leaves in $STATUS (VAX V7.3, docs/oracle/semantics/fio/) */
+    int rc = 0x10000001;   /* SS$_NORMAL|STS$M_INHIB_MSG: what a DELETE leaves in $STATUS (VAX V7.3, docs/oracle/semantics/fio/) */
     for (int pi = 0; pi < dcl_param_total(cmd); pi++) {
         const char *spec = dcl_param_at(cmd, pi);
         if (!spec || !spec[0]) continue;

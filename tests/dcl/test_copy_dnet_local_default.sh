@@ -1,23 +1,22 @@
 #!/bin/bash
-# TEST: DCL COPY node:: hands DECNETD the LOCAL spec completed with the default directory (vms-ea8)
+# TEST: DCL COPY node:: is RMS remote access, never a DECNETD activation (vms-ea8, vms-0a7)
 #
-# DECNETD.EXE gives its local spec straight to RMS, which completes a missing
-# device/directory from SYS$DISK's root -- not from DCL's SET DEFAULT. Found
-# live on a booted OVMX: `COPY 1.1"SYSTEM pw"::TOOVMX.TXT FROMVAX.TXT` reported
-# success and the file landed in VDA0:[000000] instead of the user's default
-# SYS$SYSROOT:[SYSMGR]. DCL now completes the local side the way its own file
-# commands do before activating DECNETD; the NODE:: side is left for the
-# remote FAL. A stand-in DECNETD.EXE (this test only) prints the argv it got.
-# NEGCTL: before the fix argv carried the bare "B.TXT" / "C.TXT".
+# COPY with a node:: input or output goes through RMS ($SEARCH/$OPEN/$GET on
+# the node's FAL, $CREATE/$PUT on the local side completed with the process
+# default directory -- the vms-ea8 rule). A stand-in SYS$SYSTEM:DECNETD.EXE
+# prints any argv it gets: it must never run, and no password may reach a
+# message. On a host with no _NET: device the remote side fails honestly.
+# NEGCTL: before rd vms-0a7 DCL activated DECNETD.EXE --copy ... --password-fd.
 #
-# EXPECT: regex:FAKE-DECNETD-ARGV: --copy 1\.1"SYSTEM"::A\.TXT \S*\]\S*B\.TXT --password-fd
-# EXPECT: regex:FAKE-DECNETD-ARGV: --copy \S*\]\S*C\.TXT 1\.1::D\.TXT
-# EXPECT_NOT: contains:::A.TXT B.TXT
-# EXPECT_NOT: contains:--copy C.TXT
+# EXPECT: contains:%COPY-E-OPENIN, error opening 1.1"SYSTEM password"::A.TXT as input
+# EXPECT: contains:-RMS-E-FND
+# EXPECT: contains:$STATUS == "%X10000908"
+# EXPECT_NOT: contains:FAKE-DECNETD-ARGV
+# EXPECT_NOT: contains:--password-fd
 # EXPECT_NOT: contains:secret
 VMSDCL="${VMSDCL:-vmsdcl}"
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 printf '#!/bin/sh\necho "FAKE-DECNETD-ARGV: $*"\n' > "$T/DECNETD.EXE"
 chmod +x "$T/DECNETD.EXE"
-printf 'DEFINE SYS$SYSTEM "%s/"\nCOPY 1.1"SYSTEM secret"::A.TXT B.TXT\nCOPY C.TXT 1.1::D.TXT\n' "$T" | $VMSDCL 2>&1
+printf 'DEFINE SYS$SYSTEM "%s/"\nCOPY 1.1"SYSTEM secret"::A.TXT B.TXT\nSHOW SYMBOL $STATUS\nCOPY C.TXT 1.1"SYSTEM secret"::D.TXT\n' "$T" | $VMSDCL 2>&1

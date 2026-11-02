@@ -1182,7 +1182,7 @@ static int dir_deellipsize(const char *spec, char *out, size_t out_sz)
 
 static int cmd_directory_list(struct dcl_command *cmd);
 static int copy_spec_has_node(const char *s);
-static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(FILE *, const char *));
+static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(const char *));
 
 /*
  * rd vms-ba2: DIRECTORY takes a P1 list. Consecutive elements in ONE directory
@@ -2288,13 +2288,13 @@ static int copy_spec_has_node(const char *s)
  * refused honestly rather than silently dropped. A failure has been reported
  * already, so $STATUS carries it with STS$M_INHIB_MSG.
  */
-static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(FILE *, const char *))
+static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(const char *))
 {
     if (cmd->qualifier_count > 0) {
         printf("%%SYSTEM-F-UNSUPPORTED, unsupported operation or function\n");
         return SS$_UNSUPPORTED;
     }
-    uint32_t st = verb(stdout, cmd->params[0]);
+    uint32_t st = verb(cmd->params[0]);
     return (st & 1) ? SS$_NORMAL : (int)(st | 0x10000000u);
 }
 
@@ -2456,7 +2456,7 @@ int cmd_copy(struct dcl_command *cmd)
         if (dcl_rms_effective_spec(ctx, cmd->params[0], sx, sizeof sx) != 0 ||
             dcl_rms_effective_spec(ctx, cmd->params[1], dx, sizeof dx) != 0)
             return RMS$_SYN;
-        uint32_t st = dcl_remote_copy(stdout, sx, dx, dcl_has_qualifier(cmd, "LOG"));
+        uint32_t st = dcl_remote_copy(sx, dx, dcl_has_qualifier(cmd, "LOG"));
         return (st & 1) ? SS$_NORMAL : (int)(st | 0x10000000u);
     }
 

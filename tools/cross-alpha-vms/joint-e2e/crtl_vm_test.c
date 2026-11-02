@@ -10,7 +10,7 @@
  *      well before the 400 MB bound and with errno ENOMEM (a heap on Linux
  *      mmap runs to the bound: the P0 window and the guest's memory hold
  *      400 untouched megabytes);
- *   2. asks SYS$EXPREG for 16 pagelets: the EXECUTIVE must refuse it
+ *   2. asks SYS$EXPREG for what that malloc asked ($EXPREG of 1 MB + 8 KB, 2064 pagelets): the EXECUTIVE must refuse it
  *      SS$_EXQUOTA -- the heap's pages and SYS$EXPREG's are one charge, so a
  *      heap that was not charged leaves room and SYS$EXPREG succeeds;
  *   3. frees everything and asks again: the charge came back, so SYS$EXPREG
@@ -59,14 +59,14 @@ int main(int argc, char **argv)
     }
     e = errno;
     memset(ret, 0, sizeof ret);
-    st1 = sys$expreg(16, ret, 0, 0);
+    st1 = sys$expreg(2064, ret, 0, 0);   /* 1 MB + one Alpha page: what the refused malloc asked for */
     printf("CRTLVM: heap exhausted after %d MB: malloc NULL errno=%s, then SYS$EXPREG %%X%08X\n",
            n, e == ENOMEM ? "ENOMEM" : "other", st1);
 
     for (i = 0; i < n; i++)
         free(blk[i]);
     memset(ret, 0, sizeof ret);
-    st2 = sys$expreg(16, ret, 0, 0);
+    st2 = sys$expreg(2064, ret, 0, 0);
     p = malloc(1024 * 1024);
     printf("CRTLVM: after free: SYS$EXPREG %%X%08X, malloc 1 MB %s\n",
            st2, p ? "ok" : "NULL");

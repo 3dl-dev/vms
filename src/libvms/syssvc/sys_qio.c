@@ -744,8 +744,52 @@ struct bg_sockaddr_in {
     uint32_t addr;      /* network byte order (IPv4) */
 };
 
+/*
+ * IO$_SETMODE P4: the socket-option list (iodef.h TCPIP$C_SOCKOPT, vms-a9e7).
+ * P4 is the address of an item_list_2 descriptor of type TCPIP$C_SOCKOPT whose
+ * address/length name an array of item_list_2 option entries. Each recognised
+ * option is applied to the channel's executive socket; an unknown option code,
+ * a malformed list or a bad value is SS$_BADPARAM (honest -- never swallowed).
+ */
+static uint32_t qio_bg_sockopts(uint32_t exec_chan, uintptr_t p4)
+{
+    const struct tcpip_item_list_2 *desc = (const struct tcpip_item_list_2 *)p4;
+    const struct tcpip_item_list_2 *opt;
+    uint32_t n, i;
+
+    if (desc->type != TCPIP$C_SOCKOPT || desc->address == NULL ||
+        desc->length == 0 || desc->length % sizeof(struct tcpip_item_list_2) != 0)
+        return SS$_BADPARAM;
+    opt = (const struct tcpip_item_list_2 *)desc->address;
+    n = desc->length / (uint32_t)sizeof(struct tcpip_item_list_2);
+    for (i = 0; i < n; i++) {
+        if (opt[i].type == TCPIP$C_RCVTIMEO) {
+            const struct tcpip_timeval32 *tv =
+                (const struct tcpip_timeval32 *)opt[i].address;
+            uint64_t ms;
+            uint32_t st;
+            if (tv == NULL || opt[i].length < sizeof(*tv) ||
+                tv->tv_sec < 0 || tv->tv_usec < 0 || tv->tv_usec >= 1000000)
+                return SS$_BADPARAM;
+            ms = (uint64_t)tv->tv_sec * 1000u + (uint64_t)tv->tv_usec / 1000u;
+            if (ms == 0 && tv->tv_usec > 0)
+                ms = 1;                     /* sub-ms timeout: still a timeout */
+            if (ms > 0x7fffffffu)
+                ms = 0x7fffffffu;
+            st = vms_kif_bg_setsockopt(exec_chan, VMS_BG_SOL_EXEC,
+                                       VMS_BG_SO_RCVTIMEO_MS, (int)ms);
+            if (!(st & 1))
+                return st;
+        } else {
+            return SS$_BADPARAM;            /* an option OVMX does not implement */
+        }
+    }
+    return SS$_NORMAL;
+}
+
 static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
-                          void *p1, uint32_t p2, uint32_t p3, uint32_t efn,
+                          void *p1, uint32_t p2, uint32_t p3, uintptr_t p4,
+                          uint32_t efn,
                           void (*astadr)(uint32_t), uint32_t astprm) {
     qio_iosb_t *iosb = (qio_iosb_t *)iosb_ptr;
     uint32_t exec_chan = vms$$chan_exec_chan(chan);
@@ -763,8 +807,13 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
              * selector, IO$K_SOCK_*, iodef.h, vms-80b): IO$K_SOCK_ICMP creates a
              * raw ICMP socket for PING, anything else (0 = IO$K_SOCK_STREAM, what
              * every existing caller passes) the default AF_INET/SOCK_STREAM TCP
-             * client socket. */
-            if (p1) {
+             * client socket; IO$K_SOCK_UDP a UDP datagram socket (vms-a9e7).
+             * P4 (vms-a9e7) = a socket-option list (TCPIP$C_SOCKOPT, iodef.h) to
+             * apply to the channel's EXISTING socket -- e.g. the receive timeout;
+             * a SETMODE carrying only P4 sets options and creates nothing. */
+            if (p4 && !p1 && p3 == 0 && p2 == 0) {
+                st = qio_bg_sockopts(exec_chan, p4);
+            } else if (p1) {
                 struct bg_sockaddr_in *sa = (struct bg_sockaddr_in *)p1;
                 uint16_t eport = 0;
                 uint32_t eaddr = 0;
@@ -775,9 +824,13 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                 st = vms_kif_bg_listen(exec_chan, (int)p3);
             } else if (p2 == IO$K_SOCK_ICMP) {
                 st = vms_kif_bg_setmode_icmp(exec_chan);
+            } else if (p2 == IO$K_SOCK_UDP) {
+                st = vms_kif_bg_setmode_udp(exec_chan);
             } else {
                 st = vms_kif_bg_setmode(exec_chan);
             }
+            if ((st & 1) && p4)
+                st = qio_bg_sockopts(exec_chan, p4);  /* create/bind + options */
             break;
 
         case IO$_ACCESS:
@@ -1684,7 +1737,7 @@ static uint32_t qio_body(uint32_t efn, uint16_t chan, uint32_t func,
         return SS$_NORMAL;
 
     if (vms$$chan_is_bg(chan))
-        return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
+        return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, p4, efn, astadr, astprm);
 
     if (vms$$chan_is_net(chan))
         return qio_net_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
@@ -1765,7 +1818,7 @@ static uint32_t qiow_body(uint32_t efn, uint16_t chan, uint32_t func,
         return SS$_NORMAL;
 
     if (vms$$chan_is_bg(chan))
-        return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
+        return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, p4, efn, astadr, astprm);
 
     if (vms$$chan_is_net(chan))
         return qio_net_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);

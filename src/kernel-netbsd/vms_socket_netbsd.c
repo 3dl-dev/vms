@@ -105,6 +105,27 @@ exec_socket_create_icmp(exec_socket_t *out)
 	return 0;
 }
 
+/* UDP socket for the DNS resolver (vms-a9e7): the SOCK_DGRAM/IPPROTO_UDP twin
+ * of exec_socket_create. Contract-only until a runnable NetBSD BGn: (vms-024). */
+int
+exec_socket_create_udp(exec_socket_t *out)
+{
+	struct exec_socket_holder *h;
+	struct socket *so;
+	int rc;
+
+	*out = NULL;
+	rc = socreate(AF_INET, &so, SOCK_DGRAM, IPPROTO_UDP, curlwp, NULL);
+	if (rc)
+		return rc;
+	h = kmem_alloc(sizeof(*h), KM_SLEEP);
+	h->so = so;
+	h->refcnt = 1;                  /* the channel's reference */
+	h->l2 = NULL;
+	*out = h;
+	return 0;
+}
+
 void
 exec_socket_get(exec_socket_t s)
 {
@@ -256,6 +277,25 @@ exec_socket_setopt_int(exec_socket_t s, int level, int name, int val)
 		rc = sosetopt(s->so, &sopt);
 	sockopt_destroy(&sopt);
 	return rc;
+}
+
+/* Receive timeout (vms-a9e7): ms -> the receive sockbuf's sb_timeo in ticks
+ * (0 = block indefinitely); soreceive then fails EWOULDBLOCK on expiry, which
+ * exec_socket_recv returns negated -- the same -EAGAIN the Linux twin yields. */
+int
+exec_socket_set_rcvtimeo(exec_socket_t s, uint32_t timeout_ms)
+{
+	int ticks = 0;
+
+	if (timeout_ms) {
+		ticks = mstohz((int)(timeout_ms > 0x7fffffffu ? 0x7fffffffu : timeout_ms));
+		if (ticks <= 0)
+			ticks = 1;
+	}
+	solock(s->so);
+	s->so->so_rcv.sb_timeo = ticks;
+	sounlock(s->so);
+	return 0;
 }
 
 int

@@ -995,6 +995,7 @@ size_t exec_arena_grow(void *arena, size_t need);
 typedef struct exec_socket_holder *exec_socket_t;
 int  exec_socket_create(exec_socket_t *out);
 int  exec_socket_create_icmp(exec_socket_t *out);   /* raw ICMP for PING (vms-80b) */
+int  exec_socket_create_udp(exec_socket_t *out);    /* UDP for the resolver (vms-a9e7) */
 void exec_socket_get(exec_socket_t s);
 void exec_socket_release(exec_socket_t s);
 int  exec_socket_connect(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);
@@ -1004,6 +1005,7 @@ int  exec_socket_shutdown(exec_socket_t s);
 int  exec_socket_getname(exec_socket_t s, int peer, uint16_t *family, uint16_t *port_be, uint32_t *addr_be);
 int  exec_socket_setopt_int(exec_socket_t s, int level, int name, int val);
 int  exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out);
+int  exec_socket_set_rcvtimeo(exec_socket_t s, uint32_t timeout_ms);  /* vms-a9e7 */
 
 /* Server path (vms-698). exec_socket_accept mints a NEW holder for the accepted
  * connection (like exec_socket_create), returned via *out. Contract-only twin:

@@ -1,0 +1,9 @@
+; lab.test -- the zone the OVMX resolver queries in the vms-a9e7 interop rig.
+; srvhost is the server host itself (named, telnetd and the ICMP echo all live
+; on 192.168.77.1); alias is a CNAME to it; any other name is NXDOMAIN.
+$TTL 300
+@        IN SOA  ns1.lab.test. hostmaster.lab.test. ( 2026110201 3600 600 86400 300 )
+         IN NS   ns1.lab.test.
+ns1      IN A    192.168.77.1
+srvhost  IN A    192.168.77.1
+alias    IN CNAME srvhost.lab.test.

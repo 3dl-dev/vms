@@ -1,0 +1,68 @@
+17:58:07.929333 ARP, Ethernet (len 6), IPv4 (len 4), Request who-has 10.0.3.1 tell 10.0.3.15, length 28
+17:58:07.929385 ARP, Ethernet (len 6), IPv4 (len 4), Reply 10.0.3.1 is-at 86:55:9f:82:84:3b, length 28
+17:58:07.933458 IP (tos 0x0, ttl 64, id 20979, offset 0, flags [DF], proto UDP (17), length 62)
+    10.0.3.15.47037 > 192.168.77.1.53: [bad udp cksum 0x1af4 -> 0xfe14!] 38227+ A? srvhost.lab.test. (34)
+17:58:07.934580 IP (tos 0x0, ttl 64, id 63023, offset 0, flags [none], proto UDP (17), length 78)
+    192.168.77.1.53 > 10.0.3.15.47037: [bad udp cksum 0x1b04 -> 0xab0a!] 38227*- q: A? srvhost.lab.test. 1/0/0 srvhost.lab.test. A 192.168.77.1 (50)
+17:58:07.971451 IP (tos 0x0, ttl 64, id 53656, offset 0, flags [DF], proto ICMP (1), length 84)
+    10.0.3.15 > 192.168.77.1: ICMP echo request, id 79, seq 1, length 64
+17:58:07.971540 IP (tos 0x0, ttl 64, id 27193, offset 0, flags [none], proto ICMP (1), length 84)
+    192.168.77.1 > 10.0.3.15: ICMP echo reply, id 79, seq 1, length 64
+17:58:08.009540 IP (tos 0x0, ttl 64, id 61674, offset 0, flags [DF], proto ICMP (1), length 84)
+    10.0.3.15 > 192.168.77.1: ICMP echo request, id 79, seq 2, length 64
+17:58:08.009576 IP (tos 0x0, ttl 64, id 27229, offset 0, flags [none], proto ICMP (1), length 84)
+    192.168.77.1 > 10.0.3.15: ICMP echo reply, id 79, seq 2, length 64
+17:58:08.191521 IP (tos 0x0, ttl 64, id 3892, offset 0, flags [DF], proto UDP (17), length 60)
+    10.0.3.15.44534 > 192.168.77.1.53: [bad udp cksum 0x1af2 -> 0x3dc1!] 57857+ A? alias.lab.test. (32)
+17:58:08.191904 IP (tos 0x0, ttl 64, id 63096, offset 0, flags [none], proto UDP (17), length 98)
+    192.168.77.1.53 > 10.0.3.15.44534: [bad udp cksum 0x1b18 -> 0x1341!] 57857*- q: A? alias.lab.test. 2/0/0 alias.lab.test. CNAME srvhost.lab.test., srvhost.lab.test. A 192.168.77.1 (70)
+17:58:08.209309 IP (tos 0x0, ttl 64, id 59622, offset 0, flags [DF], proto ICMP (1), length 84)
+    10.0.3.15 > 192.168.77.1: ICMP echo request, id 79, seq 1, length 64
+17:58:08.209369 IP (tos 0x0, ttl 64, id 27420, offset 0, flags [none], proto ICMP (1), length 84)
+    192.168.77.1 > 10.0.3.15: ICMP echo reply, id 79, seq 1, length 64
+17:58:08.530472 IP (tos 0x0, ttl 64, id 35763, offset 0, flags [DF], proto UDP (17), length 61)
+    10.0.3.15.40089 > 192.168.77.1.53: [bad udp cksum 0x1af3 -> 0xdef4!] 23703+ A? nosuch.lab.test. (33)
+17:58:08.530983 IP (tos 0x0, ttl 64, id 63185, offset 0, flags [none], proto UDP (17), length 112)
+    192.168.77.1.53 > 10.0.3.15.40089: [bad udp cksum 0x1b26 -> 0x7e75!] 23703 NXDomain*- q: A? nosuch.lab.test. 0/1/0 ns: lab.test. SOA ns1.lab.test. hostmaster.lab.test. 2026110201 3600 600 86400 300 (84)
+17:58:09.597472 IP (tos 0x0, ttl 64, id 40931, offset 0, flags [DF], proto UDP (17), length 63)
+    10.0.3.15.60160 > 192.168.77.2.53: [bad udp cksum 0x1af6 -> 0x9cbc!] 60934+ A? deadhost.lab.test. (35)
+17:58:11.656227 IP (tos 0x0, ttl 64, id 40932, offset 0, flags [DF], proto UDP (17), length 63)
+    10.0.3.15.60160 > 192.168.77.2.53: [bad udp cksum 0x1af6 -> 0x9cbc!] 60934+ A? deadhost.lab.test. (35)
+17:58:13.006373 ARP, Ethernet (len 6), IPv4 (len 4), Request who-has 10.0.3.15 tell 10.0.3.1, length 28
+17:58:13.010051 ARP, Ethernet (len 6), IPv4 (len 4), Reply 10.0.3.15 is-at 52:54:00:a9:e7:01, length 28
+17:58:15.640660 IP (tos 0x0, ttl 64, id 9122, offset 0, flags [DF], proto UDP (17), length 62)
+    10.0.3.15.53930 > 192.168.77.1.53: [bad udp cksum 0x1af4 -> 0xb0cb!] 51119+ A? srvhost.lab.test. (34)
+17:58:15.641161 IP (tos 0x0, ttl 64, id 3162, offset 0, flags [none], proto UDP (17), length 78)
+    192.168.77.1.53 > 10.0.3.15.53930: [bad udp cksum 0x1b04 -> 0x5dc1!] 51119*- q: A? srvhost.lab.test. 1/0/0 srvhost.lab.test. A 192.168.77.1 (50)
+17:58:15.672150 IP (tos 0x0, ttl 64, id 34493, offset 0, flags [DF], proto TCP (6), length 60)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [S], cksum 0x1ae7 (incorrect -> 0xeabb), seq 1097071927, win 64240, options [mss 1460,sackOK,TS val 1357524733 ecr 0,nop,wscale 6], length 0
+17:58:15.672192 IP (tos 0x0, ttl 64, id 0, offset 0, flags [DF], proto TCP (6), length 60)
+    192.168.77.1.23 > 10.0.3.15.35074: Flags [S.], cksum 0x1ae7 (incorrect -> 0x90e9), seq 2411559051, ack 1097071928, win 65160, options [mss 1460,sackOK,TS val 2463808260 ecr 1357524733,nop,wscale 7], length 0
+17:58:15.675376 IP (tos 0x0, ttl 64, id 34494, offset 0, flags [DF], proto TCP (6), length 52)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [.], cksum 0x1adf (incorrect -> 0xba51), seq 1, ack 1, win 1004, options [nop,nop,TS val 1357524734 ecr 2463808260], length 0
+17:58:15.675714 IP (tos 0x0, ttl 64, id 25982, offset 0, flags [DF], proto TCP (6), length 64)
+    192.168.77.1.23 > 10.0.3.15.35074: Flags [P.], cksum 0x1aeb (incorrect -> 0xc00b), seq 1:13, ack 1, win 510, options [nop,nop,TS val 2463808264 ecr 1357524734], length 12 [telnet DO ECHO, DO NAWS, WILL ECHO, WILL SUPPRESS GO AHEAD]
+17:58:15.678901 IP (tos 0x0, ttl 64, id 34495, offset 0, flags [DF], proto TCP (6), length 52)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [.], cksum 0x1adf (incorrect -> 0xba3b), seq 1, ack 13, win 1004, options [nop,nop,TS val 1357524740 ecr 2463808264], length 0
+17:58:15.678937 IP (tos 0x0, ttl 64, id 25983, offset 0, flags [DF], proto TCP (6), length 63)
+    192.168.77.1.23 > 10.0.3.15.35074: Flags [P.], cksum 0x1aea (incorrect -> 0x9b62), seq 13:24, ack 1, win 510, options [nop,nop,TS val 2463808267 ecr 1357524740], length 11
+17:58:15.679218 IP (tos 0x0, ttl 64, id 34496, offset 0, flags [DF], proto TCP (6), length 52)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [.], cksum 0x1adf (incorrect -> 0xba2d), seq 1, ack 24, win 1004, options [nop,nop,TS val 1357524740 ecr 2463808267], length 0
+17:58:15.679392 IP (tos 0x0, ttl 64, id 34497, offset 0, flags [DF], proto TCP (6), length 55)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [P.], cksum 0x1ae2 (incorrect -> 0xb925), seq 1:4, ack 24, win 1004, options [nop,nop,TS val 1357524740 ecr 2463808267], length 3 [telnet WONT ECHO]
+17:58:15.679413 IP (tos 0x0, ttl 64, id 25984, offset 0, flags [DF], proto TCP (6), length 52)
+    192.168.77.1.23 > 10.0.3.15.35074: Flags [.], cksum 0x1adf (incorrect -> 0xbc17), seq 24, ack 4, win 510, options [nop,nop,TS val 2463808268 ecr 1357524740], length 0
+17:58:15.679827 IP (tos 0x0, ttl 64, id 34498, offset 0, flags [DF], proto TCP (6), length 55)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [P.], cksum 0x1ae2 (incorrect -> 0x9b20), seq 4:7, ack 24, win 1004, options [nop,nop,TS val 1357524741 ecr 2463808268], length 3 [telnet WONT NAWS]
+17:58:15.679848 IP (tos 0x0, ttl 64, id 25985, offset 0, flags [DF], proto TCP (6), length 52)
+    192.168.77.1.23 > 10.0.3.15.35074: Flags [.], cksum 0x1adf (incorrect -> 0xbc13), seq 24, ack 7, win 510, options [nop,nop,TS val 2463808268 ecr 1357524741], length 0
+17:58:15.680981 IP (tos 0x0, ttl 64, id 34499, offset 0, flags [DF], proto TCP (6), length 58)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [P.], cksum 0x1ae5 (incorrect -> 0xba14), seq 7:13, ack 24, win 1004, options [nop,nop,TS val 1357524742 ecr 2463808268], length 6 [telnet DONT ECHO, DONT SUPPRESS GO AHEAD]
+17:58:15.681013 IP (tos 0x0, ttl 64, id 25986, offset 0, flags [DF], proto TCP (6), length 52)
+    192.168.77.1.23 > 10.0.3.15.35074: Flags [.], cksum 0x1adf (incorrect -> 0xbc0b), seq 24, ack 13, win 510, options [nop,nop,TS val 2463808269 ecr 1357524742], length 0
+17:58:18.939479 IP (tos 0x0, ttl 64, id 34500, offset 0, flags [DF], proto TCP (6), length 52)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [F.], cksum 0x1adf (incorrect -> 0xad67), seq 13, ack 24, win 1004, options [nop,nop,TS val 1357527995 ecr 2463808269], length 0
+17:58:18.939720 IP (tos 0x0, ttl 64, id 25987, offset 0, flags [DF], proto TCP (6), length 52)
+    192.168.77.1.23 > 10.0.3.15.35074: Flags [F.], cksum 0x1adf (incorrect -> 0xa299), seq 24, ack 14, win 510, options [nop,nop,TS val 2463811528 ecr 1357527995], length 0
+17:58:18.949441 IP (tos 0x0, ttl 64, id 34501, offset 0, flags [DF], proto TCP (6), length 52)
+    10.0.3.15.35074 > 192.168.77.1.23: Flags [.], cksum 0x1adf (incorrect -> 0xa09d), seq 14, ack 25, win 1004, options [nop,nop,TS val 1357528009 ecr 2463811528], length 0

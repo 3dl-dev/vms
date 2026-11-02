@@ -2087,6 +2087,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_bg_setmode(proc, arg);
     case VMS_IOCTL_BG_SETMODE_ICMP:
         return vms_ioctl_bg_setmode_icmp(proc, arg);
+    case VMS_IOCTL_BG_SETMODE_UDP:
+        return vms_ioctl_bg_setmode_udp(proc, arg);
     case VMS_IOCTL_BG_CONNECT:
         return vms_ioctl_bg_connect(proc, arg);
     case VMS_IOCTL_BG_SEND:

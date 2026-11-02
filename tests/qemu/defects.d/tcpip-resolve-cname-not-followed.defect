@@ -1,0 +1,29 @@
+# tcpip-resolve-cname-not-followed -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "TCP/IP Services resolver -- the DNS reply parser of the shared resolver engine (tcpip_dns_parse_reply, src/vmstcpip/services/tcpip_resolve.h, vms-a9e7), the header the DCL TELNET/FTP/PING verbs ship and test_syssvc_bg_udp proves. A name not in TCPIP\$HOST.DAT is resolved by an RFC 1035 query to the TCPIP\$NAMESERVICE.DAT server over a BGn: UDP channel (\$ASSIGN TCPIP\$DEVICE:, IO\$_SETMODE P2=IO\$K_SOCK_UDP, IO\$_ACCESS/WRITEVBLK/READVBLK); the parser follows CNAME records in the answer section to the A record.";;
+        targets)      echo "vmstcpip/services/tcpip_resolve.h";;
+        suites_red)   echo "test_syssvc_bg_udp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_dns_parse_reply() moves its owner target to the CNAME's canonical name with 'memcpy(target, next, sizeof(target));' before re-scanning the answers for the A record. The mutation drops that step, so a reply whose answer is CNAME -> A yields NODATA (the A record is owned by the canonical name, never by the alias). A direct A answer, NXDOMAIN, the wrong-ID decoy and the timeout paths are untouched, so only the CNAME assertion reddens. One statement neutralised.";;
+        require_fail) cat <<'EOF2'
+resolver: follows the CNAME alias.lab.test -> vaxa.lab.test to its A record
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Anchored on its own NEGCTL comment so the text is unique; after
+        # substitution the memcpy is gone, so a second apply is a no-op.
+        sed -i 's|        memcpy(target, next, sizeof(target)); /\* NEGCTL tcpip-resolve-cname-not-followed \*/|        (void)next; /* NEGCTL tcpip-resolve-cname-not-followed */|' "$_file"
+
+    :
+}

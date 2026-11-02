@@ -1,0 +1,31 @@
+# bg-udp-recv-timeout-not-reported -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "INET pseudo-device BGn: -- the receive timeout of the executive-resident BGn: driver's IO\$_READVBLK (vms_ioctl_bg_recv, src/kernel-core/vms_bg.c, vms-a9e7). A UDP channel (IO\$_SETMODE P2=IO\$K_SOCK_UDP) armed with TCPIP\$C_RCVTIMEO through the IO\$_SETMODE P4 socket-option list must complete a read against a silent peer with SS\$_TIMEOUT, so the DNS resolver behind \$ TELNET/FTP/PING name reports a silent name server instead of hanging.";;
+        targets)      echo "kernel-core/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bg_udp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_bg_recv() maps the host kernel's -EAGAIN (the armed sk_rcvtimeo expiring) to SS\$_TIMEOUT. The mutation reports it as SS\$_ABORT instead, so the timed-out read still returns promptly (no hang -- the timeout itself is still armed) but with the wrong status: the silent-port read assertion reddens (it requires SS\$_TIMEOUT), and so does the resolver's silent-server assertion, because the engine reads SS\$_ABORT as a failed exchange (NONET) rather than a timeout. The byte-exact UDP round-trip and every resolver answer path stay green. One conditional expression replaced.";;
+        require_fail) cat <<'EOF2'
+BGn: IO$_READVBLK on a silent UDP peer completes SS$_TIMEOUT within bounds
+resolver: a silent name server is reported as a timeout (one retry), not a hang
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # The only "(n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT" in the file is in
+        # vms_ioctl_bg_recv. After substitution it is gone, so a second apply is
+        # the no-op the selftest requires.
+        sed -i 's|a->status = (n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT;|a->status = SS__ABORT; /* NEGCTL bg-udp-recv-timeout-not-reported */|' "$_file"
+
+    :
+}

@@ -1719,6 +1719,18 @@ static void test_c350_depart_open_carries_the_adjusted_quorum(void)
 			"its body[96] (3 here, 9 in evac run 15) is not CEVOTES "
 			"and is not read");
 	ct_check_eq_u32(o.has_bitmap, 0, "and it carries no nodemap");
+
+	/* HELD OUT, other values, other cause: SET CLUSTER/EXPECTED_VOTES=7
+	 * on the labc350 run, where VMS itself printed "yields quorum of 4". A
+	 * CEVOTES reading of this cell would say 7. */
+	fx = load_qfx("cm-setcluster-quorum-open-to-ovmx");
+	ct_check(fx != NULL, "held-out fixture loads");
+	if (fx == NULL)
+		return;
+	ct_check(vms_cm_open_parse(fx->bytes + VMS_OFF_SYSAP_BODY,
+				   VMS_CM_BODY_LEN, &o) == VMS_CODEC_OK, "parses");
+	ct_check_eq_u32(o.cells.quorum, 4, "the cell is the QUORUM (4), not "
+			"the expected votes (7)");
 }
 
 static void test_c350_member_keeps_quorum_after_remove_node(void)

@@ -111,9 +111,11 @@ G=$O/gccsrc; rm -rf $G; mkdir -p $G/SRC $G/BLD $G/HOST
 S=$O/src/gcc-14.2.0
 ( cd $S && find gcc include libcpp/include libdecnumber libbacktrace libcody \
       \( -path gcc/testsuite -o -path gcc/jit -o -path gcc/doc -o -path gcc/po \) -prune \
-      -o -type f \( -name '*.h' -o -name '*.def' -o -name '*.hh' \) -print ) > $O/gccsrc.list
+      -o -type f \( -name '*.h' -o -name '*.def' -o -name '*.hh' -o -name '*.tcc' -o -name '*.inl' \) -print ) > $O/gccsrc.list
 ( cd $S && tar cf - -T $O/gccsrc.list ) | ( cd $G/SRC && tar xf - )
-( cd $O/b-gcc/gcc && find . -maxdepth 1 -type f \( -name '*.h' -o -name '*.def' \) -print | tar cf - -T - ) \
+# (and the target hook tables genhooks writes one level down: common/, c-family/)
+( cd $O/b-gcc/gcc && { find . -maxdepth 1 -type f \( -name '*.h' -o -name '*.def' \) -print;
+    find . -mindepth 2 -maxdepth 2 -type f -name '*-target-hooks-def.h' -print; } | tar cf - -T - ) \
     | ( mkdir -p $G/BLD/gcc && cd $G/BLD/gcc && tar xf - )
 mkdir -p $G/BLD/libdecnumber && cp $O/b-gcc/libdecnumber/*.h $G/BLD/libdecnumber/
 cp -r $H/include $G/HOST/include
@@ -137,7 +139,7 @@ while read -r d; do
     *) echo "build-host-gcc: FAIL a compiled source outside the source and build trees: $d"; exit 1 ;;
   esac
   mkdir -p "$dst"
-  find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.cc' -o -name '*.h' -o -name '*.def' -o -name '*.inc' -o -name '*.tab' \) \
+  find "$d" -maxdepth 1 -type f \( -name '*.c' -o -name '*.cc' -o -name '*.h' -o -name '*.def' -o -name '*.inc' -o -name '*.tab' -o -name '*.tcc' -o -name '*.inl' \) \
     -exec cp -p {} "$dst/" \;
 done < $O/plan.dirs
 mkdir -p $G/PLAN/REC && cp $O/plan/*.rec $G/PLAN/REC/

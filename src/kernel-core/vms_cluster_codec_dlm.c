@@ -858,7 +858,7 @@ vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len
 #define VMS_DLM_RM_REC_C110_VAL    0x01u
 #define VMS_OFF_DLM_RM_REC_TAIL    184u /* body[112:128]                    */
 #define VMS_DLM_RM_REC_TAIL_LEN    16u
-/* body[28] of the holder's op-0x13: 0 in 391 of 391 (H4). */
+/* body[28] of the holder's op-0x13: 0 in 662 of 662 (H4). */
 #define VMS_OFF_DLM_RM_END_ROLE    100u
 #define VMS_DLM_RM_END_ROLE_HOLDER 0x00u
 
@@ -925,10 +925,18 @@ int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
 	 * real ones) and a WHOLE parent pair or none (the census's root/sub
 	 * split: every ROOT record's body[36:44] is zero, every SUB record's is
 	 * not, and vms_dlm_rm_lock_rec_build refuses a half pair); the
-	 * end-of-records names a resource, carries zero at body[40:44] (1,232
-	 * of 1,232) and the HOLDER role byte at body[28] (391 of 391).
+	 * end-of-records names a resource, carries zero at body[40:44] (1,774
+	 * of 1,774) and the HOLDER role byte at body[28] (662 of 662).
 	 */
-	if (op == VMS_DLM_WIREOP_RM_12) {
+	/*
+	 * ...AND THE FAILOVER REBUILD RECORD (rd vms-874f), the same record
+	 * with op 0x08: a surviving holder's description of a lock in a tree
+	 * whose master LEFT, sent to that tree's directory or new master -- a
+	 * real VMS member by definition, which otherwise never learns this
+	 * node holds the lock. Same shape test: 888 of 888 real op-0x08s carry
+	 * a non-zero own handle at body[24:28] and a whole parent pair or none.
+	 */
+	if (op == VMS_DLM_WIREOP_RM_12 || op == VMS_DLM_WIREOP_REBUILD_REC) {
 		uint8_t nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
 		uint32_t mine = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 		uint32_t ph = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_H);
@@ -1026,7 +1034,7 @@ int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len)
 		       flag == VMS_DLM_GRANT_NOTIFY_FLAG_VAL;
 	}
 	/*
-	 * THE END-OF-RECORDS (rd vms-33a): 1,232 of 1,232 real op-0x13s carry
+	 * THE END-OF-RECORDS (rd vms-33a): 1,774 of 1,774 real op-0x13s carry
 	 * body[4:8] = 0 and none is answered. Admitted only when it names a
 	 * resource, as every real one does.
 	 */
@@ -2191,9 +2199,15 @@ vms_codec_status_t vms_dlm_rm_step_parse(const uint8_t *frame, uint32_t len,
 					  len - VMS_OFF_SYSAP_BODY, out);
 }
 
-vms_codec_status_t vms_dlm_rm_lock_rec_parse_body(const uint8_t *body,
-						  uint32_t len,
-						  struct vms_dlm_rm_lock_rec *out)
+/*
+ * ONE LOCK RECORD, op-0x12 (a remaster hand-over) or op-0x08 (a failover
+ * rebuild, rd vms-874f): the same cells at the same offsets
+ * (tools/cluster/dlm_rebuild08_census.py --selftest pins the op-0x08 half), so
+ * one reader serves both and the caller names which opcode it will accept.
+ */
+static vms_codec_status_t dlm_lock_rec_parse_op(const uint8_t *body,
+						uint32_t len, uint8_t want_op,
+						struct vms_dlm_rm_lock_rec *out)
 {
 	vms_wire_view_t v;
 	struct vms_dlm_rm_lock_rec r;
@@ -2207,7 +2221,7 @@ vms_codec_status_t vms_dlm_rm_lock_rec_parse_body(const uint8_t *body,
 	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
-	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_RM_12)
+	if (cat != VMS_DLM_CAT_REQUEST || op != want_op)
 		return VMS_CODEC_E_CLASS;
 
 	r.holder_epid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
@@ -2235,6 +2249,19 @@ vms_codec_status_t vms_dlm_rm_lock_rec_parse_body(const uint8_t *body,
 			       r.parent_master_lkid == 0u) ? 1u : 0u);
 	*out = r;
 	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_rm_lock_rec_parse_body(const uint8_t *body,
+						  uint32_t len,
+						  struct vms_dlm_rm_lock_rec *out)
+{
+	return dlm_lock_rec_parse_op(body, len, VMS_DLM_WIREOP_RM_12, out);
+}
+
+vms_codec_status_t vms_dlm_rb_rec_parse_body(const uint8_t *body, uint32_t len,
+					     struct vms_dlm_rm_lock_rec *out)
+{
+	return dlm_lock_rec_parse_op(body, len, VMS_DLM_WIREOP_REBUILD_REC, out);
 }
 
 /*
@@ -2355,7 +2382,11 @@ vms_dlm_rm_lock_answer_build(const uint8_t *req_body, uint32_t req_len,
 	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
-	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_RM_12)
+	/* rd vms-874f: a master answers a failover-rebuild record (op 0x08)
+	 * with the same 82/01 grant -- 736 of 736 real 0xfa answers carry the
+	 * cells this builder writes (dlm_rebuild08_census.py --selftest). */
+	if (cat != VMS_DLM_CAT_REQUEST || (op != VMS_DLM_WIREOP_RM_12 &&
+					   op != VMS_DLM_WIREOP_REBUILD_REC))
 		return VMS_CODEC_E_CLASS;
 
 	vms_wire_buf_init(&w, frame, cap);
@@ -2560,9 +2591,38 @@ vms_codec_status_t vms_dlm_rm_0f_new_master(const uint8_t *body, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
+static vms_codec_status_t dlm_lock_rec_build_op(const struct vms_dlm_rm_lock_rec *r,
+						int hash_known, uint8_t op,
+						uint8_t *frame, uint32_t cap,
+						uint32_t *written);
+
 vms_codec_status_t vms_dlm_rm_lock_rec_build(const struct vms_dlm_rm_lock_rec *r,
 					     int hash_known, uint8_t *frame,
 					     uint32_t cap, uint32_t *written)
+{
+	return dlm_lock_rec_build_op(r, hash_known, VMS_DLM_WIREOP_RM_12,
+				     frame, cap, written);
+}
+
+/*
+ * rd vms-874f: the FAILOVER REBUILD record is the op-0x12 record with op 0x08
+ * -- every cell the builder writes is in the op-0x08 envelope at the same
+ * offset (the census's ROOT/SUB cell tables, and RA1b's RMT1 tree: VAX3's PID
+ * 0x20600216 at body[20:24], its own lkid, modes, parent pair, identity, the
+ * block, body[110] = 01 and the 00/ff tail).
+ */
+vms_codec_status_t vms_dlm_rb_rec_build(const struct vms_dlm_rm_lock_rec *r,
+					int hash_known, uint8_t *frame,
+					uint32_t cap, uint32_t *written)
+{
+	return dlm_lock_rec_build_op(r, hash_known, VMS_DLM_WIREOP_REBUILD_REC,
+				     frame, cap, written);
+}
+
+static vms_codec_status_t dlm_lock_rec_build_op(const struct vms_dlm_rm_lock_rec *r,
+						int hash_known, uint8_t op,
+						uint8_t *frame, uint32_t cap,
+						uint32_t *written)
 {
 	vms_wire_buf_t w;
 	uint32_t i;
@@ -2585,7 +2645,7 @@ vms_codec_status_t vms_dlm_rm_lock_rec_build(const struct vms_dlm_rm_lock_rec *r
 		return VMS_CODEC_E_INVAL;
 	dlm_rm_blank(&w);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_RM_12);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, op);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, r->holder_epid);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, r->holder_lkid);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, r->granted_mode);

@@ -390,6 +390,16 @@ static void cnxtrace_print_dlm(void)
            "op-0x13 sent=%u  hand-overs stopped=%u\n",
            (unsigned)v->rm_ho_records_sent, (unsigned)v->rm_ho_answers,
            (unsigned)v->rm_ho_ends_sent, (unsigned)v->rm_ho_stopped);
+    /* THE FAILOVER REBUILD (rd vms-874f): a tree's master LEFT and this node
+     * re-described its locks in it, or as the new master installed a
+     * survivor's. A fire reads records == answers (or mastered), and
+     * stopped == 0. */
+    printf("%%CNXTRACE-I-DLMREBUILD, op-0x08 records sent=%u answered=%u  "
+           "trees mastered=%u  survivors' locks installed=%u  "
+           "rebuilds stopped=%u\n",
+           (unsigned)v->rm_rb_records_sent, (unsigned)v->rm_rb_answers,
+           (unsigned)v->rm_rb_mastered, (unsigned)v->rm_rb_installed,
+           (unsigned)v->rm_rb_stopped);
     printf("%%CNXTRACE-I-DLMPOST, posts queued=%u unqueued=%u lock_gone=%u "
            "refused=%u\n",
            (unsigned)v->posts_queued, (unsigned)v->posts_unqueued,

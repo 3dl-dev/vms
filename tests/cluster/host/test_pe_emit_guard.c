@@ -1088,6 +1088,70 @@ static void test_holder_frames_pass_the_guard(void)
 	ct_check_eq_u32(e.fsm.guard_warned, 0u, "...nor warned about");
 }
 
+/* ================================================================== *
+ * rd vms-874f: A SURVIVOR'S FAILOVER REBUILD RECORDS PASS THE GUARD. The
+ * op-0x08 ROOT (to the tree's directory) and SUB (to its new master, carrying
+ * the parent's new handle) are answered requests, each opening a transaction;
+ * refusing a correct one loses this node's locks exactly as silence would.
+ * ================================================================== */
+static void test_rebuild_records_pass_the_guard(void)
+{
+	struct guard_env e;
+	struct vms_dlm_rm_lock_rec r;
+	uint8_t root[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t sub[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+
+	printf("-- rd vms-874f: the survivor's op-0x08 ROOT and SUB records "
+	       "pass the emit-time guard\n");
+	memset(&r, 0, sizeof(r));
+	r.holder_lkid = 0x0e00049bu;        /* RA1b VAX3's RMT1 */
+	r.holder_epid = 0x20600216u;
+	r.granted_mode = 1u;
+	r.requested_mode = 1u;
+	r.id.mode = 3u;
+	r.id.name_len = 4u;
+	memcpy(r.id.name, "RMT1", 4);
+	r.id.hash = 0xef47b8a2u;
+	ct_check(vms_dlm_rb_rec_build(&r, 1, root, sizeof(root), NULL) ==
+		 VMS_CODEC_OK, "the ROOT record builds");
+	r.holder_lkid = 0x010004a6u;        /* ...and its S2 */
+	r.parent_holder_lkid = 0x0e00049bu;
+	r.parent_master_lkid = 0x01000563u;
+	r.granted_mode = 2u;
+	r.requested_mode = 2u;
+	r.id.name_len = 2u;
+	memcpy(r.id.name, "S2", 2);
+	ct_check(vms_dlm_rb_rec_build(&r, 0, sub, sizeof(sub), NULL) ==
+		 VMS_CODEC_OK, "the SUB record builds");
+	ct_check(vms_dlm_shape_fit_for_any_member(root + VMS_OFF_SYSAP_BODY,
+						  VMS_CM_BODY_LEN) &&
+		 vms_dlm_shape_fit_for_any_member(sub + VMS_OFF_SYSAP_BODY,
+						  VMS_CM_BODY_LEN),
+		 "both are admitted for a member not proven to run OVMX "
+		 "(the CM's RULE C shape gate)");
+	{
+		uint8_t half[VMS_CM_BODY_LEN];
+
+		memcpy(half, sub + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
+		half[40] = half[41] = half[42] = half[43] = 0u;
+		ct_check(!vms_dlm_shape_fit_for_any_member(half,
+							   VMS_CM_BODY_LEN),
+			 "...but a HALF parent pair is not");
+	}
+
+	open_circuit(&e);
+	rx_cm(&e, 1u, 0u, 1u);
+	ct_check_eq_u32((unsigned long)send_built(&e, root, 1u, 1u, 0x2101u),
+			(unsigned long)PE_VC_SEND_OK,
+			"the ROOT goes out (a request: transaction opened)");
+	ct_check_eq_u32((unsigned long)send_built(&e, sub, 2u, 1u, 0x2102u),
+			(unsigned long)PE_VC_SEND_OK,
+			"the SUB goes out (a request: transaction opened)");
+	ct_check_eq_u32(e.fsm.guard_judged, 2u, "both were JUDGED");
+	ct_check_eq_u32(e.fsm.guard_refused, 0u, "*** neither was refused ***");
+	ct_check_eq_u32(e.fsm.guard_warned, 0u, "...nor warned about");
+}
+
 int main(void)
 {
 	test_golden_dialogue_is_never_refused();
@@ -1110,5 +1174,6 @@ int main(void)
 	test_the_console_is_throttled();
 	test_guard_class_names_do_not_drift();
 	test_holder_frames_pass_the_guard();
+	test_rebuild_records_pass_the_guard();
 	return ct_summary("test_pe_emit_guard");
 }

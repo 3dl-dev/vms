@@ -1152,6 +1152,30 @@ set_tests_properties(cluster_host_test_dlm_handover PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-874f: the FAILOVER REBUILD, on the real engine + table + codec ----
+# A tree's master LEFT: this node, a surviving holder, re-describes its locks
+# (op-0x08 records, root first, subs carrying the new master's handle), or is
+# told 0xf9 and masters the tree -- and, as the new master, installs a
+# survivor's records. Driven with RA1b's REAL records and answers.
+add_executable(test_dlm_rebuild test_dlm_rebuild.c)
+target_include_directories(test_dlm_rebuild PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_rebuild PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_rebuild PRIVATE
+    cluster_host_lock cluster_host_cnxman cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_rebuild PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_rebuild COMMAND test_dlm_rebuild)
+set_tests_properties(cluster_host_test_dlm_rebuild PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- rd vms-c72: the op-0x03/op-0x04 RECEIVE half really moves lock state ----
 # The mirror of test_dlm_deq_reachable above, on the same two library recipes
 # and for the same reason: the emit was proven and the RECEIVE was declined
@@ -1310,6 +1334,10 @@ add_test(NAME cluster_frame_conformance_gate
         # rd vms-33a: the HOLDER's records and its end-of-records, emitted by
         # test_dlm_remaster_arm driving the real table through RA5's RMT5.
         dlm_rm_12 dlm_rm_13
+        # rd vms-874f: the survivor's failover-rebuild records and, as the
+        # tree's new master, its 0xfa answers -- emitted by test_dlm_rebuild
+        # replaying RA1b's RMT1 tree on the real engine.
+        dlm_rm_08 dlm_rm_08_ans
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"

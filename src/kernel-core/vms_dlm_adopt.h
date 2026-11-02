@@ -321,6 +321,66 @@ uint32_t vms_lock_dlm_handover_valblk(const struct vms_dlm_adopt_valblk *v);
 uint32_t vms_lock_dlm_handover_rehomed(void);
 uint32_t vms_lock_dlm_handover_valblks(void);
 
+/* ==========================================================================
+ * THE FAILOVER REBUILD (rd vms-874f): a tree's master LEFT the cluster, and
+ * every surviving holder re-describes its locks in it with op-0x08 records
+ * (vms_cluster_codec_dlm.h R1..R4). The departure sweep
+ * (vms_lock_dlm_member_departed) keeps each GRANTED proxy of ours that named the
+ * departed master; the hand-over's _next and _rehome above then describe and
+ * re-home them exactly as for an op-0x12 -- the record carries the same cells.
+ * What the rebuild adds is below: which trees are orphaned, whose proxies a
+ * directory is looking at, and the NEW MASTER's install of a survivor's lock.
+ * ========================================================================== */
+
+/*
+ * THE NEXT ORPHANED TREE: a ROOT resource on which this node holds a GRANTED
+ * proxy that still names `departed_csid` (with that master's handle), and whose
+ * identity is not one of the `n_skip` in `skip` (the trees the caller is
+ * already rebuilding, or has stopped). 1 and `*out` filled -- its identity and
+ * `old_master_csid` = `departed_csid` -- or 0 when there is none left.
+ */
+int vms_lock_dlm_rebuild_tree_next(uint32_t departed_csid,
+				   const struct vms_dlm_adopt_tree *skip,
+				   uint32_t n_skip,
+				   struct vms_dlm_adopt_tree *out);
+
+/*
+ * WHICH MASTER DO OUR PROXIES ON THIS ROOT NAME? 1 and `*out_csid` when this
+ * node holds a granted proxy on the root resource of that identity; 0 when it
+ * holds none. The directory role asks it to tell a tree whose master is a
+ * MEMBER (a lookup it must not answer) from one whose master has LEFT (the
+ * rebuild, where a survivor's record is answered from the directory table).
+ */
+int vms_lock_dlm_name_proxy_master(const char *resnam, uint32_t resnam_len,
+				   uint16_t group, uint8_t mode,
+				   uint32_t *out_csid);
+
+/*
+ * INSTALL A SURVIVOR'S LOCK, as THE TREE'S MASTER (an inbound op-0x08 record).
+ *
+ * A ROOT record (parent_master_lkid 0) is installed only on a root resource
+ * that EXISTS here and that this node MASTERS -- a rebuild record never creates
+ * a tree. A SUB record names its parent by the handle this engine minted for
+ * the same holder's parent (a master-side LKB, req_csid == holder_csid, on a
+ * resource mastered here): looked up, never trusted. The LKB is the remaster
+ * adoption's (vms_lock_dlm_adopt_lock): granted at body[30]'s mode, tagged with
+ * the holder's CSID and own handle, owned by the delivery proc, linked under
+ * the parent lock; IDEMPOTENT to a retransmit (same handle back, `duplicate`).
+ *
+ * A lock no longer COMPATIBLE with what the resource holds here is NOT
+ * installed (SS$_UNSUPPORTED) -- never a second incompatible grant (rd vms-5cd).
+ * An all-NL lock IS installed: it is a real lock (330 of 338 real SUB records).
+ *
+ * SS$_NORMAL when `*out` describes a lock that now exists (read back off it);
+ * SS$_IVLOCKID when the tree is not mastered here or the parent does not check
+ * out; SS$_BADPARAM for a malformed record.
+ */
+uint32_t vms_lock_dlm_rebuild_lock(const struct vms_dlm_adopt_lock_rec *r,
+				   struct vms_dlm_adopt_lock_result *out);
+
+/* Survivors' locks installed by rebuild records, since boot. */
+uint32_t vms_lock_dlm_rebuild_installed(void);
+
 /*
  * CLOSE the adoption of `t` (the 0x13 end-of-records). `*n_locks` (optional) is
  * how many locks the engine REALLY installed -- a counted observation, and the

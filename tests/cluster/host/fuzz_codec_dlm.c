@@ -28,6 +28,8 @@
  *                                          rd vms-33a)
  *     vms_dlm_rm_held_ident               (the tree an INBOUND op-0x14 names,
  *                                          the holder's 82/15 key, rd vms-bc51)
+ *     vms_dlm_rb_rec_parse_body           (a survivor's FAILOVER REBUILD
+ *                                          record, op-0x08, rd vms-874f)
  *     vms_cm_params_parse                 (CNXMAN op-01 PARAMS, votes)
  * plus the frame-level entry (vms_frame_classify -> vms_dlm_*_parse), the real
  * inbound path (body = frame + VMS_OFF_SYSAP_BODY, so a short frame exercises
@@ -271,6 +273,44 @@ static void fuzz_rm_holder(void)
                         "over-read/crash, and REACHED (non-vacuous)");
 }
 
+/* rd vms-874f: the op-0x08 REBUILD RECORD parser -- what this node reads when
+ * it is a tree's new master and a surviving VMS holder describes its lock. The
+ * class gate (cat 0x02 / op 0x08 at body[8:10]) is planted on 3/4 of the
+ * iterations over every length 0..160, and a non-zero own handle at
+ * body[24:28] most of the time so the identity and block readers behind the
+ * range check are reached; accepted bodies are counted and asserted non-zero
+ * (non-vacuous), and an accepted record's name length must lie in 1..31. */
+static void fuzz_rb_rec(void)
+{
+    struct vms_dlm_rm_lock_rec r;
+    uint32_t ok = 0, bad_len = 0;
+
+    for (int i = 0; i < ITERS; i++) {
+        uint8_t scratch[160];
+        uint32_t n = (uint32_t)(rand() % 161);
+
+        fill_random(scratch, n);
+        if ((rand() & 3) && n > DLM_OP_BODY_OFF) {
+            scratch[DLM_OP_BODY_OFF - 1] = 0x02;
+            scratch[DLM_OP_BODY_OFF] = VMS_DLM_WIREOP_REBUILD_REC;
+            if (n > 47 && (rand() & 1))
+                scratch[47] = (uint8_t)(1 + rand() % 31);
+        }
+        uint8_t *body = exact(scratch, n);
+        if (vms_dlm_rb_rec_parse_body(body, n, &r) == VMS_CODEC_OK) {
+            ok++;
+            if (r.id.name_len == 0 || r.id.name_len >= VMS_DLM_NAME_MAX ||
+                r.holder_lkid == 0)
+                bad_len++;
+        }
+        free(body);
+    }
+    ct_check(ok > 0, "rb_rec_parse_body: 100k (3/4 planted), no "
+                     "over-read/crash, and REACHED (non-vacuous)");
+    ct_check(bad_len == 0, "rb_rec_parse_body: every accepted record names "
+                           "a resource (1..31) and a non-zero own handle");
+}
+
 /* rd vms-20c: the op-0x0d RECORD parser, with its class gates planted so the
  * identity reader behind them is actually reached: cat 0x02 / op 0x0d at
  * body[8:10] and 0x0001 at body[12:14], a name length that is usually in range,
@@ -345,6 +385,7 @@ int main(void)
     fuzz_grant_valblk();
     fuzz_dir_reg();
     fuzz_rm_holder();
+    fuzz_rb_rec();
     fuzz_frame();
 
     return ct_summary("fuzz_codec_dlm");

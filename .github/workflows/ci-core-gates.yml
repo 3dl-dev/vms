@@ -138,6 +138,12 @@ jobs:
         run: |
           python3 tools/ci/check_docker_mirror.py --selftest
           python3 tools/ci/check_docker_mirror.py .
+      # vms-839: every GCC/binutils port patch carries a classified row in
+      # docs/selfhost/gcc-patch-audit.md, and no row outlives its patch.
+      - name: check_patch_audit.sh (every port patch is classified in the audit)
+        run: |
+          sh tools/cross-alpha-vms/test/check_patch_audit.sh --self-test .
+          sh tools/cross-alpha-vms/test/check_patch_audit.sh .
 
   merge-queue-gates:
     # Every gating workflow ends in the merge queue's required `gate` job, and

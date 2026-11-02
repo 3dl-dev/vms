@@ -279,7 +279,7 @@ exec_socket_setopt_int(exec_socket_t s, int level, int name, int val)
 	return rc;
 }
 
-/* Receive timeout (vms-a9e7): ms -> the receive sockbuf's sb_timo in ticks
+/* Receive timeout (vms-a9e7): ms -> the receive sockbuf's sb_timeo in ticks
  * (0 = block indefinitely); soreceive then fails EWOULDBLOCK on expiry, which
  * exec_socket_recv returns negated -- the same -EAGAIN the Linux twin yields. */
 int

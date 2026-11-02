@@ -636,7 +636,7 @@
  *        Carried as milliseconds, not a substrate SO_RCVTIMEO/timeval, so the
  *        caller names no host socket constant. 0/nonzero.
  *        Linux: WRITE_ONCE(sk->sk_rcvtimeo, msecs_to_jiffies(ms)) under lock_sock.
- *        NetBSD: so->so_rcv.sb_timo = mstohz(ms) under solock (contract-only twin).
+ *        NetBSD: so->so_rcv.sb_timeo = mstohz(ms) under solock (contract-only twin).
  *   int  exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out)
  *        read one integer socket option back off the LIVE socket. Returns 0 (+
  *        *out) for the supported whitelist (SO_KEEPALIVE/SO_REUSEADDR/SO_ERROR,

@@ -345,7 +345,9 @@ static int ell_split_dir(const char *dir, char *prefix, size_t psz,
         if (l >= ELL_COMPLEN) l = ELL_COMPLEN - 1;
         memcpy(comp[n], p, l); comp[n][l] = '\0'; n++;
         p += l;
-        if (*p == '.') p++;
+        /* the dot after a name separates it from the next one -- unless it
+         * begins an ellipsis ("SRCHT..." is SRCHT then "...") */
+        if (*p == '.' && !(p[1] == '.' && p[2] == '.')) p++;
     }
     for (int i = 0; i < n; i++)
         if (strpbrk(comp[i], "*%") || ell_is_ell(comp[i])) { first = i; break; }
@@ -645,6 +647,20 @@ static uint32_t rms_acp_search(void *fab_ptr)
                 fab->fab$l_sts = rs; nam->nam$l_sts = rs; return rs;
             }
             #undef VMS_SEARCH_MAX_CANDS
+        }
+
+        /* A spec with no version names the HIGHEST version of each file
+         * ("*.DAT" finds PUR.DAT;2, not PUR.DAT;1 as well); only ";*" asks
+         * for every version (VAX V7.3, docs/oracle/semantics/srch/
+         * SRCH.ALL.DAT / SRCH.COPY, rd vms-28c). The ACP's search pattern
+         * says "highest" with ";0". */
+        {
+            size_t pl = strlen(pattern);
+            if (pl > 0 && pattern[pl - 1] == ';' && pl + 1 < sizeof pattern) {
+                pattern[pl] = '0'; pattern[pl + 1] = '\0';
+            } else if (!strchr(pattern, ';') && pl + 2 < sizeof pattern) {
+                pattern[pl] = ';'; pattern[pl + 1] = '0'; pattern[pl + 2] = '\0';
+            }
         }
 
         if (ctx->walk) {

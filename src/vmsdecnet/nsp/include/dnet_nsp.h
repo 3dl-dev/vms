@@ -158,8 +158,14 @@ enum dnet_nsp_type {
     DNET_NSP_T_OTHACK       /* other-data ack (link-service/interrupt ack)        */
 };
 
-/* Generous cap on the opaque higher-layer payload an NSP PDU can carry. */
-#define DNET_NSP_MAX_DATA       1024
+/* The largest higher-layer payload an NSP data segment carries: the SEGSIZE
+ * OVMX requests in every Connect Initiate / Confirm (1459, the Ethernet
+ * segment size a VAX requests too) and the DAP BUFSIZ FAL advertises. It was
+ * 1024 while OVMX advertised 1459, so a real VAX FAL that filled its segments
+ * (a COPY or TYPE of a file over ~1 KB, a long DIRECTORY LIST) sent segments
+ * NETACP's decoder refused unacked; the VAX retransmitted, then disconnected
+ * "no response from object" (rd vms-6a4 live lab, 2026-11-02). */
+#define DNET_NSP_MAX_DATA       1459
 
 /* Decoded / to-be-encoded NSP message (a flat tagged record). Only the fields
  * relevant to `type` are meaningful; the rest are zero after a decode. */

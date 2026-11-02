@@ -3191,6 +3191,17 @@ EOF
 *** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
 VAX3's WAITING record is installed
 this node masters RMT1 now; nothing is sent
+  5d6: VAX3's 0xfa re-homes it, still waiting, nothing ended
+  5d6: VAX3's WAITING record is installed in the regain window
+  5d6: hung -- this node has not mastered RMT1 and its waiter is queued
+  5d6: the regain window makes this node RMT1's master
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+*** 5d6: our EX waiter is NOT granted before VAX3's record is in, though hung windows closed since the departure ***
+*** 5d6: quorum lost -- the queued PR -> EX conversion is NOT ended and nothing is sent ***
+*** 5d6: quorum lost at VAX1's departure -- the queued waiter is NOT ended (no SS$_UNSUPPORTED) ***
+*** 5d6: the hang's beats and the transition's end leave it queued -- no out-of-window stop ***
+*** 5d6: the regain window closes: our waiter, first in the queue, is GRANTED EX ***
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -3214,6 +3225,12 @@ EOF
 *** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
 VAX3's WAITING record is installed
 this node masters RMT1 now; nothing is sent
+  5d6: VAX3's 0xfa re-homes it, still waiting, nothing ended
+  5d6: VAX3's WAITING record is installed in the regain window
+  5d6: the regain window makes this node RMT1's master
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+*** 5d6: the regain window closes: our waiter, first in the queue, is GRANTED EX ***
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -3227,6 +3244,7 @@ EOF
         why)          echo "the promotion grants at once, before the other survivors' records are installed: a waiter can be granted over a lock a later record names.";;
         require_fail) hd_lines <<'EOF'
 *** our EX waiter is NOT granted before the survivors' records are in ***
+*** 5d6: our EX waiter is NOT granted before VAX3's record is in, though hung windows closed since the departure ***
 EOF
                       ;;
         esac;;
@@ -3352,6 +3370,8 @@ EOF
 *** EVERY NAMED CELL equals VAX3's real SUB record (PID, CW/CW, the parent pair, identity, tail) ***
 the ROOT goes to VAX2 carrying RMLVB-0123456789 at 1 (lab874f frame 5322)
 *** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -3443,6 +3463,12 @@ VAX2's 0xf9 (frame 23) is the answer
 release 6: one record out
 release 6: the ROOT goes
 the late 0xfa re-homes the root
+  5d6: VAX3's 0xfa re-homes it, still waiting, nothing ended
+  5d6: VAX3's WAITING record is installed in the regain window
+  5d6: quorum regained; the regain transition's window sends the granted ROOT first
+  5d6: the regain window makes this node RMT1's master
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;

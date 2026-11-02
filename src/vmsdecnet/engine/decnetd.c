@@ -4855,6 +4855,42 @@ static int netacp_running(void)
     return (r == 1 && dl > 0) ? 1 : 0;
 }
 
+/*
+ * ONE NETACP PER NODE (rd vms-365). A node runs one network ACP: it owns the
+ * node's datalink, its logical-link pool and the _NET: request mailbox. A
+ * second no-argv DECNETD (a RUN/DETACHED of the image under any process name
+ * other than NETACP, which the executive already refuses -DUPLNAM) used to
+ * come up as a second full NETACP beside the first -- a second pool and a
+ * second engine racing the first for every frame, and on a swapless VAX the
+ * memory that left the next fork with none (PRCLOST). It is LIVE, not merely
+ * published, when DNET$NETACP_REQ names a mailbox that still exists: NETACP's
+ * request mailbox is temporary, so it goes with the process, and a logical a
+ * dead NETACP left behind must not block the next STARTNET. Anything but
+ * "no such device" (a protection refusal included) means it exists.
+ * Returns 1 live, 0 none, -1 no executive to ask.
+ */
+static int netacp_live(void)
+{
+    char dev[64];
+    uint16_t dl = 0;
+    int r = vms_kif_lnm_translate(VMS_LNM_TBL_SYSTEM, NETACP_REQ_LOGNAM, 0, dev,
+                                  sizeof dev - 1, &dl, NULL, NULL);
+    if (r < 0) return -1;
+    if (r != 1 || dl == 0) return 0;
+    dev[dl] = '\0';
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    struct dsc$descriptor_s d;
+    sethost_mkdesc(&d, dev);
+    uint16_t chan = 0;
+    uint32_t st = sys$assign(&d, &chan, 0, NULL);
+    if (st & 1) {
+        sys$dassgn(chan);
+        return 1;
+    }
+    return (st == SS$_NOSUCHDEV || st == SS$_IVDEVNAM) ? 0 : 1;
+}
+
 static int netcli_assign(struct netcli *c)
 {
     memset(c, 0, sizeof *c);
@@ -8954,6 +8990,19 @@ int main(int argc, char **argv)
         }
     }
 
+    /* ONE NETACP PER NODE (rd vms-365, netacp_live above). The persistent
+     * daemon (no argv) that finds a NETACP already serving this node does not
+     * become a second one: it says so and exits at once, before it opens a
+     * datalink or touches its session pool. (Diagnostic runs with flags --
+     * --iface lab runs, --show-executor -- are not NETACPs and are unaffected.) */
+    if (argc == 1 && netacp_live() == 1) {
+        fprintf(stderr, "DECNETD-E-NETACPACT, a NETACP is already serving this node"
+                        " (%s names its live request mailbox); a node runs one"
+                        " NETACP -- this process is not starting a second\n",
+                NETACP_REQ_LOGNAM);
+        return 1;
+    }
+
     /* RESOLVE THE DATALINK INTERFACE. When --iface was not given (the persistent
      * NETACP daemon STARTNET.COM starts with no argv), auto-detect the primary
      * NIC rather than binding the compile-time "br0" -- inside a booted node's
@@ -9273,9 +9322,19 @@ int main(int argc, char **argv)
 
     /* The logical links this node holds -- inbound sessions AND (rd vms-dda)
      * outbound links local processes open through _NET: -- a bounded pool of
-     * the executor's MAXIMUM LINKS (rd vms-f91). */
+     * the executor's MAXIMUM LINKS (rd vms-f91).
+     *
+     * MEMORY (rd vms-365). A slot is ~70-77 KB (the CTERM host role and the
+     * outbound receive queue), so the NETACP_POOL_CAP table is ~4.5-5 MB. It
+     * is zero-filled static storage that this process enters once: it was
+     * ALREADY zero, and the memset that used to clear it again wrote every
+     * page of all 64 slots -- ~4.5 MB made resident for a pool of at most
+     * MAXIMUM LINKS (default 32) slots, nearly all of them idle. On a swapless
+     * VAX that left the node ~300 KB free and the next fork child died ENOMEM
+     * (PRCLOST). Untouched, a slot costs nothing until a link takes it (its
+     * `used` word: one page). Only slots below MAXIMUM LINKS are ever
+     * reached. */
     static struct netacp_slot slots[NETACP_POOL_CAP];
-    memset(slots, 0, sizeof slots);
     uint16_t next_lla = 0x2100;
     netacp_vnodes_load();              /* the network starts: volatile <- permanent */
     memcpy(g_netacp_self, eng.my_id, 6);

@@ -1705,8 +1705,15 @@ run_dcl_acceptance_battery() {
     #      the detached process) is test_syssvc_creprc_inherit C on the kmod leg;
     #   3. the same request from a creator WITHOUT SETPRV is REFUSED
     #      %RUN-F-CREPRC -SYSTEM-F-NOPRIV, and nothing is created.
-    # (The subject image is DECNETD.EXE, shipped on every rail; with no argv it
-    # exits at once -- creation, not the image's work, is what is pinned.)
+    # (The subject image is DECNETD.EXE, shipped on every rail. Creation, not the
+    # image's work, is what is pinned -- but the subject must not outlive the
+    # check: it used to be assumed that DECNETD "with no argv exits at once",
+    # and that was FALSE -- FF75A came up as a SECOND full NETACP beside the one
+    # STARTNET started above, and on a swapless VAX the memory it took left the
+    # next fork ENOMEM (%RUN-F-CREPRC -OVMX-F-PRCLOST, rd vms-365). It exits at
+    # once now because a node runs ONE NETACP: a no-argv DECNETD that finds a
+    # live one refuses (DECNETD-E-NETACPACT), and where none could start (no
+    # datalink) it fails the same way that one did. Point 4 below pins that.)
     run_cmd 'RUN/DETACHED/PROCESS_NAME=FF75A/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
     must_have "$SEG" '%RUN-S-PROC_ID' \
         "RUN/DETACHED [vms-ff75]: the interactive SYSTEM session creates a detached process (no %RUN-F-CREPRC -SYSTEM-F-NOPRIV)"
@@ -1725,6 +1732,25 @@ run_dcl_acceptance_battery() {
         "RUN/DETACHED [vms-ff75]: a refused identity creates NOTHING"
     negctl "$SEG" 'FF75N' "RUN/DETACHED creator-authorized identity"
     run_cmd 'SET PROCESS/PRIVILEGES=SETPRV'
+    #   4. (rd vms-365) the detached subjects EXIT: neither FF75A nor FF75C stays
+    #      up as a second NETACP. A process exit is asynchronous to the RUN that
+    #      created it, so SHOW SYSTEM is read until both rows are gone, within a
+    #      bound (30 s); a row still listed at the bound is a FAIL.
+    local ff_gone=0 ff_try
+    for ff_try in 1 2 3 4 5 6 7 8 9 10; do
+        run_cmd 'SHOW SYSTEM'
+        if ! printf '%s\n' "$SEG" | grep -qE '^[0-9A-Fa-f]{8} FF75[AC] '; then
+            ff_gone=1; break
+        fi
+        sleep 2
+    done
+    if [ "$ff_gone" = 1 ]; then
+        ok "RUN/DETACHED [vms-365]: the detached DECNETD subjects exited -- a no-argv DECNETD on a node whose NETACP serves does not become a second NETACP"
+    else
+        bad "RUN/DETACHED [vms-365]: FF75A/FF75C are still listed by SHOW SYSTEM 30 s after creation -- a no-argv DECNETD stayed up (a second NETACP on the node)"
+    fi
+    must_have "$SEG" 'SYSTEM' "RUN/DETACHED [vms-365]: the SHOW SYSTEM read for the exit check is a real process list"
+    negctl "$SEG" 'SHOW SYSTEM' "RUN/DETACHED [vms-365] subject-exit check"
 
     # =======================================================================
     # SESSION PRIMITIVE (vms-3e9) -- $CREPRC creates the session, LOGINOUT

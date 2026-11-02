@@ -290,8 +290,10 @@ static ssize_t rms_io_write_acp(rms_file_t *f, const void *buf, size_t n)
         a.buffer = (uint64_t)(uintptr_t)(p + done);
 
         st = vms_kif_acp_writevb(&a);
-        if (!$VMS_STATUS_SUCCESS(st))
+        if (!$VMS_STATUS_SUCCESS(st)) {
+            f->io_sts = st;
             return done ? (ssize_t)done : -1;
+        }
 
         f->cursor += a.xferred;
         done      += a.xferred;

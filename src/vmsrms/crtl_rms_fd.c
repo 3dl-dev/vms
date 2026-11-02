@@ -1831,10 +1831,14 @@ char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
 /* ------------------------------------------------------------ install ----- */
 
 /* Turn the RMS file layer on for this image: from here every C RTL file call
- * that names an RMS file goes to RMS. decc$main does it for a DECC$SHR image;
+ * that names an RMS file goes to RMS, and the C RTL's clock and time zone are
+ * the system's (crtl_time.c). decc$main does it for a DECC$SHR image;
  * a statically linked C image's start-up (vms-003b) calls it directly. */
+void ovmx_crtl_time_install(void);   /* crtl_time.c: $GETUTC + the TZ logicals (vms-593) */
+
 void ovmx_crtl_fd_install(void)
 {
+    ovmx_crtl_time_install();
     __ovmx_sys_hook = rms_hook;
     __ovmx_crtl_fab_query = fab_query;
     TR("crtlfd: hook installed", (uintptr_t)rms_hook);

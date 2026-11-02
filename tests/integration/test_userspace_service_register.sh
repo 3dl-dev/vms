@@ -898,6 +898,11 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # "libc.h"/"stdio_impl.h" and define only exit() / __stdio_exit(), no sys$ symbol.
 # Its real compile + the exit nm gate run in build-musl.sh; the alpha crtl-fd gate
 # proves the behaviour. Anchored + file-level.
+# .../src/time/alpha-dec-vms/clock_gettime.c and __tz.c (vms-593) are the same kind
+# again: musl's own files with the C RTL time hooks, including musl's INTERNAL
+# "atomic.h"/"../time_impl.h"; they define no sys$ symbol (the hooks' sys$getutc/
+# sys$trnlnm calls live in src/vmsrms/crtl_time.c, which IS scanned). Their real
+# compiles are build-musl.sh (alpha) and src/crtl-musl-x86_64/build-musl.sh.
 # src/vmsrms/crtl_rms_fd.c (vms-b90) is the C RTL file layer DECC$SHR's
 # RMS-backed pass links: it hooks the musl-arch syscall funnel and fills musl's
 # arch-internal struct kstat (musl-arch kstat.h), so it only compiles against
@@ -923,7 +928,7 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # the alpha-dec-vms client headers (musl-arch bits/stat.h: st_ino[3], st_fab_*,
 # the __OVMX_DECC_STAT_FIELDS list); a host libc has neither. They define no
 # sys$ service; their real compiles are mk_decc_shr.sh and the crtl-fd gate.
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^tools/cross-alpha-vms/musl-arch/src/exit/alpha-dec-vms/exit\.c$|^tools/cross-alpha-vms/musl-arch/src/stdio/alpha-dec-vms/__stdio_exit\.c$|^src/vmsrms/crtl_rms_fd\.c$|^src/vmsrms/rms_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/vms_abi_headers\.c$|^tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test\.c$|^src/vmslink/ovmx_decc_stat\.c$|^tools/cross-alpha-vms/joint-e2e/crtl_fd_test\.c$|^src/libvms/syssvc/sys_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/hostabi_bfd_shapes\.c$"
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$|^tools/cross-alpha-vms/musl-arch/src/process/alpha-dec-vms/_Fork\.c$|^tools/cross-alpha-vms/musl-arch/src/exit/alpha-dec-vms/exit\.c$|^tools/cross-alpha-vms/musl-arch/src/stdio/alpha-dec-vms/__stdio_exit\.c$|^tools/cross-alpha-vms/musl-arch/src/time/alpha-dec-vms/clock_gettime\.c$|^tools/cross-alpha-vms/musl-arch/src/time/alpha-dec-vms/__tz\.c$|^src/vmsrms/crtl_rms_fd\.c$|^src/vmsrms/rms_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/vms_abi_headers\.c$|^tools/cross-alpha-vms/joint-e2e/vmsabi_rms_test\.c$|^src/vmslink/ovmx_decc_stat\.c$|^tools/cross-alpha-vms/joint-e2e/crtl_fd_test\.c$|^src/libvms/syssvc/sys_vmsabi\.c$|^tools/cross-alpha-vms/include-surface/hostabi_bfd_shapes\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

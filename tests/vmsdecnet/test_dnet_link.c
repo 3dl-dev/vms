@@ -361,6 +361,59 @@ static void test_link_service(void)
           "the reply is an other-data ack (0x14) acking other-data seg 1");
 }
 
+/* rd vms-3106: a restarted node must not open its first link with the SRCADDR of
+ * a link a peer still holds from before the restart. Before the fix every
+ * NETACP start began at 0x2100 (and the one-link clients always used 0x2001),
+ * so the real VAX saw the new CI as part of its stale link and refused it with
+ * reason 38, or did not answer at all. */
+static int held_by_peer_ctx(uint16_t a, void *ctx)
+{
+    const uint16_t *held = ctx;
+    for (int i = 0; held[i]; i++) if (held[i] == a) return 1;
+    return 0;
+}
+
+static void test_lla_alloc(void)
+{
+    printf("-- logical-link address allocation (rd vms-3106) --\n");
+    /* Seeds stay inside [DNET_LLA_MIN, 0xFFFF] and never yield 0. */
+    int in_range = 1;
+    for (uint64_t e = 0; e < 4096; e++) {
+        uint16_t v = dnet_lla_seed(e * 0x100000001B3ull);
+        if (v < DNET_LLA_MIN || v == 0) in_range = 0;
+    }
+    check(in_range, "every seed lies in [DNET_LLA_MIN, 0xFFFF]");
+
+    /* Two starts, with different entropy, begin at different addresses. The
+     * restart scenario: start 1's first link is still held by the peer, and
+     * start 2's first link must not reuse it. */
+    unsigned distinct = 0;
+    for (uint64_t boot = 1; boot <= 1000; boot++) {
+        uint16_t c1 = dnet_lla_seed(boot * 0x9E3779B97F4A7C15ull);
+        uint16_t c2 = dnet_lla_seed((boot + 1) * 0x9E3779B97F4A7C15ull);
+        uint16_t first1 = dnet_lla_take(&c1, NULL, NULL);
+        uint16_t first2 = dnet_lla_take(&c2, NULL, NULL);
+        if (first1 != first2) distinct++;
+    }
+    check(distinct >= 995, "consecutive starts open their first link at different addresses");
+
+    /* take() advances, wraps 0xFFFF -> DNET_LLA_MIN, and never returns 0. */
+    uint16_t cur = 0xFFFE;
+    uint16_t a = dnet_lla_take(&cur, NULL, NULL);
+    uint16_t b = dnet_lla_take(&cur, NULL, NULL);
+    uint16_t c = dnet_lla_take(&cur, NULL, NULL);
+    check(a == 0xFFFE && b == 0xFFFF && c == DNET_LLA_MIN, "the cursor wraps inside the range");
+    cur = 0;   /* a zeroed cursor is lifted into the range */
+    check(dnet_lla_take(&cur, NULL, NULL) == DNET_LLA_MIN, "a cursor below the range starts at DNET_LLA_MIN");
+
+    /* An address a live link holds is skipped. */
+    uint16_t held[] = { 0x3000, 0x3001, 0 };
+    cur = 0x3000;
+    check(dnet_lla_take(&cur, held_by_peer_ctx, held) == 0x3002,
+          "addresses held by live links are skipped");
+    check(dnet_lla_take(NULL, NULL, NULL) == 0, "a null cursor is refused");
+}
+
 int main(void)
 {
     printf("test_dnet_link: DECnet Phase IV NSP logical-link connection service\n");
@@ -369,6 +422,7 @@ int main(void)
     test_engine_e2e();
     test_engine_link_tick();
     test_link_service();
+    test_lla_alloc();
     if (failures == 0) { printf("test_dnet_link: ALL CHECKS PASSED\n"); return 0; }
     printf("test_dnet_link: %d CHECK(S) FAILED\n", failures);
     return 1;

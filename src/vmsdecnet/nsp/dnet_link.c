@@ -431,3 +431,33 @@ int dnet_link_tick(struct dnet_link *lk, dnet_tick_t now,
     lk->ci_deadline = now + DNET_LINK_CI_RETRANS_SECS;
     return DNET_LINK_OK;
 }
+
+/* ---- logical-link address allocation (rd vms-3106) ---- */
+
+uint16_t dnet_lla_seed(uint64_t entropy)
+{
+    /* splitmix64 finaliser: every entropy bit reaches the low 16 bits. */
+    uint64_t z = entropy + 0x9E3779B97F4A7C15ull;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    const uint32_t span = 0x10000u - DNET_LLA_MIN;
+    return (uint16_t)(DNET_LLA_MIN + (uint32_t)(z % span));
+}
+
+uint16_t dnet_lla_take(uint16_t *cursor,
+                       int (*in_use)(uint16_t addr, void *ctx), void *ctx)
+{
+    if (!cursor)
+        return 0;
+    const uint32_t span = 0x10000u - DNET_LLA_MIN;
+    for (uint32_t tries = 0; tries < span; tries++) {
+        uint16_t c = *cursor;
+        if (c < DNET_LLA_MIN)
+            c = (uint16_t)DNET_LLA_MIN;
+        *cursor = (c == 0xFFFFu) ? (uint16_t)DNET_LLA_MIN : (uint16_t)(c + 1u);
+        if (!in_use || !in_use(c, ctx))
+            return c;
+    }
+    return 0;
+}

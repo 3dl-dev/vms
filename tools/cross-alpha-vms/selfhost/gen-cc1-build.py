@@ -29,7 +29,7 @@ The trees on OVMX (rooted logicals the proof defines):
 --only N writes a procedure for the first N compiles only (no archives, no
 link): a timing probe. --trace N types the response file of the first N
 compiles. --extra ARG (repeatable) adds ARG to every compile (a diagnosis:
--ftime-report). --pick REGEX keeps only the compiles whose object name
+-ftime-report); --link-extra ARG to the link (-v: the driver's and ld's commands). --pick REGEX keeps only the compiles whose object name
 matches (a probe of chosen sources; no archives, no link). --shard K/N keeps
 every Nth compile from the Kth (1-based) in GCC's build order, no archives and
 no link: one of N CI jobs that build cc1 together (rd vms-b85); the job that
@@ -170,6 +170,11 @@ def main():
     while "--extra" in argv:
         k = argv.index("--extra")
         extra.append(argv[k + 1])
+        del argv[k:k + 2]
+    link_extra = []
+    while "--link-extra" in argv:
+        k = argv.index("--link-extra")
+        link_extra.append(argv[k + 1])
         del argv[k:k + 2]
     if "--trace" in argv:
         k = argv.index("--trace")
@@ -346,7 +351,7 @@ def main():
             w("$ WRITE SYS$OUTPUT \"CC1B: AR %s %d members FAILS=''FAILS'\"" % (lib, len(mem)))
         # the link: the record's arguments, objects and archives moved to GCCOBJ
         la, cwd, P32 = link["args"], link["cwd"], r["P32"]
-        largs = ["-BSYS$SYSTEM:"]
+        largs = ["-BSYS$SYSTEM:"] + link_extra
         i = 0
         while i < len(la):
             x = la[i]

@@ -2687,7 +2687,7 @@ PYEOF3
       '  printf ("hello from cc1 on OVMX %d\n", sq (7));' '  return 0;' '}' > "$GATE_ROOT/cc1bimg/hello.c"
     tar xf "$_hg/gccsrc.tar" -C "$GATE_ROOT/cc1bimg" gccsrc/PLAN
     python3 -I "$REPO/tools/cross-alpha-vms/selfhost/gen-cc1-build.py" "$GATE_ROOT/cc1bimg/gccsrc/PLAN/REC" \
-      "$GATE_ROOT/cc1bimg/gccsrc/PLAN/ROOTS" "$GATE_ROOT/cc1bimg/BUILD_CC1.COM" ${CC1B_ONLY:+--only "$CC1B_ONLY"} --trace "${CC1B_TRACE:-1}" ${CC1B_EXTRA:+--extra "$CC1B_EXTRA"} ${CC1B_PICK:+--pick "$CC1B_PICK"} ${CC1B_SHARD:+--shard "$CC1B_SHARD"} \
+      "$GATE_ROOT/cc1bimg/gccsrc/PLAN/ROOTS" "$GATE_ROOT/cc1bimg/BUILD_CC1.COM" ${CC1B_ONLY:+--only "$CC1B_ONLY"} --trace "${CC1B_TRACE:-1}" ${CC1B_EXTRA:+--extra "$CC1B_EXTRA"} ${CC1B_LINK_EXTRA:+--link-extra "$CC1B_LINK_EXTRA"} ${CC1B_PICK:+--pick "$CC1B_PICK"} ${CC1B_SHARD:+--shard "$CC1B_SHARD"} \
       | tee "$GATE_ROOT/cc1bimg/gen.log" || die "gen-cc1-build.py failed"
     _ntu=$(grep -oE '^gen-cc1-build: [0-9]+ compiles' "$GATE_ROOT/cc1bimg/gen.log" | awk '{print $2}')
     [ -n "$_ntu" ] && [ "$_ntu" -gt 0 ] || die "BUILD_CC1.COM has no compiles"

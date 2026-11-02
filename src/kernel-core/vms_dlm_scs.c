@@ -267,7 +267,11 @@ struct vms_dlm_scs {
 				       /* a VMS system is its own rung)        */
 	uint32_t dir_unanswered;      /* no table / full: not answered        */
 	uint32_t dir_misaddressed;    /* the lookup's key is not ours by OUR  */
-				       /* vector (served anyway, as VMS does)  */
+				       /* vector (answered only from an entry  */
+				       /* naming a master, rd vms-b4d)         */
+	uint32_t dir_undirected_refused; /* rd vms-b4d: ... and no entry, so */
+				       /* only "you master it" could answer:  */
+				       /* not answered                         */
 	uint32_t dir_regs_seen;       /* op-0x0d registrations recorded       */
 	uint32_t dir_tr_lookups;      /* op-0x08 barrier lookups answered     */
 	uint32_t dir_tr_redirect_held;/* op-0x08 whose answer would redirect: */
@@ -306,6 +310,7 @@ struct vms_dlm_scs {
 	uint8_t  dir_said_self_held;
 	uint8_t  dir_said_unanswered;
 	uint8_t  dir_said_misaddressed;
+	uint8_t  dir_said_undirected;
 	uint8_t  dir_said_tr_redirect;
 	uint8_t  dir_said_mixed;
 
@@ -590,13 +595,15 @@ static void dlm_arm_dir_say(struct vms_dlm_scs *d, uint8_t *said,
 static enum vms_dlm_dir_outcome dlm_arm_dir_ask(struct vms_dlm_scs *d,
 						const struct vms_dlm_res_ident *id,
 						vms_csid_t from,
+						int directed_here,
 						vms_csid_t *out_master)
 {
 	enum vms_dlm_dir_outcome o;
 
 	exec_lock(&d->dir_lock);
-	o = vms_dlm_dir_lookup(&d->dir, id, from,
-			       (vms_csid_t)vms_lock_dlm_local_csid(), out_master);
+	o = vms_dlm_dir_lookup_directed(&d->dir, id, from,
+			       (vms_csid_t)vms_lock_dlm_local_csid(),
+			       directed_here, out_master);
 	exec_unlock(&d->dir_lock);
 	return o;
 }
@@ -2352,6 +2359,7 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 	vms_csid_t master = 0u;
 	uint32_t written = 0u;
 	uint8_t status;
+	int directed;
 
 	/* p. 6-51 outcome (a) FIRST: a name this node masters is resolved as the
 	 * master, never answered from the directory table. */
@@ -2383,14 +2391,31 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			"not master: not answered");
 		return -1;
 	}
-	if (!dlm_arm_dir_is_ours(d, id->hash, 1)) {
+	/*
+	 * rd vms-b4d: the vector's answer for the name, read now, decides
+	 * whether this node may say "you master it". A request REDIRECTED here
+	 * by a directory whose entry outlived our mastery reads exactly like a
+	 * lookup (lab1b68 wire-1610, 6667 vs 6669); answering it 0xf9 from an
+	 * empty table made VAX1 a second master of WKLD. Undirected, only an
+	 * entry naming a master is answered; "you master it" never is.
+	 */
+	directed = dlm_arm_dir_is_ours(d, id->hash, 1);
+	if (!directed) {
 		d->dir_misaddressed++;
 		dlm_arm_dir_say(d, &d->dir_said_misaddressed,
 			"%DLM, a directory lookup arrived for a resource this "
 			"node's own weight vector does not direct here: answered "
-			"from this node's entries, as the directory node does");
+			"only from an entry naming its master");
 	}
-	o = dlm_arm_dir_ask(d, id, req->from_csid, &master);
+	o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);
+	if (o == VMS_DLM_DIR_ANSWER_NONE && !directed) {
+		d->dir_undirected_refused++;
+		dlm_arm_dir_say(d, &d->dir_said_undirected,
+			"%DLM, a request for a resource this node neither masters "
+			"nor is the directory of, and holds no entry for: not "
+			"answered \"you master it\"");
+		return -1;
+	}
 	if (o == VMS_DLM_DIR_ANSWER_NONE) {
 		d->dir_unanswered++;
 		dlm_arm_dir_say(d, &d->dir_said_unanswered,

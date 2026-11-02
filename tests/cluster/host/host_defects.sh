@@ -333,7 +333,10 @@ dlm-1b68-waiter-granted-before-settle
 dlm-1b68-survivor-never-ended
 dlm-1b68-survivor-block-dropped
 dlm-5d6-rebuild-runs-in-quorum-hang
-dlm-5d6-hold-lifted-in-quorum-hang"
+dlm-5d6-hold-lifted-in-quorum-hang
+dlm-b4d-adopted-tree-dir-untold
+dlm-b4d-undirected-answers-you
+dlm-b4d-undirected-answers-you-fuzz"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3349,6 +3352,55 @@ EOF
                       ;;
         esac;;
 
+    dlm-b4d-adopted-tree-dir-untold)
+        case "$_f" in
+        facility)     echo "a tree this node mastered by REMASTER hand-over records the directory the vector names for it, so the op-0x04 removal goes there when its last lock goes (vms_lock.c dlm_adopt_note_directory, rd vms-b4d)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_stale_directory";;
+        isolation)    echo "isolated";;
+        why)          echo "the adopted root's dir_told_csid is never set, so its release posts no removal: the directory keeps naming this node and redirects the old master's next \$ENQ here -- the lab1b68 wire-1610 two-master sequence.";;
+        require_fail) hd_lines <<'EOF'
+b4d: the last lock going posts exactly one directory removal
+b4d: its removal goes to the old master, the directory it named
+b4d: step 2, VAX2's directory no longer names OVMXE
+b4d: step 3, VAX2 answers VAX1 you-master-it, not a redirect to OVMXE
+EOF
+                      ;;
+        esac;;
+
+    dlm-b4d-undirected-answers-you)
+        case "$_f" in
+        facility)     echo "a node the lock directory weight vector does NOT direct a name to never answers a request for it 'you master it' from no entry (vms_dlm_dir_lookup_directed, rd vms-b4d)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "test_dlm_stale_directory";;
+        isolation)    echo "isolated";;
+        why)          echo "the vector's answer is ignored, so an op-0x01 redirected here by a stale directory entry is answered 0xf9 from an empty table and recorded: the requester becomes a second master.";;
+        require_fail) hd_lines <<'EOF'
+b4d: an undirected name with no entry is never answered you-master-it
+b4d: an undirected name with no entry is not answered at all
+b4d: nothing is recorded for an undirected name
+b4d: the refusal is counted (undirected_refused)
+b4d: answered_you stays 0 for the undirected request
+b4d: an undirected entry naming the requester is not answered
+b4d: step 3', a redirected op-0x01 at OVMXE is not answered you-master-it
+EOF
+                      ;;
+        esac;;
+
+    dlm-b4d-undirected-answers-you-fuzz)
+        case "$_f" in
+        facility)     echo "the op-0x01 directory fuzz holds the undirected-never-0xf9 property over random bodies and table state (fuzz_dlm_dir_directed, rd vms-b4d)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "fuzz_dlm_dir_directed";;
+        isolation)    echo "isolated";;
+        why)          echo "the same mutation as dlm-b4d-undirected-answers-you, observed by the fuzz: undirected names with no entry are answered 0xf9 and recorded.";;
+        require_fail) hd_lines <<'EOF'
+fuzz-b4d: an undirected name with no entry is never answered you-master-it
+fuzz-b4d: an undirected lookup records nothing
+EOF
+                      ;;
+        esac;;
+
     dlm-rebuild-0xf9-not-adopted)
         case "$_f" in
         facility)     echo "the failover rebuild's 0xf9 (rd vms-874f): the directory told THIS node it now masters a tree whose master LEFT, and the table adopts it through the adoption engine -- whose close turns every proxy of ours in it into a local lock -- and records the authority under which survivors' records are then installed";;
@@ -4690,6 +4742,17 @@ apply_edit() {
 
     dlm-1b68-survivor-block-dropped)
         sed -i 's|^\treturn r->settled \&\&$|\treturn 0 \&\& r->settled \&\& /* NEGCTL dlm-1b68-survivor-block-dropped */|' "$_file";;
+
+    dlm-b4d-adopted-tree-dir-untold)
+        # `        root->dir_told_csid = dir;` is unique (dlm_adopt_note_directory).
+        sed -i 's|^        root->dir_told_csid = dir;$|        (void)0; /* NEGCTL dlm-b4d-adopted-tree-dir-untold */|' "$_file";;
+
+    dlm-b4d-undirected-answers-you)
+        # `\tif (directed_here)` is unique (vms_dlm_dir_lookup_directed).
+        sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you */|' "$_file";;
+
+    dlm-b4d-undirected-answers-you-fuzz)
+        sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you-fuzz */|' "$_file";;
 
     dlm-rebuild-0xf9-not-adopted)
         # `if (g.outcome == (uint8_t)VMS_DLM_DIR_YOU_MASTER && t->await_root &&` is unique.

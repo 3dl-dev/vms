@@ -269,6 +269,29 @@ enum vms_dlm_dir_outcome vms_dlm_dir_lookup(struct vms_dlm_dir *d,
 	return VMS_DLM_DIR_ANSWER_YOU;
 }
 
+enum vms_dlm_dir_outcome vms_dlm_dir_lookup_directed(struct vms_dlm_dir *d,
+					const struct vms_dlm_res_ident *id,
+					vms_csid_t requester, vms_csid_t self,
+					int directed_here,
+					vms_csid_t *out_master)
+{
+	const struct vms_dlm_dir_entry *e;
+
+	if (directed_here)
+		return vms_dlm_dir_lookup(d, id, requester, self, out_master);
+	if (d == (struct vms_dlm_dir *)0 || id == (const struct vms_dlm_res_ident *)0 ||
+	    out_master == (vms_csid_t *)0 || requester == 0u)
+		return VMS_DLM_DIR_ANSWER_NONE;
+	e = vms_dlm_dir_find(d, id);
+	if (e == (const struct vms_dlm_dir_entry *)0 || e->master == requester) {
+		/* Only "you master it" could answer this, and this node is not
+		 * the directory that may say so. */
+		d->undirected_refused++;
+		return VMS_DLM_DIR_ANSWER_NONE;
+	}
+	return vms_dlm_dir_lookup(d, id, requester, self, out_master);
+}
+
 int vms_dlm_dir_claim_self(struct vms_dlm_dir *d,
 			   const struct vms_dlm_res_ident *id,
 			   vms_csid_t master)

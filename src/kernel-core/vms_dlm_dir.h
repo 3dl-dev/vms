@@ -140,6 +140,10 @@ struct vms_dlm_dir {
 				   /* resolves the request (Davis p. 6-51)     */
 	uint32_t own_lookups;      /* this executive's own $ENQ consulted this */
 				   /* directory about a resource it holds      */
+	/* rd vms-b4d. */
+	uint32_t undirected_refused;/* a request for a name the vector directs */
+				   /* ELSEWHERE that only a "you master it"    */
+				   /* could answer: nothing recorded, no answer*/
 };
 
 enum vms_dlm_dir_outcome {
@@ -187,6 +191,31 @@ enum vms_dlm_dir_outcome vms_dlm_dir_lookup(struct vms_dlm_dir *d,
 					    vms_csid_t requester,
 					    vms_csid_t self,
 					    vms_csid_t *out_master);
+
+/*
+ * THE SAME LOOKUP, FOR A NAME THE VECTOR DOES NOT DIRECT HERE (rd vms-b4d).
+ *
+ * An op-0x01 that names a resource reads the same whether it is a LOOKUP or a
+ * request a directory REDIRECTED here (lab1b68 wire-1610: VAX1's 6667 to VAX2
+ * and 6669 to OVMXE differ only in the envelope). Only a node that masters the
+ * name, or the directory the vector names for it, may answer it. A node that is
+ * neither and answers "you master it" makes the requester a SECOND master: VAX2
+ * named OVMXE, OVMXE answered VAX1 0xf9 from an empty table, and VAX1 and OVMXE
+ * each granted WKLD at EX.
+ *
+ * `directed_here` is the vector's answer for the name. When it is 1 this is
+ * exactly vms_dlm_dir_lookup. When it is 0, an entry naming another master (a
+ * REDIRECT) or this node (SELF) is answered as before, and everything that could
+ * only be answered YOU -- no entry, or an entry naming the requester -- returns
+ * NONE, records nothing, and counts `undirected_refused`. A real former master
+ * answers 0xf7 there (rd vms-e09 R4, 5 specimens in L2); rd vms-657 holds that
+ * shape until a held-out set grounds it, so the honest floor is no answer.
+ */
+enum vms_dlm_dir_outcome vms_dlm_dir_lookup_directed(struct vms_dlm_dir *d,
+					const struct vms_dlm_res_ident *id,
+					vms_csid_t requester, vms_csid_t self,
+					int directed_here,
+					vms_csid_t *out_master);
 
 /*
  * THIS NODE IS ABOUT TO MASTER THIS RESOURCE -- record it in its own directory

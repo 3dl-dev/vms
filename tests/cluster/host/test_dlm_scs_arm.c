@@ -473,11 +473,20 @@ static void arm_bindings(void)
 	has("if (master == vms_lock_dlm_local_csid() || dlm_arm_is_member(d, master))\n\t\treturn 0;",
 	    "... whose proxies name a master that is neither this node nor a "
 	    "member of the cluster");
-	has("o = dlm_arm_dir_ask(d, id, req->from_csid, &master);",
+	has("o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
 	    "the outcome comes from this node's own directory entries");
-	has("vms_dlm_dir_lookup(&d->dir, id, from,",
+	has("vms_dlm_dir_lookup_directed(&d->dir, id, from,",
 	    "... through the one accessor that holds the table's leaf lock, "
 	    "because the LOCK ENGINE reads the table too now (rd vms-025)");
+	/* rd vms-b4d: whether this node may say "you master it" is the
+	 * vector's answer for the name, read on this request. */
+	before("directed = dlm_arm_dir_is_ours(d, id->hash, 1);",
+	       "o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
+	       "the vector is read for the name before the table is asked");
+	before("if (o == VMS_DLM_DIR_ANSWER_NONE && !directed) {",
+	       "if (vms_dlm_dir_answer_build(req->body, req->len, status,",
+	       "an undirected request the table cannot answer from an entry "
+	       "returns before any answer is built");
 	/* rd vms-629: a VAX's barrier lookup (op 0x08) is answered like an
 	 * op-0x01 one -- unanswered, the VAX's barrier never releases. */
 	has("req->opcode == (uint8_t)VMS_DLM_WIREOP_DIR_LOOKUP_TR)\n\t\treturn dlm_arm_dir_lookup(d, req, &id, reply);",

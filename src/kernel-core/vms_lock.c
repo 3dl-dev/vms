@@ -6120,6 +6120,44 @@ static void dlm_adopt_count_promotions(uint32_t n)
     exec_unlock(&vms_dlm_adopt_lock_g);
 }
 
+/*
+ * rd vms-b4d: A TREE MASTERED BY HAND-OVER HAS A DIRECTORY ENTRY NAMING THIS
+ * NODE, so its removal is owed when the last lock goes -- exactly as for a
+ * tree mastered on an 0xf9 (vms_lock_dlm_assume_mastery, rd vms-e09).
+ *
+ * Grounded both ways. (1) The directory names the new master once the remaster
+ * is done: lab1b68 wire-1610, WKLD moved VAX1 -> OVMXE (op 0x0e..0x14, frames
+ * 4852-4886, VAX1's 0x0f and 0x11 going to VAX2, the directory), and VAX2 then
+ * answered VAX1's lookup 0xf8 naming OVMXE (6667/6668). (2) A real master that
+ * got its tree by remaster sends that directory the named op-0x04 when its last
+ * lock goes: tests/lab/captures/vms-cab-op0f-20261010/heldout{1,2}, VAX2 took
+ * CACHE$cm trees from VAX1 (the directory there) by 0x0e..0x14 and later sent
+ * VAX1 the removal, with the 0x0e's hash and no 0xf9 in between -- 6 of the 6
+ * adopted trees whose mastery ended inside a capture without moving on. Without
+ * this OVMXE freed WKLD and said nothing; VAX2 kept naming it, and the
+ * resource got two masters.
+ *
+ * Only a directory that is ANOTHER member and that the vector names now is
+ * recorded; a vector that cannot answer records nothing (rd vms-c55: a removal
+ * is sent only where an entry is held). Caller holds no engine lock.
+ */
+static void dlm_adopt_note_directory(struct vms_lock_resource *root)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    uint32_t dir = 0u;
+
+    if (root == NULL || ops.dir_resolve == NULL)
+        return;
+    exec_lock(&root->lock);
+    if (root->master_csid != 0u && root->master_csid == vms_local_csid &&
+        root->parent == NULL && root->name_len != 0u &&
+        dir_hash_for_routing(root) == SS__NORMAL && root->hash_known &&
+        ops.dir_resolve(ops.ctx, root->dir_hash, &dir) == SS__NORMAL &&
+        dir != 0u && dir != vms_local_csid)
+        root->dir_told_csid = dir;
+    exec_unlock(&root->lock);
+}
+
 uint32_t vms_lock_dlm_adopt_end(const struct vms_dlm_adopt_tree *t,
                                 uint32_t *n_locks)
 {
@@ -6154,6 +6192,7 @@ uint32_t vms_lock_dlm_adopt_end(const struct vms_dlm_adopt_tree *t,
     exec_unlock(&vms_dlm_adopt_lock_g);
 
     dlm_adopt_clear_gen(gen);
+    dlm_adopt_note_directory(root);
     /*
      * ...AND THIS NODE'S OWN LOCKS IN THE TREE STOP BEING PROXIES (rd vms-3ac).
      * After the 0x13, not at adopt_open: an adoption that ABORTS gives the tree

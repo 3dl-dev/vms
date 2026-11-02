@@ -47,6 +47,11 @@ TIERS = {
         ".github/workflows/release.yml",
         ".github/workflows/ci-release-e2e.yml",
         "tools/cut-release*.sh",
+        # vms-f10: the cut assembles the Alpha bootable set with these.
+        "tools/cross-alpha/build-alpha-bootimage.sh",
+        "tools/cross-alpha/build-vmsko-alpha.sh",
+        "tools/cross-alpha/release-vmsko.sh",
+        "distro/rootfs-alpha/**",
         "tools/publish-release.sh",
         "tools/gen_release_notes.py",
         "tools/check_guide_drift.py",

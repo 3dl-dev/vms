@@ -110,13 +110,25 @@ if [ "$ARCH" = "aarch64" ]; then
     QEMU=qemu-system-aarch64
     MACHINE="-machine virt -cpu cortex-a57"
     CONSOLE="console=ttyAMA0"
+elif [ "$ARCH" = "alpha" ]; then
+    # OVMX/Alpha (rd vms-f10): the cut's alpha/ bootable set is the one
+    # tools/cross-alpha/build-alpha-bootimage.sh assembles -- vmlinux-boot (the
+    # Linux/Alpha kernel with the bootstrap initramfs, vms.ko included, baked
+    # in: clipper's -initrd is unreliable) and the ODS-2 system disk -- booted
+    # exactly as tools/cross-alpha/run-boot-alpha.sh boots it (-M clipper, TCG).
+    QEMU=qemu-system-alpha
+    MACHINE="-M clipper -vga none"
+    CONSOLE="console=ttyS0"
+    KERNEL=/release/vmlinux-boot
+    INITRD=""
+    DISTRIB_IMG=/release/ovmx-distrib-alpha.img
 else
     QEMU=qemu-system-x86_64
     MACHINE=""
     CONSOLE="console=ttyS0"
 fi
 
-for f in "$KERNEL" "$INITRD" "$DISTRIB_IMG"; do
+for f in "$KERNEL" ${INITRD:+"$INITRD"} "$DISTRIB_IMG"; do
     [ -f "$f" ] || { echo "FATAL: $f not found - run this inside the ovmx-boot image with a cut-release.sh bundle bind-mounted at /release (see header)"; exit 1; }
 done
 command -v "$QEMU" >/dev/null 2>&1 || { echo "FATAL: $QEMU not available"; exit 1; }
@@ -141,11 +153,18 @@ mkfifo "$FIFO"
 cleanup() { [ -n "${QPID:-}" ] && kill "$QPID" 2>/dev/null; }
 trap cleanup EXIT
 
+if [ "$ARCH" = "alpha" ]; then
+    # run-boot-alpha.sh's machine: one CPU, 1 GB, the serial console on stdio.
+    QEMU_ARGS=(-kernel "$KERNEL" -nographic -append "$CONSOLE panic=-1"
+               -m 1024 -smp 1 -nic none)
+else
+    QEMU_ARGS=(-kernel "$KERNEL" -initrd "$INITRD"
+               -nographic -append "$CONSOLE loglevel=3 quiet"
+               -m 512M -smp 2 -nic none -nodefaults -serial stdio)
+fi
 # shellcheck disable=SC2086
 timeout "$((BOOT_TIMEOUT + SETUP_TIMEOUT + RUN_TIMEOUT + 120))" $QEMU $MACHINE \
-    -kernel "$KERNEL" -initrd "$INITRD" \
-    -nographic -append "$CONSOLE loglevel=3 quiet" \
-    -m 512M -smp 2 -nic none -nodefaults -serial stdio \
+    "${QEMU_ARGS[@]}" \
     -drive file="$DISK",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$FIFO" >"$LOG" 2>&1 &
 QPID=$!
@@ -173,7 +192,18 @@ dump_and_die() {
 
 # --- 1. Boot the CUT artifact: distrib.img -> STARTUP.EXE -> login prompt --
 if wait_for ' - OpenVMS-compatible' 60; then ok "executive attached (real vms.ko, cut artifact)"; else bad "executive never attached"; fi
-send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+if [ "$ARCH" = "alpha" ]; then
+    # run-boot-alpha.sh's wake loop (vms-3f6/vms-2213): on the clipper serial
+    # console a single early RETURN can land before LOGINOUT reads OPA0:, so
+    # feed one every 2s until it prompts.
+    W=0
+    while [ "$W" -lt "$BOOT_TIMEOUT" ] && kill -0 "$QPID" 2>/dev/null \
+          && ! grep -qaF 'Username:' "$LOG" 2>/dev/null; do
+        send ''; sleep 2; W=$((W + 2))
+    done
+else
+    send ''  # vms-2213: wake OPA0: — LOGINOUT waits for RETURN before Username:
+fi
 if wait_for 'Username:' "$BOOT_TIMEOUT"; then
     ok "the CUT ovmx-distrib.img boots to the login prompt"
 else

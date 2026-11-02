@@ -53,6 +53,8 @@
 #      (no --skip-alpha), with the identical pre-alpha historical-baseline
 #      exception (%CUT-ALPHA-I-PREALPHA). The Alpha executive module vms.ko ships in
 #      the same set (vms-ec1), its byte-reproducibility proven by the cut diff.
+#      So does the Alpha BOOTABLE set (vms-f10): vmlinux-boot +
+#      ovmx-distrib-alpha.img, which release-acceptance-e2e boots.
 #   9. Builds the aarch64 BOOTABLE release set (the x86_64 set, for arm64:
 #      vmlinuz Image, slim initramfs, ovmx-distrib.img, ovmx-os.kit) into
 #      OUT_DIR/aarch64/ via tools/cut-release-aarch64.sh -- or takes the set a
@@ -556,7 +558,7 @@ bytes_of() { stat -c%s "$OUT_DIR/$1"; }
     printf '\n    ]\n'
     printf '  },\n'
     printf '  "alpha_release_parity": {\n'
-    printf '    "_note": "Alpha (OVMX/Linux-Alpha, EM_ALPHA/LP64) co-release artifacts (rd vms-233b, epic vms-f10: co-release parity across aarch64/x86_64/alpha/VAX). BUILD-ONLY (Rule 9 tooling, never a runtime claim): the byte-reproducible userspace ovmx-images aggregate, cross-built under the alpha-linux-gnu toolchain -- the same images alpha-boot-login boots. The Alpha executive module vms.ko (unsigned: the Alpha kernel config has no MODULE_SIG; cross-built under SOURCE_DATE_EPOCH, byte-reproducibility proven by the two-cut diff, vms-ec1) ships in the same set. No bootable Alpha image set yet. All files under alpha/.",\n'
+    printf '    "_note": "Alpha (OVMX/Linux-Alpha, EM_ALPHA/LP64) co-release artifacts (rd vms-233b, epic vms-f10: co-release parity across aarch64/x86_64/alpha/VAX). The byte-reproducible userspace ovmx-images aggregate, cross-built under the alpha-linux-gnu toolchain -- the same images alpha-boot-login boots. The Alpha executive module vms.ko (unsigned: the Alpha kernel config has no MODULE_SIG; cross-built under SOURCE_DATE_EPOCH, byte-reproducibility proven by the two-cut diff, vms-ec1) ships in the same set. The bootable set (vms-f10) ships too: vmlinux-boot (the Linux/Alpha kernel with the bootstrap initramfs and vms.ko baked in) + ovmx-distrib-alpha.img (the ODS-2 system disk), assembled by tools/cross-alpha/build-alpha-bootimage.sh under SOURCE_DATE_EPOCH; release-acceptance-e2e boots it under qemu-system-alpha -M clipper. All files under alpha/.",\n'
     printf '    "skipped": %s,\n' "$([ -n "$ALPHA_SKIP_NOTE" ] && echo true || echo false)"
     if [ -n "$ALPHA_SKIP_NOTE" ]; then
         printf '    "skipped_reason": "%s",\n' "$ALPHA_SKIP_NOTE"

@@ -469,6 +469,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
+      # vms-f10: the cut now also assembles the Alpha bootable set (a Linux/Alpha
+      # kernel tree + userland, ~3 GB) on top of the x86_64/VAX/Alpha builds;
+      # reclaim the big unused hosted toolchains so the cut cannot ENOSPC.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
       - name: Checkout
         uses: actions/checkout@v4
       - name: Enable KVM
@@ -504,6 +512,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
+      # vms-f10: the cut now also assembles the Alpha bootable set (a Linux/Alpha
+      # kernel tree + userland, ~3 GB) on top of the x86_64/VAX/Alpha builds;
+      # reclaim the big unused hosted toolchains so the cut cannot ENOSPC.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
       - name: Checkout
         uses: actions/checkout@v4
       - name: Enable KVM
@@ -741,6 +757,14 @@ jobs:
     timeout-minutes: 150
 
     steps:
+      # vms-f10: the cut now also assembles the Alpha bootable set (a Linux/Alpha
+      # kernel tree + userland, ~3 GB) on top of the x86_64/VAX/Alpha builds;
+      # reclaim the big unused hosted toolchains so the cut cannot ENOSPC.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -992,6 +1016,14 @@ jobs:
     timeout-minutes: 300
 
     steps:
+      # vms-f10: the cut now also assembles the Alpha bootable set (a Linux/Alpha
+      # kernel tree + userland, ~3 GB) on top of the x86_64/VAX/Alpha builds;
+      # reclaim the big unused hosted toolchains so the cut cannot ENOSPC.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -1114,6 +1146,43 @@ jobs:
             exit 1
           fi
           exit "$rc"
+
+      # Alpha ships a bootable set (rd vms-f10): the SAME gate boots the cut's
+      # alpha/ set -- vmlinux-boot (vms.ko baked into its initramfs) and the
+      # ODS-2 ovmx-distrib-alpha.img -- under qemu-system-alpha -M clipper
+      # (TCG), inside the ovmx-cross-alpha:release image the cut built, logs in
+      # SYSTEM/MANAGER and checks PRODUCT SHOW PRODUCT against the manifest.
+      # PARTS is not on the Alpha disk yet (no VMS-native PARTS.EXE build for
+      # Alpha): OVMX_SKIP_PARTS_SCENARIO=1 here is that tracked gap (vms-f10
+      # child), not a weakened check -- the x86_64/aarch64 legs still run it.
+      - name: Release-acceptance gate (alpha) — boot the cut's alpha set, log in, verify the shipped version
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_RELEASE_ARCH=alpha OVMX_SKIP_PARTS_SCENARIO=1 \
+          BOOT_TIMEOUT=600 SETUP_TIMEOUT=120 \
+          OVMX_RELEASE_DIR="${{ github.workspace }}/dist/release-acceptance" \
+            tests/qemu/run_release_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: the alpha release-acceptance run SKIPPED -- it must boot for real." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: NEGATIVE CONTROL (alpha) — a wrong expected version must redden the alpha gate
+        if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_RELEASE_ARCH=alpha OVMX_SKIP_PARTS_SCENARIO=1 \
+          BOOT_TIMEOUT=600 SETUP_TIMEOUT=120 \
+          OVMX_RELEASE_DIR="${{ github.workspace }}/dist/release-acceptance" \
+          OVMX_EXPECTED_PRODUCT_VERSION_OVERRIDE="V0.0-NEGATIVE-CONTROL-DOES-NOT-EXIST" \
+            tests/qemu/run_release_acceptance_e2e.sh
+          rc=$?
+          [ "$rc" -ne 77 ] || { echo "FATAL: the alpha negative control SKIPPED" >&2; exit 1; }
+          [ "$rc" -ne 0 ] || { echo "FATAL: the alpha gate PASSED against a deliberately wrong version" >&2; exit 1; }
+          echo "Negative control confirmed: the alpha gate reddened (exit $rc) on a version disagreement."
 
       # A failed aarch64 build must fail the cut itself (no aarch64, no release).
       - name: NEGATIVE CONTROL — tools/cut-release.sh itself must fail when the aarch64 build fails
@@ -1591,6 +1660,11 @@ jobs:
           [ "$dir_count" -eq "$n" ] || { echo "FAIL: $MANIFEST names $n artifacts but dist/alpha-gate-proof/ contains $dir_count files"; exit 1; }
           grep -qx 'vms.ko' "$MANIFEST" || { echo "FAIL: vms.ko (the Alpha executive module, vms-ec1) is not in $MANIFEST"; exit 1; }
           file dist/alpha-gate-proof/vms.ko | grep -qi 'alpha' || { echo "FAIL: dist/alpha-gate-proof/vms.ko is not an Alpha ELF object"; exit 1; }
+          # vms-f10: the bootable set must be in the cut (release-acceptance-e2e boots it).
+          for f in vmlinux-boot ovmx-distrib-alpha.img; do
+            grep -qx "$f" "$MANIFEST" || { echo "FAIL: $f (the Alpha bootable set, vms-f10) is not in $MANIFEST"; exit 1; }
+          done
+          file dist/alpha-gate-proof/vmlinux-boot | grep -qi 'alpha' || { echo "FAIL: dist/alpha-gate-proof/vmlinux-boot is not an Alpha ELF kernel"; exit 1; }
           [ "$n" -ge 12 ] || { echo "FAIL: only $n Alpha release artifacts named in $MANIFEST -- expected at least the ovmx-images baseline of 12"; exit 1; }
           echo "PASS: all $n Alpha release artifacts named in $MANIFEST are present"
 

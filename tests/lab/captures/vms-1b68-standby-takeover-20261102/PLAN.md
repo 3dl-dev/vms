@@ -49,3 +49,9 @@ rows for dlm_rm_08/dlm_rm_12/dlm_rm_08_ans select on the queue the emitting test
 (st:queue=01/00/ff): [30] requested, [31] granted, [108] 04 and [110] 00/ff on converting/waiting
 records; test_dlm_rebuild dumps a waiting and a converting record. Predictions unchanged. Pod manifest
 requests 200m CPU, limit 4; the CPU the fire actually got is recorded with the results.
+
+## Addendum 2 (F$GETSYI on both VAXes, before OVMXE boots)
+VAX1 VOTES 1 EXPECTED_VOTES 1 LOCKDIRWT 1; VAX2 VOTES 0 EXPECTED_VOTES 1 LOCKDIRWT 1; CLUSTER_VOTES 1,
+CLUSTER_QUORUM 1. (NODE_CSID read without a node argument returned the same value on both and is not
+recorded.) OVMXE boots VOTES 1 (ovmx_fire_node.sh), EXPECTED_VOTES 1 (OVMX_FIRE_EXPVOTES=1), so quorum
+stays 1 and VAX2 + OVMXE (1 vote) stay quorate after VAX1's REMOVE_NODE departure.

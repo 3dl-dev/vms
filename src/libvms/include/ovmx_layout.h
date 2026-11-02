@@ -167,6 +167,7 @@
  * which is statically linked and therefore grew two hand-rolled 512-byte
  * SYSUAF parsers of its own -- does not read SYSUAF at all. */
 #define VMS_PROVISION_PATH   "SYS$SYSTEM:PROVISION.EXE"
+#define VMS_OPCOM_PATH       "SYS$SYSTEM:OPCOM.EXE"        /* OPCOM, created by PID 1 (vms-798) */
 #define VMS_LOGINOUT_PATH    "SYS$SYSTEM:LOGINOUT.EXE"
 /* VMS_SSHD_PATH DELETED (vms-d916): it had zero readers since vms-47b (its only
  * reader was STARTUP.EXE's start_sshd(), removed with PID 1's service starting),

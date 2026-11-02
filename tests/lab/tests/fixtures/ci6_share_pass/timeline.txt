@@ -1,0 +1,1 @@
+18:27:08 T0 fixture (excerpt of ../../captures/vms-5fa-shared-volume-20261102/ci6evac-182708; lines the real run never produced are synthesised, see test_ci6_evac_share.sh)

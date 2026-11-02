@@ -1,0 +1,13 @@
+18:27:08 T0 share ci6evac-182708 on pod lab5fa; OVMX node OVMXE; volume EVAC5FA = VAX1 $2$DUA2:; [CI6E11021827]; capture tests/lab/captures/vms-5fa-shared-volume-20261102/ci6evac-182708
+18:28:19 STAGED EVACWL.EXE on VAX1
+18:29:28 S1 OVMXE names VAX1's $2$DUA2: as VAX1$DUA16386:
+18:30:27 S1 EVAC5FA mounted on VAX1 ($2$DUA2:) and OVMXE (VAX1$DUA16386:)
+18:30:34 S2 round 1: VAX1 EVACWL 10 (EX), then OVMXE EVACWL 10 queued behind it
+18:31:33 S2 round 2: VAX1 EVACWL 10 (EX), then OVMXE EVACWL 10 queued behind it
+18:32:42 S3 VAX1 EVACWL (EX, forever); OVMXE EVACWL STANDBY 15 queued
+18:34:22 ABORT: OVMXE standby never took NL
+18:35-18:40 (by hand, lab-console.sh) VAX1 SDA SHOW RESOURCE/NAME=EVAC$WORKLOAD + SHOW LOCK of each lock (vax1.log): master VAX1 (CSID 00000000); GRANTED EX = "Master copy of lock 0100040F on system 00010003" (OVMXE round-1 SYSTEM_1); WAITING 0E0006A5 EX (VAX1), 080006A1 EX (OVMXE 01000416), 020006A7 EX (VAX1 EVACVAX1), 200006A3 NL (OVMXE standby 0100042E). OVMXE SHOW SYSTEM: SYSTEM_1/_2/_3 all alive, none printed a line.
+18:40 OVMXE DISMOUNT VAX1$DUA16386: -> %DISMOUNT-I-DISMOUNTED. VAX1 STOP EVACVAX1.
+18:40 VAX1 TYPE EVAC.DAT: 10 records, all VAX1 seq 1..10 (18:30:36-18:30:45). No OVMXE record.
+18:41 VAX1 ANALYZE/DISK_STRUCTURE $2$DUA2: -> only %ANALDISK-I-OPENQUOTA (no QUOTA.SYS); $STATUS %X00000001. VAX2 Q=2 V=2 N=3.
+18:42 bugcheck grep (fatal|bugcheck|CNXMGRERR|LOCKMGRERR|INVLOCKID|quorum lost) over the whole pod-life consoles: 0/0/0.

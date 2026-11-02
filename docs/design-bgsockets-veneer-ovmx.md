@@ -151,3 +151,78 @@ The BSD sockets API is POSIX. The VMS-facing surface the veneer speaks
 VSI OpenVMS TCP/IP Services docs + the already-landed BGn: driver — never VSI/HPE
 source. The veneer is labeled an OVMX design choice; no VMS-authentic byte-layout
 claim is made for it.
+
+## 8. DECC$SHR's sockets are the executive's (vms-99f)
+
+**Finding.** DECC$SHR whole-archives musl `libc.a`. Its `socket`, `decc$socket`,
+`connect`, `send`, `recv`, `getaddrinfo` and the rest were musl's: raw Linux
+socket system calls, plus musl's resolver, which sends DNS over Linux UDP. A
+VMS-linked program therefore did host-side Linux networking dressed up as VMS.
+
+**Design: a socket is a real fd whose file is the executive socket.**
+`src/vmstcpip/sockets/ovmx_decc_sockets.c` is linked into DECC$SHR, and
+`mk_decc_shr.sh` binds every socket and resolver universal to it.
+
+| Call | What happens |
+|------|--------------|
+| `socket()` | `ovmx_socket` (`$ASSIGN TCPIP$DEVICE:` + `IO$_SETMODE`), then `VMS_IOCTL_BG_MATERIALIZE_FD` turns the channel's socket into a real fd: a vms.ko `[bgconn]` anon inode. The program gets that fd. DECC$SHR records fd -> veneer handle. |
+| `read`/`write`/`readv`/`writev`/`poll`/`select`/`fcntl(O_NONBLOCK)`/`dup` | Unchanged C RTL calls. The kernel routes them to the `[bgconn]` file operations, which drive the same executive socket that `IO$_READVBLK`/`IO$_WRITEVBLK` use. Sockets mix freely with files and terminals in one `poll()` set. |
+| `connect`/`bind`/`listen`/`accept[4]`/`shutdown` | `IO$_ACCESS` and the related requests on the recorded channel. `accept` materializes the new channel the same way. |
+| `send`/`recv`/`sendto`/`recvfrom`/`sendmsg`/`recvmsg` | `write`/`read` on the fd. `MSG_DONTWAIT`, `MSG_WAITALL` and `MSG_NOSIGNAL` are honoured. `MSG_PEEK`, `MSG_OOB` and control messages fail `EOPNOTSUPP`. |
+| `getsockname`/`getpeername`/`[gs]etsockopt` | ioctls on the fd itself, answered from the executive's socket. Integer options only; struct options fail `ENOPROTOOPT`. |
+| `close` | `$DASSGN` the channel, then close the fd. The transport FIN goes out when the last reference drops. |
+
+**Why this design.** The veneer's handle space (`>= OVMX_BGSOCK_BASE`) is not an
+fd, so a handle cannot appear in a `poll()` set, be `dup2()`ed onto stdio, or be
+`close()`d. The materialized fd removes that split, and nothing in it is a
+proxy: no Linux socket ever exists in the process.
+
+**Transport.** DECC$SHR is a non-TLS producer and cannot link `vms_kif.c`, whose
+`/dev/vms` descriptor is `__thread`. So DECC$SHR keeps its own process-wide
+descriptor. The BGn: marshalling lives in one place,
+`src/libvmssys/vms_kif_bg_ops.h`, which both `vms_kif.c` and
+`ovmx_decc_sockets.c` include. The `/dev/vms` descriptor is only the
+system-service gate (`vms_dev_release` does nothing to the process), so holding
+two descriptors in one process is harmless.
+
+**Honest failure.** With no `/dev/vms`, `socket()` returns -1 with `ENODEV`.
+Unsupported cases fail with their own errors: `AF_INET6` and `AF_UNIX` through
+`socket()` give `EAFNOSUPPORT`, UDP and raw sockets give `EPROTOTYPE`, and a
+non-socket fd gives `ENOTSOCK`.
+
+**Audit of every DECC$SHR entry that could reach the host network.**
+
+| Entry | Decision |
+|-------|----------|
+| socket, connect, bind, listen, accept, accept4, send, recv, sendto, recvfrom, sendmsg, recvmsg, shutdown, getsockname, getpeername, setsockopt, getsockopt, close | BGn: executive (above) |
+| getaddrinfo, freeaddrinfo, getnameinfo, gethostbyname, gethostbyaddr | Numeric IPv4 only. Names fail `EAI_FAIL`/`NO_RECOVERY` until the BGn: UDP resolver (vms-a9e7). musl's resolver is never called. |
+| getservbyname, getservbyport | Return NULL. musl's version reads the host's `/etc/services`, not the node's services database, which is not wired yet. |
+| if_nametoindex, if_indextoname, if_nameindex | Fail. musl's version opens a Linux socket and queries the host's interfaces. |
+| socketpair | Stays musl: an AF_UNIX pair inside the process. Local IPC, not network. |
+| inet_*, hton*/ntoh*, gai_strerror, herror, hstrerror | Stay musl: pure conversions. |
+| getprotoby*, getprotoent, getnetby*, gethostent, getservent, set/end*ent | Stay musl: a static table or stubs that touch nothing. |
+| gethostname | Stays musl: `uname(2)`, the node's own name. |
+| read, write, poll, select, fcntl, ioctl, dup, dup2 | Stay musl: fd calls that reach `[bgconn]` fops on a socket. |
+
+**Proof.** `tests/qemu/test_syssvc_decc_socket.c` runs SOCKECHO.EXE
+(`tests/qemu/sockecho/`), a BSD-sockets program linked with `LINK.EXE --use
+DECC$SHR` only. It runs under a ptrace system-call audit against a real
+`/dev/vms` and checks four things. Bytes round-trip byte-exact with the suite's
+own executive listener, and the image also runs its own bind/listen/accept leg.
+The descriptor is `anon_inode:[bgconn]`. There are zero Linux socket-family
+system calls. With an empty `/dev`, `socket()` fails `ENODEV`, still with zero
+such calls. The negative control `decc-socket-bound-to-musl` rebinds `socket()`
+to musl and makes the suite fail.
+
+**Gaps (open).**
+- The Alpha DECC$SHR, built by the alpha branch of `mk_decc_shr.sh` from musl-alpha,
+  still exports musl's decc$ sockets.
+- No UDP sockets.
+- No half-close: `shutdown(SHUT_WR)` shuts both directions.
+- No `FIONREAD`.
+- A `[bgconn]` fd that was not created in this image cannot connect, bind or listen.
+- `close()` that musl makes internally, for example `fclose()` of an `fdopen()`ed
+  socket, does not `$DASSGN` the channel. The socket stays open until image exit.
+- On the VMS-native DCL, `TCPIP SHOW INTERFACE` used a host datagram socket for
+  its interface probe. It now reports `%TCPIP-E-SOCKERR` honestly instead of
+  describing the host.

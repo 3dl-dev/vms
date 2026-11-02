@@ -1,0 +1,39 @@
+# decc-socket-bound-to-musl -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "C RTL sockets of DECC\$SHR over the executive BGn: socket (src/vmstcpip/sockets/ovmx_decc_sockets.c, vms-99f): a VMS-linked program's socket() is \$ASSIGN TCPIP\$DEVICE: + IO\$_SETMODE, materialized as a vms.ko [bgconn] fd, never musl's Linux socket(); no exported DECC\$SHR entry reaches a Linux socket system call, and with no executive socket() fails ENODEV.";;
+        targets)      echo "vmstcpip/sockets/ovmx_decc_sockets.c";;
+        suites_red)   echo "test_syssvc_decc_socket";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_decc_socket() -- what DECC\$SHR's socket/decc\$socket universals are bound to -- is re-bound to musl's socket(), the Linux system call the item removed. SOCKECHO's socket is then a Linux socket: the system-call audit counts socket(2) (and the no-executive run SUCCEEDS through the host instead of failing ENODEV), the descriptor is socket:[...] not [bgconn], and connect() on it fails ENOTSOCK so no byte reaches the executive listener. One call replaced; the staging and listener assertions stay green.";;
+        require_fail) cat <<'EOF2'
+SOCKECHO (linked against DECC$SHR) completed every socket step
+SOCKECHO's socket() returned an executive BG connection ([bgconn]), not a Linux socket
+bytes round-tripped through the executive listener BYTE-EXACT
+this process's executive socket received exactly the bytes SOCKECHO sent
+SOCKECHO's own bind/listen/accept server leg ran on executive sockets
+ZERO Linux socket-family syscalls from the VMS-linked image (the audit saw its executive ioctls)
+with no /dev/vms SOCKECHO's socket() fails ENODEV (no host fallback)
+and still ZERO Linux socket-family syscalls
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # Bind DECC$SHR's socket() back to musl: the executive socket call in
+        # ovmx_decc_socket() becomes a return of musl's socket(), the Linux system
+        # call. Anchored on its NEGCTL comment; after substitution the
+        # 'h = ovmx_socket(' text is gone, so a second apply is the no-op the
+        # selftest requires.
+        sed -i 's|    h = ovmx_socket(domain, type \& ~(SOCK_NONBLOCK \| SOCK_CLOEXEC), protocol); /\* NEGCTL decc-socket-bound-to-musl \*/|    return socket(domain, type, protocol); /* NEGCTL decc-socket-bound-to-musl (musl) */|' "$_file"
+
+    :
+}

@@ -773,6 +773,16 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/RMHOLD.EXE \
         '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' \
         '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMS$SHR.EXE' && \
+    # SOCKECHO.EXE (rd vms-99f): the VMS-native BSD-sockets program the DECC$SHR
+    # sockets proof (test_syssvc_decc_socket) runs under a syscall audit. Linked
+    # --use the very SYS$LIBRARY DECC$SHR staged above (.vms$imp binds by
+    # symbol-vector INDEX), activator baked at this harness's IMGACT path -- the
+    # same two reasons RMHOLD is built here.
+    IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
+    sh /src/repo/tests/qemu/sockecho/mk_sockecho_native.sh \
+        /src/repo/build-static/bin/LINK.EXE \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/SOCKECHO.EXE \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers

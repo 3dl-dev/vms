@@ -1148,6 +1148,75 @@ VEC="$VEC,C\$_EXIT1=GLOBALVALUE:0x0035A009"
 # (vms-dfb, ROUTE-THROUGH): this rung provides the linkable CRTL surface; R2
 # upgrades the file semantics. Append-only -> prior consumers' vector indices are
 # unchanged (GSMATCH LEQUAL-compatible).
+# ---- vms-99f: the C RTL sockets are the EXECUTIVE's BGn: sockets ---------------
+# musl's socket()/connect()/send()/recv()/getaddrinfo()... are raw Linux socket
+# system calls (and musl's resolver sends DNS over Linux UDP). Exported as they
+# were, a VMS-linked program's socket() did host-side Linux networking dressed up
+# as VMS. Every socket/resolver universal DECC$SHR exports is therefore bound to
+# src/vmstcpip/sockets/ovmx_decc_sockets.c (over the vms_bgsock.c veneer), whose
+# socket is a BGn: channel in vms.ko materialized as a real fd. No exported entry
+# reaches musl's socket implementation; without /dev/vms socket() fails ENODEV.
+# Design: docs/design-bgsockets-veneer-ovmx.md section 8.
+#
+# Existing universals keep their sv# and are rebound IN PLACE (the plain socket/
+# close below, and the decc$ map entries in DECC_SOCK_REBIND); entries no vector
+# had yet are APPENDED at the very end (DECC_SOCK_TAIL, after everything else).
+# Left on musl ON PURPOSE, each with its reason:
+#   read/write/readv/writev/poll/select/fcntl/dup/dup2/ioctl -- fd calls; on a
+#     socket fd the kernel routes them to vms.ko's [bgconn] file operations, so
+#     the bytes still transit the executive socket.
+#   socketpair -- an AF_UNIX pair inside the process (local IPC, no network).
+#   inet_*/hton*/ntoh*/gai_strerror/herror/hstrerror -- pure conversions.
+#   getprotoby*/getprotoent -- musl's static table; getnetby*, gethostent,
+#     getservent & the set/end*ent calls -- musl stubs that touch nothing.
+#   gethostname -- uname(2), the node's own name; no network.
+SOCK_SRC_DIR="$(CDPATH= cd "$(dirname "$0")/../vmstcpip/sockets" && pwd)"
+SOCK_KIF_DIR="$(CDPATH= cd "$(dirname "$0")/../libvmssys" && pwd)"
+SOCK_VMS_INC="$(CDPATH= cd "$(dirname "$0")/../libvms/include" && pwd)"
+SOCK_OBJ_DIR=$(mktemp -d)
+for _s in vms_bgsock ovmx_decc_sockets; do
+    "${CC:-cc}" -c -fPIC -ffreestanding -U_FORTIFY_SOURCE -fno-stack-protector \
+        -I"$SOCK_SRC_DIR" -I"$SOCK_KIF_DIR" -I"$SOCK_VMS_INC" \
+        -o "$SOCK_OBJ_DIR/$_s.o" "$SOCK_SRC_DIR/$_s.c"
+done
+# The executive is reached ONLY through libvmssys's transport seam (rd vms-bbde):
+# kif_transport_linux.c + its raw system-call stubs, as LIBVMSSYS$SHR builds them
+# (the alpha branch above links the same seam for vfork's PCB request).
+case "$("${CC:-cc}" -dumpmachine 2>/dev/null)" in
+    x86_64*)  SOCK_ARCH=x86_64;  SOCK_ARCHFLAG="" ;;
+    aarch64*) SOCK_ARCH=aarch64; SOCK_ARCHFLAG="-mno-outline-atomics" ;;
+    *) echo "mk_decc_shr: FAIL no libvmssys transport for $("${CC:-cc}" -dumpmachine) (vms-99f)" >&2; exit 2 ;;
+esac
+# shellcheck disable=SC2086
+"${CC:-cc}" -c -fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE $SOCK_ARCHFLAG \
+    -I"$SOCK_KIF_DIR" -o "$SOCK_OBJ_DIR/kif_transport_linux.o" "$SOCK_KIF_DIR/kif_transport_linux.c"
+"${CC:-cc}" -c -fPIC -o "$SOCK_OBJ_DIR/vms_syscall_stubs.o" "$SOCK_KIF_DIR/arch/$SOCK_ARCH/syscall.S"
+SOCK_OBJS="$SOCK_OBJ_DIR/vms_bgsock.o $SOCK_OBJ_DIR/ovmx_decc_sockets.o $SOCK_OBJ_DIR/kif_transport_linux.o $SOCK_OBJ_DIR/vms_syscall_stubs.o"
+DECC_SOCK_REBIND="socket listen send recv setsockopt getsockopt shutdown close getaddrinfo freeaddrinfo getnameinfo getservbyname getservbyport if_nametoindex if_indextoname if_nameindex"
+for _n in socket close; do
+    case ",$VEC," in
+        *",$_n=PROCEDURE,"*) VEC=$(printf '%s' ",$VEC," | sed "s/,$_n=PROCEDURE,/,$_n\/ovmx_decc_$_n=PROCEDURE,/; s/^,//; s/,\$//") ;;
+        *) echo "mk_decc_shr: FAIL plain $_n is not a PROCEDURE universal to rebind (vms-99f)" >&2; exit 2 ;;
+    esac
+done
+# New at the tail: the plain names a tcc/cc-built VMS program references, and the
+# decc$ names decc_crtl_map.txt does not carry.
+DECC_SOCK_TAIL=""
+for _n in connect bind listen accept accept4 send recv sendto recvfrom sendmsg recvmsg \
+          setsockopt getsockopt getsockname getpeername shutdown \
+          getaddrinfo freeaddrinfo getnameinfo gethostbyname gethostbyaddr \
+          getservbyname getservbyport if_nametoindex if_indextoname; do
+    DECC_SOCK_TAIL="$DECC_SOCK_TAIL,$_n/ovmx_decc_$_n=PROCEDURE"
+done
+for _n in connect bind accept sendto recvfrom sendmsg recvmsg getsockname getpeername \
+          gethostbyname gethostbyaddr; do
+    DECC_SOCK_TAIL="$DECC_SOCK_TAIL,decc\$$_n/ovmx_decc_$_n=PROCEDURE"
+done
+# Pure musl conversions a sockets program also needs under its plain name.
+for _n in select htons ntohs htonl inet_addr inet_aton inet_ntoa gai_strerror; do
+    DECC_SOCK_TAIL="$DECC_SOCK_TAIL,$_n=PROCEDURE"
+done
+
 DECC_MAP="$(CDPATH= cd "$(dirname "$0")" && pwd)/decc_crtl_map.txt"
 if [ -f "$DECC_MAP" ]; then
     LIBC_DEFS="$(mktemp)"
@@ -1155,11 +1224,17 @@ if [ -f "$DECC_MAP" ]; then
     # --defined-only` prints member-header lines (NF==1, "member.o:") we drop and
     # symbol lines "<addr> <type> <name>" whose $NF is the name.
     nm --defined-only "$LIBC" 2>/dev/null | awk 'NF>=2{print $NF}' | sort -u > "$LIBC_DEFS"
-    n_add=0; n_skip=0
+    n_add=0; n_skip=0; n_sock=0
     while read -r nm_name; do
         case "$nm_name" in ''|\#*) continue;; esac
         if grep -qxF "$nm_name" "$LIBC_DEFS"; then
-            VEC="$VEC,decc\$$nm_name/$nm_name=PROCEDURE"
+            # vms-99f: a socket/resolver entry keeps its place in the vector (same
+            # sv#) but is bound to the executive-BGn: C RTL sockets, never musl's
+            # Linux-socket implementation. See the SOCKETS block below.
+            case " $DECC_SOCK_REBIND " in
+                *" $nm_name "*) VEC="$VEC,decc\$$nm_name/ovmx_decc_$nm_name=PROCEDURE"; n_sock=$((n_sock + 1)) ;;
+                *)              VEC="$VEC,decc\$$nm_name/$nm_name=PROCEDURE" ;;
+            esac
             n_add=$((n_add + 1))
         else
             n_skip=$((n_skip + 1))
@@ -1167,6 +1242,10 @@ if [ -f "$DECC_MAP" ]; then
     done < "$DECC_MAP"
     rm -f "$LIBC_DEFS"
     echo "mk_decc_shr: decc\$ CRTL alias vector: exported $n_add, skipped $n_skip (musl-undefined — gap for a later rung, not faked)"
+    # Every name in the rebind list is a musl-defined map entry; one that did not
+    # rebind would be left on musl (or missing), so the count is checked.
+    _want=$(echo $DECC_SOCK_REBIND | wc -w)
+    [ "$n_sock" -eq "$_want" ] || { echo "mk_decc_shr: FAIL only $n_sock of $_want decc\$ socket entries rebound to the BGn: C RTL sockets (vms-99f)" >&2; exit 2; }
 fi
 
 # waitid (vms-707) APPENDED at the very end of the vector -> no prior universal's
@@ -1197,6 +1276,13 @@ for pair in get_index get_name get_value set_value; do
     VEC="$VEC,decc\$feature_$pair/ovmx_crtl_feature_$pair=PROCEDURE"
 done
 VEC="$VEC,decc\$set_reentrancy/ovmx_crtl_set_reentrancy=PROCEDURE,decc\$get_reentrancy/ovmx_crtl_get_reentrancy=PROCEDURE"
+# vms-99f: the sockets universals new to the vector (see the SOCKETS block).
+for _u in $(printf '%s' "$DECC_SOCK_TAIL" | tr ',' ' '); do
+    case ",$VEC," in *",${_u%%[/=]*}="*|*",${_u%%[/=]*}/"*)
+        echo "mk_decc_shr: FAIL ${_u%%[/=]*} is already a universal; the sockets tail would duplicate it (vms-99f)" >&2; exit 2;;
+    esac
+done
+VEC="$VEC$DECC_SOCK_TAIL"
 
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
 # link with zero deferred externals. libc.a first so its strong defs win; the
@@ -1204,6 +1290,7 @@ VEC="$VEC,decc\$set_reentrancy/ovmx_crtl_set_reentrancy=PROCEDURE,decc\$get_reen
 "$LINK_EXE" --shareable \
     --symbol-vector "$VEC" \
     --gsmatch "$GSMATCH" \
-    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ" "$FEAT_OBJ"
+    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ" "$FEAT_OBJ" $SOCK_OBJS
+rm -rf "$SOCK_OBJ_DIR"
 
 echo "mk_decc_shr: created $OUT"

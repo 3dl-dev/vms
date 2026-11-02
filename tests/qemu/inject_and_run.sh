@@ -171,6 +171,24 @@ echo "--- rebuilding TCPIP\$DAYTIME.EXE (the subject test_syssvc_tcpip_daytime d
 ( cd /src/repo && cmake --build build-static --target vms_tcpip_daytime \
                         --parallel "$(nproc)" ) || exit 4
 
+# DECC$SHR.EXE + SOCKECHO.EXE (rd vms-99f). The C RTL sockets layer
+# (src/vmstcpip/sockets/ovmx_decc_sockets.c, decc-socket-bound-to-musl) is
+# compiled INTO DECC$SHR, which nothing above rebuilds: re-emit it into
+# SYS$LIBRARY with the SAME recipe and inputs the image build's full producer
+# graph used (mk_mmk_native_staged.sh: CC=musl-gcc, the musl libc.a, musl-gcc's
+# libgcc.a), and relink test_syssvc_decc_socket's subject against it. Rebuilt
+# unconditionally, as everything here is; the vector is append-only, so every
+# other activated image still binds the same sv# indices.
+echo "--- rebuilding DECC\$SHR.EXE (SYS\$LIBRARY) + SOCKECHO.EXE ---"
+( cd /src/repo && \
+  CC=musl-gcc sh src/vmslink/mk_decc_shr.sh build-static/bin/LINK.EXE \
+      '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' \
+      "$(ls /usr/lib/*-linux-musl/libc.a | head -1)" "$(musl-gcc -print-libgcc-file-name)" && \
+  IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
+  sh tests/qemu/sockecho/mk_sockecho_native.sh build-static/bin/LINK.EXE \
+      /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/SOCKECHO.EXE \
+      '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' ) || exit 4
+
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing

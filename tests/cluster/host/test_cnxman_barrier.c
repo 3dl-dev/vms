@@ -894,6 +894,143 @@ static void test_dlm_seam(void)
 			"with completed = 1 after release #12");
 }
 
+
+/*
+ * 6b. THE SURVIVOR'S HELD STEP (rd vms-2fa; tests/lab/captures/
+ * vms-2fa-rebuild-step-20261102). On release R the lock manager sends this
+ * node's own op-0x08 rebuild records, and the step report R+1 waits until
+ * every one is answered: arm 3b frames 21 (release 6), 22 (the record), 23
+ * (the 0xf9), 24 (step 7) -- 1,965 of 1,965 real records closed and held.
+ */
+static uint32_t g_rb_open_on;      /* the release the fake sends records on */
+static uint32_t g_rb_records;      /* how many it sends then                */
+static uint32_t g_rb_outstanding;  /* how many are unanswered now           */
+static uint32_t g_rb_told[16];     /* the releases told, in order           */
+static uint32_t g_rb_steps_when[16]; /* steps_sent when each was told       */
+static uint32_t g_rb_n_told;
+
+static uint32_t fake_rb_released(void *ctx, const struct cnxman_transition *tr,
+				 uint32_t step)
+{
+	(void)ctx; (void)tr;
+	if (g_rb_n_told < 16u) {
+		g_rb_told[g_rb_n_told] = step;
+		g_rb_steps_when[g_rb_n_told] = g.b.steps_sent;
+		g_rb_n_told++;
+	}
+	if (step == g_rb_open_on)
+		g_rb_outstanding = g_rb_records;
+	return g_rb_outstanding;
+}
+
+static uint32_t fake_rb_outstanding(void *ctx)
+{
+	(void)ctx;
+	return g_rb_outstanding;
+}
+
+static const struct dlm_scs_role_ops g_fake_rb_dlm = {
+	.transition_begin    = fake_dlm_begin,
+	.handle_request      = fake_dlm_request,
+	.transition_end      = fake_dlm_end,
+	.barrier_released    = fake_rb_released,
+	.rebuild_outstanding = fake_rb_outstanding,
+};
+
+static void rb_bed(uint32_t open_on, uint32_t records)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+
+	bed_init();
+	g_rb_open_on = open_on;
+	g_rb_records = records;
+	g_rb_outstanding = 0u;
+	g_rb_n_told = 0u;
+	memset(g_rb_told, 0, sizeof(g_rb_told));
+	cnxman_barrier_set_dlm(&g.b, &g_fake_rb_dlm);
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+}
+
+static void test_survivor_holds_its_step_for_its_records(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t r, n, i;
+	char what[160];
+
+	printf("[barrier] rd vms-2fa: a survivor's own rebuild records hold its "
+	       "step report R+1 until every one is answered\n");
+	for (r = 5u; r <= 6u; r++) {
+		rb_bed(r, 1u);
+		for (n = 1u; n < r; n++)
+			(void)feed(f, mk_release(f, EPOCH, n));
+		ct_check_eq_u32(g.b.steps_sent, r,
+				"  every step up to R went out unheld");
+		(void)feed(f, mk_release(f, EPOCH, r));
+		ct_check_eq_u32(g.b.steps_sent, r, r == 5u ?
+				"*** R=5: release 5, a record out -- step 6 is "
+				"NOT sent ***" :
+				"*** R=6: release 6, a record out -- step 7 is "
+				"NOT sent ***");
+		ct_check_eq_u32(g.b.rebuild_holds, 1u, "  the hold is counted");
+		ct_check_eq_u32(g.b.held_step, r + 1u, "  step R+1 is held");
+		g.fake.now_ms += 1000u;
+		cnxman_barrier_timer(&g.b);
+		ct_check_eq_u32(g.b.steps_sent, r,
+				"  the watchdog does not send it while unanswered");
+		cnxman_barrier_rebuild_retry(&g.b);
+		ct_check_eq_u32(g.b.steps_sent, r, "  nor does a retry");
+
+		g_rb_outstanding = 0u;             /* the 0xf9 arrived */
+		cnxman_barrier_rebuild_retry(&g.b);
+		snprintf(what, sizeof(what), "*** answered: step %u goes now "
+			 "(arm 3b frame 24) ***", r + 1u);
+		ct_check(g.b.steps_sent == r + 1u &&
+			 sent_le32(g.n_sent - 1, VMS_OFF_CM_STEP) == r + 1u,
+			 what);
+		ct_check_eq_u32(g.b.rebuild_held_sent, 1u, "  counted");
+		cnxman_barrier_rebuild_retry(&g.b);
+		ct_check_eq_u32(g.b.steps_sent, r + 1u,
+				"  exactly once: a second retry sends nothing");
+
+		for (n = r + 1u; n <= CNXMAN_BARRIER_STEPS; n++)
+			(void)feed(f, mk_release(f, EPOCH, n));
+		ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_COMPLETE &&
+			 g.b.steps_sent == CNXMAN_BARRIER_STEPS,
+			 "  and the barrier still completes, 12 steps, no 13th");
+		ct_check_eq_u32(g_rb_n_told, CNXMAN_BARRIER_STEPS - 1u,
+				"  the lock manager was told releases 1..11");
+		for (i = 0u; i < g_rb_n_told; i++) {
+			if (g_rb_told[i] != i + 1u ||
+			    g_rb_steps_when[i] != i + 1u)
+				break;
+		}
+		ct_check_eq_u32(i, g_rb_n_told,
+				"  *** each release told BEFORE the next step "
+				"report went, in order ***");
+	}
+
+	/* Drained by the watchdog alone (no DLM frame to trigger a retry --
+	 * the answer expired at RECNXINTERVAL in the lock manager). */
+	rb_bed(6u, 3u);
+	for (n = 1u; n <= 6u; n++)
+		(void)feed(f, mk_release(f, EPOCH, n));
+	ct_check_eq_u32(g.b.steps_sent, 6u, "three records out: step 7 held");
+	g_rb_outstanding = 0u;
+	g.fake.now_ms += 1000u;
+	cnxman_barrier_timer(&g.b);
+	ct_check_eq_u32(g.b.steps_sent, 7u,
+			"  the watchdog sends it once none is outstanding");
+
+	/* A lock manager with nothing to rebuild holds nothing. */
+	rb_bed(6u, 0u);
+	for (n = 1u; n <= CNXMAN_BARRIER_STEPS; n++)
+		(void)feed(f, mk_release(f, EPOCH, n));
+	ct_check(g.b.rebuild_holds == 0u &&
+		 g.b.state == (uint8_t)CNXMAN_BARRIER_COMPLETE,
+		 "no records: no hold, the barrier runs straight through");
+}
+
 /* ==========================================================================
  * 7. CLASS PARTICIPATION -- ADD / REMOVE / DEPART
  * ========================================================================== */
@@ -1802,6 +1939,7 @@ int main(void)
 	test_rebuild_records_are_answered_mid_barrier();
 	test_rebuild_records_outside_the_barrier();
 	test_dlm_seam();
+	test_survivor_holds_its_step_for_its_records();
 	test_class_remove_runs_the_same_barrier();
 	test_class_remove_open_is_answered();
 	test_class_remove_drops_the_named_member();

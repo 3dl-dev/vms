@@ -562,6 +562,9 @@ void cnxman_coord_init(struct cnxman_coord *c, struct vms_cluster *cl,
  * its rebuild-gate reporter. */
 void cnxman_coord_set_dlm(struct cnxman_coord *c,
 			  const struct dlm_scs_role_ops *dlm);
+/* rd vms-2fa: a DLM frame was delivered -- maybe the last answer a release was
+ * held on. Re-tries the release (a no-op unless the gate is now open). */
+void cnxman_coord_rebuild_retry(struct cnxman_coord *c);
 void cnxman_coord_set_rebuild(struct cnxman_coord *c,
 			      const struct cnxman_coord_rebuild_ops *rb);
 

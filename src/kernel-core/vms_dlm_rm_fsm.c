@@ -881,6 +881,26 @@ static int rm_rb_become_master(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
 }
 
 /*
+ * MAY A REBUILD RECORD GO ON THE WIRE NOW (rd vms-bcb, vms-2fa)? Only while
+ * the rebuild window is open: after the barrier release of step R and before
+ * the next one (the window section of vms_dlm_rm_fsm.h). Outside it the tree
+ * is STOPPED, counted and said -- this node's locks there are not rebuilt,
+ * which is a loss this node owns; a record a real VAX receives outside that
+ * step is a LOCKMGRERR bugcheck on the receiver (lab33a, 2026-11-02).
+ */
+static int rm_rb_in_window(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
+{
+	if (f->rb_window_open)
+		return 1;
+	f->rb_out_of_window++;
+	rm_rb_stop(f, t, "%DLM, a tree whose master left would be rebuilt "
+			 "by a record outside the state transition's rebuild "
+			 "step: its locks there are not rebuilt (see the DLM "
+			 "counters)");
+	return 0;
+}
+
+/*
  * SEND THE NEXT RECORD THIS TREE OWES, or finish it. Every cell is read from
  * the engine NOW (vms_lock_dlm_handover_next: our next proxy still naming the
  * departed master, root first, a sub only once its parent names `dst`).
@@ -898,6 +918,10 @@ static void rm_rb_pump(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
 		rm_rb_free(t);
 		return;
 	}
+	/* A record is owed: it goes only inside the window -- the first one
+	 * and every one after an answer alike. */
+	if (!rm_rb_in_window(f, t))
+		return;
 	rm_bzero(&w, (uint32_t)sizeof(w));
 	w.id.group = r.res_group;
 	w.id.mode = r.res_mode;
@@ -945,25 +969,6 @@ static void rm_rb_pump(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
 }
 
 /*
- * MAY A REBUILD RECORD GO ON THE WIRE NOW (rd vms-bcb)? Only inside the
- * transition's rebuild step (the `rb_window` door). Outside it the tree is
- * STOPPED, counted and said -- this node's locks there are not rebuilt, which
- * is a loss this node owns; a record a real VAX receives outside that step is
- * a LOCKMGRERR bugcheck on the receiver (lab33a, 2026-11-02).
- */
-static int rm_rb_in_window(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t)
-{
-	if (f->ops->rb_window != 0 && f->ops->rb_window(f->ops->ctx))
-		return 1;
-	f->rb_out_of_window++;
-	rm_rb_stop(f, t, "%DLM, a tree whose master left would be rebuilt "
-			 "by a record outside the state transition's rebuild "
-			 "step, which this node does not yet take part in: its "
-			 "locks there are not rebuilt (see the DLM counters)");
-	return 0;
-}
-
-/*
  * TAKE UP ONE ORPHANED TREE (R2): find where its ROOT record goes, or become
  * its master when this node is its directory and nobody else has claimed it.
  */
@@ -996,8 +1001,7 @@ static void rm_rb_start(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t,
 			return;
 		}
 		t->dst = dir;
-		if (rm_rb_in_window(f, t))
-			rm_rb_pump(f, t);
+		rm_rb_pump(f, t);
 		return;
 	}
 	/* THIS NODE is the directory. Its own entry says who is master now. */
@@ -1015,8 +1019,7 @@ static void rm_rb_start(struct vms_dlm_rm *f, struct vms_dlm_rb_tree *t,
 				/* RA1b: the directory-holder addresses the
 				 * master it has just answered 0xf9. */
 				t->dst = master;
-				if (rm_rb_in_window(f, t))
-					rm_rb_pump(f, t);
+				rm_rb_pump(f, t);
 				return;
 			}
 			f->rb_unaddressable++;
@@ -1950,6 +1953,82 @@ void vms_dlm_rm_rb_transition_begin(struct vms_dlm_rm *f)
 		rm_bzero(&f->rbm[i], (uint32_t)sizeof(f->rbm[i]));
 }
 
+/* ==========================================================================
+ * 7c. THE REBUILD WINDOW (rd vms-2fa) -- the barrier's own state, told here.
+ * ========================================================================== */
+
+uint32_t vms_dlm_rb_release_step(uint32_t own_lockdirwt)
+{
+	return own_lockdirwt != 0u ? VMS_DLM_RB_REL_WEIGHTED
+				   : VMS_DLM_RB_REL_UNWEIGHTED;
+}
+
+void vms_dlm_rm_rb_barrier_released(struct vms_dlm_rm *f, uint32_t step,
+				    uint32_t own_lockdirwt, uint32_t now_ms)
+{
+	if (f == (struct vms_dlm_rm *)0)
+		return;
+	if (step != vms_dlm_rb_release_step(own_lockdirwt)) {
+		/* Before R nothing may go; after it, R+1 is released only once
+		 * every record was answered (the barrier held it), so nothing
+		 * is in flight to strand. A late answer finds the window shut
+		 * and its tree's next record is stopped, never sent. */
+		vms_dlm_rm_rb_window_close(f);
+		return;
+	}
+	if (!f->rb_window_open) {
+		f->rb_window_open = 1u;
+		f->rb_window_step = (uint8_t)step;
+		f->rb_window_opened_ms = now_ms;
+		f->rb_windows_opened++;
+	}
+	/* THE RECORDS GO NOW: every orphaned tree of ours is taken up while
+	 * the barrier is between release R and this node's next frame. */
+	vms_dlm_rm_rb_kick(f);
+}
+
+void vms_dlm_rm_rb_window_close(struct vms_dlm_rm *f)
+{
+	if (f == (struct vms_dlm_rm *)0)
+		return;
+	f->rb_window_open = 0u;
+	f->rb_window_step = 0u;
+}
+
+int vms_dlm_rm_rb_window_open(const struct vms_dlm_rm *f)
+{
+	return (f != (const struct vms_dlm_rm *)0 && f->rb_window_open) ? 1 : 0;
+}
+
+uint32_t vms_dlm_rm_rb_outstanding(const struct vms_dlm_rm *f)
+{
+	return vms_dlm_rm_rb_in_state(f, VMS_DLM_RB_ST_AWAIT);
+}
+
+uint32_t vms_dlm_rm_rb_expire(struct vms_dlm_rm *f, uint32_t now_ms,
+			      uint32_t limit_ms)
+{
+	uint32_t i, n = 0u;
+
+	if (f == (struct vms_dlm_rm *)0 || !f->rb_window_open ||
+	    limit_ms == 0u ||
+	    (uint32_t)(now_ms - f->rb_window_opened_ms) < limit_ms)
+		return 0u;
+	for (i = 0u; i < VMS_DLM_RB_TREES; i++) {
+		if (f->rb[i].state != (uint8_t)VMS_DLM_RB_ST_AWAIT)
+			continue;
+		f->rb_answer_expired++;
+		rm_rb_stop(f, &f->rb[i], "%DLM, a rebuild record went "
+					 "unanswered for the cluster's "
+					 "reconnection interval: that tree's "
+					 "rebuild is stopped and the state "
+					 "transition goes on (see the DLM "
+					 "counters)");
+		n++;
+	}
+	return n;
+}
+
 uint32_t vms_dlm_rm_rb_in_state(const struct vms_dlm_rm *f,
 				enum vms_dlm_rb_state st)
 {
@@ -1971,5 +2050,5 @@ uint32_t vms_dlm_rm_rb_stopped(const struct vms_dlm_rm *f)
 	return f->rb_departed_full + f->rb_unbound + f->rb_records_unsent +
 	       f->rb_answers_refused + f->rb_master_refused +
 	       f->rb_unaddressable + f->rb_dst_departed + f->rb_in_refused +
-	       f->rb_out_of_window;
+	       f->rb_out_of_window + f->rb_answer_expired;
 }

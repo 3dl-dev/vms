@@ -94,10 +94,11 @@ The corpus holds 888 op-0x08 records in ten captures. Every sender is a real VAX
   in the capture (887 of 888) is sent after the barrier release (cat-0x01 op-0x0c) of step 5
   (RA1b, oracle-3node-fault-f1, one formation) or step 6 (E4, E5, E5b, ci6 run16, two
   formations), and answered before the next release. None follows a release of step 7 or later.
-  The coordinator holds its next release until every record is answered. Which of step 5 or 6 a
-  departure takes is not separated here: RA1b and f1 (step 5) and E5/E5b (step 6) all change the
-  directory vector. rd vms-bcb: OVMX's one record, sent after the release of step 12 (lab33a,
-  2026-11-02), bugchecked a real VAX V7.3 with LOCKMGRERR.
+  The coordinator holds its next release until every record is answered. rd vms-bcb: OVMX's one
+  record, sent after the release of step 12 (lab33a, 2026-11-02), bugchecked a real VAX V7.3 with
+  LOCKMGRERR. rd vms-2fa (`tests/lab/captures/vms-2fa-rebuild-step-20261102`) separated 5 from 6:
+  the SENDER's own LOCKDIRWT picks it (non-zero: 5, zero: 6), and the executive now sends only in
+  that window and holds its next barrier frame until every record is answered.
 
 ## Topology: what is covered and what is NOT
 

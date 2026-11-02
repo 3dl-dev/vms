@@ -341,7 +341,9 @@ struct vms_dlm_rm_ops {
 	 * recorded and nothing is sent: the honest floor.
 	 *
 	 * `rb_ready`       1 when the directory may be resolved: the weight
-	 *                  vector is built and no transition is running.
+	 *                  vector is built, and either no transition is
+	 *                  running or this table's rebuild window is open
+	 *                  (vms_dlm_rm_rb_window_open, rd vms-2fa).
 	 * `rb_tree_next`   vms_lock_dlm_rebuild_tree_next: the next orphaned
 	 *                  tree of ours not among `skip`.
 	 * `rb_dir_entry`   THIS node's own directory, asked about a root it
@@ -353,24 +355,6 @@ struct vms_dlm_rm_ops {
 	 *                  the tree's master; 1 = SS$_NORMAL.
 	 */
 	int (*rb_ready)(void *ctx);
-	/*
-	 * `rb_window`      1 only while this node is INSIDE a state
-	 *                  transition's rebuild step, where every real record
-	 *                  is sent (rd vms-bcb): after the barrier release of
-	 *                  step 5 or 6 and answered before the next release
-	 *                  (887 of 887 real records whose barrier is in the
-	 *                  capture, six departures, dlm_rebuild08_census.py
-	 *                  --selftest section 8). None is ever sent after the
-	 *                  barrier: the one OVMX sent there (lab33a, after
-	 *                  release 12) bugchecked a real VAX V7.3 LOCKMGRERR.
-	 *                  UNBOUND = CLOSED, and the executive leaves it
-	 *                  unbound: neither barrier FSM holds a step for a
-	 *                  rebuild yet, and which step (6 or 7) a departure
-	 *                  of a directory node takes is not grounded. A tree
-	 *                  whose record would go to another system is STOPPED,
-	 *                  counted (`rb_out_of_window`) and said.
-	 */
-	int (*rb_window)(void *ctx);
 	int (*rb_tree_next)(void *ctx, uint32_t departed_csid,
 			    const struct vms_dlm_adopt_tree *skip,
 			    uint32_t n_skip, struct vms_dlm_adopt_tree *out);
@@ -449,8 +433,9 @@ struct vms_dlm_ho_tree {
  *                    Its directory node X is resolved the way every lookup
  *                    is (the `dir_node` door):
  *                    A record that would go to ANOTHER system goes only
- *                    inside the transition's rebuild step (`rb_window`,
- *                    rd vms-bcb); outside it the tree is STOPPED, counted.
+ *                    while the REBUILD WINDOW is open (rd vms-bcb,
+ *                    vms-2fa; below); outside it the tree is STOPPED,
+ *                    counted.
  *                      X another member  -> the ROOT record goes to X (R2);
  *                      X is THIS node    -> its own directory is asked: an
  *                        entry naming another member M (a survivor it has
@@ -481,6 +466,39 @@ struct vms_dlm_ho_tree {
  * the lock id whose answer is due; every record cell is re-read from the
  * engine when its frame is built.
  * ========================================================================== */
+/*
+ * THE REBUILD WINDOW (rd vms-2fa; tests/lab/captures/
+ * vms-2fa-rebuild-step-20261102). Every real op-0x08 -- 1,965 of 1,965 whose
+ * barrier is in a capture -- goes out INSIDE the departure's transition: after
+ * the barrier release (cat-0x01 op-0x0c, step at body[16]) of
+ *
+ *   R = VMS_DLM_RB_REL_WEIGHTED (5)   when the SENDER's own LOCKDIRWT != 0,
+ *   R = VMS_DLM_RB_REL_UNWEIGHTED (6) when it is 0,
+ *
+ * and every record is answered before the sender's own next barrier frame (its
+ * step report R+1 as a participant, its release R+1 as the coordinator). Not
+ * the transition type, not a directory-vector change, not the coordinator's
+ * weight: the census separates each of those from the rule. The one OVMX record
+ * sent outside it (after release 12, lab33a) bugchecked a real VAX LOCKMGRERR.
+ *
+ * So the window is the barrier's own state, told to this table by the barrier
+ * FSMs through the arm (vms_dlm_rm_rb_barrier_released): it OPENS on release
+ * R, and CLOSES on any other release, at a transition's begin and end, and
+ * never otherwise. While open, `vms_dlm_rm_rb_outstanding` is what the barrier
+ * holds its next frame on.
+ *
+ * AN ANSWER THAT NEVER COMES (vms_dlm_rm_rb_expire). Every real record in the
+ * corpus was answered, and a destination that LEAVES already stops its tree
+ * (rb_dst_departed). A destination that stays connected and stays silent is
+ * bounded by the interval the cluster already allows a silent system,
+ * RECNXINTERVAL: past it the tree is STOPPED, counted (rb_answer_expired) and
+ * said, and the barrier goes on. The same interval after which VMS would have
+ * removed that system, and with it the hold -- never a timeout of this
+ * table's own choosing.
+ */
+#define VMS_DLM_RB_REL_WEIGHTED   5u
+#define VMS_DLM_RB_REL_UNWEIGHTED 6u
+
 #define VMS_DLM_RB_TREES     16u
 #define VMS_DLM_RB_DEPARTED   8u
 
@@ -632,6 +650,13 @@ struct vms_dlm_rm {
 	uint32_t rb_dst_departed;    /* trees stopped: their destination left */
 	uint32_t rb_out_of_window;   /* trees stopped: a record would have    */
 				     /* gone out outside the rebuild step     */
+	uint32_t rb_answer_expired;  /* trees stopped: no answer within the   */
+				     /* cluster's RECNXINTERVAL               */
+	uint32_t rb_windows_opened;  /* rebuild windows opened (release R)    */
+	uint32_t rb_window_opened_ms;/* when the open window opened           */
+	uint8_t  rb_window_open;     /* 1 between release R and the next      */
+	uint8_t  rb_window_step;     /* the R that opened it                  */
+	uint8_t  rb_window_pad[2];
 	uint32_t rb_no_slot;         /* trees left waiting: every slot busy   */
 	uint32_t rb_in_installed;    /* survivors' records installed + 0xfa   */
 	uint32_t rb_in_refused;      /* ...refused by the engine: unanswered  */
@@ -743,6 +768,35 @@ enum vms_dlm_rm_status vms_dlm_rm_rb_record(struct vms_dlm_rm *f,
 					    uint32_t from_csid,
 					    const uint8_t *body, uint32_t len);
 void vms_dlm_rm_rb_transition_begin(struct vms_dlm_rm *f);
+
+/*
+ * THE REBUILD WINDOW'S DOORS (rd vms-2fa; the window section above).
+ *
+ * `vms_dlm_rb_release_step`: R for a node whose own LOCKDIRWT is
+ * `own_lockdirwt` -- 5 when non-zero, else 6.
+ *
+ * `vms_dlm_rm_rb_barrier_released`: the barrier released step `step` (a
+ * participant RECEIVED it; the coordinator SENT it to everybody). Release R
+ * opens the window (stamped `now_ms`) and kicks the rebuild, so this node's
+ * records go out NOW; any other release closes it.
+ *
+ * `vms_dlm_rm_rb_window_close`: a transition began or ended.
+ *
+ * `vms_dlm_rm_rb_outstanding`: records on the wire and not yet answered -- what
+ * the barrier holds its next frame on.
+ *
+ * `vms_dlm_rm_rb_expire`: with the window open longer than `limit_ms`, every
+ * tree still awaiting an answer is STOPPED, counted (rb_answer_expired);
+ * returns how many. A `limit_ms` of 0 expires nothing.
+ */
+uint32_t vms_dlm_rb_release_step(uint32_t own_lockdirwt);
+void vms_dlm_rm_rb_barrier_released(struct vms_dlm_rm *f, uint32_t step,
+				    uint32_t own_lockdirwt, uint32_t now_ms);
+void vms_dlm_rm_rb_window_close(struct vms_dlm_rm *f);
+int vms_dlm_rm_rb_window_open(const struct vms_dlm_rm *f);
+uint32_t vms_dlm_rm_rb_outstanding(const struct vms_dlm_rm *f);
+uint32_t vms_dlm_rm_rb_expire(struct vms_dlm_rm *f, uint32_t now_ms,
+			      uint32_t limit_ms);
 
 /* How many rebuild slots are in `st`; and the rebuild's stopped total. */
 uint32_t vms_dlm_rm_rb_in_state(const struct vms_dlm_rm *f,

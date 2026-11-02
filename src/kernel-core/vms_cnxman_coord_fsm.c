@@ -837,9 +837,27 @@ static void coord_dlm_end(struct cnxman_coord *c, int completed)
 
 static uint32_t coord_rebuild_outstanding(const struct cnxman_coord *c)
 {
-	if (c->rebuild == NULL || c->rebuild->outstanding == NULL)
-		return 0u;
-	return c->rebuild->outstanding(c->rebuild->ctx);
+	uint32_t n = 0u;
+
+	if (c->rebuild != NULL && c->rebuild->outstanding != NULL)
+		n += c->rebuild->outstanding(c->rebuild->ctx);
+	/* rd vms-2fa: this node's OWN op-0x08 rebuild records, sent after its
+	 * release R, hold its release R+1 until every one is answered. */
+	if (c->dlm != NULL && c->dlm->rebuild_outstanding != NULL)
+		n += c->dlm->rebuild_outstanding(c->dlm->ctx);
+	return n;
+}
+
+/* rd vms-2fa: the coordinator has just released `step` to everybody; the lock
+ * manager opens its rebuild window on its own R and sends its records now. */
+static void coord_rebuild_released(struct cnxman_coord *c, uint32_t step)
+{
+	struct cnxman_transition tr;
+
+	if (c->dlm == NULL || c->dlm->barrier_released == NULL)
+		return;
+	coord_fill_transition(c, &tr);
+	(void)c->dlm->barrier_released(c->dlm->ctx, &tr, step);
 }
 
 /* ==========================================================================
@@ -1706,6 +1724,11 @@ static void coord_try_release(struct cnxman_coord *c)
 			coord_finish(c);
 			return;
 		}
+		/* AFTER the release is on the wire and BEFORE the next one can
+		 * be: release R opens the window, the records go, and the gate
+		 * above holds release R+1 until they are answered (arm 1: a
+		 * weight-0 coordinator, release 6, 281 records, then 7). */
+		coord_rebuild_released(c, (uint32_t)c->step);
 		c->step = (uint8_t)(c->step + 1u);
 		c->cl->club.barrier_step = c->step;
 	}
@@ -2885,6 +2908,13 @@ void cnxman_coord_timer(struct cnxman_coord *c)
 	if (c->ops != NULL && c->ops->arm_timer != NULL && coord_is_active(c))
 		c->ops->arm_timer(c->ops->ctx, CNXMAN_TIMER_BARRIER,
 				  (uint32_t)c->step, CNXMAN_COORD_WATCH_MS);
+}
+
+void cnxman_coord_rebuild_retry(struct cnxman_coord *c)
+{
+	if (c == NULL || c->cl == NULL)
+		return;
+	coord_try_release(c);
 }
 
 void cnxman_coord_participant_lost(struct cnxman_coord *c, int32_t csb_index)

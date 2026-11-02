@@ -2672,7 +2672,11 @@ static int dlm_arm_rb_ready(void *ctx)
 
 	if (d == NULL || d->cl == NULL)
 		return 0;
-	return d->cl->club.ldwv.valid && !d->cl->club.transition_active;
+	/* rd vms-2fa: INSIDE a transition only while the rebuild window is
+	 * open (the vector was refilled at that transition's Phase 2). */
+	return d->cl->club.ldwv.valid &&
+	       (!d->cl->club.transition_active ||
+		vms_dlm_rm_rb_window_open(&d->rm));
 }
 
 static int dlm_arm_rb_tree_next(void *ctx, uint32_t departed_csid,
@@ -2744,10 +2748,6 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.ho_rehome          = dlm_arm_ho_rehome;
 	d->rm_ops.ho_valblk          = dlm_arm_ho_valblk;
 	d->rm_ops.rb_ready           = dlm_arm_rb_ready;
-	/* `rb_window` stays UNBOUND = CLOSED (rd vms-bcb): every real op-0x08
-	 * goes inside the barrier's rebuild step, and neither barrier FSM holds
-	 * a step for one yet. A record sent after the barrier bugchecked a real
-	 * VAX (LOCKMGRERR); a tree that would need one is stopped, counted. */
 	d->rm_ops.rb_tree_next       = dlm_arm_rb_tree_next;
 	d->rm_ops.rb_dir_entry       = dlm_arm_rb_dir_entry;
 	d->rm_ops.rb_dir_claim       = dlm_arm_rb_dir_claim;
@@ -3071,6 +3071,38 @@ static void dlm_arm_transition_begin(void *ctx,
 	/* rd vms-874f: trees this node mastered by an EARLIER rebuild stop
 	 * admitting survivors' ROOT records. */
 	vms_dlm_rm_rb_transition_begin(&d->rm);
+	/* rd vms-2fa: no rebuild record until this transition releases R. */
+	vms_dlm_rm_rb_window_close(&d->rm);
+}
+
+/*
+ * THE BARRIER RELEASED A STEP (rd vms-2fa): a participant received it, or the
+ * coordinator sent it to everybody. The rebuild window is the barrier's own
+ * state: release R -- R read off THIS node's own LOCKDIRWT, the SYSGEN value
+ * its CSB advertises and its weight vector is built from -- opens it and the
+ * records go out now; any other release closes it. Returns what the barrier
+ * holds its next frame on.
+ */
+static uint32_t dlm_arm_barrier_released(void *ctx,
+					 const struct cnxman_transition *tr,
+					 uint32_t step)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	(void)tr;
+	if (d == NULL || d->cl == NULL)
+		return 0u;
+	vms_dlm_rm_rb_barrier_released(&d->rm, step,
+				       (uint32_t)d->cl->params.lockdirwt,
+				       dlm_arm_now_ms(d));
+	return vms_dlm_rm_rb_outstanding(&d->rm);
+}
+
+static uint32_t dlm_arm_rebuild_outstanding(void *ctx)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	return d != NULL ? vms_dlm_rm_rb_outstanding(&d->rm) : 0u;
 }
 
 /*
@@ -3166,8 +3198,11 @@ static void dlm_arm_transition_end(void *ctx,
 	 * ordinary beat can send.
 	 */
 	(void)dlm_req_fsm_transition_ended(&d->req);
-	/* ...AND THE FAILOVER REBUILD (rd vms-874f): the directory resolves
-	 * again, so the trees of ours whose master left are taken up now. */
+	/* ...AND THE FAILOVER REBUILD (rd vms-874f, vms-2fa): the window is
+	 * shut with the transition, so a tree of ours not rebuilt inside it is
+	 * taken up here only to be STOPPED and counted (or mastered here, when
+	 * this node is its directory -- nothing on the wire). */
+	vms_dlm_rm_rb_window_close(&d->rm);
 	vms_dlm_rm_rb_kick(&d->rm);
 }
 
@@ -3247,6 +3282,8 @@ static void dlm_arm_bind_role(struct vms_dlm_scs *d)
 	d->role.transition_end   = dlm_arm_transition_end;
 	d->role.member_departed  = dlm_arm_member_departed;
 	d->role.quorum_changed   = dlm_arm_quorum_changed;
+	d->role.barrier_released = dlm_arm_barrier_released;
+	d->role.rebuild_outstanding = dlm_arm_rebuild_outstanding;
 	d->role.ctx              = d;
 }
 
@@ -3319,6 +3356,12 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 		/* rd vms-874f: a rebuild that was waiting for a directory, or
 		 * for a slot, is taken up on the beat too (idempotent). */
 		vms_dlm_rm_rb_kick(&d->rm);
+		/* rd vms-2fa: a record unanswered for the cluster's own
+		 * RECNXINTERVAL stops its tree, so the barrier held on it goes
+		 * on (it re-tries on its own watchdog). */
+		if (d->cl != NULL)
+			(void)vms_dlm_rm_rb_expire(&d->rm, dlm_arm_now_ms(d),
+				(uint32_t)d->cl->club.recnxinterval * 1000u);
 		dlm_arm_arm_beat(d);
 		return;
 	}

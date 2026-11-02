@@ -314,6 +314,10 @@ dlm-rebuild-0xf9-not-adopted
 dlm-rebuild-record-sent-as-op12
 dlm-rebuild-install-ignores-compat
 dlm-rebuild-sent-outside-the-step
+dlm-rebuild-window-opens-early
+dlm-rebuild-records-wait-past-release
+barrier-step-not-held-for-own-rebuild
+coord-release-not-held-for-own-rebuild
 dlm-rebuild-record-drops-the-granted-valblk
 dlm-rebuild-record-stale-seq-after-own-write"
 
@@ -3126,6 +3130,7 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "vms_dlm_rm_rb_answer()'s 0xf9 branch is disarmed, so a 0xf9 is read as a refused record: the tree stops, this node never becomes its master, its own locks stay proxies naming a master that has left, and the other survivor's records have nowhere to be installed. The tree is mastered nowhere: RA1b's RMT1 with OVMX as VAX2.";;
         require_fail) hd_lines <<'EOF'
+  OVMXE now masters DEPT
   *** its 0xfa equals VAX2's real one: the echo, body[28]=0x10, the tail ***
   and nothing new installed
   body[20:24]: a handle THIS engine minted
@@ -3151,6 +3156,7 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "rm_rb_pump() builds its record with the op-0x12 builder: every cell is right but the opcode, so a real VAX directory receives a remaster record for a hand-over nobody opened instead of the failover rebuild record, and the survivor's locks die with the master exactly as before rd vms-874f.";;
         require_fail) hd_lines <<'EOF'
+  a cat-0x02 op-0x08 ROOT for our DEPT lock, to the directory VAX2
   a SUB record, body[36:40] our own root lkid
   a cat-0x02 op-0x08
 *** EVERY NAMED CELL equals VAX2's real ROOT record: PID 0x20400217, own lkid, PR/PR, no parent, identity, tail, the tree hash ***
@@ -3176,11 +3182,11 @@ EOF
 
     dlm-rebuild-sent-outside-the-step)
         case "$_f" in
-        facility)     echo "the failover rebuild's PHASE (rd vms-bcb): an op-0x08 record goes on the wire only inside the transition's rebuild step (887 of 887 real records sent after the barrier release of step 5 or 6 and answered before the next release); outside it the tree is stopped, counted";;
+        facility)     echo "the failover rebuild's PHASE (rd vms-bcb, vms-2fa): an op-0x08 record goes on the wire only while the rebuild window is open -- after the barrier release R and before this node's next barrier frame (1,965 of 1,965 real records); outside it the tree is stopped, counted";;
         targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
         suites_red)   echo "test_dlm_rebuild";;
         isolation)    echo "isolated";;
-        why)          echo "rm_rb_in_window() always says open, so the survivor sends its ROOT record at the transition's end, after the barrier's twelfth release -- the frame (lab33a pcap 7801) on which a real OpenVMS VAX V7.3 bugchecked LOCKMGRERR.";;
+        why)          echo "rm_rb_in_window() always says open, so the survivor sends its ROOT record at the transition's end, after the barrier's twelfth release -- the frame (lab33a pcap 7801) on which a real OpenVMS VAX V7.3 bugchecked LOCKMGRERR -- and a SUB after a late answer, once the window has shut.";;
         require_fail) hd_lines <<'EOF'
 *** NO op-0x08 goes to VAX2 after the barrier (the old sender's frame 7801 bugchecked it) ***
   nothing counted as sent
@@ -3188,6 +3194,101 @@ EOF
   in the stopped total
 *** the directory-holder sends none outside the step either ***
   counted
+*** the SUB it would release is NOT sent: the window is shut ***
+  the tree stopped, counted
+EOF
+                      ;;
+        esac;;
+
+    dlm-rebuild-window-opens-early)
+        case "$_f" in
+        facility)     echo "the rebuild window's RELEASE (rd vms-2fa): R = 5 only when this node's own LOCKDIRWT is non-zero, else 6 (588 of 588 weight-0 records after release 6)";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rb_release_step() answers 5 for every node, so a weight-0 survivor -- lab33a's OVMXE, arm 3b's VAX3 -- sends its op-0x08 after release 5, a step before any real weight-0 sender does.";;
+        require_fail) hd_lines <<'EOF'
+  and nothing was re-sent
+  counted
+  in the stopped total
+  still one
+  the tree stopped, counted
+  the window is shut
+*** at RECNXINTERVAL the tree is stopped ***
+*** release 5: no record yet (an EARLY record is outside every real one) ***
+*** the SUB it would release is NOT sent: the window is shut ***
+R for a weight-0 node is 6 (588 of 588 real records)
+release 6: one record out
+release 6: the ROOT goes
+the late 0xfa re-homes the root
+EOF
+                      ;;
+        esac;;
+
+    dlm-rebuild-records-wait-past-release)
+        case "$_f" in
+        facility)     echo "the records go out ON release R (rd vms-2fa): the barrier holds its next frame only on records already on the wire, so a record not sent at R is sent never -- or, as lab33a's was, after the barrier";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rm_rb_barrier_released() opens the window and takes up no tree, so nothing is outstanding, the barrier does not hold, release R+1 shuts the window and the tree is stopped at the transition's end: the survivor's lock dies with the master, exactly lab33a's DEPT.";;
+        require_fail) hd_lines <<'EOF'
+  OVMXE now masters DEPT
+  a cat-0x02 op-0x08 ROOT for our DEPT lock, to the directory VAX2
+  and no tree was stopped for the step
+  and nothing more went out through release 12
+  and nothing was re-sent
+  and release 6 is just another release to it
+  counted
+  in the stopped total
+  nor at the transition's end
+  still one
+  the tree stopped, counted
+*** ONE record unanswered: what the barrier holds step 7 on ***
+*** at RECNXINTERVAL the tree is stopped ***
+*** release 6: the ROOT goes out NOW (arm 3b frame 22), not at the transition's end (lab33a frame 7801) ***
+*** the SUB it would release is NOT sent: the window is shut ***
+*** weighted: the ROOT goes out on release 5 (arm 2, 796 of 796) ***
+VAX2's 0xf9 (frame 23) is the answer
+release 6: one record out
+release 6: the ROOT goes
+the late 0xfa re-homes the root
+EOF
+                      ;;
+        esac;;
+
+    barrier-step-not-held-for-own-rebuild)
+        case "$_f" in
+        facility)     echo "the participant's HELD step (rd vms-2fa): with its own op-0x08 records unanswered after release R, step report R+1 waits (arm 3b frames 21-24; 1,965 of 1,965 real records answered before the sender's next barrier frame)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_release() never holds: step R+1 goes out while this node's rebuild records are still on the wire, so the coordinator can release R+1 -- the step after which no real record is ever sent or answered.";;
+        require_fail) hd_lines <<'EOF'
+*** R=5: release 5, a record out -- step 6 is NOT sent ***
+*** R=6: release 6, a record out -- step 7 is NOT sent ***
+  the hold is counted
+  step R+1 is held
+  the watchdog does not send it while unanswered
+  nor does a retry
+  counted
+three records out: step 7 held
+EOF
+                      ;;
+        esac;;
+
+    coord-release-not-held-for-own-rebuild)
+        case "$_f" in
+        facility)     echo "the coordinator's HELD release (rd vms-2fa): with its own op-0x08 records unanswered after release R, release R+1 waits even once every member reported R+1 (arm 1: VAX3 the coordinator, 281 records after release 6, then 7)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_rebuild_outstanding() stops counting the lock manager's own records, so the coordinator releases R+1 to everybody while its records are still unanswered.";;
+        require_fail) hd_lines <<'EOF'
+*** R=5: everybody reported 6, but release 6 is HELD for our records ***
+*** R=6: everybody reported 7, but release 7 is HELD for our records ***
+  the hold is counted
+  neither the beat nor a retry releases it while one is unanswered
 EOF
                       ;;
         esac;;
@@ -4271,8 +4372,27 @@ apply_edit() {
         sed -i 's#    ok = dup != NULL ||#    ok = 1 || dup != NULL || /* NEGCTL dlm-rebuild-install-ignores-compat */#' "$_file";;
 
     dlm-rebuild-sent-outside-the-step)
-        # `if (f->ops->rb_window != 0 && f->ops->rb_window(f->ops->ctx))` is unique.
-        sed -i 's|if (f->ops->rb_window != 0 \&\& f->ops->rb_window(f->ops->ctx))|if (1) /* NEGCTL dlm-rebuild-sent-outside-the-step */|' "$_file";;
+        # rm_rb_in_window()'s tab-indented if (f->rb_window_open) line is unique.
+        sed -i 's|^\tif (f->rb_window_open)$|\tif (1) /* NEGCTL dlm-rebuild-sent-outside-the-step */|' "$_file";;
+
+    dlm-rebuild-window-opens-early)
+        # vms_dlm_rb_release_step()'s one return: every node takes the
+        # WEIGHTED release. The edit consumes its anchor.
+        sed -i 's|return own_lockdirwt != 0u ? VMS_DLM_RB_REL_WEIGHTED|return (own_lockdirwt + 1u) != 0u ? VMS_DLM_RB_REL_WEIGHTED /* NEGCTL dlm-rebuild-window-opens-early */|' "$_file";;
+
+    dlm-rebuild-records-wait-past-release)
+        # vms_dlm_rm_rb_barrier_released()'s kick, the TAB-indented one
+        # directly after the "THE RECORDS GO NOW" comment: the window opens
+        # and nothing is taken up in it. The edit consumes its anchor.
+        sed -i '/THE RECORDS GO NOW/,/vms_dlm_rm_rb_kick(f);/ s|^\tvms_dlm_rm_rb_kick(f);$|\t/* NEGCTL dlm-rebuild-records-wait-past-release */|' "$_file";;
+
+    barrier-step-not-held-for-own-rebuild)
+        # barrier_h_release()'s hold: never taken. The edit consumes it.
+        sed -i 's|\tif (barrier_rebuild_released(b, rel.step) != 0u) {|\tif (barrier_rebuild_released(b, rel.step) != 0u \&\& 0) { /* NEGCTL barrier-step-not-held-for-own-rebuild */|' "$_file";;
+
+    coord-release-not-held-for-own-rebuild)
+        # coord_rebuild_outstanding()'s own-records term: never counted.
+        sed -i 's|\tif (c->dlm != NULL \&\& c->dlm->rebuild_outstanding != NULL)|\tif (0 \&\& c->dlm != NULL) /* NEGCTL coord-release-not-held-for-own-rebuild */|' "$_file";;
 
     dlm-rebuild-record-drops-the-granted-valblk)
         # `        if (seq_how == DLM_GRANT_SEQ_SET)` is unique.

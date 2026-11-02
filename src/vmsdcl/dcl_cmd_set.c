@@ -2498,7 +2498,7 @@ static int cmd_set_host(struct dcl_command *cmd)
                 dcl_error("DCL", 0, "VALREQ",
                           "missing qualifier or keyword value - supply all "
                           "required values\n \\%s\\", v->quals[hit].name);
-                return SS$_BADPARAM;
+                return CLI$_VALREQ;
             }
         }
         dcl_error("DCL", 0, "MAXPARM", "too many parameters - reenter command "

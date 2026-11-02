@@ -2095,8 +2095,9 @@ static int dlm_arm_handle_reply(struct vms_dlm_scs *d,
  *     lets the next asker become a second master too.
  * Both are counted and said once on the console.
  *
- * Only for a sender that is NOT this implementation: between OVMX nodes the
- * engine's own all-OVMX routing owns the directory (vms-3e3).
+ * Between OVMX nodes the engine's master path still serves what this node
+ * masters (vms-3e3); the directory answers an OVMX member only where the master
+ * path cannot -- a name nobody here holds (rd vms-3ea, dlm_arm_dir_takes_ours).
  * ========================================================================== */
 
 /*

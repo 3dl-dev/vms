@@ -1,0 +1,74 @@
+; EVPROBE.MAR - the ci.6 exclusion probe (rd vms-1e58, criterion 4).
+;
+; Assembled + run on a real VAX V7.3 lab node at fire time, like EVACWL.MAR
+; (tests/lab/tools/ci6_evac.sh stages it). While another node holds
+; EVAC$WORKLOAD EX, a $ENQW for EX with LCK$M_NOQUEUE must come back
+; SS$_NOTQUEUED: the master refuses to queue it. A grant here would mean two
+; holders of the workload lock at once.
+;
+; Clean-room (Rule 8): LCK$K_EXMODE / LCK$M_NOQUEUE (4) come from the public
+; STARLET definitions this project's oracle captured off a real VAX V7.3 node
+; (docs/oracle/vax73-starlet-defs/LCKDEF.txt; SS$_NOTQUEUED = 2488 in
+; SSDEF.txt). The $GETMSG_S / $FAO_S / LIB$PUT_OUTPUT shape follows this
+; project's own message-catalog probe (tools/oracle/messages/SP_MSGCAT.MAR)
+; and the $ENQW_S / $ASCTIM_S shape follows EVACWL.MAR (same directory).
+; None of this is VSI/HPE source.
+;
+; LOCK NAMESPACE: like EVACWL, no LCK$M_SYSTEM, so the name is scoped to the
+; caller's UIC group: run it as SYSTEM, the account EVACWL runs under.
+;
+; OUTPUT, one line (ci6_evac.sh grade reads it):
+;   EVPROBE: <$ASCTIM time> $ENQW EX NOQUEUE EVAC$WORKLOAD R0=<hex> <message>
+; R0 is the service status, or the LKSB status when the request was queued.
+; If the lock WAS granted, EVPROBE releases it at once ($DEQ) so the probe
+; never holds the workload lock itself.
+ .TITLE EVPROBE
+ $LCKDEF
+
+ .PSECT DAT,WRT,NOEXE,LONG
+LKSB: .BLKB 8
+RESNAM_D: .ASCID /EVAC$WORKLOAD/
+STATUS: .LONG 0
+NOWTIM: .QUAD 0
+TIMEBUF: .BLKB 32
+TIMELEN: .WORD 0
+ .ALIGN LONG
+TIMEDSC: .WORD 31
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS TIMEBUF
+MSGBUF: .BLKB 256
+MSGDSC: .LONG 256
+ .ADDRESS MSGBUF
+MSGLEN: .WORD 0
+ .ALIGN LONG
+CTL: .ASCID /EVPROBE: !AD $ENQW EX NOQUEUE EVAC$WORKLOAD R0=!XL !AD/
+LINE: .BLKB 400
+LINDSC: .LONG 400
+ .ADDRESS LINE
+LINLEN: .WORD 0
+
+ .PSECT COD,EXE,NOWRT
+ .ENTRY EVPROBE,^M<R2,R3,R4,R5,R6>
+ $GETTIM_S TIMADR=NOWTIM
+ $ASCTIM_S TIMLEN=TIMELEN,TIMBUF=TIMEDSC,TIMADR=NOWTIM,CVTFLG=#0
+ $ENQW_S EFN=#1,LKMODE=#LCK$K_EXMODE,LKSB=LKSB,RESNAM=RESNAM_D,FLAGS=#LCK$M_NOQUEUE
+ MOVL R0,STATUS
+ BLBC R0,10$
+ MOVZWL LKSB,STATUS                ; queued: the final status is in the LKSB
+10$:
+ $GETMSG_S MSGID=STATUS,MSGLEN=MSGLEN,BUFADR=MSGDSC,FLAGS=#15
+ MOVZWL TIMELEN,R2
+ MOVZWL MSGLEN,R3
+ MOVL #400,LINDSC
+ $FAO_S CTRSTR=CTL,OUTLEN=LINLEN,OUTBUF=LINDSC,P1=R2,P2=#TIMEBUF,P3=STATUS,P4=R3,P5=#MSGBUF
+ MOVZWL LINLEN,R6
+ MOVW R6,LINDSC
+ PUSHAQ LINDSC
+ CALLS #1,G^LIB$PUT_OUTPUT
+ BLBC STATUS,20$
+ $DEQ_S LKID=LKSB+4                ; granted: release it at once
+20$:
+ MOVL #1,R0
+ RET
+ .END EVPROBE

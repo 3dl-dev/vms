@@ -1,0 +1,59 @@
+old console line from an earlier run: %SYSTEM-F-INVLOCKID, this must be windowed out
+$ ! CI6EVAC-BEGIN ci6evac-172133
+$ SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL
+%DCL-S-SPAWNED, process EVACVAX1 spawned
+$ STOP EVACVAX1
+$ DISMOUNT/CLUSTER $2$DUA1:
+%DISM-W-RMTDSMFAIL, _$2$DUA1: failed to dismount on node OVMXE
+-SYSTEM-W-GPTFULL, global page table is full
+%DISM-W-RMTDSMFAIL, _$2$DUA1: failed to dismount on node OVMXE
+-SYSTEM-W-DEVOFFLINE, device is not in configuration or not available
+%DISM-W-DSMCLUFAIL, dismount/cluster failed on one or more nodes in the cluster
+$ @SYS$SYSTEM:SHUTDOWN
+
+
+        SHUTDOWN -- Perform an Orderly System Shutdown
+                    on node VAX1
+
+How many minutes until final shutdown [0]: 0
+Reason for shutdown [Standalone]: CI6-EVACUATION
+Do you want to spin down the disk volumes [NO]? NO
+Do you want to invoke the site-specific shutdown procedure [YES]? NO
+Should an automatic system reboot be performed [NO]? NO
+When will the system be rebooted [later]: 
+Shutdown options (enter as a comma-separated list):
+ REMOVE_NODE         Remaining nodes in the cluster should adjust quorum
+ CLUSTER_SHUTDOWN    Entire cluster is shutting down
+ REBOOT_CHECK        Check existence of basic system files
+ SAVE_FEEDBACK       Save AUTOGEN feedback information from this boot
+ DISABLE_AUTOSTART   Disable autostart queues
+
+Shutdown options [NONE]: REMOVE_NODE
+
+%SHUTDOWN-I-OPERATOR, this terminal is now an operator's console
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:28:52.12  %%%%%%%%%%%
+Operator status for operator _VAX1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%SHUTDOWN-I-DISLOGINS, interactive logins will now be disabled
+%SET-I-INTSET, login interactive limit = 0, current interactive value = 1
+%SHUTDOWN-I-SHUTNET, the DECnet network will now be shut down
+%SHUTDOWN-I-STOPQUEUES, the queues on this node will now be stopped
+%SHUTDOWN-I-DISMOUNT, all volumes will now be dismounted
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.20  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+_VAX1$OPA0:, VAX1 shutdown was requested by the operator.
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.22  %%%%%%%%%%%
+Logfile was closed by operator _VAX1$OPA0:
+Logfile was VAX1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;46
+
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:01.24  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+%CNXMAN,  proposing modification of quorum or quorum disk membership
+%CNXMAN,  completing VAXcluster state transition
+	SYSTEM SHUTDOWN COMPLETE - use console to halt system
+Infinite loop, PC: 86FAB4D3 (BRB 86FAB4D3)

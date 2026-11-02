@@ -1,0 +1,220 @@
+#!/bin/bash
+# ci6_evac.sh -- the ci.6 rolling-evacuation release gate (rd vms-1e58): drive
+# the evacuation on a lab pod, then grade the capture.
+#
+#   ci6_evac.sh fire <pod> [capture-dir]    drive the run, capture, then grade
+#   ci6_evac.sh grade <capture-dir>         grade a capture (pure, no lab)
+#
+# GRADE (tests/lab/tools/ci6_evac_grade.py) reads only the capture directory
+# and prints PASS/FAIL for each criterion; exit 1 on any FAIL:
+#   1 EVACWL running on VAX1, the OVMX standby queued behind it (NL first)
+#   2 the workload stopped on VAX1, VAX1 removed (SHUTDOWN REMOVE_NODE)
+#   3 OVMX granted, continues at seq+1 on the shared volume
+#   4 a VAX2 $ENQ EX/NOQUEUE probe (tests/lab/ci6/EVPROBE.MAR) gets
+#     SS$_NOTQUEUED while OVMX holds the lock
+#   5 quorum never lost, 0 bugchecks (console grep), EVAC.DAT contiguous
+#
+# FIRE drives the run16 sequence (tests/lab/captures/vms-ci6-evac-20261010/)
+# through lab-console.sh only, one line per call (AGENTS.md "Lab consoles"),
+# writes a timeline, collects the consoles windowed from its own begin marker,
+# and grades. Default capture dir: tests/lab/captures/vms-ci6-evac-<date>/<run>.
+# CI6_DRY=1 prints the console sequence instead of sending it (no pod).
+#
+# PRECONDITIONS (fire checks what it can and refuses otherwise):
+#  * VAX1 and VAX2 (real V7.3) and the OVMX member are one cluster, every
+#    console logged in as SYSTEM at the DCL prompt (prompt-synchronised login,
+#    tests/lab/README.md).
+#  * Votes leave the survivors quorate when VAX1 leaves. With VAX1/VAX2 at
+#    VOTES 1, boot the OVMX member with OVMX_FIRE_VOTES=2 (ovmx_fire.sh):
+#    total 4, quorum 3, survivors 3. fire reads CLUSTER_QUORUM/CLUSTER_VOTES
+#    on VAX2 and VOTES on VAX1 and refuses if (votes - VAX1's) < quorum.
+#  * The OVMX member runs LOCKDIRWT 1 (so its standby NL makes it directory
+#    and master, the interim configuration), sees the shared VAX1DATA disk
+#    ($2$DUA1: on the VAXes) as VDA100:, and carries SYS$SYSTEM:EVACWL.EXE
+#    (tests/lab/ci6/mk_evacwl_native.sh). fire checks EVACWL.EXE.
+set -u
+HERE=$(cd "$(dirname "$0")" && pwd)
+CI6=$HERE/../ci6
+LC=$HERE/lab-console.sh
+NS=ovmx-lab
+OVMX=${CI6_OVMX_NODE:-OVMXE}
+OCON=$(echo "$OVMX" | tr A-Z a-z)
+DRY=${CI6_DRY:-0}
+
+usage() { sed -n '2,8p' "$0" >&2; exit 2; }
+
+case "${1:-}" in
+grade)
+	[ $# -eq 2 ] || usage
+	exec python3 -I "$HERE/ci6_evac_grade.py" "$2" ;;
+fire) [ $# -ge 2 ] || usage ;;
+*) usage ;;
+esac
+
+POD=$2
+case "$POD" in *[!A-Za-z0-9-]*|"") echo "ci6_evac.sh: bad pod name" >&2; exit 2;; esac
+STAMP=$(date -u +%Y%m%d)
+RUN=ci6evac-$(date -u +%H%M%S)
+CAP=${3:-$HERE/../captures/vms-ci6-evac-$STAMP/$RUN}
+# A fresh directory per run on the shared volume, so EVAC.DAT starts at seq 1
+# by construction (run16's DELETE of the old file failed BADFILEHDR).
+DIR=CI6E$(date -u +%m%d%H%M)
+TL=$CAP/timeline.txt
+mkdir -p "$CAP"
+
+tl() { echo "$(date -u +%H:%M:%S) $*" | tee -a "$TL"; }
+die() { tl "ABORT: $*"; exit 3; }
+send() {    # send <node> <line> [settle-seconds]
+	if [ "$DRY" = 1 ]; then echo "SEND $1: $2"; return 0; fi
+	timeout 60 "$LC" send "$POD" "$1" "$2" || die "lab-console send to $1 failed"
+	sleep "${3:-3}"
+}
+ctrl() {
+	if [ "$DRY" = 1 ]; then echo "CTRL $1: ^$2"; return 0; fi
+	timeout 60 "$LC" ctrl "$POD" "$1" "$2" || die "lab-console ctrl to $1 failed"
+	sleep 2
+}
+# The console since this fire's begin marker (consoles are append-only).
+since() {
+	[ "$DRY" = 1 ] && return 0
+	timeout 120 "$LC" read "$POD" "$1" "${2:-4000}" | tr -d '\r' | awk -v m="CI6EVAC-BEGIN $RUN" 'index($0,m){b=NR} {l[NR]=$0} END{for(i=b;i<=NR&&b;i++)print l[i]}'
+}
+# wait_for <node> <ERE> <seconds>: poll the windowed console for a line.
+wait_for() {
+	[ "$DRY" = 1 ] && { echo "WAIT $1: /$2/"; return 0; }
+	local i
+	for i in $(seq 0 10 "$3"); do
+		since "$1" | grep -qE -- "$2" && return 0
+		sleep 10
+	done
+	return 1
+}
+
+tl "T0 $RUN on pod $POD; OVMX node $OVMX; data directory [$DIR]; capture $CAP"
+for n in vax1 vax2 "$OCON"; do send "$n" "! CI6EVAC-BEGIN $RUN" 2; done
+
+# ---- preconditions ----------------------------------------------------------
+send vax2 'WRITE SYS$OUTPUT "CI6Q Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")'
+send vax1 'WRITE SYS$OUTPUT "CI6V VOTES=",F$GETSYI("VOTES")'
+send "$OCON" 'DIRECTORY SYS$SYSTEM:EVACWL.EXE' 5
+if [ "$DRY" != 1 ]; then
+	qv=$(since vax2 | sed -n 's/^CI6Q Q=\([0-9]*\) V=\([0-9]*\) N=\([0-9]*\).*/\1 \2 \3/p' | tail -1)
+	v1=$(since vax1 | sed -n 's/^CI6V VOTES=\([0-9]*\).*/\1/p' | tail -1)
+	set -- $qv
+	[ $# -eq 3 ] && [ -n "$v1" ] || die "could not read quorum/votes (VAX2 '$qv', VAX1 '$v1')"
+	[ "$3" -ge 3 ] || die "cluster has $3 members, want VAX1+VAX2+$OVMX"
+	[ $(($2 - v1)) -ge "$1" ] || die "survivors keep $(($2 - v1)) votes < quorum $1: boot $OVMX with OVMX_FIRE_VOTES=2"
+	tl "PRECHECK Q=$1 V=$2 N=$3, VAX1 VOTES $v1: survivors keep $(($2 - v1)) >= $1"
+	since "$OCON" | grep -q 'EVACWL.EXE;' || die "$OVMX has no SYS\$SYSTEM:EVACWL.EXE"
+fi
+
+# ---- stage EVACWL (VAX1) and EVPROBE (VAX2): FTP, then MACRO + LINK on the VAX
+STAGE=/lab/run-ci6evac
+if [ "$DRY" = 1 ]; then
+	echo "STAGE EVACWL.MAR -> vax1, EVPROBE.MAR -> vax2 (vput.py)"
+else
+	kubectl -n $NS exec "$POD" -- mkdir -p $STAGE || die "stage dir"
+	for f in "$CI6/EVACWL.MAR" "$CI6/EVPROBE.MAR" "$HERE/vput.py"; do
+		kubectl -n $NS cp "$f" "$POD:$STAGE/$(basename "$f")" || die "kubectl cp $f"
+	done
+	kubectl -n $NS exec "$POD" -- python3 $STAGE/vput.py 10.2.1.1 $STAGE/EVACWL.MAR || die "FTP EVACWL.MAR"
+	kubectl -n $NS exec "$POD" -- python3 $STAGE/vput.py 10.2.1.2 $STAGE/EVPROBE.MAR || die "FTP EVPROBE.MAR"
+fi
+send vax1 'SET DEFAULT SYS$LOGIN'
+send vax1 'MACRO EVACWL' 25
+send vax1 'LINK EVACWL' 15
+send vax1 'EVACWL :== $SYS$LOGIN:EVACWL.EXE'
+send vax2 'SET DEFAULT SYS$LOGIN'
+send vax2 'MACRO EVPROBE' 25
+send vax2 'LINK EVPROBE' 15
+send vax2 'EVPROBE :== $SYS$LOGIN:EVPROBE.EXE'
+send vax1 'DIRECTORY/SIZE SYS$LOGIN:EVACWL.EXE'
+send vax2 'DIRECTORY/SIZE SYS$LOGIN:EVPROBE.EXE'
+if [ "$DRY" != 1 ]; then
+	since vax1 | grep -q 'EVACWL.EXE;' || die "EVACWL did not build on VAX1"
+	since vax2 | grep -q 'EVPROBE.EXE;' || die "EVPROBE did not build on VAX2"
+fi
+tl "STAGED EVACWL.EXE on VAX1, EVPROBE.EXE on VAX2"
+
+# ---- STEP 0: the shared volume, cluster-mounted from VAX1 ---------------------
+tl "STEP 0 VAX1: DISMOUNT/CLUSTER, MOUNT/CLUSTER \$2\$DUA1: VAX1DATA; [$DIR]"
+send vax1 'DISMOUNT/CLUSTER $2$DUA1:' 30
+send vax1 'MOUNT/CLUSTER $2$DUA1: VAX1DATA' 40
+send vax1 "CREATE/DIRECTORY \$2\$DUA1:[$DIR]" 5
+send vax1 "DEFINE/SYSTEM EVAC\$DATA \$2\$DUA1:[$DIR]"
+send "$OCON" "DEFINE/SYSTEM EVAC\$DATA VDA100:[$DIR]"
+send vax1 'SHOW DEVICE $2$DUA1:' 5
+
+# ---- STEP 1: OVMX standby takes NL first (directory + master), converts at 90 s
+tl "STEP 1 $OVMX: EVACWL STANDBY NL=90 (spawned)"
+send "$OCON" 'CREATE SYS$LOGIN:OVSTBY.COM' 2
+send "$OCON" '$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE' 1
+send "$OCON" '$ EVACWL STANDBY NL=90' 1
+ctrl "$OCON" Z
+send "$OCON" 'SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM' 5
+wait_for "$OCON" 'standby holds EVAC\$WORKLOAD NL' 60 || die "$OVMX standby never took NL"
+
+# ---- STEP 2: the workload on the real VAX ----------------------------------------
+tl "STEP 2 VAX1: EVACWL (direct EX, forever)"
+send vax1 'SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL' 5
+[ "$DRY" = 1 ] || sleep 120           # past the standby's 90 s NL hold: its CONVERT queues
+since "$OCON" | grep -q 'took EVAC\$WORKLOAD EX' && die "$OVMX took EX while VAX1 ran"
+send vax1 'SHOW SYSTEM' 5
+send vax1 "DIRECTORY/SIZE=ALL \$2\$DUA1:[$DIR]EVAC.DAT" 5
+tl "SNAPSHOT VAX1 workload running, $OVMX standby converting behind it"
+
+# ---- STEP 3: evacuate -----------------------------------------------------------
+tl "STEP 3 EVACUATE: STOP EVACVAX1 on VAX1"
+send vax1 'STOP EVACVAX1' 5
+wait_for "$OCON" 'holding EVAC\$WORKLOAD, waiting for' 180 || die "$OVMX standby was not granted EX"
+tl "STEP 3 result: $OVMX standby granted EX"
+
+# ---- STEP 4: volume handoff, OVMX continues on the shared volume ----------------
+tl "STEP 4 VAX1: DISMOUNT/CLUSTER \$2\$DUA1:; $OVMX: MOUNT VDA100: VAX1DATA"
+send vax1 'DISMOUNT/CLUSTER $2$DUA1:' 45
+send vax1 'SHOW DEVICE $2$DUA1:' 5
+send "$OCON" 'MOUNT VDA100: VAX1DATA' 10
+wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 || die "$OVMX never continued the workload"
+tl "TAKEOVER: $(since "$OCON" | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
+
+# ---- STEP 5: the exclusion probe, while OVMX holds EX -----------------------------
+[ "$DRY" = 1 ] || sleep 20
+tl "STEP 5 VAX2: EVPROBE (\$ENQW EX NOQUEUE EVAC\$WORKLOAD)"
+send vax2 'EVPROBE' 10
+tl "PROBE: $(since vax2 | grep -ao 'EVPROBE: .*' | tail -1)"
+
+# ---- STEP 6: VAX1 leaves the cluster ----------------------------------------------
+tl "STEP 6 VAX1: SHUTDOWN, REMOVE_NODE"
+send vax1 '@SYS$SYSTEM:SHUTDOWN' 10
+for a in 0 CI6-EVACUATION NO NO NO '' REMOVE_NODE; do send vax1 "$a" 4; done
+wait_for vax2 'removed from VAXcluster system VAX1|Node VAX1 .* has been removed' 600 || die "VAX2 never removed VAX1"
+wait_for vax1 'SYSTEM SHUTDOWN COMPLETE' 300 || die "VAX1 never completed SHUTDOWN"
+send vax2 'WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")' 5
+send vax2 'SHOW CLUSTER' 10
+tl "STEP 6 result: VAX1 removed"
+
+# ---- STEP 7: end of workload; read the seam back on real VMS --------------------
+[ "$DRY" = 1 ] || sleep 60
+tl "STEP 7 $OVMX: STOP SYSTEM_1 (EVACWL), DISMOUNT VDA100:"
+send "$OCON" 'STOP SYSTEM_1' 5
+send "$OCON" 'SHOW SYSTEM' 5
+if [ "$DRY" != 1 ] && since "$OCON" 40 | grep -q 'SYSTEM_1'; then
+	tl "SYSTEM_1 survived the first STOP (as in run16): STOP again"
+	send "$OCON" 'STOP SYSTEM_1' 5
+fi
+send "$OCON" 'DISMOUNT VDA100:' 10
+wait_for "$OCON" 'DISMOUNT-I-DISMOUNTED|VDA100: dismounted' 60 || die "$OVMX could not dismount VDA100: -- no coherent read-back"
+tl "STEP 7 VAX2: MOUNT \$2\$DUA1: VAX1DATA, TYPE EVAC.DAT, DISMOUNT"
+send vax2 'MOUNT $2$DUA1: VAX1DATA' 20
+send vax2 "TYPE \$2\$DUA1:[$DIR]EVAC.DAT" 30
+send vax2 'DISMOUNT $2$DUA1:' 10
+send vax2 'WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")' 5
+tl "END"
+
+# ---- collect + grade ---------------------------------------------------------------
+[ "$DRY" = 1 ] && { echo "GRADE $CAP"; exit 0; }
+since vax1 50000 > "$CAP/vax1.log"
+since vax2 50000 > "$CAP/vax2.log"
+since "$OCON" 50000 > "$CAP/$OVMX.console.log"
+"$0" grade "$CAP" | tee "$CAP/grade.txt"
+exit "${PIPESTATUS[0]}"

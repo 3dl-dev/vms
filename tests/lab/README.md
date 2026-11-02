@@ -343,6 +343,7 @@ deliberately; do not assume this copy is current.
 | `bootlab.sh` | Boot the lab from live disks with no golden restore. |
 | `mk_sysgen.py` | Mint a SYSGEN store for a new `SCSNODE`/`SCSSYSTEMID`. Patches a known-good template rather than regenerating, so every other field matches a store proven to join. Rejects names >6 chars (VMS truncates) and deletes any stale `.cluster` sidecar. |
 | `stage_rmhold.sh` | Stage `RMHOLD` (`tests/lab/ci6/RMHOLD.MAR`, the remaster/rebuild arm driver) on a pod's real VAXes once they are logged in as SYSTEM: FTP via `vput.py`, then MACRO, LINK, COPY to `SYS$COMMON:[SYSEXE]` and `RMH :==` on each console, verified by `DIRECTORY`. Run it before any fire whose plan uses `RMH`. |
+| `ci6_evac.sh` | The ci.6 evacuation release gate (rd vms-1e58). `fire <pod>` drives the run16 sequence through `lab-console.sh` (EVACWL on VAX1, OVMX standby, STOP, volume handoff, OVMX continues at seq+1, the VAX2 `EVPROBE` EX/NOQUEUE probe, VAX1 `SHUTDOWN` REMOVE_NODE, seam read back on VAX2) into `captures/vms-ci6-evac-<date>/`; `grade <dir>` is pure and prints PASS/FAIL for the five criteria (`ctest -R lab_ci6_evac_grade`). Boot the OVMX member with `OVMX_FIRE_VOTES=2` so the survivors stay quorate. |
 | `seqchk.py` | Capture-integrity check: sequence gaps and truncated frames. |
 | `probe.sh` | Drive any VAX console and capture between markers. |
 | `portwatch.sh` | `csbwatch.sh` with SDA `SHOW CONNECTIONS/NODE=` — the peer's CDT table and its `Rej/Disconn Reason`. |

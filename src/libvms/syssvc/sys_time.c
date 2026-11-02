@@ -96,7 +96,7 @@
 #include "gen64def.h"   /* struct _generic_64 for sys$bintim's timadr */
 #include "efndef.h"     /* EFN$C_ENF */
 #include "ovmx_utc.h"   /* ovmx_timegm: no C RTL timegm on OpenVMS */
-#include "vms_kif.h"    /* vms_substrate_systime: the system clock (vms-593) */
+#include "vms_systime.h" /* vms_substrate_systime: the system clock (vms-593) */
 
 /* The per-request host timers below are POSIX timers (timer_create), which the
  * OpenVMS C RTL does not have, and their expiry runs a handler the kernel

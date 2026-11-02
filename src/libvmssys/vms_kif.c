@@ -4213,18 +4213,3 @@ uint32_t vms_kif_acp_fileop(struct vms_acp_fileop_args *args)
 
     return args->status;
 }
-
-/* vms_substrate_systime (vms-593): see vms_kif.h. 0x007C95674BEB4000 = 17-NOV-1858 ->
- * 1-JAN-1970 in 100 ns ticks. */
-uint32_t vms_substrate_systime(uint64_t *vmstime)
-{
-    struct vms_timespec ts;
-
-    if (!vmstime)
-        return SS$_BADPARAM;
-    if (vms_sys_clock_gettime(VMS_CLOCK_REALTIME, &ts) != 0 || ts.tv_sec < 0)
-        return SS$_ABORT;
-    *vmstime = (uint64_t)ts.tv_sec * 10000000ULL + (uint64_t)ts.tv_nsec / 100u
-               + 0x007C95674BEB4000ULL;
-    return SS$_NORMAL;
-}

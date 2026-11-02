@@ -40,6 +40,8 @@ extern int waitpid(int, int *, int);
 extern void _exit(int);
 extern void exit(int);
 extern int getpid(void);
+extern void (*signal(int, void (*)(int)))(int);
+extern int *__errno_location(void);
 extern int sscanf(const char *, const char *, ...);
 int vms_waitpid(int, int *, int) __asm__("decc$__vms_waitpid");
 /* $GETJPIW (LIBVMS$SHR): its item list cells are 64-bit (the OVMX ABI), so the
@@ -58,6 +60,7 @@ int execv(const char *, cp32 const *) __asm__("decc$$execv32");
 int main(int argc, char **argv)
 {
     if (argc >= 2 && strcmp(argv[1], "child") == 0) {
+        write(2, "OVMX vfork child: started\n", 26);
         int ok = argc == 4 && strcmp(argv[2], "alpha") == 0 && strcmp(argv[3], "42") == 0;
         char line[64];
         int n = 0;
@@ -85,6 +88,7 @@ int main(int argc, char **argv)
     av[3] = "42";
     av[4] = 0;
 
+    signal(13, (void (*)(int))1);       /* SIGPIPE: SIG_IGN -- a dead child is a verdict, not a crash */
     int pid = vfork();
     if (pid == 0) {
         /* DEC C: this runs in the parent, on the child's behalf. */
@@ -98,6 +102,7 @@ int main(int argc, char **argv)
         _exit(127);                     /* not reached: exec returns via vfork */
     }
     int pid_ok = pid > 0;
+    printf("OVMX vfork test: exec returned pid=%X errno=%d\n", (unsigned int)pid, *__errno_location());
     close(p[1]);
     close(q[0]);
     char buf[64];
@@ -137,6 +142,7 @@ int main(int argc, char **argv)
     int ok = pid_ok && piped && jpi_ok && getpid_ok && vms_ok;
     /* This line reaching the console is itself the proof that the parent's
      * stdout was restored after the child-context dup2. */
+    printf("OVMX vfork diag: n=%d buf=%s jst=%X jpid=%X w=%d\n", n, buf, jst, jpid, w);
     printf("OVMX vfork test: pid_ok=%d piped=%d jpi=%d getpid=%d vmswait=%d status=%X argc=%d\n",
            pid_ok, piped, jpi_ok, getpid_ok, vms_ok, (unsigned int)vst, argc);
     if (!ok)

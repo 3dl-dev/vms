@@ -1218,7 +1218,6 @@ static void f29f_a_queued_enqw_wakes_on_the_masters_grant(void)
 	struct f29f_waiter w;
 	struct vms_proc app;
 	pthread_t th;
-	vms_csid_t master = 0;
 	uint32_t written = 0, ovmx_lkid;
 	int woke;
 
@@ -1226,12 +1225,13 @@ static void f29f_a_queued_enqw_wakes_on_the_masters_grant(void)
 	       "$ENQW EX, then GRANTS it with an op-0x02 --\n");
 	if (frame == NULL)
 		return;
-	labbed_up(0u, 0u, 0u);
+	labbed_up(0u, 1u, 1u);   /* the lab's LOCKDIRWTs: VAXes 1, OVMX 0 */
 	lab_proc_init(&app);
 
-	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
-		 VMS_DLM_DIR_ANSWER_YOU && master == CSID_VAX,
-		 "VAX1 masters EVAC$WORKLOAD (its captured lookup, recorded)");
+	ct_check_eq_u32((uint32_t)dir_node_for(EVAC_RESNAM, EVAC_GROUP,
+					       EVAC_MODE), CSID_VAX,
+			"the vector directs EVAC$WORKLOAD at VAX1, where the "
+			"lab's frame 5781 went");
 
 	memset(&w, 0, sizeof(w));
 	w.proc = &app;
@@ -1307,16 +1307,14 @@ static void f29f_an_op02_grants_nothing_it_does_not_name(void)
 	const uint8_t *frame = evac_captured_frame();
 	uint8_t gn[VMS_CM_BODY_LEN];
 	struct vms_proc app;
-	vms_csid_t master = 0;
 	uint32_t lkid = 0, ovmx_lkid;
 
 	printf("-- rd vms-f29f: an op-0x02 for no request of ours, or one the "
 	       "codec refuses, grants nothing --\n");
 	if (frame == NULL)
 		return;
-	labbed_up(0u, 0u, 0u);
+	labbed_up(0u, 1u, 1u);   /* the lab's LOCKDIRWTs: VAXes 1, OVMX 0 */
 	lab_proc_init(&app);
-	(void)vax_lookup(frame, CSID_VAX, &master);
 	ct_check(do_enq(&app, EVAC_RESNAM, LCK_K_EXMODE, 0u, &lkid) ==
 		 SS__NORMAL && lkid != 0u, "an async OVMX $ENQ EX at VAX1");
 	ovmx_lkid = f29f_rd32(g.last + VMS_OFB_DLM_REQ_LKID);
@@ -1365,7 +1363,6 @@ static void f29f_fuzz_the_deferred_grant_entry(void)
 	uint8_t base[VMS_CM_BODY_LEN], gn[VMS_CM_BODY_LEN];
 	struct vms_dlm_grant_notify parsed;
 	struct vms_proc app;
-	vms_csid_t master = 0;
 	uint32_t lkid = 0, ovmx_lkid, i, k, len, sent0;
 	uint32_t admitted_ours = 0, bad_grant = 0;
 	enum dlm_req_status st;
@@ -1374,9 +1371,8 @@ static void f29f_fuzz_the_deferred_grant_entry(void)
 	       "mutated real op-0x02 bodies) --\n");
 	if (frame == NULL)
 		return;
-	labbed_up(0u, 0u, 0u);
+	labbed_up(0u, 1u, 1u);   /* the lab's LOCKDIRWTs: VAXes 1, OVMX 0 */
 	lab_proc_init(&app);
-	(void)vax_lookup(frame, CSID_VAX, &master);
 	ct_check(do_enq(&app, EVAC_RESNAM, LCK_K_EXMODE, 0u, &lkid) ==
 		 SS__NORMAL && lkid != 0u, "an async OVMX $ENQ EX at VAX1");
 	ovmx_lkid = f29f_rd32(g.last + VMS_OFB_DLM_REQ_LKID);

@@ -260,25 +260,25 @@ def selftest(repo):
     # H1..H4 quotes and the holder half of vms_dlm_rm_fsm.c implements.
     h = holder_figures(paths)
     pin = [
-        ('0x11', 394),
-        ('0x11 after a 0x0f for the tree to that member', 394),   # H1
-        ('0x0f from the old master', 1257),
-        ('0x0f naming a CSID-shaped member', 1257),                # H1
-        ('captures with >1 new master', 17),
-        ('...where body[28:32] is one value per new master, distinct', 17),
-        ('0x11 recipients (completed episodes)', 391),             # H2
-        ('...that send the new master a 0x13', 391),
-        ('...after the 0x11', 391),
-        ('...that sent no record at all', 15),
+        ('0x11', 665),
+        ('0x11 after a 0x0f for the tree to that member', 665),   # H1
+        ('0x0f from the old master', 1807),
+        ('0x0f naming a CSID-shaped member', 1807),                # H1
+        ('captures with >1 new master', 18),
+        ('...where body[28:32] is one value per new master, distinct', 18),
+        ('0x11 recipients (completed episodes)', 662),             # H2
+        ('...that send the new master a 0x13', 662),
+        ('...after the 0x11', 662),
+        ('...that sent no record at all', 16),
         ('attributable holders with records', 7),                  # H3
         ('...records after the 0x11 and before its 0x13', 7),
-        ('records', 3522),
-        ('records sent with none of that holder unanswered', 2991),
-        ('holder 0x13', 391),                                      # H4
-        ('holder 0x13 with body[28] = 0', 391),
-        ('holder 0x13 carrying the 0x0e hash', 391),
-        ('old-master 0x13', 841),
-        ('old-master 0x13 with body[28] in {1,2}', 841),
+        ('records', 3941),
+        ('records sent with none of that holder unanswered', 3086),
+        ('holder 0x13', 662),                                      # H4
+        ('holder 0x13 with body[28] = 0', 662),
+        ('holder 0x13 carrying the 0x0e hash', 662),
+        ('old-master 0x13', 1112),
+        ('old-master 0x13 with body[28] in {1,2}', 1112),
         ('op-0x1a a holder relays', 259),
         ('...after a 0x0f to that holder', 259),
         ('...relayed byte for byte at body[88:108]', 251),

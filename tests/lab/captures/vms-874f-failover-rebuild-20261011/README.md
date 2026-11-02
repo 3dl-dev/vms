@@ -85,7 +85,14 @@ The corpus holds 888 op-0x08 records in ten captures. Every sender is a real VAX
   just answered f9. That is the RMT1 case.
 - **SYS$SYS_ID** at a formation barrier (rd vms-629, four samples) is the same message: a ROOT
   record of the node's own lock (lkid 01000000, EX/EX, exec mode), answered f9.
-- **Phase.** No op-0x0d lies inside any capture's op-0x08 run.
+- **Phase.** No op-0x0d lies inside any capture's op-0x08 run. Every record whose barrier is
+  in the capture (887 of 888) is sent after the barrier release (cat-0x01 op-0x0c) of step 5
+  (RA1b, oracle-3node-fault-f1, one formation) or step 6 (E4, E5, E5b, ci6 run16, two
+  formations), and answered before the next release. None follows a release of step 7 or later.
+  The coordinator holds its next release until every record is answered. Which of step 5 or 6 a
+  departure takes is not separated here: RA1b and f1 (step 5) and E5/E5b (step 6) all change the
+  directory vector. rd vms-bcb: OVMX's one record, sent after the release of step 12 (lab33a,
+  2026-11-02), bugchecked a real VAX V7.3 with LOCKMGRERR.
 
 ## Topology: what is covered and what is NOT
 

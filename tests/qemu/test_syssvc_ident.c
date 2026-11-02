@@ -712,7 +712,7 @@ static int g_create_oplog(void)
     fab.fab$b_org = FAB$C_SEQ;
     fab.fab$b_rfm = FAB$C_STMLF;
     fab.fab$b_fac = FAB$M_PUT;
-    fab.fab$l_xab = &pro;
+    fab.fab$l_xab = (struct XABKEY *)&pro;
     uint32_t st = sys$create(&fab, 0, 0);
     if (!(st & 1)) {
         printf("  NOTE: $CREATE %s -> %08X\n", G_OPLOG_VMS, (unsigned)st);

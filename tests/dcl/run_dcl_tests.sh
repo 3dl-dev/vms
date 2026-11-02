@@ -111,11 +111,16 @@ run_test() {
     # Run the test with timeout
     local output
     local exit_code
-    output=$(timeout "$TIMEOUT" bash "$test_file" 2>&1) || true
+    # a test that does more than one command's worth of file I/O names its
+    # own bound ("# TIMEOUT: <seconds>"; each host RMS $CLOSE fsyncs)
+    local t_limit
+    t_limit=$(sed -n 's/^# TIMEOUT: *\([0-9][0-9]*\)$/\1/p' "$test_file" | head -1)
+    t_limit="${t_limit:-$TIMEOUT}"
+    output=$(timeout "$t_limit" bash "$test_file" 2>&1) || true
     exit_code=$?
 
     if [ $exit_code -eq 124 ]; then
-        echo "FAIL: $description (TIMEOUT after ${TIMEOUT}s)"
+        echo "FAIL: $description (TIMEOUT after ${t_limit}s)"
         FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  TIMEOUT: $test_name"
         return 1

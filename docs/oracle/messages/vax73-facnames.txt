@@ -1,0 +1,8 @@
+# provenance: OpenVMS VAX V7.3 (SIMH MicroVAX 3900), ovmx-lab pod labdiff node VAX1, captured 2026-11-02 by
+#   tools/oracle/semantic/capture.py --dcl: WRITE SYS$OUTPUT "MC <value> 00000000 ", F$MESSAGE(%X<value>),
+#   commands run as SYSTEM, output verbatim. FACILITY NAMES ONLY: F$MESSAGE gives no $GETMSG outadr, so the
+#   second field is a placeholder, and gen_msgcat.py takes nothing from these lines but the facility name a
+#   NOMSG answer still carries. Observed output of the real system (clean-room Rule 8); nothing disassembled.
+#   Also observed in the same session: F$MESSAGE(%X00000000) = "%NONAME-W-NOMSG, Message number 00000000",
+#   F$MESSAGE(%X00008000) = "%SYSTEM-W-NOMSG, Message number 00008000" (a known facility keeps its name).
+MC 006C8000 00000000 %DIFF-W-NOMSG, Message number 006C8000

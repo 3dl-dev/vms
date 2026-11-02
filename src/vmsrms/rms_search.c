@@ -692,7 +692,22 @@ static uint32_t rms_posix_search(void *fab_ptr)
             strstr(entry->d_name, ".rms_idx")) {
             continue;
         }
-        if (fnmatch(ctx->pattern, entry->d_name, FNM_CASEFOLD) == 0) {
+        /* The passthrough keeps each version as a literal "name.type;N" entry
+         * (the RMS writer's store): match the name against the pattern without
+         * that ";N", so "A.TMP" and "A.TMP;*" find "a.tmp;1" (the pattern's own
+         * version was dropped above). Versionless entries match as before. */
+        char bare[256];
+        {
+            size_t bl = strlen(entry->d_name);
+            const char *semi = strrchr(entry->d_name, ';');
+            if (semi && semi[1] && strspn(semi + 1, "0123456789") == strlen(semi + 1) &&
+                !strchr(ctx->pattern, ';'))
+                bl = (size_t)(semi - entry->d_name);
+            if (bl >= sizeof bare) bl = sizeof bare - 1;
+            memcpy(bare, entry->d_name, bl);
+            bare[bl] = '\0';
+        }
+        if (fnmatch(ctx->pattern, bare, FNM_CASEFOLD) == 0) {
             /* Compose the resultant VMS spec DEV:[DIR]NAME (name upper-cased --
              * VMS specs are upper-case; the on-disk entry is lower-case). Prefer
              * the searched device/directory (ctx->vms_prefix); only when it is

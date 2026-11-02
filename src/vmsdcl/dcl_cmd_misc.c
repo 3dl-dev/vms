@@ -88,100 +88,451 @@
 #endif
 
 /*
- * DIFFERENCES - Compare two files and show differences.
- * Format: DIFFERENCES file1 file2
- * Implements a simple line-by-line diff with VMS-style output.
+ * DIFFERENCES - compare two text files record by record (utilities$differences).
+ *
+ * The listing, the counts, the closing command summary and the $STATUS are those
+ * OpenVMS VAX V7.3 produces (docs/oracle/semantics/diff/vax73.txt, the semantic
+ * family specs-dcl/diff.py captured on a real VAX):
+ *
+ *   - records are compared in order; at a mismatch the comparison resynchronises
+ *     at the nearest pair of positions where /MATCH (default 3) consecutive
+ *     records agree -- or where the records agree to the end of both files;
+ *   - a difference section lists each file's differing records ("%5d   text"),
+ *     each followed by /MERGED (default 1; 0 with /MAXIMUM_DIFFERENCES) of the
+ *     agreeing records after it; /PARALLEL lists them side by side, /WIDTH
+ *     (default 132 in a file, the terminal width on it) wide;
+ *   - "records found" counts, per section, the larger file's records;
+ *   - $STATUS is %X006C8009 (identical), %X006C8013 (differences found) or
+ *     %X006C8018 (stopped at /MAXIMUM_DIFFERENCES); a file that will not open
+ *     is %DIFF-F-OPENIN (%X106C109C) and one parameter with no lower version is
+ *     %DIF-F-NOLOWVER (%X106C8064), each printed and then inhibited.
+ *
+ * Every file is read and written through RMS ($PARSE/$SEARCH for the resultant
+ * names, $OPEN/$GET for the inputs, $CREATE/$PUT for /OUTPUT) -- never stdio.
  */
+#define DIFF_ST_IDENT    0x006C8009u
+#define DIFF_ST_DIFFS    0x006C8013u
+#define DIFF_ST_MAXDIF   0x006C8018u
+#define DIFF_ST_OPENIN   0x106C109Cu
+#define DIFF_ST_NOLOWVER 0x106C8064u
+
+struct diff_file {
+    char    spec[512];      /* the RMS resultant name */
+    char  **rec;            /* the records, in order */
+    int     n;
+    int    *key;            /* indexes of the records compared (/IGNORE) */
+    int     nk;
+};
+
+struct diff_out {
+    struct dcl_rms_writer *w;   /* /OUTPUT file, or NULL for SYS$OUTPUT */
+};
+
+static void diff_emit(struct diff_out *o, const char *s)
+{
+    if (o->w) {
+        dcl_rms_write_record(o->w, s, strlen(s));
+    } else {
+        fputs(s, stdout);            /* SYS$OUTPUT, as every DCL verb writes it */
+        fputc('\n', stdout);
+    }
+}
+
+static void diff_free(struct diff_file *f)
+{
+    for (int i = 0; i < f->n; i++) free(f->rec[i]);
+    free(f->rec);
+    free(f->key);
+    f->rec = NULL; f->key = NULL; f->n = f->nk = 0;
+}
+
+/* $GET every record of `spec` (a resultant name) into f. RMS status out. */
+static uint32_t diff_read(struct dcl_context *ctx, struct diff_file *f)
+{
+    uint32_t st = 0;
+    struct dcl_rms_reader *r = dcl_rms_read_open(ctx, f->spec, &st);
+    if (!r) return st ? st : RMS$_FNF;
+    int cap = 0, eof = 0, len;
+    static char buf[32768];
+    while ((len = dcl_rms_read_record(r, buf, sizeof buf, &eof)) >= 0) {
+        if (f->n == cap) {
+            cap = cap ? cap * 2 : 64;
+            char **nr = realloc(f->rec, (size_t)cap * sizeof *nr);
+            if (!nr) break;
+            f->rec = nr;
+        }
+        f->rec[f->n] = malloc((size_t)len + 1);
+        if (!f->rec[f->n]) break;
+        memcpy(f->rec[f->n], buf, (size_t)len);
+        f->rec[f->n][len] = '\0';
+        f->n++;
+    }
+    dcl_rms_read_close(r);
+    return SS$_NORMAL;
+}
+
+static int diff_blank(const char *s)
+{
+    for (; *s; s++)
+        if (*s != ' ' && *s != '\t') return 0;
+    return 1;
+}
+
+/* the compared length of a record: /IGNORE=TRAILING_SPACES drops its trailing
+ * spaces and tabs */
+static size_t diff_len(const char *s, int trail)
+{
+    size_t n = strlen(s);
+    if (trail)
+        while (n && (s[n - 1] == ' ' || s[n - 1] == '\t')) n--;
+    return n;
+}
+
+static int diff_eq(const struct diff_file *a, int i, const struct diff_file *b, int j,
+                   int trail)
+{
+    const char *x = a->rec[a->key[i]], *y = b->rec[b->key[j]];
+    size_t lx = diff_len(x, trail), ly = diff_len(y, trail);
+    return lx == ly && memcmp(x, y, lx) == 0;
+}
+
+/* do keys a[i..] and b[j..] agree for `match` records, or to the end of both? */
+static int diff_sync(const struct diff_file *a, int i, const struct diff_file *b, int j,
+                     int match, int trail)
+{
+    int k = 0;
+    while (k < match) {
+        if (i + k >= a->nk || j + k >= b->nk)
+            return i + k >= a->nk && j + k >= b->nk;
+        if (!diff_eq(a, i + k, b, j + k, trail)) return 0;
+        k++;
+    }
+    return 1;
+}
+
+/* the version number of a resultant name ("...;12" -> 12; none -> 0) */
+static long diff_version(const char *spec)
+{
+    const char *semi = strrchr(spec, ';');
+    long v = 0;
+    if (semi)
+        for (const char *q = semi + 1; *q >= '0' && *q <= '9'; q++)
+            v = v * 10 + (*q - '0');
+    return v;
+}
+
+/* Resolve a parameter to its resultant name through $PARSE/$SEARCH: the highest
+ * version, or with `lower`, the next lower one. 1 = found. Every version is
+ * searched and ranked here, so the answer does not depend on the order the
+ * directory returns them in. */
+static int diff_resolve(struct dcl_context *ctx, const char *param, int lower,
+                        char *out, size_t outsz)
+{
+    char pat[600];
+    snprintf(pat, sizeof pat, "%s%s", param, strchr(param, ';') ? "" : ";*");
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, pat);
+    if (!d) return 0;
+    char spec[512], best[2][512] = { "", "" };
+    long bv[2] = { -1, -1 };
+    while (dcl_rms_dir_next(d, spec, sizeof spec, NULL, NULL, NULL)) {
+        long v = diff_version(spec);
+        if (v > bv[0]) {
+            bv[1] = bv[0]; memcpy(best[1], best[0], sizeof best[1]);
+            bv[0] = v; snprintf(best[0], sizeof best[0], "%s", spec);
+        } else if (v > bv[1]) {
+            bv[1] = v; snprintf(best[1], sizeof best[1], "%s", spec);
+        }
+    }
+    dcl_rms_dir_close(d);
+    if (bv[lower ? 1 : 0] < 0) return 0;
+    snprintf(out, outsz, "%s", best[lower ? 1 : 0]);
+    return 1;
+}
+
+static void diff_openin(struct dcl_context *ctx, const char *param, uint32_t rst)
+{
+    extern void dcl_message_spec(struct dcl_context *, const char *, const char *,
+                                 char *, size_t);
+    char full[1100];
+    dcl_message_spec(ctx, param, NULL, full, sizeof full);
+    fflush(stdout);   /* the message follows whatever SYS$OUTPUT already has */
+    dcl_error("DIFF", 4, "OPENIN", "error opening %s as input", full);
+    /* the reason, on its own line, as RMS words it */
+    char txt[256];
+    uint16_t tl = 0;
+    struct dsc$descriptor_s md;
+    md.dsc$w_length = (uint16_t)(sizeof txt - 1);
+    md.dsc$b_dtype = DSC$K_DTYPE_T;
+    md.dsc$b_class = DSC$K_CLASS_S;
+    md.dsc$a_pointer = txt;
+    if (sys$getmsg(rst ? rst : RMS$_FNF, &tl, &md, 15, NULL) & 1) {
+        txt[tl] = '\0';
+        if (txt[0] == '%') txt[0] = '-';
+        fprintf(stderr, "%s\n", txt);
+    }
+}
+
+/* "DIFFERENCES /IGNORE=()/MERGED=1/OUTPUT=...-", wrapped at the listing width
+ * onto 4-space continuation lines, then one line per input file */
+static void diff_trailer(struct diff_out *o, int width, char pieces[][700], int np,
+                         const char *a, const char *b)
+{
+    char line[2048], tmp[2400];
+    snprintf(line, sizeof line, "DIFFERENCES %s", pieces[0]);
+    for (int i = 1; i < np; i++) {
+        if ((int)(strlen(line) + strlen(pieces[i]) + 1) > width) {
+            snprintf(tmp, sizeof tmp, "%s-", line);
+            diff_emit(o, tmp);
+            snprintf(line, sizeof line, "    %s", pieces[i]);
+        } else {
+            size_t ll = strlen(line);
+            snprintf(line + ll, sizeof line - ll, "%s", pieces[i]);
+        }
+    }
+    snprintf(tmp, sizeof tmp, "%s-", line);
+    diff_emit(o, tmp);
+    snprintf(tmp, sizeof tmp, "    %s-", a);
+    diff_emit(o, tmp);
+    snprintf(tmp, sizeof tmp, "    %s", b);
+    diff_emit(o, tmp);
+}
+
+/* one side-by-side row: left column `lw` wide, "|  ", right column to width-1 */
+static void diff_prow(struct diff_out *o, int width, int lw, const char *l, const char *r)
+{
+    char row[1100];
+    int rw = width - 1 - lw - 3;
+    if (rw < 0) rw = 0;
+    snprintf(row, sizeof row, "%-*.*s|  %-*.*s", lw, lw, l, rw, rw, r);
+    diff_emit(o, row);
+}
+
+static void diff_pnum(struct diff_out *o, int width, int lw, int na, int nb)
+{
+    char row[1100], num[16];
+    int n = width - 1;
+    if (n > (int)sizeof row - 1) n = (int)sizeof row - 1;
+    memset(row, '-', (size_t)n);
+    row[n] = '\0';
+    int pa = lw / 2, pb = (lw + 1) + (width - 1 - lw - 1) / 2;
+    snprintf(num, sizeof num, " %d ", na);
+    if (pa + (int)strlen(num) <= n) memcpy(row + pa, num, strlen(num));
+    snprintf(num, sizeof num, " %d ", nb);
+    if (pb + (int)strlen(num) <= n) memcpy(row + pb, num, strlen(num));
+    diff_emit(o, row);
+}
+
 int cmd_differences(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    if (cmd->param_count < 2) {
-        dcl_error("DCL", 2, "NOFILE",
-                  "missing file specification(s)");
+    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+        dcl_error("DCL", 2, "NOFILE", "missing file specification(s)");
         return SS$_BADPARAM;
     }
 
-    char path1[1024], path2[1024];
-    dcl_resolve_path(ctx, cmd->params[0], path1, sizeof(path1));
-    dcl_resolve_path(ctx, cmd->params[1], path2, sizeof(path2));
-
-    FILE *f1 = fopen(path1, "r");
-    if (!f1) {
-        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
-        return SS$_NOSUCHFILE;
+    /* ---- qualifiers ---- */
+    int parallel = dcl_has_qualifier(cmd, "PARALLEL");
+    const char *v;
+    int match = 3, merged = 1, maxdiff = 0, width = 0;
+    int have_match = 0, have_merged = 0, have_max = 0, have_width = 0;
+    int ign_trail = 0, ign_blank = 0;
+    char ignlist[256] = "";
+    if (dcl_has_qualifier(cmd, "MATCH") && (v = dcl_qualifier_value(cmd, "MATCH"))) {
+        match = atoi(v); have_match = 1;
+        if (match < 1) match = 1;
     }
-    FILE *f2 = fopen(path2, "r");
-    if (!f2) {
-        fclose(f1);
-        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[1]);
-        return SS$_NOSUCHFILE;
+    if (dcl_has_qualifier(cmd, "MERGED")) {
+        v = dcl_qualifier_value(cmd, "MERGED");
+        merged = (v && *v) ? atoi(v) : 1; have_merged = 1;
     }
-
-    /* VMS DIFFERENCES header */
-    char vms1[256], vms2[256];
-    const char *b1 = strrchr(path1, '/'); if (b1) b1++; else b1 = path1;
-    const char *b2 = strrchr(path2, '/'); if (b2) b2++; else b2 = path2;
-    size_t ni;
-    for (ni = 0; b1[ni] && ni < sizeof(vms1)-1; ni++)
-        vms1[ni] = (char)toupper((unsigned char)b1[ni]);
-    vms1[ni] = '\0';
-    for (ni = 0; b2[ni] && ni < sizeof(vms2)-1; ni++)
-        vms2[ni] = (char)toupper((unsigned char)b2[ni]);
-    vms2[ni] = '\0';
-
-    printf("\n");
-    printf("*************************\n");
-    printf("File SYS$DISK:[]%s;1\n", vms1);
-    printf("File SYS$DISK:[]%s;1\n", vms2);
-    printf("*************************\n\n");
-
-    char line1[4096], line2[4096];
-    int lineno = 0;
-    int diffs = 0;
-
-    while (1) {
-        char *r1 = fgets(line1, sizeof(line1), f1);
-        char *r2 = fgets(line2, sizeof(line2), f2);
-        lineno++;
-
-        if (!r1 && !r2) break;
-
-        /* Remove trailing newlines for comparison */
-        if (r1) {
-            size_t l = strlen(line1);
-            if (l > 0 && line1[l-1] == '\n') line1[l-1] = '\0';
-        }
-        if (r2) {
-            size_t l = strlen(line2);
-            if (l > 0 && line2[l-1] == '\n') line2[l-1] = '\0';
-        }
-
-        if (!r1 || !r2 || strcmp(line1, line2) != 0) {
-            diffs++;
-            printf("***\n");
-            if (r1) printf("  (%d) %s\n", lineno, line1);
-            else    printf("  (%d) <end of file>\n", lineno);
-            printf("***\n");
-            if (r2) printf("  (%d) %s\n", lineno, line2);
-            else    printf("  (%d) <end of file>\n", lineno);
-            printf("\n");
-
-            if (!r1 || !r2) break;
+    if (dcl_has_qualifier(cmd, "MAXIMUM_DIFFERENCES") &&
+        (v = dcl_qualifier_value(cmd, "MAXIMUM_DIFFERENCES"))) {
+        maxdiff = atoi(v); have_max = 1;
+        if (!have_merged) merged = 0;
+    }
+    if (dcl_has_qualifier(cmd, "WIDTH") && (v = dcl_qualifier_value(cmd, "WIDTH"))) {
+        width = atoi(v); have_width = 1;
+    }
+    if (dcl_has_qualifier(cmd, "IGNORE") && (v = dcl_qualifier_value(cmd, "IGNORE"))) {
+        /* keywords as given, by their full names */
+        char kw[256];
+        snprintf(kw, sizeof kw, "%s", v);
+        char *t = kw;
+        for (;;) {
+            while (*t == '(' || *t == ')' || *t == ',' || *t == ' ') t++;
+            if (!*t) break;
+            char *e = t;
+            while (*e && *e != '(' && *e != ')' && *e != ',' && *e != ' ') e++;
+            char sep = *e;
+            *e = '\0';
+            for (char *q = t; *q; q++) *q = (char)toupper((unsigned char)*q);
+            const char *full = NULL;
+            size_t tl = strlen(t);
+            if (tl && strncmp(t, "TRAILING_SPACES", tl) == 0) { full = "TRAILING_SPACES"; ign_trail = 1; }
+            else if (tl && strncmp(t, "BLANK_LINES", tl) == 0) { full = "BLANK_LINES"; ign_blank = 1; }
+            else {
+                dcl_error("CLI", 0, "IVKEYW", "unrecognized keyword - check validity and spelling");
+                fprintf(stderr, " \\%s\\\n", t);
+                return 0x00038060u | 0x10000000u;
+            }
+            size_t il = strlen(ignlist);
+            snprintf(ignlist + il, sizeof ignlist - il, "%s%s", il ? "," : "", full);
+            if (!sep) break;
+            t = e + 1;
         }
     }
+    const char *outq = dcl_has_qualifier(cmd, "OUTPUT") ? dcl_qualifier_value(cmd, "OUTPUT") : NULL;
 
-    fclose(f1);
-    fclose(f2);
-
-    if (diffs == 0) {
-        printf("Number of difference sections found: 0\n\n");
-        printf("%%DIFF-I-IDENT, files are identical\n");
+    /* ---- the input files ---- */
+    struct diff_file fa, fb;
+    memset(&fa, 0, sizeof fa);
+    memset(&fb, 0, sizeof fb);
+    uint32_t rst;
+    if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+        /* one file: it and its next lower version */
+        if (!diff_resolve(ctx, cmd->params[0], 0, fa.spec, sizeof fa.spec)) {
+            diff_openin(ctx, cmd->params[0], RMS$_FNF);
+            return DIFF_ST_OPENIN;
+        }
+        if (!diff_resolve(ctx, cmd->params[0], 1, fb.spec, sizeof fb.spec)) {
+            fflush(stdout);
+            dcl_error("DIF", 4, "NOLOWVER", "no lower version of file %s found", fa.spec);
+            return DIFF_ST_NOLOWVER;
+        }
     } else {
-        printf("Number of difference sections found: %d\n", diffs);
+        if (!diff_resolve(ctx, cmd->params[0], 0, fa.spec, sizeof fa.spec)) {
+            diff_openin(ctx, cmd->params[0], RMS$_FNF);
+            return DIFF_ST_OPENIN;
+        }
+        if (!diff_resolve(ctx, cmd->params[1], 0, fb.spec, sizeof fb.spec)) {
+            diff_openin(ctx, cmd->params[1], RMS$_FNF);
+            return DIFF_ST_OPENIN;
+        }
+    }
+    if ((rst = diff_read(ctx, &fa)) != SS$_NORMAL) {
+        diff_openin(ctx, fa.spec, rst);
+        diff_free(&fa);
+        return DIFF_ST_OPENIN;
+    }
+    if ((rst = diff_read(ctx, &fb)) != SS$_NORMAL) {
+        diff_openin(ctx, fb.spec, rst);
+        diff_free(&fa); diff_free(&fb);
+        return DIFF_ST_OPENIN;
+    }
+    struct diff_file *ff[2] = { &fa, &fb };
+    for (int s = 0; s < 2; s++) {
+        struct diff_file *f = ff[s];
+        f->key = malloc(((size_t)f->n + 1) * sizeof *f->key);
+        if (!f->key) { diff_free(&fa); diff_free(&fb); return SS$_INSFMEM; }
+        for (int i = 0; i < f->n; i++)
+            if (!(ign_blank && diff_blank(f->rec[i])))
+                f->key[f->nk++] = i;
     }
 
-    return SS$_NORMAL;
+    /* ---- the listing ---- */
+    struct diff_out o = { NULL };
+    char outspec[600] = "";
+    if (outq) {
+        char ospec[600];
+        snprintf(ospec, sizeof ospec, "%s%s", outq, strchr(outq, '.') ? "" : ".DIF");
+        uint32_t wst = 0;
+        o.w = dcl_rms_write_create(ctx, ospec, FAB$C_VAR, FAB$M_CR, 0, &wst);
+        if (!o.w) {
+            extern void dcl_message_spec(struct dcl_context *, const char *, const char *,
+                                         char *, size_t);
+            char full[1100];
+            dcl_message_spec(ctx, ospec, NULL, full, sizeof full);
+            dcl_error("DIFF", 4, "OPENOUT", "error opening %s as output", full);
+            diff_free(&fa); diff_free(&fb);
+            return 0x106C10A4u;
+        }
+        if (!diff_resolve(ctx, ospec, 0, outspec, sizeof outspec))
+            snprintf(outspec, sizeof outspec, "%s", ospec);
+    }
+    if (!have_width)
+        width = o.w ? 132 : (ctx->terminal.width > 0 ? ctx->terminal.width : 80);
+    if (width < 8) width = 8;
+    if (width > 1000) width = 1000;
+    int lw = (width - 1) / 2;
+
+    int sections = 0, records = 0, stopped = 0;
+    int i = 0, j = 0;
+    char line[1100];
+    while (i < fa.nk || j < fb.nk) {
+        if (i < fa.nk && j < fb.nk && diff_eq(&fa, i, &fb, j, ign_trail)) { i++; j++; continue; }
+        if (have_max && sections >= maxdiff) { stopped = 1; break; }
+        /* the nearest resynchronisation point */
+        int si = fa.nk, sj = fb.nk, found = 0;
+        for (int d = 1; !found && d <= (fa.nk - i) + (fb.nk - j); d++) {
+            for (int a = 0; a <= d; a++) {
+                int ii = i + a, jj = j + (d - a);
+                if (ii > fa.nk || jj > fb.nk) continue;
+                if (diff_sync(&fa, ii, &fb, jj, match, ign_trail)) {
+                    si = ii; sj = jj; found = 1; break;
+                }
+            }
+        }
+        sections++;
+        records += (si - i) > (sj - j) ? (si - i) : (sj - j);
+        if (parallel) {
+            if (sections == 1) {
+                char hl[600], hr[600];
+                memset(line, '-', (size_t)(width - 1)); line[width - 1] = '\0';
+                diff_emit(&o, line);
+                snprintf(hl, sizeof hl, "File %s", fa.spec);
+                snprintf(hr, sizeof hr, "File %s", fb.spec);
+                diff_prow(&o, width, lw, hl, hr);
+            }
+            int ra = i < fa.nk ? fa.key[i] + 1 : fa.n + 1;
+            int rb = j < fb.nk ? fb.key[j] + 1 : fb.n + 1;
+            diff_pnum(&o, width, lw, ra, rb);
+            int rows = (si - i) > (sj - j) ? (si - i) : (sj - j);
+            for (int k = 0; k < rows; k++)
+                diff_prow(&o, width, lw, i + k < si ? fa.rec[fa.key[i + k]] : "",
+                          j + k < sj ? fb.rec[fb.key[j + k]] : "");
+        } else {
+            for (int s = 0; s < 2; s++) {
+                struct diff_file *f = ff[s];
+                int from = s ? j : i, to = s ? sj : si;
+                diff_emit(&o, s ? "******" : "************");
+                snprintf(line, sizeof line, "File %s", f->spec);
+                diff_emit(&o, line);
+                for (int k = from; k < to + merged && k < f->nk; k++) {
+                    snprintf(line, sizeof line, "%5d   %s", f->key[k] + 1, f->rec[f->key[k]]);
+                    diff_emit(&o, line);
+                }
+            }
+            diff_emit(&o, "************");
+        }
+        i = si; j = sj;
+    }
+    if (parallel && sections) {
+        memset(line, '-', (size_t)(width - 1)); line[width - 1] = '\0';
+        diff_emit(&o, line);
+    }
+    if (sections) diff_emit(&o, "");
+    snprintf(line, sizeof line, "Number of difference sections found: %d", sections);
+    diff_emit(&o, line);
+    snprintf(line, sizeof line, "Number of difference records found: %d", records);
+    diff_emit(&o, line);
+    diff_emit(&o, "");
+
+    char pieces[8][700];
+    int np = 0;
+    snprintf(pieces[np++], 700, "/IGNORE=(%s)", ignlist);
+    if (have_match) snprintf(pieces[np++], 700, "/MATCH=%d", match);
+    if (have_max) snprintf(pieces[np++], 700, "/MAXIMUM_DIFFERENCES=%d", maxdiff);
+    if (!parallel) snprintf(pieces[np++], 700, "/MERGED=%d", merged);
+    if (have_width) snprintf(pieces[np++], 700, "/WIDTH=%d", width);
+    if (o.w) snprintf(pieces[np++], 700, "/OUTPUT=%s", outspec);
+    if (parallel) snprintf(pieces[np++], 700, "/PARALLEL");
+    diff_trailer(&o, width, pieces, np, fa.spec, fb.spec);
+
+    if (o.w) dcl_rms_write_close(o.w);
+    diff_free(&fa); diff_free(&fb);
+    if (stopped) return DIFF_ST_MAXDIF;
+    return sections ? DIFF_ST_DIFFS : DIFF_ST_IDENT;
 }
 
 /* qsort comparators for SORT command */

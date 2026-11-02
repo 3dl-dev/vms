@@ -5034,33 +5034,20 @@ static int run_fal_verb_net(int verb, const char *arg, int password_fd)
     if (verb == DNET_FAL_VERB_DIRECTORY && al >= 2 && !strcmp(spec + al - 2, "::"))
         memcpy(spec + al, "*.*;*", 6);
 
-    static struct dnet_nodespec ns;
-    int r = dnet_nodespec_parse(spec, &ns);
-    if (r != DNET_CTERM_OK) {
-        fprintf(stderr, "DECNETD-E-FALSPEC, could not parse the node file specification"
-                        " (status %d)\n", r);
-        return 1;
-    }
-    /* POSTURE (as --copy): the password never rides argv. */
-    if (ns.password[0]) {
-        fprintf(stderr, "DECNETD-E-COPYPW, the FAL password must not appear on the"
-                        " command line; supply it on the fd named by --password-fd\n");
-        return 1;
-    }
+    /* The node spec, the credential posture and the password read are
+     * COPY's own (copy_prepare): the remote side of a GET whose local side
+     * is the terminal. The password never rides argv. */
+    static struct dnet_copy_plan plan;
     char password[DNET_SC_MAX_STR + 1];
-    memset(password, 0, sizeof password);
-    if (ns.has_access && password_fd >= 0) {
-        ssize_t got = read(password_fd, password, DNET_SC_MAX_STR); // codeql[cpp/cleartext-transmission]
-        if (got < 0) {
-            fprintf(stderr, "DECNETD-E-COPYPW, could not read the password from"
-                            " fd %d: %s\n", password_fd, strerror(errno));
-            return 1;
-        }
-        password[got] = '\0';
-        size_t pl = strlen(password);
-        while (pl && (password[pl - 1] == '\n' || password[pl - 1] == '\r'))
-            password[--pl] = '\0';
-    }
+    if (copy_prepare(spec, "SYS$OUTPUT:", password_fd, &plan, password) != 0)
+        return 1;
+    static struct dnet_nodespec ns;
+    memset(&ns, 0, sizeof ns);
+    memcpy(ns.node, plan.node, sizeof ns.node);
+    memcpy(ns.username, plan.username, sizeof ns.username);
+    memcpy(ns.account, plan.account, sizeof ns.account);
+    memcpy(ns.filespec, plan.remote_spec, sizeof ns.filespec);
+    ns.has_access = plan.has_access;
 
     char pfx[DNET_NODESPEC_MAXNODE + DNET_SC_MAX_STR + 32];
     dnet_fal_display_prefix(ns.node, ns.username, ns.has_access, password[0] != '\0',

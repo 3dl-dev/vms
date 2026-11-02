@@ -4,7 +4,7 @@
 defect_meta() {
         case "$_f" in
         facility)     echo "SYS\$GETLKI/SYS\$GETLKIW's LKI\$_RESNAM as a COUNTED name (rd vms-c06d)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
+        targets)      echo "libvms/syssvc/sys_getlki.c";;
         suites_red)   echo "test_syssvc_getlki";;
         blind_suites) echo "";;
         blind_why)    echo "";;

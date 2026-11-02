@@ -22,6 +22,6 @@ EOF2
 }
 
 defect_apply() {
-        sed -i 's|^    const char \*label = dcl_qualifier_value(cmd, "ERROR");$|    const char *label = NULL; /* NEGCTL dcl-write-error-ignored */|' "$_file"
+        sed -i 's|^    dcl_branch_handled(ctx, dcl_qualifier_value(cmd, "ERROR"));$|    dcl_branch_handled(ctx, NULL); /* NEGCTL dcl-write-error-ignored */|' "$_file"
     :
 }

@@ -109,7 +109,7 @@ make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.lo
 # exit is __posix_exit. A configure that drops CFLAGS for one subdirectory fails here.
 bad=$(for o in $(find libiberty libcpp libcody libdecnumber libbacktrace zlib gcc -maxdepth 3 \
         \( -name '*.o' -o -name '*.obj' \) -not -path '*/build-*' -not -path '*/pic/*' 2>/dev/null); do
-        strings -a "$o" | grep -E 'decc\$exit$' >/dev/null && echo "$o"; done)
+        if strings -a "$o" | grep -E 'decc\$exit$' >/dev/null; then echo "$o"; fi; done)
 [ -z "$bad" ] || { echo "build-host-gcc: FAIL host objects call DEC C exit (success on exit(1)), not __posix_exit:"; echo "$bad"; exit 1; }
 echo "   _POSIX_EXIT: no host object binds decc\$exit"
 # ld.exe is the port's own linker wrapper (config/vms/vms-ld.c): it writes an options

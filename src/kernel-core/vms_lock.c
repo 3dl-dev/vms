@@ -2954,17 +2954,78 @@ struct lock_sweep {
     uint32_t parent_lkid;   /* 0 == every lock */
 };
 
-static int lock_sweep_matches(const struct vms_lock_entry *lock,
-                              const struct lock_sweep *s)
+/*
+ * CHILDREN BEFORE THEIR PARENT. A sweep releases a lock only once no lock it
+ * will also release still names it as parent. A real VMS node's releases of a
+ * tree go leaf-first: over every committed capture, 552 of 552 sub-locks whose
+ * parent was released in the same capture were released BEFORE that parent.
+ * The order is not cosmetic. On 2026-11-02 (lab33a, rd vms-33a fire) an OVMX
+ * image rundown released a proxy ROOT ahead of its two sub-locks, and the real
+ * V7.3 master bugchecked LOCKMGRERR on the root's master copy (R1 = the root's
+ * handle) -- a parent with sub-locks is a state $DEQ itself refuses
+ * (SS$_SUBLOCKS), and a master is never asked to hold it.
+ *
+ * Caller holds proc->lock_list_lock. The parent sweep (s->parent_lkid) takes a
+ * parent's whole subtree, so the deferral sees grandchildren too.
+ */
+static int lock_sweep_in_subtree(struct vms_proc *proc,
+                                 const struct vms_lock_entry *lock,
+                                 uint32_t ancestor)
+{
+    uint32_t pid = lock->parent_id;
+    uint32_t depth;
+
+    /* Bounded walk: a parent chain longer than this, or a cycle, is not a
+     * tree this sweep takes -- it falls back to the direct-child filter. */
+    for (depth = 0; pid != 0 && depth < 32u; depth++) {
+        const struct vms_lock_entry *up;
+        int found = 0;
+
+        if (pid == ancestor)
+            return 1;
+        exec_list_for_each_entry(up, &proc->locks, proc_list) {
+            if (up->lkid == pid) {
+                pid = up->parent_id;
+                found = 1;
+                break;
+            }
+        }
+        if (!found)
+            return 0;
+    }
+    return 0;
+}
+
+static int lock_sweep_takes(struct vms_proc *proc,
+                            const struct vms_lock_entry *lock,
+                            const struct lock_sweep *s)
 {
     if (s->use_acmode && lock->acmode < s->min_acmode)
         return 0;
-    if (s->parent_lkid != 0 && lock->parent_id != s->parent_lkid)
+    if (s->parent_lkid != 0 && lock->parent_id != s->parent_lkid &&
+        !lock_sweep_in_subtree(proc, lock, s->parent_lkid))
         return 0;
     return 1;
 }
 
-/* Returns nonzero when matching locks may remain (the batch filled). */
+/* Does a lock this sweep will also release still name `lock` as parent? */
+static int lock_sweep_child_pending(struct vms_proc *proc,
+                                    const struct vms_lock_entry *lock,
+                                    const struct lock_sweep *s)
+{
+    const struct vms_lock_entry *c;
+
+    exec_list_for_each_entry(c, &proc->locks, proc_list) {
+        if (c != lock && c->parent_id == lock->lkid &&
+            lock_sweep_takes(proc, c, s))
+            return 1;
+    }
+    return 0;
+}
+
+/* Returns nonzero when matching locks may remain (the batch filled, or a
+ * parent waited for its children). Every pass releases at least one lock --
+ * the deepest one the sweep takes has no pending child -- so it terminates. */
 static int lock_sweep_pass(struct vms_proc *proc, const struct lock_sweep *s,
                            struct dlm_release_batch *b, struct dlm_flips *f)
 {
@@ -2973,8 +3034,12 @@ static int lock_sweep_pass(struct vms_proc *proc, const struct lock_sweep *s,
 
     exec_lock(&proc->lock_list_lock);
     exec_list_for_each_entry_safe(lock, tmp, &proc->locks, proc_list) {
-        if (!lock_sweep_matches(lock, s))
+        if (!lock_sweep_takes(proc, lock, s))
             continue;
+        if (lock_sweep_child_pending(proc, lock, s)) {
+            more = 1;    /* its children go first; it goes on a later pass */
+            continue;
+        }
         if (!lock_teardown_locked(lock, b, f)) {
             more = 1;    /* batch full: drain it and come back for this one */
             break;

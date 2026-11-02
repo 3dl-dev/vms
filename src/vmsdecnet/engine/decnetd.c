@@ -2703,6 +2703,17 @@ static void dnet_periodic(struct dnet_engine *eng, int sock, unsigned ifindex,
             memcpy(dst, frame, DNET_ADDR_LEN);
             scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, tlen);
         }
+        /* rd vms-985: what the RUN link owes the wire -- retransmissions after
+         * a NAK or timeout, data the peer's flow control held, link services. */
+        for (unsigned g = 0; g < 2u * DNET_LINK_TXQ + 4u; g++) {
+            thas = 0;
+            if (dnet_engine_link_poll(eng, now, frame, sizeof(frame), &tlen, &thas, NULL)
+                    != DNET_ENGINE_OK || !thas)
+                break;
+            uint8_t dst[DNET_ADDR_LEN];
+            memcpy(dst, frame, DNET_ADDR_LEN);
+            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, tlen);
+        }
     }
 }
 
@@ -2714,8 +2725,10 @@ static int cterm_link_send(struct dnet_engine *eng, int sock, unsigned ifindex,
 {
     uint8_t frame[DNET_FRAME_MAX];
     size_t flen = 0;
-    if (dnet_engine_link_send(eng, pdu, plen, frame, sizeof(frame), &flen, now)
-            != DNET_ENGINE_OK)
+    int rc = dnet_engine_link_send(eng, pdu, plen, frame, sizeof(frame), &flen, now);
+    if (rc == DNET_ENGINE_QUEUED)
+        return 0;                 /* held by the peer's flow control; the pump sends it */
+    if (rc != DNET_ENGINE_OK)
         return -1;
     uint8_t dst[DNET_ADDR_LEN];
     memcpy(dst, frame, DNET_ADDR_LEN);
@@ -5198,11 +5211,16 @@ static int netacp_pool_size(const struct dnet_executor *x, int *clamped)
  * reaches NETACP as a broker OPEN and becomes a slot in THIS pool -- the same
  * bounded table, the same per-source discipline (here the source is the
  * requesting process), and an idle bound so a client that died cannot hold a
- * slot. Inbound data is queued per link until the client's READVBLK takes it;
- * a link whose queue overflows is aborted honestly (NSP here does not
- * retransmit data, so a dropped segment could never be recovered). */
+ * slot. Inbound data is queued per link until the client's READVBLK takes it.
+ * The queue is the link's NSP receive window (rd vms-985): the link asks the
+ * peer to stop (link service FCMOD 1) when half of it is used and to resume
+ * (FCMOD 2) when it drains, and a segment that still finds it full is NAKed
+ * unacknowledged so the peer resends it. A slow reader slows the peer down; it
+ * never costs the link (before vms-985 the 33rd queued segment aborted the
+ * link with Disconnect Initiate reason 1 and the client saw -RMS-F-RER). */
 #define NETACP_OUT_RXQ        32
 #define NETACP_OUT_IDLE_SECS  60
+static unsigned long g_netacp_rxq_overrun;   /* must stay 0: the window prevents it */
 
 struct netacp_slot {
     int      used;
@@ -5268,14 +5286,54 @@ static void netacp_send(int sock, unsigned ifindex, const uint8_t mac[6],
     (void)g_netacp_tx(sock, (int)ifindex, DNET_ETHERTYPE, mac, f, n);
 }
 
-/* Ship every CTERM segment the host FSM has queued, in order, over the link. */
+static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
+                            dnet_tick_t now, const char *why);
+
+/* Put on the wire everything the slot's NSP link owes it now (rd vms-985):
+ * flow-control link services, retransmissions after a NAK or a timeout, and
+ * data the peer's flow control had held. A link whose retransmit budget ran
+ * out is dead: an outbound link reports it to its process (ABORT on the next
+ * request), an inbound session ends. */
+static void netacp_link_flush(struct netacp_slot *sl, int sock, unsigned ifindex,
+                              dnet_tick_t now)
+{
+    if (!sl->used || !sl->lk.link_active)
+        return;
+    uint8_t fr[DNET_FRAME_MAX];
+    for (unsigned guard = 0; guard < 2u * DNET_LINK_TXQ + 4u; guard++) {
+        size_t fn = 0; int has = 0;
+        enum dnet_link_event ev = DNET_LINK_EV_NONE;
+        if (dnet_engine_link_poll(&sl->lk, now, fr, sizeof fr, &fn, &has, &ev) !=
+            DNET_ENGINE_OK)
+            return;
+        if (ev == DNET_LINK_EV_DISCONNECT) {
+            sl->lk.link_active = 0;
+            sl->disc_reason = sl->lk.link.disc_reason;
+            if (sl->outbound) {
+                sl->remote_gone = 1;
+                sl->rxq_count = 0;
+            } else {
+                netacp_slot_end(sl, sock, ifindex, now,
+                                "the remote stopped acknowledging (retransmit limit)");
+            }
+            return;
+        }
+        if (!has)
+            return;
+        netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+    }
+}
+
+/* Ship every CTERM segment the host FSM has queued, in order, over the link,
+ * as far as the link's transmit queue takes them (the rest wait in the FSM). */
 static void netacp_cterm_drain(struct netacp_slot *sl, int sock, unsigned ifindex,
                                dnet_tick_t now)
 {
     uint8_t seg[DNET_CTH_SEG_MAX], fr[DNET_FRAME_MAX];
     size_t n = 0, fn = 0;
-    while (dnet_cth_tx_pop(&sl->cth, seg, sizeof seg, &n))
-        if (dnet_engine_link_send(&sl->lk, seg, n, fr, sizeof fr, &fn, now) == 0)
+    while (dnet_link_tx_room(&sl->lk.link) > 0 &&
+           dnet_cth_tx_pop(&sl->cth, seg, sizeof seg, &n))
+        if (dnet_engine_link_send(&sl->lk, seg, n, fr, sizeof fr, &fn, now) == DNET_ENGINE_OK)
             netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
 }
 
@@ -5312,6 +5370,7 @@ static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
             (void)dnet_cth_close(&sl->cth);
         netacp_cterm_drain(sl, sock, ifindex, now);
     }
+    netacp_link_flush(sl, sock, ifindex, now);   /* what flow control lets go */
     if (dnet_link_is_up(&sl->lk.link) &&
         dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn, now) == 0)
         netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
@@ -5340,6 +5399,8 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
     int live = 0;
     for (int i = 0; i < NETACP_MAX_SESSIONS; i++) {
         struct netacp_slot *sl = &slots[i];
+        if (!sl->used) continue;
+        netacp_link_flush(sl, sock, ifindex, now);
         if (!sl->used) continue;
         live++;
         uint8_t buf[DNET_FAL_SEG_MAX], fr[DNET_FRAME_MAX];
@@ -5374,8 +5435,13 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
         } else {
             size_t n = 0; uint32_t xst = 0;
             int r;
-            while ((r = dnet_fal_proc_poll(&sl->fal, buf, sizeof buf, &n, &xst)) == 1) {
-                if (dnet_engine_link_send(&sl->lk, buf, n, fr, sizeof fr, &fn, now) == 0)
+            /* Take the server's next message only when the link can queue it:
+             * a peer's flow control backs up into the server, never drops. */
+            r = 0;
+            while (dnet_link_tx_room(&sl->lk.link) > 0 &&
+                   (r = dnet_fal_proc_poll(&sl->fal, buf, sizeof buf, &n, &xst)) == 1) {
+                if (dnet_engine_link_send(&sl->lk, buf, n, fr, sizeof fr, &fn, now) ==
+                    DNET_ENGINE_OK)
                     netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
             }
             if (r == 2 || r < 0 || !dnet_fal_proc_alive(&sl->fal))
@@ -5993,23 +6059,20 @@ static void netacp_outbound_event(struct netacp_slot *sl, int sock, unsigned ifi
         return;
     }
     if (ev == DNET_LINK_EV_DATA && !sl->remote_gone) {
-        if (sl->rxq_count >= NETACP_OUT_RXQ) {
-            /* The client is not draining its link: abort it rather than lose a
-             * segment NSP here would never retransmit. */
-            if (dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_RESOURCE, fr, sizeof fr,
-                                       &fn, now) == DNET_ENGINE_OK)
-                netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
-            sl->lk.link_active = 0;
-            sl->remote_gone = 1;
-            sl->rxq_count = 0;
-            return;
+        /* The link accepted (and acknowledged) this segment only because its
+         * receive window -- this queue's free entries -- had room. */
+        if (sl->rxq_count < NETACP_OUT_RXQ) {
+            unsigned t = (sl->rxq_head + sl->rxq_count) % NETACP_OUT_RXQ;
+            uint16_t n = sl->lk.rx_datalen > DNET_NSP_MAX_DATA ? DNET_NSP_MAX_DATA
+                                                               : sl->lk.rx_datalen;
+            memcpy(sl->rxq[t], sl->lk.rx_data, n);
+            sl->rxq_len[t] = n;
+            sl->rxq_count++;
+        } else {
+            g_netacp_rxq_overrun++;        /* unreachable by construction; counted */
         }
-        unsigned t = (sl->rxq_head + sl->rxq_count) % NETACP_OUT_RXQ;
-        uint16_t n = sl->lk.rx_datalen > DNET_NSP_MAX_DATA ? DNET_NSP_MAX_DATA
-                                                           : sl->lk.rx_datalen;
-        memcpy(sl->rxq[t], sl->lk.rx_data, n);
-        sl->rxq_len[t] = n;
-        sl->rxq_count++;
+        dnet_link_rx_room(&sl->lk.link, NETACP_OUT_RXQ - sl->rxq_count);
+        netacp_link_flush(sl, sock, ifindex, now);
     }
 }
 
@@ -6078,6 +6141,8 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
             memset(sl, 0, sizeof *sl);
             return;
         }
+        /* The client's receive queue is this link's NSP receive window. */
+        dnet_link_rx_window(&sl->lk.link, NETACP_OUT_RXQ);
         sl->used = 1;
         netacp_note_links(slots);
         sl->open_corr = req->corr_id;      /* answered on CC / DI / give-up */
@@ -6112,12 +6177,23 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
             netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
             return;
         }
-        if (dnet_engine_link_send(&sl->lk, req->data, req->datalen, fr, sizeof fr, &fn,
-                                  now) != DNET_ENGINE_OK) {
-            netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
-            return;
+        {
+            int src = dnet_engine_link_send(&sl->lk, req->data, req->datalen, fr, sizeof fr,
+                                            &fn, now);
+            if (src == DNET_ENGINE_EAGAIN) {
+                /* The peer has not acknowledged enough yet (or has stopped us):
+                 * nothing taken; the client offers the message again, as a
+                 * waiting READVBLK asks again (rd vms-985). */
+                netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_ENDOFFILE, NULL, 0);
+                return;
+            }
+            if (src != DNET_ENGINE_OK && src != DNET_ENGINE_QUEUED) {
+                netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
+                return;
+            }
+            if (src == DNET_ENGINE_OK)
+                netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
         }
-        netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
         netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_NORMAL, NULL, 0);
         return;
 
@@ -6128,6 +6204,11 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
                            sl->rxq[h], sl->rxq_len[h]);
             sl->rxq_head = (h + 1) % NETACP_OUT_RXQ;
             sl->rxq_count--;
+            if (!sl->remote_gone) {
+                /* Room again: the link may now tell the peer to resume. */
+                dnet_link_rx_room(&sl->lk.link, NETACP_OUT_RXQ - sl->rxq_count);
+                netacp_link_flush(sl, sock, ifindex, now);
+            }
             return;
         }
         netacp_respond(sl, sl->reply_unit, req->corr_id,
@@ -6135,6 +6216,8 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
         return;
 
     case DNET_BROKER_OP_CLOSE:
+        if (!sl->remote_gone)
+            netacp_link_flush(sl, sock, ifindex, now);
         if (!sl->remote_gone && dnet_link_is_up(&sl->lk.link) &&
             dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn,
                                    now) == DNET_ENGINE_OK)
@@ -6208,6 +6291,10 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
                                 &has, &ev) != 0)
             return;
         if (has) netacp_send(sock, ifindex, sl->peer_mac, reply, rlen);
+        /* An ACK, NAK or link service may have released or rewound data. */
+        if (ev != DNET_LINK_EV_DISCONNECT && ev != DNET_LINK_EV_DISCONNECT_CONF)
+            netacp_link_flush(sl, sock, ifindex, now);
+        if (!sl->used) return;
         if (sl->outbound) {
             netacp_outbound_event(sl, sock, ifindex, ev, now);
             return;
@@ -7191,6 +7278,86 @@ static int nbs_get(void *ctx, uint8_t *buf, size_t cap, size_t *len)
     return 1;
 }
 
+/* --- rd vms-985: NSP flow control through NETACP, both directions --------- */
+/* A raw request on an open link; returns its corr id. */
+static uint32_t nb_raw_op(uint32_t pid, uint32_t unit, uint32_t handle, uint16_t op,
+                          const void *data, size_t len, uint32_t *corr)
+{
+    struct dnet_broker_req r;
+    memset(&r, 0, sizeof r);
+    r.corr_id = dnet_broker_corr_next(corr);
+    r.owner_pid = pid; r.reply_unit = unit; r.link_handle = handle; r.op = op;
+    r.datalen = (uint16_t)len;
+    if (len) memcpy(r.data, data, len);
+    uint8_t rec[DNET_BROKER_REQ_MAX]; size_t n = 0;
+    dnet_broker_req_encode(&r, rec, sizeof rec, &n);
+    nb_put(NULL, rec, n);
+    nb_pump();
+    return r.corr_id;
+}
+/* The full response to `corr` on `unit` (status 0 = none yet). */
+static uint32_t nb_reply_full(uint32_t unit, uint32_t corr, struct dnet_broker_rsp *rsp)
+{
+    uint8_t rec[DNET_BROKER_RSP_MAX]; size_t n = 0;
+    while (nb_take_reply(unit, rec, sizeof rec, &n) == 1)
+        if (dnet_broker_rsp_decode(rec, n, rsp) == DNET_BROKER_OK && rsp->corr_id == corr)
+            return rsp->status;
+    return 0;
+}
+/* The far end, driven in this thread over the socketpair: take every frame
+ * NETACP sent, answer it, and put out whatever its link owes. Counts the
+ * Disconnect Initiates NETACP sent and the data it delivered. */
+struct nb_peer {
+    struct dnet_engine *e; int fd;
+    unsigned di_seen, stops_seen, delivered, bad;
+    unsigned next_expect;
+    unsigned rxq, rxcap;          /* the peer's own reader (rx window), 0 = off */
+};
+static void nb_peer_pump(struct nb_peer *p, dnet_tick_t now)
+{
+    uint8_t f[DNET_FRAME_MAX], r[DNET_FRAME_MAX];
+    ssize_t n;
+    while ((n = recv(p->fd, f, sizeof f, MSG_DONTWAIT)) > 0) {
+        const uint8_t *pdu = NULL; size_t pl = 0;
+        struct dnet_nsp_msg m;
+        if (dnet_engine_parse_data_frame(f, (size_t)n, NULL, NULL, &pdu, &pl) == DNET_ENGINE_OK &&
+            dnet_nsp_decode(pdu, pl, &m, NULL) == DNET_NSP_OK) {
+            if (m.type == DNET_NSP_T_DI) p->di_seen++;
+            if (m.type == DNET_NSP_T_LS && (m.ls_flags & 3) == DNET_NSP_LS_FCMOD_STOP)
+                p->stops_seen++;
+        }
+        size_t rl = 0; int has = 0; enum dnet_link_event ev = DNET_LINK_EV_NONE;
+        if (dnet_engine_link_rx(p->e, now, f, (size_t)n, r, sizeof r, &rl, &has, &ev) != 0)
+            continue;
+        if (ev == DNET_LINK_EV_CONNECT_IND) {
+            if (dnet_engine_link_accept(p->e, 0x2008, r, sizeof r, &rl, now) == DNET_ENGINE_OK)
+                (void)write(p->fd, r, rl);
+            continue;
+        }
+        if (has) (void)write(p->fd, r, rl);
+        if (ev == DNET_LINK_EV_DATA) {
+            char want[48];
+            snprintf(want, sizeof want, "record %05u", p->next_expect);
+            if (p->e->rx_datalen != strlen(want) ||
+                memcmp(p->e->rx_data, want, p->e->rx_datalen) != 0)
+                p->bad++;
+            p->next_expect++;
+            p->delivered++;
+            if (p->rxcap) {
+                p->rxq++;
+                dnet_link_rx_room(&p->e->link, p->rxq >= p->rxcap ? 0 : p->rxcap - p->rxq);
+            }
+        }
+    }
+    if (p->e->link_active)
+        for (;;) {
+            size_t rl = 0; int has = 0;
+            if (dnet_engine_link_poll(p->e, now, r, sizeof r, &rl, &has, NULL) != 0 || !has)
+                break;
+            (void)write(p->fd, r, rl);
+        }
+}
+
 static int run_netacp_broker_selftest(void)
 {
     printf("DECNETD-I-NETACPBROKER, outbound links brokered through NETACP: _NET:"
@@ -7248,6 +7415,136 @@ static int run_netacp_broker_selftest(void)
                  " miss round-trips (client + server both NOSUCHFILE)");
         NA_CHECK(g_nb_wire > wire0 && bc.handle == 0 && nb_used() == 0,
                  "the frames went out on NETACP's datalink; DEACCESS disconnected the link and freed its pool slot");
+    }
+
+    /* (1b) rd vms-985: NSP flow control through NETACP's real outbound slot.
+     * A peer engine on 1.11 (driven in this thread) accepts a link and sends
+     * 40 records while the client reads none: NETACP must stop the peer when
+     * half its 32-entry queue is used and keep the link (before vms-985 the
+     * 33rd segment drew Disconnect Initiate reason 1 -> -RMS-F-RER). Then the
+     * client reads all 40, in order. The other way, the peer stops OVMX at 4
+     * records: SEND completes ENDOFFILE (offer it again) while the link's
+     * queue is full, nothing more goes on the wire, and every record arrives
+     * once in order when the peer resumes. */
+    {
+        dnet_engine_init(&B, 1, 11, "OVMXB", "EWA0", NULL, hwB, 0, 0, 0);
+        struct nb_peer pr;
+        memset(&pr, 0, sizeof pr);
+        pr.e = &B; pr.fd = sv[1]; pr.next_expect = 1;
+        uint32_t corr = 0x985000, unit = 0x71, pid = 0x985;
+        uint32_t oc = nb_raw_open(pid, unit, "1.11::\"17=\"", &corr);
+        struct dnet_broker_rsp rsp;
+        uint32_t ost = 0;
+        for (int i = 0; i < 200 && !ost; i++) {
+            nb_peer_pump(&pr, monotonic_sec());
+            nb_pump();
+            ost = nb_reply_full(unit, oc, &rsp);
+        }
+        uint32_t h = (ost & 1) && rsp.datalen >= 4
+            ? (uint32_t)rsp.data[0] | ((uint32_t)rsp.data[1] << 8) |
+              ((uint32_t)rsp.data[2] << 16) | ((uint32_t)rsp.data[3] << 24) : 0;
+        NA_CHECK(h != 0 && dnet_link_is_up(&B.link), "flow: the link to the peer is RUN");
+
+        /* Peer -> OVMX: 40 records, client not reading. */
+        unsigned sent = 1;
+        struct netacp_slot *sl = NULL;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            if (g_nbslots[i].used && g_nbslots[i].handle == h) sl = &g_nbslots[i];
+        for (int round = 0; round < 400; round++) {
+            dnet_tick_t now = monotonic_sec();
+            while (sent <= 40) {
+                char rec[48]; size_t fl = 0; uint8_t f[DNET_FRAME_MAX];
+                int n = snprintf(rec, sizeof rec, "record %05u", sent);
+                int rc = dnet_engine_link_send(&B, (const uint8_t *)rec, (size_t)n, f, sizeof f,
+                                               &fl, now);
+                if (rc == DNET_ENGINE_EAGAIN) break;
+                if (rc == DNET_ENGINE_OK) (void)write(sv[1], f, fl);
+                sent++;
+            }
+            nb_peer_pump(&pr, now);
+            nb_pump();
+        }
+        NA_CHECK(sl && sl->used && sl->rxq_count >= 16 && sl->rxq_count <= NETACP_OUT_RXQ &&
+                 B.link.rem_stopped && pr.di_seen == 0 && dnet_link_is_up(&sl->lk.link),
+                 "flow: with the client not reading, NETACP queued its window, told the peer"
+                 " to stop (link service FCMOD 1), and sent NO Disconnect Initiate");
+        /* The client reads all 40 (RECV with OPF_NOW, the waiting read's step). */
+        unsigned got = 0, order_ok = 1;
+        for (int round = 0; round < 4000 && got < 40; round++) {
+            dnet_tick_t now = monotonic_sec();
+            while (sent <= 40) {
+                char rec[48]; size_t fl = 0; uint8_t f[DNET_FRAME_MAX];
+                int n = snprintf(rec, sizeof rec, "record %05u", sent);
+                int rc = dnet_engine_link_send(&B, (const uint8_t *)rec, (size_t)n, f, sizeof f,
+                                               &fl, now);
+                if (rc == DNET_ENGINE_EAGAIN) break;
+                if (rc == DNET_ENGINE_OK) (void)write(sv[1], f, fl);
+                sent++;
+            }
+            uint32_t rc = nb_raw_op(pid, unit, h, DNET_BROKER_OP_RECV | DNET_BROKER_OPF_NOW,
+                                    NULL, 0, &corr);
+            uint32_t st = nb_reply_full(unit, rc, &rsp);
+            if (st & 1) {
+                char want[48];
+                snprintf(want, sizeof want, "record %05u", got + 1);
+                if (rsp.datalen != strlen(want) || memcmp(rsp.data, want, rsp.datalen) != 0)
+                    order_ok = 0;
+                got++;
+            }
+            nb_peer_pump(&pr, now);
+            nb_pump();
+        }
+        NA_CHECK(got == 40 && order_ok && pr.di_seen == 0 && !B.link.rem_stopped,
+                 "flow: the client then read all 40 records in order; NETACP resumed the peer"
+                 " (FCMOD 2) and the link never dropped");
+
+        /* OVMX -> peer: the peer's reader holds 4, so it stops OVMX. */
+        dnet_link_rx_window(&B.link, 4);
+        pr.rxcap = 4; pr.rxq = 0; pr.next_expect = 1; pr.delivered = 0; pr.bad = 0;
+        unsigned next = 1, eof_seen = 0, held = 0, holds = 0, held_quiet = 0;
+        unsigned long wire_mark = 0;
+        for (int round = 0; round < 6000 && pr.delivered < 40; round++) {
+            dnet_tick_t now = monotonic_sec();
+            if (next <= 40) {
+                char rec[48];
+                int n = snprintf(rec, sizeof rec, "record %05u", next);
+                uint32_t sc = nb_raw_op(pid, unit, h, DNET_BROKER_OP_SEND, rec, (size_t)n, &corr);
+                uint32_t st = nb_reply_full(unit, sc, &rsp);
+                if (st == SS$_ENDOFFILE)
+                    eof_seen++;
+                else if (st & 1)
+                    next++;
+            }
+            nb_peer_pump(&pr, now);
+            nb_pump();
+            if (B.link.loc_stopped && sl->lk.link.rem_stopped) {
+                /* The peer's reader is full and OVMX has been told: for a while
+                 * nothing may reach the wire from NETACP, then the reader
+                 * drains and the peer resumes OVMX. */
+                if (++held == 3) wire_mark = g_nb_wire;
+                if (held == 30) {
+                    if (g_nb_wire == wire_mark) held_quiet++;
+                    holds++;
+                    held = 0;
+                    pr.rxq = 0;
+                    dnet_link_rx_room(&B.link, 4);
+                }
+            }
+        }
+        NA_CHECK(eof_seen > 0 && holds > 0 && held_quiet == holds && pr.delivered == 40 &&
+                 pr.bad == 0 && pr.di_seen == 0 && dnet_link_is_up(&sl->lk.link),
+                 "flow: stopped by the peer, NETACP put nothing on the wire and SEND completed"
+                 " ENDOFFILE (offer again) instead of dropping; after each resume the rest went,"
+                 " and all 40 records arrived once, in order");
+        uint32_t cc = nb_raw_op(pid, unit, h, DNET_BROKER_OP_CLOSE, NULL, 0, &corr);
+        nb_peer_pump(&pr, monotonic_sec());
+        nb_pump();
+        (void)nb_reply_full(unit, cc, &rsp);
+        g_nbrep_n = 0;
+        uint8_t junk[DNET_FRAME_MAX];
+        while (recv(sv[1], junk, sizeof junk, MSG_DONTWAIT) > 0) {}
+        while (recv(sv[0], junk, sizeof junk, MSG_DONTWAIT) > 0) {}
+        NA_CHECK(nb_used() == 0, "flow: DEACCESS freed the slot");
     }
 
     /* (2) A remote that rejects the access control: OPEN completes INVLOGIN. */

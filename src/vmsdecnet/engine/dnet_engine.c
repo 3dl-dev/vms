@@ -617,9 +617,37 @@ int dnet_engine_link_send(struct dnet_engine *e, const uint8_t *data, size_t len
     if (!e || !frame_out || !e->link_active)
         return DNET_ENGINE_EINVAL;
     struct dnet_nsp_msg d;
-    if (dnet_link_send_data(&e->link, data, len, &d, now) != DNET_LINK_OK)
+    int rc = dnet_link_send_data(&e->link, data, len, &d, now);
+    if (rc == DNET_LINK_QUEUED)
+        return DNET_ENGINE_QUEUED;
+    if (rc == DNET_LINK_EAGAIN)
+        return DNET_ENGINE_EAGAIN;
+    if (rc != DNET_LINK_OK)
         return DNET_ENGINE_EINVAL;
     return engine_wrap_pdu(e, &d, frame_out, cap, len_out);
+}
+
+int dnet_engine_link_poll(struct dnet_engine *e, dnet_tick_t now,
+                          uint8_t *frame_out, size_t cap, size_t *len_out,
+                          int *has_out, enum dnet_link_event *event)
+{
+    if (has_out)
+        *has_out = 0;
+    if (event)
+        *event = DNET_LINK_EV_NONE;
+    if (!e || !frame_out || !has_out || !e->link_active)
+        return DNET_ENGINE_EINVAL;
+    struct dnet_nsp_msg out;
+    int ho = 0;
+    if (dnet_link_poll(&e->link, now, &out, &ho, event) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    if (ho) {
+        int rc = engine_wrap_pdu(e, &out, frame_out, cap, len_out);
+        if (rc != DNET_ENGINE_OK)
+            return rc;
+        *has_out = 1;
+    }
+    return DNET_ENGINE_OK;
 }
 
 int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,

@@ -18,6 +18,38 @@ target_link_libraries(test_dnet_link PRIVATE vmsdecnet_engine)
 target_compile_options(test_dnet_link PRIVATE -Werror)
 add_test(NAME vmsdecnet_link_unit COMMAND test_dnet_link)
 
+# rd vms-985: NSP data flow -- receive window + link-service stop/resume, ACK /
+# NAK, go-back-N retransmission. Replays the real VAX V7.3 PDUs of the two
+# vms-0a7 S1 large-COPY failures (tests/lab/captures/vms-0a7-s1-20261102/), then
+# moves 20000 records each way over a lossy channel with a slow reader.
+add_executable(test_dnet_nsp_flow test_dnet_nsp_flow.c)
+target_link_libraries(test_dnet_nsp_flow PRIVATE vmsdecnet_nsp)
+target_compile_options(test_dnet_nsp_flow PRIVATE -Werror)
+add_test(NAME vmsdecnet_nsp_flow_unit COMMAND test_dnet_nsp_flow)
+
+# rd vms-985: sanitizer fuzz of the peer-reachable data-flow receive paths (codec
+# DATA/LS/ACK/OTHACK decode + the link FSM under hostile acks, NAKs, link
+# services and segment numbers). The codec and link sources are compiled into
+# the target so ASan/UBSan instrument them.
+add_executable(test_dnet_nsp_flow_fuzz test_dnet_nsp_flow_fuzz.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/dnet_nsp.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/dnet_link.c)
+target_include_directories(test_dnet_nsp_flow_fuzz PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/include)
+target_compile_options(test_dnet_nsp_flow_fuzz PRIVATE -Werror)
+if(NOT DEFINED OVMX_DAP_SANITIZE_OK)
+    include(CheckCSourceCompiles)
+    set(_nspfuzz_san_save "${CMAKE_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+    check_c_source_compiles("int main(void){return 0;}" OVMX_DAP_SANITIZE_OK)
+    set(CMAKE_REQUIRED_FLAGS "${_nspfuzz_san_save}")
+endif()
+if(OVMX_DAP_SANITIZE_OK)
+    target_compile_options(test_dnet_nsp_flow_fuzz PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_nsp_flow_fuzz PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_nsp_flow_fuzz_unit COMMAND test_dnet_nsp_flow_fuzz)
+
 # rd vms-4d2, engine rung 3: the CTERM (Command Terminal) protocol behind
 # $ SET HOST. Proves (1) every CTERM message type round-trips encode->decode,
 # (2) a terminal + host session bind/negotiate/carry-I/O/unbind on raw PDUs, and

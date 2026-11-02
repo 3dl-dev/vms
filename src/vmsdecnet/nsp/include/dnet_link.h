@@ -118,8 +118,11 @@ enum dnet_link_event {
 
 /* Return codes (distinct namespace from the codec's DNET_NSP_E*). */
 #define DNET_LINK_OK        0
+#define DNET_LINK_QUEUED    1    /* send: taken into the transmit queue, held by
+                                  * the peer's flow control (no PDU yet) */
 #define DNET_LINK_EINVAL  (-1)   /* null argument / bad parameter */
 #define DNET_LINK_ESTATE  (-2)   /* operation invalid in the current state */
+#define DNET_LINK_EAGAIN  (-3)   /* send: transmit queue full, nothing taken */
 
 /*
  * Timer / limit defaults.
@@ -155,8 +158,33 @@ enum dnet_link_event {
 #define DNET_LINK_REASON_OBJREJ        9   /* object rejected/ended the connect (oracle frame 117) */
 #define DNET_LINK_REASON_DISCOMPLETE  42   /* disconnect complete (oracle frame 118) */
 
-/* 12-bit NSP data/ack sequence number mask. */
+/* 12-bit NSP data/ack sequence number mask. Numbers run modulo 4096: after
+ * 4095 comes 0 (a 20000-record COPY one record per segment wraps 4 times). */
 #define DNET_LINK_SEQ_MASK          0x0fffu
+
+/*
+ * NSP data flow (rd vms-985). Spec-derived (DNA Phase IV NSP: segment
+ * acknowledgement, NAK, retransmission, link-service FCMOD on/off, request
+ * counts) and grounded in the real VAX V7.3 behaviour captured in
+ * tests/lab/captures/vms-0a7-s1-20261102/wire.txt: the VAX offers FCOPT none,
+ * stops its sender with LSFLAGS FCMOD 1, resumes it with FCMOD 2, discards what
+ * it cannot buffer and NAKs (0x900e), expecting go-back-N retransmission.
+ *
+ * DNET_LINK_TXQ -- data segments this end holds unacknowledged (sent or held by
+ * flow control). A send beyond it returns DNET_LINK_EAGAIN: the caller keeps
+ * the message and offers it again, so nothing is ever dropped. OVMX choice.
+ *
+ * DNET_LINK_RTX_SECS -- data / link-service retransmit interval with no ACK.
+ * The spec sets it from a delay estimate times the executor DELAY FACTOR; OVMX
+ * uses a fixed whole-tick value (ticks are seconds), labelled.
+ *
+ * DNET_LINK_RTX_MAX -- consecutive retransmits with no progress before the link
+ * is declared dead: the VMS executor's default RETRANSMIT FACTOR (10, NCP
+ * SHOW EXECUTOR CHARACTERISTICS).
+ */
+#define DNET_LINK_TXQ               8u
+#define DNET_LINK_RTX_SECS          2u
+#define DNET_LINK_RTX_MAX          10u
 
 /*
  * A single NSP logical link. Pure state: no socket, no fd. `remote_node` is the
@@ -182,10 +210,52 @@ struct dnet_link {
     uint16_t send_ack;      /* highest of our segments the peer has acknowledged */
 
     /* Other-data subchannel (link service / interrupt), rd vms-6165. NSP numbers
-     * these separately from data segments; oth_recv is how many other-data
-     * messages we have received (so a link-service/ils-ack ACKNUM is real link
-     * state, never templated -- INV-6). */
-    uint16_t oth_recv;      /* count of other-data (LS/interrupt) msgs received */
+     * these separately from data segments; oth_recv is the highest in-order
+     * other-data number we have received (so a link-service/ils-ack ACKNUM is
+     * real link state, never templated -- INV-6). */
+    uint16_t oth_recv;      /* highest in-order other-data number received */
+    uint16_t oth_send;      /* last other-data number we assigned */
+
+    /* --- transmit side (rd vms-985) ---
+     * txq: our data segments not yet acknowledged, oldest first, in segment
+     * order. The first tx_sent of them are on the wire; the rest are held by
+     * the peer's flow control or await a go-back-N retransmission (tx_ever
+     * counts those already transmitted at least once). */
+    struct dnet_link_txseg {
+        uint16_t seg;
+        uint16_t len;
+        uint8_t  data[DNET_NSP_MAX_DATA];
+    } txq[DNET_LINK_TXQ];
+    unsigned    tx_head, tx_count, tx_sent;
+    unsigned    tx_ever;        /* of them, how many were ever transmitted */
+    dnet_tick_t rtx_deadline;   /* oldest on-wire segment's retransmit time */
+    uint8_t     nak_rewound;    /* rewound for a NAK of send_ack; a repeat of
+                                 * that NAK is ignored while that resend is
+                                 * still going out (tx_sent < rewind_mark) */
+    unsigned    rewind_mark;    /* tx_sent when we rewound */
+    uint8_t     rx_nak_sent;    /* we NAKed the gap at recv_seq already */
+    unsigned    rtx_count;      /* retransmits since the last progress */
+    uint8_t     rem_fcopt;      /* the peer's FCOPT (DNET_NSP_SVC_FCOPT_*) */
+    uint8_t     rem_stopped;    /* the peer said FCMOD "do not send data" */
+    int16_t     rem_reqcnt;     /* data request count the peer granted
+                                 * (FCOPT segment/message only) */
+
+    /* --- receive side flow control (rd vms-985) ---
+     * Off until the owner calls dnet_link_rx_window(); then a data segment is
+     * accepted (and ACKed) only while rx_room > 0, and the link asks the peer
+     * to stop (FCMOD 1) when rx_room falls to rx_low and to send again
+     * (FCMOD 2) when it climbs back to rx_high. A segment that arrives with no
+     * room is discarded and NAKed, never acknowledged -- the peer resends it. */
+    uint8_t     rx_fc;
+    uint8_t     loc_stopped;    /* we told the peer FCMOD "do not send data" */
+    unsigned    rx_room, rx_low, rx_high;
+
+    /* One link service in flight on the other-data subchannel at a time. */
+    uint8_t     ls_out;         /* an LS awaits the peer's other-data ack */
+    uint8_t     ls_out_flags;   /* its LSFLAGS (resent byte-identical) */
+    uint16_t    ls_out_seg;     /* its other-data number */
+    uint8_t     ls_want;        /* FCMOD still to send once ls_out clears */
+    dnet_tick_t ls_deadline;
 
     /* Connect data (access control / session-control payload), retained so a CI
      * retransmit is byte-identical to the original. Opaque to NSP. */
@@ -201,6 +271,7 @@ struct dnet_link {
 
     /* Honest counters (reported on the VMS surface; never fabricated). */
     unsigned long data_sent, data_recv, acks_sent, acks_recv, ci_sent;
+    unsigned long data_rtx, naks_sent, naks_recv, rx_discarded, ls_sent;
 };
 
 /*
@@ -243,24 +314,27 @@ int dnet_link_accept_data(struct dnet_link *lk, const uint8_t *data, size_t len,
                           struct dnet_nsp_msg *out, dnet_tick_t now);
 
 /*
- * Send a single data segment on a RUN link. Builds a data-segment PDU into *out
- * carrying up to DNET_NSP_MAX_DATA bytes, assigns the next segment number, and
- * piggybacks the current receive acknowledgement when there is one to send.
- * Returns DNET_LINK_OK, DNET_LINK_ESTATE if the link is not RUN, or
- * DNET_LINK_EINVAL (null / oversized payload).
+ * Send a single data segment on a RUN link. The message (up to
+ * DNET_NSP_MAX_DATA bytes) takes the next segment number and joins the
+ * transmit queue, where it stays until the peer acknowledges it. If the peer's
+ * flow control lets it go now, the data-segment PDU (with the current receive
+ * acknowledgement piggybacked) is built into *out and DNET_LINK_OK returned;
+ * if the peer has stopped us, DNET_LINK_QUEUED (no PDU -- dnet_link_poll sends
+ * it later). DNET_LINK_EAGAIN if the transmit queue is full (nothing taken:
+ * offer it again after the peer acknowledges), DNET_LINK_ESTATE if the link is
+ * not RUN, DNET_LINK_EINVAL (null / oversized payload).
  */
 int dnet_link_send_data(struct dnet_link *lk, const uint8_t *data, size_t len,
                         struct dnet_nsp_msg *out, dnet_tick_t now);
 
 /*
- * Build a LINK SERVICE credit-grant PDU on a RUN link (rd vms-6165). NSP
- * requires the connection initiator to send this immediately after the Connect
- * Confirm: it acks the other-data subchannel and opens the initial data-segment
- * flow-control window, and it is what makes a real OpenVMS peer STOP
- * retransmitting its CC and begin sending. Builds `10 <dst> <src> <ACKNUM>
- * <LSFLAGS=0x01> <FCVAL=0x00>` into *out; ACKNUM = 0x8000 | oth_recv (real link
- * state, never templated). Returns DNET_LINK_OK, DNET_LINK_ESTATE if not RUN,
- * or DNET_LINK_EINVAL.
+ * Build the LINK SERVICE a connection initiator sends right after the Connect
+ * Confirm (rd vms-6165), as a real VAX does: `10 <dst> <src> <ACKNUM> <SEGNUM>
+ * 00 00` -- ACKNUM = 0x8000 | oth_recv, SEGNUM the next other-data number,
+ * LSFLAGS 0 (no change), FCVAL 0 (docs/oracle/vax-copy-fal-dap.hex.txt). It
+ * stays outstanding (retransmitted by dnet_link_poll) until the peer's
+ * other-data ack. Returns DNET_LINK_OK, DNET_LINK_ESTATE if not RUN or another
+ * link service is still outstanding, or DNET_LINK_EINVAL.
  */
 int dnet_link_link_service(struct dnet_link *lk, struct dnet_nsp_msg *out,
                            dnet_tick_t now);
@@ -301,6 +375,35 @@ int dnet_link_rx(struct dnet_link *lk, const struct dnet_nsp_msg *in,
  */
 int dnet_link_tick(struct dnet_link *lk, dnet_tick_t now,
                    struct dnet_nsp_msg *out, int *has_out);
+
+/*
+ * Receive-side flow control (rd vms-985). dnet_link_rx_window(lk, cap) turns it
+ * on for a link whose owner buffers at most `cap` delivered messages: room
+ * starts at cap, the stop mark is cap/2 and the resume mark 3*cap/4.
+ * dnet_link_rx_room(lk, room) reports the owner's real free buffer count after
+ * it queues or hands on a message; the link then decides whether the peer
+ * must be stopped or may resume, and dnet_link_poll emits that link service.
+ */
+void dnet_link_rx_window(struct dnet_link *lk, unsigned cap);
+void dnet_link_rx_room(struct dnet_link *lk, unsigned room);
+
+/* Free transmit-queue entries: how many more sends dnet_link_send_data takes. */
+unsigned dnet_link_tx_room(const struct dnet_link *lk);
+
+/*
+ * The next PDU a RUN link owes the wire at `now`, built into *out with
+ * *has_out = 1; call until *has_out is 0. In order: a pending link service
+ * (stop / resume the peer, or a retransmit of one it has not acked), then data
+ * segments -- a go-back-N retransmission after a NAK or after DNET_LINK_RTX_SECS
+ * without an ACK, or segments the peer's flow control held back -- as far as
+ * the peer's flow control allows. After DNET_LINK_RTX_MAX retransmits with no
+ * progress the peer is dead: the link goes CLOSED with reason
+ * DNET_LINK_REASON_UNREACHABLE, *has_out = 0, and *event (if non-NULL) is
+ * DNET_LINK_EV_DISCONNECT. Returns DNET_LINK_OK or DNET_LINK_EINVAL.
+ */
+int dnet_link_poll(struct dnet_link *lk, dnet_tick_t now,
+                   struct dnet_nsp_msg *out, int *has_out,
+                   enum dnet_link_event *event);
 
 /*
  * Logical-link address allocation (rd vms-3106).

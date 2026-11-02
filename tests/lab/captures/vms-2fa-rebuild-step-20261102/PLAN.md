@@ -120,3 +120,19 @@ on receipt (participant) or emission (coordinator) of that release in the depart
 transition. The node's next step report (participant) or next release (coordinator) is held
 until every record is answered. It is never a frame-count constant and never "after the
 transition".
+
+## Addendum, registered 2026-11-02 11:20Z, after arms 1 and 3 and before arm 2
+
+Arm 3 (0/1/0, SHUTDOWN) carried no op-0x08. VAX1, at LOCKDIRWT 0, remastered DEPV to VAX3 at
+shutdown (op-0x0e..0x14, frames 3855-3873), so there was nothing left to rebuild. It was re-run
+as **arm 3b**: the same 0/1/0 weights, with VAX1 removed by stopping its simulator (`^E`).
+
+Arm 2 runs as **0/1/1** with fault removal. A normal reboot of VAX1 came back with LOCKDIRWT 0,
+as read by `F$GETSYI`. VAX3 was rebooted conversationally with `SET LOCKDIRWT 1`. Holders: VAX1
+`RMH 110WDEPX`, `110WDEPY`, `110WDEPZ`; VAX3 `RMH 111-DEPX`, `111-DEPY`, `111-DEPZ`. VAX1 is
+stopped by `^E`. This sharpens the separation:
+
+- VAX1's weight is 0, so the directory vector does not change. H2 predicts release 6.
+- H1 predicts release **5**, because VAX3's own weight is 1.
+
+P8 is unchanged: every VAX3 record follows release 5, and each is `closed` and `held`.

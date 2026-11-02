@@ -166,6 +166,31 @@ __attribute__((weak)) int dcl_parse_style_extended(void)
     return 0;
 }
 
+/*
+ * rd vms-ba2: record which parameter (P1..P8) each new list element belongs
+ * to. A blank starts a new parameter; a ',' continues the parameter before it
+ * as a list ("DELETE A.TXT;*,B.TXT;*" is ONE parameter of two elements, as
+ * OpenVMS DCL parses it). Called before every token and once at the end, so
+ * every path that adds an element is seen.
+ */
+static void note_param_slots(struct dcl_command *cmd, int *list_comma)
+{
+    int total = dcl_param_total(cmd);
+    while (cmd->slot_recorded < total) {
+        int i = cmd->slot_recorded;
+        if (i >= DCL_MAX_ELEMS) {
+            cmd->overflow_lost = 1;
+            return;
+        }
+        if (i > 0 && *list_comma)
+            cmd->elem_slot[i] = cmd->elem_slot[i - 1];
+        else
+            cmd->elem_slot[i] = (unsigned char)(cmd->slot_count < 255 ? cmd->slot_count++ : 255);
+        *list_comma = 0;
+        cmd->slot_recorded++;
+    }
+}
+
 int dcl_parse_line(const char *line, struct dcl_command *cmd)
 {
     dcl_lexer_t lex;
@@ -350,7 +375,9 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
     /* Parse the rest of the tokens */
     int last_was_param = 0;       /* previous token was a WORD/STRING/NUMBER param */
     int last_param_quoted = 0;    /* ...and that param came from a bare STRING     */
+    int list_comma = 0;           /* a ',' since the last element (rd vms-ba2)     */
     while (1) {
+        note_param_slots(cmd, &list_comma);
         size_t before = lex.pos;
         if (dcl_lexer_next(&lex, &tok) != 0) break;
         if (tok.type == TOK_EOF || tok.type == TOK_NEWLINE) break;
@@ -482,7 +509,9 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
             break;
 
         case TOK_COMMA:
-            /* Comma-separated parameters (continue to next param) */
+            /* Comma-separated list elements: the next element belongs to the
+             * same parameter as the one before (rd vms-ba2). */
+            list_comma = 1;
             break;
 
         case TOK_EQUALS:
@@ -523,6 +552,7 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
         cmd->params[0][sizeof(cmd->params[0]) - 1] = '\0';
         cmd->param_count = 1;
     }
+    note_param_slots(cmd, &list_comma);
 
     return 0;
 }
@@ -530,6 +560,21 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
 int dcl_param_total(const struct dcl_command *cmd)
 {
     return cmd->param_count + cmd->overflow_count;
+}
+
+int dcl_slot_total(const struct dcl_command *cmd)
+{
+    /* a command built by hand (no slot record) has one element per parameter */
+    if (cmd->slot_recorded != dcl_param_total(cmd))
+        return dcl_param_total(cmd);
+    return cmd->slot_count;
+}
+
+int dcl_param_slot(const struct dcl_command *cmd, int i)
+{
+    if (i < 0 || i >= dcl_param_total(cmd)) return -1;
+    if (cmd->slot_recorded != dcl_param_total(cmd)) return i;
+    return cmd->elem_slot[i];
 }
 
 const char *dcl_param_at(const struct dcl_command *cmd, int i)

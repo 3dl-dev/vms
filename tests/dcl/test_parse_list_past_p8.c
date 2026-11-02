@@ -80,6 +80,40 @@ int main(void)
           cmd.param_count == 3 && cmd.overflow_count == 0 && dcl_param_total(&cmd) == 3,
           "a short list fills params[] only");
 
+    /* rd vms-ba2: a comma list is ONE parameter; a blank starts the next */
+    check(dcl_slot_total(&cmd) == 1 && dcl_param_slot(&cmd, 2) == 0,
+          "DELETE a,b,c: one parameter (P1) of three elements");
+    check(dcl_parse_line("LIBRARY /REPLACE L.A X.O,Y.O", &cmd) == 0 &&
+          dcl_slot_total(&cmd) == 2 && dcl_param_slot(&cmd, 0) == 0 &&
+          dcl_param_slot(&cmd, 1) == 1 && dcl_param_slot(&cmd, 2) == 1,
+          "LIBRARY lib x,y: P1 = lib, P2 = the list x,y");
+    check(dcl_parse_line("COPY A.TXT,B.TXT/LOG , C.TXT  OUT.TXT", &cmd) == 0 &&
+          dcl_slot_total(&cmd) == 2 && dcl_param_slot(&cmd, 2) == 0 &&
+          dcl_param_slot(&cmd, 3) == 1,
+          "COPY a,b/LOG , c out: blanks around the comma and a qualifier keep the list");
+    check(dcl_parse_line("DELETE K.TXT;* L.TXT;*", &cmd) == 0 &&
+          dcl_slot_total(&cmd) == 2,
+          "DELETE k l (blank-separated): two parameters");
+    strcpy(line, "DELETE ");
+    for (int i = 1; i <= 12; i++) {
+        char f[32];
+        snprintf(f, sizeof f, "%sF%02d.TXT;*", i > 1 ? "," : "", i);
+        strcat(line, f);
+    }
+    check(dcl_parse_line(line, &cmd) == 0 && dcl_param_total(&cmd) == 12 &&
+          dcl_slot_total(&cmd) == 1 && dcl_param_slot(&cmd, 11) == 0 &&
+          !cmd.overflow_lost,
+          "a 12-element DELETE list is one parameter, every element past P8 in P1");
+    {
+        struct dcl_command hand;
+        memset(&hand, 0, sizeof hand);
+        strcpy(hand.params[0], "X");
+        strcpy(hand.params[1], "Y");
+        hand.param_count = 2;
+        check(dcl_slot_total(&hand) == 2 && dcl_param_slot(&hand, 1) == 1,
+              "a command built by hand: one parameter per element");
+    }
+
     printf("test_parse_list_past_p8: %s\n", failures ? "FAILED" : "OK");
     return failures ? 1 : 0;
 }

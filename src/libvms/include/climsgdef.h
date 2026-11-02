@@ -15,6 +15,7 @@
 #define CLI$_IVKEYW   0x00038060   /* %CLI-W-IVKEYW, unrecognized keyword */
 #define CLI$_IVVERB   0x00038090   /* %CLI-W-IVVERB, unrecognized command verb */
 #define CLI$_MAXPARM  0x00038098   /* %CLI-W-MAXPARM, too many parameters */
+#define CLI$_NOLIST   0x000380C0   /* %CLI-W-NOLIST, list of parameter values not allowed */
 #define CLI$_UNDSYM   0x00038140   /* %CLI-W-UNDSYM, undefined symbol */
 #define CLI$_IVQUAL   0x00038240   /* %CLI-W-IVQUAL, unrecognized qualifier */
 

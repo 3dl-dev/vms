@@ -1,0 +1,26 @@
+# dcl-plist-stops-at-p8 -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL file-verb P1 lists of any length (src/vmsdcl/dcl_exec.c exec_plist, vms-ba2)";;
+        targets)      echo "vmsdcl/dcl_exec.c";;
+        suites_red)   echo "test_syssvc_dcl_plist";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "exec_plist acts on only the first eight list elements (the P1-P8 limit OpenVMS does not have): a 12-element DELETE succeeds but leaves the last four files.";;
+        require_fail) cat <<'EOF2'
+... every one of the twelve is gone
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    for (int i = 0; i < total; i++) {$|    for (int i = 0; i < total \&\& i < 8; i++) { /* NEGCTL dcl-plist-stops-at-p8 */|' "$_file"
+    :
+}

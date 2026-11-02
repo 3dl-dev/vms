@@ -4,8 +4,8 @@
 # EXPECT: contains:DOTA-REPLACE-ONE-MEMBER-OK
 # EXPECT: contains:DOTA-TEXT-LIBRARY-UNCHANGED
 # EXPECT: contains:DOTA-LONG-LIST-ALL-10-OK
-# EXPECT: contains:%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters
-# EXPECT: contains:DOTA-MAXPARM-NOTHING-DELETED
+# EXPECT: contains:DOTA-DELETE-LIST-ALL-9-OK
+# EXPECT_NOT: contains:MAXPARM
 #
 # The alpha-dec-vms GCC port's `ar` (gcc/config/vms/vms-ar.c) writes a command file
 #   $ library /replace/create libx.a -
@@ -52,11 +52,13 @@ if [ -n "$LONG" ] && [ "$(ar t "$LONG" 2>/dev/null | grep -ci '^L[0-9]')" = 10 ]
 else
     echo "DOTA-LONG-LIST-FAIL: $(ar t "$LONG" 2>/dev/null | tr '\n' ' ')"
 fi
-# a built-in that takes no long list refuses it whole: DELETE removed nothing
-if [ "$(find "/vms/$TDIR" -iname 'L[0-9].OBJ*' | wc -l)" -ge 10 ]; then
-    echo "DOTA-MAXPARM-NOTHING-DELETED"
+# rd vms-ba2: DELETE takes a list past P8 too, as OpenVMS does -- all nine go,
+# L9 (not in the list) stays
+if [ "$(find "/vms/$TDIR" -iname 'L[0-8].OBJ*' | wc -l)" -eq 0 ] &&
+   [ "$(find "/vms/$TDIR" -iname 'L9.OBJ*' | wc -l)" -eq 1 ]; then
+    echo "DOTA-DELETE-LIST-ALL-9-OK"
 else
-    echo "DOTA-MAXPARM-DELETED-SOME"
+    echo "DOTA-DELETE-LIST-FAIL: $(find "/vms/$TDIR" -iname 'L[0-9].OBJ*' | tr '\n' ' ')"
 fi
 
 LIB=$(find "/vms/$TDIR" -iname 'LIBX.A' 2>/dev/null | head -1)

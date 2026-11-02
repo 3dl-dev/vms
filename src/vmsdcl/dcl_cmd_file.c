@@ -1184,8 +1184,88 @@ static int copy_spec_has_node(const char *s);
 static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *cmd,
                                   const char *mode, const char *fac);
 
+/*
+ * rd vms-ba2: DIRECTORY takes a P1 list. Consecutive elements in ONE directory
+ * are listed under one header with one total (real VAX V7.3,
+ * tests/lab/captures/dcl-plist-20261102 #7: DIRECTORY A.TXT,B.TXT,C.TXT ->
+ * one "Directory" header, three files, "Total of 3 files."). An element that
+ * finds nothing reports %DIRECT-E-OPENIN and the rest are still listed (#14).
+ * cmd_directory hands cmd_directory_list the further elements of the group
+ * through dir_more / dir_more_n; dir_listed_files is the group's file count.
+ */
+static const char *const *dir_more;
+static int dir_more_n;
+static int dir_listed_files;
+
+/* the VMS pattern a DIRECTORY spec lists, and its directory part */
+static void dir_spec_pattern(struct dcl_context *ctx, const char *spec,
+                             char *pat, size_t patsz, char *base, size_t basesz,
+                             char *filepat, size_t fpsz)
+{
+    if (spec && spec[0])
+        dcl_rms_effective_spec(ctx, spec, pat, patsz);
+    else
+        dcl_rms_effective_spec(ctx, "*.*;*", pat, patsz);
+    size_t L = strlen(pat);
+    char last = L ? pat[L - 1] : 0;
+    if (last == ']' || last == '>' || last == ':')
+        strncat(pat, "*.*;*", patsz - L - 1);
+    const char *rb = strrchr(pat, ']');
+    if (!rb) rb = strrchr(pat, '>');
+    if (!rb) rb = strrchr(pat, ':');
+    size_t pl = rb ? (size_t)(rb - pat) + 1 : 0;
+    if (pl >= basesz) pl = basesz - 1;
+    memcpy(base, pat, pl);
+    base[pl] = '\0';
+    snprintf(filepat, fpsz, "%s", (rb ? rb + 1 : pat)[0] ? (rb ? rb + 1 : pat) : "*.*;*");
+}
+
 int cmd_directory(struct dcl_command *cmd)
 {
+    /* a P1 list: one listing per run of elements in the same directory */
+    if (dcl_param_total(cmd) > 1 && dcl_slot_total(cmd) == 1) {
+        struct dcl_context *ctx = dcl_get_context();
+        int total = dcl_param_total(cmd), nel = 0;
+        char (*el)[DCL_MAX_VALUE] = malloc((size_t)total * sizeof *el);
+        struct dcl_command *one = malloc(sizeof *one);
+        const char **more = malloc((size_t)total * sizeof *more);
+        if (!el || !one || !more) { free(el); free(one); free(more); return SS$_INSFMEM; }
+        for (int i = 0; i < total; i++, nel++)
+            dcl_plist_sticky(nel ? el[nel - 1] : NULL, dcl_param_at(cmd, i),
+                             el[nel], sizeof el[0]);
+        int final = SS$_NORMAL, groups = 0, files = 0;
+        for (int i = 0; i < nel; ) {
+            char pat[1024], base[1024], fp[256], pat2[1024], base2[1024];
+            dir_spec_pattern(ctx, el[i], pat, sizeof pat, base, sizeof base, fp, sizeof fp);
+            int j = i + 1;
+            while (j < nel && !strstr(el[i], "...") && !strstr(el[j], "...")) {
+                dir_spec_pattern(ctx, el[j], pat2, sizeof pat2, base2, sizeof base2, fp, sizeof fp);
+                if (strcasecmp(base, base2) != 0) break;
+                more[j - i - 1] = el[j];
+                j++;
+            }
+            memcpy(one, cmd, sizeof *one);
+            snprintf(one->params[0], sizeof one->params[0], "%s", el[i]);
+            one->param_count = 1;
+            one->overflow_count = 0;
+            one->slot_recorded = 0;
+            dir_more = more;
+            dir_more_n = j - i - 1;
+            dir_listed_files = 0;
+            int st = cmd_directory(one);
+            dir_more = NULL;
+            dir_more_n = 0;
+            if (dir_listed_files > 0) { groups++; files += dir_listed_files; }
+            if (!(st & 1) && (final & 1)) final = st;
+            i = j;
+        }
+        if (groups > 1)
+            printf("\nGrand total of %d directories, %d file%s.\n",
+                   groups, files, files != 1 ? "s" : "");
+        free(el); free(one); free(more);
+        return final;
+    }
+
     const struct dcl_qualifier *pq = NULL;
     for (int i = 0; i < cmd->qualifier_count; i++)
         if (strcasecmp(cmd->qualifiers[i].name, "PAGE") == 0)
@@ -1414,7 +1494,7 @@ static int cmd_directory_list(struct dcl_command *cmd)
          * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DIRECTORY
          * — a search that finds nothing yields
          * "%DIRECT-W-NOFILES, no files found". */
-        if (entry_count == 0) {
+        if (entry_count == 0 && dir_more_n == 0) {
             free(entries);
             dcl_error("DIRECT", STS$K_WARNING, "NOFILES", "no files found");
             return SS$_NOSUCHFILE;
@@ -1432,13 +1512,68 @@ static int cmd_directory_list(struct dcl_command *cmd)
                                    (use_spec[1] == '.' || use_spec[1] == '-') && vms_base[0])
                                       ? vms_base : use_spec,
                                   vms_dir, sizeof(vms_dir));
-        if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
+        int list_status = SS$_NORMAL;
+        if (dir_more_n == 0) {
+            if (show_heading) printf("\nDirectory %s\n\n", vms_dir);
+        } else {
+            /* rd vms-ba2: the rest of this directory's run of list elements.
+             * The heading comes first (as soon as there is a file to list);
+             * an element that finds nothing is reported where it is met, and
+             * the columns follow (lab #14). */
+            int headed = 0;
+            if (entry_count > 0 && show_heading) { printf("\nDirectory %s\n\n", vms_dir); headed = 1; }
+            if (entry_count == 0) {
+                dcl_error("DIRECT", STS$K_ERROR, "OPENIN", "error opening %s as input", vms_pattern);
+                fprintf(stderr, "-RMS-E-FNF, file not found\n");
+                list_status = 0x0001C04A;
+            }
+            for (int m = 0; m < dir_more_n; m++) {
+                char mpat[1024], mbase[1024], mfp[256];
+                struct dir_entry *more = NULL;
+                int more_count = 0, mst;
+                dir_spec_pattern(ctx, dir_more[m], mpat, sizeof mpat, mbase, sizeof mbase,
+                                 mfp, sizeof mfp);
+                if (rms_executive_absent()) {
+                    size_t L = strlen(dir_more[m]);
+                    char lc = L ? dir_more[m][L - 1] : 0;
+                    int dt = (lc == ']' || lc == '>' || lc == ':');
+                    mst = dir_collect_host(ctx, mbase[0] ? mbase : NULL, dt ? NULL : mfp,
+                                           excl_pats, excl_count, &more, &more_count);
+                } else {
+                    mst = dir_collect_acp(ctx, mpat, excl_pats, excl_count, &more, &more_count);
+                }
+                if (mst != SS$_NORMAL || more_count == 0) {
+                    free(more);
+                    dcl_error("DIRECT", STS$K_ERROR, "OPENIN", "error opening %s as input", mpat);
+                    fprintf(stderr, "-RMS-E-FNF, file not found\n");
+                    list_status = 0x0001C04A;   /* DIRECT-E-OPENIN, lab #14 */
+                    continue;
+                }
+                struct dir_entry *grown = realloc(entries,
+                    (size_t)(entry_count + more_count) * sizeof *entries);
+                if (!grown) { free(more); free(entries); return SS$_INSFMEM; }
+                entries = grown;
+                memcpy(entries + entry_count, more, (size_t)more_count * sizeof *more);
+                entry_count += more_count;
+                free(more);
+                if (!headed && show_heading) {
+                    dcl_directory_header_spec(ctx->default_dir, mbase, vms_dir, sizeof(vms_dir));
+                    printf("\nDirectory %s\n\n", vms_dir);
+                    headed = 1;
+                }
+            }
+            if (entry_count == 0) {
+                free(entries);
+                return list_status;
+            }
+        }
 
         int file_count = 0;
         long total_blocks = 0, total_alloc = 0;
         dir_print_entries(entries, entry_count, &opts,
                           &file_count, &total_blocks, &total_alloc);
         free(entries);
+        dir_listed_files = file_count;
 
         /* Footer. Block counts appear only when file sizes are displayed
          * (/SIZE or /FULL) — see dcl_print_dir_total()'s citation. */
@@ -1467,7 +1602,7 @@ static int cmd_directory_list(struct dcl_command *cmd)
             printf("%s\n", vms_dir);
         }
 
-        return SS$_NORMAL;
+        return list_status;
     }
 
     /* ---------------- Multi-directory ellipsis listing ----------------
@@ -1583,6 +1718,35 @@ static int type_page_pause(void)
 /*
  * TYPE - Display file contents.
  */
+/*
+ * rd vms-ba2: TYPE A.TXT,B.TXT,C.TXT -- every file after the first in the list
+ * is headed by its full name between blank lines (real VAX V7.3,
+ * tests/lab/captures/dcl-plist-20261102 #3):
+ *     A
+ *
+ *     SYS$SYSROOT:[SYSMGR.BA2]B.TXT;1
+ *
+ *     B
+ */
+static void type_list_heading(struct dcl_context *ctx, const struct dcl_command *cmd)
+{
+    if (cmd->list_elem <= 0)
+        return;
+    char full[1100] = "";
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, cmd->params[0]);
+    if (d) {
+        if (!dcl_rms_dir_next(d, full, sizeof full, NULL, NULL, NULL))
+            full[0] = '\0';
+        dcl_rms_dir_close(d);
+    }
+    if (!full[0]) {
+        extern void dcl_message_spec(struct dcl_context *, const char *,
+                                     const char *, char *, size_t);
+        dcl_message_spec(ctx, cmd->params[0], NULL, full, sizeof full);
+    }
+    printf("\n%s\n\n", full);
+}
+
 int cmd_type(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -1636,6 +1800,7 @@ int cmd_type(struct dcl_command *cmd)
             dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
             FILE *fp = fopen(linux_path, "r");
             if (fp) {
+                type_list_heading(ctx, cmd);
                 int paged = dcl_has_qualifier(cmd, "PAGE");
                 int line_count = 0, page_size = type_page_lines(ctx);
                 char line[4096];
@@ -1694,6 +1859,7 @@ int cmd_type(struct dcl_command *cmd)
         return rst;
     }
 
+    type_list_heading(ctx, cmd);
     /* Check for /PAGE qualifier */
     int paged = dcl_has_qualifier(cmd, "PAGE");
     int line_count = 0;
@@ -2307,6 +2473,132 @@ static int dnet_fal_verb_activate(struct dcl_context *ctx, struct dcl_command *c
  *   - /LOG lists each file with "%COPY-S-COPIED, in copied to out", and a
  *     multi-file copy reports "%COPY-S-NEWFILES, n files created".
  */
+/*
+ * rd vms-ba2: COPY in1,in2,... OUT where OUT names one file concatenates the
+ * inputs into ONE new OUT, as OpenVMS COPY does (real VAX V7.3,
+ * tests/lab/captures/dcl-plist-20261102 #4: one C2.TXT;1 holding A then B;
+ * /LOG #4b: "%COPY-S-COPIED, A copied to C3" then "%COPY-S-APPENDED, B
+ * appended to C3 (1 record)"). dcl_exec routes a list to a one-file output
+ * here whole; every other list runs COPY once per element.
+ */
+static int copy_concat(struct dcl_context *ctx, struct dcl_command *cmd)
+{
+    const char *out = NULL;
+    for (int i = 0; i < dcl_param_total(cmd); i++)
+        if (dcl_param_slot(cmd, i) == 1) { out = dcl_param_at(cmd, i); break; }
+    if (!out) return SS$_BADPARAM;
+    int do_log = dcl_has_qualifier(cmd, "LOG");
+    int final = SS$_NORMAL, n = 0;
+    char prev[DCL_MAX_VALUE] = "", in[DCL_MAX_VALUE];
+    char out_eff[1024] = "", out_path[1024] = "";
+    struct dcl_rms_writer *w = NULL;
+    static char rec[65536];
+
+    for (int i = 0; i < dcl_param_total(cmd); i++) {
+        if (dcl_param_slot(cmd, i) != 0) continue;
+        dcl_plist_sticky(n++ ? prev : NULL, dcl_param_at(cmd, i), in, sizeof in);
+        memcpy(prev, in, sizeof prev);
+
+        if (rms_executive_absent()) {
+            /* host ctest defer (vms-5f0): the first input is an ordinary COPY,
+             * the rest are appended to the file it made */
+            if (!out_path[0]) {
+                struct dcl_command *one = malloc(sizeof *one);
+                if (!one) return SS$_INSFMEM;
+                memcpy(one, cmd, sizeof *one);
+                snprintf(one->params[0], sizeof one->params[0], "%s", in);
+                snprintf(one->params[1], sizeof one->params[1], "%s", out);
+                one->param_count = 2;
+                one->overflow_count = 0;
+                one->slot_recorded = 0;
+                int st = cmd_copy(one);
+                free(one);
+                if (!(st & 1)) { final = st; continue; }
+                dcl_resolve_path(ctx, out, out_path, sizeof out_path);
+                continue;
+            }
+            char src_path[1024];
+            dcl_resolve_path(ctx, in, src_path, sizeof src_path);
+            FILE *src = fopen(src_path, "rb"), *dst = NULL;
+            if (!src) {
+                dcl_error("RMS", 2, "FNF", "file not found - %s", in);
+                final = SS$_NOSUCHFILE;
+                continue;
+            }
+            dst = fopen(out_path, "ab");
+            size_t k;
+            int recs = 0;
+            while (dst && fgets(rec, sizeof rec, src)) {
+                k = strlen(rec);
+                if (fwrite(rec, 1, k, dst) != k) { final = SS$_ABORT; break; }
+                recs++;
+            }
+            fclose(src);
+            if (!dst || fclose(dst) != 0) {
+                dcl_error("RMS", 2, "WER", "write error - %s", out);
+                final = SS$_ABORT;
+            } else if (do_log) {
+                dcl_error("COPY", 1, "APPENDED", "%s appended to %s (%d record%s)",
+                          in, out, recs, recs == 1 ? "" : "s");
+            }
+            continue;
+        }
+
+        struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, in);
+        char src_spec[1024];
+        int matched = 0;
+        while (d && dcl_rms_dir_next(d, src_spec, sizeof src_spec, NULL, NULL, NULL)) {
+            matched++;
+            uint32_t rst = 0;
+            if (!w) {
+                struct rms_fileattr sa;
+                uint8_t rfm = FAB$C_VAR, rat = 0;
+                uint16_t mrs = 0;
+                if (dcl_rms_attr(ctx, src_spec, &sa) == RMS$_NORMAL && sa.rfm) {
+                    rfm = sa.rfm; rat = (uint8_t)sa.rat; mrs = sa.mrs;
+                }
+                dcl_rms_effective_spec(ctx, out, out_eff, sizeof out_eff);
+                w = dcl_rms_write_create(ctx, out, rfm, rat, mrs, &rst);
+                if (!w) {
+                    dcl_error("RMS", 2, "CRE", "cannot create - %s", out_eff);
+                    dcl_rms_dir_close(d);
+                    return SS$_FILACCERR;
+                }
+            }
+            int first = (matched == 1 && n == 1);
+            struct dcl_rms_reader *r = dcl_rms_read_open(ctx, src_spec, &rst);
+            if (!r) {
+                dcl_error("RMS", 2, "FNF", "file not found - %s", src_spec);
+                final = SS$_NOSUCHFILE;
+                continue;
+            }
+            int eof = 0, len, recs = 0;
+            while ((len = dcl_rms_read_record(r, rec, sizeof rec, &eof)) >= 0) {
+                if (dcl_rms_write_record(w, rec, (size_t)len) != 0) { final = SS$_ABORT; break; }
+                recs++;
+            }
+            dcl_rms_read_close(r);
+            if (!eof && (final & 1)) final = SS$_ABORT;
+            if (!(final & 1)) {
+                dcl_error("RMS", 2, "WER", "write error - %s", out_eff);
+                break;
+            }
+            if (do_log && first)
+                dcl_error("COPY", 1, "COPIED", "%s copied to %s", src_spec, out_eff);
+            else if (do_log)
+                dcl_error("COPY", 1, "APPENDED", "%s appended to %s (%d record%s)",
+                          src_spec, out_eff, recs, recs == 1 ? "" : "s");
+        }
+        if (d) dcl_rms_dir_close(d);
+        if (!matched) {
+            dcl_error("RMS", 2, "FNF", "file not found - %s", in);
+            if (final & 1) final = SS$_NOSUCHFILE;
+        }
+    }
+    if (w) dcl_rms_write_close(w);
+    return final;
+}
+
 int cmd_copy(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -2315,6 +2607,9 @@ int cmd_copy(struct dcl_command *cmd)
         dcl_error("DCL", 2, "NOFILE", "missing source and/or destination");
         return SS$_BADPARAM;
     }
+    /* a list in P1 to one named output file: concatenate (rd vms-ba2) */
+    if (dcl_param_total(cmd) > dcl_slot_total(cmd) && dcl_slot_total(cmd) == 2)
+        return copy_concat(ctx, cmd);
 
     /* ---- DECnet file COPY (NODE"user pw"::file), rd vms-8c2 / vms-ea8 -----
      * A node prefix on either side is a DECnet FAL/DAP transfer, NOT a local
@@ -3450,6 +3745,105 @@ extern int vmsfs_list_versions(const char *linux_dir, const char *basename,
  * Calls vmsfs_purge_versions() for each matching file base name found
  * in the target directory.
  */
+/*
+ * purge_files_acp - PURGE over the Files-11 ACP (the product runtime): every
+ * version the executive directory search ($PARSE/$SEARCH) returns for the spec,
+ * with PURGE's default *.*;* filling the missing name/type, grouped by
+ * name.type; all but the newest keep_count of each group are $ERASEd
+ * (dcl_rms_erase, IO$_DELETE). No opendir()/unlink() on a /vms passthrough --
+ * the same shape as delete_files_acp.
+ */
+static int purge_files_acp(struct dcl_context *ctx, const char *param, int keep_count,
+                           int do_confirm, int do_log)
+{
+    char pat[1024];
+    const char *src = (param && param[0]) ? param : "";
+    size_t n0 = strlen(src);
+    if (n0 >= sizeof(pat) - 8) {
+        dcl_error("RMS", 2, "FNM", "error in file name - %s", src);
+        return RMS$_FNM;
+    }
+    memcpy(pat, src, n0 + 1);
+    {   /* PURGE's default file spec *.*;* : drop any version, fill name/type */
+        char *comp = (char *)dcl_filename_component(pat);
+        if (!comp) comp = pat + strlen(pat);
+        char *semi = strchr(comp, ';');
+        if (semi) *semi = '\0';
+        if (!comp[0]) {
+            memcpy(pat + strlen(pat), "*.*", 4);
+        } else if (!strchr(comp, '.')) {
+            memcpy(pat + strlen(pat), ".*", 3);
+        }
+        memcpy(pat + strlen(pat), ";*", 3);
+    }
+
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, pat);
+    if (!d) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", src[0] ? src : "*.*;*");
+        return SS$_NOSUCHFILE;
+    }
+    struct acp_pur { char spec[1024]; struct file_match fm; };
+    int cap = 32, n = 0;
+    struct acp_pur *arr = malloc((size_t)cap * sizeof(*arr));
+    if (!arr) { dcl_rms_dir_close(d); return SS$_INSFMEM; }
+    char rspec[1024];
+    while (dcl_rms_dir_next(d, rspec, sizeof(rspec), NULL, NULL, NULL)) {
+        if (n >= cap) {
+            cap *= 2;
+            struct acp_pur *t = realloc(arr, (size_t)cap * sizeof(*arr));
+            if (!t) { free(arr); dcl_rms_dir_close(d); return SS$_INSFMEM; }
+            arr = t;
+        }
+        strncpy(arr[n].spec, rspec, sizeof(arr[n].spec) - 1);
+        arr[n].spec[sizeof(arr[n].spec) - 1] = '\0';
+        const char *nt = rspec;
+        const char *rb = strrchr(rspec, ']');
+        if (!rb) rb = strrchr(rspec, '>');
+        if (rb) nt = rb + 1;
+        strncpy(arr[n].fm.dname, nt, sizeof(arr[n].fm.dname) - 1);
+        arr[n].fm.dname[sizeof(arr[n].fm.dname) - 1] = '\0';
+        fm_split(nt, arr[n].fm.base, sizeof(arr[n].fm.base), &arr[n].fm.version);
+        n++;
+    }
+    dcl_rms_dir_close(d);
+
+    int total_deleted = 0;
+    for (int i = 0; i < n; i++) {
+        /* rank = how many versions of the same name.type are newer than this one */
+        int newer = 0;
+        for (int j = 0; j < n; j++)
+            if (j != i && strcmp(arr[j].fm.base, arr[i].fm.base) == 0 &&
+                arr[j].fm.version > arr[i].fm.version)
+                newer++;
+        if (newer < keep_count) continue;
+        if (do_confirm) {
+            printf("PURGE %s ? [N]: ", arr[i].spec);
+            fflush(stdout);
+            char resp[64];
+            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (toupper((unsigned char)resp[0]) != 'Y') continue;
+        }
+        uint32_t est = dcl_rms_erase(ctx, arr[i].spec);
+        if (est & 1) {
+            total_deleted++;
+            if (do_log)
+                dcl_error("PURGE", 1, "FILPURG", "%s deleted", arr[i].spec);
+        } else if (est == RMS$_PRV) {
+            dcl_error("PURGE", 2, "PRV",
+                      "insufficient privilege or file protection violation for %s",
+                      arr[i].spec);
+        }
+    }
+    free(arr);
+    if (total_deleted == 0) {
+        printf("%%PURGE-I-NOPURGE, no file versions to purge\n");
+    } else {
+        printf("%%PURGE-I-PURGED, %d old version%s deleted\n",
+               total_deleted, total_deleted != 1 ? "s" : "");
+    }
+    return SS$_NORMAL;
+}
+
 int cmd_purge(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -3465,6 +3859,10 @@ int cmd_purge(struct dcl_command *cmd)
         keep_count = (int)strtol(keep_val, &endp, 10);
         if (endp == keep_val || *endp != '\0' || keep_count < 1) keep_count = 1;
     }
+
+    if (!rms_executive_absent())
+        return purge_files_acp(ctx, cmd->param_count >= 1 ? cmd->params[0] : "",
+                               keep_count, do_confirm, do_log);
 
     /* Determine the target directory and pattern */
     char linux_dir[1024];

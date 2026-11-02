@@ -1,0 +1,345 @@
+$ WRITE SYS$OUTPUT "CN_"+F$STRING(F$GETSYI("CLUSTER_NODES"))
+CN_2
+$ WRITE SYS$OUTPUT "BA2START "+F$GETSYI("VERSION")+" "+F$GETJPI("","USERNAME")
+BA2START V7.3     SYSTEM      
+$ SET TERMINAL/WIDTH=132
+$ CREATE/DIRECTORY [.BA2]
+$ SET DEFAULT [.BA2]
+$ SHOW DEFAULT
+  SYS$SYSROOT:[SYSMGR.BA2]
+  =   SYS$SYSROOT:[SYSMGR.BA2]
+$ OPEN/WRITE F MK.COM
+$ WRITE F "$ L = ""A,B,C,D,E,F,G,H,I,J,K,L,X1,X2"""
+$ WRITE F "$ N=0"
+$ WRITE F "$LP: X=F$ELEMENT(N,"","",L)"
+$ WRITE F "$ IF X .EQS. "","" THEN GOTO DN"
+$ @MK
+%DCL-E-OPENIN, error opening SYS$SYSROOT:[SYSMGR.BA2]MK.COM; as input
+-RMS-E-FLK, file currently locked by another user
+$ CREATE/DIRECTORY [.SUB]
+$ DIRECTORY
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+MK.COM;1            SUB.DIR;1           
+
+Total of 2 files.
+$ CLOSE F
+$ DELETE MK.COM;*
+$ Q = "'"
+$ OPEN/WRITE F MK.COM
+$ WRITE F "$ L = ""A,B,C,D,E,F,G,H,I,J,K,L,X1,X2"""
+$ WRITE F "$ N=0"
+$ WRITE F "$LP: X=F$ELEMENT(N,"","",L)"
+$ WRITE F "$ IF X .EQS. "","" THEN GOTO DN"
+$ WRITE F "$ OPEN/WRITE G "+Q+"X"+Q+".TXT"
+$ WRITE F "$ WRITE G X"
+$ WRITE F "$ CLOSE G"
+$ WRITE F "$ N=N+1"
+$ WRITE F "$ GOTO LP"
+$ WRITE F "$DN: EXIT"
+$ CLOSE F
+$ TYPE MK.COM
+$ L = "A,B,C,D,E,F,G,H,I,J,K,L,X1,X2"
+$ N=0
+$LP: X=F$ELEMENT(N,",",L)
+$ IF X .EQS. "," THEN GOTO DN
+$ OPEN/WRITE G 'X'.TXT
+$ WRITE G X
+$ CLOSE G
+$ N=N+1
+$ GOTO LP
+$DN: EXIT
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10000001"
+$ @MK
+$ WRITE SYS$OUTPUT "MK_DONE"
+MK_DONE
+$ DIRECTORY
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+A.TXT;1             B.TXT;1             C.TXT;1             D.TXT;1            
+E.TXT;1             F.TXT;1             G.TXT;1             H.TXT;1            
+I.TXT;1             J.TXT;1             K.TXT;1             L.TXT;1            
+MK.COM;1            SUB.DIR;1           X1.TXT;1            X2.TXT;1           
+
+Total of 16 files.
+$ DELETE A.TXT;*,B.TXT;*,C.TXT;*,D.TXT;*,E.TXT;*,F.TXT;*,G.TXT;*,H.TXT;*,I.TXT;*,J.TXT;*
+$ WRITE SYS$OUTPUT "P1 STATUS=",F$STRING($STATUS)
+P1 STATUS=%X10000001
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00010001"
+$ DIRECTORY
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+K.TXT;1             L.TXT;1             MK.COM;1            SUB.DIR;1          
+X1.TXT;1            X2.TXT;1            
+
+Total of 6 files.
+$ DELETE K.TXT;* L.TXT;*
+%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters
+ \L\
+$ WRITE SYS$OUTPUT "P2 STATUS=",F$STRING($STATUS)
+P2 STATUS=%X00038098
+$ DIRECTORY
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+K.TXT;1             L.TXT;1             MK.COM;1            SUB.DIR;1          
+X1.TXT;1            X2.TXT;1            
+
+Total of 6 files.
+$ DELETE *.TXT;*
+$ @MK
+$ DELETE A.TXT;* B.TXT;*
+%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters
+ \B\
+$ WRITE SYS$OUTPUT "P16 STATUS=",F$STRING($STATUS)
+P16 STATUS=%X00038098
+$ DIRECTORY/NOHEAD/NOTRAIL A.TXT,B.TXT
+SYS$SYSROOT:[SYSMGR.BA2]A.TXT;1
+SYS$SYSROOT:[SYSMGR.BA2]B.TXT;1
+$ TYPE A.TXT,B.TXT,C.TXT
+A
+ 
+SYS$SYSROOT:[SYSMGR.BA2]B.TXT;1
+ 
+B
+ 
+SYS$SYSROOT:[SYSMGR.BA2]C.TXT;1
+ 
+C
+$ WRITE SYS$OUTPUT "P3 STATUS=",F$STRING($STATUS)
+P3 STATUS=%X10000001
+$ COPY A.TXT,B.TXT C2.TXT
+$ WRITE SYS$OUTPUT "P4 STATUS=",F$STRING($STATUS)
+P4 STATUS=%X00000001
+$ TYPE C2.TXT
+A
+B
+$ DIRECTORY C2.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+C2.TXT;1            
+
+Total of 1 file.
+$ COPY/LOG A.TXT,B.TXT C3.TXT
+%COPY-S-COPIED, SYS$SYSROOT:[SYSMGR.BA2]A.TXT;1 copied to SYS$SYSROOT:[SYSMGR.BA2]C3.TXT;1 (1 block)
+%COPY-S-APPENDED, SYS$SYSROOT:[SYSMGR.BA2]B.TXT;1 appended to SYS$SYSROOT:[SYSMGR.BA2]C3.TXT;1 (1 record)
+$ WRITE SYS$OUTPUT "P4b STATUS=",F$STRING($STATUS)
+P4b STATUS=%X00000001
+$ COPY A.TXT,B.TXT [.SUB]*.*
+$ WRITE SYS$OUTPUT "P5 STATUS=",F$STRING($STATUS)
+P5 STATUS=%X00000001
+$ DIRECTORY [.SUB]
+
+Directory SYS$SYSROOT:[SYSMGR.BA2.SUB]
+
+A.TXT;1             B.TXT;1             
+
+Total of 2 files.
+$ APPEND A.TXT,B.TXT C.TXT
+$ WRITE SYS$OUTPUT "P6 STATUS=",F$STRING($STATUS)
+P6 STATUS=%X00000001
+$ TYPE C.TXT
+C
+A
+B
+$ DIRECTORY A.TXT,B.TXT,C.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+A.TXT;1             B.TXT;1             C.TXT;1             
+
+Total of 3 files.
+$ WRITE SYS$OUTPUT "P7 STATUS=",F$STRING($STATUS)
+P7 STATUS=%X00000001
+$ OPEN/WRITE G A.TXT
+$ WRITE G "A2"
+$ CLOSE G
+$ OPEN/WRITE G B.TXT
+$ WRITE G "B2"
+$ CLOSE G
+$ DIRECTORY A.TXT;*,B.TXT;*
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+A.TXT;2             A.TXT;1             B.TXT;2             B.TXT;1            
+
+Total of 4 files.
+$ PURGE A.TXT,B.TXT
+$ WRITE SYS$OUTPUT "P8 STATUS=",F$STRING($STATUS)
+P8 STATUS=%X10000001
+$ DIRECTORY A.TXT;*,B.TXT;*
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+A.TXT;2             B.TXT;2             
+
+Total of 2 files.
+$ OPEN/WRITE G A.TXT
+$ WRITE G "A3"
+$ CLOSE G
+$ OPEN/WRITE G B.TXT
+$ WRITE G "B3"
+$ CLOSE G
+$ DIRECTORY A.TXT;*,B.TXT;*
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+A.TXT;3             A.TXT;2             B.TXT;3             B.TXT;2            
+
+Total of 4 files.
+$ PURGE/LOG A.TXT,B.TXT
+%PURGE-I-FILPURG, SYS$SYSROOT:[SYSMGR.BA2]A.TXT;2 deleted (9 blocks)
+%PURGE-I-FILPURG, SYS$SYSROOT:[SYSMGR.BA2]B.TXT;2 deleted (9 blocks)
+%PURGE-I-TOTAL, 2 files deleted (18 blocks)
+$ WRITE SYS$OUTPUT "P17 STATUS=",F$STRING($STATUS)
+P17 STATUS=%X10000001
+$ DIRECTORY A.TXT;*,B.TXT;*
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+A.TXT;3             B.TXT;3             
+
+Total of 2 files.
+$ RENAME A.TXT,B.TXT *.NEW
+$ WRITE SYS$OUTPUT "P9 STATUS=",F$STRING($STATUS)
+P9 STATUS=%X00000001
+$ DIRECTORY *.NEW,A.TXT,B.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2]A.TXT;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2]B.TXT;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+A.NEW;1             B.NEW;1             
+
+Total of 2 files.
+$ COPY A.NEW B.TXT,C.TXT
+%DCL-W-NOLIST, list of parameter values not allowed - check use of comma (,)
+ \B.TXT,C\
+$ WRITE SYS$OUTPUT "P15 STATUS=",F$STRING($STATUS)
+P15 STATUS=%X000380C0
+$ DIRECTORY
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+A.NEW;1             B.NEW;1             C.TXT;1             C2.TXT;1           
+C3.TXT;1            D.TXT;1             E.TXT;1             F.TXT;1            
+G.TXT;1             H.TXT;1             I.TXT;1             J.TXT;1            
+K.TXT;1             L.TXT;1             MK.COM;1            SUB.DIR;1          
+X1.TXT;1            X2.TXT;1            
+
+Total of 18 files.
+$ COPY A.NEW B.TXT,C.TXT
+%DCL-W-NOLIST, list of parameter values not allowed - check use of comma (,)
+ \B.TXT,C\
+$ WRITE SYS$OUTPUT "P15b STATUS=",F$STRING($STATUS)
+P15b STATUS=%X000380C0
+$ DIRECTORY B.TXT,C.TXT
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2]B.TXT;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+C.TXT;1             
+
+Total of 1 file.
+$ DELETE *.TXT;*,*.NEW;*
+$ @MK
+$ DELETE [.SUB]A.TXT;*,B.TXT;*
+$ WRITE SYS$OUTPUT "P10 STATUS=",F$STRING($STATUS)
+P10 STATUS=%X10000001
+$ DIRECTORY [.SUB]
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2.SUB]*.*;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+$ DIRECTORY A.TXT,B.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+A.TXT;1             B.TXT;1             
+
+Total of 2 files.
+$ DELETE A.TXT;*,NOPE.TXT;*,B.TXT;*
+%DELETE-W-SEARCHFAIL, error searching for SYS$COMMON:[SYSMGR.BA2]NOPE.TXT;*
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+$ WRITE SYS$OUTPUT "P11 STATUS=",F$STRING($STATUS)
+P11 STATUS=%X10931238
+$ DIRECTORY A.TXT,B.TXT
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2]A.TXT;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2]B.TXT;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+$ DELETE/LOG X1.TXT;*,X2.TXT;*
+%DELETE-I-FILDEL, SYS$SYSROOT:[SYSMGR.BA2]X1.TXT;1 deleted (9 blocks)
+%DELETE-I-FILDEL, SYS$SYSROOT:[SYSMGR.BA2]X2.TXT;1 deleted (9 blocks)
+%DELETE-I-TOTAL, 2 files deleted (18 blocks)
+$ WRITE SYS$OUTPUT "P12 STATUS=",F$STRING($STATUS)
+P12 STATUS=%X10000001
+$ DIRECTORY X*.TXT
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2]X*.TXT;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+$ DELETE *.TXT;*
+$ @MK
+$ COPY A.TXT [.SUB]A.TXT
+$ TYPE A.TXT B.TXT
+%DCL-W-MAXPARM, too many parameters - reenter command with fewer parameters
+ \B\
+$ WRITE SYS$OUTPUT "P13 STATUS=",F$STRING($STATUS)
+P13 STATUS=%X00038098
+$ DIRECTORY [.SUB]A.TXT,B.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.BA2.SUB]
+
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2.SUB]B.TXT;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+A.TXT;1             
+
+Total of 1 file.
+$ WRITE SYS$OUTPUT "P14 STATUS=",F$STRING($STATUS)
+P14 STATUS=%X1001C04A
+$ COPY A.TXT B.TXT,C.TXT
+%DCL-W-NOLIST, list of parameter values not allowed - check use of comma (,)
+ \B.TXT,C\
+$ WRITE SYS$OUTPUT "P15c STATUS=",F$STRING($STATUS)
+P15c STATUS=%X000380C0
+$ DIRECTORY B.TXT,C.TXT
+
+Directory SYS$SYSROOT:[SYSMGR.BA2]
+
+B.TXT;1             C.TXT;1             
+
+Total of 2 files.
+$ DELETE [.SUB]*.*;*
+$ DELETE *.*;*
+$ SET DEFAULT [-]
+$ SET FILE/PROT=O:RWED BA2.DIR;1
+$ DELETE BA2.DIR;1
+$ DIRECTORY SYS$LOGIN:BA2.DIR,SYS$LOGIN:[.BA2]*.*
+%DIRECT-E-OPENIN, error opening SYS$LOGIN:[.BA2]*.* as input
+-RMS-F-DIR, error in directory name
+$ SHOW DEFAULT
+  SYS$SYSROOT:[SYSMGR]
+  =   SYS$SYSROOT:[SYSMGR]
+  =   SYS$COMMON:[SYSMGR]
+$ DIRECTORY BA2.DIR
+%DIRECT-W-NOFILES, no files found
+$ DIRECTORY [.BA2]
+%DIRECT-E-OPENIN, error opening SYS$COMMON:[SYSMGR.BA2]*.*;* as input
+-RMS-E-DNF, directory not found
+-SYSTEM-W-NOSUCHFILE, no such file
+$ 

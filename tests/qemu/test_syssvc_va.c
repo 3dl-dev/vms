@@ -88,8 +88,8 @@ static int child_quota(void)
     check(q(&a) && a.charged == 128 && a.pagfilcnt == CHILD_QUOTA - 128,
           "child: the executive charged the heap's 64 KB: 128 pagelets, 128 remaining");
 
-    /* negctl: va-pgflquota-unenforced */
     st = ovmx$vm_expreg(131072, &p2);
+    /* negctl: va-pgflquota-unenforced */
     check(st == SS$_EXQUOTA,
           "child: a heap request past PGFLQUOTA is refused SS$_EXQUOTA by the executive");
     check(q(&a) && a.charged == 128,

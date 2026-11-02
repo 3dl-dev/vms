@@ -248,13 +248,25 @@ fi
 #                    VDA200: is mounted (%MOUNT-F-VOLALRMNT).
 OVMX_DISK6=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 cp "$OVMX_ODS2_SEARCH_SRC" "$OVMX_DISK6"
-# A scratch SCSI disk (blank), attached as a REAL virtio-scsi disk below. Its
-# only purpose is to prove the executive's non-virtio disk probe: with a real
+# A SCSI disk, attached as a REAL virtio-scsi disk below. It proves the
+# executive's non-virtio disk probe: with a real
 # /dev/sda present in the guest, vms_devtab_probe_disks() must enter SDA0:
 # resolving to that node's real major:minor (test_kmod_disk.c asserts it against
-# an independent stat()). Blank is fine -- the probe resolves the node, it does
-# not read the contents. vms-ddc / vms-47d (device-native naming beyond virtio).
+# an independent stat()). The probe resolves the node and does not read the
+# contents, so the disk also carries the cluster-3 fixture (below). vms-ddc / vms-47d (device-native naming beyond virtio).
 OVMX_SCSI0=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+# rd vms-563: the SCSI disk carries the cluster-factor-3 ODS-2 volume
+# (/ods2_cluster3.img == tests/qemu/mkimage_ods2_cluster3.c), padded to 16M.
+# test_syssvc_acp_cluster3 $MOUNTs it as SDA0: and extends a file on it;
+# test_kmod_disk reads only the unit -> backing-device mapping.
+OVMX_ODS2_CLUSTER3_SRC=/ods2_cluster3.img
+if [ -f "$OVMX_ODS2_CLUSTER3_SRC" ]; then
+    cp "$OVMX_ODS2_CLUSTER3_SRC" "$OVMX_SCSI0"
+else
+    echo "run_tests.sh: FATAL: cluster-3 fixture $OVMX_ODS2_CLUSTER3_SRC missing --" >&2
+    echo "                test_syssvc_acp_cluster3 (vms-563) needs it on SDA0:" >&2
+    exit 2
+fi
 truncate -s 16M "$OVMX_SCSI0"
 trap 'rm -f "$ASSERT_TRANSCRIPT" "$OVMX_DISK0" "$OVMX_DISK1" "$OVMX_DISK2" "$OVMX_DISK3" "$OVMX_DISK4" "$OVMX_DISK5" "$OVMX_DISK6" "$OVMX_SCSI0"' EXIT
 

@@ -1757,6 +1757,12 @@ ods2_status_t ods2_wvolume_open_bdev(int fd, uint64_t span_bytes,
     total_blocks = scb.scb_volsize;
     if (total_blocks == 0 || total_blocks > rd.nblocks)
         return ODS2_ERR_FORMAT;   /* SCB disagrees with the backing store */
+    /* This writer allocates one bitmap bit per BLOCK (storage_bitmap_mark_used:
+     * cluster factor 1). A volume with a larger cluster factor maps bit N to
+     * LBNs N*cluster.., so writing it here would put data where the bitmap does
+     * not say (rd vms-563): refuse it rather than corrupt it. */
+    if (scb.scb_cluster != 1 || rd.home.hm2_cluster != 1)
+        return ODS2_ERR_FORMAT;
 
     memset(wvol, 0, sizeof(*wvol));
     wvol->is_bdev  = 1;

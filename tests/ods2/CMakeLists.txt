@@ -337,3 +337,17 @@ set_tests_properties(ods5_write PROPERTIES
     TIMEOUT 30
     ENVIRONMENT "ODS5_FIXTURE_DIR=${PROJECT_SOURCE_DIR}/tests/lab/captures/ods5-alpha-20261022"
 )
+
+# rd vms-563: the storage-bitmap allocator works in CLUSTERS -- on a
+# cluster-factor-3 volume bitmap bit N is LBNs 3N..3N+2, and a file's data and
+# map land in the blocks the bitmap marks (the vms-5fa ALLOCCLR at LBN
+# 89118-89120 on VAX1's $2$DUA2).
+add_executable(test_ods2_cluster_alloc test_ods2_cluster_alloc.c)
+target_include_directories(test_ods2_cluster_alloc PRIVATE ${VMS_FS_INCLUDE_DIR})
+target_link_libraries(test_ods2_cluster_alloc PRIVATE ods2)
+
+add_test(NAME ods2_cluster_alloc COMMAND test_ods2_cluster_alloc)
+set_tests_properties(ods2_cluster_alloc PROPERTIES
+    LABELS "unit;ods2;vmsfs"
+    TIMEOUT 30
+)

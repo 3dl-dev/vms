@@ -325,6 +325,13 @@ exec_zalloc_atomic(size_t n)
 	return __exec_alloc(n, KM_NOSLEEP, 1);
 }
 
+/* rd vms-c01: physical memory, for caches sized to the machine. */
+static __inline unsigned long long
+exec_physmem_bytes(void)
+{
+	return (unsigned long long)ptoa((unsigned long long)physmem);
+}
+
 static __inline void *
 exec_alloc(size_t n)
 {
@@ -961,6 +968,7 @@ static __inline void exec_membar_consumer(void) { membar_consumer(); }
 typedef void *exec_arena_t;
 void *exec_arena_alloc(size_t n);
 void  exec_arena_free(void *arena);
+size_t exec_arena_grow(void *arena, size_t need);
 
 /* ================================================================
  * §12  Host TCP client socket (vms-9951; BGn: INET facility).

@@ -16,6 +16,7 @@ static struct vms_lnm_arena *A;
 
 /* The executive's other cluster members (vms_devtab.c on a real build). */
 static uint32_t g_others;
+size_t lnm_host_arena_cap;
 uint32_t vms_lnm_cluster_other_members(void) { return g_others; }
 
 static const struct vms_lnm_entry *find(uint32_t table, uint32_t key,
@@ -255,6 +256,55 @@ int main(void)
 		ct_check(vms_ioctl_lnm_define(&p, (unsigned long)&d) == 0 &&
 			 d.status == SS__NORMAL,
 			 "  and the clusterwide DEFINE is served again");
+	}
+
+	/*
+	 * rd vms-c01: the arena is backed for the names that exist, not for its
+	 * capacity. It starts well short of VMS_LNM_MAX_ENTRIES, grows as names are
+	 * made, and when no more memory can be had a DEFINE is refused cleanly with
+	 * every existing name intact.
+	 */
+	{
+		char nm[32];
+		uint32_t i, start = A->max_entries, made = 0, refused = 0;
+		size_t hdr = (size_t)((char *)&A->entries[0] - (char *)A);
+
+		ct_check(start > 0u && start < VMS_LNM_MAX_ENTRIES,
+			 "c01: the arena starts backed for fewer than its capacity");
+		set_eq(0, "GROWN", 0);
+		for (i = 0; i < 200u; i++) {
+			snprintf(nm, sizeof(nm), "OVMX_GROW_%u", i);
+			if (vms_lnm_cluster_crelnm("LNM$SYSCLUSTER_TABLE", nm, 0, 2,
+						   1, eq) == SS__NORMAL)
+				made++;
+		}
+		ct_check_eq_u32(made, 200u, "c01: 200 more names are made");
+		ct_check(A->max_entries > start && A->max_entries <= VMS_LNM_MAX_ENTRIES,
+			 "  the arena grew to hold them, within its capacity");
+		for (i = 0; i < 200u; i++) {
+			snprintf(nm, sizeof(nm), "OVMX_GROW_%u", i);
+			if (!find(VMS_LNM_TBL_CLUSTER, sys, nm, 2))
+				break;
+		}
+		ct_check_eq_u32(i, 200u, "  and every one of them is found");
+
+		/* No memory to back another slot: fill what is backed, then one more. */
+		lnm_host_arena_cap = hdr + (size_t)A->max_entries * sizeof(A->entries[0]);
+		for (i = 0; i < VMS_LNM_MAX_ENTRIES; i++) {
+			snprintf(nm, sizeof(nm), "OVMX_FILL_%u", i);
+			if (vms_lnm_cluster_crelnm("LNM$SYSCLUSTER_TABLE", nm, 0, 2,
+						   1, eq) != SS__NORMAL) {
+				refused = 1;
+				break;
+			}
+		}
+		ct_check(refused && A->max_entries ==
+			 (uint32_t)((lnm_host_arena_cap - hdr) / sizeof(A->entries[0])),
+			 "c01: with no memory left a DEFINE is refused, the arena unchanged");
+		ct_check(find(VMS_LNM_TBL_CLUSTER, sys, "OVMX_GROW_0", 2) &&
+			 find(VMS_LNM_TBL_CLUSTER, sys, "OVMX_GROW_199", 2),
+			 "  and the names already made are all still there");
+		lnm_host_arena_cap = 0;
 	}
 
 	vms_lnm_cleanup();

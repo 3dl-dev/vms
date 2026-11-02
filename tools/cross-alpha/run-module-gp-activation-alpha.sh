@@ -2736,6 +2736,20 @@ PYEOF3
       cp -r "$CC1B_OBJ_IN" "$WORK/joint/gccobj"
       log "staged $(find "$WORK/joint/gccobj" -type f | wc -l) shard objects as GCCOBJ:[...]"
     fi
+    # every compile's sources and headers are on the volume: preprocess each one on
+    # the host against the staged trees (minutes) before the boot spends hours
+    log "step 1e: every compile in BUILD_CC1.COM preprocesses against the staged trees"
+    rm -rf "$GATE_ROOT/cc1bic"; mkdir -p "$GATE_ROOT/cc1bic"
+    cp -r "$GATE_ROOT/cxxinc" "$GATE_ROOT/cc1bic/cxx"; ln -s alpha-dec-vms "$GATE_ROOT/cc1bic/cxx/ALPHA-DEC-VMS"
+    python3 -I "$REPO/tools/cross-alpha-vms/selfhost/cc1-include-check.py" "$WORK/joint/gccsrc/BUILD_CC1.COM" \
+      "$GATE_ROOT/cc1bic/check.sh" || die "cc1-include-check.py failed"
+    _icst=0
+    docker run --rm -v "$WORK/joint/gccsrc:/GCCSRC:ro" -v "$GATE_ROOT/cc1bic/cxx:/GNU/CXX:ro" \
+      -v "$_tc:/out:ro" -v "$_jr:/joint:ro" -v "$GATE_ROOT/cc1bic:/ic:ro" -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" \
+      bash -c 'export PATH=/out/cxx/bin:$PATH; bash /ic/check.sh' > "$GATE_ROOT/cc1bic/check.log" 2>&1 || _icst=$?
+    grep -E '^cc1-include-check:' "$GATE_ROOT/cc1bic/check.log" | tail -20 | sed 's/^/  /'
+    [ "$_icst" -eq 0 ] || die "a compile cannot find a source or header in the staged trees (above): fix the staging (selfhost/build-host-gcc.sh)"
+    rm -rf "$GATE_ROOT/cc1bic/cxx"
     rm -f "$WORK/joint/"*_PROOF; : > "$WORK/joint/CC1B_PROOF"
     assemble_boot_image
     log "step 3: BOOT A -- BUILD_CC1.COM builds cc1 on the REAL executive ($_ntu compiles; up to ${BOOT_TIMEOUT}s)"

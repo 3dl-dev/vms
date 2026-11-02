@@ -214,17 +214,20 @@ static int cmd_show_time(struct dcl_command *cmd)
                   cmd->qualifiers[0].name);
         return 0x000380C8;
     }
+    /* "  29-AUG-2026 00:56:01": no hundredths, on VAX V7.3 and Alpha V8.4
+     * alike (tests/qemu/golden/oracle-{vax-v7.3,alpha-v8.4}.console.txt), and
+     * $STATUS is DCL's own success %X00030001
+     * (docs/oracle/vax73-status-after-verbs.md). */
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
-    int centisec = (int)(ts.tv_nsec / 10000000);
 
-    printf("  %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    printf("  %2d-%s-%04d %02d:%02d:%02d\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-           tm.tm_hour, tm.tm_min, tm.tm_sec, centisec);
+           tm.tm_hour, tm.tm_min, tm.tm_sec);
 
-    return SS$_NORMAL;
+    return 0x00030001;
 }
 
 /*

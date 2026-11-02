@@ -532,7 +532,15 @@ static expr_val_t parse_primary(expr_parser_t *ep)
             }
             return make_str(val);
         }
-        /* Not a symbol - treat as string literal */
+        /* An undefined symbol in an expression is %DCL-W-UNDSYM and the
+         * command does not complete (VAX V7.3, docs/oracle/semantics/fio/
+         * FIO.READ.EOF.NOLABEL: the assignment of "/[" + SP_L + "]" left SP_T
+         * alone). */
+        if (!eval_fail_status) {
+            dcl_error("DCL", 0, "UNDSYM",
+                      "undefined symbol - check validity and spelling\n \\%s\\", word);
+            eval_fail_status = CLI$_UNDSYM;
+        }
         return make_str(word);
     }
 
@@ -1450,6 +1458,8 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
         if (trimmed[0] != '\0') {
             expr_val_t r;
             eval_expr(ctx, trimmed, &r);
+            if (eval_fail_status == (uint32_t)CLI$_UNDSYM)
+                return (int)eval_fail_status;      /* shown; the symbol is left as it was */
             if (eval_fail_status == DCL_CLI_EXPSYN) {
                 if (has_arith_op(trimmed) || has_dot_op(trimmed)) {
                     /* the symbol is left as it was, as on VMS */
@@ -1492,6 +1502,8 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
             /* Expression evaluation (arithmetic or string ops) */
             expr_val_t result;
             eval_expr(ctx, trimmed, &result);
+            if (eval_fail_status == (uint32_t)CLI$_UNDSYM)
+                return (int)eval_fail_status;
             if (eval_fail_status == DCL_CLI_EXPSYN) {
                 /* the symbol is left as it was, as on VMS */
                 dcl_error("DCL", 0, "EXPSYN",

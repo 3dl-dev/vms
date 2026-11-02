@@ -100,6 +100,9 @@ struct dcl_context {
      * dcl_script.c checks return_requested and stops; return_status carries the
      * optional status argument, or $STATUS when RETURN gives none. */
     int return_requested;
+    /* A command that failed but branched to its own /ERROR= or /END_OF_FILE=
+     * label: its $STATUS is the failure, but no error action is taken. */
+    int status_handled;
     int return_status;
 
     /* Control-Y handling */
@@ -144,6 +147,7 @@ struct dcl_context {
         struct dcl_rms_writer *writer;
         char name[64];
         int  mode;  /* 0=read, 1=write, 2=append */
+        int  named; /* OPEN defined its name as a process logical (CLOSE removes it) */
     } channels[16];
 
     /* SET MESSAGE flags (1 = show, 0 = suppress) */

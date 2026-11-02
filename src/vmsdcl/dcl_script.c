@@ -232,6 +232,11 @@ static int dcl_run_proc_lines(struct dcl_context *ctx, struct dcl_pf *fp)
         {
             int lvl = ctx->proc_depth;
 
+            if (ctx->status_handled) {         /* it branched to its own label */
+                ctx->status_handled = 0;
+                continue;
+            }
+
             /* SET NOON: DCL does not test $STATUS at all -- no default exit and
              * no ON action -- so execution continues past any error. This is the
              * fix for the flagged bug where SET NOON suppressed only the ON

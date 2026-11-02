@@ -360,6 +360,7 @@ static const struct dcl_qual_def q_open[] = {
     { "READ",   CDU_VT_NONE, 0, NULL, NULL },
     { "WRITE",  CDU_VT_NONE, 0, NULL, NULL },
     { "APPEND", CDU_VT_NONE, 0, NULL, NULL },
+    { "ERROR",  CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     QUAL_END
 };
 /* SPAWN reads /NOWAIT and /OUTPUT. Declaring "NOWAIT" (not "WAIT" negatable)

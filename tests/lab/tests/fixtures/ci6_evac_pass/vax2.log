@@ -1,0 +1,64 @@
+$ ! CI6EVAC-BEGIN ci6evac-172133
+$ EVPROBE
+EVPROBE: 10-OCT-2026 17:23:55.50 $ENQW EX NOQUEUE EVAC$WORKLOAD R0=000009B8 %SYSTEM-W-NOTQUEUED, request not queued
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:10.08  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:10.01)
+17:29:10.01 Node VAX1 (csid 00010001) proposed modification of quorum or quorum disk membership
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:10.09  %%%%%%%%%%%    (from node VAX1   at 10-OCT-2026 17:29:10.01)
+17:29:10.01 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+$ 
+%CNXMAN,  lost connection to system VAX1
+%CNXMAN,  timed-out lost connection to system VAX1
+%CNXMAN,  proposing reconfiguration of the VAXcluster
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.15  %%%%%%%%%%%
+17:29:15.15 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.15  %%%%%%%%%%%
+17:29:15.15 Node VAX2 (csid 00010002) timed-out lost connection to node VAX1
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.15  %%%%%%%%%%%
+17:29:15.15 Node VAX2 (csid 00010002) proposed reconfiguration of the VAXcluster
+
+$ 
+%CNXMAN,  removed from VAXcluster system VAX1
+%CNXMAN,  completing VAXcluster state transition
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.18  %%%%%%%%%%%
+17:29:15.18 Node VAX1 (csid 00010001) has been removed from the VAXcluster
+
+$ 
+%%%%%%%%%%%  OPCOM  10-OCT-2026 17:29:15.18  %%%%%%%%%%%
+17:29:15.18 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")
+Q=2 V=3 N=2
+$ MOUNT $2$DUA1: VAX1DATA
+%MOUNT-I-MOUNTED, VAX1DATA mounted on _$2$DUA1: (VAX2)
+$ TYPE $2$DUA1:[CI6E10101721]EVAC.DAT
+VAX1             538968604         110-OCT-2026 17:23:09.19     
+VAX1             538968604         210-OCT-2026 17:23:10.19     
+VAX1             538968604         310-OCT-2026 17:23:11.19     
+VAX1             538968604         410-OCT-2026 17:23:12.19     
+VAX1             538968604         510-OCT-2026 17:23:13.19     
+VAX1             538968604         610-OCT-2026 17:23:14.19     
+VAX1             538968604         710-OCT-2026 17:23:15.19     
+VAX1             538968604         810-OCT-2026 17:23:16.19     
+VAX1             538968604         910-OCT-2026 17:23:17.19     
+VAX1             538968604        1010-OCT-2026 17:23:18.19     
+OVMXE            268435461        1110-OCT-2026 17:23:49.85     
+OVMXE            268435461        1210-OCT-2026 17:23:50.85     
+OVMXE            268435461        1310-OCT-2026 17:23:51.85     
+OVMXE            268435461        1410-OCT-2026 17:23:52.85     
+OVMXE            268435461        1510-OCT-2026 17:23:53.85     
+OVMXE            268435461        1610-OCT-2026 17:23:54.85     
+OVMXE            268435461        1710-OCT-2026 17:23:55.85     
+OVMXE            268435461        1810-OCT-2026 17:23:56.85     
+OVMXE            268435461        1910-OCT-2026 17:23:57.85     
+OVMXE            268435461        2010-OCT-2026 17:23:58.85     
+$ DISMOUNT $2$DUA1:

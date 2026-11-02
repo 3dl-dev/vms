@@ -1300,6 +1300,18 @@ if(BUILD_TESTS)
     set_tests_properties(lab_stage_rmhold PROPERTIES
         LABELS "integration;cluster" TIMEOUT 30)
 
+    # The ci.6 evacuation release gate's grader (rd vms-1e58): `ci6_evac.sh
+    # grade` is pure text over a capture directory, so it is proven here on a
+    # passing fixture, ten can-fail mutations (seq gap, duplicate seq, bugcheck,
+    # quorum lost, no/granted/mistimed NOQUEUE probe, takeover off seq+1, no
+    # REMOVE_NODE, unwindowed console) and the real run16 hand-run capture,
+    # which must FAIL only criterion 4 (it ran no NOQUEUE probe). Also checks
+    # the fire subcommand's dry-run console order. Hermetic: no pod.
+    add_test(NAME lab_ci6_evac_grade
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_ci6_evac_grade.sh)
+    set_tests_properties(lab_ci6_evac_grade PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 60)
+
     # x86_64 relocation survey freshness (vms-680, under vms-bdf): the
     # committed docs/design-link-x86_64-relocs.md is GENERATED, not hand-typed
     # -- tools/survey_x86_64_relocs.sh cross-compiles the vms-b65.1-.6 object

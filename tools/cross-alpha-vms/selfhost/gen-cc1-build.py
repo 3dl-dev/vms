@@ -379,12 +379,16 @@ def main():
                 largs.append(x)
             i += 1
         w("$ IF FAILS .NE. 0 THEN GOTO DONE")
-        w("$ OPEN/WRITE R GCCOBJ:[000000]LINK.RSP")
-        for a in largs:
-            w("$ WRITE R %s" % dcl_str(rsp_quote(a)))
-        w("$ CLOSE R")
+        # The link's arguments are on the command line (each quoted, so DCL keeps
+        # its case), as make gives them: a driver that read its arguments from an
+        # @file hands ld its own in @files, and the port's ld (vms-ld.c) reads an
+        # @file as object names only -- the record's -L directories were lost and
+        # -lgcc was not found (rd vms-465).
+        line = "$ GXX " + " ".join(dcl_str(a) for a in largs)
+        if len(line) >= 4096:
+            sys.exit("gen-cc1-build: the link command is %d characters, past DCL's 4096" % len(line))
         w("$ T0 = F$TIME()")
-        w("$ GXX @GCCOBJ:[000000]LINK.RSP")
+        w(line)
         w("$ S = $STATUS")
         w("$ T1 = F$TIME()")
         w("$ WRITE SYS$OUTPUT \"CC1B: LINK ''S' ''T0' ''T1'\"")

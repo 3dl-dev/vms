@@ -568,6 +568,40 @@ static void barrier_phase1_clear(struct cnxman_barrier *b)
 }
 
 /*
+ * THE PROPOSED QUORUM IS THE COORDINATOR'S (rd vms-c350). p. 7-40: the Phase 1
+ * message carries the proposed quorum; p. 7-42 task 2 makes it effective at
+ * Phase 2. The open's body[22:24] is that cell (rd vms-f297 for op 0x07/08/09;
+ * vms_cm_open_parse reads the same cell from a class-0x04 op 0x0d). Reading it
+ * here is what lets a member follow a quorum ADJUSTMENT: a departing VAX's
+ * SHUTDOWN/REMOVE_NODE proposes a quorum below (CEVOTES+2)/2, and a member
+ * that went on deriving its own kept the old one and blocked the moment the
+ * departing node's votes left (measured, vms-93fa: OVMXE "quorum lost" while
+ * VAX2 ran on at QUORUM 1).
+ *
+ * A zero cell is NOT a proposal of quorum zero -- no real open carries one,
+ * and a coordinator that has none sends zero (vms_cnxman_coord_fsm.c). It
+ * leaves the proposal to cnxman_glue_preload_proposed(), as before. The other
+ * proposed cells are this CLUB's own: CEVOTES, QDSKVOTES and the count are not
+ * read from a class-0x04 open (its CEVOTES slot is not one), and nothing here
+ * is guessed for them.
+ */
+static void barrier_take_proposed_quorum(struct cnxman_barrier *b,
+					 const struct vms_cm_open *open)
+{
+	struct vms_club *club = &b->cl->club;
+
+	if (open->cells.quorum == 0u)
+		return;
+	club->proposed_members = club->cluster_nodes;
+	club->proposed_cevotes = club->cevotes;
+	club->proposed_quorum = open->cells.quorum;
+	club->proposed_qdisk_votes = club->qdisk_votes;
+	club->proposed_valid = 1u;
+	club->proposed_from_open = 1u;
+	b->proposals_taken++;
+}
+
+/*
  * [*][RX_TR_OPEN] -- PHASE 1. Record the proposal, then acknowledge it with the
  * grounded 0x81 echo (p. 7-41: "each system normally acknowledges to VAX_A that
  * it has received and processed the information"; spec SS4(p): 0x81/0x09 is
@@ -595,6 +629,7 @@ static void barrier_h_open(struct cnxman_barrier *b, const struct barrier_msg *m
 			       open.env.opcode == VMS_CM_OP_XITION_FORM ||
 			       open.env.opcode == VMS_CM_OP_XITION_REM,
 			       &open.cells);
+	barrier_take_proposed_quorum(b, &open);
 	barrier_phase1_mark(b);
 	b->state = (uint8_t)CNXMAN_BARRIER_OPEN;
 	barrier_dlm_begin(b);
@@ -702,6 +737,14 @@ static void barrier_h_go(struct cnxman_barrier *b, const struct barrier_msg *m)
 
 	if (!b->open_seen || go.epoch != b->epoch) {
 		/* A removal's GO arrives with no preceding open. */
+		/* ...so a proposal still standing came from ANOTHER epoch's
+		 * open, one that never reached its GO: it is not this
+		 * transition's, and committing it would be the stale quorum
+		 * (rd vms-c350). The preload refills from this CLUB. */
+		if (b->cl->club.proposed_from_open) {
+			b->cl->club.proposed_valid = 0u;
+			b->cl->club.proposed_from_open = 0u;
+		}
 		b->epoch = go.epoch;
 		b->tr_class = go.cls;
 		b->open_seen = 0u;

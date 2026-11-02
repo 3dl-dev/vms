@@ -38,6 +38,8 @@
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_barrier_fsm.h"
 #include "vms_cluster_codec_cm.h"
+#include "cluster_fixture.h"
+#include "vms_cnxman_quorum.h"
 #include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, RX specimen
 				  * assembly (FC-P3.15, design sec 3.2.4) */
 
@@ -1608,6 +1610,171 @@ static void test_retransmitted_open_is_reanswered(void)
 	ct_check_eq_u32(g.b.transitions_superseded, 0, "nothing superseded");
 }
 
+/* ==========================================================================
+ * rd vms-c350: a QUORUM ADJUSTMENT is the coordinator's, and this node keeps it
+ *
+ * The real topology of the vms-93fa run (pod lab93fa, 2026-11-02): VAX1
+ * (VOTES 1, EXPECTED_VOTES 1), VAX2 (VOTES 0), OVMXE (VOTES 1, EXPECTED_VOTES
+ * 3). max{EV} = 3, so p. 7-6 alone gives QUORUM 2. VAX1 left with
+ * SHUTDOWN/REMOVE_NODE; its class-0x04 open proposed QUORUM 1, VAX2 ran on at
+ * CLUSTER_QUORUM=1, and OVMXE -- which re-derived 2 over its own table --
+ * logged "quorum lost, blocking activity" the moment VAX1's vote left. The
+ * opens fed here are the two REAL captured frames.
+ * ========================================================================== */
+
+static struct vms_fixture g_qfx;
+
+static const struct vms_fixture *load_qfx(const char *name)
+{
+	char path[512], err[256];
+
+	snprintf(path, sizeof(path), "%s/%s.spec", OVMX_FIXTURE_DIR, name);
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, &g_qfx, err,
+			     sizeof(err)) != 0) {
+		printf("  fixture %s: %s\n", name, err);
+		return NULL;
+	}
+	return &g_qfx;
+}
+
+static struct vms_csb *g_qpeer;
+
+/* The lab93fa membership, every member committed and reachable. */
+static void quorum_bed(void)
+{
+	struct vms_csb *local;
+	uint32_t i;
+
+	bed_init();
+	local = cnxman_club_local(&g.cl.club);
+	g_qpeer = NULL;
+	for (i = 0; i < g.cl.club.n_csb; i++) {
+		struct vms_csb *c = &g.cl.club.csb[i];
+
+		if (c->in_use && c != local && c != g.coord_csb)
+			g_qpeer = c;
+	}
+	cnxman_csb_set_params(local, 1, 3, 0);
+	cnxman_csb_set_params(g.coord_csb, 1, 1, 1);
+	cnxman_csb_set_params(g_qpeer, 0, 1, 1);
+	cnxman_csb_set_flags(local, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	cnxman_csb_set_flags(g.coord_csb, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	cnxman_csb_set_flags(g_qpeer, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	g.coord_csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	g_qpeer->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	g.cl.state = VMS_CLUSTER_MEMBER;
+	(void)cnxman_quorum_member_recompute(&g.cl);
+}
+
+static void feed_body_from(const uint8_t *frame, vms_csid_t csid,
+			   struct vms_csb *csb)
+{
+	(void)cnxman_barrier_rx_body(&g.b, frame + VMS_OFF_SYSAP_BODY,
+				     VMS_CM_BODY_LEN, csid, 1,
+				     (int32_t)cnxman_club_csb_index(&g.cl.club,
+								    csb));
+}
+
+/* Run the departure on the real open (or a copy with the quorum cell zeroed),
+ * then lose the departed member's connection, as VAX1's did. */
+static void run_departure(int zero_cell)
+{
+	const struct vms_fixture *fx = load_qfx("cm-depart-quorum-open-to-ovmx");
+	uint8_t open[VMS_CM_FRAME_LEN], f[VMS_CM_FRAME_LEN];
+	struct vms_cm_open o;
+
+	ct_check(fx != NULL, "cm-depart-quorum-open-to-ovmx loads");
+	if (fx == NULL)
+		return;
+	memcpy(open, fx->bytes, VMS_CM_FRAME_LEN);
+	if (zero_cell) {
+		open[VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_QUORUM] = 0u;
+		open[VMS_OFF_SYSAP_BODY + VMS_OFB_CM_OPEN_QUORUM + 1] = 0u;
+	}
+	ct_check(vms_cm_open_parse(open + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN,
+				   &o) == VMS_CODEC_OK, "the real op 0x0d parses");
+	feed_body_from(open, COORD_CSID, g.coord_csb);
+	(void)feed(f, mk_go(f, o.epoch, VMS_CM_CLASS_DEPART, VMS_CM_ROLE_GO));
+	(void)cnxman_quorum_member_recompute(&g.cl);
+	g.coord_csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;   /* VAX1 gone */
+	(void)cnxman_quorum_member_recompute(&g.cl);
+}
+
+static void test_c350_depart_open_carries_the_adjusted_quorum(void)
+{
+	const struct vms_fixture *fx;
+	struct vms_cm_open o;
+
+	printf("[barrier] rd vms-c350: a class-0x04 open's body[22:24] is the "
+	       "adjusted quorum; nothing else of it is read\n");
+	fx = load_qfx("cm-depart-quorum-open-to-ovmx");
+	ct_check(fx != NULL, "fixture loads");
+	if (fx == NULL)
+		return;
+	ct_check(vms_cm_open_parse(fx->bytes + VMS_OFF_SYSAP_BODY,
+				   VMS_CM_BODY_LEN, &o) == VMS_CODEC_OK, "parses");
+	ct_check_eq_u32(o.cls, VMS_CM_CLASS_DEPART, "class 0x04");
+	ct_check_eq_u32(o.cells.quorum, 1, "VAX1's REMOVE_NODE proposed 1");
+	ct_check_eq_u32(o.cells.cevotes, 0,
+			"its body[96] (3 here, 9 in evac run 15) is not CEVOTES "
+			"and is not read");
+	ct_check_eq_u32(o.has_bitmap, 0, "and it carries no nodemap");
+}
+
+static void test_c350_member_keeps_quorum_after_remove_node(void)
+{
+	const struct vms_fixture *fx;
+	struct vms_cm_open o;
+	uint8_t rem[VMS_CM_FRAME_LEN], f[VMS_CM_FRAME_LEN];
+
+	printf("[barrier] rd vms-c350: after REMOVE_NODE this node holds the "
+	       "coordinator's quorum and keeps activity going\n");
+	quorum_bed();
+	ct_check_eq_u32(g.cl.club.quorum, 2, "before: p. 7-6 over max{EV}=3");
+	ct_check(!cnxman_quorum_hang_active(&g.cl), "and quorum is held");
+
+	run_departure(0);
+	ct_check_eq_u32(g.b.proposals_taken, 1, "the open's quorum was taken");
+	ct_check_eq_u32(g.cl.club.quorum, 1, "the adjusted quorum is in force");
+	ct_check(!g.cl.club.quorum_lost,
+		 "1 present vote meets it with VAX1 gone (VAX2 votes 0)");
+	ct_check(!cnxman_quorum_hang_active(&g.cl),
+		 "no 'quorum lost, blocking activity'");
+
+	/* VAX2's removal of VAX1 -- the next coordinator kept 1 as well. */
+	fx = load_qfx("cm-remove-after-adjust-open-to-ovmx");
+	ct_check(fx != NULL, "cm-remove-after-adjust-open-to-ovmx loads");
+	if (fx == NULL)
+		return;
+	memcpy(rem, fx->bytes, VMS_CM_FRAME_LEN);
+	ct_check(vms_cm_open_parse(rem + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN,
+				   &o) == VMS_CODEC_OK, "VAX2's op 0x08 parses");
+	ct_check_eq_u32(o.cells.quorum, 1, "and proposes 1");
+	feed_body_from(rem, PEER_CSID, g_qpeer);
+	(void)cnxman_barrier_rx_body(&g.b, f + VMS_OFF_SYSAP_BODY,
+				     mk_go(f, o.epoch, VMS_CM_CLASS_REMOVE,
+					   VMS_CM_ROLE_GO) - VMS_OFF_SYSAP_BODY,
+				     PEER_CSID, 1,
+				     (int32_t)cnxman_club_csb_index(&g.cl.club,
+								    g_qpeer));
+	(void)cnxman_quorum_member_recompute(&g.cl);
+	ct_check_eq_u32(g.cl.club.quorum, 1,
+			"the removal commits 1, not a re-derived 2");
+	ct_check(!cnxman_quorum_hang_active(&g.cl), "still no blocking");
+}
+
+static void test_c350_falsifier_without_the_cell(void)
+{
+	printf("[barrier] rd vms-c350 falsifier: the SAME departure with the "
+	       "quorum cell zeroed blocks, as OVMXE did\n");
+	quorum_bed();
+	run_departure(1);
+	ct_check_eq_u32(g.b.proposals_taken, 0, "a zero cell is no proposal");
+	ct_check_eq_u32(g.cl.club.quorum, 2, "the derived 2 stays");
+	ct_check(cnxman_quorum_hang_active(&g.cl),
+		 "and 1 present vote is short of it: the lab93fa symptom");
+}
+
 int main(void)
 {
 	test_open_is_acknowledged();
@@ -1649,5 +1816,8 @@ int main(void)
 	test_reopen_supersedes_before_the_go();
 	test_a_new_transition_supersedes_a_stalled_barrier();
 	test_retransmitted_open_is_reanswered();
+	test_c350_depart_open_carries_the_adjusted_quorum();
+	test_c350_member_keeps_quorum_after_remove_node();
+	test_c350_falsifier_without_the_cell();
 	return ct_summary("test_cnxman_barrier");
 }

@@ -83,8 +83,6 @@ LIBVMS_A="$(build_dep libvms "$LIBVMS" vms libvms.a)"
 LIBVMSLNM_A="$(build_dep vmslnm "$VMSLNM" vmslnm libvmslnm.a)"
 LIBVMSFS_A="$(build_dep vmsfs "$VMSFS" vmsfs libvmsfs.a)"
 LIBVMSRMS_A="$(build_dep vmsrms "$VMSRMS" vmsrms libvmsrms.a)"
-. "$(dirname "$0")/weak-seams.sh"   # rd vms-1f7: the LIBVMSRMS weak seams
-seam_flags 1>&2
 LIBVMSQUEUE_A="$(build_dep vmsqueue "$VMSQUEUE" vmsqueue libvmsqueue.a)"
 echo "dependency stack built:"
 echo "  $LIBVMSSYS_A"
@@ -132,7 +130,6 @@ echo "=== proof 2: link a real vax--netbsdelf LOGINOUT.EXE ==="
 "$CC" --sysroot="$SYSROOT" \
     "$OUT/vms_login.o" "$OUT/loginout_display.o" "$OUT/mail_notify.o" \
     "$OUT/loginout_rms_bind.o" \
-    $SEAM_FLAGS \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
@@ -149,5 +146,6 @@ echo "$HDR" | grep -qiF 'Digital VAX' \
     || { echo "FAIL: LOGINOUT.EXE Machine is not Digital VAX"; exit 1; }
 
 echo
-seam_check "$OUT/LOGINOUT.EXE"
+. "$(dirname "$0")/weak-seams.sh"   # rd vms-1f7 / vms-20c9
+seam_exempt "$OUT/LOGINOUT.EXE" vms-20c9
 echo "=== ALL PROOFS PASSED: vms_login (LOGINOUT.EXE) builds and links for $TARGET ==="

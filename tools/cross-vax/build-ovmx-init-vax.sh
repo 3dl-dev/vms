@@ -95,8 +95,6 @@ LIBVMS_A="$(build_dep libvms "$LIBVMS" vms libvms.a)"
 LIBVMSLNM_A="$(build_dep vmslnm "$VMSLNM" vmslnm libvmslnm.a)"
 LIBVMSFS_A="$(build_dep vmsfs "$VMSFS" vmsfs libvmsfs.a)"
 LIBVMSRMS_A="$(build_dep vmsrms "$VMSRMS" vmsrms libvmsrms.a)"
-. "$(dirname "$0")/weak-seams.sh"   # rd vms-1f7: the LIBVMSRMS weak seams
-seam_flags 1>&2
 LIBVMSQUEUE_A="$(build_dep vmsqueue "$VMSQUEUE" vmsqueue libvmsqueue.a)"
 echo "dependency stack built:"
 echo "  $LIBVMSSYS_A"
@@ -218,7 +216,6 @@ echo "=== proof 3: link a real vax--netbsdelf STARTUP.EXE (PID 1) ==="
 "$CC" --sysroot="$SYSROOT" \
     "$OUT/ovmx_init.o" "$OUT/ovmx_boot_netbsd.o" "$OUT/sysboot.o" \
     "$OUT/ovmx_boot_acp_read.o" "$OUT/ovmx_boot_sysgen_acp.o" "$OUT/imgact_acp.o" \
-    $SEAM_FLAGS \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
@@ -283,5 +280,6 @@ fi
 echo "OK: ovmx_boot_netbsd.o references vms_kif_acp_mount (ACP mount arm live)"
 
 echo
-seam_check "$OUT/STARTUP.EXE"
+. "$(dirname "$0")/weak-seams.sh"   # rd vms-1f7 / vms-20c9
+seam_exempt "$OUT/STARTUP.EXE" vms-20c9
 echo "=== ALL PROOFS PASSED: ovmx_init (STARTUP.EXE) builds and links for $TARGET ==="

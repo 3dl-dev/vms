@@ -1,5 +1,10 @@
-# weak-seams.sh - sourced by the hand-linked netbsd-vax image scripts
-# (build-{vmsdcl,loginout,job-control,provision,ovmx-init}-vax.sh). rd vms-1f7.
+# weak-seams.sh - sourced by tools/cross-vax/build-vmsdcl-vax.sh (rd vms-1f7).
+#
+# DCL.EXE ONLY, on purpose. Forcing the same seams into STARTUP, PROVISION,
+# JOB_CONTROL and LOGINOUT bound code paths those images had never run on the
+# VAX, and PROVISION.EXE then failed the boot on a 16 MB VAX (ci-vax 16 MB leg,
+# run 41383611966: %OVMX-I-EXECINIT, SYS$SYSTEM:PROVISION.EXE failed). Each of
+# those images gets its seams back only with a boot proof at 16 MB (rd vms-20c9).
 #
 # libvms reaches LIBVMSRMS through `#pragma weak' declarations (rightslist.c,
 # sysuaf.c, rms_textfile.c, sys_security.c, ...) so a bare LIBVMS unit test links
@@ -42,4 +47,19 @@ seam_check() {
         exit 1
     fi
     echo "OK: all $(echo $FORCE_SEAMS | wc -w) seams are defined"
+}
+
+#   seam_exempt <exe> <item>   for an image NOT yet given its seams: computes
+#                     the same list and PRINTS every one left weak in <exe>,
+#                     tagged with the item that owns closing it. Never fails;
+#                     the gap stays visible in every build log.
+seam_exempt() {
+    _exe="$1"; _item="$2"; _left=""
+    seam_flags >/dev/null
+    for _s in $FORCE_SEAMS; do
+        "$TARGET-nm" "$_exe" | awk -v s="$_s" \
+            '$NF==s && ($(NF-1)=="T"||$(NF-1)=="D"||$(NF-1)=="B"||$(NF-1)=="R"){f=1} END{exit !f}' \
+            || _left="$_left $_s"
+    done
+    echo "=== seam proof EXEMPT ($_item): $(basename "$_exe") leaves these LIBVMSRMS seams weak-NULL:${_left:- (none)} ==="
 }

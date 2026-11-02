@@ -244,7 +244,7 @@ uint32_t dcl_remote_directory(const char *spec)
     if (f.end_sts != RMS$_NMF) {
         if (f.n == 0 && f.end_sts == RMS$_FNF) {
             printf("%%DIRECT-W-NOFILES, no files found\n");
-            ret = RMS$_FNF;
+            ret = RMS$_FNF & ~7u;     /* at warning severity: $STATUS %X10018290 on the VAX */
         } else {
             /* A refused link or search: the live VAX prints %DIRECT-E-OPENIN
              * on what the remote had expanded, then why. */
@@ -254,7 +254,7 @@ uint32_t dcl_remote_directory(const char *spec)
         }
     } else if (f.n == 0) {
         printf("%%DIRECT-W-NOFILES, no files found\n");
-        ret = RMS$_FNF;
+        ret = RMS$_FNF & ~7u;
     }
     fflush(stdout);
     found_free(&f);

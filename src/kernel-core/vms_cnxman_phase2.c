@@ -194,6 +194,13 @@ static void phase2_commit_quorum(struct vms_club *club)
 	club->cevotes = club->proposed_cevotes;
 	club->quorum = club->proposed_quorum;
 	club->qdisk_votes = club->proposed_qdisk_votes;
+	/* rd vms-c350: a quorum the COORDINATOR proposed stays in force past
+	 * this node's own recompute (vms_cnxman_quorum.c); one this node
+	 * proposed or preloaded leaves the arithmetic in charge. */
+	club->quorum_coord_valid = club->proposed_from_open;
+	club->quorum_coord = club->proposed_from_open ? club->proposed_quorum
+						       : 0u;
+	club->proposed_from_open = 0u;
 	club->proposed_valid = 0u;   /* p. 7-41: ignored outside a transition */
 }
 

@@ -209,6 +209,21 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 		struct vms_cm_open_cells none = { 0 };
 
 		out->cells = none;
+		/*
+		 * THE CLASS-0x04 OPEN CARRIES THE ADJUSTED QUORUM at the same
+		 * body[22:24] (rd vms-c350). Every real-VAX op 0x0d in the
+		 * library agrees with the quorum the survivors held after it:
+		 * 1 where VAX2 then read CLUSTER_QUORUM=1 (vms-93fa, both
+		 * recipients), 2 where the 10-10 evac survivors read Q=2
+		 * (runs 15/16, both recipients), 1 on the 2-node VAX-only
+		 * departures (vms-cab heldout1/2). ONLY that cell: the rest of
+		 * the op-0x0d body is not the f297 layout -- its body[96]
+		 * tracks body[20] - 1 in every specimen (9 where CEVOTES was
+		 * 3, run 15), so it is not CEVOTES and is not read.
+		 */
+		if (out->env.opcode == VMS_CM_OP_DEPART_XITION)
+			out->cells.quorum =
+				vms_wire_get_le16(&v, VMS_OFB_CM_OPEN_QUORUM);
 	}
 
 	if (!vms_wire_view_ok(&v))

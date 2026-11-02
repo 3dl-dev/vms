@@ -2971,6 +2971,14 @@ static int delete_files_acp(struct dcl_context *ctx, const char *param,
         strncpy(arr[n].fm.dname, nt, sizeof(arr[n].fm.dname) - 1);
         arr[n].fm.dname[sizeof(arr[n].fm.dname) - 1] = '\0';
         fm_split(nt, arr[n].fm.base, sizeof(arr[n].fm.base), &arr[n].fm.version);
+        /* ...grouped within its directory: the same name in two directories of
+         * an ellipsis walk is two files, not two versions of one (rd vms-28c) */
+        {
+            char grp[256];
+            snprintf(grp, sizeof grp, "%.*s%s", (int)(nt - rspec), rspec, arr[n].fm.base);
+            for (char *g = grp; *g; g++) *g = (char)toupper((unsigned char)*g);
+            snprintf(arr[n].fm.base, sizeof(arr[n].fm.base), "%s", grp);
+        }
         n++;
     }
     dcl_rms_dir_close(d);
@@ -3803,6 +3811,14 @@ static int purge_files_acp(struct dcl_context *ctx, const char *param, int keep_
         strncpy(arr[n].fm.dname, nt, sizeof(arr[n].fm.dname) - 1);
         arr[n].fm.dname[sizeof(arr[n].fm.dname) - 1] = '\0';
         fm_split(nt, arr[n].fm.base, sizeof(arr[n].fm.base), &arr[n].fm.version);
+        /* ...grouped within its directory: the same name in two directories of
+         * an ellipsis walk is two files, not two versions of one (rd vms-28c) */
+        {
+            char grp[256];
+            snprintf(grp, sizeof grp, "%.*s%s", (int)(nt - rspec), rspec, arr[n].fm.base);
+            for (char *g = grp; *g; g++) *g = (char)toupper((unsigned char)*g);
+            snprintf(arr[n].fm.base, sizeof(arr[n].fm.base), "%s", grp);
+        }
         n++;
     }
     dcl_rms_dir_close(d);

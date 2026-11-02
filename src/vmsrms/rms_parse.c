@@ -626,7 +626,7 @@ uint32_t rms_name_parse_ex(const char *fna, size_t fns, const char *dna, size_t 
 #endif
 
     fnb |= devbits;
-    if (fs_wild(p.dir)) fnb |= NAM$M_WILD_DIR | NAM$M_WILDCARD;
+    if (fs_wild(p.dir) || strstr(p.dir, "...")) fnb |= NAM$M_WILD_DIR | NAM$M_WILDCARD;
     if (fs_wild(p.name)) fnb |= NAM$M_WILD_NAME | NAM$M_WILDCARD;
     if (fs_wild(p.type)) fnb |= NAM$M_WILD_TYPE | NAM$M_WILDCARD;
     if (fs_wild(p.ver)) fnb |= NAM$M_WILD_VER | NAM$M_WILDCARD;

@@ -158,7 +158,7 @@ o=$(python3 "$ROOT/tools/ci/ci_tiers.py" --repo "$T" --event merge_group --ref x
 [ "$(get "$o" negctl_select)" = ALL ] && [ "$(get "$o" heavy_release)" = true ] \
   && ok "queue: git failure fails closed to the full suite" || bad "git failure fail-closed"
 
-# pre_tag_verify: red without a green full run on the SHA, green with all six
+# pre_tag_verify: red without a green full run on the SHA, green with every workflow in WORKFLOWS
 python3 - "$ROOT" <<'PY' && ok "pre_tag_verify check: missing -> 1, all green -> 0, push/PR runs do not count" || bad "pre_tag_verify"
 import sys
 sys.path.insert(0, sys.argv[1] + "/tools/ci")
@@ -170,6 +170,8 @@ assert p.check(sha, fetch=lambda wf, r: [run("push", "success"), run("pull_reque
 assert p.check(sha, fetch=lambda wf, r: [run("schedule", "failure")]) == 1
 assert p.check(sha, fetch=lambda wf, r: [run("schedule", "success", "b" * 40)]) == 1
 assert p.check(sha, fetch=lambda wf, r: [run("workflow_dispatch", "success")]) == 0
+# vms-b85: the native cc1 build (724 compiles, link, hello.c compare) gates a tag
+assert "ci-selfhost-cc1.yml" in p.WORKFLOWS
 PY
 
 echo "ci_tiers: $pass passed, $fail failed"

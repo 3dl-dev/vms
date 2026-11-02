@@ -4,11 +4,11 @@
 The merge queue no longer runs every heavy leg (release cuts + e2e, the
 per-facility executive negctl, Alpha cc1/C++ self-host, keystroke oracle): it
 runs each only when its area is touched (tools/ci/ci_tiers.py). The backstops
-are the nightly schedule and THIS: a release must be tagged on a SHA where all
-six CI workflows completed green as a FULL run (event schedule or
+are the nightly schedule and THIS: a release must be tagged on a SHA where every
+CI workflow in WORKFLOWS completed green as a FULL run (event schedule or
 workflow_dispatch -- both force every heavy tier on).
 
-  pre_tag_verify.py dispatch [--ref REF]   start the six full runs on REF
+  pre_tag_verify.py dispatch [--ref REF]   start every full run on REF
                                            (default main) and print their URLs
   pre_tag_verify.py check --sha SHA        exit 0 iff each workflow has a
                                            successful full run on SHA; prints
@@ -27,6 +27,7 @@ WORKFLOWS = [
     "ci-core-gates.yml",
     "ci-kernel-executive.yml",
     "ci-release-e2e.yml",
+    "ci-selfhost-cc1.yml",
     "ci-selfhost-x86.yml",
     "ci-vax.yml",
 ]
@@ -58,7 +59,7 @@ def check(sha, repo=None, fetch=runs_for):
             print("MISSING: %-26s no successful full (schedule/dispatch) run on %s" % (wf, sha[:12]))
     if missing:
         print("\npre-tag verify FAILED: run `tools/ci/pre_tag_verify.py dispatch --ref <branch>` on the "
-              "release SHA and wait for all six to pass before tagging.")
+              "release SHA and wait for all of them to pass before tagging.")
         return 1
     print("\npre-tag verify OK: every moved heavy test ran green on %s" % sha[:12])
     return 0

@@ -948,13 +948,26 @@ static void olb_print_reasons(void)
  * file is fixed-length with no record size, so each $PUT lands exactly its own
  * bytes (the byte-exact write LINK.EXE's image and LIBRARIAN.EXE's .OLB use). */
 static int olb_file_write(struct dcl_context *ctx, const char *spec,
-                          const unsigned char *buf, size_t len)
+                          const unsigned char *buf, size_t len, int in_place)
 {
     g_olb_why = g_olb_whystv = 0;
     if (!olb_host_defer(spec)) {
         uint32_t st = 0;
-        struct dcl_rms_writer *w =
-            dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
+        struct dcl_rms_writer *w = NULL;
+        if (in_place) {
+            /* the version the library has now (the highest), superseded */
+            char eff[1024], cur[1024];
+            struct dcl_rms_dir *d = NULL;
+            if (dcl_rms_effective_spec(ctx, spec, eff, sizeof(eff)) == 0)
+                d = dcl_rms_dir_open(ctx, eff);
+            if (d && dcl_rms_dir_next(d, cur, sizeof(cur), NULL, NULL, NULL))
+                w = dcl_rms_write_supersede(ctx, cur, FAB$C_FIX, 0, 0, &st);
+            else
+                w = dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
+            if (d) dcl_rms_dir_close(d);
+        } else {
+            w = dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
+        }
         if (!w) { g_olb_why = st; return -1; }
         int rc = 0;
         for (size_t done = 0; done < len && rc == 0; ) {
@@ -986,15 +999,19 @@ static int olb_lib_read(struct dcl_context *ctx, const char *spec,
     return olb_parse(buf, len, members, count);
 }
 
-/* Write the member array as a new version of the library `spec`. */
+/* Write the member array as the library `spec`: in place (the version it has,
+ * superseded) for /INSERT, /REPLACE and /DELETE, as VMS LIBRARIAN updates a
+ * library; a new version for /CREATE and /COMPRESS. A new version per update
+ * filled the cc1 build's volume with copies of LIBBACKEND.A (rd vms-465). */
 static int olb_lib_write(struct dcl_context *ctx, const char *spec,
-                         const struct olb_member *members, uint32_t count)
+                         const struct olb_member *members, uint32_t count,
+                         int in_place)
 {
     unsigned char *img = NULL;
     size_t len = 0;
     int rc = olb_build(members, count, &img, &len);
     if (rc != OLB_OK) return rc;
-    rc = olb_file_write(ctx, spec, img, len) == 0 ? OLB_OK : OLB_ERR_IO;
+    rc = olb_file_write(ctx, spec, img, len, in_place) == 0 ? OLB_OK : OLB_ERR_IO;
     free(img);
     return rc;
 }
@@ -1076,7 +1093,7 @@ static int olb_create(struct dcl_context *ctx, struct dcl_command *cmd)
     int st = olb_insert_files(ctx, cmd, 1, &members, &count, &cap);
     if (!$VMS_STATUS_SUCCESS(st)) { olb_free(members, count); return st; }
 
-    if (olb_lib_write(ctx, cmd->params[0], members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, cmd->params[0], members, count, 0) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error creating library - %s", cmd->params[0]);
@@ -1103,7 +1120,7 @@ static int olb_insert(struct dcl_context *ctx, struct dcl_command *cmd)
     st = olb_insert_files(ctx, cmd, 1, &members, &count, &cap);
     if (!$VMS_STATUS_SUCCESS(st)) { olb_free(members, count); return st; }
 
-    if (olb_lib_write(ctx, cmd->params[0], members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, cmd->params[0], members, count, 1) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", cmd->params[0]);
@@ -1159,7 +1176,7 @@ static int olb_extract_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
     const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
     if (output_file && output_file[0]) {
         if (olb_file_write(ctx, output_file, members[idx].data,
-                           members[idx].len) != 0) {
+                           members[idx].len, 0) != 0) {
             dcl_error("LIBRARIAN", 2, "OPENOUT",
                       "error creating output file - %s", output_file);
             olb_free(members, count);
@@ -1201,7 +1218,7 @@ static int olb_delete_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
         members[k] = members[k + 1];
     count--;
 
-    if (olb_lib_write(ctx, cmd->params[0], members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, cmd->params[0], members, count, 1) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", cmd->params[0]);
@@ -1228,7 +1245,7 @@ static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
     int st = olb_load(ctx, cmd->params[0], &members, &count, &cap);
     if (!$VMS_STATUS_SUCCESS(st)) return st;
 
-    if (olb_lib_write(ctx, out_spec, members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, out_spec, members, count, 0) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", outspec && outspec[0] ? outspec : cmd->params[0]);

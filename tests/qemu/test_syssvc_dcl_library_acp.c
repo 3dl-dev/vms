@@ -19,6 +19,9 @@
  *      container holding both objects' bytes exactly (odd length, a NUL).
  *   2. LIBRARY/LIST reads that library back through the ACP (both modules).
  *   3. LIBRARY/EXTRACT=m/OUTPUT=f writes the module through the ACP, byte-exact.
+ *   1b. LIBRARY/REPLACE into the existing library updates it IN PLACE, as VMS
+ *      LIBRARIAN does: still ;1, no ;2 copy (a new version per update filled the
+ *      cc1 build's volume with copies of LIBBACKEND.A, rd vms-465).
  *   4. FAIL-HONEST: a library naming an object that does not exist is
  *      %LIBRARIAN-E-OPENIN, and no library is created.
  * With no executive it exits EXIT_SKIP (77).
@@ -162,10 +165,11 @@ int main(void)
     static char script[1024], out[16384];
     snprintf(script, sizeof script,
              "LIBRARY/REPLACE/CREATE %s %s,%s\n"
+             "LIBRARY/REPLACE %s %s\n"
              "LIBRARY/LIST %s\n"
              "LIBRARY/EXTRACT=%s/OUTPUT=%s %s\n"
              "LIBRARY/REPLACE/CREATE %s %sNOSUCH%u.O\n",
-             lib, obja, objb, lib, modb, xout, lib, nolib, DIR, pid);
+             lib, obja, objb, lib, obja, lib, modb, xout, lib, nolib, DIR, pid);
     CHECK(run_dcl(script, out, sizeof out) == 0, "DCL ran the LIBRARY build");
     printf("  ---- DCL ----\n%s  ---- end ----\n", out);
 
@@ -184,6 +188,22 @@ int main(void)
     CHECK(has_bytes(img, ilen, pa, sizeof pa - 1) && has_bytes(img, ilen, pb, sizeof pb),
           "the library holds both objects' bytes exactly");
     free(img);
+
+    {
+        char v1[80], v2[80];
+        uint8_t *b1 = NULL, *b2 = NULL;
+        uint64_t l1 = 0, l2 = 0;
+        snprintf(v1, sizeof v1, "%s;1", lib);
+        snprintf(v2, sizeof v2, "%s;2", lib);
+        uint32_t s1 = rms_read_over_acp(v1, &b1, &l1);
+        uint32_t s2 = rms_read_over_acp(v2, &b2, &l2);
+        CHECK(strstr(out, "module " ) != NULL && strstr(out, "REPLACED") != NULL,
+              "LIBRARY/REPLACE into the existing library replaced the module");
+        CHECK(s1 == RMS$_NORMAL && has_bytes(b1, l1, pa, sizeof pa - 1) &&
+              has_bytes(b1, l1, pb, sizeof pb) && s2 != RMS$_NORMAL,
+              "the update is in place: the library is still ;1 and no ;2 copy exists");
+        free(b1); free(b2);
+    }
 
     /* negctl: dcl-library-object-posix-io */
     CHECK(strstr(out, moda) != NULL && strstr(out, modb) != NULL &&

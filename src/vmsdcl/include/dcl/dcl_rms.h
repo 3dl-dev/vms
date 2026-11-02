@@ -69,6 +69,12 @@ struct dcl_rms_writer;   /* opaque: FAB+RAB over an RMS $CREATE/$CONNECT */
 struct dcl_rms_writer *dcl_rms_write_create(struct dcl_context *ctx, const char *spec,
                                             uint8_t rfm, uint8_t rat, uint16_t mrs,
                                             uint32_t *rms_status);
+/* As dcl_rms_write_create, with FOP SUP: `spec` names an existing version
+ * (NAME.TYP;N), which the new file of that same version supersedes -- an update
+ * that does not leave a second copy behind (LIBRARY /INSERT, /REPLACE, /DELETE). */
+struct dcl_rms_writer *dcl_rms_write_supersede(struct dcl_context *ctx, const char *spec,
+                                               uint8_t rfm, uint8_t rat, uint16_t mrs,
+                                               uint32_t *rms_status);
 /* $PUT one record (len bytes). Returns 0 on success, -1 on error. */
 int      dcl_rms_write_record(struct dcl_rms_writer *w, const char *buf, size_t len);
 /* The RMS status of the last $PUT (and its secondary value, STV, to *stv). */

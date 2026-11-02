@@ -418,3 +418,54 @@ dlm_rm_14_ra7	*	118	1	derived	state:acmode	body[46]: the tree root's access mode
 dlm_rm_14_ra7	*	119	1	derived	state:namelen	body[47]: the root name's length; unmoved by the pattern
 dlm_rm_14_ra7	*	120	80	deviation	any:ra7-pattern	body[48:128]: the root name, then RA7's pattern across the name TAIL instead of zeros (a real 0x14's tail is residue: RA6's held another resource's name and an OPCOM fragment)
 dlm_rm_14_ra7	*	200	4	derived	state:hash	body[128:132]: the directory hash; unmoved by the pattern
+#
+# ---- rd vms-33a: THE HOLDER'S op-0x12 RECORDS and its op-0x13 --------------
+# Emitted by test_dlm_remaster_arm, which drives the REAL table and codec
+# through RA5's RMT5 from the holder's side and pins every named cell equal to
+# the records VAX3 really sent. One type covers ROOT and SUB records: the two
+# forms differ only in the parent pair and the hash, which are `state` rows.
+dlm_rm_12	*	72	4	const	const:0	body[0:4]: this builder writes zero; cnxman_envelope_originate assigns this CSB's send/ack numbers on the way out
+dlm_rm_12	*	76	4	const	const:0	body[4:8]: zero here; the record is ANSWERED (3,521 of 3,521 real ones get an 82/01), so the CM mints the transaction token for it on the way out (E85), as for every DLM request
+dlm_rm_12	*	80	1	const	const:2	body[8]: category 0x02; 3,521/3,521 (tools/cluster/rec12_holder_census.py --selftest)
+dlm_rm_12	*	81	1	const	const:12	body[9]: op 0x12; 3,521/3,521
+dlm_rm_12	*	82	2	const	const:0	body[10:12]: not named. Zero on 2,739 of 3,521 real records (ROOT 430/792, SUB 2,309/2,729); this node writes zero
+dlm_rm_12	*	84	4	const	const:0	body[12:16]: left zero for cnxman_dlm_seq_stamp, which writes 0x0001 + the cluster DLM rebuild sequence from club state on every DLM message (rd vms-64b); 3,521 of 3,521 real records carry that form (body[12]=01, body[13]=body[15]=0)
+dlm_rm_12	*	88	4	const	const:0	body[16:20]: not named. Zero on 1,174 of 3,521 real records (ROOT 780/792, SUB 394/2,729); this node writes zero
+dlm_rm_12	*	92	4	derived	state:epid	body[20:24]: the PID of the process whose lock this is, read off the LKB's own PCB (vms_lock_dlm_handover_next; the same read dlm_proxy_fill_post makes for an ENQ). RA5 VAX3's real records carry its PID 0x20600216 here, root and sub alike, and test_dlm_remaster_arm pins the built record equal
+dlm_rm_12	*	96	4	derived	state:lkid	body[24:28]: THIS node's own lock id for the lock, read off the proxy LKB -- the correlation the new master echoes in its 82/01 (4/4 vs SDA in RA2/RA4/RA5/RA6). Never zero: vms_dlm_rm_lock_rec_build refuses it
+dlm_rm_12	*	100	2	deviation	const:0	body[28:30]: NOT NAMED, and this node writes 0 0. Only 17 of 3,521 real records carry 0 0 -- all SUB records in the controlled arms (RA2/RA5/RA8, whose sub-locks were taken with no $ENQ flags); every ROOT record is non-zero (0x76/0x7d on 689 of 792, 0x11 in the controlled arms) and 2,571 of 2,729 SUB records read 0x4b. It co-varies with the lock, not the frame, so it is likely the LKB's request flags, but no capture or SDA page names it and Rule 8 forbids naming it from values. Accepted: not yet fired at a real VAX -- rd vms-33a's lab fire is the first, and the new master's SDA of the adopted lock is what will say whether it reads the cell
+dlm_rm_12	*	102	1	derived	state:grmode	body[30]: the lock's GRANTED mode, read off the LKB (LCK$K_ encoding; CR 01, CW 02 vs SDA in RA2/RA5/RA8)
+dlm_rm_12	*	103	1	derived	state:rqmode	body[31]: the LKB's requested mode, read off the LKB (equal to body[30] on every controlled-arm record; the 2,698 F11B$ SUB records that read 0 here are a different holder state this executive does not produce)
+dlm_rm_12	*	104	4	deviation	const:0	body[32:36]: NOT NAMED. A real record carries XX 00 01 00 here, XX a per-episode number (0x16 throughout RA5, 0x17 throughout RA8), except 432 of 792 ROOT records, which carry all four zero -- the form this node writes for every record. On a SUB record that is outside the envelope (0 of 2,729 real SUB records are all-zero here). Accepted: not yet fired; rd vms-33a's lab fire is the first
+dlm_rm_12	*	108	4	derived	state:parent_lkid	body[36:40]: OUR OWN lock id for the PARENT lock, read off the LKB's parent_id; 0 on the root record (792 of 792 real ROOT records zero here, 2,729 of 2,729 SUB records not)
+dlm_rm_12	*	112	4	derived	state:parent_master	body[40:44]: the PARENT's handle at the NEW master -- read off the parent proxy LKB AFTER the new master's own 82/01 for the parent re-homed it (vms_lock_dlm_handover_rehome), so it is the value that master minted, never one copied from a frame to a frame: the engine refuses to describe a sub-lock before its parent names the new master. 0 on the root record. RA5: VAX2's 0x020004cc, equal in VAX3's real S2 record
+dlm_rm_12	*	116	2	derived	state:group	body[44:46]: the resource's UIC group, off the RSB (0 for a LCK$M_SYSTEM name; the census caution: 3,519 of 3,521 real records are zero because every captured holder used one, so this is read, never assumed)
+dlm_rm_12	*	118	1	derived	state:acmode	body[46]: the resource's access mode, off the RSB
+dlm_rm_12	*	119	1	derived	state:namelen	body[47]: the resource name's counted length, 1..31, off the RSB
+dlm_rm_12	*	120	40	copied	any:name	body[48:88]: the lock's resource name off the RSB, then zeros. A real record leaves its own residue in the tail (85 of 3,521 have a zero tail; RA5's carries SYSTEM$VAX3 and a fragment of another frame) and this node sends none (rd vms-42de's direction)
+dlm_rm_12	*	160	16	copied	any:valblk	body[88:104]: the resource's VALUE BLOCK -- copied THROUGH THE EXECUTIVE, never frame to frame: the old master's op-0x1a wrote it onto this node's RSB (vms_lock_dlm_handover_valblk; 251 of 259 real holder records that relay an op-0x1a carry its block byte for byte) and the record reads it back. Twenty zeros when the RSB holds none -- an absent block, not a placeholder (the parser's own rule). RA5: RMLVB-0123456789, equal in VAX3's root record
+dlm_rm_12	*	176	4	derived	state:valblkseq	body[104:108]: the value block's SEQUENCE, off the same RSB; 0 when no block rides (2,702 of 2,702 real records that carry a block carry a non-zero sequence, and this node sends a block only with one)
+dlm_rm_12	*	180	2	const	const:0	body[108:110]: zero on 3,328 of 3,521 real records
+dlm_rm_12	*	182	1	const	const:1	body[110]: 0x01 on 3,516 of 3,521 real records
+dlm_rm_12	*	183	1	deviation	const:0	body[111]: NOT NAMED. Zero on 320 of 3,521 real records (ROOT 19/792, SUB 301/2,729); RA5's and RA8's controlled records read 0x04. This node writes zero. Accepted: not yet fired; rd vms-33a's lab fire is the first
+dlm_rm_12	*	184	4	const	const:0	body[112:116]: 0 on 3,521 of 3,521 real records
+dlm_rm_12	*	188	4	const	const:ffffffff	body[116:120]: ffffffff on 3,521 of 3,521 real records
+dlm_rm_12	*	192	4	const	const:0	body[120:124]: 0 on 3,521 of 3,521 real records
+dlm_rm_12	*	196	4	const	const:ffffffff	body[124:128]: ffffffff on 3,521 of 3,521 real records
+dlm_rm_12	*	200	4	derived	state:hash	body[128:132]: the directory hash this executive HOLDS for the lock's resource (res->dir_hash with hash_known, the value a system put on the wire or the proven function determined -- the same read the op-0x14 makes). For the tree's ROOT it is the tree hash (RA5: 0xc54eeaea, equal in VAX3's root record). A SUB name no directory was asked about has no held hash, and the four bytes stay ZERO rather than carry a minted one -- real SUB records do carry one, so the gate reports this row's zero on every sub record it passes as the Rule 8 gap it is
+dlm_rm_13	*	72	4	const	const:0	body[0:4]: this builder writes zero; cnxman_envelope_originate assigns the send/ack numbers
+dlm_rm_13	*	76	4	const	const:0	body[4:8]: ZERO and kept zero -- a NOTIFICATION: 1,232 of 1,232 real op-0x13s carry no transaction and none is answered, and vms_dlm_body_is_notification routes it through the CM's NOTIFY branch so no token is opened for it
+dlm_rm_13	*	80	1	const	const:2	body[8]: category 0x02; 1,232/1,232
+dlm_rm_13	*	81	1	const	const:13	body[9]: op 0x13; 1,232/1,232
+dlm_rm_13	*	82	2	deviation	const:0	body[10:12]: NOT NAMED, and it is not the frame's: zero on 160 of the 391 real HOLDER op-0x13s, the rest the sender's stale buffer (03 00, 53 4b, 49 53 ...). This node writes zero (rd vms-42de's direction). Accepted: not yet fired
+dlm_rm_13	*	84	4	const	const:0	body[12:16]: left zero for cnxman_dlm_seq_stamp (rd vms-64b); 1,232 of 1,232 real op-0x13s carry that form
+dlm_rm_13	*	88	12	deviation	const:0	body[16:28]: the sender's STALE BUFFER -- on a real holder, the 82/01 grant it just received (its master/holder lock ids). All-zero on 49 of 391 real holder op-0x13s. This node writes zeros, never another frame's handles. Accepted: not yet fired
+dlm_rm_13	*	100	1	const	const:0	body[28]: the SENDER'S ROLE: 0 on 391 of 391 real HOLDER op-0x13s (every member told an op-0x11), 1 or 2 on 841 of 841 sent by the OLD master (tools/cluster/rec12_holder_census.py --selftest, H4)
+dlm_rm_13	*	101	1	const	const:0	body[29]: 0 on 391 of 391 real holder op-0x13s
+dlm_rm_13	*	102	10	deviation	const:0	body[30:40]: the stale buffer again (a grant record's f1 01 / 01 00 fa 00, kernel addresses): all-zero on 17 of 391 real holder op-0x13s -- the holders that held nothing and so received no 82/01. This node writes zeros. Accepted: not yet fired
+dlm_rm_13	*	112	4	const	const:0	body[40:44]: 0 on 1,232 of 1,232 real op-0x13s
+dlm_rm_13	*	116	2	derived	state:group	body[44:46]: the TREE ROOT's UIC group -- the identity the old master's op-0x0f and op-0x11 named and this node's engine described its locks under
+dlm_rm_13	*	118	1	derived	state:acmode	body[46]: the tree root's access mode
+dlm_rm_13	*	119	1	derived	state:namelen	body[47]: the root name's length, 1..31
+dlm_rm_13	*	120	80	copied	any:name	body[48:128]: the tree's ROOT name, then zeros. A real holder's tail is its residue (4 of 391 are zero to body[128]); this node sends none
+dlm_rm_13	*	200	4	derived	state:hash	body[128:132]: the tree's directory hash as this executive HOLDS it (the dir_hash door, the read the op-0x14 makes): 391 of 391 real holder op-0x13s carry the tree hash the old master's op-0x0e carried. Unknown leaves the four bytes zero, never a minted value

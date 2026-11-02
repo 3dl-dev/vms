@@ -493,6 +493,234 @@ static void rm_complete(struct vms_dlm_rm *f, struct vms_dlm_rm_tree *t)
 }
 
 /* ==========================================================================
+ * 4b. THE HOLDER'S HALF (rd vms-33a) -- vms_dlm_rm_fsm.h states the machine,
+ * vms_cluster_codec_dlm.h H1..H4 the measurements behind it.
+ * ========================================================================== */
+
+/* All three holder doors bound, on top of the table's own. */
+static int rm_ho_ok(const struct vms_dlm_rm *f)
+{
+	return rm_ops_ok(f) && f->ops->ho_next != 0 &&
+	       f->ops->ho_rehome != 0 && f->ops->ho_valblk != 0;
+}
+
+/* The holder slot for (tree, old master) in `state`, or NULL. */
+static struct vms_dlm_ho_tree *rm_ho_slot(struct vms_dlm_rm *f,
+					  const struct vms_dlm_res_ident *id,
+					  uint32_t old_master, uint8_t state)
+{
+	uint32_t i;
+
+	for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
+		struct vms_dlm_ho_tree *h = &f->ho[i];
+
+		if (h->state == state && h->tree.old_master_csid == old_master &&
+		    rm_ident_eq(&h->id, id))
+			return h;
+	}
+	return (struct vms_dlm_ho_tree *)0;
+}
+
+static void rm_ho_free(struct vms_dlm_ho_tree *h)
+{
+	rm_bzero(h, (uint32_t)sizeof(*h));
+}
+
+/*
+ * ARM on an op-0x0f this node answered in the PLAIN-MEMBER role: the frame
+ * names the new master (H1). The name is checked against the CLUB before a
+ * single frame is addressed at it -- a selected member, not this node (the
+ * club lists only the others), and not the old master itself.
+ */
+static void rm_ho_arm(struct vms_dlm_rm *f, uint32_t from_csid,
+		      const struct vms_dlm_rm_step *step,
+		      const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_ho_tree *h;
+	uint32_t n = 0u, i;
+
+	if (!rm_ho_ok(f))
+		return;
+	if (vms_dlm_rm_0f_new_master(body, len, &n) != VMS_CODEC_OK ||
+	    n == from_csid || !rm_is_member(f, n) ||
+	    !rm_is_member(f, from_csid)) {
+		f->ho_unaddressable++;
+		return;
+	}
+	/* A hand-over of this tree from this old master already SENDING is not
+	 * disturbed by a repeated 0x0f; one only ARMED takes the newer name. */
+	if (rm_ho_slot(f, &step->id, from_csid, VMS_DLM_HO_ST_AWAIT) !=
+	    (struct vms_dlm_ho_tree *)0)
+		return;
+	h = rm_ho_slot(f, &step->id, from_csid, VMS_DLM_HO_ST_ARMED);
+	if (h == (struct vms_dlm_ho_tree *)0) {
+		for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
+			if (f->ho[i].state == (uint8_t)VMS_DLM_HO_ST_FREE) {
+				h = &f->ho[i];
+				break;
+			}
+		}
+	}
+	if (h == (struct vms_dlm_ho_tree *)0) {
+		f->ho_no_slot++;
+		rm_say(f, "%DLM, a lock-tree hand-over could not be tracked "
+			  "(every holder slot is busy): this node will not "
+			  "report its locks in that tree to the new master");
+		return;
+	}
+	rm_ho_free(h);
+	h->id = step->id;
+	for (i = 0u; i < step->id.name_len && i < sizeof(h->tree.resnam); i++)
+		h->tree.resnam[i] = (char)step->id.name[i];
+	h->tree.resnam_len = step->id.name_len;
+	h->tree.res_group = step->id.group;
+	h->tree.res_mode = step->id.mode;
+	h->tree.ident_valid = 1u;
+	h->tree.old_master_csid = from_csid;
+	h->new_master = n;
+	h->state = (uint8_t)VMS_DLM_HO_ST_ARMED;
+	f->ho_armed++;
+}
+
+/*
+ * SEND THE NEXT THING THIS HAND-OVER OWES: the next lock's record, or -- when
+ * the engine has none left that still names the old master -- the op-0x13.
+ * Every record field is read from the engine NOW, never from the slot.
+ */
+static void rm_ho_pump(struct vms_dlm_rm *f, struct vms_dlm_ho_tree *h)
+{
+	struct vms_dlm_handover_rec r;
+	struct vms_dlm_rm_lock_rec w;
+	char nm[VMS_DLM_NAME_MAX + 1u];
+	uint32_t hash = 0u, i;
+	int known;
+
+	rm_bzero(&r, (uint32_t)sizeof(r));
+	if (f->ops->ho_next(f->ops->ctx, &h->tree, h->new_master, &r)) {
+		rm_bzero(&w, (uint32_t)sizeof(w));
+		w.id.group = r.res_group;
+		w.id.mode = r.res_mode;
+		w.id.name_len = r.resnam_len;
+		for (i = 0u; i < r.resnam_len && i < VMS_DLM_NAME_MAX; i++)
+			w.id.name[i] = (uint8_t)r.resnam[i];
+		w.id.hash = r.dir_hash;
+		w.holder_epid = r.holder_epid;
+		w.holder_lkid = r.holder_lkid;
+		w.parent_holder_lkid = r.parent_lkid;
+		w.parent_master_lkid = r.parent_master_lkid;
+		w.granted_mode = r.granted_mode;
+		w.requested_mode = r.requested_mode;
+		w.valblk_present = r.valblk_present;
+		w.valblk_seq = r.valblk_seq;
+		for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+			w.valblk[i] = r.valblk[i];
+		if (vms_dlm_rm_lock_rec_build(&w, r.hash_known ? 1 : 0,
+					      f->txframe,
+					      (uint32_t)sizeof(f->txframe),
+					      (uint32_t *)0) != VMS_CODEC_OK) {
+			f->codec_failures++;
+			f->ho_records_unsent++;
+			rm_say(f, "%DLM, a lock this node holds could not be "
+				  "described to a tree's new master: the "
+				  "hand-over is stopped (see the DLM counters)");
+			rm_ho_free(h);
+			return;
+		}
+		if (f->ops->send(f->ops->ctx, h->new_master,
+				 f->txframe + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN) != 0) {
+			f->ho_records_unsent++;
+			rm_say(f, "%DLM, a lock record for a tree's new master "
+				  "could not be sent: the hand-over is stopped "
+				  "(see the DLM counters)");
+			rm_ho_free(h);
+			return;
+		}
+		f->ho_records_sent++;
+		h->await_lkid = r.holder_lkid;
+		h->state = (uint8_t)VMS_DLM_HO_ST_AWAIT;
+		return;
+	}
+
+	/* Nothing of ours left naming the old master: end-of-records (H2). */
+	rm_ident_to_name(&h->id, nm, (uint32_t)sizeof(nm));
+	known = f->ops->dir_hash(f->ops->ctx, nm, h->id.name_len, h->id.group,
+				 h->id.mode, &hash);
+	{
+		struct vms_dlm_res_ident id = h->id;
+
+		id.hash = known ? hash : 0u;
+		if (vms_dlm_rm_end_build(&id, known, f->txframe,
+					 (uint32_t)sizeof(f->txframe),
+					 (uint32_t *)0) != VMS_CODEC_OK) {
+			f->codec_failures++;
+			f->ho_ends_unsent++;
+			rm_ho_free(h);
+			return;
+		}
+	}
+	if (f->ops->send(f->ops->ctx, h->new_master,
+			 f->txframe + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN) != 0) {
+		f->ho_ends_unsent++;
+		rm_say(f, "%DLM, the end-of-records for a tree's new master "
+			  "could not be sent (see the DLM counters)");
+	} else {
+		f->ho_ends_sent++;
+	}
+	rm_ho_free(h);
+}
+
+/* op 0x11 from the old master: FIRE the hand-over its 0x0f armed. */
+static void rm_ho_fire(struct vms_dlm_rm *f, uint32_t from_csid,
+		       const struct vms_dlm_rm_step *step)
+{
+	struct vms_dlm_ho_tree *h;
+
+	if (!rm_ho_ok(f)) {
+		f->ho_unbound++;
+		return;
+	}
+	if (rm_ho_slot(f, &step->id, from_csid, VMS_DLM_HO_ST_AWAIT) !=
+	    (struct vms_dlm_ho_tree *)0) {
+		f->ho_repeats++;
+		return;
+	}
+	h = rm_ho_slot(f, &step->id, from_csid, VMS_DLM_HO_ST_ARMED);
+	if (h == (struct vms_dlm_ho_tree *)0) {
+		/* No 0x0f named the new master (394 of 394 real op-0x11s had
+		 * one first): this node cannot address one, and does not
+		 * guess. */
+		f->ho_unarmed++;
+		rm_say(f, "%DLM, told a lock tree moved without being told "
+			  "where: nothing is sent (see the DLM counters)");
+		return;
+	}
+	rm_ho_pump(f, h);
+}
+
+/* op 0x1a to a HOLDER: admitted only from an old master that armed a
+ * hand-over here; the ENGINE checks the lock, the sender and the handle. */
+static int rm_ho_valblk(struct vms_dlm_rm *f,
+			const struct vms_dlm_adopt_valblk *v)
+{
+	uint32_t i;
+
+	if (!rm_ho_ok(f))
+		return 0;
+	for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
+		if (f->ho[i].state != (uint8_t)VMS_DLM_HO_ST_FREE &&
+		    f->ho[i].tree.old_master_csid == v->from_csid)
+			break;
+	}
+	if (i == VMS_DLM_HO_TREES)
+		return 0;
+	if (!f->ops->ho_valblk(f->ops->ctx, v))
+		return 0;
+	f->ho_valblks_taken++;
+	return 1;
+}
+
+/* ==========================================================================
  * 5. The handlers -- one per (state, event) cell
  * ========================================================================== */
 
@@ -590,6 +818,8 @@ static enum vms_dlm_rm_status rm_h_role(struct vms_dlm_rm *f,
 		return VMS_DLM_RM_REFUSED;
 	if (new_master)
 		f->roles_as_new_master++;
+	else
+		rm_ho_arm(f, in->from_csid, in->step, in->body, in->len);
 	return VMS_DLM_RM_HANDLED;
 }
 
@@ -856,6 +1086,10 @@ static enum vms_dlm_rm_status rm_valblk(struct vms_dlm_rm *f,
 	for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
 		v.valblk[i] = w.valblk[i];
 	if (!f->ops->adopt_valblk(f->ops->ctx, &v)) {
+		/* Not a tree this node is adopting -- but it may be one this
+		 * node HOLDS locks in and is about to describe (rd vms-33a). */
+		if (rm_ho_valblk(f, &v))
+			return VMS_DLM_RM_HANDLED;
 		f->valblks_refused++;
 		return VMS_DLM_RM_REFUSED;
 	}
@@ -881,6 +1115,21 @@ enum vms_dlm_rm_status vms_dlm_rm_step(struct vms_dlm_rm *f, uint32_t from_csid,
 		return VMS_DLM_RM_NOT_MINE;
 	if (opcode == (uint8_t)VMS_DLM_WIREOP_RM_1A)
 		return rm_valblk(f, from_csid, body, len);
+	/*
+	 * op 0x11 -- some OTHER member is the new master of a tree, and THIS
+	 * node owes it an op-0x13, after its own records (H2). A notification:
+	 * nothing is staged whatever happens.
+	 */
+	if (opcode == (uint8_t)VMS_DLM_WIREOP_RM_11) {
+		if (from_csid == 0u || !rm_ops_ok(f))
+			return VMS_DLM_RM_REFUSED;
+		if (vms_dlm_rm_step_parse_body(body, len, &step) !=
+		    VMS_CODEC_OK)
+			return VMS_DLM_RM_REFUSED;
+		f->notifications++;
+		rm_ho_fire(f, from_csid, &step);
+		return VMS_DLM_RM_HANDLED;
+	}
 	ev = rm_event_of(opcode);
 	if (ev < 0)
 		return VMS_DLM_RM_NOT_MINE;
@@ -964,12 +1213,86 @@ void vms_dlm_rm_notified(struct vms_dlm_rm *f)
 		f->notifications++;
 }
 
+int vms_dlm_rm_ho_answer(struct vms_dlm_rm *f, uint32_t from_csid,
+			 uint8_t category, uint8_t opcode,
+			 const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_rm_lock_grant g;
+	struct vms_dlm_ho_tree *h = (struct vms_dlm_ho_tree *)0;
+	uint32_t i;
+
+	if (f == (struct vms_dlm_rm *)0 || body == (const uint8_t *)0 ||
+	    len < VMS_CM_BODY_LEN || from_csid == 0u || !rm_ho_ok(f))
+		return 0;
+	if (category != (uint8_t)(VMS_DLM_CAT_REQUEST |
+				  VMS_WIRE_RESPONSE_BIT) ||
+	    opcode != (uint8_t)VMS_DLM_WIREOP_ENQ)
+		return 0;
+	if (vms_dlm_rm_lock_grant_parse_body(body, len, &g) != VMS_CODEC_OK)
+		return 0;
+	for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
+		if (f->ho[i].state == (uint8_t)VMS_DLM_HO_ST_AWAIT &&
+		    f->ho[i].new_master == from_csid &&
+		    f->ho[i].await_lkid == g.holder_lkid) {
+			h = &f->ho[i];
+			break;
+		}
+	}
+	if (h == (struct vms_dlm_ho_tree *)0)
+		return 0;
+	/*
+	 * THE REPLACEMENT. The proxy now names the new master and the handle
+	 * it minted -- the only write the hand-over makes, and only when the
+	 * answer is a grant and the engine still finds the lock naming the old
+	 * master. Anything else STOPS the hand-over (the header says why).
+	 */
+	if (!g.granted ||
+	    !f->ops->ho_rehome(f->ops->ctx, g.holder_lkid,
+			       h->tree.old_master_csid, h->new_master,
+			       g.master_lkid)) {
+		f->ho_answers_refused++;
+		rm_say(f, "%DLM, a tree's new master did not grant a lock this "
+			  "node described, or the lock moved: the hand-over is "
+			  "stopped (see the DLM counters)");
+		rm_ho_free(h);
+		return 1;
+	}
+	f->ho_answers++;
+	h->records++;
+	h->await_lkid = 0u;
+	rm_ho_pump(f, h);
+	return 1;
+}
+
+uint32_t vms_dlm_rm_ho_in_state(const struct vms_dlm_rm *f,
+				enum vms_dlm_ho_state st)
+{
+	uint32_t i, n = 0u;
+
+	if (f == (const struct vms_dlm_rm *)0)
+		return 0u;
+	for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
+		if (f->ho[i].state == (uint8_t)st)
+			n++;
+	}
+	return n;
+}
+
 void vms_dlm_rm_member_departed(struct vms_dlm_rm *f, uint32_t csid)
 {
 	uint32_t i;
 
 	if (f == (struct vms_dlm_rm *)0 || csid == 0u || !rm_ops_ok(f))
 		return;
+	/* A hand-over whose NEW master left has nobody to report to. One
+	 * whose OLD master left goes on: the new master still waits for it. */
+	for (i = 0u; i < VMS_DLM_HO_TREES; i++) {
+		if (f->ho[i].state != (uint8_t)VMS_DLM_HO_ST_FREE &&
+		    f->ho[i].new_master == csid) {
+			rm_ho_free(&f->ho[i]);
+			f->ho_departed++;
+		}
+	}
 	for (i = 0u; i < VMS_DLM_RM_TREES; i++) {
 		struct vms_dlm_rm_tree *t = &f->tree[i];
 

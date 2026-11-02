@@ -32,6 +32,7 @@
 #include "cluster_test.h"
 #include "pe_fake_vc.h"
 #include "vms_cluster_codec_cm.h"
+#include "vms_cluster_codec_dlm.h"  /* rd vms-33a: the holder's frames */
 #include "vms_cluster_codec_scs.h"
 #include "vms_cluster_emit_guard.h"
 
@@ -1021,6 +1022,72 @@ static void test_e81_reconnect_reissue_is_clean_and_the_regression_is_not(void)
 		 "named as the S2 vector");
 }
 
+
+/* ================================================================== *
+ * rd vms-33a: THE HOLDER'S FRAMES PASS THE GUARD. A remaster record (an
+ * answered REQUEST, with a transaction) and the end-of-records (a
+ * NOTIFICATION, transaction 0) are what the holder half originates; the
+ * guard is the last thing between them and a real VAX, and it must let the
+ * correct ones out -- the never-crash backstop refusing a correct frame
+ * strands the new master exactly as silence would.
+ * ================================================================== */
+static int send_built(struct guard_env *e, const uint8_t *built,
+		      uint16_t send_msg, uint16_t ack_msg, uint16_t txn)
+{
+	struct cm_spec s = cm_ok(send_msg, ack_msg);
+	uint8_t body[PE_SEND_BODY_LEN];
+
+	s.txn = txn;
+	s.category = built[VMS_OFF_SYSAP_BODY + 8];
+	s.opcode = built[VMS_OFF_SYSAP_BODY + 9];
+	cm_body(body, &s);
+	/* The builder's whole SYSAP body past the envelope (body[8..]), then the
+	 * envelope the connection manager would have stamped. */
+	memcpy(body + BODY_SYSAP_OFF + 8, built + VMS_OFF_SYSAP_BODY + 8,
+	       VMS_CM_BODY_LEN - 8);
+	return pe_vc_send_msg(&e->fsm, VAX1_SYSID, (vms_conid_t)0, body,
+			      PE_SEND_BODY_LEN);
+}
+
+static void test_holder_frames_pass_the_guard(void)
+{
+	struct guard_env e;
+	struct vms_dlm_rm_lock_rec r;
+	struct vms_dlm_res_ident id;
+	uint8_t rec[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t end[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+
+	printf("-- rd vms-33a: the holder's op-0x12 and op-0x13 pass the "
+	       "emit-time guard\n");
+	memset(&r, 0, sizeof(r));
+	r.holder_lkid = 0x110000ceu;
+	r.holder_epid = 0x20600216u;
+	r.granted_mode = 1u;
+	r.requested_mode = 1u;
+	r.id.mode = 3u;
+	r.id.name_len = 4u;
+	memcpy(r.id.name, "RMT5", 4);
+	r.id.hash = 0xc54eeaeau;
+	ct_check(vms_dlm_rm_lock_rec_build(&r, 1, rec, sizeof(rec), NULL) ==
+		 VMS_CODEC_OK, "the record builds");
+	id = r.id;
+	ct_check(vms_dlm_rm_end_build(&id, 1, end, sizeof(end), NULL) ==
+		 VMS_CODEC_OK, "the end-of-records builds");
+
+	open_circuit(&e);
+	rx_cm(&e, 1u, 0u, 1u);
+	ct_check_eq_u32((unsigned long)send_built(&e, rec, 1u, 1u, 0x2001u),
+			(unsigned long)PE_VC_SEND_OK,
+			"the op-0x12 record goes out (a request: transaction "
+			"opened)");
+	ct_check_eq_u32((unsigned long)send_built(&e, end, 2u, 1u, 0u),
+			(unsigned long)PE_VC_SEND_OK,
+			"the op-0x13 goes out (a notification: transaction 0)");
+	ct_check_eq_u32(e.fsm.guard_judged, 2u, "both were JUDGED");
+	ct_check_eq_u32(e.fsm.guard_refused, 0u, "*** neither was refused ***");
+	ct_check_eq_u32(e.fsm.guard_warned, 0u, "...nor warned about");
+}
+
 int main(void)
 {
 	test_golden_dialogue_is_never_refused();
@@ -1042,5 +1109,6 @@ int main(void)
 	test_ledger_does_not_advance_on_a_failed_send();
 	test_the_console_is_throttled();
 	test_guard_class_names_do_not_drift();
+	test_holder_frames_pass_the_guard();
 	return ct_summary("test_pe_emit_guard");
 }

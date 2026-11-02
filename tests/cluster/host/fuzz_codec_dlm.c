@@ -22,6 +22,10 @@
  *     vms_dlm_rm_step_parse_body          (a remaster step, 0x0e/0x0f/0x10/0x13/0x14)
  *     vms_dlm_rm_lock_rec_parse_body      (a remaster LOCK RECORD, op-0x12)
  *     vms_dlm_rm_valblk_parse_body        (a remaster's VALUE BLOCK, op-0x1a)
+ *     vms_dlm_rm_lock_grant_parse_body    (the NEW master's 82/01 to OUR op-0x12
+ *                                          record, rd vms-33a)
+ *     vms_dlm_rm_0f_new_master            (the new master an op-0x0f names,
+ *                                          rd vms-33a)
  *     vms_cm_params_parse                 (CNXMAN op-01 PARAMS, votes)
  * plus the frame-level entry (vms_frame_classify -> vms_dlm_*_parse), the real
  * inbound path (body = frame + VMS_OFF_SYSAP_BODY, so a short frame exercises
@@ -219,6 +223,45 @@ static void fuzz_grant_valblk(void)
                 "(body[36:52], #1194/vms-727): 100k, no over-read/crash");
 }
 
+/* rd vms-33a: the two decoders the HOLDER's half reads off a real peer -- the
+ * new master's 82/01 answer to one of our op-0x12 records, and the new master
+ * an op-0x0f names. Both class gates are planted (cat 0x82 / op 0x01 and cat
+ * 0x02 / op 0x0f at body[8:10]) on 3/4 of the iterations, over every length
+ * from 0 to 160, so the field reads behind the gates are reached; the count of
+ * accepted bodies is asserted non-zero for each, so a gate change that stops
+ * reaching them fails here rather than shipping a green fuzz of nothing. */
+static void fuzz_rm_holder(void)
+{
+    struct vms_dlm_rm_lock_grant g;
+    uint32_t csid, ok_grant = 0, ok_0f = 0;
+
+    for (int i = 0; i < ITERS; i++) {
+        uint8_t scratch[160];
+        uint32_t n = (uint32_t)(rand() % 161);
+        int which = i & 1;
+
+        fill_random(scratch, n);
+        if ((rand() & 3) && n > DLM_OP_BODY_OFF) {
+            scratch[DLM_OP_BODY_OFF - 1] = which ? 0x82 : 0x02;
+            scratch[DLM_OP_BODY_OFF] = which ? VMS_DLM_WIREOP_ENQ
+                                             : VMS_DLM_WIREOP_RM_0F;
+        }
+        uint8_t *body = exact(scratch, n);
+        if (which) {
+            if (vms_dlm_rm_lock_grant_parse_body(body, n, &g) == VMS_CODEC_OK)
+                ok_grant++;
+        } else {
+            if (vms_dlm_rm_0f_new_master(body, n, &csid) == VMS_CODEC_OK)
+                ok_0f++;
+        }
+        free(body);
+    }
+    ct_check(ok_grant > 0, "rm_lock_grant_parse_body: 100k (half planted), "
+                           "no over-read/crash, and REACHED (non-vacuous)");
+    ct_check(ok_0f > 0, "rm_0f_new_master: 100k (half planted), no "
+                        "over-read/crash, and REACHED (non-vacuous)");
+}
+
 /* rd vms-20c: the op-0x0d RECORD parser, with its class gates planted so the
  * identity reader behind them is actually reached: cat 0x02 / op 0x0d at
  * body[8:10] and 0x0001 at body[12:14], a name length that is usually in range,
@@ -292,6 +335,7 @@ int main(void)
 
     fuzz_grant_valblk();
     fuzz_dir_reg();
+    fuzz_rm_holder();
     fuzz_frame();
 
     return ct_summary("fuzz_codec_dlm");

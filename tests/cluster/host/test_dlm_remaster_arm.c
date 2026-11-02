@@ -33,6 +33,7 @@
 #include "cluster_test.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_dlm_rm_fsm.h"
+#include "conformance_dump.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -311,10 +312,13 @@ static void fk_log(void *ctx, const char *msg)
 	(void)msg;
 }
 
+/* The holder doors are left UNBOUND here: every new-master test above runs on
+ * a table whose holder half is off, exactly as before rd vms-33a. The holder
+ * tests bind them (section 9). */
 static const struct vms_dlm_rm_ops g_ops_template = {
 	&g_f, fk_members, fk_open, fk_lock, fk_end, fk_abort, fk_tree_of_lkid,
 	fk_reported, fk_mastered, fk_hash, fk_dir_node, fk_stage, fk_send,
-	fk_residue, fk_valblk, fk_log
+	fk_residue, fk_valblk, fk_log, NULL, NULL, NULL
 };
 
 static struct vms_dlm_rm_ops g_ops;
@@ -910,9 +914,16 @@ static void test_not_mine_and_the_ack(void)
 	}
 	rig_reset();
 	b = fxbody(n11);
+	/* rd vms-33a: the op-0x11 IS this table's now -- it fires the holder's
+	 * half. With the holder doors unbound (this rig) it is counted, and
+	 * nothing is answered or sent, which is all this table may claim
+	 * without them. */
 	ct_check(vms_dlm_rm_step(&g_rm, RMT_O_CSID, b[8], b[9], b,
-				 VMS_CM_BODY_LEN) == VMS_DLM_RM_NOT_MINE,
-		 "  an op-0x11 is not this table's: the arm counts it");
+				 VMS_CM_BODY_LEN) == VMS_DLM_RM_HANDLED &&
+		 g_rm.notifications == 1u && g_rm.ho_unbound == 1u &&
+		 g_f.n_staged == 0u && g_f.n_sent == 0u,
+		 "  an op-0x11 is counted and, with no holder doors, nothing "
+		 "is answered or sent");
 	b = fxbody(ans);
 	ct_check(vms_dlm_rm_step(&g_rm, RMT_O_CSID, b[8], b[9], b,
 				 VMS_CM_BODY_LEN) == VMS_DLM_RM_NOT_MINE,
@@ -1059,6 +1070,444 @@ static void test_op1a_reaches_the_engine(void)
 		 "asked");
 }
 
+
+/* ==========================================================================
+ * 9. THE HOLDER'S HALF (rd vms-33a): THIS node holds locks in a tree a real
+ *    VAX moves to a THIRD node, and reports them.
+ *
+ * THE EPISODE IS RA5's RMT5, replayed from THIS NODE'S SIDE: this node stands
+ * where VAX3 (the holder, 1332) stood. The old master's op-0x0f and op-0x11
+ * are VAX1's real frames; the new master's two 82/01 answers are VAX2's real
+ * frames. What this node SENDS is built by the real table and codec from a
+ * FAKE ENGINE whose proxies carry VAX3's own lock state -- the lock ids, PID,
+ * modes, parent link and value block VAX3's SDA had -- so the records it emits
+ * can be compared, cell by named cell, with the records VAX3 really sent
+ * (rm-12-root-req, rm-12-sub-req, rm-13-notif). A table that copied an inbound
+ * frame's bytes into a record would have nothing to copy them FROM here: no
+ * inbound frame carries body[88:108] or the PID.
+ * ========================================================================== */
+
+#define RMT_N_CSID  0x00010002u   /* VAX2, as the real op-0x0f names it */
+
+/* VAX3's own lock state for RMT5 (SDA and its own op-0x12 records). */
+#define HO_ROOT_LKID  0x110000ceu
+#define HO_S2_LKID    0x180000a9u
+#define HO_EPID       0x20600216u
+#define HO_TREE_HASH  0xc54eeaeau
+
+struct ho_lock {
+	uint32_t lkid, parent, master, master_lkid;
+	uint8_t  grmode, rqmode, has_valblk, hash_known;
+	char     name[8];
+	uint8_t  name_len;
+	uint32_t hash;
+};
+
+static struct {
+	struct ho_lock lk[4];
+	uint32_t n;
+	int rehome_ok;
+	uint32_t next_asked, rehomes, valblks;
+	uint32_t last_new_master, last_old, last_new_lkid;
+	struct vms_dlm_adopt_tree last_tree;
+} g_ho;
+
+static int fk_ho_next(void *ctx, const struct vms_dlm_adopt_tree *t,
+		      uint32_t new_master, struct vms_dlm_handover_rec *out)
+{
+	uint32_t i, j;
+
+	(void)ctx;
+	g_ho.next_asked++;
+	g_ho.last_tree = *t;
+	g_ho.last_new_master = new_master;
+	memset(out, 0, sizeof(*out));
+	/* The engine's contract (vms_dlm_adopt.h): a lock still naming the old
+	 * master whose parent, if any, already names the new one. */
+	for (i = 0; i < g_ho.n; i++) {
+		struct ho_lock *l = &g_ho.lk[i];
+		uint32_t pm = 0u;
+
+		if (l->master != t->old_master_csid)
+			continue;
+		if (l->parent != 0u) {
+			for (j = 0; j < g_ho.n; j++)
+				if (g_ho.lk[j].lkid == l->parent)
+					break;
+			if (j == g_ho.n || g_ho.lk[j].master != new_master)
+				continue;
+			pm = g_ho.lk[j].master_lkid;
+		}
+		memcpy(out->resnam, l->name, l->name_len);
+		out->resnam_len = l->name_len;
+		out->res_group = 0u;
+		out->res_mode = 3u;
+		out->holder_lkid = l->lkid;
+		out->holder_epid = HO_EPID;
+		out->parent_lkid = l->parent;
+		out->parent_master_lkid = pm;
+		out->granted_mode = l->grmode;
+		out->requested_mode = l->rqmode;
+		if (l->has_valblk) {
+			memcpy(out->valblk, "RMLVB-0123456789", 16);
+			out->valblk_seq = 1u;
+			out->valblk_present = 1u;
+		}
+		out->hash_known = l->hash_known;
+		out->dir_hash = l->hash;
+		return 1;
+	}
+	return 0;
+}
+
+static int fk_ho_rehome(void *ctx, uint32_t lkid, uint32_t old_csid,
+			uint32_t new_csid, uint32_t new_lkid)
+{
+	uint32_t i;
+
+	(void)ctx;
+	g_ho.rehomes++;
+	g_ho.last_old = old_csid;
+	g_ho.last_new_lkid = new_lkid;
+	if (!g_ho.rehome_ok)
+		return 0;
+	for (i = 0; i < g_ho.n; i++) {
+		if (g_ho.lk[i].lkid == lkid && g_ho.lk[i].master == old_csid) {
+			g_ho.lk[i].master = new_csid;
+			g_ho.lk[i].master_lkid = new_lkid;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static int fk_ho_valblk(void *ctx, const struct vms_dlm_adopt_valblk *v)
+{
+	(void)ctx;
+	(void)v;
+	g_ho.valblks++;
+	return 1;
+}
+
+/* A holder rig: this node is H; the others are O (VAX1) and N (VAX2). */
+static void ho_rig(int with_sub)
+{
+	rig_reset();
+	g_f.members[0] = RMT_O_CSID;
+	g_f.members[1] = RMT_N_CSID;
+	g_f.n_members = 2u;
+	g_f.hash = HO_TREE_HASH;
+	g_ops.ho_next = fk_ho_next;
+	g_ops.ho_rehome = fk_ho_rehome;
+	g_ops.ho_valblk = fk_ho_valblk;
+	vms_dlm_rm_init(&g_rm, &g_ops);
+
+	memset(&g_ho, 0, sizeof(g_ho));
+	g_ho.rehome_ok = 1;
+	g_ho.lk[0].lkid = HO_ROOT_LKID;
+	g_ho.lk[0].master = RMT_O_CSID;
+	g_ho.lk[0].master_lkid = 0x0400082fu;   /* VAX1's handle for it */
+	g_ho.lk[0].grmode = 1u;                 /* CR */
+	g_ho.lk[0].rqmode = 1u;
+	g_ho.lk[0].has_valblk = 1u;
+	g_ho.lk[0].hash_known = 1u;
+	g_ho.lk[0].hash = HO_TREE_HASH;
+	memcpy(g_ho.lk[0].name, "RMT5", 4);
+	g_ho.lk[0].name_len = 4u;
+	g_ho.n = 1u;
+	if (with_sub) {
+		g_ho.lk[1].lkid = HO_S2_LKID;
+		g_ho.lk[1].parent = HO_ROOT_LKID;
+		g_ho.lk[1].master = RMT_O_CSID;
+		g_ho.lk[1].master_lkid = 0x04000830u;
+		g_ho.lk[1].grmode = 2u;             /* CW */
+		g_ho.lk[1].rqmode = 2u;
+		memcpy(g_ho.lk[1].name, "S2", 2);
+		g_ho.lk[1].name_len = 2u;
+		/* No hash for a sub name: nobody asked a directory about it. */
+		g_ho.n = 2u;
+	}
+}
+
+/* Do the NAMED cells of a record this node built equal the real holder's? */
+static int ho_named_cells_match(const uint8_t *ours, const uint8_t *real,
+				int with_hash)
+{
+	static const struct { unsigned off, len; } cells[] = {
+		{ 8, 2 },     /* cat, op                               */
+		{ 20, 4 },    /* the holder's PID                      */
+		{ 24, 4 },    /* the holder's own lock id              */
+		{ 30, 2 },    /* granted, requested mode               */
+		{ 36, 8 },    /* the parent pair                       */
+		{ 44, 4 },    /* group, access mode, name length       */
+		{ 88, 20 },   /* the value block and its sequence      */
+		{ 110, 1 },   /* const 0x01                            */
+		{ 112, 16 },  /* const 00000000 ffffffff 00000000 ffffffff */
+	};
+	unsigned i;
+
+	for (i = 0; i < sizeof(cells) / sizeof(cells[0]); i++)
+		if (memcmp(ours + cells[i].off, real + cells[i].off,
+			   cells[i].len) != 0) {
+			printf("    cell body[%u:%u] differs\n", cells[i].off,
+			       cells[i].off + cells[i].len);
+			return 0;
+		}
+	if (memcmp(ours + 48, real + 48, real[47]) != 0)
+		return 0;
+	if (with_hash && memcmp(ours + 128, real + 128, 4) != 0)
+		return 0;
+	return 1;
+}
+
+static void ho_dump12(const uint8_t *b)
+{
+	char st[256];
+
+	snprintf(st, sizeof(st),
+		 "lkid=0x%x,epid=0x%x,grmode=%u,rqmode=%u,parent_lkid=0x%x,"
+		 "parent_master=0x%x,group=0,acmode=3,namelen=%u,hash=0x%x,"
+		 "valblkseq=0x%x",
+		 le32(b + 24), le32(b + 20), b[30], b[31], le32(b + 36),
+		 le32(b + 40), b[47], le32(b + 128), le32(b + 104));
+	conf_dump("dlm_rm_12", VMS_OFF_SYSAP_BODY, st, b, VMS_CM_BODY_LEN);
+}
+
+static void ho_dump13(const uint8_t *b)
+{
+	char st[128];
+
+	snprintf(st, sizeof(st), "group=0,acmode=3,namelen=%u,hash=0x%x",
+		 b[47], le32(b + 128));
+	conf_dump("dlm_rm_13", VMS_OFF_SYSAP_BODY, st, b, VMS_CM_BODY_LEN);
+}
+
+static void test_holder_reports_its_locks_root_first(void)
+{
+	const struct vms_fixture *root_req = fixture("rm-12-root-req");
+	const struct vms_fixture *sub_req = fixture("rm-12-sub-req");
+	const struct vms_fixture *root_ans = fixture("rm-12-root-ans");
+	const struct vms_fixture *sub_ans = fixture("rm-12-sub-ans");
+	const struct vms_fixture *end = fixture("rm-13-notif");
+	const uint8_t *b;
+
+	printf("-- rd vms-33a: RMT5 from the HOLDER's side -- the records, root "
+	       "first, then the end-of-records\n");
+	ct_check(root_req && sub_req && root_ans && sub_ans && end,
+		 "  the RA5 holder specimens load");
+	if (!(root_req && sub_req && root_ans && sub_ans && end))
+		return;
+	ho_rig(1);
+
+	/* VAX1's op-0x0f to the holder: answered as a PLAIN member, and it
+	 * ARMS the hand-over -- naming VAX2 (body[28:32] = 00010002). */
+	ct_check(step("rm-0f-member-req", RMT_O_CSID) == VMS_DLM_RM_HANDLED,
+		 "  the real op-0x0f is HANDLED");
+	ct_check_eq_u32(g_f.n_staged, 1u, "  ...and answered (82/15)");
+	ct_check(memcmp(g_f.staged + 28, fxbody(fixture("rm-0f-member-req")) + 28,
+			4) == 0,
+		 "  ...in the plain-member role: body[28:32] KEPT");
+	ct_check_eq_u32(g_rm.ho_armed, 1u, "  the hand-over is ARMED");
+	ct_check_eq_u32(g_f.n_sent, 0u,
+			"  *** and NOTHING is sent yet: the records follow the "
+			"op-0x11 (7 of 7 attributable episodes) ***");
+
+	/* VAX1's op-0x11: FIRE. The engine names the ROOT first. */
+	ct_check(step("rm-11-notif", RMT_O_CSID) == VMS_DLM_RM_HANDLED,
+		 "  the real op-0x11 is HANDLED");
+	ct_check_eq_u32(g_f.n_staged, 1u, "  a notification: nothing answered");
+	ct_check_eq_u32(g_f.n_sent, 1u, "  ONE record goes out");
+	ct_check_eq_u32(g_f.sent[0].csid, RMT_N_CSID,
+			"  *** to the NEW master the op-0x0f named, not to the "
+			"old master that sent the op-0x11 ***");
+	ct_check_eq_u32(g_ho.last_tree.old_master_csid, RMT_O_CSID,
+			"  the engine was asked for locks still naming VAX1");
+	b = g_f.sent[0].body;
+	ho_dump12(b);
+	ct_check(b[8] == 0x02 && b[9] == 0x12, "  it is a cat-0x02 op-0x12");
+	ct_check(ho_named_cells_match(b, fxbody(root_req), 1),
+		 "  *** EVERY NAMED CELL equals VAX3's real ROOT record: PID, "
+		 "lock id, modes, no parent, identity, name, the value block "
+		 "RMLVB-0123456789 at sequence 1, the tree's hash ***");
+	ct_check(le32(b + 4) == 0u && le32(b + 12) == 0u,
+		 "  body[4:8] and body[12:16] left for the connection manager");
+
+	/* A second op-0x11 while the root's answer is out changes nothing. */
+	ct_check(step("rm-11-notif", RMT_O_CSID) == VMS_DLM_RM_HANDLED &&
+		 g_f.n_sent == 1u && g_rm.ho_repeats == 1u,
+		 "  a repeated op-0x11 mid-hand-over sends nothing more");
+
+	/* An 82/01 from the wrong system is NOT this record's answer. */
+	ct_check(vms_dlm_rm_ho_answer(&g_rm, RMT_O_CSID, 0x82u, 0x01u,
+				      fxbody(root_ans), VMS_CM_BODY_LEN) == 0,
+		 "  the real answer, but from the OLD master: not consumed");
+
+	/* VAX2's real 82/01 for the root: re-home, then the SUB record. */
+	ct_check(vms_dlm_rm_ho_answer(&g_rm, RMT_N_CSID, 0x82u, 0x01u,
+				      fxbody(root_ans), VMS_CM_BODY_LEN) == 1,
+		 "  VAX2's real 82/01 for the root is consumed");
+	ct_check_eq_u32(g_ho.last_new_lkid, le32(fxbody(root_ans) + 20),
+			"  *** the proxy's master handle is REPLACED with the one "
+			"VAX2 minted (0x020004cc) ***");
+	ct_check_eq_u32(g_ho.last_old, RMT_O_CSID, "  ...from VAX1's");
+	ct_check_eq_u32(g_f.n_sent, 2u, "  and the next record goes out");
+	b = g_f.sent[1].body;
+	ho_dump12(b);
+	ct_check(ho_named_cells_match(b, fxbody(sub_req), 0),
+		 "  *** EVERY NAMED CELL equals VAX3's real S2 record -- "
+		 "including body[40:44], the parent's NEW-master handle, which "
+		 "existed only once VAX2's answer came back ***");
+	ct_check(le32(b + 128) == 0u,
+		 "  and NO hash for a sub name this node never learned "
+		 "(a deviation row, never a minted value)");
+
+	/* VAX2's real 82/01 for S2: nothing left -> the op-0x13. */
+	ct_check(vms_dlm_rm_ho_answer(&g_rm, RMT_N_CSID, 0x82u, 0x01u,
+				      fxbody(sub_ans), VMS_CM_BODY_LEN) == 1,
+		 "  VAX2's real 82/01 for S2 is consumed");
+	ct_check_eq_u32(g_f.n_sent, 3u, "  and the end-of-records goes out");
+	b = g_f.sent[2].body;
+	ho_dump13(b);
+	ct_check_eq_u32(g_f.sent[2].csid, RMT_N_CSID, "  to the new master");
+	ct_check(b[8] == 0x02 && b[9] == 0x13, "  it is a cat-0x02 op-0x13");
+	ct_check(memcmp(b + 44, fxbody(end) + 44, 4 + fxbody(end)[47]) == 0 &&
+		 memcmp(b + 128, fxbody(end) + 128, 4) == 0 &&
+		 b[28] == fxbody(end)[28] && le32(b + 4) == 0u &&
+		 le32(b + 40) == le32(fxbody(end) + 40),
+		 "  *** it equals VAX3's real op-0x13 on every named cell: the "
+		 "identity, the name, the hash, the HOLDER role byte body[28]=0, "
+		 "body[40:44]=0, and no transaction ***");
+	ct_check(vms_dlm_rm_step_parse_body(b, VMS_CM_BODY_LEN,
+					    &(struct vms_dlm_rm_step){0}) ==
+		 VMS_CODEC_OK,
+		 "  and the new master's own parser reads it as a step");
+	ct_check_eq_u32(g_rm.ho_records_sent, 2u, "  counted: 2 records");
+	ct_check_eq_u32(g_rm.ho_answers, 2u, "  ...2 answered and re-homed");
+	ct_check_eq_u32(g_rm.ho_ends_sent, 1u, "  ...1 end-of-records");
+	ct_check_eq_u32(vms_dlm_rm_ho_in_state(&g_rm, VMS_DLM_HO_ST_FREE),
+			VMS_DLM_HO_TREES, "  and the slot is free again");
+	ct_check(vms_dlm_rm_ho_answer(&g_rm, RMT_N_CSID, 0x82u, 0x01u,
+				      fxbody(sub_ans), VMS_CM_BODY_LEN) == 0,
+		 "  a late duplicate answer is not consumed (the reply path "
+		 "counts it as unmatched)");
+}
+
+static void test_holder_with_nothing_still_ends(void)
+{
+	printf("-- rd vms-33a H2: a member that holds NOTHING in the tree still "
+	       "sends its op-0x13 (15 of 391 real ones)\n");
+	ho_rig(0);
+	g_ho.n = 0u;
+	(void)step("rm-0f-member-req", RMT_O_CSID);
+	ct_check(step("rm-11-notif", RMT_O_CSID) == VMS_DLM_RM_HANDLED,
+		 "  the op-0x11 is HANDLED");
+	ct_check_eq_u32(g_f.n_sent, 1u, "  ONE frame goes out");
+	ct_check(g_f.sent[0].body[9] == 0x13 &&
+		 g_f.sent[0].csid == RMT_N_CSID,
+		 "  *** and it is the op-0x13, to the new master ***");
+	ho_dump13(g_f.sent[0].body);
+	ct_check_eq_u32(g_rm.ho_records_sent, 0u, "  with no record before it");
+}
+
+static void test_holder_refusals(void)
+{
+	uint8_t body[VMS_CM_BODY_LEN];
+
+	printf("-- rd vms-33a: what the holder half will NOT do\n");
+
+	/* 1. An op-0x11 with no op-0x0f: the new master is unknown. */
+	ho_rig(1);
+	ct_check(step("rm-11-notif", RMT_O_CSID) == VMS_DLM_RM_HANDLED,
+		 "  an unarmed op-0x11 is still HANDLED (it is never answered)");
+	ct_check(g_f.n_sent == 0u && g_rm.ho_unarmed == 1u,
+		 "  *** but NOTHING is sent: no 0x0f named the new master, and "
+		 "this node does not guess one ***");
+
+	/* 2. An op-0x0f naming a system that is not a member. */
+	ho_rig(1);
+	g_f.members[1] = 0x00010009u;
+	(void)step("rm-0f-member-req", RMT_O_CSID);
+	ct_check(g_rm.ho_armed == 0u && g_rm.ho_unaddressable == 1u,
+		 "  an op-0x0f naming a non-member new master does not arm");
+	ct_check(g_f.n_staged == 1u,
+		 "  ...though it is still answered, as every member answers it");
+	(void)step("rm-11-notif", RMT_O_CSID);
+	ct_check_eq_u32(g_f.n_sent, 0u, "  ...and the op-0x11 sends nothing");
+
+	/* 3. A refused answer STOPS the hand-over -- no op-0x13. */
+	ho_rig(1);
+	(void)step("rm-0f-member-req", RMT_O_CSID);
+	(void)step("rm-11-notif", RMT_O_CSID);
+	memcpy(body, fxbody(fixture("rm-12-root-ans")), sizeof(body));
+	body[34] = 0x00u;   /* not a grant */
+	ct_check(vms_dlm_rm_ho_answer(&g_rm, RMT_N_CSID, 0x82u, 0x01u, body,
+				      sizeof(body)) == 1,
+		 "  a non-grant answer to our record is consumed");
+	ct_check(g_f.n_sent == 1u && g_rm.ho_answers_refused == 1u &&
+		 g_ho.rehomes == 0u,
+		 "  *** nothing re-homed and NO op-0x13: telling the new master "
+		 "this node holds less than it does is the stale-handle crash "
+		 "(rd vms-3ac) ***");
+
+	/* 4. The engine will not re-home (the lock moved): stop too. */
+	ho_rig(1);
+	g_ho.rehome_ok = 0;
+	(void)step("rm-0f-member-req", RMT_O_CSID);
+	(void)step("rm-11-notif", RMT_O_CSID);
+	(void)vms_dlm_rm_ho_answer(&g_rm, RMT_N_CSID, 0x82u, 0x01u,
+				   fxbody(fixture("rm-12-root-ans")),
+				   VMS_CM_BODY_LEN);
+	ct_check(g_f.n_sent == 1u && g_rm.ho_answers_refused == 1u,
+		 "  an answer the engine cannot apply stops the hand-over");
+
+	/* 5. The new master LEAVES mid-hand-over: dropped, counted. */
+	ho_rig(1);
+	(void)step("rm-0f-member-req", RMT_O_CSID);
+	(void)step("rm-11-notif", RMT_O_CSID);
+	vms_dlm_rm_member_departed(&g_rm, RMT_N_CSID);
+	ct_check(g_rm.ho_departed == 1u &&
+		 vms_dlm_rm_ho_in_state(&g_rm, VMS_DLM_HO_ST_AWAIT) == 0u,
+		 "  the new master left: the hand-over is dropped");
+
+	/* 6. The send door refuses: stopped, never retried in a loop. */
+	ho_rig(1);
+	(void)step("rm-0f-member-req", RMT_O_CSID);
+	g_f.send_fails = 1;
+	(void)step("rm-11-notif", RMT_O_CSID);
+	ct_check(g_rm.ho_records_unsent == 1u &&
+		 vms_dlm_rm_ho_in_state(&g_rm, VMS_DLM_HO_ST_FREE) ==
+		 VMS_DLM_HO_TREES,
+		 "  a refused send stops the hand-over, counted");
+
+	/* 7. The holder doors UNBOUND: the op-0x11 is only counted. */
+	rig_reset();
+	(void)step("rm-0f-member-req", RMT_O_CSID);
+	(void)step("rm-11-notif", RMT_O_CSID);
+	ct_check(g_f.n_sent == 0u && g_rm.ho_unbound == 1u &&
+		 g_rm.notifications == 1u,
+		 "  a table without the holder doors sends nothing and says so");
+}
+
+static void test_holder_op1a_needs_an_armed_sender(void)
+{
+	printf("-- rd vms-33a: an op-0x1a to a HOLDER reaches the engine only "
+	       "from a system that armed a hand-over here\n");
+	ho_rig(1);
+	g_f.valblk_ok = 0;   /* this node is adopting nothing */
+	ct_check(step("ra7a-02-1a-valblk", RMT_O_CSID) == VMS_DLM_RM_REFUSED &&
+		 g_ho.valblks == 0u,
+		 "  before any op-0x0f: REFUSED, the holder door not asked");
+	(void)step("rm-0f-member-req", RMT_O_CSID);
+	ct_check(step("ra7a-02-1a-valblk", RMT_O_CSID) == VMS_DLM_RM_HANDLED &&
+		 g_ho.valblks == 1u && g_rm.ho_valblks_taken == 1u,
+		 "  after VAX1's op-0x0f armed it: HANDLED through the engine");
+	ct_check(step("ra7a-02-1a-valblk", RMT_N_CSID) == VMS_DLM_RM_REFUSED &&
+		 g_ho.valblks == 1u,
+		 "  from another member: REFUSED");
+	ct_check_eq_u32(g_f.n_staged, 1u,
+			"  and no op-0x1a is ever answered (only the 0x0f was)");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -1087,6 +1536,10 @@ int main(void)
 	test_not_mine_and_the_ack();
 	test_slots();
 	test_op1a_reaches_the_engine();
+	test_holder_reports_its_locks_root_first();
+	test_holder_with_nothing_still_ends();
+	test_holder_refusals();
+	test_holder_op1a_needs_an_armed_sender();
 
 	return ct_summary("test_dlm_remaster_arm");
 }

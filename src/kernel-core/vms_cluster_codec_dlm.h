@@ -2100,6 +2100,99 @@ vms_codec_status_t vms_dlm_rm_valblk_parse_body(const uint8_t *body,
 						struct vms_dlm_rm_valblk *out);
 
 /* ==========================================================================
+ * THE HOLDER'S HALF OF A REMASTER (rd vms-33a): the op-0x12 records and the
+ * op-0x13 this node SENDS when a real VMS node moves a tree it holds locks in.
+ *
+ * WHO SENDS, AND WHEN -- measured, tools/cluster/rec12_holder_census.py
+ * --selftest (the `holder` figures), over every capture in tests/lab/captures:
+ *
+ *   H1  every member a real old master sends an op-0x11 is first sent an
+ *       op-0x0f FOR THE SAME TREE (394 of 394), and that op-0x0f's body[28:32]
+ *       NAMES THE NEW MASTER: CSID-shaped (0x0001000n) in all 1,257 op-0x0f's
+ *       an old master sent; in all 17 captures with more than one new master
+ *       it takes exactly one value per new master and a different value for
+ *       each; and in the SDA-named RA8 arm it is VAX1's CSID 00010001, the
+ *       new master's. It is also the one cell the NEW MASTER's 82/15 answer
+ *       clears (rd vms-cab) -- the cell that names it.
+ *   H2  every op-0x11 recipient sends the new master an op-0x13, after the
+ *       op-0x11 (391 of 391 in the episodes that complete), INCLUDING the 15
+ *       that sent no record at all. So "who sends 0x13" is: whoever was sent
+ *       an op-0x11. (The new master's own wait set -- vms_dlm_rm_fsm.h --
+ *       is the same fact from the other end, rd vms-083.)
+ *   H3  in every episode the records can be attributed to (7 of 7), the
+ *       holder's records follow the op-0x11 and precede its op-0x13; and
+ *       2,991 of 3,522 real records go out with no earlier record of the same
+ *       holder still unanswered -- one at a time is the commonest real pacing,
+ *       and a SUB record cannot go earlier anyway: it carries its parent's
+ *       NEW-MASTER handle at body[40:44], which only that parent's 82/01
+ *       returns.
+ *   H4  a holder's op-0x13 carries body[28] = 0 (391 of 391); the old master's
+ *       carries 1 or 2 (841 of 841) -- the cell says which role sent it. Its
+ *       body[128:132] is the tree's directory hash (391 of 391 equal the
+ *       op-0x0e's). Every other cell past the identity is the sender's stale
+ *       buffer (the last 82/01 answer's grant record, kernel addresses), and
+ *       the vms-42de ruling's direction applies: this node sends zeros there.
+ * ========================================================================== */
+
+/*
+ * THE NEW MASTER an op-0x0f names (H1): body[28:32]. VMS_CODEC_E_CLASS for
+ * anything but a cat-0x02 op-0x0f; VMS_CODEC_E_RANGE for zero. The value is a
+ * NAME, never trusted: the caller must find it among the SELECTED members
+ * before it addresses a single frame at it.
+ */
+vms_codec_status_t vms_dlm_rm_0f_new_master(const uint8_t *body, uint32_t len,
+					    uint32_t *out_csid);
+
+/*
+ * BUILD one op-0x12 record from a lock this node holds (H3). `r` is the
+ * vms_dlm_rm_lock_rec the PARSER produces, filled by the caller from the LKB
+ * and RSB -- nothing in it may come from another frame. `hash_known` 0 leaves
+ * body[128:132] zero rather than mint a hash (Rule 8). `r->dlm_seq`,
+ * `r->flags` and `r->is_root` are IGNORED: the sequence is the connection
+ * manager's stamp, the flag cell is not named (written 0), and the root/sub
+ * form follows from the parent pair alone.
+ *
+ * Refuses (VMS_CODEC_E_INVAL): holder_lkid 0; a HALF parent pair (one of
+ * body[36:40]/[40:44] zero and the other not -- a zero pair is what a ROOT
+ * record means, so a sub-record whose parent's new handle has not come back
+ * must not be built at all); a name length outside 1..31; a mode above EX.
+ */
+vms_codec_status_t vms_dlm_rm_lock_rec_build(const struct vms_dlm_rm_lock_rec *r,
+					     int hash_known, uint8_t *frame,
+					     uint32_t cap, uint32_t *written);
+
+/*
+ * BUILD the HOLDER's op-0x13 (H4): the tree's identity and name, its directory
+ * hash when this executive holds one, body[28] = 0, and zeros everywhere else.
+ * A notification: body[4:8] stays zero (the connection manager opens no
+ * transaction on it -- vms_dlm_body_is_notification).
+ */
+vms_codec_status_t vms_dlm_rm_end_build(const struct vms_dlm_res_ident *id,
+					int hash_known, uint8_t *frame,
+					uint32_t cap, uint32_t *written);
+
+/*
+ * THE NEW MASTER'S 82/01 ANSWER TO ONE OF OUR op-0x12 RECORDS -- a PEER-RECEIVE
+ * decoder (fuzzed, tests/cluster/host/fuzz_codec_dlm.c). It reads only the
+ * cells rule 2 above names: body[20:24] the handle the new master minted,
+ * body[24:28] our own handle echoed (the correlation), body[34] the outcome.
+ * `granted` is body[34] == 0xfa (3,521 of 3,521 real answers) with a non-zero
+ * minted handle; nothing else in the answer is read. VMS_CODEC_E_CLASS for
+ * anything but a cat-0x82 op-0x01.
+ */
+struct vms_dlm_rm_lock_grant {
+	uint32_t master_lkid;    /* body[20:24], minted by the NEW master */
+	uint32_t holder_lkid;    /* body[24:28], ours, echoed             */
+	uint8_t  outcome;        /* body[34]                              */
+	uint8_t  granted;        /* outcome 0xfa AND master_lkid != 0     */
+	uint8_t  pad[2];
+};
+
+vms_codec_status_t vms_dlm_rm_lock_grant_parse_body(const uint8_t *body,
+						    uint32_t len,
+						    struct vms_dlm_rm_lock_grant *out);
+
+/* ==========================================================================
  * DLKSRCH -- distributed deadlock search (H11, rd vms-d55 / vms-ec75).
  *
  * OVMX-DERIVED (Rule 8): the do-it-like-VMS successor to the retired-scsd

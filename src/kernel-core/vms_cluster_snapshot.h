@@ -628,13 +628,29 @@ struct vms_dlm_scs_view {
 	 * that grant NOT happening, attributable to this executive.
 	 */
 	uint32_t proxy_compat_blocks;
+
+	/*
+	 * LOCK-TREE REMASTERING, THE HOLDER'S SIDE (rd vms-33a,
+	 * vms_dlm_rm_fsm.h's holder half): what this node told a real VAX new
+	 * master about the locks it holds in a tree that moved. A fire proves
+	 * the hand-over with the first three -- records sent, each answered
+	 * and re-homed, then one end-of-records per tree -- and `rm_ho_stopped`
+	 * is every way one did NOT complete (no new master named, a named one
+	 * not addressable, no slot, a send refused, an answer not a grant),
+	 * counted rather than left as a silent hang.
+	 */
+	uint32_t rm_ho_records_sent;    /* op-0x12 records really on the wire   */
+	uint32_t rm_ho_answers;         /* ...answered 82/01 and re-homed       */
+	uint32_t rm_ho_ends_sent;       /* op-0x13s really on the wire          */
+	uint32_t rm_ho_stopped;         /* hand-overs that could not complete   */
 };
-/* 184 since rd vms-ed5 added the ten remaster counters (144 before): a
+/* 236 since rd vms-33a added the four holder counters (220 before; 184 since
+ * rd vms-ed5 added the ten remaster counters, 144 before that): a
  * fixed-width ABI struct
  * whose size is PINNED, so a field added here fails to build until both
  * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
  * and this number are updated together. */
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 220,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 236,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

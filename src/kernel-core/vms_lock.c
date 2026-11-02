@@ -240,6 +240,11 @@ static uint32_t         vms_dlm_adopt_promotions_n;
 /* op-0x1a value blocks that really landed on a resource (rd vms-26e). Guarded
  * by vms_dlm_adopt_lock_g. */
 static uint32_t         vms_dlm_adopt_valblks_n;
+/* THE HOLDER'S HALF (rd vms-33a): this node's proxies a remaster re-homed onto
+ * the new master's handle, and the op-0x1a blocks that landed on a resource
+ * while this node was a holder. Guarded by vms_dlm_adopt_lock_g. */
+static uint32_t         vms_dlm_handover_rehomed_n;
+static uint32_t         vms_dlm_handover_valblks_n;
 /*
  * How many PROXY POSTS were refused because THIS node masters the resource
  * (rd vms-3ac -- the INVLOCKID bugcheck a real V7.3 node took on a release
@@ -305,6 +310,8 @@ int vms_lock_init(void)
     vms_dlm_adopt_reports_n = 0u;
     vms_dlm_adopt_promotions_n = 0u;
     vms_dlm_adopt_valblks_n = 0u;
+    vms_dlm_handover_rehomed_n = 0u;
+    vms_dlm_handover_valblks_n = 0u;
     /* ...and the posts refused because this node masters the resource
      * (rd vms-3ac): also "since this executive started". */
     vms_dlm_proxy_self_mastered_n = 0u;
@@ -5123,6 +5130,294 @@ uint32_t vms_lock_dlm_adopt_valblks_applied(void)
 
     exec_lock(&vms_dlm_adopt_lock_g);
     n = vms_dlm_adopt_valblks_n;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return n;
+}
+
+/* ==========================================================================
+ * THE HOLDER'S HALF OF A REMASTER (rd vms-33a; contract vms_dlm_adopt.h)
+ *
+ * This node holds locks in a tree a real VMS node is moving to a third node.
+ * Three reads and one write, every one of them against the PROXY LKBs this
+ * node already holds -- nothing here creates a lock or a resource:
+ *
+ *   _next    which of my locks in that tree still names the OLD master and is
+ *            ready to be described (its parent, if it has one, already names
+ *            the NEW master), and everything its op-0x12 record carries;
+ *   _rehome  the new master answered: replace that proxy's master and handle;
+ *   _valblk  the old master's op-0x1a: the resource's block and sequence,
+ *            which the record relays.
+ *
+ * LOCK ORDER is the snapshot discipline dlm_adopt_scan_own_proxy uses: the
+ * scan holds the hash lock and ONE resource lock at a time and returns only a
+ * lock id; every later read re-finds the LKB by id and takes only its own
+ * resource's lock. No two resource locks are ever held together.
+ * ========================================================================== */
+
+/* The root resource of `t`, or NULL. Caller holds vms_res_hash_lock. */
+static struct vms_lock_resource *dlm_handover_root_locked(
+    const struct vms_dlm_adopt_tree *t)
+{
+    struct res_key k = dlm_adopt_root_key(t);
+
+    return resource_find_key(&k);
+}
+
+/*
+ * The SMALLEST lock id above `after` of a proxy of ours in the tree that is
+ * GRANTED, names `old_csid` as its master and carries that master's handle --
+ * a snapshot (lock id and parent id), for the reason the header gives.
+ */
+static int dlm_handover_scan(const struct vms_dlm_adopt_tree *t,
+                             uint32_t after, uint32_t *lkid,
+                             uint32_t *parent_id)
+{
+    struct vms_lock_resource *root, *res;
+    int bkt, found = 0;
+    uint32_t best = 0u, best_parent = 0u;
+
+    exec_lock(&vms_res_hash_lock);
+    root = dlm_handover_root_locked(t);
+    if (root != NULL) {
+        exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+            struct vms_lock_entry *l;
+
+            if (!dlm_res_within_tree(res, root))
+                continue;
+            exec_lock(&res->lock);
+            exec_list_for_each_entry(l, &res->proxies, res_proxy) {
+                if (l->waiting || l->master_csid != t->old_master_csid ||
+                    l->master_lkid == VMS_DLM_LKID_UNSET ||
+                    l->lkid <= after)
+                    continue;
+                if (!found || l->lkid < best) {
+                    best = l->lkid;
+                    best_parent = l->parent_id;
+                    found = 1;
+                }
+            }
+            exec_unlock(&res->lock);
+        }
+    }
+    exec_unlock(&vms_res_hash_lock);
+    if (found) {
+        *lkid = best;
+        *parent_id = best_parent;
+    }
+    return found;
+}
+
+/*
+ * The NEW master's handle for a parent lock of ours: 1 and `*handle` when the
+ * parent is a proxy that already names `new_csid` with a handle that master
+ * minted; 0 otherwise (not yet re-homed, gone, or not a proxy).
+ */
+static int dlm_handover_parent_handle(uint32_t parent_id, uint32_t new_csid,
+                                      uint32_t *handle)
+{
+    struct vms_lock_entry *p = lock_find_by_id(parent_id);
+    struct vms_lock_resource *pres;
+    int ok = 0;
+
+    if (p == NULL)
+        return 0;
+    pres = p->resource;
+    if (pres != NULL) {
+        exec_lock(&pres->lock);
+        if (p->proxy && p->master_csid == new_csid &&
+            p->master_lkid != VMS_DLM_LKID_UNSET) {
+            *handle = p->master_lkid;
+            ok = 1;
+        }
+        exec_unlock(&pres->lock);
+    }
+    lock_put(p);
+    return ok;
+}
+
+/* Fill `out` off the LKB and RSB, re-checking under the resource lock what the
+ * scan read without it. 1 when the lock is still what the scan saw. */
+static int dlm_handover_fill(uint32_t lkid, const struct vms_dlm_adopt_tree *t,
+                             uint32_t parent_handle,
+                             struct vms_dlm_handover_rec *out)
+{
+    struct vms_lock_entry *lock = dlm_proxy_find(lkid);
+    struct vms_lock_resource *res;
+    int ok = 0;
+
+    if (lock == NULL)
+        return 0;
+    res = lock->resource;
+    if (res != NULL) {
+        exec_lock(&res->lock);
+        if (lock->proxy && !lock->waiting &&
+            lock->master_csid == t->old_master_csid &&
+            lock->master_lkid != VMS_DLM_LKID_UNSET &&
+            res->name_len >= 1u && res->name_len <= sizeof(out->resnam)) {
+            memset(out, 0, sizeof(*out));
+            memcpy(out->resnam, res->name, res->name_len);
+            out->resnam_len = res->name_len;
+            out->res_group = res->res_group;
+            out->res_mode = res->res_mode;
+            out->holder_lkid = lock->lkid;
+            /* The id of the process whose lock this is, off its PCB -- the
+             * same read dlm_proxy_fill_post makes for body[20:24]. */
+            out->holder_epid = (lock->proc != NULL) ? lock->proc->vms_pid : 0u;
+            out->parent_lkid = lock->parent_id;
+            out->parent_master_lkid = lock->parent_id != 0u ? parent_handle : 0u;
+            out->granted_mode = (uint8_t)lock->granted_mode;
+            out->requested_mode = (uint8_t)lock->requested_mode;
+            /* THE BLOCK RIDES ONLY WITH ITS SEQUENCE. On a holder the
+             * resource's sequence is written by nothing but the old master's
+             * op-0x1a (vms_lock_dlm_handover_valblk), so a non-zero one IS a
+             * block the old master told this node; every real record that
+             * carries a block carries a non-zero sequence (2,702 of 2,702). */
+            if (res->valblk_seq != 0u) {
+                memcpy(out->valblk, res->valblk, LCK_VALBLK_SIZE);
+                out->valblk_seq = res->valblk_seq;
+                out->valblk_present = 1u;
+            }
+            if (res->hash_known) {
+                out->dir_hash = res->dir_hash;
+                out->hash_known = 1u;
+            }
+            ok = 1;
+        }
+        exec_unlock(&res->lock);
+    }
+    lock_put(lock);
+    return ok;
+}
+
+int vms_lock_dlm_handover_next(const struct vms_dlm_adopt_tree *t,
+                               uint32_t new_master_csid,
+                               struct vms_dlm_handover_rec *out)
+{
+    uint32_t after = 0u, lkid = 0u, parent_id = 0u;
+
+    if (t == NULL || out == NULL || !dlm_adopt_tree_ok(t) ||
+        new_master_csid == 0u || new_master_csid == t->old_master_csid)
+        return 0;
+    while (dlm_handover_scan(t, after, &lkid, &parent_id)) {
+        uint32_t handle = 0u;
+
+        after = lkid;
+        /* PARENT BEFORE CHILD: a sub-record carries its parent's NEW-master
+         * handle, which exists only once that parent's 82/01 came back. */
+        if (parent_id != 0u &&
+            !dlm_handover_parent_handle(parent_id, new_master_csid, &handle))
+            continue;
+        if (dlm_handover_fill(lkid, t, handle, out))
+            return 1;
+    }
+    memset(out, 0, sizeof(*out));
+    return 0;
+}
+
+uint32_t vms_lock_dlm_handover_rehome(uint32_t holder_lkid,
+                                      uint32_t old_master_csid,
+                                      uint32_t new_master_csid,
+                                      uint32_t new_master_lkid)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    uint32_t parent_handle = 0u, st = SS__IVLOCKID;
+    int have_parent = 0;
+
+    if (holder_lkid == VMS_DLM_LKID_UNSET || old_master_csid == 0u ||
+        new_master_csid == 0u || old_master_csid == new_master_csid ||
+        new_master_lkid == VMS_DLM_LKID_UNSET)
+        return SS__BADPARAM;
+    lock = dlm_proxy_find(holder_lkid);
+    if (lock == NULL)
+        return SS__IVLOCKID;
+    /* The parent's NEW handle, read before this lock's resource lock is
+     * taken (no two resource locks at once). */
+    if (lock->parent_id != 0u)
+        have_parent = dlm_handover_parent_handle(lock->parent_id,
+                                                 new_master_csid,
+                                                 &parent_handle);
+    res = lock->resource;
+    if (res != NULL) {
+        exec_lock(&res->lock);
+        if (lock->proxy && lock->master_csid == old_master_csid) {
+            lock->master_csid = new_master_csid;
+            lock->master_lkid = new_master_lkid;
+            /* The pair this lock's own later requests name its parent by
+             * (rd vms-b67a) must name the parent's NEW handle too. */
+            if (have_parent)
+                lock->parent_master_lkid = parent_handle;
+            if (res->master_csid == old_master_csid)
+                res->master_csid = new_master_csid;
+            st = SS__NORMAL;
+        }
+        exec_unlock(&res->lock);
+    }
+    lock_put(lock);
+    if (st == SS__NORMAL) {
+        exec_lock(&vms_dlm_adopt_lock_g);
+        vms_dlm_handover_rehomed_n++;
+        exec_unlock(&vms_dlm_adopt_lock_g);
+    }
+    return st;
+}
+
+uint32_t vms_lock_dlm_handover_valblk(const struct vms_dlm_adopt_valblk *v)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    uint32_t st = SS__IVLOCKID;
+    int wrote = 0;
+
+    if (v == NULL || v->from_csid == 0u ||
+        v->holder_lkid == VMS_DLM_LKID_UNSET ||
+        v->master_lkid == VMS_DLM_LKID_UNSET)
+        return SS__BADPARAM;
+    lock = dlm_proxy_find(v->holder_lkid);
+    if (lock == NULL)
+        return SS__IVLOCKID;
+    res = lock->resource;
+    if (res != NULL) {
+        exec_lock(&res->lock);
+        /* The sender must be this lock's master, naming the handle its own
+         * grant gave it: only the system that holds the resource's block
+         * may tell this node what it is. */
+        if (lock->proxy && lock->master_csid == v->from_csid &&
+            lock->master_lkid == v->master_lkid) {
+            if (v->valblk_present) {
+                memcpy(res->valblk, v->valblk, LCK_VALBLK_SIZE);
+                res->valblk_seq = v->valblk_seq;
+                wrote = 1;
+            }
+            st = SS__NORMAL;
+        }
+        exec_unlock(&res->lock);
+    }
+    lock_put(lock);
+    if (wrote) {
+        exec_lock(&vms_dlm_adopt_lock_g);
+        vms_dlm_handover_valblks_n++;
+        exec_unlock(&vms_dlm_adopt_lock_g);
+    }
+    return st;
+}
+
+uint32_t vms_lock_dlm_handover_rehomed(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    n = vms_dlm_handover_rehomed_n;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return n;
+}
+
+uint32_t vms_lock_dlm_handover_valblks(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    n = vms_dlm_handover_valblks_n;
     exec_unlock(&vms_dlm_adopt_lock_g);
     return n;
 }

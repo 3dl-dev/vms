@@ -76,6 +76,8 @@
 #include "vms_dlm_dir.h"
 #include "vms_dlm_ldwv.h"
 #include "vms_dlm_scs_fsm.h"
+#include "vms_dlm_rm_fsm.h"   /* rd vms-33a: the holder's half, end to end */
+#include "vms_dlm_adopt.h"
 #include "vms_cluster.h"
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
@@ -1674,6 +1676,271 @@ static void a_departure_never_touches_a_local_lock(void)
 	mixed_down();
 }
 
+
+/* ==========================================================================
+ * 9. rd vms-33a -- THIS NODE HOLDS A LOCK IN A VAX-MASTERED TREE, AND THE VAX
+ *    MOVES THE TREE TO A THIRD NODE.
+ *
+ * End to end over everything that links on the host: the OVMX $ENQ goes to the
+ * VAX master through the shipping requester FSM and is granted by the VAX's
+ * reply (section 2's path); the old master's op-0x0f and op-0x11 drive the
+ * SHIPPING remaster table, whose holder doors are bound -- as vms_dlm_scs.c
+ * binds them -- to the SHIPPING engine's vms_lock_dlm_handover_* entry points;
+ * the new master's 82/01 is built by the SHIPPING new-master builder
+ * (vms_dlm_rm_lock_answer_build, the one OVMX itself answers with); and the
+ * release that follows goes through the shipping FSM again.
+ *
+ * The two old-master frames are RA5's REAL op-0x0f and op-0x11 (rm5-remaster
+ * .pcap, fixtures rm-0f-member-req / rm-11-notif) with exactly three cells
+ * substituted, and said here: the resource identity and name at body[44:48+L]
+ * and body[128:132] (this file's tree, not RMT5), and body[28:32] of the
+ * op-0x0f, which names the new master -- this file's VAX2 CSID instead of
+ * RA5's 00010002 (they happen to be the same number; it is written anyway).
+ * ========================================================================== */
+static struct vms_dlm_rm g_rm;
+static struct vms_dlm_rm_ops g_rm_ops;
+static struct {
+	uint32_t n;
+	vms_csid_t dst[8];
+	uint8_t body[8][VMS_CM_BODY_LEN];
+} g_rm_out;
+
+static uint32_t rmo_members(void *ctx, uint32_t *csids, uint32_t max)
+{
+	(void)ctx;
+	return cnxman_club_other_member_csids(&g.cl.club, (vms_csid_t *)csids,
+					      max);
+}
+static int rmo_open(void *c, const struct vms_dlm_adopt_tree *t)
+{ (void)c; return vms_lock_dlm_adopt_open(t) == SS__NORMAL; }
+static int rmo_lock(void *c, const struct vms_dlm_adopt_tree *t,
+		    const struct vms_dlm_adopt_lock_rec *r,
+		    struct vms_dlm_adopt_lock_result *o)
+{ (void)c; return vms_lock_dlm_adopt_lock(t, r, o) == SS__NORMAL; }
+static int rmo_end(void *c, const struct vms_dlm_adopt_tree *t, uint32_t *n)
+{ (void)c; return vms_lock_dlm_adopt_end(t, n) == SS__NORMAL; }
+static int rmo_abort(void *c, const struct vms_dlm_adopt_tree *t, uint32_t *n)
+{ (void)c; return vms_lock_dlm_adopt_abort(t, n) == SS__NORMAL; }
+static int rmo_tree_of(void *c, uint32_t l, struct vms_dlm_adopt_tree *o)
+{ (void)c; return vms_lock_dlm_adopt_tree_of_lkid(l, o); }
+static void rmo_reported(void *c) { (void)c; vms_lock_dlm_adopt_reported(); }
+static int rmo_mastered(void *c, const char *n, uint32_t l, uint16_t g_,
+			uint8_t m)
+{ (void)c; return vms_lock_dlm_name_mastered_here(n, l, g_, m); }
+static int rmo_hash(void *c, const char *n, uint32_t l, uint16_t g_, uint8_t m,
+		    uint32_t *o)
+{ (void)c; return vms_lock_dlm_dir_hash_of(n, l, g_, m, o); }
+static int rmo_dir_node(void *c, const char *n, uint32_t l, uint16_t g_,
+			uint8_t m, uint32_t *o)
+{ (void)c; (void)n; (void)l; (void)g_; (void)m; (void)o; return 0; }
+static int rmo_stage(void *c, const uint8_t *b, uint32_t l)
+{ (void)c; (void)b; (void)l; return 0; }
+static int rmo_send(void *c, uint32_t dst, const uint8_t *b, uint32_t l)
+{
+	(void)c;
+	if (g_rm_out.n >= 8u || l != VMS_CM_BODY_LEN)
+		return -1;
+	g_rm_out.dst[g_rm_out.n] = (vms_csid_t)dst;
+	memcpy(g_rm_out.body[g_rm_out.n], b, VMS_CM_BODY_LEN);
+	g_rm_out.n++;
+	return 0;
+}
+static uint8_t rmo_fill(void *c) { (void)c; return 0u; }
+static int rmo_valblk(void *c, const struct vms_dlm_adopt_valblk *v)
+{ (void)c; return vms_lock_dlm_adopt_valblk(v) == SS__NORMAL; }
+static void rmo_log(void *c, const char *m) { (void)c; (void)m; }
+/* The three holder doors, exactly as vms_dlm_scs.c binds them. */
+static int rmo_ho_next(void *c, const struct vms_dlm_adopt_tree *t,
+		       uint32_t n, struct vms_dlm_handover_rec *o)
+{ (void)c; return vms_lock_dlm_handover_next(t, n, o); }
+static int rmo_ho_rehome(void *c, uint32_t l, uint32_t o, uint32_t n,
+			 uint32_t h)
+{ (void)c; return vms_lock_dlm_handover_rehome(l, o, n, h) == SS__NORMAL; }
+static int rmo_ho_valblk(void *c, const struct vms_dlm_adopt_valblk *v)
+{ (void)c; return vms_lock_dlm_handover_valblk(v) == SS__NORMAL; }
+
+static void rm_table_up(void)
+{
+	memset(&g_rm_ops, 0, sizeof(g_rm_ops));
+	memset(&g_rm_out, 0, sizeof(g_rm_out));
+	g_rm_ops.ctx = &g;
+	g_rm_ops.other_members = rmo_members;
+	g_rm_ops.adopt_open = rmo_open;
+	g_rm_ops.adopt_lock = rmo_lock;
+	g_rm_ops.adopt_end = rmo_end;
+	g_rm_ops.adopt_abort = rmo_abort;
+	g_rm_ops.adopt_tree_of_lkid = rmo_tree_of;
+	g_rm_ops.adopt_reported = rmo_reported;
+	g_rm_ops.name_mastered_here = rmo_mastered;
+	g_rm_ops.dir_hash = rmo_hash;
+	g_rm_ops.dir_node = rmo_dir_node;
+	g_rm_ops.stage_reply = rmo_stage;
+	g_rm_ops.send = rmo_send;
+	g_rm_ops.residue_fill = rmo_fill;
+	g_rm_ops.adopt_valblk = rmo_valblk;
+	g_rm_ops.log = rmo_log;
+	g_rm_ops.ho_next = rmo_ho_next;
+	g_rm_ops.ho_rehome = rmo_ho_rehome;
+	g_rm_ops.ho_valblk = rmo_ho_valblk;
+	vms_dlm_rm_init(&g_rm, &g_rm_ops);
+}
+
+/* RA5's real old-master frame, re-addressed to this file's tree (above). */
+static int old_master_frame(const char *spec, const char *name, uint32_t hash,
+			    uint8_t *body)
+{
+	struct vms_fixture fx;
+	char path[600];
+	char err[VMS_FIXTURE_ERRLEN] = "";
+	uint32_t n = (uint32_t)strlen(name), i;
+
+	snprintf(path, sizeof(path), "%s/%s.spec", OVMX_FIXTURE_DIR, spec);
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, &fx, err,
+			     sizeof(err)) != 0 ||
+	    fx.origin != VMS_FIXTURE_ORIGIN_CAPTURE) {
+		printf("       reason: %s\n", err);
+		return -1;
+	}
+	memcpy(body, fx.bytes + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
+	body[44] = (uint8_t)OVMX_RES_GROUP;
+	body[45] = (uint8_t)(OVMX_RES_GROUP >> 8);
+	body[46] = (uint8_t)OVMX_RES_MODE;
+	body[47] = (uint8_t)n;
+	for (i = 0u; i < n; i++)
+		body[48 + i] = (uint8_t)name[i];
+	for (i = 0u; i < 4u; i++)
+		body[128 + i] = (uint8_t)(hash >> (8u * i));
+	return 0;
+}
+
+static uint32_t rd32le(const uint8_t *b)
+{
+	return (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+	       ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+
+static void the_holder_hands_its_lock_to_the_new_master(void)
+{
+	const char *N = "EVAC$WORKLOAD";
+	const uint32_t VAX_HASH = 0x5a3c0117u;
+	const uint32_t VAX_HANDLE = 0x7fff0001u;   /* the old master's grant */
+	const uint32_t NEW_HANDLE = 0x020004ccu;   /* what VAX2 mints        */
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint8_t body[VMS_CM_BODY_LEN];
+	struct vms_dlm_rm_lock_answer a;
+	struct vms_resmaster_args rm;
+	struct vms_csb *csb;
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	uint32_t lkid = 0, i;
+	const uint8_t *rec, *end;
+
+	printf("-- rd vms-33a: a VAX moves a tree this node holds a lock in to "
+	       "a THIRD node -- end to end --\n");
+	mixed_up(1u, 0u);
+	csb = cnxman_club_alloc_csb(&g.cl.club, (vms_scs_sysid_t)CSID_VAX2, 1);
+	ct_check(csb != NULL, "the new master, a second real VAX, is a member");
+	if (csb == NULL)
+		return;
+	cnxman_csb_set_csid(csb, CSID_VAX2);
+	cnxman_csb_set_lockdirwt(csb, 0u);
+	cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED |
+					     VMS_CSB_F_MEMBER));
+	(void)cnxman_ldwv_rebuild(&g.cl.club, &g.cnx_ops);
+	proc_init(&app);
+	rm_table_up();
+
+	/* The VAX masters the tree; this node's $ENQ goes there and is
+	 * granted (section 2's path, unchanged). */
+	ct_check(vax_build_enq(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
+			       (uint8_t)LCK_K_EXMODE, N, VAX_HASH) == 0 &&
+		 vax_lookup(frame, CSID_VAX, &master) ==
+		 VMS_DLM_DIR_ANSWER_YOU, "the VAX masters the tree");
+	ct_check(do_enq(&app, N, LCK_K_CRMODE, 0u, &lkid) == SS__NORMAL &&
+		 g.last_dst == CSID_VAX && vax_grants(lkid, VAX_HANDLE,
+						      (uint8_t)LCK_K_CRMODE) == 0 &&
+		 lki_granted_mode(&app, lkid) == LCK_K_CRMODE,
+		 "this node's $ENQ at CR goes to the VAX and is granted");
+
+	/* The old master's op-0x0f (naming VAX2) and op-0x11. */
+	ct_check(old_master_frame("rm-0f-member-req", N, VAX_HASH, body) == 0,
+		 "RA5's real op-0x0f loads");
+	for (i = 0u; i < 4u; i++)
+		body[28 + i] = (uint8_t)(CSID_VAX2 >> (8u * i));
+	ct_check(vms_dlm_rm_step(&g_rm, CSID_VAX, 0x02u, 0x0fu, body,
+				 VMS_CM_BODY_LEN) == VMS_DLM_RM_HANDLED &&
+		 g_rm.ho_armed == 1u && g_rm_out.n == 0u,
+		 "the op-0x0f arms the hand-over; nothing is sent yet");
+	ct_check(old_master_frame("rm-11-notif", N, VAX_HASH, body) == 0,
+		 "RA5's real op-0x11 loads");
+	ct_check(vms_dlm_rm_step(&g_rm, CSID_VAX, 0x02u, 0x11u, body,
+				 VMS_CM_BODY_LEN) == VMS_DLM_RM_HANDLED,
+		 "the op-0x11 is handled");
+	ct_check_eq_u32(g_rm_out.n, 1u, "ONE record leaves this node");
+	ct_check_eq_u32((uint32_t)g_rm_out.dst[0], CSID_VAX2,
+			"*** addressed to the NEW master ***");
+	rec = g_rm_out.body[0];
+	ct_check(rec[8] == 0x02 && rec[9] == 0x12, "  an op-0x12");
+	ct_check_eq_u32(rd32le(rec + 24), lkid,
+			"  body[24:28]: THIS node's own lock id, off the LKB");
+	ct_check_eq_u32(rd32le(rec + 20), app.vms_pid,
+			"  body[20:24]: the owning process's PID, off its PCB");
+	ct_check(rec[30] == LCK_K_CRMODE && rec[31] == LCK_K_CRMODE,
+		 "  body[30:32]: held at CR, off the LKB");
+	ct_check(rd32le(rec + 36) == 0u && rd32le(rec + 40) == 0u,
+		 "  a ROOT record: no parent pair");
+	ct_check(rec[47] == (uint8_t)strlen(N) &&
+		 memcmp(rec + 48, N, strlen(N)) == 0 &&
+		 rd32le(rec + 128) == VAX_HASH,
+		 "  the resource's name, and the hash the VAX put on the wire");
+	ct_check(vms_dlm_shape_fit_for_any_member(rec, VMS_CM_BODY_LEN) &&
+		 !vms_dlm_body_is_notification(rec, VMS_CM_BODY_LEN),
+		 "  the connection manager would send it to a real VAX, "
+		 "opening a transaction for the answer");
+
+	/* VAX2's 82/01, built by the SHIPPING new-master builder. */
+	memset(&a, 0, sizeof(a));
+	a.master_lkid = NEW_HANDLE;
+	ct_check(vms_dlm_rm_lock_answer_build(rec, VMS_CM_BODY_LEN, &a, frame,
+					      sizeof(frame), NULL) ==
+		 VMS_CODEC_OK, "VAX2's answer is built");
+	ct_check(vms_dlm_rm_ho_answer(&g_rm, CSID_VAX, 0x82u, 0x01u,
+				      body_of(frame), VMS_CM_BODY_LEN) == 0,
+		 "the same answer from the OLD master is not this record's");
+	ct_check(vms_dlm_rm_ho_answer(&g_rm, CSID_VAX2, 0x82u, 0x01u,
+				      body_of(frame), VMS_CM_BODY_LEN) == 1,
+		 "VAX2's answer is consumed");
+	ct_check_eq_u32(g_rm_out.n, 2u, "and the end-of-records follows");
+	end = g_rm_out.body[1];
+	ct_check(end[9] == 0x13 && end[28] == 0u && rd32le(end + 4) == 0u &&
+		 g_rm_out.dst[1] == CSID_VAX2 &&
+		 rd32le(end + 128) == VAX_HASH,
+		 "*** an op-0x13 to VAX2: the holder role, no transaction, the "
+		 "tree's hash -- what the new master waits for (rule W2) ***");
+	ct_check(vms_dlm_body_is_notification(end, VMS_CM_BODY_LEN),
+		 "  and the CM sends it as a notification");
+
+	/* The lock is VAX2's now -- on this node. */
+	read_resmaster(N, &rm);
+	ct_check_eq_u32(rm.master_csid, CSID_VAX2,
+			"*** the resource's master here is now VAX2 ***");
+	ct_check_eq_u32(lki_granted_mode(&app, lkid), LCK_K_CRMODE,
+			"  and the lock is still held at CR");
+
+	/* rd vms-3ac: the release goes to VAX2, naming VAX2's handle. */
+	g.n_sent = 0u;
+	ct_check(do_deq(&app, lkid) == SS__NORMAL, "the local $DEQ succeeds");
+	(void)dlm_req_fsm_tick(&g.fsm);
+	ct_check(g.n_sent >= 1u && g.last_dst == CSID_VAX2 &&
+		 g.last[VMS_OFB_DLM_OP] == VMS_DLM_WIREOP_DEQ,
+		 "*** the release is sent to the NEW master ***");
+	ct_check_eq_u32(rd32le(g.last + 20), NEW_HANDLE,
+			"*** naming the handle VAX2 minted -- never the old "
+			"master's, which bugchecked a real VAX with INVLOCKID "
+			"(rd vms-3ac) ***");
+	mixed_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_mixed_master (rd vms-025 / vms-db2a / vms-c27: "
@@ -1698,6 +1965,8 @@ int main(void)
 
 	the_vax_departing_releases_its_locks();
 	a_departure_never_touches_a_local_lock();
+
+	the_holder_hands_its_lock_to_the_new_master();
 
 	return ct_summary("test_dlm_mixed_master");
 }

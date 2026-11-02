@@ -843,6 +843,25 @@ vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len
 #define VMS_OFB_DLM_RM_REC_VALBLK VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_REC_VALBLK)
 #define VMS_OFB_DLM_RM_REC_VALSEQ VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RM_REC_VALSEQ)
 
+/*
+ * The op-0x12 record's fixed cells. Each is CONSTANT across every real record
+ * in the corpus that the builder writes it for, and nothing else is written as
+ * a constant (tools/cluster/rec12_holder_census.py --selftest pins the list):
+ *   body[110]      0x01 on 3,516 of 3,521
+ *   body[112:128]  00000000 ffffffff 00000000 ffffffff on 3,521 of 3,521
+ * body[32:36] is NOT one of them: a real record carries XX 00 01 00 there (XX
+ * a per-episode number, 0x16 in RA5 and 0x17 in RA8, not named) except that
+ * 432 of 792 ROOT records carry all four zero. Zero is that real form, written
+ * for every record; on a SUB record it is a `deviation` row.
+ */
+#define VMS_OFF_DLM_RM_REC_C110    182u /* body[110]                        */
+#define VMS_DLM_RM_REC_C110_VAL    0x01u
+#define VMS_OFF_DLM_RM_REC_TAIL    184u /* body[112:128]                    */
+#define VMS_DLM_RM_REC_TAIL_LEN    16u
+/* body[28] of the holder's op-0x13: 0 in 391 of 391 (H4). */
+#define VMS_OFF_DLM_RM_END_ROLE    100u
+#define VMS_DLM_RM_END_ROLE_HOLDER 0x00u
+
 /* ------------------------------------------------------------------ *
  * The directory role (rd vms-8219) -- see the header for the grounding.
  * ------------------------------------------------------------------ */
@@ -895,6 +914,38 @@ int vms_dlm_shape_fit_for_any_member(const uint8_t *body, uint32_t len)
 
 		return vms_wire_view_ok(&v) && nlen != 0u &&
 		       nlen < VMS_DLM_NAME_MAX && z == 0u;
+	}
+	/*
+	 * THE HOLDER'S RECORDS AND ITS END-OF-RECORDS (rd vms-33a). They face a
+	 * real VMS member BY DEFINITION: the new master a real old master chose
+	 * is waiting for them, and an unsent op-0x13 hangs it (rule W2).
+	 *
+	 * Admitted on SHAPE: a record names a resource (a name length 1..31),
+	 * carries a non-zero handle of ours at body[24:28] (3,521 of 3,521
+	 * real ones) and a WHOLE parent pair or none (the census's root/sub
+	 * split: every ROOT record's body[36:44] is zero, every SUB record's is
+	 * not, and vms_dlm_rm_lock_rec_build refuses a half pair); the
+	 * end-of-records names a resource, carries zero at body[40:44] (1,232
+	 * of 1,232) and the HOLDER role byte at body[28] (391 of 391).
+	 */
+	if (op == VMS_DLM_WIREOP_RM_12) {
+		uint8_t nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+		uint32_t mine = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+		uint32_t ph = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_H);
+		uint32_t pm = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_M);
+
+		return vms_wire_view_ok(&v) && nlen != 0u &&
+		       nlen < VMS_DLM_NAME_MAX &&
+		       mine != VMS_DLM_LKID_UNSET && ((ph == 0u) == (pm == 0u));
+	}
+	if (op == VMS_DLM_WIREOP_RM_13) {
+		uint8_t nlen = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+		uint32_t z = vms_wire_get_le32(&v, VMS_OFB_DLM_RM_PARENT_M);
+		uint8_t role = vms_wire_get_u8(&v, VMS_OFB_DLM_GRANT_FLAG);
+
+		return vms_wire_view_ok(&v) && nlen != 0u &&
+		       nlen < VMS_DLM_NAME_MAX && z == 0u &&
+		       role == VMS_DLM_RM_END_ROLE_HOLDER;
 	}
 	/*
 	 * THE DEFERRED GRANT THIS MASTER ORIGINATES (rd vms-a4d7). It faces a
@@ -974,6 +1025,13 @@ int vms_dlm_body_is_notification(const uint8_t *body, uint32_t len)
 		return vms_wire_view_ok(&v) &&
 		       flag == VMS_DLM_GRANT_NOTIFY_FLAG_VAL;
 	}
+	/*
+	 * THE END-OF-RECORDS (rd vms-33a): 1,232 of 1,232 real op-0x13s carry
+	 * body[4:8] = 0 and none is answered. Admitted only when it names a
+	 * resource, as every real one does.
+	 */
+	if (op == VMS_DLM_WIREOP_RM_13)
+		return nlen != 0u;
 	return op == VMS_DLM_WIREOP_DIR_REMOVE && nlen != 0u;
 }
 
@@ -2421,5 +2479,172 @@ vms_codec_status_t vms_dlm_rm_valblk_parse_body(const uint8_t *body,
 		any = 1u;
 	r.valblk_present = any;
 	*out = r;
+	return VMS_CODEC_OK;
+}
+
+/* ==========================================================================
+ * THE HOLDER'S HALF (rd vms-33a) -- see the header for H1..H4.
+ * ========================================================================== */
+
+
+static void dlm_rm_blank(vms_wire_buf_t *w)
+{
+	uint32_t i;
+
+	for (i = 0u; i < VMS_CM_BODY_LEN; i++)
+		vms_wire_put_u8(w, VMS_OFF_SYSAP_BODY + i, 0u);
+}
+
+/* The identity span every remaster frame carries: group, mode, the counted
+ * name, and the directory hash when one is held. */
+static void dlm_rm_put_ident(vms_wire_buf_t *w,
+			     const struct vms_dlm_res_ident *id, int hash_known)
+{
+	uint32_t i;
+
+	vms_wire_put_le16(w, VMS_OFF_DLM_RES_GROUP, id->group);
+	vms_wire_put_u8(w, VMS_OFF_DLM_RES_MODE, id->mode);
+	vms_wire_put_u8(w, VMS_OFF_DLM_NAME_LEN, id->name_len);
+	for (i = 0u; i < id->name_len; i++)
+		vms_wire_put_u8(w, VMS_OFF_DLM_NAME + i, id->name[i]);
+	if (hash_known)
+		vms_wire_put_le32(w, VMS_OFF_DLM_DIR_HASH, id->hash);
+}
+
+vms_codec_status_t vms_dlm_rm_0f_new_master(const uint8_t *body, uint32_t len,
+					    uint32_t *out_csid)
+{
+	vms_wire_view_t v;
+	uint8_t cat, op;
+	uint32_t csid;
+
+	if (body == (const uint8_t *)0 || out_csid == (uint32_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	csid = vms_wire_get_le32(&v, VMS_OFB_DLM_DIR_MASTER);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_RM_0F)
+		return VMS_CODEC_E_CLASS;
+	if (csid == 0u)
+		return VMS_CODEC_E_RANGE;
+	*out_csid = csid;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_rm_lock_rec_build(const struct vms_dlm_rm_lock_rec *r,
+					     int hash_known, uint8_t *frame,
+					     uint32_t cap, uint32_t *written)
+{
+	vms_wire_buf_t w;
+	uint32_t i;
+
+	if (r == (const struct vms_dlm_rm_lock_rec *)0 || frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (r->holder_lkid == VMS_DLM_LKID_UNSET)
+		return VMS_CODEC_E_INVAL;
+	/* A half pair is neither a root record nor a sub record. */
+	if ((r->parent_holder_lkid == 0u) != (r->parent_master_lkid == 0u))
+		return VMS_CODEC_E_INVAL;
+	if (r->id.name_len == 0u || r->id.name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_INVAL;
+	if (r->granted_mode > (uint8_t)VMS_LCK_EX ||
+	    r->requested_mode > (uint8_t)VMS_LCK_EX)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	dlm_rm_blank(&w);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_RM_12);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, r->holder_epid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, r->holder_lkid);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, r->granted_mode);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE + 1u, r->requested_mode);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_RM_PARENT_H, r->parent_holder_lkid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_RM_PARENT_M, r->parent_master_lkid);
+	dlm_rm_put_ident(&w, &r->id, hash_known);
+	/* The holder's copy of the resource's block and its sequence, or twenty
+	 * zeros: the parser's own rule, so a record this builds and a record a
+	 * real holder sends are read the same way by the new master. */
+	if (r->valblk_present) {
+		for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+			vms_wire_put_u8(&w, VMS_OFF_DLM_RM_REC_VALBLK + i,
+					r->valblk[i]);
+		vms_wire_put_le32(&w, VMS_OFF_DLM_RM_REC_VALSEQ,
+				  r->valblk_seq);
+	}
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RM_REC_C110, VMS_DLM_RM_REC_C110_VAL);
+	for (i = 0u; i < VMS_DLM_RM_REC_TAIL_LEN; i++)
+		vms_wire_put_u8(&w, VMS_OFF_DLM_RM_REC_TAIL + i,
+				((i / 4u) & 1u) ? 0xffu : 0x00u);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_rm_end_build(const struct vms_dlm_res_ident *id,
+					int hash_known, uint8_t *frame,
+					uint32_t cap, uint32_t *written)
+{
+	vms_wire_buf_t w;
+
+	if (id == (const struct vms_dlm_res_ident *)0 || frame == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (id->name_len == 0u || id->name_len >= VMS_DLM_NAME_MAX)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	dlm_rm_blank(&w);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_RM_13);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_RM_END_ROLE, VMS_DLM_RM_END_ROLE_HOLDER);
+	dlm_rm_put_ident(&w, id, hash_known);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_rm_lock_grant_parse_body(const uint8_t *body,
+						    uint32_t len,
+						    struct vms_dlm_rm_lock_grant *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_rm_lock_grant g;
+	uint8_t cat, op;
+
+	if (body == (const uint8_t *)0 ||
+	    out == (struct vms_dlm_rm_lock_grant *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != vms_wire_response_category(VMS_DLM_CAT_REQUEST) ||
+	    op != VMS_DLM_WIREOP_ENQ)
+		return VMS_CODEC_E_CLASS;
+	g.master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
+	g.holder_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+	g.outcome = vms_wire_get_u8(&v, VMS_OFB_DLM_RESULT_STAMP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	g.granted = (uint8_t)((g.outcome == VMS_DLM_REPLY_GRANTED &&
+			       g.master_lkid != VMS_DLM_LKID_UNSET) ? 1u : 0u);
+	g.pad[0] = 0u;
+	g.pad[1] = 0u;
+	*out = g;
 	return VMS_CODEC_OK;
 }

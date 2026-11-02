@@ -136,3 +136,13 @@ stopped by `^E`. This sharpens the separation:
 - H1 predicts release **5**, because VAX3's own weight is 1.
 
 P8 is unchanged: every VAX3 record follows release 5, and each is `closed` and `held`.
+
+## Addendum 2, registered 2026-11-02 11:30Z, before arm 2 fires
+
+The 0/1/1 holders did not stay on VAX1. SDA shows DEPX, DEPY and DEPZ each mastered on VAX3,
+with VAX1's locks held as process copies (CSID 00010007). A departing VAX1 would therefore leave
+no tree to rebuild. A conversational SET appears to persist: VAX1 came back at 0 after its arm-3
+conversational boot. So VAX1 is rebooted conversationally with `SET LOCKDIRWT 1`, which makes
+arm 2 **1/1/1**, the RA1b weights, in this pod. Holders: VAX1 `RMH 110WDEPQ`; VAX3
+`RMH 111-DEPQ`. VAX1 is removed by `^E`. P8 is unchanged: every VAX3 record follows release 5.
+Set against arm 3b (0/1/0, fault removal, release 6), the only difference is the weights.

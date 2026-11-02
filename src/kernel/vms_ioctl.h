@@ -550,6 +550,17 @@ struct vms_getlki_args {
                                  * (vms-b71). 0 when the lock has no resource.
                                  * Was a reserved pad; same size, no ABI
                                  * change. */
+    /*
+     * LKI$_PID (rd vms-6f2) -- the VMS PID of the process on THIS node that
+     * owns the lock, read off the LKB's owning PCB. holder_local is 1 exactly
+     * when such a process exists: the lock was taken by a local process
+     * (req_csid == 0). A master copy this node holds FOR a remote node's
+     * process (req_csid != 0) is owned by a process the executive cannot name
+     * -- its LKB's proc is the delivering SCS daemon, not the holder -- so
+     * holder_local is 0 and holder_pid 0, never the daemon's PID.
+     */
+    uint32_t holder_pid;
+    uint32_t holder_local;
 };
 
 /*

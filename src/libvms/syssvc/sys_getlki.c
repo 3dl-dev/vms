@@ -8,7 +8,7 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * OVMX-PARTIAL: sys$getlki (vms-b71) -- exec: every
- *     item getlki_impl answers (LKI$_LOCKID/RESNAM/GRANTCOUNT/PARENT/STATE) comes
+ *     item getlki_impl answers (LKI$_LOCKID/RESNAM/GRANTCOUNT/PARENT/STATE/PID) comes
  *     from the kernel lock manager's real lock+resource state
  *     (vms_kif_getlki_parent -> VMS_IOCTL_GETLKI -> vms_ioctl_getlki,
  *     kernel-core/vms_lock.c), including GRANTCOUNT's resource->granted walk. The
@@ -40,13 +40,17 @@
  * answer from REAL lock state (INV-6: no fabricated item answers an
  * unsupported code's caller would otherwise read as success).
  *
- * LKI$_PID is deliberately NOT in this set: the kernel's GETLKI ioctl
- * reports the HOLDER'S OWN process only for a lock this node itself holds
- * (proc is NULL for a proxy LKB on the master side holding a lock FOR a
- * remote node, FC-P4.4) and the public $GETLKI contract does not document a
- * "no local holder" answer distinct from a real PID 0 -- so until that is
- * resolved, declining it with SS$_BADPARAM is the honest answer rather than
- * reporting 0 as if it were a genuine holder PID.
+ * LKI$_PID (rd vms-6f2) is in the set: the executive reads the owning
+ * process's PID off the lock block (vms_ioctl_getlki's holder_pid). It was
+ * once refused here outright, which made $GETLKI reject any list naming it --
+ * RMHOLD's six-item read-back, among others. The one case the executive
+ * cannot answer, a master copy this node holds FOR a remote node's process,
+ * is refused per lock in getlki_impl (see there), never answered with a
+ * made-up PID.
+ *
+ * Any other code fails the whole call with SS$_BADPARAM, as VMS does: the
+ * OpenVMS System Services Reference Manual's $GETLKI "Condition Values
+ * Returned" lists "SS$_BADPARAM  You specified an invalid item code."
  */
 static int lki_item_defined(uint32_t code)
 {
@@ -56,6 +60,7 @@ static int lki_item_defined(uint32_t code)
     case LKI$_LOCKID:
     case LKI$_RESNAM:
     case LKI$_GRANTCOUNT:
+    case LKI$_PID:
         return 1;
     default:
         return 0;
@@ -147,6 +152,24 @@ static uint32_t getlki_impl(const uint32_t *lkidadr,
     if (!(status & 1))
         return status;
 
+    /* LKI$_PID (rd vms-6f2): the owning process's PID as the executive reads
+     * it off the lock block. Asked only when an item wants it. A lock with no
+     * local owner (a master copy held for a remote node's process) has a PID
+     * the executive does not hold; rather than invent one (or report 0 as if
+     * it were a real PID), the request is refused as an item this executive
+     * cannot answer for THIS lock, before any item is written. */
+    uint32_t holder_pid = 0, holder_local = 0;
+    for (const struct item_list_3 *it = itmlst; it->buflen || it->item_code; it++) {
+        if (it->item_code == LKI$_PID) {
+            status = vms_kif_getlki_holder(*lkidadr, &holder_pid, &holder_local);
+            if (!(status & 1))
+                return status;
+            if (!holder_local)
+                return SS$_BADPARAM;
+            break;
+        }
+    }
+
     /* The name as the resource block counts it (vms_kif_getlki_resnam): the
      * C-string copy above stops at the first NUL. Asked only when an item
      * wants it. */
@@ -180,6 +203,9 @@ static uint32_t getlki_impl(const uint32_t *lkidadr,
                 break;
             case LKI$_STATE:
                 lki_put_state(item, requested_mode, granted_mode);
+                break;
+            case LKI$_PID:
+                lki_put_long(item, holder_pid);
                 break;
         }
     }

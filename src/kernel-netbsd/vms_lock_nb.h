@@ -172,6 +172,13 @@ struct vms_getlki_args {
 	uint32_t grant_count;       /* return: LKI$_GRANTCOUNT, the resource's
 	                             * granted-queue length (vms-b71). Was a
 	                             * reserved pad; same size, no ABI change. */
+	uint32_t holder_pid;        /* return: LKI$_PID, the owning local
+	                             * process's VMS PID (rd vms-6f2); 0 when
+	                             * holder_local is 0. Mirror of src/kernel/
+	                             * vms_ioctl.h. */
+	uint32_t holder_local;      /* return: 1 = a process on this node owns
+	                             * the lock; 0 = a master copy held for a
+	                             * remote node's process. */
 };
 
 struct vms_resmaster_args {
@@ -883,8 +890,9 @@ _Static_assert(sizeof(struct vms_enq_args) == 112,
                "vms_enq_args changed size -- VMS_IOCTL_ENQ/CONVERT ABI break");
 _Static_assert(sizeof(struct vms_deq_args) == 28,
                "vms_deq_args changed size -- VMS_IOCTL_DEQ ABI break");
-/* 72 -> 76 with rd vms-326's `resnam_len` ($GETLKI's LKI$_RESNAM is counted). */
-_Static_assert(sizeof(struct vms_getlki_args) == 76,
+/* 72 -> 76 with rd vms-326's `resnam_len` ($GETLKI's LKI$_RESNAM is counted);
+ * 76 -> 84 with rd vms-6f2's holder_pid/holder_local (LKI$_PID). */
+_Static_assert(sizeof(struct vms_getlki_args) == 84,
                "vms_getlki_args changed size -- VMS_IOCTL_GETLKI ABI break");
 _Static_assert(sizeof(struct vms_resmaster_args) == 64,
                "vms_resmaster_args changed size -- VMS_IOCTL_GET_RESMASTER ABI break");

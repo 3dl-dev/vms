@@ -7777,6 +7777,16 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
     args.requested_mode = lock->waiting ? lock->requested_mode : lock->granted_mode;
     args.parent_id = lock->parent_id; /* the lock's PARENT lkid (vms-0dd), 0 if root */
 
+    /* LKI$_PID (rd vms-6f2): the owning process's PID, from the LKB's own
+     * PCB -- but only for a lock a process on THIS node took. A master copy
+     * held for a remote holder (req_csid != 0) carries the delivering SCS
+     * daemon in ->proc, which is not the owner, so it reports no local
+     * holder rather than the daemon's PID. */
+    if (lock->req_csid == 0 && lock->proc) {
+        args.holder_pid = lock->proc->vms_pid;
+        args.holder_local = 1;
+    }
+
     if (lock->resource) {
         struct vms_lock_resource *res = lock->resource;
         struct vms_lock_entry *granted;

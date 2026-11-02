@@ -204,7 +204,7 @@ static uint32_t dap_rms(uint16_t stscode, uint64_t stv, uint32_t fallback)
 struct rr_attr {
     int have;
     uint8_t org, rfm, rat, fsz;
-    uint16_t mrs, lrl, ffb;
+    uint16_t mrs, lrl, ffb, deq;
     uint32_t hbk, ebk;
 };
 
@@ -218,6 +218,7 @@ static void attr_take(struct rr_attr *a, const struct dnet_dap_msg *m)
     a->fsz = (mn & (1u << DNET_DAP_ATT_FSZ)) ? m->u.attr.fsz : 2;
     a->mrs = (mn & (1u << DNET_DAP_ATT_MRS)) ? m->u.attr.mrs : 0;
     a->lrl = (mn & (1u << DNET_DAP_ATT_LRL)) ? m->u.attr.lrl : 0;
+    a->deq = (mn & (1u << DNET_DAP_ATT_DEQ)) ? m->u.attr.deq : 0;
     a->ffb = (mn & (1u << DNET_DAP_ATT_FFB)) ? m->u.attr.ffb : 0;
     a->hbk = (mn & (1u << DNET_DAP_ATT_HBK)) && m->u.attr.hbk <= 0xffffffffu
              ? (uint32_t)m->u.attr.hbk : 0;
@@ -752,6 +753,233 @@ void rms_remote_search_end(void *nam)
     for (int i = 0; i < RR_MAXSTATE; i++)
         if (g_st[i].used && g_st[i].nam == nam && g_st[i].kind == RR_SEARCH)
             st_free(&g_st[i]);
+}
+
+
+/* ---- DIRECTORY/FULL: one DIRECTORY LIST with the attributes ---------------- */
+
+/* DECdts UTC (100-ns ticks since 15-OCT-1582) to VMS time (since 17-NOV-1858):
+ * the difference between the two bases, and the FAL's TDF (minutes east of UTC)
+ * added to give the local time a VMS system keeps. */
+#define RR_DTS_TO_VMS 0x135886ac7960000ull
+static int vms_local_time(uint64_t utc, int16_t tdf, uint8_t out[8])
+{
+    if (utc < RR_DTS_TO_VMS) return 0;
+    int64_t t = (int64_t)(utc - RR_DTS_TO_VMS) + (int64_t)tdf * 60 * 10000000ll;
+    if (t <= 0) return 0;
+    for (int i = 0; i < 8; i++) out[i] = (uint8_t)((uint64_t)t >> (8 * i));
+    return 1;
+}
+
+/* "[000200,000201]" -> group 0200, member 0201 (octal), when numeric. */
+static int owner_uic(const char *s, uint16_t *g, uint16_t *m)
+{
+    if (*s++ != '[') return 0;
+    unsigned long a = 0, b = 0;
+    int na = 0, nb = 0;
+    for (; *s >= '0' && *s <= '7'; s++, na++) a = a * 8 + (unsigned)(*s - '0');
+    if (*s++ != ',') return 0;
+    for (; *s >= '0' && *s <= '7'; s++, nb++) b = b * 8 + (unsigned)(*s - '0');
+    if (*s != ']' || !na || !nb || a > 0xffff || b > 0xffff) return 0;
+    *g = (uint16_t)a; *m = (uint16_t)b;
+    return 1;
+}
+
+void rms_remote_full_free(struct rms_remote_full *f)
+{
+    if (!f) return;
+    for (size_t i = 0; i < f->n; i++) free(f->e[i].name);
+    free(f->e);
+    memset(f, 0, sizeof *f);
+}
+
+struct fl {
+    struct rms_remote_full *out;
+    char vol[DNET_DAP_MAX_SPEC + 1], dir[DNET_DAP_MAX_SPEC + 1], file[DNET_DAP_MAX_SPEC + 1];
+    int have_file, oom;
+    size_t cap;
+    struct rms_remote_fent cur;
+    struct rr_attr attr;
+    int rvn;
+    const char *disp;
+};
+
+static void fl_commit(struct fl *d)
+{
+    struct rms_remote_full *o = d->out;
+    if (!d->have_file) return;
+    d->have_file = 0;
+    if (o->n >= RMS_REMOTE_MAXFILES) return;                 /* the bound */
+    if (o->n == d->cap) {
+        size_t nc = d->cap ? d->cap * 2 : 16;
+        struct rms_remote_fent *g = realloc(o->e, nc * sizeof *g);
+        if (!g) { d->oom = 1; return; }
+        o->e = g; d->cap = nc;
+    }
+    size_t l = strlen(d->disp) + strlen(d->vol) + strlen(d->dir) + strlen(d->file) + 1;
+    char *nm = malloc(l);
+    if (!nm) { d->oom = 1; return; }
+    snprintf(nm, l, "%s%s%s%s", d->disp, d->vol, d->dir, d->file);
+    struct rms_remote_fent *e = &o->e[o->n++];
+    *e = d->cur;
+    e->name = nm;
+    if (d->attr.have) {
+        e->have_attr = 1;
+        e->fa.org = d->attr.org;
+        e->fa.rfm = d->attr.rfm;
+        e->fa.rat = d->attr.rat;
+        e->fa.mrs = d->attr.mrs;
+        e->fa.lrl = d->attr.lrl;
+        e->fa.vfcsize = d->attr.rfm == DNET_DAP_RFM_VFC ? d->attr.fsz : 0;
+        e->fa.hiblk = d->attr.hbk;
+        e->fa.efblk = d->attr.ebk;
+        e->fa.ffbyte = d->attr.ffb;
+        e->fa.defext = d->attr.deq;
+    }
+    e->fa.revision = (uint16_t)d->rvn;
+    memset(&d->cur, 0, sizeof d->cur);
+    memset(&d->attr, 0, sizeof d->attr);
+    d->rvn = 0;
+}
+
+static void fl_name(struct fl *d, unsigned type, const char *spec)
+{
+    size_t n = strnlen(spec, DNET_DAP_MAX_SPEC);
+    char *to = NULL;
+    switch (type) {
+    case DNET_DAP_NT_VOLUME:    fl_commit(d); to = d->vol; break;
+    case DNET_DAP_NT_DIRECTORY: fl_commit(d); to = d->dir; break;
+    case DNET_DAP_NT_FILENAME:  fl_commit(d); to = d->file; d->have_file = 1; break;
+    default: return;
+    }
+    memcpy(to, spec, n);
+    to[n] = '\0';
+}
+
+uint32_t rms_remote_dirlist_full(const char *spec, struct rms_remote_full *out)
+{
+    if (!spec || !out) return RMS$_SYN;
+    memset(out, 0, sizeof *out);
+    out->end_sts = RMS$_NMF;
+    struct rr_state st;
+    memset(&st, 0, sizeof st);
+    if (spec_split(spec, strlen(spec), &st.sp) != 0) { memset(&st, 0, sizeof st); return RMS$_SYN; }
+    char disp[RR_NODE + 2 * RR_FLD + 16];
+    st.displen = spec_display(&st.sp, disp, sizeof disp);
+    snprintf(out->end_what, sizeof out->end_what, "%s%s", disp, st.sp.file);
+
+    uint32_t lst;
+    struct rr_link k;
+    if (link_open(&st.sp, &k, &lst) < 0) {
+        out->end_sts = RMS_REMOTE_FND;
+        out->end_stv = lst;
+        memset(&st, 0, sizeof st);
+        return RMS$_NORMAL;
+    }
+    struct fl d;
+    memset(&d, 0, sizeof d);
+    d.out = out;
+    d.disp = disp;
+    struct dnet_dap_msg m;
+    memset(&m, 0, sizeof m);
+    m.op = DNET_DAP_ACCESS;
+    m.u.access.accfunc = DNET_DAP_ACC_DIRLIST;
+    snprintf(m.u.access.filespec, sizeof m.u.access.filespec, "%s", st.sp.file);
+    m.u.access.have_display = 1;
+    m.u.access.display = DNET_DAP_DSP_MAIN | DNET_DAP_DSP_SUMMARY | DNET_DAP_DSP_DATETIME |
+                         DNET_DAP_DSP_PROT | DNET_DAP_DSP_NAME;
+    uint16_t sc = 0; uint64_t sv = 0;
+    int ok = 0, broke = 0;
+    if (rr_send(&k, &m) < 0) broke = 1;
+    while (!broke && !ok) {
+        if (rr_recv(&k, &m) < 0) { broke = 1; break; }
+        switch (m.op) {
+        case DNET_DAP_NAME:
+            m.u.name.namespec[DNET_DAP_MAX_SPEC] = '\0';
+            fl_name(&d, (unsigned)m.u.name.nametype, m.u.name.namespec);
+            if (d.oom) broke = 1;
+            break;
+        case DNET_DAP_ATTRIBUTES:
+            if (d.have_file) attr_take(&d.attr, &m);
+            break;
+        case DNET_DAP_DATETIME:
+            if (!d.have_file) break;
+            if (m.u.datetime.menu & DNET_DAP_DAT_RVN) d.rvn = m.u.datetime.rvn;
+            if (m.u.datetime.have_cdt64)
+                d.cur.have_cre = vms_local_time(m.u.datetime.cdt64, m.u.datetime.cdt_tdf, d.cur.fa.credate);
+            if (m.u.datetime.have_rdt64)
+                d.cur.have_rev = vms_local_time(m.u.datetime.rdt64, m.u.datetime.rdt_tdf, d.cur.fa.revdate);
+            break;
+        case DNET_DAP_PROTECTION: {
+            if (!d.have_file) break;
+            uint64_t mn = m.u.prot.menu;
+            if (mn & DNET_DAP_PRM_OWNER) {
+                m.u.prot.owner[sizeof m.u.prot.owner - 1] = '\0';
+                snprintf(d.cur.owner, sizeof d.cur.owner, "%s", m.u.prot.owner);
+                d.cur.have_owner = 1;
+                if (owner_uic(d.cur.owner, &d.cur.fa.uic_group, &d.cur.fa.uic_member))
+                    snprintf(d.cur.owner, sizeof d.cur.owner, "[%o,%o]",
+                             (unsigned)d.cur.fa.uic_group, (unsigned)d.cur.fa.uic_member);
+            }
+            if ((mn & (DNET_DAP_PRM_SYS | DNET_DAP_PRM_OWN | DNET_DAP_PRM_GRP | DNET_DAP_PRM_WLD)) ==
+                (DNET_DAP_PRM_SYS | DNET_DAP_PRM_OWN | DNET_DAP_PRM_GRP | DNET_DAP_PRM_WLD)) {
+                d.cur.fa.fileprot = (uint16_t)((m.u.prot.psys & 0xf) | ((m.u.prot.pown & 0xf) << 4) |
+                                               ((m.u.prot.pgrp & 0xf) << 8) | ((m.u.prot.pwld & 0xf) << 12));
+                d.cur.have_prot = 1;
+            }
+            break; }
+        case DNET_DAP_ACKNOWLEDGE: case DNET_DAP_SUMMARY: case DNET_DAP_ALLOC:
+        case DNET_DAP_KEYDEF: case DNET_DAP_ACL: case DNET_DAP_MSG_UNKNOWN:
+            break;                                        /* an extension: bounded, skipped */
+        case DNET_DAP_ACCESS_COMPLETE:
+            if (m.u.complete.cmpfunc == DNET_DAP_CMP_RESPONSE) ok = 1;
+            else broke = 1;
+            break;
+        case DNET_DAP_STATUS: {
+            sc = m.u.status.stscode;
+            sv = m.u.status.have_stv ? m.u.status.stv : 0;
+            /* A STATUS after a file's NAME alone: the FAL named a file it
+             * will not describe (the VAX: PRV). The client skips it and the
+             * list goes on. A wildcard NAME ("NOSUCH.TXT;*") is the search
+             * that matched nothing, which ends it. */
+            if (d.have_file && !strpbrk(d.file, "*%")) {
+                d.cur.sts = dap_rms(sc, sv, SS$_ABORT);
+                d.cur.stv = sv <= 0xffffffffu ? (uint32_t)sv : 0;
+                fl_commit(&d);
+                struct dnet_dap_msg c;
+                memset(&c, 0, sizeof c);
+                c.op = DNET_DAP_CONTINUE;
+                c.u.cont.confunc = 2;                      /* skip this file */
+                if (rr_send(&k, &c) < 0) broke = 1;
+                sc = 0; sv = 0;
+                break;
+            }
+            broke = 1;
+            break; }
+        default:
+            broke = 1;
+            break;
+        }
+    }
+    link_close(&k);
+    if (ok) {
+        fl_commit(&d);
+        if (d.oom) out->end_sts = RMS$_DME;
+        memset(&st, 0, sizeof st);
+        return RMS$_NORMAL;
+    }
+    snprintf(out->end_what, sizeof out->end_what, "%s%s%s%s", disp, d.vol, d.dir,
+             d.have_file ? d.file : (d.vol[0] || d.dir[0] ? "" : st.sp.file));
+    if (d.oom) { out->end_sts = RMS$_DME; }
+    else if (sc && DNET_DAP_MIC(sc) == DNET_DAP_MIC_FNF && out->n == 0) {
+        out->end_sts = RMS$_FNF;
+        out->end_stv = sv <= 0xffffffffu ? (uint32_t)sv : 0;
+    } else {
+        out->end_sts = sc ? dap_rms(sc, sv, SS$_ABORT) : SS$_ABORT;
+        out->end_stv = sc ? (sv <= 0xffffffffu ? (uint32_t)sv : 0) : SS$_ABORT;
+    }
+    memset(&st, 0, sizeof st);
+    return RMS$_NORMAL;
 }
 
 /* ---- $OPEN / $CREATE --------------------------------------------------------- */

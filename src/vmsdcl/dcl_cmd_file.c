@@ -176,85 +176,11 @@ static int dir_format_vmsbintime(const uint8_t vt[8], char *buf, size_t bufsize)
     return 1;
 }
 
-/* Per-category access bits within a VMS protection nibble (set = DENIED) and
- * the nibble shifts. Kept as literals (matching src/libvms/include/
- * ovmx_fileprot.h) so no libvms header is pulled onto the DCL native-link
- * include path. */
-#define DIR_PROT_R 0x01
-#define DIR_PROT_W 0x02
-#define DIR_PROT_E 0x04
-#define DIR_PROT_D 0x08
-
-/*
- * dir_format_prot_full - Render a VMS protection word in the LONG form real
- * DIRECTORY/FULL prints: "System:RWED, Owner:RWED, Group:RE, World:".
- *
- * Same protection word (from st_mode via vmsfs_mode_to_protection) the
- * columnar /PROTECTION display decodes — only the presentation differs. A
- * clear bit means the access is ALLOWED (VMS convention).
- */
-/* DIRECTORY/FULL "Record format:" text for a FAT record format (vms-a44),
- * as OpenVMS VAX V7.3 prints it (vax73-dirfull-recfmt.txt):
- *   FIX  "Fixed length 20 byte records"
- *   VAR  "Variable length, maximum 0 bytes, longest 32 bytes"
- *   VFC  "VFC, 2 byte header, maximum 0 bytes, longest 32 bytes"
- *   STM / STMLF / STMCR  "Stream" / "Stream_LF" / "Stream_CR", maximum, longest
- *   UDF  "Undefined, maximum 0 bytes, longest 0 bytes" */
-static void dir_format_recfmt(uint8_t rfm, uint16_t mrs, uint16_t lrl, uint8_t fsz,
-                              char *out, size_t cap)
-{
-    const char *nm;
-    switch (rfm) {
-    case FAB$C_FIX:
-        snprintf(out, cap, "Fixed length %u byte records", (unsigned)mrs);
-        return;
-    case FAB$C_VFC:
-        snprintf(out, cap, "VFC, %u byte header, maximum %u bytes, longest %u bytes",
-                 (unsigned)fsz, (unsigned)mrs, (unsigned)lrl);
-        return;
-    case FAB$C_VAR:   nm = "Variable length"; break;
-    case FAB$C_STM:   nm = "Stream";          break;
-    case FAB$C_STMLF: nm = "Stream_LF";       break;
-    case FAB$C_STMCR: nm = "Stream_CR";       break;
-    default:          nm = "Undefined";       break;
-    }
-    snprintf(out, cap, "%s, maximum %u bytes, longest %u bytes", nm,
-             (unsigned)mrs, (unsigned)lrl);
-}
-
-/* "Record attributes:" text (vms-a44, same capture): the carriage-control
- * attribute (Fortran / Carriage return / Print file carriage control), then
- * ", Non-spanned" for BLK; "None" when neither is set. */
-static void dir_format_recattr(uint8_t rat, char *out, size_t cap)
-{
-    const char *cc = (rat & FAB$M_FTN) ? "Fortran carriage control"
-                   : (rat & FAB$M_CR)  ? "Carriage return carriage control"
-                   : (rat & FAB$M_PRN) ? "Print file carriage control" : NULL;
-    if (cc && (rat & FAB$M_BLK))      snprintf(out, cap, "%s, Non-spanned", cc);
-    else if (cc)                      snprintf(out, cap, "%s", cc);
-    else if (rat & FAB$M_BLK)         snprintf(out, cap, "Non-spanned");
-    else                              snprintf(out, cap, "None");
-}
-
-static void dir_format_prot_full(uint16_t prot, char *buf, size_t bufsize)
-{
-    static const char *cats[]  = { "System", "Owner", "Group", "World" };
-    static const int   shift[] = { 0, 4, 8, 12 };
-    size_t off = 0;
-    for (int i = 0; i < 4; i++) {
-        uint8_t bits = (uint8_t)((prot >> shift[i]) & 0x0F);
-        char acc[5]; int a = 0;
-        if (!(bits & DIR_PROT_R)) acc[a++] = 'R';
-        if (!(bits & DIR_PROT_W)) acc[a++] = 'W';
-        if (!(bits & DIR_PROT_E)) acc[a++] = 'E';
-        if (!(bits & DIR_PROT_D)) acc[a++] = 'D';
-        acc[a] = '\0';
-        int n = snprintf(buf + off, bufsize - off, "%s%s:%s",
-                         (i > 0) ? ", " : "", cats[i], acc);
-        if (n < 0 || (size_t)n >= bufsize - off) break;
-        off += (size_t)n;
-    }
-}
+/* The DIRECTORY/FULL record-format, record-attribute and protection texts are
+ * shared with the node:: path (dcl_remote_file.c): one formatter, one wording. */
+#define dir_format_recfmt    dcl_fmt_recfmt
+#define dir_format_recattr   dcl_fmt_recattr
+#define dir_format_prot_full dcl_fmt_prot_full
 
 /*
  * dcl_filename_component - Extract the raw NAME.TYPE;VERSION text a user
@@ -2271,7 +2197,15 @@ static int copy_spec_has_node(const char *s)
  */
 static int dcl_remote_verb(struct dcl_command *cmd, uint32_t (*verb)(const char *))
 {
-    if (cmd->qualifier_count > 0) {
+    /* DIRECTORY/FULL is served (RMS asks the FAL for each file's attributes
+     * with the listing); every other qualifier is refused honestly. */
+    if (verb == dcl_remote_directory && cmd->qualifier_count == 1 &&
+        strlen(cmd->qualifiers[0].name) >= 2 &&
+        strncasecmp("FULL", cmd->qualifiers[0].name, strlen(cmd->qualifiers[0].name)) == 0 &&
+        !cmd->qualifiers[0].negated &&
+        !cmd->qualifiers[0].value[0])
+        verb = dcl_remote_directory_full;
+    else if (cmd->qualifier_count > 0) {
         printf("%%SYSTEM-F-UNSUPPORTED, unsupported operation or function\n");
         return SS$_UNSUPPORTED;
     }

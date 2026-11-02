@@ -9,13 +9,17 @@
 # The form is the real VAX's for a refused connect (TYPE ... -RMS-E-FND then the
 # connect failure, tests/lab/captures/decnet-fal-verbs-20261008/vax1-console.txt;
 # DIRECTORY's %DIRECT-E-OPENIN, rd vms-c18 live VAX); here the connect failure is
-# the $ASSIGN _NET: one, and $STATUS is it with STS$M_INHIB_MSG.
+# the $ASSIGN _NET: one. $STATUS is what the live VAX V7.3 left after a refused
+# link (tests/lab/captures/vms-0a7-s1-20261102/events.log, L5a / L5b): DIRECTORY
+# the RMS status RMS$_FND, %X1001C02A, and TYPE its own %TYPE-W-SEARCHFAIL,
+# %X10951238 -- not the connect failure under them.
 #
 # EXPECT: contains:%DIRECT-E-OPENIN, error opening VAX1"SYSTEM password"::*.*;* as input
 # EXPECT: contains:%TYPE-W-SEARCHFAIL, error searching for VAX1"SYSTEM password"::LOGIN.COM;
 # EXPECT: contains:-RMS-E-FND, ACP file or directory lookup failed
 # EXPECT: contains:-SYSTEM-W-NOSUCHDEV, no such device available
-# EXPECT: contains:$STATUS == "%X10000908"
+# EXPECT: contains:$STATUS == "%X1001C02A"
+# EXPECT: contains:$STATUS == "%X10951238"
 # EXPECT_NOT: contains:$STATUS == "%X00000001"
 # EXPECT_NOT: contains:%DIRECT-W-NOFILES
 # EXPECT_NOT: contains:NETNOTAVAIL

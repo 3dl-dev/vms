@@ -293,7 +293,7 @@ exec_socket_set_rcvtimeo(exec_socket_t s, uint32_t timeout_ms)
 			ticks = 1;
 	}
 	solock(s->so);
-	s->so->so_rcv.sb_timo = ticks;
+	s->so->so_rcv.sb_timeo = ticks;
 	sounlock(s->so);
 	return 0;
 }

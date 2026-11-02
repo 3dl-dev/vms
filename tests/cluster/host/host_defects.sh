@@ -329,7 +329,9 @@ dlm-1b68-waiter-ended-at-departure
 dlm-1b68-waiter-not-described
 dlm-1b68-waiter-granted-before-settle
 dlm-1b68-survivor-never-ended
-dlm-1b68-survivor-block-dropped"
+dlm-1b68-survivor-block-dropped
+dlm-5d6-rebuild-runs-in-quorum-hang
+dlm-5d6-hold-lifted-in-quorum-hang"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3189,6 +3191,17 @@ EOF
 *** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
 VAX3's WAITING record is installed
 this node masters RMT1 now; nothing is sent
+  5d6: VAX3's 0xfa re-homes it, still waiting, nothing ended
+  5d6: VAX3's WAITING record is installed in the regain window
+  5d6: hung -- this node has not mastered RMT1 and its waiter is queued
+  5d6: the regain window makes this node RMT1's master
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+*** 5d6: our EX waiter is NOT granted before VAX3's record is in, though hung windows closed since the departure ***
+*** 5d6: quorum lost -- the queued PR -> EX conversion is NOT ended and nothing is sent ***
+*** 5d6: quorum lost at VAX1's departure -- the queued waiter is NOT ended (no SS$_UNSUPPORTED) ***
+*** 5d6: the hang's beats and the transition's end leave it queued -- no out-of-window stop ***
+*** 5d6: the regain window closes: our waiter, first in the queue, is GRANTED EX ***
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -3212,6 +3225,12 @@ EOF
 *** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
 VAX3's WAITING record is installed
 this node masters RMT1 now; nothing is sent
+  5d6: VAX3's 0xfa re-homes it, still waiting, nothing ended
+  5d6: VAX3's WAITING record is installed in the regain window
+  5d6: the regain window makes this node RMT1's master
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+*** 5d6: the regain window closes: our waiter, first in the queue, is GRANTED EX ***
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -3225,6 +3244,7 @@ EOF
         why)          echo "the promotion grants at once, before the other survivors' records are installed: a waiter can be granted over a lock a later record names.";;
         require_fail) hd_lines <<'EOF'
 *** our EX waiter is NOT granted before the survivors' records are in ***
+*** 5d6: our EX waiter is NOT granted before VAX3's record is in, though hung windows closed since the departure ***
 EOF
                       ;;
         esac;;
@@ -3239,6 +3259,42 @@ EOF
         require_fail) hd_lines <<'EOF'
   ...and so does one no rebuild can carry at all
 *** a survivor whose rebuild stopped ends SS$_UNSUPPORTED: no eternal wait ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-5d6-rebuild-runs-in-quorum-hang)
+        case "$_f" in
+        facility)     echo "while quorum is lost and no rebuild window is open the failover rebuild is not taken up, so a survivor's queued waiter/converter rides out the hang (vms_dlm_rm_rb_kick rb_quorum_hang, rd vms-5d6)";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "the kick ignores the hang: the departure takes the tree up outside any window, stops it, and ends the queued \$ENQWs SS\$_UNSUPPORTED with no op-0x08 sent -- the lab1b68 failure.";;
+        require_fail) hd_lines <<'EOF'
+*** 5d6: quorum lost at VAX1's departure -- the queued waiter is NOT ended (no SS$_UNSUPPORTED) ***
+  5d6: no tree is taken up while the hang lasts: nothing sent, nothing stopped
+*** 5d6: the hang's beats and the transition's end leave it queued -- no out-of-window stop ***
+  5d6: quorum regained; the regain transition's window sends the granted ROOT first
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
+  5d6: VAX3's 0xfa re-homes it, still waiting, nothing ended
+*** 5d6: quorum lost -- the queued PR -> EX conversion is NOT ended and nothing is sent ***
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+  5d6: hung -- this node has not mastered RMT1 and its waiter is queued
+*** 5d6: our EX waiter is NOT granted before VAX3's record is in, though hung windows closed since the departure ***
+  5d6: VAX3's WAITING record is installed in the regain window
+EOF
+                      ;;
+        esac;;
+
+    dlm-5d6-hold-lifted-in-quorum-hang)
+        case "$_f" in
+        facility)     echo "a rebuild window that closes while quorum is lost keeps the rebuild hold, so a waiter this node masters only in the regain window is decided at that window's close (vms_lock_dlm_rebuild_settle, rd vms-5d6)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_rebuild";;
+        isolation)    echo "isolated";;
+        why)          echo "a hung settle lifts the hold, so the regain window's promotion grants our waiter before the other survivors' records are installed.";;
+        require_fail) hd_lines <<'EOF'
+*** 5d6: our EX waiter is NOT granted before VAX3's record is in, though hung windows closed since the departure ***
 EOF
                       ;;
         esac;;
@@ -3314,6 +3370,8 @@ EOF
 *** EVERY NAMED CELL equals VAX3's real SUB record (PID, CW/CW, the parent pair, identity, tail) ***
 the ROOT goes to VAX2 carrying RMLVB-0123456789 at 1 (lab874f frame 5322)
 *** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -3405,6 +3463,12 @@ VAX2's 0xf9 (frame 23) is the answer
 release 6: one record out
 release 6: the ROOT goes
 the late 0xfa re-homes the root
+  5d6: VAX3's 0xfa re-homes it, still waiting, nothing ended
+  5d6: VAX3's WAITING record is installed in the regain window
+  5d6: quorum regained; the regain transition's window sends the granted ROOT first
+  5d6: the regain window makes this node RMT1's master
+*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] 00, [108] 04 ***
+*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, [108] 04 ***
 EOF
                       ;;
         esac;;
@@ -4575,6 +4639,12 @@ apply_edit() {
 
     dlm-1b68-survivor-never-ended)
         sed -i 's|^\tif (f->ops->rb_unsent != (uint32_t (\*)(void \*,$|\tif (0 \&\& f->ops->rb_unsent != (uint32_t (*)(void *, /* NEGCTL dlm-1b68-survivor-never-ended */|' "$_file";;
+
+    dlm-5d6-rebuild-runs-in-quorum-hang)
+        sed -i 's|^\tif (!f->rb_window_open \&\&$|\tif (0 \&\& !f->rb_window_open \&\& /* NEGCTL dlm-5d6-rebuild-runs-in-quorum-hang */|' "$_file";;
+
+    dlm-5d6-hold-lifted-in-quorum-hang)
+        sed -i 's|^    vms_dlm_rebuild_hold = hang ? 1 : 0;$|    vms_dlm_rebuild_hold = 0; (void)hang; /* NEGCTL dlm-5d6-hold-lifted-in-quorum-hang */|' "$_file";;
 
     dlm-1b68-survivor-block-dropped)
         sed -i 's|^\treturn r->settled \&\&$|\treturn 0 \&\& r->settled \&\& /* NEGCTL dlm-1b68-survivor-block-dropped */|' "$_file";;

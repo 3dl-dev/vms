@@ -374,6 +374,18 @@ struct vms_dlm_rm_ops {
 	 */
 	uint32_t (*rb_unsent)(void *ctx, const struct vms_dlm_adopt_tree *t);
 	void (*rb_settle)(void *ctx);
+	/*
+	 * rd vms-5d6, OPTIONAL. `rb_quorum_hang`: 1 while this node has lost
+	 * quorum and is blocking lock activity (the connection manager's own
+	 * predicate, cnxman_quorum_hang_active). While it answers 1 and no
+	 * rebuild window is open, the rebuild is NOT taken up at all: no tree
+	 * is started, stopped or ended, the departed masters stay recorded,
+	 * and every survivor stays queued -- the window of the transition
+	 * that regains quorum takes them up (real VMS, vms-0db arm B PB3/PB4:
+	 * the survivors' converting and waiting locks stayed queued through
+	 * the hang and ran once quorum returned).
+	 */
+	int (*rb_quorum_hang)(void *ctx);
 };
 
 /* ==========================================================================
@@ -671,6 +683,8 @@ struct vms_dlm_rm {
 	uint32_t rb_no_slot;         /* trees left waiting: every slot busy   */
 	uint32_t rb_waiters_ended;   /* survivors no record carried, ended    */
 				     /* SS$_UNSUPPORTED (rd vms-1b68)         */
+	uint32_t rb_quorum_waits;    /* kicks deferred: quorum lost, no       */
+				     /* window open (rd vms-5d6)              */
 	uint32_t rb_in_installed;    /* survivors' records installed + 0xfa   */
 	uint32_t rb_in_refused;      /* ...refused by the engine: unanswered  */
 };

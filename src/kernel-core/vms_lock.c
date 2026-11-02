@@ -8110,13 +8110,20 @@ uint32_t vms_lock_dlm_rebuild_settle(void)
 {
     struct vms_lock_resource *res;
     struct dlm_flips all, mine;
-    int bkt;
+    int bkt, hang;
 
     if (vms_dlm_rebuild_hold == 0)
         return 0u;
+    /* rd vms-5d6: a window that closes while quorum is LOST has not run the
+     * rebuild -- the rebuild table waits the hang out (vms_dlm_rm_fsm.h
+     * rb_quorum_hang) -- so the hold outlives it: a waiter this node is
+     * later promoted to master by is decided by the settle of the window
+     * that regains quorum, with every survivor's record in. Read before the
+     * resource hash lock, as the grant decision reads it outside res->lock. */
+    hang = quorum_hang_active();
     memset(&all, 0, sizeof(all));
     exec_lock(&vms_res_hash_lock);
-    vms_dlm_rebuild_hold = 0;
+    vms_dlm_rebuild_hold = hang ? 1 : 0;
     exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
         exec_lock(&res->lock);
         if (!exec_list_empty(&res->waiting)) {

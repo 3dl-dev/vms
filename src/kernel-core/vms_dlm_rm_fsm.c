@@ -1809,6 +1809,22 @@ void vms_dlm_rm_rb_kick(struct vms_dlm_rm *f)
 		}
 		return;
 	}
+	/*
+	 * rd vms-5d6: QUORUM IS LOST. The cluster blocks lock activity until
+	 * quorum is regained, and a rebuild is lock activity: outside a state
+	 * transition's rebuild window nothing is taken up -- no tree started,
+	 * none stopped, no survivor ended. The departed masters stay recorded
+	 * and their survivors stay queued; the window of the transition that
+	 * regains quorum re-sends them. (Inside an open window the records go
+	 * as always: real VMS sent its op-0x08s in the departure transition
+	 * that left it without quorum -- vms-0db arm B.)
+	 */
+	if (!f->rb_window_open &&
+	    f->ops->rb_quorum_hang != (int (*)(void *))0 &&
+	    f->ops->rb_quorum_hang(f->ops->ctx)) {
+		f->rb_quorum_waits++;
+		return;
+	}
 	if (!f->ops->rb_ready(f->ops->ctx))
 		return;                       /* no directory yet: wait      */
 	for (i = 0u; i < VMS_DLM_RB_DEPARTED; i++) {

@@ -2260,6 +2260,12 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 					from_valid);
 
 		if (drx != 0) {
+			/* rd vms-2fa: it may have been the last answer to one
+			 * of this node's own op-0x08 rebuild records, which
+			 * holds its step report (participant) or its release
+			 * (coordinator). Each is a no-op unless held. */
+			cnxman_barrier_rebuild_retry(&cn->barrier);
+			cnxman_coord_rebuild_retry(&cn->coord);
 			cnxman_glue_preload_proposed(cn);
 			cnxman_notify_membership_changes(cn, before);
 			return drx < 0 ? 1 : 0;

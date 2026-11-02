@@ -463,6 +463,10 @@ struct vms_lock_entry {
 	                                     * delivers the holder's AST, not a
 	                                     * default. Mirror of the Linux twin. */
 	uint8_t             valblk[LCK_VALBLK_SIZE];
+	uint32_t            valblk_seq;     /* on a proxy: the sequence of the
+	                                     * block the master last granted it
+	                                     * (rd vms-8159); 0 = none. Mirror of
+	                                     * the Linux twin. */
 	struct vms_lock_resource *resource;
 	struct vms_proc     *proc;
 	int                 waiting;        /* 1 if on the waiting list */

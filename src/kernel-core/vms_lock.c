@@ -245,6 +245,7 @@ static uint32_t         vms_dlm_adopt_valblks_n;
  * while this node was a holder. Guarded by vms_dlm_adopt_lock_g. */
 static uint32_t         vms_dlm_handover_rehomed_n;
 static uint32_t         vms_dlm_handover_valblks_n;
+static uint32_t         vms_dlm_rebuild_installed_n;   /* rd vms-874f */
 /*
  * How many PROXY POSTS were refused because THIS node masters the resource
  * (rd vms-3ac -- the INVLOCKID bugcheck a real V7.3 node took on a release
@@ -312,6 +313,7 @@ int vms_lock_init(void)
     vms_dlm_adopt_valblks_n = 0u;
     vms_dlm_handover_rehomed_n = 0u;
     vms_dlm_handover_valblks_n = 0u;
+    vms_dlm_rebuild_installed_n = 0u;
     /* ...and the posts refused because this node masters the resource
      * (rd vms-3ac): also "since this executive started". */
     vms_dlm_proxy_self_mastered_n = 0u;
@@ -3696,6 +3698,16 @@ static uint32_t convert_proxy_request(struct vms_proc *proc,
     lock->grant_state = 0;
     dst = lock->master_csid ? lock->master_csid : res->master_csid;
     dlm_proxy_fill_post(lock, res, VMS_DLM_POST_CONVERT, dst, &post);
+    /*
+     * A value-block WRITE replaces the block the master last granted with
+     * this caller's, so the sequence that came with the old one no longer
+     * describes what the LKB holds (rd vms-8159). What sequence the write
+     * advances to is rd vms-85c1's; until then this node holds NONE for the
+     * block, and a failover record carries the absent form rather than a
+     * stale sequence beside new bytes.
+     */
+    if (post.write_valblk)
+        lock->valblk_seq = 0u;
     exec_unlock(&res->lock);
 
     st = dlm_proxy_post(&post);
@@ -3703,6 +3715,10 @@ static uint32_t convert_proxy_request(struct vms_proc *proc,
         exec_lock(&res->lock);
         lock->requested_mode = held_mode;   /* still held at the old mode */
         lock->waiting = 0;
+        /* The caller's bytes were copied over the granted block above and
+         * no grant will replace them: no sequence describes them. */
+        if (a->flags & LCK_M_VALBLK)
+            lock->valblk_seq = 0u;
         exec_unlock(&res->lock);
         return st;
     }
@@ -3827,6 +3843,7 @@ static void dlm_proxy_stops_being_one_locked(struct vms_lock_entry *lock)
     lock->master_lkid = VMS_DLM_LKID_UNSET; /* no remote handle exists */
     lock->req_csid    = 0u;                 /* ...and it is nobody else's */
     lock->req_lkid    = VMS_DLM_LKID_UNSET;
+    lock->valblk_seq  = 0u;   /* a master's pair describes a PROXY (rd vms-8159) */
 }
 
 /*
@@ -3901,8 +3918,13 @@ uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t resnam_len,
  * handlers; declared here because the doors are part of the FC-P4.6 seam
  * block and belong beside the other three. */
 static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req);
+/* What a grant says about the SEQUENCE of the block it carries (rd vms-8159):
+ * the master's own (SET), nothing because it carried no block and the proxy's
+ * pair stands (KEEP), or nothing although it overwrites the block (NONE). */
+enum dlm_grant_seq { DLM_GRANT_SEQ_NONE, DLM_GRANT_SEQ_KEEP, DLM_GRANT_SEQ_SET };
 static uint32_t dlm_xnode_grant_apply(struct vms_dlm_xnode_args *req,
-                                      int granted);
+                                      int granted, enum dlm_grant_seq seq_how,
+                                      uint32_t valblk_seq);
 static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
                                                struct vms_dlm_xnode_args *req);
 
@@ -4031,7 +4053,16 @@ uint32_t vms_lock_dlm_proxy_grant_recv(const struct vms_dlm_proxy_grant *g)
      * forever on it (diagnostic run 41389303326: grants received=1,
      * proxy_lkbs=1). Only the ioctl door keeps "NL means queued-reply".
      */
-    return dlm_xnode_grant_apply(&args, 1);
+    /*
+     * ...AND THE BLOCK'S SEQUENCE (rd vms-8159). A grant that carried the
+     * master's block carries its sequence beside it, and the proxy keeps the
+     * PAIR: it is what this node's op-0x08 failover record relays if the
+     * master leaves. A grant that carried no block leaves the pair as it was.
+     */
+    return dlm_xnode_grant_apply(&args, 1,
+                                 g->valblk_present ? DLM_GRANT_SEQ_SET
+                                                   : DLM_GRANT_SEQ_KEEP,
+                                 g->valblk_seq);
 }
 
 /*
@@ -5396,14 +5427,28 @@ static int dlm_handover_fill(uint32_t lkid, const struct vms_dlm_adopt_tree *t,
             out->parent_master_lkid = lock->parent_id != 0u ? parent_handle : 0u;
             out->granted_mode = (uint8_t)lock->granted_mode;
             out->requested_mode = (uint8_t)lock->requested_mode;
-            /* THE BLOCK RIDES ONLY WITH ITS SEQUENCE. On a holder the
-             * resource's sequence is written by nothing but the old master's
-             * op-0x1a (vms_lock_dlm_handover_valblk), so a non-zero one IS a
-             * block the old master told this node; every real record that
-             * carries a block carries a non-zero sequence (2,702 of 2,702). */
-            if (res->valblk_seq != 0u) {
-                memcpy(out->valblk, res->valblk, LCK_VALBLK_SIZE);
-                out->valblk_seq = res->valblk_seq;
+            /* THE BLOCK RIDES ONLY WITH ITS SEQUENCE; every real record
+             * that carries a block carries a non-zero sequence (op-0x12
+             * 2,702 of 2,702; op-0x08 336 of 336). It is the pair the
+             * MASTER LAST TOLD THIS LOCK (lock->valblk / valblk_seq, rd
+             * vms-8159) -- executive state, never a template. By the
+             * holder's last event for the lock
+             * (tools/cluster/dlm_rebuild08_census.py section 9):
+             *
+             *  - an op-0x1a on a REMASTER, which vms_lock_dlm_handover_valblk
+             *    writes onto the LKB: the record relays it in 251 of 259 real
+             *    op-0x12s and 3 of 3 op-0x08s, zeros included;
+             *  - otherwise the master's last GRANT (its body[36:56]) -- all a
+             *    survivor has on a FAILOVER, where the master is gone: the
+             *    record equals it in 500 of 508 (the 8 others all
+             *    heldout-E5/E5b). RA1b: VAX3's and VAX2's RMT1 records carry
+             *    RMLVB-0123456789 at 1, the master's LVB in SDA;
+             *  - after this node's OWN write, none (convert_proxy_request):
+             *    real records carry the bytes written (145 of 153 op-0x08)
+             *    at a sequence no frame delivers -- rd vms-85c1. */
+            if (lock->valblk_seq != 0u) {
+                memcpy(out->valblk, lock->valblk, LCK_VALBLK_SIZE);
+                out->valblk_seq = lock->valblk_seq;
                 out->valblk_present = 1u;
             }
             if (res->hash_known) {
@@ -5476,7 +5521,10 @@ uint32_t vms_lock_dlm_handover_rehome(uint32_t holder_lkid,
              * (rd vms-b67a) must name the parent's NEW handle too. */
             if (have_parent)
                 lock->parent_master_lkid = parent_handle;
-            if (res->master_csid == old_master_csid)
+            /* ...and the resource's own master: the old one, or NONE -- a
+             * departure sweep (vms_lock_dlm_member_departed) cleared it, and
+             * the failover rebuild (rd vms-874f) is what names the new one. */
+            if (res->master_csid == old_master_csid || res->master_csid == 0u)
                 res->master_csid = new_master_csid;
             st = SS__NORMAL;
         }
@@ -5518,6 +5566,16 @@ uint32_t vms_lock_dlm_handover_valblk(const struct vms_dlm_adopt_valblk *v)
                 res->valblk_seq = v->valblk_seq;
                 wrote = 1;
             }
+            /* ...and onto THIS LOCK, the pair its op-0x12 relays (rd
+             * vms-8159): the op-0x1a supersedes the lock's last grant, and
+             * one that carries no block leaves the record the absent form
+             * (20 of 20 real records after a zero op-0x1a are zeros). */
+            if (v->valblk_present) {
+                memcpy(lock->valblk, v->valblk, LCK_VALBLK_SIZE);
+                lock->valblk_seq = v->valblk_seq;
+            } else {
+                lock->valblk_seq = 0u;
+            }
             st = SS__NORMAL;
         }
         exec_unlock(&res->lock);
@@ -5547,6 +5605,249 @@ uint32_t vms_lock_dlm_handover_valblks(void)
 
     exec_lock(&vms_dlm_adopt_lock_g);
     n = vms_dlm_handover_valblks_n;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return n;
+}
+
+/* ================================================================
+ * THE FAILOVER REBUILD (rd vms-874f) -- the contract is vms_dlm_adopt.h
+ * ================================================================
+ *
+ * A tree's master LEFT the cluster. vms_lock_dlm_member_departed kept every
+ * GRANTED proxy of ours that named it (dlm_proxies_master_departed: "preserved
+ * for the rebuild") and cleared the resource's master. These are the engine's
+ * three reads and one write for what follows: which trees of ours are
+ * orphaned, which master our proxies on a root name, and -- on the side that
+ * becomes the tree's new master -- installing a surviving holder's lock from
+ * its op-0x08 record. Describing our own locks and re-homing them is the
+ * hand-over's _next/_rehome above, unchanged: an op-0x08 record carries the
+ * op-0x12 record's cells.
+ */
+
+/* A ROOT resource carrying a GRANTED proxy of ours that names `csid` as its
+ * master with that master's handle on it. Caller holds res->lock. */
+static int dlm_rebuild_res_orphaned(const struct vms_lock_resource *res,
+                                    uint32_t csid)
+{
+    const struct vms_lock_entry *l;
+
+    if (res->parent != NULL)
+        return 0;
+    exec_list_for_each_entry(l, &res->proxies, res_proxy) {
+        if (!l->waiting && l->master_csid == csid &&
+            l->master_lkid != VMS_DLM_LKID_UNSET)
+            return 1;
+    }
+    return 0;
+}
+
+static int dlm_rebuild_skipped(const struct vms_lock_resource *res,
+                               const struct vms_dlm_adopt_tree *skip,
+                               uint32_t n_skip)
+{
+    uint32_t i;
+
+    for (i = 0u; skip != NULL && i < n_skip; i++) {
+        if (res->res_group == skip[i].res_group &&
+            res->res_mode == skip[i].res_mode &&
+            res_name_is(res, skip[i].resnam, adopt_tree_name_len(&skip[i])))
+            return 1;
+    }
+    return 0;
+}
+
+int vms_lock_dlm_rebuild_tree_next(uint32_t departed_csid,
+                                   const struct vms_dlm_adopt_tree *skip,
+                                   uint32_t n_skip,
+                                   struct vms_dlm_adopt_tree *out)
+{
+    struct vms_lock_resource *res;
+    int bkt, found = 0;
+
+    if (out == NULL || departed_csid == 0u)
+        return 0;
+    memset(out, 0, sizeof(*out));
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        if (res->parent != NULL || dlm_rebuild_skipped(res, skip, n_skip))
+            continue;
+        exec_lock(&res->lock);
+        if (dlm_rebuild_res_orphaned(res, departed_csid) &&
+            res->name_len >= 1u && res->name_len <= sizeof(out->resnam)) {
+            memcpy(out->resnam, res->name, res->name_len);
+            out->resnam_len = (uint8_t)res->name_len;
+            out->res_group = res->res_group;
+            out->res_mode = res->res_mode;
+            out->ident_valid = 1u;
+            out->old_master_csid = departed_csid;
+            found = 1;
+        }
+        exec_unlock(&res->lock);
+        if (found)
+            break;
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+int vms_lock_dlm_name_proxy_master(const char *resnam, uint32_t resnam_len,
+                                   uint16_t group, uint8_t mode,
+                                   uint32_t *out_csid)
+{
+    struct res_key k;
+    struct vms_lock_resource *res;
+    int found = 0;
+
+    if (resnam == NULL || out_csid == NULL)
+        return 0;
+    k = res_key_counted(resnam, resnam_len, group, mode);
+    if (!res_name_len_ok(k.name_len))
+        return 0;
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find_key(&k);
+    if (res != NULL) {
+        const struct vms_lock_entry *l;
+
+        exec_lock(&res->lock);
+        exec_list_for_each_entry(l, &res->proxies, res_proxy) {
+            if (!l->waiting && l->master_csid != 0u) {
+                *out_csid = l->master_csid;
+                found = 1;
+                break;
+            }
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+/* A rebuild record this executive can install. Unlike a remaster record an
+ * all-NL lock IS one (330 of 338 real op-0x08 SUB records are NL/NL): it is a
+ * real lock a real holder holds. */
+static int dlm_rebuild_rec_ok(const struct vms_dlm_adopt_lock_rec *r)
+{
+    if (r == NULL || !r->ident_valid)
+        return 0;
+    if (!res_name_len_ok(adopt_rec_name_len(r)))
+        return 0;
+    if (r->holder_csid == 0u || r->holder_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    if (r->granted_mode > LCK_K_EXMODE || r->requested_mode > LCK_K_EXMODE)
+        return 0;
+    return 1;
+}
+
+uint32_t vms_lock_dlm_rebuild_lock(const struct vms_dlm_adopt_lock_rec *r,
+                                   struct vms_dlm_adopt_lock_result *out)
+{
+    struct vms_lock_resource *res;
+    struct vms_lock_entry *lock, *dup, *plock = NULL;
+    struct vms_proc *proc;
+    struct res_key k;
+    uint32_t parent_lkid = 0u;
+    int ok;
+
+    if (out == NULL)
+        return SS__BADPARAM;
+    memset(out, 0, sizeof(*out));
+    if (!dlm_rebuild_rec_ok(r))
+        return SS__BADPARAM;
+    if (vms_local_csid == 0u)
+        return SS__UNSUPPORTED;
+    proc = dlm_delivery_proc_get();
+    if (proc == NULL)
+        return SS__UNSUPPORTED;
+
+    k.name = r->resnam;
+    k.name_len = adopt_rec_name_len(r);
+    k.group = r->res_group;
+    k.mode = r->res_mode;
+    if (r->parent_master_lkid == VMS_DLM_LKID_UNSET) {
+        /* A ROOT: the resource must already exist here and be MASTERED here
+         * -- a rebuild record never creates a tree this node does not hold. */
+        k.parent = NULL;
+        exec_lock(&vms_res_hash_lock);
+        res = resource_find_key(&k);
+        ok = 0;
+        if (res != NULL) {
+            exec_lock(&res->lock);
+            ok = res->master_csid != 0u && dlm_master_is_us(res);
+            exec_unlock(&res->lock);
+        }
+        exec_unlock(&vms_res_hash_lock);
+        if (!ok)
+            return SS__IVLOCKID;
+    } else {
+        /* A SUB: its parent must be a MASTER-SIDE lock this engine holds FOR
+         * THE SAME HOLDER (its own handle, answered moments ago), on a
+         * resource this node masters. Looked up, never trusted. */
+        plock = lock_find_by_id(r->parent_master_lkid);
+        if (plock == NULL)
+            return SS__IVLOCKID;
+        ok = !plock->proxy && plock->req_csid == r->holder_csid &&
+             plock->resource != NULL;
+        if (ok) {
+            exec_lock(&plock->resource->lock);
+            ok = plock->resource->master_csid != 0u &&
+                 dlm_master_is_us(plock->resource);
+            exec_unlock(&plock->resource->lock);
+        }
+        if (!ok) {
+            lock_put(plock);
+            return SS__IVLOCKID;
+        }
+        parent_lkid = plock->lkid;
+        k.parent = plock->resource;
+    }
+    res = resource_find_or_create_key(&k);     /* may sleep; +1 reference */
+    if (plock != NULL)
+        lock_put(plock);
+    if (res == NULL)
+        return SS__INSFMEM;
+
+    lock = dlm_adopt_alloc_lkb(r, 0u, parent_lkid, proc);  /* may sleep */
+    if (lock == NULL) {
+        resource_release(res);
+        return SS__INSFMEM;
+    }
+
+    exec_lock(&res->lock);
+    dup = dlm_adopt_dup_locked(res, r);
+    /* NEVER A SECOND INCOMPATIBLE GRANT. The holder held this lock under the
+     * departed master, so it was compatible THERE; this node may have granted
+     * since (it mastered the tree first). A lock that no longer fits is NOT
+     * installed and NOT answered -- the double grant of rd vms-5cd is worse
+     * than the holder's wait. */
+    ok = dup != NULL ||
+         (granted_queue_compatible(res, r->granted_mode, NULL) &&
+          held_proxies_compatible(res, r->granted_mode, NULL));
+    exec_unlock(&res->lock);
+    if (dup != NULL) {
+        dlm_adopt_fill_result(dup, res, 1u, out);
+        lock_entry_free(lock);
+        resource_release(res);
+        return SS__NORMAL;
+    }
+    if (!ok) {
+        lock_entry_free(lock);
+        resource_release(res);
+        return SS__UNSUPPORTED;
+    }
+    dlm_adopt_link_lkb(res, lock, r);
+    dlm_adopt_fill_result(lock, res, 0u, out);
+    exec_lock(&vms_dlm_adopt_lock_g);
+    vms_dlm_rebuild_installed_n++;
+    exec_unlock(&vms_dlm_adopt_lock_g);
+    return SS__NORMAL;
+}
+
+uint32_t vms_lock_dlm_rebuild_installed(void)
+{
+    uint32_t n;
+
+    exec_lock(&vms_dlm_adopt_lock_g);
+    n = vms_dlm_rebuild_installed_n;
     exec_unlock(&vms_dlm_adopt_lock_g);
     return n;
 }
@@ -8053,7 +8354,10 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
 {
     /* The ioctl door (VMS_IOCTL_DLM_XNODE): its message carries no outcome of
      * its own, so a queued-reply is spelled lkmode == NL, as documented above. */
-    return dlm_xnode_grant_apply(req, req->lkmode > LCK_K_NLMODE);
+    /* This door's message carries no sequence: a block it grants is one
+     * this node holds no sequence for. */
+    return dlm_xnode_grant_apply(req, req->lkmode > LCK_K_NLMODE,
+                                 DLM_GRANT_SEQ_NONE, 0u);
 }
 
 /*
@@ -8063,7 +8367,8 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
  * says WHICH mode was granted; it never decides WHETHER (rd vms-3ea).
  */
 static uint32_t dlm_xnode_grant_apply(struct vms_dlm_xnode_args *req,
-                                      int granted)
+                                      int granted, enum dlm_grant_seq seq_how,
+                                      uint32_t valblk_seq)
 {
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
@@ -8120,8 +8425,20 @@ static uint32_t dlm_xnode_grant_apply(struct vms_dlm_xnode_args *req,
      * stale block. The bytes are the master's real res->valblk transported over
      * SCS, never fabricated (INV-6).
      */
-    if (granted)
+    if (granted) {
         memcpy(lock->valblk, req->valblk, LCK_VALBLK_SIZE);
+        /*
+         * ...WITH ITS SEQUENCE (rd vms-8159): the pair the master delivered,
+         * which a survivor's op-0x08 record relays after that master leaves
+         * (RA1b VAX3's RMT1 record: RMLVB-0123456789 at 1, the master's LVB
+         * as SDA read it). A grant that carried no block keeps the pair; a
+         * block granted with no sequence leaves none, never a made-up one.
+         */
+        if (seq_how == DLM_GRANT_SEQ_SET)
+            lock->valblk_seq = valblk_seq;
+        else if (seq_how == DLM_GRANT_SEQ_NONE)
+            lock->valblk_seq = 0u;
+    }
 
     /*
      * BLKAST WIRE (rung H6, vms-76d). When this GRANT establishes the proxy as a

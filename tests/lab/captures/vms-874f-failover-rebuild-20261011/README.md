@@ -77,7 +77,12 @@ The corpus holds 888 op-0x08 records in ten captures. Every sender is a real VAX
     locks) body[30] is the higher; which one is the granted mode is **not grounded**.
   - body[44:48+] is the resource identity (group, access mode, length, name).
   - body[88:108] is the value block and sequence. A 0xfa ROOT answer returns it at
-    body[36:56] (387 of 398).
+    body[36:56] (387 of 398). It is what the holder's lock was last told: its
+    master's last grant (record equals the grant's body[36:56] in 500 of 508 op-0x08
+    and op-0x12 records), or an op-0x1a that supersedes it. RA1b's RMT1 records carry
+    RMLVB-0123456789 at sequence 1 from both survivors, the master's LVB in SDA. After
+    the holder's own op-0x06 write the record carries the written bytes (145 of 153)
+    at a sequence no frame delivers (rd vms-8159; section 9 of the census).
   - body[128:132] on a ROOT is refhash of its own identity (550 of 550). On a SUB it is neither
     its own name's hash nor its parent's, the same finding `dlm_sublock_census.py` has for the
     op-0x01 sub request.
@@ -97,7 +102,15 @@ The corpus holds 888 op-0x08 records in ten captures. Every sender is a real VAX
   just answered f9. That is the RMT1 case.
 - **SYS$SYS_ID** at a formation barrier (rd vms-629, four samples) is the same message: a ROOT
   record of the node's own lock (lkid 01000000, EX/EX, exec mode), answered f9.
-- **Phase.** No op-0x0d lies inside any capture's op-0x08 run.
+- **Phase.** No op-0x0d lies inside any capture's op-0x08 run. Every record whose barrier is
+  in the capture (887 of 888) is sent after the barrier release (cat-0x01 op-0x0c) of step 5
+  (RA1b, oracle-3node-fault-f1, one formation) or step 6 (E4, E5, E5b, ci6 run16, two
+  formations), and answered before the next release. None follows a release of step 7 or later.
+  The coordinator holds its next release until every record is answered. rd vms-bcb: OVMX's one
+  record, sent after the release of step 12 (lab33a, 2026-11-02), bugchecked a real VAX V7.3 with
+  LOCKMGRERR. rd vms-2fa (`tests/lab/captures/vms-2fa-rebuild-step-20261102`) separated 5 from 6:
+  the SENDER's own LOCKDIRWT picks it (non-zero: 5, zero: 6), and the executive now sends only in
+  that window and holds its next barrier frame until every record is answered.
 
 ## Topology: what is covered and what is NOT
 

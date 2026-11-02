@@ -643,14 +643,29 @@ struct vms_dlm_scs_view {
 	uint32_t rm_ho_answers;         /* ...answered 82/01 and re-homed       */
 	uint32_t rm_ho_ends_sent;       /* op-0x13s really on the wire          */
 	uint32_t rm_ho_stopped;         /* hand-overs that could not complete   */
+
+	/*
+	 * THE FAILOVER REBUILD (rd vms-874f): a tree's master LEFT, and this
+	 * node re-described its locks in it (op-0x08 records), or -- as the
+	 * tree's new master -- installed a survivor's. A fire proves this node's
+	 * locks survived with records == answers (or a tree mastered), and the
+	 * new-master side with `installed`; `stopped` is every way a rebuild
+	 * did NOT complete, counted rather than left as a silent loss.
+	 */
+	uint32_t rm_rb_records_sent;    /* op-0x08 records really on the wire   */
+	uint32_t rm_rb_answers;         /* ...answered 0xfa and re-homed        */
+	uint32_t rm_rb_mastered;        /* trees this node became master of     */
+	uint32_t rm_rb_installed;       /* survivors' locks installed (engine)  */
+	uint32_t rm_rb_stopped;         /* rebuilds that could not complete     */
 };
-/* 236 since rd vms-33a added the four holder counters (220 before; 184 since
+/* 256 since rd vms-874f added the five rebuild counters; 236 since rd vms-33a
+ * added the four holder counters (220 before; 184 since
  * rd vms-ed5 added the ten remaster counters, 144 before that): a
  * fixed-width ABI struct
  * whose size is PINNED, so a field added here fails to build until both
  * substrate twins (src/kernel/vms_ioctl.h, src/kernel-netbsd/vms_lock_nb.h)
  * and this number are updated together. */
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 236,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 256,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

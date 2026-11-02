@@ -332,6 +332,37 @@ struct vms_dlm_rm_ops {
 			 uint32_t old_master_csid, uint32_t new_master_csid,
 			 uint32_t new_master_lkid);
 	int (*ho_valblk)(void *ctx, const struct vms_dlm_adopt_valblk *v);
+
+	/*
+	 * THE FAILOVER REBUILD'S DOORS (rd vms-874f) -- OPTIONAL as a group, on
+	 * top of the holder's three (which the rebuild reuses to describe and
+	 * re-home our proxies) and the adoption doors (which it reuses when
+	 * this node becomes a tree's master). Unbound, a departure is only
+	 * recorded and nothing is sent: the honest floor.
+	 *
+	 * `rb_ready`       1 when the directory may be resolved: the weight
+	 *                  vector is built, and either no transition is
+	 *                  running or this table's rebuild window is open
+	 *                  (vms_dlm_rm_rb_window_open, rd vms-2fa).
+	 * `rb_tree_next`   vms_lock_dlm_rebuild_tree_next: the next orphaned
+	 *                  tree of ours not among `skip`.
+	 * `rb_dir_entry`   THIS node's own directory, asked about a root it
+	 *                  directs: 0 no entry, 1 another system masters it
+	 *                  (`*master`), 2 this node does.
+	 * `rb_dir_claim`   record THIS node as that root's master in its own
+	 *                  directory (vms_dlm_dir_claim_self); 1 when held.
+	 * `rb_install`     vms_lock_dlm_rebuild_lock: a survivor's lock, as
+	 *                  the tree's master; 1 = SS$_NORMAL.
+	 */
+	int (*rb_ready)(void *ctx);
+	int (*rb_tree_next)(void *ctx, uint32_t departed_csid,
+			    const struct vms_dlm_adopt_tree *skip,
+			    uint32_t n_skip, struct vms_dlm_adopt_tree *out);
+	int (*rb_dir_entry)(void *ctx, const struct vms_dlm_res_ident *id,
+			    uint32_t *master);
+	int (*rb_dir_claim)(void *ctx, const struct vms_dlm_res_ident *id);
+	int (*rb_install)(void *ctx, const struct vms_dlm_adopt_lock_rec *r,
+			  struct vms_dlm_adopt_lock_result *out);
 };
 
 /* ==========================================================================
@@ -384,6 +415,117 @@ struct vms_dlm_ho_tree {
 	uint32_t await_lkid;              /* the lock whose 82/01 is due      */
 	uint32_t records;                 /* records N answered for this tree */
 	uint8_t  state;                   /* enum vms_dlm_ho_state            */
+	uint8_t  pad[3];
+};
+
+/* ==========================================================================
+ * THE FAILOVER REBUILD (rd vms-874f): a tree's MASTER LEFT the cluster, and
+ * this node -- a surviving holder -- re-describes every lock it holds in that
+ * tree, one op-0x08 record at a time (vms_cluster_codec_dlm.h R1..R4; capture
+ * and census tests/lab/captures/vms-874f-failover-rebuild-20261011). VMS does
+ * NOT remaster a user tree at shutdown; without these records a survivor's
+ * locks die with the master.
+ *
+ *   a departure      recorded (`rb_departed`); the rebuild waits for the
+ *                    directory (`rb_ready`: vector built, no transition).
+ *   KICK             for each departed master D, the engine names the next
+ *                    ORPHANED tree of ours (a granted proxy still naming D).
+ *                    Its directory node X is resolved the way every lookup
+ *                    is (the `dir_node` door):
+ *                    A record that would go to ANOTHER system goes only
+ *                    while the REBUILD WINDOW is open (rd vms-bcb,
+ *                    vms-2fa; below); outside it the tree is STOPPED,
+ *                    counted.
+ *                      X another member  -> the ROOT record goes to X (R2);
+ *                      X is THIS node    -> its own directory is asked: an
+ *                        entry naming another member M (a survivor it has
+ *                        just answered 0xf9) -> the ROOT goes to M (RA1b's
+ *                        directory-holder case); no entry -> this node
+ *                        becomes the master itself, claims the entry, and
+ *                        sends nothing.
+ *   82/01 0xf9       THIS node now masters the tree (R3): adopted through
+ *                    the adoption engine, whose close turns every proxy of
+ *                    ours in it into a local lock -- and NO sub-record goes
+ *                    out (a 0xf9 holder sends none, RA1b's VAX2 RMT1).
+ *   82/01 0xfa       re-home that proxy onto the answerer and the handle it
+ *                    minted (vms_lock_dlm_handover_rehome), then the next
+ *                    record -- a sub becomes ready only now, carrying that
+ *                    handle at body[40:44] (R4) -- or, none left, the tree
+ *                    is done. There is no end-of-records message (the census
+ *                    finds none).
+ *   anything else    the tree STOPS, counted and said: never a claim to hold
+ *                    less than this node holds.
+ *
+ * AND AS THE TREE'S NEW MASTER, inbound: a survivor's op-0x08 ROOT for a tree
+ * this node came to master by a rebuild, or a SUB under a lock this node
+ * already holds for that survivor, is installed by the engine
+ * (vms_lock_dlm_rebuild_lock) and answered 0xfa off the LKB it created. A ROOT
+ * for any other tree is NOT_MINE: the directory role answers it as before.
+ *
+ * INV-6 as in the holder's half: a slot holds an identity, a destination and
+ * the lock id whose answer is due; every record cell is re-read from the
+ * engine when its frame is built.
+ * ========================================================================== */
+/*
+ * THE REBUILD WINDOW (rd vms-2fa; tests/lab/captures/
+ * vms-2fa-rebuild-step-20261102). Every real op-0x08 -- 1,965 of 1,965 whose
+ * barrier is in a capture -- goes out INSIDE the departure's transition: after
+ * the barrier release (cat-0x01 op-0x0c, step at body[16]) of
+ *
+ *   R = VMS_DLM_RB_REL_WEIGHTED (5)   when the SENDER's own LOCKDIRWT != 0,
+ *   R = VMS_DLM_RB_REL_UNWEIGHTED (6) when it is 0,
+ *
+ * and every record is answered before the sender's own next barrier frame (its
+ * step report R+1 as a participant, its release R+1 as the coordinator). Not
+ * the transition type, not a directory-vector change, not the coordinator's
+ * weight: the census separates each of those from the rule. The one OVMX record
+ * sent outside it (after release 12, lab33a) bugchecked a real VAX LOCKMGRERR.
+ *
+ * So the window is the barrier's own state, told to this table by the barrier
+ * FSMs through the arm (vms_dlm_rm_rb_barrier_released): it OPENS on release
+ * R, and CLOSES on any other release, at a transition's begin and end, and
+ * never otherwise. While open, `vms_dlm_rm_rb_outstanding` is what the barrier
+ * holds its next frame on.
+ *
+ * AN ANSWER THAT NEVER COMES (vms_dlm_rm_rb_expire). Every real record in the
+ * corpus was answered, and a destination that LEAVES already stops its tree
+ * (rb_dst_departed). A destination that stays connected and stays silent is
+ * bounded by the interval the cluster already allows a silent system,
+ * RECNXINTERVAL: past it the tree is STOPPED, counted (rb_answer_expired) and
+ * said, and the barrier goes on. The same interval after which VMS would have
+ * removed that system, and with it the hold -- never a timeout of this
+ * table's own choosing.
+ */
+#define VMS_DLM_RB_REL_WEIGHTED   5u
+#define VMS_DLM_RB_REL_UNWEIGHTED 6u
+
+#define VMS_DLM_RB_TREES     16u
+#define VMS_DLM_RB_DEPARTED   8u
+
+enum vms_dlm_rb_state {
+	VMS_DLM_RB_ST_FREE = 0,
+	VMS_DLM_RB_ST_AWAIT,      /* a record is out; its 82/01 is not in      */
+	VMS_DLM_RB_ST_STOPPED,    /* could not complete: left, never retried   */
+	VMS_DLM_RB_ST__COUNT
+};
+
+struct vms_dlm_rb_tree {
+	struct vms_dlm_adopt_tree tree;   /* root identity + the DEPARTED master */
+	struct vms_dlm_res_ident  id;     /* the same, as the wire spells it    */
+	uint32_t dst;                     /* where the records go (R2)          */
+	uint32_t await_lkid;              /* the lock whose 82/01 is due        */
+	uint32_t records;                 /* records answered 0xfa so far       */
+	uint8_t  state;                   /* enum vms_dlm_rb_state              */
+	uint8_t  await_root;              /* the outstanding record is a ROOT   */
+	uint8_t  pad[2];
+};
+
+/* A tree THIS node came to master by a rebuild: the authority under which a
+ * survivor's ROOT record is installed here. */
+struct vms_dlm_rb_mastered {
+	struct vms_dlm_res_ident id;
+	uint32_t departed;                /* whose tree it was                  */
+	uint8_t  used;
 	uint8_t  pad[3];
 };
 
@@ -485,6 +627,39 @@ struct vms_dlm_rm {
 	uint32_t ho_held_unacked;    /* ...an 82/15 owed and not staged       */
 	uint32_t ho_departed;        /* hand-overs dropped: N left            */
 	uint32_t ho_valblks_taken;   /* op-0x1a blocks taken as a holder      */
+
+	/* THE FAILOVER REBUILD (rd vms-874f). */
+	uint32_t rb_departed[VMS_DLM_RB_DEPARTED];  /* masters still rebuilding */
+	struct vms_dlm_rb_tree     rb[VMS_DLM_RB_TREES];
+	struct vms_dlm_rb_mastered rbm[VMS_DLM_RB_TREES];
+	uint32_t rb_departures;      /* departures recorded for a rebuild     */
+	uint32_t rb_departed_full;   /* ...not recorded: the list was full    */
+	uint32_t rb_unbound;         /* kicks with the rebuild doors unbound  */
+	uint32_t rb_trees_started;   /* orphaned trees of ours taken up       */
+	uint32_t rb_records_sent;    /* op-0x08 records really on the wire    */
+	uint32_t rb_records_unsent;  /* ...owed and not sent (tree STOPPED)   */
+	uint32_t rb_answers;         /* 0xfa answers that re-homed a proxy    */
+	uint32_t rb_answers_refused; /* non-grant / un-re-homable answers     */
+	uint32_t rb_trees_done;      /* trees whose every lock was re-homed   */
+	uint32_t rb_mastered;        /* trees this node became master of      */
+	uint32_t rb_master_refused;  /* ...the adoption engine refused        */
+	uint32_t rb_claim_failed;    /* mastered, and this node's own         */
+				     /* directory could not record it         */
+	uint32_t rb_unaddressable;   /* no directory/master this node may     */
+				     /* address: STOPPED, nothing sent        */
+	uint32_t rb_dst_departed;    /* trees stopped: their destination left */
+	uint32_t rb_out_of_window;   /* trees stopped: a record would have    */
+				     /* gone out outside the rebuild step     */
+	uint32_t rb_answer_expired;  /* trees stopped: no answer within the   */
+				     /* cluster's RECNXINTERVAL               */
+	uint32_t rb_windows_opened;  /* rebuild windows opened (release R)    */
+	uint32_t rb_window_opened_ms;/* when the open window opened           */
+	uint8_t  rb_window_open;     /* 1 between release R and the next      */
+	uint8_t  rb_window_step;     /* the R that opened it                  */
+	uint8_t  rb_window_pad[2];
+	uint32_t rb_no_slot;         /* trees left waiting: every slot busy   */
+	uint32_t rb_in_installed;    /* survivors' records installed + 0xfa   */
+	uint32_t rb_in_refused;      /* ...refused by the engine: unanswered  */
 };
 
 /* ==========================================================================
@@ -559,9 +734,74 @@ uint32_t vms_dlm_rm_ho_in_state(const struct vms_dlm_rm *f,
 /*
  * A member LEFT. It is struck from every tree's owed set -- a departed system
  * will not be sending an end-of-records -- which may complete a tree that was
- * waiting only for it.
+ * waiting only for it. And (rd vms-874f) it is RECORDED as a master whose
+ * trees this node may hold locks in, and the rebuild is kicked.
  */
 void vms_dlm_rm_member_departed(struct vms_dlm_rm *f, uint32_t csid);
+
+/*
+ * THE FAILOVER REBUILD (rd vms-874f), its three doors from the arm.
+ *
+ * `vms_dlm_rm_rb_kick` takes up every orphaned tree it has a slot for --
+ * idempotent, and a no-op while `rb_ready` says the directory cannot be
+ * resolved, so the arm calls it at a departure, at a transition's end and on
+ * its beat.
+ *
+ * `vms_dlm_rm_rb_answer` is an inbound cat-0x82 op-0x01: 1 when it was the
+ * answer to one of our op-0x08 records (matched by sender == the record's
+ * destination AND body[24:28] == the lock whose record is out), 0 otherwise.
+ *
+ * `vms_dlm_rm_rb_record` is an inbound cat-0x02 op-0x08 from `from_csid`:
+ * HANDLED with the 0xfa answer staged; REFUSED (a SUB the engine would not
+ * install, or a sender that is not a member -- never answered, counted);
+ * NOT_MINE for a ROOT of a tree this node did not come to master by a rebuild,
+ * which the directory role then answers exactly as before.
+ *
+ * `vms_dlm_rm_rb_transition_begin`: a new transition -- the trees this node
+ * mastered by an EARLIER rebuild stop being admissible for ROOT records.
+ */
+void vms_dlm_rm_rb_kick(struct vms_dlm_rm *f);
+int vms_dlm_rm_rb_answer(struct vms_dlm_rm *f, uint32_t from_csid,
+			 uint8_t category, uint8_t opcode,
+			 const uint8_t *body, uint32_t len);
+enum vms_dlm_rm_status vms_dlm_rm_rb_record(struct vms_dlm_rm *f,
+					    uint32_t from_csid,
+					    const uint8_t *body, uint32_t len);
+void vms_dlm_rm_rb_transition_begin(struct vms_dlm_rm *f);
+
+/*
+ * THE REBUILD WINDOW'S DOORS (rd vms-2fa; the window section above).
+ *
+ * `vms_dlm_rb_release_step`: R for a node whose own LOCKDIRWT is
+ * `own_lockdirwt` -- 5 when non-zero, else 6.
+ *
+ * `vms_dlm_rm_rb_barrier_released`: the barrier released step `step` (a
+ * participant RECEIVED it; the coordinator SENT it to everybody). Release R
+ * opens the window (stamped `now_ms`) and kicks the rebuild, so this node's
+ * records go out NOW; any other release closes it.
+ *
+ * `vms_dlm_rm_rb_window_close`: a transition began or ended.
+ *
+ * `vms_dlm_rm_rb_outstanding`: records on the wire and not yet answered -- what
+ * the barrier holds its next frame on.
+ *
+ * `vms_dlm_rm_rb_expire`: with the window open longer than `limit_ms`, every
+ * tree still awaiting an answer is STOPPED, counted (rb_answer_expired);
+ * returns how many. A `limit_ms` of 0 expires nothing.
+ */
+uint32_t vms_dlm_rb_release_step(uint32_t own_lockdirwt);
+void vms_dlm_rm_rb_barrier_released(struct vms_dlm_rm *f, uint32_t step,
+				    uint32_t own_lockdirwt, uint32_t now_ms);
+void vms_dlm_rm_rb_window_close(struct vms_dlm_rm *f);
+int vms_dlm_rm_rb_window_open(const struct vms_dlm_rm *f);
+uint32_t vms_dlm_rm_rb_outstanding(const struct vms_dlm_rm *f);
+uint32_t vms_dlm_rm_rb_expire(struct vms_dlm_rm *f, uint32_t now_ms,
+			      uint32_t limit_ms);
+
+/* How many rebuild slots are in `st`; and the rebuild's stopped total. */
+uint32_t vms_dlm_rm_rb_in_state(const struct vms_dlm_rm *f,
+				enum vms_dlm_rb_state st);
+uint32_t vms_dlm_rm_rb_stopped(const struct vms_dlm_rm *f);
 
 /* ==========================================================================
  * READBACKS -- what this machine really holds, for the arm and the tests

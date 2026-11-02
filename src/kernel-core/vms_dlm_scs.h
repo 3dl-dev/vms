@@ -213,6 +213,24 @@ struct dlm_scs_role_ops {
 	 */
 	void (*quorum_changed)(void *ctx, int quorum_lost);
 
+	/*
+	 * THE REBUILD WINDOW (rd vms-2fa). `barrier_released` is told every
+	 * barrier release below the last: the step a PARTICIPANT received, or
+	 * the step the COORDINATOR has just sent to everybody. The lock manager
+	 * opens its op-0x08 rebuild window on the release its own LOCKDIRWT
+	 * selects (5 weighted, 6 not; 1,965 of 1,965 real records) and sends
+	 * its records then; it returns how many are on the wire unanswered.
+	 * `rebuild_outstanding` reads the same count later. While it is
+	 * non-zero the barrier HOLDS this node's next own frame -- the
+	 * participant's step report, the coordinator's release -- exactly as
+	 * every real survivor does. Both optional: NULL is a lock manager with
+	 * no rebuild, which never holds anything.
+	 */
+	uint32_t (*barrier_released)(void *ctx,
+				     const struct cnxman_transition *tr,
+				     uint32_t step);
+	uint32_t (*rebuild_outstanding)(void *ctx);
+
 	void *ctx;
 };
 

@@ -310,6 +310,12 @@ struct cnxman_barrier {
 	uint32_t rebuild_dlm;        /* ... answered from REAL lock state      */
 	uint32_t rebuild_echoed;     /* ... answered with the grounded echo    */
 	uint32_t rebuild_declined;   /* ... the DLM declined; we sent nothing  */
+	/* rd vms-2fa: this node's OWN op-0x08 rebuild records hold its next
+	 * step report until every one is answered (the survivor's rule). */
+	uint32_t rebuild_holds;      /* step reports held for our own records  */
+	uint32_t rebuild_held_sent;  /* ...sent once the last was answered     */
+	uint8_t  held_step;          /* the step report held, 0 = none         */
+	uint8_t  held_pad[3];
 
 	/* ---- instrumentation: the things the spec says to watch ---- */
 	uint32_t step_mismatch;      /* a release whose index != our step      */
@@ -388,6 +394,15 @@ enum cnxman_barrier_rx cnxman_barrier_rx_body(struct cnxman_barrier *b,
  * counts and logs; it never abandons and never re-sends.
  */
 void cnxman_barrier_timer(struct cnxman_barrier *b);
+
+/*
+ * THE HELD STEP REPORT (rd vms-2fa). After release R this node's own op-0x08
+ * rebuild records are on the wire, and -- as every real survivor does -- its
+ * step report R+1 waits until the lock manager says none is unanswered. The
+ * glue calls this after every DLM frame it delivers; the watchdog calls it
+ * too. Sends the held report once the count is zero; a no-op otherwise.
+ */
+void cnxman_barrier_rebuild_retry(struct cnxman_barrier *b);
 
 /*
  * Connectivity to the coordinator was lost mid-transition. The barrier cannot

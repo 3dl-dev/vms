@@ -158,6 +158,29 @@ static void arm_bindings(void)
 	    "stop: the engine goes back to purely local operation");
 	has("cnxman_set_dlm(cl, NULL)",
 	    "stop: the connection manager stops handing it messages");
+
+	/* rd vms-2fa: THE REBUILD WINDOW is the barrier's own state, read
+	 * against this node's own LOCKDIRWT, and the barrier holds on it. */
+	has("d->role.barrier_released = dlm_arm_barrier_released;",
+	    "rd vms-2fa: the barrier tells the arm every release");
+	has("d->role.rebuild_outstanding = dlm_arm_rebuild_outstanding;",
+	    "rd vms-2fa: ...and reads what its next frame waits for");
+	has("vms_dlm_rm_rb_barrier_released(&d->rm, step,\n"
+	    "\t\t\t\t       (uint32_t)d->cl->params.lockdirwt,",
+	    "*** rd vms-2fa: R is chosen off THIS node's own SYSGEN LOCKDIRWT, "
+	    "never a constant ***");
+	has("(!d->cl->club.transition_active ||\n"
+	    "\t\tvms_dlm_rm_rb_window_open(&d->rm));",
+	    "*** rd vms-2fa: inside a transition the rebuild runs only while "
+	    "the window is open (test_dlm_rebuild's rb_ready mirrors this) ***");
+	before("vms_dlm_rm_rb_window_close(&d->rm);\n\tvms_dlm_rm_rb_kick(&d->rm);",
+	       "static void dlm_arm_member_departed(",
+	       "rd vms-2fa: the transition's end shuts the window BEFORE its "
+	       "kick, so nothing goes out after the barrier");
+	has("(void)vms_dlm_rm_rb_expire(&d->rm, dlm_arm_now_ms(d),\n"
+	    "\t\t\t\t(uint32_t)d->cl->club.recnxinterval * 1000u);",
+	    "rd vms-2fa: an unanswered record is bounded by the cluster's own "
+	    "RECNXINTERVAL, on the arm's beat");
 	has("vms_lock_dlm_set_delivery_proc(NULL)",
 	    "stop: the delivery-proc registration is cleared");
 
@@ -440,8 +463,16 @@ static void arm_bindings(void)
 	    "and the diagnostic projection carries how many of the vector's "
 	    "entries are this node's (CNXTRACE dirvec_own=)");
 
-	has("if (dlm_arm_dir_name_held(id)) {",
-	    "a name THIS node holds locks on is never answered 'you master it'");
+	has("if (dlm_arm_dir_name_held(id) && !dlm_arm_dir_name_orphaned(d, req, id)) {",
+	    "a name THIS node holds locks on is never answered 'you master it' "
+	    "-- unless the master its proxies name has LEFT (rd vms-874f)");
+	/* rd vms-874f: that exception is exactly the failover rebuild's ROOT,
+	 * and only while the master our proxies name is no member. */
+	has("if (req->opcode != (uint8_t)VMS_DLM_WIREOP_REBUILD_REC)\n\t\treturn 0;",
+	    "... the exception is an op-0x08 rebuild record and nothing else");
+	has("if (master == vms_lock_dlm_local_csid() || dlm_arm_is_member(d, master))\n\t\treturn 0;",
+	    "... whose proxies name a master that is neither this node nor a "
+	    "member of the cluster");
 	has("o = dlm_arm_dir_ask(d, id, req->from_csid, &master);",
 	    "the outcome comes from this node's own directory entries");
 	has("vms_dlm_dir_lookup(&d->dir, id, from,",
@@ -921,6 +952,12 @@ static void cnxman_legs(void)
 	       "cnxman_dlm_rx(cn, &env, body, len",
 	       "the DLM receive leg runs AFTER the join/barrier/coordinator, so "
 	       "the barrier keeps the op-0x0d record it owns in a transition");
+	before("cnxman_dlm_rx(cn, &env, body, len",
+	       "cnxman_barrier_rebuild_retry(&cn->barrier);",
+	       "rd vms-2fa: after a DLM frame (maybe the last answer) the held "
+	       "step report is retried...");
+	has("cnxman_coord_rebuild_retry(&cn->coord);",
+	    "rd vms-2fa: ...and the held release");
 	before("cnxman_dlm_rx(cn, &env, body, len",
 	       "cn->frames_unrouted++",
 	       "... and BEFORE the unrouted counter, so DLM traffic is not "

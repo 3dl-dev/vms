@@ -377,6 +377,27 @@ static void barrier_dlm_end(struct cnxman_barrier *b, int completed)
 	b->dlm->transition_end(b->dlm->ctx, &tr, completed);
 }
 
+/* rd vms-2fa: tell the lock manager a release arrived; what it returns is how
+ * many of its own rebuild records are unanswered. No lock manager, or one with
+ * no rebuild, holds nothing. */
+static uint32_t barrier_rebuild_released(struct cnxman_barrier *b,
+					 uint32_t step)
+{
+	struct cnxman_transition tr;
+
+	if (b->dlm == NULL || b->dlm->barrier_released == NULL)
+		return 0u;
+	barrier_fill_transition(b, &tr);
+	return b->dlm->barrier_released(b->dlm->ctx, &tr, step);
+}
+
+static uint32_t barrier_rebuild_outstanding(const struct cnxman_barrier *b)
+{
+	if (b->dlm == NULL || b->dlm->rebuild_outstanding == NULL)
+		return 0u;
+	return b->dlm->rebuild_outstanding(b->dlm->ctx);
+}
+
 /* ==========================================================================
  * The membership bitmap -- Phase 1's nodemap, and the WIDTH instrumentation
  *
@@ -527,6 +548,7 @@ static void barrier_start_transition(struct cnxman_barrier *b,
 	b->epoch = open->epoch;
 	b->tr_class = open->cls;
 	b->step = 0u;
+	b->held_step = 0u;
 	b->phase2_committed = 0u;
 	b->open_seen = 1u;
 	b->coordinator_valid = (uint8_t)(m->from_valid ? 1 : 0);
@@ -750,6 +772,7 @@ static void barrier_h_go(struct cnxman_barrier *b, const struct barrier_msg *m)
 		b->open_seen = 0u;
 		b->phase2_committed = 0u;
 		b->step = 0u;
+		b->held_step = 0u;
 		b->transitions_seen++;
 		b->coordinator_valid = (uint8_t)(m->from_valid ? 1 : 0);
 		b->coordinator_csb = m->from_csb;
@@ -909,7 +932,38 @@ static void barrier_h_release(struct cnxman_barrier *b,
 		barrier_finish(b);
 		return;
 	}
+	/*
+	 * THE REBUILD WINDOW (rd vms-2fa). The lock manager is told the release
+	 * BEFORE the next step report goes: on release R it sends its op-0x08
+	 * records now, and the report R+1 is HELD until every one is answered.
+	 * 1,965 of 1,965 real records sit exactly there -- a weight-0 survivor
+	 * (lab33a's role, arm 3b frames 21-24): release 6, its record, the
+	 * 0xf9, and only then its step 7.
+	 */
+	if (barrier_rebuild_released(b, rel.step) != 0u) {
+		b->held_step = (uint8_t)(rel.step + 1u);
+		b->rebuild_holds++;
+		return;
+	}
+	b->held_step = 0u;
 	barrier_send_step(b, rel.step + 1u);
+	b->cl->club.barrier_step = b->step;
+}
+
+void cnxman_barrier_rebuild_retry(struct cnxman_barrier *b)
+{
+	if (b == NULL || b->cl == NULL || b->held_step == 0u)
+		return;
+	if (b->state != (uint8_t)CNXMAN_BARRIER_STEP ||
+	    (uint32_t)b->held_step != (uint32_t)b->step + 1u) {
+		b->held_step = 0u;   /* the transition moved on without it */
+		return;
+	}
+	if (barrier_rebuild_outstanding(b) != 0u)
+		return;
+	b->held_step = 0u;
+	b->rebuild_held_sent++;
+	barrier_send_step(b, (uint32_t)b->step + 1u);
 	b->cl->club.barrier_step = b->step;
 }
 
@@ -1207,6 +1261,10 @@ void cnxman_barrier_timer(struct cnxman_barrier *b)
 	if (b->slow_steps == 1u)
 		barrier_log(b, "%CNXMAN, waiting for the cluster state "
 			       "transition to release a barrier step");
+	/* rd vms-2fa: a step report held for our own rebuild records goes as
+	 * soon as none is unanswered -- the lock manager bounds that wait by
+	 * the cluster's RECNXINTERVAL (vms_dlm_rm_rb_expire). */
+	cnxman_barrier_rebuild_retry(b);
 	if (b->ops != NULL && b->ops->arm_timer != NULL)
 		b->ops->arm_timer(b->ops->ctx, CNXMAN_TIMER_BARRIER,
 				  (uint32_t)b->step, CNXMAN_BARRIER_WATCH_MS);

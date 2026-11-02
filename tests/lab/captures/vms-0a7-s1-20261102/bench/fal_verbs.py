@@ -4,8 +4,11 @@ TYPE / COPY node::spec, now plain RMS clients ($PARSE/$SEARCH/$OPEN/$GET/$PUT ov
 _NET: + IO$_ACCESS + DAP), against a real OpenVMS VAX V7.3 over DECnet (FAL, object
 17), and the VAX's COPY / DIRECTORY against OVMX's FAL. Added over vms-6a4: a wrong
 password, COPY/LOG of a remote wildcard, a 2000-record COPY each way, a VAX-loopback
-oracle for the access-string and wrong-password cases, and DECNETD.EXE renamed away
-on OVMX while OVMX's own client commands run.
+oracle for the access-string and wrong-password cases, a process-logical control that
+makes SYS$SYSTEM:DECNETD.EXE unreachable from the console process (positive control:
+SET HOST, which still activates it), and a second login (VAXC SET HOST OVMXA) that
+samples SHOW SYSTEM / JPI$_IMAGNAME during a 20000-record COPY, and BIG.TXT pushed
+by VAXC into OVMX's FAL then sent back by OVMXA's RMS client.
 
 VAXC  = real OpenVMS VAX V7.3 under SIMH (Node C DECnet disk, scratch copy),
         licensed at run time from the lab PAKs (console log paused; never logged).
@@ -121,7 +124,7 @@ def main():
               '/DIRECTORY=[SYSMGR]/NOPWDEXPIRED/PWDLIFETIME=NONE/PRIVILEGES=(TMPMBX,NETMBX)'
               '/DEFPRIVILEGES=(TMPMBX,NETMBX)')
         v.cmd('MCR AUTHORIZE MODIFY DNTEST/FLAGS=NODISUSER')   # a new UAF record starts DISUSER
-        v.cmd('DELETE SYS$SYSDEVICE:[SYSMGR]BRK*.TXT;*,BIG*.TXT;*,SYS$LOGIN:V2O*.TXT;*,SYS$SYSDEVICE:[LOOPOUT]*.*;*')  # a re-run starts clean
+        v.cmd('DELETE SYS$SYSDEVICE:[SYSMGR]BRK*.TXT;*,BIG*.TXT;*,LONG*.TXT;*,SYS$LOGIN:V2O*.TXT;*,SYS$SYSDEVICE:[LOOPOUT]*.*;*')  # a re-run starts clean
         v.cmd('CREATE/DIRECTORY SYS$SYSDEVICE:[LOOPOUT]')
         v.cmd('CREATE/DIRECTORY/OWNER=[200,201]/PROTECTION=(S:RWE,O:RWE,G:RE,W:RE) SYS$SYSDEVICE:[SYSMGR]')
         v.cmd('SET SECURITY/PROTECTION=(S:RWE,O:RWE,G:RE,W:RE) SYS$SYSDEVICE:[000000]SYSMGR.DIR')
@@ -137,7 +140,13 @@ def main():
                  "$ WRITE F \"record ''N' of the S1 long copy, abcdefghijklmnopqrstuvwxyz0123456789\"",
                  "$ IF I .LT. 2000 THEN GOTO L", "$ CLOSE F"])
         v.cmd('@SYS$SCRATCH:MKBIG.COM', t=300)
-        v.cmd('DIRECTORY/OWNER/PROTECTION/SIZE SYS$SYSDEVICE:[SYSMGR]BRK*.TXT,BIG.TXT')
+        # LONG.TXT: 20000 records, so a COPY lasts long enough to sample OVMXA from a second login
+        v.create('SYS$SCRATCH:MKLONG.COM', ["$ OPEN/WRITE F SYS$SYSDEVICE:[SYSMGR]LONG.TXT", "$ I = 0",
+                 "$ L: I = I + 1", "$ N = F$FAO(\"!5ZL\",I)",
+                 "$ WRITE F \"long record ''N' for the S1 second-login sample, abcdefghijklmnopqrstuvwxyz\"",
+                 "$ IF I .LT. 20000 THEN GOTO L", "$ CLOSE F"])
+        v.cmd('@SYS$SCRATCH:MKLONG.COM', t=900)
+        v.cmd('DIRECTORY/OWNER/PROTECTION/SIZE SYS$SYSDEVICE:[SYSMGR]BRK*.TXT,BIG.TXT,LONG.TXT')
         v.cmd('DIRECTORY SYS$LOGIN:*.COM')
         v.cmd('SET DEFAULT SYS$LOGIN')
         ev('VAXC fixtures ready')
@@ -166,13 +175,35 @@ def main():
             st = v.cmd('SHOW SYMBOL $STATUS', t=30)
             m = re.search(r'%X[0-9A-F]+', st)
             ev('VAXC', tag, 'done $STATUS=' + (m.group(0) if m else '?'))
-        # --- (0) DECNETD.EXE out of the way: if DIRECTORY/TYPE/COPY node:: still activated
-        # it (the pre-S1 path), they would fail "SYS$SYSTEM:DECNETD.EXE is not staged".
-        # NETACP is already running from it, so the network stays up.
+        PID = re.search(r'([0-9A-F]{8})', a.cmd('WRITE SYS$OUTPUT F$GETJPI("","PID")', t=30)).group(1)
+        ev('OVMXA console PID', PID)
         a.cmd('SHOW SYSTEM', t=60)
         a.cmd('DIRECTORY/SIZE SYS$SYSTEM:DECNETD.EXE', t=60)
-        ostep('0a', 'RENAME SYS$SYSTEM:DECNETD.EXE SYS$SYSTEM:DECNETD.S1AWAY', t=60)
-        a.cmd('DIRECTORY SYS$SYSTEM:DECNETD.*', t=60)
+        # --- (0) DECNETD.EXE unreachable from THIS process only: a process logical makes
+        # SYS$SYSTEM: name SYS$LOGIN:, which holds no DECNETD.EXE. NETACP (another process,
+        # already running from DECNETD.EXE) is untouched. Positive control: SET HOST, which
+        # on this branch still activates SYS$SYSTEM:DECNETD.EXE, must now find no image.
+        ostep('0a', 'DEFINE/PROCESS SYS$SYSTEM SYS$LOGIN:', t=30)
+        a.cmd('SHOW LOGICAL SYS$SYSTEM', t=30)
+        a.cmd('DIRECTORY SYS$SYSTEM:DECNETD.EXE', t=30)
+        ev('OVMXA', '0b', 'start')
+        a.send('SET HOST VAXC')
+        k = a.p.expect([r'\$ ', 'Username:'], timeout=120)
+        if k == 1:      # control did NOT block activation: log in and leave, record it
+            ev('OVMXA 0b CONTROL FAILED: SET HOST reached VAXC Username:')
+            a.send('SYSTEM'); a.p.expect('Password:', timeout=60); a.send(VAX_PW)
+            a.p.expect(r'\$ ', timeout=120); a.send('LOGOUT'); a.p.expect(r'\$ ', timeout=120)
+        st = a.cmd('SHOW SYMBOL $STATUS', t=30)
+        m = re.search(r'%X[0-9A-F]+', st)
+        ev('OVMXA', '0b', 'done $STATUS=' + (m.group(0) if m else '?'))
+        for tag, c in [('0c', f'DIRECTORY {S}SYS$SYSDEVICE:[SYSMGR]BRK*.TXT'),
+                       ('0d', f'TYPE {S}SYS$SYSDEVICE:[SYSMGR]BRK1.TXT'),
+                       ('0e', f'COPY {S}SYS$SYSDEVICE:[SYSMGR]BRK2.TXT SYS$LOGIN:BRK2C.TXT'),
+                       ('0f', f'COPY SYS$LOGIN:BRK2C.TXT {S}SYS$SYSDEVICE:[SYSMGR]BRK2RT.TXT'),
+                       ('0g', f'COPY {S}SYS$SYSDEVICE:[SYSMGR]BIG.TXT SYS$LOGIN:BIGC.TXT')]:
+            ostep(tag, c)
+        ostep('0h', 'DEASSIGN/PROCESS SYS$SYSTEM', t=30)
+        a.cmd('SHOW LOGICAL SYS$SYSTEM', t=30)
         steps = [
             ('1a', f'DIRECTORY {S}SYS$LOGIN:*.COM'),
             ('1b', f'DIRECTORY {S}SYS$LOGIN:NOSUCH*.XYZ'),
@@ -192,18 +223,41 @@ def main():
             ('3d', f'COPY/LOG {S}SYS$SYSDEVICE:[SYSMGR]BRK*.TXT SYS$LOGIN:*.*'),
             ('3e', 'DIRECTORY SYS$LOGIN:BRK*.TXT'),
             ('3f', f'COPY {S}SYS$SYSDEVICE:[SYSMGR]BIG.TXT SYS$LOGIN:BIG.TXT'),
-            ('3g', 'SHOW SYSTEM'),
+            ('3g', 'DIRECTORY/SIZE SYS$LOGIN:BIG.TXT'),
             ('3h', f'COPY SYS$LOGIN:BIG.TXT {S}SYS$SYSDEVICE:[SYSMGR]BIGRT.TXT'),
         ]
         for tag, c in steps:
             ostep(tag, c)
-        ostep('0b', 'RENAME SYS$SYSTEM:DECNETD.S1AWAY SYS$SYSTEM:DECNETD.EXE', t=60)
-        a.cmd('DIRECTORY/SIZE SYS$SYSTEM:DECNETD.EXE', t=60)
+        # --- (6) a second login on OVMXA (VAXC SET HOST OVMXA, CTERM) samples SHOW SYSTEM and
+        # the console process's JPI$_IMAGNAME while the console runs a 20000-record COPY
+        ev('VAXC SET HOST OVMXA start')
+        v.p.send('SET HOST OVMXA\r'); v.p.expect('Username:', timeout=120)
+        v.p.send('SYSTEM\r'); v.p.expect('Password:', timeout=60); time.sleep(0.5)
+        v.p.send(OVMX_PW + '\r'); v.p.expect(PROMPT, timeout=120)
+        ev('VAXC logged in to OVMXA')
+        v.cmd('SHOW SYSTEM')
+        ev('OVMXA', '6a', 'start')
+        a.send(f'COPY {S}SYS$SYSDEVICE:[SYSMGR]LONG.TXT SYS$LOGIN:LONG.TXT')
+        time.sleep(2)
+        for n in range(3):
+            ev('second login sample', n)
+            v.cmd('SHOW SYSTEM')
+            v.cmd(f'WRITE SYS$OUTPUT "IMAGNAME=<" + F$GETJPI("{PID}","IMAGNAME") + ">"')
+            v.cmd(f'SHOW PROCESS/ID={PID}')
+            time.sleep(1)
+        a.p.expect(r'\$ ', timeout=900)
+        st = a.cmd('SHOW SYMBOL $STATUS', t=30)
+        m = re.search(r'%X[0-9A-F]+', st)
+        ev('OVMXA', '6a', 'done $STATUS=' + (m.group(0) if m else '?'))
+        v.cmd('SHOW SYSTEM')
+        v.p.send('LOGOUT\r'); v.p.expect(PROMPT, timeout=120)
+        ev('VAXC back from OVMXA')
+        ostep('6b', f'COPY SYS$LOGIN:LONG.TXT {S}SYS$SYSDEVICE:[SYSMGR]LONGRT.TXT', t=900)
         a.cmd('SHOW SYSTEM', t=60)
         # --- (3) byte identity, judged on the VAX
-        for x, y in (('BRK1.TXT', 'BRK1RT.TXT'), ('BIG.TXT', 'BIGRT.TXT')):
+        for x, y in (('BRK1.TXT', 'BRK1RT.TXT'), ('BRK2.TXT', 'BRK2RT.TXT'), ('BIG.TXT', 'BIGRT.TXT'), ('LONG.TXT', 'LONGRT.TXT')):
             v.cmd(f'DIRECTORY/FULL SYS$SYSDEVICE:[SYSMGR]{x},{y}')
-            vstep('3v-' + x, f'DIFFERENCES SYS$SYSDEVICE:[SYSMGR]{x} SYS$SYSDEVICE:[SYSMGR]{y}')
+            vstep('3v-' + x, f'DIFFERENCES/MAXIMUM_DIFFERENCES=3 SYS$SYSDEVICE:[SYSMGR]{x} SYS$SYSDEVICE:[SYSMGR]{y}')
             for f in (x, y):
                 v.cmd(f'CHECKSUM SYS$SYSDEVICE:[SYSMGR]{f}')
                 v.cmd('SHOW SYMBOL CHECKSUM$CHECKSUM')
@@ -237,6 +291,16 @@ def main():
         v.cmd('DIRECTORY/FULL SYS$LOGIN:V2O.TXT,V2O_BACK.TXT')
         a.cmd('DIRECTORY SYS$LOGIN:V2O.TXT', t=60)
         a.cmd('TYPE SYS$LOGIN:V2O.TXT', t=60)
+        # --- (7) the large file the other way: VAXC pushes BIG.TXT into OVMX's FAL, then
+        # OVMXA's RMS client sends it back to VAXC; identity judged on VAXC
+        vstep('7a', f'COPY SYS$SYSDEVICE:[SYSMGR]BIG.TXT {O}BIGV.TXT', t=900)
+        ostep('7b', 'DIRECTORY/SIZE SYS$LOGIN:BIGV.TXT', t=60)
+        ostep('7c', f'COPY SYS$LOGIN:BIGV.TXT {S}SYS$SYSDEVICE:[SYSMGR]BIGVRT.TXT', t=900)
+        v.cmd('DIRECTORY/FULL SYS$SYSDEVICE:[SYSMGR]BIG.TXT,BIGVRT.TXT')
+        vstep('7d', 'DIFFERENCES/MAXIMUM_DIFFERENCES=3 SYS$SYSDEVICE:[SYSMGR]BIG.TXT SYS$SYSDEVICE:[SYSMGR]BIGVRT.TXT', t=600)
+        for f in ('BIG.TXT', 'BIGVRT.TXT'):
+            v.cmd(f'CHECKSUM SYS$SYSDEVICE:[SYSMGR]{f}', t=300)
+            v.cmd('SHOW SYMBOL CHECKSUM$CHECKSUM')
         ev('DONE')
     finally:
         if a:

@@ -307,8 +307,12 @@ def main():
         w("$ %s @GCCOBJ:[000000]TU.RSP" % drv)
         w("$ S = $STATUS")
         w("$ T1 = F$TIME()")
+        # GCC exits 0 (SS$_NORMAL) when it compiled: any other code, even one
+        # with success severity (DEC C __posix_exit(4), an internal compiler
+        # error, is %X0035A021), or no object, is a failed compile
+        w("$ IF S .EQ. 1 .AND. F$SEARCH(\"GCCOBJ:[%s]%s\") .EQS. \"\" THEN S = %%X10000002" % (vdir, vname))
         w("$ WRITE SYS$OUTPUT \"CC1B: TU %d/%d ''S' ''T0' ''T1' %s\"" % (n, len(todo), label))
-        w("$ IF .NOT. S THEN FAILS = FAILS + 1")
+        w("$ IF S .NE. 1 THEN FAILS = FAILS + 1")
         w("$ DELETE GCCOBJ:[000000]TU.RSP;*")
         w("$C%d:" % n)
     if not only:

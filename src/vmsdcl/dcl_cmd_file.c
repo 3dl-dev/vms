@@ -1763,7 +1763,10 @@ static void type_list_heading(struct dcl_context *ctx, const struct dcl_command 
                                      const char *, char *, size_t);
         dcl_message_spec(ctx, cmd->params[0], NULL, full, sizeof full);
     }
-    printf("\n%s\n\n", full);
+    /* each blank line is a record holding one space: the raw VAX console
+     * bytes are "\r\n \r\nSYS$SYSROOT:[SYSMGR]TB.TXT;1\r\n \r\n" (rd vms-691d,
+     * tests/lab/captures/vms-691d-type-spawn-20261102) */
+    printf(" \n%s\n \n", full);
 }
 
 int cmd_type(struct dcl_command *cmd)
@@ -1848,7 +1851,12 @@ int cmd_type(struct dcl_command *cmd)
             if (rst == 0 || rst == RMS$_FNF || rst == RMS$_DNF) {
                 dcl_error("TYPE", 0, "SEARCHFAIL", "error searching for %s", full);
                 fprintf(stderr, "-RMS-E-FNF, file not found\n");
-                return SS$_NOSUCHFILE;
+                /* $STATUS as VAX V7.3 leaves it (rd vms-691d, lab capture
+                 * tests/lab/captures/vms-691d-type-spawn-20261102): TYPE's
+                 * SEARCHFAIL (facility TYPE 0x95, shared message 0x1238,
+                 * warning) with STS$M_INHIB_MSG -- %X10951238 -- for a lone
+                 * file and for a list alike. */
+                return 0x10951238;
             }
             /* The file is there but could not be opened (another accessor
              * holds it, no privilege, ...): say so with RMS's own status --

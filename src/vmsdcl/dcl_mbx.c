@@ -77,6 +77,8 @@
 #include <pthread.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <strings.h>
+#include <sys/stat.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -200,6 +202,124 @@ static int is_mbx_device(const char *s)
     for (size_t i = 3; i < n - 1; i++)
         if (!isdigit((unsigned char)s[i]))
             return 0;
+    return 1;
+}
+
+/*
+ * SYS$OUTPUT A DISK FILE (rd vms-691d). A process $CREPRC'd with a VMS file as
+ * its output -- SPAWN/OUTPUT=file, LIB$SPAWN's output-file, RUN/DETACHED
+ * /OUTPUT=file of a command procedure -- has SYS$OUTPUT naming that file in
+ * LNM$PROCESS, as on VMS, and its stream on the null device ($CREPRC,
+ * src/libvms/syssvc/sys_process.c). The CLI opens it: a NEW version is
+ * $CREATEd through RMS and every line DCL (or an image it runs, which inherits
+ * the stream) writes becomes a record, $PUT through RMS. SYS$ERROR naming the
+ * same file shares the record stream. Observed on OpenVMS VAX V7.3
+ * (tests/lab/captures/vms-691d-type-spawn-20261102): SPAWN/OUTPUT=S2.LOG FOOBAR
+ * leaves "%DCL-W-IVVERB ..." and " \FOOBAR\" in S2.LOG and nothing of them on
+ * the terminal but the creator's own report of the completion status.
+ *
+ * Bound only when the creator arranged it -- the logical is a file spec AND the
+ * stream is the null device -- so a session whose stream is a terminal or a
+ * creator's pipe is never redirected by a SYS$OUTPUT logical it merely carries.
+ * If RMS cannot create the file the stream stays on the null device: the
+ * output is discarded, never written somewhere it was not sent (INV-6).
+ */
+static int names_a_file(const char *spec);
+static char      g_fout_spec[256];
+static int       g_fout_pipe_r = -1;
+static pthread_t g_fout_writer;
+static int       g_fout_up     = 0;
+
+static int lnm_process_file(const char *lognam, char *out, size_t outsz)
+{
+    uint16_t len = 0;
+    uint32_t attrs = 0;
+    if (vms_kif_lnm_translate(VMS_LNM_TBL_PROCESS, lognam, 0, out,
+                              (uint32_t)outsz, &len, &attrs, NULL) != 1)
+        return 0;
+    if (len >= outsz)
+        len = (uint16_t)(outsz - 1);
+    out[len] = '\0';
+    if (len == 0 || vms_lnm_is_ppf(out, len) || out[0] == '/')
+        return 0;
+    return strpbrk(out, "[<") != NULL || names_a_file(out);
+}
+
+static int fd_is_null_device(int fd)
+{
+    struct stat s, n;
+    if (fstat(fd, &s) != 0 || stat("/dev/null", &n) != 0)
+        return 0;
+    return S_ISCHR(s.st_mode) && s.st_rdev == n.st_rdev;
+}
+
+static void *file_writer_main(void *arg)
+{
+    char buf[1024];
+    char line[DCL_MBX_BUF + 1];
+    size_t len = 0;
+    (void)arg;
+    for (;;) {
+        ssize_t n = read(g_fout_pipe_r, buf, sizeof(buf));
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            break;
+        for (ssize_t i = 0; i < n; i++) {
+            if (buf[i] == '\n' || len == sizeof(line) - 1) {
+                while (len > 0 && line[len - 1] == '\r')
+                    len--;
+                line[len] = '\0';
+                (void)rms_textfile_append_line(g_fout_spec, line);
+                len = 0;
+                if (buf[i] == '\n')
+                    continue;
+            }
+            line[len++] = buf[i];
+        }
+    }
+    if (len > 0) {
+        line[len] = '\0';
+        (void)rms_textfile_append_line(g_fout_spec, line);
+    }
+    return NULL;
+}
+
+int dcl_mbx_output_file_is(const char *equiv)
+{
+    return g_fout_up && equiv && strcasecmp(equiv, g_fout_spec) == 0;
+}
+
+static int bind_output_file(void)
+{
+    char out[256], err[256];
+    if (!fd_is_null_device(STDOUT_FILENO) ||
+        !lnm_process_file("SYS$OUTPUT", out, sizeof(out)))
+        return 0;
+    if (rms_textfile_create(out) != 0)
+        return 0;                            /* fail honest: stays on NL: */
+    int p[2];
+    if (pipe(p) != 0)
+        return 0;
+    (void)fcntl(p[0], F_SETFD, FD_CLOEXEC);
+    snprintf(g_fout_spec, sizeof(g_fout_spec), "%s", out);
+    g_fout_pipe_r = p[0];
+    fflush(stdout);
+    if (dup2(p[1], STDOUT_FILENO) < 0 ||
+        pthread_create(&g_fout_writer, NULL, file_writer_main, NULL) != 0) {
+        close(p[0]);
+        close(p[1]);
+        g_fout_pipe_r = -1;
+        return 0;
+    }
+    /* SYS$ERROR naming the same file is the same record stream. */
+    if (fd_is_null_device(STDERR_FILENO) &&
+        lnm_process_file("SYS$ERROR", err, sizeof(err)) &&
+        strcasecmp(err, out) == 0)
+        dup2(p[1], STDERR_FILENO);
+    close(p[1]);
+    g_fout_up = 1;
+    setvbuf(stdout, NULL, _IOLBF, 0);
     return 1;
 }
 
@@ -624,7 +744,9 @@ int dcl_mbx_bind_std_streams(void)
     }
 
     /* SYS$OUTPUT: results leave here. */
-    if (resolve_to_mailbox("SYS$OUTPUT", dev, sizeof(dev))) {
+    if (bind_output_file()) {
+        bound |= DCL_MBX_BOUND_OUTPUT;
+    } else if (resolve_to_mailbox("SYS$OUTPUT", dev, sizeof(dev))) {
         uint32_t chan = 0;
         if (vms_kif_mbx_assign(dev, &chan) & 1) {
             int p[2];
@@ -659,6 +781,23 @@ int dcl_mbx_bind_std_streams(void)
 
 void dcl_mbx_shutdown(void)
 {
+    if (g_fout_up) {
+        /* Every write end closed, the writer files the last line and ends; the
+         * join makes the file complete before the process is gone (the
+         * creator TYPEs it as soon as the subprocess has ended). */
+        fflush(stdout);
+        fflush(stderr);
+        int nfd = open("/dev/null", O_WRONLY);
+        if (nfd >= 0) {
+            dup2(nfd, STDOUT_FILENO);
+            dup2(nfd, STDERR_FILENO);
+            close(nfd);
+        }
+        pthread_join(g_fout_writer, NULL);
+        g_fout_up = 0;
+        close(g_fout_pipe_r);
+        g_fout_pipe_r = -1;
+    }
     if (g_writer_up) {
         /* Flush DCL's remaining SYS$OUTPUT into the pipe, then close the last
          * write end (fd 1) so writer_main() drains it and sees EOF; join so the

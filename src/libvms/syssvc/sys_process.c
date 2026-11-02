@@ -2050,11 +2050,20 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 char path[256];
                 dsc$strncpy(path, output, sizeof(path));
                 int fd = creprc_open_outstream(path);
+                /* A VMS FILE as the stream, for a detached process or a
+                 * subprocess alike (rd vms-691d: SPAWN/OUTPUT=file): the
+                 * name becomes the process's SYS$OUTPUT and the stream the
+                 * null device, which the image's run-time library (or the
+                 * CLI, src/vmsdcl/dcl_mbx.c) replaces with the file it
+                 * $CREATEs through RMS. A subprocess no longer writes on
+                 * its creator's terminal because its file was a VMS name. */
+                /* NEGCTL-ANCHORED (creprc-subprocess-output-file-on-creator-terminal) */
+                int vfile = fd < 0 && creprc_is_vms_file_spec(path);
                 /* NEGCTL-ANCHORED (creprc-detached-output-vms-file-not-written) */
-                if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                if (vfile)
                     creprc_define_stream("SYS$OUTPUT", path);
                 /* NEGCTL-ANCHORED (creprc-detached-output-on-creator-terminal) */
-                if (fd < 0 && detached)
+                if (fd < 0 && (detached || vfile))
                     fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
             } else if (detached) {
@@ -2065,9 +2074,10 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 char path[256];
                 dsc$strncpy(path, error, sizeof(path));
                 int fd = creprc_open_outstream(path);
-                if (fd < 0 && detached && creprc_is_vms_file_spec(path))
+                int vfile = fd < 0 && creprc_is_vms_file_spec(path);
+                if (vfile)
                     creprc_define_stream("SYS$ERROR", path);
-                if (fd < 0 && detached)
+                if (fd < 0 && (detached || vfile))
                     fd = open("/dev/null", O_WRONLY);
                 if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
             } else if (detached) {

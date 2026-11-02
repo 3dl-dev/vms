@@ -19,6 +19,7 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/dcl_cmd.h"
+#include "dcl/dcl_mbx.h"   /* dcl_mbx_output_file_is (rd vms-691d) */
 #include "dcl/vms_messages.h"
 #include "dcl/dcl_rms.h"   /* vms-5f0: OPEN/READ/WRITE/CLOSE ride RMS (ACP), not fopen */
 #include "ssdef.h"
@@ -200,6 +201,12 @@ static int dcl_logical_is_terminal(const char *equiv)
                 return 1;
         }
     }
+    /* The process-permanent FILE this DCL bound its SYS$OUTPUT (and a
+     * SYS$ERROR naming the same file) to at startup -- SPAWN/OUTPUT=file
+     * (dcl_mbx_bind_std_streams, rd vms-691d): writing the stream IS writing
+     * that file, through the one RMS record stream, never a second opener. */
+    if (dcl_mbx_output_file_is(equiv))
+        return 1;
     /* A mailbox device (MBAn:) is a stream too: when SYS$INPUT/SYS$OUTPUT
      * name a mailbox, DCL bound its stdin/stdout to it at startup
      * (dcl_mbx_bind_std_streams, vms-786), so writing the stream IS writing

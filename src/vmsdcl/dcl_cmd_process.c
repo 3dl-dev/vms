@@ -2774,28 +2774,22 @@ int cmd_run(struct dcl_command *cmd)
  * SPAWN                    — interactive DCL subprocess
  * SPAWN cmd                — execute single DCL command in subprocess
  * SPAWN /NOWAIT cmd        — run DCL subprocess in background
- * SPAWN /OUTPUT=file cmd   — redirect subprocess stdout to file
+ * SPAWN /OUTPUT=file cmd   — the subprocess's SYS$OUTPUT is that file
+ * SPAWN /INPUT=file [cmd]   — its SYS$INPUT is that file (after cmd, if any)
  */
-/*
- * Create an exclusive scratch SYS$INPUT file, filling `buf` and returning an
- * open write fd (or -1). Uses only DECC$SHR-exported universals (getpid /
- * snprintf / open) -- NOT mkstemp(), which the VMS-native link does not export
- * as a bare universal (only the decorated decc$mkstemp), so a bare mkstemp()
- * would be an unresolved external in every native-linked consumer (vms-e9a).
- * O_CREAT|O_EXCL with a retry gives the same collision safety mkstemp gave.
- */
-static int dcl_spawn_open_scratch(char *buf, size_t bufsz)
+/* A SPAWN /INPUT or /OUTPUT value as the subprocess must be handed it: a bare
+ * device (NL:, OPA0:, MBA3:) as given, a file named in full from this
+ * process's defaults (rd vms-691d). */
+static void spawn_stream_spec(struct dcl_context *ctx, const char *v,
+                              char *out, size_t outsz)
 {
-    static unsigned seq = 0;
-    for (int tries = 0; tries < 4096; tries++) {
-        snprintf(buf, bufsz, "/tmp/ovmx_dclspawn_%d_%u", (int)getpid(), seq++);
-        int fd = open(buf, O_CREAT | O_EXCL | O_WRONLY, 0600);
-        if (fd >= 0)
-            return fd;
-        if (errno != EEXIST)
-            return -1;
+    size_t n = strlen(v);
+    if (n > 1 && v[n - 1] == ':' && strchr(v, ':') == v + n - 1) {
+        snprintf(out, outsz, "%s", v);
+        return;
     }
-    return -1;
+    if (dcl_rms_effective_spec(ctx, v, out, outsz) != 0 || !out[0])
+        snprintf(out, outsz, "%s", v);
 }
 
 int cmd_spawn(struct dcl_command *cmd)
@@ -2805,6 +2799,7 @@ int cmd_spawn(struct dcl_command *cmd)
     /* Check qualifiers */
     int nowait = dcl_has_qualifier(cmd, "NOWAIT");
     const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
+    const char *input_file  = dcl_qualifier_value(cmd, "INPUT");
     const char *proc_name_q = dcl_qualifier_value(cmd, "PROCESS");
 
     /* Build command text from params if any */
@@ -2877,40 +2872,37 @@ int cmd_spawn(struct dcl_command *cmd)
      * fork/exec to fall back to), so SPAWN reports the failure rather than
      * running an invisible subprocess (INV-6 / Rule 9, design §3d).
      *
-     * The command runs as the subprocess's SYS$INPUT ($CREPRC execs with no
-     * argv; VMS LIB$SPAWN likewise feeds a command string to the CLI as its
-     * input). SPAWN writes it to a scratch file it OWNS, so it can reclaim the
-     * file after its own attached wait -- and asks lib$spawn only to CREATE
-     * (CLI$M_NOWAIT), doing the waiting itself where Ctrl-Y/attach live.
+     * The command string goes to lib$spawn AS the command string: lib$spawn
+     * hands it to the subprocess's CLI through a temporary mailbox (rd
+     * vms-003b) -- no scratch file, no host path (rd vms-691d retired the
+     * /tmp command file this used to write with open(2)). SPAWN asks lib$spawn
+     * only to CREATE (CLI$M_NOWAIT), doing the waiting itself where Ctrl-Y /
+     * attach live.
+     *
+     * /INPUT and /OUTPUT (rd vms-691d) name the subprocess's SYS$INPUT and
+     * SYS$OUTPUT -- its process-permanent files, which $CREPRC gives it by
+     * name (DCL Dictionary, SPAWN; observed on OpenVMS VAX V7.3,
+     * tests/lab/captures/vms-691d-type-spawn-20261102). A file is named in
+     * full here, defaulted from THIS process's default directory, so the
+     * subprocess opens the file the user meant; a bare device (NL:, OPA0:)
+     * passes as given.
      */
-    char cmd_tmp[256] = "";
-    int  have_tmp   = 0;
-    struct dsc$descriptor_s in_d;
-    const struct dsc$descriptor_s *in_arg = NULL;
+    struct dsc$descriptor_s cmd_d;
+    const struct dsc$descriptor_s *cmd_arg = NULL;
     if (has_command) {
-        int tfd = dcl_spawn_open_scratch(cmd_tmp, sizeof(cmd_tmp));
-        if (tfd < 0) {
-            dcl_error("DCL", 4, "CREPRC", "cannot create process");
-            return SS$_INSFMEM;
-        }
-        have_tmp = 1;
-        char line[DCL_MAX_LINE + 2];
-        int wl = snprintf(line, sizeof(line), "%s\n", command_text);
-        int wrc = dcl_write_all(tfd, line, (size_t)wl);
-        close(tfd);
-        if (wrc != 0) {
-            /* The scratch file could not take the command (rd vms-f47: tmpfs
-             * refuses writes below 4 MB of available memory): a subprocess
-             * given a truncated command would run the wrong thing. */
-            unlink(cmd_tmp);
-            dcl_error("DCL", 4, "CREPRC", "cannot create process: no room for its command");
-            return SS$_INSFMEM;
-        }
-        in_d   = dsc_from_str(cmd_tmp);
-        in_arg = &in_d;
+        cmd_d   = dsc_from_str(command_text);
+        cmd_arg = &cmd_d;
     }
 
-    struct dsc$descriptor_s out_d = dsc_from_str(output_file);
+    char in_spec[1024] = "", out_spec[1024] = "";
+    if (input_file && *input_file)
+        spawn_stream_spec(spawn_ctx, input_file, in_spec, sizeof(in_spec));
+    if (output_file && *output_file)
+        spawn_stream_spec(spawn_ctx, output_file, out_spec, sizeof(out_spec));
+    struct dsc$descriptor_s in_d = dsc_from_str(in_spec);
+    const struct dsc$descriptor_s *in_arg =
+        in_d.dsc$a_pointer ? &in_d : NULL;
+    struct dsc$descriptor_s out_d = dsc_from_str(out_spec);
     const struct dsc$descriptor_s *out_arg =
         out_d.dsc$a_pointer ? &out_d : NULL;
 
@@ -2930,7 +2922,7 @@ int cmd_spawn(struct dcl_command *cmd)
         strncpy(final_name, proc_name_q, sizeof(final_name) - 1);
         final_name[sizeof(final_name) - 1] = '\0';
         struct dsc$descriptor_s prc_d = dsc_from_str(final_name);
-        cst = lib$spawn(NULL, in_arg, out_arg, &flags, &prc_d, &vms_pid, NULL,
+        cst = lib$spawn(cmd_arg, in_arg, out_arg, &flags, &prc_d, &vms_pid, NULL,
                         NULL, NULL, NULL, NULL, NULL, NULL);
     } else {
         for (int n = 1; n <= 65535; n++) {
@@ -2939,7 +2931,7 @@ int cmd_spawn(struct dcl_command *cmd)
             strncpy(final_name, nm, sizeof(final_name) - 1);
             final_name[sizeof(final_name) - 1] = '\0';
             struct dsc$descriptor_s prc_d = dsc_from_str(final_name);
-            cst = lib$spawn(NULL, in_arg, out_arg, &flags, &prc_d, &vms_pid,
+            cst = lib$spawn(cmd_arg, in_arg, out_arg, &flags, &prc_d, &vms_pid,
                             NULL, NULL, NULL, NULL, NULL, NULL, NULL);
             if (cst & 1)
                 break;                     /* created + named base_N */
@@ -2949,7 +2941,24 @@ int cmd_spawn(struct dcl_command *cmd)
     }
 
     if (!(cst & 1)) {
-        if (have_tmp) unlink(cmd_tmp);
+        /* An input file that is not there is RMS's own status, reported as
+         * itself and left in $STATUS -- VAX V7.3: SPAWN/INPUT=NOSUCH.COM SHOW
+         * TIME -> "%RMS-E-FNF, file not found", $STATUS %X00018292, and no
+         * process (rd vms-691d). */
+        if (((cst >> 16) & 0x0FFF) == 1 /* RMS */) {
+            char txt[256];
+            uint16_t tl = 0;
+            struct dsc$descriptor_s md;
+            md.dsc$w_length = (uint16_t)(sizeof txt - 1);
+            md.dsc$b_dtype = DSC$K_DTYPE_T;
+            md.dsc$b_class = DSC$K_CLASS_S;
+            md.dsc$a_pointer = txt;
+            if ((sys$getmsg(cst, &tl, &md, 0x0F, NULL) & 1) && tl > 0) {
+                txt[tl] = '\0';
+                fprintf(stderr, "%s\n", txt);
+                return (int)cst;
+            }
+        }
         /* lib$spawn propagated $CREPRC's authentic status (no executive,
          * name clash it could not resolve, or a lost child). Report honestly
          * -- SPAWN created nothing (INV-6). */
@@ -2986,7 +2995,6 @@ int cmd_spawn(struct dcl_command *cmd)
                errno == EINTR)
             ;
         dcl_running_child = 0;
-        if (have_tmp) unlink(cmd_tmp);
         if (WIFSTOPPED(wstatus)) {
             printf("\nInterrupt\n");
             spawn_ctx->interrupted_pid = (pid_t)pinfo.linux_pid;
@@ -2999,7 +3007,6 @@ int cmd_spawn(struct dcl_command *cmd)
 
     /* The executive no longer resolves the pid: a fast subprocess already ran
      * to completion between creation and this read. It genuinely ran. */
-    if (have_tmp) unlink(cmd_tmp);
     return SS$_NORMAL;
 }
 

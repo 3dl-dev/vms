@@ -78,4 +78,11 @@ int dcl_mbx_output_is_mailbox(void);
  */
 void dcl_mbx_output_drain_sync(void);
 
+/*
+ * dcl_mbx_output_file_is - is `equiv` the VMS file this DCL bound its
+ * SYS$OUTPUT to at startup (a process created with a file as its output, e.g.
+ * SPAWN/OUTPUT=file, rd vms-691d)? Writing SYS$OUTPUT then writes that stream.
+ */
+int dcl_mbx_output_file_is(const char *equiv);
+
 #endif /* OVMX_DCL_MBX_H */

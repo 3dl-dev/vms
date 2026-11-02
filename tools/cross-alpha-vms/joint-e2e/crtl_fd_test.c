@@ -104,6 +104,7 @@ int main(int argc, char **argv)
          * have. (openat() is no DEC C RTL entry; test_syssvc_crtl_devfd
          * covers a directory descriptor.) */
         char so[256], mb[256], cmd[300], b[64];
+        setvbuf(stdout, NULL, _IONBF, 0);   /* in order with system()'s output */
         int p[2], tty = isatty(1);
         if (!getname(1, so, 1))
             strcpy(so, "<none>");

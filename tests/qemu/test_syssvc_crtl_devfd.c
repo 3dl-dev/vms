@@ -205,14 +205,17 @@ int main(void)
         check(mb[0] && (dvi(mb, DVI$_UNIT, &unit) & 1) && fstat(p[0], &st) == 0 &&
               S_ISFIFO(st.st_mode) && (uint32_t)st.st_ino == unit,
               "fstat() of the read end: a FIFO whose st_ino is the mailbox unit");
+        /* both messages, then the end of file, queued before any read: a
+         * reader can never wait here, whatever the descriptors are */
         ssize_t w1 = write(p[1], "abc", 3), w2 = write(p[1], "defg", 4);
+        int wclosed = close(p[1]) == 0;
         ssize_t r1 = read(p[0], b, sizeof b);
         int ok1 = r1 == 3 && memcmp(b, "abc", 3) == 0;
         ssize_t r2 = read(p[0], b, sizeof b);
         int ok2 = r2 == 4 && memcmp(b, "defg", 4) == 0;
         /* negctl: crtl-devfd-pipe-via-kernel */
         check(w1 == 3 && w2 == 4 && ok1 && ok2, "each write() is one message; each read() takes one");
-        check(close(p[1]) == 0 && read(p[0], b, sizeof b) == 0,
+        check(wclosed && read(p[0], b, sizeof b) == 0,
               "close() of the write end: the reader sees end of file");
         check(close(p[0]) == 0, "close() of the read end");
         /* negctl: crtl-devfd-pipe-via-kernel */

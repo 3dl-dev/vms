@@ -1,0 +1,182 @@
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID.80000001H:ECX.svm [bit 2]
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+
+    OpenVMX V0.7-14 - OpenVMS-compatible
+     2-NOV-2026 15:56:20.70
+
+%STDRV-I-STARTUP, OpenVMX startup begun at  2-NOV-2026 15:56:20.95
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:56:21.01  %%%%%%%%%%%
+Operator _OVMX$OPA0: has been enabled, username SYSTEM
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:56:21.36  %%%%%%%%%%%
+Operator status for operator _OVMX$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 10000004
+%RUN-S-PROC_ID, identification of created process is 10000005
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-14 (OpenVMS-compatible)
+
+Username: 
+
+Username: 
+%%%%%%%%%%%  OPCOM   2-NOV-2026 15:56:23.86  %%%%%%%%%%%
+Message from user SYSTEM on OVMX
+DECnet starting
+Username: 
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMX V0.7-14 - OpenVMS-compatible[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ NCP :== $SYS$SYSTEM:NCP.EXE
+$ NCP SHOW EXECUTOR
+
+
+Node Volatile Summary as of  2-NOV-2026 15:56:38
+
+Executor node = 1.963 (OVMXA)
+
+State                    = on
+Identification           = OVMX DECnet-compatible V0.7-14
+
+
+$ NCP SHOW KNOWN NODES
+
+
+Known Node Volatile Summary as of  2-NOV-2026 15:56:38
+
+Executor node = 1.963 (OVMXA)
+
+State                    = on
+Identification           = OVMX DECnet-compatible V0.7-14
+
+
+    Node           State      Active  Delay   Circuit     Next node
+                              Links
+
+ 1.964 (OVMXB)                                ETH-0          0
+ 1.965 (VAXC)                                 ETH-0          0
+$ DIRECTORY VAXC"SYSTEM XX"::SYS$LOGIN:*.COM
+
+Directory VAXC"SYSTEM password"::SYS$COMMON:[SYSMGR]
+
+ALFMAINT.COM;1      AMDS$LOGICALS.COM;1 CLUSTER_CONFIG.COM;1                    
+CLUSTER_CONFIG_LAN.COM;1                DBLSTRTUP.COM;1     
+DCE$RPC_SHUTDOWN.COM;1                  DCE$RPC_STARTUP.COM;1                   
+DECW$STARTXTERMINAL.COM;1               DNS$CHANGE_DEF_FILE.COM;1               
+DNS$CLIENT_STARTUP.COM;1                DNS$CLIENT_STOP.COM;1                   
+ICC$ADD_REGISTRY_TABLE.COM;1            ICC$CREATE_SECURITY_OBJECT.COM;1        
+LAT$SYSTARTUP.COM;1 LIB$DT_STARTUP.COM;1                    LOADNET.COM;1       
+LOGIN.COM;1         LTLOAD.COM;1        MAKEROOT.COM;1      NETCONFIG.COM;1     
+RTTLOAD.COM;1       SMISERVER.COM;1     STARTNET.COM;1      SYCONFIG.COM;1      
+SYLOGICALS.COM;1    SYLOGIN.COM;1       SYPAGSWPFILES.COM;1 SYSECURITY.COM;1    
+SYSHUTDWN.COM;1     SYSTARTUP_V5.COM;1  SYSTARTUP_VMS.COM;2 TFF$STARTUP.COM;1   
+TNT$UTILITY.COM;1   UTC$CONFIGURE_TDF.COM;1                 
+UTC$TIMEZONE_SETUP.COM;1                UTC$TIME_SETUP.COM;1                    
+
+Total of 36 files.
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DIRECTORY VAXC"SYSTEM XX"::SYS$LOGIN:NOSUCH*.XYZ
+%DIRECT-W-NOFILES, no files found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10018292"
+$ DIRECTORY VAXC"SYSTEM XX"::SYS$SYSDEVICE:[SYSMGR]BRK*.TXT
+
+Directory VAXC"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1          BRK2.TXT;1          BRKP.TXT;1          
+
+Total of 3 files.
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DIRECTORY VAXC"DNTEST XX"::SYS$LOGIN:BRK*.TXT
+
+Directory VAXC"DNTEST password"::SYS$SYSDEVICE:[SYSMGR]
+
+BRK1.TXT;1          BRK2.TXT;1          BRKP.TXT;1          
+
+Total of 3 files.
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DIRECTORY VAXC"DNTEST XX"::SYS$LOGIN:NOSUCH.TXT
+%DIRECT-W-NOFILES, no files found
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X10018292"
+$ DIRECTORY/FULL VAXC"DNTEST XX"::SYS$LOGIN:BRK*.TXT
+%SYSTEM-F-UNSUPPORTED, unsupported operation or function
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000E4A"
+$ TYPE VAXC"SYSTEM XX"::SYS$SYSDEVICE:[SYSMGR]BRK1.TXT
+bracket file one
+second record
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ TYPE VAXC"SYSTEM XX"::SYS$SYSDEVICE:[SYSMGR]BRK*.TXT
+ 
+VAXC"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]BRK1.TXT;1
+ 
+bracket file one
+second record
+ 
+VAXC"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]BRK2.TXT;1
+ 
+bracket file two
+ 
+VAXC"SYSTEM password"::SYS$SYSDEVICE:[SYSMGR]BRKP.TXT;1
+ 
+protected file
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ TYPE VAXC"DNTEST XX"::SYS$LOGIN:BRK*.TXT
+ 
+VAXC"DNTEST password"::SYS$SYSDEVICE:[SYSMGR]BRK1.TXT;1
+ 
+bracket file one
+second record
+ 
+VAXC"DNTEST password"::SYS$SYSDEVICE:[SYSMGR]BRK2.TXT;1
+ 
+bracket file two
+%TYPE-W-OPENIN, error opening VAXC"DNTEST password"::SYS$SYSDEVICE:[SYSMGR]BRKP.TXT;1 as input
+-RMS-E-PRV, insufficient privilege or file protection violation
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X1001829A"
+$ TYPE VAXC"DNTEST XX"::SYS$LOGIN:BRKP.TXT
+%TYPE-W-OPENIN, error opening VAXC"DNTEST password"::SYS$SYSDEVICE:[SYSMGR]BRKP.TXT;1 as input
+-RMS-E-PRV, insufficient privilege or file protection violation
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X1001829A"
+$ COPY VAXC"SYSTEM XX"::SYS$SYSDEVICE:[SYSMGR]BRK1.TXT SYS$LOGIN:BRK1.
+TXT
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ TYPE SYS$LOGIN:BRK1.TXT
+bracket file one
+second record
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ COPY SYS$LOGIN:BRK1.TXT VAXC"SYSTEM XX"::SYS$SYSDEVICE:[SYSMGR]BRK1R
+T.TXT
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ DIRECTORY SYS$LOGIN:V2O.TXT
+
+Directory SYS$SYSROOT:[SYSMGR]
+
+V2O.TXT;1
+
+Total of 1 file.
+$ TYPE SYS$LOGIN:V2O.TXT
+vax to ovmx line one
+line two of the round trip
+$ 

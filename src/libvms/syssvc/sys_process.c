@@ -2174,8 +2174,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      */
     if (detached) {
         int mstatus;
-        while (waitpid(pid, &mstatus, 0) < 0 && errno == EINTR)
-            ;
+        (void)vms_kif_substrate_reap((uint32_t)pid, &mstatus, 0);   /* rd vms-e70f */
     }
 
     if (r != (ssize_t)sizeof(rep) || !(rep.status & 1)) {
@@ -2225,8 +2224,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          */
         if (!detached) {
             int wstatus;
-            while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
-                ;
+            (void)vms_kif_substrate_reap((uint32_t)pid, &wstatus, 0);
         }
         return (r == (ssize_t)sizeof(rep)) ? rep.status : OVMX$_PRCLOST;
     }

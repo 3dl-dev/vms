@@ -19,6 +19,10 @@
 #include "vms_syscall.h"
 #include "vms_string.h"
 #include "vms_errno.h"
+#if defined(__NetBSD__)
+#include <errno.h>
+#include <sys/wait.h>     /* vms_kif_substrate_reap */
+#endif
 
 /* File descriptor for /dev/vms — thread-local so each thread opens/closes
  * independently.  Callers must invoke vms_kif_open() before using any KIF
@@ -175,6 +179,32 @@ uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid)
 uint32_t vms_kif_substrate_pid(void)
 {
     return (uint32_t)vms_sys_getpid();
+}
+
+/*
+ * vms_kif_substrate_reap (rd vms-e70f) -- collect the substrate task `pid` this
+ * process forked for $CREPRC/LIB$SPAWN, waiting for it: the substrate half of
+ * process creation, beneath the VMS layer. The C RTL's wait()/waitpid() are the
+ * VMS ones (a subprocess's completion from the executive), so the services that
+ * own a substrate child reap it through here. Returns the pid, or -1.
+ */
+int vms_kif_substrate_reap(uint32_t pid, int *wstatus, int options)
+{
+#if defined(__NetBSD__)
+    for (;;) {
+        pid_t r = waitpid((pid_t)pid, wstatus, options);
+        if (r < 0 && errno == EINTR)
+            continue;
+        return (int)r;
+    }
+#else
+    for (;;) {
+        long r = (long)vms_sys_wait4((vms_pid_t)pid, wstatus, options, 0);
+        if (r == -4 /* EINTR */)
+            continue;
+        return r < 0 ? -1 : (int)r;
+    }
+#endif
 }
 
 static void kif_bind(void)

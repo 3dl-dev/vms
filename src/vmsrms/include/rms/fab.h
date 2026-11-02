@@ -96,7 +96,7 @@ struct FAB {
     char    *fab$l_dna;         /* Default filename address */
     uint8_t  fab$b_dns;         /* Default filename size */
     struct NAM *fab$l_nam;      /* Name block address */
-    struct XABKEY *fab$l_xab;   /* XAB chain address */
+    void    *fab$l_xab;         /* XAB chain address: any XAB type, void * as in DEC C fabdef.h */
     uint8_t  fab$b_fsz;         /* Fixed header size (VFC) */
     /* Internal state - not part of VMS FAB, used by our implementation.
      *

@@ -268,6 +268,15 @@ if ! grep -q 'vms-5b3: exit is __posix_exit' include/stdlib.h; then
 	perl -0pi -e 's/^_Noreturn void exit \(int\);\n/#if defined(__VMS) \&\& !defined(__OVMX_LIBC_BUILD) \&\& defined(_POSIX_EXIT) \/* vms-5b3: exit is __posix_exit *\/\n_Noreturn void exit (int) __asm__("decc\$__posix_exit");\n#else\n_Noreturn void exit (int);\n#endif\n/m' include/stdlib.h
 fi
 grep -q 'vms-5b3: exit is __posix_exit' include/stdlib.h || { echo "vms-5b3 PATCH FAIL: exit in include/stdlib.h" >&2; exit 7; }
+# vms-465: the <inttypes.h> length modifiers follow this port's LLP64 model.
+# musl picks "l" for 64-bit types whenever pointers are 64-bit, but here long
+# is 32-bit and int64_t/intmax_t/uintptr_t are long long: PRId64 was "ld" and
+# printed the low 32 bits -- GCC's cc1plus built on it wrote `.quad 65535` for
+# 0x10000FFFF (HOST_WIDE_INT_PRINT_DEC is "%" PRId64).
+if ! grep -q 'vms-465: LLP64 inttypes' include/inttypes.h; then
+	perl -0pi -e 's/^#if UINTPTR_MAX == UINT64_MAX\n#define __PRI64  "l"\n/#if UINTPTR_MAX == UINT64_MAX \&\& __LONG_MAX == 0x7fffffffL \/* vms-465: LLP64 inttypes *\/\n#define __PRI64  "ll"\n#define __PRIPTR "ll"\n#elif UINTPTR_MAX == UINT64_MAX\n#define __PRI64  "l"\n/m' include/inttypes.h
+fi
+grep -q 'vms-465: LLP64 inttypes' include/inttypes.h || { echo "vms-465 PATCH FAIL: LLP64 in include/inttypes.h" >&2; exit 7; }
 # vms-4ba3: DEC C fgetname(FILE *, char *, ...) -- the file specification of an
 # open stream, served by the RMS file layer (src/vmsrms/crtl_rms_fd.c). A DEC C
 # client form only; musl has no such routine.
@@ -633,6 +642,27 @@ else
 	cat /tmp/pgsz.err >&2
 	exit 7
 fi
+
+# vms-465: <inttypes.h> 64-bit length modifiers are "ll" on this LLP64 port, at
+# both client pointer sizes -- a "l" printed the low 32 bits of every int64_t.
+cat > /tmp/pri64.c <<'EOF'
+#include <inttypes.h>
+_Static_assert(sizeof(long) == 4, "alpha-dec-vms long is 32-bit (LLP64)");
+_Static_assert(sizeof(PRId64) == 4 && sizeof(PRIx64) == 4 && sizeof(SCNd64) == 4, "PRI/SCN 64 must be lld-style: long is 32-bit here (vms-465)");
+_Static_assert(sizeof(PRIdMAX) == 4 && sizeof(PRIxPTR) == 4, "intmax_t and uintptr_t are long long here (vms-465)");
+int __vms_465_pri64_ok;
+EOF
+for ps in "" "-mpointer-size=64"; do
+	if "${TARGET}-gcc" ${ps} -nostdinc -D_XOPEN_SOURCE=700 -D__VMS=1 \
+		-Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
+		-fsyntax-only /tmp/pri64.c 2>/tmp/pri64.err; then
+		echo "  OK      PRId64/PRIxPTR use ll (LLP64, pointer size: ${ps:-default 32})"
+	else
+		echo "VERIFY FAIL (vms-465): <inttypes.h> 64-bit modifiers are wrong for LLP64 (${ps:-default 32}):" >&2
+		cat /tmp/pri64.err >&2
+		exit 7
+	fi
+done
 
 # --------------------------------------------------------------------------
 # ONE-HEAP GATE (vms-032): lite_malloc.o must be the alpha-dec-vms override --

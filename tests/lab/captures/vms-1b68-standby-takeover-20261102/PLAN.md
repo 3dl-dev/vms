@@ -42,3 +42,10 @@ that the survivors (VAX2 + OVMXE) stay quorate after VAX1 leaves.
 
 STOP RULE: any VAX bugcheck -> stop firing, keep console + pcap, identify the frame, report; no re-fire.
 Pcaps carrying OVMX-originated op-0x08/0x12 records are NOT committed (census tools would count them).
+
+## Addendum (2026-11-02, before any OVMX node boots)
+Rebased onto work/vms-1b68-standby-takeover 7eb359853, which answers GATE-REFUSAL.md: frame-grounding
+rows for dlm_rm_08/dlm_rm_12/dlm_rm_08_ans select on the queue the emitting test reads off the LKB
+(st:queue=01/00/ff): [30] requested, [31] granted, [108] 04 and [110] 00/ff on converting/waiting
+records; test_dlm_rebuild dumps a waiting and a converting record. Predictions unchanged. Pod manifest
+requests 200m CPU, limit 4; the CPU the fire actually got is recorded with the results.

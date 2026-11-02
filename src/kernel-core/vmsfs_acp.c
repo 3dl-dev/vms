@@ -2815,13 +2815,14 @@ static uint32_t acp_fh2_self_fidnum(const uint8_t *hdr)
  */
 static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
                                     struct acp_rw_scratch *s,
-                                    uint32_t need, uint32_t hint, uint32_t *lbn_out);
+                                    uint32_t need, uint32_t hint, uint32_t room,
+                                    uint32_t *lbn_out);
 
 static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
                                  struct acp_rw_scratch *s,
                                  uint32_t need, uint32_t *lbn_out)
 {
-    return acp_bitmap_alloc_at(snap, s, need, 0, lbn_out);
+    return acp_bitmap_alloc_at(snap, s, need, 0, need, lbn_out);
 }
 
 /*
@@ -2832,17 +2833,89 @@ static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
  * bitmap block it starts in instead of every block from LBN 1 up to the free
  * space. When nothing is free from the hint on, the search wraps to LBN 1 and
  * runs up to the hint (first fit). hint 0 is a plain first-fit search.
+ *
+ * `room` (>= need; rd vms-465): when the blocks at the hint are taken, the run
+ * is placed at the start of a free stretch of at least `room` blocks, so the
+ * file can keep growing there in one extent instead of filling the holes other
+ * files left one by one (a 20 MB assembler output written in 64 KB pieces
+ * across the holes of deleted temporaries outgrew the channel window's
+ * ACP_WINDOW_MAX extents: SS$_DEVICEFULL, "I/O error" in the compiler). Only
+ * when no such stretch exists does it take the first run of `need`.
  */
+
+/* Find `len` consecutive free blocks in [lo, hi); 1 and *start when found, 0
+ * when not, -1 on an I/O error. */
+static int acp_bitmap_find_run(const struct acp_chan_snap *snap, struct acp_rw_scratch *s,
+                               const struct acp_win_ext *bmwin, uint32_t nwin,
+                               uint32_t lo, uint32_t hi, uint32_t len, uint32_t *start)
+{
+    uint32_t b, run_start = 0, run_len = 0, cur_bmvbn = 0;
+    int loaded = 0;
+
+    for (b = lo; b < hi; b++) {
+        uint32_t bmvbn = 2u + b / ODS2_SBM_BITS_PER_BLOCK;
+
+        if (!loaded || bmvbn != cur_bmvbn) {
+            uint32_t lbn = acp_window_map_vbn(bmwin, nwin, bmvbn);
+
+            if (lbn == 0)
+                return 0;                   /* past the bitmap's coverage */
+            if (acp_bdev_read(snap->backing_major, snap->backing_minor,
+                              lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
+                return -1;
+            cur_bmvbn = bmvbn;
+            loaded = 1;
+        }
+        /* A whole longword of the bitmap at once where it can be: 32
+         * allocated blocks are skipped, 32 free ones join the run
+         * (rd vms-465: the search crossed a million bits one call each). */
+        if ((b % 32u) == 0 && b + 32u <= hi) {
+            uint32_t wi = (b % ODS2_SBM_BITS_PER_BLOCK) / 32u;
+            const uint8_t *wp = s->bmblk + (size_t)wi * 4u;
+            uint32_t w = (uint32_t)wp[0] | ((uint32_t)wp[1] << 8) |
+                         ((uint32_t)wp[2] << 16) | ((uint32_t)wp[3] << 24);
+            if (w == 0u) {
+                run_len = 0;
+                b += 31u;
+                continue;
+            }
+            if (w == 0xFFFFFFFFu && len - run_len >= 32u) {
+                if (run_len == 0)
+                    run_start = b;
+                run_len += 32u;
+                b += 31u;
+                if (run_len == len) {
+                    *start = run_start;
+                    return 1;
+                }
+                continue;
+            }
+        }
+        if (ods2_sbm_block_bit_free(s->bmblk, b % ODS2_SBM_BITS_PER_BLOCK)) {
+            if (run_len == 0)
+                run_start = b;
+            if (++run_len == len) {
+                *start = run_start;
+                return 1;
+            }
+        } else {
+            run_len = 0;
+        }
+    }
+    return 0;
+}
+
 static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
                                     struct acp_rw_scratch *s,
-                                    uint32_t need, uint32_t hint, uint32_t *lbn_out)
+                                    uint32_t need, uint32_t hint, uint32_t room,
+                                    uint32_t *lbn_out)
 {
     struct acp_winbuild wb;
     struct acp_win_ext  bmwin[ACP_WINDOW_MAX];
     uint32_t bmhdr_lbn;
-    uint32_t b, run_start = 0, run_len = 0, cur_bmvbn = 0;
-    uint32_t i, pass, lo, hi;
-    int loaded = 0, found = 0;
+    uint32_t run_start = 0;
+    uint32_t i;
+    int found = 0, tryroom;
 
     if (need == 0)
         return SS__BADPARAM;
@@ -2864,68 +2937,30 @@ static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
 
     if (hint < 1 || hint >= snap->volsize)
         hint = 1;
-    /* Scan for a run of `need` consecutive free blocks: [hint, volsize), then
-     * [1, hint + need) (a run may not wrap). Bit 0 (LBN 0, the boot block) is
-     * never a data block; the reserved region is already marked used in the
-     * bitmap, so the scan simply skips it. */
-    for (pass = 0; pass < 2 && !found; pass++) {
-        lo = pass == 0 ? hint : 1u;
-        hi = pass == 0 ? snap->volsize
-                       : (hint + need < snap->volsize ? hint + need : snap->volsize);
-        if (pass == 1 && hint == 1)
-            break;                          /* the first pass covered it all */
-        run_len = 0;
-        for (b = lo; b < hi; b++) {
-            uint32_t bmvbn = 2u + b / ODS2_SBM_BITS_PER_BLOCK;
-            uint32_t lbn;
+    if (room < need)
+        room = need;
+    if (room > snap->volsize / 8u)
+        room = need > snap->volsize / 8u ? need : snap->volsize / 8u;
+    /* 1. the blocks at the hint itself (the file's own continuation) */
+    if (hint > 1 && hint + need <= snap->volsize) {
+        found = acp_bitmap_find_run(snap, s, bmwin, wb.n, hint, hint + need, need, &run_start);
+        if (found < 0)
+            return SS__DEVNOTMOUNT;
+    }
+    /* 2. the start of a stretch with room to grow, from the hint on, then from
+     *    LBN 1; 3. the first run of `need` (a run may not wrap). Bit 0 (LBN 0,
+     *    the boot block) is never a data block; the reserved region is already
+     *    marked used in the bitmap, so the scan simply skips it. */
+    for (tryroom = (room > need); !found && tryroom >= 0; tryroom--) {
+        uint32_t len = tryroom ? room : need;
 
-            if (!loaded || bmvbn != cur_bmvbn) {
-                lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
-                if (lbn == 0)
-                    break;                  /* past the bitmap's coverage */
-                if (acp_bdev_read(snap->backing_major, snap->backing_minor,
-                                             lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
-                    return SS__DEVNOTMOUNT;
-                cur_bmvbn = bmvbn;
-                loaded = 1;
-            }
-            /* A whole longword of the bitmap at once where it can be: 32
-             * allocated blocks are skipped, 32 free ones join the run
-             * (rd vms-465: the search crossed a million bits one call each). */
-            if ((b % 32u) == 0 && b + 32u <= hi) {
-                uint32_t wi = (b % ODS2_SBM_BITS_PER_BLOCK) / 32u;
-                const uint8_t *wp = s->bmblk + (size_t)wi * 4u;
-                uint32_t w = (uint32_t)wp[0] | ((uint32_t)wp[1] << 8) |
-                             ((uint32_t)wp[2] << 16) | ((uint32_t)wp[3] << 24);
-                if (w == 0u) {
-                    run_len = 0;
-                    b += 31u;
-                    continue;
-                }
-                if (w == 0xFFFFFFFFu && need - run_len >= 32u) {
-                    if (run_len == 0)
-                        run_start = b;
-                    run_len += 32u;
-                    b += 31u;
-                    if (run_len == need) {
-                        found = 1;
-                        break;
-                    }
-                    continue;
-                }
-            }
-            if (ods2_sbm_block_bit_free(s->bmblk, b % ODS2_SBM_BITS_PER_BLOCK)) {
-                if (run_len == 0)
-                    run_start = b;
-                run_len++;
-                if (run_len == need) {
-                    found = 1;
-                    break;
-                }
-            } else {
-                run_len = 0;
-            }
-        }
+        found = acp_bitmap_find_run(snap, s, bmwin, wb.n, hint, snap->volsize, len, &run_start);
+        if (!found && hint > 1)
+            found = acp_bitmap_find_run(snap, s, bmwin, wb.n, 1u,
+                                        hint + len < snap->volsize ? hint + len : snap->volsize,
+                                        len, &run_start);
+        if (found < 0)
+            return SS__DEVNOTMOUNT;
     }
     if (!found)
         return SS__DEVICEFULL;              /* no contiguous free run -- honest */
@@ -3066,7 +3101,8 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         /* contiguous-best-try: the blocks right after the file's last extent */
         uint32_t hint = lwin_n ? lwin[lwin_n - 1u].lbn + lwin[lwin_n - 1u].count : 0u;
 
-        status = acp_bitmap_alloc_at(snap, s, need, hint, &alloc_lbn);
+        /* room to grow: as much again as the file holds already (rd vms-465) */
+        status = acp_bitmap_alloc_at(snap, s, need, hint, need + old_hiblk, &alloc_lbn);
         if (status != SS__NORMAL) {
             args.status = status;           /* SS$_DEVICEFULL / SS$_DEVNOTMOUNT */
             exec_free(s);

@@ -66,6 +66,15 @@ lib gmp gmp-6.3.0 --disable-assembly
 lib mpfr mpfr-4.2.1 --with-gmp=$H
 lib mpc mpc-1.3.1 --with-gmp=$H --with-mpfr=$H
 echo "== gcc (build=$B host=$T target=$T, all-gcc)"
+# vms-d2a: every host object is compiled with _POSIX_EXIT, the port's own intent
+# for its programs (gcc/config/vms/xm-vms.h: "Posix compatible failure and success
+# codes"), and the way VMS ports build third-party C (/DEFINE=_POSIX_EXIT). xm-vms.h
+# reaches only gcc/*.cc that include config.h; libiberty (xexit.c, obstack.c),
+# libcody (fatal.cc) and config/vms/vms-ar.c, vms-ld.c do not include it, so their
+# exit(1) was DEC C exit(1) == SS$_NORMAL: a cc1plus out of memory (libiberty
+# xmalloc_failed -> xexit(1)) read as a successful compile. GCC's sources are
+# unchanged; this is a build flag.
+PX=-D_POSIX_EXIT
 mkdir -p $O/b-gcc && cd $O/b-gcc
 export ax_cv_cxx_compile_cxx11_FOR_BUILD=yes CONFIG_SITE=/src/tools/cross-alpha-vms/cxx/config.site
 [ -f Makefile ] || rm -rf $O/plan
@@ -73,7 +82,7 @@ export ax_cv_cxx_compile_cxx11_FOR_BUILD=yes CONFIG_SITE=/src/tools/cross-alpha-
     --enable-languages=c,c++ --disable-nls --disable-bootstrap --disable-shared --disable-lto \
     --disable-plugin --disable-fixincludes \
     --with-gmp=$H --with-mpfr=$H --with-mpc=$H --without-isl --without-zstd --with-gnu-as \
-    CC="$T-gcc" CXX="$T-g++ $P32" AR=ar RANLIB=true CFLAGS="-O2" CXXFLAGS="-O2" \
+    CC="$T-gcc" CXX="$T-g++ $P32" AR=ar RANLIB=true CFLAGS="-O2 $PX" CXXFLAGS="-O2 $PX" \
     > cfg.log 2>&1 || { tail -30 cfg.log; exit 1; }
 # configure-host serially: the sub-configures share config.cache
 make -j1 configure-host > configure-host.log 2>&1 || { tail -30 configure-host.log; exit 1; }
@@ -96,6 +105,13 @@ PB=$O/planbin; rm -rf $PB; [ -f $O/plan/.configured ] || rm -rf $O/plan; mkdir -
 for p in $T-gcc $T-g++ ar; do ln -s /src/tools/cross-alpha-vms/selfhost/planlog $PB/$p; done
 OVMX_PLAN_LOG=$O/plan PATH=$PB:$PATH \
 make -j"$JOBS" all-gcc > make.log 2>&1 || { grep -nE ' error:|LINK-[FE]' make.log | sort -t: -k3 -u | head -40; exit 1; }
+# vms-d2a: no host object may bind DEC C exit() (exit(1) == SS$_NORMAL); every
+# exit is __posix_exit. A configure that drops CFLAGS for one subdirectory fails here.
+bad=$(for o in $(find libiberty libcpp libcody libdecnumber libbacktrace zlib gcc -maxdepth 3 \
+        \( -name '*.o' -o -name '*.obj' \) -not -path '*/build-*' -not -path '*/pic/*' 2>/dev/null); do
+        if strings -a "$o" | grep -E 'decc\$exit$' >/dev/null; then echo "$o"; fi; done)
+[ -z "$bad" ] || { echo "build-host-gcc: FAIL host objects call DEC C exit (success on exit(1)), not __posix_exit:"; echo "$bad"; exit 1; }
+echo "   _POSIX_EXIT: no host object binds decc\$exit"
 # ld.exe is the port's own linker wrapper (config/vms/vms-ld.c): it writes an options
 # file and runs the VMS `link` command, the program the driver calls to link (vms-65a);
 # ar.exe (config/vms/vms-ar.c) is its twin for `ar`: a command file running `library` (vms-8ca)

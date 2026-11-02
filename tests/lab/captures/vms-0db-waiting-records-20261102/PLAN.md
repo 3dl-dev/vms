@@ -170,3 +170,30 @@ granted at once; then a 120 s wait; then 3,000 rounds of A0 NL <-> s. Its root i
 C and Q queue, and its activity starts after they have. Step 3 becomes four
 `RMW 31AWQRC` on VAX2, and step 4 (C, Q on VAX3) follows within the 120 s. The STOP of VAX1's
 holder in step 6 is kept. Every prediction is unchanged, with WQRC for WQRA.
+
+## Addendum 2, registered after arm A's first firing and before its second
+
+**Arm A, first firing (WQRC, capture `0db-armA` running from step 1): the tree did not move.**
+SDA on VAX3 before the STOP showed every VAX3 lock in WQRC mastered on VAX1 (CSID 00010001):
+C (0A0003F2, CR -> EX) on the root's conversion queue, Q (070003F4, EX) on its waiting queue,
+V (080003ED) and U (080003EF) on W0's. VAX1's holder was stopped at 13:13:53Z. VAX2's four
+delayed-activity processes then sent all 12,000 conversions to VAX1 (02/06 and 02/07 x12,001
+each in the capture). SDA on VAX3 at 13:17:27Z and 13:22:57Z still showed CSID 00010001, and
+the capture holds no op-0x0e for WQRC. **PA1 fails on this firing: it is a measurement for HN.**
+
+Run A0 (uncaptured) did move, with V and U already queued on W0. So the next firing separates
+the root's queues from the sub's, in the same pod and the same tree, with only the root's
+queues changed:
+
+- STOP CC and CQ on VAX3, so WQRC's root has empty conversion and waiting queues. V and U stay
+  queued on W0, and CH, CG and VAX2's CN1-4 stay granted.
+- VAX2: four more `RMW 31AWQRC` (CM1-CM4), 120 s delay then 3,000 rounds each. Capture still on.
+
+Predictions for this firing:
+
+- **PA1b (HN, root queues):** WQRC now moves to VAX2 within 10 minutes of the activity
+  starting. If it does not, HN is not about the root's queues, and the report says the trigger
+  failed instead.
+- **PA2b:** VAX3 sends 9 op-0x12 records (CH root, S0, S1; CG root, W0; CV root, W0; CU root,
+  W0). The CV and CU W0 records are the converting and the waiting sub. PA3-PA8 are scored on
+  them as registered, for the sub only.

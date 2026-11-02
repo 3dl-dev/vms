@@ -3129,6 +3129,11 @@ EOF
   *** nothing re-homed and NO op-0x13: telling the new master this node holds less than it does is the stale-handle crash (rd vms-3ac) ***
   *** the proxy's master handle is REPLACED with the one VAX2 minted (0x020004cc) ***
   *** to the NEW master the op-0x0f named, not to the old master that sent the op-0x11 ***
+*** the NEW MASTER's real op-0x14 is answered ***
+  *** byte-for-byte VAX3's real 82/15 outside the envelope body[0:4] ***
+  *** the slot waits, ENDED, for the new master's op-0x14 (lab33a: freeing it here left VAX2's 0x14 unanswered) ***
+  counted: 1 acked
+  one 82/15 staged
   ...1 end-of-records
   ...2 answered and re-homed
   ...from VAX1's

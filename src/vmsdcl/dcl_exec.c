@@ -1713,7 +1713,8 @@ int dcl_spec_names_one_file(const char *s)
  */
 static void parm_echo(const char *elem, char *out, size_t cap)
 {
-    size_t n = strcspn(elem, ".;");
+    size_t n = 0;                 /* no strcspn: not in the VMS-native DCL link's surface */
+    while (elem[n] && elem[n] != '.' && elem[n] != ';') n++;
     if (n >= cap) n = cap - 1;
     memcpy(out, elem, n);
     out[n] = '\0';

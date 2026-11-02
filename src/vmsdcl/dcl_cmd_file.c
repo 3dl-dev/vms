@@ -3745,6 +3745,105 @@ extern int vmsfs_list_versions(const char *linux_dir, const char *basename,
  * Calls vmsfs_purge_versions() for each matching file base name found
  * in the target directory.
  */
+/*
+ * purge_files_acp - PURGE over the Files-11 ACP (the product runtime): every
+ * version the executive directory search ($PARSE/$SEARCH) returns for the spec,
+ * with PURGE's default *.*;* filling the missing name/type, grouped by
+ * name.type; all but the newest keep_count of each group are $ERASEd
+ * (dcl_rms_erase, IO$_DELETE). No opendir()/unlink() on a /vms passthrough --
+ * the same shape as delete_files_acp.
+ */
+static int purge_files_acp(struct dcl_context *ctx, const char *param, int keep_count,
+                           int do_confirm, int do_log)
+{
+    char pat[1024];
+    const char *src = (param && param[0]) ? param : "";
+    size_t n0 = strlen(src);
+    if (n0 >= sizeof(pat) - 8) {
+        dcl_error("RMS", 2, "FNM", "error in file name - %s", src);
+        return RMS$_FNM;
+    }
+    memcpy(pat, src, n0 + 1);
+    {   /* PURGE's default file spec *.*;* : drop any version, fill name/type */
+        char *comp = (char *)dcl_filename_component(pat);
+        if (!comp) comp = pat + strlen(pat);
+        char *semi = strchr(comp, ';');
+        if (semi) *semi = '\0';
+        if (!comp[0]) {
+            memcpy(pat + strlen(pat), "*.*", 4);
+        } else if (!strchr(comp, '.')) {
+            memcpy(pat + strlen(pat), ".*", 3);
+        }
+        memcpy(pat + strlen(pat), ";*", 3);
+    }
+
+    struct dcl_rms_dir *d = dcl_rms_dir_open(ctx, pat);
+    if (!d) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", src[0] ? src : "*.*;*");
+        return SS$_NOSUCHFILE;
+    }
+    struct acp_pur { char spec[1024]; struct file_match fm; };
+    int cap = 32, n = 0;
+    struct acp_pur *arr = malloc((size_t)cap * sizeof(*arr));
+    if (!arr) { dcl_rms_dir_close(d); return SS$_INSFMEM; }
+    char rspec[1024];
+    while (dcl_rms_dir_next(d, rspec, sizeof(rspec), NULL, NULL, NULL)) {
+        if (n >= cap) {
+            cap *= 2;
+            struct acp_pur *t = realloc(arr, (size_t)cap * sizeof(*arr));
+            if (!t) { free(arr); dcl_rms_dir_close(d); return SS$_INSFMEM; }
+            arr = t;
+        }
+        strncpy(arr[n].spec, rspec, sizeof(arr[n].spec) - 1);
+        arr[n].spec[sizeof(arr[n].spec) - 1] = '\0';
+        const char *nt = rspec;
+        const char *rb = strrchr(rspec, ']');
+        if (!rb) rb = strrchr(rspec, '>');
+        if (rb) nt = rb + 1;
+        strncpy(arr[n].fm.dname, nt, sizeof(arr[n].fm.dname) - 1);
+        arr[n].fm.dname[sizeof(arr[n].fm.dname) - 1] = '\0';
+        fm_split(nt, arr[n].fm.base, sizeof(arr[n].fm.base), &arr[n].fm.version);
+        n++;
+    }
+    dcl_rms_dir_close(d);
+
+    int total_deleted = 0;
+    for (int i = 0; i < n; i++) {
+        /* rank = how many versions of the same name.type are newer than this one */
+        int newer = 0;
+        for (int j = 0; j < n; j++)
+            if (j != i && strcmp(arr[j].fm.base, arr[i].fm.base) == 0 &&
+                arr[j].fm.version > arr[i].fm.version)
+                newer++;
+        if (newer < keep_count) continue;
+        if (do_confirm) {
+            printf("PURGE %s ? [N]: ", arr[i].spec);
+            fflush(stdout);
+            char resp[64];
+            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (toupper((unsigned char)resp[0]) != 'Y') continue;
+        }
+        uint32_t est = dcl_rms_erase(ctx, arr[i].spec);
+        if (est & 1) {
+            total_deleted++;
+            if (do_log)
+                dcl_error("PURGE", 1, "FILPURG", "%s deleted", arr[i].spec);
+        } else if (est == RMS$_PRV) {
+            dcl_error("PURGE", 2, "PRV",
+                      "insufficient privilege or file protection violation for %s",
+                      arr[i].spec);
+        }
+    }
+    free(arr);
+    if (total_deleted == 0) {
+        printf("%%PURGE-I-NOPURGE, no file versions to purge\n");
+    } else {
+        printf("%%PURGE-I-PURGED, %d old version%s deleted\n",
+               total_deleted, total_deleted != 1 ? "s" : "");
+    }
+    return SS$_NORMAL;
+}
+
 int cmd_purge(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -3760,6 +3859,10 @@ int cmd_purge(struct dcl_command *cmd)
         keep_count = (int)strtol(keep_val, &endp, 10);
         if (endp == keep_val || *endp != '\0' || keep_count < 1) keep_count = 1;
     }
+
+    if (!rms_executive_absent())
+        return purge_files_acp(ctx, cmd->param_count >= 1 ? cmd->params[0] : "",
+                               keep_count, do_confirm, do_log);
 
     /* Determine the target directory and pattern */
     char linux_dir[1024];

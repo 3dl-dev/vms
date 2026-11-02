@@ -20,13 +20,21 @@
 #
 # Runtime: ~15-25 min first run (Linux/Alpha kernel cross-build); the kernel
 # tree is cached in $WORK so re-runs only rebuild the modules (seconds).
+#
+# ALPHA_IMG overrides the toolchain image tag (default ovmx-cross-alpha; the
+# release cut passes its own :release tag so it never clobbers a developer's).
+# SOURCE_DATE_EPOCH, when set, pins the kbuild clock/user/host/build number so
+# the kernel and module are byte-reproducible (the release cut's Alpha bootable
+# set, rd vms-f10). The kernel tarball is sha256-pinned either way.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-IMG="ovmx-cross-alpha"
+IMG="${ALPHA_IMG:-ovmx-cross-alpha}"
 KV="${KV:-6.6.52}"
 WORK="${WORK:-/tmp/ovmx-vmsko-alpha}"
+SDE="${SOURCE_DATE_EPOCH:-}"
+case "$SDE" in ''|*[!0-9]*) [ -z "$SDE" ] || { echo "FATAL: SOURCE_DATE_EPOCH='$SDE' is not a nonnegative integer"; exit 1; } ;; esac
 
 echo "== building cross/emulation image ($IMG) =="
 docker build -t "$IMG" "$HERE" >/dev/null
@@ -39,11 +47,21 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
   -v "$REPO:/repo:ro" \
   -v "$WORK:/work" "$IMG" bash -euo pipefail -c '
     KV="'"$KV"'"
+    SDE="'"$SDE"'"
     export ARCH=alpha CROSS_COMPILE=alpha-linux-gnu-
+    if [ -n "$SDE" ]; then
+        export SOURCE_DATE_EPOCH="$SDE" KBUILD_BUILD_USER=ovmx KBUILD_BUILD_HOST=ovmx KBUILD_BUILD_VERSION=1
+        export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@$SDE" "+%a %b %e %H:%M:%S UTC %Y")"
+        export TZ=UTC LC_ALL=C
+    fi
     cd /work
 
     # ---- 1. Linux/Alpha kernel tree (cached) ----
     [ -f linux-$KV.tar.xz ] || wget -q https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KV.tar.xz
+    if [ "$KV" = 6.6.52 ]; then
+        echo "1591ab348399d4aa53121158525056a69c8cf0fe0e90935b0095e9a58e37b4b8  linux-$KV.tar.xz" | sha256sum -c - \
+            || { echo "FATAL: linux-$KV.tar.xz does not match its pinned sha256"; exit 1; }
+    fi
     [ -d linux-$KV ] || tar xf linux-$KV.tar.xz
     cd linux-$KV
 

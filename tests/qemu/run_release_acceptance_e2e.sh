@@ -66,6 +66,14 @@
 #                                          top-level x86_64 set. The version
 #                                          still comes from the bundle's
 #                                          release-manifest.json.
+#                                          "alpha" boots the bundle's alpha/
+#                                          bootable set (rd vms-f10) --
+#                                          vmlinux-boot + ovmx-distrib-alpha.img
+#                                          -- under qemu-system-alpha -M clipper,
+#                                          inside OVMX_ALPHA_BOOT_IMAGE (default
+#                                          ovmx-cross-alpha:release, the image
+#                                          tools/cut-release-alpha.sh builds; it
+#                                          carries qemu-system-alpha).
 #   BOOT_TIMEOUT / SETUP_TIMEOUT / RUN_TIMEOUT   forwarded to the gate itself.
 
 set -uo pipefail
@@ -93,9 +101,13 @@ fi
 case "${OVMX_RELEASE_ARCH:-}" in
     "") BOOT_DIR="$RELEASE_DIR"; GUEST_ARCH="" ;;
     aarch64) BOOT_DIR="$RELEASE_DIR/aarch64"; GUEST_ARCH=aarch64 ;;
-    *) echo "FATAL: unsupported OVMX_RELEASE_ARCH='$OVMX_RELEASE_ARCH' (want: empty or aarch64)"; exit 1 ;;
+    alpha) BOOT_DIR="$RELEASE_DIR/alpha"; GUEST_ARCH=alpha
+           IMAGE="${OVMX_ALPHA_BOOT_IMAGE:-ovmx-cross-alpha:release}" ;;
+    *) echo "FATAL: unsupported OVMX_RELEASE_ARCH='$OVMX_RELEASE_ARCH' (want: empty, aarch64 or alpha)"; exit 1 ;;
 esac
-for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img; do
+BOOT_SET=(vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img)
+[ "$GUEST_ARCH" = alpha ] && BOOT_SET=(vmlinux-boot ovmx-distrib-alpha.img)
+for f in "${BOOT_SET[@]}"; do
     [ -f "$BOOT_DIR/$f" ] || { echo "FATAL: $BOOT_DIR/$f missing -- is this a real tools/cut-release.sh output directory?"; exit 1; }
 done
 
@@ -113,7 +125,11 @@ else
 fi
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    if [ "${OVMX_BUILD_BOOT_IMAGE:-0}" = "1" ]; then
+    if [ "$GUEST_ARCH" = alpha ]; then
+        echo "FATAL: image '$IMAGE' (qemu-system-alpha) not found -- tools/cut-release.sh builds it;"
+        echo "  or: docker build -t $IMAGE tools/cross-alpha"
+        exit 1
+    elif [ "${OVMX_BUILD_BOOT_IMAGE:-0}" = "1" ]; then
         echo "--- building bootable image ($IMAGE) ---"
         docker build -t "$IMAGE" -f "$REPO_ROOT/distro/Dockerfile.bootable" "$REPO_ROOT" \
             || { echo "FAIL: bootable image build"; exit 1; }

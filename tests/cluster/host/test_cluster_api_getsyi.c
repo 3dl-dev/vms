@@ -112,7 +112,20 @@ static void test_projection_after_join(void)
 
 	ct_check(v.cluster_member != 0, "after-join: CLUSTER_MEMBER true");
 	ct_check_eq_u32(v.cluster_nodes, 3, "after-join: CLUSTER_NODES 3 (OVMX+VAX1+VAX2)");
-	ct_check_eq_u32(v.cluster_votes, 0, "after-join: CLUSTER_VOTES 0 (OVMX is non-voting)");
+	/* rd vms-b6f: the CLUSTER's votes, as a real V7.3 reports them -- VAX2,
+	 * VOTES 0 itself, read CLUSTER_VOTES=1 beside OVMXE's one vote
+	 * (vms-93fa) and 4 beside 1 + 3 (vms-c350 labc350). Here OVMX is
+	 * non-voting and VAX1 + VAX2 hold one each. */
+	ct_check_eq_u32(v.cluster_votes, 2,
+			"after-join: CLUSTER_VOTES 2 (the cluster's, not OVMX's own 0)");
+	vax1->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_quorum_recompute(club);
+	cluster_api_getsyi_project(&g_cl, &v);
+	ct_check_eq_u32(v.cluster_votes, 1,
+			"after-join: CLUSTER_VOTES 1 once VAX1 is unreachable");
+	vax1->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_quorum_recompute(club);
+	cluster_api_getsyi_project(&g_cl, &v);
 	ct_check_eq_u32(v.cluster_quorum, club->quorum,
 			"after-join: CLUSTER_QUORUM matches the CLUB's own quorum field");
 	ct_check_eq_u32(club->quorum, 2, "after-join: QUORUM = (2+2)/2 = 2 (VAX1+VAX2 = 2 votes)");

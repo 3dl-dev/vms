@@ -48,8 +48,12 @@ void cluster_api_getsyi_project(const struct vms_cluster *cl,
 	/* SYI$_CLUSTER_NODES: FC-P3.6's own SELECTED-flag member count. */
 	out->cluster_nodes = club->cluster_nodes;
 
-	/* SYI$_CLUSTER_VOTES: this system's own SYSGEN VOTES, not a peer's. */
-	out->cluster_votes = cl->params.votes;
+	/* SYI$_CLUSTER_VOTES: the CLUSTER's votes -- every reachable member's,
+	 * this system's included -- which is what a real V7.3 reports (rd
+	 * vms-b6f): VAX2, whose own VOTES is 0, read CLUSTER_VOTES=1 beside
+	 * OVMXE's one vote, 4 beside 1 + 3, and 3 after the 1 departed. This
+	 * system's own VOTES is SYI$_VOTES, a SYSGEN parameter. */
+	out->cluster_votes = club->present_votes;
 
 	/* SYI$_CLUSTER_QUORUM: FC-P3.7's own computed field
 	 * (cnxman_quorum_recompute(), vms_cnxman_quorum.c). */

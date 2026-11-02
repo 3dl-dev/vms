@@ -1334,6 +1334,36 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
             n = result_size - 1;
         memcpy(result, hw.hw_model, n);
         result[n] = '\0';
+    } else if (strcmp(s, "CLUSTER_NODES") == 0 ||
+               strcmp(s, "CLUSTER_QUORUM") == 0 ||
+               strcmp(s, "CLUSTER_VOTES") == 0 ||
+               strcmp(s, "CLUSTER_MEMBER") == 0) {
+        /* rd vms-b6f: these were UNHANDLED here and fell through to "0" --
+         * an OVMX node that both real VAXes counted as a member read
+         * CN=0 Q=0 V=0. They come from the connection manager's own CLUB,
+         * through the same projection $GETSYI uses (cluster_api_getsyi_
+         * project), so DCL and SHOW CLUSTER read one source. With no
+         * connection manager (VAXCLUSTER=0, or no /dev/vms) a real
+         * standalone VMS answers 0 / FALSE, which is the truth here too. */
+        struct vms_cluster_getsyi_args ca;
+        int ok = vms_kif_cluster_getsyi(&ca) == SS$_NORMAL;
+
+        if (strcmp(s, "CLUSTER_MEMBER") == 0)
+            strncpy(result, ok && ca.cluster_member ? "TRUE" : "FALSE",
+                    result_size - 1);
+        else
+            snprintf(result, result_size, "%u",
+                     !ok ? 0u
+                     : strcmp(s, "CLUSTER_NODES") == 0 ? (unsigned)ca.cluster_nodes
+                     : strcmp(s, "CLUSTER_QUORUM") == 0 ? (unsigned)ca.cluster_quorum
+                     : (unsigned)ca.cluster_votes);
+    } else if (strcmp(s, "VOTES") == 0 || strcmp(s, "EXPECTED_VOTES") == 0) {
+        /* rd vms-b6f: this system's own SYSGEN values, from the same store
+         * SCSSYSTEMID is read from. A real VAX2 read EXPECTED_VOTES=1 -- its
+         * own parameter -- after its cluster's quorum had been adjusted. */
+        uint32_t v = 0;
+        (void)sysgen_read_param(s, &v);
+        snprintf(result, result_size, "%u", v);
     } else if (strcmp(s, "BOOTTIME") == 0) {
         format_vms_time(result, result_size);
     } else {

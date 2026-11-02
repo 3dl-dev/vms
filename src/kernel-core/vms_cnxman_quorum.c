@@ -269,6 +269,8 @@ void cnxman_quorum_recompute(struct vms_club *club)
 		club->quorum = cnxman_quorum_of_cevotes(new_cevotes);
 	club->expected_votes = (uint16_t)max_expected;
 	club->quorum_lost = (uint8_t)(present_votes < (uint32_t)club->quorum);
+	club->present_votes = present_votes > 0xffffu ? (uint16_t)0xffffu
+						      : (uint16_t)present_votes;
 
 	/* club->qdisk_votes is a TRACKED readback (design SS3.4 lists it among
 	 * the fields this item computes), kept in step here even though it

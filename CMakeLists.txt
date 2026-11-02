@@ -1281,6 +1281,14 @@ if(BUILD_TESTS)
     set_tests_properties(lab_fire_cluster_group PROPERTIES
         LABELS "integration;cluster" TIMEOUT 120)
 
+    # A lab fire boots OVMXE with the VOTES the plan asked for (rd vms-1b68):
+    # OVMX_FIRE_VOTES reaches the SYSBOOT> VOTES prompt. Hermetic (stubbed ip
+    # and setsid); carries its own negative control (VOTES hard-coded to 1).
+    add_test(NAME lab_fire_node_votes
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_fire_node_votes.sh)
+    set_tests_properties(lab_fire_node_votes PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 60)
+
     # The lab node image's vax.ini keeps SIMH's timer catch-up OFF (rd vms-549c):
     # with catch-up on, a host stall overflowed the timer calibration (Current
     # Insts Per Tick went negative), every event went to a negative delay, and

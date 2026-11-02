@@ -454,6 +454,10 @@ static void mixed_up(uint8_t ovmx_wt, uint8_t vax_wt)
 	g.now_ms = 1000u;
 	g.n_sent = 0u;
 	g.last_dst = 0u;
+	/* No frame of an EARLIER scenario may stand in for one this scenario
+	 * never sent (rd vms-7649: a check of g.last after a send that did not
+	 * happen read the previous scenario's frame). */
+	memset(g.last, 0, sizeof(g.last));
 	vms_local_csid = CSID_OVMX;
 
 	club_up(ovmx_wt, vax_wt);

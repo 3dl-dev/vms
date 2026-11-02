@@ -1151,16 +1151,16 @@ jobs:
       # alpha/ set -- vmlinux-boot (vms.ko baked into its initramfs) and the
       # ODS-2 ovmx-distrib-alpha.img -- under qemu-system-alpha -M clipper
       # (TCG), inside the ovmx-cross-alpha:release image the cut built, logs in
-      # SYSTEM/MANAGER and checks PRODUCT SHOW PRODUCT against the manifest.
-      # PARTS is not on the Alpha disk yet (no VMS-native PARTS.EXE build for
-      # Alpha): OVMX_SKIP_PARTS_SCENARIO=1 here is that tracked gap (vms-f10
-      # child), not a weakened check -- the x86_64/aarch64 legs still run it.
-      - name: Release-acceptance gate (alpha) — boot the cut's alpha set, log in, verify the shipped version
+      # SYSTEM/MANAGER, runs the PARTS demo (@SYS$UPDATE:PARTS_SETUP.COM, keyed
+      # RMS lookups) and checks PRODUCT SHOW PRODUCT against the manifest -- the
+      # same assertions as the x86_64/aarch64 legs. The negative control below
+      # skips PARTS only to reach the version assertion faster.
+      - name: Release-acceptance gate (alpha) — boot the cut's alpha set, log in, run PARTS, verify the shipped version
         if: ${{ !cancelled() && steps.cut.outcome == 'success' }}
         run: |
           set +e
-          OVMX_QEMU_FULL_E2E=1 OVMX_RELEASE_ARCH=alpha OVMX_SKIP_PARTS_SCENARIO=1 \
-          BOOT_TIMEOUT=600 SETUP_TIMEOUT=120 \
+          OVMX_QEMU_FULL_E2E=1 OVMX_RELEASE_ARCH=alpha \
+          BOOT_TIMEOUT=600 SETUP_TIMEOUT=300 \
           OVMX_RELEASE_DIR="${{ github.workspace }}/dist/release-acceptance" \
             tests/qemu/run_release_acceptance_e2e.sh
           rc=$?

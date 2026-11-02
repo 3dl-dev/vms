@@ -1168,6 +1168,8 @@ long vms_ioctl_mbx_chkacc(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pid,
                                   uint32_t *uic, uint64_t *privs);
 int  vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
+/* $GETDVI of a mailbox unit (rd vms-a66e; vms_mbx.c) */
+uint32_t vms_mbx_devinfo(const char *devnam, struct vms_devinfo *info);
 void vms_mbx_release_all(struct vms_proc *proc);
 
 /* ----------------------------------------------------------------

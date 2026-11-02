@@ -194,6 +194,7 @@
 #include <time.h>
 #include <stdio.h>
 #include "ovmx_async.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "starlet.h"
 #include "rms_textfile.h"   /* a VMS-file SYS$INPUT is checked through RMS (rd vms-003b) */
 #include "lnmdef.h"
@@ -321,6 +322,7 @@ uint32_t sys$exit(uint32_t code) {
  */
 static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
 {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     if (linux_pid == vms_kif_substrate_pid()) {
         /* User + system CPU of every thread of this process, the figure
          * getrusage(RUSAGE_SELF) gives; clock_gettime is also a DEC C RTL
@@ -1363,6 +1365,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                       uint32_t baspri, uint32_t uic, uint32_t mbxunt,
                       uint32_t stsflg, const void *itemlst,
                       const struct dsc$descriptor_s *node) {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     (void)quota; (void)baspri; (void)mbxunt;
 
     /* Creating a process on another cluster node, or a non-empty $CREPRC item

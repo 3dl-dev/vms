@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 #include <stdio.h>
 #include "ssdef.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "descrip.h"
 #include "lib$routines.h"
 #include "str$routines.h"
@@ -357,6 +358,31 @@ static void spawn_resolve_spec(const struct dsc$descriptor_s *spec,
     }
 }
 
+/*
+ * THE SUBSTRATE SCOPE (rd vms-a66e; ovmx_substrate.h). Depth of the system
+ * services / RTL routines now doing the substrate's own work. The C RTL file
+ * layer (DECC$SHR, src/vmsrms/crtl_rms_fd.c) asks ovmx_substrate_active() and
+ * leaves those calls to the kernel. One process-wide count, as the C RTL is
+ * single-threaded (a non-TLS producer).
+ */
+static int ovmx_substrate_depth;
+
+int ovmx_substrate_enter(void)
+{
+    return ++ovmx_substrate_depth;
+}
+
+void ovmx_substrate_leave(void)
+{
+    if (ovmx_substrate_depth > 0)
+        ovmx_substrate_depth--;
+}
+
+int ovmx_substrate_active(void)
+{
+    return ovmx_substrate_depth != 0;
+}
+
 uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *input_file,
                    const struct dsc$descriptor_s *output_file,
@@ -369,6 +395,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *prompt,
                    const struct dsc$descriptor_s *cli_name,
                    const struct dsc$descriptor_s *table_name) {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     (void)prompt; (void)cli_name; (void)table_name;   /* OVMX's one CLI is DCL */
     /* efn/astadr/astprm: the /NOWAIT completion-notification path, wired in the
      * CLI$M_NOWAIT branch below via vms_kif_spawn_notify (B1). */

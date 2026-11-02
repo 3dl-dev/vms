@@ -11,13 +11,21 @@
  * against the Files-11 ODS-2 volume through the public RMS services, with no
  * change to musl's stdio and no per-function veneer.
  *
- * WHICH PATHS ARE RMS FILES. The C RTL's file system is RMS. Every path is an
- * RMS file specification -- OpenVMS syntax as written, UNIX syntax translated
- * by the DEC C rules (crtl_filespec.c, the decc$to_vms translator) -- EXCEPT the
- * substrate kernel's own namespaces, which stay with the kernel: /dev, /proc,
- * /sys, /run (the device nodes, /dev/vms among them, and the boot launcher)
- * and /vms (the substrate's staging of the system tree). A path relative to a directory descriptor other than the current
- * directory is not an RMS form and goes to the kernel too.
+ * WHICH PATHS ARE RMS FILES. The C RTL's file system is RMS. Every path a
+ * program names is an RMS file specification -- OpenVMS syntax as written,
+ * UNIX syntax translated by the DEC C rules (crtl_filespec.c, the decc$to_vms
+ * translator) -- and nothing a program names reaches the substrate's file
+ * system (rd vms-a66e): "/proc/self/status" is PROC:[SELF]STATUS to RMS, which
+ * has no such device (ENOENT), as on OpenVMS. The one exception is the DEC C
+ * spelling of the null device, /dev/null, whose substrate node IS the NL:
+ * device's backing. A path relative to a directory descriptor is resolved
+ * against that RMS directory; relative to anything else it is EBADF/ENOTDIR.
+ * The substrate's own access to its namespaces (/dev/vms, the /vms staging,
+ * /proc) is the executive's and the system services' (src/libvms), made inside
+ * an ovmx_substrate_enter() scope, which this layer leaves to the kernel.
+ *
+ * DEVICES. Terminals and mailboxes (stdin/stdout/stderr on a terminal, pipe())
+ * are VMS I/O channels: src/vmsrms/crtl_devfd.c, offered every call first.
  *
  * DESCRIPTOR NUMBERS. An RMS file's descriptor is a real kernel descriptor
  * number: a placeholder (O_PATH on "/", close-on-exec) reserves it, so RMS and
@@ -194,6 +202,12 @@ static int rms_errno(uint32_t st)
 {
     switch (st) {
     case RMS$_FNF: case RMS$_DNF: case RMS$_DEV:
+    case 2312u:                     /* SS$_NOSUCHDEV: no such device (PROC:) */
+    case 324u:                      /* SS$_IVDEVNAM */
+    case 444u:                      /* SS$_NOLOGNAM */
+#ifdef RMS$_DNR
+    case RMS$_DNR:
+#endif
         return ENOENT;
     case RMS$_PRV:
         return EACCES;
@@ -212,34 +226,65 @@ static int rms_errno(uint32_t st)
 
 /* ------------------------------------------------------------- paths -------- */
 
+extern int ovmx_crtl_devfd_is(long long fd);       /* crtl_devfd.c */
+extern int ovmx_crtl_devfd_device_known(const char *spec);
+
+/* The DEC C null device: the substrate's node is the NL: device's backing. */
 static int kernel_path(const char *p)
 {
-    /* /vms is the substrate's own staging of the system tree (initramfs / boot
-     * image), which OVMX's run-time libraries reach as kernel paths -- LIB$SPAWN
-     * checks the DCL image there (vms-003b); it is not a C program's file. */
-    static const char *const ns[] = { "/dev", "/proc", "/sys", "/run", "/vms" };
-    if (!p || !*p)
-        return 1;
-    for (size_t i = 0; i < sizeof ns / sizeof ns[0]; i++) {
-        size_t n = strlen(ns[i]);
-        if (strncmp(p, ns[i], n) == 0 && (p[n] == '\0' || p[n] == '/'))
-            return 1;
-    }
-    return 0;
+    return p && strcmp(p, "/dev/null") == 0;
 }
 
 /* The RMS spec for (dirfd, path), or -1 if the path is the kernel's; sets *dir
- * when the spec names a directory. */
+ * when the spec names a directory. -2: errno set (an invalid spec, or a
+ * directory descriptor the C RTL does not have). */
 static int rms_spec(long long dirfd, const char *path, char *out, size_t outsz,
                     int *dir)
 {
+    if (!path || !*path) {
+        errno = ENOENT;
+        return -2;
+    }
     if (kernel_path(path))
         return -1;
-    if (path[0] != '/' && !ovmx_crtl_is_vms_syntax(path) && dirfd != AT_FDCWD)
-        return -1;                  /* relative to another directory fd */
+    char joined[512];
+    if (path[0] != '/' && !ovmx_crtl_is_vms_syntax(path) && dirfd != AT_FDCWD) {
+        /* relative to a directory descriptor: the RMS directory it is open on */
+        struct rfile *df = (dirfd >= 0 && dirfd < RFD_MAX) ? rfd[dirfd] : NULL;
+        char ud[256];
+        if (!df) {
+            /* a terminal or a mailbox is not a directory; any other number
+             * is no directory descriptor of the C RTL's */
+            errno = ovmx_crtl_devfd_is(dirfd) ? ENOTDIR : EBADF;
+            return -2;
+        }
+        if (df->kind != RF_DIR) {
+            errno = ENOTDIR;
+            return -2;
+        }
+        if (ovmx_crtl_vms_to_unix(df->spec, ud, sizeof ud) < 0) {
+            errno = EINVAL;
+            return -2;
+        }
+        size_t ul = strlen(ud);
+        while (ul > 1 && ud[ul - 1] == '/')
+            ud[--ul] = '\0';
+        if (ul + 1 + strlen(path) + 1 > sizeof joined) {
+            errno = ENAMETOOLONG;
+            return -2;
+        }
+        memcpy(joined, ud, ul);
+        joined[ul] = '/';
+        strcpy(joined + ul + 1, path);
+        path = joined;
+    }
     int k = ovmx_crtl_unix_to_vms(path, out, outsz, OVMX_FS_AUTO);
     if (k < 0)
         return -2;                  /* errno set: an invalid RMS spec */
+    if (path[0] == '/' && !ovmx_crtl_devfd_device_known(out)) {
+        errno = ENOENT;             /* "/proc/...": no PROC device */
+        return -2;
+    }
     if (dir) {
         size_t n = strlen(out);
         *dir = k == OVMX_FS_DIR ||
@@ -1329,6 +1374,20 @@ static int stat_unix_path(const char *path, const char *spec, int dir, struct ra
     return r;
 }
 
+/* A terminal or mailbox descriptor (crtl_devfd.c): its stat attributes. */
+extern int ovmx_crtl_devfd_stat(long long fd, unsigned int *mode, unsigned long long *ino);
+static int dev_attr(long long fd, struct rattr *a)
+{
+    unsigned int mode = 0;
+    unsigned long long ino = 0;
+    if (!ovmx_crtl_devfd_stat(fd, &mode, &ino))
+        return 0;
+    memset(a, 0, sizeof *a);
+    a->mode = (uint16_t)mode;
+    a->ino = ino;
+    return 1;
+}
+
 static int rf_attr(struct rfile *rf, struct rattr *a)
 {
     if (rf->kind == RF_DIR)
@@ -1355,6 +1414,16 @@ static long long r_dup_to(long long oldfd, long long newfd, long long flags)
 
 /* ------------------------------------------------------------- hook ------- */
 
+extern long long ovmx_crtl_devfd_call(long long, long long, long long, long long,
+                                      long long, long long, int *);
+
+/* A dup2 from a device descriptor onto an RMS file's number closes the file. */
+void ovmx_crtl_rms_unbind(long long fd)
+{
+    if (rget(fd))
+        rfd_unbind(fd);
+}
+
 static long long rms_hook_body(long long n, long long a1, long long a2,
                                long long a3, long long a4, long long a5,
                                int *handled)
@@ -1362,6 +1431,12 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
     struct rfile *rf;
     if (rget(a1) || n == SYS_openat)
         TR("crtlfd: sys", n);
+    /* terminals, mailboxes and pipe() (crtl_devfd.c) first */
+    {
+        long long r = ovmx_crtl_devfd_call(n, a1, a2, a3, a4, a5, handled);
+        if (*handled)
+            return r;
+    }
     switch (n) {
     /* what reads the volume by name, or makes another process: the
      * write-behind bytes of every open file are on the volume first */
@@ -1510,7 +1585,12 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
         const char *path = (const char *)(uintptr_t)a2;
         int r;
         if ((a3 & AT_EMPTY_PATH) && path && !*path) {
-            if (!(rf = rget(a1))) return 0;
+            if (!(rf = rget(a1))) {
+                if (!dev_attr(a1, &a)) return 0;
+                *handled = 1;
+                attr_to_statx(&a, (struct ovmx_statx *)(uintptr_t)a5);
+                return 0;
+            }
             *handled = 1;
             r = rf_attr(rf, &a);
         } else {
@@ -1528,9 +1608,14 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
         return 0;
     }
     case SYS_fstat: {
-        if (!(rf = rget(a1))) return 0;
-        *handled = 1;
         struct rattr a;
+        if (!(rf = rget(a1))) {
+            if (!dev_attr(a1, &a)) return 0;
+            *handled = 1;
+            attr_to_kstat(&a, (struct kstat *)(uintptr_t)a2);
+            return 0;
+        }
+        *handled = 1;
         int r = rf_attr(rf, &a);
         if (r < 0) return r;
         attr_to_kstat(&a, (struct kstat *)(uintptr_t)a2);
@@ -1541,7 +1626,12 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
         struct rattr a;
         int r;
         if ((a4 & AT_EMPTY_PATH) && path && !*path) {
-            if (!(rf = rget(a1))) return 0;
+            if (!(rf = rget(a1))) {
+                if (!dev_attr(a1, &a)) return 0;
+                *handled = 1;
+                attr_to_kstat(&a, (struct kstat *)(uintptr_t)a3);
+                return 0;
+            }
             *handled = 1;
             r = rf_attr(rf, &a);
         } else {
@@ -1645,6 +1735,12 @@ void ovmx_crtl_signal_install(void);
 void ovmx_crtl_sig_flush(void);
 extern volatile int ovmx_crtl_sig_busy;
 
+extern void ovmx_crtl_devfd_rundown(void);         /* crtl_devfd.c */
+/* LIBVMS (src/libvms/rtl/lib_misc.c): nonzero while a system service or RTL
+ * routine is doing the substrate's own work (its /dev/vms, /vms staging, host
+ * pipes between a fork and its exec); those calls are the kernel's. */
+extern int ovmx_substrate_active(void);
+
 static long long rms_hook(long long n, long long a1, long long a2, long long a3,
                           long long a4, long long a5, long long a6, int *handled)
 {
@@ -1654,12 +1750,20 @@ static long long rms_hook(long long n, long long a1, long long a2, long long a3,
         if (*handled)
             return sr;
     }
-    if (n == SYS_exit_group || n == SYS_exit)
+    if (n == SYS_exit_group || n == SYS_exit) {
         ovmx_crtl_fd_flush_all();               /* image rundown: RMS writes its buffers */
+        if (n == SYS_exit_group && !in_rms) {
+            in_rms = 1;
+            ovmx_crtl_devfd_rundown();          /* a pipe's mailbox ends (crtl_devfd.c) */
+            in_rms = 0;
+        }
+    }
     if (n == SYS_exit_group && __ovmx_crtl_exit_record)
         __ovmx_crtl_exit_record();              /* SYS$EXIT: does not return */
     if (in_rms)
         return 0;                               /* RMS's own system calls */
+    if (ovmx_substrate_active())
+        return 0;                               /* the system services' own (src/libvms) */
     in_rms = 1;
     ovmx_crtl_sig_busy++;
     int saved = errno;
@@ -1798,6 +1902,7 @@ int ovmx_crtl_creat(const char *name, mode_t mode, ...)
  * A stream that is not an RMS file (a pipe, a terminal, /dev/null) has no
  * file specification here: a null pointer, errno EINVAL. */
 char *ovmx_decc_fgetname(FILE *fp, char *buf, ...) __asm__("decc$fgetname");
+static char *fd_getname(int fd, char *buf, int vms_format);
 
 char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
 {
@@ -1811,7 +1916,36 @@ char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
         errno = EINVAL;
         return NULL;
     }
-    struct rfile *rf = rget(fileno(fp));
+    return fd_getname(fileno(fp), buf, vms_format);
+}
+
+/* DEC C getname(fd, buffer [, format]) (rd vms-a66e): the same for a
+ * descriptor -- an RMS file's resultant specification, or the device a
+ * terminal or mailbox descriptor is a channel to ("_MBA12:"). */
+char *ovmx_crtl_getname(int fd, char *buf, ...)
+{
+    va_list ap;
+    va_start(ap, buf);
+    int vms_format = va_arg(ap, int) != 0;
+    va_end(ap);
+    if (!buf) {
+        errno = EINVAL;
+        return NULL;
+    }
+    return fd_getname(fd, buf, vms_format);
+}
+
+extern int ovmx_crtl_devfd_name(long long fd, char *buf, size_t sz);
+
+static char *fd_getname(int fd, char *buf, int vms_format)
+{
+    char dev[64];
+    if (ovmx_crtl_devfd_name(fd, dev, sizeof dev) == 1) {
+        if (vms_format || ovmx_crtl_vms_to_unix(dev, buf, 256) != 0)
+            memcpy(buf, dev, strlen(dev) + 1);
+        return buf;
+    }
+    struct rfile *rf = rget(fd);
     if (!rf) {
         errno = EINVAL;
         return NULL;
@@ -1848,6 +1982,8 @@ char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
 
 /* ------------------------------------------------------------ install ----- */
 
+extern void ovmx_crtl_devfd_bind_stdio(void);     /* crtl_devfd.c */
+
 /* Turn the RMS file layer on for this image: from here every C RTL file call
  * that names an RMS file goes to RMS, the C RTL's clock and time zone are
  * the system's (crtl_time.c), and its signals are VMS conditions, ASTs and
@@ -1861,6 +1997,12 @@ void ovmx_crtl_fd_install(void)
     ovmx_crtl_signal_install();         /* crtl_signal.c: signals over VMS (vms-931) */
     __ovmx_sys_hook = rms_hook;
     __ovmx_crtl_fab_query = fab_query;
+    {
+        int was = in_rms;
+        in_rms = 1;                                 /* the services' own calls */
+        ovmx_crtl_devfd_bind_stdio();               /* SYS$INPUT/OUTPUT/ERROR */
+        in_rms = was;
+    }
     TR("crtlfd: hook installed", (uintptr_t)rms_hook);
 }
 

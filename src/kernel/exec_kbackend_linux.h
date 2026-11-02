@@ -1008,6 +1008,8 @@ static inline void exec_membar_consumer(void) { smp_rmb(); }
 typedef void *exec_arena_t;
 static inline void *exec_arena_alloc(size_t n) { return vmalloc_user(n); }
 static inline void  exec_arena_free(void *arena) { vfree(arena); }
+/* vmalloc_user backed the whole arena at allocation (rd vms-c01). */
+static inline size_t exec_arena_grow(void *arena, size_t need) { (void)arena; return need; }
 
 /* ================================================================
  * §12  Host TCP client socket (vms-9951; BGn: INET facility).

@@ -968,6 +968,7 @@ static __inline void exec_membar_consumer(void) { membar_consumer(); }
 typedef void *exec_arena_t;
 void *exec_arena_alloc(size_t n);
 void  exec_arena_free(void *arena);
+size_t exec_arena_grow(void *arena, size_t need);
 
 /* ================================================================
  * §12  Host TCP client socket (vms-9951; BGn: INET facility).

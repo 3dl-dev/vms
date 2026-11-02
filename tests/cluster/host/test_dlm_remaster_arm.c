@@ -324,7 +324,9 @@ static const struct vms_dlm_rm_ops g_ops_template = {
 	 * vms-2fa), not a door. */
 	NULL, NULL, NULL, NULL, NULL,
 	/* rd vms-1b68: the survivors' end and the window's settle. */
-	NULL, NULL
+	NULL, NULL,
+	/* rd vms-5d6: the quorum-hang predicate, unbound (never hung). */
+	NULL
 };
 
 static struct vms_dlm_rm_ops g_ops;

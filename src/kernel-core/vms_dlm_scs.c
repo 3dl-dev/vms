@@ -2847,6 +2847,16 @@ static void dlm_arm_rb_settle(void *ctx)
 	(void)vms_lock_dlm_rebuild_settle();
 }
 
+/* rd vms-5d6: the rebuild waits out a quorum hang -- asked of the connection
+ * manager's own predicate, never of a copy. */
+static int dlm_arm_rb_quorum_hang(void *ctx)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	return (d != NULL && d->cl != NULL) ?
+	       cnxman_quorum_hang_active(d->cl) : 0;
+}
+
 static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 {
 	d->rm_ops.ctx                = d;
@@ -2875,6 +2885,7 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.rb_install         = dlm_arm_rb_install;
 	d->rm_ops.rb_unsent          = dlm_arm_rb_unsent;
 	d->rm_ops.rb_settle          = dlm_arm_rb_settle;
+	d->rm_ops.rb_quorum_hang     = dlm_arm_rb_quorum_hang;
 	vms_dlm_rm_init(&d->rm, &d->rm_ops);
 }
 

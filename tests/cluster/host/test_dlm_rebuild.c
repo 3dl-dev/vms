@@ -43,6 +43,7 @@
 #include "vms_dlm_dir.h"
 #include "vms_dlm_master.h"
 #include "vms_dlm_proxy.h"
+#include "vms_dlm_quorum.h"
 #include "vms_dlm_rm_fsm.h"
 
 #include "ra1b_rmt1_bodies.h"
@@ -2039,6 +2040,252 @@ static void test_this_node_masters_the_waiter(void)
 	engine_down();
 }
 
+/* ================================================================== *
+ * rd vms-5d6: QUORUM LOST AT THE MASTER'S DEPARTURE.
+ *
+ * Lab lab1b68 (lab/vms-1b68 tests/lab/captures/vms-1b68-standby-takeover-
+ * 20261102/RESULT.md): VAX1 halted, the survivors lost quorum ("quorum lost,
+ * blocking activity" on VAX2 and OVMXE), and OVMXE ended BOTH of its queued
+ * $ENQWs at once SS$_UNSUPPORTED (%X00000E4A) with no op-0x08 sent -- the
+ * rebuild was taken up outside any window and stopped. Real VMS (vms-0db arm
+ * B, PB3/PB4): with quorum lost the survivors' converting and waiting locks
+ * stayed queued, none granted, and ran once quorum returned. So: while the
+ * hang lasts nothing of the rebuild is taken up; the regain transition's
+ * window re-sends the survivors (rd vms-1b68 rules) and the new master grants.
+ *
+ * The hang is ONE predicate both halves ask -- the engine's grant gate
+ * (vms_lock_set_quorum_ops) and the table's rb_quorum_hang -- as the arm
+ * binds both to cnxman_quorum_hang_active.
+ * ================================================================== */
+static int g_hang;
+
+static int d_hang(void *ctx)
+{
+	(void)ctx;
+	return g_hang;
+}
+
+/* A survivor (VAX2, VAX3 the directory) with quorum, no rebuild window open,
+ * and the hang predicate bound to both halves. Its locks are queued at VAX1
+ * BEFORE quorum is lost, as in the lab. */
+static uint32_t hung_survivor_up(void)
+{
+	struct vms_quorum_ops q;
+	uint32_t root;
+
+	g_bind_window = 0;
+	g_in_transition = 0;
+	root = survivor_up();
+	g_bind_window = 1;
+	g_hang = 0;
+	memset(&q, 0, sizeof(q));
+	q.hang = d_hang;
+	vms_lock_set_quorum_ops(&q);
+	g_ops.rb_quorum_hang = d_hang;
+	return root;
+}
+
+/* VAX1 HALTS: its votes go with its circuit, so quorum is lost first ("quorum
+ * lost, blocking activity"); then it is removed -- with no rebuild window open
+ * (RECNXINTERVAL expiry, nobody left to negotiate with). */
+static void vax1_halts_and_quorum_is_lost(void)
+{
+	g_hang = 1;
+	vax1_departs();
+}
+
+static void hung_engine_down(void)
+{
+	g_hang = 0;
+	vms_lock_set_quorum_ops(NULL);
+	engine_down();
+}
+
+/* The transition that REGAINS quorum (VAX1 rejoins): it begins and shuts any
+ * window, quorum comes back at its commit, then its barrier releases R. */
+static void regain_transition_to_release_r(void)
+{
+	g_in_transition = 1;
+	vms_dlm_rm_rb_transition_begin(&g_rm);
+	vms_dlm_rm_rb_window_close(&g_rm);
+	g_hang = 0;
+	vms_lock_quorum_resume();
+	vms_dlm_rm_rb_barrier_released(&g_rm, vms_dlm_rb_release_step(0u), 0u,
+				       0u);
+}
+
+static void test_quorum_loss_keeps_the_waiter(void)
+{
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	struct vms_dlm_rm_lock_answer a;
+	struct vms_dlm_proxy_grant gr;
+	uint32_t root, w, i;
+
+	printf("-- rd vms-5d6: quorum is lost as VAX1 leaves; our queued "
+	       "waiter stays queued, and is re-sent and granted after regain\n");
+	root = hung_survivor_up();
+	w = enq("RMT1", LCK_K_EXMODE, 0u);
+	(void)vms_lock_dlm_proxy_queued_recv(w, CSID_VAX1, 0x0700040au);
+	vax1_halts_and_quorum_is_lost();
+	ct_check(lk_state(w) == 0 && vms_lock_dlm_proxy_survives(w),
+		 "*** 5d6: quorum lost at VAX1's departure -- the queued waiter "
+		 "is NOT ended (no SS$_UNSUPPORTED) ***");
+	ct_check(g_n_sent == 0u && g_rm.rb_trees_started == 0u &&
+		 g_rm.rb_waiters_ended == 0u && g_rm.rb_quorum_waits >= 1u,
+		 "  5d6: no tree is taken up while the hang lasts: nothing "
+		 "sent, nothing stopped");
+	/* The departure transition's end and the arm's beats, all hung. */
+	transition_ends();
+	for (i = 0u; i < 4u; i++)
+		vms_dlm_rm_rb_kick(&g_rm);
+	ct_check(lk_state(w) == 0 && g_n_sent == 0u &&
+		 g_rm.rb_waiters_ended == 0u && g_rm.rb_out_of_window == 0u,
+		 "*** 5d6: the hang's beats and the transition's end leave it "
+		 "queued -- no out-of-window stop ***");
+
+	regain_transition_to_release_r();
+	ct_check(g_n_sent == 1u && le32(g_sent[0].body + 24) == root,
+		 "  5d6: quorum regained; the regain transition's window sends "
+		 "the granted ROOT first");
+	answer_for(ans, ra1b_vax3_rmt1_ans, root);
+	(void)vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01, ans,
+				   VMS_CM_BODY_LEN);
+	ct_check(g_n_sent == 2u && le32(g_sent[1].body + 24) == w &&
+		 g_sent[1].body[9] == 0x08u && g_sent[1].body[30] == 5u &&
+		 g_sent[1].body[31] == 0u && g_sent[1].body[110] == 0xffu &&
+		 g_sent[1].body[108] == 0x04u,
+		 "*** 5d6: then the waiter is re-sent: op 0x08, (5,0), [110] ff, "
+		 "[108] 04 ***");
+	memset(&a, 0, sizeof(a));
+	a.master_lkid = VAX3_W_HANDLE;
+	(void)vms_dlm_rm_lock_answer_build(g_sent[1].body, VMS_CM_BODY_LEN, &a,
+					   ans, sizeof(ans), NULL);
+	ct_check(vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01,
+				      ans + VMS_OFF_SYSAP_BODY,
+				      VMS_CM_BODY_LEN) == 1 &&
+		 g_rm.rb_trees_done == 1u && g_rm.rb_waiters_ended == 0u &&
+		 lk_state(w) == 0,
+		 "  5d6: VAX3's 0xfa re-homes it, still waiting, nothing ended");
+	transition_ends();
+	memset(&gr, 0, sizeof(gr));
+	gr.req_lkid = w;
+	gr.master_lkid = VAX3_W_HANDLE;
+	gr.master_csid = CSID_VAX3;
+	gr.valblk_present = 1u;
+	(void)vms_lock_dlm_proxy_grant_recv(&gr);
+	ct_check(lk_state(w) == (int)SS__NORMAL,
+		 "*** 5d6: VAX3's grant completes the $ENQW that rode out the "
+		 "hang ***");
+	hung_engine_down();
+}
+
+static void test_quorum_loss_keeps_the_conversion(void)
+{
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	struct vms_dlm_rm_lock_answer a;
+	struct vms_dlm_proxy_grant gr;
+	struct vms_enq_args e;
+	uint32_t root;
+
+	printf("-- rd vms-5d6: quorum is lost as VAX1 leaves; our queued "
+	       "conversion stays queued, and is re-sent and granted after "
+	       "regain\n");
+	root = hung_survivor_up();
+	memset(&e, 0, sizeof(e));
+	e.lkid = root;
+	e.lkmode = LCK_K_EXMODE;
+	e.flags = LCK_M_CONVERT;
+	(void)vms_ioctl_convert(&g_proc, (unsigned long)(void *)&e);
+	(void)vms_lock_dlm_proxy_queued_recv(root, CSID_VAX1, 0x05000024u);
+	vax1_halts_and_quorum_is_lost();
+	transition_ends();
+	ct_check(lk_state(root) == 0 && vms_lock_dlm_proxy_survives(root) &&
+		 g_n_sent == 0u && g_rm.rb_waiters_ended == 0u,
+		 "*** 5d6: quorum lost -- the queued PR -> EX conversion is NOT "
+		 "ended and nothing is sent ***");
+	regain_transition_to_release_r();
+	ct_check(g_n_sent == 1u && le32(g_sent[0].body + 24) == root &&
+		 g_sent[0].body[9] == 0x08u && g_sent[0].body[30] == 5u &&
+		 g_sent[0].body[31] == 3u && g_sent[0].body[110] == 0x00u &&
+		 g_sent[0].body[108] == 0x04u,
+		 "*** 5d6: after regain it is re-sent CONVERTING: (5,3), [110] "
+		 "00, [108] 04 ***");
+	memset(&a, 0, sizeof(a));
+	a.master_lkid = 0x020004edu;            /* arm B: VAX2's converter */
+	(void)vms_dlm_rm_lock_answer_build(g_sent[0].body, VMS_CM_BODY_LEN, &a,
+					   ans, sizeof(ans), NULL);
+	(void)vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01,
+				   ans + VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN);
+	transition_ends();
+	memset(&gr, 0, sizeof(gr));
+	gr.req_lkid = root;
+	gr.master_lkid = 0x020004edu;
+	gr.master_csid = CSID_VAX3;
+	gr.valblk_present = 1u;
+	(void)vms_lock_dlm_proxy_grant_recv(&gr);
+	ct_check(lk_state(root) == (int)SS__NORMAL,
+		 "*** 5d6: VAX3's grant completes the conversion that rode out "
+		 "the hang ***");
+	hung_engine_down();
+}
+
+/* This node directs RMT1 and becomes its master in the regain transition: its
+ * own waiter is decided only at that window's close, with VAX3's record in --
+ * the hold the departure set outlives the hung windows before it. */
+static void test_quorum_loss_this_node_masters(void)
+{
+	struct vms_quorum_ops q;
+	uint8_t rec[VMS_CM_BODY_LEN];
+	uint32_t w;
+
+	printf("-- rd vms-5d6: quorum lost; this node masters RMT1 only in the "
+	       "regain window, and decides its waiter at that window's "
+	       "close\n");
+	(void)engine_up(CSID_VAX2, 0x20400217u);
+	g_bind_window = 0;
+	g_in_transition = 0;
+	table_up(CSID_VAX3, 0u);
+	g_bind_window = 1;
+	g_ops.rb_unsent = d_rb_unsent;
+	g_ops.rb_settle = d_rb_settle;
+	g_hang = 0;
+	memset(&q, 0, sizeof(q));
+	q.hang = d_hang;
+	vms_lock_set_quorum_ops(&q);
+	g_ops.rb_quorum_hang = d_hang;
+	g_dir_of_names = 0u;                         /* THIS node directs it */
+	w = enq("RMT1", LCK_K_EXMODE, 0u);
+	(void)vms_lock_dlm_proxy_queued_recv(w, CSID_VAX1, 0x0700040au);
+	vax1_halts_and_quorum_is_lost();
+	transition_ends();
+	ct_check(g_rm.rb_mastered == 0u && lk_state(w) == 0 &&
+		 g_rm.rb_waiters_ended == 0u,
+		 "  5d6: hung -- this node has not mastered RMT1 and its waiter "
+		 "is queued");
+	regain_transition_to_release_r();
+	ct_check(g_rm.rb_mastered == 1u && g_n_sent == 0u,
+		 "  5d6: the regain window makes this node RMT1's master");
+	ct_check(lk_state(w) == 0,
+		 "*** 5d6: our EX waiter is NOT granted before VAX3's record "
+		 "is in, though hung windows closed since the departure ***");
+	memcpy(rec, ra1b_vax3_rmt1_req, VMS_CM_BODY_LEN);
+	put32(rec + 24, 0x07000404u);
+	rec[30] = (uint8_t)LCK_K_PRMODE;
+	rec[31] = 0u;
+	rec[108] = 0x04u;
+	rec[110] = 0xffu;
+	ct_check_eq_u32(vms_dlm_rm_rb_record(&g_rm, CSID_VAX3, rec,
+					     VMS_CM_BODY_LEN),
+			VMS_DLM_RM_HANDLED,
+			"  5d6: VAX3's WAITING record is installed in the regain "
+			"window");
+	transition_ends();
+	ct_check(lk_state(w) == (int)SS__NORMAL,
+		 "*** 5d6: the regain window closes: our waiter, first in the "
+		 "queue, is GRANTED EX ***");
+	hung_engine_down();
+}
+
 int main(void)
 {
 	printf("test_dlm_rebuild: the failover rebuild, on the real lock "
@@ -2058,5 +2305,8 @@ int main(void)
 	test_a_queued_waiter_is_rebuilt();
 	test_a_queued_conversion_is_rebuilt();
 	test_this_node_masters_the_waiter();
+	test_quorum_loss_keeps_the_waiter();
+	test_quorum_loss_keeps_the_conversion();
+	test_quorum_loss_this_node_masters();
 	return ct_summary("test_dlm_rebuild");
 }

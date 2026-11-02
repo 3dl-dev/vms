@@ -227,7 +227,7 @@ static int dcl_logical_is_terminal(const char *equiv)
 /* Cached SYS$INPUT stream for a file-redirected SYS$INPUT, so successive
  * READ SYS$INPUT calls advance through the file rather than re-reading line 1
  * (vms-f89). Keyed by resolved path; re-opened when the redirection changes. */
-static FILE *g_sysinput_fp;
+static struct dcl_rms_reader *g_sysinput_rd;   /* RMS $OPEN/$GET, never stdio (vms-5cc) */
 static char  g_sysinput_key[1024];
 
 /*
@@ -708,7 +708,10 @@ int cmd_read(struct dcl_command *cmd)
     const char *label = eof ? dcl_qualifier_value(cmd, "END_OF_FILE") : NULL;
     if (!label || !*label)
         label = dcl_qualifier_value(cmd, "ERROR");
-    dcl_branch_handled(ctx, label);
+    /* At end of file the /END_OF_FILE= (else /ERROR=) label takes control
+     * and no message is shown; without one it is %RMS-E-EOF. */
+    if (!dcl_branch_handled(ctx, label) && eof)
+        dcl_error("RMS", 2, "EOF", "end of file detected");
     return st;
 }
 
@@ -755,10 +758,8 @@ static int read_impl(struct dcl_command *cmd)
             dcl_error("RMS", 0, "TMO", "timeout period expired");
             return RMS$_TMO;
         }
-        if (n < 0) {
-            dcl_error("RMS", 2, "EOF", "end of file detected");
-            return RMS$_EOF;
-        }
+        if (n < 0)
+            return RMS$_EOF;            /* cmd_read reports it unless a label takes it */
         dcl_sym_set(symbol_name, buf, DCL_SYM_LOCAL);
         return SS$_NORMAL;
     }
@@ -773,35 +774,26 @@ static int read_impl(struct dcl_command *cmd)
      */
     if (!fp && strcasecmp(channel_name, "SYS$INPUT") == 0) {
         char equiv[1024];
-        int redirected = 0;
-        char linux_path[1024];
         if (dcl_translate_logical("SYS$INPUT", equiv, sizeof(equiv)) == 0 &&
                 equiv[0] && !dcl_logical_is_terminal(equiv)) {
-            dcl_resolve_path(ctx, equiv, linux_path, sizeof(linux_path));
-            redirected = 1;
-        }
-
-        if (redirected) {
-            if (!g_sysinput_fp || strcmp(g_sysinput_key, linux_path) != 0) {
-                if (g_sysinput_fp)
-                    fclose(g_sysinput_fp);
-                g_sysinput_fp = fopen(linux_path, "r");
-                strncpy(g_sysinput_key, linux_path, sizeof(g_sysinput_key) - 1);
+            /* A file SYS$INPUT is read through RMS: $OPEN once per
+             * redirection, then one $GET per READ (vms-f89, vms-5cc). */
+            if (!g_sysinput_rd || strcmp(g_sysinput_key, equiv) != 0) {
+                if (g_sysinput_rd)
+                    dcl_rms_read_close(g_sysinput_rd);
+                uint32_t ost = RMS$_NORMAL;
+                g_sysinput_rd = dcl_rms_read_open(ctx, equiv, &ost);
+                strncpy(g_sysinput_key, equiv, sizeof(g_sysinput_key) - 1);
                 g_sysinput_key[sizeof(g_sysinput_key) - 1] = '\0';
             }
-            if (!g_sysinput_fp) {
-                dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
+            if (!g_sysinput_rd)
                 return RMS$_EOF;
-            }
             char rline[4096];
-            if (!fgets(rline, sizeof(rline), g_sysinput_fp)) {
-                dcl_sym_set(symbol_name, "", DCL_SYM_LOCAL);
+            int reof = 0;
+            if (dcl_rms_read_record(g_sysinput_rd, rline, sizeof(rline), &reof) < 0)
                 return RMS$_EOF;
-            }
-            size_t rl = strlen(rline);
-            if (rl > 0 && rline[rl - 1] == '\n') rline[rl - 1] = '\0';
             dcl_sym_set(symbol_name, rline, DCL_SYM_LOCAL);
-            return SS$_NORMAL;
+            return (int)DCL_CLI_NORMAL;
         }
 
         /* Terminal SYS$INPUT: read one line from the process stdin. */
@@ -822,8 +814,8 @@ static int read_impl(struct dcl_command *cmd)
         int eof = 0;
         int n = dcl_rms_read_record(ctx->channels[ch].reader, rec, sizeof(rec), &eof);
         if (n < 0) {
-            /* RMS$_EOF leaves the symbol alone (FIO.READ.EOF.NOLABEL) */
-            dcl_error("RMS", 2, "EOF", "end of file detected");
+            /* RMS$_EOF leaves the symbol alone (FIO.READ.EOF.NOLABEL);
+             * cmd_read shows %RMS-E-EOF unless a label takes it */
             return RMS$_EOF;
         }
         dcl_sym_set(symbol_name, rec, DCL_SYM_LOCAL);
@@ -841,7 +833,6 @@ static int read_impl(struct dcl_command *cmd)
 
     char line[4096];
     if (!fgets(line, sizeof(line), fp)) {
-        dcl_error("RMS", 2, "EOF", "end of file detected");
         return RMS$_EOF;
     }
 
@@ -1078,17 +1069,21 @@ static int write_impl(struct dcl_command *cmd)
         char equiv[1024];
         if (dcl_translate_logical(channel_name, equiv, sizeof(equiv)) == 0 &&
                 equiv[0] && !dcl_logical_is_terminal(equiv)) {
-            char linux_path[1024];
-            dcl_resolve_path(ctx, equiv, linux_path, sizeof(linux_path));
-            FILE *fp = fopen(linux_path, "a");
-            if (!fp) {
+            /* A file SYS$OUTPUT/SYS$ERROR: the record is $PUT at the end of
+             * the file through RMS, never stdio (vms-5cc). */
+            uint32_t ost = RMS$_NORMAL;
+            struct dcl_rms_writer *w = dcl_rms_write_append(ctx, equiv, &ost);
+            if (!w) {
                 dcl_error("RMS", 2, "OPENOUT",
                           "error opening %s as output", equiv);
-                return SS$_NOSUCHFILE;
+                return (int)(ost & 1 ? RMS$_FNF : ost);
             }
-            fprintf(fp, "%s\n", text);
-            fclose(fp);
-            return SS$_NORMAL;
+            int wr = dcl_rms_write_record(w, text, strlen(text));
+            uint32_t pst = wr < 0 ? dcl_rms_write_status(w, NULL) : RMS$_NORMAL;
+            uint32_t cst = dcl_rms_write_close(w);
+            if (!(pst & 1))
+                return (int)pst;
+            return (int)((cst & 1) ? RMS$_NORMAL : cst);
         }
 
         FILE *out = is_err ? stderr : stdout;

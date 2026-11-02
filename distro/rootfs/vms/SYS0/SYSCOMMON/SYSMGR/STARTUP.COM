@@ -111,9 +111,9 @@ $!
 $! ======================================================================
 $! RUN_PHASES - STDRV's phase loop.
 $!
-$! Reads SYS$STARTUP:VMS$PHASES.DAT one phase name per line (READ signals
-$! end-of-file as SS$_ENDOFFILE, decimal 2160 -- checked via $STATUS since
-$! this DCL has no READ/END_OF_FILE= qualifier). For each phase: run its
+$! Reads SYS$STARTUP:VMS$PHASES.DAT one phase name per line; READ's
+$! /END_OF_FILE= label ends the loop (at end of file VMS READ completes with
+$! RMS$_EOF, %X1001827A, and takes that label). For each phase: run its
 $! registered components (RUN_COMPONENTS), then the one site file (if any)
 $! documented for that phase.
 $! ======================================================================
@@ -130,8 +130,7 @@ $!  re-reads are gone.
 $   GOSUB LOAD_COMPONENTS
 $   OPEN/READ PHASE_FILE SYS$STARTUP:VMS$PHASES.DAT
 $ PHASE_LOOP:
-$   READ PHASE_FILE PHASE_NAME
-$   IF $STATUS .EQ. 2160 THEN GOTO PHASE_LOOP_DONE
+$   READ/END_OF_FILE=PHASE_LOOP_DONE PHASE_FILE PHASE_NAME
 $   GOSUB RUN_COMPONENTS
 $   IF PHASE_NAME .EQS. "CONFIG" THEN @SYS$MANAGER:SYCONFIG.COM
 $   IF PHASE_NAME .EQS. "BASEENVIRON" THEN @SYS$MANAGER:SYLOGICALS.COM
@@ -175,8 +174,7 @@ $ LOAD_COMPONENTS:
 $   COMPONENT_COUNT = 0
 $   OPEN/READ COMPONENT_FILE SYS$STARTUP:VMS$VMS.DAT
 $ LOAD_LOOP:
-$   READ COMPONENT_FILE COMPONENT_LINE
-$   IF $STATUS .EQ. 2160 THEN GOTO LOAD_LOOP_DONE
+$   READ/END_OF_FILE=LOAD_LOOP_DONE COMPONENT_FILE COMPONENT_LINE
 $   IF COMPONENT_LINE .EQS. "" THEN GOTO LOAD_LOOP
 $   COMPONENT_FIRST_CHAR = F$EXTRACT(0,1,COMPONENT_LINE)
 $   IF COMPONENT_FIRST_CHAR .EQS. "!" THEN GOTO LOAD_LOOP

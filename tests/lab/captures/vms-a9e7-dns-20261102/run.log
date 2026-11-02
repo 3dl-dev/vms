@@ -1,0 +1,46 @@
+BIND 9.18.49 (Extended Support Version) <id:cd4a53b>
+lo               UNKNOWN        127.0.0.1/8 192.168.77.1/32 ::1/128 
+eth0@if366       UP             172.17.0.5/16 
+tap0             DOWN           10.0.3.1/24 
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+udp        0      0 192.168.77.1:53         0.0.0.0:*                           
+=== OVMX DCL resolver against a real BIND on a separate host (vms-a9e7) ===
+  PASS: OVMX boots to login (virtio NIC on tap0)
+  PASS: SYSTEM logs in
+  PASS: SET INTERFACE SE0 10.0.3.15/24
+  PASS: SET ROUTE /DEFAULT /GATEWAY=10.0.3.1
+  PASS: before SET NAME_SERVICE: PING srvhost fails %PING-E-NORESOLVE (no name service configured)
+  PASS: TCPIP SET NAME_SERVICE /SERVER=192.168.77.1 /DOMAIN=lab.test
+  PASS: PING srvhost: resolved via BIND (srvhost.lab.test) and the echo came back
+  PASS: PING alias.lab.test: CNAME -> srvhost.lab.test followed to its A record
+  PASS: PING nosuch: BIND's NXDOMAIN reported as no such name (nosuch.lab.test)
+  PASS: TCPIP SET NAME_SERVICE /SERVER=192.168.77.2 (a dead server)
+  PASS: PING deadhost: a dead name server times out as 'no reply from the name server'
+  PASS: TELNET srvhost: resolved and connected to the server host's telnetd
+  PASS: TELNET session ends
+  RESULTS: 13/13 checks passed, 0 failed
+  PASS: wire: the VM's A? srvhost.lab.test. query to 192.168.77.1:53
+  PASS: wire: BIND's answer srvhost.lab.test. A 192.168.77.1
+  PASS: wire: BIND's CNAME answer for alias.lab.test
+  PASS: wire: BIND's NXDomain for nosuch.lab.test
+  PASS: wire: the VM's query to the dead server 192.168.77.2 (retried, never answered)
+  PASS: wire: nothing ever answered from 192.168.77.2
+  PASS: wire: ICMP echo to the resolved address
+  PASS: wire: TELNET SYN to the resolved address
+  PASS: named's own log (querylog): srvhost.lab.test IN A from 10.0.3.15
+  PASS: named's own log (querylog): nosuch.lab.test IN A from 10.0.3.15
+  evidence in /home/baron/projects/vms/.worktrees/net-a9e7/tests/lab/captures/vms-a9e7-dns-20261102
+=== vms-a9e7 DNS interop: PASS ===
+EXIT 0

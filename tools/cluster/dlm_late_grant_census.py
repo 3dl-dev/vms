@@ -440,7 +440,7 @@ def selftest(repo):
     # rd vms-874f: +704 from the RA1b departure capture (419 answers to op-0x12
     # remaster records, 283 to op-0x08 failover rebuild records, 2 to op-0x01)
     # -- none queued, so the 111 / 0 above do not move.
-    check('granted at once (the contrast)', out['granted at once'], 55127)
+    check('granted at once (the contrast)', out['granted at once'], 55950)  # +823 with the rd vms-2fa arm captures
 
     # 2. WHAT OCCUPIES THAT MOMENT INSTEAD, measured and not interpreted.
     real, ovmx, named = notify_frames(paths)
@@ -478,8 +478,8 @@ def selftest(repo):
     # 283 op-0x08 failover rebuild records, paired on (dst, src, body[4:8]).
     # "no request" here means "no op-0x01 request", which is what this
     # falsifier is about; the trim did not drop them.
-    check('real->real 0xfa grants', tot, 55146)
-    check('...with no request in the same capture', noreq, 4676)
+    check('real->real 0xfa grants', tot, 55969)  # +823 with the rd vms-2fa arm captures
+    check('...with no request in the same capture', noreq, 5494)  # +818 with the rd vms-2fa arm captures
     check('...of those, carrying no transaction token', notok, 0)
     check('*** ...naming a pair this master had QUEUED ***', qnamed, 0)
 

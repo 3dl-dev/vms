@@ -129,7 +129,16 @@ CORPUS = [
     ('vms-cab-op0f-20261010/heldout1.pcap.gz', {'08002bb15b7d': 0}),
     ('vms-cab-op0f-20261010/heldout2.pcap.gz', {'08002bb15b7d': 0}),
     ('vms-ci6-evac-20261010/run16/wire.pcap.gz', {'aa0004000204': 0}),
+    # rd vms-2fa's own arms: VAX3 08002b98a48f, VAX2 08002b8b8727, each node's
+    # weight read with F$GETSYI("LOCKDIRWT") before the arm (README.md).
+    ('vms-2fa-rebuild-step-20261102/arm1-departure.pcap.gz', {'08002b98a48f': 0}),
+    ('vms-2fa-rebuild-step-20261102/arm3b-departure.pcap.gz', {'08002b98a48f': 0}),
+    ('vms-2fa-rebuild-step-20261102/arm2-departure.pcap.gz',
+     {'08002b98a48f': 1, '08002b8b8727': 1}),
 ]
+# The pinned outcome: records per (LOCKDIRWT, release they follow). A corpus
+# change moves this deliberately.
+WANT = {(1, 5): 1377, (0, 6): 588}
 
 
 def show(rows):
@@ -141,17 +150,20 @@ def show(rows):
 
 def selftest(repo):
     root = os.path.join(repo, 'tests', 'lab', 'captures')
-    ok, n = True, 0
+    ok, n, per = True, 0, {}
     for rel, ldw in CORPUS:
         rows = score(os.path.join(root, rel), ldw)
         print(rel)
         show(rows)
         for r in rows:
             n += r['n']
+            k = (r['ldw'], r['rel_first'])
+            per[k] = per.get(k, 0) + r['n']
             good = (r['ldw'] is not None and r['rel_first'] == r['rel_last'] == rule(r['ldw'])
                     and r['closed'] and r['held'])
             ok = ok and good
-    print('records: %d' % n)
+    print('records: %d, by (LOCKDIRWT, release): %r' % (n, per))
+    ok = ok and per == WANT
     print('rebuild_step selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1
 

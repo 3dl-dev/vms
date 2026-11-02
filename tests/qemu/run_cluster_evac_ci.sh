@@ -64,7 +64,7 @@ if [ "$MODE" = "negctl" ]; then
 		dlm-departed-holder-locks-kept "$CTX/src" \
 		|| { echo "FATAL: could not inject dlm-departed-holder-locks-kept" >&2; exit 1; }
 	rm -f "$CTX"/src/kernel-core/*.negctl-pristine
-	grep -q 'NEGCTL dlm-departed-holder-locks-kept' "$CTX/src/kernel-core/vms_lock.c" \
+	grep "NEGCTL dlm-departed-holder-locks-kept" "$CTX/src/kernel-core/vms_lock.c" >/dev/null \
 		|| { echo "FATAL: the defect is not in the copy the rig is built from" >&2; exit 1; }
 	BUILD_DIR="$CTX"
 fi
@@ -83,10 +83,10 @@ RC=$?
 tr -d '\r' < "$OUT/rig.log" > "$OUT/rig.txt"
 sed -n '/=== rd vms-1e58: the EVACUATION/,$p' "$OUT/rig.txt"
 
-failed() { grep -q "^  FAILED ($1)" "$OUT/rig.txt"; }
+failed() { grep "^  FAILED ($1)" "$OUT/rig.txt" >/dev/null; }
 
 if [ "$MODE" = "proof" ]; then
-	if [ "$RC" -eq 0 ] && grep -q "EVACUATION PROOF PASSED" "$OUT/rig.txt"; then
+	if [ "$RC" -eq 0 ] && grep "EVACUATION PROOF PASSED" "$OUT/rig.txt" >/dev/null; then
 		echo "PASS: OVMX<->OVMX evacuation -- the standby was granted and continued the sequence"
 		exit 0
 	fi
@@ -97,7 +97,7 @@ fi
 
 # negctl: red, and red at the takeover only.
 BAD=0
-if [ "$RC" -eq 0 ] || grep -q "EVACUATION PROOF PASSED" "$OUT/rig.txt"; then
+if [ "$RC" -eq 0 ] || grep "EVACUATION PROOF PASSED" "$OUT/rig.txt" >/dev/null; then
 	echo "NEGATIVE CONTROL FAILED: with the departed system's locks kept, the rig still PASSED."
 	BAD=1
 fi

@@ -109,6 +109,11 @@ cp -v  "${OVERLAY}/src/process/${TARGET}/"* "src/process/${TARGET}/"
 # src/time/alpha-dec-vms/times.c.
 mkdir -p "src/time/${TARGET}"
 cp -v  "${OVERLAY}/src/time/${TARGET}/"* "src/time/${TARGET}/"
+# vms-465: sysinfo() reads the kernel's 64-bit struct sysinfo into a buffer of
+# its own width and narrows it, so sysconf(_SC_PHYS_PAGES) is the machine's
+# memory. See the header of src/linux/alpha-dec-vms/sysinfo.c.
+mkdir -p "src/linux/${TARGET}"
+cp -v  "${OVERLAY}/src/linux/${TARGET}/"* "src/linux/${TARGET}/"
 
 # ---- teach configure the triplet -> ARCH mapping (idempotent) ----
 if ! grep -q "ARCH=alpha-dec-vms" configure; then

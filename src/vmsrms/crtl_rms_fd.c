@@ -33,7 +33,7 @@
  * the end of the transfer). Record-format files (VAR, VFC, STM, STMCR) are read
  * the way the DEC C RTL reads them: $GET record by record, each record followed
  * by a newline when the file has carriage-control attributes. Writing a
- * record-format file, positioning one other than to its start or current
+ * record-format file, positioning one other than to its start, its end or current
  * position, and directories as descriptors are not provided yet: those calls
  * fail with an honest errno (EOPNOTSUPP / ESPIPE), never a silent success.
  * A file created here is a new version, Stream_LF with carriage-return
@@ -162,6 +162,14 @@ struct rfile {
     size_t    reclen, recoff;
     int       rec_eof;
     char     *io;                   /* IOBUF bytes, block-I/O staging          */
+    /* write-behind (stream files): bytes [wb_off, wb_off + wb_len) of the file,
+     * wb_off at a block boundary, held here until the buffer fills or the file
+     * is read, positioned, stat()ed, flushed or closed -- the multiblock buffer
+     * RMS writes a sequential stream through, one $WRITE per IOBUF instead of
+     * a $READ + $WRITE of a block per write() (rd vms-465). */
+    char     *wb;
+    uint64_t  wb_off;
+    uint32_t  wb_len;
     /* directory stream (RF_DIR): a $PARSE/$SEARCH wildcard context over spec */
     char      pat[264];             /* "<dirspec>*.*;*", fab$l_fna's backing   */
     int       dir_live;             /* $PARSE succeeded: the context is open   */
@@ -170,6 +178,8 @@ struct rfile {
 };
 
 static struct rfile *rfd[RFD_MAX];
+static int wb_flush(struct rfile *rf, int keep_tail);
+void ovmx_crtl_fd_flush_all(void);
 static unsigned char rfd_cloexec[RFD_MAX];   /* the user's FD_CLOEXEC view   */
 static int in_rms;                           /* RMS's own syscalls -> kernel */
 
@@ -449,6 +459,7 @@ static void rfile_free(struct rfile *rf)
         return;
     free(rf->rec);
     free(rf->io);
+    free(rf->wb);
     free(rf);
 }
 
@@ -956,6 +967,8 @@ static void rfile_release(struct rfile *rf)
         rfile_free(rf);
         return;
     }
+    if (rf->wb_len)
+        (void)wb_flush(rf, 0);
     sys$disconnect(&rf->rab, 0, 0);
     sys$close(&rf->fab, 0, 0);
     rfile_free(rf);
@@ -975,6 +988,8 @@ static void rfd_unbind(long long fd)
 
 static long long stream_read(struct rfile *rf, char *buf, uint64_t n)
 {
+    if (rf->wb_len && wb_flush(rf, 0) < 0)
+        return -EIO;
     if (rf->pos >= rf->eof || n == 0)
         return 0;
     if (n > rf->eof - rf->pos)
@@ -1018,10 +1033,104 @@ static int bio_write(struct rfile *rf, uint32_t vbn, const char *src, uint32_t l
     return (sys$write(&rf->rab, 0, 0) & 1) ? 0 : -EIO;
 }
 
+static int wb_dirty;                         /* rfiles holding write-behind bytes */
+
+static void wb_set_len(struct rfile *rf, uint32_t len)
+{
+    if (!rf->wb_len && len)
+        wb_dirty++;
+    else if (rf->wb_len && !len)
+        wb_dirty--;
+    rf->wb_len = len;
+}
+
+/* Write the write-behind bytes out: one $WRITE (the last block short). With
+ * keep_tail, a trailing partial block stays buffered, so the next sequential
+ * write appends to it without reading it back (it is written again then). */
+static int wb_flush(struct rfile *rf, int keep_tail)
+{
+    if (!rf->wb || rf->wb_len == 0)
+        return 0;
+    if (bio_write(rf, (uint32_t)(rf->wb_off / BLK) + 1u, rf->wb, rf->wb_len) < 0)
+        return -EIO;
+    uint32_t tail = rf->wb_len % BLK;
+    if (keep_tail && tail) {
+        memmove(rf->wb, rf->wb + (rf->wb_len - tail), tail);
+        rf->wb_off += rf->wb_len - tail;
+        wb_set_len(rf, tail);
+    } else {
+        wb_set_len(rf, 0);
+    }
+    return 0;
+}
+
+/* Every open file's write-behind bytes, before anything that reads the volume
+ * by name (another open, stat, rename, delete) or ends the image. */
+void ovmx_crtl_fd_flush_all(void)
+{
+    if (!wb_dirty)
+        return;
+    for (int k = 0; k < RFD_MAX; k++)
+        if (rfd[k] && rfd[k]->wb_len)
+            (void)wb_flush(rfd[k], 0);
+}
+
+/* Append `n` bytes at the end of file to the write-behind buffer; 0 if the
+ * write is not a sequential append there (the caller writes it through). */
+static long long wb_append(struct rfile *rf, const char *buf, uint64_t n)
+{
+    if (rf->pos != rf->eof)
+        return 0;
+    if (rf->wb_len && rf->wb_off + rf->wb_len != rf->pos)
+        return 0;
+    if (!rf->wb) {
+        rf->wb = malloc(IOBUF);
+        if (!rf->wb)
+            return 0;
+    }
+    if (rf->wb_len == 0) {
+        /* start at the block holding the end of file, with what it already holds */
+        uint64_t bstart = rf->pos / BLK * BLK, valid = rf->pos - bstart;
+        if (valid) {
+            rf->rab.rab$l_bkt = (uint32_t)(bstart / BLK) + 1u;
+            rf->rab.rab$l_ubf = rf->wb;
+            rf->rab.rab$w_usz = BLK;
+            uint32_t st = sys$read(&rf->rab, 0, 0);
+            if (!(st & 1) || rf->rab.rab$w_rsz < valid)
+                return 0;
+        }
+        rf->wb_off = bstart;
+        wb_set_len(rf, (uint32_t)valid);
+    }
+    uint64_t done = 0;
+    while (done < n) {
+        if (rf->wb_len == 0)
+            rf->wb_off = rf->pos;            /* flushed whole: restart here */
+        uint64_t room = IOBUF - rf->wb_len, take = n - done;
+        if (take > room)
+            take = room;
+        memcpy(rf->wb + rf->wb_len, buf + done, take);
+        wb_set_len(rf, rf->wb_len + (uint32_t)take);
+        done += take;
+        rf->pos += take;
+        rf->eof = rf->pos;
+        if (rf->wb_len == IOBUF && wb_flush(rf, 1) < 0)
+            return -EIO;
+    }
+    return (long long)done;
+}
+
 static long long stream_write(struct rfile *rf, const char *buf, uint64_t n)
 {
     if (rf->oflags & O_APPEND)
         rf->pos = rf->eof;
+    if (n) {
+        long long r = wb_append(rf, buf, n);
+        if (r != 0)
+            return r;
+    }
+    if (wb_flush(rf, 0) < 0)
+        return -EIO;
     uint64_t done = 0;
     while (done < n) {
         uint64_t pos = rf->pos;
@@ -1140,7 +1249,20 @@ static long long r_lseek(struct rfile *rf, long long off, int whence)
             rf->rec_eof = 0;
             return 0;
         }
-        return -ESPIPE;                          /* record files: not yet */
+        if (whence == SEEK_END && off == 0) {
+            /* To the end of file, as the DEC C RTL positions a record file:
+             * reads return end of file, and the position is the end of the
+             * stored bytes -- not the count of bytes reads deliver (each
+             * record's length word is stored, its newline is not), but never
+             * smaller than it, which is what a reader sizing a buffer by
+             * fseek(SEEK_END) + ftell relies on (libiberty's @file reader,
+             * rd vms-465). */
+            rf->reclen = rf->recoff = 0;
+            rf->rec_eof = 1;
+            rf->pos = rf->eof;
+            return (long long)rf->pos;
+        }
+        return -ESPIPE;                          /* other record positions: not yet */
     }
     long long base;
     switch (whence) {
@@ -1240,6 +1362,23 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
     struct rfile *rf;
     if (rget(a1) || n == SYS_openat)
         TR("crtlfd: sys", n);
+    switch (n) {
+    /* what reads the volume by name, or makes another process: the
+     * write-behind bytes of every open file are on the volume first */
+    case SYS_openat: case SYS_statx: case SYS_newfstatat: case SYS_faccessat:
+    case SYS_faccessat2: case SYS_unlinkat: case SYS_renameat: case SYS_renameat2:
+    case SYS_mkdirat: case SYS_readlinkat: case SYS_clone:
+#ifdef SYS_fork
+    case SYS_fork:
+#endif
+#ifdef SYS_vfork
+    case SYS_vfork:
+#endif
+        ovmx_crtl_fd_flush_all();
+        break;
+    default:
+        break;
+    }
     switch (n) {
     case SYS_openat:
         return do_openat(a1, (const char *)(uintptr_t)a2, a3, handled);
@@ -1349,6 +1488,8 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
         *handled = 1;
         if (rf->kind == RF_DIR)
             return 0;
+        if (rf->wb_len && wb_flush(rf, 0) < 0)
+            return -EIO;
         return (sys$flush(&rf->rab, 0, 0) & 1) ? 0 : -EIO;
     case SYS_getdents64:
         if (!(rf = rget(a1))) return 0;
@@ -1498,6 +1639,8 @@ static long long rms_hook(long long n, long long a1, long long a2, long long a3,
                           long long a4, long long a5, long long a6, int *handled)
 {
     (void)a6;
+    if (n == SYS_exit_group || n == SYS_exit)
+        ovmx_crtl_fd_flush_all();               /* image rundown: RMS writes its buffers */
     if (n == SYS_exit_group && __ovmx_crtl_exit_record)
         __ovmx_crtl_exit_record();              /* SYS$EXIT: does not return */
     if (in_rms)

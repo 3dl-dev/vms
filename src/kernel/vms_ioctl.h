@@ -1516,12 +1516,20 @@ struct vms_dlm_scs_view_wire {
     uint32_t releases_refused;
     uint32_t blkasts_unparsed;
     uint32_t deferred_grants_owed;
-    uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
+    uint32_t deferred_grants_sent;     /* the op-0x02 originated (a4d7/f87)  */
     uint32_t queued_no_reply;
     uint32_t queued_answered;          /* ...and the 0xfb that went back (85f) */
     uint32_t queued_unanswerable;      /* ...and the honest silence left       */
     uint32_t grant_advances_in;        /* a LOCAL release advanced a cross-node */
     uint32_t grant_advances_stale;     /* ...queue; and the ones with no lock  */
+    /* WHICH DOOR an owed grant was refused at (the rd vms-85f/vms-28bd lab
+     * fire): `deferred_grants_owed` above is their sum, and the fire that read
+     * it as `owed=1` beside a real VAX still waiting could not name the gate.
+     * See vms_cluster_snapshot.h for what each one means. */
+    uint32_t pending_keep_refused;
+    uint32_t pending_overflow;
+    uint32_t deferred_grants_refused;
+    uint32_t deferred_grants_send_failed;
     uint32_t unparsed;
     uint32_t foreign_refused;
     /* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5) -- the pair
@@ -1549,8 +1557,13 @@ struct vms_dlm_scs_view_wire {
     uint32_t posts_unqueued;
     uint32_t posts_lock_gone;
     uint32_t posts_refused;
+    /* The ENGINE's lock-safety read (rd vms-5cd): grant decisions withheld
+     * because a PROXY LKB of this node's holds the resource. See
+     * vms_cluster_snapshot.h -- the alternative was OVMX granting a real VAX EX
+     * over a CR its own process held. */
+    uint32_t proxy_compat_blocks;
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 200,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 220,
                "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
 
 struct vms_cluster_diag_dlm_args {
@@ -1558,7 +1571,7 @@ struct vms_cluster_diag_dlm_args {
     uint32_t pad0;
     struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
 };
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 208,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 228,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 /*
  * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
@@ -1580,13 +1593,21 @@ _Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 208,
  * vms-28bd then appended `grant_advances_in` and `grant_advances_stale`
  * (200 -> 208), moving it 0xC0C8566E -> 0xC0D0566E -- the other half of the
  * same hang: whether a LOCAL release that advanced a cross-node queue reached
- * the arm at all.
+ * the arm at all. The rd vms-85f/vms-28bd LAB FIRE then appended the four
+ * counters that say WHICH DOOR an owed grant was refused at (208 -> 224),
+ * moving it 0xC0D0566E -> 0xC0E0566E -- deliberately, in that commit: the fire
+ * read `owed=1` beside a real VAX that was still waiting, and `owed` is the
+ * sum of three unlike facts, so the row could not name the gate. rd vms-5cd
+ * then appended `proxy_compat_blocks` (224 -> 228), moving it
+ * 0xC0E0566E -> 0xC0E4566E -- deliberately, in that commit: the DOUBLE GRANT
+ * that fire found (EX granted over a CR this node's own process held) is
+ * prevented by a check whose firing nothing else in the row would show.
  * A diagnostic image built from another
  * tree therefore fails LOUDLY (ENOTTY) rather than reading a shorter row as
  * data, which is the behaviour this assert exists to guarantee.
  */
 #define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
-_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC0D0566Eu,
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC0E4566Eu,
                "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
 
 /*
@@ -1836,6 +1857,7 @@ _Static_assert(VMS_IOCTL_CLUSTER_STOP == 0xC010566Fu,
  * name form is ddcu:, e.g. OPA0:).
  */
 #define VMS_DEVNAM_SIZE 16
+#define VMS_FULLDEVNAM_SIZE 24  /* "<SCSNODE>$" or "$<alloclass>$" + a physical name (rd vms-1f7) */
 
 /*
  * Size of a disk unit's BACKING Linux block-device name (e.g. "vda"), NUL
@@ -1982,6 +2004,13 @@ struct vms_devinfo {
     uint32_t perm_width;   /* PERMANENT terminal width -- IO$_SENSECHAR's answer
                             * (SET TERMINAL/PERMANENT); rd vms-d900 */
     uint32_t perm_page;    /* PERMANENT terminal page length */
+    /*
+     * DVI$_FULLDEVNAM without its leading underscore (rd vms-1f7): the
+     * physical name prefixed by the allocation class ("$2$DUA0:") or the node
+     * ("VAX1$OPA0:") as the executive composes it from the unit's DEV$M_NNM
+     * and the loaded SCSNODE/ALLOCLASS (src/kernel-core/vms_devtab_fullnam.h).
+     */
+    char     fulldevnam[VMS_FULLDEVNAM_SIZE];
 };
 
 /*
@@ -2386,15 +2415,15 @@ struct vms_terminal_args {
  * These values are measured, not chosen: aarch64 and x86_64 agree,
  * because every field is a fixed-width type.
  */
-_Static_assert(sizeof(struct vms_devinfo) == 88,
+_Static_assert(sizeof(struct vms_devinfo) == 112,
                "struct vms_devinfo changed size -- kernel and userspace would disagree on device attribute offsets");
 _Static_assert(sizeof(struct vms_assign_args) == 24,
                "struct vms_assign_args changed size -- $ASSIGN would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_dassgn_args) == 8,
                "struct vms_dassgn_args changed size -- $DASSGN would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_getdvi_args) == 104,
+_Static_assert(sizeof(struct vms_getdvi_args) == 128,
                "struct vms_getdvi_args changed size -- $GETDVI would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_devscan_args) == 96,
+_Static_assert(sizeof(struct vms_devscan_args) == 120,
                "struct vms_devscan_args changed size -- $DEVICE_SCAN would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_setmode_args) == 40,
                "struct vms_setmode_args changed size -- IO$_SETMODE would decode at the wrong offsets");
@@ -2411,9 +2440,9 @@ _Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
                "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_DASSGN == 0xC0085651u,
                "VMS_IOCTL_DASSGN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETDVI == 0xC0685652u,
+_Static_assert(VMS_IOCTL_GETDVI == 0xC0805652u,
                "VMS_IOCTL_GETDVI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0605653u,
+_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0785653u,
                "VMS_IOCTL_DEVSCAN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_TTSETMODE == 0xC0285654u,
                "VMS_IOCTL_TTSETMODE encodes differently here than on the reference build");

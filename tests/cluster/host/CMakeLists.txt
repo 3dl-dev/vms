@@ -861,6 +861,31 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(cluster_host_hdr_alone PRIVATE -Wall -Wextra)
 endif()
 
+# ---- rd vms-5cd: the OTHER substrate's ioctl mirror, compiled ----------------
+# src/kernel-netbsd/vms_lock_nb.h pins every CLUSTER_DIAG args struct with a
+# _Static_assert, and nothing in the host build compiled it -- so on 2026-10-22
+# its vms_cluster_diag_dlm_args assert was found 16 bytes stale while the row it
+# mirrors had moved. An assert that is never compiled is not a tripwire. Its own
+# object library because src/kernel-netbsd and src/kernel both carry a
+# vms_internal.h: the two include paths must not meet in one target.
+add_library(cluster_host_hdr_alone_nb OBJECT
+    hdr_alone_vms_lock_nb.c           # rd vms-5cd
+)
+target_include_directories(cluster_host_hdr_alone_nb PRIVATE
+    "${CMAKE_SOURCE_DIR}/src/kernel-netbsd")
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(cluster_host_hdr_alone_nb PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME cluster_host_headers_alone_netbsd
+    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}
+            --target cluster_host_hdr_alone_nb --config $<CONFIG>
+)
+set_tests_properties(cluster_host_headers_alone_netbsd PROPERTIES
+    LABELS "unit;cluster;cluster_host;abi"
+    TIMEOUT 60
+)
+
 # A "did it compile" gate for an OBJECT library: `cmake --build --target <name>`,
 # which ctest invokes directly. This is the host-includability proof, registered
 # UNCONDITIONALLY: a build failure here must be a RED ctest result.
@@ -1216,6 +1241,10 @@ add_test(NAME cluster_frame_conformance_gate
         # required here so the never-crash rule's own condition holds -- no new
         # frame type reaches a real VAX before the gate can see every byte.
         dlm_enq_ans_queued
+        # rd vms-a4d7: the DEFERRED GRANT (cat-0x02 op-0x02). Also a frame type
+        # OVMX has never emitted, and the one that replaced an invented echo --
+        # required here so no byte of it reaches a real lock manager ungrounded.
+        dlm_grant_notify
         # rd vms-380: the remaster shapes. dlm_rm_14 and dlm_rm_14_ra7 are the
         # two forms rd vms-6ad1 (RA7) fires, and they are required HERE so the
         # gate refuses to let either ship ungrounded.
@@ -1333,6 +1362,25 @@ add_test(NAME cluster_host_dlm_deq_census
 set_tests_properties(cluster_host_dlm_deq_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;crash-safety"
     TIMEOUT 180
+)
+
+# ---- rd vms-28bd: HOW A REAL MASTER DELIVERS A GRANT IT COULD NOT GIVE AT
+# ONCE. The rd vms-5cd fix fire measured the door an owed deferred grant is
+# refused at (`send_failed=1`, the SHAPE gate in cnxman_dlm_peer_proven), and
+# this census is why widening that gate would be the WRONG fix: over the whole
+# corpus, 111 real->real op-0x01 transactions were answered 0xfb QUEUED and
+# ZERO of them were later answered 0xfa on the same transaction -- so the frame
+# rd vms-f87 built has no real instance at all. It also pins what DOES occupy
+# that moment (a cat-0x02 op-0x02 notification this codec has no name for, 387
+# real frames, 0 ever emitted by OVMX) WITHOUT claiming what it means.
+add_test(NAME cluster_host_dlm_late_grant_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_late_grant_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_late_grant_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 300
 )
 
 # ---- rd vms-b67a: how a REAL node asks for a SUB-LOCK. The item is that OVMX

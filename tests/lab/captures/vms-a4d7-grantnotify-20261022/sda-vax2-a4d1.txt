@@ -1,0 +1,26 @@
+SDA> SHOW RESOURCE/NAME=A4D1
+Address of RSB:  87992600  GGMODE:       NL  Status: DIRENTR VALID           
+Parent RSB:      00000000  CGMODE:       NL                                  
+Sub-RSB count:          0  FGMODE:       NL                                  
+Lock Count:             1  CSID:   00010003                                  
+BLKAST count:           0  RQSEQNM:    0000
+
+Resource:      00000000 31443441   A4D1....  Valblk: 00000000 00000000
+ Length    4   00000000 00000000   ........          00000000 00000000
+ User mode     00000000 00000000   ........ 
+ System        00000000 00000000   ........  Seqnum: 00000000
+
+Granted queue (Lock ID / Gr mode / Range):
+ 540003AD  EX 00000000-FFFFFFFF
+
+Conversion queue (Lock ID / Gr mode / Range -> Rq mode / Range):
+     *** EMPTY QUEUE ***
+
+Waiting queue (Lock ID / Rq mode / Range):
+     *** EMPTY QUEUE ***
+SDA> EXIT
+$ STOP HOLD2
+$ SHOW SYSTEM/PROCESS=HOLD2
+$ SPAWN/NOWAIT/PROCESS=HOLD3 RMH 123WA4D2
+%DCL-S-SPAWNED, process HOLD3 spawned
+$ SHOW SYSTEM/PROCESS=HOLD3

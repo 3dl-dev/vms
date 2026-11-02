@@ -647,12 +647,19 @@ struct vms_dlm_scs_view_wire {
 	uint32_t releases_refused;
 	uint32_t blkasts_unparsed;
 	uint32_t deferred_grants_owed;
-	uint32_t deferred_grants_sent;     /* originated on a queue advance (f87) */
+	uint32_t deferred_grants_sent;     /* the op-0x02 originated (a4d7/f87)  */
 	uint32_t queued_no_reply;
 	uint32_t queued_answered;          /* ...and the 0xfb that went back (85f) */
 	uint32_t queued_unanswerable;      /* ...and the honest silence left       */
 	uint32_t grant_advances_in;        /* a LOCAL release advanced a cross-node */
 	uint32_t grant_advances_stale;     /* ...queue; and the ones with no lock  */
+	/* WHICH DOOR the owed grant was refused at (fire q85f1). `owed` above is
+	 * their sum, which a lab fire could not decompose; see
+	 * vms_cluster_snapshot.h for what each one means. */
+	uint32_t pending_keep_refused;
+	uint32_t pending_overflow;
+	uint32_t deferred_grants_refused;
+	uint32_t deferred_grants_send_failed;
 	uint32_t unparsed;
 	uint32_t foreign_refused;
 	/* Lock-tree remastering, the NEW MASTER's side (rd vms-ed5). Mirror of
@@ -676,6 +683,10 @@ struct vms_dlm_scs_view_wire {
 	uint32_t posts_unqueued;
 	uint32_t posts_lock_gone;
 	uint32_t posts_refused;
+	/* The ENGINE's lock-safety read (rd vms-5cd): grant decisions withheld
+	 * because a PROXY LKB of this node's holds the resource. Mirror of
+	 * src/kernel/vms_ioctl.h; see vms_cluster_snapshot.h. */
+	uint32_t proxy_compat_blocks;
 };
 
 struct vms_cluster_diag_dlm_args {
@@ -912,9 +923,16 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 200,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 220,
                "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 208,
+/*
+ * 228 = the row (220) + status + pad0. The row grew again here: rd vms-5cd adds
+ * one counter to vms_dlm_scs_view_wire (216 -> 220). This mirror is compiled on
+ * the host by tests/cluster/host/hdr_alone_vms_lock_nb.c (added with rd
+ * vms-28bd's four owed-grant counters, after this very assert was found 16
+ * bytes stale), so a number that does not move with the row is a RED host test.
+ */
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 228,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

@@ -639,3 +639,11 @@ libvms_add_test(test_libvms_opcdef_layout
 # order and statuses observed on VAX1 (tests/lab/captures/lib-lun-20261021/).
 libvms_add_test(test_libvms_lib_lun
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_lun.c)
+
+# rd vms-1f7: the executive's DVI$_FULLDEVNAM composition (node / allocation-
+# class prefix by DEV$M_NNM), the header devinfo_fill() runs, against the
+# standalone VAX V7.3 capture. Host-only, no executive needed.
+add_executable(test_devtab_fullnam ${CMAKE_CURRENT_SOURCE_DIR}/test_devtab_fullnam.c)
+target_include_directories(test_devtab_fullnam PRIVATE ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_options(test_devtab_fullnam PRIVATE -Wall -Wextra -Werror)
+add_test(NAME test_devtab_fullnam COMMAND test_devtab_fullnam)

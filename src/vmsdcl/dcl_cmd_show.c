@@ -1080,10 +1080,11 @@ static const char *show_process_target_qual(const struct dcl_command *cmd)
  *                         VAX1$TTD3:
  *
  * A process that owns nothing gets no section at all (Section 3.1). The
- * name is the one $GETDVI DVI$_FULLDEVNAM answers for the same row; OVMX's
- * full name carries no "node$" prefix yet (the vms-dv1 remainder, shared
- * with $GETDVI rather than patched here alone). A devscan that fails prints
- * nothing -- no device is ever invented.
+ * name is the one $GETDVI DVI$_FULLDEVNAM answers for the same row, without
+ * its underscore: the executive's full name, node- or allocation-class-
+ * prefixed (rd vms-1f7; standalone VMS prints VAX1$OPA0: too, docs/oracle/
+ * vax73-device-full-name.md). A devscan that fails prints nothing -- no
+ * device is ever invented.
  */
 static void show_process_devices(uint32_t tgt_pid)
 {
@@ -1097,10 +1098,12 @@ static void show_process_devices(uint32_t tgt_pid)
         info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
         if (info.owner_pid != tgt_pid || info.devnam[0] == '\0')
             continue;
+        info.fulldevnam[VMS_FULLDEVNAM_SIZE - 1] = '\0';
+        const char *nm = info.fulldevnam[0] ? info.fulldevnam : info.devnam;
         if (shown == 0)
-            printf("\n%-20s%s\n", "Devices allocated:", info.devnam);
+            printf("\n%-20s%s\n", "Devices allocated:", nm);
         else
-            printf("%-20s%s\n", "", info.devnam);
+            printf("%-20s%s\n", "", nm);
         shown++;
     }
 }

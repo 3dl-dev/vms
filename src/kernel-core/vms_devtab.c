@@ -58,6 +58,7 @@
                                 * of "SYSINIT starts the fork thread first") */
 #include "vms_cluster_snapshot.h"
 #include "vms_cluster_sysgen.h"
+#include "vms_devtab_fullnam.h" /* rd vms-1f7: DVI$_FULLDEVNAM composition */
 #include "vms_pe.h"
 #include "vms_cnxman.h"        /* FC-P3.8: cnxman_get_club/_csb + $SETCLUEVT */
 #include "vms_cnxman_csb.h"    /* FC-P3.9: the CSB state names MEMBER_GET renders */
@@ -254,6 +255,16 @@ static struct vms_device *vms_devtab_create(const char *devnam,
     dev->page      = page;
     dev->perm_width = width;     /* a unit starts at its permanent set */
     dev->perm_page  = page;
+    /*
+     * DEVCHAR2 DEV$M_NNM, "name the unit with its node" (rd vms-1f7). Real VAX
+     * V7.3 sets it on every terminal and disk and leaves it clear on NLA0:, the
+     * LAN controllers and the NET/BG pseudo-devices (tests/lab/captures/
+     * fulldevnam-standalone-20261101/, the R2| table) -- the three kinds the
+     * other rows here are. A mailbox row (MBAn: carries it, NLA0: does not)
+     * would set its own.
+     */
+    if (devclass == DC__TERM || devclass == DC__DISK)
+        dev->devchar2 = VMS_DEVTAB_DEV_M_NNM;
     exec_list_head_init(&dev->chanlist);
     exec_lock_init(&dev->lock);
 
@@ -2514,6 +2525,26 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
     info->devchar_dev = dev->devchar_dev;
     info->devbufsiz   = dev->devbufsiz;
     exec_unlock(&dev->lock);
+
+    /*
+     * DVI$_FULLDEVNAM (rd vms-1f7). Composed HERE, from the unit's own
+     * DEV$M_NNM and the SCSNODE/ALLOCLASS the executive loaded at boot
+     * (VMS_IOCTL_SYSGEN_LOAD), so every reader -- $GETDVI, $ALLOC, F$GETDVI,
+     * SHOW PROCESS -- prints the same one. Measured rule and capture:
+     * vms_devtab_fullnam.h. Before SYSGEN_LOAD there is no node name to
+     * prefix and the full name is the physical name; nothing is invented.
+     */
+    {
+        const struct vms_cluster *cl = vms_cluster_node();
+        const int loaded = cl->params_valid != 0u;
+
+        if (vms_devtab_full_name(info->devnam, info->devclass, dev->devchar2,
+                                 loaded ? (const char *)cl->params.scsnode : NULL,
+                                 loaded ? cl->params.scsnode_len : 0u,
+                                 loaded ? cl->params.alloclass : 0u,
+                                 info->fulldevnam, sizeof(info->fulldevnam)) < 0)
+            strscpy(info->fulldevnam, info->devnam, sizeof(info->fulldevnam));
+    }
 }
 
 long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg)

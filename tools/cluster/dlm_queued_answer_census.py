@@ -141,6 +141,17 @@ def answer_status_table(paths):
     return tab
 
 
+def ovmx_queued_answers(paths):
+    """Every cat-0x82 op-0x01 QUEUED answer an OVMX node emitted, as bodies."""
+    out = []
+    for p in paths:
+        for _idx, src, _dst, body in rc.sca_bodies_with_src(p):
+            if len(body) >= BODY_LEN and body[8] == ANS_CAT and \
+               body[9] == ENQ_OP and body[34] == QUEUED and not is_real(src):
+                out.append(bytes(body))
+    return out
+
+
 def print_status_table(tab):
     print("=== every cat-0x82 op-0x01 in the corpus, by sender and body[34]")
     for (cls, st), n in sorted(tab.items(), key=lambda kv: -kv[1]):
@@ -209,9 +220,17 @@ def selftest(repo):
     bad = 0
     q = real_pairs(paths, QUEUED)
     root, sub = split_root_sub(q)
-    bad += expect(len(q) == 110, "110 real->real queued op-0x01 pairs (got %d)"
+    # 2026-10-22, rd vms-5cd's FIX FIRE added the 111th pair and the 18th ROOT
+    # one, and it is the most useful kind of addition: a THIRD real master
+    # (VAX2), holding a remote CR for an OVMX node on a tree it masters,
+    # answered a real VAX's conflicting EX 0xfb QUEUED -- the same decisive
+    # cell OVMX writes, from a direction the corpus had never held
+    # (tests/lab/captures/vms-5cd-fixfire-20261022, f9378). Every RULE below
+    # survived it unchanged: the same 15 rewritten offsets, the same record,
+    # the same echoed handle.
+    bad += expect(len(q) == 111, "111 real->real queued op-0x01 pairs (got %d)"
                   % len(q))
-    bad += expect(len(root) == 17, "17 of them name no parent -- ROOT (got %d)"
+    bad += expect(len(root) == 18, "18 of them name no parent -- ROOT (got %d)"
                   % len(root))
     bad += expect(len(sub) == 93, "93 name a parent -- SUB-LOCK (got %d)"
                   % len(sub))
@@ -240,8 +259,8 @@ def selftest(repo):
                   "parent, and has no cell this executive cannot hold")
     b28 = collections.Counter(a[28] for _p, _q, a, _r, _s in root)
     bad += expect(sorted(b28) == [0x14, 0x54] and b28[0x14] == 9 and
-                  b28[0x54] == 8,
-                  "body[28] is 0x14 (9) or 0x54 (8) -- two forms, no grounded "
+                  b28[0x54] == 9,
+                  "body[28] is 0x14 (9) or 0x54 (9) -- two forms, no grounded "
                   "determinant (got %s)" % dict(b28))
     b29 = collections.Counter(a[29] for _p, _q, a, _r, _s in root)
     bad += expect(sorted(b29) == [0x00, 0x02],
@@ -254,13 +273,13 @@ def selftest(repo):
                   "request cell that predicts it (got %s)" % sorted(b52))
 
     # The arrangements: this is not one master answering one requester.
-    bad += expect(len({a.hex() for *_x, a in root}) == 2,
-                  "measured at 2 distinct masters")
-    bad += expect(len({r.hex() for *_x, r, _a in root}) == 7,
-                  "from 7 distinct requesters")
+    bad += expect(len({a.hex() for *_x, a in root}) == 3,
+                  "measured at 3 distinct masters")
+    bad += expect(len({r.hex() for *_x, r, _a in root}) == 8,
+                  "from 8 distinct requesters")
     bad += expect(len({os.path.basename(os.path.dirname(p))
-                       for p, *_x in root}) == 7,
-                  "in 7 distinct captures")
+                       for p, *_x in root}) == 8,
+                  "in 8 distinct captures")
     bad += expect({req[30] for _p, req, *_x in root} == {4, 5},
                   "at 2 requested modes (PW and EX)")
 
@@ -282,10 +301,32 @@ def selftest(repo):
     bad += expect(all(a[32:36] == bytes((1, 0, GRANTED, 0))
                       for _p, _q, a, _r, _s in g),
                   "and their record at body[32:36] is 01 00 fa 00")
-    bad += expect(not any(st == QUEUED and cls == 'ovmx'
-                          for cls, st in answer_status_table(paths)),
-                  "NO OVMX node has ever emitted one: the silence this item "
-                  "is about")
+    # 2026-10-22: THIS CONTROL IS NOW A MEASUREMENT, NOT A SILENCE.
+    #
+    # It used to assert that no OVMX node had ever emitted a queued answer --
+    # "the silence this item is about". The rd vms-85f fire ended that silence
+    # on a real cluster: two OVMX-emitted 0xfb answers reached a real V7.3's
+    # lock manager, which accepted them (its process left RWSCS for LEF and
+    # STOP completed it) -- tests/lab/captures/vms-85f-queued-answer-20261021.
+    #
+    # So the control keeps its teeth by asserting WHAT they are instead of that
+    # they are absent: every OVMX-emitted queued answer in the whole corpus
+    # must carry the queue bit at body[28], the 0xfb status, and a master
+    # handle that is non-zero and is NOT the requester's own -- the minted-value
+    # class that bugchecked two lab VAXes. A malformed one cannot slip in.
+    ovmx_q = ovmx_queued_answers(paths)
+    bad += expect(len(ovmx_q) == 6,
+                  "OVMX-emitted queued answers in the corpus: %d (two from the "
+                  "rd vms-85f fire, two from the rd vms-5cd fix fire -- the "
+                  "latter the answers that replaced a DOUBLE GRANT -- and two "
+                  "from the rd vms-a4d7 grant-notify fire, each of which was "
+                  "followed by the op-0x02 that GRANTED it)" % len(ovmx_q))
+    bad += expect(all(a[28] & 0x04 for a in ovmx_q),
+                  "every one carries the queue bit 0x04 at body[28]")
+    bad += expect(all(a[20:24] != bytes(4) and a[20:24] != a[24:28]
+                      for a in ovmx_q),
+                  "...and a master handle that is neither zero nor the "
+                  "requester's own")
     print("\n%s" % ("selftest: all figures hold" if bad == 0
                     else "selftest: %d FAILED" % bad))
     return 1 if bad else 0

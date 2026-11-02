@@ -1,0 +1,14 @@
+P7: vms_cnxtrace on OVMXE, read AFTER step 8 (the local release), 00:32Z -- RUN SYS$SYSTEM:CNXTRACE on the node under test.
+
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=MEMBER failure=none ignored_events=11 recording=yes
+%CNXTRACE-I-COUNT, held=75 recorded=75 dropped=0
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=1 lockdirwt=0 gen=3 proxy_lkbs=1
+%CNXTRACE-I-DLMREQ, requests sent=7 received=3 grants sent=0 received=1 declined=1
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=2 answered=2 unanswerable=0 unparsed=0 foreign=1
+%CNXTRACE-I-DLMRECV, releases received=1 refused=0  blkasts unparsed=0  deferred grants sent=0 owed=1  local advances=1 stale=0
+%CNXTRACE-I-DLMRM, trees opened=1 refused=0  records adopted=0 refused=0  ends=2
+%CNXTRACE-I-DLMRMHELD, trees held=1  op-0x14 sent=2 unsent=0  completions unreported=0  other-master notices=0
+%CNXTRACE-I-DLMPOST, posts queued=12 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=14 refused=0 frames_rx=18 replies_sent=5 declined=1
+%CNXTRACE-I-END, 75 records printed

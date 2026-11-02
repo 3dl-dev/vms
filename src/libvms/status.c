@@ -83,6 +83,7 @@ static const struct status_entry known_codes[] = {
     { SS$_DEVNOTALLOC,  "SYSTEM", "DEVNOTALLOC",  "device not allocated" },
     { SS$_IVDEVNAM,     "SYSTEM", "IVDEVNAM",     "invalid device name" },
     { SS$_IVLOGNAM,     "SYSTEM", "IVLOGNAM",     "invalid logical name" },
+    { SS$_IVIDENT,      "SYSTEM", "IVIDENT",      "invalid identifier format" },  /* alpha84-msgcat.txt (SET FILE/OWNER_UIC, vms-1fb7) */
     /* ORACLE-PINNED: F$MESSAGE(148) on the reference lab VAX V7.3
      * renders "%SYSTEM-F-DUPLNAM, duplicate name" -- the same text the
      * lab's RUN/DETACHED transcript chains under %RUN-F-CREPRC when a
@@ -118,7 +119,7 @@ static const struct status_entry known_codes[] = {
     { SS$_DEADLOCK,     "SYSTEM", "DEADLOCK",     "deadlock detected" },
     { SS$_EXENQLM,      "SYSTEM", "EXENQLM",     "exceeded enqueue limit" },
     { SS$_EXASTLM,      "SYSTEM", "EXASTLM",     "exceeded AST limit" },
-    { SS$_UNSUPPORTED,  "SYSTEM", "UNSUPPORTED",  "unsupported operation" },
+    { SS$_UNSUPPORTED,  "SYSTEM", "UNSUPPORTED",  "unsupported operation or function" },
     { SS$_ENDOFFILE,    "SYSTEM", "ENDOFFILE",    "end of file" },
 
     /* CLI facility (docs/oracle/messages/alpha84-msgcat2.txt) */

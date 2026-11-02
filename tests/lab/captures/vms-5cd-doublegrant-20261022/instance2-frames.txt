@@ -1,0 +1,17 @@
+rd vms-5cd SECOND INSTANCE (RA7W, 02:34-02:38Z): the frames
+
+f157 req  cat=02 op=01 ENQ (new lock request)   52540000e501->VAX1 mode=0x01(CR) reqid/pid=0x10000004 master_lkid=0x01000358 reslen=4 res='RA7W'
+f566 req  cat=02 op=0e ?                        VAX1->52540000e501 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7W'
+f568 resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7W'
+f569 req  cat=02 op=0f ?                        VAX1->52540000e501 mode=0x01(CR) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7W'
+f571 resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7W'
+f573 req  cat=02 op=10 ?                        VAX1->52540000e501 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7W'
+f576 resp cat=82 op=15 ?                        52540000e501->VAX1 mode=0x00(NL) reqid/pid=0x00000000 master_lkid=0x00000004 reslen=4 res='RA7W'
+f577 req  cat=02 op=13 ?                        VAX1->52540000e501 mode=0x15(-) reqid/pid=0xffffffff master_lkid=0x00000000 reslen=4 res='RA7W'
+f1404 req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->VAX1 mode=0x05(EX) reqid/pid=0x20400222 master_lkid=0x05000371 reslen=4 res='RA7W'
+f1405 resp cat=82 op=01 ENQ (new lock request)   VAX1->08002b51a04d mode=0x01(CR) reqid/pid=0x20400222 master_lkid=0x05000371 reslen=4 res='RA7W'
+f1406 req  cat=02 op=01 ENQ (new lock request)   08002b51a04d->52540000e501 mode=0x05(EX) reqid/pid=0x20400222 master_lkid=0x05000371 reslen=4 res='RA7W'
+
+--- every frame OVMXE originated (the 0xfa at 02:37:46 is the grant) ---
+frames OVMXE ORIGINATED (src = 52:54:00:00:e5:01), by cat/op:
+   f1408  02:37:46  cat=0x82 op=0x01 body[34]=0xfa

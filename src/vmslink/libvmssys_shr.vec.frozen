@@ -145,3 +145,5 @@ vms_kif_tt_write_record=PROCEDURE
 vms_kif_netcfg=PROCEDURE
 vms_kif_power_off=PROCEDURE
 vms_kif_gblsc_delete=PROCEDURE
+vms_kif_pprop=PROCEDURE
+vms_kif_task_fork=PROCEDURE

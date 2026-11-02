@@ -98,6 +98,19 @@ static int rest_is_whitespace(dcl_lexer_t *lex)
  * Returns the token type if matched, or 0 if not.
  * Sets *len to the length of the matched operator.
  */
+/* Is a '[' still open in the first n characters of a word being scanned? */
+static int word_bracket_open(const char *w, size_t n)
+{
+    int depth = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (w[i] == '[')
+            depth++;
+        else if (w[i] == ']' && depth > 0)
+            depth--;
+    }
+    return depth > 0;
+}
+
 static dcl_token_type_t try_dot_operator(dcl_lexer_t *lex, size_t *len)
 {
     /* Must start with '.' */
@@ -424,6 +437,15 @@ int dcl_lexer_next(dcl_lexer_t *lex, dcl_token_t *token)
                         token->value[vi++] = lex_peek(lex);
                     lex_advance(lex);
                 }
+            } else if (ch == ',' && word_bracket_open(token->value, vi)) {
+                /* A comma inside an open '[' belongs to the word: a UIC
+                 * ([144,144]) or a UIC-form directory ([1,4]FILE.TXT) is ONE
+                 * value to DCL (OpenVMS DCL Dictionary, SET FILE/OWNER_UIC=uic,
+                 * SET UIC [g,m]). Splitting it made "/OWNER_UIC=[144,144]" a
+                 * "[144" value plus a stray "144]" parameter (rd vms-1fb7). */
+                if (vi < sizeof(token->value) - 1)
+                    token->value[vi++] = ch;
+                lex_advance(lex);
             } else if (ch == ';') {
                 /* VMS file version delimiter appearing INSIDE a filespec word:
                  * ';', ';N', ';*' or ';-N'. DCL's only comment character is

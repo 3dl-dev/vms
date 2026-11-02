@@ -314,7 +314,12 @@ def main():
         w("$ CLOSE R")
         if n <= trace:
             w("$ TYPE GCCOBJ:[000000]TU.RSP")
-        w("$ SET DEFAULT %s" % m.vms_dir(rec["cwd"]))
+        vd = m.vms_dir(rec["cwd"])
+        if "^" in vd:   # an ODS-5 name on the command line needs the extended parse style
+            w("$ SET PROCESS/PARSE_STYLE=EXTENDED")
+        w("$ SET DEFAULT %s" % vd)
+        if "^" in vd:
+            w("$ SET PROCESS/PARSE_STYLE=TRADITIONAL")
         w("$ T0 = F$TIME()")
         w("$ %s @GCCOBJ:[000000]TU.RSP" % drv)
         w("$ S = $STATUS")

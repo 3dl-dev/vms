@@ -163,7 +163,10 @@ $! g++, with the flags GCC's own build gives it, over GCC's source and generated
 $! (GCCSRC:[SRC.GCC-14^.2^.0...], [BLD...], [HOST.INCLUDE]). The arguments are in a response file the
 $! driver reads (@file), as typed by the build, so DCL changes none of them.
 $ DEFINE/SYSTEM/TRANSLATION_ATTRIBUTES=CONCEALED GCCSRC SYS$COMMON:[GCCSRC.]
+$! an ODS-5 name (the ^. in gcc-14.2.0) on the command line needs the extended parse style
+$ SET PROCESS/PARSE_STYLE=EXTENDED
 $ COPY GCCSRC:[SRC.GCC-14^.2^.0.GCC.C]C-LANG.CC VDA0:[SYSTMP]C-LANG.CC
+$ SET PROCESS/PARSE_STYLE=TRADITIONAL
 $ GXX @GCCSRC:[000000]CC1TU.RSP
 $ WRITE SYS$OUTPUT "DRL-PROOF: BUILD-TU-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === INDEPENDENT READER: DCL DUMP C-LANG.OBJ ==="

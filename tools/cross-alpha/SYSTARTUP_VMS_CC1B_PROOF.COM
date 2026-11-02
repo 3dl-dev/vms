@@ -23,6 +23,8 @@ $! the C RTL hands RMS names with '+' (c^+^+config.h) when this is defined, as t
 $ DEFINE/SYSTEM DECC$EFS_CHARSET ENABLE
 $! the trees as the ACP sees them: a file deep in the largest source directory
 $ DIRECTORY GCCSRC:[000000]
+$! an ODS-5 name (the ^. in gcc-14.2.0) on the command line needs the extended parse style
+$ SET PROCESS/PARSE_STYLE=EXTENDED
 $ DIRECTORY GCCSRC:[SRC.GCC-14^.2^.0]
 $ DIRECTORY/SIZE GCCSRC:[SRC.GCC-14^.2^.0.GCC]GIMPLE-MATCH-HEAD.CC
 $ DIRECTORY/SIZE GCCSRC:[SRC.GCC-14^.2^.0.GCC.C-FAMILY]C-COMMON.CC
@@ -30,6 +32,7 @@ $ DIRECTORY/SIZE GCCSRC:[SRC.GCC-14^.2^.0.GCC.CONFIG.VMS]XM-VMS.H
 $ DIRECTORY/SIZE GCCSRC:[BLD.GCC]CONFIG.H
 $! a machine description the generated insn-*.cc name by #line, from their directory (vms-2eb)
 $ DIRECTORY/SIZE GCCSRC:[SRC.GCC-14^.2^.0.GCC.CONFIG.ALPHA]ALPHA.MD
+$ SET PROCESS/PARSE_STYLE=TRADITIONAL
 $ WRITE SYS$OUTPUT "CC1B-PROOF: === BUILD: @GCCSRC:[000000]BUILD_CC1 ==="
 $ @GCCSRC:[000000]BUILD_CC1
 $ WRITE SYS$OUTPUT "CC1B-PROOF: BUILD-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"

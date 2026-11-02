@@ -110,3 +110,11 @@ Predictions (cells per vms-0db):
   "quorum lost".
 
 STOP RULE unchanged: any VAX bugcheck -> stop, keep console + pcap, identify the frame, report.
+
+## Addendum 5 (17:1xZ, OVMXE joined, BEFORE the arms)
+Pod lab1b68r (fresh, CPU request 200m / limit 4), OVMXE built from 5849a3396 (SOURCE_COMMIT in
+/lab/art-r1b68). F$GETSYI on each node after OVMXE joined (via VAX2, 16:50:50Z):
+- VAX1:  VOTES=1 EXPECTED_VOTES=1 CLUSTER_VOTES=3 CLUSTER_QUORUM=2 CLUSTER_NODES=3
+- VAX2:  VOTES=0 EXPECTED_VOTES=1 CLUSTER_VOTES=3 CLUSTER_QUORUM=2 CLUSTER_NODES=3
+- OVMXE: VOTES=2 EXPECTED_VOTES=3 CLUSTER_VOTES=3 CLUSTER_QUORUM=2 CLUSTER_NODES=3
+VAX1's departure leaves VAX2 0 + OVMXE 2 = 2 >= quorum 2. Arms proceed as addendum 4.

@@ -1,0 +1,70 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+36FCAE00+36F0AE00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> SET SCSNODE OVMXE
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXE
+SYSBOOT> SET SCSSYSTEMID 1030
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1030
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 41 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+
+    OpenVMX V0.7-14 - OpenVMS-compatible
+     2-NOV-2026 07:24:20.16
+
+%SYSINIT, waiting to form or join a VMScluster system
+%STDRV-I-STARTUP, OpenVMX startup begun at  2-NOV-2026 07:24:20.31
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 07:24:20.35  %%%%%%%%%%%
+Operator _OVMXE$OPA0: has been enabled, username SYSTEM
+
+
+%%%%%%%%%%%  OPCOM   2-NOV-2026 07:24:20.48  %%%%%%%%%%%
+Operator status for operator _OVMXE$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 10000004
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-14 (OpenVMS-compatible)
+
+Username: 
+Username: SYSTEM
+Password: 
+%CNXMAN,  sending VAXcluster membership request to system VAX2
+
+%CNXMAN,  now a VAXcluster member -- system OVMXE
+
+ Welcome to OpenVMX V0.7-14 - OpenVMS-compatible[c\Z[0c
+%SET-W-NOTSET, error modifying OPA0:
+-SET-I-UNKTERM, unknown terminal type
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ SPAWN/NOWAIT/PROCESS=HOLDO RMHOLD 100-RA7T
+%DCL-S-SPAWNED, process HOLDO spawned
+$ 
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \RMHOLD\
+$ RMHOLD :== $SYS$SYSTEM:RMHOLD.EXE
+$ SPAWN/NOWAIT/PROCESS=HOLDO RMHOLD 100-RA7T
+%DCL-S-SPAWNED, process HOLDO spawned
+$ 
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \RMHOLD\
+$ RMH :== $SYS$SYSTEM:RMHOLD
+$ RMH 100-RA7T
+RMHOLD: root 'RA7T' CR, 0 sub-lock(s) NL, w '-'
+RMHOLD: root lkid 0100038C -- $GETLKIW failed, status %X00000014 (not answered)
+RMHOLD: holding -- hibernating

@@ -86,4 +86,9 @@ struct vms_acp_volume_info {
  */
 uint32_t vms_acp_volume_at(uint32_t index, struct vms_acp_volume_info *out);
 
+/* rd vms-943: a block of the volume backed by (major,minor) was written (the
+ * MSCP server's write on behalf of a remote node): the ACP's block cache
+ * forgets it. Call after the transfer, successful or not. */
+void vms_acp_cache_wrote_block(uint32_t major, uint32_t minor, uint64_t lbn);
+
 #endif /* OVMX_VMS_ACP_SERVE_H */

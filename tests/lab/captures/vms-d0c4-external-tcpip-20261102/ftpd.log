@@ -1,0 +1,46 @@
+tcpsvd: listening on 192.168.77.1:21, starting
+tcpsvd: start 32 192.168.77.1:21-10.0.3.15:44316
+ftpd[32]: 220 Operation successful
+tcpsvd: status 1/30
+ftpd[32]: USER anonymous
+ftpd[32]: 230 Operation successful
+ftpd[32]: TYPE I
+ftpd[32]: 200 Operation successful
+ftpd[32]: PASV
+ftpd[32]: 227 PASV ok (192,168,77,1,142,29)
+ftpd[32]: RETR no-such-file.bin
+ftpd[32]: 550 Error
+tcpsvd: end 32 exit 0
+tcpsvd: status 0/30
+tcpsvd: start 33 192.168.77.1:21-10.0.3.15:44330
+tcpsvd: status 1/30
+ftpd[33]: 220 Operation successful
+ftpd[33]: USER anonymous
+ftpd[33]: 230 Operation successful
+ftpd[33]: TYPE I
+ftpd[33]: 200 Operation successful
+ftpd[33]: PASV
+ftpd[33]: 227 PASV ok (192,168,77,1,172,41)
+ftpd[33]: RETR seed.bin
+ftpd[33]: 150 Opening BINARY connection for seed.bin (131072 bytes)
+ftpd[33]: 226 Operation successful
+ftpd[33]: QUIT
+ftpd[33]: 221 Operation successful
+tcpsvd: end 33 exit 0
+tcpsvd: status 0/30
+tcpsvd: start 34 192.168.77.1:21-10.0.3.15:60394
+tcpsvd: status 1/30
+ftpd[34]: 220 Operation successful
+ftpd[34]: USER anonymous
+ftpd[34]: 230 Operation successful
+ftpd[34]: TYPE I
+ftpd[34]: 200 Operation successful
+ftpd[34]: PASV
+ftpd[34]: 227 PASV ok (192,168,77,1,169,93)
+ftpd[34]: STOR back.bin
+ftpd[34]: 150 Ok to send data
+ftpd[34]: 226 Operation successful
+ftpd[34]: QUIT
+ftpd[34]: 221 Operation successful
+tcpsvd: end 34 exit 0
+tcpsvd: status 0/30

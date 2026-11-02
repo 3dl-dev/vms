@@ -1,0 +1,40 @@
+--- starting the server host (alpine:3.20: busybox telnetd :23, ftpd :21 on 192.168.77.1; link tap0 10.0.3.1/24) ---
+lo               UNKNOWN        127.0.0.1/8 192.168.77.1/32 ::1/128 
+eth0@if54317     UP             172.17.0.12/16 
+tap0             DOWN           10.0.3.1/24 
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       
+tcp        0      0 192.168.77.1:23         0.0.0.0:*               LISTEN      
+tcp        0      0 192.168.77.1:21         0.0.0.0:*               LISTEN      
+--- booting OVMX on tap0; TELNET/FTP to 192.168.77.1 through gateway 10.0.3.1 ---
+=== TCP/IP to real servers outside the VM: SET INTERFACE/ROUTE, TELNET, FTP (vms-d0c4) ===
+server=192.168.77.1 gateway=10.0.3.1 seed=131072 bytes
+  PASS: the TCP/IP image boots to login (virtio NIC on tap0)
+  PASS: SYSTEM logs in (OPER: may configure the network)
+  PASS: with the boot-time 10.0.2.15 address: TELNET 192.168.77.1 fails -SYSTEM-F-UNREACHABLE
+  PASS: TCPIP SET INTERFACE SE0 /HOST=10.0.3.15 /NETWORK_MASK=255.255.255.0 applied
+  PASS: TCPIP SHOW INTERFACE: SE0 10.0.3.15 255.255.255.0 Up
+  PASS: on the link but before SET ROUTE: TELNET 192.168.77.1 (off-link) still -SYSTEM-F-UNREACHABLE
+  PASS: TCPIP SET ROUTE /DEFAULT /GATEWAY=10.0.3.1 applied to the live routing table
+  PASS: TCPIP SHOW ROUTE: default via 10.0.3.1 on SE0
+  PASS: TELNET 192.168.77.1 connects through the gateway
+  PASS: the remote shell's output (OVMX-TN-42-END, computed there) comes back during the session
+  PASS: the server's exit ends the session from the far side (%TELNET-I-SESSEND)
+  PASS: CTRL/] gives the TELNET> escape prompt
+  PASS: QUIT at TELNET> closes the session from this side
+  PASS: FTP /GET of a file the server does not have fails honestly (%FTP-E-GETERR)
+  PASS: FTP /GET=seed.bin: 131072 bytes over a PASV data connection to 192.168.77.1, stored to SEED.BIN
+  PASS: DIRECTORY/SIZE: SEED.BIN;1 is 256 blocks on the ODS-2 system disk
+  PASS: FTP /PUT=SEED.BIN /REMOTE=back.bin: 131072 bytes sent back
+  PASS: back.bin on the server is byte-identical to seed.bin (GET then PUT round trip)
+
+  RESULTS: 18/18 checks passed, 0 failed
+=== test_tcpip_external_boot_e2e: PASS ===
+  PASS: wire: the VM (10.0.3.15) opened TCP to 192.168.77.1:23 on the link (SYN captured on tap0)
+  PASS: wire: the VM opened the FTP control connection to 192.168.77.1:21
+  PASS: wire: the VM opened FTP PASV data connections to 192.168.77.1 (non-21/23 ports)
+  PASS: wire: the server host sent data back to the VM
+  PASS: ftpd's own log records RETR seed.bin and STOR back.bin
+  PASS: tcpsvd logs the VM's address (10.0.3.15) as the FTP client
+  wire: 235 packets between 10.0.3.15 and the server host
+  evidence kept in /home/baron/projects/vms/.worktrees/net-d0c4/tests/lab/captures/vms-d0c4-external-tcpip-20261102

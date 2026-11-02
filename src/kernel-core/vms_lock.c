@@ -3765,6 +3765,8 @@ uint32_t vms_lock_dlm_assume_mastery(const char *resnam, uint32_t resnam_len,
  * handlers; declared here because the doors are part of the FC-P4.6 seam
  * block and belong beside the other three. */
 static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req);
+static uint32_t dlm_xnode_grant_apply(struct vms_dlm_xnode_args *req,
+                                      int granted);
 static uint32_t vms_lock_dlm_xnode_blkast_recv(struct vms_proc *proc,
                                                struct vms_dlm_xnode_args *req);
 
@@ -3884,7 +3886,16 @@ uint32_t vms_lock_dlm_proxy_grant_recv(const struct vms_dlm_proxy_grant *g)
     else
         dlm_grant_valblk_from_proxy(g->req_lkid, args.valblk);
 
-    return vms_lock_dlm_xnode_grant_recv(&args);
+    /*
+     * rd vms-3ea: THROUGH THIS DOOR A GRANT IS A GRANT, WHATEVER ITS MODE. The
+     * wire arm calls it only for the master's GRANT (the FSM's QUEUED event,
+     * 0xfb, reports nothing to the engine), so an NL request the master granted
+     * arrives here with lkmode NL and must WAKE its $ENQW -- the standing
+     * F11B$v<label> lock $MOUNT takes is exactly that, and node B's MOUNT slept
+     * forever on it (diagnostic run 41389303326: grants received=1,
+     * proxy_lkbs=1). Only the ioctl door keeps "NL means queued-reply".
+     */
+    return dlm_xnode_grant_apply(&args, 1);
 }
 
 /*
@@ -7576,13 +7587,27 @@ static struct vms_lock_entry *dlm_proxy_reconstruct(struct vms_dlm_xnode_args *r
  */
 static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
 {
+    /* The ioctl door (VMS_IOCTL_DLM_XNODE): its message carries no outcome of
+     * its own, so a queued-reply is spelled lkmode == NL, as documented above. */
+    return dlm_xnode_grant_apply(req, req->lkmode > LCK_K_NLMODE);
+}
+
+/*
+ * dlm_xnode_grant_apply - the body of both grant doors. `granted` is the
+ * CALLER's statement of what the master said: 1 = it granted the request (at
+ * the mode the request asked for, which may be NL), 0 = it queued it. The mode
+ * says WHICH mode was granted; it never decides WHETHER (rd vms-3ea).
+ */
+static uint32_t dlm_xnode_grant_apply(struct vms_dlm_xnode_args *req,
+                                      int granted)
+{
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
     int created = 0;
 
     if (req->req_lkid == 0)
         return SS__BADPARAM;   /* a GRANT must name the requester's own handle */
-    if (req->lkmode > LCK_K_NLMODE && req->master_lkid == VMS_DLM_LKID_UNSET)
+    if (granted && req->master_lkid == VMS_DLM_LKID_UNSET)
         return SS__BADPARAM;   /* a grant with no master handle is not a grant */
 
     lock = lock_find_by_id(req->req_lkid);
@@ -7618,9 +7643,9 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
         if (res->master_csid != vms_local_csid)
             res->master_csid = req->master_csid;
     }
-    if (req->lkmode > LCK_K_NLMODE)
+    if (granted)
         lock->requested_mode = req->lkmode;
-    lock->granted_mode = req->lkmode;   /* NL on a queued-reply; EX on a grant */
+    lock->granted_mode = req->lkmode;   /* NL on a queued-reply; the mode on a grant */
 
     /*
      * LVB read crossing (rd vms-eeb, rung H9). A real GRANT (a non-NL granted
@@ -7631,7 +7656,7 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
      * stale block. The bytes are the master's real res->valblk transported over
      * SCS, never fabricated (INV-6).
      */
-    if (req->lkmode > LCK_K_NLMODE)
+    if (granted)
         memcpy(lock->valblk, req->valblk, LCK_VALBLK_SIZE);
 
     /*
@@ -7643,7 +7668,7 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
      * no blkastadr, leaves the proxy with no blocking AST, so a later BLKAST
      * honestly declines rather than inventing a delivery (INV-6).
      */
-    if (req->blkastadr != 0 && req->lkmode > LCK_K_NLMODE) {
+    if (req->blkastadr != 0 && granted) {
         lock->blkastadr = req->blkastadr;
         lock->blkastprm = req->blkastprm;
     }
@@ -7654,7 +7679,7 @@ static uint32_t vms_lock_dlm_xnode_grant_recv(struct vms_dlm_xnode_args *req)
      * the same discipline try_grant_waiters uses, which is what makes the wait
      * lost-wakeup-free. A queued-reply leaves it pending and wakes nobody.
      */
-    if (req->lkmode > LCK_K_NLMODE) {
+    if (granted) {
         lock->waiting = 0;
         lock->grant_state = SS__NORMAL;
         queue_completion_ast(lock);      /* async $ENQ: the completion AST */

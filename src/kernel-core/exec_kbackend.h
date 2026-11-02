@@ -230,6 +230,10 @@
  *   void  exec_free(void *p)            free an exec_{z,}alloc/exec_zalloc_atomic
  *                                       block (the backend recovers the size
  *                                       where its free needs one).
+ *   unsigned long long exec_physmem_bytes(void)
+ *                                       the machine's physical memory, for a
+ *                                       facility that sizes a cache to it the
+ *                                       way AUTOGEN sizes VMS's (rd vms-c01).
  *
  * 5. Host-task binding  (Phase F; called ONLY from the process table +, later,
  *    the device/module glue -- the host-task coupling is concentrated in those
@@ -484,6 +488,13 @@
  *        (contract-only twin, exec_rbtree/blockdev precedent -- vms_lnm.c is
  *        not in the NetBSD module's SRCS, so this side is type-checked-at-most,
  *        never run, and names its real source in the backend comment).
+ *   size_t exec_arena_grow(void *arena, size_t need)
+ *        make sure the first `need` bytes of the arena are backed by zeroed
+ *        memory, and return how many bytes are (rd vms-c01). Less than `need`
+ *        when memory ran out; never sleeps (the facility calls it under its
+ *        exec_lock). The facility touches no byte beyond what this returned.
+ *        Linux: vmalloc_user backed it all at allocation, so it returns `need`.
+ *        NetBSD: backs the pages one at a time (vms_lnm_arena_netbsd.c).
  *   void exec_arena_free(void *arena)
  *        free an exec_arena_alloc block. Linux: vfree(). NetBSD: release the
  *        uvm object (contract-only twin).

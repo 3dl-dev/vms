@@ -22,7 +22,7 @@ items:
     authenticity: real
     vms: "IF/THEN, GOTO, GOSUB, labels"
     evidence: src/vmsdcl/dcl_script.c
-    notes: "Real. Exercised by tests/dcl/test_if_then.sh, test_parser_goto.sh, test_script_labels.sh — plain functional self-tests, not an oracle, so implemented (not verified) per the credibility rule."
+    notes: "Real. Exercised by tests/dcl/test_if_then.sh, test_parser_goto.sh, test_script_labels.sh — plain functional self-tests. IF conditions evaluate expression operands with VMS precedence (+ - * / above the comparisons, rd vms-c17a): the ifx semantic-oracle family (docs/oracle/semantics/ifx/vax73.txt, 19 cases captured on VAX V7.3) is byte-gated on the booted executive (test_semantic_oracle.sh) and on the host (tests/dcl/test_if_expression_oracle.sh). GOTO/GOSUB/labels have no oracle gate, so the row stays implemented."
 
   - id: dcl-scripting$on-condition
     kind: feature

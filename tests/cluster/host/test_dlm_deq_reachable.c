@@ -816,6 +816,87 @@ static void test_rundown_release_reaches_the_wire(void)
 }
 
 /* ==========================================================================
+ * 5b. A TREE IS RELEASED LEAF-FIRST (lab33a, 2026-11-02)
+ *
+ * An OVMX image rundown released a proxy ROOT ahead of its two sub-locks and
+ * the real V7.3 master bugchecked LOCKMGRERR on the root's master copy. Every
+ * real node releases a tree leaf-first: 552 of 552 sub-locks whose parent was
+ * released in the same capture went before that parent. Both sweeps that
+ * release a tree -- image rundown and $DEQ LCK$M_DEQALL of the parent -- must
+ * put the sub-locks' op-0x03s on the wire before the parent's.
+ * ========================================================================== */
+static uint32_t granted_proxy_sub(struct vms_proc *proc, uint32_t parid,
+				  const char *resnam, uint32_t mode,
+				  uint32_t master_lkid)
+{
+	struct vms_enq_args e;
+
+	memset(&e, 0, sizeof(e));
+	e.lkmode = mode;
+	e.parid = parid;
+	strscpy(e.resnam, resnam, sizeof(e.resnam));
+	vms_ioctl_enq(proc, (unsigned long)(void *)&e);
+	fork_drain();
+	(void)deliver_grant(proc, e.lkid, mode, master_lkid, resnam);
+	return e.lkid;
+}
+
+static void check_tree_released_leaf_first(int via_deqall)
+{
+	const uint32_t ROOT_M = 0x01000411u, S0_M = 0x01000412u,
+		       S1_M = 0x01000413u;
+	struct vms_proc proc;
+	struct vms_dlm_deq d[3];
+	uint32_t root, s0, s1, first, i, n_deq = 0;
+
+	engine_up();
+	proc_init(&proc);
+	root = granted_proxy(&proc, via_deqall ? "LEAFQ" : "LEAFR",
+			     LCK_K_CRMODE, ROOT_M);
+	s0 = granted_proxy_sub(&proc, root, "S0", LCK_K_CRMODE, S0_M);
+	s1 = granted_proxy_sub(&proc, root, "S1", LCK_K_CRMODE, S1_M);
+	ct_check(root != 0 && s0 != 0 && s1 != 0,
+		 "a granted proxy root and two granted proxy sub-locks");
+	first = a.n_sent;
+
+	if (via_deqall) {
+		struct vms_deq_args q;
+
+		memset(&q, 0, sizeof(q));
+		q.lkid = root;
+		q.flags = LCK_M_DEQALL;
+		vms_ioctl_deq(&proc, (unsigned long)(void *)&q);
+		ct_check_eq_u32(q.status, SS__NORMAL,
+				"$DEQ LCK$M_DEQALL of the root is accepted");
+	} else {
+		vms_proc_rundown_locks(&proc, 0u);
+	}
+	fork_drain();
+
+	for (i = first; i < a.n_sent && n_deq < 3u; i++)
+		if (sent_opcode(&a.sent[i]) == VMS_DLM_WIREOP_DEQ &&
+		    parse_deq(&a.sent[i], &d[n_deq]) == 0)
+			n_deq++;
+	ct_check_eq_u32(n_deq, 3u, "three releases reach the wire");
+	if (n_deq != 3u) {
+		engine_down();
+		return;
+	}
+	ct_check(d[0].master_lkid != ROOT_M && d[1].master_lkid != ROOT_M,
+		 "*** both sub-locks are released BEFORE their parent ***");
+	ct_check_eq_u32(d[2].master_lkid, ROOT_M,
+			"*** the parent's release is the LAST of the tree ***");
+	engine_down();
+}
+
+static void test_tree_released_leaf_first(void)
+{
+	printf("-- a released tree goes leaf-first: rundown, then $DEQALL\n");
+	check_tree_released_leaf_first(0);
+	check_tree_released_leaf_first(1);
+}
+
+/* ==========================================================================
  * 6. THE NEGATIVE CONTROLS -- every way a staged release must NOT reach a wire
  *
  * The staging changes WHERE the release's fields come from. It changes NOTHING
@@ -2387,6 +2468,7 @@ int main(void)
 	       "REACHABLE caller) ===\n");
 	test_deq_reaches_the_wire();
 	test_rundown_release_reaches_the_wire();
+	test_tree_released_leaf_first();
 	test_shape_fitness_for_an_unproven_member();
 	test_gate_rule_c();
 	test_gate_zero_master_lkid();

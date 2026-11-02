@@ -12,3 +12,13 @@ COMMANDS=(
   'SHOW USERS'
   'SHOW USERS/FULL'
 )
+# MACHINE_MASK (rd vms-6a1): the values that legitimately vary by product,
+# machine and moment -- masked so the gate compares the labelled STRUCTURE:
+#   1. the banner's PRODUCT word: VMS prints "OpenVMS User Processes at", OVMX
+#      its own name (INV-0: OVMX never claims the OpenVMS mark as its identity,
+#      the same reason SHOW SYSTEM's banner differs). One capitalised word is
+#      required, so a missing banner word still reds;
+#   2. the MONTH of the banner date (NORMALIZE masks only its digits);
+#   3. the NODE column of the SYSTEM row -- VAX "VAX1" vs OVMX's own SCSNODE.
+#      The username and the count/PID/terminal columns stay compared.
+MACHINE_MASK='s/^( +)[A-Z][A-Za-z]+ (User Processes at )/\1<PRODUCT> \2/; s/(User Processes at +#+)-[A-Z]{3}-/\1-<MON>-/; s/^( SYSTEM +)[A-Z][A-Z0-9#]*( )/\1<NODE>\2/'

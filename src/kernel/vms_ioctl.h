@@ -1562,8 +1562,14 @@ struct vms_dlm_scs_view_wire {
      * vms_cluster_snapshot.h -- the alternative was OVMX granting a real VAX EX
      * over a CR its own process held. */
     uint32_t proxy_compat_blocks;
+    /* Lock-tree remastering, the HOLDER's side (rd vms-33a). See
+     * vms_cluster_snapshot.h. */
+    uint32_t rm_ho_records_sent;
+    uint32_t rm_ho_answers;
+    uint32_t rm_ho_ends_sent;
+    uint32_t rm_ho_stopped;
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 220,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 236,
                "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
 
 struct vms_cluster_diag_dlm_args {
@@ -1571,7 +1577,7 @@ struct vms_cluster_diag_dlm_args {
     uint32_t pad0;
     struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
 };
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 228,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 244,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 /*
  * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
@@ -1602,12 +1608,15 @@ _Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 228,
  * 0xC0E0566E -> 0xC0E4566E -- deliberately, in that commit: the DOUBLE GRANT
  * that fire found (EX granted over a CR this node's own process held) is
  * prevented by a check whose firing nothing else in the row would show.
+ * rd vms-33a then appended the four HOLDER counters (228 -> 244), moving it
+ * 0xC0E4566E -> 0xC0F4566E -- deliberately, in that commit: a fire proves the
+ * holder's half of a remaster only by reading what this node sent.
  * A diagnostic image built from another
  * tree therefore fails LOUDLY (ENOTTY) rather than reading a shorter row as
  * data, which is the behaviour this assert exists to guarantee.
  */
 #define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
-_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC0E4566Eu,
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC0F4566Eu,
                "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
 
 /*

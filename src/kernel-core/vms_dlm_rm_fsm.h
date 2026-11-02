@@ -313,6 +313,78 @@ struct vms_dlm_rm_ops {
 
 	/* The one-line-per-fact console voice. */
 	void (*log)(void *ctx, const char *msg);
+
+	/*
+	 * THE HOLDER'S DOORS (rd vms-33a) -- vms_dlm_adopt.h's hand-over entry
+	 * points, one each. OPTIONAL as a group: a table bound without them
+	 * answers every step exactly as it did before and only COUNTS an
+	 * op-0x11 (`ho_unbound`), which is the honest floor for a node that
+	 * cannot reach its own proxies. All three, or the holder half is off.
+	 *
+	 * `ho_next` 1 = the engine named the next lock of ours to describe;
+	 * `ho_rehome` / `ho_valblk` 1 = the engine really did it (SS$_NORMAL),
+	 * the same 1/0 contract as the adoption doors above.
+	 */
+	int (*ho_next)(void *ctx, const struct vms_dlm_adopt_tree *t,
+		       uint32_t new_master_csid,
+		       struct vms_dlm_handover_rec *out);
+	int (*ho_rehome)(void *ctx, uint32_t holder_lkid,
+			 uint32_t old_master_csid, uint32_t new_master_csid,
+			 uint32_t new_master_lkid);
+	int (*ho_valblk)(void *ctx, const struct vms_dlm_adopt_valblk *v);
+};
+
+/* ==========================================================================
+ * THE HOLDER'S HALF (rd vms-33a): a real VMS node moves a tree THIS node holds
+ * locks in -- or is the directory node of -- to a THIRD node, and that new
+ * master waits for this node's records and its op-0x13 (rule W2). The
+ * measured shape is vms_cluster_codec_dlm.h H1..H4; this is the machine.
+ *
+ *   op 0x0f from O   ARM: the frame NAMES the new master N (H1). N is
+ *                    addressed only if the club says it is a SELECTED member
+ *                    other than this node and other than O; otherwise the
+ *                    hand-over is not armed (`ho_unaddressable`).
+ *   op 0x11 from O   FIRE: everyone told an 0x11 owes N an 0x13 (H2). Ask
+ *                    the engine for the next lock of ours in the tree that
+ *                    still names O; send its record; wait for the answer.
+ *   82/01 from N     REPLACE that proxy's master and handle with N's; then
+ *                    the next record (a sub-lock becomes ready only now --
+ *                    its record carries the handle N just minted for its
+ *                    parent) -- or, when none is left, the op-0x13.
+ *   op 0x1a from O   the resource's value block, written onto OUR resource
+ *                    so the record relays it (rd vms-26e), admitted only from
+ *                    an O that has armed a hand-over here.
+ *
+ * ONE RECORD IN FLIGHT PER TREE (H3): the commonest real pacing, and the only
+ * one a sub-record allows. INV-6: a slot holds NO lock id it puts on the wire
+ * except `await_lkid`, which is the engine's answer to "which lock did I just
+ * describe" and is used only to correlate N's 82/01; every record field is
+ * re-read from the engine at the moment its frame is built.
+ *
+ * WHAT IT REFUSES TO DO. An 82/01 that is not a grant (outcome != 0xfa, or no
+ * handle) STOPS the hand-over -- counted and said -- rather than send an
+ * op-0x13 that tells N this node holds less than it does. A stalled new master
+ * is a hang; a new master told the wrong lock set is a stale handle on a real
+ * VAX's release path (rd vms-3ac's INVLOCKID).
+ * ========================================================================== */
+#define VMS_DLM_HO_TREES  16u
+
+enum vms_dlm_ho_state {
+	VMS_DLM_HO_ST_FREE = 0,
+	VMS_DLM_HO_ST_ARMED,      /* the 0x0f named N; the 0x11 has not come */
+	VMS_DLM_HO_ST_AWAIT,      /* a record is out; its 82/01 is not in     */
+	VMS_DLM_HO_ST_ENDED,      /* the 0x13 is out; N's 0x14 is not in yet  */
+	VMS_DLM_HO_ST__COUNT
+};
+
+struct vms_dlm_ho_tree {
+	struct vms_dlm_adopt_tree tree;   /* root identity + the OLD master  */
+	struct vms_dlm_res_ident  id;     /* the same, as the wire spells it */
+	uint32_t new_master;              /* N, as the 0x0f named it, checked */
+	uint32_t await_lkid;              /* the lock whose 82/01 is due      */
+	uint32_t records;                 /* records N answered for this tree */
+	uint8_t  state;                   /* enum vms_dlm_ho_state            */
+	uint8_t  pad[3];
 };
 
 /* ==========================================================================
@@ -391,6 +463,28 @@ struct vms_dlm_rm {
 	uint32_t valblks_taken;      /* op-0x1a the engine accepted (rd vms-26e)*/
 	uint32_t valblks_refused;    /* ... and the ones it did not: no lock,  */
 				     /* no open adoption, or not the sender's  */
+
+	/* THE HOLDER'S HALF (rd vms-33a). */
+	struct vms_dlm_ho_tree ho[VMS_DLM_HO_TREES];
+	uint32_t ho_armed;           /* hand-overs a 0x0f armed               */
+	uint32_t ho_unaddressable;   /* 0x0f whose named new master is not a  */
+				     /* member this node may address          */
+	uint32_t ho_no_slot;         /* ...armable, but every slot was busy   */
+	uint32_t ho_unarmed;         /* 0x11 for a tree no 0x0f armed: N is   */
+				     /* unknown, so NOTHING is sent           */
+	uint32_t ho_unbound;         /* 0x11 with the holder doors unbound    */
+	uint32_t ho_repeats;         /* 0x11 for a hand-over already sending  */
+	uint32_t ho_records_sent;    /* op-0x12 records really on the wire    */
+	uint32_t ho_records_unsent;  /* ...owed and not sent (stops the tree) */
+	uint32_t ho_answers;         /* 82/01s that re-homed a proxy of ours  */
+	uint32_t ho_answers_refused; /* 82/01s not a grant, or the engine     */
+				     /* would not re-home: the tree STOPS     */
+	uint32_t ho_ends_sent;       /* op-0x13s really on the wire           */
+	uint32_t ho_ends_unsent;     /* ...owed and not sent                  */
+	uint32_t ho_held_acked;      /* N's op-0x14 to us, answered 82/15     */
+	uint32_t ho_held_unacked;    /* ...an 82/15 owed and not staged       */
+	uint32_t ho_departed;        /* hand-overs dropped: N left            */
+	uint32_t ho_valblks_taken;   /* op-0x1a blocks taken as a holder      */
 };
 
 /* ==========================================================================
@@ -409,8 +503,13 @@ void vms_dlm_rm_init(struct vms_dlm_rm *f, const struct vms_dlm_rm_ops *ops);
  * them, so this table cannot be handed a body that is not what the envelope
  * claimed.
  *
- * VMS_DLM_RM_NOT_MINE for anything that is not one of the five steps or the
- * op-0x1a, so the caller's own routing is unchanged by this file's presence.
+ * VMS_DLM_RM_NOT_MINE for anything that is not one of the five steps, the
+ * op-0x11 or the op-0x1a, so the caller's own routing is unchanged by this
+ * file's presence.
+ *
+ * THE op-0x11 (rd vms-33a) is the holder's half: HANDLED whenever its sender
+ * can be named and it parses, whether or not this node then sends anything
+ * (counted either way); nothing is ever staged for it.
  *
  * THE op-0x1a (rd vms-26e) is not a table event: it names no tree, only a lock
  * of ours, so it goes straight to the engine (`adopt_valblk`), which finds the
@@ -434,12 +533,28 @@ int vms_dlm_rm_held_ack(struct vms_dlm_rm *f, uint32_t from_csid,
 
 /*
  * op-0x11: some OTHER member is the new master of a tree. A real VMS member
- * never answers one (7 of 7 carry no transaction), so this only COUNTS it --
- * and the count is not cosmetic: it is how many times a real VAX new master
- * was left waiting for THIS node's op-0x12 records and op-0x13, which this
- * table does not send. That is the HOLDER half of remastering, rd vms-33a.
+ * never answers one (7 of 7 carry no transaction). vms_dlm_rm_step now ACTS on
+ * it (the holder's half above) and counts it; this is the count alone, for an
+ * arm whose step was refused before the table could see the frame.
  */
 void vms_dlm_rm_notified(struct vms_dlm_rm *f);
+
+/*
+ * AN INBOUND cat-0x82 op-0x01 that may be the new master's answer to one of
+ * this node's op-0x12 records. 1 when it was (consumed, and the hand-over
+ * moved on or stopped -- both counted); 0 otherwise, and then the caller's own
+ * reply path sees the frame unchanged. Matched by the sender being the slot's
+ * new master AND body[24:28] being the lock whose record is out: the only two
+ * facts that tie an answer to a record (the connection manager's transaction
+ * token is not surfaced to the DLM).
+ */
+int vms_dlm_rm_ho_answer(struct vms_dlm_rm *f, uint32_t from_csid,
+			 uint8_t category, uint8_t opcode,
+			 const uint8_t *body, uint32_t len);
+
+/* How many holder slots are in `st`. */
+uint32_t vms_dlm_rm_ho_in_state(const struct vms_dlm_rm *f,
+				enum vms_dlm_ho_state st);
 
 /*
  * A member LEFT. It is struck from every tree's owed set -- a departed system

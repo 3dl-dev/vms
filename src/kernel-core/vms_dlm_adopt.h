@@ -232,6 +232,95 @@ uint32_t vms_lock_dlm_adopt_valblk(const struct vms_dlm_adopt_valblk *v);
 /* How many op-0x1a blocks really landed on a resource, since boot. */
 uint32_t vms_lock_dlm_adopt_valblks_applied(void);
 
+/* ==========================================================================
+ * THE HOLDER'S HALF (rd vms-33a): this node holds locks in a tree a real VMS
+ * node is moving to a THIRD node. The wire half is vms_dlm_rm_fsm.h's holder
+ * slots; this is everything it reads and writes in the lock database.
+ *
+ * Nothing here creates a lock or a resource. The objects are the PROXY LKBs
+ * this node already holds for locks the old master granted it, and the only
+ * write is the one the new master's 82/01 entitles: that proxy's master and
+ * its handle.
+ * ========================================================================== */
+
+/*
+ * ONE LOCK OF OURS, as its op-0x12 record describes it -- every field read off
+ * the LKB and its RSB by vms_lock_dlm_handover_next, none from a frame.
+ */
+struct vms_dlm_handover_rec {
+	char     resnam[32];          /* THIS lock's resource name (counted)   */
+	uint8_t  resnam_len;
+	uint8_t  res_mode;            /* the resource's access mode            */
+	uint16_t res_group;           /* ...and its UIC group                  */
+	uint32_t holder_lkid;         /* body[24:28]: the LKB's own lock id     */
+	uint32_t holder_epid;         /* body[20:24]: its process's id          */
+	uint32_t parent_lkid;         /* body[36:40]: the LKB's parent_id       */
+	uint32_t parent_master_lkid;  /* body[40:44]: the PARENT LKB's handle,
+	                               * read AFTER that parent was re-homed onto
+	                               * the new master -- i.e. the handle the new
+	                               * master's own 82/01 named              */
+	uint8_t  granted_mode;        /* body[30]                              */
+	uint8_t  requested_mode;      /* body[31]                              */
+	uint8_t  valblk_present;      /* the RSB holds a block the old master
+	                               * sent (a non-zero sequence)            */
+	uint8_t  hash_known;          /* the RSB holds a directory hash        */
+	uint8_t  valblk[VMS_DLM_VALBLK_LEN];  /* body[88:104]                  */
+	uint32_t valblk_seq;                  /* body[104:108]                 */
+	uint32_t dir_hash;                    /* body[128:132]                 */
+};
+
+/*
+ * THE NEXT LOCK OF OURS TO DESCRIBE to `new_master_csid`, in the tree whose
+ * root identity and old master `t` names. 1 and `*out` filled when there is
+ * one; 0 when every lock of ours in that tree that still names the old master
+ * has been handed over -- which is when the op-0x13 is due.
+ *
+ * "Ready" is the ORDER the wire needs (rd vms-33a H3): a lock with a parent is
+ * returned only once that parent LKB already names the NEW master, because its
+ * record must carry the handle the new master minted for the parent. So the
+ * tree's root goes first by construction, and a sub-lock can never be
+ * described with a half parent pair. A PENDING proxy (no grant yet, so no
+ * handle from the old master) is never described.
+ */
+int vms_lock_dlm_handover_next(const struct vms_dlm_adopt_tree *t,
+			       uint32_t new_master_csid,
+			       struct vms_dlm_handover_rec *out);
+
+/*
+ * THE NEW MASTER ANSWERED ONE RECORD: `holder_lkid`'s proxy now names
+ * `new_master_csid` and the handle it minted. Only when that proxy still names
+ * `old_master_csid` -- a second answer, or an answer for a lock that moved
+ * some other way, changes nothing (SS$_IVLOCKID). The resource's own master
+ * moves with it, and a sub-lock's recorded parent pair takes the parent's new
+ * handle, so the lock's NEXT request (a convert, a release) is addressed at
+ * the new master with handles it can resolve. That is the stale-handle half of
+ * rd vms-3ac: a release naming the old master's handle bugchecked a real VAX.
+ *
+ * SS$_NORMAL when re-homed; SS$_BADPARAM for a malformed call.
+ */
+uint32_t vms_lock_dlm_handover_rehome(uint32_t holder_lkid,
+				      uint32_t old_master_csid,
+				      uint32_t new_master_csid,
+				      uint32_t new_master_lkid);
+
+/*
+ * THE OLD MASTER'S op-0x1a TO A HOLDER (rd vms-26e measured 93 of 1,205 go to a
+ * holder that is NOT the new master, which then relays the same 20 bytes in its
+ * op-0x12 record: 251 of the 259 records matched to an earlier op-0x1a carry
+ * them byte for byte, and all 259 of those op-0x1a's follow an op-0x0f to that
+ * holder -- tools/cluster/rec12_holder_census.py --selftest). Checked exactly
+ * as vms_lock_dlm_adopt_valblk checks its own: OUR
+ * proxy by our handle, the sender its recorded master, the handle that
+ * master's grant put on it -- and then the RESOURCE's block and sequence are
+ * written. The caller (the holder slot) admits it only from a system that has
+ * opened a hand-over with this node.
+ */
+uint32_t vms_lock_dlm_handover_valblk(const struct vms_dlm_adopt_valblk *v);
+
+/* Proxies re-homed, and op-0x1a blocks that landed as a holder, since boot. */
+uint32_t vms_lock_dlm_handover_rehomed(void);
+uint32_t vms_lock_dlm_handover_valblks(void);
+
 /*
  * CLOSE the adoption of `t` (the 0x13 end-of-records). `*n_locks` (optional) is
  * how many locks the engine REALLY installed -- a counted observation, and the

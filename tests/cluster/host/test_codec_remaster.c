@@ -826,6 +826,141 @@ static void test_op1a_valblk_parse(void)
 		 VMS_CODEC_E_INVAL, "  NULL is refused (E_INVAL)");
 }
 
+
+/* ==========================================================================
+ * rd vms-33a: THE HOLDER'S FRAMES -- the op-0x0f's named new master, the
+ * op-0x12 builder's refusals and round trip, the op-0x13 builder, the 82/01
+ * parse, and the CM's two shape/notification gates.
+ * ========================================================================== */
+static uint32_t rd32(const uint8_t *b)
+{
+	return (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+	       ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+
+static void test_holder_frames(void)
+{
+	const struct vms_fixture *m0f = fixture("rm-0f-member-req");
+	const struct vms_fixture *n0f = fixture("rm-0f-newmaster-req");
+	const struct vms_fixture *rreq = fixture("rm-12-root-req");
+	const struct vms_fixture *rans = fixture("rm-12-root-ans");
+	const struct vms_fixture *end = fixture("rm-13-notif");
+	struct vms_dlm_rm_lock_rec r, back;
+	struct vms_dlm_rm_lock_grant g;
+	struct vms_dlm_rm_step st;
+	uint8_t frame[256];
+	const uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	uint32_t csid = 0u, written = 0u;
+
+	printf("-- rd vms-33a: the holder's frames\n");
+	ct_check(m0f && n0f && rreq && rans && end, "  specimens load");
+	if (!(m0f && n0f && rreq && rans && end))
+		return;
+
+	/* H1: both copies of RA5's op-0x0f name VAX2. */
+	ct_check(vms_dlm_rm_0f_new_master(fxbody(m0f), VMS_CM_BODY_LEN,
+					  &csid) == VMS_CODEC_OK &&
+		 csid == 0x00010002u,
+		 "  the op-0x0f to the holder names the new master 00010002");
+	csid = 0u;
+	ct_check(vms_dlm_rm_0f_new_master(fxbody(n0f), VMS_CM_BODY_LEN,
+					  &csid) == VMS_CODEC_OK &&
+		 csid == 0x00010002u,
+		 "  ...and so does the copy sent to the new master itself");
+	ct_check(vms_dlm_rm_0f_new_master(fxbody(rreq), VMS_CM_BODY_LEN,
+					  &csid) == VMS_CODEC_E_CLASS,
+		 "  an op-0x12 is not an op-0x0f");
+
+	/* The record builder round-trips through the new master's parser. */
+	ct_check(vms_dlm_rm_lock_rec_parse_body(fxbody(rreq), VMS_CM_BODY_LEN,
+						&r) == VMS_CODEC_OK,
+		 "  VAX3's real root record parses");
+	memset(frame, 0xa5, sizeof(frame));
+	ct_check(vms_dlm_rm_lock_rec_build(&r, 1, frame, sizeof(frame),
+					   &written) == VMS_CODEC_OK &&
+		 written == VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN,
+		 "  rebuilt from its parse, it builds a whole body");
+	ct_check(vms_dlm_rm_lock_rec_parse_body(b, VMS_CM_BODY_LEN, &back) ==
+		 VMS_CODEC_OK && back.holder_lkid == r.holder_lkid &&
+		 back.holder_epid == r.holder_epid && back.is_root &&
+		 back.valblk_present && back.valblk_seq == r.valblk_seq &&
+		 memcmp(back.valblk, r.valblk, 16) == 0 &&
+		 back.id.hash == r.id.hash,
+		 "  *** and the new master's own parser reads back every named "
+		 "field ***");
+	ct_check(b[110] == 0x01u && rd32(b + 112) == 0u &&
+		 rd32(b + 116) == 0xffffffffu && rd32(b + 120) == 0u &&
+		 rd32(b + 124) == 0xffffffffu,
+		 "  the census-constant cells: body[110]=1, 00/ff/00/ff tail");
+	ct_check(rd32(b + 4) == 0u && rd32(b + 12) == 0u && b[28] == 0u &&
+		 rd32(b + 32) == 0u,
+		 "  the CM's cells left zero, the unnamed ones written zero");
+	ct_check(vms_dlm_shape_fit_for_any_member(b, VMS_CM_BODY_LEN) &&
+		 !vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "  the CM admits it toward a real member, and opens a "
+		 "transaction for it (it is answered)");
+	ct_check(vms_dlm_rm_lock_rec_build(&r, 0, frame, sizeof(frame),
+					   NULL) == VMS_CODEC_OK &&
+		 rd32(b + 128) == 0u,
+		 "  hash_known 0 leaves body[128:132] zero");
+
+	/* Refusals. */
+	back = r;
+	back.holder_lkid = 0u;
+	ct_check(vms_dlm_rm_lock_rec_build(&back, 1, frame, sizeof(frame),
+					   NULL) == VMS_CODEC_E_INVAL,
+		 "  REFUSED: holder lock id 0");
+	back = r;
+	back.parent_holder_lkid = 0x110000ceu;   /* a half pair */
+	ct_check(vms_dlm_rm_lock_rec_build(&back, 1, frame, sizeof(frame),
+					   NULL) == VMS_CODEC_E_INVAL,
+		 "  *** REFUSED: a half parent pair (a sub-record whose "
+		 "parent's new handle has not come back) ***");
+	back = r;
+	back.granted_mode = 6u;
+	ct_check(vms_dlm_rm_lock_rec_build(&back, 1, frame, sizeof(frame),
+					   NULL) == VMS_CODEC_E_INVAL,
+		 "  REFUSED: a mode above EX");
+	back = r;
+	back.id.name_len = 0u;
+	ct_check(vms_dlm_rm_lock_rec_build(&back, 1, frame, sizeof(frame),
+					   NULL) == VMS_CODEC_E_INVAL,
+		 "  REFUSED: no name");
+
+	/* The op-0x13. */
+	ct_check(vms_dlm_rm_step_parse_body(fxbody(end), VMS_CM_BODY_LEN,
+					    &st) == VMS_CODEC_OK,
+		 "  VAX3's real op-0x13 parses");
+	memset(frame, 0xa5, sizeof(frame));
+	ct_check(vms_dlm_rm_end_build(&st.id, 1, frame, sizeof(frame),
+				      &written) == VMS_CODEC_OK,
+		 "  the holder's op-0x13 builds");
+	ct_check(memcmp(b + 44, fxbody(end) + 44, 4 + fxbody(end)[47]) == 0 &&
+		 rd32(b + 128) == rd32(fxbody(end) + 128) && b[28] == 0u &&
+		 b[8] == 0x02u && b[9] == 0x13u,
+		 "  identity, name, hash and the holder role byte are VAX3's");
+	ct_check(vms_dlm_shape_fit_for_any_member(b, VMS_CM_BODY_LEN) &&
+		 vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "  *** the CM admits it AND sends it as a NOTIFICATION: no "
+		 "transaction is opened on it (1,232 of 1,232 real ones) ***");
+	frame[VMS_OFF_SYSAP_BODY + 28] = 0x02u;   /* the OLD master's role */
+	ct_check(!vms_dlm_shape_fit_for_any_member(b, VMS_CM_BODY_LEN),
+		 "  an op-0x13 claiming the OLD master's role is not admitted");
+
+	/* The 82/01 parse. */
+	ct_check(vms_dlm_rm_lock_grant_parse_body(fxbody(rans), VMS_CM_BODY_LEN,
+						  &g) == VMS_CODEC_OK &&
+		 g.granted && g.master_lkid == 0x020004ccu &&
+		 g.holder_lkid == 0x110000ceu,
+		 "  VAX2's real 82/01: granted, minted 0x020004cc, echoing "
+		 "VAX3's 0x110000ce");
+	ct_check(vms_dlm_rm_lock_grant_parse_body(fxbody(rreq), VMS_CM_BODY_LEN,
+						  &g) == VMS_CODEC_E_CLASS,
+		 "  a request is not an answer");
+	ct_check(vms_dlm_rm_lock_grant_parse_body(fxbody(rans), 40u, &g) ==
+		 VMS_CODEC_E_SHORT, "  a short body is refused");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -855,5 +990,6 @@ int main(void)
 	test_op14_role_rule_is_false();
 	test_negative_controls();
 	test_op1a_valblk_parse();
+	test_holder_frames();
 	return ct_summary("test_codec_remaster");
 }

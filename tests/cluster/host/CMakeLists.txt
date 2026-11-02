@@ -1129,6 +1129,29 @@ set_tests_properties(cluster_host_test_dlm_adopt_valblk PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-33a: the HOLDER's half of a remaster, on the real lock engine ----
+# A proxy root and a proxy sub-lock made by the shipping $ENQ/grant doors are
+# described root-first, re-homed onto the new master's handles, and the release
+# that follows goes to the NEW master naming ITS handle (rd vms-3ac).
+add_executable(test_dlm_handover test_dlm_handover.c)
+target_include_directories(test_dlm_handover PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_handover PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_handover PRIVATE
+    cluster_host_lock cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_handover PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_handover COMMAND test_dlm_handover)
+set_tests_properties(cluster_host_test_dlm_handover PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- rd vms-c72: the op-0x03/op-0x04 RECEIVE half really moves lock state ----
 # The mirror of test_dlm_deq_reachable above, on the same two library recipes
 # and for the same reason: the emit was proven and the RECEIVE was declined
@@ -1284,6 +1307,9 @@ add_test(NAME cluster_frame_conformance_gate
         # two forms rd vms-6ad1 (RA7) fires, and they are required HERE so the
         # gate refuses to let either ship ungrounded.
         dlm_rm_ack dlm_rm_ack_nm dlm_rm_lock_ans dlm_rm_14 dlm_rm_14_ra7
+        # rd vms-33a: the HOLDER's records and its end-of-records, emitted by
+        # test_dlm_remaster_arm driving the real table through RA5's RMT5.
+        dlm_rm_12 dlm_rm_13
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"

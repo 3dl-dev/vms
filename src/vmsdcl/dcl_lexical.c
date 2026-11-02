@@ -2135,11 +2135,12 @@ static int dev_index = 0;
  * a reader with its own private idea of what the system contains.
  *
  * The device list is executive-resident (CLAUDE.md rule 11). $DEVICE_SCAN
- * over it is the only source here, and the names are the executive's own
- * physical form -- not re-decorated with a leading underscore, because
- * whether F$DEVICE returns "OPA0:" or "_OPA0:" on real VMS is not recorded
- * in anything this work has, and inventing the difference would be inventing
- * VMS behaviour (rule 10).
+ * over it is the only source here. Each name is the unit's FULL name with
+ * its underscore -- "_VAX1$OPA0:", "_$2$DUA0:", "_NLA0:" -- as OpenVMS VAX
+ * V7.3 returns it (rd vms-256; the 78-unit F$DEVICE walk in tests/lab/
+ * captures/fulldevnam-standalone-20261101/). The search name is matched
+ * against the physical name and the full name alike, so F$DEVICE("OPA*")
+ * and F$DEVICE("*$OPA*") both find the console.
  *
  * The executive binding is not error-checked, for the same reason
  * src/libvms/syssvc/sys_lock.c's bind_to_executive() is not: the state it
@@ -2159,13 +2160,19 @@ static void populate_device_list(const char *pattern)
 
     while (dev_count < MAX_DEV_LIST &&
            vms_kif_devscan(&index, &info) == SS$_NORMAL) {
+        char full[VMS_FULLDEVNAM_SIZE + 2];
         info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+        info.fulldevnam[VMS_FULLDEVNAM_SIZE - 1] = '\0';
+        snprintf(full, sizeof full, "_%s",
+                 info.fulldevnam[0] ? info.fulldevnam : info.devnam);
 
         if (pattern[0] != '\0' && pattern[0] != '*' &&
-            fnmatch(pattern, info.devnam, FNM_CASEFOLD) != 0)
+            fnmatch(pattern, info.devnam, FNM_CASEFOLD) != 0 &&
+            fnmatch(pattern, full + 1, FNM_CASEFOLD) != 0 &&
+            fnmatch(pattern, full, FNM_CASEFOLD) != 0)
             continue;
 
-        strncpy(dev_list[dev_count], info.devnam, 63);
+        strncpy(dev_list[dev_count], full, 63);
         dev_list[dev_count][63] = '\0';
         dev_count++;
     }
@@ -2176,9 +2183,6 @@ static int lex_device(struct dcl_context *ctx, const char *args,
 {
     (void)ctx;
     result[0] = '\0';
-    if (!args) {
-        populate_device_list("*");
-    }
 
     /* Parse: search_name [, dev_class [, dev_type [, stream_id]]] */
     char search[256] = "*";
@@ -2197,12 +2201,24 @@ static int lex_device(struct dcl_context *ctx, const char *args,
             search[--len] = '\0';
     }
 
-    /* On first call or when search pattern changes, repopulate */
-    if (dev_count == 0 || dev_index >= dev_count) {
+    /* On first call, after the list is exhausted, or when the search name
+     * changes, start a new search (the DCL Dictionary: a different
+     * search_name begins a new context). The comment always said so; the
+     * pattern was never compared (rd vms-256). */
+    static char dev_search[256];
+    static int dev_active;
+    if (!dev_active || strcmp(search, dev_search) != 0) {
         populate_device_list(search);
+        snprintf(dev_search, sizeof dev_search, "%s", search);
+        dev_active = 1;
     }
 
+    /* The end of the walk returns "" ONCE and the next call starts over --
+     * the documented loop `$ D = F$DEVICE() / $ IF D .EQS. "" THEN EXIT`.
+     * Before rd vms-256 an exhausted list was repopulated and its first name
+     * returned again, so that loop never ended. */
     if (dev_index >= dev_count) {
+        dev_active = 0;
         result[0] = '\0';
         return 0;
     }
@@ -2384,11 +2400,11 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
     (void)vms_kif_getvol(info.devnam, &vol);
 
     if (strcmp(item, "DEVNAM") == 0) {
-        /* The executive's own physical name (e.g. "DKA0:"). No leading
-         * underscore is invented here (the executive does not store one, and
-         * F$DEVICE deliberately does not add one either -- see
-         * populate_device_list). */
-        snprintf(result, result_size, "%s", info.devnam);
+        /* The physical name with VMS's underscore: F$GETDVI("OPA0:","DEVNAM")
+         * is "_OPA0:", F$GETDVI("SYS$SYSDEVICE","DEVNAM") "_DUA0:" on VAX
+         * V7.3 (rd vms-256; tests/lab/captures/fulldevnam-standalone-20261101/)
+         * -- the same form $GETDVI DVI$_DEVNAM already returns. */
+        snprintf(result, result_size, "_%s", info.devnam);
     } else if (strcmp(item, "FULLDEVNAM") == 0 ||
                strcmp(item, "ALLDEVNAM") == 0) {
         /* The FULL name the executive composed, with the underscore VMS

@@ -344,8 +344,56 @@ status_proof_selftest() {
   return 1
 }
 
-# The selftest alone needs no docker, no cache and no boot -- run it before the
+# THE BOOT DISK'S /sbin/init IS THE STARTUP.EXE IT WAS ASSEMBLED FROM. The
+# install marker used to be a bare touch file, so a cache assembled once kept
+# its OLD /sbin/init (and vms.kmod) through every later run, even with
+# FORCE_CROSS_BUILD=1 rebuilding STARTUP.EXE: a local acceptance run then
+# booted a STARTUP.EXE that predated OPCOM and $SETPRN and reported a nameless
+# PID 1 and no OPCOM row -- a symptom of the cache, not of the tree under test.
+# The marker now records what was installed; a different artifact means the
+# boot-work copy is re-cloned and re-assembled.
+boot_install_stamp() {  # [artifacts dir] -> stamp of the files install-boot installs
+  local d="${1:-${ARTIFACTS_DIR}}"
+  [ -f "$d/STARTUP.EXE" ] && [ -f "$d/vms.kmod" ] || { echo "missing"; return 0; }
+  cat "$d/STARTUP.EXE" "$d/vms.kmod" | sha256sum | cut -c1-32
+}
+boot_install_current() {  # <marker> [artifacts dir] -> 0 iff the marker records these artifacts
+  local want
+  want="$(boot_install_stamp "${2:-}")"
+  [ "$want" != "missing" ] && [ -f "$1" ] && [ "$(cat "$1")" = "$want" ]
+}
+boot_stamp_selftest() {
+  local t fails=0
+  t="$(mktemp -d)"
+  printf 'init-A' > "$t/STARTUP.EXE"; printf 'kmod-A' > "$t/vms.kmod"
+  _bexp() {  # <want: current|stale> <label>
+    local got=stale
+    boot_install_current "$t/marker" "$t" && got=current
+    if [ "$got" = "$1" ]; then echo "  boot-stamp selftest: $2 -> $got (expected)"
+    else echo "  boot-stamp selftest: $2 -> $got (WRONG, expected $1)"; fails=$((fails + 1)); fi
+  }
+  _bexp stale "no marker"
+  : > "$t/marker"
+  _bexp stale "legacy empty marker (the old touch file)"
+  boot_install_stamp "$t" > "$t/marker"
+  _bexp current "marker records these artifacts"
+  printf 'init-B' > "$t/STARTUP.EXE"
+  _bexp stale "STARTUP.EXE rebuilt"
+  boot_install_stamp "$t" > "$t/marker"; printf 'kmod-B' > "$t/vms.kmod"
+  _bexp stale "vms.kmod rebuilt"
+  rm -f "$t/vms.kmod"
+  _bexp stale "artifact missing"
+  rm -rf "$t"
+  [ "$fails" -eq 0 ] && { echo "=== boot-stamp selftest: a rebuilt artifact re-assembles the boot disk ==="; return 0; }
+  echo "=== boot-stamp selftest FAILED: $fails case(s) wrong ==="; return 1
+}
+
+# The selftests alone need no docker, no cache and no boot -- run them before the
 # shared build/assemble preamble below (which every booting mode needs).
+if [ "${MODE}" = "boot-stamp-selftest" ]; then
+  boot_stamp_selftest && exit 0
+  exit 1
+fi
 if [ "${MODE}" = "status-selftest" ]; then
   status_proof_selftest && exit 0
   exit 1
@@ -513,8 +561,10 @@ build_boot_image_set() {
      && [ -f "${SYSVOL_IMAGES_DIR}/MAIL.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/NCP.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/ROOTAUDIT.EXE" ] \
-     && [ -f "${SYSVOL_IMAGES_DIR}/OPCOM.EXE" ]; then
+     && [ -f "${SYSVOL_IMAGES_DIR}/OPCOM.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/.shipped-stripped" ]; then
     log "boot image set present -- NOT rebuilding (set FORCE_SYSVOL_BUILD=1 to force)"; return 0; fi
+  rm -f "${SYSVOL_IMAGES_DIR}/.shipped-stripped"
   mkdir -p "${SYSVOL_IMAGES_DIR}"
   log "cross-building the full boot image set (STARTUP/PROVISION/DCL/JOB_CONTROL/LOGINOUT) for elf32-vax"
   docker run --rm -v "${REPO}:/src" -w /src -v "${SYSVOL_IMAGES_DIR}:/out" \
@@ -559,6 +609,34 @@ build_boot_image_set() {
   [ -f "${SYSVOL_IMAGES_DIR}/ROOTAUDIT.EXE" ] || die "ROOTAUDIT.EXE cross-build did not produce an elf32-vax image (rd vms-251b)"
   # OPCOM.EXE (rd vms-798): the operator communication process PID 1 creates.
   [ -f "${SYSVOL_IMAGES_DIR}/OPCOM.EXE" ] || die "OPCOM.EXE cross-build did not produce an elf32-vax image (rd vms-798)"
+  ship_stripped_images
+}
+
+# rd vms-c01: the images the SYSTEM volume ships carry no debug sections and no
+# static symbol table, as a VMS kit's SYS$SYSTEM images are linked /NODEBUG.
+# This is a memory fix, not a disk-space one. PID 1 stages the boot images off
+# the ODS-2 volume into the boot tmpfs (ovmx_init.c stage_boot_images), and tmpfs
+# is RAM that cannot be paged out on a VAX with no swap. The unstripped set was
+# ~3.7 MB of that RAM, ~0.9 MB of it debug info and symbols that no one reads at
+# run time, and it starved the 16 MB VAX (PROVISION SIGKILLed, %RUN-F-CREPRC).
+# The symbol-carrying copies stay beside the set, in unstripped/, for gdb.
+# Only what ld.elf_so maps or the image reads is kept (.dynsym, .vms$* stay).
+ship_stripped_images() {
+  log "stripping the shipped VAX images (debug + .symtab; unstripped copies kept in unstripped/) -- rd vms-c01"
+  docker run --rm -v "${SYSVOL_IMAGES_DIR}:/out" --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      mkdir -p /out/unstripped
+      for f in /out/*.EXE; do
+        b=$(basename "$f")
+        cp "$f" "/out/unstripped/$b"
+        vax--netbsdelf-strip --strip-all -o "$f" "/out/unstripped/$b"
+        if readelf -SW "$f" | grep -E "\.debug_|\.symtab" >/dev/null; then
+          echo "FATAL: $b still carries debug sections or a .symtab after strip" >&2; exit 1
+        fi
+        echo "  $b: $(stat -c%s "/out/unstripped/$b") -> $(stat -c%s "$f") bytes"
+      done
+      touch /out/.shipped-stripped' \
+    || die "stripping the shipped VAX images failed (rd vms-c01)"
 }
 
 # 3c (sysboot). Master the OVMX SYSTEM volume: build the host vmsfs_master, stage
@@ -997,6 +1075,11 @@ ensure_modular_kernel() {
 
 # 6. clone the shared (MODULAR-kernel) disk to an ISOLATED boot-work copy.
 make_boot_copy() {
+  # An assembly from OTHER artifacts is stale: start again from a fresh clone.
+  if [ -f "${BOOT_INSTALL_MARKER}" ] && ! boot_install_current "${BOOT_INSTALL_MARKER}"; then
+    log "boot-work disk was assembled from a different STARTUP.EXE/vms.kmod -- re-cloning"
+    rm -f "${BOOT_COPY_MARKER}" "${BOOT_INSTALL_MARKER}"
+  fi
   if [ -f "${BOOT_COPY_MARKER}" ] && [ -f "${BOOT_WORKDIR}/wd0.img" ]; then
     log "isolated boot-disk copy present -- NOT re-copying"; return 0; fi
   [ -f "${CACHE_DIR}/anita-work/wd0.img" ] || die "shared disk missing; cannot copy"
@@ -1009,11 +1092,11 @@ make_boot_copy() {
 
 # 7. assemble ovmx_init + modules + nodes onto the boot-work copy (once).
 ensure_boot_install() {
-  if [ -f "${BOOT_INSTALL_MARKER}" ]; then
-    log "boot disk already assembled (ovmx_init installed) -- skipping"; return 0; fi
+  if boot_install_current "${BOOT_INSTALL_MARKER}"; then
+    log "boot disk already assembled from this STARTUP.EXE/vms.kmod -- skipping"; return 0; fi
   log "assembling the bootable disk (install STARTUP.EXE as /sbin/init, modules, nodes)"
   run_session install-boot /cache/boot-work || die "boot-disk assembly session failed"
-  touch "${BOOT_INSTALL_MARKER}"
+  boot_install_stamp > "${BOOT_INSTALL_MARKER}"
 }
 
 ensure_images
@@ -1531,5 +1614,5 @@ case "${MODE}" in
     run_status_gate && exit 0
     exit 1
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install | status-gate | status-gate-negctl | status-selftest)" ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install | status-gate | status-gate-negctl | status-selftest | boot-stamp-selftest)" ;;
 esac

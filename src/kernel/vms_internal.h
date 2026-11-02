@@ -765,7 +765,7 @@ struct vms_lock_resource {
 /* What a deleted process's creator is told (rd vms-9f32), captured at the claim. */
 struct vms_termination {
     uint32_t owner_vms_pid, vms_pid, linux_pid, condition;
-    uint8_t  has_status, compl_armed, compl_acmode, pad;
+    uint8_t  has_status, compl_armed, compl_acmode, handed_on;
     uint32_t compl_parent_pid, compl_efn;
     uint64_t compl_astadr, compl_astprm;
     uint32_t owner_linux_pid, compl_parent_linux_pid; /* the creating / arming TASK (rd vms-e70f) */
@@ -1072,6 +1072,11 @@ struct vms_proc {
      */
     uint32_t            exit_status;      /* recorded image completion $STATUS */
     uint8_t             has_exit_status;  /* 1 once SETEXIT recorded a value */
+    /* rd vms-ff24: the completion an image task of this process recorded and
+     * ended with (it shares this process's VMS PID). The process's completion
+     * when this row records none of its own; never read as this row's own. */
+    uint8_t             has_inh_status;
+    uint32_t            inh_status;
 
     /*
      * /NOWAIT subprocess-exit completion registration (vms-e9a B1,
@@ -1388,7 +1393,7 @@ void vms_proc_free_claimed(struct vms_proc *proc);
 
 /* Drop table entries whose backing task no longer exists. */
 /* The two halves of process deletion around the substrate's release (rd vms-9f32). */
-void vms_proc_termination_capture(const struct vms_proc *victim,
+void vms_proc_termination_capture(struct vms_proc *victim,
                                   struct vms_termination *t);
 void vms_proc_termination_post_locked(const struct vms_termination *t);
 

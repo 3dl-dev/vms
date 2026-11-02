@@ -1,0 +1,33 @@
+# process-ends-with-first-row -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a VMS process with several task rows (an image task shares its VMS PID) ends when its LAST row goes, and its creator is told its image's completion (rd vms-ff24)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_crtl_exec";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_hand_on_locked() keeps a process alive in its surviving task row: the creating row that ends first hands its creator's record and completion on, and an image task hands its completion to the row that created it. The mutation returns at once, so the first row to end posts its creator a termination record with no status (SS\$_ABORT) while the image is still running.";;
+        require_fail) cat <<'EOF2'
+G: a subprocess whose creating task ends first is collected with its image task's completion
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+the creator's checks all held
+EOF2
+                      ;;
+        knock_on_why)  cat <<'EOF2'
+The suite's summary check reports the creator's red (G runs in the creator).
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    if (!survivor)$|    if (1) /* NEGCTL process-ends-with-first-row */|' "$_file"
+
+    :
+}

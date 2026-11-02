@@ -21,6 +21,7 @@ A: the _VMS_WAIT wait returns the subprocess's error completion %X1000002C
 B: a C-facility completion (__posix_exit(3)) waits as WEXITSTATUS 3
 the creator's checks all held
 F: an image task sharing its creator's VMS PID gets its own subprocess's completion %X0035A019
+G: a subprocess whose creating task ends first is collected with its image task's completion
 EOF2
                       ;;
         knock_on_why)  cat <<'EOF2'

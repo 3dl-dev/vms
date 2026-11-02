@@ -26,6 +26,10 @@
  *      that execs a subprocess is the one told how it ended: its completion
  *      and termination record go to the task that created it, not to another
  *      row holding the same VMS PID.
+ *   G  a subprocess whose creating task ends BEFORE its image task (the image
+ *      task shares the subprocess's VMS PID) is collected once, when the whole
+ *      process is gone, with the image's completion -- not SS$_ABORT from the
+ *      row that ended first with nothing recorded (rd vms-ff24).
  *
  * NEGATIVE CONTROL: tests/qemu/defects.d/crtl-exec-substrate-fork.defect puts
  * the substrate fork/execve/wait back; A's $GETJPI, getpid and completion code
@@ -57,6 +61,7 @@
 #define DIR_      "/tmp/ovmx_e70f"
 #define CHILD_ERR 0x1000002Cu           /* SS$_ABORT, message inhibited */
 #define POSIX3    0x0035A019u           /* __posix_exit(3), measured on Alpha V8.4 */
+#define IMAGE_ST  0x10000014u           /* %X10000014: an error, message inhibited */
 
 static int pass, fail;
 #define CHECK(c, m) do { if (c) { printf("  PASS: %s\n", m); pass++; } \
@@ -102,6 +107,15 @@ static int subject_main(const char *role)
         (void)sys$exit(CHILD_ERR);
     } else if (strcmp(role, "POSIX3") == 0) {
         (void)sys$exit(POSIX3);
+    } else if (strcmp(role, "TWOROW") == 0) {
+        /* The image runs in a task of this process (CONTINUE: the same VMS
+         * PID) and outlives the creating task, which ends recording nothing. */
+        pid_t t = ovmx_fork_kind_st(VMS_CREPRC_PCB_CONTINUE, NULL);
+        if (t == 0) {
+            usleep(300000);
+            (void)sys$exit(IMAGE_ST);
+        }
+        _exit(0);
     }
     (void)sys$exit(SS$_NORMAL);
     return 0;
@@ -168,6 +182,15 @@ static int creator_main(void)
     w = pid ? ovmx_crtl_wait(&st) : -1;
     CHECK(w == (int)pid && st == 0, "C: an SS$_NORMAL completion waits as status 0 (wait for any)");
 
+    /* G */
+    pid = ovmx_crtl_exec_create(DIR_ "/TWOROW", args, 0, env);
+    st = -1;
+    w = pid ? ovmx_crtl_vms_waitpid((int)pid, &st, 0) : -1;
+    printf("  INFO: G wait=%d status=%08X\n", w, (unsigned)st);
+    /* negctl: process-ends-with-first-row */
+    CHECK(w == (int)pid && (uint32_t)st == IMAGE_ST,
+          "G: a subprocess whose creating task ends first is collected with its image task's completion");
+
     /* D */
     errno = 0;
     w = ovmx_crtl_wait(&st);
@@ -217,8 +240,8 @@ int main(int argc, char **argv)
     self[sl] = '\0';
     mkdir(DIR_, 0777);
     int staged = 1;
-    const char *roles[] = { "ARGS", "POSIX3", "OK" };
-    for (int i = 0; i < 3; i++) {
+    const char *roles[] = { "ARGS", "POSIX3", "OK", "TWOROW" };
+    for (int i = 0; i < 4; i++) {
         char p[128];
         snprintf(p, sizeof p, DIR_ "/%s", roles[i]);
         unlink(p);

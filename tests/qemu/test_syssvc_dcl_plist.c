@@ -189,6 +189,7 @@ int main(void)
     printf("  ---- 12-element DELETE ----\n%s  ---- end ----\n", out);
     CHECK(!strstr(out, "MAXPARM") && strstr(out, "$STATUS == \"%X00000001\""),
           "DELETE of a 12-element list succeeds, no MAXPARM (oracle #1)");
+    /* negctl: dcl-plist-stops-at-p8 */
     CHECK(!strstr(out, ".TXT;1"), "... every one of the twelve is gone");
 
     run_dcl("SET DEFAULT VDA0:[OVMXDIR]\nSET FILE/PROTECTION=O:RWED [.PLIST]SUB.DIR;1\n"

@@ -31,6 +31,8 @@ $ DIRECTORY/SIZE GCCSRC:[BLD.GCC]CONFIG.H
 $ WRITE SYS$OUTPUT "CC1B-PROOF: === BUILD: @GCCSRC:[000000]BUILD_CC1 ==="
 $ @GCCSRC:[000000]BUILD_CC1
 $ WRITE SYS$OUTPUT "CC1B-PROOF: BUILD-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
+$! what the ACP holds under GCCOBJ (the objects a CI shard carries off its volume)
+$ DIRECTORY/SIZE=ALL GCCOBJ:[*]
 $ DIRECTORY/SIZE GCCOBJ:[CC1]CC1.EXE
 $!
 $! The cc1 built here, as a foreign command; the arguments are quoted so DCL passes

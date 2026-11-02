@@ -145,6 +145,25 @@ void dcl_error(const char *facility, int severity, const char *ident,
 }
 
 /*
+ * A continuation line of the message just shown ("-RMS-E-FNF, file not
+ * found"), through the same message sink as dcl_error.
+ */
+void dcl_error_cont(const char *facility, int severity, const char *ident,
+                    const char *fmt, ...)
+{
+    char text[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(text, sizeof(text), fmt, ap);
+    va_end(ap);
+
+    char msg[1280];
+    dcl_format_error(facility, severity, ident, text, msg, sizeof(msg));
+    msg[0] = '-';
+    fprintf(stderr, "%s\n", msg);
+}
+
+/*
  * The one honest refusal for an operation OVMX does not perform (vms-916):
  * the REAL condition SS$_UNSUPPORTED, %X00000E4A, displayed with VMS's own
  * text (OpenVMS Alpha V8.4 $GETMSG: "%SYSTEM-W-UNSUPPORTED, unsupported

@@ -202,6 +202,9 @@ int dcl_exec_foreign_command(struct dcl_context *ctx, struct dcl_command *cmd,
 /* External functions used by command implementations */
 extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
+/* A "-FAC-S-IDENT, text" continuation line of the message just shown. */
+extern void dcl_error_cont(const char *facility, int severity, const char *ident,
+                           const char *fmt, ...);
 /* Print %SYSTEM-E-UNSUPPORTED and return SS$_UNSUPPORTED (dcl_io.c). */
 extern uint32_t dcl_unsupported(void);
 extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,

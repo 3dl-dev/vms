@@ -3261,10 +3261,29 @@ int cmd_exit(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    /* Optional status code */
+    /* Optional status code. It is an EXPRESSION (DCL Dictionary, "EXIT":
+     * "status-code ... an integer or an expression equivalent to an integer
+     * value"): EXIT STATUS, EXIT 40 + 4 and EXIT %X2C all return its value,
+     * as the VAX V7.3 oracle shows (docs/oracle/semantics/on/ ON.EXIT.*). It
+     * used to be strtoul'd as text, so a symbol or a %X literal returned 0
+     * and "40 + 4" returned 40. */
     uint32_t exit_code = SS$_NORMAL;
-    if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
-        exit_code = (uint32_t)strtoul(cmd->params[0], NULL, 0);
+    const char *expr = cmd->raw_tail[0] ? cmd->raw_tail
+                     : (cmd->param_count >= 1 ? cmd->params[0] : "");
+    if (expr[0] != '\0') {
+        extern long dcl_parse_int(const char *s, int *ok);
+        char val[DCL_MAX_VALUE];
+        int ok = 0;
+        dcl_eval_expr_string(ctx, expr, val, sizeof val);
+        exit_code = (uint32_t)dcl_parse_int(val, &ok);
+        if (!ok)
+            exit_code = 0;
+    } else if (ctx->proc_depth >= 0) {
+        /* EXIT with no status leaves a procedure level with the status of
+         * the last command, its message marked as already shown
+         * (STS$M_INHIB_MSG): VAX V7.3 returns %X10030001 after a symbol
+         * assignment (docs/oracle/semantics/on/ ON.WARNING.SUCCESS ...). */
+        exit_code = (uint32_t)ctx->last_status | 0x10000000u;
     }
 
     ctx->exit_requested = 1;

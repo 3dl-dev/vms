@@ -26,60 +26,97 @@ extern void dcl_error(const char *facility, int severity, const char *ident,
 extern void dcl_set_status(struct dcl_context *ctx, int status);
 
 /*
- * Search a procedure file for a label.
- * Positions the file pointer to the line after the label.
- * Returns 0 on success, -1 if label not found.
+ * One procedure line, read for label scoping: its label (if any) into lbl, and
+ * whether its command is SUBROUTINE (+1) or ENDSUBROUTINE (-1), else 0.
  */
-int dcl_find_label(struct dcl_pf *fp, const char *label)
+static int label_line(const char *line, char *lbl, size_t lblsz)
 {
-    if (!fp || !label) return -1;
-
-    /* Rewind to beginning */
-    dcl_pf_rewind(fp);
-
-    char line[DCL_MAX_LINE];
-    while (dcl_pf_gets(line, sizeof(line), fp)) {
-        /* Remove leading whitespace */
-        char *p = line;
+    const char *p = line;
+    lbl[0] = '\0';
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '$') {
+        p++;
         while (*p == ' ' || *p == '\t') p++;
-
-        /* Skip $ prefix */
-        if (*p == '$') {
-            p++;
+    }
+    const char *colon = strchr(p, ':');
+    if (colon) {
+        size_t llen = (size_t)(colon - p);
+        while (llen > 0 && (p[llen - 1] == ' ' || p[llen - 1] == '\t'))
+            llen--;
+        int valid = llen > 0 && llen < lblsz;
+        for (size_t i = 0; valid && i < llen; i++)
+            if (!isalnum((unsigned char)p[i]) && p[i] != '_' && p[i] != '$')
+                valid = 0;
+        if (valid) {
+            memcpy(lbl, p, llen);
+            lbl[llen] = '\0';
+            p = colon + 1;
             while (*p == ' ' || *p == '\t') p++;
         }
-
-        /* Check for LABEL: */
-        char *colon = strchr(p, ':');
-        if (colon) {
-            /* Check that everything before colon is a valid label name */
-            char lbl[256];
-            size_t llen = (size_t)(colon - p);
-            if (llen > 0 && llen < sizeof(lbl)) {
-                memcpy(lbl, p, llen);
-                lbl[llen] = '\0';
-
-                /* Trim trailing whitespace from label */
-                while (llen > 0 && (lbl[llen - 1] == ' ' || lbl[llen - 1] == '\t'))
-                    lbl[--llen] = '\0';
-
-                /* Check that label is valid (alphanumeric and _$) */
-                int valid = 1;
-                for (size_t i = 0; i < llen; i++) {
-                    if (!isalnum((unsigned char)lbl[i]) && lbl[i] != '_' && lbl[i] != '$') {
-                        valid = 0;
-                        break;
-                    }
-                }
-
-                if (valid && strcasecmp(lbl, label) == 0) {
-                    return 0; /* Found - file pointer is now after this line */
-                }
-            }
-        }
     }
+    char w[16];
+    size_t n = 0;
+    while (n < sizeof w - 1 && (isalpha((unsigned char)p[n]) || p[n] == '_')) {
+        w[n] = (char)toupper((unsigned char)p[n]);
+        n++;
+    }
+    w[n] = '\0';
+    if (isalnum((unsigned char)p[n]) || p[n] == '_')
+        return 0;
+    if (strcmp(w, "SUBROUTINE") == 0) return 1;
+    if (strcmp(w, "ENDSUBROUTINE") == 0) return -1;
+    return 0;
+}
 
+/*
+ * Search a procedure file for a label IN A SCOPE, and position the file
+ * pointer on the line after it. Returns 0 on success, -1 if not found.
+ *
+ * SCOPE (VAX V7.3, docs/oracle/semantics/on/): the labels of a
+ * SUBROUTINE...ENDSUBROUTINE block are local to it. A GOTO H inside one block
+ * goes to that block's H, never to an H in another block or at the top level;
+ * from the procedure's own level, labels inside blocks are not visible. So
+ *   scope < 0  : the procedure level -- labels outside every block (a block's
+ *                own "NAME: SUBROUTINE" label is at that level: CALL finds it);
+ *   scope >= 0 : the block whose body starts at file offset `scope` -- its own
+ *                labels, outside any block nested in it, up to its
+ *                ENDSUBROUTINE.
+ */
+int dcl_find_label_in(struct dcl_pf *fp, const char *label, long scope)
+{
+    if (!fp || !label) return -1;
+    dcl_pf_rewind(fp);
+    if (scope >= 0 && dcl_pf_seek(fp, scope, SEEK_SET) != 0)
+        return -1;
+
+    char line[DCL_MAX_LINE], lbl[256];
+    int depth = 0;
+    while (dcl_pf_gets(line, sizeof(line), fp)) {
+        int kind = label_line(line, lbl, sizeof lbl);
+        if (kind < 0) {
+            if (depth == 0 && scope >= 0)
+                return -1;                 /* the end of this block */
+            if (depth > 0) depth--;
+            continue;
+        }
+        if (depth == 0 && lbl[0] && strcasecmp(lbl, label) == 0)
+            return 0;   /* found - file pointer is now after this line */
+        if (kind > 0)
+            depth++;
+    }
     return -1; /* Not found */
+}
+
+/* The label search a GOTO/GOSUB at the CURRENT level makes: its own block's
+ * labels inside a CALLed subroutine, else the procedure level's. */
+int dcl_find_label(struct dcl_pf *fp, const char *label)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    long scope = -1;
+    if (ctx->proc_depth >= 0 && ctx->proc_stack[ctx->proc_depth].is_subroutine &&
+        ctx->proc_stack[ctx->proc_depth].fp == fp)
+        scope = ctx->proc_stack[ctx->proc_depth].sub_start;
+    return dcl_find_label_in(fp, label, scope);
 }
 
 /*
@@ -192,26 +229,30 @@ static int dcl_run_proc_lines(struct dcl_context *ctx, struct dcl_pf *fp)
                 /* Failure: severity is even -- 0=WARNING, 2=ERROR, 4=SEVERE. */
                 int severity = status & 7;
 
-                if (lvl >= 0 && ctx->proc_stack[lvl].on_armed &&
-                    severity >= ctx->proc_stack[lvl].on_severity) {
-                    /* Armed ON action fires. ON ERROR THEN CONTINUE just resumes
-                     * and REMAINS in effect (the "ignore errors in this block"
-                     * idiom). Any other action -- GOTO a handler, EXIT, or an
-                     * arbitrary command -- is ONE-SHOT: DCL resets the level to
-                     * its default (exit on error) before performing it, so a
-                     * GOTO handler cannot infinitely re-enter itself; the
-                     * handler re-arms by issuing another ON. (VSI OpenVMS DCL
-                     * Dictionary, "ON".) */
+                if (lvl >= 0 && ctx->proc_stack[lvl].on_armed) {
+                    /* An armed ON REPLACES the default action at this level
+                     * (VAX V7.3, docs/oracle/semantics/on/: ON.SEVERE.ERROR --
+                     * under ON SEVERE_ERROR an ERROR does not stop the
+                     * procedure). A completion below its threshold goes on.
+                     * At or above it the action fires ONCE -- CONTINUE
+                     * included (ON.CONTINUE, ON.LEVEL.CALLER.CONTINUE: the
+                     * next error takes the default and exits) -- and the
+                     * level is back to its default (exit on ERROR/SEVERE)
+                     * before the action runs, so a GOTO handler cannot
+                     * re-enter itself; it re-arms by issuing another ON.
+                     * (VSI OpenVMS DCL Dictionary, "ON".) */
+                    if (severity < ctx->proc_stack[lvl].on_severity)
+                        continue;
                     char action[256];
                     strncpy(action, ctx->proc_stack[lvl].on_action,
                             sizeof(action) - 1);
                     action[sizeof(action) - 1] = '\0';
 
-                    if (strcasecmp(action, "CONTINUE") == 0 || action[0] == '\0')
-                        continue;   /* persists; keep on_armed set */
-
                     ctx->proc_stack[lvl].on_armed = 0;   /* one-shot reset */
                     ctx->proc_stack[lvl].on_action[0] = '\0';
+
+                    if (strcasecmp(action, "CONTINUE") == 0 || action[0] == '\0')
+                        continue;
 
                     /* Run the THEN command through the normal command path:
                      * GOTO reseeks fp, EXIT sets exit_requested, any other
@@ -272,8 +313,10 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
     long resume_off = dcl_pf_tell(fp);
     int  resume_line = ctx->proc_stack[ctx->proc_depth].line_number;
 
-    /* Position at the subroutine's label (fp now points just after it). */
-    if (dcl_find_label(fp, label) != 0) {
+    /* Position at the subroutine's label (fp now points just after it). A
+     * SUBROUTINE label is at the procedure level, so CALL finds it from any
+     * level, a CALLed block included. */
+    if (dcl_find_label_in(fp, label, -1) != 0) {
         dcl_pf_seek(fp, resume_off, SEEK_SET);
         dcl_error("DCL", 2, "USGOTO",
                   "target of CALL not found - \\%s\\", label);
@@ -289,6 +332,7 @@ int dcl_call_subroutine(const char *label, int argc, char **argv)
             c->proc_stack[c->proc_depth - 1].filename,
             sizeof(c->proc_stack[0].filename) - 1);
     c->proc_stack[c->proc_depth].is_subroutine = 1;
+    c->proc_stack[c->proc_depth].sub_start = dcl_pf_tell(fp);
     c->proc_stack[c->proc_depth].gosub_base = c->gosub_depth;
     c->proc_stack[c->proc_depth].line_number = 0;
 

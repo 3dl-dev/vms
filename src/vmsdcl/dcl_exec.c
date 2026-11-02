@@ -1635,6 +1635,10 @@ int dcl_execute_command(struct dcl_command *cmd)
         }
 
         if (ctx->proc_depth >= 0) {
+            /* ON turns error checking back on at this level: after SET NOON
+             * an ON WARNING THEN GOTO still catches the next warning (VAX
+             * V7.3, docs/oracle/semantics/on/ ON.AFTER.NOON). */
+            ctx->proc_stack[ctx->proc_depth].noon = 0;
             ctx->proc_stack[ctx->proc_depth].on_armed = 1;
             ctx->proc_stack[ctx->proc_depth].on_severity = sev;
             strncpy(ctx->proc_stack[ctx->proc_depth].on_action, action,

@@ -1590,6 +1590,7 @@ struct standing_result {
 	struct vms_proc *proc;
 	uint32_t         status;
 	uint32_t         lkid;
+	int              remote;
 	volatile int     done;
 };
 
@@ -1599,7 +1600,7 @@ static void *standing_thread(void *arg)
 
 	wire_learn("F11B$vOVMXDATA");
 	r->status = vms_lock_acp_vol_standing(r->proc, "F11B$vOVMXDATA",
-					      &r->lkid);
+					      &r->lkid, &r->remote);
 	r->done = 1;
 	return NULL;
 }

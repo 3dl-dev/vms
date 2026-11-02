@@ -324,7 +324,7 @@ uint32_t vms_lock_rms_file_enq_no_label(void);
  * rd vms-3ea) and its release. Mirror of the
  * src/kernel/vms_internal.h decls, where the full note lives. */
 uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
-                                   uint32_t *lkid_out);
+                                   uint32_t *lkid_out, int *remote_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
 /*
  * Image rundown's lock release. In the real kernel this is called by

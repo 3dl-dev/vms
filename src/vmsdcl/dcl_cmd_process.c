@@ -3430,26 +3430,14 @@ int cmd_logout(struct dcl_command *cmd)
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
 
-    /* Write an OPCOM logout record to the operator log */
-    {
-        struct {
-            struct opcdef hdr;
-            char text[128];
-        } msgbuf;
-        memset(&msgbuf, 0, sizeof(msgbuf));
-        msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_RQST;
-        OPC$SET_TARGET(msgbuf.hdr, OPC$M_NM_CENTRL);
-        int n = snprintf(msgbuf.hdr.opc$l_ms_text, sizeof(msgbuf.text),
-                         "logout: user %s at %02d-%s-%04d %02d:%02d:%02d",
-                         upper_user,
-                         tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
-                         tm.tm_hour, tm.tm_min, tm.tm_sec);
-        struct dsc$descriptor_s desc;
-        desc.dsc$a_pointer = (char *)&msgbuf.hdr;
-        desc.dsc$w_length  = (uint16_t)(OPC$K_MS_HDRLEN + n);
-        sys$sndopr(&desc, 0);
-    }
-
+    /*
+     * No OPCOM message (rd vms-798). An earlier LOGOUT sent "logout: user X at
+     * ..." to OPCOM with $SNDOPR; real VMS's LOGOUT sends nothing, and once
+     * OPCOM was a real process that message reached the console after every
+     * logout -- the keystroke oracle's LOGOUT L step caught it against VAX
+     * V7.3, which prints only the "logged out at" line. A logout is an audit
+     * event on VMS (AUDIT_SERVER, when enabled), not an operator request.
+     */
     ctx->exit_requested = 1;
     ctx->logout_requested = 1;
     return SS$_NORMAL;

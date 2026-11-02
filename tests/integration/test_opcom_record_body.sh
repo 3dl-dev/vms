@@ -68,8 +68,10 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 echo "vms-2d37: the OPCOM record body carries the message, not the header bytes"
 echo "  DCL under test: $DCL"
 
-# LOGOUT is the cheapest caller that emits a record, and its text is built by
-# cmd_logout in src/vmsdcl/dcl_cmd_process.c as "logout: user X at DD-MON-YYYY".
+# REQUEST is the cheapest caller that emits a record: its text is the caller's
+# own parameter (cmd_request, src/vmsdcl/dcl_cmd_misc.c). LOGOUT was the probe
+# until rd vms-798 removed its invented "logout: user X" message -- real VMS's
+# LOGOUT sends OPCOM nothing.
 #
 # THE LOG PATH IS THE SERVICE'S TO CHOOSE, AND THIS GATE ASKS RATHER THAN
 # GUESSES. open_operator_log() translates SYS$MANAGER:OPERATOR.LOG through
@@ -107,7 +109,7 @@ done > "$WORK/sizes"
 sleep 1   # filesystem timestamp granularity; without it a log written in the
           # same second as the stamp can compare as not-newer and be skipped
 
-printf 'LOGOUT\n' | "$DCL" >"$WORK/dcl.out" 2>"$WORK/dcl.err"
+printf 'REQUEST "OVMX2D37 PROBE TEXT"\n' | "$DCL" >"$WORK/dcl.out" 2>"$WORK/dcl.err"
 DCL_RC=$?
 
 # -iname, not -name: vmsfs_to_linux_path() LOWERCASES the translated filename,
@@ -184,7 +186,7 @@ check() {
 }
 
 # 1. the body is present and is the caller's text
-if printf '%s' "$BODY" | grep -q 'logout:'; then r=ok; else r=no; fi
+if printf '%s' "$BODY" | grep -q 'OVMX2D37 PROBE TEXT'; then r=ok; else r=no; fi
 check "$r" "the body carries the caller's message text" \
       "the header bytes reaching the log instead of the text, or no body at all"
 

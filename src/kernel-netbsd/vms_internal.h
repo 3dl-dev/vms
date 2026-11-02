@@ -665,9 +665,10 @@ extern uint32_t vms_local_csid;
 /* What a deleted process's creator is told (rd vms-9f32), captured at the claim. */
 struct vms_termination {
 	uint32_t owner_vms_pid, vms_pid, linux_pid, condition;
-	uint8_t  has_status, compl_armed, compl_acmode, pad;
+	uint8_t  has_status, compl_armed, compl_acmode, handed_on;
 	uint32_t compl_parent_pid, compl_efn;
 	uint64_t compl_astadr, compl_astprm;
+	uint32_t owner_linux_pid, compl_parent_linux_pid; /* rd vms-e70f */
 };
 
 struct vms_termrec {
@@ -793,6 +794,8 @@ struct vms_proc {
 	 */
 	uint32_t            exit_status;
 	uint8_t             has_exit_status;
+	uint8_t             has_inh_status;   /* rd vms-ff24 */
+	uint32_t            inh_status;
 	uint8_t             cli_present;
 	uint16_t            cli_length;
 	char                cli_command[VMS_CLI_CMDLINE_SIZE];
@@ -832,6 +835,7 @@ struct vms_proc {
 	uint8_t             compl_armed;
 	uint8_t             compl_acmode;
 	uint32_t            compl_parent_pid;
+	uint32_t            compl_parent_linux_pid; /* rd vms-e70f */
 	uint32_t            compl_efn;
 	uint64_t            compl_astadr;
 	uint64_t            compl_astprm;
@@ -840,6 +844,7 @@ struct vms_proc {
 	 * records of this process's ended subprocesses. Same field set and
 	 * meaning as src/kernel/vms_internal.h. Guarded by vms_proc_hash_lock. */
 	uint32_t            owner_vms_pid;
+	uint32_t            owner_linux_pid;  /* the creating task (rd vms-e70f) */
 	struct vms_termrec  termrec[VMS_TERMREC_MAX];
 	uint32_t            termrec_next;
 
@@ -1550,7 +1555,7 @@ void vms_proc_free_claimed(struct vms_proc *proc);
  * vms_proc_may_read are used cross-file on Linux; here they are simply part of
  * the compiled facility. The ioctl entry points are dispatched by vms_netbsd.c. */
 /* The two halves of process deletion around the substrate's release (rd vms-9f32). */
-void vms_proc_termination_capture(const struct vms_proc *victim,
+void vms_proc_termination_capture(struct vms_proc *victim,
                                   struct vms_termination *t);
 void vms_proc_termination_post_locked(const struct vms_termination *t);
 

@@ -425,6 +425,27 @@ static struct vms_proc *find_by_vms_pid(uint32_t vms_pid)
 }
 
 /*
+ * find_task_row - the row of process `vms_pid` that is the task `tgid` (rd
+ * vms-e70f). An image task (CONTINUE, DCL's RUN) shares its creator's VMS PID,
+ * so a VMS PID can name two rows; the one that created a subprocess, or armed
+ * its completion, is the one its termination record and completion belong to
+ * -- the row that will $WAITFR and GETEXIT. Falls back to the PID alone.
+ */
+static struct vms_proc *find_task_row(uint32_t vms_pid, uint32_t tgid)
+{
+    struct vms_proc *proc;
+    int bkt;
+
+    if (tgid) {
+        exec_hash_for_each(vms_proc_hash, bkt, proc, hash_node) {
+            if (proc->vms_pid == vms_pid && (uint32_t)proc->linux_pid == tgid)
+                return proc;
+        }
+    }
+    return find_by_vms_pid(vms_pid);
+}
+
+/*
  * vms_proc_access_identity - the UIC and ENABLED privileges the executive holds
  * for the process `vms_pid`, for an access decision made on its behalf (rd
  * vms-046: NETACP asking whether a requester could use the reply mailbox it
@@ -1302,7 +1323,7 @@ void vms_proc_deliver_abnormal_completion(struct vms_proc *child)
     if (!child->compl_armed)
         return;
 
-    parent   = find_by_vms_pid(child->compl_parent_pid);
+    parent   = find_task_row(child->compl_parent_pid, child->compl_parent_linux_pid);
     c_efn    = child->compl_efn;
     c_astadr = child->compl_astadr;
     c_astprm = child->compl_astprm;
@@ -1336,26 +1357,83 @@ void vms_proc_deliver_abnormal_completion(struct vms_proc *child)
  * subprocess's resources are gone. Both halves are atomic-safe (nothing here
  * sleeps); step 2 is the substrate's and may sleep.
  */
-void vms_proc_termination_capture(const struct vms_proc *victim,
+/*
+ * One VMS process, several task rows (rd vms-ff24). An image task (CONTINUE)
+ * shares its creator's VMS PID: the process's creating row and its image's row
+ * end separately, in either order. The process has ended only when its LAST
+ * row goes, and its completion is its image's. So, when a row ends while
+ * another row of the same VMS PID lives on:
+ *   - an image task (its owner is its own process) hands the completion it
+ *     recorded to the row that created it; that task's own record to its
+ *     creator row is posted as always (DCL reads it by substrate pid);
+ *   - the process's creating row (its owner is ANOTHER process) hands the
+ *     creator's record and completion on to the surviving row, and posts
+ *     nothing: the creator is told once, when the process is gone, with the
+ *     image's completion.
+ * Called under vms_proc_hash_lock with `victim` already unlinked.
+ */
+static void vms_proc_hand_on_locked(struct vms_proc *victim, struct vms_termination *t)
+{
+    struct vms_proc *survivor = find_by_vms_pid(victim->vms_pid);
+    const int has = victim->has_exit_status || victim->has_inh_status;
+    const uint32_t cond = victim->has_exit_status ? victim->exit_status : victim->inh_status;
+
+    if (!survivor)
+        return;
+    if (victim->owner_vms_pid == victim->vms_pid) {
+        struct vms_proc *creator = find_task_row(victim->vms_pid, victim->owner_linux_pid);
+        if (creator && has) {
+            creator->inh_status = cond;
+            creator->has_inh_status = 1;
+        }
+        return;
+    }
+    survivor->owner_vms_pid = victim->owner_vms_pid;
+    survivor->owner_linux_pid = victim->owner_linux_pid;
+    if (has && !survivor->has_exit_status && !survivor->has_inh_status) {
+        survivor->inh_status = cond;
+        survivor->has_inh_status = 1;
+    }
+    if (victim->compl_armed && !survivor->compl_armed) {
+        survivor->compl_armed = 1;
+        survivor->compl_acmode = victim->compl_acmode;
+        survivor->compl_parent_pid = victim->compl_parent_pid;
+        survivor->compl_parent_linux_pid = victim->compl_parent_linux_pid;
+        survivor->compl_efn = victim->compl_efn;
+        survivor->compl_astadr = victim->compl_astadr;
+        survivor->compl_astprm = victim->compl_astprm;
+    }
+    t->handed_on = 1;
+}
+
+void vms_proc_termination_capture(struct vms_proc *victim,
                                   struct vms_termination *t)
 {
     memset(t, 0, sizeof(*t));
     t->owner_vms_pid    = victim->owner_vms_pid;
     t->vms_pid          = victim->vms_pid;
     t->linux_pid        = (uint32_t)victim->linux_pid;
-    t->condition        = victim->has_exit_status ? victim->exit_status : SS__ABORT;
-    t->has_status       = victim->has_exit_status;
+    t->condition        = victim->has_exit_status ? victim->exit_status
+                        : victim->has_inh_status ? victim->inh_status : SS__ABORT;
+    t->has_status       = victim->has_exit_status || victim->has_inh_status;
     t->compl_armed      = victim->compl_armed;
     t->compl_acmode     = victim->compl_acmode;
     t->compl_parent_pid = victim->compl_parent_pid;
+    t->compl_parent_linux_pid = victim->compl_parent_linux_pid;
+    t->owner_linux_pid  = victim->owner_linux_pid;
     t->compl_efn        = victim->compl_efn;
     t->compl_astadr     = victim->compl_astadr;
     t->compl_astprm     = victim->compl_astprm;
+    vms_proc_hand_on_locked(victim, t);
 }
 
 void vms_proc_termination_post_locked(const struct vms_termination *t)
 {
-    struct vms_proc *owner = t->owner_vms_pid ? find_by_vms_pid(t->owner_vms_pid) : NULL;
+    struct vms_proc *owner;
+
+    if (t->handed_on)
+        return;                      /* the process lives on in another row */
+    owner = t->owner_vms_pid ? find_task_row(t->owner_vms_pid, t->owner_linux_pid) : NULL;
 
     if (owner) {
         struct vms_termrec *r = &owner->termrec[owner->termrec_next % VMS_TERMREC_MAX];
@@ -1366,7 +1444,7 @@ void vms_proc_termination_post_locked(const struct vms_termination *t)
         r->has_status = t->has_status;
     }
     if (t->compl_armed) {
-        struct vms_proc *parent = find_by_vms_pid(t->compl_parent_pid);
+        struct vms_proc *parent = find_task_row(t->compl_parent_pid, t->compl_parent_linux_pid);
         if (parent)
             spawn_notify_deliver(parent, t->compl_efn, t->compl_astadr,
                                  t->compl_astprm, t->compl_acmode);
@@ -1464,6 +1542,7 @@ long vms_ioctl_spawn_notify(struct vms_proc *proc, unsigned long arg)
         child->compl_armed      = 1;
         child->compl_acmode     = acmode;
         child->compl_parent_pid = proc->vms_pid;
+        child->compl_parent_linux_pid = (uint32_t)proc->linux_pid;
         child->compl_efn        = args.efn;
         child->compl_astadr     = args.astadr;
         child->compl_astprm     = args.astprm;
@@ -1526,7 +1605,7 @@ long vms_ioctl_setexit(struct vms_proc *proc, unsigned long arg)
      * nothing to notify -- no fabrication, no hang.
      */
     if (proc->compl_armed) {
-        struct vms_proc *parent = find_by_vms_pid(proc->compl_parent_pid);
+        struct vms_proc *parent = find_task_row(proc->compl_parent_pid, proc->compl_parent_linux_pid);
         uint32_t c_efn    = proc->compl_efn;
         uint64_t c_astadr = proc->compl_astadr;
         uint64_t c_astprm = proc->compl_astprm;
@@ -1628,6 +1707,20 @@ long vms_ioctl_getexit(struct vms_proc *proc, unsigned long arg)
 
     args.condition  = target->exit_status;
     args.has_exited = target->has_exit_status;
+    if (!target->has_exit_status && args.select == VMS_JPI_SEL_PID) {
+        /* Another process's completion is its image's, which may be recorded
+         * on another of its task rows (rd vms-ff24). */
+        struct vms_proc *row;
+        int bkt;
+
+        exec_hash_for_each(vms_proc_hash, bkt, row, hash_node) {
+            if (row->vms_pid == target->vms_pid && row->has_exit_status) {
+                args.condition  = row->exit_status;
+                args.has_exited = 1;
+                break;
+            }
+        }
+    }
     exec_unlock(&vms_proc_hash_lock);
 
     args.success  = (uint8_t)(args.condition & VMS_STS_M_SUCCESS);

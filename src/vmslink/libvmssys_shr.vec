@@ -339,3 +339,7 @@ vms_kif_task_fork=PROCEDURE
 # released in V0.7-15
 vms_kif_acp_flock=PROCEDURE
 vms_kif_getlki_resnam=PROCEDURE
+vms_kif_getlki_holder=PROCEDURE
+vms_kif_lan_sense=PROCEDURE
+vms_kif_tt_typahd=PROCEDURE
+vms_kif_bg_setmode_udp=PROCEDURE

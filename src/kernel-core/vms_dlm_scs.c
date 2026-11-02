@@ -341,6 +341,8 @@ struct vms_dlm_scs {
 	 * what was queued, which the DLMOWED diagnostic row reports. Retiring
 	 * the table is rd vms-838f, not a silent side effect of this change. */
 	struct vms_dlm_pending pending;
+	uint32_t grant_notifies_taken;    /* a master's op-0x02 completed a  */
+					  /* request of ours (rd vms-f29f)    */
 	uint32_t deferred_grants_sent;    /* the op-0x02 really ORIGINATED    */
 	uint32_t deferred_grants_refused; /* owed, and the codec would not    */
 					   /* state it: a handle or a mode this */
@@ -3096,6 +3098,26 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 	 */
 	if (dlm_arm_serve_mixed_held(d, req, reply) == 0)
 		return 0;
+
+	/*
+	 * THE MASTER'S DEFERRED GRANT FOR A REQUEST OF OUR OWN (rd vms-f29f): a
+	 * cat-0x02 op-0x02, from ANY member. Above RULE C for the reason the
+	 * reply below is: it creates no lock state for the sender and emits
+	 * nothing at it (nobody answers an op-0x02, 0 of 387) -- the FSM matches
+	 * it to a request THIS executive minted, by that handle, and completes a
+	 * wait this node is already in. Declined here, a real VAX master's grant
+	 * of a lock it had QUEUED left the OVMX process asleep in $ENQW for ever
+	 * (lab run vms-5fa, 2026-11-02).
+	 */
+	if (req->category == (uint8_t)VMS_DLM_CAT_REQUEST &&
+	    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY) {
+		if (dlm_req_fsm_grant_notify_body(&d->req, req->from_csid,
+						  req->body, req->len) !=
+		    DLM_REQ_OK)
+			return -1;
+		d->grant_notifies_taken++;
+		return 0;
+	}
 
 	/*
 	 * ... AND THE ANSWER TO A REQUEST OF OUR OWN. A cat-0x82 reply from a

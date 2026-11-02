@@ -970,6 +970,13 @@ static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 	g.master_csid  = e->from_csid;
 	g.granted_mode = e->rsp->granted_mode;
 	g.granted_mode_present = e->rsp->granted_mode_present;
+	/* A CONVERT the master queued on a held lock is granted HERE too, by its
+	 * op-0x02 (rd vms-f29f) -- and that grant carries the resource's block. */
+	if (e->rsp->valblk_present) {
+		g.valblk_present = 1u;
+		dq_memcpy(g.valblk, e->rsp->valblk, VMS_DLM_VALBLK_WIRE_LEN);
+		g.valblk_seq = e->rsp->valblk_seq;
+	}
 
 	f->grants_duplicate++;
 	if (f->ops->grant_recv(f->ops->ctx, &g) != 0) {
@@ -1910,6 +1917,80 @@ enum dlm_req_status dlm_req_fsm_blkast_body(struct dlm_req_fsm *f,
 		return DLM_REQ_E_CODEC;
 	}
 	return dlm_req_fsm_blkast(f, b.req_lkid);
+}
+
+/*
+ * THE DEFERRED GRANT's RECEIVE HALF (rd vms-f29f): the cat-0x02 op-0x02 a
+ * master sends when a request it answered 0xfb QUEUED becomes grantable.
+ *
+ * WHAT IT FIXES, MEASURED. Lab run vms-5fa (2026-11-02, tests/lab/captures/
+ * vms-5fa-shared-volume-20261102): VAX1 answered OVMXE's $ENQW EX on
+ * EVAC$WORKLOAD 0xfb, later granted it (its SDA: "Master copy of lock 0100040F
+ * on system 00010003", granted EX) and told OVMXE so with an op-0x02 at
+ * 18:30:44.18 -- and the OVMX process slept for ever, holding an EX every later
+ * requester in the cluster queued behind. h_queued's own comment promised "the
+ * master's later grant lands on the GRANT cell"; but a real master's later
+ * grant is THIS frame (95 of 111 queued answers are followed by one, the
+ * census in vms_cluster_codec_dlm.h), not a second 82/01, and nothing in this
+ * tree read one. The arm declined it.
+ *
+ * THE LOCK IS FOUND BY A HANDLE THIS EXECUTIVE MINTED -- body[24:28], the
+ * requester's own handle, which this node put on its op-0x01 -- exactly as the
+ * BLKAST entry finds its holder. Every value handed on is one the master
+ * really sent: its handle (body[20:24]), its CSID (the connection manager's
+ * identification of the sender), the granted mode (body[30], 1..5 in 387 of
+ * 387 and refused otherwise by the codec), and the resource's value block and
+ * sequence (body[36:56]) when the frame carried one. It then lands on the SAME
+ * GRANT cell an 82/01 grant does, so the engine records it and wakes the
+ * $ENQW by the one path already proven for an immediate grant.
+ *
+ * NOTHING IS SENT. 0 of 387 real op-0x02 frames open a transaction and the
+ * corpus holds no answer to one.
+ */
+enum dlm_req_status dlm_req_fsm_grant_notify_body(struct dlm_req_fsm *f,
+						  vms_csid_t from_csid,
+						  const uint8_t *body,
+						  uint32_t len)
+{
+	struct vms_dlm_grant_notify gn;
+	struct vms_dlm_enq_response rsp;
+	struct dlm_req *r;
+	struct dq_ev e;
+
+	if (f == (struct dlm_req_fsm *)0 || body == (const uint8_t *)0)
+		return DLM_REQ_E_INVAL;
+	if (!dq_ops_ok(f))
+		return DLM_REQ_E_INVAL;
+
+	dq_bzero(&gn, (uint32_t)sizeof(gn));
+	if (vms_dlm_grant_notify_parse_body(body, len, &gn) != VMS_CODEC_OK) {
+		f->grant_notifies_unparsed++;
+		return DLM_REQ_E_CODEC;
+	}
+	f->grant_notifies_rx++;
+
+	r = dq_find(f, gn.req_lkid);
+	if (r == (struct dlm_req *)0) {
+		f->replies_unmatched++;
+		return DLM_REQ_E_NOLOCK;
+	}
+
+	dq_bzero(&rsp, (uint32_t)sizeof(rsp));
+	rsp.outcome              = VMS_DLM_ENQ_GRANTED;
+	rsp.req_lkid             = gn.req_lkid;
+	rsp.master_lkid          = gn.master_lkid;
+	rsp.granted_mode         = gn.granted_mode;
+	rsp.granted_mode_present = 1u;
+	if (gn.valblk_present) {
+		rsp.valblk_present = 1u;
+		dq_memcpy(rsp.valblk, gn.valblk, VMS_DLM_VALBLK_WIRE_LEN);
+		rsp.valblk_seq = gn.valblk_seq;
+	}
+
+	dq_bzero(&e, (uint32_t)sizeof(e));
+	e.rsp = &rsp;
+	e.from_csid = from_csid;
+	return dq_dispatch(f, r, DLM_REQ_EV_GRANT, &e);
 }
 
 uint32_t dlm_req_fsm_observe(struct dlm_req_fsm *f, const uint8_t *frame,

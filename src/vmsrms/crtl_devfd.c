@@ -79,23 +79,33 @@ struct devfd_ile3 {
     void          *buf;
     unsigned short *retlen;
 };
-extern unsigned int sys$assign(const struct devfd_dsc *devnam, unsigned short *chan,
+/* A statically linked C image (OVMX_CRTLFD_STATIC: the x86_64 test corpus)
+ * takes these WEAK: one that calls no system service of its own does not pull
+ * the whole of LIBVMS into its image for them, and has no device layer (its
+ * descriptors stay as the image's start-up found them); one that links LIBVMS
+ * (test_syssvc_crtl_devfd) has it all. DECC$SHR always imports them. */
+#if defined(OVMX_CRTLFD_STATIC)
+#define DEVFD_SVC __attribute__((__weak__))
+#else
+#define DEVFD_SVC
+#endif
+extern DEVFD_SVC unsigned int sys$assign(const struct devfd_dsc *devnam, unsigned short *chan,
                                unsigned int acmode, const struct devfd_dsc *mbxnam,
                                unsigned int flags);
-extern unsigned int sys$dassgn(unsigned short chan);
-extern unsigned int sys$crembx(int prmflg, unsigned short *chan, unsigned int maxmsg,
+extern DEVFD_SVC unsigned int sys$dassgn(unsigned short chan);
+extern DEVFD_SVC unsigned int sys$crembx(int prmflg, unsigned short *chan, unsigned int maxmsg,
                                unsigned int bufquo, unsigned int promsk,
                                unsigned int acmode, const struct devfd_dsc *lognam,
                                unsigned int flags, void *nullarg);
-extern unsigned int sys$qiow(unsigned int efn, unsigned short chan, unsigned int func,
+extern DEVFD_SVC unsigned int sys$qiow(unsigned int efn, unsigned short chan, unsigned int func,
                              void *iosb, void (*astadr)(unsigned int), unsigned int astprm,
                              void *p1, unsigned int p2, unsigned int p3,
                              uintptr_t p4, uintptr_t p5, unsigned int p6);
-extern unsigned int sys$getdviw(unsigned int efn, unsigned short chan,
+extern DEVFD_SVC unsigned int sys$getdviw(unsigned int efn, unsigned short chan,
                                 const struct devfd_dsc *devnam, void *itmlst, void *iosb,
                                 void (*astadr)(unsigned int), unsigned int astprm,
                                 unsigned int nullarg);
-extern unsigned int sys$trnlnm(const unsigned int *attr, const struct devfd_dsc *tabnam,
+extern DEVFD_SVC unsigned int sys$trnlnm(const unsigned int *attr, const struct devfd_dsc *tabnam,
                                const struct devfd_dsc *lognam, const unsigned char *acmode,
                                const struct devfd_ile3 *itmlst);
 
@@ -575,6 +585,8 @@ static long long d_ioctl(struct dfile *df, unsigned long req, void *arg)
 /* pipe(): a temporary mailbox, a channel for each end (the read end first). */
 static long long d_pipe(int *fds, long long flags)
 {
+    if (!sys$crembx || !sys$assign || !sys$getdviw)
+        return -ENOSYS;                 /* a static image without LIBVMS */
     unsigned short rc = 0, wc = 0;
     unsigned int st = sys$crembx(0, &rc, PIPE_MAXMSG, PIPE_BUFQUO, 0, 0, 0, 0, 0);
     if (!(st & 1))
@@ -855,6 +867,8 @@ static int line_is_host_pipe(int fd)
  */
 void ovmx_crtl_devfd_bind_stdio(void)
 {
+    if (!sys$assign || !sys$trnlnm || !sys$qiow || !sys$getdviw)
+        return;                         /* a static image without LIBVMS */
     static const char *const names[3] = { "SYS$INPUT", "SYS$OUTPUT", "SYS$ERROR" };
     for (int fd = 0; fd < 3; fd++) {
         char dev[256];
@@ -977,6 +991,8 @@ void ovmx_crtl_devfd_rundown(void)
  */
 int ovmx_crtl_devfd_device_known(const char *spec)
 {
+    if (!sys$trnlnm || !sys$getdviw)
+        return 1;                       /* a static image without LIBVMS: RMS decides */
     const char *col = strchr(spec, ':');
     if (!col || col == spec || (size_t)(col - spec) >= 64)
         return 1;                       /* no device field: RMS's default */

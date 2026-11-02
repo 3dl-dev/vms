@@ -1729,7 +1729,13 @@ extern void ovmx_crtl_devfd_rundown(void);         /* crtl_devfd.c */
 /* LIBVMS (src/libvms/rtl/lib_misc.c): nonzero while a system service or RTL
  * routine is doing the substrate's own work (its /dev/vms, /vms staging, host
  * pipes between a fork and its exec); those calls are the kernel's. */
+#if defined(OVMX_CRTLFD_STATIC)
+extern int ovmx_substrate_active(void) __attribute__((__weak__));  /* no LIBVMS: none */
+#define SUBSTRATE_ACTIVE() (ovmx_substrate_active && ovmx_substrate_active())
+#else
 extern int ovmx_substrate_active(void);
+#define SUBSTRATE_ACTIVE() ovmx_substrate_active()
+#endif
 
 static long long rms_hook(long long n, long long a1, long long a2, long long a3,
                           long long a4, long long a5, long long a6, int *handled)
@@ -1747,7 +1753,7 @@ static long long rms_hook(long long n, long long a1, long long a2, long long a3,
         __ovmx_crtl_exit_record();              /* SYS$EXIT: does not return */
     if (in_rms)
         return 0;                               /* RMS's own system calls */
-    if (ovmx_substrate_active())
+    if (SUBSTRATE_ACTIVE())
         return 0;                               /* the system services' own (src/libvms) */
     in_rms = 1;
     int saved = errno;

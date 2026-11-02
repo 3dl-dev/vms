@@ -66,6 +66,13 @@ static void check(int c, const char *m)
 void ovmx_crtl_fd_install(void);
 char *ovmx_crtl_getname(int fd, char *buf, ...);
 
+/* A static image takes the device layer's system services weakly
+ * (crtl_devfd.c): this one uses the layer, so it links them. */
+__attribute__((used)) static void *const devfd_services[] = {
+    (void *)sys$assign, (void *)sys$dassgn, (void *)sys$crembx,
+    (void *)sys$qiow, (void *)sys$getdviw, (void *)sys$trnlnm,
+};
+
 static const struct dsc$descriptor_s ptab =
     { 17, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"LNM$PROCESS_TABLE" };
 

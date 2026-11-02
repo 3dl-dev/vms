@@ -50,7 +50,8 @@ target_include_directories(vmslink_image PRIVATE include ${VMS_INCLUDE_DIR})
 target_compile_definitions(vmslink_image PRIVATE OVMX_LINK_IMAGE
     IMGACT_INTERP_PATH=/run/ovmx-boot/IMGACT.EXE)
 target_link_libraries(vmslink_image PRIVATE vms)
-target_link_options(vmslink_image PRIVATE ${OVMX_HOST_TOOL_LINK_OPTS})
+# Not a build-host tool: under OVMX_IMGACT it is a runtime image like DCL.EXE
+# (PT_INTERP=IMGACT.EXE, bound to LIBVMS$SHR), never run during the build.
 set_target_properties(vmslink_image PROPERTIES OUTPUT_NAME "LINK" SUFFIX ".EXE"
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin/sysexe)
 install(TARGETS vmslink_image RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
@@ -225,7 +226,7 @@ endif()
 # rd vms-3cb1: SYS$SYSTEM:LINK.EXE takes the VMS LINK command (CLI$ routines
 # against the LINK table) and produces the image the build tool's flags do; it
 # refuses what it cannot honour; and its image holds no build flag.
-if(BUILD_TESTS)
+if(BUILD_TESTS AND NOT OVMX_IMGACT)   # an IMGACT image does not run on the build host
     add_test(NAME vmslink_vms_command
         COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/test/run_link_command.sh
                 $<TARGET_FILE:vmslink_image> $<TARGET_FILE:vmslink>)

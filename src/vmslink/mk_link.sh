@@ -89,7 +89,7 @@ $CC $CFLAGS $DEFS $INCS -c -o "$WORK/ovmx_link_rms_io.o" "$HERE/ovmx_link_rms_io
 # executive LIB$GET_FOREIGN reads the command from VMS_FOREIGN_CMD, the channel
 # DCL sets for a foreign command when /dev/vms is absent. The Linux paths are
 # quoted file specs (a bare '/' would start a qualifier).
-if readelf -lW "$LINK_EXE" 2>/dev/null | grep -q 'Requesting program interpreter'; then
+if readelf -lW "$LINK_EXE" 2>/dev/null | grep 'Requesting program interpreter' | grep -q 'IMGACT'; then
     echo "mk_link: native LINK.EXE: LINK/EXECUTABLE=... {2 objects, 6 shareable images} -> $OUT"
     VMS_FOREIGN_CMD="/EXECUTABLE=\"$OUT\"/NOSYSLIB/NOSYSSHR \"$WORK/link.o\",\"$WORK/ovmx_link_rms_io.o\",\"$DECC_SHR\"/SHAREABLE,\"$VMS_SHR\"/SHAREABLE,\"$PROC_SHR\"/SHAREABLE,\"$FS_SHR\"/SHAREABLE,\"$LNM_SHR\"/SHAREABLE,\"$RMS_SHR\"/SHAREABLE" \
         "$LINK_EXE"

@@ -122,6 +122,51 @@ static void fuzz_body(body_fn fn, void *ctx, uint8_t op, const char *label)
     ct_check(1, label);
 }
 
+
+/*
+ * rd vms-d63: THE RELEASE THAT CARRIES A VALUE BLOCK, fuzzed deep. A peer's
+ * $DEQ marked 1 at body[30] now hands the master its body[36:52]; a frame of
+ * any length and content must never over-read, and the block may come back
+ * ONLY when the frame was marked and long enough to hold it -- never on an
+ * unmarked frame, whose body[36:52] is a stale buffer.
+ */
+static void fuzz_d63_deq_valblk(void)
+{
+    uint8_t scratch[224];
+    int bad = 0;
+
+    for (int i = 0; i < ITERS; i++) {
+        uint32_t n = rand_len(160);
+        struct vms_dlm_deq d;
+        int marked;
+
+        fill_random(scratch, n < sizeof scratch ? n : sizeof scratch);
+        if (n > sizeof scratch) n = sizeof scratch;
+        if (n > DLM_OP_BODY_OFF)
+            scratch[DLM_OP_BODY_OFF] = VMS_DLM_WIREOP_DEQ;
+        if (n > 30u && (rand() & 1))
+            scratch[30] = 1u;                 /* the write mark, half the time */
+        marked = n > 30u && scratch[30] == 1u;
+        uint8_t *body = exact(scratch, n);
+        memset(&d, 0x5a, sizeof d);
+        if (vms_dlm_deq_parse_body(body, n, &d) == VMS_CODEC_OK) {
+            if (marked) {
+                if (n < 52u || d.write_valblk != 1u ||
+                    memcmp(d.valblk, body + 36, 16) != 0)
+                    bad++;
+            } else {
+                static const uint8_t zero[16];
+                if (d.write_valblk != 0u || memcmp(d.valblk, zero, 16) != 0)
+                    bad++;
+            }
+        }
+        free(body);
+    }
+    ct_check(bad == 0, "deq_parse_body (rd vms-d63): 100k with the write mark planted -- "
+                       "a block only from a marked frame long enough to hold it, "
+                       "never from an unmarked one; no over-read/crash");
+}
+
 /* Per-decoder thunks (uniform (body,len,ctx) shape). */
 static int t_enq_req(const uint8_t *b, uint32_t n, void *c)
 { uint8_t op; return (int)vms_dlm_enq_request_parse_body(b, n, &op, (struct vms_dlm_enq_request *)c); }
@@ -483,5 +528,8 @@ int main(void)
     fuzz_rb_queue_cells();
     fuzz_frame();
 
+    /* Last, so the shared rand() sequence every earlier fuzz was tuned on
+     * (their REACHED floors) is not shifted. */
+    fuzz_d63_deq_valblk();
     return ct_summary("fuzz_codec_dlm");
 }

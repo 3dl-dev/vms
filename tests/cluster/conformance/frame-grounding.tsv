@@ -229,6 +229,36 @@ dlm_deq	*	108	12	const	const:0	body[36:48]: a real release's STALE BUFFER -- 254
 dlm_deq	*	120	76	const	const:0	body[48:124]: NO RESOURCE NAME, and no residue. A real release carries no name -- the codec refuses to read one, because what a real $DEQ leaves here is whatever last used the buffer (142, 47, 97 ... distinct values per byte) -- so writing one would add a field the reference does not have (rd vms-b5b0)
 dlm_deq	*	196	4	const	const:0	body[124:128]: a real release carries ffffffff (22,839 of 41,837) or zero (16,488 whole-span); this node writes the zero form, which is a measured real one. UNLIKE the request, whose body[124:128] is ffffffff in 22,458 of 22,458 -- the release's own census is what licenses the difference
 dlm_deq	*	200	4	const	const:0	body[128:132]: a real release's tail residue (174-243 distinct values per byte, all-zero in 12,563 of 41,837); this node sends none
+# ---- rd vms-d63: THE SAME RELEASE WHEN IT WRITES ITS VALUE BLOCK (type dlm_deq_vb).
+#      A real XQP releases its per-file serialization lock (F11B$s, held PW with
+#      LCK$M_VALBLK) with a $DEQ that carries the lock's 16-byte value block at
+#      body[36:52] and the cell 1 at body[30]/body[32]: 34,577 real F11B$s releases
+#      carry a block there, and of the writes whose next grant is on the wire the
+#      master stored the block on 1,472 of 1,496 marked 1 and on 12 of 323 marked 0
+#      (tools/cluster/f11b_ser_valblk_census.py (ctest cluster_host_f11b_ser_valblk_census)). Specimen: mscp-read-write.pcap frame 1481
+#      (tests/cluster/host/fixtures/dlm-deq-valblk-write.spec). Every other span is
+#      the dlm_deq rows' own, unchanged. ----
+dlm_deq_vb	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+dlm_deq_vb	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_deq_vb	*	76	4	const	const:0	body[4:8]: NO TRANSACTION. A release is a notification: 0 of 41,837 real releases carry a token here and no node has ever answered one. This node opened one on all 11 of its early releases, which minted a token on the CSB for a message nobody would answer and left it open -- the envelope-inconsistency class that produced CNXMGRERR (rd vms-194 D1)
+dlm_deq_vb	*	80	1	const	const:2	category 0x02, the request side; 41,837 of 41,837
+dlm_deq_vb	*	81	1	const	const:3	op 0x03, the release; 41,837 of 41,837
+dlm_deq_vb	*	82	2	const	const:0	body[10:12]: stale buffer in a real release (0 in 35,501 and 39,045 of 41,837); this node sends no residue (rd vms-42de)
+dlm_deq_vb	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b); 41,837 of 41,837
+dlm_deq_vb	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq), as on every DLM message. 13 distinct values across the corpus's clusters; body[15] is 0 in 41,837 of 41,837
+dlm_deq_vb	*	88	4	const	const:0	body[16:20]: stale buffer in a real release (all-zero in 23,899 of 41,837); this node sends none
+dlm_deq_vb	*	92	4	derived	state:masterlkid	body[20:24]: THE MASTER'S handle, read off the LKB this node is releasing -- what the master's own grant recorded. NEVER a placeholder: a release naming a handle the master does not know is what bugchecked VAX1 with INVLOCKID (rd vms-3ac, R1 = 370004A7), and the codec refuses lkid 0 on both sides
+dlm_deq_vb	*	96	4	derived	state:ownlkid	body[24:28]: this node's OWN handle for the lock, read off the same LKB -- the correlation the master matches the release to
+dlm_deq_vb	*	100	2	const	const:0	body[28:30]: 0 in 41,704 of 41,837 real releases at body[28] and in 41,837 of 41,837 at body[29]
+dlm_deq_vb	*	102	1	const	const:1	body[30]: THE WRITE MARK. 1 on a release that writes its value block -- the master stored the block on 1,472 of 1,496 real writes marked 1 and on 12 of 323 marked 0 (tools/cluster/f11b_ser_valblk_census.py (ctest cluster_host_f11b_ser_valblk_census)). The same cell is 0 on a release that writes nothing (the dlm_deq rows, rd vms-194)
+dlm_deq_vb	*	103	1	const	const:0	body[31]: stale buffer in a real release (0 in 33,111 of 41,837); this node sends none
+dlm_deq_vb	*	104	1	const	const:1	body[32]: the MIRROR of body[30], equal to it on every real release (the dlm_deq row's census), so 1 here too
+dlm_deq_vb	*	105	3	const	const:0	body[33:36]: 0 in 41,837 of 41,837 real releases, all three bytes
+dlm_deq_vb	*	108	8	derived	state:vblo	body[36:44]: the value block's first 8 bytes -- the F11B$s HEADER and DATA counters -- read off the LKB the executive is releasing (lock->valblk, written by vms_lock_acp_file_ser_release); on 3,748 real releases this span differs from the block the lock was granted: the writes
+dlm_deq_vb	*	116	8	derived	state:vbhi	body[44:52]: the value block's last 8 bytes, off the same LKB; zero on 34,698 of 34,744 real F11B$s blocks, and the ACP writes them zero (tools/cluster/f11b_ser_valblk_census.py (ctest cluster_host_f11b_ser_valblk_census))
+dlm_deq_vb	*	124	72	const	const:0	body[52:124]: no name and no residue, as the dlm_deq rows (a real release carries its stale buffer here; this node sends none, rd vms-42de)
+dlm_deq_vb	*	196	4	const	const:0	body[124:128]: a real release carries ffffffff (22,839 of 41,837) or zero (16,488 whole-span); this node writes the zero form, which is a measured real one. UNLIKE the request, whose body[124:128] is ffffffff in 22,458 of 22,458 -- the release's own census is what licenses the difference
+dlm_deq_vb	*	200	4	const	const:0	body[128:132]: a real release's tail residue (174-243 distinct values per byte, all-zero in 12,563 of 41,837); this node sends none
 # ---- rd vms-b67a: THE SAME REQUEST WHEN IT NAMES A PARENT (a SUB-LOCK).
 #      Only ROOT resources are in the lock directory (Davis p. 6-29) and a
 #      resource TREE HAS ONE MASTER, so a lock whose PARID names a parent goes

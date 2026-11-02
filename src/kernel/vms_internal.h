@@ -1503,6 +1503,21 @@ uint32_t vms_lock_rms_file_enq(struct vms_proc *proc,
                                uint32_t *lkid_out);
 uint32_t vms_lock_rms_file_enq_no_label(void);
 uint32_t vms_lock_rms_file_release(struct vms_proc *proc, uint32_t lkid);
+/*
+ * THE XQP'S PER-FILE SERIALIZATION LOCK (rd vms-d63): "F11B$s" + the file
+ * number, a sub-lock of an NL lock on `vresnam` (the volume's "F11B$v" +
+ * label, `vresnam_len` counted bytes) taken in the caller's process, both at
+ * (UIC group 0, KERNEL mode); the sub-lock PW with LCK$M_VALBLK, its granted
+ * value block copied to `vb_out` (16 bytes). Release both with
+ * vms_lock_acp_file_ser_release, which writes `vb` as the $DEQ of a PW holder
+ * does. See vms_lock.c and src/kernel-core/vms_f11b_ser.h.
+ */
+uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
+                               uint32_t vresnam_len, uint32_t fidnum,
+                               uint8_t *vb_out, uint32_t *par_lkid_out,
+                               uint32_t *lkid_out);
+uint32_t vms_lock_acp_file_ser_release(struct vms_proc *proc, uint32_t par_lkid,
+                                       uint32_t lkid, const uint8_t *vb);
 /* The STANDING per-volume lock a faithful MOUNT holds for the whole mount life
  * (vms-25e): an NL-mode $ENQ on the F11B$v<label> resource, held from $MOUNT to
  * $DISMOUNT as the cluster-registration presence marker (not serialization).

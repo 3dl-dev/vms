@@ -140,6 +140,8 @@
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+dlm-d63-release-writes-no-value-block
+dlm-d63-read-holder-writes-the-master-block
 dlm-f29f-deferred-grant-not-read
 dlm-f29f-deferred-grant-declined-by-the-arm
 blk-port-op-not-stamped
@@ -1181,6 +1183,32 @@ EOF
 *** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
 the shipping composer opens no transaction on it
 EOF
+                      ;;
+        esac;;
+
+    dlm-d63-release-writes-no-value-block)
+        case "$_f" in
+        facility)     echo "a \$DEQ of a lock held at PW/EX with LCK\$M_VALBLK WRITES its value block to the master (vms_lock.c dlm_proxy_fill_post write_valblk on VMS_DLM_POST_DEQ, rd vms-d63) -- how OVMX's F11B\$s release tells a VAX the file header changed";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the release of the XQP's per-file serialization lock goes out unmarked and without its block -- what OVMX did before rd vms-d63. MEASURED COST 2026-11-02 (tests/lab/captures/vms-5fa-shared-volume-r2-20261102): OVMX appended seq 11..20 to EVAC.DAT and rewrote its header, VAX1's cached header never learned of it, and VAX1 wrote its own seq 11..20 over OVMX's records -- the final file held 1169 records, every one VAX1's.";;
+        require_fail) hd_lines <<'EOF2'
+*** and its release is MARKED as writing the value block ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-read-holder-writes-the-master-block)
+        case "$_f" in
+        facility)     echo "the MASTER stores a peer's released value block only for a lock it holds for that peer at PW/EX (vms_lock.c vms_lock_dlm_xnode_deq, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "a peer's CR (or NL) lock, released with the write mark, overwrites the master's value block -- a block a read-mode holder was never entitled to set, which on an F11B\$s resource is another node's header counter rolled back or forged.";;
+        require_fail) hd_lines <<'EOF2'
+*** a CR holder's marked release writes nothing: only PW/EX may set the block ***
+EOF2
                       ;;
         esac;;
 
@@ -3894,9 +3922,19 @@ apply_edit() {
         # The release's own admission line, unique in this file.
         sed -i 's|^\tif (op == VMS_DLM_WIREOP_DEQ)$|\tif (0) /* NEGCTL dlm-release-opens-a-transaction */|' "$_file";;
 
+    dlm-d63-release-writes-no-value-block)
+        # The $DEQ arm of write_valblk; unique in vms_lock.c.
+        sed -i 's|^                       (op == VMS_DLM_POST_DEQ \&\&$|                       (op == VMS_DLM_POST_DEQ \&\& 0 \&\& /* NEGCTL dlm-d63-release-writes-no-value-block */|' "$_file";;
+
+    dlm-d63-read-holder-writes-the-master-block)
+        # The mode guard on the master's store; unique in vms_lock.c.
+        sed -i 's|^        lock->granted_mode >= LCK_K_PWMODE)$|        1) /* NEGCTL dlm-d63-read-holder-writes-the-master-block */|' "$_file";;
+
     dlm-release-carries-the-lock-mode)
         # The release builder's own measured-cell line, unique in this file.
-        sed -i 's|^\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
+        # (rd vms-d63 moved the no-write release's cell write into an else
+        # branch, one tab deeper.)
+        sed -i 's|^\t\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\t\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
 
     dlm-local-convert-grants-nobody)
         # The immediate convert branch's grant pass. Distinguished from the

@@ -307,11 +307,10 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
  *   - NO DIRECTORY HASH. A release is addressed to the MASTER, which the lock
  *     database names; a directory index is what you carry when you do not know
  *     who to ask.
- *   - NO VALUE BLOCK, and this one is a GAP rather than a shape: a release
- *     that wrote the LVB has no grounded field to carry it here (the value
- *     block is grounded at body[36:52] of an op-0x06 only, and that opcode has
- *     no builder because the four bytes ahead of the block are unpinned).
- *     Unchanged by this item, and stated rather than hidden.
+ *   - NO VALUE BLOCK unless the release WRITES one (rd vms-d63): then the
+ *     LKB's block rides at body[36:52] with the cell 1, the form a real
+ *     XQP's F11B$s release has (struct vms_dlm_deq). A release that writes
+ *     nothing carries none, as before.
  */
 static enum dlm_req_status dq_build_deq(struct dlm_req_fsm *f,
 					const struct vms_dlm_proxy_post *p)
@@ -326,6 +325,16 @@ static enum dlm_req_status dq_build_deq(struct dlm_req_fsm *f,
 	 * p->lkmode there, which is how a release of an EX lock carried a 5
 	 * that no real release has ever carried; the builder now writes the
 	 * measured cell itself, so there is nothing to plumb. */
+	/* rd vms-d63: a release that WRITES the value block (the engine says
+	 * so -- dlm_proxy_fill_post's write_valblk, read off the LKB) carries
+	 * the LKB's block, as a real XQP's release of its F11B$s lock does. */
+	if (p->write_valblk) {
+		uint32_t i;
+
+		d.write_valblk = 1u;
+		for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+			d.valblk[i] = p->valblk[i];
+	}
 
 	dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
 	if (vms_dlm_deq_build(&d, f->txframe, (uint32_t)sizeof(f->txframe),

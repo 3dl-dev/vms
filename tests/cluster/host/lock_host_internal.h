@@ -329,6 +329,14 @@ uint32_t vms_lock_rms_file_enq_no_label(void);
 uint32_t vms_lock_acp_vol_standing(struct vms_proc *proc, const char *resnam,
                                    uint32_t *lkid_out, int *remote_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
+/* THE XQP'S PER-FILE SERIALIZATION LOCK (rd vms-d63). Mirror of the
+ * src/kernel/vms_internal.h decls, where the full note lives (#928). */
+uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
+                               uint32_t vresnam_len, uint32_t fidnum,
+                               uint8_t *vb_out, uint32_t *par_lkid_out,
+                               uint32_t *lkid_out);
+uint32_t vms_lock_acp_file_ser_release(struct vms_proc *proc, uint32_t par_lkid,
+                                       uint32_t lkid, const uint8_t *vb);
 /*
  * Image rundown's lock release. In the real kernel this is called by
  * vms_access.c (image rundown) with PSL_C_USER; a host test calls it directly

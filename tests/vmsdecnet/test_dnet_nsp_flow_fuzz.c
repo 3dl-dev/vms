@@ -182,6 +182,7 @@ int main(void)
 
     /* 2. FSM: a RUN link with a receive window, hammered by a hostile peer. */
     unsigned long delivered = 0, closed_by_limit = 0, closed_by_peer = 0;
+    unsigned long closes = 0, drained_di = 0;
     for (unsigned i = 0; i < ITERS_FSM; i++) {
         uint64_t s = (BASE_SEED ^ 0xF5A1ULL) + i;
         struct dnet_link L;
@@ -225,6 +226,14 @@ int main(void)
             } else if (op < 8) {
                 room = (unsigned)(sm64(&s) % (cap + 1));
                 dnet_link_rx_room(&L, room);
+            } else if (op < 9 && sm64(&s) % 8 == 0) {
+                /* A normal close mid-flight: no DI while data is outstanding. */
+                unsigned before = L.tx_count;
+                int crc = dnet_link_close(&L, 0, &out, now);
+                CHECK((crc == DNET_LINK_QUEUED && before > 0) ||
+                      (crc == DNET_LINK_OK && before == 0 && out.type == DNET_NSP_T_DI) ||
+                      crc == DNET_LINK_ESTATE, "close is DI only when nothing is queued", i);
+                closes++;
             } else {
                 now += sm64(&s) % 4;
             }
@@ -236,8 +245,13 @@ int main(void)
                 if (ev == DNET_LINK_EV_DISCONNECT) { closed_by_limit++; break; }
                 if (!has) break;
                 uint8_t e[DNET_NSP_MAX_DATA + 64]; size_t en = 0;
-                CHECK(dnet_nsp_encode(&out, e, sizeof e, &en) == DNET_NSP_OK &&
-                      out.type != DNET_NSP_T_DI, "polled PDU encodes, never a DI", i);
+                CHECK(dnet_nsp_encode(&out, e, sizeof e, &en) == DNET_NSP_OK,
+                      "polled PDU encodes", i);
+                if (out.type == DNET_NSP_T_DI) {
+                    CHECK(L.tx_count == 0 && L.state == DNET_LINK_DI_SENT,
+                          "a polled DI comes only after the queue drained (normal close)", i);
+                    drained_di++;
+                }
                 if (++emitted > 2 * DNET_LINK_TXQ + 4) {
                     CHECK(0, "poll terminates", i);
                     break;
@@ -249,6 +263,8 @@ int main(void)
     printf("[fuzz] %d decode iters, %d FSM runs x %d steps: %lu delivered, %lu closed by"
            " the retransmit limit, %lu by a peer DI\n", ITERS_DECODE, ITERS_FSM, STEPS_FSM,
            delivered, closed_by_limit, closed_by_peer);
+    printf("[fuzz] %lu normal closes, %lu DIs after a drain\n", closes, drained_di);
+    CHECK(closes > 0 && drained_di > 0, "the close path was exercised", 0u);
     printf("test_dnet_nsp_flow_fuzz: %s\n", g_fail ? "FAILED" : "ALL CHECKS PASSED");
     return g_fail ? 1 : 0;
 }

@@ -312,6 +312,84 @@ static void test_ovmx_to_vax_replay(void)
 }
 
 /* ------------------------------------------------------------------------ */
+/* A normal close while the VAX holds us stopped: the DI waits for the tail. */
+static void test_close_drains_before_di(void)
+{
+    printf("[close] the VAX stops OVMX, OVMX closes, the VAX resumes: all data before the DI\n");
+    const uint16_t LA = 0xc961, RA = 0x204b;
+    struct dnet_link A;
+    up_initiator(&A, LA, RA);
+    struct dnet_nsp_msg out, in;
+    int has = 0;
+    enum dnet_link_event ev;
+    char rec[48];
+
+    /* Records 1..3 go out; the VAX acks 1 and stops us (its post-CC LS, then
+     * the 227.016 stop). */
+    for (unsigned r = 1; r <= 3; r++) {
+        snprintf(rec, sizeof rec, "record %04u", r);
+        dnet_link_send_data(&A, (const uint8_t *)rec, strlen(rec), &out, 10);
+    }
+    const uint8_t ack1[] = { 0x04, 0x61, 0xc9, 0x4b, 0x20, 0x01, 0x80 };
+    decode_hex(ack1, sizeof ack1, &in);
+    dnet_link_rx(&A, &in, 10, NULL, NULL, NULL);
+    const uint8_t vls1[] = { 0x10, 0x61, 0xc9, 0x4b, 0x20, 0x00, 0x80, 0x01, 0x00, 0x00, 0x00 };
+    const uint8_t vstop[] = { 0x10, 0x61, 0xc9, 0x4b, 0x20, 0x00, 0x80, 0x02, 0x00, 0x01, 0x00 };
+    decode_hex(vls1, sizeof vls1, &in);  dnet_link_rx(&A, &in, 10, &out, &has, &ev);
+    decode_hex(vstop, sizeof vstop, &in); dnet_link_rx(&A, &in, 10, &out, &has, &ev);
+    /* While stopped: records 4..6 queue, and the client closes. */
+    for (unsigned r = 4; r <= 6; r++) {
+        snprintf(rec, sizeof rec, "record %04u", r);
+        CHECK(dnet_link_send_data(&A, (const uint8_t *)rec, strlen(rec), &out, 11) ==
+              DNET_LINK_QUEUED, "records queue while stopped");
+    }
+    CHECK(dnet_link_close(&A, DNET_LINK_REASON_NORMAL, &out, 11) == DNET_LINK_QUEUED,
+          "close with data outstanding is queued -- no DI yet");
+    CHECK(dnet_link_send_data(&A, (const uint8_t *)"x", 1, &out, 11) == DNET_LINK_ESTATE,
+          "a closing link takes no more data");
+    for (dnet_tick_t t = 11; t < 60; t++) {
+        dnet_link_poll(&A, t, &out, &has, &ev);
+        CHECK(!has && dnet_link_is_up(&A), "stopped: no data and no DI goes out");
+    }
+
+    /* The VAX resumes. 2 and 3 are already on the wire; the held 4..6 go in
+     * order, the VAX acks what it has, and only after the ACK of 6 does the
+     * DI go. */
+    const uint8_t vgo[] = { 0x10, 0x61, 0xc9, 0x4b, 0x20, 0x00, 0x80, 0x03, 0x00, 0x02, 0x00 };
+    decode_hex(vgo, sizeof vgo, &in); dnet_link_rx(&A, &in, 60, &out, &has, &ev);
+    unsigned next = 4, di = 0, data_after_di = 0;
+    for (int guard = 0; guard < 100 && !di; guard++) {
+        dnet_link_poll(&A, 60, &out, &has, &ev);
+        if (!has) {
+            /* The VAX acks what it got so far. */
+            uint8_t a[] = { 0x04, 0x61, 0xc9, 0x4b, 0x20, (uint8_t)(next - 1), 0x80 };
+            decode_hex(a, sizeof a, &in);
+            dnet_link_rx(&A, &in, 60, NULL, NULL, NULL);
+            continue;
+        }
+        if (out.type == DNET_NSP_T_DI) {
+            di = 1;
+            CHECK(next == 7 && A.tx_count == 0, "the DI follows the ACK of the last record (6)");
+            CHECK(out.reason == DNET_LINK_REASON_NORMAL, "DI reason normal");
+        } else if (out.type == DNET_NSP_T_DATA) {
+            if (di) data_after_di++;
+            snprintf(rec, sizeof rec, "record %04u", next);
+            CHECK(out.segnum == next && out.datalen == strlen(rec) &&
+                  memcmp(out.data, rec, out.datalen) == 0, "the tail goes in order, byte-identical");
+            next++;
+        }
+    }
+    CHECK(di && data_after_di == 0 && dnet_link_state_of(&A) == DNET_LINK_DI_SENT,
+          "all six records arrived before the DI; the link is DI_SENT");
+
+    /* With nothing outstanding a close is immediate. */
+    struct dnet_link B;
+    up_initiator(&B, LA, RA);
+    CHECK(dnet_link_close(&B, DNET_LINK_REASON_NORMAL, &out, 5) == DNET_LINK_OK &&
+          out.type == DNET_NSP_T_DI, "an idle link closes at once");
+}
+
+/* ------------------------------------------------------------------------ */
 /* Two links, 20000 records, lossy channel, slow reader. */
 
 struct chan {
@@ -468,6 +546,7 @@ int main(void)
 {
     test_vax_to_ovmx_replay();
     test_ovmx_to_vax_replay();
+    test_close_drains_before_di();
     transfer("OVMX->VAX direction (initiator sends)", 1, 0x0a7u);
     transfer("VAX->OVMX direction (responder sends)", 0, 0x985u);
     printf("test_dnet_nsp_flow: %d passed, %d failed\n", g_pass, g_fail);

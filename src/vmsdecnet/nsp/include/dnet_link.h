@@ -257,6 +257,10 @@ struct dnet_link {
     uint8_t     ls_want;        /* FCMOD still to send once ls_out clears */
     dnet_tick_t ls_deadline;
 
+    /* Normal close waiting for the transmit queue to drain (rd vms-985). */
+    uint8_t     close_pending;
+    uint16_t    close_reason;
+
     /* Connect data (access control / session-control payload), retained so a CI
      * retransmit is byte-identical to the original. Opaque to NSP. */
     uint16_t conn_len;
@@ -375,6 +379,19 @@ int dnet_link_rx(struct dnet_link *lk, const struct dnet_nsp_msg *in,
  */
 int dnet_link_tick(struct dnet_link *lk, dnet_tick_t now,
                    struct dnet_nsp_msg *out, int *has_out);
+
+/*
+ * Close the link NORMALLY (rd vms-985): NSP sends the Disconnect Initiate only
+ * after every data segment we queued has gone out and been acknowledged --
+ * respecting the peer's flow control -- so the tail of a transfer is never
+ * lost. With nothing outstanding the DI is built into *out now (DNET_LINK_OK,
+ * link DI_SENT, as dnet_link_disconnect). Otherwise DNET_LINK_QUEUED: no more
+ * sends are taken, and dnet_link_poll emits the DI once the queue is empty
+ * (or the link dies of the retransmit limit). dnet_link_disconnect stays the
+ * immediate abort. DNET_LINK_ESTATE if not RUN, DNET_LINK_EINVAL on null.
+ */
+int dnet_link_close(struct dnet_link *lk, uint16_t reason, struct dnet_nsp_msg *out,
+                    dnet_tick_t now);
 
 /*
  * Receive-side flow control (rd vms-985). dnet_link_rx_window(lk, cap) turns it

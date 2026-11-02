@@ -5220,6 +5220,9 @@ static int netacp_pool_size(const struct dnet_executor *x, int *clamped)
  * link with Disconnect Initiate reason 1 and the client saw -RMS-F-RER). */
 #define NETACP_OUT_RXQ        32
 #define NETACP_OUT_IDLE_SECS  60
+/* How long a closing link may wait for its peer to take the queued data (the
+ * peer may hold it stopped) before NETACP aborts it. OVMX bound, labelled. */
+#define NETACP_LINGER_SECS    120
 static unsigned long g_netacp_rxq_overrun;   /* must stay 0: the window prevents it */
 
 struct netacp_slot {
@@ -5240,6 +5243,11 @@ struct netacp_slot {
     uint32_t reply_chan;                /* NETACP's channel to that mailbox    */
     uint32_t open_corr;                 /* an OPEN awaiting CC/DI (0 = none)   */
     int      remote_gone;               /* the remote disconnected / aborted   */
+    /* rd vms-985: a normal close waiting for the link's queued data to be
+     * acknowledged before its Disconnect Initiate goes (NSP). */
+    int      closing;
+    const char *closing_why;
+    dnet_tick_t closing_deadline;
     uint16_t disc_reason;
     dnet_tick_t last_req;               /* last client request (idle bound)    */
     unsigned rxq_head, rxq_count;
@@ -5319,9 +5327,12 @@ static void netacp_link_flush(struct netacp_slot *sl, int sock, unsigned ifindex
             return;
         }
         if (!has)
-            return;
+            break;
         netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
     }
+    /* A normal close whose queue has drained: its DI just went out. */
+    if (sl->used && sl->closing && !dnet_link_is_up(&sl->lk.link))
+        netacp_slot_end(sl, sock, ifindex, now, sl->closing_why);
 }
 
 /* Ship every CTERM segment the host FSM has queued, in order, over the link,
@@ -5359,6 +5370,17 @@ static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
     uint8_t buf[DNET_FRAME_MAX], fr[DNET_FRAME_MAX];
     size_t n = 0, fn = 0;
     (void)buf; (void)n;
+    if (sl->closing) {
+        /* Second pass: the queue drained and the DI went (or the linger bound
+         * ran out / the link died -- then abort what is left). */
+        sl->closing = 0;
+        if (dnet_link_is_up(&sl->lk.link) &&
+            dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn,
+                                   now) == 0)
+            netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+        sl->lk.link_active = 0;
+        goto release;
+    }
     /* CTERM: the session's last output, then foundation Unbind (02 03 00,
      * "user unbind request") -- what a VMS host sends at logout. */
     if (sl->object == DNET_CTERM_OBJECT && sl->host.active && dnet_link_is_up(&sl->lk.link)) {
@@ -5371,9 +5393,22 @@ static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
         netacp_cterm_drain(sl, sock, ifindex, now);
     }
     netacp_link_flush(sl, sock, ifindex, now);   /* what flow control lets go */
-    if (dnet_link_is_up(&sl->lk.link) &&
-        dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn, now) == 0)
-        netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+    if (!sl->used) return;
+    if (dnet_link_is_up(&sl->lk.link)) {
+        /* NSP normal close: the DI waits until every queued segment is sent
+         * and acknowledged, so the tail of a transfer is never lost. */
+        int crc = dnet_engine_link_close_normal(&sl->lk, DNET_LINK_REASON_NORMAL, fr,
+                                                sizeof fr, &fn, now);
+        if (crc == DNET_ENGINE_OK) {
+            netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
+        } else if (crc == DNET_ENGINE_QUEUED) {
+            sl->closing = 1;
+            sl->closing_why = why;
+            sl->closing_deadline = now + NETACP_LINGER_SECS;
+            return;                        /* netacp_link_flush finishes it */
+        }
+    }
+release:
     if (sl->outbound) {
         netacp_outbound_release(sl, why);
         return;
@@ -5403,6 +5438,11 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
         netacp_link_flush(sl, sock, ifindex, now);
         if (!sl->used) continue;
         live++;
+        if (sl->closing) {
+            if (now >= sl->closing_deadline || !sl->lk.link_active)
+                netacp_slot_end(sl, sock, ifindex, now, sl->closing_why);
+            continue;                      /* lingering: only its link runs */
+        }
         uint8_t buf[DNET_FAL_SEG_MAX], fr[DNET_FRAME_MAX];
         size_t fn = 0;
         if (sl->outbound) {
@@ -6216,15 +6256,18 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
         return;
 
     case DNET_BROKER_OP_CLOSE:
-        if (!sl->remote_gone)
-            netacp_link_flush(sl, sock, ifindex, now);
-        if (!sl->remote_gone && dnet_link_is_up(&sl->lk.link) &&
-            dnet_engine_link_close(&sl->lk, DNET_LINK_REASON_NORMAL, fr, sizeof fr, &fn,
-                                   now) == DNET_ENGINE_OK)
-            netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
-        sl->lk.link_active = 0;
+        /* A normal disconnect: its DI follows the link's queued data, which
+         * still goes out and is acknowledged (rd vms-985; the slot lingers
+         * with no owner until then, bounded by NETACP_LINGER_SECS). */
         netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_NORMAL, NULL, 0);
-        netacp_outbound_release(sl, "its process disconnected");
+        if (sl->remote_gone || !dnet_link_is_up(&sl->lk.link)) {
+            sl->lk.link_active = 0;
+            netacp_outbound_release(sl, "its process disconnected");
+            return;
+        }
+        sl->handle = 0;                    /* no request can name it any more */
+        netacp_slot_end(sl, sock, ifindex, now, "its process disconnected");
+        (void)fr; (void)fn;
         return;
 
     default:
@@ -6295,6 +6338,13 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         if (ev != DNET_LINK_EV_DISCONNECT && ev != DNET_LINK_EV_DISCONNECT_CONF)
             netacp_link_flush(sl, sock, ifindex, now);
         if (!sl->used) return;
+        if (sl->closing) {
+            if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF) {
+                sl->lk.link_active = 0;
+                netacp_slot_end(sl, sock, ifindex, now, sl->closing_why);
+            }
+            return;                        /* closing: nothing more is delivered */
+        }
         if (sl->outbound) {
             netacp_outbound_event(sl, sock, ifindex, ev, now);
             return;
@@ -7309,7 +7359,7 @@ static uint32_t nb_reply_full(uint32_t unit, uint32_t corr, struct dnet_broker_r
  * Disconnect Initiates NETACP sent and the data it delivered. */
 struct nb_peer {
     struct dnet_engine *e; int fd;
-    unsigned di_seen, stops_seen, delivered, bad;
+    unsigned di_seen, stops_seen, delivered, bad, delivered_at_di;
     unsigned next_expect;
     unsigned rxq, rxcap;          /* the peer's own reader (rx window), 0 = off */
 };
@@ -7322,7 +7372,10 @@ static void nb_peer_pump(struct nb_peer *p, dnet_tick_t now)
         struct dnet_nsp_msg m;
         if (dnet_engine_parse_data_frame(f, (size_t)n, NULL, NULL, &pdu, &pl) == DNET_ENGINE_OK &&
             dnet_nsp_decode(pdu, pl, &m, NULL) == DNET_NSP_OK) {
-            if (m.type == DNET_NSP_T_DI) p->di_seen++;
+            if (m.type == DNET_NSP_T_DI) {
+                if (!p->di_seen) p->delivered_at_di = p->delivered;
+                p->di_seen++;
+            }
             if (m.type == DNET_NSP_T_LS && (m.ls_flags & 3) == DNET_NSP_LS_FCMOD_STOP)
                 p->stops_seen++;
         }
@@ -7545,6 +7598,52 @@ static int run_netacp_broker_selftest(void)
         while (recv(sv[1], junk, sizeof junk, MSG_DONTWAIT) > 0) {}
         while (recv(sv[0], junk, sizeof junk, MSG_DONTWAIT) > 0) {}
         NA_CHECK(nb_used() == 0, "flow: DEACCESS freed the slot");
+
+        /* A DEACCESS while the peer holds OVMX stopped: NETACP keeps the link
+         * until the queued tail is sent and acknowledged, then the DI. */
+        dnet_engine_init(&B, 1, 11, "OVMXB", "EWA0", NULL, hwB, 0, 0, 0);
+        memset(&pr, 0, sizeof pr);
+        pr.e = &B; pr.fd = sv[1]; pr.next_expect = 1;
+        oc = nb_raw_open(pid, unit, "1.11::\"17=\"", &corr);
+        ost = 0;
+        for (int i = 0; i < 200 && !ost; i++) {
+            nb_peer_pump(&pr, monotonic_sec());
+            nb_pump();
+            ost = nb_reply_full(unit, oc, &rsp);
+        }
+        h = (ost & 1) && rsp.datalen >= 4
+            ? (uint32_t)rsp.data[0] | ((uint32_t)rsp.data[1] << 8) |
+              ((uint32_t)rsp.data[2] << 16) | ((uint32_t)rsp.data[3] << 24) : 0;
+        dnet_link_rx_window(&B.link, 4);
+        pr.rxcap = 4;
+        unsigned nx = 1;
+        for (int round = 0; round < 400 && nx <= 6; round++) {
+            char rec[48];
+            int n = snprintf(rec, sizeof rec, "record %05u", nx);
+            uint32_t sc = nb_raw_op(pid, unit, h, DNET_BROKER_OP_SEND, rec, (size_t)n, &corr);
+            if (nb_reply_full(unit, sc, &rsp) & 1) nx++;
+            nb_peer_pump(&pr, monotonic_sec());
+            nb_pump();
+        }
+        uint32_t c2 = nb_raw_op(pid, unit, h, DNET_BROKER_OP_CLOSE, NULL, 0, &corr);
+        uint32_t c2st = nb_reply_full(unit, c2, &rsp);
+        for (int round = 0; round < 50; round++) { nb_peer_pump(&pr, monotonic_sec()); nb_pump(); }
+        int lingered = (nb_used() == 1 && pr.di_seen == 0 && pr.delivered < 6 &&
+                        B.link.loc_stopped);
+        pr.rxq = 0;
+        dnet_link_rx_room(&B.link, 4);           /* the peer's reader drains, resumes */
+        for (int round = 0; round < 2000 && !pr.di_seen; round++) {
+            nb_peer_pump(&pr, monotonic_sec());
+            nb_pump();
+            if (pr.rxq >= 4) { pr.rxq = 0; dnet_link_rx_room(&B.link, 4); }
+        }
+        NA_CHECK(h != 0 && nx == 7 && (c2st & 1) && lingered && pr.di_seen == 1 &&
+                 pr.delivered_at_di == 6 && pr.bad == 0 && nb_used() == 0,
+                 "flow: DEACCESS while the peer held OVMX stopped -- the link lingered (no DI),"
+                 " and after the resume all 6 records arrived in order BEFORE the DI; slot freed");
+        g_nbrep_n = 0;
+        while (recv(sv[1], junk, sizeof junk, MSG_DONTWAIT) > 0) {}
+        while (recv(sv[0], junk, sizeof junk, MSG_DONTWAIT) > 0) {}
     }
 
     /* (2) A remote that rejects the access control: OPEN completes INVLOGIN. */

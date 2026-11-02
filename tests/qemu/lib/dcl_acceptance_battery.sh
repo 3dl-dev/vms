@@ -667,20 +667,22 @@ run_dcl_acceptance_battery() {
     # tests/lab/captures/fulldevnam-standalone-20261101/ (a VAXCLUSTER 0 node):
     # F$GETDVI("OPA0:","DEVNAM") = _OPA0:, FULLDEVNAM = _VAX1$OPA0:, NLA0:'s
     # FULLDEVNAM = _NLA0: (no DEV$M_NNM), F$DEVICE returns the full name and
-    # F$GETDVI accepts it back. The node is THIS node's SCSNODE, compared in
-    # DCL so no literal node name is assumed; a blank SCSNODE reds below.
+    # F$GETDVI accepts it back. The node is THIS node's SCSNODE, read from DCL
+    # and compared here, so no literal node name is assumed; a blank one reds.
     run_cmd 'FDN_N = F$EDIT(F$GETSYI("SCSNODE"),"TRIM")'
     run_cmd 'WRITE SYS$OUTPUT "[FDNODE:" + FDN_N + "]"'
     must_not_have "$SEG" '[FDNODE:]' "device names [vms-1f7]: the executive answers a non-blank SCSNODE to prefix with"
+    local FDNODE
+    FDNODE=$(printf '%s\n' "$SEG" | tr -d '\r' | grep -oE '^\[FDNODE:[A-Z0-9$_]+\]' | head -1 | sed 's/^\[FDNODE://; s/\]$//')
     run_cmd 'WRITE SYS$OUTPUT "[FDN:" + F$GETDVI("OPA0:","DEVNAM") + "]"'
     must_have     "$SEG" '[FDN:_OPA0:]' "F\$GETDVI DEVNAM [vms-256]: the physical name with VMS's underscore, _OPA0:"
-    run_cmd 'IF F$GETDVI("OPA0:","FULLDEVNAM") .EQS. "_" + FDN_N + "$OPA0:" THEN WRITE SYS$OUTPUT "[FDFULL:" + "OK]"'
-    must_have     "$SEG" '[FDFULL:OK]' "F\$GETDVI FULLDEVNAM [vms-1f7]: _<SCSNODE>\$OPA0:, node-prefixed by DEV\$M_NNM"
+    run_cmd 'WRITE SYS$OUTPUT "[FDFULL:" + F$GETDVI("OPA0:","FULLDEVNAM") + "]"'
+    must_have     "$SEG" "[FDFULL:_${FDNODE:-NONODE}\$OPA0:]" "F\$GETDVI FULLDEVNAM [vms-1f7]: _<SCSNODE>\$OPA0: (node '${FDNODE:-none}'), node-prefixed by DEV\$M_NNM"
     run_cmd 'WRITE SYS$OUTPUT "[FDNL:" + F$GETDVI("NLA0:","FULLDEVNAM") + "]"'
     must_have     "$SEG" '[FDNL:_NLA0:]' "F\$GETDVI FULLDEVNAM [vms-1f7]: NLA0: carries no node prefix (DEV\$M_NNM clear)"
     run_cmd 'FDN_D = F$DEVICE("OPA*")'
-    run_cmd 'IF FDN_D .EQS. "_" + FDN_N + "$OPA0:" THEN WRITE SYS$OUTPUT "[FDDEV:" + "OK]"'
-    must_have     "$SEG" '[FDDEV:OK]' "F\$DEVICE [vms-256]: returns the full name _<SCSNODE>\$OPA0:"
+    run_cmd 'WRITE SYS$OUTPUT "[FDDEV:" + FDN_D + "]"'
+    must_have     "$SEG" "[FDDEV:_${FDNODE:-NONODE}\$OPA0:]" "F\$DEVICE [vms-256]: returns the full name _<SCSNODE>\$OPA0:"
     run_cmd 'WRITE SYS$OUTPUT "[FDRT:" + F$GETDVI(FDN_D,"DEVNAM") + "]"'
     must_have     "$SEG" '[FDRT:_OPA0:]' "F\$GETDVI [vms-256]: accepts the full name F\$DEVICE returned"
     run_cmd 'WRITE SYS$OUTPUT "[FDEND:" + F$DEVICE("OPA*") + "]"'

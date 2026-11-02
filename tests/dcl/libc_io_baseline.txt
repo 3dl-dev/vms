@@ -3,18 +3,16 @@
 # with it. Each line is a libc-drop to remove (rd label libc-drop).
 dcl_backup.c 6
 dcl_builtin.c 1
-dcl_cmd_file.c 26
-dcl_cmd_io.c 1
-dcl_cmd_misc.c 24
-dcl_cmd_process.c 21
-dcl_cmd_set.c 10
+dcl_cmd_file.c 21
+dcl_cmd_misc.c 18
+dcl_cmd_process.c 14
+dcl_cmd_set.c 2
 dcl_cmd_show.c 7
 dcl_editor.c 2
 dcl_help.c 5
-dcl_io.c 4
-dcl_lexical.c 1
-dcl_library.c 10
+dcl_io.c 2
+dcl_library.c 9
 dcl_main.c 4
 dcl_mbx.c 9
 dcl_memfile.c 7
-dcl_terminal.c 9
+dcl_terminal.c 8

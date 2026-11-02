@@ -5,6 +5,7 @@
  * message formatting, and interactive input with readline support.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,7 +48,7 @@ int dcl_read_input(struct dcl_context *ctx, const char *prompt,
 
         /* If verify mode is on, echo the command */
         if (ctx->verify) {
-            printf("%s\n", buffer);
+            dcl_out_printf("%s\n", buffer);
         }
         return 0;
     }
@@ -66,8 +67,8 @@ int dcl_read_input(struct dcl_context *ctx, const char *prompt,
         return 0;
 #else
         if (prompt) {
-            fputs(prompt, stdout);
-            fflush(stdout);
+            dcl_out_fputs(prompt);
+            dcl_out_flush();
         }
         if (!fgets(buffer, (int)bufsize, stdin)) return -1;
         size_t len = strlen(buffer);
@@ -94,7 +95,7 @@ void dcl_write_output(struct dcl_context *ctx, const char *text)
 {
     (void)ctx;
     if (text) {
-        fputs(text, stdout);
+        dcl_out_fputs(text);
     }
 }
 
@@ -105,7 +106,7 @@ void dcl_write_error(struct dcl_context *ctx, const char *text)
 {
     (void)ctx;
     if (text) {
-        fputs(text, stderr);
+        dcl_err_fputs(text);
     }
 }
 
@@ -141,7 +142,7 @@ void dcl_error(const char *facility, int severity, const char *ident,
 
     char msg[1280];
     dcl_format_error(facility, severity, ident, text, msg, sizeof(msg));
-    fprintf(stderr, "%s\n", msg);
+    dcl_err_printf("%s\n", msg);
 }
 
 /*
@@ -160,7 +161,7 @@ void dcl_error_cont(const char *facility, int severity, const char *ident,
     char msg[1280];
     dcl_format_error(facility, severity, ident, text, msg, sizeof(msg));
     msg[0] = '-';
-    fprintf(stderr, "%s\n", msg);
+    dcl_err_printf("%s\n", msg);
 }
 
 /*

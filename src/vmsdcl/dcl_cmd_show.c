@@ -4,6 +4,7 @@
  * All cmd_show_* functions and the SHOW dispatcher.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,7 +191,7 @@ static int cmd_show_acl(struct dcl_command *cmd)
             struct tm tm;
             clock_gettime(CLOCK_REALTIME, &ts);
             localtime_r(&ts.tv_sec, &tm);
-            printf("Object type: FILE,  Object name: %s,  on %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+            dcl_out_printf("Object type: FILE,  Object name: %s,  on %2d-%s-%04d %02d:%02d:%02d.%02d\n",
                    match, tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
                    tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
         }
@@ -230,7 +231,7 @@ static int cmd_show_time(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    printf("  %2d-%s-%04d %02d:%02d:%02d\n",
+    dcl_out_printf("  %2d-%s-%04d %02d:%02d:%02d\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec);
 
@@ -245,7 +246,7 @@ static int cmd_show_default(struct dcl_command *cmd)
     (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
 
-    printf("  %s\n", ctx->default_dir);
+    dcl_out_printf("  %s\n", ctx->default_dir);
     {
         /* the default need not exist (SET DEFAULT does not check); SHOW
          * DEFAULT says when it does not (VAX V7.3 probe Q.SETDEF:
@@ -360,19 +361,19 @@ static void print_lnm_search_list(const char *name, const char *table_label,
      * degrade to the bare shape rather than fabricate an access mode for a
      * value that names no actual logical-name-table entry. */
     if (!full || acmode == LNM_ACMODE_UNKNOWN) {
-        printf("   \"%s\" = \"%s\" (%s)\n", name, values[0], table_label);
+        dcl_out_printf("   \"%s\" = \"%s\" (%s)\n", name, values[0], table_label);
     } else {
         char attrs[64];
         lnm_attr_list(attributes, attrs, sizeof(attrs));
         if (attrs[0])
-            printf("   \"%s\" [%s] = \"%s\" [%s] (%s)\n", name,
+            dcl_out_printf("   \"%s\" [%s] = \"%s\" [%s] (%s)\n", name,
                    lnm_acmode_label(acmode), values[0], attrs, table_label);
         else
-            printf("   \"%s\" [%s] = \"%s\" (%s)\n", name,
+            dcl_out_printf("   \"%s\" [%s] = \"%s\" (%s)\n", name,
                    lnm_acmode_label(acmode), values[0], table_label);
     }
     for (uint8_t i = 1; i < n; i++)
-        printf("        = \"%s\"\n", values[i]);
+        dcl_out_printf("        = \"%s\"\n", values[i]);
 }
 
 static int show_lnm_callback(const char *name, const lnm_entry_t *entry, void *ctx)
@@ -527,13 +528,13 @@ static int cmd_show_logical(struct dcl_command *cmd)
                                   acmode, attrs);
             return SS$_NORMAL;
         }
-        printf("\n(%s)\n", label);
+        dcl_out_printf("\n(%s)\n", label);
         sctx.table_name = label;
         sctx.full = full;
         sctx.count = 0;
         lnm_enumerate(mgr, tab, show_lnm_callback, &sctx);
         if (sctx.count == 0)
-            printf("%%SHOW-S-NOTRAN, no translation for logical name *\n");
+            dcl_out_printf("%%SHOW-S-NOTRAN, no translation for logical name *\n");
         return SS$_NORMAL;
     }
 
@@ -641,8 +642,8 @@ static int cmd_show_logical(struct dcl_command *cmd)
 
             for (int t = 0; t < 4; t++) {
                 if (!want[t]) continue;
-                if (shown) printf("\n");
-                printf("(%s)\n\n", tlabels[t]);
+                if (shown) dcl_out_printf("\n");
+                dcl_out_printf("(%s)\n\n", tlabels[t]);
                 sctx.table_name = tnames[t];
                 sctx.full = full;
                 sctx.count = 0;
@@ -651,8 +652,8 @@ static int cmd_show_logical(struct dcl_command *cmd)
             }
         } else {
             /* LNM not available — show nothing (graceful degrade) */
-            printf("(LNM$PROCESS_TABLE)\n\n");
-            printf("   %%DCL-W-NOLOGNAM, logical name manager not available\n");
+            dcl_out_printf("(LNM$PROCESS_TABLE)\n\n");
+            dcl_out_printf("   %%DCL-W-NOLOGNAM, logical name manager not available\n");
         }
     }
 
@@ -762,7 +763,7 @@ static int cmd_show_system(struct dcl_command *cmd)
     char sysname[OVMX_IDENTITY_MAXLEN];
     ovmx_node_name(sysname, sizeof(sysname));
 
-    printf("%s  on node %s  %2d-%s-%04d %02d:%02d:%02d.%02d"
+    dcl_out_printf("%s  on node %s  %2d-%s-%04d %02d:%02d:%02d.%02d"
            "  Uptime  %s\n",
            ovmx_product_banner(), sysname, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
@@ -833,7 +834,7 @@ static int cmd_show_system(struct dcl_command *cmd)
      * to widen this header further is to make the executive hold the
      * quantity faithfully, and then read it.
      */
-    printf("  Pid    Process Name          CPU         Page flts   Pages\n");
+    dcl_out_printf("  Pid    Process Name          CPU         Page flts   Pages\n");
 
     /*
      * ENUMERATE THE EXECUTIVE'S PROCESS TABLE (vms-8019).
@@ -946,7 +947,7 @@ static int cmd_show_system(struct dcl_command *cmd)
          * column right of VMS and put the CPU figure two columns further
          * out again.
          */
-        printf("%08X %-15s %s %s %s\n",
+        dcl_out_printf("%08X %-15s %s %s %s\n",
                info.vms_pid,
                info.prcnam[0] ? info.prcnam : "",
                cpu_str, pf_str, pg_str);
@@ -1111,9 +1112,9 @@ static void show_process_devices(uint32_t tgt_pid)
         info.fulldevnam[VMS_FULLDEVNAM_SIZE - 1] = '\0';
         const char *nm = info.fulldevnam[0] ? info.fulldevnam : info.devnam;
         if (shown == 0)
-            printf("\n%-20s%s\n", "Devices allocated:", nm);
+            dcl_out_printf("\n%-20s%s\n", "Devices allocated:", nm);
         else
-            printf("%-20s%s\n", "", nm);
+            dcl_out_printf("%-20s%s\n", "", nm);
         shown++;
     }
 }
@@ -1205,7 +1206,7 @@ static int cmd_show_process(struct dcl_command *cmd)
              * cannot be reported as NONEXPR: "ZZZZ" is not a process
              * that does not exist, it is not a process ID.
              */
-            printf("%%SHOW-E-INVQUAVAL, value '%s' invalid for "
+            dcl_out_printf("%%SHOW-E-INVQUAVAL, value '%s' invalid for "
                    "/IDENTIFICATION qualifier\n", idval);
             return SHOW$_INVQUAVAL;
         }
@@ -1303,7 +1304,7 @@ static int cmd_show_process(struct dcl_command *cmd)
          */
         char msg[160];
         vms_status_string(st, msg, sizeof(msg));
-        printf("%s\n", msg);
+        dcl_out_printf("%s\n", msg);
         return (int)st;
     }
 
@@ -1342,15 +1343,15 @@ static int cmd_show_process(struct dcl_command *cmd)
      * two-column arrangement carrying Node: and Process name:. A blank
      * line precedes the pair and another follows it.
      */
-    printf("\n");
-    printf("%2d-%s-%04d %02d:%02d:%02d.%02d   User: %-17sProcess ID:   %08X\n",
+    dcl_out_printf("\n");
+    dcl_out_printf("%2d-%s-%04d %02d:%02d:%02d.%02d   User: %-17sProcess ID:   %08X\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000),
            tgt_user, tgt_pid);
-    printf("                          Node: %-17sProcess name: \"%s\"\n",
+    dcl_out_printf("                          Node: %-17sProcess name: \"%s\"\n",
            node, tgt_prcnam);
-    printf("\n");
+    dcl_out_printf("\n");
 
     /* Body labels sit in a 20-column field -- values start at column 20. */
     char uicbuf[RIGHTSLIST_NAME_MAX + 2];
@@ -1397,11 +1398,11 @@ static int cmd_show_process(struct dcl_command *cmd)
             (void)vms_kif_terminal_getrpi(tdev, rpi, sizeof(rpi));
         }
         if (rpi[0])
-            printf("%-20s%s  (%s)\n", "Terminal:", tdev, rpi);
+            dcl_out_printf("%-20s%s  (%s)\n", "Terminal:", tdev, rpi);
         else
-            printf("%-20s%s\n", "Terminal:", tdev);
+            dcl_out_printf("%-20s%s\n", "Terminal:", tdev);
     }
-    printf("%-20s%s\n", "User Identifier:", uicbuf);
+    dcl_out_printf("%-20s%s\n", "User Identifier:", uicbuf);
 
     /*
      * Base priority: (rd vms-1f7), the base priority the EXECUTIVE holds for
@@ -1413,7 +1414,7 @@ static int cmd_show_process(struct dcl_command *cmd)
     {
         uint32_t prib = 0;
         if (vms_kif_pri(VMS_PRI_OP_GET, tgt_pid, &prib, NULL, NULL) & 1)
-            printf("%-20s%u\n", "Base priority:", (unsigned)prib);
+            dcl_out_printf("%-20s%u\n", "Base priority:", (unsigned)prib);
     }
 
     /*
@@ -1424,7 +1425,7 @@ static int cmd_show_process(struct dcl_command *cmd)
      * default directory is RMS state private to that process and the
      * executive row does not carry it.
      */
-    printf("%-20s%s\n", "Default file spec:",
+    dcl_out_printf("%-20s%s\n", "Default file spec:",
            is_self ? ctx->default_dir : "Not available");
 
     show_process_devices(tgt_pid);
@@ -1473,7 +1474,7 @@ static int cmd_show_process(struct dcl_command *cmd)
      * plain display above is the whole honest answer.
      */
     if (dcl_has_qualifier(cmd, "ALL") && is_self) {
-        printf("\n");
+        dcl_out_printf("\n");
         cmd_show_process_privileges(ctx);
     }
 
@@ -1663,7 +1664,7 @@ static int cmd_show_users(struct dcl_command *cmd)
      * Processes"; SHOW SYSTEM already badges via ovmx_product_banner() for
      * exactly this reason -- SHOW USERS was the one human header the
      * rebrand missed. Printed only after the executive answered above. */
-    printf("      %s User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    dcl_out_printf("      %s User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
            OVMX_PRODUCT_NAME,
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
@@ -1719,7 +1720,7 @@ static int cmd_show_users(struct dcl_command *cmd)
          * parenthetical -- VMS prints only this line. A readable-but-empty table
          * (SS$_NONEXPR) prints the honest "= 0" here; a scan that could not
          * reach the executive prints no count at all. */
-        printf("    Total number of users = %d,  number of processes = %d\n\n",
+        dcl_out_printf("    Total number of users = %d,  number of processes = %d\n\n",
                seen_count, process_count);
     }
 
@@ -1739,7 +1740,7 @@ static int cmd_show_users(struct dcl_command *cmd)
          * (cols 2-12), node %-6s (13-18), process-name %-14s (19-32), PID
          * %08X (33-40), two spaces, terminal. The header is a hand-spaced
          * literal, distinct from the data field widths, exactly as VMS emits. */
-        printf(" Username  Node   Process Name    PID     Terminal\n");
+        dcl_out_printf(" Username  Node   Process Name    PID     Terminal\n");
 
         index = 0;
         while (vms_kif_procscan(&index, &info) & 1) {
@@ -1753,7 +1754,7 @@ static int cmd_show_users(struct dcl_command *cmd)
                 upper_name[i] = (char)toupper((unsigned char)info.username[i]);
             upper_name[i] = '\0';
 
-            printf(" %-11s%-6s%-14s%08X  %s\n",
+            dcl_out_printf(" %-11s%-6s%-14s%08X  %s\n",
                    upper_name, node, info.prcnam, (unsigned)info.vms_pid,
                    info.terminal);
         }
@@ -1768,7 +1769,7 @@ static int cmd_show_users(struct dcl_command *cmd)
          * counts right-justified with the Interactive value's right edge on
          * col 29 -- %11s (19-29), %12s (30-41), %8s (42-49). A zero column
          * renders blank (VMS blank-zero), never a literal "0". */
-        printf(" Username  Node     Interactive  Subprocess   Batch\n");
+        dcl_out_printf(" Username  Node     Interactive  Subprocess   Batch\n");
 
         for (int i = 0; i < seen_count; i++) {
             char upper_name[VMS_USERNAME_SIZE];
@@ -1791,7 +1792,7 @@ static int cmd_show_users(struct dcl_command *cmd)
             if (seen_batch[i])
                 snprintf(bcol, sizeof(bcol), "%d", seen_batch[i]);
 
-            printf(" %-11s%-6s%11s%12s%8s\n",
+            dcl_out_printf(" %-11s%-6s%11s%12s%8s\n",
                    upper_name, node, icol, scol, bcol);
         }
     }
@@ -1804,7 +1805,7 @@ static int show_local_sym_cb(const char *name, const char *value,
                               int scope, void *ctx)
 {
     (void)scope; (void)ctx;
-    printf("  %s = \"%s\"\n", name, value);
+    dcl_out_printf("  %s = \"%s\"\n", name, value);
     return 0;
 }
 
@@ -1812,7 +1813,7 @@ static int show_global_sym_cb(const char *name, const char *value,
                                int scope, void *ctx)
 {
     (void)scope; (void)ctx;
-    printf("  %s == \"%s\"\n", name, value);
+    dcl_out_printf("  %s == \"%s\"\n", name, value);
     return 0;
 }
 
@@ -1837,9 +1838,9 @@ static int show_wild_sym_cb(const char *name, const char *value,
     if (fnmatch(wc->pattern, name, FNM_CASEFOLD) != 0)
         return 0;
     if (scope == DCL_SYM_GLOBAL)
-        printf("  %s == \"%s\"\n", name, value);
+        dcl_out_printf("  %s == \"%s\"\n", name, value);
     else
-        printf("  %s = \"%s\"\n", name, value);
+        dcl_out_printf("  %s = \"%s\"\n", name, value);
     wc->count++;
     return 0;
 }
@@ -1982,10 +1983,10 @@ static int cmd_show_symbol(struct dcl_command *cmd)
                  * yields -2147483648), so all three columns now agree.
                  */
                 unsigned long lw = (unsigned long)v & 0xFFFFFFFFUL;
-                printf("  %s %s %ld   Hex = %08lX  Octal = %011lo\n",
+                dcl_out_printf("  %s %s %ld   Hex = %08lX  Octal = %011lo\n",
                        upper_name, eq, v, lw, lw);
             } else {
-                printf("  %s %s \"%s\"\n", upper_name, eq, value);
+                dcl_out_printf("  %s %s \"%s\"\n", upper_name, eq, value);
             }
         } else {
             /* an undefined symbol, named exactly: %DCL-W-UNDSYM, CLI status
@@ -2028,7 +2029,7 @@ static int cmd_show_protection(struct dcl_command *cmd)
     uint16_t dfprot = 0;
     (void)sys$setdfprot(NULL, &dfprot);     /* the executive's process default */
     vmsfs_format_protection(dfprot, prot_buf, sizeof(prot_buf));
-    printf("  SYSTEM default protection: %s\n", prot_buf);
+    dcl_out_printf("  SYSTEM default protection: %s\n", prot_buf);
     return SS$_NORMAL;
 }
 
@@ -2062,10 +2063,10 @@ static int cmd_show_protection(struct dcl_command *cmd)
 static void show_device_row(const struct vms_devinfo *info, int *rows)
 {
     if (*rows == 0) {
-        printf("Device                  Device           Error\n");
-        printf(" Name                   Status           Count\n");
+        dcl_out_printf("Device                  Device           Error\n");
+        dcl_out_printf(" Name                   Status           Count\n");
     }
-    printf("%-24s%-12s%10u\n", info->devnam,
+    dcl_out_printf("%-24s%-12s%10u\n", info->devnam,
            info->allocated ? "Online alloc" : "Online", info->errcnt);
     (*rows)++;
 }
@@ -2105,9 +2106,9 @@ static void show_device_disk_row(const struct vms_devinfo *info,
     const char *status, *label;
 
     if (*rows == 0) {
-        printf(DISK_ROW_FMT, "Device", "Device", "Error",
+        dcl_out_printf(DISK_ROW_FMT, "Device", "Device", "Error",
                "Volume", "Free", "Trans", "Mnt");
-        printf(DISK_ROW_FMT, " Name", " Status", "Count",
+        dcl_out_printf(DISK_ROW_FMT, " Name", " Status", "Count",
                "  Label", "Blocks", "Count", "Cnt");
     }
 
@@ -2132,7 +2133,7 @@ static void show_device_disk_row(const struct vms_devinfo *info,
         freebuf[0] = transbuf[0] = mntbuf[0] = '\0';
     }
 
-    printf(DISK_ROW_FMT, info->devnam, status, errbuf, label,
+    dcl_out_printf(DISK_ROW_FMT, info->devnam, status, errbuf, label,
            freebuf, transbuf, mntbuf);
     (*rows)++;
 }
@@ -2150,21 +2151,21 @@ static void show_device_disk_row(const struct vms_devinfo *info,
 static void show_device_disk_full(const struct vms_devinfo *info,
                                   const struct vms_getvol_args *vol)
 {
-    printf("\nDisk %s, is online%s.\n\n", info->devnam,
+    dcl_out_printf("\nDisk %s, is online%s.\n\n", info->devnam,
            (vol && vol->mounted) ? ", mounted" : "");
 
-    printf("    Error count            %10u    Operations completed   %10llu\n",
+    dcl_out_printf("    Error count            %10u    Operations completed   %10llu\n",
            info->errcnt, (unsigned long long)info->opcnt);
 
     if (vol && vol->mounted) {
-        printf("    Volume label           %-10s    Cluster size           %10u\n",
+        dcl_out_printf("    Volume label           %-10s    Cluster size           %10u\n",
                vol->volnam, vol->cluster);
         if (vol->free_valid)
-            printf("    Free blocks            %10u    Maximum blocks         %10u\n",
+            dcl_out_printf("    Free blocks            %10u    Maximum blocks         %10u\n",
                    vol->freeblocks, vol->volsize);
         else
-            printf("    Maximum blocks         %10u\n", vol->volsize);
-        printf("    Transaction count      %10u\n", vol->transcnt);
+            dcl_out_printf("    Maximum blocks         %10u\n", vol->volsize);
+        dcl_out_printf("    Transaction count      %10u\n", vol->transcnt);
     }
 }
 
@@ -2226,13 +2227,13 @@ static void show_device_terminal_full(const struct vms_devinfo *info)
     const char *tname = terminal_type_name(info->devtype, 1);
 
     if (tname)
-        printf("\nTerminal %s, device type %s, is online, record-oriented device.\n\n",
+        dcl_out_printf("\nTerminal %s, device type %s, is online, record-oriented device.\n\n",
                info->devnam, tname);
     else
-        printf("\nTerminal %s, is online, record-oriented device.\n\n",
+        dcl_out_printf("\nTerminal %s, is online, record-oriented device.\n\n",
                info->devnam);
 
-    printf("    Error count            %10u    Operations completed   %10llu\n",
+    dcl_out_printf("    Error count            %10u    Operations completed   %10llu\n",
            info->errcnt, (unsigned long long)info->opcnt);
 
     if (info->owner_pid != 0) {
@@ -2243,12 +2244,12 @@ static void show_device_terminal_full(const struct vms_devinfo *info)
 
         terminal_owner_name(info->owner_pid, owner, sizeof(owner));
         snprintf(qowner, sizeof(qowner), "\"%s\"", owner);
-        printf("    Owner process       %12s    Owner UIC              [%03o,%03o]\n",
+        dcl_out_printf("    Owner process       %12s    Owner UIC              [%03o,%03o]\n",
                qowner, g, m);
-        printf("    Owner process ID      %08X\n", info->owner_pid);
+        dcl_out_printf("    Owner process ID      %08X\n", info->owner_pid);
     }
 
-    printf("    Reference count        %10u\n", info->refcnt);
+    dcl_out_printf("    Reference count        %10u\n", info->refcnt);
 }
 
 /*
@@ -2685,7 +2686,7 @@ static int cmd_show_memory(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    printf("\n              System Memory Resources on %2d-%s-%04d"
+    dcl_out_printf("\n              System Memory Resources on %2d-%s-%04d"
            " %02d:%02d:%02d.%02d\n\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
@@ -2729,10 +2730,10 @@ static int cmd_show_memory(struct dcl_command *cmd)
              * fabricated 0. A blank cell is distinct from the Linux path's real
              * measured 0 (Dirty=0): it says "no value", not "measured zero"
              * (INV-6). Total/Free/In Use are the real executive uvm figures. */
-            printf("%-30s%10s%12s%12s%12s\n",
+            dcl_out_printf("%-30s%10s%12s%12s%12s\n",
                    "Physical Memory Usage (pages):",
                    "Total", "Free", "In Use", "Modified");
-            printf("%-28s%12ld%12ld%12ld%12s\n",
+            dcl_out_printf("%-28s%12ld%12ld%12ld%12s\n",
                    label, total_pages, free_pages, inuse_pages, "");
         }
         /* else: no real executive source -> section honestly omitted. */
@@ -2762,10 +2763,10 @@ static int cmd_show_memory(struct dcl_command *cmd)
          * field to 12 (28+12=40) -- so both rows land Total's right edge on
          * col 40 despite the "Physical Memory Usage (pages):" header being two
          * columns longer than the "  Main Memory (...)" data label. */
-        printf("%-30s%10s%12s%12s%12s\n",
+        dcl_out_printf("%-30s%10s%12s%12s%12s\n",
                "Physical Memory Usage (pages):",
                "Total", "Free", "In Use", "Modified");
-        printf("%-28s%12ld%12ld%12ld%12ld\n",
+        dcl_out_printf("%-28s%12ld%12ld%12ld%12ld\n",
                label, total_pages, free_pages, inuse_pages, modified_pages);
 #endif
     }
@@ -2789,14 +2790,14 @@ static int cmd_show_memory(struct dcl_command *cmd)
                         long used_pages  = used_kb  * 2L;
                         long free_pages  = total_pages - used_pages;
                         if (!header_shown) {
-                            printf("\n%-40s%12s%12s%12s\n",
+                            dcl_out_printf("\n%-40s%12s%12s%12s\n",
                                    "Paging File Usage (pages):",
                                    "Free", "Reservable", "Total");
                             header_shown = 1;
                         }
                         /* Reservable == Free: OVMX does not yet track page-file
                          * reservations, so every free block is reservable. */
-                        printf("  %-38s%12ld%12ld%12ld\n",
+                        dcl_out_printf("  %-38s%12ld%12ld%12ld\n",
                                fname, free_pages, free_pages, total_pages);
                     }
                 }
@@ -2868,12 +2869,12 @@ static int cmd_show_status(struct dcl_command *cmd)
     if (info.fields_valid & VMS_PI_V_CPUTIM) {
         char cpu_str[24];
         format_cputim_field(info.cputim, cpu_str, sizeof(cpu_str));
-        printf("  Status on %2d-%s-%04d %02d:%02d:%02d.%02d   Elapsed CPU : %s\n",
+        dcl_out_printf("  Status on %2d-%s-%04d %02d:%02d:%02d.%02d   Elapsed CPU : %s\n",
                tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
                tm.tm_hour, tm.tm_min, tm.tm_sec,
                (int)(ts.tv_nsec / 10000000), cpu_str);
     } else {
-        printf("  Status on %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+        dcl_out_printf("  Status on %2d-%s-%04d %02d:%02d:%02d.%02d\n",
                tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
                tm.tm_hour, tm.tm_min, tm.tm_sec,
                (int)(ts.tv_nsec / 10000000));
@@ -2889,13 +2890,13 @@ static int cmd_show_status(struct dcl_command *cmd)
      * faithful source for them either. */
     if ((info.fields_valid & (VMS_PI_V_PAGES | VMS_PI_V_PAGEFLTS)) ==
         (VMS_PI_V_PAGES | VMS_PI_V_PAGEFLTS)) {
-        printf("  Phys. Mem. : %10u    Page Faults : %10u\n",
+        dcl_out_printf("  Phys. Mem. : %10u    Page Faults : %10u\n",
                info.pages, info.pageflts);
     } else {
         if (info.fields_valid & VMS_PI_V_PAGES)
-            printf("  Phys. Mem. : %10u\n", info.pages);
+            dcl_out_printf("  Phys. Mem. : %10u\n", info.pages);
         if (info.fields_valid & VMS_PI_V_PAGEFLTS)
-            printf("  Page Faults : %10u\n", info.pageflts);
+            dcl_out_printf("  Page Faults : %10u\n", info.pageflts);
     }
 
     return SS$_NORMAL;
@@ -3110,7 +3111,7 @@ static void show_terminal_render(const struct vms_devinfo *info)
      * padding IS the separator here; there is no literal space after
      * either field.
      */
-    printf("Terminal: %-12sDevice_Type: %-14sOwner: %s\n",
+    dcl_out_printf("Terminal: %-12sDevice_Type: %-14sOwner: %s\n",
            phys,
            /* A type the oracle has not shown us gets NO spelling rather
             * than a plausible one. */
@@ -3123,9 +3124,9 @@ static void show_terminal_render(const struct vms_devinfo *info)
     {
         char rpi[64] = "";
         if ((vms_kif_terminal_getrpi(info->devnam, rpi, sizeof(rpi)) & 1) && rpi[0])
-            printf("Remote Port Info: %s\n", rpi);
+            dcl_out_printf("Remote Port Info: %s\n", rpi);
     }
-    printf("\n");
+    dcl_out_printf("\n");
 
     /*
      * WIDTH AND PAGE ARE NOT PRINTED (vms-d0b), CORRECTING THE SAME
@@ -3152,22 +3153,22 @@ static void show_terminal_render(const struct vms_devinfo *info)
      * belongs when the display cannot show it honestly.
      */
 
-    printf("Terminal Characteristics:\n");
+    dcl_out_printf("Terminal Characteristics:\n");
     for (i = 0; i < ncells; i++) {
         const char *name = (info->devchar & terminal_chars[i].bit)
                            ? terminal_chars[i].set
                            : terminal_chars[i].clear;
 
         if (col == 0)
-            printf("   ");
+            dcl_out_printf("   ");
         if (col == 3 || i + 1 == ncells) {
             /* The last cell of a row is unpadded: the oracle's rows
              * carry no trailing whitespace (section 2, read byte for
              * byte with cat -A). */
-            printf("%s\n", name ? name : "");
+            dcl_out_printf("%s\n", name ? name : "");
             col = 0;
         } else {
-            printf("%-19s", name ? name : "");
+            dcl_out_printf("%-19s", name ? name : "");
             col++;
         }
     }
@@ -3265,7 +3266,7 @@ static int cmd_show_process_privileges(struct dcl_context *ctx)
      * The separator between blocks is a line containing a single space,
      * which is what the capture shows -- not an empty line.
      */
-    printf("Authorized privileges:\n");
+    dcl_out_printf("Authorized privileges:\n");
     {
         int col = 0;
         char line[128];
@@ -3300,7 +3301,7 @@ static int cmd_show_process_privileges(struct dcl_context *ctx)
             if (n < 0 || (size_t)n >= sizeof(line) - len) {
                 while (len > 1 && line[len - 1] == ' ')
                     line[--len] = '\0';
-                printf("%s\n", line);
+                dcl_out_printf("%s\n", line);
                 col = 0; len = 1; line[1] = '\0';
                 break;
             }
@@ -3309,18 +3310,18 @@ static int cmd_show_process_privileges(struct dcl_context *ctx)
                 /* Trim the padding of the final cell before printing. */
                 while (len > 1 && line[len - 1] == ' ')
                     line[--len] = '\0';
-                printf("%s\n", line);
+                dcl_out_printf("%s\n", line);
                 col = 0; len = 1; line[1] = '\0';
             }
         }
         if (col > 0) {
             while (len > 1 && line[len - 1] == ' ')
                 line[--len] = '\0';
-            printf("%s\n", line);
+            dcl_out_printf("%s\n", line);
         }
     }
 
-    printf(" \n");
+    dcl_out_printf(" \n");
 
     /*
      * The one-privilege-per-line block. " %-20s %s" is the oracle's
@@ -3333,10 +3334,10 @@ static int cmd_show_process_privileges(struct dcl_context *ctx)
      * prints the heading and nothing under it. A message VMS does not
      * emit is an invention however helpful it reads (Rule 10).
      */
-    printf("Process privileges:\n");
+    dcl_out_printf("Process privileges:\n");
     for (int i = 0; vms_priv_names[i].name; i++) {
         if (shown_current & vms_priv_names[i].bit)
-            printf(" %-20s %s\n", vms_priv_names[i].name,
+            dcl_out_printf(" %-20s %s\n", vms_priv_names[i].name,
                    vms_priv_names[i].desc);
     }
 
@@ -3401,29 +3402,29 @@ static int cmd_show_process_quotas(struct dcl_context *ctx)
     if (!(jst & 1))
         return (int)jst;
 
-    printf("Process Quotas:\n");
-    printf(" Account name: %s\n", info.username);
+    dcl_out_printf("Process Quotas:\n");
+    dcl_out_printf(" Account name: %s\n", info.username);
 
     /* Quota lines: printed only when the executive sourced the JIB quota
      * block. VMS_PI_V_QUOTA is clear today (no quota facility) so nothing
      * below prints -- honest omission, not a fabricated constant. */
     if (info.fields_valid & VMS_PI_V_QUOTA) {
-        printf(" Direct I/O limit:             %8u"
+        dcl_out_printf(" Direct I/O limit:             %8u"
                "  Buffered I/O limit:      %8u\n",
                info.quota.diolm, info.quota.biolm);
-        printf(" Buffered I/O byte count quota:%8u"
+        dcl_out_printf(" Buffered I/O byte count quota:%8u"
                "  Open file quota:         %8u\n",
                info.quota.bytlm, info.quota.fillm);
-        printf(" Timer queue entry quota:      %8u"
+        dcl_out_printf(" Timer queue entry quota:      %8u"
                "  Subprocess quota:        %8u\n",
                info.quota.tqelm, info.quota.prclm);
-        printf(" Paging file quota:            %8u"
+        dcl_out_printf(" Paging file quota:            %8u"
                "  AST quota:               %8u\n",
                info.quota.pgflquota, info.quota.astlm);
-        printf(" Enqueue quota:                %8u"
+        dcl_out_printf(" Enqueue quota:                %8u"
                "  Default working set:     %8u\n",
                info.quota.enqlm, info.quota.wsdefault);
-        printf(" Working set quota:            %8u"
+        dcl_out_printf(" Working set quota:            %8u"
                "  Working set extent:      %8u\n",
                info.quota.wsquota, info.quota.wsextent);
     }
@@ -3484,7 +3485,7 @@ static int cmd_show_translation(struct dcl_command *cmd)
     }
 
     /* Print translation chain (resolve iteratively up to 8 levels) */
-    printf("   \"%s\" = \"%s\"\n", upper_name, value);
+    dcl_out_printf("   \"%s\" = \"%s\"\n", upper_name, value);
 
     char current[256];
     strncpy(current, value, sizeof(current) - 1);
@@ -3509,7 +3510,7 @@ static int cmd_show_translation(struct dcl_command *cmd)
             upper_cur[i] = (char)toupper((unsigned char)current[i]);
         upper_cur[i] = '\0';
 
-        printf("   \"%s\" = \"%s\"\n", upper_cur, next);
+        dcl_out_printf("   \"%s\" = \"%s\"\n", upper_cur, next);
         strncpy(current, next, sizeof(current) - 1);
         current[sizeof(current) - 1] = '\0';
         depth++;
@@ -3555,9 +3556,9 @@ static int cmd_show_license(struct dcl_command *cmd)
     ovmx_node_name(node, sizeof(node));
 
     /* Banner + column headings -- byte-exact to the VAX V7.3 oracle. */
-    printf("Active licenses on node %s:\n\n", node);
-    printf("------- Product ID --------    ---- Rating ----- -- Version --\n");
-    printf("Product            Producer    Units Avail Activ Version Release"
+    dcl_out_printf("Active licenses on node %s:\n\n", node);
+    dcl_out_printf("------- Product ID --------    ---- Rating ----- -- Version --\n");
+    dcl_out_printf("Product            Producer    Units Avail Activ Version Release"
            "    Termination\n");
 
     /*
@@ -3574,7 +3575,7 @@ static int cmd_show_license(struct dcl_command *cmd)
     };
 
     for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
-        printf("%-18.18s %-11s%6s%3s     %-7s%-5s%-12s%-11s \n",
+        dcl_out_printf("%-18.18s %-11s%6s%3s     %-7s%-5s%-12s%-11s \n",
                rows[i][0], rows[i][1], rows[i][2], rows[i][3],
                rows[i][4], rows[i][5], rows[i][6], rows[i][7]);
     }
@@ -3674,7 +3675,7 @@ static void show_cluster_row(const struct vms_cluster_member *m, int is_local)
     else
         snprintf(csidcol, sizeof(csidcol), "%s", "");
 
-    printf("| %-6s | %-8s | %-15s | %-16s |\n", nodecol, csidcol,
+    dcl_out_printf("| %-6s | %-8s | %-15s | %-16s |\n", nodecol, csidcol,
            is_local ? OVMX_CLUSTER_SW_VERSION : "", m->state);
 }
 
@@ -3690,7 +3691,7 @@ static int show_cluster_systems(void)
     if (status == SS$_NOSUCHDEV)
         return show_cluster_nosuchdev();
     if (status != SS$_NORMAL || n_members < 1) {
-        printf("%%SYSTEM-I-NOTMEMBER, this system is not a member of a "
+        dcl_out_printf("%%SYSTEM-I-NOTMEMBER, this system is not a member of a "
                "VMScluster\n");
         return SS$_NORMAL;
     }
@@ -3703,16 +3704,16 @@ static int show_cluster_systems(void)
         snprintf(node, sizeof(node), "%s", members[0].scsnode);
     show_cluster_timestamp(tbuf, sizeof(tbuf));
 
-    printf("View of Cluster from system ID %u node: %-6s   %s\n\n",
+    dcl_out_printf("View of Cluster from system ID %u node: %-6s   %s\n\n",
            (unsigned)members[0].sysid, node, tbuf);
-    printf("+---------------------------------------------------------------+\n");
-    printf("|                 SYSTEMS                |      MEMBERS         |\n");
-    printf("|----------------------------------------+----------------------|\n");
-    printf("| NODE   | CSID     | SOFTWARE        | STATUS           |\n");
-    printf("|--------+----------+-----------------+------------------|\n");
+    dcl_out_printf("+---------------------------------------------------------------+\n");
+    dcl_out_printf("|                 SYSTEMS                |      MEMBERS         |\n");
+    dcl_out_printf("|----------------------------------------+----------------------|\n");
+    dcl_out_printf("| NODE   | CSID     | SOFTWARE        | STATUS           |\n");
+    dcl_out_printf("|--------+----------+-----------------+------------------|\n");
     for (uint32_t i = 0; i < n_members; i++)
         show_cluster_row(&members[i], i == 0);
-    printf("+---------------------------------------------------------------+\n");
+    dcl_out_printf("+---------------------------------------------------------------+\n");
     return SS$_NORMAL;
 }
 
@@ -3733,24 +3734,24 @@ static int show_cluster_club(void)
     if (status != SS$_NORMAL)
         return show_cluster_nosuchdev();
 
-    printf("Cluster block\n\n");
+    dcl_out_printf("Cluster block\n\n");
     if (a.club.local_csid_valid)
-        printf("  Local CSID          %08X\n", (unsigned)a.club.local_csid);
+        dcl_out_printf("  Local CSID          %08X\n", (unsigned)a.club.local_csid);
     else
-        printf("  Local CSID          (not yet assigned by the cluster)\n");
-    printf("  Nodes               %u\n", (unsigned)a.club.cluster_nodes);
-    printf("  Votes / quorum      %u / %u\n", (unsigned)a.club.cevotes,
+        dcl_out_printf("  Local CSID          (not yet assigned by the cluster)\n");
+    dcl_out_printf("  Nodes               %u\n", (unsigned)a.club.cluster_nodes);
+    dcl_out_printf("  Votes / quorum      %u / %u\n", (unsigned)a.club.cevotes,
            (unsigned)a.club.quorum);
-    printf("  Expected votes      %u\n", (unsigned)a.club.expected_votes);
-    printf("  Quorum lost         %s\n", a.club.quorum_lost ? "yes" : "no");
-    printf("  Epoch               %u\n", (unsigned)a.club.epoch);
-    printf("  Reformations        %u\n", (unsigned)a.club.reformations);
+    dcl_out_printf("  Expected votes      %u\n", (unsigned)a.club.expected_votes);
+    dcl_out_printf("  Quorum lost         %s\n", a.club.quorum_lost ? "yes" : "no");
+    dcl_out_printf("  Epoch               %u\n", (unsigned)a.club.epoch);
+    dcl_out_printf("  Reformations        %u\n", (unsigned)a.club.reformations);
     if (a.club.transition_active)
-        printf("  Transition          class %u, barrier step %u of 12\n",
+        dcl_out_printf("  Transition          class %u, barrier step %u of 12\n",
                (unsigned)a.club.transition_class,
                (unsigned)a.club.barrier_step);
     else
-        printf("  Transition          none in progress\n");
+        dcl_out_printf("  Transition          none in progress\n");
     return SS$_NORMAL;
 }
 
@@ -3771,8 +3772,8 @@ static int show_cluster_connections(void)
     if (vms_kif_cluster_diag_conn(&a) != SS$_NORMAL)
         return show_cluster_nosuchdev();
 
-    printf("SCS connections\n\n");
-    printf("  Local SYSAP      Remote SYSAP     Local Con.ID Remote Con.ID"
+    dcl_out_printf("SCS connections\n\n");
+    dcl_out_printf("  Local SYSAP      Remote SYSAP     Local Con.ID Remote Con.ID"
            " Credit S/R  State\n");
     for (i = 0; i < a.scs.n_cdts + 32u; i++) {
         char remote[16];
@@ -3789,7 +3790,7 @@ static int show_cluster_connections(void)
         else
             snprintf(remote, sizeof(remote), "%s", "");
 
-        printf("  %-16.16s %-16.16s %08X     %-13s %3u/%-3u    %u\n",
+        dcl_out_printf("  %-16.16s %-16.16s %08X     %-13s %3u/%-3u    %u\n",
                (const char *)a.cdt.local_name, (const char *)a.cdt.remote_name,
                (unsigned)a.cdt.local_conid, remote,
                (unsigned)a.cdt.credit_send, (unsigned)a.cdt.credit_receive,
@@ -3812,14 +3813,14 @@ static int show_cluster_local_ports(void)
     if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL)
         return show_cluster_nosuchdev();
 
-    printf("Local ports\n\n");
-    printf("  PEA0:  %s, link %s\n", a.port.port_open ? "open" : "closed",
+    dcl_out_printf("Local ports\n\n");
+    dcl_out_printf("  PEA0:  %s, link %s\n", a.port.port_open ? "open" : "closed",
            a.port.link_up ? "up" : "down");
     if (a.port.hwaddr_valid)
-        printf("         hardware address %02X-%02X-%02X-%02X-%02X-%02X\n",
+        dcl_out_printf("         hardware address %02X-%02X-%02X-%02X-%02X-%02X\n",
                a.port.hwaddr[0], a.port.hwaddr[1], a.port.hwaddr[2],
                a.port.hwaddr[3], a.port.hwaddr[4], a.port.hwaddr[5]);
-    printf("         MTU %u, channels %u, circuits %u\n",
+    dcl_out_printf("         MTU %u, channels %u, circuits %u\n",
            (unsigned)a.port.mtu, (unsigned)a.port.n_channels,
            (unsigned)a.port.n_vcs);
     /*
@@ -3836,10 +3837,10 @@ static int show_cluster_local_ports(void)
      * plainly when the 0 is a default rather than a choice.
      */
     if (a.port.cluster_group_valid)
-        printf("         cluster group %u (CLUSTER_AUTHORIZE)\n",
+        dcl_out_printf("         cluster group %u (CLUSTER_AUTHORIZE)\n",
                (unsigned)a.port.cluster_group);
     else
-        printf("         cluster group %u -- NOT CONFIGURED (no "
+        dcl_out_printf("         cluster group %u -- NOT CONFIGURED (no "
                "CLUSTER_AUTHORIZE record): this node cannot reach a real "
                "cluster\n", (unsigned)a.port.cluster_group);
     /*
@@ -3851,7 +3852,7 @@ static int show_cluster_local_ports(void)
      * shape the E51 fix (exec_lan_open bringing the interface up) closes --
      * this line is what makes that observable without a raw kernel log.
      */
-    printf("         frames tx %u (errors %u), rx %u (dropped: nobuf %u, badclass %u)\n",
+    dcl_out_printf("         frames tx %u (errors %u), rx %u (dropped: nobuf %u, badclass %u)\n",
            (unsigned)a.port.tx_frames, (unsigned)a.port.tx_errors,
            (unsigned)a.port.rx_frames, (unsigned)a.port.rx_drops_nobuf,
            (unsigned)a.port.rx_drops_badclass);
@@ -3875,15 +3876,15 @@ static int show_cluster_circuits(void)
         return show_cluster_nosuchdev();
     n_vcs = a.port.n_vcs;
 
-    printf("Circuits\n\n");
-    printf("  Remote system ID  State  Send   Recv   Unacked  Retransmits\n");
+    dcl_out_printf("Circuits\n\n");
+    dcl_out_printf("  Remote system ID  State  Send   Recv   Unacked  Retransmits\n");
     for (i = 0; i < n_vcs + 32u; i++) {
         memset(&a, 0, sizeof(a));
         a.row = VMS_CLUSTER_DIAG_PORT_VC;
         a.index = i;
         if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL)
             continue;
-        printf("  %08X%08X  %5u  %6u %6u %8u %12u\n",
+        dcl_out_printf("  %08X%08X  %5u  %6u %6u %8u %12u\n",
                (unsigned)a.vc.peer_sysid_hi, (unsigned)a.vc.peer_sysid_lo,
                (unsigned)a.vc.state, (unsigned)a.vc.send_seq,
                (unsigned)a.vc.recv_seq, (unsigned)a.vc.unacked,
@@ -3971,12 +3972,12 @@ static int cmd_show_network(struct dcl_command *cmd)
     char decnet[128];
     if (show_network_decnet_line(decnet, sizeof decnet)) {
         /* Oracle: a blank line, then one "Product:" line per network product. */
-        printf("\n%s\n", decnet);
+        dcl_out_printf("\n%s\n", decnet);
     }
     char netnode[OVMX_IDENTITY_MAXLEN];
     ovmx_node_name(netnode, sizeof(netnode));
-    printf("Product: OVMX TCP/IP Services %s\n", ovmx_product_version());
-    printf("Node: %s\n", netnode);
+    dcl_out_printf("Product: OVMX TCP/IP Services %s\n", ovmx_product_version());
+    dcl_out_printf("Node: %s\n", netnode);
     return SS$_NORMAL;
 }
 
@@ -4052,8 +4053,8 @@ static int cmd_show_error(struct dcl_command *cmd)
         if (info.errcnt == 0)
             continue;                 /* HELP: only devices with count > 0 */
         if (rows == 0)
-            printf("Device                           Error Count\n");
-        printf("%-33s%9u\n", info.devnam, info.errcnt);
+            dcl_out_printf("Device                           Error Count\n");
+        dcl_out_printf("%-33s%9u\n", info.devnam, info.errcnt);
         rows++;
     }
 
@@ -4062,7 +4063,7 @@ static int cmd_show_error(struct dcl_command *cmd)
      * stopped short of SS$_NOMOREDEV hit an ioctl-level failure -- silent,
      * $STATUS carries it, nothing is fabricated to paper over it. */
     if (rows == 0 && status == SS$_NOMOREDEV)
-        printf("Device                           Error Count\n");
+        dcl_out_printf("Device                           Error Count\n");
 
     return (status == SS$_NOMOREDEV) ? SS$_NORMAL : status;
 }
@@ -4120,11 +4121,11 @@ static int cmd_show_working_set(struct dcl_command *cmd)
          * line plus the Authorized limits, every field real. The current WS
          * size (JPI$_PPGCNT) is the /Limit; if the executive did not source
          * it, fall back to the JIB default working-set size. */
-        printf("  Working Set  /Limit= %-6u /Quota= %-6u /Extent= %u\n",
+        dcl_out_printf("  Working Set  /Limit= %-6u /Quota= %-6u /Extent= %u\n",
                (info.fields_valid & VMS_PI_V_PAGES) ? info.pages
                                                     : info.quota.wsdefault,
                info.quota.wsquota, info.quota.wsextent);
-        printf("  Adjustment enabled  Authorized Quota = %u  "
+        dcl_out_printf("  Adjustment enabled  Authorized Quota = %u  "
                "Authorized Extent = %u\n",
                info.quota.wsquota, info.quota.wsextent);
     } else if (info.fields_valid & VMS_PI_V_PAGES) {
@@ -4133,7 +4134,7 @@ static int cmd_show_working_set(struct dcl_command *cmd)
          * and OMIT /Quota, /Extent and the Authorized line rather than
          * fabricate an 8192 / quota*2 that names nothing true about this
          * process. */
-        printf("  Working Set  /Limit= %u\n", info.pages);
+        dcl_out_printf("  Working Set  /Limit= %u\n", info.pages);
     }
 
     return SS$_NORMAL;
@@ -4152,11 +4153,11 @@ static int cmd_show_accounting(struct dcl_command *cmd)
 {
     (void)cmd;
     if (ovmx_accounting_is_enabled()) {
-        printf("Accounting is currently enabled.\n");
+        dcl_out_printf("Accounting is currently enabled.\n");
     } else {
-        printf("Accounting is currently disabled.\n");
+        dcl_out_printf("Accounting is currently disabled.\n");
     }
-    printf("Accounting file: SYS$MANAGER:ACCOUNTNG.DAT\n");
+    dcl_out_printf("Accounting file: SYS$MANAGER:ACCOUNTNG.DAT\n");
     return SS$_NORMAL;
 }
 
@@ -4168,11 +4169,11 @@ static int cmd_show_audit(struct dcl_command *cmd)
     (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
     if (ctx->audit_enabled) {
-        printf("System security auditing is currently enabled.\n");
+        dcl_out_printf("System security auditing is currently enabled.\n");
     } else {
-        printf("System security auditing is currently disabled.\n");
+        dcl_out_printf("System security auditing is currently disabled.\n");
     }
-    printf("Audit log file: SYS$MANAGER:AUDIT.LOG\n");
+    dcl_out_printf("Audit log file: SYS$MANAGER:AUDIT.LOG\n");
     return SS$_NORMAL;
 }
 
@@ -4218,7 +4219,7 @@ static int cmd_show_quota(struct dcl_command *cmd)
 static int cmd_show_root(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("  System root is SYS$SYSDEVICE:[SYS0.SYSCOMMON.]\n");
+    dcl_out_printf("  System root is SYS$SYSDEVICE:[SYS0.SYSCOMMON.]\n");
     return SS$_NORMAL;
 }
 
@@ -4443,38 +4444,38 @@ static int cmd_show_cpu(struct dcl_command *cmd)
                  c0 == 'a' || c0 == 'e' || c0 == 'i' || c0 == 'o' || c0 == 'u')
                 ? "an" : "a";
 
-            printf("\n%s, %s %.*s\n", node, article, (int)hw.hw_model_len,
+            dcl_out_printf("\n%s, %s %.*s\n", node, article, (int)hw.hw_model_len,
                    (const char *)hw.hw_model);
         } else {
-            printf("\n%s\n", node);
+            dcl_out_printf("\n%s\n", node);
         }
     }
-    printf("Multiprocessing is %s.\n", n_online > 1 ? "ENABLED" : "DISABLED");
-    printf("\nPRIMARY CPU = %02d\n", primary);
+    dcl_out_printf("Multiprocessing is %s.\n", n_online > 1 ? "ENABLED" : "DISABLED");
+    dcl_out_printf("\nPRIMARY CPU = %02d\n", primary);
 
     if (want_summary) {
-        printf("Active CPUs:      %s\n", active_str);
-        printf("Configured CPUs:  %s\n", config_str);
+        dcl_out_printf("Active CPUs:      %s\n", active_str);
+        dcl_out_printf("Configured CPUs:  %s\n", config_str);
     }
 
     if (want_brief || want_full) {
         for (int i = 0; i <= present_max; i++) {
             if (!present[i]) continue;
-            printf("\n");
+            dcl_out_printf("\n");
             if (online[i]) {
-                printf("CPU %02d is in RUN state\n", i);
+                dcl_out_printf("CPU %02d is in RUN state\n", i);
                 if (want_full) {
-                    printf("  Capabilities of this CPU:\n");
+                    dcl_out_printf("  Capabilities of this CPU:\n");
                     if (i == primary)
-                        printf("     PRIMARY QUORUM RUN\n");
+                        dcl_out_printf("     PRIMARY QUORUM RUN\n");
                     else
-                        printf("     QUORUM RUN\n");
-                    printf("  Processes which can only execute on this CPU:\n");
-                    printf("     *** None ***\n");
+                        dcl_out_printf("     QUORUM RUN\n");
+                    dcl_out_printf("  Processes which can only execute on this CPU:\n");
+                    dcl_out_printf("     *** None ***\n");
                 }
             } else {
                 /* Present but offline: honestly not in the active set. */
-                printf("CPU %02d is not in the active set\n", i);
+                dcl_out_printf("CPU %02d is not in the active set\n", i);
             }
         }
     }

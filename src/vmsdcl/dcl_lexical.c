@@ -5,6 +5,7 @@
  * about strings, times, files, processes, and the environment.
  */
 
+#include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -3446,7 +3447,7 @@ int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
      */
     dcl_error("DCL", 0, "IVFNAM",
               "invalid lexical function name - check validity and spelling");
-    fprintf(stderr, " \\%s(\\\n", func_name);
+    dcl_err_printf(" \\%s(\\\n", func_name);
     result[0] = '\0';
     if (ctx) ctx->last_status = 0x000381C0;   /* CLI-W-IVFNAM */
     return -1;

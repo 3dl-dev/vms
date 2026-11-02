@@ -322,7 +322,9 @@ static const struct vms_dlm_rm_ops g_ops_template = {
 	/* rd vms-874f: the rebuild doors, unbound here too (test_dlm_rebuild
 	 * binds them). The rebuild window is the table's own state (rd
 	 * vms-2fa), not a door. */
-	NULL, NULL, NULL, NULL, NULL
+	NULL, NULL, NULL, NULL, NULL,
+	/* rd vms-1b68: the survivors' end and the window's settle. */
+	NULL, NULL
 };
 
 static struct vms_dlm_rm_ops g_ops;

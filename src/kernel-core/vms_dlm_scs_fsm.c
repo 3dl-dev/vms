@@ -1004,6 +1004,14 @@ static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 static void h_queued(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	f->queued_rx++;
+	/* rd vms-1b68: the master's own handle for the queued request, recorded
+	 * on the proxy -- the proof that the request is in its queue. */
+	if (f->ops->queued != (void (*)(void *, uint32_t, vms_csid_t,
+					uint32_t))0 &&
+	    e->rsp != (const struct vms_dlm_enq_response *)0 &&
+	    e->rsp->master_lkid != VMS_DLM_LKID_UNSET && e->from_csid != 0u)
+		f->ops->queued(f->ops->ctx, e->r->req_lkid, e->from_csid,
+			       e->rsp->master_lkid);
 	e->r->settled = 1u;
 	e->r->tries   = 0u;
 	e->r->sent_ms = dq_now(f);
@@ -1246,11 +1254,25 @@ static void h_timeout_granted(struct dlm_req_fsm *f, struct dq_ev *e)
 
 /* ---- a member left ----------------------------------------------------- */
 
+/* rd vms-1b68: a request the master QUEUED (settled by its 0xfb) whose proxy
+ * the engine preserves for the rebuild keeps its block: the tree's next master
+ * will grant it by this key. */
+static int dq_survives(struct dlm_req_fsm *f, const struct dlm_req *r)
+{
+	return r->settled &&
+	       f->ops->survives != (int (*)(void *, uint32_t))0 &&
+	       f->ops->survives(f->ops->ctx, r->req_lkid);
+}
+
 static void h_peer_gone_pending(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	f->peers_gone++;
-	dq_fail(f, e->r, DLM_REQ_FAIL_PATHLOST);
 	e->st = DLM_REQ_OK;
+	if (dq_survives(f, e->r)) {
+		f->survivors_kept++;
+		return;
+	}
+	dq_fail(f, e->r, DLM_REQ_FAIL_PATHLOST);
 }
 
 /* A GRANTED lock whose master left is the ENGINE's business (its own
@@ -1259,8 +1281,12 @@ static void h_peer_gone_pending(struct dlm_req_fsm *f, struct dq_ev *e)
 static void h_peer_gone_granted(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	f->peers_gone++;
-	dq_free(e->r);
 	e->st = DLM_REQ_OK;
+	if (dq_survives(f, e->r)) {      /* a CONVERT the master queued */
+		f->survivors_kept++;
+		return;
+	}
+	dq_free(e->r);
 }
 
 /* ==========================================================================
@@ -1619,6 +1645,36 @@ enum dlm_req_status dlm_req_fsm_blkast(struct dlm_req_fsm *f, uint32_t req_lkid)
 
 	dq_bzero(&e, (uint32_t)sizeof(e));
 	return dq_entry(f, req_lkid, DLM_REQ_EV_BLKAST, &e);
+}
+
+enum dlm_req_status dlm_req_fsm_rehomed(struct dlm_req_fsm *f,
+					uint32_t req_lkid, vms_csid_t new_csid)
+{
+	struct dlm_req *r;
+
+	if (f == (struct dlm_req_fsm *)0 || new_csid == 0u)
+		return DLM_REQ_E_INVAL;
+	r = dq_find(f, req_lkid);
+	if (r == (struct dlm_req *)0)
+		return DLM_REQ_E_NOLOCK;
+	r->dst_csid = new_csid;
+	r->to_directory = 0u;
+	f->survivors_rehomed++;
+	return DLM_REQ_OK;
+}
+
+enum dlm_req_status dlm_req_fsm_forget(struct dlm_req_fsm *f,
+				       uint32_t req_lkid)
+{
+	struct dlm_req *r;
+
+	if (f == (struct dlm_req_fsm *)0)
+		return DLM_REQ_E_INVAL;
+	r = dq_find(f, req_lkid);
+	if (r == (struct dlm_req *)0)
+		return DLM_REQ_E_NOLOCK;
+	dq_free(r);
+	return DLM_REQ_OK;
 }
 
 uint32_t dlm_req_fsm_peer_gone(struct dlm_req_fsm *f, vms_csid_t csid)

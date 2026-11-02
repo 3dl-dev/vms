@@ -102,8 +102,10 @@ struct vms_dlm_adopt_tree {
  *                       the parent record. 0 on the tree's ROOT record. It is
  *                       LOOKED UP here, never trusted: a record naming a handle
  *                       this engine did not mint for this adoption is refused.
- *   granted_mode        body[30], requested_mode body[31] (CR 01 01, CW 02 02
- *                       vs SDA 4/4 in RA2).
+ *   granted_mode        body[31], requested_mode body[30] (CR 01 01, CW 02 02
+ *                       vs SDA 4/4 in RA2; which is which is rd vms-0db's
+ *                       converting (5,1) and waiting (5,0) records).
+ *   queue_state         body[110]: the queue the lock is on (rd vms-0db).
  *   valblk/_seq/_present
  *                       the record's own copy of the resource's value block
  *                       and its SEQUENCE -- body[88:104] and body[104:108]
@@ -129,7 +131,9 @@ struct vms_dlm_adopt_lock_rec {
 	uint8_t  granted_mode;         /* LCK$K_ encoding                    */
 	uint8_t  requested_mode;       /* LCK$K_ encoding                    */
 	uint8_t  valblk_present;
-	uint8_t  pad;
+	uint8_t  queue_state;          /* body[110] as enum vms_dlm_rb_queue
+	                                * (rd vms-0db): 0 granted, 1 waiting,
+	                                * 2 converting                        */
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
 	uint32_t valblk_seq;           /* body[104:108]                      */
 };
@@ -259,13 +263,19 @@ struct vms_dlm_handover_rec {
 	                               * read AFTER that parent was re-homed onto
 	                               * the new master -- i.e. the handle the new
 	                               * master's own 82/01 named              */
-	uint8_t  granted_mode;        /* body[30]                              */
-	uint8_t  requested_mode;      /* body[31]                              */
+	uint8_t  granted_mode;        /* body[31]; 0 on a waiting lock         */
+	uint8_t  requested_mode;      /* body[30]                              */
 	uint8_t  valblk_present;      /* the LKB holds a block its master
 	                               * told it -- an op-0x1a or its last
 	                               * grant -- with a non-zero sequence
 	                               * (rd vms-8159)                        */
 	uint8_t  hash_known;          /* the RSB holds a directory hash        */
+	uint8_t  queue_state;         /* body[110]: 0 granted, 1 waiting,
+	                               * 2 converting (enum vms_dlm_rb_queue,
+	                               * rd vms-0db) -- WHICH QUEUE the LKB is
+	                               * on, never a mode comparison           */
+	uint8_t  rec_flags;           /* body[28]: VALBLK 0x01, CONVERT 0x02,
+	                               * SYSTEM 0x10, off the LKB's flags      */
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];  /* body[88:104]                  */
 	uint32_t valblk_seq;                  /* body[104:108]                 */
 	uint32_t dir_hash;                    /* body[128:132]                 */
@@ -281,8 +291,11 @@ struct vms_dlm_handover_rec {
  * returned only once that parent LKB already names the NEW master, because its
  * record must carry the handle the new master minted for the parent. So the
  * tree's root goes first by construction, and a sub-lock can never be
- * described with a half parent pair. A PENDING proxy (no grant yet, so no
- * handle from the old master) is never described.
+ * described with a half parent pair. Within a resource the order is the
+ * queue's (rd vms-0db): granted, then converting, then waiting. A WAITING or
+ * CONVERTING proxy is described when the old master acknowledged it
+ * (vms_lock_dlm_proxy_survives); a proxy still pending its first answer --
+ * no copy at the master to name -- never is.
  */
 int vms_lock_dlm_handover_next(const struct vms_dlm_adopt_tree *t,
 			       uint32_t new_master_csid,
@@ -358,6 +371,30 @@ int vms_lock_dlm_name_proxy_master(const char *resnam, uint32_t resnam_len,
 				   uint32_t *out_csid);
 
 /*
+ * END THE WAITERS A FAILOVER REBUILD DID NOT CARRY (rd vms-1b68). A waiting or
+ * converting proxy the departed master had acknowledged survives the departure
+ * so its rebuild record can be sent (vms_lock_dlm_proxy_survives). When the
+ * rebuild of its tree ends without that record being answered -- stopped, out
+ * of window, or nothing left this node could describe -- this ends every such
+ * survivor still naming `t->old_master_csid`, in `t`'s tree or (ident_valid 0)
+ * anywhere, with SS$_UNSUPPORTED: no eternal wait. `lkids`/`max` receive the
+ * ended ids (may be NULL); returns how many were ended.
+ */
+uint32_t vms_lock_dlm_rebuild_fail_unsent(const struct vms_dlm_adopt_tree *t,
+					  uint32_t *lkids, uint32_t max);
+
+/*
+ * THE REBUILD WINDOW CLOSED: decide every waiter this node masters once (rd
+ * vms-1b68). While a rebuild collects records, a waiter of ours promoted by a
+ * 0xf9 and a queued lock installed from a survivor's record (body[110] 0x00 /
+ * 0xff, rd vms-0db) are NOT granted -- a grant before every survivor's record
+ * is in could conflict with a lock a later record names. This runs the
+ * ordinary granting algorithm over them and reports each cross-node grant.
+ * 1 when a hold was pending, 0 (and nothing done) otherwise.
+ */
+uint32_t vms_lock_dlm_rebuild_settle(void);
+
+/*
  * INSTALL A SURVIVOR'S LOCK, as THE TREE'S MASTER (an inbound op-0x08 record).
  *
  * A ROOT record (parent_master_lkid 0) is installed only on a root resource
@@ -365,12 +402,15 @@ int vms_lock_dlm_name_proxy_master(const char *resnam, uint32_t resnam_len,
  * a tree. A SUB record names its parent by the handle this engine minted for
  * the same holder's parent (a master-side LKB, req_csid == holder_csid, on a
  * resource mastered here): looked up, never trusted. The LKB is the remaster
- * adoption's (vms_lock_dlm_adopt_lock): granted at body[30]'s mode, tagged with
+ * adoption's (vms_lock_dlm_adopt_lock): granted at body[31]'s mode -- or, for a
+ * converting/waiting record (body[110] 00/ff, rd vms-0db), queued ungranted on
+ * the waiting queue for vms_lock_dlm_rebuild_settle to decide -- tagged with
  * the holder's CSID and own handle, owned by the delivery proc, linked under
  * the parent lock; IDEMPOTENT to a retransmit (same handle back, `duplicate`).
  *
- * A lock no longer COMPATIBLE with what the resource holds here is NOT
+ * A GRANTED lock no longer COMPATIBLE with what the resource holds here is NOT
  * installed (SS$_UNSUPPORTED) -- never a second incompatible grant (rd vms-5cd).
+ * A queued one is not a grant and is always queued.
  * An all-NL lock IS installed: it is a real lock (330 of 338 real SUB records).
  *
  * SS$_NORMAL when `*out` describes a lock that now exists (read back off it);

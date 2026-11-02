@@ -755,6 +755,29 @@ uint32_t vms_lock_dlm_proxy_refill_post(uint32_t req_lkid, uint32_t op,
 uint32_t vms_lock_dlm_proxy_fail(uint32_t req_lkid, uint32_t status);
 
 /*
+ * THE MASTER QUEUED A REQUEST OF OURS (rd vms-1b68): `master_csid` -- the
+ * 0xfb answer's SCA source -- answered it and named `master_lkid`
+ * (body[20:24]). Recorded on the WAITING proxy: `queued_master_lkid`, the
+ * proof that the master holds the request in a queue, and `master_csid`, who
+ * that master is. Nothing else changes: the proxy stays waiting and
+ * `master_lkid` stays unset until a grant. SS$_IVLOCKID when `req_lkid` is not
+ * a waiting proxy, SS$_BADPARAM for a zero argument.
+ */
+uint32_t vms_lock_dlm_proxy_queued_recv(uint32_t req_lkid, uint32_t master_csid,
+                                        uint32_t master_lkid);
+
+/*
+ * DOES THIS PROXY SURVIVE ITS MASTER'S DEPARTURE? (rd vms-1b68.) 1 when it is
+ * a WAITING or CONVERTING proxy, still pending, whose request the master
+ * ACKNOWLEDGED (its 0xfb, vms_lock_dlm_proxy_queued_recv) -- a lock in the
+ * master's queue, which a survivor re-sends to the tree's new master
+ * (rd vms-0db). The one test the departure sweep, the requester FSM and the
+ * hand-over/rebuild scan all apply. 0 for anything else: a request the master
+ * never acknowledged ends SS$_UNSUPPORTED at the departure, as before.
+ */
+int vms_lock_dlm_proxy_survives(uint32_t req_lkid);
+
+/*
  * OUTCOME 3 (Davis p. 6-31): the DIRECTORY node answered "there is no master --
  * YOU master it". Record this node as the master of `resnam`'s tree and PROMOTE
  * the proxy LKB `req_lkid` into a real local lock, then run the local granting

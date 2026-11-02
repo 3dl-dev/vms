@@ -1651,6 +1651,297 @@ static void test_ra1b_7400_the_later_sequence_stays(void)
 	engine_down();
 }
 
+
+/* ================================================================== *
+ * 9. rd vms-1b68 / vms-0db: A WAITING OR CONVERTING LOCK OUTLIVES ITS
+ *    MASTER. tests/lab/captures/vms-0db-waiting-records-20261102 (arm B,
+ *    WQRB): a real holder re-sends its converting (5,1) and waiting (5,0)
+ *    locks as op-0x08 records with body[110] 00 / ff and body[108] 04,
+ *    after its granted ones; the new master answers each 0xfa with body[28]
+ *    0x14 and the record's own body[30:32], and queues it, ungranted.
+ * ================================================================== */
+#define VAX3_W_HANDLE 0x020004efu    /* arm B: VAX2's answer to the waiter */
+
+/* The grant state of one of g_proc's locks: 0 pending, SS$_ when ended. */
+static int lk_state(uint32_t lkid)
+{
+	struct vms_lock_entry *l;
+
+	exec_list_for_each_entry(l, &g_proc.locks, proc_list) {
+		if (l->lkid == lkid)
+			return l->grant_state;
+	}
+	return -1;
+}
+
+static uint32_t d_rb_unsent(void *ctx, const struct vms_dlm_adopt_tree *t)
+{
+	(void)ctx;
+	return vms_lock_dlm_rebuild_fail_unsent(t, NULL, 0u);
+}
+
+static void d_rb_settle(void *ctx)
+{
+	(void)ctx;
+	(void)vms_lock_dlm_rebuild_settle();
+}
+
+/* A survivor table: VAX3 is the directory, the rebuild's end and settle are
+ * bound, and this node (VAX2) holds RMT1 at PR (granted by VAX1). */
+static uint32_t survivor_up(void)
+{
+	uint32_t root;
+
+	(void)engine_up(CSID_VAX2, 0x20400217u);
+	table_up(CSID_VAX3, 0u);
+	g_ops.rb_unsent = d_rb_unsent;
+	g_ops.rb_settle = d_rb_settle;
+	root = enq("RMT1", LCK_K_PRMODE, 0u);
+	(void)vax1_grants(root, 0x05000024u);
+	g_dir_of_names = CSID_VAX3;
+	return root;
+}
+
+static void test_codec_queue_states(void)
+{
+	struct vms_dlm_rm_lock_rec r, back;
+	struct vms_dlm_rm_lock_answer a;
+	struct vms_dlm_rb_modes m;
+	struct vms_dlm_rb_mode_cells c;
+	uint8_t f[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t g[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	const uint8_t *b = f + VMS_OFF_SYSAP_BODY;
+	const uint8_t *ab = ans + VMS_OFF_SYSAP_BODY;
+
+	printf("-- rd vms-0db: body[110] is the queue, body[30] requested, "
+	       "body[31] granted\n");
+	ct_check(vms_dlm_rb_rec_parse_body(ra1b_vax3_rmt1_req, VMS_CM_BODY_LEN,
+					   &r) == VMS_CODEC_OK &&
+		 r.queue_state == VMS_DLM_RB_Q_GRANTED,
+		 "VAX3's real granted ROOT reads GRANTED (body[110] 01)");
+	ct_check(vms_dlm_rb_rec_build(&r, 1, g, sizeof(g), NULL) ==
+		 VMS_CODEC_OK &&
+		 g[VMS_OFF_SYSAP_BODY + 110] == 0x01u &&
+		 g[VMS_OFF_SYSAP_BODY + 108] == 0x00u &&
+		 g[VMS_OFF_SYSAP_BODY + 28] == 0x00u,
+		 "  a granted record OVMX builds: 01 at [110], 0 at [108] and "
+		 "[28], as before");
+
+	/* WQRB's waiter, arm B frame 1071: rq/gr 5/0 st ff. */
+	r.queue_state = VMS_DLM_RB_Q_WAITING;
+	r.requested_mode = (uint8_t)LCK_K_EXMODE;
+	r.granted_mode = (uint8_t)LCK_K_CRMODE;   /* ignored: never granted */
+	r.flags = VMS_DLM_REC_FLAG_VALBLK | VMS_DLM_REC_FLAG_SYSTEM | 0x80u;
+	ct_check(vms_dlm_rb_rec_build(&r, 1, f, sizeof(f), NULL) ==
+		 VMS_CODEC_OK, "a WAITING record is built");
+	ct_check(b[30] == 5u && b[31] == 0u && b[110] == 0xffu &&
+		 b[108] == 0x04u && b[28] == 0x11u,
+		 "*** waiting: (5,0), [110] ff, [108] 04, [28] 11 -- arm B's "
+		 "frame 1071 ***");
+	ct_check(vms_dlm_rb_rec_parse_body(b, VMS_CM_BODY_LEN, &back) ==
+		 VMS_CODEC_OK && back.queue_state == VMS_DLM_RB_Q_WAITING &&
+		 back.requested_mode == 5u && back.granted_mode == 0u,
+		 "  and reads back WAITING, requested EX, granted 0");
+	memset(&a, 0, sizeof(a));
+	a.master_lkid = VAX3_W_HANDLE;
+	ct_check(vms_dlm_rm_lock_answer_build(b, VMS_CM_BODY_LEN, &a, ans,
+					      sizeof(ans), NULL) ==
+		 VMS_CODEC_OK && ab[34] == 0xfau && ab[28] == 0x14u &&
+		 ab[30] == 5u && ab[31] == 0u && le32(ab + 20) == VAX3_W_HANDLE,
+		 "*** its answer: 0xfa, body[28] 0x14, body[30:32] echoed ***");
+
+	/* WQRB's converter, frame 1069: rq/gr 5/1 st 00. */
+	r.queue_state = VMS_DLM_RB_Q_CONVERTING;
+	r.granted_mode = (uint8_t)LCK_K_CRMODE;
+	r.flags = VMS_DLM_REC_FLAG_VALBLK | VMS_DLM_REC_FLAG_CONVERT |
+		  VMS_DLM_REC_FLAG_SYSTEM;
+	ct_check(vms_dlm_rb_rec_build(&r, 1, f, sizeof(f), NULL) ==
+		 VMS_CODEC_OK && b[30] == 5u && b[31] == 1u &&
+		 b[110] == 0x00u && b[108] == 0x04u && b[28] == 0x13u,
+		 "*** converting: (5,1), [110] 00, [108] 04, [28] 13 -- frame "
+		 "1069 ***");
+	ct_check(vms_dlm_rb_rec_parse_body(b, VMS_CM_BODY_LEN, &back) ==
+		 VMS_CODEC_OK && back.queue_state == VMS_DLM_RB_Q_CONVERTING &&
+		 back.granted_mode == 1u && back.requested_mode == 5u,
+		 "  and reads back CONVERTING, CR held, EX requested");
+	ct_check(vms_dlm_rm_lock_rec_build(&r, 1, g, sizeof(g), NULL) ==
+		 VMS_CODEC_OK &&
+		 memcmp(g + VMS_OFF_SYSAP_BODY + 10, b + 10,
+			VMS_CM_BODY_LEN - 10) == 0,
+		 "  the op-0x12 record carries the same cells (arm A4/A5)");
+
+	/* A granted, down-converted lock keeps its earlier request: (5,1) at
+	 * state 01 is GRANTED (arm A5, VAX1's WQRE root). */
+	memcpy(g, f, sizeof(g));
+	g[VMS_OFF_SYSAP_BODY + 110] = 0x01u;
+	ct_check(vms_dlm_rb_rec_parse_body(g + VMS_OFF_SYSAP_BODY,
+					   VMS_CM_BODY_LEN, &back) ==
+		 VMS_CODEC_OK && back.queue_state == VMS_DLM_RB_Q_GRANTED &&
+		 back.granted_mode == 1u,
+		 "*** (5,1) at [110] 01 is GRANTED at CR: the modes never "
+		 "decide the queue ***");
+	g[VMS_OFF_SYSAP_BODY + 110] = 0x02u;
+	ct_check(vms_dlm_rb_rec_parse_body(g + VMS_OFF_SYSAP_BODY,
+					   VMS_CM_BODY_LEN, &back) ==
+		 VMS_CODEC_E_RANGE,
+		 "a body[110] naming no queue is REFUSED");
+	g[VMS_OFF_SYSAP_BODY + 110] = 0x01u;
+	g[VMS_OFF_SYSAP_BODY + 30] = 6u;
+	ct_check(vms_dlm_rb_rec_parse_body(g + VMS_OFF_SYSAP_BODY,
+					   VMS_CM_BODY_LEN, &back) ==
+		 VMS_CODEC_E_RANGE, "...and so is a mode above EX");
+	m.queue_state = 9u;
+	m.granted_mode = m.requested_mode = m.flags = 0u;
+	ct_check(vms_dlm_rb_rec_modes(1, &m, &c) == VMS_CODEC_E_INVAL,
+		 "an unknown queue is never encoded");
+}
+
+static void test_a_queued_waiter_is_rebuilt(void)
+{
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	struct vms_dlm_rm_lock_answer a;
+	struct vms_dlm_proxy_grant gr;
+	uint32_t root, w;
+
+	printf("-- rd vms-1b68: a waiter VAX1 queued is re-sent to VAX3 and "
+	       "granted by it\n");
+	root = survivor_up();
+	w = enq("RMT1", LCK_K_EXMODE, 0u);
+	ct_check(w != 0u && lk_state(w) == 0, "our EX waits at VAX1");
+	ct_check_eq_u32(vms_lock_dlm_proxy_queued_recv(w, CSID_VAX1, 0x0700040au),
+			SS__NORMAL, "  VAX1 queued it (0xfb, its handle)");
+	vax1_departs();
+	ct_check(lk_state(w) == 0 && vms_lock_dlm_proxy_survives(w),
+		 "*** VAX1 left and the queued waiter is NOT ended ***");
+	ct_check(g_n_sent == 1u && le32(g_sent[0].body + 24) == root,
+		 "  the granted ROOT goes first");
+	answer_for(ans, ra1b_vax3_rmt1_ans, root);
+	(void)vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01, ans,
+				   VMS_CM_BODY_LEN);
+	ct_check(g_n_sent == 2u && le32(g_sent[1].body + 24) == w &&
+		 g_sent[1].body[9] == 0x08u && g_sent[1].body[30] == 5u &&
+		 g_sent[1].body[31] == 0u && g_sent[1].body[110] == 0xffu &&
+		 g_sent[1].body[108] == 0x04u && le32(g_sent[1].body + 36) == 0u,
+		 "*** then the waiter: op 0x08, (5,0), [110] ff, [108] 04 ***");
+	memset(&a, 0, sizeof(a));
+	a.master_lkid = VAX3_W_HANDLE;
+	ct_check(vms_dlm_rm_lock_answer_build(g_sent[1].body, VMS_CM_BODY_LEN,
+					      &a, ans, sizeof(ans), NULL) ==
+		 VMS_CODEC_OK, "  VAX3 answers it 0xfa");
+	ct_check(vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01,
+				      ans + VMS_OFF_SYSAP_BODY,
+				      VMS_CM_BODY_LEN) == 1 &&
+		 g_rm.rb_trees_done == 1u && g_rm.rb_waiters_ended == 0u,
+		 "  the tree is done and no waiter was ended");
+	ct_check(lk_state(w) == 0, "*** still waiting, now at VAX3 ***");
+	vms_dlm_rm_rb_window_close(&g_rm);
+	ct_check(lk_state(w) == 0, "  the window's close grants nothing VAX3 "
+		 "masters");
+	memset(&gr, 0, sizeof(gr));
+	gr.req_lkid = w;
+	gr.master_lkid = VAX3_W_HANDLE;
+	gr.master_csid = CSID_VAX3;
+	gr.valblk_present = 1u;
+	(void)vms_lock_dlm_proxy_grant_recv(&gr);
+	ct_check(lk_state(w) == (int)SS__NORMAL,
+		 "*** VAX3's grant completes the $ENQ ***");
+	engine_down();
+
+	/* Never acknowledged: no survivor, no record. (Its requester block is
+	 * failed PATHLOST at the departure -- test_dlm_requester's
+	 * test_survivor_keeps_its_block -- which ends it SS$_UNSUPPORTED.) */
+	root = survivor_up();
+	w = enq("RMT1", LCK_K_EXMODE, 0u);
+	vax1_departs();
+	ct_check(lk_state(w) == 0 && !vms_lock_dlm_proxy_survives(w),
+		 "*** a request VAX1 never acknowledged does not survive ***");
+	answer_for(ans, ra1b_vax3_rmt1_ans, root);
+	(void)vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01, ans,
+				   VMS_CM_BODY_LEN);
+	ct_check_eq_u32(g_n_sent, 1u, "  and no record of it goes out");
+	engine_down();
+
+	/* Acknowledged, but its tree's rebuild is STOPPED: ended, not left. */
+	root = survivor_up();
+	w = enq("RMT1", LCK_K_EXMODE, 0u);
+	(void)vms_lock_dlm_proxy_queued_recv(w, CSID_VAX1, 0x0700040au);
+	vax1_departs();
+	answer_for(ans, ra1b_vax3_rmt1_ans, root);
+	ans[34] = 0xfb;                                    /* not a grant */
+	(void)vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01, ans,
+				   VMS_CM_BODY_LEN);
+	ct_check(lk_state(w) == (int)SS__UNSUPPORTED &&
+		 g_rm.rb_waiters_ended == 1u,
+		 "*** a survivor whose rebuild stopped ends SS$_UNSUPPORTED: "
+		 "no eternal wait ***");
+	engine_down();
+
+	/* Acknowledged, but no rebuild can run (doors unbound). */
+	root = survivor_up();
+	w = enq("RMT1", LCK_K_EXMODE, 0u);
+	(void)vms_lock_dlm_proxy_queued_recv(w, CSID_VAX1, 0x0700040au);
+	g_ops.rb_install = NULL;
+	vax1_departs();
+	ct_check(lk_state(w) == (int)SS__UNSUPPORTED,
+		 "  ...and so does one no rebuild can carry at all");
+	engine_down();
+	(void)root;
+}
+
+static void test_this_node_masters_the_waiter(void)
+{
+	uint8_t rec[VMS_CM_BODY_LEN];
+	uint32_t w, n0;
+
+	printf("-- rd vms-1b68: this node is RMT1's directory and its next "
+	       "master; its waiter is granted at the window's close\n");
+	(void)engine_up(CSID_VAX2, 0x20400217u);
+	table_up(CSID_VAX3, 0u);
+	g_ops.rb_unsent = d_rb_unsent;
+	g_ops.rb_settle = d_rb_settle;
+	g_dir_of_names = 0u;                         /* THIS node directs it */
+	w = enq("RMT1", LCK_K_EXMODE, 0u);
+	(void)vms_lock_dlm_proxy_queued_recv(w, CSID_VAX1, 0x0700040au);
+	vax1_departs();
+	ct_check(g_rm.rb_mastered == 1u && g_n_sent == 0u,
+		 "this node masters RMT1 now; nothing is sent");
+	ct_check(lk_state(w) == 0,
+		 "*** our EX waiter is NOT granted before the survivors' "
+		 "records are in ***");
+	/* VAX3's waiting PR, re-sent to us (its ROOT record, re-queued). */
+	n0 = vms_lock_dlm_rebuild_installed();
+	memcpy(rec, ra1b_vax3_rmt1_req, VMS_CM_BODY_LEN);
+	put32(rec + 24, 0x07000404u);
+	rec[30] = (uint8_t)LCK_K_PRMODE;
+	rec[31] = 0u;
+	rec[108] = 0x04u;
+	rec[110] = 0xffu;
+	ct_check_eq_u32(vms_dlm_rm_rb_record(&g_rm, CSID_VAX3, rec,
+					     VMS_CM_BODY_LEN),
+			VMS_DLM_RM_HANDLED,
+			"VAX3's WAITING record is installed");
+	ct_check(g_staged[34] == 0xfau && g_staged[28] == 0x14u &&
+		 g_staged[30] == (uint8_t)LCK_K_PRMODE && g_staged[31] == 0u &&
+		 le32(g_staged + 20) != 0u,
+		 "*** answered 0xfa, body[28] 0x14, its (body[30], body[31]) "
+		 "echoed ***");
+	ct_check_eq_u32(vms_lock_dlm_rebuild_installed(), n0 + 1u,
+			"  one lock installed, on the waiting queue");
+	rec[110] = 0x02u;
+	ct_check_eq_u32(vms_dlm_rm_rb_record(&g_rm, CSID_VAX3, rec,
+					     VMS_CM_BODY_LEN),
+			VMS_DLM_RM_NOT_MINE,
+			"a record whose body[110] names no queue is not taken");
+	vms_dlm_rm_rb_window_close(&g_rm);
+	ct_check(lk_state(w) == (int)SS__NORMAL,
+		 "*** the window closes: our waiter, first in the queue, is "
+		 "GRANTED EX ***");
+	ct_check(vms_lock_dlm_rebuild_settle() == 0u,
+		 "  the settle runs once");
+	engine_down();
+}
+
 int main(void)
 {
 	printf("test_dlm_rebuild: the failover rebuild, on the real lock "
@@ -1666,5 +1957,8 @@ int main(void)
 	test_an_unanswered_record_is_bounded();
 	test_lab874f_the_adopted_rsb_keeps_the_block();
 	test_ra1b_7400_the_later_sequence_stays();
+	test_codec_queue_states();
+	test_a_queued_waiter_is_rebuilt();
+	test_this_node_masters_the_waiter();
 	return ct_summary("test_dlm_rebuild");
 }

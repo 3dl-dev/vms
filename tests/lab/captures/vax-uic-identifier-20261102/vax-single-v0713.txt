@@ -1,0 +1,31 @@
+OVMX/NetBSD-vax V0.7-13 single-node demo disk (release asset ovmx-vax-single.img.gz),
+booted under SIMH in an own lab pod, 2026-11-02 (rd vms-1f7 VAX follow-up).
+Console read through ovmx-lab-console; CR/NUL stripped.
+
+BEFORE -- the disk as released. Its DCL.EXE is linked by
+tools/cross-vax/build-vmsdcl-vax.sh; nm shows the LIBVMSRMS seams weak-UNDEFINED
+("w ovmx_rightslist_idtoasc", "w ovmx_rightslist_asctoid", ...), so the resolver
+pointer libvms tests is NULL and every lookup takes the miss:
+
+$ WRITE SYS$OUTPUT "[A:" + F$IDENTIFIER("SYSTEM","NAME_TO_NUMBER") + "]"
+[A:0]
+$ WRITE SYS$OUTPUT "[B:" + F$IDENTIFIER(%X10004,"NUMBER_TO_NAME") + "]"
+[B:]
+
+CONTROL -- a separate image (DIAG.EXE, linked like the top-level CMake DCL)
+injected into the same disk resolves the same RIGHTSLIST.DAT, so the file and
+the RMS/ACP path are sound; only DCL's link was missing the code:
+
+$ RUN SYS$SYSTEM:DIAG.EXE
+DIAG open h=0x7f40e000 st=00010001
+DIAG lseek=0 read=512 b0..15: 03 00 03 00 01 00 03 00 10 00 0D 00 00 00 00 00
+DIAG p3open st=00010001 krf_name=2 krf_holder=1
+DIAG byvalue st=00010001
+DIAG byname st=00010001
+DIAG idtoasc st=00000001 name=SYSTEM
+DIAG asctoid st=00000001 value=00010004
+
+AFTER -- DCL.EXE;2 linked by the fixed build-vmsdcl-vax.sh (V0.7-13 sources,
+the 20 LIBVMSRMS seams forced in with --undefined; proof 3 asserts none is left
+weak) injected into a fresh copy of the same disk:
+

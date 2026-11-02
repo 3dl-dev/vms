@@ -90,6 +90,8 @@ LIBVMS_A="$(build_dep libvms "$LIBVMS" vms libvms.a)"
 LIBVMSLNM_A="$(build_dep vmslnm "$VMSLNM" vmslnm libvmslnm.a)"
 LIBVMSFS_A="$(build_dep vmsfs "$VMSFS" vmsfs libvmsfs.a)"
 LIBVMSRMS_A="$(build_dep vmsrms "$VMSRMS" vmsrms libvmsrms.a)"
+. "$(dirname "$0")/weak-seams.sh"   # rd vms-1f7: the LIBVMSRMS weak seams
+seam_flags 1>&2
 LIBVMSQUEUE_A="$(build_dep vmsqueue "$VMSQUEUE" vmsqueue libvmsqueue.a)"
 echo "dependency stack built:"
 echo "  $LIBVMSSYS_A"
@@ -134,6 +136,7 @@ echo "=== proof 2: link a real vax--netbsdelf PROVISION.EXE ==="
 # OVMX image on this substrate takes.
 "$CC" --sysroot="$SYSROOT" \
     "$OUT/ovmx_provision.o" "$OUT/ovmx_boot_netbsd.o" \
+    $SEAM_FLAGS \
     -Wl,--start-group \
         "$LIBVMSQUEUE_A" "$LIBVMSRMS_A" "$LIBVMS_A" "$LIBVMSFS_A" \
         "$LIBVMSLNM_A" "$LIBVMSPROCESS_A" "$LIBVMSSYS_A" \
@@ -172,4 +175,5 @@ fi
 echo "OK: own_object_acp defined + vms_kif_acp_fileop referenced (ACP arm live)"
 
 echo
+seam_check "$OUT/PROVISION.EXE"
 echo "=== ALL PROOFS PASSED: ovmx_provision (PROVISION.EXE) builds and links for $TARGET ==="

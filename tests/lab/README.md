@@ -342,6 +342,7 @@ deliberately; do not assume this copy is current.
 | `cycle2.sh` | Join/exit cycling with a per-cycle identity and per-cycle env. |
 | `bootlab.sh` | Boot the lab from live disks with no golden restore. |
 | `mk_sysgen.py` | Mint a SYSGEN store for a new `SCSNODE`/`SCSSYSTEMID`. Patches a known-good template rather than regenerating, so every other field matches a store proven to join. Rejects names >6 chars (VMS truncates) and deletes any stale `.cluster` sidecar. |
+| `stage_rmhold.sh` | Stage `RMHOLD` (`tests/lab/ci6/RMHOLD.MAR`, the remaster/rebuild arm driver) on a pod's real VAXes once they are logged in as SYSTEM: FTP via `vput.py`, then MACRO, LINK, COPY to `SYS$COMMON:[SYSEXE]` and `RMH :==` on each console, verified by `DIRECTORY`. Run it before any fire whose plan uses `RMH`. |
 | `seqchk.py` | Capture-integrity check: sequence gaps and truncated frames. |
 | `probe.sh` | Drive any VAX console and capture between markers. |
 | `portwatch.sh` | `csbwatch.sh` with SDA `SHOW CONNECTIONS/NODE=` — the peer's CDT table and its `Rej/Disconn Reason`. |

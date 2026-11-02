@@ -1,0 +1,105 @@
+ .TITLE RMHOLD
+; RMHOLD "<r><s><n><w><name>" -- vms-380 controlled remaster arm.
+;   w = W: take the root EX first and write the known value block on the
+;       down-conversion to r (only the FIRST holder can); anything else: request
+;       the root directly in mode r with VALBLK.
+;   w = A: as '-', then generate lock ACTIVITY: 300 rounds of converting every
+;       sub-lock to NL and back to s (drives activity-based remastering).
+;   w = B: as A, with 3000 rounds (rd vms-657 run 2).
+;   r = root lock mode digit (0 NL .. 5 EX), taken EX first with VALBLK so a
+;       known 16-byte value block is written by the down-conversion to r
+;   s = sub-lock mode digit, n = number of sub-locks (0-9) named S0..S(n-1)
+;   name = root resource name (system-wide)
+; Then hibernates holding everything. Ground truth (lkids, modes, LVB) is read
+; afterwards with SDA SHOW LOCK / SHOW RESOURCE on each node.
+ $LCKDEF
+ $SSDEF
+ .PSECT DAT,WRT,NOEXE,LONG
+RLKSB: .BLKB 24
+SLKSB: .BLKB 240
+CMDBUF: .BLKB 100
+CMDDSC: .WORD 100
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS CMDBUF
+CMDLEN: .WORD 0
+ .WORD 0
+RMODE: .LONG 0
+SMODE: .LONG 0
+NSUB: .LONG 0
+RESDSC: .WORD 0
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS 0
+SUBNAM: .ASCII /S0/
+SUBDSC: .WORD 2
+ .BYTE 14
+ .BYTE 1
+ .ADDRESS SUBNAM
+PAT: .ASCII /RMLVB-0123456789/
+ .PSECT COD,EXE,NOWRT
+ .ENTRY RMHOLD,^M<R2,R3,R4,R5,R6,R7,R8>
+ PUSHAW CMDLEN
+ PUSHL #0
+ PUSHAB CMDDSC
+ CALLS #3,G^LIB$GET_FOREIGN
+ MOVZBL CMDBUF,R0
+ SUBL2 #^A/0/,R0
+ MOVL R0,RMODE
+ MOVZBL CMDBUF+1,R0
+ SUBL2 #^A/0/,R0
+ MOVL R0,SMODE
+ MOVZBL CMDBUF+2,R0
+ SUBL2 #^A/0/,R0
+ MOVL R0,NSUB
+ MOVZWL CMDLEN,R1
+ SUBL2 #4,R1
+ MOVW R1,RESDSC
+ MOVAB CMDBUF+4,RESDSC+4
+ CMPB CMDBUF+3,#^A/W/
+ BEQL 60$
+ $ENQW_S EFN=#1,LKMODE=RMODE,LKSB=RLKSB,-
+  FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK>,RESNAM=RESDSC
+ BLBS R0,71$
+ BRW 90$
+60$: $ENQW_S EFN=#1,LKMODE=#LCK$K_EXMODE,LKSB=RLKSB,-
+  FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK>,RESNAM=RESDSC
+ BLBS R0,70$
+ BRW 90$
+70$: MOVC3 #16,PAT,RLKSB+8
+ $ENQW_S EFN=#1,LKMODE=RMODE,LKSB=RLKSB,-
+  FLAGS=#<LCK$M_SYSTEM!LCK$M_VALBLK!LCK$M_CONVERT>
+ BLBS R0,71$
+ BRW 90$
+71$: CLRL R6
+ MOVAB SLKSB,R7
+10$: CMPL R6,NSUB
+ BGEQ 50$
+ ADDB3 #^A/0/,R6,SUBNAM+1
+ $ENQW_S EFN=#1,LKMODE=SMODE,LKSB=(R7),RESNAM=SUBDSC,-
+  PARID=RLKSB+4
+ BLBS R0,72$
+ BRW 90$
+72$: ADDL2 #24,R7
+ INCL R6
+ BRB 10$
+50$: MOVL #300,R8
+ CMPB CMDBUF+3,#^A/A/
+ BEQL 52$
+ MOVL #3000,R8
+ CMPB CMDBUF+3,#^A/B/
+ BNEQ 58$
+52$: CLRL R6
+ MOVAB SLKSB,R7
+54$: CMPL R6,NSUB
+ BGEQ 56$
+ $ENQW_S EFN=#1,LKMODE=#LCK$K_NLMODE,LKSB=(R7),FLAGS=#LCK$M_CONVERT
+ $ENQW_S EFN=#1,LKMODE=SMODE,LKSB=(R7),FLAGS=#LCK$M_CONVERT
+ ADDL2 #24,R7
+ INCL R6
+ BRB 54$
+56$: SOBGTR R8,52$
+58$: $HIBER_S
+ BRB 58$
+90$: RET
+ .END RMHOLD

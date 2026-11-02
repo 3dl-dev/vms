@@ -199,6 +199,19 @@ cluster_host_fuzz(fuzz_codec_cm)
 cluster_host_fuzz(fuzz_codec_vc)
 cluster_host_fuzz(fuzz_codec_blk)
 
+# rd vms-b4d: the directory half of the op-0x01 RECEIVE path -- identity
+# parse, the shipping directory table asked WITH the vector's answer, and the
+# answer builder -- fuzzed with random bodies, table state and directed-ness.
+# The table TU is compiled into the fuzz itself so the sanitizer covers it.
+cluster_host_fuzz(fuzz_dlm_dir_directed)
+target_sources(fuzz_dlm_dir_directed PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_dlm_dir.c)
+target_include_directories(fuzz_dlm_dir_directed PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_definitions(fuzz_dlm_dir_directed PRIVATE OVMX_CLUSTER_HOST)
+set_tests_properties(cluster_host_fuzz_dlm_dir_directed PROPERTIES
+    LABELS "unit;cluster;codec;fuzz;dlm" TIMEOUT 180)
+
 # ---- FC-P3.6: the CLUB/CSB model, the ten-state ladder, the reconnect FSM ----
 # Built from src/kernel-core with -DOVMX_CLUSTER_HOST -- the SAME sources both
 # kmods compile, with no kernel headers and no seam. That is the whole point of
@@ -1245,6 +1258,30 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 add_test(NAME cluster_host_test_dlm_mixed_master COMMAND test_dlm_mixed_master)
 set_tests_properties(cluster_host_test_dlm_mixed_master PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm;cnxman"
+    TIMEOUT 60
+)
+
+# ---- rd vms-b4d: NO STALE DIRECTORY AFTER A REMASTER, NO UNDIRECTED 0xf9 ----
+# The engine (an adopted tree's release posts the op-0x04 to the directory the
+# real vector names), the CLUB's real three-member vector, and the shipping
+# directory table (an undirected op-0x01 with no entry is never "you master
+# it") -- the lab1b68 two-master sequence end to end.
+add_executable(test_dlm_stale_directory test_dlm_stale_directory.c)
+target_include_directories(test_dlm_stale_directory PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_stale_directory PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_stale_directory PRIVATE
+    cluster_host_lock cluster_host_cnxman Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_stale_directory PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_stale_directory COMMAND test_dlm_stale_directory)
+set_tests_properties(cluster_host_test_dlm_stale_directory PROPERTIES
     LABELS "unit;cluster;cluster_host;lock;dlm;cnxman"
     TIMEOUT 60
 )

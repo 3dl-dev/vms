@@ -127,6 +127,7 @@ static const struct status_entry known_codes[] = {
     { CLI$_IVKEYW,      "CLI",    "IVKEYW",       "unrecognized keyword - check validity and spelling" },
     { CLI$_IVVERB,      "CLI",    "IVVERB",       "unrecognized command verb - check validity and spelling" },
     { CLI$_MAXPARM,     "CLI",    "MAXPARM",      "too many parameters - reenter command with fewer parameters" },
+    { CLI$_NOLIST,      "CLI",    "NOLIST",       "list of parameter values not allowed - check use of comma (,)" },
     { CLI$_UNDSYM,      "CLI",    "UNDSYM",       "undefined symbol - check validity and spelling" },
     { CLI$_IVQUAL,      "CLI",    "IVQUAL",       "unrecognized qualifier - check validity, spelling, and placement" },
 

@@ -1635,6 +1635,162 @@ static int dcl_label_not_found(struct dcl_context *ctx, const char *label)
     return (int)DCL_CLI_USGOTO_EXIT;
 }
 
+/*
+ * rd vms-ba2: the file verbs whose P1 is a filespec LIST of any length
+ * ("parameter: filespec[,...]", OpenVMS DCL Dictionary), and how many
+ * parameters each takes. OpenVMS acts on every element of the list -- its
+ * length is bounded only by the command line -- so DCL runs the verb once per
+ * element; P2 (the output of COPY/APPEND/RENAME) is the same for each.
+ */
+static const struct { const char *verb; int maxp; int self; } plist_verbs[] = {
+    { "DELETE", 1, 0 }, { "TYPE", 1, 0 }, { "PURGE", 1, 0 },
+    { "COPY", 2, 0 }, { "APPEND", 2, 0 }, { "RENAME", 2, 0 },
+    { "DIRECTORY", 1, 1 },   /* lists the whole P1 itself: one header per directory */
+};
+
+static int plist_index(const char *verb)
+{
+    for (size_t i = 0; i < sizeof plist_verbs / sizeof plist_verbs[0]; i++)
+        if (strcmp(verb, plist_verbs[i].verb) == 0)
+            return (int)i;
+    return -1;
+}
+
+/* VMS severity order (low to high): S, I, W, E, F -> rank for "keep worst". */
+static int sev_rank(int st)
+{
+    static const int rank[8] = { 2, 0, 3, 1, 4, 4, 4, 4 };
+    return rank[st & 7];
+}
+
+/* the "node::dev:[dir]" prefix of a filespec (length), 0 if it names none */
+static size_t spec_dir_prefix(const char *s)
+{
+    size_t end = 0;
+    for (size_t i = 0; s[i]; i++) {
+        if (s[i] == '"') {                      /* node"user pw":: access string */
+            while (s[++i] && s[i] != '"') ;
+            if (!s[i]) break;
+        } else if (s[i] == ':') {
+            end = i + 1;
+        } else if (s[i] == '[' || s[i] == '<') {
+            char close = s[i] == '[' ? ']' : '>';
+            while (s[i] && s[i] != close) i++;
+            if (!s[i]) break;
+            end = i + 1;
+        }
+    }
+    return end;
+}
+
+/*
+ * A list element without a device or directory takes them from the element
+ * before it: DCL's temporary ("sticky") defaults in a parameter list. Real
+ * VAX V7.3: DELETE [.SUB]A.TXT;*,B.TXT;* and DIRECTORY [.SUB]A.TXT,B.TXT both
+ * look for B.TXT in [.SUB] (tests/lab/captures/dcl-plist-20261102 #10, #14).
+ */
+void dcl_plist_sticky(const char *prev, const char *cur, char *out, size_t cap)
+{
+    size_t pl = prev ? spec_dir_prefix(prev) : 0;
+    if (pl == 0 || spec_dir_prefix(cur) != 0 || pl + strlen(cur) + 1 > cap) {
+        snprintf(out, cap, "%s", cur);
+        return;
+    }
+    memcpy(out, prev, pl);
+    snprintf(out + pl, cap - pl, "%s", cur);
+}
+
+/* an output spec that names one file (not a wildcard, a bare directory or device) */
+int dcl_spec_names_one_file(const char *s)
+{
+    if (strpbrk(s, "*%")) return 0;
+    return s[spec_dir_prefix(s)] != '\0';
+}
+
+/*
+ * The text DCL echoes between backslashes after a parameter error: as far as
+ * it had parsed -- the name field of a filespec ("L.TXT;*" -> \L\, lab #2).
+ */
+static void parm_echo(const char *elem, char *out, size_t cap)
+{
+    size_t n = strcspn(elem, ".;");
+    if (n >= cap) n = cap - 1;
+    memcpy(out, elem, n);
+    out[n] = '\0';
+}
+
+/*
+ * Run a P1-list verb once per element of P1, P2.. the same for each. The
+ * element's index is cmd->list_elem (TYPE heads every file after the first
+ * with its name, as OpenVMS does). The status is the most severe one seen.
+ */
+static int exec_plist(const struct dcl_verb *verb, struct dcl_command *cmd)
+{
+    int total = dcl_param_total(cmd);
+    const char *tail[DCL_MAX_PARAMS];
+    int ntail = 0;
+    for (int s = 1; s < dcl_slot_total(cmd) && ntail < DCL_MAX_PARAMS - 1; s++)
+        for (int i = 0; i < total; i++)
+            if (dcl_param_slot(cmd, i) == s) { tail[ntail++] = dcl_param_at(cmd, i); break; }
+
+    struct dcl_command *one = malloc(sizeof *one);
+    if (!one) return SS$_INSFMEM;
+
+    int final = SS$_NORMAL, n = 0;
+    char prev[sizeof cmd->params[0]] = "";
+    for (int i = 0; i < total; i++) {
+        if (dcl_param_slot(cmd, i) != 0) continue;
+        memcpy(one, cmd, sizeof *one);
+        dcl_plist_sticky(n ? prev : NULL, dcl_param_at(cmd, i), one->params[0],
+                         sizeof one->params[0]);
+        memcpy(prev, one->params[0], sizeof prev);
+        for (int t = 0; t < ntail; t++)
+            snprintf(one->params[1 + t], sizeof one->params[0], "%s", tail[t]);
+        one->param_count = 1 + ntail;
+        one->overflow_count = one->overflow_len = 0;
+        one->overflow[0] = '\0';
+        one->slot_recorded = 0;
+        one->slot_count = one->param_count;
+        one->list_elem = n;
+        int st = verb->handler(one);
+        if (!(st & 1) && ((final & 1) || sev_rank(st) >= sev_rank(final)))
+            final = st;
+        n++;
+    }
+    free(one);
+    return final;
+}
+
+/*
+ * rd vms-ba2: a parameter of a P1-list verb that DCL itself refuses, as real
+ * OpenVMS does (lab dcl-plist-20261102): more parameters than the verb takes
+ * -> %DCL-W-MAXPARM \name\ (#2, #13, #16); a list in P2 -> %DCL-W-NOLIST
+ * \first,name\ (#15). Returns 0 when the parameters are acceptable.
+ */
+static int plist_refuse(const struct dcl_command *cmd, int maxp)
+{
+    int total = dcl_param_total(cmd), slots = dcl_slot_total(cmd);
+    char echo[256];
+    if (slots > maxp) {
+        for (int i = 0; i < total; i++)
+            if (dcl_param_slot(cmd, i) == maxp) { parm_echo(dcl_param_at(cmd, i), echo, sizeof echo); break; }
+        dcl_error("DCL", 0, "MAXPARM",
+                  "too many parameters - reenter command with fewer parameters\n \\%s\\", echo);
+        return CLI$_MAXPARM;
+    }
+    for (int i = 1; i < total; i++) {
+        if (dcl_param_slot(cmd, i) >= 1 && dcl_param_slot(cmd, i) == dcl_param_slot(cmd, i - 1)) {
+            char nm[200];
+            parm_echo(dcl_param_at(cmd, i), nm, sizeof nm);
+            snprintf(echo, sizeof echo, "%.50s,%s", dcl_param_at(cmd, i - 1), nm);
+            dcl_error("DCL", 0, "NOLIST",
+                      "list of parameter values not allowed - check use of comma (,)\n \\%s\\", echo);
+            return CLI$_NOLIST;
+        }
+    }
+    return 0;
+}
+
 int dcl_execute_command(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -2033,11 +2189,22 @@ int dcl_execute_command(struct dcl_command *cmd)
         /* rd vms-465: more parameters than P1-P8 hold. A built-in that reads
          * them from params[] would run on a silently shortened list, so it
          * answers %DCL-W-MAXPARM instead -- except LIBRARY (its input list
-         * through dcl_param_at) and the verbs that parse their own raw command
+         * through dcl_param_at), the verbs that parse their own raw command
          * tail and never saw the cut (WRITE, READ, LINK, PIPE, SET ACL /
-         * PROTECTION / TERMINAL). */
-        if ((cmd->overflow_count > 0 || cmd->overflow_lost) &&
-            (cmd->overflow_lost || !dcl_verb_takes_long_list(verb->name, cmd))) {
+         * PROTECTION / TERMINAL), and the P1-list file verbs (plist_verbs,
+         * rd vms-ba2), which act on every element. */
+        int plx = plist_index(verb->name);
+        if (plx >= 0 && !cmd->overflow_lost) {
+            int rst = plist_refuse(cmd, plist_verbs[plx].maxp);
+            if (rst) {
+                dcl_set_status(ctx, rst);
+                return rst;
+            }
+        }
+        int maxparm = cmd->overflow_lost ||
+            (plx < 0 && cmd->overflow_count > 0 &&
+             !dcl_verb_takes_long_list(verb->name, cmd));
+        if (maxparm) {
             dcl_error("DCL", 0, "MAXPARM",
                       "too many parameters - reenter command with fewer parameters");
             dcl_set_status(ctx, CLI$_MAXPARM);
@@ -2050,7 +2217,18 @@ int dcl_execute_command(struct dcl_command *cmd)
             return qstatus;
         }
 
-        int status = verb->handler(cmd);
+        /* rd vms-ba2: a list in P1 of a file verb -- every element is acted on */
+        int plist = plx >= 0 && !plist_verbs[plx].self &&
+                    dcl_param_total(cmd) > dcl_slot_total(cmd);
+        /* COPY of a list to ONE named file concatenates: cmd_copy takes it whole */
+        if (plist && strcmp(verb->name, "COPY") == 0 && dcl_slot_total(cmd) >= 2) {
+            for (int i = 0; i < dcl_param_total(cmd); i++)
+                if (dcl_param_slot(cmd, i) == 1) {
+                    if (dcl_spec_names_one_file(dcl_param_at(cmd, i))) plist = 0;
+                    break;
+                }
+        }
+        int status = plist ? exec_plist(verb, cmd) : verb->handler(cmd);
         dcl_set_status(ctx, status);
         return status;
     }

@@ -28,6 +28,8 @@
 #include "lckdef.h"
 #include "lkidef.h"
 #include "iledef.h"   /* ILE3 / ILE3_TERMINATOR */
+#include "efndef.h"   /* EFN$C_ENF */
+#include "prcdef.h"   /* JPI$_PID (LKI$_PID's cross-check) */
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
 
@@ -322,6 +324,107 @@ static void scenario_binary_resnam(void)
     sys$deq(lksb.lksb$l_lkid, NULL, 0, 0);
 }
 
+/* ================================================================
+ * Scenario (rd vms-6f2): the SIX-item list tests/lab/ci6/RMHOLD.C's
+ * getlki_read() asks for, verbatim -- LKI$_LOCKID, LKI$_PARENT, LKI$_PID,
+ * LKI$_GRANTCOUNT, LKI$_STATE (3 bytes) and LKI$_RESNAM (32), every item with
+ * a return-length word, through sys$getlkiw(EFN$C_ENF, ...). Before vms-6f2
+ * LKI$_PID was refused and the WHOLE list came back SS$_BADPARAM. Every item
+ * must now be filled from the real lock: LKI$_PID equals the PID $GETJPI
+ * reports for this very process.
+ * ================================================================ */
+static void scenario_six_item_list(void)
+{
+    printf("--- scenario: RMHOLD's six-item list, every item filled (rd vms-6f2) ---\n");
+
+    $DESCRIPTOR(resnam, "SYSSVC_GETLKI_SIX");
+    struct lksb_caller lksb = {0};
+    uint32_t est = sys$enqw(0, LCK$K_PWMODE, &lksb, 0, &resnam, 0, NULL, 0, NULL, 0, 0, 0);
+    if (!(est & 1)) {
+        printf("  FAIL: setup: sys$enqw PW failed (status %u)\n", est);
+        fail++;
+        return;
+    }
+
+    uint32_t mypid = 0, jpid0 = 0;
+    ILE3 jitm[] = { { 4, JPI$_PID, &mypid, NULL }, ILE3_TERMINATOR };
+    uint32_t jst = sys$getjpiw(0, &jpid0, NULL, jitm, NULL, NULL, 0);
+    CHECK((jst & 1) && mypid != 0, "setup: sys$getjpiw reports this process's own PID");
+
+    uint32_t lockid = 0xDEADBEEF, parent = 0xDEADBEEF, pid = 0xDEADBEEF,
+             grantcount = 0xDEADBEEF;
+    uint8_t  state[3] = {0xFF, 0xFF, 0xFF};
+    char     rname[32];
+    uint16_t len_id = 0xFFFF, len_par = 0xFFFF, len_pid = 0xFFFF,
+             len_cnt = 0xFFFF, len_state = 0xFFFF, len_res = 0xFFFF;
+    memset(rname, 0x5A, sizeof rname);
+    ILE3 items[] = {
+        { 4,             LKI$_LOCKID,     &lockid,     &len_id    },
+        { 4,             LKI$_PARENT,     &parent,     &len_par   },
+        { 4,             LKI$_PID,        &pid,        &len_pid   },
+        { 4,             LKI$_GRANTCOUNT, &grantcount, &len_cnt   },
+        { 3,             LKI$_STATE,      state,       &len_state },
+        { sizeof(rname), LKI$_RESNAM,     rname,       &len_res   },
+        ILE3_TERMINATOR
+    };
+
+    uint32_t lkidarg = lksb.lksb$l_lkid;
+    uint32_t gst = sys$getlkiw(EFN$C_ENF, &lkidarg, items, NULL, NULL, 0, NULL);
+    printf("  INFO: six-item sys$getlkiw returned %%X%08X\n", (unsigned)gst);
+    CHECK(gst == SS$_NORMAL, "the six-item sys$getlkiw over a granted lock returns SS$_NORMAL");
+    CHECK(lockid == lksb.lksb$l_lkid && len_id == 4,
+          "LKI$_LOCKID: the lock ID $ENQW returned, return length 4");
+    CHECK(parent == 0 && len_par == 4, "LKI$_PARENT: 0 for a root lock, return length 4");
+    CHECK(pid == mypid && len_pid == 4,
+          "LKI$_PID: the PID $GETJPI reports for the owning process, return length 4");
+    CHECK(grantcount == 1 && len_cnt == 4,
+          "LKI$_GRANTCOUNT: 1 (the only granted lock on the resource), return length 4");
+    CHECK(len_state == 3 && state[LKI$B_STATE_GRMODE] == LCK$K_PWMODE &&
+          state[LKI$B_STATE_RQMODE] == LCK$K_PWMODE &&
+          state[LKI$B_STATE_QUEUE] == LKI$C_GRANTED,
+          "LKI$_STATE: 3 bytes, granted PW, requested PW, queue GRANTED");
+    CHECK(len_res == 17 && memcmp(rname, "SYSSVC_GETLKI_SIX", 17) == 0,
+          "LKI$_RESNAM: the 17-byte resource name, return length 17");
+
+    sys$deq(lksb.lksb$l_lkid, NULL, 0, 0);
+}
+
+/* ================================================================
+ * Scenario (rd vms-6f2): an unsupported item code INSIDE an otherwise valid
+ * list. VMS fails the CALL: the OpenVMS System Services Reference Manual's
+ * $GETLKI "Condition Values Returned" gives "SS$_BADPARAM  You specified an
+ * invalid item code." -- a call-level status, not a per-item one. The codes
+ * are validated before the executive is read, so the valid items in the same
+ * list are left untouched rather than half-answered.
+ * ================================================================ */
+static void scenario_unsupported_in_list(void)
+{
+    printf("--- scenario: unsupported item code inside a valid list (rd vms-6f2) ---\n");
+
+    $DESCRIPTOR(resnam, "SYSSVC_GETLKI_BADITM");
+    struct lksb_caller lksb = {0};
+    uint32_t est = sys$enqw(0, LCK$K_EXMODE, &lksb, 0, &resnam, 0, NULL, 0, NULL, 0, 0, 0);
+    CHECK(est & 1, "setup: sys$enqw EX for the unsupported-item scenario succeeds");
+
+    uint32_t lockid = 0xDEADBEEF, pid = 0xDEADBEEF, dummy = 0xDEADBEEF;
+    uint16_t len_id = 0xFFFF, len_pid = 0xFFFF, len_bad = 0xFFFF;
+    ILE3 items[] = {
+        { 4, LKI$_LOCKID, &lockid, &len_id  },
+        { 4, LKI$_PID,    &pid,    &len_pid },
+        { 4, 0x7FFF /* no LKI$_ item has this code */, &dummy, &len_bad },
+        ILE3_TERMINATOR
+    };
+    uint32_t lkidarg = lksb.lksb$l_lkid;
+    uint32_t bst = sys$getlkiw(EFN$C_ENF, &lkidarg, items, NULL, NULL, 0, NULL);
+    CHECK(bst == SS$_BADPARAM,
+          "an invalid item code anywhere in the list fails the call with SS$_BADPARAM");
+    CHECK(lockid == 0xDEADBEEF && pid == 0xDEADBEEF && dummy == 0xDEADBEEF &&
+          len_id == 0xFFFF && len_pid == 0xFFFF && len_bad == 0xFFFF,
+          "the refused call writes no item and no return length");
+
+    sys$deq(lksb.lksb$l_lkid, NULL, 0, 0);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -348,6 +451,8 @@ int main(void)
     scenario_two_holders();
     scenario_fail_honest();
     scenario_binary_resnam();
+    scenario_six_item_list();
+    scenario_unsupported_in_list();
 
     printf("=== test_syssvc_getlki: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

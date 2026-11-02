@@ -689,6 +689,26 @@ uint32_t vms_kif_getlki_resnam(uint32_t lkid, uint8_t resnam[32],
 }
 
 /*
+ * vms_kif_getlki_holder (rd vms-6f2) -- LKI$_PID: the owning local process's
+ * VMS PID as the executive reads it off the lock block (vms_ioctl_getlki),
+ * and whether a local process owns the lock at all.
+ */
+uint32_t vms_kif_getlki_holder(uint32_t lkid, uint32_t *holder_pid,
+                               uint32_t *holder_local)
+{
+    struct vms_getlki_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.lkid = lkid;
+
+    KIF_CALL(VMS_IOCTL_GETLKI, &args);
+
+    if (holder_pid) *holder_pid = args.holder_pid;
+    if (holder_local) *holder_local = args.holder_local;
+    return args.status;
+}
+
+/*
  * vms_kif_getlki_parent (vms-0dd, extended vms-b71) -- a sibling of
  * vms_kif_getlki that ALSO surfaces args.parent_id and args.grant_count.
  * Same VMS_IOCTL_GETLKI ioctl, same kernel handler (no new op/ABI addition --

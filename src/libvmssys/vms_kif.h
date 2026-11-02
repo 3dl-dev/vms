@@ -286,6 +286,14 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 uint32_t vms_kif_getlki_resnam(uint32_t lkid, uint8_t resnam[32],
                                uint32_t *resnam_len);
 
+/* vms_kif_getlki_holder -- LKI$_PID's source (rd vms-6f2): the VMS PID of
+ * the process on THIS node that owns the lock, read off the LKB's owning PCB.
+ * *holder_local is 1 when such a process exists, 0 for a master copy held for
+ * a remote node's process (whose PID the executive does not hold).
+ * WIRED: sys$getlki's LKI$_PID (src/libvms/syssvc/sys_getlki.c). */
+uint32_t vms_kif_getlki_holder(uint32_t lkid, uint32_t *holder_pid,
+                               uint32_t *holder_local);
+
 /* vms_kif_getlki_parent -- vms_kif_getlki plus the lock's PARENT lkid (0 for
  * a root lock) and the resource's GRANTCOUNT (vms-b71), the #GETLKI fields
  * the kernel already fills but the original wrapper never surfaced. Same

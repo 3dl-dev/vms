@@ -1,0 +1,40 @@
+# OVMX booted runtime (distro/Dockerfile.bootable, QEMU console, UAT harness), this branch, 2026-11-02
+$ SPAWN SHOW TIME
+   2-NOV-2026 22:46:59
+$ SHOW SYMBOL $STATUS
+  $STATUS == "%X00000001"
+$ SPAWN/OUTPUT=SYS$LOGIN:X1.LOG SHOW TIME
+$ TYPE SYS$LOGIN:X1.LOG
+   2-NOV-2026 22:47:00
+$ SPAWN/INPUT=NL:/OUTPUT=SYS$LOGIN:X2.LOG WRITE SYS$OUTPUT "TO-X2"
+$ TYPE SYS$LOGIN:X2.LOG
+TO-X2
+$ SPAWN/OUTPUT=SYS$LOGIN:X3.LOG FOOBAR
+$ TYPE SYS$LOGIN:X3.LOG
+%DCL-W-IVVERB, unrecognized command verb - check validity and spelling
+ \FOOBAR\
+$ TYPE SYS$LOGIN:LOGIN.COM,X2.LOG
+$! LOGIN.COM - Per-user login command procedure template
+$!
+$! Copy this file to your home directory and customize.
+$!
+$ SET DEFAULT SYS$LOGIN
+$ EXIT
+ 
+SYS$SYSROOT:[SYSMGR]X2.LOG;1
+ 
+TO-X2
+$ SPAWN/NOWAIT/INPUT=NL:/OUTPUT=SYS$LOGIN:N1.LOG SHOW SYSTEM
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+$ WAIT 00:00:03
+$ TYPE SYS$LOGIN:N1.LOG
+OpenVMX V0.7-15 - OpenVMS-compatible  on node OVMX   2-NOV-2026 22:49:17.75  Uptime  0 00:00:21
+  Pid    Process Name          CPU         Page flts   Pages
+10000005 SYSTEM             0 00:00:00.53       1112     915
+10000001 STARTUP            0 00:00:03.10        109     358
+10000002 OPCOM              0 00:00:00.20        121     384
+10000004 JOB_CONTROL        0 00:00:00.07         96     352
+10000006 SYSTEM_1           0 00:00:00.30        511     825
+$ SPAWN/INPUT=SYS$LOGIN:LOGIN.COM/OUTPUT=SYS$LOGIN:N2.LOG SHOW DEFAULT
+$ TYPE SYS$LOGIN:N2.LOG
+  SYS$SYSROOT:[SYSMGR]

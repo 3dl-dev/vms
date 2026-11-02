@@ -79,6 +79,7 @@
 #include <fcntl.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <poll.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -227,8 +228,9 @@ static int is_mbx_device(const char *s)
 static int names_a_file(const char *spec);
 static char      g_fout_spec[256];
 static int       g_fout_pipe_r = -1;
-static pthread_t g_fout_writer;
 static int       g_fout_up     = 0;
+static char      g_fout_line[DCL_MBX_BUF + 1];
+static size_t    g_fout_len    = 0;
 
 static int lnm_process_file(const char *lognam, char *out, size_t outsz)
 {
@@ -253,36 +255,52 @@ static int fd_is_null_device(int fd)
     return S_ISCHR(s.st_mode) && s.st_rdev == n.st_rdev;
 }
 
-static void *file_writer_main(void *arg)
+/* File one finished line as a record of the SYS$OUTPUT file ($PUT at EOF). */
+static void fout_put(void)
 {
+    while (g_fout_len > 0 && g_fout_line[g_fout_len - 1] == '\r')
+        g_fout_len--;
+    g_fout_line[g_fout_len] = '\0';
+    (void)rms_textfile_append_line(g_fout_spec, g_fout_line);
+    g_fout_len = 0;
+}
+
+/*
+ * dcl_mbx_output_pump - file every complete line now waiting in the SYS$OUTPUT
+ * stream as a record, on THIS (the main) thread, without blocking. DCL calls it
+ * after each command and while it waits for an image it runs (dcl_cli_wait);
+ * the stream's read end is non-blocking. No thread does this: a VMS-native
+ * image's new threads have no thread-local state for LIBVMSSYS$SHR (its
+ * producer-TLS case is deferred, src/imgact/imgact.c), so RMS or a $QIO
+ * issued from one never reaches the executive -- observed on the booted
+ * runtime, where a writer thread left SPAWN/OUTPUT's file empty.
+ */
+void dcl_mbx_output_pump(void)
+{
+    if (!g_fout_up)
+        return;
     char buf[1024];
-    char line[DCL_MBX_BUF + 1];
-    size_t len = 0;
-    (void)arg;
     for (;;) {
         ssize_t n = read(g_fout_pipe_r, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
             continue;
         if (n <= 0)
-            break;
+            return;
         for (ssize_t i = 0; i < n; i++) {
-            if (buf[i] == '\n' || len == sizeof(line) - 1) {
-                while (len > 0 && line[len - 1] == '\r')
-                    len--;
-                line[len] = '\0';
-                (void)rms_textfile_append_line(g_fout_spec, line);
-                len = 0;
-                if (buf[i] == '\n')
-                    continue;
+            if (buf[i] == '\n') {
+                fout_put();
+                continue;
             }
-            line[len++] = buf[i];
+            g_fout_line[g_fout_len++] = buf[i];
+            if (g_fout_len == sizeof(g_fout_line) - 1)
+                fout_put();
         }
     }
-    if (len > 0) {
-        line[len] = '\0';
-        (void)rms_textfile_append_line(g_fout_spec, line);
-    }
-    return NULL;
+}
+
+int dcl_mbx_output_fd(void)
+{
+    return g_fout_up ? g_fout_pipe_r : -1;
 }
 
 int dcl_mbx_output_file_is(const char *equiv)
@@ -302,16 +320,15 @@ static int bind_output_file(void)
     if (pipe(p) != 0)
         return 0;
     (void)fcntl(p[0], F_SETFD, FD_CLOEXEC);
+    set_nonblock(p[0], 1);
     snprintf(g_fout_spec, sizeof(g_fout_spec), "%s", out);
-    g_fout_pipe_r = p[0];
     fflush(stdout);
-    if (dup2(p[1], STDOUT_FILENO) < 0 ||
-        pthread_create(&g_fout_writer, NULL, file_writer_main, NULL) != 0) {
+    if (dup2(p[1], STDOUT_FILENO) < 0) {
         close(p[0]);
         close(p[1]);
-        g_fout_pipe_r = -1;
         return 0;
     }
+    g_fout_pipe_r = p[0];
     /* SYS$ERROR naming the same file is the same record stream. */
     if (fd_is_null_device(STDERR_FILENO) &&
         lnm_process_file("SYS$ERROR", err, sizeof(err)) &&
@@ -677,6 +694,49 @@ void dcl_mbx_output_drain_sync(void)
     pthread_mutex_unlock(&g_out_mtx);
 }
 
+/*
+ * drain_queued_input - read, on THIS (the main) thread, every message already
+ * queued in the SYS$INPUT mailbox, into DCL's stdin pipe (rd vms-691d).
+ * LIB$SPAWN queues its subprocess's whole input -- the command string, the
+ * /INPUT file's records, then an end-of-file message -- before the subprocess
+ * exists, so DCL can take it all with $QIO IO$_READVBLK|IO$M_NOW reads and needs
+ * no reader thread. (On the booted runtime the VMS-native DCL.EXE's reader
+ * thread does not see the mailbox; its blocking read never returned, so a
+ * SPAWNed command never ran -- the UAT's SPAWN SHOW TIME printed nothing.)
+ * IO$M_NOW on an empty mailbox and an end-of-file message both complete with
+ * SS$_ENDOFFILE; only the end-of-file message names a sender. Returns 1 when
+ * the end-of-file was reached, 0 when the queue ran dry first (a parent that
+ * drives this DCL over time -- the reader thread takes over).
+ */
+static int drain_queued_input(uint32_t chan, int pipe_w)
+{
+    char buf[DCL_MBX_BUF];
+    for (;;) {
+        uint32_t actlen = 0, sender = 0;
+        uint32_t st = vms_kif_mbx_read_ex(chan, buf, (uint32_t)sizeof(buf),
+                                          &actlen, 1, &sender);
+        if (!(st & 1))
+            return sender != 0;
+        uint32_t mlen = actlen > sizeof(buf) ? (uint32_t)sizeof(buf) : actlen;
+        if (mlen > 0 && buf[mlen - 1] == '\0')
+            mlen--;
+        size_t off = 0;
+        while (off < mlen) {
+            ssize_t w = write(pipe_w, buf + off, mlen - off);
+            if (w <= 0) {
+                if (w < 0 && errno == EINTR) continue;
+                return 0;
+            }
+            off += (size_t)w;
+        }
+        if (mlen == 0 || buf[mlen - 1] != '\n') {
+            char nl = '\n';
+            if (write(pipe_w, &nl, 1) != 1)
+                return 0;
+        }
+    }
+}
+
 int dcl_mbx_bind_std_streams(void)
 {
     int bound = 0;
@@ -690,7 +750,15 @@ int dcl_mbx_bind_std_streams(void)
             if (pipe(p) == 0) {
                 g_in_chan   = chan;
                 g_in_pipe_w = p[1];
-                if (dup2(p[0], STDIN_FILENO) >= 0 &&
+                int ended = drain_queued_input(chan, p[1]);
+                if (ended && dup2(p[0], STDIN_FILENO) >= 0) {
+                    /* the whole input was already queued, end-of-file included
+                     * (LIB$SPAWN's command mailbox): no reader is needed */
+                    close(p[1]);
+                    g_in_pipe_w = -1;
+                    close(p[0]);
+                    bound |= DCL_MBX_BOUND_INPUT;
+                } else if (dup2(p[0], STDIN_FILENO) >= 0 &&
                     pthread_create(&g_reader, NULL, reader_main, NULL) == 0) {
                     pthread_detach(g_reader);
                     g_reader_up = 1;
@@ -782,9 +850,10 @@ int dcl_mbx_bind_std_streams(void)
 void dcl_mbx_shutdown(void)
 {
     if (g_fout_up) {
-        /* Every write end closed, the writer files the last line and ends; the
-         * join makes the file complete before the process is gone (the
-         * creator TYPEs it as soon as the subprocess has ended). */
+        /* File the rest before the process is gone (the creator TYPEs the
+         * file as soon as the subprocess has ended): close this process's
+         * write ends, then take what is left until end-of-file -- bounded, in
+         * case a process this one created still holds the stream. */
         fflush(stdout);
         fflush(stderr);
         int nfd = open("/dev/null", O_WRONLY);
@@ -793,7 +862,24 @@ void dcl_mbx_shutdown(void)
             dup2(nfd, STDERR_FILENO);
             close(nfd);
         }
-        pthread_join(g_fout_writer, NULL);
+        set_nonblock(g_fout_pipe_r, 0);
+        struct pollfd pf = { g_fout_pipe_r, POLLIN, 0 };
+        while (poll(&pf, 1, 2000) > 0) {
+            char buf[1024];
+            ssize_t n = read(g_fout_pipe_r, buf, sizeof(buf));
+            if (n < 0 && errno == EINTR)
+                continue;
+            if (n <= 0)
+                break;
+            for (ssize_t i = 0; i < n; i++) {
+                if (buf[i] == '\n') { fout_put(); continue; }
+                g_fout_line[g_fout_len++] = buf[i];
+                if (g_fout_len == sizeof(g_fout_line) - 1)
+                    fout_put();
+            }
+        }
+        if (g_fout_len > 0)
+            fout_put();
         g_fout_up = 0;
         close(g_fout_pipe_r);
         g_fout_pipe_r = -1;

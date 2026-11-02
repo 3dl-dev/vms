@@ -43,7 +43,8 @@
 #include "lib$routines.h"  /* lib$spawn — the one create+register path SPAWN rides (B0, vms-e9a) */
 #include "clidef.h"        /* CLI$M_NOWAIT — lib$spawn flags */
 #include "imgact_activate.h"
-#include "dcl/dcl_rms.h"    /* rms_file_attr / dcl_rms_attr: ACP image probe (vms-5f0) */
+#include "dcl/dcl_rms.h"
+#include "dcl/dcl_mbx.h"    /* dcl_mbx_output_pump (rd vms-691d) */    /* rms_file_attr / dcl_rms_attr: ACP image probe (vms-5f0) */
 #include <poll.h>
 #include <sys/socket.h>
 #include "ovmx_cli.h"       /* the CLI callback channel (vms-cded) */
@@ -2079,10 +2080,24 @@ void dcl_cli_handler(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
  */
 static void dcl_cli_wait(int fd, pid_t pid, siginfo_t *si)
 {
+    /* SYS$OUTPUT bound to a file (SPAWN/OUTPUT=file, rd vms-691d): what the
+     * image writes is filed as records while DCL waits for it, so a full
+     * stream never stalls the image. */
+    int ofd = dcl_mbx_output_fd();
     for (;;) {
+        if (ofd >= 0) {
+            dcl_mbx_output_pump();
+            if (fd < 0) {
+                struct pollfd op = { ofd, POLLIN, 0 };
+                (void)poll(&op, 1, 100);
+            }
+        }
         if (fd >= 0) {
-            struct pollfd p = { fd, POLLIN, 0 };
-            int r = poll(&p, 1, 100);
+            struct pollfd pp[2] = { { fd, POLLIN, 0 }, { ofd, POLLIN, 0 } };
+            int r = poll(pp, ofd >= 0 ? 2 : 1, 100);
+            struct pollfd p = pp[0];
+            if (r > 0 && !(p.revents & (POLLIN | POLLHUP | POLLERR)))
+                r = 0;                    /* only the output stream woke us */
             if (r > 0 && (p.revents & POLLIN)) {
                 struct ovmx_cli_req rq;
                 ssize_t n = read(fd, &rq, sizeof rq);
@@ -2106,7 +2121,7 @@ static void dcl_cli_wait(int fd, pid_t pid, siginfo_t *si)
             }
         }
         memset(si, 0, sizeof *si);
-        int opts = WEXITED | WSTOPPED | WNOWAIT | (fd >= 0 ? WNOHANG : 0);
+        int opts = WEXITED | WSTOPPED | WNOWAIT | (fd >= 0 || ofd >= 0 ? WNOHANG : 0);
         if (waitid(P_PID, (id_t)pid, si, opts) < 0) {
             if (errno == EINTR)
                 continue;

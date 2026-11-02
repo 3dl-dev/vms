@@ -85,4 +85,13 @@ void dcl_mbx_output_drain_sync(void);
  */
 int dcl_mbx_output_file_is(const char *equiv);
 
+/*
+ * dcl_mbx_output_pump - when SYS$OUTPUT is a file this DCL bound at startup,
+ * file every complete line waiting in its stream as a record, without
+ * blocking (rd vms-691d). dcl_mbx_output_fd - that stream's read end (for a
+ * caller's poll), or -1.
+ */
+void dcl_mbx_output_pump(void);
+int  dcl_mbx_output_fd(void);
+
 #endif /* OVMX_DCL_MBX_H */

@@ -987,6 +987,10 @@ int main(int argc, char *argv[])
         } else {
             /* Non-interactive: read from stdin */
             static char buf[DCL_MAX_LINE];
+            /* a SYS$OUTPUT file: the last command's lines become records
+             * before the next is read (rd vms-691d) */
+            fflush(stdout);
+            dcl_mbx_output_pump();
             if (!fgets(buf, sizeof(buf), stdin)) break;
             /* Remove trailing newline */
             size_t len = strlen(buf);

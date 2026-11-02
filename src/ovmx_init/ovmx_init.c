@@ -518,6 +518,25 @@ static void executive_attach(void)
         }
     }
 
+    /*
+     * THIS PROCESS'S NAME (rd vms-66e). Every process VMS lists in SHOW SYSTEM
+     * has a name; the boot task had none, so a visitor's first SHOW SYSTEM on a
+     * demo node showed a nameless row with the most CPU on the system. VMS's
+     * startup process is named STARTUP, after the image it runs; this is that
+     * image (STARTUP.EXE), so it names itself the same way, with $SETPRN, the
+     * moment it has a PCB. One difference is disclosed rather than hidden:
+     * VMS's STARTUP process exits when SYSTARTUP_VMS.COM is done, while this one
+     * stays -- Linux's PID 1 cannot exit, and the rd vms-c27 ruling makes it the
+     * process-permanent owner of the locks other cluster members ask this node
+     * to grant. A refused name is reported, never papered over.
+     */
+    {
+        uint32_t pst = vms_kif_setprn("STARTUP");
+        if (!(pst & 1))
+            boot_oplog("%%OVMX-W-NOPRCNAM, the boot task could not name itself STARTUP"
+                       " (status %08X)", (unsigned)pst);
+    }
+
     if (executive_announce_deferred)
         return;                 /* conversational path: %OVMX-I-EXEC deferred to
                                  * executive_announce() after the SYSBOOT> prompt */

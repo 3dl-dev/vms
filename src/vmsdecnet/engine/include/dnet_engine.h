@@ -423,6 +423,14 @@ int dnet_engine_link_send(struct dnet_engine *e, const uint8_t *data, size_t len
                           uint8_t *frame_out, size_t cap, size_t *len_out,
                           dnet_tick_t now);
 
+/* Close the link normally (rd vms-985, dnet_link_close): DNET_ENGINE_OK with
+ * the Disconnect Initiate frame when nothing is outstanding; DNET_ENGINE_QUEUED
+ * when queued data must drain first -- dnet_engine_link_poll then emits the DI
+ * after the last acknowledgement. */
+int dnet_engine_link_close_normal(struct dnet_engine *e, uint16_t reason,
+                                  uint8_t *frame_out, size_t cap, size_t *len_out,
+                                  dnet_tick_t now);
+
 /* Disconnect the link: builds the Disconnect Initiate data frame. */
 int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
                            uint8_t *frame_out, size_t cap, size_t *len_out,

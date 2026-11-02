@@ -212,7 +212,7 @@ int dnet_link_send_data(struct dnet_link *lk, const uint8_t *data, size_t len,
         return DNET_LINK_EINVAL;
     if (len > DNET_NSP_MAX_DATA)
         return DNET_LINK_EINVAL;
-    if (lk->state != DNET_LINK_RUN)
+    if (lk->state != DNET_LINK_RUN || lk->close_pending)
         return DNET_LINK_ESTATE;
     if (lk->tx_count >= DNET_LINK_TXQ)
         return DNET_LINK_EAGAIN;
@@ -231,6 +231,20 @@ int dnet_link_send_data(struct dnet_link *lk, const uint8_t *data, size_t len,
         emit_next(lk, out, now);
         return DNET_LINK_OK;
     }
+    return DNET_LINK_QUEUED;
+}
+
+int dnet_link_close(struct dnet_link *lk, uint16_t reason, struct dnet_nsp_msg *out,
+                    dnet_tick_t now)
+{
+    if (!lk || !out)
+        return DNET_LINK_EINVAL;
+    if (lk->state != DNET_LINK_RUN)
+        return DNET_LINK_ESTATE;
+    if (lk->tx_count == 0)
+        return dnet_link_disconnect(lk, reason, out, now);
+    lk->close_pending = 1;
+    lk->close_reason  = reason;
     return DNET_LINK_QUEUED;
 }
 
@@ -701,6 +715,15 @@ int dnet_link_poll(struct dnet_link *lk, dnet_tick_t now,
     if (lk->tx_sent < lk->tx_count && may_send(lk, lk->tx_sent)) {
         emit_next(lk, out, now);
         *has_out = 1;
+        return DNET_LINK_OK;
+    }
+
+    /* 4. A normal close waiting on the queue: everything is acknowledged now,
+     *    so the Disconnect Initiate may go. */
+    if (lk->close_pending && lk->tx_count == 0) {
+        lk->close_pending = 0;
+        (void)dnet_link_disconnect(lk, lk->close_reason, out, now);
+        *has_out = 1;
     }
     return DNET_LINK_OK;
 
@@ -712,6 +735,7 @@ dead:
     lk->tx_count = lk->tx_sent = lk->tx_ever = 0;
     lk->ls_out = 0;
     lk->ls_want = 0;
+    lk->close_pending = 0;
     if (event)
         *event = DNET_LINK_EV_DISCONNECT;
     return DNET_LINK_OK;

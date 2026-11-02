@@ -650,6 +650,21 @@ int dnet_engine_link_poll(struct dnet_engine *e, dnet_tick_t now,
     return DNET_ENGINE_OK;
 }
 
+int dnet_engine_link_close_normal(struct dnet_engine *e, uint16_t reason,
+                                  uint8_t *frame_out, size_t cap, size_t *len_out,
+                                  dnet_tick_t now)
+{
+    if (!e || !frame_out || !e->link_active)
+        return DNET_ENGINE_EINVAL;
+    struct dnet_nsp_msg di;
+    int rc = dnet_link_close(&e->link, reason, &di, now);
+    if (rc == DNET_LINK_QUEUED)
+        return DNET_ENGINE_QUEUED;
+    if (rc != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    return engine_wrap_pdu(e, &di, frame_out, cap, len_out);
+}
+
 int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
                            uint8_t *frame_out, size_t cap, size_t *len_out,
                            dnet_tick_t now)

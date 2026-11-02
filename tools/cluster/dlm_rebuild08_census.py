@@ -662,10 +662,12 @@ def selftest(repo):
     f9 = f9_holder_answers(caps)
     check('0xf9 holders\' later 0x10-shape 0xfa ROOT answers, by (own vs '
           'incoming pair, what the answer returns)', sorted(f9.items()), [
-              (('own == incoming, a block', 'own'), 5),
-              (('own == incoming, absent', 'own'), 346),
+              # +5 / +60 / +1: the vms-0db captures (rd vms-0db); no new
+              # category, every answer still follows the rule above.
+              (('own == incoming, a block', 'own'), 10),
+              (('own == incoming, absent', 'own'), 406),
               (('own seq < incoming seq', 'incoming'), 3),
-              (('own seq > incoming seq', 'own'), 1)])
+              (('own seq > incoming seq', 'own'), 2)])
 
     print('dlm_rebuild08_census selftest: %s' % ('PASS' if ok else 'FAIL'))
     return 0 if ok else 1

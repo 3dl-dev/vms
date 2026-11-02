@@ -582,7 +582,7 @@ ship_stripped_images() {
         b=$(basename "$f")
         cp "$f" "/out/unstripped/$b"
         vax--netbsdelf-strip --strip-all -o "$f" "/out/unstripped/$b"
-        if readelf -SW "$f" | grep -qE "\.debug_|\.symtab"; then
+        if readelf -SW "$f" | grep -E "\.debug_|\.symtab" >/dev/null; then
           echo "FATAL: $b still carries debug sections or a .symtab after strip" >&2; exit 1
         fi
         echo "  $b: $(stat -c%s "/out/unstripped/$b") -> $(stat -c%s "$f") bytes"

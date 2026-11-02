@@ -2877,10 +2877,35 @@ uint32_t vms_lock_dlm_grant_advance_read(uint32_t csid, uint32_t master_lkid,
     mode = (uint8_t)lock->granted_mode;
     reqmode = (uint8_t)lock->requested_mode;
     req_lkid = lock->req_lkid;
+    /*
+     * ...AND THE RESOURCE'S VALUE BLOCK AND SEQUENCE, in the same pass (rd
+     * vms-427). A real deferred grant carries them at body[36:52]/[52:56]:
+     * where the master's last grant on that resource carried a block, the
+     * op-0x02 carries the same block (41 of 42) and is never zero
+     * (tools/cluster/dlm_late_grant_census.py section 7). The same RSB read
+     * the immediate grant makes (dlm_master_read_valblk): a resource with
+     * neither a block nor a sequence carries none.
+     */
+    memcpy(out->valblk, res->valblk, LCK_VALBLK_SIZE);
+    out->valblk_seq = res->valblk_seq;
     exec_unlock(&res->lock);
+    {
+        int i;
+
+        for (i = 0; i < LCK_VALBLK_SIZE; i++)
+            if (out->valblk[i]) { out->valblk_present = 1u; break; }
+        if (out->valblk_seq != 0u)
+            out->valblk_present = 1u;
+        if (!out->valblk_present)
+            memset(out->valblk, 0, LCK_VALBLK_SIZE);
+    }
     lock_put(lock);
-    if (!ok || req_lkid == VMS_DLM_LKID_UNSET)
+    if (!ok || req_lkid == VMS_DLM_LKID_UNSET) {
+        memset(out->valblk, 0, LCK_VALBLK_SIZE);   /* no grant, no block */
+        out->valblk_seq = 0u;
+        out->valblk_present = 0u;
         return SS__IVLOCKID;
+    }
 
     out->outcome = (uint8_t)VMS_DLM_MASTER_RELEASED;
     out->deferred_grant = 1u;
@@ -4840,6 +4865,38 @@ static struct vms_lock_entry *dlm_adopt_alloc_lkb(const struct vms_dlm_adopt_loc
 }
 
 /*
+ * THE FAILOVER REBUILD'S VALUE-BLOCK RULE (rd vms-427). Caller holds res->lock
+ * and this node masters `res`. A pair a holder carries into the rebuild -- this
+ * node's own proxy LKB's at a 0xf9 promotion, or a survivor's record's -- goes
+ * onto the RSB only when the RSB holds none or holds an EARLIER sequence.
+ *
+ * Measured (tools/cluster/dlm_rebuild08_census.py section 10): of the real
+ * 0xfa ROOT answers a holder gave after being told 0xf9 for that tree, 351
+ * return its own record's pair where the incoming record carried the same
+ * pair; where they differ, 3 return the incoming pair (its sequence higher)
+ * and 1 its own (RA1b frame 7400: own seq 2, incoming seq 1). SDA on vms-2fa
+ * arm 1 shows the 0xf9 holder's block on the RSB it then masters. A pair with
+ * no sequence is no pair (336 of 336 real records with a block carry one), so
+ * it never replaces anything.
+ *
+ * NOT DONE HERE: real VMS shows that RSB at Seqnum 2 and status INVALID after
+ * the transition (vms-2fa arm 1, lab874f DEPU), while every answer inside the
+ * rebuild window still returns the record's sequence (lab874f frame 5323). No
+ * frame shows what a later grant says about that state, so it is not built.
+ */
+static void dlm_rsb_take_rebuild_pair_locked(struct vms_lock_resource *res,
+                                             const uint8_t *valblk,
+                                             uint32_t seq)
+{
+    if (seq == 0u)
+        return;
+    if (res->valblk_seq != 0u && seq <= res->valblk_seq)
+        return;
+    memcpy(res->valblk, valblk, LCK_VALBLK_SIZE);
+    res->valblk_seq = seq;
+}
+
+/*
  * LINK the prepared LKB into the database: a fresh lock id, the delivery proc's
  * lock list, and the resource's GRANTED queue.
  *
@@ -4850,7 +4907,8 @@ static struct vms_lock_entry *dlm_adopt_alloc_lkb(const struct vms_dlm_adopt_loc
  */
 static void dlm_adopt_link_lkb(struct vms_lock_resource *res,
                                struct vms_lock_entry *lock,
-                               const struct vms_dlm_adopt_lock_rec *r)
+                               const struct vms_dlm_adopt_lock_rec *r,
+                               int rebuild)
 {
     struct vms_proc *proc = lock->proc;
 
@@ -4869,7 +4927,12 @@ static void dlm_adopt_link_lkb(struct vms_lock_resource *res,
      * resource's own block is LEFT ALONE: sixteen zeros written over a real
      * block destroys data and calls it an adoption (INV-6).
      */
-    if (r->valblk_present) {
+    if (r->valblk_present && rebuild) {
+        /* A FAILOVER record (op 0x08) does not overwrite a LATER pair the
+         * RSB already holds -- the 0xf9 holder's own, or an earlier
+         * survivor's (rd vms-427, dlm_rsb_take_rebuild_pair_locked). */
+        dlm_rsb_take_rebuild_pair_locked(res, r->valblk, r->valblk_seq);
+    } else if (r->valblk_present) {
         memcpy(res->valblk, r->valblk, LCK_VALBLK_SIZE);
         /* ...and its SEQUENCE, which the record carried beside it
          * (body[104:108], rd vms-ed5). A block without its sequence tells the
@@ -5019,7 +5082,7 @@ uint32_t vms_lock_dlm_adopt_lock(const struct vms_dlm_adopt_tree *t,
         resource_release(res);
         return SS__NORMAL;
     }
-    dlm_adopt_link_lkb(res, lock, r);
+    dlm_adopt_link_lkb(res, lock, r, 0);
     a->n_locks++;
     dlm_adopt_fill_result(lock, res, 0u, out);
     exec_unlock(&vms_dlm_adopt_lock_g);
@@ -5191,6 +5254,18 @@ static int dlm_adopt_promote_lkid(uint32_t lkid,
         if (lock->waiting) {
             dlm_promote_proxy_locked(res, lock);
         } else {
+            /*
+             * THE BLOCK THIS LOCK WAS LAST TOLD BECOMES THE RSB'S (rd
+             * vms-427). On the proxy side the pair lives on the LKB only (the
+             * grant writes lock->valblk/valblk_seq, rd vms-8159), and this
+             * node is now the resource's master: without this the RSB keeps
+             * zeros and the next grant hands a remote requester a zero block
+             * at sequence 0 -- what VAX2's SDA showed for DEPT in lab874f.
+             * Read before dlm_proxy_stops_being_one_locked clears the LKB's
+             * sequence; never a template.
+             */
+            dlm_rsb_take_rebuild_pair_locked(res, lock->valblk,
+                                             lock->valblk_seq);
             dlm_proxy_stops_being_one_locked(lock);
             exec_list_add_tail(&lock->res_granted, &res->granted);
         }
@@ -5834,7 +5909,7 @@ uint32_t vms_lock_dlm_rebuild_lock(const struct vms_dlm_adopt_lock_rec *r,
         resource_release(res);
         return SS__UNSUPPORTED;
     }
-    dlm_adopt_link_lkb(res, lock, r);
+    dlm_adopt_link_lkb(res, lock, r, 1);
     dlm_adopt_fill_result(lock, res, 0u, out);
     exec_lock(&vms_dlm_adopt_lock_g);
     vms_dlm_rebuild_installed_n++;

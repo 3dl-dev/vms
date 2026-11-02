@@ -1425,6 +1425,232 @@ static void test_an_unanswered_record_is_bounded(void)
 	engine_down();
 }
 
+/* ================================================================== *
+ * 8. lab874f REPLAYED (rd vms-427): told 0xf9, this node masters DEPT --
+ *    and the RSB it now masters carries its own lock's value block, so a
+ *    remote requester's grant carries it too.
+ * ================================================================== */
+
+/* VAX2's REAL 0xf9 for OVMXE's DEPT ROOT, frame 5324 of lab874f
+ * (tests/lab/captures/vms-874f-rebuild-window-20261102/transition-frames.txt),
+ * body[0:132] verbatim. */
+static const uint8_t lab874f_vax2_dept_f9[VMS_CM_BODY_LEN] = {
+	0x2d, 0x01, 0x81, 0x00, 0x01, 0x00, 0x14, 0x00, 0x82, 0x01, 0x00, 0x00,
+	0x01, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x10,
+	0x91, 0x03, 0x00, 0x01, 0x01, 0x01, 0x48, 0x00, 0x02, 0x00, 0xf9, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x04,
+	0x44, 0x45, 0x50, 0x54, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x52, 0x4d, 0x4c, 0x56, 0x42, 0x2d, 0x30, 0x31,
+	0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x01, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+	0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0x3c, 0x21, 0x57, 0x90,
+};
+
+#define LAB874F_VAX2_EXT  0x0200050du   /* VAX2's EX lock on DEPT, its SDA */
+
+/* VAX2's $ENQ for DEPT reaching this node as DEPT's master, the way the arm
+ * fills the master seam (vms_dlm_scs.c dlm_arm_fill_master_req). */
+static uint32_t vax2_asks_dept(uint32_t mode, uint32_t req_lkid,
+			       struct vms_dlm_master_result *res)
+{
+	struct vms_dlm_master_request mr;
+
+	memset(&mr, 0, sizeof(mr));
+	mr.op = VMS_DLM_MREQ_ENQ;
+	mr.req_csid = CSID_VAX2;
+	mr.req_lkid = req_lkid;
+	mr.lkmode = mode;
+	memcpy(mr.resnam, "DEPT", 4);
+	mr.resnam_len = 4u;
+	mr.res_group = 0u;
+	mr.res_mode = 3u;
+	mr.res_ident_valid = 1u;
+	memset(res, 0, sizeof(*res));
+	return vms_lock_dlm_master_serve(&mr, res);
+}
+
+/* OVMXE holds DEPT at CR, granted by VAX1 with RMLVB-0123456789 at 1; VAX1
+ * leaves; the ROOT goes to VAX2 and VAX2's REAL 0xf9 makes OVMXE the master. */
+static uint32_t lab874f_told_f9(void)
+{
+	uint32_t root;
+	uint8_t ans[VMS_CM_BODY_LEN];
+
+	(void)engine_up(CSID_OVMXE, 0x10000005u);
+	table_up(CSID_VAX2, 0u);
+	root = enq("DEPT", LCK_K_CRMODE, 0u);
+	ct_check(root != 0u && vax1_grants_vb(root, 0x0b000439u, RMT1_LVB,
+					      RMT1_LVB_SEQ),
+		 "OVMXE's DEPT at CR, granted by VAX1 with RMLVB-0123456789 "
+		 "at 1 (lab874f P0: VAX1's SDA, Seqnum 1)");
+	g_dir_of_names = CSID_VAX2;
+	vax1_departs();
+	ct_check(g_n_sent == 1u && g_sent[0].csid == CSID_VAX2 &&
+		 g_sent[0].body[9] == 0x08 &&
+		 memcmp(g_sent[0].body + 88, lab874f_vax2_dept_f9 + 88, 20) ==
+		 0,
+		 "the ROOT goes to VAX2 carrying RMLVB-0123456789 at 1 "
+		 "(lab874f frame 5322)");
+	answer_for(ans, lab874f_vax2_dept_f9, root);
+	ct_check(vms_dlm_rm_rb_answer(&g_rm, CSID_VAX2, 0x82, 0x01, ans,
+				      VMS_CM_BODY_LEN) == 1 &&
+		 g_rm.rb_mastered == 1u &&
+		 vms_lock_dlm_name_mastered_here("DEPT", 4u, 0u, 3u),
+		 "VAX2's real 0xf9 (frame 5324): OVMXE now masters DEPT");
+	return root;
+}
+
+static void test_lab874f_the_adopted_rsb_keeps_the_block(void)
+{
+	struct vms_dlm_master_result q, r;
+	struct vms_dlm_grant_notify gn;
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint32_t root, written = 0u;
+	const uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+
+	printf("-- rd vms-427: lab874f replayed -- told 0xf9, then VAX2's EX "
+	       "waits and is granted, WITH the block\n");
+	root = lab874f_told_f9();
+
+	/* D2: VAX2's EX waits behind OVMXE's CR. */
+	ct_check(vax2_asks_dept(LCK_K_EXMODE, LAB874F_VAX2_EXT, &q) ==
+		 SS__NORMAL && q.outcome == VMS_DLM_MASTER_QUEUED &&
+		 q.master_lkid != 0u,
+		 "VAX2's EX on DEPT waits while OVMXE holds CR (lab874f D2)");
+
+	/* D3: OVMXE's Ctrl-Y -- a LOCAL release that advances the queue. */
+	{
+		struct vms_deq_args d;
+
+		memset(&d, 0, sizeof(d));
+		d.lkid = root;
+		vms_ioctl_deq(&g_proc, (unsigned long)(void *)&d);
+		ct_check_eq_u32(d.status, SS__NORMAL,
+				"OVMXE releases its CR (the Ctrl-Y)");
+	}
+
+	/* The deferred grant, read back the way the arm reads it at the send. */
+	ct_check_eq_u32(vms_lock_dlm_grant_advance_read(CSID_VAX2,
+							q.master_lkid, &r),
+			SS__NORMAL, "VAX2's EX is now granted (lab874f D3)");
+	/* negctl: dlm-f9-promotion-drops-the-valblk */
+	ct_check(r.valblk_present == 1u &&
+		 memcmp(r.valblk, RMT1_LVB, VMS_DLM_VALBLK_LEN) == 0 &&
+		 r.valblk_seq == RMT1_LVB_SEQ,
+		 "*** the grant reads RMLVB-0123456789 at sequence 1 off the "
+		 "RSB OVMXE adopted -- its own lock's pair, not the zero "
+		 "block at 0 VAX2's SDA showed (lab874f, rd vms-427) ***");
+
+	memset(&gn, 0, sizeof(gn));
+	gn.master_lkid = r.deferred_master_lkid;
+	gn.req_lkid = r.deferred_req_lkid;
+	gn.granted_mode = r.deferred_mode;
+	gn.req_mode = r.deferred_req_mode;
+	gn.valblk_present = r.valblk_present;
+	memcpy(gn.valblk, r.valblk, sizeof(gn.valblk));
+	gn.valblk_seq = r.valblk_seq;
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_grant_notify_build(&gn, frame, sizeof(frame),
+					    &written) == VMS_CODEC_OK,
+		 "the op-0x02 deferred grant builds");
+	/* negctl: grant-notify-drops-the-valblk */
+	ct_check(b[8] == 0x02 && b[9] == 0x02 &&
+		 memcmp(b + 36, RMT1_LVB, 16) == 0 && le32(b + 52) == 1u &&
+		 le32(b + 24) == LAB874F_VAX2_EXT && b[30] == LCK_K_EXMODE,
+		 "*** and the op-0x02 VAX2 receives carries it at body[36:52] "
+		 "with its sequence at body[52:56], as 41 of 42 real deferred "
+		 "grants carry the block their master's last grant did ***");
+	{
+		char st[160];
+
+		/* The DLM sequence stamp every DLM message gets on the way out
+		 * (vms_dlm_seq_put, as test_cnxman_coord drives it) -- lab874f's
+		 * 3 -- so the gate reads the frame as it leaves. */
+		ct_check(vms_dlm_seq_put(frame + VMS_OFF_SYSAP_BODY,
+					 VMS_CM_BODY_LEN, 3u) == VMS_CODEC_OK,
+			 "  stamped with the cluster's DLM sequence");
+		snprintf(st, sizeof(st),
+			 "seq=3,mlkid=0x%x,lkid=0x%x,mode=%u,reqmode=%u,"
+			 "valblkseq=0x%x",
+			 gn.master_lkid, gn.req_lkid, gn.granted_mode,
+			 gn.req_mode, gn.valblk_seq);
+		conf_dump("dlm_grant_notify", VMS_OFF_SYSAP_BODY, st, b,
+			  VMS_CM_BODY_LEN);
+	}
+	engine_down();
+
+	/* The immediate grant reads the same RSB: a compatible PR is granted
+	 * at once, block and sequence with it. */
+	printf("-- rd vms-427: ...and an immediate grant reads the same "
+	       "RSB\n");
+	(void)lab874f_told_f9();
+	ct_check(vax2_asks_dept(LCK_K_PRMODE, LAB874F_VAX2_EXT, &q) ==
+		 SS__NORMAL && q.outcome == VMS_DLM_MASTER_GRANTED,
+		 "VAX2's PR on DEPT is granted at once beside OVMXE's CR");
+	ct_check(q.valblk_present == 1u &&
+		 memcmp(q.valblk, RMT1_LVB, VMS_DLM_VALBLK_LEN) == 0 &&
+		 q.valblk_seq == RMT1_LVB_SEQ,
+		 "*** the 82/01 grant returns RMLVB-0123456789 at 1 ***");
+	engine_down();
+}
+
+/* ================================================================== *
+ * 9. RA1b frame 7400 (rd vms-427): a survivor's record does not overwrite a
+ *    LATER pair on the RSB a 0xf9 holder masters; a later one replaces it.
+ * ================================================================== */
+static uint32_t vax2_master_of_rmt1(uint32_t own_seq)
+{
+	uint32_t root;
+	uint8_t ans[VMS_CM_BODY_LEN];
+
+	(void)engine_up(CSID_VAX2, 0x20400217u);
+	table_up(CSID_VAX3, 0u);
+	root = enq("RMT1", LCK_K_PRMODE, 0u);
+	(void)vax1_grants_vb(root, 0x05000024u, RMT1_LVB, own_seq);
+	g_dir_of_names = CSID_VAX3;
+	vax1_departs();
+	answer_for(ans, ra1b_vax2_rmt1_ans, root);
+	(void)vms_dlm_rm_rb_answer(&g_rm, CSID_VAX3, 0x82, 0x01, ans,
+				   VMS_CM_BODY_LEN);
+	return root;
+}
+
+static void test_ra1b_7400_the_later_sequence_stays(void)
+{
+	uint8_t rec[VMS_CM_BODY_LEN];
+
+	printf("-- rd vms-427: RA1b frame 7400 -- the RSB keeps the LATER "
+	       "pair\n");
+	(void)vax2_master_of_rmt1(2u);
+	ct_check_eq_u32(g_rm.rb_mastered, 1u, "told 0xf9 with its own pair at 2");
+	ct_check_eq_u32(vms_dlm_rm_rb_record(&g_rm, CSID_VAX3,
+					     ra1b_vax3_rmt1_req,
+					     VMS_CM_BODY_LEN),
+			VMS_DLM_RM_HANDLED,
+			"VAX3's real ROOT record (RMLVB at 1) is installed");
+	/* negctl: dlm-rebuild-record-overwrites-a-later-pair */
+	ct_check(g_staged[34] == 0xfa &&
+		 memcmp(g_staged + 36, RMT1_LVB, 16) == 0 &&
+		 le32(g_staged + 52) == 2u,
+		 "*** its 0xfa returns the RSB's pair at 2, not the record's 1 "
+		 "(RA1b frame 7400: own 2, incoming 1, answer 2) ***");
+	engine_down();
+
+	(void)vax2_master_of_rmt1(1u);
+	memcpy(rec, ra1b_vax3_rmt1_req, VMS_CM_BODY_LEN);
+	put32(rec + 104, 2u);
+	ct_check_eq_u32(vms_dlm_rm_rb_record(&g_rm, CSID_VAX3, rec,
+					     VMS_CM_BODY_LEN),
+			VMS_DLM_RM_HANDLED,
+			"a record carrying the same block at 2 is installed");
+	ct_check(g_staged[34] == 0xfa && le32(g_staged + 52) == 2u,
+		 "*** a HIGHER sequence replaces the RSB's (3 of 3 real "
+		 "answers return the incoming pair then) ***");
+	engine_down();
+}
+
 int main(void)
 {
 	printf("test_dlm_rebuild: the failover rebuild, on the real lock "
@@ -1438,5 +1664,7 @@ int main(void)
 	test_the_window_rides_the_barrier();
 	test_no_record_after_the_window_shuts();
 	test_an_unanswered_record_is_bounded();
+	test_lab874f_the_adopted_rsb_keeps_the_block();
+	test_ra1b_7400_the_later_sequence_stays();
 	return ct_summary("test_dlm_rebuild");
 }

@@ -1900,10 +1900,18 @@ static void dlm_arm_say_send_failed(struct vms_dlm_scs *d,
 static void dlm_arm_fill_grant_notify(struct vms_dlm_grant_notify *g,
 				      const struct vms_dlm_master_result *r)
 {
+	memset(g, 0, sizeof(*g));
 	g->master_lkid  = r->deferred_master_lkid;
 	g->req_lkid     = r->deferred_req_lkid;
 	g->granted_mode = r->deferred_mode;
 	g->req_mode     = r->deferred_req_mode;
+	/* body[36:56]: the master RSB's value block and sequence, read in the
+	 * same pass as the modes (rd vms-427) -- none when the RSB has none. */
+	g->valblk_present = r->valblk_present;
+	if (r->valblk_present) {
+		memcpy(g->valblk, r->valblk, sizeof(g->valblk));
+		g->valblk_seq = r->valblk_seq;
+	}
 }
 
 static void dlm_arm_send_grant_notify(struct vms_dlm_scs *d, uint32_t csid,

@@ -2092,9 +2092,11 @@ static void check_one_grant_notify(const char *name, uint8_t want_mode)
 	struct vms_dlm_grant_notify g;
 	uint8_t built[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
 	uint32_t written = 0;
+	/* body[36:56] left this list with rd vms-427: it is the resource's value
+	 * block and sequence, asserted byte-exact below. */
 	static const uint32_t RESIDUE[][2] = {
 		{VMS_OFF_SYSAP_BODY + 10u, 2u}, {VMS_OFF_SYSAP_BODY + 16u, 4u},
-		{VMS_OFF_SYSAP_BODY + 32u, 16u}, {VMS_OFF_SYSAP_BODY + 48u, 64u},
+		{VMS_OFF_SYSAP_BODY + 32u, 4u}, {VMS_OFF_SYSAP_BODY + 56u, 56u},
 		{VMS_OFF_SYSAP_BODY + 128u, 4u}
 	};
 	uint32_t i, live = 0, zeroed = 0;
@@ -2135,6 +2137,11 @@ static void check_one_grant_notify(const char *name, uint8_t want_mode)
 		"  body[28:30] = 14 00, as in 387 of 387");
 	assert_grant_notify_cell(f, built, VMS_OFF_DLM_GRANT_NOTIFY_MODE, 2u,
 		"*** body[30] and body[31], the two mode cells, byte-exact ***");
+	/* negctl: grant-notify-drops-the-valblk */
+	assert_grant_notify_cell(f, built, VMS_OFF_DLM_VALBLK, 20u,
+		"*** body[36:56], the resource's VALUE BLOCK and its SEQUENCE, "
+		"byte-exact -- the zeros of a resource with none, or the block a "
+		"real master carried (rd vms-427) ***");
 	assert_grant_notify_cell(f, built, VMS_OFF_SYSAP_BODY + 112u, 16u,
 		"*** body[112:128] = 0, ffffffff, 0, ffffffff -- all four "
 		"cells byte-exact, 387 of 387 ***");
@@ -2172,8 +2179,31 @@ static void test_grant_notify_is_the_real_one(void)
 
 	check_one_grant_notify("dlm-grant-notify-a", (uint8_t)VMS_LCK_PW);
 	check_one_grant_notify("dlm-grant-notify-b", (uint8_t)VMS_LCK_EX);
+	/* rd vms-427: a THIRD arrangement, a deferred grant that carries the
+	 * resource's block -- 'F11B$s*' at PW, the master's last grant's block at
+	 * the next sequence. */
+	check_one_grant_notify("dlm-grant-notify-c", (uint8_t)VMS_LCK_PW);
+	{
+		const struct vms_fixture *fc = fixture("dlm-grant-notify-c");
+		struct vms_dlm_grant_notify gc;
+		static const uint8_t blk[16] = { 1, 0, 0, 0, 1, 0, 0, 0 };
+
+		memset(&gc, 0, sizeof(gc));
+		ct_check(fc != NULL &&
+			 vms_dlm_grant_notify_parse_body(
+				 fc->bytes + VMS_OFF_SYSAP_BODY,
+				 fc->wire_len - VMS_OFF_SYSAP_BODY, &gc) ==
+			 VMS_CODEC_OK &&
+			 gc.valblk_present == 1u &&
+			 memcmp(gc.valblk, blk, sizeof(blk)) == 0 &&
+			 gc.valblk_seq == 0x21bu,
+			 "*** the parser reads the block and its sequence off a "
+			 "real deferred grant: 01000000 01000000 0.. at 0x21b, "
+			 "one past the master's last grant (0x21a) ***");
+	}
 
 	printf("-- rd vms-a4d7: what the deferred grant REFUSES to say\n");
+	memset(&g, 0, sizeof(g));
 	g.master_lkid = 0x1d000412u;
 	g.req_lkid = 0x07000412u;
 	g.granted_mode = (uint8_t)VMS_LCK_EX;

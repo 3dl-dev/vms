@@ -266,6 +266,14 @@ DNET_BROKER_API uint32_t dnet_broker_xfer(struct dnet_broker_chan *bc,
             }
             return rsp.status;
         case DNET_BROKER_OP_SEND:
+            if (rsp.status == DNET_BROKER_ST_ENDOFFILE) {
+                /* NETACP took nothing: the link's transmit queue is full until
+                 * the remote acknowledges (or resumes us). Offer it again, as a
+                 * waiting READVBLK asks again (rd vms-985). */
+                if (io->idle)
+                    io->idle(io->ctx);
+                continue;
+            }
             if ((rsp.status & 1u) && xfer)
                 *xfer = inlen;
             return rsp.status;

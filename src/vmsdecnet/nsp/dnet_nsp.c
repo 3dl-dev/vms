@@ -45,6 +45,28 @@ static inline void wr_le16(uint8_t *p, uint16_t v)
     p[1] = (uint8_t)((v >> 8) & 0xff);
 }
 
+/* Read the optional ack fields that open a DATA or LS message: up to two
+ * 16-bit fields whose bit 15 is set (ACKNUM, then the cross-subchannel
+ * ACKOTH/ACKDAT). A SEGNUM never has bit 15 set, which is how the spec makes
+ * the fields self-describing. */
+static void rd_opt_acks(const uint8_t **pp, size_t *remain, struct dnet_nsp_msg *out)
+{
+    const uint8_t *p = *pp;
+    if (*remain >= 2 && (rd_le16(p) & DNET_NSP_ACK_QUAL)) {
+        out->has_acknum = 1;
+        out->acknum = rd_le16(p);
+        p += 2;
+        *remain -= 2;
+        if (*remain >= 2 && (rd_le16(p) & DNET_NSP_ACK_QUAL)) {
+            out->has_ackoth = 1;
+            out->ackoth = rd_le16(p);
+            p += 2;
+            *remain -= 2;
+        }
+    }
+    *pp = p;
+}
+
 /* Classify a MSGFLG byte into an enum dnet_nsp_type, or 0 if unsupported. */
 static uint8_t nsp_classify(uint8_t msgflg)
 {
@@ -139,14 +161,9 @@ int dnet_nsp_decode(const uint8_t *buf, size_t len,
         break;
     }
     case DNET_NSP_T_DATA: {
-        /* Optional piggyback ACKNUM (present iff its bit15 QUAL is set),
-         * then a mandatory SEGNUM, then the opaque segment data. */
-        if (remain >= 2 && (rd_le16(p) & DNET_NSP_ACK_QUAL)) {
-            out->has_acknum = 1;
-            out->acknum = rd_le16(p);
-            p += 2;
-            remain -= 2;
-        }
+        /* Optional piggyback ACKNUM and ACKOTH (each present iff its bit 15
+         * is set), then a mandatory SEGNUM, then the opaque segment data. */
+        rd_opt_acks(&p, &remain, out);
         if (remain < 2)
             return DNET_NSP_ETRUNC;   /* SEGNUM is mandatory */
         out->segnum = rd_le16(p);
@@ -169,7 +186,7 @@ int dnet_nsp_decode(const uint8_t *buf, size_t len,
         out->acknum = rd_le16(p);
         p += 2;
         remain -= 2;
-        if (remain >= 2) {
+        if (remain >= 2 && (rd_le16(p) & DNET_NSP_ACK_QUAL)) {
             out->has_ackoth = 1;
             out->ackoth = rd_le16(p);
             p += 2;
@@ -192,21 +209,16 @@ int dnet_nsp_decode(const uint8_t *buf, size_t len,
         break;
     }
     case DNET_NSP_T_LS: {
-        /* Link Service: mandatory ACKNUM (other-data ack), then LSFLAGS(1) +
-         * FCVAL(1). ACKNUM's bit15 QUAL marks it present, as in a data-ack. */
-        if (remain < 2)
+        /* Link Service: optional ACKNUM / ACKDAT, then SEGNUM, LSFLAGS, FCVAL
+         * (all three mandatory). Trailing Ethernet min-frame padding, if any,
+         * is ignored; consumed reports the meaningful bytes. */
+        rd_opt_acks(&p, &remain, out);
+        if (remain < 4)
             return DNET_NSP_ETRUNC;
-        out->has_acknum = 1;
-        out->acknum = rd_le16(p);
-        p += 2;
-        remain -= 2;
-        if (remain < 2)
-            return DNET_NSP_ETRUNC;   /* LSFLAGS + FCVAL are mandatory */
-        out->ls_flags = p[0];
-        out->fc_val   = (int8_t)p[1];
-        p += 2;
-        /* Trailing Ethernet min-frame padding (if any) is ignored; consumed
-         * reports the 9 meaningful bytes. */
+        out->segnum   = rd_le16(p);
+        out->ls_flags = p[2];
+        out->fc_val   = (int8_t)p[3];
+        p += 4;
         break;
     }
     default:
@@ -239,7 +251,8 @@ int dnet_nsp_encode(const struct dnet_nsp_msg *msg,
         need += 2 + msg->datalen;             /* REASON + data */
         break;
     case DNET_NSP_T_DATA:
-        need += (msg->has_acknum ? 2 : 0) + 2 + msg->datalen; /* [ACK] SEGNUM data */
+        need += (msg->has_acknum ? 2 : 0) + (msg->has_ackoth ? 2 : 0) + 2 +
+                msg->datalen;                 /* [ACKNUM] [ACKOTH] SEGNUM data */
         break;
     case DNET_NSP_T_ACK:
         if (msg->datalen != 0)
@@ -254,7 +267,8 @@ int dnet_nsp_encode(const struct dnet_nsp_msg *msg,
     case DNET_NSP_T_LS:
         if (msg->datalen != 0)
             return DNET_NSP_EBADLEN;          /* a link service carries no data */
-        need += 2 + 2;                        /* ACKNUM + LSFLAGS + FCVAL */
+        need += (msg->has_acknum ? 2 : 0) + (msg->has_ackoth ? 2 : 0) +
+                2 + 2;                        /* [ACKNUM] [ACKDAT] SEGNUM LSFLAGS FCVAL */
         break;
     default:
         return DNET_NSP_EBADTYPE;
@@ -292,6 +306,10 @@ int dnet_nsp_encode(const struct dnet_nsp_msg *msg,
             wr_le16(p, msg->acknum);
             p += 2;
         }
+        if (msg->has_ackoth) {
+            wr_le16(p, msg->ackoth);
+            p += 2;
+        }
         wr_le16(p, msg->segnum);
         p += 2;
         if (msg->datalen)
@@ -311,11 +329,18 @@ int dnet_nsp_encode(const struct dnet_nsp_msg *msg,
         p += 2;
         break;
     case DNET_NSP_T_LS:
-        wr_le16(p, msg->acknum);
-        p += 2;
-        p[0] = msg->ls_flags;
-        p[1] = (uint8_t)msg->fc_val;
-        p += 2;
+        if (msg->has_acknum) {
+            wr_le16(p, msg->acknum);
+            p += 2;
+        }
+        if (msg->has_ackoth) {
+            wr_le16(p, msg->ackoth);
+            p += 2;
+        }
+        wr_le16(p, msg->segnum);
+        p[2] = msg->ls_flags;
+        p[3] = (uint8_t)msg->fc_val;
+        p += 4;
         break;
     default:
         return DNET_NSP_EBADTYPE;

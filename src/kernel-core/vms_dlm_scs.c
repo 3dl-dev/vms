@@ -2397,6 +2397,14 @@ static void dlm_arm_dir_register(struct vms_dlm_scs *d,
  *   AND REFUSING IT IS NOT NEUTRAL. A real VAX that is shutting down waits for
  *   the new master it chose; unanswered, its departure does not complete. That
  *   is the ci.6 evacuation gate, and it is what this section exists for.
+ *
+ * AND THE HOLDER'S HALF (rd vms-33a), through three more doors below: when a
+ * real VAX moves a tree THIS node holds locks in to a THIRD node, the table
+ * sends that new master one op-0x12 per proxy lock of ours, root first, each
+ * field read off the LKB/RSB, re-homes each proxy onto the handle the new
+ * master's 82/01 minted, and ends with the op-0x13 the new master waits for.
+ * Above RULE C for the same reason: the frames describe locks the engine
+ * really holds, to the system the old master named, and nothing else.
  * ========================================================================== */
 
 /* The CLUB's own answer to "who else is a member". */
@@ -2559,6 +2567,37 @@ static void dlm_arm_rm_log(void *ctx, const char *msg)
 	exec_console_printf("%s\n", msg);
 }
 
+/*
+ * THE HOLDER'S THREE DOORS (rd vms-33a) -- vms_dlm_adopt.h's hand-over entry
+ * points, nothing more: which lock of ours to describe next (read off the
+ * proxy LKB and its RSB), the replacement of that proxy's master handle with
+ * the one the new master's 82/01 minted, and the old master's op-0x1a block
+ * onto our resource. The SS$_ vocabulary stops here, as for the adoption doors.
+ */
+static int dlm_arm_ho_next(void *ctx, const struct vms_dlm_adopt_tree *t,
+			   uint32_t new_master_csid,
+			   struct vms_dlm_handover_rec *out)
+{
+	(void)ctx;
+	return vms_lock_dlm_handover_next(t, new_master_csid, out);
+}
+
+static int dlm_arm_ho_rehome(void *ctx, uint32_t holder_lkid,
+			     uint32_t old_master_csid, uint32_t new_master_csid,
+			     uint32_t new_master_lkid)
+{
+	(void)ctx;
+	return vms_lock_dlm_handover_rehome(holder_lkid, old_master_csid,
+					    new_master_csid,
+					    new_master_lkid) == SS__NORMAL ? 1 : 0;
+}
+
+static int dlm_arm_ho_valblk(void *ctx, const struct vms_dlm_adopt_valblk *v)
+{
+	(void)ctx;
+	return vms_lock_dlm_handover_valblk(v) == SS__NORMAL ? 1 : 0;
+}
+
 static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 {
 	d->rm_ops.ctx                = d;
@@ -2577,6 +2616,9 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.residue_fill       = dlm_arm_rm_residue_fill;
 	d->rm_ops.adopt_valblk       = dlm_arm_rm_adopt_valblk;
 	d->rm_ops.log                = dlm_arm_rm_log;
+	d->rm_ops.ho_next            = dlm_arm_ho_next;
+	d->rm_ops.ho_rehome          = dlm_arm_ho_rehome;
+	d->rm_ops.ho_valblk          = dlm_arm_ho_valblk;
 	vms_dlm_rm_init(&d->rm, &d->rm_ops);
 }
 
@@ -2703,20 +2745,32 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 		return 0;
 
 	/*
-	 * op 0x11 -- some OTHER member was made the new master of a tree. 7 of 7
-	 * real ones open no transaction and are never answered, so this node
-	 * answers nothing and asserts nothing; it is COUNTED, because it is also
-	 * the moment a tree this node HOLDS LOCKS IN moved, and OVMX does not
-	 * yet send its own records to that new master -- which leaves a real
-	 * VAX new master WAITING for this node's op-0x13 (rule W2, 7 of 7
-	 * multi-0x13 episodes). That is the other half of remastering and it is
-	 * rd vms-33a; `rm_notifications` is how many times it mattered.
+	 * op 0x11 -- some OTHER member was made the new master of a tree. The
+	 * table above ACTS on it (rd vms-33a: this node's records and its
+	 * op-0x13 go to the new master its op-0x0f named). This branch is only
+	 * reached when the table refused the step -- an unnamed sender, an
+	 * unparsable body -- and then the notice is counted and nothing is
+	 * sent: no answer is ever owed to an op-0x11 (7 of 7 carry no
+	 * transaction).
 	 */
 	if (req->category == (uint8_t)VMS_DLM_CAT_REQUEST &&
 	    req->opcode == (uint8_t)VMS_DLM_WIREOP_RM_11) {
 		vms_dlm_rm_notified(&d->rm);
 		return 0;
 	}
+
+	/*
+	 * THE NEW MASTER'S 82/01 TO ONE OF OUR op-0x12 RECORDS (rd vms-33a).
+	 * Ahead of the requester's own reply path on purpose: it is a cat-0x82
+	 * op-0x01 exactly like a grant to one of our $ENQs, and it is told apart
+	 * only by the two facts the holder slot holds -- the sender is the new
+	 * master that slot is reporting to, and body[24:28] is the lock whose
+	 * record is out. Anything else falls through unchanged.
+	 */
+	if (vms_dlm_rm_ho_answer(&d->rm, (uint32_t)req->from_csid,
+				 req->category, req->opcode, req->body,
+				 req->len))
+		return 0;
 
 	/* The 82/15 answer to an op-0x14 THIS node sent. Matched against a tree
 	 * this node really announced to that system; nothing is emitted. */
@@ -3363,6 +3417,14 @@ static void dlm_arm_project_remaster(const struct vms_dlm_scs *d,
 	 * -- a tree this node was handed, decided against an empty picture.
 	 */
 	out->proxy_compat_blocks = vms_lock_dlm_proxy_compat_blocks();
+	out->rm_ho_records_sent  = d->rm.ho_records_sent;
+	out->rm_ho_answers       = d->rm.ho_answers;
+	out->rm_ho_ends_sent     = d->rm.ho_ends_sent;
+	out->rm_ho_stopped       = d->rm.ho_unaddressable + d->rm.ho_no_slot +
+				   d->rm.ho_unarmed + d->rm.ho_unbound +
+				   d->rm.ho_records_unsent +
+				   d->rm.ho_answers_refused +
+				   d->rm.ho_ends_unsent + d->rm.ho_departed;
 }
 
 int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)

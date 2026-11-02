@@ -745,6 +745,20 @@ one frame left this node
   user mode (body[46])
 *** addressed to VAX1, the master its own frame told us about ***
 *** and the resource's MASTER is VAX1 -- this node did NOT master it a second time ***
+  an op-0x12
+  and the CM sends it as a notification
+  body[20:24]: the owning process's PID, off its PCB
+  body[24:28]: THIS node's own lock id, off the LKB
+  body[30:32]: held at CR, off the LKB
+  the connection manager would send it to a real VAX, opening a transaction for the answer
+*** an op-0x13 to VAX2: the holder role, no transaction, the tree's hash -- what the new master waits for (rule W2) ***
+*** naming the handle VAX2 minted -- never the old master's, which bugchecked a real VAX with INVLOCKID (rd vms-3ac) ***
+*** the release is sent to the NEW master ***
+*** the resource's master here is now VAX2 ***
+VAX2's answer is built
+VAX2's answer is consumed
+and the end-of-records follows
+this node's $ENQ at CR goes to the VAX and is granted
 EOF
                       ;;
         esac;;
@@ -3108,6 +3122,43 @@ EOF
         require_fail) hd_lines <<'EOF'
   *** body[28:32] is KEPT: this node is not the new master and does not claim to be ***
   no new-master role was asserted
+  *** EVERY NAMED CELL equals VAX3's real ROOT record: PID, lock id, modes, no parent, identity, name, the value block RMLVB-0123456789 at sequence 1, the tree's hash ***
+  *** EVERY NAMED CELL equals VAX3's real S2 record -- including body[40:44], the parent's NEW-master handle, which existed only once VAX2's answer came back ***
+  *** and it is the op-0x13, to the new master ***
+  *** it equals VAX3's real op-0x13 on every named cell: the identity, the name, the hash, the HOLDER role byte body[28]=0, body[40:44]=0, and no transaction ***
+  *** nothing re-homed and NO op-0x13: telling the new master this node holds less than it does is the stale-handle crash (rd vms-3ac) ***
+  *** the proxy's master handle is REPLACED with the one VAX2 minted (0x020004cc) ***
+  *** to the NEW master the op-0x0f named, not to the old master that sent the op-0x11 ***
+*** the NEW MASTER's real op-0x14 is answered ***
+  *** byte-for-byte VAX3's real 82/15 outside the envelope body[0:4] ***
+  *** the slot waits, ENDED, for the new master's op-0x14 (lab33a: freeing it here left VAX2's 0x14 unanswered) ***
+  counted: 1 acked
+  one 82/15 staged
+  ...1 end-of-records
+  ...2 answered and re-homed
+  ...from VAX1's
+  ...in the plain-member role: body[28:32] KEPT
+  ONE frame goes out
+  ONE record goes out
+  VAX2's real 82/01 for S2 is consumed
+  VAX2's real 82/01 for the root is consumed
+  a non-grant answer to our record is consumed
+  a refused send stops the hand-over, counted
+  a repeated op-0x11 mid-hand-over sends nothing more
+  after VAX1's op-0x0f armed it: HANDLED through the engine
+  an answer the engine cannot apply stops the hand-over
+  an op-0x0f naming a non-member new master does not arm
+  and the end-of-records goes out
+  and the new master's own parser reads it as a step
+  and the next record goes out
+  counted: 2 records
+  from another member: REFUSED
+  it is a cat-0x02 op-0x12
+  it is a cat-0x02 op-0x13
+  the engine was asked for locks still naming VAX1
+  the hand-over is ARMED
+  the new master left: the hand-over is dropped
+  to the new master
 EOF
                       ;;
         esac;;

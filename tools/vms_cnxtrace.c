@@ -383,6 +383,13 @@ static void cnxtrace_print_dlm(void)
      * attribute the queue to this executive rather than to the wire. */
     printf("%%CNXTRACE-I-DLMHOLDOWN, grants withheld by a proxy lock of ours=%u"
            "\n", (unsigned)v->proxy_compat_blocks);
+    /* THE HOLDER'S HALF OF A REMASTER (rd vms-33a): what this node told a
+     * real VAX new master about its own locks in a tree that moved. A fire
+     * reads records == answers and one end per tree, and stopped == 0. */
+    printf("%%CNXTRACE-I-DLMRMHOLDER, op-0x12 records sent=%u answered=%u  "
+           "op-0x13 sent=%u  hand-overs stopped=%u\n",
+           (unsigned)v->rm_ho_records_sent, (unsigned)v->rm_ho_answers,
+           (unsigned)v->rm_ho_ends_sent, (unsigned)v->rm_ho_stopped);
     printf("%%CNXTRACE-I-DLMPOST, posts queued=%u unqueued=%u lock_gone=%u "
            "refused=%u\n",
            (unsigned)v->posts_queued, (unsigned)v->posts_unqueued,

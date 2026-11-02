@@ -1291,6 +1291,15 @@ if(BUILD_TESTS)
     set_tests_properties(lab_entrypoint_vaxini PROPERTIES
         LABELS "integration;cluster" TIMEOUT 30)
 
+    # RMHOLD is staged on a lab pod's real VAXes by a committed recipe
+    # (tests/lab/tools/stage_rmhold.sh), not hand-FTP'd per fire: the vms-93fa
+    # re-fire found it missing from the pod's VAX disks. Hermetic dry run of
+    # the per-node sequence, with negative controls.
+    add_test(NAME lab_stage_rmhold
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_stage_rmhold.sh)
+    set_tests_properties(lab_stage_rmhold PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 30)
+
     # x86_64 relocation survey freshness (vms-680, under vms-bdf): the
     # committed docs/design-link-x86_64-relocs.md is GENERATED, not hand-typed
     # -- tools/survey_x86_64_relocs.sh cross-compiles the vms-b65.1-.6 object

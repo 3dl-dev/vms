@@ -236,6 +236,14 @@ def main(a):
         g = {}
         exec(compile(open(spec).read(), spec, "exec"), g)
         ids = set(c for c, _ in g["CASES"])
+        if g.get("LISTING"):
+            # a family that prints a listing under each case (specs-dcl/diff.py):
+            # its <CASE>.Lnn record lines and <CASE>.N count line are the probe's
+            listed = set(ids)
+            for ln in lines[b:]:
+                m = re.match(r"^(.+)\.(L\d+|N)$", ln.split(" ", 1)[0])
+                if m and m.group(1) in listed:
+                    ids.add(ln.split(" ", 1)[0])
     else:
         ids = set(subprocess.run([sys.executable, os.path.join(HERE, "spgen.py"), "--list", spec],
                                  capture_output=True, text=True, check=True).stdout.split())

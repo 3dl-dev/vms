@@ -228,9 +228,22 @@ static const struct dcl_qual_def q_stop[] = {
     { "IDENTIFICATION", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
     QUAL_END
 };
-/* APPEND and DIFFERENCES read NO qualifiers today: an explicit empty table
- * makes any qualifier on them fail honestly with %DCL-W-IVQUAL rather than be
- * silently swallowed. */
+/* DIFFERENCES: exactly the qualifiers cmd_differences honours (the listing
+ * forms and comparison controls a user types first, byte-gated against VAX
+ * V7.3 by the semantic family diff); any other is %DCL-W-IVQUAL. */
+static const struct dcl_qual_def q_differences[] = {
+    { "IGNORE",              CDU_VT_LIST,  CDU_Q_VALREQ, NULL, NULL },
+    { "MATCH",               CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "MAXIMUM_DIFFERENCES", CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "MERGED",              CDU_VT_VALUE, 0,            NULL, NULL },
+    { "OUTPUT",              CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    { "PARALLEL",            CDU_VT_NONE,  0,            NULL, NULL },
+    { "WIDTH",               CDU_VT_VALUE, CDU_Q_VALREQ, NULL, NULL },
+    QUAL_END
+};
+/* APPEND reads NO qualifiers today: an explicit empty table makes any
+ * qualifier on it fail honestly with %DCL-W-IVQUAL rather than be silently
+ * swallowed. */
 static const struct dcl_qual_def q_none[] = {
     QUAL_END
 };
@@ -550,7 +563,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "DELETE",      cmd_delete,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Delete a file (or symbol with /SYMBOL)", q_delete },
     { "DIFFERENCES", cmd_differences, CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
-      "Compare two files and display differences", q_none },
+      "Compare two files and display differences", q_differences },
     { "DIRECTORY",   cmd_directory,   CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "List files in a directory", q_directory },
     { "DISMOUNT",    cmd_dismount,    CDU_F_ABBREV | CDU_F_PARAM, 4,

@@ -171,7 +171,12 @@ uint32_t sys$getmsg(uint32_t msgid, uint16_t *msglen,
     } else {
         snprintf(ident, sizeof ident, "NOMSG");
         snprintf(text, sizeof text, "Message number %08X", (unsigned)msgid);
-        snprintf(facbuf, sizeof facbuf, "NONAME");
+        /* a facility the system knows keeps its name ("%DIFF-F-NOMSG",
+         * "%SYSTEM-W-NOMSG, Message number 00008000"); only value 0 and an
+         * unknown facility are NONAME (VAX V7.3 F$MESSAGE,
+         * docs/oracle/messages/vax73-facnames.txt) */
+        snprintf(facbuf, sizeof facbuf, "%s",
+                 (msgid != 0 && facname) ? facname : "NONAME");
         status = SS$_MSGNOTFND;
     }
 

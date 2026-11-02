@@ -2721,6 +2721,102 @@ static int delete_files_acp(struct dcl_context *ctx, const char *param,
     return SS$_NORMAL;
 }
 
+/* DELETE of one file specification (an element of DELETE's list). */
+static int delete_one_spec(struct dcl_context *ctx, const char *spec,
+                           int do_confirm, int do_log)
+{
+    /*
+     * VMS requires an explicit version field on DELETE — a bare name is
+     * refused, so that a user cannot delete the wrong version by omission.
+     * Accepted forms: ";n" (a version), ";" or ";0" (highest), ";-n"
+     * (relative), ";*" (all versions / wildcard).
+     *
+     * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DELETE — "you
+     * must include the version number ... in each file specification"; omitting
+     * it yields %DELETE-E-DELVER, "explicit version number or wild card
+     * required". (The wild-card allowance is exactly why the guard passes on a
+     * ";" of any of the forms above, not only a literal ";n".)
+     */
+    const char *fcomp = dcl_filename_component(spec);
+    const char *fcheck = (fcomp && fcomp[0]) ? fcomp : spec;
+    if (!strchr(fcheck, ';')) {
+        dcl_error("DELETE", 2, "DELVER",
+                  "explicit version number or wild card required in %s",
+                  spec);
+        return SS$_BADPARAM;
+    }
+
+    /*
+     * Product runtime (vms-0a5): DELETE removes files over the Files-11 ODS-2
+     * ACP -- $SEARCH to enumerate, $ERASE (IO$_DELETE) to remove. Only the
+     * executive-absent defer (host ctest / self-host container, where the ACP
+     * is unreachable) uses the legacy opendir()+unlink() path below. Mirrors
+     * exactly how DIRECTORY branches (dir_collect_acp vs dir_collect_host) and
+     * how RMS $ERASE itself branches (rms_impl_erase vs rms_posix_erase) --
+     * fail-honest on an absent executive, no silent passthrough (INV-6/Rule 9).
+     */
+    if (!rms_executive_absent())
+        return delete_files_acp(ctx, spec, do_confirm, do_log);
+
+    /* Directory + name.type pattern + version spec (the text after ';'). */
+    char linux_dir[1024], name_pat[512], vspec[64];
+    int  has_version;
+    split_file_spec(ctx, spec, linux_dir, sizeof(linux_dir),
+                    name_pat, sizeof(name_pat), vspec, sizeof(vspec),
+                    &has_version);
+
+    struct file_match *m = NULL;
+    int count = 0;
+    int st = fm_collect(linux_dir, name_pat, &m, &count);
+    if (st == SS$_NOSUCHFILE) {
+        /* Directory could not be opened: the named file cannot exist -> FNF
+         * (the same result the old single-file path gave when unlink() failed),
+         * rather than surfacing a resolution-artifact directory path. */
+        dcl_error("RMS", 2, "FNF", "file not found - %s", spec);
+        return SS$_NOSUCHFILE;
+    }
+    if (st != SS$_NORMAL) {
+        free(m);
+        return st;
+    }
+
+    int deleted = 0;
+    for (int i = 0; i < count; i++) {
+        if (!version_selected(m, i, count, has_version, vspec)) continue;
+
+        char full[2600];
+        snprintf(full, sizeof(full), "%s%s", linux_dir, m[i].dname);
+
+        if (do_confirm) {
+            char vms_spec[256];
+            dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
+            printf("DELETE %s ? [N]: ", vms_spec);
+            fflush(stdout);
+            char resp[64];
+            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (toupper((unsigned char)resp[0]) != 'Y') continue;
+        }
+
+        if (unlink(full) == 0) {
+            deleted++;
+            if (do_log) {
+                char vms_spec[256];
+                dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
+                /* Authentic identifier: %DELETE-I-FILDEL, <spec> deleted. */
+                dcl_error("DELETE", 3, "FILDEL", "%s deleted", vms_spec);
+            }
+        }
+    }
+    free(m);
+
+    if (deleted == 0) {
+        dcl_error("RMS", 2, "FNF", "file not found - %s", spec);
+        return SS$_NOSUCHFILE;
+    }
+
+    return SS$_NORMAL;
+}
+
 int cmd_delete(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -2795,96 +2891,17 @@ int cmd_delete(struct dcl_command *cmd)
     int do_confirm = dcl_has_qualifier(cmd, "CONFIRM");
     int do_log = dcl_has_qualifier(cmd, "LOG");
 
-    /*
-     * VMS requires an explicit version field on DELETE — a bare name is
-     * refused, so that a user cannot delete the wrong version by omission.
-     * Accepted forms: ";n" (a version), ";" or ";0" (highest), ";-n"
-     * (relative), ";*" (all versions / wildcard).
-     *
-     * Grounded (clean-room, Rule 8): VSI OpenVMS DCL Dictionary, DELETE — "you
-     * must include the version number ... in each file specification"; omitting
-     * it yields %DELETE-E-DELVER, "explicit version number or wild card
-     * required". (The wild-card allowance is exactly why the guard passes on a
-     * ";" of any of the forms above, not only a literal ";n".)
-     */
-    const char *fcomp = dcl_filename_component(cmd->params[0]);
-    const char *fcheck = (fcomp && fcomp[0]) ? fcomp : cmd->params[0];
-    if (!strchr(fcheck, ';')) {
-        dcl_error("DELETE", 2, "DELVER",
-                  "explicit version number or wild card required in %s",
-                  cmd->params[0]);
-        return SS$_BADPARAM;
+    /* DELETE a,b,...: each element of the list in turn (the parser hands
+     * them over as separate parameters); a failure on one does not stop the
+     * rest, and $STATUS is the last failure (rd vms-ad5a). */
+    int rc = SS$_NORMAL;
+    for (int pi = 0; pi < dcl_param_total(cmd); pi++) {
+        const char *spec = dcl_param_at(cmd, pi);
+        if (!spec || !spec[0]) continue;
+        int one = delete_one_spec(ctx, spec, do_confirm, do_log);
+        if (!(one & 1)) rc = one;
     }
-
-    /*
-     * Product runtime (vms-0a5): DELETE removes files over the Files-11 ODS-2
-     * ACP -- $SEARCH to enumerate, $ERASE (IO$_DELETE) to remove. Only the
-     * executive-absent defer (host ctest / self-host container, where the ACP
-     * is unreachable) uses the legacy opendir()+unlink() path below. Mirrors
-     * exactly how DIRECTORY branches (dir_collect_acp vs dir_collect_host) and
-     * how RMS $ERASE itself branches (rms_impl_erase vs rms_posix_erase) --
-     * fail-honest on an absent executive, no silent passthrough (INV-6/Rule 9).
-     */
-    if (!rms_executive_absent())
-        return delete_files_acp(ctx, cmd->params[0], do_confirm, do_log);
-
-    /* Directory + name.type pattern + version spec (the text after ';'). */
-    char linux_dir[1024], name_pat[512], vspec[64];
-    int  has_version;
-    split_file_spec(ctx, cmd->params[0], linux_dir, sizeof(linux_dir),
-                    name_pat, sizeof(name_pat), vspec, sizeof(vspec),
-                    &has_version);
-
-    struct file_match *m = NULL;
-    int count = 0;
-    int st = fm_collect(linux_dir, name_pat, &m, &count);
-    if (st == SS$_NOSUCHFILE) {
-        /* Directory could not be opened: the named file cannot exist -> FNF
-         * (the same result the old single-file path gave when unlink() failed),
-         * rather than surfacing a resolution-artifact directory path. */
-        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
-        return SS$_NOSUCHFILE;
-    }
-    if (st != SS$_NORMAL) {
-        free(m);
-        return st;
-    }
-
-    int deleted = 0;
-    for (int i = 0; i < count; i++) {
-        if (!version_selected(m, i, count, has_version, vspec)) continue;
-
-        char full[2600];
-        snprintf(full, sizeof(full), "%s%s", linux_dir, m[i].dname);
-
-        if (do_confirm) {
-            char vms_spec[256];
-            dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
-            printf("DELETE %s ? [N]: ", vms_spec);
-            fflush(stdout);
-            char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
-            if (toupper((unsigned char)resp[0]) != 'Y') continue;
-        }
-
-        if (unlink(full) == 0) {
-            deleted++;
-            if (do_log) {
-                char vms_spec[256];
-                dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
-                /* Authentic identifier: %DELETE-I-FILDEL, <spec> deleted. */
-                dcl_error("DELETE", 3, "FILDEL", "%s deleted", vms_spec);
-            }
-        }
-    }
-    free(m);
-
-    if (deleted == 0) {
-        dcl_error("RMS", 2, "FNF", "file not found - %s", cmd->params[0]);
-        return SS$_NOSUCHFILE;
-    }
-
-    return SS$_NORMAL;
+    return rc;
 }
 
 /*

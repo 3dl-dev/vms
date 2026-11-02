@@ -14,7 +14,7 @@ summary: >
   Re-censused 2026-09-14 against origin/main: unchanged in substance; CONVERT was
   the one facade-risk row; it no longer claims a conversion it does not perform
   (vms-558e); evidence lines re-anchored. PRODUCT stays verified (install-boot-e2e gate).
-last_reviewed: 2026-10-19
+last_reviewed: 2026-11-02
 items:
   - id: utilities$authorize
     kind: utility
@@ -103,11 +103,12 @@ items:
 
   - id: utilities$differences
     kind: utility
-    status: partial
-    authenticity: advisory
+    status: verified
+    authenticity: real
     vms: "DIFFERENCES — file comparison utility"
     evidence: src/vmsdcl/dcl_cmd_misc.c
-    notes: "Slice exercised by tests/dcl/test_differences.sh (not a full-coverage oracle)."
+    verified_against: "docs/oracle/semantics/diff/vax73.txt (24 cases, 367 lines, VAX V7.3, captured twice, identical) via tests/dcl/test_diff_oracle.sh + tests/qemu/test_semantic_oracle.sh"
+    notes: "The diff semantic-oracle family runs one procedure on VAX V7.3 and on OVMX and byte-compares every record of the /OUTPUT listing and every $STATUS: identical files (%X006C8009), a changed, inserted, deleted, first, last, appended and replaced record, two sections, an empty file, a two-digit line number, one parameter against its next lower version, the merged listing (/MERGED, default 1, 0 under /MAXIMUM_DIFFERENCES), /MATCH resynchronisation, /PARALLEL with and without /WIDTH, /MAXIMUM_DIFFERENCES (%X006C8018), /IGNORE=TRAILING_SPACES and BLANK_LINES, the command summary that closes the listing, a missing file (%DIFF-F-OPENIN, %X106C109C) and no lower version (%DIF-F-NOLOWVER, %X106C8064). Files are read and written through RMS ($SEARCH/$OPEN/$GET/$CREATE/$PUT). Not implemented: /SLP, /CHANGE_BAR, /NUMBER, /MODE, /SEPARATED, /COMMENT_DELIMITER, /EXACT, /WINDOW and the other /IGNORE keywords, which are refused (%DCL-W-IVQUAL, %CLI-W-IVKEYW)."
 
   - id: utilities$convert
     kind: utility

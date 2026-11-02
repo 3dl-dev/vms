@@ -334,7 +334,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                 cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRV_PROOF.COM \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
                 echo "   JOINT-E2E (DRIVER): xgcc/cc1/as.exe -> SYS\$SYSEXE; launcher joint_e2e.exe -> SYS\$SYSEXE; DRV-proof SYSTARTUP staged"
-            elif [ -f "$JOINT/DRL_PROOF" ]; then
+            elif [ -f "$JOINT/DRL_PROOF" ] || [ -f "$JOINT/CC1B_PROOF" ]; then
                 # vms-65a: the REAL GCC driver compiles and links: cc1, as, ld (the port wrapper
                 # around the VMS link command) and LINK.EXE beside it.
                 for _f in xgcc cc1 as ld link; do
@@ -369,15 +369,22 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                     if [ -d "$JOINT/gccsrc" ]; then
                         cp -r "$JOINT/gccsrc" "$ST/vms/SYS0/SYSCOMMON/GCCSRC"
                     fi
+                    # vms-b85: objects the CI shards compiled on OVMX -> GCCOBJ:[...]
+                    if [ -d "$JOINT/gccobj" ]; then
+                        cp -r "$JOINT/gccobj" "$ST/vms/SYS0/SYSCOMMON/GCCOBJ"
+                    fi
                     # vms-408: the C++ headers as GCC installs them (bits/c++config.h ...) -> GNU:[CXX]
                     if [ -d "$JOINT/inc/gnu/cxx" ]; then
                         cp -r "$JOINT/inc/gnu/cxx" "$ST/vms/SYS0/SYSCOMMON/GNU/CXX"
                     fi
                     echo "   JOINT-E2E (HEADERS): $(find "$ST/vms/SYS0/SYSCOMMON/USR" "$ST/vms/SYS0/SYSCOMMON/GNU" -type f | wc -l) header file(s) -> [USR.INCLUDE], [GNU.LIB.GCC.ALPHA-DEC-VMS.14_2_0.INCLUDE]"
                 fi
-                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_DRL_PROOF.COM \
+                # vms-465: the same toolchain builds cc1 itself (CC1B_PROOF: GCCSRC holds
+                # the whole GCC source and build tree and BUILD_CC1.COM)
+                _su=SYSTARTUP_VMS_DRL_PROOF.COM; [ -f "$JOINT/CC1B_PROOF" ] && _su=SYSTARTUP_VMS_CC1B_PROOF.COM
+                cp "/repo/tools/cross-alpha/$_su" \
                    "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
-                echo "   JOINT-E2E (DRIVER LINK): xgcc/cc1/as/ld/link.exe + start files + libgcc.a -> SYS\$SYSEXE; STARLET.A -> SYS\$LIBRARY; DRL-proof SYSTARTUP staged"
+                echo "   JOINT-E2E (DRIVER LINK): xgcc/cc1/as/ld/link.exe + start files + libgcc.a -> SYS\$SYSEXE; STARLET.A -> SYS\$LIBRARY; $_su staged"
             elif [ -f "$JOINT/LNK_PROOF" ]; then
                 # vms-e40: cc1 -> as -> LINK (all VMS-hosted) -> RUN the result.
                 for _f in cc1 as link; do

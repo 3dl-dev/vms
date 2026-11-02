@@ -409,12 +409,24 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
                         sizeof(cmd->params[0]) - 1);
                 cmd->params[cmd->param_count][sizeof(cmd->params[0]) - 1] = '\0';
                 cmd->param_count++;
+            } else {
+                /* past P8: keep it, never drop it (rd vms-465) */
+                size_t vl = strlen(tok.value);
+                if ((size_t)cmd->overflow_len + vl + 1 <= sizeof(cmd->overflow)) {
+                    memcpy(cmd->overflow + cmd->overflow_len, tok.value, vl + 1);
+                    cmd->overflow_len += (int)vl + 1;
+                    cmd->overflow_count++;
+                } else {
+                    cmd->overflow_lost = 1;
+                }
             }
             break;
 
         case TOK_PLUS:
             /* Append + to previous param or start new one */
-            if (cmd->param_count > 0) {
+            if (cmd->overflow_count > 0) {
+                cmd->overflow_lost = 1;      /* a '+' past P8: not kept, MAXPARM */
+            } else if (cmd->param_count > 0) {
                 size_t len = strlen(cmd->params[cmd->param_count - 1]);
                 if (len < sizeof(cmd->params[0]) - 2) {
                     cmd->params[cmd->param_count - 1][len] = '+';
@@ -513,6 +525,22 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
     }
 
     return 0;
+}
+
+int dcl_param_total(const struct dcl_command *cmd)
+{
+    return cmd->param_count + cmd->overflow_count;
+}
+
+const char *dcl_param_at(const struct dcl_command *cmd, int i)
+{
+    if (i < 0) return NULL;
+    if (i < cmd->param_count) return cmd->params[i];
+    i -= cmd->param_count;
+    if (i >= cmd->overflow_count) return NULL;
+    const char *p = cmd->overflow;
+    while (i-- > 0) p += strlen(p) + 1;
+    return p;
 }
 
 /*

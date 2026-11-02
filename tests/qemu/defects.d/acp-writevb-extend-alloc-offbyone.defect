@@ -21,17 +21,22 @@ EOF
 }
 
 defect_apply() {
-        # UNIQUE TEXT: ods2_fh2_map_append()'s format-1 low-LBN word encode
-        # (`w1 = (uint16_t)(cur_lbn & 0xFFFF);`) occurs once in ods2_edit.c. (The
-        # append loop splits a run into <=256-block format-1 pointers and advances
-        # cur_lbn per pointer; this is the per-pointer LBN low word.) Encoding
-        # (cur_lbn + 1) records the newly allocated extent ONE LBN too high in the
-        # on-disk FH2 map, while the IO$_WRITEVBLK path writes the data (and its
-        # in-memory channel window) at the correct LBN -- so only the re-ACCESS
-        # read-back (window rebuilt from the corrupted on-disk map) reads the
-        # wrong block. After substitution no `(cur_lbn & 0xFFFF)` is left (now
-        # `((cur_lbn + 1u) & 0xFFFF)`) -- the no-op the idempotency selftest requires.
-        sed -i 's|w1 = (uint16_t)(cur_lbn \& 0xFFFF);|w1 = (uint16_t)((cur_lbn + 1u) \& 0xFFFF); /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file"
+        # UNIQUE TEXT: ods2_fh2_map_append()'s count == 0 early return
+        # (`return ODS2_OK;                     /* a no-op */`) occurs once in
+        # ods2_edit.c. Right after it the defect moves the run's start one LBN
+        # up (`lbn += 1u;`), so the newly allocated extent is recorded ONE LBN too
+        # high in the on-disk FH2 map (and no longer abuts the last pointer, so it
+        # is appended as its own pointer: the earlier extents stay intact), while
+        # the IO$_WRITEVBLK path writes the data (and its in-memory channel window)
+        # at the correct LBN -- so only the re-ACCESS read-back (window rebuilt
+        # from the corrupted on-disk map) reads the wrong block. After the
+        # substitution the anchor text carries the NEGCTL marker, so a second
+        # application matches nothing -- the no-op the idempotency selftest requires.
+        # The run's start is copied into cur_lbn when it is declared (the map
+        # encoder writes from cur_lbn since rd vms-465's format-2/3 rewrite), so
+        # the defect moves both: a bump of lbn alone only skipped the merge and
+        # the extent was still recorded at the right LBN.
+        sed -i 's|^        return ODS2_OK;                     /\* a no-op \*/$|        return ODS2_OK;                     /* a no-op (NEGCTL) */\n    lbn += 1u; cur_lbn = lbn; /* NEGCTL acp-writevb-extend-alloc-offbyone */|' "$_file"
 
     :
 }

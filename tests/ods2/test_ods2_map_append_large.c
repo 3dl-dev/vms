@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
- * test_ods2_map_append_large.c - CODEC-LEVEL proof (vms-3a8) that
- * ods2_fh2_map_append() records a contiguous run LONGER THAN 256 blocks as
- * several consecutive FM2 format-1 retrieval pointers, instead of rejecting it.
+ * test_ods2_map_append_large.c - CODEC-LEVEL proof (vms-3a8, vms-465) that
+ * ods2_fh2_map_append() records a contiguous run LONGER THAN 256 blocks, as VMS
+ * does, in the smallest FM2 retrieval-pointer format that covers it (format 1:
+ * <= 256 blocks below LBN 2^22; format 2: <= 16384; format 3: <= 2^30), instead
+ * of rejecting it.
  *
  * WHY THIS EXISTS. The executive Files-11 ACP's IO$_WRITEVBLK extend path
  * (vms_ioctl_acp_writevb, src/kernel-core/vmsfs_acp.c) allocates a whole
@@ -14,25 +16,24 @@
  * INSTALL's WRITE of the first kit image larger than 128 KB (AUTHORIZE.EXE)
  * failed with %PCSI-E-WRITE, cascading into every downstream install/boot step.
  *
- * A large contiguous allocation is legally stored in ODS-2 as back-to-back
- * format-1 pointers whose LBNs abut; the reader (ods2_fh2_map_walk) and the
- * ACP's channel-window builder read them back and coalesce the abutting runs, so
- * the file remains one VBN->LBN window turn. This test drives map_append()
- * DIRECTLY (no volume, no fd -- a header built by ods2_fh2_build) and proves,
- * through the reader's own ods2_fh2_map_walk primitive:
+ * vms-465: a split into format-1 pointers only (the vms-3a8 encoding) capped a
+ * file's map at about 80 runs of 256 blocks, ~10 MB: AR growing LIBBACKEND.A on
+ * OVMX/Alpha failed SS$_DEVICEFULL on an almost empty volume. This test drives
+ * map_append() DIRECTLY (no volume, no fd -- a header built by ods2_fh2_build)
+ * and proves, through the reader's own ods2_fh2_map_walk primitive:
  *
  *   1. A run of 600 blocks (> 256) is ACCEPTED and reconstructs to exactly the
- *      600-block contiguous span it was given (the pre-fix ODS2_ERR_ARGS bug).
- *   2. It is stored as MORE THAN ONE pointer, each <= 256 blocks (a genuine
- *      format-1 split, not one out-of-range pointer), yet the walk coalesces
- *      them back into a single contiguous span.
- *   3. An abutting follow-on run coalesces into the last pointer up to the
- *      256-block ceiling and then extends (the vms-401 grow-in-place invariant
- *      still holds across the split boundary).
- *   4. A run whose pointers would overflow the fixed 255-word FH2 map area is an
- *      honest ODS2_ERR_NOSPACE -- never a silent partial map (INV-6).
- *   5. count == 0 is a no-op success; a run past the format-1 LBN ceiling
- *      (>= 2^22) is a fail-honest ODS2_ERR_ARGS.
+ *      600-block contiguous span it was given (the pre-vms-3a8 ODS2_ERR_ARGS bug).
+ *   2. It is ONE format-2 pointer (3 words), as VMS records it.
+ *   3. An abutting follow-on run merges into the last pointer (the vms-401
+ *      grow-in-place invariant): still one pointer.
+ *   4. A file grown 64 blocks at a time to 40000 blocks (20 MB, past the old
+ *      ~10 MB cap) stays ONE pointer (format 3 past 16384 blocks), never
+ *      NOSPACE; a run above LBN 2^22 is a format-2 pointer.
+ *   5. A run whose pointers would overflow the fixed 255-word FH2 map area is an
+ *      honest ODS2_ERR_NOSPACE that leaves the header unchanged -- never a
+ *      silent partial map (INV-6).
+ *   6. count == 0 is a no-op success; a run past LBN 2^32 is ODS2_ERR_ARGS.
  */
 
 #include "vmsfs/ods2.h"
@@ -41,6 +42,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stddef.h>
 
 static int g_failures = 0;
 
@@ -125,9 +127,9 @@ int main(void)
     walk(hdr, &w);
     CHECK_EQ(w.total_blocks, 600, "the 600-block run reconstructs to 600 blocks");
     CHECK_EQ(w.first_lbn, 1000, "the run still starts at LBN 1000");
-    CHECK(w.contiguous, "the split pointers reconstruct ONE contiguous span (LBNs abut)");
-    CHECK(w.n >= 3, "the run is stored as >= 3 pointers (256+256+88), not one");
-    CHECK(w.max_ptr_count <= 256, "no single pointer exceeds the format-1 256-block ceiling");
+    CHECK(w.contiguous, "the run reconstructs ONE contiguous span");
+    CHECK_EQ(w.n, 1, "the 600-block run is ONE retrieval pointer");
+    CHECK_EQ(hdr[offsetof(ods2_fh2_t, fh2_map_inuse)], 3, "... a format-2 pointer (3 map words)");
 
     /* (3): an abutting follow-on run coalesces into the last (<256) pointer,
      * then extends -- the vms-401 grow-in-place invariant across the split. */
@@ -139,15 +141,47 @@ int main(void)
     CHECK_EQ(w.total_blocks, 700, "after the abutting append the span is 700 blocks");
     CHECK_EQ(w.first_lbn, 1000, "the coalesced span still starts at LBN 1000");
     CHECK(w.contiguous, "the whole 700-block span is still ONE contiguous run");
+    CHECK_EQ(w.n, 1, "the abutting run merged into the last pointer (one pointer)");
 
-    /* (5): fail-honest edges. count 0 is a no-op success; a run past the
-     * format-1 LBN ceiling (>= 2^22) is ODS2_ERR_ARGS. */
+    /* (4): a file grown one 64-block extend at a time to 40000 blocks (20 MB):
+     * one pointer throughout (format 3 past 16384 blocks), never NOSPACE. */
+    memset(hdr, 0, sizeof(hdr));
+    st = ods2_fh2_build(hdr, 102, 1, "GROWING", 1, 0, ODS2_FK_DATA_FIX,
+                        NULL, 0, 0, backlink, owner, 0, 200);
+    CHECK_EQ(st, ODS2_OK, "ods2_fh2_build a header for a growing file");
+    {
+        ods2_status_t gst = ODS2_OK;
+        uint32_t blocks = 0;
+        while (blocks < 40000u && gst == ODS2_OK) {
+            gst = ods2_fh2_map_append(hdr, 2000u + blocks, 64u);
+            blocks += 64u;
+        }
+        CHECK_EQ(gst, ODS2_OK, "64-block extends to 40000 blocks all succeed (was NOSPACE at ~10 MB)");
+        ods2_fh2_reseal(hdr);
+        walk(hdr, &w);
+        CHECK_EQ(w.total_blocks, blocks, "the grown file maps every block it was given");
+        CHECK_EQ(w.n, 1, "the grown file is ONE retrieval pointer");
+        CHECK_EQ(hdr[offsetof(ods2_fh2_t, fh2_map_inuse)], 4, "... a format-3 pointer (4 map words)");
+    }
+    /* a run above LBN 2^22 (beyond format 1) is a format-2 pointer */
+    memset(hdr, 0, sizeof(hdr));
+    st = ods2_fh2_build(hdr, 103, 1, "HIGHLBN", 1, 0, ODS2_FK_DATA_FIX,
+                        NULL, 0, 0, backlink, owner, 0, 200);
+    st = ods2_fh2_map_append(hdr, (1u << 22) + 5u, 10u);
+    CHECK_EQ(st, ODS2_OK, "a 10-block run at LBN 2^22+5 is accepted");
+    ods2_fh2_reseal(hdr);
+    walk(hdr, &w);
+    CHECK_EQ(w.first_lbn, (1u << 22) + 5u, "... and maps back to LBN 2^22+5");
+    CHECK_EQ(hdr[offsetof(ods2_fh2_t, fh2_map_inuse)], 3, "... as a format-2 pointer");
+
+    /* (6): fail-honest edges. count 0 is a no-op success; a run past LBN 2^32
+     * is ODS2_ERR_ARGS. */
     st = ods2_fh2_map_append(hdr, 5000, 0);
     CHECK_EQ(st, ODS2_OK, "map_append(count=0) is a no-op success");
-    st = ods2_fh2_map_append(hdr, (1u << 22) - 10u, 100);   /* end >= 2^22 */
-    CHECK_EQ(st, ODS2_ERR_ARGS, "a run past the format-1 LBN ceiling is ODS2_ERR_ARGS");
+    st = ods2_fh2_map_append(hdr, 0xFFFFFFF0u, 100);       /* end > 2^32 */
+    CHECK_EQ(st, ODS2_ERR_ARGS, "a run past LBN 2^32 is ODS2_ERR_ARGS");
 
-    /* (4): a run whose pointers cannot fit the remaining 255-word map area is an
+    /* (5): a run whose pointers cannot fit the remaining 255-word map area is an
      * honest ODS2_ERR_NOSPACE. Build a fresh header and fill the map with
      * NON-abutting 256-block runs (each forces a new pointer) until it refuses;
      * the map must fill and never silently drop a pointer. */
@@ -160,8 +194,15 @@ int main(void)
         uint32_t lbn = 100;
         for (int i = 0; i < 400; i++) {
             /* +512 gap between runs so no coalesce -- each is its own pointer. */
+            uint8_t before[ODS2_BLOCK_SIZE];
+            memcpy(before, hdr, sizeof(before));
             st = ods2_fh2_map_append(hdr, lbn, 200);
-            if (st == ODS2_ERR_NOSPACE) { nospace = 1; break; }
+            if (st == ODS2_ERR_NOSPACE) {
+                nospace = 1;
+                CHECK(memcmp(before, hdr, sizeof(before)) == 0,
+                      "a refused run leaves the header unchanged");
+                break;
+            }
             CHECK_EQ(st, ODS2_OK, "map_append fills the map area one pointer at a time");
             if (g_failures) break;
             lbn += 200 + 512;

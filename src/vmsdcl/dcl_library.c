@@ -36,6 +36,9 @@
 #include "rms/rms.h"         /* rms_read_over_acp, rms_executive_absent */
 #include "vmsfs/device.h"    /* vmsfs_device_spec_kernel_mounted */
 #include "ssdef.h"
+#include "starlet.h"          /* sys$getmsg: the reason under OPENOUT */
+#include "descrip.h"
+#include "msgdef.h"
 #include "climsgdef.h"
 #include "ovmx_olb.h"
 
@@ -921,24 +924,60 @@ static unsigned char *olb_file_read(struct dcl_context *ctx, const char *spec,
     return buf;
 }
 
+/* Why the last library write was refused: the RMS status and its secondary
+ * value (STV), which LIBRARIAN reports under %LIBRARIAN-E-OPENOUT as VMS does. */
+static uint32_t g_olb_why, g_olb_whystv;
+
+/* The refusal's messages, chained ('-' for '%'), after the OPENOUT message. */
+static void olb_print_reasons(void)
+{
+    uint32_t sts[2] = { g_olb_why, g_olb_whystv };
+    for (int i = 0; i < 2; i++) {
+        char m[256];
+        uint16_t n = 0;
+        struct dsc$descriptor_s md = { sizeof m - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, m };
+        if (!sts[i] || !(sys$getmsg(sts[i], &n, &md, MSG$M_ALL, NULL) & 1))
+            continue;
+        m[n] = '\0';
+        if (m[0] == '%') m[0] = '-';
+        fprintf(stderr, "%s\n", m);
+    }
+}
+
 /* Write `len` bytes as a new version of `spec`; 0 on success. Through RMS the
  * file is fixed-length with no record size, so each $PUT lands exactly its own
  * bytes (the byte-exact write LINK.EXE's image and LIBRARIAN.EXE's .OLB use). */
 static int olb_file_write(struct dcl_context *ctx, const char *spec,
-                          const unsigned char *buf, size_t len)
+                          const unsigned char *buf, size_t len, int in_place)
 {
+    g_olb_why = g_olb_whystv = 0;
     if (!olb_host_defer(spec)) {
         uint32_t st = 0;
-        struct dcl_rms_writer *w =
-            dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
-        if (!w) return -1;
+        struct dcl_rms_writer *w = NULL;
+        if (in_place) {
+            /* the version the library has now (the highest), superseded */
+            char eff[1024], cur[1024];
+            struct dcl_rms_dir *d = NULL;
+            if (dcl_rms_effective_spec(ctx, spec, eff, sizeof(eff)) == 0)
+                d = dcl_rms_dir_open(ctx, eff);
+            if (d && dcl_rms_dir_next(d, cur, sizeof(cur), NULL, NULL, NULL))
+                w = dcl_rms_write_supersede(ctx, cur, FAB$C_FIX, 0, 0, &st);
+            else
+                w = dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
+            if (d) dcl_rms_dir_close(d);
+        } else {
+            w = dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
+        }
+        if (!w) { g_olb_why = st; return -1; }
         int rc = 0;
         for (size_t done = 0; done < len && rc == 0; ) {
             size_t chunk = len - done > 32768 ? 32768 : len - done;
             rc = dcl_rms_write_record(w, (const char *)buf + done, chunk);
             done += chunk;
         }
-        if (!(dcl_rms_write_close(w) & 1)) rc = -1;
+        if (rc) g_olb_why = dcl_rms_write_status(w, &g_olb_whystv);
+        uint32_t cst = dcl_rms_write_close(w);
+        if (!(cst & 1)) { if (!rc) g_olb_why = cst; rc = -1; }
         return rc;
     }
     char linux_path[1024];
@@ -960,15 +999,19 @@ static int olb_lib_read(struct dcl_context *ctx, const char *spec,
     return olb_parse(buf, len, members, count);
 }
 
-/* Write the member array as a new version of the library `spec`. */
+/* Write the member array as the library `spec`: in place (the version it has,
+ * superseded) for /INSERT, /REPLACE and /DELETE, as VMS LIBRARIAN updates a
+ * library; a new version for /CREATE and /COMPRESS. A new version per update
+ * filled the cc1 build's volume with copies of LIBBACKEND.A (rd vms-465). */
 static int olb_lib_write(struct dcl_context *ctx, const char *spec,
-                         const struct olb_member *members, uint32_t count)
+                         const struct olb_member *members, uint32_t count,
+                         int in_place)
 {
     unsigned char *img = NULL;
     size_t len = 0;
     int rc = olb_build(members, count, &img, &len);
     if (rc != OLB_OK) return rc;
-    rc = olb_file_write(ctx, spec, img, len) == 0 ? OLB_OK : OLB_ERR_IO;
+    rc = olb_file_write(ctx, spec, img, len, in_place) == 0 ? OLB_OK : OLB_ERR_IO;
     free(img);
     return rc;
 }
@@ -979,20 +1022,22 @@ static int olb_insert_files(struct dcl_context *ctx, struct dcl_command *cmd,
                             int first, struct olb_member **members,
                             uint32_t *count, uint32_t *cap)
 {
-    for (int i = first; i < cmd->param_count; i++) {
+    /* the whole input list, past P8 included (rd vms-465) */
+    for (int i = first; i < dcl_param_total(cmd); i++) {
+        const char *in = dcl_param_at(cmd, i);
         size_t len = 0;
-        unsigned char *data = olb_file_read(ctx, cmd->params[i], &len);
+        unsigned char *data = olb_file_read(ctx, in, &len);
         if (!data) {
             dcl_error("LIBRARIAN", 2, "OPENIN",
-                      "error opening object file - %s", cmd->params[i]);
+                      "error opening object file - %s", in);
             return SS$_NOSUCHFILE;
         }
         char name[OLB_NAME_MAX + 1];
-        olb_module_name(cmd->params[i], name, sizeof name);
+        olb_module_name(in, name, sizeof name);
         if (name[0] == '\0') {
             free(data);
             dcl_error("LIBRARIAN", 2, "BADNAME",
-                      "cannot derive module name - %s", cmd->params[i]);
+                      "cannot derive module name - %s", in);
             return SS$_BADPARAM;
         }
 
@@ -1050,10 +1095,11 @@ static int olb_create(struct dcl_context *ctx, struct dcl_command *cmd)
     int st = olb_insert_files(ctx, cmd, 1, &members, &count, &cap);
     if (!$VMS_STATUS_SUCCESS(st)) { olb_free(members, count); return st; }
 
-    if (olb_lib_write(ctx, cmd->params[0], members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, cmd->params[0], members, count, 0) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error creating library - %s", cmd->params[0]);
+        olb_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1076,10 +1122,11 @@ static int olb_insert(struct dcl_context *ctx, struct dcl_command *cmd)
     st = olb_insert_files(ctx, cmd, 1, &members, &count, &cap);
     if (!$VMS_STATUS_SUCCESS(st)) { olb_free(members, count); return st; }
 
-    if (olb_lib_write(ctx, cmd->params[0], members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, cmd->params[0], members, count, 1) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", cmd->params[0]);
+        olb_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1131,7 +1178,7 @@ static int olb_extract_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
     const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
     if (output_file && output_file[0]) {
         if (olb_file_write(ctx, output_file, members[idx].data,
-                           members[idx].len) != 0) {
+                           members[idx].len, 0) != 0) {
             dcl_error("LIBRARIAN", 2, "OPENOUT",
                       "error creating output file - %s", output_file);
             olb_free(members, count);
@@ -1173,10 +1220,11 @@ static int olb_delete_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
         members[k] = members[k + 1];
     count--;
 
-    if (olb_lib_write(ctx, cmd->params[0], members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, cmd->params[0], members, count, 1) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", cmd->params[0]);
+        olb_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1199,10 +1247,11 @@ static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
     int st = olb_load(ctx, cmd->params[0], &members, &count, &cap);
     if (!$VMS_STATUS_SUCCESS(st)) return st;
 
-    if (olb_lib_write(ctx, out_spec, members, count) != OLB_OK) {
+    if (olb_lib_write(ctx, out_spec, members, count, 0) != OLB_OK) {
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", outspec && outspec[0] ? outspec : cmd->params[0]);
+        olb_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1214,6 +1263,14 @@ static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
 /* Route an OBJECT-library (.OLB) LIBRARY command to the ar-container handlers. */
 static int olb_dispatch(struct dcl_context *ctx, struct dcl_command *cmd)
 {
+    /* Only an insert/replace/create takes an input list past P8 (rd vms-465). */
+    if (cmd->overflow_count > 0 &&
+        (dcl_has_qualifier(cmd, "DELETE") || dcl_has_qualifier(cmd, "EXTRACT") ||
+         dcl_has_qualifier(cmd, "LIST"))) {
+        dcl_error("DCL", 0, "MAXPARM",
+                  "too many parameters - reenter command with fewer parameters");
+        return CLI$_MAXPARM;
+    }
     if (dcl_has_qualifier(cmd, "CREATE"))  return olb_create(ctx, cmd);
     if (dcl_has_qualifier(cmd, "DELETE"))  return olb_delete_cmd(ctx, cmd);
     if (dcl_has_qualifier(cmd, "EXTRACT")) return olb_extract_cmd(ctx, cmd);
@@ -1286,6 +1343,13 @@ int cmd_library(struct dcl_command *cmd)
     if (cmd->param_count >= 1 &&
         lbr_get_type(cmd, cmd->params[0]) == LBR_TYPE_OBJECT) {
         return olb_dispatch(ctx, cmd);
+    }
+
+    /* TEXT/HELP libraries take no list past P8 (rd vms-465). */
+    if (cmd->overflow_count > 0) {
+        dcl_error("DCL", 0, "MAXPARM",
+                  "too many parameters - reenter command with fewer parameters");
+        return CLI$_MAXPARM;
     }
 
     /* HELP libraries (.HLB, or /HELP) compile a numbered-level .HLP source into

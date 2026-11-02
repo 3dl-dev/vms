@@ -100,6 +100,10 @@ typedef struct rms_file {
      * highest+1) this is the version the ACP minted (fop.out_version), which
      * SYSGEN WRITE CURRENT reports as "...OVMXVMSSYS.PAR;N". 0 when unset. */
     uint16_t version;
+    /* The directory entry's "NAME.TYPE" (with did_* and version above), so a
+     * $CLOSE with FOP DLT/TMD removes the entry with the file (rd vms-b739).
+     * Empty when the handle was not opened or created by name. */
+    char     ent_name[256];   /* VMS_ACP_NAME_SIZE */
     /* vms-50e (docs/design-rms-file-lock.md): the file-access $ENQ lock ID this
      * open instance holds on the FID-named resource "RMS$<fid>.<seq>.<rvn>",
      * taken by rms_impl_open/rms_impl_create right after IO$_ACCESS/IO$_CREATE
@@ -120,6 +124,10 @@ typedef struct rms_file {
      * of per 512 bytes -- an RMS_IO_RAHEAD_BLKS-fold cut in QIOs on the scan
      * path. rbuf_len == 0 means "empty/invalid"; any write on the handle
      * invalidates it. Not used by the POSIX backend. */
+    /* The system status of the last ACP transfer that failed (IO$_WRITEVBLK's
+     * SS$_ value, e.g. SS$_DEVICEFULL), which RMS returns as the STV of the
+     * RMS$_WER it reports. 0 when no transfer has failed. */
+    uint32_t io_sts;
     uint64_t rbuf_base;   /* file byte offset of rbuf[0] */
     uint32_t rbuf_len;    /* valid bytes in rbuf (0 == invalid) */
     uint8_t  rbuf[RMS_IO_RAHEAD_BYTES];

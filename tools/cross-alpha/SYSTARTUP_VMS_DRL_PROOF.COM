@@ -104,6 +104,11 @@ $ WRITE SYS$OUTPUT "DRL-PROOF: DUMP3-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === RUN THE BUILT PROGRAM: RUN TWO.EXE ==="
 $ RUN VDA0:[SYSTMP]TWO.EXE
 $ WRITE SYS$OUTPUT "DRL-PROOF: TWO-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
+$! vms-465: a link with an undefined symbol (two_b, TWOB.O left out) FAILS -- LINK's
+$! %LINK-F-UNDEF reaches the driver's $STATUS as an error, never as success.
+$ WRITE SYS$OUTPUT "DRL-PROOF: === LINK WITH AN UNDEFINED SYMBOL ==="
+$ GCC -BSYS$SYSTEM: -L/SYS$SYSTEM -nostdinc -x c VDA0:[SYSTMP]TWOMAIN.C -o VDA0:[SYSTMP]UNDEF.EXE -x none VDA0:[SYSTMP]TWOA.O
+$ WRITE SYS$OUTPUT "DRL-PROOF: UNDEF-LINK-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $!
 $! vms-5b3: C++. GCC 14 is written in C++, so cc1 built on OVMX needs cc1plus and libstdc++
 $! here. The g++ driver (xg++, staged as GXX.EXE) runs CC1PLUS.EXE, as and ld.
@@ -160,10 +165,13 @@ $ WRITE SYS$OUTPUT "DRL-PROOF: CXX-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $!
 $! vms-9a0: one real source file of cc1 -- gcc/c/c-lang.cc -- compiled here by the native
 $! g++, with the flags GCC's own build gives it, over GCC's source and generated headers
-$! (GCCSRC:[SRC...], [BLD...], [HOST.INCLUDE]). The arguments are in a response file the
+$! (GCCSRC:[SRC.GCC-14^.2^.0...], [BLD...], [HOST.INCLUDE]). The arguments are in a response file the
 $! driver reads (@file), as typed by the build, so DCL changes none of them.
 $ DEFINE/SYSTEM/TRANSLATION_ATTRIBUTES=CONCEALED GCCSRC SYS$COMMON:[GCCSRC.]
-$ COPY GCCSRC:[SRC.GCC.C]C-LANG.CC VDA0:[SYSTMP]C-LANG.CC
+$! an ODS-5 name (the ^. in gcc-14.2.0) on the command line needs the extended parse style
+$ SET PROCESS/PARSE_STYLE=EXTENDED
+$ COPY GCCSRC:[SRC.GCC-14^.2^.0.GCC.C]C-LANG.CC VDA0:[SYSTMP]C-LANG.CC
+$ SET PROCESS/PARSE_STYLE=TRADITIONAL
 $ GXX @GCCSRC:[000000]CC1TU.RSP
 $ WRITE SYS$OUTPUT "DRL-PROOF: BUILD-TU-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "DRL-PROOF: === INDEPENDENT READER: DCL DUMP C-LANG.OBJ ==="

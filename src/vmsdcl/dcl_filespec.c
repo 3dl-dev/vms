@@ -775,11 +775,30 @@ struct dcl_rms_writer {
     struct RAB rab;
     char spec[1024];
     int  connected;
+    uint32_t put_sts, put_stv;   /* the last $PUT's status and secondary value */
 };
+
+static struct dcl_rms_writer *rms_write_open(struct dcl_context *ctx, const char *spec,
+                                             uint8_t rfm, uint8_t rat, uint16_t mrs,
+                                             uint32_t fop, uint32_t *rms_status);
 
 struct dcl_rms_writer *dcl_rms_write_create(struct dcl_context *ctx, const char *spec,
                                             uint8_t rfm, uint8_t rat, uint16_t mrs,
                                             uint32_t *rms_status)
+{
+    return rms_write_open(ctx, spec, rfm, rat, mrs, 0, rms_status);
+}
+
+struct dcl_rms_writer *dcl_rms_write_supersede(struct dcl_context *ctx, const char *spec,
+                                               uint8_t rfm, uint8_t rat, uint16_t mrs,
+                                               uint32_t *rms_status)
+{
+    return rms_write_open(ctx, spec, rfm, rat, mrs, FAB$M_SUP, rms_status);
+}
+
+static struct dcl_rms_writer *rms_write_open(struct dcl_context *ctx, const char *spec,
+                                             uint8_t rfm, uint8_t rat, uint16_t mrs,
+                                             uint32_t fop, uint32_t *rms_status)
 {
     struct dcl_rms_writer *w = calloc(1, sizeof(*w));
     uint32_t st;
@@ -798,8 +817,10 @@ struct dcl_rms_writer *dcl_rms_write_create(struct dcl_context *ctx, const char 
     w->fab.fab$b_rat = rat;
     w->fab.fab$w_mrs = mrs;
     w->fab.fab$b_fac = FAB$M_PUT;
+    w->fab.fab$l_fop |= fop;
     st = sys$create(&w->fab, 0, 0);
-    if (st != RMS$_NORMAL) { if (rms_status) *rms_status = st; free(w); return NULL; }
+    if (!(st & 1)) {           /* RMS$_SUPERSEDE, RMS$_CREATED ... are successes */
+        if (rms_status) *rms_status = st; free(w); return NULL; }
 
     w->rab = cc$rms_rab;
     w->rab.rab$l_fab = &w->fab;
@@ -820,7 +841,15 @@ int dcl_rms_write_record(struct dcl_rms_writer *w, const char *buf, size_t len)
     w->rab.rab$l_rbf = (char *)buf;
     w->rab.rab$w_rsz = (uint16_t)len;
     st = sys$put(&w->rab, 0, 0);
+    w->put_sts = st;
+    w->put_stv = w->rab.rab$l_stv;
     return (st == RMS$_NORMAL) ? 0 : -1;
+}
+
+uint32_t dcl_rms_write_status(const struct dcl_rms_writer *w, uint32_t *stv)
+{
+    if (stv) *stv = w ? w->put_stv : 0;
+    return w ? w->put_sts : RMS$_RAB;
 }
 
 uint32_t dcl_rms_write_close(struct dcl_rms_writer *w)

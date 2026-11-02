@@ -365,6 +365,8 @@ static uint32_t rms_impl_put(void *rab_ptr)
     }
 
     uint32_t status;
+    if (fab->_rms_file)
+        fab->_rms_file->io_sts = 0;
     switch (fab->fab$b_org) {
         case FAB$C_SEQ:
             status = rms_seq_put(fab, rab);
@@ -384,6 +386,9 @@ static uint32_t rms_impl_put(void *rab_ptr)
     if ($VMS_STATUS_SUCCESS(status))
         status = rms_reclock_after_put(fab, rab, status);
 #endif
+    /* a write the file system refused: its system status is the STV */
+    if (status == RMS$_WER && fab->_rms_file)
+        rab->rab$l_stv = fab->_rms_file->io_sts;
 
     rab->rab$l_sts = status;
     return status;
@@ -688,9 +693,11 @@ static uint32_t rms_impl_write(void *rab_ptr)
         return RMS$_WER;
     }
     if (rab->rab$w_rsz != 0) {
+        f->io_sts = 0;
         ssize_t n = rms_io_write(f, rab->rab$l_rbf, rab->rab$w_rsz);
         if (n != (ssize_t)rab->rab$w_rsz) {
             rab->rab$l_sts = RMS$_WER;
+            rab->rab$l_stv = f->io_sts;   /* the system status, as VMS RMS gives it */
             return RMS$_WER;
         }
     }

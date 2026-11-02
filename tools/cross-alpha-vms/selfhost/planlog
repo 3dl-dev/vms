@@ -1,0 +1,25 @@
+#!/bin/bash
+# planlog -- records one compiler / archiver invocation of GCC's own build, then
+# runs the real program unchanged (vms-465). build-host-gcc.sh puts a directory
+# of links to this script (alpha-dec-vms-gcc, alpha-dec-vms-g++, ar) first in
+# PATH for `make all-gcc` only, so the record is exactly what GCC's Makefiles
+# ran: the working directory, the program, every argument. gen-cc1-build.py
+# turns the records of cc1's closure into the DCL procedure that builds cc1 on
+# OVMX and into the cross reference build of the same commands.
+#
+# A record is one file in $OVMX_PLAN_LOG: NUL-terminated fields -- the time
+# (ns, orders the records), the working directory, the program's name, then
+# each argument. One file per invocation: make -j runs these concurrently.
+self=$(basename "$0")
+here=$(cd "$(dirname "$0")" && pwd)
+real=""
+IFS=: read -ra _dirs <<< "$PATH"
+for d in "${_dirs[@]}"; do
+  [ -n "$d" ] && [ "$(cd "$d" 2>/dev/null && pwd)" != "$here" ] && [ -x "$d/$self" ] && { real="$d/$self"; break; }
+done
+[ -n "$real" ] || { echo "planlog: no $self in PATH beyond $here" >&2; exit 127; }
+if [ -n "${OVMX_PLAN_LOG:-}" ]; then
+  t=$(date +%s%N)
+  printf '%s\0' "$t" "$PWD" "$self" "$@" > "$OVMX_PLAN_LOG/$t.$$.rec"
+fi
+exec "$real" "$@"

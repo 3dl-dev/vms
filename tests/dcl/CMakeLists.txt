@@ -65,6 +65,29 @@ set_tests_properties(dcl-parse-at-param PROPERTIES
     LABELS "dcl;parser;unit"
 )
 
+# A comma list longer than P1-P8 keeps every element (rd vms-465: GCC's ar
+# hands LIBRARY a whole batch of objects in one command). Hermetic, the same
+# shape as test_parse_at_param.
+add_executable(test_parse_list_past_p8
+    test_parse_list_past_p8.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_parser.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_lexer.c
+    ${CMAKE_SOURCE_DIR}/src/libvms/rtl/str_util.c
+)
+target_include_directories(test_parse_list_past_p8 PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    ${VMS_INCLUDE_DIR}
+)
+target_compile_definitions(test_parse_list_past_p8 PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+add_test(NAME dcl-parse-list-past-p8 COMMAND test_parse_list_past_p8)
+set_tests_properties(dcl-parse-list-past-p8 PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;parser;unit"
+)
+
 # A comma inside '[...]' is part of the word, so a UIC is one DCL value
 # (rd vms-1fb7): SET FILE/OWNER_UIC=[144,144], SET UIC [1,4]. Hermetic, the
 # same shape as test_parse_at_param.

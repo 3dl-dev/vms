@@ -608,6 +608,77 @@ int main(void)
         }
     }
 
+    /* ---- vms-b739 / vms-465: a file deleted by $CLOSE FOP DLT, or
+     * superseded by $CREATE FOP SUP, takes its directory entry with it. The
+     * by-FID delete freed the header and left NAME;N in [OVMXDIR]: $SEARCH
+     * still found it, and a new NAME;N then failed RMS$_CRE. ---- */
+    {
+        char spec[128], wild[128], esa[NAM$C_MAXESS + 1], rsa[NAM$C_MAXRSS + 1];
+        snprintf(spec, sizeof spec, "%s[OVMXDIR]DLTCLOSE.DAT;1", ODS2_UNIT);
+        snprintf(wild, sizeof wild, "%s[OVMXDIR]DLTCLOSE.DAT;*", ODS2_UNIT);
+        for (int round = 0; round < 2; round++) {
+            struct FAB fab = cc$rms_fab;
+            fab.fab$l_fna = spec; fab.fab$b_fns = (uint8_t)strlen(spec);
+            fab.fab$b_fac = FAB$M_PUT;
+            uint32_t dst = sys$create(&fab, 0, 0);
+            check(dst == RMS$_NORMAL, round == 0
+                  ? "vms-b739: sys$create DLTCLOSE.DAT;1"
+                  : "vms-b739: DLTCLOSE.DAT;1 can be created again after its $CLOSE DLT");
+            if (dst != RMS$_NORMAL) break;
+            fab.fab$l_fop |= FAB$M_DLT;
+            check(sys$close(&fab, 0, 0) == RMS$_NORMAL, "vms-b739: sys$close FOP DLT -> NORMAL");
+
+            struct NAM nam = cc$rms_nam;
+            struct FAB sf = cc$rms_fab;
+            nam.nam$l_esa = esa; nam.nam$b_ess = NAM$C_MAXESS;
+            nam.nam$l_rsa = rsa; nam.nam$b_rss = NAM$C_MAXRSS;
+            sf.fab$l_fna = wild; sf.fab$b_fns = (uint8_t)strlen(wild);
+            sf.fab$l_nam = &nam;
+            uint32_t pst = sys$parse(&sf, 0, 0);
+            uint32_t sst = pst == RMS$_NORMAL ? sys$search(&sf, 0, 0) : pst;
+            printf("  vms-b739: $SEARCH DLTCLOSE.DAT;* after $CLOSE DLT -> %%X%08X\n", sst);
+            check(pst == RMS$_NORMAL && sst != RMS$_NORMAL,
+                  "vms-b739: after $CLOSE DLT, $SEARCH finds no DLTCLOSE.DAT entry");
+            rms_search_end(&nam);
+        }
+
+        /* FOP SUP: the superseded NAME;1 is replaced, not duplicated. */
+        snprintf(spec, sizeof spec, "%s[OVMXDIR]SUPSEDE.DAT;1", ODS2_UNIT);
+        snprintf(wild, sizeof wild, "%s[OVMXDIR]SUPSEDE.DAT;*", ODS2_UNIT);
+        int made = 0;
+        for (int round = 0; round < 3; round++) {
+            struct FAB fab = cc$rms_fab;
+            fab.fab$l_fna = spec; fab.fab$b_fns = (uint8_t)strlen(spec);
+            fab.fab$b_fac = FAB$M_PUT;
+            if (round) fab.fab$l_fop |= FAB$M_SUP;
+            uint32_t cst = sys$create(&fab, 0, 0);
+            printf("  vms-465: $CREATE SUPSEDE.DAT;1 round %d -> %%X%08X\n", round, cst);
+            if ($VMS_STATUS_SUCCESS(cst)) {
+                made++;
+                sys$close(&fab, 0, 0);
+            }
+        }
+        check(made == 3, "vms-465: $CREATE FOP SUP supersedes SUPSEDE.DAT;1, twice");
+        {
+            struct NAM nam = cc$rms_nam;
+            struct FAB sf = cc$rms_fab;
+            nam.nam$l_esa = esa; nam.nam$b_ess = NAM$C_MAXESS;
+            nam.nam$l_rsa = rsa; nam.nam$b_rss = NAM$C_MAXRSS;
+            sf.fab$l_fna = wild; sf.fab$b_fns = (uint8_t)strlen(wild);
+            sf.fab$l_nam = &nam;
+            int found = 0;
+            if (sys$parse(&sf, 0, 0) == RMS$_NORMAL)
+                while (sys$search(&sf, 0, 0) == RMS$_NORMAL && found < 10)
+                    found++;
+            rms_search_end(&nam);
+            printf("  vms-465: $SEARCH SUPSEDE.DAT;* found %d entr%s\n", found, found == 1 ? "y" : "ies");
+            check(found == 1, "vms-465: after two supersedes, SUPSEDE.DAT has exactly one entry");
+        }
+        struct FAB ef = cc$rms_fab;
+        ef.fab$l_fna = wild; ef.fab$b_fns = (uint8_t)strlen(wild);
+        (void)sys$erase(&ef, 0, 0);
+    }
+
     /* If rms_io_write() ($PUT) writes a record one VBN too high while
      * rms_io_read() ($GET) still reads the true VBN, every byte-exact readback
      * above misses on re-$OPEN -- so this whole-suite gate reddens exactly when

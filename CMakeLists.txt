@@ -1320,6 +1320,15 @@ if(BUILD_TESTS)
     set_tests_properties(lab_ci6_evac_grade PROPERTIES
         LABELS "integration;cluster" TIMEOUT 60)
 
+    # rd vms-5fa: `ci6_evac.sh grade-share` (one MSCP-served volume mounted by
+    # a VAX and OVMX at once) on a passing fixture, eleven can-fail mutations
+    # and the real 2026-11-02 capture (which must FAIL S2,S3,S4), plus the
+    # share fire's dry-run console order. Hermetic: no pod.
+    add_test(NAME lab_ci6_evac_share
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_ci6_evac_share.sh)
+    set_tests_properties(lab_ci6_evac_share PROPERTIES
+        LABELS "integration;cluster" TIMEOUT 60)
+
     # x86_64 relocation survey freshness (vms-680, under vms-bdf): the
     # committed docs/design-link-x86_64-relocs.md is GENERATED, not hand-typed
     # -- tools/survey_x86_64_relocs.sh cross-compiles the vms-b65.1-.6 object

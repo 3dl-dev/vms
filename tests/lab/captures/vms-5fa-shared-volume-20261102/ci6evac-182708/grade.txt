@@ -1,0 +1,8 @@
+capture: /home/baron/projects/vms/.worktrees/cluster-5fa/tests/lab/captures/vms-5fa-shared-volume-20261102/ci6evac-182708; EVAC.DAT from vax1.log dump, 10 records
+S1 PASS: EVAC5FA on $2$DUA2: (MSCP-served) and VAX1$DUA16386: (OVMXE)
+S2 FAIL: VAX1 masters F11B$vEVAC5FA (CSID 00000000) with Lock Count 1: no other member's lock reached it
+S3 FAIL: EVAC.DAT runs VAX1:10: not alternating (want >= 4 runs, >= 2 per node)
+S4 FAIL: no "OVMXE took EVAC$WORKLOAD EX" banner: the workload never evacuated
+S5 PASS: no %ANALDISK-W/-E/-F; $STATUS %X00000001
+S6 PASS: 0 bugcheck/quorum lines; VAX2 Q=2 V=2; EVAC.DAT seq 1..10 contiguous
+VERDICT: FAIL (criteria S2,S3,S4)

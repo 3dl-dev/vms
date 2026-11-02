@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""ci6_evac_grade.py <capture-dir> -- grade a ci.6 evacuation capture (rd vms-1e58).
+"""ci6_evac_grade.py [--share] <capture-dir> -- grade a ci.6 evacuation capture (rd vms-1e58),
+or with --share a shared-volume capture (rd vms-5fa, `ci6_evac.sh share`).
 
 The grading half of tests/lab/tools/ci6_evac.sh (`ci6_evac.sh grade`). It is
 PURE: it reads only files in the capture directory and prints one PASS/FAIL
@@ -36,6 +37,25 @@ Criteria:
      Fatal|bugcheck|CNXMGRERR|LOCKMGRERR|INVLOCKID|quorum lost); VAX2's last
      F$GETSYI read shows CLUSTER_VOTES >= CLUSTER_QUORUM; EVAC.DAT runs
      1..N with no gap and no duplicate.
+
+--share criteria (rd vms-5fa; EVAC.DAT is the largest TYPE of it in vax1.log):
+  S1  One volume mounted by both: VAX1 MOUNTED it on $2$DUAn: and its SHOW
+      DEVICE/FULL says mounted + "served to cluster via MSCP Server"; OVMX
+      MOUNTED the same label on its MSCP unit <VAX1>$DUAn: and its SHOW
+      DEVICE/FULL says mounted.
+  S2  The Files-11 volume lock reaches one master: VAX1's SDA SHOW RESOURCE
+      of F11B$v<label> has Lock Count >= 2 and a SHOW LOCK in the capture of a
+      lock on that resource reads "Master copy of lock ... on system <csid>"
+      (another member's lock, mastered on VAX1).
+  S3  Both nodes wrote EVAC.DAT alternately: >= 4 runs, alternating VAX1 and
+      OVMX, each node >= 2 runs.
+  S4  Evacuation on the shared volume: "$ STOP <workload>" on VAX1, then OVMX's
+      "took EVAC$WORKLOAD EX at seq S" with S = VAX1's last seq + 1, and
+      EVAC.DAT ends with >= 2 OVMX records from S.
+  S5  ANALYZE/DISK_STRUCTURE on VAX1 is clean: it ran, printed no
+      %ANALDISK-W/-E/-F line, and the $STATUS read after it is odd.
+  S6  0 bugcheck/quorum lines on any console; VAX2's last Q/V read has V >= Q;
+      EVAC.DAT is 1..N with no gap and no duplicate.
 """
 import os
 import re
@@ -48,12 +68,12 @@ VAX1 = os.environ.get('CI6_VAX1_NODE', 'VAX1')
 WLPROC = os.environ.get('CI6_VAX1_PROCESS', 'EVACVAX1')
 SS_NOTQUEUED = 0x9B8
 
-TIME_RE = re.compile(r'\d\d-[A-Z]{3}-\d{4} \d\d:\d\d:\d\d\.\d\d')
+TIME_RE = re.compile(r'[ \d]\d-[A-Z]{3}-\d{4} \d\d:\d\d:\d\d\.\d\d')
 BAD_RE = re.compile(r'(?i:fatal|bug ?check|quorum lost)|CNXMGRERR|LOCKMGRERR|INVLOCKID')
 
 
 def vtime(s):
-    return datetime.strptime(s, '%d-%b-%Y %H:%M:%S.%f')
+    return datetime.strptime(s.strip(), '%d-%b-%Y %H:%M:%S.%f')
 
 
 def read(path):
@@ -75,13 +95,14 @@ def record(line):
 
 
 def dump_from_console(lines):
+    """The largest TYPE/SEARCH of EVAC.DAT in a console, as records."""
     blocks, cur = [], None
     for l in lines:
-        if re.match(r'^\$ (TYPE|SEARCH)\b.*EVAC\.DAT', l):
+        if re.match(r'^ ?\$ (TYPE|SEARCH)\b.*EVAC\.DAT', l):
             cur = []
             blocks.append(cur)
         elif cur is not None:
-            if l.startswith('$'):
+            if l.lstrip().startswith('$'):
                 cur = None
             else:
                 r = record(l)
@@ -91,10 +112,14 @@ def dump_from_console(lines):
 
 
 def main():
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    share = bool(args) and args[0] == '--share'
+    if share:
+        args = args[1:]
+    if len(args) != 1:
         print(__doc__.split('\n')[0], file=sys.stderr)
         return 2
-    d = sys.argv[1]
+    d = args[0]
     con = {}
     for name, cands in (('vax1', ['vax1.log']), ('vax2', ['vax2.log']),
                         ('ovmx', [OVMX + '.console.log', OVMX.lower() + '.log'])):
@@ -106,6 +131,8 @@ def main():
     if not os.path.isfile(os.path.join(d, 'timeline.txt')):
         print('capture: FAIL -- timeline.txt missing')
         return 2
+    if share:
+        return grade_share(d, con)
     dp = os.path.join(d, 'evac_dat.txt')
     if os.path.isfile(dp):
         recs = [r for r in map(record, read(dp)) if r]
@@ -235,6 +262,148 @@ def main():
 
     bad = [n for n in sorted(verdict) if not verdict[n]]
     print('VERDICT: %s' % ('PASS' if not bad else 'FAIL (criteria %s)' % ','.join(map(str, bad))))
+    return 1 if bad else 0
+
+
+def block(lines, start_re, stop_re=r'^ ?(\$|SDA>) '):
+    """The lines after the LAST line matching start_re, up to the next prompt."""
+    at = [i for i, l in enumerate(lines) if re.search(start_re, l)]
+    if not at:
+        return None
+    out = []
+    for l in lines[at[-1] + 1:]:
+        if re.match(stop_re, l):
+            break
+        out.append(l)
+    return out
+
+
+def grade_share(d, con):
+    v1, v2, ov = con['vax1'], con['vax2'], con['ovmx']
+    recs = dump_from_console(v1)
+    print('capture: %s; EVAC.DAT from vax1.log dump, %d records' % (d, len(recs)))
+    verdict = {}
+
+    def say(n, ok, why):
+        verdict[n] = ok
+        print('S%d %s: %s' % (n, 'PASS' if ok else 'FAIL', why))
+
+    # S1
+    vm = [re.search(r'%MOUNT-I-MOUNTED, (\S+) mounted on _(\$\d+\$DUA\d+:)', l) for l in v1]
+    vm = [m for m in vm if m]
+    label = vm[-1].group(1) if vm else None
+    om = [re.search(r'%%MOUNT-I-MOUNTED, (\S+) mounted on _(%s\$DUA\d+:)' % re.escape(VAX1), l) for l in ov]
+    om = [m for m in om if m and m.group(1) == label]
+    vfull = block(v1, r'^ ?\$ SHOW DEVICE/FULL \$\d+\$DUA') or []
+    vfull = ' '.join(x.strip() for x in vfull)
+    ofull = block(ov, r'^ ?\$ SHOW DEVICE/FULL %s\$DUA' % re.escape(VAX1)) or []
+    ofull = ' '.join(x.strip() for x in ofull)
+    if not vm:
+        say(1, False, 'no %%MOUNT-I-MOUNTED on %s' % VAX1)
+    elif not om:
+        say(1, False, '%s never mounted %s on an MSCP unit of %s' % (OVMX, label, VAX1))
+    elif 'mounted' not in vfull or 'served to cluster via MSCP Server' not in vfull:
+        say(1, False, '%s SHOW DEVICE/FULL does not show %s mounted and MSCP-served' % (VAX1, vm[-1].group(2)))
+    elif 'is online, mounted' not in ofull:
+        say(1, False, '%s SHOW DEVICE/FULL does not show %s mounted' % (OVMX, om[-1].group(2)))
+    else:
+        say(1, True, '%s on %s (MSCP-served) and %s (%s)'
+            % (label, vm[-1].group(2), om[-1].group(2), OVMX))
+
+    # S2
+    pad = (label or '').ljust(12)
+    rsb = block(v1, r'SHOW RESOURCE/NAME="F11B\$v%s"' % re.escape(pad), r'^ ?(\$|SDA>) ')
+    rsb_t = '\n'.join(rsb or [])
+    cnt = re.search(r'Lock Count:\s+(\d+)', rsb_t)
+    master = re.search(r'CSID:\s+([0-9A-F]{8})', rsb_t)
+    remote = []
+    cur = None
+    for l in v1:
+        m = re.match(r'Resource:\s+\S+ \S+\s+(\S+)', l)
+        if m:
+            cur = m.group(1)
+        m = re.search(r'Master copy of lock ([0-9A-F]{8}) on system ([0-9A-F]{8})', l)
+        if m and cur == 'F11B$v' + (label or '')[:2]:
+            remote.append(m.groups())
+    if not rsb:
+        say(2, False, 'no SDA SHOW RESOURCE of F11B$v%s on %s' % (label, VAX1))
+    elif not cnt or int(cnt.group(1)) < 2:
+        say(2, False, '%s masters F11B$v%s (CSID %s) with Lock Count %s: no other member\'s lock reached it'
+            % (VAX1, label, master.group(1) if master else '?', cnt.group(1) if cnt else '?'))
+    elif not remote:
+        say(2, False, 'F11B$v%s has %s locks on %s but none is a master copy of another member\'s'
+            % (label, cnt.group(1), VAX1))
+    else:
+        say(2, True, 'F11B$v%s mastered on %s, Lock Count %s, master copy of lock %s on system %s'
+            % (label, VAX1, cnt.group(1), remote[0][0], remote[0][1]))
+
+    # S3
+    runs = []
+    for r in recs:
+        if not runs or runs[-1][0] != r[0]:
+            runs.append([r[0], 0])
+        runs[-1][1] += 1
+    shape = ' '.join('%s:%d' % (n, c) for n, c in runs)
+    nv = sum(1 for n, _ in runs if n == VAX1)
+    no = sum(1 for n, _ in runs if n == OVMX)
+    if not recs:
+        say(3, False, 'no EVAC.DAT records typed on %s' % VAX1)
+    elif any(n not in (VAX1, OVMX) for n, _ in runs):
+        say(3, False, 'EVAC.DAT has a writer other than %s/%s: %s' % (VAX1, OVMX, shape))
+    elif len(runs) < 4 or nv < 2 or no < 2:
+        say(3, False, 'EVAC.DAT runs %s: not alternating (want >= 4 runs, >= 2 per node)' % shape)
+    else:
+        say(3, True, 'EVAC.DAT runs %s' % shape)
+
+    # S4
+    stop = any(re.match(r'^ ?\$ STOP %s\b' % re.escape(WLPROC), l) for l in v1)
+    took = [int(s) for n, s in re.findall(r'EVACWL: (\S+) took EVAC\$WORKLOAD EX at seq (\d+)', '\n'.join(ov))
+            if n == OVMX]
+    tail = runs[-1] if runs else None
+    if not stop:
+        say(4, False, 'no "$ STOP %s" on %s' % (WLPROC, VAX1))
+    elif not took:
+        say(4, False, 'no "%s took EVAC$WORKLOAD EX" banner: the workload never evacuated' % OVMX)
+    elif not tail or tail[0] != OVMX or tail[1] < 2 or len(runs) < 2:
+        say(4, False, 'EVAC.DAT does not end with >= 2 %s records after a %s run' % (OVMX, VAX1))
+    else:
+        start = recs[-tail[1]][1]
+        if took[-1] != start or recs[-tail[1] - 1][0] != VAX1 or start != recs[-tail[1] - 1][1] + 1:
+            say(4, False, '%s took EX at seq %d; its final run starts at seq %d' % (OVMX, took[-1], start))
+        else:
+            say(4, True, '%s seq %d -> %s seq %d..%d' % (VAX1, start - 1, OVMX, start, recs[-1][1]))
+
+    # S5
+    an = block(v1, r'^ ?\$ ANALYZE/DISK_STRUCTURE')
+    st = [re.search(r'ANALDISK STATUS=%X([0-9A-F]{8})', l) for l in v1]
+    st = [m for m in st if m]
+    bad = [l for l in (an or []) if re.search(r'%ANALDISK-[WEF]-', l)]
+    if an is None:
+        say(5, False, 'no ANALYZE/DISK_STRUCTURE on %s' % VAX1)
+    elif bad:
+        say(5, False, '%d ANALDISK warning/error line(s), first: %s' % (len(bad), bad[0].strip()))
+    elif not st or not int(st[-1].group(1), 16) & 1:
+        say(5, False, 'ANALYZE/DISK_STRUCTURE $STATUS %s' % (st[-1].group(1) if st else 'not read'))
+    else:
+        say(5, True, 'no %%ANALDISK-W/-E/-F; $STATUS %%X%s' % st[-1].group(1))
+
+    # S6
+    hits = ['%s: %s' % (n, l.strip()) for n in ('vax1', 'vax2', 'ovmx') for l in con[n] if BAD_RE.search(l)]
+    q = [m for m in (re.search(r'\bQ=(\d+) V=(\d+)', l) for l in v2) if m]
+    seqs = [r[1] for r in recs]
+    contiguous = seqs == list(range(1, len(seqs) + 1))
+    if hits:
+        say(6, False, '%d console line(s) match the bugcheck/quorum grep, first: %s' % (len(hits), hits[0][:120]))
+    elif not q or int(q[-1].group(2)) < int(q[-1].group(1)):
+        say(6, False, 'VAX2 last Q/V read %s' % (q[-1].group(0) if q else 'missing'))
+    elif not seqs or not contiguous:
+        say(6, False, 'EVAC.DAT seq is not 1..N contiguous')
+    else:
+        say(6, True, '0 bugcheck/quorum lines; VAX2 %s; EVAC.DAT seq 1..%d contiguous'
+            % (q[-1].group(0), len(seqs)))
+
+    bad = [n for n in sorted(verdict) if not verdict[n]]
+    print('VERDICT: %s' % ('PASS' if not bad else 'FAIL (criteria %s)' % ','.join('S%d' % n for n in bad)))
     return 1 if bad else 0
 
 

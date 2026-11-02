@@ -127,8 +127,10 @@ uint32_t dnet_netsrv_proc_start(struct dnet_fal_proc *p, const char *image_spec,
     /* THE PERSONA is the caller's choice and only the caller's: FAL passes the
      * authenticated user's UIC + DEFAULT privileges, MAIL the MAIL object's
      * account. Never NETACP's own identity. */
+    /* PRC$M_NETWRK: this is a network object's server process, which VMS
+     * classifies NETWORK (F$MODE(), JPI$_MODE, JPI$_JOBTYPE). */
     st = sys$creprc(&pid, &img_d, NULL, NULL, NULL, &pv, NULL, &nam_d,
-                    0, uic, 0, PRC$M_DETACH);
+                    0, uic, 0, PRC$M_DETACH | PRC$M_NETWRK);
     if (!(st & 1)) {
         dnet_fal_proc_close(p);
         p->fail_stage = "$CREPRC";

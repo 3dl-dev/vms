@@ -1670,7 +1670,10 @@ static int cmd_show_users(struct dcl_command *cmd)
      * the guard's call is the first, not a discarded probe. */
     if (readable) {
         while (scan_st & 1) {
-            if (!info.redacted && info.proc_type != VMS_PROC_T_OTHER) {
+            /* Network processes are not shown by default (SHOW USERS /NETWORK,
+             * which OVMX does not parse yet, is how VMS asks for them). */
+            if (!info.redacted && info.proc_type != VMS_PROC_T_OTHER &&
+                info.proc_type != VMS_PROC_T_NETWORK) {
                 process_count++;
 
                 int slot = -1;
@@ -1730,7 +1733,8 @@ static int cmd_show_users(struct dcl_command *cmd)
 
         index = 0;
         while (vms_kif_procscan(&index, &info) & 1) {
-            if (info.redacted || info.proc_type == VMS_PROC_T_OTHER)
+            if (info.redacted || info.proc_type == VMS_PROC_T_OTHER ||
+                info.proc_type == VMS_PROC_T_NETWORK)
                 continue;
 
             char upper_name[VMS_USERNAME_SIZE];

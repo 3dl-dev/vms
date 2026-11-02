@@ -74,8 +74,8 @@ items:
 
   - id: dcl-scripting$f-mode
     kind: lexical
-    status: partial
+    status: implemented
     authenticity: real
     vms: "F$MODE reports INTERACTIVE/BATCH/OTHER/NETWORK per the actual process context"
     evidence: src/vmsdcl/dcl_lexical.c
-    notes: "F$MODE() and F$GETJPI(pid,\"MODE\") read $GETJPI JPI$_MODE, the executive's classification of the process (its row's proc_type): INTERACTIVE for an interactive job's processes, OTHER for a detached one, BATCH for a batch job root (none runs: no batch engine). Formerly DCL guessed INTERACTIVE/BATCH from whether its own input was a terminal. Partial: the executive does not classify a DECnet object's server process as NETWORK (it reports OTHER). Proof tests/qemu/test_syssvc_dcl_fmode.c + defects.d/dcl-fmode-from-terminal.defect."
+    notes: "F$MODE() and F$GETJPI(pid,\"MODE\") read $GETJPI JPI$_MODE, the executive's classification of the process (its row's proc_type): INTERACTIVE for an interactive job's processes, OTHER for a detached one, BATCH for a batch job root (none runs: no batch engine). Formerly DCL guessed INTERACTIVE/BATCH from whether its own input was a terminal. NETWORK for a network object's server process: $CREPRC PRC$M_NETWRK (NETACP's FAL/MAIL creation) makes the executive mark the row NETWORK, so JPI$_MODE, JPI$_JOBTYPE and F$MODE() say NETWORK and SHOW USERS leaves it out by default, as VMS does. Proof tests/qemu/test_syssvc_dcl_fmode.c + defects.d/dcl-fmode-from-terminal.defect + defects.d/creprc-netwrk-not-classified.defect."

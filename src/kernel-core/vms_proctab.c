@@ -164,10 +164,14 @@ static void proc_fill_info(const struct vms_proc *proc,
      */
     if (proc->job_id != 0 && proc->job_id != proc->vms_pid) {
         struct vms_proc *root = find_by_vms_pid(proc->job_id);
-        info->proc_type = (root && root->terminal[0])
+        info->proc_type = (root && root->network) ? VMS_PROC_T_NETWORK
+                        : (root && root->terminal[0])
                             ? VMS_PROC_T_SUBPROCESS : VMS_PROC_T_OTHER;
     } else {
-        info->proc_type = proc->terminal[0]
+        /* A network object's server process is a NETWORK job (its creator,
+         * NETACP, said so with PRC$M_NETWRK; rd dcl-scripting$f-mode). */
+        info->proc_type = proc->network ? VMS_PROC_T_NETWORK
+                        : proc->terminal[0]
                             ? VMS_PROC_T_INTERACTIVE : VMS_PROC_T_OTHER;
     }
 
@@ -1976,7 +1980,7 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
     bool ok;
 
     uint32_t kind;
-    int login, given;
+    int login, given, network;
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -1986,7 +1990,10 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
     kind  = VMS_CREPRC_PCB_KIND(args.flags);
     login = (args.flags & VMS_CREPRC_PCB_F_LOGIN) != 0;
     given = (args.flags & VMS_CREPRC_PCB_F_IDENTITY) != 0;
-    if ((args.flags & ~(0xFFu | VMS_CREPRC_PCB_F_LOGIN | VMS_CREPRC_PCB_F_IDENTITY)) != 0 ||
+    network = (args.flags & VMS_CREPRC_PCB_F_NETWORK) != 0;
+    if ((args.flags & ~(0xFFu | VMS_CREPRC_PCB_F_LOGIN | VMS_CREPRC_PCB_F_IDENTITY |
+                        VMS_CREPRC_PCB_F_NETWORK)) != 0 ||
+        (network && kind != VMS_CREPRC_PCB_DETACHED) ||
         (kind != VMS_CREPRC_PCB_SUBPROCESS && kind != VMS_CREPRC_PCB_DETACHED &&
          kind != VMS_CREPRC_PCB_CONTINUE) ||
         (login && kind == VMS_CREPRC_PCB_CONTINUE) ||
@@ -2019,13 +2026,17 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
      * activations' worth (vms_proc_image_activated counts them down). A
      * subprocess with a GIVEN identity ($CREPRC uic/prvadr) takes it now,
      * from the executive, instead of stamping it itself. */
-    if ((args.status & 1) && (login || given)) {
+    if ((args.status & 1) && (login || given || network)) {
         struct vms_proc *np;
 
         exec_lock(&vms_proc_hash_lock);
         np = find_by_linux_pid(args.child_pid);
         if (np && login)
             np->login_images = 2;
+        /* A network object's server (PRC$M_NETWRK): its JPI$_MODE is NETWORK,
+         * as the executive says, never a guess from its missing terminal. */
+        if (np && network)
+            np->network = 1;
         exec_unlock(&vms_proc_hash_lock);
         if (np && given)
             vms_proc_apply_ticket_identity(np, args.username, args.uic, args.privs);

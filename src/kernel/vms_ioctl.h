@@ -2750,6 +2750,7 @@ struct vms_jib_quota {
 #define VMS_PROC_T_INTERACTIVE  1u  /* job root with a terminal (login) */
 #define VMS_PROC_T_SUBPROCESS   2u  /* belongs to a parent's job (SPAWN) */
 #define VMS_PROC_T_BATCH        3u  /* batch job root (reserved -- no engine yet) */
+#define VMS_PROC_T_NETWORK      4u  /* a network object's server process ($CREPRC PRC$M_NETWRK) and its job */
 
 struct vms_procinfo {
     uint32_t vms_pid;                   /* VMS-style process ID */
@@ -3123,6 +3124,7 @@ struct vms_ident_args {
  * process may stamp an identity (SETIDENT), and only until the image after
  * LOGINOUT is activated. SUBPROCESS and DETACHED only. */
 #define VMS_CREPRC_PCB_F_LOGIN    0x100u
+#define VMS_CREPRC_PCB_F_NETWORK  0x400u   /* detached: PRC$M_NETWRK, a network object's server (JPI$K_NETWORK) */
 /* OR'd into flags with SUBPROCESS (rd vms-a2c): the subprocess takes the
  * given identity (username/uic/privs) instead of its creator's -- $CREPRC's
  * explicit uic/prvadr -- under the rule DETACHED applies. */

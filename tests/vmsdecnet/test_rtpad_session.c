@@ -507,12 +507,15 @@ static void test_recall_and_sense(void)
     check(f.initlen == 9 && memcmp(f.init, "SHOW TIME", 9) == 0,
           "the recalled SHOW TIME is the read's initial input, not part of its prompt");
     check(screen_has(&f, "$ ") && !screen_has(&f, "$ SHOW"), "the prompt is just the prompt");
-    /* DCL's next read: untimed, its prompt goes WITH the read, which starts
-     * at once (outstanding while the user types, as on VMS) */
+    /* RETURN ended that read (echoed: a fresh line); DCL's next read is
+     * untimed: its prompt is shown at once, its CR LF rendered as the driver
+     * renders it on a fresh line -- just CR -- and the read waits for a key */
+    size_t mark = f.screenlen;
     rtpad_session_rx(&s, k_vax_dcl_read, sizeof k_vax_dcl_read);
-    check(rtpad_session_wants_input(&s) && rtpad_session_read_now(&s) &&
-          s.rd_plen == 5 && memcmp(s.rd_prompt, "\r\n\0$ ", 5) == 0 && s.rd_init == 0,
-          "DCL's command read starts at once with its prompt \"\\r\\n\\0$ \" (the driver renders it)");
+    check(f.screenlen == mark + 4 && memcmp(f.screen + mark, "\r\0$ ", 4) == 0,
+          "after an echoed RETURN, DCL's \"\\r\\n\\0$ \" shows as <CR><NUL>$ (no blank line)");
+    check(rtpad_session_wants_input(&s) && !rtpad_session_read_now(&s),
+          "an untimed read waits for the first key (the link is served meanwhile)");
 }
 
 static void test_send_refused(void)

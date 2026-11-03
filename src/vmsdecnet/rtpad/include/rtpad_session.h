@@ -88,6 +88,7 @@ struct rtpad_session {
     uint8_t opdu[32];                   /* an Out-of-Band PDU (sent from an AST) */
     unsigned oob_sent, oob_dropped;
     int read_cleared;                   /* a clearing OOB came during the read */
+    int fresh;                          /* the cursor is where an echoed RETURN left it */
     int done;
     uint32_t status;                    /* the session's ending condition */
     uint8_t cpdu[DNET_CTERM_MAX_PDU];
@@ -109,8 +110,10 @@ void rtpad_session_rx(struct rtpad_session *s, const uint8_t *data, size_t len);
  * is outstanding; a file whenever the host solicits.) */
 int rtpad_session_wants_input(const struct rtpad_session *s);
 
-/* Must the outstanding read start now, before the user types? On a terminal,
- * yes: the read (and its prompt) is outstanding while the user types. */
+/* Must the outstanding read start now, before the user types? A TIMED read
+ * (its time runs from the prompt) and one with initial input (a recalled
+ * command, shown at once) do; an untimed one, its prompt already shown,
+ * waits for the first key so the link is served meanwhile. */
 int rtpad_session_read_now(const struct rtpad_session *s);
 
 /* Satisfy the outstanding Start Read from the local side (one line). */

@@ -949,6 +949,18 @@ if(BUILD_TESTS)
     set_tests_properties(qemu_harness_verdict PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
 
+    # The corpus runtime's reply protocol cannot lose sync with the boot task
+    # (vms-84e). init.sh polled the reply FIFO with `read -t`, which drops the
+    # bytes it read when its deadline lapses mid-line, and the corpus reported
+    # "rc=" (empty) for a program that had passed. This runs init.sh's own
+    # corpus loop against a boot task that splits its RC line, plus the boot
+    # task's budgeted wait (tests/qemu/ovmx_wait_budget.h). No QEMU.
+    add_test(NAME qemu_corpus_rt_reply_protocol
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_corpus_rt_reply_protocol.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(qemu_corpus_rt_reply_protocol PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
+
     # Userspace service register (vms-5b4): every sys$ service either reaches
     # the executive or is declared, against an item, as answering from
     # userspace. The census asks "is this vms_kif wrapper called?" and cannot

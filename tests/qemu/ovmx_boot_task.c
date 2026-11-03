@@ -20,6 +20,7 @@
  *
  * Protocol (init.sh holds both FIFOs open read-write):
  *   control FIFO, one line per suite:   RUN <program> <output-path> [<arg>...]
+ *                                   or:  RUNB <budget-seconds> <program> <output-path> [<arg>...]
  *   reply FIFO, two lines per suite:    PID <substrate-pid> <CREPRC_PCB status>
  *                                       RC <exit status as the shell reports it>
  * The program's stdout and stderr go to <output-path> (init.sh's per-suite
@@ -43,6 +44,7 @@
 
 #include "ssdef.h"
 #include "vms_kif.h"
+#include "ovmx_wait_budget.h"
 
 static int write_all(int fd, const char *s)
 {
@@ -79,7 +81,8 @@ static struct vms_procinfo g_self;     /* the boot task's own (SYSTEM) row */
 
 #define MAX_ARGS 32
 
-static void run_one(int reply, const char *prog, const char *out, char *const *argv)
+static void run_one(int reply, const char *prog, const char *out, char *const *argv,
+                    unsigned budget_s)
 {
     char msg[160];
     int gp[2], hold[2];
@@ -146,11 +149,7 @@ static void run_one(int reply, const char *prog, const char *out, char *const *a
     (void)write_all(reply, msg);
 
     /* The intermediate is gone, so the suite is now this subreaper's child. */
-    int ws = 0;
-    while (waitpid((pid_t)gpid, &ws, 0) < 0 && errno == EINTR)
-        ;
-    int rc = WIFEXITED(ws) ? WEXITSTATUS(ws)
-           : WIFSIGNALED(ws) ? 128 + WTERMSIG(ws) : 1;
+    int rc = ovmx_wait_rc((pid_t)gpid, budget_s);
     snprintf(msg, sizeof msg, "RC %d\n", rc);
     (void)write_all(reply, msg);
 }
@@ -197,9 +196,25 @@ int main(int argc, char **argv)
     while (read_line(ctl, line, sizeof line) >= 0) {
         if (strcmp(line, "EXIT") == 0)
             break;
-        if (strncmp(line, "RUN ", 4) != 0)
+        char *prog;
+        unsigned budget_s = 0;
+        if (strncmp(line, "RUN ", 4) == 0) {
+            prog = line + 4;
+        } else if (strncmp(line, "RUNB ", 5) == 0) {
+            char *end = NULL;
+            unsigned long b = strtoul(line + 5, &end, 10);
+            if (end == line + 5 || *end != ' ' || b == 0 || b > 86400) {
+                /* answer it, so init.sh's blocking read is never left waiting */
+                char msg[64];
+                snprintf(msg, sizeof msg, "PID 0 %u\nRC 126\n", (unsigned)SS$_BADPARAM);
+                (void)write_all(reply, msg);
+                continue;
+            }
+            budget_s = (unsigned)b;
+            prog = end + 1;
+        } else {
             continue;
-        char *prog = line + 4;
+        }
         char *out = strchr(prog, ' ');
         if (!out)
             continue;
@@ -214,7 +229,7 @@ int main(int argc, char **argv)
                 argv_run[n++] = w;
         }
         argv_run[n] = NULL;
-        run_one(reply, prog, out, argv_run);
+        run_one(reply, prog, out, argv_run, budget_s);
     }
     return 0;
 }

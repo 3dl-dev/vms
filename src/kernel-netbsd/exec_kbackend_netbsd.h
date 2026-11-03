@@ -94,6 +94,7 @@
 #include <sys/errno.h>     /* EWOULDBLOCK, EINTR, ERESTART (Phase G cv timeout) */
 #include <sys/atomic.h>    /* membar_producer / membar_consumer (vms-d61) */
 #include <sys/callout.h>   /* struct callout (exec_timer_t, SS16 -- FC-P0.1) */
+#include <sys/cpu.h>       /* cpu_intr_p (vms-896d: hold an oper line only from thread context) */
 #include <sys/intr.h>      /* IPL_NET (exec_rxlock_t's EXEC_LAN_RX_IPL, FC-P0.16) */
 
 /* ---- primitive types ---- */

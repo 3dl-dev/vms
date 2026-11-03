@@ -78,6 +78,9 @@ vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t 
 		return VMS_CODEC_E_CLASS;
 
 	out->mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	/* body[28:30], the requester's $ENQ options as received (rd vms-1e58
+	 * C4; only VMS_DLM_REQ_FLAG_NOQUEUE is grounded -- see the header). */
+	out->req_flags = vms_wire_get_le16(&v, VMS_OFB_DLM_REQ_FLAGS);
 	out->req_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
 	/* body[20:24] is ONE cell carrying one of two things, and a RECEIVER
@@ -671,6 +674,52 @@ vms_codec_status_t vms_dlm_enq_response_build_queued(const uint8_t *req_body,
 	 * the queued CONVERT's answer zeroes it. */
 	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 52u, 0u);
 	vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + 53u, 0u);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/*
+ * A MASTER'S DENY of a NOQUEUE first ENQ (rd vms-1e58 C4) -- the request
+ * echoed, the category made a response, body[28:32] cleared and the NOTQUEUED
+ * record at body[32:36]. Every figure: the header's declaration.
+ */
+vms_codec_status_t vms_dlm_enq_response_build_notqueued(const uint8_t *req_body,
+							uint32_t req_len,
+							uint8_t *frame,
+							uint32_t cap,
+							uint32_t *written)
+{
+	vms_wire_view_t v;
+	vms_wire_buf_t w;
+	uint8_t cat, op;
+
+	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	vms_wire_view_init(&v, req_body, req_len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_ENQ)
+		return VMS_CODEC_E_CLASS;
+	/* A sub-lock's deny names the master's own S0 address at body[40:44]:
+	 * not a value this executive holds, so no answer is composed for it. */
+	if (dlm_req_names_parent(&v))
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			vms_wire_response_category(VMS_DLM_CAT_REQUEST));
+	/* body[28:32]: cleared on the real root denies -- the requested mode
+	 * included, because no lock of that mode exists. */
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_FLAG, 0u);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_NOTQUEUED_REC_VAL);
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)

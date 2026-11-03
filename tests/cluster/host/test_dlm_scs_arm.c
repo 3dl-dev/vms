@@ -341,6 +341,26 @@ static void arm_bindings(void)
 	       "two counters read as a total and a subset");
 
 	/*
+	 * AND A REQUEST THAT MAY NOT BE QUEUED IS NOT (rd vms-1e58 C4). The arm
+	 * used to fill the master's request field by field and never set its
+	 * flags, so a real VAX's EX/NOQUEUE against an EX this node held was
+	 * QUEUED (lab fire ci6evac-031902, frames 7310/7312). The translation
+	 * now lives in vms_dlm_master_wire.h, which test_dlm_mixed_master.c
+	 * drives with the captured frame; what only the shipped text can say is
+	 * that the ARM calls that same translation, and that its DENY is the
+	 * grounded echo rather than a frame composed from zeros.
+	 */
+	has("vms_dlm_master_req_from_wire(e, wireop, (uint32_t)in->from_csid, out);",
+	    "*** the arm fills the master's request through THE translation "
+	    "the host harness drives -- the one that reads NOQUEUE ***");
+	has("vms_dlm_enq_response_build_notqueued(in->body, in->len,",
+	    "*** and the DENIED outcome is answered with the request echoed "
+	    "and the b8 09 fc record ***");
+	absent("vms_dlm_enq_response_build_deny(",
+	       "*** and the arm no longer composes a deny from a zeroed "
+	       "buffer (no transaction token, no outcome byte) ***");
+
+	/*
 	 * AND THE OTHER HALF OF THE SAME HANG (rd vms-28bd): a LOCAL release
 	 * that advances a cross-node queue. The engine's notification carries
 	 * only (csid, master_lkid); what this arm does with it is all order and

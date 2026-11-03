@@ -3149,6 +3149,74 @@ static void test_85f_queued_answer_on_the_wire(void)
 }
 
 /*
+ * rd vms-1e58 C4: THE MASTER'S DENY (SS$_NOTQUEUED), all 132 bytes described.
+ *
+ * A frame type OVMX had never emitted: the arm used to compose its deny from a
+ * zeroed buffer, and it was unreachable anyway because the master never heard a
+ * requester's NOQUEUE. Now that a real VAX's EX/NOQUEUE reaches the deny, the
+ * answer is the request echoed with the NOTQUEUED record, and every byte gets a
+ * row here before any of it reaches a real lock manager. The REQUEST is
+ * composed by the shipping request builder, as in rd vms-85f's queued answer.
+ */
+static void test_1e58_notqueued_answer_on_the_wire(void)
+{
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t req[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *ab = ans + VMS_OFF_SYSAP_BODY;
+	char state[256];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-1e58: the NOTQUEUED answer's 132 bytes, all "
+	       "described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&r, 0, sizeof(r));
+	r.mode            = 5u;              /* EX, EVPROBE's own mode        */
+	r.req_lkid        = 0x1b000374u;     /* the requester's own handle    */
+	r.req_pid         = 0x20400216u;     /* PID-form: no master handle yet */
+	r.dir_hash        = 0x00027e10u;
+	r.dir_hash_valid  = 1u;
+	r.res_group       = 1u;
+	r.res_acmode      = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len        = 13u;
+	memcpy(r.name, "EVAC$WORKLOAD", 13);
+
+	memset(req, 0, sizeof(req));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, req,
+					   sizeof(req), &written) ==
+		 VMS_CODEC_OK, "the request this master is about to deny");
+	cnxman_envelope_originate(m, req + VMS_OFF_SYSAP_BODY,
+				  CNXMAN_ENV_REQUEST);
+	memset(ans, 0, sizeof(ans));
+	ct_check(vms_dlm_enq_response_build_notqueued(req + VMS_OFF_SYSAP_BODY,
+						      VMS_CM_BODY_LEN, ans,
+						      sizeof(ans), &written) ==
+		 VMS_CODEC_OK, "the NOTQUEUED answer's body");
+	ct_check(vms_dlm_seq_put(ab, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK,
+		 "the cluster's DLM sequence, as on every DLM message");
+	cnxman_envelope_originate(m, ab, CNXMAN_ENV_RESPONSE);
+	ct_check(memcmp(ab + 4u, req + VMS_OFF_SYSAP_BODY + 4u, 4u) == 0 &&
+		 (ab[4] | ab[5] | ab[6] | ab[7]) != 0u,
+		 "*** body[4:8] is the REQUEST's own transaction, echoed -- the "
+		 "old composed deny carried none ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,pid=%u,lkid=%u,group=%u,acmode=%u,namelen=%u,hash=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
+		 (unsigned)r.req_lkid, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash);
+	conf_dump("dlm_enq_ans_notqueued", 72u, state, ab, VMS_CM_BODY_LEN);
+}
+
+/*
  * rd vms-194 D1: THE RELEASE OPENS NO TRANSACTION.
  *
  * MEASURED by tools/cluster/dlm_deq_census.py over every committed pcap: 0 of
@@ -3449,6 +3517,7 @@ int main(void)
 	test_c55_enq_request_on_the_wire();
 	test_b67a_sublock_request_on_the_wire();
 	test_85f_queued_answer_on_the_wire();
+	test_1e58_notqueued_answer_on_the_wire();
 	test_194_release_opens_no_transaction();
 	test_a4d7_grant_notify_on_the_wire();
 	test_194_release_on_the_wire();

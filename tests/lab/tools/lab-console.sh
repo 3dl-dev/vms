@@ -8,10 +8,15 @@
 #   lab-console.sh send <pod> <node> <line>    send one line (CR appended)
 #   lab-console.sh ctrl <pod> <node> <letter>  send ^<letter> (e.g. E for sim>)
 #   lab-console.sh read <pod> <node> [lines]   print the console tail (default 40)
+#   lab-console.sh stamp <pod> <node> <lead-cs> <ERE|-> <line>
+#                                              send one line stamped with the POD's
+#       clock: %NOW% becomes the pod time at the write (+lead hundredths, DCL
+#       dd-MMM-yyyy:hh:mm:ss.cc); with an ERE, wait for the first new console
+#       line matching it and print when it appeared (console_stamp.py, vms-6731)
 #
 # Lines travel base64-encoded so DCL '$' and '"' survive the shell layers.
 set -eu
-[ $# -ge 3 ] || { sed -n '2,12p' "$0"; exit 2; }
+[ $# -ge 3 ] || { sed -n '2,17p' "$0"; exit 2; }
 op=$1 pod=$2 node=$3; shift 3
 case "$pod" in *[!A-Za-z0-9-]*|"") echo "bad pod name" >&2; exit 2;; esac
 case "$node" in *[!A-Za-z0-9_-]*|"") echo "bad node name" >&2; exit 2;; esac
@@ -33,6 +38,14 @@ case "$op" in
     code=$(printf '%d' "'$(printf '%s' "$1" | tr a-z A-Z)"); code=$((code - 64))
     b=$(printf "\\$(printf '%03o' "$code")" | base64 -w0)
     k "L=\$( $locate ) || { echo 'console not found' >&2; exit 1; }; echo $b | base64 -d > \"\$L.in\"" ;;
+  stamp)
+    [ $# -ge 3 ] || { echo "stamp needs <lead-cs> <ERE|-> <line>" >&2; exit 2; }
+    case "$1" in ''|*[!0-9]*) echo "lead must be a number of hundredths" >&2; exit 2;; esac
+    lead=$1 ere=$2; shift 2
+    b=$(printf '%s' "$*" | base64 -w0)
+    if [ "$ere" = - ]; then e=-; else e=$(printf '%s' "$ere" | base64 -w0); fi
+    py=$(base64 -w0 < "$(dirname "$0")/console_stamp.py")
+    k "L=\$( $locate ) || { echo 'console not found' >&2; exit 1; }; echo $py | base64 -d | python3 -I - \"\$L\" $lead $b $e" ;;
   read)
     n=${1:-40}; case "$n" in *[!0-9]*) echo "lines must be a number" >&2; exit 2;; esac
     k "L=\$( $locate ) || { echo 'console not found' >&2; exit 1; }; tr -d '\\000\\r' < \"\$L\" | tail -n $n" ;;

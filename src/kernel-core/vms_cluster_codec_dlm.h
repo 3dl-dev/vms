@@ -329,7 +329,6 @@ enum vms_lck_mode {
 #define VMS_OFF_DLM_MASTER_LKID    92u  /* body[20:24] LE u32: the MASTER's   */
 #define VMS_OFF_DLM_REQ_LKID       96u  /* body[24:28] LE u32: the REQUESTER's*/
 #define VMS_OFF_DLM_MODE          102u  /* body[30]    u8,     spec row     */
-#define VMS_OFF_DLM_REQ_FLAGS     100u  /* body[28:30] LE16, request: the $ENQ LCK$M_ flags (rd vms-d63) */
 /*
  * body[46] IS THE RESOURCE'S ACCESS MODE, NOT A CONSTANT (rd vms-8219,
  * rd vms-b5b0). It was read for a long time as a "name marker" holding a
@@ -471,6 +470,9 @@ struct vms_dlm_enq_request {
 	 * LKB's own flags, mapped by the engine (dlm_proxy_fill_post), written on
 	 * an op-0x01 request; the codec adds nothing to it.
 	 */
+	/* Written by the builder on an op-0x01 request (rd vms-d63); read back by
+	 * the parser AS RECEIVED (rd vms-1e58 C4). The master acts only on the
+	 * bits vms_dlm_master_wire.h maps. */
 	uint16_t req_flags;         /* body[28:30], op-0x01 only            */
 	uint32_t parent_own_lkid;   /* body[36:40], 0 on a ROOT request       */
 	uint32_t parent_master_lkid;/* body[40:44], 0 on a ROOT request       */
@@ -519,7 +521,35 @@ struct vms_dlm_enq_request {
 	uint16_t res_group;
 	uint8_t  res_acmode;
 	uint8_t  res_ident_valid;
+
 };
+
+/*
+ * body[28:30] BIT 0x0004 OF A RECEIVED op-0x01 REQUEST IS LCK$M_NOQUEUE (rd
+ * vms-1e58 C4). Wire black-box, two independent readings:
+ *
+ *  1. A DRIVEN ONE-VARIABLE PAIR. tests/lab/ci6/EVACWL.MAR and EVPROBE.MAR
+ *     issue the same $ENQW -- EX, the same name EVAC$WORKLOAD, no
+ *     LCK$M_SYSTEM -- and differ ONLY in FLAGS (0 vs #LCK$M_NOQUEUE, the
+ *     public value 4). On the wire (tests/lab/captures/vms-ci6-evac-20261103,
+ *     ci6-frames.txt) the requests read body[28:30] = 00 00 (frame 5212, real
+ *     VAX1) and 04 00 (frame 7310, real VAX2).
+ *  2. THE ANSWERS REAL MASTERS GIVE, over every committed capture (pinned by
+ *     tools/cluster/dlm_notqueued_answer_census.py --selftest): every real
+ *     DENY (body[34] = 0xfc) answers a request with this bit SET, and every
+ *     real QUEUED (body[34] = 0xfb) answers one with it CLEAR -- op-0x01 and
+ *     op-0x07 alike, never the other way round. A request that may not be
+ *     queued is exactly the one a master may deny.
+ *
+ * Without this, OVMX's master never heard NOQUEUE: the arm left the request's
+ * flags 0, so a real VAX's EX/NOQUEUE against an EX OVMX holds was QUEUED, and
+ * the VAX's $ENQW then completed SS$_NORMAL while OVMX still held EX (the ci.6
+ * C4 failure, frames 7310/7312).
+ */
+#define VMS_DLM_REQ_FLAG_NOQUEUE   0x0004u
+#define VMS_DLM_REQ_FLAG_VALBLK    0x0001u  /* rd vms-d63, req_flags comment */
+#define VMS_OFF_DLM_REQ_FLAGS      100u  /* body[28:30] LE u16, as received */
+#define VMS_OFB_DLM_REQ_FLAGS      VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REQ_FLAGS)
 
 /*
  * The grant/deny outcome is a message-SHAPE discriminator, not a literal
@@ -707,6 +737,45 @@ vms_codec_status_t vms_dlm_enq_response_build_queued(const uint8_t *req_body,
 						     uint32_t req_lkid,
 						     uint8_t *frame, uint32_t cap,
 						     uint32_t *written);
+
+/*
+ * vms_dlm_enq_response_build_notqueued - a MASTER's DENY of a first ENQ (op
+ * 0x01) that asked LCK$M_NOQUEUE and could not be granted (rd vms-1e58 C4).
+ * The answer a real VAX's $ENQW turns into SS$_NOTQUEUED.
+ *
+ * GROUNDED by tools/cluster/dlm_notqueued_answer_census.py --selftest over the
+ * committed corpus: REAL -> REAL cat-0x02 op-0x01 requests whose answer
+ * carries body[34] = 0xfc, paired by the transaction token at body[4:8].
+ *
+ *   body[32:36] = b8 09 fc .. on EVERY real deny, root and sub-lock alike:
+ *                 0x09b8 is 2488, SS$_NOTQUEUED's own value, and 0xfc is the
+ *                 cat-0x82 outcome byte (0xfa grant, 0xfb queued). body[35]
+ *                 is 0 on the root answers that are not residue-filled.
+ *   body[28:32] = 0 on the ROOT answers: the requested mode at body[30] is
+ *                 CLEARED (spec §4(f).1's deny shape), unlike a QUEUED answer
+ *                 which carries it back.
+ *   EVERYTHING ELSE IS ECHOED: the PID-form placeholder at body[20:24] (no
+ *   lock exists, so there is no master handle to name), the requester's own
+ *   handle at body[24:28], the identity and the counted name -- in full; a
+ *   deny does NOT zero body[52:54] the way a QUEUED answer does.
+ *   ONE ROOT ANSWER of the three instead carries S0-looking bytes at
+ *   body[28:32] and ff at body[35:39]; this node writes the residue-free form
+ *   the other two carry (rd vms-42de: no residue), and every byte has a row
+ *   (dlm_enq_ans_notqueued) in tests/cluster/conformance/frame-grounding.tsv.
+ *
+ * REFUSES, rather than asserting what this node does not hold:
+ *   E_SHORT  a body shorter than the CM body;
+ *   E_CLASS  a body that is not a cat-0x02 op-0x01 request, or a SUB-LOCK
+ *            request (body[36:44] names a parent): every real deny of one
+ *            rewrites body[40:44] with the master's own S0 address.
+ */
+#define VMS_DLM_REPLY_NOTQUEUED           0xfcu
+#define VMS_DLM_NOTQUEUED_REC_VAL         0x00fc09b8u /* body[32:36]          */
+vms_codec_status_t vms_dlm_enq_response_build_notqueued(const uint8_t *req_body,
+							uint32_t req_len,
+							uint8_t *frame,
+							uint32_t cap,
+							uint32_t *written);
 
 /* The immediate answer to a CONVERT a master QUEUED: the request echoed, cat
  * 0x82, body[34] = 0xfb, body[52:54] left zero (rd vms-cab). */

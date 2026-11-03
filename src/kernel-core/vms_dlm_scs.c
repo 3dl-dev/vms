@@ -91,6 +91,7 @@
 #include "vms_cnxman.h"
 #include "vms_dlm_ldwv.h"
 #include "vms_dlm_master.h"
+#include "vms_dlm_master_wire.h" /* rd vms-1e58: wire -> master request */
 #include "vms_dlm_dir.h"      /* rd vms-8219: the lock directory's entries */
 #include "vms_dlm_proxy.h"
 #include "vms_dlm_quorum.h"
@@ -1346,43 +1347,15 @@ static int dlm_arm_peer_is_ours(struct vms_dlm_scs *d,
 }
 
 /* Fill the master-side request from the PARSED frame and the connection
- * manager's own identification of the sender. `from_csid` is spec §4(a)'s
- * cluster-logical source address -- the one grounded answer to "who is
- * asking"; the DLM body carries no CSID field at all. */
+ * manager's own identification of the sender -- through the ONE translation
+ * the host harnesses also call (vms_dlm_master_wire.h, rd vms-1e58 C4), so the
+ * requester's NOQUEUE reaches the master here exactly as it does under test. */
 static void dlm_arm_fill_master_req(const struct dlm_scs_request *in,
 				    const struct vms_dlm_enq_request *e,
 				    uint8_t wireop,
 				    struct vms_dlm_master_request *out)
 {
-	uint32_t n = e->name_len;
-
-	memset(out, 0, sizeof(*out));
-	out->op = (wireop == VMS_DLM_WIREOP_CONVERT) ? VMS_DLM_MREQ_CONVERT
-						     : VMS_DLM_MREQ_ENQ;
-	out->req_csid = (uint32_t)in->from_csid;
-	out->req_lkid = e->req_lkid;
-	out->master_lkid = e->master_lkid;
-	out->lkmode = e->mode;
-	/* COUNTED (rd vms-326): the frame states the length at body[47] and a
-	 * VMS resource name may contain NULs, so the master is told how many
-	 * bytes the name is rather than being left to find a terminator. The
-	 * tail stays zero (the struct was memset above), so a diagnostic
-	 * printf of an ASCII name is still safe. */
-	if (n > sizeof(out->resnam))
-		n = (uint32_t)sizeof(out->resnam);
-	memcpy(out->resnam, e->name, n);
-	out->resnam_len = (uint8_t)n;
-	/*
-	 * WHICH resource of that name (rd vms-b5b0): body[44:46] UIC group and
-	 * body[46] access mode, as the codec read them. `res_ident_valid` is 0
-	 * for an op-0x07 CONVERT, whose identity span is stale buffer on a real
-	 * frame -- the engine then takes the identity off the LOCK the convert
-	 * names, which is an executive read (vms_lock.c). Nothing is defaulted
-	 * here.
-	 */
-	out->res_group = e->res_group;
-	out->res_mode = e->res_acmode;
-	out->res_ident_valid = e->res_ident_valid;
+	vms_dlm_master_req_from_wire(e, wireop, (uint32_t)in->from_csid, out);
 }
 
 /*
@@ -1477,27 +1450,23 @@ static int dlm_arm_reply_grant(struct vms_dlm_scs *d,
 }
 
 /*
- * DENIED (SS$_NOTQUEUED): the spec's deny shape echoes the request's body[20]
- * placeholder and the resource name back verbatim. Those two ARE echoes, by the
- * protocol's own definition of this reply -- they identify the request being
- * refused -- and nothing else is asserted: no lock id of ours, because we hold
- * no lock for it.
+ * DENIED (SS$_NOTQUEUED): the request ECHOED with the deny record, the same
+ * discipline as the grant and the queued answer (rd vms-1e58 C4). It used to be
+ * composed from a zeroed buffer -- no transaction token, no outcome byte at
+ * body[34] -- a frame no real master sends; every real deny carries b8 09 fc at
+ * body[32:35] (vms_dlm_enq_response_build_notqueued). Nothing of ours is named:
+ * no lock exists, so the PID-form placeholder at body[20:24] rides back.
  */
 static int dlm_arm_reply_deny(struct vms_dlm_scs *d,
 			      const struct dlm_scs_request *in,
-			      const struct vms_dlm_enq_request *e,
 			      struct dlm_scs_reply *reply)
 {
 	uint32_t written = 0;
 
 	memset(d->txframe, 0, sizeof(d->txframe));
-	/* body[46] echoes the DENIED REQUEST's own access mode (rd vms-b5b0):
-	 * this reply is about that requester's resource, in its domain. */
-	if (vms_dlm_enq_response_build_deny(e->req_lkid, e->master_lkid,
-					    e->res_acmode, e->name_len,
-					    e->name, d->txframe,
-					    (uint32_t)sizeof(d->txframe),
-					    &written) != VMS_CODEC_OK) {
+	if (vms_dlm_enq_response_build_notqueued(in->body, in->len, d->txframe,
+						 (uint32_t)sizeof(d->txframe),
+						 &written) != VMS_CODEC_OK) {
 		d->codec_failures++;
 		return -1;
 	}
@@ -1709,7 +1678,7 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 	case VMS_DLM_MASTER_GRANTED:
 		return dlm_arm_reply_grant(d, in, &res, reply);
 	case VMS_DLM_MASTER_DENIED:
-		return dlm_arm_reply_deny(d, in, e, reply);
+		return dlm_arm_reply_deny(d, in, reply);
 	case VMS_DLM_MASTER_QUEUED:
 		/*
 		 * A REAL lock on a REAL waiting queue. Nothing goes back NOW --

@@ -1384,6 +1384,10 @@ add_test(NAME cluster_frame_conformance_gate
         # required here so the never-crash rule's own condition holds -- no new
         # frame type reaches a real VAX before the gate can see every byte.
         dlm_enq_ans_queued
+        # rd vms-1e58 C4: the master's NOTQUEUED answer. Another frame type
+        # OVMX had never emitted (its old deny was composed from zeros and
+        # unreachable), required here for the same never-crash reason.
+        dlm_enq_ans_notqueued
         # rd vms-a4d7: the DEFERRED GRANT (cat-0x02 op-0x02). Also a frame type
         # OVMX has never emitted, and the one that replaced an invented echo --
         # required here so no byte of it reaches a real lock manager ungrounded.
@@ -1723,6 +1727,22 @@ add_test(NAME cluster_host_dlm_queued_answer_census
         --selftest "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(cluster_host_dlm_queued_answer_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;crash-safety"
+    TIMEOUT 600
+)
+
+# ---- rd vms-1e58 C4: what a real master answers a NOQUEUE request it cannot
+# grant, and which request bit says NOQUEUE. Every real deny (0xfc) answers a
+# request with body[28:30] bit 0x0004 set and every real queue (0xfb) one with
+# it clear, op 0x01 and 0x07 alike; every deny carries b8 09 fc (SS$_NOTQUEUED)
+# at body[32:35]. Pins the figures in the codec header and the
+# dlm_enq_ans_notqueued rows.
+add_test(NAME cluster_host_dlm_notqueued_answer_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_notqueued_answer_census.py"
+        --selftest "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_notqueued_answer_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;crash-safety"
     TIMEOUT 600
 )

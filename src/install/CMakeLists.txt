@@ -44,7 +44,7 @@ if(BUILD_TESTS)
         TIMEOUT 30
         ENVIRONMENT "INSTALL_EXE=$<TARGET_FILE:vms_install>"
         # vms-ed4: stages a file under the real /vms/SYS0/SYSCOMMON tree.
-        # Shares that SYSDISK with dcl-integration -> same lock so ctest
+        # Shares that SYSDISK with dcl-integration-sysdisk -> same lock so ctest
         # --parallel never runs them concurrently. Do not remove (Rule 8).
         RESOURCE_LOCK "sysdisk"
     )

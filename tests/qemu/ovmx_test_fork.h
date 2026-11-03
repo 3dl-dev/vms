@@ -30,7 +30,14 @@
 #include <unistd.h>
 
 #include "vms_kif.h"
-#include "ovmx_substrate.h"  /* the fork handshake is the substrate's own work (rd vms-a66e) */
+/* The substrate scope (src/libvms/include/ovmx_substrate.h, rd vms-a66e): the
+ * fork handshake is the substrate's own work. Declared weak here, not
+ * included: a suite built without LIBVMS (the test_kmod_* kernel suites) has no
+ * C RTL file layer either, so there is no scope to enter. */
+extern int  ovmx_substrate_enter(void) __attribute__((__weak__));
+extern void ovmx_substrate_leave(void) __attribute__((__weak__));
+static inline void ovmx_test_fork_scope_enter(void) { if (ovmx_substrate_enter) ovmx_substrate_enter(); }
+static inline void ovmx_test_fork_scope_leave(void) { if (ovmx_substrate_leave) ovmx_substrate_leave(); }
 
 static inline pid_t ovmx_fork_kind_ident_body(uint32_t kind, const char *uname, uint32_t uic,
                                             uint64_t privs, uint32_t *status)
@@ -86,9 +93,9 @@ static inline pid_t ovmx_fork_kind_ident_body(uint32_t kind, const char *uname, 
 static inline pid_t ovmx_fork_kind_ident_st(uint32_t kind, const char *uname, uint32_t uic,
                                             uint64_t privs, uint32_t *status)
 {
-    ovmx_substrate_enter();
+    ovmx_test_fork_scope_enter();
     pid_t r = ovmx_fork_kind_ident_body(kind, uname, uic, privs, status);
-    ovmx_substrate_leave();
+    ovmx_test_fork_scope_leave();
     return r;
 }
 
@@ -244,9 +251,9 @@ static inline pid_t ovmx_fork_detached_flags_st(const char *uname, uint32_t uic,
                                                 uint64_t privs, uint32_t extra,
                                                 uint32_t *status)
 {
-    ovmx_substrate_enter();
+    ovmx_test_fork_scope_enter();
     pid_t r = ovmx_fork_detached_flags_body(uname, uic, privs, extra, status);
-    ovmx_substrate_leave();
+    ovmx_test_fork_scope_leave();
     return r;
 }
 

@@ -1268,8 +1268,14 @@ run_boot_a() {
       # OVMX_IMGACT_SEAM=1: surface the EXECUTIVE-recorded completion $STATUS per
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
+      # i8042.noaux: the clipper machine has a PS/2 AUX port, and the kernel probes
+      # the (absent) mouse asynchronously -- under ignore_loglevel its "input:
+      # ImExPS/2 ..." printk lands on the serial console at a random moment, and once
+      # (PR #2003, crtl-sig-gate) between an image record and its terminator, which
+      # fused the two into one line the ^...$ asserts could not match. A serial-
+      # console OVMX node has no mouse; do not probe one.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m '"${BOOT_MEM_MB:-1024}"' -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 i8042.noaux OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot '"${BOOT_QEMU_EXTRA:-}"' <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!

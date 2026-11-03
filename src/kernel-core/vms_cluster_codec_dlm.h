@@ -547,7 +547,6 @@ struct vms_dlm_enq_request {
  * C4 failure, frames 7310/7312).
  */
 #define VMS_DLM_REQ_FLAG_NOQUEUE   0x0004u
-#define VMS_DLM_REQ_FLAG_VALBLK    0x0001u  /* rd vms-d63, req_flags comment */
 #define VMS_OFF_DLM_REQ_FLAGS      100u  /* body[28:30] LE u16, as received */
 #define VMS_OFB_DLM_REQ_FLAGS      VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REQ_FLAGS)
 

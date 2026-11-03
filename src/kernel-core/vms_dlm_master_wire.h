@@ -30,9 +30,8 @@
 /*
  * The requester's options the master acts on, from the frame's body[28:30].
  *
- * NOQUEUE AND VALBLK, AND ONLY ON A FIRST ENQ: the grounded bits
- * (VMS_DLM_REQ_FLAG_NOQUEUE, rd vms-1e58; VMS_DLM_REQ_FLAG_VALBLK, rd
- * vms-d63). For NOQUEUE, an op-0x01 deny is the one answer shape this
+ * NOQUEUE ONLY, AND ONLY ON A FIRST ENQ. It is the one grounded bit
+ * (VMS_DLM_REQ_FLAG_NOQUEUE), and an op-0x01 deny is the one answer shape this
  * node can build from grounded cells (vms_dlm_enq_response_build_notqueued). A
  * CONVERT's deny has a shape of its own whose body[30] has no grounded
  * determinant yet, so a NOQUEUE convert keeps its old path until that answer
@@ -41,18 +40,10 @@
 static inline uint32_t vms_dlm_master_req_flags(const struct vms_dlm_enq_request *e,
 						uint8_t wireop)
 {
-	uint32_t f = 0u;
-
-	if (wireop != VMS_DLM_WIREOP_ENQ)
-		return 0u;
-	if ((e->req_flags & VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)
-		f |= (uint32_t)LCK_M_NOQUEUE;
-	/* VALBLK, bit 0x0001 (rd vms-d63, measured: vms_cluster_codec_dlm.h
-	 * req_flags): the requester wants the value block, so the master returns
-	 * it on the grant and stores a PW/EX holder's marked release. */
-	if ((e->req_flags & VMS_DLM_REQ_FLAG_VALBLK) != 0u)
-		f |= (uint32_t)LCK_M_VALBLK;
-	return f;
+	if (wireop == VMS_DLM_WIREOP_ENQ &&
+	    (e->req_flags & VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)
+		return (uint32_t)LCK_M_NOQUEUE;
+	return 0u;
 }
 
 /*

@@ -2922,7 +2922,7 @@ static void d63_a_vax_release_writes_the_master_block(void)
 	/* The VAX takes PW with LCK$M_VALBLK, as its XQP takes F11B$s. */
 	ct_check(vax_build_enq_flags(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
 			       (uint8_t)LCK_K_PWMODE, N, 0x5a3c0d63u,
-			       VMS_DLM_REQ_FLAG_VALBLK) == 0,
+			       0x0001u /* LCK$M_VALBLK */) == 0,
 		 "the VAX's PW request is built");
 	(void)vax_lookup(frame, CSID_VAX, &master);
 	vax_served_as_master(frame, CSID_VAX, &res);
@@ -2941,7 +2941,7 @@ static void d63_a_vax_release_writes_the_master_block(void)
 	/* MARKED, from a PW holder: stored. */
 	ct_check(vax_build_enq_flags(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_2,
 			       (uint8_t)LCK_K_PWMODE, N, 0x5a3c0d63u,
-			       VMS_DLM_REQ_FLAG_VALBLK) == 0,
+			       0x0001u /* LCK$M_VALBLK */) == 0,
 		 "the VAX's next PW request");
 	vax_served_as_master(frame, CSID_VAX, &res);
 	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
@@ -2957,7 +2957,7 @@ static void d63_a_vax_release_writes_the_master_block(void)
 	/* MARKED, but from a READ-mode holder: refused. */
 	ct_check(vax_build_enq_flags(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
 			       (uint8_t)LCK_K_CRMODE, N, 0x5a3c0d63u,
-			       VMS_DLM_REQ_FLAG_VALBLK) == 0,
+			       0x0001u /* LCK$M_VALBLK */) == 0,
 		 "the VAX's CR request");
 	vax_served_as_master(frame, CSID_VAX, &res);
 	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED, "  granted CR");

@@ -4268,7 +4268,7 @@ apply_edit() {
 
     dlm-1e58-noqueue-not-read)
         # The NOQUEUE test is unique in the header.
-        sed -i 's|\tif ((e->req_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)|\tif ((e->req_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u \&\& 0) /* NEGCTL dlm-1e58-noqueue-not-read */|' "$_file";;
+        sed -i 's|\t    (e->req_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)|\t    (e->req_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u \&\& 0) /* NEGCTL dlm-1e58-noqueue-not-read */|' "$_file";;
 
     dlm-1e58-deny-record-not-written)
         # The NOTQUEUED record's one write is unique in the codec.

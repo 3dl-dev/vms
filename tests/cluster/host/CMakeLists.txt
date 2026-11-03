@@ -1691,6 +1691,22 @@ set_tests_properties(cluster_host_f11b_ser_valblk_census PROPERTIES
     TIMEOUT 180
 )
 
+# ---- rd vms-d63 (vms-5fa r5): the value a SUB-lock request carries at
+# body[128:132] -- ((fold(sub identity) ^ (parent value >> 16)) * MULT), the
+# value the tree's master finds the sub-RSB by. Pins it on every real sub
+# request whose parent request is in the corpus, on the op-0x12/0x08 SUB
+# records, and on the r5 frames themselves. Grounds
+# vms_dlm_sub_name_hash_proven() (src/kernel-core/vms_dlm_hash.h).
+add_test(NAME cluster_host_dlm_sub_hash_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_sub_hash_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_sub_hash_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;files11"
+    TIMEOUT 180
+)
+
 # ---- rd vms-85f: what a REAL master answers to an op-0x01 IT QUEUED. OVMX
 # answered nothing at all, so a real VAX's $ENQW on a resource OVMX masters and
 # holds at a conflicting mode sat in RWSCS and STOP could not complete it

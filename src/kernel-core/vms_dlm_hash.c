@@ -125,3 +125,28 @@ enum vms_dlm_hash_status vms_dlm_name_hash_proven(uint16_t group, uint8_t mode,
 		return st;
 	return vms_dlm_name_hash(group, mode, name, name_len, out);
 }
+
+/*
+ * A SUB-resource's value: the root fold over the sub's own identity, the high
+ * half of its ROOT parent's value XORed in, then the one multiply. See the
+ * header (rd vms-d63) for the 6607-of-6607 measurement and the coverage.
+ */
+enum vms_dlm_hash_status vms_dlm_sub_name_hash_proven(uint32_t parent_hash,
+						      uint16_t group,
+						      uint8_t mode,
+						      const uint8_t *name,
+						      uint32_t name_len,
+						      uint32_t *out)
+{
+	enum vms_dlm_hash_status st;
+	uint32_t acc;
+
+	if (name == (const void *)0 || out == (void *)0)
+		return VMS_DLM_HASH_E_INVAL;
+	st = vms_dlm_name_hash_coverage(group, mode, name_len);
+	if (st != VMS_DLM_HASH_OK)
+		return st;
+	acc = dlm_hash_fold(group, mode, name, name_len) ^ (parent_hash >> 16);
+	*out = (uint32_t)(acc * VMS_DLM_HASH_MULT);
+	return VMS_DLM_HASH_OK;
+}

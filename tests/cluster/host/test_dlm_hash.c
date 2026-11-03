@@ -462,11 +462,59 @@ static void test_coverage(void)
 	}
 }
 
+/*
+ * rd vms-d63: THE SUB-RESOURCE HASH, on real wire vectors. Each value below is
+ * one a real VAX put at body[128:132] of an op-0x01 SUB request, with the
+ * parent value that parent's own request carried
+ * (tools/cluster/dlm_sub_hash_census.py pins all 28,532).
+ */
+static void test_sub_hash(void)
+{
+	static const struct {
+		uint32_t parent;
+		uint16_t group;
+		uint8_t  mode;
+		const char *name;
+		uint32_t len;
+		uint32_t want;
+		const char *what;
+	} v[] = {
+		{ 0x20c23c17u, 0u, 0u, "F11B$s\x2a\x00\x00\x00", 10u, 0x0ba668d7u,
+		  "vms-5fa r5 frame 11: VAX2 F11B$s<42> under F11B$vSYSDSK1" },
+		{ 0x20c23c17u, 0u, 0u, "F11B$s\x04\x00\x00\x00", 10u, 0x4220bf9fu,
+		  "vms-b67a arm: F11B$s<4> (the MFD) under F11B$vSYSDSK1" },
+		{ 0x43395412u, 0u, 3u, "S0", 2u, 0x457ebde3u,
+		  "vms-b67a arm frame 235: S0 under RMT9 (group 0, user mode)" },
+		{ 0x43395412u, 0u, 3u, "S1", 2u, 0x78ecbde3u,
+		  "vms-b67a arm frame 237: S1 under RMT9" },
+	};
+	uint32_t i, h;
+
+	printf("--- rd vms-d63: the sub-resource hash on real VAX vectors ---\n");
+	for (i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
+		h = 0u;
+		ct_check(vms_dlm_sub_name_hash_proven(v[i].parent, v[i].group,
+				v[i].mode, (const uint8_t *)v[i].name, v[i].len,
+				&h) == VMS_DLM_HASH_OK && h == v[i].want, v[i].what);
+	}
+	h = 0x5a5a5a5au;
+	ct_check(vms_dlm_sub_name_hash_proven(0x20c23c17u, 0u, 2u,
+			(const uint8_t *)"F11B$s\x2a\x00\x00\x00", 10u, &h) ==
+		 VMS_DLM_HASH_E_COVER && h == 0x5a5a5a5au,
+		 "a supervisor-mode sub identity is outside the coverage, *out untouched");
+	ct_check(vms_dlm_sub_name_hash_proven(0x20c23c17u, 0u, 0u,
+			(const uint8_t *)"x", 0u, &h) == VMS_DLM_HASH_E_RANGE,
+		 "a zero-length sub name is refused");
+	ct_check(vms_dlm_sub_name_hash_proven(0u, 0u, 0u, NULL, 2u, &h) ==
+		 VMS_DLM_HASH_E_INVAL, "a null name is refused");
+}
+
 int main(void)
 {
 	test_refusals();
 	test_named_specimen();
 	test_coverage();
+	test_sub_hash();
 	/* The row counts are the ones frozen with the corpus (rd vms-9c95);
 	 * a shrinking fixture must not quietly weaken this proof. */
 	report("derivation split", OVMX_DLM_HASH_DIR "/dlm_hash_derivation.tsv",

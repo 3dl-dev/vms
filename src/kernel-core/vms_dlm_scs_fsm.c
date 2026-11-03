@@ -258,16 +258,18 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 	req.parent_own_lkid    = p->parent_own_lkid;
 	req.parent_master_lkid = p->parent_master_lkid;
 	/*
-	 * ...and A SUB REQUEST CARRIES NO DIRECTORY HASH. The hash indexes the
-	 * directory, only ROOT resources are in the directory, and this request
-	 * is addressed to the master the parent named -- so there is no lookup
-	 * for a hash to serve. A real sub request does carry four bytes at
-	 * body[128:132], and what selects them is NOT a function of the name this
-	 * executive can learn or compute (Rule 8), so writing anything but zero
-	 * would be minting one. The deviation is recorded in frame-grounding.tsv.
+	 * ...and THE RESOURCE'S HASH, body[128:132], ROOT OR SUB (rd vms-d63). On a
+	 * root it indexes the directory. On a sub request -- addressed to the
+	 * master the parent named -- it is how that MASTER finds the sub-RSB: OVMX
+	 * sent zero there and a real VAX master answered every F11B$s request with
+	 * a resource of its own making, never the one its XQP holds (vms-5fa r5,
+	 * SDA 0 of 600). The value is the engine's (vms_dlm_sub_name_hash_proven
+	 * of the sub's identity and its root parent's held value, 28,532 of 28,532
+	 * real sub requests -- tools/cluster/dlm_sub_hash_census.py); the engine
+	 * marks it unknown when it holds none, and then nothing is written.
 	 */
-	req.dir_hash        = (p->parent_own_lkid != 0u) ? 0u : p->dir_hash;
-	req.dir_hash_valid  = (p->parent_own_lkid != 0u) ? 0u : p->dir_hash_known;
+	req.dir_hash        = p->dir_hash;
+	req.dir_hash_valid  = p->dir_hash_known;
 	req.name_len        = dq_name_from_post(p, req.name);
 	/*
 	 * The identity that qualifies the name, body[44:46] + body[46] (rd

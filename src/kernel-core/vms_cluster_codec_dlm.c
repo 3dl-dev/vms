@@ -193,8 +193,9 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 			  req->master_lkid != 0u ? req->master_lkid
 						 : req->req_pid);
 	/*
-	 * body[128:132] ONLY when the caller holds a WIRE-LEARNED hash for this
-	 * root name. No `else` branch, on purpose: a zero written here would be
+	 * body[128:132] ONLY when the caller holds a hash for this resource --
+	 * learned off the wire or computed by the proven function, for a root
+	 * name or (rd vms-d63) a sub-resource. No `else` branch, on purpose: a zero written here would be
 	 * a hash nobody derived, the directory node would scan the wrong chain,
 	 * miss the name, and install US as master of a resource somebody else
 	 * already masters -- the campaign's 35/s grant storm (FC-P4.1 §3).

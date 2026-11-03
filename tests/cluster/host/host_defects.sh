@@ -141,6 +141,7 @@ SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
 dlm-d63-xqp-lock-not-system
+dlm-d63-sub-request-carries-no-hash
 dlm-d63-release-queue-drops-the-value-block
 dlm-d63-request-asks-for-no-value-block
 dlm-d63-release-writes-no-value-block
@@ -754,7 +755,6 @@ the sub-lock's request was posted
   ...and it is NOT a directory lookup
 *** body[36:40] is OUR OWN handle for the parent, read off the parent LKB ***
 *** body[40:44] is the handle THE PARENT'S MASTER gave it -- the pair that parent's own grant carried ***
-  and NO hash is asserted for a sub name nobody was asked about (Rule 8)
 the posted name is the sub-resource's own
 body[30] is the sub-lock's own requested mode
 its request was posted too
@@ -1203,6 +1203,20 @@ EOF
 the shipping composer opens no transaction on it
 a value-block release is still a notification: no transaction
 EOF
+                      ;;
+        esac;;
+
+    dlm-d63-sub-request-carries-no-hash)
+        case "$_f" in
+        facility)     echo "a SUB-resource carries its own hash, computed from its identity and its ROOT parent's held value (vms_lock.c enq_sub_take_tree_hash, vms_dlm_hash.c vms_dlm_sub_name_hash_proven, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the sub request goes out with ZERO at body[128:132], the form of the vms-5fa r5 fire: the real VAX1 master found no RSB by that value and granted every one of 161 OVMX F11B\$s<12> requests on a fresh one, (0,0) vbseq 0, while its own F11B\$s<12> RSB 879D7380 never held OVMX's lock (SDA 0 of 600). Real sub requests carry the sub hash on 28,532 of 28,532.";;
+        require_fail) hd_lines <<'EOF2'
+*** and carrying the SUB's hash, off its parent's held value -- the value VAX1 finds its own F11B$s<12> RSB by, never the zero that made it grant a fresh RSB (vms-5fa r5) ***
+*** and it carries the SUB's hash, off the root's value (rd vms-d63; the function is VAX2's own on S0 under RMT9, b67a frame 235 -- test_dlm_hash) ***
+EOF2
                       ;;
         esac;;
 
@@ -3992,6 +4006,11 @@ apply_edit() {
     dlm-d63-request-asks-for-no-value-block)
         # The request-flag write; unique in vms_cluster_codec_dlm.c.
         sed -i 's|^\tif (opcode == VMS_DLM_WIREOP_ENQ \&\& req->req_flags != 0u)$|\tif (0 \&\& opcode == VMS_DLM_WIREOP_ENQ \&\& req->req_flags != 0u) /* NEGCTL dlm-d63-request-asks-for-no-value-block */|' "$_file";;
+
+    dlm-d63-sub-request-carries-no-hash)
+        # The one call that gives a sub-resource its hash; unique. Removing it
+        # consumes the anchor, so a second apply cannot match.
+        sed -i 's|^        enq_sub_take_tree_hash(res);$|        ; /* NEGCTL dlm-d63-sub-request-carries-no-hash */|' "$_file";;
 
     dlm-d63-xqp-lock-not-system)
         # The F11B$s request's flags in vms_lock_acp_file_ser; unique.

@@ -263,8 +263,12 @@ static void test_the_holder_hands_its_tree_over(void)
 			"the parent -- read off the re-homed parent LKB ***");
 	ct_check(r.granted_mode == LCK_K_CWMODE && r.resnam_len == 2u &&
 		 memcmp(r.resnam, "S2", 2) == 0, "  S2 held at CW");
-	ct_check_eq_u32(r.hash_known, 0u,
-			"  no hash for a sub name nobody asked a directory about");
+	/* rd vms-d63: a SUB record carries the sub's hash, off the root's held
+	 * value -- RA5's own op-0x12 for S2 under RMT5 carries 2e 1e 80 05
+	 * (vms-50d-ra5-14cells-20261013; 2,736 of 2,736 real op-0x12 SUB
+	 * records, tools/cluster/dlm_sub_hash_census.py). */
+	ct_check(r.hash_known && r.dir_hash == 0x05801e2eu,
+		 "  *** the sub's hash, 0x05801e2e, as RA5's own S2 record ***");
 
 	ct_check_eq_u32(vms_lock_dlm_handover_rehome(s2, CSID_O, CSID_N,
 						     N_S2_LKID),

@@ -207,6 +207,13 @@ done
 for img in $OPTIONAL_IMAGES; do
     [ -f "$IMAGES_DIR/$img" ] && cp "$IMAGES_DIR/$img" "$SYSEXE/$img"
 done
+# NETACP_TEST.EXE (rd vms-0a7 S3): the DECnet TEST image -- every self-test the
+# shipped NETACP.EXE does not carry -- which the DCL acceptance battery runs as
+# SYS$SYSTEM:NETACP_TEST.EXE on this rail. A GATE volume only: a --distribution
+# volume never carries a test image.
+if [ "$DISTRIBUTION" -eq 0 ] && [ -f "$IMAGES_DIR/NETACP_TEST.EXE" ]; then
+    cp "$IMAGES_DIR/NETACP_TEST.EXE" "$SYSEXE/NETACP_TEST.EXE"
+fi
 
 # 3b. --status-proof only: the proof images join SYS$SYSTEM. Every image the
 #     proof SYSTARTUP RUNs must be here, so a missing one fails now rather than

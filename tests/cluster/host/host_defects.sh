@@ -1601,6 +1601,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** freeing the mastered resource posts something ***
 *** and tells the directory to drop B's entry ***
+*** an entry told AFTER the transition is removed ***
 EOF
                       ;;
         esac;;
@@ -1885,6 +1886,7 @@ EOF
         why)          echo "dlm_dir_remove_fill() no longer requires that a directory answered the resource's lookup, so a resource mastered before the cluster committed a vector is removed from a directory that never held it. The real V7.3 answers cat-0x02 op-0x19 and bugchecks LOCKMGRERR (4 of 4 captured crashes).";;
         require_fail) hd_lines <<'EOF'
 *** a resource mastered before any directory held an entry for it is NOT removed from the directory ***
+*** a resource whose directory entry a transition discarded is NOT removed from that directory ***
 EOF
                       ;;
         esac;;

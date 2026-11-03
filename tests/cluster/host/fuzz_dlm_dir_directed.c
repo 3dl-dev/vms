@@ -196,6 +196,7 @@ int main(void)
 	 */
 	{
 		uint32_t at_you = 0, at_refused = 0, at_viol = 0, at_rec = 0;
+		uint32_t else_you = 0;
 
 		srand(0x966e);
 		(void)vms_dlm_dir_init(&g_dir, g_store, DIR_CAP);
@@ -205,7 +206,7 @@ int main(void)
 			vms_csid_t requester, master = 0u, before = 0u;
 			uint32_t n, used_before, written = 0;
 			enum vms_dlm_dir_outcome o;
-			int had, k;
+			int had, k, dv;
 			uint8_t *b;
 
 			if (i % 1024 == 0)
@@ -239,6 +240,10 @@ int main(void)
 				continue;
 			}
 			requester = pick_csid();
+			/* r3/r5: the vector names the requester; r10: a third
+			 * member. The table's answer must not depend on which. */
+			dv = (rand() & 1) ? VMS_DLM_DIR_AT_REQUESTER :
+					    VMS_DLM_DIR_ELSEWHERE;
 			switch (rand() % 4) {
 			case 0: break;
 			case 1: if (requester != 0u)
@@ -258,15 +263,15 @@ int main(void)
 			used_before = g_dir.used;
 
 			o = vms_dlm_dir_lookup_directed(&g_dir, &id, requester,
-							CSID_SELF,
-							VMS_DLM_DIR_AT_REQUESTER,
-							&master);
+							CSID_SELF, dv, &master);
 			if (g_dir.used != used_before)
 				at_rec++;
 			if (requester != 0u && had && before == requester) {
 				if (o != VMS_DLM_DIR_ANSWER_YOU ||
 				    master != requester)
 					at_viol++;
+				else if (dv == VMS_DLM_DIR_ELSEWHERE)
+					else_you++;
 				else
 					at_you++;
 			} else if (o == VMS_DLM_DIR_ANSWER_YOU) {
@@ -283,11 +288,15 @@ int main(void)
 			}
 			free(b);
 		}
-		printf("  at-requester: YOU %u, refused %u\n", at_you,
-		       at_refused);
+		printf("  at-requester: YOU %u, elsewhere: YOU %u, refused %u\n",
+		       at_you, else_you, at_refused);
 		ct_check(at_you > 0u,
 			 "fuzz-966e: an entry naming the requester is answered "
 			 "you-master-it when the requester is its own directory");
+		ct_check(else_you > 0u,
+			 "fuzz-966e-r10: an entry naming the requester is "
+			 "answered you-master-it when the vector names a THIRD "
+			 "member");
 		ct_check(at_refused > 0u,
 			 "fuzz-966e: at-requester lookups with no such entry "
 			 "really occur");

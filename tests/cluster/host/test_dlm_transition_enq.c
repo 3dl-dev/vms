@@ -29,6 +29,17 @@
  * master for the name is the requester: answering 0xf9 from the entry repeats
  * what this node already told it and records nothing.
  *
+ * r10 (C,A,B) on ae84d1fc6 -- WITH that answer in -- hung the same way: 3508
+ * VAXC op-0x01 -> 3514 OVMXA 0xf9, 4178 step 0x0a, 4179 the same lookup to
+ * OVMXA, unanswered. Over three members that name's directory is OVMXB, a
+ * THIRD member (VAXC's own rebuild records 3687 to OVMXA and 3602 to OVMXB go
+ * where this vector sends them), so the requester-is-directory reading did not
+ * fire. The shared shape of r3/r5/r10 is the timing: each first lookup left
+ * VAXC between its join's 01/09 and 01/0a, in flight when its transition
+ * began, and VAXC re-sends it at step 0x0a to the node it first asked. That
+ * node's entry naming VAXC answers it, wherever the new vector points
+ * (VMS_DLM_DIR_ELSEWHERE).
+ *
  * Everything below runs the SHIPPING objects: the CLUB, cnxman_ldwv_rebuild
  * (the Phase 2 vector), the directory table, and the codec -- on the real
  * frames. The arm's one line that picks VMS_DLM_DIR_AT_REQUESTER is pinned by
@@ -171,13 +182,17 @@ static int directed_for(const struct vms_dlm_res_ident *id, vms_csid_t from)
 		return 1;
 	if (vms_ldwv_names(v, vms_ldwv_key(id->hash), from))
 		return VMS_DLM_DIR_AT_REQUESTER;
+	if (vms_ldwv_names(v, vms_ldwv_key(id->hash), CSID_VAXC) ||
+	    vms_ldwv_names(v, vms_ldwv_key(id->hash), CSID_FIRST) ||
+	    vms_ldwv_names(v, vms_ldwv_key(id->hash), CSID_SECOND))
+		return VMS_DLM_DIR_ELSEWHERE;   /* dlm_arm_dir_elsewhere */
 	return 0;
 }
 
 static void one_run(const char *file, const char *run, unsigned lookup,
 		    unsigned answer, unsigned step0a, unsigned again,
 		    unsigned rec_first, unsigned rec_second,
-		    const char *answered)
+		    vms_csid_t new_dir, const char *answered)
 {
 	uint8_t f_look[VMS_CM_FRAME_LEN], f_ans[VMS_CM_FRAME_LEN];
 	uint8_t f_step[VMS_CM_FRAME_LEN], f_again[VMS_CM_FRAME_LEN];
@@ -251,10 +266,16 @@ static void one_run(const char *file, const char *run, unsigned lookup,
 	}
 	ct_check(!vms_ldwv_is_ours(&g_cl.club.ldwv, key_of(f_again)),
 		 "three members: the vector no longer directs the name here");
-	ct_check(vms_ldwv_names(&g_cl.club.ldwv, key_of(f_again), CSID_VAXC),
-		 "...it directs it at VAXC, the requester itself");
-	ct_check(directed_for(&id2, CSID_VAXC) == VMS_DLM_DIR_AT_REQUESTER,
-		 "the arm's reading: directed at the requester");
+	ct_check(vms_ldwv_names(&g_cl.club.ldwv, key_of(f_again), new_dir),
+		 new_dir == CSID_VAXC ?
+		 "...it directs it at VAXC, the requester itself" :
+		 "...it directs it at the joiner, a THIRD member");
+	ct_check(directed_for(&id2, CSID_VAXC) ==
+		 (new_dir == CSID_VAXC ? VMS_DLM_DIR_AT_REQUESTER :
+					 VMS_DLM_DIR_ELSEWHERE),
+		 new_dir == CSID_VAXC ?
+		 "the arm's reading: directed at the requester" :
+		 "the arm's reading: directed at a third member");
 
 	/* *** THE STALLED REQUEST *** */
 	m = 0u;
@@ -297,21 +318,31 @@ static void one_run(const char *file, const char *run, unsigned lookup,
 	o = vms_dlm_dir_lookup_directed(&dir, &id2, CSID_VAXC, CSID_FIRST, 0,
 					&m);
 	ct_check_eq_u32(o, VMS_DLM_DIR_ANSWER_NONE,
-			"directed at a THIRD system, an entry naming the "
+			"with no vector reading (0), an entry naming the "
 			"requester is still not answered (rd vms-b4d)");
-	ct_check(!vms_ldwv_names(&g_cl.club.ldwv, key_of(f_again),
-				 CSID_SECOND) &&
-		 !vms_ldwv_names(&g_cl.club.ldwv, key_of(f_again), 0u),
+	ct_check(vms_ldwv_names(&g_cl.club.ldwv, key_of(f_again), CSID_VAXC) +
+		 vms_ldwv_names(&g_cl.club.ldwv, key_of(f_again), CSID_SECOND) +
+		 vms_ldwv_is_ours(&g_cl.club.ldwv, key_of(f_again)) == 1,
 		 "the vector names exactly one system for the name");
+	(void)vms_dlm_dir_init(&dir, store, 16u);
+	o = vms_dlm_dir_lookup_directed(&dir, &id2, CSID_VAXC, CSID_FIRST,
+					VMS_DLM_DIR_ELSEWHERE, &m);
+	ct_check(o == VMS_DLM_DIR_ANSWER_NONE && vms_dlm_dir_find(&dir, &id2) ==
+		 NULL,
+		 "directed at a third member, an EMPTY table is still never "
+		 "answered you-master-it, and records nothing");
 }
 
 int main(void)
 {
 	one_run("r3-frames.txt", "r3 (A,B,C), OVMXB", 4159u, 4168u, 4820u,
-		4821u, 4702u, 4701u,
+		4821u, 4702u, 4701u, CSID_VAXC,
 		"*** r3 (A,B,C), OVMXB: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***");
 	one_run("r5-frames.txt", "r5 (C,A,B), OVMXA", 3180u, 3186u, 3858u,
-		3859u, 0u, 0u,
+		3859u, 0u, 0u, CSID_VAXC,
 		"*** r5 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***");
+	one_run("r10-frames.txt", "r10 (C,A,B) on ae84d1fc6, OVMXA", 3508u,
+		3514u, 4178u, 4179u, 3687u, 3602u, CSID_SECOND,
+		"*** r10 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a, its directory now OVMXB, is ANSWERED you-master-it from the entry naming it -- the demo, on the PR #2023 fix, got no answer ***");
 	return ct_summary("test_dlm_transition_enq");
 }

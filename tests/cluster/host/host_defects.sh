@@ -323,6 +323,8 @@ dlm-rebuild-sent-outside-the-step
 dlm-rebuild-window-opens-early
 dlm-rebuild-records-wait-past-release
 dlm-966e-at-requester-refused
+dlm-966e-elsewhere-refused
+dlm-966e-elsewhere-refused-fuzz
 barrier-step-not-held-for-own-rebuild
 coord-release-not-held-for-own-rebuild
 dlm-rebuild-record-drops-the-granted-valblk
@@ -3523,8 +3525,38 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** r3 (A,B,C), OVMXB: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
 *** r5 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
+*** r10 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a, its directory now OVMXB, is ANSWERED you-master-it from the entry naming it -- the demo, on the PR #2023 fix, got no answer ***
 it is counted as the requester's-own-directory answer
 and not as a refusal
+EOF
+                      ;;
+        esac;;
+
+    dlm-966e-elsewhere-refused)
+        case "$_f" in
+        facility)     echo "a lookup the vector directs at a THIRD member, for a name this node's table names the requester master of, is answered 0xf9 from the entry (vms_dlm_dir_lookup_directed VMS_DLM_DIR_ELSEWHERE, rd vms-966e r10)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "test_dlm_transition_enq";;
+        isolation)    echo "isolated";;
+        why)          echo "the state ae84d1fc6 shipped: the PR #2023 answer covered only a vector naming the requester; VAXC's step-0x0a re-send of a lookup in flight when its transition began, for a name the new vector directs at OVMXB, is refused and never answered, and VAXC hangs in STARTUP before Username: (cap-966e r10 4179).";;
+        require_fail) hd_lines <<'EOF'
+*** r10 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a, its directory now OVMXB, is ANSWERED you-master-it from the entry naming it -- the demo, on the PR #2023 fix, got no answer ***
+it is counted as the requester's-own-directory answer
+and not as a refusal
+EOF
+                      ;;
+        esac;;
+
+    dlm-966e-elsewhere-refused-fuzz)
+        case "$_f" in
+        facility)     echo "the op-0x01 directory fuzz holds that an entry naming the requester answers 0xf9 whether the vector names the requester or a third member (fuzz_dlm_dir_directed, rd vms-966e r10)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "fuzz_dlm_dir_directed";;
+        isolation)    echo "isolated";;
+        why)          echo "the same mutation as dlm-966e-elsewhere-refused, observed by the fuzz: a third-member lookup with an entry naming the requester is refused.";;
+        require_fail) hd_lines <<'EOF'
+fuzz-966e-r10: an entry naming the requester is answered you-master-it when the vector names a THIRD member
+fuzz-966e: at the requester, you-master-it comes ONLY from an entry naming it
 EOF
                       ;;
         esac;;
@@ -4936,6 +4968,10 @@ apply_edit() {
     dlm-966e-at-requester-refused)
         # The at-requester entry test is the only line of this shape.
         sed -i 's|^\t\t\t    e->master == requester) {$|\t\t\t    e->master == requester \&\& 0) { /* NEGCTL dlm-966e-at-requester-refused */|' "$_file";;
+
+    dlm-966e-elsewhere-refused|dlm-966e-elsewhere-refused-fuzz)
+        # ae84d1fc6's table: only a vector naming the requester answers from the entry.
+        sed -i 's|^\t\t\t    e->master == requester) {$|\t\t\t    e->master == requester \&\& directed_here != VMS_DLM_DIR_ELSEWHERE) { /* NEGCTL dlm-966e-elsewhere-refused */|' "$_file";;
 
     dlm-b4d-undirected-answers-you-fuzz)
         sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you-fuzz */|' "$_file";;

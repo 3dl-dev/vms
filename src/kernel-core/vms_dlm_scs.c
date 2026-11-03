@@ -2320,6 +2320,24 @@ static int dlm_arm_dir_name_orphaned(struct vms_dlm_scs *d,
 	return 1;
 }
 
+/*
+ * rd vms-966e r10: does this node's vector, read now, place the name's
+ * directory at a member that is neither this node nor the requester? 0 for an
+ * unbuilt or unreadable vector, which places it nowhere.
+ */
+static int dlm_arm_dir_elsewhere(struct vms_dlm_scs *d,
+				 const struct vms_dlm_res_ident *id,
+				 vms_csid_t from)
+{
+	vms_csid_t at = 0u;
+
+	if (d->cl == NULL ||
+	    vms_ldwv_resolve(&d->cl->club.ldwv, vms_ldwv_key(id->hash), &at) !=
+	    VMS_LDWV_OK)
+		return 0;
+	return (at != 0u && at != from) ? 1 : 0;
+}
+
 static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			      const struct dlm_scs_request *req,
 			      const struct vms_dlm_res_ident *id,
@@ -2390,8 +2408,17 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 	    vms_ldwv_names(&d->cl->club.ldwv, vms_ldwv_key(id->hash),
 			   req->from_csid))
 		directed = VMS_DLM_DIR_AT_REQUESTER;
+	/*
+	 * ...and when it names a THIRD member (rd vms-966e r10): the same lookup,
+	 * re-sent at step 0x0a to the node it was in flight to when the
+	 * requester's transition began. The vector's choice is not what decides
+	 * it; the entry this node's own earlier answer recorded is.
+	 */
+	if (!directed && dlm_arm_dir_elsewhere(d, id, req->from_csid))
+		directed = VMS_DLM_DIR_ELSEWHERE;
 	o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);
-	if (directed == VMS_DLM_DIR_AT_REQUESTER)
+	if (directed == VMS_DLM_DIR_AT_REQUESTER ||
+	    directed == VMS_DLM_DIR_ELSEWHERE)
 		directed = 0;       /* undirected here, whatever it was answered */
 	if (o == VMS_DLM_DIR_ANSWER_NONE && !directed) {
 		d->dir_undirected_refused++;

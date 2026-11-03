@@ -245,7 +245,7 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 
 	dq_bzero(&req, (uint32_t)sizeof(req));
 	req.mode            = (uint8_t)p->lkmode;
-	req.valblk_requested = p->valblk_requested;   /* rd vms-d63: body[28] bit 0 */
+	req.req_flags       = p->req_flags;   /* rd vms-d63: body[28:30] */
 	req.req_lkid = p->req_lkid;      /* our own executive handle */
 	req.master_lkid     = p->master_lkid;   /* 0 until the master named it */
 	req.req_pid         = p->req_pid;       /* ...and who is asking until then */

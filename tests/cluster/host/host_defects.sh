@@ -970,6 +970,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 a zero-length name is refused
 a refusal writes nothing (INV-6)
+a zero-length sub name is refused
 EOF
                       ;;
         esac;;

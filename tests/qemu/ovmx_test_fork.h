@@ -31,13 +31,30 @@
 
 #include "vms_kif.h"
 /* The substrate scope (src/libvms/include/ovmx_substrate.h, rd vms-a66e): the
- * fork handshake is the substrate's own work. Declared weak here, not
- * included: a suite built without LIBVMS (the test_kmod_* kernel suites) has no
- * C RTL file layer either, so there is no scope to enter. */
-extern int  ovmx_substrate_enter(void) __attribute__((__weak__));
-extern void ovmx_substrate_leave(void) __attribute__((__weak__));
-static inline void ovmx_test_fork_scope_enter(void) { if (ovmx_substrate_enter) ovmx_substrate_enter(); }
-static inline void ovmx_test_fork_scope_leave(void) { if (ovmx_substrate_leave) ovmx_substrate_leave(); }
+ * fork handshake is the substrate's own work. A suite linked with the C RTL
+ * file layer (OVMX_CRTLFD_STATIC, tests/qemu/CMakeLists.txt) references the
+ * scope STRONGLY -- a weak reference would not pull its member out of a static
+ * LIBVMS (tools/cross-vax/weak-seams.sh), and the handshake would then run
+ * outside the scope -- and checks the scope really is active. Every other
+ * suite (the test_kmod_* kernel suites have no LIBVMS) has no C RTL file layer
+ * to step around, so the scope is a no-op there. */
+#if defined(OVMX_CRTLFD_STATIC)
+#include <stdio.h>
+#include <stdlib.h>
+#include "ovmx_substrate.h"
+static inline void ovmx_test_fork_scope_enter(void)
+{
+    ovmx_substrate_enter();
+    if (!ovmx_substrate_active()) {
+        fprintf(stderr, "FAIL: ovmx_test_fork: the substrate scope is not active in a C RTL-layer suite\n");
+        abort();
+    }
+}
+static inline void ovmx_test_fork_scope_leave(void) { ovmx_substrate_leave(); }
+#else
+static inline void ovmx_test_fork_scope_enter(void) { }
+static inline void ovmx_test_fork_scope_leave(void) { }
+#endif
 
 static inline pid_t ovmx_fork_kind_ident_body(uint32_t kind, const char *uname, uint32_t uic,
                                             uint64_t privs, uint32_t *status)

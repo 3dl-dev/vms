@@ -1127,10 +1127,16 @@ run_dcl_acceptance_battery() {
     # runtime cannot prove it) and must RED here, not silently pass because
     # nothing ran.
     local CTERM_OFF; CTERM_OFF=$(wc -c <"$LOG")
-    run_cmd 'DNETACC :== $SYS$SYSTEM:DECNETD.EXE'
+    # rd vms-0a7 S3: the self-tests are no longer in a shipped image -- they are
+    # the test image NETACP_TEST.EXE, which the rail's harness puts on a
+    # scratch test volume (DNET_TEST_MOUNT, e.g. "VDA100: DNETTEST") and names
+    # in DNET_TEST_IMAGE. Default: SYS$SYSTEM:NETACP_TEST.EXE (a harness that
+    # stages it on its own test system volume).
+    if [ -n "${DNET_TEST_MOUNT:-}" ]; then run_cmd "MOUNT ${DNET_TEST_MOUNT}"; fi
+    run_cmd "DNETACC :== \$${DNET_TEST_IMAGE:-SYS\$SYSTEM:NETACP_TEST.EXE}"
     send 'DNETACC --cterm-accept-test'
     if wait_for 'IVIMAGE' 15 "$CTERM_OFF"; then
-        bad "CTERM [vms-f40]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-SET-HOST authentication proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
+        bad "CTERM [vms-f40]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the inbound-SET-HOST authentication proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
     elif wait_for 'DECNETD-CTERM-ACCEPT:' 180 "$CTERM_OFF"; then
         local CTSEG; CTSEG=$(tail -c "+$((CTERM_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: PASS' \
@@ -1151,7 +1157,7 @@ run_dcl_acceptance_battery() {
             "CTERM [vms-f40]: no assertion in the inbound-SET-HOST acceptance failed"
         negctl "$CTSEG" 'DECNETD-I-CTERMACCEPT' "DECnet CTERM acceptance"
     else
-        bad "CTERM [vms-f40]: DECNETD.EXE --cterm-accept-test produced no verdict line within 180s -- the inbound-SET-HOST authentication proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung session)"
+        bad "CTERM [vms-f40]: NETACP_TEST.EXE --cterm-accept-test produced no verdict line within 180s -- the inbound-SET-HOST authentication proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung session)"
     fi
     wait_for '$ ' 20 "$CTERM_OFF"
 
@@ -1174,7 +1180,7 @@ run_dcl_acceptance_battery() {
     local ISOL_OFF; ISOL_OFF=$(wc -c <"$LOG")
     send 'DNETACC --isolation-test'
     if wait_for 'IVIMAGE' 15 "$ISOL_OFF"; then
-        bad "NETACP isolation [vms-9ab]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the A2/A8 privileged-path isolation proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
+        bad "NETACP isolation [vms-9ab]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the A2/A8 privileged-path isolation proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
     elif wait_for 'DECNETD-ISOLATION:' 60 "$ISOL_OFF"; then
         local ISSEG; ISSEG=$(tail -c "+$((ISOL_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$ISSEG" 'DECNETD-ISOLATION: PASS' \
@@ -1185,7 +1191,7 @@ run_dcl_acceptance_battery() {
             "NETACP isolation [vms-9ab]: no isolation assertion failed"
         negctl "$ISSEG" 'DECNETD-I-ISOLATION' "DECnet NETACP isolation"
     else
-        bad "NETACP isolation [vms-9ab]: DECNETD.EXE --isolation-test produced no verdict line within 60s"
+        bad "NETACP isolation [vms-9ab]: NETACP_TEST.EXE --isolation-test produced no verdict line within 60s"
     fi
     wait_for '$ ' 20 "$ISOL_OFF"
 
@@ -1221,7 +1227,7 @@ run_dcl_acceptance_battery() {
     local FAL_OFF; FAL_OFF=$(wc -c <"$LOG")
     send 'DNETACC --fal-accept-test'
     if wait_for 'IVIMAGE' 15 "$FAL_OFF"; then
-        note "FAL COPY [vms-8c2]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-FAL COPY authentication + transfer proof DID NOT RUN here (hard gate on the rails that ship the image; staging into the VAX sysvol + Alpha boot image is tracked follow-on)"
+        note "FAL COPY [vms-8c2]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the inbound-FAL COPY authentication + transfer proof DID NOT RUN here (hard gate on the rails that ship the image; staging into the VAX sysvol + Alpha boot image is tracked follow-on)"
     elif wait_for 'DECNETD-FAL-ACCEPT:' 180 "$FAL_OFF"; then
         local FALSEG; FALSEG=$(tail -c "+$((FAL_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$FALSEG" 'DECNETD-FAL-ACCEPT: PASS' \
@@ -1236,7 +1242,7 @@ run_dcl_acceptance_battery() {
             "FAL COPY [vms-8c2]: no assertion in the inbound-FAL COPY acceptance failed"
         negctl "$FALSEG" 'DECNETD-I-FALACCEPT' "DECnet FAL COPY acceptance"
     else
-        bad "FAL COPY [vms-8c2]: DECNETD.EXE --fal-accept-test produced no verdict line within 180s -- the inbound-FAL COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
+        bad "FAL COPY [vms-8c2]: NETACP_TEST.EXE --fal-accept-test produced no verdict line within 180s -- the inbound-FAL COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
     fi
     wait_for '$ ' 20 "$FAL_OFF"
 
@@ -1251,7 +1257,7 @@ run_dcl_acceptance_battery() {
     local FALP_OFF; FALP_OFF=$(wc -c <"$LOG")
     send 'DNETACC --fal-proc-accept-test'
     if wait_for 'IVIMAGE' 15 "$FALP_OFF"; then
-        note "FAL persona [vms-d85]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the FAL server-process persona proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "FAL persona [vms-d85]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the FAL server-process persona proof DID NOT RUN here (hard gate on the rails that ship the image)"
     elif wait_for 'DECNETD-FAL-PROC-ACCEPT:' 240 "$FALP_OFF" &&
          tail -c "+$((FALP_OFF + 1))" "$LOG" | grep -q 'DECNETD-FAL-PROC-ACCEPT: NOIMAGE'; then
         note "FAL persona [vms-d85]: SYS\$SYSTEM:FAL.EXE is not on THIS runtime's system disk (the VAX/Alpha staging follow-on), so the FAL server-process persona proof DID NOT RUN here"
@@ -1279,7 +1285,7 @@ run_dcl_acceptance_battery() {
             "FAL persona [vms-d85]: no assertion in the FAL server-process persona proof failed"
         negctl "$FALPSEG" 'DECNETD-I-FALPROC' "DECnet FAL server-process persona"
     else
-        bad "FAL persona [vms-d85]: DECNETD.EXE --fal-proc-accept-test produced no verdict line within 240s -- the persona proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung session)"
+        bad "FAL persona [vms-d85]: NETACP_TEST.EXE --fal-proc-accept-test produced no verdict line within 240s -- the persona proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung session)"
     fi
     wait_for '$ ' 20 "$FALP_OFF"
 
@@ -1293,7 +1299,7 @@ run_dcl_acceptance_battery() {
     local POOL_OFF; POOL_OFF=$(wc -c <"$LOG")
     send 'DNETACC --netacp-pool-selftest'
     if wait_for 'IVIMAGE' 15 "$POOL_OFF"; then
-        note "NETACP pool [vms-6af1]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the session-pool proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "NETACP pool [vms-6af1]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the session-pool proof DID NOT RUN here (hard gate on the rails that ship the image)"
     elif wait_for 'DECNETD-POOL-SELFTEST:' 240 "$POOL_OFF"; then
         local POOLSEG; POOLSEG=$(tail -c "+$((POOL_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$POOLSEG" 'DECNETD-POOL-SELFTEST: PASS' \
@@ -1312,7 +1318,7 @@ run_dcl_acceptance_battery() {
             "NETACP pool [vms-6af1]: no assertion in the session-pool proof failed"
         negctl "$POOLSEG" 'DECNETD-I-POOL' "DECnet NETACP session pool"
     else
-        bad "NETACP pool [vms-6af1]: DECNETD.EXE --netacp-pool-selftest produced no verdict line within 240s -- the session-pool proof did not run"
+        bad "NETACP pool [vms-6af1]: NETACP_TEST.EXE --netacp-pool-selftest produced no verdict line within 240s -- the session-pool proof did not run"
     fi
     wait_for '$ ' 20 "$POOL_OFF"
 
@@ -1330,7 +1336,7 @@ run_dcl_acceptance_battery() {
     local M11_OFF; M11_OFF=$(wc -c <"$LOG")
     send 'DNETACC --mail11-accept-test'
     if wait_for 'IVIMAGE' 15 "$M11_OFF"; then
-        note "MAIL-11 [vms-47fd]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound MAIL-11 proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "MAIL-11 [vms-47fd]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the inbound MAIL-11 proof DID NOT RUN here (hard gate on the rails that ship the image)"
         wait_for '$ ' 20 "$M11_OFF"
     elif wait_for 'DECNETD-MAIL11-ACCEPT:' 240 "$M11_OFF" &&
          tail -c "+$((M11_OFF + 1))" "$LOG" | grep -q 'DECNETD-MAIL11-ACCEPT: NOIMAGE'; then
@@ -1394,7 +1400,7 @@ run_dcl_acceptance_battery() {
             wait_for '$ ' 20 "$MAIL_OFF"
         fi
     else
-        bad "MAIL-11 [vms-47fd]: DECNETD.EXE --mail11-accept-test produced no verdict line within 240s -- the inbound MAIL-11 proof did not run"
+        bad "MAIL-11 [vms-47fd]: NETACP_TEST.EXE --mail11-accept-test produced no verdict line within 240s -- the inbound MAIL-11 proof did not run"
         wait_for '$ ' 20 "$M11_OFF"
     fi
 
@@ -1416,7 +1422,7 @@ run_dcl_acceptance_battery() {
     local NMBX_OFF; NMBX_OFF=$(wc -c <"$LOG")
     send 'DNETACC --net-mbx-selftest'
     if wait_for 'IVIMAGE' 15 "$NMBX_OFF"; then
-        note "NET mailbox [vms-22c]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the T1 mailbox transport round-trip DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "NET mailbox [vms-22c]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the T1 mailbox transport round-trip DID NOT RUN here (hard gate on the rails that ship the image)"
     elif wait_for 'DECNETD-NET-MBX-SELFTEST:' 60 "$NMBX_OFF"; then
         local NMBXSEG; NMBXSEG=$(tail -c "+$((NMBX_OFF + 1))" "$LOG" | tr -d '\r')
         # Rule 9 / ONE RUNTIME: --net-mbx-selftest does NOT skip -- it always
@@ -1434,7 +1440,7 @@ run_dcl_acceptance_battery() {
             must_not_have "$NMBXSEG" 'DECNETD-NET-MBX-SELFTEST: FAIL' \
                 "NET mailbox [vms-22c]: no assertion in the T1 mailbox round-trip failed (a TERMINAL FAIL here means the real executive mailbox facility is broken, never a skipped proof)"
     else
-        bad "NET mailbox [vms-22c]: DECNETD.EXE --net-mbx-selftest produced no verdict line within 60s -- the T1 mailbox round-trip did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung mailbox)"
+        bad "NET mailbox [vms-22c]: NETACP_TEST.EXE --net-mbx-selftest produced no verdict line within 60s -- the T1 mailbox round-trip did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung mailbox)"
     fi
     wait_for '$ ' 20 "$NMBX_OFF"
 
@@ -1453,7 +1459,7 @@ run_dcl_acceptance_battery() {
     local NLB_OFF; NLB_OFF=$(wc -c <"$LOG")
     send 'DNETACC --net-loopback-accept-test'
     if wait_for 'IVIMAGE' 15 "$NLB_OFF"; then
-        note "NETACP _NET: links [vms-dda]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the brokered-link proof DID NOT RUN here (hard gate on the rails that ship the image)"
+        note "NETACP _NET: links [vms-dda]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the brokered-link proof DID NOT RUN here (hard gate on the rails that ship the image)"
     elif wait_for 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$NLB_OFF" &&
          tail -c "+$((NLB_OFF + 1))" "$LOG" | grep -q 'DECNETD-E-NONET'; then
         note "NETACP _NET: links [vms-dda]: this VM has no NIC, so no _NET: device exists (NIC-gated, INV-6) -- the brokered-link proof is a hard gate in tests/qemu/test_decnet_startnet_boot_e2e.sh, which boots with a NIC and a running NETACP"
@@ -1471,7 +1477,7 @@ run_dcl_acceptance_battery() {
             "NETACP _NET: links [vms-dda]: no assertion in the brokered-link proof failed"
         negctl "$NLBSEG" 'DECNETD-I-NETLOOP' "DECnet NETACP-brokered _NET: links"
     else
-        bad "NETACP _NET: links [vms-dda]: DECNETD.EXE --net-loopback-accept-test produced no verdict line within 240s -- the brokered-link proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung link)"
+        bad "NETACP _NET: links [vms-dda]: NETACP_TEST.EXE --net-loopback-accept-test produced no verdict line within 240s -- the brokered-link proof did not run (a missing DECNETD.EXE/FAL.EXE, an absent /dev/vms, or a hung link)"
     fi
     wait_for '$ ' 20 "$NLB_OFF"
 
@@ -1491,7 +1497,7 @@ run_dcl_acceptance_battery() {
     local COPY_OFF; COPY_OFF=$(wc -c <"$LOG")
     send 'DNETACC --copy-accept-test'
     if wait_for 'IVIMAGE' 15 "$COPY_OFF"; then
-        note "outbound COPY [vms-ea8]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the outbound \$ COPY command-layer transfer proof DID NOT RUN here (hard gate on the rails that ship the image; VAX/Alpha staging is the same tracked follow-on as FAL)"
+        note "outbound COPY [vms-ea8]: the DECnet test image NETACP_TEST.EXE is not reachable on THIS runtime, so the outbound \$ COPY command-layer transfer proof DID NOT RUN here (hard gate on the rails that ship the image; VAX/Alpha staging is the same tracked follow-on as FAL)"
     elif wait_for 'DECNETD-COPY-ACCEPT:' 180 "$COPY_OFF"; then
         local COPYSEG; COPYSEG=$(tail -c "+$((COPY_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$COPYSEG" 'DECNETD-COPY-ACCEPT: PASS' \
@@ -1504,7 +1510,7 @@ run_dcl_acceptance_battery() {
             "outbound COPY [vms-ea8]: no assertion in the outbound-COPY acceptance failed"
         negctl "$COPYSEG" 'DECNETD-I-COPYACCEPT' "DECnet outbound COPY acceptance"
     else
-        bad "outbound COPY [vms-ea8]: DECNETD.EXE --copy-accept-test produced no verdict line within 180s -- the outbound-COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
+        bad "outbound COPY [vms-ea8]: NETACP_TEST.EXE --copy-accept-test produced no verdict line within 180s -- the outbound-COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
     fi
     wait_for '$ ' 20 "$COPY_OFF"
 
@@ -1634,7 +1640,7 @@ run_dcl_acceptance_battery() {
                         "NETACP [vms-b72]: the executive opened the datalink for an image of this interactive session (open $pass_n of 2, no reboot between)"
                     negctl "$DLSEG" 'DECNETD' "NETACP executive datalink open $pass_n"
                 else
-                    bad "NETACP [vms-b72]: DECNETD.EXE --iface $dl_if produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s (open $pass_n)"
+                    bad "NETACP [vms-b72]: NETACP_TEST.EXE --iface $dl_if produced neither DECNETD-I-COUNTERS nor a DECNETD-E- verdict within 50s (open $pass_n)"
                     wait_for '$ ' 20 "$DL_OFF"
                 fi
             done

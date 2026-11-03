@@ -1,19 +1,22 @@
 /*
- * test_syssvc_decnetd_syscall_audit.c - the booted NETACP (DECNETD.EXE, the
+ * test_syssvc_decnetd_syscall_audit.c - the booted NETACP (NETACP.EXE, the
  * executive-datalink build the image ships) reaches its NIC, waits and runs
  * through VMS services, not Linux libc (rd vms-d3cd; Baron 2026-11-02: "don't
  * drop to linux LIBC, use all VMS-authentic API").
  *
  * WHAT IS AUDITED. The suite makes a VMS subprocess (ovmx_fork_subprocess: a
  * process the executive created, holding the suite's privileges, PHY_IO among
- * them), has it ptrace(PTRACE_TRACEME) and exec the SHIPPED static DECNETD.EXE
- * staged at SYS$SYSTEM, run as a NETACP for a few seconds:
+ * them), has it ptrace(PTRACE_TRACEME) and exec the SHIPPED static NETACP.EXE
+ * staged at SYS$SYSTEM with NO command line (rd vms-0a7 S3: NETACP takes no
+ * argv; its executor 1.42 comes from the executor database, here the host-test
+ * file OVMX_DECNET_EXECUTOR names), run for a few seconds:
  *
- *     DECNETD.EXE --address 1.42 --duration 4
+ *     NETACP.EXE
  *
  * which opens the executive datalink on the LAN unit ETH0:, senses its
- * hardware address, starts the session pool and the request broker, sends
- * hellos and serves the loop until the alarm stops it. Every system call of
+ * hardware address, starts the session pool and the request broker (its
+ * request read an async $QIO, its sleep $SETIMR + $WFLOR), sends hellos and
+ * serves the loop until the suite stops it with SIGTERM. Every system call of
  * the process -- and of any process or thread it makes (PTRACE_O_TRACEFORK /
  * TRACECLONE / TRACEVFORK) -- is seen at its entry stop, and the suite asserts
  * that NONE is
@@ -24,7 +27,9 @@
  *   - ioctl in the SIOCGIF* range 0x8910..0x89FF               (interface lookup);
  *   - poll / ppoll / select / pselect6 / epoll_wait / epoll_pwait (host
  *     descriptor waits -- the old terminal/datalink poll());
- *   - clone with CLONE_THREAD, or clone3                      (pthread_create).
+ *   - clone with CLONE_THREAD, or clone3                      (pthread_create);
+ *   - pipe / pipe2                                            (a host pipe --
+ *     the old SYS$OUTPUT reader's, sysoutput_rms.c).
  *
  * NOT VACUOUS. A trace that saw nothing would pass all of that, so the suite
  * also asserts what the run DID: the tracer saw the process's /dev/vms
@@ -71,7 +76,7 @@
 #define EXIT_SKIP 77
 
 #ifndef DECNETD_PATH_DEFAULT
-#define DECNETD_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE"
+#define DECNETD_PATH_DEFAULT "/vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE"
 #endif
 
 static int pass = 0, fail = 0;
@@ -115,7 +120,7 @@ static int sc_read(pid_t pid, struct sc *s)
 struct verdict {
     unsigned long total;      /* syscall entries seen */
     unsigned long vms_ioctls; /* ioctls whose request carries the 'V' magic */
-    unsigned bad_socket, bad_ifioctl, bad_wait, bad_thread;
+    unsigned bad_socket, bad_ifioctl, bad_wait, bad_thread, bad_pipe;
     char first_bad[160];
 };
 
@@ -171,6 +176,12 @@ static void classify(struct verdict *v, const struct sc *s)
 #ifdef SYS_epoll_pwait
     if (nr == SYS_epoll_pwait) { flag(v, &v->bad_wait, "epoll_pwait", s); return; }
 #endif
+#ifdef SYS_pipe
+    if (nr == SYS_pipe) { flag(v, &v->bad_pipe, "pipe", s); return; }
+#endif
+#ifdef SYS_pipe2
+    if (nr == SYS_pipe2) { flag(v, &v->bad_pipe, "pipe2", s); return; }
+#endif
     if (nr == SYS_clone) {
         /* x86_64/aarch64/alpha: flags are the first argument */
         if (s->a0 & CLONE_THREAD)
@@ -183,7 +194,19 @@ static void classify(struct verdict *v, const struct sc *s)
 }
 
 static volatile pid_t g_root;
-static void on_bound(int sig) { (void)sig; if (g_root > 0) kill(g_root, SIGKILL); }
+static volatile int g_stop_first;     /* the first alarm asks NETACP to stop */
+static void on_bound(int sig)
+{
+    (void)sig;
+    if (g_root <= 0) return;
+    if (g_stop_first) {               /* SIGTERM: NETACP ends its loop, reports, exits 0 */
+        g_stop_first = 0;
+        kill(g_root, SIGTERM);
+        alarm(20);                    /* ... and is killed if it does not */
+        return;
+    }
+    kill(g_root, SIGKILL);
+}
 
 /*
  * trace_all - run the tracee (already stopped at its SIGSTOP after
@@ -191,7 +214,7 @@ static void on_bound(int sig) { (void)sig; if (g_root > 0) kill(g_root, SIGKILL)
  * each syscall-ENTRY stop to classify(). Returns the first tracee's exit
  * status (waitpid form), or -1 if the trace broke.
  */
-static int trace_all(pid_t root, struct verdict *v, int bound_s)
+static int trace_all(pid_t root, struct verdict *v, int bound_s, int stop_s)
 {
     long opts = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK |
                 PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC | PTRACE_O_EXITKILL;
@@ -205,7 +228,8 @@ static int trace_all(pid_t root, struct verdict *v, int bound_s)
         return -1;
     g_root = root;
     signal(SIGALRM, on_bound);
-    alarm((unsigned)bound_s);         /* a wedged tracee is killed, not waited on */
+    g_stop_first = stop_s > 0;
+    alarm((unsigned)(stop_s > 0 ? stop_s : bound_s)); /* a wedged tracee is killed, not waited on */
     tids[nt] = root; insys[nt] = 0; newborn[nt] = 0; nt++;
     if (ptrace(PTRACE_SYSCALL, root, 0, 0) != 0)
         return -1;
@@ -258,6 +282,8 @@ static void control_child(void)
 {
     struct pollfd pf = { -1, 0, 0 };
     (void)poll(&pf, 1, 0);
+    int pp[2];
+    if (pipe(pp) == 0) { close(pp[0]); close(pp[1]); }
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     if (s >= 0) {
         unsigned char ifr[40];
@@ -292,10 +318,10 @@ int main(void)
         }
         int st = 0;
         waitpid(c, &st, 0);
-        int rs = trace_all(c, &v, 30);
+        int rs = trace_all(c, &v, 30, 0);
         CHECK(rs >= 0 && v.bad_wait >= 1 && v.bad_socket >= 1 && v.bad_ifioctl >= 1 &&
-              v.bad_thread >= 1,
-              "control: the audit flags a poll, a socket(AF_INET), a SIOCGIF ioctl and a thread");
+              v.bad_thread >= 1 && v.bad_pipe >= 1,
+              "control: the audit flags a poll, a pipe, a socket(AF_INET), a SIOCGIF ioctl and a thread");
     }
 
     if (vms_kif_open() < 0) {
@@ -312,7 +338,16 @@ int main(void)
         return 1;
     }
 
-    /* ---- 1. trace the shipped DECNETD.EXE as a NETACP ------------------- */
+    /* ---- 1. trace the shipped NETACP.EXE -------------------------------- */
+    /* Its executor: the executor database, here the host-test file the store
+     * reads when OVMX_DECNET_EXECUTOR names one (dnet_ncpstore.c). */
+    static char exf[] = "/tmp/netacp-audit-executor.dat";
+    {
+        FILE *xf = fopen(exf, "w");
+        if (!xf) { printf("  FAIL: cannot write %s\n", exf); return 1; }
+        fprintf(xf, "EXECUTOR 1.42 NAME OVMX STATE ON\n");
+        fclose(xf);
+    }
     int out[2];
     if (pipe(out) != 0) { printf("  FAIL: pipe\n"); return 1; }
     uint32_t cst = 0;
@@ -323,11 +358,12 @@ int main(void)
         close(out[0]); close(out[1]);
         ptrace(PTRACE_TRACEME, 0, 0, 0);
         raise(SIGSTOP);
-        execl(img, "DECNETD.EXE", "--address", "1.42", "--duration", "4", (char *)NULL);
+        setenv("OVMX_DECNET_EXECUTOR", exf, 1);
+        execl(img, "NETACP.EXE", (char *)NULL);
         _exit(127);
     }
     close(out[1]);
-    CHECK(c > 0, "the suite makes a VMS subprocess to run DECNETD.EXE");
+    CHECK(c > 0, "the suite makes a VMS subprocess to run NETACP.EXE");
     if (c <= 0) {
         printf("=== test_syssvc_decnetd_syscall_audit: %d passed, %d failed ===\n", pass, fail);
         return 1;
@@ -339,7 +375,7 @@ int main(void)
 
     struct verdict v;
     memset(&v, 0, sizeof v);
-    int rs = trace_all(c, &v, 60);
+    int rs = trace_all(c, &v, 60, 6);
 
     static char log[16384];
     size_t ln = 0;
@@ -351,17 +387,20 @@ int main(void)
     }
     log[ln] = '\0';
     close(out[0]);
-    printf("  --- DECNETD.EXE output ---\n%s  --- end ---\n", log);
+    printf("  --- NETACP.EXE output ---\n%s  --- end ---\n", log);
     printf("  (syscalls seen %lu, executive ioctls %lu; flagged socket %u ifioctl %u wait %u"
-           " thread %u%s%s)\n", v.total, v.vms_ioctls, v.bad_socket, v.bad_ifioctl,
-           v.bad_wait, v.bad_thread, v.first_bad[0] ? "; first: " : "", v.first_bad);
+           " thread %u pipe %u%s%s)\n", v.total, v.vms_ioctls, v.bad_socket, v.bad_ifioctl,
+           v.bad_wait, v.bad_thread, v.bad_pipe, v.first_bad[0] ? "; first: " : "", v.first_bad);
+    unlink(exf);
 
     CHECK(rs >= 0 && WIFEXITED(rs) && WEXITSTATUS(rs) == 0,
-          "DECNETD.EXE ran as a NETACP under the trace and exited 0");
+          "NETACP.EXE (no command line) ran under the trace, stopped on SIGTERM and exited 0");
     CHECK(strstr(log, "DECNETD-I-DATALINK, datalink open on ETH0: via the executive") != NULL,
           "it opened its datalink on the LAN unit ETH0: through the executive");
     CHECK(strstr(log, "DECNETD-I-STARTED") != NULL && strstr(log, "DECNETD-I-COUNTERS") != NULL,
           "it started, served its loop and reported its counters");
+    CHECK(strstr(log, "DECNETD-I-BROKER") != NULL && strstr(log, "DECNETD-W-REQ") == NULL,
+          "its request mailbox read is a queued $QIO (no $ASSIGN/$QIO refusal reported)");
     CHECK(v.total > 50 && v.vms_ioctls > 10,
           "the trace is not vacuous: it saw the process's executive (/dev/vms) calls");
     /* negctl: decnetd-lan-lookup-via-libc */
@@ -369,6 +408,7 @@ int main(void)
           "NO host interface lookup: no socket(AF_INET/INET6/PACKET/NETLINK), no SIOCGIF* ioctl");
     CHECK(v.bad_wait == 0, "NO poll/ppoll/select/epoll wait on a host descriptor");
     CHECK(v.bad_thread == 0, "NO thread (clone CLONE_THREAD / clone3)");
+    CHECK(v.bad_pipe == 0, "NO host pipe (pipe / pipe2)");
 
     printf("=== test_syssvc_decnetd_syscall_audit: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

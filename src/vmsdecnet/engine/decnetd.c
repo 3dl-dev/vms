@@ -49,7 +49,7 @@
 #include <fcntl.h>      /* open(/dev/urandom): the NETACP link-handle secret */
 #include <net/if.h>      /* if_nametoindex() */
 #include <ifaddrs.h>    /* probe build: host NIC auto-detect (the executive build names ETH0:) */
-#include <poll.h>       /* the --fal-proc-accept-test pump only (selftest; rd vms-d3cd) */
+#include <poll.h>       /* the test image only (netacp_test.c includes this file), and the netacp-wait-via-poll negative control */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
 #include <stdarg.h>

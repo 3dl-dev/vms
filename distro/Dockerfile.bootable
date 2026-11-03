@@ -716,7 +716,7 @@ RUN CC=musl-gcc sh tests/toolchain/mk_tcc_static.sh build-static/bin/TCC.EXE
 # a NETACP and a FAL run. The shipped disks stay byte-identical.
 RUN cmake -B build-static -DBUILD_TESTS=ON >/dev/null && \
     cmake --build build-static --target mmk_native test_syssvc_dcl_remote_syscall_audit \
-        netacp_test_exe \
+        netacp_test_exe startnet_audit \
         --parallel $(nproc) 2>&1
 
 # -- System tree staging (OS kit + distribution image source) -----------------
@@ -1537,6 +1537,9 @@ COPY --from=builder /src/build-static/bin/test_syssvc_dcl_remote_syscall_audit /
 # shipped NETACP.EXE no longer carries; the boot e2e and the DCL battery master it
 # onto a scratch volume beside DCLNETAUDIT.EXE.
 COPY --from=builder /src/build-static/bin/NETACP_TEST.EXE /usr/local/lib/ovmx-test/NETACP_TEST.EXE
+# ... and STARTNETAUDIT.EXE (gate (c)): the ptrace audit of STARTNET -> NCP ->
+# NETACP -> an inbound FAL.EXE the boot e2e runs from that same scratch volume.
+COPY --from=builder /src/build-static/bin/startnet_audit /usr/local/lib/ovmx-test/STARTNETAUDIT.EXE
 # Negative controls for test_executive_integral.sh only — never a runtime.
 COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz

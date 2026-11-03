@@ -121,7 +121,7 @@ int main(int argc, char **argv)
           "DCL ran the MAIL qualifier probes");
     printf("  ---- MAIL probes ----\n%s  ---- end ----\n", out);
     /* negctl: dcl-mail-quals-accept-all */
-    CHECK(strstr(out, "%DCL-W-IVQUAL") != NULL && strstr(out, "\\ZQBOGUS\\") != NULL,
+    CHECK(strstr(out, "%DCL-W-IVQUAL") != NULL && strstr(out, " \\ZQBOGUS\\") != NULL,
           "MAIL/ZQBOGUS is %DCL-W-IVQUAL naming the qualifier");
     /* negctl: dcl-mail-qual-bare-name */
     CHECK(strstr(out, "MAILARG=/SUBJECT=hi there") != NULL,

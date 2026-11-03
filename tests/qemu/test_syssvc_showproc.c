@@ -62,6 +62,7 @@
 #include "jpidef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -325,25 +326,74 @@ static uint32_t pid_on_line(const char *line, int col)
  * stream instead of exec'ing, so a broken arrangement fails LOUDLY rather
  * than quietly running the command with full privilege and passing for the
  * wrong reason.
+ *
+ * WHERE THE OUTPUT COMES FROM. With an executive, DCL's output comes back
+ * from its SYS$OUTPUT mailbox (rd vms-2f39), and SETUP_FAIL_MARK -- the
+ * child's own report, not DCL's -- is an ovmx_dcl_sysout_note() that
+ * collect() puts ahead of it. The device-absent checks have no executive,
+ * so no mailbox can exist: they still read a pipe on DCL's stdout/stderr.
  */
+static int dcl_exec_present;   /* set by main() once /dev/vms opens */
+
+/* A line the child itself reports: a note on the mailbox route, a printf on
+ * the pipe route. */
+static void child_say(const struct ovmx_dcl_sysout *so, int mbx,
+                      const char *line)
+{
+    if (mbx) {
+        ovmx_dcl_sysout_note(so, line);
+    } else {
+        fputs(line, stdout);
+        fflush(stdout);
+    }
+}
+
+/* The mailbox route's bound: wait for the DCL child to exit and reap it; past
+ * the deadline SIGKILL and reap it and return OVMX_TCG_DRAIN_TIMEOUT -- the
+ * counterpart of ovmx_tcg_drain_pipe()'s bound on the pipe route. */
+static int dcl_sysout_wait(pid_t pid, long deadline_ms)
+{
+    long start = ovmx_tcg_mono_ms();
+    for (;;) {
+        pid_t r = waitpid(pid, NULL, WNOHANG);
+        if (r == pid || (r < 0 && errno != EINTR))
+            return OVMX_TCG_DRAIN_EOF;
+        if (ovmx_tcg_mono_ms() - start >= deadline_ms) {
+            kill(pid, SIGKILL);
+            while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+                ;
+            return OVMX_TCG_DRAIN_TIMEOUT;
+        }
+        usleep(20000);
+    }
+}
+
 static int run_dcl(const char *script, int uic_group, const char *prcnam,
                    char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2], out_pipe[2] = { -1, -1 };
+    struct ovmx_dcl_sysout so;
+    int mbx = dcl_exec_present;
 
     out[0] = '\0';
     if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (mbx) {
+        if (!(ovmx_dcl_sysout_open(&so) & 1)) {
+            close(in_pipe[0]); close(in_pipe[1]); return -1;
+        }
+    } else if (pipe(out_pipe) < 0) {
+        close(in_pipe[0]); close(in_pipe[1]); return -1;
+    }
 
     /*
      * Flush every stdio buffer -- including this process's own (parent)
      * stdout -- before forking. Without this, the child inherits a copy
-     * of the PARENT's unflushed stdout buffer; the child's own
-     * fflush(stdout) after dup2'ing the capture pipe then writes that
-     * inherited parent data into the child's pipe, splicing a prior
-     * run_dcl() call's transcript into this call's capture. Latent when
-     * stdout is line-buffered (console); live the moment stdout is fully
-     * buffered (redirected to a file) -- see vms-cdb.
+     * of the PARENT's unflushed stdout buffer; on the pipe route the
+     * child's own fflush(stdout) after dup2'ing the capture pipe then
+     * writes that inherited parent data into the child's pipe, splicing a
+     * prior run_dcl() call's transcript into this call's capture. Latent
+     * when stdout is line-buffered (console); live the moment stdout is
+     * fully buffered (redirected to a file) -- see vms-cdb.
      */
     fflush(NULL);
 
@@ -362,49 +412,61 @@ static int run_dcl(const char *script, int uic_group, const char *prcnam,
     } else {
         pid = ovmx_fork_subprocess();
     }
-    if (pid < 0) return -1;
+    if (pid < 0) {
+        if (mbx) ovmx_dcl_sysout_collect(&so, NULL, 0);
+        return -1;
+    }
 
     if (pid == 0) {
+        if (mbx)
+            ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        if (!mbx) {
+            dup2(out_pipe[1], STDOUT_FILENO);
+            dup2(out_pipe[1], STDERR_FILENO);
+            close(out_pipe[0]); close(out_pipe[1]);
+        }
 
         if (uic_group >= 0) {
             struct vms_procinfo info;
             if (prcnam && !(vms_kif_setprn(prcnam) & 1)) {
-                printf(SETUP_FAIL_MARK " setprn\n"); fflush(stdout); _exit(126);
+                child_say(&so, mbx, SETUP_FAIL_MARK " setprn\n"); _exit(126);
             }
             if (!(vms_kif_getjpi_self(&info) & 1) ||
                 (info.cur_privs & VMS_PRV_M_WORLD) != 0 ||
                 (info.uic >> 16) != (uint32_t)uic_group) {
-                printf(SETUP_FAIL_MARK " identity\n");
-                fflush(stdout); _exit(126);
+                child_say(&so, mbx, SETUP_FAIL_MARK " identity\n");
+                _exit(126);
             }
         }
 
         execl("/bin/DCL.EXE", "DCL.EXE", (char *)NULL);
-        printf(SETUP_FAIL_MARK " exec\n");
-        fflush(stdout);
+        child_say(&so, mbx, SETUP_FAIL_MARK " exec\n");
         _exit(127);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
+    if (!mbx) close(out_pipe[1]);
     if (write_full(in_pipe[1], script, strlen(script)) != 0) {
         /* fall through: the child's output still gets captured */
     }
     close(in_pipe[1]);
 
-    /* Bounded drain (was an UNBOUNDED blocking read that hung forever if
+    /* Bounded (was an UNBOUNDED blocking read that hung forever if
      * DCL.EXE never closed stdout -- the "5 PASS then outer timeout" mode).
      * ovmx_tcg_ms scales the 30s base for a slow TCG guest; x86_64 keeps 30s
      * (scale == 1). */
     size_t used = 0;
     long deadline_ms = ovmx_tcg_ms(30000);
-    int dr = ovmx_tcg_drain_pipe(out_pipe[0], out, outsz, deadline_ms, pid, &used);
-    close(out_pipe[0]);
+    int dr;
+    if (mbx) {
+        dr = dcl_sysout_wait(pid, deadline_ms);
+        used = ovmx_dcl_sysout_collect(&so, out, outsz);
+    } else {
+        dr = ovmx_tcg_drain_pipe(out_pipe[0], out, outsz, deadline_ms, pid, &used);
+        close(out_pipe[0]);
+    }
 
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
@@ -413,10 +475,10 @@ static int run_dcl(const char *script, int uic_group, const char *prcnam,
     if (dr == OVMX_TCG_DRAIN_TIMEOUT) {
         /* INV-6 / prove-or-expose: expose the partial capture, then FAIL the
          * caller's CHECK(run_dcl(...) == 0) loudly -- never mask a hang. The
-         * child was SIGKILLed by the drain so this waitpid did not block. */
+         * child was SIGKILLed by the bound so this waitpid did not block. */
         printf("  ---- SHOWPROC partial DCL.EXE output (%zu bytes) ----\n%s\n"
                "  ---- end partial ----\n", used, out);
-        printf("SHOWPROC: DCL.EXE did NOT close stdout within %ldms (scale=%ld)"
+        printf("SHOWPROC: DCL.EXE did NOT finish within %ldms (scale=%ld)"
                " -- partial output above; child SIGKILLed\n",
                deadline_ms, ovmx_tcg_scale());
         fflush(stdout);
@@ -596,6 +658,7 @@ int main(void)
     if (devfd < 0)
         return device_absent_checks();
     close(devfd);
+    dcl_exec_present = 1;
 
     /* The subject's script. It must block, or the subject exits before it
      * can be observed; `sleep` is a busybox applet installed by init.sh. */

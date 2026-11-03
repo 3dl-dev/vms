@@ -5,6 +5,7 @@
  */
 
 #include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -782,6 +783,16 @@ static int read_impl(struct dcl_command *cmd)
         char equiv[1024];
         if (dcl_translate_logical("SYS$INPUT", equiv, sizeof(equiv)) == 0 &&
                 equiv[0] && !dcl_logical_is_terminal(equiv)) {
+            /* SYS$INPUT is the stream DCL reads its commands from (a mailbox,
+             * a command file -- dcl_in.c): READ takes ITS next record, the
+             * data line after the READ (rd vms-4d27). */
+            if (dcl_in_is_ppf(equiv)) {
+                char pline[4096];
+                if (dcl_in_get(NULL, pline, sizeof(pline)) < 0)
+                    return RMS$_EOF;
+                dcl_sym_set(symbol_name, pline, DCL_SYM_LOCAL);
+                return (int)DCL_CLI_NORMAL;
+            }
             /* A file SYS$INPUT is read through RMS: $OPEN once per
              * redirection, then one $GET per READ (vms-f89, vms-5cc). */
             if (!g_sysinput_rd || strcmp(g_sysinput_key, equiv) != 0) {

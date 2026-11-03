@@ -1,8 +1,7 @@
 /*
  * dcl_io.c - DCL I/O Operations
  *
- * Handles SYS$INPUT/SYS$OUTPUT abstraction, VMS-style error
- * message formatting, and interactive input with readline support.
+ * Where SYS$OUTPUT/SYS$ERROR go, and VMS-style error message formatting.
  */
 
 #include "dcl/dcl_out.h"
@@ -24,75 +23,12 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#ifdef HAVE_READLINE
-#include <readline/readline.h>
-#include <readline/history.h>
-#endif
 
 /*
- * Read a line of input from the current source.
- * If interactive, uses readline. If in a procedure, reads from the file.
- * Returns 0 on success, -1 on EOF/error.
+ * DCL's input -- its command lines and READ SYS$INPUT / INQUIRE data -- is
+ * read from SYS$INPUT by dcl_in.c (mailbox by $QIO, file by RMS) and the
+ * terminal driver (dcl_terminal.c); there is no stdio read here.
  */
-int dcl_read_input(struct dcl_context *ctx, const char *prompt,
-                   char *buffer, size_t bufsize)
-{
-    if (!ctx || !buffer || bufsize == 0) return -1;
-
-    /* If in a command procedure, read from procedure file */
-    if (ctx->proc_depth >= 0 && ctx->proc_stack[ctx->proc_depth].fp) {
-        if (!dcl_pf_gets(buffer, (int)bufsize,
-                         ctx->proc_stack[ctx->proc_depth].fp)) {
-            return -1; /* EOF */
-        }
-        /* Remove trailing newline */
-        size_t len = strlen(buffer);
-        if (len > 0 && buffer[len - 1] == '\n') {
-            buffer[len - 1] = '\0';
-        }
-        ctx->proc_stack[ctx->proc_depth].line_number++;
-
-        /* If verify mode is on, echo the command */
-        if (ctx->verify) {
-            dcl_out_printf("%s\n", buffer);
-        }
-        return 0;
-    }
-
-    /* Interactive input */
-    if (ctx->interactive) {
-#ifdef HAVE_READLINE
-        char *line = readline(prompt ? prompt : "$ ");
-        if (!line) return -1; /* EOF */
-        strncpy(buffer, line, bufsize - 1);
-        buffer[bufsize - 1] = '\0';
-        if (line[0] != '\0') {
-            add_history(line);
-        }
-        free(line);
-        return 0;
-#else
-        if (prompt) {
-            dcl_out_fputs(prompt);
-            dcl_out_flush();
-        }
-        if (!fgets(buffer, (int)bufsize, stdin)) return -1;
-        size_t len = strlen(buffer);
-        if (len > 0 && buffer[len - 1] == '\n') {
-            buffer[len - 1] = '\0';
-        }
-        return 0;
-#endif
-    }
-
-    /* Non-interactive stdin */
-    if (!fgets(buffer, (int)bufsize, stdin)) return -1;
-    size_t len = strlen(buffer);
-    if (len > 0 && buffer[len - 1] == '\n') {
-        buffer[len - 1] = '\0';
-    }
-    return 0;
-}
 
 /*
  * Write a line to SYS$OUTPUT (stdout).

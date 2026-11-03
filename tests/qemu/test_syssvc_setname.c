@@ -87,6 +87,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -203,61 +204,91 @@ static uint32_t pid_on_line(const char *line, int col)
  *
  * DCL.EXE is staged into the initramfs at /bin by tests/qemu/Dockerfile
  * (absence there is a FATAL image-build error, not a skip).
+ *
+ * With an executive, DCL's output comes back from its SYS$OUTPUT mailbox
+ * (rd vms-2f39), and a failed exec's SETUP_FAIL_MARK is a note ahead of
+ * it. The device-absent checks run with no executive, where no mailbox can
+ * exist, so that run still reads a pipe on DCL's stdout/stderr.
  */
+static int dcl_exec_present;   /* set by main() once /dev/vms opens */
+
 static int run_dcl(const char *script, char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2], out_pipe[2] = { -1, -1 };
+    struct ovmx_dcl_sysout so;
+    int mbx = dcl_exec_present;
 
     out[0] = '\0';
     if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (mbx) {
+        if (!(ovmx_dcl_sysout_open(&so) & 1)) {
+            close(in_pipe[0]); close(in_pipe[1]); return -1;
+        }
+    } else if (pipe(out_pipe) < 0) {
+        close(in_pipe[0]); close(in_pipe[1]); return -1;
+    }
 
     /*
      * Flush every stdio buffer -- including this process's own (parent)
      * stdout -- before forking. Without this, the child inherits a copy
-     * of the PARENT's unflushed stdout buffer; if execl() ever fails,
-     * the child's own fflush(stdout) after dup2'ing the capture pipe
-     * would write that inherited parent data into the child's pipe,
-     * splicing a prior run_dcl() call's transcript into this call's
-     * capture. Latent when stdout is line-buffered (console); live the
-     * moment stdout is fully buffered (redirected to a file) -- see
-     * vms-cdb.
+     * of the PARENT's unflushed stdout buffer; if execl() ever fails on
+     * the pipe route, the child's own fflush(stdout) after dup2'ing the
+     * capture pipe would write that inherited parent data into the
+     * child's pipe, splicing a prior run_dcl() call's transcript into
+     * this call's capture. Latent when stdout is line-buffered (console);
+     * live the moment stdout is fully buffered (redirected to a file) --
+     * see vms-cdb.
      */
     fflush(NULL);
 
     pid_t pid = ovmx_fork_subprocess();
-    if (pid < 0) return -1;
+    if (pid < 0) {
+        if (mbx) ovmx_dcl_sysout_collect(&so, NULL, 0);
+        return -1;
+    }
 
     if (pid == 0) {
+        if (mbx)
+            ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        if (!mbx) {
+            dup2(out_pipe[1], STDOUT_FILENO);
+            dup2(out_pipe[1], STDERR_FILENO);
+            close(out_pipe[0]); close(out_pipe[1]);
+        }
         execl("/bin/DCL.EXE", "DCL.EXE", (char *)NULL);
-        printf(SETUP_FAIL_MARK " exec\n");
-        fflush(stdout);
+        if (mbx) {
+            ovmx_dcl_sysout_note(&so, SETUP_FAIL_MARK " exec\n");
+        } else {
+            printf(SETUP_FAIL_MARK " exec\n");
+            fflush(stdout);
+        }
         _exit(127);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
+    if (!mbx) close(out_pipe[1]);
     (void)write_full(in_pipe[1], script, strlen(script));
     close(in_pipe[1]);
 
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
+    if (!mbx) {
+        size_t used = 0;
+        for (;;) {
+            ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
+            if (n <= 0) break;
+            used += (size_t)n;
+            if (used >= outsz - 1) break;
+        }
+        out[used] = '\0';
+        close(out_pipe[0]);
     }
-    out[used] = '\0';
-    close(out_pipe[0]);
 
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+    if (mbx)
+        ovmx_dcl_sysout_collect(&so, out, outsz);
     return 0;
 }
 
@@ -497,6 +528,7 @@ int main(void)
     if (devfd < 0)
         return device_absent_checks();
     close(devfd);
+    dcl_exec_present = 1;
 
     if (access("/bin/DCL.EXE", X_OK) != 0) {
         printf("  FAIL: /bin/DCL.EXE is not staged in this image\n");

@@ -7,6 +7,7 @@
  */
 
 #include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1815,14 +1816,68 @@ int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
  * fork()+execve() child read the procedure lines. Interactive DCL leaves the
  * terminal on fd 0.
  */
+/* The data-line source dcl_sysinput_setup gathers from: the @procedure's
+ * stream, or (fp NULL) the SYS$INPUT command file DCL reads by RMS (dcl_in.c).
+ * A line comes back with its '\n', as dcl_pf_gets gives it. */
+static int sysin_next(struct dcl_pf *fp, char *line, size_t sz)
+{
+    if (fp)
+        return dcl_pf_gets(line, (int)sz, fp) != NULL;
+    if (dcl_in_get(NULL, line, sz - 1) < 0)
+        return 0;
+    strcat(line, "\n");
+    return 1;
+}
+
+/* the line just read was consumed */
+static void sysin_advance(struct dcl_context *ctx, struct dcl_pf *fp, long *pos)
+{
+    if (!fp)
+        return;
+    ctx->proc_stack[ctx->proc_depth].line_number++;
+    *pos = dcl_pf_tell(fp);
+}
+
+/* the '$' line just read is DCL's next command: put it back */
+static void sysin_putback(struct dcl_pf *fp, long pos, char *line)
+{
+    if (fp) {
+        dcl_pf_seek(fp, pos, SEEK_SET);
+        return;
+    }
+    size_t n = strlen(line);
+    if (n && line[n - 1] == '\n')
+        line[n - 1] = '\0';
+    dcl_in_unget(line);
+}
+
 int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
 {
     si->saved_fd0 = -1;
-    if (!ctx || ctx->proc_depth < 0)
-        return 0;                   /* interactive: SYS$INPUT = terminal */
-    struct dcl_pf *fp = ctx->proc_stack[ctx->proc_depth].fp;
-    if (!fp)
+    if (!ctx)
         return 0;
+    /*
+     * SYS$INPUT A COMMAND FILE, NOT AN @PROCEDURE (rd vms-45f2): a process
+     * whose SYS$INPUT is a VMS file (LIB$SPAWN INPUT=, RUN/DETACHED/INPUT=)
+     * reads its commands from that file by RMS $GET (dcl_in.c), and, as on
+     * VMS, the records after the image's command that do not begin with '$'
+     * are the image's SYS$INPUT. They are $GET from the same stream; the '$'
+     * record that ends them is handed back for DCL's own next read.
+     *
+     * BOOTSTRAP: the records reach the image through the SAME vms-1a9 fd-0
+     * block a procedure's data lines use (dcl_sysinput_install), because an
+     * image's C RTL reads SYS$INPUT from fd 0. The real fix -- DECC$SHR's
+     * stdin reading SYS$INPUT through RMS/$QIO for every image class -- retires
+     * this block (rd vms-07ae).
+     */
+    struct dcl_pf *fp = NULL;
+    int from_ppf = 0;
+    if (ctx->proc_depth >= 0)
+        fp = ctx->proc_stack[ctx->proc_depth].fp;
+    else if (dcl_in_route() == DCL_IN_ROUTE_FILE)
+        from_ppf = 1;
+    if (!fp && !from_ppf)
+        return 0;                   /* interactive: SYS$INPUT = terminal */
 
     /* The block is gathered in MEMORY and delivered on fd 0 by
      * dcl_sysinput_install(): /dev/null for an empty block (the RUN line is
@@ -1837,7 +1892,7 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
     int blk_bad = 0;
 
     char line[DCL_MAX_LINE];
-    long pos = dcl_pf_tell(fp);
+    long pos = fp ? dcl_pf_tell(fp) : 0;
     /* DECK/EOD explicit in-stream data (vms-3983). Normally the input block
      * ends at the first '$'-command line; DECK suspends that so a block may
      * itself contain '$'-lines, ending only at the EOD sentinel. Reference:
@@ -1845,7 +1900,7 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
      * "$EOD"; DECK/DOLLAR=string names a different one. */
     int  deck_mode = 0;
     char deck_term[48] = "EOD";
-    while (dcl_pf_gets(line, sizeof(line), fp)) {
+    while (sysin_next(fp, line, sizeof(line))) {
         const char *p = line;
         while (*p == ' ' || *p == '\t')
             p++;
@@ -1861,8 +1916,7 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                     (q[tl] == '\0' || q[tl] == '\n' ||
                      q[tl] == ' '  || q[tl] == '\t')) {
                     deck_mode = 0;   /* consume the EOD line, feed nothing */
-                    ctx->proc_stack[ctx->proc_depth].line_number++;
-                    pos = dcl_pf_tell(fp);
+                    sysin_advance(ctx, fp, &pos);
                     continue;
                 }
             }
@@ -1892,13 +1946,12 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                     }
                 }
                 deck_mode = 1;   /* consume the DECK line, feed nothing */
-                ctx->proc_stack[ctx->proc_depth].line_number++;
-                pos = dcl_pf_tell(fp);
+                sysin_advance(ctx, fp, &pos);
                 continue;
             }
             /* Next DCL command terminates the image's input. Put the stream
              * back at the start of this line so the parent loop reads it. */
-            dcl_pf_seek(fp, pos, SEEK_SET);
+            sysin_putback(fp, pos, line);
             break;
         }
         /* Data line fed to the image's SYS$INPUT. VMS DCL performs apostrophe
@@ -1939,8 +1992,7 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
                 blk_len += sl;
             }
         }
-        ctx->proc_stack[ctx->proc_depth].line_number++;
-        pos = dcl_pf_tell(fp);
+        sysin_advance(ctx, fp, &pos);
     }
     if (blk_bad) {
         free(blk);
@@ -1949,6 +2001,8 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
     }
     int rc = dcl_sysinput_install(si, blk, blk_len);
     free(blk);
+    if (si->saved_fd0 >= 0)
+        dcl_in_substrate(1);     /* SYS$INPUT is the block now (dcl_in.c) */
     if (rc != 0)
         dcl_error("DCL", 4, "SYSINPUT", "cannot provide SYS$INPUT for the image");
     return rc != 0 ? SS$_INSFMEM : 0;
@@ -1961,7 +2015,8 @@ void dcl_sysinput_restore(struct dcl_sysinput *si)
     dup2(si->saved_fd0, 0);
     close(si->saved_fd0);
     si->saved_fd0 = -1;
-    clearerr(stdin);
+    dcl_in_clear_eof();          /* the block's end is not the stream's */
+    dcl_in_substrate(0);
 }
 
 /*

@@ -5,6 +5,7 @@
  */
 
 #include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1194,8 +1195,8 @@ static int cmd_set_protection(struct dcl_command *cmd)
  * suppressed, for the SET PASSWORD prompts below: $QIO IO$_READPROMPT with
  * IO$M_NOECHO through the executive's terminal driver (rd vms-f8c), the read
  * VMS's own SET PASSWORD issues. The caller has already written its prompt,
- * so this read carries none. Off the OVMX runtime (no terminal driver behind
- * TT:) the descriptor is read plainly. Returns 0 on success (buf holds the
+ * so this read carries none. With no terminal driver behind TT: it is the
+ * next record of SYS$INPUT (dcl_in.c). Returns 0 on success (buf holds the
  * trimmed line), -1 on EOF/read error.
  */
 static int dcl_read_noecho_line(char *buf, size_t bufsz)
@@ -1210,7 +1211,7 @@ static int dcl_read_noecho_line(char *buf, size_t bufsz)
     if (n != DCL_TT_NODRIVER)
         return -1;
 
-    if (fgets(buf, (int)bufsz, stdin) == NULL)
+    if (dcl_in_get(NULL, buf, bufsz) < 0)
         rc = -1;
     if (rc == 0) {
         size_t len = strlen(buf);

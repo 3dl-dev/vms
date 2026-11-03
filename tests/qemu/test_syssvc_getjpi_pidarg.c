@@ -53,6 +53,7 @@
 #include "prvdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 
 #define SS_NORMAL  SS$_NORMAL
 #define DCL_PATH   "/bin/DCL.EXE"
@@ -100,11 +101,59 @@ static char *const poison_env[] = {
 
 /*
  * run_dcl - establish identity B, exec the real DCL, feed it `script` on
- * stdin, capture stdout+stderr. Returns 0 on a clean run. Modelled on
- * test_syssvc_ident.c's helper of the same name.
+ * stdin, capture what it writes to its SYS$OUTPUT mailbox (rd vms-2f39).
+ * Returns 0 on a clean run. Modelled on test_syssvc_ident.c's helper of the
+ * same name.
  */
 static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
                    const char *script, char *out, size_t outsz)
+{
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
+
+    out[0] = '\0';
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
+
+    fflush(NULL);
+    pid_t pid = ovmx_fork_login();   /* a VMS subprocess of this suite (rd vms-2a5) */
+    if (pid < 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
+        return -1;
+    }
+    if (pid == 0) {
+        ovmx_dcl_sysout_child(&so);
+        dup2(in_pipe[0], STDIN_FILENO);
+        close(in_pipe[0]); close(in_pipe[1]);
+
+        uint32_t st = vms_kif_setident(username, uic, privs);
+        printf("SETIDENT_STATUS=%u\n", (unsigned)st);
+        fflush(stdout);
+
+        execle(DCL_PATH, "DCL.EXE", (char *)NULL, poison_env);
+        printf("EXEC_FAILED=%d\n", errno);
+        fflush(stdout);
+        _exit(127);
+    }
+
+    close(in_pipe[0]);
+    ssize_t w = write(in_pipe[1], script, strlen(script));
+    (void)w;
+    close(in_pipe[1]);
+
+    waitpid(pid, NULL, 0);
+    ovmx_dcl_sysout_collect(&so, out, outsz);
+    return 0;
+}
+
+/*
+ * run_dcl_no_executive - the negative control's DCL run. With no executive
+ * there is no mailbox to be DCL's SYS$OUTPUT ($CREMBX is SS$_NOSUCHDEV), so
+ * this one run reads DCL's substrate stdout+stderr from a pipe: the only place
+ * a DCL with no executive can write. Used ONLY when /dev/vms is absent.
+ */
+static int run_dcl_no_executive(const char *script, char *out, size_t outsz)
 {
     int in_pipe[2], out_pipe[2];
 
@@ -113,7 +162,7 @@ static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
     if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
 
     fflush(NULL);
-    pid_t pid = ovmx_fork_login();   /* a VMS subprocess of this suite (rd vms-2a5) */
+    pid_t pid = ovmx_fork_login();
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
@@ -125,14 +174,7 @@ static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
         dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
-
-        uint32_t st = vms_kif_setident(username, uic, privs);
-        printf("SETIDENT_STATUS=%u\n", (unsigned)st);
-        fflush(stdout);
-
         execle(DCL_PATH, "DCL.EXE", (char *)NULL, poison_env);
-        printf("EXEC_FAILED=%d\n", errno);
-        fflush(stdout);
         _exit(127);
     }
 
@@ -184,7 +226,7 @@ int main(void)
             "IF OTHER .EQS. \"\" THEN VERDICT = \"HONEST_DEGRADED\"\n"
             "IF OTHER .NES. \"\" .AND. OTHER .NES. SELF THEN VERDICT = \"OTHER_PROC\"\n"
             "WRITE SYS$OUTPUT \"NEG_VERDICT=''VERDICT'\"\n";
-        if (run_dcl(NULL, 0, 0, neg, out, sizeof(out)) != 0) {
+        if (run_dcl_no_executive(neg, out, sizeof(out)) != 0) {
             printf("  FAIL: could not run DCL at all\n");
             printf("=== test_syssvc_getjpi_pidarg: %d passed, %d failed ===\n", pass, fail + 1);
             return 1;

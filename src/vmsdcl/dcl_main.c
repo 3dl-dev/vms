@@ -30,6 +30,7 @@
 #include "dcl/terminal.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_mbx.h"
+#include "dcl/dcl_in.h"
 #include "ovmx_cli.h"
 #include "ssdef.h"
 #include "vms/pcb.h"
@@ -836,8 +837,11 @@ int main(int argc, char *argv[])
     int mbx_bound = dcl_mbx_bind_std_streams();
     if (mbx_bound & DCL_MBX_BOUND_OUTPUT)
         dcl_out_bind_ppf();        /* DCL's records to the mailbox by $QIO (rd vms-1b6a) */
-    if (mbx_bound & DCL_MBX_BOUND_INPUT)
-        dcl_ctx.interactive = 0;   /* a mailbox is never an interactive TTY */
+    /* SYS$INPUT a mailbox or a command file: DCL reads its records itself,
+     * $QIO IO$_READVBLK / RMS $GET (dcl_in.c, rd vms-4d27) */
+    int in_routed = dcl_in_bind_ppf() != DCL_IN_ROUTE_NONE;
+    if (in_routed)
+        dcl_ctx.interactive = 0;   /* a mailbox or a file is never an interactive TTY */
 
     /* Interactive mode */
     if (dcl_ctx.interactive) {
@@ -1018,13 +1022,9 @@ int main(int argc, char *argv[])
                 /* DCL_TT_NODRIVER: no executive terminal behind TT: -- a
                  * developer's host build run outside the OVMX runtime. Read
                  * the descriptor plainly; nothing reprograms it. */
-                static char fgets_buf[DCL_MAX_LINE];
-                dcl_out_printf("%s", dcl_ctx.prompt);
-                dcl_out_flush();
-                if (!fgets(fgets_buf, sizeof(fgets_buf), stdin)) {
-                    if (feof(stdin) && !ferror(stdin) && isatty(STDIN_FILENO) &&
-                        ++ctrlz_run <= 64) {
-                        clearerr(stdin);
+                static char fb_buf[DCL_MAX_LINE];
+                if (dcl_in_get(dcl_ctx.prompt, fb_buf, sizeof(fb_buf)) < 0) {
+                    if (dcl_in_rearm() && ++ctrlz_run <= 64) {
                         dcl_out_printf("\n");
                         continue;
                     }
@@ -1032,19 +1032,15 @@ int main(int argc, char *argv[])
                     break;
                 }
                 ctrlz_run = 0;
-                size_t flen = strlen(fgets_buf);
-                if (flen > 0 && fgets_buf[flen - 1] == '\n')
-                    fgets_buf[flen - 1] = '\0';
-                line = strdup(fgets_buf);
+                line = strdup(fb_buf);
                 if (!line) break;
             }
         } else {
-            /* Non-interactive: read from stdin */
+            /* Non-interactive: the next record of SYS$INPUT -- a mailbox
+             * message ($QIO), a command file record (RMS $GET), or the
+             * substrate stream (dcl_in.c) */
             static char buf[DCL_MAX_LINE];
-            if (!fgets(buf, sizeof(buf), stdin)) break;
-            /* Remove trailing newline */
-            size_t len = strlen(buf);
-            if (len > 0 && buf[len - 1] == '\n') buf[len - 1] = '\0';
+            if (dcl_in_get(NULL, buf, sizeof(buf)) < 0) break;
             line = strdup(buf);
             if (!line) break;
         }
@@ -1067,23 +1063,13 @@ int main(int argc, char *argv[])
                     if (cn >= 0) {
                         cont = strdup(ccbuf);
                     } else if (cn == DCL_TT_NODRIVER) {
-                        dcl_out_printf("_$ ");
-                        dcl_out_flush();
-                        if (fgets(ccbuf, sizeof(ccbuf), stdin)) {
-                            size_t clen = strlen(ccbuf);
-                            if (clen > 0 && ccbuf[clen - 1] == '\n')
-                                ccbuf[clen - 1] = '\0';
+                        if (dcl_in_get("_$ ", ccbuf, sizeof(ccbuf)) >= 0)
                             cont = strdup(ccbuf);
-                        }
                     }
                 } else {
                     static char cbuf[DCL_MAX_LINE];
-                    if (fgets(cbuf, sizeof(cbuf), stdin)) {
-                        size_t clen = strlen(cbuf);
-                        if (clen > 0 && cbuf[clen - 1] == '\n')
-                            cbuf[clen - 1] = '\0';
+                    if (dcl_in_get(NULL, cbuf, sizeof(cbuf)) >= 0)
                         cont = strdup(cbuf);
-                    }
                 }
 
                 if (cont) {
@@ -1137,6 +1123,7 @@ int main(int argc, char *argv[])
      * and joins the writer thread, so the parent's last read is not lost to
      * process exit. A no-op when SYS$INPUT/SYS$OUTPUT were not mailboxes. */
     dcl_mbx_shutdown();
+    dcl_in_shutdown();
 
     /* Cleanup */
     /* Deallocate terminal device */
@@ -1162,7 +1149,7 @@ int main(int argc, char *argv[])
      * input without an EXIT or LOGOUT ends with the status of the last command, as
      * the subprocess's completion status; a command that failed is not reported as a
      * success to the creator (system() returns it). */
-    if ((mbx_bound & DCL_MBX_BOUND_INPUT) && !dcl_ctx.exit_requested && !dcl_ctx.logout_requested)
+    if (in_routed && !dcl_ctx.exit_requested && !dcl_ctx.logout_requested)
         return (dcl_ctx.last_status & 1) ? 0 : 1;
 
     return dcl_ctx.exit_status;

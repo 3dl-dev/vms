@@ -1,5 +1,6 @@
 /*
- * dcl_mbx.h - bind DCL's SYS$INPUT / SYS$OUTPUT to mailbox devices (vms-786)
+ * dcl_mbx.h - bind DCL's SYS$OUTPUT to a mailbox device (vms-786). A
+ * SYS$INPUT mailbox or file is read by dcl_in.c (rd vms-4d27).
  *
  * When DCL is a subprocess a parent drives over VMS mailboxes -- the shape
  * MMK's send_cmd_and_wait uses to keep one persistent DCL open and feed it
@@ -23,18 +24,12 @@
 #include <stddef.h>
 
 /* Return-bit set from dcl_mbx_bind_std_streams(). */
-#define DCL_MBX_BOUND_INPUT   0x1
 #define DCL_MBX_BOUND_OUTPUT  0x2
 
 /*
- * dcl_mbx_bind_std_streams - if SYS$INPUT and/or SYS$OUTPUT resolve to a
- * mailbox device, bind DCL's stdin/stdout to that mailbox's real executive
- * $QIO path.
+ * dcl_mbx_bind_std_streams - if SYS$OUTPUT resolves to a mailbox device,
+ * bind DCL's output to that mailbox's real executive $QIO path.
  *
- * INPUT: a reader thread blocks in sys$qiow(IO$_READVBLK) on the input mailbox
- *   and feeds each message (as a newline-terminated command record) into a pipe
- *   dup'd onto STDIN_FILENO -- so DCL's existing command-read loop reads
- *   commands, verbatim, that arrived over the mailbox.
  * OUTPUT: a writer thread drains a pipe dup'd onto STDOUT_FILENO and emits each
  *   chunk with sys$qiow(IO$_WRITEVBLK) to the output mailbox -- so every byte
  *   DCL writes to SYS$OUTPUT (WRITE, SHOW, image output) is delivered to the
@@ -46,8 +41,7 @@
  * returns 0, leaving DCL on its ordinary stdin/stdout. It never fabricates a
  * per-process substitute for a mailbox.
  *
- * Returns a bitmask of DCL_MBX_BOUND_INPUT | DCL_MBX_BOUND_OUTPUT (0 if
- * neither stream resolved to a mailbox).
+ * Returns DCL_MBX_BOUND_OUTPUT, or 0 if SYS$OUTPUT is not a mailbox.
  */
 int dcl_mbx_bind_std_streams(void);
 

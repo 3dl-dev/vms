@@ -1,0 +1,31 @@
+# dcl-sysinput-file-not-read -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL reads its commands and READ SYS\$INPUT data from a SYS\$INPUT command file by RMS \$GET (src/vmsdcl/dcl_in.c file_get, rd vms-4d27, vms-003b)";;
+        targets)      echo "vmsdcl/dcl_in.c";;
+        suites_red)   echo "test_syssvc_dcl_input_route test_syssvc_spawn_input";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "file_get() is where each record of the SYS\$INPUT command file is \$GET for DCL's command loop and READ SYS\$INPUT. The mutation reports end of file without the \$GET: the file is still RMS \$OPENed and bound, DCL starts and exits cleanly at what it takes for the end of its input, but no command in the file runs, so no IN4D27 record reaches SYS\$OUTPUT. The suite's RMS read-back of that file reddens; its mailbox drive, which does not take this route, stays green. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOR'
+file: DCL read its commands, the READ SYS$INPUT data record and a continuation, in order, as RMS records of the SYS$INPUT file
+EOR
+                      ;;
+        knock_on_fail) cat <<'EOR'
+the DCL executed the ODS-2 command file (its output reached the output file)
+EOR
+                      ;;
+        knock_on_why)  echo "test_syssvc_spawn_input (vms-ccc) has LIB\$SPAWN hand the subprocess an ODS-2 command file as its INPUT; the spawned DCL reads it through this same file_get, so with every \$GET reporting end of file its WRITE never runs and nothing reaches the output file -- the same single defect, seen from LIB\$SPAWN. The spawn itself and the subprocess's completion stay green.";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one $GET in file_get().
+        sed -i 's|    if (!g_file \|\| !rms_textfile_getline(g_file, buf, bufsz, &too_long))|    if ((void)too_long, 1) /* NEGCTL dcl-sysinput-file-not-read */|' "$_file"
+
+    :
+}

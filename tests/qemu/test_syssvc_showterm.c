@@ -76,6 +76,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -147,7 +148,7 @@ static const char *dcl_path(void)
 
 /*
  * run_dcl - feed one DCL command line to the real DCL.EXE and capture its
- * stdout.
+ * SYS$OUTPUT.
  *
  * `bind` (a device name, or NULL) decides whether the forked process records
  * that terminal -- the console, or an RTAn: -- as its terminal BEFORE exec'ing
@@ -155,13 +156,22 @@ static const char *dcl_path(void)
  * runs, and it is made in the CHILD, after fork and before exec -- the same
  * place and the same two calls as src/ovmx_init/ovmx_init.c's login child.
  * The parent never binds anything, so nothing leaks between runs.
+ *
+ * With an executive, the capture is a mailbox named as DCL's SYS$OUTPUT alone
+ * (OVMX_DCL_SYSOUT_F_OUTPUT_ONLY; rd vms-2f39): the error stream stays off it,
+ * as it always went to /dev/null here. The no-executive rig has no mailbox to
+ * use, so it still captures DCL's stdout into a file.
  */
+static int dcl_exec_present;   /* set by main() once the executive opens */
+
 static int run_dcl(const char *cmdline, const char *bind, char *out, size_t outsz)
 {
     char script[] = "/tmp/showterm_in.XXXXXX";
     char capture[] = "/tmp/showterm_out.XXXXXX";
     char text[512];
-    int sfd, cfd, wstatus, len;
+    int sfd, cfd = -1, wstatus, len;
+    int mbx = dcl_exec_present;
+    struct ovmx_dcl_sysout so;
     pid_t pid;
     ssize_t n;
 
@@ -181,17 +191,25 @@ static int run_dcl(const char *cmdline, const char *bind, char *out, size_t outs
     }
     lseek(sfd, 0, SEEK_SET);
 
-    cfd = mkstemp(capture);
-    if (cfd < 0) {
-        close(sfd);
-        unlink(script);
-        return -1;
+    if (mbx) {
+        if (!(ovmx_dcl_sysout_open_flags(&so, OVMX_DCL_SYSOUT_F_OUTPUT_ONLY) & 1)) {
+            close(sfd);
+            unlink(script);
+            return -1;
+        }
+    } else {
+        cfd = mkstemp(capture);
+        if (cfd < 0) {
+            close(sfd);
+            unlink(script);
+            return -1;
+        }
     }
 
     pid = ovmx_fork_subprocess();
     if (pid == 0) {
-        int devnull;
-
+        if (mbx)
+            ovmx_dcl_sysout_child(&so);   /* SYS$OUTPUT only; fd 1/2 on /dev/null */
         if (bind) {
             uint32_t chan = 0;
             if (vms_kif_assign(bind, &chan) != SS$_NORMAL)
@@ -200,16 +218,26 @@ static int run_dcl(const char *cmdline, const char *bind, char *out, size_t outs
                 _exit(125);
         }
         dup2(sfd, 0);
-        dup2(cfd, 1);
-        devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0)
-            dup2(devnull, 2);
+        if (!mbx) {
+            int devnull;
+
+            dup2(cfd, 1);
+            devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0)
+                dup2(devnull, 2);
+        }
         execl(dcl_path(), dcl_path(), (char *)NULL);
         _exit(127);
     }
     if (pid < 0) {
-        close(sfd); close(cfd);
-        unlink(script); unlink(capture);
+        close(sfd);
+        unlink(script);
+        if (mbx) {
+            ovmx_dcl_sysout_collect(&so, NULL, 0);
+        } else {
+            close(cfd);
+            unlink(capture);
+        }
         return -1;
     }
 
@@ -224,16 +252,28 @@ static int run_dcl(const char *cmdline, const char *bind, char *out, size_t outs
     }
     kill(pid, 9);
     waitpid(pid, &wstatus, 0);
-    close(sfd); close(cfd);
-    unlink(script); unlink(capture);
+    close(sfd);
+    unlink(script);
+    if (mbx) {
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
+    } else {
+        close(cfd);
+        unlink(capture);
+    }
     return -1;
 
 reaped:
-    lseek(cfd, 0, SEEK_SET);
-    n = read(cfd, out, outsz - 1);
-    out[(n > 0) ? (size_t)n : 0] = '\0';
-    close(sfd); close(cfd);
-    unlink(script); unlink(capture);
+    if (mbx) {
+        ovmx_dcl_sysout_collect(&so, out, outsz);
+    } else {
+        lseek(cfd, 0, SEEK_SET);
+        n = read(cfd, out, outsz - 1);
+        out[(n > 0) ? (size_t)n : 0] = '\0';
+        close(cfd);
+        unlink(capture);
+    }
+    close(sfd);
+    unlink(script);
     return 0;
 }
 
@@ -439,6 +479,7 @@ int main(void)
                pass, fail);
         return fail > 0 ? 1 : EXIT_SKIP;
     }
+    dcl_exec_present = 1;
 
     /* ---- 1. UNBOUND: nothing recorded this job's terminal ------------ */
     if (run_dcl("SHOW TERMINAL", NULL, out, sizeof(out)) < 0) {

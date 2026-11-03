@@ -138,8 +138,11 @@ static int run_logger(void)
         line_text(line, sizeof(line), i);
         rab.rab$l_rbf = line;
         rab.rab$w_rsz = (uint16_t)strlen(line);
-        if (sys$put(&rab, 0, 0) != RMS$_NORMAL)
-            bad++;
+        if (sys$put(&rab, 0, 0) != RMS$_NORMAL) {
+            if (bad++ == 0)
+                printf("  logger: $PUT #%d failed sts=%08X stv=%08X\n", i,
+                       (unsigned)rab.rab$l_sts, (unsigned)rab.rab$l_stv);
+        }
     }
     timer_stop();
     if (!(sys$close(&fab, 0, 0) & 1))
@@ -175,8 +178,12 @@ static int run_writer(void)
         for (r = 0; r < BIG_RECS; r++) {
             rab.rab$l_rbf = rec;
             rab.rab$w_rsz = (uint16_t)sizeof(rec);
-            if (sys$put(&rab, 0, 0) != RMS$_NORMAL)
+            if (sys$put(&rab, 0, 0) != RMS$_NORMAL) {
+                printf("  writer: cycle %d $PUT #%d failed sts=%08X stv=%08X\n", c, r,
+                       (unsigned)rab.rab$l_sts, (unsigned)rab.rab$l_stv);
+                fflush(stdout);
                 return 23;
+            }
         }
         if (!(sys$close(&fab, 0, 0) & 1))
             return 24;

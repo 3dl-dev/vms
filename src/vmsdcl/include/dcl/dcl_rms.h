@@ -84,6 +84,33 @@ uint32_t dcl_rms_write_status(const struct dcl_rms_writer *w, uint32_t *stv);
 /* $CLOSE + $DASSGN. Returns the RMS close status. */
 uint32_t dcl_rms_write_close(struct dcl_rms_writer *w);
 
+/* ---- Block I/O (BACKUP savesets, a file's bytes) ---- */
+/* RMS block I/O (FAC=BIO; VSI OpenVMS RMS Reference, "Block I/O"): $READ and
+ * $WRITE move whole 512-byte virtual blocks with no record format. */
+struct dcl_rms_bio;      /* opaque: FAB+RAB over $OPEN or $CREATE, FAC=BIO */
+/* Open `spec` (device/dir-defaulted; `deftype` -- e.g. ".BCK" -- supplied when
+ * the name has no type, may be NULL) for block reads. NULL and *rms_status set
+ * on failure. */
+struct dcl_rms_bio *dcl_rms_bio_open(struct dcl_context *ctx, const char *spec,
+                                     const char *deftype, uint32_t *rms_status);
+/* Create `spec` (new highest version) carrying record format rfm/rat/mrs, for
+ * block writes. NULL and *rms_status set on failure. */
+struct dcl_rms_bio *dcl_rms_bio_create(struct dcl_context *ctx, const char *spec,
+                                       const char *deftype, uint8_t rfm, uint8_t rat,
+                                       uint16_t mrs, uint32_t *rms_status);
+/* The next `len` bytes of the file, as a byte stream over whole-block $READs.
+ * Returns the count read (< len only at end of file), or -1 on an RMS error
+ * (dcl_rms_bio_status says which). */
+long     dcl_rms_bio_read(struct dcl_rms_bio *b, void *buf, size_t len);
+/* Append `len` bytes, $WRITE-ing each block as it fills. 0, or -1 on error. */
+int      dcl_rms_bio_write(struct dcl_rms_bio *b, const void *buf, size_t len);
+/* The status of the last failed $READ/$WRITE (RMS$_NORMAL if none). */
+uint32_t dcl_rms_bio_status(const struct dcl_rms_bio *b);
+/* The full spec the FAB names (device/dir-defaulted, default type applied). */
+const char *dcl_rms_bio_spec(const struct dcl_rms_bio *b);
+/* $WRITE the last partial block (a writer), $CLOSE. The RMS status. */
+uint32_t dcl_rms_bio_close(struct dcl_rms_bio *b);
+
 /* ---- Wildcard directory iteration (DIRECTORY, F$SEARCH) ---- */
 struct dcl_rms_dir;      /* opaque: FAB+NAM over $PARSE/$SEARCH */
 /* Open a wildcard search over `pattern` (a VMS filespec, wildcards allowed). The

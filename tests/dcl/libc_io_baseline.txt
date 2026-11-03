@@ -1,14 +1,12 @@
 # libc I/O call sites per src/vmsdcl file (tests/dcl/libc_io_census.sh).
 # A ratchet: a count may only go DOWN, and when it does this file is lowered
 # with it. Each line is a libc-drop to remove (rd label libc-drop).
-dcl_backup.c 6
 dcl_cmd_file.c 23
 dcl_cmd_misc.c 21
 dcl_cmd_process.c 14
 dcl_cmd_set.c 2
 dcl_cmd_show.c 7
 dcl_editor.c 2
-dcl_help.c 5
 dcl_io.c 2
 dcl_library.c 9
 dcl_main.c 4

@@ -3,9 +3,11 @@
 # EXPECT: contains:LIBC_IO_RATCHET_OK
 # EXPECT_NOT: contains:LIBC_IO_RATCHET_FAIL
 #
-# Negative control for libc drops (vms-28db, vms-20c94): OPEN/READ/WRITE/CLOSE
-# (dcl_cmd_io.c) and @-procedure execution (dcl_script.c's procedure open) must
-# reach files only through RMS and the terminal only through $QIO; a stdio
+# Negative control for libc drops (vms-28db, vms-20c94, vms-3381, vms-539):
+# OPEN/READ/WRITE/CLOSE (dcl_cmd_io.c), @-procedure execution (dcl_script.c's
+# procedure open), HELP's library reads (dcl_help.c, dcl_help_acp.c) and
+# BACKUP's files and savesets (dcl_backup.c) must reach files only through RMS
+# and the terminal only through $QIO; a stdio
 # stream coming back in either fails here. Every other file's count is pinned
 # to tests/dcl/libc_io_baseline.txt and may only shrink. A count below its
 # baseline is reported, not failed, so PRs that remove sites concurrently in
@@ -18,6 +20,17 @@ for pat in 'fopen\s*\(' 'fdopen\s*\(' 'freopen\s*\(' 'fgets\s*\(' '\bdup2?\s*\('
 done
 hits=$(grep -nE 'fopen\s*\(' "$ROOT/src/vmsdcl/dcl_script.c" | grep -vE '^[0-9]+:\s*(\*|//|/\*)')
 [ -n "$hits" ] && { echo "dcl_script.c: @ opens a procedure with fopen: $hits"; bad=1; }
+# HELP reads its libraries and BACKUP its files and savesets only through RMS
+# (vms-3381, vms-539): no stdio stream, directory stream, or host stat/mkdir
+# in either, and none in the HELP engine's RMS seam (dcl_help_acp.c).
+for f in dcl_help.c dcl_backup.c dcl_help_acp.c; do
+    for pat in '\b(fopen|fdopen|freopen|fgets|fread|fwrite|fseek|ftell|getline|getc|fgetc)\s*\(' \
+               '\b(opendir|readdir|scandir|stat|lstat|fstat|mkdir|unlink)\s*\(' \
+               '(^|[^_a-zA-Z0-9.>$])(open|read|write|close)\s*\('; do
+        hits=$(grep -nE "$pat" "$ROOT/src/vmsdcl/$f" | grep -vE '^[0-9]+:\s*(\*|//|/\*)')
+        [ -n "$hits" ] && { echo "$f: libc file I/O is back: $hits"; bad=1; }
+    done
+done
 # One output sink (vms-d4a0): SYS$OUTPUT and SYS$ERROR are written only by
 # dcl_out.c. Any other file writing stdio's stdout/stderr bypasses the sink.
 for f in "$ROOT"/src/vmsdcl/*.c; do

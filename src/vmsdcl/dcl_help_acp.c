@@ -1,19 +1,22 @@
 /*
- * dcl_help_acp.c - the Files-11 ACP read seam for the HELP engine (vms-4ac).
+ * dcl_help_acp.c - the RMS read side of the HELP engine (vms-4ac, vms-3381).
  *
- * dcl_help.c is the pure hierarchical HELP engine; it must stay free of the RMS
- * and vmsfs dependencies so the hermetic engine unit test (tests/dcl/
- * test_help_engine.c) can compile and link it alone. The library READ -- which
- * on the product runtime must go over the executive Files-11 ODS-2 ACP, because
- * the /vms POSIX passthrough it used to fopen() was retired by the atomic flip
- * (epic vms-208) -- lives HERE instead, and dcl_help.c reaches it through two
- * WEAK seams (help_acp_library_text / help_acp_vms_to_linux). This TU is
- * compiled into the images that DO link RMS/vmsfs (DCL.EXE, HELP.EXE); the
- * engine test links it not at all, so those weak references resolve to NULL and
- * dcl_help.c's VMS-spec branch is inert there.
+ * dcl_help.c is the hierarchical HELP engine (parse, navigate, display); every
+ * byte of a HELP library it reads comes from HERE, through RMS:
  *
- * This is the same #pragma-weak layering discipline rms_textfile.c itself uses
- * (LIBVMS sits below RMS, so a hard reference would invert the layering).
+ *   help_acp_library_text(spec)   a .HLP source, record by record ($OPEN,
+ *                                 $CONNECT, $GET via rms_textfile_*);
+ *   help_acp_library_bytes(spec)  a file's bytes by block I/O ($OPEN with
+ *                                 FAC=BIO, $READ), for the compiled .HLB.
+ *
+ * The engine performs no file I/O of its own (libc-drop vms-3381): a library
+ * RMS cannot reach is a miss, and HELP reports %HELP-E-OPENIN. On the product
+ * runtime RMS rides the Files-11 ACP over /dev/vms; where the executive is
+ * absent (host build/test tooling) RMS itself defers to its POSIX layer -- that
+ * is RMS's business, not HELP's. dcl_help.c reaches these through weak
+ * references; this TU supplies them to HELP.EXE and the engine test
+ * (tests/dcl test_help_engine), and DCL.EXE carries its own pair over DCL's
+ * RMS helpers (dcl_cmd_misc.c).
  */
 
 #include <stdio.h>
@@ -22,7 +25,8 @@
 
 #include "ssdef.h"
 #include "rms_textfile.h"       /* RMS text reader over the ACP (LIBVMS) */
-#include "vmsfs/filespec.h"     /* vmsfs_to_linux_path (POSIX fallback) */
+#include <stdint.h>
+#include "rms/rms.h"            /* sys$open/$connect/$read/$close */
 
 /* Grow-and-append `add_len` bytes onto *buf (*cap tracked); NUL-terminate.
  * Returns 0 on success, -1 on OOM (leaving *buf for the caller to free). */
@@ -82,11 +86,67 @@ char *help_acp_library_text(const char *vms_spec)
 }
 
 /*
- * Translate a VMS filespec to its Linux /vms path for the POSIX fallback.
- * Returns 1 on success (buf filled), 0 otherwise. vmsfs_to_linux_path returns a
- * VMS status code (odd == success), NOT 0-on-success.
+ * Read a library file's bytes the VMS way: RMS $OPEN with block-I/O access
+ * (FAC = GET|BIO), $CONNECT, then $READ of whole virtual blocks until RMS$_EOF
+ * (VSI OpenVMS RMS Reference, "Block I/O"). A compiled .HLB is a binary
+ * container, so it is read by block, not by record. NULL when RMS cannot reach
+ * the file; *rms_status (if non-NULL) receives the RMS status either way, and
+ * *len_out the byte count read.
  */
-int help_acp_vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
+char *help_acp_library_bytes(const char *spec, size_t *len_out, uint32_t *rms_status)
 {
-    return $VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vms_spec, buf, bufsz)) ? 1 : 0;
+    struct FAB fab = cc$rms_fab;
+    struct RAB rab = cc$rms_rab;
+    static char blk[63 * 512];            /* the largest whole-block USZ */
+    char *buf = NULL;
+    size_t len = 0, cap = 0;
+    uint32_t st;
+
+    if (len_out) *len_out = 0;
+    if (!spec || !spec[0] || strlen(spec) > 255) {
+        if (rms_status) *rms_status = RMS$_FNM;
+        return NULL;
+    }
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_fac = FAB$M_GET | FAB$M_BIO;
+    fab.fab$b_shr = FAB$M_SHRGET;
+    st = sys$open(&fab, 0, 0);
+    if (!(st & 1)) {
+        if (rms_status) *rms_status = st;
+        return NULL;
+    }
+    rab.rab$l_fab = &fab;
+    st = sys$connect(&rab, 0, 0);
+    if (!(st & 1)) {
+        if (rms_status) *rms_status = st;
+        sys$close(&fab, 0, 0);
+        return NULL;
+    }
+    if (hacp_append(&buf, &len, &cap, "", 0) != 0) {
+        if (rms_status) *rms_status = RMS$_DME;
+        sys$close(&fab, 0, 0);
+        return NULL;
+    }
+    for (;;) {
+        rab.rab$l_ubf = blk;
+        rab.rab$w_usz = (uint16_t)sizeof(blk);
+        rab.rab$l_bkt = 0;                /* the next block in sequence */
+        st = sys$read(&rab, 0, 0);
+        if (st == RMS$_EOF)
+            break;
+        if (!(st & 1) ||
+            hacp_append(&buf, &len, &cap, blk, rab.rab$w_rsz) != 0) {
+            if (rms_status) *rms_status = (st & 1) ? RMS$_DME : st;
+            free(buf);
+            sys$close(&fab, 0, 0);
+            return NULL;
+        }
+        if (rab.rab$w_rsz == 0)
+            break;
+    }
+    sys$close(&fab, 0, 0);
+    if (rms_status) *rms_status = RMS$_NORMAL;
+    if (len_out) *len_out = len;
+    return buf;
 }

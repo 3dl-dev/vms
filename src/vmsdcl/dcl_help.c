@@ -25,28 +25,22 @@
 #include "ssdef.h"
 
 /*
- * vms-4ac: the HELP library (SYS$HELP:HELPLIB.HLP) is read over the Files-11
- * ODS-2 ACP on the product runtime -- the /vms POSIX passthrough it used to
- * fopen() was retired by the atomic flip (epic vms-208), so a runtime HELP
- * answered %HELP-E-OPENIN even though HELPLIB.HLP is mastered on the volume.
+ * A HELP library is read through RMS only (vms-4ac, libc-drop vms-3381): the
+ * engine holds no fopen()/fgets() of its own. It reaches the reads through
+ * two WEAK seams, so the engine carries no RMS dependency itself; each image
+ * that holds the engine supplies them -- DCL.EXE in dcl_cmd_misc.c (DCL's own
+ * RMS reader), HELP.EXE and the engine test in dcl_help_acp.c:
  *
- * The RMS/ACP read lives in a SEPARATE translation unit (dcl_help_acp.c),
- * reached here through TWO WEAK SEAMS so this engine stays free of the RMS and
- * vmsfs dependencies -- the hermetic engine unit test (tests/dcl/
- * test_help_engine.c) compiles THIS file alone and links neither. When the
- * seam is present (DCL.EXE, HELP.EXE), a VMS filespec is read over the ACP with
- * a POSIX /vms fallback; when it is absent (the engine test, which only ever
- * feeds Linux temp paths), the VMS-spec branch is simply inert.
+ *   help_acp_library_text(spec)            -> malloc'd .HLP text, record by
+ *                                             record ($GET), or NULL.
+ *   help_acp_library_bytes(spec,&len,&st)  -> malloc'd file bytes by block
+ *                                             I/O ($READ), or NULL.
  *
- *   help_acp_library_text(spec)          -> malloc'd .HLP text over the ACP, or
- *                                           NULL if the ACP cannot reach it.
- *   help_acp_vms_to_linux(spec,buf,sz)   -> 1 + Linux /vms path for the POSIX
- *                                           fallback, 0 if it cannot translate.
- * The same #pragma weak layering seam rms_textfile.c uses (LIBVMS sits below
- * RMS, so a hard reference would invert the layering).
+ * A library RMS cannot reach -- or an image without the seam -- is an honest
+ * miss (%HELP-E-OPENIN from the caller), never a host-path substitute.
  */
 char *help_acp_library_text(const char *vms_spec) __attribute__((weak));
-int   help_acp_vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
+char *help_acp_library_bytes(const char *spec, size_t *len_out, uint32_t *rms_status)
       __attribute__((weak));
 
 /* ------------------------------------------------------------------ */
@@ -190,25 +184,13 @@ help_lib_t *help_open_text(const char *text)
     return lib;
 }
 
-help_lib_t *help_open_file(const char *linux_path)
+help_lib_t *help_open_file(const char *spec)
 {
-    FILE *fp = fopen(linux_path, "r");
-    if (!fp) return NULL;
-
-    help_lib_t *lib = lib_new();
-    if (!lib) { fclose(fp); return NULL; }
-
-    help_node_t *stack[10] = {0};
-    help_node_t *cur = NULL;
-
-    char line[1024];
-    while (fgets(line, sizeof(line), fp)) {
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-            line[--len] = '\0';
-        parse_line(lib, stack, &cur, line);
-    }
-    fclose(fp);
+    if (!&help_acp_library_text) return NULL;     /* no RMS reader linked */
+    char *text = help_acp_library_text(spec);     /* RMS $GET, record by record */
+    if (!text) return NULL;
+    help_lib_t *lib = help_open_text(text);
+    free(text);
     return lib;
 }
 
@@ -251,187 +233,103 @@ static int str_append(char **buf, size_t *len, size_t *cap,
     return 0;
 }
 
-/* Read a whole file into a fresh NUL-terminated buffer, or NULL. */
-static char *read_whole_file(FILE *fp)
+/* Reconstruct the numbered-level text of a .HLB from its bytes (as RMS block
+ * I/O read them): the header, the module index after it, then each module's
+ * body in index order. Returns malloc'd text, or NULL on a malformed library. */
+static char *hlb_reconstruct_text(const char *data, size_t size)
 {
-    if (fseek(fp, 0, SEEK_END) != 0) return NULL;
-    long n = ftell(fp);
-    if (n < 0) return NULL;
-    if (fseek(fp, 0, SEEK_SET) != 0) return NULL;
-    char *buf = malloc((size_t)n + 1);
-    if (!buf) return NULL;
-    if (n > 0 && (long)fread(buf, 1, (size_t)n, fp) != n) {
-        free(buf);
-        return NULL;
-    }
-    buf[n] = '\0';
-    return buf;
-}
+    struct lbr_header hdr;
+    if (size < sizeof(hdr)) return NULL;
+    memcpy(&hdr, data, sizeof(hdr));
+    if (hdr.magic != LBR_MAGIC || hdr.type != LBR_TYPE_HELP) return NULL;
+    if (hdr.module_count > LBR_MAX_MODULES) return NULL;
 
-/* Reconstruct the numbered-level text of an already-open .HLB (its header
- * already read into *hdr, fp positioned just after the header). Concatenates
- * each module's body in index order. Returns malloc'd text, or NULL. */
-static char *hlb_reconstruct_text(FILE *fp, const struct lbr_header *hdr)
-{
-    if (hdr->module_count > LBR_MAX_MODULES) return NULL;
-
-    struct lbr_module *mods = NULL;
-    if (hdr->module_count > 0) {
-        mods = calloc(hdr->module_count, sizeof(*mods));
-        if (!mods) return NULL;
-        if (fread(mods, sizeof(*mods), hdr->module_count, fp)
-                != hdr->module_count) {
-            free(mods);
-            return NULL;
-        }
-    }
+    size_t idx_len = (size_t)hdr.module_count * sizeof(struct lbr_module);
+    if (size - sizeof(hdr) < idx_len) return NULL;
 
     char *text = NULL;
     size_t len = 0, cap = 0;
-    if (str_append(&text, &len, &cap, "", 0) != 0) { /* ensure non-NULL "" */
-        free(mods);
+    if (str_append(&text, &len, &cap, "", 0) != 0)  /* ensure non-NULL "" */
         return NULL;
-    }
 
-    for (uint32_t i = 0; i < hdr->module_count; i++) {
-        if (mods[i].length == 0) continue;
-        char *chunk = malloc(mods[i].length);
-        if (!chunk) { free(text); free(mods); return NULL; }
-        if (fseek(fp, (long)mods[i].offset, SEEK_SET) != 0 ||
-            fread(chunk, 1, mods[i].length, fp) != mods[i].length) {
-            free(chunk); free(text); free(mods);
+    for (uint32_t i = 0; i < hdr.module_count; i++) {
+        struct lbr_module m;
+        memcpy(&m, data + sizeof(hdr) + (size_t)i * sizeof(m), sizeof(m));
+        if (m.length == 0) continue;
+        if (m.offset > size || m.length > size - m.offset) {
+            free(text);
             return NULL;
         }
-        if (str_append(&text, &len, &cap, chunk, mods[i].length) != 0) {
-            free(chunk); free(text); free(mods);
+        if (str_append(&text, &len, &cap, data + m.offset, m.length) != 0) {
+            free(text);
             return NULL;
         }
-        free(chunk);
         /* A module body ends at its last authored line; guarantee a newline
          * boundary before the next module's level-1 key. */
         if (len > 0 && text[len - 1] != '\n')
             (void)str_append(&text, &len, &cap, "\n", 1);
     }
-
-    free(mods);
     return text;
 }
 
-/* A VMS filespec (DEV:[DIR]NAME.TYP or a device-logical spec) rather than a
- * Linux path: has a ':' or '[' and does not begin with '/'. */
-static int help_is_vms_spec(const char *path)
+/* True when the bytes are a compiled HELP library (LBRO magic, HELP type). */
+static int bytes_are_hlb(const char *data, size_t size)
 {
-    return path && path[0] != '/' &&
-           (strchr(path, ':') != NULL || strchr(path, '[') != NULL);
-}
-
-/* True if the filespec's type is .HLB (a compiled binary LBRO library). The ACP
- * text reader (help_acp_library_text) reads records and would mangle a binary
- * .HLB, so a .HLB is always taken through the POSIX read path, which detects the
- * LBRO magic and reconstructs the numbered-level source. The .HLB library is a
- * build/test artifact; the product volume ships the .HLP source. */
-static int help_type_is_hlb(const char *path)
-{
-    /* Scan the name part only (after the last ']' ':' '/'), find its last '.',
-     * and compare the type -- up to a ';' version -- to "HLB". */
-    const char *base = path;
-    for (const char *p = path; *p; p++)
-        if (*p == ']' || *p == ':' || *p == '/' || *p == '>')
-            base = p + 1;
-
-    const char *dot = NULL;
-    for (const char *p = base; *p && *p != ';'; p++)
-        if (*p == '.') dot = p;
-    if (!dot) return 0;
-
-    return (dot[1] == 'H' || dot[1] == 'h') &&
-           (dot[2] == 'L' || dot[2] == 'l') &&
-           (dot[3] == 'B' || dot[3] == 'b') &&
-           (dot[4] == '\0' || dot[4] == ';');
+    struct lbr_header hdr;
+    if (size < sizeof(hdr)) return 0;
+    memcpy(&hdr, data, sizeof(hdr));
+    return hdr.magic == LBR_MAGIC && hdr.type == LBR_TYPE_HELP;
 }
 
 /*
- * Return the numbered-level source text for one library, given either a VMS
- * filespec or a Linux path.
+ * Return the numbered-level source text for one library (a VMS filespec, or
+ * whatever name RMS accepts), read through RMS only:
  *
- *  - A VMS spec (SYS$HELP:HELPLIB.HLP, HLP$LIBRARY translations) is read over
- *    the Files-11 ACP first (the weak help_acp_library_text seam) -- the product
- *    runtime, where /dev/vms is present and the /vms passthrough is gone. If the
- *    ACP cannot reach it (host build/test tooling with no /dev/vms, or the
- *    netbsd-vax cross), it FALLS BACK to a POSIX read of the translated /vms
- *    path (help_acp_vms_to_linux). On the real runtime a file that is genuinely
- *    absent fails BOTH the ACP read and the POSIX open (/vms does not exist
- *    there), so HELP reports %HELP-E-OPENIN honestly -- never a fabricated
- *    success (Rule 9 / INV-6). This is the same ACP-first, POSIX-for-host dual
- *    backend $SEARCH (rms_search.c) uses. When the seam is absent (engine unit
- *    test), a VMS spec has no reader and yields NULL.
- *  - A Linux path (the $OVMX_HELPLIB locator; temp-file engine tests) is read
- *    directly.
+ *  - its bytes by block I/O first; a compiled .HLB (LBRO magic) is
+ *    reconstructed from them to its numbered-level source;
+ *  - anything else is a .HLP source, read again record by record ($GET), so
+ *    the record framing is RMS's (a VAR file's count words never reach the
+ *    parser).
  *
- * Either way, a compiled .HLB (LBRO magic) is auto-detected on the POSIX read
- * and reconstructed to its numbered-level source; a raw .HLP is returned as-is.
+ * A library RMS cannot reach is NULL -- the caller reports %HELP-E-OPENIN.
  * Malloc'd, or NULL.
  */
-static char *library_source_text(const char *path)
+static char *library_source_text(const char *spec)
 {
-    if (help_is_vms_spec(path)) {
-        /* A .HLP source is line-oriented, so it reads over the ACP text reader;
-         * a binary .HLB does NOT (the record reader would mangle it) -- it goes
-         * straight to the POSIX read below, which detects the LBRO magic and
-         * reconstructs the source. */
-        if (!help_type_is_hlb(path) && &help_acp_library_text) {
-            char *text = help_acp_library_text(path);   /* ACP; NULL on a miss */
-            if (text)
-                return text;
-        }
-        /* POSIX fallback (host tooling / netbsd cross), and the .HLB read path:
-         * translate to the /vms path and read it as a Linux path below (fopen +
-         * .HLB/.HLP auto-detect). On the product runtime /vms does not exist, so
-         * this open fails too -- an honest miss, not a fake (Rule 9 / INV-6). */
-        if (&help_acp_vms_to_linux) {
-            char linux_path[1024];
-            if (help_acp_vms_to_linux(path, linux_path, sizeof(linux_path)))
-                return library_source_text(linux_path);   /* now a Linux path */
-        }
+    size_t size = 0;
+    uint32_t st = 0;
+    if (!&help_acp_library_bytes || !&help_acp_library_text)
+        return NULL;                              /* no RMS reader linked */
+    char *bytes = help_acp_library_bytes(spec, &size, &st);
+    if (!bytes)
         return NULL;
+    if (bytes_are_hlb(bytes, size)) {
+        char *text = hlb_reconstruct_text(bytes, size);
+        free(bytes);
+        return text;
     }
-
-    FILE *fp = fopen(path, "rb");
-    if (!fp) return NULL;
-
-    struct lbr_header hdr;
-    char *text;
-    if (fread(&hdr, sizeof(hdr), 1, fp) == 1 && hdr.magic == LBR_MAGIC &&
-        hdr.type == LBR_TYPE_HELP) {
-        text = hlb_reconstruct_text(fp, &hdr);
-    } else {
-        text = read_whole_file(fp);
-    }
-    fclose(fp);
-    return text;
+    free(bytes);
+    return help_acp_library_text(spec);
 }
 
-help_lib_t *help_open_hlb(const char *linux_path)
+help_lib_t *help_open_hlb(const char *spec)
 {
-    FILE *fp = fopen(linux_path, "rb");
-    if (!fp) return NULL;
-    struct lbr_header hdr;
-    if (fread(&hdr, sizeof(hdr), 1, fp) != 1 || hdr.magic != LBR_MAGIC ||
-        hdr.type != LBR_TYPE_HELP) {
-        fclose(fp);
-        return NULL;
-    }
-    char *text = hlb_reconstruct_text(fp, &hdr);
-    fclose(fp);
+    size_t size = 0;
+    uint32_t st = 0;
+    if (!&help_acp_library_bytes) return NULL;    /* no RMS reader linked */
+    char *bytes = help_acp_library_bytes(spec, &size, &st);
+    if (!bytes) return NULL;
+    char *text = hlb_reconstruct_text(bytes, size);
+    free(bytes);
     if (!text) return NULL;
     help_lib_t *lib = help_open_text(text);
     free(text);
     return lib;
 }
 
-help_lib_t *help_open_any(const char *linux_path)
+help_lib_t *help_open_any(const char *spec)
 {
-    char *text = library_source_text(linux_path);
+    char *text = library_source_text(spec);
     if (!text) return NULL;
     help_lib_t *lib = help_open_text(text);
     free(text);
@@ -789,7 +687,7 @@ void help_set_reader(help_read_fn fn)
 /* "Topic? " at the top, "<KEY> ... Subtopic? " inside a topic: a prompt on
  * a new line of its own (no fill), as INQUIRE's is */
 static int read_prompted(char stack[][128], int depth, char *line,
-                         size_t sz, FILE *in, FILE *out)
+                         size_t sz, FILE *out)
 {
     char prompt[HELP_MAX_DEPTH * 130 + 16];
     size_t pl = 0;
@@ -802,15 +700,13 @@ static int read_prompted(char stack[][128], int depth, char *line,
         prompt[pl++] = ' ';
     }
     memcpy(prompt + pl, depth ? "Subtopic? " : "Topic? ", depth ? 11 : 8);
-    if (g_reader) {
-        fflush(out);
-        return g_reader(prompt, line, sz);
-    }
-    fputs(prompt + 1, out);       /* a plain stream: "\nTopic? " */
+    /* The line comes only from the caller's reader (DCL: the terminal through
+     * $QIO, dcl_tt_read_line) -- the engine reads no stream itself
+     * (libc-drop vms-3381). No reader: nothing to read, as at end of file. */
     fflush(out);
-    if (!fgets(line, (int)sz, in))
+    if (!g_reader)
         return -1;
-    return 0;
+    return g_reader(prompt, line, sz);
 }
 
 static void show_level(help_lib_t *lib, char stack[][128], int depth,
@@ -841,7 +737,7 @@ static void show_offer(help_lib_t *lib, char stack[][128], int depth, FILE *out)
 }
 
 void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
-                      FILE *in, FILE *out)
+                      FILE *out)
 {
     char stack[HELP_MAX_DEPTH][128];
     int depth = 0;
@@ -870,7 +766,7 @@ void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
 
     char line[256];
     for (;;) {
-        if (read_prompted(stack, depth, line, sizeof line, in, out) != 0)
+        if (read_prompted(stack, depth, line, sizeof line, out) != 0)
             break;                         /* CTRL/Z or EOF */
 
         size_t len = strlen(line);

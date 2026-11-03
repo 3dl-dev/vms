@@ -52,6 +52,7 @@
 #include <poll.h>       /* the --fal-proc-accept-test pump only (selftest; rd vms-d3cd) */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -116,6 +117,148 @@ extern struct vms_pcb *vms_pcb_init(uint64_t initial_privs);
  * from the running process (vms-15a/a70). Defined with run_set_host_loop; the
  * --set-host-src-codes-selftest above it asserts the codes are nonzero. */
 static void sethost_src_codes(uint16_t *grp, uint16_t *usr);
+
+/*
+ * ===================== NETACP.LOG through RMS (rd vms-0a7 S3) =====================
+ * NCP creates NETACP detached with /OUTPUT=/ERROR=SYS$MANAGER:NETACP.LOG: the
+ * process gets SYS$OUTPUT / SYS$ERROR in LNM$PROCESS naming that file and no
+ * terminal. When NETACP starts it $CREATEs the file through RMS
+ * (rms_textfile_create, over the Files-11 ACP) and files every line it writes
+ * as one record ($PUT at EOF, rms_textfile_append_line) -- synchronously, in
+ * this process: no reader thread, no pipe, no poll() (the generic run-time
+ * routine src/libvms/rtl/sysoutput_rms.c uses all three, so NETACP does not
+ * link it). A line is formatted with vsnprintf (no I/O) and only then filed.
+ *
+ * printf / fprintf(stdout|stderr) / fflush below are redirected to this sink
+ * for the code AFTER this point, so the existing reports need no rewrite. A
+ * stream whose logical is not a file (a terminal, NL:) -- the test image, a
+ * foreground run -- falls through to the C library unchanged. If the file
+ * cannot be created through RMS the line is discarded, never written to a host
+ * file (INV-6, no POSIX fallback).
+ */
+#define NETACP_LOG_REC 512
+struct netacp_log_sink {
+    int  on;
+    char spec[256];
+    char line[NETACP_LOG_REC + 1];
+    size_t len;
+};
+static struct netacp_log_sink g_nlog[2];      /* [0] SYS$OUTPUT, [1] SYS$ERROR */
+
+static int netacp_log_is_file(const char *v, size_t len)
+{
+    if (len == 0 || v[0] == '/' || vms_lnm_is_ppf(v, (uint32_t)len))
+        return 0;
+    if (strpbrk(v, "[<"))
+        return 1;
+    const char *col = strrchr(v, ':');
+    return col && col[1] != '\0';
+}
+
+static void netacp_log_open(void)
+{
+    static const char *const ln[2] = { "SYS$OUTPUT", "SYS$ERROR" };
+    for (int i = 0; i < 2; i++) {
+        struct netacp_log_sink *k = &g_nlog[i];
+        uint16_t len = 0;
+        uint32_t attrs = 0;
+        memset(k, 0, sizeof *k);
+        if (vms_kif_lnm_translate(VMS_LNM_TBL_PROCESS, ln[i], 0, k->spec,
+                                  (uint32_t)sizeof k->spec - 1, &len, &attrs, NULL) != 1)
+            continue;
+        if (len >= sizeof k->spec) len = sizeof k->spec - 1;
+        k->spec[len] = '\0';
+        if (!netacp_log_is_file(k->spec, len))
+            continue;
+        if (i == 1 && g_nlog[0].on && strcasecmp(k->spec, g_nlog[0].spec) == 0) {
+            k->on = 2;                            /* SYS$ERROR shares SYS$OUTPUT's file */
+            continue;
+        }
+        k->on = (rms_textfile_create(k->spec) & 1) ? 1 : 0;
+    }
+}
+
+static struct netacp_log_sink *netacp_log_sink(FILE *f)
+{
+    struct netacp_log_sink *k = f == stdout ? &g_nlog[0] : f == stderr ? &g_nlog[1] : NULL;
+    if (k && k->on == 2) k = &g_nlog[0];
+    return (k && k->on) ? k : NULL;
+}
+
+static void netacp_log_put(struct netacp_log_sink *k)
+{
+    while (k->len > 0 && k->line[k->len - 1] == '\r')
+        k->len--;
+    k->line[k->len] = '\0';
+    (void)rms_textfile_append_line(k->spec, k->line);
+    k->len = 0;
+}
+
+static void netacp_log_take(struct netacp_log_sink *k, const char *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (b[i] == '\n') { netacp_log_put(k); continue; }
+        k->line[k->len++] = b[i];
+        if (k->len == NETACP_LOG_REC)
+            netacp_log_put(k);
+    }
+}
+
+static int netacp_vfprintf(FILE *f, const char *fmt, va_list ap)
+{
+    struct netacp_log_sink *k = netacp_log_sink(f);
+    if (!k)
+        return vfprintf(f, fmt, ap);
+    char b[2048];
+    int n = vsnprintf(b, sizeof b, fmt, ap);
+    if (n > 0)
+        netacp_log_take(k, b, (size_t)n < sizeof b ? (size_t)n : sizeof b - 1);
+    return n;
+}
+
+static int netacp_fprintf(FILE *f, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static int netacp_fprintf(FILE *f, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = netacp_vfprintf(f, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+static int netacp_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static int netacp_printf(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    int n = netacp_vfprintf(stdout, fmt, ap);
+    va_end(ap);
+    return n;
+}
+
+static int netacp_fflush(FILE *f)
+{
+    return (f && netacp_log_sink(f)) ? 0 : fflush(f);
+}
+
+/* A library report that writes to a FILE (dnet_engine_show_*): formatted into
+ * memory, then filed line by line like every other report. */
+static void netacp_log_report(FILE *f, void (*show)(const struct dnet_engine *, FILE *),
+                              const struct dnet_engine *e)
+{
+    struct netacp_log_sink *k = netacp_log_sink(f);
+    if (!k) { show(e, f); return; }
+    char *buf = NULL; size_t n = 0;
+    FILE *m = open_memstream(&buf, &n);
+    if (!m) return;
+    show(e, m);
+    fclose(m);
+    if (buf) { netacp_log_take(k, buf, n); free(buf); }
+}
+
+#define printf(...)       netacp_printf(__VA_ARGS__)
+#define fprintf(f, ...)   netacp_fprintf(f, __VA_ARGS__)
+#define fflush(f)         netacp_fflush(f)
 
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
  * bridge model that carries raw Phase IV multicast; SLIRP cannot, see
@@ -2942,14 +3085,17 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
  */
 #define NETACP_REQ_PROMSK 0xDF00u
 
+static char g_breq_dev[64];          /* the request mailbox device, MBAn: */
+
 static int netacp_broker_start(uint32_t *chan)
 {
     uint32_t unit = 0;
-    char dev[64] = "";
+    char *dev = g_breq_dev;
+    dev[0] = '\0';
     uint32_t st = vms_kif_mbx_create_prot(0, DNET_BROKER_REQ_MAX + 16,
                                           (DNET_BROKER_REQ_MAX + 16) * 32,
                                           NETACP_REQ_PROMSK, chan, &unit, dev,
-                                          sizeof dev);
+                                          sizeof g_breq_dev);
     if (!(st & 1)) {
         log_ts(stdout);
         printf(" DECNETD-W-NOBROKER, could not create the _NET: request mailbox"
@@ -3070,6 +3216,116 @@ static void netacp_broker_drain(uint32_t chan, struct netacp_slot *slots,
 }
 
 /*
+ * ===================== HOW NETACP WAITS (rd vms-0a7 S3) =====================
+ * The VMS way: one $WFLOR on two local event flags, no thread and no poll().
+ *
+ *   NETACP_EFN_REQ  an asynchronous $QIO IO$_READVBLK on the request mailbox
+ *                   (a channel $ASSIGNed to it): it completes -- IOSB, event
+ *                   flag -- when a client process's request arrives, and its
+ *                   IOSB's second longword is the executive's stamp of the
+ *                   writer's PID, which the forgery check reads.
+ *   NETACP_EFN_TMR  $SETIMR for the protocol's next deadline: the hello
+ *                   cadence, NSP's retransmit and flow-control timers, the
+ *                   sessions' local side, and the datalink.
+ *
+ * The datalink is the one input with no completion of its own: the executive's
+ * L2 port (VMS_IOCTL_L2_RECV) has a receive with a timeout but no pending-read
+ * queue that could set an event flag (follow-up recorded on the S3 PR). So each
+ * wake takes every frame waiting, through that receive at its shortest timeout
+ * (1 ms), and the timer is short (5 ms) while any link is live. A request never
+ * waits on the timer.
+ */
+#define NETACP_EFN_TMR      20u
+#define NETACP_EFN_REQ      21u
+#define NETACP_TMR_REQIDT   0x4E414350u        /* 'NACP' */
+#define NETACP_RX_BURST     64
+
+struct netacp_iosb { uint16_t status, count; uint32_t dev_depend; };
+static uint16_t g_req_qchan;
+static uint8_t g_req_buf[DNET_BROKER_REQ_MAX + 16];
+static struct netacp_iosb g_req_iosb;
+static int g_req_posted;
+
+static int netacp_req_post(void)
+{
+    memset(&g_req_iosb, 0, sizeof g_req_iosb);
+    uint32_t st = sys$qio(NETACP_EFN_REQ, g_req_qchan, IO$_READVBLK, &g_req_iosb,
+                          NULL, 0, g_req_buf, (uint32_t)sizeof g_req_buf, 0, 0, 0, 0);
+    g_req_posted = (st & 1) ? 1 : 0;
+    if (!g_req_posted) {
+        log_ts(stdout);
+        printf(" DECNETD-W-REQQIO, $QIO read of the request mailbox %s failed"
+               " (status %08X); requests are taken on the timer\n", g_breq_dev,
+               (unsigned)st);
+        fflush(stdout);
+    }
+    return g_req_posted;
+}
+
+/* $ASSIGN a channel to the request mailbox and queue the first read. */
+static int netacp_req_arm(void)
+{
+    struct dsc$descriptor_s d = { (uint16_t)strlen(g_breq_dev), DSC$K_DTYPE_T,
+                                  DSC$K_CLASS_S, g_breq_dev };
+    uint32_t st = sys$assign(&d, &g_req_qchan, 0, NULL, 0);
+    if (!(st & 1)) {
+        log_ts(stdout);
+        printf(" DECNETD-W-REQASSIGN, $ASSIGN %s failed (status %08X); requests"
+               " are taken on the timer\n", g_breq_dev, (unsigned)st);
+        fflush(stdout);
+        g_req_qchan = 0;
+        return 0;
+    }
+    return netacp_req_post();
+}
+
+/* The request read completed: service it (and anything queued behind it,
+ * IO$M_NOW), then queue the next read. Without a queued read (the $QIO was
+ * refused) the timer takes the requests, IO$M_NOW. */
+static void netacp_broker_service(uint32_t chan, struct netacp_slot *slots,
+                                  const struct dnet_engine *node, int sock,
+                                  unsigned ifindex, dnet_tick_t now, uint16_t *next_lla)
+{
+    if (g_req_posted) {
+        if (g_req_iosb.status == 0)
+            return;                                     /* still outstanding */
+        g_req_posted = 0;
+        if (g_req_iosb.status & 1) {
+            size_t got = g_req_iosb.count;
+            netacp_broker_record(slots, node, sock, ifindex, g_req_buf,
+                                 got > sizeof g_req_buf ? sizeof g_req_buf : got, 1,
+                                 g_req_iosb.dev_depend, now, next_lla);
+        }
+        netacp_broker_drain(chan, slots, node, sock, ifindex, now, next_lla);
+        (void)netacp_req_post();
+        return;
+    }
+    netacp_broker_drain(chan, slots, node, sock, ifindex, now, next_lla);
+    if (g_req_qchan)
+        (void)netacp_req_post();
+}
+
+/* Sleep until the timer runs out or a request arrives: $SETIMR + $WFLOR. */
+static int netacp_wait_ms(unsigned ms)
+{
+    uint64_t dt = (uint64_t)(-(int64_t)ms * 10000);       /* delta, 100 ns units */
+    (void)sys$clref(NETACP_EFN_TMR);
+    uint32_t st = sys$setimr(NETACP_EFN_TMR, &dt, NULL, NETACP_TMR_REQIDT, 0);
+    if (!(st & 1)) {
+        log_ts(stderr);
+        fprintf(stderr, " DECNETD-F-SETIMR, $SETIMR failed (status %08X); NETACP"
+                        " cannot keep its timers and stops\n", (unsigned)st);
+        return -1;
+    }
+    uint32_t mask = 1u << NETACP_EFN_TMR;
+    if (g_req_posted)
+        mask |= 1u << NETACP_EFN_REQ;
+    st = sys$wflor(NETACP_EFN_TMR, mask);
+    (void)sys$cantim(NETACP_TMR_REQIDT, 0);
+    return (st & 1) ? 0 : -1;
+}
+
+/*
  * rd vms-158d: what a real VMS node's operator sees when DECnet comes up --
  * NETACP's OPCOM message "DECnet starting" (tests/lab/captures/
  * vms-52d-0b01-oracle-20261013/armA-vax1-console.log: "Message from user
@@ -3157,6 +3413,11 @@ static int netacp_run(const struct netacp_cfg *cfg)
     const char *set_host_user = cfg->set_host_user;
     int router_mode = cfg->router_mode;
     int router_priority = cfg->router_priority;
+
+    /* The detached NETACP's SYS$OUTPUT / SYS$ERROR is NETACP.LOG: $CREATE it
+     * through RMS before the first report. */
+    if (cfg->detached)
+        netacp_log_open();
 
     if ((router_mode || set_host_to) && !cterm_server_explicit)
         cterm_server = 0;
@@ -3309,8 +3570,8 @@ static int netacp_run(const struct netacp_cfg *cfg)
         }
         if (router_mode)
             dnet_engine_set_router(&e, (uint8_t)router_priority);
-        dnet_engine_show_executor(&e, stdout);
-        dnet_engine_show_circuit(&e, stdout);
+        netacp_log_report(stdout, dnet_engine_show_executor, &e);
+        netacp_log_report(stdout, dnet_engine_show_circuit, &e);
         /* Report, honestly, whether the persistent daemon would SERVE inbound
          * $ SET HOST -- the serve decision STARTNET.COM's NETACP inherits (the
          * endnode daemon serves object 42 by default; a router or --set-host
@@ -3498,8 +3759,8 @@ static int netacp_run(const struct netacp_cfg *cfg)
            " (wire engine demoted to NETACP's datalink; the raw L2 path hidden"
            " behind the _NET: device face, Rule 1)\n",
            router_mode ? "L1 router" : "endnode", eng.circuit);
-    dnet_engine_show_executor(&eng, stdout);
-    dnet_engine_show_circuit(&eng, stdout);
+    netacp_log_report(stdout, dnet_engine_show_executor, &eng);
+    netacp_log_report(stdout, dnet_engine_show_circuit, &eng);
     /* Say, honestly, whether this NETACP serves inbound $ SET HOST. When it
      * does, an inbound object-42 connect reaches LOGINOUT on an executive-minted
      * RTAn: (a bounded pool of sessions, rd vms-6af1); the remote user authenticates fresh. */
@@ -3584,6 +3845,11 @@ static int netacp_run(const struct netacp_cfg *cfg)
     g_netacp_serve_inbound = cterm_server;
     uint32_t breq_chan = 0;
     int broker = router_mode ? 0 : netacp_broker_start(&breq_chan);
+    if (broker)
+        (void)netacp_req_arm();
+    /* The datalink receive takes whatever is waiting: its shortest timeout. */
+    (void)scs_datalink_set_recv_timeout_ms(sock, 1);
+    int rx_fatal = 0;
 
     while (!g_stop) {
         dnet_tick_t now = monotonic_sec();
@@ -3638,61 +3904,74 @@ static int netacp_run(const struct netacp_cfg *cfg)
             fflush(stdout);
         }
 
-        /* Serve every live session's local side (never blocks), then wait on
-         * the wire only briefly while sessions are live -- so a session's
-         * output is not held back by an idle wire. */
+        /* Serve every live session's local side and every request that has
+         * arrived (never blocks). */
         int live = 0;
         if (cterm_server || broker)
             live = netacp_service_sessions(slots, sock, ifindex, now);
         if (broker)
-            netacp_broker_drain(breq_chan, slots, &eng, sock, ifindex, now, &next_lla);
+            netacp_broker_service(breq_chan, slots, &eng, sock, ifindex, now, &next_lla);
         netacp_loop_drain(slots, &eng, sock, ifindex, now, &next_lla);
+
+        /* Every frame waiting on the datalink. */
+        for (int k = 0; k < NETACP_RX_BURST && !g_stop; k++) {
+            ssize_t n = scs_datalink_recv(sock, rxbuf, sizeof(rxbuf));
+            if (n < 0) {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+                    break;                       /* nothing (more) waiting */
+                fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n", strerror(errno));
+                rx_fatal = 1;
+                break;
+            }
+            now = monotonic_sec();
+            char afrom[8];
+            uint8_t from[6];
+            enum dnet_adj_state st = DNET_ADJ_DOWN;
+            int rc = dnet_engine_rx_frame(&eng, now, rxbuf, (size_t)n, from, &st);
+
+            /* INBOUND SESSION DISPATCH (rd vms-f40 CTERM 42, rd vms-d85 FAL 17,
+             * rd vms-6af1 pool). A frame the routing/HELLO path did not claim
+             * may be an NSP logical-link frame: it is demultiplexed to its
+             * session by our logical-link address, or -- a Connect Initiate --
+             * offered to a free slot. UNTRUSTED, UNAUTHENTICATED bytes, parsed
+             * under bounds; every refusal leaves the peer disconnected rather
+             * than admitted (INV-6). */
+            if ((cterm_server || broker) && rc != 1)
+                netacp_dispatch_frame(slots, &eng, sock, ifindex, rxbuf, (size_t)n,
+                                      now, &next_lla);
+            netacp_loop_drain(slots, &eng, sock, ifindex, now, &next_lla);
+
+            if (rc == 1) {
+                uint16_t na = dnet_addr_from_id(from);
+                if (st == DNET_ADJ_UP) {
+                    log_ts(stdout);
+                    printf(" DECNETD-I-ADJUP, adjacency to %s is up on circuit %s\n",
+                           dnet_addr_str(na, afrom, sizeof(afrom)), eng.circuit);
+                } else {
+                    log_ts(stdout);
+                    printf(" DECNETD-I-ADJINIT, heard %s (%s) on circuit %s\n",
+                           dnet_addr_str(na, afrom, sizeof(afrom)),
+                           st == DNET_ADJ_INITIALIZING ? "initializing" : "?",
+                           eng.circuit);
+                }
+                fflush(stdout);
+            }
+        }
+        if (rx_fatal)
+            break;
+
+        /* Sleep: $SETIMR for the next deadline, $WFLOR on it and the request
+         * read. Short while a link is live (NSP timers, the client's next
+         * request, the peer's next segment); idle, it bounds the latency of
+         * a Connect Initiate and the hello cadence. */
         int outbound = 0;
         for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
             outbound += slots[i].used && slots[i].outbound;
-        /* A client polls its outbound link through the broker, so while one is
-         * live the wire wait is short; idle, it bounds request latency. */
-        (void)scs_datalink_set_recv_timeout_ms(sock, outbound ? 5 : live ? 20
-                                                     : broker ? 100 : 250);
-
-        ssize_t n = scs_datalink_recv(sock, rxbuf, sizeof(rxbuf));
-        if (n < 0) {
-            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
-                continue; /* timer wakeup / signal -- re-check cadence */
-            fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n", strerror(errno));
+        live = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            live += slots[i].used;
+        if (netacp_wait_ms(outbound || live ? 5u : 100u) != 0)
             break;
-        }
-        char afrom[8];
-        uint8_t from[6];
-        enum dnet_adj_state st = DNET_ADJ_DOWN;
-        int rc = dnet_engine_rx_frame(&eng, now, rxbuf, (size_t)n, from, &st);
-
-        /* INBOUND SESSION DISPATCH (rd vms-f40 CTERM 42, rd vms-d85 FAL 17,
-         * rd vms-6af1 pool). A frame the routing/HELLO path did not claim may be
-         * an NSP logical-link frame: it is demultiplexed to its session by our
-         * logical-link address, or -- a Connect Initiate -- offered to a free
-         * slot. UNTRUSTED, UNAUTHENTICATED bytes, parsed under bounds; every
-         * refusal leaves the peer disconnected rather than admitted (INV-6). */
-        if ((cterm_server || broker) && rc != 1)
-            netacp_dispatch_frame(slots, &eng, sock, ifindex, rxbuf, (size_t)n,
-                                  now, &next_lla);
-        netacp_loop_drain(slots, &eng, sock, ifindex, now, &next_lla);
-
-        if (rc == 1) {
-            uint16_t na = dnet_addr_from_id(from);
-            if (st == DNET_ADJ_UP) {
-                log_ts(stdout);
-                printf(" DECNETD-I-ADJUP, adjacency to %s is up on circuit %s\n",
-                       dnet_addr_str(na, afrom, sizeof(afrom)), eng.circuit);
-            } else {
-                log_ts(stdout);
-                printf(" DECNETD-I-ADJINIT, heard %s (%s) on circuit %s\n",
-                       dnet_addr_str(na, afrom, sizeof(afrom)),
-                       st == DNET_ADJ_INITIALIZING ? "initializing" : "?",
-                       eng.circuit);
-            }
-            fflush(stdout);
-        }
     }
 
     for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
@@ -3702,7 +3981,7 @@ static int netacp_run(const struct netacp_cfg *cfg)
 
     log_ts(stdout);
     printf(" DECNETD-I-STOPPING, shutting down circuit %s\n", eng.circuit);
-    dnet_engine_show_adjacent(&eng, stdout);
+    netacp_log_report(stdout, dnet_engine_show_adjacent, &eng);
     printf("DECNETD-I-COUNTERS, hello_sent=%lu hello_recv=%lu frames_recv=%lu"
            " frames_dropped=%lu adj_up=%lu adj_down=%lu\n",
            eng.hello_sent, eng.hello_recv, eng.frames_recv, eng.frames_dropped,

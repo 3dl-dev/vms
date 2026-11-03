@@ -966,7 +966,11 @@ assert_crtlsig() {
            "^CRTLSIG: mask held=1 then action=1$" \
            "^CRTLSIG: alarm action=1 pause=-1 errno=EINTR seen-ASTFLT=1$" \
            "^CRTLSIG: kill own-VMS-PID rc=0 action=1$"; do
-    tr -d '\r' < "$log" | grep >/dev/null -aE "$l" || { echo "  assert_crtlsig: no line matching '$l'" >&2; return 1; }
+    tr -d '\r' < "$log" | grep >/dev/null -aE "$l" || {
+      echo "  assert_crtlsig: no line matching '$l'" >&2
+      # the raw bytes of every CRTLSIG line, so an invisible byte is seen
+      grep -a "CRTLSIG" "$log" | od -c | head -60 >&2
+      return 1; }
   done
   return 0
 }

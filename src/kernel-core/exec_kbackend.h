@@ -615,6 +615,10 @@
  *        receive up to len bytes; returns the count (0 == orderly peer close /
  *        EOF), or negative on error. MAY SLEEP. Linux: kernel_recvmsg. NetBSD:
  *        uio -> soreceive.
+ *   long exec_socket_recv_now(exec_socket_t s, void *buf, size_t len)
+ *        exec_socket_recv that never waits (IO$M_NOW): negative -EAGAIN when no
+ *        data is queued. Linux: kernel_recvmsg(MSG_DONTWAIT). NetBSD: soreceive
+ *        with MSG_DONTWAIT.
  *   int  exec_socket_shutdown(exec_socket_t s)
  *        shut both directions down. Linux: kernel_sock_shutdown(SHUT_RDWR).
  *        NetBSD: soshutdown(SHUT_RDWR).

@@ -257,6 +257,18 @@
 #define SS__TIMEOUT     556
 #define SS__HANGUP      716
 /*
+ * BGn: connect completions (rd vms-d0c4). A connect that the far side or the
+ * network refuses completes with the condition VMS TCP/IP Services reports for
+ * it, not a generic SS$_ABORT: connection refused (ECONNREFUSED) is
+ * SS$_REJECT, no route to the network/host (ENETUNREACH / EHOSTUNREACH) is
+ * SS$_UNREACHABLE, and a connect that timed out (ETIMEDOUT) is SS$_TIMEOUT
+ * (above). Values are the oracle's: docs/oracle/vax73-starlet-defs/SSDEF.txt
+ * "$EQU SS$_REJECT 660" and "$EQU SS$_UNREACHABLE 8340"; ssdef.h carries the
+ * same values and the same citation.
+ */
+#define SS__REJECT      660
+#define SS__UNREACHABLE 8340
+/*
  * Allocation statuses. Unlike the four above, these two were measured
  * directly on the oracle rather than inherited: VMS's own message
  * facility on the ~/vax OpenVMS VAX V7.3 lab reports

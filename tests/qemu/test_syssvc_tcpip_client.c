@@ -181,6 +181,21 @@ static void *telnet_mock(void *arg)
     return NULL;
 }
 
+/* ============ late-data peer for the IO$M_NOW read (rd vms-a6b) ============ */
+static void *late_mock(void *arg)
+{
+    int lsock = *(int *)arg;
+    int c = accept(lsock, NULL, NULL);
+    if (c >= 0) {
+        usleep(300 * 1000);             /* nothing for 300 ms ... */
+        send_str(c, "LATE");
+        usleep(200 * 1000);
+        close(c);                       /* ... then an orderly close */
+    }
+    close(lsock);
+    return NULL;
+}
+
 /* ============ FTP server mock (the loopback other end) ============ */
 struct ftpd_ctx {
     int      lsock;                 /* control listener */
@@ -383,6 +398,10 @@ int main(void)
             CHECK(!(st & 1) && conn.chan == 0 && !conn.connected,
                   "TELNET/FTP connect to a port nobody listens on FAILS (the IOSB status), and the"
                   " channel is released -- never a connection reported open");
+            /* rd vms-d0c4: the refusal is the condition TCP/IP Services reports
+             * for ECONNREFUSED, not a generic abort. */
+            CHECK(st == SS$_REJECT,
+                  "the refused connect completes SS$_REJECT (connection refused)");
             if (st & 1)
                 tcpip_close(&conn);
         }
@@ -429,6 +448,54 @@ int main(void)
                                    &got, &has_iac);
             CHECK((st & 1) && strstr(buf, "PING OVMX") != NULL,
                   "TELNET reads the line echoed back by the server");
+
+            tcpip_close(&conn);
+            pthread_join(th, NULL);
+        }
+    }
+
+    /* ---------------- IO$M_NOW read (rd vms-a6b) ----------------
+     * The TELNET verb serves the terminal and the connection in one loop with
+     * $QIOW IO$_READVBLK|IO$M_NOW and a $SETIMR/$WAITFR idle wait -- no poll()
+     * on a Linux fd. Prove the three outcomes the loop depends on. */
+    {
+        uint16_t port = 0;
+        int lsock = listen_loopback(&port);
+        CHECK(lsock >= 0, "IO$M_NOW peer listens on 127.0.0.1");
+        if (lsock >= 0) {
+            pthread_t th;
+            struct tcpip_conn conn;
+            char buf[64];
+            uint32_t got = 0, st, total = 0;
+            int closed = 0, i;
+            uint64_t tick = (uint64_t)(-(int64_t)200000);   /* 20 ms delta */
+
+            pthread_create(&th, NULL, late_mock, &lsock);
+            st = tcpip_connect(&conn, lo_be, port);
+            CHECK(st & 1, "IO$M_NOW: connect to the late-data peer");
+
+            st = tcpip_recv_now(&conn, buf, sizeof buf, &got);
+            CHECK(st == SS$_ENDOFFILE && got == 0,
+                  "IO$M_NOW read with nothing queued completes at once with SS$_ENDOFFILE");
+
+            memset(buf, 0, sizeof buf);
+            for (i = 0; i < 200 && !closed; i++) {
+                st = tcpip_recv_now(&conn, buf + total, sizeof buf - 1 - total, &got);
+                if (st == SS$_ENDOFFILE) {
+                    sys$clref(40);
+                    if (sys$setimr(40, &tick, NULL, 0, 0) & 1)
+                        sys$waitfr(40);         /* the loop's idle wait */
+                } else if (!(st & 1)) {
+                    break;
+                } else if (got == 0) {
+                    closed = 1;                 /* orderly close */
+                } else {
+                    total += got;
+                }
+            }
+            CHECK(total == 4 && memcmp(buf, "LATE", 4) == 0,
+                  "IO$M_NOW read returns the bytes once they have arrived");
+            CHECK(closed, "IO$M_NOW read of a closed connection is SS$_NORMAL with 0 bytes");
 
             tcpip_close(&conn);
             pthread_join(th, NULL);

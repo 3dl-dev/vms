@@ -114,12 +114,18 @@ struct vms_bg_connect_args {
  * coalesce or split, so `len` on a read is the actual count the host kernel
  * returned, which a caller reads back through the IOSB byte count.
  */
+/* IO$M_NOW on a BGn: read (rd vms-a6b): complete at once. With nothing
+ * received the IOSB status is SS$_ENDOFFILE and no bytes moved (the same
+ * convention as an IO$M_NOW read of an empty mailbox); an orderly peer close
+ * is still SS$_NORMAL with zero bytes. */
+#define VMS_BG_IOF_NOW 0x1u
+
 struct vms_bg_io_args {
     uint32_t chan;          /* in */
     uint32_t len;           /* in: bytes to send / buffer size for recv;
                              * out: bytes actually moved */
     uint32_t status;        /* out */
-    uint32_t pad;
+    uint32_t flags;         /* in: VMS_BG_IOF_* (recv only; was pad, zero) */
     char     data[VMS_BG_IOCTL_MAXLEN];
 };
 

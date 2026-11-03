@@ -1169,6 +1169,18 @@ static inline long exec_socket_recv(exec_socket_t s, void *buf, size_t len)
 	return kernel_recvmsg(s->sock, &msg, &vec, 1, len, 0);
 }
 
+/* Receive without waiting (IO$M_NOW): -EAGAIN when nothing is queued. */
+static inline long exec_socket_recv_now(exec_socket_t s, void *buf, size_t len)
+{
+	struct msghdr msg;
+	struct kvec vec;
+
+	memset(&msg, 0, sizeof(msg));
+	vec.iov_base = buf;
+	vec.iov_len = len;
+	return kernel_recvmsg(s->sock, &msg, &vec, 1, len, MSG_DONTWAIT);
+}
+
 static inline int exec_socket_shutdown(exec_socket_t s)
 {
 	return kernel_sock_shutdown(s->sock, SHUT_RDWR);

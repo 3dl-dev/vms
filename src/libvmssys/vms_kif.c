@@ -3850,6 +3850,13 @@ uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
 uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
                          uint32_t *actlen)
 {
+    return vms_kif_bg_recv_ex(exec_chan, buf, bufsz, actlen, 0);
+}
+
+/* now != 0: IO$M_NOW -- SS$_ENDOFFILE and no bytes when nothing is queued. */
+uint32_t vms_kif_bg_recv_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                            uint32_t *actlen, int now)
+{
     struct vms_bg_io_args args;
     uint32_t n;
 
@@ -3861,6 +3868,7 @@ uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
     vms_memset(&args, 0, sizeof(args));
     args.chan = exec_chan;
     args.len = (bufsz > VMS_BG_IOCTL_MAXLEN) ? VMS_BG_IOCTL_MAXLEN : bufsz;
+    args.flags = now ? 1u : 0u;
 
     KIF_CALL(VMS_IOCTL_BG_RECV, &args);
 

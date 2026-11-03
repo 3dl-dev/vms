@@ -415,6 +415,13 @@ if(BUILD_TESTS)
     set_tests_properties(tcpip_posture_guard PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # rd vms-a6b: the TELNET session loop and the TCP/IP client engine use only
+    # VMS system services -- no poll()/select()/read() on a Linux fd.
+    add_test(NAME telnet_no_libc_wait
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_telnet_no_libc_wait.sh)
+    set_tests_properties(telnet_no_libc_wait PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # rd vms-4ff: an emulated x86 OVMX node must tell the kernel not to verify
     # the 8254-to-IO-APIC wiring. check_timer()'s timer_irq_works() demands 5
     # serviced IRQ0 ticks inside a window bounded in TSC CYCLES -- i.e. ~18 ms

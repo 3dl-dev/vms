@@ -1,0 +1,37 @@
+# crtl-shr-layer-not-started -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "an image activated against the x86_64 DECC\$SHR starts the C RTL layer before main(): its terminals, pipes, names, clock and signals are SYS\$OUTPUT \$QIO, mailboxes, RMS names, \$GETUTC and ASTs, not the substrate's (rd vms-569)";;
+        targets)      echo "imgact/imgact.c";;
+        suites_red)   echo "test_syssvc_crtl_shr";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The image activator no longer calls DECC\$SHR's ovmx_crtl_fd_install before main() -- the x86_64 C RTL as it was before vms-569: the layer is linked into DECC\$SHR but never reached, so the program's printf() goes to the substrate descriptor underneath (the decoy line), pipe() is a kernel pipe, /proc opens, time() is the substrate clock and alarm() is a Linux SIGALRM.";;
+        require_fail) cat <<'EOF2'
+the program's printf() report arrived on SYS$OUTPUT's RTAn: line, through the terminal driver
+...and none of it on the substrate's line underneath descriptor 1
+getname(1) is SYS$OUTPUT's terminal device
+getname() of the program's pipe() is a mailbox (MBAn:)
+DCL SHOW DEVICE shows that mailbox while the program holds its pipe
+a message this process $QIOs into the mailbox is what the program's read() of its pipe returns
+open("/proc/self/status") fails ENOENT
+time() is the executive's system time (2031), not the substrate clock
+...from a $SETIMR AST: the program's frame handler saw SS$_ASTFLT
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+alarm(1) ran the SIGALRM action
+EOF2
+                      ;;
+        knock_on_why)  echo "The program reports through its stdout, which the suite reads off SYS\$OUTPUT's terminal; with the layer not started that report goes to the substrate line underneath, so the ALARM line -- whose action does run, from Linux's SIGALRM -- is not on the terminal to be read either. Same single defect: SYS\$OUTPUT is not the program's stdout.";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^\tcrtl_image_init();$|\t/* NEGCTL crtl-shr-layer-not-started: the C RTL layer is never started */|' "$_file"
+    :
+}

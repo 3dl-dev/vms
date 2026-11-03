@@ -1995,8 +1995,13 @@ extern void ovmx_crtl_devfd_bind_stdio(void);     /* crtl_devfd.c */
 /* Turn the RMS file layer on for this image: from here every C RTL file call
  * that names an RMS file goes to RMS, the C RTL's clock and time zone are
  * the system's (crtl_time.c), and its signals are VMS conditions, ASTs and
- * process services (crtl_signal.c). decc$main does it for a DECC$SHR image;
- * a statically linked C image's start-up (vms-003b) calls it directly. */
+ * process services (crtl_signal.c). decc$main does it for an Alpha DECC$SHR
+ * image. The x86_64 DECC$SHR (OVMX_CRTLFD_GENERIC_SHR) exports it as a
+ * universal and the image activator calls it once the main image is bound,
+ * after its LIB$INITIALIZE routines and before main() -- the point decc$main
+ * runs on Alpha; LINK.EXE's x86_64 crt0 calls main() directly, so there is no
+ * decc$main there to do it (rd vms-569). A statically linked C image's
+ * start-up (vms-003b) calls it directly. */
 void ovmx_crtl_time_install(void);   /* crtl_time.c: $GETUTC + the TZ logicals (vms-593) */
 
 void ovmx_crtl_fd_install(void)
@@ -2014,9 +2019,10 @@ void ovmx_crtl_fd_install(void)
     TR("crtlfd: hook installed", (uintptr_t)rms_hook);
 }
 
-#if defined(OVMX_CRTLFD_STATIC)
-/* A static image has no DECC$SHR to carry the DEC C struct stat query cell
- * (src/vmslink/ovmx_decc_stat.c); the layer keeps its own. */
+#if defined(OVMX_CRTLFD_STATIC) || defined(OVMX_CRTLFD_GENERIC_SHR)
+/* A static image, and the x86_64 DECC$SHR, carry no src/vmslink/
+ * ovmx_decc_stat.c (the DEC C struct stat query cell's home in the Alpha
+ * DECC$SHR); the layer keeps its own. */
 int (*__ovmx_crtl_fab_query)(int fd, int dirfd, const char *path,
                              struct ovmx_fab_attrs *out);
 #else
@@ -2072,4 +2078,4 @@ void ovmx_crtl_fd_main(void *progxfer, void *cli_util, void *imghdr,
                         cliflag, argc, argv, envp);
     TR("crtlfd: decc$main returned", 0);
 }
-#endif /* !OVMX_CRTLFD_STATIC */
+#endif /* !OVMX_CRTLFD_STATIC && !OVMX_CRTLFD_GENERIC_SHR */

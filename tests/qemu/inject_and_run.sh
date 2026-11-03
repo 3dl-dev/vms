@@ -179,6 +179,18 @@ echo "--- rebuilding DECNETD.EXE (the subject test_syssvc_decnetd_syscall_audit 
 ( cd /src/repo && cmake --build build-static --target decnetd_exe \
                         --parallel "$(nproc)" ) || exit 4
 
+# IMGACT.EXE is the activator of every IMGACT-activated subject (MMK.EXE,
+# RMHOLD.EXE, CRTLSHR.EXE, ...), and crtl-shr-layer-not-started (rd vms-569)
+# targets src/imgact/imgact.c -- the call that starts an activated image's C RTL
+# layer. Rebuilt unconditionally, same reason as the subjects above, and copied
+# to the initramfs SYS$SYSTEM path the kernel loads it from (PT_INTERP); the
+# system volume re-mastered just below takes the same build.
+echo "--- rebuilding IMGACT.EXE (the image activator) ---"
+( cd /src/repo && make -C src/imgact CC=musl-gcc ARCH="$ARCH" clean >/dev/null 2>&1; \
+  make -C src/imgact CC=musl-gcc ARCH="$ARCH" >/dev/null ) || exit 4
+cp /src/repo/src/imgact/IMGACT.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE || exit 4
+
 # SYS$SYSTEM:LINK.EXE is a SUBJECT test_syssvc_mmk_build drives through DCL's
 # LINK verb (rd vms-3cb1), and link-image-takes-build-flags targets
 # src/vmslink/link.c, compiled into it. It lives in two places the guest can

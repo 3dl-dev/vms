@@ -1360,8 +1360,10 @@ VEC="$VEC,waitid=PROCEDURE"
 VEC="$VEC,mlock=PROCEDURE,munlock=PROCEDURE,getrandom=PROCEDURE"
 # vms-db7: the DEC C feature-switch API and reentrancy level (src/vmsrms/crtl_features.c),
 # so a VMS C program that sets its switches (the ipc_benchmark corpus' LIB$INITIALIZE
-# routine) links and runs unchanged. Built -DOVMX_CRTL_NO_RMS_VENEER: this C RTL does
-# not open files through RMS, so it honours no feature and every name is -1/EINVAL.
+# routine) links and runs unchanged. Built -DOVMX_CRTL_NO_RMS_VENEER: every name is
+# -1/EINVAL. The bootstrap pass opens no file through RMS, so it has no feature to
+# honour; the RMS-backed pass below (vms-569) does, and does not honour them yet
+# (the Alpha DECC$SHR builds this file without the macro).
 # Appended at the end of the vector (append-only).
 FEAT_SRC="$(CDPATH= cd "$(dirname "$0")/../vmsrms" && pwd)/crtl_features.c"
 FEAT_INC="$(CDPATH= cd "$(dirname "$0")/../vmsrms/include" && pwd)"
@@ -1379,13 +1381,71 @@ for _u in $(printf '%s' "$DECC_SOCK_TAIL" | tr ',' ' '); do
 done
 VEC="$VEC$DECC_SOCK_TAIL"
 
+# ----------------------------------------------------------------------
+# THE RMS-BACKED PASS (rd vms-569), the x86_64 counterpart of the Alpha pass
+# above. Opt-in via CRTL_RMS_USE=<an ALREADY-BUILT LIBVMSRMS$SHR.EXE> and
+# CRTL_VMS_USE=<its LIBVMS$SHR.EXE>, from a prior bootstrap pass (this script
+# without them) -- the same two-stage bootstrap of the mutual DECC$SHR <->
+# LIBVMS*$SHR dependency, and the same rule: every universal keeps its
+# symbol-vector index (IMGACT binds by index, vms-b14), so this pass only ADDS
+# names at the very end.
+#
+# The C RTL layer is the SAME source the Alpha DECC$SHR and the x86_64 static
+# images link: crtl_rms_fd.c (files over RMS; its hook offered every musl
+# system call by the funnel src/crtl-musl-x86_64/src/internal/ovmx_syscall.c),
+# crtl_devfd.c (terminals and pipes over VMS channels), crtl_time.c (the clock
+# and time zone) and crtl_signal.c (signals over conditions, ASTs and process
+# services), with crtl_filespec.c (the DEC C file-spec translation they use).
+# The one difference is how it is turned on: Alpha rebinds decc$main; LINK.EXE's
+# x86_64 crt0 calls main() directly, so the layer's ovmx_crtl_fd_install is a
+# universal of its own, which the image activator calls once the main image is
+# bound, before main() (src/imgact/imgact.c, crtl_image_init).
+#
+# Needs a C RTL archive with the funnel: musl from src/crtl-musl-x86_64/
+# build-musl.sh. Stock musl has no place for the hook, so asking for this pass
+# on one is refused rather than linked into a DECC$SHR whose layer is dead code.
+if [ -n "${CRTL_RMS_USE:-}" ]; then
+    for _u in "$CRTL_RMS_USE" "${CRTL_VMS_USE:-}"; do
+        [ -n "$_u" ] && [ -f "$_u" ] || { echo "mk_decc_shr: FAIL the RMS-backed pass needs CRTL_RMS_USE (LIBVMSRMS\$SHR) and CRTL_VMS_USE (LIBVMS\$SHR); got '$_u'" >&2; exit 2; }
+    done
+    nm --defined-only "$LIBC" 2>/dev/null | awk '{print $NF}' | grep -qxF __ovmx_sys_hook \
+        || { echo "mk_decc_shr: FAIL $LIBC has no system-call funnel (__ovmx_sys_hook): the C RTL layer would never be reached -- build musl with src/crtl-musl-x86_64/build-musl.sh" >&2; exit 2; }
+    RMS_SRC_DIR="$(CDPATH= cd "$(dirname "$0")/../vmsrms" && pwd)"
+    CRTLFD_DIR=$(mktemp -d)
+    CRTLFD_OBJS=""
+    for _src in crtl_rms_fd crtl_devfd crtl_time crtl_signal crtl_filespec; do
+        "${CC:-cc}" -c -O2 -fPIC -ffreestanding -fno-stack-protector -U_FORTIFY_SOURCE -w \
+            -DOVMX_CRTLFD_GENERIC_SHR \
+            -I"$RMS_SRC_DIR" -I"$RMS_SRC_DIR/include" \
+            -I"$(CDPATH= cd "$(dirname "$0")/../libvms/include" && pwd)" \
+            -I"$(CDPATH= cd "$(dirname "$0")/../crtl-musl-x86_64/include" && pwd)" \
+            -o "$CRTLFD_DIR/$_src.o" "$RMS_SRC_DIR/$_src.c"
+        CRTLFD_OBJS="$CRTLFD_OBJS $CRTLFD_DIR/$_src.o"
+    done
+    for _want in crtl_rms_fd:ovmx_crtl_fd_install crtl_rms_fd:ovmx_crtl_getname \
+                 crtl_devfd:ovmx_crtl_devfd_bind_stdio crtl_time:ovmx_crtl_time_install \
+                 crtl_signal:ovmx_crtl_signal_hook; do
+        nm --defined-only "$CRTLFD_DIR/${_want%%:*}.o" 2>/dev/null | awk '{print $NF}' | grep -qxF "${_want#*:}" \
+            || { echo "mk_decc_shr: FAIL ${_want%%:*}.c did not define ${_want#*:}" >&2; exit 2; }
+    done
+    case ",$VEC," in
+        *',ovmx_crtl_fd_install'[=/]*|*',decc$getname'[=/]*) echo "mk_decc_shr: FAIL the RMS-backed pass's names are already in the vector" >&2; exit 2;;
+    esac
+    # Appended at the very end: the image activator's C RTL start, and DEC C getname().
+    VEC="$VEC,ovmx_crtl_fd_install=PROCEDURE,decc\$getname/ovmx_crtl_getname=PROCEDURE"
+    CRTLFD_USE="--use $CRTL_RMS_USE --use $CRTL_VMS_USE"
+    echo "mk_decc_shr: C RTL layer wired (vms-569): files over RMS, terminals and pipes over VMS channels, the system clock, signals over VMS -- ovmx_crtl_fd_install is the image activator's C RTL start (--use $CRTL_RMS_USE --use $CRTL_VMS_USE)"
+fi
+
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
 # link with zero deferred externals. libc.a first so its strong defs win; the
 # loader-glue object last (it only REFERENCES __libc, which libc.a defines).
+# shellcheck disable=SC2086
 "$LINK_EXE" --shareable \
     --symbol-vector "$VEC" \
-    --gsmatch "$GSMATCH" \
-    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ" "$FEAT_OBJ" $SOCK_OBJS
+    --gsmatch "$GSMATCH" ${CRTLFD_USE:-} \
+    -o "$OUT" "$LIBC" "$LIBGCC" "$STUB_OBJ" "$CRTL_OBJ" "$FEAT_OBJ" $SOCK_OBJS ${CRTLFD_OBJS:-}
 rm -rf "$SOCK_OBJ_DIR"
+if [ -n "${CRTLFD_DIR:-}" ]; then rm -rf "$CRTLFD_DIR"; fi
 
 echo "mk_decc_shr: created $OUT"

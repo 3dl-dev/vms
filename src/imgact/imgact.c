@@ -2850,6 +2850,31 @@ static void imgact_finish_producers(void)
 	publish_resident_producers();
 }
 
+/* The C RTL's start for the image about to run (rd vms-569). On OpenVMS the DEC
+ * C RTL takes the image over in decc$main, which the program's own start calls
+ * after the LIB$INITIALIZE routines and before main(): there its file layer
+ * over RMS, its terminal and mailbox descriptors, its clock and its signals are
+ * turned on (src/vmsrms/crtl_rms_fd.c, ovmx_crtl_fd_install). OVMX's Alpha
+ * images do exactly that. LINK.EXE's x86_64/aarch64 crt0 calls main() directly
+ * -- there is no decc$main on the way -- so a DECC$SHR built with that layer
+ * (src/vmslink/mk_decc_shr.sh's RMS-backed pass) exports ovmx_crtl_fd_install
+ * and the activator calls it here, at that same point. A DECC$SHR without the
+ * layer exports no such universal and nothing happens. Not on Alpha, whose
+ * decc$main already does it. */
+static void crtl_image_init(void)
+{
+#if !defined(__alpha__)
+	struct ovmx_prod *crtl = find_crtl_producer();
+	unsigned long start;
+
+	if (!crtl)
+		return;
+	start = sv_find_named(crtl, "ovmx_crtl_fd_install");
+	if (start)
+		((void (*)(void))start)();
+#endif
+}
+
 static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 				   ElfW(Phdr) *ephdr, int ephnum)
 {
@@ -2981,6 +3006,9 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	 * the EVAX path, vms-43c), which calls them itself. */
 	if (!(g_xfer.valid && g_xfer.count > 1))
 		run_lib_initialize_symvec(exe_base, libinit_addr, libinit_size);
+
+	/* Last, the C RTL's own start for this image (rd vms-569). */
+	crtl_image_init();
 }
 
 /* Discover the ACP system device (rung vms-29ff / vms-104). Walk the process

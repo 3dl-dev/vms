@@ -752,6 +752,20 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE \
         /initramfs/vms/SYS0/SYSCOMMON/SYSLIB full && \
     ls -la /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/*'$SHR.EXE' && \
+    # THE SYSTEM'S DECC$SHR IS THE RMS-BACKED ONE (rd vms-569). This image's musl
+    # has the system-call funnel (src/crtl-musl-x86_64, above), so the graph just
+    # built relinked DECC$SHR with its C RTL layer over RMS and VMS channels
+    # (lib_build_graph.sh -> mk_decc_shr.sh's RMS-backed pass): an activated
+    # image's files, terminals, pipes, clock and signals are VMS's, as on Alpha.
+    # It keeps every universal's index, so images linked against the first
+    # DECC$SHR still bind. It becomes THE DECC$SHR: build-static/bin (which
+    # inject_and_run.sh re-masters from) and SYS$LIBRARY on the system volume,
+    # re-mastered here because the volume was mastered before the graph existed.
+    grep -q 'ovmx_crtl_fd_install' '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' || \
+      { echo "FATAL: SYS\$LIBRARY:DECC\$SHR.EXE is not the RMS-backed pass (no ovmx_crtl_fd_install universal) -- the activated C RTL would be the substrate's"; exit 1; } && \
+    cp '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' '/src/repo/build-static/bin/DECC$SHR.EXE' && \
+    rm -f /ods2_sysvol.img && \
+    sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img && \
     # EVACWL.EXE (vms-06c, the ci.6 evacuation workload): the SAME VMS-native
     # TCC.EXE + LINK.EXE --use build the corpus images use, for the bespoke
     # (non-corpus) EVAC$WORKLOAD lock-and-append workload
@@ -811,6 +825,16 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         /src/repo/build-static/bin/LINK.EXE \
         /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/SOCKECHO.EXE \
         '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' && \
+    # CRTLSHR.EXE (rd vms-569): a C program linked --use DECC$SHR (+ LIBVMS$SHR
+    # for lib$establish), the subject test_syssvc_crtl_shr.c RUNs from DCL to
+    # prove the activated C RTL's terminals, pipes, names, clock and signals are
+    # VMS's. Same activator-path rule as RMHOLD just above.
+    CC=musl-gcc IMGACT_INTERP_PATH=/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE \
+    sh /src/repo/tests/qemu/crtlshr/mk_crtlshr_native.sh \
+        /src/repo/build-static/bin/LINK.EXE \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/CRTLSHR.EXE \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' \
+        '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMS$SHR.EXE' && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers

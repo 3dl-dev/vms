@@ -529,8 +529,14 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # Busybox provides sh, mount, insmod, reboot, grep, etc.
     cp /bin/busybox /initramfs/bin/busybox && \
     ln -s busybox /initramfs/bin/sh && \
-    # Kernel modules
-    cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
+    # Kernel modules. vms.ko goes in WITHOUT its DWARF (objcopy --strip-debug;
+    # the symbol table stays, so an Oops still names functions). The guest
+    # never reads the debug sections, and they are ~18 MB of a 20 MB module:
+    # the initramfs unpacks into the guest's RAM (run_tests.sh -m 512M), and
+    # every MB it holds is a MB the suites cannot stage into at run time
+    # (see the INITRAMFS BUDGET check at the pack step below). Host-side
+    # debugging keeps the full /src/kernel/vms.ko in this image.
+    objcopy --strip-debug /src/kernel/vms.ko /initramfs/lib/modules/vms.ko && \
     # veth.ko (rd FC-P0.2, test_kmod_cluster_seam.c): the R3 substrate
     # contract test needs a REAL veth pair (CONFIG_VETH ships as a module on
     # this stock kernel, not built in), so the guest that loads vms.ko also
@@ -943,7 +949,21 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     chmod +x /initramfs/init && \
     # Pack initramfs
     cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
-    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')" && \
+    # INITRAMFS BUDGET (rd vms-0a7 S1, PR #1994). The guest unpacks this archive
+    # into RAM-backed rootfs inside run_tests.sh's 512 MB, and the suites stage
+    # images into that same rootfs (DCL's lazy SYS$SYSTEM staging, IMGACT's
+    # /run/ovmx-boot). Measured with -m 512M: a 193.1 MB unpacked archive does
+    # not boot ("Initramfs unpacking failed: write error", kernel panic); a
+    # slightly smaller one (82 MB gzipped) booted but ran out of room mid-shard,
+    # which surfaced as test_syssvc_mmk_build's %DCL-E-IVIMAGE for
+    # SYS$SYSTEM:LINK.EXE (the fourth image the drive stages); a 182.8 MB one
+    # ran clean, and the same 193.1 MB tree passes with -m 1024M. Fail the build here,
+    # by name, rather than let a full guest show up as an unrelated suite's red.
+    INITRAMFS_BYTES=$(gzip -dc /initramfs.cpio.gz | wc -c) && \
+    INITRAMFS_BUDGET=$((176 * 1024 * 1024)) && \
+    echo "Initramfs unpacked: $INITRAMFS_BYTES bytes (budget $INITRAMFS_BUDGET)" && \
+    { [ "$INITRAMFS_BYTES" -le "$INITRAMFS_BUDGET" ] || { echo "FATAL: the unpacked initramfs is $INITRAMFS_BYTES bytes, over the $INITRAMFS_BUDGET-byte budget -- the 512 MB guest would run out of RAM-backed rootfs mid-run (or fail to unpack it at all). Shrink what the initramfs carries, or raise run_tests.sh's -m together with this budget."; exit 1; }; }
 
 # --- Per-facility negative controls (vms-e7d) ----------------------------
 #

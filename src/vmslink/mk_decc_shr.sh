@@ -373,6 +373,19 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         "$NM" --defined-only "$TIME_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_time_install \
             || { echo "mk_decc_shr: FAIL crtl_time.c did not define ovmx_crtl_time_install" >&2; exit 2; }
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $TIME_OBJ"
+        # vms-931: the C RTL's signals (src/vmsrms/crtl_signal.c), turned on by
+        # the same install: musl's signal/sigaction/sigprocmask/raise/kill/alarm/
+        # setitimer/pause system calls are served by LIB$SIGNAL + the secondary
+        # exception vector, $SETIMR/$CANTIM ASTs, $HIBER/$WAKE and $FORCEX/
+        # $DELPRC/$SUSPND/$RESUME/$GETJPIW on a VMS PID (LIBVMS$SHR, --use
+        # ALPHA_CRTL_VMS_USE), never rt_sig*/kill/setitimer. No universal of its own.
+        SIG_OBJ="$VENEER_DIR/crtl_signal.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            $ALPHA_MUSL_INC -o "$SIG_OBJ" "$RMS_SRC_DIR/crtl_signal.c"
+        "$NM" --defined-only "$SIG_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_signal_hook \
+            || { echo "mk_decc_shr: FAIL crtl_signal.c did not define ovmx_crtl_signal_hook" >&2; exit 2; }
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SIG_OBJ"
         # vms-4ba3: DEC C fgetname, from the same layer (an RMS stream's
         # resultant spec); new to this pass, so it goes at the vector tail.
         "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF 'decc$fgetname' \

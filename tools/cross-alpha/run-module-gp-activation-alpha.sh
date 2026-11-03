@@ -67,6 +67,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate # vms-f49 rung 4: veneer write + INDEPENDENT ODS-2 File-ID reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-sig-gate # vms-931: DEC C signals are VMS conditions + $SETIMR ASTs (raise = LIB$SIGNAL, alarm = SS$_ASTFLT, kill = VMS PID)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-vm-gate # vms-bc53: the DEC C heap is executive $EXPREG P0 charged to PGFLQUOTA (logged-in SYSTEM: malloc NULL/ENOMEM, SYS$EXPREG SS$_EXQUOTA)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate     # vms-3b3f: .EXE LINKed on real OpenVMS Alpha runs unchanged (SYS$QIOW/LIB$PUT_OUTPUT via SYS$PUBLIC_VECTORS/LIBRTL)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
@@ -948,6 +949,28 @@ assert_crtlvm() {
     || { echo "  assert_crtlvm: no ENOMEM exhaustion below the bound followed by SS\$_EXQUOTA: '$line'" >&2; return 1; }
   tr -d '\r' < "$log" | grep >/dev/null -aE "^CRTLVM: after free: SYS\\\$EXPREG %X[0-9A-F]{7}[13579BDF], malloc 1 MB ok$" \
     || { echo "  assert_crtlvm: the charge did not come back after free" >&2; return 1; }
+  return 0
+}
+
+# assert_crtlsig <console-log> -- THE TEETH for the vms-931 signal proof
+# (`crtl-sig-gate' mode). PASS iff the image said OK (it does only with every
+# check held) and each property's own line is the VMS one: raise(SIGSEGV) was
+# seen by the program's frame handler as SS$_ACCVIO, LIB$SIGNAL SS$_HPARITH ran
+# the SIGFPE action, a blocked signal was held, the alarm came as SS$_ASTFLT and
+# ended pause() with EINTR, and kill() of the process's VMS PID ran the action;
+# and the image did not crash. Signal calls left on the Linux/Alpha kernel fail
+# the seen-ACCVIO, seen-ASTFLT and kill lines.
+assert_crtlsig() {
+  local log="$1" l
+  tr -d '\r' < "$log" | grep >/dev/null -a "^OVMX CRTL-SIG test: OK" || { echo "  assert_crtlsig: the image did not report OK" >&2; return 1; }
+  grep -aqE "%DCL-F-ABORT|terminated abnormally" "$log" && { echo "  assert_crtlsig: the image crashed" >&2; return 1; }
+  for l in "^CRTLSIG: raise SIGSEGV action=1 seen-ACCVIO=1$" \
+           "^CRTLSIG: cond HPARITH SIGFPE-action=1$" \
+           "^CRTLSIG: mask held=1 then action=1$" \
+           "^CRTLSIG: alarm action=1 pause=-1 errno=EINTR seen-ASTFLT=1$" \
+           "^CRTLSIG: kill own-VMS-PID rc=0 action=1$"; do
+    tr -d '\r' < "$log" | grep >/dev/null -aE "$l" || { echo "  assert_crtlsig: no line matching '$l'" >&2; return 1; }
+  done
   return 0
 }
 
@@ -3363,6 +3386,63 @@ EOF
       exit 0
     fi
     echo "FAIL: the C RTL file layer did not work end to end. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  crtl-sig-gate)
+    # vms-931: DEC C signals are VMS conditions and ASTs. MILESTONE image
+    # crtl_sig_test.c is an ordinary DEC C program against the RMS-backed
+    # DECC$SHR (decc$main turns on src/vmsrms/crtl_signal.c); SYSTARTUP runs it
+    # on the real executive. LIB$SIGNAL/LIB$ESTABLISH/SYS$GETJPIW are LIBVMS$SHR's.
+    MILESTONE_MAIN=crtl_sig_test.c
+    export JOINT_MAIN_CFLAGS=""
+    export JOINT_MAIN_MUSL_HEADERS=1
+    export JOINT_USE_LIBVMS=1
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    _st=$(mktemp -d); _fails=0
+    {
+      echo "CRTLSIG: raise SIGSEGV action=1 seen-ACCVIO=1"
+      echo "CRTLSIG: cond HPARITH SIGFPE-action=1"
+      echo "CRTLSIG: mask held=1 then action=1"
+      echo "CRTLSIG: alarm action=1 pause=-1 errno=EINTR seen-ASTFLT=1"
+      echo "CRTLSIG: kill own-VMS-PID rc=0 action=1"
+      echo "OVMX CRTL-SIG test: OK (signals are VMS conditions and ASTs)"
+      echo "CRTLSIG-END"
+    } > "$_st/pass.log"
+    # the signal calls on the Linux/Alpha kernel: actions run, no condition is
+    # signalled, and a VMS PID is no Linux pid
+    sed -e 's/seen-ACCVIO=1/seen-ACCVIO=0/' -e 's/seen-ASTFLT=1/seen-ASTFLT=0/' \
+        -e 's/SIGFPE-action=1/SIGFPE-action=0/' -e 's/rc=0 action=1/rc=-1 action=0/' "$_st/pass.log" > "$_st/linux.log"
+    sed 's/seen-ACCVIO=1/seen-ACCVIO=0/' "$_st/pass.log" > "$_st/noraise.log"
+    sed 's/seen-ASTFLT=1/seen-ASTFLT=0/' "$_st/pass.log" > "$_st/noast.log"
+    sed 's/held=1/held=0/' "$_st/pass.log" > "$_st/nomask.log"
+    sed 's/rc=0 action=1/rc=-1 action=0/' "$_st/pass.log" > "$_st/nokill.log"
+    sed 's/test: OK (signals/test: FAILED (signals/' "$_st/pass.log" > "$_st/checkfail.log"
+    { cat "$_st/pass.log"; echo "%DCL-F-ABORT, image terminated abnormally"; } > "$_st/crash.log"
+    for _c in "pass:0" "linux:1" "noraise:1" "noast:1" "nomask:1" "nokill:1" "checkfail:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_crtlsig "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  crtlsig selftest $_n: PASS"; else echo "  crtlsig selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "crtlsig selftest failed -- assert_crtlsig cannot be trusted"
+    [ "${CRTLSIG_SELFTEST_ONLY:-0}" = 1 ] && { echo "PASS: crtlsig selftest only"; exit 0; }
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- DEC C signals on the REAL executive (SYSTARTUP runs the image)"
+    run_boot_a
+    grep -aE "CRTLSIG|OVMX CRTL-SIG|%DCL-|%IMGACT|%SYSTEM-|fatal signal" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_crtlsig "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: a DEC C program's raise() is LIB\$SIGNAL of the signal's condition, its"
+      echo "      alarm() is a \$SETIMR AST (SS\$_ASTFLT), sigprocmask() holds a signal, and"
+      echo "      kill() names a VMS PID -- no Linux signal system call."
+      exit 0
+    fi
+    echo "FAIL: DEC C signals are not VMS conditions and ASTs. Full log: $WORK/modgpA.log"
     tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

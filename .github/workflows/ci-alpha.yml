@@ -1080,6 +1080,60 @@ jobs:
       - name: "C RTL heap gate — executive $EXPREG + PGFLQUOTA; can-fail selftest first"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-vm-gate
 
+  # alpha-crtl-sig (vms-931): DEC C signals are VMS conditions, $SETIMR ASTs and
+  # process services on a VMS PID -- no Linux rt_sig*/kill/setitimer.
+  alpha-crtl-sig:
+    name: "OVMX/Alpha DEC C signals are VMS conditions and ASTs — raise() is LIB$SIGNAL of the signal's condition, alarm() a $SETIMR AST (SS$_ASTFLT), sigprocmask() holds, kill() names a VMS PID (vms-931)"
+    needs: [changes, alpha-assets]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: ./.github/actions/setup-buildx
+
+      # In the background: the toolchain image build below does not need the space
+      # at once, and the rm (~1.5 min) would otherwise be pure serial wait.
+      - name: Free up disk space (in the background)
+        run: |
+          ( setsid nohup sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost >/dev/null 2>&1 & )
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha
+          # cache-to omitted: ci-alpha.yml:alpha-boot-login is scope cross-alpha's one writer (rd vms-14da)
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-cache:cross-alpha-vms
+          # cache-to omitted: ci-alpha.yml:alpha-toolchain-image is scope cross-alpha-vms's one writer (rd vms-14da)
+
+      - name: Restore the shared Alpha executive/kernel + userland (GHCR)
+        uses: ./.github/actions/alpha-assets
+        with:
+          mode: fetch
+
+      - name: "C RTL signal gate — LIB$SIGNAL conditions + $SETIMR AST; can-fail selftest first"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-sig-gate
+
   # -----------------------------------------------------------------------
   # alpha-vmsabi-rms (vms-692): the VMS-ABI RMS entry points over the VMS-layout
   # control blocks -- what GCC's VMS-host code calls.
@@ -2609,6 +2663,7 @@ jobs:
       - alpha-crtl-rms-fileop
       - alpha-crtl-fd
       - alpha-crtl-vm
+      - alpha-crtl-sig
       - alpha-vmsabi-rms
       - alpha-native-image
       - alpha-mf-multifile

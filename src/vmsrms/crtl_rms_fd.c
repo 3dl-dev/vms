@@ -1635,10 +1635,25 @@ static long long rms_hook_body(long long n, long long a1, long long a2,
  * final exit_group, after musl ran the atexit handlers and flushed stdio. */
 void (*__ovmx_crtl_exit_record)(void);
 
+/* crtl_signal.c (vms-931): the C RTL's signals over VMS conditions, ASTs and
+ * process services. Its hook serves the signal system calls before any file
+ * call; an AST signal that lands while this layer is inside RMS is held
+ * (ovmx_crtl_sig_busy) and delivered when it leaves. */
+long long ovmx_crtl_signal_hook(long long, long long, long long, long long,
+                                long long, int *);
+void ovmx_crtl_signal_install(void);
+void ovmx_crtl_sig_flush(void);
+extern volatile int ovmx_crtl_sig_busy;
+
 static long long rms_hook(long long n, long long a1, long long a2, long long a3,
                           long long a4, long long a5, long long a6, int *handled)
 {
     (void)a6;
+    {
+        long long sr = ovmx_crtl_signal_hook(n, a1, a2, a3, a4, handled);
+        if (*handled)
+            return sr;
+    }
     if (n == SYS_exit_group || n == SYS_exit)
         ovmx_crtl_fd_flush_all();               /* image rundown: RMS writes its buffers */
     if (n == SYS_exit_group && __ovmx_crtl_exit_record)
@@ -1646,10 +1661,13 @@ static long long rms_hook(long long n, long long a1, long long a2, long long a3,
     if (in_rms)
         return 0;                               /* RMS's own system calls */
     in_rms = 1;
+    ovmx_crtl_sig_busy++;
     int saved = errno;
     long long r = rms_hook_body(n, a1, a2, a3, a4, a5, handled);
     errno = saved;
     in_rms = 0;
+    ovmx_crtl_sig_busy--;
+    ovmx_crtl_sig_flush();
     return r;
 }
 
@@ -1831,14 +1849,16 @@ char *ovmx_decc_fgetname(FILE *fp, char *buf, ...)
 /* ------------------------------------------------------------ install ----- */
 
 /* Turn the RMS file layer on for this image: from here every C RTL file call
- * that names an RMS file goes to RMS, and the C RTL's clock and time zone are
- * the system's (crtl_time.c). decc$main does it for a DECC$SHR image;
+ * that names an RMS file goes to RMS, the C RTL's clock and time zone are
+ * the system's (crtl_time.c), and its signals are VMS conditions, ASTs and
+ * process services (crtl_signal.c). decc$main does it for a DECC$SHR image;
  * a statically linked C image's start-up (vms-003b) calls it directly. */
 void ovmx_crtl_time_install(void);   /* crtl_time.c: $GETUTC + the TZ logicals (vms-593) */
 
 void ovmx_crtl_fd_install(void)
 {
     ovmx_crtl_time_install();
+    ovmx_crtl_signal_install();         /* crtl_signal.c: signals over VMS (vms-931) */
     __ovmx_sys_hook = rms_hook;
     __ovmx_crtl_fab_query = fab_query;
     TR("crtlfd: hook installed", (uintptr_t)rms_hook);

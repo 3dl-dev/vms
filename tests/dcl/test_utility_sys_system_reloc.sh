@@ -1,5 +1,5 @@
 #!/bin/bash
-# DCL_OUTPUT: stdio vms-380f an image/PIPE segment DCL runs does not yet write the parent's file SYS$OUTPUT
+# DCL_OUTPUT: stdio vms-380f an image DCL runs does not yet write the parent's file SYS$OUTPUT (PIPE segments do)
 # TEST: DCL utility activation resolves through the SYS$SYSTEM logical (vms-7d8)
 #
 # THE DOGFOOD (rd vms-7d8, parent vms-704, program vms-8ad). Operator: "we

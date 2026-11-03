@@ -284,7 +284,12 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
     if (!buf) return RMS$_RAB;
     uint16_t len = rab->rab$w_rsz;
 
-    /* Seek to end for sequential writes */
+    /* Seek to end for sequential writes. With write sharing (SHRPUT), the
+     * end is the file's end NOW: another process holding it open (a
+     * subprocess writing its parent's SYS$OUTPUT, rd vms-380f) may have put
+     * records since this stream's last $PUT, and they are not overwritten. */
+    if (fab->fab$b_shr & (FAB$M_SHRPUT | FAB$M_SHRUPD))
+        (void)rms_io_refresh_eof(fd);
     rms_io_lseek(fd, 0, SEEK_END);
 
     switch (fab->fab$b_rfm) {

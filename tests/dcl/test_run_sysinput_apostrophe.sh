@@ -1,5 +1,5 @@
 #!/bin/bash
-# DCL_OUTPUT: stdio vms-380f an image/PIPE segment DCL runs does not yet write the parent's file SYS$OUTPUT
+# DCL_OUTPUT: stdio vms-380f an image DCL runs does not yet write the parent's file SYS$OUTPUT (PIPE segments do)
 # TEST: DCL apostrophe substitution on RUN'd-image SYS$INPUT data lines (vms-963)
 #
 # VMS behaviour (VSI OpenVMS User's Manual / DCL Concepts -- "Symbol

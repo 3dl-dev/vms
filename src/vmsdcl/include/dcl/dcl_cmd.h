@@ -225,6 +225,8 @@ extern int dcl_format_filespec(const char *linux_path, char *vms_spec,
 extern int dcl_logical_is_terminal(const char *equiv);
 /* SYS$OUTPUT (0) / SYS$ERROR (1) is routed to the file `spec` (dcl_io.c) */
 extern int dcl_ppf_routed_to_file(int which, const char *spec);
+/* the file SYS$OUTPUT (0) / SYS$ERROR (1) is routed to, or NULL (dcl_io.c) */
+extern const char *dcl_ppf_file_spec(int which);
 extern int dcl_translate_logical(const char *name, char *result,
                                  size_t result_size);
 extern int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,

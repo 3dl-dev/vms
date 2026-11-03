@@ -156,6 +156,12 @@ typedef struct rms_file {
  * byte position, or (off_t)-1 on a bad handle. */
 off_t rms_io_lseek(rms_file_t *f, off_t offset, int whence);
 
+/* Bring f->eof up to the file's valid length as it is now, including what
+ * other channels (another process holding the file open with write sharing)
+ * appended since this handle last looked. A shared-write $PUT positions at
+ * this end (rd vms-380f). Returns 0, or -1 on a bad handle / I/O failure. */
+int rms_io_refresh_eof(rms_file_t *f);
+
 /* read(2) emulation: read up to `n` bytes at the cursor via IO$_READVBLK,
  * advance the cursor by the count returned. Returns the byte count (0 at EOF),
  * or -1 on error (an executive/channel failure, never a POSIX fallback). */

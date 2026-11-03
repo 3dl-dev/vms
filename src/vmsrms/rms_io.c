@@ -122,6 +122,18 @@ static int rms_io_fsync_posix(rms_file_t *f)
     return fsync(f->fd);
 }
 
+static int rms_io_refresh_eof_posix(rms_file_t *f)
+{
+    off_t end;
+    if (!f || f->fd < 0)
+        return -1;
+    end = lseek(f->fd, 0, SEEK_END);
+    if (end < 0)
+        return -1;
+    f->eof = (uint64_t)end;
+    return 0;
+}
+
 rms_file_t *rms_io_posix_wrap(int fd)
 {
     rms_file_t *f = (rms_file_t *)calloc(1, sizeof(*f));
@@ -356,6 +368,39 @@ static int rms_io_ftruncate_acp(rms_file_t *f, off_t length)
     }
 }
 
+
+/* The file's valid length as it is NOW, another channel's writes included: a
+ * READVBLK clamps at the valid bytes, so what reads past this handle's EOF is
+ * what others appended. Reads into a scratch buffer, never the read-ahead
+ * cache, and never lowers f->eof. */
+static int rms_io_refresh_eof_acp(rms_file_t *f)
+{
+    uint8_t scratch[RMS_IO_BLK];
+    if (!f || !f->accessed)
+        return -1;
+    for (;;) {
+        struct vms_acp_rw_args a;
+        uint32_t st;
+        memset(&a, 0, sizeof(a));
+        a.chan   = f->chan;
+        a.vbn    = (uint32_t)(f->eof / RMS_IO_BLK) + 1u;
+        a.offset = (uint32_t)(f->eof % RMS_IO_BLK);
+        a.length = (uint32_t)sizeof scratch;
+        a.buffer = (uint64_t)(uintptr_t)scratch;
+        st = vms_kif_acp_readvb(&a);
+        if (st == SS$_ENDOFFILE || ($VMS_STATUS_SUCCESS(st) && a.xferred == 0))
+            break;
+        if (!$VMS_STATUS_SUCCESS(st))
+            return -1;
+        f->eof += a.xferred;
+        f->rbuf_len = 0;
+        if (a.new_hiblk)
+            f->hiblk = a.new_hiblk;
+        if (a.xferred < sizeof scratch)
+            break;
+    }
+    return 0;
+}
 #endif /* __linux__ ACP backend */
 
 /* ==========================================================================
@@ -374,6 +419,17 @@ ssize_t rms_io_read(rms_file_t *f, void *buf, size_t n)
     return rms_io_read_acp(f, buf, n);
 #else
     return rms_io_read_posix(f, buf, n);
+#endif
+}
+
+int rms_io_refresh_eof(rms_file_t *f)
+{
+#if defined(OVMX_HAVE_ACP)
+    if (f && f->fd >= 0)
+        return rms_io_refresh_eof_posix(f);
+    return rms_io_refresh_eof_acp(f);
+#else
+    return rms_io_refresh_eof_posix(f);
 #endif
 }
 

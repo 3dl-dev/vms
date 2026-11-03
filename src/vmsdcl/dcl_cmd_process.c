@@ -3221,9 +3221,34 @@ int cmd_pipe(struct dcl_command *cmd)
                 close(pipefds[j][1]);
             }
 
-            /* A VMS process once DCL has made its PCB; then exec vmsdcl -c. */
+            /* A VMS process once DCL has made its PCB; then exec vmsdcl -c.
+             * The segment's process-permanent files are its creator's, as a
+             * PIPE subprocess's are on VMS: SYS$ERROR always, SYS$OUTPUT for
+             * the last segment (the others write the pipe to the next). When
+             * this DCL's stream is an RMS file, the segment is created with
+             * that file as its own SYS$OUTPUT/SYS$ERROR (the $CREPRC
+             * output/error names, given as DCL's --output/--error) and $PUTs
+             * its records there, opened shared (rd vms-380f). */
             dcl_pcb_hold_wait(pcb_hold);
-            execl(dcl_exe, "vmsdcl", "-c", segments[i], (char *)NULL);
+            {
+                const char *xargv[8];
+                int xa = 0;
+                const char *ospec = dcl_ppf_file_spec(0);
+                const char *espec = dcl_ppf_file_spec(1);
+                xargv[xa++] = "vmsdcl";
+                if (ospec && i == nseg - 1) {
+                    xargv[xa++] = "--output";
+                    xargv[xa++] = ospec;
+                }
+                if (espec) {
+                    xargv[xa++] = "--error";
+                    xargv[xa++] = espec;
+                }
+                xargv[xa++] = "-c";
+                xargv[xa++] = segments[i];
+                xargv[xa] = NULL;
+                execv(dcl_exe, (char *const *)xargv);
+            }
             dcl_err_printf("%%DCL-E-CREPRC, cannot execute - %s\n", dcl_exe);
             _exit(127);
         }

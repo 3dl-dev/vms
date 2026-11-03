@@ -1,5 +1,5 @@
 #!/bin/bash
-# DCL_OUTPUT: stdio vms-380f an image/PIPE segment DCL runs does not yet write the parent's file SYS$OUTPUT
+# DCL_OUTPUT: stdio vms-380f an image DCL runs does not yet write the parent's file SYS$OUTPUT (PIPE segments do)
 # TEST: @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM authors a node's cluster identity the
 #       VMS way (vms-258) -- the operator picks CHANGE, answers SCSNODE/
 #       SCSSYSTEMID/..., and the procedure drives SYSGEN (USE/SET/WRITE CURRENT)

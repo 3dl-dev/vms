@@ -780,25 +780,27 @@ struct dcl_rms_writer {
 
 static struct dcl_rms_writer *rms_write_open(struct dcl_context *ctx, const char *spec,
                                              uint8_t rfm, uint8_t rat, uint16_t mrs,
-                                             uint32_t fop, uint32_t *rms_status);
+                                             uint32_t fop, uint8_t shr,
+                                             uint32_t *rms_status);
 
 struct dcl_rms_writer *dcl_rms_write_create(struct dcl_context *ctx, const char *spec,
                                             uint8_t rfm, uint8_t rat, uint16_t mrs,
                                             uint32_t *rms_status)
 {
-    return rms_write_open(ctx, spec, rfm, rat, mrs, 0, rms_status);
+    return rms_write_open(ctx, spec, rfm, rat, mrs, 0, 0, rms_status);
 }
 
 struct dcl_rms_writer *dcl_rms_write_supersede(struct dcl_context *ctx, const char *spec,
                                                uint8_t rfm, uint8_t rat, uint16_t mrs,
                                                uint32_t *rms_status)
 {
-    return rms_write_open(ctx, spec, rfm, rat, mrs, FAB$M_SUP, rms_status);
+    return rms_write_open(ctx, spec, rfm, rat, mrs, FAB$M_SUP, 0, rms_status);
 }
 
 static struct dcl_rms_writer *rms_write_open(struct dcl_context *ctx, const char *spec,
                                              uint8_t rfm, uint8_t rat, uint16_t mrs,
-                                             uint32_t fop, uint32_t *rms_status)
+                                             uint32_t fop, uint8_t shr,
+                                             uint32_t *rms_status)
 {
     struct dcl_rms_writer *w = calloc(1, sizeof(*w));
     uint32_t st;
@@ -817,6 +819,7 @@ static struct dcl_rms_writer *rms_write_open(struct dcl_context *ctx, const char
     w->fab.fab$b_rat = rat;
     w->fab.fab$w_mrs = mrs;
     w->fab.fab$b_fac = FAB$M_PUT;
+    w->fab.fab$b_shr = shr;
     w->fab.fab$l_fop |= fop;
     st = sys$create(&w->fab, 0, 0);
     if (!(st & 1)) {           /* RMS$_SUPERSEDE, RMS$_CREATED ... are successes */
@@ -837,8 +840,8 @@ static struct dcl_rms_writer *rms_write_open(struct dcl_context *ctx, const char
 /* OPEN/APPEND: the file's end is where the next $PUT lands (RAB$M_EOF); a file
  * that does not exist yet is created, as VMS does. The record format is the
  * existing file's own (read from its header), like dcl_rms_read_open. */
-struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char *spec,
-                                            uint32_t *rms_status)
+static struct dcl_rms_writer *rms_write_append(struct dcl_context *ctx, const char *spec,
+                                               uint8_t shr, uint32_t *rms_status)
 {
     struct dcl_rms_writer *w = calloc(1, sizeof(*w));
     struct rms_fileattr fa;
@@ -850,7 +853,7 @@ struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char 
     }
     if (rms_file_attr(w->spec, &fa) != RMS$_NORMAL) {
         free(w);                               /* not there: create it */
-        return rms_write_open(ctx, spec, FAB$C_VAR, FAB$M_CR, 0, 0, rms_status);
+        return rms_write_open(ctx, spec, FAB$C_VAR, FAB$M_CR, 0, 0, shr, rms_status);
     }
     w->fab = cc$rms_fab;
     w->fab.fab$l_fna = w->spec;
@@ -861,6 +864,7 @@ struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char 
         if (fa.mrs) w->fab.fab$w_mrs = fa.mrs;
     }
     w->fab.fab$b_fac = FAB$M_PUT;
+    w->fab.fab$b_shr = shr;
     st = sys$open(&w->fab, 0, 0);
     if (!(st & 1)) { if (rms_status) *rms_status = st; free(w); return NULL; }
     w->rab = cc$rms_rab;
@@ -874,6 +878,23 @@ struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char 
     w->connected = 1;
     if (rms_status) *rms_status = RMS$_NORMAL;
     return w;
+}
+
+struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char *spec,
+                                            uint32_t *rms_status)
+{
+    return rms_write_append(ctx, spec, 0, rms_status);
+}
+
+/* A process-permanent file (rd vms-380f): opened for append with write
+ * sharing, as VMS opens a log file a subprocess or image also writes. Each
+ * $PUT lands at the file's end at the time it is made, so the records of every
+ * process holding it open interleave in the order they were put. */
+struct dcl_rms_writer *dcl_rms_write_append_shared(struct dcl_context *ctx,
+                                                   const char *spec,
+                                                   uint32_t *rms_status)
+{
+    return rms_write_append(ctx, spec, FAB$M_SHRPUT | FAB$M_SHRGET, rms_status);
 }
 
 int dcl_rms_write_record(struct dcl_rms_writer *w, const char *buf, size_t len)

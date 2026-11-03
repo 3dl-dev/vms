@@ -78,6 +78,11 @@ struct dcl_rms_writer *dcl_rms_write_supersede(struct dcl_context *ctx, const ch
 /* $PUT one record (len bytes). Returns 0 on success, -1 on error. */
 struct dcl_rms_writer *dcl_rms_write_append(struct dcl_context *ctx, const char *spec,
                                             uint32_t *rms_status);
+/* As dcl_rms_write_append, opened SHRPUT|SHRGET: a process-permanent file
+ * (SYS$OUTPUT/SYS$ERROR) that a subprocess appends to as well (rd vms-380f). */
+struct dcl_rms_writer *dcl_rms_write_append_shared(struct dcl_context *ctx,
+                                                   const char *spec,
+                                                   uint32_t *rms_status);
 int      dcl_rms_write_record(struct dcl_rms_writer *w, const char *buf, size_t len);
 /* The RMS status of the last $PUT (and its secondary value, STV, to *stv). */
 uint32_t dcl_rms_write_status(const struct dcl_rms_writer *w, uint32_t *stv);

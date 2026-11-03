@@ -309,7 +309,7 @@ void dcl_out_bind_ppf(void)
                 dcl_out_route(which, NULL, NULL, 0, NULL);
             if (!f->w) {
                 uint32_t st = 0;
-                f->w = dcl_rms_write_append(dcl_get_context(), equiv[which], &st);
+                f->w = dcl_rms_write_append_shared(dcl_get_context(), equiv[which], &st);
                 snprintf(f->spec, sizeof f->spec, "%s", equiv[which]);
             }
             if (f->w) {
@@ -319,6 +319,15 @@ void dcl_out_bind_ppf(void)
             }
         }
     }
+}
+
+/* The file SYS$OUTPUT (which 0) or SYS$ERROR (1) is routed to, or NULL. A
+ * subprocess DCL creates (a PIPE segment) is given it as its own SYS$OUTPUT /
+ * SYS$ERROR -- the process-permanent file it inherits (rd vms-380f). */
+const char *dcl_ppf_file_spec(int which)
+{
+    const struct ppf_file *f = g_route_file[which ? 1 : 0];
+    return (f && f->w && dcl_out_routed(which ? 1 : 0)) ? f->spec : NULL;
 }
 
 /* Is SYS$OUTPUT (which 0) or SYS$ERROR (1) routed to the file `spec`? Then a

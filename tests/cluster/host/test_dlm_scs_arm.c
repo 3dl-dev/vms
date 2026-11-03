@@ -515,6 +515,18 @@ static void arm_bindings(void)
 	before("directed = VMS_DLM_DIR_AT_REQUESTER;",
 	       "o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
 	       "... before the table is asked");
+	/* rd vms-966e r10: ...and one it directs at a THIRD member is marked
+	 * VMS_DLM_DIR_ELSEWHERE, from the vector read now, before the table is
+	 * asked; test_dlm_transition_enq drives the r10 frames through it. */
+	has("if (!directed && dlm_arm_dir_elsewhere(d, id, req->from_csid))\n"
+	    "\t\tdirected = VMS_DLM_DIR_ELSEWHERE;",
+	    "*** rd vms-966e r10: the arm marks a lookup the vector directs at a "
+	    "third member VMS_DLM_DIR_ELSEWHERE ***");
+	has("return (at != 0u && at != from) ? 1 : 0;",
+	    "... a member that is neither this node nor the requester");
+	before("directed = VMS_DLM_DIR_ELSEWHERE;",
+	       "o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
+	       "... before the table is asked");
 	before("if (o == VMS_DLM_DIR_ANSWER_NONE && !directed) {",
 	       "if (vms_dlm_dir_answer_build(req->body, req->len, status,",
 	       "an undirected request the table cannot answer from an entry "

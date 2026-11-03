@@ -2211,6 +2211,50 @@ uint32_t vms_kif_pprop(uint32_t property, const uint32_t *newvalue, uint32_t *ol
 }
 
 /*
+ * The login data LOGINOUT leaves for the CLI (VMS_IOCTL_LGI, rd vms-838b). SET
+ * hands *flags, *uaf_flags and lgicmd to the executive; GET reads the caller's
+ * own back into them. A SET spec that does not fit is SS$_BADPARAM, not clipped.
+ */
+uint32_t vms_kif_lgi(uint32_t op, uint32_t *flags, uint32_t *uaf_flags,
+                     char *lgicmd, uint32_t lgicmd_size)
+{
+    struct vms_lgi_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    if (op == VMS_LGI_OP_SET) {
+        if (flags)
+            args.flags = *flags;
+        if (uaf_flags)
+            args.uaf_flags = *uaf_flags;
+        if (lgicmd) {
+            vms_size_t len = vms_strlen(lgicmd);
+            if (len > VMS_LGICMD_SIZE - 1)
+                return 0x00000014; /* SS$_BADPARAM */
+            vms_memcpy(args.lgicmd, lgicmd, len);
+        }
+    }
+
+    KIF_CALL(VMS_IOCTL_LGI, &args);
+
+    if (op == VMS_LGI_OP_GET && (args.status & 1)) {
+        if (flags)
+            *flags = args.flags;
+        if (uaf_flags)
+            *uaf_flags = args.uaf_flags;
+        if (lgicmd && lgicmd_size) {
+            uint32_t n = 0;
+            while (n < VMS_LGICMD_SIZE && args.lgicmd[n] != '\0' && n < lgicmd_size - 1) {
+                lgicmd[n] = args.lgicmd[n];
+                n++;
+            }
+            lgicmd[n] = '\0';
+        }
+    }
+    return args.status;
+}
+
+/*
  * $SETDDIR: read and optionally replace this process's default directory, held
  * by the executive (VMS_IOCTL_DDIR, rd vms-872). newdir NULL = read only.
  * olddir (may be NULL) receives the directory in force before the call ("" if

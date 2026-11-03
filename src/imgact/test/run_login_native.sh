@@ -35,15 +35,16 @@
 #
 # WHAT THIS SCRIPT DOES *NOT* PROVE, AND WHY THAT IS THE CORRECT OUTCOME HERE
 # (CLAUDE.md Rule 9), NOT A GAP IN THE TEST:
-#   After authentication succeeds, LOGINOUT calls vms_kif_setident() to stamp
-#   the identity into the executive over /dev/vms -- and this container has
+#   After authentication succeeds, LOGINOUT's first executive call is
+#   vms_kif_lgi() (the login data, rd vms-838b), then vms_kif_setident() to
+#   stamp the identity into the executive over /dev/vms -- and this container has
 #   no /dev/vms (no vms.ko; Docker/podman here is BUILD/TEST TOOLING, never a
 #   runtime, and none of the three labs [vms-2f3 lab-1, vms-a5c lab-2,
 #   vms-e2c lab-Alpha] load a Linux-side vms.ko either -- they run OpenVMS
-#   itself). So vms_kif_setident correctly, HONESTLY fails (no /dev/vms to
+#   itself). So vms_kif_lgi correctly, HONESTLY fails (no /dev/vms to
 #   open), and vms_login.c's own "FAILURE IS FATAL" contract (see the long
 #   comment above that call in tools/vms_login.c) makes LOGINOUT print
-#   %OVMX-F-NOIDENT and _exit(1) -- it does NOT fall through to exec DCL.EXE.
+#   %OVMX-F-NOLGI and _exit(1) before it ever reaches SETIDENT -- it does NOT fall through to exec DCL.EXE.
 #   THAT IS THE ASSERTION BELOW: a VMS-native LOGINOUT.EXE, given no
 #   executive, refuses to hand over a session rather than silently
 #   succeeding -- exactly the behavior Rule 9 requires and exactly the
@@ -167,14 +168,14 @@ grep -q 'User authorization failure' "$WORK/session.out" && { echo "FAIL: SYSTEM
 echo "-- SYSTEM authenticated against the real SYSUAF.DAT hash (no mock) --"
 
 # THE CORRECT OUTCOME IN THIS CONTAINER (see header): no /dev/vms means
-# vms_kif_setident MUST fail, and LOGINOUT MUST refuse the session honestly
+# LOGINOUT's first executive call (vms_kif_lgi) MUST fail, and LOGINOUT MUST refuse the session honestly
 # rather than exec into DCL.EXE anyway. Assert exactly that -- the opposite
 # assertion (a DCL prompt reached, or SHOW TIME's output) would mean a
 # silent userspace fallback exists, which is the bug class Rule 9 forbids.
-grep -q '%OVMX-F-NOIDENT' "$WORK/session.out" || { echo "FAIL: LOGINOUT did not report %OVMX-F-NOIDENT -- expected an honest refusal with no /dev/vms present"; exit 1; }
+grep -q '%OVMX-F-NOLGI' "$WORK/session.out" || { echo "FAIL: LOGINOUT did not report %OVMX-F-NOLGI -- expected an honest refusal with no /dev/vms present"; exit 1; }
 [ "$RC" -ne 0 ] || { echo "FAIL: LOGINOUT exited 0 with no /dev/vms present -- it must refuse, not silently succeed (Rule 9)"; exit 1; }
 grep -qE '^ [0-9]{2}-[A-Z]{3}-[0-9]{4}' "$WORK/session.out" && { echo "FAIL: DCL's SHOW TIME output appears -- LOGINOUT execed into DCL.EXE despite no established identity"; exit 1; }
-echo "-- LOGINOUT correctly refused the session (%OVMX-F-NOIDENT, exit $RC) -- no silent fallback, Rule 9 held --"
+echo "-- LOGINOUT correctly refused the session (%OVMX-F-NOLGI, exit $RC) -- no silent fallback, Rule 9 held --"
 
 echo
 echo "RESULT (vms-c39): LOGINOUT.EXE links VMS-native (LINK.EXE --executable --use the"

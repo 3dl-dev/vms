@@ -16,7 +16,8 @@
 # has no vmsdcl/vmsqueue split, just the login program: prompt Username:/Password:,
 # authenticate against SYSUAF, stamp the identity into the executive
 # (vms_kif_setident), name the session (vms_kif_setprn), drop Linux
-# credentials to the SYSUAF UIC, and execl() DCL.EXE with --login. It is an
+# credentials to the SYSUAF UIC, leave DCL its login data in the executive
+# (vms_kif_lgi, rd vms-838b) and execl() DCL.EXE with no arguments. It is an
 # ET_DYN EXECUTABLE (PT_INTERP=IMGACT.EXE, entry via the C runtime), same
 # shape as DCL.EXE:
 #   (a) has NO symbol vector (it exports nothing -- it is the program, not a

@@ -709,6 +709,12 @@ struct vms_proc {
 	uint64_t            image_privs;      /* the running installed image's (vms-bdc1) */
 	uint8_t             network;          /* $CREPRC PRC$M_NETWRK: a network object's server process (F$MODE NETWORK) */
 	uint8_t             login_images;     /* rd vms-a2c: image activations in which SETIDENT is allowed (a login process: 2 at creation) */
+	/* The login data LOGINOUT leaves for the CLI (rd vms-838b, VMS_IOCTL_LGI):
+	 * stored under the SETIDENT gate, read by the process's own DCL. Zero in
+	 * every process LOGINOUT did not log in. Under mode_lock. */
+	uint32_t            lgi_flags;        /* VMS_LGI_F_* */
+	uint32_t            lgi_uaf_flags;    /* SYSUAF flags, UAI$_FLAGS layout */
+	char                lgi_cmd[VMS_LGICMD_SIZE]; /* login command file spec */
 	exec_lock_t         mode_lock;        /* guards current_mode/privs/image_* */
 
 	/* Authorized JIB quota set (vms-14a) -- byte-twin of the Linux struct
@@ -1581,6 +1587,7 @@ long vms_ioctl_getcli(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dfprot(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ddir(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pprop(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_lgi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_rights(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);

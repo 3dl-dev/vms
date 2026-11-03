@@ -201,3 +201,14 @@ set_tests_properties(dcl-show-device-prefix PROPERTIES
     TIMEOUT 60
     LABELS "dcl;unit"
 )
+
+# DCL.EXE parses no "--" argv flags: LOGINOUT leaves its login data in the
+# executive (VMS_IOCTL_LGI) and DCL reads it (rd vms-838b). Self-proving.
+add_test(
+    NAME dcl-no-argv-flags
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_dcl_no_argv_flags.sh ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(dcl-no-argv-flags PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;gate"
+)

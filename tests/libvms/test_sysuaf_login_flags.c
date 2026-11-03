@@ -24,8 +24,9 @@
  * when passed by CTest): the predicates being correct is worthless if the
  * login path does not CALL them, so this test also asserts the wiring is
  * present -- LOGINOUT refuses on the permit predicate BEFORE starting a
- * session and passes --captive; DCL disables Ctrl/Y and suppresses the REPL
- * for a captive login. Same source-guard technique as
+ * session and stores the CAPTIVE flag in the executive (VMS_IOCTL_LGI, rd
+ * vms-838b; no argv flag); DCL reads it there, disables Ctrl/Y and suppresses
+ * the REPL for a captive login. Same source-guard technique as
  * tests/tools/test_loginout_display.c.
  *
  * Grounding for the per-flag behavior (OpenVMS Guide to System Security:
@@ -165,6 +166,21 @@ int main(int argc, char *argv[])
     CHECK(sysuaf_account_captive(NULL) == 0,
           "NULL record: not captive (fail closed)");
 
+    /* ---- The UAI$_FLAGS longword LOGINOUT leaves for DCL (vms-838b) ---- */
+    {
+        sysuaf_record_t r = rec_with_flags("CAPTIVE");
+        CHECK((sysuaf_record_uaf_flags(&r) & UAI$M_CAPTIVE) != 0,
+              "UAF flags: a CAPTIVE record carries UAI$M_CAPTIVE");
+        le32w(r.raw.uaf$l_flags, UAI$M_DISCTLY);
+        CHECK((sysuaf_record_uaf_flags(&r) & (UAI$M_CAPTIVE | UAI$M_DISCTLY))
+                  == (UAI$M_CAPTIVE | UAI$M_DISCTLY),
+              "UAF flags: the binary uaf$l_flags bits (DISCTLY) are carried too");
+        sysuaf_record_t n = rec_with_flags(NULL);
+        CHECK(sysuaf_record_uaf_flags(&n) == 0,
+              "UAF flags: an account with no flags carries none");
+        CHECK(sysuaf_record_uaf_flags(NULL) == 0, "UAF flags: NULL record -> 0");
+    }
+
     /* ---- Password-expiration predicate (vms-c6df) ---- */
 
     /* A record with neither the flag nor a lifetime is NOT expired -- a normal
@@ -230,8 +246,13 @@ int main(int argc, char *argv[])
                   "LOGINOUT gates login on sysuaf_interactive_login_permitted");
             CHECK(strstr(login, "sysuaf_account_captive") != NULL,
                   "LOGINOUT consults sysuaf_account_captive");
-            CHECK(strstr(login, "--captive") != NULL,
-                  "LOGINOUT passes --captive to DCL for a captive account");
+            CHECK(strstr(login, "UAI$M_CAPTIVE") != NULL &&
+                  strstr(login, "vms_kif_lgi(VMS_LGI_OP_SET") != NULL,
+                  "LOGINOUT stores the CAPTIVE flag in the executive for DCL (vms-838b)");
+            CHECK(strstr(login, "\"--captive\"") == NULL &&
+                  strstr(login, "\"--login\"") == NULL &&
+                  strstr(login, "\"--lgicmd\"") == NULL,
+                  "LOGINOUT passes DCL no argv flag (vms-838b)");
             CHECK(strstr(login, "sysuaf_password_expired") != NULL,
                   "LOGINOUT gates login on sysuaf_password_expired (vms-c6df)");
             free(login);
@@ -242,8 +263,11 @@ int main(int argc, char *argv[])
         char *dcl = slurp(argv[2]);
         CHECK(dcl != NULL, "read src/vmsdcl/dcl_main.c for source guard");
         if (dcl) {
-            CHECK(strstr(dcl, "--captive") != NULL,
-                  "DCL handles --captive");
+            CHECK(strstr(dcl, "vms_kif_lgi(VMS_LGI_OP_GET") != NULL &&
+                  strstr(dcl, "UAI$M_CAPTIVE") != NULL,
+                  "DCL reads the CAPTIVE flag from the executive (vms-838b)");
+            CHECK(strstr(dcl, "\"--captive\"") == NULL,
+                  "DCL parses no --captive argv flag (vms-838b)");
             CHECK(strstr(dcl, "ctrl_y_enabled = 0") != NULL,
                   "DCL disables Ctrl/Y for a captive login");
             CHECK(strstr(dcl, "captive_mode")

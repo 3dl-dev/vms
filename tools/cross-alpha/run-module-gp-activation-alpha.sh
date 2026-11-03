@@ -1361,6 +1361,12 @@ run_boot_a() {
               echo "LOGIN-RUN: SYSTEM/MANAGER login did not reach the banner" >> modgpA.raw
           fi
       fi
+      # A guest that is gone before the harness is done exited on its own:
+      # record how, so a console that stops mid-boot says why.
+      if ! kill -0 "$QP" 2>/dev/null; then
+          QRC=0; wait "$QP" 2>/dev/null || QRC=$?
+          echo "BOOT-HARNESS: qemu-system-alpha exited by itself after ${W}s, status $QRC (vmlinux-boot $(stat -c %s vmlinux-boot) bytes)" >> modgpA.raw
+      fi
       exec 6>&-
       sleep 3            # let STDRV/LOGINOUT flush the last seam + prompt
       kill "$QP" 2>/dev/null || true
@@ -1368,7 +1374,9 @@ run_boot_a() {
       rm -f "$FIFO"
       grep -avE "TSUNAMI machine check|tsunami_(read|write)" modgpA.raw > modgpA.log || true
     '
+  local _boot_rc=$?
   set -e
+  [ "$_boot_rc" -eq 0 ] || echo "[modgp-activation] boot container exited with status $_boot_rc" >&2
   docker rm -f "$cname" >/dev/null 2>&1 || true
   # BOOT_KEEP_IMG=1: keep the disk the boot wrote (a cc1build shard's objects are read off it)
   [ -n "${BOOT_KEEP_IMG:-}" ] || rm -f "$WORK/modgpA.img"

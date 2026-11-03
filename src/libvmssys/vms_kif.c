@@ -2418,6 +2418,16 @@ uint32_t vms_kif_brkauth(uint32_t sndtyp)
 uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *username,
                             uint32_t uic, uint64_t privs, uint32_t *vms_pid)
 {
+    return vms_kif_creprc_pcb_q(child_pid, flags, username, uic, privs, 0, vms_pid);
+}
+
+/* The same, with the $CREPRC quota list's PQL$_PGFLQUOTA (rd vms-89dd8):
+ * `flags` carries VMS_CREPRC_PCB_F_QUOTA when a list was given, `pgflquota`
+ * the value it named (0 = none named). The executive sources the limit. */
+uint32_t vms_kif_creprc_pcb_q(uint32_t child_pid, uint32_t flags, const char *username,
+                              uint32_t uic, uint64_t privs, uint32_t pgflquota,
+                              uint32_t *vms_pid)
+{
     struct vms_creprc_pcb_args args;
 
     vms_memset(&args, 0, sizeof(args));
@@ -2427,6 +2437,7 @@ uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *user
         vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
     args.uic = uic;
     args.privs = privs;
+    args.pgflquota = pgflquota;
 
     KIF_CALL(VMS_IOCTL_CREPRC_PCB, &args);
 

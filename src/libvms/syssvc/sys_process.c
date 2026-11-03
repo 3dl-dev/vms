@@ -200,6 +200,7 @@
 #include "lnmdef.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
+#include "pqldef.h"
 #include "pscandef.h"
 #include "vmsfs/filespec.h"   /* vmsfs_to_linux_path: a VMS image spec */
 #include <sched.h>
@@ -1319,7 +1320,35 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                       uint32_t stsflg, const void *itemlst,
                       const struct dsc$descriptor_s *node) {
     OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
-    (void)quota; (void)baspri; (void)mbxunt;
+    (void)baspri; (void)mbxunt;
+
+    /*
+     * The QUOTA LIST (rd vms-89dd8): packed entries, a one-byte PQL$_ code
+     * then a longword value, ended by PQL$_LISTEND (OpenVMS System Services
+     * Reference, $CREPRC). The executive sources the new process's quotas
+     * from it (VMS_CREPRC_PCB_F_QUOTA); this only carries what the list says.
+     * PGFLQUOTA is the limit the executive enforces ($EXPREG/$CRETVA); the
+     * other entries are validated but not yet sourced (no executive state to
+     * hold them), so a list naming them is accepted, never silently faked.
+     */
+    uint32_t quota_flags = 0, quota_pgfl = 0;
+    if (quota) {
+        const uint8_t *qp = (const uint8_t *)quota;
+        int n;
+        quota_flags = VMS_CREPRC_PCB_F_QUOTA;
+        for (n = 0; n < 64; n++, qp += 5) {
+            uint32_t v;
+            if (qp[0] == PQL$_LISTEND)
+                break;
+            if (qp[0] >= PQL$_LENGTH)
+                return SS$_BADPARAM;
+            memcpy(&v, qp + 1, sizeof v);
+            if (qp[0] == PQL$_PGFLQUOTA)
+                quota_pgfl = v;
+        }
+        if (n == 64)
+            return SS$_BADPARAM;
+    }
 
     /* Creating a process on another cluster node, or a non-empty $CREPRC item
      * list, is not supported: refuse honestly instead of creating a local
@@ -2075,8 +2104,9 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                 pflags |= VMS_CREPRC_PCB_F_NETWORK;
             if (!detached && (uic != 0 || prvadr != NULL) && child_username[0])
                 pflags |= VMS_CREPRC_PCB_F_IDENTITY;
-            go_st = vms_kif_creprc_pcb(task, pflags,
-                                       child_username, child_uic, child_privs, &go_pid);
+            go_st = vms_kif_creprc_pcb_q(task, pflags | quota_flags,
+                                         child_username, child_uic, child_privs,
+                                         quota_pgfl, &go_pid);
             if (vms_kif_creprc_sync(VMS_CREPRC_SYNC_ANSWER, &rec, NULL, &go_st, &go_pid) & 1) {
                 uint32_t report = 0;
                 if (vms_kif_creprc_sync(VMS_CREPRC_SYNC_RESULT, &rec, NULL, &report, NULL) & 1) {

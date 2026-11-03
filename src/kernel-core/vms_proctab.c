@@ -2146,7 +2146,7 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
     given = (args.flags & VMS_CREPRC_PCB_F_IDENTITY) != 0;
     network = (args.flags & VMS_CREPRC_PCB_F_NETWORK) != 0;
     if ((args.flags & ~(0xFFu | VMS_CREPRC_PCB_F_LOGIN | VMS_CREPRC_PCB_F_IDENTITY |
-                        VMS_CREPRC_PCB_F_NETWORK)) != 0 ||
+                        VMS_CREPRC_PCB_F_NETWORK | VMS_CREPRC_PCB_F_QUOTA)) != 0 ||
         (network && kind != VMS_CREPRC_PCB_DETACHED) ||
         (kind != VMS_CREPRC_PCB_SUBPROCESS && kind != VMS_CREPRC_PCB_DETACHED &&
          kind != VMS_CREPRC_PCB_CONTINUE) ||
@@ -2180,7 +2180,8 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
      * activations' worth (vms_proc_image_activated counts them down). A
      * subprocess with a GIVEN identity ($CREPRC uic/prvadr) takes it now,
      * from the executive, instead of stamping it itself. */
-    if ((args.status & 1) && (login || given || network)) {
+    if ((args.status & 1) && (login || given || network ||
+                              (args.flags & VMS_CREPRC_PCB_F_QUOTA))) {
         struct vms_proc *np;
 
         exec_lock(&vms_proc_hash_lock);
@@ -2191,6 +2192,24 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
          * as the executive says, never a guess from its missing terminal. */
         if (np && network)
             np->network = 1;
+        /* The quota list ($CREPRC "quota", rd vms-89dd8): the EXECUTIVE sources
+         * the new process's PGFLQUOTA -- the listed PQL$_PGFLQUOTA, else the
+         * SYSGEN default PQL_DPGFLQUOTA -- clamped up to PQL_MPGFLQUOTA, and
+         * marks the block sourced so va_quota_check enforces it. The other
+         * limits are the creator's when it has a sourced block (a subprocess
+         * shares its job's limits), otherwise left zero/unsourced. The child
+         * has not been released yet, so nothing runs against the block. */
+        /* NEGCTL-ANCHORED (creprc-quota-list-ignored) */
+        if (np && (args.flags & VMS_CREPRC_PCB_F_QUOTA)) {
+            uint32_t pg = args.pgflquota ? args.pgflquota : VMS_PQL_DPGFLQUOTA;
+
+            if (pg < VMS_PQL_MPGFLQUOTA)
+                pg = VMS_PQL_MPGFLQUOTA;
+            if (proc->quota_valid)
+                np->quota = proc->quota;
+            np->quota.pgflquota = pg;
+            np->quota_valid = 1;
+        }
         exec_unlock(&vms_proc_hash_lock);
         if (np && given)
             vms_proc_apply_ticket_identity(np, args.username, args.uic, args.privs);

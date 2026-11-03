@@ -384,6 +384,17 @@ struct vms_getcli_args {
 #define VMS_CREPRC_PCB_DETACHED   1u
 #define VMS_CREPRC_PCB_CONTINUE   2u   /* DCL's image task: the SAME VMS process (rd vms-e50) */
 #define VMS_CREPRC_PCB_F_LOGIN    0x100u
+/* OR'd into flags (rd vms-89dd8): $CREPRC was given a quota list. `pgflquota`
+ * carries PQL$_PGFLQUOTA from it (0 = the list did not name one); the executive
+ * sources the new process's PGFLQUOTA from it, else PQL_DPGFLQUOTA, clamped up
+ * to PQL_MPGFLQUOTA, and marks the quota block sourced (va_quota_check). */
+#define VMS_CREPRC_PCB_F_QUOTA    0x800u
+/* SYSGEN PQL_DPGFLQUOTA / PQL_MPGFLQUOTA (pagelets): the default and minimum
+ * PGFLQUOTA of a process whose creator gave a quota list. The OpenVMS Alpha
+ * V8.4 parameter defaults (OpenVMS System Management Utilities Reference,
+ * SYSGEN PQL_ parameters); OVMX has no SYSGEN parameter store to override them. */
+#define VMS_PQL_DPGFLQUOTA        65536u
+#define VMS_PQL_MPGFLQUOTA        2048u
 #define VMS_CREPRC_PCB_F_NETWORK  0x400u   /* detached: PRC$M_NETWRK, a network object's server (JPI$K_NETWORK) */
 #define VMS_CREPRC_PCB_F_IDENTITY 0x200u
 #define VMS_CREPRC_PCB_KIND(f)    ((f) & 0xFFu)
@@ -395,7 +406,7 @@ struct vms_creprc_pcb_args {
     uint32_t vms_pid;                     /* out: the new process's VMS PID    */
     uint64_t privs;                       /* in: DETACHED privileges           */
     uint32_t status;                      /* out: SS$_ status                  */
-    uint32_t pad;
+    uint32_t pgflquota;                    /* in: PQL$_PGFLQUOTA (F_QUOTA), pagelets */
 };
 #define VMS_IOCTL_CREPRC_PCB _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x9a, struct vms_creprc_pcb_args)
 

@@ -28,6 +28,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 
 #define EXIT_SKIP 77
 #define DCL_PATH "/bin/DCL.EXE"
@@ -40,40 +41,31 @@ static int pass = 0, fail = 0;
 
 static char *const dcl_env[] = { (char *)"PATH=/bin", NULL };
 
+/* DCL's output comes back from its SYS$OUTPUT mailbox (rd vms-2f39). */
 static int run_dcl(const char *script, char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
     out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) return -1;
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
     fflush(NULL);
     pid_t pid = ovmx_fork_login();
-    if (pid < 0) return -1;
+    if (pid < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
     if (pid == 0) {
+        ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
         execle(DCL_PATH, "DCL.EXE", (char *)NULL, dcl_env);
         _exit(127);
     }
     close(in_pipe[0]);
-    close(out_pipe[1]);
     if (write(in_pipe[1], script, strlen(script)) < 0) { /* best effort */ }
     close(in_pipe[1]);
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
-    }
-    out[used] = '\0';
-    close(out_pipe[0]);
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+    ovmx_dcl_sysout_collect(&so, out, outsz);
     return 0;
 }
 

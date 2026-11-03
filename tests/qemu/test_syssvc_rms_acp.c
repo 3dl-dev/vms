@@ -56,6 +56,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "rms/rms.h"
 #include "rms/nam.h"
 #include "rms/rab.h"
@@ -447,41 +448,61 @@ static void fat_search_attr(const struct fat_case *c)
           fa.mrs == c->mrs && fa.lrl == c->lrl && fa.org == FAB$C_SEQ, label);
 }
 
-/* Feed `script` to /bin/DCL.EXE; capture its output. 0 = DCL.EXE ran to EOF. */
+/* Feed `script` to /bin/DCL.EXE; capture its output from its SYS$OUTPUT
+ * mailbox (rd vms-2f39). 0 = DCL.EXE ran to its end within the deadline. */
 static int run_dcl(const char *script, char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
 
     out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
     fflush(NULL);
     pid_t pid = ovmx_fork_subprocess();
-    if (pid < 0) return -1;
+    if (pid < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
     if (pid == 0) {
+        ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
         execl("/bin/DCL.EXE", "DCL.EXE", (char *)NULL);
-        printf("SETUP_FAIL exec\n");
-        fflush(stdout);
-        _exit(127);
+        _exit(127);     /* the parent reports SETUP_FAIL exec */
     }
     close(in_pipe[0]);
-    close(out_pipe[1]);
     (void)!write(in_pipe[1], script, strlen(script));
     close(in_pipe[1]);
-    size_t used = 0;
-    int dr = ovmx_tcg_drain_pipe(out_pipe[0], out, outsz, ovmx_tcg_ms(30000), pid, &used);
-    close(out_pipe[0]);
-    int ws;
-    while (waitpid(pid, &ws, 0) < 0 && errno == EINTR)
-        ;
-    if (dr == OVMX_TCG_DRAIN_TIMEOUT) {
+    /* The same TOTAL wall bound the pipe drain had: on expiry the wedged DCL
+     * is SIGKILLed and its partial output shown (INV-6, no masked success). */
+    long deadline = ovmx_tcg_ms(30000), start = ovmx_tcg_mono_ms();
+    int timed_out = 0, ws = 0;
+    for (;;) {
+        pid_t r = waitpid(pid, &ws, WNOHANG);
+        if (r == pid || (r < 0 && errno != EINTR)) break;
+        if (ovmx_dcl_sysout_peek(&so, out, outsz) >= outsz - 1) {
+            while (waitpid(pid, &ws, 0) < 0 && errno == EINTR)
+                ;
+            break;
+        }
+        if (ovmx_tcg_mono_ms() - start >= deadline) {
+            timed_out = 1;
+            kill(pid, SIGKILL);
+            while (waitpid(pid, &ws, 0) < 0 && errno == EINTR)
+                ;
+            break;
+        }
+        usleep(10000);
+    }
+    size_t used = ovmx_dcl_sysout_collect(&so, out, outsz);
+    if (timed_out) {
         printf("  ---- partial DCL.EXE output (%zu bytes) ----\n%s\n  ---- end ----\n", used, out);
         return -1;
+    }
+    /* The child's stdout is the null device now, so an exec (127) or
+     * SYS$OUTPUT-definition (126) failure is reported here, into the text the
+     * checks read, exactly as the child used to print it. */
+    if (WIFEXITED(ws) && (WEXITSTATUS(ws) == 127 || WEXITSTATUS(ws) == 126) &&
+        used + 16 < outsz) {
+        memcpy(out + used, "SETUP_FAIL exec\n", 17);
     }
     return 0;
 }

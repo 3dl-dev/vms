@@ -53,6 +53,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <grp.h>
 #include <pwd.h>
 #include <sys/wait.h>
@@ -63,6 +64,7 @@
 #include "prvdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"   /* processes this suite creates (rd vms-2a5) */
+#include "ovmx_dcl_sysout.h"   /* DCL's output, from its SYS$OUTPUT mailbox (rd vms-2f39) */
 #include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-586 ACP mount)     */
 #include "descrip.h"
 #include "rms_textfile.h"    /* the on-volume OPERATOR.LOG, read back (vms-1f6) */
@@ -148,28 +150,62 @@ static char *const poison_env[] = {
  * drop != 0 means "become an unprivileged user first", which is what makes
  * the executive's refusal below a real refusal rather than a policy choice.
  *
- * The child prints "SETIDENT_STATUS=<n>" on the captured stream BEFORE
+ * The child reports "SETIDENT_STATUS=<n>" on the captured stream BEFORE
  * exec'ing, so the writer's own verdict is part of the evidence rather
  * than something this file asserts about from the outside.
+ *
+ * With an executive, DCL's output comes back from its SYS$OUTPUT mailbox
+ * and the child's own reports travel as ovmx_dcl_sysout_note()s, which
+ * collect() puts ahead of DCL's records (rd vms-2f39). The no-executive
+ * check has no mailbox to use, so there the capture is still a pipe on
+ * the child's stdout/stderr.
  */
+static int dcl_exec_present;   /* set by main() once /dev/vms opens */
+
+/* A line the child itself reports: a note on the mailbox route, a printf on
+ * the pipe route. */
+static void child_say(const struct ovmx_dcl_sysout *so, int mbx,
+                      const char *fmt, ...)
+{
+    char line[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof line, fmt, ap);
+    va_end(ap);
+    if (mbx) {
+        ovmx_dcl_sysout_note(so, line);
+    } else {
+        fputs(line, stdout);
+        fflush(stdout);
+    }
+}
+
 static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
                    int drop, const char *script, char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2], out_pipe[2] = { -1, -1 };
+    struct ovmx_dcl_sysout so;
+    int mbx = dcl_exec_present;
 
     out[0] = '\0';
     if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (mbx) {
+        if (!(ovmx_dcl_sysout_open(&so) & 1)) {
+            close(in_pipe[0]); close(in_pipe[1]); return -1;
+        }
+    } else if (pipe(out_pipe) < 0) {
+        close(in_pipe[0]); close(in_pipe[1]); return -1;
+    }
 
     /*
      * Flush every stdio buffer -- including this process's own (parent)
      * stdout -- before forking. Without this, the child inherits a copy
-     * of the PARENT's unflushed stdout buffer; the child's own
-     * fflush(stdout) after dup2'ing the capture pipe then writes that
-     * inherited parent data into the child's pipe, splicing a prior
-     * run_dcl() call's transcript into this call's capture. Latent when
-     * stdout is line-buffered (console); live the moment stdout is fully
-     * buffered (redirected to a file) -- see vms-cdb.
+     * of the PARENT's unflushed stdout buffer; on the pipe route the
+     * child's own fflush(stdout) after dup2'ing the capture pipe then
+     * writes that inherited parent data into the child's pipe, splicing a
+     * prior run_dcl() call's transcript into this call's capture. Latent
+     * when stdout is line-buffered (console); live the moment stdout is
+     * fully buffered (redirected to a file) -- see vms-cdb.
      */
     fflush(NULL);
 
@@ -182,55 +218,62 @@ static int run_dcl(const char *username, uint32_t uic, uint64_t privs,
         : ovmx_fork_login();   /* it stamps the identity: a login process (rd vms-a2c) */
     if (pid < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        if (mbx) ovmx_dcl_sysout_collect(&so, NULL, 0);
+        else { close(out_pipe[0]); close(out_pipe[1]); }
         return -1;
     }
 
     if (pid == 0) {
+        if (mbx)
+            ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        if (!mbx) {
+            dup2(out_pipe[1], STDOUT_FILENO);
+            dup2(out_pipe[1], STDERR_FILENO);
+            close(out_pipe[0]); close(out_pipe[1]);
+        }
 
         if (drop) {
-            if (setgid((gid_t)C_GID) != 0) { printf("SETGID_FAILED\n"); fflush(stdout); _exit(126); }
-            if (setuid((uid_t)C_UID) != 0) { printf("SETUID_FAILED\n"); fflush(stdout); _exit(126); }
+            if (setgid((gid_t)C_GID) != 0) { child_say(&so, mbx, "SETGID_FAILED\n"); _exit(126); }
+            if (setuid((uid_t)C_UID) != 0) { child_say(&so, mbx, "SETUID_FAILED\n"); _exit(126); }
         }
 
         if (username) {
             uint32_t st = vms_kif_setident(username, uic, privs);
-            printf("SETIDENT_STATUS=%u\n", (unsigned)st);
+            child_say(&so, mbx, "SETIDENT_STATUS=%u\n", (unsigned)st);
         } else {
-            printf("SETIDENT_STATUS=none\n");
+            child_say(&so, mbx, "SETIDENT_STATUS=none\n");
         }
-        fflush(stdout);
 
         execle(DCL_PATH, "DCL.EXE", (char *)NULL, poison_env);
-        printf("EXEC_FAILED=%d\n", errno);
-        fflush(stdout);
+        child_say(&so, mbx, "EXEC_FAILED=%d\n", errno);
         _exit(127);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
+    if (!mbx) close(out_pipe[1]);
     ssize_t w = write(in_pipe[1], script, strlen(script));
     (void)w;
     close(in_pipe[1]);
 
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
+    if (!mbx) {
+        size_t used = 0;
+        for (;;) {
+            ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
+            if (n <= 0) break;
+            used += (size_t)n;
+            if (used >= outsz - 1) break;
+        }
+        out[used] = '\0';
+        close(out_pipe[0]);
     }
-    out[used] = '\0';
-    close(out_pipe[0]);
 
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+    if (mbx)
+        ovmx_dcl_sysout_collect(&so, out, outsz);
     return 0;
 }
 
@@ -267,102 +310,90 @@ static void dump(const char *label, const char *text)
  * point: the executive's refusal and the credential drop are only
  * load-bearing together.
  *
- * The child prints its own verdict on the captured stream and then
- * execs the real DCL with the poisoned environment, so what is asserted
- * is what a user would actually see.
+ * The session and the subprocess report their own verdicts as notes ahead
+ * of DCL's output, and the subprocess execs the real DCL with the poisoned
+ * environment, its SYS$OUTPUT the suite's mailbox (rd vms-2f39), so what
+ * is asserted is what a user would actually see.
  */
 static int run_session_fork(char *out, size_t outsz)
 {
-    int out_pipe[2], in_pipe[2];
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
+    char line[128];
 
     out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
 
     /*
      * Flush every stdio buffer -- including this process's own (parent)
-     * stdout -- before forking. Without this, the child inherits a copy
-     * of the PARENT's unflushed stdout buffer; the child's own
-     * fflush(stdout) after dup2'ing the capture pipe then writes that
-     * inherited parent data into the child's pipe, splicing a prior
-     * call's transcript into this call's capture. Latent when stdout is
-     * line-buffered (console); live the moment stdout is fully buffered
-     * (redirected to a file) -- see vms-cdb.
+     * stdout -- before forking, so no child inherits a copy of the
+     * PARENT's unflushed stdout buffer that a later flush in the child
+     * could write out a second time (vms-cdb).
      */
     fflush(NULL);
 
     pid_t sess = ovmx_fork_login();   /* the session: a process this suite creates */
     if (sess < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
         return -1;
     }
 
     if (sess == 0) {
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
 
         /* 1. LOGINOUT establishes the authenticated identity. */
         uint32_t st = vms_kif_setident(A_NAME, (A_GRP << 16) | A_MEM, A_PRIVS);
-        printf("SESSION_SETIDENT=%u\n", (unsigned)st);
+        snprintf(line, sizeof line, "SESSION_SETIDENT=%u\n", (unsigned)st);
+        ovmx_dcl_sysout_note(&so, line);
 
         /* 2. LOGINOUT becomes the user. Same calls, same order, same
          *    fatality as tools/vms_login.c. */
         if (setgroups(0, NULL) != 0 || setgid((gid_t)A_GRP) != 0 ||
             setuid((uid_t)A_MEM) != 0) {
-            printf("SESSION_DROP_FAILED=%d\n", errno);
-            fflush(stdout);
+            snprintf(line, sizeof line, "SESSION_DROP_FAILED=%d\n", errno);
+            ovmx_dcl_sysout_note(&so, line);
             _exit(126);
         }
-        printf("SESSION_UID=%u SESSION_GID=%u\n",
-               (unsigned)getuid(), (unsigned)getgid());
-        fflush(stdout);
+        snprintf(line, sizeof line, "SESSION_UID=%u SESSION_GID=%u\n",
+                 (unsigned)getuid(), (unsigned)getgid());
+        ovmx_dcl_sysout_note(&so, line);
 
         /* 3. The session spawns a subprocess (the session creates it, as
          *    $CREPRC does), which claims everything. */
         pid_t sub = ovmx_fork_login();
         if (sub == 0) {
+            ovmx_dcl_sysout_child(&so);
             uint32_t vpid = 0;
             uint32_t rst = ovmx_test_self(&vpid);
-            printf("SUB_SELF=%u\n", (unsigned)rst);
+            snprintf(line, sizeof line, "SUB_SELF=%u\n", (unsigned)rst);
+            ovmx_dcl_sysout_note(&so, line);
             uint32_t cst = vms_kif_setident("SYSTEM", (1u << 16) | 4u, ~0ULL);
-            printf("SUB_SETIDENT=%u\n", (unsigned)cst);
-            fflush(stdout);
+            snprintf(line, sizeof line, "SUB_SETIDENT=%u\n", (unsigned)cst);
+            ovmx_dcl_sysout_note(&so, line);
             execle(DCL_PATH, "DCL.EXE", (char *)NULL, poison_env);
-            printf("SUB_EXEC_FAILED=%d\n", errno);
-            fflush(stdout);
+            snprintf(line, sizeof line, "SUB_EXEC_FAILED=%d\n", errno);
+            ovmx_dcl_sysout_note(&so, line);
             _exit(127);
         }
         int sst;
         while (sub > 0 && waitpid(sub, &sst, 0) < 0 && errno == EINTR)
             ;
-        fflush(stdout);
         _exit(0);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
     ssize_t w = write(in_pipe[1], "SHOW PROCESS\nSHOW PROCESS/PRIVILEGES\n",
                       strlen("SHOW PROCESS\nSHOW PROCESS/PRIVILEGES\n"));
     (void)w;
     close(in_pipe[1]);
 
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
-    }
-    out[used] = '\0';
-    close(out_pipe[0]);
-
     int st;
     while (waitpid(sess, &st, 0) < 0 && errno == EINTR)
         ;
+    ovmx_dcl_sysout_collect(&so, out, outsz);
     return 0;
 }
 
@@ -879,61 +910,61 @@ static int g_opcom_headers_naming(const char *log, const char *want, int *total)
     return hits;
 }
 
+/* DCL's output comes back from its SYS$OUTPUT mailbox; the session's and
+ * the subprocess's own reports are notes ahead of it (rd vms-2f39). */
 static int run_g_subprocess(const char *script, char *out, size_t outsz)
 {
-    int out_pipe[2], in_pipe[2];
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
+    char line[256];
 
     out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
 
     /*
      * Flush every stdio buffer -- including this process's own (parent)
-     * stdout -- before forking. Without this, the child inherits a copy
-     * of the PARENT's unflushed stdout buffer; the child's own
-     * fflush(stdout) after dup2'ing the capture pipe then writes that
-     * inherited parent data into the child's pipe, splicing a prior
-     * call's transcript into this call's capture. Latent when stdout is
-     * line-buffered (console); live the moment stdout is fully buffered
-     * (redirected to a file) -- see vms-cdb.
+     * stdout -- before forking, so no child inherits a copy of the
+     * PARENT's unflushed stdout buffer that a later flush in the child
+     * could write out a second time (vms-cdb).
      */
     fflush(NULL);
 
     pid_t sess = ovmx_fork_login();   /* the session: a process this suite creates */
     if (sess < 0) {
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
         return -1;
     }
 
     if (sess == 0) {
         struct vms_procinfo self;
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
 
         /* 1. LOGINOUT stamps the authenticated identity. */
-        printf("G_SESSION_SETIDENT=%u\n",
-               (unsigned)vms_kif_setident(G_NAME, (G_GRP << 16) | G_MEM,
-                                          G_PRIVS));
+        snprintf(line, sizeof line, "G_SESSION_SETIDENT=%u\n",
+                 (unsigned)vms_kif_setident(G_NAME, (G_GRP << 16) | G_MEM,
+                                            G_PRIVS));
+        ovmx_dcl_sysout_note(&so, line);
         /* Read it back out of the executive, so the run itself shows the
          * table CAN hold a name -- otherwise the subprocess's blank could
          * be explained by the executive naming nobody in this boot. */
         memset(&self, 0, sizeof(self));
-        if (vms_kif_getjpi_self(&self) & 1)
-            printf("G_SESSION_SELF=%s\n", self.username);
+        if (vms_kif_getjpi_self(&self) & 1) {
+            snprintf(line, sizeof line, "G_SESSION_SELF=%s\n", self.username);
+            ovmx_dcl_sysout_note(&so, line);
+        }
 
         /* 2. LOGINOUT becomes the user. */
         if (setgroups(0, NULL) != 0 || setgid((gid_t)G_GRP) != 0 ||
             setuid((uid_t)G_MEM) != 0) {
-            printf("G_SESSION_DROP_FAILED=%d\n", errno);
-            fflush(stdout);
+            snprintf(line, sizeof line, "G_SESSION_DROP_FAILED=%d\n", errno);
+            ovmx_dcl_sysout_note(&so, line);
             _exit(126);
         }
-        printf("G_SESSION_UID=%u\n", (unsigned)getuid());
-        fflush(stdout);
+        snprintf(line, sizeof line, "G_SESSION_UID=%u\n", (unsigned)getuid());
+        ovmx_dcl_sysout_note(&so, line);
 
         /* 3. The session SPAWNs: it creates the subprocess (rd vms-2a5), which
          *    inherits the session's name and claims nothing. */
@@ -941,7 +972,9 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
         if (sub == 0) {
             uint32_t vpid = 0;
             struct passwd *pw;
-            printf("G_SUB_SELF=%u\n", (unsigned)ovmx_test_self(&vpid));
+            ovmx_dcl_sysout_child(&so);
+            snprintf(line, sizeof line, "G_SUB_SELF=%u\n", (unsigned)ovmx_test_self(&vpid));
+            ovmx_dcl_sysout_note(&so, line);
             /* vms-586: point SYS$SYSDEVICE at the $MOUNTed ODS-2 fixture in
              * LNM$JOB, keyed to THIS subprocess's job_id. The DCL.EXE this
              * process execve's into is the SAME process (same job_id), and its
@@ -956,41 +989,31 @@ static int run_g_subprocess(const char *script, char *out, size_t outsz)
              * Without it, "the Linux name is absent" is a claim about a
              * name that may never have existed. */
             pw = getpwuid(getuid());
-            printf("G_SUB_PWNAM=%s\n", pw && pw->pw_name ? pw->pw_name : "(none)");
-            fflush(stdout);
+            snprintf(line, sizeof line, "G_SUB_PWNAM=%s\n",
+                     pw && pw->pw_name ? pw->pw_name : "(none)");
+            ovmx_dcl_sysout_note(&so, line);
             execle(DCL_PATH, "DCL.EXE", (char *)NULL, g_env);
-            printf("G_SUB_EXEC_FAILED=%d\n", errno);
-            fflush(stdout);
+            snprintf(line, sizeof line, "G_SUB_EXEC_FAILED=%d\n", errno);
+            ovmx_dcl_sysout_note(&so, line);
             _exit(127);
         }
         int sst;
         while (sub > 0 && waitpid(sub, &sst, 0) < 0 && errno == EINTR)
             ;
-        fflush(stdout);
         _exit(0);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
     {
         ssize_t w = write(in_pipe[1], script, strlen(script));
         (void)w;
     }
     close(in_pipe[1]);
 
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
-    }
-    out[used] = '\0';
-    close(out_pipe[0]);
-
     int st;
     while (waitpid(sess, &st, 0) < 0 && errno == EINTR)
         ;
+    ovmx_dcl_sysout_collect(&so, out, outsz);
     return 0;
 }
 
@@ -1560,6 +1583,7 @@ int main(void)
                pass, fail);
         return fail > 0 ? 1 : EXIT_SKIP;
     }
+    dcl_exec_present = 1;
 
     if (ovmx_test_self(&selfpid) != SS_NORMAL) {
         printf("  FAIL: this process has no row its creator made\n");

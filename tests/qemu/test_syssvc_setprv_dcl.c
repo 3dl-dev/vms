@@ -63,6 +63,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -114,69 +115,129 @@ static int write_full(int fd, const void *buf, size_t n)
  *
  * Returns 0 on success. Modeled on tests/qemu/test_syssvc_setname.c's
  * run_dcl(); credential drop mirrors test_syssvc_setprv.c's child.
+ *
+ * With an executive, DCL's output comes back from its SYS$OUTPUT mailbox
+ * (rd vms-2f39), and the child's own "SETUP_FAIL" reports -- which P6-P8
+ * assert on -- are ovmx_dcl_sysout_note()s that collect() puts ahead of it.
+ * The device-absent check has no executive, so no mailbox can exist: it
+ * still reads a pipe on DCL's stdout/stderr.
  */
+static int dcl_exec_present;   /* set by main() once /dev/vms opens */
+
+/* The mailbox route's bound: wait for the DCL child to exit and reap it; past
+ * the deadline SIGKILL and reap it and return OVMX_TCG_DRAIN_TIMEOUT -- the
+ * counterpart of ovmx_tcg_drain_pipe()'s bound on the pipe route. */
+static int dcl_sysout_wait(pid_t pid, long deadline_ms)
+{
+    long start = ovmx_tcg_mono_ms();
+    for (;;) {
+        pid_t r = waitpid(pid, NULL, WNOHANG);
+        if (r == pid || (r < 0 && errno != EINTR))
+            return OVMX_TCG_DRAIN_EOF;
+        if (ovmx_tcg_mono_ms() - start >= deadline_ms) {
+            kill(pid, SIGKILL);
+            while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+                ;
+            return OVMX_TCG_DRAIN_TIMEOUT;
+        }
+        usleep(20000);
+    }
+}
+
+/* A line the child itself reports: a note on the mailbox route, a printf on
+ * the pipe route. */
+static void child_say(const struct ovmx_dcl_sysout *so, int mbx,
+                      const char *line)
+{
+    if (mbx) {
+        ovmx_dcl_sysout_note(so, line);
+    } else {
+        fputs(line, stdout);
+        fflush(stdout);
+    }
+}
+
 static int run_dcl_creds(const char *script, char *out, size_t outsz,
                          int drop_creds)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2], out_pipe[2] = { -1, -1 };
+    struct ovmx_dcl_sysout so;
+    int mbx = dcl_exec_present;
 
     out[0] = '\0';
     if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (mbx) {
+        if (!(ovmx_dcl_sysout_open(&so) & 1)) {
+            close(in_pipe[0]); close(in_pipe[1]); return -1;
+        }
+    } else if (pipe(out_pipe) < 0) {
+        close(in_pipe[0]); close(in_pipe[1]); return -1;
+    }
 
     fflush(NULL);
 
     /* DCL is a process this suite creates (rd vms-2a5): unprivileged in
      * UIC [C_GID,C_UID] when the credentials drop, else a subprocess. */
     pid_t pid = drop_creds ? ovmx_fork_unprivileged(C_GID, C_UID) : ovmx_fork_subprocess();
-    if (pid < 0) return -1;
+    if (pid < 0) {
+        if (mbx) ovmx_dcl_sysout_collect(&so, NULL, 0);
+        return -1;
+    }
 
     if (pid == 0) {
+        if (mbx)
+            ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
+        if (!mbx) {
+            dup2(out_pipe[1], STDOUT_FILENO);
+            dup2(out_pipe[1], STDERR_FILENO);
+            close(out_pipe[0]); close(out_pipe[1]);
+        }
         if (drop_creds) {
             /* Drop group then user, BEFORE exec, so DCL.EXE runs under the
              * dropped substrate credentials too. */
             if (setgid(C_GID) != 0 || setuid(C_UID) != 0) {
-                printf("SETUP_FAIL dropcreds\n");
-                fflush(stdout);
+                child_say(&so, mbx, "SETUP_FAIL dropcreds\n");
                 _exit(2);
             }
         }
         execl("/bin/DCL.EXE", "DCL.EXE", (char *)NULL);
-        printf("SETUP_FAIL exec\n");
-        fflush(stdout);
+        child_say(&so, mbx, "SETUP_FAIL exec\n");
         _exit(127);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
+    if (!mbx) close(out_pipe[1]);
     (void)write_full(in_pipe[1], script, strlen(script));
     close(in_pipe[1]);
 
-    /* Bounded drain (was an UNBOUNDED blocking read that hung forever if
+    /* Bounded (was an UNBOUNDED blocking read that hung forever if
      * DCL.EXE never closed stdout). ovmx_tcg_ms scales the 30s base for a slow
      * TCG guest; x86_64 keeps 30s (scale == 1). */
     size_t used = 0;
     long deadline_ms = ovmx_tcg_ms(30000);
-    int dr = ovmx_tcg_drain_pipe(out_pipe[0], out, outsz, deadline_ms, pid, &used);
-    close(out_pipe[0]);
+    int dr;
+    if (mbx) {
+        dr = dcl_sysout_wait(pid, deadline_ms);
+        used = ovmx_dcl_sysout_collect(&so, out, outsz);
+    } else {
+        dr = ovmx_tcg_drain_pipe(out_pipe[0], out, outsz, deadline_ms, pid, &used);
+        close(out_pipe[0]);
+    }
 
     int st;
     while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
 
     if (dr == OVMX_TCG_DRAIN_TIMEOUT) {
-        /* INV-6 / prove-or-expose: DCL.EXE never closed stdout within the
+        /* INV-6 / prove-or-expose: DCL.EXE never finished within the
          * (scaled) deadline. Show the PARTIAL capture and how far DCL got,
          * then FAIL loudly -- never mask a hang as success. A genuine
          * executive-path deadlock on Alpha surfaces here as a partial (or
          * empty) transcript pinpointing the wedge; a merely TCG-slow DCL
          * clears the bar once OVMX_TEST_DEADLINE_SCALE is large enough and
-         * returns EOF instead. The child was SIGKILLed by the drain. */
+         * returns EOF instead. The child was SIGKILLed by the bound. */
         printf("  ---- SETPRV_DCL partial DCL.EXE output (%zu bytes) ----\n%s\n"
                "  ---- end partial ----\n", used, out);
         printf("SETPRV_DCL: DCL.EXE did NOT complete "
@@ -276,6 +337,7 @@ int main(void)
     if (devfd < 0)
         return device_absent_checks();
     close(devfd);
+    dcl_exec_present = 1;
 
     if (access("/bin/DCL.EXE", X_OK) != 0) {
         printf("  FAIL: /bin/DCL.EXE is not staged in this image\n");

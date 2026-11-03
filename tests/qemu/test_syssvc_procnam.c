@@ -85,6 +85,7 @@
 #include "lib$routines.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "ptrace_hold.h"
 
 #define EXIT_SKIP 77
@@ -1123,7 +1124,8 @@ static int read_full_bounded(int fd, void *buf, size_t n, int timeout_ms)
  * only place SHOW SYSTEM can be proven: it is a reader of the executive's
  * process table, and ctest never runs anywhere a process table exists.
  *
- * Returns 0 on success with the command's stdout in out.
+ * Returns 0 on success with the command's output in out, read from DCL's
+ * SYS$OUTPUT mailbox (rd vms-2f39).
  */
 
 /*
@@ -1206,44 +1208,42 @@ static void dump_stuck_task(pid_t pid)
 
 static int run_show_system(char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
 
     out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
 
     /*
      * Flush every stdio buffer -- including this process's own (parent)
      * stdout -- before forking. Without this, the child inherits a copy
      * of the PARENT's unflushed stdout buffer, which a later fflush(stdout)
-     * in this or a sibling helper could push into the wrong capture pipe.
+     * in the child could write out a second time.
      * Latent when stdout is line-buffered (console); live the moment
      * stdout is fully buffered (redirected to a file) -- see vms-cdb.
      */
     fflush(NULL);
 
     pid_t pid = ovmx_fork_subprocess();
-    if (pid < 0) return -1;
+    if (pid < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
 
     if (pid == 0) {
+        ovmx_dcl_sysout_child(&so);
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
         execl("/bin/DCL.EXE", "DCL.EXE", (char *)NULL);
         _exit(127);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
     const char *script = "SHOW SYSTEM\nLOGOUT\n";
     ssize_t w = write(in_pipe[1], script, strlen(script));
     (void)w;
     close(in_pipe[1]);
 
-    size_t used = 0;
     int timed_out = 0;
+    int reaped = 0;
     {
         /* Bounded (60 s): a DCL that never finishes is this suite's named
          * FAIL, never a guest hung until the whole-VM wall (a defect that
@@ -1252,33 +1252,33 @@ static int run_show_system(char *out, size_t outsz)
         struct timespec t0;
         clock_gettime(CLOCK_MONOTONIC, &t0);
         for (;;) {
+            pid_t r = waitpid(pid, NULL, WNOHANG);
+            if (r == pid || (r < 0 && errno != EINTR)) {
+                reaped = 1;
+                break;
+            }
             struct timespec tn;
             clock_gettime(CLOCK_MONOTONIC, &tn);
             long left = 60000 - ((tn.tv_sec - t0.tv_sec) * 1000 +
                                  (tn.tv_nsec - t0.tv_nsec) / 1000000);
-            struct pollfd pfd = { .fd = out_pipe[0], .events = POLLIN };
-            if (left <= 0 || poll(&pfd, 1, (int)left) == 0) {
+            if (left <= 0) {
                 timed_out = 1;
-                out[used] = '\0';
+                size_t used = ovmx_dcl_sysout_peek(&so, out, outsz);
                 printf("  STUCK: DCL.EXE wrote %zu bytes before it stopped:\n%s\n", used, out);
                 dump_stuck_task(pid);
                 kill(pid, SIGKILL);
                 break;
             }
-            ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-            if (n <= 0) break;
-            used += (size_t)n;
-            if (used >= outsz - 1) break;
+            usleep(20000);
         }
     }
-    out[used] = '\0';
-    close(out_pipe[0]);
     if (timed_out)
         printf("  INFO: DCL.EXE did not finish within 60 s; killed\n");
 
     int st;
-    while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
+    while (!reaped && waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+    ovmx_dcl_sysout_collect(&so, out, outsz);
     return timed_out ? -1 : 0;
 }
 
@@ -1307,87 +1307,84 @@ static int run_show_system(char *out, size_t outsz)
  * On any setup failure the child prints SETUP_FAIL_MARK on the captured
  * stream instead of exec'ing, so a broken arrangement fails LOUDLY
  * rather than quietly running SHOW SYSTEM with full privilege and
- * passing for the wrong reason.
+ * passing for the wrong reason. DCL's output comes back from its SYS$OUTPUT
+ * mailbox, and the mark -- the child's own report, not DCL's -- is an
+ * ovmx_dcl_sysout_note() that collect() puts ahead of it (rd vms-2f39).
  */
 static int run_show_system_unpriv(char *out, size_t outsz)
 {
-    int in_pipe[2], out_pipe[2];
+    int in_pipe[2];
+    struct ovmx_dcl_sysout so;
 
     out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+    if (!(ovmx_dcl_sysout_open(&so) & 1)) return -1;
+    if (pipe(in_pipe) < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
 
     /*
      * Flush every stdio buffer -- including this process's own (parent)
-     * stdout -- before forking. Without this, the child inherits a copy
-     * of the PARENT's unflushed stdout buffer; on any setup failure below
-     * the child's fflush(stdout) after dup2'ing the capture pipe would
-     * write that inherited parent data into the child's pipe. Latent
-     * when stdout is line-buffered (console); live the moment stdout is
-     * fully buffered (redirected to a file) -- see vms-cdb.
+     * stdout -- before forking, so the child inherits no copy of the
+     * PARENT's unflushed stdout buffer that a flush in the child could
+     * write out a second time (vms-cdb).
      */
     fflush(NULL);
 
     pid_t pid = ovmx_fork_login();
-    if (pid < 0) return -1;
+    if (pid < 0) { ovmx_dcl_sysout_collect(&so, NULL, 0); return -1; }
 
     if (pid == 0) {
         struct vms_procinfo info;
         uint32_t st;
+        char line[128];
 
         dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
         close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
 
         if (setgid(SHOW_UIC_GROUP) != 0) {
-            printf(SETUP_FAIL_MARK " setgid\n");
-            fflush(stdout);
+            ovmx_dcl_sysout_note(&so, SETUP_FAIL_MARK " setgid\n");
             _exit(126);
         }
         st = vms_kif_getjpi_self(&info);      /* first call: registers */
         if (!(st & 1)) {
-            printf(SETUP_FAIL_MARK " register %08X\n", st);
-            fflush(stdout);
+            snprintf(line, sizeof line, SETUP_FAIL_MARK " register %08X\n", st);
+            ovmx_dcl_sysout_note(&so, line);
             _exit(126);
         }
         st = vms_kif_setprn(SHOW_NAME);
         if (!(st & 1)) {
-            printf(SETUP_FAIL_MARK " setprn %08X\n", st);
-            fflush(stdout);
+            snprintf(line, sizeof line, SETUP_FAIL_MARK " setprn %08X\n", st);
+            ovmx_dcl_sysout_note(&so, line);
             _exit(126);
         }
         st = vms_kif_setident(SHOWER_USERNAME, info.uic,
                               info.perm_privs &
                               ~(uint64_t)(VMS_PRV_M_WORLD | VMS_PRV_M_SETPRV));
         if (!(st & 1)) {
-            printf(SETUP_FAIL_MARK " setident %08X\n", st);
-            fflush(stdout);
+            snprintf(line, sizeof line, SETUP_FAIL_MARK " setident %08X\n", st);
+            ovmx_dcl_sysout_note(&so, line);
             _exit(126);
         }
         if (!(vms_kif_getjpi_self(&info) & 1) ||
             (info.cur_privs & VMS_PRV_M_WORLD) != 0) {
-            printf(SETUP_FAIL_MARK " world-still-held\n");
-            fflush(stdout);
+            ovmx_dcl_sysout_note(&so, SETUP_FAIL_MARK " world-still-held\n");
             _exit(126);
         }
 
+        /* After the arrangement, so naming the mailbox (a $CRELNM) cannot
+         * register the process before its setgid. */
+        ovmx_dcl_sysout_child(&so);
         execl("/bin/DCL.EXE", "DCL.EXE", (char *)NULL);
-        printf(SETUP_FAIL_MARK " exec\n");
-        fflush(stdout);
+        ovmx_dcl_sysout_note(&so, SETUP_FAIL_MARK " exec\n");
         _exit(127);
     }
 
     close(in_pipe[0]);
-    close(out_pipe[1]);
     const char *script = "SHOW SYSTEM\nLOGOUT\n";
     ssize_t w = write(in_pipe[1], script, strlen(script));
     (void)w;
     close(in_pipe[1]);
 
-    size_t used = 0;
     int timed_out = 0;
+    int reaped = 0;
     {
         /* Bounded (60 s): a DCL that never finishes is this suite's named
          * FAIL, never a guest hung until the whole-VM wall (a defect that
@@ -1396,33 +1393,33 @@ static int run_show_system_unpriv(char *out, size_t outsz)
         struct timespec t0;
         clock_gettime(CLOCK_MONOTONIC, &t0);
         for (;;) {
+            pid_t r = waitpid(pid, NULL, WNOHANG);
+            if (r == pid || (r < 0 && errno != EINTR)) {
+                reaped = 1;
+                break;
+            }
             struct timespec tn;
             clock_gettime(CLOCK_MONOTONIC, &tn);
             long left = 60000 - ((tn.tv_sec - t0.tv_sec) * 1000 +
                                  (tn.tv_nsec - t0.tv_nsec) / 1000000);
-            struct pollfd pfd = { .fd = out_pipe[0], .events = POLLIN };
-            if (left <= 0 || poll(&pfd, 1, (int)left) == 0) {
+            if (left <= 0) {
                 timed_out = 1;
-                out[used] = '\0';
+                size_t used = ovmx_dcl_sysout_peek(&so, out, outsz);
                 printf("  STUCK: DCL.EXE wrote %zu bytes before it stopped:\n%s\n", used, out);
                 dump_stuck_task(pid);
                 kill(pid, SIGKILL);
                 break;
             }
-            ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-            if (n <= 0) break;
-            used += (size_t)n;
-            if (used >= outsz - 1) break;
+            usleep(20000);
         }
     }
-    out[used] = '\0';
-    close(out_pipe[0]);
     if (timed_out)
         printf("  INFO: DCL.EXE did not finish within 60 s; killed\n");
 
     int st;
-    while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
+    while (!reaped && waitpid(pid, &st, 0) < 0 && errno == EINTR)
         ;
+    ovmx_dcl_sysout_collect(&so, out, outsz);
     return timed_out ? -1 : 0;
 }
 

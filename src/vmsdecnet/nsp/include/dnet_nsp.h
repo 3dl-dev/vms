@@ -126,10 +126,45 @@ extern "C" {
 #define DNET_NSP_MSGFLG_DI      0x38    /* disconnect initiate (spec-derived) */
 #define DNET_NSP_MSGFLG_DC      0x48    /* disconnect confirm  (spec-derived) */
 
-/* Link Service FCVAL_INT (low 2 bits of LSFLAGS): 1 = data-segment request. The
- * oracle client's post-CC LS carries LSFLAGS=0x01, FCVAL=0x00 (real-cterm-
- * ci.pcap: `10 <dst> <src> 00 80 01 00`) -- reproduced verbatim (rd vms-6165). */
-#define DNET_NSP_LSFLAGS_DATA_REQ  0x01
+/* Link Service (MSGFLG 0x10), DNA Phase IV NSP:
+ *   MSGFLG DSTADDR SRCADDR [ACKNUM] [ACKDAT] SEGNUM LSFLAGS FCVAL
+ * SEGNUM numbers the other-data subchannel (link service + interrupt), 1 up.
+ * LSFLAGS bits 1:0 FCMOD (0 no change, 1 do not send data, 2 send data),
+ * bits 3:2 FCVAL INT (0 = FCVAL changes the data request count, 1 = the
+ * interrupt request count). FCVAL is a signed request-count delta.
+ * Oracle: every VAX link service in docs/oracle/vax-copy-fal-dap.hex.txt is
+ * `10 dst src 00 80 01 00 00 00` (ACKNUM 0x8000, SEGNUM 1, LSFLAGS 0, FCVAL 0),
+ * and in tests/lab/captures/vms-0a7-s1-20261102/wire.txt the VAX stops and
+ * resumes OVMX with `00 80 02 00 01 00` / `00 80 03 00 02 00`. (The 4-byte
+ * `00 80 01 00` OVMX sent before rd vms-985 lacked LSFLAGS/FCVAL: the "0x01"
+ * once read as LSFLAGS was the SEGNUM's low byte.) */
+#define DNET_NSP_LS_FCMOD_MASK     0x03
+#define DNET_NSP_LS_FCMOD_NOCHANGE 0x00
+#define DNET_NSP_LS_FCMOD_STOP     0x01    /* do not send data */
+#define DNET_NSP_LS_FCMOD_START    0x02    /* send data        */
+#define DNET_NSP_LS_FCVAL_INT_MASK 0x0c
+#define DNET_NSP_LS_FCVAL_INT_DATA 0x00    /* FCVAL applies to the data request count */
+#define DNET_NSP_LS_FCVAL_INT_INT  0x04    /* FCVAL applies to the interrupt count    */
+
+/* SERVICES byte (CI/CC): bit 0 is always 1; bits 3:2 FCOPT -- the flow control
+ * the SENDER of the CI/CC asks its peer to obey when sending to it: 0 none,
+ * 1 segment request count, 2 session-control message request count. Every
+ * CI/CC a real VAX V7.3 sends in the committed captures carries 0x01 (none). */
+#define DNET_NSP_SVC_FCOPT_MASK    0x0c
+#define DNET_NSP_SVC_FCOPT_NONE    0x00
+#define DNET_NSP_SVC_FCOPT_SEG     0x04
+#define DNET_NSP_SVC_FCOPT_MSG     0x08
+
+/* ACKNUM / ACKOTH / ACKDAT field: bit 15 = present, bits 14:12 QUAL, bits 11:0
+ * the segment number. QUAL 0 = ACK, 1 = NAK of this subchannel; 2 = ACK,
+ * 3 = NAK of the OTHER subchannel (a cross-subchannel acknowledgement). A NAK
+ * of n acknowledges everything through n and asks for n+1 onward again; the
+ * VAX NAKs with 0x900e in the vms-0a7 S1 capture. */
+#define DNET_NSP_ACK_QUAL_MASK     0x7000
+#define DNET_NSP_ACK_Q_ACK         0x0000
+#define DNET_NSP_ACK_Q_NAK         0x1000
+#define DNET_NSP_ACK_Q_XACK        0x2000
+#define DNET_NSP_ACK_Q_XNAK        0x3000
 
 /* A standard NSP disconnect-complete reason code (DNA Phase IV NSP), carried in
  * the DC REASON field when a Disconnect Initiate is confirmed normally. */
@@ -158,8 +193,14 @@ enum dnet_nsp_type {
     DNET_NSP_T_OTHACK       /* other-data ack (link-service/interrupt ack)        */
 };
 
-/* Generous cap on the opaque higher-layer payload an NSP PDU can carry. */
-#define DNET_NSP_MAX_DATA       1024
+/* The largest higher-layer payload an NSP data segment carries: the SEGSIZE
+ * OVMX requests in every Connect Initiate / Confirm (1459, the Ethernet
+ * segment size a VAX requests too) and the DAP BUFSIZ FAL advertises. It was
+ * 1024 while OVMX advertised 1459, so a real VAX FAL that filled its segments
+ * (a COPY or TYPE of a file over ~1 KB, a long DIRECTORY LIST) sent segments
+ * NETACP's decoder refused unacked; the VAX retransmitted, then disconnected
+ * "no response from object" (rd vms-6a4 live lab, 2026-11-02). */
+#define DNET_NSP_MAX_DATA       1459
 
 /* Decoded / to-be-encoded NSP message (a flat tagged record). Only the fields
  * relevant to `type` are meaningful; the rest are zero after a decode. */
@@ -174,19 +215,21 @@ struct dnet_nsp_msg {
     uint8_t  info;          /* INFO byte (NSP version in low 2 bits) */
     uint16_t segsize;       /* requested segment size */
 
-    /* Data segment */
-    uint16_t segnum;        /* SEGNUM field (segment no. + BOM/EOM/DLY flags) */
+    /* Data segment / Link Service */
+    uint16_t segnum;        /* SEGNUM field (segment no. + BOM/EOM/DLY flags);
+                             * for a link service its other-data number */
 
-    /* Link Service (DNET_NSP_T_LS): flow-control request on the other-data
-     * subchannel. ACKNUM (below) is mandatory and acks other-data received. */
-    uint8_t  ls_flags;      /* LSFLAGS byte (FCVAL_INT/FCMOD; oracle 0x01)     */
-    int8_t   fc_val;        /* FCVAL byte (segment-count delta; oracle 0x00)   */
+    /* Link Service (DNET_NSP_T_LS): flow control on the other-data subchannel. */
+    uint8_t  ls_flags;      /* LSFLAGS byte (FCMOD bits 1:0, FCVAL INT 3:2)    */
+    int8_t   fc_val;        /* FCVAL byte (signed request-count delta)         */
 
-    /* Piggyback / acknowledgement fields */
-    uint8_t  has_acknum;    /* data segment or data-ack: ACKNUM present */
-    uint16_t acknum;        /* ACKNUM field (raw, incl QUAL/NAK bits) */
-    uint8_t  has_ackoth;    /* data-ack: second (other-data) ack present */
-    uint16_t ackoth;        /* cross-subchannel other-data ack (raw) */
+    /* Acknowledgement fields (DATA, LS, ACK, OTHACK). Each carries its own QUAL
+     * (see DNET_NSP_ACK_Q_*), so a cross-subchannel ack is recognisable in
+     * either slot. */
+    uint8_t  has_acknum;    /* first ack field present */
+    uint16_t acknum;        /* first ack field (raw, incl present/QUAL bits) */
+    uint8_t  has_ackoth;    /* second (cross-subchannel) ack field present */
+    uint16_t ackoth;        /* second ack field (raw) */
 
     /* Disconnect Initiate */
     uint16_t reason;        /* disconnect reason code */

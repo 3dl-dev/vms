@@ -1,15 +1,29 @@
 #!/bin/bash
-# TEST: DIRECTORY and TYPE of a DECnet node:: spec go to the FAL client (rd vms-6a4)
+# TEST: DIRECTORY and TYPE of a DECnet node:: spec are RMS remote access (rd vms-6a4, vms-0a7)
 #
 # `DIRECTORY VAX1"SYSTEM pw"::` and `TYPE VAX1"SYSTEM pw"::LOGIN.COM` name files
-# on a remote node. DCL must hand them to SYS$SYSTEM:DECNETD.EXE (--directory /
-# --type), never search the local disk for them. On a host with no DECNETD.EXE
-# staged that is the honest NETNOTAVAIL, and the password is never echoed.
+# on a remote node. RMS takes them to the node's FAL ($PARSE/$SEARCH/$OPEN over
+# _NET:), never to the local disk and never to another image. On a host with no
+# _NET: device the connect fails honestly, in VMS's words, on the spec with the
+# password shown as the word "password" -- the password itself is never echoed.
+# The form is the real VAX's for a refused connect (TYPE ... -RMS-E-FND then the
+# connect failure, tests/lab/captures/decnet-fal-verbs-20261008/vax1-console.txt;
+# DIRECTORY's %DIRECT-E-OPENIN, rd vms-c18 live VAX); here the connect failure is
+# the $ASSIGN _NET: one. $STATUS is what the live VAX V7.3 left after a refused
+# link (tests/lab/captures/vms-0a7-s1-20261102/events.log, L5a / L5b): DIRECTORY
+# the RMS status RMS$_FND, %X1001C02A, and TYPE its own %TYPE-W-SEARCHFAIL,
+# %X10951238 -- not the connect failure under them.
 #
-# EXPECT: contains:%DIRECT-I-NETNOTAVAIL
-# EXPECT: contains:%TYPE-I-NETNOTAVAIL
+# EXPECT: contains:%DIRECT-E-OPENIN, error opening VAX1"SYSTEM password"::*.*;* as input
+# EXPECT: contains:%TYPE-W-SEARCHFAIL, error searching for VAX1"SYSTEM password"::LOGIN.COM;
+# EXPECT: contains:-RMS-E-FND, ACP file or directory lookup failed
+# EXPECT: contains:-SYSTEM-W-NOSUCHDEV, no such device available
+# EXPECT: contains:$STATUS == "%X1001C02A"
+# EXPECT: contains:$STATUS == "%X10951238"
+# EXPECT_NOT: contains:$STATUS == "%X00000001"
 # EXPECT_NOT: contains:%DIRECT-W-NOFILES
-# EXPECT_NOT: contains:%TYPE-W-SEARCHFAIL
+# EXPECT_NOT: contains:NETNOTAVAIL
+# EXPECT_NOT: contains:DECNETD
 # EXPECT_NOT: contains:secret
 VMSDCL="${VMSDCL:-vmsdcl}"
-printf 'DIRECTORY VAX1"SYSTEM secret"::\nTYPE VAX1"SYSTEM secret"::LOGIN.COM\n' | $VMSDCL 2>&1
+printf 'DIRECTORY VAX1"SYSTEM secret"::\nSHOW SYMBOL $STATUS\nTYPE VAX1"SYSTEM secret"::LOGIN.COM\nSHOW SYMBOL $STATUS\n' | $VMSDCL 2>&1

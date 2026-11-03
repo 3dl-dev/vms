@@ -980,6 +980,7 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
     uint32_t result = SS$_ABORT;
     int have_attr = 0;
     uint8_t peer_org = DNET_DAP_ORG_SEQ, peer_rfm = DNET_DAP_RFM_VAR, peer_rat = DNET_DAP_RAT_CR;
+    uint8_t peer_fsz = 2;
     for (;;) {
         if (fal_recv(t, &m) < 0) return result;          /* link closed: done */
         switch (m.op) {
@@ -994,6 +995,8 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
                            ? m.u.attr.rfm : DNET_DAP_RFM_VAR;
             peer_rat = (m.u.attr.menu & (1u << DNET_DAP_ATT_RAT))
                            ? (uint8_t)(m.u.attr.rat & 0x0f) : DNET_DAP_RAT_CR;
+            peer_fsz = ((m.u.attr.menu & (1u << DNET_DAP_ATT_FSZ)) && m.u.attr.fsz)
+                           ? m.u.attr.fsz : 2;
             continue;
         case DNET_DAP_KEYDEF: case DNET_DAP_ALLOC: case DNET_DAP_SUMMARY:
         case DNET_DAP_DATETIME: case DNET_DAP_PROTECTION: case DNET_DAP_ACL:
@@ -1074,6 +1077,13 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
             /* The file's REAL record format and attributes, as RMS opened it. */
             if (frfm >= DNET_DAP_RFM_FIX && frfm <= 6) a.u.attr.rfm = frfm;
             a.u.attr.rat = (uint8_t)(frat & 0x0f);
+            if (frfm == DNET_DAP_RFM_VFC) {
+                /* The fixed-control size each DATA record starts with. */
+                struct dnet_fal_fattr va;
+                a.u.attr.menu |= (1u << DNET_DAP_ATT_FSZ);
+                a.u.attr.fsz = (dnet_fal_fileattr(have_rsa ? rsa : spec, &va, NULL) == 0 && va.fsz)
+                                   ? va.fsz : 2;
+            }
             if (fal_send(t, &a) < 0) return SS$_ABORT;
             /* Extended attributes the accessor asked for (a VMS TYPE asks for
              * DATE AND TIME), from the opened file's header. */
@@ -1101,7 +1111,7 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
              * NAME is the resultant spec of the file that really exists. */
             void *h = NULL;
             char rsa[DNET_DAP_MAX_SPEC + 1] = "";
-            if (dnet_fal_wopen(spec, peer_rfm, peer_rat, &h, rsa, sizeof rsa) != 0) {
+            if (dnet_fal_wopen(spec, peer_rfm, peer_rat, peer_fsz, &h, rsa, sizeof rsa) != 0) {
                 if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_CRE, 0) < 0)
                     return SS$_ABORT;
                 result = SS$_ABORT;
@@ -1121,6 +1131,10 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
             text_attributes(&a);
             a.u.attr.rfm = peer_rfm;
             a.u.attr.rat = peer_rat;
+            if (peer_rfm == DNET_DAP_RFM_VFC) {
+                a.u.attr.menu |= (1u << DNET_DAP_ATT_FSZ);
+                a.u.attr.fsz = peer_fsz;
+            }
             if (fal_send(t, &a) < 0) { (void)dnet_fal_wclose(h); return SS$_ABORT; }
             if (want_name && rsa[0] && send_name(t, DNET_DAP_NT_FILESPEC, rsa) < 0) {
                 (void)dnet_fal_wclose(h); return SS$_ABORT;
@@ -1237,7 +1251,7 @@ uint32_t dnet_fal_client_get(const char *remote_spec, const char *local_spec,
 
     /* The local copy: one RMS stream, records verbatim (embedded NULs kept). */
     void *h = NULL;
-    if (dnet_fal_wopen(local_spec, DNET_DAP_RFM_VAR, DNET_DAP_RAT_CR, &h, NULL, 0) != 0) {
+    if (dnet_fal_wopen(local_spec, DNET_DAP_RFM_VAR, DNET_DAP_RAT_CR, 0, &h, NULL, 0) != 0) {
         (void)client_close(t);
         return SS$_ABORT;
     }

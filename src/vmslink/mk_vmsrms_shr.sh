@@ -109,7 +109,7 @@ CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mn
 # still gets it. Runtime still fails HONESTLY with no /dev/vms (INV-6): the ACP
 # arm answers the real RMS status, it does not fall back to /vms.
 DEFS="-DOVMX_HAVE_ACP"
-INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSFS_INC -I$LIBVMSSYS_INC"
+INCS="-I$SRC/include -I$LIBVMS_INC -I$VMSFS_INC -I$LIBVMSSYS_INC -I$SRC/../vmsdecnet/dap/include"
 
 echo "mk_vmsrms_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
 echo "mk_vmsrms_shr: src=$SRC"
@@ -130,7 +130,9 @@ echo "mk_vmsrms_shr: --use $DECC_SHR $VMS_SHR $FS_SHR $SYS_SHR"
 # over the executive Files-11 ACP) must be in LIBVMSRMS$SHR too, or the
 # native-link DCL/SCSD cannot resolve the weak ovmx_sysgen_acp_* and SYSGEN
 # authoring / F$GETSYI(SCSNODE) fall to the retired /vms path.
-LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rightslist_live rms_record rms_parse rms_search rms_util sysgen_acp"
+# rd vms-0a7: rms_remote (node:: access over DAP to a remote FAL) and rms_dap
+# (the DAP codec it speaks) -- rms_core/rms_record/rms_parse/rms_search call them.
+LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rightslist_live rms_record rms_parse rms_search rms_util sysgen_acp rms_remote rms_dap"
 
 # ---- ALPHA/EVAX branch (vms-a7a) — the alpha-dec-vms LP64 RMS substrate. ----
 # Delegates the alpha mechanics (cross-compile with the port cc1, enumerate the

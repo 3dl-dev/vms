@@ -107,6 +107,7 @@
 #include <time.h>
 #include "rms/rms.h"
 #include "rms_internal.h"
+#include "rms_remote.h"      /* RMS remote file access (rd vms-0a7) */
 #include "rms_io.h"
 #include "rms_prolog3.h"
 #include "vmsfs/filespec.h"
@@ -1156,6 +1157,8 @@ static uint32_t rms_posix_file_attr(const char *vmsspec, struct rms_fileattr *ou
  */
 uint32_t rms_file_attr(const char *vmsspec, struct rms_fileattr *out)
 {
+    if (vmsspec && rms_remote_is_spec(vmsspec, strlen(vmsspec)))  /* node:: (rd vms-0a7) */
+        return rms_remote_file_attr(vmsspec, out);
     if (!vmsspec || !out)
         return RMS$_FAB;
     memset(out, 0, sizeof(*out));
@@ -2120,6 +2123,10 @@ static void rms_fab_from_header(struct FAB *fab, const rms_file_t *h)
      * creator's fab$w_mrs (vms-b447) -- $OPEN returns it whatever the caller
      * passed, as VMS does. A FIX file's record size is that same value. */
     fab->fab$w_mrs = h->fhc_mrz;
+    /* A VFC file's fixed-control size is FAT$B_VFCSIZE ($OPEN output field
+     * FAB$B_FSZ): $GET and $PUT frame its records, and size RAB$L_RHB, by it. */
+    if (rfm == FAB$C_VFC && h->fhc_vfc)
+        fab->fab$b_fsz = h->fhc_vfc;
 }
 #endif /* OVMX_HAVE_ACP */
 
@@ -3614,16 +3621,22 @@ uint32_t sys$extend(void *fab, void (*err)(void *), void (*suc)(void *))
 
 uint32_t sys$open(void *fab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_fab(fab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_open(fab), fab, err, suc);
     return rms_complete(rms_impl_open(fab), fab, err, suc);
 }
 
 uint32_t sys$create(void *fab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_fab(fab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_create(fab), fab, err, suc);
     return rms_complete(rms_impl_create(fab), fab, err, suc);
 }
 
 uint32_t sys$close(void *fab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_fab(fab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_close(fab), fab, err, suc);
     return rms_complete(rms_impl_close(fab), fab, err, suc);
 }
 
@@ -3642,11 +3655,15 @@ uint32_t sys$rename(void *old_fab, void (*err)(void *), void (*suc)(void *),
 
 uint32_t sys$connect(void *rab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_rab(rab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_connect(rab), rab, err, suc);
     return rms_complete(rms_impl_connect(rab), rab, err, suc);
 }
 
 uint32_t sys$disconnect(void *rab, void (*err)(void *), void (*suc)(void *))
 {
+    if (rms_remote_owns_rab(rab))                     /* node:: (rd vms-0a7) */
+        return rms_complete(rms_remote_disconnect(rab), rab, err, suc);
     return rms_complete(rms_impl_disconnect(rab), rab, err, suc);
 }
 

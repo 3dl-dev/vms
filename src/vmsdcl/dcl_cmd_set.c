@@ -647,14 +647,32 @@ static int cmd_set_terminal(struct dcl_command *cmd)
          * terminal is an ANSI and DEC CRT, which is what the driver looks at
          * (its CTRL/Z echo is a reverse-video " Exit " there: keystroke
          * Q.EDTNUM V7; rd vms-c37) */
+        int dtcode = -1;
         if (devtype_set) {
             const char *dt = term->device_type;
             int vt = (dt[0] == 'V' && dt[1] == 'T' && dt[2] >= '1' && dt[2] <= '5');
             if (vt) exec_set |= VMS_TTC_ANSI_CRT | VMS_TTC_DEC_CRT;
             else    exec_clr |= VMS_TTC_ANSI_CRT | VMS_TTC_DEC_CRT;
+            /* the type's DT$_ code, for the names whose code the V7.3 DCDEF
+             * gives (docs/oracle/vax73-starlet-defs/DCDEF.txt); a VT100 is
+             * also what VMS makes of one: a scope with hardware tabs, ANSI,
+             * advanced video, a DEC CRT (VAX V7.3, SET TERMINAL/DEVICE=VT100
+             * then SHOW TERMINAL, S2 live bench; rd vms-686) */
+            static const struct { const char *name; int code; } dts[] = {
+                { "UNKNOWN", 0 }, { "VT05", 1 }, { "LA36", 32 }, { "VT52", 64 },
+                { "VT55", 65 }, { "VT100", 96 }, { "VT101", 97 }, { "VT102", 98 },
+                { "VT105", 99 }, { "VT125", 100 }, { "VT131", 101 }, { "VT132", 102 },
+            };
+            for (unsigned d = 0; d < sizeof dts / sizeof dts[0]; d++)
+                if (strcmp(dt, dts[d].name) == 0)
+                    dtcode = dts[d].code;
+            if (dtcode == 96) {
+                exec_set |= VMS_TTC_TAB | VMS_TTC_ADVANCED_VIDEO;
+                exec_clr |= VMS_TTC_HARDCOPY;
+            }
         }
-        if (exec_set | exec_clr)
-            (void)dcl_tt_set_characteristics(exec_set, exec_clr);
+        if (exec_set | exec_clr || dtcode >= 0)
+            (void)dcl_tt_set_characteristics(exec_set, exec_clr, dtcode);
         vms_terminal_apply(term);
     }
 

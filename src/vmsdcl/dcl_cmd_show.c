@@ -2184,11 +2184,15 @@ static void terminal_owner_name(uint32_t owner_pid, char *out, size_t outsz);
  */
 #define SHOW_DT_TTYUNKN  0
 #define SHOW_DT_LA36     32
+#define SHOW_DT_VT100    96   /* DT$_VT100; "VT100" on the VAX V7.3 SHOW TERMINAL
+                               * (S2 live bench tests/lab/captures/vms-0a7-s2-
+                               * 20261103; docs/oracle/vax-sethost-cterm.md) */
 static const char *terminal_type_name(uint32_t devtype, int show_device)
 {
     switch (devtype) {
     case SHOW_DT_TTYUNKN: return show_device ? "unknown" : "Unknown";
     case SHOW_DT_LA36:    return "LA36";
+    case SHOW_DT_VT100:   return "VT100";
     default:              return NULL;
     }
 }

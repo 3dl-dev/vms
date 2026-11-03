@@ -142,7 +142,8 @@ void dcl_page_end(struct dcl_pager *pg, int page_len);
 int dcl_recall_size(void);
 int dcl_tt_read(const char *prompt, size_t prompt_len, char *buf, size_t bufsz,
                 uint32_t modifiers, uint32_t timeout_sec, uint16_t *term_out);
-uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr);
+/* devtype: a DT$_ code to set as the terminal's type, or -1 to leave it */
+uint32_t dcl_tt_set_characteristics(uint64_t set, uint64_t clr, int devtype);
 int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz);
 
 /* vms_terminal_show() was here and is DELETED (vms-d0b). SHOW TERMINAL reads

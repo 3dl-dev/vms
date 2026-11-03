@@ -245,7 +245,7 @@ static int run_dcl(const char *dcl, const char *cmd, struct audit *a, char *out,
     if (sfd < 0 || cfd < 0) return -1;
     char text[512];
     int len = snprintf(text, sizeof text,
-                       "DEFINE SYS$SYSTEM \"" DECNETD_DIR "\"\n%s\n"
+                       "%s\n"
                        "WRITE SYS$OUTPUT \"OVMX-AD71-ALIVE\"\n", cmd);
     if (len < 0 || write(sfd, text, (size_t)len) != len) return -1;
     lseek(sfd, 0, SEEK_SET);

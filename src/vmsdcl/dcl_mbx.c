@@ -461,6 +461,41 @@ static int resolve_to_mailbox(const char *name, char *out, size_t outsz)
 }
 
 /*
+ * forward_record - put one SYS$INPUT mailbox record (actlen bytes in buf) into
+ * DCL's stdin pipe as one command line. The one place a record becomes a line,
+ * for the reader thread and for the main-thread drain alike. Returns 0 when
+ * the pipe is gone.
+ */
+static int forward_record(int pipe_w, char *buf, size_t bufsz, uint32_t actlen)
+{
+    uint32_t mlen = actlen;
+    if (mlen > bufsz)
+        mlen = (uint32_t)bufsz;
+    /* A writer that sent the record with a trailing NUL (a write of
+     * strlen+1) should not push that NUL into the command line. */
+    if (mlen > 0 && buf[mlen - 1] == '\0')
+        mlen--;
+
+    size_t off = 0;
+    while (off < mlen) {
+        ssize_t w = write(pipe_w, buf + off, mlen - off);
+        if (w <= 0) {
+            if (w < 0 && errno == EINTR)
+                continue;
+            return 0;
+        }
+        off += (size_t)w;
+    }
+    /* Deliver a complete line even if the record carried no newline. */
+    if (mlen == 0 || buf[mlen - 1] != '\n') {
+        char nl = '\n';
+        if (write(pipe_w, &nl, 1) != 1)
+            return 0;
+    }
+    return 1;
+}
+
+/*
  * reader_main - drain the SYS$INPUT mailbox into DCL's stdin pipe. Each
  * IO$_READVBLK returns one message (one command record the parent wrote); it is
  * forwarded to the pipe and terminated with a newline so DCL's fgets()-based
@@ -481,27 +516,8 @@ static void *reader_main(void *arg)
         if (!(st & 1))
             break;
 
-        uint32_t mlen = actlen;
-        if (mlen > sizeof(buf))
-            mlen = sizeof(buf);
-        /* A writer that sent the record with a trailing NUL (a write of
-         * strlen+1) should not push that NUL into the command line. */
-        if (mlen > 0 && buf[mlen - 1] == '\0')
-            mlen--;
-
-        size_t off = 0;
-        while (off < mlen) {
-            ssize_t w = write(g_in_pipe_w, buf + off, mlen - off);
-            if (w <= 0)
-                goto done;
-            off += (size_t)w;
-        }
-        /* Deliver a complete line even if the record carried no newline. */
-        if (mlen == 0 || buf[mlen - 1] != '\n') {
-            char nl = '\n';
-            if (write(g_in_pipe_w, &nl, 1) != 1)
-                break;
-        }
+        if (!forward_record(g_in_pipe_w, buf, sizeof(buf), actlen))
+            goto done;
     }
 
 done:
@@ -717,23 +733,8 @@ static int drain_queued_input(uint32_t chan, int pipe_w)
                                           &actlen, 1, &sender);
         if (!(st & 1))
             return sender != 0;
-        uint32_t mlen = actlen > sizeof(buf) ? (uint32_t)sizeof(buf) : actlen;
-        if (mlen > 0 && buf[mlen - 1] == '\0')
-            mlen--;
-        size_t off = 0;
-        while (off < mlen) {
-            ssize_t w = write(pipe_w, buf + off, mlen - off);
-            if (w <= 0) {
-                if (w < 0 && errno == EINTR) continue;
-                return 0;
-            }
-            off += (size_t)w;
-        }
-        if (mlen == 0 || buf[mlen - 1] != '\n') {
-            char nl = '\n';
-            if (write(pipe_w, &nl, 1) != 1)
-                return 0;
-        }
+        if (!forward_record(pipe_w, buf, sizeof(buf), actlen))
+            return 0;
     }
 }
 

@@ -22,7 +22,8 @@ EOF
 
 defect_apply() {
         # UNIQUE TEXT, no range anchor needed: `uint32_t mlen = actlen;` occurs
-        # exactly once in dcl_mbx.c -- the reader thread's per-message length
+        # exactly once in dcl_mbx.c -- forward_record()'s per-message length, which
+        # both the reader thread and the main-thread drain (rd vms-691d) go through
         # (the count of bytes IO$_READVBLK pulled out of the SYS$INPUT mailbox).
         # Forcing it to zero makes the reader drain the SYS$INPUT mailbox but
         # forward NOTHING into DCL's command loop, so the driven DCL never

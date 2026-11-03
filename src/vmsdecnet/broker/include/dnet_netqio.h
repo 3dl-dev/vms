@@ -26,6 +26,19 @@
 
 /* Returns how the I/O ended (the IOSB status) when the request was queued, or
  * the refusal when it was not; *xfer is the IOSB byte count on success. */
+static inline uint32_t dnet_net_qiow3(uint16_t chan, uint32_t func, void *p1, uint32_t p2,
+                                      uint32_t p3, size_t *xfer)
+{
+    struct _iosb iosb;
+    memset(&iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, chan, func, &iosb, NULL, 0, p1, p2, p3, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    if (xfer)
+        *xfer = (st & 1) ? iosb.iosb$w_bcnt : 0;
+    return st;
+}
+
 static inline uint32_t dnet_net_qiow(uint16_t chan, uint32_t func, void *p1, uint32_t p2,
                                      size_t *xfer)
 {

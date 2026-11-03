@@ -261,6 +261,16 @@ DNET_BROKER_API uint32_t dnet_broker_xfer(struct dnet_broker_chan *bc,
                              ((uint32_t)rsp.data[2] << 16) | ((uint32_t)rsp.data[3] << 24);
                 if (bc->handle == 0)
                     return DNET_BROKER_ST_ABORT;  /* a zero handle is never valid */
+                /* An ACCEPT (rd vms-0a7 S3) also returns the network job's
+                 * information after the handle, when the caller asked for it. */
+                size_t n = rsp.datalen - 4u;
+                if (out && outcap && n) {
+                    if (n > outcap)
+                        return DNET_BROKER_ST_BUFFEROVF;
+                    memcpy(out, rsp.data + 4, n);
+                    if (xfer)
+                        *xfer = n;
+                }
             } else if (rsp.status & 1u) {
                 return DNET_BROKER_ST_ABORT;      /* success without a handle: refuse it */
             }

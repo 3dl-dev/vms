@@ -1250,7 +1250,9 @@ run_dcl_acceptance_battery() {
     # DECnet FAL SERVER PROCESS PERSONA (rd vms-d85, R4 G3). An inbound FAL
     # access must run with the AUTHENTICATED user's identity, never NETACP's:
     # NETACP $CREPRCs SYS$SYSTEM:FAL.EXE with the user's UIC + default
-    # privileges and the DAP session moves through its link mailboxes. The
+    # privileges and SYS$NET naming the link; FAL.EXE accepts it ($ASSIGN
+    # _NET: + IO$_ACCESS) and the DAP session moves over $QIOW on the channel
+    # (rd vms-0a7 S3). The
     # DIFFERENTIAL is the proof -- the SAME SYSTEM-only file through the SAME
     # path is served to SYSTEM and REFUSED to GUEST, and the server process's
     # executive row carries the user's UIC. HARD GATE where DECNETD.EXE ships.

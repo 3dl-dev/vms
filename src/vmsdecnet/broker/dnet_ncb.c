@@ -164,3 +164,131 @@ int dnet_ncb_parse(const char *ncb, size_t len, struct dnet_ncb *out)
     out->is_named = 1;
     return DNET_NCB_OK;
 }
+
+/* ---- the inbound-accept NCB (rd vms-0a7 S3; OVMX's own form, see .h) ---- */
+
+/* A node-name byte: printable, and none of the bytes the form uses as
+ * delimiters (quote, colon, blank). */
+static int acc_node_ch(char c)
+{
+    return c > ' ' && c < 0x7f && c != '"' && c != ':';
+}
+
+/* A user-name byte: as a node byte, and never the '/' that ends it. */
+static int acc_user_ch(char c)
+{
+    return acc_node_ch(c) && c != '/';
+}
+
+static int acc_hexval(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+int dnet_ncb_accept_parse(const char *ncb, size_t len, struct dnet_ncb_accept *out)
+{
+    if (!ncb || !out)
+        return DNET_NCB_EINVAL;
+    memset(out, 0, sizeof(*out));
+    int r = DNET_NCB_ENOTACC;
+
+    /* <node>:: -- every byte up to the first ':' is a node byte. */
+    size_t i = 0;
+    while (i < len && acc_node_ch(ncb[i]))
+        i++;
+    if (i == 0 || i + 1 >= len || ncb[i] != ':' || ncb[i + 1] != ':')
+        goto bad;
+    if (i > DNET_NCB_MAXNODE) { r = DNET_NCB_EBADLEN; goto bad; }
+    memcpy(out->node, ncb, i);
+    size_t p = i + 2;
+
+    /* "...": the quoted body is the rest of the NCB, exactly. */
+    if (p >= len || ncb[p] != '"' || len - p < 2 || ncb[len - 1] != '"')
+        goto bad;
+    size_t b = p + 1, e = len - 1;      /* body = ncb[b..e-1] */
+
+    /* <object-number>= : 1..3 digits, 1..255, no leading zero (one spelling
+     * per link: what dnet_ncb_accept_format writes). */
+    unsigned obj = 0;
+    size_t d = 0;
+    if (b < e && ncb[b] == '0')
+        goto bad;
+    while (b + d < e && ncb[b + d] >= '0' && ncb[b + d] <= '9') {
+        if (++d > 3) goto bad;
+        obj = obj * 10u + (unsigned)(ncb[b + d - 1] - '0');
+    }
+    if (d == 0 || obj == 0 || obj > DNET_NCB_ACC_MAXOBJ || b + d >= e || ncb[b + d] != '=')
+        goto bad;
+    b += d + 1;
+
+    /* <user>/ */
+    size_t u = 0;
+    while (b + u < e && acc_user_ch(ncb[b + u]))
+        u++;
+    if (u == 0 || b + u >= e || ncb[b + u] != '/')
+        goto bad;
+    if (u > DNET_NCB_MAXACC) { r = DNET_NCB_EBADLEN; goto bad; }
+    memcpy(out->user, ncb + b, u);
+    b += u + 1;
+
+    /* #<8 hex digits>, then the closing quote and nothing else. */
+    if (e - b != 9 || ncb[b] != '#')
+        goto bad;
+    uint32_t h = 0;
+    for (size_t k = 1; k <= 8; k++) {
+        int v = acc_hexval(ncb[b + k]);
+        if (v < 0) goto bad;
+        h = (h << 4) | (uint32_t)v;
+    }
+    if (h == 0)
+        goto bad;                         /* 0 is never a link handle */
+    out->object = obj;
+    out->handle = h;
+    return DNET_NCB_OK;
+bad:
+    memset(out, 0, sizeof(*out));
+    return r;
+}
+
+int dnet_ncb_accept_format(const char *node, unsigned object, const char *user,
+                           uint32_t handle, char *buf, size_t cap, size_t *outlen)
+{
+    static const char hx[] = "0123456789ABCDEF";
+    if (!node || !user || !buf || !outlen)
+        return DNET_NCB_EINVAL;
+    *outlen = 0;
+    size_t nl = strlen(node), ul = strlen(user);
+    if (nl == 0 || ul == 0 || object == 0 || object > DNET_NCB_ACC_MAXOBJ || handle == 0)
+        return DNET_NCB_ENOTACC;
+    if (nl > DNET_NCB_MAXNODE || ul > DNET_NCB_MAXACC)
+        return DNET_NCB_EBADLEN;
+    for (size_t i = 0; i < nl; i++)
+        if (!acc_node_ch(node[i])) return DNET_NCB_ENOTACC;
+    for (size_t i = 0; i < ul; i++)
+        if (!acc_user_ch(user[i])) return DNET_NCB_ENOTACC;
+    char num[4];
+    size_t dl = 0;
+    if (object >= 100) num[dl++] = (char)('0' + object / 100);
+    if (object >= 10)  num[dl++] = (char)('0' + (object / 10) % 10);
+    num[dl++] = (char)('0' + object % 10);
+    /* node :: " num = user / # 8hex " NUL */
+    size_t need = nl + 2 + 1 + dl + 1 + ul + 1 + 1 + 8 + 1;
+    if (need + 1 > cap)
+        return DNET_NCB_EBADLEN;
+    size_t o = 0;
+    memcpy(buf + o, node, nl); o += nl;
+    buf[o++] = ':'; buf[o++] = ':'; buf[o++] = '"';
+    memcpy(buf + o, num, dl); o += dl;
+    buf[o++] = '=';
+    memcpy(buf + o, user, ul); o += ul;
+    buf[o++] = '/'; buf[o++] = '#';
+    for (int k = 7; k >= 0; k--)
+        buf[o++] = hx[(handle >> (4 * k)) & 0xFu];
+    buf[o++] = '"';
+    buf[o] = '\0';
+    *outlen = o;
+    return DNET_NCB_OK;
+}

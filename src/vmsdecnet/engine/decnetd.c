@@ -1771,6 +1771,13 @@ struct netacp_slot {
     struct dnet_cth cth;                /* object 42: the CTERM host wire role */
     int      term_recorded;             /* originating terminal on the RTAn:   */
     struct dnet_fal_proc fal;           /* objects 17 + 27: the server process */
+    /* --- object 17 over SYS$NET (rd vms-0a7 S3) --- */
+    int      accept_wait;               /* held for its server's ACCEPT: no CC yet */
+    int      inbound_net;               /* its server accepted it: served as a
+                                         * brokered slot (outbound = 1)          */
+    dnet_tick_t accept_deadline;        /* the incoming timer                   */
+    dnet_tick_t last_xfer;              /* last data either way (idle bound)    */
+    struct dnet_falp_linkblk acc_lb;    /* the network job's information        */
     /* --- outbound (_NET:) links only --- */
     uint32_t handle;                    /* NETACP-issued link handle (unguessable) */
     uint32_t owner_pid;                 /* the requesting process              */
@@ -1789,6 +1796,41 @@ struct netacp_slot {
     uint16_t rxq_len[NETACP_OUT_RXQ];
     uint8_t  rxq[NETACP_OUT_RXQ][DNET_NSP_MAX_DATA];
 };
+
+/* INBOUND FAL OVER SYS$NET (rd vms-0a7 S3). An inbound object-17 connect is
+ * authenticated, then NETACP $CREPRCs FAL.EXE with SYS$NET naming the link and
+ * HOLDS the link -- no Connect Confirm -- until that process accepts it
+ * (IO$_ACCESS with the NCB). The bound is VMS's executor INCOMING TIMER default
+ * (45 s: the most time between a connect arriving for a process and the process
+ * accepting it); a server that does not accept in time, or that is gone, has
+ * the connect refused honestly (a Disconnect Initiate, object rejected).
+ *
+ * WHY THE CC WAITS FOR THE ACCEPT (VMS's own order). OVMX's NSP sends no
+ * Connect Acknowledgment, so the remote retransmits its Connect Initiate while
+ * the server starts; the link FSM in CONNECT RECEIVED ignores a duplicate CI
+ * (dnet_link.c), so a retransmission costs nothing, and a VAX's outgoing timer
+ * (60 s default) is longer than the incoming timer here. Accepted, the link is
+ * served exactly as a local process's brokered link: SEND/RECV/CLOSE, the
+ * receive queue as the NSP receive window, flow control (rd vms-985). An
+ * accepted inbound link with no data either way for DNET_FALP_IDLE_SEC is ended
+ * (a stalled peer cannot hold a server process, R4 G2), and so is one whose
+ * server process is gone. */
+#define NETACP_ACCEPT_SECS    45
+
+/* Is a process in the executive's process table? (A selftest seam.) */
+static int netacp_pid_alive_exec(uint32_t pid)
+{
+    struct vms_procinfo pi;
+    memset(&pi, 0, sizeof pi);
+    return pid != 0 && (vms_kif_getjpi_pid(pid, &pi) & 1) ? 1 : 0;
+}
+static int (*g_netacp_pid_alive)(uint32_t pid) = netacp_pid_alive_exec;
+/* The connect-time authenticator and the FAL.EXE creation: the real ones;
+ * the host selftest substitutes stand-ins (it has no SYSUAF, no executive). */
+static uint32_t (*g_netacp_fal_auth)(const uint8_t *, size_t,
+                                     struct dnet_fal_identity *) = dnet_fal_connect_auth_id;
+static uint32_t (*g_netacp_fal_spawn)(const char *, const char *, uint32_t, uint64_t,
+                                      uint32_t *, const char **) = dnet_fal_net_start;
 
 /* How long a session's terminal output must be quiet before the CTERM host
  * ships it -- and, with no read outstanding, solicits input with the trailing
@@ -1895,6 +1937,23 @@ static void netacp_cterm_feed_terminal(struct netacp_slot *sl)
 }
 
 static void netacp_outbound_release(struct netacp_slot *sl, const char *why);
+static void netacp_refuse(struct dnet_engine *tmp, int sock, unsigned ifindex,
+                          const uint8_t mac[6], uint16_t reason, dnet_tick_t now);
+
+/* An inbound link its server process never accepted: refuse the connect
+ * (no Connect Confirm was ever sent) and free the slot. */
+static void netacp_accept_abandon(struct netacp_slot *sl, int sock, unsigned ifindex,
+                                  dnet_tick_t now, const char *why)
+{
+    char pa[8];
+    netacp_refuse(&sl->lk, sock, ifindex, sl->peer_mac, DNET_LINK_REASON_OBJREJ, now);
+    log_ts(stdout);
+    printf(" DECNETD-I-CONNREJ, inbound FAL connect from %s refused: server process"
+           " %08X did not accept the link (%s)\n", dnet_addr_str(sl->peer, pa, sizeof pa),
+           (unsigned)sl->owner_pid, why);
+    fflush(stdout);
+    memset(sl, 0, sizeof *sl);
+}
 
 /* End a session: tell the remote (CTERM unbind / NSP disconnect), release the
  * local side, free the slot. Safe on an unused slot. */
@@ -1902,6 +1961,10 @@ static void netacp_slot_end(struct netacp_slot *sl, int sock, unsigned ifindex,
                             dnet_tick_t now, const char *why)
 {
     if (!sl->used) return;
+    if (sl->accept_wait) {
+        netacp_accept_abandon(sl, sock, ifindex, now, why);
+        return;
+    }
     uint8_t buf[DNET_FRAME_MAX], fr[DNET_FRAME_MAX];
     size_t n = 0, fn = 0;
     (void)buf; (void)n;
@@ -1980,6 +2043,13 @@ static int netacp_service_sessions(struct netacp_slot *slots, int sock,
         }
         uint8_t buf[DNET_FAL_SEG_MAX], fr[DNET_FRAME_MAX];
         size_t fn = 0;
+        if (sl->accept_wait) {
+            if (!g_netacp_pid_alive(sl->owner_pid))
+                netacp_accept_abandon(sl, sock, ifindex, now, "the process is gone");
+            else if (now >= sl->accept_deadline)
+                netacp_accept_abandon(sl, sock, ifindex, now, "incoming timer expired");
+            continue;
+        }
         if (sl->outbound) {
             netacp_outbound_tick(sl, sock, ifindex, now);
             continue;
@@ -2543,7 +2613,7 @@ static void netacp_show(const struct netacp_slot *slots, const struct dnet_engin
                    : sl->object == DNET_FAL_OBJECT ? sl->fal.pid
                    : sl->host.session_pid;
             l->object = (uint8_t)(sl->object < 0 || sl->object > 255 ? 0 : sl->object);
-            l->outbound = sl->outbound ? 1 : 0;
+            l->outbound = sl->outbound && !sl->inbound_net ? 1 : 0;
             l->running = dnet_link_is_up(&sl->lk.link) ? 1 : 0;
         }
     }
@@ -2563,9 +2633,14 @@ static void netacp_outbound_release(struct netacp_slot *sl, const char *why)
         (void)vms_kif_dassgn(sl->reply_chan);
     char pa[8];
     log_ts(stdout);
-    printf(" DECNETD-I-LINKEND, outbound link to %s (object %d) for process %08X"
-           " ended (%s)\n", dnet_addr_str(sl->peer, pa, sizeof pa), sl->object,
-           (unsigned)sl->owner_pid, why);
+    if (sl->inbound_net)
+        printf(" DECNETD-I-SESSEND, inbound FAL link from %s served by process %08X"
+               " ended (%s)\n", dnet_addr_str(sl->peer, pa, sizeof pa),
+               (unsigned)sl->owner_pid, why);
+    else
+        printf(" DECNETD-I-LINKEND, outbound link to %s (object %d) for process %08X"
+               " ended (%s)\n", dnet_addr_str(sl->peer, pa, sizeof pa), sl->object,
+               (unsigned)sl->owner_pid, why);
     fflush(stdout);
     memset(sl, 0, sizeof *sl);
 }
@@ -2586,6 +2661,13 @@ static void netacp_outbound_tick(struct netacp_slot *sl, int sock, unsigned ifin
             sl->lk.link_active = 0;
             netacp_outbound_release(sl, "the remote node did not answer the connect");
         }
+        return;
+    }
+    if (sl->inbound_net) {
+        if (!g_netacp_pid_alive(sl->owner_pid))
+            netacp_slot_end(sl, sock, ifindex, now, "its server process exited");
+        else if (now - sl->last_xfer > DNET_FALP_IDLE_SEC)
+            netacp_slot_end(sl, sock, ifindex, now, "no data either way -- idle bound");
         return;
     }
     if (now - sl->last_req > NETACP_OUT_IDLE_SECS)
@@ -2643,12 +2725,74 @@ static void netacp_outbound_event(struct netacp_slot *sl, int sock, unsigned ifi
             memcpy(sl->rxq[t], sl->lk.rx_data, n);
             sl->rxq_len[t] = n;
             sl->rxq_count++;
+            sl->last_xfer = now;
         } else {
             g_netacp_rxq_overrun++;        /* unreachable by construction; counted */
         }
         dnet_link_rx_room(&sl->lk.link, NETACP_OUT_RXQ - sl->rxq_count);
         netacp_link_flush(sl, sock, ifindex, now);
     }
+}
+
+/*
+ * netacp_accept - IO$_ACCESS with an inbound-accept NCB (rd vms-0a7 S3): the
+ * server process NETACP created for a waiting inbound link accepts it. Only
+ * THAT process may (owner_pid, which netacp_broker_record has checked is the
+ * executive-stamped writer of the request on a booted node), only for the
+ * link its NCB's handle names, and only while the link still waits. Then the
+ * Connect Confirm goes and the slot is a brokered link like any other; the
+ * completion carries the handle and the network job's information. Anything
+ * else completes ABORT and changes nothing -- a guessed or stale NCB learns
+ * nothing about which links exist.
+ */
+static void netacp_accept(struct netacp_slot *slots, int sock, unsigned ifindex,
+                          const struct dnet_broker_req *req,
+                          const struct dnet_ncb_accept *acc, dnet_tick_t now,
+                          uint16_t *next_lla)
+{
+    struct netacp_slot *sl = NULL;
+    char pa[8];
+    for (int i = 0; i < NETACP_MAX_SESSIONS && !sl; i++)
+        if (slots[i].used && slots[i].accept_wait && slots[i].handle == acc->handle &&
+            slots[i].owner_pid == req->owner_pid && slots[i].object == (int)acc->object)
+            sl = &slots[i];
+    if (!sl) {
+        netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
+        log_ts(stdout);
+        printf(" DECNETD-W-NOACCEPT, process %08X tried to accept a link that is not"
+               " waiting for it -- refused\n", (unsigned)req->owner_pid);
+        fflush(stdout);
+        return;
+    }
+    uint16_t lla = netacp_take_lla(slots, next_lla);
+    uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
+    if (dnet_engine_link_accept(&sl->lk, lla, fr, sizeof fr, &fn, now) != DNET_ENGINE_OK) {
+        netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
+        netacp_accept_abandon(sl, sock, ifindex, now, "the link could not be accepted");
+        return;
+    }
+    netacp_send(sock, ifindex, sl->peer_mac, fr, fn);      /* the Connect Confirm */
+    sl->accept_wait = 0;
+    sl->inbound_net = 1;
+    sl->outbound    = 1;          /* a local process's _NET: link from here on */
+    sl->reply_unit  = req->reply_unit;
+    sl->last_req    = now;
+    sl->last_xfer   = now;
+    /* The server's receive queue is this link's NSP receive window. */
+    dnet_link_rx_window(&sl->lk.link, NETACP_OUT_RXQ);
+    uint8_t rd[4 + sizeof sl->acc_lb];
+    rd[0] = (uint8_t)sl->handle;         rd[1] = (uint8_t)(sl->handle >> 8);
+    rd[2] = (uint8_t)(sl->handle >> 16); rd[3] = (uint8_t)(sl->handle >> 24);
+    memcpy(rd + 4, &sl->acc_lb, sizeof sl->acc_lb);
+    netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_NORMAL, rd, sizeof rd);
+    memset(rd, 0, sizeof rd);
+    memset(&sl->acc_lb, 0, sizeof sl->acc_lb);
+    log_ts(stdout);
+    printf(" DECNETD-I-FALACCEPT, inbound FAL link from %s accepted by FAL.EXE pid %08X"
+           " (SYS$NET) -- Connect Confirm sent\n", dnet_addr_str(sl->peer, pa, sizeof pa),
+           (unsigned)sl->owner_pid);
+    fflush(stdout);
+    netacp_link_flush(sl, sock, ifindex, now);
 }
 
 /*
@@ -2671,6 +2815,11 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
         return;
     }
     if (base == DNET_BROKER_OP_OPEN) {
+        struct dnet_ncb_accept acc;
+        if (dnet_ncb_accept_parse((const char *)req->data, req->datalen, &acc) == DNET_NCB_OK) {
+            netacp_accept(slots, sock, ifindex, req, &acc, now, next_lla);
+            return;
+        }
         int free_i = -1, mine = 0;
         for (int i = 0; i < NETACP_MAX_SESSIONS; i++) {
             if (!slots[i].used) { if (free_i < 0) free_i = i; }
@@ -2769,6 +2918,7 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
             if (src == DNET_ENGINE_OK)
                 netacp_send(sock, ifindex, sl->peer_mac, fr, fn);
         }
+        sl->last_xfer = now;
         netacp_respond(sl, sl->reply_unit, req->corr_id, SS$_NORMAL, NULL, 0);
         return;
 
@@ -2873,6 +3023,8 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         if (ev != DNET_LINK_EV_DISCONNECT && ev != DNET_LINK_EV_DISCONNECT_CONF)
             netacp_link_flush(sl, sock, ifindex, now);
         if (!sl->used) return;
+        if (sl->accept_wait)
+            return;                        /* a retransmitted CI: the FSM ignored it */
         if (sl->closing) {
             if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF) {
                 sl->lk.link_active = 0;
@@ -3020,10 +3172,42 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         /* FAL: authenticate the connect-carried credentials, then run the
          * access in a FAL.EXE server process AS THAT USER (rd vms-d85). */
         struct dnet_fal_identity id;
-        cst = dnet_fal_connect_auth_id(sl->lk.link.conn_data, sl->lk.link.conn_len, &id);
-        if (cst == SS$_NORMAL)
-            cst = dnet_fal_proc_start(&sl->fal, id.uic, id.def_privs, id.username,
-                                      id.default_dir);
+        cst = g_netacp_fal_auth(sl->lk.link.conn_data, sl->lk.link.conn_len, &id);
+        if (cst == SS$_NORMAL) {
+            /* The link waits for the process created for it: SYS$NET names
+             * it by an unguessable handle (dnet_ncb.h, OVMX's accept form). */
+            char rnode[16], ncb[96], prcnam[16];
+            size_t nl = 0;
+            static unsigned srv_seq;
+            netacp_peer_name(peer, rnode, sizeof rnode);
+            sl->handle = netacp_new_handle();
+            /* VMS names a network job's process SERVER_nnnn. */
+            snprintf(prcnam, sizeof prcnam, "SERVER_%04X", (++srv_seq) & 0xFFFFu);
+            if (dnet_ncb_accept_format(rnode, (unsigned)obj, id.username, sl->handle, ncb,
+                                       sizeof ncb, &nl) != DNET_NCB_OK) {
+                cst = SS$_BADPARAM;
+            } else {
+                const char *stage = NULL;
+                uint32_t pid = 0;
+                cst = g_netacp_fal_spawn(ncb, prcnam, id.uic, id.def_privs, &pid, &stage);
+                if (cst & 1) {
+                    sl->owner_pid = pid;
+                    sl->fal.pid = pid;
+                    sl->fal.uic = id.uic;
+                    sl->accept_wait = 1;
+                    sl->accept_deadline = now + NETACP_ACCEPT_SECS;
+                    snprintf(sl->acc_lb.username, sizeof sl->acc_lb.username, "%s",
+                             id.username);
+                    snprintf(sl->acc_lb.default_dir, sizeof sl->acc_lb.default_dir, "%s",
+                             id.default_dir);
+                    snprintf(sl->acc_lb.remote_node, sizeof sl->acc_lb.remote_node, "%s",
+                             rnode);
+                    snprintf(sl->acc_lb.local_node, sizeof sl->acc_lb.local_node, "%s",
+                             node->node_name);
+                }
+            }
+            memset(ncb, 0, sizeof ncb);
+        }
         memset(&id, 0, sizeof id);
         if (!(cst & 1)) {
             netacp_refuse(&sl->lk, sock, ifindex, mac,
@@ -3040,6 +3224,16 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
     }
     sl->used = 1;
     netacp_note_links(slots);
+    if (sl->accept_wait) {
+        /* FAL: the Connect Confirm goes when FAL.EXE accepts (netacp_accept). */
+        log_ts(stdout);
+        printf(" DECNETD-I-FALSTART, inbound FAL access from %s authenticated -- FAL.EXE"
+               " pid %08X created as UIC [%o,%o]; the link waits for it to accept"
+               " (SYS$NET)\n", dnet_addr_str(peer, pa, sizeof pa), (unsigned)sl->owner_pid,
+               (unsigned)(sl->fal.uic >> 16), (unsigned)(sl->fal.uic & 0xffff));
+        fflush(stdout);
+        return;
+    }
     uint16_t lla = netacp_take_lla(slots, next_lla);
     uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
     if ((obj == DNET_MAIL11_OBJECT
@@ -3059,11 +3253,6 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
                " MAIL_SERVER.EXE pid %08X as UIC [%o,%o]\n",
                dnet_addr_str(peer, pa, sizeof pa), (unsigned)sl->fal.pid,
                (unsigned)(sl->fal.uic >> 16), (unsigned)(sl->fal.uic & 0xffff));
-    else
-        printf(" DECNETD-I-FALSTART, inbound FAL access from %s accepted -- served by"
-               " FAL.EXE pid %08X as UIC [%o,%o]\n", dnet_addr_str(peer, pa, sizeof pa),
-               (unsigned)sl->fal.pid, (unsigned)(sl->fal.uic >> 16),
-               (unsigned)(sl->fal.uic & 0xffff));
     fflush(stdout);
 }
 

@@ -516,6 +516,108 @@ static int run_net_ncb_selftest(void)
         (void)accepted;
     }
 
+    /* rd vms-0a7 S3: the INBOUND-ACCEPT NCB (OVMX's own text form, dnet_ncb.h):
+     * NODE::"objnum=user/#<8 hex handle>", what SYS$NET names for FAL.EXE. */
+    {
+        struct dnet_ncb_accept a;
+        char buf[96];
+        size_t bl = 0;
+#define ACC_S(str) (str), strlen(str), &a
+        NC_CHECK(dnet_ncb_accept_parse(ACC_S("VAX1::\"17=GUEST/#9A3C01F2\"")) == DNET_NCB_OK &&
+                 !strcmp(a.node, "VAX1") && a.object == 17 && !strcmp(a.user, "GUEST") &&
+                 a.handle == 0x9A3C01F2u,
+                 "accept NCB VAX1::\"17=GUEST/#9A3C01F2\" -> node, object 17, user, handle");
+        NC_CHECK(dnet_ncb_accept_parse(ACC_S("1025::\"27=MAIL$SERVER/#0000beef\"")) == DNET_NCB_OK &&
+                 !strcmp(a.node, "1025") && a.object == 27 && !strcmp(a.user, "MAIL$SERVER") &&
+                 a.handle == 0xBEEFu,
+                 "a numeric node, a '$' user and lower-case hex parse");
+        NC_CHECK(dnet_ncb_accept_format("OVMXB", 17, "SYSTEM", 0x0102A0B0u, buf, sizeof buf,
+                                        &bl) == DNET_NCB_OK &&
+                 !strcmp(buf, "OVMXB::\"17=SYSTEM/#0102A0B0\"") && bl == strlen(buf) &&
+                 dnet_ncb_accept_parse(buf, bl, &a) == DNET_NCB_OK && a.handle == 0x0102A0B0u &&
+                 !strcmp(a.user, "SYSTEM") && !strcmp(a.node, "OVMXB") && a.object == 17,
+                 "format -> parse round-trips exactly");
+        int not_outbound = dnet_ncb_accept_parse(ACC_S("VAX1\"U P\"::\"17=\"")) == DNET_NCB_ENOTACC &&
+            dnet_ncb_accept_parse(ACC_S("VAX1::\"17=GUEST/9A3C01F2\"")) == DNET_NCB_ENOTACC &&
+            dnet_ncb_accept_parse(ACC_S("VAX1::\"TASK=ECHO\"")) == DNET_NCB_ENOTACC &&
+            dnet_ncb_accept_parse(ACC_S("VAX1::\"0=ECHO/data\"")) == DNET_NCB_ENOTACC;
+        NC_CHECK(not_outbound,
+                 "an outbound connect NCB (access control, \"17=\", TASK=, a /connect-data tail"
+                 " without '#') is never taken for an accept");
+        NC_CHECK(dnet_ncb_accept_parse(ACC_S("N::\"17=U/#00000000\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"0=U/#00000001\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"017=U/#00000001\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"256=U/#00000001\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"1700=U/#00000001\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"17=U/#0000001\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"17=U/#000000001\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"17=U/#0000000G\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"17=/#00000001\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"17=U/#00000001\"X")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::17=U/#00000001")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N:\"17=U/#00000001\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"")) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_parse("", 0, &a) == DNET_NCB_ENOTACC,
+                 "a zero handle, object 0 / >255 / 4 digits / a leading zero, 7 or 9 or non-hex digits, an empty"
+                 " user, trailing bytes, an unquoted body, one colon and a lone quote are refused");
+        NC_CHECK(dnet_ncb_accept_parse(ACC_S("THISNODENAMEISWAYTOOLONG::\"17=U/#00000001\"")) ==
+                     DNET_NCB_EBADLEN && a.node[0] == '\0' &&
+                 dnet_ncb_accept_parse(ACC_S("N::\"17=UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU/#00000001\"")) ==
+                     DNET_NCB_EBADLEN && a.user[0] == '\0',
+                 "an over-long node or user is refused EBADLEN and nothing is left behind");
+        NC_CHECK(dnet_ncb_accept_parse(NULL, 4, &a) == DNET_NCB_EINVAL &&
+                 dnet_ncb_accept_format("N", 17, "U", 1, buf, 8, &bl) == DNET_NCB_EBADLEN &&
+                 dnet_ncb_accept_format("N", 17, "U\"X", 1, buf, sizeof buf, &bl) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_format("N", 17, "U/X", 1, buf, sizeof buf, &bl) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_format("N:", 17, "U", 1, buf, sizeof buf, &bl) == DNET_NCB_ENOTACC &&
+                 dnet_ncb_accept_format("N", 17, "U", 0, buf, sizeof buf, &bl) == DNET_NCB_ENOTACC,
+                 "a null NCB, a short buffer, and a field the parser would not read back are refused");
+#undef ACC_S
+
+        /* FUZZ: any local process can hand any bytes to IO$_ACCESS, so the
+         * accept parser sees untrusted input. 300k mutations of a valid
+         * accept NCB plus every truncated prefix: never a crash (ASan/UBSan),
+         * every accepted parse bounded and REFORMATTING to exactly the bytes
+         * parsed (no lenient second reading), malformed refused. */
+        const char *base = "OVMXB::\"17=GUEST/#9A3C01F2\"";
+        size_t blen = strlen(base);
+        uint32_t seed = 0x0a7f0a75u;
+        int bad = 0, refused = 0, accepted = 0;
+        for (int i = 0; i < 300000; i++) {
+            char fz[64];
+            memcpy(fz, base, blen);
+            int muts = 1 + (int)(i % 3);
+            for (int m = 0; m < muts; m++) {
+                seed = seed * 1664525u + 1013904223u;
+                fz[(seed >> 8) % blen] = (char)(seed & 0xff);
+            }
+            seed = seed * 1664525u + 1013904223u;
+            size_t use = (i & 1) ? blen : (seed >> 8) % (blen + 1);
+            struct dnet_ncb_accept fa;
+            int r = dnet_ncb_accept_parse(fz, use, &fa);
+            if (r == DNET_NCB_OK) {
+                accepted++;
+                char re[96]; size_t rl = 0;
+                if (strnlen(fa.node, sizeof fa.node) >= sizeof fa.node ||
+                    strnlen(fa.user, sizeof fa.user) >= sizeof fa.user ||
+                    fa.handle == 0 || fa.object == 0 || fa.object > 255 ||
+                    dnet_ncb_accept_format(fa.node, fa.object, fa.user, fa.handle, re,
+                                           sizeof re, &rl) != DNET_NCB_OK ||
+                    rl != use || strncasecmp(re, fz, use) != 0)
+                    bad++;
+            } else {
+                refused++;
+                if (fa.node[0] || fa.user[0] || fa.handle || fa.object)
+                    bad++;                 /* a refusal leaves nothing behind */
+            }
+        }
+        printf("  NOTE: accept-NCB fuzz: %d accepted, %d refused, %d inconsistent\n",
+               accepted, refused, bad);
+        NC_CHECK(bad == 0 && refused > 0 && accepted > 0,
+                 "300k-mutation + truncated-prefix fuzz of the accept NCB: every accepted parse is"
+                 " bounded and re-formats to exactly the bytes parsed; every refusal leaves *out zeroed");
+    }
+
     printf("DECNETD-I-NETNCB, %d passed, %d failed\n", pass, fail);
     if (fail == 0 && pass > 0) { printf("DECNETD-NET-NCB-SELFTEST: PASS\n"); return 0; }
     printf("DECNETD-NET-NCB-SELFTEST: FAIL\n");
@@ -2512,341 +2614,6 @@ static int run_fal_accept_test(void)
 #undef FA_CHECK
 }
 
-/*
- * ============== --fal-proc-accept-test (rd vms-d85, R4 G3) ==================
- * The inbound FAL access runs in a NETWORK SERVER PROCESS with the
- * AUTHENTICATED user's identity, never NETACP's (dnet_fal_proc.h). Booted
- * battery only (needs /dev/vms + the mounted SYSUAF + SYS$SYSTEM:FAL.EXE); it
- * FAILS honestly anywhere else (Rule 9, INV-6). For each case: an object-17
- * link over a socketpair, connect-time auth (dnet_fal_connect_auth_id), then
- * NETACP's real path -- dnet_fal_proc_start $CREPRCs FAL.EXE with the user's
- * UIC + default privileges and this test pumps NSP segments <-> its mailboxes
- * exactly as the live NETACP will. The differential is the proof: the SAME
- * file through the SAME path is served to SYSTEM and REFUSED to GUEST, and the
- * server process's executive row carries the user's UIC.
- */
-struct falp_pump {
-    struct dnet_engine *R; int fd; dnet_tick_t *tick;
-    struct dnet_fal_proc *fp;
-    volatile int stop;
-    uint32_t exit_status; int got_exit;
-    int server_lost;          /* the server died/hung without EXIT */
-};
-
-static void *falp_pump_thread(void *v)
-{
-    struct falp_pump *pp = v;
-    uint8_t rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX], seg[DNET_FAL_SEG_MAX];
-    int idle_after_exit = 0;
-    unsigned iter = 0;
-    while (!pp->stop) {
-        /* Never hang the caller: a server process that died (or never got
-         * its image running) without reporting EXIT ends the session -- the
-         * shutdown unblocks the client's read with EOF -- and so does a hard
-         * deadline (~60 s of 10 ms polls). */
-        if ((++iter % 50) == 0 && !pp->got_exit &&
-            (!dnet_fal_proc_alive(pp->fp) || iter > 6000)) {
-            pp->server_lost = 1;
-            shutdown(pp->fd, SHUT_RDWR);
-            break;
-        }
-        struct pollfd pfd = { pp->fd, POLLIN, 0 };
-        if (poll(&pfd, 1, 10) > 0 && (pfd.revents & POLLIN)) {
-            ssize_t n = read(pp->fd, rxbuf, sizeof rxbuf);
-            if (n <= 0) break;
-            size_t rlen = 0; int has = 0; enum dnet_link_event ev = DNET_LINK_EV_NONE;
-            if (dnet_engine_link_rx(pp->R, (*pp->tick)++, rxbuf, (size_t)n, reply,
-                                    sizeof reply, &rlen, &has, &ev) == 0) {
-                if (has) (void)write(pp->fd, reply, rlen);
-                if (ev == DNET_LINK_EV_DATA)
-                    (void)dnet_fal_proc_put(pp->fp, pp->R->rx_data, pp->R->rx_datalen);
-                if (ev == DNET_LINK_EV_DISCONNECT) break;
-            }
-        }
-        size_t slen = 0; uint32_t xst = 0;
-        int r = dnet_fal_proc_poll(pp->fp, seg, sizeof seg, &slen, &xst);
-        if (r == 1) {
-            uint8_t frame[DNET_FRAME_MAX]; size_t flen = 0;
-            if (dnet_engine_link_send(pp->R, seg, slen, frame, sizeof frame, &flen,
-                                      (*pp->tick)++) == 0)
-                (void)write(pp->fd, frame, flen);
-        } else if (r == 2) {
-            pp->exit_status = xst; pp->got_exit = 1;
-        } else if (r < 0) {
-            break;
-        }
-        if (pp->got_exit && ++idle_after_exit > 50) break;   /* drained */
-    }
-    return NULL;
-}
-
-/* One FAL access through the network-server-process path. Returns the client
- * status; *srv_uic gets the server process's executive UIC (0 if none).
- * op: FALP_PUT / FALP_GET (remote, local), FALP_ERASE (remote), FALP_RENAME
- * (remote -> local as the NEW remote name); for ERASE / RENAME the remote's
- * refusal STATUS lands in *stscode / *stv (rd vms-277a). */
-enum { FALP_PUT = 0, FALP_GET = 1, FALP_ERASE = 2, FALP_RENAME = 3, FALP_DIRLIST = 4 };
-static char falp_names[512];      /* FALP_DIRLIST: the NAMEs received */
-static uint32_t falp_session_op(const char *user, const char *pw, int op,
-                                const char *remote, const char *local,
-                                uint32_t *auth_out, uint32_t *srv_uic, uint32_t *srv_exit,
-                                uint16_t *stscode, uint64_t *stv)
-{
-    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
-    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
-    int sv[2];
-    *srv_uic = 0; *srv_exit = 0; *auth_out = 0;
-    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) return SS$_ABORT;
-    struct dnet_engine L, R; dnet_tick_t tick = 500;
-    dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0);
-    dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0);
-
-    uint8_t conn[128], frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
-    size_t clen = 0, flen = 0, rxlen = 0, rlen = 0; int has = 0;
-    enum dnet_link_event ev = DNET_LINK_EV_NONE;
-    uint32_t cst = SS$_ABORT;
-    if (dnet_cterm_sc_connect_build(DNET_OBJ_FAL, "OVMXL", 0x021a, 0x2020, user, pw, "",
-                                    conn, sizeof conn, &clen) != 0 ||
-        dnet_engine_link_open(&L, 1, 11, 0x2001, conn, clen, 1459, 1, DNET_NSP_VER_41,
-                              frame, sizeof frame, &flen, tick++) != 0 ||
-        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) != 0 ||
-        dnet_engine_link_rx(&R, tick++, rxbuf, rxlen, reply, sizeof reply, &rlen,
-                            &has, &ev) != 0 || ev != DNET_LINK_EV_CONNECT_IND)
-        goto out;
-
-    struct dnet_fal_identity id;
-    *auth_out = dnet_fal_connect_auth_id(R.link.conn_data, R.link.conn_len, &id);
-    if (*auth_out != SS$_NORMAL) { cst = *auth_out; goto out; }
-
-    struct dnet_fal_proc fp;
-    uint32_t pst = dnet_fal_proc_start(&fp, id.uic, id.def_privs, id.username,
-                                       id.default_dir);
-    if (!(pst & 1)) {
-        printf("  NOTE: FAL server process not created (status %08X at %s)\n", (unsigned)pst,
-               fp.fail_stage ? fp.fail_stage : "?");
-        cst = pst; goto out;
-    }
-    {
-        struct vms_procinfo pi; memset(&pi, 0, sizeof pi);
-        if (vms_kif_getjpi_pid(fp.pid, &pi) & 1) *srv_uic = pi.uic;
-    }
-    if (dnet_engine_link_accept(&R, 0x2002, reply, sizeof reply, &rlen, tick++) != 0 ||
-        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) != 0 ||
-        dnet_engine_link_rx(&L, tick++, rxbuf, rxlen, frame, sizeof frame, &flen,
-                            &has, &ev) != 0 || ev != DNET_LINK_EV_CONNECT_CONF) {
-        dnet_fal_proc_close(&fp); goto out;
-    }
-
-    struct falp_pump pp = { &R, sv[1], &tick, &fp, 0, 0, 0, 0 };
-    pthread_t th;
-    pthread_create(&th, NULL, falp_pump_thread, &pp);
-    struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
-    struct dnet_dap_transport ct = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &cxp };
-    switch (op) {
-    case FALP_GET:    cst = dnet_fal_client_get(remote, local, &ct); break;
-    case FALP_PUT:    cst = dnet_fal_client_put(local, remote, &ct); break;
-    case FALP_ERASE:  cst = dnet_fal_client_erase(remote, &ct, stscode, stv); break;
-    case FALP_DIRLIST: cst = dnet_fal_client_dirlist(remote, &ct, falp_names, sizeof falp_names,
-                                                      stscode, stv); break;
-    default:          cst = dnet_fal_client_rename(remote, local, &ct, stscode, stv); break;
-    }
-    for (int i = 0; i < 300 && !pp.got_exit; i++) {          /* <= 3 s for EXIT */
-        struct timespec ts = { 0, 10 * 1000 * 1000 }; nanosleep(&ts, NULL);
-    }
-    pp.stop = 1;
-    pthread_join(th, NULL);
-    *srv_exit = pp.got_exit ? pp.exit_status : 0;
-    dnet_fal_proc_close(&fp);
-out:
-    close(sv[0]); close(sv[1]);
-    return cst;
-}
-
-static uint32_t falp_session(const char *user, const char *pw, int is_get,
-                             const char *remote, const char *local,
-                             uint32_t *auth_out, uint32_t *srv_uic, uint32_t *srv_exit)
-{
-    return falp_session_op(user, pw, is_get ? FALP_GET : FALP_PUT, remote, local,
-                           auth_out, srv_uic, srv_exit, NULL, NULL);
-}
-
-/* The persona fixture must be genuinely SYSTEM-only: protection
- * (S:RWED,O:RWED,G,W) -- ODS-2 fileprot 0xFF00, a set bit denies -- set by the
- * ACP at CREATE. A default-protected file is W:RE, and VMS lets GUEST read
- * that, so a GUEST refusal on it would be wrong, not a proof. */
-static int falp_write_private(const char *spec, const char *line)
-{
-    uint32_t st = 0;
-    rms_file_t *h = rms_open_named_handle_kind_prot(spec, 1, 1, ODS2_FK_DATA_STMLF,
-                                                    0xFF00u, &st);
-    if (!h) return -1;
-    int rc = (rms_io_write_exact(h, line, strlen(line)) == 0 &&
-              rms_io_write_exact(h, "\n", 1) == 0) ? 0 : -1;
-    if (rc == 0) rms_io_fsync(h);
-    rms_close_named_handle(h);
-    return rc;
-}
-
-static int run_fal_proc_accept_test(void)
-{
-    printf("DECNETD-I-FALPROC, inbound FAL access runs in a FAL.EXE server process"
-           " with the AUTHENTICATED user's UIC + privileges, never NETACP's"
-           " (rd vms-d85, R4 G3)\n");
-    if (!dnet_fal_proc_image_present()) {
-        printf("DECNETD-I-FALPROC-NOIMAGE, SYS$SYSTEM:FAL.EXE is not on this system disk:"
-               " no FAL server process can be created, so the persona proof cannot run here\n");
-        printf("DECNETD-FAL-PROC-ACCEPT: NOIMAGE\n");
-        return 1;
-    }
-    int pass = 0, fail = 0;
-#define FP_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
-    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
-
-    const char *PRIV  = "SYS$SYSROOT:[SYSMGR]FALP_PRIV.TXT";
-    const char *EVIL  = "SYS$SYSROOT:[SYSMGR]FALP_EVIL.TXT";
-    const char *LOCAL = "SYS$SYSROOT:[SYSMGR]FALP_LOCAL.TXT";
-    static const char *lines[] = { "FAL persona proof: a SYSTEM-owned record" };
-    FP_CHECK(falp_write_private(PRIV, lines[0]) == 0,
-             "a SYSTEM-only file (S:RWED,O:RWED,G,W) is laid down in SYS$SYSROOT:[SYSMGR] via RMS");
-
-    uint32_t auth = 0, uic = 0, xst = 0, st;
-
-    /* (1) SYSTEM reads it through the FAL server process: the path works and
-     * the server runs as [1,4]. */
-    st = falp_session("SYSTEM", "MANAGER", 1, PRIV, LOCAL, &auth, &uic, &xst);
-    FP_CHECK(auth == SS$_NORMAL, "SYSTEM/MANAGER authenticates at connect");
-    FP_CHECK(uic == ((1u << 16) | 4u),
-             "the FAL server process for SYSTEM runs with UIC [1,4] (executive row)");
-    FP_CHECK(st == SS$_NORMAL && fal_file_matches(LOCAL, lines, 1),
-             "SYSTEM GETs the file through the FAL server process, records BYTE-MATCH");
-
-    /* (2) GUEST through the SAME path: the server runs as GUEST and the
-     * executive ACP refuses the file it cannot see. */
-    st = falp_session("GUEST", "GUEST", 1, PRIV, LOCAL, &auth, &uic, &xst);
-    FP_CHECK(auth == SS$_NORMAL, "GUEST/GUEST authenticates at connect");
-    if (auth != SS$_NORMAL)       /* vms-330: say WHY (this proof fails intermittently in CI) */
-        printf("  NOTE: GUEST connect auth status %08X, session status %08X\n",
-               (unsigned)auth, (unsigned)st);
-    FP_CHECK(uic == ((128u << 16) | 129u),
-             "the FAL server process for GUEST runs with GUEST's UIC [128,129], NOT NETACP's");
-    FP_CHECK(st != SS$_NORMAL,
-             "GUEST's GET of a SYSTEM-only file is REFUSED -- the access is checked against the user, not the daemon");
-    st = falp_session("GUEST", "GUEST", 1, "SYS$SYSTEM:SYSUAF.DAT", LOCAL, &auth, &uic, &xst);
-    FP_CHECK(st != SS$_NORMAL, "GUEST cannot read SYS$SYSTEM:SYSUAF.DAT through FAL");
-
-    /* (3) GUEST cannot write into a SYSTEM directory either. */
-    static const char *evil[] = { "written by GUEST over FAL" };
-    int wl = rms_textfile_write_line(LOCAL, evil[0]);
-    if (wl != 0)
-        printf("  NOTE: rms_textfile_write_line(%s) = %d, errno %d (%s)\n", LOCAL, wl, errno, strerror(errno));
-    FP_CHECK(wl == 0, "a local source for the PUT exists");
-    st = falp_session("GUEST", "GUEST", 0, EVIL, LOCAL, &auth, &uic, &xst);
-    rms_textfile_t *chk = rms_textfile_open(EVIL);
-    FP_CHECK(st != SS$_NORMAL && chk == NULL,
-             "GUEST's PUT into SYS$SYSROOT:[SYSMGR] is REFUSED and no file is created");
-    if (chk) rms_textfile_close(chk);
-
-    /* (4) A bad password never creates a server process at all. */
-    st = falp_session("GUEST", "WRONGPW", 1, PRIV, LOCAL, &auth, &uic, &xst);
-    FP_CHECK(auth == SS$_INVLOGIN && uic == 0,
-             "a bad password is refused at connect and NO FAL server process is created");
-
-    /* (5) rd vms-277a: remote DELETE and RENAME through the SAME server
-     * process. The refusals are the executive ACP's verdict on GUEST's
-     * identity, and the STATUS the client receives must be the bytes a real
-     * VMS V7.3 FAL sent for the same refusal
-     * (tests/lab/captures/decnet-fal-verbs-20261008): DELETE = MAC 4 / MIC PRV
-     * (0x4055) + STV 0x24, RENAME = MAC 4 / MIC RMV (0x405f) without STV. Then
-     * SYSTEM, which owns the files, deletes and renames them, read back
-     * through RMS. */
-    {
-        const char *DEL = "SYS$SYSROOT:[SYSMGR]FALP_DEL.TXT";
-        const char *REN = "SYS$SYSROOT:[SYSMGR]FALP_REN.TXT";
-        const char *RENAMED = "SYS$SYSROOT:[SYSMGR]FALP_RENAMED.TXT";
-        const char *STOLEN = "SYS$SYSROOT:[SYSMGR]FALP_STOLEN.TXT";
-        static const char *dl[] = { "FAL verbs: a SYSTEM-only file to delete" };
-        static const char *rl[] = { "FAL verbs: a SYSTEM-only file to rename" };
-        uint32_t s1 = 0, s2 = 0;
-        (void)dnet_fal_erase(RENAMED, &s1, &s2);        /* a previous run's */
-        FP_CHECK(falp_write_private(DEL, dl[0]) == 0 && falp_write_private(REN, rl[0]) == 0,
-                 "SYSTEM-only files (S:RWED,O:RWED,G,W) to DELETE and RENAME are laid down via RMS");
-        uint16_t sc = 0; uint64_t sv = 0;
-
-        st = falp_session_op("GUEST", "GUEST", FALP_ERASE, DEL, NULL, &auth, &uic, &xst, &sc, &sv);
-        printf("  NOTE: GUEST DELETE -> client %08X, STATUS %04X STV %llX\n",
-               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
-        FP_CHECK(st != SS$_NORMAL && sc == 0x4055 && sv == 0x24,
-                 "GUEST's remote DELETE of a SYSTEM-only file is REFUSED by the executive with the VAX FAL's STATUS 0x4055 (RMS-E-PRV) STV 0x24 (SS$_NOPRIV)");
-        {
-            uint32_t rs = 0; void *rh = NULL;
-            int ro = dnet_fal_ropen_st(DEL, &rh, NULL, NULL, &rs);
-            if (ro == 0) (void)dnet_fal_rclose(rh);
-            printf("  NOTE: after GUEST DELETE, $OPEN %s -> %s (RMS %08X)\n", DEL,
-                   ro == 0 ? "opens" : "refused", (unsigned)rs);
-        }
-        FP_CHECK(fal_file_matches(DEL, dl, 1), "the file GUEST tried to delete is still there, intact");
-
-        st = falp_session_op("GUEST", "GUEST", FALP_RENAME, REN, STOLEN, &auth, &uic, &xst, &sc, &sv);
-        printf("  NOTE: GUEST RENAME -> client %08X, STATUS %04X STV %llX\n",
-               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
-        void *rf = NULL;
-        int stolen = (dnet_fal_ropen(STOLEN, &rf, NULL, NULL) == 0);
-        if (stolen) (void)dnet_fal_rclose(rf);
-        FP_CHECK(st != SS$_NORMAL && sc == 0x405f && sv == 0,
-                 "GUEST's remote RENAME of a SYSTEM-only file is REFUSED by the executive with the VAX FAL's STATUS 0x405f (RMS-F-RMV), no STV");
-        FP_CHECK(!stolen && fal_file_matches(REN, rl, 1),
-                 "the refused RENAME moved nothing: the old name still holds the file, the new name does not exist");
-
-        {   /* diagnostic: the resultant the server will rename by */
-            void *sx = NULL; char r[256] = "";
-            if (dnet_fal_search_begin(REN, &sx) == 0) {
-                if (dnet_fal_search_next(sx, r, sizeof r) != 0) r[0] = '\0';
-                dnet_fal_search_end(sx);
-            }
-            printf("  NOTE: %s resolves to '%s'\n", REN, r);
-        }
-        st = falp_session_op("SYSTEM", "MANAGER", FALP_RENAME, REN, RENAMED, &auth, &uic, &xst, &sc, &sv);
-        printf("  NOTE: SYSTEM RENAME -> client %08X, STATUS %04X STV %llX\n",
-               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
-        uint32_t ors = 0;
-        int old_gone = (dnet_fal_ropen_st(REN, &rf, NULL, NULL, &ors) != 0);
-        if (!old_gone) (void)dnet_fal_rclose(rf);
-        printf("  NOTE: after SYSTEM RENAME, $OPEN old -> RMS %08X; new name byte-match %d\n",
-               (unsigned)ors, fal_file_matches(RENAMED, rl, 1));
-        FP_CHECK(st == SS$_NORMAL && old_gone && fal_file_matches(RENAMED, rl, 1),
-                 "SYSTEM renames its file through the FAL server process: RMS reads the records under the NEW name and the old name is gone");
-
-        st = falp_session_op("SYSTEM", "MANAGER", FALP_ERASE, DEL, NULL, &auth, &uic, &xst, &sc, &sv);
-        uint32_t ost = 0;
-        int del_gone = (dnet_fal_ropen_st(DEL, &rf, NULL, NULL, &ost) != 0);
-        if (!del_gone) (void)dnet_fal_rclose(rf);
-        printf("  NOTE: SYSTEM DELETE -> client %08X, STATUS %04X STV %llX, server exit %08X;"
-               " then $OPEN RMS %08X\n", (unsigned)st, (unsigned)sc, (unsigned long long)sv,
-               (unsigned)xst, (unsigned)ost);
-        FP_CHECK(st == SS$_NORMAL && del_gone && ost == RMS$_FNF,
-                 "SYSTEM deletes its file through the FAL server process: RMS $OPEN then finds no such file (RMS-E-FNF)");
-        (void)dnet_fal_erase(RENAMED, &s1, &s2);
-
-        /* A DIRECTORY of a missing file in GUEST's SYS$LOGIN (live bracket
-         * 2026-10-08: a VMS client printed "Total of 1 file" when the NAMEs
-         * came back as volume + file with no directory). The miss must be
-         * STATUS FNF, and any NAMEs must be the fully expanded spec. */
-        st = falp_session_op("GUEST", "GUEST", FALP_DIRLIST, "SYS$LOGIN:NOSUCH_FALP.TXT;*", NULL,
-                             &auth, &uic, &xst, &sc, &sv);
-        printf("  NOTE: GUEST DIRECTORY SYS$LOGIN:NOSUCH_FALP.TXT;* -> client %08X, NAMEs '%s',"
-               " STATUS %04X STV %llX\n", (unsigned)st, falp_names, (unsigned)sc,
-               (unsigned long long)sv);
-        int has_file = strstr(falp_names, "2:") != NULL, has_dir = strstr(falp_names, "4:") != NULL;
-        FP_CHECK(st != SS$_NORMAL && sc == 0x4032 && sv == 0x0910 && (!has_file || has_dir),
-                 "GUEST's remote DIRECTORY of a missing file is STATUS FNF 0x4032 STV 0x0910, never a file NAME without its directory (VMS prints NOFILES)");
-    }
-
-    printf("DECNETD-I-FALPROC, %d passed, %d failed\n", pass, fail);
-    if (fail == 0 && pass > 0) { printf("DECNETD-FAL-PROC-ACCEPT: PASS\n"); return 0; }
-    printf("DECNETD-FAL-PROC-ACCEPT: FAIL\n");
-    return 1;
-#undef FP_CHECK
-}
 
 /*
  * ================== --copy-selftest (rd vms-ea8/vms-6a4) ====================
@@ -4368,6 +4135,60 @@ static void nb_peer_pump(struct nb_peer *p, dnet_tick_t now)
         }
 }
 
+/* --- rd vms-0a7 S3: inbound FAL over SYS$NET, host floor -------------------- */
+/* Stand-ins for what the host has not got: the SYSUAF (the authenticator) and
+ * the executive ($CREPRC FAL.EXE, the process table). Everything between them
+ * -- NETACP's hold of the link, the accept, the brokered slot, the DAP
+ * session in the server code FAL.EXE runs -- is the real code. */
+static unsigned g_s3_spawns;
+static char     g_s3_sysnet[128];        /* the SYS$NET the process would get */
+static char     g_s3_prcnam[32];
+static uint32_t g_s3_uic;
+static uint32_t g_s3_pid = 0x00002A0Au;
+static uint32_t g_s3_dead_pid;          /* the process table no longer has it */
+static uint32_t s3_auth(const uint8_t *cd, size_t cl, struct dnet_fal_identity *id)
+{
+    (void)cd; (void)cl;
+    memset(id, 0, sizeof *id);
+    snprintf(id->username, sizeof id->username, "GUEST");
+    id->uic = (0200u << 16) | 0201u;
+    snprintf(id->default_dir, sizeof id->default_dir, "DKA0:[GUEST]");
+    return SS$_NORMAL;
+}
+static uint32_t s3_spawn(const char *ncb, const char *prcnam, uint32_t uic, uint64_t privs,
+                         uint32_t *pid, const char **stage)
+{
+    (void)privs; (void)stage;
+    g_s3_spawns++;
+    snprintf(g_s3_sysnet, sizeof g_s3_sysnet, "%s", ncb);
+    snprintf(g_s3_prcnam, sizeof g_s3_prcnam, "%s", prcnam);
+    g_s3_uic = uic;
+    *pid = ++g_s3_pid;
+    return SS$_NORMAL;
+}
+static int s3_alive(uint32_t pid) { return pid != 0 && pid != g_s3_dead_pid; }
+
+struct s3_client_arg { struct copy_wire w; struct dnet_copy_plan plan; uint32_t status; };
+static void *s3_client_thread(void *v)
+{
+    struct s3_client_arg *a = v;
+    a->status = copy_client_run(&a->w, 1, 10, &a->plan, "GUEST");
+    return NULL;
+}
+
+/* A bare Connect Initiate to object 17 on 1.10 from engine *b (no thread). */
+static int s3_send_ci(struct dnet_engine *b, int fd, uint16_t lla)
+{
+    uint8_t conn[192], f[DNET_FRAME_MAX];
+    size_t cl = 0, fl = 0;
+    if (dnet_cterm_sc_connect_build(DNET_OBJ_FAL, "OVMXB", 0x021a, 0x2020, "GUEST", "GUEST", "",
+                                    conn, sizeof conn, &cl) != 0 ||
+        dnet_engine_link_open(b, 1, 10, lla, conn, cl, 1459, 1, DNET_NSP_VER_41, f, sizeof f,
+                              &fl, monotonic_sec()) != DNET_ENGINE_OK)
+        return -1;
+    return write(fd, f, fl) == (ssize_t)fl ? 0 : -1;
+}
+
 static int run_netacp_broker_selftest(void)
 {
     printf("DECNETD-I-NETACPBROKER, outbound links brokered through NETACP: _NET:"
@@ -4745,6 +4566,134 @@ static int run_netacp_broker_selftest(void)
                                        NULL, 0, &x);
         NA_CHECK(st == SS$_DEVOFFLINE && none.puts == 1 && dbc.handle == 0,
                  "a NETACP that never answers completes the $QIO SS$_DEVOFFLINE -- never a fake success");
+    }
+
+    /* (7) rd vms-0a7 S3: an INBOUND object-17 connect served the VMS way. A
+     * remote FAL client on 1.11 (copy_client_run, a thread) connects to
+     * NETACP on 1.10; NETACP authenticates and "creates FAL.EXE" with SYS$NET
+     * naming the link -- and HOLDS the link: no Connect Confirm. Then the
+     * FAL process, here this thread, accepts through the broker exactly as
+     * FAL.EXE's $QIOW IO$_ACCESS does (dnet_netsrv_net_accept with the NCB
+     * from its SYS$NET) and runs FAL.EXE's own server loop (dnet_fal_net_run)
+     * over READVBLK / WRITEVBLK: the DAP session moves both ways and the
+     * honest miss round-trips. Also: a forged / wrong-handle accept is
+     * refused and changes nothing; a process that never accepts, or dies,
+     * has the connect refused with a Disconnect Initiate. */
+    {
+        g_netacp_fal_auth = s3_auth;
+        g_netacp_fal_spawn = s3_spawn;
+        g_netacp_pid_alive = s3_alive;
+        g_nbrep_n = 0;
+        g_nb_wire_fd = sv[0];             /* the wire to 1.11 again (the bounds tests discarded it) */
+        {   /* frames the earlier sections left on the wire, either way */
+            uint8_t junk[DNET_FRAME_MAX];
+            while (recv(sv[0], junk, sizeof junk, MSG_DONTWAIT) > 0) {}
+            while (recv(sv[1], junk, sizeof junk, MSG_DONTWAIT) > 0) {}
+        }
+        dnet_engine_init(&B, 1, 11, "OVMXB", "EWA0", NULL, hwB, 0, 0, 0);
+        struct s3_client_arg ca;
+        memset(&ca, 0, sizeof ca);
+        int rp = dnet_copy_plan("1.10\"GUEST\"::DKA0:[X]NOPE.TXT", "DKA0:[X]LOCAL.TXT", &ca.plan);
+        ca.w.eng = &B; ca.w.txf = cw_sp_tx; ca.w.rxev = cw_sp_rx;
+        ca.w.sp_wfd = sv[1]; ca.w.sp_rfd = sv[1]; ca.w.synthetic = 1; ca.w.clk = 3000;
+        unsigned sp0 = g_s3_spawns;
+        pthread_t th;
+        int thr = (rp == 0) ? pthread_create(&th, NULL, s3_client_thread, &ca) : -1;
+        for (int i = 0; i < 2000 && thr == 0 && g_s3_spawns == sp0; i++)
+            nb_idle(NULL);
+        struct netacp_slot *held = NULL;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            if (g_nbslots[i].used && g_nbslots[i].accept_wait) held = &g_nbslots[i];
+        struct dnet_ncb_accept acc;
+        int ncb_ok = dnet_ncb_accept_parse(g_s3_sysnet, strlen(g_s3_sysnet), &acc) == DNET_NCB_OK;
+        printf("  NOTE: FAL process %s created with SYS$NET = %s\n", g_s3_prcnam, g_s3_sysnet);
+        NA_CHECK(thr == 0 && g_s3_spawns == sp0 + 1 && held && ncb_ok && acc.object == 17 &&
+                 !strcmp(acc.user, "GUEST") && !strcmp(acc.node, "1035") &&
+                 acc.handle == held->handle && held->owner_pid == g_s3_pid &&
+                 g_s3_uic == ((0200u << 16) | 0201u) && !strncmp(g_s3_prcnam, "SERVER_", 7),
+                 "an authenticated inbound FAL connect creates ONE server process as the user,"
+                 " its SYS$NET the accept NCB naming THIS link (1035::\"17=GUEST/#handle\": the"
+                 " peer by address, as VMS names an unknown node)");
+        unsigned long w0 = g_nb_wire;
+        for (int i = 0; i < 50; i++) nb_idle(NULL);
+        NA_CHECK(held && held->accept_wait && g_nb_wire == w0,
+                 "NETACP holds the link for its process: no Connect Confirm before the accept");
+
+        /* Forged and wrong-handle accepts: ABORT, the link still waits. */
+        uint32_t corr = 0x5300;
+        uint32_t fc = nb_raw_open(g_s3_pid + 100, 0x91, g_s3_sysnet, &corr);
+        char wrong[128]; size_t wl = 0;
+        (void)dnet_ncb_accept_format(acc.node[0] ? acc.node : "N", 17, "GUEST",
+                                     acc.handle ^ 0x10u, wrong, sizeof wrong, &wl);
+        uint32_t wc = nb_raw_open(g_s3_pid, 0x92, wrong, &corr);
+        NA_CHECK(nb_reply_status(0x91, fc) == SS$_ABORT && nb_reply_status(0x92, wc) == SS$_ABORT &&
+                 held && held->accept_wait && g_nb_wire == w0,
+                 "an accept from ANOTHER process, or naming another handle, is refused ABORT and"
+                 " the link still waits for its own process (no CC went)");
+
+        /* The FAL process accepts and serves. */
+        struct nb_client fcl = { 0x93 };
+        struct dnet_broker_io fio = { &fcl, nb_put, nb_get, nb_idle, 2000, 20000 };
+        struct dnet_broker_chan fbc;
+        memset(&fbc, 0, sizeof fbc);
+        fbc.owner_pid = g_s3_pid;
+        fbc.reply_unit = fcl.unit;
+        struct dnet_netsrv_net nn;
+        memset(&nn, 0, sizeof nn);
+        nn.bc = &fbc; nn.io = &fio;
+        struct dnet_falp_linkblk lb;
+        uint32_t ast = dnet_netsrv_net_accept(&nn, g_s3_sysnet, strlen(g_s3_sysnet), &lb);
+        NA_CHECK(ast == SS$_NORMAL && fbc.handle == acc.handle && !strcmp(lb.username, "GUEST") &&
+                 !strcmp(lb.default_dir, "DKA0:[GUEST]") && !strcmp(lb.remote_node, "1035") &&
+                 !strcmp(lb.local_node, "OVMXA") && held && !held->accept_wait &&
+                 held->inbound_net && g_nb_wire > w0,
+                 "IO$_ACCESS with that NCB from that process ACCEPTS: the Connect Confirm goes now,"
+                 " and the completion carries the link handle + the job's user and login directory");
+        lb.default_dir[0] = '\0';         /* no executive here to $SETDDIR against */
+        uint32_t sst = (ast & 1) ? dnet_fal_net_run(&nn, &lb) : SS$_ABORT;
+        if (thr == 0) pthread_join(th, NULL);
+        for (int i = 0; i < 200 && nb_used() != 0; i++) nb_idle(NULL);
+        printf("  NOTE: S3 client %08X, FAL server %08X\n", (unsigned)ca.status, (unsigned)sst);
+        NA_CHECK(ca.status == SS$_NOSUCHFILE && sst == SS$_NOSUCHFILE,
+                 "the DAP session moved BOTH ways over the accepted link (READVBLK / WRITEVBLK"
+                 " through NETACP): the remote's GET reached FAL's server loop and the honest"
+                 " miss came back (client + server both NOSUCHFILE)");
+        NA_CHECK(nb_used() == 0 && fbc.handle == 0,
+                 "IO$_DEACCESS / the remote's disconnect freed the slot");
+
+        /* A process that never accepts: the incoming timer refuses the connect. */
+        struct nb_peer pr;
+        memset(&pr, 0, sizeof pr);
+        dnet_engine_init(&B, 1, 11, "OVMXB", "EWA0", NULL, hwB, 0, 0, 0);
+        pr.e = &B; pr.fd = sv[1];
+        unsigned sp1 = g_s3_spawns;
+        int ci = s3_send_ci(&B, sv[1], 0x3001);
+        nb_pump();
+        int waiting = nb_used() == 1 && g_s3_spawns == sp1 + 1;
+        (void)netacp_service_sessions(g_nbslots, g_nb_wire_fd, 0,
+                                      monotonic_sec() + NETACP_ACCEPT_SECS + 1);
+        nb_peer_pump(&pr, monotonic_sec());
+        NA_CHECK(ci == 0 && waiting && nb_used() == 0 && pr.di_seen == 1 &&
+                 dnet_link_state_of(&B.link) == DNET_LINK_CLOSED,
+                 "a server that does not accept within the incoming timer (45 s): the remote's"
+                 " connect is refused with a Disconnect Initiate and the slot is freed");
+
+        /* A process that dies before accepting: refused at once. */
+        memset(&pr, 0, sizeof pr);
+        dnet_engine_init(&B, 1, 11, "OVMXB", "EWA0", NULL, hwB, 0, 0, 0);
+        pr.e = &B; pr.fd = sv[1];
+        g_s3_dead_pid = g_s3_pid + 1;     /* the next process created */
+        ci = s3_send_ci(&B, sv[1], 0x3002);
+        nb_pump();
+        nb_peer_pump(&pr, monotonic_sec());
+        NA_CHECK(ci == 0 && nb_used() == 0 && pr.di_seen == 1 &&
+                 dnet_link_state_of(&B.link) == DNET_LINK_CLOSED,
+                 "a server process that is gone before it accepts: the connect is refused at once");
+        g_s3_dead_pid = 0;
+        g_nbrep_n = 0;
+        g_netacp_fal_auth = dnet_fal_connect_auth_id;
+        g_netacp_fal_spawn = dnet_fal_net_start;
+        g_netacp_pid_alive = netacp_pid_alive_exec;
     }
 
     g_nb_wire_fd = -1;
@@ -6078,6 +6027,313 @@ static int run_net_loopback_accept_test(void)
 #undef NL_CHECK
 }
 
+
+/*
+ * ============== --fal-proc-accept-test (rd vms-d85, R4 G3) ==================
+ * The inbound FAL access runs in a NETWORK SERVER PROCESS with the
+ * AUTHENTICATED user's identity, never NETACP's (dnet_fal_proc.h). Booted
+ * battery only (needs /dev/vms + the mounted SYSUAF + SYS$SYSTEM:FAL.EXE); it
+ * FAILS honestly anywhere else (Rule 9, INV-6). Each case runs NETACP's real
+ * path end to end (rd vms-0a7 S3): this process (a NETACP of its own on a
+ * thread, its request mailbox published as DNET$NETACP_REQ, or the node's
+ * running NETACP) is the CLIENT -- $ASSIGN _NET: and IO$_ACCESS to
+ * 0"user password"::"17=" -- over NETACP's local loopback to its inbound FAL
+ * dispatch, which authenticates and $CREPRCs FAL.EXE with the user's UIC +
+ * default privileges and SYS$NET naming the link; FAL.EXE accepts it through
+ * $ASSIGN _NET: + IO$_ACCESS, and the DAP session moves over $QIOW on both
+ * channels. The server's pid comes from NETACP's own link table (NCP SHOW
+ * KNOWN LINKS: the inbound link whose remote link is this client's), its UIC
+ * from the executive. The differential is the proof: the SAME file through the
+ * SAME path is served to SYSTEM and REFUSED to GUEST, and the server process's
+ * executive row carries the user's UIC.
+ */
+static uint32_t falp_show_query(void *ctx, const uint8_t *req, size_t reqlen,
+                                uint8_t *rsp, size_t rspcap, size_t *rsplen)
+{
+    struct netcli *c = ctx;
+    if (reqlen == 0 || reqlen > rspcap) return SS$_BADPARAM;
+    memcpy(rsp, req, reqlen);
+    return dnet_net_qiow3(c->chan, IO$_ACPCONTROL, rsp, (uint32_t)rspcap,
+                          (uint32_t)reqlen, rsplen);
+}
+
+/* The UIC of the FAL server process serving the inbound end of the client's
+ * object-17 link on `c` (0 if NETACP's link table does not show one). */
+static uint32_t falp_server_uic(struct netcli *c)
+{
+    static struct dnet_netshow_view v;
+    struct vms_procinfo me, pi;
+    memset(&me, 0, sizeof me);
+    if (!(vms_kif_getjpi_self(&me) & 1)) return 0;
+    if (!(dnet_netshow_fetch(falp_show_query, c, DNET_NETSHOW_ENT_LINKS, &v) & 1)) return 0;
+    for (unsigned i = 0; i < v.nlinks; i++) {
+        const struct dnet_netshow_link *o = &v.links[i];
+        if (!o->outbound || o->object != DNET_FAL_OBJECT || o->pid != me.vms_pid) continue;
+        for (unsigned j = 0; j < v.nlinks; j++) {
+            const struct dnet_netshow_link *in = &v.links[j];
+            if (in->outbound || in->object != DNET_FAL_OBJECT ||
+                in->remote_link != o->local_link || in->pid == 0)
+                continue;
+            memset(&pi, 0, sizeof pi);
+            if (vms_kif_getjpi_pid(in->pid, &pi) & 1) return pi.uic;
+        }
+    }
+    return 0;
+}
+
+/* One FAL access through the network-server-process path. Returns the client
+ * status; *auth_out the IO$_ACCESS completion (SS$_NORMAL: authenticated and
+ * accepted by its FAL.EXE; SS$_INVLOGIN: refused at connect); *srv_uic the
+ * server process's executive UIC (0 if none).
+ * op: FALP_PUT / FALP_GET (remote, local), FALP_ERASE (remote), FALP_RENAME
+ * (remote -> local as the NEW remote name); for ERASE / RENAME the remote's
+ * refusal STATUS lands in *stscode / *stv (rd vms-277a). */
+enum { FALP_PUT = 0, FALP_GET = 1, FALP_ERASE = 2, FALP_RENAME = 3, FALP_DIRLIST = 4 };
+static char falp_names[512];      /* FALP_DIRLIST: the NAMEs received */
+static uint32_t falp_session_op(const char *user, const char *pw, int op,
+                                const char *remote, const char *local,
+                                uint32_t *auth_out, uint32_t *srv_uic, uint32_t *srv_exit,
+                                uint16_t *stscode, uint64_t *stv)
+{
+    *srv_uic = 0; *srv_exit = 0; *auth_out = 0;
+    struct netcli c;
+    if (netcli_assign(&c) != 0) return SS$_NOSUCHDEV;
+    uint32_t cst = netcli_open_fal(&c, "0", 1, user, pw, "");
+    *auth_out = cst;
+    if (cst & 1) {
+        *srv_uic = falp_server_uic(&c);
+        struct dnet_dap_transport ct = { .send = netcli_dap_send, .recv = netcli_dap_recv,
+                                         .ctx = &c };
+        switch (op) {
+        case FALP_GET:    cst = dnet_fal_client_get(remote, local, &ct); break;
+        case FALP_PUT:    cst = dnet_fal_client_put(local, remote, &ct); break;
+        case FALP_ERASE:  cst = dnet_fal_client_erase(remote, &ct, stscode, stv); break;
+        case FALP_DIRLIST: cst = dnet_fal_client_dirlist(remote, &ct, falp_names,
+                                                          sizeof falp_names, stscode, stv); break;
+        default:          cst = dnet_fal_client_rename(remote, local, &ct, stscode, stv); break;
+        }
+        size_t x = 0;
+        (void)netcli_op(&c, DNET_BROKER_OP_CLOSE, NULL, 0, NULL, 0, &x);
+    }
+    (void)sys$dassgn(c.chan);
+    return cst;
+}
+
+static uint32_t falp_session(const char *user, const char *pw, int is_get,
+                             const char *remote, const char *local,
+                             uint32_t *auth_out, uint32_t *srv_uic, uint32_t *srv_exit)
+{
+    return falp_session_op(user, pw, is_get ? FALP_GET : FALP_PUT, remote, local,
+                           auth_out, srv_uic, srv_exit, NULL, NULL);
+}
+
+/* The persona fixture must be genuinely SYSTEM-only: protection
+ * (S:RWED,O:RWED,G,W) -- ODS-2 fileprot 0xFF00, a set bit denies -- set by the
+ * ACP at CREATE. A default-protected file is W:RE, and VMS lets GUEST read
+ * that, so a GUEST refusal on it would be wrong, not a proof. */
+static int falp_write_private(const char *spec, const char *line)
+{
+    uint32_t st = 0;
+    rms_file_t *h = rms_open_named_handle_kind_prot(spec, 1, 1, ODS2_FK_DATA_STMLF,
+                                                    0xFF00u, &st);
+    if (!h) return -1;
+    int rc = (rms_io_write_exact(h, line, strlen(line)) == 0 &&
+              rms_io_write_exact(h, "\n", 1) == 0) ? 0 : -1;
+    if (rc == 0) rms_io_fsync(h);
+    rms_close_named_handle(h);
+    return rc;
+}
+
+static int run_fal_proc_accept_test(void)
+{
+    printf("DECNETD-I-FALPROC, inbound FAL access runs in a FAL.EXE server process"
+           " with the AUTHENTICATED user's UIC + privileges, never NETACP's"
+           " (rd vms-d85, R4 G3)\n");
+    if (!dnet_fal_proc_image_present()) {
+        printf("DECNETD-I-FALPROC-NOIMAGE, SYS$SYSTEM:FAL.EXE is not on this system disk:"
+               " no FAL server process can be created, so the persona proof cannot run here\n");
+        printf("DECNETD-FAL-PROC-ACCEPT: NOIMAGE\n");
+        return 1;
+    }
+    int pass = 0, fail = 0;
+#define FP_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    /* The NETACP every session goes through: the node's, or one of this
+     * process's own (loopback only, never the wire). */
+    pthread_t th;
+    int own = 0;
+    if (netacp_running() != 1) {
+        unsigned ea = 1, en = 1;
+        (void)sethost_source_executor(&ea, &en);
+        const uint8_t hw[6] = { 0x02,0,0,0,0,0x01 };
+        dnet_engine_init(&g_nbnode, ea, en, "OVMXLB", "EWA0", NULL, hw, 0, 0, monotonic_sec());
+        memcpy(g_netacp_self, g_nbnode.my_id, 6);
+        g_netacp_self_set = 1;
+        g_netacp_tx = nb_tx;
+        g_nb_wire_fd = -1;
+        memset(g_nbslots, 0, sizeof g_nbslots);
+        g_lb_stop = 0;
+        own = netacp_broker_start(&g_lb_chan);
+        FP_CHECK(own, "this process's NETACP published its request mailbox as DNET$NETACP_REQ");
+        if (own && pthread_create(&th, NULL, lb_netacp_thread, NULL) != 0)
+            own = 0;
+    } else {
+        printf("  NOTE: a NETACP is already serving on this node -- the sessions use it\n");
+    }
+
+    const char *PRIV  = "SYS$SYSROOT:[SYSMGR]FALP_PRIV.TXT";
+    const char *EVIL  = "SYS$SYSROOT:[SYSMGR]FALP_EVIL.TXT";
+    const char *LOCAL = "SYS$SYSROOT:[SYSMGR]FALP_LOCAL.TXT";
+    static const char *lines[] = { "FAL persona proof: a SYSTEM-owned record" };
+    FP_CHECK(falp_write_private(PRIV, lines[0]) == 0,
+             "a SYSTEM-only file (S:RWED,O:RWED,G,W) is laid down in SYS$SYSROOT:[SYSMGR] via RMS");
+
+    uint32_t auth = 0, uic = 0, xst = 0, st;
+
+    /* (1) SYSTEM reads it through the FAL server process: the path works and
+     * the server runs as [1,4]. */
+    st = falp_session("SYSTEM", "MANAGER", 1, PRIV, LOCAL, &auth, &uic, &xst);
+    FP_CHECK(auth == SS$_NORMAL, "SYSTEM/MANAGER authenticates at connect");
+    FP_CHECK(uic == ((1u << 16) | 4u),
+             "the FAL server process for SYSTEM runs with UIC [1,4] (executive row)");
+    FP_CHECK(st == SS$_NORMAL && fal_file_matches(LOCAL, lines, 1),
+             "SYSTEM GETs the file through the FAL server process, records BYTE-MATCH");
+
+    /* (2) GUEST through the SAME path: the server runs as GUEST and the
+     * executive ACP refuses the file it cannot see. */
+    st = falp_session("GUEST", "GUEST", 1, PRIV, LOCAL, &auth, &uic, &xst);
+    FP_CHECK(auth == SS$_NORMAL, "GUEST/GUEST authenticates at connect");
+    if (auth != SS$_NORMAL)       /* vms-330: say WHY (this proof fails intermittently in CI) */
+        printf("  NOTE: GUEST connect auth status %08X, session status %08X\n",
+               (unsigned)auth, (unsigned)st);
+    FP_CHECK(uic == ((128u << 16) | 129u),
+             "the FAL server process for GUEST runs with GUEST's UIC [128,129], NOT NETACP's");
+    FP_CHECK(st != SS$_NORMAL,
+             "GUEST's GET of a SYSTEM-only file is REFUSED -- the access is checked against the user, not the daemon");
+    st = falp_session("GUEST", "GUEST", 1, "SYS$SYSTEM:SYSUAF.DAT", LOCAL, &auth, &uic, &xst);
+    FP_CHECK(st != SS$_NORMAL, "GUEST cannot read SYS$SYSTEM:SYSUAF.DAT through FAL");
+
+    /* (3) GUEST cannot write into a SYSTEM directory either. */
+    static const char *evil[] = { "written by GUEST over FAL" };
+    int wl = rms_textfile_write_line(LOCAL, evil[0]);
+    if (wl != 0)
+        printf("  NOTE: rms_textfile_write_line(%s) = %d, errno %d (%s)\n", LOCAL, wl, errno, strerror(errno));
+    FP_CHECK(wl == 0, "a local source for the PUT exists");
+    st = falp_session("GUEST", "GUEST", 0, EVIL, LOCAL, &auth, &uic, &xst);
+    rms_textfile_t *chk = rms_textfile_open(EVIL);
+    FP_CHECK(st != SS$_NORMAL && chk == NULL,
+             "GUEST's PUT into SYS$SYSROOT:[SYSMGR] is REFUSED and no file is created");
+    if (chk) rms_textfile_close(chk);
+
+    /* (4) A bad password never creates a server process at all. */
+    st = falp_session("GUEST", "WRONGPW", 1, PRIV, LOCAL, &auth, &uic, &xst);
+    FP_CHECK(auth == SS$_INVLOGIN && uic == 0,
+             "a bad password is refused at connect and NO FAL server process is created");
+
+    /* (5) rd vms-277a: remote DELETE and RENAME through the SAME server
+     * process. The refusals are the executive ACP's verdict on GUEST's
+     * identity, and the STATUS the client receives must be the bytes a real
+     * VMS V7.3 FAL sent for the same refusal
+     * (tests/lab/captures/decnet-fal-verbs-20261008): DELETE = MAC 4 / MIC PRV
+     * (0x4055) + STV 0x24, RENAME = MAC 4 / MIC RMV (0x405f) without STV. Then
+     * SYSTEM, which owns the files, deletes and renames them, read back
+     * through RMS. */
+    {
+        const char *DEL = "SYS$SYSROOT:[SYSMGR]FALP_DEL.TXT";
+        const char *REN = "SYS$SYSROOT:[SYSMGR]FALP_REN.TXT";
+        const char *RENAMED = "SYS$SYSROOT:[SYSMGR]FALP_RENAMED.TXT";
+        const char *STOLEN = "SYS$SYSROOT:[SYSMGR]FALP_STOLEN.TXT";
+        static const char *dl[] = { "FAL verbs: a SYSTEM-only file to delete" };
+        static const char *rl[] = { "FAL verbs: a SYSTEM-only file to rename" };
+        uint32_t s1 = 0, s2 = 0;
+        (void)dnet_fal_erase(RENAMED, &s1, &s2);        /* a previous run's */
+        FP_CHECK(falp_write_private(DEL, dl[0]) == 0 && falp_write_private(REN, rl[0]) == 0,
+                 "SYSTEM-only files (S:RWED,O:RWED,G,W) to DELETE and RENAME are laid down via RMS");
+        uint16_t sc = 0; uint64_t sv = 0;
+
+        st = falp_session_op("GUEST", "GUEST", FALP_ERASE, DEL, NULL, &auth, &uic, &xst, &sc, &sv);
+        printf("  NOTE: GUEST DELETE -> client %08X, STATUS %04X STV %llX\n",
+               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
+        FP_CHECK(st != SS$_NORMAL && sc == 0x4055 && sv == 0x24,
+                 "GUEST's remote DELETE of a SYSTEM-only file is REFUSED by the executive with the VAX FAL's STATUS 0x4055 (RMS-E-PRV) STV 0x24 (SS$_NOPRIV)");
+        {
+            uint32_t rs = 0; void *rh = NULL;
+            int ro = dnet_fal_ropen_st(DEL, &rh, NULL, NULL, &rs);
+            if (ro == 0) (void)dnet_fal_rclose(rh);
+            printf("  NOTE: after GUEST DELETE, $OPEN %s -> %s (RMS %08X)\n", DEL,
+                   ro == 0 ? "opens" : "refused", (unsigned)rs);
+        }
+        FP_CHECK(fal_file_matches(DEL, dl, 1), "the file GUEST tried to delete is still there, intact");
+
+        st = falp_session_op("GUEST", "GUEST", FALP_RENAME, REN, STOLEN, &auth, &uic, &xst, &sc, &sv);
+        printf("  NOTE: GUEST RENAME -> client %08X, STATUS %04X STV %llX\n",
+               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
+        void *rf = NULL;
+        int stolen = (dnet_fal_ropen(STOLEN, &rf, NULL, NULL) == 0);
+        if (stolen) (void)dnet_fal_rclose(rf);
+        FP_CHECK(st != SS$_NORMAL && sc == 0x405f && sv == 0,
+                 "GUEST's remote RENAME of a SYSTEM-only file is REFUSED by the executive with the VAX FAL's STATUS 0x405f (RMS-F-RMV), no STV");
+        FP_CHECK(!stolen && fal_file_matches(REN, rl, 1),
+                 "the refused RENAME moved nothing: the old name still holds the file, the new name does not exist");
+
+        {   /* diagnostic: the resultant the server will rename by */
+            void *sx = NULL; char r[256] = "";
+            if (dnet_fal_search_begin(REN, &sx) == 0) {
+                if (dnet_fal_search_next(sx, r, sizeof r) != 0) r[0] = '\0';
+                dnet_fal_search_end(sx);
+            }
+            printf("  NOTE: %s resolves to '%s'\n", REN, r);
+        }
+        st = falp_session_op("SYSTEM", "MANAGER", FALP_RENAME, REN, RENAMED, &auth, &uic, &xst, &sc, &sv);
+        printf("  NOTE: SYSTEM RENAME -> client %08X, STATUS %04X STV %llX\n",
+               (unsigned)st, (unsigned)sc, (unsigned long long)sv);
+        uint32_t ors = 0;
+        int old_gone = (dnet_fal_ropen_st(REN, &rf, NULL, NULL, &ors) != 0);
+        if (!old_gone) (void)dnet_fal_rclose(rf);
+        printf("  NOTE: after SYSTEM RENAME, $OPEN old -> RMS %08X; new name byte-match %d\n",
+               (unsigned)ors, fal_file_matches(RENAMED, rl, 1));
+        FP_CHECK(st == SS$_NORMAL && old_gone && fal_file_matches(RENAMED, rl, 1),
+                 "SYSTEM renames its file through the FAL server process: RMS reads the records under the NEW name and the old name is gone");
+
+        st = falp_session_op("SYSTEM", "MANAGER", FALP_ERASE, DEL, NULL, &auth, &uic, &xst, &sc, &sv);
+        uint32_t ost = 0;
+        int del_gone = (dnet_fal_ropen_st(DEL, &rf, NULL, NULL, &ost) != 0);
+        if (!del_gone) (void)dnet_fal_rclose(rf);
+        printf("  NOTE: SYSTEM DELETE -> client %08X, STATUS %04X STV %llX, server exit %08X;"
+               " then $OPEN RMS %08X\n", (unsigned)st, (unsigned)sc, (unsigned long long)sv,
+               (unsigned)xst, (unsigned)ost);
+        FP_CHECK(st == SS$_NORMAL && del_gone && ost == RMS$_FNF,
+                 "SYSTEM deletes its file through the FAL server process: RMS $OPEN then finds no such file (RMS-E-FNF)");
+        (void)dnet_fal_erase(RENAMED, &s1, &s2);
+
+        /* A DIRECTORY of a missing file in GUEST's SYS$LOGIN (live bracket
+         * 2026-10-08: a VMS client printed "Total of 1 file" when the NAMEs
+         * came back as volume + file with no directory). The miss must be
+         * STATUS FNF, and any NAMEs must be the fully expanded spec. */
+        st = falp_session_op("GUEST", "GUEST", FALP_DIRLIST, "SYS$LOGIN:NOSUCH_FALP.TXT;*", NULL,
+                             &auth, &uic, &xst, &sc, &sv);
+        printf("  NOTE: GUEST DIRECTORY SYS$LOGIN:NOSUCH_FALP.TXT;* -> client %08X, NAMEs '%s',"
+               " STATUS %04X STV %llX\n", (unsigned)st, falp_names, (unsigned)sc,
+               (unsigned long long)sv);
+        int has_file = strstr(falp_names, "2:") != NULL, has_dir = strstr(falp_names, "4:") != NULL;
+        FP_CHECK(st != SS$_NORMAL && sc == 0x4032 && sv == 0x0910 && (!has_file || has_dir),
+                 "GUEST's remote DIRECTORY of a missing file is STATUS FNF 0x4032 STV 0x0910, never a file NAME without its directory (VMS prints NOFILES)");
+    }
+
+    if (own) {
+        g_lb_stop = 1;
+        pthread_join(th, NULL);
+        netacp_broker_stop(g_lb_chan);
+    }
+    printf("DECNETD-I-FALPROC, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-FAL-PROC-ACCEPT: PASS\n"); return 0; }
+    printf("DECNETD-FAL-PROC-ACCEPT: FAIL\n");
+    return 1;
+#undef FP_CHECK
+}
 
 int main(int argc, char **argv)
 {

@@ -1092,6 +1092,14 @@ static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
                 /* The query sits at p1 (p3 bytes); the answer replaces it. */
                 st = (!p1 || p3 == 0 || p3 > p2) ? SS$_BADPARAM
                    : dnet_broker_control(&ns->bc, &io, p1, p3, p1, p2, &xfer);
+            } else if (op == DNET_BROKER_OP_OPEN && p3 != 0) {
+                /* IO$_ACCESS with p3 = the size of the p1 buffer (rd vms-0a7
+                 * S3, an OVMX extension, LABELLED): a network server ACCEPTING
+                 * its inbound link (the NCB its SYS$NET names) gets the network
+                 * job's information in place of the NCB -- the user and login
+                 * directory VMS's LOGINOUT would give the job. */
+                st = (!p1 || p3 < p2) ? SS$_BADPARAM
+                   : dnet_broker_xfer(&ns->bc, &io, op, p1, p2, p1, p3, &xfer);
             } else {
                 st = dnet_broker_xfer(&ns->bc, &io, op,
                                       (op == DNET_BROKER_OP_OPEN || op == DNET_BROKER_OP_SEND) ? p1 : NULL,

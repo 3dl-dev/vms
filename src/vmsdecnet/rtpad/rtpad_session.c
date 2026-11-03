@@ -110,14 +110,11 @@ void rtpad_session_oob(struct rtpad_session *s, uint8_t c)
     }
 }
 
-/* Host output to the screen. The cursor is no longer at the start of the
- * fresh line a terminal read's echoed RETURN left. */
+/* Host output to the screen. */
 static void show(struct rtpad_session *s, const uint8_t *b, size_t n)
 {
-    if (!n)
-        return;
-    s->io->show(s->io->ctx, b, n);
-    s->fresh = 0;
+    if (n)
+        s->io->show(s->io->ctx, b, n);
 }
 
 static void fail(struct rtpad_session *s, uint32_t st)
@@ -200,21 +197,6 @@ static void on_bound_msg(struct rtpad_session *s, const uint8_t *data, size_t le
             memcpy(s->rd_prompt, txt, txtlen);
             s->rd_plen = eop;
             s->rd_init = txtlen - eop;
-            if (s->rd_timeout == 0 && s->rd_init == 0 && s->rd_plen) {
-                /* An untimed read waits for the user's first key (so the link
-                 * is served meanwhile); its prompt is shown now, rendered as
-                 * the driver renders a read's prompt: a leading CR LF on the
-                 * fresh line a RETURN's echo opened is just the CR (VAX V7.3:
-                 * "<CR><NUL>$ " after a command, rd vms-fc4). */
-                const uint8_t *p = s->rd_prompt;
-                size_t pn = s->rd_plen;
-                if (s->fresh && pn >= 2 && p[0] == '\r' && p[1] == '\n') {
-                    s->io->show(s->io->ctx, p, 1);
-                    p += 2; pn -= 2;
-                }
-                show(s, p, pn);
-                s->rd_plen = 0;
-            }
         } else if (txtlen) {
             show(s, txt, txtlen);
         }
@@ -295,7 +277,12 @@ void rtpad_session_rx(struct rtpad_session *s, const uint8_t *data, size_t len)
 
 int rtpad_session_read_now(const struct rtpad_session *s)
 {
-    return s->read_pending && (s->rd_timeout != 0 || s->rd_init != 0);
+    /* Every solicited read starts at once, its prompt with it, as VMS's
+     * RTPAD has its read outstanding while the user types: what is typed is
+     * echoed and edited as it comes (a paste longer than the type-ahead
+     * buffer is not lost), a timed read's time runs from its prompt, a
+     * recalled command shows at once. */
+    return s->read_pending && s->is_terminal;
 }
 
 int rtpad_session_wants_input(const struct rtpad_session *s)
@@ -354,9 +341,6 @@ void rtpad_session_input(struct rtpad_session *s)
         if (n > sizeof line)
             n = sizeof line;
         s->rd_plen = s->rd_init = 0;
-        /* the driver echoed the RETURN as a new line: the cursor is at the
-         * start of a fresh one */
-        s->fresh = (term == 0x0d && s->rd_echo && s->rd_term_echo);
         send_line(s, line, n, term);
         return;
     }

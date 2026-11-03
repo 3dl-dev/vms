@@ -523,7 +523,7 @@ int main(int argc, char **argv)
               "SET HOST 0: control returned with %REM-S-END");
         {
             /* VAX V7.3: the message once, from DCL, for RTPAD's exit condition
-             * (tests/lab/captures/vms-0a7-s2-20261102: $STATUS %X0000028C) */
+             * (tests/lab/captures/vms-0a7-s2-20261103: $STATUS %X0000028C) */
             int n = 0;
             for (const char *q = bad->out; (q = strstr(q, "NOSUCHNODE")) != NULL; q++)
                 n++;

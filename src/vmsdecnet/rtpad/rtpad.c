@@ -359,7 +359,7 @@ static size_t cli_value(const char *label, char *out, size_t cap)
 /* The link could not be had: exit with the condition, as VMS RTPAD does --
  * DCL shows its message once and $STATUS is that value, with no
  * STS$M_INHIB_MSG (VAX V7.3: SET HOST NOSUCH -> "%SYSTEM-F-NOSUCHNODE, remote
- * node is unknown", $STATUS %X0000028C; tests/lab/captures/vms-0a7-s2-20261102). */
+ * node is unknown", $STATUS %X0000028C; tests/lab/captures/vms-0a7-s2-20261103). */
 static void fail_exit(struct rtpad *r, uint32_t st)
 {
     if (r->ch_tt) (void)sys$dassgn(r->ch_tt);

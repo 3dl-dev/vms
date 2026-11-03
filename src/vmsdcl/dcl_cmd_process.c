@@ -819,7 +819,7 @@ static void run_print_condition(uint32_t status, int chained)
  * condition value (rd vms-0a7 S2). VMS DCL displays the CONDITION'S OWN
  * MESSAGE and leaves $STATUS that value: on VAX V7.3 `SET HOST NOSUCH` (RTPAD
  * exits SYSTEM-F-NOSUCHNODE) shows "%SYSTEM-F-NOSUCHNODE, remote node is
- * unknown" with $STATUS %X0000028C (tests/lab/captures/vms-0a7-s2-20261102).
+ * unknown" with $STATUS %X0000028C (tests/lab/captures/vms-0a7-s2-20261103).
  * Nothing is shown when STS$M_INHIB_MSG is set (the image already said it)
  * or the severity is success/informational. A value $GETMSG has no text for
  * still says which image failed and with what value.

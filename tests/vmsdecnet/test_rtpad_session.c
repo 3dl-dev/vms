@@ -353,7 +353,7 @@ static void test_file_input(void)
 /* ---- a timed read (rd vms-0a7 S2 live bench, VAX V7.3 host) --------------
  * After "User authorization failure" a VAX host's LOGINOUT issues a no-prompt
  * retry read, TIMED (FLAGS bit 13, TIMEOUT 20 s): from the bench wire
- * (tests/lab/captures/vms-0a7-s2-20261102), the host->terminal segment that
+ * (tests/lab/captures/vms-0a7-s2-20261103), the host->terminal segment that
  * follows the failure Write. The VAX's own SET HOST ends the session 20 s
  * later; RTPAD must time the read and tell the host (Read Data, code 5). */
 static const uint8_t k_vax_retry_read[] = {
@@ -407,7 +407,7 @@ static void test_timed_read(void)
 
 /* ---- out of band, characteristics, recall, the terminal's own image ----
  * The VAX V7.3 host's Characteristics, from the bench wire (tests/lab/
- * captures/vms-0a7-s2-20261102): at login DCL makes CTRL/Y out of band
+ * captures/vms-0a7-s2-20261103): at login DCL makes CTRL/Y out of band
  * (attributes 0x29 under mask 0x3b) and CTRL/T (0x03 under 0x3f); its recall
  * read carries the recalled command after END-OF-PROMPT. */
 static const uint8_t k_vax_char_ctrly[] = { 0x09, 0x00, 0x07, 0x00,
@@ -507,15 +507,12 @@ static void test_recall_and_sense(void)
     check(f.initlen == 9 && memcmp(f.init, "SHOW TIME", 9) == 0,
           "the recalled SHOW TIME is the read's initial input, not part of its prompt");
     check(screen_has(&f, "$ ") && !screen_has(&f, "$ SHOW"), "the prompt is just the prompt");
-    /* RETURN ended that read (echoed: a fresh line); DCL's next read is
-     * untimed: its prompt is shown at once, its CR LF rendered as the driver
-     * renders it on a fresh line -- just CR -- and the read waits for a key */
-    size_t mark = f.screenlen;
+    /* DCL's next read: untimed, its prompt goes WITH the read, which starts
+     * at once (outstanding while the user types, as on VMS) */
     rtpad_session_rx(&s, k_vax_dcl_read, sizeof k_vax_dcl_read);
-    check(f.screenlen == mark + 4 && memcmp(f.screen + mark, "\r\0$ ", 4) == 0,
-          "after an echoed RETURN, DCL's \"\\r\\n\\0$ \" shows as <CR><NUL>$ (no blank line)");
-    check(rtpad_session_wants_input(&s) && !rtpad_session_read_now(&s),
-          "an untimed read waits for the first key (the link is served meanwhile)");
+    check(rtpad_session_wants_input(&s) && rtpad_session_read_now(&s) &&
+          s.rd_plen == 5 && memcmp(s.rd_prompt, "\r\n\0$ ", 5) == 0 && s.rd_init == 0,
+          "DCL's command read starts at once with its prompt \"\\r\\n\\0$ \" (the driver renders it)");
 }
 
 static void test_send_refused(void)

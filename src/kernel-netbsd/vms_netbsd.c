@@ -719,6 +719,7 @@ vms_proc_exithook(struct proc *p, void *arg __unused)
 	exec_lock(&vms_proc_hash_lock);
 	vms_proc_termination_post_locked(&t);
 	exec_unlock(&vms_proc_hash_lock);
+	vms_proc_termination_mailbox(&t);	/* may sleep (rd vms-6d9) */
 }
 
 /*

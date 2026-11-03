@@ -1351,6 +1351,7 @@ void vms_proc_termination_capture(const struct vms_proc *victim,
     t->compl_efn        = victim->compl_efn;
     t->compl_astadr     = victim->compl_astadr;
     t->compl_astprm     = victim->compl_astprm;
+    t->term_mbx_unit    = victim->term_mbx_unit;
 }
 
 void vms_proc_termination_post_locked(const struct vms_termination *t)
@@ -1373,6 +1374,81 @@ void vms_proc_termination_post_locked(const struct vms_termination *t)
     }
 }
 
+
+/*
+ * vms_proc_termination_mailbox - the deleted process's termination message
+ * into its $CREPRC termination mailbox (rd vms-6d9; struct vms_exec_mbxmsg in
+ * vms_ioctl.h). The substrate's exit hook calls it UNLOCKED, after the
+ * process's resources are released (step 2) -- the message allocation may
+ * sleep. The mailbox's owner is the creator's VMS process; for DCL's image task
+ * (VMS_CREPRC_PCB_CONTINUE) that is the image's own VMS PID.
+ */
+void vms_proc_termination_mailbox(const struct vms_termination *t)
+{
+    struct vms_exec_mbxmsg msg;
+
+    /* NEGCTL-ANCHORED (cli-wait-no-termination-message) */
+    if (t->term_mbx_unit == 0)
+        return;
+    memset(&msg, 0, sizeof(msg));
+    msg.msgtyp     = VMS_EXEC_MBXMSG_TERM;
+    msg.has_status = t->has_status;
+    msg.finalsts   = t->condition;
+    msg.pid        = t->vms_pid;
+    msg.task_pid   = t->linux_pid;
+    vms_mbx_exec_post(t->term_mbx_unit, t->owner_vms_pid ? t->owner_vms_pid : t->vms_pid,
+                      &msg, sizeof(msg), 0);
+}
+
+/*
+ * vms_proc_ctrly_image - CTRL/Y reached the CLI (rd vms-6d9). The terminal
+ * driver has fired the CTRL/Y AST that a task of VMS process `vms_pid` armed
+ * (`arming_task`: DCL). On VMS the image runs IN that process, and a CTRL/Y
+ * interrupts it whatever the image does (OpenVMS User's Manual, "Interrupting
+ * an image": CTRL/Y returns control to DCL and the image can be resumed with
+ * CONTINUE). OVMX's image is a second task of the same VMS process (DCL's
+ * CONTINUE task, the one with a termination mailbox), so the executive stops
+ * it -- with the stop signal the image cannot catch or ignore -- and tells DCL
+ * through the task's termination mailbox, where DCL is waiting. An image that
+ * armed its OWN CTRL/Y AST is not the CLI's to interrupt: then the arming task
+ * is the image, and nothing here applies to it.
+ *
+ * Not atomic-context safe for the stop on every substrate: called by the
+ * terminal driver after its own lock is dropped, where the substrate interrupt
+ * is delivered.
+ */
+void vms_proc_ctrly_image(uint32_t vms_pid, uint32_t arming_task)
+{
+    struct vms_proc *p;
+    exec_task_ref_t *ref = NULL;
+    struct vms_exec_mbxmsg msg;
+    uint32_t unit = 0, task = 0;
+    int bkt;
+
+    if (vms_pid == 0)
+        return;
+    exec_lock(&vms_proc_hash_lock);
+    exec_hash_for_each(vms_proc_hash, bkt, p, hash_node) {
+        if (p->vms_pid == vms_pid && p->term_mbx_unit != 0 &&
+            (uint32_t)p->linux_pid != arming_task) {
+            ref  = p->pid_ref;
+            unit = p->term_mbx_unit;
+            task = (uint32_t)p->linux_pid;
+            break;
+        }
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    if (!ref)
+        return;
+    /* As vms_ioctl_procctl: a PCB deleted after the unlock leaves a ref whose
+     * process is gone, which exec_task_signal reports as -ESRCH. */
+    (void)exec_task_signal(ref, EXEC_SIG_STOP);
+    memset(&msg, 0, sizeof(msg));
+    msg.msgtyp   = VMS_EXEC_MBXMSG_CTRLY;
+    msg.pid      = vms_pid;
+    msg.task_pid = task;
+    vms_mbx_exec_post(unit, vms_pid, &msg, sizeof(msg), 1);
+}
 
 /*
  * termrec_find - the caller's own termination record for its ended subprocess
@@ -2177,8 +2253,23 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
             goto out;
         }
     }
+    /* The termination mailbox (rd vms-6d9): one the creator holds a channel
+     * to, or none. */
+    if (args.mbxunt != 0 && !vms_mbx_proc_holds_unit(proc, args.mbxunt)) {
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
     args.status = vms_proc_create_for(proc, args.child_pid, kind, args.username,
                                       args.uic, args.privs, &args.vms_pid);
+    if ((args.status & 1) && args.mbxunt != 0) {
+        struct vms_proc *np;
+
+        exec_lock(&vms_proc_hash_lock);
+        np = find_by_linux_pid(args.child_pid);
+        if (np)
+            np->term_mbx_unit = args.mbxunt;
+        exec_unlock(&vms_proc_hash_lock);
+    }
     /* A LOGIN process (rd vms-a2c): SETIDENT is allowed in it while the task
      * that is becoming LOGINOUT, and LOGINOUT's own image, run -- two image
      * activations' worth (vms_proc_image_activated counts them down). A

@@ -668,6 +668,7 @@ struct vms_termination {
 	uint8_t  has_status, compl_armed, compl_acmode, pad;
 	uint32_t compl_parent_pid, compl_efn;
 	uint64_t compl_astadr, compl_astprm;
+	uint32_t term_mbx_unit;	/* the termination mailbox (rd vms-6d9) */
 };
 
 struct vms_termrec {
@@ -835,6 +836,7 @@ struct vms_proc {
 	uint32_t            compl_efn;
 	uint64_t            compl_astadr;
 	uint64_t            compl_astprm;
+	uint32_t            term_mbx_unit;  /* termination mailbox (rd vms-6d9), 0 = none */
 
 	/* The process lifecycle (rd vms-9f32): the creator, and the termination
 	 * records of this process's ended subprocesses. Same field set and
@@ -1155,6 +1157,10 @@ uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pi
                                   uint32_t *uic, uint64_t *privs);
 int  vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_mbx_release_all(struct vms_proc *proc);
+/* The termination mailbox (rd vms-6d9). */
+int  vms_mbx_proc_holds_unit(struct vms_proc *proc, uint32_t unit);
+void vms_mbx_exec_post(uint32_t unit, uint32_t owner_vms_pid, const void *msg,
+                       uint32_t len, int atomic);
 
 /* ----------------------------------------------------------------
  * LOCK MANAGER facility (DLM, P4-A, rd vms-ff7) -- DEFINED in
@@ -1553,6 +1559,8 @@ void vms_proc_free_claimed(struct vms_proc *proc);
 void vms_proc_termination_capture(const struct vms_proc *victim,
                                   struct vms_termination *t);
 void vms_proc_termination_post_locked(const struct vms_termination *t);
+void vms_proc_termination_mailbox(const struct vms_termination *t);
+void vms_proc_ctrly_image(uint32_t vms_pid, uint32_t arming_task);
 
 /* Facility-provided (src/kernel-core/vms_proctab.c): deliver a /NOWAIT spawn
  * completion for a subprocess reclaimed WITHOUT a recorded exit (SIGKILL/crash),

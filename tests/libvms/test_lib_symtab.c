@@ -258,6 +258,28 @@ static void docmd_cli(const struct ovmx_cli_req *rq, struct ovmx_cli_rsp *rs)
     rs->status = docmd_answer;
 }
 
+/* A CLI DCL named (OVMX$CLI_MBX) that cannot be reached -- here, no executive
+ * -- is no CLI: LIB$_NOCLI, never the process-local table posing as DCL's
+ * (rd vms-6d9). Run last: the RTL keeps the verdict for the image's life. */
+static void test_named_cli_unreachable(void)
+{
+    printf("Testing a named but unreachable CLI...\n");
+    char text[] = "WRITE SYS$OUTPUT \"X\"";
+    struct dsc$descriptor_s cmd = { (uint16_t)strlen(text), DSC$K_DTYPE_T, DSC$K_CLASS_S, text };
+    char nm[] = "VMS6D9";
+    char val[] = "1";
+    struct dsc$descriptor_s dn = { (uint16_t)strlen(nm), DSC$K_DTYPE_T, DSC$K_CLASS_S, nm };
+    struct dsc$descriptor_s dv = { (uint16_t)strlen(val), DSC$K_DTYPE_T, DSC$K_CLASS_S, val };
+
+    lib$$set_cli_handler(NULL);
+    setenv(OVMX_CLI_MBX_ENV, "MBA65000:,MBA65001:", 1);
+    check(lib$do_command(&cmd) == LIB$_NOCLI, "do_command with an unreachable CLI is LIB$_NOCLI");
+    check(lib$set_symbol(&dn, &dv, NULL) == LIB$_NOCLI,
+          "set_symbol with an unreachable CLI is LIB$_NOCLI");
+    check(getenv(OVMX_CLI_MBX_ENV) == NULL,
+          "the CLI name is the image's alone (not passed to a process it starts)");
+}
+
 static void test_do_command(void)
 {
     printf("Testing lib$do_command...\n");
@@ -265,7 +287,7 @@ static void test_do_command(void)
     struct dsc$descriptor_s cmd = { (uint16_t)strlen(text), DSC$K_DTYPE_T, DSC$K_CLASS_S, text };
 
     lib$$set_cli_handler(NULL);
-    unsetenv(OVMX_CLI_FD_ENV);
+    unsetenv(OVMX_CLI_MBX_ENV);
     check(lib$do_command(&cmd) == LIB$_NOCLI, "do_command with no CLI is LIB$_NOCLI");
 
     lib$$set_cli_handler(docmd_cli);
@@ -319,6 +341,7 @@ int main(void)
     test_purgws();
     test_getutc();
     test_do_command();
+    test_named_cli_unreachable();
 
     printf("\n%d/%d assertions passed.\n", total - failures, total);
 

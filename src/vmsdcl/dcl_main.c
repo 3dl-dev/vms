@@ -269,9 +269,21 @@ static void sigint_handler(int sig)
 
     pid_t child = (pid_t)dcl_running_child;
     if (child > 0 && dcl_ctx.ctrl_y_enabled) {
-        /* Stop the running child process — VMS Ctrl-Y behavior */
+        /* Stop the running child process — VMS Ctrl-Y behavior. When the
+         * terminal is the executive's, the executive has already stopped the
+         * image and told DCL's wait mailbox (rd vms-6d9, vms_proc_ctrly_image);
+         * this substrate stop covers a terminal that is not, and the marker
+         * below ends DCL's mailbox read for it. */
         kill(child, SIGTSTP);
-        /* The waitpid in the caller (with WUNTRACED) will pick up the stop */
+        extern volatile sig_atomic_t dcl_wait_mbx_chan;
+        uint32_t wc = (uint32_t)dcl_wait_mbx_chan;
+        if (wc) {
+            struct vms_exec_mbxmsg em;
+            memset(&em, 0, sizeof em);
+            em.msgtyp = VMS_EXEC_MBXMSG_CTRLY;
+            em.task_pid = (uint32_t)child;
+            (void)vms_kif_mbx_write_ex(wc, &em, sizeof em, 1);
+        }
         return;
     }
 

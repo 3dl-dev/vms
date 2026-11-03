@@ -2393,6 +2393,27 @@ uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *user
     return args.status;
 }
 
+/* vms_kif_creprc_pcb with $CREPRC's termination mailbox (rd vms-6d9): `mbxunt`
+ * is the unit of a mailbox the caller holds a channel to; the executive writes
+ * the new process's termination message (struct vms_exec_mbxmsg) into it when
+ * the process is deleted. */
+uint32_t vms_kif_creprc_pcb_mbx(uint32_t child_pid, uint32_t flags, uint32_t mbxunt,
+                                uint32_t *vms_pid)
+{
+    struct vms_creprc_pcb_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.child_pid = child_pid;
+    args.flags = flags;
+    args.mbxunt = mbxunt;
+
+    KIF_CALL(VMS_IOCTL_CREPRC_PCB, &args);
+
+    if (vms_pid)
+        *vms_pid = args.vms_pid;
+    return args.status;
+}
+
 /* The held task's wait for its PCB (rd vms-89bb): returns once its creator's
  * VMS_IOCTL_CREPRC_PCB for it has settled. A signal does not end it. */
 uint32_t vms_kif_creprc_await(void)

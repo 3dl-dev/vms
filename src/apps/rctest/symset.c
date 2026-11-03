@@ -10,10 +10,18 @@
  * If DCL defines OVMX_DOCMD, the image then hands that command to DCL with
  * LIB$DO_COMMAND, which does not return: DCL runs the command after the image
  * exits. A "do_command returned" line therefore means it failed.
+ *
+ * If DCL defines OVMX_SPIN, the image instead ignores the substrate's terminal
+ * stop signal and spins for OVMX_SPIN seconds (rd vms-6d9): CTRL/Y must still
+ * interrupt it, as on VMS, because the executive -- not a signal the image can
+ * refuse -- stops it; CONTINUE resumes it to "spin ended".
  */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <unistd.h>
 
 struct dsc { uint16_t len; uint8_t dtype, cls; char *ptr; };
 extern uint32_t lib$set_symbol(const struct dsc *, const struct dsc *, const uint32_t *);
@@ -22,8 +30,30 @@ extern uint32_t lib$do_command(const struct dsc *);
 
 static struct dsc d(char *s) { struct dsc x = { (uint16_t)strlen(s), 14, 1, s }; return x; }
 
+static int spin(const char *secs)
+{
+    int n = atoi(secs);
+    signal(SIGTSTP, SIG_IGN);
+    printf("SYMSET: spinning %d (SIGTSTP ignored)\n", n);
+    fflush(stdout);
+    for (int i = 0; i < n; i++)
+        sleep(1);
+    printf("SYMSET: spin ended\n");
+    fflush(stdout);
+    return 0;
+}
+
 int main(void)
 {
+    char sbuf[16];
+    struct dsc sd = { sizeof sbuf - 1, 14, 1, sbuf };
+    struct dsc n_s = d("OVMX_SPIN");
+    uint16_t slen = 0;
+    if (lib$get_symbol(&n_s, &sd, &slen, 0) & 1) {
+        sbuf[slen] = '\0';
+        return spin(sbuf);
+    }
+
     char inbuf[128];
     struct dsc in = { sizeof inbuf, 14, 1, inbuf };
     struct dsc n_in = d("OVMX_CLI_IN");

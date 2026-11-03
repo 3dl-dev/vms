@@ -995,6 +995,7 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 	uint64_t dc = tt_devchar(tt->dev);
 	uint8_t intr[8], flow[8];
 	uint32_t nintr = 0, nflow = 0;
+	uint32_t ctrly_pid = 0, ctrly_task = 0;   /* a CLI's CTRL/Y fired (rd vms-6d9) */
 	size_t i;
 
 	exec_lock(&tt->lock);
@@ -1031,6 +1032,14 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 					if (tt->rd_active)
 						tt_complete(tt, SS__ABORT, 0, 0);
 					tt_oob_fire(tt, &fire, fire.astprm);
+					/* A CTRL/Y AST (CTRL/C without its own
+					 * AST fires it too): the image of the
+					 * arming task's VMS process is the
+					 * executive's to interrupt (rd vms-6d9). */
+					if (o == &tt->oob[VMS_TT_OOB_CTRLY - 1]) {
+						ctrly_pid = fire.proc->vms_pid;
+						ctrly_task = (uint32_t)fire.owner;
+					}
 					/* the substrate interrupt still stops an
 					 * image the AST owner is waiting on */
 					if (nintr < sizeof(intr))
@@ -1103,6 +1112,8 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 	exec_unlock(&tt->lock);
 
 	tt_flush(tt);
+	if (ctrly_pid)
+		vms_proc_ctrly_image(ctrly_pid, ctrly_task);
 	if (nflow || nintr) {
 		struct tt_portref pr;
 

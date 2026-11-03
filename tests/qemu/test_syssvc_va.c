@@ -213,6 +213,7 @@ static void test_creprc_quota(void)
     uint32_t pid = 0;
 
     creprc_probe(q4096, 4096, rep, sizeof rep);
+    /* negctl: creprc-quota-list-ignored */
     check(strcmp(rep, "OK\n") == 0,
           "creprc: a PQL$_PGFLQUOTA of 4096 sources the subprocess's PGFLQUOTA; $EXPREG past it is SS$_EXQUOTA");
     if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);

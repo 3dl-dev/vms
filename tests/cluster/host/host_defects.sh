@@ -751,6 +751,8 @@ EOF
         why)          echo "the sub-resource stops inheriting its tree's master, so dlm_resolve_master falls through to the DIRECTORY path and the sub NAME is looked up as if it were a root -- exactly what shipped before. MEASURED COST at two real V7.3 VAXes 2026-10-21 (tests/lab/captures/vms-c2b-ovmx-holder-20261021): OVMX held the ROOT of a tree VAX1 mastered, then sent S0/S1/S2 to VAX2 (the directory) under each sub name's own derived hash, was answered 'no entry', and MASTERED THEM LOCALLY -- reporting lock ids 0100034B/4C/4D granted at CW that VAX1's SDA does not list. A grant no master gave, and one sub-resource name mastered on two nodes at once.";;
         require_fail) hd_lines <<'EOF'
 the sub-lock's request was posted
+*** and carrying the SUB's hash, off its parent's held value -- the value VAX1 finds its own F11B$s<12> RSB by, never the zero that made it grant a fresh RSB (vms-5fa r5) ***
+*** and it carries the SUB's hash, off the root's value (rd vms-d63; the function is VAX2's own on S0 under RMT9, b67a frame 235 -- test_dlm_hash) ***
 *** and it goes to the PARENT'S MASTER -- never to the directory, as 7 of 7 real sub-lock requests do ***
   ...and it is NOT a directory lookup
 *** body[36:40] is OUR OWN handle for the parent, read off the parent LKB ***

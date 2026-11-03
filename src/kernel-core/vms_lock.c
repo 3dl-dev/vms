@@ -514,7 +514,14 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
      * of a lock held at PW or EX, as a conversion down from those modes does;
      * a lock still WAITING holds no mode it could write from.
      */
-    p->valblk_requested = (lock->flags & LCK_M_VALBLK) ? 1u : 0u;   /* rd vms-d63 */
+    /* rd vms-d63: the LKB's flags, in the LCK$M_ encoding a real request
+     * carries at body[28:30] (lckdef.h values; the executive's own LCK_M_
+     * bits are a different, internal numbering). Only the flags this LKB
+     * really holds -- nothing is added for the wire. */
+    p->req_flags = (uint16_t)(((lock->flags & LCK_M_VALBLK)  ? 0x0001u : 0u) |
+                              ((lock->flags & LCK_M_NOQUEUE) ? 0x0004u : 0u) |
+                              ((lock->flags & LCK_M_SYNCSTS) ? 0x0008u : 0u) |
+                              ((lock->flags & LCK_M_SYSTEM)  ? 0x0010u : 0u));
     p->write_valblk = ((op == VMS_DLM_POST_CONVERT &&
                         (lock->flags & LCK_M_VALBLK) &&
                         lock->granted_mode >= LCK_K_PWMODE &&
@@ -7656,7 +7663,12 @@ uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
     /* The parent: NL on the volume's F11B$v resource, in this process. */
     memset(&a, 0, sizeof(a));
     a.lkmode = LCK_K_NLMODE;
-    a.flags = LCK_M_SYNC;
+    /* SYSTEM and SYNCSTS, as on every real XQP F11B$ request (wire flags
+     * 0x0639/0x0239/0x007d all carry 0x0018; tools/cluster/
+     * dlm_request_flags_census.py). SYSTEM is part of how a master names the
+     * resource: on all 76,116 real requests with it the identity's group is
+     * 0, and the XQP's resources are exactly those (rd vms-d63, r4 fire). */
+    a.flags = LCK_M_SYNC | LCK_M_SYSTEM | LCK_M_SYNCSTS;
     memcpy(a.resnam, vresnam, vresnam_len);
     a.resnam_len = vresnam_len;
     /* An interrupted wait is re-entered, never reported (vms_lock_acp_vol_ex). */
@@ -7673,7 +7685,11 @@ uint32_t vms_lock_acp_file_ser(struct vms_proc *proc, const char *vresnam,
     (void)vms_f11b_ser_name(fidnum, name, (uint32_t)sizeof(name));
     memset(&a, 0, sizeof(a));
     a.lkmode = LCK_K_PWMODE;
-    a.flags = LCK_M_SYNC | LCK_M_VALBLK;
+    /* On the wire this is 0x0019 (VALBLK|SYNCSTS|SYSTEM); a real XQP's is
+     * 0x0239, which adds NOQUOTA and NODLCKWT -- semantics this executive's
+     * lock manager does not have (no enqueue quota; deadlock search covers
+     * every lock), so it does not claim them. */
+    a.flags = LCK_M_SYNC | LCK_M_VALBLK | LCK_M_SYSTEM | LCK_M_SYNCSTS;
     a.parid = par;
     memcpy(a.resnam, name, VMS_F11B_SER_NAME_LEN);
     a.resnam_len = VMS_F11B_SER_NAME_LEN;   /* counted: the name has NULs */

@@ -2780,11 +2780,24 @@ static void d63_r3_the_f11b_ser_lock_on_the_wire(void)
 		 "  an op-0x01 for 'F11B$s' + 0c 00 00 00");
 	ct_check(g.last[30] == d63_vax2_enq_b28[2],
 		 "  at PW, as VAX2's (body[30] = 4)");
-	ct_check((g.last[28] & 0x01u) == (d63_vax2_enq_b28[0] & 0x01u),
-		 "*** body[28] bit 0 SET, as on VAX2's F11B$s request (0x0239): "
-		 "the request asks the master for the value block ***");
-	ct_check(g.last[29] == 0u && (g.last[28] & 0xfeu) == 0u,
-		 "  and no other bit of the span: none is measured");
+	{
+		uint32_t ours = (uint32_t)g.last[28] | ((uint32_t)g.last[29] << 8);
+		uint32_t vax2 = (uint32_t)d63_vax2_enq_b28[0] |
+				((uint32_t)d63_vax2_enq_b28[1] << 8);
+
+		ct_check((ours & 0x0001u) && (vax2 & 0x0001u),
+			 "*** body[28:30] carries VALBLK (0x0001), as VAX2's "
+			 "F11B$s request (0x0239): the request asks the master for "
+			 "the value block ***");
+		ct_check((ours & 0x0010u) && (vax2 & 0x0010u),
+			 "*** and SYSTEM (0x0010), as VAX2's: the system-wide "
+			 "resource VAX1's own F11B$s lock is on (rd vms-d63 r4) ***");
+		ct_check((ours & 0x0008u) == (vax2 & 0x0008u),
+			 "  and SYNCSTS (0x0008), as VAX2's");
+		ct_check((ours & ~0x0019u) == 0u,
+			 "  and nothing this LKB does not hold (VAX2's NOQUOTA and "
+			 "NODLCKWT are semantics this lock manager lacks)");
+	}
 
 	ct_check(d63_grant(D63_S_MASTER, granted, 677u) == 0,
 		 "VAX1 grants it with the block (2,1)");

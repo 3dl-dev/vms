@@ -140,6 +140,7 @@
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+dlm-d63-xqp-lock-not-system
 dlm-d63-release-queue-drops-the-value-block
 dlm-d63-request-asks-for-no-value-block
 dlm-d63-release-writes-no-value-block
@@ -1205,6 +1206,19 @@ EOF
                       ;;
         esac;;
 
+    dlm-d63-xqp-lock-not-system)
+        case "$_f" in
+        facility)     echo "the XQP's F11B\$s request is a SYSTEM-wide lock (LCK\$M_SYSTEM, wire 0x0010 at body[28:30]) as every real XQP F11B\$ request is (vms_lock.c vms_lock_acp_file_ser, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the request goes out without SYSTEM, the form of the vms-5fa r4 fire: VAX1 granted every OVMX F11B\$s request an empty value block (vbseq 0), including the one right after OVMX's marked release, so VAX1's own system-wide F11B\$s<12> never saw OVMX's change. SYSTEM goes with the group-0 identity on 76,116 of 76,116 real requests.";;
+        require_fail) hd_lines <<'EOF2'
+*** and SYSTEM (0x0010), as VAX2's: the system-wide resource VAX1's own F11B$s lock is on (rd vms-d63 r4) ***
+EOF2
+                      ;;
+        esac;;
+
     dlm-d63-release-queue-drops-the-value-block)
         case "$_f" in
         facility)     echo "the wire arm's RELEASE QUEUE keeps a written value block with the release it stages (vms_dlm_scs_fsm.c relq_record_from_post, rd vms-d63)";;
@@ -1227,7 +1241,9 @@ EOF2
         isolation)    echo "isolated";;
         why)          echo "the request goes out with body[28:30] all zero -- what OVMX sent in the vms-5fa r3 fire, where VAX1 granted its F11B\$s requests with an empty value block (vbseq 0) 48 of 48 times while VAX2's, carrying 0x0239, got (1,1).";;
         require_fail) hd_lines <<'EOF2'
-*** body[28] bit 0 SET, as on VAX2's F11B$s request (0x0239): the request asks the master for the value block ***
+*** body[28:30] carries VALBLK (0x0001), as VAX2's F11B$s request (0x0239): the request asks the master for the value block ***
+*** and SYSTEM (0x0010), as VAX2's: the system-wide resource VAX1's own F11B$s lock is on (rd vms-d63 r4) ***
+  and SYNCSTS (0x0008), as VAX2's
 EOF2
                       ;;
         esac;;
@@ -3975,7 +3991,11 @@ apply_edit() {
 
     dlm-d63-request-asks-for-no-value-block)
         # The request-flag write; unique in vms_cluster_codec_dlm.c.
-        sed -i 's|^\tif (opcode == VMS_DLM_WIREOP_ENQ \&\& req->valblk_requested)$|\tif (0 \&\& opcode == VMS_DLM_WIREOP_ENQ \&\& req->valblk_requested) /* NEGCTL dlm-d63-request-asks-for-no-value-block */|' "$_file";;
+        sed -i 's|^\tif (opcode == VMS_DLM_WIREOP_ENQ \&\& req->req_flags != 0u)$|\tif (0 \&\& opcode == VMS_DLM_WIREOP_ENQ \&\& req->req_flags != 0u) /* NEGCTL dlm-d63-request-asks-for-no-value-block */|' "$_file";;
+
+    dlm-d63-xqp-lock-not-system)
+        # The F11B$s request's flags in vms_lock_acp_file_ser; unique.
+        sed -i 's|^    a.flags = LCK_M_SYNC \| LCK_M_VALBLK \| LCK_M_SYSTEM \| LCK_M_SYNCSTS;$|    a.flags = LCK_M_SYNC \| LCK_M_VALBLK \| LCK_M_SYNCSTS; /* NEGCTL dlm-d63-xqp-lock-not-system */|' "$_file";;
 
     dlm-d63-release-writes-no-value-block)
         # The $DEQ arm of write_valblk; unique in vms_lock.c.

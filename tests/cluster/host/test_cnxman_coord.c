@@ -2908,11 +2908,11 @@ static void test_c55_enq_request_on_the_wire(void)
 		 "*** body[4:8] names a transaction -- a request IS answered ***");
 	snprintf(state, sizeof(state),
 		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
-		 "namelen=%u,hash=%u,valblkreq=%u",
+		 "namelen=%u,hash=%u,reqflags=%u",
 		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
 		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
 		 (unsigned)r.res_acmode, (unsigned)r.name_len,
-		 (unsigned)r.dir_hash, (unsigned)r.valblk_requested);
+		 (unsigned)r.dir_hash, (unsigned)r.req_flags);
 	conf_dump("dlm_enq_req", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
@@ -2987,12 +2987,12 @@ static void test_b67a_sublock_request_on_the_wire(void)
 		 "about the name (Rule 8) ***");
 	snprintf(state, sizeof(state),
 		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
-		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u,valblkreq=%u",
+		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u,reqflags=%u",
 		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
 		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
 		 (unsigned)r.res_acmode, (unsigned)r.name_len,
 		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid,
-		 (unsigned)r.valblk_requested);
+		 (unsigned)r.req_flags);
 	conf_dump("dlm_enq_req_sub", 72u, state, b, VMS_CM_BODY_LEN);
 
 	/*
@@ -3008,7 +3008,7 @@ static void test_b67a_sublock_request_on_the_wire(void)
 	r.req_pid            = 0x10000031u;
 	r.parent_own_lkid    = 0x0100036au;
 	r.parent_master_lkid = 0x24000003u;
-	r.valblk_requested   = 1u;
+	r.req_flags          = 0x0019u;   /* VALBLK|SYNCSTS|SYSTEM, the ACP's */
 	r.res_group          = 0u;
 	r.res_acmode         = 0u;
 	r.res_ident_valid    = 1u;
@@ -3021,17 +3021,17 @@ static void test_b67a_sublock_request_on_the_wire(void)
 	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
 		 VMS_CODEC_OK, "  the cluster's DLM sequence");
 	cnxman_envelope_originate(m, b, CNXMAN_ENV_REQUEST);
-	ct_check(b[28] == 0x01u && b[29] == 0u,
-		 "*** body[28] bit 0 asks the master for the value block, as "
-		 "VAX2's F11B$s request does (0x0239 has it) ***");
+	ct_check(b[28] == 0x19u && b[29] == 0u,
+		 "*** body[28:30] is the LKB's $ENQ flags, VALBLK|SYNCSTS|SYSTEM "
+		 "(0x0019) -- each of them in VAX2's 0x0239 ***");
 	snprintf(state, sizeof(state),
 		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
-		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u,valblkreq=%u",
+		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u,reqflags=%u",
 		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
 		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
 		 (unsigned)r.res_acmode, (unsigned)r.name_len,
 		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid,
-		 (unsigned)r.valblk_requested);
+		 (unsigned)r.req_flags);
 	conf_dump("dlm_enq_req_sub", 72u, state, b, VMS_CM_BODY_LEN);
 }
 

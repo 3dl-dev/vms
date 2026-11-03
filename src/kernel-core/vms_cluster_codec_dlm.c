@@ -180,10 +180,10 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, opcode);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, req->mode);
-	/* rd vms-d63: body[28] bit 0 is LCK$M_VALBLK on a new request (struct
-	 * vms_dlm_enq_request). Only that bit, and only on op 0x01. */
-	if (opcode == VMS_DLM_WIREOP_ENQ && req->valblk_requested)
-		vms_wire_put_u8(&w, VMS_OFF_DLM_REQ_FLAGS, 0x01u);
+	/* rd vms-d63: body[28:30] is the caller's $ENQ flags in the LCK$M_
+	 * encoding (struct vms_dlm_enq_request), on a new request. */
+	if (opcode == VMS_DLM_WIREOP_ENQ && req->req_flags != 0u)
+		vms_wire_put_le16(&w, VMS_OFF_DLM_REQ_FLAGS, req->req_flags);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req->req_lkid);
 	/* The master's handle when the master has named one, and the requesting
 	 * process's id until then (the struct's census note). One cell, two

@@ -444,10 +444,20 @@ static void test_oob(void)
     bind_on_oracle(&f, &s, &io);
     check(f.oob_sets >= 1 && f.oob_mask == RTPAD_OOB_ALWAYS,
           "from the start CTRL/Y and CTRL/C are taken out of band from the local driver");
+    /* VAX V7.3 client to a host that never made CTRL/Y or CTRL/C out of band
+     * (S2 bench wire, VAX SET HOST OVMXA): CTRL/Y -> 04 00 19, CTRL/C -> the
+     * same 04 00 19, the interrupt shown locally */
+    static const uint8_t want_y0[] = { 0x09, 0x00, 0x03, 0x00, 0x04, 0x00, 0x19 };
     int before = f.nsent;
     rtpad_session_oob(&s, 0x19);
-    check(f.nsent == before && s.oob_dropped == 1,
-          "CTRL/Y before the host makes it out of band: dropped (never the local DCL's)");
+    check(f.nsent == before + 1 && f.sentlen[before] == sizeof want_y0 &&
+          memcmp(f.sent[before], want_y0, sizeof want_y0) == 0 && f.nrecords == 1,
+          "CTRL/Y before the host says anything: Out-of-Band 04 00 19, *INTERRUPT* shown (as a VAX client)");
+    rtpad_session_oob(&s, 0x03);
+    check(f.nsent == before + 2 && memcmp(f.sent[before + 1], want_y0, sizeof want_y0) == 0 &&
+          f.nrecords == 2,
+          "CTRL/C goes as that same CTRL/Y (as a VAX client) while the host has not made CTRL/C out of band");
+    f.nrecords = 0;
     rtpad_session_rx(&s, k_vax_char_ctrly, sizeof k_vax_char_ctrly);
     rtpad_session_rx(&s, k_vax_char_ctrlt, sizeof k_vax_char_ctrlt);
     check(s.chattr[0x19] == 0x29 && s.chattr[0x14] == 0x03,
@@ -461,7 +471,7 @@ static void test_oob(void)
           memcmp(f.sent[before], want_y, sizeof want_y) == 0,
           "CTRL/Y goes as Out-of-Band 04 01 19 (discard, per its attributes)");
     check(f.nrecords == 1 && strcmp(f.record, "*INTERRUPT*") == 0,
-          "CTRL/Y (attributes echo it) shows *INTERRUPT* on the terminal");
+          "... and *INTERRUPT* on the terminal");
     before = f.nsent;
     rtpad_session_oob(&s, 0x14);
     static const uint8_t want_t[] = { 0x09, 0x00, 0x03, 0x00, 0x04, 0x00, 0x14 };

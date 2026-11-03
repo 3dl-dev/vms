@@ -83,8 +83,18 @@ void rtpad_session_oob(struct rtpad_session *s, uint8_t c)
         if (s) s->oob_dropped++;
         return;
     }
+    /* What a VAX V7.3 client sends (S2 live bench, VAX SET HOST OVMXA, a host
+     * that never made CTRL/Y or CTRL/C out of band): CTRL/Y as Out-of-Band
+     * 04 00 19 whatever the host's attributes, and CTRL/C as that same CTRL/Y
+     * -- unless the host made CTRL/C out of band itself -- with the interrupt
+     * shown on its own screen. */
+    int interrupt = 0;
+    if (c == 0x03 && (s->chattr[0x03] & 3) == 0)
+        c = 0x19;
+    if (c == 0x19)
+        interrupt = 1;
     unsigned kind = s->chattr[c] & 3;
-    if (kind == 0) {
+    if (kind == 0 && !interrupt) {
         /* not out of band at the host: it never reaches the local DCL */
         s->oob_dropped++;
         return;
@@ -99,11 +109,10 @@ void rtpad_session_oob(struct rtpad_session *s, uint8_t c)
     if (!(s->io->link_send(s->io->ctx, s->opdu, olen) & 1))
         return;
     s->oob_sent++;
-    /* The character's echo (attributes bits 4-5, set for CTRL/Y by a VAX
-     * host): the terminal shows the interrupt as the local driver shows its
-     * own CTRL/Y -- a VAX client's screen shows it; the host sends no text
-     * for it (S2 live bench). */
-    if (s->chattr[c] & 0x30)
+    /* The interrupt is shown on this screen, as the local driver shows its
+     * own CTRL/Y: a VAX client's screen shows it, and a VAX host sends no
+     * text for it (S2 live bench). */
+    if (interrupt || (s->chattr[c] & 0x30))
         s->io->record(s->io->ctx, "*INTERRUPT*");
     /* A read the host has outstanding stays outstanding: a VAX host that
      * takes CTRL/Y at an idle DCL prompt solicits nothing new, so the line

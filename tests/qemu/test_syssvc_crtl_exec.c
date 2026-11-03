@@ -14,7 +14,8 @@
  * subprocess with arguments and an environment.
  *
  *   A  the subprocess got exactly the arguments and environment passed, through
- *      the C RTL's exec mailbox; its getpid() is the VMS PID the creator got
+ *      the C RTL's exec mailbox -- one argument longer than a mailbox message
+ *      and its buffer quota (chunked, the parent waiting out a full mailbox); its getpid() is the VMS PID the creator got
  *      back, and $GETJPI of that PID answers while it lives. It exits with the
  *      ERROR completion %X1000002C; the _VMS_WAIT wait returns that code.
  *   B  a subprocess ending with __posix_exit(3)'s completion (%X0035A019) gives
@@ -61,7 +62,8 @@
 #define DIR_      "/tmp/ovmx_e70f"
 #define CHILD_ERR 0x1000002Cu           /* SS$_ABORT, message inhibited */
 #define POSIX3    0x0035A019u           /* __posix_exit(3), measured on Alpha V8.4 */
-#define IMAGE_ST  0x10000014u           /* %X10000014: an error, message inhibited */
+#define IMAGE_ST  0x10000014u
+#define LONGARG   9000                  /* longer than a mailbox message and its quota */           /* %X10000014: an error, message inhibited */
 
 static int pass, fail;
 #define CHECK(c, m) do { if (c) { printf("  PASS: %s\n", m); pass++; } \
@@ -97,7 +99,11 @@ static int subject_main(const char *role)
     char **xa = NULL, **xe = NULL;
     int have = ovmx_crtl_exec_context(&xc, &xa, &xe);
     if (strcmp(role, "ARGS") == 0) {
-        int ok = have && xc == 3 && strcmp(xa[0], "child") == 0 &&
+        int longok = have && xc == 4 && strlen(xa[3]) == LONGARG;
+        for (int i = 0; longok && i < LONGARG; i++)
+            if (xa[3][i] != (char)('a' + i % 26))
+                longok = 0;
+        int ok = longok && strcmp(xa[0], "child") == 0 &&
                  strcmp(xa[1], "alpha") == 0 && strcmp(xa[2], "42 with space") == 0 &&
                  xe[0] && strcmp(xe[0], "OVMX_E70F=probe") == 0 && xe[1] == NULL;
         printf("%s %08X\n", ok ? "ARGS-OK" : "ARGS-BAD", (unsigned)ovmx_crtl_getpid());
@@ -137,9 +143,12 @@ static int creator_main(void)
     int save0 = dup(0), save1 = dup(1);
     dup2(out[1], 1);
     dup2(in[0], 0);
-    char *args[] = { "child", "alpha", "42 with space" };
+    static char longarg[LONGARG + 1];
+    for (int i = 0; i < LONGARG; i++)
+        longarg[i] = (char)('a' + i % 26);
+    char *args[] = { "child", "alpha", "42 with space", longarg };
     char *env[] = { "OVMX_E70F=probe", NULL };
-    uint32_t pid = ovmx_crtl_exec_create(DIR_ "/ARGS", args, 3, env);
+    uint32_t pid = ovmx_crtl_exec_create(DIR_ "/ARGS", args, 4, env);
     int e = errno;
     dup2(save0, 0);
     dup2(save1, 1);

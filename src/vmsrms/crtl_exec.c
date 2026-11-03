@@ -67,6 +67,8 @@
 #include "lnmdef.h"
 #include "starlet.h"
 
+extern uint32_t lib$wait(const void *seconds, const uint32_t *flags, const uint32_t *float_type);
+
 #include "crtl_exec.h"
 
 /* LIB$GET_EF / the executive's completion notification and termination record
@@ -112,21 +114,57 @@ static int errno_of(uint32_t st)
     }
 }
 
-static uint32_t exec_put(uint16_t chan, char tag, const char *s, char *rec, size_t cap)
+/* A mailbox message is at most EXEC_CHUNK bytes (the executive's mailbox cap
+ * is 4096, its buffer quota 4096): a string travels in chunks, tagged
+ * lower-case ('a'/'e') while more follow and upper-case on its last one. */
+#define EXEC_CHUNK 4000u
+
+/* Write one record. The child reads as the parent writes (it is awake), so a
+ * full mailbox is waited out -- while the child lives: one that ended without
+ * reading has nothing more to be given. */
+static uint32_t exec_write(uint16_t chan, uint32_t pid, const char *rec, size_t n)
 {
-    size_t n = strlen(s);
-    uint16_t iosb[4] = { 0, 0, 0, 0 };
-    if (n + 1 > cap)
-        return SS$_BADPARAM;
-    rec[0] = tag;
-    memcpy(rec + 1, s, n);
-    uint32_t st = sys$qiow(0, chan, IO$_WRITEVBLK | IO$M_NOW, iosb, 0, 0,
-                           rec, n + 1, 0, 0, 0, 0);
-    return (st & 1) ? iosb[0] : st;
+    static const float tick = 0.01f;
+    for (;;) {
+        uint16_t iosb[4] = { 0, 0, 0, 0 };
+        uint32_t st = sys$qiow(0, chan, IO$_WRITEVBLK | IO$M_NORSWAIT, iosb, 0, 0,
+                               (void *)rec, (uint32_t)n, 0, 0, 0, 0);
+        if (st & 1)
+            st = iosb[0];
+        if (st != SS$_MBFULL)
+            return st;
+        uint32_t got = 0, p = pid;
+        uint16_t len = 0;
+        struct item_list_3 il[2];
+        memset(il, 0, sizeof il);
+        il[0].buflen = 4;
+        il[0].item_code = JPI$_PID;
+        il[0].bufaddr = &got;
+        il[0].retlen = &len;
+        if (sys$getjpiw(0, &p, 0, il, 0, 0, 0) == SS$_NONEXPR)
+            return SS$_NONEXPR;
+        (void)lib$wait(&tick, 0, 0);
+    }
+}
+
+static uint32_t exec_put(uint16_t chan, uint32_t pid, char tag, const char *s, char *rec)
+{
+    size_t n = strlen(s), off = 0;
+    do {
+        size_t c = n - off > EXEC_CHUNK - 1 ? EXEC_CHUNK - 1 : n - off;
+        int last = off + c == n;
+        rec[0] = last ? tag : (char)(tag - 'A' + 'a');
+        memcpy(rec + 1, s + off, c);
+        uint32_t st = exec_write(chan, pid, rec, c + 1);
+        if (!(st & 1))
+            return st;
+        off += c;
+    } while (off < n);
+    return SS$_NORMAL;
 }
 
 /* Create the subprocess. Returns its VMS PID, or 0 with errno set (nothing
- * remains: a subprocess whose context could not be given it is deleted). */
+ * remains: a subprocess that could not be given its context is deleted). */
 uint32_t ovmx_crtl_exec_create(const char *spec, char *const *args, size_t nargs,
                                char *const *envp)
 {
@@ -137,25 +175,11 @@ uint32_t ovmx_crtl_exec_create(const char *spec, char *const *args, size_t nargs
         errno = EAGAIN;                     /* the subprocess quota of this image */
         return 0;
     }
-    size_t nenv = 0, maxrec = 32, total = 32;
+    size_t nenv = 0;
     if (envp)
         while (envp[nenv])
             nenv++;
-    for (size_t i = 0; i < nargs; i++) {
-        size_t l = strlen(args[i] ? args[i] : "") + 1;
-        if (l > maxrec) maxrec = l;
-        total += l + 16;
-    }
-    for (size_t i = 0; i < nenv; i++) {
-        size_t l = strlen(envp[i]) + 1;
-        if (l > maxrec) maxrec = l;
-        total += l + 16;
-    }
-    if (maxrec > 65535 || total > 0x7FFFFFFF) {
-        errno = E2BIG;
-        return 0;
-    }
-    char *rec = malloc(maxrec + 1);
+    char *rec = malloc(EXEC_CHUNK);
     if (!rec) {
         errno = ENOMEM;
         return 0;
@@ -174,31 +198,33 @@ uint32_t ovmx_crtl_exec_create(const char *spec, char *const *args, size_t nargs
     exec_lognam(ln, sizeof ln, pid);
     struct dsc$descriptor_s lnd = sdsc(ln, strlen(ln));
     uint16_t chan = 0;
-    st = sys$crembx(0, &chan, (uint32_t)maxrec, (uint32_t)total, 0, 0, &lnd, 0, 0);
-    if (st & 1) {
-        char hdr[32];
-        snprintf(hdr, sizeof hdr, "%u %u", (unsigned)nargs, (unsigned)nenv);
-        uint16_t iosb[4] = { 0, 0, 0, 0 };
-        st = sys$qiow(0, chan, IO$_WRITEVBLK | IO$M_NOW, iosb, 0, 0,
-                      hdr, strlen(hdr), 0, 0, 0, 0);
-        if (st & 1)
-            st = iosb[0];
-        for (size_t i = 0; (st & 1) && i < nargs; i++)
-            st = exec_put(chan, 'A', args[i] ? args[i] : "", rec, maxrec + 1);
-        for (size_t i = 0; (st & 1) && i < nenv; i++)
-            st = exec_put(chan, 'E', envp[i], rec, maxrec + 1);
-    }
-    free(rec);
+    st = sys$crembx(0, &chan, EXEC_CHUNK, 2u * EXEC_CHUNK, 0, 0, &lnd, 0, 0);
     if (!(st & 1)) {
-        if (chan)
-            (void)sys$dassgn(chan);
+        free(rec);
         (void)sys$delprc(&pid, 0);
         errno = errno_of(st);
         return 0;
     }
     kids[slot].pid = pid;
     kids[slot].chan = chan;
-    (void)sys$wake(&pid, 0);
+    (void)sys$wake(&pid, 0);            /* it reads its context as it is written */
+
+    char hdr[32];
+    snprintf(hdr, sizeof hdr, "%u %u", (unsigned)nargs, (unsigned)nenv);
+    st = exec_write(chan, pid, hdr, strlen(hdr));
+    for (size_t i = 0; (st & 1) && i < nargs; i++)
+        st = exec_put(chan, pid, 'A', args[i] ? args[i] : "", rec);
+    for (size_t i = 0; (st & 1) && i < nenv; i++)
+        st = exec_put(chan, pid, 'E', envp[i], rec);
+    free(rec);
+    /* A subprocess that ended before taking its context (an image that is not
+     * a C program, or one that failed activation) still exists to be waited
+     * for; any other failure is a failed exec. */
+    if (!(st & 1) && st != SS$_NONEXPR) {
+        (void)sys$delprc(&pid, 0);
+        errno = errno_of(st);
+        return 0;
+    }
     return pid;
 }
 
@@ -379,22 +405,37 @@ int ovmx_crtl_exec_context(int *argc, char ***argv, char ***envp)
     if (!av || !ev)
         goto out;
     for (unsigned i = 0; i < na + ne; i++) {
-        memset(iosb, 0, sizeof iosb);
-        if (!(sys$qiow(0, chan, IO$_READVBLK, iosb, 0, 0, buf, 65536, 0, 0, 0, 0) & 1) ||
-            !(iosb[0] & 1) || iosb[1] < 1)
-            goto out;
         char want = i < na ? 'A' : 'E';
-        if (buf[0] != want)
-            goto out;
-        char *s = malloc(iosb[1]);
-        if (!s)
-            goto out;
-        memcpy(s, buf + 1, iosb[1] - 1u);
-        s[iosb[1] - 1u] = 0;
+        char *str = NULL;
+        size_t len = 0;
+        for (;;) {
+            memset(iosb, 0, sizeof iosb);
+            if (!(sys$qiow(0, chan, IO$_READVBLK, iosb, 0, 0, buf, 65536, 0, 0, 0, 0) & 1) ||
+                !(iosb[0] & 1) || iosb[1] < 1) {
+                free(str);
+                goto out;
+            }
+            int last = buf[0] == want;
+            if (!last && buf[0] != (char)(want - 'A' + 'a')) {
+                free(str);
+                goto out;
+            }
+            char *ns = realloc(str, len + iosb[1]);
+            if (!ns) {
+                free(str);
+                goto out;
+            }
+            str = ns;
+            memcpy(str + len, buf + 1, iosb[1] - 1u);
+            len += iosb[1] - 1u;
+            if (last)
+                break;
+        }
+        str[len] = 0;
         if (i < na)
-            av[i] = s;
+            av[i] = str;
         else
-            ev[i - na] = s;
+            ev[i - na] = str;
     }
     ok = 1;
 out:

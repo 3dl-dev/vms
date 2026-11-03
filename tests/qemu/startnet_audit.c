@@ -349,6 +349,19 @@ static int trace_all(pid_t root, struct verdict *v, struct sink *out, struct cli
             if (cl->pid <= 0) { cl->done = 1; cl->pid = -1; }
         }
         if (!stopped && (cl->done || t - t0 > 420000u) && v->netacp_pid > 0) {
+            /* Diagnostics: where every traced task is when the client ends. */
+            for (int i = 0; i < nt; i++) {
+                char pth[64], buf[256] = "", wch[64] = "";
+                snprintf(pth, sizeof pth, "/proc/%d/stat", (int)tids[i]);
+                FILE *f = fopen(pth, "r");
+                if (f) { if (!fgets(buf, sizeof buf, f)) buf[0] = 0; fclose(f); }
+                snprintf(pth, sizeof pth, "/proc/%d/wchan", (int)tids[i]);
+                f = fopen(pth, "r");
+                if (f) { if (!fgets(wch, sizeof wch, f)) wch[0] = 0; fclose(f); }
+                buf[strcspn(buf, "\n")] = 0;
+                printf("  (task %d [%s] insys=%d: %.80s | wchan %s)\n", (int)tids[i],
+                       g_lab[task_lab(tids[i])].name, insys[i], buf, wch);
+            }
             kill(v->netacp_pid, SIGTERM);
             stopped = 1; t_stop = t;
         }

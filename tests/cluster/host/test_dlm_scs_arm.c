@@ -503,6 +503,18 @@ static void arm_bindings(void)
 	before("directed = dlm_arm_dir_is_ours(d, id->hash, 1);",
 	       "o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
 	       "the vector is read for the name before the table is asked");
+	/* rd vms-966e: a lookup the vector directs at the REQUESTER itself is
+	 * marked so, from the vector and the frame's own sender, before the
+	 * table is asked -- test_dlm_transition_enq drives what the table does
+	 * with it on the real demo frames. */
+	has("vms_ldwv_names(&d->cl->club.ldwv, vms_ldwv_key(id->hash),\n"
+	    "\t\t\t   req->from_csid))\n"
+	    "\t\tdirected = VMS_DLM_DIR_AT_REQUESTER;",
+	    "*** rd vms-966e: the arm marks a lookup the vector directs at its "
+	    "own sender VMS_DLM_DIR_AT_REQUESTER ***");
+	before("directed = VMS_DLM_DIR_AT_REQUESTER;",
+	       "o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);",
+	       "... before the table is asked");
 	before("if (o == VMS_DLM_DIR_ANSWER_NONE && !directed) {",
 	       "if (vms_dlm_dir_answer_build(req->body, req->len, status,",
 	       "an undirected request the table cannot answer from an entry "

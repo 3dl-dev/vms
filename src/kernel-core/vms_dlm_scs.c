@@ -2377,7 +2377,22 @@ static int dlm_arm_dir_lookup(struct vms_dlm_scs *d,
 			"node's own weight vector does not direct here: answered "
 			"only from an entry naming its master");
 	}
+	/*
+	 * rd vms-966e: ...and when the vector names the REQUESTER as the
+	 * directory, the lookup is the requester's own name routed here under
+	 * the vector a transition just replaced (VAXC at barrier step 0x0a, the
+	 * same lock this node told it "you master it" before the join). The
+	 * table answers it only from an entry naming the requester -- see
+	 * vms_dlm_dir_lookup_directed -- and otherwise it is refused below
+	 * exactly as before.
+	 */
+	if (!directed && d->cl != NULL &&
+	    vms_ldwv_names(&d->cl->club.ldwv, vms_ldwv_key(id->hash),
+			   req->from_csid))
+		directed = VMS_DLM_DIR_AT_REQUESTER;
 	o = dlm_arm_dir_ask(d, id, req->from_csid, directed, &master);
+	if (directed == VMS_DLM_DIR_AT_REQUESTER)
+		directed = 0;       /* undirected here, whatever it was answered */
 	if (o == VMS_DLM_DIR_ANSWER_NONE && !directed) {
 		d->dir_undirected_refused++;
 		dlm_arm_dir_say(d, &d->dir_said_undirected,

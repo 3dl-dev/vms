@@ -320,6 +320,7 @@ dlm-rebuild-install-ignores-compat
 dlm-rebuild-sent-outside-the-step
 dlm-rebuild-window-opens-early
 dlm-rebuild-records-wait-past-release
+dlm-966e-at-requester-refused
 barrier-step-not-held-for-own-rebuild
 coord-release-not-held-for-own-rebuild
 dlm-rebuild-record-drops-the-granted-valblk
@@ -3455,6 +3456,22 @@ EOF
                       ;;
         esac;;
 
+    dlm-966e-at-requester-refused)
+        case "$_f" in
+        facility)     echo "a lookup the vector directs at the REQUESTER itself, for a name this node's table names the requester master of, is answered 0xf9 from the entry (vms_dlm_dir_lookup_directed VMS_DLM_DIR_AT_REQUESTER, rd vms-966e)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "test_dlm_transition_enq";;
+        isolation)    echo "isolated";;
+        why)          echo "the shipped state the cluster demo caught: VAXC's op-0x01 at barrier step 0x0a, sent under the vector the running join replaced for a lock this node had told it 'you master it', is refused as undirected and never answered, and VAXC hangs in STARTUP before Username: (cap-966e r3 4821, r5 3859).";;
+        require_fail) hd_lines <<'EOF'
+*** r3 (A,B,C), OVMXB: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
+*** r5 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
+it is counted as the requester's-own-directory answer
+and not as a refusal
+EOF
+                      ;;
+        esac;;
+
     dlm-b4d-undirected-answers-you-fuzz)
         case "$_f" in
         facility)     echo "the op-0x01 directory fuzz holds the undirected-never-0xf9 property over random bodies and table state (fuzz_dlm_dir_directed, rd vms-b4d)";;
@@ -3465,6 +3482,8 @@ EOF
         require_fail) hd_lines <<'EOF'
 fuzz-b4d: an undirected name with no entry is never answered you-master-it
 fuzz-b4d: an undirected lookup records nothing
+fuzz-966e: at the requester, you-master-it comes ONLY from an entry naming it
+fuzz-966e: an at-requester lookup records nothing
 EOF
                       ;;
         esac;;
@@ -4848,6 +4867,10 @@ apply_edit() {
     dlm-b4d-undirected-answers-you)
         # `\tif (directed_here)` is unique (vms_dlm_dir_lookup_directed).
         sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you */|' "$_file";;
+
+    dlm-966e-at-requester-refused)
+        # The at-requester entry test is the only line of this shape.
+        sed -i 's|^\t\t\t    e->master == requester) {$|\t\t\t    e->master == requester \&\& 0) { /* NEGCTL dlm-966e-at-requester-refused */|' "$_file";;
 
     dlm-b4d-undirected-answers-you-fuzz)
         sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you-fuzz */|' "$_file";;

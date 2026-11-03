@@ -271,6 +271,8 @@ guard-ignores-category-0b
 refused-send-always-keeps-number
 dir-remove-unregistered-entry
 dir-told-survives-transition
+dirreg-not-sent-at-release-4
+dirreg-answer-not-recorded
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
@@ -1901,6 +1903,57 @@ EOF
         require_fail) hd_lines <<'EOF'
 the transition forgets the one directory this node told
 *** a resource whose directory entry a transition discarded is NOT removed from that directory ***
+EOF
+                      ;;
+        esac;;
+
+    dirreg-not-sent-at-release-4)
+        case "$_f" in
+        facility)     echo "a master re-registers each root it masters with its directory node (cat-0x02 op-0x0d) after release 4 of every state transition (rd vms-fdeb)";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_dirreg";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rm_dr_barrier_released() treats release 4 like any other release, so OVMX re-registers nothing and after any transition a real directory holds no entry for a resource OVMX masters: the next requester is answered 0xf9 and becomes a second master.";;
+        require_fail) hd_lines <<'EOF'
+*** the re-registered entry is removed from the directory that answered ***
+...and every one is recorded told
+...not taken as held, and the window STOPS
+MSCP$LOADBAL goes to the directory node the vector names
+a refused send stops the window and holds nothing
+a transition's start abandons the records in flight
+an answer not stamped 0xf9 is ours...
+both expire at RECNXINTERVAL
+both hold the barrier until answered
+each answer sends the next: all ten
+one left
+release 4: one op-0x0d per root mastered here whose directory is another member
+still two out
+the REAL 82/0d (frame 121) answers our MSCP$LOADBAL record
+the barrier goes on; the window is stopped
+the engine records that directory as told
+the second record is on the wire
+the window's worth go at once
+two out
+with the doors unbound nothing is sent and nothing held
+EOF
+                      ;;
+        esac;;
+
+    dirreg-answer-not-recorded)
+        case "$_f" in
+        facility)     echo "the directory's 82/0d answer to a re-registration records that directory as the one holding the entry, so only it is told to remove it (rd vms-fdeb, rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_dirreg";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rm_dr_answer() frees the slot without telling the engine, so an entry the directory confirmed is never removed when the resource goes: the directory keeps a stale entry naming OVMX as master.";;
+        require_fail) hd_lines <<'EOF'
+*** the re-registered entry is removed from the directory that answered ***
+...and every one is recorded told
+each answer sends the next: all ten
+every record answered: the barrier goes on
+one left
+the engine records that directory as told
+the same answer twice is not taken twice
 EOF
                       ;;
         esac;;
@@ -4654,6 +4707,14 @@ apply_edit() {
     dir-told-survives-transition)
         # `if (res->dir_told_csid != 0u) {` is unique in this file.
         sed -i 's#if (res->dir_told_csid != 0u) {#if (0 \&\& res->dir_told_csid != 0u) { /* NEGCTL dir-told-survives-transition */#' "$_file";;
+
+    dirreg-not-sent-at-release-4)
+        # `if (step != VMS_DLM_DR_REL_STEP) {` is unique in this file.
+        sed -i 's#if (step != VMS_DLM_DR_REL_STEP) {#if (1 || step != VMS_DLM_DR_REL_STEP) { /* NEGCTL dirreg-not-sent-at-release-4 */#' "$_file";;
+
+    dirreg-answer-not-recorded)
+        # `if (f->ops->dr_told(f->ops->ctx, &s->id, s->dst))` is unique in this file.
+        sed -i 's#if (f->ops->dr_told(f->ops->ctx, &s->id, s->dst))#if (0 \&\& f->ops->dr_told(f->ops->ctx, \&s->id, s->dst)) /* NEGCTL dirreg-answer-not-recorded */#' "$_file";;
 
     pe-blk-frame-unringed)
         # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.

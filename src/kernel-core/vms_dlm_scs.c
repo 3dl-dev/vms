@@ -2885,6 +2885,63 @@ static int dlm_arm_rb_quorum_hang(void *ctx)
 	       cnxman_quorum_hang_active(d->cl) : 0;
 }
 
+/*
+ * THE DIRECTORY RE-REGISTRATION'S TWO DOORS (rd vms-fdeb): the engine's walk
+ * and its record, with the identity carried across in the engine's own tree
+ * shape (vms_dlm_adopt.h) -- the same translation the rebuild doors make.
+ */
+static void dlm_arm_ident_to_tree(const struct vms_dlm_res_ident *id,
+				  struct vms_dlm_adopt_tree *t)
+{
+	memset(t, 0, sizeof(*t));
+	if (id->name_len > sizeof(t->resnam))
+		return;
+	memcpy(t->resnam, id->name, id->name_len);
+	t->resnam_len = id->name_len;
+	t->res_group = id->group;
+	t->res_mode = id->mode;
+	t->ident_valid = 1u;
+}
+
+static int dlm_arm_dr_next(void *ctx, const struct vms_dlm_res_ident *skip,
+			   uint32_t n_skip, struct vms_dlm_res_ident *out,
+			   uint32_t *dir_csid)
+{
+	struct vms_dlm_adopt_tree sk[VMS_DLM_DR_WINDOW];
+	struct vms_dlm_adopt_tree t;
+	uint32_t i, hash = 0u, dir = 0u;
+
+	(void)ctx;
+	if (out == NULL || dir_csid == NULL || n_skip > VMS_DLM_DR_WINDOW)
+		return 0;
+	for (i = 0u; i < n_skip; i++)
+		dlm_arm_ident_to_tree(&skip[i], &sk[i]);
+	if (!vms_lock_dlm_dirreg_next(sk, n_skip, &t, &hash, &dir))
+		return 0;
+	if (t.resnam_len == 0u || t.resnam_len >= VMS_DLM_NAME_MAX)
+		return 0;
+	memset(out, 0, sizeof(*out));
+	memcpy(out->name, t.resnam, t.resnam_len);
+	out->name_len = t.resnam_len;
+	out->group = t.res_group;
+	out->mode = t.res_mode;
+	out->hash = hash;
+	*dir_csid = dir;
+	return 1;
+}
+
+static int dlm_arm_dr_told(void *ctx, const struct vms_dlm_res_ident *id,
+			   uint32_t dir_csid)
+{
+	struct vms_dlm_adopt_tree t;
+
+	(void)ctx;
+	if (id == NULL)
+		return 0;
+	dlm_arm_ident_to_tree(id, &t);
+	return t.ident_valid ? vms_lock_dlm_dirreg_told(&t, dir_csid) : 0;
+}
+
 static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 {
 	d->rm_ops.ctx                = d;
@@ -2914,6 +2971,8 @@ static void dlm_arm_bind_rm_ops(struct vms_dlm_scs *d)
 	d->rm_ops.rb_unsent          = dlm_arm_rb_unsent;
 	d->rm_ops.rb_settle          = dlm_arm_rb_settle;
 	d->rm_ops.rb_quorum_hang     = dlm_arm_rb_quorum_hang;
+	d->rm_ops.dr_next            = dlm_arm_dr_next;
+	d->rm_ops.dr_told            = dlm_arm_dr_told;
 	vms_dlm_rm_init(&d->rm, &d->rm_ops);
 }
 
@@ -3071,6 +3130,14 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 	 * (rd vms-874f): told apart the same way, by the record's destination
 	 * and the lock whose record is out. */
 	if (vms_dlm_rm_rb_answer(&d->rm, (uint32_t)req->from_csid,
+				 req->category, req->opcode, req->body,
+				 req->len))
+		return 0;
+
+	/* ...AND THE DIRECTORY'S 82/0d TO ONE OF OUR op-0x0d RE-REGISTRATIONS
+	 * (rd vms-fdeb): told apart by its sender (the directory node the
+	 * record went to) and the echoed identity. */
+	if (vms_dlm_rm_dr_answer(&d->rm, (uint32_t)req->from_csid,
 				 req->category, req->opcode, req->body,
 				 req->len))
 		return 0;
@@ -3260,6 +3327,8 @@ static void dlm_arm_transition_begin(void *ctx,
 	vms_dlm_rm_rb_transition_begin(&d->rm);
 	/* rd vms-2fa: no rebuild record until this transition releases R. */
 	vms_dlm_rm_rb_window_close(&d->rm);
+	/* rd vms-fdeb: ...and no re-registration until it releases 4. */
+	vms_dlm_rm_dr_close(&d->rm);
 }
 
 /*
@@ -3282,14 +3351,19 @@ static uint32_t dlm_arm_barrier_released(void *ctx,
 	vms_dlm_rm_rb_barrier_released(&d->rm, step,
 				       (uint32_t)d->cl->params.lockdirwt,
 				       dlm_arm_now_ms(d));
-	return vms_dlm_rm_rb_outstanding(&d->rm);
+	/* rd vms-fdeb: release 4 -- every master re-registers its directory
+	 * entries now, and the next frame is held until each is answered. */
+	vms_dlm_rm_dr_barrier_released(&d->rm, step, dlm_arm_now_ms(d));
+	return vms_dlm_rm_rb_outstanding(&d->rm) +
+	       vms_dlm_rm_dr_outstanding(&d->rm);
 }
 
 static uint32_t dlm_arm_rebuild_outstanding(void *ctx)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
 
-	return d != NULL ? vms_dlm_rm_rb_outstanding(&d->rm) : 0u;
+	return d != NULL ? vms_dlm_rm_rb_outstanding(&d->rm) +
+			   vms_dlm_rm_dr_outstanding(&d->rm) : 0u;
 }
 
 /*
@@ -3391,6 +3465,7 @@ static void dlm_arm_transition_end(void *ctx,
 	 * this node is its directory -- nothing on the wire). */
 	vms_dlm_rm_rb_window_close(&d->rm);
 	vms_dlm_rm_rb_kick(&d->rm);
+	vms_dlm_rm_dr_close(&d->rm);   /* rd vms-fdeb */
 }
 
 static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)
@@ -3546,9 +3621,13 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 		/* rd vms-2fa: a record unanswered for the cluster's own
 		 * RECNXINTERVAL stops its tree, so the barrier held on it goes
 		 * on (it re-tries on its own watchdog). */
-		if (d->cl != NULL)
+		if (d->cl != NULL) {
 			(void)vms_dlm_rm_rb_expire(&d->rm, dlm_arm_now_ms(d),
 				(uint32_t)d->cl->club.recnxinterval * 1000u);
+			/* rd vms-fdeb: the same bound on a re-registration. */
+			(void)vms_dlm_rm_dr_expire(&d->rm, dlm_arm_now_ms(d),
+				(uint32_t)d->cl->club.recnxinterval * 1000u);
+		}
 		dlm_arm_arm_beat(d);
 		return;
 	}

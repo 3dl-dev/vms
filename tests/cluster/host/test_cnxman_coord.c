@@ -2854,6 +2854,52 @@ static void test_e09_dir_remove_on_the_wire(void)
 }
 
 /*
+ * rd vms-fdeb: THE MASTER'S op-0x0d RE-REGISTRATION exactly as cnxman_dlm_send
+ * puts it on the wire -- the table's body (vms_dlm_dir_reg_build), the
+ * cluster's DLM sequence, then a REQUEST envelope on the directory node's CSB:
+ * a directory answers every one (82/0d), so unlike the op-0x04 removal it
+ * opens a transaction. The identity is MSCP$LOADBAL as a real V7.3 master
+ * registered it (vms-d52c r3-ovmx-first frame 116). The conformance gate's
+ * `dlm_dir_reg` rows read this dump.
+ */
+static void test_fdeb_dir_reg_on_the_wire(void)
+{
+	struct vms_dlm_res_ident id;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[32];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-fdeb: the re-registration opens a transaction --\n");
+	memset(&id, 0, sizeof(id));
+	memcpy(id.name, "MSCP$LOADBAL", 12u);
+	id.name_len = 12u;
+	id.hash = 0x35a34509u;
+
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_dir_reg_build(&id, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the table's body");
+	ct_check(vms_dlm_shape_fit_for_any_member(b, VMS_CM_BODY_LEN),
+		 "RULE C admits it at a real member");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence, as on every DLM message");
+	ct_check(!vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "the glue reads it as a request, not a notification");
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_REQUEST);
+	ct_check(b[4] != 0 || b[5] != 0 || b[6] != 0 || b[7] != 0,
+		 "*** body[4:8] opens a transaction: the directory answers it ***");
+	snprintf(state, sizeof(state), "seq=%u", (unsigned)g.cl.club.dlm_seq);
+	conf_dump("dlm_dir_reg", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
+/*
  * rd vms-c55 / rd vms-ac4f: THE LOCK REQUEST, composed the way the shipping
  * send path composes it -- the codec's body, then the cluster's DLM sequence,
  * then the connection manager's envelope on the destination's CSB -- so the
@@ -3314,6 +3360,7 @@ int main(void)
 	test_52d_startup_query_answered_from_csb();
 	test_e09_dir_remove_on_the_wire();
 	test_c55_enq_request_on_the_wire();
+	test_fdeb_dir_reg_on_the_wire();
 	test_b67a_sublock_request_on_the_wire();
 	test_85f_queued_answer_on_the_wire();
 	test_194_release_opens_no_transaction();

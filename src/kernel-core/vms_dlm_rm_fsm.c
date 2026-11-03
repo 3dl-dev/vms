@@ -2086,6 +2086,207 @@ uint32_t vms_dlm_rm_rb_expire(struct vms_dlm_rm *f, uint32_t now_ms,
 	return n;
 }
 
+/* ==========================================================================
+ * 7d. THE DIRECTORY RE-REGISTRATION (rd vms-fdeb) -- a MASTER's op-0x0d.
+ *
+ * The header states the grounding. Everything put on the wire is read from the
+ * engine at the moment the record is built (dr_next): the identity and hash
+ * from the RSB, the destination from the weight vector in force. The slot keeps
+ * a copy only to recognise the answer.
+ * ========================================================================== */
+
+static int rm_dr_ok(const struct vms_dlm_rm *f)
+{
+	return f != (const struct vms_dlm_rm *)0 &&
+	       f->ops != (const struct vms_dlm_rm_ops *)0 &&
+	       f->ops->send != 0 && f->ops->dr_next != 0 &&
+	       f->ops->dr_told != 0;
+}
+
+static void rm_dr_free_all(struct vms_dlm_rm *f)
+{
+	uint32_t i;
+
+	for (i = 0u; i < VMS_DLM_DR_WINDOW; i++) {
+		if (f->dr[i].state == (uint8_t)VMS_DLM_DR_ST_AWAIT)
+			f->dr_abandoned++;
+		rm_bzero(&f->dr[i], (uint32_t)sizeof(f->dr[i]));
+	}
+}
+
+static void rm_dr_stop(struct vms_dlm_rm *f, const char *why)
+{
+	if (!f->dr_stopped)
+		rm_say(f, why);
+	f->dr_stopped = 1u;
+}
+
+/* Fill every free slot with the next resource owed a record. */
+static void rm_dr_pump(struct vms_dlm_rm *f)
+{
+	struct vms_dlm_res_ident skip[VMS_DLM_DR_WINDOW];
+	struct vms_dlm_res_ident id;
+	uint32_t i, n_skip, dir;
+	uint32_t written = 0u;
+
+	while (f->dr_open && !f->dr_stopped) {
+		struct vms_dlm_dr_slot *slot = (struct vms_dlm_dr_slot *)0;
+
+		n_skip = 0u;
+		for (i = 0u; i < VMS_DLM_DR_WINDOW; i++) {
+			if (f->dr[i].state == (uint8_t)VMS_DLM_DR_ST_AWAIT)
+				skip[n_skip++] = f->dr[i].id;
+			else if (slot == (struct vms_dlm_dr_slot *)0)
+				slot = &f->dr[i];
+		}
+		if (slot == (struct vms_dlm_dr_slot *)0)
+			return;   /* the window is full; an answer refills it */
+		dir = 0u;
+		rm_bzero(&id, (uint32_t)sizeof(id));
+		if (!f->ops->dr_next(f->ops->ctx, skip, n_skip, &id, &dir))
+			return;   /* nothing more is owed a record */
+		if (dir == 0u ||
+		    vms_dlm_dir_reg_build(&id, f->txframe,
+					  (uint32_t)sizeof(f->txframe),
+					  &written) != VMS_CODEC_OK) {
+			f->dr_codec_failures++;
+			rm_dr_stop(f, "%DLM, a directory re-registration could "
+				      "not be built: no more are sent in this "
+				      "transition (see the DLM counters)");
+			return;
+		}
+		if (f->ops->send(f->ops->ctx, dir,
+				 f->txframe + VMS_OFF_SYSAP_BODY,
+				 VMS_CM_BODY_LEN) != 0) {
+			f->dr_send_failed++;
+			rm_dr_stop(f, "%DLM, a directory re-registration could "
+				      "not be sent: no more are sent in this "
+				      "transition (see the DLM counters)");
+			return;
+		}
+		slot->state = (uint8_t)VMS_DLM_DR_ST_AWAIT;
+		slot->dst = dir;
+		slot->id = id;
+		f->dr_sent++;
+	}
+}
+
+void vms_dlm_rm_dr_close(struct vms_dlm_rm *f)
+{
+	if (f == (struct vms_dlm_rm *)0)
+		return;
+	rm_dr_free_all(f);
+	f->dr_open = 0u;
+	f->dr_stopped = 0u;
+}
+
+void vms_dlm_rm_dr_barrier_released(struct vms_dlm_rm *f, uint32_t step,
+				    uint32_t now_ms)
+{
+	if (f == (struct vms_dlm_rm *)0)
+		return;
+	if (step != VMS_DLM_DR_REL_STEP) {
+		/* Release 5 goes only once every record was answered (the
+		 * barrier held it), so nothing is in flight to strand. */
+		vms_dlm_rm_dr_close(f);
+		return;
+	}
+	if (!rm_dr_ok(f)) {
+		f->dr_unbound++;
+		return;
+	}
+	if (!f->dr_open) {
+		rm_dr_free_all(f);
+		f->dr_open = 1u;
+		f->dr_stopped = 0u;
+		f->dr_opened_ms = now_ms;
+		f->dr_windows_opened++;
+	}
+	rm_dr_pump(f);
+}
+
+int vms_dlm_rm_dr_answer(struct vms_dlm_rm *f, uint32_t from_csid,
+			 uint8_t category, uint8_t opcode,
+			 const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_dir_reg r;
+	uint8_t stamp = 0u;
+	uint32_t i;
+
+	if (f == (struct vms_dlm_rm *)0 || body == (const uint8_t *)0 ||
+	    from_csid == 0u || !rm_dr_ok(f))
+		return 0;
+	if (category != (uint8_t)(VMS_DLM_CAT_REQUEST |
+				  VMS_WIRE_RESPONSE_BIT) ||
+	    opcode != (uint8_t)VMS_DLM_WIREOP_REBUILD)
+		return 0;
+	if (vms_dlm_dir_reg_answer_parse_body(body, len, &r, &stamp) !=
+	    VMS_CODEC_OK)
+		return 0;
+	for (i = 0u; i < VMS_DLM_DR_WINDOW; i++) {
+		struct vms_dlm_dr_slot *s = &f->dr[i];
+
+		if (s->state != (uint8_t)VMS_DLM_DR_ST_AWAIT ||
+		    s->dst != from_csid || s->id.hash != r.id.hash ||
+		    !rm_ident_eq(&s->id, &r.id))
+			continue;
+		if (stamp != (uint8_t)VMS_DLM_RESULT_STAMP_REBUILD) {
+			/* Never seen from a real directory: the entry is not
+			 * taken as held, and nothing more is sent. */
+			f->dr_answers_odd++;
+			rm_bzero(s, (uint32_t)sizeof(*s));
+			rm_dr_stop(f, "%DLM, a directory answered a "
+				      "re-registration with an outcome this "
+				      "node does not know: no more are sent in "
+				      "this transition");
+			return 1;
+		}
+		f->dr_answers++;
+		if (f->ops->dr_told(f->ops->ctx, &s->id, s->dst))
+			f->dr_told++;
+		rm_bzero(s, (uint32_t)sizeof(*s));
+		rm_dr_pump(f);
+		return 1;
+	}
+	return 0;
+}
+
+uint32_t vms_dlm_rm_dr_outstanding(const struct vms_dlm_rm *f)
+{
+	uint32_t i, n = 0u;
+
+	if (f == (const struct vms_dlm_rm *)0)
+		return 0u;
+	for (i = 0u; i < VMS_DLM_DR_WINDOW; i++) {
+		if (f->dr[i].state == (uint8_t)VMS_DLM_DR_ST_AWAIT)
+			n++;
+	}
+	return n;
+}
+
+uint32_t vms_dlm_rm_dr_expire(struct vms_dlm_rm *f, uint32_t now_ms,
+			      uint32_t limit_ms)
+{
+	uint32_t i, n = 0u;
+
+	if (f == (struct vms_dlm_rm *)0 || !f->dr_open || limit_ms == 0u ||
+	    (uint32_t)(now_ms - f->dr_opened_ms) < limit_ms)
+		return 0u;
+	for (i = 0u; i < VMS_DLM_DR_WINDOW; i++) {
+		if (f->dr[i].state != (uint8_t)VMS_DLM_DR_ST_AWAIT)
+			continue;
+		f->dr_expired++;
+		rm_bzero(&f->dr[i], (uint32_t)sizeof(f->dr[i]));
+		n++;
+	}
+	if (n != 0u)
+		rm_dr_stop(f, "%DLM, a directory re-registration went "
+			      "unanswered for the cluster's reconnection "
+			      "interval: no more are sent and the state "
+			      "transition goes on (see the DLM counters)");
+	return n;
+}
+
 uint32_t vms_dlm_rm_rb_in_state(const struct vms_dlm_rm *f,
 				enum vms_dlm_rb_state st)
 {

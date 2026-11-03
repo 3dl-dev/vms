@@ -261,6 +261,19 @@ static void test_datetime_forms(void)
          m.u.datetime.rvn == 1 && !m.u.datetime.have_cdt64 && !m.u.datetime.have_rdt64;
     CHECK(ok, "DATE-TIME, DAP 5.6 form: A-18 created/revised, RVN, a bit-4 date read past");
 
+    /* The accessor's CONFIGURATION with SYSCAP bit 65 (the UTC date form)
+     * is the one the syscap probe sent the real VAX (syscap-probe wire):
+     * OVMX's SYSCAP a2 80 d0 f8 a0 2c, extended to ... ac 80 80 80 04. */
+    struct dnet_dap_msg c;
+    dnet_dap_ovmx_config(&c, 1459);
+    dnet_dap_syscap_set(&c, DNET_DAP_CAP_UTC_DATETIME);
+    uint8_t enc[64]; size_t en = 0, wn;
+    uint8_t want[64];
+    wn = unhex("0100b305070307020000" "00a280d0f8a0ac80808004", want, sizeof want);
+    ok = dnet_dap_encode(&c, 0, enc, sizeof enc, &en) == DNET_DAP_OK && en == wn && !memcmp(enc, want, wn) &&
+         dnet_dap_syscap_has(&c, DNET_DAP_CAP_UTC_DATETIME) && dnet_dap_syscap_has(&c, DNET_DAP_CAP_DIRLIST);
+    CHECK(ok, "CONFIGURATION with SYSCAP bit 65 encodes as the probe sent it (a2 80 d0 f8 a0 ac 80 80 80 04)");
+
     /* Fuzz: every DATMENU (bits 0-8 + extension) over random operand bytes
      * of every length; the decode never reads past the buffer (ASan). */
     unsigned bad = 0;

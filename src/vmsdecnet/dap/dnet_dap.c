@@ -588,6 +588,17 @@ int dnet_dap_decode(const uint8_t *buf, size_t len,
     return DNET_DAP_OK;
 }
 
+void dnet_dap_syscap_set(struct dnet_dap_msg *c, unsigned bit)
+{
+    if (!c || c->op != DNET_DAP_CONFIG || bit / 7 >= DNET_DAP_MAX_EX) return;
+    unsigned n = c->u.config.syscap_len;
+    if (bit / 7 + 1 > n) n = bit / 7 + 1;
+    c->u.config.syscap[bit / 7] |= (uint8_t)(1u << (bit % 7));
+    for (unsigned i = 0; i < n; i++)              /* EX: every byte but the last extends */
+        c->u.config.syscap[i] = (uint8_t)((c->u.config.syscap[i] & 0x7f) | (i + 1 < n ? 0x80 : 0));
+    c->u.config.syscap_len = (uint8_t)n;
+}
+
 int dnet_dap_syscap_has(const struct dnet_dap_msg *c, unsigned bit)
 {
     if (!c || c->op != DNET_DAP_CONFIG) return 0;

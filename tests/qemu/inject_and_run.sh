@@ -229,7 +229,8 @@ echo "--- rebuilding DECC\$SHR.EXE (SYS\$LIBRARY) + SOCKECHO.EXE ---"
 # been rebuilt. Re-mastering before the DECC$SHR rebuild left the volume copy
 # pristine, so a defect in ovmx_decc_sockets.c never reached the suite (vms-99f).
 rm -f /ods2_sysvol.img
-sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img || exit 4
+sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img \
+    /initramfs/vms/SYS0/SYSCOMMON/SYSLIB || exit 4
 
 echo "--- re-staging the initramfs ---"
 # WITHOUT its DWARF, exactly as the image build stages it (tests/qemu/Dockerfile):

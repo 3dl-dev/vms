@@ -765,7 +765,7 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
       { echo "FATAL: SYS\$LIBRARY:DECC\$SHR.EXE is not the RMS-backed pass (no ovmx_crtl_fd_install universal) -- the activated C RTL would be the substrate's"; exit 1; } && \
     cp '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' '/src/repo/build-static/bin/DECC$SHR.EXE' && \
     rm -f /ods2_sysvol.img && \
-    sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img && \
+    sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img /initramfs/vms/SYS0/SYSCOMMON/SYSLIB && \
     # EVACWL.EXE (vms-06c, the ci.6 evacuation workload): the SAME VMS-native
     # TCC.EXE + LINK.EXE --use build the corpus images use, for the bespoke
     # (non-corpus) EVAC$WORKLOAD lock-and-append workload

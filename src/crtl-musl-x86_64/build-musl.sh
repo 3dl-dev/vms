@@ -44,6 +44,8 @@ tail -n +4 "$HERE/include/kstat.h" | cmp -s - arch/x86_64/kstat.h ||
     { echo "build-musl: include/kstat.h no longer matches musl ${MUSL_VER} arch/x86_64/kstat.h" >&2; exit 1; }
 cp "$HERE/arch/x86_64/syscall_arch.h" arch/x86_64/syscall_arch.h
 cp "$HERE/src/internal/ovmx_syscall.c" src/internal/ovmx_syscall.c
+# rd vms-569: cancellation-point calls go through the same funnel.
+cp "$HERE/src/thread/x86_64/syscall_cp.s" src/thread/x86_64/syscall_cp.s
 # vms-593: the C RTL's clock and time zone are the VMS system's -- the SAME two
 # overlays the Alpha DECC$SHR builds (one source: musl 1.2.4 and 1.2.5 carry
 # identical clock_gettime.c/__tz.c), as musl's per-arch replacements.
@@ -57,6 +59,8 @@ done
 make -j"$(nproc)" lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o lib/rcrt1.o lib/Scrt1.o >/dev/null
 nm lib/libc.a 2>/dev/null | grep -q " T __ovmx_syscall$" ||
     { echo "build-musl: __ovmx_syscall not in libc.a" >&2; exit 1; }
+nm lib/libc.a 2>/dev/null | grep -A20 '^syscall_cp.lo:$' | grep -q " U __ovmx_syscall$" ||
+    { echo "build-musl: musl's cancellable system call does not go through the funnel (syscall_cp.s overlay)" >&2; exit 1; }
 for h in __ovmx_clock_hook __ovmx_tz_hook; do
     nm lib/libc.a 2>/dev/null | grep -qE " [DB] $h$" ||
         { echo "build-musl: $h not in libc.a (vms-593 time overlay not built)" >&2; exit 1; }

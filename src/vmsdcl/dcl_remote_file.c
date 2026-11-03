@@ -585,12 +585,9 @@ uint32_t dcl_remote_type(const char *spec)
                 broke = (rab.rab$l_stv == SS$_ABORT);   /* the link broke: stop */
                 break;
             }
-            /* A VFC record starts with its fixed-control bytes (the print
-             * control of a print file); TYPE shows the data after them. */
-            size_t skip = (fab.fab$b_rfm == FAB$C_VFC) ? fab.fab$b_fsz : 0;
-            if (skip > rab.rab$w_rsz) skip = rab.rab$w_rsz;
-            if (rab.rab$w_rsz > skip)
-                printf("%.*s", (int)(rab.rab$w_rsz - skip), rab.rab$l_rbf + skip);
+            /* A VFC record's fixed control (RHB 0: not asked for) is not
+             * part of the record $GET returns; TYPE shows the data. */
+            if (rab.rab$w_rsz) printf("%.*s", (int)rab.rab$w_rsz, rab.rab$l_rbf);
             putchar('\n');
         }
         (void)sys$close(&fab, 0, 0);
@@ -672,6 +669,7 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
          * dcl_rms_read_open does): the header's, read first. */
         in.fab$b_rfm = fa.rfm;
         if (fa.mrs) in.fab$w_mrs = fa.mrs;
+        if (fa.rfm == FAB$C_VFC && fa.vfcsize) in.fab$b_fsz = fa.vfcsize;
         local_attr = 1;
     }
     uint32_t st = sys$open(&in, 0, 0);
@@ -707,11 +705,17 @@ static uint32_t copy_one(const char *src, const char *dst, int log)
         if (!strstr(rshow, "::")) snprintf(dshow, sizeof dshow, "%s", rshow);
     }
 
+    /* A VFC record's fixed control area travels in the record header
+     * buffer: $GET fills it, $PUT writes it (RAB$L_RHB), so the output
+     * holds the input's control bytes and its records, as on VMS. */
+    static char rhb[256];
     struct RAB ir = cc$rms_rab, orb = cc$rms_rab;
     ir.rab$l_fab = &in;
     ir.rab$l_ubf = rec;
     ir.rab$w_usz = (uint16_t)(sizeof rec - 1);
+    ir.rab$l_rhb = rhb;
     orb.rab$l_fab = &o;
+    orb.rab$l_rhb = rhb;
     (void)sys$connect(&ir, 0, 0);
     (void)sys$connect(&orb, 0, 0);
     uint32_t ret = RMS$_NORMAL;

@@ -222,6 +222,15 @@ add_test(NAME vmsdecnet_fal_server_replay COMMAND test_dnet_fal_server
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/falverbs-v2v-wire.txt
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/live-bracket)
 
+# rd vms-36aa: the FAL's real RMS record path (dnet_fal_wput / dnet_fal_rget,
+# not stubbed) stores a VAX's VFC records with the control in RAB$L_RHB, so a
+# 290-block file is 290 blocks on OVMX, and reads them back byte-identical.
+add_executable(test_dnet_fal_vfc test_dnet_fal_vfc.c)
+target_include_directories(test_dnet_fal_vfc PRIVATE ${VMS_RMS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_dnet_fal_vfc PRIVATE vmsdecnet_fal vmsdecnet_dap vmsrms vms)
+target_compile_options(test_dnet_fal_vfc PRIVATE -Werror -Wno-overflow)
+add_test(NAME vmsdecnet_fal_vfc COMMAND test_dnet_fal_vfc)
+
 # rd vms-47fd: INBOUND DECnet MAIL-11 (object 27). Reads the real VAX V7.3
 # capture itself and replays every VAX1 segment through the OVMX receiver,
 # asserting VAX2's replies byte for byte (accepted message + NOSUCHUSR), then the

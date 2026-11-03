@@ -173,9 +173,11 @@ int  dnet_fal_erase(const char *spec, uint32_t *sts, uint32_t *stv);
 int  dnet_fal_rename(const char *oldspec, const char *newspec, uint32_t *sts, uint32_t *stv);
 
 /* Record output for a FAL CREATE: $CREATE the file (sequential, the given
- * RMS record format + attributes) returning its RESULTANT spec, $PUT records
- * verbatim, $CLOSE. RMS over the ACP (dnet_fal_search.c); 0 = ok, -1 = fail. */
-int  dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, void **h,
+ * RMS record format + attributes; fsz = a VFC file's fixed-control size, 0 =
+ * the default 2) returning its RESULTANT spec, $PUT records verbatim (a VFC
+ * record's leading fsz bytes go to RMS as RAB$L_RHB), $CLOSE. RMS over the
+ * ACP (dnet_fal_search.c); 0 = ok, -1 = fail. */
+int  dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, uint8_t fsz, void **h,
                     char *rsa, size_t cap);
 int  dnet_fal_wput(void *h, const uint8_t *rec, size_t len);
 int  dnet_fal_wclose(void *h);
@@ -185,7 +187,8 @@ int  dnet_fal_wclose(void *h);
  * format (VAR, STM*, FIX), so a record is exactly what TYPE shows, NULs and
  * all. *rfm / *rat (may be NULL) receive the file's real record format and
  * attributes for the ATTRIBUTES reply. rget: 1 = a record (len in *len),
- * 0 = end of file, -1 = error. 0 = ok / -1 = fail elsewhere. */
+ * 0 = end of file, -1 = error. 0 = ok / -1 = fail elsewhere. A VFC record
+ * comes back as its fixed control area (RAB$L_RHB) followed by the data. */
 int  dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat);
 /* dnet_fal_ropen, plus the RMS completion of a refused $OPEN in *sts (may be
  * NULL): FNF vs PRV decide the STATUS the server sends. */

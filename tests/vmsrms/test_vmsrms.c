@@ -426,6 +426,101 @@ static void test_fixed_records(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Test: VFC records carry their fixed control in RAB$L_RHB (vms-36aa) */
+/*                                                                      */
+/* The VAX's BIG.TXT (vms-0a7 S1 run 4): 2000 DCL OPEN/WRITE records,   */
+/* VFC with a 2-byte print control (01 8D), 69 bytes of text each, 290  */
+/* blocks used. Each record is a count word (2 + 69 = 71), the control, */
+/* the text and a pad byte: 74 bytes, 148000 for the file -- block 290. */
+/* Before RHB, $PUT of control+text wrote zeroes AND the control (4 extra */
+/* bytes a record over 2000 = 297 blocks) and $GET threw the control away. */
+static void test_vfc_records(void)
+{
+    printf("\n--- VFC records and RAB$L_RHB (vms-36aa) ---\n");
+
+    char vfile[256], vdisk[270], vmeta[290];
+    snprintf(vfile, sizeof(vfile), "/tmp/test_vmsrms_vfc_%d", (int)getpid());
+    snprintf(vdisk, sizeof(vdisk), "%s;1", vfile);      /* the file $CREATE made */
+    snprintf(vmeta, sizeof(vmeta), "%s.rms_meta", vdisk);
+
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = vfile;
+    fab.fab$b_fns = (uint8_t)strlen(vfile);
+    fab.fab$b_fac = FAB$M_PUT | FAB$M_GET;
+    fab.fab$b_rfm = FAB$C_VFC;
+    fab.fab$b_fsz = 2;
+    fab.fab$b_rat = FAB$M_PRN;
+    fab.fab$b_org = FAB$C_SEQ;
+    uint32_t st = sys$create(&fab, 0, 0);
+    check(st == RMS$_NORMAL, "create VFC file (fsz 2)");
+
+    struct RAB rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    sys$connect(&rab, 0, 0);
+
+    char ctl[2] = { 0x01, (char)0x8d };
+    char text[128];
+    int puts_ok = 1;
+    rab.rab$l_rhb = ctl;
+    for (int i = 1; i <= 2000; i++) {
+        int n = snprintf(text, sizeof text,
+                         "record %04d of the S1 long copy, abcdefghijklmnopqrstuvwxyz0123456789", i);
+        rab.rab$l_rbf = text;
+        rab.rab$w_rsz = (uint16_t)n;
+        if (sys$put(&rab, 0, 0) != RMS$_NORMAL) puts_ok = 0;
+    }
+    check(puts_ok, "sys$put 2000 VFC records with RHB = 01 8D");
+    sys$disconnect(&rab, 0, 0);
+    check(sys$close(&fab, 0, 0) == RMS$_NORMAL, "close the VFC file");
+
+    struct stat sb;
+    check(stat(vdisk, &sb) == 0 && sb.st_size == 148000,
+          "2000 records are 148000 bytes on disk: EOF in block 290, as on the VAX (not 297)");
+    check(sb.st_size > 0 && (sb.st_size + 511) / 512 == 290, "the file uses 290 blocks");
+
+    /* The first record on disk: count 71, control 01 8D, text, pad. */
+    unsigned char raw[74];
+    int fd = open(vdisk, O_RDONLY);
+    check(fd >= 0 && read(fd, raw, sizeof raw) == (ssize_t)sizeof raw &&
+          raw[0] == 71 && raw[1] == 0 && raw[2] == 0x01 && raw[3] == 0x8d &&
+          memcmp(raw + 4, "record 0001 of", 14) == 0 && raw[73] == 0,
+          "record 1 on disk: count 71, control 01 8D, the text, one pad byte");
+    if (fd >= 0) close(fd);
+
+    /* $OPEN takes the record format and fixed-control size from the file. */
+    fab = cc$rms_fab;
+    fab.fab$l_fna = vfile;
+    fab.fab$b_fns = (uint8_t)strlen(vfile);
+    fab.fab$b_fac = FAB$M_GET;
+    fab.fab$b_rfm = FAB$C_VFC;
+    fab.fab$b_fsz = 2;
+    check(sys$open(&fab, 0, 0) == RMS$_NORMAL, "reopen the VFC file");
+    rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    sys$connect(&rab, 0, 0);
+    char rbuf[256], rhb[2] = { 0, 0 };
+    rab.rab$l_ubf = rbuf;
+    rab.rab$w_usz = sizeof rbuf;
+    rab.rab$l_rhb = rhb;
+    st = sys$get(&rab, 0, 0);
+    check(st == RMS$_NORMAL && rab.rab$w_rsz == 69 &&
+          memcmp(rbuf, "record 0001 of the S1 long copy", 31) == 0,
+          "sys$get returns the text alone (69 bytes) in UBF");
+    check(rhb[0] == 0x01 && rhb[1] == (char)0x8d, "sys$get returns the fixed control 01 8D in RHB");
+
+    rab.rab$l_rhb = NULL;
+    st = sys$get(&rab, 0, 0);
+    check(st == RMS$_NORMAL && rab.rab$w_rsz == 69 &&
+          memcmp(rbuf, "record 0002 of", 14) == 0,
+          "sys$get with RHB 0 still returns the text alone");
+
+    sys$disconnect(&rab, 0, 0);
+    sys$close(&fab, 0, 0);
+    unlink(vdisk);
+    unlink(vmeta);
+}
+
+/* ------------------------------------------------------------------ */
 /* Test: XAB creation/revision dates are real VMS binary time (vms-3dd) */
 /*                                                                      */
 /* Regression: rms_impl_display() used to stuff raw Unix time_t into    */
@@ -645,6 +740,7 @@ int main(void)
     test_open_close();
     test_record_io();
     test_fixed_records();
+    test_vfc_records();
     test_block_io();
     test_xab_dates();
 

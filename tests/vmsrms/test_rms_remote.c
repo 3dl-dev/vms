@@ -31,6 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #include "rms/rms.h"
 #include "rms_remote.h"
@@ -244,8 +246,40 @@ static void oracle_case(const char *what, const char *console, const char *cmd,
 }
 
 /* ---------------- 1. RMS units: the spec, the NCB, the password ---------- */
+static uint64_t q8(const uint8_t b[8])
+{ uint64_t v = 0; for (int i = 7; i >= 0; i--) v = (v << 8) | b[i]; return v; }
+
+/* rd vms-5b9: a DAP A-18 date to VMS binary time (the expected values are
+ * independent: Python datetime, ticks since 17-NOV-1858 00:00). */
+static void ascii_dates(void)
+{
+    static const struct { const char *s; uint64_t want; } ok[] = {
+        { " 2-NOV-26 23:40:25", 0xbc4eabff3a7a80ull },
+        { "02-NOV-26 23:40:25", 0xbc4eabff3a7a80ull },
+        { " 2-NOV-2026 23:40:25.81", 0xbc4eabffb61320ull },
+        { "29-FEB-00 00:00:00", 0x9e65d062794000ull },
+        { "31-DEC-99 23:59:59", 0x9e37739b816980ull },
+    };
+    for (size_t i = 0; i < sizeof ok / sizeof ok[0]; i++) {
+        uint8_t b[8] = { 0 };
+        int r = rms_remote_ascii_time(ok[i].s, strlen(ok[i].s), b);
+        char what[96];
+        snprintf(what, sizeof what, "A-18 date \"%s\" is VMS time %llx", ok[i].s, (unsigned long long)ok[i].want);
+        CHECK(r == 1 && q8(b) == ok[i].want, what);
+    }
+    static const char *bad[] = { "", "30-FEB-26 00:00:00", "02-XYZ-26 00:00:00", "02-NOV-26 24:00:00",
+                                 "02-NOV-26 23:40", "02-NOV-26 23:40:25x", "-NOV-26 23:40:25" };
+    int all = 1;
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        uint8_t b[8];
+        if (rms_remote_ascii_time(bad[i], strlen(bad[i]), b)) all = 0;
+    }
+    CHECK(all, "A-18 dates that are not dates (Feb 30, bad month, 24:00, short, trailing junk) are refused");
+}
+
 static void units(void)
 {
+    ascii_dates();
     /* $PARSE: the expanded string shows the password as the word. */
     struct FAB fab = cc$rms_fab;
     struct NAM nam = cc$rms_nam;
@@ -651,6 +685,83 @@ static void vfc_cases(void)
                       buf ? buf : "", (unsigned)st, g_nsink);
     CHECK(same, "COPY of a VFC print file node:: -> node:: sends each record with its fixed control (01 8D + text), byte-identical");
     free(buf);
+
+    /* COPY node:: -> local writes the VAX's own VFC records: the control in
+     * the fixed-control area (RAB$L_RHB), not in the data (rd vms-36aa: the
+     * 290-block BIG.TXT was 297 on OVMX). Each record: count 33 (2 + 31),
+     * 01 8D, the 31-byte text, a pad byte = 36 bytes; 3 records = 108. */
+    char lspec[128], ldisk[140], lmeta[160];
+    snprintf(lspec, sizeof lspec, "/tmp/test_rms_remote_vfc_%d.TXT", (int)getpid());
+    snprintf(ldisk, sizeof ldisk, "%s;1", lspec);
+    snprintf(lmeta, sizeof lmeta, "%s.rms_meta", ldisk);
+    g_mk_n = 0;
+    cap_begin(NULL);
+    st = dcl_remote_copy("VAX4::SYS$SYSDEVICE:[SYSMGR]BIG.TXT", lspec, 0);
+    buf = cap_end();
+    struct stat sb;
+    unsigned char raw[36];
+    int fd = open(ldisk, O_RDONLY);
+    int ondisk = (st & 1) && stat(ldisk, &sb) == 0 && sb.st_size == 3 * 36 && fd >= 0 &&
+                 read(fd, raw, sizeof raw) == (ssize_t)sizeof raw && raw[0] == 33 && raw[1] == 0 &&
+                 raw[2] == 0x01 && raw[3] == 0x8d && !memcmp(raw + 4, "record 0001 of", 14);
+    if (fd >= 0) close(fd);
+    if (!ondisk) printf("    --- COPY printed ---\n%s    --- st %08X ---\n", buf ? buf : "", (unsigned)st);
+    CHECK(ondisk, "COPY node:: -> local of a VFC file: 36 bytes a record (count, 01 8D control, text, pad), as the VAX's");
+    free(buf);
+
+    /* ... and back: the local file's records, $GET with RHB and $PUT with
+     * RHB to node:: (what COPY local -> node:: does), are the VAX's records. */
+    g_mk_n = 0; g_nsink = 0;
+    {
+        struct FAB in = cc$rms_fab, out = cc$rms_fab;
+        in.fab$l_fna = ldisk; in.fab$b_fns = (uint8_t)strlen(ldisk);
+        in.fab$b_fac = FAB$M_GET; in.fab$b_rfm = FAB$C_VFC; in.fab$b_fsz = 2;
+        char ospec[] = "VAX3::BIGRT.TXT";
+        out.fab$l_fna = ospec; out.fab$b_fns = (uint8_t)strlen(ospec);
+        out.fab$b_fac = FAB$M_PUT; out.fab$b_org = FAB$C_SEQ;
+        out.fab$b_rfm = FAB$C_VFC; out.fab$b_fsz = 2; out.fab$b_rat = FAB$M_PRN;
+        int ok = (sys$open(&in, 0, 0) & 1) && (sys$create(&out, 0, 0) & 1);
+        struct RAB ir = cc$rms_rab, orb = cc$rms_rab;
+        char ub[128], hb[2];
+        ir.rab$l_fab = &in; ir.rab$l_ubf = ub; ir.rab$w_usz = sizeof ub; ir.rab$l_rhb = hb;
+        orb.rab$l_fab = &out; orb.rab$l_rhb = hb;
+        ok = ok && (sys$connect(&ir, 0, 0) & 1) && (sys$connect(&orb, 0, 0) & 1);
+        while (ok && (sys$get(&ir, 0, 0) & 1)) {
+            orb.rab$l_rbf = ir.rab$l_rbf; orb.rab$w_rsz = ir.rab$w_rsz;
+            ok = (sys$put(&orb, 0, 0) & 1);
+        }
+        ok = ok && (sys$close(&out, 0, 0) & 1);
+        (void)sys$close(&in, 0, 0);
+        same = ok && g_nsink == VFC_NREC;
+        for (int i = 0; i < g_nsink && same; i++) {
+            uint8_t want[128]; size_t wn = 0;
+            vfc_rec(i, want, &wn);
+            same = g_sinkn[i] == wn && memcmp(g_sink[i], want, wn) == 0;
+        }
+        if (!same) printf("    --- ok %d, %d records ---\n", ok, g_nsink);
+        CHECK(same, "the local VFC file -> node:: ($GET/$PUT with RHB) sends each record as the VAX sent it (01 8D + text)");
+    }
+    unlink(ldisk); unlink(lmeta);
+
+    /* $GET with RHB: the control in RHB, the text alone in UBF. */
+    g_mk_n = 0;
+    {
+        struct FAB f = cc$rms_fab;
+        char spec[] = "VAX4::SYS$SYSDEVICE:[SYSMGR]BIG.TXT";
+        f.fab$l_fna = spec; f.fab$b_fns = (uint8_t)strlen(spec);
+        f.fab$b_fac = FAB$M_GET;
+        int ok = (sys$open(&f, 0, 0) & 1) && f.fab$b_rfm == FAB$C_VFC && f.fab$b_fsz == 2;
+        struct RAB r = cc$rms_rab;
+        char ub[128], hb[2] = { 0, 0 };
+        r.rab$l_fab = &f; r.rab$l_ubf = ub; r.rab$w_usz = sizeof ub; r.rab$l_rhb = hb;
+        ok = ok && (sys$connect(&r, 0, 0) & 1) && (sys$get(&r, 0, 0) & 1) &&
+             r.rab$w_rsz == 31 && !memcmp(ub, "record 0001 of the S1 long copy", 31) &&
+             hb[0] == 0x01 && hb[1] == (char)0x8d;
+        r.rab$l_rhb = NULL;
+        ok = ok && (sys$get(&r, 0, 0) & 1) && r.rab$w_rsz == 31 && !memcmp(ub, "record 0002", 11);
+        (void)sys$close(&f, 0, 0);
+        CHECK(ok, "$GET node:: of a VFC record: RHB = 01 8D, UBF = the text (RSZ 31); RHB 0 = the text alone");
+    }
 
     g_mk_n = 0;
     cap_begin(NULL);

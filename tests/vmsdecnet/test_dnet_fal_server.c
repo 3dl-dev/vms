@@ -243,8 +243,8 @@ int dnet_fal_rename(const char *oldspec, const char *newspec, uint32_t *sts, uin
     *sts = RMS$_NORMAL; return 0;
 }
 
-int dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, void **h, char *rsa, size_t cap)
-{ (void)rfm; (void)rat; snprintf(g_put_spec, sizeof g_put_spec, "%s", spec); g_put_len = 0; g_put_closed = 0;
+int dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, uint8_t fsz, void **h, char *rsa, size_t cap)
+{ (void)rfm; (void)rat; (void)fsz; snprintf(g_put_spec, sizeof g_put_spec, "%s", spec); g_put_len = 0; g_put_closed = 0;
   if (rsa && cap) { if (g_wopen_no_rsa) rsa[0] = '\0'; else snprintf(rsa, cap, "DKA0:[SRV]%s1", spec); }
   *h = g_put_spec; return 0; }
 int dnet_fal_wput(void *h, const uint8_t *rec, size_t len)

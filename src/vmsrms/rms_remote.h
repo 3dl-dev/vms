@@ -59,6 +59,11 @@ void     rms_remote_search_end(void *nam);
  * format, attributes, size limit, organization) from a DAP OPEN. */
 uint32_t rms_remote_file_attr(const char *spec, struct rms_fileattr *out);
 
+/* A DAP A-18 date ("dd-MMM-yy hh:mm:ss", the FAL's local time; a 4-digit
+ * year and ".cc" hundredths also taken) as a VMS binary time in out.
+ * 1 = converted, 0 = not a date. */
+int rms_remote_ascii_time(const char *s, size_t n, uint8_t out[8]);
+
 /* RMS$_FND "ACP file or directory lookup failed" (catalog 0x0001C02A; not in
  * rmsdef.h): a remote access whose logical link did not open. The connect's
  * own failure is the STV. */

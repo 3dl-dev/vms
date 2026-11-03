@@ -180,6 +180,10 @@ static int rr_config(struct rr_link *k)
 {
     struct dnet_dap_msg m;
     dnet_dap_ovmx_config(&m, RR_BUFSIZ);
+    /* The accessor takes the FAL's dates as UTC values with hundredths
+     * (dnet_dap.h DNET_DAP_CAP_UTC_DATETIME): without it a VAX FAL sends the
+     * A-18 text, and DIRECTORY/FULL lost the hundredths the VAX prints. */
+    dnet_dap_syscap_set(&m, DNET_DAP_CAP_UTC_DATETIME);
     if (rr_send(k, &m) < 0) return -1;
     if (rr_recv(k, &m) < 0 || m.op != DNET_DAP_CONFIG) return -1;
     return 0;

@@ -360,6 +360,24 @@ int vms_lock_dlm_rebuild_tree_next(uint32_t departed_csid,
 				   struct vms_dlm_adopt_tree *out);
 
 /*
+ * rd vms-fdeb: THE MASTER'S DIRECTORY RE-REGISTRATION (op-0x0d), engine half.
+ *
+ * `vms_lock_dlm_dirreg_next`: the next ROOT resource this node masters whose
+ * directory node, by the weight vector in force, is ANOTHER member and has not
+ * been told of it since the transition's discard -- not one of the `n_skip` in
+ * `skip`. 1 with `*out` (identity), `*hash_out` and `*dir_out` filled, else 0.
+ *
+ * `vms_lock_dlm_dirreg_told`: that directory answered; record it as the one
+ * holding the entry (dir_told_csid, rd vms-c55), only while the vector still
+ * names it and this node still masters the root. 1 when recorded.
+ */
+int vms_lock_dlm_dirreg_next(const struct vms_dlm_adopt_tree *skip,
+                             uint32_t n_skip, struct vms_dlm_adopt_tree *out,
+                             uint32_t *hash_out, uint32_t *dir_out);
+int vms_lock_dlm_dirreg_told(const struct vms_dlm_adopt_tree *id,
+                             uint32_t dir_csid);
+
+/*
  * WHICH MASTER DO OUR PROXIES ON THIS ROOT NAME? 1 and `*out_csid` when this
  * node holds a granted proxy on the root resource of that identity; 0 when it
  * holds none. The directory role asks it to tell a tree whose master is a

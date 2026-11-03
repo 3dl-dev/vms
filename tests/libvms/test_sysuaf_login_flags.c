@@ -39,6 +39,8 @@
 #include <string.h>
 
 #include "sysuaf.h"
+#include "starlet.h"   /* sys$gettim: is there a system time to read (rd vms-642) */
+#include "ssdef.h"
 
 static int failures = 0;
 
@@ -227,8 +229,17 @@ int main(int argc, char *argv[])
          * far in the future, so not expired regardless of the wall clock. */
         le64w(r.raw.uaf$q_pwd_date, 0x00E0000000000000ULL);
         le64w(r.raw.uaf$q_pwd_lifetime, 0x0010000000000000ULL);
-        CHECK(sysuaf_password_expired(&r) == 0,
-              "lifetime NOT yet elapsed (expiry instant in the future): NOT expired");
+        /* "now" is the system time, the executive's (rd vms-642). With no
+         * /dev/vms it cannot be read and the check fails closed; against a real
+         * executive tests/qemu/test_syssvc_systime.c moves the system time
+         * across an expiry instant and watches this function follow it. */
+        uint64_t now = 0;
+        if (sys$gettim(&now) == SS$_NOSUCHDEV)
+            CHECK(sysuaf_password_expired(&r) == 1,
+                  "no system time readable (no executive): a lifetime password fails closed as EXPIRED");
+        else
+            CHECK(sysuaf_password_expired(&r) == 0,
+                  "lifetime NOT yet elapsed (expiry instant in the future): NOT expired");
     }
 
     /* Fail closed on a NULL record: an unreadable record is treated as expired,

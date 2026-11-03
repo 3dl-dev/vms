@@ -83,6 +83,7 @@
 #include "vms_cnxman_csb.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_cluster_codec_dlm.h"
+#include "vms_dlm_master_wire.h" /* rd vms-1e58: the ARM's own translation */
 #include "vms_dlm_hash.h"     /* the PROVEN resource-name hash the engine routes
 			       * by for a resource no frame has named (rd
 			       * vms-b5b0) */
@@ -612,16 +613,19 @@ static enum vms_dlm_dir_outcome vax_lookup(const uint8_t *frame,
 }
 
 /* Serve one of the VAX's op-0x01/op-0x07 frames AS THE MASTER, exactly as
- * dlm_arm_serve_enq_frame does: the shipping parse, then the shipping
- * master-side door. */
+ * dlm_arm_serve_enq_frame does: the shipping parse, the shipping translation
+ * (vms_dlm_master_wire.h -- the arm's own), then the shipping master-side door.
+ *
+ * THE REQUESTER'S OPTIONS COME OFF THE FRAME (rd vms-1e58 C4). This harness
+ * used to take them as a parameter, and so it handed the master an
+ * LCK_M_NOQUEUE the real arm never read off any frame: the NOQUEUE test here
+ * was green while a real VAX's EX/NOQUEUE was QUEUED in the lab. */
 static void vax_served_as_master(const uint8_t *frame, vms_csid_t from,
-				 uint32_t flags,
 				 struct vms_dlm_master_result *out)
 {
 	struct vms_dlm_enq_request e;
 	struct vms_dlm_master_request mr;
 	uint8_t wireop = 0;
-	uint32_t i;
 
 	memset(out, 0, sizeof(*out));
 	out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
@@ -630,22 +634,7 @@ static void vax_served_as_master(const uint8_t *frame, vms_csid_t from,
 		ct_check(0, "the shipping parser read the VAX's frame back");
 		return;
 	}
-	memset(&mr, 0, sizeof(mr));
-	mr.op = (wireop == VMS_DLM_WIREOP_CONVERT) ? VMS_DLM_MREQ_CONVERT :
-						     VMS_DLM_MREQ_ENQ;
-	mr.req_csid = (uint32_t)from;
-	mr.req_lkid = e.req_lkid;
-	mr.master_lkid = e.master_lkid;
-	mr.lkmode = e.mode;
-	mr.flags = flags;
-	/* WHICH resource of that name, off the frame the parser just read
-	 * (rd vms-b5b0). */
-	mr.res_group = e.res_group;
-	mr.res_mode = e.res_acmode;
-	mr.res_ident_valid = e.res_ident_valid;
-	for (i = 0u; i < e.name_len && i < sizeof(mr.resnam) - 1u; i++)
-		mr.resnam[i] = (char)e.name[i];
-	mr.resnam[i] = '\0';
+	vms_dlm_master_req_from_wire(&e, wireop, (uint32_t)from, &mr);
 	(void)vms_lock_dlm_master_serve(&mr, out);
 }
 
@@ -1039,7 +1028,7 @@ static void lab_arm_a_the_captured_enq_is_served_as_master(void)
 			"the console said 'does not master'");
 
 	/* *** VAX1'S CAPTURED FRAME *** */
-	vax_served_as_master(frame, CSID_VAX, 0u, &res);
+	vax_served_as_master(frame, CSID_VAX, &res);
 	ct_check_eq_u32(res.outcome, (uint32_t)VMS_DLM_MASTER_GRANTED,
 			"*** VAX1's CAPTURED ENQ(EX) is GRANTED by this node as "
 			"the resource's master (p. 6-31 outcome (a)) -- the lab "
@@ -1462,7 +1451,7 @@ static void *e7649_sync_thread(void *arg)
 	struct e7649_standing *r = (struct e7649_standing *)arg;
 
 	r->status = vms_lock_acp_vol_ex(r->proc, "F11B$sEVAC5FA     ",
-					&r->lkid);
+					&r->lkid, NULL);
 	r->done = 1;
 	return NULL;
 }
@@ -1939,7 +1928,7 @@ static void ovmx_first_then_the_vax_is_served_as_master(void)
 
 	/* ... and the master role resolves it: EX against a local EX holder
 	 * QUEUES, genuinely, on a real waiting queue. */
-	vax_served_as_master(frame, CSID_VAX, 0u, &res);
+	vax_served_as_master(frame, CSID_VAX, &res);
 	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_QUEUED &&
 		 res.master_lkid != 0u,
 		 "*** the VAX's EX request is QUEUED by this executive, behind "
@@ -1963,31 +1952,167 @@ static void ovmx_first_then_the_vax_is_served_as_master(void)
 	mixed_down();
 }
 
-/* The NOQUEUE case: SS$_NOTQUEUED is a real refusal of a real conflict. */
+/*
+ * ONE FRAME OF THE ci.6 LAB FIRE, read out of the COMMITTED hex transcript
+ * (tests/lab/captures/vms-ci6-evac-20261103/ci6evac-031902/ci6-frames.txt --
+ * "Bytes from the Ethernet payload (after the 14-byte header)"), so no byte of
+ * it is typed into this file. The 14-byte Ethernet header is left zero: the
+ * codec reads from VMS_OFF_SYSAP_BODY on. Returns 0, or -1 with the test red.
+ */
+#define CI6_FRAMES "../../../lab/captures/vms-ci6-evac-20261103/" \
+		   "ci6evac-031902/ci6-frames.txt"
+static int ci6_frame(unsigned want, uint8_t *frame)
+{
+	char path[700], line[256];
+	FILE *fp;
+	int in = 0, got = 0;
+
+	memset(frame, 0, VMS_CM_FRAME_LEN);
+	snprintf(path, sizeof(path), "%s/%s", OVMX_FIXTURE_DIR, CI6_FRAMES);
+	fp = fopen(path, "r");
+	if (fp == NULL) {
+		ct_check(0, "the committed ci.6 frame transcript opens");
+		return -1;
+	}
+	while (fgets(line, sizeof(line), fp) != NULL) {
+		unsigned n = 0, off = 0, v = 0;
+		int used = 0;
+		const char *c;
+
+		if (sscanf(line, "frame %u", &n) == 1) {
+			if (in)
+				break;
+			in = (n == want);
+			continue;
+		}
+		if (!in || sscanf(line, " %x%n", &off, &used) != 1)
+			continue;
+		for (c = line + used; sscanf(c, " %2x%n", &v, &used) == 1;
+		     c += used, off++) {
+			if (14u + off < VMS_CM_FRAME_LEN)
+				frame[14u + off] = (uint8_t)v;
+			got++;
+		}
+	}
+	fclose(fp);
+	ct_check(got + 14 == (int)VMS_CM_FRAME_LEN,
+		 "the transcript frame is the 204-byte DLM class, read whole");
+	return got + 14 == (int)VMS_CM_FRAME_LEN ? 0 : -1;
+}
+
+/*
+ * THE NOQUEUE CASE, ON THE REAL WIRE (rd vms-1e58 C4): SS$_NOTQUEUED is a real
+ * refusal of a real conflict, and the request says NOQUEUE IN ITS OWN BYTES.
+ *
+ * The lab: OVMXE mastered EVAC$WORKLOAD and held it EX; VAX2's EVPROBE asked
+ * for EX with LCK$M_NOQUEUE (frame 7310, body[28:30] = 04 00) and OVMXE
+ * answered QUEUED (frame 7312), so VAX2's $ENQW completed SS$_NORMAL inside
+ * OVMXE's hold. The same request WITHOUT NOQUEUE -- VAX1's EVACWL, frame 5212,
+ * body[28:30] = 00 00 -- is the contrast: that one must still queue.
+ */
 static void a_vax_noqueue_request_is_denied(void)
 {
-	const char *N = "EVAC$NOQ";
-	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint8_t probe[VMS_CM_FRAME_LEN], wl[VMS_CM_FRAME_LEN];
+	uint8_t ans[VMS_CM_FRAME_LEN];
+	struct vms_dlm_enq_request e;
+	struct vms_dlm_enq_response r;
 	struct vms_dlm_master_result res;
+	struct vms_resmaster_args rm;
 	struct vms_proc app;
-	uint32_t lkid = 0;
+	uint32_t lkid = 0, written = 0;
+	uint8_t wireop = 0;
+	const uint8_t *ab = ans + VMS_OFF_SYSAP_BODY;
+	const uint8_t *pb = probe + VMS_OFF_SYSAP_BODY;
 
-	printf("-- the VAX's NOQUEUE request on a held resource is DENIED --\n");
-	mixed_up(1u, 0u);
-	proc_init(&app);
+	printf("-- rd vms-1e58 C4: VAX2's CAPTURED EX/NOQUEUE against this "
+	       "node's EX is DENIED --\n");
+	if (ci6_frame(7310u, probe) != 0 || ci6_frame(5212u, wl) != 0)
+		return;
+	labbed_up(0u, 0u, 0u);
+	lab_proc_init(&app);
 
-	ct_check(do_enq(&app, N, LCK_K_EXMODE, 0u, &lkid) == SS__NORMAL,
-		 "this node holds EX and masters it");
-	ct_check(vax_build_enq(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_2,
-			       (uint8_t)LCK_K_EXMODE, N, 0x11223344u) == 0,
-		 "the VAX's op-0x01 is built");
-	vax_served_as_master(frame, CSID_VAX, LCK_M_NOQUEUE, &res);
-	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_DENIED,
-		 "*** DENIED -- the deny shape the real wire grounds, from a "
-		 "real incompatibility ***");
+	ct_check(vms_dlm_enq_request_parse_body(pb, VMS_CM_BODY_LEN, &wireop,
+						&e) == VMS_CODEC_OK &&
+		 wireop == VMS_DLM_WIREOP_ENQ,
+		 "frame 7310 parses as an op-0x01 ENQ");
+	ct_check((e.lck_flags & VMS_DLM_REQ_FLAG_NOQUEUE) != 0u,
+		 "*** the parser READS body[28:30]'s NOQUEUE bit off VAX2's "
+		 "own frame ***");
+	/* negctl: dlm-1e58-noqueue-not-read */
+	ct_check_eq_u32(vms_dlm_master_req_flags(&e, wireop), LCK_M_NOQUEUE,
+			"*** and the arm's translation hands the master "
+			"LCK_M_NOQUEUE ***");
+
+	ct_check(do_enq(&app, EVAC_RESNAM, LCK_K_EXMODE, 0u, &lkid) ==
+		 SS__NORMAL && lkid != 0u,
+		 "this node holds EVAC$WORKLOAD EX (the lab's OVMXE)");
+	read_resmaster(EVAC_RESNAM, &rm);
+	ct_check_eq_u32(rm.is_local_master, 1u, "  and masters it");
+
+	vax_served_as_master(probe, CSID_VAX2, &res);
+	ct_check_eq_u32(res.outcome, (uint32_t)VMS_DLM_MASTER_DENIED,
+			"*** VAX2's captured EX/NOQUEUE is DENIED -- the lab "
+			"got QUEUED ***");
 	ct_check_eq_u32(res.master_lkid, 0u,
 			"  and no lock id is asserted, because no lock exists");
+	read_resmaster(EVAC_RESNAM, &rm);
+	ct_check_eq_u32(rm.n_granted, 1u,
+			"  the resource still has ONE granted lock: ours");
+	ct_check_eq_u32(rm.remote_holder_csid, 0u,
+			"  and nothing is held for VAX2");
+	ct_check_eq_u32(lki_granted_mode(&app, lkid), LCK_K_EXMODE,
+			"  this node still holds EX");
+
+	/* THE ANSWER the arm sends for it: the grounded deny, read back by the
+	 * shipping requester-side parser exactly as a requester would. */
+	ct_check(vms_dlm_enq_response_build_notqueued(pb, VMS_CM_BODY_LEN, ans,
+						      sizeof(ans), &written) ==
+		 VMS_CODEC_OK && written == VMS_CM_FRAME_LEN,
+		 "the deny is built from VAX2's own request");
+	/* negctl: dlm-1e58-deny-record-not-written */
+	ct_check(ab[34] == VMS_DLM_REPLY_NOTQUEUED && ab[32] == 0xb8u &&
+		 ab[33] == 0x09u && ab[35] == 0u,
+		 "*** body[32:36] = b8 09 fc 00, the record every real deny "
+		 "carries (0x09b8 = SS$_NOTQUEUED) -- not 00 00 fb 00 ***");
+	ct_check(ab[8] == 0x82u && ab[9] == VMS_DLM_WIREOP_ENQ,
+		 "  a cat-0x82 answer to the op-0x01");
+	ct_check(memcmp(ab + 4, pb + 4, 4) == 0 &&
+		 memcmp(ab + 20, pb + 20, 8) == 0,
+		 "  the transaction token, the PID placeholder and VAX2's own "
+		 "handle ride back unchanged");
+	ct_check(ab[28] == 0u && ab[29] == 0u && ab[30] == 0u && ab[31] == 0u,
+		 "  body[28:32] cleared, the requested mode included");
+	ct_check(memcmp(ab + 44, pb + 44, 88) == 0,
+		 "  and the identity and the WHOLE name echo back -- no "
+		 "'EVAC 00 00 ORKLOAD' (that was the QUEUED shape's body[52:54])");
+	ct_check(vms_dlm_enq_response_parse_body(ab, VMS_CM_BODY_LEN, &r) ==
+		 VMS_CODEC_OK && r.outcome == VMS_DLM_ENQ_DENIED,
+		 "*** and this node's own requester reads it as DENIED ***");
+
+	/* THE CONTRAST: the same EX without NOQUEUE still queues. */
+	vax_served_as_master(wl, CSID_VAX, &res);
+	ct_check_eq_u32(res.outcome, (uint32_t)VMS_DLM_MASTER_QUEUED,
+			"*** VAX1's captured EX WITHOUT NOQUEUE (frame 5212) is "
+			"QUEUED, as before ***");
 	mixed_down();
+}
+
+/* A SUB-LOCK's deny names the master's own S0 address at body[40:44]
+ * (55 of 55 real ones): no answer is composed for it. */
+static void a_notqueued_sublock_answer_is_refused(void)
+{
+	uint8_t probe[VMS_CM_FRAME_LEN], ans[VMS_CM_FRAME_LEN];
+	uint32_t written = 0;
+
+	printf("-- rd vms-1e58 C4: no deny is composed for a sub-lock --\n");
+	if (ci6_frame(7310u, probe) != 0)
+		return;
+	probe[VMS_OFF_SYSAP_BODY + 40] = 0x01u;   /* names a parent master */
+	ct_check(vms_dlm_enq_response_build_notqueued(probe + VMS_OFF_SYSAP_BODY,
+						      VMS_CM_BODY_LEN, ans,
+						      sizeof(ans), &written) ==
+		 VMS_CODEC_E_CLASS,
+		 "a sub-lock request's deny is refused, not invented");
 }
 
 /* A CONVERT from the VAX, and the BLOCKING AST this master owes a remote
@@ -2013,7 +2138,7 @@ static void a_convert_names_the_blocking_holder(void)
 	ct_check(vax_build_enq(f1, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
 			       (uint8_t)LCK_K_EXMODE, N, 0x22334455u) == 0,
 		 "the VAX's EX request is built");
-	vax_served_as_master(f1, CSID_VAX, 0u, &held);
+	vax_served_as_master(f1, CSID_VAX, &held);
 	ct_check(held.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
 		 held.granted_mode == LCK_K_EXMODE,
 		 "the VAX is GRANTED EX by this master (NL is compatible)");
@@ -2033,7 +2158,7 @@ static void a_convert_names_the_blocking_holder(void)
 				       (uint8_t)LCK_K_NLMODE, N,
 				       0x22334455u) == 0,
 			 "the second system's op-0x01 NL request is built");
-		vax_served_as_master(f2, CSID_VAX2, 0u, &nl);
+		vax_served_as_master(f2, CSID_VAX2, &nl);
 		ct_check(nl.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
 			 nl.master_lkid != 0u,
 			 "it is GRANTED NL, with a real handle of ours");
@@ -2041,7 +2166,7 @@ static void a_convert_names_the_blocking_holder(void)
 					   (uint8_t)LCK_K_EXMODE) == 0,
 			 "and its op-0x07 convert to EX names that handle");
 	}
-	vax_served_as_master(f2, CSID_VAX2, 0u, &queued);
+	vax_served_as_master(f2, CSID_VAX2, &queued);
 	ct_check(queued.outcome == (uint8_t)VMS_DLM_MASTER_QUEUED,
 		 "*** the convert QUEUES behind the VAX's EX ***");
 	ct_check_eq_u32(queued.blocking_csid, CSID_VAX,
@@ -2090,7 +2215,7 @@ static void the_vax_departing_releases_its_locks(void)
 	ct_check(vax_build_enq(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
 			       (uint8_t)LCK_K_EXMODE, N, 0x33445566u) == 0,
 		 "the VAX's EX request is built");
-	vax_served_as_master(frame, CSID_VAX, 0u, &held);
+	vax_served_as_master(frame, CSID_VAX, &held);
 	ct_check(held.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
 		 "the VAX holds EX here");
 
@@ -2517,7 +2642,7 @@ static void e3ea_served_then_released_leaves_no_master(void)
 		 "the peer's NL request");
 	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
 		 VMS_DLM_DIR_ANSWER_SELF, "  answered: this node masters it");
-	vax_served_as_master(frame, CSID_VAX, 0u, &res);
+	vax_served_as_master(frame, CSID_VAX, &res);
 	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
 		 res.master_lkid != 0u, "  and GRANTED, as the master");
 
@@ -2706,6 +2831,7 @@ int main(void)
 
 	ovmx_first_then_the_vax_is_served_as_master();
 	a_vax_noqueue_request_is_denied();
+	a_notqueued_sublock_answer_is_refused();
 	a_convert_names_the_blocking_holder();
 
 	the_vax_departing_releases_its_locks();

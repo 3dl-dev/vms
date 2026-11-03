@@ -29,6 +29,10 @@
 #include "lnmdef.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
+#include <errno.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include "ovmx_test_fork.h"
 
 #define EXIT_SKIP 77
 
@@ -116,6 +120,34 @@ int main(void)
               "gettimeofday() is the same clock");
         check(clock_gettime(CLOCK_REALTIME, &ts) == 0 && near((long long)ts.tv_sec, g),
               "clock_gettime(CLOCK_REALTIME) is the same clock");
+    }
+
+    /* The clock is the SYSTEM time (rd vms-642): $SETIME here moves time() in
+     * another process; recalibrating brings it back. 1-JAN-2031 00:00:00 is
+     * Unix 1924992000. */
+    {
+        uint64_t m = VMS_PRV_M_OPER | VMS_PRV_M_LOG_IO;
+        uint64_t target = 1924992000ULL * 10000000ULL + 0x007C95674BEB4000ULL;
+        int ws = 0;
+        pid_t c;
+        check((sys$setprv(1, &m, 0, NULL) & 1) && sys$setime(&target) == SS$_NORMAL,
+              "$SETIME to 1-JAN-2031 (OPER and LOG_IO enabled)");
+        fflush(NULL);
+        c = ovmx_fork_subprocess();
+        if (c == 0) {
+            long long d = (long long)time(NULL) - 1924992000LL;
+            _exit(d >= 0 && d < 86400 ? 0 : 1);
+        }
+        while (c > 0 && waitpid(c, &ws, 0) < 0 && errno == EINTR)
+            ;
+        /* negctl-knockon: systime-gettim-substrate-clock */
+        /* negctl-knockon: systime-setime-not-stored */
+        /* negctl-knockon: crtl-time-falls-to-linux */
+        check(c > 0 && WIFEXITED(ws) && WEXITSTATUS(ws) == 0,
+              "time() in another process is the system time $SETIME set (1-JAN-2031)");
+        check(sys$setime(NULL) == SS$_NORMAL && near((long long)time(NULL), getutc_secs()) &&
+                  time(NULL) < 1924992000,
+              "$SETIME with no time recalibrates: time() is the time-of-year clock again");
     }
 
     time_t now = time(NULL);

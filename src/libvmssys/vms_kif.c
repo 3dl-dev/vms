@@ -19,6 +19,10 @@
 #include "vms_syscall.h"
 #include "vms_string.h"
 #include "vms_errno.h"
+#if defined(__NetBSD__)
+#include <errno.h>
+#include <sys/wait.h>     /* vms_kif_substrate_reap */
+#endif
 
 /* File descriptor for /dev/vms — thread-local so each thread opens/closes
  * independently.  Callers must invoke vms_kif_open() before using any KIF
@@ -165,6 +169,44 @@ uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid)
  * success (CLAUDE.md Rules 9 and 10; tests/integration/test_runtime_target.sh
  * rejects a branch on it).
  */
+/*
+ * vms_kif_substrate_pid (rd vms-e70f) -- the SUBSTRATE task id of the calling
+ * process: the key the executive's table is indexed by, which $CREPRC's
+ * creation handshake hands the creator. It is not a VMS process id and is never
+ * shown to a VMS program as one: the C RTL's getpid() is the VMS PID ($GETJPI
+ * JPI$_PID), so OVMX's own substrate bookkeeping asks for this explicitly.
+ */
+uint32_t vms_kif_substrate_pid(void)
+{
+    return (uint32_t)vms_sys_getpid();
+}
+
+/*
+ * vms_kif_substrate_reap (rd vms-e70f) -- collect the substrate task `pid` this
+ * process forked for $CREPRC/LIB$SPAWN, waiting for it: the substrate half of
+ * process creation, beneath the VMS layer. The C RTL's wait()/waitpid() are the
+ * VMS ones (a subprocess's completion from the executive), so the services that
+ * own a substrate child reap it through here. Returns the pid, or -1.
+ */
+int vms_kif_substrate_reap(uint32_t pid, int *wstatus, int options)
+{
+#if defined(__NetBSD__)
+    for (;;) {
+        pid_t r = waitpid((pid_t)pid, wstatus, options);
+        if (r < 0 && errno == EINTR)
+            continue;
+        return (int)r;
+    }
+#else
+    for (;;) {
+        long r = (long)vms_sys_wait4((vms_pid_t)pid, wstatus, options, 0);
+        if (r == -4 /* EINTR */)
+            continue;
+        return r < 0 ? -1 : (int)r;
+    }
+#endif
+}
+
 static void kif_bind(void)
 {
     vms_pid_t pid = vms_sys_getpid();
@@ -2393,6 +2435,40 @@ uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *user
     return args.status;
 }
 
+/*
+ * $CREPRC's creation record (rd vms-416d): one op on the executive object the
+ * creator and the task it forked synchronise through (VMS_CREPRC_SYNC_*). The
+ * waiting ops are re-entered on a signal, as $WAITFR is (kif_wait_call): a
+ * signal the CALLER catches must not decide what $CREPRC says about the child.
+ * Each op is idempotent, so re-issuing it after -EINTR changes nothing.
+ * `pid`, `value` and `vms_pid` are in/out (NULL: 0 in, discarded out).
+ */
+uint32_t vms_kif_creprc_sync(uint32_t op, uint32_t *rec, uint32_t *pid,
+                             uint32_t *value, uint32_t *vms_pid)
+{
+    struct vms_creprc_sync_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.rec = rec ? *rec : 0;
+    args.pid = pid ? *pid : 0;
+    args.value = value ? *value : 0;
+    args.vms_pid = vms_pid ? *vms_pid : 0;
+
+    /* NEGCTL-ANCHORED (creprc-handshake-eintr) */
+    KIF_WAIT_CALL(VMS_IOCTL_CREPRC_SYNC, &args);
+
+    if (rec)
+        *rec = args.rec;
+    if (pid)
+        *pid = args.pid;
+    if (value)
+        *value = args.value;
+    if (vms_pid)
+        *vms_pid = args.vms_pid;
+    return args.status;
+}
+
 /* $DELPRC / $FORCEX / $SUSPND / $RESUME, authorized and delivered by the
  * executive (rd vms-8e9). op = VMS_PROCCTL_*; pid 0 = the caller. */
 uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code)
@@ -2531,6 +2607,21 @@ uint32_t vms_kif_va(struct vms_va_args *args)
 
     args->status = 0;
     KIF_CALL(VMS_IOCTL_VA, args);
+
+    return args->status;
+}
+
+uint32_t vms_kif_systime(struct vms_systime_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_SYSTIME, args);
 
     return args->status;
 }
@@ -3793,6 +3884,13 @@ uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
 uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
                          uint32_t *actlen)
 {
+    return vms_kif_bg_recv_ex(exec_chan, buf, bufsz, actlen, 0);
+}
+
+/* now != 0: IO$M_NOW -- SS$_ENDOFFILE and no bytes when nothing is queued. */
+uint32_t vms_kif_bg_recv_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                            uint32_t *actlen, int now)
+{
     struct vms_bg_io_args args;
     uint32_t n;
 
@@ -3804,6 +3902,7 @@ uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
     vms_memset(&args, 0, sizeof(args));
     args.chan = exec_chan;
     args.len = (bufsz > VMS_BG_IOCTL_MAXLEN) ? VMS_BG_IOCTL_MAXLEN : bufsz;
+    args.flags = now ? 1u : 0u;
 
     KIF_CALL(VMS_IOCTL_BG_RECV, &args);
 
@@ -4315,7 +4414,10 @@ uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args)
         return SS$_NOSUCHDEV;
 
     args->status = 0;
-    KIF_CALL(VMS_IOCTL_ACP_WRITEVBLK, args);
+    /* Re-entered past a signal (rd vms-b6e): the executive ends a wait for
+     * the volume lock when a signal is pending, having changed nothing, so the
+     * signal's AST runs and the I/O is re-issued -- never an error. */
+    KIF_WAIT_CALL(VMS_IOCTL_ACP_WRITEVBLK, args);
     return args->status;
 }
 
@@ -4344,7 +4446,10 @@ uint32_t vms_kif_acp_fileop(struct vms_acp_fileop_args *args)
     args->name[VMS_ACP_NAME_SIZE - 1] = '\0';
     args->status = 0;
 
-    KIF_CALL(VMS_IOCTL_ACP_FILEOP, args);
+    /* Re-entered past a signal (rd vms-b6e): the executive ends a wait for
+     * the volume lock when a signal is pending, having changed nothing, so the
+     * signal's AST runs and the I/O is re-issued -- never an error. */
+    KIF_WAIT_CALL(VMS_IOCTL_ACP_FILEOP, args);
 
     return args->status;
 }

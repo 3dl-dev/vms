@@ -2854,6 +2854,52 @@ static void test_e09_dir_remove_on_the_wire(void)
 }
 
 /*
+ * rd vms-fdeb: THE MASTER'S op-0x0d RE-REGISTRATION exactly as cnxman_dlm_send
+ * puts it on the wire -- the table's body (vms_dlm_dir_reg_build), the
+ * cluster's DLM sequence, then a REQUEST envelope on the directory node's CSB:
+ * a directory answers every one (82/0d), so unlike the op-0x04 removal it
+ * opens a transaction. The identity is MSCP$LOADBAL as a real V7.3 master
+ * registered it (vms-d52c r3-ovmx-first frame 116). The conformance gate's
+ * `dlm_dir_reg` rows read this dump.
+ */
+static void test_fdeb_dir_reg_on_the_wire(void)
+{
+	struct vms_dlm_res_ident id;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[32];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-fdeb: the re-registration opens a transaction --\n");
+	memset(&id, 0, sizeof(id));
+	memcpy(id.name, "MSCP$LOADBAL", 12u);
+	id.name_len = 12u;
+	id.hash = 0x35a34509u;
+
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_dir_reg_build(&id, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the table's body");
+	ct_check(vms_dlm_shape_fit_for_any_member(b, VMS_CM_BODY_LEN),
+		 "RULE C admits it at a real member");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence, as on every DLM message");
+	ct_check(!vms_dlm_body_is_notification(b, VMS_CM_BODY_LEN),
+		 "the glue reads it as a request, not a notification");
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_REQUEST);
+	ct_check(b[4] != 0 || b[5] != 0 || b[6] != 0 || b[7] != 0,
+		 "*** body[4:8] opens a transaction: the directory answers it ***");
+	snprintf(state, sizeof(state), "seq=%u", (unsigned)g.cl.club.dlm_seq);
+	conf_dump("dlm_dir_reg", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
+/*
  * rd vms-c55 / rd vms-ac4f: THE LOCK REQUEST, composed the way the shipping
  * send path composes it -- the codec's body, then the cluster's DLM sequence,
  * then the connection manager's envelope on the destination's CSB -- so the
@@ -3074,6 +3120,74 @@ static void test_85f_queued_answer_on_the_wire(void)
 		 (unsigned)r.res_acmode, (unsigned)r.name_len,
 		 (unsigned)r.dir_hash);
 	conf_dump("dlm_enq_ans_queued", 72u, state, ab, VMS_CM_BODY_LEN);
+}
+
+/*
+ * rd vms-1e58 C4: THE MASTER'S DENY (SS$_NOTQUEUED), all 132 bytes described.
+ *
+ * A frame type OVMX had never emitted: the arm used to compose its deny from a
+ * zeroed buffer, and it was unreachable anyway because the master never heard a
+ * requester's NOQUEUE. Now that a real VAX's EX/NOQUEUE reaches the deny, the
+ * answer is the request echoed with the NOTQUEUED record, and every byte gets a
+ * row here before any of it reaches a real lock manager. The REQUEST is
+ * composed by the shipping request builder, as in rd vms-85f's queued answer.
+ */
+static void test_1e58_notqueued_answer_on_the_wire(void)
+{
+	struct vms_dlm_enq_request r;
+	struct vms_csb *m;
+	uint8_t req[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t ans[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *ab = ans + VMS_OFF_SYSAP_BODY;
+	char state[256];
+	uint32_t written = 0;
+
+	printf("\n-- rd vms-1e58: the NOTQUEUED answer's 132 bytes, all "
+	       "described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&r, 0, sizeof(r));
+	r.mode            = 5u;              /* EX, EVPROBE's own mode        */
+	r.req_lkid        = 0x1b000374u;     /* the requester's own handle    */
+	r.req_pid         = 0x20400216u;     /* PID-form: no master handle yet */
+	r.dir_hash        = 0x00027e10u;
+	r.dir_hash_valid  = 1u;
+	r.res_group       = 1u;
+	r.res_acmode      = 3u;
+	r.res_ident_valid = 1u;
+	r.name_len        = 13u;
+	memcpy(r.name, "EVAC$WORKLOAD", 13);
+
+	memset(req, 0, sizeof(req));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, req,
+					   sizeof(req), &written) ==
+		 VMS_CODEC_OK, "the request this master is about to deny");
+	cnxman_envelope_originate(m, req + VMS_OFF_SYSAP_BODY,
+				  CNXMAN_ENV_REQUEST);
+	memset(ans, 0, sizeof(ans));
+	ct_check(vms_dlm_enq_response_build_notqueued(req + VMS_OFF_SYSAP_BODY,
+						      VMS_CM_BODY_LEN, ans,
+						      sizeof(ans), &written) ==
+		 VMS_CODEC_OK, "the NOTQUEUED answer's body");
+	ct_check(vms_dlm_seq_put(ab, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK,
+		 "the cluster's DLM sequence, as on every DLM message");
+	cnxman_envelope_originate(m, ab, CNXMAN_ENV_RESPONSE);
+	ct_check(memcmp(ab + 4u, req + VMS_OFF_SYSAP_BODY + 4u, 4u) == 0 &&
+		 (ab[4] | ab[5] | ab[6] | ab[7]) != 0u,
+		 "*** body[4:8] is the REQUEST's own transaction, echoed -- the "
+		 "old composed deny carried none ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,pid=%u,lkid=%u,group=%u,acmode=%u,namelen=%u,hash=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
+		 (unsigned)r.req_lkid, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash);
+	conf_dump("dlm_enq_ans_notqueued", 72u, state, ab, VMS_CM_BODY_LEN);
 }
 
 /*
@@ -3314,8 +3428,10 @@ int main(void)
 	test_52d_startup_query_answered_from_csb();
 	test_e09_dir_remove_on_the_wire();
 	test_c55_enq_request_on_the_wire();
+	test_fdeb_dir_reg_on_the_wire();
 	test_b67a_sublock_request_on_the_wire();
 	test_85f_queued_answer_on_the_wire();
+	test_1e58_notqueued_answer_on_the_wire();
 	test_194_release_opens_no_transaction();
 	test_a4d7_grant_notify_on_the_wire();
 	test_194_release_on_the_wire();

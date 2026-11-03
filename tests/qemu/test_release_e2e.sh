@@ -280,6 +280,11 @@ run_case() {
         else
             rc=1
         fi
+        # The detail line is PROVISION's NEXT write after the F line; killing the
+        # guest the instant the F line lands raced it out of the log (seen once in
+        # the merge queue, PR #2022). Wait for it too -- bounded -- before the kill;
+        # its presence is still asserted below.
+        [ "$rc" -eq 0 ] && waitfor '%OVMX-I-EXECINIT, no session could ever authenticate as SYSTEM' 30 "$log2" || true
         kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
         record "$tag boot 2: HALTS with '%OVMX-F-EXECINIT, no SYSTEM account'" "$rc"
 
@@ -628,6 +633,11 @@ run_norecord_case() {
     # Whole-log grep is safe: a boot-time diagnostic printed before any prompt
     # exists, so nothing this script typed can have produced it.
     if waitfor '%OVMX-F-EXECINIT, no SYSTEM account' 120 "$log2"; then rc=0; else rc=1; fi
+    # The detail line is PROVISION's NEXT write after the F line; killing the
+    # guest the instant the F line lands raced it out of the log (seen once in
+    # the merge queue, PR #2022). Wait for it too -- bounded -- before the kill;
+    # its presence is still asserted below.
+    [ "$rc" -eq 0 ] && waitfor '%OVMX-I-EXECINIT, no session could ever authenticate as SYSTEM' 30 "$log2" || true
     kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
     record "$tag boot 2: HALTS with '%OVMX-F-EXECINIT, no SYSTEM account'" "$rc"
 

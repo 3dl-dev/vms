@@ -104,6 +104,15 @@ static const struct status_entry known_codes[] = {
      * "code" included. */
     { SS$_ILLIOFUNC,    "SYSTEM", "ILLIOFUNC",    "illegal I/O function code" },
     { SS$_TIMEOUT,      "SYSTEM", "TIMEOUT",      "device timeout" },
+    /* ORACLE-PINNED (rd vms-d0c4): docs/oracle/messages/alpha84-msgcat.txt
+     * "MC 00000290 %SYSTEM-W-REJECT, connect to network object rejected" and
+     * "MC 00002090 %SYSTEM-W-UNREACHABLE, remote node is not currently
+     * reachable" -- the BGn: connect completions for a refused connection and
+     * an unreachable network. */
+    { SS$_REJECT,       "SYSTEM", "REJECT",       "connect to network object rejected" },
+    { SS$_UNREACHABLE,  "SYSTEM", "UNREACHABLE",  "remote node is not currently reachable" },
+    /* ORACLE-PINNED (rd vms-d0c4): alpha84-msgcat.txt "MC 00000838 %SYSTEM-W-DATAOVERUN, data overrun". */
+    { SS$_DATAOVERUN,   "SYSTEM", "DATAOVERUN",   "data overrun" },
     /* ORACLE-PINNED (vms-68c): F$MESSAGE(236) and F$MESSAGE(564) on the
      * reference lab VAX V7.3 render "%SYSTEM-F-ILLEFC, illegal event flag
      * cluster" and "%SYSTEM-F-UNASEFC, unassociated event flag cluster".

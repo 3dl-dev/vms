@@ -271,6 +271,29 @@ long vms_ioctl_bg_setmode_udp(struct vms_proc *proc, unsigned long arg)
  * The address arrives as the first eight bytes of a sockaddr_in, port and v4
  * addr already in network byte order; the backend builds the host sockaddr.
  */
+/*
+ * The VMS condition for a finished connect (rd vms-d0c4). A refused connect, an
+ * unreachable network and a timeout are different answers a TCP/IP Services
+ * program acts on differently (TELNET says "connection refused" versus "network
+ * unreachable"), so they are mapped, not folded into SS$_ABORT; any other
+ * failure stays SS$_ABORT. The backend returns -errno on Linux and +errno on
+ * NetBSD, so the sign is normalised first.
+ */
+static uint32_t vms_bg_connect_status(int rc)
+{
+    int e = rc < 0 ? -rc : rc;
+
+    if (e == 0)
+        return SS__NORMAL;
+    if (e == ECONNREFUSED)
+        return SS__REJECT;
+    if (e == ENETUNREACH || e == EHOSTUNREACH)
+        return SS__UNREACHABLE;
+    if (e == ETIMEDOUT)
+        return SS__TIMEOUT;
+    return SS__ABORT;
+}
+
 long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_bg_connect_args args;
@@ -293,7 +316,7 @@ long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg)
     }
 
     rc = exec_socket_connect(sock, args.sin_family, args.sin_port, args.sin_addr);
-    args.status = rc ? SS__ABORT : SS__NORMAL;
+    args.status = vms_bg_connect_status(rc);
 
 out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
@@ -541,15 +564,22 @@ long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg)
         goto out_copy;
     }
 
-    n = exec_socket_recv(sock, a->data, bufsz);
+    if (a->flags & VMS_BG_IOF_NOW)
+        n = exec_socket_recv_now(sock, a->data, bufsz);
+    else
+        n = exec_socket_recv(sock, a->data, bufsz);
     if (n < 0) {
+        int e = (int)-n;
         a->len = 0;
         /* A receive timeout armed through VMS_BG_SO_RCVTIMEO_MS ends the read
          * with no data: that is SS$_TIMEOUT, not an aborted I/O (vms-a9e7). A
          * socket with no timeout set never sees -EAGAIN here (the read blocks),
          * so TCP behaviour is unchanged. (EWOULDBLOCK == EAGAIN on both Linux
          * and NetBSD.) */
-        a->status = (n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT;
+        if ((e == EAGAIN || e == EWOULDBLOCK) && (a->flags & VMS_BG_IOF_NOW))
+            a->status = SS__ENDOFFILE;  /* IO$M_NOW, nothing queued (vms-a6b) */
+        else
+            a->status = (n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT;
     } else {
         a->len = (uint32_t)n;
         a->status = SS__NORMAL;

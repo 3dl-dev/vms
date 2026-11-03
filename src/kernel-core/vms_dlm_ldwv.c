@@ -411,6 +411,15 @@ int vms_ldwv_is_ours(const struct vms_ldwv *v, uint16_t hash16)
 	return (csid == 0u) ? 1 : 0;
 }
 
+int vms_ldwv_names(const struct vms_ldwv *v, uint16_t hash16, vms_csid_t csid)
+{
+	vms_csid_t at = 0u;
+
+	if (csid == 0u || vms_ldwv_resolve(v, hash16, &at) != VMS_LDWV_OK)
+		return 0;
+	return (at == csid) ? 1 : 0;
+}
+
 /* ==========================================================================
  * The CLUB-facing half: CSV-index order, over real CSBs
  * ========================================================================== */

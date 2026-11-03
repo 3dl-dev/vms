@@ -498,7 +498,47 @@ struct vms_dlm_enq_request {
 	uint16_t res_group;
 	uint8_t  res_acmode;
 	uint8_t  res_ident_valid;
+
+	/*
+	 * THE REQUESTER'S $ENQ OPTIONS, body[28:30], AS RECEIVED (rd vms-1e58
+	 * C4). READ BY THE PARSER ONLY: the builder still writes 0 there (the
+	 * dlm_enq_req body[28:30] `deviation` row, rd vms-6e6), so this field
+	 * says what a received frame carried and nothing about what this node
+	 * sends.
+	 *
+	 * ONE BIT OF IT IS GROUNDED, VMS_DLM_REQ_FLAG_NOQUEUE (below), and only
+	 * that bit is acted on. The rest of the span -- the per-facility option
+	 * sets rd vms-6e6 measured -- is reported as received and interpreted by
+	 * nobody.
+	 */
+	uint16_t lck_flags;
 };
+
+/*
+ * body[28:30] BIT 0x0004 OF A RECEIVED op-0x01 REQUEST IS LCK$M_NOQUEUE (rd
+ * vms-1e58 C4). Wire black-box, two independent readings:
+ *
+ *  1. A DRIVEN ONE-VARIABLE PAIR. tests/lab/ci6/EVACWL.MAR and EVPROBE.MAR
+ *     issue the same $ENQW -- EX, the same name EVAC$WORKLOAD, no
+ *     LCK$M_SYSTEM -- and differ ONLY in FLAGS (0 vs #LCK$M_NOQUEUE, the
+ *     public value 4). On the wire (tests/lab/captures/vms-ci6-evac-20261103,
+ *     ci6-frames.txt) the requests read body[28:30] = 00 00 (frame 5212, real
+ *     VAX1) and 04 00 (frame 7310, real VAX2).
+ *  2. THE ANSWERS REAL MASTERS GIVE, over every committed capture (pinned by
+ *     tools/cluster/dlm_notqueued_answer_census.py --selftest): every real
+ *     DENY (body[34] = 0xfc) answers a request with this bit SET, and every
+ *     real QUEUED (body[34] = 0xfb) answers one with it CLEAR -- op-0x01 and
+ *     op-0x07 alike, never the other way round. A request that may not be
+ *     queued is exactly the one a master may deny.
+ *
+ * Without this, OVMX's master never heard NOQUEUE: the arm left the request's
+ * flags 0, so a real VAX's EX/NOQUEUE against an EX OVMX holds was QUEUED, and
+ * the VAX's $ENQW then completed SS$_NORMAL while OVMX still held EX (the ci.6
+ * C4 failure, frames 7310/7312).
+ */
+#define VMS_DLM_REQ_FLAG_NOQUEUE   0x0004u
+#define VMS_OFF_DLM_REQ_FLAGS      100u  /* body[28:30] LE u16, as received */
+#define VMS_OFB_DLM_REQ_FLAGS      VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REQ_FLAGS)
 
 /*
  * The grant/deny outcome is a message-SHAPE discriminator, not a literal
@@ -686,6 +726,45 @@ vms_codec_status_t vms_dlm_enq_response_build_queued(const uint8_t *req_body,
 						     uint32_t req_lkid,
 						     uint8_t *frame, uint32_t cap,
 						     uint32_t *written);
+
+/*
+ * vms_dlm_enq_response_build_notqueued - a MASTER's DENY of a first ENQ (op
+ * 0x01) that asked LCK$M_NOQUEUE and could not be granted (rd vms-1e58 C4).
+ * The answer a real VAX's $ENQW turns into SS$_NOTQUEUED.
+ *
+ * GROUNDED by tools/cluster/dlm_notqueued_answer_census.py --selftest over the
+ * committed corpus: REAL -> REAL cat-0x02 op-0x01 requests whose answer
+ * carries body[34] = 0xfc, paired by the transaction token at body[4:8].
+ *
+ *   body[32:36] = b8 09 fc .. on EVERY real deny, root and sub-lock alike:
+ *                 0x09b8 is 2488, SS$_NOTQUEUED's own value, and 0xfc is the
+ *                 cat-0x82 outcome byte (0xfa grant, 0xfb queued). body[35]
+ *                 is 0 on the root answers that are not residue-filled.
+ *   body[28:32] = 0 on the ROOT answers: the requested mode at body[30] is
+ *                 CLEARED (spec §4(f).1's deny shape), unlike a QUEUED answer
+ *                 which carries it back.
+ *   EVERYTHING ELSE IS ECHOED: the PID-form placeholder at body[20:24] (no
+ *   lock exists, so there is no master handle to name), the requester's own
+ *   handle at body[24:28], the identity and the counted name -- in full; a
+ *   deny does NOT zero body[52:54] the way a QUEUED answer does.
+ *   ONE ROOT ANSWER of the three instead carries S0-looking bytes at
+ *   body[28:32] and ff at body[35:39]; this node writes the residue-free form
+ *   the other two carry (rd vms-42de: no residue), and every byte has a row
+ *   (dlm_enq_ans_notqueued) in tests/cluster/conformance/frame-grounding.tsv.
+ *
+ * REFUSES, rather than asserting what this node does not hold:
+ *   E_SHORT  a body shorter than the CM body;
+ *   E_CLASS  a body that is not a cat-0x02 op-0x01 request, or a SUB-LOCK
+ *            request (body[36:44] names a parent): every real deny of one
+ *            rewrites body[40:44] with the master's own S0 address.
+ */
+#define VMS_DLM_REPLY_NOTQUEUED           0xfcu
+#define VMS_DLM_NOTQUEUED_REC_VAL         0x00fc09b8u /* body[32:36]          */
+vms_codec_status_t vms_dlm_enq_response_build_notqueued(const uint8_t *req_body,
+							uint32_t req_len,
+							uint8_t *frame,
+							uint32_t cap,
+							uint32_t *written);
 
 /* The immediate answer to a CONVERT a master QUEUED: the request echoed, cat
  * 0x82, body[34] = 0xfb, body[52:54] left zero (rd vms-cab). */
@@ -1258,11 +1337,12 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * manager's, exactly as for vms_dlm_dir_remove_build. The caller passes only a
  * hash the executive holds for that identity (res->hash_known).
  *
- * NOT YET ADDRESSABLE AT A REAL VAX: vms_dlm_shape_fit_for_any_member() still
- * says no to an op-0x0d body. No real VAX has been watched to accept an
- * all-zero residue span from a sender (the nearest are 47 rejoin records whose
- * residue is zero but for body[24] = 0x03, all answered by the real VAX2), and
- * opening that gate is the lab proof's job, not this codec's.
+ * ADDRESSABLE AT A REAL VAX since rd vms-fdeb: vms_dlm_shape_fit_for_any_
+ * member() admits an op-0x0d on its shape, because without it a real directory
+ * holds no entry for a resource OVMX masters after any transition. The nearest
+ * real precedent for the all-zero residue is 47 rejoin records whose residue is
+ * zero but for body[24] = 0x03, all answered by the real VAX2; the lab proof
+ * that a real V7.3 answers OVMX's own is tests/lab/captures/vms-fdeb-*.
  */
 struct vms_dlm_dir_reg {
 	struct vms_dlm_res_ident id;     /* body[44:48+L], body[128:132]      */
@@ -1274,6 +1354,15 @@ struct vms_dlm_dir_reg {
  * length outside 1..31. `*out` written only on VMS_CODEC_OK. */
 vms_codec_status_t vms_dlm_dir_reg_parse_body(const uint8_t *body, uint32_t len,
 					      struct vms_dlm_dir_reg *out);
+
+/* rd vms-fdeb: parse the directory's 82/0d ANSWER to an op-0x0d this node
+ * sent: the echoed identity and DLM sequence into `*out`, body[34] (0xf9 in
+ * every real answer) into `*stamp`. VMS_CODEC_E_CLASS for any other (cat, op),
+ * a body[12:14] other than 0x0001, or a name length outside 1..31. */
+vms_codec_status_t vms_dlm_dir_reg_answer_parse_body(const uint8_t *body,
+						     uint32_t len,
+						     struct vms_dlm_dir_reg *out,
+						     uint8_t *stamp);
 
 /* Build the op-0x0d body for `id` into abs [72,204) of `frame`: cat/op, the
  * identity, the hash, zero elsewhere. VMS_CODEC_E_INVAL for an identity with no

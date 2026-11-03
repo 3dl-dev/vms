@@ -91,6 +91,7 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_eflag.c \
       $CORE/vms_ast.c \
       $CORE/vms_access.c \
+      $CORE/vms_systime.c \
       $CORE/vms_mbx.c \
       $CORE/vms_proctab.c \
       $CORE/vms_lock.c \

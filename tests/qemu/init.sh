@@ -358,28 +358,23 @@ if [ "$CORPUS_RT" = "1" ]; then
         # Each program is a DETACHED process the boot task (SYSTEM) creates,
         # as every suite is (rd vms-a2c): the executive no longer lets a
         # program construct SYSTEM for itself.
-        _t=0
+        # The 40s budget is the BOOT TASK's (RUNB 40): it kills the program and
+        # answers RC 124. Never poll fd 7 with `read -t` (rd vms-84e): busybox
+        # reads the FIFO a byte at a time and, when its deadline lapses
+        # mid-line, drops the bytes it already read -- the next read then
+        # parses the tail of "RC 0" and reports rc= (empty). Every read of the
+        # reply FIFO below is a blocking read of one whole line.
         if [ "$BOOT_OK" = 1 ]; then
-            echo "RUN $prog /tmp/corpus_out.$$ $_args" >&8
+            echo "RUNB 40 $prog /tmp/corpus_out.$$ $_args" >&8
             read -r _tag _pp _pst <&7
-            if [ "${_pp:-0}" != 0 ]; then
-                while ! read -t 1 -r _tag rc <&7; do
-                    _t=$((_t+1))
-                    if [ "$_t" -ge 40 ]; then
-                        kill -KILL "$_pp" 2>/dev/null
-                        read -r _tag rc <&7
-                        break
-                    fi
-                done
-            else
+            if [ "${_pp:-0}" = 0 ]; then
                 echo "%OVMX-F-NOTCREATED, $name was not run: the executive did not create it (CREPRC_PCB status ${_pst:-none})" >/tmp/corpus_out.$$
-                read -r _tag rc <&7
             fi
+            read -r _tag rc <&7
         else
             echo "%OVMX-F-NOTCREATED, $name was not run: the harness boot task is not up" >/tmp/corpus_out.$$
             rc=126
         fi
-        [ "$_t" -ge 40 ] && rc=124
         sig=0
         grep -qE '^%[A-Z0-9_$]+-[EF]-' /tmp/corpus_out.$$ 2>/dev/null && sig=1
         echo "CORPUS-RT $name rc=$rc signaled=$sig" >&4

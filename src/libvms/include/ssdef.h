@@ -128,6 +128,18 @@ extern "C" {
 
 #define SS$_INSFMEM         292     /* Insufficient dynamic memory */
 #define SS$_TIMEOUT         556     /* Device timeout */
+/* ORACLE-PINNED (rd vms-d0c4) from docs/oracle/vax73-starlet-defs/SSDEF.txt:
+ *     $EQU  SS$_REJECT       660
+ *     $EQU  SS$_UNREACHABLE  8340
+ * The BGn: connect completions for a refused connection (ECONNREFUSED) and an
+ * unreachable network/host (ENETUNREACH / EHOSTUNREACH); src/kernel/
+ * vms_internal.h carries the executive's twin (SS__REJECT / SS__UNREACHABLE). */
+#define SS$_REJECT          660     /* Network connect rejected */
+#define SS$_UNREACHABLE     8340    /* Remote node is unreachable */
+/* ORACLE-PINNED (rd vms-d0c4): docs/oracle/vax73-starlet-defs/SSDEF.txt
+ * "$EQU SS$_DATAOVERUN 2104" -- an FTP RETR into a caller buffer that is too
+ * small fails with it rather than truncating the file silently. */
+#define SS$_DATAOVERUN      2104    /* Data overrun */
 /* ORACLE-PINNED (vms-9fc, 2026-07-30) on reference lab node VAX1, OpenVMS
  * VAX V7.3, by the same two documented-tool observations used above:
  *     $EQU  SS$_ILLIOFUNC   244        (LIBRARY/EXTRACT=$SSDEF ... STARLET.MLB)

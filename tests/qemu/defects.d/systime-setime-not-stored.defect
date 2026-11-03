@@ -1,0 +1,43 @@
+# systime-setime-not-stored -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the system time is the executive's: \$SETIME sets the cell every process's \$GETTIM reads (VMS_IOCTL_SYSTIME, rd vms-642)";;
+        targets)      echo "kernel-core/vms_systime.c";;
+        suites_red)   echo "test_syssvc_systime test_syssvc_crtl_time";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_systime() answers \$SETIME SS\$_NORMAL but stores no offset: the privilege check and the delta-time refusal still work, the system time never moves. One assignment, forced to 0.";;
+        require_fail) cat <<'EOF2'
+this process's $GETTIM now reads 1-JAN-2031
+the second process's $GETTIM reads the time this one set
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+... its $GETUTC too (abstime = the set time + the 1582 offset)
+... its $ASCTIM of the current time formats 1-JAN-2031
+... its $CREATE_UID stamps the set time
+... and SYSUAF ages a password against it: a lifetime ending 31-DEC-2030 has expired
+F$TIME in a DCL process is the time this process set
+SHOW TIME in a DCL process shows it as VMS does: '   1-JAN-2031 00:0m:ss', no hundredths
+DCL SET TIME=1-JAN-2032:12:00:00 with OPER and LOG_IO: this process reads 1-JAN-2032 12:00
+time() in another process is the system time $SETIME set (1-JAN-2031)
+EOF2
+                      ;;
+        knock_on_why) cat <<'EOF2'
+Every one reads the system time after a $SETIME (or DCL SET TIME) that the
+mutated executive acknowledged without storing, so each sees the time-of-year
+clock instead of 1-JAN-2031 / 1-JAN-2032; test_syssvc_crtl_time's time() is
+DECC$SHR's $GETUTC, which reads the same system time.
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^            systime_offset = (int64_t)(a.time - exec_time_now_vms());$|            systime_offset = 0; /* NEGCTL systime-setime-not-stored */|' "$_file"
+    :
+}

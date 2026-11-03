@@ -150,6 +150,15 @@ if(TARGET test_syssvc_va)
         ${CMAKE_SOURCE_DIR}/src/vmslink/ovmx_decc_vm.c)
 endif()
 
+# test_syssvc_crtl_exec (rd vms-e70f): the DEC C RTL's exec*/wait/getpid over
+# $CREPRC and the executive (crtl_exec.c), the code DECC$SHR's entries run.
+if(TARGET test_syssvc_crtl_exec)
+    target_sources(test_syssvc_crtl_exec PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_exec.c)
+    target_include_directories(test_syssvc_crtl_exec PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms)
+endif()
+
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
 # condition bridge. DELIBERATELY named test_arith_* (NOT test_syssvc_*): it is an
 # Alpha-only libvms RTL signal primitive, not a /dev/vms executive facility, so

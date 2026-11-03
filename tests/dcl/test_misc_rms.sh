@@ -1,11 +1,12 @@
 #!/bin/bash
 # TEST: DIFFERENCES, SORT, CONVERT and DUMP reach files only through RMS; a file RMS cannot open is reported with the RMS reason (libc-drop vms-0504)
-# EXPECT: contains:%DIFF-E-OPENIN, error opening NOSUCH_A.TXT as input
+# EXPECT: contains:%DIFF-F-OPENIN, error opening SYS$SYSDEVICE:[
+# EXPECT: contains:NOSUCH_A.TXT; as input
 # EXPECT: contains:%SORT-F-OPENIN, error opening NOSUCH_B.TXT as input
 # EXPECT: contains:%CONVERT-E-OPENIN, error opening NOSUCH_C.TXT as input
 # EXPECT: contains:-RMS-E-FNF, file not found
 # EXPECT: contains:SORT_VIA_RMS_OK
-# EXPECT: contains:%DIFF-I-IDENT, files are identical
+# EXPECT: contains:Number of difference sections found: 0
 # EXPECT: contains:DUMP_VIA_RMS_OK
 # EXPECT_NOT: contains:SORT_VIA_RMS_BAD
 # EXPECT_NOT: contains:DUMP_VIA_RMS_BAD

@@ -27,7 +27,12 @@
 # it is silently accepted again. /CONTIGUOUS is a real VMS COPY qualifier OVMX
 # does not implement - honestly rejected (over-restriction), not faked.
 VMSDCL="${VMSDCL:-vmsdcl}"
-TDIR=$(mktemp -d)
+# Staged on the system disk: TYPE reads the outcome only through RMS, never a
+# host path (libc-drop vms-2cbe).
+TNAME="dcl_cpcf_$$"
+TDIR="/vms/$TNAME"
+VDIR="$(echo "$TNAME" | tr a-z A-Z)"
+mkdir -p "$TDIR"
 echo "PAYLOAD" > "$TDIR/src.txt"
-printf 'DEFINE TD "%s"\nSET DEFAULT TD:[000000]\nCOPY/CONFIRM SRC.TXT NOPE.TXT\nN\nCOPY/CONFIRM SRC.TXT YEP.TXT\nY\nTYPE YEP.TXT\nTYPE NOPE.TXT\nCOPY/CONTIGUOUS SRC.TXT CFG.TXT\n' "$TDIR" | $VMSDCL 2>&1
+printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nCOPY/CONFIRM SRC.TXT NOPE.TXT\nN\nCOPY/CONFIRM SRC.TXT YEP.TXT\nY\nTYPE YEP.TXT\nTYPE NOPE.TXT\nCOPY/CONTIGUOUS SRC.TXT CFG.TXT\n' "$VDIR" | $VMSDCL 2>&1
 rm -rf "$TDIR"

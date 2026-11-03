@@ -868,6 +868,8 @@ struct posix_search_context {
                                 /* resultant is DEV:[DIR]NAME (vms-5f0) rather  */
                                 /* than round-tripped through vmsfs_to_vms_spec */
                                 /* (which maps /vms/X/Y -> X:[000000]Y).        */
+    char ver[16];               /* the version the spec asked for ("*", "N"), */
+                                /* or "" when it named none (vms-2cbe)        */
     int  active;                /* Context is valid */
 };
 
@@ -919,6 +921,22 @@ static uint32_t rms_posix_search(void *fab_ptr)
             free(ctx);
             fab->fab$l_sts = RMS$_SYN;
             return RMS$_SYN;
+        }
+
+        /* The version the spec names after its ';' ("*" or a number). The
+         * passthrough stores each version as a literal "name.type;N" entry,
+         * which the version-less glob below cannot match, so an explicit
+         * version is matched separately against that suffix (vms-2cbe: PURGE
+         * searches "NAME.TYP;*"). */
+        {
+            const char *semi = strrchr(expanded, ';');
+            const char *rb = strrchr(expanded, ']');
+            if (semi && (!rb || semi > rb) && semi[1] && strcmp(semi + 1, "0") != 0) {
+                size_t vl = strlen(semi + 1);
+                if (vl >= sizeof(ctx->ver)) vl = sizeof(ctx->ver) - 1;
+                memcpy(ctx->ver, semi + 1, vl);
+                ctx->ver[vl] = '\0';
+            }
         }
 
         /* Preserve the "DEV:[DIR]" of the expanded VMS spec (up to and including
@@ -1047,7 +1065,14 @@ static uint32_t rms_posix_search(void *fab_ptr)
             memcpy(bare, entry->d_name, bl);
             bare[bl] = '\0';
         }
-        if (fnmatch(ctx->pattern, bare, FNM_CASEFOLD) == 0) {
+        int hit = (fnmatch(ctx->pattern, bare, FNM_CASEFOLD) == 0);
+        if (hit && ctx->ver[0] && strcmp(ctx->ver, "*") != 0) {
+            /* An explicit ";N" in the spec selects that version alone. */
+            const char *semi = strrchr(entry->d_name, ';');
+            if (semi && semi[1] && strspn(semi + 1, "0123456789") == strlen(semi + 1))
+                hit = strtol(ctx->ver, NULL, 10) == strtol(semi + 1, NULL, 10);
+        }
+        if (hit) {
             /* Compose the resultant VMS spec DEV:[DIR]NAME (name upper-cased --
              * VMS specs are upper-case; the on-disk entry is lower-case). Prefer
              * the searched device/directory (ctx->vms_prefix); only when it is

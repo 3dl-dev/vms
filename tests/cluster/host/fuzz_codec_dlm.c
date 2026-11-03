@@ -505,7 +505,6 @@ int main(void)
 
     fuzz_body(t_enq_req,   &req,  VMS_DLM_WIREOP_ENQ,           "enq_request_parse_body: 100k, no over-read/crash");
     fuzz_body(t_enq_resp,  &resp, VMS_DLM_WIREOP_ENQ,           "enq_response_parse_body: 100k, no over-read/crash");
-    fuzz_notqueued_answer();
     fuzz_body(t_dir_hash,  &hash, VMS_DLM_WIREOP_REBUILD,       "dir_hash_parse_body: 100k, no over-read/crash");
     fuzz_body(t_rebuild,   &rec,  VMS_DLM_WIREOP_REBUILD,       "rebuild_parse_body: 100k, no over-read/crash");
     fuzz_body(t_deq,       &deq,  VMS_DLM_WIREOP_DEQ,           "deq_parse_body: 100k, no over-read/crash");
@@ -529,5 +528,9 @@ int main(void)
     fuzz_rb_queue_cells();
     fuzz_frame();
 
+    /* rd vms-1e58: LAST, so the fixed-seed stream every fuzzer above draws
+     * from is exactly what it was (fuzz_rb_rec's reachability depends on it,
+     * rd vms-1e58 follow-up). */
+    fuzz_notqueued_answer();
     return ct_summary("fuzz_codec_dlm");
 }

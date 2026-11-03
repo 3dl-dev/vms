@@ -1077,11 +1077,14 @@ static int write_impl(struct dcl_command *cmd)
              * DCL's own output already holds open when it is that one
              * (rd vms-1b6a). */
             if (dcl_ppf_routed_to_file(is_err, equiv)) {
+                /* DCL's own record on its process-permanent file: the same
+                 * WRITE as to the terminal (on VMS both are a $PUT on the
+                 * PPF's RAB), so the same $STATUS, %X00000001 (rd vms-a6ce) */
                 if (is_err)
                     dcl_err_printf("%s\n", text);
                 else
                     dcl_out_printf("%s\n", text);
-                return (int)RMS$_NORMAL;
+                return SS$_NORMAL;
             }
             uint32_t ost = RMS$_NORMAL;
             struct dcl_rms_writer *w = dcl_rms_write_append(ctx, equiv, &ost);

@@ -1,4 +1,5 @@
 #!/bin/bash
+# DCL_OUTPUT: stdio vms-380f an image/PIPE segment DCL runs does not yet write the parent's file SYS$OUTPUT
 # TEST: MAIL refuses an unrecognized qualifier before MAIL.EXE is entered, and forwards
 # the one it honours as /NAME=value (not the bare name) (vms-097).
 # EXPECT: contains:%DCL-W-IVQUAL

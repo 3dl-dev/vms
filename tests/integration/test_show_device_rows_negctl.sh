@@ -36,6 +36,12 @@ set -u
 
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 GATE="$SRC_ROOT/tests/integration/test_show_device_rows.sh"
+# The gate reads DCL's output through RMS (rd vms-a6ce): each DCL it runs is
+# dcl_rms_run (DCL_RMS_RUN, set by ctest) wrapping the mutant DCL_RMS_REAL.
+if [ ! -x "${DCL_RMS_RUN:-}" ]; then
+    echo "FAIL: DCL_RMS_RUN (the build's dcl_rms_run) is not set or not executable"
+    exit 1
+fi
 status=0
 passed=0
 failed=0
@@ -99,7 +105,7 @@ build_dcl() {
 # POSITIVE CONTROL. Without it a red below could be the sandbox being broken
 # rather than the mutation being caught, and would prove nothing.
 # ---------------------------------------------------------------------------
-if build_dcl && sh "$GATE" "$BUILD/bin/DCL.EXE" >"$WORK/pos.log" 2>&1; then
+if build_dcl && DCL_RMS_REAL="$BUILD/bin/DCL.EXE" sh "$GATE" "$DCL_RMS_RUN" >"$WORK/pos.log" 2>&1; then
     echo "  PASS: positive control - unmutated sandbox DCL passes the gate"
     passed=$((passed + 1))
 else
@@ -119,7 +125,7 @@ expect_red() {
         tail -20 "$WORK/build.log" | sed 's/^/          | /'
         failed=$((failed + 1)); status=1; restore; return
     fi
-    out=$(sh "$GATE" "$BUILD/bin/DCL.EXE" 2>&1)
+    out=$(DCL_RMS_REAL="$BUILD/bin/DCL.EXE" sh "$GATE" "$DCL_RMS_RUN" 2>&1)
     rc=$?
     ok=1; why=""
     if [ "$rc" -eq 0 ]; then
@@ -166,8 +172,11 @@ inject '{ struct vms_devinfo fab; int fr = 0; memset(&fab, 0, sizeof(fab)); strc
 # --- B. ...and in a format nobody has used yet ---------------------------
 # The point of a property gate is that it does not need to have seen the
 # format before. This row shares no token, no column geometry and no helper
-# with anything in the file.
-inject 'puts("console device: opa0 [up]");' \
+# with anything in the file. It is written the one way DCL output leaves DCL,
+# its sink (dcl_out.c): a raw stdio puts() is not DCL output -- the gate reads
+# DCL's SYS$OUTPUT records through RMS (rd vms-a6ce), where a puts() to the
+# substrate stdout never arrives, and test_no_libc_io.sh refuses one anyway.
+inject 'dcl_out_puts("console device: opa0 [up]");' \
     && expect_red "B: a row in a format the gate has never seen" \
         "$R_ROW" "$R_VERDICT"
 

@@ -1089,6 +1089,15 @@ if(BUILD_TESTS)
     set_tests_properties(env_identity_census_negctl PROPERTIES
         LABELS "integration;authenticity;slow" TIMEOUT 180)
 
+    # DCL's output in these behavioural gates is read through RMS (rd
+    # vms-a6ce): the DCL each gate runs is dcl_rms_run (tests/dcl), which
+    # starts DCL_RMS_REAL with SYS$OUTPUT/SYS$ERROR assigned to a disk file and
+    # hands back the records rms_read_records $GETs from it. The gate scripts
+    # are unchanged; their stdout/stderr are those records. (foreign_command_
+    # dispatch_gate runs an image whose output does not yet reach the file:
+    # rd vms-380f.)
+    set(DCL_RMS_RUN ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dcl_rms_run)
+
     # The BEHAVIOURAL half of the same rule (vms-fb9 round 2), and the one
     # that actually carries the invariant. The two source scans above check
     # that named tokens are absent; an adversary reintroduced SHOW DEVICE's
@@ -1098,8 +1107,9 @@ if(BUILD_TESTS)
     # which no re-spelling of the fabrication can satisfy.
     add_test(NAME show_device_rows_gate
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_device_rows.sh
-                $<TARGET_FILE:vmsdcl>)
+                ${DCL_RMS_RUN})
     set_tests_properties(show_device_rows_gate PROPERTIES
+        ENVIRONMENT "DCL_RMS_REAL=$<TARGET_FILE:vmsdcl>"
         LABELS "integration;authenticity" TIMEOUT 60)
 
     # ...and its evasions, which BUILD mutant DCLs (including the exact
@@ -1109,6 +1119,7 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_device_rows_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(show_device_rows_negctl PROPERTIES
+        ENVIRONMENT "DCL_RMS_RUN=${DCL_RMS_RUN}"
         LABELS "integration;authenticity" TIMEOUT 300)
 
     # SHOW CLUSTER answers from the EXECUTIVE, and says so honestly when there
@@ -1123,8 +1134,9 @@ if(BUILD_TESTS)
     # the connection manager's CLUB/CSB table through /dev/vms.
     add_test(NAME show_cluster_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_cluster_negctl.sh
-                $<TARGET_FILE:vmsdcl>)
+                ${DCL_RMS_RUN})
     set_tests_properties(show_cluster_negctl PROPERTIES
+        ENVIRONMENT "DCL_RMS_REAL=$<TARGET_FILE:vmsdcl>"
         LABELS "integration;authenticity;cluster" TIMEOUT 60)
 
     # The retirement itself, asserted rather than assumed (FC-P3.9's own
@@ -1147,8 +1159,9 @@ if(BUILD_TESTS)
     # correct for positives).
     add_test(NAME show_symbol_longword_gate
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_symbol_longword.sh
-                $<TARGET_FILE:vmsdcl>)
+                ${DCL_RMS_RUN})
     set_tests_properties(show_symbol_longword_gate PROPERTIES
+        ENVIRONMENT "DCL_RMS_REAL=$<TARGET_FILE:vmsdcl>"
         LABELS "integration;authenticity" TIMEOUT 60)
 
     # ...and the proof that each of its four assertions carries a defect. Three
@@ -1169,6 +1182,7 @@ if(BUILD_TESTS)
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_symbol_longword_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_BINARY_DIR})
     set_tests_properties(show_symbol_longword_negctl PROPERTIES
+        ENVIRONMENT "DCL_RMS_RUN=${DCL_RMS_RUN}"
         LABELS "integration;authenticity" TIMEOUT 120)
 
     # The OPCOM record OVMX writes carries the MESSAGE (rd vms-2d37). $SNDOPR
@@ -1183,8 +1197,9 @@ if(BUILD_TESTS)
     # absence of the bad bytes.
     add_test(NAME opcom_record_body_gate
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_opcom_record_body.sh
-                $<TARGET_FILE:vmsdcl>)
+                ${DCL_RMS_RUN})
     set_tests_properties(opcom_record_body_gate PROPERTIES
+        ENVIRONMENT "DCL_RMS_REAL=$<TARGET_FILE:vmsdcl>"
         LABELS "integration;authenticity" TIMEOUT 60
         # vms-ed4: reads a GLOBAL recency-ordered OPERATOR.LOG view across all of
         # /vms and /tmp (find /vms /tmp -iname OPERATOR.LOG -newer $STAMP). Any
@@ -1204,8 +1219,9 @@ if(BUILD_TESTS)
     if(BUILD_TOOLS)
         add_test(NAME monitor_process_source_gate
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_monitor_process_source.sh
-                    $<TARGET_FILE:vms_monitor> $<TARGET_FILE:vmsdcl>)
+                    $<TARGET_FILE:vms_monitor> ${DCL_RMS_RUN})
         set_tests_properties(monitor_process_source_gate PROPERTIES
+        ENVIRONMENT "DCL_RMS_REAL=$<TARGET_FILE:vmsdcl>"
             LABELS "integration;authenticity" TIMEOUT 120)
 
         # ...and the proof it can go red: a sandbox MONITOR with the /proc scan
@@ -1213,8 +1229,9 @@ if(BUILD_TESTS)
         # Builds one tool target in a sandbox -- cmake required.
         add_test(NAME monitor_process_source_negctl
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_monitor_process_source_negctl.sh
-                    ${CMAKE_CURRENT_SOURCE_DIR} $<TARGET_FILE:vmsdcl>)
+                    ${CMAKE_CURRENT_SOURCE_DIR} ${DCL_RMS_RUN})
         set_tests_properties(monitor_process_source_negctl PROPERTIES
+            ENVIRONMENT "DCL_RMS_REAL=$<TARGET_FILE:vmsdcl>"
             LABELS "integration;authenticity" TIMEOUT 300)
     endif()
 
@@ -1384,9 +1401,10 @@ if(BUILD_TESTS)
     if(TARGET PARTS)
     add_test(NAME parts_setup_gate
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_parts_setup.sh
-                $<TARGET_FILE:vmsdcl> $<TARGET_FILE:PARTS>
+                ${DCL_RMS_RUN} $<TARGET_FILE:PARTS>
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(parts_setup_gate PROPERTIES
+        ENVIRONMENT "DCL_RMS_REAL=$<TARGET_FILE:vmsdcl>"
         LABELS "integration;parts" TIMEOUT 60)
 
     # Foreign-command dispatch (vms-96e): "SYM :== $image" then a BARE "SYM

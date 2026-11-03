@@ -732,6 +732,52 @@ static int process_line(struct dcl_context *ctx, char *line)
 }
 
 /*
+ * PROCESS-PERMANENT FILES THE CREATOR NAMES (rd vms-a6ce).
+ *
+ * WHAT VMS DOES. The creator of a process names its SYS$OUTPUT and SYS$ERROR
+ * -- $CREPRC's output and error arguments, RUN /OUTPUT= /ERROR=, a batch
+ * job's log -- and the new process starts with those process-permanent
+ * logical names (executive mode, LNM$PROCESS_TABLE) already defined. DCL then
+ * writes its records there.
+ *
+ * WHAT THIS DOES. With an executive, $CREPRC defines them in the executive's
+ * process table before DCL runs (sys_process.c creprc_define_stream). A
+ * creator with no executive behind it -- the host test harness, which has no
+ * $CREPRC to call -- names them on the command line instead:
+ *     DCL.EXE --output <vms-filespec> --error <vms-filespec> [usual args]
+ * Leading options only (a P-parameter spelled "--output" is never taken), and
+ * removed from argv so -c / script mode see their usual argv[1]. Each defines
+ * the process-permanent name exactly as $CREPRC does; dcl_out_bind_ppf() then
+ * routes DCL's records to that file through RMS $PUT when nothing in the
+ * substrate already carries the stream (it is the null device).
+ */
+static int take_ppf_args(int argc, char **argv)
+{
+    static const char *const opt[2]    = { "--output", "--error" };
+    static const char *const lognam[2] = { "SYS$OUTPUT", "SYS$ERROR" };
+    int first = 1;
+
+    while (first + 1 < argc) {
+        int k = strcmp(argv[first], opt[0]) == 0 ? 0
+              : strcmp(argv[first], opt[1]) == 0 ? 1 : -1;
+        if (k < 0)
+            break;
+        lnm_manager_t *mgr = lnm_get_manager();
+        if (mgr)
+            (void)lnm_create(mgr, LNM_PROCESS_TABLE, lognam[k], argv[first + 1],
+                             0, LNM_MODE_EXEC);
+        first += 2;
+    }
+    if (first == 1)
+        return argc;
+    int n = 1;
+    for (int i = first; i < argc; i++)
+        argv[n++] = argv[i];
+    argv[n] = NULL;
+    return n;
+}
+
+/*
  * Main REPL loop.
  */
 int main(int argc, char *argv[])
@@ -739,6 +785,7 @@ int main(int argc, char *argv[])
     /* Initialize context */
     dcl_context_init(&dcl_ctx);
     setup_session(&dcl_ctx);
+    argc = take_ppf_args(argc, argv);
 
     /* Establish and register DCL's P1 control region (vms-68f.v). This lays
      * the process-permanent control block whose extent $GETJPI reports and

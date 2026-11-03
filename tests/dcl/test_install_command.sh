@@ -1,4 +1,5 @@
 #!/bin/bash
+# DCL_OUTPUT: stdio vms-380f an image/PIPE segment DCL runs does not yet write the parent's file SYS$OUTPUT
 # TEST: DCL's INSTALL builtin reaches the real SYS$SYSTEM:INSTALL.EXE
 # (src/install/install.c), and with no executive that utility fails honestly
 # (rd vms-220).

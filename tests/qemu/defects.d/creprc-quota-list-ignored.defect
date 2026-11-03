@@ -11,9 +11,9 @@ defect_meta() {
         isolation)    echo "isolated";;
         why)          echo "vms_ioctl_creprc_pcb ignores the quota list: the new process is never given a sourced PGFLQUOTA, so va_quota_check never refuses it. One condition, forced off.";;
         require_fail) cat <<'EOF'
-creprc: a PQL$_PGFLQUOTA of 4096 sources the subprocess's PGFLQUOTA; $EXPREG past it is SS$_EXQUOTA
-creprc: a PGFLQUOTA below PQL_MPGFLQUOTA is clamped up to 2048
-creprc: a list without PGFLQUOTA takes PQL_DPGFLQUOTA (65536)
+creprc: a listed PQL$_PGFLQUOTA of 5000 sources the subprocess's PGFLQUOTA; $EXPREG past it is SS$_EXQUOTA
+creprc: a listed PGFLQUOTA below the loaded PQL_MPGFLQUOTA is clamped up to it (3000)
+creprc: a list without PGFLQUOTA takes the loaded PQL_DPGFLQUOTA (6000)
 EOF
                       ;;
         knock_on_fail) echo "";;

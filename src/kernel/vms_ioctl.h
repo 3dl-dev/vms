@@ -3173,15 +3173,10 @@ struct vms_ident_args {
 #define VMS_CREPRC_PCB_F_LOGIN    0x100u
 /* OR'd into flags (rd vms-89dd8): $CREPRC was given a quota list. `pgflquota`
  * carries PQL$_PGFLQUOTA from it (0 = the list did not name one); the executive
- * sources the new process's PGFLQUOTA from it, else PQL_DPGFLQUOTA, clamped up
- * to PQL_MPGFLQUOTA, and marks the quota block sourced (va_quota_check). */
+ * sources the new process's PGFLQUOTA from it, else the LOADED SYSGEN
+ * PQL_DPGFLQUOTA, clamped up to the loaded PQL_MPGFLQUOTA (VMS_IOCTL_PQL_LOAD;
+ * never loaded = left unsourced), and marks the quota block sourced (va_quota_check). */
 #define VMS_CREPRC_PCB_F_QUOTA    0x800u
-/* SYSGEN PQL_DPGFLQUOTA / PQL_MPGFLQUOTA (pagelets): the default and minimum
- * PGFLQUOTA of a process whose creator gave a quota list. The OpenVMS Alpha
- * V8.4 parameter defaults (OpenVMS System Management Utilities Reference,
- * SYSGEN PQL_ parameters); OVMX has no SYSGEN parameter store to override them. */
-#define VMS_PQL_DPGFLQUOTA        65536u
-#define VMS_PQL_MPGFLQUOTA        2048u
 #define VMS_CREPRC_PCB_F_NETWORK  0x400u   /* detached: PRC$M_NETWRK, a network object's server (JPI$K_NETWORK) */
 /* OR'd into flags with SUBPROCESS (rd vms-a2c): the subprocess takes the
  * given identity (username/uic/privs) instead of its creator's -- $CREPRC's
@@ -3226,6 +3221,23 @@ struct vms_creprc_sync_args {
     uint32_t pad[2];
 };
 #define VMS_IOCTL_CREPRC_SYNC _IOWR(VMS_IOC_MAGIC, 0xc6, struct vms_creprc_sync_args)
+
+/*
+ * VMS_IOCTL_PQL_LOAD (rd vms-89dd8) -- hand the executive the SYSGEN
+ * PQL_DPGFLQUOTA / PQL_MPGFLQUOTA (pagelets) $CREPRC uses for a process whose
+ * creator gave a quota list. STARTUP.EXE issues it at boot from
+ * SYS$SYSTEM:OVMXVMSSYS.PAR; the executive holds no value of its own, so until
+ * it is called (or after VMS_PQL_LOAD_F_CLEAR) a quota-list child is left
+ * unsourced. Needs CMKRNL, as loading SYSGEN state does.
+ */
+#define VMS_PQL_LOAD_F_CLEAR      1u    /* forget the loaded pair (never-loaded state) */
+struct vms_pql_load_args {
+    uint32_t dpgflquota;                  /* in: PQL_DPGFLQUOTA, pagelets      */
+    uint32_t mpgflquota;                  /* in: PQL_MPGFLQUOTA, pagelets      */
+    uint32_t flags;                       /* in: VMS_PQL_LOAD_F_*              */
+    uint32_t status;                      /* out: SS$_ status                  */
+};
+#define VMS_IOCTL_PQL_LOAD _IOWR(VMS_IOC_MAGIC, 0xc5, struct vms_pql_load_args)
 
 
 /*

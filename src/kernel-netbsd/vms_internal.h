@@ -1621,6 +1621,7 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_creprc_sync(struct vms_proc *proc, unsigned long arg);
 void vms_creprc_sync_init(void);
 void vms_creprc_sync_cleanup(void);
+long vms_ioctl_pql_load(struct vms_proc *proc, unsigned long arg);   /* rd vms-89dd8 */
 /* Substrate half of creator-driven creation (rd vms-c43): vms_module.c (Linux),
  * vms_netbsd.c (NetBSD). */
 uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,

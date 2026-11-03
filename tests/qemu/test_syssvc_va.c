@@ -137,7 +137,14 @@ static int creprc_child(const char *out, unsigned int want)
     int fd, bad = 0;
 
     snprintf(buf, sizeof buf, "creprc child: ");
-    if (!(q(&a) && a.quota_sourced == 1 && a.pgflquota == want)) {
+    if (want == 0) {                    /* nothing loaded: left unsourced */
+        if (q(&a) && a.quota_sourced == 0 && sys$expreg(64, r, 0, 0) == SS$_NORMAL)
+            snprintf(buf, sizeof buf, "OK\n");
+        else {
+            bad++;
+            snprintf(buf, sizeof buf, "BAD: sourced=%u, want unsourced\n", a.quota_sourced);
+        }
+    } else if (!(q(&a) && a.quota_sourced == 1 && a.pgflquota == want)) {
         bad++;
         snprintf(buf, sizeof buf, "BAD: sourced=%u pgflquota=%llu want=%u\n",
                  q(&a) ? a.quota_sourced : 99u, (unsigned long long)a.pgflquota, want);
@@ -202,31 +209,47 @@ static const char *creprc_probe(const void *quota, unsigned int want, char *rep,
     (unsigned char)((val) & 0xFF), (unsigned char)(((val) >> 8) & 0xFF), \
     (unsigned char)(((val) >> 16) & 0xFF), (unsigned char)(((val) >> 24) & 0xFF)
 
+/* The SYSGEN pair this test loads into the executive (distinct from any real
+ * system's, so a hard-coded default cannot pass): default 6000, minimum 3000. */
+#define T_DPG 6000u
+#define T_MPG 3000u
+
 static void test_creprc_quota(void)
 {
     char rep[256];
-    static const unsigned char q4096[] = { QENT(PQL$_PGFLQUOTA, 4096u), PQL$_LISTEND, 0,0,0,0 };
+    static const unsigned char q5000[] = { QENT(PQL$_PGFLQUOTA, 5000u), PQL$_LISTEND, 0,0,0,0 };
     static const unsigned char qlow[]  = { QENT(PQL$_PGFLQUOTA, 100u), PQL$_LISTEND, 0,0,0,0 };
     static const unsigned char qother[] = { QENT(PQL$_FILLM, 50u), PQL$_LISTEND, 0,0,0,0 };
     static const unsigned char qbad[]  = { QENT(99, 1u), PQL$_LISTEND, 0,0,0,0 };
     struct dsc$descriptor_s img = { 4, 14, 1, (char *)"/x" };
     uint32_t pid = 0;
 
-    creprc_probe(q4096, 4096, rep, sizeof rep);
+    check((vms_kif_pql_load(T_DPG, T_MPG, 0) & 1) != 0,
+          "creprc: the executive accepts a SYSGEN PQL_DPGFLQUOTA/PQL_MPGFLQUOTA pair (6000/3000)");
+
+    creprc_probe(q5000, 5000, rep, sizeof rep);
     /* negctl: creprc-quota-list-ignored */
     check(strcmp(rep, "OK\n") == 0,
-          "creprc: a PQL$_PGFLQUOTA of 4096 sources the subprocess's PGFLQUOTA; $EXPREG past it is SS$_EXQUOTA");
+          "creprc: a listed PQL$_PGFLQUOTA of 5000 sources the subprocess's PGFLQUOTA; $EXPREG past it is SS$_EXQUOTA");
     if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);
-    creprc_probe(qlow, 2048, rep, sizeof rep);
+    creprc_probe(qlow, T_MPG, rep, sizeof rep);
     check(strcmp(rep, "OK\n") == 0,
-          "creprc: a PGFLQUOTA below PQL_MPGFLQUOTA is clamped up to 2048");
+          "creprc: a listed PGFLQUOTA below the loaded PQL_MPGFLQUOTA is clamped up to it (3000)");
     if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);
-    creprc_probe(qother, 65536, rep, sizeof rep);
+    creprc_probe(qother, T_DPG, rep, sizeof rep);
+    /* negctl: creprc-pql-default-hardcoded */
     check(strcmp(rep, "OK\n") == 0,
-          "creprc: a list without PGFLQUOTA takes PQL_DPGFLQUOTA (65536)");
+          "creprc: a list without PGFLQUOTA takes the loaded PQL_DPGFLQUOTA (6000)");
     if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);
     check(sys$creprc(&pid, &img, NULL, NULL, NULL, NULL, qbad, NULL, 0, 0, 0, 0) == SS$_BADPARAM,
           "creprc: an unknown PQL$_ code in the list is SS$_BADPARAM");
+
+    check((vms_kif_pql_load(0, 0, VMS_PQL_LOAD_F_CLEAR) & 1) != 0,
+          "creprc: the loaded pair can be cleared (the executive's never-loaded state)");
+    creprc_probe(q5000, 0, rep, sizeof rep);
+    check(strcmp(rep, "OK\n") == 0,
+          "creprc: with no SYSGEN pair loaded the executive invents none: the child is left unsourced");
+    if (strcmp(rep, "OK\n")) printf("    child said: %s\n", rep);
 }
 
 int main(void)

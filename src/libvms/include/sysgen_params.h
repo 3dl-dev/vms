@@ -80,6 +80,22 @@
 #define SYSGEN_DEFAULT_CLUSTER_CREDITS  10u
 
 /*
+ * PQL_DPGFLQUOTA / PQL_MPGFLQUOTA (rd vms-89dd8): the default and the minimum
+ * paging-file quota $CREPRC gives a process whose creator named a quota list
+ * (pagelets). GROUNDED: SYSBOOT> SHOW on a live OpenVMS Alpha node (lab
+ * alphalab-0/alpha1) prints PQL_DPGFLQUOTA current/default 131072, min 4096,
+ * max -1, Pagelets, Dynamic; PQL_MPGFLQUOTA current/default 4096, min 4096,
+ * max -1, Pagelets, Dynamic (capture: docs/oracle/, rd vms-c746). Defined once
+ * for tools/vms_sysgen.c's table and ovmx_init.c's boot load of the executive
+ * (a .PAR that predates the record takes the table default, as above).
+ * "Max -1" is no maximum: struct sysgen_param has a uint32 max, so the table
+ * carries SYSGEN_NO_MAX (0xFFFFFFFF) for it. */
+#define SYSGEN_DEFAULT_PQL_DPGFLQUOTA   131072u
+#define SYSGEN_DEFAULT_PQL_MPGFLQUOTA   4096u
+#define SYSGEN_PQL_PGFLQUOTA_MIN        4096u
+#define SYSGEN_NO_MAX                   0xFFFFFFFFu
+
+/*
  * OVMX_CLEAN_DEPART's default (rd vms-abd), here for the SAME reason and with
  * the SAME hazard as CLUSTER_CREDITS above.
  *

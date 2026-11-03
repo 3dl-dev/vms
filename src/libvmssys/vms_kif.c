@@ -2411,6 +2411,20 @@ uint32_t vms_kif_brkauth(uint32_t sndtyp)
     return args.status;
 }
 
+/* VMS_IOCTL_PQL_LOAD (rd vms-89dd8): give the executive the SYSGEN
+ * PQL_DPGFLQUOTA/PQL_MPGFLQUOTA pair; flags VMS_PQL_LOAD_F_CLEAR forgets it. */
+uint32_t vms_kif_pql_load(uint32_t dpgflquota, uint32_t mpgflquota, uint32_t flags)
+{
+    struct vms_pql_load_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.dpgflquota = dpgflquota;
+    args.mpgflquota = mpgflquota;
+    args.flags = flags;
+    KIF_CALL(VMS_IOCTL_PQL_LOAD, &args);
+    return args.status;
+}
+
 /* $CREPRC's creator creates the new process's PCB (rd vms-c43): `child_pid`
  * is the substrate pid of the task it forked and holds; flags =
  * VMS_CREPRC_PCB_SUBPROCESS (identity from the creator) or _DETACHED (the

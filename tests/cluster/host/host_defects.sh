@@ -344,7 +344,8 @@ dlm-b4d-undirected-answers-you
 dlm-b4d-undirected-answers-you-fuzz
 dlm-departed-holder-locks-kept
 dlm-1e58-noqueue-not-read
-dlm-1e58-deny-record-not-written"
+dlm-1e58-deny-record-not-written
+tt-oper-line-splices-write"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -3958,6 +3959,26 @@ EOF
                       ;;
         esac;;
 
+    tt-oper-line-splices-write)
+        case "$_f" in
+        facility)     echo "an executive operator line never splits a write request going out on the terminal (vms_tt_oper.h vms_tt_oper_submit, rd vms-896d): it is held until the request ends, then written on a line of its own, CR LF after it, as VMS's terminal driver writes a message to a terminal";;
+        targets)      echo "kernel-core/vms_tt_oper.h";;
+        suites_red)   echo "test_tt_oper";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_tt_oper_submit() stops holding a line while a write request is going out (if (writing) -> if (0 && writing)): the line is written the moment it arrives, between two pieces of the request -- the P0-proof console where OPCOM's operator-status record was cut at 'OPER9, OP' and its rest glued on as 'system OVMXBER10,', which the visitor gate read as NOT CN=3.";;
+        require_fail) hd_lines <<'EOF'
+OPCOM's whole record, then the executive line on a line of its own, CR LF after it
+OPCOM's record is not split ('OPER9, OPER10,' intact)
+cuts at which the console differs from record-then-line
+nothing written while the request goes out
+both lines follow the write, in arrival order, each on its own line
+a piece ending is not the request ending
+the hold is bounded
+... and keeps the line held
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -3975,6 +3996,10 @@ EOF
 apply_edit() {
     _file="$1"; _d="$2"
     case "$_d" in
+    tt-oper-line-splices-write)
+        # `\tif (writing) {` is unique in vms_tt_oper.h.
+        sed -i 's|^\tif (writing) {$|\tif (0 \&\& writing) { /* NEGCTL tt-oper-line-splices-write */|' "$_file";;
+
     dlm-f29f-deferred-grant-not-read)
         # The GRANT dispatch with that exact spelling is unique in the file.
         sed -i 's|\treturn dq_dispatch(f, r, DLM_REQ_EV_GRANT, \&e);|\treturn DLM_REQ_E_NOLOCK; /* NEGCTL dlm-f29f-deferred-grant-not-read */|' "$_file";;

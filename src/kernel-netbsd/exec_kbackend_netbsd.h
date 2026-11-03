@@ -1127,7 +1127,18 @@ void exec_wait_ms(uint32_t ms);
  * the patch's "operator line" flag, so it still reaches the console. On a
  * kernel without the patch TOCONSOP is an unknown bit that kprintf ignores,
  * and this degrades to an ordinary console printf. __printflike keeps the
- * compiler checking every call site, the reason this used to be a macro. */
+ * compiler checking every call site, the reason this used to be a macro.
+ *
+ * rd vms-896d: once OPA0:'s class driver is bound, the console line goes
+ * THROUGH it (vms_tt_oper_line, src/kernel-core/vms_tt_oper.h), not around it.
+ * Written straight to the console, it landed between two pieces of a write
+ * request still going out on OPA0: -- OPCOM's operator-status message -- and
+ * the rest of that record was glued to the end of it ("system OVMXBER10,").
+ * The class driver holds it until the write request ends and writes it on a
+ * line of its own, CR LF after it, as VMS's terminal driver does. The direct
+ * write below stays for what the class driver cannot take: boot, before
+ * OPA0: is bound, and a hardware-interrupt caller (its lock is adaptive). */
+int vms_tt_oper_line(const char *line);      /* src/kernel-core/vms_tt.c */
 #include <sys/kprintf.h>   /* TOCONS, TOLOG, NOTSTAMP */
 #include "vms_cluster_opa0.h"
 #ifndef TOCONSOP
@@ -1164,6 +1175,8 @@ exec_console_printf(const char *fmt, ...)
 	n = strlen(line);
 	while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r'))
 		line[--n] = '\0';
+	if (!cpu_intr_p() && vms_tt_oper_line(line))
+		return;
 	exec_console_opa0_put("\n%s", line);
 }
 

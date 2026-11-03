@@ -33,6 +33,7 @@
 #include "exec_kbackend.h"
 #include "exec_list.h"
 #include "vms_tt.h"
+#include "vms_tt_oper.h"
 #include "vms_prot.h"
 
 #define VMS_DC_TERM 66   /* DC$_TERM (dcdef.h; vms_devtab.c DC__TERM) */
@@ -115,6 +116,12 @@ struct vms_tt {
 	int      ctrlo;            /* CTRL/O: output is being discarded */
 	int      rd_astpend;       /* an AST for the reader's process is queued */
 	int      rd_disturbed;     /* output broke through the read: redisplay */
+
+	/* WRITE REQUESTS GOING OUT (rd vms-896d): an executive operator line
+	 * arriving while one is goes out when the last one ends, never inside
+	 * it (vms_tt_oper.h). */
+	uint32_t wr_reqs;
+	struct vms_tt_oper oper;
 };
 
 /* ------------------------------------------------------------------ */
@@ -1352,6 +1359,113 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 }
 
 /*
+ * The read in progress, shown again after output broke through it: the owed
+ * line feed, its prompt, what was typed so far (rd vms-f0fb, vms-53a; probe
+ * OB.PROMPT T2). Under tt->lock.
+ */
+static void tt_reshow_read(struct vms_tt *tt)
+{
+	if (tt->pos == TT_POS_CR && tt_echoing(tt)) {
+		tt_out1(tt, CH_LF);
+		tt->rec_open = 0;
+	}
+	if (tt->promptsz)
+		tt_prompt_out(tt, tt->prompt, tt->promptsz);
+	if (tt_echoing(tt))
+		tt_out(tt, tt->line, tt->len);
+}
+
+/* The cursor stands at column 0 of an empty line: a new line costs nothing. */
+static int tt_at_fresh_line(const struct vms_tt *tt)
+{
+	return tt->pos == TT_POS_FRESH || tt->pos == TT_POS_CLEAN;
+}
+
+/* Bytes the driver itself just framed at the end of obuf: count them in,
+ * tracking the cursor through them. Under tt->lock. */
+static void tt_obuf_commit(struct vms_tt *tt, uint32_t n)
+{
+	uint32_t i;
+
+	for (i = 0; i < n; i++)
+		tt_track(tt, tt->obuf[tt->olen + i]);
+	tt->olen += n;
+}
+
+/*
+ * WRITE REQUESTS (rd vms-896d). A write request -- one $QIO write, one
+ * write(2) on the line -- is begun and ended around ALL of its pieces, however
+ * the caller cuts it up; vms_tt_write brackets each piece too, so a writer
+ * that is one piece needs nothing more. While any request is going out, an
+ * executive operator line is held (vms_tt_oper_line); when the last one ends,
+ * the held lines go out after it, each on its own line, and a read in progress
+ * is shown again.
+ */
+void vms_tt_write_begin(struct vms_tt *tt)
+{
+	exec_lock(&tt->lock);
+	tt->wr_reqs++;
+	exec_unlock(&tt->lock);
+}
+
+void vms_tt_write_end(struct vms_tt *tt)
+{
+	uint32_t k = 0;
+
+	exec_lock(&tt->lock);
+	if (tt->wr_reqs > 0 && --tt->wr_reqs == 0 && tt->oper.len) {
+		k = vms_tt_oper_release(&tt->oper, tt_at_fresh_line(tt),
+					tt->obuf + tt->olen, VMS_TT_OBUF - tt->olen);
+		tt_obuf_commit(tt, k);
+		if (k && tt->rd_busy && !tt->rd_done && !tt->passall)
+			tt_reshow_read(tt);
+	}
+	exec_unlock(&tt->lock);
+	if (k)
+		tt_flush(tt);
+}
+
+/*
+ * vms_tt_oper_line - an EXECUTIVE OPERATOR LINE for the console terminal
+ * OPA0: (rd vms-896d): the substrate's exec_console_printf() offers it here
+ * first. The console's class driver writes it the way VMS's terminal driver
+ * writes a message to a terminal: never inside a write request that is going
+ * out (it is held until that request ends), on a line of its own -- a new line
+ * before it, CR LF after it -- and with a read in progress shown again after
+ * it (vms_tt_oper.h). Never sleeps: the bytes go to the port through its
+ * no-wait path.
+ *
+ * Returns 1 when the console's class driver took the line, 0 when there is
+ * none (boot, before OPA0: is bound) or it could not hold the line: the
+ * substrate then writes it to its console itself.
+ */
+int vms_tt_oper_line(const char *line)
+{
+	struct vms_tt *tt = vms_devtab_tt_by_name("OPA0:");
+	int r;
+
+	if (!tt)
+		return 0;
+	exec_lock(&tt->lock);
+	if (tt->detached) {
+		r = -1;
+	} else {
+		r = vms_tt_oper_submit(&tt->oper, tt->wr_reqs != 0, tt_at_fresh_line(tt),
+				       line, tt->obuf + tt->olen, VMS_TT_OBUF - tt->olen);
+		if (r > 0) {
+			tt_obuf_commit(tt, (uint32_t)r);
+			if (tt->rd_busy && !tt->rd_done && !tt->passall)
+				tt_reshow_read(tt);
+		}
+	}
+	exec_unlock(&tt->lock);
+	if (r > 0)
+		tt_flush(tt);
+	vms_tt_release(tt);
+	return r >= 0;
+}
+
+/*
  * vms_tt_write - output through the class driver. `cooked` 1: the bytes are a
  * program's records, '\n'-terminated (a writer arriving on the port's own
  * write path); 0: written as they are (the driver's own output: a broadcast);
@@ -1363,6 +1477,7 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 {
 	uint8_t chunk[128];
 	size_t i = 0;
+	int rc = 0;
 
 	if (cooked == 1) {
 		/* each record a program writes to its terminal is one buffered
@@ -1375,12 +1490,14 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 	tt_flush(tt);                     /* echo queued before this write first */
 	if (READ_ONCE_TT(tt->ctrlo))
 		return 0;                    /* CTRL/O: the output is discarded */
+	vms_tt_write_begin(tt);
 	while (i < n) {
 		size_t k = 0;
-		int rc;
 
-		if (READ_ONCE_TT(tt->detached))
-			return -EIO;             /* the line went away */
+		if (READ_ONCE_TT(tt->detached)) {
+			rc = -EIO;               /* the line went away */
+			goto out;
+		}
 
 		/*
 		 * Build the chunk under the lock: the cursor position is driver
@@ -1438,8 +1555,10 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 			struct tt_portref pr;
 			int swapped;
 
-			if (!tt_port_enter(tt, &pr))
-				return -EIO;     /* the line went away */
+			if (!tt_port_enter(tt, &pr)) {
+				rc = -EIO;       /* the line went away */
+				goto out;
+			}
 			if (pr.ops->write) {
 				rc = pr.ops->write(pr.port, chunk, k);
 			} else {
@@ -1456,7 +1575,7 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 				break;
 		}
 		if (rc)
-			return rc;
+			goto out;
 	}
 
 	/*
@@ -1468,18 +1587,13 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 	 */
 	exec_lock(&tt->lock);
 	if (tt->rd_busy && !tt->rd_done && !tt->passall && n) {
-		if (tt->pos == TT_POS_CR && tt_echoing(tt)) {
-			tt_out1(tt, CH_LF);
-			tt->rec_open = 0;
-		}
-		if (tt->promptsz)
-			tt_prompt_out(tt, tt->prompt, tt->promptsz);
-		if (tt_echoing(tt))
-			tt_out(tt, tt->line, tt->len);
+		tt_reshow_read(tt);
 	}
 	exec_unlock(&tt->lock);
 	tt_flush(tt);
-	return 0;
+out:
+	vms_tt_write_end(tt);    /* held executive lines follow the write */
+	return rc;
 }
 
 /*
@@ -1674,6 +1788,7 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 		goto out;
 	}
 	a.status = SS__NORMAL;
+	vms_tt_write_begin(tt);   /* ONE request, however many pieces (rd vms-896d) */
 	while (done < a.len) {
 		uint32_t k = a.len - done < sizeof(chunk) ? a.len - done : (uint32_t)sizeof(chunk);
 
@@ -1694,6 +1809,7 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL && a.len &&
 	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 1))
 		a.status = SS__ABORT;
+	vms_tt_write_end(tt);
 	if (a.status == SS__NORMAL)
 		VMS_IO_COUNT(&proc->io_buffered, 1u);   /* JPI$_BUFIO (rd vms-bd71) */
 	vms_tt_release(tt);

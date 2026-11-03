@@ -57,15 +57,6 @@ static inline vms_pid_t vms_sys_getpid(void)
     return (vms_pid_t)getpid();
 }
 
-/* vms-593: the realtime clock vms_substrate_systime reads (NetBSD libc, as the rest). */
-static inline int vms_sys_clock_gettime(vms_clockid_t clockid, struct vms_timespec *tp)
-{
-    struct timespec t;
-    int r = clock_gettime((clockid_t)clockid, &t);
-    if (r == 0) { tp->tv_sec = (vms_time_t)t.tv_sec; tp->tv_nsec = t.tv_nsec; }
-    return r;
-}
-
 static inline vms_uid_t vms_sys_getuid(void)
 {
     return (vms_uid_t)getuid();

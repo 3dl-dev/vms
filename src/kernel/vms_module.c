@@ -2157,6 +2157,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     case VMS_IOCTL_VA:
         return vms_ioctl_va(proc, arg);
 
+    /* System time: $GETTIM/$GETUTC/$SETIME (rd vms-642, kernel-core/vms_systime.c) */
+    case VMS_IOCTL_SYSTIME:
+        return vms_ioctl_systime(proc, arg);
+
     /* P1 control region (vms-68f.ii, same design, increment (ii)) */
     case VMS_IOCTL_P1_MAP:
         return vms_ioctl_p1_map(proc, arg);
@@ -2650,6 +2654,10 @@ static int __init vms_init(void)
      * nothing that can fail here (see vmsfs_acp.c's vms_acp_init()). */
     vms_acp_init();
 
+    /* The system time cell (rd vms-642, kernel-core/vms_systime.c): cannot
+     * fail; exec_lock_destroy is a no-op on Linux, so no unwind. */
+    vms_systime_init();
+
     /* Register /dev/vms */
     /* The process-exit hook comes up BEFORE the device can be opened: no PCB
      * may exist that its process's end would not delete (rd vms-9f32). */
@@ -2829,6 +2837,7 @@ static void __exit vms_exit(void)
     vms_lnm_cleanup();
     vms_mbx_cleanup();
     vms_acp_cleanup();
+    vms_systime_cleanup();           /* rd vms-642 */
     exec_bdev_cache_release_all();   /* rd vms-648: close cached ACP backing handles */
 
     kmem_cache_destroy(vms_proc_cache);

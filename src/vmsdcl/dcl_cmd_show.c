@@ -218,8 +218,14 @@ static int cmd_show_time(struct dcl_command *cmd)
      * alike (tests/qemu/golden/oracle-{vax-v7.3,alpha-v8.4}.console.txt), and
      * $STATUS is DCL's own success %X00030001
      * (docs/oracle/vax73-status-after-verbs.md). */
+    /* The system time is SYS$GETTIM's: the executive's, which SET TIME
+     * changes for every process (rd vms-642). */
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    uint32_t st = dcl_system_time(&ts);
+    if (!(st & 1)) {
+        dcl_put_sysmsg(st);
+        return (int)st;
+    }
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 

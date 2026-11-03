@@ -236,6 +236,7 @@ struct vms_mode_args {
 #define VMS_PRV_M_MOUNT     (1ULL << VMS_PRV_V_MOUNT)
 #define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
 #define VMS_PRV_M_PHY_IO    (1ULL << VMS_PRV_V_PHY_IO)
+#define VMS_PRV_M_LOG_IO    (1ULL << VMS_PRV_V_LOG_IO)
 #define VMS_PRV_M_SYSPRV    (1ULL << VMS_PRV_V_SYSPRV)
 #define VMS_PRV_M_GRPPRV    (1ULL << VMS_PRV_V_GRPPRV)
 #define VMS_PRV_M_BYPASS    (1ULL << VMS_PRV_V_BYPASS)
@@ -3853,6 +3854,49 @@ _Static_assert(sizeof(struct vms_va_args) == 72,
                "vms_va_args layout changed: VMS_IOCTL_VA ABI break");
 _Static_assert(VMS_IOCTL_VA == 0xC04856C4u,
                "VMS_IOCTL_VA encodes differently here than on the reference build");
+
+/* ================================================================
+ * System time -- $GETTIM / $GETUTC / $SETIME (rd vms-642)
+ *
+ * The executive holds the system time (src/kernel-core/vms_systime.c), the
+ * EXE$GQ_SYSTIME of VMS: every process reads the same cell, and $SETIME
+ * changes it for all of them. The cell is the substrate kernel's realtime
+ * clock (the "time-of-year clock" a VMS system recalibrates from) plus an
+ * offset the executive keeps; $SETIME moves the offset, never the substrate
+ * clock. One request, an op selector:
+ *   VMS_SYSTIME_GET    out: time = the system time, VMS absolute (100 ns
+ *                      ticks since 17-NOV-1858). No privilege.
+ *   VMS_SYSTIME_SET    in: time = the new system time. OPER and LOG_IO
+ *                      enabled, else SS$_NOPRIV; a delta (negative) time is
+ *                      SS$_IVTIME. out: time = the system time now.
+ *   VMS_SYSTIME_RECAL  $SETIME with no timadr: recalibrate from the
+ *                      time-of-year clock (drop the offset). Same privileges.
+ * Privileges and condition values: OpenVMS System Services Reference Manual,
+ * $SETIME ("Required Privileges: OPER and LOG_IO"; SS$_NORMAL, SS$_ACCVIO,
+ * SS$_IVTIME, SS$_NOPRIV).
+ *
+ * INV-6: no /dev/vms -> $GETTIM/$GETUTC/$SETIME are SS$_NOSUCHDEV; there is no
+ * userspace clock fallback.
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the request layout and number are
+ * OVMX's own transport encoding, not a VMS wire format.
+ */
+#define VMS_SYSTIME_GET     1
+#define VMS_SYSTIME_SET     2
+#define VMS_SYSTIME_RECAL   3
+
+struct vms_systime_args {
+    uint32_t op;            /* in: VMS_SYSTIME_* */
+    uint32_t status;        /* out: SS$_ */
+    uint64_t time;          /* in (SET): new system time; out: the system time */
+};
+
+#define VMS_IOCTL_SYSTIME  _IOWR(VMS_IOC_MAGIC, 0xC5, struct vms_systime_args)
+
+_Static_assert(sizeof(struct vms_systime_args) == 16,
+               "vms_systime_args layout changed: VMS_IOCTL_SYSTIME ABI break");
+_Static_assert(VMS_IOCTL_SYSTIME == 0xC01056C5u,
+               "VMS_IOCTL_SYSTIME encodes differently here than on the reference build");
 
 /* ================================================================
  * P1 control region (vms-68f.ii, in-process image activation foundation,

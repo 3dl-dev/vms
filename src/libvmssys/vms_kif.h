@@ -939,6 +939,15 @@ uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
  */
 uint32_t vms_kif_va(struct vms_va_args *args);
 
+/*
+ * vms_kif_systime - the executive's system time (rd vms-642): read it
+ * (VMS_SYSTIME_GET), set it or recalibrate it ($SETIME: VMS_SYSTIME_SET /
+ * _RECAL, OPER and LOG_IO required), as `args->op`. args->time carries the
+ * new time in and the system time out. Returns the service's VMS status;
+ * SS$_NOSUCHDEV with no executive -- there is no userspace clock fallback.
+ */
+uint32_t vms_kif_systime(struct vms_systime_args *args);
+
 /* ================================================================
  * P1 control region (vms-68f.ii, in-process image activation foundation,
  * increment (ii))

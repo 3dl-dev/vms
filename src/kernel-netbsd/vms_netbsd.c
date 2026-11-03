@@ -1165,6 +1165,17 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return vms_facility_errno(r);
 
 	/*
+	 * System time, $GETTIM/$GETUTC/$SETIME (rd vms-642): the shared facility
+	 * src/kernel-core/vms_systime.c, the same dispatch shape as the event
+	 * flags above (the caller's proc carries the privileges $SETIME needs).
+	 */
+	case VMS_IOCTL_SYSTIME:
+		proc = vms_proc_find(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ESRCH;
+		return vms_facility_errno(vms_ioctl_systime(proc, (unsigned long)data));
+
+	/*
 	 * AST facility (src/kernel-core/vms_ast.c) and access-mode facility
 	 * (src/kernel-core/vms_access.c) -- P4-A. Same dispatch shape as event
 	 * flags: find-or-create the caller's proc, hand the framework's kernel
@@ -1865,6 +1876,10 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * is after INIT returns, and vms_acp_init cannot fail (vmsfs_acp.c), so it
 		 * needs no unwind. Mirrors the Linux vms.ko init. */
 		vms_acp_init();
+		/* The system time cell (rd vms-642, kernel-core/vms_systime.c): same
+		 * reasoning as the ACP above -- no ioctl before INIT returns, cannot
+		 * fail, so no unwind. */
+		vms_systime_init();
 		/* FC-P0.4: prove the cluster seam (SS14..SS18) at module load,
 		 * the same "self-test on the console" posture
 		 * vms_lnm_arena_selftest() takes for the arena seam above -- no
@@ -1924,6 +1939,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * vms_proc_free_claimed above), then close the cached backing device
 		 * vnode the ACP $MOUNT opened. Mirrors the Linux vms.ko FINI. */
 		vms_acp_cleanup();
+		vms_systime_cleanup();           /* rd vms-642 */
 		/* Free the device table's rows AFTER the procs are gone (rd vms-618):
 		 * vms_proctab_teardown above ran each proc's vms_proc_release_channels,
 		 * which unlinks its channels FROM these rows, so nothing points at a

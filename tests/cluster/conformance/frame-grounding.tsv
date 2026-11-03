@@ -330,6 +330,35 @@ dlm_enq_ans_queued	*	124	2	deviation	const:0	body[52:54]: zeroed, which also ove
 dlm_enq_ans_queued	*	126	70	copied	any:name	body[54:124]: the rest of the echoed name and the zero tail behind it
 dlm_enq_ans_queued	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b), echoed
 dlm_enq_ans_queued	*	200	4	derived	state:hash	body[128:132]: the directory hash the REQUEST carried, echoed -- a value some system in this cluster put on the wire, never one computed here (rd vms-4fb)
+# ---- rd vms-1e58 C4: the master's NOTQUEUED answer to a cat-0x02 op-0x01 that
+# asked LCK$M_NOQUEUE (cat 0x82, body[34] 0xfc). A frame OVMX had NEVER emitted:
+# its master never heard NOQUEUE, so a real VAX's EX/NOQUEUE was QUEUED and its
+# $ENQW completed SS$_NORMAL inside OVMX's EX (ci.6 fire ci6evac-031902, frames
+# 7310/7312). Grounded by tools/cluster/dlm_notqueued_answer_census.py: every
+# real deny answers a request with body[28:30] bit 0x0004 set, and every one
+# carries b8 09 fc at body[32:35]; the ROOT answers echo the request with
+# body[28:32] cleared. Emitted by test_cnxman_coord.c through the shipping
+# composer.
+dlm_enq_ans_notqueued	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, CNXMAN_ENV_RESPONSE)
+dlm_enq_ans_notqueued	*	74	2	derived	any:envelope	ack-msg#: the requester's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_enq_ans_notqueued	*	76	4	copied	any:echo	body[4:8]: the REQUEST's own transaction, echoed -- every real deny pair is matched by it (dlm_notqueued_answer_census.py pairs by this token)
+dlm_enq_ans_notqueued	*	80	1	const	const:82	category 0x02 | 0x80, the response; every real deny
+dlm_enq_ans_notqueued	*	81	1	const	const:1	op stays 0x01: an ENQ is answered as an ENQ
+dlm_enq_ans_notqueued	*	82	2	const	const:0	body[10:12]: the request's own cell, echoed, which this node sends as 0 (the dlm_enq_req row above)
+dlm_enq_ans_notqueued	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b), echoed
+dlm_enq_ans_notqueued	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq) and stamped on every DLM message this node sends, answers included (cnxman_dlm_seq_stamp)
+dlm_enq_ans_notqueued	*	88	4	const	const:0	body[16:20]: the request's own cell, echoed; this node sends no residue (rd vms-42de)
+dlm_enq_ans_notqueued	*	92	4	derived	state:pid	body[20:24]: the REQUEST's PID-form placeholder, echoed -- NOT rewritten by any real root deny (no lock exists, so there is no master handle to name; spec sec 4(f).1's deny shape)
+dlm_enq_ans_notqueued	*	96	4	derived	state:lkid	body[24:28]: the requester's own handle, echoed -- what it correlates the refusal by; NOT rewritten by a real deny
+dlm_enq_ans_notqueued	*	100	4	const	const:0	body[28:32]: CLEARED, the requested mode at body[30] included -- 2 of the 3 real ROOT denies; the third carries S0-looking residue (80 82 95 87) this node does not send (rd vms-42de)
+dlm_enq_ans_notqueued	*	104	4	const	const:fc09b8	body[32:36] = b8 09 fc 00, the NOTQUEUED record: 0x09b8 = 2488 = SS$_NOTQUEUED and body[34] = 0xfc the cat-0x82 outcome byte, on every real deny (root and sub-lock); body[35] 0 on 2 of 3 ROOT (the residue answer above has ff)
+dlm_enq_ans_notqueued	*	108	8	const	const:0	body[36:44]: ZERO, because the builder REFUSES a request that names a parent: every real SUB-lock deny rewrites body[40:44] with the master's own S0 address
+dlm_enq_ans_notqueued	*	116	2	derived	state:group	body[44:46] UIC group: the request's, echoed -- the resource identity the refusal is about
+dlm_enq_ans_notqueued	*	118	1	derived	state:acmode	body[46] access mode: the request's, echoed
+dlm_enq_ans_notqueued	*	119	1	derived	state:namelen	body[47] name length: the request's, echoed -- a deny keeps the name (spec sec 4(f).1)
+dlm_enq_ans_notqueued	*	120	76	copied	any:name	body[48:124]: the WHOLE echoed name and the zero tail behind it -- a real deny does not zero body[52:54] the way a QUEUED answer does (3/3 ROOT denies leave the name intact)
+dlm_enq_ans_notqueued	*	196	4	const	const:ffffffff	body[124:128]: the measured constant of this request shape (rd vms-64b), echoed
+dlm_enq_ans_notqueued	*	200	4	derived	state:hash	body[128:132]: the directory hash the REQUEST carried, echoed -- never one computed here (rd vms-4fb)
 # ---- cat 0x04 op 0x00: the credit/commit ACK (spec sec 4(u), rd vms-ac4f).
 #      The single largest class an OVMX node puts on a real VAX's wire: 256 of
 #      the 298 frames across every committed capture that no row described.

@@ -339,7 +339,9 @@ dlm-5d6-hold-lifted-in-quorum-hang
 dlm-b4d-adopted-tree-dir-untold
 dlm-b4d-undirected-answers-you
 dlm-b4d-undirected-answers-you-fuzz
-dlm-departed-holder-locks-kept"
+dlm-departed-holder-locks-kept
+dlm-1e58-noqueue-not-read
+dlm-1e58-deny-record-not-written"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -787,6 +789,35 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** a parent named with NO master handle: REFUSED. Zero at body[40:44] reads to the master as a ROOT and would create a second root for the name ***
   ...and a master handle with no parent of our own: refused too
+EOF
+                      ;;
+        esac;;
+
+    dlm-1e58-noqueue-not-read)
+        case "$_f" in
+        facility)     echo "the MASTER hearing a remote requester's LCK\$M_NOQUEUE (vms_dlm_master_req_flags(), vms_dlm_master_wire.h, rd vms-1e58 C4): body[28:30] bit 0x0004 of a received op-0x01 becomes the engine's LCK_M_NOQUEUE";;
+        targets)      echo "kernel-core/vms_dlm_master_wire.h";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "The translation stops reading the NOQUEUE bit, which is exactly the shipped state the ci.6 lab fire caught: the arm never set the master request's flags, so a real VAX's captured EX/NOQUEUE (frame 7310) against an EX this node holds is QUEUED instead of DENIED, and the VAX's \$ENQW completes SS\$_NORMAL inside this node's hold. The same frame's parse is untouched (lck_flags still reads 04 00), so only the translation and the outcome redden.";;
+        require_fail) hd_lines <<'EOF'
+*** and the arm's translation hands the master LCK_M_NOQUEUE ***
+*** VAX2's captured EX/NOQUEUE is DENIED -- the lab got QUEUED ***
+  and no lock id is asserted, because no lock exists
+EOF
+                      ;;
+        esac;;
+
+    dlm-1e58-deny-record-not-written)
+        case "$_f" in
+        facility)     echo "the master's DENY answer (vms_dlm_enq_response_build_notqueued(), rd vms-1e58 C4): the request echoed with the b8 09 fc record at body[32:36] that every real deny carries";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "The deny builder writes the QUEUED record (00 00 fb 00) where the NOTQUEUED one (b8 09 fc 00) goes -- the very bytes the lab saw OVMXE send in frame 7312. The engine's decision is untouched (the outcome is still DENIED), so only the answer's record and the requester-side reading of it redden: a VAX told 'queued' about a request it said may not be queued.";;
+        require_fail) hd_lines <<'EOF'
+*** body[32:36] = b8 09 fc 00, the record every real deny carries (0x09b8 = SS$_NOTQUEUED) -- not 00 00 fb 00 ***
+*** and this node's own requester reads it as DENIED ***
 EOF
                       ;;
         esac;;
@@ -4099,6 +4130,14 @@ apply_edit() {
         # asserts the opposite of the engine's own read.
         sed -i 's|\td->dir_master_unserved++;|\td->dir_self_held++; /* NEGCTL dlm-master-unserved-said-as-not-mastered */|' "$_file"
         sed -i 's|"resource this node MASTERS, and it could not be served as "|"resource this node itself holds locks on and does not "|' "$_file";;
+
+    dlm-1e58-noqueue-not-read)
+        # The NOQUEUE test is unique in the header.
+        sed -i 's|\t    (e->lck_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)|\t    (e->lck_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u \&\& 0) /* NEGCTL dlm-1e58-noqueue-not-read */|' "$_file";;
+
+    dlm-1e58-deny-record-not-written)
+        # The NOTQUEUED record's one write is unique in the codec.
+        sed -i 's|vms_wire_put_le32(\&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_NOTQUEUED_REC_VAL);|vms_wire_put_le32(\&w, VMS_OFF_DLM_GRANT_REC, VMS_DLM_QUEUED_REC_VAL); /* NEGCTL dlm-1e58-deny-record-not-written */|' "$_file";;
 
     dlm-own-directory-not-consulted)
         # `if (!inbound && dlm_route_own_directory(res, route, dst_csid, &st))`

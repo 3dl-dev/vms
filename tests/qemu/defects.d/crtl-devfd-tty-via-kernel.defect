@@ -1,0 +1,31 @@
+# crtl-devfd-tty-via-kernel -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a C program's stdin/stdout on a terminal are SYS\$INPUT/SYS\$OUTPUT: \$QIO on a channel to that terminal through the executive's terminal driver, not the substrate's descriptor (rd vms-a66e)";;
+        targets)      echo "vmsrms/crtl_devfd.c";;
+        suites_red)   echo "test_syssvc_crtl_devfd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_crtl_devfd_bind_stdio() binds descriptors 0/1/2 to SYS\$INPUT/OUTPUT/ERROR when they name a terminal. The mutation skips every terminal, which is the raw kernel path the C RTL had before vms-a66e: printf() and fgets() go to the substrate's descriptors (the suite's decoy line), getname(1) names nothing, and the RTAn: SYS\$OUTPUT names sees no output.";;
+        require_fail) cat <<'EOF2'
+getname(1) is SYS$OUTPUT's terminal device
+printf() reached SYS$OUTPUT's terminal through the terminal driver (CR LF)
+...and nothing reached the substrate's line underneath descriptor 1
+fgets(stdin) read the line typed on SYS$INPUT's terminal (CR -> newline)
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        if (cls == DC_TERM) {$|        if (cls == DC_TERM) { continue; /* NEGCTL crtl-devfd-tty-via-kernel */|' "$_file"
+    :
+}

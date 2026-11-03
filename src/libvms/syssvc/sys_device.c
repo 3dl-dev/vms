@@ -484,10 +484,17 @@ static uint32_t getdvi_impl(uint32_t efn, uint16_t chan,
          * hold is SS$_IVCHAN, as on VMS.
          */
         const char *dn = vms$$chan_devnam(chan);
-        uint32_t ec = dn ? 0 : vms$$chan_exec_chan(chan);
-        if (dn)
+        uint32_t ec = vms$$chan_exec_chan(chan);
+        if (dn) {
             status = device_lookup_translated(dn, &info);
-        else if (ec)
+            /* a channel the executive bound answers for its own device even
+             * when the name it was assigned by is an alias this process cannot
+             * look up (TT: in a process with no terminal row: the channel is
+             * OPA0:'s; rd vms-a66e) */
+            if (status != SS$_NORMAL && ec &&
+                vms_kif_getdvi_chan(ec, &info) == SS$_NORMAL)
+                status = SS$_NORMAL;
+        } else if (ec)
             status = vms_kif_getdvi_chan(ec, &info);
         else
             status = SS$_IVCHAN;

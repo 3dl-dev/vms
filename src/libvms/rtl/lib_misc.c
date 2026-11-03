@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 #include <stdio.h>
 #include "ssdef.h"
+#include "ovmx_substrate.h"  /* OVMX_SUBSTRATE_SCOPE (rd vms-a66e) */
 #include "descrip.h"
 #include "lib$routines.h"
 #include "str$routines.h"
@@ -369,6 +370,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *prompt,
                    const struct dsc$descriptor_s *cli_name,
                    const struct dsc$descriptor_s *table_name) {
+    OVMX_SUBSTRATE_SCOPE();   /* rd vms-a66e: the substrate's own work */
     (void)prompt; (void)cli_name; (void)table_name;   /* OVMX's one CLI is DCL */
     /* efn/astadr/astprm: the /NOWAIT completion-notification path, wired in the
      * CLI$M_NOWAIT branch below via vms_kif_spawn_notify (B1). */

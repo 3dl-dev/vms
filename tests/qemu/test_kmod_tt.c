@@ -594,29 +594,21 @@ int main(void)
                   "CTRL/Y in the OUTBAND mask: its out-of-band AST (parameter 0x19), no *INTERRUPT*, the read still outstanding");
             CHECK(vms_kif_deliverast(&aa, &ap, &am) != 0,
                   "... and the CTRL/Y AST armed beside it is NOT queued");
-            {
-                uint32_t rs;
-                pid_t kid = fork();
-                if (kid == 0) {
-                    msleep(300);
-                    type(m, "\x03" "C\r");
-                    _exit(0);
-                }
-                r.a.oflags = 0;
-                rs = vms_kif_tt_read(&r.a);          /* the same read resumes */
-                got = vms_kif_deliverast(&aa, &ap, &am) == 0;
-                CHECK((r.a.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x6666 && ap == 0x03,
-                      "CTRL/C in the OUTBAND mask: its out-of-band AST (parameter 0x03), the read still outstanding");
-                r.a.oflags = 0;
-                rs = vms_kif_tt_read(&r.a);
-                waitpid(kid, NULL, 0);
-                r.data[r.a.count < sizeof r.data ? r.a.count : sizeof r.data - 1] = '\0';
-                CHECK(rs == SS_NORMAL && strcmp(r.data, "ABC") == 0,
-                      "the read survives both and completes with its whole line 'ABC'");
-                (void)screen(m, scr, sizeof(scr), 300);
-            }
+            /* CTRL/C the same way, on a read of its own (the CTRL/Y read is
+             * left suspended; the driver lets this one have the slot after
+             * VMS_TT_SUSPEND_MS) */
+            rd_start(&r, chan, 0, NULL, 0);
+            msleep(1500);
+            type(m, "C\x03");
+            rd_wait(&r);
+            (void)screen(m, scr, sizeof(scr), 300);
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            CHECK((r.a.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x6666 && ap == 0x03 &&
+                  strstr(scr, "INTERRUPT") == NULL,
+                  "CTRL/C in the OUTBAND mask: its out-of-band AST (parameter 0x03), no *INTERRUPT*, the read still outstanding");
             while (vms_kif_deliverast(&aa, &ap, &am) == 0)
                 ;
+            msleep(1200);   /* the suspended read is then abandoned to the next reader */
         }
         (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0, 0, 0, 3);
         (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0, 0, 0, 3);

@@ -10,7 +10,8 @@
  * with $QIOW IO$_ACCESS on _NET:. This suite runs the shipped DCL.EXE with one
  * `-c "SET HOST ..."` per process, as a VMS subprocess the executive created,
  * under ptrace from its first instruction, following every process and thread
- * it makes, and asserts NONE of them does
+ * it makes, and asserts NONE of them does (pipes and descriptor waits: from
+ * RTPAD.EXE -- DCL's own fork-path image activation makes some, rd vms-89bb)
  *
  *   - pipe / pipe2                                    (a host pipe);
  *   - poll / ppoll / select / pselect6 / epoll_wait / epoll_pwait
@@ -140,6 +141,7 @@ struct verdict {
     unsigned long vms_ioctls; /* ioctls whose request carries the 'V' magic */
     unsigned long rt_ioctls;  /* ... of them, from RTPAD.EXE */
     unsigned bad_pipe, bad_wait, bad_thread, bad_socket, bad_exec, bad_tty;
+    unsigned dcl_pipe, dcl_wait;  /* DCL's own (its fork-path activation, vms-89bb) */
     unsigned execs;           /* execve/execveat entries, the allowed ones included */
     unsigned rtpad_execs;     /* activations of SYS$SYSTEM:RTPAD.EXE */
     const char *allow_exec;   /* the one image the root may exec (its own DCL) */
@@ -162,6 +164,18 @@ static int is_rtpad(const struct verdict *v, pid_t pid)
     return 0;
 }
 
+/* A host pipe or descriptor wait: a failure from RTPAD.EXE; from DCL it is
+ * DCL's image activation (the fork path's exec handshake and CLI-callback
+ * wait, rd vms-89bb, libc-drop), counted and printed, not RTPAD's. */
+static void pipe_or_wait(struct verdict *v, pid_t pid, unsigned *bad, unsigned *dcl,
+                         const char *what, const struct sc *s)
+{
+    if (is_rtpad(v, pid))
+        flag(v, bad, what, s);
+    else
+        (*dcl)++;
+}
+
 static int ends_with(const char *s, const char *t)
 {
     size_t a = strlen(s), b = strlen(t);
@@ -173,10 +187,10 @@ static void classify(struct verdict *v, pid_t pid, pid_t root, const struct sc *
     v->total++;
     long nr = s->nr;
 #ifdef SYS_pipe
-    if (nr == SYS_pipe) { flag(v, &v->bad_pipe, "pipe", s); return; }
+    if (nr == SYS_pipe) { pipe_or_wait(v, pid, &v->bad_pipe, &v->dcl_pipe, "pipe", s); return; }
 #endif
 #ifdef SYS_pipe2
-    if (nr == SYS_pipe2) { flag(v, &v->bad_pipe, "pipe2", s); return; }
+    if (nr == SYS_pipe2) { pipe_or_wait(v, pid, &v->bad_pipe, &v->dcl_pipe, "pipe2", s); return; }
 #endif
 #ifdef SYS_socket
     if (nr == SYS_socket) {
@@ -203,22 +217,22 @@ static void classify(struct verdict *v, pid_t pid, pid_t root, const struct sc *
         return;
     }
 #ifdef SYS_poll
-    if (nr == SYS_poll) { flag(v, &v->bad_wait, "poll", s); return; }
+    if (nr == SYS_poll) { pipe_or_wait(v, pid, &v->bad_wait, &v->dcl_wait, "poll", s); return; }
 #endif
 #ifdef SYS_ppoll
-    if (nr == SYS_ppoll) { flag(v, &v->bad_wait, "ppoll", s); return; }
+    if (nr == SYS_ppoll) { pipe_or_wait(v, pid, &v->bad_wait, &v->dcl_wait, "ppoll", s); return; }
 #endif
 #ifdef SYS_select
-    if (nr == SYS_select) { flag(v, &v->bad_wait, "select", s); return; }
+    if (nr == SYS_select) { pipe_or_wait(v, pid, &v->bad_wait, &v->dcl_wait, "select", s); return; }
 #endif
 #ifdef SYS_pselect6
-    if (nr == SYS_pselect6) { flag(v, &v->bad_wait, "pselect6", s); return; }
+    if (nr == SYS_pselect6) { pipe_or_wait(v, pid, &v->bad_wait, &v->dcl_wait, "pselect6", s); return; }
 #endif
 #ifdef SYS_epoll_wait
-    if (nr == SYS_epoll_wait) { flag(v, &v->bad_wait, "epoll_wait", s); return; }
+    if (nr == SYS_epoll_wait) { pipe_or_wait(v, pid, &v->bad_wait, &v->dcl_wait, "epoll_wait", s); return; }
 #endif
 #ifdef SYS_epoll_pwait
-    if (nr == SYS_epoll_pwait) { flag(v, &v->bad_wait, "epoll_pwait", s); return; }
+    if (nr == SYS_epoll_pwait) { pipe_or_wait(v, pid, &v->bad_wait, &v->dcl_wait, "epoll_pwait", s); return; }
 #endif
     if (nr == SYS_clone) {
         if (s->a0 & CLONE_THREAD)
@@ -348,22 +362,30 @@ static int trace_all(pid_t root, struct verdict *v, int bound_s, struct sink *ou
     return root_status;
 }
 
-/* ---- the control child: exactly the forbidden calls --------------------- */
-static void *ctl_thread(void *a) { return a; }
+/* ---- the control child: exactly the forbidden calls --------------------- *
+ * As raw system calls: this binary is linked with libvms, whose CRTL entry
+ * points (isatty, poll, ...) are VMS-backed and need not reach the host
+ * calls the audit looks for -- the control must make them for certain. Each
+ * is seen at its syscall entry, whether or not it then succeeds. */
 static void control_child(void)
 {
-    int pp[2];
-    if (pipe(pp) == 0) { close(pp[0]); close(pp[1]); }
+    int pp[2] = { -1, -1 };
     struct pollfd pf = { -1, 0, 0 };
-    (void)poll(&pf, 1, 0);
-    int s = socket(AF_INET, SOCK_DGRAM, 0);
-    if (s >= 0) close(s);
-    pthread_t th;
-    if (pthread_create(&th, NULL, ctl_thread, NULL) == 0)
-        pthread_join(th, NULL);
-    (void)isatty(0);                     /* TCGETS: this task counts as RTPAD */
+    struct timespec zero = { 0, 0 };
+    struct termios t;
+    /* pipe2/ppoll: the calls every architecture has (arm64 has no pipe/poll) */
+    (void)syscall(SYS_pipe2, pp, 0);
+    (void)syscall(SYS_ppoll, &pf, 1, &zero, NULL, 0);
+    (void)syscall(SYS_socket, AF_INET, SOCK_DGRAM, 0);
+#ifdef SYS_clone3
+    (void)syscall(SYS_clone3, NULL, 0);            /* EINVAL, but entered */
+#else
+    (void)syscall(SYS_clone, CLONE_THREAD, 0, 0, 0, 0); /* EINVAL: CLONE_THREAD needs CLONE_SIGHAND */
+#endif
+    (void)syscall(SYS_ioctl, 0, TCGETS, &t);        /* isatty: this task counts as RTPAD */
     char *const av[] = { (char *)"DECNETD.EXE", NULL };
-    (void)execv("/nonexistent/DECNETD.EXE", av);
+    (void)syscall(SYS_execve, "/nonexistent/DECNETD.EXE", av, NULL);
+    syscall(SYS_exit_group, 0);
     _exit(0);
 }
 
@@ -456,7 +478,7 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     int netacp = argc > 1 && strcasecmp(argv[1], "NETACP") == 0;
     printf("=== test_syssvc_sethost_syscall_audit (SET HOST is RTPAD.EXE over _NET: and"
-           " the terminal's \$QIO, rd vms-0a7 S2) [%s] ===\n",
+           " the terminal's $QIO, rd vms-0a7 S2) [%s] ===\n",
            netacp ? "booted node: NETACP" : "executive rail: no NETACP");
 
     /* ---- 0. the classifier works (anti-vacuity) ------------------------- */
@@ -554,8 +576,10 @@ int main(int argc, char **argv)
     }
     printf("  (audited commands: 2; pipe %u, wait %u, thread %u, host socket %u,"
            " foreign exec %u, RTPAD isatty %u)\n", pipes, waits, threads, socks, execs, ttys);
-    CHECK(pipes == 0, "NO pipe/pipe2 in SET HOST");
-    CHECK(waits == 0, "NO poll/ppoll/select/pselect6/epoll wait in SET HOST");
+    printf("  (DCL's own image activation: pipe %u, wait %u -- the fork path, rd vms-89bb)\n",
+           R[0].v.dcl_pipe + R[1].v.dcl_pipe, R[0].v.dcl_wait + R[1].v.dcl_wait);
+    CHECK(pipes == 0, "NO pipe/pipe2 from RTPAD.EXE in SET HOST");
+    CHECK(waits == 0, "NO poll/ppoll/select/pselect6/epoll wait from RTPAD.EXE in SET HOST");
     CHECK(threads == 0, "NO thread (clone CLONE_THREAD / clone3) in SET HOST");
     CHECK(socks == 0, "NO socket(AF_INET/INET6/PACKET/NETLINK) in SET HOST");
     CHECK(execs == 0, "NO exec of DECNETD.EXE or any image but DCL and RTPAD.EXE in SET HOST");

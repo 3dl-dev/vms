@@ -376,6 +376,7 @@ jobs:
               - 'src/vmsdcl/**'
               - 'src/kernel-core/vms_tt.c'
               - 'src/kernel-core/vms_tt.h'
+              - 'src/kernel-core/vms_tt_oper.h'
               - 'tools/vms_login.c'
               - 'tools/loginout_display.c'
               - 'src/vmslink/mk_loginout.sh'

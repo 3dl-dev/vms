@@ -117,6 +117,7 @@ COPY src/kernel-core/vms_devtab_fullnam.h /netbsd/guest-src/kernel-core/vms_devt
 COPY src/kernel-netbsd/vms_devtab_nb.h /netbsd/guest-src/kmod/vms_devtab_nb.h
 COPY src/kernel-core/vms_tt.c /netbsd/guest-src/kernel-core/vms_tt.c
 COPY src/kernel-core/vms_tt.h /netbsd/guest-src/kernel-core/vms_tt.h
+COPY src/kernel-core/vms_tt_oper.h /netbsd/guest-src/kernel-core/vms_tt_oper.h
 COPY src/kernel-netbsd/vms_tt_nb.h /netbsd/guest-src/kmod/vms_tt_nb.h
 COPY src/kernel-netbsd/vms_tt_netbsd.c /netbsd/guest-src/kmod/vms_tt_netbsd.c
 COPY src/kernel-core/exec_hash.h src/kernel-core/exec_rbtree.h /netbsd/guest-src/kernel-core/

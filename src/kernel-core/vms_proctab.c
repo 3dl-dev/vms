@@ -2348,3 +2348,338 @@ out:
         return -EFAULT;
     return 0;
 }
+
+/* ================================================================
+ * The $CREPRC creation record (rd vms-416d).
+ *
+ * $CREPRC's creator and the task it forked synchronise through THIS executive
+ * object, never through a host pipe. On VMS the executive creates the process
+ * and $CREPRC returns once it exists; OVMX creates it with fork(), so the two
+ * halves meet here:
+ *
+ *   creator  OPEN                       -> a record, owned by the creator
+ *   task     ARRIVE(rec)                 the task that will run the image (the
+ *                                        fork child; for PRC$M_DETACH the
+ *                                        grandchild) names ITSELF -- the
+ *                                        executive reads its substrate pid off
+ *                                        the calling task, nothing is
+ *                                        self-reported -- and waits
+ *   creator  ACCEPT(rec, watch)          waits for the arrival (or the watched
+ *                                        fork child's death: nothing arrives),
+ *                                        then VMS_IOCTL_CREPRC_PCB for it
+ *   creator  ANSWER(rec, status, pid)    the PCB status + VMS PID wake the task
+ *   intermed HOLD(rec, watch)            the detach intermediate stays alive,
+ *                                        linking creator and grandchild (the
+ *                                        PCB's parentage rule), until the
+ *                                        answer -- or the grandchild's death
+ *   task     REPORT(rec, status)         after naming / terminal binding, the
+ *                                        task's creation status
+ *   creator  RESULT(rec)                 waits for the report, or the task's
+ *                                        death before it (OVMX$_PRCLOST)
+ *   creator  CLOSE(rec)
+ *
+ * ARRIVE and HOLD are the only executive calls a task with no PCB may make
+ * besides ESTABLISH_SYSTEM; neither makes it a row (rd vms-2a5): the row is
+ * the creator's VMS_IOCTL_CREPRC_PCB. Every wait ends on its predicate, on the
+ * death of the party it waits for (exec_pid_running, re-checked every
+ * CREPRC_SYNC_POLL_MS), or on a signal (-EINTR; the caller re-issues the op,
+ * which is idempotent). A creator that dies leaves its record to be swept by
+ * the next OPEN; a task waiting on it is released with SS$_ABORT.
+ * ================================================================ */
+
+#define CREPRC_SYNC_SLOTS   128u
+#define CREPRC_SYNC_POLL_MS 50u
+
+#define CRS_ARRIVED   0x01u
+#define CRS_ANSWERED  0x02u
+#define CRS_REPORTED  0x04u
+#define CRS_ABANDONED 0x08u     /* the task (or its intermediate's grandchild)
+                                 * died before arriving */
+
+struct creprc_sync_rec {
+    uint32_t gen;               /* 0 = free; id = gen << 8 | slot */
+    uint32_t creator;           /* creator's substrate pid */
+    uint32_t task;              /* arrived task's substrate pid */
+    uint32_t state;             /* CRS_* */
+    uint32_t pcb_status, vms_pid, report;
+};
+
+static struct creprc_sync_rec creprc_sync_tab[CREPRC_SYNC_SLOTS];
+static uint32_t creprc_sync_gen;
+static exec_lock_t creprc_sync_lock;
+static exec_cv_t creprc_sync_cv;
+
+void vms_creprc_sync_init(void)
+{
+    exec_lock_init(&creprc_sync_lock);
+    exec_cv_init(&creprc_sync_cv);
+}
+
+void vms_creprc_sync_cleanup(void)
+{
+    exec_cv_destroy(&creprc_sync_cv);
+    exec_lock_destroy(&creprc_sync_lock);
+}
+
+/* The live record `id` names, or NULL. Caller holds creprc_sync_lock. */
+static struct creprc_sync_rec *creprc_sync_find(uint32_t id)
+{
+    uint32_t slot = id & 0xFFu;
+
+    if (slot >= CREPRC_SYNC_SLOTS || id == 0)
+        return NULL;
+    if (creprc_sync_tab[slot].gen == 0 || creprc_sync_tab[slot].gen != (id >> 8))
+        return NULL;
+    return &creprc_sync_tab[slot];
+}
+
+/* OPEN: a fresh record for the calling creator. Records of creators that are
+ * no longer running are reclaimed first (their creation can never finish). */
+static uint32_t creprc_sync_open(uint32_t me, uint32_t *id_out)
+{
+    uint32_t owner[CREPRC_SYNC_SLOTS];
+    uint32_t i, slot = CREPRC_SYNC_SLOTS;
+
+    /* Snapshot the owners, test liveness unlocked (exec_pid_running may take
+     * a sleeping substrate lock), then reclaim under the lock, re-checking the
+     * slot still belongs to the same dead owner. */
+    exec_lock(&creprc_sync_lock);
+    for (i = 0; i < CREPRC_SYNC_SLOTS; i++)
+        owner[i] = creprc_sync_tab[i].gen ? creprc_sync_tab[i].creator : 0;
+    exec_unlock(&creprc_sync_lock);
+    for (i = 0; i < CREPRC_SYNC_SLOTS; i++)
+        if (owner[i] != 0 && owner[i] != me && exec_pid_running(owner[i]))
+            owner[i] = 0;              /* alive: keep */
+    exec_lock(&creprc_sync_lock);
+    for (i = 0; i < CREPRC_SYNC_SLOTS; i++) {
+        struct creprc_sync_rec *r = &creprc_sync_tab[i];
+        if (owner[i] != 0 && owner[i] != me && r->gen && r->creator == owner[i])
+            memset(r, 0, sizeof(*r));
+        if (r->gen == 0 && slot == CREPRC_SYNC_SLOTS)
+            slot = i;
+    }
+    if (slot == CREPRC_SYNC_SLOTS) {
+        exec_unlock(&creprc_sync_lock);
+        return SS__INSFMEM;
+    }
+    creprc_sync_gen = (creprc_sync_gen + 1u) & 0x00FFFFFFu;
+    if (creprc_sync_gen == 0)
+        creprc_sync_gen = 1;
+    memset(&creprc_sync_tab[slot], 0, sizeof(creprc_sync_tab[slot]));
+    creprc_sync_tab[slot].gen = creprc_sync_gen;
+    creprc_sync_tab[slot].creator = me;
+    *id_out = (creprc_sync_gen << 8) | slot;
+    exec_cv_broadcast(&creprc_sync_cv);   /* a reclaimed slot's waiters: gone */
+    exec_unlock(&creprc_sync_lock);
+    return SS__NORMAL;
+}
+
+/*
+ * creprc_sync_wait - wait on record `id` until `want` is in its state.
+ *
+ * `watch` is the substrate pid whose death also ends the wait (0: none); when
+ * it is found not running, `on_death` is OR'd into the state (if nonzero) and
+ * the wait ends with SS$_ABORT unless `want` was reached first. The creator's
+ * death ends a task-side wait (`watch_creator`). Returns 0 with *st set, or
+ * -EINTR (signal; nothing changed, the op may be re-issued).
+ */
+static long creprc_sync_wait(uint32_t id, uint32_t want, uint32_t watch,
+                             uint32_t on_death, int watch_creator, uint32_t *st,
+                             struct creprc_sync_rec *snap)
+{
+    for (;;) {
+        struct creprc_sync_rec *r;
+        uint32_t creator;
+        int intr, to;
+
+        exec_lock(&creprc_sync_lock);
+        r = creprc_sync_find(id);
+        if (r == NULL) {
+            exec_unlock(&creprc_sync_lock);
+            *st = SS__ABORT;            /* closed or reclaimed: the creation is over */
+            return 0;
+        }
+        if ((r->state & want) == want) {
+            *snap = *r;
+            exec_unlock(&creprc_sync_lock);
+            *st = SS__NORMAL;
+            return 0;
+        }
+        if (r->state & CRS_ABANDONED) {
+            *snap = *r;
+            exec_unlock(&creprc_sync_lock);
+            *st = SS__ABORT;
+            return 0;
+        }
+        intr = exec_cv_wait_timeout(&creprc_sync_cv, &creprc_sync_lock,
+                                    CREPRC_SYNC_POLL_MS, &to);
+        r = creprc_sync_find(id);
+        if (r != NULL && (r->state & want) == want) {
+            *snap = *r;
+            exec_unlock(&creprc_sync_lock);
+            *st = SS__NORMAL;            /* the predicate wins over a signal */
+            return 0;
+        }
+        creator = r ? r->creator : 0;
+        exec_unlock(&creprc_sync_lock);
+        if (intr)
+            return -EINTR;
+        if (watch != 0 && !exec_pid_running(watch)) {
+            exec_lock(&creprc_sync_lock);
+            r = creprc_sync_find(id);
+            if (r != NULL && (r->state & want) != want) {
+                if (on_death)
+                    r->state |= on_death;
+                exec_cv_broadcast(&creprc_sync_cv);
+                exec_unlock(&creprc_sync_lock);
+                *st = SS__ABORT;
+                return 0;
+            }
+            exec_unlock(&creprc_sync_lock);
+            continue;                     /* reached `want` just before dying */
+        }
+        if (watch_creator && creator != 0 && !exec_pid_running(creator)) {
+            *st = SS__ABORT;
+            return 0;
+        }
+    }
+}
+
+/*
+ * vms_ioctl_creprc_sync - the $CREPRC creation record (above). `proc` is NULL
+ * for ARRIVE and HOLD from a task that has no PCB yet; every creator-side op
+ * needs the caller's PCB and the record to be the caller's.
+ */
+long vms_ioctl_creprc_sync(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_creprc_sync_args args;
+    struct creprc_sync_rec *r, snap;
+    uint32_t me = exec_current_pid();
+    uint32_t st = SS__NORMAL;
+    long rc;
+
+    memset(&args, 0, sizeof(args));
+    memset(&snap, 0, sizeof(snap));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    switch (args.op) {
+    case VMS_CREPRC_SYNC_OPEN:
+        if (proc == NULL)
+            return -ESRCH;
+        args.status = creprc_sync_open(me, &args.rec);
+        goto out;
+
+    case VMS_CREPRC_SYNC_ARRIVE:
+        /* The task names itself: its pid is read here, never passed in. */
+        exec_lock(&creprc_sync_lock);
+        r = creprc_sync_find(args.rec);
+        if (r == NULL) {
+            exec_unlock(&creprc_sync_lock);
+            args.status = SS__ABORT;
+            goto out;
+        }
+        if ((r->state & CRS_ARRIVED) && r->task != me) {
+            exec_unlock(&creprc_sync_lock);
+            args.status = SS__BADPARAM;     /* another task already arrived */
+            goto out;
+        }
+        r->task = me;
+        r->state |= CRS_ARRIVED;
+        exec_cv_broadcast(&creprc_sync_cv);
+        exec_unlock(&creprc_sync_lock);
+        rc = creprc_sync_wait(args.rec, CRS_ANSWERED, 0, 0, 1, &st, &snap);
+        if (rc)
+            return rc;
+        args.status = st;
+        args.value = (st & 1) ? snap.pcb_status : SS__ABORT;
+        args.vms_pid = (st & 1) ? snap.vms_pid : 0;
+        goto out;
+
+    case VMS_CREPRC_SYNC_HOLD:
+        rc = creprc_sync_wait(args.rec, CRS_ANSWERED, args.pid, CRS_ABANDONED, 1,
+                              &st, &snap);
+        if (rc)
+            return rc;
+        args.status = st;
+        goto out;
+
+    case VMS_CREPRC_SYNC_REPORT:
+        exec_lock(&creprc_sync_lock);
+        r = creprc_sync_find(args.rec);
+        if (r == NULL || !(r->state & CRS_ARRIVED) || r->task != me) {
+            exec_unlock(&creprc_sync_lock);
+            args.status = r == NULL ? SS__ABORT : SS__NOPRIV;
+            goto out;
+        }
+        r->report = args.value;
+        r->state |= CRS_REPORTED;
+        exec_cv_broadcast(&creprc_sync_cv);
+        exec_unlock(&creprc_sync_lock);
+        args.status = SS__NORMAL;
+        goto out;
+
+    case VMS_CREPRC_SYNC_ACCEPT:
+    case VMS_CREPRC_SYNC_ANSWER:
+    case VMS_CREPRC_SYNC_RESULT:
+    case VMS_CREPRC_SYNC_CLOSE:
+        break;
+    default:
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+
+    /* Creator-side ops: the caller is a VMS process and owns the record. */
+    if (proc == NULL)
+        return -ESRCH;
+    exec_lock(&creprc_sync_lock);
+    r = creprc_sync_find(args.rec);
+    if (r == NULL || r->creator != me) {
+        exec_unlock(&creprc_sync_lock);
+        args.status = r == NULL ? SS__BADPARAM : SS__NOPRIV;
+        goto out;
+    }
+    switch (args.op) {
+    case VMS_CREPRC_SYNC_ANSWER:
+        r->pcb_status = args.value;
+        r->vms_pid = args.vms_pid;
+        r->state |= CRS_ANSWERED;
+        exec_cv_broadcast(&creprc_sync_cv);
+        exec_unlock(&creprc_sync_lock);
+        args.status = SS__NORMAL;
+        goto out;
+    case VMS_CREPRC_SYNC_CLOSE:
+        memset(r, 0, sizeof(*r));
+        exec_cv_broadcast(&creprc_sync_cv);
+        exec_unlock(&creprc_sync_lock);
+        args.status = SS__NORMAL;
+        goto out;
+    case VMS_CREPRC_SYNC_ACCEPT:
+        exec_unlock(&creprc_sync_lock);
+        rc = creprc_sync_wait(args.rec, CRS_ARRIVED, args.pid, CRS_ABANDONED, 0,
+                              &st, &snap);
+        if (rc)
+            return rc;
+        args.status = st;
+        args.pid = (st & 1) ? snap.task : 0;
+        goto out;
+    default: /* VMS_CREPRC_SYNC_RESULT */ {
+        uint32_t task = r->task;
+        exec_unlock(&creprc_sync_lock);
+        if (task == 0) {
+            args.status = SS__BADPARAM;     /* RESULT only after an ACCEPT */
+            goto out;
+        }
+        rc = creprc_sync_wait(args.rec, CRS_REPORTED, task, 0, 0, &st, &snap);
+        if (rc)
+            return rc;
+        args.status = st;
+        args.value = (st & 1) ? snap.report : 0;
+        goto out;
+    }
+    }
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}

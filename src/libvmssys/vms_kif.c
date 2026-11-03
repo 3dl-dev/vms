@@ -2435,6 +2435,40 @@ uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *user
     return args.status;
 }
 
+/*
+ * $CREPRC's creation record (rd vms-416d): one op on the executive object the
+ * creator and the task it forked synchronise through (VMS_CREPRC_SYNC_*). The
+ * waiting ops are re-entered on a signal, as $WAITFR is (kif_wait_call): a
+ * signal the CALLER catches must not decide what $CREPRC says about the child.
+ * Each op is idempotent, so re-issuing it after -EINTR changes nothing.
+ * `pid`, `value` and `vms_pid` are in/out (NULL: 0 in, discarded out).
+ */
+uint32_t vms_kif_creprc_sync(uint32_t op, uint32_t *rec, uint32_t *pid,
+                             uint32_t *value, uint32_t *vms_pid)
+{
+    struct vms_creprc_sync_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.op = op;
+    args.rec = rec ? *rec : 0;
+    args.pid = pid ? *pid : 0;
+    args.value = value ? *value : 0;
+    args.vms_pid = vms_pid ? *vms_pid : 0;
+
+    /* NEGCTL-ANCHORED (creprc-handshake-eintr) */
+    KIF_WAIT_CALL(VMS_IOCTL_CREPRC_SYNC, &args);
+
+    if (rec)
+        *rec = args.rec;
+    if (pid)
+        *pid = args.pid;
+    if (value)
+        *value = args.value;
+    if (vms_pid)
+        *vms_pid = args.vms_pid;
+    return args.status;
+}
+
 /* $DELPRC / $FORCEX / $SUSPND / $RESUME, authorized and delivered by the
  * executive (rd vms-8e9). op = VMS_PROCCTL_*; pid 0 = the caller. */
 uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code)

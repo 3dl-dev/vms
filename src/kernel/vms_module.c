@@ -1776,6 +1776,12 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * every other ioctl below refuses it with -ESRCH (SS$_NONEXPR). */
     if (cmd == VMS_IOCTL_ESTABLISH_SYSTEM)
         return vms_ioctl_establish_system(vms_proc_find_or_err(), arg);
+    /* $CREPRC's creation record (rd vms-416d): the task $CREPRC forked, and
+     * its detach intermediate, have no PCB yet when they ARRIVE / HOLD; the
+     * facility takes the caller's PCB as NULL then and makes none. Every
+     * creator-side op refuses a caller without one. */
+    if (cmd == VMS_IOCTL_CREPRC_SYNC)
+        return vms_ioctl_creprc_sync(vms_proc_find_or_err(), arg);
 
     /*
      * E47 (docs/cluster-integration-notes.md): the three cluster
@@ -2605,6 +2611,7 @@ static int __init vms_init(void)
         return ret;
     }
     vms_eflag_init();
+    vms_creprc_sync_init();     /* rd vms-416d: $CREPRC's creation record */
 
     /*
      * Bring up the device table before /dev/vms exists, so that the
@@ -2617,6 +2624,7 @@ static int __init vms_init(void)
         pr_err("vms: failed to initialize device table: %d\n", ret);
         vms_lock_cleanup();
         vms_eflag_cleanup();
+        vms_creprc_sync_cleanup();
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
@@ -2645,6 +2653,7 @@ static int __init vms_init(void)
         vms_devtab_cleanup();
         vms_lock_cleanup();
         vms_eflag_cleanup();
+        vms_creprc_sync_cleanup();
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
@@ -2689,6 +2698,7 @@ static int __init vms_init(void)
         vms_devtab_cleanup();
         vms_lock_cleanup();
         vms_eflag_cleanup();
+        vms_creprc_sync_cleanup();
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
@@ -2836,6 +2846,7 @@ static void __exit vms_exit(void)
     /* Cleanup subsystems */
     vms_lock_cleanup();
     vms_eflag_cleanup();
+    vms_creprc_sync_cleanup();
     vms_devtab_cleanup();
     vms_lnm_cleanup();
     vms_mbx_cleanup();

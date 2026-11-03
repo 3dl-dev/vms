@@ -574,6 +574,29 @@ static inline int exec_task_alive(exec_task_ref_t *ref)
 	return task != NULL;
 }
 
+/* rd vms-416d: the CURRENT task's process id, as its own getpid() sees it. */
+static inline uint32_t exec_current_pid(void)
+{
+	return (uint32_t)task_tgid_vnr(current);
+}
+
+/* rd vms-416d: nonzero iff process `pid` (in the caller's pid namespace)
+ * exists and has not exited -- a zombie is NOT running (whole process). */
+static inline int exec_pid_running(uint32_t pid)
+{
+	struct task_struct *task;
+	int running;
+
+	rcu_read_lock();
+	task = pid_task(find_vpid((pid_t)pid), PIDTYPE_PID);
+	/* signal->live counts the group's threads that have not passed do_exit:
+	 * whole-process, so a leader thread that exited out of a live threaded
+	 * process does not read as dead, and a zombie reads 0. */
+	running = task != NULL && atomic_read(&task->signal->live) > 0;
+	rcu_read_unlock();
+	return running;
+}
+
 static inline exec_task_pin_t *exec_task_pin(exec_task_ref_t *ref)
 {
 	struct task_struct *task;

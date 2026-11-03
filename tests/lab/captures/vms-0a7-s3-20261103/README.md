@@ -5,17 +5,65 @@ it, STARTNET runs `NCP SET EXECUTOR STATE ON` and NCP `$CREPRC`s `NETACP.EXE` de
 output going to `SYS$MANAGER:NETACP.LOG`. NETACP serves inbound object 17 by `$CREPRC`ing
 `FAL.EXE`, which takes its link through `SYS$NET`. The peer is a real OpenVMS VAX V7.3 (VAXC).
 
-**Result: S3 is not ready as shipped.** The run found two bugs. One is fixed here:
+**Current result (branch head 771a65216, as shipped): S3 is still not ready.** In 771a65216
+NETACP keeps NETACP.LOG open (one `$CREATE` with SHRGET, then `$PUT` + `$FLUSH` per line). That
+did not clear the stalls:
+- the inbound SET HOST login stalls after "Last interactive login";
+- the 2000-record COPY fails or stalls in both directions;
+- once, the OVMX **console** login at boot stalled the same way.
 
-- **Fixed: NETACP stopped itself.** A process leaked one POSIX timer for every `$SETIMR` that
-  expired, so NETACP stopped after a few thousand waits. The fix is commit 40e8c4f7e.
-- **Open: the NETACP.LOG writer stalls DECnet.** NETACP writes `SYS$MANAGER:NETACP.LOG` through
-  RMS, one `$OPEN`/`$PUT`/`$CLOSE` per line. While it does, a large COPY stalls in either
-  direction and an inbound SET HOST login stalls.
+In every stalled run NETACP.LOG gets no line after the first process that NETACP creates. The run
+is in `run-771a65216-shipped/` and summarised in the first table below.
 
-Run B is the same image with NETACP restarted with `/OUTPUT=NL:` (no NETACP.LOG). In run B every
-case passes against the VAX, byte-identical both ways. It is a diagnostic variant, not the
-shipped configuration.
+Earlier runs are kept as history:
+
+| fix | commit | result |
+|---|---|---|
+| A process leaked one POSIX timer for every expired `$SETIMR`, so NETACP stopped after a few thousand waits. | 40e8c4f7e | fixed |
+| NETACP did one `$OPEN`/`$PUT`/`$CLOSE` per NETACP.LOG line. | 771a65216 | stalls remain |
+
+**Run B, the diagnostic variant.** This is image 40e8c4f7e with NETACP restarted with
+`/OUTPUT=NL:` (no NETACP.LOG). In run B every case passes against the VAX, byte-identical both
+ways. It is not the shipped configuration.
+
+## Shipped run on 771a65216 (`run-771a65216-shipped/`)
+
+**Image.** `ovmx-boot-s3:bench-771a65216`, docker id `sha256:8f35c21ea61e…`, built by the branch
+owner from 771a65216. Its `artifacts.sha256` gives `ovmx-distrib.img` as `90c9f651…`.
+
+**Bench.** This is `bench/s3_bench.py` as shipped, with no NL: override. `S3_SETHOST_LAST=1` runs
+the inbound SET HOST last. With the login first, the bench never got past it. Two more attempts are
+kept:
+- `login-first/`: the inbound login at the start. It stalls, and the OVMX console then shows
+  SHOW SYSTEM and NETACP.LOG.
+- `console-login-stall/`: the OVMXA console login itself stalled after "Welcome", so the bench
+  never started.
+
+| # | case | result on 771a65216 as shipped |
+|---|---|---|
+| 1a | NETACP is its own detached process (OVMX SHOW SYSTEM). | **PASS.** 10000004 NETACP. |
+| 1b | NETACP.LOG has the DATALINK and STARTED lines. | **PASS** (2 lines). |
+| 1c | VAXC `SET HOST OVMXA`, login, SHOW SYSTEM. | **FAIL** (`login-first/`). The banner and "Last interactive login" arrive, then no `$` for 120 s, and CTRL/Y CTRL/Y Y is needed on the VAX. During the stall OVMX shows NETACP alive with a nameless session process 10000007. NETACP.LOG ends at `SESSTART … RTA0:`: no RTATERM line, and no 15 s ADJINIT lines after it. In the main run the login was not reached, because 3e hung the console. |
+| 2 | VAXC `DIRECTORY OVMXA"…"::` | **PASS** (2a, 2b). |
+| 2 | VAXC `COPY BIG.TXT` into OVMX's FAL, back, DIFFERENCES | **FAIL.** `%COPY-E-WRITEERR … -SYSTEM-F-LINKDISCON` at 106 blocks. FAL `SERVER_0003` is still running afterwards and holding BIGV.TXT: OVMX's own COPY of it (2h) gets `-RMS-F-SHR`. The copy back and DIFFERENCES fail with FNF. |
+| 3 | OVMX `DIRECTORY` / `TYPE VAXC"…"::`, wrong password | **PASS** (3a–3d). The wrong password gives `-SYSTEM-F-INVLOGIN`. |
+| 3 | OVMX `COPY VAXC"…"::BIG.TXT` | **FAIL.** No prompt in 420 s, and the console does not return after CTRL/Y. |
+| 4 | DECNETD.EXE never activated | **PASS.** It is deleted at login. `SET HOST VAXC` gives `%SET-I-NOTAVAIL`. No DECNETD process appears in any SHOW SYSTEM. |
+| — | VAX console | No bugcheck. |
+
+**Reading.** Keeping the file open did not help, so the per-line `$OPEN` was not the whole cause.
+The stall signature is the same as with the old sink. What separates the passing runs is NETACP's
+SYS$OUTPUT: with NETACP.LOG (through RMS) things stall; with `NL:` (run B), or as a foreground
+image on a terminal, they do not.
+- **Hypothesis.** NETACP's RMS access to NETACP.LOG stops working, or blocks, once NETACP has
+  `$CREPRC`ed a process (LOGINOUT for CTERM, FAL for object 17). It contends with that process's
+  file writes in `[SYSMGR]` (LASTLOGIN_SYSTEM.DAT, BIGV.TXT, the console COPY's BIG.TXT), and
+  NETACP's single loop stalls.
+- **The console-login stall.** At boot, NETACP's open NETACP.LOG and the console LOGINOUT's write
+  in the same directory deadlock, which points at the ACP/RMS file-access layer.
+- **Not proven.** The exact lock.
+
+## History: runs on 3c4df7549 and 40e8c4f7e
 
 ## Images and artifacts
 
@@ -23,6 +71,7 @@ shipped configuration.
 |---|---|---|
 | `ovmx-boot-s3:bench-3c4df7549` (as handed over) | 3c4df7549 | `sha256:da5623ed1318…` |
 | `ovmx-boot-s3:s3r1-40e8c4f7e` (with the two fixes below) | 40e8c4f7e | `sha256:1c4a913d8fa0…` |
+| `ovmx-boot-s3:bench-771a65216` (NETACP.LOG kept open) | 771a65216 | `sha256:8f35c21ea61e…` |
 
 Both were built with `docker build -f distro/Dockerfile.bootable --target runner`. The sha256 of
 the kernel, initramfs, distribution disk and DECnet-injected OVMXA disk are in each run's
@@ -52,7 +101,7 @@ the lab PVC: `nodec.dsk.gz` (`/lab/cluster-demo-nodeC-v73-decnet/`), `secret/pak
 - OVMXA's prompt is matched as `CR LF CR NUL "$ "`. NETACP.LOG text contains "$ SET HOST".
 - A step that hangs is ended with CTRL/Y and recorded as FAIL.
 
-## Results
+## Results on 40e8c4f7e (history)
 
 Each cell gives the run and the step tag from that run's `events.log`. The $STATUS values are
 also in `events.log`.
@@ -102,7 +151,7 @@ also in `events.log`.
 - **After the fix.** NETACP stays up: in the fixed image's first run (`run-40e8c4f7e-shipped-bench`)
   hellos keep going out for 6+ min.
 
-## The open failure: NETACP.LOG through RMS (diagnosis, not fixed)
+## The NETACP.LOG failure as diagnosed on 40e8c4f7e (771a65216 then changed the sink; see the shipped run above)
 
 **The bisect.** One image (40e8c4f7e), one VAX, one bench, and only NETACP's SYS$OUTPUT differs:
 
@@ -136,6 +185,7 @@ SHOW SYSTEM and LOGOUT.
 
 | path | contents |
 |---|---|
+| `run-771a65216-shipped/` | The current shipped run (case table above), plus `login-first/` and `console-login-stall/`. Consoles, `events.log`, `wire.txt.gz`, `artifacts.sha256`. |
 | `run-40e8c4f7e-netacp-nl/` | Run B, every case PASS. Consoles, `events.log`, `wire.txt.gz` (NSP decode, `SHOWN=1`, passwords XX), `artifacts.sha256`. |
 | `run-40e8c4f7e-shipped-copy-login/` | The fixed image as shipped: VAX→OVMX FAL BIG COPY fails at 41 blocks, then the inbound login stalls. OVMX SHOW SYSTEM and NETACP.LOG are taken during the stall. |
 | `run-40e8c4f7e-shipped-bench/` | The fixed image as shipped: the OVMX→VAX BIG COPY stalls (the wire shows the 3 s flow-control cadence and the DI at 104 s). |

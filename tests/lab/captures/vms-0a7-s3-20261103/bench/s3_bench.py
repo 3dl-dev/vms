@@ -263,7 +263,18 @@ def main():
             v.p.send('SET HOST OVMXA\r'); v.p.expect('Username:', timeout=120)
             v.p.send('SYSTEM\r'); v.p.expect('Password:', timeout=60); time.sleep(0.5)
             v.p.send(OVMX_PW + '\r')
-            k = v.p.expect([r'REM-S-END', PROMPT], timeout=120)
+            k = v.p.expect([r'REM-S-END', PROMPT, pexpect.TIMEOUT], timeout=120)
+            if k == 2:
+                ev('VAXC', tag, 'FAIL: no DCL prompt in 120 s after login; OVMXA console looks')
+                acmd('SHOW SYSTEM'); acmd('TYPE SYS$MANAGER:NETACP.LOG')
+                # VAX RTPAD: CTRL/Y twice asks "Are you repeating ^Y to abort the
+                # remote session on node OVMXA?"; Y returns to VAXC
+                v.p.send('\x19'); time.sleep(2); v.p.send('\x19')
+                v.p.expect('abort the remote session', timeout=60)
+                time.sleep(1); v.p.send('Y\r')
+                v.p.expect(r'\$ $', timeout=120)
+                ev('VAXC', tag, 'back on VAXC after CTRL/Y CTRL/Y')
+                return False
             if k == 0:
                 v.p.expect(PROMPT, timeout=60)
                 ev('VAXC', tag, 'FAIL: %REM-S-END right after login; back on VAXC')
@@ -279,7 +290,9 @@ def main():
         # (the inbound SET HOST of case 1 runs LAST: in the first run of this bench
         # NETACP ended at that login, and every later case then had no network)
 
-        if not vax_sethost('1'):
+        if os.environ.get('S3_SETHOST_LAST'):
+            ev('case 1 inbound SET HOST deferred to the end (S3_SETHOST_LAST)')
+        elif not vax_sethost('1'):
             ostep('1h', 'SHOW SYSTEM', t=60)
             ostep('1i', 'TYPE SYS$MANAGER:NETACP.LOG', t=60)
 

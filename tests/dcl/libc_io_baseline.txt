@@ -8,7 +8,7 @@ dcl_cmd_process.c 14
 dcl_cmd_set.c 2
 dcl_cmd_show.c 7
 dcl_editor.c 2
-dcl_help.c 5
+dcl_help.c 4
 dcl_io.c 2
 dcl_library.c 9
 dcl_main.c 4

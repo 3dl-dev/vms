@@ -1,5 +1,4 @@
 #!/bin/bash
-# DCL_OUTPUT: stdio vms-d1a HELP renders through stdio (dcl_out_stream), not the sink
 # TEST: HELP <verb> surfaces per-command qualifiers from the Engine A CDU
 #       command tables, in sync with the actually-accepted syntax (vms-01b).
 # EXPECT: contains:CDU_DIR_EXCLUDE_LISTED

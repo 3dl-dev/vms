@@ -1775,6 +1775,19 @@ int help_acp_vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
     return $VMS_STATUS_SUCCESS(vmsfs_to_linux_path(vms_spec, buf, bufsz)) ? 1 : 0;
 }
 
+/* HELP's sink: SYS$OUTPUT (rd vms-d1a) */
+static int help_out_sysoutput(void *arg, const char *p, size_t n)
+{
+    (void)arg;
+    return dcl_out_write(p, n) == n ? 0 : -1;
+}
+
+static int help_out_sysoutput_flush(void *arg)
+{
+    (void)arg;
+    return dcl_out_flush();
+}
+
 /*
  * HELP - hierarchical topic help, read from the HELP library (vms-01b).
  *
@@ -1860,13 +1873,13 @@ int cmd_help(struct dcl_command *cmd)
         }
         npath = k;
     }
-    if (prompting) {
-        help_set_reader(dcl_tt_read_line);
-        help_interactive(lib, path, npath, stdin, dcl_out_stream());
-        help_set_reader(NULL);
-    } else {
-        status = help_render(lib, path, npath, dcl_out_stream());
-    }
+    /* HELP's display is DCL output: SYS$OUTPUT records through the sink,
+     * routed wherever SYS$OUTPUT is (rd vms-d1a) */
+    const help_out_t out = { help_out_sysoutput, help_out_sysoutput_flush, NULL };
+    if (prompting)
+        help_interactive(lib, path, npath, dcl_tt_read_line, &out);
+    else
+        status = help_render(lib, path, npath, &out);
 
     help_close(lib);
     return status;

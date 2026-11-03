@@ -19,6 +19,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdarg.h>
 
 #include "dcl/help.h"
 #include "dcl/hlb.h"
@@ -608,6 +609,56 @@ void help_node_remove_child(help_node_t *parent, help_node_t *child)
  *     on lines of their own;
  *   - a blank line ends the display, before the next prompt.
  */
+/* The display goes to the caller's sink (help_out_t): in DCL, SYS$OUTPUT's
+ * records (rd vms-d1a). */
+static void hwrite(const help_out_t *out, const char *p, size_t n)
+{
+    if (n)
+        (void)out->write(out->arg, p, n);
+}
+
+static void hputs(const help_out_t *out, const char *s)
+{
+    hwrite(out, s, strlen(s));
+}
+
+static void hputc(int c, const help_out_t *out)
+{
+    char ch = (char)c;
+    hwrite(out, &ch, 1);
+}
+
+static void hflush(const help_out_t *out)
+{
+    if (out->flush)
+        (void)out->flush(out->arg);
+}
+
+static void hprintf(const help_out_t *out, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+static void hprintf(const help_out_t *out, const char *fmt, ...)
+{
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    if (n < 0)
+        return;
+    if ((size_t)n < sizeof buf) {
+        hwrite(out, buf, (size_t)n);
+        return;
+    }
+    char *big = malloc((size_t)n + 1);
+    if (!big)
+        return;
+    va_start(ap, fmt);
+    vsnprintf(big, (size_t)n + 1, fmt, ap);
+    va_end(ap);
+    hwrite(out, big, (size_t)n);
+    free(big);
+}
+
 #define HELP_COLW   11
 #define HELP_LIMIT  77
 
@@ -628,7 +679,7 @@ static int collect_keys(help_node_t *node, help_node_t **keys, int max)
     return n;
 }
 
-static void print_key_columns_at(help_node_t *node, int indent, FILE *out)
+static void print_key_columns_at(help_node_t *node, int indent, const help_out_t *out)
 {
     help_node_t *keys[1024];
     int n = collect_keys(node, keys, 1024);
@@ -640,14 +691,14 @@ static void print_key_columns_at(help_node_t *node, int indent, FILE *out)
         int len = (int)strlen(k);
         int slash = listing_slash(keys[i]);
         if (pos >= 0 && (slash != prev_slash || pos + len > HELP_LIMIT)) {
-            fputc('\n', out);
+            hputc('\n', out);
             pos = -1;
         }
         if (pos < 0) {
-            fprintf(out, "%*s", indent, "");
+            hprintf(out, "%*s", indent, "");
             pos = indent;
         }
-        fputs(k, out);
+        hputs(out, k);
         {
             int cols = (len + 1 + HELP_COLW - 1) / HELP_COLW;
             int next = pos + cols * HELP_COLW;
@@ -656,80 +707,80 @@ static void print_key_columns_at(help_node_t *node, int indent, FILE *out)
             int nslash = more ? listing_slash(keys[i + 1]) : slash;
             int nlen = more ? (int)strlen(keys[i + 1]->name) : 0;
             if (more && nslash == slash && next + nlen <= HELP_LIMIT)
-                fprintf(out, "%*s", next - pos - len, "");
+                hprintf(out, "%*s", next - pos - len, "");
             pos = next;
         }
         prev_slash = slash;
     }
     if (pos >= 0)
-        fputc('\n', out);
+        hputc('\n', out);
 }
 
-static void print_key_columns(help_node_t *first, FILE *out)
+static void print_key_columns(help_node_t *first, const help_out_t *out)
 {
     print_key_columns_at(first ? first->parent : NULL, 2, out);
 }
 
 /* the node's text, each non-empty line indented `indent` more */
-static void print_text(const char *text, int indent, FILE *out)
+static void print_text(const char *text, int indent, const help_out_t *out)
 {
     const char *p = text;
     while (p && *p) {
         const char *e = strchr(p, '\n');
         size_t l = e ? (size_t)(e - p) : strlen(p);
         if (l)
-            fprintf(out, "%*s%.*s", indent, "", (int)l, p);
-        fputc('\n', out);
+            hprintf(out, "%*s%.*s", indent, "", (int)l, p);
+        hputc('\n', out);
         p = e ? e + 1 : p + l;
     }
 }
 
-static void print_listing(help_node_t *node, int indent, FILE *out)
+static void print_listing(help_node_t *node, int indent, const help_out_t *out)
 {
-    fprintf(out, "\n\n%*sAdditional information available:\n\n", indent, "");
+    hprintf(out, "\n\n%*sAdditional information available:\n\n", indent, "");
     print_key_columns_at(node, indent, out);
 }
 
-void help_show_toplevel(help_lib_t *lib, FILE *out)
+void help_show_toplevel(help_lib_t *lib, const help_out_t *out)
 {
     const char *self[] = { "HELP" };
     help_node_t *h = lib ? help_find(lib, self, 1) : NULL;
 
     /* VMS's bare HELP shows the HELP topic, then every topic (probe Q.HELP E) */
     if (h && strcasecmp(h->name, "HELP") == 0) {
-        fprintf(out, "\nHELP\n\n");
+        hprintf(out, "\nHELP\n\n");
         if (h->text && h->text[0])
             print_text(h->text, 0, out);
         print_listing(lib->root, 2, out);
     } else if (lib && lib->root->first_child) {
-        fprintf(out, "\n  Information available:\n\n");
+        hprintf(out, "\n  Information available:\n\n");
         print_key_columns_at(lib->root, 2, out);
     } else {
-        fprintf(out, "\n  (no information available)\n");
+        hprintf(out, "\n  (no information available)\n");
     }
 }
 
 /* the node at each level of the path, for the header */
 static void write_header(help_lib_t *lib, const char *const path[], int n,
-                         FILE *out)
+                         const help_out_t *out)
 {
     help_node_t *node = lib ? lib->root : NULL;
     for (int i = 0; i < n; i++) {
         help_node_t *c = node ? key_lookup(node, path[i]) : NULL;
         const char *nm = c ? c->name : path[i];
-        fprintf(out, "%*s", 2 * i, "");
+        hprintf(out, "%*s", 2 * i, "");
         for (const char *p = nm; *p; p++)
-            fputc(toupper((unsigned char)*p), out);
-        fputs("\n\n", out);
+            hputc(toupper((unsigned char)*p), out);
+        hputs(out, "\n\n");
         node = c;
     }
 }
 
 static void show_node_lib(help_lib_t *lib, help_node_t *node,
-                          const char *const path[], int n, FILE *out)
+                          const char *const path[], int n, const help_out_t *out)
 {
     if (!node) return;
-    fputc('\n', out);
+    hputc('\n', out);
     write_header(lib, path, n, out);
     if (node->text && node->text[0])
         print_text(node->text, n > 1 ? 2 * (n - 1) : 0, out);
@@ -740,24 +791,24 @@ static void show_node_lib(help_lib_t *lib, help_node_t *node,
 static help_lib_t *g_show_lib;
 
 void help_show_node(help_node_t *node, const char *const path[], int n,
-                    FILE *out)
+                    const help_out_t *out)
 {
     show_node_lib(g_show_lib, node, path, n, out);
 }
 
 /* "  Sorry, no documentation on <PATH>", then what the level above offers */
-static void show_nodoc(const char *const path[], int n, FILE *out)
+static void show_nodoc(const char *const path[], int n, const help_out_t *out)
 {
-    fprintf(out, "  Sorry, no documentation on ");
+    hprintf(out, "  Sorry, no documentation on ");
     for (int i = 0; i < n; i++) {
-        if (i) fputc(' ', out);
+        if (i) hputc(' ', out);
         for (const char *p = path[i]; *p; p++)
-            fputc(toupper((unsigned char)*p), out);
+            hputc(toupper((unsigned char)*p), out);
     }
-    fputc('\n', out);
+    hputc('\n', out);
 }
 
-int help_render(help_lib_t *lib, const char *const path[], int n, FILE *out)
+int help_render(help_lib_t *lib, const char *const path[], int n, const help_out_t *out)
 {
     g_show_lib = lib;
     if (n == 0) {
@@ -779,17 +830,10 @@ int help_render(help_lib_t *lib, const char *const path[], int n, FILE *out)
 
 #define HELP_MAX_DEPTH 9
 
-static help_read_fn g_reader;
-
-void help_set_reader(help_read_fn fn)
-{
-    g_reader = fn;
-}
-
 /* "Topic? " at the top, "<KEY> ... Subtopic? " inside a topic: a prompt on
  * a new line of its own (no fill), as INQUIRE's is */
 static int read_prompted(char stack[][128], int depth, char *line,
-                         size_t sz, FILE *in, FILE *out)
+                         size_t sz, help_read_fn reader, const help_out_t *out)
 {
     char prompt[HELP_MAX_DEPTH * 130 + 16];
     size_t pl = 0;
@@ -802,19 +846,12 @@ static int read_prompted(char stack[][128], int depth, char *line,
         prompt[pl++] = ' ';
     }
     memcpy(prompt + pl, depth ? "Subtopic? " : "Topic? ", depth ? 11 : 8);
-    if (g_reader) {
-        fflush(out);
-        return g_reader(prompt, line, sz);
-    }
-    fputs(prompt + 1, out);       /* a plain stream: "\nTopic? " */
-    fflush(out);
-    if (!fgets(line, (int)sz, in))
-        return -1;
-    return 0;
+    hflush(out);                  /* the display goes before the prompt */
+    return reader(prompt, line, sz);
 }
 
 static void show_level(help_lib_t *lib, char stack[][128], int depth,
-                       FILE *out)
+                       const help_out_t *out)
 {
     if (depth == 0) {
         help_show_toplevel(lib, out);
@@ -823,11 +860,11 @@ static void show_level(help_lib_t *lib, char stack[][128], int depth,
         for (int i = 0; i < depth; i++) path[i] = stack[i];
         show_node_lib(lib, help_find(lib, path, depth), path, depth, out);
     }
-    fputc('\n', out);             /* the blank line that ends a display */
+    hputc('\n', out);             /* the blank line that ends a display */
 }
 
 /* the display after "Sorry": what the level the user is at offers */
-static void show_offer(help_lib_t *lib, char stack[][128], int depth, FILE *out)
+static void show_offer(help_lib_t *lib, char stack[][128], int depth, const help_out_t *out)
 {
     help_node_t *node = lib->root;
     if (depth) {
@@ -837,11 +874,11 @@ static void show_offer(help_lib_t *lib, char stack[][128], int depth, FILE *out)
     }
     if (node && node->first_child)
         print_listing(node, depth ? 2 * depth : 2, out);
-    fputc('\n', out);
+    hputc('\n', out);
 }
 
 void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
-                      FILE *in, FILE *out)
+                      help_read_fn reader, const help_out_t *out)
 {
     char stack[HELP_MAX_DEPTH][128];
     int depth = 0;
@@ -870,7 +907,7 @@ void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
 
     char line[256];
     for (;;) {
-        if (read_prompted(stack, depth, line, sizeof line, in, out) != 0)
+        if (read_prompted(stack, depth, line, sizeof line, reader, out) != 0)
             break;                         /* CTRL/Z or EOF */
 
         size_t len = strlen(line);

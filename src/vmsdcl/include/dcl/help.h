@@ -27,14 +27,26 @@
  * library search order (VSI OpenVMS DCL Dictionary, HELP).
  *
  * This engine is deliberately free of DCL-context and libvms-runtime
- * dependencies (only <stdio.h> for the FILE* sinks and VMS status codes) so it
- * can be exercised standalone by a hermetic unit test.
+ * dependencies (it renders into a caller's help_out_t sink and reads through a
+ * caller's help_read_fn, and returns VMS status codes) so it can be exercised
+ * standalone by a hermetic unit test. In DCL the sink is SYS$OUTPUT's
+ * (dcl_out_*, rd vms-d1a): HELP's text is DCL output records, routed wherever
+ * SYS$OUTPUT is -- the terminal, a mailbox, or an RMS file.
  */
 
 #ifndef OVMX_DCL_HELP_H
 #define OVMX_DCL_HELP_H
 
-#include <stdio.h>
+#include <stddef.h>
+
+/* Where HELP's text goes: `write` takes the next `n` bytes of the display
+ * (a '\n' ends a line); `flush` (may be NULL) sends a partial line -- the
+ * text before a prompt -- out now. */
+typedef struct help_out {
+    int  (*write)(void *arg, const char *p, size_t n);
+    int  (*flush)(void *arg);
+    void  *arg;
+} help_out_t;
 
 /* One key in the hierarchy (topic, subtopic, ...). */
 typedef struct help_node {
@@ -111,30 +123,31 @@ void help_node_clear_children(help_node_t *node);
 void help_node_remove_child(help_node_t *parent, help_node_t *child);
 
 /* Print the top-level "Information available:" topic listing. */
-void help_show_toplevel(help_lib_t *lib, FILE *out);
+void help_show_toplevel(help_lib_t *lib, const help_out_t *out);
 
 /* Print one node: its "<PATH>" header, indented body text, and the
  * "Additional information available:" listing of its immediate subtopics. */
 void help_show_node(help_node_t *node, const char *const path[], int n,
-                    FILE *out);
+                    const help_out_t *out);
 
 /* Non-interactive lookup + display. n == 0 lists the top level; otherwise the
  * resolved node is shown, or "Sorry, no documentation on <PATH>" is printed
  * when it cannot be resolved. Returns a VMS status code:
  *   SS$_NORMAL       - a node (or the top-level list) was displayed
  *   SS$_ITEMNOTFOUND - the requested topic path had no documentation */
-int help_render(help_lib_t *lib, const char *const path[], int n, FILE *out);
+int help_render(help_lib_t *lib, const char *const path[], int n,
+                const help_out_t *out);
+
+/* How the prompt loop reads a line: the prompt (with its own leading CR LF,
+ * which a plain stream shows as a new line), then the reply into buf; 0, or -1
+ * at end of file (CTRL/Z). DCL reads the terminal (dcl_tt_read_line, rd
+ * vms-f9e). */
+typedef int (*help_read_fn)(const char *prompt, char *buf, size_t bufsz);
 
 /* Interactive HELP: display the initial path (top level when ninit == 0), then
- * drive the VMS "Topic?" / "<path> Subtopic?" prompt loop reading from `in`.
- * A blank line pops one level (and exits at the top); EOF exits. */
+ * drive the VMS "Topic?" / "<path> Subtopic?" prompt loop reading through
+ * `reader`. A blank line pops one level (and exits at the top); EOF exits. */
 void help_interactive(help_lib_t *lib, const char *const initial[], int ninit,
-                      FILE *in, FILE *out);
-
-/* How the prompt loop reads a line at a terminal: prompt (with its own
- * leading CR LF), buffer; 0, or -1 at end of file (CTRL/Z). Unset, the loop
- * writes the prompt to `out` and reads `in`. rd vms-f9e. */
-typedef int (*help_read_fn)(const char *prompt, char *buf, size_t bufsz);
-void help_set_reader(help_read_fn fn);
+                      help_read_fn reader, const help_out_t *out);
 
 #endif /* OVMX_DCL_HELP_H */

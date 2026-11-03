@@ -27,9 +27,6 @@ int    dcl_out_flush(void);
 int    dcl_out_error(void);                  /* the stream's error flag */
 void   dcl_out_clearerr(void);
 void   dcl_out_line_buffered(void);          /* SYS$OUTPUT became a pipe */
-/* The SYS$OUTPUT stream itself, for the HELP renderer, which writes a
- * caller-chosen stream (a libc-drop: help_render/help_interactive). */
-FILE  *dcl_out_stream(void);
 
 /* /PAGE: SYS$OUTPUT is gathered into `f` until dcl_out_capture(NULL). */
 void   dcl_out_capture(FILE *f);

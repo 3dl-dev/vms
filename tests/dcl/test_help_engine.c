@@ -49,6 +49,22 @@ static const char *SRC =
     "2 /BRIEF\n"
     " Displays only file names.\n";
 
+/* The engine renders into a help_out_t sink; the test's sink is a heap
+ * buffer (open_memstream), its reader a scripted stream. */
+static int file_write(void *arg, const char *p, size_t n)
+{
+    return fwrite(p, 1, n, (FILE *)arg) == n ? 0 : -1;
+}
+
+static int file_flush(void *arg) { return fflush((FILE *)arg); }
+
+static FILE *g_in, *g_out;
+static int script_read(const char *prompt, char *buf, size_t bufsz)
+{
+    fputs(prompt + 1, g_out);      /* "\nTopic? " */
+    return fgets(buf, (int)bufsz, g_in) ? 0 : -1;
+}
+
 /* Render helpers capturing into a heap buffer via open_memstream. */
 static char *render_path(help_lib_t *lib, const char *const path[], int n,
                          int *status_out)
@@ -56,7 +72,8 @@ static char *render_path(help_lib_t *lib, const char *const path[], int n,
     char *buf = NULL;
     size_t sz = 0;
     FILE *out = open_memstream(&buf, &sz);
-    int st = help_render(lib, path, n, out);
+    const help_out_t sink = { file_write, file_flush, out };
+    int st = help_render(lib, path, n, &sink);
     fclose(out);
     if (status_out) *status_out = st;
     return buf; /* caller frees */
@@ -139,7 +156,10 @@ int main(void)
         char *buf = NULL;
         size_t sz = 0;
         FILE *out = open_memstream(&buf, &sz);
-        help_interactive(lib, NULL, 0, in, out);
+        const help_out_t sink = { file_write, file_flush, out };
+        g_in = in;
+        g_out = out;
+        help_interactive(lib, NULL, 0, script_read, &sink);
         fclose(out);
         fclose(in);
         check(strstr(buf, "Topic? ") != NULL,

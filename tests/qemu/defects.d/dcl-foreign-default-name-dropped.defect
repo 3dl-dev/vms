@@ -1,0 +1,27 @@
+# dcl-foreign-default-name-dropped -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL foreign-command dispatch: SYM :== \$ with no image-spec activates the image named by the symbol (src/vmsdcl/dcl_cmd_process.c dcl_exec_foreign_command, rd vms-96e)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_dcl_foreign_dispatch";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The default-name rule is dropped: an empty image-spec stays empty instead of becoming the symbol's own name, so SELFNAMED's %DCL-W-IVIMAGE names no image. Every foreign command with an image-spec (the suite's other probes, MMK's TCC) is untouched.";;
+        require_fail) cat <<'EOR'
+SYM :== $ (empty image-spec) defaults the image name to the symbol
+EOR
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the default-name line in dcl_exec_foreign_command().
+        sed -i 's|^    if (\*image_spec == .\\0.) image_spec = cmd->verb;$|    if (0) image_spec = cmd->verb; /* NEGCTL dcl-foreign-default-name-dropped */|' "$_file"
+    :
+}

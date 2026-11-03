@@ -11,7 +11,7 @@
 # CURRENT on the booted volume, then a power-cycle whose PID 1 reads the new
 # OVMXVMSSYS.PAR and sethostname()s from SCSNODE) is already CI-proven by
 # tests/qemu/test_boot_scsnode_hostname_e2e.sh -- but that gate types the SYSGEN
-# commands BY HAND. tests/dcl/test_cluster_config_lan.sh drives the actual
+# commands BY HAND. tests/qemu/test_syssvc_dcl_image_sysout.c (cclan case) drives the actual
 # procedure, but through a HOST DCL interpreter with piped stdin against a /tmp
 # store: it never boots, never reboots, and never proves the identity is adopted
 # by a running system. It asserts only that a store-write happened.
@@ -227,7 +227,7 @@ if [ "$rc" -eq 0 ]; then
 
     # ROBUSTNESS: an over-long name (>6 chars) is rejected with the honest
     # facility error and re-prompted -- never written. Same guard the host shim
-    # test (tests/dcl/test_cluster_config_lan.sh) asserts, here on a real boot.
+    # test (tests/qemu/test_syssvc_dcl_image_sysout.c (cclan case)) asserts, here on a real boot.
     send 'TOOLONGNAME'; sleep 2
     check "boot 1: over-long SCSNODE rejected with %CLUSTER_CONFIG-E-BADNODE" \
         "$POS_LOG1" '%CLUSTER_CONFIG-E-BADNODE, SCSNODE is limited to 6 characters'

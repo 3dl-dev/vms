@@ -273,7 +273,7 @@ RUN cd /src/repo && \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
         -DOVMX_CRTL_FD_STATIC=ON \
-    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime vms_sysgen vms_install vms_product PARTS --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     echo "--- PIPESTAGE.EXE (the stage image test_syssvc_spawn_pipeline drives, vms-e9a B2) ---" && \
@@ -355,7 +355,13 @@ RUN cd /src/repo && \
     # test_syssvc_decnetd_syscall_audit.c traces (qemu_syssvc_tests DEPENDS on
     # decnetd_exe). Absence is FATAL, as for every subject above.
     echo "--- DECNETD.EXE (the NETACP test_syssvc_decnetd_syscall_audit traces) ---" && \
-    ls -la build-static/bin/DECNETD.EXE
+    ls -la build-static/bin/DECNETD.EXE && \
+    # SYSGEN/INSTALL/PRODUCT/PARTS.EXE (rd vms-380f): the images DCL activates
+    # in test_syssvc_dcl_image_sysout / test_syssvc_dcl_foreign_dispatch, whose
+    # output those suites read from DCL's SYS$OUTPUT. Absence is FATAL.
+    echo "--- SYSGEN/INSTALL/PRODUCT/PARTS.EXE (images DCL runs, vms-380f) ---" && \
+    ls -la build-static/bin/SYSGEN.EXE build-static/bin/INSTALL.EXE \
+           build-static/bin/PRODUCT.EXE build-static/bin/PARTS.EXE
 
 # TCC.EXE (vms-d1b, self-host spine #6): tinycc built as a PLAIN STATIC (musl)
 # foreign-command image -- the compiler test_syssvc_mmk_build.c drives from MMK's
@@ -927,6 +933,19 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
            /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ || \
         { echo "FATAL: $f was not staged into the initramfs -- F\$IDENTIFIER reads the rights database now, and every identifier assertion would silently become a miss"; exit 1; }; \
     done && \
+    # SYSGEN/INSTALL/PRODUCT/PARTS.EXE at SYS$SYSTEM and the shipped
+    # CLUSTER_CONFIG_LAN.COM at SYS$MANAGER (rd vms-380f): the images and the
+    # procedure test_syssvc_dcl_image_sysout / test_syssvc_dcl_foreign_dispatch
+    # have DCL run. Absence is FATAL: their assertions would have nothing to run.
+    for f in SYSGEN.EXE INSTALL.EXE PRODUCT.EXE PARTS.EXE; do \
+        { cp "/src/repo/build-static/bin/$f" /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+          chmod +x "/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/$f"; } || \
+        { echo "FATAL: $f was not built into the static tree -- the image DCL runs in the vms-380f suites would go unproven"; exit 1; }; \
+    done && \
+    mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSMGR && \
+    { cp /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/CLUSTER_CONFIG_LAN.COM \
+         /initramfs/vms/SYS0/SYSCOMMON/SYSMGR/ || \
+      { echo "FATAL: CLUSTER_CONFIG_LAN.COM was not staged -- the cclan case would have no procedure"; exit 1; }; } && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

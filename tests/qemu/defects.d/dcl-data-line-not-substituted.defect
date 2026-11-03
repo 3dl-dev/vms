@@ -1,0 +1,34 @@
+# dcl-data-line-not-substituted -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DCL apostrophe substitution on the data lines an @procedure feeds a RUN image's SYS\$INPUT (src/vmsdcl/dcl_cmd_process.c dcl_sysinput_setup, rd vms-963, vms-380f)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_dcl_image_sysout";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "dcl_sysinput_setup copies each data line verbatim instead of passing it through dcl_sym_substitute, so 'PWSYM' reaches the RUN image literally. The image (reading SYS\$INPUT, writing DCL's SYS\$OUTPUT) echoes the raw marker, and the suite's substitution assertions redden while the substitution-free lines still pass.";;
+        require_fail) cat <<'EOR'
+apos: 'PWSYM' in a RUN data line reaches the image as the symbol's value
+apos: the unsubstituted marker never reaches the image
+EOR
+                      ;;
+        knock_on_fail) cat <<'EOR'
+cclan: SYSGEN, driven by the procedure's RUN data lines, set SCSNODE
+cclan: SYSGEN, driven by the procedure's RUN data lines, set SCSSYSTEMID
+cclan: the store holds SCSNODE=OVMXA, no quote characters
+cclan: the store holds SCSSYSTEMID=1030
+EOR
+                      ;;
+        knock_on_why)  echo "CLUSTER_CONFIG_LAN.COM drives SYSGEN through the same RUN data lines (SET SCSNODE \"''CC_NODE'\", SET SCSSYSTEMID 'CC_ID'); unsubstituted, SYSGEN never sets OVMXA/1030, so the same single defect reddens the SYSGEN-set and store read-back assertions of the cclan case. The confirmation screen is DCL WRITE command lines, which this mutation does not touch.";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the one data-line substitution in dcl_sysinput_setup().
+        sed -i 's|^        dcl_sym_substitute(line, subst, sizeof(subst));$|        snprintf(subst, sizeof(subst), "%s", line); /* NEGCTL dcl-data-line-not-substituted */|' "$_file"
+    :
+}

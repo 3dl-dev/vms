@@ -75,6 +75,8 @@ make_image STARTUP.EXE      S  9000
 # the VAX sysvol, so a stand-in is required here too or stage_sysvol.sh dies
 # "boot image missing from images dir".
 make_image DECNETD.EXE      N  8000
+# NETACP.EXE (rd vms-0a7 S3): the network ACP NCP SET EXECUTOR STATE ON creates.
+make_image NETACP.EXE       N  8000
 # FAL.EXE (rd vms-d85): the FAL network server process, staged beside it.
 make_image FAL.EXE          F  7000
 # MAIL_SERVER.EXE (rd vms-47fd): the MAIL-11 network server process, likewise.
@@ -115,12 +117,13 @@ echo "PASS: staged system tree round-trips master -> extract byte-exact"
 # ---------------------------------------------------------------------------
 ROOTED="SYS0/SYSCOMMON/SYSEXE"
 for f in DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE \
-         DECNETD.EXE SYSUAF.DAT RIGHTSLIST.DAT OVMXVMSSYS.PAR; do
+         DECNETD.EXE NETACP.EXE SYSUAF.DAT RIGHTSLIST.DAT OVMXVMSSYS.PAR; do
     [ -f "$OUT/$ROOTED/$f" ] || fail "boot file absent from rooted SYSEXE after round-trip: $ROOTED/$f"
 done
 cmp -s "$IMAGES/DCL.EXE"       "$OUT/$ROOTED/DCL.EXE"       || fail "DCL.EXE not byte-exact at rooted path"
 cmp -s "$IMAGES/PROVISION.EXE" "$OUT/$ROOTED/PROVISION.EXE" || fail "PROVISION.EXE not byte-exact at rooted path"
 cmp -s "$IMAGES/DECNETD.EXE"   "$OUT/$ROOTED/DECNETD.EXE"   || fail "DECNETD.EXE not byte-exact at rooted path"
+cmp -s "$IMAGES/NETACP.EXE"    "$OUT/$ROOTED/NETACP.EXE"    || fail "NETACP.EXE not byte-exact at rooted path"
 cmp -s "$REPO/distro/rootfs/vms/$ROOTED/SYSUAF.DAT" "$OUT/$ROOTED/SYSUAF.DAT" \
     || fail "SYSUAF.DAT not reused byte-exact"
 echo "PASS: DCL.EXE + PROVISION.EXE + DECNETD.EXE + SYSUAF.DAT present + byte-exact at rooted [SYS0.SYSCOMMON.SYSEXE]"

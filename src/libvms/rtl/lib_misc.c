@@ -603,8 +603,7 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
     uint32_t gj = vms_kif_getjpi_pid(vms_pid, &info);
     if ((gj & 1) && info.linux_pid) {
         int wstatus;
-        while (waitpid((pid_t)info.linux_pid, &wstatus, 0) < 0 && errno == EINTR)
-            ;
+        (void)vms_kif_substrate_reap(info.linux_pid, &wstatus, 0);   /* rd vms-e70f */
         if (status) {
             if (WIFEXITED(wstatus))
                 *status = (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;

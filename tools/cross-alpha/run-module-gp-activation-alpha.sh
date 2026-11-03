@@ -439,30 +439,27 @@ assert_p32() {
 }
 
 assert_vfork() {
-  # vms-fb4: vfork()+execv() created a subprocess running an image with
-  # arguments; its output came back over the child-context pipe, the parent's
-  # stdout was restored, waitpid() collected it; sentinel 7.
+  # vms-fb4 / vms-e70f: vfork()+execv() created a SUBPROCESS through SYS$CREPRC
+  # running an image with arguments; its output came back over the child-context
+  # pipe, the parent's stdout was restored; $GETJPI answered the PID vfork()
+  # returned while the child lived, the child's getpid() was that VMS PID, and
+  # DECC$__VMS_WAITPID collected the child's ERROR completion %X1035A00A (main
+  # returned 1; the child's own activation seam shows it); the parent then exited
+  # with it, so DCL's $STATUS for the parent is %X1035A00A.
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
-  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
-  port_ok=$(grep -qaF 'OVMX vfork test: pid_ok=1 exited=1 piped=1 buf=CHILD-ARGS-OK ' "$log" && echo 1 || echo 0)
+  local port_ok seam st_hex st_ok=0
+  port_ok=$(grep -qaE 'OVMX vfork test: pid_ok=1 piped=1 jpi=1 getpid=1 vmswait=1 status=1035A00A ' "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
-  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
-  if [ -n "$mile_hex" ]; then
-    mile_dec=$(( mile_hex ))
-    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
-      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
-      [ "$sentinel" -eq 7 ] && mile_ok=1
-    fi
-  fi
+  st_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  [ -n "$st_hex" ] && [ $(( st_hex )) -eq $(( 0x1035A00A )) ] && grep -qaF 'WRITE-STATUS=%X1035A00A' "$log" && st_ok=1
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
-  echo "  (a) vfork/exec/wait          : port_ok=$port_ok (want 1)"
-  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
-  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
-  echo "  (c) no activation err         : ok=$err_ok"
-  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  echo "  (a) vfork/exec/\$GETJPI/getpid/wait : port_ok=$port_ok (want 1)"
+  echo "  (b) parent \$STATUS = child's       : ${seam:-<ABSENT>} (want 0x1035a00a, and DCL WRITE-STATUS=%X1035A00A; ok=$st_ok)"
+  echo "  (c) no activation err              : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$st_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -969,7 +966,11 @@ assert_crtlsig() {
            "^CRTLSIG: mask held=1 then action=1$" \
            "^CRTLSIG: alarm action=1 pause=-1 errno=EINTR seen-ASTFLT=1$" \
            "^CRTLSIG: kill own-VMS-PID rc=0 action=1$"; do
-    tr -d '\r' < "$log" | grep >/dev/null -aE "$l" || { echo "  assert_crtlsig: no line matching '$l'" >&2; return 1; }
+    tr -d '\r' < "$log" | grep >/dev/null -aE "$l" || {
+      echo "  assert_crtlsig: no line matching '$l'" >&2
+      # the raw bytes of every CRTLSIG line, so an invisible byte is seen
+      grep -a "CRTLSIG" "$log" | od -c | head -60 >&2
+      return 1; }
   done
   return 0
 }
@@ -1370,6 +1371,12 @@ run_boot_a() {
               echo "LOGIN-RUN: SYSTEM/MANAGER login did not reach the banner" >> modgpA.raw
           fi
       fi
+      # A guest that is gone before the harness is done exited on its own:
+      # record how, so a console that stops mid-boot says why.
+      if ! kill -0 "$QP" 2>/dev/null; then
+          QRC=0; wait "$QP" 2>/dev/null || QRC=$?
+          echo "BOOT-HARNESS: qemu-system-alpha exited by itself after ${W}s, status $QRC (vmlinux-boot $(stat -c %s vmlinux-boot) bytes)" >> modgpA.raw
+      fi
       exec 6>&-
       sleep 3            # let STDRV/LOGINOUT flush the last seam + prompt
       kill "$QP" 2>/dev/null || true
@@ -1377,7 +1384,9 @@ run_boot_a() {
       rm -f "$FIFO"
       grep -avE "TSUNAMI machine check|tsunami_(read|write)" modgpA.raw > modgpA.log || true
     '
+  local _boot_rc=$?
   set -e
+  [ "$_boot_rc" -eq 0 ] || echo "[modgp-activation] boot container exited with status $_boot_rc" >&2
   docker rm -f "$cname" >/dev/null 2>&1 || true
   # BOOT_KEEP_IMG=1: keep the disk the boot wrote (a cc1build shard's objects are read off it)
   [ -n "${BOOT_KEEP_IMG:-}" ] || rm -f "$WORK/modgpA.img"
@@ -1394,6 +1403,10 @@ run_boot_a() {
       log "P0 layout confirmed: ${p0img}.EXE and its shareables activated in P0 (base ${JOINT_LINK_BASE:-0x10000})"
     else
       grep -aE "OVMX-SEAM:" "$WORK/modgpA.log" | sed 's/^/  /' || true
+      # No seam line at all = the image never ran: show the console tail so the
+      # CI log says where the boot stopped (a timeout, a bugcheck, a DCL error).
+      grep -aqE "OVMX-SEAM:" "$WORK/modgpA.log" \
+        || { echo "  -- console tail (no OVMX-SEAM line) --"; tail -n 80 "$WORK/modgpA.log" | sed 's/^/  | /'; }
       die "P0 image (base ${JOINT_LINK_BASE:-0x10000}) but the activation seam does not report p0=1 (an image or shareable landed outside P0)"
     fi
   fi
@@ -2934,15 +2947,17 @@ PYEOF3
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
     _st=$(mktemp -d); _fails=0
-    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 exited=1 piped=1 buf=CHILD-ARGS-OK argc=1' \
-      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
-    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 exited=1 piped=0 buf=CHILD-ARGS-BAD argc=1' \
-      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/noargs.log"
+    export JOINT_USE_LIBVMS=1           # vms-e70f: the parent asks $GETJPI (LIBVMS$SHR)
+    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 piped=1 jpi=1 getpid=1 vmswait=1 status=1035A00A argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x1035a00a p0=1' > "$_st/pass.log"
+    echo 'VENEER-PROOF: WRITE-STATUS=%X1035A00A SEVERITY=2' >> "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 piped=1 jpi=0 getpid=0 vmswait=0 status=FFFFFFFF argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x00000003 p0=1' > "$_st/noargs.log"
     printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
       'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
     echo "-- vfork selftest 1/3: child ran with its arguments, output piped back, reaped must PASS --"
     if assert_vfork "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
-    echo "-- vfork selftest 2/3: a child that did not receive its arguments must FAIL --"
+    echo "-- vfork selftest 2/3: a child the executive does not know (substrate pid, no VMS status) must FAIL --"
     if assert_vfork "$_st/noargs.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
     echo "-- vfork selftest 3/3: a crash must FAIL --"
     if assert_vfork "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
@@ -2956,8 +2971,9 @@ PYEOF3
     grep -aE "OVMX vfork|IMGACT|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_vfork "$WORK/modgpA.log"; then
       echo ""
-      echo "PASS: DEC C vfork()+execv() created a subprocess running an image off the ODS-2"
-      echo "      volume with arguments; output piped back, parent stdout restored, reaped."
+      echo "PASS: DEC C vfork()+execv() created a subprocess through SYS\$CREPRC running an image"
+      echo "      off the ODS-2 volume with arguments; \$GETJPI and getpid() agree on its VMS PID;"
+      echo "      its error completion came back through wait and DCL \$STATUS."
       exit 0
     fi
     echo "FAIL: DEC C vfork/exec did not work. Full log: $WORK/modgpA.log"

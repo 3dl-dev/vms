@@ -100,9 +100,19 @@ static void test_system_services(void)
           "$GET_ENTROPY fills the buffer with non-zero bytes");
     check(sys$get_entropy(NULL, 8) == SS$_ACCVIO, "$GET_ENTROPY on a null buffer is ACCVIO");
 
+    /* The system time is the executive's (rd vms-642): with no /dev/vms the
+     * honest answer is SS$_NOSUCHDEV, never the host clock. Against a real
+     * executive these run as written, and tests/qemu/test_syssvc_systime.c
+     * asserts the same agreement there. */
     uint64_t t0 = 0, t1 = 0;
-    check(sys$gettim_prec(&t0) == SS$_NORMAL && t0 > 0x007C95674BEB4000ULL, "$GETTIM_PREC returns a post-1970 VMS time");
-    check(sys$gettim(&t1) == SS$_NORMAL && t1 >= t0 && t1 - t0 < 100000000ULL, "$GETTIM_PREC agrees with $GETTIM");
+    uint32_t pst = sys$gettim_prec(&t0);
+    if (pst == SS$_NOSUCHDEV) {
+        check(sys$gettim(&t1) == SS$_NOSUCHDEV,
+              "no executive: $GETTIM_PREC and $GETTIM are SS$_NOSUCHDEV, not the host clock");
+    } else {
+        check(pst == SS$_NORMAL && t0 > 0x007C95674BEB4000ULL, "$GETTIM_PREC returns a post-1970 VMS time");
+        check(sys$gettim(&t1) == SS$_NORMAL && t1 >= t0 && t1 - t0 < 100000000ULL, "$GETTIM_PREC agrees with $GETTIM");
+    }
 
     /* $LCKPAG/$ULKPAG report the page-rounded range they locked. */
     long pg = sysconf(_SC_PAGESIZE);

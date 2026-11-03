@@ -321,7 +321,7 @@ uint32_t sys$exit(uint32_t code) {
  */
 static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
 {
-    if (linux_pid == (uint32_t)getpid()) {
+    if (linux_pid == vms_kif_substrate_pid()) {
         /* User + system CPU of every thread of this process, the figure
          * getrusage(RUSAGE_SELF) gives; clock_gettime is also a DEC C RTL
          * entry point, so the OpenVMS-calling-standard build has it too. */
@@ -1444,6 +1444,24 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             snprintf(img_path, sizeof(img_path), "%s", staged);
     }
 
+    /*
+     * AN IMAGE ONLY THE VOLUME HOLDS (rd vms-e70f). On OVMX/Alpha an image that
+     * is not boot-staged -- one LINKed into a user directory, the cc1/as/collect2
+     * the DEC C exec*() functions create subprocesses for -- has no substrate
+     * path at all: the VMS image activator reads it off the ODS-2 volume through
+     * the ACP. The created process then runs IMGACT.EXE with the VMS spec as its
+     * first argument (the vms-fb4 launch mode DCL's RUN uses for the same case),
+     * and an image IMGACT cannot find fails activation there, as on VMS.
+     */
+    char launch_spec[512] = "";
+#if defined(__alpha__) || defined(__alpha)
+    /* Also the fallback for an image the substrate cannot exec itself: one whose
+     * interpreter path names the retired /vms passthrough (DCL's RUN falls back
+     * the same way, dcl_cmd_process.c). */
+    if (access(OVMX_BOOT_STAGE_DIR "/IMGACT.EXE", X_OK) == 0)
+        dsc$strncpy(launch_spec, image, sizeof(launch_spec));
+#endif
+
     struct vms_pcb *parent_pcb = vms_pcb_get();
 
     /*
@@ -1837,7 +1855,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * nothing registers this task on its own first. */
         uint32_t pcb_status = SS$_NORMAL;
         if (!(engage && child_username[0] == 0) && (!detached || use_ticket)) {
-            uint32_t me = (uint32_t)getpid();
+            uint32_t me = vms_kif_substrate_pid();
             uint32_t go[2] = { 0, 0 };
             if (creprc_write_all(pcbreq[1], &me, sizeof(me)) != (ssize_t)sizeof(me) ||
                 creprc_read_all(pcbgo[0], go, sizeof(go)) != (ssize_t)sizeof(go))
@@ -1980,7 +1998,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             const char *username = child_username[0] ? child_username
                                  : (parent_pcb ? parent_pcb->username
                                                : "UNKNOWN");
-            vms_pcb_set_identity((uint32_t)getpid(), child_uic,
+            vms_pcb_set_identity(vms_kif_substrate_pid(), child_uic,
                                  username, child_prcnam);
             if (parent_pcb && parent_pcb->default_dir[0])
                 vms_pcb_set_default_dir(parent_pcb->default_dir);
@@ -2085,12 +2103,18 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * PRC.NOIMAGE.STATE: gone before any $WAKE).
          */
         if (stsflg & PRC$M_HIBER) {
-            if (access(img_path, X_OK) != 0)
+            /* An image only the volume holds is IMGACT's to find: the process
+             * stays until activation fails, as on VMS (observed PRC.NOIMAGE). */
+            if (!launch_spec[0] && access(img_path, X_OK) != 0)
                 _exit(1);
             (void)sys$hiber();
         }
 
-        execl(img_path, img_path, (char *)NULL);
+        if (access(img_path, X_OK) == 0)
+            execl(img_path, img_path, (char *)NULL);
+        if (launch_spec[0])
+            execl(OVMX_BOOT_STAGE_DIR "/IMGACT.EXE",
+                  OVMX_BOOT_STAGE_DIR "/IMGACT.EXE", launch_spec, (char *)NULL);
         _exit(1);  /* exec failed */
     }
 
@@ -2150,8 +2174,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      */
     if (detached) {
         int mstatus;
-        while (waitpid(pid, &mstatus, 0) < 0 && errno == EINTR)
-            ;
+        (void)vms_kif_substrate_reap((uint32_t)pid, &mstatus, 0);   /* rd vms-e70f */
     }
 
     if (r != (ssize_t)sizeof(rep) || !(rep.status & 1)) {
@@ -2201,8 +2224,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          */
         if (!detached) {
             int wstatus;
-            while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
-                ;
+            (void)vms_kif_substrate_reap((uint32_t)pid, &wstatus, 0);
         }
         return (r == (ssize_t)sizeof(rep)) ? rep.status : OVMX$_PRCLOST;
     }

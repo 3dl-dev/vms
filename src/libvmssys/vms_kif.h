@@ -852,6 +852,12 @@ uint32_t vms_kif_getexit_linux(uint32_t linux_pid, uint32_t *condition,
  * $GETJPI (SS$_NOPRIV cross-group without WORLD; a same-group parent reading its
  * own subprocess needs none). Must be called BEFORE the subprocess is reaped.
  * *has_exited (optional) is nonzero iff an image actually recorded a status. */
+/* The calling process's substrate task id -- the executive's table key, NOT a
+ * VMS PID (rd vms-e70f: getpid() in the C RTL is the VMS PID). */
+uint32_t vms_kif_substrate_pid(void);
+/* Reap the substrate task `pid` this process forked ($CREPRC/LIB$SPAWN). */
+int vms_kif_substrate_reap(uint32_t pid, int *wstatus, int options);
+
 uint32_t vms_kif_getexit_pid(uint32_t vms_pid, uint32_t *condition,
                              int *has_exited);
 
@@ -945,6 +951,15 @@ uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit);
  * no executive -- there is no userspace fallback.
  */
 uint32_t vms_kif_va(struct vms_va_args *args);
+
+/*
+ * vms_kif_systime - the executive's system time (rd vms-642): read it
+ * (VMS_SYSTIME_GET), set it or recalibrate it ($SETIME: VMS_SYSTIME_SET /
+ * _RECAL, OPER and LOG_IO required), as `args->op`. args->time carries the
+ * new time in and the system time out. Returns the service's VMS status;
+ * SS$_NOSUCHDEV with no executive -- there is no userspace clock fallback.
+ */
+uint32_t vms_kif_systime(struct vms_systime_args *args);
 
 /* ================================================================
  * P1 control region (vms-68f.ii, in-process image activation foundation,

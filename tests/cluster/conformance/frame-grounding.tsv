@@ -168,6 +168,24 @@ dlm_dir_ans_redir	*	111	93	copied	any:echo	body[39:132]: echoed from the request
 # ---- cat 0x82 op 0x0d: THE REBUILD ECHO (rd vms-ac4f). A VERBATIM copy of the
 #      coordinator's own record with two cells overwritten, so every row is `copied`
 #      and sec 4(p)'s 1367/1367 reconstruction is what grounds them ----
+# ---- rd vms-fdeb: the MASTER's directory re-registration (cat 0x02 op 0x0d) ----
+# Census: every real op-0x0d in tests/lab/captures (tools/cluster/dlm_dirreg_census.py;
+# the vms-fdeb capture README). Sent after the coordinator's release 4 (18/18 real
+# sender-transitions); answered 82/0d, the record echoed + body[34]=0xf9 (1487/1487).
+dlm_dir_reg	*	72	2	derived	any:envelope	send-msg#: the CSB dialogue's next number (cnxman_envelope_originate, spec sec 4(j))
+dlm_dir_reg	*	74	2	derived	any:envelope	ack-msg#: the peer's highest send-msg# seen on this CSB (spec sec 4(j))
+dlm_dir_reg	*	76	4	derived	any:envelope	txn/token: an op-0x0d IS answered (16791 of 16800 real records carry an 82/0d), so the envelope OPENS a transaction
+dlm_dir_reg	*	80	1	const	const:2	category 0x02, the request
+dlm_dir_reg	*	81	1	const	const:d	op 0x0d, the rebuild registration
+dlm_dir_reg	*	82	2	const	const:0	body[10:12]: the sender's stale buffer, written by no real sender (vms-20c buffer-slot census); this node sends no residue (rd vms-42de)
+dlm_dir_reg	*	84	2	const	const:1	body[12:14] = 0x0001 on every DLM message (rd vms-64b)
+dlm_dir_reg	*	86	2	derived	state:seq	body[14:16] = N, the cluster's DLM sequence read from executive state (club.dlm_seq), as on every DLM message
+dlm_dir_reg	*	88	28	const	const:0	body[16:44]: stale buffer, written by no real sender; all-zero in 15 real records each answered by a real VAX (e.g. vms-d52c r3-ovmx-first frames 116/121)
+dlm_dir_reg	*	116	2	copied	any:identity	body[44:46] UIC group, read off the resource block (63 of 16800 real records non-zero)
+dlm_dir_reg	*	118	1	copied	any:identity	body[46] access mode, read off the resource block (0/1/3 all occur)
+dlm_dir_reg	*	119	1	copied	any:identity	body[47] name length 1..31, read off the resource block
+dlm_dir_reg	*	120	80	copied	any:name	body[48:48+L] the resource name, then zero to body[128] (stale tail, written by no real sender; zero in the 15 real all-zero records)
+dlm_dir_reg	*	200	4	copied	any:hash	body[128:132] the directory hash of that identity: 16800 of 16800 real records equal the product hash (vms_dlm_hash.h); res->dir_hash
 cm_dlm_op0d_echo	*	72	8	copied	any:echo	body[0:8]: the record's own txn/token, echoed -- the response IS the request's 132 bytes with two cells overwritten
 cm_dlm_op0d_echo	*	80	1	const	const:82	body[8]: the request category with the response bit; the ONE arithmetic change (body[8] |= 0x80)
 cm_dlm_op0d_echo	*	81	1	const	const:d	body[9]: op 0x0d, echoed unchanged

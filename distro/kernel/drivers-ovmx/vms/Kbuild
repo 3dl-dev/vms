@@ -25,6 +25,7 @@ vms-y := vms_module.o \
          vms_bg_datafd.o \
          vms_l2.o \
          vms_access.o \
+         vms_systime.o \
          vms_ast.o \
          vms_devtab.o \
          vms_tt.o \

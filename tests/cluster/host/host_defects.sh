@@ -277,6 +277,8 @@ guard-ignores-category-0b
 refused-send-always-keeps-number
 dir-remove-unregistered-entry
 dir-told-survives-transition
+dirreg-not-sent-at-release-4
+dirreg-answer-not-recorded
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
@@ -326,6 +328,7 @@ dlm-rebuild-install-ignores-compat
 dlm-rebuild-sent-outside-the-step
 dlm-rebuild-window-opens-early
 dlm-rebuild-records-wait-past-release
+dlm-966e-at-requester-refused
 barrier-step-not-held-for-own-rebuild
 coord-release-not-held-for-own-rebuild
 dlm-rebuild-record-drops-the-granted-valblk
@@ -616,6 +619,10 @@ EOF
 *** writing NO status: $ENQW has no 'your wait was interrupted' condition value, so userspace re-enters the wait and no caller can observe this ***
   and no status written
 *** and the lock is STILL HELD AT ITS OLD MODE: a failed convert never loses the lock (VMS semantics) ***
+*** the interrupted volume-lock wait COMES BACK: it neither spins nor re-queues in the executive ***
+  and it says so, so the ACP service returns -ERESTARTSYS
+  handing back no lock
+*** the waiter holds NO lock afterwards: its abandoned request was $DEQd, not left queued ***
 EOF
                       ;;
         esac;;
@@ -2039,6 +2046,57 @@ EOF
         require_fail) hd_lines <<'EOF'
 the transition forgets the one directory this node told
 *** a resource whose directory entry a transition discarded is NOT removed from that directory ***
+EOF
+                      ;;
+        esac;;
+
+    dirreg-not-sent-at-release-4)
+        case "$_f" in
+        facility)     echo "a master re-registers each root it masters with its directory node (cat-0x02 op-0x0d) after release 4 of every state transition (rd vms-fdeb)";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_dirreg";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rm_dr_barrier_released() treats release 4 like any other release, so OVMX re-registers nothing and after any transition a real directory holds no entry for a resource OVMX masters: the next requester is answered 0xf9 and becomes a second master.";;
+        require_fail) hd_lines <<'EOF'
+*** the re-registered entry is removed from the directory that answered ***
+...and every one is recorded told
+...not taken as held, and the window STOPS
+MSCP$LOADBAL goes to the directory node the vector names
+a refused send stops the window and holds nothing
+a transition's start abandons the records in flight
+an answer not stamped 0xf9 is ours...
+both expire at RECNXINTERVAL
+both hold the barrier until answered
+each answer sends the next: all ten
+one left
+release 4: one op-0x0d per root mastered here whose directory is another member
+still two out
+the REAL 82/0d (frame 121) answers our MSCP$LOADBAL record
+the barrier goes on; the window is stopped
+the engine records that directory as told
+the second record is on the wire
+the window's worth go at once
+two out
+with the doors unbound nothing is sent and nothing held
+EOF
+                      ;;
+        esac;;
+
+    dirreg-answer-not-recorded)
+        case "$_f" in
+        facility)     echo "the directory's 82/0d answer to a re-registration records that directory as the one holding the entry, so only it is told to remove it (rd vms-fdeb, rd vms-c55)";;
+        targets)      echo "kernel-core/vms_dlm_rm_fsm.c";;
+        suites_red)   echo "test_dlm_dirreg";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_rm_dr_answer() frees the slot without telling the engine, so an entry the directory confirmed is never removed when the resource goes: the directory keeps a stale entry naming OVMX as master.";;
+        require_fail) hd_lines <<'EOF'
+*** the re-registered entry is removed from the directory that answered ***
+...and every one is recorded told
+each answer sends the next: all ten
+every record answered: the barrier goes on
+one left
+the engine records that directory as told
+the same answer twice is not taken twice
 EOF
                       ;;
         esac;;
@@ -3562,6 +3620,22 @@ EOF
                       ;;
         esac;;
 
+    dlm-966e-at-requester-refused)
+        case "$_f" in
+        facility)     echo "a lookup the vector directs at the REQUESTER itself, for a name this node's table names the requester master of, is answered 0xf9 from the entry (vms_dlm_dir_lookup_directed VMS_DLM_DIR_AT_REQUESTER, rd vms-966e)";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "test_dlm_transition_enq";;
+        isolation)    echo "isolated";;
+        why)          echo "the shipped state the cluster demo caught: VAXC's op-0x01 at barrier step 0x0a, sent under the vector the running join replaced for a lock this node had told it 'you master it', is refused as undirected and never answered, and VAXC hangs in STARTUP before Username: (cap-966e r3 4821, r5 3859).";;
+        require_fail) hd_lines <<'EOF'
+*** r3 (A,B,C), OVMXB: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
+*** r5 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
+it is counted as the requester's-own-directory answer
+and not as a refusal
+EOF
+                      ;;
+        esac;;
+
     dlm-b4d-undirected-answers-you-fuzz)
         case "$_f" in
         facility)     echo "the op-0x01 directory fuzz holds the undirected-never-0xf9 property over random bodies and table state (fuzz_dlm_dir_directed, rd vms-b4d)";;
@@ -3572,6 +3646,8 @@ EOF
         require_fail) hd_lines <<'EOF'
 fuzz-b4d: an undirected name with no entry is never answered you-master-it
 fuzz-b4d: an undirected lookup records nothing
+fuzz-966e: at the requester, you-master-it comes ONLY from an entry naming it
+fuzz-966e: an at-requester lookup records nothing
 EOF
                       ;;
         esac;;
@@ -4829,6 +4905,14 @@ apply_edit() {
         # `if (res->dir_told_csid != 0u) {` is unique in this file.
         sed -i 's#if (res->dir_told_csid != 0u) {#if (0 \&\& res->dir_told_csid != 0u) { /* NEGCTL dir-told-survives-transition */#' "$_file";;
 
+    dirreg-not-sent-at-release-4)
+        # `if (step != VMS_DLM_DR_REL_STEP) {` is unique in this file.
+        sed -i 's#if (step != VMS_DLM_DR_REL_STEP) {#if (1 || step != VMS_DLM_DR_REL_STEP) { /* NEGCTL dirreg-not-sent-at-release-4 */#' "$_file";;
+
+    dirreg-answer-not-recorded)
+        # `if (f->ops->dr_told(f->ops->ctx, &s->id, s->dst))` is unique in this file.
+        sed -i 's#if (f->ops->dr_told(f->ops->ctx, &s->id, s->dst))#if (0 \&\& f->ops->dr_told(f->ops->ctx, \&s->id, s->dst)) /* NEGCTL dirreg-answer-not-recorded */#' "$_file";;
+
     pe-blk-frame-unringed)
         # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.
         sed -i 's|if (op != 0u \&\& total <= PE_VC_FRAME_MAX)|if (0 \&\& op != 0u \&\& total <= PE_VC_FRAME_MAX) /* NEGCTL pe-blk-frame-unringed */|' "$_file";;
@@ -4983,6 +5067,10 @@ apply_edit() {
     dlm-b4d-undirected-answers-you)
         # `\tif (directed_here)` is unique (vms_dlm_dir_lookup_directed).
         sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you */|' "$_file";;
+
+    dlm-966e-at-requester-refused)
+        # The at-requester entry test is the only line of this shape.
+        sed -i 's|^\t\t\t    e->master == requester) {$|\t\t\t    e->master == requester \&\& 0) { /* NEGCTL dlm-966e-at-requester-refused */|' "$_file";;
 
     dlm-b4d-undirected-answers-you-fuzz)
         sed -i 's|^\tif (directed_here)$|\tif (1 \|\| directed_here) /* NEGCTL dlm-b4d-undirected-answers-you-fuzz */|' "$_file";;

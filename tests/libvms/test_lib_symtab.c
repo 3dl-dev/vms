@@ -224,7 +224,17 @@ static void test_getutc(void)
      * since 15-OCT-1582 = system time + 100840 days), unspecified inaccuracy, TDF word. */
     uint8_t u[16];
     uint64_t t0 = 0, t2 = 0;
-    check(sys$gettim(&t0) == SS$_NORMAL, "sys$gettim returns SS$_NORMAL");
+    /* The system time is the executive's (rd vms-642): with no /dev/vms both
+     * services are SS$_NOSUCHDEV, never the host clock. The layout below is
+     * asserted against a real executive in tests/qemu/test_syssvc_systime.c. */
+    if (sys$gettim(&t0) == SS$_NOSUCHDEV) {
+        check(sys$getutc(u) == SS$_NOSUCHDEV,
+              "no executive: sys$gettim and sys$getutc are SS$_NOSUCHDEV, not the host clock");
+        check(sys$getutc(NULL) == SS$_BADPARAM,
+              "sys$getutc(NULL) returns SS$_BADPARAM");
+        return;
+    }
+    check(1, "sys$gettim returns SS$_NORMAL");
     uint32_t st = sys$getutc(u);
     check(st == SS$_NORMAL, "sys$getutc returns SS$_NORMAL");
     check(sys$gettim(&t2) == SS$_NORMAL, "sys$gettim again");

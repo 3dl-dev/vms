@@ -339,7 +339,7 @@ uint32_t vms_lock_acp_file_ser_release(struct vms_proc *proc, uint32_t par_lkid,
                                        uint32_t lkid, const uint8_t *vb);
 /* The XQP's transient per-write EX sync lock (vms-233). */
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
-                             uint32_t *lkid_out);
+                             uint32_t *lkid_out, int *intr_out);
 /*
  * Image rundown's lock release. In the real kernel this is called by
  * vms_access.c (image rundown) with PSL_C_USER; a host test calls it directly

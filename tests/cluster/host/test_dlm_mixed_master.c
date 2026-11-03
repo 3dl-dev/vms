@@ -1480,7 +1480,7 @@ static void *e7649_sync_thread(void *arg)
 	struct e7649_standing *r = (struct e7649_standing *)arg;
 
 	r->status = vms_lock_acp_vol_ex(r->proc, "F11B$sEVAC5FA     ",
-					&r->lkid);
+					&r->lkid, NULL);
 	r->done = 1;
 	return NULL;
 }

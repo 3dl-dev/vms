@@ -69,9 +69,10 @@
  *     rather than told a record was written.
  * OVMX-PARTIAL: sys$create_uid (vms-44a) -- exec: the node field is the system's
  *     SCSNODE name, read through $GETSYI (the same as the lab OpenVMS Alpha V8.4
- *     node, whose uids carry "ALPHA1" there).
+ *     node, whose uids carry "ALPHA1" there), and the time is the executive's
+ *     system time through $GETTIM (rd vms-642).
  * OVMX-LOCAL: sys$create_uid -- the uid is assembled in this process as an OSF DCE
- *     uuid version 1: the clock (sys$gettim), a per-process random clock sequence
+ *     uuid version 1: that time, a per-process random clock sequence
  *     (sys$get_entropy) and that node field. Uniqueness is the uuid argument (time +
  *     sequence + node), not an executive-issued number. A node with no readable
  *     SCSNODE falls back to a random multicast-bit node (RFC 4122 4.5).
@@ -684,8 +685,11 @@ uint32_t (sys$create_uid)(void *uid)
     if (!uid)
         return SS$_ACCVIO;
 
-    if (!(sys$gettim(&now) & 1))
-        return SS$_BADPARAM;
+    {
+        uint32_t tst = sys$gettim(&now);    /* the executive's system time (rd vms-642) */
+        if (!(tst & 1))
+            return tst;                     /* SS$_NOSUCHDEV with no executive */
+    }
 
     pthread_mutex_lock(&lock);
     if (!seeded) {

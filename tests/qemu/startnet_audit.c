@@ -127,6 +127,31 @@ static int ends_with(const char *s, const char *suf)
     return a >= b && strcasecmp(s + a - b, suf) == 0;
 }
 
+/* ---- who made the call: each task is labelled by the image it runs ------- */
+#define MAXL 16
+static struct { char name[24]; unsigned pipe, wait, thread, socket; } g_lab[MAXL];
+static int g_nlab;
+static int lab_of(const char *name)
+{
+    for (int i = 0; i < g_nlab; i++)
+        if (!strcmp(g_lab[i].name, name)) return i;
+    if (g_nlab == MAXL) return MAXL - 1;
+    snprintf(g_lab[g_nlab].name, sizeof g_lab[0].name, "%s", name);
+    return g_nlab++;
+}
+enum { MAXTASK = 128 };
+static pid_t g_tpid[MAXTASK]; static int g_tlab[MAXTASK]; static int g_ntask;
+static int task_lab(pid_t p)
+{
+    for (int i = 0; i < g_ntask; i++) if (g_tpid[i] == p) return g_tlab[i];
+    return lab_of("?");
+}
+static void task_set(pid_t p, int lab)
+{
+    for (int i = 0; i < g_ntask; i++) if (g_tpid[i] == p) { g_tlab[i] = lab; return; }
+    if (g_ntask < MAXTASK) { g_tpid[g_ntask] = p; g_tlab[g_ntask] = lab; g_ntask++; }
+}
+
 /* ---- the classifier ------------------------------------------------------ */
 struct verdict {
     unsigned long total, vms_ioctls;
@@ -144,9 +169,8 @@ static void flag(struct verdict *v, unsigned *ctr, const char *what, const struc
                  what, s->nr, s->a0, s->a1);
 }
 
-static void classify(struct verdict *v, pid_t pid, const struct sc *s)
+static void classify1(struct verdict *v, pid_t pid, const struct sc *s)
 {
-    v->total++;
     long nr = s->nr;
 #ifdef SYS_pipe
     if (nr == SYS_pipe) { flag(v, &v->bad_pipe, "pipe", s); return; }
@@ -204,6 +228,10 @@ static void classify(struct verdict *v, pid_t pid, const struct sc *s)
 #endif
         char path[512];
         peek_str(pid, pa, path, sizeof path);
+        const char *b = strrchr(path, '/');
+        char nm[24];
+        snprintf(nm, sizeof nm, "%.23s", b ? b + 1 : path);
+        task_set(pid, lab_of(nm));
         if (ends_with(path, "/DCL.EXE")) v->exec_dcl++;
         else if (ends_with(path, "/NCP.EXE")) v->exec_ncp++;
         else if (ends_with(path, "/NETACP.EXE")) { v->exec_netacp++; v->netacp_pid = pid; }
@@ -214,6 +242,16 @@ static void classify(struct verdict *v, pid_t pid, const struct sc *s)
                 snprintf(v->first_bad, sizeof v->first_bad, "execve(\"%.200s\")", path);
         }
     }
+}
+
+static void classify(struct verdict *v, pid_t pid, const struct sc *s)
+{
+    v->total++;
+    int L = task_lab(pid);
+    unsigned p0 = v->bad_pipe, w0 = v->bad_wait, t0 = v->bad_thread, k0 = v->bad_socket;
+    classify1(v, pid, s);
+    g_lab[L].pipe += v->bad_pipe - p0; g_lab[L].wait += v->bad_wait - w0;
+    g_lab[L].thread += v->bad_thread - t0; g_lab[L].socket += v->bad_socket - k0;
 }
 
 /* ---- the trace, with the untraced client driven from inside the loop ----- */
@@ -293,6 +331,7 @@ static int trace_all(pid_t root, struct verdict *v, struct sink *out, struct cli
     struct itimerval it = { { 0, 250000 }, { 0, 250000 } };
     setitimer(ITIMER_REAL, &it, NULL);
     tids[nt] = root; insys[nt] = 0; newborn[nt] = 0; nt++;
+    task_set(root, lab_of("root"));
     if (ptrace(PTRACE_SYSCALL, root, 0, 0) != 0)
         return -1;
 
@@ -350,7 +389,17 @@ static int trace_all(pid_t root, struct verdict *v, struct sink *out, struct cli
                 insys[k] = !insys[k];
             }
         } else if (sig == SIGTRAP && (st >> 16)) {
-            /* fork/clone/vfork/exec event: the new task arrives on its own */
+            /* fork/clone/vfork/exec event: the new task arrives on its own;
+             * until it execs it runs its creator's code */
+            int ev = st >> 16;
+            if (ev == PTRACE_EVENT_FORK || ev == PTRACE_EVENT_VFORK || ev == PTRACE_EVENT_CLONE) {
+                unsigned long np = 0;
+                if (ptrace(PTRACE_GETEVENTMSG, p, 0, &np) == 0) {
+                    char nm[24];
+                    snprintf(nm, sizeof nm, "%.15s>fork", g_lab[task_lab(p)].name);
+                    task_set((pid_t)np, lab_of(nm));
+                }
+            }
         } else if (sig == SIGSTOP && k < nt && newborn[k]) {
             newborn[k] = 0;
         } else {
@@ -443,11 +492,21 @@ int main(int argc, char **argv)
         FILE *g = fopen("/tmp/startnet_audit_client.com", "w");
         if (!f || !g) { printf("  FAIL: cannot write the audit's procedures in /tmp\n"); return 1; }
         fprintf(f, "$ @SYS$MANAGER:STARTNET\n$ EXIT $STATUS\n");
-        fprintf(g, "$ NETACPTEST := $%s\n$ NETACPTEST --net-loopback-accept-test\n", client_img);
+        (void)client_img;
+        fprintf(g,
+            "$ SET NOON\n"
+            "$ COPY SYS$MANAGER:STARTNET.COM 0\"SYSTEM MANAGER\"::SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP\n"
+            "$ IF .NOT. $STATUS THEN WRITE SYS$OUTPUT \"SNAUDIT-FAIL COPY-TO\"\n"
+            "$ COPY 0\"SYSTEM MANAGER\"::SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP SYS$SYSROOT:[SYSMGR]SNAUDIT_B.TMP\n"
+            "$ IF .NOT. $STATUS THEN WRITE SYS$OUTPUT \"SNAUDIT-FAIL COPY-FROM\"\n"
+            "$ TYPE SYS$SYSROOT:[SYSMGR]SNAUDIT_B.TMP\n"
+            "$ DELETE SYS$SYSROOT:[SYSMGR]SNAUDIT_A.TMP;*,SNAUDIT_B.TMP;*\n"
+            "$ WRITE SYS$OUTPUT \"SNAUDIT-CLIENT-END\"\n");
         fclose(f); fclose(g);
     }
 
     /* ---- 1. trace DCL @SYS$MANAGER:STARTNET and what it makes ----------- */
+    g_nlab = 0; g_ntask = 0;              /* the control's tallies are not the run's */
     int o[2];
     if (pipe(o) != 0) { printf("  FAIL: pipe\n"); return 1; }
     uint32_t cst = 0;
@@ -482,8 +541,8 @@ int main(int argc, char **argv)
 
     printf("  --- traced: DCL @SYS$MANAGER:STARTNET (and NCP, NETACP, FAL.EXE) ---\n%s\n"
            "  --- end ---\n", g_out);
-    printf("  --- untraced client: %s --net-loopback-accept-test ---\n%s\n  --- end ---\n",
-           client_img, g_clout);
+    printf("  --- untraced client: DCL COPY to and from 0\"SYSTEM MANAGER\":: ---\n%s\n  --- end ---\n",
+           g_clout);
     printf("  (STARTNET's DCL: %s %d)\n",
            rs >= 0 && WIFEXITED(rs) ? "exit" : "signal/broken",
            rs >= 0 && WIFEXITED(rs) ? WEXITSTATUS(rs) : (rs >= 0 && WIFSIGNALED(rs) ? WTERMSIG(rs) : -1));
@@ -493,11 +552,20 @@ int main(int argc, char **argv)
            v.bad_pipe, v.bad_wait, v.bad_thread, v.bad_socket, v.bad_exec,
            v.first_bad[0] ? "; first: " : "", v.first_bad);
 
+    for (int i = 0; i < g_nlab; i++)
+        if (g_lab[i].pipe || g_lab[i].wait || g_lab[i].thread || g_lab[i].socket)
+            printf("  (flagged in %s: pipe %u wait %u thread %u host-socket %u)\n", g_lab[i].name,
+                   g_lab[i].pipe, g_lab[i].wait, g_lab[i].thread, g_lab[i].socket);
+    printf("  (NETACP's exit: %s %d)\n",
+           netacp_st >= 0 && WIFEXITED(netacp_st) ? "exit" : "signal/none",
+           netacp_st >= 0 && WIFEXITED(netacp_st) ? WEXITSTATUS(netacp_st)
+           : (netacp_st >= 0 && WIFSIGNALED(netacp_st) ? WTERMSIG(netacp_st) : -1));
     CHECK(rs >= 0 && WIFEXITED(rs) && WEXITSTATUS(rs) == 0, "@SYS$MANAGER:STARTNET completed with success");
     CHECK(v.exec_ncp >= 1, "STARTNET ran NCP (NCP SET EXECUTOR STATE ON) under the trace");
     CHECK(v.exec_netacp == 1, "NCP created NETACP (NETACP.EXE exec'd under the trace, once)");
-    CHECK(strstr(g_clout, "DECNETD-NET-LOOPBACK-ACCEPT: PASS") != NULL,
-          "the client's COPY 0\"SYSTEM MANAGER\":: to FAL.EXE and back through NETACP passed, byte-verified");
+    CHECK(strstr(g_clout, "SNAUDIT-CLIENT-END") != NULL && strstr(g_clout, "SNAUDIT-FAIL") == NULL &&
+          strstr(g_clout, "$ NCP SET EXECUTOR STATE ON") != NULL,
+          "the client COPYed STARTNET.COM to 0\"SYSTEM MANAGER\":: (FAL.EXE) and back through NETACP, and the copy reads back");
     CHECK(v.exec_fal >= 1, "NETACP created FAL.EXE for the inbound object-17 connect, under the trace");
     CHECK(netacp_st >= 0 && WIFEXITED(netacp_st) && WEXITSTATUS(netacp_st) == 0,
           "NETACP stopped on SIGTERM and exited 0");

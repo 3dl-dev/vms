@@ -211,6 +211,9 @@ if [ "$rc" -eq 0 ] && login_system "$LOG1"; then
     record "boot 1: @SYS\$MANAGER:STARTNET -> NCP SET EXECUTOR STATE ON -> NETACP -> an inbound FAL.EXE under ptrace: 0 pipe, 0 poll, 0 thread, 0 host socket, no DECNETD.EXE exec; the COPY 0:: through it byte-verified (rd vms-0a7 S3)" "$rc"
     if printf '%s\n' "$seg" | grep >/dev/null -F 'PASS: control: the audit flags a pipe, a poll, a socket(AF_INET), a thread and an exec of another image'; then rc=0; else rc=1; fi
     record "NEGCTL boot 1: the STARTNET audit's control child is flagged on the booted node" "$rc"
+    # Diagnostics only: what the audited NETACP logged.
+    run_seg 'TYPE SYS$MANAGER:NETACP.LOG' "$LOG1" '$ ' 30
+    printf '%s\n' "$seg" | head -40
     send 'DISMOUNT VDA100:'; sleep 3
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
     sleep "$SETTLE_SECS"

@@ -12,6 +12,6 @@ dcl_help.c 5
 dcl_io.c 2
 dcl_library.c 9
 dcl_main.c 4
-dcl_mbx.c 9
+dcl_mbx.c 8
 dcl_memfile.c 7
 dcl_terminal.c 8

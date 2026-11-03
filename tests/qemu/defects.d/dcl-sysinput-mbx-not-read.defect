@@ -5,7 +5,7 @@ defect_meta() {
         case "$_f" in
         facility)     echo "DCL reads SYS\$INPUT from / writes SYS\$OUTPUT to a mailbox device (src/vmsdcl/dcl_mbx.c, vms-786) -- the persistent-DCL-over-mailboxes drive MMK's send_cmd_and_wait stands on (spine #4, vms-b23)";;
         targets)      echo "vmsdcl/dcl_mbx.c";;
-        suites_red)   echo "test_syssvc_mbx_dcldrv";;
+        suites_red)   echo "test_syssvc_mbx_dcldrv test_syssvc_dcl_sink_route";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -14,8 +14,13 @@ defect_meta() {
 the spawned DCL read its commands from the SYS$INPUT mailbox, executed them, and delivered the computed result over the SYS$OUTPUT mailbox
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+mailbox: DCL's own SHOW SYMBOL output arrives over the SYS$OUTPUT mailbox as one record
+mailbox: WRITE SYS$OUTPUT arrives over the SYS$OUTPUT mailbox as exactly one record
+file: DCL's SHOW SYMBOL output and its WRITE are records of the SYS$OUTPUT file, read back through RMS
+EOF
+                      ;;
+        knock_on_why)  echo "test_syssvc_dcl_sink_route (rd vms-1b6a) drives the shipped DCL over the same SYS\$INPUT command mailbox: a DCL that receives no command writes no SHOW SYMBOL line and no WRITE record, to its SYS\$OUTPUT mailbox or to its SYS\$OUTPUT file -- the same single defect, observed where that suite looks for DCL's output";;
         esac
 
 }

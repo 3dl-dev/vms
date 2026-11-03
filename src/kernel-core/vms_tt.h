@@ -127,6 +127,8 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 /* A write through the class driver (process context). LF -> CR LF when
  * `cooked` (a Unix-style writer through the port's own write path).
  * 0, or -EINTR. */
+/* or'd into vms_tt_write's `cooked`: more of the same write follows */
+#define VMS_TT_W_MORE 0x10
 int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked);
 
 /* PASSALL (IO$_SETMODE P2 = IO$K_TT_PASSALL): every byte is data, nothing is

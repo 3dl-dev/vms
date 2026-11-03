@@ -397,6 +397,26 @@ int main(void)
     (void)!write(s, "d\n", 2);
     screen(m, scr, sizeof(scr), 300);
     CHECK(strcmp(scr, "\nd\r") == 0, "the record after it pays the owed line feed: <LF>d<CR>");
+    /* P4 "$" (prompt carriage control): the owed new line, the text, and the
+     * record left OPEN -- the record written next continues that line and
+     * ends it (rd vms-1b6a: DCL's sink flushing a line not yet ended) */
+    st = vms_kif_tt_write_prompt(chan, "Go? ", 4);
+    screen(m, scr, sizeof(scr), 300);
+    CHECK((st & 1) && strcmp(scr, "\nGo? ") == 0,
+          "a $QIO write with P4 carriage control \"$\" opens a record: <LF>Go? and no <CR>");
+    {
+        struct vms_procinfo pa, pb;
+        memset(&pa, 0, sizeof pa);
+        (void)vms_kif_getjpi_self(&pa);
+        st = vms_kif_tt_write_record(chan, "yes", 3);
+        screen(m, scr, sizeof(scr), 300);
+        memset(&pb, 0, sizeof pb);
+        (void)vms_kif_getjpi_self(&pb);
+        CHECK((st & 1) && strcmp(scr, "yes\r") == 0,
+              "the record after a \"$\" write continues its line and ends it: yes<CR>");
+        CHECK((pa.fields_valid & VMS_PI_V_BUFIO) && pb.bufio == pa.bufio + 1,
+              "one $QIO record write is one buffered I/O (JPI$_BUFIO)");
+    }
     /* IO$M_NOFORMAT: the bytes go as they are and the driver's idea of the
      * cursor is left alone -- the record after it still pays the line feed
      * the record before it owed (rd vms-457; keystroke PG.DIR C1) */

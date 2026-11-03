@@ -1357,12 +1357,18 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
  * write path); 0: written as they are (the driver's own output: a broadcast);
  * 3: a program's $QIO write, as they are -- its own CR LF leaves nothing owed;
  * 2: as they are without moving the driver's idea of the cursor
- * (IO$M_NOFORMAT).
+ * (IO$M_NOFORMAT); 4: the text of a $QIO record (P4 " " or "$"), rendered as
+ * 1 is, but counted by the caller as the one buffered I/O its $QIO is.
  */
 int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 {
 	uint8_t chunk[128];
 	size_t i = 0;
+	/* VMS_TT_W_MORE: more of the same $QIO follows -- a read it breaks
+	 * through is shown again once, after the last piece (rd vms-1b6a) */
+	int more = cooked & VMS_TT_W_MORE;
+
+	cooked &= ~VMS_TT_W_MORE;
 
 	if (cooked == 1) {
 		/* each record a program writes to its terminal is one buffered
@@ -1396,7 +1402,7 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 		while (i < n && k < sizeof(chunk) - 4) {
 			uint8_t c = buf[i];
 
-			if (cooked == 1) {
+			if (cooked == 1 || cooked == 4) {
 				if (!tt->rec_open) {
 					uint32_t o0 = tt->olen;
 
@@ -1467,7 +1473,7 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 	 * OB.PROMPT T2, VAX V7.3: <CR><LF>status<CR><LF><CR><NUL>$ ABC).
 	 */
 	exec_lock(&tt->lock);
-	if (tt->rd_busy && !tt->rd_done && !tt->passall && n) {
+	if (tt->rd_busy && !tt->rd_done && !tt->passall && n && !more) {
 		if (tt->pos == TT_POS_CR && tt_echoing(tt)) {
 			tt_out1(tt, CH_LF);
 			tt->rec_open = 0;
@@ -1682,17 +1688,22 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 			break;
 		}
 		/* a record (VMS_TT_WR_RECORD): the cooked path's new line before
-		 * and carriage return after; the text itself carries no '\n' */
-		if (vms_tt_write(tt, chunk, k,
-				 (a.flags & VMS_TT_WR_RECORD) ? 1 :
-				 (a.flags & VMS_TT_WR_NOFORMAT) ? 2 : 3)) {
+		 * and carriage return after; the text itself carries no '\n'. A
+		 * prompt (VMS_TT_WR_PROMPT): the new line before, the record left
+		 * open for what follows (rd vms-1b6a). */
+		int more = (done + k < a.len || (a.flags & VMS_TT_WR_RECORD))
+			   ? VMS_TT_W_MORE : 0;
+
+		if (vms_tt_write(tt, chunk, k, more |
+				 ((a.flags & (VMS_TT_WR_RECORD | VMS_TT_WR_PROMPT)) ? 4 :
+				  (a.flags & VMS_TT_WR_NOFORMAT) ? 2 : 3))) {
 			a.status = SS__ABORT;
 			break;
 		}
 		done += k;
 	}
 	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL && a.len &&
-	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 1))
+	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 4))
 		a.status = SS__ABORT;
 	if (a.status == SS__NORMAL)
 		VMS_IO_COUNT(&proc->io_buffered, 1u);   /* JPI$_BUFIO (rd vms-bd71) */

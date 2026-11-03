@@ -754,6 +754,10 @@ int main(int argc, char *argv[])
     if (captive_mode)
         dcl_ctx.ctrl_y_enabled = 0;
 
+    /* SYS$OUTPUT/SYS$ERROR: DCL's records go where the process-permanent
+     * files name -- the terminal driver, a file through RMS (rd vms-1b6a). */
+    dcl_out_bind_ppf();
+
     /* Check for -c "command" mode */
     if (argc >= 3 && strcmp(argv[1], "-c") == 0) {
         dcl_ctx.interactive = 0;
@@ -783,6 +787,8 @@ int main(int argc, char *argv[])
      * unchanged. Placed AFTER the -c and script early-returns so only the
      * persistent-REPL invocation consults it. */
     int mbx_bound = dcl_mbx_bind_std_streams();
+    if (mbx_bound & DCL_MBX_BOUND_OUTPUT)
+        dcl_out_bind_ppf();        /* DCL's records to the mailbox by $QIO (rd vms-1b6a) */
     if (mbx_bound & DCL_MBX_BOUND_INPUT)
         dcl_ctx.interactive = 0;   /* a mailbox is never an interactive TTY */
 

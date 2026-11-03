@@ -3686,7 +3686,7 @@ int cmd_create(struct dcl_command *cmd)
     int srt = dcl_sysinput_setup(ctx, &si);
     if (srt)
         return srt;
-    if (ctx->interactive || ctx->proc_depth >= 0) {
+    if (ctx->interactive || ctx->proc_depth >= 0 || si.saved_fd0 >= 0) {
         char line[4096];
         /* A ^Z that ended an earlier CREATE left stdin's end-of-file flag
          * set; a terminal's end of file is per read, so clear it, or every

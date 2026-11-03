@@ -48,6 +48,11 @@ int dcl_in_at_eof(void);
  * ^Z ends one read, not the stream). */
 void dcl_in_clear_eof(void);
 
+/* Hand `rec` back: the next dcl_in_get returns it (one record). DCL reads
+ * an image's data records ahead to the next '$' record and keeps that one for
+ * its own next command read. */
+void dcl_in_unget(const char *rec);
+
 /* While on, reads go to the substrate fd 0: a command procedure's in-stream
  * data block that dcl_sysinput_install put there (CREATE, an image). */
 void dcl_in_substrate(int on);

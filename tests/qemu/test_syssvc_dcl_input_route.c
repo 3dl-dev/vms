@@ -24,6 +24,12 @@
  * continuation. The record IN4D27:42:<data> exists only if DCL read every one
  * of those records, in order, from SYS$INPUT.
  *
+ * RUN (rd vms-45f2): a SYS$INPUT command file "$ RUN <this binary>", two data
+ * records, then a '$' WRITE. The image (this binary in echo mode) must read
+ * exactly the two data records and then end of file; DCL must resume at the
+ * WRITE and run no data record as a command. (A mailbox-driven DCL's image
+ * reads the null device until DECC$SHR stdin reads SYS$INPUT, rd vms-07ae.)
+ *
  * NEGATIVE CONTROLS: tests/qemu/defects.d/dcl-sysinput-mbx-not-read.defect
  * empties every mailbox record DCL reads (the MAILBOX assertion reddens);
  * dcl-sysinput-file-not-read.defect ends the file stream at its first $GET
@@ -60,6 +66,10 @@
 #define OUT_MBX  "VDA0:[OVMXDIR]IN4D27M.LIS"
 #define OUT_FILE "VDA0:[OVMXDIR]IN4D27F.LIS"
 #define DCL_ERRLOG "/tmp/dcl_input_route.err"
+#define RUNCOM   "VDA0:[OVMXDIR]IN4D27R.COM"
+#define RUN_OUT  "VDA0:[OVMXDIR]IN4D27R.LIS"
+#define ECHO_LOG "VDA0:[OVMXDIR]IN4D27E.LIS"
+#define ECHO_ENV "OVMX_IN4D27_ECHO"
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -240,8 +250,100 @@ static void file_case(void)
           "file: DCL read its commands, the READ SYS$INPUT data record and a continuation, in order, as RMS records of the SYS$INPUT file");
 }
 
-int main(void)
+/* ---- THE IMAGE: this binary, RUN by the DCL under test ----
+ * Reads its SYS$INPUT to the end, filing each record it got as "SAW:<rec>"
+ * and then "IMGEOF" in ECHO_LOG through RMS. */
+static int echo_image(void)
 {
+    char line[1024], rec[1100];
+    (void)vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
+    (void)rms_textfile_write_line(ECHO_LOG, "IMGSTART");
+    while (fgets(line, sizeof line, stdin)) {
+        size_t n = strlen(line);
+        while (n && (line[n - 1] == '\n' || line[n - 1] == '\r'))
+            line[--n] = '\0';
+        snprintf(rec, sizeof rec, "SAW:%s", line);
+        (void)rms_textfile_append_line(ECHO_LOG, rec);
+    }
+    (void)rms_textfile_append_line(ECHO_LOG, "IMGEOF");
+    return 0;
+}
+
+/* Does `spec`, read through RMS, hold the record `want`? */
+static int file_has(const char *spec, const char *want, int show)
+{
+    char rec[1024];
+    int found = 0, too_long = 0, nrec = 0;
+    rms_textfile_t *tf = rms_textfile_open(spec);
+    while (tf && rms_textfile_getline(tf, rec, sizeof rec, &too_long)) {
+        size_t l = strlen(rec);
+        while (l && (rec[l - 1] == '\n' || rec[l - 1] == '\r'))
+            rec[--l] = '\0';
+        if (show && nrec++ < 8)
+            printf("  info: %s record %d: %s\n", spec, nrec, rec);
+        if (want[strlen(want) - 1] == '*' ? strncmp(rec, want, strlen(want) - 1) == 0
+                                           : strcmp(rec, want) == 0)
+            found = 1;
+    }
+    rms_textfile_close(tf);
+    return found;
+}
+
+static int errlog_has(const char *what)
+{
+    char line[512];
+    int found = 0;
+    FILE *e = fopen(DCL_ERRLOG, "r");
+    while (e && fgets(line, sizeof line, e)) {
+        if (strstr(line, what))
+            found = 1;
+    }
+    if (e) fclose(e);
+    return found;
+}
+
+/* ---- RUN from a SYS$INPUT command file: the image gets the data records ----
+ * VMS: the records after "$ RUN image" that do not begin with '$' are the
+ * image's SYS$INPUT, up to the next '$' record; DCL resumes there (DCL
+ * Concepts, "Data Lines"). Here the command file IS the process's SYS$INPUT
+ * (LIB$SPAWN INPUT=, RUN/DETACHED/INPUT=), not an @procedure. */
+static void run_case(const char *self)
+{
+    char runline[300];
+    snprintf(runline, sizeof runline, "$ RUN \"%s\"", self);
+    const char *lines[] = { runline, "ALPHA4D27", "BETA4D27",
+                            "$ WRITE SYS$OUTPUT \"RESUMED4D27\"", "$ LOGOUT" };
+    int laid = 1;
+    for (size_t i = 0; i < sizeof lines / sizeof lines[0]; i++)
+        laid &= (i == 0 ? rms_textfile_write_line(RUNCOM, lines[i])
+                        : rms_textfile_append_line(RUNCOM, lines[i])) == 0;
+    CHECK(laid, "run: the command file (RUN, two data records, a WRITE) is laid down through RMS");
+    CHECK(define_system("SYS$INPUT", RUNCOM) & 1, "run: SYS$INPUT names the command file");
+    CHECK(define_system("SYS$OUTPUT", RUN_OUT) & 1, "run: SYS$OUTPUT names a file");
+    setenv(ECHO_ENV, "1", 1);
+    pid_t pid = start_dcl();
+    unsetenv(ECHO_ENV);
+    CHECK(reap(pid), "run: DCL reads LOGOUT from the command file and exits");
+    undefine_system("SYS$INPUT");
+    undefine_system("SYS$OUTPUT");
+
+    int saw_a = file_has(ECHO_LOG, "SAW:ALPHA4D27", 1);
+    int saw_b = file_has(ECHO_LOG, "SAW:BETA4D27", 0);
+    int saw_dollar = file_has(ECHO_LOG, "SAW:$*", 0);
+    int eof = file_has(ECHO_LOG, "IMGEOF", 0);
+    CHECK(saw_a && saw_b,
+          "run: the RUN image read the two data records that follow RUN in the SYS$INPUT command file");
+    CHECK(eof && !saw_dollar,
+          "run: the image's SYS$INPUT ended at the next '$' record, which it was not given");
+    CHECK(file_has(RUN_OUT, "RESUMED4D27", 1) && !errlog_has("IVVERB"),
+          "run: DCL resumed at the '$' record after the data, and executed no data record as a command");
+}
+
+int main(int argc, char **argv)
+{
+    (void)argc; (void)argv;
+    if (getenv(ECHO_ENV))
+        return echo_image();
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGPIPE, SIG_IGN);
     printf("=== test_syssvc_dcl_input_route (DCL reads SYS$INPUT from a mailbox by $QIO, from a file by RMS, vms-4d27) ===\n");
@@ -270,6 +372,16 @@ int main(void)
 
     file_case();
     mailbox_case();
+    {
+        char self[256];
+        ssize_t sl = readlink("/proc/self/exe", self, sizeof self - 1);
+        if (sl > 0) {
+            self[sl] = '\0';
+            run_case(self);
+        } else {
+            CHECK(0, "run: this suite's own image path resolves (it is the image RUN)");
+        }
+    }
 
     printf("=== test_syssvc_dcl_input_route: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

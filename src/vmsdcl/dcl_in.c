@@ -30,6 +30,7 @@
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
@@ -55,6 +56,7 @@ static size_t          g_msg_len, g_msg_off;
 static int             g_msg_more;           /* g_msg holds lines not yet read */
 static int             g_eof;                /* the route's last read hit the end */
 static int             g_substrate;          /* reads go to the substrate fd 0 */
+static char           *g_unget;              /* a record handed back (dcl_in_unget) */
 
 /* ================================================================
  * THE STDIO FALLBACK -- the only libc input in DCL.
@@ -285,6 +287,13 @@ int dcl_in_get(const char *prompt, char *buf, size_t bufsz)
     }
     if (substrate())
         return fb_get(buf, bufsz);
+    if (g_unget) {
+        snprintf(buf, bufsz, "%s", g_unget);
+        free(g_unget);
+        g_unget = NULL;
+        g_eof = 0;
+        return (int)strlen(buf);
+    }
     int n = g_route == DCL_IN_ROUTE_MBX ? mbx_get(buf, bufsz) : file_get(buf, bufsz);
     g_eof = n < 0;
     return n;
@@ -306,6 +315,12 @@ void dcl_in_clear_eof(void)
         fb_clear_eof();
     else
         g_eof = 0;
+}
+
+void dcl_in_unget(const char *rec)
+{
+    free(g_unget);
+    g_unget = rec ? strdup(rec) : NULL;
 }
 
 void dcl_in_substrate(int on)

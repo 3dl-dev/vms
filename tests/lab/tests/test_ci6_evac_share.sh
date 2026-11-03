@@ -79,6 +79,15 @@ order=$(echo "$dry" | grep -nE 'MOUNT/SYSTEM \$2\$DUA2|MOUNT/SYSTEM VAX1\$DUA|SH
 n=$(echo "$order" | wc -w); sorted=$(echo "$order" | tr ' ' '\n' | sort -n | paste -sd' ')
 [ "$n" -ge 7 ] && [ "$order" = "$sorted" ] || bad "share dry-run order: VAX1 mount, OVMX mount, SDA, writes, STOP, OVMX dismount, ANALYZE (got lines '$order')"
 echo "$dry" | grep -q 'SHOW DEVICE D$' || bad "share discovers OVMX's MSCP unit with SHOW DEVICE D (vms-582: the prefix matches past the VAX1$ node prefix)"
+# S3's "took EX while VAX1 ran" check and its takeover wait read from an S3
+# marker sent after S2, so S2's legitimate OVMX EX grants answer for neither
+# (the 2026-11-02 r2 fire aborted on S2's lines).
+s2=$(echo "$dry" | grep -n 'EVACWL 10$' | tail -1 | cut -d: -f1)
+s3=$(echo "$dry" | grep -n 'CI6EVAC-S3 ' | head -1 | cut -d: -f1)
+sb=$(echo "$dry" | grep -n 'OVSTBY.COM$' | tail -1 | cut -d: -f1)
+[ -n "$s2" ] && [ -n "$s3" ] && [ -n "$sb" ] && [ "$s2" -lt "$s3" ] && [ "$s3" -lt "$sb" ] || bad "share sends the CI6EVAC-S3 marker after S2's rounds and before the STANDBY spawn (got S2=$s2 S3=$s3 spawn=$sb)"
+grep -q "since \"\$OCON\" 4000 CI6EVAC-S3 | grep -q 'took EVAC" "$S" || bad "S3's took-EX-while-VAX1-ran check reads from the S3 marker"
+grep -q 'EX at seq" 180 CI6EVAC-S3' "$S" || bad "S3's takeover wait reads from the S3 marker"
 
 [ $fail = 0 ] && echo "PASS: ci6_evac.sh grade-share -- fixture PASS, 11 negative controls FAIL their criterion, the 2026-11-02 capture FAILs S2,S3,S4"
 exit $fail

@@ -89,16 +89,20 @@ ctrl() {
 	sleep 2
 }
 # The console since this fire's begin marker (consoles are append-only).
+# since <node> [lines] [marker]: a later marker (e.g. CI6EVAC-S3, sent just
+# before a phase) scopes the read to that phase, so an earlier phase's lines
+# -- S2's legitimate OVMX EX grants -- never answer for it.
 since() {
 	[ "$DRY" = 1 ] && return 0
-	timeout 120 "$LC" read "$POD" "$1" "${2:-4000}" | tr -d '\r' | awk -v m="CI6EVAC-BEGIN $RUN" 'index($0,m){b=NR} {l[NR]=$0} END{for(i=b;i<=NR&&b;i++)print l[i]}'
+	timeout 120 "$LC" read "$POD" "$1" "${2:-4000}" | tr -d '\r' | awk -v m="${3:-CI6EVAC-BEGIN} $RUN" 'index($0,m){b=NR} {l[NR]=$0} END{for(i=b;i<=NR&&b;i++)print l[i]}'
 }
-# wait_for <node> <ERE> <seconds>: poll the windowed console for a line.
+# wait_for <node> <ERE> <seconds> [marker]: poll the windowed console for a
+# line, read from [marker] (default the fire's begin marker) on.
 wait_for() {
 	[ "$DRY" = 1 ] && { echo "WAIT $1: /$2/"; return 0; }
 	local i
 	for i in $(seq 0 10 "$3"); do
-		since "$1" | grep -qE -- "$2" && return 0
+		since "$1" 4000 "${4:-CI6EVAC-BEGIN}" | grep -qE -- "$2" && return 0
 		sleep 10
 	done
 	return 1
@@ -212,6 +216,7 @@ if [ "$MODE" = share ]; then
 	# ---- S3: evacuation: VAX1 runs it, OVMX stands by, VAX1's copy is stopped --
 	tl "S3 VAX1 EVACWL (EX, forever); $OVMX EVACWL STANDBY $TAIL queued"
 	send vax1 'SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL' 10
+	send "$OCON" "! CI6EVAC-S3 $RUN" 2	# S2's OVMX EX grants precede this
 	send "$OCON" 'CREATE SYS$LOGIN:OVSTBY.COM' 2
 	send "$OCON" '$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE' 1
 	send "$OCON" "\$ EVACWL STANDBY NL=5 $TAIL" 1
@@ -219,11 +224,11 @@ if [ "$MODE" = share ]; then
 	send "$OCON" 'SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM' 5
 	wait_for "$OCON" 'standby holds EVAC\$WORKLOAD NL' 60 || die "$OVMX standby never took NL"
 	[ "$DRY" = 1 ] || sleep 30
-	since "$OCON" | grep -q 'took EVAC\$WORKLOAD EX' && die "$OVMX took EX while VAX1 ran"
+	since "$OCON" 4000 CI6EVAC-S3 | grep -q 'took EVAC\$WORKLOAD EX' && die "$OVMX took EX while VAX1 ran"
 	tl "S3 EVACUATE: STOP EVACVAX1 on VAX1"
 	send vax1 'STOP EVACVAX1' 5
-	wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 || die "$OVMX standby was not granted EX"
-	tl "TAKEOVER: $(since "$OCON" | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
+	wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 CI6EVAC-S3 || die "$OVMX standby was not granted EX"
+	tl "TAKEOVER: $(since "$OCON" 4000 CI6EVAC-S3 | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
 	[ "$DRY" = 1 ] || sleep $((TAIL * 2 + 20))
 
 	# ---- S4: OVMX leaves the volume; VAX1 reads it back and checks it ----------

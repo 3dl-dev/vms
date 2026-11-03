@@ -232,6 +232,7 @@ struct vms_dlm_scs {
 	uint32_t releases_stale;      /* a work item naming no staged release */
 
 	uint32_t transitions_begun;
+	uint32_t dir_entries_forgotten;   /* rd vms-8cb5: told-directory records a transition voided */
 	uint32_t transitions_ended;
 	uint32_t members_departed;
 
@@ -3249,6 +3250,11 @@ static void dlm_arm_transition_begin(void *ctx,
 	 * structural, not remembered. Counted so a transcript shows the boundary.
 	 */
 	d->transitions_begun++;
+	/* rd vms-8cb5: ...and so does the directory entry of every resource this
+	 * node masters, because this node sends no op-0x0d to re-register it.
+	 * The engine forgets which directory it told, so no removal is ever sent
+	 * for an entry the rebuild left nowhere (the V0.7-15 LOCKMGRERR). */
+	d->dir_entries_forgotten += vms_lock_dlm_directory_discarded();
 	/* rd vms-874f: trees this node mastered by an EARLIER rebuild stop
 	 * admitting survivors' ROOT records. */
 	vms_dlm_rm_rb_transition_begin(&d->rm);

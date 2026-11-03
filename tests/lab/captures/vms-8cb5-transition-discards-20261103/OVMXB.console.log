@@ -1,0 +1,42 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+    OpenVMX V0.7-15 - OpenVMS-compatible
+     3-NOV-2026 03:05:11.29
+
+%SYSINIT, waiting to form or join a VMScluster system
+%STDRV-I-STARTUP, OpenVMX startup begun at  3-NOV-2026 03:06:13.66
+%CNXMAN,  sending VAXcluster membership request to system VAXC
+%CNXMAN,  now a VAXcluster member -- system OVMXB
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:06:20.02  %%%%%%%%%%%
+Operator _OVMXB$OPA0: has been enabled, username SYSTEM
+
+%CNXMAN,  quorum lost, blocking activity
+                                        %OVMX-W-OWNER, cannot set owner of SYS$SYSROOT:[SYSMGR]: SS$ 3658
+%OVMX-W-OWNER, cannot set owner of SYS$SYSDEVICE:[USERS]: SS$ 3658
+%OVMX-W-OWNER, cannot set owner of SYS$SYSDEVICE:[USERS.USER1]: SS$ 3658
+%OVMX-W-OWNER, cannot set owner of SYS$SYSDEVICE:[USERS.USER2]: SS$ 3658
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:06:34.19  %%%%%%%%%%%
+Operator status for operator _OVMXB$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+█OVMX-W-OWNER, cannot set owner of [000000]SYS0.DIR: SS$ 3658

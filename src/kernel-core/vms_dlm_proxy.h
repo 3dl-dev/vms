@@ -611,6 +611,16 @@ uint32_t vms_lock_dlm_dir_hash_computed_wrong(void);
  * mastered resource was freed, and those it could not hand over. */
 uint32_t vms_lock_dlm_dir_removes_posted(void);
 uint32_t vms_lock_dlm_dir_removes_unposted(void);
+/*
+ * rd vms-8cb5: a cluster state transition has begun, and with it Phase 1's
+ * cluster-wide discard of directory information (Davis p. 7-40/7-41, p. 6-33).
+ * Forget every "that directory node holds my entry" record (`dir_told_csid`):
+ * a real master re-registers its entries with op-0x0d and OVMX sends none, so
+ * no directory holds one any more -- and a removal for an entry a directory
+ * does not hold is what draws a real V7.3's op-0x19 and LOCKMGRERR. Returns
+ * how many records were forgotten.
+ */
+uint32_t vms_lock_dlm_directory_discarded(void);
 
 /*
  * HOW MANY PROXY TRANSMISSIONS WERE REFUSED BECAUSE THIS NODE MASTERS THE

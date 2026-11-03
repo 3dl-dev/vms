@@ -883,6 +883,14 @@ static void arm_bindings(void)
 	    "arm ***");
 	has("return d->cl->club.transition_active != 0u;",
 	    "... and the arm reads it LIVE off the CLUB, never from a copy");
+	/* rd vms-8cb5: Phase 1 discards every directory entry and OVMX
+	 * re-registers none, so the transition's START makes the engine forget
+	 * which directories it told -- otherwise its next removal names an
+	 * entry no directory holds (op-0x19, LOCKMGRERR on a real V7.3). */
+	before("d->transitions_begun++;",
+	       "d->dir_entries_forgotten += vms_lock_dlm_directory_discarded();",
+	       "*** a transition's start forgets every told-directory record "
+	       "(the V0.7-15 LOCKMGRERR) ***");
 	before("(void)vms_dlm_dir_drop_unless(&d->dir, dlm_arm_dir_is_ours, d);",
 	       "(void)dlm_req_fsm_transition_ended(&d->req);",
 	       "*** a held request is released only AFTER the new directory "

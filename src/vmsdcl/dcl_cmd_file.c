@@ -3156,9 +3156,10 @@ int cmd_rename(struct dcl_command *cmd)
  * becomes the next parent DID); a genuinely-new leaf is created. Returns a VMS
  * status: SS$_NORMAL on success, SS$_DUPLNAM if the target already exists (the
  * ACP's honest duplicate-name answer), else the ACP's fail-honest status. Only
- * called with the executive present (INV-6); no POSIX fallback here.
+ * called with the executive present (INV-6); no POSIX fallback here. BACKUP's
+ * restore creates a missing output directory with it too (vms-539).
  */
-static uint32_t dcl_mkdir_acp(const char *vspec)
+uint32_t dcl_mkdir_acp(const char *vspec)
 {
     char dev[128] = "", dirtree[512] = "";
     const char *colon = strchr(vspec, ':');

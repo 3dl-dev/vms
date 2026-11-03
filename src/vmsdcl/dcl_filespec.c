@@ -786,6 +786,186 @@ void dcl_rms_read_close(struct dcl_rms_reader *r)
     free(r);
 }
 
+/* ---- Block I/O (BACKUP savesets) ---- */
+
+#define DCL_BIO_BLK 512u
+
+struct dcl_rms_bio {
+    struct FAB fab;
+    struct RAB rab;
+    char spec[1024];
+    int  writing;
+    uint32_t sts;                 /* the last failed $READ/$WRITE, else NORMAL */
+    unsigned char blk[63 * DCL_BIO_BLK];
+    size_t have, pos;             /* bytes in blk; next unread byte (reader) */
+    int  eof;
+};
+
+/* The effective spec with `deftype` supplied when the name part has no type. */
+static int bio_spec(struct dcl_context *ctx, const char *spec, const char *deftype,
+                    char *out, size_t outsz)
+{
+    if (dcl_rms_effective_spec(ctx, spec, out, outsz) != 0)
+        return -1;
+    if (deftype && deftype[0]) {
+        const char *name = out;
+        for (const char *p = out; *p; p++)
+            if (*p == ']' || *p == '>' || *p == ':')
+                name = p + 1;
+        if (!strchr(name, '.')) {
+            size_t l = strlen(out), dl = strlen(deftype);
+            char *semi = strchr(name, ';');
+            if (l + dl + 1 > outsz)
+                return -1;
+            if (semi) {
+                memmove(semi + dl, semi, strlen(semi) + 1);
+                memcpy(semi, deftype, dl);
+            } else {
+                memcpy(out + l, deftype, dl + 1);
+            }
+        }
+    }
+    return strlen(out) > 255 ? -1 : 0;
+}
+
+static struct dcl_rms_bio *bio_new(struct dcl_context *ctx, const char *spec,
+                                   const char *deftype, uint32_t *rms_status)
+{
+    struct dcl_rms_bio *b = calloc(1, sizeof(*b));
+    if (!b) { if (rms_status) *rms_status = RMS$_DME; return NULL; }
+    if (bio_spec(ctx, spec, deftype, b->spec, sizeof(b->spec)) != 0) {
+        if (rms_status) *rms_status = RMS$_SYN;
+        free(b); return NULL;
+    }
+    b->fab = cc$rms_fab;
+    b->fab.fab$l_fna = b->spec;
+    b->fab.fab$b_fns = (uint8_t)strlen(b->spec);
+    b->fab.fab$b_org = FAB$C_SEQ;
+    b->sts = RMS$_NORMAL;
+    return b;
+}
+
+static struct dcl_rms_bio *bio_connect(struct dcl_rms_bio *b, uint32_t *rms_status)
+{
+    uint32_t st;
+    b->rab = cc$rms_rab;
+    b->rab.rab$l_fab = &b->fab;
+    st = sys$connect(&b->rab, 0, 0);
+    if (!(st & 1)) {
+        if (rms_status) *rms_status = st;
+        sys$close(&b->fab, 0, 0); free(b); return NULL;
+    }
+    if (rms_status) *rms_status = RMS$_NORMAL;
+    return b;
+}
+
+struct dcl_rms_bio *dcl_rms_bio_open(struct dcl_context *ctx, const char *spec,
+                                     const char *deftype, uint32_t *rms_status)
+{
+    struct dcl_rms_bio *b = bio_new(ctx, spec, deftype, rms_status);
+    uint32_t st;
+    if (!b) return NULL;
+    b->fab.fab$b_fac = FAB$M_GET | FAB$M_BIO;
+    b->fab.fab$b_shr = FAB$M_SHRGET;
+    st = sys$open(&b->fab, 0, 0);
+    if (!(st & 1)) { if (rms_status) *rms_status = st; free(b); return NULL; }
+    return bio_connect(b, rms_status);
+}
+
+struct dcl_rms_bio *dcl_rms_bio_create(struct dcl_context *ctx, const char *spec,
+                                       const char *deftype, uint8_t rfm, uint8_t rat,
+                                       uint16_t mrs, uint32_t *rms_status)
+{
+    struct dcl_rms_bio *b = bio_new(ctx, spec, deftype, rms_status);
+    uint32_t st;
+    if (!b) return NULL;
+    b->fab.fab$b_rfm = rfm ? rfm : FAB$C_FIX;
+    b->fab.fab$b_rat = rat;
+    b->fab.fab$w_mrs = (rfm == 0 && mrs == 0) ? DCL_BIO_BLK : mrs;
+    b->fab.fab$b_fac = FAB$M_PUT | FAB$M_BIO;
+    st = sys$create(&b->fab, 0, 0);
+    if (!(st & 1)) { if (rms_status) *rms_status = st; free(b); return NULL; }
+    b->writing = 1;
+    return bio_connect(b, rms_status);
+}
+
+long dcl_rms_bio_read(struct dcl_rms_bio *b, void *buf, size_t len)
+{
+    size_t done = 0;
+    if (!b || b->writing) return -1;
+    while (done < len) {
+        if (b->pos == b->have) {
+            uint32_t st;
+            if (b->eof) break;
+            b->rab.rab$l_ubf = (char *)b->blk;
+            b->rab.rab$w_usz = (uint16_t)sizeof(b->blk);
+            b->rab.rab$l_bkt = 0;           /* the next block in sequence */
+            st = sys$read(&b->rab, 0, 0);
+            if (st == RMS$_EOF) { b->eof = 1; break; }
+            if (!(st & 1)) { b->sts = st; return -1; }
+            b->have = b->rab.rab$w_rsz;
+            b->pos = 0;
+            if (b->have == 0) { b->eof = 1; break; }
+        }
+        size_t n = b->have - b->pos;
+        if (n > len - done) n = len - done;
+        memcpy((char *)buf + done, b->blk + b->pos, n);
+        b->pos += n;
+        done += n;
+    }
+    return (long)done;
+}
+
+static int bio_flush(struct dcl_rms_bio *b, size_t n)
+{
+    uint32_t st;
+    b->rab.rab$l_rbf = (char *)b->blk;
+    b->rab.rab$w_rsz = (uint16_t)n;
+    b->rab.rab$l_bkt = 0;
+    st = sys$write(&b->rab, 0, 0);
+    if (!(st & 1)) { b->sts = st; return -1; }
+    b->have = 0;
+    return 0;
+}
+
+int dcl_rms_bio_write(struct dcl_rms_bio *b, const void *buf, size_t len)
+{
+    const char *p = buf;
+    if (!b || !b->writing) return -1;
+    while (len > 0) {
+        size_t n = sizeof(b->blk) - b->have;
+        if (n > len) n = len;
+        memcpy(b->blk + b->have, p, n);
+        b->have += n;
+        p += n;
+        len -= n;
+        if (b->have == sizeof(b->blk) && bio_flush(b, b->have) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+uint32_t dcl_rms_bio_status(const struct dcl_rms_bio *b)
+{
+    return b ? b->sts : RMS$_RAB;
+}
+
+const char *dcl_rms_bio_spec(const struct dcl_rms_bio *b)
+{
+    return b ? b->spec : "";
+}
+
+uint32_t dcl_rms_bio_close(struct dcl_rms_bio *b)
+{
+    uint32_t st = RMS$_NORMAL, cst;
+    if (!b) return RMS$_FAB;
+    if (b->writing && b->have > 0 && bio_flush(b, b->have) != 0)
+        st = b->sts;
+    cst = sys$close(&b->fab, 0, 0);
+    free(b);
+    return (st & 1) ? cst : st;
+}
+
 /* ---- Sequential record WRITE (CREATE, COPY dest) ---- */
 
 struct dcl_rms_writer {

@@ -1520,7 +1520,13 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_PROCCTL:
 	case VMS_IOCTL_CREPRC_PCB:
 	case VMS_IOCTL_SPAWN_NOTIFY:
+	case VMS_IOCTL_CREPRC_SYNC:
 		uarg = data;
+		/* $CREPRC's creation record (rd vms-416d): ARRIVE/HOLD come from a
+		 * task with no PCB yet; the facility takes NULL and makes none. */
+		if (cmd == VMS_IOCTL_CREPRC_SYNC)
+			return vms_facility_errno(vms_ioctl_creprc_sync(
+			    vms_proc_find(l->l_proc->p_pid), (unsigned long)uarg));
 		/* ESTABLISH_SYSTEM is the boot task's, which has no row yet: the
 		 * facility makes it (vms_proc_create_boot_task). Every other caller
 		 * the executive did not create is refused. */
@@ -1800,6 +1806,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		exec_lock_init(&vms_proc_hash_lock);
 		exec_hash_init(vms_proc_hash);
 		vms_eflag_init();
+		vms_creprc_sync_init();	/* rd vms-416d */
 		/* Bring up the mailbox table's list guard too (the table starts empty
 		 * -- mailboxes are created on demand by $CREMBX). */
 		vms_mbx_init();
@@ -1820,6 +1827,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		if (error != 0) {
 			printf("vms: vms_lnm_init failed: %d\n", error);
 			vms_eflag_cleanup();
+			vms_creprc_sync_cleanup();
 			vms_lock_cleanup();
 			vms_proctab_teardown();
 			vms_mbx_cleanup();
@@ -1852,6 +1860,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 			printf("vms: vms_devtab_init failed: %d\n", error);
 			vms_lnm_cleanup();
 			vms_eflag_cleanup();
+			vms_creprc_sync_cleanup();
 			vms_lock_cleanup();
 			vms_proctab_teardown();
 			vms_mbx_cleanup();
@@ -1866,6 +1875,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 			vms_devtab_cleanup();
 			vms_lnm_cleanup();
 			vms_eflag_cleanup();
+			vms_creprc_sync_cleanup();
 			vms_lock_cleanup();
 			vms_proctab_teardown();
 			vms_mbx_cleanup();
@@ -1935,6 +1945,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * the facility frees its shared objects, then proctab_teardown frees the
 		 * PCBs without re-releasing them. */
 		vms_eflag_cleanup();
+		vms_creprc_sync_cleanup();
 		vms_lock_cleanup();
 		vms_proctab_teardown();
 		vms_mbx_cleanup();

@@ -889,6 +889,10 @@ uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code);
 /* $CREPRC: the creator creates the child's PCB (rd vms-c43); flags = VMS_CREPRC_PCB_*. */
 uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *username,
                             uint32_t uic, uint64_t privs, uint32_t *vms_pid);
+/* $CREPRC's creation record (rd vms-416d): op = VMS_CREPRC_SYNC_*. Returns
+ * the op's SS$_ status; SS$_ABORT means the other side died or gave up. */
+uint32_t vms_kif_creprc_sync(uint32_t op, uint32_t *rec, uint32_t *pid,
+                             uint32_t *value, uint32_t *vms_pid);
 uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
                              uint32_t cap, uint32_t *count);
 
@@ -1345,6 +1349,8 @@ uint32_t vms_kif_bg_connect(uint32_t exec_chan, uint16_t family,
 uint32_t vms_kif_bg_send(uint32_t exec_chan, const void *buf, uint32_t len,
                          uint32_t *actlen);
 /* IO$_READVBLK -- receive into buf (<= bufsz); *actlen gets the bytes read. */
+uint32_t vms_kif_bg_recv_ex(uint32_t exec_chan, void *buf, uint32_t bufsz,
+                            uint32_t *actlen, int now);
 uint32_t vms_kif_bg_recv(uint32_t exec_chan, void *buf, uint32_t bufsz,
                          uint32_t *actlen);
 /* IO$_DEACCESS -- shut the connection down both ways. */

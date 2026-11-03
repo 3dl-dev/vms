@@ -411,6 +411,28 @@ exec_current_gid(void)
 	return (uint32_t)kauth_cred_getgid(kauth_cred_get());
 }
 
+/* rd vms-416d: the CURRENT process's id. */
+static __inline uint32_t
+exec_current_pid(void)
+{
+	return (uint32_t)curlwp->l_proc->p_pid;
+}
+
+/* rd vms-416d: nonzero iff process `pid` exists and has not exited. proc_find
+ * (under proc_lock, which it asserts) returns only SACTIVE/SSTOP processes, so
+ * a zombie or a dying process is not running -- the twin of Linux's
+ * exit_state test. Takes proc_lock: never call it holding an exec_lock. */
+static __inline int
+exec_pid_running(uint32_t pid)
+{
+	int running;
+
+	mutex_enter(&proc_lock);
+	running = proc_find((pid_t)pid) != NULL;
+	mutex_exit(&proc_lock);
+	return running;
+}
+
 static __inline int
 exec_task_alive(exec_task_ref_t *ref)
 {
@@ -1001,6 +1023,7 @@ void exec_socket_release(exec_socket_t s);
 int  exec_socket_connect(exec_socket_t s, uint16_t family, uint16_t port_be, uint32_t addr_be);
 long exec_socket_send(exec_socket_t s, const void *buf, size_t len);
 long exec_socket_recv(exec_socket_t s, void *buf, size_t len);
+long exec_socket_recv_now(exec_socket_t s, void *buf, size_t len);
 int  exec_socket_shutdown(exec_socket_t s);
 int  exec_socket_getname(exec_socket_t s, int peer, uint16_t *family, uint16_t *port_be, uint32_t *addr_be);
 int  exec_socket_setopt_int(exec_socket_t s, int level, int name, int val);

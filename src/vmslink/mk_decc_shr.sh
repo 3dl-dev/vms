@@ -385,6 +385,28 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         "$NM" --defined-only "$SIG_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_signal_hook \
             || { echo "mk_decc_shr: FAIL crtl_signal.c did not define ovmx_crtl_signal_hook" >&2; exit 2; }
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SIG_OBJ"
+        # vms-a66e: the C RTL's terminal and mailbox descriptors (crtl_devfd.c):
+        # stdin/stdout/stderr on a terminal are $QIO on a channel to it, pipe()
+        # is a mailbox pair; the hook above offers every call to it first. Its
+        # system services ($ASSIGN/$QIOW/$CREMBX/$GETDVI/$TRNLNM) are LIBVMS$SHR's
+        # (--use ALPHA_CRTL_VMS_USE below).
+        DEVFD_OBJ="$VENEER_DIR/crtl_devfd.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -O2 -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
+            -I"$RMS_SRC_DIR" -I"$RMS_INC" $ALPHA_MUSL_INC \
+            -o "$DEVFD_OBJ" "$RMS_SRC_DIR/crtl_devfd.c"
+        for _df in ovmx_crtl_devfd_call ovmx_crtl_devfd_bind_stdio ovmx_crtl_devfd_rundown; do
+            "$NM" --defined-only "$DEVFD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF "$_df" \
+                || { echo "mk_decc_shr: FAIL crtl_devfd.c did not define $_df" >&2; exit 2; }
+        done
+        ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $DEVFD_OBJ"
+        # DEC C getname(): a descriptor's file or device name; new, so at the tail.
+        "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF ovmx_crtl_getname \
+            || { echo "mk_decc_shr: FAIL crtl_rms_fd.c did not define ovmx_crtl_getname" >&2; exit 2; }
+        case ",$VEC,${PASS2_TAIL:-}," in
+            *',decc$getname'[=/]*) echo "mk_decc_shr: FAIL decc\$getname is already in the vector" >&2; exit 2;;
+        esac
+        echo "mk_decc_shr: C RTL terminals and pipes over VMS channels wired (vms-a66e): crtl_devfd.c"
         # vms-4ba3: DEC C fgetname, from the same layer (an RMS stream's
         # resultant spec); new to this pass, so it goes at the vector tail.
         "$NM" --defined-only "$FD_OBJ" 2>/dev/null | awk '{print $NF}' | grep -qxF 'decc$fgetname' \
@@ -513,6 +535,8 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         PASS2_TAIL="${PASS2_TAIL:-},decc\$__vms_waitpid/ovmx_crtl_vms_waitpid=PROCEDURE"
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $EXEC_OBJ"
         echo "mk_decc_shr: DEC C subprocess functions wired (vms-e70f): exec*() -> SYS\$CREPRC, decc\$wait/waitpid/__vms_waitpid -> the executive's completion, decc\$getpid -> the VMS PID (--use $ALPHA_CRTL_SYS_USE)"
+        # vms-a66e: DEC C getname() (crtl_rms_fd.c), after every earlier tail entry.
+        PASS2_TAIL="${PASS2_TAIL:-},decc\$getname/ovmx_crtl_getname=PROCEDURE"
         ALPHA_VENEER_OBJ="$ALPHA_VENEER_OBJ $SYS_OBJ"
         echo "mk_decc_shr: DEC C system() wired (vms-65a): decc\$system -> ovmx_crtl_system (LIB\$SPAWN, --use $ALPHA_CRTL_VMS_USE); exit/__posix_exit record \$STATUS (vms-599)"
     fi

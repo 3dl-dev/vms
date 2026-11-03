@@ -1,0 +1,31 @@
+# crtl-kernel-namespace-passthru -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "a name a C program opens is an RMS file specification: /proc, /sys, /run and /dev (but the null device) never reach the substrate's file system (rd vms-a66e)";;
+        targets)      echo "vmsrms/crtl_rms_fd.c";;
+        suites_red)   echo "test_syssvc_crtl_devfd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "kernel_path() keeps only /dev/null with the kernel. The mutation restores the namespace list the C RTL passed to the kernel before vms-a66e (/dev, /proc, /sys, /run, /vms), so open/stat/access of those names reach the Linux VFS and succeed.";;
+        require_fail) cat <<'EOF2'
+open("/proc/self/status") fails ENOENT
+stat("/sys/kernel") fails ENOENT
+access("/run/devfdprobe") of a file the substrate made there fails ENOENT
+open("/dev/vms") fails ENOENT (the executive's door is not a C RTL file)
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+EOF2
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    return p \&\& strcmp(p, "/dev/null") == 0;$|    return p \&\& (!strncmp(p, "/dev", 4) \|\| !strncmp(p, "/proc", 5) \|\| !strncmp(p, "/sys/", 5) \|\| !strcmp(p, "/sys") \|\| !strncmp(p, "/run", 4) \|\| !strncmp(p, "/vms", 4)); /* NEGCTL crtl-kernel-namespace-passthru */|' "$_file"
+    :
+}

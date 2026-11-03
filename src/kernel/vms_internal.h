@@ -257,6 +257,18 @@
 #define SS__TIMEOUT     556
 #define SS__HANGUP      716
 /*
+ * BGn: connect completions (rd vms-d0c4). A connect that the far side or the
+ * network refuses completes with the condition VMS TCP/IP Services reports for
+ * it, not a generic SS$_ABORT: connection refused (ECONNREFUSED) is
+ * SS$_REJECT, no route to the network/host (ENETUNREACH / EHOSTUNREACH) is
+ * SS$_UNREACHABLE, and a connect that timed out (ETIMEDOUT) is SS$_TIMEOUT
+ * (above). Values are the oracle's: docs/oracle/vax73-starlet-defs/SSDEF.txt
+ * "$EQU SS$_REJECT 660" and "$EQU SS$_UNREACHABLE 8340"; ssdef.h carries the
+ * same values and the same citation.
+ */
+#define SS__REJECT      660
+#define SS__UNREACHABLE 8340
+/*
  * Allocation statuses. Unlike the four above, these two were measured
  * directly on the oracle rather than inherited: VMS's own message
  * facility on the ~/vax OpenVMS VAX V7.3 lab reports
@@ -1748,6 +1760,10 @@ long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg);
+/* rd vms-416d: $CREPRC's creation record (proc NULL for ARRIVE/HOLD) */
+long vms_ioctl_creprc_sync(struct vms_proc *proc, unsigned long arg);
+void vms_creprc_sync_init(void);
+void vms_creprc_sync_cleanup(void);
 /* Substrate half of creator-driven creation (rd vms-c43): vms_module.c (Linux),
  * vms_netbsd.c (NetBSD). */
 uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
@@ -1838,6 +1854,8 @@ uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pi
  * $DASSGN can report SS$_IVCHAN itself).
  */
 int vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
+/* $GETDVI of a mailbox unit (rd vms-a66e; vms_mbx.c) */
+uint32_t vms_mbx_devinfo(const char *devnam, struct vms_devinfo *info);
 /* Give back every mailbox channel a dying process holds. */
 void vms_mbx_release_all(struct vms_proc *proc);
 

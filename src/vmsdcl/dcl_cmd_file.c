@@ -5,6 +5,7 @@
  */
 
 #include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1659,7 +1660,7 @@ static int type_page_pause(void)
     char buf[64];
     dcl_out_printf("Press RETURN to continue\n");
     dcl_out_flush();
-    return fgets(buf, sizeof(buf), stdin) != NULL;
+    return dcl_in_get(NULL, buf, sizeof(buf)) >= 0;
 }
 
 /*
@@ -2500,7 +2501,7 @@ int cmd_copy(struct dcl_command *cmd)
                 dcl_out_printf("COPY %s to %s ? [N]: ", vsrc, vdst);
                 dcl_out_flush();
                 char resp[64];
-                if (!fgets(resp, sizeof(resp), stdin)) break;
+                if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
                 if (toupper((unsigned char)resp[0]) != 'Y') continue;
             }
 
@@ -2643,7 +2644,7 @@ int cmd_copy(struct dcl_command *cmd)
             dcl_out_printf("COPY %s to %s ? [N]: ", src_spec, dst_spec);
             dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
 
@@ -2789,7 +2790,7 @@ static int delete_files_acp(struct dcl_context *ctx, const char *param,
             dcl_out_printf("DELETE %s ? [N]: ", arr[i].spec);
             dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
 
@@ -2891,7 +2892,7 @@ static int delete_one_spec(struct dcl_context *ctx, const char *spec,
             dcl_out_printf("DELETE %s ? [N]: ", vms_spec);
             dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
 
@@ -3441,15 +3442,15 @@ int cmd_create(struct dcl_command *cmd)
          * set; a terminal's end of file is per read, so clear it, or every
          * later CREATE at the terminal reads nothing and writes an empty file
          * (rd vms-f37: KSBC.COM, keystroke BC.READ) */
-        clearerr(stdin);
+        dcl_in_clear_eof();
         while (1) {
-            if (!fgets(line, sizeof(line), stdin)) break;
+            if (dcl_in_get(NULL, line, sizeof(line)) < 0) break;
             size_t ll = strlen(line);
             while (ll > 0 && (line[ll - 1] == '\n' || line[ll - 1] == '\r'))
                 ll--;
             if (dcl_rms_write_record(w, line, ll) != 0) break;
         }
-        clearerr(stdin);
+        dcl_in_clear_eof();
     }
     dcl_sysinput_restore(&si);
 
@@ -3648,7 +3649,7 @@ static int purge_files_acp(struct dcl_context *ctx, const char *param, int keep_
             dcl_out_printf("PURGE %s ? [N]: ", arr[i].spec);
             dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin)) break;
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0) break;
             if (toupper((unsigned char)resp[0]) != 'Y') continue;
         }
         uint32_t est = dcl_rms_erase(ctx, arr[i].spec);
@@ -3845,7 +3846,7 @@ int cmd_purge(struct dcl_command *cmd)
                    upper_ext[0] ? "." : "", upper_ext);
             dcl_out_flush();
             char resp[64];
-            if (!fgets(resp, sizeof(resp), stdin) ||
+            if (dcl_in_get(NULL, resp, sizeof(resp)) < 0 ||
                 toupper((unsigned char)resp[0]) != 'Y')
                 continue;
         }

@@ -1,17 +1,18 @@
 # libc I/O call sites per src/vmsdcl file (tests/dcl/libc_io_census.sh).
 # A ratchet: a count may only go DOWN, and when it does this file is lowered
 # with it. Each line is a libc-drop to remove (rd label libc-drop).
+# dcl_in.c: the ONE stdio input fallback (no executive), as dcl_out.c is for
+# output -- every other stdin read in DCL moved onto it (rd vms-4d27).
 dcl_backup.c 6
-dcl_cmd_file.c 21
+dcl_cmd_file.c 13
 dcl_cmd_misc.c 18
 dcl_cmd_process.c 10
-dcl_cmd_set.c 2
+dcl_cmd_set.c 1
 dcl_cmd_show.c 7
 dcl_editor.c 2
 dcl_help.c 5
-dcl_io.c 2
+dcl_in.c 1
 dcl_library.c 9
-dcl_main.c 4
-dcl_mbx.c 8
+dcl_mbx.c 3
 dcl_memfile.c 7
-dcl_terminal.c 8
+dcl_terminal.c 7

@@ -88,17 +88,33 @@ int main(void)
         return 1;
     }
 
-    static char out[16384];
-    CHECK(run_dcl("TELNET/ZQBOGUS 127.0.0.1\nFTP/ZQBOGUS 127.0.0.1\nFTP/PORT=21 127.0.0.1\n", out, sizeof out) == 0,
+    /*
+     * Each verb is probed in its OWN DCL run (rd vms-fcb5). With all three
+     * lines in one run, FTP/ZQBOGUS's IVQUAL satisfied the IVQUAL assertion
+     * for TELNET too, and "no connection attempt" keyed on the one message
+     * (%TELNET-I-TRYING) the client happened to print first. A TELNET that
+     * refuses a non-terminal SYS$INPUT before TRYING (%TELNET-E-NOTERM) then
+     * hid an accept-all TELNET completely: the control
+     * dcl-tcpip-tool-quals-accept-all went green in the merge queue. Now
+     * TELNET/ZQBOGUS must be IVQUAL in its own output, and that output must
+     * carry NO %TELNET- message at all -- whatever the client says first,
+     * it said something, so it was entered.
+     */
+    static char tout[8192], fout[8192], pout[8192];
+    CHECK(run_dcl("TELNET/ZQBOGUS 127.0.0.1\n", tout, sizeof tout) == 0 &&
+          run_dcl("FTP/ZQBOGUS 127.0.0.1\n", fout, sizeof fout) == 0 &&
+          run_dcl("FTP/PORT=21 127.0.0.1\n", pout, sizeof pout) == 0,
           "DCL ran the TELNET/FTP qualifier probes");
-    printf("  ---- probes ----\n%s  ---- end ----\n", out);
+    printf("  ---- TELNET/ZQBOGUS ----\n%s  ---- FTP/ZQBOGUS ----\n%s"
+           "  ---- FTP/PORT=21 ----\n%s  ---- end ----\n", tout, fout, pout);
     /* negctl: dcl-tcpip-tool-quals-accept-all */
-    CHECK(strstr(out, "%DCL-W-IVQUAL") != NULL && strstr(out, "\\ZQBOGUS\\") != NULL,
+    CHECK(strstr(tout, "%DCL-W-IVQUAL") != NULL && strstr(tout, "\\ZQBOGUS\\") != NULL &&
+          strstr(fout, "%DCL-W-IVQUAL") != NULL && strstr(fout, "\\ZQBOGUS\\") != NULL,
           "TELNET/ZQBOGUS and FTP/ZQBOGUS are %DCL-W-IVQUAL naming the qualifier");
     /* negctl: dcl-tcpip-tool-quals-accept-all */
-    CHECK(strstr(out, "%TELNET-I-TRYING") == NULL,
+    CHECK(strstr(tout, "%TELNET-") == NULL,
           "TELNET/ZQBOGUS never reaches the client (no connection attempt)");
-    CHECK(strstr(out, "%FTP-E-NOOP") != NULL,
+    CHECK(strstr(pout, "%FTP-E-NOOP") != NULL,
           "FTP/PORT=21 is a declared qualifier: it reaches the handler (not IVQUAL)");
 
     printf("=== test_syssvc_dcl_tcpip_tool_quals: %d passed, %d failed ===\n", pass, fail);

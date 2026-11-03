@@ -520,7 +520,37 @@ apply_edit() {
     case "$_d" in *[!a-z0-9-]*|"") echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;; esac
     [ -f "$DEFECTS_DIR/$_d.defect" ] || { echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2; }
     . "$DEFECTS_DIR/$_d.defect"
+    _ae_k=0
     defect_apply
+    _ae_rc=$?
+    [ "$_ae_k" -gt "$_ae_n" ] && _ae_n=$_ae_k
+    return $_ae_rc
+}
+
+# EVERY sed in a defect_apply must land, not just one (rd vms-fcb5). cmd_apply's
+# whole-file cmp only proves that SOME edit changed the file, so a defect with two
+# seds -- the mutation proper plus a helper, like acp-fileop-no-dlm-lock's
+# window-widening msleep -- whose MUTATION anchor went stale still "landed": the
+# helper edit changed the file, the lock was never removed, and the control went
+# green in the merge queue (PR #2020 renamed the call it anchors on). This shadow
+# of sed(1), live only while a defect_apply runs, numbers each `sed -i ... FILE`
+# call and records the ones that changed FILE. A sed may legitimately miss one
+# target of a multi-target defect, so cmd_apply requires each numbered sed to hit
+# at least ONE of the defect's target files.
+sed() {
+    case " $* " in
+    *" -i "*) ;;
+    *) command sed "$@"; return $? ;;
+    esac
+    for _ae_last in "$@"; do :; done
+    [ -f "$_ae_last" ] || { command sed "$@"; return $?; }
+    _ae_k=$((_ae_k + 1))
+    cp "$_ae_last" "$_ae_last.negctl-sedpre" || return 3
+    command sed "$@"
+    _ae_src=$?
+    cmp -s "$_ae_last" "$_ae_last.negctl-sedpre" || _ae_hits="$_ae_hits $_ae_k "
+    rm -f "$_ae_last.negctl-sedpre"
+    return $_ae_src
 }
 
 cmd_list() { echo "$DEFECTS"; }
@@ -559,6 +589,8 @@ cmd_apply() {
     }
 
     _touched=0
+    _ae_n=0
+    _ae_hits=""
     for _root in "$@"; do
         [ -d "$_root" ] || continue
         for _t in $_targets; do
@@ -586,6 +618,20 @@ cmd_apply() {
         echo "  defect '$_d' names target(s) [$_targets] but none exist under: $*" >&2
         return 3
     fi
+    _ae_i=1
+    while [ "$_ae_i" -le "$_ae_n" ]; do
+        case "$_ae_hits" in
+        *" $_ae_i "*) ;;
+        *)
+            echo "FATAL: BROKEN FIXTURE (not a broken gate)." >&2
+            echo "  sed #$_ae_i of defect '$_d' changed NONE of its targets [$_targets] --" >&2
+            echo "  its anchor no longer matches. Another sed did land, so the file changed," >&2
+            echo "  but the image would carry only PART of the mutation. Re-anchor it." >&2
+            return 3
+            ;;
+        esac
+        _ae_i=$((_ae_i + 1))
+    done
     return 0
 }
 

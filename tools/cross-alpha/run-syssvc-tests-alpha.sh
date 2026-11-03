@@ -209,7 +209,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     gcc -O2 -Wall -I/repo/src/vmsfs/include -I/repo/tests/qemu -o /work/mk_imgact \
         /repo/tests/qemu/mkimage_ods2_imgact.c $ODS2CC
     /work/mk_imgact /work/tests/ods2_imgact.img 1
-    # DKA700: the cluster-factor-3 volume test_syssvc_acp_cluster3 extends a
+    # VDA700: (vdh) the cluster-factor-3 volume test_syssvc_acp_cluster3 extends a
     # file on (rd vms-563; on x86/aarch64 it is the virtio-scsi SDA0:).
     gcc -O2 -Wall -I/repo/src/vmsfs/include -I/repo/tests/ods2 -o /work/mk_cluster3 \
         /repo/tests/qemu/mkimage_ods2_cluster3.c $ODS2CC
@@ -345,7 +345,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # rd vms-3ea: a SECOND copy of the OVMXSEARCH volume on DKA600: -- the
     # same-label unit test_syssvc_acp_volalrmnt (its $MOUNT) must refuse.
     cp /work/tests/ods2_search.img /work/d6.img
-    # rd vms-563: the cluster-factor-3 volume on DKA700: (the eighth function).
+    # rd vms-563: the cluster-factor-3 volume on VDA700: (vdh, the eighth function).
     cp /work/tests/ods2_cluster3.img /work/d7.img
 
     echo "== boot qemu-system-alpha -M clipper, timeout ${BT}s =="

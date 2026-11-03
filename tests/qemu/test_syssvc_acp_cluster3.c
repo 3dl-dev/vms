@@ -10,7 +10,7 @@
  * that bit stands for. VAX1's ANALYZE/DISK_STRUCTURE: ALLOCCLR at LBN
  * 89118-89120, and LBN 29706 belonged to something else.
  *
- * THE VOLUME. SDA0: (the virtio-scsi disk; DKA700: on the Alpha rail) carries
+ * THE VOLUME. SDA0: (the virtio-scsi disk; VDA700:, the eighth virtio disk vdh, on the Alpha rail) carries
  * /ods2_cluster3.img, mastered by tests/qemu/mkimage_ods2_cluster3.c: 3000
  * blocks, cluster factor 3, [000000]FILLER.DAT;1 (2000 blocks of 'F') then
  * [000000]EVAC.DAT;1 (2 blocks) ending at LBN 2048.
@@ -126,7 +126,7 @@ static void rw_init(struct vms_acp_rw_args *r, uint32_t chan, uint32_t vbn,
 
 int main(void)
 {
-    static const char *const units[] = { "SDA0:", "DKA700:" };
+    static const char *const units[] = { "SDA0:", "VDA700:", "DKA700:" };
     struct vms_acp_access_args a;
     struct vms_acp_rw_args r;
     uint8_t pat[512], blk[512], bm_before[512], bm_after[512], *fbuf;
@@ -158,7 +158,7 @@ int main(void)
             unit = units[i];
             break;
         }
-    check(unit != NULL, "the cluster-factor-3 fixture disk is attached (SDA0: / DKA700:)");
+    check(unit != NULL, "the cluster-factor-3 fixture disk is attached (SDA0: / VDA700: / DKA700:)");
     if (!unit) {
         printf("=== test_syssvc_acp_cluster3: %d passed, %d failed ===\n", pass, fail);
         return 1;

@@ -771,6 +771,64 @@ static int vms_local_time(uint64_t utc, int16_t tdf, uint8_t out[8])
     return 1;
 }
 
+/* A DAP 5.6 A-18 date ("dd-MMM-yy hh:mm:ss", the FAL's local time; a leading
+ * blank for a one-digit day; spec sec. 3.15), or the same with a 4-digit year
+ * and/or ".cc" hundredths, to a VMS binary time (100-ns ticks since
+ * 17-NOV-1858). A two-digit year is 1958..2057. 0 = not a date. */
+int rms_remote_ascii_time(const char *s, size_t n, uint8_t out[8])
+{
+    static const char mon[] = "JANFEBMARAPRMAYJUNJULAUGSEPOCTNOVDEC";
+    size_t i = 0;
+    unsigned v[7] = { 0 }; int nd[7] = { 0 };
+    while (i < n && s[i] == ' ') i++;
+    for (; i < n && s[i] >= '0' && s[i] <= '9' && nd[0] < 2; i++, nd[0]++) v[0] = v[0] * 10 + (unsigned)(s[i] - '0');
+    if (!nd[0] || i + 5 > n || s[i] != '-') return 0;
+    int m = -1;
+    for (int k = 0; k < 12; k++) {
+        int eq = 1;
+        for (int c = 0; c < 3; c++) {
+            char ch = s[i + 1 + (size_t)c];
+            if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 32);
+            if (ch != mon[3 * k + c]) eq = 0;
+        }
+        if (eq) { m = k; break; }
+    }
+    if (m < 0 || s[i + 4] != '-') return 0;
+    i += 5;
+    for (; i < n && s[i] >= '0' && s[i] <= '9' && nd[1] < 4; i++, nd[1]++) v[1] = v[1] * 10 + (unsigned)(s[i] - '0');
+    if (nd[1] != 2 && nd[1] != 4) return 0;
+    if (nd[1] == 2) v[1] += v[1] < 58 ? 2000 : 1900;
+    if (i >= n || s[i] != ' ') return 0;
+    i++;
+    for (int f = 2; f <= 4; f++) {
+        if (f > 2) { if (i >= n || s[i] != ':') return 0; i++; }
+        for (; i < n && s[i] >= '0' && s[i] <= '9' && nd[f] < 2; i++, nd[f]++) v[f] = v[f] * 10 + (unsigned)(s[i] - '0');
+        if (!nd[f]) return 0;
+    }
+    if (i < n && s[i] == '.') {
+        i++;
+        for (; i < n && s[i] >= '0' && s[i] <= '9' && nd[5] < 2; i++, nd[5]++) v[5] = v[5] * 10 + (unsigned)(s[i] - '0');
+        if (nd[5] == 1) v[5] *= 10;
+    }
+    while (i < n && (s[i] == ' ' || s[i] == '\0')) i++;
+    if (i != n) return 0;
+    static const unsigned mdays[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    unsigned y = v[1];
+    int leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    unsigned dim = mdays[m] + (m == 1 && leap);
+    if (y < 1859 || v[0] < 1 || v[0] > dim || v[2] > 23 || v[3] > 59 || v[4] > 59) return 0;
+    /* Days from 1-JAN-1859, plus the 45 days from 17-NOV-1858 to it. */
+    int64_t days = 0;
+    for (unsigned yy = 1859; yy < y; yy++)
+        days += 365 + (((yy % 4 == 0 && yy % 100 != 0) || yy % 400 == 0) ? 1 : 0);
+    for (int k = 0; k < m; k++) days += mdays[k] + (k == 1 && leap);
+    days += (int64_t)v[0] - 1 + 45;
+    int64_t t = ((days * 24 + v[2]) * 60 + v[3]) * 60 + v[4];
+    t = t * 10000000ll + (int64_t)v[5] * 100000ll;
+    for (int k = 0; k < 8; k++) out[k] = (uint8_t)((uint64_t)t >> (8 * k));
+    return 1;
+}
+
 /* "[000200,000201]" -> group 0200, member 0201 (octal), when numeric. */
 static int owner_uic(const char *s, uint16_t *g, uint16_t *m)
 {
@@ -909,6 +967,14 @@ uint32_t rms_remote_dirlist_full(const char *spec, struct rms_remote_full *out)
                 d.cur.have_cre = vms_local_time(m.u.datetime.cdt64, m.u.datetime.cdt_tdf, d.cur.fa.credate);
             if (m.u.datetime.have_rdt64)
                 d.cur.have_rev = vms_local_time(m.u.datetime.rdt64, m.u.datetime.rdt_tdf, d.cur.fa.revdate);
+            /* A FAL that sends the DAP 5.6 A-18 dates (the VAX V7.3 FAL to an
+             * OVMX accessor, vms-0a7 S1 run 4 case 1f, rd vms-5b9). */
+            if (!d.cur.have_cre && (m.u.datetime.menu & DNET_DAP_DAT_CDT))
+                d.cur.have_cre = rms_remote_ascii_time(m.u.datetime.cdt, strlen(m.u.datetime.cdt),
+                                                       d.cur.fa.credate);
+            if (!d.cur.have_rev && (m.u.datetime.menu & DNET_DAP_DAT_RDT))
+                d.cur.have_rev = rms_remote_ascii_time(m.u.datetime.rdt, strlen(m.u.datetime.rdt),
+                                                       d.cur.fa.revdate);
             break;
         case DNET_DAP_PROTECTION: {
             if (!d.have_file) break;
@@ -1137,14 +1203,19 @@ uint32_t rms_remote_get(void *rabp)
     if (rr_recv(&st->link, &m) < 0) return rab_ret(rab, RMS$_RER, SS$_ABORT);
     if (m.op == DNET_DAP_DATA) {
         size_t n = m.u.data.reclen <= sizeof m.u.data.rec ? m.u.data.reclen : sizeof m.u.data.rec;
-        /* A VFC record keeps its fixed-control bytes at the front, as OVMX's
-         * local RMS holds them (dnet_fal.h: "a VFC record still carries its fsz
-         * control bytes") and as the FAL sends and takes them in a DAP DATA
-         * record. Stripping them here lost them on a COPY node:: -> local ->
-         * node:: round trip: the 290-block BIG.TXT came back with every
-         * record's first two bytes eaten (vms-0a7 S1 run 4, BIGRT.TXT).
-         * Callers that print records skip fab$b_fsz themselves (TYPE). */
+        /* A DAP DATA record of a VFC file carries its fixed control area
+         * (fsz bytes) in front of the data. $GET moves the control to the
+         * record header buffer RAB$L_RHB (dropped when RHB is 0) and the data
+         * to UBF, as local RMS does -- so a COPY node:: -> local writes the
+         * VAX's own on-disk record (vms-0a7 S1 run 4: 297 blocks for the
+         * VAX's 290 when the control rode in the data, rd vms-36aa). */
         const uint8_t *rec = m.u.data.rec;
+        if (st->attr.rfm == DNET_DAP_RFM_VFC) {
+            size_t fsz = st->attr.fsz;
+            if (fsz > n) fsz = n;
+            if (rab->rab$l_rhb && fsz) memcpy(rab->rab$l_rhb, rec, fsz);
+            rec += fsz; n -= fsz;
+        }
         rab->rab$l_rbf = rab->rab$l_ubf;
         if (!rab->rab$l_ubf && n) return rab_ret(rab, RMS$_RTB, 0);
         size_t c = n <= rab->rab$w_usz ? n : rab->rab$w_usz;
@@ -1178,8 +1249,17 @@ uint32_t rms_remote_put(void *rabp)
     struct dnet_dap_msg m;
     memset(&m, 0, sizeof m);
     m.op = DNET_DAP_DATA;
-    m.u.data.reclen = rab->rab$w_rsz;
-    if (rab->rab$w_rsz) memcpy(m.u.data.rec, rab->rab$l_rbf, rab->rab$w_rsz);
+    /* A VFC record goes out with its fixed control area in front of the
+     * data, from RAB$L_RHB (zeroes when RHB is 0), as local RMS writes it. */
+    size_t fsz = 0;
+    struct FAB *fab = rab->rab$l_fab;
+    if (fab && fab->fab$b_rfm == FAB$C_VFC) {
+        fsz = fab->fab$b_fsz ? fab->fab$b_fsz : 2;
+        if (fsz + rab->rab$w_rsz > DNET_DAP_MAX_REC) return rab_ret(rab, RMS$_RTB, 0);
+        if (rab->rab$l_rhb) memcpy(m.u.data.rec, rab->rab$l_rhb, fsz);
+    }
+    m.u.data.reclen = (uint16_t)(fsz + rab->rab$w_rsz);
+    if (rab->rab$w_rsz) memcpy(m.u.data.rec + fsz, rab->rab$l_rbf, rab->rab$w_rsz);
     if (rr_send(&st->link, &m) < 0) return rab_ret(rab, RMS$_WER, SS$_ABORT);
     return rab_ret(rab, RMS$_NORMAL, 0);
 }

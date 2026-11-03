@@ -238,6 +238,45 @@ static void test_encoder_lab_bytes(void)
           "LENGTH+LEN256 blocked DATA (operand 301) round-trips");
 }
 
+/* ---- 2b. DATE AND TIME: both forms a VAX FAL sends (rd vms-5b9) ---------- */
+static void test_datetime_forms(void)
+{
+    struct dnet_dap_msg m; size_t used = 0; uint8_t b[128]; size_t n;
+    /* The VAX V7.3 FAL to a VAX (vax-to-vax-sys-login, falverbs-v2v-wire.txt
+     * seg2): DATMENU 88 03 = RVN + bits 7/8, RVN 2, two 16-byte UTC times. */
+    n = unhex("0d0224880302000" "0c74c092cc3f101ffffffffffff101f803edb0f2cc3f101ffffffffffff101f", b, sizeof b);
+    int ok = dnet_dap_decode(b, n, &m, &used) == DNET_DAP_OK && used == n && m.op == DNET_DAP_DATETIME &&
+             m.u.datetime.rvn == 2 && m.u.datetime.have_cdt64 && m.u.datetime.have_rdt64 &&
+             m.u.datetime.cdt64 == 0x01f1c32c094cc700ull && m.u.datetime.rdt64 == 0x01f1c32c0fdb3e80ull;
+    CHECK(ok, "DATE-TIME, DAP 7 form (VAX->VAX capture): RVN 2, binary created/revised times");
+
+    /* The DAP 5.6 form: CDT, RDT (A-18), RVN, and a bit-4 A-18 date after
+     * RVN; the A-18 dates are kept as sent. */
+    const char *a = " 2-NOV-26 23:40:25", *r2 = " 2-NOV-26 23:40:26", *bk = "17-NOV-58 00:00:00";
+    n = 0; b[n++] = 0x0d; b[n++] = 0x00; b[n++] = 0x1b;
+    memcpy(b + n, a, 18); n += 18; memcpy(b + n, r2, 18); n += 18;
+    b[n++] = 0x01; b[n++] = 0x00; memcpy(b + n, bk, 18); n += 18;
+    ok = dnet_dap_decode(b, n, &m, &used) == DNET_DAP_OK && used == n &&
+         m.u.datetime.menu == 0x1b && !strcmp(m.u.datetime.cdt, a) && !strcmp(m.u.datetime.rdt, r2) &&
+         m.u.datetime.rvn == 1 && !m.u.datetime.have_cdt64 && !m.u.datetime.have_rdt64;
+    CHECK(ok, "DATE-TIME, DAP 5.6 form: A-18 created/revised, RVN, a bit-4 date read past");
+
+    /* Fuzz: every DATMENU (bits 0-8 + extension) over random operand bytes
+     * of every length; the decode never reads past the buffer (ASan). */
+    unsigned bad = 0;
+    srand(0x5b9);
+    for (int i = 0; i < 100000; i++) {
+        uint8_t f[160];
+        size_t len = (size_t)(rand() % (int)sizeof f);
+        for (size_t k = 0; k < len; k++) f[k] = (uint8_t)rand();
+        if (len >= 1) f[0] = 0x0d;
+        if (len >= 2) f[1] = 0x00;
+        if (len >= 4) { unsigned mn = (unsigned)rand() & 0x1ff; f[2] = (uint8_t)((mn & 0x7f) | (mn > 0x7f ? 0x80 : 0)); f[3] = (uint8_t)(mn >> 7); }
+        if (dnet_dap_decode(f, len, &m, &used) == DNET_DAP_OK && (used > len || used == 0)) bad++;
+    }
+    CHECK(bad == 0, "DATE-TIME decoder: 100k random menus and operands, never over-consumes");
+}
+
 /* ---- 3. fuzz the DAP decoder: no crash, clean reject ---------------------- */
 
 static void test_dap_fuzz(void)
@@ -394,6 +433,7 @@ int main(void)
     test_oracle_block_data();
     test_lab_get_and_status();
     test_encoder_lab_bytes();
+    test_datetime_forms();
     test_dap_fuzz();
     test_fal_access_oracle();
     test_fal_access_fuzz();

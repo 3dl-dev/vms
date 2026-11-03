@@ -2123,6 +2123,10 @@ static void rms_fab_from_header(struct FAB *fab, const rms_file_t *h)
      * creator's fab$w_mrs (vms-b447) -- $OPEN returns it whatever the caller
      * passed, as VMS does. A FIX file's record size is that same value. */
     fab->fab$w_mrs = h->fhc_mrz;
+    /* A VFC file's fixed-control size is FAT$B_VFCSIZE ($OPEN output field
+     * FAB$B_FSZ): $GET and $PUT frame its records, and size RAB$L_RHB, by it. */
+    if (rfm == FAB$C_VFC && h->fhc_vfc)
+        fab->fab$b_fsz = h->fhc_vfc;
 }
 #endif /* OVMX_HAVE_ACP */
 

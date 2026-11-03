@@ -460,6 +460,7 @@ static void rab_in(struct RAB *r, const struct ovmx_rmsabi_rab *io)
     r->rab$w_usz = (uint16_t)io->usz;
     r->rab$l_rbf = (char *)(uintptr_t)io->rbf_in;
     r->rab$w_rsz = (uint16_t)io->rsz_in;
+    r->rab$l_rhb = io->rhb;
 }
 
 static void rab_out(struct ovmx_rmsabi_rab *io, const struct RAB *r)

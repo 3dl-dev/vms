@@ -184,6 +184,14 @@ static int creator_main(void)
 
     /* G */
     pid = ovmx_crtl_exec_create(DIR_ "/TWOROW", args, 0, env);
+    /* Collect only once the WHOLE process is gone (both rows), so the answer
+     * is the termination record the executive posted, not a live row's. */
+    for (int i = 0; pid && i < 400; i++) {
+        target = pid;
+        if (jpi_pid(&target) == 0)
+            break;
+        usleep(50000);
+    }
     st = -1;
     w = pid ? ovmx_crtl_vms_waitpid((int)pid, &st, 0) : -1;
     printf("  INFO: G wait=%d status=%08X\n", w, (unsigned)st);

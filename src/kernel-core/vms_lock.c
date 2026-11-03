@@ -3645,6 +3645,48 @@ static uint32_t enq_sub_adopt_tree_master(struct vms_lock_resource *res,
     return st;
 }
 
+/*
+ * THE SUB-RESOURCE'S OWN HASH, off its ROOT parent's (rd vms-d63).
+ *
+ * The master of a tree finds a sub-RSB by the value the request carries at
+ * body[128:132]. OVMX used to send zero there, and a real VAX master answered
+ * every F11B$s<fid> request with a resource of its own making -- (0,0) value
+ * block, vbseq 0 -- beside the RSB its XQP really uses, so the file-header
+ * value block never crossed (vms-5fa r5, SDA RSB 879D7380: 0 of 600 samples).
+ * The value is vms_dlm_sub_name_hash_proven() of the sub's identity and the
+ * parent's held value, both read off the resource blocks; it is stored like a
+ * COMPUTED root value (re-derivable, so it keeps no idle block alive).
+ *
+ * Only under a ROOT parent whose value this node holds: that is the whole
+ * observed coverage (every real parent in the corpus is a root). Anything else
+ * leaves the value unknown and the request carries the zero it always did --
+ * no value is minted. Caller holds no engine lock.
+ */
+static void enq_sub_take_tree_hash(struct vms_lock_resource *res)
+{
+    struct vms_lock_resource *parent = res->parent;
+    uint32_t ph = 0u, h = 0u;
+    int have = 0;
+
+    if (parent == NULL)
+        return;
+    exec_lock(&parent->lock);
+    if (parent->parent == NULL && parent->hash_known) {
+        ph = parent->dir_hash;
+        have = 1;
+    }
+    exec_unlock(&parent->lock);
+    if (!have)
+        return;
+    exec_lock(&res->lock);
+    if (!res->hash_known &&
+        vms_dlm_sub_name_hash_proven(ph, res->res_group, res->res_mode,
+                                     (const uint8_t *)res->name,
+                                     res->name_len, &h) == VMS_DLM_HASH_OK)
+        (void)dir_hash_store(res, h, 1 /* computed */);
+    exec_unlock(&res->lock);
+}
+
 static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
                               struct vms_lock_resource *res, uint32_t dst_csid,
                               const struct enq_parent_facts *pf, int *intr)
@@ -6821,6 +6863,11 @@ static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
             goto out;
         }
     }
+    /* rd vms-d63: a sub-resource's own hash, for every frame that will name
+     * it -- the request to the tree's master, and the op-0x12/0x08 records
+     * a re-home or a rebuild sends for it. */
+    if (!xn)
+        enq_sub_take_tree_hash(res);
 
     /*
      * DLM directory lookup + master resolution BEFORE anything is granted.

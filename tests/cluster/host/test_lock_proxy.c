@@ -60,6 +60,7 @@
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h -> exec_kbackend_host.h */
 #include "vms_dlm_proxy.h"    /* the requester seam under test */
 #include "vms_rms_lockname.h" /* the RMS file-access lock's name (rd vms-326) */
+#include "vms_dlm_hash.h"     /* rd vms-d63: the sub-resource hash */
 #include "vms_f11b_ser.h"     /* the XQP per-file serialization lock (rd vms-d63) */
 
 #include <pthread.h>
@@ -1296,7 +1297,7 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 	 * master lock id for RMT9's root, which its SDA printed as the
 	 * sub-lock's "Par. id: 3C000695". */
 	const uint32_t PARENT_MASTER_LKID = 0x3c000695u;
-	struct vms_dlm_proxy_post post;
+	struct vms_dlm_proxy_post post, root_post;
 	struct vms_proc proc;
 	uint32_t root = 0, sub = 0, rootS0 = 0, st;
 
@@ -1317,6 +1318,7 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 	ct_check(st == SS__NORMAL && root != 0,
 		 "the root $ENQ creates a proxy and posts a request");
 	ct_check(fm_wait_posts(1, &post), "the root's request was posted");
+	root_post = post;
 	ct_check_eq_u32(post.dst_csid, CSID_DIRECTORY,
 			"the ROOT's first request goes to the DIRECTORY node");
 	ct_check(post.parent_own_lkid == 0u && post.parent_master_lkid == 0u,
@@ -1328,10 +1330,9 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 	ct_check_eq_u32(st, SS__NORMAL,
 			"the master GRANTS the root and names its own handle");
 
-	/* (2) THE SUB-LOCK. Note what is deliberately NOT done: no hash is
-	 *     learned for the sub NAME. A request addressed to a master needs no
-	 *     directory index, and this executive will never have learned one for
-	 *     a name no directory was ever asked about. */
+	/* (2) THE SUB-LOCK. Nothing is learned for the sub NAME: its hash is
+	 *     COMPUTED (rd vms-d63) from its identity and the root's held value
+	 *     -- the value the tree's master finds the sub-RSB by. */
 	{
 		struct vms_enq_args a;
 
@@ -1344,7 +1345,7 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 		sub = a.lkid;
 	}
 	ct_check(st == SS__NORMAL && sub != 0,
-		 "*** the sub-lock $ENQ is accepted with NO directory hash for "
+		 "*** the sub-lock $ENQ is accepted with no hash LEARNED for "
 		 "its name ***");
 	ct_check(fm_wait_posts(2, &post), "the sub-lock's request was posted");
 	ct_check_eq_u32(post.dst_csid, CSID_MASTER,
@@ -1358,9 +1359,21 @@ static void b67a_sublock_goes_to_the_parents_master(void)
 	ct_check_eq_u32(post.parent_master_lkid, PARENT_MASTER_LKID,
 			"*** body[40:44] is the handle THE PARENT'S MASTER gave "
 			"it -- the pair that parent's own grant carried ***");
-	ct_check_eq_u32(post.dir_hash_known, 0u,
-			"  and NO hash is asserted for a sub name nobody was "
-			"asked about (Rule 8)");
+	{
+		uint32_t want = 0u;
+
+		ct_check(root_post.dir_hash_known &&
+			 vms_dlm_sub_name_hash_proven(root_post.dir_hash,
+						      post.res_group,
+						      post.res_acmode,
+						      (const uint8_t *)"S0", 2u,
+						      &want) == VMS_DLM_HASH_OK,
+			 "  the root carried its value; the sub hash is defined");
+		ct_check(post.dir_hash_known && post.dir_hash == want,
+			 "*** and it carries the SUB's hash, off the root's value "
+			 "(rd vms-d63; the function is VAX2's own on S0 under RMT9, "
+			 "b67a frame 235 -- test_dlm_hash) ***");
+	}
 	ct_check(strcmp(post.resnam, "S0") == 0,
 		 "the posted name is the sub-resource's own");
 	ct_check_eq_u32(post.lkmode, LCK_K_CWMODE,
@@ -1916,7 +1929,9 @@ static void d63_file_ser_lock_on_a_vax_mastered_volume(void)
 	}
 	fm_install();
 	proc_init(&proc);
-	(void)vms_lock_dlm_learn_dir_hash(D63_VRES, 18u, 0u, 0u, 0x5fa1u);
+	/* the value OVMX's own root request carried and VAX1 echoed (r5 frames
+	 * 3493/3494) */
+	(void)vms_lock_dlm_learn_dir_hash(D63_VRES, 18u, 0u, 0u, 0xa0261e5fu);
 
 	memset(&t, 0, sizeof(t));
 	t.proc = &proc;
@@ -1963,6 +1978,18 @@ static void d63_file_ser_lock_on_a_vax_mastered_volume(void)
 	ct_check(sub_post.parent_master_lkid == D63_V_MASTER &&
 		 sub_post.parent_own_lkid == post.req_lkid,
 		 "  naming its parent by the pair (own handle, master's handle)");
+	{
+		uint32_t want = 0u;
+
+		ct_check(vms_dlm_sub_name_hash_proven(0xa0261e5fu, 0u, 0u,
+						      want_name, 10u, &want) ==
+			 VMS_DLM_HASH_OK, "  the proven sub hash is defined here");
+		ct_check(sub_post.dir_hash_known && sub_post.dir_hash == want &&
+			 want != 0u,
+			 "*** and carrying the SUB's hash, off its parent's held value "
+			 "-- the value VAX1 finds its own F11B$s<12> RSB by, never the "
+			 "zero that made it grant a fresh RSB (vms-5fa r5) ***");
+	}
 
 	/* 3. the grant hands out the value block */
 	memset(&g, 0, sizeof(g));

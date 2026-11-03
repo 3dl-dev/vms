@@ -47,6 +47,7 @@
 #include "vms_cnxman_coord_fsm.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_cluster_codec_dlm.h"
+#include "vms_dlm_hash.h"        /* rd vms-d63: the sub-resource hash */
 #include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, RX specimen
 				  * assembly (FC-P3.15, design sec 3.2.4) */
 
@@ -2962,13 +2963,22 @@ static void test_b67a_sublock_request_on_the_wire(void)
 	 * arm's own evidence). */
 	r.parent_own_lkid    = 0x59000076u;
 	r.parent_master_lkid = 0x3c000695u;
-	/* NO HASH: a sub-resource is not in the directory. */
-	r.dir_hash_valid  = 0u;
-	r.res_group       = 1u;
+	/* THE SUB'S HASH (rd vms-d63): the master finds the sub-RSB by it. Off
+	 * the proven function, from the parent RMT9's own carried value
+	 * (0x43395412, the arm's frame 43); the arm's VAX2 put 0x457ebde3 on the
+	 * wire for this S0 (frame 235). */
+	r.res_group       = 0u;              /* the arm's 00 00 03 02 */
 	r.res_acmode      = 3u;
 	r.res_ident_valid = 1u;
 	r.name_len        = 2u;
 	memcpy(r.name, "S0", 2);
+	ct_check(vms_dlm_sub_name_hash_proven(0x43395412u, 0u, 3u,
+					      (const uint8_t *)"S0", 2u,
+					      &r.dir_hash) == VMS_DLM_HASH_OK &&
+		 r.dir_hash == 0x457ebde3u,
+		 "*** the sub hash of S0 under RMT9 is the value the real VAX2 "
+		 "sent (b67a frame 235) ***");
+	r.dir_hash_valid  = 1u;
 
 	memset(frame, 0, sizeof(frame));
 	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
@@ -2981,16 +2991,17 @@ static void test_b67a_sublock_request_on_the_wire(void)
 		 le32_at(b + 40u) == r.parent_master_lkid,
 		 "*** body[36:44] is the PARENT PAIR, which is what makes this a "
 		 "sub-lock and not a second root of the same name ***");
-	ct_check(b[128] == 0 && b[129] == 0 && b[130] == 0 && b[131] == 0,
-		 "*** and body[128:132] is ZERO: the hash indexes a directory "
-		 "this resource is not in, and no directory was ever asked "
-		 "about the name (Rule 8) ***");
+	ct_check(b[128] == 0xe3 && b[129] == 0xbd && b[130] == 0x7e &&
+		 b[131] == 0x45,
+		 "*** and body[128:132] is the SUB's hash, e3 bd 7e 45, byte for "
+		 "byte what VAX2 sent ***");
 	snprintf(state, sizeof(state),
 		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
-		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u,reqflags=%u",
+		 "namelen=%u,hash=%u,parentown=%u,parentmaster=%u,reqflags=%u",
 		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
 		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
 		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash,
 		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid,
 		 (unsigned)r.req_flags);
 	conf_dump("dlm_enq_req_sub", 72u, state, b, VMS_CM_BODY_LEN);
@@ -3014,6 +3025,24 @@ static void test_b67a_sublock_request_on_the_wire(void)
 	r.res_ident_valid    = 1u;
 	r.name_len           = 10u;
 	memcpy(r.name, "F11B$s\x0c\x00\x00\x00", 10);
+	/* rd vms-d63 r5: the hash VAX1 finds its own F11B$s<12> RSB by. The
+	 * function first proven on VAX2's own F11B$s<42> under F11B$vSYSDSK1
+	 * (r5 f11b-frames.txt frame 11: d7 68 a6 0b, the parent's value
+	 * 0x20c23c17); then OVMX's under F11B$vEVAC5FA, whose value 0xa0261e5f
+	 * OVMX's root request carried and VAX1 echoed (frames 3493/3494). */
+	{
+		uint32_t v = 0u;
+
+		ct_check(vms_dlm_sub_name_hash_proven(0x20c23c17u, 0u, 0u,
+				(const uint8_t *)"F11B$s\x2a\x00\x00\x00", 10u,
+				&v) == VMS_DLM_HASH_OK && v == 0x0ba668d7u,
+			 "*** r5 frame 11: VAX2's F11B$s<42> sub hash, d7 68 a6 0b ***");
+	}
+	ct_check(vms_dlm_sub_name_hash_proven(0xa0261e5fu, 0u, 0u,
+					      (const uint8_t *)r.name, 10u,
+					      &r.dir_hash) == VMS_DLM_HASH_OK,
+		 "  OVMX's F11B$s<12> sub hash under F11B$vEVAC5FA");
+	r.dir_hash_valid = 1u;
 	memset(frame, 0, sizeof(frame));
 	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
 					   sizeof(frame), &written) ==
@@ -3024,12 +3053,15 @@ static void test_b67a_sublock_request_on_the_wire(void)
 	ct_check(b[28] == 0x19u && b[29] == 0u,
 		 "*** body[28:30] is the LKB's $ENQ flags, VALBLK|SYNCSTS|SYSTEM "
 		 "(0x0019) -- each of them in VAX2's 0x0239 ***");
+	ct_check(le32_at(b + 128u) == r.dir_hash && r.dir_hash != 0u,
+		 "*** body[128:132] carries that hash, not zero (vms-5fa r5) ***");
 	snprintf(state, sizeof(state),
 		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
-		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u,reqflags=%u",
+		 "namelen=%u,hash=%u,parentown=%u,parentmaster=%u,reqflags=%u",
 		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
 		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
 		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash,
 		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid,
 		 (unsigned)r.req_flags);
 	conf_dump("dlm_enq_req_sub", 72u, state, b, VMS_CM_BODY_LEN);

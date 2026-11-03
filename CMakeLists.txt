@@ -1314,7 +1314,10 @@ if(BUILD_TESTS)
     # quorum lost, no/granted/mistimed NOQUEUE probe, takeover off seq+1, no
     # REMOVE_NODE, unwindowed console) and the real run16 hand-run capture,
     # which must FAIL only criterion 4 (it ran no NOQUEUE probe). Also checks
-    # the fire subcommand's dry-run console order. Hermetic: no pod.
+    # the fire subcommand's dry-run console order. rd vms-6731: the SETUP
+    # node-clock check (clock.txt; a misaligned bed is a SETUP FAULT and C3 is
+    # UNGRADED) and console_stamp.py, lab-console.sh stamp's in-pod half.
+    # Hermetic: no pod.
     add_test(NAME lab_ci6_evac_grade
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/lab/tests/test_ci6_evac_grade.sh)
     set_tests_properties(lab_ci6_evac_grade PROPERTIES

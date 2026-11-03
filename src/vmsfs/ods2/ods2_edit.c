@@ -333,10 +333,10 @@ void ods2_fh2_reseal(void *header_block)
 /* ================================================================
  * Storage bitmap (BITMAP.SYS VBN2..) bit accounting. [N2] (ods2.h /
  * ods2_writer.c): 32-bit little-endian words, 4096 bits per 512-byte block, a
- * SET bit == a FREE block, a CLEAR bit == an ALLOCATED block (cluster factor 1,
- * so bit N of the whole bitmap == LBN N). These helpers act on ONE 512-byte
- * bitmap DATA block; the ACP chooses which block (bit / 4096) and which bit
- * within it (bit % 4096), reading/writing the block through exec_blockdev_*.
+ * SET bit == a FREE cluster, a CLEAR bit == an ALLOCATED one (bit N of the
+ * whole bitmap == CLUSTER N, LBNs N*cluster.., see ods2_sbm_alloc below).
+ * These helpers act on ONE 512-byte bitmap DATA block: bit / 4096 picks the
+ * block, bit % 4096 the bit within it.
  * ================================================================ */
 
 #define ODS2_SBM_BITS_PER_WORD   32u
@@ -375,6 +375,212 @@ void ods2_sbm_block_free(void *bitmap_block, unsigned bit_in_block)
     uint32_t w = ed_rd32(wp);
     w |= (1u << bit_idx);
     ed_put32(wp, w);
+}
+
+/* ================================================================
+ * CLUSTER-AWARE storage-bitmap allocation and deallocation (rd vms-563).
+ *
+ * One bitmap bit is one CLUSTER, not one block: bit N covers LBNs
+ * N*cluster .. N*cluster+cluster-1, where `cluster` is the volume's cluster
+ * factor (hm2_cluster / scb_cluster; INITIALIZE /CLUSTER_SIZE). A volume of
+ * `volsize` blocks has volsize / cluster bits. Space is handed out and given
+ * back only in whole clusters, so a retrieval pointer always begins on a
+ * cluster boundary and covers a multiple of the cluster factor, and the
+ * file's highest allocated block (HIBLK) is a multiple of it too. This is
+ * what a VAX's ANALYZE/DISK_STRUCTURE checks: every LBN a file maps lies in a
+ * cluster the bitmap marks allocated, and every allocated cluster is mapped.
+ *
+ * The ACP used to treat bit N as LBN N. On a cluster-factor-3 volume it
+ * allocated bit 29706 and then wrote the file's data at LBN 29706 -- another
+ * part of the volume -- while LBNs 89118-89120 stayed marked allocated with
+ * nothing mapping them (VAX1 ANALYZE/DISK: ALLOCCLR at 89118-89120). The bit
+ * <-> LBN conversion now lives here, once, and the ACP only supplies the
+ * BITMAP.SYS block reads and writes.
+ * ================================================================ */
+
+static uint32_t sbm_cluster(const ods2_sbm_io_t *io)
+{
+    return io->cluster ? io->cluster : 1u;
+}
+
+uint32_t ods2_sbm_round_blocks(uint32_t blocks, uint32_t cluster)
+{
+    if (cluster <= 1u)
+        return blocks;
+    return ((blocks + cluster - 1u) / cluster) * cluster;
+}
+
+/* Find `len` consecutive FREE bits in [lo, hi). 1 + *start when found, 0 when
+ * not, -1 on an I/O error. Reads each bitmap block it crosses once. */
+static int sbm_find_run(const ods2_sbm_io_t *io, uint8_t *blk,
+                        uint32_t lo, uint32_t hi, uint32_t len, uint32_t *start)
+{
+    uint32_t b, run_start = 0, run_len = 0, cur_bmvbn = 0;
+    int loaded = 0;
+
+    for (b = lo; b < hi; b++) {
+        uint32_t bmvbn = 2u + b / ODS2_SBM_BITS_PER_BLOCK;
+
+        if (!loaded || bmvbn != cur_bmvbn) {
+            int r = io->read(io->ctx, bmvbn, blk);
+            if (r > 0)
+                return 0;                   /* past the bitmap's coverage */
+            if (r < 0)
+                return -1;
+            cur_bmvbn = bmvbn;
+            loaded = 1;
+        }
+        /* A whole longword at once where it can be (rd vms-465): 32
+         * allocated clusters are skipped, 32 free ones join the run. */
+        if ((b % 32u) == 0 && b + 32u <= hi) {
+            uint32_t wi = (b % ODS2_SBM_BITS_PER_BLOCK) / 32u;
+            uint32_t w = ed_rd32(blk + (size_t)wi * 4u);
+            if (w == 0u) {
+                run_len = 0;
+                b += 31u;
+                continue;
+            }
+            if (w == 0xFFFFFFFFu && len - run_len >= 32u) {
+                if (run_len == 0)
+                    run_start = b;
+                run_len += 32u;
+                b += 31u;
+                if (run_len == len) {
+                    *start = run_start;
+                    return 1;
+                }
+                continue;
+            }
+        }
+        if (ods2_sbm_block_bit_free(blk, b % ODS2_SBM_BITS_PER_BLOCK)) {
+            if (run_len == 0)
+                run_start = b;
+            if (++run_len == len) {
+                *start = run_start;
+                return 1;
+            }
+        } else {
+            run_len = 0;
+        }
+    }
+    return 0;
+}
+
+/* Set (free != 0) or clear the bits [first, first+n), one read-modify-write
+ * per bitmap block. */
+static ods2_status_t sbm_mark(const ods2_sbm_io_t *io, uint8_t *blk,
+                              uint32_t first, uint32_t n, int free)
+{
+    uint32_t i = 0;
+
+    while (i < n) {
+        uint32_t bmvbn = 2u + (first + i) / ODS2_SBM_BITS_PER_BLOCK;
+
+        if (io->read(io->ctx, bmvbn, blk) != 0)
+            return ODS2_ERR_IO;
+        do {
+            if (free)
+                ods2_sbm_block_free(blk, (first + i) % ODS2_SBM_BITS_PER_BLOCK);
+            else
+                ods2_sbm_block_alloc(blk, (first + i) % ODS2_SBM_BITS_PER_BLOCK);
+            i++;
+        } while (i < n && 2u + (first + i) / ODS2_SBM_BITS_PER_BLOCK == bmvbn);
+        if (io->write(io->ctx, bmvbn, blk) != 0)
+            return ODS2_ERR_IO;
+    }
+    return ODS2_OK;
+}
+
+/*
+ * ods2_sbm_alloc - allocate at least `need` contiguous blocks in whole
+ * clusters. Searches from LBN `hint` first (the block after the file's last
+ * extent, so a growing file stays one extent), then wraps (first fit). `room`
+ * (>= need) asks for a stretch that leaves the file space to keep growing
+ * (rd vms-465): the run is placed in the middle of a free stretch of 2*room,
+ * else at the start of one of `room`, else the first run of `need`.
+ * On success *lbn_out is the run's first LBN (a cluster boundary) and
+ * *count_out the blocks allocated (need rounded up to whole clusters).
+ */
+ods2_status_t ods2_sbm_alloc(const ods2_sbm_io_t *io, void *bitmap_block,
+                             uint32_t need, uint32_t hint, uint32_t room,
+                             uint32_t *lbn_out, uint32_t *count_out)
+{
+    uint8_t *blk = (uint8_t *)bitmap_block;
+    uint32_t c, nbits, ncl, rcl, hb, run_start = 0;
+    int found = 0, tryroom;
+    ods2_status_t st;
+
+    if (!io || !io->read || !io->write || !blk || !lbn_out || !count_out || need == 0)
+        return ODS2_ERR_ARGS;
+    c = sbm_cluster(io);
+    nbits = io->volsize / c;               /* one bit per whole cluster */
+    ncl = (need + c - 1u) / c;
+    if (room < need)
+        room = need;
+    rcl = (room + c - 1u) / c;
+    hb = (hint + c - 1u) / c;              /* first cluster at/after the hint */
+    if (hb < 1 || hb >= nbits)
+        hb = 1;
+    if (rcl > nbits / 16u)
+        rcl = ncl > nbits / 16u ? ncl : nbits / 16u;
+
+    /* 1. the clusters at the hint itself (the file's own continuation) */
+    if (hb > 1 && hb + ncl <= nbits) {
+        found = sbm_find_run(io, blk, hb, hb + ncl, ncl, &run_start);
+        if (found < 0)
+            return ODS2_ERR_IO;
+    }
+    /* 2. a stretch of 2*room with the run in its middle; 3. a stretch of room;
+     * 4. the first run of need. Each from the hint on, then from cluster 1.
+     * Bit 0 (holding the boot block) is never data. */
+    for (tryroom = (rcl > ncl) ? 2 : 0; !found && tryroom >= 0; tryroom--) {
+        uint32_t len = tryroom == 2 ? 2u * rcl : tryroom == 1 ? rcl : ncl;
+
+        if (len > nbits)
+            continue;
+        found = sbm_find_run(io, blk, hb, nbits, len, &run_start);
+        if (!found && hb > 1)
+            found = sbm_find_run(io, blk, 1u, hb + len < nbits ? hb + len : nbits,
+                                 len, &run_start);
+        if (found < 0)
+            return ODS2_ERR_IO;
+        if (found && tryroom == 2)
+            run_start += rcl;
+    }
+    if (!found)
+        return ODS2_ERR_NOSPACE;
+
+    st = sbm_mark(io, blk, run_start, ncl, 0);
+    if (st != ODS2_OK)
+        return st;
+    *lbn_out = run_start * c;              /* the first LBN of the cluster */
+    *count_out = ncl * c;
+    return ODS2_OK;
+}
+
+/*
+ * ods2_sbm_free_range - give back the clusters that lie WHOLLY inside LBNs
+ * [lbn, lbn+count). A cluster only partly inside is left allocated: its other
+ * blocks may still be mapped (a truncate keeps whole clusters, so on a
+ * well-formed file this frees exactly the range).
+ */
+ods2_status_t ods2_sbm_free_range(const ods2_sbm_io_t *io, void *bitmap_block,
+                                  uint32_t lbn, uint32_t count)
+{
+    uint32_t c, first, end;
+
+    if (!io || !io->read || !io->write || !bitmap_block)
+        return ODS2_ERR_ARGS;
+    if (count == 0)
+        return ODS2_OK;
+    c = sbm_cluster(io);
+    first = (lbn + c - 1u) / c;
+    end = (lbn + count) / c;
+    if (end > io->volsize / c)
+        end = io->volsize / c;
+    if (end <= first)
+        return ODS2_OK;
+    return sbm_mark(io, (uint8_t *)bitmap_block, first, end - first, 1);
 }
 
 /* ================================================================

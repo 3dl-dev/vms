@@ -1,0 +1,33 @@
+# acp-cluster-lbn-not-scaled -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP extend on a volume with cluster factor > 1: the run BITMAP.SYS allocates (bit N = cluster N = LBNs N*cluster..) is the run the file's data and map get, rd vms-563";;
+        targets)      echo "vmsfs/ods2/ods2_edit.c";;
+        suites_red)   echo "test_syssvc_acp_cluster3";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ods2_sbm_alloc() -- the codec allocator the ACP's extend calls -- returns the cluster NUMBER of the run it marked in BITMAP.SYS as its start LBN instead of cluster * cluster-factor: the vms-5fa defect, where OVMXE cleared bit 29706 on VAX1's cluster-3 volume and wrote EVAC.DAT's data to LBN 29706 instead of 89118-89120. On the fixture the extend of EVAC.DAT (ending at LBN 2048) allocates cluster 683 and, mutated, writes and maps LBN 683 -- inside FILLER.DAT. The block count is still a whole cluster and the map agrees with where the data went, so the extend, the HIBLK, the re-ACCESS read-back and the raw read of the mapped LBN all stay green; only the cluster-boundary check, the bitmap-vs-map agreement and FILLER.DAT's content go red. Cluster-factor-1 volumes (every other suite) are unaffected: cluster * 1 == cluster. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the new extent starts on a cluster boundary (LBN a multiple of 3)
+exactly one BITMAP.SYS bit went free -> allocated, the cluster holding the new data
+FILLER.DAT still reads all 'F': the extend wrote nothing outside its cluster
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+EOF
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: ods2_sbm_alloc()'s result line occurs once in ods2_edit.c.
+        # The substitution drops the "* c" scaling and marks the line, so a
+        # second application matches nothing.
+        sed -i 's|^    \*lbn_out = run_start \* c;              /\* the first LBN of the cluster \*/$|    *lbn_out = run_start; /* NEGCTL acp-cluster-lbn-not-scaled */|' "$_file"
+    :
+}

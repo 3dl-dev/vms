@@ -128,7 +128,7 @@ ROOTFS="$REPO/distro/rootfs/vms"
 VAX_SYSTARTUP="$REPO/distro/rootfs-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 VAX_DISTRIB_SYSTARTUP="$REPO/distro/rootfs-distrib-only-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 VAX_STATUS_PROOF_SYSTARTUP="$REPO/tests/lab-vax/SYSTARTUP_VMS_STATUS_PROOF.COM"
-BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE FAL.EXE MAIL_SERVER.EXE MAIL.EXE NCP.EXE OPCOM.EXE"
+BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE NETACP.EXE FAL.EXE MAIL_SERVER.EXE MAIL.EXE NCP.EXE OPCOM.EXE"
 OPTIONAL_IMAGES="ROOTAUDIT.EXE"
 KIT_DEST_NAME="OVMX-OS-VAX.KIT"
 
@@ -207,6 +207,13 @@ done
 for img in $OPTIONAL_IMAGES; do
     [ -f "$IMAGES_DIR/$img" ] && cp "$IMAGES_DIR/$img" "$SYSEXE/$img"
 done
+# NETACP_TEST.EXE (rd vms-0a7 S3): the DECnet TEST image -- every self-test the
+# shipped NETACP.EXE does not carry -- which the DCL acceptance battery runs as
+# SYS$SYSTEM:NETACP_TEST.EXE on this rail. A GATE volume only: a --distribution
+# volume never carries a test image.
+if [ "$DISTRIBUTION" -eq 0 ] && [ -f "$IMAGES_DIR/NETACP_TEST.EXE" ]; then
+    cp "$IMAGES_DIR/NETACP_TEST.EXE" "$SYSEXE/NETACP_TEST.EXE"
+fi
 
 # 3b. --status-proof only: the proof images join SYS$SYSTEM. Every image the
 #     proof SYSTARTUP RUNs must be here, so a missing one fails now rather than

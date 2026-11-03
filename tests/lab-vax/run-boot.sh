@@ -556,6 +556,8 @@ build_boot_image_set() {
      && [ -f "${SYSVOL_IMAGES_DIR}/JOB_CONTROL.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/STARTUP.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/NETACP.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/NETACP_TEST.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/FAL.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/MAIL_SERVER.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/MAIL.EXE" ] \
@@ -586,14 +588,22 @@ build_boot_image_set() {
       cmake -S /src -B /tmp/build-decnetd-vax \
         -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
         -DCMAKE_BUILD_TYPE=Release >/tmp/build-decnetd-vax-configure.log 2>&1
-      cmake --build /tmp/build-decnetd-vax --target decnetd_exe fal_exe mail_server_exe vms_mail ncp_exe vms_rootaudit ovmx_opcom -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
+      cmake --build /tmp/build-decnetd-vax --target decnetd_exe netacp_exe fal_exe mail_server_exe vms_mail ncp_exe vms_rootaudit ovmx_opcom -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
       cp /tmp/build-decnetd-vax/bin/DECNETD.EXE /out/DECNETD.EXE
+      cp /tmp/build-decnetd-vax/bin/NETACP.EXE /out/NETACP.EXE
       cp /tmp/build-decnetd-vax/bin/FAL.EXE /out/FAL.EXE
       cp /tmp/build-decnetd-vax/bin/MAIL_SERVER.EXE /out/MAIL_SERVER.EXE
       cp /tmp/build-decnetd-vax/bin/MAIL.EXE /out/MAIL.EXE
       cp /tmp/build-decnetd-vax/bin/NCP.EXE /out/NCP.EXE
       cp /tmp/build-decnetd-vax/bin/ROOTAUDIT.EXE /out/ROOTAUDIT.EXE
-      cp /tmp/build-decnetd-vax/bin/OPCOM.EXE /out/OPCOM.EXE'
+      cp /tmp/build-decnetd-vax/bin/OPCOM.EXE /out/OPCOM.EXE
+      # rd vms-0a7 S3: the DECnet test image the battery runs (tests/ needs
+      # BUILD_TESTS, which a cross configure defaults OFF) -- its own build tree.
+      cmake -S /src -B /tmp/build-dnettest-vax \
+        -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON >/tmp/build-dnettest-vax-configure.log 2>&1
+      cmake --build /tmp/build-dnettest-vax --target netacp_test_exe -- -j"$(nproc)" >/tmp/build-dnettest-vax-build.log 2>&1
+      cp /tmp/build-dnettest-vax/bin/NETACP_TEST.EXE /out/NETACP_TEST.EXE'
   [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ] || die "DECNETD.EXE cross-build did not produce an elf32-vax image (rd vms-c1f)"
   # FAL.EXE (rd vms-d85): the FAL network server process NETACP $CREPRCs for
   # every inbound file access, running as the authenticated user.
@@ -698,7 +708,7 @@ master_system_volume() {
   # DECnet CTERM section hard-gates on it, so a regression that drops it off
   # this rail's runtime must fail HERE too, not surface as a silent skip deep
   # in the battery.
-  for f in DCL.EXE PROVISION.EXE OVMXVMSSYS.PAR DECNETD.EXE; do
+  for f in DCL.EXE PROVISION.EXE OVMXVMSSYS.PAR DECNETD.EXE NETACP.EXE; do
     grep -qiF "${f}" <<<"${listing}" \
       || die "mastered system volume is MISSING ${f} -- staging/caching regression (vms-72da / vms-c1f)"
   done
@@ -758,7 +768,7 @@ inject_cluster_sysvol_config() {
 #    below stages via stage_sysvol.sh --distribution from VAX_IMAGES_DIR, so
 #    without this the install mode would die "boot image missing".
 build_vax_images() {
-  local need="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE DECNETD.EXE OPCOM.EXE"
+  local need="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE DECNETD.EXE NETACP.EXE OPCOM.EXE"
   if [ "${FORCE_VAX_IMAGES:-0}" != "1" ]; then
     local have=1
     for img in $need; do [ -f "${VAX_IMAGES_DIR}/${img}" ] || have=0; done
@@ -774,7 +784,7 @@ build_vax_images() {
         set -e
         BUILD_DIR=/tmp/build-vax-images-cmake sh tools/cross-vax/build-ovmx-images-vax-cmake.sh
         for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE \
-                   PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE DECNETD.EXE OPCOM.EXE; do
+                   PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE DECNETD.EXE NETACP.EXE OPCOM.EXE; do
           cp /tmp/build-vax-images-cmake/bin/$img /out/$img
         done'
   rc=$?; set -e

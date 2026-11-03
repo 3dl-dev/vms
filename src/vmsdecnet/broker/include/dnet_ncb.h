@@ -25,11 +25,13 @@
 #define DNET_NCB_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #define DNET_NCB_OK        0
 #define DNET_NCB_EINVAL  (-1)   /* null argument                                 */
 #define DNET_NCB_ETRUNC  (-2)   /* no "::" separator / empty node or object      */
 #define DNET_NCB_EBADLEN (-3)   /* a field over its bound                        */
+#define DNET_NCB_ENOTACC (-4)   /* not the inbound-accept NCB form (below)       */
 
 /* DECnet Phase IV node names are <= 6 chars; the "area.node" literal form is a
  * little longer. A task/object name is <= 16 (DNA Session Control end-user
@@ -71,5 +73,48 @@ struct dnet_ncb {
  * An optional "/<connect data>" tail on the object spec is accepted and ignored.
  */
 int dnet_ncb_parse(const char *ncb, size_t len, struct dnet_ncb *out);
+
+/*
+ * THE INBOUND-ACCEPT NCB (rd vms-0a7 S3) -- OVMX's OWN DOCUMENTED TEXT FORM,
+ * LABELLED: it is NOT VMS's binary NCB layout and claims nothing about it.
+ *
+ * On VMS, NETACP creates a network object's server process with the logical
+ * name SYS$NET translating to an NCB that names the inbound link; the server
+ * $ASSIGNs _NET: and issues IO$_ACCESS with that NCB to ACCEPT the link
+ * (VMS's NCB carries the remote node, the object, the user and, after a '/',
+ * the link identification and the connect data). OVMX's form keeps that SHAPE,
+ * as text a $TRNLNM can return and a $QIO can carry:
+ *
+ *     <remote-node>::"<object-number>=<user>/#<link handle, 8 hex digits>"
+ *     e.g.  VAX1::"17=GUEST/#9A3C01F2"
+ *
+ * The handle is the NETACP-issued, unguessable link handle of the waiting
+ * inbound link; NETACP accepts the link only for the process it created for it
+ * (the executive-stamped sender PID), so a guessed NCB from any other process
+ * is refused. The "/#" tail is what makes the form unambiguous: the outbound
+ * connect NCB above never has a '#' after its '/'.
+ *
+ * dnet_ncb_accept_parse - parse ncb[0..len-1]. DNET_NCB_OK, or EINVAL (null),
+ * ENOTACC (not this form), EBADLEN (a field over its bound). Bounds-checked,
+ * never reads past ncb[len-1]; *out is zeroed on any failure. The text is
+ * untrusted (any local process can hand any bytes to IO$_ACCESS): every byte
+ * is checked, fuzzed by the broker selftest.
+ *
+ * dnet_ncb_accept_format - the same form into buf (cap with the NUL); *outlen
+ * the length without it. Refuses (EBADLEN / ENOTACC) a field the parser would
+ * not read back exactly, so format -> parse always round-trips.
+ */
+#define DNET_NCB_ACC_MAXOBJ  255u
+
+struct dnet_ncb_accept {
+    char     node[DNET_NCB_MAXNODE + 1];   /* the remote node (name or address)   */
+    unsigned object;                       /* the object number, 1..255           */
+    char     user[DNET_NCB_MAXACC + 1];    /* the authenticated user              */
+    uint32_t handle;                       /* NETACP's link handle, never 0       */
+};
+
+int dnet_ncb_accept_parse(const char *ncb, size_t len, struct dnet_ncb_accept *out);
+int dnet_ncb_accept_format(const char *node, unsigned object, const char *user,
+                           uint32_t handle, char *buf, size_t cap, size_t *outlen);
 
 #endif /* DNET_NCB_H */

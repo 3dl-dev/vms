@@ -107,6 +107,13 @@ enum dnet_dap_op {
 #define DNET_DAP_CAP_WILDCARD       38
 #define DNET_DAP_CAP_SEQ_RECORD     33
 #define DNET_DAP_CAP_NAME_MSG       40
+/* Bit 65 is past the DAP 5.6 list. Observed (rd vms-5b9, black-box against the
+ * real VAX V7.3 FAL, tests/lab/captures/vms-0a7-s1-20261103-run5/syscap-probe/):
+ * with it in the accessor's CONFIGURATION, and nothing else changed, the FAL's
+ * DATE AND TIME carries the created / revised times as 16-byte UTC values
+ * (DATMENU bits 7 / 8, hundredths kept) in place of the A-18 text; every other
+ * DIRECTORY LIST reply byte is the same. OVMX's accessor decodes that form. */
+#define DNET_DAP_CAP_UTC_DATETIME   65
 
 /* ATTMENU bits (spec sec. 3.4) in field order. */
 enum {
@@ -336,6 +343,12 @@ struct dnet_dap_msg {
             char     cdt[DNET_DAP_DATE_LEN + 1], rdt[DNET_DAP_DATE_LEN + 1],
                      edt[DNET_DAP_DATE_LEN + 1];
             uint16_t rvn;
+            /* DATMENU bits 7 / 8 (DAP 7): created / revised as a UTC value --
+             * 100-ns ticks since 15-OCT-1582 and the time differential factor
+             * in minutes east of UTC. Decode only; never encoded. */
+            int      have_cdt64, have_rdt64;
+            uint64_t cdt64, rdt64;
+            int16_t  cdt_tdf, rdt_tdf;
         } datetime;
 
         struct {                       /* PROTECTION (sec. 3.16)               */
@@ -375,6 +388,8 @@ int dnet_dap_decode(const uint8_t *buf, size_t len,
 
 /* Test a SYSCAP bit in a decoded CONFIGURATION. */
 int dnet_dap_syscap_has(const struct dnet_dap_msg *config, unsigned bit);
+/* Set one SYSCAP bit in a CONFIGURATION message (the EX field grows to it). */
+void dnet_dap_syscap_set(struct dnet_dap_msg *config, unsigned bit);
 
 /* Build OVMX's own CONFIGURATION (DAP 5.6, VMS/RMS-32, OVMX SYSCAP). */
 void dnet_dap_ovmx_config(struct dnet_dap_msg *m, uint16_t bufsiz);

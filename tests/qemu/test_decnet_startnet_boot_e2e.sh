@@ -3,17 +3,27 @@
 # endnode the VMS way, and NETACP is proven RUNNING with its datalink OPEN
 # (rd vms-1f69). Not "STARTNET printed its message" -- the process and the wire.
 #
-# Boot 1 (SYSTEM; DECnet unconfigured at boot): NCP SET EXECUTOR ADDRESS 1.42 / NAME OVMX / STATE ON
-#   persists SYS$SYSTEM:NETNODE_LOCAL.DAT through RMS over the Files-11 ACP;
+# Boot 1 (SYSTEM; DECnet unconfigured at boot): NCP SET EXECUTOR ADDRESS 1.42 / NAME OVMX and
+#   NCP DEFINE EXECUTOR STATE ON (the permanent database: the network is not
+#   turned on yet) persist SYS$SYSTEM:NETNODE_LOCAL.DAT through RMS over the Files-11 ACP;
 #   NCP DEFINE NODE 1.1 NAME VAX1 adds a remote node; NCP LIST EXECUTOR reads
 #   the permanent database back. With NO NETACP yet, NCP SHOW EXECUTOR fails
 #   %NCP-F-OPEFAI and SHOW NETWORK has no DECNET line (rd vms-30e: SHOW reads
-#   the RUNNING network). Settle for guest writeback, power off.
+#   the RUNNING network). Then (g) THE STARTNET AUDIT (rd vms-0a7 S3): SYSTEM
+#   MOUNTs the scratch volume and runs STARTNETAUDIT.EXE (tests/qemu/
+#   startnet_audit.c), which ptraces DCL @SYS$MANAGER:STARTNET -> NCP SET
+#   EXECUTOR STATE ON -> the NETACP NCP creates -> the FAL.EXE NETACP creates
+#   for an inbound COPY 0:: (driven by NETACP_TEST.EXE off the same volume),
+#   asserts 0 pipe, 0 poll, 0 thread, 0 host socket, no exec of DECNETD.EXE,
+#   and stops that NETACP. The wire's negative control is the boot-1 pcap UP TO
+#   the audit; after it, the hellos of the NETACP NCP started are on the wire.
+#   Settle for guest writeback, power off.
 # Both boots carry a virtio NIC whose guest->wire frames QEMU dumps to a pcap
 #   (-object filter-dump), so boot 1 is the wire's negative control.
-# Boot 2 (same disk): the LPBETA startup phase runs
+# Boot 2 (same disk; its timeout carries 300s more for (f)'s audit): the LPBETA startup phase runs
 #   @SYS$MANAGER:STARTNET exactly as the system does; its F$SEARCH gate finds
-#   NETNODE_LOCAL.DAT and it starts NETACP (SYS$SYSTEM:DECNETD.EXE) detached.
+#   NETNODE_LOCAL.DAT and NCP SET EXECUTOR STATE ON creates NETACP
+#   (SYS$SYSTEM:NETACP.EXE) detached.
 #   Asserted:
 #     (a) the console carries %DECNET-I-STARTNET and NOT %DECNET-E-STARTNET /
 #         %RUN-F-CREPRC (the launch really happened -- STARTNET checks $STATUS);
@@ -38,6 +48,25 @@
 #         by NETACP's own PID (the PID SHOW SYSTEM lists for NETACP). Boot 1,
 #         with no NETACP, fails SHOW KNOWN OBJECTS %NCP-F-OPEFAI while LIST
 #         KNOWN OBJECTS reads the permanent file.
+#
+#     (f) THE COMMANDS STAY OFF LINUX LIBC (rd vms-0a7): boot 2 also carries a
+#         scratch ODS-2 volume (VDA100:, label DCLAUDIT) mastered here with
+#         vmsfs_master from the runner image's DCLNETAUDIT.EXE
+#         (tests/qemu/test_syssvc_dcl_remote_syscall_audit.c, built static by
+#         distro/Dockerfile.bootable as test tooling -- the shipped disk carries
+#         no audit tool). SYSTEM MOUNTs it and runs it as a foreign command; it
+#         ptraces the shipped DCL.EXE running DIRECTORY / TYPE / COPY (both
+#         directions) of 0"SYSTEM MANAGER":: against THIS NETACP and its
+#         FAL.EXE, and asserts 0 pipe, 0 poll-family wait, 0 thread, 0 host
+#         socket, no exec of DECNETD.EXE (or of anything but that DCL), while
+#         the trace sees each command's /dev/vms calls and its real output (the
+#         listing's 'Total of', the TYPE record, each COPY read back).
+#         WHY HERE, AS A MOUNTED-VOLUME IMAGE: this is the one place a NETACP
+#         and a FAL both run, and running an image off a mounted volume is how
+#         a VMS user brings a tool to a system without changing its system
+#         disk. The kernel-executive harness runs the same binary with no
+#         NETACP (honest refusal + the same audit); that is where its facility
+#         negative control (defects.d/rms-remote-link-via-host-pipe) runs.
 #
 # Reboot mechanics + writeback settle: identical to test_tcpip_reboot_e2e.sh
 # (no DCL REBOOT under -no-reboot; a reboot is a fresh QEMU on the same disk).
@@ -88,6 +117,13 @@ frames_with() { [ -s "$2" ] || { echo 0; return; }
     od -An -v -tx1 "$2" | tr -d ' \n' | grep -a -o "$1" | wc -l; }
 
 DISK=/tmp/dn-startnet-e2e.img
+AUDIT_SRC="${OVMX_DCLNETAUDIT:-/usr/local/lib/ovmx-test/DCLNETAUDIT.EXE}"
+# rd vms-0a7 S3: the DECnet test image (every self-test the shipped NETACP.EXE
+# does not carry) and the STARTNET audit, on the same scratch volume.
+NETTEST_SRC="${OVMX_NETACP_TEST:-/usr/local/lib/ovmx-test/NETACP_TEST.EXE}"
+SNAUDIT_SRC="${OVMX_STARTNETAUDIT:-/usr/local/lib/ovmx-test/STARTNETAUDIT.EXE}"
+AUDIT_DISK=/tmp/dn-startnet-audit.img
+AUDIT_TREE=/tmp/dn-startnet-audit-tree
 LOG1=/tmp/dn-startnet-boot1.log
 LOG2=/tmp/dn-startnet-boot2.log
 PCAP1=/tmp/dn-startnet-boot1.pcap
@@ -97,6 +133,13 @@ HELLO_142="ab0000030000aa0004002a046003"   # dst AB-00-00-03-00-00, src AA-00-04
 rm -f "$DISK" "$LOG1" "$LOG2" "$PCAP1" "$PCAP2" "$FIFO"
 cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
+rm -rf "$AUDIT_TREE" "$AUDIT_DISK"; mkdir -p "$AUDIT_TREE"
+if [ -f "$AUDIT_SRC" ] && cp "$AUDIT_SRC" "$AUDIT_TREE/DCLNETAUDIT.EXE" \
+   && [ -f "$NETTEST_SRC" ] && cp "$NETTEST_SRC" "$AUDIT_TREE/NETACP_TEST.EXE" \
+   && [ -f "$SNAUDIT_SRC" ] && cp "$SNAUDIT_SRC" "$AUDIT_TREE/STARTNETAUDIT.EXE" \
+   && vmsfs_master --ods2 master "$AUDIT_DISK" DCLAUDIT "$AUDIT_TREE" 16 >/dev/null; then rc=0; else rc=1; fi
+record "the test volume (DCLNETAUDIT.EXE, NETACP_TEST.EXE, STARTNETAUDIT.EXE) is mastered onto a scratch ODS-2 volume -- the shipped disk carries no test image" "$rc"
+[ -f "$AUDIT_DISK" ] || truncate -s 16M "$AUDIT_DISK"
 
 echo "=== DECnet: NCP configures, boot-time STARTNET starts NETACP, hellos on the wire (vms-1f69) ==="
 echo "arch=$ARCH qemu=$QEMU"
@@ -110,13 +153,14 @@ login_system() { local logf="$1"
 
 # --- Boot 1: configure the executor (NIC present, DECnet NOT yet configured) ---
 # shellcheck disable=SC2086
-timeout -k 15 $((BOOT_TIMEOUT + SETTLE_SECS + 120)) $QEMU $MACHINE $ACCEL \
+timeout -k 15 $((BOOT_TIMEOUT + SETTLE_SECS + 720)) $QEMU $MACHINE $ACCEL \
     -kernel "$KERNEL" -initrd "$INITRD" \
     -nographic -append "$CONSOLE loglevel=3 quiet" \
     -m 512M -smp 1 -nodefaults -serial stdio \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0,romfile= \
     -object filter-dump,id=fd0,netdev=n0,file="$PCAP1" \
     -drive file="$DISK",format=raw,if=virtio,cache=writethrough \
+    -drive file="$AUDIT_DISK",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$FIFO" >"$LOG1" 2>&1 &
 qp=$!
 exec 4>"$FIFO"
@@ -129,7 +173,9 @@ if [ "$rc" -eq 0 ] && login_system "$LOG1"; then
     send 'NCP :== $SYS$SYSTEM:NCP.EXE'; sleep 1
     send 'NCP SET EXECUTOR ADDRESS 1.42'; sleep 3
     send 'NCP SET EXECUTOR NAME OVMX'; sleep 3
-    send 'NCP SET EXECUTOR STATE ON'; sleep 3
+    # DEFINE: the permanent database only. SET EXECUTOR STATE ON would turn the
+    # network on now (NCP creates NETACP, rd vms-0a7 S3) -- that is (g) below.
+    send 'NCP DEFINE EXECUTOR STATE ON'; sleep 3
     send 'NCP DEFINE NODE 1.1 NAME VAX1'; sleep 3
     send 'NCP LIST EXECUTOR'
     if waitfor 'Executor node = 1.42 (OVMX)' 30 "$LOG1"; then rc=0; else rc=1; fi
@@ -149,6 +195,26 @@ if [ "$rc" -eq 0 ] && login_system "$LOG1"; then
     run_seg 'SHOW NETWORK' "$LOG1" 'Product:' 20
     if has 'Product: OVMX TCP/IP' && ! has 'Product:  DECNET'; then rc=0; else rc=1; fi
     record "boot 1: SHOW NETWORK has NO DECNET product line while no NETACP serves (TCP/IP line unchanged)" "$rc"
+    # The wire's negative control ends here: everything up to now ran with no
+    # NETACP. (QEMU appends to the dump as frames go; a copy is the prefix.)
+    sleep 2; cp "$PCAP1" "$PCAP1.pre" 2>/dev/null || : > "$PCAP1.pre"
+
+    # (g) rd vms-0a7 S3: STARTNET -> NCP -> NETACP -> an inbound FAL.EXE, traced.
+    run_seg 'MOUNT VDA100: DCLAUDIT' "$LOG1" 'MOUNT' 60
+    if has '%MOUNT-I-MOUNTED, DCLAUDIT mounted on _VDA100:'; then rc=0; else rc=1; fi
+    record "boot 1: the scratch test volume mounts (VDA100:, DCLAUDIT)" "$rc"
+    send 'STARTNETAUDIT :== $VDA100:[000000]STARTNETAUDIT.EXE'; sleep 1
+    run_seg 'STARTNETAUDIT VDA100:[000000]NETACP_TEST.EXE' "$LOG1" '=== startnet_audit: ' 600
+    printf '%s\n' "$seg" | sed -n '/=== startnet_audit (/,/=== startnet_audit: /p'
+    if printf '%s\n' "$seg" | grep >/dev/null -E '^=== startnet_audit: [0-9]+ passed, 0 failed ===$' \
+       && ! printf '%s\n' "$seg" | grep >/dev/null -E '^  FAIL: '; then rc=0; else rc=1; fi
+    record "boot 1: @SYS\$MANAGER:STARTNET -> NCP SET EXECUTOR STATE ON -> NETACP -> an inbound FAL.EXE under ptrace: 0 pipe, 0 poll, 0 thread, 0 host socket, no DECNETD.EXE exec; the COPY 0:: through it byte-verified (rd vms-0a7 S3)" "$rc"
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'PASS: control: the audit flags a pipe, a poll, a socket(AF_INET), a thread and an exec of another image'; then rc=0; else rc=1; fi
+    record "NEGCTL boot 1: the STARTNET audit's control child is flagged on the booted node" "$rc"
+    # Diagnostics only: what the audited NETACP logged.
+    run_seg 'TYPE SYS$MANAGER:NETACP.LOG' "$LOG1" '$ ' 30
+    printf '%s\n' "$seg" | head -40
+    send 'DISMOUNT VDA100:'; sleep 3
     echo "  (settling ${SETTLE_SECS}s for guest writeback)"
     sleep "$SETTLE_SECS"
 else
@@ -156,20 +222,26 @@ else
 fi
 kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
 
-n1=$(frames_with "$HELLO_142" "$PCAP1")
+n1=$(frames_with "$HELLO_142" "$PCAP1.pre")
 if [ "$n1" -eq 0 ]; then rc=0; else rc=1; fi
-record "NEGCTL boot 1 (DECnet unconfigured at boot): NO 1.42 endnode hello on the wire (count=$n1) -- the wire check can tell" "$rc"
+record "NEGCTL boot 1 (DECnet unconfigured at boot): NO 1.42 endnode hello on the wire before the network is turned on (count=$n1) -- the wire check can tell" "$rc"
+n1b=$(frames_with "$HELLO_142" "$PCAP1")
+if [ "$n1b" -ge 1 ]; then rc=0; else rc=1; fi
+record "boot 1: once NCP SET EXECUTOR STATE ON created NETACP (the audit), its 1.42 endnode hellos are on the wire (count=$n1b)" "$rc"
+rm -f "$PCAP1.pre"
 
 # --- Boot 2: STARTNET at LPBETA starts NETACP; prove it runs + talks -----------
+# (f)'s scratch volume: the audit image on a volume of its own (rd vms-0a7).
 rm -f "$FIFO"; mkfifo "$FIFO"
 # shellcheck disable=SC2086
-timeout -k 15 $((BOOT_TIMEOUT + NETACP_SETTLE + 420)) $QEMU $MACHINE $ACCEL \
+timeout -k 15 $((BOOT_TIMEOUT + NETACP_SETTLE + 720)) $QEMU $MACHINE $ACCEL \
     -kernel "$KERNEL" -initrd "$INITRD" \
     -nographic -append "$CONSOLE loglevel=3 quiet" \
     -m 512M -smp 1 -nodefaults -serial stdio \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0,romfile= \
     -object filter-dump,id=fd0,netdev=n0,file="$PCAP2" \
     -drive file="$DISK",format=raw,if=virtio,cache=writethrough \
+    -drive file="$AUDIT_DISK",format=raw,if=virtio,cache=writethrough \
     -no-reboot <"$FIFO" >"$LOG2" 2>&1 &
 qp=$!
 exec 4>"$FIFO"
@@ -184,8 +256,8 @@ boot2_up=$rc
 # record is read back from OPERATOR.LOG.
 if grep -qaE '%DECNET-[IE]-STARTNET|DECnet Phase IV -- Startup' "$LOG2"; then rc=1; else rc=0; fi
 record "boot 2: STARTNET puts no OVMX launch line on the console (rd vms-158d)" "$rc"
-if grep -qaF '%RUN-F-CREPRC' "$LOG2"; then rc=1; else rc=0; fi
-record "boot 2: no refused launch (%RUN-F-CREPRC absent)" "$rc"
+if grep -qaE '%RUN-F-CREPRC|%NCP-F-OPEFAI' "$LOG2"; then rc=1; else rc=0; fi
+record "boot 2: no refused launch (no %NCP-F-OPEFAI from STARTNET's NCP SET EXECUTOR STATE ON, no %RUN-F-CREPRC)" "$rc"
 
 if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: SYSTEM logs in" 0
@@ -218,8 +290,12 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     # RUNNING boot-time NETACP over $ASSIGN _NET: + $QIO (the DCL battery VM has
     # no NIC, hence no _NET:; this boot has both). COPY 0"SYSTEM MANAGER":: over
     # NETACP's local loopback to a FAL.EXE server process and back.
+    # rd vms-0a7 S3: the test image runs off the scratch test volume.
+    run_seg 'MOUNT VDA100: DCLAUDIT' "$LOG2" 'MOUNT' 60
+    if has '%MOUNT-I-MOUNTED, DCLAUDIT mounted on _VDA100:'; then rc=0; else rc=1; fi
+    record "boot 2: the scratch test volume mounts (VDA100:, DCLAUDIT)" "$rc"
     off=$(wc -c <"$LOG2")
-    send 'DNETACC :== $SYS$SYSTEM:DECNETD.EXE'; sleep 1
+    send 'DNETACC :== $VDA100:[000000]NETACP_TEST.EXE'; sleep 1
     send 'DNETACC --net-loopback-accept-test'
     if ! waitfor 'DECNETD-NET-LOOPBACK-ACCEPT:' 240 "$LOG2"; then
         # Diagnostics only (the verdicts below are unchanged): interrupt the
@@ -277,6 +353,17 @@ if [ "$boot2_up" -eq 0 ] && login_system "$LOG2"; then
     record "boot 2: TYPE with a bad password: SEARCHFAIL, -RMS-E-FND, -SYSTEM-F-INVLOGIN as the VAX prints it, and no record shown" "$rc"
     if has 'DCL-E-ABORT' || printf '%s\n' "$seg" | grep -vF 'TYPE 0"SYSTEM WRONGPW"' | grep >/dev/null -F 'WRONGPW'; then rc=1; else rc=0; fi
     record "NEGCTL boot 2: ... no image line, and the password is never echoed back in a message" "$rc"
+
+    # (f) rd vms-0a7: the same verbs, traced, stay off Linux libc.
+    send 'DCLNETAUDIT :== $VDA100:[000000]DCLNETAUDIT.EXE'; sleep 1
+    run_seg 'DCLNETAUDIT NETACP' "$LOG2" '=== test_syssvc_dcl_remote_syscall_audit: ' 600
+    printf '%s\n' "$seg" | sed -n '/=== test_syssvc_dcl_remote_syscall_audit (/,/=== test_syssvc_dcl_remote_syscall_audit: /p'
+    if printf '%s\n' "$seg" | grep >/dev/null -F '[booted node: NETACP + FAL]' \
+       && printf '%s\n' "$seg" | grep >/dev/null -E '^=== test_syssvc_dcl_remote_syscall_audit: [0-9]+ passed, 0 failed ===$' \
+       && ! printf '%s\n' "$seg" | grep >/dev/null -E '^  FAIL: '; then rc=0; else rc=1; fi
+    record "boot 2: DIRECTORY / TYPE / COPY (both directions) of 0\"SYSTEM MANAGER\":: under ptrace -- 0 pipe, 0 poll, 0 thread, 0 host socket, no DECNETD.EXE exec; /dev/vms calls and the real output seen (rd vms-0a7)" "$rc"
+    if printf '%s\n' "$seg" | grep >/dev/null -F 'PASS: control: the audit flags a pipe, a poll, a socket(AF_INET), a thread and an exec of another image'; then rc=0; else rc=1; fi
+    record "NEGCTL boot 2: the audit's control child is flagged on the booted node (the trace can see a pipe, a poll, a socket, a thread, an exec)" "$rc"
 
     # (d) NCP SHOW + SHOW NETWORK read the RUNNING NETACP (rd vms-30e).
     send 'NCP :== $SYS$SYSTEM:NCP.EXE'; sleep 1
@@ -363,6 +450,7 @@ else
     record "boot 2: SYSTEM logs in" 1
 fi
 kill "$qp" 2>/dev/null; wait "$qp" 2>/dev/null; exec 4>&- 2>/dev/null
+rm -rf "$AUDIT_TREE" "$AUDIT_DISK"
 
 n2=$(frames_with "$HELLO_142" "$PCAP2")
 if [ "$n2" -ge 1 ]; then rc=0; else rc=1; fi

@@ -1,0 +1,41 @@
+--- a/src/vmsrms/rms_remote.c
++++ b/src/vmsrms/rms_remote.c
+@@ -176,10 +176,38 @@
+     return rr_send(k, &m);
+ }
+ 
++#include "descrip.h"
++#include "starlet.h"
++#include "lnmdef.h"
++/* EXPERIMENT ONLY (never committed): extra SYSCAP bits from S1R5_SYSCAP. */
++static void xsyscap(struct dnet_dap_msg *m)
++{
++    static const char tab[] = "LNM$FILE_DEV", nm[] = "S1R5_SYSCAP";
++    struct dsc$descriptor_s dtab = { sizeof tab - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)tab };
++    struct dsc$descriptor_s dnam = { sizeof nm - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)nm };
++    char buf[200]; uint16_t rl = 0;
++    struct item_list_3 il[2];
++    memset(il, 0, sizeof il);
++    il[0].item_code = LNM$_STRING; il[0].buflen = sizeof buf - 1; il[0].bufaddr = buf; il[0].retlen = &rl;
++    if (!(sys$trnlnm(NULL, &dtab, &dnam, NULL, il) & 1)) return;
++    buf[rl] = 0;
++    unsigned maxbit = m->u.config.syscap_len * 7 - 1, v = 0; int dig = 0;
++    for (char *c = buf;; c++) {
++        if (*c >= '0' && *c <= '9') { v = v * 10 + (unsigned)(*c - '0'); dig = 1; continue; }
++        if (dig && v < 84) { m->u.config.syscap[v / 7] |= (uint8_t)(1u << (v % 7)); if (v > maxbit) maxbit = v; }
++        v = 0; dig = 0;
++        if (!*c) break;
++    }
++    unsigned n = maxbit / 7 + 1;
++    for (unsigned i = 0; i < n; i++) m->u.config.syscap[i] = (uint8_t)((m->u.config.syscap[i] & 0x7f) | (i + 1 < n ? 0x80 : 0));
++    m->u.config.syscap_len = (uint8_t)n;
++}
++
+ static int rr_config(struct rr_link *k)
+ {
+     struct dnet_dap_msg m;
+     dnet_dap_ovmx_config(&m, RR_BUFSIZ);
++    xsyscap(&m);
+     if (rr_send(k, &m) < 0) return -1;
+     if (rr_recv(k, &m) < 0 || m.op != DNET_DAP_CONFIG) return -1;
+     return 0;

@@ -475,6 +475,33 @@ static int dec_operand(struct dnet_dap_msg *m, struct rd *r)
             r->off += DNET_DAP_DATE_LEN;
         }
         if (BIT(mn, 3) && (rc = rd_b16(r, &m->u.datetime.rvn))) return rc;
+        /* Bits 4-6: further A-18 dates (backup, and two more the spec adds
+         * after it), each 18 bytes in menu order; they are read past, not
+         * kept. A field that does not fit ends the decode of the optional
+         * part (the operand is bounded either way). */
+        int fit = 1;
+        for (int i = 4; i <= 6 && fit; i++) {
+            if (!BIT(mn, i)) continue;
+            if (r->len - r->off < DNET_DAP_DATE_LEN) { fit = 0; break; }
+            r->off += DNET_DAP_DATE_LEN;
+        }
+        /* Bits 7 and 8: the created and revised times as the VAX V7.3 FAL
+         * sends them (vax-to-vax-sys-login capture): each is a 16-byte UTC
+         * (DECdts) value -- 8 bytes of 100-ns ticks since 15-OCT-1582, a
+         * 6-byte inaccuracy, and 2 bytes holding the time-differential-factor
+         * (low 12 bits, signed minutes east of UTC) under a 4-bit version. */
+        for (int i = 0; i < 2 && fit; i++) {
+            if (!BIT(mn, 7 + i)) continue;
+            if (r->len - r->off < 16) break;
+            uint64_t t = 0;
+            for (int b = 7; b >= 0; b--) t = (t << 8) | r->b[r->off + (size_t)b];
+            unsigned tw = (unsigned)r->b[r->off + 14] | ((unsigned)r->b[r->off + 15] << 8);
+            int tdf = (int)(tw & 0x0fff);
+            if (tdf & 0x0800) tdf -= 0x1000;
+            if (i == 0) { m->u.datetime.have_cdt64 = 1; m->u.datetime.cdt64 = t; m->u.datetime.cdt_tdf = (int16_t)tdf; }
+            else        { m->u.datetime.have_rdt64 = 1; m->u.datetime.rdt64 = t; m->u.datetime.rdt_tdf = (int16_t)tdf; }
+            r->off += 16;
+        }
         r->off = r->len;
         return DNET_DAP_OK;
     }
@@ -559,6 +586,17 @@ int dnet_dap_decode(const uint8_t *buf, size_t len,
     *out = m;
     if (consumed) *consumed = off + oplen;
     return DNET_DAP_OK;
+}
+
+void dnet_dap_syscap_set(struct dnet_dap_msg *c, unsigned bit)
+{
+    if (!c || c->op != DNET_DAP_CONFIG || bit / 7 >= DNET_DAP_MAX_EX) return;
+    unsigned n = c->u.config.syscap_len;
+    if (bit / 7 + 1 > n) n = bit / 7 + 1;
+    c->u.config.syscap[bit / 7] |= (uint8_t)(1u << (bit % 7));
+    for (unsigned i = 0; i < n; i++)              /* EX: every byte but the last extends */
+        c->u.config.syscap[i] = (uint8_t)((c->u.config.syscap[i] & 0x7f) | (i + 1 < n ? 0x80 : 0));
+    c->u.config.syscap_len = (uint8_t)n;
 }
 
 int dnet_dap_syscap_has(const struct dnet_dap_msg *c, unsigned bit)

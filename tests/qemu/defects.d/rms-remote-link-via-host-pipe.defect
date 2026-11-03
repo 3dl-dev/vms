@@ -1,0 +1,27 @@
+# rms-remote-link-via-host-pipe -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "RMS remote file access (DCL DIRECTORY/TYPE/COPY node::) reaches the node's FAL through \$ASSIGN _NET: + \$QIOW on the executive, never a Linux libc pipe/poll/thread/socket or a DECNETD.EXE helper (rms_remote.c, rd vms-0a7)";;
+        targets)      echo "vmsrms/rms_remote.c";;
+        suites_red)   echo "test_syssvc_dcl_remote_syscall_audit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "net_open() -- the link every remote \$PARSE/\$SEARCH/\$OPEN/\$CREATE opens -- \$ASSIGNs _NET: (\`uint32_t s = sys\$assign(&d, &chan, 0, NULL, 0);\`). The mutation first makes and closes a host pipe there (the shape of the pre-S1 path, where DCL ran DECNETD.EXE and talked to it over pipes). Non-fatal: the pipe is closed at once and the \$ASSIGN proceeds unchanged, so every verb's output and status are what they were and only the no-pipe assertion reddens. The original text is gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOT'
+NO pipe/pipe2 in DIRECTORY, TYPE or COPY (either direction) of a node:: spec
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    uint32_t s = sys\$assign(&d, &chan, 0, NULL, 0);$|    { extern int pipe(int *); extern int close(int); int pp_[2]; if (pipe(pp_) == 0) { close(pp_[0]); close(pp_[1]); } } /* NEGCTL rms-remote-link-via-host-pipe */ uint32_t s = sys$assign(\&d, \&chan, 0, NULL, 0);|' "$_file"
+    :
+}

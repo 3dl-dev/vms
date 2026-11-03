@@ -18,6 +18,38 @@ target_link_libraries(test_dnet_link PRIVATE vmsdecnet_engine)
 target_compile_options(test_dnet_link PRIVATE -Werror)
 add_test(NAME vmsdecnet_link_unit COMMAND test_dnet_link)
 
+# rd vms-985: NSP data flow -- receive window + link-service stop/resume, ACK /
+# NAK, go-back-N retransmission. Replays the real VAX V7.3 PDUs of the two
+# vms-0a7 S1 large-COPY failures (tests/lab/captures/vms-0a7-s1-20261102/), then
+# moves 20000 records each way over a lossy channel with a slow reader.
+add_executable(test_dnet_nsp_flow test_dnet_nsp_flow.c)
+target_link_libraries(test_dnet_nsp_flow PRIVATE vmsdecnet_nsp)
+target_compile_options(test_dnet_nsp_flow PRIVATE -Werror)
+add_test(NAME vmsdecnet_nsp_flow_unit COMMAND test_dnet_nsp_flow)
+
+# rd vms-985: sanitizer fuzz of the peer-reachable data-flow receive paths (codec
+# DATA/LS/ACK/OTHACK decode + the link FSM under hostile acks, NAKs, link
+# services and segment numbers). The codec and link sources are compiled into
+# the target so ASan/UBSan instrument them.
+add_executable(test_dnet_nsp_flow_fuzz test_dnet_nsp_flow_fuzz.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/dnet_nsp.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/dnet_link.c)
+target_include_directories(test_dnet_nsp_flow_fuzz PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/nsp/include)
+target_compile_options(test_dnet_nsp_flow_fuzz PRIVATE -Werror)
+if(NOT DEFINED OVMX_DAP_SANITIZE_OK)
+    include(CheckCSourceCompiles)
+    set(_nspfuzz_san_save "${CMAKE_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+    check_c_source_compiles("int main(void){return 0;}" OVMX_DAP_SANITIZE_OK)
+    set(CMAKE_REQUIRED_FLAGS "${_nspfuzz_san_save}")
+endif()
+if(OVMX_DAP_SANITIZE_OK)
+    target_compile_options(test_dnet_nsp_flow_fuzz PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_nsp_flow_fuzz PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_nsp_flow_fuzz_unit COMMAND test_dnet_nsp_flow_fuzz)
+
 # rd vms-4d2, engine rung 3: the CTERM (Command Terminal) protocol behind
 # $ SET HOST. Proves (1) every CTERM message type round-trips encode->decode,
 # (2) a terminal + host session bind/negotiate/carry-I/O/unbind on raw PDUs, and
@@ -190,31 +222,14 @@ add_test(NAME vmsdecnet_fal_server_replay COMMAND test_dnet_fal_server
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/vax-to-vax-sys-login/falverbs-v2v-wire.txt
          ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008/live-bracket)
 
-# rd vms-6a4: $ DIRECTORY node:: / $ TYPE node:: -- the OVMX FAL CLIENT run
-# against the real VAX FAL's replies, its output compared byte for byte with
-# what the VAX's own console printed; then the NAME/DATA receive path fuzzed.
-# A peer-receive parser: built WITH ASan/UBSan where the toolchain has them.
-# The client sources are compiled INTO the test so the sanitizer instruments
-# the receive path itself, not only the test's own code.
-add_executable(test_dnet_fal_dirtype test_dnet_fal_dirtype.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_fal.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_fal_dirtype.c)
-target_include_directories(test_dnet_fal_dirtype PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include)
-target_link_libraries(test_dnet_fal_dirtype PRIVATE vmsdecnet_fal vmsdecnet_dap vmsdecnet_cterm vmsrms)
-# -Werror on the test's own TU (the compiled-in sources keep their library
-# warning set).
-set_source_files_properties(test_dnet_fal_dirtype.c PROPERTIES COMPILE_OPTIONS -Werror)
-if(OVMX_NODESPEC_SANITIZE_OK)
-    target_compile_options(test_dnet_fal_dirtype PRIVATE -fsanitize=address,undefined)
-    target_link_options(test_dnet_fal_dirtype PRIVATE -fsanitize=address,undefined)
-endif()
-set(_fv ${CMAKE_SOURCE_DIR}/tests/lab/captures/decnet-fal-verbs-20261008)
-add_test(NAME vmsdecnet_fal_dirtype COMMAND test_dnet_fal_dirtype
-         ${_fv}/vax-to-vax-sys-login/falverbs-v2v-wire.txt
-         ${_fv}/vax-to-vax-sys-login/falverbs-v2v-vax1-console.txt
-         ${_fv}/falverbs-wire.txt
-         ${_fv}/vax1-console.txt)
+# rd vms-36aa: the FAL's real RMS record path (dnet_fal_wput / dnet_fal_rget,
+# not stubbed) stores a VAX's VFC records with the control in RAB$L_RHB, so a
+# 290-block file is 290 blocks on OVMX, and reads them back byte-identical.
+add_executable(test_dnet_fal_vfc test_dnet_fal_vfc.c)
+target_include_directories(test_dnet_fal_vfc PRIVATE ${VMS_RMS_INCLUDE_DIR} ${VMS_INCLUDE_DIR})
+target_link_libraries(test_dnet_fal_vfc PRIVATE vmsdecnet_fal vmsdecnet_dap vmsrms vms)
+target_compile_options(test_dnet_fal_vfc PRIVATE -Werror -Wno-overflow)
+add_test(NAME vmsdecnet_fal_vfc COMMAND test_dnet_fal_vfc)
 
 # rd vms-47fd: INBOUND DECnet MAIL-11 (object 27). Reads the real VAX V7.3
 # capture itself and replays every VAX1 segment through the OVMX receiver,
@@ -300,8 +315,103 @@ add_test(NAME vmsdecnet_router_emit_fuzz_unit COMMAND test_dnet_router_emit_fuzz
 # relies on (rd vms-a70 direction B): --show-executor self-sources the executor
 # address and exits SUCCESS iff DECnet is configured (the gate STARTNET branches
 # on), and the persistent endnode daemon serves inbound object 42 by default.
-# Runs the shipped DECNETD.EXE on the host -- no socket, no /dev/vms, no privilege.
+# Runs the test image's --show-executor on the host (the same netacp_run the
+# shipped NETACP.EXE runs) -- no socket, no /dev/vms, no privilege.
 add_test(NAME vmsdecnet_startnet_gate
          COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_decnetd_startnet_gate.sh)
 set_tests_properties(vmsdecnet_startnet_gate PROPERTIES
-    ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:decnetd_exe>")
+    ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:netacp_test_exe>")
+
+# ---------------------------------------------------------------------------
+# NETACP_TEST.EXE (rd vms-0a7 S3): every DECnet self-test and lab mode that
+# DECNETD.EXE used to carry behind argv flags. It compiles the shipped
+# src/vmsdecnet/engine/decnetd.c itself (netacp_test.c #includes it, with no
+# image entry defined) and links the same libraries as NETACP.EXE, so each test
+# drives the real NETACP code. The test-only peers are threads: Threads here,
+# never in NETACP.EXE. Staged for the QEMU battery / boot e2e on a scratch test
+# volume, not the system disk.
+add_executable(netacp_test_exe netacp_test.c
+               ${CMAKE_SOURCE_DIR}/src/vmsdecnet/engine/decnetd_rms_bind.c)
+target_include_directories(netacp_test_exe PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/engine ${_netacp_includes})
+find_package(Threads REQUIRED)
+target_link_libraries(netacp_test_exe PRIVATE ${_netacp_libs} Threads::Threads)
+set_target_properties(netacp_test_exe PROPERTIES OUTPUT_NAME "NETACP_TEST" SUFFIX ".EXE")
+
+add_test(NAME decnetd_sethost_src_codes
+         COMMAND netacp_test_exe --set-host-src-codes-selftest)
+# rd vms-ea8/vms-6a4: the OUTBOUND $ COPY command layer floor -- copy_plan
+# direction/creds/spec derivation (GET + PUT) and the parsed creds driving a
+# real object-17 connect refused without auth, both directions. No executive.
+add_test(NAME decnetd_copy_selftest
+         COMMAND netacp_test_exe --copy-selftest)
+# rd vms-dda: the TASK-TO-TASK client host floor -- open a logical link by NAME
+# (format-1 NAMED descriptor, NODE::"TASK=x"), the passive side decodes the
+# name, a request + reply move BOTH directions byte-verified, then disconnect.
+# The generic-object addressing + bidirectional pump the _NET: $QIO broker
+# (Option 1, NETACP-brokered) will expose. No executive.
+add_test(NAME decnetd_task_selftest
+         COMMAND netacp_test_exe --task-selftest)
+# rd vms-22c (a1-2): the exec<->NETACP T1 broker record codec floor -- request/
+# response round-trip, bounds-validated decode (200k-mutation + truncated-prefix
+# fuzz, ASan/UBSan-clean), and the correlation-id anti-cross-talk guard. No
+# executive; the mailbox seam + qio_net_op + NETACP servicing build on it.
+# rd vms-22c (a1-2): the NCB connect-block parser floor -- NODE::"TASK=name"
+# -> {node, task/object}, bounds-safe refusal of malformed input, fuzzed. A
+# spec-derived LOCAL API parser (never a wire field); no executive.
+add_test(NAME decnetd_net_ncb_selftest
+         COMMAND netacp_test_exe --net-ncb-selftest)
+add_test(NAME decnetd_net_broker_selftest
+         COMMAND netacp_test_exe --net-broker-selftest)
+# rd vms-22c (a1-2 integration): the NETACP broker SERVICE DISPATCH floor --
+# dnet_broker_serve driving OPEN/SEND/RECV/CLOSE against the NSP link engine
+# over a socketpair, correlation-matched, with honest never-crash refusals
+# (unknown op, too-short OPEN). No executive; the mailbox $CREMBX seam +
+# qio_net_op marshalling + the IO$M_NOW serve loop build on it.
+add_test(NAME decnetd_net_service_selftest
+         COMMAND netacp_test_exe --net-service-selftest)
+# rd vms-dda: OUTBOUND links brokered through NETACP -- the host floor. A real
+# NETACP pool serves clients that reach it ONLY through broker records
+# (dnet_broker_xfer, the marshalling libvms's qio_net_op runs) over an
+# in-process queue standing in for the executive mailboxes; a second engine
+# across a socketpair is the remote. COPY's FAL client end to end through
+# NETACP, a remote access-control rejection (INVLOGIN), the local loopback
+# (0::), per-process share + full-pool refusals (EXQUOTA), handle-ownership
+# and correlation-id refusals, a silent NETACP (DEVOFFLINE). No executive;
+# the booted $QIO _NET: proof is --net-loopback-accept-test in the battery.
+add_test(NAME decnetd_netacp_broker_selftest
+         COMMAND netacp_test_exe --netacp-broker-selftest)
+set_tests_properties(decnetd_netacp_broker_selftest PROPERTIES TIMEOUT 120)
+# rd vms-30e: NCP SHOW / DCL SHOW NETWORK read the RUNNING NETACP -- the host
+# floor. The snapshot record codec (round-trip, every truncated prefix,
+# over-bound counts/strings, control bytes, 200k mutations); a real NETACP
+# pool serving IO$_ACPCONTROL queries through broker records from its live
+# state (node database on disk, an adjacency from a real hello, one link that
+# completed its NSP handshake and one connecting, the high-water counter,
+# paging, BADPARAM / BUFFEROVF / DEVOFFLINE); and the formatters diffed line
+# for line against the real OpenVMS VAX V7.3 transcripts in
+# docs/oracle/vax-ncp-show (timestamps normalized). No executive.
+add_test(NAME decnetd_netacp_show_selftest
+         COMMAND netacp_test_exe --netacp-show-selftest
+                 --oracle-dir ${CMAKE_SOURCE_DIR}/docs/oracle/vax-ncp-show)
+# rd vms-ea8: the OUTBOUND $ COPY client transport PUMP floor -- copy_client_run
+# (the same client the live $ COPY drives) brings up an object-17 link + NSP
+# link-service + a DAP session over the copy_wire transport against a threaded
+# test-double server; an honest miss round-trips end to end. No executive (the
+# authenticated byte-verified transfer is --copy-accept-test in the battery).
+add_test(NAME decnetd_copy_transport_selftest
+         COMMAND netacp_test_exe --copy-transport-selftest)
+
+# rd vms-0a7 S3 gates. (a) the libc thread/wait/pipe ratchet: src/vmsdecnet has
+# no pthread_create/poll/pipe, DCL no more than its baseline, NETACP.EXE links no
+# Threads -- with planted-call negative controls. (b) no shipped src/vmsdecnet
+# image parses argv "--" beyond the baseline (DECNETD.EXE's SET HOST client,
+# until S2), NETACP.EXE is main(void) -- with planted-parser negative controls.
+add_test(NAME vmsdecnet_netacp_no_libc_wait
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_netacp_no_libc_wait.sh)
+set_tests_properties(vmsdecnet_netacp_no_libc_wait PROPERTIES
+    PASS_REGULAR_EXPRESSION "NETACP_NO_LIBC_WAIT_OK")
+add_test(NAME vmsdecnet_no_argv_flags
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_no_argv_flags.sh)
+set_tests_properties(vmsdecnet_no_argv_flags PROPERTIES
+    PASS_REGULAR_EXPRESSION "NO_ARGV_FLAGS_OK")

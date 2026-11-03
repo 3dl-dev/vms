@@ -4,8 +4,8 @@ $! On real OpenVMS, @SYS$MANAGER:STARTNET starts DECnet Phase IV -- it brings up
 $! the network ancillary control process (NETACP), which drives the routing
 $! datalink AND serves inbound connects to the Session Control OBJECTS the node
 $! offers (CTERM = object 42, the target of a remote $ SET HOST). This procedure
-$! is the OVMX equivalent: it starts SYS$SYSTEM:DECNETD.EXE detached as NETACP,
-$! which self-sources its executor address from the node's DECnet configuration
+$! is the OVMX equivalent: NCP SET EXECUTOR STATE ON creates SYS$SYSTEM:NETACP.EXE
+$! detached, which sources its executor address from the node's DECnet configuration
 $! and serves inbound $ SET HOST by default (an object-42 connect reaches
 $! LOGINOUT on an executive-minted RTAn:; the remote user authenticates fresh).
 $!
@@ -48,13 +48,13 @@ $! the VMS binary format -- labelled in the file itself).
 $!
 $! INV-6 (fail-honest, no facade): NETACP opens its 0x6003 datalink on the
 $! primary NIC (auto-detected -- the same NIC the executive's _NET: rides)
-$! THROUGH THE EXECUTIVE: the booted DECNETD.EXE is built with the executive L2
+$! THROUGH THE EXECUTIVE: the booted NETACP.EXE is built with the executive L2
 $! backend (src/libdatalink, OVMX_DATALINK_VIA_EXECUTIVE), so the kernel owns
 $! the raw socket (VMS_IOCTL_L2_OPEN) and the open is gated on the VMS PHY_IO
 $! privilege -- a booted VMS process holds no CAP_NET_RAW and needs none. NETACP
-$! inherits PHY_IO from its creator (SYSTEM at boot or at the console: RUN
-$! /DETACHED with no /PRIVILEGES gives the detached process the creator's current
-$! privileges, sys$creprc). It sources every frame from its Phase IV
+$! inherits PHY_IO from its creator (SYSTEM at boot or at the console: NCP's
+$! $CREPRC passes no privilege mask, so the detached process gets the creator's
+$! current privileges). It sources every frame from its Phase IV
 $! algorithmic station address AA-00-04-00-<LE16(area*1024+node)>, which the
 $! executive validates and stamps. With no NIC, or no PHY_IO, it fails honestly
 $! (%DECNETD-E-NOSOCKET ... SS$_NOSUCHDEV / SS$_NOPRIV in NETACP.LOG) -- it never
@@ -74,39 +74,38 @@ $! F$SEARCH is a pure DCL lexical -- no image runs, so no %DCL-E-ABORT.
 $ IF F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") .EQS. "" THEN GOTO no_decnet
 $!
 $! THE CONSOLE (rd vms-158d). A real VMS node's console shows only what VMS
-$! itself prints for this step: RUN's own "%RUN-S-PROC_ID, identification of
-$! created process is ..." and then NETACP's OPCOM message "DECnet starting"
+$! itself prints for this step: a "%RUN-S-PROC_ID, identification of created
+$! process is ..." and then NETACP's OPCOM message "DECnet starting"
 $! (tests/lab/captures/vms-52d-0b01-oracle-20261013/armA-vax1-console.log).
-$! So this procedure prints no banner and no launch line of its own: NETACP
+$! This procedure prints no banner and no launch line of its own: NETACP
 $! reports "DECnet starting" to OPCOM ($SNDOPR, SYS$MANAGER:OPERATOR.LOG) once
-$! its datalink is open, and a refused launch is RUN's own %RUN-F-CREPRC.
-$! NETACP is a persistent master listener -- it must run as a DETACHED process,
-$! NOT a foreground RUN that would BLOCK system startup forever. VMS RUN passes
-$! the image NO argv (an image parameter only), so DECNETD self-sources its
-$! executor address, auto-detects its NIC, and serves inbound object 42 by
-$! default -- the same shape TCPIP$STARTUP uses to start TCPIP$INETD, which reads
-$! its own service DB. The EXECUTIVE assigns the process name NETACP as it creates
-$! the process, so SHOW SYSTEM lists it and $GETJPI resolves it by name; a
-$! duplicate is refused to the caller (%RUN-F-CREPRC / -SYSTEM-F-DUPLNAM), making
-$! a re-run idempotent-safe. Per-process status (served / not-configured / a
-$! NOSOCKET failure) is aimed at SYS$MANAGER:NETACP.LOG and never reaches the
-$! console; until a created process can write a VMS file as its SYS$OUTPUT
-$! (rd vms-c89) $CREPRC puts it on NL: instead (rd vms-5843).
-$ RUN /DETACHED -
-       /PROCESS_NAME=NETACP -
-       /INPUT=NL: /OUTPUT=SYS$MANAGER:NETACP.LOG -
-       /ERROR=SYS$MANAGER:NETACP.LOG -
-       SYS$SYSTEM:DECNETD.EXE
+$! its datalink is open. NCP's $CREPRC prints no PROC_ID line (the VAX's comes
+$! from a RUN its startup does; the one-line difference is recorded on the S3
+$! PR), and a refused launch is NCP's own %NCP-F-OPEFAI.
+$! THE NETWORK STARTS WITH NCP (rd vms-0a7 S3): SET EXECUTOR STATE ON is what
+$! turns the network on. NCP $CREPRCs NETACP -- SYS$SYSTEM:NETACP.EXE, DETACHED,
+$! process name NETACP, /INPUT=NL: and SYS$OUTPUT = SYS$ERROR =
+$! SYS$MANAGER:NETACP.LOG -- with NO parameters: NETACP reads its executor from
+$! the executor database, its LAN unit from the executive, and serves inbound
+$! object 42 and object 17 by default. It is a persistent master listener, so
+$! it is detached and never blocks system startup. The EXECUTIVE assigns the
+$! process name NETACP as it creates the process, so SHOW SYSTEM lists it; the
+$! network already on (a NETACP of that name running) leaves STATE ON a no-op.
+$! NCP runs with this procedure's (SYSTEM's) privileges, which NETACP inherits:
+$! PHY_IO for its datalink. Per-process status (served / not-configured / a
+$! NOSOCKET failure) goes to SYS$MANAGER:NETACP.LOG, never the console.
+$ NCP := $SYS$SYSTEM:NCP.EXE
+$ NCP SET EXECUTOR STATE ON
 $! HONEST LAUNCH REPORT (rd vms-1f69): NETACP announces "DECnet starting" to
-$! OPCOM only once it is really running. A refused $CREPRC (%RUN-F-CREPRC,
-$! e.g. -SYSTEM-F-NOPRIV / -DUPLNAM) is reported with its status and NOTHING
+$! OPCOM only once it is really running. A refused $CREPRC is NCP's
+$! %NCP-F-OPEFAI with the system's reason (e.g. -SYSTEM-F-NOPRIV) and NOTHING
 $! claims NETACP is running. (Copy $STATUS first: a later command resets it.)
 $ run_status = $STATUS
 $ IF .NOT. run_status THEN GOTO run_failed
 $ EXIT
 $!
 $ run_failed:
-$! RUN has already said why, in its own words (%RUN-F-CREPRC); the status goes
+$! NCP has already said why, in its own words (%NCP-F-OPEFAI); the status goes
 $! back to the caller unchanged and nothing claims NETACP is running.
 $ EXIT run_status
 $!

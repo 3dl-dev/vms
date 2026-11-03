@@ -1,0 +1,78 @@
+00:45:49 VAXC logged in
+00:46:00 VAXC licensed
+00:46:01 VAXC DECnet on
+00:46:19 OVMXA logged in
+00:46:21 probe base bits []
+00:46:22 probe base Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:22 probe bit0 bits [0]
+00:46:22 probe bit0 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:22 probe bit2 bits [2]
+00:46:23 probe bit2 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:23 probe bit4 bits [4]
+00:46:23 probe bit4 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:23 probe bit6 bits [6]
+00:46:23 probe bit6 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:23 probe bit7 bits [7]
+00:46:23 probe bit7 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:23 probe bit8 bits [8]
+00:46:24 probe bit8 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:24 probe bit10 bits [10]
+00:46:24 probe bit10 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:24 probe bit11 bits [11]
+00:46:24 probe bit11 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:24 probe bit12 bits [12]
+00:46:24 probe bit12 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:24 probe bit13 bits [13]
+00:46:25 probe bit13 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:25 probe bit14 bits [14]
+00:46:25 probe bit14 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:25 probe bit17 bits [17]
+00:46:25 probe bit17 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:25 probe bit21 bits [21]
+00:46:26 probe bit21 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:26 probe bit22 bits [22]
+00:46:26 probe bit22 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:26 probe bit23 bits [23]
+00:46:26 probe bit23 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:26 probe bit29 bits [29]
+00:46:26 probe bit29 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:27 probe bit30 bits [30]
+00:46:27 probe bit30 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:27 probe bit31 bits [31]
+00:46:27 probe bit31 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:27 probe bit43 bits [43]
+00:46:27 probe bit43 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:27 probe bit44 bits [44]
+00:46:28 probe bit44 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:28 probe bit51 bits [51]
+00:46:28 probe bit51 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:28 probe bit53 bits [53]
+00:46:28 probe bit53 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:28 probe bit56 bits [56]
+00:46:28 probe bit56 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:28 probe bit57 bits [57]
+00:46:29 probe bit57 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:29 probe bit58 bits [58]
+00:46:29 probe bit58 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:29 probe bit61 bits [61]
+00:46:29 probe bit61 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:29 probe bit62 bits [62]
+00:46:30 probe bit62 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:30 probe bit63 bits [63]
+00:46:30 probe bit63 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:30 probe bit64 bits [64]
+00:46:30 probe bit64 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:30 probe bit65 bits [65]
+00:46:30 probe bit65 Created 3-NOV-2026 00:46:20.16 hundredths
+00:46:31 probe bit66 bits [66]
+00:46:31 probe bit66 Created <none> TEXT-FORM
+00:46:31 probe bit67 bits [67]
+00:46:31 probe bit67 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:31 probe bit68 bits [68]
+00:46:32 probe bit68 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:32 probe bit69 bits [69]
+00:46:32 probe bit69 Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+00:46:32 RESULT: bits giving binary times: [65]
+00:46:32 probe base-again bits []
+00:46:32 probe base-again Created 3-NOV-2026 00:46:20.00 TEXT-FORM
+EXIT 0

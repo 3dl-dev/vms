@@ -325,6 +325,7 @@ struct timer_entry {
     uint32_t    astprm;          /* AST parameter */
     timer_t     timerid;         /* POSIX timer ID */
     int         active;          /* Entry in use */
+    int         created;         /* timerid is a live POSIX timer (see below) */
 };
 
 static struct timer_entry timer_table[MAX_TIMERS];
@@ -347,6 +348,12 @@ static void timer_signal_handler(int sig, siginfo_t *si, void *uc) {
         te->astadr(te->astprm);
     }
 
+    /* The request is complete, but its POSIX timer still exists (te->created):
+     * it is deleted when the slot is next claimed or cancelled, outside signal
+     * context. Each timer holds one of the process's queued-signal resources
+     * (RLIMIT_SIGPENDING), so a timer left behind per expiry used to exhaust
+     * them: a process that waits on a short $SETIMR in a loop (NETACP's
+     * $WFLOR, rd vms-0a7 S3) got SS$_INSFMEM after a few thousand requests. */
     te->active = 0;
 }
 
@@ -619,6 +626,10 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     }
 
     struct timer_entry *te = &timer_table[slot];
+    if (te->created) {               /* the timer of an expired request */
+        timer_delete(te->timerid);
+        te->created = 0;
+    }
     te->reqidt = reqidt;
     te->efn = efn;
     te->astadr = astadr;
@@ -637,6 +648,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
         pthread_mutex_unlock(&timer_mutex);
         return SS$_INSFMEM;
     }
+    te->created = 1;
 
     /* Convert VMS time to timespec for timer_settime */
     struct itimerspec its;
@@ -655,6 +667,8 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
         /* Absolute time - convert from VMS to Unix */
         struct timespec abs_ts;
         if (vms_to_unix_time((uint64_t)signed_time, &abs_ts) < 0) {
+            timer_delete(te->timerid);
+            te->created = 0;
             te->active = 0;
             pthread_mutex_unlock(&timer_mutex);
             return SS$_BADPARAM;
@@ -665,6 +679,7 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     int timer_flags = (signed_time >= 0) ? TIMER_ABSTIME : 0;
     if (timer_settime(te->timerid, timer_flags, &its, NULL) < 0) {
         timer_delete(te->timerid);
+        te->created = 0;
         te->active = 0;
         pthread_mutex_unlock(&timer_mutex);
         return SS$_BADPARAM;
@@ -690,6 +705,7 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
         if (timer_table[i].active &&
             (reqidt == 0 || timer_table[i].reqidt == reqidt)) {
             timer_delete(timer_table[i].timerid);
+            timer_table[i].created = 0;
             timer_table[i].active = 0;
         }
     }

@@ -351,11 +351,11 @@ RUN cd /src/repo && \
     # aux-server-launches-a-real-image assertions into no-ops with the job green.
     echo "--- TCPIP\$DAYTIME.EXE (the standalone RFC 867 service the aux server launches, test_syssvc_tcpip_daytime) ---" && \
     ls -la 'build-static/bin/TCPIP$DAYTIME.EXE' && \
-    # DECNETD.EXE (rd vms-d3cd): the shipped executive-datalink NETACP that
-    # test_syssvc_decnetd_syscall_audit.c traces (qemu_syssvc_tests DEPENDS on
-    # decnetd_exe). Absence is FATAL, as for every subject above.
-    echo "--- DECNETD.EXE (the NETACP test_syssvc_decnetd_syscall_audit traces) ---" && \
-    ls -la build-static/bin/DECNETD.EXE
+    # NETACP.EXE (rd vms-d3cd, vms-0a7 S3): the shipped executive-datalink NETACP
+    # that test_syssvc_decnetd_syscall_audit.c traces (qemu_syssvc_tests DEPENDS
+    # on netacp_exe). Absence is FATAL, as for every subject above.
+    echo "--- NETACP.EXE (the NETACP test_syssvc_decnetd_syscall_audit traces) ---" && \
+    ls -la build-static/bin/NETACP.EXE
 
 # TCC.EXE (vms-d1b, self-host spine #6): tinycc built as a PLAIN STATIC (musl)
 # foreign-command image -- the compiler test_syssvc_mmk_build.c drives from MMK's
@@ -675,13 +675,13 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp '/src/repo/build-static/bin/TCPIP$DAYTIME.EXE' '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' || \
       { echo "FATAL: TCPIP\$DAYTIME.EXE was not built into the static tree -- the auxiliary server's launch of a real shipped image would go unproven against a real executive"; exit 1; }; } && \
     chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$DAYTIME.EXE' && \
-    # DECNETD.EXE at SYS$SYSTEM (rd vms-d3cd) -- the NETACP
+    # NETACP.EXE at SYS$SYSTEM (rd vms-d3cd, vms-0a7 S3) -- the NETACP
     # test_syssvc_decnetd_syscall_audit.c traces (OVMX_DECNETD default
-    # /vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE). Matches no test_* glob. Absence is
+    # /vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE). Matches no test_* glob. Absence is
     # FATAL: the audit would otherwise have nothing to audit.
-    { cp /src/repo/build-static/bin/DECNETD.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE || \
-      { echo "FATAL: DECNETD.EXE was not built into the static tree -- the NETACP syscall audit would go unproven"; exit 1; }; } && \
-    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE && \
+    { cp /src/repo/build-static/bin/NETACP.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE || \
+      { echo "FATAL: NETACP.EXE was not built into the static tree -- the NETACP syscall audit would go unproven"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/NETACP.EXE && \
     # TCC.EXE at SYS$SYSTEM (vms-d1b, self-host spine #6) -- the compiler
     # test_syssvc_mmk_build.c drives from MMK's persistent mailbox DCL. Its
     # descrip.mms defines TCC :== $/vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE (an absolute

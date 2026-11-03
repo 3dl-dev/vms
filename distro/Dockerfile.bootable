@@ -733,8 +733,16 @@ RUN CC=musl-gcc sh tests/toolchain/mk_tcc_static.sh build-static/bin/TCC.EXE
 # this compiles just mmk_native.c and links it, no product rebuild. Same
 # target the initramfs uses (tests/qemu/Dockerfile), where test_syssvc_mmk_build
 # proves the MMK->TCC->LINK->IMGACT chain against a real executive.
+# The same reconfigure also builds test_syssvc_dcl_remote_syscall_audit (rd
+# vms-0a7): TEST TOOLING, never put on a mastered disk. The runner image carries
+# it beside vmsfs_master (below) so the booted DECnet e2e
+# (tests/qemu/test_decnet_startnet_boot_e2e.sh) can master it onto a scratch
+# volume, MOUNT it, and run its ptrace audit of DIRECTORY/TYPE/COPY node:: where
+# a NETACP and a FAL run. The shipped disks stay byte-identical.
 RUN cmake -B build-static -DBUILD_TESTS=ON >/dev/null && \
-    cmake --build build-static --target mmk_native --parallel $(nproc) 2>&1
+    cmake --build build-static --target mmk_native test_syssvc_dcl_remote_syscall_audit \
+        netacp_test_exe startnet_audit \
+        --parallel $(nproc) 2>&1
 
 # -- System tree staging (OS kit + distribution image source) -----------------
 # All OVMX binaries assembled into a /vms tree. This is BUILD staging only --
@@ -862,6 +870,7 @@ RUN . /etc/ovmx-arch.env && mkdir -p /system-stage/dev /system-stage/proc /syste
     # image that implements it would be a claim the installed product cannot
     # honour (INV-6). Shipped, not started: no startup procedure runs it.
     cp build-static/bin/DECNETD.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/NETACP.EXE     /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/LIBRARIAN.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/OVMXDUMP       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # TCP/IP aux server + its first service (rd vms-21b): TCPIP$INETD.EXE +
@@ -1546,6 +1555,16 @@ COPY --from=builder /boot/ovmx-os.kit.manifest.txt /boot/ovmx-os.kit.manifest.tx
 # (`vmsfs_master --ods2 relabel <disk> <SCSNODE>SYS` -- SET VOLUME/LABEL's
 # on-disk effect), because the label is the Files-11 cluster lock namespace.
 COPY --from=builder /src/build-static/bin/vmsfs_master /usr/local/bin/vmsfs_master
+# Test tooling only (rd vms-0a7), see the builder's mmk_native step: the DCL
+# remote-file ptrace audit the DECnet boot e2e masters onto a scratch volume.
+COPY --from=builder /src/build-static/bin/test_syssvc_dcl_remote_syscall_audit /usr/local/lib/ovmx-test/DCLNETAUDIT.EXE
+# Test tooling only (rd vms-0a7 S3): NETACP_TEST.EXE, every DECnet self-test the
+# shipped NETACP.EXE no longer carries; the boot e2e and the DCL battery master it
+# onto a scratch volume beside DCLNETAUDIT.EXE.
+COPY --from=builder /src/build-static/bin/NETACP_TEST.EXE /usr/local/lib/ovmx-test/NETACP_TEST.EXE
+# ... and STARTNETAUDIT.EXE (gate (c)): the ptrace audit of STARTNET -> NCP ->
+# NETACP -> an inbound FAL.EXE the boot e2e runs from that same scratch volume.
+COPY --from=builder /src/build-static/bin/startnet_audit /usr/local/lib/ovmx-test/STARTNETAUDIT.EXE
 # Negative controls for test_executive_integral.sh only — never a runtime.
 COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz

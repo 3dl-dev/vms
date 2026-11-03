@@ -1,0 +1,32 @@
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID.80000001H:ECX.svm [bit 2]
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+
+    OpenVMX V0.7-15 - OpenVMS-compatible
+     3-NOV-2026 05:38:34.14
+
+%STDRV-I-STARTUP, OpenVMX startup begun at  3-NOV-2026 05:38:34.20
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 05:38:34.20  %%%%%%%%%%%
+Operator _OVMX$OPA0: has been enabled, username SYSTEM
+
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 05:38:34.47  %%%%%%%%%%%
+Operator status for operator _OVMX$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 10000005
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 05:38:36.36  %%%%%%%%%%%
+Message from user SYSTEM on OVMX
+DECnet starting
+
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-15 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+ Welcome to OpenVMX V0.7-15 - OpenVMS-compatible

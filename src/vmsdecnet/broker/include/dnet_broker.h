@@ -228,8 +228,16 @@ DNET_BROKER_API int dnet_broker_call(const struct dnet_broker_io *io,
  * dnet_broker_xfer - one logical-link operation on a client channel, the body of
  * a _NET: $QIO: op = DNET_BROKER_OP_* (| DNET_BROKER_OPF_NOW for a RECV).
  *   OPEN : in = the NCB text (NODE"user password account"::"object"); on
- *          success the NETACP-issued link handle is kept in bc->handle.
- *   SEND : in = the message; *xfer = bytes accepted.
+ *          success the NETACP-issued link handle is kept in bc->handle. With
+ *          the inbound-ACCEPT NCB (dnet_ncb.h, rd vms-0a7 S3) the OPEN accepts
+ *          the waiting inbound link instead, and -- when out/outcap are given
+ *          -- the response's data after the handle (the network job's
+ *          information, struct dnet_falp_linkblk) is copied there (*xfer =
+ *          its length; BUFFEROVF, link kept, if it does not fit).
+ *   SEND : in = the message; *xfer = bytes accepted. While the link's NSP
+ *          transmit queue is full (the remote has not acknowledged, or has
+ *          stopped us) NETACP answers ENDOFFILE and the client offers the
+ *          message again; a dead remote ends it ABORT (rd vms-985).
  *   RECV : out = the next message (*xfer = its length). Without OPF_NOW the
  *          client waits (re-asking NETACP) until a message or a link failure
  *          arrives; with OPF_NOW an empty link completes ENDOFFILE at once.

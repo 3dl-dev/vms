@@ -121,7 +121,9 @@ for spec in $NODES; do
     send "$n" 'NCP :== $SYS$SYSTEM:NCP.EXE'; sleep 1
     send "$n" "NCP SET EXECUTOR ADDRESS $addr"; sleep 3
     send "$n" "NCP SET EXECUTOR NAME $name"; sleep 3
-    send "$n" 'NCP SET EXECUTOR STATE ON'; sleep 3
+    # DEFINE: the permanent database; boot 2's STARTNET turns the network on
+    # (SET EXECUTOR STATE ON creates NETACP at once -- rd vms-0a7 S3).
+    send "$n" 'NCP DEFINE EXECUTOR STATE ON'; sleep 3
     for o in $NODES; do
         on=${o%%:*}; [ "$on" = "$n" ] && continue
         orest=${o#*:}; oaddr=${orest%%:*}; orest=${orest#*:}; oname=${orest%%:*}
@@ -150,7 +152,7 @@ record "boot 2 (B): SYSTEM logs in" "$rb"
 # RUN's %RUN-S-PROC_ID and NETACP's OPCOM "DECnet starting"), so the launch is
 # proven by the process: no refused $CREPRC on either console, and SHOW SYSTEM
 # on each node lists NETACP.
-if grep >/dev/null -aF '%RUN-F-CREPRC' "$LA" || grep >/dev/null -aF '%RUN-F-CREPRC' "$LB"; then rc=1; else rc=0; fi
+if grep >/dev/null -aE '%RUN-F-CREPRC|%NCP-F-OPEFAI' "$LA" || grep >/dev/null -aE '%RUN-F-CREPRC|%NCP-F-OPEFAI' "$LB"; then rc=1; else rc=0; fi
 for n in A B; do
     [ "$rc" -eq 0 ] || break
     if [ "$n" = A ]; then lg="$LA"; else lg="$LB"; fi

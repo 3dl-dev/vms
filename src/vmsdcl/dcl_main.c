@@ -852,7 +852,7 @@ int main(int argc, char *argv[])
         char sylogin_linux[1024];
         vmsfs_to_linux_path(SYLOGIN_PATH, sylogin_linux, sizeof(sylogin_linux));
         if (stat(sylogin_linux, &st) == 0 && S_ISREG(st.st_mode)) {
-            dcl_execute_script(sylogin_linux, 0, NULL);
+            dcl_execute_script(SYLOGIN_PATH, 0, NULL);   /* RMS opens the VMS spec */
         }
 
         /*
@@ -868,7 +868,7 @@ int main(int argc, char *argv[])
         char user_login[1024];
         if (vmsfs_to_linux_path(lgicmd_spec, user_login, sizeof(user_login)) == 1
             && stat(user_login, &st) == 0 && S_ISREG(st.st_mode)) {
-            dcl_execute_script(user_login, 0, NULL);
+            dcl_execute_script(lgicmd_spec, 0, NULL);    /* RMS opens the VMS spec */
         }
 
         /*

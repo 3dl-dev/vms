@@ -3435,6 +3435,8 @@ EOF
         require_fail) hd_lines <<'EOF'
 *** r3 (A,B,C), OVMXB: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
 *** r5 (C,A,B), OVMXA: VAXC's op-0x01 at step 0x0a is ANSWERED you-master-it from the entry naming it -- the demo got no answer ***
+it is counted as the requester's-own-directory answer
+and not as a refusal
 EOF
                       ;;
         esac;;
@@ -3449,6 +3451,8 @@ EOF
         require_fail) hd_lines <<'EOF'
 fuzz-b4d: an undirected name with no entry is never answered you-master-it
 fuzz-b4d: an undirected lookup records nothing
+fuzz-966e: at the requester, you-master-it comes ONLY from an entry naming it
+fuzz-966e: an at-requester lookup records nothing
 EOF
                       ;;
         esac;;

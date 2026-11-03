@@ -472,11 +472,22 @@ static void test_oob(void)
           "CTRL/Y goes as Out-of-Band 04 01 19 (discard, per its attributes)");
     check(f.nrecords == 1 && strcmp(f.record, "*INTERRUPT*") == 0,
           "... and *INTERRUPT* on the terminal");
+    {
+        /* the host's next prompt after the interrupt starts a NEW line: it
+         * must not overprint *INTERRUPT* (S2 bench, image c4f228d9d) */
+        s.fresh = 1;
+        rtpad_session_oob(&s, 0x19);
+        size_t mark = f.screenlen;
+        rtpad_session_rx(&s, k_vax_dcl_read, sizeof k_vax_dcl_read);
+        check(f.screenlen == mark + 5 && memcmp(f.screen + mark, "\r\n\0$ ", 5) == 0,
+              "after *INTERRUPT* the DCL prompt keeps its CR LF (a line of its own)");
+    }
     before = f.nsent;
+    f.nrecords = 0;
     rtpad_session_oob(&s, 0x14);
     static const uint8_t want_t[] = { 0x09, 0x00, 0x03, 0x00, 0x04, 0x00, 0x14 };
     check(f.nsent == before + 1 && memcmp(f.sent[before], want_t, sizeof want_t) == 0 &&
-          f.nrecords == 1,
+          f.nrecords == 0,
           "CTRL/T (immediate hello) goes as Out-of-Band 04 00 14, nothing echoed");
     rtpad_session_oob(&s, 0x40);
     check(f.nsent == before + 1, "a character past 31 is not out of band: nothing sent");

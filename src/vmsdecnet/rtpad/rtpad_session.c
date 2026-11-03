@@ -112,8 +112,10 @@ void rtpad_session_oob(struct rtpad_session *s, uint8_t c)
     /* The interrupt is shown on this screen, as the local driver shows its
      * own CTRL/Y: a VAX client's screen shows it, and a VAX host sends no
      * text for it (S2 live bench). */
-    if (interrupt || (s->chattr[c] & 0x30))
+    if (interrupt || (s->chattr[c] & 0x30)) {
         s->io->record(s->io->ctx, "*INTERRUPT*");
+        s->fresh = 0;          /* the next prompt's CR LF is a new line */
+    }
     /* A read the host has outstanding stays outstanding: a VAX host that
      * takes CTRL/Y at an idle DCL prompt solicits nothing new, so the line
      * the user types next still answers it (S2 live bench). */

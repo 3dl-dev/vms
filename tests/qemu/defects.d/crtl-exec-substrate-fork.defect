@@ -1,0 +1,41 @@
+# crtl-exec-substrate-fork -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DEC C exec*()/wait() create and collect a VMS subprocess through \$CREPRC and the executive's completion record, not the substrate's fork/execve/wait (rd vms-e70f)";;
+        targets)      echo "vmsrms/crtl_exec.c";;
+        suites_red)   echo "test_syssvc_crtl_exec";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The mutation puts back the path DECC\$SHR had before vms-e70f: exec*() forks the task and execl()s the image (no \$CREPRC, so the PID handed back is the substrate's task id), and wait() takes the substrate's waitpid status (0 or SS\$_ABORT) instead of the executive's termination record. \$GETJPI cannot answer the substrate id, the child finds no exec context under its own VMS PID and its getpid() is not the id exec returned, and neither the error completion nor the C-facility exit code comes back.";;
+        require_fail) cat <<'EOF2'
+A: $GETJPI answers the subprocess's VMS PID while it lives
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+A: the subprocess got exactly the arguments and environment passed
+A: the subprocess's getpid() is the VMS PID exec returned
+A: the _VMS_WAIT wait returns the subprocess's error completion %X1000002C
+B: a C-facility completion (__posix_exit(3)) waits as WEXITSTATUS 3
+the creator's checks all held
+F: an image task sharing its creator's VMS PID gets its own subprocess's completion %X0035A019
+G: a subprocess whose creating task ends first is collected with its image task's completion
+EOF2
+                      ;;
+        knock_on_why)  cat <<'EOF2'
+All one defect, the substrate process in place of the VMS one: a task $CREPRC did not create has no exec context under a VMS PID the creator knows (arguments), its getpid() is not the id exec returned, and the substrate wait carries no VMS completion (the error code, the C-facility code). The suite's summary check reports the creator's red.
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^#include <string.h>$|#include <string.h> /* NEGCTL crtl-exec-substrate-fork */\n#include <unistd.h>\n#include <sys/wait.h>|' "$_file"
+        sed -i 's|^    uint32_t st = sys\$creprc(&pid, &img, 0, 0, 0, 0, 0, 0, 0, 0, 0, PRC\$M_HIBER);$|    (void)img; pid_t lp = fork(); if (lp == 0) { execl(spec, spec, (char *)0); _exit(127); } pid = (uint32_t)lp; uint32_t st = lp > 0 ? 1u : 0u; /* NEGCTL crtl-exec-substrate-fork */|' "$_file"
+        sed -i 's|^    uint32_t st = vms_kif_getexit_pid(pid, &c, &rec);$|    int ws = 0; uint32_t st = waitpid((pid_t)pid, \&ws, 0) > 0 ? 1u : 0u; c = (WIFEXITED(ws) \&\& WEXITSTATUS(ws) == 0) ? 1u : 0x2Cu; rec = 1; /* NEGCTL crtl-exec-substrate-fork */|' "$_file"
+
+    :
+}

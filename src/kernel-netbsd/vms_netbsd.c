@@ -354,6 +354,7 @@ vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,
 	if (proc == NULL)
 		return SS__INSFMEM;
 	proc->owner_vms_pid = creator->vms_pid;
+	proc->owner_linux_pid = (uint32_t)creator->linux_pid;
 	if (cont) {
 		(void)vms_proc_continue_identity(proc, creator->pid, true);
 	} else if (!detached) {

@@ -852,6 +852,12 @@ uint32_t vms_kif_getexit_linux(uint32_t linux_pid, uint32_t *condition,
  * $GETJPI (SS$_NOPRIV cross-group without WORLD; a same-group parent reading its
  * own subprocess needs none). Must be called BEFORE the subprocess is reaped.
  * *has_exited (optional) is nonzero iff an image actually recorded a status. */
+/* The calling process's substrate task id -- the executive's table key, NOT a
+ * VMS PID (rd vms-e70f: getpid() in the C RTL is the VMS PID). */
+uint32_t vms_kif_substrate_pid(void);
+/* Reap the substrate task `pid` this process forked ($CREPRC/LIB$SPAWN). */
+int vms_kif_substrate_reap(uint32_t pid, int *wstatus, int options);
+
 uint32_t vms_kif_getexit_pid(uint32_t vms_pid, uint32_t *condition,
                              int *has_exited);
 

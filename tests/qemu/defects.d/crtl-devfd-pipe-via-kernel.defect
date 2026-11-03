@@ -1,0 +1,36 @@
+# crtl-devfd-pipe-via-kernel -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "DEC C pipe() is a temporary mailbox (\$CREMBX) with a channel for each end; each write a message, close of the write end end-of-file (rd vms-a66e)";;
+        targets)      echo "vmsrms/crtl_devfd.c";;
+        suites_red)   echo "test_syssvc_crtl_devfd";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "d_pipe() creates the mailbox and assigns the second channel. The mutation makes it the raw kernel pipe2() instead, the path the C RTL had before vms-a66e: the descriptors are a Linux pipe, so getname() names no device, \$GETDVI finds no mailbox, fstat() is no mailbox unit and the two writes read back as one byte stream.";;
+        require_fail) cat <<'EOF2'
+getname() of the read end is a mailbox (MBAn:)
+$GETDVI of that device: DC$_MAILBOX
+fstat() of the read end: a FIFO whose st_ino is the mailbox unit
+each write() is one message; each read() takes one
+with both ends closed the temporary mailbox is gone
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+openat() relative to a pipe: ENOTDIR
+EOF2
+                      ;;
+        knock_on_why)  cat <<'EOF2'
+The same defect: a kernel pipe's descriptor is no descriptor of the C RTL, so openat() relative to it answers EBADF (no such directory descriptor) rather than ENOTDIR (a mailbox is not a directory).
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^    unsigned int st = sys\$crembx(0, &rc, PIPE_MAXMSG, PIPE_BUFQUO, 0, 0, 0, 0, 0);$|    return rawsys(SYS_pipe2, (long long)(uintptr_t)fds, flags \& ~(long long)O_NONBLOCK, 0); /* NEGCTL crtl-devfd-pipe-via-kernel */ unsigned int st = 0;|' "$_file"
+    :
+}

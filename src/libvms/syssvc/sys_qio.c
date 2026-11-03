@@ -876,7 +876,12 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
         case IO$_READLBLK:
         case IO$_READPBLK:
             if (!p1) { st = SS$_BADPARAM; break; }
-            st = vms_kif_bg_recv(exec_chan, p1, p2, &actlen);
+            /* IO$M_NOW (rd vms-a6b): complete at once; SS$_ENDOFFILE and a zero
+             * count when nothing has arrived. A caller multiplexing the
+             * connection with a terminal waits on an event flag/timer and
+             * reads with NOW -- never poll() on a Linux fd. */
+            st = vms_kif_bg_recv_ex(exec_chan, p1, p2, &actlen,
+                                    (func & IO$M_NOW) != 0);
             break;
 
         case IO$_DEACCESS:

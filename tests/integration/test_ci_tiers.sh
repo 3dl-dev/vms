@@ -147,6 +147,32 @@ o=$(tier push refs/heads/main tools/cross-alpha/run-syssvc-tests-alpha.sh)
 o=$(tier schedule refs/heads/main docs/x.md)
 [ "$(get "$o" alpha_syssvc)" = true ] && ok "nightly sets alpha_syssvc" || bad "alpha_syssvc nightly"
 
+# tcpip_net tier (ci-release-e2e tcpip-daytime-boot-e2e, rd vms-d0c4): the booted
+# TCP/IP proofs (inbound DAYTIME, reboot reapply, the external TELNET/FTP peer)
+# run in the queue when the BGn: driver, the engines or the DCL verbs change.
+o=$(tier merge_group q src/kernel-core/vms_bg.c)
+[ "$(get "$o" tcpip_net)" = true ] && ok "queue: a BGn: driver change runs the booted TCP/IP proofs" || bad "tcpip_net bg"
+o=$(tier merge_group q src/vmstcpip/services/tcpip_client.h)
+[ "$(get "$o" tcpip_net)" = true ] && ok "queue: a TELNET/FTP engine change runs the booted TCP/IP proofs" || bad "tcpip_net engine"
+o=$(tier merge_group q src/vmsdcl/dcl_cmd_misc.c)
+[ "$(get "$o" tcpip_net)" = true ] && ok "queue: a TELNET/FTP verb change runs the booted TCP/IP proofs" || bad "tcpip_net verb"
+o=$(tier merge_group q tests/qemu/test_tcpip_external_boot_e2e.sh)
+[ "$(get "$o" tcpip_net)" = true ] && ok "queue: the external-peer e2e itself runs when changed" || bad "tcpip_net e2e"
+o=$(tier merge_group q docs/foo.md src/vmsdecnet/engine/decnetd.c)
+[ "$(get "$o" tcpip_net)" = false ] && ok "queue: an unrelated change does not boot the TCP/IP proofs" || bad "tcpip_net unrelated"
+o=$(tier pull_request refs/pull/1/merge src/kernel-core/vms_bg.c)
+[ "$(get "$o" tcpip_net)" = false ] && ok "tcpip_net is a queue tier (PRs use ci-changes tcpip)" || bad "tcpip_net pr"
+o=$(tier schedule refs/heads/main docs/x.md)
+[ "$(get "$o" tcpip_net)" = true ] && ok "nightly runs the booted TCP/IP proofs" || bad "tcpip_net nightly"
+grep -q "tcpip_net: \${{ steps.tiers.outputs.tcpip_net }}" "$ROOT/.github/workflows/ci-changes.yml" \
+  && grep -q "value: \${{ jobs.changes.outputs.tcpip_net }}" "$ROOT/.github/workflows/ci-changes.yml" \
+  && ok "ci-changes.yml exports tcpip_net" || bad "ci-changes tcpip_net output"
+awk '/^  tcpip-daytime-boot-e2e:/{f=1} f&&/^    if:/{p=1} p{print} p&&/}}/{exit}' "$ROOT/.github/workflows/ci-release-e2e.yml" \
+  | grep -q "github.event_name == 'merge_group' && needs.changes.outputs.tcpip_net == 'true'" \
+  && ok "ci-release-e2e tcpip-daytime-boot-e2e runs in the queue on tcpip_net" || bad "tcpip job merge_group condition"
+grep -q "tests/qemu/run_tcpip_external_boot_e2e.sh" "$ROOT/.github/workflows/ci-release-e2e.yml" \
+  && ok "the tcpip job runs the external-peer proof" || bad "external e2e not wired"
+
 # keystroke / alpha selfhost area
 o=$(tier merge_group q src/kernel-core/vms_tt.c)
 [ "$(get "$o" keystroke)" = true ] && ok "queue: terminal driver change runs the keystroke oracle" || bad "keystroke area"

@@ -344,6 +344,17 @@
  *
  *   void exec_task_unpin(exec_task_pin_t *pin)   drop the exec_task_pin ref.
  *
+ *   uint32_t exec_current_pid(void)                         (rd vms-416d)
+ *        the CURRENT process's id, as its own getpid() reports it. Linux:
+ *        task_tgid_vnr(current). NetBSD: curlwp->l_proc->p_pid.
+ *
+ *   int  exec_pid_running(uint32_t pid)                     (rd vms-416d)
+ *        nonzero iff process `pid` exists and has NOT exited (a zombie is not
+ *        running) -- the liveness test $CREPRC's creation record waits on for
+ *        a task that has no PCB yet. MAY take a sleeping substrate lock: never
+ *        call it holding an exec_lock. Linux: pid_task(find_vpid) with
+ *        exit_state/PF_EXITING clear. NetBSD: proc_find(9) under proc_lock.
+ *
  *   int  exec_task_signal(exec_task_ref_t *ref, int sig)   (rd vms-8e9)
  *        deliver EXEC_SIG_TERM / _FORCE / _STOP / _CONT to the whole process
  *        behind `ref`, from inside the executive, after the executive's own
@@ -615,6 +626,10 @@
  *        receive up to len bytes; returns the count (0 == orderly peer close /
  *        EOF), or negative on error. MAY SLEEP. Linux: kernel_recvmsg. NetBSD:
  *        uio -> soreceive.
+ *   long exec_socket_recv_now(exec_socket_t s, void *buf, size_t len)
+ *        exec_socket_recv that never waits (IO$M_NOW): negative -EAGAIN when no
+ *        data is queued. Linux: kernel_recvmsg(MSG_DONTWAIT). NetBSD: soreceive
+ *        with MSG_DONTWAIT.
  *   int  exec_socket_shutdown(exec_socket_t s)
  *        shut both directions down. Linux: kernel_sock_shutdown(SHUT_RDWR).
  *        NetBSD: soshutdown(SHUT_RDWR).

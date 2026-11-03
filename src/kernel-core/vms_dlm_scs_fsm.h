@@ -877,14 +877,15 @@ const char *dlm_req_state_name(enum dlm_req_state s);
  * stages, the fork thread claims, and the frame is built from what the engine
  * really read.
  *
- * FOUR FIELDS, AND THE OMISSIONS ARE STRUCTURAL. A record carries the proxy
+ * FOUR FIELDS (and, since rd vms-d63, a WRITTEN value block). A record carries the proxy
  * LKB's own handle, the master's handle for it, the mode it held as it went,
  * and the master's CSID -- which is precisely what a cat-0x02 op-0x03 asserts
  * (vms_cluster_codec_dlm.h) plus where to send it. It deliberately does NOT
- * carry the resource name, the value block or the directory hash: those are
- * fields of a REQUEST, they have no grounded place on a release, and a snapshot
- * that held them would be a snapshot a later edit could put on a wire. What is
- * not in the record cannot be asserted.
+ * carry the resource name or the directory hash: those are fields of a
+ * REQUEST, with no grounded place on a release. The VALUE BLOCK it carries
+ * only when the engine marked the release as writing it: a real release of a
+ * PW F11B$s lock carries its block at body[36:52] (rd vms-d63), and a
+ * snapshot that dropped it would emit a release that silently writes nothing.
  *
  * WHAT IS STILL REFUSED. Nothing here relaxes a gate. A record whose
  * `master_lkid` is 0 -- a lock the master never named -- reaches the codec's
@@ -920,7 +921,14 @@ struct dlm_relq_rec {
 	uint32_t dst_csid;     /* the MASTER -- a release never goes to a
 				* directory node                              */
 	uint8_t  mode;         /* the mode the LKB held as it was released    */
-	uint8_t  pad[3];
+	/* rd vms-d63: a release that WRITES its value block (dlm_proxy_fill_post's
+	 * write_valblk) carries the LKB's block, so the snapshot keeps both; a
+	 * release that writes nothing keeps 0 and no block, as before. Dropping
+	 * them here is exactly how the r3 lab fire's F11B$s releases left
+	 * unmarked and empty while the engine had marked them. */
+	uint8_t  write_valblk;
+	uint8_t  pad[2];
+	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
 };
 
 struct dlm_relq_slot {

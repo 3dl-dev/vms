@@ -135,6 +135,7 @@
 #define SS__IVCHAN    316          /* SS$_IVCHAN -- invalid I/O channel */
 #define SS__IVDEVNAM  324          /* SS$_IVDEVNAM -- invalid device name */
 #define SS__NOSUCHDEV 2312         /* SS$_NOSUCHDEV -- no such device available */
+#define SS__IVTIME    388          /* SS$_IVTIME -- $SETIME of a delta time (rd vms-642) */
 /*
  * Cluster port/SCS subset (FC-P2.4). Values match src/kernel/vms_internal.h
  * exactly and are the ones src/libvms/include/ssdef.h already ships for those
@@ -1123,6 +1124,14 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_enter_image(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_image_rundown(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_substrate_id(struct vms_proc *proc, unsigned long arg);
+
+/* ----------------------------------------------------------------
+ * System time (rd vms-642) -- DEFINED in src/kernel-core/vms_systime.c.
+ * ---------------------------------------------------------------- */
+void vms_systime_init(void);
+void vms_systime_cleanup(void);
+uint64_t vms_systime_now(void);
+long vms_ioctl_systime(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_power(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_netcfg(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_kfe(struct vms_proc *proc, unsigned long arg);

@@ -9,7 +9,7 @@ defect_meta() {
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "The C RTL layer's install sets musl's two time hooks. The mutation leaves both unset, so time()/clock_gettime() fall back to the substrate kernel's clock and localtime() to musl's no-VMS-zone UTC: a DEFINE of SYS\$TIMEZONE_DIFFERENTIAL no longer moves localtime(). The clock checks stay green (the substrate clock is what \$GETUTC reads until the executive keeps the system time, rd vms-642). Gone after substitution (no-op re-apply).";;
+        why)          echo "The C RTL layer's install sets musl's two time hooks. The mutation leaves both unset, so time()/clock_gettime() fall back to the substrate kernel's clock and localtime() to musl's no-VMS-zone UTC: a DEFINE of SYS\$TIMEZONE_DIFFERENTIAL no longer moves localtime(). The plain clock checks stay green (while no \$SETIME has moved it, the system time \$GETUTC reads equals the substrate clock); the one that moves the system time (rd vms-642) does not. Gone after substitution (no-op re-apply).";;
         require_fail) cat <<'EOR'
 TDF 19800: the next localtime() is UTC+05:30, zone IST
 TDF 19800: strftime() gives 2026-01-15 17:30 IST +0530
@@ -21,9 +21,15 @@ a disagreeing rule is not used: UTC+01:00 CET
 EOR
                       ;;
         knock_on_fail) cat <<'EOR'
+time() in another process is the system time $SETIME set (1-JAN-2031)
 EOR
                       ;;
-        knock_on_why)  echo "";;
+        knock_on_why) cat <<'EOR'
+With the clock hook unset, time() is the substrate kernel's clock, so after
+$SETIME moves the system time to 1-JAN-2031 a child's time() still reads the
+substrate's date: the same defect seen through the clock rather than the zone.
+EOR
+                      ;;
         esac
 
 }

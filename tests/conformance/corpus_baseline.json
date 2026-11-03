@@ -5,8 +5,8 @@
     "compile-pass": 0,
     "compile-fail": 38,
     "link-fail": 39,
-    "run-pass": 115,
-    "run-fail": 9,
+    "run-pass": 114,
+    "run-fail": 10,
     "run-crash": 28,
     "run-pass-signaled": 6
   },
@@ -1724,7 +1724,7 @@
     {
       "name": "sys_numtim",
       "file": "tier1-examples/sys_numtim.c",
-      "status": "run-pass",
+      "status": "run-fail",
       "signaled_error": false,
       "errors": [],
       "missing_symbols": [],

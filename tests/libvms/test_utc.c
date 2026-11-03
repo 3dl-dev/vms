@@ -58,7 +58,15 @@ int main(void)
           "$TIMCON quadword -> UTC returns the same structure");
 
     uint64_t t0 = 0, t1 = 0;
-    sys$gettim(&t0);
+    /* The system time is the executive's (rd vms-642): with no /dev/vms $GETUTC
+     * is SS$_NOSUCHDEV, never the host clock; the checks below run against a
+     * real executive (and tests/qemu/test_syssvc_systime.c makes them there). */
+    if (sys$gettim(&t0) == SS$_NOSUCHDEV) {
+        CHECK(sys$getutc(utc) == SS$_NOSUCHDEV, "no executive: $GETUTC is SS$_NOSUCHDEV, not the host clock");
+        CHECK(sys$getutc(NULL) == SS$_BADPARAM, "a NULL structure is refused");
+        printf("=== %d passed, %d failed ===\n", pass, fail);
+        return fail ? 1 : 0;
+    }
     CHECK($VMS_STATUS_SUCCESS(sys$getutc(utc)), "$GETUTC");
     sys$gettim(&t1);
     uint64_t a = ((uint64_t)lw(utc, 1) << 32) | lw(utc, 0);

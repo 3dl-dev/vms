@@ -1,0 +1,38 @@
+# systime-setime-no-privcheck -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "\$SETIME needs OPER and LOG_IO, decided by the executive (VMS_IOCTL_SYSTIME, rd vms-642)";;
+        targets)      echo "kernel-core/vms_systime.c";;
+        suites_red)   echo "test_syssvc_systime";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_systime() asks for no privilege: any process may set the system time. One argument, emptied.";;
+        require_fail) cat <<'EOF2'
+$SETIME without OPER and LOG_IO is SS$_NOPRIV
+$SETIME with OPER but not LOG_IO is SS$_NOPRIV
+a process with no SETPRV cannot get OPER/LOG_IO: its $SETIME is SS$_NOPRIV
+EOF2
+                      ;;
+        knock_on_fail) cat <<'EOF2'
+... and the system time did not move
+... the system time is still the time-of-year clock
+DCL SET TIME without OPER and LOG_IO is %SYSTEM-F-NOPRIV
+EOF2
+                      ;;
+        knock_on_why) cat <<'EOF2'
+The refused $SETIMEs are granted, so the system time moves to 1-JAN-2031 (and
+DCL's to 1-JAN-2032) where the suite checks it stayed put; DCL SET TIME reports
+success instead of %SYSTEM-F-NOPRIV.
+EOF2
+                      ;;
+        esac
+
+}
+
+defect_apply() {
+        sed -i 's|^        a.status = vms_prot_require_priv(privs, VMS_PRV_M_OPER \| VMS_PRV_M_LOG_IO);$|        a.status = vms_prot_require_priv(privs, 0); /* NEGCTL systime-setime-no-privcheck */|' "$_file"
+    :
+}

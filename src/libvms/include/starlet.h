@@ -296,6 +296,19 @@ uint32_t sys$dlcefc(const struct dsc$descriptor_s *name);
 uint32_t sys$gettim(uint64_t *timadr);
 
 /**
+ * sys$setime - Set or recalibrate the system time (rd vms-642)
+ *
+ * @param timadr  the new system time (an absolute VMS time), or NULL to
+ *                recalibrate the system time from the time-of-year clock
+ *
+ * @return  SS$_NORMAL; SS$_NOPRIV without OPER and LOG_IO enabled;
+ *          SS$_IVTIME for a delta time; SS$_ACCVIO; SS$_NOSUCHDEV with no
+ *          executive. The system time is the executive's: every process's
+ *          sys$gettim reads the time set here.
+ */
+uint32_t sys$setime(const uint64_t *timadr);
+
+/**
  * sys$getutc - Get current system time in UTC.
  *
  * @param timadr  Pointer to quadword to receive 64-bit VMS time

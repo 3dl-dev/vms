@@ -204,6 +204,7 @@
 #define SS__IVDEVNAM    324         /* invalid device name */
 #define SS__NOMOREDEV   2648        /* device scan exhausted */
 #define SS__NOSUCHDEV   2312        /* no such device available */
+#define SS__IVTIME      388         /* invalid time: ssdef.h SS$_IVTIME; $SETIME of a delta time (rd vms-642) */
 #define SS__DEVMOUNT    108        /* device already mounted (ssdef.h SS$_DEVMOUNT) */
 /*
  * SS__DEVNOTMOUNT (SS$_DEVNOTMOUNT == 124, this tree's src/libvms/include/
@@ -1771,6 +1772,12 @@ long vms_ioctl_p0_unmap(struct vms_proc *proc, unsigned long arg);
 struct vms_va_space;
 long vms_ioctl_va(struct vms_proc *proc, unsigned long arg);
 void vms_va_release(struct vms_proc *proc);
+
+/* System time, $GETTIM/$GETUTC/$SETIME (rd vms-642, kernel-core/vms_systime.c). */
+void vms_systime_init(void);
+void vms_systime_cleanup(void);
+uint64_t vms_systime_now(void);
+long vms_ioctl_systime(struct vms_proc *proc, unsigned long arg);
 
 /*
  * P1 control region (vms-68f.ii, in-process image activation foundation,

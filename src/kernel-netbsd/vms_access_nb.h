@@ -81,6 +81,11 @@
 #define VMS_PRV_M_CMEXEC    (1ULL << VMS_PRV_V_CMEXEC)
 #define VMS_PRV_M_SETPRV    (1ULL << VMS_PRV_V_SETPRV)
 
+/* $SETIME (rd vms-642, src/kernel-core/vms_systime.c) gates on OPER and LOG_IO;
+ * OPER's mask is vms_internal.h's, LOG_IO's is here (PRV$V_LOG_IO = 7). */
+#define VMS_PRV_V_LOG_IO     7
+#define VMS_PRV_M_LOG_IO    (1ULL << VMS_PRV_V_LOG_IO)
+
 /* ================================================================
  * Argument structs -- byte-identical to src/kernel/vms_ioctl.h.
  * ================================================================ */
@@ -179,6 +184,18 @@ struct vms_native_page0_args {
 #define VMS_IOCTL_KFE            _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB0, struct vms_kfe_args)
 #define VMS_IOCTL_NATIVE_PAGE0   _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB2, struct vms_native_page0_args)
 #define VMS_IOCTL_POWER          _IOWR(VMS_ACCESS_IOC_MAGIC, 0xB3, struct vms_power_args)
+
+/* System time, $GETTIM/$GETUTC/$SETIME (rd vms-642): the same struct and number
+ * as src/kernel/vms_ioctl.h; the facility is src/kernel-core/vms_systime.c. */
+#define VMS_SYSTIME_GET     1
+#define VMS_SYSTIME_SET     2
+#define VMS_SYSTIME_RECAL   3
+struct vms_systime_args {
+	uint32_t op;
+	uint32_t status;
+	uint64_t time;
+};
+#define VMS_IOCTL_SYSTIME        _IOWR(VMS_ACCESS_IOC_MAGIC, 0xC5, struct vms_systime_args)
 struct vms_netcfg_args {
 	uint32_t req;
 	uint32_t status;

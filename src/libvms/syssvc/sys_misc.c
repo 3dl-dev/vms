@@ -32,7 +32,7 @@
  *     is read only as a wildcard-walk context that is one node long (-1 returns
  *     this node, the next call SS$_NOMORENODE), so a request aimed at another
  *     cluster node is answered with this machine's numbers as though aimed here
- *     (vms-642 open; the cluster-item cutover above is the first executive-backed
+ *     (vms-716 open; the cluster-item cutover above is the first executive-backed
  *     slice).
  * OVMX-PARTIAL: sys$getsyiw (vms-5919) -- exec: the same SYI$_CLUSTER_MEMBER /
  *     SYI$_CLUSTER_NODES read of the connection manager's CLUB as sys$getsyi

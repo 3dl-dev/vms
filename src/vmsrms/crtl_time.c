@@ -19,7 +19,7 @@
  * alpha-dec-vms/{clock_gettime,__tz}.c):
  *
  *   __ovmx_clock_hook  the realtime clock: SYS$GETUTC's UTC time (the same
- *                      clock SYS$GETTIM reports, vms_substrate_systime)
+ *                      clock SYS$GETTIM reports: the executive's system time, rd vms-642)
  *   __ovmx_tz_hook     the zone: the three logicals above, through SYS$TRNLNM
  *                      on LNM$FILE_DEV, as SYS$GETUTC/$TIMCON read the TDF
  *

@@ -17,12 +17,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
+#include "starlet.h"   /* sys$gettim: the system time (dcl_system_time) */
+#include "descrip.h"
+#include "msgdef.h"
 
 /* BACKUP command (dcl_backup.c) */
 extern int cmd_backup(struct dcl_command *cmd);
@@ -39,6 +43,40 @@ const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
 };
+
+/*
+ * dcl_system_time - the system time, as a host timespec for DCL's formatting
+ * (rd vms-642). It is SYS$GETTIM's -- the executive's system time, which SET
+ * TIME changes for every process -- never the substrate clock. Returns the
+ * $GETTIM status (SS$_NOSUCHDEV with no executive; *ts is then untouched).
+ */
+uint32_t dcl_system_time(struct timespec *ts)
+{
+    uint64_t t = 0;
+    uint32_t st = sys$gettim(&t);
+
+    if (!(st & 1))
+        return st;
+    t -= 0x007C95674BEB4000ULL;          /* 17-NOV-1858 -> 1-JAN-1970, 100 ns */
+    ts->tv_sec = (time_t)(t / 10000000ULL);
+    ts->tv_nsec = (long)(t % 10000000ULL) * 100;
+    return st;
+}
+
+/* dcl_put_sysmsg - report a system-service condition as VMS does: the message
+ * $GETMSG gives for it ("%SYSTEM-F-NOPRIV, insufficient privilege or object
+ * protection violation"). */
+void dcl_put_sysmsg(uint32_t st)
+{
+    char msg[256];
+    uint16_t len = 0;
+    struct dsc$descriptor_s md = { sizeof msg - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, msg };
+
+    if (sys$getmsg(st, &len, &md, MSG$M_ALL, NULL) & 1) {
+        msg[len] = '\0';
+        fprintf(stderr, "%s\n", msg);
+    }
+}
 
 /* ================================================================== */
 /*             Per-verb qualifier tables (Phase 1, vms-097)            */

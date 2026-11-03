@@ -134,6 +134,7 @@ obj-m := vms.o
 # cross-compile gates from this commit.
 vms-y := vms_module.o \
          ../kernel-core/vms_access.o \
+         ../kernel-core/vms_systime.o \
          ../kernel-core/vms_ast.o \
          ../kernel-core/vms_bg.o \
          ../kernel-core/vms_devtab.o \

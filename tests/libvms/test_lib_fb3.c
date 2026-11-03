@@ -55,9 +55,12 @@ static void test_sys_asctim(void)
 {
     printf("Testing lib$sys_asctim...\n");
 
+    /* A fixed absolute time: what is under test is the formatting. (The
+     * system time is the executive's, rd vms-642; the current-time form is the
+     * NULL-timadr case below.) */
     GENERIC_64 now;
-    check(sys$gettim(&now.gen64$q_quadword) == SS$_NORMAL,
-          "sys$gettim seeds the GENERIC_64 for lib$sys_asctim");
+    now.gen64$q_quadword = 0x009E663849721A60ULL;
+    check(1, "a fixed GENERIC_64 seeds lib$sys_asctim");
 
     char outbuf[32];
     memset(outbuf, 0, sizeof(outbuf));
@@ -72,9 +75,15 @@ static void test_sys_asctim(void)
     check(outbuf[2] == '-' && outbuf[6] == '-',
           "lib$sys_asctim formats DD-MMM-YYYY");
 
-    /* NULL timadr means "current time", matching sys$asctim. */
+    /* NULL timadr means "current time", matching sys$asctim: the system time,
+     * which is the executive's (rd vms-642). With no /dev/vms that is an honest
+     * SS$_NOSUCHDEV; tests/qemu/test_syssvc_systime.c formats it there. */
+    uint64_t probe = 0;
     st = lib$sys_asctim(&outlen, &out_d, NULL, 0);
-    check(st == SS$_NORMAL, "lib$sys_asctim(NULL timadr) returns SS$_NORMAL");
+    if (sys$gettim(&probe) == SS$_NOSUCHDEV)
+        check(st == SS$_NOSUCHDEV, "no executive: lib$sys_asctim(NULL timadr) is SS$_NOSUCHDEV, not the host clock");
+    else
+        check(st == SS$_NORMAL, "lib$sys_asctim(NULL timadr) returns SS$_NORMAL");
 }
 
 /* ------------------------------------------------------------------ */

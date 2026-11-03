@@ -18,6 +18,7 @@ done
     "SYSEXE:TCC.EXE=$R/build-static/bin/TCC.EXE" \
     "SYSEXE:LIBRARIAN.EXE=$R/build-static/bin/LIBRARIAN.EXE" \
     "SYSEXE:LINK.EXE=$R/build-static/bin/sysexe/LINK.EXE" \
+    "SYSEXE:DECNETD.EXE=$R/build-static/bin/DECNETD.EXE" \
     "SYSEXE:IMGACT.EXE=$R/src/imgact/IMGACT.EXE" \
     "SYSLIB:DECC\$SHR.EXE=$R/build-static/bin/DECC\$SHR.EXE" \
     "$@"

@@ -69,6 +69,38 @@
 #define TN_SB   250u
 #define TN_SE   240u
 
+/* TELNET option codes this client acts on (RFC 857 ECHO, RFC 858 SGA). */
+#define TN_OPT_ECHO 1u
+#define TN_OPT_SGA  3u
+
+/*
+ * The TELNET receive state machine (RFC 854 command parsing, RFC 1143-style
+ * "don't answer what is already true" so negotiation can never loop). It is a
+ * PURE function over a byte buffer: it never reads the network itself, so a
+ * command split across two reads (IAC in one segment, its option byte in the
+ * next) resumes where it stopped, and the parser can be fuzzed on the host
+ * (tests/vmstcpip/test_tcpip_client_fuzz.c).
+ *
+ * Policy -- what a line/character-mode VMS TELNET client agrees to:
+ *   - the SERVER may ECHO and SUPPRESS-GO-AHEAD (WILL ECHO / WILL SGA -> DO):
+ *     a server that echoes puts the session in character mode;
+ *   - every other server WILL is refused (DONT);
+ *   - this client offers nothing of its own: every DO is answered WONT;
+ *   - a WONT/DONT is answered only when it changes a state that was on.
+ * Subnegotiations (IAC SB ... IAC SE) are swallowed; an IAC IAC in data or in a
+ * subnegotiation is the literal byte 0xFF.
+ */
+struct tcpip_telnet_state {
+    unsigned char st;           /* parser state, TNS_* below */
+    unsigned char cmd;          /* the WILL/WONT/DO/DONT awaiting its option */
+    unsigned char him[256];     /* 1 = the server has the option enabled */
+};
+#define TNS_DATA   0u
+#define TNS_IAC    1u
+#define TNS_OPT    2u
+#define TNS_SB     3u
+#define TNS_SB_IAC 4u
+
 /* A BGn: connection: the VMS channel plus a small read buffer so callers can
  * read line-at-a-time (FTP control) or fixed amounts (FTP data) off a byte
  * stream that the host kernel may coalesce or split arbitrarily. */
@@ -78,6 +110,7 @@ struct tcpip_conn {
     unsigned char rbuf[TCPIP_XFER_MAX];/* buffered unconsumed inbound bytes */
     uint32_t rlen;                     /* valid bytes in rbuf */
     uint32_t rpos;                     /* next unconsumed byte */
+    struct tcpip_telnet_state tn;      /* TELNET parser (zeroed by connect) */
 };
 
 /* ---- byte-order + parsing helpers (no libc net calls, so nothing new lands
@@ -235,6 +268,29 @@ static inline uint32_t tcpip_fill(struct tcpip_conn *c, uint32_t *got)
     return SS$_NORMAL;
 }
 
+/* IO$_READVBLK|IO$M_NOW (rd vms-a6b): take whatever has arrived, never wait.
+ * Returns SS$_ENDOFFILE with *got == 0 when nothing is queued (the IO$M_NOW
+ * convention of an empty mailbox read), SS$_NORMAL with *got == 0 on an
+ * orderly peer close, SS$_NORMAL with *got > 0 for data. A client that serves
+ * a terminal and the connection together waits on a timer event flag between
+ * these reads ($SETIMR + $WAITFR) -- it never poll()s a Linux fd. */
+static inline uint32_t tcpip_recv_now(struct tcpip_conn *c, void *buf,
+                                      uint32_t cap, uint32_t *got)
+{
+    struct _iosb iosb;
+    uint32_t st;
+
+    *got = 0;
+    memset(&iosb, 0, sizeof iosb);
+    st = sys$qiow(0, c->chan, IO$_READVBLK | IO$M_NOW, &iosb, NULL, 0,
+                  buf, cap, 0, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    if (st & 1)
+        *got = iosb.iosb$w_bcnt;
+    return st;
+}
+
 /* Read one raw byte off the stream (buffering as needed). Returns 1 on a byte
  * (in *out), 0 on EOF, -1 on error. */
 static inline int tcpip_getc(struct tcpip_conn *c, unsigned char *out)
@@ -312,81 +368,167 @@ static inline uint32_t tcpip_telnet_send(struct tcpip_conn *c,
     return SS$_NORMAL;
 }
 
-/* Read application data from the TELNET stream, handling inline IAC option
- * negotiation: every DO/WILL is refused (WONT/DONT) and every subnegotiation is
- * swallowed, so *out_len holds only the option-stripped application bytes the
- * server sent. Returns a VMS status; *out_len == 0 with success means EOF. */
-static inline uint32_t tcpip_telnet_recv(struct tcpip_conn *c, char *out,
-                                         uint32_t outsz, uint32_t *out_len)
+static inline void tcpip_telnet_init(struct tcpip_telnet_state *t)
+{
+    memset(t, 0, sizeof(*t));
+}
+
+/* 1 when the server echoes: the client is in character mode. */
+static inline int tcpip_telnet_remote_echo(const struct tcpip_telnet_state *t)
+{
+    return t->him[TN_OPT_ECHO] != 0;
+}
+
+/*
+ * Feed `inlen` received bytes. Application data goes to out[outsz] (*outlen),
+ * the negotiation replies owed to the server to reply[replysz] (*replylen).
+ * Returns the number of input bytes consumed: it stops early only when out or
+ * reply is full, so the caller drains them and feeds the rest. Never writes
+ * past either buffer.
+ */
+static inline uint32_t tcpip_telnet_filter(struct tcpip_telnet_state *t,
+                                           const unsigned char *in, uint32_t inlen,
+                                           unsigned char *out, uint32_t outsz,
+                                           uint32_t *outlen,
+                                           unsigned char *reply, uint32_t replysz,
+                                           uint32_t *replylen)
+{
+    uint32_t i = 0, o = 0, r = 0;
+
+    while (i < inlen) {
+        unsigned char b = in[i];
+
+        switch (t->st) {
+        case TNS_DATA:
+            if (b == TN_IAC) {
+                t->st = TNS_IAC;
+            } else {
+                if (o >= outsz)
+                    goto full;
+                out[o++] = b;
+            }
+            break;
+
+        case TNS_IAC:
+            if (b == TN_IAC) {                  /* escaped 0xFF data byte */
+                if (o >= outsz)
+                    goto full;
+                out[o++] = b;
+                t->st = TNS_DATA;
+            } else if (b == TN_WILL || b == TN_WONT || b == TN_DO || b == TN_DONT) {
+                t->cmd = b;
+                t->st = TNS_OPT;
+            } else if (b == TN_SB) {
+                t->st = TNS_SB;
+            } else {
+                t->st = TNS_DATA;               /* NOP, GA, DM, ...: nothing owed */
+            }
+            break;
+
+        case TNS_OPT: {
+            unsigned char ans = 0;
+            if (t->cmd == TN_WILL) {
+                if (b == TN_OPT_ECHO || b == TN_OPT_SGA) {
+                    if (!t->him[b])
+                        ans = TN_DO;
+                } else {
+                    ans = TN_DONT;
+                }
+            } else if (t->cmd == TN_WONT) {
+                if (t->him[b])
+                    ans = TN_DONT;
+            } else if (t->cmd == TN_DO) {
+                ans = TN_WONT;                  /* this client offers nothing */
+            }
+            /* TN_DONT: our options are always off -- nothing owed. */
+            if (ans) {
+                if (r + 3 > replysz)
+                    goto full;                  /* reply drained, then resumed */
+                reply[r++] = TN_IAC;
+                reply[r++] = ans;
+                reply[r++] = b;
+            }
+            if (t->cmd == TN_WILL && (b == TN_OPT_ECHO || b == TN_OPT_SGA))
+                t->him[b] = 1;
+            else if (t->cmd == TN_WONT)
+                t->him[b] = 0;
+            t->st = TNS_DATA;
+            break;
+        }
+
+        case TNS_SB:
+            if (b == TN_IAC)
+                t->st = TNS_SB_IAC;
+            break;
+
+        case TNS_SB_IAC:
+            /* IAC SE ends it; IAC IAC is a literal 0xFF inside it. */
+            t->st = (b == TN_SE) ? TNS_DATA : TNS_SB;
+            break;
+
+        default:
+            t->st = TNS_DATA;
+            break;
+        }
+        i++;
+    }
+full:
+    *outlen = o;
+    *replylen = r;
+    return i;
+}
+
+/* Read application data from the TELNET stream, answering the server's option
+ * negotiation inline (tcpip_telnet_filter's policy). *out_len holds only the
+ * application bytes the server sent. Returns a VMS status; *out_len == 0 with
+ * success means EOF. The connection's parser state lives in `t`, so a command
+ * split across reads is resumed on the next call. */
+static inline uint32_t tcpip_telnet_recv_state(struct tcpip_conn *c,
+                                               struct tcpip_telnet_state *t,
+                                               char *out, uint32_t outsz,
+                                               uint32_t *out_len)
 {
     uint32_t n = 0;
 
     *out_len = 0;
-    /* Read at least one buffer; process every byte currently available, then
-     * return what accumulated. A first refill of 0 is EOF. */
     for (;;) {
-        unsigned char ch;
-        int r;
+        unsigned char reply[96];
+        uint32_t got = 0, rl = 0, used;
 
         if (c->rpos >= c->rlen) {
+            uint32_t st;
             if (n > 0)
                 break;                  /* have data; don't block for more */
-            {
-                uint32_t got = 0;
-                uint32_t st = tcpip_fill(c, &got);
-                if (!(st & 1))
-                    return st;
-                if (got == 0)
-                    break;              /* EOF */
-            }
+            st = tcpip_fill(c, &got);
+            if (!(st & 1))
+                return st;
+            if (got == 0)
+                break;                  /* EOF */
         }
-        r = tcpip_getc(c, &ch);
-        if (r < 0)
-            return SS$_ABORT;
-        if (r == 0)
+        if (n >= outsz)
             break;
-
-        if (ch != TN_IAC) {
-            if (n < outsz)
-                out[n++] = (char)ch;
-            continue;
-        }
-
-        /* IAC: read the command byte. */
-        {
-            unsigned char cmd;
-            if (tcpip_getc(c, &cmd) <= 0)
-                break;
-            if (cmd == TN_IAC) {        /* escaped 0xFF = literal data byte */
-                if (n < outsz)
-                    out[n++] = (char)TN_IAC;
-            } else if (cmd == TN_DO || cmd == TN_WILL) {
-                unsigned char opt;
-                unsigned char reply[3];
-                if (tcpip_getc(c, &opt) <= 0)
-                    break;
-                reply[0] = TN_IAC;
-                reply[1] = (cmd == TN_DO) ? TN_WONT : TN_DONT;
-                reply[2] = opt;
-                tcpip_send_all(c, reply, 3);   /* refuse every option */
-            } else if (cmd == TN_DONT || cmd == TN_WONT) {
-                unsigned char opt;
-                (void)tcpip_getc(c, &opt);     /* acknowledge, no reply owed */
-            } else if (cmd == TN_SB) {
-                /* Swallow the subnegotiation up to IAC SE. */
-                unsigned char b, prev = 0;
-                while (tcpip_getc(c, &b) > 0) {
-                    if (prev == TN_IAC && b == TN_SE)
-                        break;
-                    prev = b;
-                }
-            }
-            /* other 2-byte commands (e.g. NOP, GA): command byte already
-             * consumed, nothing further owed. */
+        used = tcpip_telnet_filter(t, c->rbuf + c->rpos, c->rlen - c->rpos,
+                                   (unsigned char *)out + n, outsz - n, &got,
+                                   reply, (uint32_t)sizeof(reply), &rl);
+        c->rpos += used;
+        n += got;
+        if (rl) {
+            uint32_t st = tcpip_send_all(c, reply, rl);
+            if (!(st & 1))
+                return st;
         }
     }
     *out_len = n;
     return SS$_NORMAL;
+}
+
+/* The connection's own parser: tcpip_connect zeroes it (TNS_DATA, no options
+ * on), and it persists across calls, so negotiation split across reads is never
+ * lost. */
+static inline uint32_t tcpip_telnet_recv(struct tcpip_conn *c, char *out,
+                                         uint32_t outsz, uint32_t *out_len)
+{
+    return tcpip_telnet_recv_state(c, &c->tn, out, outsz, out_len);
 }
 
 /* ---- FTP (RFC 959), passive mode ---------------------------------------- */
@@ -461,6 +603,8 @@ static inline int tcpip_ftp_parse_pasv(const char *line,
         int digits = 0;
         while (*p >= '0' && *p <= '9') {
             n = n * 10u + (unsigned int)(*p - '0');
+            if (n > 255u)
+                return 0;               /* each field is one byte (RFC 959) */
             p++;
             digits++;
         }
@@ -473,6 +617,8 @@ static inline int tcpip_ftp_parse_pasv(const char *line,
             p++;
         }
     }
+    if (v[4] == 0 && v[5] == 0)
+        return 0;                       /* port 0 is no data port */
     b[0] = (unsigned char)v[0];
     b[1] = (unsigned char)v[1];
     b[2] = (unsigned char)v[2];
@@ -563,21 +709,38 @@ static inline uint32_t tcpip_ftp_open_data(struct tcpip_conn *ctl,
     return SS$_NORMAL;
 }
 
-/* RETR remote_file into out[outsz]; *out_len = bytes received. Full FTP client:
- * connect, log in, PASV, RETR, drain the data channel, confirm 226. */
-static inline uint32_t tcpip_ftp_get(uint32_t server_addr_be, uint16_t server_port,
-                                     const char *user, const char *pass,
-                                     const char *remote_file,
-                                     unsigned char *out, uint32_t outsz,
-                                     uint32_t *out_len)
+/* A transfer's local side: a SINK takes each block a RETR delivers, a SOURCE
+ * fills each block a STOR sends. Both return a VMS status; a source sets *got to
+ * 0 at its end. This is what lets the DCL verb stream a file of any size through
+ * RMS instead of holding it in memory. */
+typedef uint32_t (*tcpip_ftp_sink_fn)(void *arg, const unsigned char *buf,
+                                      uint32_t len);
+typedef uint32_t (*tcpip_ftp_source_fn)(void *arg, unsigned char *buf,
+                                        uint32_t cap, uint32_t *got);
+
+/* The server's verdict on a finished transfer: "226 Transfer complete" (or the
+ * 250 some servers send). Any other reply -- 426 aborted, 451 local error --
+ * means the bytes moved are not the whole file. */
+static inline int tcpip_ftp_xfer_ok(int code)
+{
+    return code == 226 || code == 250;
+}
+
+/* RETR remote_file, handing each received block to sink. *total = bytes
+ * received. Full FTP client: connect, log in, PASV, RETR, drain the data
+ * channel to EOF, then require the server's 226. */
+static inline uint32_t tcpip_ftp_retr(uint32_t server_addr_be, uint16_t server_port,
+                                      const char *user, const char *pass,
+                                      const char *remote_file,
+                                      tcpip_ftp_sink_fn sink, void *arg,
+                                      uint32_t *total)
 {
     struct tcpip_conn ctl, data;
     char line[512];
     int code = 0, xfer = 0;
-    uint32_t total = 0;
     uint32_t st;
 
-    *out_len = 0;
+    *total = 0;
 
     st = tcpip_connect(&ctl, server_addr_be, server_port);
     if (!(st & 1))
@@ -595,40 +758,39 @@ static inline uint32_t tcpip_ftp_get(uint32_t server_addr_be, uint16_t server_po
         if (!(st & 1)) { tcpip_close(&data); tcpip_close(&ctl); return st; }
         if (got == 0)
             break;
-        {
-            uint32_t take = got;
-            if (total + take > outsz)
-                take = outsz - total;
-            if (take) {
-                memcpy(out + total, data.rbuf, take);
-                total += take;          /* NEGCTL tcpip-ftp-get-length-dropped */
-            }
-        }
-        if (total >= outsz)
-            break;
+        st = sink(arg, data.rbuf, got);
+        if (!(st & 1)) { tcpip_close(&data); tcpip_close(&ctl); return st; }
+        *total += got;
     }
     tcpip_close(&data);
 
     st = tcpip_ftp_reply(&ctl, &code, line, sizeof(line));   /* 226 complete */
-    tcpip_ftp_send_cmd(&ctl, "QUIT", NULL);
-    tcpip_ftp_reply(&ctl, &code, line, sizeof(line));        /* 221 bye */
-    tcpip_close(&ctl);
-
-    *out_len = total;
+    {
+        int completed = (st & 1) && tcpip_ftp_xfer_ok(code);
+        tcpip_ftp_send_cmd(&ctl, "QUIT", NULL);
+        tcpip_ftp_reply(&ctl, &code, line, sizeof(line));    /* 221 bye */
+        tcpip_close(&ctl);
+        if (!completed)
+            return SS$_ABORT;
+    }
     return SS$_NORMAL;
 }
 
-/* STOR data[data_len] to remote_file. Full FTP client: connect, log in, PASV,
- * STOR, push the data, close the data channel, confirm 226. */
-static inline uint32_t tcpip_ftp_put(uint32_t server_addr_be, uint16_t server_port,
-                                     const char *user, const char *pass,
-                                     const char *remote_file,
-                                     const unsigned char *data, uint32_t data_len)
+/* STOR remote_file, sending what source supplies until it reports its end. Full
+ * FTP client: connect, log in, PASV, STOR, push the data, close the data
+ * channel (the EOF that ends the file), then require the server's 226. */
+static inline uint32_t tcpip_ftp_stor(uint32_t server_addr_be, uint16_t server_port,
+                                      const char *user, const char *pass,
+                                      const char *remote_file,
+                                      tcpip_ftp_source_fn source, void *arg,
+                                      uint32_t *total)
 {
     struct tcpip_conn ctl, dc;
     char line[512];
     int code = 0, xfer = 0;
     uint32_t st;
+
+    *total = 0;
 
     st = tcpip_connect(&ctl, server_addr_be, server_port);
     if (!(st & 1))
@@ -639,7 +801,16 @@ static inline uint32_t tcpip_ftp_put(uint32_t server_addr_be, uint16_t server_po
     st = tcpip_ftp_open_data(&ctl, "STOR", remote_file, &dc, &xfer);
     if (!(st & 1)) { tcpip_close(&ctl); return st; }
 
-    st = tcpip_send_all(&dc, data, data_len);
+    for (;;) {
+        uint32_t got = 0;
+        st = source(arg, dc.rbuf, (uint32_t)sizeof(dc.rbuf), &got);
+        if (!(st & 1) || got == 0)
+            break;
+        st = tcpip_send_all(&dc, dc.rbuf, got);
+        if (!(st & 1))
+            break;
+        *total += got;
+    }
     tcpip_close(&dc);                    /* EOF tells the server the file ended */
     if (!(st & 1)) { tcpip_close(&ctl); return st; }
 
@@ -648,7 +819,7 @@ static inline uint32_t tcpip_ftp_put(uint32_t server_addr_be, uint16_t server_po
      * `code` -- otherwise the 221 reply clobbers the 226 we just confirmed and
      * the completion check below always fails (the transfer itself succeeded). */
     {
-        int completed = (st & 1) && code == 226;
+        int completed = (st & 1) && tcpip_ftp_xfer_ok(code);
         tcpip_ftp_send_cmd(&ctl, "QUIT", NULL);
         tcpip_ftp_reply(&ctl, &code, line, sizeof(line));    /* 221 bye */
         tcpip_close(&ctl);
@@ -656,6 +827,81 @@ static inline uint32_t tcpip_ftp_put(uint32_t server_addr_be, uint16_t server_po
             return SS$_ABORT;
     }
     return SS$_NORMAL;
+}
+
+/* ---- the in-memory forms (a caller-supplied buffer) ---------------------- */
+
+struct tcpip_ftp_membuf {
+    unsigned char       *out;           /* RETR: destination */
+    const unsigned char *in;            /* STOR: source */
+    uint32_t             cap;           /* bytes available */
+    uint32_t             len;           /* RETR: bytes stored / STOR: consumed */
+};
+
+static inline uint32_t tcpip_ftp_mem_sink(void *arg, const unsigned char *buf,
+                                          uint32_t len)
+{
+    struct tcpip_ftp_membuf *m = (struct tcpip_ftp_membuf *)arg;
+    uint32_t total = m->len;
+    uint32_t take = len;
+
+    /* A file larger than the buffer is an error, never a silent truncation. */
+    if (take > m->cap - total)
+        return SS$_DATAOVERUN;
+    memcpy(m->out + total, buf, take);
+    total += take;          /* NEGCTL tcpip-ftp-get-length-dropped */
+    m->len = total;
+    return SS$_NORMAL;
+}
+
+static inline uint32_t tcpip_ftp_mem_source(void *arg, unsigned char *buf,
+                                             uint32_t cap, uint32_t *got)
+{
+    struct tcpip_ftp_membuf *m = (struct tcpip_ftp_membuf *)arg;
+    uint32_t n = m->cap - m->len;
+
+    if (n > cap)
+        n = cap;
+    memcpy(buf, m->in + m->len, n);
+    m->len += n;
+    *got = n;
+    return SS$_NORMAL;
+}
+
+/* RETR remote_file into out[outsz]; *out_len = bytes received. A file larger
+ * than outsz fails SS$_DATAOVERUN. */
+static inline uint32_t tcpip_ftp_get(uint32_t server_addr_be, uint16_t server_port,
+                                     const char *user, const char *pass,
+                                     const char *remote_file,
+                                     unsigned char *out, uint32_t outsz,
+                                     uint32_t *out_len)
+{
+    struct tcpip_ftp_membuf m;
+    uint32_t total = 0, st;
+
+    memset(&m, 0, sizeof(m));
+    m.out = out;
+    m.cap = outsz;
+    st = tcpip_ftp_retr(server_addr_be, server_port, user, pass, remote_file,
+                        tcpip_ftp_mem_sink, &m, &total);
+    *out_len = m.len;
+    return st;
+}
+
+/* STOR data[data_len] to remote_file. */
+static inline uint32_t tcpip_ftp_put(uint32_t server_addr_be, uint16_t server_port,
+                                     const char *user, const char *pass,
+                                     const char *remote_file,
+                                     const unsigned char *data, uint32_t data_len)
+{
+    struct tcpip_ftp_membuf m;
+    uint32_t total = 0;
+
+    memset(&m, 0, sizeof(m));
+    m.in = data;
+    m.cap = data_len;
+    return tcpip_ftp_stor(server_addr_be, server_port, user, pass, remote_file,
+                          tcpip_ftp_mem_source, &m, &total);
 }
 
 #endif /* _OVMX_TCPIP_CLIENT_H */

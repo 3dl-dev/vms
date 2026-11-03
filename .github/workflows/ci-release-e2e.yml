@@ -1212,11 +1212,17 @@ jobs:
   # PR is green-by-SHA); schedule/dispatch -> runs (main-side reds surface on the
   # nightly, never a PR-only blind spot). Full-distro boot is too heavy for every
   # unrelated main push, so it is path-filtered, NOT run on every != pull_request.
+  # MERGE QUEUE (rd vms-d0c4): the queue runs it when the tcpip_net tier
+  # (tools/ci/ci_tiers.py) matches -- the BGn: driver, the TCP/IP engines, the
+  # DCL verbs, the test overlay -- so a TCP/IP change is proven on the exact tree
+  # that lands. The job also carries the EXTERNAL-peer proof: TELNET and FTP over
+  # the NIC to real servers in a sibling container (run_tcpip_external_boot_e2e.sh).
   tcpip-daytime-boot-e2e:
     name: TCP/IP daytime cold-boot e2e — aux server launches DAYTIME on a booted distro (vms-21b)
     needs: changes
     if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-            || (github.event_name == 'pull_request' && needs.changes.outputs.tcpip == 'true'))
+            || (github.event_name == 'pull_request' && needs.changes.outputs.tcpip == 'true')
+            || (github.event_name == 'merge_group' && needs.changes.outputs.tcpip_net == 'true'))
             && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     steps:
@@ -1267,6 +1273,18 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: tcpip_reboot_e2e SKIPPED in CI — this gate must actually double-boot + assert reapply/no-growth, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: External-peer proof — SET INTERFACE/ROUTE, TELNET and FTP GET/PUT to real servers outside the VM (vms-d0c4)
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_DAYTIME_IMAGE=ovmx-boot-tcpip:latest \
+            tests/qemu/run_tcpip_external_boot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: tcpip_external_boot_e2e SKIPPED in CI — this gate must actually boot and reach the external servers, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

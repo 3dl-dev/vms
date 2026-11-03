@@ -3,32 +3,28 @@
 
 defect_meta() {
         case "$_f" in
-        facility)     echo "process creation handshake in the PRODUCT (\$CREPRC's report pipe, src/libvms/syssvc/sys_process.c)";;
-        targets)      echo "libvms/syssvc/sys_process.c";;
+        facility)     echo "process creation handshake in the PRODUCT (\$CREPRC's creation record, VMS_IOCTL_CREPRC_SYNC through src/libvmssys/vms_kif.c, rd vms-416d)";;
+        targets)      echo "libvmssys/vms_kif.c";;
         suites_red)   echo "test_syssvc_procnam";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
         why)          cat <<'EOF'
-$CREPRC's handshake read goes back to a bare read(2), so a signal delivered to
-the CALLER through a handler without SA_RESTART returns EINTR and the service
-misreads the child (since rd vms-c43 the first such read is the child's PCB
-request: the request is lost, no PCB is made, and the child reports failure). This is the vms-8019 round-4
-defect exactly, and it is not a theoretical one: DCL installs its interactive
-SIGINT/SIGQUIT handlers with sa_flags = 0 (src/vmsdcl/dcl_main.c) and DCL is
-what calls $CREPRC, so a Ctrl-C in the handshake window is the production
-trigger.
-THE DEFECT HAS TWO ENDINGS AND THE SCHEDULER PICKS ONE. Either the caller
-closes the pipe's read end first, so the child's report takes SIGPIPE, the
-child dies, and $CREPRC answers OVMX$_PRCLOST ("nothing was ever entered in
-the table") about a process that WAS created and registered; or the child
-reports first, activates its image, and $CREPRC's reap blocks for the lifetime
-of that image, so the call never comes back at all. BOTH were measured from
-this same mutation on this same commit -- the second on an aarch64 host under
-TCG, the FIRST on the x86_64 CI runner. They are one property (the caller's
-signal decided what $CREPRC said about the child) seen through two channels,
-so the suite asserts them as ONE assertion and prints which ending it saw;
-naming them separately is what made an earlier revision of this control flaky.
+$CREPRC's handshake wait is no longer re-entered on a signal: the creation
+record's waits (VMS_IOCTL_CREPRC_SYNC, rd vms-416d -- formerly a read on a
+pipe) go through kif_call instead of kif_wait_call, so a signal delivered to
+the CALLER through a handler without SA_RESTART ends the creator's ACCEPT wait
+with EINTR, and the service misreads the child as never having arrived: it
+closes the record, the held child is released with SS$_ABORT and exits, and
+$CREPRC answers OVMX$_PRCLOST about a process it did fork. This is the
+vms-8019 round-4 defect exactly, and it is not a theoretical one: DCL installs
+its interactive SIGINT/SIGQUIT handlers with sa_flags = 0
+(src/vmsdcl/dcl_main.c) and DCL is what calls $CREPRC, so a Ctrl-C in the
+handshake window is the production trigger.
+Under the pipe handshake this defect had two endings (an OVMX$_PRCLOST, or a
+reap that blocked for the image's life); the suite still asserts them as ONE
+assertion -- the caller's signal decided what $CREPRC said about the child --
+and prints which ending it saw.
 Nothing else in the file is touched: with no signal delivered the mutated code
 and the correct code are byte-for-byte equivalent in behaviour, which is why
 the ONLY assertion it reddens is the one that arranges the signal.
@@ -45,14 +41,10 @@ EOF
 }
 
 defect_apply() {
-        # The ONE edit, and it is the code as it actually shipped for one
-        # round: the creation handshake's read is a bare read(2) again. It
-        # changes nothing except what happens when a signal is delivered to
-        # the CALLER while it waits -- which is the whole property.
-        # rd vms-c43: the handshake's FIRST blocking read is now the creator
-        # waiting for the child's PCB request (pcbreq) -- where the signal
-        # lands. A bare read() there loses the request on EINTR, so no PCB is
-        # made and the child reports failure for a process the caller did fork.
-        sed -i 's|        if (creprc_read_all(pcbreq\[0\], \&cpid, sizeof(cpid)) == (ssize_t)sizeof(cpid)) {|        if (read(pcbreq[0], \&cpid, sizeof(cpid)) == (ssize_t)sizeof(cpid)) { /* NEGCTL creprc-handshake-eintr */|' "$_file"
+        # The ONE edit: the creation record's op is issued through kif_call,
+        # not kif_wait_call -- a signalled wait is no longer re-entered. It
+        # changes nothing except what happens when a signal is delivered to the
+        # CALLER while it waits, which is the whole property.
+        sed -i '/NEGCTL-ANCHORED (creprc-handshake-eintr)/{n;s|^    KIF_WAIT_CALL(VMS_IOCTL_CREPRC_SYNC, \&args);$|    KIF_CALL(VMS_IOCTL_CREPRC_SYNC, \&args); /* NEGCTL creprc-handshake-eintr */|}' "$_file"
     :
 }

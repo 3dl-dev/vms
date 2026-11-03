@@ -56,3 +56,20 @@ endforeach()
 add_test(NAME tcpip_resolve COMMAND test_tcpip_resolve)
 add_test(NAME tcpip_resolve_fuzz COMMAND test_tcpip_resolve_fuzz)
 set_tests_properties(tcpip_resolve tcpip_resolve_fuzz PROPERTIES TIMEOUT 120)
+
+# rd vms-d0c4: the TELNET/FTP client's peer-receive parsers (tcpip_client.h:
+# tcpip_telnet_filter, tcpip_ftp_parse_pasv) -- bytes a server outside the VM
+# controls. Same bar and same sanitizer wiring as the SERVICE.DAT fuzz above.
+add_executable(test_tcpip_client_fuzz test_tcpip_client_fuzz.c)
+target_include_directories(test_tcpip_client_fuzz PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/services
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+    ${CMAKE_SOURCE_DIR}/src/libvmssys)
+# -Wno-comment: starlet.h pulls opcdef.h, whose comment nests a "/*".
+target_compile_options(test_tcpip_client_fuzz PRIVATE -Werror -Wno-comment)
+if(OVMX_TCPIP_FUZZ_SANITIZE_OK)
+    target_compile_options(test_tcpip_client_fuzz PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_tcpip_client_fuzz PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME tcpip_client_fuzz COMMAND test_tcpip_client_fuzz)
+set_tests_properties(tcpip_client_fuzz PROPERTIES TIMEOUT 120)

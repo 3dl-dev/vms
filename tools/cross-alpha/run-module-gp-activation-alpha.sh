@@ -1041,6 +1041,23 @@ assert_crtlfd() {
     || { echo "  assert_crtlfd: the F\$TIME stamps or the image's time() are missing" >&2; return 1; }
   [ "$(printf '%s\n' "$_d1" "$_u" "$_d2" | LC_ALL=C sort | tr '\n' '|')" = "$_d1|$_u|$_d2|" ] \
     || { echo "  assert_crtlfd: time() $_u is not the system time (F\$TIME $_d1 .. $_d2)" >&2; return 1; }
+  # vms-a66e: the C RTL's terminal and pipe descriptors are VMS channels. stdout
+  # is a channel to the console terminal (getname names OPA0:); pipe() is a
+  # mailbox that SHOW DEVICE, run by system() while the pipe is open, finds in
+  # the executive's device table; one message per write, end of file on close;
+  # /proc is not a C RTL name.
+  local _dv _mb _sd
+  _dv=$(tr -d '\r' < "$log")
+  printf '%s\n' "$_dv" | grep >/dev/null -aE "^CFDDEV: stdout=_?OPA0: isatty=1$" \
+    || { echo "  assert_crtlfd: stdout is not a channel to the terminal (getname(1) is not OPA0:)" >&2; return 1; }
+  _mb=$(printf '%s\n' "$_dv" | grep -aoE "^CFDDEV: pipe=_?MBA[0-9]+: messages=abc\|defg$" | grep -oE "MBA[0-9]+:" | head -1)
+  [ -n "$_mb" ] || { echo "  assert_crtlfd: pipe() is not a mailbox carrying one message per write" >&2; return 1; }
+  _sd=$(printf '%s\n' "$_dv" | awk '/^CFDDEV: === SHOW DEVICE /{f=1;next} /^CFDDEV: === END SHOW DEVICE/{f=0} f{print}')
+  printf '%s\n' "$_sd" | grep >/dev/null -a "NOSUCHDEV" && { echo "  assert_crtlfd: SHOW DEVICE does not know the pipe's mailbox" >&2; return 1; }
+  printf '%s\n' "$_sd" | grep >/dev/null -aE "(^|[ _])$_mb" \
+    || { echo "  assert_crtlfd: SHOW DEVICE did not list the pipe's mailbox $_mb" >&2; return 1; }
+  printf '%s\n' "$_dv" | grep >/dev/null -aE "^CFDDEV: eof=yes proc=ENOENT$" \
+    || { echo "  assert_crtlfd: pipe end-of-file or the /proc refusal is wrong" >&2; return 1; }
   return 0
 }
 
@@ -1269,14 +1286,15 @@ run_boot_a() {
       # OVMX_IMGACT_SEAM=1: surface the EXECUTIVE-recorded completion $STATUS per
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
-      # i8042.noaux: the clipper machine has a PS/2 AUX port, and the kernel probes
-      # the (absent) mouse asynchronously -- under ignore_loglevel its "input:
-      # ImExPS/2 ..." printk lands on the serial console at a random moment, and once
-      # (PR #2003, crtl-sig-gate) between an image record and its terminator, which
-      # fused the two into one line the ^...$ asserts could not match. A serial-
-      # console OVMX node has no mouse; do not probe one.
+      # i8042.noaux i8042.nokbd: the clipper machine has PS/2 ports OVMX never
+      # uses (the console is ttyS0). Probed, the kernel announces the mouse
+      # LATE, while startup images run, and with ignore_loglevel that line lands
+      # on the console in the middle of the output of an image: a terminal record
+      # (implied carriage control, LF before / CR after) is open until the LF
+      # of the next record, so the kernel line joined it and an anchored gate grep
+      # missed a correct line (crtl-sig-gate, 2026-11-03). Silenced at source.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m '"${BOOT_MEM_MB:-1024}"' -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 i8042.noaux OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 i8042.noaux i8042.nokbd OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot '"${BOOT_QEMU_EXTRA:-}"' <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!
@@ -3368,12 +3386,26 @@ EOF
       echo "CRTLTIME-DCL: 2026-11-02 17:40:13.52"
       echo "CRTLTIME: utc=2026-11-02 17:40:14 zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026"
       echo "CRTLTIME: utc=2026-11-02 17:40:15 zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026"
+      printf 'CFDDEV: stdout=_OPA0: isatty=1\r\n'
+      echo "CFDDEV: pipe=_MBA7: messages=abc|defg"
+      echo "CFDDEV: === SHOW DEVICE _MBA7: ==="
+      echo "Device                  Device           Error"
+      echo " Name                   Status           Count"
+      echo "MBA7:                   Online               0"
+      echo "CFDDEV: === END SHOW DEVICE (1) ==="
+      echo "CFDDEV: eof=yes proc=ENOENT"
     } > "$_st/pass.log"
     # vms-593 negative controls: the differential is not followed (musl's UTC), the
     # TZ variable is read, and a time() that is not the system time.
     sed 's/zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026/zone=UTC +0000 jan=2026-01-15 12:00 UTC +0000 ctime=Thu Jan 15 12:00:00 2026/' "$_st/pass.log" > "$_st/tdfignored.log"
     sed 's/zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026/zone=XXX +0700 jan=2026-01-15 19:00 XXX +0700 ctime=Thu Jan 15 19:00:00 2026/' "$_st/pass.log" > "$_st/tzread.log"
     sed 's/CRTLTIME: utc=2026-11-02 17:40:12/CRTLTIME: utc=2026-11-02 18:40:12/' "$_st/pass.log" > "$_st/clockoff.log"
+    # vms-a66e negative controls: the raw kernel path (stdout not a channel, a
+    # kernel pipe, /proc opened), and a mailbox SHOW DEVICE does not have.
+    sed 's/CFDDEV: stdout=_OPA0: isatty=1/CFDDEV: stdout=<none> isatty=1/' "$_st/pass.log" > "$_st/ttkernel.log"
+    sed 's/CFDDEV: pipe=_MBA7: messages=abc|defg/CFDDEV: pipe=<none> messages=WRONG/' "$_st/pass.log" > "$_st/pipekernel.log"
+    sed 's/MBA7:                   Online               0/%SYSTEM-W-NOSUCHDEV, no such device available/' "$_st/pass.log" > "$_st/nombx.log"
+    sed 's/proc=ENOENT/proc=OPENED/' "$_st/pass.log" > "$_st/procopen.log"
     # vms-599 negative controls: musl's exit (exit(1) a POSIX failure, nothing recorded),
     # a __posix_exit that does not encode, and an exit that skips the stdio flush
     sed 's/CRTLFD-EXIT: exit 1 STATUS=%X00000001/CRTLFD-EXIT: exit 1 STATUS=%X0000002C/' "$_st/pass.log" > "$_st/muslexit.log"
@@ -3388,7 +3420,7 @@ EOF
     grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
     sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
     sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
-    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1" "tdfignored:1" "tzread:1" "clockoff:1"; do
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1" "tdfignored:1" "tzread:1" "clockoff:1" "ttkernel:1" "pipekernel:1" "nombx:1" "procopen:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -3400,7 +3432,7 @@ EOF
     assemble_boot_image
     log "step 3: BOOT A -- the C RTL file layer over RMS on the REAL executive"
     run_boot_a
-    grep -aE "CFD:|CFDX:|CRTLFD-EXIT:|CRTLTIME|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    grep -aE "CFD:|CFDX:|CFDDEV:|MBA[0-9]+:|CRTLFD-EXIT:|CRTLFD-DEV:|CRTLTIME|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-|%SYSTEM-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_crtlfd "$WORK/modgpA.log"; then
       echo ""
       echo "PASS: a 32-bit DEC C program's stdio and descriptor calls ran over RMS on the"

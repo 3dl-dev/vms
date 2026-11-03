@@ -92,4 +92,10 @@ $ CFD time
 $ DEASSIGN SYS$TIMEZONE_DIFFERENTIAL
 $ DEASSIGN SYS$TIMEZONE_NAME
 $!
+$! vms-a66e: stdout on the terminal is a channel to it; pipe() is a mailbox the
+$! executive's device table carries (SHOW DEVICE, run from inside the image while
+$! the pipe is open); /proc is not a C RTL name.
+$ CFD dev
+$ WRITE SYS$OUTPUT "CRTLFD-DEV: STATUS=''$STATUS'"
+$!
 $ EXIT

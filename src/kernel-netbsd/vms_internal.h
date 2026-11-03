@@ -1168,6 +1168,8 @@ long vms_ioctl_mbx_chkacc(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_proc_access_identity(const struct vms_proc *caller, uint32_t vms_pid,
                                   uint32_t *uic, uint64_t *privs);
 int  vms_mbx_dassgn(struct vms_proc *proc, uint32_t chan);
+/* $GETDVI of a mailbox unit (rd vms-a66e; vms_mbx.c) */
+uint32_t vms_mbx_devinfo(const char *devnam, struct vms_devinfo *info);
 void vms_mbx_release_all(struct vms_proc *proc);
 
 /* ----------------------------------------------------------------
@@ -1615,6 +1617,10 @@ long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg);
+/* rd vms-416d: $CREPRC's creation record (proc NULL for ARRIVE/HOLD) */
+long vms_ioctl_creprc_sync(struct vms_proc *proc, unsigned long arg);
+void vms_creprc_sync_init(void);
+void vms_creprc_sync_cleanup(void);
 /* Substrate half of creator-driven creation (rd vms-c43): vms_module.c (Linux),
  * vms_netbsd.c (NetBSD). */
 uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,

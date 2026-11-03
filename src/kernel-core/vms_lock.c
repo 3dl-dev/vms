@@ -3676,8 +3676,13 @@ static void enq_proxy_request(struct vms_proc *proc, struct vms_enq_args *a,
          * request still outstanding AT THE MASTER, and the caller returns
          * -ERESTARTSYS so userspace re-enters it (lab run ci6-evac-11). */
         st = (uint32_t)enq_wait_sync(res, lock, intr);
-        if (intr != NULL && *intr)
+        if (intr != NULL && *intr) {
+            /* The abandoned request's id, for an IN-EXECUTIVE caller that
+             * must $DEQ it before it lets the signal through (rd vms-b6e).
+             * The ioctl path never copies it out. */
+            a->lkid = lock->lkid;
             return;
+        }
         if (st != SS__NORMAL) {
             dlm_proxy_unwind(proc, res, lock);
             a->lkid = 0;
@@ -6698,6 +6703,8 @@ static void enq_resource_identity(struct vms_proc *proc,
  * enq_resource_identity(). vms_enq_core_ex() below is the NULL case, which is
  * what the ioctl and the cross-node arm both reach.
  */
+static long vms_deq_core(struct vms_proc *proc, struct vms_deq_args *io);
+
 static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
                                struct dlm_xnode_enq_out *xn,
                                const struct dlm_enq_ident *id)
@@ -6837,8 +6844,10 @@ static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
 
             enq_proxy_request(proc, &args, res, dst_csid, &pfacts,
                               &wait_intr);
-            if (wait_intr)
+            if (wait_intr) {
+                io->lkid = args.lkid;  /* still outstanding at the master */
                 return -ERESTARTSYS;   /* a signal, not an answer */
+            }
             goto out;      /* enq_proxy_request owns `res` from here */
         }
         if (route == DLM_ROUTE_REMOTE) {
@@ -7103,8 +7112,33 @@ static long vms_enq_core_ident(struct vms_proc *proc, struct vms_enq_args *io,
                      * replaces the old userspace GETLKI poll loop.
                      */
                     wait_st = enq_wait_sync(res, lock, &wait_intr);
-                    if (wait_intr)
+                    if (wait_intr) {
+                        /*
+                         * THE ABANDONED REQUEST GOES (rd vms-b6e). The caller
+                         * re-enters with the SAME arguments -- libvmssys'
+                         * KIF_WAIT_CALL re-issues this $ENQ, an in-executive
+                         * caller calls back in -- and every re-entry is a
+                         * NEW request. Left queued, the old one is an orphan
+                         * nobody holds the id of: granted later, it is a lock
+                         * nobody ever releases. That is what wedged a volume
+                         * (live VAX bench vms-0a7 S3): NETACP's timer signals
+                         * interrupted its F11B$s wait over and over, each
+                         * re-entry queued another EX, the first was granted
+                         * when FAL's write ended, and every later writer on
+                         * the volume -- FAL, LOGINOUT, NETACP itself --
+                         * waited behind it for ever. $DEQ it here, so the
+                         * re-entry is the only request; it may still be
+                         * granted in the window since the wait ended, and a
+                         * $DEQ of a granted lock releases it the same way.
+                         */
+                        struct vms_deq_args d;
+
+                        memset(&d, 0, sizeof(d));
+                        d.lkid = lock->lkid;
+                        (void)vms_deq_core(proc, &d);
+                        io->lkid = 0;
                         return -ERESTARTSYS;  /* a signal, not an answer */
+                    }
                     if (wait_st == SS__DEADLOCK) {
                         /* Never granted: unwind the fresh request. */
                         exec_lock(&proc->lock_list_lock);
@@ -7392,27 +7426,46 @@ static long acp_f11b_enq(struct vms_proc *proc, struct vms_enq_args *a)
 }
 
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
-                             uint32_t *lkid_out)
+                             uint32_t *lkid_out, int *intr_out)
 {
     struct vms_enq_args a;
 
     if (lkid_out)
         *lkid_out = 0;
+    if (intr_out)
+        *intr_out = 0;
     memset(&a, 0, sizeof(a));
     a.lkmode = LCK_K_EXMODE;
     a.flags  = LCK_M_SYNC;      /* $ENQW: block in-kernel until granted */
     strscpy(a.resnam, resnam, sizeof(a.resnam));
 
     /*
-     * An INTERRUPTED wait (rd vms-f87) is not a status: this caller is an
-     * in-kernel ACP path with no userspace ioctl to restart, so it RE-ENTERS
-     * the wait itself -- the same answer kif_wait_call gives a user service,
-     * and the faithful one (on VMS an AST interrupts a wait, runs, and the wait
-     * resumes). Bounded only by the wait itself completing, exactly like the
-     * uninterrupted case.
+     * AN INTERRUPTED WAIT ENDS THE ACP CALL (rd vms-b6e; was re-entered here,
+     * rd vms-f87). This used to loop on the $ENQ until it came back granted.
+     * But a signal stays pending until the caller returns to user mode, and
+     * the wait does not sleep while one is pending: every pass came straight
+     * back, and every pass was a NEW EX request queued behind the last. On
+     * the live VAX bench (vms-0a7 S3) NETACP -- whose $SETIMR fires every
+     * 5 ms -- did exactly that whenever FAL or LOGINOUT held the volume lock:
+     * it spun in the kernel, and the first of its orphaned requests was
+     * granted when the holder finished and was never released, so every
+     * later ACP write on the volume (FAL's, LOGINOUT's, NETACP.LOG's) waited
+     * for ever.
+     *
+     * The request the $ENQ abandoned is gone by the time it returns (a local
+     * one is $DEQd in vms_enq_core_ident; a proxy's id comes back and is
+     * $DEQd here), *intr_out says so, and the ACP service returns
+     * -ERESTARTSYS before it has changed anything: the signal is delivered,
+     * its AST runs, and the I/O is re-issued -- what VMS does when an AST
+     * interrupts a wait. No caller can observe the interruption.
      */
-    while (acp_f11b_enq(proc, &a) != 0)
-        ;   /* ACP volume lock: local, full detection */
+    if (acp_f11b_enq(proc, &a) != 0) {
+        if (a.lkid != 0u)
+            (void)vms_lock_acp_vol_release(proc, a.lkid);
+        if (intr_out)
+            *intr_out = 1;
+        return SS__NORMAL;     /* unused: the caller writes no status */
+    }
     /* Whatever lock the $ENQ created is handed back, whatever status it reported,
      * so the caller's single exit releases it: a granted $ENQ may report SS$_SYNCH
      * as well as SS$_NORMAL, and a lock id kept only on SS$_NORMAL would leak the

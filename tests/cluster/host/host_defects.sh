@@ -613,6 +613,10 @@ EOF
 *** writing NO status: $ENQW has no 'your wait was interrupted' condition value, so userspace re-enters the wait and no caller can observe this ***
   and no status written
 *** and the lock is STILL HELD AT ITS OLD MODE: a failed convert never loses the lock (VMS semantics) ***
+*** the interrupted volume-lock wait COMES BACK: it neither spins nor re-queues in the executive ***
+  and it says so, so the ACP service returns -ERESTARTSYS
+  handing back no lock
+*** the waiter holds NO lock afterwards: its abandoned request was $DEQd, not left queued ***
 EOF
                       ;;
         esac;;

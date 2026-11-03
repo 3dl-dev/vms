@@ -1511,7 +1511,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
  * EX-mode $ENQ on a per-volume resource, enqueued directly in the caller's
  * ioctl context (no /dev/vms round-trip). Release with a zero lkid is a no-op. */
 uint32_t vms_lock_acp_vol_ex(struct vms_proc *proc, const char *resnam,
-                             uint32_t *lkid_out);
+                             uint32_t *lkid_out, int *intr_out);
 uint32_t vms_lock_acp_vol_release(struct vms_proc *proc, uint32_t lkid);
 /*
  * THE RMS FILE-ACCESS LOCK, taken by the EXECUTIVE on RMS's behalf (rd

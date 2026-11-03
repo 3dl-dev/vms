@@ -3408,7 +3408,15 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         exec_unlock(&proc->chan_lock);
     }
     if (wr_resnam[0]) {
-        status = vms_lock_acp_vol_ex(proc, wr_resnam, &wr_lkid);   /* vms-233: EX $ENQ, per-volume sync */
+        int wr_intr = 0;
+
+        status = vms_lock_acp_vol_ex(proc, wr_resnam, &wr_lkid, &wr_intr);   /* vms-233: EX $ENQ, per-volume sync */
+        if (wr_intr) {
+            /* A signal ended the wait (rd vms-b6e). Nothing has been written
+             * yet, so the I/O is simply re-issued once it is delivered. */
+            exec_free(s);
+            return -ERESTARTSYS;
+        }
         if (status != SS__NORMAL) {
             args.status = status;           /* SS$_UNSUPPORTED (remote master) etc. */
             exec_free(s);
@@ -4598,7 +4606,16 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
         {
             char fop_resnam[32];
             acp_vol_resnam(vol, fop_resnam, sizeof(fop_resnam));
-            status = vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid);   /* vms-233: EX $ENQ, per-volume sync */
+            int fop_intr = 0;
+
+            status = vms_lock_acp_vol_ex(proc, fop_resnam, &fop_lkid, &fop_intr);   /* vms-233: EX $ENQ, per-volume sync */
+            if (fop_intr) {
+                /* A signal ended the wait (rd vms-b6e): nothing has been
+                 * touched, so the operation is re-issued once it is
+                 * delivered. */
+                exec_free(sc);
+                return -ERESTARTSYS;
+            }
             if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
         }
 

@@ -315,8 +315,89 @@ add_test(NAME vmsdecnet_router_emit_fuzz_unit COMMAND test_dnet_router_emit_fuzz
 # relies on (rd vms-a70 direction B): --show-executor self-sources the executor
 # address and exits SUCCESS iff DECnet is configured (the gate STARTNET branches
 # on), and the persistent endnode daemon serves inbound object 42 by default.
-# Runs the shipped DECNETD.EXE on the host -- no socket, no /dev/vms, no privilege.
+# Runs the test image's --show-executor on the host (the same netacp_run the
+# shipped NETACP.EXE runs) -- no socket, no /dev/vms, no privilege.
 add_test(NAME vmsdecnet_startnet_gate
          COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_decnetd_startnet_gate.sh)
 set_tests_properties(vmsdecnet_startnet_gate PROPERTIES
-    ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:decnetd_exe>")
+    ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:netacp_test_exe>")
+
+# ---------------------------------------------------------------------------
+# NETACP_TEST.EXE (rd vms-0a7 S3): every DECnet self-test and lab mode that
+# DECNETD.EXE used to carry behind argv flags. It compiles the shipped
+# src/vmsdecnet/engine/decnetd.c itself (netacp_test.c #includes it, with no
+# image entry defined) and links the same libraries as NETACP.EXE, so each test
+# drives the real NETACP code. The test-only peers are threads: Threads here,
+# never in NETACP.EXE. Staged for the QEMU battery / boot e2e on a scratch test
+# volume, not the system disk.
+add_executable(netacp_test_exe netacp_test.c
+               ${CMAKE_SOURCE_DIR}/src/vmsdecnet/engine/decnetd_rms_bind.c)
+target_include_directories(netacp_test_exe PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/engine ${_netacp_includes})
+find_package(Threads REQUIRED)
+target_link_libraries(netacp_test_exe PRIVATE ${_netacp_libs} Threads::Threads)
+set_target_properties(netacp_test_exe PROPERTIES OUTPUT_NAME "NETACP_TEST" SUFFIX ".EXE")
+
+add_test(NAME decnetd_sethost_src_codes
+         COMMAND netacp_test_exe --set-host-src-codes-selftest)
+# rd vms-ea8/vms-6a4: the OUTBOUND $ COPY command layer floor -- copy_plan
+# direction/creds/spec derivation (GET + PUT) and the parsed creds driving a
+# real object-17 connect refused without auth, both directions. No executive.
+add_test(NAME decnetd_copy_selftest
+         COMMAND netacp_test_exe --copy-selftest)
+# rd vms-dda: the TASK-TO-TASK client host floor -- open a logical link by NAME
+# (format-1 NAMED descriptor, NODE::"TASK=x"), the passive side decodes the
+# name, a request + reply move BOTH directions byte-verified, then disconnect.
+# The generic-object addressing + bidirectional pump the _NET: $QIO broker
+# (Option 1, NETACP-brokered) will expose. No executive.
+add_test(NAME decnetd_task_selftest
+         COMMAND netacp_test_exe --task-selftest)
+# rd vms-22c (a1-2): the exec<->NETACP T1 broker record codec floor -- request/
+# response round-trip, bounds-validated decode (200k-mutation + truncated-prefix
+# fuzz, ASan/UBSan-clean), and the correlation-id anti-cross-talk guard. No
+# executive; the mailbox seam + qio_net_op + NETACP servicing build on it.
+# rd vms-22c (a1-2): the NCB connect-block parser floor -- NODE::"TASK=name"
+# -> {node, task/object}, bounds-safe refusal of malformed input, fuzzed. A
+# spec-derived LOCAL API parser (never a wire field); no executive.
+add_test(NAME decnetd_net_ncb_selftest
+         COMMAND netacp_test_exe --net-ncb-selftest)
+add_test(NAME decnetd_net_broker_selftest
+         COMMAND netacp_test_exe --net-broker-selftest)
+# rd vms-22c (a1-2 integration): the NETACP broker SERVICE DISPATCH floor --
+# dnet_broker_serve driving OPEN/SEND/RECV/CLOSE against the NSP link engine
+# over a socketpair, correlation-matched, with honest never-crash refusals
+# (unknown op, too-short OPEN). No executive; the mailbox $CREMBX seam +
+# qio_net_op marshalling + the IO$M_NOW serve loop build on it.
+add_test(NAME decnetd_net_service_selftest
+         COMMAND netacp_test_exe --net-service-selftest)
+# rd vms-dda: OUTBOUND links brokered through NETACP -- the host floor. A real
+# NETACP pool serves clients that reach it ONLY through broker records
+# (dnet_broker_xfer, the marshalling libvms's qio_net_op runs) over an
+# in-process queue standing in for the executive mailboxes; a second engine
+# across a socketpair is the remote. COPY's FAL client end to end through
+# NETACP, a remote access-control rejection (INVLOGIN), the local loopback
+# (0::), per-process share + full-pool refusals (EXQUOTA), handle-ownership
+# and correlation-id refusals, a silent NETACP (DEVOFFLINE). No executive;
+# the booted $QIO _NET: proof is --net-loopback-accept-test in the battery.
+add_test(NAME decnetd_netacp_broker_selftest
+         COMMAND netacp_test_exe --netacp-broker-selftest)
+set_tests_properties(decnetd_netacp_broker_selftest PROPERTIES TIMEOUT 120)
+# rd vms-30e: NCP SHOW / DCL SHOW NETWORK read the RUNNING NETACP -- the host
+# floor. The snapshot record codec (round-trip, every truncated prefix,
+# over-bound counts/strings, control bytes, 200k mutations); a real NETACP
+# pool serving IO$_ACPCONTROL queries through broker records from its live
+# state (node database on disk, an adjacency from a real hello, one link that
+# completed its NSP handshake and one connecting, the high-water counter,
+# paging, BADPARAM / BUFFEROVF / DEVOFFLINE); and the formatters diffed line
+# for line against the real OpenVMS VAX V7.3 transcripts in
+# docs/oracle/vax-ncp-show (timestamps normalized). No executive.
+add_test(NAME decnetd_netacp_show_selftest
+         COMMAND netacp_test_exe --netacp-show-selftest
+                 --oracle-dir ${CMAKE_SOURCE_DIR}/docs/oracle/vax-ncp-show)
+# rd vms-ea8: the OUTBOUND $ COPY client transport PUMP floor -- copy_client_run
+# (the same client the live $ COPY drives) brings up an object-17 link + NSP
+# link-service + a DAP session over the copy_wire transport against a threaded
+# test-double server; an honest miss round-trips end to end. No executive (the
+# authenticated byte-verified transfer is --copy-accept-test in the battery).
+add_test(NAME decnetd_copy_transport_selftest
+         COMMAND netacp_test_exe --copy-transport-selftest)

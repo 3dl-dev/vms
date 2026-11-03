@@ -1844,6 +1844,65 @@ jobs:
   # is red when any of them failed or was cancelled; a job skipped by its own
   # condition or path filter counts as passed. tools/ci/check_merge_gates.py
   # fails a job left out of `needs`.
+  # -----------------------------------------------------------------------
+  # rd vms-1e58 (the CI half of the ci.6 evacuation gate): an OVMX<->OVMX
+  # EVACUATION on the hermetic 2-node genesis rig. Two QEMU guests, each on the
+  # REAL vms.ko via /dev/vms, form a cluster; node B holds the workload lock
+  # (EVAC$WORKLOAD) EX on node A's master and commits seq 1..3 through
+  # EVAC$SEQ's value block; node A's standby converts NL->EX and queues; node
+  # B's QEMU is killed -9; node A's own executive must grant the standby, which
+  # reads seq 3 back and continues at 4. The negative control builds the SAME
+  # rig from a copy of the tree with host_defects.sh's
+  # dlm-departed-holder-locks-kept applied and must go red at the takeover,
+  # with every set-up verdict still green. Heavy tier: merge queue (when the
+  # kernel paths change), push to main and the nightly; never per-PR.
+  # -----------------------------------------------------------------------
+  cluster-evacuation-2node:
+    name: Cluster evacuation, OVMX<->OVMX on two executives (vms-1e58)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'merge_group' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
+      - name: Evacuate node B; node A's standby must be granted and continue seq+1
+        run: tests/qemu/run_cluster_evac_ci.sh proof "$RUNNER_TEMP/evac-proof"
+
+      - name: Upload the rig's evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-evacuation-2node
+          path: ${{ runner.temp }}/evac-proof
+          if-no-files-found: warn
+
+  cluster-evacuation-2node-negctl:
+    name: Cluster evacuation — negative control (dlm-departed-holder-locks-kept)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'merge_group' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
+      - name: Docker daemon pulls through the registry mirror first (rd vms-9a6)
+        uses: ./.github/actions/docker-mirror
+
+      - name: With the departed system's locks kept, the takeover must go red (and only it)
+        run: tests/qemu/run_cluster_evac_ci.sh negctl "$RUNNER_TEMP/evac-negctl"
+
   gate:
     name: "Merge gate: CI / Kernel Executive / NetBSD-amd64"
     if: ${{ always() }}
@@ -1861,6 +1920,8 @@ jobs:
       - netbsd-amd64-eflag-facility
       - netbsd-amd64-p4a-facilities-crossproc
       - kernel-executive-facility-negative-controls-shard
+      - cluster-evacuation-2node
+      - cluster-evacuation-2node-negctl
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

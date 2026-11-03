@@ -175,7 +175,9 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
     # fail HONESTLY (never skip). Required targets (DCL/INITIALIZE/AUTHORIZE)
     # cross-build via the same glibc-static toolchain the tests use.
     echo "== build subject images (DCL/INITIALIZE/AUTHORIZE + best-effort MMK/TCC) =="
-    for tgt in vmsdcl vms_initialize vms_authorize; do
+    # decnetd_exe: DECNETD.EXE, the NETACP test_syssvc_decnetd_syscall_audit
+    # traces at SYS$SYSTEM (rd vms-d3cd).
+    for tgt in vmsdcl vms_initialize vms_authorize decnetd_exe; do
         cmake --build /work/cmake-alpha --target "$tgt" -j"$(nproc)" >>/work/cmake-subj.log 2>&1 \
             || echo "WARN: subject target $tgt did not build for alpha"
     done
@@ -303,6 +305,7 @@ timeout --kill-after=60 "$DOCKER_TIMEOUT" docker run --rm --memory=8g --cpus="$(
       [ -f "$B/AUTHORIZE.EXE" ]  && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/AUTHORIZE.EXE $B/AUTHORIZE.EXE 755 0 0"
       [ -f "$B/MMK.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE $B/MMK.EXE 755 0 0"
       [ -f "$B/TCC.EXE" ]        && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/TCC.EXE $B/TCC.EXE 755 0 0"
+      [ -f "$B/DECNETD.EXE" ]    && echo "file /vms/SYS0/SYSCOMMON/SYSEXE/DECNETD.EXE $B/DECNETD.EXE 755 0 0"
     } > /work/syssvc.list
 
     echo "== rebuild vmlinux with the syssvc-test initramfs baked in =="

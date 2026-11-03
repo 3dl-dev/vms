@@ -1,0 +1,320 @@
+==========================================================
+ Per-facility negative controls for the executive (vms-e7d)
+==========================================================
+Engine:  docker
+Suites derived from the checkout (182):
+  test_imgact_bind
+  test_imgact_chunk
+  test_imgact_eihd
+  test_imgact_publish
+  test_kmod_access
+  test_kmod_ast
+  test_kmod_bind
+  test_kmod_cluster_conn_diag
+  test_kmod_cluster_fork_hammer
+  test_kmod_cluster_membership_diag
+  test_kmod_cluster_seam
+  test_kmod_cluster_vc_diag
+  test_kmod_devtab
+  test_kmod_devtab_terminal
+  test_kmod_disk
+  test_kmod_eflag
+  test_kmod_eflag_mproc
+  test_kmod_errcnt
+  test_kmod_exit
+  test_kmod_ident
+  test_kmod_lock
+  test_kmod_lock_mproc
+  test_kmod_lock_sync
+  test_kmod_mbx
+  test_kmod_procacct
+  test_kmod_procnam
+  test_kmod_resdir
+  test_kmod_rundown
+  test_kmod_setterm
+  test_kmod_spawn_notify
+  test_kmod_tt
+  test_syssvc_acl
+  test_syssvc_acp_access
+  test_syssvc_acp_channel
+  test_syssvc_acp_create
+  test_syssvc_acp_delete_prot
+  test_syssvc_acp_dlm
+  test_syssvc_acp_mount
+  test_syssvc_acp_ods5
+  test_syssvc_acp_rw
+  test_syssvc_acp_search
+  test_syssvc_acp_volalrmnt
+  test_syssvc_ast
+  test_syssvc_ast_secmode
+  test_syssvc_authorize
+  test_syssvc_bg_echo
+  test_syssvc_bg_fork_close_inherit
+  test_syssvc_bg_fork_inherit
+  test_syssvc_bg_materialize_fd
+  test_syssvc_bg_server
+  test_syssvc_bg_udp
+  test_syssvc_bgsock_echo
+  test_syssvc_bgsock_exec
+  test_syssvc_bgsock_peername
+  test_syssvc_bgsock_poll
+  test_syssvc_cancel_uring
+  test_syssvc_ci6_evacwl
+  test_syssvc_ci6_rmhold
+  test_syssvc_clrast
+  test_syssvc_cluevt
+  test_syssvc_cluster_negctl
+  test_syssvc_convert_dcl
+  test_syssvc_create_dir
+  test_syssvc_creprc_detached_lnm
+  test_syssvc_creprc_detached_output
+  test_syssvc_creprc_inherit
+  test_syssvc_creprc_pcb
+  test_syssvc_crtl_efs
+  test_syssvc_crtl_features
+  test_syssvc_crtl_static
+  test_syssvc_dcl_acp
+  test_syssvc_dcl_allocate
+  test_syssvc_dcl_create_dir
+  test_syssvc_dcl_fmode
+  test_syssvc_dcl_library_acp
+  test_syssvc_dcl_library_quals
+  test_syssvc_dcl_mail_quals
+  test_syssvc_dcl_ods5
+  test_syssvc_dcl_pipe
+  test_syssvc_dcl_read
+  test_syssvc_dcl_run_quals
+  test_syssvc_dcl_set_protection
+  test_syssvc_dcl_set_quals
+  test_syssvc_dcl_show_quals
+  test_syssvc_dcl_tcpip_quals
+  test_syssvc_dcl_tcpip_tool_quals
+  test_syssvc_dcl_write_quals
+  test_syssvc_delprc
+  test_syssvc_dgblsc_nosuchsec
+  test_syssvc_dirlogical_acp
+  test_syssvc_dlm_xnode
+  test_syssvc_ef_local
+  test_syssvc_ef_mproc
+  test_syssvc_efn0
+  test_syssvc_establish_once
+  test_syssvc_getdvi
+  test_syssvc_getdvi_volume
+  test_syssvc_getjpi_pidarg
+  test_syssvc_getlki
+  test_syssvc_hiber_ast
+  test_syssvc_ident
+  test_syssvc_identcont
+  test_syssvc_image_privs
+  test_syssvc_imgact_acp
+  test_syssvc_imgact_extern
+  test_syssvc_imgact_inproc
+  test_syssvc_imgact_nonres
+  test_syssvc_imgact_realimg
+  test_syssvc_imgact_tls
+  test_syssvc_initialize
+  test_syssvc_kfe
+  test_syssvc_l2_datalink
+  test_syssvc_lib_do_command
+  test_syssvc_lib_movtuc
+  test_syssvc_libspawn_reg
+  test_syssvc_lkwset
+  test_syssvc_lnm_cluster
+  test_syssvc_lnm_crossproc
+  test_syssvc_lnm_groupjob
+  test_syssvc_lnm_privilege
+  test_syssvc_lnm_searchlist
+  test_syssvc_lnm_system
+  test_syssvc_lock
+  test_syssvc_lock_status
+  test_syssvc_loginout_acp
+  test_syssvc_mbx_cmdresp
+  test_syssvc_mbx_crossproc
+  test_syssvc_mbx_dcldrv
+  test_syssvc_mbx_prot
+  test_syssvc_mbx_wrtattn
+  test_syssvc_mmk_build
+  test_syssvc_mmk_drive
+  test_syssvc_modeswitch
+  test_syssvc_multiuser_stage
+  test_syssvc_net_assign
+  test_syssvc_net_qio_status
+  test_syssvc_netcfg
+  test_syssvc_p0
+  test_syssvc_p1
+  test_syssvc_pin
+  test_syssvc_pprop
+  test_syssvc_privilege_enforce
+  test_syssvc_process_scan
+  test_syssvc_procnam
+  test_syssvc_qio_terminal
+  test_syssvc_rights_acl
+  test_syssvc_rightslist
+  test_syssvc_rms_acp
+  test_syssvc_rms_filelock
+  test_syssvc_rms_ods5
+  test_syssvc_rms_p3_acp
+  test_syssvc_rms_reclock
+  test_syssvc_rms_scratch_create
+  test_syssvc_rms_textfile_threads
+  test_syssvc_rms_workload
+  test_syssvc_rundown_ff8
+  test_syssvc_scratch_writable
+  test_syssvc_setdfprot
+  test_syssvc_setident_cmkrnl
+  test_syssvc_setname
+  test_syssvc_setprv
+  test_syssvc_setprv_dcl
+  test_syssvc_setuai
+  test_syssvc_showdev
+  test_syssvc_showproc
+  test_syssvc_showproc_devices
+  test_syssvc_showterm
+  test_syssvc_spawn_complete
+  test_syssvc_spawn_input
+  test_syssvc_spawn_pipeline
+  test_syssvc_spawn_users
+  test_syssvc_startup_service
+  test_syssvc_substrate_id
+  test_syssvc_sysuaf_uic_base
+  test_syssvc_tcpip_client
+  test_syssvc_tcpip_config
+  test_syssvc_tcpip_config_acp
+  test_syssvc_tcpip_daytime
+  test_syssvc_tcpip_host_acp
+  test_syssvc_tcpip_inetd
+  test_syssvc_tcpip_ping
+  test_syssvc_tcpip_service_db
+
+--- coverage: every executive facility, and every derived suite, has a control ---
+PASS: every src/{kernel,kernel-core}/*.c translation unit is named by some defect's targets declaration
+SCOPE-OUT (DERIVED LIVE, vms-181): 36 translation unit(s) OWNED by
+  the R1 host ladder (tests/cluster/host/host_defects.sh 'owned') -- peer-
+  requiring cluster FSMs/codecs a single-node VAXCLUSTER=0 QEMU guest cannot
+  reach, covered-or-still-red by that script's OWN coverage check (vms-181),
+  re-derived every run so the two gates cannot drift apart:
+    kernel-core/vms_cluster_codec.c
+    kernel-core/vms_cluster_codec_blk.c
+    kernel-core/vms_cluster_codec_cm.c
+    kernel-core/vms_cluster_codec_dlm.c
+    kernel-core/vms_cluster_codec_hello.c
+    kernel-core/vms_cluster_codec_mscp.c
+    kernel-core/vms_cluster_codec_scs.c
+    kernel-core/vms_cluster_codec_vc.c
+    kernel-core/vms_cluster_emit_guard.c
+    kernel-core/vms_cluster_sysgen.c
+    kernel-core/vms_cnxman_barrier_fsm.c
+    kernel-core/vms_cnxman_coord_fsm.c
+    kernel-core/vms_cnxman_csb.c
+    kernel-core/vms_cnxman_diag.c
+    kernel-core/vms_cnxman_join_fsm.c
+    kernel-core/vms_cnxman_phase2.c
+    kernel-core/vms_cnxman_quorum.c
+    kernel-core/vms_cnxman_recnx_fsm.c
+    kernel-core/vms_dlm_dir.c
+    kernel-core/vms_dlm_echo_guard.c
+    kernel-core/vms_dlm_hash.c
+    kernel-core/vms_dlm_ldwv.c
+    kernel-core/vms_dlm_pending.c
+    kernel-core/vms_dlm_scs.c
+    kernel-core/vms_dlm_scs_fsm.c
+    kernel-core/vms_dlm_rm_fsm.c
+    kernel-core/vms_mscp_cl.c
+    kernel-core/vms_mscp_cl_conn_fsm.c
+    kernel-core/vms_mscp_cl_fsm.c
+    kernel-core/vms_mscp_cl_io_fsm.c
+    kernel-core/vms_mscp_srv.c
+    kernel-core/vms_mscp_srv_fsm.c
+    kernel-core/vms_mscp_srv_io.c
+    kernel-core/vms_pe_fsm.c
+    kernel-core/vms_scs_dir.c
+    kernel-core/vms_scs_fsm.c
+PASS: 181 derived suite(s) are each NAMED by some defect's suites_red glob
+  (a STRING MATCH against the manifest's own attribution claim -- not an
+   execution. See the header: only run_facility_negctl.sh, in CI, executes.)
+OBSERVED: of those 181, 0 are PROVEN ABLE TO GO RED and 181 are
+  NAMED ONLY -- NOT MEASURED: no usable execution record was read (see
+  section 6). Every claim above this line is a string relation over
+  declarations the tree makes about itself.
+PASS: all 310 defect(s) anchored by 643 marker(s) across 181 in-scope suite source(s)
+  (this floors PAIRING against a ONE-FILE EDIT ONLY -- deleting a defect
+   and its anchors together still shrinks the list and still passes THIS
+   check. It does not floor the list's SIZE; see section 6 below, priced
+   honestly rather than claimed closed -- vms-d894.)
+PASS: 310 defect(s) >= floor 210 recorded in /home/baron/projects/vms/.worktrees/net-a9e7/tests/qemu/facility_defects_floor.txt
+NOT MEASURED: no execution record at /home/baron/projects/vms/.worktrees/net-a9e7/tests/qemu/facility_negctl_observed.tsv, so there is no
+  observed count floor and NO suite is PROVEN able to go red -- only
+  NAMED. The record is emitted by tests/qemu/run_facility_negctl.sh,
+  which runs in CI only (rd vms-b1f: it cannot run on a dev host at
+  all). Take it from that job's output and commit it.
+  This is a stated degradation, not a pass with a smaller claim: the
+  two cardinals it would have produced are absent rather than guessed.
+SCOPE: this gate does NOT cover 0 translation unit(s) under  or the suite(s) [test_kmod_cluster_seam].
+  test_kmod_cluster_seam -- the FC-P0.2 SUBSTRATE-CONTRACT conformance test, not a
+  VMS executive facility. It proves the Linux kbackend BINDINGS satisfy the seam
+  contract the executive is built ON (exec_kbackend_linux.h §14-18: dev_add_pack /
+  dev_queue_xmit / dev_mc_add / kthread / timer_list / ktime), driven through a
+  TEST-ONLY harness (vms_module.c, #if OVMX_KTEST_CLUSTER_SEAM). The only
+  cluster_seam-exclusive code IS that harness -- not a mutable product facility.
+  Every primitive it exercises is a SHARED substrate primitive: exec_lan_open/
+  hwaddr/mtu/link_up/mc_add are used by src/kernel-core/vms_pe.c (product), which
+  feeds the cluster VC/SCS/membership snapshots that the product suites
+  test_kmod_cluster_*_diag already anchor (pe-vc-snapshot-fabricates-circuit et
+  al.); the kthread/timer/time primitives are pervasive. So a defect in any of them
+  reddens those PRODUCT suites, not the seam in isolation -- there is no isolatable
+  per-facility negctl to anchor here, and scoping it out opens NO coverage hole:
+  the substrate's correctness is proven positively by this seam test AND
+  transitively by every facility suite that would fail if a binding broke. A
+  per-facility product negctl would be a category error (no VMS facility sits
+  behind it to fault-inject) -- the exact self-declaration/harness-isolation class
+  Rule 9 / vms-49f distinguishes from runtime behavioral proof.
+
+--- building the harness image (once) ---
+  built ovmx-ktest-negctl-base:latest
+
+--- positive control: pristine image, every suite green ---
+  ok: pristine image: all 182 suites rc=0, and ZERO failing assertions, against a real /dev/vms
+
+--- emitting the execution record to /tmp/tmp.s25iBj6Z7x (tree 29308608eab1baba33f8138dbef9dac6723feb09) ---
+
+--- negative control: tcpip-resolve-cname-not-followed ---
+  facility: TCP/IP Services resolver -- the DNS reply parser of the shared resolver engine (tcpip_dns_parse_reply, src/vmstcpip/services/tcpip_resolve.h, vms-a9e7), the header the DCL TELNET/FTP/PING verbs ship and test_syssvc_bg_udp proves. A name not in TCPIP$HOST.DAT is resolved by an RFC 1035 query to the TCPIP$NAMESERVICE.DAT server over a BGn: UDP channel ($ASSIGN TCPIP$DEVICE:, IO$_SETMODE P2=IO$K_SOCK_UDP, IO$_ACCESS/WRITEVBLK/READVBLK); the parser follows CNAME records in the answer section to the A record.
+  defect:   tcpip_dns_parse_reply() moves its owner target to the CNAME's canonical name with 'memcpy(target, next, sizeof(target));' before re-scanning the answers for the A record. The mutation drops that step, so a reply whose answer is CNAME -> A yields NODATA (the A record is owned by the canonical name, never by the alias). A direct A answer, NXDOMAIN, the wrong-ID decoy and the timeout paths are untouched, so only the CNAME assertion reddens. One statement neutralised.
+  may go red: test_syssvc_bg_udp   (isolation: isolated)
+  inject: === FACILITY_DEFECT=tcpip-resolve-cname-not-followed ===
+  inject:   injected 'tcpip-resolve-cname-not-followed' into /src/repo/src/vmstcpip/services/tcpip_resolve.h
+  ok: harness exited 1 (nonzero)
+  ok: vms.ko still loaded and /dev/vms present (this is a facility defect, not an absent executive)
+  ok: the facility's own suite(s) went red: test_syssvc_bg_udp
+  ok: no suite outside [test_syssvc_bg_udp] failed -- the failure is attributable to 'TCP/IP Services resolver -- the DNS reply parser of the shared resolver engine (tcpip_dns_parse_reply, src/vmstcpip/services/tcpip_resolve.h, vms-a9e7), the header the DCL TELNET/FTP/PING verbs ship and test_syssvc_bg_udp proves. A name not in TCPIP$HOST.DAT is resolved by an RFC 1035 query to the TCPIP$NAMESERVICE.DAT server over a BGn: UDP channel ($ASSIGN TCPIP$DEVICE:, IO$_SETMODE P2=IO$K_SOCK_UDP, IO$_ACCESS/WRITEVBLK/READVBLK); the parser follows CNAME records in the answer section to the A record.'
+  ok: the red set is EXACTLY the 1 assertion(s) the manifest names (observed 1), attributed to:
+      test_syssvc_bg_udp
+  PASS: 'tcpip-resolve-cname-not-followed' turns the harness red; the assertions that went red are
+        EXACTLY the ones the manifest names, and they name 'TCP/IP Services resolver -- the DNS reply parser of the shared resolver engine (tcpip_dns_parse_reply, src/vmstcpip/services/tcpip_resolve.h, vms-a9e7), the header the DCL TELNET/FTP/PING verbs ship and test_syssvc_bg_udp proves. A name not in TCPIP$HOST.DAT is resolved by an RFC 1035 query to the TCPIP$NAMESERVICE.DAT server over a BGn: UDP channel ($ASSIGN TCPIP$DEVICE:, IO$_SETMODE P2=IO$K_SOCK_UDP, IO$_ACCESS/WRITEVBLK/READVBLK); the parser follows CNAME records in the answer section to the A record.'.
+
+--- negative control: bg-udp-recv-timeout-not-reported ---
+  facility: INET pseudo-device BGn: -- the receive timeout of the executive-resident BGn: driver's IO$_READVBLK (vms_ioctl_bg_recv, src/kernel-core/vms_bg.c, vms-a9e7). A UDP channel (IO$_SETMODE P2=IO$K_SOCK_UDP) armed with TCPIP$C_RCVTIMEO through the IO$_SETMODE P4 socket-option list must complete a read against a silent peer with SS$_TIMEOUT, so the DNS resolver behind $ TELNET/FTP/PING name reports a silent name server instead of hanging.
+  defect:   vms_ioctl_bg_recv() maps the host kernel's -EAGAIN (the armed sk_rcvtimeo expiring) to SS$_TIMEOUT. The mutation reports it as SS$_ABORT instead, so the timed-out read still returns promptly (no hang -- the timeout itself is still armed) but with the wrong status: the silent-port read assertion reddens (it requires SS$_TIMEOUT), and so does the resolver's silent-server assertion, because the engine reads SS$_ABORT as a failed exchange (NONET) rather than a timeout. The byte-exact UDP round-trip and every resolver answer path stay green. One conditional expression replaced.
+  may go red: test_syssvc_bg_udp   (isolation: isolated)
+  inject: === FACILITY_DEFECT=bg-udp-recv-timeout-not-reported ===
+  inject:   injected 'bg-udp-recv-timeout-not-reported' into /src/kernel-core/vms_bg.c
+  inject:   injected 'bg-udp-recv-timeout-not-reported' into /src/repo/src/kernel-core/vms_bg.c
+  ok: harness exited 1 (nonzero)
+  ok: vms.ko still loaded and /dev/vms present (this is a facility defect, not an absent executive)
+  ok: the facility's own suite(s) went red: test_syssvc_bg_udp
+  ok: no suite outside [test_syssvc_bg_udp] failed -- the failure is attributable to 'INET pseudo-device BGn: -- the receive timeout of the executive-resident BGn: driver's IO$_READVBLK (vms_ioctl_bg_recv, src/kernel-core/vms_bg.c, vms-a9e7). A UDP channel (IO$_SETMODE P2=IO$K_SOCK_UDP) armed with TCPIP$C_RCVTIMEO through the IO$_SETMODE P4 socket-option list must complete a read against a silent peer with SS$_TIMEOUT, so the DNS resolver behind $ TELNET/FTP/PING name reports a silent name server instead of hanging.'
+  ok: the red set is EXACTLY the 2 assertion(s) the manifest names (observed 2), attributed to:
+      test_syssvc_bg_udp
+  PASS: 'bg-udp-recv-timeout-not-reported' turns the harness red; the assertions that went red are
+        EXACTLY the ones the manifest names, and they name 'INET pseudo-device BGn: -- the receive timeout of the executive-resident BGn: driver's IO$_READVBLK (vms_ioctl_bg_recv, src/kernel-core/vms_bg.c, vms-a9e7). A UDP channel (IO$_SETMODE P2=IO$K_SOCK_UDP) armed with TCPIP$C_RCVTIMEO through the IO$_SETMODE P4 socket-option list must complete a read against a silent peer with SS$_TIMEOUT, so the DNS resolver behind $ TELNET/FTP/PING name reports a silent name server instead of hanging.'.
+
+--- the execution record this run observed vs the one committed ---
+  observed: 2 defect(s) executed, 3 failing assertion(s) recorded
+  NOT COMPARED: this was a partial run (2 defect(s) named on the command
+  line), so its record is a subset by construction and cannot be required
+  to equal the committed one. Nothing is certified from it.
+
+==========================================================
+ Facility negative controls: 4 passed, 0 failed
+==========================================================
+EXIT 0

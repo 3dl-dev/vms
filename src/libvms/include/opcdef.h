@@ -62,7 +62,7 @@
  * ================================================================ */
 
 /*
- * Layout per the OPCDEF oracle offsets (rd vms-f811 follow-up; docs/oracle/*-starlet-defs/
+ * Layout per the OPCDEF oracle offsets (rd vms-f811 follow-up; docs/oracle/{vax73,alpha84}-starlet-defs/
  * OPCDEF.txt): OPC$B_MS_TYPE @0, OPC$B_MS_TARGET @1 with OPC$S_MS_TARGET_CLASSES == 3 (the
  * target operator classes are a 24-bit mask in bytes 1..3 -- the first byte is the member
  * programs assign, the rest overlays the reply status word -- which is why OPC$M_NM_OPER1..12

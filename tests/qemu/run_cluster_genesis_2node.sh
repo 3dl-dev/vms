@@ -128,6 +128,30 @@
 #           the SAME name and reads GET_RESMASTER back to prove it now
 #           masters it locally: the autonomous remaster, unassisted.
 #
+#   evac    (rd vms-1e58, the CI half of the ci.6 evacuation gate) the proof
+#           run, PLUS an EVACUATION. Node B (the HOLDER) takes the workload
+#           lock EX -- EVAC$WORKLOAD, tests/lab/ci6/EVACWL.C's own resource,
+#           or the first name of that series node A masters (read back) --
+#           and commits sequence numbers 1..3 through the value block of a
+#           second resource, EVAC$SEQ (EX -> CR with LCK$M_VALBLK, the
+#           committing write). Node A (the SURVIVOR) converts its own NL
+#           lock on the workload to EX -- EVACWL's standby path -- and it
+#           QUEUES. This rig then kills node B's QEMU -9 (vms-4838's
+#           EVACUATE: no $DEQ, no rundown, no last gasp) and never relaunches
+#           it. Node A's executive must notice the departure on its own,
+#           release the locks it held for node B (vms_lock_dlm_member_departed
+#           -> vms_lock_dlm_release_csid_locks), and GRANT the queued
+#           conversion; node A then reads the last committed sequence number
+#           back out of EVAC$SEQ's value block and continues at seq+1. There
+#           is no shared disk on this rig, so the value block -- executive
+#           state on the surviving master -- is the continuity carrier.
+#           Each workload instance is its own executive-created SUBPROCESS
+#           (cluster_node.c 6g): this program is STARTUP.EXE's stand-in and so
+#           the cluster delivery process, which must not also be the standby.
+#           The negative control is host_defects.sh's
+#           dlm-departed-holder-locks-kept, applied to the tree this image
+#           is built from (tests/qemu/run_cluster_evac_ci.sh runs both).
+#
 # VERDICT: read only from the guests' own RIG-* lines, which carry values the
 # guest read back out of the executive (INV-6).
 
@@ -261,6 +285,24 @@ if [ "$MODE" = "remaster" ]; then
 	WALL="${RIG_WALL:-420}"
 fi
 
+# rd vms-1e58: the EVACUATION run (see the header). Both phases begin at the
+# same wall moment (B's window is STAGGER shorter, as in xnode). Node B is
+# then killed -9 by THIS script once both nodes report their half of the
+# set-up, and node A alone runs on.
+EVAC=0
+EVAC_A=0
+EVAC_B=0
+EVAC_KILLED=0
+if [ "$MODE" = "evac" ]; then
+	EVAC=1
+	EVAC_A=1     # survivor
+	EVAC_B=2     # holder
+	WINDOW_A="${RIG_WINDOW_A:-150}"
+	WINDOW_B="${RIG_WINDOW_B:-$((WINDOW_A - STAGGER))}"
+	EVAC_SETUP_MAX="${RIG_EVAC_SETUP_MAX:-400}"  # s after B's power-on
+	WALL="${RIG_WALL:-900}"
+fi
+
 # rd vms-6d3d: THE DOCUMENTED TWO-NODE VMSCLUSTER, formed from cold.
 #
 # Both nodes VOTES=1 EXPECTED_VOTES=2 -- the configuration every OpenVMS
@@ -342,6 +384,7 @@ echo "mode=$MODE"
 echo "accel=${ACCEL#-accel } group=$GROUP recnx=${RECNX}s stagger=${STAGGER}s"
 [ "$XNODE" = "1" ] && echo "cross-node phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s, linger=${LINGER}s)"
 [ "$REJOIN" = "1" ] && echo "rejoin phase: ON (B_WINDOW1=${B_WINDOW1}s evac_dwell=${EVAC_DWELL}s B_WINDOW2=${B_WINDOW2}s)"
+[ "$EVAC" = "1" ] && echo "evacuation phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s -- B holds, A waits, B is killed -9)"
 [ "$REMASTER" = "1" ] && echo "remaster phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s -- B exits on its own, A watches)"
 echo "node A: $SCSNODE_A/$SYSID_A VOTES=$VOTES_A EXPECTED_VOTES=$EXPECTED_A VAXCLUSTER=2"
 echo "node B: $SCSNODE_B/$SYSID_B VOTES=$VOTES_B EXPECTED_VOTES=$EXPECTED_B VAXCLUSTER=2"
@@ -354,15 +397,15 @@ echo ""
 # The SYSGEN identity rides the kernel command line; the initramfs is symmetric.
 node_cmdline() {
 	# $1=tag $2=scsnode $3=sysid $4=votes $5=expected_votes $6=window
-	local rm=0
-	[ "$1" = "A" ] && rm="$REMASTER_A"
-	[ "$1" = "B" ] && rm="$REMASTER_B"
+	local rm=0 ev=0
+	[ "$1" = "A" ] && rm="$REMASTER_A" && ev="$EVAC_A"
+	[ "$1" = "B" ] && rm="$REMASTER_B" && ev="$EVAC_B"
 	echo "console=ttyS0 net.ifnames=0 biosdevname=0 panic=-1 loglevel=7" \
 	     "ovmx.tag=$1 ovmx.scsnode=$2 ovmx.sysid=$3 ovmx.votes=$4" \
 	     "ovmx.expected_votes=$5 ovmx.vaxcluster=2 ovmx.group=$GROUP" \
 	     "ovmx.recnx=$RECNX ovmx.credits=$CREDITS ovmx.swver=$SWVER" \
 	     "ovmx.window=$6 ovmx.xnode=$XNODE ovmx.linger=$LINGER" \
-	     "ovmx.qhang=$QHANG ovmx.remaster=$rm"
+	     "ovmx.qhang=$QHANG ovmx.remaster=$rm ovmx.evac=$ev"
 }
 
 # Node A holds the segment open; node B dials in. A is powered on first
@@ -499,6 +542,35 @@ else
 fi
 
 ( sleep "$WALL"; kill -9 "$PA" "$PB" 2>/dev/null ) & GUARD=$!
+
+if [ "$EVAC" = "1" ]; then
+	# THE EVACUATION TRIGGER. The rig waits for both halves of the set-up --
+	# node B holding the workload with its records committed, node A's
+	# conversion queued behind it -- and then kills node B's whole system.
+	# These two lines only decide WHEN to pull the plug; nothing in the
+	# verdict below is taken from them (it is read from node A's executive).
+	echo "--- waiting up to ${EVAC_SETUP_MAX}s for B to hold the workload and A to queue behind it ---"
+	SECS=0
+	while [ "$SECS" -lt "$EVAC_SETUP_MAX" ]; do
+		if grep -aq "RIG-B-EVAC-HOLDING" "$OUT/nodeB.ttyS1.log" 2>/dev/null && \
+		   grep -aq "RIG-A-EVAC-WAITING" "$OUT/nodeA.ttyS1.log" 2>/dev/null; then
+			break
+		fi
+		kill -0 "$PB" 2>/dev/null || break
+		sleep 1
+		SECS=$((SECS + 1))
+	done
+	if grep -aq "RIG-B-EVAC-HOLDING" "$OUT/nodeB.ttyS1.log" 2>/dev/null && \
+	   grep -aq "RIG-A-EVAC-WAITING" "$OUT/nodeA.ttyS1.log" 2>/dev/null; then
+		sleep 3
+		echo "--- EVACUATING node B (kill -9 at ~t=${SECS}s of its boot; it is NOT relaunched) ---"
+		kill -9 "$PB" 2>/dev/null
+		wait "$PB" 2>/dev/null
+		EVAC_KILLED=1
+	else
+		echo "    set-up never completed (B holding / A waiting) -- not evacuating"
+	fi
+fi
 wait "$PA" 2>/dev/null
 wait "$PB" 2>/dev/null
 kill "$GUARD" 2>/dev/null
@@ -1463,6 +1535,108 @@ fi
 # genuinely departed and node A correctly reports cn=1 -- a cn2_reached()
 # failure here would be measuring the wrong thing.
 # --------------------------------------------------------------------------
+if [ "$MODE" = "evac" ]; then
+	ev() { rig_field "$1" "EVAC-$2" "$3"; }
+	EV_A_WRES=$(grep -a "RIG-A-EVAC-RES base=EVAC\$WORKLOAD " "$OUT/nodeA.ttyS1.log" 2>/dev/null | tail -n 1 | tr -d '\r' | tr ' ' '\n' | sed -n 's/^res=//p')
+	EV_A_LOCAL=$(grep -a "RIG-A-EVAC-RES base=EVAC\$WORKLOAD " "$OUT/nodeA.ttyS1.log" 2>/dev/null | tail -n 1 | tr -d '\r' | tr ' ' '\n' | sed -n 's/^is_local_master=//p')
+	EV_B_HRES=$(ev B HOLD res);       EV_B_HMODE=$(ev B HOLD granted_mode)
+	EV_B_HMASTER=$(ev B HOLD master_csid)
+	EV_B_LAST=$(ev B HOLDING last_seq)
+	EV_B_COMMITS=$(grep -a "RIG-B-EVAC-SEQ " "$OUT/nodeB.ttyS1.log" 2>/dev/null | tr -d '\r' | grep -c "granted=1 commit_status=1 ")
+	EV_A_PEER=$(ev A PEERHOLD remote_holder_csid)
+	EV_A_WGM=$(ev A WAITING granted_mode); EV_A_WRM=$(ev A WAITING requested_mode)
+	EV_A_WHOLD=$(ev A WAITING remote_holder_csid)
+	EV_A_GRANTED=$(ev A GRANTED granted); EV_A_GGM=$(ev A GRANTED granted_mode)
+	EV_A_GNODES=$(ev A GRANTED nodes_at_grant)
+	EV_A_GHOLD=$(ev A GRANTED remote_holder_csid)
+	EV_A_SEQ=$(ev A SEQREAD seq); EV_A_NEXT=$(ev A SEQWRITE seq)
+	EV_A_NEXTST=$(ev A SEQWRITE status); EV_A_REREAD=$(ev A SEQREREAD seq)
+	A_MEMBER_END=$(final_field A member); A_CN_END=$(final_field A cn)
+
+	echo ""
+	echo "=== rd vms-1e58: the EVACUATION -- every value below was read back"
+	echo "    out of an executive (node B's before it died, node A's after) ==="
+	printf "    workload    : res=%s mastered_on_A=%s | B holds mode=%s master=%s\n" \
+		"${EV_A_WRES:-?}" "${EV_A_LOCAL:-?}" "${EV_B_HMODE:-?}" "${EV_B_HMASTER:-?}"
+	printf "    committed   : B commits=%s last_seq=%s\n" "${EV_B_COMMITS:-?}" "${EV_B_LAST:-?}"
+	printf "    standby     : A sees holder=%s, queued granted=%s requested=%s holder=%s\n" \
+		"${EV_A_PEER:-?}" "${EV_A_WGM:-?}" "${EV_A_WRM:-?}" "${EV_A_WHOLD:-?}"
+	printf "    evacuated   : node B killed -9 = %s\n" "$EVAC_KILLED"
+	printf "    takeover    : granted=%s mode=%s nodes_at_grant=%s holder_after=%s\n" \
+		"${EV_A_GRANTED:-?}" "${EV_A_GGM:-?}" "${EV_A_GNODES:-?}" "${EV_A_GHOLD:-?}"
+	printf "    continuity  : seq_read=%s seq_next=%s (status %s) reread=%s\n" \
+		"${EV_A_SEQ:-?}" "${EV_A_NEXT:-?}" "${EV_A_NEXTST:-?}" "${EV_A_REREAD:-?}"
+	printf "    cluster     : A member=%s cn=%s at the end\n" "${A_MEMBER_END:-?}" "${A_CN_END:-?}"
+	echo ""
+
+	XFAIL=0
+	if [ -z "$EV_A_WRES" ] || [ "$EV_A_LOCAL" != "1" ] || [ "$EV_B_HRES" != "$EV_A_WRES" ]; then
+		echo "  FAILED (1): the two nodes did not agree on ONE workload resource"
+		echo "  mastered by node A (A=${EV_A_WRES:-none} local=${EV_A_LOCAL:-?}, B=${EV_B_HRES:-none})."
+		XFAIL=1
+	fi
+	if [ "$EV_B_HMODE" != "5" ] || [ "$EV_B_COMMITS" != "3" ] || [ "$EV_B_LAST" != "3" ]; then
+		echo "  FAILED (2): node B did not hold the workload EX across the wire"
+		echo "  with its three sequence numbers committed (mode=${EV_B_HMODE:-?}"
+		echo "  commits=${EV_B_COMMITS:-?} last_seq=${EV_B_LAST:-?})."
+		XFAIL=1
+	fi
+	if [ -z "$EV_A_PEER" ] || [ "$EV_A_PEER" = "0x00000000" ] || [ "$EV_A_WRM" != "5" ] || \
+	   [ "$EV_A_WGM" = "5" ] || [ "$EV_A_WHOLD" != "$EV_A_PEER" ]; then
+		echo "  FAILED (3): node A's standby was not QUEUED behind node B's held"
+		echo "  lock before the evacuation (holder=${EV_A_PEER:-?} granted=${EV_A_WGM:-?}"
+		echo "  requested=${EV_A_WRM:-?} holder_at_queue=${EV_A_WHOLD:-?})."
+		XFAIL=1
+	fi
+	if [ "$EVAC_KILLED" != "1" ]; then
+		echo "  FAILED (4): node B was never evacuated (its set-up never completed)."
+		XFAIL=1
+	fi
+	if [ "$EV_A_GRANTED" != "1" ] || [ "$EV_A_GGM" != "5" ] || \
+	   [ "$EV_A_GNODES" != "1" ] || [ "$EV_A_GHOLD" != "0x00000000" ]; then
+		echo "  FAILED (5): node A's queued standby was NOT granted EX by its own"
+		echo "  executive after node B left (granted=${EV_A_GRANTED:-?} mode=${EV_A_GGM:-?}"
+		echo "  nodes_at_grant=${EV_A_GNODES:-?} holder_after=${EV_A_GHOLD:-?}). A lock"
+		echo "  held for a departed system was left GRANTED on the surviving master."
+		XFAIL=1
+	fi
+	if [ -z "$EV_B_LAST" ] || [ "$EV_A_SEQ" != "$EV_B_LAST" ] || \
+	   [ "$EV_A_NEXT" != "$(( $(num "$EV_B_LAST") + 1 ))" ] || [ "$EV_A_NEXTST" != "1" ] || \
+	   [ "$EV_A_REREAD" != "$EV_A_NEXT" ]; then
+		echo "  FAILED (6): the sequence did not continue: node B committed"
+		echo "  ${EV_B_LAST:-?}, node A read ${EV_A_SEQ:-?} and committed ${EV_A_NEXT:-?}"
+		echo "  (status ${EV_A_NEXTST:-?}), a fresh lock read back ${EV_A_REREAD:-?}."
+		XFAIL=1
+	fi
+	if [ "$A_MEMBER_END" != "1" ]; then
+		echo "  FAILED (7): node A is not a cluster member at the end -- the"
+		echo "  cluster did not stay up on the survivor."
+		XFAIL=1
+	fi
+	if console_panicked A; then
+		echo "  FAILED (8): node A's console shows a panic/bugcheck."
+		XFAIL=1
+	fi
+
+	echo "=========================================="
+	if [ "$XFAIL" = "0" ]; then
+		echo "  EVACUATION PROOF PASSED (rd vms-1e58): node B held the workload"
+		echo "  lock EX on node A's master and committed seq 1..${EV_B_LAST}; node A's"
+		echo "  standby conversion queued behind it; node B's whole system was"
+		echo "  killed -9; node A's own executive removed it, released the lock"
+		echo "  it held for it and GRANTED the standby, which read seq ${EV_A_SEQ}"
+		echo "  back out of the value block and continued at ${EV_A_NEXT}. Node A"
+		echo "  stayed a member throughout."
+		echo "=========================================="
+		exit 0
+	fi
+	echo "  EVACUATION PROOF FAILED"
+	echo "=========================================="
+	echo "--- node A console tail ---"; tail -n 40 "$OUT/nodeA.console.log" 2>/dev/null
+	echo "--- node B console tail ---"; tail -n 40 "$OUT/nodeB.console.log" 2>/dev/null
+	exit 1
+fi
+
 if [ "$MODE" = "remaster" ]; then
 	RM_BEFORE_RES=$(rig_field A REMASTER-BEFORE res)
 	RM_MC_BEFORE=$(rig_field A REMASTER-BEFORE master_csid)

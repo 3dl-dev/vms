@@ -74,6 +74,11 @@
  * shipped PING verb and the proven code are identical. */
 #include "../vmstcpip/services/tcpip_ping.h"
 
+/* Host-name resolver (vms-a9e7) -- TCPIP$HOST.DAT, then DNS over a BGn: UDP
+ * channel to the TCPIP$NAMESERVICE.DAT server. The SAME header the host
+ * unit/fuzz tests and the QEMU proof (tests/qemu/test_syssvc_bg_udp.c) drive. */
+#include "../vmstcpip/services/tcpip_resolve.h"
+
 /* TCP/IP Services CONFIG plane (vms-67f) -- the SAME single-header engine the
  * QEMU proof (tests/qemu/test_syssvc_tcpip_config.c) drives against a real
  * /dev/vms. It records the VMS-faithful TCPIP$* SYSTEM logical names in the
@@ -4113,16 +4118,104 @@ static int tcpip_tool_iprefix(const char *line, const char *word)
     return 1;
 }
 
-/* Resolve a host argument to a network-order IPv4 address. Name resolution (the
- * BIND resolver) is a later phase; only a dotted-quad literal is accepted. */
+/* Resolve a host argument to a network-order IPv4 address (vms-a9e7): a
+ * dotted-quad literal; else the local host database SYS$SYSTEM:TCPIP$HOST.DAT
+ * (RMS over the Files-11 ACP); else DNS to the SYS$SYSTEM:TCPIP$NAMESERVICE.DAT
+ * server over a BGn: UDP channel (tcpip_resolve.h). Every failure is reported
+ * as NORESOLVE with the honest reason: no such name (NXDOMAIN), no reply, no
+ * name service configured, or the network device absent. */
 static int tcpip_tool_resolve(const char *facility, const char *host,
                               uint32_t *addr_be)
 {
+    uint32_t server_be = 0, vst = SS$_NORMAL;
+    int have_server = 0;
+    char domain[256] = "";
+    char fqdn[TCPIP_DNS_MAX_NAME + 1];
+    char line[512];
+    int too_long = 0;
+    rms_textfile_t *tf;
+    enum tcpip_dns_rc rc;
+
     if (tcpip_parse_ipv4(host, addr_be))
         return 1;
-    dcl_error(facility, 2, "NORESOLVE",
-              "host name resolution is not available yet (BIND resolver pending)"
-              " - use a dotted-quad IP address");
+
+    /* 1. The local host database. */
+    tf = rms_textfile_open("SYS$SYSTEM:TCPIP$HOST.DAT");
+    if (tf) {
+        int found = 0;
+        while (!found && rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+            if (too_long) continue;
+            found = tcpip_hosts_match_line(line, host, addr_be);
+        }
+        rms_textfile_close(tf);
+        if (found)
+            return 1;
+    }
+
+    /* 2. DNS, to the configured name server. */
+    tf = rms_textfile_open("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT");
+    if (tf) {
+        while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+            if (too_long) continue;
+            (void)tcpip_ns_parse_line(line, &server_be, &have_server,
+                                      domain, sizeof(domain));
+        }
+        rms_textfile_close(tf);
+    }
+    if (!have_server) {
+        dcl_error(facility, 2, "NORESOLVE",
+                  "unknown host %s - not in TCPIP$HOST.DAT and no name service is "
+                  "configured (TCPIP SET NAME_SERVICE /SERVER=ip)", host);
+        return 0;
+    }
+    if (!tcpip_res_qualify(host, domain, fqdn, sizeof(fqdn))) {
+        dcl_error(facility, 2, "NORESOLVE", "host name too long - \\%s\\", host);
+        return 0;
+    }
+
+    rc = tcpip_dns_query_server(server_be, TCPIP_DNS_PORT, fqdn,
+                                TCPIP_DNS_TIMEOUT_MS, addr_be, &vst);
+    switch (rc) {
+    case TCPIP_DNS_OK:
+        return 1;
+    case TCPIP_DNS_NXDOMAIN:
+        dcl_error(facility, 2, "NORESOLVE",
+                  "unknown host %s - the name server reports no such name", fqdn);
+        break;
+    case TCPIP_DNS_NODATA:
+        dcl_error(facility, 2, "NORESOLVE",
+                  "unknown host %s - the name server has no address record for it", fqdn);
+        break;
+    case TCPIP_DNS_TIMEOUT:
+        dcl_error(facility, 2, "NORESOLVE",
+                  "cannot resolve %s - no reply from the name server", fqdn);
+        break;
+    case TCPIP_DNS_TRUNCATED:
+        dcl_error(facility, 2, "NORESOLVE",
+                  "cannot resolve %s - the name server reply was truncated", fqdn);
+        break;
+    case TCPIP_DNS_SERVFAIL:
+        dcl_error(facility, 2, "NORESOLVE",
+                  "cannot resolve %s - the name server reported a failure", fqdn);
+        break;
+    case TCPIP_DNS_MALFORMED:
+        dcl_error(facility, 2, "NORESOLVE",
+                  "cannot resolve %s - malformed reply from the name server", fqdn);
+        break;
+    case TCPIP_DNS_BADNAME:
+        dcl_error(facility, 2, "NORESOLVE", "invalid host name - \\%s\\", host);
+        break;
+    case TCPIP_DNS_NONET:
+    default:
+        if (vst == SS$_NOSUCHDEV)
+            dcl_error(facility, 2, "NORESOLVE",
+                      "cannot resolve %s - TCP/IP Services (BGn: executive device) "
+                      "is not available", fqdn);
+        else
+            dcl_error(facility, 2, "NORESOLVE",
+                      "cannot resolve %s - the name server could not be reached", fqdn);
+        break;
+    }
     return 0;
 }
 

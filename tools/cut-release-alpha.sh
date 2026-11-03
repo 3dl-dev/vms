@@ -44,6 +44,15 @@
 #                      cmp's every alpha/ artifact, vms.ko included; the
 #                      cut-release-alpha-gate job fails if vms.ko is absent.
 #
+#   vmlinux-boot     the Alpha BOOTABLE set (rd vms-f10): the Linux/Alpha kernel
+#   ovmx-distrib-alpha.img  with the bootstrap initramfs (STARTUP.EXE as /init,
+#                      vms.ko) baked in, and the genuine ODS-2 system disk -- the
+#                      SAME assembly alpha-boot-login boots
+#                      (tools/cross-alpha/build-alpha-bootimage.sh), run in its
+#                      OVMX_ALPHA_RELEASE product-disk mode under SOURCE_DATE_EPOCH.
+#                      release-acceptance-e2e boots them from the cut bundle to an
+#                      authenticated DCL prompt, runs PARTS and checks the version.
+#
 # This script writes $OUT_DIR/alpha-artifact-manifest.txt: the flat, newline-
 # separated list of every artifact basename it actually shipped, in CMake's own
 # install order. tools/cut-release.sh reads THAT file to build its
@@ -82,7 +91,7 @@
 #                               cross toolchain image
 #   -h|--help                  Show this help and exit
 #
-# Exit 0 = the full Alpha userspace artifact set + vms.ko was built and copied into
+# Exit 0 = the full Alpha userspace artifact set + vms.ko + the bootable set was built and copied into
 # --out-dir.
 
 set -euo pipefail
@@ -94,7 +103,7 @@ NO_CACHE=0
 SDE=""
 
 usage() {
-    sed -n '2,86p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,95p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 while [ $# -gt 0 ]; do
@@ -158,7 +167,7 @@ docker "${BUILD_ARGS[@]}"
 # --- Userspace images (ovmx-images CMake aggregate, EM_ALPHA/LP64) ------------
 # Also the OVMX_ALPHA_RELEASE_NEGCTL target -- fail loudly BEFORE spending the
 # build time, the same pattern cut-release-vax.sh's stage-3 negctl uses.
-log "=== stage 1/2: userspace images (ovmx-images CMake aggregate, EM_ALPHA) ==="
+log "=== stage 1/3: userspace images (ovmx-images CMake aggregate, EM_ALPHA) ==="
 if [ "$NEGCTL" = "1" ]; then
     fail "OVMX_ALPHA_RELEASE_NEGCTL: deliberately failing the userspace-image stage to prove the release-cut gate has teeth against a failed Alpha build"
 fi
@@ -212,7 +221,7 @@ done < "$IMAGE_MANIFEST"
 log "ovmx-images aggregate: ${#IMAGE_NAMES[@]} images shipped (derived from install_manifest_ovmx-images.txt, not a hand list)"
 
 # --- Executive module vms.ko (rd vms-ec1) -------------------------------------
-log "=== stage 2/2: vms.ko (Linux/Alpha kernel + OVMX executive, SOURCE_DATE_EPOCH=$SDE) ==="
+log "=== stage 2/3: vms.ko (Linux/Alpha kernel + OVMX executive, SOURCE_DATE_EPOCH=$SDE) ==="
 KOUT="$WORK/vmsko"; mkdir -p "$KOUT"
 docker run --rm -e "SDE=$SDE" \
     -v "$SRC_DIR:/src:ro" -v "$KOUT:/out" \
@@ -221,6 +230,36 @@ docker run --rm -e "SDE=$SDE" \
 cp "$KOUT/vms.ko" "$OUT_DIR/vms.ko"
 log "-> $OUT_DIR/vms.ko"
 IMAGE_NAMES+=("vms.ko")
+
+# --- Bootable set (rd vms-f10): vmlinux-boot + ovmx-distrib-alpha.img ----------
+# The SAME assembly alpha-boot-login / run-boot-alpha.sh boot (tools/cross-alpha/
+# build-alpha-bootimage.sh, from the archived tree), in its release mode: the
+# product disk (no harness payload) with every embedded clock pinned from
+# SOURCE_DATE_EPOCH. vmlinux-boot is the Linux/Alpha kernel with the bootstrap
+# initramfs (STARTUP.EXE as /init, vms.ko, SYSUAF/SYSMGR) baked in; the disk is
+# the genuine ODS-2 system volume. release-acceptance-e2e boots exactly these two
+# files; cut-release-reproducible cmp's them across two cuts. A failed assembly
+# or a missing file fails the cut.
+# HISTORICAL-BASELINE EXCEPTION: a tree whose build-alpha-bootimage.sh predates
+# the release mode (no OVMX_ALPHA_RELEASE) cannot assemble a product disk, so it
+# ships no bootable set (%CUT-ALPHA-I-PREBOOTSET), as pre-Alpha trees ship none.
+BOOTIMG="$SRC_DIR/tools/cross-alpha/build-alpha-bootimage.sh"
+if grep -q 'OVMX_ALPHA_RELEASE' "$BOOTIMG" 2>/dev/null; then
+    log "=== stage 3/3: bootable set (vmlinux-boot + ovmx-distrib-alpha.img, SOURCE_DATE_EPOCH=$SDE) ==="
+    BS="$WORK/bootset"; mkdir -p "$BS"
+    ALPHA_IMG="$TOOLCHAIN_IMAGE" OVMX_ALPHA_RELEASE=1 SOURCE_DATE_EPOCH="$SDE" FORCE_BUILD=1 \
+        VMSKO_WORK="$BS/vmsko" USERLAND="$BS/userland" WORK="$BS/boot" \
+        bash "$BOOTIMG" || fail "Alpha bootable-set assembly (build-alpha-bootimage.sh) failed"
+    for f in vmlinux-boot ovmx-distrib-alpha.img; do
+        [ -s "$BS/boot/$f" ] || fail "Alpha bootable set incomplete: $f missing after build-alpha-bootimage.sh"
+        cp "$BS/boot/$f" "$OUT_DIR/$f"
+        log "-> $OUT_DIR/$f"
+        IMAGE_NAMES+=("$f")
+    done
+    grep -qi 'alpha' <<<"$(file "$OUT_DIR/vmlinux-boot")" || fail "vmlinux-boot is not an Alpha ELF kernel"
+else
+    log "%CUT-ALPHA-I-PREBOOTSET: this tree predates the Alpha bootable release set (no OVMX_ALPHA_RELEASE in build-alpha-bootimage.sh) -- no bootable set for this historical cut"
+fi
 
 # --- Shipped-artifact manifest: the DERIVED "what actually shipped" list, every
 # image name from the CMake install manifest, in the order CMake installed them.

@@ -587,6 +587,16 @@
  *        Linux: sock_create_kern(&init_net, AF_INET, SOCK_RAW, IPPROTO_ICMP, ...).
  *        NetBSD: socreate(AF_INET, ..., SOCK_RAW, IPPROTO_ICMP, ...) (contract-only
  *        twin; a runnable NetBSD BGn: raw socket rides vms-024 with the rest).
+ *   int  exec_socket_create_udp(exec_socket_t *out)
+ *        create an AF_INET/SOCK_DGRAM/IPPROTO_UDP host socket, ref count 1 -- the
+ *        datagram socket the VMS DNS resolver drives (vms-a9e7). Exactly the
+ *        create_icmp shape: the caller builds the application payload (a DNS
+ *        query), connects the socket to the server (setting the datagram peer)
+ *        and moves ONE datagram per exec_socket_send / exec_socket_recv. Same
+ *        holder/refcount discipline and MAY SLEEP. Returns 0 + *out / nonzero.
+ *        Linux: sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, ...).
+ *        NetBSD: socreate(AF_INET, ..., SOCK_DGRAM, IPPROTO_UDP, ...) (contract-only
+ *        twin, runnable with the rest of the NetBSD BGn: in vms-024).
  *   void exec_socket_get(exec_socket_t s)
  *        take an ADDITIONAL reference (the Linux poll fd rind's second ref).
  *        Linux: kref_get. NetBSD: trivial (never called -- no poll fd).
@@ -619,6 +629,14 @@
  *        set one integer socket option on the REAL host socket. 0/nonzero.
  *        Linux: sock_setsockopt (SOL_SOCKET) or ops->setsockopt, KERNEL_SOCKPTR.
  *        NetBSD: sockopt_setint + sosetopt (contract-only twin).
+ *   int  exec_socket_set_rcvtimeo(exec_socket_t s, uint32_t timeout_ms)
+ *        arm a receive timeout (ms; 0 = block indefinitely, every socket's
+ *        initial state) for subsequent exec_socket_recv calls, which then return
+ *        -EAGAIN when it expires (vms_bg.c maps that to SS$_TIMEOUT, vms-a9e7).
+ *        Carried as milliseconds, not a substrate SO_RCVTIMEO/timeval, so the
+ *        caller names no host socket constant. 0/nonzero.
+ *        Linux: WRITE_ONCE(sk->sk_rcvtimeo, msecs_to_jiffies(ms)) under lock_sock.
+ *        NetBSD: so->so_rcv.sb_timeo = mstohz(ms) under solock (contract-only twin).
  *   int  exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out)
  *        read one integer socket option back off the LIVE socket. Returns 0 (+
  *        *out) for the supported whitelist (SO_KEEPALIVE/SO_REUSEADDR/SO_ERROR,

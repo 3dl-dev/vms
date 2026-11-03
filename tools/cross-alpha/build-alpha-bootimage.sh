@@ -40,11 +40,31 @@
 #
 # Rule 9: BUILD/TEST tooling only, all containerized.  It assembles and (via
 # boot-alpha-image.sh) boots the REAL runtime; it is never itself a runtime.
+#
+# RELEASE KNOBS (tools/cut-release-alpha.sh, rd vms-f10 -- the Alpha bootable
+# release set is THIS script's output, not a second assembly path):
+#   OVMX_ALPHA_RELEASE=1  the release product disk: no harness payload is built
+#                         or staged (no joint-e2e proof images, no proof
+#                         SYSTARTUP) -- the volume carries the static product
+#                         userland and the product rootfs-alpha SYSTARTUP_VMS.COM.
+#                         The genuine DECC$SHR/LIBOTS$SHR shareable graph (step
+#                         1b) is NOT on the release disk yet: it needs the
+#                         alpha-dec-vms GCC toolchain image in the cut (tracked
+#                         under vms-f10).
+#   SOURCE_DATE_EPOCH     pins every clock the set embeds -- kbuild (via
+#                         build-vmsko-alpha.sh and the bake below), the initramfs
+#                         member mtimes, and the ODS-2 file dates vmsfs_master
+#                         stamps -- so two cuts of one commit are byte-identical.
+#   ALPHA_IMG             the toolchain image tag (default ovmx-cross-alpha).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-IMG="ovmx-cross-alpha"
+IMG="${ALPHA_IMG:-ovmx-cross-alpha}"
+export ALPHA_IMG="$IMG"
+RELEASE="${OVMX_ALPHA_RELEASE:-0}"
+SDE="${SOURCE_DATE_EPOCH:-}"
+case "$SDE" in ''|*[!0-9]*) [ -z "$SDE" ] || { echo "FAIL: SOURCE_DATE_EPOCH='$SDE' is not a nonnegative integer"; exit 1; } ;; esac
 KV="${KV:-6.6.52}"
 VMSKO_WORK="${VMSKO_WORK:-/tmp/ovmx-vmsko-alpha}"
 USERLAND="${USERLAND:-/tmp/ovmx-alpha-boot-build}"
@@ -123,7 +143,9 @@ fi
 # milestone image), that staging is reused untouched -- this step only
 # fills the gap when nothing pre-staged it.
 JOINT_DIR="$WORK/joint"
-if [ "$_force" = "1" ] || [ ! -s "$JOINT_DIR/joint_e2e.exe" ] || \
+if [ "$RELEASE" = "1" ]; then
+    echo "== OVMX_ALPHA_RELEASE=1: release product disk -- no joint-e2e harness payload built or staged =="
+elif [ "$_force" = "1" ] || [ ! -s "$JOINT_DIR/joint_e2e.exe" ] || \
    [ ! -s "$JOINT_DIR/DECC\$SHR.EXE" ] || [ ! -s "$JOINT_DIR/LIBOTS_SHR.EXE" ]; then
     echo "== Alpha shareable graph not staged (or FORCE_BUILD) -- building the genuine alpha DECC\$SHR + LIBOTS\$SHR (vms-864/vms-410) =="
     _jbuild="$WORK/.joint-build"
@@ -165,8 +187,18 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
   -v "$WORK":/work "$IMG" bash -euo pipefail -c '
     KV="'"$KV"'"
     DISK_MB="'"$DISK_MB"'"
+    RELEASE="'"$RELEASE"'"
+    SDE="'"$SDE"'"
     export ARCH=alpha CROSS_COMPILE=alpha-linux-gnu-
     export QEMU_LD_PREFIX=/usr/alpha-linux-gnu
+    if [ -n "$SDE" ]; then
+        # vmsfs_master (run under qemu-alpha, which passes the environment
+        # through) stamps its ODS-2 file dates from SOURCE_DATE_EPOCH; kbuild
+        # takes its clock/user/host/build number from these for the bake.
+        export SOURCE_DATE_EPOCH="$SDE" KBUILD_BUILD_USER=ovmx KBUILD_BUILD_HOST=ovmx KBUILD_BUILD_VERSION=1
+        export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@$SDE" "+%a %b %e %H:%M:%S UTC %Y")"
+        export TZ=UTC LC_ALL=C
+    fi
     BIN=/userland/bin
 
     #########################################################################
@@ -219,6 +251,10 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     [ -f /work/imgact-boot-src/imgact/IMGACT.EXE ] \
         || { echo "FAIL: IMGACT.EXE(alpha) did not build -- see /work/imgact-boot-build.log"; tail -20 /work/imgact-boot-build.log; exit 1; }
     cp /work/imgact-boot-src/imgact/IMGACT.EXE "$SYSEXE/IMGACT.EXE"
+    # Its .symtab names the per-build compiler temp objects (ccXXXXXX.o), the one
+    # nondeterministic byte run on the volume: the release disk ships it with
+    # that table stripped (the dynamic symbols the activator needs are kept).
+    [ "$RELEASE" != "1" ] || alpha-linux-gnu-strip --strip-unneeded "$SYSEXE/IMGACT.EXE"
     cp "$BIN/STARTUP.EXE" "$SYSEXE/"   # STARTUP is also /init, but keep on disk
     # Config: SYSUAF/RIGHTSLIST + SYSMGR command files + SYS$STARTUP data
     cp /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT "$SYSEXE/"
@@ -249,7 +285,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # the assemble docker bash -c single-quote.
     JOINT=/work/joint
     MASTER_FMT=--ods2
-    if [ -f "$JOINT/joint_e2e.exe" ] && [ -f "$JOINT/DECC\$SHR.EXE" ] && [ -f "$JOINT/LIBOTS_SHR.EXE" ]; then
+    if [ "$RELEASE" != "1" ] && [ -f "$JOINT/joint_e2e.exe" ] && [ -f "$JOINT/DECC\$SHR.EXE" ] && [ -f "$JOINT/LIBOTS_SHR.EXE" ]; then
         echo "-- staging JOINT-E2E port-image proof onto the ODS-2 volume --"
         cp "$JOINT/joint_e2e.exe"   "$SYSEXE/JOINT_E2E.EXE"
         cp "$JOINT/DECC\$SHR.EXE"   "$ST/vms/SYS0/SYSCOMMON/SYSLIB/DECC\$SHR.EXE"
@@ -427,6 +463,15 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
 
     cp -r "/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYS\$STARTUP/." "$ST/vms/SYS0/SYSCOMMON/SYS\$STARTUP/" 2>/dev/null || true
     cp -r /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSHLP/. "$ST/vms/SYS0/SYSCOMMON/SYSHLP/" 2>/dev/null || true
+    # Release product disk: the PARTS demo kit in SYS$UPDATE, as the x86_64
+    # distrib.img ships it (PARTS.EXE is in the ovmx-images aggregate, built
+    # EM_ALPHA above; PARTS_SETUP.COM is the shared product procedure), so the
+    # release-acceptance PARTS scenario runs on Alpha too.
+    if [ "$RELEASE" = "1" ]; then
+        [ -f "$BIN/PARTS.EXE" ] || { echo "FAIL: release disk needs $BIN/PARTS.EXE"; exit 1; }
+        cp "$BIN/PARTS.EXE" "$ST/vms/SYS0/SYSCOMMON/SYSUPD/PARTS.EXE"
+        cp /repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSUPD/PARTS_SETUP.COM "$ST/vms/SYS0/SYSCOMMON/SYSUPD/"
+    fi
 
     echo "   staged $(ls "$SYSEXE" | wc -l) files in SYS\$SYSTEM:"
 
@@ -536,6 +581,8 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
           echo "file $rel $f 644 0 0"
       done < <(find "$IR/vms" -type f | sort)
     } > /work/alpha-boot.list
+    # gen_init_cpio embeds each file member mtime: pin them for a reproducible set.
+    [ -z "$SDE" ] || find "$IR" -exec touch -h -d "@$SDE" {} +
     echo "   initramfs list: $(wc -l < /work/alpha-boot.list) entries"
 
     #########################################################################

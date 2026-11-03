@@ -1320,6 +1320,19 @@ static int cmd_directory_list(struct dcl_command *cmd)
         char last = L ? vms_pattern[L - 1] : 0;
         if (last == ']' || last == '>' || last == ':')
             strncat(vms_pattern, "*.*;*", sizeof(vms_pattern) - L - 1);
+        /* DIRECTORY's default version is ";*" -- every version is listed --
+         * where $SEARCH of a spec without one finds only the highest (rd
+         * vms-28c). */
+        const char *rb = strrchr(vms_pattern, ']');
+        if (!rb) rb = strrchr(vms_pattern, '>');
+        if (!rb) rb = strrchr(vms_pattern, ':');
+        const char *ft = rb ? rb + 1 : vms_pattern;
+        const char *semi = strchr(ft, ';');
+        L = strlen(vms_pattern);
+        if (!semi)
+            strncat(vms_pattern, ";*", sizeof(vms_pattern) - L - 1);
+        else if (semi[1] == '\0')
+            strncat(vms_pattern, "*", sizeof(vms_pattern) - L - 1);
     }
 
     /* Split the effective pattern into a directory-spec prefix and a file
@@ -1497,7 +1510,10 @@ static int cmd_directory_list(struct dcl_command *cmd)
         if (entry_count == 0 && dir_more_n == 0) {
             free(entries);
             dcl_error("DIRECT", STS$K_WARNING, "NOFILES", "no files found");
-            return SS$_NOSUCHFILE;
+            /* $STATUS: RMS$_FNF at WARNING severity, its message shown --
+             * %X10018290 on VAX V7.3 (tests/lab/captures/
+             * status-battery-20261021/, DIRECTORY NOSUCHQ.TMP) */
+            return (int)(0x10000000u | (RMS$_FNF & ~7u));
         }
 
         /* Header (only once we know there is at least one file to list).
@@ -1678,7 +1694,10 @@ static int cmd_directory_list(struct dcl_command *cmd)
 
     if (grand_files == 0) {
         dcl_error("DIRECT", STS$K_WARNING, "NOFILES", "no files found");
-        return SS$_NOSUCHFILE;
+        /* $STATUS: over a directory tree that matched nothing VAX V7.3
+         * returns RMS$_DNF, its message shown -- %X1001C04A
+         * (docs/oracle/semantics/srch/ SRCH.DIR.NONE, rd vms-28c) */
+        return (int)(0x10000000u | RMS$_DNF);
     }
 
     printf("\nGrand total of %d director%s, %ld file%s",
@@ -2846,6 +2865,29 @@ int cmd_copy(struct dcl_command *cmd)
                 snprintf(dst_spec, sizeof(dst_spec), "%s%s", dst_prefix, out_name);
         }
 
+        /* An output without a version takes the INPUT file's version when no
+         * file of that name exists yet, else the next one up (DCL Dictionary,
+         * COPY; VAX V7.3 copies [.A]PUR.DAT;2 to [.C]PUR.DAT;2,
+         * docs/oracle/semantics/srch/ SRCH.COPY, rd vms-28c). */
+        {
+            const char *ont = strrchr(dst_spec, ']');
+            if (!ont) ont = strrchr(dst_spec, '>');
+            ont = ont ? ont + 1 : dst_spec;
+            const char *ssemi = strrchr(src_spec, ';');
+            long iver = ssemi ? strtol(ssemi + 1, NULL, 10) : 0;
+            if (!strchr(ont, ';') && iver > 1) {
+                char probe[1300];
+                snprintf(probe, sizeof probe, "%s;*", dst_spec);
+                struct dcl_rms_dir *pd = dcl_rms_dir_open(ctx, probe);
+                int exists = pd && dcl_rms_dir_next(pd, NULL, 0, NULL, NULL, NULL);
+                if (pd) dcl_rms_dir_close(pd);
+                if (!exists) {
+                    size_t dl = strlen(dst_spec);
+                    snprintf(dst_spec + dl, sizeof(dst_spec) - dl, ";%ld", iver);
+                }
+            }
+        }
+
         if (do_confirm) {
             printf("COPY %s to %s ? [N]: ", src_spec, dst_spec);
             fflush(stdout);
@@ -2971,6 +3013,14 @@ static int delete_files_acp(struct dcl_context *ctx, const char *param,
         strncpy(arr[n].fm.dname, nt, sizeof(arr[n].fm.dname) - 1);
         arr[n].fm.dname[sizeof(arr[n].fm.dname) - 1] = '\0';
         fm_split(nt, arr[n].fm.base, sizeof(arr[n].fm.base), &arr[n].fm.version);
+        /* ...grouped within its directory: the same name in two directories of
+         * an ellipsis walk is two files, not two versions of one (rd vms-28c) */
+        {
+            char grp[256];
+            snprintf(grp, sizeof grp, "%.*s%s", (int)(nt - rspec), rspec, arr[n].fm.base);
+            for (char *g = grp; *g; g++) *g = (char)toupper((unsigned char)*g);
+            snprintf(arr[n].fm.base, sizeof(arr[n].fm.base), "%s", grp);
+        }
         n++;
     }
     dcl_rms_dir_close(d);
@@ -3820,6 +3870,14 @@ static int purge_files_acp(struct dcl_context *ctx, const char *param, int keep_
         strncpy(arr[n].fm.dname, nt, sizeof(arr[n].fm.dname) - 1);
         arr[n].fm.dname[sizeof(arr[n].fm.dname) - 1] = '\0';
         fm_split(nt, arr[n].fm.base, sizeof(arr[n].fm.base), &arr[n].fm.version);
+        /* ...grouped within its directory: the same name in two directories of
+         * an ellipsis walk is two files, not two versions of one (rd vms-28c) */
+        {
+            char grp[256];
+            snprintf(grp, sizeof grp, "%.*s%s", (int)(nt - rspec), rspec, arr[n].fm.base);
+            for (char *g = grp; *g; g++) *g = (char)toupper((unsigned char)*g);
+            snprintf(arr[n].fm.base, sizeof(arr[n].fm.base), "%s", grp);
+        }
         n++;
     }
     dcl_rms_dir_close(d);

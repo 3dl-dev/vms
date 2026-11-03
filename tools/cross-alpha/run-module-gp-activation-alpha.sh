@@ -67,6 +67,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate # vms-f49 rung 4: veneer write + INDEPENDENT ODS-2 File-ID reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-fd-gate # vms-b90: the C RTL file layer over RMS (32-bit stdio + descriptors) + DCL writer/TYPE reader
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-vm-gate # vms-bc53: the DEC C heap is executive $EXPREG P0 charged to PGFLQUOTA (logged-in SYSTEM: malloc NULL/ENOMEM, SYS$EXPREG SS$_EXQUOTA)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh native-gate     # vms-3b3f: .EXE LINKed on real OpenVMS Alpha runs unchanged (SYS$QIOW/LIB$PUT_OUTPUT via SYS$PUBLIC_VECTORS/LIBRTL)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh vmsabi-rms-gate # vms-692: SYS$PARSE/SYS$SEARCH over VMS-layout FAB/NAM + DIRECTORY/FULL File ID cross-check
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh cc1-gate      # vms-9a63: the VMS-hosted GCC cc1 compiles a C file on OVMX; DCL TYPE == cross cc1 output
@@ -932,6 +933,24 @@ assert_vmsabi() {
   return 0
 }
 
+# assert_crtlvm <console-log> -- THE TEETH for the vms-bc53 heap proof
+# (`crtl-vm-gate' mode). PASS iff the image, run in a logged-in SYSTEM session
+# (PGFLQUOTA sourced from SYSUAF), (a) ran out of heap before its 400 MB bound
+# with malloc NULL / errno ENOMEM, (b) then had SYS$EXPREG refused SS$_EXQUOTA by
+# the executive (the heap and $EXPREG are one charge), (c) got both back after
+# free, and (d) did not crash. A heap still on Linux mmap fails (a) and (b).
+assert_crtlvm() {
+  local log="$1" line
+  tr -d '\r' < "$log" | grep >/dev/null -a "^OVMX CRTL-VM test: OK" || { echo "  assert_crtlvm: the image did not report OK" >&2; return 1; }
+  grep -aqE "%DCL-F-ABORT|terminated abnormally" "$log" && { echo "  assert_crtlvm: the image crashed" >&2; return 1; }
+  line=$(tr -d '\r' < "$log" | grep -a "^CRTLVM: heap exhausted after" | tail -1)
+  printf '%s\n' "$line" | grep >/dev/null -E "after ([1-9]|[1-9][0-9]|[1-3][0-9][0-9]) MB: malloc NULL errno=ENOMEM, then SYS\\\$EXPREG %X0000001C$" \
+    || { echo "  assert_crtlvm: no ENOMEM exhaustion below the bound followed by SS\$_EXQUOTA: '$line'" >&2; return 1; }
+  tr -d '\r' < "$log" | grep >/dev/null -aE "^CRTLVM: after free: SYS\\\$EXPREG %X[0-9A-F]{7}[13579BDF], malloc 1 MB ok$" \
+    || { echo "  assert_crtlvm: the charge did not come back after free" >&2; return 1; }
+  return 0
+}
+
 # assert_crtlfd <console-log> -- THE TEETH for the vms-b90 C RTL file-layer
 # proof (`crtl-fd-gate' mode). PASS iff (a) the image ran every check and said
 # so ("OVMX CRTL-FD test: OK", which it prints only with zero failed checks:
@@ -979,6 +998,25 @@ assert_crtlfd() {
     tr -d '\r' < "$log" | grep >/dev/null -aF "CFDX: $_call atexit-ran" \
       || { echo "  assert_crtlfd: main returning $_call: the atexit function did not run" >&2; return 1; }
   done
+  # vms-593: the C RTL's clock is the system time and its zone the SYS$TIMEZONE_*
+  # logicals: each DEFINE of the differential moves the next run's localtime(),
+  # with no TZ variable anywhere. The first run's time() (UTC, differential 0)
+  # lies between the two F$TIME stamps DCL printed around it.
+  local _t _d1 _d2 _u
+  _t=$(tr -d '\r' < "$log")
+  for _x in "zone=UTC +0000 jan=2026-01-15 12:00 UTC +0000 ctime=Thu Jan 15 12:00:00 2026" \
+            "zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026" \
+            "zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026"; do
+    printf '%s\n' "$_t" | grep -aF " $_x" | grep >/dev/null -aE "CRTLTIME: utc=[0-9-]{10} [0-9:]{8} zone=" \
+      || { echo "  assert_crtlfd: the C RTL's local time did not follow the differential: no '$_x'" >&2; return 1; }
+  done
+  _d1=$(printf '%s\n' "$_t" | grep -aoE "CRTLTIME-DCL: [0-9-]{10} [0-9:]{8}" | sed -n 1p | cut -c15-)
+  _d2=$(printf '%s\n' "$_t" | grep -aoE "CRTLTIME-DCL: [0-9-]{10} [0-9:]{8}" | sed -n 2p | cut -c15-)
+  _u=$(printf '%s\n' "$_t" | grep -aoE "CRTLTIME: utc=[0-9-]{10} [0-9:]{8}" | sed -n 1p | cut -c15-)
+  [ -n "$_d1" ] && [ -n "$_d2" ] && [ -n "$_u" ] \
+    || { echo "  assert_crtlfd: the F\$TIME stamps or the image's time() are missing" >&2; return 1; }
+  [ "$(printf '%s\n' "$_d1" "$_u" "$_d2" | LC_ALL=C sort | tr '\n' '|')" = "$_d1|$_u|$_d2|" ] \
+    || { echo "  assert_crtlfd: time() $_u is not the system time (F\$TIME $_d1 .. $_d2)" >&2; return 1; }
   return 0
 }
 
@@ -1265,6 +1303,42 @@ run_boot_a() {
               send LOGOUT
           else
               echo "NATIVE-SP: SYSTEM/MANAGER login did not reach the banner" >> modgpA.raw
+          fi
+      fi
+      # LOGIN_CMDS_FILE (the crtl-vm gate, vms-bc53): log in SYSTEM/MANAGER on
+      # OPA0: and send each command line of the file after its first, which is
+      # the marker that ends the session. A login process is the one whose
+      # quotas LOGINOUT sourced from SYSUAF.
+      LCF="'"${LOGIN_CMDS_FILE:-}"'"
+      if [ -n "$LCF" ] && [ -f "$LCF" ] && grep -qaF "Username:" modgpA.raw 2>/dev/null; then
+          lsend()    { printf "%s\r" "$1" >&6 2>/dev/null || true; }
+          lwaitpat() {
+              local pat="$1" lim="$2" since="${3:-0}" w=0
+              while [ "$w" -lt "$lim" ]; do
+                  tail -c "+$((since + 1))" modgpA.raw 2>/dev/null | grep >/dev/null -aF -- "$pat" && return 0
+                  kill -0 "$QP" 2>/dev/null || return 1
+                  sleep 1; w=$((w + 1))
+              done
+              return 1
+          }
+          LEND=$(head -1 "$LCF")
+          OFF=$(wc -c < modgpA.raw)
+          lsend SYSTEM
+          lwaitpat "Password:" 60 "$OFF" && lsend MANAGER
+          if lwaitpat "Welcome to OpenVMX" 120 "$OFF"; then
+              lwaitpat "\$ " 60 "$OFF" || true
+              sleep 2
+              tail -n +2 "$LCF" | while IFS= read -r LC; do
+                  OFF=$(wc -c < modgpA.raw)
+                  lsend "$LC"
+                  lwaitpat "\$ " 60 "$OFF" || true
+                  sleep 1
+              done
+              lwaitpat "$LEND" 900 0 || echo "LOGIN-RUN: the session did not reach $LEND" >> modgpA.raw
+              sleep 2
+              lsend LOGOUT
+          else
+              echo "LOGIN-RUN: SYSTEM/MANAGER login did not reach the banner" >> modgpA.raw
           fi
       fi
       exec 6>&-
@@ -3244,7 +3318,17 @@ EOF
       for _x in "ret 0:%X00000001" "ret 3:%X0035A019"; do
         echo "CFDX: ${_x%%:*} flushed-by-exitCFDX: ${_x%%:*} atexit-ranCRTLFD-EXIT: ${_x%%:*} STATUS=${_x##*:}"
       done
+      echo "CRTLTIME-DCL: 2026-11-02 17:40:11.07"
+      echo "CRTLTIME: utc=2026-11-02 17:40:12 zone=UTC +0000 jan=2026-01-15 12:00 UTC +0000 ctime=Thu Jan 15 12:00:00 2026"
+      echo "CRTLTIME-DCL: 2026-11-02 17:40:13.52"
+      echo "CRTLTIME: utc=2026-11-02 17:40:14 zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026"
+      echo "CRTLTIME: utc=2026-11-02 17:40:15 zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026"
     } > "$_st/pass.log"
+    # vms-593 negative controls: the differential is not followed (musl's UTC), the
+    # TZ variable is read, and a time() that is not the system time.
+    sed 's/zone=IST +0530 jan=2026-01-15 17:30 IST +0530 ctime=Thu Jan 15 17:30:00 2026/zone=UTC +0000 jan=2026-01-15 12:00 UTC +0000 ctime=Thu Jan 15 12:00:00 2026/' "$_st/pass.log" > "$_st/tdfignored.log"
+    sed 's/zone=EST -0500 jan=2026-01-15 07:00 EST -0500 ctime=Thu Jan 15 07:00:00 2026/zone=XXX +0700 jan=2026-01-15 19:00 XXX +0700 ctime=Thu Jan 15 19:00:00 2026/' "$_st/pass.log" > "$_st/tzread.log"
+    sed 's/CRTLTIME: utc=2026-11-02 17:40:12/CRTLTIME: utc=2026-11-02 18:40:12/' "$_st/pass.log" > "$_st/clockoff.log"
     # vms-599 negative controls: musl's exit (exit(1) a POSIX failure, nothing recorded),
     # a __posix_exit that does not encode, and an exit that skips the stdio flush
     sed 's/CRTLFD-EXIT: exit 1 STATUS=%X00000001/CRTLFD-EXIT: exit 1 STATUS=%X0000002C/' "$_st/pass.log" > "$_st/muslexit.log"
@@ -3259,7 +3343,7 @@ EOF
     grep -v "APPENDED BY" "$_st/pass.log" > "$_st/noappend.log"
     sed 's/TYPE-STATUS=%X00000001/TYPE-STATUS=%X00018292/' "$_st/pass.log" > "$_st/notype.log"
     sed 's/test: OK (stdio/test: 1 check(s) FAILED (first 14) (stdio/' "$_st/pass.log" > "$_st/checkfail.log"
-    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1"; do
+    for _c in "pass:0" "noappend:1" "notype:1" "checkfail:1" "kwignored:1" "ratignored:1" "muslexit:1" "pexitraw:1" "noflush:1" "retnorundown:1" "retnoatexit:1" "retstatus:1" "tdfignored:1" "tzread:1" "clockoff:1"; do
       _n=${_c%%:*}; _want=${_c##*:}
       if assert_crtlfd "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
       if [ "$_got" = "$_want" ]; then echo "  crtlfd selftest $_n: PASS"; else echo "  crtlfd selftest $_n: FAIL"; _fails=$((_fails+1)); fi
@@ -3271,7 +3355,7 @@ EOF
     assemble_boot_image
     log "step 3: BOOT A -- the C RTL file layer over RMS on the REAL executive"
     run_boot_a
-    grep -aE "CFD:|CFDX:|CRTLFD-EXIT:|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    grep -aE "CFD:|CFDX:|CRTLFD-EXIT:|CRTLTIME|OVMX CRTL-FD|CRTLFD-PROOF:|line (001|120) of|APPENDED BY|%DCL-|%IMGACT|%RMS-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     if assert_crtlfd "$WORK/modgpA.log"; then
       echo ""
       echo "PASS: a 32-bit DEC C program's stdio and descriptor calls ran over RMS on the"
@@ -3279,6 +3363,63 @@ EOF
       exit 0
     fi
     echo "FAIL: the C RTL file layer did not work end to end. Full log: $WORK/modgpA.log"
+    tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  crtl-vm-gate)
+    # vms-bc53: the DEC C heap's address space is the executive's. MILESTONE
+    # image crtl_vm_test.c is an ordinary 32-bit DEC C program; SYSTARTUP runs it
+    # once with no argument (a boot process: no sourced quota, so it only checks
+    # P0 placement). The proof run is in a SYSTEM login on OPA0: -- LOGINOUT
+    # sources PGFLQUOTA from SYSUAF -- as the foreign command `CRTLVM quota`.
+    MILESTONE_MAIN=crtl_vm_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    export JOINT_MAIN_MUSL_HEADERS=1
+    export JOINT_USE_LIBVMS=1           # SYS$EXPREG lives in LIBVMS$SHR
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1"
+    _st=$(mktemp -d); _fails=0
+    {
+      echo "CRTLVM: small+large malloc in P0=1"
+      echo "CRTLVM: heap exhausted after 18 MB: malloc NULL errno=ENOMEM, then SYS\$EXPREG %X0000001C"
+      echo "CRTLVM: after free: SYS\$EXPREG %X00000001, malloc 1 MB ok"
+      echo "OVMX CRTL-VM test: OK (the heap is P0 charged to PGFLQUOTA)"
+      echo "CRTLVM-END"
+    } > "$_st/pass.log"
+    # the heap on Linux mmap: it runs to the bound and $EXPREG still has room
+    sed 's/after 18 MB: malloc NULL errno=ENOMEM, then SYS\$EXPREG %X0000001C/after 400 MB: malloc NULL errno=other, then SYS$EXPREG %X00000001/' "$_st/pass.log" > "$_st/linuxheap.log"
+    # the heap charged nothing: it ran out of P0 (VASFULL) instead of quota
+    sed 's/then SYS\$EXPREG %X0000001C/then SYS$EXPREG %X00000001/' "$_st/pass.log" > "$_st/nocharge.log"
+    sed 's/errno=ENOMEM/errno=other/' "$_st/pass.log" > "$_st/noerrno.log"
+    sed 's/after free: SYS\$EXPREG %X00000001/after free: SYS$EXPREG %X0000001C/' "$_st/pass.log" > "$_st/nocredit.log"
+    sed 's/test: OK (the heap/test: FAILED (the heap/' "$_st/pass.log" > "$_st/checkfail.log"
+    { cat "$_st/pass.log"; echo "%DCL-F-ABORT, image terminated abnormally"; } > "$_st/crash.log"
+    for _c in "pass:0" "linuxheap:1" "nocharge:1" "noerrno:1" "nocredit:1" "checkfail:1" "crash:1"; do
+      _n=${_c%%:*}; _want=${_c##*:}
+      if assert_crtlvm "$_st/$_n.log" >/dev/null 2>&1; then _got=0; else _got=1; fi
+      if [ "$_got" = "$_want" ]; then echo "  crtlvm selftest $_n: PASS"; else echo "  crtlvm selftest $_n: FAIL"; _fails=$((_fails+1)); fi
+    done
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "crtlvm selftest failed -- assert_crtlvm cannot be trusted"
+    [ "${CRTLVM_SELFTEST_ONLY:-0}" = 1 ] && { echo "PASS: crtlvm selftest only"; exit 0; }
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    # The login session's commands: first line is the END marker to wait for.
+    printf '%s\n' "CRTLVM-END" 'CRTLVM :== $SYS$SYSTEM:JOINT_E2E.EXE' "CRTLVM quota" > "$WORK/login_cmds.txt"
+    export LOGIN_CMDS_FILE=/work/login_cmds.txt
+    log "step 3: BOOT A -- the DEC C heap on the REAL executive, in a SYSTEM login"
+    run_boot_a
+    grep -aE "CRTLVM|OVMX CRTL-VM|LOGIN-RUN:|%DCL-|%IMGACT|%SYSTEM-|fatal signal" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_crtlvm "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: a DEC C program's heap ran out at its PGFLQUOTA (malloc NULL, ENOMEM) and"
+      echo "      the executive then refused SYS\$EXPREG SS\$_EXQUOTA: the heap is VMS address"
+      echo "      space charged to the process's quota, given back by free."
+      exit 0
+    fi
+    echo "FAIL: the DEC C heap is not the executive's \$EXPREG address space. Full log: $WORK/modgpA.log"
     tail -60 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

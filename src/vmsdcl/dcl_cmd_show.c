@@ -33,6 +33,7 @@
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
 #include "dcl/dcl_rms.h"
+#include "dcl/devmatch.h"   /* SHOW DEVICE <prefix> (vms-582) */
 #include "ssdef.h"
 #include "climsgdef.h"
 #include "vms/logical.h"
@@ -2403,6 +2404,10 @@ static int cmd_show_device(struct dcl_command *cmd)
          * with "D" (DKA0:, DUA0:, ...), grouped by class like a bare
          * SHOW DEVICES; VMS reports %SYSTEM-W-NOSUCHDEV when the prefix matches
          * nothing (oracle section 6, the same message the exact-name miss uses).
+         * The prefix is matched against the device name proper, past any
+         * node or allocation-class prefix ("$2$DUA2", "VAX1$DUA2"), the way a
+         * cluster's SHOW DEVICE D lists MSCP-served disks (vms-582,
+         * dcl/devmatch.h).
          * A fully-qualified NAME: still goes through the exact $GETDVI-by-name
          * path below, which is where the oracle-pinned NOSUCHDEV/IVDEVNAM
          * verdicts for a named device are measured. Both source every value
@@ -2418,7 +2423,7 @@ static int cmd_show_device(struct dcl_command *cmd)
                 info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
                 if (info.devclass != DC$_DISK)
                     continue;
-                if (strncmp(info.devnam, want, wlen) != 0)
+                if (!dcl_devnam_prefix_match(info.devnam, want, wlen))
                     continue;
                 struct vms_getvol_args vol;
                 memset(&vol, 0, sizeof(vol));
@@ -2437,7 +2442,7 @@ static int cmd_show_device(struct dcl_command *cmd)
                 info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
                 if (info.devclass == DC$_DISK)
                     continue;
-                if (strncmp(info.devnam, want, wlen) != 0)
+                if (!dcl_devnam_prefix_match(info.devnam, want, wlen))
                     continue;
                 show_device_row(&info, &rows);
                 matched++;

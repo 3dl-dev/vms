@@ -320,6 +320,10 @@
  * measured against any reference lab; see src/kernel/vms_mbx.c).
  */
 #define SS__EXQUOTA     28
+/* SS__VASFULL / SS__PAGOWNVIO -- $EXPREG/$CRETVA (rd vms-bc53). Oracle-pinned:
+ * docs/oracle/alpha84-starlet-defs/SSDEF.txt (SS$_VASFULL 580, SS$_PAGOWNVIO 492). */
+#define SS__VASFULL     580
+#define SS__PAGOWNVIO   492
 /* SS__MBTOOSML -- SS$_MBTOOSML (412): a mailbox message bigger than the
  * mailbox's maximum message size. Oracle-pinned: the V7.3 STARLET dump
  * (docs/oracle/vax73-starlet-defs/SSDEF.txt) and the semantic oracle, which
@@ -1057,6 +1061,15 @@ struct vms_proc {
     spinlock_t          p1_lock;
 
     /*
+     * Virtual address space record (rd vms-bc53, vms_va.c): the ranges
+     * $EXPREG/$CRETVA created for this process and their PGFLQUOTA charge.
+     * NULL until the first VMS_IOCTL_VA; va_lock serialises every VA
+     * service for the process (it sleeps: the services map/unmap pages).
+     */
+    struct vms_va_space *va;
+    struct mutex        va_lock;
+
+    /*
      * Image completion status -- the executive half of $EXIT/$STATUS
      * (vms-f60d). When an activated image finishes (its port crt0's
      * main() returns, or it calls SYS$EXIT explicitly), IMGACT records
@@ -1747,6 +1760,11 @@ bool vms_proc_may_read(const struct vms_proc *caller,
 long vms_ioctl_p0_map(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_p0_unmap(struct vms_proc *proc, unsigned long arg);
 
+/* Process virtual address space: $EXPREG/$CRETVA/$DELTVA (rd vms-bc53, vms_va.c). */
+struct vms_va_space;
+long vms_ioctl_va(struct vms_proc *proc, unsigned long arg);
+void vms_va_release(struct vms_proc *proc);
+
 /*
  * P1 control region (vms-68f.ii, in-process image activation foundation,
  * increment (ii)). Records [p1_base, p1_limit) for the calling process;
@@ -1857,6 +1875,7 @@ void vms_acp_cleanup(void);
 long vms_ioctl_bg_create(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_setmode_icmp(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_bg_setmode_udp(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_connect(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_send(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg);

@@ -212,7 +212,7 @@ grep '^DEFERRED-UNDEF: ' "$LINKLOG" | awk '{print $2}' | sort -u > "$DEFERRED"
 UNEXPECTED=0
 while IFS= read -r name; do
     case "$name" in
-        vms_kif_*|vmsfs_*|vms_pcb_*) ;;                      # LIBVMSSYS/LIBVMSFS/LIBVMSPROCESS (not yet packaged for vax)
+        vms_kif_*|vms_substrate_*|vmsfs_*|vms_pcb_*) ;;      # LIBVMSSYS (vms_substrate_systime: vms-593)/LIBVMSFS/LIBVMSPROCESS (not yet packaged for vax)
         CMPLX|__progname|__ps_strings|environ|_end) ;;       # libm helper / NetBSD libc process-startup globals
         *)
             echo "FAIL: unexpected deferred import '$name' -- not on the allowlist (regression or a new real dependency; update the allowlist deliberately if it's the latter)"

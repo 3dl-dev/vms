@@ -3794,6 +3794,67 @@ _Static_assert(VMS_IOCTL_P0_UNMAP == 0xC0185664u,
                "VMS_IOCTL_P0_UNMAP encodes differently here than on the reference build");
 
 /* ================================================================
+ * Process virtual address space -- $EXPREG / $CRETVA / $DELTVA (rd vms-bc53)
+ *
+ * The executive creates and deletes a process's demand-zero pages and charges
+ * them against its paging-file quota (src/kernel/vms_va.c). One request, an
+ * op selector:
+ *   VMS_VA_EXPREG  append `length` bytes to the end of `region` (P0 only;
+ *                  P1 -> SS$_UNSUPPORTED). out: base/length created.
+ *                  SS$_EXQUOTA past a sourced PGFLQUOTA, SS$_VASFULL when the
+ *                  region has no room below its ceiling.
+ *   VMS_VA_CRETVA  create pages over [base, base+length), replacing pages
+ *                  this service created; SS$_PAGOWNVIO if the range touches
+ *                  pages it did not create (image, shareables, substrate).
+ *   VMS_VA_DELTVA  delete the pages this service created in the range,
+ *                  skipping the rest. out: base/length actually deleted.
+ *   VMS_VA_QUERY   no change; the accounting fields only.
+ * Every reply carries the accounting: charged/pgflquota/pagfilcnt in
+ * PAGELETS (512 bytes), quota_sourced = 1 only when the process's PGFLQUOTA
+ * came from SYSUAF (VMS_IOCTL_SETIDENT quota_valid) -- otherwise the pages
+ * are charged but no limit is enforced, and pgflquota/pagfilcnt are 0
+ * (absent, not zero -- the vms_jib_quota discipline above).
+ *
+ * INV-6: no /dev/vms -> SYS$EXPREG/CRETVA/DELTVA and the DEC C heap return
+ * SS$_NOSUCHDEV / NULL; there is no userspace mmap fallback.
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the request layout and number are
+ * OVMX's own transport encoding, not a VMS wire format.
+ */
+#define VMS_VA_EXPREG       1
+#define VMS_VA_CRETVA       2
+#define VMS_VA_DELTVA       3
+#define VMS_VA_QUERY        4
+
+#define VMS_VA_REGION_P0    0
+#define VMS_VA_REGION_P1    1
+
+#define VMS_VA_P0_FLOOR     0x00100000ULL  /* first $EXPREG candidate, above the image base */
+#define VMS_VA_P0_CEILING   0x40000000ULL  /* P1 begins here on every VMS architecture   */
+
+struct vms_va_args {
+    uint32_t op;            /* in: VMS_VA_* */
+    uint32_t region;        /* in (EXPREG): VMS_VA_REGION_* */
+    uint64_t base;          /* in (CRETVA/DELTVA): first byte; out: first byte affected */
+    uint64_t length;        /* in: bytes; out: bytes affected (page-rounded) */
+    uint32_t status;        /* out: SS$_ */
+    uint32_t quota_sourced; /* out: 1 = pgflquota is the process's SYSUAF quota */
+    uint64_t pgflquota;     /* out: authorized PGFLQUOTA, pagelets (0 = unsourced) */
+    uint64_t pagfilcnt;     /* out: remaining, pagelets (0 = unsourced) */
+    uint64_t charged;       /* out: pagelets created by this service and not deleted */
+    uint64_t frep0va;       /* out: end of the P0 region $EXPREG grows */
+    uint32_t extents;       /* out: executive-created ranges held */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_VA  _IOWR(VMS_IOC_MAGIC, 0xC4, struct vms_va_args)
+
+_Static_assert(sizeof(struct vms_va_args) == 72,
+               "vms_va_args layout changed: VMS_IOCTL_VA ABI break");
+_Static_assert(VMS_IOCTL_VA == 0xC04856C4u,
+               "VMS_IOCTL_VA encodes differently here than on the reference build");
+
+/* ================================================================
  * P1 control region (vms-68f.ii, in-process image activation foundation,
  * increment (ii))
  *

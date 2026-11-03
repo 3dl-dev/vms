@@ -1102,6 +1102,33 @@ static inline int exec_socket_create_icmp(exec_socket_t *out)
 	return 0;
 }
 
+/* UDP socket for the DNS resolver (vms-a9e7): identical holder discipline to
+ * exec_socket_create, only the type/protocol differ (SOCK_DGRAM/IPPROTO_UDP).
+ * The caller builds the application payload (a DNS query) itself; a connected
+ * UDP socket then moves one datagram per exec_socket_send / exec_socket_recv
+ * (kernel_recvmsg on a datagram socket returns exactly one datagram). */
+static inline int exec_socket_create_udp(exec_socket_t *out)
+{
+	struct exec_socket_holder *h;
+	struct socket *sock;
+	int rc;
+
+	*out = NULL;
+	rc = sock_create_kern(&init_net, AF_INET, SOCK_DGRAM, IPPROTO_UDP, &sock);
+	if (rc)
+		return rc;
+	h = kmalloc(sizeof(*h), GFP_KERNEL);
+	if (!h) {
+		sock_release(sock);
+		return -ENOMEM;
+	}
+	h->sock = sock;
+	h->promisc_ifindex = 0;     /* vms-a84d: TCP/ICMP/UDP holders never go promisc */
+	kref_init(&h->kref);        /* the channel's reference */
+	*out = h;
+	return 0;
+}
+
 static inline void exec_socket_get(exec_socket_t s) { kref_get(&s->kref); }
 static inline void exec_socket_release(exec_socket_t s)
 {
@@ -1179,6 +1206,24 @@ static inline int exec_socket_setopt_int(exec_socket_t s, int level, int name, i
 	if (sock->ops && sock->ops->setsockopt)
 		return sock->ops->setsockopt(sock, level, name, KERNEL_SOCKPTR(&val), sizeof(val));
 	return -ENOPROTOOPT;
+}
+
+/* Receive timeout in milliseconds (0 = block indefinitely) for later
+ * exec_socket_recv calls (vms-a9e7). Sets sk_rcvtimeo directly -- the same
+ * field-level socket-state access exec_l2_recv uses -- so the caller needs no
+ * substrate SO_RCVTIMEO number or timeval layout. A recv that times out returns
+ * -EAGAIN. */
+static inline int exec_socket_set_rcvtimeo(exec_socket_t s, uint32_t timeout_ms)
+{
+	struct sock *sk = s->sock->sk;
+
+	if (!sk)
+		return -EINVAL;
+	lock_sock(sk);
+	WRITE_ONCE(sk->sk_rcvtimeo, timeout_ms ? (long)msecs_to_jiffies(timeout_ms)
+						: MAX_SCHEDULE_TIMEOUT);
+	release_sock(sk);
+	return 0;
 }
 
 static inline int exec_socket_getopt_int(exec_socket_t s, int level, int name, int *out)

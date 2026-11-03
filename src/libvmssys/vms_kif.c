@@ -2476,6 +2476,21 @@ uint32_t vms_kif_p0_map(uint64_t base, uint64_t limit)
     return args.status;
 }
 
+uint32_t vms_kif_va(struct vms_va_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+
+    kif_bind();
+    if (vms_dev_fd < 0)
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_VA, args);
+
+    return args->status;
+}
+
 uint32_t vms_kif_p0_unmap(uint64_t *old_base, uint64_t *old_limit)
 {
     struct vms_p0_args args;
@@ -3670,6 +3685,21 @@ uint32_t vms_kif_bg_setmode_icmp(uint32_t exec_chan)
     args.chan = exec_chan;
 
     KIF_CALL(VMS_IOCTL_BG_SETMODE_ICMP, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_bg_setmode_udp(uint32_t exec_chan)
+{
+    struct vms_bg_chanonly_args args;
+
+    if (!bg_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = exec_chan;
+
+    KIF_CALL(VMS_IOCTL_BG_SETMODE_UDP, &args);
 
     return args.status;
 }

@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <unixlib.h>
 
@@ -78,6 +79,19 @@ int main(int argc, char **argv)
         setvbuf(stdout, NULL, _IOFBF, BUFSIZ);
         printf("CFDX: ret %s flushed-by-exit", argv[2]);
         return (int)strtol(argv[2], NULL, 0);
+    }
+    if (argc >= 2 && strcmp(argv[1], "time") == 0) {
+        /* vms-593: the C RTL's clock and zone. time() is the system time; the
+         * zone is SYS$TIMEZONE_DIFFERENTIAL/_NAME, which SYSTARTUP redefines
+         * between runs (no TZ variable). The struct tm stays the C RTL's own:
+         * strftime formats every field this checks. jan = 2026-01-15 12:00 UTC. */
+        time_t now = time(NULL), jan = 1768478400;
+        char u[64], l[64], j[64];
+        strftime(u, sizeof u, "%Y-%m-%d %H:%M:%S", gmtime(&now));
+        strftime(l, sizeof l, "%Z %z", localtime(&now));
+        strftime(j, sizeof j, "%Y-%m-%d %H:%M %Z %z", localtime(&jan));
+        printf("CRTLTIME: utc=%s zone=%s jan=%s ctime=%s", u, l, j, ctime(&jan));
+        return 0;
     }
     if (argc >= 3 && (strcmp(argv[1], "exit") == 0 || strcmp(argv[1], "pexit") == 0)) {
         int n = (int)strtol(argv[2], NULL, 0);

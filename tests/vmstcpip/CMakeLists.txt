@@ -33,3 +33,26 @@ endif()
 
 add_test(NAME tcpip_svcdb_fuzz COMMAND test_tcpip_svcdb_fuzz)
 set_tests_properties(tcpip_svcdb_fuzz PROPERTIES TIMEOUT 120)
+
+# rd vms-a9e7: the host-name resolver engine (services/tcpip_resolve.h). The unit
+# test covers the TCPIP$HOST.DAT / TCPIP$NAMESERVICE.DAT record parsers, the RFC
+# 1035 query and hand-built replies (A, CNAME->A, NXDOMAIN, TC, wrong ID, pointer
+# loop / past-end, huge RDLENGTH); the fuzz mutates valid replies and holds the
+# PEER-RECEIVE parser to "never reads past the datagram" under ASan/UBSan. Both
+# compile the header straight in; the BGn: exchange half is unused here (the QEMU
+# suite test_syssvc_bg_udp proves it against a real /dev/vms).
+foreach(_t test_tcpip_resolve test_tcpip_resolve_fuzz)
+    add_executable(${_t} ${_t}.c)
+    target_include_directories(${_t} PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmstcpip/services
+        ${CMAKE_SOURCE_DIR}/src/libvms/include
+        ${CMAKE_SOURCE_DIR}/src/libvmssys)
+    target_compile_options(${_t} PRIVATE -Werror)
+    if(OVMX_TCPIP_FUZZ_SANITIZE_OK)
+        target_compile_options(${_t} PRIVATE -fsanitize=address,undefined)
+        target_link_options(${_t} PRIVATE -fsanitize=address,undefined)
+    endif()
+endforeach()
+add_test(NAME tcpip_resolve COMMAND test_tcpip_resolve)
+add_test(NAME tcpip_resolve_fuzz COMMAND test_tcpip_resolve_fuzz)
+set_tests_properties(tcpip_resolve tcpip_resolve_fuzz PROPERTIES TIMEOUT 120)

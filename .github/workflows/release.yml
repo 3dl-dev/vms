@@ -174,6 +174,14 @@ jobs:
     timeout-minutes: 150
 
     steps:
+      # vms-f10: the cut now also assembles the Alpha bootable set (a Linux/Alpha
+      # kernel tree + userland, ~3 GB) on top of the x86_64/VAX/Alpha builds;
+      # reclaim the big unused hosted toolchains so the cut cannot ENOSPC.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
       - name: Resolve the release tag
         id: tag
         run: |

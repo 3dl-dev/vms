@@ -75,6 +75,13 @@ cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
 # header of src/malloc/alpha-dec-vms/lite_malloc.c.
 mkdir -p "src/malloc/${TARGET}"
 cp -v  "${OVERLAY}/src/malloc/${TARGET}/"* "src/malloc/${TARGET}/"
+# vms-bc53: the heap's address space comes from the executive's $EXPREG/$DELTVA
+# (src/vmslink/ovmx_decc_vm.c), never Linux brk/mmap/munmap/mremap. mallocng
+# names those through glue.h; the overlay is upstream's glue.h with only that
+# block replaced (see its header). A header, so it replaces the original in place.
+cp -v  "${OVERLAY}/src/malloc/mallocng/glue.h" "src/malloc/mallocng/glue.h"
+grep -q 'ovmx\$vm_expreg' src/malloc/mallocng/glue.h \
+ || { echo "vms-bc53 OVERLAY FAIL: src/malloc/mallocng/glue.h" >&2; exit 7; }
 # vms-599: exit() runs the atexit handlers and flushes stdio. Replace generic
 # exit.c (which reaches both through local weak aliases the back end self-binds)
 # with one that calls them by name. See src/exit/alpha-dec-vms/exit.c.

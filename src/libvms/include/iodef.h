@@ -123,6 +123,39 @@ extern "C" {
  */
 #define IO$K_SOCK_STREAM    0   /* default: AF_INET/SOCK_STREAM TCP client */
 #define IO$K_SOCK_ICMP      1   /* AF_INET/SOCK_RAW/IPPROTO_ICMP (PING) */
+#define IO$K_SOCK_UDP       2   /* AF_INET/SOCK_DGRAM/IPPROTO_UDP (resolver, vms-a9e7) */
+
+/*
+ * BGn: IO$_SETMODE P4 socket-option list (vms-a9e7). TCP/IP Services documents
+ * IO$_SETMODE P4 as the socket-OPTIONS parameter: an item_list_2 descriptor
+ * whose type names a socket-option list, whose address points at an array of
+ * item_list_2 entries, one per option (length / option code / address of the
+ * value). OVMX honours ONE option there today -- the receive timeout, whose
+ * value is a {int32 seconds, int32 microseconds} timeval -- so a READVBLK
+ * against a silent peer completes SS$_TIMEOUT instead of waiting forever.
+ * An option code OVMX does not implement is refused SS$_BADPARAM, never
+ * silently ignored.
+ *
+ * CLEAN-ROOM (CLAUDE.md Rule 8): the SHAPE (P4 = item_list_2 descriptor ->
+ * option list -> per-option item_list_2) is the public TCP/IP Services
+ * programming interface; the NUMERIC values of TCPIP$C_SOCKOPT and
+ * TCPIP$C_RCVTIMEO below are OVMX DESIGN CHOICES, stated rather than implied --
+ * the same posture as IO$K_SOCK_* above. They are not presented as the values
+ * VSI's TCPIP$INETDEF.H carries.
+ */
+#define TCPIP$C_SOCKOPT     0x4f01  /* OVMX value: P4 list type "socket options" */
+#define TCPIP$C_RCVTIMEO    0x4f02  /* OVMX value: receive timeout (timeval)   */
+
+struct tcpip_item_list_2 {          /* item_list_2: length, type, address */
+    unsigned short  length;
+    unsigned short  type;
+    void           *address;
+};
+
+struct tcpip_timeval32 {            /* the RCVTIMEO value: two 32-bit fields */
+    int tv_sec;
+    int tv_usec;
+};
 
 /*
  * TERMINAL (TTn:/RTAn:/OPA0:) IO$_SETMODE line-discipline selector, passed in P2

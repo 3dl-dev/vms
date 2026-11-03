@@ -166,19 +166,25 @@ long vms_ioctl_bg_create(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
- * IO$_SETMODE create, shared by the TCP-stream (vms_ioctl_bg_setmode) and the
- * raw-ICMP (vms_ioctl_bg_setmode_icmp, vms-80b) entry points. `want_icmp`
- * chooses which host socket kind the seam mints; everything else -- the
- * idempotency, the race-drop of a spare, the channel install -- is identical, so
- * the two socket kinds differ in exactly one line (the seam call) and share this
- * whole body. Idempotent: a second SETMODE on a channel that already has a
+ * IO$_SETMODE create, shared by the TCP-stream (vms_ioctl_bg_setmode), the
+ * raw-ICMP (vms_ioctl_bg_setmode_icmp, vms-80b) and the UDP
+ * (vms_ioctl_bg_setmode_udp, vms-a9e7) entry points. `kind` chooses which host
+ * socket the seam mints; everything else -- the idempotency, the race-drop of a
+ * spare, the channel install -- is identical, so the socket kinds differ in
+ * exactly one line (the seam call) and share this whole body. Idempotent: a second SETMODE on a channel that already has a
  * socket is a success, not a leak (only the first create wins; a raced second
  * socket is released). NOTE: a channel's socket KIND is fixed at first create,
- * so a SETMODE and a SETMODE_ICMP on the same channel both no-op after the first
+ * so a SETMODE and a SETMODE_ICMP/_UDP on the same channel no-op after the first
  * (a program $ASSIGNs a fresh channel per socket, exactly as on VMS).
  */
+enum vms_bg_sock_kind {
+    VMS_BG_SOCK_TCP  = 0,
+    VMS_BG_SOCK_ICMP = 1,
+    VMS_BG_SOCK_UDP  = 2,
+};
+
 static long vms_bg_setmode_common(struct vms_proc *proc, unsigned long arg,
-                                  int want_icmp)
+                                  enum vms_bg_sock_kind kind)
 {
     struct vms_bg_chanonly_args args;
     struct vms_bg_chan *ch;
@@ -199,7 +205,11 @@ static long vms_bg_setmode_common(struct vms_proc *proc, unsigned long arg,
         goto out;
     }
 
-    rc = want_icmp ? exec_socket_create_icmp(&sock) : exec_socket_create(&sock);
+    switch (kind) {
+    case VMS_BG_SOCK_ICMP: rc = exec_socket_create_icmp(&sock); break;
+    case VMS_BG_SOCK_UDP:  rc = exec_socket_create_udp(&sock);  break;
+    default:               rc = exec_socket_create(&sock);      break;
+    }
     if (rc) {
         args.status = SS__ABORT;
         goto out;
@@ -228,7 +238,7 @@ out:
  */
 long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg)
 {
-    return vms_bg_setmode_common(proc, arg, 0 /* TCP stream */);
+    return vms_bg_setmode_common(proc, arg, VMS_BG_SOCK_TCP);
 }
 
 /*
@@ -241,7 +251,19 @@ long vms_ioctl_bg_setmode(struct vms_proc *proc, unsigned long arg)
  */
 long vms_ioctl_bg_setmode_icmp(struct vms_proc *proc, unsigned long arg)
 {
-    return vms_bg_setmode_common(proc, arg, 1 /* raw ICMP */);
+    return vms_bg_setmode_common(proc, arg, VMS_BG_SOCK_ICMP);
+}
+
+/*
+ * IO$_SETMODE (UDP subfunction) -- create an AF_INET/SOCK_DGRAM/IPPROTO_UDP host
+ * socket on the channel (vms-a9e7, the DNS resolver's transport). Then the
+ * ordinary connect (sets the datagram peer) / send (one datagram) / recv (one
+ * datagram) ioctls drive it. The host kernel's UDP carries the datagram; OVMX
+ * builds only the application payload (a DNS query), never a transport.
+ */
+long vms_ioctl_bg_setmode_udp(struct vms_proc *proc, unsigned long arg)
+{
+    return vms_bg_setmode_common(proc, arg, VMS_BG_SOCK_UDP);
 }
 
 /*
@@ -522,7 +544,12 @@ long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg)
     n = exec_socket_recv(sock, a->data, bufsz);
     if (n < 0) {
         a->len = 0;
-        a->status = SS__ABORT;
+        /* A receive timeout armed through VMS_BG_SO_RCVTIMEO_MS ends the read
+         * with no data: that is SS$_TIMEOUT, not an aborted I/O (vms-a9e7). A
+         * socket with no timeout set never sees -EAGAIN here (the read blocks),
+         * so TCP behaviour is unchanged. (EWOULDBLOCK == EAGAIN on both Linux
+         * and NetBSD.) */
+        a->status = (n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT;
     } else {
         a->len = (uint32_t)n;
         a->status = SS__NORMAL;
@@ -667,6 +694,18 @@ long vms_ioctl_bg_sockopt(struct vms_proc *proc, unsigned long arg)
     ch = bgchan_lookup(proc, args.chan, &sock);
     if (!ch || !sock) {
         args.status = SS__IVCHAN;
+        goto out;
+    }
+
+    if (args.level == VMS_BG_SOL_EXEC) {
+        /* Executive-defined options (vms_bg.h): only SET of the receive timeout
+         * (ms, >= 0) exists. Anything else is an honest SS$_BADPARAM. */
+        if (args.op == 0 && args.optname == VMS_BG_SO_RCVTIMEO_MS && args.optval >= 0) {
+            rc = exec_socket_set_rcvtimeo(sock, (uint32_t)args.optval);
+            args.status = rc ? SS__BADPARAM : SS__NORMAL;
+        } else {
+            args.status = SS__BADPARAM;
+        }
         goto out;
     }
 

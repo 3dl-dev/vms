@@ -411,6 +411,28 @@ exec_current_gid(void)
 	return (uint32_t)kauth_cred_getgid(kauth_cred_get());
 }
 
+/* rd vms-416d: the CURRENT process's id. */
+static __inline uint32_t
+exec_current_pid(void)
+{
+	return (uint32_t)curlwp->l_proc->p_pid;
+}
+
+/* rd vms-416d: nonzero iff process `pid` exists and has not exited. proc_find
+ * (under proc_lock, which it asserts) returns only SACTIVE/SSTOP processes, so
+ * a zombie or a dying process is not running -- the twin of Linux's
+ * exit_state test. Takes proc_lock: never call it holding an exec_lock. */
+static __inline int
+exec_pid_running(uint32_t pid)
+{
+	int running;
+
+	mutex_enter(&proc_lock);
+	running = proc_find((pid_t)pid) != NULL;
+	mutex_exit(&proc_lock);
+	return running;
+}
+
 static __inline int
 exec_task_alive(exec_task_ref_t *ref)
 {

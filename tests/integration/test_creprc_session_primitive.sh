@@ -147,7 +147,9 @@ elif printf '%s\n' "$TICKET_DEF" | grep -q 'loginout'; then
 else
     echo "PASS: WALL-6: a PRC\$M_LOGINOUT session gets its PCB from its creator ($TICKET_DEF)"
 fi
-REQ_LINE=$(grep -a -n 'creprc_write_all(pcbreq\[1\]' "$CREPRC_C" \
+# Since rd vms-416d the request is the task's ARRIVE at the executive's
+# creation record (it blocks until the creator has made the PCB), not a pipe.
+REQ_LINE=$(grep -a -n 'vms_kif_creprc_sync(VMS_CREPRC_SYNC_ARRIVE' "$CREPRC_C" \
     | grep -vE '^[0-9]+:[[:space:]]*\*' | head -1 | cut -d: -f1)
 EXEC_LINE=$(grep -a -n 'execl(img_path' "$CREPRC_C" \
     | grep -vE '^[0-9]+:[[:space:]]*\*' | head -1 | cut -d: -f1)

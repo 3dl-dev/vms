@@ -228,6 +228,10 @@ extern int dcl_directory_header_spec(const char *def, const char *spec,
                                      char *vms_dir, size_t dir_size);
 extern int dcl_format_filespec(const char *linux_path, char *vms_spec,
                                size_t spec_size);
+/* SYS$OUTPUT/SYS$INPUT/SYS$ERROR equivalence names the terminal (dcl_cmd_io.c) */
+extern int dcl_logical_is_terminal(const char *equiv);
+/* SYS$OUTPUT (0) / SYS$ERROR (1) is routed to the file `spec` (dcl_io.c) */
+extern int dcl_ppf_routed_to_file(int which, const char *spec);
 extern int dcl_translate_logical(const char *name, char *result,
                                  size_t result_size);
 extern int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,

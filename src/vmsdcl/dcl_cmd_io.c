@@ -189,7 +189,7 @@ static int dcl_lnm_table_of(struct dcl_command *cmd, char *out, size_t cap)
  * preserves the pre-vms-f89 behavior of writing to / reading from the
  * process's own stdout/stdin when the logical is not defined.
  */
-static int dcl_logical_is_terminal(const char *equiv)
+int dcl_logical_is_terminal(const char *equiv)
 {
     if (!equiv || !equiv[0])
         return 1;
@@ -1062,7 +1062,16 @@ static int write_impl(struct dcl_command *cmd)
         if (dcl_translate_logical(channel_name, equiv, sizeof(equiv)) == 0 &&
                 equiv[0] && !dcl_logical_is_terminal(equiv)) {
             /* A file SYS$OUTPUT/SYS$ERROR: the record is $PUT at the end of
-             * the file through RMS, never stdio (vms-5cc). */
+             * the file through RMS, never stdio (vms-5cc) -- through the file
+             * DCL's own output already holds open when it is that one
+             * (rd vms-1b6a). */
+            if (dcl_ppf_routed_to_file(is_err, equiv)) {
+                if (is_err)
+                    dcl_err_printf("%s\n", text);
+                else
+                    dcl_out_printf("%s\n", text);
+                return (int)RMS$_NORMAL;
+            }
             uint32_t ost = RMS$_NORMAL;
             struct dcl_rms_writer *w = dcl_rms_write_append(ctx, equiv, &ost);
             if (!w) {

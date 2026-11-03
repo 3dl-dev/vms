@@ -332,6 +332,23 @@ int dcl_tt_put_record(const char *text, size_t n)
     return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
 }
 
+int dcl_tt_output_ready(void)
+{
+    return isatty(STDOUT_FILENO) && dcl_tt_assign();
+}
+
+int dcl_tt_put_text(const char *text, size_t n, int open)
+{
+    uint16_t iosb[4];
+
+    if (!dcl_tt_assign())
+        return -1;
+    memset(iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, dcl_tt_chan, IO$_WRITEVBLK, iosb, NULL, 0,
+                           (void *)text, (uint32_t)n, 0, open ? '$' : ' ', 0, 0);
+    return ((st & 1) && (iosb[0] & 1)) ? 0 : -1;
+}
+
 int dcl_tt_getc(int poll)
 {
     static uint32_t none[8];
@@ -408,6 +425,7 @@ int dcl_page_begin(struct dcl_pager *pg)
         pg->save = -1;
         return 0;
     }
+    dcl_out_capture(pg->tmp);           /* DCL's own records too, not only an image's */
     return 1;
 }
 
@@ -423,6 +441,7 @@ void dcl_page_end(struct dcl_pager *pg, int page_len)
     dcl_out_flush();
     int page_werr = dcl_out_error();      /* the buffer filled mid-command */
     dcl_out_clearerr();
+    dcl_out_capture(NULL);
     if (page_werr)
         dcl_err_printf("%%DCL-W-PAGEFULL, output exceeded the paging buffer; the listing is incomplete\n");
     dup2(pg->save, STDOUT_FILENO);

@@ -751,6 +751,9 @@ uint32_t vms_kif_tt_read(struct vms_tt_read_args *a);
 uint32_t vms_kif_tt_write(uint32_t chan, const void *buf, uint32_t len);
 /* The same as one record (VMS_TT_WR_RECORD): IO$_WRITEVBLK with P4 " ". */
 uint32_t vms_kif_tt_write_record(uint32_t chan, const void *buf, uint32_t len);
+/* The text opening a record left open (VMS_TT_WR_PROMPT): IO$_WRITEVBLK with
+ * P4 "$" -- a new line before it, no carriage return after (rd vms-1b6a). */
+uint32_t vms_kif_tt_write_prompt(uint32_t chan, const void *buf, uint32_t len);
 /* IO$M_NOFORMAT: the bytes as they are, the cursor position left untouched */
 uint32_t vms_kif_tt_write_noformat(uint32_t chan, const void *buf, uint32_t len);
 uint32_t vms_kif_tt_setmode(uint32_t chan, uint32_t mode);

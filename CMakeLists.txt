@@ -1159,22 +1159,15 @@ if(BUILD_TESTS)
     # positive-only, which is the state the tree was in before a negative value
     # was reachable through F$IDENTIFIER at all.
     #
-    # TIMEOUT derived, not guessed, and the measurement says under WHAT LOAD --
-    # which is the half that is usually missing. MEASURED on workshop
-    # 2026-08-05: 7-8s wall-clock serialized (invoked directly, and under ctest
-    # with nothing else running), 14s with a second full ctest running
-    # concurrently. One sandbox configure plus four builds of the vmsdcl target.
-    # 120 is ~8.5x the loaded figure. A bare "8s" would have been true and
-    # would have overstated the margin by 2x, because this suite's cost is
-    # dominated by compiler contention rather than by its own work -- the same
-    # effect that took the per-facility negctl job from 27m to >60m and killed
-    # it (rd vms-86a). If this is ever approached, measure and record it here
-    # rather than doubling it blind (the lesson rd vms-008 charged to
-    # terminal_identity_negctl, where a never-derived 120 was killing a
-    # PASSING test).
+    # COST (rd vms-797c): the mutants reuse THIS build tree's vmsdcl objects,
+    # libraries and link line and recompile only dcl_cmd_show.c, so a run is
+    # ~1.5s and writes under 1MB of scratch. The old sandbox rebuilt the whole
+    # dependency chain (15s alone, 73-82s with 24 concurrent runs, against the
+    # 120 TIMEOUT) and leaked a ~32MB tree whenever ctest killed it. TIMEOUT
+    # is unchanged at 120.
     add_test(NAME show_symbol_longword_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_symbol_longword_negctl.sh
-                ${CMAKE_CURRENT_SOURCE_DIR})
+                ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_BINARY_DIR})
     set_tests_properties(show_symbol_longword_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
 

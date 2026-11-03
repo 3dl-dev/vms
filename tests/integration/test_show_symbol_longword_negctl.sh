@@ -45,7 +45,7 @@
 # mutant is required to differ from the pristine one. A mutation that silently
 # became a no-op is reported as a BROKEN FIXTURE, not certified as caught.
 #
-# Usage: test_show_symbol_longword_negctl.sh [SRC_ROOT]
+# Usage: test_show_symbol_longword_negctl.sh [SRC_ROOT [BUILD_DIR]]
 
 set -u
 
@@ -57,27 +57,43 @@ failed=0
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
+# BUILD_DIR is the already-built tree whose vmsdcl target supplies the compile
+# flags, the link line and every other object/library.
+BUILD_DIR="${2:-$SRC_ROOT/build}"
 
 echo "vms-c71 negative controls: each defect must turn the SHOW SYMBOL gate RED"
 
-command -v cmake >/dev/null 2>&1 || {
-    echo "FAIL: cmake is not available, so no mutant can be built"
-    echo "  -> this control cannot be evaluated; reported as FAILED, never skipped"
-    exit 1
-}
 [ -f "$GATE" ] || {
     echo "FAIL: the gate this file controls is missing: $GATE"
     exit 1
 }
 
-ROOT="$WORK/tree"
-mkdir -p "$ROOT"
-cp -a "$SRC_ROOT/src" "$ROOT/src"
-cp "$SRC_ROOT/CMakeLists.txt" "$ROOT/CMakeLists.txt"
+# ROOT CAUSE OF THE INTERMITTENT FAILURE (rd vms-797c). This file used to copy
+# the whole src/ tree, configure a private CMake tree and build vmsdcl AND ITS
+# WHOLE DEPENDENCY CHAIN (libvms, vmsrms, ...) serially from nothing -- ~15 CPU
+# seconds that stretch ~5x under a loaded parallel ctest (measured: 15s alone,
+# 73-82s with 24 such runs competing), against a 120s TIMEOUT; a ctest timeout
+# SIGKILLs the script, the EXIT trap never runs, and a ~32MB tree leaked into
+# /tmp each time (dozens were found), on a disk with a few GB free. The only
+# thing a mutant changes is ONE translation unit, so only that unit is
+# compiled and DCL.EXE is relinked against the objects and libraries the real
+# build already produced, using the real build's own flags and link line.
+# Nothing is written into BUILD_DIR, and WORK stays well under a megabyte.
+DCLDIR="$BUILD_DIR/src/vmsdcl"
+FLAGS_MK="$DCLDIR/CMakeFiles/vmsdcl.dir/flags.make"
+LINK_TXT="$DCLDIR/CMakeFiles/vmsdcl.dir/link.txt"
+for f in "$FLAGS_MK" "$LINK_TXT" "$DCLDIR/CMakeFiles/vmsdcl.dir/dcl_cmd_show.c.o"; do
+    [ -f "$f" ] || {
+        echo "FAIL: $f is missing -- BUILD_DIR ($BUILD_DIR) is not a built tree"
+        echo "  -> this control cannot be evaluated; reported as FAILED, never skipped"
+        exit 1
+    }
+done
 
-SHOW_C="$ROOT/src/vmsdcl/dcl_cmd_show.c"
-cp "$SHOW_C" "$WORK/dcl_cmd_show.c.orig"
+SHOW_C="$WORK/dcl_cmd_show.c"
+cp "$SRC_ROOT/src/vmsdcl/dcl_cmd_show.c" "$WORK/dcl_cmd_show.c.orig"
 restore() { cp "$WORK/dcl_cmd_show.c.orig" "$SHOW_C"; }
+restore
 
 # The line under test, as the fix leaves it. Anchored on the format string
 # rather than on a line number or a comment, so a reformat makes the mutation
@@ -90,23 +106,32 @@ if ! grep -qF "$PRISTINE_FMT" "$WORK/dcl_cmd_show.c.orig"; then
     exit 1
 fi
 
-BUILD="$WORK/build"
+CC_DEFINES=$(sed -n 's/^C_DEFINES = //p' "$FLAGS_MK")
+CC_INCLUDES=$(sed -n 's/^C_INCLUDES = //p' "$FLAGS_MK")
+CC_FLAGS=$(sed -n 's/^C_FLAGS = //p' "$FLAGS_MK")
+# The recorded link line, retargeted: the mutant object replaces the real
+# dcl_cmd_show object, the output goes to WORK, and the linker's dependency
+# file (which would be written into BUILD_DIR) is dropped.
+LINK_CMD=$(sed -e "s# CMakeFiles/vmsdcl.dir/dcl_cmd_show.c.o # $WORK/show.o #" \
+               -e "s# -o ../../bin/DCL.EXE # -o $WORK/DCL.EXE #" \
+               -e 's# -Wl,--dependency-file=[^ ]*##' "$LINK_TXT")
+
 build_dcl() {
-    cmake -B "$BUILD" -S "$ROOT" \
-        -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF \
-        >"$WORK/cmake.log" 2>&1 || return 1
-    cmake --build "$BUILD" --target vmsdcl >"$WORK/build.log" 2>&1 || return 1
-    [ -x "$BUILD/bin/DCL.EXE" ]
+    rm -f "$WORK/show.o" "$WORK/DCL.EXE"
+    (cd "$DCLDIR" && eval "cc $CC_DEFINES $CC_INCLUDES -I$SRC_ROOT/src/vmsdcl $CC_FLAGS -c \"$SHOW_C\" -o \"$WORK/show.o\"") \
+        >"$WORK/build.log" 2>&1 || return 1
+    (cd "$DCLDIR" && eval "$LINK_CMD") >>"$WORK/build.log" 2>&1 || return 1
+    [ -x "$WORK/DCL.EXE" ]
 }
 
-md5_of() { md5sum "$BUILD/bin/DCL.EXE" 2>/dev/null | cut -d' ' -f1; }
+md5_of() { md5sum "$WORK/DCL.EXE" 2>/dev/null | cut -d' ' -f1; }
 
 # ---------------------------------------------------------------------------
 # POSITIVE CONTROL. Without it, a red below could be the sandbox being broken
 # rather than the mutation being caught -- and it would look identical.
 # ---------------------------------------------------------------------------
 PRISTINE_MD5=""
-if build_dcl && sh "$GATE" "$BUILD/bin/DCL.EXE" >"$WORK/pos.log" 2>&1; then
+if build_dcl && sh "$GATE" "$WORK/DCL.EXE" >"$WORK/pos.log" 2>&1; then
     PRISTINE_MD5=$(md5_of)
     echo "  PASS: positive control - unmutated sandbox DCL passes the gate (md5 ${PRISTINE_MD5%%??????????????????????}...)"
     passed=$((passed + 1))
@@ -138,7 +163,7 @@ expect_red() {
         failed=$((failed + 1)); status=1; restore; return
     fi
 
-    out=$(sh "$GATE" "$BUILD/bin/DCL.EXE" 2>&1)
+    out=$(sh "$GATE" "$WORK/DCL.EXE" 2>&1)
     rc=$?
     got=$(printf '%s\n' "$out" | sed -n 's/^  FAIL: \(.*\)$/\1/p' | sort)
     want=$(printf '%s\n' "$expect" | grep -v '^$' | sort)

@@ -259,6 +259,15 @@ int main(void)
     }
     vms_kif_close();
 
+    /* The harness seeds VDA0: but each suite mounts it (idempotent) and
+     * dismounts it at its end, as the other RMS/ACP suites do. */
+    {
+        uint32_t mst = vms_kif_acp_mount("VDA0:");
+        check($VMS_STATUS_SUCCESS(mst), "VDA0: mounted executive-global for RMS");
+        if (!$VMS_STATUS_SUCCESS(mst))
+            return 1;
+    }
+
     erase_all(LOG_SPEC);
     erase_all(BIG_SPEC);
 
@@ -282,6 +291,9 @@ int main(void)
           "*** the logger finished: its $PUTs never stalled behind the writer ***");
     check(wrc != -1,
           "*** the writer finished: its creates/writes never stalled behind the logger ***");
+    /* negctl: lock-interrupted-enq-orphans-request */
+    check(lrc == 0 && wrc == 0,
+          "*** both writers finished, every write succeeding: no orphaned volume lock wedged them ***");
     check(lrc == 0, "  and every logger $PUT succeeded");
     check(wrc == 0, "  and every writer create/$PUT/close/erase succeeded");
     if (lrc == -1 || wrc == -1) {
@@ -294,6 +306,7 @@ int main(void)
         erase_all(BIG_SPEC);
     }
 
+    vms_kif_acp_dmount("VDA0:");
     printf("RESULTS: %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }

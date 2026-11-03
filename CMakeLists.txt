@@ -1456,7 +1456,7 @@ if(BUILD_TOOLS)
         vms_cnxtrace         # CNXTRACE.EXE
         decnetd_exe          # DECNETD.EXE
         fal_exe              # FAL.EXE
-        rtpad_exe            # RTPAD.EXE (SET HOST, rd vms-0a7 S2)
+        rtpad_exe            # RTPAD.EXE
         mail_server_exe      # MAIL_SERVER.EXE
         PARTS                # PARTS.EXE
         ncp_exe              # NCP.EXE

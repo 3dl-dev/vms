@@ -2113,6 +2113,9 @@ struct vms_devscan_args {
 #define VMS_TTSET_PAGE      0x4     /* apply page */
 #define VMS_TTSET_PERM      0x8     /* also the PERMANENT width/page/characteristics
                                      * (SET TERMINAL/PERMANENT; rd vms-d900) */
+#define VMS_TTSET_TYPE      0x10    /* apply devtype: the terminal's DT$_ type
+                                     * (IO$_SETMODE buffer byte 1; SET TERMINAL
+                                     * /DEVICE_TYPE; rd vms-686) */
 
 struct vms_setmode_args {
     uint32_t chan;              /* channel assigned to the terminal */
@@ -2122,7 +2125,7 @@ struct vms_setmode_args {
     uint32_t width;
     uint32_t page;
     uint32_t status;            /* return: SS$_ status */
-    uint32_t pad;
+    uint32_t devtype;           /* with VMS_TTSET_TYPE: the DT$_ code */
 };
 
 #define VMS_IOCTL_ASSIGN    _IOWR(VMS_IOC_MAGIC, 0x50, struct vms_assign_args)
@@ -2202,6 +2205,11 @@ struct vms_tt_write_args {
  * cursor position is left as it was (rd vms-457: the VAX V7.3 console after
  * DIRECTORY/PAGE's pager, keystroke PG.DIR C1) */
 #define VMS_TT_WR_NOFORMAT    0x2u
+/* IO$M_REFRESH: a read in progress is shown again after the write (its prompt
+ * and the line so far). Without it a $QIO write leaves the read's line where
+ * the output left it (VAX V7.3 SET HOST client, host output while a line is
+ * half typed: "<CR><LF>LATE<CR>" and the typing goes on -- S2 live bench). */
+#define VMS_TT_WR_REFRESH     0x4u
 
 #define VMS_TT_MODE_PASSALL   0x1u     /* IO$_SETMODE P2 = IO$K_TT_PASSALL */
 struct vms_tt_mode_args {
@@ -2251,7 +2259,19 @@ struct vms_tt_oobast_args {
     uint32_t mask;              /* in: OUTBAND: control characters */
     uint32_t acmode;            /* in: access mode (P3) */
     uint32_t status;            /* out: SS$_ */
-    uint32_t pad;
+    uint32_t flags;             /* in: OUTBAND: VMS_TT_OOBF_* */
+};
+/* IO$M_TT_ABORT on IO$_SETMODE!IO$M_OUTBAND: an interrupt character (CTRL/Y,
+ * CTRL/C) in the mask aborts the owner's read in progress, the driver showing
+ * its interrupt (rd vms-0a7 S2). */
+#define VMS_TT_OOBF_ABORT     0x1u
+
+/* VMS_IOCTL_TT_CANCEL (rd vms-0a7 S2): $CANCEL on a terminal channel -- the
+ * calling process's read in progress on that terminal (running or suspended
+ * for an AST) ends SS$_ABORT. */
+struct vms_tt_cancel_args {
+    uint32_t chan;              /* in: the executive channel */
+    uint32_t status;            /* out: SS$_ */
 };
 
 /* VMS_IOCTL_TT_BRKTHRU (rd vms-53a): write a broadcast to terminal `devnam`
@@ -2286,6 +2306,7 @@ struct vms_tt_typahd_args {
 #define VMS_IOCTL_TT_OOBAST   _IOWR(VMS_IOC_MAGIC, 0xA5, struct vms_tt_oobast_args)
 #define VMS_IOCTL_TT_BRKTHRU  _IOWR(VMS_IOC_MAGIC, 0xA6, struct vms_tt_brkthru_args)
 #define VMS_IOCTL_TT_TYPAHD   _IOWR(VMS_IOC_MAGIC, 0xA7, struct vms_tt_typahd_args)
+#define VMS_IOCTL_TT_CANCEL   _IOWR(VMS_IOC_MAGIC, 0xA8, struct vms_tt_cancel_args)
 
 /* The NetBSD twin (src/kernel-netbsd/vms_tt_nb.h) asserts the same layout and
  * numbers on ILP32 VAX; these are the reference-build values. */
@@ -2321,6 +2342,10 @@ _Static_assert(sizeof(struct vms_tt_typahd_args) == 16,
                "struct vms_tt_typahd_args changed size");
 _Static_assert(VMS_IOCTL_TT_TYPAHD == 0xC01056A7u,
                "VMS_IOCTL_TT_TYPAHD encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_tt_cancel_args) == 8,
+               "struct vms_tt_cancel_args changed size");
+_Static_assert(VMS_IOCTL_TT_CANCEL == 0xC00856A8u,
+               "VMS_IOCTL_TT_CANCEL encodes differently here than on the reference build");
 
 /*
  * Resolve a DISK unit to the Linux block device the executive enumerated it

@@ -111,6 +111,7 @@ struct vms_tt {
 		uint64_t astadr, astprm;
 		uint8_t  acmode;
 		uint32_t mask;             /* OUTBAND: control characters */
+		uint32_t flags;            /* OUTBAND: VMS_TT_OOBF_* (IO$M_TT_ABORT) */
 	} oob[3];                      /* VMS_TT_OOB_CTRLY / _CTRLC / _OUTBAND, minus 1 */
 	int      ctrlo;            /* CTRL/O: output is being discarded */
 	int      rd_astpend;       /* an AST for the reader's process is queued */
@@ -377,6 +378,17 @@ static void tt_kill_line(struct vms_tt *tt)
 			for (i = 0; i < w; i++)
 				tt_out1(tt, ' ');
 			tt_bs(tt, w);
+			tt->len = 0;
+			tt->cur = 0;
+			return;
+		}
+		if (keep == 0 && (tt->rd_dc & VMS_TTC_ANSI_CRT)) {
+			/* an ANSI CRT, the whole line: erase it, the prompt
+			 * again, erase to its end (VAX V7.3 VT100, S2 live
+			 * bench: "<CR><ESC>[K<CR><NUL>$ <ESC>[K") */
+			tt_out(tt, "\r\033[K", 4);
+			tt_prompt_cr(tt);
+			tt_out(tt, "\033[K", 3);
 			tt->len = 0;
 			tt->cur = 0;
 			return;
@@ -983,7 +995,14 @@ static void tt_oob_fire(struct vms_tt *tt, struct tt_oob *o, uint64_t astprm)
 static void tt_echo_interrupt(struct vms_tt *tt)
 {
 	tt_nl(tt);
-	tt_out(tt, "*INTERRUPT*\r\n", 13);
+	/* on an ANSI CRT, a reverse-video " Interrupt ", the cursor saved and
+	 * restored around it, as the " Exit " of CTRL/Z (VAX V7.3 VT100, S2
+	 * live bench tests/lab/captures/vms-0a7-s2-20261103: "<ESC>7<ESC>[7m
+	 * Interrupt <ESC>[m<ESC>8<CR><LF>") */
+	if (tt_devchar(tt->dev) & VMS_TTC_ANSI_CRT)
+		tt_out(tt, "\0337\033[7m Interrupt \033[m\0338\r\n", 24);
+	else
+		tt_out(tt, "*INTERRUPT*\r\n", 13);
 	tt->pos = TT_POS_MID;
 }
 
@@ -1014,7 +1033,24 @@ void vms_tt_receive(struct vms_tt *tt, const uint8_t *buf, size_t n)
 			    (tt->oob[VMS_TT_OOB_OUTBAND - 1].mask & (1u << c))) {
 				/* an out-of-band character: never data, never
 				 * echoed; its AST carries it (stays armed) */
-				tt_oob_fire(tt, &tt->oob[VMS_TT_OOB_OUTBAND - 1], c);
+				struct tt_oob *ob = &tt->oob[VMS_TT_OOB_OUTBAND - 1];
+
+				if ((ob->flags & VMS_TT_OOBF_ABORT) &&
+				    (c == TT_CTRL('Y') || c == TT_CTRL('C'))) {
+					/* IO$M_TT_ABORT (I/O User's Reference:
+					 * the out-of-band character aborts the
+					 * read in progress). OVMX, labelled: for
+					 * the interrupt characters only, and with
+					 * the driver's own interrupt shown and the
+					 * type-ahead discarded, as for its own
+					 * CTRL/Y -- what a VAX SET HOST client's
+					 * screen shows (S2 live bench) */
+					tt_echo_interrupt(tt);
+					tt_ta_purge(tt);
+					if (tt->rd_active && tt->rd_owner == (const void *)ob->proc)
+						tt_complete(tt, SS__ABORT, 0, 0);
+				}
+				tt_oob_fire(tt, ob, c);
 				continue;
 			}
 			if (c == TT_CTRL('Y') || c == TT_CTRL('C')) {
@@ -1270,7 +1306,19 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 		if (tt->pos == TT_POS_CR && tt_echoing(tt))
 			tt_out1(tt, CH_LF);
 		/* the prompt is written BEFORE any type-ahead is consumed and echoed */
-		if (tt->promptsz)
+		if (tt->promptsz && req->inistr && req->inisz &&
+		    (dc & VMS_TTC_ANSI_CRT) && tt->pos == TT_POS_MID &&
+		    tt->promptsz >= 2 && tt->prompt[0] == CH_CR && tt->prompt[1] == CH_LF &&
+		    tt_echoing(tt)) {
+			/* a recalled line (initial input) on an ANSI CRT, the
+			 * cursor still on the line the recall key ended: drawn
+			 * again IN PLACE -- the line erased instead of a new one
+			 * (VAX V7.3 VT100, S2 live bench: "<02><CR><ESC>[K<NUL>
+			 * <NUL><NUL>$ SHOW TIME"; on a hardcopy console a new
+			 * line, keystroke RC.RECALL U1) */
+			tt_out(tt, "\r\033[K\0\0", 6);
+			tt_out(tt, tt->prompt + 2, tt->promptsz - 2);
+		} else if (tt->promptsz)
 			tt_prompt_out(tt, tt->prompt, tt->promptsz);
 		/* TRM$_INISTRNG: the line starts with these characters, shown
 		 * after the prompt, the cursor after them (a recalled command,
@@ -1293,11 +1341,17 @@ int vms_tt_read(struct vms_tt *tt, const struct vms_tt_read_req *req,
 	while (!tt->rd_done && !tt->detached) {
 		uint32_t olen = tt->olen;
 
-		if (tt->rd_astpend && req->owner && tt->rd_owner == req->owner) {
+		if (req->owner && tt->rd_owner == req->owner &&
+		    (tt->rd_astpend ||
+		     (req->proc && vms_ast_has_deliverable(req->proc, PSL_C_USER)))) {
 			/* an AST the driver queued for this process (an out-of-
-			 * band character): let the caller deliver it, keeping the
+			 * band character), or any other user-mode AST it can
+			 * take -- one $DCLAST'd from a timer AST that interrupted
+			 * this wait, say: let the caller deliver it, keeping the
 			 * read outstanding -- the same owner's next read resumes
-			 * it, as after a signal (rd vms-f0fb) */
+			 * it, as after a signal (rd vms-f0fb). On VMS a process
+			 * waiting in $QIOW runs its ASTs (rd vms-0a7 S2: SET
+			 * HOST serves its link while its read is outstanding). */
 			tt->rd_astpend = 0;
 			tt->rd_suspended = 1;
 			tt->rd_susp_ms = exec_ticks_ms();
@@ -1370,6 +1424,11 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 {
 	uint8_t chunk[128];
 	size_t i = 0;
+	/* VMS_TT_WRITE_QUIET: a $QIO write without IO$M_REFRESH -- a read in
+	 * progress is not shown again after it (see VMS_TT_WR_REFRESH) */
+	int quiet = (cooked & VMS_TT_WRITE_QUIET) != 0;
+
+	cooked &= ~VMS_TT_WRITE_QUIET;
 
 	if (cooked == 1) {
 		/* each record a program writes to its terminal is one buffered
@@ -1474,7 +1533,7 @@ int vms_tt_write(struct vms_tt *tt, const uint8_t *buf, size_t n, int cooked)
 	 * OB.PROMPT T2, VAX V7.3: <CR><LF>status<CR><LF><CR><NUL>$ ABC).
 	 */
 	exec_lock(&tt->lock);
-	if (tt->rd_busy && !tt->rd_done && !tt->passall && n) {
+	if (tt->rd_busy && !tt->rd_done && !tt->passall && n && !quiet) {
 		if (tt->pos == TT_POS_CR && tt_echoing(tt)) {
 			tt_out1(tt, CH_LF);
 			tt->rec_open = 0;
@@ -1622,6 +1681,7 @@ long vms_ioctl_tt_read(struct vms_proc *proc, unsigned long arg)
 
 	/* a signal suspends the read; this process's re-entry resumes it */
 	rq.owner = proc;
+	rq.proc = proc;
 	{
 		int rrc = vms_tt_read(tt, &rq, line, &r);
 
@@ -1691,15 +1751,17 @@ long vms_ioctl_tt_write(struct vms_proc *proc, unsigned long arg)
 		/* a record (VMS_TT_WR_RECORD): the cooked path's new line before
 		 * and carriage return after; the text itself carries no '\n' */
 		if (vms_tt_write(tt, chunk, k,
-				 (a.flags & VMS_TT_WR_RECORD) ? 1 :
-				 (a.flags & VMS_TT_WR_NOFORMAT) ? 2 : 3)) {
+				 ((a.flags & VMS_TT_WR_RECORD) ? 1 :
+				  (a.flags & VMS_TT_WR_NOFORMAT) ? 2 : 3) |
+				 ((a.flags & VMS_TT_WR_REFRESH) ? 0 : VMS_TT_WRITE_QUIET))) {
 			a.status = SS__ABORT;
 			break;
 		}
 		done += k;
 	}
 	if ((a.flags & VMS_TT_WR_RECORD) && a.status == SS__NORMAL && a.len &&
-	    vms_tt_write(tt, (const uint8_t *)"\n", 1, 1))
+	    vms_tt_write(tt, (const uint8_t *)"\n", 1,
+			 1 | ((a.flags & VMS_TT_WR_REFRESH) ? 0 : VMS_TT_WRITE_QUIET)))
 		a.status = SS__ABORT;
 	if (a.status == SS__NORMAL)
 		VMS_IO_COUNT(&proc->io_buffered, 1u);   /* JPI$_BUFIO (rd vms-bd71) */
@@ -1820,6 +1882,40 @@ out:
 }
 
 /*
+ * VMS_IOCTL_TT_CANCEL (rd vms-0a7 S2): $CANCEL on a terminal channel. The
+ * calling process's read in progress on the terminal -- waiting, or suspended
+ * while the process delivers an AST -- ends SS$_ABORT (I/O User's Reference,
+ * Terminal Driver: a read cancelled by $CANCEL); its owner's resumed read
+ * returns it. Another process's read is not touched.
+ */
+long vms_ioctl_tt_cancel(struct vms_proc *proc, unsigned long arg)
+{
+	struct vms_tt_cancel_args a;
+	struct vms_tt *tt;
+	uint32_t st = SS__NORMAL;
+
+	memset(&a, 0, sizeof(a));
+	if (exec_copyin(&a, (const void *)arg, sizeof(a)))
+		return -EFAULT;
+	tt = tt_from_chan(proc, a.chan, &st);
+	if (!tt) {
+		a.status = st;
+		goto out;
+	}
+	exec_lock(&tt->lock);
+	if (tt->rd_busy && tt->rd_active && !tt->rd_done &&
+	    tt->rd_owner == (const void *)proc)
+		tt_complete(tt, SS__ABORT, 0, 0);
+	exec_unlock(&tt->lock);
+	vms_tt_release(tt);
+	a.status = SS__NORMAL;
+out:
+	if (exec_copyout((void *)arg, &a, sizeof(a)))
+		return -EFAULT;
+	return 0;
+}
+
+/*
  * VMS_IOCTL_TT_OOBAST (rd vms-f0fb): $QIO IO$_SETMODE!IO$M_CTRLYAST /
  * IO$M_CTRLCAST / IO$M_OUTBAND on a channel to a terminal -- arm (astadr) or
  * disarm (0) an out-of-band AST (I/O User's Reference, "Terminal Driver").
@@ -1864,6 +1960,7 @@ long vms_ioctl_tt_oobast(struct vms_proc *proc, unsigned long arg)
 		o->astprm = a.astprm;
 		o->acmode = mode;
 		o->mask = a.which == VMS_TT_OOB_OUTBAND ? a.mask : 0;
+		o->flags = a.which == VMS_TT_OOB_OUTBAND ? a.flags : 0;
 	}
 	exec_unlock(&tt->lock);
 	vms_tt_release(tt);

@@ -1463,6 +1463,11 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		if (proc == NULL)
 			return ESRCH;
 		return vms_facility_errno(vms_ioctl_tt_typahd(proc, (unsigned long)data));
+	case VMS_IOCTL_TT_CANCEL:        /* rd vms-0a7 S2: $CANCEL of a read */
+		proc = vms_proc_find(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ESRCH;
+		return vms_facility_errno(vms_ioctl_tt_cancel(proc, (unsigned long)data));
 
 	case VMS_IOCTL_ACP_READVBLK:
 		return vms_acp_rw_bounce(l, data, 0);

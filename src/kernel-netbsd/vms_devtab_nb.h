@@ -193,6 +193,7 @@ struct vms_devscan_args {
 #define VMS_TTSET_WIDTH     0x2     /* apply width */
 #define VMS_TTSET_PAGE      0x4     /* apply page */
 #define VMS_TTSET_PERM      0x8     /* also the PERMANENT set (SET TERMINAL/PERMANENT; rd vms-d900) */
+#define VMS_TTSET_TYPE      0x10    /* apply devtype (SET TERMINAL/DEVICE_TYPE; rd vms-686) */
 
 struct vms_setmode_args {
 	uint32_t chan;              /* channel assigned to the terminal */
@@ -202,7 +203,7 @@ struct vms_setmode_args {
 	uint32_t width;
 	uint32_t page;
 	uint32_t status;            /* return: SS$_ status */
-	uint32_t pad;
+	uint32_t devtype;           /* with VMS_TTSET_TYPE: the DT$_ code */
 };
 
 /* Record this process's terminal, named by a channel it already holds. */

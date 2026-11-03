@@ -320,6 +320,7 @@ dlm-rebuild-install-ignores-compat
 dlm-rebuild-sent-outside-the-step
 dlm-rebuild-window-opens-early
 dlm-rebuild-records-wait-past-release
+dlm-966e-at-requester-refused
 barrier-step-not-held-for-own-rebuild
 coord-release-not-held-for-own-rebuild
 dlm-rebuild-record-drops-the-granted-valblk
@@ -339,7 +340,6 @@ dlm-5d6-hold-lifted-in-quorum-hang
 dlm-b4d-adopted-tree-dir-untold
 dlm-b4d-undirected-answers-you
 dlm-b4d-undirected-answers-you-fuzz
-dlm-966e-at-requester-refused
 dlm-departed-holder-locks-kept"
 
 # ---------------------------------------------------------------------------

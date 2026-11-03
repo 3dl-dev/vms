@@ -63,6 +63,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_dcl_sysout.h"
 #include "tcg_deadline.h"
 
 #define EXIT_SKIP 77
@@ -99,22 +100,31 @@ static const char *dcl_path(void)
 
 /*
  * run_dcl - feed one DCL command line to the real DCL.EXE and capture its
- * stdout into `out`. Returns 0 on success, -1 if DCL could not be run or did
- * not finish in time.
+ * SYS$OUTPUT into `out`. Returns 0 on success, -1 if DCL could not be run or
+ * did not finish in time.
  *
- * stdout only, deliberately: device rows are printed to stdout and
- * diagnostics to stderr, and the two are buffered differently, so a merged
- * capture would interleave non-deterministically. A test paced by luck is a
- * flaky test. stderr is captured separately by run_dcl_err() when a
- * diagnostic is what is being asserted.
+ * SYS$OUTPUT only, deliberately: device rows are printed to SYS$OUTPUT and
+ * diagnostics to the error stream, and a merged capture would interleave
+ * them. A test paced by luck is a flaky test. DCL's stderr is captured
+ * separately by run_dcl_err() when a diagnostic is what is being asserted.
+ *
+ * With an executive, the SYS$OUTPUT capture is a mailbox named as DCL's
+ * SYS$OUTPUT alone (OVMX_DCL_SYSOUT_F_OUTPUT_ONLY; rd vms-2f39). The
+ * no-executive rig has no mailbox to use, and run_dcl_err()'s stderr-only
+ * capture has no mailbox counterpart yet: both still capture a substrate
+ * stream into a file.
  */
+static int dcl_exec_present;   /* set by main() once the executive opens */
+
 static int run_dcl_streams(const char *cmdline, char *out, size_t outsz,
                            int want_stderr)
 {
     char script[] = "/tmp/showdev_in.XXXXXX";
     char capture[] = "/tmp/showdev_out.XXXXXX";
     char text[512];
-    int sfd, cfd, wstatus, len;
+    int sfd, cfd = -1, wstatus, len;
+    int mbx = dcl_exec_present && !want_stderr;
+    struct ovmx_dcl_sysout so;
     pid_t pid;
     ssize_t n;
 
@@ -134,28 +144,47 @@ static int run_dcl_streams(const char *cmdline, char *out, size_t outsz,
     }
     lseek(sfd, 0, SEEK_SET);
 
-    cfd = mkstemp(capture);
-    if (cfd < 0) {
-        close(sfd);
-        unlink(script);
-        return -1;
+    if (mbx) {
+        if (!(ovmx_dcl_sysout_open_flags(&so, OVMX_DCL_SYSOUT_F_OUTPUT_ONLY) & 1)) {
+            close(sfd);
+            unlink(script);
+            return -1;
+        }
+    } else {
+        cfd = mkstemp(capture);
+        if (cfd < 0) {
+            close(sfd);
+            unlink(script);
+            return -1;
+        }
     }
 
     pid = ovmx_fork_subprocess();
     if (pid == 0) {
-        dup2(sfd, 0);
-        dup2(cfd, want_stderr ? 2 : 1);
-        /* Send the stream we are NOT capturing to /dev/null so it cannot
-         * land in the capture file. */
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0)
-            dup2(devnull, want_stderr ? 1 : 2);
+        if (mbx) {
+            ovmx_dcl_sysout_child(&so);   /* SYS$ERROR stays off: fd 2 on /dev/null */
+            dup2(sfd, 0);
+        } else {
+            dup2(sfd, 0);
+            dup2(cfd, want_stderr ? 2 : 1);
+            /* Send the stream we are NOT capturing to /dev/null so it cannot
+             * land in the capture file. */
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0)
+                dup2(devnull, want_stderr ? 1 : 2);
+        }
         execl(dcl_path(), dcl_path(), (char *)NULL);
         _exit(127);
     }
     if (pid < 0) {
-        close(sfd); close(cfd);
-        unlink(script); unlink(capture);
+        close(sfd);
+        unlink(script);
+        if (mbx) {
+            ovmx_dcl_sysout_collect(&so, NULL, 0);
+        } else {
+            close(cfd);
+            unlink(capture);
+        }
         return -1;
     }
 
@@ -172,16 +201,28 @@ static int run_dcl_streams(const char *cmdline, char *out, size_t outsz,
     }
     kill(pid, 9);
     waitpid(pid, &wstatus, 0);
-    close(sfd); close(cfd);
-    unlink(script); unlink(capture);
+    close(sfd);
+    unlink(script);
+    if (mbx) {
+        ovmx_dcl_sysout_collect(&so, NULL, 0);
+    } else {
+        close(cfd);
+        unlink(capture);
+    }
     return -1;
 
 reaped:
-    lseek(cfd, 0, SEEK_SET);
-    n = read(cfd, out, outsz - 1);
-    out[(n > 0) ? (size_t)n : 0] = '\0';
-    close(sfd); close(cfd);
-    unlink(script); unlink(capture);
+    if (mbx) {
+        ovmx_dcl_sysout_collect(&so, out, outsz);
+    } else {
+        lseek(cfd, 0, SEEK_SET);
+        n = read(cfd, out, outsz - 1);
+        out[(n > 0) ? (size_t)n : 0] = '\0';
+        close(cfd);
+        unlink(capture);
+    }
+    close(sfd);
+    unlink(script);
     return 0;
 }
 
@@ -283,6 +324,7 @@ int main(void)
                pass, fail);
         return fail > 0 ? 1 : EXIT_SKIP;
     }
+    dcl_exec_present = 1;
 
     /* ---- 1. BEFORE: the console is listed, and it is not allocated ---- */
     if (run_dcl("SHOW DEVICE", out, sizeof(out)) < 0) {

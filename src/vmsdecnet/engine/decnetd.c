@@ -91,6 +91,7 @@
 #include "prvdef.h"         /* PRV$M_NETMBX: a broker requester must hold it (rd vms-c6d1) */
 #include "prcdef.h"         /* PRC$M_DETACH: the vms-c6d1 request-mailbox probe process */
 #include "vmsfs/filespec.h" /* vmsfs_to_linux_path: SYS$SYSTEM:DECNETD.EXE for that probe */
+#include "vmsfs/device.h"   /* vmsfs_resolve_filespec_device: NETACP.LOG's device */
 #include "ovmx_layout.h"    /* ovmx_boot_stage_exec_path                              */
 #include "starlet.h"        /* vms-f54 CLIENT: $ASSIGN/$QIO(W)/$DASSGN terminal I/O */
 #include "descrip.h"        /* dsc$descriptor_s for the SYS$INPUT/SYS$OUTPUT assign */
@@ -124,8 +125,8 @@ static void sethost_src_codes(uint16_t *grp, uint16_t *usr);
  * process gets SYS$OUTPUT / SYS$ERROR in LNM$PROCESS naming that file and no
  * terminal. When NETACP starts it $CREATEs the file through RMS
  * (rms_textfile_create, over the Files-11 ACP) and files every line it writes
- * as one record ($PUT at EOF, rms_textfile_append_line) -- synchronously, in
- * this process: no reader thread, no pipe, no poll() (the generic run-time
+ * as one record -- synchronously, in this process: no reader thread, no pipe,
+ * no poll() (the generic run-time
  * routine src/libvms/rtl/sysoutput_rms.c uses all three, so NETACP does not
  * link it). A line is formatted with vsnprintf (no I/O) and only then filed.
  *
@@ -137,9 +138,19 @@ static void sethost_src_codes(uint16_t *grp, uint16_t *usr);
  * file (INV-6, no POSIX fallback).
  */
 #define NETACP_LOG_REC 512
+/* THE FILE STAYS OPEN (rd vms-0a7 S3, live VAX run 2026-11-03). A $OPEN/$PUT/
+ * $CLOSE per line -- rms_textfile_append_line -- waited out RMS$_SHR whenever
+ * another process was writing in the same directory (FAL writing a received
+ * file, LOGINOUT its LASTLOGIN record), and NETACP's DECnet stalled with it.
+ * As VMS's run-time library does for SYS$OUTPUT, NETACP $CREATEs the file
+ * once, shared for readers (FAB$M_SHRGET, so TYPE reads it while NETACP
+ * runs), keeps its RAB connected, and $PUTs + $FLUSHes each line. */
 struct netacp_log_sink {
     int  on;
     char spec[256];
+    char rspec[512];          /* device-resolved, what the FAB names */
+    struct FAB fab;
+    struct RAB rab;
     char line[NETACP_LOG_REC + 1];
     size_t len;
 };
@@ -174,7 +185,26 @@ static void netacp_log_open(void)
             k->on = 2;                            /* SYS$ERROR shares SYS$OUTPUT's file */
             continue;
         }
-        k->on = rms_textfile_create(k->spec) == 0 ? 1 : 0;   /* 0 = created */
+        if (vmsfs_resolve_filespec_device(k->spec, k->rspec, sizeof k->rspec) != SS$_NORMAL ||
+            !k->rspec[0])
+            snprintf(k->rspec, sizeof k->rspec, "%s", k->spec);
+        k->fab = cc$rms_fab;
+        k->fab.fab$l_fna = k->rspec;
+        k->fab.fab$b_fns = (uint8_t)strlen(k->rspec);
+        k->fab.fab$b_org = FAB$C_SEQ;
+        k->fab.fab$b_rfm = FAB$C_STMLF;
+        k->fab.fab$b_fac = FAB$M_PUT;
+        k->fab.fab$b_shr = FAB$M_SHRGET;
+        if (sys$create(&k->fab, 0, 0) != RMS$_NORMAL)
+            continue;                         /* fail honest: the line is lost */
+        k->rab = cc$rms_rab;
+        k->rab.rab$l_fab = &k->fab;
+        k->rab.rab$l_rop = RAB$M_EOF;
+        if (sys$connect(&k->rab, 0, 0) != RMS$_NORMAL) {
+            sys$close(&k->fab, 0, 0);
+            continue;
+        }
+        k->on = 1;
     }
 }
 
@@ -190,7 +220,10 @@ static void netacp_log_put(struct netacp_log_sink *k)
     while (k->len > 0 && k->line[k->len - 1] == '\r')
         k->len--;
     k->line[k->len] = '\0';
-    (void)rms_textfile_append_line(k->spec, k->line);
+    k->rab.rab$l_rbf = k->line;
+    k->rab.rab$w_rsz = (uint16_t)k->len;
+    if (sys$put(&k->rab, 0, 0) == RMS$_NORMAL)
+        (void)sys$flush(&k->rab, 0, 0);       /* the EOF a reader sees */
     k->len = 0;
 }
 

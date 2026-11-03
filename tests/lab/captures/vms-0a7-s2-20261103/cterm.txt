@@ -1,0 +1,163 @@
+   11.619 type 11 0b 00 08 02 02 00
+   11.619 type 11 0b 00 02 02 03 3b 00
+   11.684 type 15 0f 00 1d 29 00 00 27 00 0c 00 04 00 01 00 04 00 00 00 02 00 0c 00 00 00
+   11.733 type 15 0f 00 1d 29 00 00 01 00 06 00 00 00 18 00 42 00 50 00 a0 02 00 18 00 32 00 00
+   11.734 type 15 0f 00 1d 29 00 00 01 00 06 00 00 00 18 00 42 00 50 00 a0 02 00 18 00 32 00 00
+   11.747 START-READ flags 0x00b008 max 122 eod 12 timeout 20 eop 12 sod 0 lw 0 data b'\x00\r\nUsername: '
+   12.834 type  3 03 00 00 00 00 00 06 00 53 59 53 54 45 4d 0d
+   12.834 type  3 03 00 00 00 00 00 06 00 53 59 53 54 45 4d 0d
+   12.848 START-READ flags 0x00b808 max 128 eod 12 timeout 20 eop 12 sod 0 lw 0 data b'\x00\r\nPassword: '
+   13.932 type  3 03 00 00 00 00 00 09 00 58 58 0d
+   13.933 type  3 03 00 00 00 00 00 09 00 58 58 0d
+   13.971 START-READ flags 0x00b808 max 80 eod 0 timeout 20 eop 0 sod 0 lw 0 data b'\x00'
+   34.069 type  3 03 05 00 00 00 00 00 00
+   34.069 type  3 03 05 00 00 00 00 00 00
+   34.350 type 11 0b 00 08 02 02 00
+   34.350 type 11 0b 00 02 02 03 3b 00
+   34.379 type 15 0f 00 58 29 00 00 27 00 0c 00 04 00 01 00 04 00 00 00 02 00 0c 00 00 00
+   34.404 type 15 0f 00 58 29 00 00 01 00 06 00 00 00 18 00 42 00 50 00 a0 02 00 18 00 32 00 00
+   34.404 type 15 0f 00 58 29 00 00 01 00 06 00 00 00 18 00 42 00 50 00 a0 02 00 18 00 32 00 00
+   34.412 START-READ flags 0x00b008 max 122 eod 12 timeout 20 eop 12 sod 0 lw 0 data b'\x00\r\nUsername: '
+   35.500 type  3 03 00 00 00 00 00 06 00 53 59 53 54 45 4d 0d
+   35.500 type  3 03 00 00 00 00 00 06 00 53 59 53 54 45 4d 0d
+   35.509 START-READ flags 0x00b808 max 128 eod 12 timeout 20 eop 12 sod 0 lw 0 data b'\x00\r\nPassword: '
+   36.590 type  3 03 00 00 00 00 00 0c 00 58 58 0d
+   36.590 type  3 03 00 00 00 00 00 0c 00 58 58 0d
+   36.640 type 11 0b 00 02 02 19 3b 29
+   36.645 type 11 0b 00 02 02 14 3f 03
+   36.663 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   38.753 type  3 03 00 00 00 00 00 45 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 46 24 47 45 54 
+   38.753 type  3 03 00 00 00 00 00 45 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 46 24 47 45 54 
+   38.756 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   68.984 type  3 03 00 00 00 00 00 00 00 0d
+   68.984 type  3 03 00 00 00 00 00 00 00 0d
+   68.984 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   69.044 type  3 03 00 00 00 00 00 0d 00 53 48 4f 57 20 54 45 52 4d 49 4e 41 4c 0d
+   69.044 type  3 03 00 00 00 00 00 0d 00 53 48 4f 57 20 54 45 52 4d 49 4e 41 4c 0d
+   69.049 type 15 0f 00 a0 29 00 00 27 00 10 00 04 00 01 00 04 00 00 00 02 00 10 00 00 00
+   69.055 type 15 0f 00 a0 29 00 00 01 00 06 00 00 00 18 00 42 00 50 00 a0 02 00 18 00 32 00 00
+   69.056 type 15 0f 00 a0 29 00 00 01 00 06 00 00 00 18 00 42 00 50 00 a0 02 00 18 00 32 00 00
+   69.071 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   69.226 type  3 03 00 00 00 00 00 0b 00 53 48 4f 57 20 53 59 53 54 45 4d 0d
+   69.227 type  3 03 00 00 00 00 00 0b 00 53 48 4f 57 20 53 59 53 54 45 4d 0d
+   69.258 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   69.440 type  3 03 00 00 00 00 00 0a 00 53 48 4f 57 20 55 53 45 52 53 0d
+   69.441 type  3 03 00 00 00 00 00 0a 00 53 48 4f 57 20 55 53 45 52 53 0d
+   69.462 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   69.557 type  3 03 00 00 00 00 00 29 00 44 49 52 45 43 54 4f 52 59 20 53 59 53 24 53 59 53 54 45 4d 3a 4c 
+   69.558 type  3 03 00 00 00 00 00 29 00 44 49 52 45 43 54 4f 52 59 20 53 59 53 24 53 59 53 54 45 4d 3a 4c 
+   69.610 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   69.687 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+   69.688 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+   69.689 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   69.793 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+   69.794 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+   69.795 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   69.909 type  3 03 00 00 00 00 00 00 00 02
+   69.910 type  3 03 00 00 00 00 00 00 00 02
+   69.910 START-READ flags 0x0a9008 max 256 eod 14 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ SHOW TIME'
+   69.923 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+   69.923 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+   69.924 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   69.990 type  3 03 00 00 00 00 00 22 00 53 45 41 52 43 48 20 53 59 53 24 53 59 53 54 45 4d 3a 2a 2e 45 58 
+   69.990 type  3 03 00 00 00 00 00 22 00 53 45 41 52 43 48 20 53 59 53 24 53 59 53 54 45 4d 3a 2a 2e 45 58 
+   74.055 type  4 04 01 19
+   74.055 type  4 04 01 19
+   74.056 type 11 0b 00 02 02 19 3b 29
+   74.056 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   75.144 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+   75.144 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+   75.146 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   75.215 type  3 03 00 00 00 00 00 22 00 53 45 41 52 43 48 20 53 59 53 24 53 59 53 54 45 4d 3a 2a 2e 45 58 
+   75.215 type  3 03 00 00 00 00 00 22 00 53 45 41 52 43 48 20 53 59 53 24 53 59 53 54 45 4d 3a 2a 2e 45 58 
+   79.277 type  4 04 01 19
+   79.277 type  4 04 01 19
+   79.278 type 11 0b 00 02 02 19 3b 29
+   79.279 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   80.367 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+   80.367 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+   80.369 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   80.476 type  4 04 01 19
+   80.476 type  4 04 01 19
+   90.563 type  3 03 00 00 00 00 00 00 00 0d
+   90.563 type  3 03 00 00 00 00 00 00 00 0d
+   90.564 type 11 0b 00 02 02 19 3b 29
+   90.564 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   91.645 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+   91.645 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+   91.647 START-READ flags 0x0a9008 max 256 eod 5 timeout 0 eop 5 sod 0 lw 0 data b'\x00\r\n\x00$ '
+   91.761 type  3 03 00 00 00 00 00 06 00 4c 4f 47 4f 55 54 0d
+   91.762 type  3 03 00 00 00 00 00 06 00 4c 4f 47 4f 55 54 0d
+   91.775 type 11 0b 00 02 02 14 0b 00
+  142.666 type 11 0b 00 08 02 02 00
+  142.666 type 11 0b 00 02 02 03 3b 00
+  142.666 type 11 0b 00 08 02 02 00
+  142.666 type 11 0b 00 02 02 03 3b 00
+  142.754 START-READ flags 0x009008 max 266 eod 11 timeout 0 eop 11 sod 0 lw 0 data b'\x00\rUsername: '
+  142.754 START-READ flags 0x009008 max 266 eod 11 timeout 0 eop 11 sod 0 lw 0 data b'\x00\rUsername: '
+  143.819 type  3 03 00 00 00 00 00 06 00 53 59 53 54 45 4d 0d
+  143.883 START-READ flags 0x009808 max 266 eod 11 timeout 0 eop 11 sod 0 lw 0 data b'\x00\rPassword: '
+  143.883 START-READ flags 0x009808 max 266 eod 11 timeout 0 eop 11 sod 0 lw 0 data b'\x00\rPassword: '
+  144.948 type  3 03 00 00 00 00 00 09 00 58 58 0d
+  145.033 START-READ flags 0x009008 max 266 eod 11 timeout 0 eop 11 sod 0 lw 0 data b'\x00\rUsername: '
+  145.033 START-READ flags 0x009008 max 266 eod 11 timeout 0 eop 11 sod 0 lw 0 data b'\x00\rUsername: '
+  146.101 type  3 03 00 00 00 00 00 06 00 53 59 53 54 45 4d 0d
+  146.164 START-READ flags 0x009808 max 266 eod 11 timeout 0 eop 11 sod 0 lw 0 data b'\x00\rPassword: '
+  146.165 START-READ flags 0x009808 max 266 eod 11 timeout 0 eop 11 sod 0 lw 0 data b'\x00\rPassword: '
+  147.226 type  3 03 00 00 00 00 00 07 00 58 58 0d
+  147.353 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  147.353 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  149.491 type  3 03 00 00 00 00 00 45 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 46 24 47 45 54 
+  149.577 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  149.577 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  149.787 type  3 03 00 00 00 00 00 51 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 50 41 53 54 
+  149.872 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  149.872 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  149.952 type  3 03 00 00 00 00 00 0d 00 53 48 4f 57 20 54 45 52 4d 49 4e 41 4c 0d
+  150.025 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.025 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.117 type  3 03 00 00 00 00 00 0b 00 53 48 4f 57 20 53 59 53 54 45 4d 0d
+  150.182 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.182 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.271 type  3 03 00 00 00 00 00 0a 00 53 48 4f 57 20 55 53 45 52 53 0d
+  150.335 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.335 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.441 type  3 03 00 00 00 00 00 29 00 44 49 52 45 43 54 4f 52 59 20 53 59 53 24 53 59 53 54 45 4d 3a 4c 
+  150.527 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.527 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.593 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+  150.678 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.678 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.761 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+  150.846 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.846 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.907 type  3 03 00 00 00 00 00 09 00 53 48 4f 57 20 54 49 4d 45 0d
+  150.971 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  150.971 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  151.057 type  3 03 00 00 00 00 00 22 00 53 45 41 52 43 48 20 53 59 53 24 53 59 53 54 45 4d 3a 2a 2e 45 58 
+  151.120 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  151.120 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  155.081 type  4 04 00 19
+  155.081 type  3 03 03 00 00 00 00 00 00
+  155.145 START-READ flags 0x009008 max 258 eod 3 timeout 0 eop 3 sod 0 lw 0 data b'\x00\x00$ '
+  155.145 START-READ flags 0x009008 max 258 eod 3 timeout 0 eop 3 sod 0 lw 0 data b'\x00\x00$ '
+  156.197 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+  156.199 type 14 0e 01
+  156.261 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  156.262 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  156.264 type  3 03 00 00 00 00 00 22 00 53 45 41 52 43 48 20 53 59 53 24 53 59 53 54 45 4d 3a 2a 2e 45 58 
+  156.349 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  156.349 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  160.232 type  4 04 00 19
+  160.232 type  3 03 03 00 00 00 00 00 00
+  160.295 START-READ flags 0x009008 max 258 eod 3 timeout 0 eop 3 sod 0 lw 0 data b'\x00\x00$ '
+  160.295 START-READ flags 0x009008 max 258 eod 3 timeout 0 eop 3 sod 0 lw 0 data b'\x00\x00$ '
+  161.344 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+  161.407 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  161.407 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  171.417 type  4 04 00 19
+  172.532 type  3 03 00 00 00 00 00 2d 00 57 52 49 54 45 20 53 59 53 24 4f 55 54 50 55 54 20 22 4e 4f 44 45 
+  172.534 type 14 0e 01
+  172.597 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  172.597 START-READ flags 0x009008 max 259 eod 4 timeout 0 eop 4 sod 0 lw 0 data b'\x00\r\x00$ '
+  172.599 type  3 03 00 00 00 00 00 06 00 4c 4f 47 4f 55 54 0d

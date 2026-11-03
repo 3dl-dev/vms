@@ -270,6 +270,7 @@ csb-0b01-answer-ignores-join-order
 guard-ignores-category-0b
 refused-send-always-keeps-number
 dir-remove-unregistered-entry
+dir-told-survives-transition
 join-lnm-answered-unapplied
 join-lnm-db-not-applied
 join-lnm-db-corrupt-unanswered
@@ -1884,6 +1885,20 @@ EOF
         why)          echo "dlm_dir_remove_fill() no longer requires that a directory answered the resource's lookup, so a resource mastered before the cluster committed a vector is removed from a directory that never held it. The real V7.3 answers cat-0x02 op-0x19 and bugchecks LOCKMGRERR (4 of 4 captured crashes).";;
         require_fail) hd_lines <<'EOF'
 *** a resource mastered before any directory held an entry for it is NOT removed from the directory ***
+EOF
+                      ;;
+        esac;;
+
+    dir-told-survives-transition)
+        case "$_f" in
+        facility)     echo "a cluster state transition voids every record of which directory node holds this node's entry, because OVMX re-registers nothing in the rebuild (rd vms-8cb5)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_directory_discarded() no longer forgets dir_told_csid, so a resource whose directory entry a transition discarded is still removed from that directory afterwards. The real V7.3 answers cat-0x02 op-0x19 and bugchecks LOCKMGRERR (V0.7-15 visitor gate, c-first-legacy).";;
+        require_fail) hd_lines <<'EOF'
+the transition forgets the one directory this node told
+*** a resource whose directory entry a transition discarded is NOT removed from that directory ***
 EOF
                       ;;
         esac;;
@@ -4633,6 +4648,10 @@ apply_edit() {
     dir-remove-unregistered-entry)
         # `if (res->dir_told_csid == 0u || res->dir_told_csid != dir)` is unique in this file.
         sed -i 's#if (res->dir_told_csid == 0u || res->dir_told_csid != dir)#if (0 \&\& res->dir_told_csid != dir) /* NEGCTL dir-remove-unregistered-entry */#' "$_file";;
+
+    dir-told-survives-transition)
+        # `if (res->dir_told_csid != 0u) {` is unique in this file.
+        sed -i 's#if (res->dir_told_csid != 0u) {#if (0 \&\& res->dir_told_csid != 0u) { /* NEGCTL dir-told-survives-transition */#' "$_file";;
 
     pe-blk-frame-unringed)
         # `if (op != 0u && total <= PE_VC_FRAME_MAX)` is unique in this file.

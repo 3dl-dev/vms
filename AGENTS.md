@@ -128,8 +128,9 @@ accepted.
 ## Lab consoles
 
 Talk to a lab emulator console (the real-VAX/Alpha nodes in the `ovmx-lab` namespace) only through
-`tests/lab/tools/lab-console.sh send|ctrl|read <pod> <node> ...`, one command per call: `send` one
-line, `ctrl` one control character (`E` for the SIMH `sim>` prompt), `read` the console tail. Lines
+`tests/lab/tools/lab-console.sh send|ctrl|read|stamp <pod> <node> ...`, one command per call: `send` one
+line, `ctrl` one control character (`E` for the SIMH `sim>` prompt), `read` the console tail, `stamp`
+one line carrying the pod's clock (`%NOW%`, e.g. `SET TIME=%NOW%`) and when the reply appeared. Lines
 travel base64-encoded, so DCL's `$` and `"` survive. Don't write to a console FIFO or `kubectl exec`
 into a lab pod by hand. The lab layout is in `tests/lab/README.md`.
 

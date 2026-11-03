@@ -13,6 +13,7 @@ Capture directory:
   <OVMX>.console.log      the OVMX member's console, OVMXE by default
                           (CI6_OVMX_NODE); <ovmx>.log is accepted too
   timeline.txt            the fire's timeline (must exist; read for nothing else)
+  clock.txt               the fire's node-clock probes (rd vms-6731), see SETUP
   evac_dat.txt            optional: EVAC.DAT as typed on VAX2. Without it, the
                           largest TYPE/SEARCH dump of EVAC.DAT in vax2.log is used
                           (how the run16 hand run read the seam back).
@@ -37,6 +38,24 @@ Criteria:
      Fatal|bugcheck|CNXMGRERR|LOCKMGRERR|INVLOCKID|quorum lost); VAX2's last
      F$GETSYI read shows CLUSTER_VOTES >= CLUSTER_QUORUM; EVAC.DAT runs
      1..N with no gap and no duplicate.
+
+SETUP (rd vms-6731): C3 compares timestamps written by different nodes, so it
+means something only when their clocks agree. The fire sets every node's clock
+from the pod's (DCL SET TIME, lab-console.sh stamp) just before the workload,
+then reads each one back with F$TIME() and writes one clock.txt line per probe:
+  <TAG> <NODE> WRITE <pod time> SEEN <pod time> DT <cs> LINE <console line>
+WRITE..SEEN is the pod-clock window in which the node evaluated F$TIME(); the
+node's offset is its F$TIME() minus the window's midpoint, uncertain by half
+the window. Tag PRE (before alignment) is reported only. Every other probe
+(ALIGN, just before the workload; PREEVAC, just before the STOP) must have
+|offset| + half-window <= CLOCK_TOL (0.30 s, CI6_CLOCK_TOL): EVACWL writes one
+record a second, so two nodes within 0.30 s each keep the seam's order unless
+the takeover lands within 0.6 s of VAX1's last write. ALIGN must cover VAX1,
+VAX2 and the OVMX member, and each LINE must be in that node's console. A
+fault is "setup: FAULT": C3 is then UNGRADED (neither PASS nor FAIL) and, if no
+criterion FAILs, the verdict is SETUP FAULT, exit 3. A capture with no
+clock.txt predates the alignment and is graded as before, saying so.
+`ci6_evac_grade.py --clock <dir>` checks clock.txt alone (the fire's gate).
 
 --share criteria (rd vms-5fa; EVAC.DAT is the largest TYPE of it in vax1.log):
   S1  One volume mounted by both: VAX1 MOUNTED it on $2$DUAn: and its SHOW
@@ -67,6 +86,8 @@ OVMX = os.environ.get('CI6_OVMX_NODE', 'OVMXE')
 VAX1 = os.environ.get('CI6_VAX1_NODE', 'VAX1')
 WLPROC = os.environ.get('CI6_VAX1_PROCESS', 'EVACVAX1')
 SS_NOTQUEUED = 0x9B8
+CLOCK_TOL = float(os.environ.get('CI6_CLOCK_TOL', '0.30'))
+CLOCK_RE = re.compile(r'^(\S+) (\S+) WRITE (\S+) SEEN (\S+) DT (\S+) LINE (.*)$')
 
 TIME_RE = re.compile(r'[ \d]\d-[A-Z]{3}-\d{4} \d\d:\d\d:\d\d\.\d\d')
 BAD_RE = re.compile(r'(?i:fatal|bug ?check|quorum lost)|CNXMGRERR|LOCKMGRERR|INVLOCKID')
@@ -94,6 +115,64 @@ def record(line):
     return (node, int(seq), vtime(line[36:59]))
 
 
+def dcltime(s):
+    """A DCL absolute time dd-MMM-yyyy:hh:mm:ss.cc (the colon joins date and time)."""
+    d, _, t = s.partition(':')
+    return vtime(d + ' ' + t)
+
+
+def clock_check(d, con=None):
+    """The SETUP clock check over <d>/clock.txt: (state, report lines), state
+    'absent', 'ok' or 'fault'. With con (the windowed consoles), each probe's
+    LINE must also be in its node's console."""
+    p = os.path.join(d, 'clock.txt')
+    if not os.path.isfile(p):
+        return 'absent', ['setup: clock.txt absent -- node clocks were not aligned '
+                          '(pre-vms-6731 capture); C3 compares free-running clocks']
+    faults, info, aligned = [], [], set()
+    cmap = {VAX1: 'vax1', 'VAX2': 'vax2', OVMX: 'ovmx'}
+    for ln in read(p):
+        if not ln.strip():
+            continue
+        m = CLOCK_RE.match(ln.strip())
+        if not m:
+            faults.append('unreadable clock.txt line: %s' % ln.strip()[:80])
+            continue
+        tag, node, w, seen, dt, line = m.groups()
+        nm = re.search(r'CI6CLK %s %s +(%s)' % (re.escape(tag), re.escape(node), TIME_RE.pattern), line)
+        if seen == '-' or not nm:
+            (info if tag == 'PRE' else faults).append('%s %s: F$TIME() never read back' % (tag, node))
+            continue
+        try:
+            t0, t1, nt = dcltime(w), dcltime(seen), vtime(nm.group(1))
+        except ValueError:
+            faults.append('%s %s: unreadable time in "%s"' % (tag, node, ln.strip()[:80]))
+            continue
+        half = (t1 - t0).total_seconds() / 2
+        off = (nt - (t0 + (t1 - t0) / 2)).total_seconds()
+        desc = '%s %s %+.2f s (+-%.2f)' % (tag, node, off, half)
+        if tag == 'PRE':
+            info.append(desc)
+            continue
+        if con is not None and node in cmap and not any(line.strip() == c.strip() for c in con[cmap[node]]):
+            faults.append('%s %s: probe line is not in the %s console' % (tag, node, node))
+            continue
+        if abs(off) + half > CLOCK_TOL:
+            faults.append(desc + ' exceeds %.2f s' % CLOCK_TOL)
+        else:
+            info.append(desc)
+        if tag == 'ALIGN':
+            aligned.add(node)
+    missing = [n for n in (VAX1, 'VAX2', OVMX) if n not in aligned]
+    if missing and not any(f.startswith('ALIGN ' + n) for n in missing for f in faults):
+        faults.append('no ALIGN probe for %s' % ','.join(missing))
+    if faults:
+        return 'fault', ['setup: FAULT -- node clocks not aligned to the pod clock within %.2f s: %s'
+                         % (CLOCK_TOL, '; '.join(faults))] + ['setup:   %s' % i for i in info]
+    return 'ok', ['setup: PASS -- every node clock within %.2f s of the pod clock: %s'
+                  % (CLOCK_TOL, '; '.join(info))]
+
+
 def dump_from_console(lines):
     """The largest TYPE/SEARCH of EVAC.DAT in a console, as records."""
     blocks, cur = [], None
@@ -113,6 +192,13 @@ def dump_from_console(lines):
 
 def main():
     args = sys.argv[1:]
+    if args[:1] == ['--clock']:
+        if len(args) != 2:
+            print(__doc__.split('\n')[0], file=sys.stderr)
+            return 2
+        state, rep = clock_check(args[1])
+        print('\n'.join(rep))
+        return {'ok': 0, 'fault': 3}.get(state, 2)
     share = bool(args) and args[0] == '--share'
     if share:
         args = args[1:]
@@ -141,10 +227,16 @@ def main():
         recs = dump_from_console(con['vax2'])
         src = 'vax2.log dump'
     print('capture: %s; EVAC.DAT from %s, %d records' % (d, src, len(recs)))
+    clock, rep = clock_check(d, con)
+    print('\n'.join(rep))
 
     verdict = {}
 
     def say(n, ok, why):
+        if n == 3 and clock == 'fault':
+            print('C3 UNGRADED (setup fault, clocks not aligned): would be %s: %s'
+                  % ('PASS' if ok else 'FAIL', why))
+            return
         verdict[n] = ok
         print('C%d %s: %s' % (n, 'PASS' if ok else 'FAIL', why))
 
@@ -261,8 +353,12 @@ def main():
             % (q[-1].group(1), q[-1].group(2), len(seqs)))
 
     bad = [n for n in sorted(verdict) if not verdict[n]]
-    print('VERDICT: %s' % ('PASS' if not bad else 'FAIL (criteria %s)' % ','.join(map(str, bad))))
-    return 1 if bad else 0
+    fault = ' + SETUP FAULT (node clocks not aligned; C3 not graded)' if clock == 'fault' else ''
+    if bad:
+        print('VERDICT: FAIL (criteria %s)%s' % (','.join(map(str, bad)), fault))
+        return 1
+    print('VERDICT: %s' % (fault[3:] if fault else 'PASS'))
+    return 3 if fault else 0
 
 
 def block(lines, start_re, stop_re=r'^ ?(\$|SDA>) '):

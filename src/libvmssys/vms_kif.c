@@ -4315,7 +4315,10 @@ uint32_t vms_kif_acp_writevb(struct vms_acp_rw_args *args)
         return SS$_NOSUCHDEV;
 
     args->status = 0;
-    KIF_CALL(VMS_IOCTL_ACP_WRITEVBLK, args);
+    /* Re-entered past a signal (rd vms-b6e): the executive ends a wait for
+     * the volume lock when a signal is pending, having changed nothing, so the
+     * signal's AST runs and the I/O is re-issued -- never an error. */
+    KIF_WAIT_CALL(VMS_IOCTL_ACP_WRITEVBLK, args);
     return args->status;
 }
 
@@ -4344,7 +4347,10 @@ uint32_t vms_kif_acp_fileop(struct vms_acp_fileop_args *args)
     args->name[VMS_ACP_NAME_SIZE - 1] = '\0';
     args->status = 0;
 
-    KIF_CALL(VMS_IOCTL_ACP_FILEOP, args);
+    /* Re-entered past a signal (rd vms-b6e): the executive ends a wait for
+     * the volume lock when a signal is pending, having changed nothing, so the
+     * signal's AST runs and the I/O is re-issued -- never an error. */
+    KIF_WAIT_CALL(VMS_IOCTL_ACP_FILEOP, args);
 
     return args->status;
 }

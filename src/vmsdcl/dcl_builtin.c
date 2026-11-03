@@ -435,28 +435,46 @@ static const struct dcl_qual_def q_analyze[] = {
     QUAL_END
 };
 /* LINK (DCL Dictionary: LINK). cmd_link() hands SYS$SYSTEM:LINK.EXE the command
- * tail as typed; LINK.EXE (src/vmslink/vms_cli.c) acts on /EXECUTABLE, /OPTIONS,
- * /LIBRARY, /SHAREABLE (as an options-file or file qualifier), /INFORMATIONALS and
- * the debug/traceback/library-search qualifiers, and refuses with a message the ones
- * it cannot honour (/MAP, /FULL, /CROSS_REFERENCE, /SHAREABLE as an image kind).
- * The table lets DCL accept exactly the qualifiers LINK.EXE then judges; a
- * qualifier outside it draws %DCL-W-IVQUAL here. */
+ * tail through the CLI; LINK.EXE parses it with CLI$DCL_PARSE against its own
+ * LINK command table (src/vmslink/link_cld.h, rd vms-3cb1), acts on what it
+ * honours and refuses the rest with %LINK-F-NOTSUPP. This table carries the same
+ * qualifier set (OpenVMS Linker Utility Manual), so DCL draws %DCL-W-IVQUAL only
+ * for a qualifier LINK does not define. */
 static const struct dcl_qual_def q_link[] = {
     { "EXECUTABLE",       CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
     { "SHAREABLE",        CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "SYSTEM",           CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "SYMBOL_TABLE",     CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "DSF",              CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
     { "MAP",              CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
-    { "FULL",             CDU_VT_NONE,  0,               NULL, NULL },
-    { "CROSS_REFERENCE",  CDU_VT_NONE,  0,               NULL, NULL },
-    { "DEBUG",            CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
-    { "TRACEBACK",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
-    { "INFORMATIONALS",   CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "BRIEF",            CDU_VT_NONE,  0,               NULL, NULL },
+    { "FULL",             CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "CROSS_REFERENCE",  CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
     { "OPTIONS",          CDU_VT_NONE,  0,               NULL, NULL },
     { "LIBRARY",          CDU_VT_NONE,  0,               NULL, NULL },
     { "INCLUDE",          CDU_VT_VALUE, CDU_Q_VALREQ,    NULL, NULL },
     { "SELECTIVE_SEARCH", CDU_VT_NONE,  0,               NULL, NULL },
     { "SYSLIB",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
     { "SYSSHR",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "SYSEXE",           CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
     { "USERLIBRARY",      CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "DEBUG",            CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "TRACEBACK",        CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "INFORMATIONALS",   CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "BPAGE",            CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "CONTIGUOUS",       CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "DEMAND_ZERO",      CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "DNI",              CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "GST",              CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "HEADER",           CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "NATIVE_ONLY",      CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "P0IMAGE",          CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "PROTECT",          CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "REPLACE",          CDU_VT_NONE,  CDU_Q_NEGATABLE, NULL, NULL },
+    { "SECTION_BINDING",  CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "THREADS_ENABLE",   CDU_VT_VALUE, CDU_Q_NEGATABLE, NULL, NULL },
+    { "ALPHA",            CDU_VT_NONE,  0,               NULL, NULL },
+    { "VAX",              CDU_VT_NONE,  0,               NULL, NULL },
     QUAL_END
 };
 /* PRODUCT (DCL Dictionary: PRODUCT). cmd_product() honours /SOURCE=kit and

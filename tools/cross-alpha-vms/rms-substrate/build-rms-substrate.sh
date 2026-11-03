@@ -145,7 +145,7 @@ done
 awk '/building LIBVMSRMS\$SHR/{f=1} f&&/LINK-W-DEFERRED/{print "GATE FAIL: LIBVMSRMS deferred:", $0; c=1} /rms_substrate_test/{f=0} END{exit c}' "$LOG" || fail=1
 # (3) the six sys$ entries bound to LIBVMSRMS$SHR in the STRICT test link
 for s in create open connect put get close; do
-    grep -qE "cross-image import 'sys\\\$${s}' bound to --use producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
+    grep -qE "cross-image import 'sys\\\$${s}' bound to shareable producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
         || { echo "GATE FAIL: sys\$${s} not bound to LIBVMSRMS\$SHR in the test link"; fail=1; }
 done
 # (4) the test image links: EVAX/Alpha ET_EXEC in P0 (vms-035), %LINK-S-CREATED, zero UNDEF

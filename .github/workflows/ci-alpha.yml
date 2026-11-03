@@ -495,7 +495,7 @@ jobs:
           #     stub): stream files by block I/O ($READ/$WRITE), record files by $GET,
           #     names by $PARSE/$SEARCH/$ERASE/$RENAME
           for s in create open connect get read write close parse search erase rename; do
-            grep -qE "cross-image import 'sys\\\$${s}' bound to --use producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
+            grep -qE "cross-image import 'sys\\\$${s}' bound to shareable producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
               || { echo "GATE FAIL (vms-2655): sys\$${s} not bound to LIBVMSRMS\$SHR inside DECC\$SHR pass 2"; exit 1; }
           done
           # (3) the FINAL joint_e2e.exe link (after crt0 assembly) is zero-deferred/
@@ -513,7 +513,7 @@ jobs:
           # (4) the port image's OWN decc$fopen import binds to the pass-2 (veneer)
           #     DECC$SHR.EXE producer -- the chain from (1)+(2) above proves THAT
           #     producer serves its file system calls through RMS, not the kernel VFS.
-          echo "$TAIL" | grep -qE "cross-image import 'decc\\\$fopen' bound to --use producer DECC\\\$SHR.EXE" \
+          echo "$TAIL" | grep -qE "cross-image import 'decc\\\$fopen' bound to shareable producer DECC\\\$SHR.EXE" \
             || { echo "GATE FAIL (vms-2655): port image decc\$fopen did not bind to the veneer-wired DECC\$SHR producer"; exit 1; }
           readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not EM_ALPHA"; exit 1; }
           readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*EXEC'    || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not ET_EXEC (P0, vms-035)"; exit 1; }

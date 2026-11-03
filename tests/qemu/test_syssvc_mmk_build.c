@@ -657,6 +657,21 @@ static long drive_budget_ms(long t_cal_ms, int do_link)
     return budget;
 }
 
+/* rd vms-3cb1: the link map and the shareable image the driven DCL LINK verb
+ * wrote on drive #2 (read before the work dir is cleaned up). */
+static char *g_map = NULL, *g_shr = NULL;
+static long  g_maplen = -1, g_shrlen = -1;
+
+static int write_text(const char *path, const char *text)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return -1;
+    size_t n = strlen(text);
+    int ok = (write(fd, text, n) == (ssize_t)n);
+    close(fd);
+    return ok ? 0 : -1;
+}
+
 /*
  * Drive ONE MMK build in a fresh work directory. Both modes compile the real
  * runtime TU VMS_STRING.C with TCC.EXE and archive it into
@@ -763,7 +778,7 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
      * /vms into /VMS and miss the case-sensitive Linux mount). Each foreign-command
      * TAIL below is delivered raw (dcl_exec_foreign_command uses cmd->raw_tail), so
      * tcc's case-sensitive flags, the lowercase -I path, LIBRARIAN's /CREATE, and
-     * LINK's --executable/--use flags + the absolute DECC$SHR.EXE path (the `$` is
+     * LINK's VMS command (/EXECUTABLE=, file/SHAREABLE; rd vms-3cb1) + the DECC$SHR.EXE spec (the `$` is
      * an ordinary VMS filename character here, not an apostrophe substitution)
      * survive as-is -- the same whole-line-raw delivery native LINK relies on. */
     /* The MMS RULE line is DEPENDENCY-FREE with a BARE target (all MMK's
@@ -790,10 +805,16 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
             "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . VMS_STRING.C -o VMS_STRING.OBJ\n"
             "\tTCC -x c -c -ffreestanding -fno-builtin -I %s -I . OVMXRTRUN.C -o OVMXRTRUN.OBJ\n"
             "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ\n"
-            "\tLNK --executable --use %s -o OVMXRT.EXE OVMXRTRUN.OBJ OVMXRT.OLB\n"
+            /* rd vms-3cb1: the DCL LINK verb itself, with the file qualifiers --
+             * a shareable from one library module, then the executable, its
+             * map, the library searched and its shareable image named in an
+             * options file. LINK.EXE reads each through CLI$PRESENT /
+             * CLI$GET_VALUE against its LINK table. */
+            "\tLINK /SHAREABLE=OVMXSTR.EXE/NOSYSLIB/NOSYSSHR OVMXRT.OLB/INCLUDE=(VMS_STRING),OVMXSTR.OPT/OPTIONS\n"
+            "\tLINK /EXECUTABLE=OVMXRT.EXE/MAP=OVMXRT.MAP/NOSYSLIB/NOSYSSHR OVMXRTRUN.OBJ,OVMXRT.OLB/LIBRARY,OVMXRT.OPT/OPTIONS\n"
             "\tWRITE SYS$OUTPUT \"%s\"\n",
             TCC_VMSSPEC, LIBR_VMSSPEC, LNK_VMSSPEC, tccinc, tccinc,
-            DECCSHR_VMSSPEC, EXPECT_MARKER);
+            EXPECT_MARKER);
     else
         snprintf(mms, sizeof(mms),
             "OVMXRT.OLB :\n"
@@ -803,6 +824,17 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
             "\tLIBRARIAN /CREATE OVMXRT.OLB VMS_STRING.OBJ\n"
             "\tWRITE SYS$OUTPUT \"%s\"\n",
             TCC_VMSSPEC, LIBR_VMSSPEC, tccinc, EXPECT_MARKER);
+    /* rd vms-3cb1: the two LINK options files, beside the objects. OVMXRT.OPT
+     * names the C RTL shareable image the executable binds; OVMXSTR.OPT declares
+     * the universal the shareable exports and its match control. */
+    if (do_link) {
+        char opt[256];
+        snprintf(path, sizeof(path), "%s/OVMXRT.OPT", workdir);
+        snprintf(opt, sizeof(opt), "! the C RTL\n%s/SHAREABLE\n", DECCSHR_VMSSPEC);
+        if (write_text(path, opt) != 0) return;
+        snprintf(path, sizeof(path), "%s/OVMXSTR.OPT", workdir);
+        if (write_text(path, "SYMBOL_VECTOR=(vms_strlen=PROCEDURE)\nGSMATCH=LEQUAL,1,0\n") != 0) return;
+    }
     /* Author the description + empty rules file on the ODS-2 volume (MMK opens
      * them through RMS); start clean in case a prior drive in this VM left them. */
     erase_ods2(ODS2_DIR "725.MMS");
@@ -962,6 +994,11 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     *olblen = read_file(olbpath, olbbuf);
     if (do_link) {
         *exelen = read_file(exepath, exebuf);
+        char p2[512];
+        snprintf(p2, sizeof(p2), "%s/OVMXRT.MAP", workdir);
+        g_maplen = read_file(p2, &g_map);
+        snprintf(p2, sizeof(p2), "%s/OVMXSTR.EXE", workdir);
+        g_shrlen = read_file(p2, &g_shr);
 
         /* ACTIVATE the produced image BEFORE cleanup (the activation oracle),
          * THROUGH THE ACP (vms-104). The MMK-driven LINK wrote OVMXRT.EXE into the
@@ -1021,7 +1058,8 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     const char *rm[] = { "VMS_STRING.C", "OVMXRTRUN.C",
                          "VMS_STRING.OBJ", "OVMXRTRUN.OBJ",
                          "OVMXRT.OLB", "OVMXRT.EXE", "vms_string.h",
-                         "vms_types.h",
+                         "vms_types.h", "OVMXRT.OPT", "OVMXSTR.OPT", "OVMXRT.MAP",
+                         "OVMXSTR.EXE",
                          NULL };
     for (int i = 0; rm[i]; i++) {
         snprintf(path, sizeof(path), "%s/%s", workdir, rm[i]);
@@ -1276,6 +1314,26 @@ int main(int argc, char **argv)
           "OVMXRT.EXE carries PT_INTERP=IMGACT.EXE (/run/ovmx-boot, ACP-staged) -- it is an image the kernel activates through IMGACT, not a bare ELF");
     CHECK(act2 == EXPECT_EXIT,
           "IMGACT activated the MMK-driven OVMXRT.EXE and it RAN to exit 216 (vms_strlen(\"OVMXRT\")*36) -- the LINK pulled VMS_STRING from the .OLB and the image really runs");
+
+    /* --- rd vms-3cb1: the DCL LINK verb with file qualifiers. LINK.EXE got the
+     * command from the CLI and read it through CLI$PRESENT / CLI$GET_VALUE
+     * against its LINK table: OVMXRT.EXE above came from
+     *   LINK /EXECUTABLE=OVMXRT.EXE/MAP=OVMXRT.MAP ... OVMXRT.OLB/LIBRARY,OVMXRT.OPT/OPTIONS
+     * and RAN to 216; these check the map it wrote and the shareable
+     *   LINK /SHAREABLE=OVMXSTR.EXE ... OVMXRT.OLB/INCLUDE=(VMS_STRING),OVMXSTR.OPT/OPTIONS --- */
+    /* negctl: link-image-takes-build-flags */
+    CHECK(g_maplen > 0 && g_map != NULL && contains(g_map, g_maplen, "! Object Module Synopsis !")
+          && contains(g_map, g_maplen, "! Symbols By Name !") && contains(g_map, g_maplen, "! Image Synopsis !"),
+          "DCL LINK/MAP=OVMXRT.MAP wrote the link map (Object Module Synopsis, Symbols By Name, Image Synopsis)");
+    CHECK(g_maplen > 0 && g_map != NULL && contains(g_map, g_maplen, "OVMXRT.OLB(VMS_STRING")
+          && contains(g_map, g_maplen, "vms_strlen"),
+          "the map lists the module /LIBRARY pulled from OVMXRT.OLB and the symbol vms_strlen it defines");
+    /* negctl: link-image-takes-build-flags */
+    CHECK(g_shrlen > 20 && g_shr != NULL && g_shr[0] == 0x7f && g_shr[1] == 'E'
+          && ((uint16_t)((unsigned char)g_shr[16] | ((unsigned char)g_shr[17] << 8))) == 3
+          && contains(g_shr, g_shrlen, ".vms$sv") && contains(g_shr, g_shrlen, "vms_strlen"),
+          "DCL LINK/SHAREABLE=OVMXSTR.EXE linked module VMS_STRING (/INCLUDE) into a shareable image exporting vms_strlen (SYMBOL_VECTOR from /OPTIONS)");
+    free(g_map); free(g_shr);
 
     free(obj1); free(obj2); free(olb1); free(olb2); free(exe1); free(exe2);
 

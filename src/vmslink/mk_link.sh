@@ -73,7 +73,9 @@ case "$ARCH" in
 esac
 
 CFLAGS="${CFLAGS:--fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector $ARCHFLAG -U_FORTIFY_SOURCE}"
-DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO"
+# OVMX_LINK_IMAGE (rd vms-3cb1): the native LINK.EXE takes the VMS LINK command
+# through LIB$GET_FOREIGN + CLI$DCL_PARSE (link_cli.c); it has no build flags.
+DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO -DOVMX_LINK_IMAGE"
 INCS="-I$HERE/include -I$SRC/vmsrms/include -I$SRC/libvms/include"
 
 echo "mk_link: CC=$CC ARCH=$ARCH"
@@ -81,11 +83,23 @@ echo "mk_link: cc link.c + ovmx_link_rms_io.c (freestanding-musl, -DOVMX_RMS_IO)
 $CC $CFLAGS $DEFS $INCS -c -o "$WORK/link.o" "$HERE/link.c"
 $CC $CFLAGS $DEFS $INCS -c -o "$WORK/ovmx_link_rms_io.o" "$HERE/ovmx_link_rms_io.c"
 
-echo "mk_link: bootstrap LINK.EXE --executable --use {6 producers} -> $OUT"
-# shellcheck disable=SC2086
-"$LINK_EXE" --executable \
-    --use "$DECC_SHR" --use "$VMS_SHR" --use "$PROC_SHR" \
-    --use "$FS_SHR" --use "$LNM_SHR" --use "$RMS_SHR" \
-    -o "$OUT" "$WORK/link.o" "$WORK/ovmx_link_rms_io.o"
+# The bootstrap linker is either the build-machine tool (driven by its build
+# flags) or an OVMX-native LINK.EXE (a PT_INTERP=IMGACT image, e.g. the S4
+# fixpoint's gen1/gen2), which takes the VMS LINK command from its CLI. Off the
+# executive LIB$GET_FOREIGN reads the command from VMS_FOREIGN_CMD, the channel
+# DCL sets for a foreign command when /dev/vms is absent. The Linux paths are
+# quoted file specs (a bare '/' would start a qualifier).
+if readelf -lW "$LINK_EXE" 2>/dev/null | grep 'Requesting program interpreter' | grep -q 'IMGACT'; then
+    echo "mk_link: native LINK.EXE: LINK/EXECUTABLE=... {2 objects, 6 shareable images} -> $OUT"
+    VMS_FOREIGN_CMD="/EXECUTABLE=\"$OUT\"/NOSYSLIB/NOSYSSHR \"$WORK/link.o\",\"$WORK/ovmx_link_rms_io.o\",\"$DECC_SHR\"/SHAREABLE,\"$VMS_SHR\"/SHAREABLE,\"$PROC_SHR\"/SHAREABLE,\"$FS_SHR\"/SHAREABLE,\"$LNM_SHR\"/SHAREABLE,\"$RMS_SHR\"/SHAREABLE" \
+        "$LINK_EXE"
+else
+    echo "mk_link: bootstrap LINK.EXE --executable --use {6 producers} -> $OUT"
+    # shellcheck disable=SC2086
+    "$LINK_EXE" --executable \
+        --use "$DECC_SHR" --use "$VMS_SHR" --use "$PROC_SHR" \
+        --use "$FS_SHR" --use "$LNM_SHR" --use "$RMS_SHR" \
+        -o "$OUT" "$WORK/link.o" "$WORK/ovmx_link_rms_io.o"
+fi
 
 echo "mk_link: created $OUT"

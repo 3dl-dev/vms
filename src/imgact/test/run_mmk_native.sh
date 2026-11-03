@@ -191,7 +191,7 @@ C_MTH=$(line 'TCC -x c -c -ffreestanding -fno-builtin -I OVMX$INCLUDE: VMS_MATH.
 C_STR=$(line 'TCC -x c -c -ffreestanding -fno-builtin -I OVMX$INCLUDE: VMS_STRING.C -o VMS_STRING.OBJ')
 C_SNP=$(line 'TCC -x c -c -ffreestanding -fno-builtin -I OVMX$INCLUDE: VMS_SNPRINTF.C -o VMS_SNPRINTF.OBJ')
 L_LIB=$(grep -nE '^LIBR /CREATE OVMXRT.OLB VMS_MATH.OBJ VMS_STRING.OBJ VMS_SNPRINTF.OBJ$' "$WORK/plan1.txt" | head -1 | cut -d: -f1)
-L_LNK=$(grep -nE '^LNK --executable .* -o OVMXRT.EXE OVMXRTDRV.OBJ OVMXRT.OLB$' "$WORK/plan1.txt" | head -1 | cut -d: -f1)
+L_LNK=$(grep -nE '^LNK /EXECUTABLE=OVMXRT\.EXE/NOSYSLIB/NOSYSSHR OVMXRTDRV\.OBJ,OVMXRT\.OLB/LIBRARY,RTLIBS\.OPT/OPTIONS$' "$WORK/plan1.txt" | head -1 | cut -d: -f1)
 
 fails=0
 need() { if [ -z "$2" ]; then echo "FAIL: $1"; fails=$((fails+1)); else echo "  PASS: $1 (plan line $2)"; fi; }

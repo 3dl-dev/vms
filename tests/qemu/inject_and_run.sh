@@ -179,6 +179,20 @@ echo "--- rebuilding DECNETD.EXE (the subject test_syssvc_decnetd_syscall_audit 
 ( cd /src/repo && cmake --build build-static --target decnetd_exe \
                         --parallel "$(nproc)" ) || exit 4
 
+# SYS$SYSTEM:LINK.EXE is a SUBJECT test_syssvc_mmk_build drives through DCL's
+# LINK verb (rd vms-3cb1), and link-image-takes-build-flags targets
+# src/vmslink/link.c, compiled into it. It lives in two places the guest can
+# activate it from -- the initramfs SYSEXE and the ODS-2 system volume -- so it
+# is rebuilt, copied to the first and the volume is re-mastered (one command
+# line, tests/qemu/master_ods2_sysvol.sh, shared with the image build).
+echo "--- rebuilding SYS\$SYSTEM:LINK.EXE and re-mastering the ODS-2 system volume ---"
+( cd /src/repo && cmake --build build-static --target vmslink_image \
+                        --parallel "$(nproc)" ) || exit 4
+cp /src/repo/build-static/bin/sysexe/LINK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || exit 4
+chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || exit 4
+rm -f /ods2_sysvol.img
+sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img || exit 4
+
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing

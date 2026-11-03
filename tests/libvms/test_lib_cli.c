@@ -283,6 +283,79 @@ static void test_errors(void)
     cli$free_cld(tab);
 }
 
+/* ------------------------------------------------------------------ */
+/* PLACEMENT=LOCAL / POSITIONAL qualifiers and a comma/plus LIST       */
+/* parameter (rd vms-3cb1): the shape of the LINK command, CDU manual  */
+/* PLACEMENT and the CLI$PRESENT status CLI$_LOCPRES / CLI$_LOCNEG.    */
+/* ------------------------------------------------------------------ */
+static void test_placement(void)
+{
+    printf("Testing PLACEMENT=LOCAL/POSITIONAL + list parameter...\n");
+    const char *cld =
+        "DEFINE VERB LNK\n"
+        "    PARAMETER P1, LABEL=FILE, VALUE(REQUIRED, LIST)\n"
+        "    QUALIFIER EXECUTABLE, NEGATABLE, VALUE\n"
+        "    QUALIFIER SHAREABLE, NEGATABLE, PLACEMENT=POSITIONAL, VALUE\n"
+        "    QUALIFIER LIBRARY, PLACEMENT=LOCAL\n"
+        "    QUALIFIER INCLUDE, PLACEMENT=LOCAL, VALUE(REQUIRED, LIST)\n"
+        "    QUALIFIER MAP, NEGATABLE, VALUE\n";
+    struct dsc$descriptor_s srcd = sdesc(cld);
+    struct cli_command_table *tab = NULL;
+    uint32_t st = cli$compile_cld(&srcd, &tab);
+    check($VMS_STATUS_SUCCESS(st) && tab, "compile placement CLD");
+    if (!tab) return;
+
+    struct dsc$descriptor_s cmdd = sdesc(
+        "LNK/SHAREABLE=X.EXE/MAP A, B/LIBRARY/INCLUDE=(M1,M2)+C/SHAREABLE,D /NOSHAREABLE");
+    st = cli$dcl_parse(&cmdd, tab, NULL, NULL);
+    check($VMS_STATUS_SUCCESS(st), "parse LINK-shaped command");
+
+    char v[64];
+    /* before any file value: the command-level placement */
+    check(cli_present("SHAREABLE") == CLI$_PRESENT, "/SHAREABLE after the verb: PRESENT");
+    st = cli_get_value("SHAREABLE", v, sizeof v);
+    check(st == SS$_NORMAL && strcmp(v, "X.EXE") == 0, "/SHAREABLE value X.EXE");
+    check(cli_present("LIBRARY") == CLI$_ABSENT, "LOCAL /LIBRARY: ABSENT at command level");
+    check(cli_present("MAP") == CLI$_PRESENT, "global /MAP PRESENT");
+
+    st = cli_get_value("FILE", v, sizeof v);
+    check(st == CLI$_COMMA && strcmp(v, "A") == 0, "FILE 1 == A, CLI$_COMMA");
+    check(cli_present("LIBRARY") == CLI$_ABSENT, "A: no /LIBRARY");
+    check(cli_present("SHAREABLE") == CLI$_PRESENT, "A: POSITIONAL falls back to command PRESENT");
+
+    st = cli_get_value("FILE", v, sizeof v);
+    check(st == CLI$_CONCAT && strcmp(v, "B") == 0, "FILE 2 == B, CLI$_CONCAT (followed by +)");
+    check(cli_present("LIBRARY") == CLI$_LOCPRES, "B/LIBRARY: CLI$_LOCPRES");
+    check(cli_present("INCLUDE") == CLI$_LOCPRES, "B/INCLUDE: CLI$_LOCPRES");
+    {
+        char m1[16] = {0}, m2[16] = {0};
+        uint32_t s1 = cli_get_value("INCLUDE", m1, sizeof m1);
+        uint32_t s2 = cli_get_value("INCLUDE", m2, sizeof m2);
+        check(s1 == CLI$_COMMA && strcmp(m1, "M1") == 0 && s2 == SS$_NORMAL && strcmp(m2, "M2") == 0,
+              "B/INCLUDE=(M1,M2) values");
+    }
+
+    st = cli_get_value("FILE", v, sizeof v);
+    check(st == CLI$_COMMA && strcmp(v, "C") == 0, "FILE 3 == C");
+    check(cli_present("SHAREABLE") == CLI$_LOCPRES, "C/SHAREABLE: CLI$_LOCPRES");
+    check(cli_present("LIBRARY") == CLI$_ABSENT, "C: no /LIBRARY");
+
+    st = cli_get_value("FILE", v, sizeof v);
+    check(st == SS$_NORMAL && strcmp(v, "D") == 0, "FILE 4 == D (last)");
+    check(cli_present("SHAREABLE") == CLI$_LOCNEG, "D /NOSHAREABLE: CLI$_LOCNEG");
+    check(!$VMS_STATUS_SUCCESS(CLI$_LOCNEG) && $VMS_STATUS_SUCCESS(CLI$_LOCPRES),
+          "LOCPRES success, LOCNEG warning severity");
+
+    st = cli_get_value("FILE", v, sizeof v);
+    check(st == CLI$_ABSENT, "FILE exhausted -> CLI$_ABSENT");
+
+    /* A LOCAL qualifier with no parameter value before it is refused. */
+    struct dsc$descriptor_s bad = sdesc("LNK/LIBRARY A");
+    check(cli$dcl_parse(&bad, tab, NULL, NULL) == CLI$_IVQUAL, "LOCAL qualifier after the verb: IVQUAL");
+
+    cli$free_cld(tab);
+}
+
 int main(void)
 {
     printf("=== CLI$ callable interface tests (vms-8c1) ===\n");
@@ -290,6 +363,7 @@ int main(void)
     test_mmk_cld();
     test_default_on();
     test_errors();
+    test_placement();
 
     if (failures == 0) {
         printf("\nAll CLI$ tests passed.\n");

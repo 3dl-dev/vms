@@ -64,7 +64,7 @@ mkdir -p "$CRT"
 printf '#!/bin/sh\nexit 0\n' >"$CRT/prog_a"
 chmod +x "$CRT/prog_a"
 loop=$(awk '/^# CORPUS RUNTIME LOOP/{on=1} on{print} on&&/CORPUS-RT DONE/{d=1} d&&/^fi$/{exit}' "$INIT")
-if [ -z "$loop" ] || ! printf '%s\n' "$loop" | grep -q 'CORPUS-RT \$name rc='; then
+if [ -z "$loop" ] || ! grep -q 'CORPUS-RT \$name rc=' <<<"$loop"; then
     bad "could not cut the corpus loop out of $INIT -- this control no longer tests it"
     echo "=== $passed passed, $failed failed ==="
     exit 1
@@ -121,7 +121,8 @@ for s in "${shells[@]}"; do
         *) ok "[$s] disproof: the old read -t loop desyncs on the same input ('$old')" ;;
     esac
 done
-if printf '%s\n' "$loop" | grep -v '^[[:space:]]*#' | grep -q 'read -t'; then
+code_only=$(grep -v '^[[:space:]]*#' <<<"$loop")
+if grep -q 'read -t' <<<"$code_only"; then
     bad "init.sh's corpus loop reads the reply FIFO with a timeout again"
 else
     ok "init.sh's corpus loop has only blocking reads of the reply FIFO"

@@ -110,6 +110,16 @@ void rtpad_session_oob(struct rtpad_session *s, uint8_t c)
     }
 }
 
+/* Host output to the screen. The cursor is no longer at the start of the
+ * fresh line a terminal read's echoed RETURN left. */
+static void show(struct rtpad_session *s, const uint8_t *b, size_t n)
+{
+    if (!n)
+        return;
+    s->io->show(s->io->ctx, b, n);
+    s->fresh = 0;
+}
+
 static void fail(struct rtpad_session *s, uint32_t st)
 {
     s->status = st;
@@ -162,7 +172,7 @@ static void on_bound_msg(struct rtpad_session *s, const uint8_t *data, size_t le
     if (tk == DNET_CTERM_TK_WRITE) {
         s->term.writes_recv++;
         if (txtlen)
-            s->io->show(s->io->ctx, txt, txtlen);
+            show(s, txt, txtlen);
     } else if (tk == DNET_CTERM_TK_START_READ) {
         /* A Start Read is PROMPT-AND-READ: show the prompt it carries, then
          * one line answers it. Its echo is the HOST's choice (N / T flags); a
@@ -190,8 +200,23 @@ static void on_bound_msg(struct rtpad_session *s, const uint8_t *data, size_t le
             memcpy(s->rd_prompt, txt, txtlen);
             s->rd_plen = eop;
             s->rd_init = txtlen - eop;
+            if (s->rd_timeout == 0 && s->rd_init == 0 && s->rd_plen) {
+                /* An untimed read waits for the user's first key (so the link
+                 * is served meanwhile); its prompt is shown now, rendered as
+                 * the driver renders a read's prompt: a leading CR LF on the
+                 * fresh line a RETURN's echo opened is just the CR (VAX V7.3:
+                 * "<CR><NUL>$ " after a command, rd vms-fc4). */
+                const uint8_t *p = s->rd_prompt;
+                size_t pn = s->rd_plen;
+                if (s->fresh && pn >= 2 && p[0] == '\r' && p[1] == '\n') {
+                    s->io->show(s->io->ctx, p, 1);
+                    p += 2; pn -= 2;
+                }
+                show(s, p, pn);
+                s->rd_plen = 0;
+            }
         } else if (txtlen) {
-            s->io->show(s->io->ctx, txt, txtlen);
+            show(s, txt, txtlen);
         }
         s->read_pending = 1;
     } else if (tk == DNET_CTERM_TK_READ_ATTR) {
@@ -255,7 +280,7 @@ void rtpad_session_rx(struct rtpad_session *s, const uint8_t *data, size_t len)
             s->term.writes_recv++;
             if (dnet_cterm_write_render(sub, sublen, &s->skip_lf, shown,
                                         sizeof shown, &sn) == 0 && sn)
-                s->io->show(s->io->ctx, shown, sn);
+                show(s, shown, sn);
             continue;
         }
         uint8_t one[4 + DNET_CTERM_MAX_DATA + 64];
@@ -266,6 +291,11 @@ void rtpad_session_rx(struct rtpad_session *s, const uint8_t *data, size_t len)
         memcpy(one + 4, sub, sublen);
         on_bound_msg(s, one, sublen + 4);
     }
+}
+
+int rtpad_session_read_now(const struct rtpad_session *s)
+{
+    return s->read_pending && (s->rd_timeout != 0 || s->rd_init != 0);
 }
 
 int rtpad_session_wants_input(const struct rtpad_session *s)
@@ -324,6 +354,9 @@ void rtpad_session_input(struct rtpad_session *s)
         if (n > sizeof line)
             n = sizeof line;
         s->rd_plen = s->rd_init = 0;
+        /* the driver echoed the RETURN as a new line: the cursor is at the
+         * start of a fresh one */
+        s->fresh = (term == 0x0d && s->rd_echo && s->rd_term_echo);
         send_line(s, line, n, term);
         return;
     }

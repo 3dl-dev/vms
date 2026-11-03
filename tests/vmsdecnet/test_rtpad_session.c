@@ -419,6 +419,11 @@ static const uint8_t k_vax_recall_read[] = { 0x09, 0x00, 0x1f, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, '\r', '\n', 0x00, '$', ' ',
     'S', 'H', 'O', 'W', ' ', 'T', 'I', 'M', 'E' };
 
+/* DCL's command read (untimed, no initial input), from the same wire */
+static const uint8_t k_vax_dcl_read[] = { 0x09, 0x00, 0x16, 0x00,
+    0x02, 0x08, 0x90, 0x0a, 0x00, 0x01, 0x05, 0x00, 0x00, 0x00, 0x05, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, '\r', '\n', 0x00, '$', ' ' };
+
 static void bind_on_oracle(struct fake *f, struct rtpad_session *s, struct rtpad_io *io)
 {
     memset(f, 0, sizeof *f);
@@ -502,6 +507,15 @@ static void test_recall_and_sense(void)
     check(f.initlen == 9 && memcmp(f.init, "SHOW TIME", 9) == 0,
           "the recalled SHOW TIME is the read's initial input, not part of its prompt");
     check(screen_has(&f, "$ ") && !screen_has(&f, "$ SHOW"), "the prompt is just the prompt");
+    /* RETURN ended that read (echoed: a fresh line); DCL's next read is
+     * untimed: its prompt is shown at once, its CR LF rendered as the driver
+     * renders it on a fresh line -- just CR -- and the read waits for a key */
+    size_t mark = f.screenlen;
+    rtpad_session_rx(&s, k_vax_dcl_read, sizeof k_vax_dcl_read);
+    check(f.screenlen == mark + 4 && memcmp(f.screen + mark, "\r\0$ ", 4) == 0,
+          "after an echoed RETURN, DCL's \"\\r\\n\\0$ \" shows as <CR><NUL>$ (no blank line)");
+    check(rtpad_session_wants_input(&s) && !rtpad_session_read_now(&s),
+          "an untimed read waits for the first key (the link is served meanwhile)");
 }
 
 static void test_send_refused(void)

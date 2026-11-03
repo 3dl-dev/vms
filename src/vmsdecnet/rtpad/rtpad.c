@@ -467,7 +467,8 @@ int main(void)
         }
         if (s.done)
             break;
-        if (rtpad_session_wants_input(&s) && (!r.ch_tt || term_ready(&r)))
+        if (rtpad_session_wants_input(&s) &&
+            (!r.ch_tt || rtpad_session_read_now(&s) || term_ready(&r)))
             rtpad_session_input(&s);
         else
             idle();

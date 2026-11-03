@@ -53,6 +53,19 @@ struct dcl_context *dcl_get_context(void)
 /* Forward declarations */
 int dcl_execute_line(const char *line);
 int dcl_execute_script(const char *filename, int argc, char **argv);
+
+/* A login procedure runs only if RMS can open it (on VMS LOGINOUT skips a
+ * missing SYLOGIN/LOGIN.COM silently). Probed with RMS $OPEN, not a host
+ * stat() of a passthrough path: the file may be on any mounted volume. */
+static int login_proc_exists(const char *spec)
+{
+    uint32_t st = 0;
+    struct dcl_rms_reader *r = dcl_rms_read_open(&dcl_ctx, spec, &st);
+    if (!r)
+        return 0;
+    dcl_rms_read_close(r);
+    return 1;
+}
 int dcl_format_directory(const char *linux_path, char *vms_dir, size_t dir_size);
 void dcl_set_status(struct dcl_context *ctx, int status);
 
@@ -822,7 +835,6 @@ int main(int argc, char *argv[])
 
     /* Execute login scripts when in login mode */
     if (login_mode) {
-        struct stat st;
 
         /*
          * ESTABLISH THE PER-USER IDENTITY LOGICALS (vms-e48).
@@ -850,25 +862,21 @@ int main(int argc, char *argv[])
                                       dcl_ctx.default_dir);
 
         /* System-wide login script */
-        char sylogin_linux[1024];
-        vmsfs_to_linux_path(SYLOGIN_PATH, sylogin_linux, sizeof(sylogin_linux));
-        if (stat(sylogin_linux, &st) == 0 && S_ISREG(st.st_mode)) {
+        if (login_proc_exists(SYLOGIN_PATH)) {
             dcl_execute_script(SYLOGIN_PATH, 0, NULL);   /* RMS opens the VMS spec */
         }
 
         /*
          * Per-user login command file: the SYSUAF LGICMD field LOGINOUT left in
          * the executive (VMS_IOCTL_LGI), or the documented SYS$LOGIN:LOGIN.COM default
-         * (vms-e48). Resolved through vmsfs_to_linux_path(), which translates
-         * the SYS$LOGIN logical just defined above -- NOT getenv("SYS$LOGIN")
+         * (vms-e48). Found by RMS, which translates the SYS$LOGIN logical just
+         * defined above and reaches any mounted volume -- NOT getenv("SYS$LOGIN")
          * with a hardcoded "/LOGIN.COM" tail, and NOT the SYSUAF field ignored.
          */
         const char *lgicmd_spec =
             login_lgicmd[0] ? login_lgicmd
                                               : SYSUAF_DEFAULT_LGICMD;
-        char user_login[1024];
-        if (vmsfs_to_linux_path(lgicmd_spec, user_login, sizeof(user_login)) == 1
-            && stat(user_login, &st) == 0 && S_ISREG(st.st_mode)) {
+        if (login_proc_exists(lgicmd_spec)) {
             dcl_execute_script(lgicmd_spec, 0, NULL);    /* RMS opens the VMS spec */
         }
 

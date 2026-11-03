@@ -57,6 +57,7 @@
 #include "iodef.h"
 #include "ssdef.h"
 #include "starlet.h"
+#include "prcdef.h"   /* PRC$M_DETACH: SET EXECUTOR STATE ON creates NETACP */
 
 /* An image run outside an executive-activated context (the host test) has no
  * process context yet; the system services need one for the channel table. */
@@ -386,6 +387,43 @@ static int fail_db(const char *msg, enum dnet_store_db which)
     return 1;
 }
 
+/*
+ * SET EXECUTOR STATE ON (rd vms-0a7 S3): the network starts. NCP $CREPRCs the
+ * network ancillary control process SYS$SYSTEM:NETACP.EXE DETACHED, process
+ * name NETACP, with no parameters -- NETACP reads the executor this command
+ * just recorded from the executor database and its LAN unit from the
+ * executive. Its SYS$OUTPUT/SYS$ERROR are SYS$MANAGER:NETACP.LOG, which it
+ * writes through RMS; its input is NL:. It runs with NCP's (the operator's)
+ * privileges: NETACP needs PHY_IO for its datalink and SYSNAM/TMPMBX for its
+ * request mailbox, and refuses honestly without them (NETACP.LOG).
+ *
+ * The network already on is not an error: a second NETACP is refused by the
+ * executive as a duplicate process name, and STATE ON then changes nothing,
+ * as on VMS. NETACP announces itself to OPCOM ("DECnet starting") once its
+ * datalink is open; NCP prints nothing on success.
+ */
+static int ncp_start_netacp(void)
+{
+    static char img[] = "SYS$SYSTEM:NETACP.EXE";
+    static char nam[] = "NETACP";
+    static char nl[] = "NL:";
+    static char log[] = "SYS$MANAGER:NETACP.LOG";
+    struct dsc$descriptor_s img_d = { (uint16_t)strlen(img), DSC$K_DTYPE_T, DSC$K_CLASS_S, img };
+    struct dsc$descriptor_s nam_d = { (uint16_t)strlen(nam), DSC$K_DTYPE_T, DSC$K_CLASS_S, nam };
+    struct dsc$descriptor_s in_d  = { (uint16_t)strlen(nl), DSC$K_DTYPE_T, DSC$K_CLASS_S, nl };
+    struct dsc$descriptor_s log_d = { (uint16_t)strlen(log), DSC$K_DTYPE_T, DSC$K_CLASS_S, log };
+    uint32_t pid = 0;
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    uint32_t st = sys$creprc(&pid, &img_d, &in_d, &log_d, &log_d, NULL, NULL, &nam_d,
+                             0, 0, 0, PRC$M_DETACH, NULL, NULL);
+    if (st & 1)
+        return 0;
+    if (st == SS$_DUPLNAM)
+        return 0;                       /* NETACP is already running */
+    return ncp_net_fail(st);
+}
+
 static void usage(void)
 {
     fprintf(stderr,
@@ -627,6 +665,10 @@ int main(int argc, char **argv)
             if (exec_save(&x) != DNET_NODEDB_OK)
                 return fail_db("CFGWRERR, could not write the executor database",
                                DNET_STORE_EXECUTOR);
+            /* SET (the running network, not DEFINE) EXECUTOR STATE ON starts
+             * the network: NCP creates NETACP. */
+            if (ieq(verb, "SET") && ieq(argv[3], "STATE") && x.state_on)
+                return ncp_start_netacp();
             return 0;
         }
         usage();

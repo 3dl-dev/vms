@@ -1,0 +1,5 @@
+# rd vms-0a7 S3: argv "--" flags still parsed by a shipped src/vmsdecnet image.
+# <file relative to src/vmsdecnet> <flag>. Only ever delete lines.
+# DECNETD.EXE is the $ SET HOST client DCL activates until RTPAD.EXE (S2).
+engine/decnetd.c --set-host
+engine/decnetd.c --user

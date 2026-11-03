@@ -1453,7 +1453,8 @@ if(BUILD_TOOLS)
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE
-        decnetd_exe          # DECNETD.EXE
+        decnetd_exe          # DECNETD.EXE (the SET HOST client, until RTPAD -- vms-0a7 S2)
+        netacp_exe           # NETACP.EXE (rd vms-0a7 S3)
         fal_exe              # FAL.EXE
         mail_server_exe      # MAIL_SERVER.EXE
         PARTS                # PARTS.EXE

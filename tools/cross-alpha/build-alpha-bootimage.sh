@@ -200,7 +200,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     for e in PROVISION.EXE JOB_CONTROL.EXE LOGINOUT.EXE DCL.EXE HELP.EXE \
              AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE \
              SYSGEN.EXE PRODUCT.EXE LIBRARIAN.EXE ANALYZE.EXE \
-             SYSMAN.EXE DECNETD.EXE FAL.EXE MAIL_SERVER.EXE NCP.EXE ROOTAUDIT.EXE \
+             SYSMAN.EXE DECNETD.EXE NETACP.EXE FAL.EXE MAIL_SERVER.EXE NCP.EXE ROOTAUDIT.EXE \
              OPCOM.EXE; do
         [ -f "$BIN/$e" ] && cp "$BIN/$e" "$SYSEXE/" || echo "   (no $e)"
     done
@@ -462,7 +462,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # DECNETD.EXE (rd vms-c1f) is in the same gate: the DCL acceptance
     # battery DECnet CTERM section hard-gates on it, so a staging regression
     # that drops it off this rail volume must fail HERE too.
-    for name in IMGACT.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE SYSUAF.DAT DECNETD.EXE OPCOM.EXE; do
+    for name in IMGACT.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE SYSUAF.DAT DECNETD.EXE NETACP.EXE OPCOM.EXE; do
         grep -qi "$name" /work/distrib-list.txt \
             || { echo "FAIL: mastered ODS-2 image missing SYS\$SYSTEM:$name"; exit 1; }
         echo "   OK: ovmx-distrib-alpha.img (ODS-2) carries SYS\$SYSTEM:$name"

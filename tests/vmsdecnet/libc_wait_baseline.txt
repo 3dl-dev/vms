@@ -1,0 +1,4 @@
+# rd vms-0a7 S3: DCL's pthread_create/poll/pipe debt, per file (lower a line when it falls; never raise one).
+src/vmsdcl/dcl_cmd_process.c 4
+src/vmsdcl/dcl_mbx.c 8
+src/vmsdcl/dcl_memfile.c 1

@@ -401,3 +401,17 @@ add_test(NAME decnetd_netacp_show_selftest
 # authenticated byte-verified transfer is --copy-accept-test in the battery).
 add_test(NAME decnetd_copy_transport_selftest
          COMMAND netacp_test_exe --copy-transport-selftest)
+
+# rd vms-0a7 S3 gates. (a) the libc thread/wait/pipe ratchet: src/vmsdecnet has
+# no pthread_create/poll/pipe, DCL no more than its baseline, NETACP.EXE links no
+# Threads -- with planted-call negative controls. (b) no shipped src/vmsdecnet
+# image parses argv "--" beyond the baseline (DECNETD.EXE's SET HOST client,
+# until S2), NETACP.EXE is main(void) -- with planted-parser negative controls.
+add_test(NAME vmsdecnet_netacp_no_libc_wait
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_netacp_no_libc_wait.sh)
+set_tests_properties(vmsdecnet_netacp_no_libc_wait PROPERTIES
+    PASS_REGULAR_EXPRESSION "NETACP_NO_LIBC_WAIT_OK")
+add_test(NAME vmsdecnet_no_argv_flags
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_no_argv_flags.sh)
+set_tests_properties(vmsdecnet_no_argv_flags PROPERTIES
+    PASS_REGULAR_EXPRESSION "NO_ARGV_FLAGS_OK")

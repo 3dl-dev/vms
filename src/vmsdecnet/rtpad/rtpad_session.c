@@ -109,27 +109,46 @@ void rtpad_session_oob(struct rtpad_session *s, uint8_t c)
     if (!(s->io->link_send(s->io->ctx, s->opdu, olen) & 1))
         return;
     s->oob_sent++;
-    /* The interrupt is shown on this screen, as the local driver shows its
-     * own CTRL/Y: a VAX client's screen shows it, and a VAX host sends no
-     * text for it (S2 live bench). */
-    if (interrupt || (s->chattr[c] & 0x30)) {
-        s->io->record(s->io->ctx, "*INTERRUPT*");
-        s->fresh = 0;          /* the next prompt's CR LF is a new line */
-    }
-    /* A read the host has outstanding stays outstanding: a VAX host that
-     * takes CTRL/Y at an idle DCL prompt solicits nothing new, so the line
-     * the user types next still answers it (S2 live bench). */
     (void)kind;
+    if (!interrupt)
+        return;
+    /* The interrupt is shown by the local driver (RTPAD arms the OUTBAND mask
+     * with IO$M_TT_ABORT: the driver shows " Interrupt " / *INTERRUPT* for
+     * the terminal it is and ends the read in progress).
+     *
+     * Then, as a VAX V7.3 client (S2 live bench and its VAX-only probes,
+     * tests/lab/captures/vms-0a7-s2-20261103: every observation fits): with
+     * a host read outstanding, a CTRL/Y that follows another with fewer than
+     * two lines sent to the host since is "repeating" -- the client asks
+     * "Are you repeating ^Y to abort the remote session on node X?" and the
+     * host's read stays outstanding; any other CTRL/Y ends the host's read
+     * (Read Data, completion code 3, no data: 03 03 00 00 00 00 00 00 on the
+     * wire after the Out-of-Band) and the host solicits again. */
+    int repeat = s->y_seen && s->read_pending && s->lines_since_y < 2;
+    s->y_seen = 1;
+    s->lines_since_y = 0;
+    if (repeat) {
+        s->ask_pending = 1;
+        return;
+    }
+    if (s->read_pending) {
+        size_t clen = 0;
+        if (dnet_cterm_found_read_data_build_code(NULL, 0, 3, s->opdu, sizeof s->opdu,
+                                                  &clen) != 0)
+            return;
+        if (!(s->io->link_send(s->io->ctx, s->opdu, clen) & 1))
+            return;
+        s->term.reads_sent++;
+        s->read_pending = 0;
+        s->rd_plen = s->rd_init = 0;
+    }
 }
 
-/* Host output to the screen. The cursor is no longer at the start of the
- * fresh line a terminal read's echoed RETURN left. */
+/* Host output to the screen. */
 static void show(struct rtpad_session *s, const uint8_t *b, size_t n)
 {
-    if (!n)
-        return;
-    s->io->show(s->io->ctx, b, n);
-    s->fresh = 0;
+    if (n)
+        s->io->show(s->io->ctx, b, n);
 }
 
 static void fail(struct rtpad_session *s, uint32_t st)
@@ -168,6 +187,7 @@ static void send_line(struct rtpad_session *s, const uint8_t *line, size_t n,
         return;
     s->term.reads_sent++;
     s->read_pending = 0;
+    s->lines_since_y++;
 }
 
 /* One BOUND-phase CTERM message (re-wrapped in its own 09 envelope). */
@@ -212,21 +232,6 @@ static void on_bound_msg(struct rtpad_session *s, const uint8_t *data, size_t le
             memcpy(s->rd_prompt, txt, txtlen);
             s->rd_plen = eop;
             s->rd_init = txtlen - eop;
-            if (s->rd_timeout == 0 && s->rd_init == 0 && s->rd_plen) {
-                /* An untimed read waits for the user's first key (so the link
-                 * is served meanwhile); its prompt is shown now, rendered as
-                 * the driver renders a read's prompt: a leading CR LF on the
-                 * fresh line a RETURN's echo opened is just the CR (VAX V7.3:
-                 * "<CR><NUL>$ " after a command, rd vms-fc4). */
-                const uint8_t *p = s->rd_prompt;
-                size_t pn = s->rd_plen;
-                if (s->fresh && pn >= 2 && p[0] == '\r' && p[1] == '\n') {
-                    s->io->show(s->io->ctx, p, 1);
-                    p += 2; pn -= 2;
-                }
-                show(s, p, pn);
-                s->rd_plen = 0;
-            }
         } else if (txtlen) {
             show(s, txt, txtlen);
         }
@@ -307,13 +312,55 @@ void rtpad_session_rx(struct rtpad_session *s, const uint8_t *data, size_t len)
 
 int rtpad_session_read_now(const struct rtpad_session *s)
 {
-    return s->read_pending && (s->rd_timeout != 0 || s->rd_init != 0);
+    /* Every solicited read starts at once, its prompt with it: RTPAD serves
+     * the link from an AST while the read is outstanding, so what is typed is
+     * echoed and edited as it comes (a paste longer than the type-ahead
+     * buffer is read whole) and host output is shown as it arrives (rd
+     * vms-fc0). */
+    return s->read_pending || s->ask_pending;
 }
 
 int rtpad_session_wants_input(const struct rtpad_session *s)
 {
     return !s->done && !s->input_eof && dnet_cterm_is_bound(&s->term) &&
-           s->read_pending;
+           (s->read_pending || s->ask_pending);
+}
+
+void rtpad_session_set_node(struct rtpad_session *s, const char *node)
+{
+    size_t k = 0;
+    while (node && node[k] && node[k] != ':' && k + 1 < sizeof s->node) {
+        s->node[k] = node[k];
+        k++;
+    }
+    s->node[k] = '\0';
+}
+
+/* "Are you repeating ^Y to abort the remote session on node X?" -- a local
+ * read, its answer never the host's (VAX V7.3 client: an answer "XYZ" runs
+ * nothing remote). Y ends the session: Unbind, "%REM-S-END ..." and $STATUS
+ * %X00000001; anything else leaves the host's read outstanding, posted again
+ * with its prompt (S2 probes). */
+static void ask_abort(struct rtpad_session *s)
+{
+    static const char q1[] = "Are you repeating ^Y to abort the remote session on node ";
+    uint8_t prompt[sizeof q1 + sizeof s->node + 4];
+    uint8_t ans[64];
+    size_t pn = 0, nl = strlen(s->node), n = 0;
+    uint8_t term = 0x0d;
+
+    s->ask_pending = 0;
+    memcpy(prompt, q1, sizeof q1 - 1); pn = sizeof q1 - 1;
+    memcpy(prompt + pn, s->node, nl); pn += nl;
+    prompt[pn++] = '?';
+    prompt[pn++] = ' ';
+    uint32_t st = s->io->read_line(s->io->ctx, prompt, pn, NULL, 0, ans, sizeof ans,
+                                   1, 1, 0, &n, &term);
+    if ((st & 1) && n > 0 && (ans[0] == 'Y' || ans[0] == 'y')) {
+        s->user_abort = 1;
+        s->status = SS$_NORMAL;
+        s->done = 1;
+    }
 }
 
 void rtpad_session_input(struct rtpad_session *s)
@@ -326,6 +373,10 @@ void rtpad_session_input(struct rtpad_session *s)
         return;
     if (s->is_terminal) {
         uint8_t term = 0x0d;
+        if (s->ask_pending) {
+            ask_abort(s);
+            return;
+        }
         st = s->io->read_line(s->io->ctx, s->rd_prompt, s->rd_plen,
                               s->rd_prompt + s->rd_plen, s->rd_init,
                               line, sizeof line, s->rd_echo,
@@ -354,14 +405,13 @@ void rtpad_session_input(struct rtpad_session *s)
              * ends on the host's Unbind or a link drop (rd vms-6165). */
             if (st != SS$_ABORT && st != SS$_CANCEL)
                 s->input_eof = 1;
+            else if (s->ask_pending)
+                ask_abort(s);          /* a repeated CTRL/Y ended the read */
             return;
         }
         if (n > sizeof line)
             n = sizeof line;
         s->rd_plen = s->rd_init = 0;
-        /* the driver echoed the RETURN as a new line: the cursor is at the
-         * start of a fresh one */
-        s->fresh = (term == 0x0d && s->rd_echo && s->rd_term_echo);
         send_line(s, line, n, term);
         return;
     }

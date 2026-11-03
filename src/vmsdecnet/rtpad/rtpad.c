@@ -18,7 +18,11 @@
  *   - the terminal: $GETDVIW SYS$INPUT (is it a terminal?), $ASSIGN TT:, and
  *                   $QIOW IO$_READVBLK (with the host's echo), IO$_WRITEVBLK,
  *                   IO$_SENSEMODE!IO$M_TYPEAHDCNT;
- *   - waiting:      $SETIMR + $WFLOR on a local event flag.
+ *   - waiting:      $SETIMR + $WFLOR on a local event flag; while a terminal
+ *                   read is outstanding, a $SETIMR AST that $DCLASTs the
+ *                   link's service, which the executive delivers inside the
+ *                   read (the read stays outstanding), and $CANCEL to end
+ *                   the read when the host ends the session.
  * There is no argv, no stdio, no isatty, no poll, no thread and no host fd.
  */
 #include <stddef.h>
@@ -51,6 +55,8 @@ extern struct vms_pcb *vms_pcb_get(void);
 extern struct vms_pcb *vms_pcb_init(uint64_t initial_privs);
 
 #define RTPAD_EFN      21u      /* the wait's timer flag (a local flag) */
+#define RTPAD_LINK_EFN 22u      /* the link-service timer's (a local flag) */
+#define RTPAD_LINK_REQ 0x52545044u  /* its $SETIMR request id ("RTPD") */
 #define RTPAD_IDLE_MS  20u      /* between looks at the link and the terminal */
 #define RTPAD_DRAIN    64       /* link reads per turn before the terminal */
 
@@ -97,6 +103,49 @@ static void io_record(void *ctx, const char *msg)
     out_bytes(r->ch_tt ? r->ch_tt : r->ch_out, msg, strlen(msg), 0x20);
 }
 
+/* ---- the link, served while a terminal read is outstanding (rd vms-fc0) ----
+ *
+ * VMS RTPAD has its terminal read outstanding while the user types, and the
+ * host's output appears meanwhile. Here: while the read runs, a $SETIMR AST
+ * (in its timer's context) does nothing but $DCLAST the link's service; the
+ * executive lets the waiting read go to deliver it, in this process's main
+ * line, and the read then goes on where it was. The service drains the link
+ * as the main loop does; when the host ends the session it $CANCELs the read.
+ */
+static struct rtpad *g_r;
+static struct rtpad_session *g_s;
+static volatile int g_reading;          /* a terminal read is outstanding */
+static int g_link_busy;
+
+static void serve_link(struct rtpad *r, struct rtpad_session *s);
+static void link_ast(uint32_t p);
+
+static void link_timer_ast(uint32_t p)
+{
+    (void)p;
+    (void)sys$dclast(link_ast, 0, 3);
+}
+
+static void link_arm(void)
+{
+    uint64_t delta = (uint64_t)(-(int64_t)RTPAD_IDLE_MS * 10000);
+    (void)sys$setimr(RTPAD_LINK_EFN, &delta, link_timer_ast, RTPAD_LINK_REQ, 0);
+}
+
+static void link_ast(uint32_t p)
+{
+    (void)p;
+    if (!g_reading || g_link_busy || !g_r || !g_s)
+        return;
+    g_link_busy = 1;
+    serve_link(g_r, g_s);
+    if (g_s->done)
+        (void)sys$cancel(g_r->ch_tt);   /* the host ended it: end the read */
+    g_link_busy = 0;
+    if (g_reading && !g_s->done)
+        link_arm();
+}
+
 static uint32_t io_read_line(void *ctx, const uint8_t *prompt, size_t plen,
                              const uint8_t *init, size_t ilen,
                              uint8_t *buf, size_t cap, int echo,
@@ -125,8 +174,12 @@ static uint32_t io_read_line(void *ctx, const uint8_t *prompt, size_t plen,
         }
         it[ni].code = TRM$_INISTRNG; it[ni].len = (unsigned short)ilen;
         it[ni].val = (uintptr_t)init; ni++;
+        g_reading = 1;
+        link_arm();
         st = sys$qiow(0, r->ch_tt, IO$_READVBLK | IO$M_EXTEND, &iosb, NULL, 0, buf,
                       (uint32_t)cap, 0, 0, (uintptr_t)it, (uint32_t)(ni * sizeof it[0]));
+        g_reading = 0;
+        (void)sys$cantim(RTPAD_LINK_REQ, 0);
     } else {
         /* the host's prompt goes with the read (P5/P6), as VMS's driver shows it */
         uint32_t func = plen ? IO$_READPROMPT : IO$_READVBLK;
@@ -136,8 +189,12 @@ static uint32_t io_read_line(void *ctx, const uint8_t *prompt, size_t plen,
             func |= IO$M_TRMNOECHO;
         if (timeout_s)
             func |= IO$M_TIMED;            /* P3 = the host's TIMEOUT, seconds */
+        g_reading = 1;
+        link_arm();
         st = sys$qiow(0, r->ch_tt, func, &iosb, NULL, 0, buf, (uint32_t)cap,
                       timeout_s, 0, (uintptr_t)prompt, (uint32_t)plen);
+        g_reading = 0;
+        (void)sys$cantim(RTPAD_LINK_REQ, 0);
     }
     if (st & 1)
         st = iosb.iosb$w_status;
@@ -175,7 +232,10 @@ static void io_set_oob(void *ctx, uint32_t mask)
         return;
     mq[0] = 0;
     mq[1] = mask;
-    (void)sys$qiow(0, r->ch_tt, IO$_SETMODE | IO$M_OUTBAND, &iosb, NULL, 0,
+    /* IO$M_TT_ABORT: CTRL/Y and CTRL/C also end the read in progress, the
+     * driver showing its interrupt (" Interrupt " on an ANSI CRT) -- what a
+     * VAX client's screen shows; RTPAD then answers the host's read */
+    (void)sys$qiow(0, r->ch_tt, IO$_SETMODE | IO$M_OUTBAND | IO$M_TT_ABORT, &iosb, NULL, 0,
                    mask ? (void *)oob_ast : NULL, 0, 3, (uintptr_t)mq, 0, 0);
 }
 
@@ -190,20 +250,10 @@ static int sense_terminal(struct rtpad *r, uint8_t sense[12])
                            0, 0, 0, 0);
     if (st & 1)
         st = iosb.iosb$w_status;
-    if (!(st & 1) || sense[0] != DC$_TERM)
-        return 0;
-    /* OVMX's SENSEMODE does not yet return the TT$/TT2$ characteristics in
-     * bytes 4-6 and 8-11 (it returns device characteristics there: rd
-     * vms-686), and a VMS host would act on them -- a real VAX showed the
-     * session's RTA as Passall. Until it does, those bytes are the ones a
-     * real VAX client reported (oracle docs/oracle/vax-sethost-cterm.*:
-     * TTSYNC LOWER WRAP / 00 32 00 00); class, type, width and page are this
-     * terminal's. */
-    static const uint8_t oracle_tt[3] = { 0xa0, 0x02, 0x00 };
-    static const uint8_t oracle_tt2[4] = { 0x00, 0x32, 0x00, 0x00 };
-    memcpy(sense + 4, oracle_tt, sizeof oracle_tt);
-    memcpy(sense + 8, oracle_tt2, sizeof oracle_tt2);
-    return 1;
+    /* the buffer as VMS fills it: class, DT$ type, width, the TT$ and TT2$
+     * characteristics and the page length (rd vms-686) -- reported to the
+     * host unaltered, as a VAX client reports its own */
+    return (st & 1) && sense[0] == DC$_TERM;
 }
 
 /* A file SYS$INPUT: its bytes, split into lines; one line per call. */
@@ -232,22 +282,6 @@ static uint32_t io_read_record(void *ctx, uint8_t *buf, size_t cap, size_t *n)
             dnet_cterm_inq_eof(&r->inq);
         }
     }
-}
-
-/* Has the terminal driver a line started in its type-ahead buffer? */
-static int term_ready(struct rtpad *r)
-{
-    uint8_t tc[8];
-    struct _iosb iosb;
-    memset(tc, 0, sizeof tc);
-    memset(&iosb, 0, sizeof iosb);
-    uint32_t st = sys$qiow(0, r->ch_tt, IO$_SENSEMODE | IO$M_TYPEAHDCNT, &iosb,
-                           NULL, 0, tc, (uint32_t)sizeof tc, 0, 0, 0, 0);
-    if (st & 1)
-        st = iosb.iosb$w_status;
-    if (!(st & 1))
-        return 1;          /* the driver cannot say: let the read report it */
-    return (tc[0] | (tc[1] << 8)) != 0;
 }
 
 /* Is SYS$INPUT the job's terminal? Asked of the executive's device row. */
@@ -381,6 +415,24 @@ static void fail_exit(struct rtpad *r, uint32_t st)
     sys$exit(st);
 }
 
+/* The link's pending segments, one turn's worth (no wait). */
+static void serve_link(struct rtpad *r, struct rtpad_session *s)
+{
+    for (int i = 0; i < RTPAD_DRAIN && !s->done; i++) {
+        uint8_t buf[1100];
+        size_t got = 0;
+        uint32_t st = dnet_net_qiow(r->net, IO$_READVBLK | IO$M_NOW, buf,
+                                    (uint32_t)sizeof buf, &got);
+        if (st == SS$_ENDOFFILE)
+            break;
+        if (!(st & 1)) {
+            s->done = 1;               /* the host unbound, or the link went */
+            break;
+        }
+        rtpad_session_rx(s, buf, got);
+    }
+}
+
 static void idle(void)
 {
     /* a VMS delta time: negative, in 100 ns units */
@@ -455,8 +507,11 @@ int main(void)
     io = io_ops;
     io.ctx = &r;
     g_oob_session = &s;
+    g_r = &r;
+    g_s = &s;
     if (rtpad_session_init(&s, &io, r.ch_tt != 0) != 0)
         fail_exit(&r, SS$_ABORT);
+    rtpad_session_set_node(&s, node);
     if (r.ch_tt) {
         uint8_t sense[12];
         if (sense_terminal(&r, sense))
@@ -465,23 +520,10 @@ int main(void)
     rtpad_session_linkup(&s);
 
     while (!s.done) {
-        for (int i = 0; i < RTPAD_DRAIN && !s.done; i++) {
-            uint8_t buf[1100];
-            size_t got = 0;
-            st = dnet_net_qiow(r.net, IO$_READVBLK | IO$M_NOW, buf,
-                               (uint32_t)sizeof buf, &got);
-            if (st == SS$_ENDOFFILE)
-                break;
-            if (!(st & 1)) {
-                s.done = 1;            /* the host unbound, or the link went */
-                break;
-            }
-            rtpad_session_rx(&s, buf, got);
-        }
+        serve_link(&r, &s);
         if (s.done)
             break;
-        if (rtpad_session_wants_input(&s) &&
-            (!r.ch_tt || rtpad_session_read_now(&s) || term_ready(&r)))
+        if (rtpad_session_wants_input(&s) && rtpad_session_read_now(&s))
             rtpad_session_input(&s);
         else
             idle();

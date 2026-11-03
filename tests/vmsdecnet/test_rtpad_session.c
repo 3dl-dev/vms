@@ -65,6 +65,15 @@ struct fake {
     uint32_t oob_mask;                /* the last set_oob */
     int oob_sets;
     int reads;
+    /* out-of-band during a read: the character the driver gives (its AST
+     * runs inside the read, as the executive delivers it), which with
+     * IO$M_TT_ABORT ends the read SS$_ABORT */
+    uint8_t oob_in_read[32];
+    struct rtpad_session *sess;
+    uint8_t lastprompt[160];
+    size_t lastplen;
+    int questions;                    /* reads prompting "Are you repeating" */
+    char qtext[160];
 };
 
 static uint32_t f_send(void *ctx, const uint8_t *pdu, size_t n)
@@ -99,6 +108,14 @@ static uint32_t f_read_line(void *ctx, const uint8_t *prompt, size_t plen,
     struct fake *f = ctx;
     f_show(ctx, prompt, plen);        /* the driver writes a read's prompt */
     f->prompted += plen ? 1 : 0;
+    if (plen < sizeof f->lastprompt) {
+        memcpy(f->lastprompt, prompt, plen);
+        f->lastplen = plen;
+        if (plen > 17 && memcmp(prompt, "Are you repeating", 17) == 0) {
+            f->questions++;
+            snprintf(f->qtext, sizeof f->qtext, "%.*s", (int)plen, (const char *)prompt);
+        }
+    }
     if (ilen && ilen < sizeof f->init) {
         memcpy(f->init, init, ilen);
         f->initlen = ilen;
@@ -106,6 +123,11 @@ static uint32_t f_read_line(void *ctx, const uint8_t *prompt, size_t plen,
     if (f->nextline >= f->nlines)
         return SS$_ENDOFFILE;
     int i = f->nextline++;
+    if (f->oob_in_read[i] && f->sess) {
+        rtpad_session_oob(f->sess, f->oob_in_read[i]);
+        f->reads++;
+        return SS$_ABORT;             /* IO$M_TT_ABORT ended the read */
+    }
     f->echo_of[i] = echo;
     f->term_echo_of[i] = term_echo;
     f->timeout_of[i] = timeout_s;
@@ -451,13 +473,11 @@ static void test_oob(void)
     int before = f.nsent;
     rtpad_session_oob(&s, 0x19);
     check(f.nsent == before + 1 && f.sentlen[before] == sizeof want_y0 &&
-          memcmp(f.sent[before], want_y0, sizeof want_y0) == 0 && f.nrecords == 1,
-          "CTRL/Y before the host says anything: Out-of-Band 04 00 19, *INTERRUPT* shown (as a VAX client)");
+          memcmp(f.sent[before], want_y0, sizeof want_y0) == 0 && f.nrecords == 0,
+          "CTRL/Y before the host says anything: Out-of-Band 04 00 19 (the driver shows the interrupt)");
     rtpad_session_oob(&s, 0x03);
-    check(f.nsent == before + 2 && memcmp(f.sent[before + 1], want_y0, sizeof want_y0) == 0 &&
-          f.nrecords == 2,
+    check(f.nsent == before + 2 && memcmp(f.sent[before + 1], want_y0, sizeof want_y0) == 0,
           "CTRL/C goes as that same CTRL/Y (as a VAX client) while the host has not made CTRL/C out of band");
-    f.nrecords = 0;
     rtpad_session_rx(&s, k_vax_char_ctrly, sizeof k_vax_char_ctrly);
     rtpad_session_rx(&s, k_vax_char_ctrlt, sizeof k_vax_char_ctrlt);
     check(s.chattr[0x19] == 0x29 && s.chattr[0x14] == 0x03,
@@ -470,17 +490,20 @@ static void test_oob(void)
     check(f.nsent == before + 1 && f.sentlen[before] == sizeof want_y &&
           memcmp(f.sent[before], want_y, sizeof want_y) == 0,
           "CTRL/Y goes as Out-of-Band 04 01 19 (discard, per its attributes)");
-    check(f.nrecords == 1 && strcmp(f.record, "*INTERRUPT*") == 0,
-          "... and *INTERRUPT* on the terminal");
     {
-        /* the host's next prompt after the interrupt starts a NEW line: it
-         * must not overprint *INTERRUPT* (S2 bench, image c4f228d9d) */
-        s.fresh = 1;
-        rtpad_session_oob(&s, 0x19);
-        size_t mark = f.screenlen;
+        /* a host read outstanding and no CTRL/Y just before: the host's read
+         * ends, Read Data completion code 3 with no data, right after the
+         * Out-of-Band (VAX client's wire, S2 bench 155.081 / 160.232) */
+        static const uint8_t want_rd3[] = { 0x09, 0x00, 0x08, 0x00,
+            0x03, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+        s.y_seen = 0;
         rtpad_session_rx(&s, k_vax_dcl_read, sizeof k_vax_dcl_read);
-        check(f.screenlen == mark + 5 && memcmp(f.screen + mark, "\r\n\0$ ", 5) == 0,
-              "after *INTERRUPT* the DCL prompt keeps its CR LF (a line of its own)");
+        before = f.nsent;
+        rtpad_session_oob(&s, 0x19);
+        check(f.nsent == before + 2 && f.sentlen[before + 1] == sizeof want_rd3 &&
+              memcmp(f.sent[before + 1], want_rd3, sizeof want_rd3) == 0 &&
+              !s.read_pending && !s.ask_pending,
+              "CTRL/Y at a read: Out-of-Band, then Read Data code 3 (03 03 00 00 00 00 00 00); the host solicits again");
     }
     before = f.nsent;
     f.nrecords = 0;
@@ -529,15 +552,77 @@ static void test_recall_and_sense(void)
     check(f.initlen == 9 && memcmp(f.init, "SHOW TIME", 9) == 0,
           "the recalled SHOW TIME is the read's initial input, not part of its prompt");
     check(screen_has(&f, "$ ") && !screen_has(&f, "$ SHOW"), "the prompt is just the prompt");
-    /* RETURN ended that read (echoed: a fresh line); DCL's next read is
-     * untimed: its prompt is shown at once, its CR LF rendered as the driver
-     * renders it on a fresh line -- just CR -- and the read waits for a key */
+    /* DCL's next read: untimed; it starts at once, its prompt WITH it (the
+     * driver renders "\r\n\0$ "), the link served meanwhile (rd vms-fc0) */
     size_t mark = f.screenlen;
     rtpad_session_rx(&s, k_vax_dcl_read, sizeof k_vax_dcl_read);
-    check(f.screenlen == mark + 4 && memcmp(f.screen + mark, "\r\0$ ", 4) == 0,
-          "after an echoed RETURN, DCL's \"\\r\\n\\0$ \" shows as <CR><NUL>$ (no blank line)");
-    check(rtpad_session_wants_input(&s) && !rtpad_session_read_now(&s),
-          "an untimed read waits for the first key (the link is served meanwhile)");
+    check(f.screenlen == mark && rtpad_session_wants_input(&s) && rtpad_session_read_now(&s) &&
+          s.rd_plen == 5 && memcmp(s.rd_prompt, "\r\n\0$ ", 5) == 0,
+          "an untimed read starts at once with its prompt (nothing shown before the read)");
+}
+
+/* CTRL/Y as a VAX V7.3 client counts it (S2 bench and its VAX-only probes,
+ * tests/lab/captures/vms-0a7-s2-20261103): with a host read outstanding, a
+ * CTRL/Y after another with fewer than two lines sent since asks "Are you
+ * repeating ^Y to abort the remote session on node X?"; the answer is never
+ * the host's; Y ends the session. */
+static void test_ctrly_repeat(void)
+{
+    printf("[ctrly] the repeat rule, the question, its answers\n");
+    static struct fake f;
+    static struct rtpad_session s;
+    static struct rtpad_io io;
+    bind_on_oracle(&f, &s, &io);
+    f.sess = &s;
+    rtpad_session_set_node(&s, "VAXC::");
+    static const uint8_t l_show[] = "SHOW TIME", l_xyz[] = "XYZ", l_y[] = "Y", l_none[] = "";
+    /* the script of local reads, in order */
+    int k = 0;
+#define LINE(t, oob) do { f.lines[k] = (t); f.linelen[k] = strlen((const char *)(t)); \
+        f.lineterm[k] = 0x0d; f.oob_in_read[k] = (oob); k++; } while (0)
+    LINE(l_show, 0);        /* 0: SHOW TIME */
+    LINE(l_show, 0);        /* 1: SHOW TIME */
+    LINE(l_none, 0x19);     /* 2: CTRL/Y at the prompt: first -> code 3 */
+    LINE(l_none, 0x19);     /* 3: CTRL/Y in the read the host issued after: repeat */
+    LINE(l_xyz, 0);         /* 4: the answer XYZ */
+    LINE(l_none, 0x19);     /* 5: CTRL/Y at once again: repeat (asking does not reset) */
+    LINE(l_none, 0);        /* 6: the answer RETURN */
+    LINE(l_show, 0);        /* 7: SHOW TIME */
+    LINE(l_show, 0);        /* 8: SHOW TIME (two lines since) */
+    LINE(l_none, 0x19);     /* 9: CTRL/Y: no question, code 3 */
+    LINE(l_none, 0x19);     /* 10: CTRL/Y: repeat */
+    LINE(l_y, 0);           /* 11: the answer Y */
+    f.nlines = k;
+#undef LINE
+    int sent_lines = 0, code3 = 0;
+    for (int turn = 0; turn < 40 && !s.done; turn++) {
+        if (!rtpad_session_wants_input(&s))
+            rtpad_session_rx(&s, k_vax_dcl_read, sizeof k_vax_dcl_read);   /* the host solicits */
+        int before = f.nsent;
+        rtpad_session_input(&s);
+        for (int m = before; m < f.nsent && m < MAXSENT; m++) {
+            const uint8_t *ln; size_t ll; uint8_t tm;
+            if (f.sentlen[m] >= 6 && f.sent[m][4] == 0x03 && f.sent[m][5] == 0x03)
+                code3++;
+            else if (read_data_of(f.sent[m], f.sentlen[m], &ln, &ll, &tm) == 1) {
+                sent_lines++;
+                check(!(ll == 3 && memcmp(ln, "XYZ", 3) == 0), "the answer XYZ is never sent to the host");
+            }
+        }
+        if (f.nextline >= f.nlines && !s.ask_pending)
+            break;
+    }
+    check(code3 == 2, "two first CTRL/Ys end the host's read with code 3 (a repeated one does not)");
+    check(f.questions == 3, "three repeated CTRL/Ys ask the question");
+    check(strcmp(f.qtext, "Are you repeating ^Y to abort the remote session on node VAXC? ") == 0,
+          "the question names the node as SET HOST did, as the VAX shows it");
+    check(sent_lines == 4, "only the four SHOW TIME lines go to the host");
+    check(s.done && s.user_abort && s.status == SS$_NORMAL,
+          "Y ends the session, status SS$_NORMAL ($STATUS %X00000001 on the VAX)");
+    f.nrecords = 0;
+    rtpad_session_finish(&s, "OVMXA");
+    check(f.nrecords == 1 && strcmp(f.record, "%REM-S-END, control returned to node OVMXA::") == 0,
+          "... and control returns with %REM-S-END");
 }
 
 static void test_send_refused(void)
@@ -625,6 +710,7 @@ int main(void)
     test_timed_read();
     test_oob();
     test_recall_and_sense();
+    test_ctrly_repeat();
     test_send_refused();
     test_fuzz();
     printf("RTPAD-SESSION: %d passed, %d failed\n", passes, failures);

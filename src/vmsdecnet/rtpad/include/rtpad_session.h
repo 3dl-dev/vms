@@ -84,7 +84,12 @@ struct rtpad_session {
     uint32_t oob_mask;                  /* what set_oob was last given */
     uint8_t opdu[32];                   /* an Out-of-Band PDU (sent from an AST) */
     unsigned oob_sent, oob_dropped;
-    int fresh;                          /* the cursor is where an echoed RETURN left it */
+    /* CTRL/Y, as a VAX client counts it (rtpad_session_oob) */
+    int y_seen;                         /* a CTRL/Y went to the host */
+    unsigned lines_since_y;             /* lines sent to the host since */
+    int ask_pending;                    /* "Are you repeating ^Y ...?" is due */
+    int user_abort;                     /* ... and was answered Y */
+    char node[32];                      /* the node as SET HOST named it */
     int done;
     uint32_t status;                    /* the session's ending condition */
     uint8_t cpdu[DNET_CTERM_MAX_PDU];
@@ -106,19 +111,21 @@ void rtpad_session_rx(struct rtpad_session *s, const uint8_t *data, size_t len);
  * is outstanding; a file whenever the host solicits.) */
 int rtpad_session_wants_input(const struct rtpad_session *s);
 
-/* Must the outstanding read start now, before the user types? A TIMED read
- * (its time runs from the prompt) and one with initial input (a recalled
- * command, shown at once) do; an untimed one, its prompt already shown,
- * waits for the first key so the link is served meanwhile. */
+/* Must the outstanding read start now? Yes: every solicited read is posted at
+ * once with its prompt, the link served from an AST meanwhile (rd vms-fc0). */
 int rtpad_session_read_now(const struct rtpad_session *s);
+
+/* The node as the SET HOST command named it (for the CTRL/Y question). */
+void rtpad_session_set_node(struct rtpad_session *s, const char *node);
 
 /* Satisfy the outstanding Start Read from the local side (one line). */
 void rtpad_session_input(struct rtpad_session *s);
 
 /* A control character the terminal driver gave out of band (from RTPAD's
  * IO$M_OUTBAND AST). One the host declared out-of-band goes to it as a CTERM
- * Out-of-Band message, echoed as the interrupt when its attributes say so.
- * Any other is dropped: it never reaches the local DCL. */
+ * Out-of-Band message; CTRL/Y (and CTRL/C, sent as CTRL/Y) then ends the
+ * host's read with Read Data code 3, or -- repeated -- asks whether to abort
+ * the session (see rtpad_session.c). Any other is dropped. */
 void rtpad_session_oob(struct rtpad_session *s, uint8_t c);
 
 /* Report THIS terminal (IO$_SENSEMODE's 12-byte buffer) to the host. */

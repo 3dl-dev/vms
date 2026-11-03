@@ -57,6 +57,13 @@ struct fake {
     uint8_t lineterm[32];
     int nlines, nextline;
     int echo_of[32], term_echo_of[32];
+    unsigned timeout_of[32];
+    int time_out[32];                 /* this line's read runs out of time */
+    int prompted;                     /* reads that carried a prompt */
+    uint8_t init[64];                 /* the last read's initial input */
+    size_t initlen;
+    uint32_t oob_mask;                /* the last set_oob */
+    int oob_sets;
     int reads;
 };
 
@@ -84,19 +91,30 @@ static void f_record(void *ctx, const char *msg)
     snprintf(f->record, sizeof f->record, "%s", msg);
     f->nrecords++;
 }
-static uint32_t f_read_line(void *ctx, uint8_t *buf, size_t cap, int echo, int term_echo,
-                            size_t *n, uint8_t *term)
+static uint32_t f_read_line(void *ctx, const uint8_t *prompt, size_t plen,
+                            const uint8_t *init, size_t ilen,
+                            uint8_t *buf, size_t cap, int echo, int term_echo,
+                            unsigned timeout_s, size_t *n, uint8_t *term)
 {
     struct fake *f = ctx;
+    f_show(ctx, prompt, plen);        /* the driver writes a read's prompt */
+    f->prompted += plen ? 1 : 0;
+    if (ilen && ilen < sizeof f->init) {
+        memcpy(f->init, init, ilen);
+        f->initlen = ilen;
+    }
     if (f->nextline >= f->nlines)
         return SS$_ENDOFFILE;
     int i = f->nextline++;
     f->echo_of[i] = echo;
     f->term_echo_of[i] = term_echo;
+    f->timeout_of[i] = timeout_s;
     f->reads++;
     size_t k = f->linelen[i] < cap ? f->linelen[i] : cap;
     memcpy(buf, f->lines[i], k);
     *n = k;
+    if (f->time_out[i])
+        return SS$_TIMEOUT;           /* the driver: IO$M_TIMED expired */
     *term = f->lineterm[i];
     return SS$_NORMAL;
 }
@@ -113,6 +131,13 @@ static uint32_t f_read_record(void *ctx, uint8_t *buf, size_t cap, size_t *n)
     return SS$_NORMAL;
 }
 
+static void f_set_oob(void *ctx, uint32_t mask)
+{
+    struct fake *f = ctx;
+    f->oob_mask = mask;
+    f->oob_sets++;
+}
+
 static void fake_io(struct fake *f, struct rtpad_io *io)
 {
     memset(io, 0, sizeof *io);
@@ -122,6 +147,8 @@ static void fake_io(struct fake *f, struct rtpad_io *io)
     io->record = f_record;
     io->read_line = f_read_line;
     io->read_record = f_read_record;
+    io->set_oob = f_set_oob;
+    io->cancel_read = NULL;
 }
 
 /* A client Read Data (09 00 LEN 00 | 03 00 00 00 00 00 <len:2> data term):
@@ -215,6 +242,8 @@ static void test_replay_live(void)
           "each typed line answered exactly one host Start Read");
     check(screen_has(&f, "Username:") && screen_has(&f, "Password:"),
           "the VAX's Username: and Password: prompts reached the screen");
+    check(f.prompted >= 2,
+          "the host prompts went WITH their terminal reads (IO$_READPROMPT), not as separate writes");
     int pw = -1;
     for (int i = 0; i < f.nlines; i++)
         if (i == 1) pw = i;
@@ -321,6 +350,160 @@ static void test_file_input(void)
     check(s.input_eof == 1, "the end of the file is seen, the link is kept");
 }
 
+/* ---- a timed read (rd vms-0a7 S2 live bench, VAX V7.3 host) --------------
+ * After "User authorization failure" a VAX host's LOGINOUT issues a no-prompt
+ * retry read, TIMED (FLAGS bit 13, TIMEOUT 20 s): from the bench wire
+ * (tests/lab/captures/vms-0a7-s2-20261102), the host->terminal segment that
+ * follows the failure Write. The VAX's own SET HOST ends the session 20 s
+ * later; RTPAD must time the read and tell the host (Read Data, code 5). */
+static const uint8_t k_vax_retry_read[] = {
+    0x09, 0x00, 0x11, 0x00,
+    0x02, 0x08, 0xb8, 0x00, 0x84, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00 };
+/* the same read with bit 13 clear: TIMEOUT is not meaningful */
+static const uint8_t k_untimed_read[] = {
+    0x09, 0x00, 0x11, 0x00,
+    0x02, 0x08, 0x98, 0x00, 0x84, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00 };
+
+static void test_timed_read(void)
+{
+    printf("[timed] the host's Start Read TIMEOUT reaches the terminal read; expiry -> Read Data code 5\n");
+    unsigned secs = 99;
+    check(dnet_cterm_start_read_timeout(k_vax_retry_read, sizeof k_vax_retry_read, &secs) == 0 &&
+          secs == 20, "the VAX retry read is timed: 20 s");
+    check(dnet_cterm_start_read_timeout(k_untimed_read, sizeof k_untimed_read, &secs) == 0 &&
+          secs == 0, "bit 13 clear: untimed, whatever TIMEOUT holds");
+    check(dnet_cterm_start_read_timeout(k_vax_retry_read, 9, &secs) != 0 && secs == 0,
+          "a truncated Start Read: refused, untimed");
+
+    static struct fake f;
+    static struct rtpad_session s;
+    struct rtpad_io io;
+    memset(&f, 0, sizeof f);
+    f.send_status = SS$_NORMAL;
+    static const uint8_t typed[] = "SYS";
+    f.lines[0] = typed; f.linelen[0] = 3; f.time_out[0] = 1;
+    f.nlines = 1;
+    fake_io(&f, &io);
+    rtpad_session_init(&s, &io, 1);
+    rtpad_session_linkup(&s);
+    for (size_t i = 0; i < NSEG(k_oracle_l) && !dnet_cterm_is_bound(&s.term); i++)
+        if (k_oracle_l[i].host)
+            rtpad_session_rx(&s, k_oracle_l[i].b, k_oracle_l[i].n);
+    check(dnet_cterm_is_bound(&s.term), "bound on the oracle's opening");
+    int before = f.nsent;
+    rtpad_session_rx(&s, k_vax_retry_read, sizeof k_vax_retry_read);
+    check(rtpad_session_wants_input(&s), "the retry read solicits input");
+    rtpad_session_input(&s);
+    check(f.timeout_of[0] == 20, "the terminal read was timed with the host's 20 s");
+    static const uint8_t want[] = { 0x09, 0x00, 0x0b, 0x00, 0x03, 0x05, 0x00, 0x00, 0x00,
+                                    0x00, 0x03, 0x00, 'S', 'Y', 'S' };
+    check(f.nsent == before + 1 && f.sentlen[before] == sizeof want &&
+          memcmp(f.sent[before], want, sizeof want) == 0,
+          "expiry sent Read Data: code 5, termination position 3, the typed SYS, no terminator");
+    check(!rtpad_session_wants_input(&s) && !s.done, "the read is answered; the session goes on");
+}
+
+/* ---- out of band, characteristics, recall, the terminal's own image ----
+ * The VAX V7.3 host's Characteristics, from the bench wire (tests/lab/
+ * captures/vms-0a7-s2-20261102): at login DCL makes CTRL/Y out of band
+ * (attributes 0x29 under mask 0x3b) and CTRL/T (0x03 under 0x3f); its recall
+ * read carries the recalled command after END-OF-PROMPT. */
+static const uint8_t k_vax_char_ctrly[] = { 0x09, 0x00, 0x07, 0x00,
+    0x0b, 0x00, 0x02, 0x02, 0x19, 0x3b, 0x29 };
+static const uint8_t k_vax_char_ctrlt[] = { 0x09, 0x00, 0x07, 0x00,
+    0x0b, 0x00, 0x02, 0x02, 0x14, 0x3f, 0x03 };
+static const uint8_t k_vax_recall_read[] = { 0x09, 0x00, 0x1f, 0x00,
+    0x02, 0x08, 0x90, 0x0a, 0x00, 0x01, 0x0e, 0x00, 0x00, 0x00, 0x05, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, '\r', '\n', 0x00, '$', ' ',
+    'S', 'H', 'O', 'W', ' ', 'T', 'I', 'M', 'E' };
+
+static void bind_on_oracle(struct fake *f, struct rtpad_session *s, struct rtpad_io *io)
+{
+    memset(f, 0, sizeof *f);
+    f->send_status = SS$_NORMAL;
+    fake_io(f, io);
+    rtpad_session_init(s, io, 1);
+    rtpad_session_linkup(s);
+    for (size_t i = 0; i < NSEG(k_oracle_l) && !dnet_cterm_is_bound(&s->term); i++)
+        if (k_oracle_l[i].host)
+            rtpad_session_rx(s, k_oracle_l[i].b, k_oracle_l[i].n);
+}
+
+static void test_oob(void)
+{
+    printf("[oob] CTRL/Y and CTRL/C are the remote session's; the host's out-of-band set\n");
+    static struct fake f;
+    static struct rtpad_session s;
+    static struct rtpad_io io;
+    bind_on_oracle(&f, &s, &io);
+    check(f.oob_sets >= 1 && f.oob_mask == RTPAD_OOB_ALWAYS,
+          "from the start CTRL/Y and CTRL/C are taken out of band from the local driver");
+    int before = f.nsent;
+    rtpad_session_oob(&s, 0x19);
+    check(f.nsent == before && s.oob_dropped == 1,
+          "CTRL/Y before the host makes it out of band: dropped (never the local DCL's)");
+    rtpad_session_rx(&s, k_vax_char_ctrly, sizeof k_vax_char_ctrly);
+    rtpad_session_rx(&s, k_vax_char_ctrlt, sizeof k_vax_char_ctrlt);
+    check(s.chattr[0x19] == 0x29 && s.chattr[0x14] == 0x03,
+          "the host's CHARACTER-ATTRIBUTES recorded (CTRL/Y 0x29, CTRL/T 0x03)");
+    check(f.oob_mask == (RTPAD_OOB_ALWAYS | (1u << 0x14)),
+          "CTRL/T joins the local out-of-band mask");
+    before = f.nsent;
+    rtpad_session_oob(&s, 0x19);
+    static const uint8_t want_y[] = { 0x09, 0x00, 0x03, 0x00, 0x04, 0x01, 0x19 };
+    check(f.nsent == before + 1 && f.sentlen[before] == sizeof want_y &&
+          memcmp(f.sent[before], want_y, sizeof want_y) == 0,
+          "CTRL/Y goes as Out-of-Band 04 01 19 (discard, per its attributes)");
+    check(s.read_cleared == 1 && !s.read_pending, "an immediate-clear character ends the local read");
+    before = f.nsent;
+    rtpad_session_oob(&s, 0x14);
+    static const uint8_t want_t[] = { 0x09, 0x00, 0x03, 0x00, 0x04, 0x00, 0x14 };
+    check(f.nsent == before + 1 && memcmp(f.sent[before], want_t, sizeof want_t) == 0,
+          "CTRL/T (immediate hello) goes as Out-of-Band 04 00 14");
+    rtpad_session_oob(&s, 0x40);
+    check(f.nsent == before + 1, "a character past 31 is not out of band: nothing sent");
+}
+
+static void test_recall_and_sense(void)
+{
+    printf("[recall] a Start Read's text after END-OF-PROMPT starts the line; [sense] THIS terminal\n");
+    static struct fake f;
+    static struct rtpad_session s;
+    static struct rtpad_io io;
+    memset(&f, 0, sizeof f);
+    f.send_status = SS$_NORMAL;
+    static const uint8_t ret[] = "";
+    f.lines[0] = ret; f.linelen[0] = 0; f.lineterm[0] = 0x0d; f.nlines = 1;
+    fake_io(&f, &io);
+    rtpad_session_init(&s, &io, 1);
+    /* a VT100, 80 x 24 (IO$_SENSEMODE: class 66, type 96, width 80,
+     * characteristics a0 02 00 | page 24, extended 00 32 00 00) */
+    static const uint8_t vt100[12] = { 0x42, 0x60, 0x50, 0x00, 0xa0, 0x02, 0x00, 0x18,
+                                       0x00, 0x32, 0x00, 0x00 };
+    rtpad_session_set_sense(&s, vt100);
+    rtpad_session_linkup(&s);
+    for (size_t i = 0; i < NSEG(k_oracle_l) && !dnet_cterm_is_bound(&s.term); i++)
+        if (k_oracle_l[i].host)
+            rtpad_session_rx(&s, k_oracle_l[i].b, k_oracle_l[i].n);
+    int seg2 = 0, seg4 = 0;
+    for (int k = 0; k < f.nsent && k < MAXSENT; k++) {
+        for (size_t o = 0; o + 12 <= f.sentlen[k]; o++)
+            if (memcmp(f.sent[k] + o, vt100, 12) == 0) {
+                if (f.sent[k][4] == 0x01) seg2 = 1;
+                if (f.sent[k][4] == 0x13) seg4 = 1;
+            }
+    }
+    check(seg2 && seg4, "the client foundation reports the VT100 80x24 the terminal driver gave");
+    rtpad_session_rx(&s, k_vax_recall_read, sizeof k_vax_recall_read);
+    check(rtpad_session_wants_input(&s), "the recall read solicits input");
+    rtpad_session_input(&s);
+    check(f.initlen == 9 && memcmp(f.init, "SHOW TIME", 9) == 0,
+          "the recalled SHOW TIME is the read's initial input, not part of its prompt");
+    check(screen_has(&f, "$ ") && !screen_has(&f, "$ SHOW"), "the prompt is just the prompt");
+}
+
 static void test_send_refused(void)
 {
     printf("[link] a link that refuses a send ends the session with its status\n");
@@ -403,6 +586,9 @@ int main(void)
     test_replay_live();
     test_replay_vax_client();
     test_file_input();
+    test_timed_read();
+    test_oob();
+    test_recall_and_sense();
     test_send_refused();
     test_fuzz();
     printf("RTPAD-SESSION: %d passed, %d failed\n", passes, failures);

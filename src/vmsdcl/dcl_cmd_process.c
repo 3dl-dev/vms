@@ -814,6 +814,37 @@ static void run_print_condition(uint32_t status, int chained)
     }
 }
 
+/*
+ * image_exit_report - what DCL shows when an image exits with a failing
+ * condition value (rd vms-0a7 S2). VMS DCL displays the CONDITION'S OWN
+ * MESSAGE and leaves $STATUS that value: on VAX V7.3 `SET HOST NOSUCH` (RTPAD
+ * exits SYSTEM-F-NOSUCHNODE) shows "%SYSTEM-F-NOSUCHNODE, remote node is
+ * unknown" with $STATUS %X0000028C (tests/lab/captures/vms-0a7-s2-20261102).
+ * Nothing is shown when STS$M_INHIB_MSG is set (the image already said it)
+ * or the severity is success/informational. A value $GETMSG has no text for
+ * still says which image failed and with what value.
+ */
+static void image_exit_report(const char *display_name, uint32_t cond)
+{
+    char m[256];
+    struct dsc$descriptor_s md;
+    uint16_t ml = 0;
+    if ((cond & 1) || (cond & DCL_STS_M_INHIB_MSG))
+        return;
+    md.dsc$w_length  = (uint16_t)(sizeof(m) - 1);
+    md.dsc$b_dtype   = DSC$K_DTYPE_T;
+    md.dsc$b_class   = DSC$K_CLASS_D;
+    md.dsc$a_pointer = m;
+    if ((sys$getmsg(cond, &ml, &md, MSG$M_ALL, NULL) & 1) && ml > 0 && m[0] == '%') {
+        m[ml] = '\0';
+        fprintf(stderr, "%s\n", m);
+        return;
+    }
+    dcl_error("DCL", (int)(cond & 7), "ABORT",
+              "image %s exited with error status %%X%08X",
+              display_name, (unsigned)cond);
+}
+
 static void run_creprc_failed(uint32_t status)
 {
     dcl_error("RUN", 4, "CREPRC", "process creation failed");
@@ -2333,10 +2364,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
                 int exited = 0;
                 uint32_t gx = vms_kif_getexit(&cond, &exited);
                 if (gx == SS$_NORMAL && exited) {
-                    if (!(cond & 1) && !(cond & DCL_STS_M_INHIB_MSG))
-                        dcl_error("DCL", (int)(cond & 7), "ABORT",
-                                  "image %s exited with error status %%X%08X",
-                                  display_name, (unsigned)cond);
+                    image_exit_report(display_name, cond);
                     return cond;
                 }
                 if (image_rc != 0) {
@@ -2529,10 +2557,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
              * is $STATUS. Surface an error severity exactly as the in-process
              * path does, then hand back the true condition value (not a
              * POSIX-derived collapse). */
-            if (!(cond & 1) && !(cond & DCL_STS_M_INHIB_MSG))
-                dcl_error("DCL", (int)(cond & 7), "ABORT",
-                          "image %s exited with error status %%X%08X",
-                          display_name, (unsigned)cond);
+            image_exit_report(display_name, cond);
             return cond;
         }
 

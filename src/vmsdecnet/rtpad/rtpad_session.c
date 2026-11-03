@@ -34,7 +34,80 @@ int rtpad_session_init(struct rtpad_session *s, const struct rtpad_io *io,
     s->status = SS$_NORMAL;
     if (dnet_cterm_session_init(&s->term, DNET_CTERM_ROLE_TERMINAL) != 0)
         return -1;
+    /* CTRL/Y and CTRL/C are the remote session's from the start */
+    if (s->is_terminal && io->set_oob) {
+        s->oob_mask = RTPAD_OOB_ALWAYS;
+        io->set_oob(io->ctx, s->oob_mask);
+    }
     return 0;
+}
+
+void rtpad_session_set_sense(struct rtpad_session *s, const uint8_t sense[12])
+{
+    if (!s || !sense)
+        return;
+    memcpy(s->sense, sense, sizeof s->sense);
+    s->sense_set = 1;
+    dnet_cterm_client_set_sense(&s->term, sense);
+}
+
+/* The host's Characteristics (CTERM message 11): every CHARACTER-ATTRIBUTES
+ * (selector 0x0202: character, mask, attributes) updates the table; a change
+ * in which characters are out of band re-arms the terminal's OUTBAND mask.
+ * Parsing stops at the first selector whose value length it does not know. */
+static void on_characteristics(struct rtpad_session *s, const uint8_t *m, size_t ml)
+{
+    size_t i = 2;                              /* MSGTYPE, FLAGS */
+    while (i + 2 <= ml) {
+        unsigned sel = (unsigned)m[i] | ((unsigned)m[i + 1] << 8);
+        if (sel != 0x0202 || i + 5 > ml)
+            break;
+        uint8_t c = m[i + 2], mask = m[i + 3], attr = m[i + 4];
+        if (c < 32)
+            s->chattr[c] = (uint8_t)((s->chattr[c] & ~mask) | (attr & mask));
+        i += 5;
+    }
+    uint32_t want = RTPAD_OOB_ALWAYS;
+    for (unsigned c = 0; c < 32; c++)
+        if (s->chattr[c] & 3)
+            want |= 1u << c;
+    if (s->is_terminal && s->io->set_oob && want != s->oob_mask) {
+        s->oob_mask = want;
+        s->io->set_oob(s->io->ctx, want);
+    }
+}
+
+void rtpad_session_oob(struct rtpad_session *s, uint8_t c)
+{
+    if (!s || s->done || c >= 32 || !dnet_cterm_is_bound(&s->term)) {
+        if (s) s->oob_dropped++;
+        return;
+    }
+    unsigned kind = s->chattr[c] & 3;
+    if (kind == 0) {
+        /* not out of band at the host: it never reaches the local DCL */
+        s->oob_dropped++;
+        return;
+    }
+    /* Out-of-Band (CTERM 4): MSGTYPE, FLAGS (bit 0: output was discarded,
+     * when the character's attributes say discard), CHARACTER */
+    uint8_t body[3] = { 0x04, (uint8_t)((s->chattr[c] & 0x08) ? 1 : 0), c };
+    size_t olen = 0;
+    if (dnet_cterm_found_envelope_build(sizeof body, body, sizeof body, s->opdu,
+                                        sizeof s->opdu, &olen) != DNET_CTERM_OK)
+        return;
+    if (!(s->io->link_send(s->io->ctx, s->opdu, olen) & 1))
+        return;
+    s->oob_sent++;
+    if (kind == 1 || kind == 2) {
+        /* a clearing character: the read in progress is gone; the host
+         * solicits again */
+        s->read_pending = 0;
+        s->rd_plen = s->rd_init = 0;
+        s->read_cleared = 1;
+        if (s->io->cancel_read)
+            s->io->cancel_read(s->io->ctx);
+    }
 }
 
 static void fail(struct rtpad_session *s, uint32_t st)
@@ -98,15 +171,40 @@ static void on_bound_msg(struct rtpad_session *s, const uint8_t *data, size_t le
         s->rd_echo = 0;
         s->rd_term_echo = 0;
         (void)dnet_cterm_start_read_echo(data, len, &s->rd_echo, &s->rd_term_echo);
-        if (txtlen)
+        /* A timed read (a VAX host times LOGINOUT's: 20 s) ends when the time
+         * runs out, and the host is told so -- without it a remote LOGINOUT
+         * waits on its retry read for ever (rd vms-0a7 S2 live bench). */
+        (void)dnet_cterm_start_read_timeout(data, len, &s->rd_timeout);
+        /* A terminal takes the prompt WITH its read (IO$_READPROMPT), as
+         * VMS's driver shows a read's prompt; a file input just shows it. */
+        s->rd_plen = s->rd_init = 0;
+        if (s->is_terminal && txtlen <= sizeof s->rd_prompt) {
+            /* END-OF-PROMPT splits the prompt from initial input (DCL's
+             * recall: "$ " then the recalled command, AA-DY88A-TK 4.16.3) */
+            struct dnet_cth_start_read sr;
+            size_t eop = txtlen;
+            if (len > 4 && dnet_cth_start_read_parse(data + 4, len - 4, &sr) == DNET_CTH_OK &&
+                sr.end_of_prompt <= txtlen && sr.end_of_data <= txtlen &&
+                sr.end_of_prompt <= sr.end_of_data)
+                eop = sr.end_of_prompt;
+            memcpy(s->rd_prompt, txt, txtlen);
+            s->rd_plen = eop;
+            s->rd_init = txtlen - eop;
+        } else if (txtlen) {
             s->io->show(s->io->ctx, txt, txtlen);
+        }
         s->read_pending = 1;
     } else if (tk == DNET_CTERM_TK_READ_ATTR) {
         /* The host asks for the terminal's characteristics: answer with the
-         * read-characteristics reply, echoing its handle. */
-        if (dnet_cterm_found_client_readchar_build(rhandle, s->cpdu, sizeof s->cpdu,
-                                                   &clen) == 0)
+         * read-characteristics reply, echoing its handle -- THIS terminal's
+         * IO$_SENSEMODE image once RTPAD has it. */
+        if (dnet_cterm_found_client_readchar_build_sense(rhandle,
+                                                         s->sense_set ? s->sense : NULL,
+                                                         s->cpdu, sizeof s->cpdu,
+                                                         &clen) == 0)
             (void)send_pdu(s, clen);
+    } else if (len > 4 && data[4] == 0x0b) {
+        on_characteristics(s, data + 4, len - 4);
     }
     /* Anything else: acknowledged by NSP, nothing to show or answer. */
 }
@@ -124,7 +222,9 @@ void rtpad_session_rx(struct rtpad_session *s, const uint8_t *data, size_t len)
         if (dnet_cterm_client_found_rx(&s->term, data, len, &prog) != DNET_CTERM_OK)
             return;
         for (;;) {
-            int frc = dnet_cterm_client_found_next(&s->term, 132, 24, s->cpdu,
+            int frc = dnet_cterm_client_found_next(&s->term,
+                                                   s->sense_set ? (uint16_t)(s->sense[2] | (s->sense[3] << 8)) : 132,
+                                                   s->sense_set ? s->sense[7] : 24, s->cpdu,
                                                    sizeof s->cpdu, &clen);
             if (frc != DNET_CTERM_OK || clen == 0)
                 break;
@@ -184,19 +284,46 @@ void rtpad_session_input(struct rtpad_session *s)
         return;
     if (s->is_terminal) {
         uint8_t term = 0x0d;
-        st = s->io->read_line(s->io->ctx, line, sizeof line, s->rd_echo,
-                              s->rd_term_echo, &n, &term);
+        s->read_cleared = 0;
+        st = s->io->read_line(s->io->ctx, s->rd_prompt, s->rd_plen,
+                              s->rd_prompt + s->rd_plen, s->rd_init,
+                              line, sizeof line, s->rd_echo,
+                              s->rd_term_echo, s->rd_timeout, &n, &term);
+        if (s->read_cleared) {
+            /* the host cleared this read (an out-of-band CTRL/Y came while it
+             * ran): its line is not the answer to anything any more */
+            s->read_cleared = 0;
+            return;
+        }
+        if (st == SS$_TIMEOUT && s->rd_timeout) {
+            /* Read Data, completion code 5: what was typed, no terminator */
+            size_t clen = 0;
+            if (n > sizeof line)
+                n = sizeof line;
+            if (dnet_cterm_found_read_data_build_code(line, n, 5, s->cpdu,
+                                                      sizeof s->cpdu, &clen) != 0) {
+                fail(s, SS$_ABORT);
+                return;
+            }
+            if (send_pdu(s, clen) != 0)
+                return;
+            s->term.reads_sent++;
+            s->read_pending = 0;
+            s->rd_plen = s->rd_init = 0;
+            return;
+        }
         if (!(st & 1)) {
             /* A read the driver cancelled (CTRL/Y) leaves the solicit
              * outstanding for the next line. Anything else -- the terminal
              * hung up -- stops reading it but keeps the link: the session
              * ends on the host's Unbind or a link drop (rd vms-6165). */
-            if (st != SS$_ABORT)
+            if (st != SS$_ABORT && st != SS$_CANCEL)
                 s->input_eof = 1;
             return;
         }
         if (n > sizeof line)
             n = sizeof line;
+        s->rd_plen = s->rd_init = 0;
         send_line(s, line, n, term);
         return;
     }

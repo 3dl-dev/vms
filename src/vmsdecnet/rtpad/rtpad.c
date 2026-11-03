@@ -41,6 +41,7 @@
 #include "iledef.h"
 #include "clitable.h"
 #include "libclidef.h"
+#include "trmdef.h"
 
 /* The process context the system services keep their channel table in (an
  * image the executive activates may not have one yet: the same bootstrap DCL
@@ -96,21 +97,54 @@ static void io_record(void *ctx, const char *msg)
     out_bytes(r->ch_tt ? r->ch_tt : r->ch_out, msg, strlen(msg), 0x20);
 }
 
-static uint32_t io_read_line(void *ctx, uint8_t *buf, size_t cap, int echo,
-                             int term_echo, size_t *n, uint8_t *term)
+static uint32_t io_read_line(void *ctx, const uint8_t *prompt, size_t plen,
+                             const uint8_t *init, size_t ilen,
+                             uint8_t *buf, size_t cap, int echo,
+                             int term_echo, unsigned timeout_s, size_t *n,
+                             uint8_t *term)
 {
     struct rtpad *r = ctx;
     struct _iosb iosb;
-    uint32_t func = IO$_READVBLK;
-    if (!echo)
-        func |= IO$M_NOECHO;
-    if (!term_echo)
-        func |= IO$M_TRMNOECHO;
+    uint32_t st;
     memset(&iosb, 0, sizeof iosb);
-    uint32_t st = sys$qiow(0, r->ch_tt, func, &iosb, NULL, 0, buf, (uint32_t)cap,
-                           0, 0, 0, 0);
+    if (ilen) {
+        /* initial input (DCL's recalled command): the extended read, its
+         * prompt and TRM$_INISTRNG in the item list */
+        struct ovmx_trm_item it[4];
+        size_t ni = 0;
+        uint32_t mods = 0;
+        if (!echo) mods |= TRM$M_TM_NOECHO;
+        if (!term_echo) mods |= TRM$M_TM_TRMNOECHO;
+        if (timeout_s) mods |= TRM$M_TM_TIMED;
+        memset(it, 0, sizeof it);
+        it[ni].code = TRM$_MODIFIERS; it[ni].val = mods; ni++;
+        if (timeout_s) { it[ni].code = TRM$_TIMEOUT; it[ni].val = timeout_s; ni++; }
+        if (plen) {
+            it[ni].code = TRM$_PROMPT; it[ni].len = (unsigned short)plen;
+            it[ni].val = (uintptr_t)prompt; ni++;
+        }
+        it[ni].code = TRM$_INISTRNG; it[ni].len = (unsigned short)ilen;
+        it[ni].val = (uintptr_t)init; ni++;
+        st = sys$qiow(0, r->ch_tt, IO$_READVBLK | IO$M_EXTEND, &iosb, NULL, 0, buf,
+                      (uint32_t)cap, 0, 0, (uintptr_t)it, (uint32_t)(ni * sizeof it[0]));
+    } else {
+        /* the host's prompt goes with the read (P5/P6), as VMS's driver shows it */
+        uint32_t func = plen ? IO$_READPROMPT : IO$_READVBLK;
+        if (!echo)
+            func |= IO$M_NOECHO;
+        if (!term_echo)
+            func |= IO$M_TRMNOECHO;
+        if (timeout_s)
+            func |= IO$M_TIMED;            /* P3 = the host's TIMEOUT, seconds */
+        st = sys$qiow(0, r->ch_tt, func, &iosb, NULL, 0, buf, (uint32_t)cap,
+                      timeout_s, 0, (uintptr_t)prompt, (uint32_t)plen);
+    }
     if (st & 1)
         st = iosb.iosb$w_status;
+    if (st == SS$_TIMEOUT) {
+        *n = iosb.iosb$w_bcnt;         /* what was typed before the time ran out */
+        return st;
+    }
     if (!(st & 1))
         return st;
     *n = iosb.iosb$w_bcnt;
@@ -119,6 +153,44 @@ static uint32_t io_read_line(void *ctx, uint8_t *buf, size_t cap, int echo,
     *term = (iosb.iosb$l_dev_depend >> 16) ? (uint8_t)(iosb.iosb$l_dev_depend & 0xff)
                                            : 0x0d;
     return SS$_NORMAL;
+}
+
+/* CTRL/Y, CTRL/C and whatever the host makes out of band: IO$M_OUTBAND on
+ * the terminal, the AST carrying the character (P2/P4: a quadword, its
+ * second longword the mask). The AST hands it to the session. */
+static struct rtpad_session *g_oob_session;
+
+static void oob_ast(uint32_t c)
+{
+    if (g_oob_session)
+        rtpad_session_oob(g_oob_session, (uint8_t)c);
+}
+
+static void io_set_oob(void *ctx, uint32_t mask)
+{
+    struct rtpad *r = ctx;
+    static uint32_t mq[2];
+    struct _iosb iosb;
+    if (!r->ch_tt)
+        return;
+    mq[0] = 0;
+    mq[1] = mask;
+    (void)sys$qiow(0, r->ch_tt, IO$_SETMODE | IO$M_OUTBAND, &iosb, NULL, 0,
+                   mask ? (void *)oob_ast : NULL, 0, 3, (uintptr_t)mq, 0, 0);
+}
+
+/* THIS terminal, as the driver reports it (IO$_SENSEMODE: class, type,
+ * width, characteristics with the page length, extended characteristics). */
+static int sense_terminal(struct rtpad *r, uint8_t sense[12])
+{
+    struct _iosb iosb;
+    memset(sense, 0, 12);
+    memset(&iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, r->ch_tt, IO$_SENSEMODE, &iosb, NULL, 0, sense, 12,
+                           0, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    return (st & 1) && sense[0] == DC$_TERM;
 }
 
 /* A file SYS$INPUT: its bytes, split into lines; one line per call. */
@@ -284,23 +356,16 @@ static size_t cli_value(const char *label, char *out, size_t cap)
 
 /* ---- reporting ------------------------------------------------------------- */
 
-/* Say why the link could not be had, as VMS SET HOST does -- the condition's
- * text from the message catalog, once -- and leave $STATUS carrying it with
- * STS$M_INHIB_MSG so DCL adds nothing under it (rd vms-5843). */
+/* The link could not be had: exit with the condition, as VMS RTPAD does --
+ * DCL shows its message once and $STATUS is that value, with no
+ * STS$M_INHIB_MSG (VAX V7.3: SET HOST NOSUCH -> "%SYSTEM-F-NOSUCHNODE, remote
+ * node is unknown", $STATUS %X0000028C; tests/lab/captures/vms-0a7-s2-20261102). */
 static void fail_exit(struct rtpad *r, uint32_t st)
 {
-    char why[256] = "";
-    uint16_t wlen = 0;
-    struct dsc$descriptor_s wd;
-    mkdesc(&wd, why, sizeof why - 1);
-    if (!(sys$getmsg(st, &wlen, &wd, 15, NULL) & 1) || wlen == 0) {
-        static const char dflt[] = "%SYSTEM-F-ABORT, abort";
-        wlen = (uint16_t)(sizeof dflt - 1);
-        memcpy(why, dflt, wlen);
-    }
-    if (r->ch_out)
-        out_bytes(r->ch_out, why, wlen, 0x20);
-    sys$exit(st | STS$M_INHIB_MSG);
+    if (r->ch_tt) (void)sys$dassgn(r->ch_tt);
+    if (r->ch_in) (void)sys$dassgn(r->ch_in);
+    if (r->ch_out) (void)sys$dassgn(r->ch_out);
+    sys$exit(st);
 }
 
 static void idle(void)
@@ -309,6 +374,8 @@ static void idle(void)
     uint64_t delta = (uint64_t)(-(int64_t)RTPAD_IDLE_MS * 10000);
     if (sys$setimr(RTPAD_EFN, &delta, NULL, 0, 0) & 1)
         (void)sys$wflor(RTPAD_EFN, 1u << (RTPAD_EFN & 31));
+    /* an out-of-band character typed while no read ran: its AST now */
+    (void)sys$setast(1);
 }
 
 int main(void)
@@ -368,12 +435,20 @@ int main(void)
     }
 
     static const struct rtpad_io io_ops = {
-        NULL, io_link_send, io_show, io_record, io_read_line, io_read_record
+        NULL, io_link_send, io_show, io_record, io_read_line, io_read_record,
+        io_set_oob, NULL
     };
-    struct rtpad_io io = io_ops;
+    static struct rtpad_io io;
+    io = io_ops;
     io.ctx = &r;
+    g_oob_session = &s;
     if (rtpad_session_init(&s, &io, r.ch_tt != 0) != 0)
         fail_exit(&r, SS$_ABORT);
+    if (r.ch_tt) {
+        uint8_t sense[12];
+        if (sense_terminal(&r, sense))
+            rtpad_session_set_sense(&s, sense);
+    }
     rtpad_session_linkup(&s);
 
     while (!s.done) {
@@ -398,6 +473,8 @@ int main(void)
             idle();
     }
 
+    io_set_oob(&r, 0);                     /* the local terminal is DCL's again */
+    g_oob_session = NULL;
     rtpad_session_finish(&s, here[0] ? here : "0");
     (void)dnet_net_qiow(r.net, IO$_DEACCESS, NULL, 0, NULL);
     (void)sys$dassgn(r.net);

@@ -572,6 +572,52 @@ int main(void)
                   "the same read resumes and completes with the whole line 'ABCD'");
             (void)screen(m, scr, sizeof(scr), 300);
         }
+        /* CTRL/Y and CTRL/C in an OUT-OF-BAND mask (SET HOST's RTPAD.EXE,
+         * rd vms-0a7 S2): the mask owner gets them -- no *INTERRUPT*, no
+         * CTRL/Y AST (DCL's stays armed and unqueued), no image interrupt,
+         * and the read in progress stays outstanding */
+        {
+            static const uint32_t yc = (1u << 0x19) | (1u << 0x03);
+            (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0x5555, 9, 0, 3);
+            st = vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0x6666, 0, yc, 3);
+            CHECK(st & 1, "IO$M_OUTBAND arms an out-of-band AST for CTRL/Y and CTRL/C");
+            while (vms_kif_deliverast(&aa, &ap, &am) == 0)
+                ;
+            rd_start(&r, chan, 0, NULL, 0);
+            msleep(200);
+            type(m, "AB\x19");
+            rd_wait(&r);
+            screen(m, scr, sizeof(scr), 300);
+            got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+            CHECK((r.a.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x6666 && ap == 0x19 &&
+                  strstr(scr, "INTERRUPT") == NULL,
+                  "CTRL/Y in the OUTBAND mask: its out-of-band AST (parameter 0x19), no *INTERRUPT*, the read still outstanding");
+            CHECK(vms_kif_deliverast(&aa, &ap, &am) != 0,
+                  "... and the CTRL/Y AST armed beside it is NOT queued");
+            {
+                uint32_t rs;
+                pid_t kid = fork();
+                if (kid == 0) {
+                    msleep(300);
+                    type(m, "\x03" "C\r");
+                    _exit(0);
+                }
+                r.a.oflags = 0;
+                rs = vms_kif_tt_read(&r.a);          /* the same read resumes */
+                got = vms_kif_deliverast(&aa, &ap, &am) == 0;
+                CHECK((r.a.oflags & VMS_TT_RDO_ASTPEND) && got && aa == 0x6666 && ap == 0x03,
+                      "CTRL/C in the OUTBAND mask: its out-of-band AST (parameter 0x03), the read still outstanding");
+                r.a.oflags = 0;
+                rs = vms_kif_tt_read(&r.a);
+                waitpid(kid, NULL, 0);
+                r.data[r.a.count < sizeof r.data ? r.a.count : sizeof r.data - 1] = '\0';
+                CHECK(rs == SS_NORMAL && strcmp(r.data, "ABC") == 0,
+                      "the read survives both and completes with its whole line 'ABC'");
+                (void)screen(m, scr, sizeof(scr), 300);
+            }
+            while (vms_kif_deliverast(&aa, &ap, &am) == 0)
+                ;
+        }
         (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_OUTBAND, 0, 0, 0, 3);
         (void)vms_kif_tt_oobast(chan, VMS_TT_OOB_CTRLY, 0, 0, 0, 3);
 

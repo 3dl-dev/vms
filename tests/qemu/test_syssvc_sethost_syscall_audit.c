@@ -521,8 +521,16 @@ int main(int argc, char **argv)
         CHECK(has(sh, "logged out at"), "SET HOST 0: SYSTEM logged in, ran SHOW TIME, logged out");
         CHECK(has(sh, "%REM-S-END, control returned to node "),
               "SET HOST 0: control returned with %REM-S-END");
-        CHECK(has(bad, "%SYSTEM-F-NOSUCHNODE, remote node is unknown") && !has(bad, "DCL-E-ABORT"),
-              "SET HOST NOSUCH: %SYSTEM-F-NOSUCHNODE, once, with no image line under it");
+        {
+            /* VAX V7.3: the message once, from DCL, for RTPAD's exit condition
+             * (tests/lab/captures/vms-0a7-s2-20261102: $STATUS %X0000028C) */
+            int n = 0;
+            for (const char *q = bad->out; (q = strstr(q, "NOSUCHNODE")) != NULL; q++)
+                n++;
+            CHECK(has(bad, "%SYSTEM-F-NOSUCHNODE, remote node is unknown") && n == 1 &&
+                  !has(bad, "DCL-E-ABORT") && !has(bad, "DCL-F-ABORT"),
+                  "SET HOST NOSUCH: %SYSTEM-F-NOSUCHNODE, once, with no image line under it");
+        }
     } else {
         /* No NETACP: RTPAD took NODE from the CLI (it is the link it reports,
          * not a missing parameter) and failed honestly at the link. */

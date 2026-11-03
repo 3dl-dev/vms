@@ -33,16 +33,36 @@ struct rtpad_io {
     void (*show)(void *ctx, const uint8_t *b, size_t n);
     /* Write a message as one VMS record (a line of its own). */
     void (*record)(void *ctx, const char *msg);
-    /* A terminal: read one line through the terminal driver, which echoes as
-     * asked. Returns the I/O status; on success *n is the line length and
-     * *term the terminator character. SS$_ABORT = the read was cancelled
-     * (CTRL/Y): the solicit stays outstanding. */
-    uint32_t (*read_line)(void *ctx, uint8_t *buf, size_t cap, int echo,
-                          int term_echo, size_t *n, uint8_t *term);
+    /* A terminal: read one line through the terminal driver -- a prompting
+     * read, the host's Start Read prompt given to the driver with it, so the
+     * driver puts it on the screen as VMS puts a read's prompt (its leading
+     * CR LF is ONE new line, not one more after the echoed RETURN) -- which
+     * echoes as asked; `init` (the Start Read's data after its prompt, e.g. a
+     * recalled command) starts the line, editable, as TRM$_INISTRNG; timed when `timeout_s` > 0 (the host's Start Read TIMEOUT).
+     * Returns the I/O status; on success *n is the line length and *term the
+     * terminator character. SS$_TIMEOUT = the time ran out, *n = what was
+     * typed before it. SS$_ABORT = the read was cancelled (CTRL/Y): the
+     * solicit stays outstanding. */
+    uint32_t (*read_line)(void *ctx, const uint8_t *prompt, size_t plen,
+                          const uint8_t *init, size_t ilen,
+                          uint8_t *buf, size_t cap, int echo,
+                          int term_echo, unsigned timeout_s, size_t *n,
+                          uint8_t *term);
     /* Not a terminal (a file SYS$INPUT): read the next record. Returns the
      * I/O status (RMS$_EOF / SS$_ENDOFFILE at the end). */
     uint32_t (*read_record)(void *ctx, uint8_t *buf, size_t cap, size_t *n);
+    /* (A terminal; may be NULL.) Take the control characters in `mask` (bit
+     * n = character n) out of band: the terminal driver hands each one typed
+     * to rtpad_session_oob() instead of acting on it (IO$M_OUTBAND). */
+    void (*set_oob)(void *ctx, uint32_t mask);
+    /* (A terminal; may be NULL.) Cancel the terminal read in progress. NULL:
+     * the read runs to its end and its line is dropped (the host cleared it). */
+    void (*cancel_read)(void *ctx);
 };
+
+/* The control characters a terminal pad always takes from the local driver:
+ * CTRL/Y and CTRL/C belong to the REMOTE session, never to the local DCL. */
+#define RTPAD_OOB_ALWAYS ((1u << 0x19) | (1u << 0x03))
 
 struct rtpad_session {
     struct dnet_cterm_session term;
@@ -54,9 +74,25 @@ struct rtpad_session {
     int input_eof;
     int skip_lf;                        /* CTERM Write "newline" state */
     int rd_echo, rd_term_echo;          /* the pending Start Read's echo */
+    unsigned rd_timeout;                /* ... and its TIMEOUT, s (0 = none) */
+    uint8_t rd_prompt[DNET_CTERM_MAX_DATA]; /* ... and its prompt (a terminal) */
+    size_t rd_plen;
+    size_t rd_init;                     /* ... of which the tail after END-OF-
+                                         * PROMPT is initial input (a recall) */
+    /* The host's CHARACTER-ATTRIBUTES per control character (CTERM
+     * Characteristics selector 0x0202): bits 0-1 the out-of-band kind
+     * (0 none, 1 immediate clear, 2 deferred clear, 3 immediate hello),
+     * bit 3 discard output. */
+    uint8_t chattr[32];
+    uint32_t oob_mask;                  /* what set_oob was last given */
+    uint8_t opdu[32];                   /* an Out-of-Band PDU (sent from an AST) */
+    unsigned oob_sent, oob_dropped;
+    int read_cleared;                   /* a clearing OOB came during the read */
     int done;
     uint32_t status;                    /* the session's ending condition */
     uint8_t cpdu[DNET_CTERM_MAX_PDU];
+    uint8_t sense[12];
+    int sense_set;
 };
 
 /* Initialise a TERMINAL-role session over `io`. Returns 0, or -1. */
@@ -75,6 +111,15 @@ int rtpad_session_wants_input(const struct rtpad_session *s);
 
 /* Satisfy the outstanding Start Read from the local side (one line). */
 void rtpad_session_input(struct rtpad_session *s);
+
+/* A control character the terminal driver gave out of band (from RTPAD's
+ * IO$M_OUTBAND AST). One the host declared out-of-band goes to it as a CTERM
+ * Out-of-Band message; a clearing one also ends the local read (the host
+ * solicits again). Any other is dropped: it never reaches the local DCL. */
+void rtpad_session_oob(struct rtpad_session *s, uint8_t c);
+
+/* Report THIS terminal (IO$_SENSEMODE's 12-byte buffer) to the host. */
+void rtpad_session_set_sense(struct rtpad_session *s, const uint8_t sense[12]);
 
 /* End: Unbind a bound session and say %REM-S-END for `local_node`. */
 void rtpad_session_finish(struct rtpad_session *s, const char *local_node);

@@ -439,6 +439,18 @@ int dnet_cterm_found_client_readchar_build(const uint8_t handle[4],
                                            uint8_t *buf, size_t cap,
                                            size_t *outlen);
 
+/* The same reply carrying `sense` (12 bytes, IO$_SENSEMODE's buffer) in place
+ * of the oracle's captured terminal; NULL = the captured bytes. */
+int dnet_cterm_found_client_readchar_build_sense(const uint8_t handle[4],
+                                                 const uint8_t *sense,
+                                                 uint8_t *buf, size_t cap,
+                                                 size_t *outlen);
+
+/* Report THIS terminal (IO$_SENSEMODE's 12 bytes) in the client foundation
+ * (seg-2, seg-4) instead of the captured one. Call before the foundation. */
+struct dnet_cterm_session;
+void dnet_cterm_client_set_sense(struct dnet_cterm_session *s, const uint8_t sense[12]);
+
 /* Client READ DATA: the enveloped input line the terminal sends the host --
  * 09-envelope wrapping `03 00 00 00 00 00 <datalen:2 LE> <data> <terminator>`
  * (oracle #57 "SYSTEM"\r, #75 a DCL command\r). `datalen` counts `len` data
@@ -447,6 +459,20 @@ int dnet_cterm_found_client_readchar_build(const uint8_t handle[4],
 int dnet_cterm_found_read_data_build(const uint8_t *data, size_t len,
                                      uint8_t terminator,
                                      uint8_t *buf, size_t cap, size_t *outlen);
+
+/* Client READ DATA for a read that ended WITHOUT a terminator: FLAGS low
+ * nibble = `code` (5 = the Start Read's TIMEOUT expired, AA-DY88A-TK 4.16.4;
+ * DNET_CTH_RDC_TIMEOUT), TERMINATION-POSITION = `len`, the `len` characters
+ * typed before it ended and nothing after them. */
+int dnet_cterm_found_read_data_build_code(const uint8_t *data, size_t len,
+                                          uint8_t code,
+                                          uint8_t *buf, size_t cap, size_t *outlen);
+
+/* The TIMEOUT a Start Read (09-enveloped) asks for, in seconds: its TIMEOUT
+ * field when FLAGS bit 13 (Q, "TIMEOUT is meaningful", DNET_CTH_RD_TIMED)
+ * is set, else 0 = untimed. A VAX host times LOGINOUT's reads (20 s:
+ * Username:, Password:, and the no-prompt retry read after a failure). */
+int dnet_cterm_start_read_timeout(const uint8_t *buf, size_t len, unsigned *secs);
 
 /* Kind of an inbound BOUND-phase 09-envelope, as classified by its body's
  * opcode bytes. */
@@ -874,6 +900,13 @@ struct dnet_cterm_session {
     int      found_host_start_seen;
     int      found_host_config_seen;
     int      found_step;
+    /* The terminal's own characteristics, as $QIO IO$_SENSEMODE returns them
+     * (class, type, width LE2, the 4-byte device-dependent longword whose high
+     * byte is the page length, the extended longword), reported to the host in
+     * the client foundation and in every read-characteristics reply. Unset:
+     * the oracle's captured bytes. */
+    uint8_t  client_sense[12];
+    int      client_sense_set;
 
     struct dnet_cterm_msg last;  /* last decoded inbound TERMINAL-I/O message */
 

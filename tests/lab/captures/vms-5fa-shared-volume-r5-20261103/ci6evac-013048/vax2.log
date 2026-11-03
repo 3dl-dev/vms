@@ -1,0 +1,20 @@
+$ ! CI6EVAC-BEGIN ci6evac-013049
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")
+Q=2 V=2 N=3
+$ SHOW DEVICE/FULL $2$DUA2:
+
+Disk $2$DUA2: (VAX1), device type RA81, is online, mounted, file-oriented
+    device, shareable, available to cluster, error logging is enabled.
+
+    Error count                    0    Operations completed                  0
+    Owner process                 ""    Owner UIC                      [SYSTEM]
+    Owner process ID        00000000    Dev Prot            S:RWPL,O:RWPL,G:R,W
+    Reference count                0    Default buffer size                 512
+    Host name                 "VAX1"    Host type, avail VAXserver 3900 Series, yes
+    Allocation class               2
+
+  Volume is mounted on VAX1.
+
+$ WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")
+Q=2 V=2 N=3
+$ 

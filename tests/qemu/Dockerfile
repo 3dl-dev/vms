@@ -962,6 +962,7 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # by name, rather than let a full guest show up as an unrelated suite's red.
     INITRAMFS_BYTES=$(gzip -dc /initramfs.cpio.gz | wc -c) && \
     INITRAMFS_BUDGET=$((176 * 1024 * 1024)) && \
+    echo "$INITRAMFS_BUDGET" > /initramfs.budget && \
     echo "Initramfs unpacked: $INITRAMFS_BYTES bytes (budget $INITRAMFS_BUDGET)" && \
     { [ "$INITRAMFS_BYTES" -le "$INITRAMFS_BUDGET" ] || { echo "FATAL: the unpacked initramfs is $INITRAMFS_BYTES bytes, over the $INITRAMFS_BUDGET-byte budget -- the 512 MB guest would run out of RAM-backed rootfs mid-run (or fail to unpack it at all). Shrink what the initramfs carries, or raise run_tests.sh's -m together with this budget."; exit 1; }; }
 

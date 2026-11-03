@@ -212,7 +212,26 @@ if [ ${#test_files[@]} -eq 0 ] || [ ! -f "${test_files[0]}" ]; then
     exit 1
 fi
 
+# DCL_TEST_SHARD splits the suite across several ctests so `ctest -j` runs the
+# slices in parallel instead of one ~200-script serial loop (vms-0944: the loop
+# alone took 60s+ under -j8 contention and hit its timeout). Unset = every script.
+#   sysdisk : the scripts that touch shared real /vms state (/vms/SYS0 -- INSTALL,
+#             SYSMAN, the persisted ACCOUNTING flag); registered with RESOURCE_LOCK "sysdisk".
+#   K/N     : every OTHER script whose position among them is K mod N (0 <= K < N).
+# The two classes partition the suite, so the union of all shards is every script.
+touches_sysdisk() { grep -qE 'SYS0|SYSMAN|INSTALL|ACCOUNTING' "$1"; }
+idx=0
 for test_file in "${test_files[@]}"; do
+    case "${DCL_TEST_SHARD:-}" in
+        "") ;;
+        sysdisk) touches_sysdisk "$test_file" || continue ;;
+        */*)
+            touches_sysdisk "$test_file" && continue
+            k="${DCL_TEST_SHARD%/*}"; n="${DCL_TEST_SHARD#*/}"
+            i=$idx; idx=$((idx + 1))
+            [ $((i % n)) -eq "$k" ] || continue ;;
+        *) echo "ERROR: bad DCL_TEST_SHARD=$DCL_TEST_SHARD"; exit 1 ;;
+    esac
     VMSDCL="$VMSDCL" run_test "$test_file"
 done
 

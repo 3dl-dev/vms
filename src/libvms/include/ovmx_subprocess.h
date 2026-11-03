@@ -8,8 +8,8 @@
  * the moment it is created. OVMX's substrate creates the task with fork(); the
  * creator then asks the executive to make that task a VMS process -- a
  * subprocess of the creator, with the creator's identity, owned by the
- * creator -- while the child waits, before the child runs a single
- * instruction of its own. That is the same mechanism $CREPRC uses
+ * creator -- while the child waits in the executive (VMS_IOCTL_CREPRC_AWAIT,
+ * rd vms-89bb), before the child runs a single instruction of its own. That is the same mechanism $CREPRC uses
  * (src/libvms/syssvc/sys_process.c) and DCL uses for its image tasks and PIPE
  * segments (src/vmsdcl/dcl_cmd_process.c, dcl_pcb_hold_*), made available to
  * every in-tree forker so none of them has its child register itself.
@@ -27,8 +27,6 @@
 #ifndef OVMX_SUBPROCESS_H
 #define OVMX_SUBPROCESS_H
 
-#include <errno.h>
-#include <fcntl.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -59,35 +57,24 @@ static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
                                         uint32_t uic, uint64_t privs,
                                         uint32_t *pcb_status, uint32_t *vms_pid)
 {
-    int go[2];
     pid_t pid;
     uint32_t st = SS$_ABORT;
-    ssize_t n;
-    char b = 'g';
 
     if (pcb_status)
         *pcb_status = SS$_ABORT;
     if (vms_pid)
         *vms_pid = 0;
-    if (pipe(go) != 0)
-        return -1;
-    (void)fcntl(go[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(go[1], F_SETFD, FD_CLOEXEC);
 
     pid = fork();
     if (pid == 0) {
-        /* Child: wait until the creator has made this task its subprocess
-         * (or given up: end-of-file). Nothing here touches the executive. */
-        close(go[1]);
-        do { n = read(go[0], &b, 1); } while (n < 0 && errno == EINTR);
-        close(go[0]);
+        /* Child: wait, in the executive, until the creator has made this task
+         * its process -- or its creation was refused, or there is no executive
+         * (rd vms-89bb, VMS_IOCTL_CREPRC_AWAIT). */
+        (void)vms_kif_creprc_await();
         return 0;
     }
-    close(go[0]);
     if (pid > 0)
         st = vms_kif_creprc_pcb((uint32_t)pid, kind, username, uic, privs, vms_pid);
-    do { n = write(go[1], &b, 1); } while (n < 0 && errno == EINTR);
-    close(go[1]);
     if (pcb_status)
         *pcb_status = st;
     return pid;

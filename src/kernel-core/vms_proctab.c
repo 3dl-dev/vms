@@ -2024,6 +2024,103 @@ out:
 }
 
 /*
+ * THE HELD TASK'S WAIT (rd vms-89bb, VMS_IOCTL_CREPRC_AWAIT).
+ *
+ * A process service forks a substrate task and its creator then makes that
+ * task a VMS process (vms_ioctl_creprc_pcb, below); until then the task must
+ * not run its image. It waits for that here, in the executive -- the process
+ * creation completing -- rather than on a substrate pipe its creator writes.
+ *
+ * Every settled creation -- made or refused -- bumps vms_creprc_gen and
+ * broadcasts vms_creprc_cv; a refusal is also left in vms_creprc_refused[] for
+ * the task it names (a small ring: a creator settles one creation at a time).
+ * The waiter reads the generation under the lock, tests its state WITHOUT the
+ * lock (the substrate's lookup takes its own locks), and sleeps only if no
+ * creation settled meanwhile -- so a PCB made between its test and its sleep is
+ * never missed. The sleep is bounded (1 s) only to notice a creator that ENDED
+ * without settling, which posts no wakeup.
+ */
+#define VMS_CREPRC_REFUSED_MAX 8
+static exec_lock_t vms_creprc_lock;
+static exec_cv_t vms_creprc_cv;
+static uint32_t vms_creprc_gen;
+static struct { uint32_t pid, status; } vms_creprc_refused[VMS_CREPRC_REFUSED_MAX];
+static unsigned vms_creprc_refused_next;
+
+void vms_creprc_await_init(void)
+{
+    exec_lock_init(&vms_creprc_lock);
+    exec_cv_init(&vms_creprc_cv);
+}
+
+static void vms_creprc_settled(uint32_t child_pid, uint32_t status)
+{
+    exec_lock(&vms_creprc_lock);
+    if (!(status & 1)) {
+        unsigned i = vms_creprc_refused_next++ % VMS_CREPRC_REFUSED_MAX;
+        vms_creprc_refused[i].pid = child_pid;
+        vms_creprc_refused[i].status = status;
+    }
+    vms_creprc_gen++;
+    exec_cv_broadcast(&vms_creprc_cv);
+    exec_unlock(&vms_creprc_lock);
+}
+
+/* The refusal recorded for task `pid`, taken (0 if none). Caller holds the lock. */
+static uint32_t vms_creprc_refusal_take(uint32_t pid)
+{
+    unsigned i;
+
+    for (i = 0; i < VMS_CREPRC_REFUSED_MAX; i++) {
+        if (pid != 0 && vms_creprc_refused[i].pid == pid) {
+            vms_creprc_refused[i].pid = 0;
+            return vms_creprc_refused[i].status;
+        }
+    }
+    return 0;
+}
+
+long vms_ioctl_creprc_await(unsigned long arg)
+{
+    struct vms_creprc_await_args args;
+
+    memset(&args, 0, sizeof(args));
+    for (;;) {
+        uint32_t self = 0, gen, refused;
+        int state = vms_task_creation_state(&self);
+
+        exec_lock(&vms_creprc_lock);
+        gen = vms_creprc_gen;
+        refused = vms_creprc_refusal_take(self);
+        if (state > 0 || refused || state < 0) {
+            exec_unlock(&vms_creprc_lock);
+            /* A PCB, if the task has one, wins over a stale refusal. */
+            args.status = state > 0 ? SS__NORMAL : refused ? refused : SS__NONEXPR;
+            break;
+        }
+        exec_unlock(&vms_creprc_lock);
+
+        /* Re-test the state under the generation: sleep only if nothing
+         * settled since the generation was read. */
+        if (vms_task_creation_state(&self) != 0)
+            continue;
+        exec_lock(&vms_creprc_lock);
+        if (vms_creprc_gen == gen) {
+            int timed_out = 0;
+            if (exec_cv_wait_timeout(&vms_creprc_cv, &vms_creprc_lock, 1000u,
+                                     &timed_out) && !timed_out) {
+                exec_unlock(&vms_creprc_lock);
+                return -ERESTARTSYS;
+            }
+        }
+        exec_unlock(&vms_creprc_lock);
+    }
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_creprc_pcb - $CREPRC's creator creates the new process's PCB
  * (rd vms-c43, design note 3.1). The caller is the creator; the target is a
  * task it forked and is holding before exec. A DETACHED identity is the one
@@ -2103,6 +2200,10 @@ long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg)
             vms_proc_apply_ticket_identity(np, args.username, args.uic, args.privs);
     }
 out:
+    /* Either way the creation is settled: release the held task
+     * (VMS_IOCTL_CREPRC_AWAIT), with the refusal if there was one. */
+    if (args.child_pid != 0)
+        vms_creprc_settled(args.child_pid, args.status);
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

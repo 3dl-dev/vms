@@ -2132,98 +2132,70 @@ static void dcl_cli_wait(int fd, pid_t pid, siginfo_t *si)
  * A distinguished exit CODE cannot fix it: every code is also one a real image
  * may legitimately return, so reading one as "activation failed" would
  * FABRICATE a diagnostic for an image that merely exited with that value
- * (INV-6). So the fact travels out of band, by the POSIX close-on-exec idiom:
- * a CLOEXEC pipe the kernel closes for us on a SUCCESSFUL exec. The parent
- * reading 0 bytes therefore means the image genuinely was entered; a full int
- * means execve() failed and the value IS the errno the failing call set --
- * read, never inferred.
+ * (INV-6). So the fact travels out of band (rd vms-89bb). On VMS the image
+ * activator runs IN the CLI's process, so the activation's failure status is
+ * simply in that process's memory when control returns to DCL. OVMX's image
+ * task is DCL's own VMS process (VMS_CREPRC_PCB_CONTINUE) in a forked task, so
+ * DCL gives it the same thing: one page of the process's memory, mapped SHARED
+ * once per session, that the task and DCL both see -- the activation cell.
+ * DCL clears it before each fork; a task whose execve() failed stores the
+ * errno the failing call set and leaves; an image that WAS entered cannot
+ * touch it (execve() replaced the task's address space). Once the task has
+ * ended, a zero cell means the image genuinely was entered and anything else
+ * IS the errno -- read, never inferred. No pipe, no descriptor, no I/O.
+ *
+ * No cell (the one mapping refused) leaves the exec failure merely
+ * undiagnosed, never MISdiagnosed: dcl_exec_handshake_read then reports "the
+ * image was entered", having no way to learn otherwise.
  * -------------------------------------------------------------------------- */
+static volatile int *dcl_act_cell;
 
-/* Open the handshake. plain pipe() + FD_CLOEXEC rather than pipe2(): the same
- * two lines work on every substrate DCL is built for (Linux glibc/musl and
- * NetBSD-vax) with no feature-test-macro dependency. On failure both ends stay
- * -1 and the path behaves exactly as it did before -- an exec failure is then
- * merely undiagnosed, never MISdiagnosed, because dcl_exec_handshake_read
- * reports "the image was entered" when it has no channel to learn otherwise. */
-static void dcl_exec_handshake_open(int fds[2])
+/* Parent, before the fork: have the activation cell, and clear it. */
+static void dcl_exec_handshake_open(void)
 {
-    if (pipe(fds) != 0) {
-        fds[0] = fds[1] = -1;
-        return;
+    if (!dcl_act_cell) {
+        void *p = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED)
+            return;
+        dcl_act_cell = p;
     }
-    /* CLOEXEC on the WRITE end is the signal itself: a successful execve closes
-     * it for us, and the parent's read then sees end-of-file. */
-    if (fcntl(fds[1], F_SETFD, FD_CLOEXEC) != 0 ||
-        fcntl(fds[0], F_SETFD, FD_CLOEXEC) != 0) {
-        close(fds[0]);
-        close(fds[1]);
-        fds[0] = fds[1] = -1;
-    }
+    *dcl_act_cell = 0;
 }
 
-/* The image task's PCB, from DCL (rd vms-e50): see dcl_cmd.h. */
-int dcl_pcb_hold_open(int fds[2])
+/* The image task's PCB, from DCL (rd vms-e50, vms-89bb): see dcl_cmd.h. */
+void dcl_pcb_hold_wait(void)
 {
-    if (pipe(fds) != 0) {
-        fds[0] = fds[1] = -1;
-        return -1;
-    }
-    (void)fcntl(fds[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(fds[1], F_SETFD, FD_CLOEXEC);
-    return 0;
+    (void)vms_kif_creprc_await();
 }
 
-/* Child: wait until DCL has made this task its VMS process (or has given up:
- * end-of-file). Nothing here touches the executive. */
-void dcl_pcb_hold_wait(int fds[2])
+/* Parent: make the held task DCL's own VMS process, which releases it. */
+uint32_t dcl_pcb_hold_release(int child_pid)
 {
-    char b;
-    ssize_t n;
-    close(fds[1]);
-    do { n = read(fds[0], &b, 1); } while (n < 0 && errno == EINTR);
-    close(fds[0]);
+    return dcl_pcb_hold_release_kind(child_pid, VMS_CREPRC_PCB_CONTINUE);
 }
 
-/* Parent: make the held task DCL's own VMS process, then release it. */
-uint32_t dcl_pcb_hold_release(int fds[2], int child_pid)
+/* Parent: make the held task a VMS process of `kind`, which releases it. */
+uint32_t dcl_pcb_hold_release_kind(int child_pid, uint32_t kind)
 {
-    return dcl_pcb_hold_release_kind(fds, child_pid, VMS_CREPRC_PCB_CONTINUE);
-}
-
-/* Parent: make the held task a VMS process of `kind`, then release it. */
-uint32_t dcl_pcb_hold_release_kind(int fds[2], int child_pid, uint32_t kind)
-{
-    uint32_t st = SS$_ABORT;
-    ssize_t n;
-    close(fds[0]);
-    if (child_pid > 0)
-        st = vms_kif_creprc_pcb((uint32_t)child_pid, kind, NULL, 0, 0, NULL);
-    do { n = write(fds[1], "g", 1); } while (n < 0 && errno == EINTR);
-    close(fds[1]);
-    return st;
+    if (child_pid <= 0)
+        return SS$_ABORT;
+    return vms_kif_creprc_pcb((uint32_t)child_pid, kind, NULL, 0, 0, NULL);
 }
 
 /* Child side, after a failed execv: record the errno and leave. Never returns. */
-static void dcl_exec_handshake_fail(int wfd, int err)
+static void dcl_exec_handshake_fail(int err)
 {
-    if (wfd >= 0) {
-        ssize_t n;
-        do { n = write(wfd, &err, sizeof err); } while (n < 0 && errno == EINTR);
-        (void)n;
-    }
+    if (dcl_act_cell)
+        *dcl_act_cell = err;
     _exit(1);
 }
 
-/* Parent side: 0 = the image was entered; otherwise the child's exec errno. */
-static int dcl_exec_handshake_read(int rfd)
+/* Parent side, once the task has ended: 0 = the image was entered; otherwise
+ * the child's exec errno. */
+static int dcl_exec_handshake_read(void)
 {
-    int err = 0;
-    ssize_t n;
-
-    if (rfd < 0)
-        return 0;
-    do { n = read(rfd, &err, sizeof err); } while (n < 0 && errno == EINTR);
-    return (n == (ssize_t)sizeof err) ? err : 0;
+    return dcl_act_cell ? *dcl_act_cell : 0;
 }
 
 /*
@@ -2358,21 +2330,11 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         cli_sv[0] = cli_sv[1] = -1;
 
     /* The exec handshake (vms-06c): whether the image was ENTERED at all. */
-    int exec_pipe[2] = { -1, -1 };
-    dcl_exec_handshake_open(exec_pipe);
-
-    int pcb_hold[2];
-    if (dcl_pcb_hold_open(pcb_hold) != 0) {
-        if (exec_pipe[0] >= 0) { close(exec_pipe[0]); close(exec_pipe[1]); }
-        if (cli_sv[0] >= 0) close(cli_sv[0]);
-        if (cli_sv[1] >= 0) close(cli_sv[1]);
-        dcl_error("DCL", 4, "CREPRC", "cannot activate %s", display_name);
-        return SS$_INSFMEM;
-    }
+    dcl_exec_handshake_open();
 
     pid_t pid = fork();
     if (pid != 0)
-        (void)dcl_pcb_hold_release(pcb_hold, (int)pid);
+        (void)dcl_pcb_hold_release((int)pid);
     if (pid == 0) {
         /* Child */
         if (cli_sv[1] >= 0) {
@@ -2395,9 +2357,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
          * This is ONLY for image activation. SPAWN / RUN/DETACHED / $CREPRC
          * create genuinely new VMS processes ($CREPRC makes their PCBs).
          */
-        dcl_pcb_hold_wait(pcb_hold);
-        if (exec_pipe[0] >= 0)
-            close(exec_pipe[0]);
+        dcl_pcb_hold_wait();
         execv(linux_path, argv);
         {
             int exec_err = errno;
@@ -2442,7 +2402,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
             /* execve() failed: the image was NEVER entered. Hand the real
              * errno to DCL through the handshake and leave -- an exit code
              * alone cannot carry this (vms-06c, dcl_exec_handshake_open). */
-            dcl_exec_handshake_fail(exec_pipe[1], exec_err);
+            dcl_exec_handshake_fail(exec_err);
         }
     } else if (pid > 0) {
         /*
@@ -2468,10 +2428,6 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         siginfo_t si;
         if (cli_sv[1] >= 0)
             close(cli_sv[1]);
-        /* Our copy of the write end must go now, or the handshake read below
-         * would never see end-of-file on a successful exec. */
-        if (exec_pipe[1] >= 0)
-            close(exec_pipe[1]);
         dcl_cli_wait(cli_sv[0], pid, &si);
         if (cli_sv[0] >= 0)
             close(cli_sv[0]);
@@ -2479,8 +2435,6 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
         if (si.si_code == CLD_STOPPED || si.si_code == CLD_TRAPPED) {
             /* Child stopped by Ctrl-Y — save for CONTINUE (do NOT reap it). */
             dcl_running_child = 0;
-            if (exec_pipe[0] >= 0)
-                close(exec_pipe[0]);
             printf("\nInterrupt\n");
             ctx->interrupted_pid = pid;
             return SS$_ABORT;
@@ -2493,9 +2447,7 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
          * %X00000001" claim that the POSIX-outcome branch below would make
          * about an image that never ran.
          */
-        int exec_err = dcl_exec_handshake_read(exec_pipe[0]);
-        if (exec_pipe[0] >= 0)
-            close(exec_pipe[0]);
+        int exec_err = dcl_exec_handshake_read();
         if (exec_err != 0) {
             int st_discard = 0;
             while (waitpid(pid, &st_discard, 0) < 0 && errno == EINTR)
@@ -2559,8 +2511,6 @@ static int dcl_activate_image_inner(struct dcl_context *ctx,
     } else {
         if (cli_sv[0] >= 0) close(cli_sv[0]);
         if (cli_sv[1] >= 0) close(cli_sv[1]);
-        if (exec_pipe[0] >= 0) close(exec_pipe[0]);
-        if (exec_pipe[1] >= 0) close(exec_pipe[1]);
         dcl_error("DCL", 4, "CREPRC", "cannot create process");
         return SS$_ABORT;
     }
@@ -3168,17 +3118,6 @@ int cmd_pipe(struct dcl_command *cmd)
 
         /* Each segment is a SUBPROCESS of this DCL, as PIPE's are on VMS
          * (rd vms-1f8): DCL makes its PCB while it waits, before it runs. */
-        int pcb_hold[2];
-        if (dcl_pcb_hold_open(pcb_hold) != 0) {
-            dcl_error("DCL", 4, "CREPRC", "cannot create process");
-            for (int j = 0; j < nseg - 1; j++) {
-                close(pipefds[j][0]);
-                close(pipefds[j][1]);
-            }
-            for (int j = 0; j < i; j++)
-                waitpid(pids[j], NULL, 0);
-            return SS$_INSFMEM;
-        }
         pid_t pid = fork();
         /* The segment is released whether or not its PCB was made, exactly as
          * an activated image is (dcl_pcb_hold_release): with no executive (a
@@ -3186,7 +3125,7 @@ int cmd_pipe(struct dcl_command *cmd)
          * then fail honestly. vms-2a5 decides what a task without a PCB may do
          * once self-registration is gone. */
         if (pid != 0)
-            (void)dcl_pcb_hold_release_kind(pcb_hold, (int)pid,
+            (void)dcl_pcb_hold_release_kind((int)pid,
                                             VMS_CREPRC_PCB_SUBPROCESS);
         if (pid < 0) {
             dcl_error("DCL", 4, "CREPRC", "cannot create process");
@@ -3221,7 +3160,7 @@ int cmd_pipe(struct dcl_command *cmd)
             }
 
             /* A VMS process once DCL has made its PCB; then exec vmsdcl -c. */
-            dcl_pcb_hold_wait(pcb_hold);
+            dcl_pcb_hold_wait();
             execl(dcl_exe, "vmsdcl", "-c", segments[i], (char *)NULL);
             fprintf(stderr, "%%DCL-E-CREPRC, cannot execute - %s\n", dcl_exe);
             _exit(127);

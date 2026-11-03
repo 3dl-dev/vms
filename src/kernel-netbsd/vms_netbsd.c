@@ -303,6 +303,28 @@ static bool vms_proc_continue_identity(struct vms_proc *proc, pid_t parent_pid,
     bool share_pid);
 
 /*
+ * vms_task_creation_state - the NetBSD half of VMS_IOCTL_CREPRC_AWAIT (rd
+ * vms-89bb; Linux twin in src/kernel/vms_module.c): 1 if this task has its row,
+ * 0 if not yet and its creator -- its parent, the task that forked it -- is a
+ * VMS process that can make it one, -1 if not (no row-less task can create
+ * one, and a creator that ended has reparented it).
+ */
+int
+vms_task_creation_state(uint32_t *self)
+{
+	struct proc *me = curproc;
+	pid_t ppid;
+
+	*self = (uint32_t)me->p_pid;
+	if (vms_proc_find(me->p_pid) != NULL)
+		return 1;
+	mutex_enter(&proc_lock);
+	ppid = me->p_pptr != NULL ? me->p_pptr->p_pid : 0;
+	mutex_exit(&proc_lock);
+	return ppid > 0 && vms_proc_find(ppid) != NULL ? 0 : -1;
+}
+
+/*
  * vms_proc_create_for - creator-driven creation, the NetBSD substrate half
  * (rd vms-c43; facility half vms_ioctl_creprc_pcb, kernel-core/vms_proctab.c;
  * Linux twin in src/kernel/vms_module.c). The task must be the creator's child
@@ -1566,6 +1588,12 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		}
 		return vms_facility_errno(r);
 
+	/* The held task's wait FOR its PCB (rd vms-89bb): made by a task its
+	 * creator has not yet made a VMS process, so no row lookup -- and it
+	 * makes none. */
+	case VMS_IOCTL_CREPRC_AWAIT:
+		return vms_facility_errno(vms_ioctl_creprc_await((unsigned long)data));
+
 	/*
 	 * Cluster diagnostic reads -- CLUSTER_DIAG_PORT/_CONN/_CSB (E47,
 	 * docs/cluster-integration-notes.md). The port's SDA SHOW PORT-
@@ -1788,6 +1816,7 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		exec_lock_init(&vms_proc_hash_lock);
 		exec_hash_init(vms_proc_hash);
 		vms_eflag_init();
+		vms_creprc_await_init();
 		/* Bring up the mailbox table's list guard too (the table starts empty
 		 * -- mailboxes are created on demand by $CREMBX). */
 		vms_mbx_init();

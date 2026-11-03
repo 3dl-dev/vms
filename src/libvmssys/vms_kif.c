@@ -2393,6 +2393,17 @@ uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *user
     return args.status;
 }
 
+/* The held task's wait for its PCB (rd vms-89bb): returns once its creator's
+ * VMS_IOCTL_CREPRC_PCB for it has settled. A signal does not end it. */
+uint32_t vms_kif_creprc_await(void)
+{
+    struct vms_creprc_await_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    KIF_WAIT_CALL(VMS_IOCTL_CREPRC_AWAIT, &args);
+    return args.status;
+}
+
 /* $DELPRC / $FORCEX / $SUSPND / $RESUME, authorized and delivered by the
  * executive (rd vms-8e9). op = VMS_PROCCTL_*; pid 0 = the caller. */
 uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code)

@@ -12,8 +12,14 @@
  * caller's child, refuses a second PCB for the same task, and refuses a
  * detached identity its caller may not give.
  *
+ * The held task's own wait is the executive's too (rd vms-89bb): it waits in
+ * VMS_IOCTL_CREPRC_AWAIT until its creator's CREPRC_PCB for it settles, and
+ * learns the outcome there -- SS$_NORMAL once it is a VMS process, the
+ * creator's refusal otherwise.
+ *
  * negctl: creprc-pcb-not-a-child, creprc-pcb-identity-unchecked,
- *         creprc-pcb-continue-not-shared, subprocess-helper-pcb-not-created
+ *         creprc-pcb-continue-not-shared, subprocess-helper-pcb-not-created,
+ *         creprc-await-releases-early
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -271,6 +277,50 @@ int main(void)
         release_and_reap(c, go_w, rep_r, &child_view);
         CHECK(child_view == vpid,
               "the detached child, reaching the executive, is the row its creator made");
+    }
+
+    /* 7. The held task waits IN THE EXECUTIVE (VMS_IOCTL_CREPRC_AWAIT, rd
+     *    vms-89bb): it calls the wait before its creator has made its PCB --
+     *    the creator delays on purpose -- and returns only once the creation
+     *    has settled: SS$_NORMAL and a row that is the creator's VMS process
+     *    after a CONTINUE, the creator's refusal after a refused kind. */
+    for (int refuse = 0; refuse < 2; refuse++) {
+        int rp[2];
+        uint32_t rep[2] = { 0, 0 }, st = 0;
+        if (pipe(rp) != 0) {
+            CHECK(0, "a report pipe for the held task");
+            break;
+        }
+        pid_t c = fork();
+        if (c == 0) {
+            struct vms_procinfo ci;
+            close(rp[0]);
+            rep[0] = vms_kif_creprc_await();
+            memset(&ci, 0, sizeof(ci));
+            rep[1] = (vms_kif_getjpi_self(&ci) & 1) ? ci.vms_pid : 0;
+            (void)!write(rp[1], rep, sizeof(rep));
+            _exit(0);
+        }
+        close(rp[1]);
+        if (c > 0) {
+            usleep(300 * 1000);      /* the task is in its wait by now */
+            st = vms_kif_creprc_pcb((uint32_t)c,
+                                    refuse ? 0xFFu : VMS_CREPRC_PCB_CONTINUE,
+                                    NULL, 0, 0, NULL);
+            if (read(rp[0], rep, sizeof(rep)) != (ssize_t)sizeof(rep))
+                rep[0] = rep[1] = 0;
+            while (waitpid(c, NULL, 0) < 0 && errno == EINTR)
+                ;
+        }
+        close(rp[0]);
+        /* negctl: creprc-await-releases-early */
+        if (!refuse) {
+            CHECK(st == SS$_NORMAL && rep[0] == SS$_NORMAL && rep[1] == me.vms_pid,
+                  "a held task's CREPRC_AWAIT returns SS$_NORMAL only once its creator made it its VMS process");
+        } else {
+            CHECK(st == SS$_BADPARAM && rep[0] == SS$_BADPARAM && rep[1] == 0,
+                  "a held task's CREPRC_AWAIT returns its creator's refusal, and the task stays no VMS process");
+        }
     }
 
     printf("=== test_syssvc_creprc_pcb: %d passed, %d failed ===\n", pass, fail);

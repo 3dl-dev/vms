@@ -1593,6 +1593,14 @@ long vms_ioctl_pri(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_brkauth(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procctl(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_creprc_pcb(struct vms_proc *proc, unsigned long arg);
+/* The held task's wait for its PCB (rd vms-89bb, VMS_IOCTL_CREPRC_AWAIT): the
+ * facility half (kernel-core/vms_proctab.c) and the substrate's answer to "what
+ * is this task's creation state" -- 1: it has a PCB; 0: it has none yet and its
+ * creator (its parent) is a VMS process that can make one; -1: no creator can. *self receives the task's
+ * substrate pid. vms_creprc_await_init runs once at module load. */
+long vms_ioctl_creprc_await(unsigned long arg);
+int vms_task_creation_state(uint32_t *self);
+void vms_creprc_await_init(void);
 /* Substrate half of creator-driven creation (rd vms-c43): vms_module.c (Linux),
  * vms_netbsd.c (NetBSD). */
 uint32_t vms_proc_create_for(struct vms_proc *creator, uint32_t child_pid, uint32_t kind,

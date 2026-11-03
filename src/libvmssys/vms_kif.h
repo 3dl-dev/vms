@@ -883,6 +883,11 @@ uint32_t vms_kif_procctl(uint32_t op, uint32_t pid, uint32_t code);
 /* $CREPRC: the creator creates the child's PCB (rd vms-c43); flags = VMS_CREPRC_PCB_*. */
 uint32_t vms_kif_creprc_pcb(uint32_t child_pid, uint32_t flags, const char *username,
                             uint32_t uic, uint64_t privs, uint32_t *vms_pid);
+/* The task a creator forked waits, in the executive, until the creator's
+ * vms_kif_creprc_pcb for it settles (rd vms-89bb): SS$_NORMAL = it now is a VMS
+ * process; the creator's refusal; SS$_NONEXPR = its parent is no VMS process
+ * (or ended); SS$_NOSUCHDEV = no executive. */
+uint32_t vms_kif_creprc_await(void);
 uint32_t vms_kif_rights_list(uint32_t pid, uint32_t *ids, uint32_t *attrs,
                              uint32_t cap, uint32_t *count);
 

@@ -1527,6 +1527,35 @@ struct vms_proc *vms_proc_create_boot_task(void)
 }
 
 /*
+ * vms_task_creation_state - the Linux half of VMS_IOCTL_CREPRC_AWAIT (rd
+ * vms-89bb; see vms_internal.h): 1 if this task has its PCB, 0 if not yet and
+ * its creator -- its parent, the task that forked it -- is a VMS process that
+ * can make it one, -1 if not (no PCB-less task can create one, and a creator
+ * that ended has reparented it).
+ */
+int vms_task_creation_state(uint32_t *self)
+{
+    struct task_struct *parent;
+    struct vms_proc *creator;
+    struct pid *ref;
+    pid_t tgid;
+    bool live;
+
+    *self = (uint32_t)current->tgid;
+    if (vms_proc_find_or_err())
+        return 1;
+    rcu_read_lock();
+    parent = rcu_dereference(current->group_leader->real_parent);
+    tgid = parent ? task_tgid_nr(parent) : 0;
+    ref = parent ? get_pid(task_tgid(parent)) : NULL;
+    rcu_read_unlock();
+    creator = ref ? vms_proc_find(tgid) : NULL;
+    live = creator && creator->pid_ref == ref;
+    put_pid(ref);
+    return live ? 0 : -1;
+}
+
+/*
  * vms_proc_create_for - creator-driven creation, the Linux substrate half
  * (rd vms-c43; the facility half is vms_ioctl_creprc_pcb in vms_proctab.c).
  *
@@ -1775,6 +1804,11 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * every other ioctl below refuses it with -ESRCH (SS$_NONEXPR). */
     if (cmd == VMS_IOCTL_ESTABLISH_SYSTEM)
         return vms_ioctl_establish_system(vms_proc_find_or_err(), arg);
+    /* CREPRC_AWAIT is the held task's wait FOR its PCB (rd vms-89bb): a task
+     * its creator has not made a VMS process yet waits in it, so it is made
+     * by a task with no PCB -- and makes none. */
+    if (cmd == VMS_IOCTL_CREPRC_AWAIT)
+        return vms_ioctl_creprc_await(arg);
 
     /*
      * E47 (docs/cluster-integration-notes.md): the three cluster
@@ -2600,6 +2634,7 @@ static int __init vms_init(void)
         return ret;
     }
     vms_eflag_init();
+    vms_creprc_await_init();
 
     /*
      * Bring up the device table before /dev/vms exists, so that the

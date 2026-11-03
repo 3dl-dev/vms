@@ -965,15 +965,9 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
         return srt;
 
     uint32_t status = SS$_NORMAL;
-    int pcb_hold[2];
-    if (dcl_pcb_hold_open(pcb_hold) != 0) {
-        dcl_error("DCL", 4, "CREPRC", "cannot create process for %s", facility);
-        dcl_sysinput_restore(&si);
-        return SS$_INSFMEM;
-    }
     pid_t pid = fork();
     if (pid != 0)
-        (void)dcl_pcb_hold_release(pcb_hold, (int)pid);
+        (void)dcl_pcb_hold_release((int)pid);
     if (pid == 0) {
         /* A SYS$SYSTEM utility (MAIL, SYSGEN, INSTALL, ...) is an image the
          * CLI runs IN ITS OWN PROCESS on VMS: DCL makes this task its own VMS
@@ -982,7 +976,7 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
          * Without it the image auto-registers a fresh PCB with no user name,
          * and MAIL -- which asks the executive whose mailbox to open -- exits
          * at once. */
-        dcl_pcb_hold_wait(pcb_hold);
+        dcl_pcb_hold_wait();
         if (bin)
             execv(bin, argv);
         execvp(exe_name, argv);

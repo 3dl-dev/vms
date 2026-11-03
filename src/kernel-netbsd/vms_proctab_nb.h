@@ -400,6 +400,27 @@ struct vms_creprc_pcb_args {
 #define VMS_IOCTL_CREPRC_PCB _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x9a, struct vms_creprc_pcb_args)
 
 /*
+ * The held task's half of creator-driven creation (rd vms-89bb). A task forked
+ * by a process service waits HERE, in the executive, until its creator has made
+ * it a VMS process (VMS_IOCTL_CREPRC_PCB) -- the one call, besides
+ * ESTABLISH_SYSTEM, that a task with no PCB may make, because it is the call
+ * that waits for the PCB. It returns, in `status`:
+ *   SS$_NORMAL   the caller now is a VMS process;
+ *   the failure  its creator's VMS_IOCTL_CREPRC_PCB for it was refused (that
+ *                status, e.g. SS$_INSFMEM);
+ *   SS$_NONEXPR  no creator can make it one: its parent (the task that forked
+ *                it) is not a VMS process, or has ended.
+ * Never a PCB of its own making: a task the executive did not create still has
+ * none (rd vms-2a5). This replaces the substrate pipe a creator once released
+ * its child through.
+ */
+struct vms_creprc_await_args {
+    uint32_t status;                      /* out: SS$_ status                  */
+    uint32_t pad;
+};
+#define VMS_IOCTL_CREPRC_AWAIT _IOWR(VMS_PROCTAB_IOC_MAGIC, 0xb7, struct vms_creprc_await_args)
+
+/*
  * VMS_IOCTL_DASSGN (vms-329) -- $DASSGN, release one assigned channel. Also
  * missing here, and also needed by the shared ACP client: imgact_acp.c and the
  * RMS ACP arm $DASSGN every channel they take, and PID 1's boot bridge stages
@@ -670,6 +691,8 @@ _Static_assert(sizeof(struct vms_brkauth_args) == 8,
                "vms_brkauth_args layout changed: VMS_IOCTL_BRKAUTH ABI break");
 _Static_assert(sizeof(struct vms_creprc_pcb_args) == 64,
                "vms_creprc_pcb_args layout changed: VMS_IOCTL_CREPRC_PCB ABI break");
+_Static_assert(sizeof(struct vms_creprc_await_args) == 8,
+               "vms_creprc_await_args layout changed: VMS_IOCTL_CREPRC_AWAIT ABI break");
 _Static_assert(sizeof(struct vms_procctl_args) == 16,
                "vms_procctl_args layout changed: VMS_IOCTL_PROCCTL ABI break");
 _Static_assert(sizeof(struct vms_spawn_notify_args) == 32,

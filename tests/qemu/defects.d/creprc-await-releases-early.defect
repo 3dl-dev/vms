@@ -1,0 +1,25 @@
+# The held task's wait for its PCB (VMS_IOCTL_CREPRC_AWAIT, rd vms-89bb).
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the held task's wait for its PCB (VMS_IOCTL_CREPRC_AWAIT, vms_ioctl_creprc_await in kernel-core/vms_proctab.c, rd vms-89bb) -- a task its creator forked runs nothing until the creation settles";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_creprc_pcb";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_creprc_await returns SS\$_NORMAL at once instead of waiting for the creator's CREPRC_PCB to settle: an image DCL activates would run before it is DCL's VMS process (its first service call answered SS\$_NONEXPR), and a refused creation would read as made. Gone after apply.";;
+        require_fail) cat <<'EOT'
+a held task's CREPRC_AWAIT returns SS$_NORMAL only once its creator made it its VMS process
+a held task's CREPRC_AWAIT returns its creator's refusal, and the task stays no VMS process
+EOT
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+}
+
+defect_apply() {
+        sed -i 's|^        if (state > 0 \|\| refused \|\| state < 0) {$|        if ((state = 1)) { /* NEGCTL creprc-await-releases-early */|' "$_file"
+    :
+}

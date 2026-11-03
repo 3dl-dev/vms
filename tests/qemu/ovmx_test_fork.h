@@ -30,8 +30,9 @@
 #include <unistd.h>
 
 #include "vms_kif.h"
+#include "ovmx_substrate.h"  /* the fork handshake is the substrate's own work (rd vms-a66e) */
 
-static inline pid_t ovmx_fork_kind_ident_st(uint32_t kind, const char *uname, uint32_t uic,
+static inline pid_t ovmx_fork_kind_ident_body(uint32_t kind, const char *uname, uint32_t uic,
                                             uint64_t privs, uint32_t *status)
 {
     int hold[2];
@@ -74,6 +75,21 @@ static inline pid_t ovmx_fork_kind_ident_st(uint32_t kind, const char *uname, ui
         return -1;
     }
     return c;
+}
+
+/* The hold pipe and the fork are the substrate's own work -- what $CREPRC does
+ * under a system service -- so the whole handshake runs in the substrate scope
+ * (ovmx_substrate.h): in a suite linked with the C RTL file layer, pipe() would
+ * otherwise be a VMS mailbox the parent's process owns, which the child cannot
+ * read. The child inherits the scope and leaves it as it returns 0 into the
+ * suite, a VMS process; the parent leaves it on every return. */
+static inline pid_t ovmx_fork_kind_ident_st(uint32_t kind, const char *uname, uint32_t uic,
+                                            uint64_t privs, uint32_t *status)
+{
+    ovmx_substrate_enter();
+    pid_t r = ovmx_fork_kind_ident_body(kind, uname, uic, privs, status);
+    ovmx_substrate_leave();
+    return r;
 }
 
 static inline pid_t ovmx_fork_kind_st(uint32_t kind, uint32_t *status)
@@ -163,7 +179,7 @@ static inline pid_t ovmx_fork_continue(void)
  * nothing else's orphans are.
  * Returns 0 in the new process, its substrate pid in the caller, -1 on refusal.
  */
-static inline pid_t ovmx_fork_detached_flags_st(const char *uname, uint32_t uic,
+static inline pid_t ovmx_fork_detached_flags_body(const char *uname, uint32_t uic,
                                                 uint64_t privs, uint32_t extra,
                                                 uint32_t *status)
 {
@@ -220,6 +236,18 @@ static inline pid_t ovmx_fork_detached_flags_st(const char *uname, uint32_t uic,
         (void)prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0);
     if (status) *status = st;
     return (st & 1) ? (pid_t)gpid : -1;
+}
+
+/* Same substrate scope as ovmx_fork_kind_ident_st: the intermediate exits
+ * without leaving it, the detached process leaves it as it returns 0. */
+static inline pid_t ovmx_fork_detached_flags_st(const char *uname, uint32_t uic,
+                                                uint64_t privs, uint32_t extra,
+                                                uint32_t *status)
+{
+    ovmx_substrate_enter();
+    pid_t r = ovmx_fork_detached_flags_body(uname, uic, privs, extra, status);
+    ovmx_substrate_leave();
+    return r;
 }
 
 static inline pid_t ovmx_fork_detached_st(const char *uname, uint32_t uic, uint64_t privs,

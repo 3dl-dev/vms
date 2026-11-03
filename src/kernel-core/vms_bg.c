@@ -579,7 +579,7 @@ long vms_ioctl_bg_recv(struct vms_proc *proc, unsigned long arg)
         if ((e == EAGAIN || e == EWOULDBLOCK) && (a->flags & VMS_BG_IOF_NOW))
             a->status = SS__ENDOFFILE;  /* IO$M_NOW, nothing queued (vms-a6b) */
         else
-            a->status = (e == EAGAIN || e == EWOULDBLOCK) ? SS__TIMEOUT : SS__ABORT;
+            a->status = (n == -EAGAIN) ? SS__TIMEOUT : SS__ABORT;
     } else {
         a->len = (uint32_t)n;
         a->status = SS__NORMAL;

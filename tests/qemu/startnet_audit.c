@@ -62,7 +62,6 @@
 
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
-#include "vmsfs/filespec.h"   /* vmsfs_to_linux_path */
 
 
 #define EXIT_SKIP 77
@@ -252,7 +251,7 @@ static int netacp_published(void)
                                  sizeof dev - 1, &len, NULL, NULL) == 1 && len > 0;
 }
 
-struct client { const char *image; pid_t pid; int st; int done; struct sink out; };
+struct client { const char *image; const char *dcl; pid_t pid; int st; int done; struct sink out; };
 
 static pid_t client_start(struct client *c, int *rfd)
 {
@@ -263,7 +262,8 @@ static pid_t client_start(struct client *c, int *rfd)
     if (p == 0) {
         dup2(o[1], 1); dup2(o[1], 2);
         close(o[0]); close(o[1]);
-        execl(c->image, c->image, "--net-loopback-accept-test", (char *)NULL);
+        /* a foreign command off the mounted test volume, as a user runs it */
+        execl(c->dcl, "DCL.EXE", "/tmp/startnet_audit_client.com", (char *)NULL);
         _exit(127);
     }
     close(o[1]);
@@ -434,10 +434,17 @@ int main(int argc, char **argv)
 
     const char *dcl = pick("OVMX_DCL", "DCL.EXE");
     static char client_img[512];
-    if (argv[1][0] == '/') snprintf(client_img, sizeof client_img, "%s", argv[1]);
-    else if (vmsfs_to_linux_path(argv[1], client_img, sizeof client_img) != 1) {
-        printf("  FAIL: cannot locate %s\n", argv[1]);
-        return 1;
+    snprintf(client_img, sizeof client_img, "%s", argv[1]);
+    /* Two DCL procedures (DCL script mode): the traced one starts the network
+     * exactly as the system does; the untraced one runs the test image as a
+     * foreign command off the mounted volume. */
+    {
+        FILE *f = fopen("/tmp/startnet_audit_sn.com", "w");
+        FILE *g = fopen("/tmp/startnet_audit_client.com", "w");
+        if (!f || !g) { printf("  FAIL: cannot write the audit's procedures in /tmp\n"); return 1; }
+        fprintf(f, "$ @SYS$MANAGER:STARTNET\n$ EXIT $STATUS\n");
+        fprintf(g, "$ NETACPTEST := $%s\n$ NETACPTEST --net-loopback-accept-test\n", client_img);
+        fclose(f); fclose(g);
     }
 
     /* ---- 1. trace DCL @SYS$MANAGER:STARTNET and what it makes ----------- */
@@ -451,7 +458,7 @@ int main(int argc, char **argv)
         unsetenv("OVMX$CLI_FD");
         ptrace(PTRACE_TRACEME, 0, 0, 0);
         raise(SIGSTOP);
-        execl(dcl, "DCL.EXE", "-c", "@SYS$MANAGER:STARTNET", (char *)NULL);
+        execl(dcl, "DCL.EXE", "/tmp/startnet_audit_sn.com", (char *)NULL);
         _exit(127);
     }
     close(o[1]);
@@ -464,6 +471,7 @@ int main(int argc, char **argv)
     struct client cl;
     memset(&cl, 0, sizeof cl);
     cl.image = client_img;
+    cl.dcl = dcl;
     cl.out.fd = -1; cl.out.buf = g_clout; cl.out.cap = sizeof g_clout;
     struct verdict v;
     memset(&v, 0, sizeof v);
@@ -476,6 +484,9 @@ int main(int argc, char **argv)
            "  --- end ---\n", g_out);
     printf("  --- untraced client: %s --net-loopback-accept-test ---\n%s\n  --- end ---\n",
            client_img, g_clout);
+    printf("  (STARTNET's DCL: %s %d)\n",
+           rs >= 0 && WIFEXITED(rs) ? "exit" : "signal/broken",
+           rs >= 0 && WIFEXITED(rs) ? WEXITSTATUS(rs) : (rs >= 0 && WIFSIGNALED(rs) ? WTERMSIG(rs) : -1));
     printf("  (syscalls %lu, executive ioctls %lu; exec DCL %u NCP %u NETACP %u FAL %u;"
            " flagged pipe %u wait %u thread %u host-socket %u foreign-exec %u%s%s)\n",
            v.total, v.vms_ioctls, v.exec_dcl, v.exec_ncp, v.exec_netacp, v.exec_fal,

@@ -174,7 +174,7 @@ static void netacp_log_open(void)
             k->on = 2;                            /* SYS$ERROR shares SYS$OUTPUT's file */
             continue;
         }
-        k->on = (rms_textfile_create(k->spec) & 1) ? 1 : 0;
+        k->on = rms_textfile_create(k->spec) == 0 ? 1 : 0;   /* 0 = created */
     }
 }
 

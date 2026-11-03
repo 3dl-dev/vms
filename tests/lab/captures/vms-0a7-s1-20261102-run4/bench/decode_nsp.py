@@ -7,7 +7,7 @@ replaced by XX before anything is printed (rd vms-3106 bench).
 usage: decode_nsp.py <file.pcap> [...]   (env MASK=pw1,pw2)"""
 import os, struct, sys
 
-MASK = [m.encode() for m in os.environ.get('MASK', 'OVMXCLUSTER1,MANAGER,DNTESTPW1,NOTTHEPW9').split(',') if m]
+MASK = [m.encode() for m in os.environ.get('MASK', ','.join(os.environ.get(k, '') for k in ('VAX_PW', 'OVMX_PW', 'DN_PW', 'BAD_PW'))).split(',') if m]
 NODES = {(1, 963): 'OVMXA', (1, 965): 'VAXC', (1, 964): 'OVMXB'}
 NSP = {0x18: 'CI', 0x68: 'CI(retrans)', 0x28: 'CC', 0x38: 'DI', 0x48: 'DC',
        0x04: 'DATA-ACK', 0x14: 'OTHER-ACK', 0x24: 'CONN-ACK', 0x08: 'NOP',

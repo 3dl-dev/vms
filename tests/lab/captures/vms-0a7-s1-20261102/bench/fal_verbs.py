@@ -18,6 +18,7 @@ Bridged by udp2mcast.py, as in ../vms-3106-lla-reboot-20261102/.
 
 usage: fal_verbs.py <outdir> <ovmx-disk-image>       (env REL = boot artifacts dir)
 """
+import os
 import json, os, re, subprocess, sys, time
 import pexpect
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,11 +27,11 @@ from node import Node
 
 W = os.environ.get('W', '/tmp/vms0a7-lab')
 OUT, IMG = sys.argv[1], sys.argv[2]
-VAX_PW = 'OVMXCLUSTER1'          # lab test SYSTEM account on VAXC
-DN_PW = 'DNTESTPW1'              # a throwaway unprivileged account this bench creates
-OVMX_PW = 'MANAGER'
+VAX_PW = os.environ['VAX_PW']          # lab test SYSTEM account on VAXC
+DN_PW = os.environ['DN_PW']              # a throwaway unprivileged account this bench creates
+OVMX_PW = os.environ['OVMX_PW']
 MCAST = '230.0.0.71:12471'
-BAD_PW = 'NOTTHEPW9'           # deliberately wrong; must never be echoed back
+BAD_PW = os.environ['BAD_PW']           # deliberately wrong; must never be echoed back
 os.makedirs(OUT, exist_ok=True)
 EVENTS = open(os.path.join(OUT, 'events.log'), 'a')
 

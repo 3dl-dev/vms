@@ -2033,6 +2033,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_ddir(proc, arg);
     case VMS_IOCTL_PPROP:
         return vms_ioctl_pprop(proc, arg);
+    case VMS_IOCTL_LGI:
+        return vms_ioctl_lgi(proc, arg);
     case VMS_IOCTL_RIGHTS:
         return vms_ioctl_rights(proc, arg);
     case VMS_IOCTL_PRI:

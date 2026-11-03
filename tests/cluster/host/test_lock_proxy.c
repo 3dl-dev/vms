@@ -1094,6 +1094,91 @@ static void c55_no_removal_for_an_unregistered_entry(void)
 
 
 /*
+ * rd vms-8cb5: NO REMOVAL FOR AN ENTRY A STATE TRANSITION DISCARDED.
+ *
+ * The V0.7-15 LOCKMGRERR, replayed on the real engine. A directory node DID
+ * hold this node's entry -- it answered the lookup 0xf9 -- and then a state
+ * transition ran (OVMXB's addition). Phase 1 discards every directory entry
+ * cluster-wide, a real master re-registers its own with op-0x0d, and OVMX sends
+ * none, so the directory holds nothing for the resource afterwards. The vector
+ * still names the SAME directory node, so the rd vms-c55 check passed and the
+ * last $DEQ sent a removal for an entry the VAX no longer had: it answered
+ * cat-0x02 op-0x19 17 ms later and bugchecked (capture frames 1722/1724 lookup
+ * + 0xf9, epoch-4 rebuild, 2741 removal, 2743 op-0x19).
+ */
+static void p8cb5_no_removal_after_a_transition_discarded_the_entry(void)
+{
+	struct vms_proc proc;
+	struct vms_dlm_proxy_post enq;
+	uint32_t lkid = 0, st;
+	int before;
+
+	printf("--- rd vms-8cb5: no removal for an entry a state transition "
+	       "discarded ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	st = do_enq_computed(&proc, "F11B$s8CB5SYS", LCK_K_EXMODE, &lkid);
+	ct_check(st == SS__NORMAL && lkid != 0,
+		 "$ENQ posts a lookup to the remote directory node");
+	if (!fm_wait_posts(1, &enq)) {
+		ct_check(0, "the lookup was posted");
+		vms_lock_dlm_set_requester_ops(NULL);
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check_eq_u32(vms_lock_dlm_assume_mastery("F11B$s8CB5SYS", 0u, lkid),
+			SS__NORMAL, "the directory answers 0xf9: this node masters it");
+
+	/* OVMXB's addition: the transition's Phase 1. */
+	ct_check_eq_u32(vms_lock_dlm_directory_discarded(), 1u,
+			"the transition forgets the one directory this node told");
+	ct_check_eq_u32(vms_lock_dlm_directory_discarded(), 0u,
+			"... once: a second transition has nothing left to forget");
+
+	pthread_mutex_lock(&fm.lock);
+	before = fm.posts;
+	pthread_mutex_unlock(&fm.lock);
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the last lock goes");
+	usleep(50 * 1000);
+	pthread_mutex_lock(&fm.lock);
+	ct_check_eq_u32((uint32_t)fm.posts, (uint32_t)before,
+			"*** a resource whose directory entry a transition "
+			"discarded is NOT removed from that directory ***");
+	pthread_mutex_unlock(&fm.lock);
+
+	/* ...and the NEXT mastery, told after the transition, is removed as
+	 * before: the record is forgotten, not the mechanism. */
+	lkid = 0;
+	(void)do_enq_computed(&proc, "F11B$s8CB5SYS", LCK_K_EXMODE, &lkid);
+	if (!fm_wait_posts(before + 1, &enq)) {
+		ct_check(0, "the re-lookup was posted");
+		vms_lock_dlm_set_requester_ops(NULL);
+		vms_lock_cleanup();
+		return;
+	}
+	ct_check_eq_u32(vms_lock_dlm_assume_mastery("F11B$s8CB5SYS", 0u, lkid),
+			SS__NORMAL, "a post-transition lookup is answered 0xf9");
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the lock goes again");
+	if (!fm_wait_posts(before + 2, &enq)) {
+		ct_check(0, "*** an entry told AFTER the transition is removed ***");
+	} else {
+		ct_check_eq_u32(enq.op, VMS_DLM_POST_DIR_REMOVE,
+				"an entry told AFTER the transition is removed");
+	}
+
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
+
+/*
  * ==========================================================================
  * rd vms-326: A COUNTED, BINARY RESOURCE NAME IS ITS OWN RESOURCE.
  *
@@ -2065,6 +2150,7 @@ int main(void)
 	e09_master_removes_its_directory_entry();
 	e09_no_removal_without_a_remote_entry();
 	c55_no_removal_for_an_unregistered_entry();
+	p8cb5_no_removal_after_a_transition_discarded_the_entry();
 	rms326_counted_binary_names();
 	b67a_sublock_goes_to_the_parents_master();
 	b67a_sublock_refuses_a_parent_with_no_master_handle();

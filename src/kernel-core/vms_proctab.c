@@ -1795,6 +1795,67 @@ out:
 }
 
 /*
+ * vms_ioctl_lgi - the login data LOGINOUT leaves for the CLI (rd vms-838b).
+ *
+ * On VMS DCL learns that it is starting a login -- and the account's CAPTIVE /
+ * DISCTLY flags and its login command file -- from the process LOGINOUT built,
+ * never from an argument list. LOGINOUT writes that state in kernel mode while
+ * it logs the process in. SET is therefore gated exactly as SETIDENT is: CMKRNL
+ * enabled, in a LOGIN process, before the image after LOGINOUT runs. An image
+ * cannot write its own login data -- so a captive account's DCL cannot be told
+ * it is not captive. GET reads the caller's own; a process LOGINOUT did not log
+ * in reads flags 0 (a plain, non-login CLI).
+ */
+long vms_ioctl_lgi(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_lgi_args args;
+    size_t i;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (args.op == VMS_LGI_OP_GET) {
+        exec_lock(&proc->mode_lock);
+        args.flags     = proc->lgi_flags;
+        args.uaf_flags = proc->lgi_uaf_flags;
+        memcpy(args.lgicmd, proc->lgi_cmd, VMS_LGICMD_SIZE);
+        exec_unlock(&proc->mode_lock);
+        args.status = SS__NORMAL;
+        goto out;
+    }
+    if (args.op != VMS_LGI_OP_SET || (args.flags & ~VMS_LGI_F_LOGIN) != 0) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    /* The spec must be NUL-terminated inside the buffer. */
+    for (i = 0; i < VMS_LGICMD_SIZE && args.lgicmd[i] != '\0'; i++)
+        ;
+    if (i == VMS_LGICMD_SIZE) {
+        args.status = SS__BADPARAM;
+        goto out;
+    }
+    exec_lock(&proc->mode_lock);
+    /* NEGCTL-ANCHORED (lgi-set-outside-login) */
+    if (vms_prot_require_priv(proc->cur_privs, VMS_PRV_M_CMKRNL) != SS__NORMAL ||
+        proc->login_images == 0) {
+        exec_unlock(&proc->mode_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+    proc->lgi_flags     = args.flags;
+    proc->lgi_uaf_flags = args.uaf_flags;
+    memset(proc->lgi_cmd, 0, VMS_LGICMD_SIZE);
+    memcpy(proc->lgi_cmd, args.lgicmd, i);
+    exec_unlock(&proc->mode_lock);
+    args.status = SS__NORMAL;
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * vms_ioctl_rights - the process rights list (rd vms-7d5a): $GRANTID / $REVOKID
  * add / remove an identifier, LIST reads it. GRANT and REVOKE need CMKRNL, as on
  * OpenVMS ($GRANTID with every privilege disabled is SS$_NOPRIV, the V7.3 / V8.4

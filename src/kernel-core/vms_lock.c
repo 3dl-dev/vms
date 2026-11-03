@@ -8332,6 +8332,53 @@ void vms_lock_dlm_member_departed(uint32_t departed_csid, uint32_t *found)
 }
 
 /*
+ * rd vms-8cb5: A STATE TRANSITION DISCARDS EVERY DIRECTORY ENTRY, SO NOTHING
+ * THIS NODE TOLD A DIRECTORY BEFORE IT IS STILL HELD THERE.
+ *
+ * Phase 1 of every cluster state transition discards all directory information
+ * cluster-wide (Davis p. 7-40/7-41, p. 6-33), and each MASTER re-registers its
+ * resources at their directory nodes with op-0x0d rebuild records. A real V7.3
+ * does exactly that toward OVMX (every 02/0d in the demo captures is VAXC's).
+ * OVMX originates no op-0x0d, so after a transition the directory node holds NO
+ * entry for a resource this node masters, however many lookups it answered
+ * before.
+ *
+ * `dir_told_csid` is this node's record of "that directory holds my entry", and
+ * it outlived the transition. When the resource's last lock went afterwards,
+ * dlm_dir_remove_fill() found the vector still naming the same node and sent a
+ * cat-0x02 op-0x04 removal for an entry the directory no longer had -- the
+ * removal rd vms-c55 already established VMS never sends: the real VAX answered
+ * cat-0x02 op-0x19 17 ms later and bugchecked LOCKMGRERR (V0.7-15 visitor
+ * gate, c-first-legacy: OVMXA looked up RMS$ for file 80 on OVMXASYS at VAXC,
+ * OVMXB's addition ran a full rebuild, OVMXA's removal followed -- the
+ * captures are named in tests/lab/captures/vms-8cb5-transition-discards-
+ * 20261103/).
+ *
+ * So the transition's start forgets every such record. A removal is sent again
+ * only for an entry a directory is told about AFTER this point (a lookup it
+ * answers 0xf9, or an adoption it names). Returns how many were forgotten.
+ * Same lock order as vms_lock_dlm_member_departed().
+ */
+uint32_t vms_lock_dlm_directory_discarded(void)
+{
+    struct vms_lock_resource *res;
+    uint32_t n = 0u;
+    int bkt;
+
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        exec_lock(&res->lock);
+        if (res->dir_told_csid != 0u) {
+            res->dir_told_csid = 0u;
+            n++;
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return n;
+}
+
+/*
  * Clear the quorum-stall mark on every waiter of ONE resource. Caller holds
  * res->lock. Nothing else about the request changes: it keeps its place in the
  * FIFO, its requested mode, its value block and (for a convert) the mode it

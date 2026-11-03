@@ -21,13 +21,24 @@ GOLD="$ROOT/docs/oracle/semantics/diff/vax73.txt"
 TDIR="dcl_semdiff_$$"
 VDIR="$(echo "$TDIR" | tr a-z A-Z)"
 mkdir -p "/vms/$TDIR"
-python3 "$ROOT/tools/oracle/semantic/comgen.py" "$ROOT/tools/oracle/semantic/specs-dcl/diff.py" \
-    > "/vms/$TDIR/sp_diff.com"
+# The procedure works in SYS$SYSDEVICE:[SPDIFF], a directory every host ctest on
+# this machine shares -- a leftover or concurrent one bumps SP_D.LIS to ;2
+# (vms-f63). Give THIS run a private work directory of the same width (so the
+# listing wraps identically): reserve a free SPxxxx with an atomic mkdir, run
+# the procedure in it, map its name back to SPDIFF to compare with the golden,
+# and remove it on every exit.
+SPD=""
+while [ -z "$SPD" ]; do
+    cand="SP$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n' | tr a-f A-F | cut -c1-4)"
+    mkdir "/vms/$cand" 2>/dev/null && SPD="$cand"
+done
+trap 'rm -rf "/vms/$TDIR" "/vms/$SPD"' EXIT
+python3 "$ROOT/tools/oracle/semantic/comgen.py" "$ROOT/tools/oracle/semantic/specs-dcl/diff.py" |
+    sed "s/SPDIFF/$SPD/g" > "/vms/$TDIR/sp_diff.com"
 got=$({ echo "SET DEFAULT SYS\$SYSDEVICE:[$VDIR]"; echo "@SP_DIFF.COM"; } | "$VMSDCL" 2>&1 |
-      tr -d '\r' | awk '/^=== SEMPROBE diff BEGIN ===$/{on=1} on{print} /^=== SEMPROBE diff END ===$/{exit}')
-rm -rf "/vms/$TDIR"
-# the procedure's own work directory, SYS$SYSDEVICE:[SPDIFF]
-for d in /vms/SPDIFF /vms/spdiff; do [ -d "$d" ] && rm -rf "$d"; done
+      tr -d '\r' | awk '/^=== SEMPROBE diff BEGIN ===$/{on=1} on{print} /^=== SEMPROBE diff END ===$/{exit}' |
+      sed "s/$SPD/SPDIFF/g")
+rm -rf "/vms/$TDIR" "/vms/$SPD"
 # compare in one pass: every golden line verbatim unless known-diff (then it
 # must still differ), and no DIFF.* line the VAX did not print
 printf '%s\n' "$got" | python3 -c '

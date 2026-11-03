@@ -1,0 +1,28 @@
+# lgi-set-outside-login -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the login data LOGINOUT leaves for DCL (VMS_IOCTL_LGI, vms_ioctl_lgi in kernel-core/vms_proctab.c) -- stored only under the SETIDENT gate, so no image can rewrite its own CAPTIVE flag or login command file (rd vms-838b)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_syssvc_dcl_login_state";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_lgi no longer checks the login window: any process holding CMKRNL -- a subprocess, DCL after login -- can store login data on itself, so a captive session's next DCL could be told it is not captive. Gone after apply.";;
+        require_fail) cat <<'EOF2'
+a process nobody logged in reads no login data and may not store any (SS$_NOPRIV)
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the login-window half of vms_ioctl_lgi's SET gate (the
+        # SETIDENT gate's own check reads "    if (proc->login_images == 0) {").
+        sed -i 's|^        proc->login_images == 0) {$|        0) { /* NEGCTL lgi-set-outside-login */|' "$_file"
+    :
+}

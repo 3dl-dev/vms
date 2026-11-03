@@ -98,5 +98,25 @@ for w in 'CI6EVAC-BEGIN' 'CI6Q Q=' 'STAGE EVACWL.MAR' 'MACRO EVPROBE' 'MOUNT/CLU
 	ln=$((ln + n))
 done
 
-[ $fail = 0 ] && echo "PASS: ci6_evac.sh grade -- fixture PASS, 10 negative controls FAIL their criterion, run16 FAILs only C4 (no NOQUEUE probe)"
+# fire on the vms-5fa shared-volume bed (CI6_SHARED=1): both nodes mount the
+# MSCP-served volume up front, no handoff, and VAX2 reads the seam back over
+# VAX1's server BEFORE VAX1 (the volume's only server) leaves.
+out=$(CI6_DRY=1 CI6_SHARED=1 CI6_INIT=1 "$S" fire podx "$T/dryshared" 2>&1)
+ln=0
+for w in 'CI6EVAC-BEGIN' 'CI6Q Q=' 'MACRO EVPROBE' 'SEND vax1: INITIALIZE $2$DUA2: EVAC1E58' \
+         'SEND vax1: MOUNT/SYSTEM $2$DUA2: EVAC1E58' 'SEND ovmxe: SHOW DEVICE D' \
+         'SEND ovmxe: MOUNT/SYSTEM VAX1$DUA16386: EVAC1E58' 'EVACWL STANDBY NL=90 60' \
+         'WAIT ovmxe: /standby holds' 'PROCESS=EVACVAX1' 'SEND vax1: STOP EVACVAX1' \
+         'WAIT ovmxe: /EVACWL: OVMXE took' 'SEND vax2: EVPROBE' 'SEND ovmxe: DISMOUNT VAX1$DUA16386:' \
+         'SEND vax2: MOUNT/SYSTEM $2$DUA2: EVAC1E58' 'SEND vax2: TYPE $2$DUA2:[' 'SEND vax2: DISMOUNT $2$DUA2:' \
+         'SEND vax1: @SYS$SYSTEM:SHUTDOWN' 'SEND vax1: REMOVE_NODE' 'WAIT vax2: /removed' 'SEND vax2: WRITE SYS$OUTPUT "Q=' 'GRADE'; do
+	n=$(echo "$out" | tail -n +$((ln + 1)) | grep -nF -- "$w" | head -1 | cut -d: -f1)
+	[ -n "$n" ] || { bad "shared fire dry run: missing or out of order after line $ln: $w"; break; }
+	ln=$((ln + n))
+done
+for w in 'DISMOUNT/CLUSTER' 'VDA100:' 'MOUNT $2$DUA1:' 'STOP SYSTEM_1'; do
+	echo "$out" | grep -qF -- "$w" && bad "shared fire dry run sends the run16 bed's '$w'"
+done
+
+[ $fail = 0 ] && echo "PASS: ci6_evac.sh grade -- fixture PASS, 10 negative controls FAIL their criterion, run16 FAILs only C4 (no NOQUEUE probe); fire dry-run order on both beds"
 exit $fail

@@ -3116,6 +3116,7 @@ struct acp_chan_snap {
     uint32_t           volsize;
     uint32_t           hdr_seq;         /* rd vms-d63: ch->acc_hdr_seq */
     int                hdr_seq_valid;
+    uint32_t           cluster;         /* SCB cluster factor: blocks per bitmap bit (vms-563) */
     uint32_t           win_n;
     struct acp_win_ext win[ACP_WINDOW_MAX];
 };
@@ -3150,6 +3151,7 @@ static uint32_t acp_chan_snapshot(struct vms_proc *proc, uint32_t chan,
         snap->volsize       = ch->vol->volsize;
         snap->hdr_seq       = ch->acc_hdr_seq;
         snap->hdr_seq_valid = ch->acc_hdr_seq_valid;
+        snap->cluster       = ch->vol->cluster ? ch->vol->cluster : 1u;
         snap->win_n         = ch->win_n;
         memcpy(snap->win, ch->win, ch->win_n * sizeof(ch->win[0]));
         status = SS__NORMAL;
@@ -3386,220 +3388,128 @@ static uint32_t acp_fh2_self_fidnum(const uint8_t *hdr)
 }
 
 /*
- * acp_bitmap_alloc - allocate `need` CONTIGUOUS free blocks from the volume's
- * BITMAP.SYS storage bitmap and return the run's start LBN. Reads BITMAP.SYS's
- * FH2 (FID 2, header at idx_lbn+1), builds its VBN->LBN window (VBN1 = SCB,
- * VBN2.. = the storage bitmap data blocks), scans whole-volume bit N (== LBN N,
- * cluster factor 1) for a run of `need` set (FREE) bits, and clears them (marks
- * ALLOCATED) on disk. SS$_DEVICEFULL if no such run exists; SS$_DEVNOTMOUNT on a
- * block-read/write or map failure. Every bitmap FORMAT fact is the codec's
- * (ods2_sbm_* / ods2_fh2_map_walk); this only sequences the raw block I/O.
+ * acp_bitmap_alloc - allocate at least `need` CONTIGUOUS blocks, in whole
+ * clusters, from the volume's BITMAP.SYS storage bitmap; return the run's
+ * start LBN and the blocks allocated. Reads BITMAP.SYS's FH2 (FID 2, header at
+ * idx_lbn+1) and builds its VBN->LBN window (VBN1 = SCB, VBN2.. = the bitmap
+ * data blocks); the codec (ods2_sbm_alloc) does the search and the bit <->
+ * LBN arithmetic: bit N is CLUSTER N, LBNs N*cluster.. (rd vms-563 -- the
+ * ACP used to take bit N for LBN N and, on a cluster-factor-3 volume, wrote a
+ * file's data a third of the way down the disk from the blocks it allocated).
+ * SS$_DEVICEFULL if no run exists; SS$_DEVNOTMOUNT on a block-read/write or
+ * map failure.
  *
- * CONCURRENCY (design §4.7): the allocate/read-modify-write span is NOT yet
- * serialized against a second concurrent writer -- the VMS-authentic mechanism
- * is the per-volume DLM synchronization lock (vms-233), a LATER rung. Single-
- * writer is acceptable for now and stated rather than faked (CLAUDE.md Rule 10):
- * no in-kernel flock stand-in is built; the DLM lock supersedes this.
+ * `hint` (rd vms-465): an extension asks for the blocks right after the
+ * file's last extent, so a growing file stays one extent when they are free
+ * (the XQP's contiguous-best-try). `room` (>= need): when those are taken the
+ * run is placed where `room` free blocks follow it, so the file keeps growing
+ * there in one extent. See ods2_sbm_alloc.
+ *
+ * Serialized against other writers by the per-volume DLM lock the callers
+ * hold (vms-233).
  */
-static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
-                                    struct acp_rw_scratch *s,
-                                    uint32_t need, uint32_t hint, uint32_t room,
-                                    uint32_t *lbn_out);
+struct acp_sbm_ctx {
+    const struct acp_chan_snap *snap;
+    const struct acp_win_ext   *bmwin;
+    uint32_t                    nwin;
+};
 
-static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
-                                 struct acp_rw_scratch *s,
-                                 uint32_t need, uint32_t *lbn_out)
+static int acp_sbm_read(void *ctx, uint32_t bmvbn, void *blk)
 {
-    return acp_bitmap_alloc_at(snap, s, need, 0, need, lbn_out);
+    const struct acp_sbm_ctx *c = (const struct acp_sbm_ctx *)ctx;
+    uint32_t lbn = acp_window_map_vbn(c->bmwin, c->nwin, bmvbn);
+
+    if (lbn == 0)
+        return 1;                           /* past the bitmap's coverage */
+    return acp_bdev_read(c->snap->backing_major, c->snap->backing_minor,
+                         lbn, blk, ACP_BLOCK_SIZE) != 0 ? -1 : 0;
 }
 
-/*
- * acp_bitmap_alloc_at - a run of `need` free blocks from BITMAP.SYS, searched
- * from LBN `hint` first (rd vms-465): an extension asks for the blocks right
- * after the file's last extent, so a growing file stays one extent when they
- * are free -- the XQP's contiguous-best-try -- and the search reads the one
- * bitmap block it starts in instead of every block from LBN 1 up to the free
- * space. When nothing is free from the hint on, the search wraps to LBN 1 and
- * runs up to the hint (first fit). hint 0 is a plain first-fit search.
- *
- * `room` (>= need; rd vms-465): when the blocks at the hint are taken, the run
- * is placed where `room` free blocks follow it (see the search order below),
- * so the file can keep growing there in one extent instead of filling the
- * holes other files left one by one (a 20 MB assembler output written in 64 KB pieces
- * across the holes of deleted temporaries outgrew the channel window's
- * ACP_WINDOW_MAX extents: SS$_DEVICEFULL, "I/O error" in the compiler). Only
- * when no such stretch exists does it take the first run of `need`.
- */
-
-/* Find `len` consecutive free blocks in [lo, hi); 1 and *start when found, 0
- * when not, -1 on an I/O error. */
-static int acp_bitmap_find_run(const struct acp_chan_snap *snap, struct acp_rw_scratch *s,
-                               const struct acp_win_ext *bmwin, uint32_t nwin,
-                               uint32_t lo, uint32_t hi, uint32_t len, uint32_t *start)
+static int acp_sbm_write(void *ctx, uint32_t bmvbn, const void *blk)
 {
-    uint32_t b, run_start = 0, run_len = 0, cur_bmvbn = 0;
-    int loaded = 0;
+    const struct acp_sbm_ctx *c = (const struct acp_sbm_ctx *)ctx;
+    uint32_t lbn = acp_window_map_vbn(c->bmwin, c->nwin, bmvbn);
 
-    for (b = lo; b < hi; b++) {
-        uint32_t bmvbn = 2u + b / ODS2_SBM_BITS_PER_BLOCK;
-
-        if (!loaded || bmvbn != cur_bmvbn) {
-            uint32_t lbn = acp_window_map_vbn(bmwin, nwin, bmvbn);
-
-            if (lbn == 0)
-                return 0;                   /* past the bitmap's coverage */
-            if (acp_bdev_read(snap->backing_major, snap->backing_minor,
-                              lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
-                return -1;
-            cur_bmvbn = bmvbn;
-            loaded = 1;
-        }
-        /* A whole longword of the bitmap at once where it can be: 32
-         * allocated blocks are skipped, 32 free ones join the run
-         * (rd vms-465: the search crossed a million bits one call each). */
-        if ((b % 32u) == 0 && b + 32u <= hi) {
-            uint32_t wi = (b % ODS2_SBM_BITS_PER_BLOCK) / 32u;
-            const uint8_t *wp = s->bmblk + (size_t)wi * 4u;
-            uint32_t w = (uint32_t)wp[0] | ((uint32_t)wp[1] << 8) |
-                         ((uint32_t)wp[2] << 16) | ((uint32_t)wp[3] << 24);
-            if (w == 0u) {
-                run_len = 0;
-                b += 31u;
-                continue;
-            }
-            if (w == 0xFFFFFFFFu && len - run_len >= 32u) {
-                if (run_len == 0)
-                    run_start = b;
-                run_len += 32u;
-                b += 31u;
-                if (run_len == len) {
-                    *start = run_start;
-                    return 1;
-                }
-                continue;
-            }
-        }
-        if (ods2_sbm_block_bit_free(s->bmblk, b % ODS2_SBM_BITS_PER_BLOCK)) {
-            if (run_len == 0)
-                run_start = b;
-            if (++run_len == len) {
-                *start = run_start;
-                return 1;
-            }
-        } else {
-            run_len = 0;
-        }
-    }
-    return 0;
+    if (lbn == 0)
+        return -1;
+    return acp_bdev_write(c->snap->backing_major, c->snap->backing_minor,
+                          lbn, blk, ACP_BLOCK_SIZE) != 0 ? -1 : 0;
 }
 
-static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
-                                    struct acp_rw_scratch *s,
-                                    uint32_t need, uint32_t hint, uint32_t room,
-                                    uint32_t *lbn_out)
+/* Read BITMAP.SYS's header into s->bmhdr and build its window into `bmwin`. */
+static uint32_t acp_sbm_open(const struct acp_chan_snap *snap, struct acp_rw_scratch *s,
+                             struct acp_win_ext *bmwin, struct acp_sbm_ctx *ctx,
+                             ods2_sbm_io_t *io)
 {
     struct acp_winbuild wb;
-    struct acp_win_ext  bmwin[ACP_WINDOW_MAX];
-    uint32_t bmhdr_lbn;
-    uint32_t run_start = 0;
-    uint32_t i;
-    int found = 0, tryroom;
 
-    if (need == 0)
-        return SS__BADPARAM;
-
-    /* BITMAP.SYS (FID 2) primary header, the INDEXF arithmetic (idx_lbn base). */
-    bmhdr_lbn = snap->idx_lbn + (ODS2_FID_BITMAP - 1u);
     if (acp_bdev_read(snap->backing_major, snap->backing_minor,
-                                 bmhdr_lbn, s->bmhdr, ACP_BLOCK_SIZE) != 0)
+                      snap->idx_lbn + (ODS2_FID_BITMAP - 1u), s->bmhdr, ACP_BLOCK_SIZE) != 0)
         return SS__DEVNOTMOUNT;             /* cannot read BITMAP.SYS header */
-
     wb.win = bmwin;
     wb.max = ACP_WINDOW_MAX;
     wb.n = 0;
     wb.next_vbn = 1;
     wb.overflow = 0;
-    if (ods2_fh2_map_walk(s->bmhdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK ||
-        wb.n == 0)
+    if (ods2_fh2_map_walk(s->bmhdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK || wb.n == 0)
         return SS__DEVNOTMOUNT;
+    ctx->snap = snap;
+    ctx->bmwin = bmwin;
+    ctx->nwin = wb.n;
+    io->ctx = ctx;
+    io->volsize = snap->volsize;
+    io->cluster = snap->cluster;
+    io->read = acp_sbm_read;
+    io->write = acp_sbm_write;
+    return SS__NORMAL;
+}
 
-    if (hint < 1 || hint >= snap->volsize)
-        hint = 1;
-    if (room < need)
-        room = need;
-    if (room > snap->volsize / 16u)
-        room = need > snap->volsize / 16u ? need : snap->volsize / 16u;
-    /* 1. the blocks at the hint itself (the file's own continuation) */
-    if (hint > 1 && hint + need <= snap->volsize) {
-        found = acp_bitmap_find_run(snap, s, bmwin, wb.n, hint, hint + need, need, &run_start);
-        if (found < 0)
-            return SS__DEVNOTMOUNT;
-    }
-    /* 2. a free stretch of twice `room`, the run placed in its middle: the
-     *    `room` blocks after it stay free for this file to grow into, and the
-     *    `room` before it for whichever file the stretch's first blocks follow
-     *    (two files growing side by side each find their own continuation
-     *    free instead of leapfrogging one another a block at a time);
-     * 3. a stretch of `room`, the run at its start; 4. the first run of
-     *    `need` (a run may not wrap). Each from the hint on, then from LBN 1.
-     *    Bit 0 (LBN 0, the boot block) is never a data block; the reserved
-     *    region is already marked used in the bitmap, so the scan simply
-     *    skips it. */
-    for (tryroom = (room > need) ? 2 : 0; !found && tryroom >= 0; tryroom--) {
-        uint32_t len = tryroom == 2 ? 2u * room : tryroom == 1 ? room : need;
+static uint32_t acp_bitmap_alloc_at(const struct acp_chan_snap *snap,
+                                    struct acp_rw_scratch *s,
+                                    uint32_t need, uint32_t hint, uint32_t room,
+                                    uint32_t *lbn_out, uint32_t *count_out)
+{
+    struct acp_win_ext bmwin[ACP_WINDOW_MAX];
+    struct acp_sbm_ctx ctx;
+    ods2_sbm_io_t io;
+    uint32_t lbn = 0, count = 0, i, st;
+    ods2_status_t ost;
 
-        if (len > snap->volsize)
-            continue;
-        found = acp_bitmap_find_run(snap, s, bmwin, wb.n, hint, snap->volsize, len, &run_start);
-        if (!found && hint > 1)
-            found = acp_bitmap_find_run(snap, s, bmwin, wb.n, 1u,
-                                        hint + len < snap->volsize ? hint + len : snap->volsize,
-                                        len, &run_start);
-        if (found < 0)
-            return SS__DEVNOTMOUNT;
-        if (found && tryroom == 2)
-            run_start += room;
-    }
-    if (!found)
+    if (need == 0)
+        return SS__BADPARAM;
+    st = acp_sbm_open(snap, s, bmwin, &ctx, &io);
+    if (st != SS__NORMAL)
+        return st;
+    ost = ods2_sbm_alloc(&io, s->bmblk, need, hint, room, &lbn, &count);
+    if (ost == ODS2_ERR_NOSPACE)
         return SS__DEVICEFULL;              /* no contiguous free run -- honest */
-
-    /* Mark the run allocated (bit -> 0): one read-modify-write per bitmap
-     * block the run touches. */
-    for (i = 0; i < need; ) {
-        uint32_t bit = run_start + i;
-        uint32_t bmvbn = 2u + bit / ODS2_SBM_BITS_PER_BLOCK;
-        uint32_t lbn = acp_window_map_vbn(bmwin, wb.n, bmvbn);
-
-        if (lbn == 0 ||
-            acp_bdev_read(snap->backing_major, snap->backing_minor,
-                                     lbn, s->bmblk, ACP_BLOCK_SIZE) != 0) {
-            return SS__DEVNOTMOUNT;
-        }
-        do {
-            ods2_sbm_block_alloc(s->bmblk, (run_start + i) % ODS2_SBM_BITS_PER_BLOCK);
-            i++;
-        } while (i < need && 2u + (run_start + i) / ODS2_SBM_BITS_PER_BLOCK == bmvbn);
-        if (acp_bdev_write(snap->backing_major, snap->backing_minor,
-                                      lbn, s->bmblk, ACP_BLOCK_SIZE) != 0)
-            return SS__DEVNOTMOUNT;
-    }
+    if (ost != ODS2_OK || lbn == 0 || count < need || lbn + count > snap->volsize)
+        return SS__DEVNOTMOUNT;
 
     /*
      * Zero-fill the freshly allocated run on disk so a caller's write that does
-     * not fully cover it (a partial tail, or a gap between old EOF and the write
-     * position) never exposes stale on-device content -- the data-write loop
-     * then overwrites whatever it does cover. (s->blk is reused as the zero
-     * source; the write loop re-fills it per block afterwards.)
+     * not fully cover it (a partial tail, a gap between old EOF and the write
+     * position, or the rest of the last cluster) never exposes stale
+     * on-device content. (s->blk is reused as the zero source; the write loop
+     * re-fills it per block afterwards.)
      */
     memset(s->blk, 0, ACP_BLOCK_SIZE);
-    for (i = 0; i < need; i++) {
+    for (i = 0; i < count; i++) {
         if (acp_bdev_write(snap->backing_major, snap->backing_minor,
-                                      run_start + i, s->blk, ACP_BLOCK_SIZE) != 0)
+                           lbn + i, s->blk, ACP_BLOCK_SIZE) != 0)
             return SS__DEVNOTMOUNT;
     }
 
-    *lbn_out = run_start;
+    *lbn_out = lbn;
+    *count_out = count;
     return SS__NORMAL;
+}
+
+static uint32_t acp_bitmap_alloc(const struct acp_chan_snap *snap,
+                                 struct acp_rw_scratch *s,
+                                 uint32_t need, uint32_t *lbn_out, uint32_t *count_out)
+{
+    return acp_bitmap_alloc_at(snap, s, need, 0, need, lbn_out, count_out);
 }
 #endif /* OVMX_ODS2_KERNEL */
 
@@ -3731,12 +3641,13 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
     if (last_vbn > old_hiblk) {
 #if defined(OVMX_ODS2_KERNEL)
         uint32_t need = last_vbn - old_hiblk;
-        uint32_t alloc_lbn = 0;
+        uint32_t alloc_lbn = 0, alloc_n = 0;
         /* contiguous-best-try: the blocks right after the file's last extent */
         uint32_t hint = lwin_n ? lwin[lwin_n - 1u].lbn + lwin[lwin_n - 1u].count : 0u;
 
         /* room to grow: as much again as the file holds already (rd vms-465) */
-        status = acp_bitmap_alloc_at(snap, s, need, hint, need + old_hiblk, &alloc_lbn);
+        status = acp_bitmap_alloc_at(snap, s, need, hint, need + old_hiblk,
+                                     &alloc_lbn, &alloc_n);
         if (status != SS__NORMAL) {
             args.status = status;           /* SS$_DEVICEFULL / SS$_DEVNOTMOUNT */
             exec_free(s);
@@ -3757,7 +3668,7 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
         if (lwin_n > 0 &&
             lwin[lwin_n - 1].lbn + lwin[lwin_n - 1].count == alloc_lbn &&
             lwin[lwin_n - 1].start_vbn + lwin[lwin_n - 1].count == old_hiblk + 1u) {
-            lwin[lwin_n - 1].count += need;
+            lwin[lwin_n - 1].count += alloc_n;
         } else {
             if (lwin_n >= ACP_WINDOW_MAX) {
                 args.status = SS__DEVICEFULL;   /* window full -- cannot map more */
@@ -3766,13 +3677,16 @@ long vms_ioctl_acp_writevb(struct vms_proc *proc, unsigned long arg)
             }
             lwin[lwin_n].start_vbn = old_hiblk + 1u;
             lwin[lwin_n].lbn       = alloc_lbn;
-            lwin[lwin_n].count     = need;
+            lwin[lwin_n].count     = alloc_n;
             lwin_n++;
         }
-        new_hiblk = last_vbn;
-        extended  = need;
+        /* Whole clusters are allocated and mapped (vms-563): HIBLK moves by
+         * the run's size, which on a cluster-factor-N volume is `need`
+         * rounded up to a multiple of N, never by `need` alone. */
+        new_hiblk = old_hiblk + alloc_n;
+        extended  = alloc_n;
         ext_lbn   = alloc_lbn;              /* the newly allocated run, for the */
-        ext_count = need;                   /* on-disk FH2 map + channel window */
+        ext_count = alloc_n;                /* on-disk FH2 map + channel window */
 #else
         /* Codec-free overlay: no accessed file ever reaches here (ACCESS
          * refuses without the codec), so an extend is unreachable. Refuse. */
@@ -4009,6 +3923,7 @@ static void acp_snap_from_vol(struct acp_chan_snap *snap, struct vms_acp_volume 
     snap->backing_minor = vol->backing_minor;
     snap->idx_lbn       = vol->idx_lbn;
     snap->volsize       = vol->volsize;
+    snap->cluster       = vol->cluster ? vol->cluster : 1u;
 }
 
 /*
@@ -4070,63 +3985,44 @@ static uint32_t acp_fid_free(struct vms_acp_volume *vol, uint32_t fidnum,
 }
 
 /*
- * acp_free_file_blocks - free every data block in a file's FH2 retrieval map
- * back to the volume's storage bitmap (BITMAP.SYS), for IO$_DELETE / a
- * MODIFY truncate. Builds the file's extent list and BITMAP.SYS window, then
- * RMWs the affected bitmap blocks (SET bit == FREE). `first_freed_vbn` (1-based)
- * skips extents wholly before it, so a truncate frees only blocks past the new
- * allocation; pass 1 to free the whole file.
+ * acp_free_file_blocks - free a file's data blocks in its FH2 retrieval map
+ * back to the volume's storage bitmap (BITMAP.SYS), for IO$_DELETE / a MODIFY
+ * truncate. `first_freed_vbn` (1-based) keeps the blocks before it, so a
+ * truncate frees only past the new allocation; pass 1 to free the whole file.
+ * The codec turns each LBN range into the CLUSTERS it covers (bit N ==
+ * cluster N, rd vms-563) and frees only clusters wholly inside the range.
  */
 static uint32_t acp_free_file_blocks(struct vms_acp_volume *vol,
                                      const uint8_t *filehdr,
                                      struct acp_fileop_scratch *sc,
                                      uint32_t first_freed_vbn)
 {
-    struct acp_winbuild wb, bwb;
+    struct acp_winbuild wb;
     struct acp_win_ext fex[ACP_WINDOW_MAX], bmwin[ACP_WINDOW_MAX];
-    uint32_t bmhdr_lbn, e, k, cur_bmvbn = 0xFFFFFFFFu, cur_bmlbn = 0;
-    int loaded = 0;
+    struct acp_sbm_ctx ctx;
+    ods2_sbm_io_t io;
+    uint32_t e, st;
 
     wb.win = fex; wb.max = ACP_WINDOW_MAX; wb.n = 0; wb.next_vbn = 1; wb.overflow = 0;
     if (ods2_fh2_map_walk(filehdr, acp_winbuild_cb, &wb, NULL) != ODS2_OK || wb.overflow)
         return SS__DEVNOTMOUNT;
 
-    bmhdr_lbn = vol->idx_lbn + (ODS2_FID_BITMAP - 1u);
-    if (acp_bdev_read(vol->backing_major, vol->backing_minor,
-                                 bmhdr_lbn, sc->rw.bmhdr, ACP_BLOCK_SIZE) != 0)
-        return SS__DEVNOTMOUNT;
-    bwb.win = bmwin; bwb.max = ACP_WINDOW_MAX; bwb.n = 0; bwb.next_vbn = 1; bwb.overflow = 0;
-    if (ods2_fh2_map_walk(sc->rw.bmhdr, acp_winbuild_cb, &bwb, NULL) != ODS2_OK || bwb.n == 0)
-        return SS__DEVNOTMOUNT;
+    acp_snap_from_vol(&sc->snap, vol);
+    st = acp_sbm_open(&sc->snap, &sc->rw, bmwin, &ctx, &io);
+    if (st != SS__NORMAL)
+        return st;
 
     for (e = 0; e < wb.n; e++) {
-        for (k = 0; k < fex[e].count; k++) {
-            uint32_t vbn = fex[e].start_vbn + k;
-            uint32_t L = fex[e].lbn + k;
-            uint32_t bmvbn = 2u + L / ODS2_SBM_BITS_PER_BLOCK;
+        uint32_t vbn0 = fex[e].start_vbn, skip = 0;
 
-            if (vbn < first_freed_vbn)
-                continue;                    /* keep blocks before the truncate point */
-            if (!loaded || bmvbn != cur_bmvbn) {
-                if (loaded &&
-                    acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                              cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
-                    return SS__DEVNOTMOUNT;
-                cur_bmlbn = acp_window_map_vbn(bmwin, bwb.n, bmvbn);
-                if (cur_bmlbn == 0 ||
-                    acp_bdev_read(vol->backing_major, vol->backing_minor,
-                                             cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
-                    return SS__DEVNOTMOUNT;
-                cur_bmvbn = bmvbn;
-                loaded = 1;
-            }
-            ods2_sbm_block_free(sc->rw.bmblk, L % ODS2_SBM_BITS_PER_BLOCK);
-        }
+        if (vbn0 + fex[e].count <= first_freed_vbn)
+            continue;                        /* wholly before the truncate point */
+        if (vbn0 < first_freed_vbn)
+            skip = first_freed_vbn - vbn0;
+        if (ods2_sbm_free_range(&io, sc->rw.bmblk, fex[e].lbn + skip,
+                                fex[e].count - skip) != ODS2_OK)
+            return SS__DEVNOTMOUNT;
     }
-    if (loaded &&
-        acp_bdev_write(vol->backing_major, vol->backing_minor,
-                                  cur_bmlbn, sc->rw.bmblk, ACP_BLOCK_SIZE) != 0)
-        return SS__DEVNOTMOUNT;
     return SS__NORMAL;
 }
 
@@ -4181,7 +4077,7 @@ static uint32_t acp_idx_extend(struct vms_acp_volume *vol, struct acp_fileop_scr
         return SS__DEVICEFULL;
     }
     acp_snap_from_vol(&sc->snap, vol);
-    st = acp_bitmap_alloc(&sc->snap, &sc->rw, n, &lbn);
+    st = acp_bitmap_alloc(&sc->snap, &sc->rw, n, &lbn, &n);   /* n: whole clusters */
     if (st != SS__NORMAL) {
         exec_free(hdr);
         return st;
@@ -4255,7 +4151,8 @@ static uint32_t acp_dir_used_blocks(const uint8_t *dirhdr, uint32_t alloc)
  */
 static uint32_t acp_dir_write_grown_map(struct vms_acp_volume *vol,
                                         uint8_t *dirhdr, uint32_t dir_hdr_lbn,
-                                        const uint32_t *lbns, unsigned nblk)
+                                        const uint32_t *lbns, unsigned nblk,
+                                        unsigned nused)
 {
     unsigned mpoff = dirhdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
     uint8_t *mp = dirhdr + (size_t)mpoff * 2u;
@@ -4272,7 +4169,8 @@ static uint32_t acp_dir_write_grown_map(struct vms_acp_volume *vol,
             return SS__DEVICEFULL;          /* map area full */
         b += run;
     }
-    (void)ods2_fh2_set_eof(dirhdr, nblk, nblk + 1u, 0);   /* [F15]/[F17] dir EOF */
+    /* nblk blocks are mapped (whole clusters, vms-563); nused hold entries. */
+    (void)ods2_fh2_set_eof(dirhdr, nblk, nused + 1u, 0);   /* [F15]/[F17] dir EOF */
     ods2_fh2_reseal(dirhdr);
     if (acp_bdev_write(vol->backing_major, vol->backing_minor,
                                   dir_hdr_lbn, dirhdr, ACP_BLOCK_SIZE) != 0)
@@ -4363,7 +4261,7 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
     if (out_nblk > nblk && out_nblk > dl.alloc) {
         uint32_t run_lbn = 0, extra = out_nblk - dl.alloc, k;
         acp_snap_from_vol(&sc->snap, vol);
-        status = acp_bitmap_alloc(&sc->snap, &sc->rw, extra, &run_lbn);
+        status = acp_bitmap_alloc(&sc->snap, &sc->rw, extra, &run_lbn, &extra);
         if (status != SS__NORMAL)
             goto done;
         for (k = 0; k < extra; k++) {
@@ -4388,7 +4286,7 @@ static uint32_t acp_dir_mutate(struct vms_acp_volume *vol,
     if (out_nblk > nblk && out_nblk > dl.alloc) {
         status = acp_dir_write_grown_map(vol, dirhdr,
                                          acp_hdr_lbn(vol, dir_fidnum),
-                                         dl.lbn, out_nblk);
+                                         dl.lbn, dl.n, out_nblk);
     } else if (out_nblk > nblk) {
         (void)ods2_fh2_set_eof(dirhdr, dl.alloc, out_nblk + 1u, 0);
         ods2_fh2_reseal(dirhdr);
@@ -5080,7 +4978,8 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
             alloc_count = is_dir ? (ap->exsz > 1u ? ap->exsz : 1u) : ap->exsz;
             if (alloc_count > 0) {
                 acp_snap_from_vol(&sc->snap, vol);
-                status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn);
+                status = acp_bitmap_alloc(&sc->snap, &sc->rw, alloc_count, &alloc_lbn,
+                                          &alloc_count);   /* whole clusters (vms-563) */
                 if (status != SS__NORMAL) {
                     (void)acp_fid_free(vol, new_fidnum, sc->ibblk);  /* roll back the FID */
                     ap->status = status;
@@ -5522,24 +5421,31 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
 
                 /* EXTEND (FIB$L_EXSZ): allocate + append a retrieval pointer. */
                 if (ap->exsz > 0) {
-                    uint32_t run_lbn = 0;
+                    uint32_t run_lbn = 0, run_n = 0;
                     acp_snap_from_vol(&sc->snap, vol);
-                    status = acp_bitmap_alloc(&sc->snap, &sc->rw, ap->exsz, &run_lbn);
+                    status = acp_bitmap_alloc(&sc->snap, &sc->rw, ap->exsz, &run_lbn, &run_n);
                     if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
-                    if (ods2_fh2_map_append(sc->filehdr, run_lbn, ap->exsz) != ODS2_OK) {
+                    if (ods2_fh2_map_append(sc->filehdr, run_lbn, run_n) != ODS2_OK) {
                         ap->status = SS__DEVICEFULL;   /* FH2 map area full */
                         goto free_sc;
                     }
-                    new_hiblk = old_hiblk + ap->exsz;
+                    new_hiblk = old_hiblk + run_n;     /* whole clusters (vms-563) */
                     touched = 1;
                 }
 
                 /* TRUNCATE (to trunc_efblk): free the blocks past it, shrink. */
                 if (ap->trunc_efblk > 0 && ap->trunc_efblk <= new_hiblk) {
-                    /* Free allocation strictly past the new EOF block. */
-                    if (ap->trunc_efblk < new_hiblk) {
+                    /* Keep whole clusters (vms-563): the allocation shrinks to
+                     * the new EOF block rounded up to the cluster factor, so a
+                     * cluster that still holds data is never freed. */
+                    uint32_t keep = ods2_sbm_round_blocks(ap->trunc_efblk,
+                                                          vol->cluster ? vol->cluster : 1u);
+                    if (keep > new_hiblk)
+                        keep = new_hiblk;
+                    /* Free allocation strictly past the kept blocks. */
+                    if (keep < new_hiblk) {
                         status = acp_free_file_blocks(vol, sc->filehdr, sc,
-                                                      ap->trunc_efblk + 1u);
+                                                      keep + 1u);
                         if (status != SS__NORMAL) { ap->status = status; goto free_sc; }
                         /* Rewrite the map to cover only [1, trunc_efblk]. */
                         {
@@ -5548,7 +5454,7 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                             unsigned mpoff = sc->filehdr[offsetof(ods2_fh2_t, fh2_mpoffset)];
                             uint8_t *mp = sc->filehdr + (size_t)mpoff * 2u;
                             size_t mapcap = ods2_fh2_map_end(sc->filehdr) - (size_t)mpoff * 2u;   /* stop below the ACL */
-                            uint32_t want = ap->trunc_efblk, e;
+                            uint32_t want = keep, e;
 
                             wb.win = fex; wb.max = ACP_WINDOW_MAX; wb.n = 0;
                             wb.next_vbn = 1; wb.overflow = 0;
@@ -5568,7 +5474,7 @@ static long acp_fileop(struct vms_proc *proc, unsigned long arg,
                             }
                         }
                     }
-                    new_hiblk = ap->trunc_efblk;
+                    new_hiblk = keep;
                     new_efblk = ap->trunc_efblk;
                     new_ffbyte = ap->trunc_ffbyte;
                     touched = 1;

@@ -1,0 +1,151 @@
+$ ! CI6EVAC-BEGIN ci6evac-031902
+$ WRITE SYS$OUTPUT "CI6V VOTES=",F$GETSYI("VOTES")
+CI6V VOTES=1
+$ SET DEFAULT SYS$LOGIN
+$ MACRO EVACWL
+%MACRO-I-GENINFO, Generated INFO: RMS BLOCK NOT LONGWORD ALIGNED;
+%MACRO-I-GENINFO, Generated INFO: RMS BLOCK NOT LONGWORD ALIGNED;
+$ LINK EVACWL
+$ EVACWL :== $SYS$LOGIN:EVACWL.EXE
+$ DIRECTORY/SIZE SYS$LOGIN:EVACWL.EXE
+
+Directory SYS$SYSROOT:[SYSMGR]
+
+EVACWL.EXE;1               8
+
+Total of 1 file, 8 blocks.
+$ INITIALIZE $2$DUA2: EVAC1E58
+$ MOUNT/SYSTEM $2$DUA2: EVAC1E58
+%MOUNT-I-MOUNTED, EVAC1E58 mounted on _$2$DUA2: (VAX1)
+$ CREATE/DIRECTORY $2$DUA2:[CI6E11030319]
+$ DEFINE/SYSTEM EVAC$DATA $2$DUA2:[CI6E11030319]
+$ SHOW DEVICE $2$DUA2:
+
+Device                  Device           Error    Volume         Free  Trans Mnt
+ Name                   Status           Count     Label        Blocks Count Cnt
+$2$DUA2:        (VAX1)  Mounted              0  EVAC1E58        890928     1   1
+$ SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL
+%DCL-S-SPAWNED, process EVACVAX1 spawned
+$ SHOW SYSTEM
+OpenVMS V7.3  on node VAX1   3-NOV-2026 03:24:57.97  Uptime  0 00:12:29
+  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages
+20200201 SWAPPER         HIB     16        0   0 00:00:00.02         0      0   
+20200206 CLUSTER_SERVER  HIB     12       11   0 00:00:00.06       206    325   
+20200207 CONFIGURE       HIB     10       11   0 00:00:00.01       129    205   
+20200208 LANACP          HIB     13       57   0 00:00:00.04       419    609   
+2020020A IPCACP          HIB     10        7   0 00:00:00.02        97    183   
+2020020B ERRFMT          HIB      8       44   0 00:00:00.03       149    227   
+2020020C CACHE_SERVER    HIB     16        8   0 00:00:00.01        83    141   
+2020020D OPCOM           HIB      7      151   0 00:00:00.08       293    136   
+2020020E AUDIT_SERVER    HIB     10       47   0 00:00:00.03       625    516   
+2020020F JOB_CONTROL     HIB     10       32   0 00:00:00.00       243    402   
+20200210 QUEUE_MANAGER   HIB     10       38   0 00:00:00.06       780   1157   
+20200211 SECURITY_SERVER HIB     10       22   0 00:00:00.04       778   1178   
+20200212 SMISERVER       HIB      9       35   0 00:00:00.05       331    590   
+20200213 TP_SERVER       HIB     10       53   0 00:00:00.01       202    323   
+20200214 NETACP          HIB     10       29   0 00:00:00.17       161    379   
+20200215 EVL             HIB      6       56   0 00:00:00.11       398    560  N
+20200216 REMACP          HIB      8        8   0 00:00:00.00        86     62   
+20200217 TCPIP$INETACP   HIB     10       49   0 00:00:00.07       295    238   
+20200218 TCPIP$FTP_1     LEF     10      158   0 00:00:00.47      2386    812  N
+2020021A SYSTEM          CUR      7      629   0 00:00:00.83      8946    413   
+2020021C EVACVAX1        HIB      5      450   0 00:00:00.02       286    291  S
+$ DIRECTORY/SIZE=ALL $2$DUA2:[CI6E11030319]EVAC.DAT
+
+Directory $2$DUA2:[CI6E11030319]
+
+EVAC.DAT;1                17/33     
+
+Total of 1 file, 17/33 blocks.
+$ STOP EVACVAX1
+$ @SYS$SYSTEM:SHUTDOWN
+
+
+        SHUTDOWN -- Perform an Orderly System Shutdown
+                    on node VAX1
+
+How many minutes until final shutdown [0]: 0
+Reason for shutdown [Standalone]: CI6-EVACUATION
+Do you want to spin down the disk volumes [NO]? NO
+Do you want to invoke the site-specific shutdown procedure [YES]? NO
+Should an automatic system reboot be performed [NO]? NO
+When will the system be rebooted [later]: 
+Shutdown options (enter as a comma-separated list):
+ REMOVE_NODE         Remaining nodes in the cluster should adjust quorum
+ CLUSTER_SHUTDOWN    Entire cluster is shutting down
+ REBOOT_CHECK        Check existence of basic system files
+ SAVE_FEEDBACK       Save AUTOGEN feedback information from this boot
+ DISABLE_AUTOSTART   Disable autostart queues
+
+Shutdown options [NONE]: REMOVE_NODE
+
+%SHUTDOWN-I-OPERATOR, this terminal is now an operator's console
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:54.74  %%%%%%%%%%%
+Operator status for operator _VAX1$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%SHUTDOWN-I-DISLOGINS, interactive logins will now be disabled
+%SET-I-INTSET, login interactive limit = 0, current interactive value = 1
+%SHUTDOWN-I-SHUTNET, the DECnet network will now be shut down
+%SHUTDOWN-I-STOPQUEUES, the queues on this node will now be stopped
+
+SHUTDOWN message on VAX1 from user SYSTEM at _VAX1$OPA0:   03:29:54
+VAX1 will shut down in 0 minutes; back up later.  Please log off node VAX1.
+CI6-EVACUATION
+
+1 terminal has been notified on VAX1.
+
+1 terminal has been notified on VAX2.
+%SHUTDOWN-I-STOPUSER, all user processes will now be stopped
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:55.04  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP NOLISTEN Process creation success: Service - FTP
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:55.07  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP Error during process startup, Nolisten Service Disabled - FTP Server 
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:55.07  %%%%%%%%%%%
+Message from user INTERnet on VAX1
+INTERnet ACP Deactivate FTP Server 
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:29:55.38  %%%%%%%%%%%
+Message from user DECNET on VAX1
+DECnet shutting down
+
+%SHUTDOWN-I-STOPAUDIT, the security auditing subsystem will now be shut down
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:06.79  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAX1
+Security alarm (SECURITY) and security audit (SECURITY) on VAX1, system id: 1025
+Auditable event:          Audit server shutting down
+Event time:                3-NOV-2026 03:30:06.79
+PID:                      2020021A        
+Username:                 SYSTEM          
+
+%SHUTDOWN-I-STOPSMISRV, the SMI server will now be shut down
+%SHUTDOWN-I-STOPSECSRV, the security server will now be shut down
+%SHUTDOWN-I-REMOVE, all installed images will now be removed
+%SHUTDOWN-I-DISMOUNT, all volumes will now be dismounted
+%DISM-W-RMTDSMFAIL, _$2$DUA2: failed to dismount on node OVMXE
+-SYSTEM-W-NOSUCHDEV, no such device available
+%DISM-W-RMTDSMFAIL, _$2$DUA2: failed to dismount on node OVMXE
+-SYSTEM-W-NOSUCHDEV, no such device available
+%DISM-W-DSMCLUFAIL, dismount/cluster failed on one or more nodes in the cluster
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:07.21  %%%%%%%%%%%
+Message from user SYSTEM on VAX1
+_VAX1$OPA0:, VAX1 shutdown was requested by the operator.
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:07.22  %%%%%%%%%%%
+Logfile was closed by operator _VAX1$OPA0:
+Logfile was VAX1::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;28
+
+%%%%%%%%%%%  OPCOM   3-NOV-2026 03:30:07.24  %%%%%%%%%%%
+Operator _VAX1$OPA0: has been disabled, username SYSTEM
+
+%CNXMAN,  proposing modification of quorum or quorum disk membership
+%CNXMAN,  completing VAXcluster state transition
+	SYSTEM SHUTDOWN COMPLETE - use console to halt system
+Infinite loop, PC: 86FAB4D3 (BRB 86FAB4D3)
+sim> 

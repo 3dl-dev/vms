@@ -500,6 +500,38 @@ struct vms_pprop_args {
 #define VMS_IOCTL_PPROP             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0x77, struct vms_pprop_args)
 
 /*
+ * Byte-identical to src/kernel/vms_ioctl.h.
+ * THE LOGIN DATA LOGINOUT LEAVES FOR THE CLI (rd vms-838b). On VMS, LOGINOUT
+ * builds the process and DCL learns from process state, never from an argument
+ * list, that it is starting a login: LOGINOUT writes the process's login data in
+ * KERNEL MODE while it logs the process in, and the CLI reads it when it gets
+ * control. Here the executive's PCB holds it:
+ *   flags     VMS_LGI_F_LOGIN -- LOGINOUT logged this process in (DCL runs
+ *             SYLOGIN and the login command procedure). Clear in every other
+ *             process: a DCL that finds it clear is a plain, non-login CLI.
+ *   uaf_flags the account's SYSUAF login flags, in the UAI$_FLAGS layout $GETUAI
+ *             returns (UAI$M_CAPTIVE, UAI$M_DISCTLY, ...).
+ *   lgicmd    the login command file (SYSUAF LGICMD, or LOGINOUT's documented
+ *             SYS$LOGIN:LOGIN.COM default), NUL-terminated; uaf$t_lgicmd is 64.
+ * VMS_LGI_OP_GET reads the caller's own. VMS_LGI_OP_SET stores it under the SAME
+ * gate as SETIDENT: CMKRNL enabled, in a LOGIN process before the image after
+ * LOGINOUT runs -- no image may write its own login data. OVMX design choice
+ * (Rule 8): the byte layout of this ioctl.
+ */
+#define VMS_LGI_OP_GET   0u
+#define VMS_LGI_OP_SET   1u
+#define VMS_LGI_F_LOGIN  0x00000001u
+#define VMS_LGICMD_SIZE  64
+struct vms_lgi_args {
+    uint32_t op;                     /* in:  VMS_LGI_OP_*              */
+    uint32_t status;                 /* return: SS$_ status            */
+    uint32_t flags;                  /* in (SET) / out (GET): VMS_LGI_F_* */
+    uint32_t uaf_flags;              /* in / out: UAI$_FLAGS layout    */
+    char     lgicmd[VMS_LGICMD_SIZE]; /* in / out: NUL-terminated spec */
+};
+#define VMS_IOCTL_LGI             _IOWR(VMS_PROCTAB_IOC_MAGIC, 0xB6, struct vms_lgi_args)
+
+/*
  * The PROCESS RIGHTS LIST (vms-7d5a): the identifiers a process holds besides its
  * UIC, executive state like the privilege mask -- $GRANTID adds one, $REVOKID removes
  * one, and the Files-11 ACP's ACL check (vmsfs_acp.c acp_proc_holds) matches an
@@ -626,6 +658,10 @@ _Static_assert(sizeof(struct vms_pprop_args) == 24,
                "vms_pprop_args layout changed: VMS_IOCTL_PPROP ABI break");
 _Static_assert(VMS_IOCTL_PPROP == 0xC0185677u,
                "VMS_IOCTL_PPROP encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_lgi_args) == 16 + VMS_LGICMD_SIZE,
+               "vms_lgi_args layout changed: VMS_IOCTL_LGI ABI break");
+_Static_assert(VMS_IOCTL_LGI == 0xC05056B6u,
+               "VMS_IOCTL_LGI encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_rights_args) == 24 + 8 * VMS_RIGHTS_MAX,
                "vms_rights_args layout changed: VMS_IOCTL_RIGHTS ABI break");
 _Static_assert(sizeof(struct vms_pri_args) == 24,

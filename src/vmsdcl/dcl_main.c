@@ -503,9 +503,9 @@ static int dcl_ctrl_t_rl_handler(int count, int key)
  * -sourced "Last interactive login" line that read the raw accounting file
  * text instead of a formatted timestamp. Two emitters of one VMS surface is
  * exactly the drift the fidelity work exists to kill -- on the real runtime
- * DCL is always started by LOGINOUT (--login), which prints the authentic
- * sequence, and this ran only on the never-taken "vmsdcl interactive, no
- * --login" path. LOGINOUT is the one emitter.
+ * DCL is always started by LOGINOUT (its login data in the executive, rd
+ * vms-838b), which prints the authentic sequence, and this ran only on the
+ * never-taken non-login interactive path. LOGINOUT is the one emitter.
  */
 
 /*
@@ -721,36 +721,37 @@ int main(int argc, char *argv[])
      * DCL runs unchanged (INV-6, no per-process fake). */
     dcl_p1_init();
 
-    /* Check for --login flag, and the login command file LOGINOUT hands over
-     * with --lgicmd <spec> (vms-e48: the SYSUAF LGICMD field, already resolved
-     * to its documented default by LOGINOUT when the field was empty). */
+    /*
+     * THE LOGIN DATA LOGINOUT LEFT IN THE EXECUTIVE (rd vms-838b). On VMS
+     * LOGINOUT builds the process and DCL learns from process state -- never
+     * from its argument list -- that it is starting a login, the account's
+     * UAF flags and its login command file. DCL.EXE parses no argv flags: a
+     * DCL whose process LOGINOUT did not log in (no VMS_LGI_F_LOGIN, or no
+     * executive) is a plain, non-login CLI.
+     */
     int login_mode = 0;
-    int captive_mode = 0;   /* vms-c8fa: --captive from LOGINOUT */
-    const char *login_lgicmd = NULL;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--login") == 0) {
-            login_mode = 1;
-            dcl_ctx.logged_in = 1;
-        } else if (strcmp(argv[i], "--captive") == 0) {
-            captive_mode = 1;
-        } else if (strcmp(argv[i], "--lgicmd") == 0 && i + 1 < argc) {
-            login_lgicmd = argv[++i];
-        }
+    int captive_mode = 0;   /* vms-c8fa: UAI$M_CAPTIVE */
+    uint32_t lgi_flags = 0, lgi_uaf = 0;
+    char login_lgicmd[VMS_LGICMD_SIZE] = "";
+    if ((vms_kif_lgi(VMS_LGI_OP_GET, &lgi_flags, &lgi_uaf, login_lgicmd,
+                     sizeof(login_lgicmd)) & 1) && (lgi_flags & VMS_LGI_F_LOGIN)) {
+        login_mode = 1;
+        dcl_ctx.logged_in = 1;
+        captive_mode = (lgi_uaf & UAI$M_CAPTIVE) != 0;
     }
 
     /*
-     * CAPTIVE ACCOUNT (vms-c8fa). LOGINOUT passes --captive for an account
-     * whose SYSUAF record carries the CAPTIVE flag. A captive account is
-     * confined to its login command procedure and cannot escape to the DCL
-     * command level: "Because the DISCTLY flag in the UAF record is turned on,
-     * any use of Ctrl/Y fails" (OpenVMS Guide to System Security, "Captive
-     * Accounts"). Disable Ctrl/Y now, BEFORE the login command procedure runs
-     * below, so the procedure cannot be interrupted to reach a bare "$"
-     * prompt. The REPL itself is suppressed for captive logins further down
-     * (see the login_mode block), so the session runs only the procedure and
-     * then logs out. Non-captive logins are untouched (ctrl_y stays enabled).
+     * CAPTIVE ACCOUNT (vms-c8fa). A captive account is confined to its login
+     * command procedure and cannot escape to the DCL command level: "Because
+     * the DISCTLY flag in the UAF record is turned on, any use of Ctrl/Y
+     * fails" (OpenVMS Guide to System Security, "Captive Accounts"). Disable
+     * Ctrl/Y now, BEFORE the login command procedure runs below, so the
+     * procedure cannot be interrupted to reach a bare "$" prompt. The REPL
+     * itself is suppressed for captive logins further down (see the
+     * login_mode block), so the session runs only the procedure and then logs
+     * out. DISCTLY alone disables Ctrl/Y without the confinement.
      */
-    if (captive_mode)
+    if (captive_mode || (login_mode && (lgi_uaf & UAI$M_DISCTLY)))
         dcl_ctx.ctrl_y_enabled = 0;
 
     /* Check for -c "command" mode */
@@ -856,14 +857,14 @@ int main(int argc, char *argv[])
         }
 
         /*
-         * Per-user login command file: the SYSUAF LGICMD field LOGINOUT handed
-         * over via --lgicmd, or the documented SYS$LOGIN:LOGIN.COM default
+         * Per-user login command file: the SYSUAF LGICMD field LOGINOUT left in
+         * the executive (VMS_IOCTL_LGI), or the documented SYS$LOGIN:LOGIN.COM default
          * (vms-e48). Resolved through vmsfs_to_linux_path(), which translates
          * the SYS$LOGIN logical just defined above -- NOT getenv("SYS$LOGIN")
          * with a hardcoded "/LOGIN.COM" tail, and NOT the SYSUAF field ignored.
          */
         const char *lgicmd_spec =
-            (login_lgicmd && login_lgicmd[0]) ? login_lgicmd
+            login_lgicmd[0] ? login_lgicmd
                                               : SYSUAF_DEFAULT_LGICMD;
         char user_login[1024];
         if (vmsfs_to_linux_path(lgicmd_spec, user_login, sizeof(user_login)) == 1

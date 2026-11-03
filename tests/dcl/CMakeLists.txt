@@ -1,18 +1,36 @@
 # DCL Integration Tests
 # Run all test_*.sh files through the test harness
 
-# Main DCL test suite (runs all test_*.sh via harness)
+# Main DCL test suite (runs all test_*.sh via harness), sharded so ctest -j runs
+# the slices in parallel (vms-0944: one serial loop of ~200 scripts took 60s+
+# under -j8 contention and hit its timeout). run_dcl_tests.sh partitions the
+# scripts by DCL_TEST_SHARD: "sysdisk" = those touching the shared real SYSDISK,
+# "K/N" = the rest, round-robin. Every script is in exactly one shard.
+set(DCL_ENV "VMSDCL=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DCL.EXE;PATH=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}:$ENV{PATH};OVMX_HELPLIB=${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSHLP/HELPLIB.HLP")
+set(DCL_SHARDS 8)
+math(EXPR DCL_LAST_SHARD "${DCL_SHARDS} - 1")
+foreach(k RANGE ${DCL_LAST_SHARD})
+    add_test(
+        NAME dcl-integration-${k}
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_dcl_tests.sh
+    )
+    set_tests_properties(dcl-integration-${k} PROPERTIES
+        ENVIRONMENT "${DCL_ENV};DCL_TEST_SHARD=${k}/${DCL_SHARDS}"
+        TIMEOUT 120
+        LABELS "dcl;integration"
+    )
+endforeach()
 add_test(
-    NAME dcl-integration
+    NAME dcl-integration-sysdisk
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_dcl_tests.sh
 )
-set_tests_properties(dcl-integration PROPERTIES
-    ENVIRONMENT "VMSDCL=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/DCL.EXE;PATH=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}:$ENV{PATH};OVMX_HELPLIB=${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSHLP/HELPLIB.HLP"
+set_tests_properties(dcl-integration-sysdisk PROPERTIES
+    ENVIRONMENT "${DCL_ENV};DCL_TEST_SHARD=sysdisk"
     TIMEOUT 120
     LABELS "dcl;integration"
-    # vms-ed4: run_dcl_tests.sh loops ~20 DCL scripts internally, several of
-    # which (INSTALL/SYSMAN) write the real /vms/SYS0/SYSCOMMON SYSDISK shared
-    # with install_utility -> same lock so ctest --parallel serializes the two.
+    # vms-ed4: these scripts (INSTALL/SYSMAN) write the real /vms/SYS0/SYSCOMMON
+    # SYSDISK shared with install_utility -> same lock so ctest --parallel
+    # serializes the two.
     RESOURCE_LOCK "sysdisk"
 )
 
@@ -200,4 +218,15 @@ add_test(NAME dcl-show-device-prefix COMMAND test_show_device_prefix)
 set_tests_properties(dcl-show-device-prefix PROPERTIES
     TIMEOUT 60
     LABELS "dcl;unit"
+)
+
+# DCL.EXE parses no "--" argv flags: LOGINOUT leaves its login data in the
+# executive (VMS_IOCTL_LGI) and DCL reads it (rd vms-838b). Self-proving.
+add_test(
+    NAME dcl-no-argv-flags
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_dcl_no_argv_flags.sh ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(dcl-no-argv-flags PROPERTIES
+    TIMEOUT 60
+    LABELS "dcl;gate"
 )

@@ -144,6 +144,8 @@ struct vms_dlm_dir {
 	uint32_t undirected_refused;/* a request for a name the vector directs */
 				   /* ELSEWHERE that only a "you master it"    */
 				   /* could answer: nothing recorded, no answer*/
+	uint32_t answered_at_requester; /* rd vms-966e: YOU from the entry, */
+				   /* the requester its own directory       */
 };
 
 enum vms_dlm_dir_outcome {
@@ -210,7 +212,22 @@ enum vms_dlm_dir_outcome vms_dlm_dir_lookup(struct vms_dlm_dir *d,
  * NONE, records nothing, and counts `undirected_refused`. A real former master
  * answers 0xf7 there (rd vms-e09 R4, 5 specimens in L2); rd vms-657 holds that
  * shape until a held-out set grounds it, so the honest floor is no answer.
+ *
+ * ...EXCEPT ONE CASE, `directed_here` == VMS_DLM_DIR_AT_REQUESTER (rd vms-966e):
+ * the vector names the REQUESTER ITSELF as the directory, and this node's table
+ * holds an entry naming the requester as the master. That is answered YOU from
+ * the entry -- it repeats what this node already told the requester and records
+ * nothing new. MEASURED on the demo (cap-966e r3 4159/4168 then 4821; r5
+ * 3180/3186 then 3859): VAXC looked a name up here under the two-node vector,
+ * was told 0xf9 and kept the lock; a third member joined, and at barrier step
+ * 0x0a VAXC sent the SAME lock's op-0x01 here again. The new vector makes VAXC
+ * its own directory for that name, so this node read it as undirected and sent
+ * nothing, and VAXC waited in STARTUP for ever. No second master can come of
+ * the answer: the requester is the directory, the only master any table here
+ * names is the requester, and an EMPTY table (the b4d specimen) or a vector
+ * naming a third system is still refused exactly as above.
  */
+#define VMS_DLM_DIR_AT_REQUESTER 2
 enum vms_dlm_dir_outcome vms_dlm_dir_lookup_directed(struct vms_dlm_dir *d,
 					const struct vms_dlm_res_ident *id,
 					vms_csid_t requester, vms_csid_t self,

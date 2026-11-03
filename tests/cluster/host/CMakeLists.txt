@@ -352,6 +352,14 @@ cluster_host_cnxman_test(test_dlm_pending test_dlm_pending.c)
 # precedent), so this is the two-proof shape: the TRUST ANCHOR the split-brain
 # gate reads, driven against the real vms_cnxman_csb.c derivation, and the
 # WIRING + ITS ORDER read out of the three shipping files that carry it.
+# rd vms-966e: the real VAX's op-0x01 at barrier step 0x0a -- sent under the
+# vector the running join replaced, for a lock this node told it "you master
+# it" -- is answered from the entry (the shipping CLUB, Phase 2 vector,
+# directory table and codec, on the committed demo frames).
+cluster_host_cnxman_test(test_dlm_transition_enq test_dlm_transition_enq.c)
+set_tests_properties(cluster_host_test_dlm_transition_enq PROPERTIES
+    LABELS "unit;cluster;cluster_host;cnxman;lock;dlm")
+
 cluster_host_cnxman_test(test_dlm_scs_arm test_dlm_scs_arm.c)
 target_compile_definitions(test_dlm_scs_arm PRIVATE
     OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"

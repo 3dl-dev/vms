@@ -35,6 +35,14 @@
 #    and master, the interim configuration), sees the shared VAX1DATA disk
 #    ($2$DUA1: on the VAXes) as VDA100:, and carries SYS$SYSTEM:EVACWL.EXE
 #    (tests/lab/ci6/mk_evacwl_native.sh). fire checks EVACWL.EXE.
+#
+# CI6_SHARED=1 fires on the vms-5fa bed instead (an ASYM_MSCP=1 pod, the
+# share subcommand's volume): $2$DUA<CI6_VAX_UNIT>: is VAX1's alone, so OVMX
+# and VAX2 reach it only through VAX1's MSCP server. STEP 0 mounts it /SYSTEM
+# on VAX1 and on OVMX's MSCP unit (as share's S1; CI6_INIT=1 INITIALIZEs it),
+# so there is no STEP 4 volume handoff. VAX1 is the volume's only server, so
+# OVMX's standby writes CI6_TAIL records and ends, OVMX dismounts, and VAX2
+# reads EVAC.DAT back over VAX1's MSCP server BEFORE VAX1 leaves (STEP 6).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 CI6=$HERE/../ci6
@@ -247,7 +255,14 @@ if [ "$MODE" = share ]; then
 	exit "${PIPESTATUS[0]}"
 fi
 
-tl "T0 $RUN on pod $POD; OVMX node $OVMX; data directory [$DIR]; capture $CAP"
+SHARED=${CI6_SHARED:-0}
+if [ "$SHARED" = 1 ]; then
+	LABEL=${CI6_LABEL:-EVAC1E58}; VUNIT=${CI6_VAX_UNIT:-2}; VDEV="\$2\$DUA$VUNIT:"
+	TAIL=${CI6_TAIL:-60}; NLARG="NL=90 $TAIL"
+else
+	LABEL=VAX1DATA; VDEV='$2$DUA1:'; NLARG=NL=90
+fi
+tl "T0 $RUN on pod $POD; OVMX node $OVMX; data directory [$DIR]; volume $LABEL = VAX1 $VDEV (shared=$SHARED); capture $CAP"
 for n in vax1 vax2 "$OCON"; do send "$n" "! CI6EVAC-BEGIN $RUN" 2; done
 
 # ---- preconditions ----------------------------------------------------------
@@ -294,6 +309,23 @@ fi
 tl "STAGED EVACWL.EXE on VAX1, EVPROBE.EXE on VAX2"
 
 # ---- STEP 0: the shared volume, cluster-mounted from VAX1 ---------------------
+if [ "$SHARED" = 1 ]; then
+	tl "STEP 0 VAX1: MOUNT/SYSTEM $VDEV $LABEL; $OVMX: MOUNT/SYSTEM its MSCP unit; [$DIR]"
+	[ "${CI6_INIT:-0}" = 1 ] && send vax1 "INITIALIZE $VDEV $LABEL" 30
+	send vax1 "MOUNT/SYSTEM $VDEV $LABEL" 20
+	wait_for vax1 "MOUNT-I-MOUNTED, $LABEL mounted" 60 || die "VAX1 could not mount $VDEV"
+	send vax1 "CREATE/DIRECTORY $VDEV[$DIR]" 5
+	send vax1 "DEFINE/SYSTEM EVAC\$DATA $VDEV[$DIR]"
+	send "$OCON" 'SHOW DEVICE D' 8	# vms-582: a prefix matches past the VAX1$ node prefix
+	if [ "$DRY" = 1 ]; then ODEV=${CI6_OVMX_DEV:-VAX1\$DUA16386:}
+	elif [ -z "${CI6_OVMX_DEV:-}" ]; then ODEV=$(ovmx_mscp_dev "$VUNIT"); fi
+	[ -n "$ODEV" ] && [ "$ODEV" != VDA100: ] || die "$OVMX lists no MSCP unit for VAX1 unit $VUNIT"
+	send "$OCON" "MOUNT/SYSTEM $ODEV $LABEL" 20
+	wait_for "$OCON" "MOUNT-I-MOUNTED, $LABEL mounted" 120 || die "$OVMX could not mount $ODEV"
+	send "$OCON" "DEFINE/SYSTEM EVAC\$DATA $ODEV[$DIR]"
+	send vax1 "SHOW DEVICE $VDEV" 5
+	tl "STEP 0 $LABEL mounted on VAX1 ($VDEV) and $OVMX ($ODEV)"
+else
 tl "STEP 0 VAX1: DISMOUNT/CLUSTER, MOUNT/CLUSTER \$2\$DUA1: VAX1DATA; [$DIR]"
 send vax1 'DISMOUNT/CLUSTER $2$DUA1:' 30
 send vax1 'MOUNT/CLUSTER $2$DUA1: VAX1DATA' 40
@@ -301,12 +333,13 @@ send vax1 "CREATE/DIRECTORY \$2\$DUA1:[$DIR]" 5
 send vax1 "DEFINE/SYSTEM EVAC\$DATA \$2\$DUA1:[$DIR]"
 send "$OCON" "DEFINE/SYSTEM EVAC\$DATA $ODEV[$DIR]"
 send vax1 'SHOW DEVICE $2$DUA1:' 5
+fi
 
 # ---- STEP 1: OVMX standby takes NL first (directory + master), converts at 90 s
-tl "STEP 1 $OVMX: EVACWL STANDBY NL=90 (spawned)"
+tl "STEP 1 $OVMX: EVACWL STANDBY $NLARG (spawned)"
 send "$OCON" 'CREATE SYS$LOGIN:OVSTBY.COM' 2
 send "$OCON" '$ EVACWL :== $SYS$SYSTEM:EVACWL.EXE' 1
-send "$OCON" '$ EVACWL STANDBY NL=90' 1
+send "$OCON" "\$ EVACWL STANDBY $NLARG" 1
 ctrl "$OCON" Z
 send "$OCON" 'SPAWN/NOWAIT @SYS$LOGIN:OVSTBY.COM' 5
 wait_for "$OCON" 'standby holds EVAC\$WORKLOAD NL' 60 || die "$OVMX standby never took NL"
@@ -317,12 +350,16 @@ send vax1 'SPAWN/NOWAIT/PROCESS=EVACVAX1/OUTPUT=SYS$LOGIN:VAX1WL.LOG EVACWL' 5
 [ "$DRY" = 1 ] || sleep 120           # past the standby's 90 s NL hold: its CONVERT queues
 since "$OCON" | grep -q 'took EVAC\$WORKLOAD EX' && die "$OVMX took EX while VAX1 ran"
 send vax1 'SHOW SYSTEM' 5
-send vax1 "DIRECTORY/SIZE=ALL \$2\$DUA1:[$DIR]EVAC.DAT" 5
+send vax1 "DIRECTORY/SIZE=ALL $VDEV[$DIR]EVAC.DAT" 5
 tl "SNAPSHOT VAX1 workload running, $OVMX standby converting behind it"
 
 # ---- STEP 3: evacuate -----------------------------------------------------------
 tl "STEP 3 EVACUATE: STOP EVACVAX1 on VAX1"
 send vax1 'STOP EVACVAX1' 5
+if [ "$SHARED" = 1 ]; then	# the volume is already OVMX's too: no handoff
+	wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 || die "$OVMX standby was not granted EX"
+	tl "TAKEOVER: $(since "$OCON" | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
+else
 wait_for "$OCON" 'holding EVAC\$WORKLOAD, waiting for' 180 || die "$OVMX standby was not granted EX"
 tl "STEP 3 result: $OVMX standby granted EX"
 
@@ -333,12 +370,26 @@ send vax1 'SHOW DEVICE $2$DUA1:' 5
 send "$OCON" "MOUNT $ODEV VAX1DATA" 10
 wait_for "$OCON" "EVACWL: $OVMX took EVAC\\\$WORKLOAD EX at seq" 180 || die "$OVMX never continued the workload"
 tl "TAKEOVER: $(since "$OCON" | grep -ao "EVACWL: $OVMX took.*" | tail -1)"
+fi
 
 # ---- STEP 5: the exclusion probe, while OVMX holds EX -----------------------------
 [ "$DRY" = 1 ] || sleep 20
 tl "STEP 5 VAX2: EVPROBE (\$ENQW EX NOQUEUE EVAC\$WORKLOAD)"
 send vax2 'EVPROBE' 10
 tl "PROBE: $(since vax2 | grep -ao 'EVPROBE: .*' | tail -1)"
+
+# ---- STEP 5a (shared): VAX1 is the volume's only server, so the seam is read
+# back over its MSCP server before it leaves: OVMX's TAIL ends, OVMX dismounts,
+# VAX2 mounts and types EVAC.DAT.
+if [ "$SHARED" = 1 ]; then
+	[ "$DRY" = 1 ] || sleep $((TAIL * 2 + 20))
+	tl "STEP 5a $OVMX: DISMOUNT $ODEV; VAX2: MOUNT/SYSTEM $VDEV, TYPE EVAC.DAT, DISMOUNT"
+	send "$OCON" "DISMOUNT $ODEV" 15
+	wait_for "$OCON" 'DISMOUNT-I-DISMOUNTED' 90 || die "$OVMX could not dismount $ODEV -- no coherent read-back"
+	send vax2 "MOUNT/SYSTEM $VDEV $LABEL" 20
+	send vax2 "TYPE $VDEV[$DIR]EVAC.DAT" 30
+	send vax2 "DISMOUNT $VDEV" 10
+fi
 
 # ---- STEP 6: VAX1 leaves the cluster ----------------------------------------------
 tl "STEP 6 VAX1: SHUTDOWN, REMOVE_NODE"
@@ -351,6 +402,7 @@ send vax2 'SHOW CLUSTER' 10
 tl "STEP 6 result: VAX1 removed"
 
 # ---- STEP 7: end of workload; read the seam back on real VMS --------------------
+if [ "$SHARED" != 1 ]; then	# shared: read back in STEP 5a; STEP 6 read Q/V last
 [ "$DRY" = 1 ] || sleep 60
 tl "STEP 7 $OVMX: STOP SYSTEM_1 (EVACWL), DISMOUNT $ODEV"
 send "$OCON" 'STOP SYSTEM_1' 5
@@ -366,6 +418,7 @@ send vax2 'MOUNT $2$DUA1: VAX1DATA' 20
 send vax2 "TYPE \$2\$DUA1:[$DIR]EVAC.DAT" 30
 send vax2 'DISMOUNT $2$DUA1:' 10
 send vax2 'WRITE SYS$OUTPUT "Q=",F$GETSYI("CLUSTER_QUORUM")," V=",F$GETSYI("CLUSTER_VOTES")," N=",F$GETSYI("CLUSTER_NODES")' 5
+fi
 tl "END"
 
 # ---- collect + grade ---------------------------------------------------------------

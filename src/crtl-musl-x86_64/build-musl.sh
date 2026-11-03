@@ -44,10 +44,23 @@ tail -n +4 "$HERE/include/kstat.h" | cmp -s - arch/x86_64/kstat.h ||
     { echo "build-musl: include/kstat.h no longer matches musl ${MUSL_VER} arch/x86_64/kstat.h" >&2; exit 1; }
 cp "$HERE/arch/x86_64/syscall_arch.h" arch/x86_64/syscall_arch.h
 cp "$HERE/src/internal/ovmx_syscall.c" src/internal/ovmx_syscall.c
+# vms-593: the C RTL's clock and time zone are the VMS system's -- the SAME two
+# overlays the Alpha DECC$SHR builds (one source: musl 1.2.4 and 1.2.5 carry
+# identical clock_gettime.c/__tz.c), as musl's per-arch replacements.
+TIME_OVL=${OVMX_MUSL_TIME_OVERLAY:-$HERE/../../tools/cross-alpha-vms/musl-arch/src/time/alpha-dec-vms}
+mkdir -p src/time/x86_64
+for f in clock_gettime.c __tz.c; do
+    cp "$TIME_OVL/$f" "src/time/x86_64/$f" ||
+        { echo "build-musl: the vms-593 time overlay $TIME_OVL/$f is missing" >&2; exit 1; }
+done
 ./configure --prefix=/usr --libdir="$LIBDIR" --disable-shared >/dev/null
 make -j"$(nproc)" lib/libc.a lib/crt1.o lib/crti.o lib/crtn.o lib/rcrt1.o lib/Scrt1.o >/dev/null
 nm lib/libc.a 2>/dev/null | grep -q " T __ovmx_syscall$" ||
     { echo "build-musl: __ovmx_syscall not in libc.a" >&2; exit 1; }
+for h in __ovmx_clock_hook __ovmx_tz_hook; do
+    nm lib/libc.a 2>/dev/null | grep -qE " [DB] $h$" ||
+        { echo "build-musl: $h not in libc.a (vms-593 time overlay not built)" >&2; exit 1; }
+done
 for f in libc.a crt1.o crti.o crtn.o rcrt1.o Scrt1.o; do
     install -m 0644 "lib/$f" "$LIBDIR/$f"
 done

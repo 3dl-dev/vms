@@ -39,32 +39,45 @@
  *     down the circuit to the departed node while HOLDING the circuits between
  *     themselves -- the lower-layer corroboration that a departure happened.
  *
+ *   - THE WORKLOAD'S LOCK CROSSING THE DEPARTURE (rd vms-1e58). The survivor
+ *     OVMXA runs the SHIPPING lock engine (src/kernel-core/vms_lock.c, built
+ *     host-side over the lock_shim backend exactly as scenarios/
+ *     dlm_mixed_evacuation.c does) and MASTERS the workload's resource,
+ *     EVAC$WORKLOAD. OVMXC's process holds it EX through the engine's real
+ *     master-side door (vms_lock_dlm_master_serve, the call an inbound
+ *     op-0x01 reaches), OVMXA's standby converts its own NL lock to EX and
+ *     QUEUES behind it (EVACWL's standby path), and the takeover is the
+ *     executive's own sweep for a departed system, vms_lock_dlm_member_departed
+ *     -- the call the DLM arm makes when the connection manager removes a
+ *     member. "W now runs on OVMXA" is read back from the engine: the standby
+ *     holds EX ($GETLKI) and no lock is left held for OVMXC (GET_RESMASTER).
+ *     Nothing sets it; host_defects.sh's dlm-departed-holder-locks-kept is the
+ *     mutation that proves this can go red.
+ *
  * STUB (a seam, not a claim -- these are the pieces ci.6 still needs):
- *   - THE WORKLOAD. In the shipped demo W is a real OpenVMS-built image's
- *     process set whose SYS$ services dispatch and execute on OVMX (rd vms-sys,
- *     the large open gate). Here W is a harness token -- a name, the node it
- *     runs on, the id of the resource it holds -- and it contributes NO
- *     cnxman/DLM metric to any assertion. Every number checked below is read
- *     from a real vms_club or pe_fsm.
- *   - THE WORKLOAD'S LOCKS REMASTERING to the survivor across the departure
- *     (rd vms-1ee and its blockers vms-fcb / vms-c27 / vms-3e3). The stub
- *     proves the survivor-takeover PRECONDITION -- a quorate, connected
- *     survivor exists to receive W -- which real remastering depends on; it
- *     does not yet prove the lock crossed.
+ *   - THE WORKLOAD PROCESS. W is a harness process block on the survivor and
+ *     a lock handle from OVMXC; the real image is tests/lab/ci6/EVACWL.C (the
+ *     booted two-executive version of this sequence is the genesis rig's
+ *     `evac` mode, tests/qemu/run_cluster_genesis_2node.sh, rd vms-1e58).
  *   - THE COORDINATOR driving the transition over the wire. As in
  *     dlm_directory.c and test_cnxman_quorum.c, THE HARNESS decides who is a
- *     member (it clears the departing CSB's flags directly). The real
- *     class-0x03 transition choreography is FC-P3.12's coordinator; this
- *     harness drives the membership change the coordinator would commit.
+ *     member (it clears the departing CSB's flags directly), and it calls the
+ *     DLM's departure sweep at the same point the connection manager's
+ *     cnxman_notify_membership_changes() would. The real class-0x03
+ *     transition choreography is FC-P3.12's coordinator, and the booted rig
+ *     above runs it.
  *
- * So: the harness is the ci.6 SKELETON. When vms-sys lands the real workload
- * plugs into place_on()/takeover_to(), and when vms-1ee's remaster lands the
- * takeover phase gains a real lock-crossing assertion. The evacuation sequence,
- * the survivor-takeover preconditions and the "cluster stays up" enforcement
- * check are host-proven now.
+ * So: the evacuation sequence, the survivor-takeover preconditions, the
+ * workload's lock passing to the survivor, and the "cluster stays up"
+ * enforcement check are host-proven here.
  */
 #include <stdio.h>
 #include <string.h>
+
+/* lock_shim/ is FIRST on this target's include path (CMakeLists.txt), so these
+ * two resolve to the host backend -- the recipe dlm_mixed_evacuation.c uses. */
+#include "vms_internal.h"
+#include "exec_kbackend.h"
 
 #include "cluster_test.h"
 
@@ -77,6 +90,7 @@
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_quorum.h"
+#include "vms_dlm_master.h"
 
 /* ==========================================================================
  * The three nodes. One vote each; EXPECTED_VOTES 3, so QUORUM = (3+2)/2 = 2 --
@@ -95,27 +109,179 @@ static const vms_csid_t   g_csid[N_NODES] = { 0x00010001u, 0x00010002u,
 #define NODE_EXPECTED   3u
 
 /* ==========================================================================
- * The workload -- a STUB (see the header). Harness bookkeeping only; it never
- * feeds an assertion about cluster state.
+ * The workload, and the survivor's lock engine
+ *
+ * OVMXA is the executive this harness runs for real: its lock database is the
+ * shipping engine's, and it masters EVAC$WORKLOAD. OVMXC is a remote holder,
+ * so its lock exists here exactly as the master holds one for another system
+ * -- a master-side LKB tagged with OVMXC's CSID. The resource identity is
+ * (group 0, user mode), the same one the standby process's own locks carry.
  * ========================================================================== */
+#define WL_RESNAM    "EVAC$WORKLOAD"
+#define WL_GROUP     0u
+#define WL_MODE      3u
+#define WL_C_LKID    0x00C0DE01u   /* OVMXC's own handle for its lock */
+
+/* The survivor's CSID is the engine's own (the "own entries" rule). */
+uint32_t vms_local_csid = 0x00010001u;
+
+void vms_ast_notify_arrival(struct vms_proc *proc) { (void)proc; }
+
+static struct vms_proc g_delivery;   /* owns master-side LKBs (rd vms-c27) */
+static struct vms_proc g_standby;    /* W's standby process on OVMXA      */
+
 struct evac_workload {
-	const char *name;      /* the workload's name                          */
-	int         on_node;   /* the node index currently running it, or -1   */
-	uint32_t    resource;  /* stub id of the cluster-wide resource it holds */
-	int         takeovers; /* how many times it has been taken over         */
+	const char *name;        /* the workload's name                       */
+	int         on_node;     /* READ BACK from the engine, or -1          */
+	uint32_t    standby_lkid;/* OVMXA's standby lock (NL, then EX)        */
+	uint32_t    holder_lkid; /* the master's handle for OVMXC's EX lock   */
+	int         takeovers;   /* granted takeovers observed                */
 };
 
-static void wl_place_on(struct evac_workload *w, int node)
+static void proc_init(struct vms_proc *p)
 {
-	w->on_node = node;
+	static uint32_t next_vms_pid = 0x20000001u;
+	int i;
+
+	memset(p, 0, sizeof(*p));
+	exec_lock_init(&p->mode_lock);
+	exec_lock_init(&p->lock_list_lock);
+	exec_list_head_init(&p->locks);
+	p->vms_pid = next_vms_pid++;
+	p->current_mode = PSL_C_USER;
+	for (i = 0; i < 4; i++) {
+		exec_lock_init(&p->ast[i].lock);
+		exec_list_head_init(&p->ast[i].pending);
+	}
 }
 
-/* The takeover a real remaster (vms-1ee) will drive: move W to a survivor. The
- * caller has already proven `to` is a quorate, connected survivor. */
-static void wl_takeover_to(struct evac_workload *w, int to)
+static int engine_up(void)
 {
-	w->on_node = to;
-	w->takeovers++;
+	if (vms_lock_init() != 0)
+		return 0;
+	proc_init(&g_delivery);
+	proc_init(&g_standby);
+	vms_lock_dlm_set_delivery_proc(&g_delivery);
+	vms_lock_dlm_set_local_csid(g_csid[NODE_A]);
+	return 1;
+}
+
+static void engine_down(void)
+{
+	vms_lock_dlm_set_delivery_proc(NULL);
+	vms_lock_cleanup();
+}
+
+static uint32_t lki(uint32_t lkid, uint32_t *requested)
+{
+	struct vms_getlki_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkid = lkid;
+	vms_ioctl_getlki(&g_standby, (unsigned long)(void *)&a);
+	if (requested != NULL)
+		*requested = a.requested_mode;
+	return a.status == SS__NORMAL ? a.granted_mode : 0xffffffffu;
+}
+
+static void resmaster(struct vms_resmaster_args *rm)
+{
+	memset(rm, 0, sizeof(*rm));
+	strscpy(rm->resnam, WL_RESNAM, sizeof(rm->resnam));
+	vms_ioctl_get_resmaster(NULL, (unsigned long)(void *)rm);
+}
+
+/* Who runs W, as the survivor's lock database says: the node whose process
+ * holds EVAC$WORKLOAD EX. Never a field the harness sets. */
+static int wl_read_on_node(const struct evac_workload *w)
+{
+	struct vms_resmaster_args rm;
+
+	if (lki(w->standby_lkid, NULL) == LCK_K_EXMODE)
+		return NODE_A;
+	resmaster(&rm);
+	if (rm.remote_holder_csid == g_csid[NODE_C])
+		return NODE_C;
+	return -1;
+}
+
+/* PLACE: the standby takes W's resource NL on OVMXA (so OVMXA masters it),
+ * then OVMXC's EX request is served by OVMXA's master. */
+static void wl_place_on_c(struct evac_workload *w)
+{
+	struct vms_enq_args e;
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result out;
+	struct vms_resmaster_args rm;
+
+	memset(&e, 0, sizeof(e));
+	e.lkmode = LCK_K_NLMODE;
+	strscpy(e.resnam, WL_RESNAM, sizeof(e.resnam));
+	vms_ioctl_enq(&g_standby, (unsigned long)(void *)&e);
+	w->standby_lkid = e.lkid;
+	resmaster(&rm);
+	ct_check(e.status == SS__NORMAL && rm.is_local_master == 1u,
+		 "place: OVMXA's standby holds EVAC$WORKLOAD NL and OVMXA "
+		 "masters it");
+
+	memset(&r, 0, sizeof(r));
+	r.op = VMS_DLM_MREQ_ENQ;
+	r.req_csid = g_csid[NODE_C];
+	r.req_lkid = WL_C_LKID;
+	r.lkmode = LCK_K_EXMODE;
+	strscpy(r.resnam, WL_RESNAM, sizeof(r.resnam));
+	r.resnam_len = (uint8_t)strlen(WL_RESNAM);
+	r.res_group = (uint16_t)WL_GROUP;
+	r.res_mode = (uint8_t)WL_MODE;
+	r.res_ident_valid = 1u;
+	memset(&out, 0, sizeof(out));
+	(void)vms_lock_dlm_master_serve(&r, &out);
+	w->holder_lkid = out.master_lkid;
+	ct_check(out.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
+		 out.granted_mode == (uint8_t)LCK_K_EXMODE,
+		 "place: OVMXC's EX request is GRANTED by OVMXA's master");
+	w->on_node = wl_read_on_node(w);
+}
+
+/* OVMXA's standby converts NL -> EX (EVACWL "standby"); it must QUEUE. */
+static void wl_standby_queues(struct evac_workload *w)
+{
+	struct vms_enq_args c;
+	uint32_t requested = 0u;
+
+	memset(&c, 0, sizeof(c));
+	c.lkid = w->standby_lkid;
+	c.lkmode = LCK_K_EXMODE;
+	c.flags = LCK_M_CONVERT;
+	vms_ioctl_convert(&g_standby, (unsigned long)(void *)&c);
+	ct_check(c.status == SS__NORMAL &&
+		 lki(w->standby_lkid, &requested) == LCK_K_NLMODE &&
+		 requested == LCK_K_EXMODE,
+		 "standby: OVMXA's NL->EX conversion is QUEUED behind OVMXC's EX");
+}
+
+/* TAKEOVER: OVMXC has left the membership; the DLM's departure sweep runs
+ * (the call the arm makes from cnxman_notify_membership_changes). Whether W
+ * moved is then READ from the engine. */
+static void wl_takeover_after_departure(struct evac_workload *w, int departed)
+{
+	int before = wl_read_on_node(w);
+
+	vms_lock_dlm_member_departed(g_csid[departed], NULL);
+	w->on_node = wl_read_on_node(w);
+	if (before != w->on_node && w->on_node >= 0)
+		w->takeovers++;
+}
+
+static void wl_release(struct evac_workload *w)
+{
+	struct vms_deq_args d;
+
+	memset(&d, 0, sizeof(d));
+	d.lkid = w->standby_lkid;
+	vms_ioctl_deq(&g_standby, (unsigned long)(void *)&d);
+	ct_check(d.status == SS__NORMAL,
+		 "release: the new holder releases EVAC$WORKLOAD cleanly");
 }
 
 /* ==========================================================================
@@ -261,11 +427,15 @@ static uint64_t pe_vc_downs(struct pe_cluster *p, int node, int peer)
 static void test_rolling_evacuation_stays_up(uint64_t seed)
 {
 	static struct member_view a, b;   /* the two survivors' vantages       */
-	struct evac_workload w = { "PAYROLL_BATCH", -1, 0xC0DEu, 0 };
+	struct evac_workload w = { "PAYROLL_BATCH", -1, 0u, 0u, 0 };
 	struct pe_cluster pe;
 
 	printf("\n== rolling evacuation, seed %llu ==\n",
 	       (unsigned long long)seed);
+	if (!engine_up()) {
+		ct_check(0, "engine: OVMXA's lock engine initialises");
+		return;
+	}
 
 	/* ---- 1. FORM ---------------------------------------------------- */
 	view_form(&a, NODE_A);
@@ -284,9 +454,9 @@ static void test_rolling_evacuation_stays_up(uint64_t seed)
 		 "form: OVMXB executive is serving (no hang)");
 
 	/* ---- 2. PLACE the workload on the node we will evacuate --------- */
-	wl_place_on(&w, NODE_C);
+	wl_place_on_c(&w);
 	ct_check(w.on_node == NODE_C,
-		 "place: PAYROLL_BATCH runs on OVMXC");
+		 "place: OVMXA's master holds EVAC$WORKLOAD EX for OVMXC");
 	/* Precondition for a real workload: its host is a current member. */
 	ct_check(cnxman_csb_is_member(a.peer[NODE_C]),
 		 "place: OVMXC is a member that can host the workload");
@@ -298,6 +468,8 @@ static void test_rolling_evacuation_stays_up(uint64_t seed)
 	ct_check_eq_u32((uint32_t)pe_vc_state(&pe, NODE_A, NODE_B),
 			(uint32_t)VMS_PE_VC_OPEN,
 			"transport: OVMXA <-> OVMXB circuit OPEN before evac");
+
+	wl_standby_queues(&w);
 
 	/* ---- 3. QUIESCE: OVMXC announces departure and stops being present */
 	sim_node_halt(&pe.sim.node[NODE_C]);        /* real last gasp, p.7-29 */
@@ -311,17 +483,32 @@ static void test_rolling_evacuation_stays_up(uint64_t seed)
 		 "quiesce: two present votes still meet QUORUM 2");
 	ct_check(!cnxman_quorum_hang_active(&a.cl),
 		 "quiesce: OVMXA keeps serving while OVMXC is away");
+	/* Membership is held, so OVMXC's lock is held too: nothing is granted
+	 * to the standby while OVMXC may yet come back (p. 7-30). */
+	ct_check(wl_read_on_node(&w) == NODE_C,
+		 "quiesce: OVMXC's EX lock is still held across the break");
 
 	/* ---- 4. TAKEOVER: the transition removes OVMXC; W moves to OVMXA - */
 	view_peer_remove(&a, NODE_C);
 	view_peer_remove(&b, NODE_C);
-	wl_takeover_to(&w, NODE_A);                 /* the vms-1ee seam        */
+	wl_takeover_after_departure(&w, NODE_C);    /* the DLM departure sweep */
 	ct_check_eq_u32(a.cl.club.cluster_nodes, 2u,
 			"takeover: OVMXC removed, two members remain");
 	ct_check_eq_u32(a.cl.club.quorum, 2u,
 			"takeover: QUORUM holds at 2 (CEVOTES never decreases)");
-	ct_check(w.on_node == NODE_A && w.takeovers == 1,
-		 "takeover: a survivor (OVMXA) now runs PAYROLL_BATCH");
+	{
+		struct vms_resmaster_args rm;
+
+		resmaster(&rm);
+		ct_check(w.on_node == NODE_A && w.takeovers == 1,
+			 "*** takeover: OVMXA's queued standby is GRANTED EX "
+			 "once OVMXC leaves -- the workload runs on a survivor ***");
+		ct_check_eq_u32(rm.remote_holder_csid, 0u,
+				"takeover: no lock is left held for the departed "
+				"OVMXC");
+		ct_check_eq_u32(rm.is_local_master, 1u,
+				"takeover: OVMXA still masters EVAC$WORKLOAD");
+	}
 	ct_check(cnxman_quorum_enforce_ready(&a.cl),
 		 "takeover: OVMXA is still a committed member");
 
@@ -354,6 +541,9 @@ static void test_rolling_evacuation_stays_up(uint64_t seed)
 	ct_check(cnxman_quorum_hang_active(&a.cl) != 0,
 		 "falsifier: OVMXA executive STALLS -- a lone node is NOT a "
 		 "cluster (so the checks above are real)");
+
+	wl_release(&w);
+	engine_down();
 }
 
 /*

@@ -242,6 +242,9 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 # C RTL file layer over RMS (src/vmsrms/crtl_rms_fd.c, -DOVMX_CRTL_FD_STATIC=ON
 # below). With no layer installed every system call traps exactly as before.
 COPY src/crtl-musl-x86_64/ /src/crtl-musl-x86_64/
+# vms-593: the musl time overlays (one source with the Alpha DECC$SHR's), at the
+# path build-musl.sh finds relative to itself.
+COPY tools/cross-alpha-vms/musl-arch/src/time/alpha-dec-vms/ /tools/cross-alpha-vms/musl-arch/src/time/alpha-dec-vms/
 RUN sh /src/crtl-musl-x86_64/build-musl.sh /usr/lib/x86_64-linux-musl
 COPY . /src/repo/
 #
@@ -270,7 +273,7 @@ RUN cd /src/repo && \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
         -DOVMX_CRTL_FD_STATIC=ON \
-    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vmslink_image vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     echo "--- PIPESTAGE.EXE (the stage image test_syssvc_spawn_pipeline drives, vms-e9a B2) ---" && \
@@ -477,16 +480,7 @@ RUN gcc -O2 -Wall -I/src/vmsfs/include -o /src/tests/qemu/mkimage_ods2_sysvol \
         /src/vmsfs/ods2/ods2_reader.c /src/vmsfs/ods2/ods2_writer.c \
         /src/vmsfs/ods2/ods2_edit.c \
         /src/vmsfs/ods2/ods2_bdev.c /src/vmsfs/ods2/ods2_block_posix.c && \
-    /src/tests/qemu/mkimage_ods2_sysvol /ods2_sysvol.img 48 \
-        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT \
-        /src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT \
-        SYSEXE:TCC.EXE=/src/repo/build-static/bin/TCC.EXE \
-        SYSEXE:LIBRARIAN.EXE=/src/repo/build-static/bin/LIBRARIAN.EXE \
-        SYSEXE:LINK.EXE=/src/repo/build-static/bin/LINK.EXE \
-        SYSEXE:IMGACT.EXE=/src/repo/src/imgact/IMGACT.EXE \
-        'SYSLIB:DECC$SHR.EXE=/src/repo/build-static/bin/DECC$SHR.EXE' \
-        $(for f in /src/repo/build-static/native/*.EXE; do \
-            [ -f "$f" ] && echo "SYSEXE:$(basename "$f")=$f"; done)
+    sh /src/repo/tests/qemu/master_ods2_sysvol.sh /src/repo /ods2_sysvol.img
 
 # GENERATED ODS-2 volume carrying a real ELF image [IMGACT]TESTIMG.EXE for the
 # IMGACT-over-ACP proof (vms-3e8e, epic vms-208). mkimage_ods2_imgact.c lays the
@@ -717,7 +711,7 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # descrip.mms defines LNK :== $/vms/.../LINK.EXE (absolute path). Absence is
     # FATAL: a missing LINK.EXE would turn the driven-link + activation assertions
     # into a no-op (the suite would report the image never appeared) job-green.
-    { cp /src/repo/build-static/bin/LINK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || \
+    { cp /src/repo/build-static/bin/sysexe/LINK.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE || \
       { echo "FATAL: LINK.EXE was not built into the static tree -- the MMK-driven link would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/LINK.EXE && \
     # IMGACT.EXE at SYS$SYSTEM (vms-725) -- the image activator the MMK-driven

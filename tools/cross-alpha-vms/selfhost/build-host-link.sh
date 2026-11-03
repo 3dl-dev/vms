@@ -20,8 +20,14 @@ cd $O
 # value build-joint-image.sh bakes into the images the cross LINK.EXE writes (vms-430)
 IMGACT_INTERP_PATH="${IMGACT_INTERP_PATH:-/run/ovmx-boot/IMGACT.EXE}"
 echo "== link.c (host alpha-dec-vms, DEC C default 32-bit pointers)"
+# rd vms-3cb1: the shipped SYS$SYSTEM:LINK.EXE takes the VMS LINK command,
+# parsed by CLI$DCL_PARSE against its LINK table (OVMX_LINK_IMAGE); the CLI$
+# routines are compiled in, at this image's pointer size (OVMX_LINK_CLI_ARGV:
+# the command arrives as the C RTL's main() words).
 alpha-dec-vms-gcc -std=gnu11 -O1 -mpointer-size=no -DIMGACT_INTERP_PATH=$IMGACT_INTERP_PATH \
+    -DOVMX_LINK_IMAGE -DOVMX_LINK_CLI_ARGV \
     -I/src/src/vmslink/include -I/src/src/libvms/include/hostabi -iquote /src/src/libvms/include/hostabi \
-    -o $O/link.exe /src/src/vmslink/link.c > build.log 2>&1 || { grep -nE 'error|LINK-[FE]' build.log | head -40; tail -20 build.log; exit 1; }
+    -I/src/src/libvms/include \
+    -o $O/link.exe /src/src/vmslink/link.c /src/src/libvms/rtl/lib_cli.c > build.log 2>&1 || { grep -nE 'error|LINK-[FE]' build.log | head -40; tail -20 build.log; exit 1; }
 ls -la $O/link.exe
 echo "HOST-LINK: OK"

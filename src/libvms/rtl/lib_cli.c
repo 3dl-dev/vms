@@ -132,6 +132,15 @@ static char *ar_str(struct cld_arena *a, const char *s, size_t n)
  * Parsed current-command context
  * ================================================================ */
 
+/* A LOCAL / POSITIONAL qualifier given on one parameter value (CDU PLACEMENT=). */
+struct cli_local {
+    int    qi;          /* index of the qualifier in the verb's table */
+    int    negated;     /* /NOxxx on this value */
+    char **values;      /* its value list */
+    int    nvalues;
+    int    getidx;      /* cursor for cli$get_value */
+};
+
 struct cli_parsed {
     const char            *name;        /* canonical UPPERCASE name / label */
     int                    is_param;
@@ -144,6 +153,9 @@ struct cli_parsed {
     char                 **values;      /* value list (heap, per-entity) */
     int                    nvalues;
     int                    getidx;      /* cursor for cli$get_value */
+    char                  *seps;        /* per value: ',' or '+' that followed it, or 0 */
+    struct cli_local     **locals;      /* per value: qualifiers placed on it */
+    int                   *nlocals;     /* per value: how many */
 };
 
 struct cli_context {
@@ -152,6 +164,8 @@ struct cli_context {
     const struct cli_verb          *verb;
     struct cli_parsed              *ents; /* nquals + nparams entries */
     int                             nents;
+    int                             cur_ent; /* parameter whose value cli$get_value */
+    int                             cur_val; /* last returned (-1: none) */
 };
 
 static struct cli_context g_ctx; /* the process-wide current command */
@@ -165,10 +179,25 @@ static void ctx_reset(void)
                 for (int v = 0; v < e->nvalues; v++) free(e->values[v]);
                 free(e->values);
             }
+            if (e->locals) {
+                for (int v = 0; v < e->nvalues; v++) {
+                    for (int l = 0; l < e->nlocals[v]; l++) {
+                        struct cli_local *lq = &e->locals[v][l];
+                        for (int k = 0; k < lq->nvalues; k++) free(lq->values[k]);
+                        free(lq->values);
+                    }
+                    free(e->locals[v]);
+                }
+                free(e->locals);
+            }
+            free(e->nlocals);
+            free(e->seps);
         }
         free(g_ctx.ents);
     }
     memset(&g_ctx, 0, sizeof(g_ctx));
+    g_ctx.cur_ent = -1;
+    g_ctx.cur_val = -1;
 }
 
 static int ent_add_value(struct cli_parsed *e, const char *s, size_t n)
@@ -176,6 +205,20 @@ static int ent_add_value(struct cli_parsed *e, const char *s, size_t n)
     char **nv = realloc(e->values, (size_t)(e->nvalues + 1) * sizeof(char *));
     if (!nv) return 0;
     e->values = nv;
+    if (e->is_param) {        /* a parameter value carries its separator and locals */
+        char *ns = realloc(e->seps, (size_t)(e->nvalues + 1));
+        if (!ns) return 0;
+        e->seps = ns;
+        e->seps[e->nvalues] = 0;
+        struct cli_local **nl = realloc(e->locals, (size_t)(e->nvalues + 1) * sizeof(*nl));
+        if (!nl) return 0;
+        e->locals = nl;
+        e->locals[e->nvalues] = NULL;
+        int *nn = realloc(e->nlocals, (size_t)(e->nvalues + 1) * sizeof(int));
+        if (!nn) return 0;
+        e->nlocals = nn;
+        e->nlocals[e->nvalues] = 0;
+    }
     char *dup = malloc(n + 1);
     if (!dup) return 0;
     memcpy(dup, s, n); dup[n] = '\0';
@@ -309,6 +352,17 @@ static void parse_qual_attrs(struct cld_toks *t, int *pi, struct cld_arena *ar,
         if (is_stmt_kw(tk)) break;
         if (ci_eq(tk, "NEGATABLE")) { *flags |= CLI_A_NEGATABLE; i++; continue; }
         if (ci_eq(tk, "NONNEGATABLE")) { *flags &= ~CLI_A_NEGATABLE; i++; continue; }
+        if (ci_eq(tk, "PLACEMENT")) {          /* PLACEMENT=GLOBAL|LOCAL|POSITIONAL */
+            i++;
+            if (i < t->n && ci_eq(t->v[i], "=")) i++;
+            if (i < t->n) {
+                *flags &= ~(CLI_A_PLACE_LOCAL | CLI_A_PLACE_POSITIONAL);
+                if (ci_eq(t->v[i], "LOCAL")) *flags |= CLI_A_PLACE_LOCAL;
+                else if (ci_eq(t->v[i], "POSITIONAL")) *flags |= CLI_A_PLACE_POSITIONAL;
+                i++;
+            }
+            continue;
+        }
         if (ci_eq(tk, "DEFAULT")) {
             /* Standalone DEFAULT = qualifier present-by-default. A "DEFAULT="
              * form inside VALUE(...) is handled in the VALUE branch. */
@@ -672,17 +726,33 @@ uint32_t cli$dcl_parse(const struct dsc$descriptor_s *command,
 
     uint32_t rc = SS$_NORMAL;
     int param_cursor = 0;
+    /* The parameter value most recently typed: a LOCAL / POSITIONAL qualifier
+     * that follows it is placed on it (CDU PLACEMENT=). */
+    struct cli_parsed *last_pe = NULL;
+    int last_pv = -1;
 
     while (*p) {
         while (*p && isspace((unsigned char)*p)) p++;
         if (!*p) break;
 
+        /* A list separator after a value of a LIST parameter: the next token is
+         * the next value of the same list. ',' and '+' are what CLI$GET_VALUE
+         * later reports as CLI$_COMMA / CLI$_CONCAT. */
+        if ((*p == ',' || *p == '+') && last_pe && (last_pe->pdef->flags & CLI_A_LIST)) {
+            last_pe->seps[last_pv] = *p;
+            p++;
+            continue;
+        }
+
         if (*p == '/') {
             p++;
             const char *qs = p;
-            while (*p && *p != '=' && *p != '/' && !isspace((unsigned char)*p)) p++;
+            while (*p && *p != '=' && *p != '/' && *p != ',' && *p != '+' &&
+                   !isspace((unsigned char)*p)) p++;
             size_t qlen = (size_t)(p - qs);
             if (qlen == 0) continue;
+            /* inside a parameter list a bare value also ends at ',' / '+' */
+            int in_list = last_pe && (last_pe->pdef->flags & CLI_A_LIST);
 
             /* Optional value. */
             const char *vs = NULL; size_t vl = 0;
@@ -698,7 +768,8 @@ uint32_t cli$dcl_parse(const struct dsc$descriptor_s *command,
                     }
                 } else {
                     if (*p == '"') { p++; while (*p && *p != '"') p++; if (*p == '"') p++; }
-                    else while (*p && *p != '/' && !isspace((unsigned char)*p)) p++;
+                    else while (*p && *p != '/' && !isspace((unsigned char)*p) &&
+                                !(in_list && (*p == ',' || *p == '+'))) p++;
                 }
                 vl = (size_t)(p - vs);
             }
@@ -714,12 +785,41 @@ uint32_t cli$dcl_parse(const struct dsc$descriptor_s *command,
             if (qi == -2) { rc = CLI$_IVQUAL; goto parsed; } /* ambiguous */
             if (qi < 0)   { rc = CLI$_IVQUAL; goto parsed; } /* unknown qualifier */
 
+            if (vl >= 2 && vs[0] == '"' && vs[vl - 1] == '"') { vs++; vl -= 2; }
+            uint32_t qflags = verb->quals[qi].flags;
+            int placeable = qflags & (CLI_A_PLACE_LOCAL | CLI_A_PLACE_POSITIONAL);
+
+            if (placeable && last_pe) {
+                /* Placed on the parameter value it follows. */
+                struct cli_local *nl = realloc(last_pe->locals[last_pv],
+                                               (size_t)(last_pe->nlocals[last_pv] + 1) * sizeof(*nl));
+                if (!nl) { rc = SS$_INSFMEM; goto parsed; }
+                last_pe->locals[last_pv] = nl;
+                struct cli_local *lq = &nl[last_pe->nlocals[last_pv]++];
+                memset(lq, 0, sizeof(*lq));
+                lq->qi = qi;
+                lq->negated = negated;
+                if (vl) {
+                    struct cli_parsed tmp; memset(&tmp, 0, sizeof(tmp));
+                    if (!add_values_from_spec(&tmp, vs, vl)) { rc = SS$_INSFMEM; goto parsed; }
+                    lq->values = tmp.values; lq->nvalues = tmp.nvalues;
+                }
+                if (!negated && (qflags & CLI_A_VALREQ) && lq->nvalues == 0) {
+                    rc = SS$_ABORT; /* %CLI-W-VALREQ analogue */
+                    goto parsed;
+                }
+                continue;
+            }
+            if (qflags & CLI_A_PLACE_LOCAL) {
+                /* a LOCAL qualifier with no parameter value before it */
+                rc = CLI$_IVQUAL;
+                goto parsed;
+            }
+
             struct cli_parsed *e = &ents[qi];
             e->specified = 1;
             e->negated = negated;
             if (vl) {
-                /* strip one surrounding quote pair for a bare quoted value */
-                if (vl >= 2 && vs[0] == '"' && vs[vl - 1] == '"') { vs++; vl -= 2; }
                 if (!add_values_from_spec(e, vs, vl)) { rc = SS$_INSFMEM; goto parsed; }
             }
             /* REQUIRED value but none supplied (and not negated). */
@@ -729,18 +829,23 @@ uint32_t cli$dcl_parse(const struct dsc$descriptor_s *command,
             }
         } else {
             /* Positional parameter. */
-            const char *ps = p;
-            if (*p == '"') { p++; while (*p && *p != '"') p++; if (*p == '"') p++; }
-            else while (*p && *p != '/' && !isspace((unsigned char)*p)) p++;
-            size_t pl = (size_t)(p - ps);
-            if (pl >= 2 && ps[0] == '"' && ps[pl - 1] == '"') { ps++; pl -= 2; }
-
             if (param_cursor >= verb->nparams) { rc = SS$_BADPARAM; goto parsed; }
             struct cli_parsed *e = &ents[verb->nquals + param_cursor];
+            int is_list = (e->pdef->flags & CLI_A_LIST) != 0;
+            const char *ps = p;
+            if (*p == '"') { p++; while (*p && *p != '"') p++; if (*p == '"') p++; }
+            else while (*p && *p != '/' && !isspace((unsigned char)*p) &&
+                        !(is_list && (*p == ',' || *p == '+'))) p++;
+            size_t pl = (size_t)(p - ps);
+            if (pl >= 2 && ps[0] == '"' && ps[pl - 1] == '"') { ps++; pl -= 2; }
+            if (p == ps) { p++; continue; }   /* a stray separator */
+
             e->specified = 1;
             if (!ent_add_value(e, ps, pl)) { rc = SS$_INSFMEM; goto parsed; }
+            last_pe = e;
+            last_pv = e->nvalues - 1;
             /* A LIST parameter consumes all remaining positional tokens. */
-            if (!(e->pdef->flags & CLI_A_LIST)) param_cursor++;
+            if (!is_list) param_cursor++;
         }
     }
 
@@ -780,6 +885,21 @@ static struct cli_parsed *ent_by_name(const char *name, size_t nlen)
     for (int i = 0; i < g_ctx.nents; i++)
         if (abbrev_of(g_ctx.ents[i].name, name, nlen)) { hit = &g_ctx.ents[i]; count++; }
     return (count == 1) ? hit : NULL;
+}
+
+/* The LOCAL / POSITIONAL placement of qualifier entity E on the parameter value
+ * CLI$GET_VALUE last returned, or NULL. */
+static struct cli_local *cur_local(const struct cli_parsed *e)
+{
+    if (!e || e->is_param || !e->qdef) return NULL;
+    if (!(e->qdef->flags & (CLI_A_PLACE_LOCAL | CLI_A_PLACE_POSITIONAL))) return NULL;
+    if (g_ctx.cur_ent < 0 || g_ctx.cur_ent >= g_ctx.nents) return NULL;
+    struct cli_parsed *pe = &g_ctx.ents[g_ctx.cur_ent];
+    if (!pe->locals || g_ctx.cur_val < 0 || g_ctx.cur_val >= pe->nvalues) return NULL;
+    int qi = (int)(e - g_ctx.ents);
+    for (int l = 0; l < pe->nlocals[g_ctx.cur_val]; l++)
+        if (pe->locals[g_ctx.cur_val][l].qi == qi) return &pe->locals[g_ctx.cur_val][l];
+    return NULL;
 }
 
 /* classify a plain (non-dotted) entity */
@@ -849,7 +969,13 @@ uint32_t cli$present(const struct dsc$descriptor_s *label)
         return CLI$_ABSENT;
     }
 
-    return classify(ent_by_name(name, len));
+    struct cli_parsed *e = ent_by_name(name, len);
+    struct cli_local *lq = cur_local(e);
+    if (lq) return lq->negated ? CLI$_LOCNEG : CLI$_LOCPRES;
+    /* A LOCAL qualifier exists only on a value; POSITIONAL falls back to its
+     * command-level placement. */
+    if (e && e->qdef && (e->qdef->flags & CLI_A_PLACE_LOCAL)) return CLI$_ABSENT;
+    return classify(e);
 }
 
 /* ================================================================
@@ -869,13 +995,36 @@ uint32_t cli$get_value(const struct dsc$descriptor_s *label,
 
     struct cli_parsed *e = ent_by_name(name, len);
     if (!e) return CLI$_ABSENT;
-    if (e->negated) return CLI$_ABSENT;
-    if (!(e->specified || e->is_default_on || e->defaulted)) return CLI$_ABSENT;
-    if (e->getidx >= e->nvalues) return CLI$_ABSENT;
-
-    const char *val = e->values[e->getidx];
+    const char *val;
+    uint32_t more;
+    struct cli_local *lq = cur_local(e);
+    if (lq) {
+        /* the qualifier's value(s) as placed on the current parameter value */
+        if (lq->negated || lq->getidx >= lq->nvalues) return CLI$_ABSENT;
+        val = lq->values[lq->getidx++];
+        more = (lq->getidx < lq->nvalues) ? CLI$_COMMA : SS$_NORMAL;
+    } else {
+        if (e->qdef && (e->qdef->flags & CLI_A_PLACE_LOCAL)) return CLI$_ABSENT;
+        if (e->negated) return CLI$_ABSENT;
+        if (!(e->specified || e->is_default_on || e->defaulted)) {
+            if (e->is_param) g_ctx.cur_ent = -1;
+            return CLI$_ABSENT;
+        }
+        if (e->getidx >= e->nvalues) {
+            if (e->is_param) g_ctx.cur_ent = -1;
+            return CLI$_ABSENT;
+        }
+        int vi = e->getidx++;
+        val = e->values[vi];
+        more = SS$_NORMAL;
+        if (e->getidx < e->nvalues)
+            more = (e->seps && e->seps[vi] == '+') ? CLI$_CONCAT : CLI$_COMMA;
+        if (e->is_param) {            /* qualifiers now answer for this value */
+            g_ctx.cur_ent = (int)(e - g_ctx.ents);
+            g_ctx.cur_val = vi;
+        }
+    }
     size_t vlen = strlen(val);
-    e->getidx++;
 
     /* Deliver into the caller's descriptor. */
     if (value->dsc$b_class == DSC$K_CLASS_D) {
@@ -898,5 +1047,5 @@ uint32_t cli$get_value(const struct dsc$descriptor_s *label,
         if (retlen) *retlen = (uint16_t)cpy;
     }
 
-    return (e->getidx < e->nvalues) ? CLI$_COMMA : SS$_NORMAL;
+    return more;
 }

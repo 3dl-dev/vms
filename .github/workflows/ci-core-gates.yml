@@ -138,6 +138,12 @@ jobs:
         run: |
           python3 tools/ci/check_docker_mirror.py --selftest
           python3 tools/ci/check_docker_mirror.py .
+      # vms-839: every GCC/binutils port patch carries a classified row in
+      # docs/selfhost/gcc-patch-audit.md, and no row outlives its patch.
+      - name: check_patch_audit.sh (every port patch is classified in the audit)
+        run: |
+          sh tools/cross-alpha-vms/test/check_patch_audit.sh --self-test .
+          sh tools/cross-alpha-vms/test/check_patch_audit.sh .
 
   merge-queue-gates:
     # Every gating workflow ends in the merge queue's required `gate` job, and
@@ -630,6 +636,14 @@ jobs:
 
       - name: Boot it under qemu-system-aarch64; vms.ko must give /dev/vms (and nothing without it)
         run: bash tests/qemu-aarch64/test_ovmx_kernel_vmsko.sh "$RUNNER_TEMP/kout"
+
+      # vms-fee/vms-c5f: the curated kernel diet is measured against checked-in
+      # budgets, and must still carry the broad real-hardware driver set.
+      - name: Kernel size budgets + real-hardware module coverage (arm64)
+        run: |
+          set -euo pipefail
+          bash tests/kernel-config/selftest_check_kernel_budget.sh
+          bash tests/kernel-config/check_kernel_budget.sh arm64 "$RUNNER_TEMP/kout"
 
   aarch64-boot-login:
     # aarch64 ships in V1.0 (rd vms-32aa, epic vms-0ad0). Builds the whole
@@ -1270,6 +1284,21 @@ jobs:
             KERNEL_BASE=${{ needs.kernel-base.outputs.ref }}
           cache-from: type=registry,ref=ghcr.io/3dl-dev/ovmx-boot-cache:main
           # import only: persistent-boot is this scope's one writer (rd vms-14da)
+
+      # vms-fee/vms-c5f: x86_64 kernel diet -- size budgets (vmlinuz, module tree,
+      # initramfs) and the real-hardware module-coverage list, against the SAME
+      # kernel the image above carries (kernel-out stage, incremental on the base).
+      - name: Kernel size budgets + real-hardware module coverage (x86_64)
+        run: |
+          set -euo pipefail
+          bash tests/kernel-config/selftest_check_kernel_budget.sh
+          docker buildx build -f distro/Dockerfile.bootable \
+            --build-arg KERNEL_BASE=${{ needs.kernel-base.outputs.ref }} \
+            --target kernel-out --output type=local,dest="$RUNNER_TEMP/kout" .
+          id=$(docker create ovmx-boot:latest)
+          docker cp -L "$id:/boot/initramfs-ovmx.cpio.gz" "$RUNNER_TEMP/initramfs-ovmx.cpio.gz"
+          docker rm "$id"
+          bash tests/kernel-config/check_kernel_budget.sh x86_64 "$RUNNER_TEMP/kout" "$RUNNER_TEMP/initramfs-ovmx.cpio.gz"
 
       - name: Run UAT session on the real runtime (QEMU console)
         timeout-minutes: 10

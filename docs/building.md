@@ -86,6 +86,31 @@ The bootable image includes:
   `vmsfs.ko` has been retired; the ODS-2 filesystem codec is compiled into
   `vms.ko` and served through the Files-11 ACP.
 
+### Kernel config: a diet that keeps real hardware (vms-fee, vms-c5f)
+
+The kernel config is the arch's distro defconfig plus two checked-in fragments
+in `distro/kernel/` (`ovmx-<arch>.config` for the boot path and broad hardware,
+`ovmx-diet.config` for what is pruned). It is deliberately not `tinyconfig` and
+not `localmodconfig`: staging, most media/DVB, amateur radio, exotic
+filesystems and heavy debug are off; broad bare-metal hardware (storage HBAs,
+NICs, USB/HID, wifi/bluetooth, GPU, sound, more filesystems) stays, built as
+signed zstd modules in a module tree. The x86_64 bzImage is zstd-compressed
+(13.6 MB to 9.0 MB). Boot-critical drivers (console, virtio, disk and wired-NIC
+drivers) stay `=y` because OVMX userland has no module autoloader yet.
+`CONFIG_TRIM_UNUSED_KSYMS` is not enabled; the reason is in `ovmx-diet.config`.
+
+`tests/kernel-config/check_kernel_budget.sh <arch> <kernel-out-dir>` is the CI
+gate: vmlinuz / module-tree / initramfs sizes against `budgets-<arch>.conf`
+(ceiling and floor), a required hardware-module list `hw-coverage-<arch>.txt`
+(must be in the module tree or built in), and the pruned categories staying off.
+`tests/kernel-config/selftest_check_kernel_budget.sh` proves each regression
+class turns it red. The kernel-out stage exports the tree:
+
+```bash
+docker buildx build -f distro/Dockerfile.bootable --target kernel-out \
+    --output type=local,dest=/tmp/kout .     # add --platform linux/arm64 for arm64
+```
+
 ## Base OS vs. Layered Products (kits)
 
 OVMX is structured like real OpenVMS: a **base operating system** plus separately-installable

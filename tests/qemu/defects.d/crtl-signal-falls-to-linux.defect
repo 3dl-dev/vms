@@ -1,0 +1,36 @@
+# crtl-signal-falls-to-linux -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "the C RTL's signals are VMS conditions, \$SETIMR ASTs and process services on a VMS PID (vms-931)";;
+        targets)      echo "vmsrms/crtl_signal.c";;
+        suites_red)   echo "test_syssvc_crtl_signal";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The C RTL layer's signal hook stops serving: every signal system call (rt_sigaction, rt_sigprocmask, tkill, kill, setitimer, pause) traps to the substrate kernel as musl made it. Actions still run (the kernel delivers them) and masks still defer, so those checks stay green; but raise() signals no VMS condition, a program's LIB\$SIGNAL never reaches its signal action, the alarm is not the \$SETIMR AST's SS\$_ASTFLT, ITIMER_VIRTUAL is a substrate CPU timer, and kill() takes a VMS PID for a Linux pid (ESRCH), so the target lives. Gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOR'
+raise(SIGSEGV) is LIB$SIGNAL SS$_ACCVIO: the frame handler saw it first
+LIB$SIGNAL SS$_ACCVIO (access) reaches the SA_SIGINFO SIGBUS action, si_addr = the VA
+LIB$SIGNAL SS$_HPARITH reaches the SIGFPE action
+the alarm is the $SETIMR AST's SS$_ASTFLT condition
+ITIMER_VIRTUAL is refused (EINVAL), not faked
+kill(own VMS PID, SIGUSR1) runs the action
+kill(VMS PID, 0) finds the process ($GETJPI)
+kill(VMS PID, SIGTERM) is accepted ($FORCEX)
+the target is gone: $GETJPI says SS$_NONEXPR
+EOR
+                      ;;
+        knock_on_fail) cat <<'EOR'
+EOR
+                      ;;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        sed -i -e 's#^    return crtl_sig_serve(n, a1, a2, a3, a4, handled);$#    (void)crtl_sig_serve; return 0; /* NEGCTL crtl-signal-falls-to-linux */#' "$_file"
+    :
+}

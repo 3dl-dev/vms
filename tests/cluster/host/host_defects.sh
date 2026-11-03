@@ -142,6 +142,7 @@ SELF="$0"
 DEFECTS="coord-genesis-refusal-uncounted
 dlm-f29f-deferred-grant-not-read
 dlm-f29f-deferred-grant-declined-by-the-arm
+dlm-7649-f11b-lock-takes-the-mounters-identity
 blk-port-op-not-stamped
 blk-send-data-not-confirmed
 rdev-dismount-absent-status-wrong
@@ -336,7 +337,8 @@ dlm-5d6-rebuild-runs-in-quorum-hang
 dlm-5d6-hold-lifted-in-quorum-hang
 dlm-b4d-adopted-tree-dir-untold
 dlm-b4d-undirected-answers-you
-dlm-b4d-undirected-answers-you-fuzz"
+dlm-b4d-undirected-answers-you-fuzz
+dlm-departed-holder-locks-kept"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -451,6 +453,23 @@ EOF2
         why)          echo "the op-0x02 branch never matches, so a real VAX master's deferred grant falls to RULE C and is declined (cn->dlm_declined) -- the lab's vms-5fa hang, with the FSM entry intact but unreachable.";;
         require_fail) hd_lines <<'EOF2'
 *** a master's op-0x02 is routed to the FSM's deferred-grant entry ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-7649-f11b-lock-takes-the-mounters-identity)
+        case "$_f" in
+        facility)     echo "the Files-11 XQP's F11B\$v/F11B\$s locks are SYSTEM-WIDE KERNEL-MODE resources (UIC group 0, access mode 0), stated by the executive (vms_lock.c acp_f11b_enq, rd vms-7649) -- VAX1's SDA 'Kernel mode / System' and every captured F11B\$ frame";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_f11b_enq passes no stated identity, so the XQP's locks take the MOUNTing process's (UIC group 1, user mode) -- what shipped before. MEASURED COST 2026-11-02 (tests/lab/captures/vms-5fa-shared-volume-20261102): OVMXE's F11B\$vEVAC5FA request hashed to VAX2 instead of VAX1, VAX2 said 'you master it', and OVMX mastered a second copy of the volume lock, so the two nodes' XQPs never serialized.";;
+        require_fail) hd_lines <<'EOF2'
+*** addressed to VAX1, the resource's directory -- not VAX2, where the lab's went ***
+*** naming UIC group 0, system-wide -- not the mounter's group 1 ***
+*** at access mode 0, kernel -- not the mounter's user mode ***
+  with the proven hash of THAT identity
+*** the F11B$s request names (group 0, kernel) too ***
 EOF2
                       ;;
         esac;;
@@ -783,6 +802,7 @@ EOF
   the engine does not claim mastery
 exactly one frame left this node
 *** addressed to the VAX the directory named ***
+  as an op-0x01 request
 *** carrying the hash the VAX ITSELF put on the wire for that name -- never a computed one ***
   and OUR OWN handle, the one this executive minted
 *** and NOTHING is granted yet: the requester waits for the VAX's master, it does not grant itself ***
@@ -3800,6 +3820,20 @@ EOF
                       ;;
         esac;;
 
+    dlm-departed-holder-locks-kept)
+        case "$_f" in
+        facility)     echo "THE EVACUATION TAKEOVER (vms_lock.c vms_lock_dlm_member_departed, rd vms-4d3 / vms-1e58): when a member leaves, the locks this master holds FOR it are released through the real release path, which is what grants a survivor's waiter queued behind them";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_sim_rolling_evacuation";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_lock_dlm_member_departed() keeps clearing directory answers and departed masters but no longer calls vms_lock_dlm_release_csid_locks(), so a departed system's EX lock stays GRANTED on the surviving master forever. The survivor's standby -- queued NL->EX behind it, exactly EVACWL's standby -- is never granted: the workload cannot be taken over, which is the ci.6 gate's whole point. The same mutation applied to the tree the genesis rig is built from turns its booted evac mode red at the takeover (tests/qemu/run_cluster_evac_ci.sh)";;
+        require_fail) hd_lines <<'EOF'
+*** takeover: OVMXA's queued standby is GRANTED EX once OVMXC leaves -- the workload runs on a survivor ***
+takeover: no lock is left held for the departed OVMXC
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -3824,6 +3858,10 @@ apply_edit() {
     dlm-f29f-deferred-grant-declined-by-the-arm)
         # The opcode test is unique in vms_dlm_scs.c.
         sed -i 's|\t    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY) {|\t    req->opcode == (uint8_t)VMS_DLM_WIREOP_GRANT_NOTIFY \&\& 0) { /* NEGCTL dlm-f29f-deferred-grant-declined-by-the-arm */|' "$_file";;
+
+    dlm-7649-f11b-lock-takes-the-mounters-identity)
+        # The XQP's one $ENQ door; its stated-identity argument is unique.
+        sed -i 's|    return vms_enq_core_ident(proc, a, NULL, \&vms_f11b_lock_ident);|    return vms_enq_core_ident(proc, a, NULL, NULL); /* NEGCTL dlm-7649-f11b-lock-takes-the-mounters-identity */|' "$_file";;
 
     quorum-form-set-ignores-peers)
         # The ONE unconditional add of a CSB's votes into the cold-formation
@@ -4850,6 +4888,11 @@ apply_edit() {
         # is a `case` label, not a return).
         sed -i 's@^        return VMS_DLM_OP_CONVERT;$@        return VMS_DLM_OP_ENQ; /* NEGCTL dlm-convert-by-name */@' "$_file";;
 
+    dlm-departed-holder-locks-kept)
+        # The sweep's one call into the release path is unique in the file
+        # (vms_lock_dlm_release_csid_locks' other callers pass a counter).
+        sed -i 's@^    (void)vms_lock_dlm_release_csid_locks(departed_csid, NULL);$@    (void)departed_csid; /* NEGCTL dlm-departed-holder-locks-kept */@' "$_file";;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -5080,6 +5123,13 @@ cmd_selftest() {
         defect_field "$_st_d" require_fail >"$_st_tmp/rf"
         for _st_suite_glob in $_st_suites; do
             _st_src="$_st_tests/$_st_suite_glob.c"
+            # A tests/cluster/sim scenario target (test_sim_<x>) has its
+            # source at tests/cluster/sim/scenarios/<x>.c (rd vms-1e58).
+            case "$_st_suite_glob" in
+            test_sim_*)
+                [ -f "$_st_src" ] ||
+                    _st_src="$_st_tests/../sim/scenarios/${_st_suite_glob#test_sim_}.c";;
+            esac
             [ -f "$_st_src" ] || { echo "FAIL: $_st_d: suites_red names '$_st_suite_glob' but $_st_src does not exist"; _st_rc=1; continue; }
             while IFS= read -r _st_txt; do
                 [ -n "$_st_txt" ] || continue

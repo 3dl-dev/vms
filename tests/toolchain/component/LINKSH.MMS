@@ -13,7 +13,7 @@
 ! build path:
 !
 !     TCC.EXE   compiles LINK.C and OVMX_LINK_RMS_IO.C to objects;
-!     LINK.EXE  --executable links the two objects against the C run-time
+!     LINK.EXE  /EXECUTABLE links the two objects against the C run-time
 !               shareable DECC$SHR.EXE + the five OVMX runtime shareables into a
 !               runnable OVMX linker image, LINKSH.EXE (PT_INTERP=IMGACT.EXE).
 !
@@ -64,19 +64,15 @@
 ! =============================================================================
 
 ! ---- macros ----------------------------------------------------------------
-CFLAGS  = -x c -c -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO
+CFLAGS  = -x c -c -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO -DOVMX_LINK_IMAGE
 INCS    = -I VMSLINK$SRC: -I OVMX$INCLUDE: -I RMS$INCLUDE:
-RTLIBS  = --use SYS$LIBRARY:DECC$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMS$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMSPROCESS$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMSFS$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMSLNM$SHR.EXE -
-	  --use SYS$LIBRARY:LIBVMSRMS$SHR.EXE
+! The six shareable images the linker binds are named in RTLIBS.OPT, as an
+! OpenVMS link names shareable images: file/SHAREABLE lines of an options file.
 OBJS    = LINK.OBJ OVMX_LINK_RMS_IO.OBJ
 
 ! ---- final image: the OVMX linker, linked from its two objects --------------
 LINKSH.EXE : $(OBJS)
-	LNK --executable $(RTLIBS) -o $(MMS$TARGET) $(OBJS)
+	LNK /EXECUTABLE=$(MMS$TARGET)/NOSYSLIB/NOSYSSHR LINK.OBJ,OVMX_LINK_RMS_IO.OBJ,RTLIBS.OPT/OPTIONS
 
 ! ---- compile each translation unit (TCC.EXE) -------------------------------
 LINK.OBJ : LINK.C

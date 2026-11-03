@@ -248,11 +248,26 @@ static int exec_done(uint32_t pid, uint32_t *cond)
     il[0].bufaddr = &got;
     il[0].retlen = &len;
     uint32_t jst = sys$getjpiw(0, &pid, 0, il, 0, 0, 0);
-    if (jst == SS$_NONEXPR) {
-        *cond = (st & 1) ? c : SS$_ABORT;
-        return 1;
+    if (jst != SS$_NONEXPR)
+        return 0;
+    /* Gone. The executive deletes a process in three steps -- unlink (its PID
+     * answers SS$_NONEXPR), release, post its creator's termination record --
+     * so the record follows the PID's disappearance by the release. Read the
+     * record (rd vms-ff24: the value read while the process still lived is no
+     * answer); give the executive the release to post it, then SS$_ABORT. */
+    static const float tick = 0.01f;
+    for (int k = 0; k < 500; k++) {
+        c = 0;
+        rec = 0;
+        st = vms_kif_getexit_pid(pid, &c, &rec);
+        if (st & 1) {
+            *cond = rec ? c : SS$_ABORT;
+            return 1;
+        }
+        (void)lib$wait(&tick, 0, 0);
     }
-    return 0;
+    *cond = SS$_ABORT;
+    return 1;
 }
 
 static void exec_forget(int i)

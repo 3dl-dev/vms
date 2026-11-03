@@ -38,6 +38,7 @@
 #include "ssdef.h"
 #include "starlet.h"
 #include "descrip.h"
+#include "rms/rms.h"
 #include "lnmdef.h"
 #include "uaidef.h"
 #include "vms_kif.h"
@@ -46,7 +47,12 @@
 #define EXIT_SKIP 77
 #define DCL_PATH "/bin/DCL.EXE"
 #define LGI_LOGICAL "LGI838B"
-#define LGI_SPEC LGI_LOGICAL ":[000000]L.COM"
+#define LGI_SPEC LGI_LOGICAL ":[OVMXDIR]OVMX838B_L.COM"
+/* @ reaches a procedure only through RMS (vms-20c94), so L.COM lives on the
+ * mounted ODS-2 volume, written with $CREATE/$PUT, never a host /tmp file. */
+#define LGI_UNIT "VDA0:"
+#define LGI_DIR  LGI_UNIT "[OVMXDIR]"
+#define LGI_FILE LGI_DIR "OVMX838B_L.COM"
 
 static int pass = 0, fail = 0;
 #define CHECK(cond, msg) do { \
@@ -177,6 +183,41 @@ static int run_child_checks(int login)
     return WIFEXITED(st) ? WEXITSTATUS(st) : 255;
 }
 
+/* A procedure as variable-length carriage-return records, one $PUT a line. */
+static int write_com_rms(const char *spec, const char *text)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    fab.fab$b_org = FAB$C_SEQ;
+    fab.fab$b_rfm = FAB$C_VAR;
+    fab.fab$b_rat = FAB$M_CR;
+    fab.fab$b_fac = FAB$M_PUT;
+    if (!(sys$create(&fab, 0, 0) & 1)) return -1;
+    struct RAB rab = cc$rms_rab;
+    rab.rab$l_fab = &fab;
+    if (!(sys$connect(&rab, 0, 0) & 1)) { sys$close(&fab, 0, 0); return -1; }
+    uint32_t st = RMS$_NORMAL;
+    while (*text && (st & 1)) {
+        const char *nl = strchr(text, '\n');
+        size_t n = nl ? (size_t)(nl - text) : strlen(text);
+        rab.rab$l_rbf = (char *)text;
+        rab.rab$w_rsz = (uint16_t)n;
+        st = sys$put(&rab, 0, 0);
+        text += n + (nl ? 1 : 0);
+    }
+    uint32_t cst = sys$close(&fab, 0, 0);
+    return ((st & 1) && (cst & 1)) ? 0 : -1;
+}
+
+static void erase_rms(const char *spec)
+{
+    struct FAB fab = cc$rms_fab;
+    fab.fab$l_fna = (char *)spec;
+    fab.fab$b_fns = (uint8_t)strlen(spec);
+    (void)sys$erase(&fab, 0, 0);
+}
+
 static uint32_t define_job_logical(const char *name, const char *val)
 {
     static const char tab[] = "LNM$JOB";
@@ -221,18 +262,14 @@ int main(void)
 
     /* The login command file, reached through a JOB logical every DCL below
      * (a subprocess of this suite's job) translates. */
-    char dir[] = "/tmp/ovmx_lgi_XXXXXX";
-    if (!mkdtemp(dir)) { printf("  FAIL: mkdtemp\n"); return 1; }
-    char path[128];
-    snprintf(path, sizeof path, "%s/L.COM", dir);
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    const char com[] = "$ WRITE SYS$OUTPUT \"LGI-RAN\"\n";
-    if (fd < 0 || write(fd, com, sizeof com - 1) != (ssize_t)(sizeof com - 1)) {
-        printf("  FAIL: write L.COM\n"); return 1;
+    if (!(vms_kif_acp_mount(LGI_UNIT) & 1)) {
+        printf("  FAIL: mount " LGI_UNIT "\n"); return 1;
     }
-    close(fd);
-    uint32_t lst = define_job_logical(LGI_LOGICAL, dir);
-    CHECK((lst & 1) || lst == SS$_SUPERSEDE, "LNM$JOB " LGI_LOGICAL " names the login command file's directory (precondition)");
+    if (write_com_rms(LGI_FILE, "$ WRITE SYS$OUTPUT \"LGI-RAN\"\n") != 0) {
+        printf("  FAIL: write " LGI_FILE " through RMS\n"); return 1;
+    }
+    uint32_t lst = define_job_logical(LGI_LOGICAL, LGI_UNIT);
+    CHECK((lst & 1) || lst == SS$_SUPERSEDE, "LNM$JOB " LGI_LOGICAL " names the login command file's volume (precondition)");
 
     static const char script[] = "WRITE SYS$OUTPUT \"REPL-REACHED\"\n";
     static char out[16384];
@@ -272,8 +309,7 @@ int main(void)
           "argv: --captive on the command line does not confine DCL");
 
     delete_job_logical(LGI_LOGICAL);
-    unlink(path);
-    rmdir(dir);
+    erase_rms(LGI_FILE);
     printf("=== test_syssvc_dcl_login_state: %d passed, %d failed ===\n", pass, fail);
     return fail ? 1 : 0;
 }

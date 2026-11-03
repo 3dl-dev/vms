@@ -1,5 +1,5 @@
 #!/bin/bash
-# TEST: DCL does no new I/O through libc: the file verbs and @ have none, output goes only through the dcl_out.c sink, and no file's libc call count grows (libc-drop ratchet)
+# TEST: DCL does no new I/O through libc: the file verbs and @ have none, output goes only through the dcl_out.c sink, input only through dcl_in.c, and no file's libc call count grows (libc-drop ratchet)
 # EXPECT: contains:LIBC_IO_RATCHET_OK
 # EXPECT_NOT: contains:LIBC_IO_RATCHET_FAIL
 #
@@ -25,6 +25,24 @@ for f in "$ROOT"/src/vmsdcl/*.c; do
     hits=$(grep -nE '(^|[^_a-zA-Z0-9.>$])(printf|puts|putchar|vprintf)\s*\(|\b(fputs|fputc|putc|fprintf|fwrite|vfprintf|fflush|setvbuf|ferror|clearerr)\s*\(.*\b(stdout|stderr)\b|=\s*(stdout|stderr)\b|,\s*(stdout|stderr)\s*\)' "$f" |
         grep -vE '^[0-9]+:\s*(\*|//|/\*)')
     [ -n "$hits" ] && { echo "$(basename "$f"): writes stdout/stderr outside the sink (dcl_out.c): $hits"; bad=1; }
+done
+# One input source (rd vms-4d27): SYS$INPUT is read only by dcl_in.c -- a
+# mailbox by $QIO, a file by RMS, the terminal by its driver -- and its one
+# marked stdio fallback. Any other file reading stdin bypasses it.
+for f in "$ROOT"/src/vmsdcl/*.c; do
+    [ "$(basename "$f")" = dcl_in.c ] && continue
+    hits=$(grep -nE '\b(fgets|fread|fscanf|getline|getdelim|getc|fgetc|ungetc|feof|clearerr)\s*\(.*\bstdin\b|(^|[^_a-zA-Z0-9.>$])(getchar|gets|scanf)\s*\(|\bread\s*\(\s*(0|STDIN_FILENO)\s*,' "$f" |
+        grep -vE '^[0-9]+:\s*(\*|//|/\*)')
+    [ -n "$hits" ] && { echo "$(basename "$f"): reads stdin outside the input source (dcl_in.c): $hits"; bad=1; }
+done
+# dcl_in.c's stdio is the one block between its THE STDIO FALLBACK markers.
+infb=$(awk '/THE STDIO FALLBACK/{f=1} f&&/^ \* =+ \*\/$|^\/\* =+ \*\/$/{n++; if(n==2){f=0}} !f&&/(^|[^A-Za-z0-9_])stdin([^A-Za-z0-9_]|$)/{print FNR": "$0}' "$ROOT/src/vmsdcl/dcl_in.c" | grep -vE '^[0-9]+:\s*(\*|//|/\*)')
+[ -n "$infb" ] && { echo "dcl_in.c: stdin used outside its marked fallback block: $infb"; bad=1; }
+# Files whose libc I/O reached 0 stay at 0 (hard pin; the ratchet alone would
+# accept a baseline edit back up).
+for z in dcl_io.c dcl_main.c; do
+    n=$(bash "$ROOT/tests/dcl/libc_io_census.sh" "$ROOT" | awk -v f="$z" '$1==f{print $2}')
+    [ -n "$n" ] && { echo "$z: $n libc I/O sites; it is pinned at 0 (rd vms-4d27, vms-67a)"; bad=1; }
 done
 base="$ROOT/tests/dcl/libc_io_baseline.txt"
 now=$(bash "$ROOT/tests/dcl/libc_io_census.sh" "$ROOT")

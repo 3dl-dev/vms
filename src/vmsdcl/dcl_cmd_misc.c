@@ -7,6 +7,7 @@
  */
 
 #include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -4262,7 +4263,8 @@ int cmd_telnet(struct dcl_command *cmd)
     if ((st & 1) && got) { dcl_out_write(buf, got); dcl_out_flush(); }
 
     /* Half-duplex line loop over SYS$INPUT. */
-    while (fgets(line, sizeof(line), stdin)) {
+    while (dcl_in_get(NULL, line, sizeof(line) - 1) >= 0) {
+        strcat(line, "\n");                  /* the line goes with its end */
         if (tcpip_tool_iprefix(line, "quit") || tcpip_tool_iprefix(line, "exit"))
             break;
         st = tcpip_telnet_send(&conn, line, (uint32_t)strlen(line));

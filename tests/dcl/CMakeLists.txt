@@ -156,6 +156,7 @@ add_executable(test_dcl_prompt_echo_race
     test_prompt_echo_race.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_mbx.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_out.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_in.c
 )
 target_include_directories(test_dcl_prompt_echo_race PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include

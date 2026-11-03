@@ -88,6 +88,7 @@ int main(void)
     char body[256] = "";
     int ofd = open(OUT_PATH, O_RDONLY);
     if (ofd >= 0) { ssize_t n = read(ofd, body, sizeof body - 1); if (n > 0) body[n] = 0; close(ofd); }
+    /* negctl-knockon: dcl-sysinput-file-not-read */
     /* negctl: spawn-input-via-linux-path */
     CHECK(strstr(body, MARKER) != NULL, "the DCL executed the ODS-2 command file (its output reached the output file)");
 

@@ -1,5 +1,10 @@
 /*
- * dcl_mbx.c - bind DCL's SYS$INPUT / SYS$OUTPUT to mailbox devices (vms-786)
+ * dcl_mbx.c - bind DCL's SYS$OUTPUT to a mailbox device (vms-786, vms-1b6a)
+ *
+ * SYS$INPUT is no longer bound here: DCL reads a SYS$INPUT mailbox itself,
+ * $QIOW IO$_READVBLK on its own channel, and a SYS$INPUT file through RMS
+ * (dcl_in.c, rd vms-4d27). The reader threads and the pipe on fd 0 that the
+ * history below describes for input are retired.
  *
  * THE GAP THIS CLOSES. DCL's command-read loop (dcl_main.c) reads from stdin
  * with fgets()/readline() and writes results with printf() to stdout -- a Unix
@@ -86,20 +91,16 @@
 #include "iodef.h"
 #include "vms_kif.h"
 #include "dcl/dcl_mbx.h"
-#include "rms_textfile.h"   /* a disk-file SYS$INPUT is read through RMS (rd vms-003b) */
+#include "dcl/dcl_in.h"
 
 /* One mailbox message never exceeds the executive's per-ioctl cap
  * (VMS_MBX_IOCTL_MAXLEN == 4096, src/kernel/vms_mbx.h); a DCL command line is
  * DCL_MAX_LINE (4096) too, so this buffer holds either. */
 #define DCL_MBX_BUF 4096
 
-static uint32_t  g_in_chan     = 0;   /* SYS$INPUT executive mailbox channel */
 static uint32_t  g_out_chan    = 0;   /* SYS$OUTPUT executive mailbox channel */
-static int       g_in_pipe_w   = -1;  /* reader thread -> DCL fd 0 (write end) */
 static int       g_out_pipe_r  = -1;  /* DCL fd 1 -> writer thread (read end) */
-static pthread_t g_reader;
 static pthread_t g_writer;
-static int       g_reader_up   = 0;
 static int       g_writer_up   = 0;
 
 /*
@@ -180,195 +181,6 @@ static int out_sink_write(const char *buf, size_t n)
         return 1;
     }
     return (vms_kif_mbx_write(g_out_chan, buf, (uint32_t)n) & 1) ? 1 : 0;
-}
-
-/* A VMS mailbox device name is MBA<unit>: -- what $CREMBX publishes and what a
- * SYS$INPUT/SYS$OUTPUT logical must resolve to for us to bind it. */
-static int is_mbx_device(const char *s)
-{
-    size_t n = strlen(s);
-    if (n < 5) return 0;                    /* at least "MBA0:" */
-    if (toupper((unsigned char)s[0]) != 'M' ||
-        toupper((unsigned char)s[1]) != 'B' ||
-        toupper((unsigned char)s[2]) != 'A')
-        return 0;
-    if (s[n - 1] != ':') return 0;
-    for (size_t i = 3; i < n - 1; i++)
-        if (!isdigit((unsigned char)s[i]))
-            return 0;
-    return 1;
-}
-
-/*
- * resolve_to_mailbox - translate a logical name (SYS$INPUT / SYS$OUTPUT)
- * through the standard search order, following indirection, until it names a
- * mailbox device. Returns 1 with *out set to the "MBAn:" device name, 0 if the
- * name is undefined or resolves to something that is not a mailbox (a terminal,
- * a file, undefined -- all of which leave DCL on its fd/stdio path).
- */
-/* The final equivalence of `name` through the logical-name tables (up to ten
- * levels), or 0 if `name` is not a logical name. */
-static int resolve_final(const char *name, char *out, size_t outsz)
-{
-    char cur[256];
-    int any = 0;
-    strncpy(cur, name, sizeof(cur) - 1);
-    cur[sizeof(cur) - 1] = '\0';
-    for (int depth = 0; depth < 10; depth++) {
-        struct dsc$descriptor_s namdsc;
-        char equiv[256];
-        uint16_t rl = 0;
-        struct item_list_3 itmlst[2];
-        vms_cstr_to_desc(&namdsc, cur);
-        memset(itmlst, 0, sizeof(itmlst));
-        itmlst[0].buflen    = (uint16_t)(sizeof(equiv) - 1);
-        itmlst[0].item_code = LNM$_STRING;
-        itmlst[0].bufaddr   = equiv;
-        itmlst[0].retlen    = &rl;
-        if (!(sys$trnlnm(NULL, NULL, &namdsc, NULL, itmlst) & 1) || rl == 0)
-            break;
-        if (rl >= sizeof(equiv))
-            rl = (uint16_t)(sizeof(equiv) - 1);
-        equiv[rl] = '\0';
-        if (strcmp(equiv, cur) == 0)
-            break;
-        strncpy(cur, equiv, sizeof(cur) - 1);
-        cur[sizeof(cur) - 1] = '\0';
-        any = 1;
-    }
-    if (!any)
-        return 0;
-    strncpy(out, cur, outsz - 1);
-    out[outsz - 1] = '\0';
-    return 1;
-}
-
-/* A FILE specification -- a device field followed by a directory or file name
- * -- rather than a bare device such as a terminal or the null device. */
-static int names_a_file(const char *spec)
-{
-    const char *c = strrchr(spec, ':');
-    return c && c[1] != '\0';
-}
-
-/* Feeds DCL's stdin pipe from a disk-file SYS$INPUT, record by record. */
-static rms_textfile_t *g_in_file;
-static void *file_reader_main(void *arg)
-{
-    char rec[4096];
-    int too_long = 0;
-    (void)arg;
-    while (rms_textfile_getline(g_in_file, rec, sizeof(rec) - 1, &too_long)) {
-        size_t n = strlen(rec);
-        if (n == 0 || rec[n - 1] != '\n')
-            rec[n++] = '\n';
-        size_t off = 0;
-        while (off < n) {
-            ssize_t w = write(g_in_pipe_w, rec + off, n - off);
-            if (w <= 0) goto done;
-            off += (size_t)w;
-        }
-    }
-done:
-    rms_textfile_close(g_in_file);
-    g_in_file = NULL;
-    close(g_in_pipe_w);
-    g_in_pipe_w = -1;
-    return NULL;
-}
-
-static int resolve_to_mailbox(const char *name, char *out, size_t outsz)
-{
-    char cur[256];
-
-    strncpy(cur, name, sizeof(cur) - 1);
-    cur[sizeof(cur) - 1] = '\0';
-
-    for (int depth = 0; depth < 10; depth++) {
-        if (is_mbx_device(cur)) {
-            strncpy(out, cur, outsz - 1);
-            out[outsz - 1] = '\0';
-            return 1;
-        }
-
-        struct dsc$descriptor_s namdsc;
-        char equiv[256];
-        uint16_t rl = 0;
-        struct item_list_3 itmlst[2];
-
-        vms_cstr_to_desc(&namdsc, cur);
-        memset(itmlst, 0, sizeof(itmlst));
-        itmlst[0].buflen    = (uint16_t)(sizeof(equiv) - 1);
-        itmlst[0].item_code = LNM$_STRING;
-        itmlst[0].bufaddr   = equiv;
-        itmlst[0].retlen    = &rl;
-        equiv[0] = '\0';
-
-        uint32_t st = sys$trnlnm(NULL, NULL, &namdsc, NULL, itmlst);
-        if (!(st & 1) || rl == 0)
-            return 0;                        /* not a logical name / undefined */
-        if (rl >= sizeof(equiv))
-            rl = (uint16_t)(sizeof(equiv) - 1);
-        equiv[rl] = '\0';
-        if (strcmp(equiv, cur) == 0)
-            return 0;                        /* no progress: not a mailbox */
-
-        strncpy(cur, equiv, sizeof(cur) - 1);
-        cur[sizeof(cur) - 1] = '\0';
-    }
-    return 0;
-}
-
-/*
- * reader_main - drain the SYS$INPUT mailbox into DCL's stdin pipe. Each
- * IO$_READVBLK returns one message (one command record the parent wrote); it is
- * forwarded to the pipe and terminated with a newline so DCL's fgets()-based
- * loop sees a complete line. A read that fails (e.g. the executive became
- * unreachable) closes the pipe, so DCL's stdin hits EOF and the REPL ends.
- */
-static void *reader_main(void *arg)
-{
-    char buf[DCL_MBX_BUF];
-    (void)arg;
-
-    for (;;) {
-        uint32_t actlen = 0;
-        /* nowait=0: block until a command record arrives (VMS $QIO READVBLK on
-         * a mailbox waits for a message; IO$M_NOW is vms-5df, not wanted here). */
-        uint32_t st = vms_kif_mbx_read(g_in_chan, buf, (uint32_t)sizeof(buf),
-                                       &actlen, 0);
-        if (!(st & 1))
-            break;
-
-        uint32_t mlen = actlen;
-        if (mlen > sizeof(buf))
-            mlen = sizeof(buf);
-        /* A writer that sent the record with a trailing NUL (a write of
-         * strlen+1) should not push that NUL into the command line. */
-        if (mlen > 0 && buf[mlen - 1] == '\0')
-            mlen--;
-
-        size_t off = 0;
-        while (off < mlen) {
-            ssize_t w = write(g_in_pipe_w, buf + off, mlen - off);
-            if (w <= 0)
-                goto done;
-            off += (size_t)w;
-        }
-        /* Deliver a complete line even if the record carried no newline. */
-        if (mlen == 0 || buf[mlen - 1] != '\n') {
-            char nl = '\n';
-            if (write(g_in_pipe_w, &nl, 1) != 1)
-                break;
-        }
-    }
-
-done:
-    if (g_in_pipe_w >= 0) {
-        close(g_in_pipe_w);
-        g_in_pipe_w = -1;
-    }
-    return NULL;
 }
 
 /*
@@ -567,70 +379,9 @@ int dcl_mbx_bind_std_streams(void)
     int bound = 0;
     char dev[256];
 
-    /* SYS$INPUT: commands arrive here. */
-    if (resolve_to_mailbox("SYS$INPUT", dev, sizeof(dev))) {
-        uint32_t chan = 0;
-        if (vms_kif_mbx_assign(dev, &chan) & 1) {
-            int p[2];
-            if (pipe(p) == 0) {
-                g_in_chan   = chan;
-                g_in_pipe_w = p[1];
-                if (dup2(p[0], STDIN_FILENO) >= 0 &&
-                    pthread_create(&g_reader, NULL, reader_main, NULL) == 0) {
-                    pthread_detach(g_reader);
-                    g_reader_up = 1;
-                    bound |= DCL_MBX_BOUND_INPUT;
-                    close(p[0]);
-                } else {
-                    close(p[0]);
-                    close(p[1]);
-                    g_in_pipe_w = -1;
-                    g_in_chan   = 0;
-                    (void)vms_kif_dassgn(chan);
-                }
-            } else {
-                (void)vms_kif_dassgn(chan);
-            }
-        }
-    }
-
-    /*
-     * SYS$INPUT a DISK FILE (rd vms-003b): a process $CREPRC'd with a VMS file
-     * as its input -- LIB$SPAWN's command file, or INPUT=file -- has SYS$INPUT
-     * naming that file, as on VMS, and DCL reads its commands from it through
-     * RMS. A terminal or a mailbox is not a file and is left to the paths
-     * around this one.
-     */
-    if (!(bound & DCL_MBX_BOUND_INPUT) && !isatty(STDIN_FILENO)) {
-        char spec[256];
-        if (resolve_final("SYS$INPUT", spec, sizeof(spec)) && names_a_file(spec) &&
-            (g_in_file = rms_textfile_open(spec)) != NULL) {
-            int p[2];
-            if (pipe(p) == 0) {
-                g_in_pipe_w = p[1];
-                if (dup2(p[0], STDIN_FILENO) >= 0 &&
-                    pthread_create(&g_reader, NULL, file_reader_main, NULL) == 0) {
-                    pthread_detach(g_reader);
-                    g_reader_up = 1;
-                    bound |= DCL_MBX_BOUND_INPUT;
-                    close(p[0]);
-                } else {
-                    close(p[0]);
-                    close(p[1]);
-                    g_in_pipe_w = -1;
-                    rms_textfile_close(g_in_file);
-                    g_in_file = NULL;
-                }
-            } else {
-                rms_textfile_close(g_in_file);
-                g_in_file = NULL;
-            }
-        }
-    }
-
     /* SYS$OUTPUT: results leave here -- DCL's own records through its $QIO
      * channel (dcl_mbx_put_record), an image's output through the relay. */
-    if (resolve_to_mailbox("SYS$OUTPUT", dev, sizeof(dev))) {
+    if (dcl_in_resolve_mailbox("SYS$OUTPUT", dev, sizeof(dev))) {
         uint32_t chan = 0;
         uint16_t qchan = 0;
         struct dsc$descriptor_s devdsc;
@@ -704,13 +455,6 @@ void dcl_mbx_shutdown(void)
             g_out_chan = 0;
         }
     }
-
-    /* The reader thread is blocked in IO$_READVBLK on the (now command-drained)
-     * input mailbox; it is detached and reclaimed by process exit. We do NOT
-     * $DASSGN the input channel here -- tearing it down under an in-flight read
-     * in another thread would be a race, and process exit reclaims the channel
-     * cleanly. */
-    g_reader_up = 0;
 }
 
 #ifdef DCL_MBX_TEST_HOOKS

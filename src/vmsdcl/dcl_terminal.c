@@ -7,6 +7,7 @@
  */
 
 #include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -567,32 +568,22 @@ int dcl_tt_inquire(char *reply, size_t replysz)
 }
 
 /*
- * dcl_tt_read_line - one line for INQUIRE / READ SYS$INPUT / READ /PROMPT
- * from an interactive terminal: through the terminal driver when stdin is
- * that terminal, else (a pipe, a file, or no driver) the plain stream. 0 with
- * buf filled, -1 at end of file (^Z, or the stream's EOF).
+ * dcl_tt_read_line - one line for INQUIRE / READ SYS$INPUT / READ /PROMPT:
+ * through the terminal driver ($QIO IO$_READPROMPT) when SYS$INPUT is the
+ * terminal, else the next record of what SYS$INPUT names -- a mailbox by
+ * $QIO, a file by RMS, or (no executive) the substrate stream (dcl_in.c).
+ * 0 with buf filled, -1 at end of file (^Z, or the stream's EOF).
  */
 int dcl_tt_read_line(const char *prompt, char *buf, size_t bufsz)
 {
-    size_t len;
-
-    if (isatty(STDIN_FILENO)) {
+    if (dcl_in_route() == DCL_IN_ROUTE_NONE && isatty(STDIN_FILENO)) {
         int n = dcl_tt_read(prompt, prompt ? strlen(prompt) : 0, buf, bufsz, 0, 0, NULL);
         if (n >= 0)
             return 0;
         if (n != DCL_TT_NODRIVER)
             return -1;
     }
-    if (prompt && prompt[0]) {
-        dcl_out_fputs(prompt);
-        dcl_out_flush();
-    }
-    if (!fgets(buf, (int)bufsz, stdin))
-        return -1;
-    len = strlen(buf);
-    if (len > 0 && buf[len - 1] == '\n')
-        buf[len - 1] = '\0';
-    return 0;
+    return dcl_in_get(prompt, buf, bufsz) < 0 ? -1 : 0;
 }
 
 /*

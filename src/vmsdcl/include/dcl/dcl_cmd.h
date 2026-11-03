@@ -233,8 +233,6 @@ extern void dcl_eval_expr_string(struct dcl_context *ctx, const char *expr,
                                  char *out, size_t outlen);
 extern int dcl_execute_line(const char *line);
 extern int dcl_execute_script(const char *filename, int argc, char **argv);
-extern int dcl_read_input(struct dcl_context *ctx, const char *prompt,
-                          char *buffer, size_t bufsize);
 
 /* VMS filesystem protection functions */
 extern int      vmsfs_parse_protection(const char *str, uint16_t *prot);

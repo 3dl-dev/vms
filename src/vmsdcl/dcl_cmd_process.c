@@ -7,6 +7,7 @@
  */
 
 #include "dcl/dcl_out.h"
+#include "dcl/dcl_in.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1949,6 +1950,8 @@ int dcl_sysinput_setup(struct dcl_context *ctx, struct dcl_sysinput *si)
     }
     int rc = dcl_sysinput_install(si, blk, blk_len);
     free(blk);
+    if (si->saved_fd0 >= 0)
+        dcl_in_substrate(1);     /* SYS$INPUT is the block now (dcl_in.c) */
     if (rc != 0)
         dcl_error("DCL", 4, "SYSINPUT", "cannot provide SYS$INPUT for the image");
     return rc != 0 ? SS$_INSFMEM : 0;
@@ -1961,7 +1964,8 @@ void dcl_sysinput_restore(struct dcl_sysinput *si)
     dup2(si->saved_fd0, 0);
     close(si->saved_fd0);
     si->saved_fd0 = -1;
-    clearerr(stdin);
+    dcl_in_clear_eof();          /* the block's end is not the stream's */
+    dcl_in_substrate(0);
 }
 
 /*

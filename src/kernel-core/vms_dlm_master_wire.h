@@ -41,7 +41,7 @@ static inline uint32_t vms_dlm_master_req_flags(const struct vms_dlm_enq_request
 						uint8_t wireop)
 {
 	if (wireop == VMS_DLM_WIREOP_ENQ &&
-	    (e->lck_flags & VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)
+	    (e->req_flags & VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)
 		return (uint32_t)LCK_M_NOQUEUE;
 	return 0u;
 }

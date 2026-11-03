@@ -1456,6 +1456,9 @@ add_test(NAME cluster_frame_conformance_gate
         # tree's new master, its 0xfa answers -- emitted by test_dlm_rebuild
         # replaying RA1b's RMT1 tree on the real engine.
         dlm_rm_08 dlm_rm_08_ans
+        # rd vms-d63: the release that WRITES its value block -- the cell 1
+        # and the F11B$s block at body[36:52] -- emitted by test_cnxman_coord.
+        dlm_deq_vb
         # rd vms-fdeb: the master's op-0x0d directory re-registration, a frame
         # type OVMX had never sent -- required here so no byte of it reaches a
         # real directory node ungrounded (test_cnxman_coord composes it).
@@ -1727,6 +1730,40 @@ add_test(NAME cluster_host_f11b_lock_census
         "${CMAKE_SOURCE_DIR}"
 )
 set_tests_properties(cluster_host_f11b_lock_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;files11"
+    TIMEOUT 180
+)
+
+# ---- rd vms-d63: what the XQP's per-file serialization lock (F11B$s) carries
+# in its VALUE BLOCK and how a real release WRITES it, measured over every
+# capture: two counters (the HEADER counter and the DATA counter, read off the
+# one capture whose MSCP writes and XQP locks share a wire), bytes 8..15 zero;
+# a real $DEQ carries the lock's block at body[36:52], and the master stores it
+# when the release is marked 1 at body[30] (>= 98%) and not when marked 0
+# (<= 5%). Grounds src/kernel-core/vms_f11b_ser.h and the op-0x03 builder's
+# value-block form (vms_cluster_codec_dlm.h struct vms_dlm_deq).
+add_test(NAME cluster_host_f11b_ser_valblk_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/f11b_ser_valblk_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_f11b_ser_valblk_census PROPERTIES
+    LABELS "unit;cluster;cluster_host;dlm;files11"
+    TIMEOUT 180
+)
+
+# ---- rd vms-d63 (vms-5fa r5): the value a SUB-lock request carries at
+# body[128:132] -- ((fold(sub identity) ^ (parent value >> 16)) * MULT), the
+# value the tree's master finds the sub-RSB by. Pins it on every real sub
+# request whose parent request is in the corpus, on the op-0x12/0x08 SUB
+# records, and on the r5 frames themselves. Grounds
+# vms_dlm_sub_name_hash_proven() (src/kernel-core/vms_dlm_hash.h).
+add_test(NAME cluster_host_dlm_sub_hash_census
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/dlm_sub_hash_census.py" --selftest
+        "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(cluster_host_dlm_sub_hash_census PROPERTIES
     LABELS "unit;cluster;cluster_host;dlm;files11"
     TIMEOUT 180
 )

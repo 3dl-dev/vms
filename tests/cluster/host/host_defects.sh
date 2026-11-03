@@ -140,6 +140,12 @@
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+dlm-d63-xqp-lock-not-system
+dlm-d63-sub-request-carries-no-hash
+dlm-d63-release-queue-drops-the-value-block
+dlm-d63-request-asks-for-no-value-block
+dlm-d63-release-writes-no-value-block
+dlm-d63-read-holder-writes-the-master-block
 dlm-f29f-deferred-grant-not-read
 dlm-f29f-deferred-grant-declined-by-the-arm
 dlm-7649-f11b-lock-takes-the-mounters-identity
@@ -774,14 +780,29 @@ EOF
         why)          echo "the sub-resource stops inheriting its tree's master, so dlm_resolve_master falls through to the DIRECTORY path and the sub NAME is looked up as if it were a root -- exactly what shipped before. MEASURED COST at two real V7.3 VAXes 2026-10-21 (tests/lab/captures/vms-c2b-ovmx-holder-20261021): OVMX held the ROOT of a tree VAX1 mastered, then sent S0/S1/S2 to VAX2 (the directory) under each sub name's own derived hash, was answered 'no entry', and MASTERED THEM LOCALLY -- reporting lock ids 0100034B/4C/4D granted at CW that VAX1's SDA does not list. A grant no master gave, and one sub-resource name mastered on two nodes at once.";;
         require_fail) hd_lines <<'EOF'
 the sub-lock's request was posted
+*** and carrying the SUB's hash, off its parent's held value -- the value VAX1 finds its own F11B$s<12> RSB by, never the zero that made it grant a fresh RSB (vms-5fa r5) ***
+*** and it carries the SUB's hash, off the root's value (rd vms-d63; the function is VAX2's own on S0 under RMT9, b67a frame 235 -- test_dlm_hash) ***
 *** and it goes to the PARENT'S MASTER -- never to the directory, as 7 of 7 real sub-lock requests do ***
   ...and it is NOT a directory lookup
 *** body[36:40] is OUR OWN handle for the parent, read off the parent LKB ***
 *** body[40:44] is the handle THE PARENT'S MASTER gave it -- the pair that parent's own grant carried ***
-  and NO hash is asserted for a sub name nobody was asked about (Rule 8)
 the posted name is the sub-resource's own
 body[30] is the sub-lock's own requested mode
 its request was posted too
+  and both handles
+  exactly four posts: 2 $ENQ, 2 $DEQ
+  naming its parent by the pair (own handle, master's handle)
+  the file's lock is released FIRST, at its master
+*** a PW $ENQ with LCK$M_VALBLK ***
+*** a SUB-lock: addressed to the tree's MASTER, not the directory ***
+*** and its release is MARKED as writing the value block ***
+*** carrying (3,1): the header counter VAX1 will compare with the 2 it cached -- the rd vms-d63 fix ***
+*** named 'F11B$s' + 0c 00 00 00, COUNTED: 10 bytes with their NULs ***
+*** the caller holds the MASTER's value block (2,1) ***
+the ACP's next block after a header write is (3,1)
+the file's lock was posted
+the master grants the file's lock, with its value block
+two releases were posted
 EOF
                       ;;
         esac;;
@@ -806,7 +827,7 @@ EOF
         targets)      echo "kernel-core/vms_dlm_master_wire.h";;
         suites_red)   echo "test_dlm_mixed_master";;
         isolation)    echo "isolated";;
-        why)          echo "The translation stops reading the NOQUEUE bit, which is exactly the shipped state the ci.6 lab fire caught: the arm never set the master request's flags, so a real VAX's captured EX/NOQUEUE (frame 7310) against an EX this node holds is QUEUED instead of DENIED, and the VAX's \$ENQW completes SS\$_NORMAL inside this node's hold. The same frame's parse is untouched (lck_flags still reads 04 00), so only the translation and the outcome redden.";;
+        why)          echo "The translation stops reading the NOQUEUE bit, which is exactly the shipped state the ci.6 lab fire caught: the arm never set the master request's flags, so a real VAX's captured EX/NOQUEUE (frame 7310) against an EX this node holds is QUEUED instead of DENIED, and the VAX's \$ENQW completes SS\$_NORMAL inside this node's hold. The same frame's parse is untouched (req_flags still reads 04 00), so only the translation and the outcome redden.";;
         require_fail) hd_lines <<'EOF'
 *** and the arm's translation hands the master LCK_M_NOQUEUE ***
 *** VAX2's captured EX/NOQUEUE is DENIED -- the lab got QUEUED ***
@@ -1008,6 +1029,7 @@ EOF
         require_fail) hd_lines <<'EOF'
 a zero-length name is refused
 a refusal writes nothing (INV-6)
+a zero-length sub name is refused
 EOF
                       ;;
         esac;;
@@ -1086,6 +1108,8 @@ every CITED byte of the real specimen is byte-exact
 OVMX builds the queued answer for pair A
 OVMX builds the queued answer for pair B
 the built queued answer equals the real master's, byte for byte
+  body[20:24] the master's handle (VAX1's grant, frame 1475)
+  body[24:28] the releaser's own handle (frame 1474)
 EOF
                       ;;
         esac;;
@@ -1239,7 +1263,90 @@ EOF
 *** the shipping predicate calls a release a NOTIFICATION: nobody answers one (0 answers in the 41,049 real releases' corpus) ***
 *** and body[4:8] is ZERO: no token is minted on the CSB for a message no peer will ever answer ***
 the shipping composer opens no transaction on it
+a value-block release is still a notification: no transaction
 EOF
+                      ;;
+        esac;;
+
+    dlm-d63-sub-request-carries-no-hash)
+        case "$_f" in
+        facility)     echo "a SUB-resource carries its own hash, computed from its identity and its ROOT parent's held value (vms_lock.c enq_sub_take_tree_hash, vms_dlm_hash.c vms_dlm_sub_name_hash_proven, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the sub request goes out with ZERO at body[128:132], the form of the vms-5fa r5 fire: the real VAX1 master found no RSB by that value and granted every one of 161 OVMX F11B\$s<12> requests on a fresh one, (0,0) vbseq 0, while its own F11B\$s<12> RSB 879D7380 never held OVMX's lock (SDA 0 of 600). Real sub requests carry the sub hash on 28,532 of 28,532.";;
+        require_fail) hd_lines <<'EOF2'
+*** and carrying the SUB's hash, off its parent's held value -- the value VAX1 finds its own F11B$s<12> RSB by, never the zero that made it grant a fresh RSB (vms-5fa r5) ***
+*** and it carries the SUB's hash, off the root's value (rd vms-d63; the function is VAX2's own on S0 under RMT9, b67a frame 235 -- test_dlm_hash) ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-xqp-lock-not-system)
+        case "$_f" in
+        facility)     echo "the XQP's F11B\$s request is a SYSTEM-wide lock (LCK\$M_SYSTEM, wire 0x0010 at body[28:30]) as every real XQP F11B\$ request is (vms_lock.c vms_lock_acp_file_ser, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the request goes out without SYSTEM, the form of the vms-5fa r4 fire: VAX1 granted every OVMX F11B\$s request an empty value block (vbseq 0), including the one right after OVMX's marked release, so VAX1's own system-wide F11B\$s<12> never saw OVMX's change. SYSTEM goes with the group-0 identity on 76,116 of 76,116 real requests.";;
+        require_fail) hd_lines <<'EOF2'
+*** and SYSTEM (0x0010), as VAX2's: the system-wide resource VAX1's own F11B$s lock is on (rd vms-d63 r4) ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-release-queue-drops-the-value-block)
+        case "$_f" in
+        facility)     echo "the wire arm's RELEASE QUEUE keeps a written value block with the release it stages (vms_dlm_scs_fsm.c relq_record_from_post, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the staged snapshot keeps its four lock-id fields and drops the engine's write mark and block, so every F11B\$s release leaves unmarked and empty. MEASURED COST (vms-5fa r3, PR #2006 f11b-ser-trace.txt): 48 of 48 OVMX releases of F11B\$s locks unmarked and zero, and VAX1 overwrote OVMX's EVAC.DAT records again.";;
+        require_fail) hd_lines <<'EOF2'
+*** its body[30:36] is VAX2's own form for a written release (01 00 01 00 00 00): the WRITE MARK survived the release queue ***
+*** and body[36:52] carries (3,1) -- VAX2's frame 26 carries its own block there the same way ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-request-asks-for-no-value-block)
+        case "$_f" in
+        facility)     echo "an op-0x01 request carries LCK\$M_VALBLK at body[28] bit 0 (vms_cluster_codec_dlm.c vms_dlm_enq_request_build, rd vms-d63) -- a real master hands a value block only to a request that sets it";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the request goes out with body[28:30] all zero -- what OVMX sent in the vms-5fa r3 fire, where VAX1 granted its F11B\$s requests with an empty value block (vbseq 0) 48 of 48 times while VAX2's, carrying 0x0239, got (1,1).";;
+        require_fail) hd_lines <<'EOF2'
+*** body[28:30] carries VALBLK (0x0001), as VAX2's F11B$s request (0x0239): the request asks the master for the value block ***
+*** and SYSTEM (0x0010), as VAX2's: the system-wide resource VAX1's own F11B$s lock is on (rd vms-d63 r4) ***
+  and SYNCSTS (0x0008), as VAX2's
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-release-writes-no-value-block)
+        case "$_f" in
+        facility)     echo "a \$DEQ of a lock held at PW/EX with LCK\$M_VALBLK WRITES its value block to the master (vms_lock.c dlm_proxy_fill_post write_valblk on VMS_DLM_POST_DEQ, rd vms-d63) -- how OVMX's F11B\$s release tells a VAX the file header changed";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_proxy";;
+        isolation)    echo "isolated";;
+        why)          echo "the release of the XQP's per-file serialization lock goes out unmarked and without its block -- what OVMX did before rd vms-d63. MEASURED COST 2026-11-02 (tests/lab/captures/vms-5fa-shared-volume-r2-20261102): OVMX appended seq 11..20 to EVAC.DAT and rewrote its header, VAX1's cached header never learned of it, and VAX1 wrote its own seq 11..20 over OVMX's records -- the final file held 1169 records, every one VAX1's.";;
+        require_fail) hd_lines <<'EOF2'
+*** and its release is MARKED as writing the value block ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-read-holder-writes-the-master-block)
+        case "$_f" in
+        facility)     echo "the MASTER stores a peer's released value block only for a lock it holds for that peer at PW/EX (vms_lock.c vms_lock_dlm_xnode_deq, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "a peer's CR (or NL) lock, released with the write mark, overwrites the master's value block -- a block a read-mode holder was never entitled to set, which on an F11B\$s resource is another node's header counter rolled back or forged.";;
+        require_fail) hd_lines <<'EOF2'
+*** a CR holder's marked release writes nothing: only PW/EX may set the block ***
+EOF2
                       ;;
         esac;;
 
@@ -4056,9 +4163,37 @@ apply_edit() {
         # The release's own admission line, unique in this file.
         sed -i 's|^\tif (op == VMS_DLM_WIREOP_DEQ)$|\tif (0) /* NEGCTL dlm-release-opens-a-transaction */|' "$_file";;
 
+    dlm-d63-release-queue-drops-the-value-block)
+        # The release queue's copy of the write mark; the comment line ahead
+        # of it is unique in vms_dlm_scs_fsm.c.
+        perl -0pi -e 's|(/\* rd vms-d63: the written value block rides with the release\. \*/\n\tif \()p->write_valblk|${1}0 \&\& p->write_valblk /* NEGCTL dlm-d63-release-queue-drops-the-value-block */|' "$_file";;
+
+    dlm-d63-request-asks-for-no-value-block)
+        # The request-flag write; unique in vms_cluster_codec_dlm.c.
+        sed -i 's|^\tif (opcode == VMS_DLM_WIREOP_ENQ \&\& req->req_flags != 0u)$|\tif (0 \&\& opcode == VMS_DLM_WIREOP_ENQ \&\& req->req_flags != 0u) /* NEGCTL dlm-d63-request-asks-for-no-value-block */|' "$_file";;
+
+    dlm-d63-sub-request-carries-no-hash)
+        # The one call that gives a sub-resource its hash; unique. Removing it
+        # consumes the anchor, so a second apply cannot match.
+        sed -i 's|^        enq_sub_take_tree_hash(res);$|        ; /* NEGCTL dlm-d63-sub-request-carries-no-hash */|' "$_file";;
+
+    dlm-d63-xqp-lock-not-system)
+        # The F11B$s request's flags in vms_lock_acp_file_ser; unique.
+        sed -i 's|^    a.flags = LCK_M_SYNC \| LCK_M_VALBLK \| LCK_M_SYSTEM \| LCK_M_SYNCSTS;$|    a.flags = LCK_M_SYNC \| LCK_M_VALBLK \| LCK_M_SYNCSTS; /* NEGCTL dlm-d63-xqp-lock-not-system */|' "$_file";;
+
+    dlm-d63-release-writes-no-value-block)
+        # The $DEQ arm of write_valblk; unique in vms_lock.c.
+        sed -i 's|^                       (op == VMS_DLM_POST_DEQ \&\&$|                       (op == VMS_DLM_POST_DEQ \&\& 0 \&\& /* NEGCTL dlm-d63-release-writes-no-value-block */|' "$_file";;
+
+    dlm-d63-read-holder-writes-the-master-block)
+        # The mode guard on the master's store; unique in vms_lock.c.
+        sed -i 's|^        lock->granted_mode >= LCK_K_PWMODE)$|        1) /* NEGCTL dlm-d63-read-holder-writes-the-master-block */|' "$_file";;
+
     dlm-release-carries-the-lock-mode)
         # The release builder's own measured-cell line, unique in this file.
-        sed -i 's|^\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
+        # (rd vms-d63 moved the no-write release's cell write into an else
+        # branch, one tab deeper.)
+        sed -i 's|^\t\tvms_wire_put_u8(&w, VMS_OFF_DLM_DEQ_REL_CELL, VMS_DLM_DEQ_REL_CELL);$|\t\tvms_wire_put_u8(\&w, VMS_OFF_DLM_DEQ_REL_CELL, d->rel_cell); /* NEGCTL dlm-release-carries-the-lock-mode */|' "$_file";;
 
     dlm-local-convert-grants-nobody)
         # The immediate convert branch's grant pass. Distinguished from the
@@ -4209,7 +4344,7 @@ apply_edit() {
 
     dlm-1e58-noqueue-not-read)
         # The NOQUEUE test is unique in the header.
-        sed -i 's|\t    (e->lck_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)|\t    (e->lck_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u \&\& 0) /* NEGCTL dlm-1e58-noqueue-not-read */|' "$_file";;
+        sed -i 's|\t    (e->req_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u)|\t    (e->req_flags \& VMS_DLM_REQ_FLAG_NOQUEUE) != 0u \&\& 0) /* NEGCTL dlm-1e58-noqueue-not-read */|' "$_file";;
 
     dlm-1e58-deny-record-not-written)
         # The NOTQUEUED record's one write is unique in the codec.

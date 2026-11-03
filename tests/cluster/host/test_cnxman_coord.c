@@ -47,6 +47,7 @@
 #include "vms_cnxman_coord_fsm.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_cluster_codec_dlm.h"
+#include "vms_dlm_hash.h"        /* rd vms-d63: the sub-resource hash */
 #include "vms_frame_compose.h"   /* test-only: struct vms_cm_link, RX specimen
 				  * assembly (FC-P3.15, design sec 3.2.4) */
 
@@ -2954,11 +2955,11 @@ static void test_c55_enq_request_on_the_wire(void)
 		 "*** body[4:8] names a transaction -- a request IS answered ***");
 	snprintf(state, sizeof(state),
 		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
-		 "namelen=%u,hash=%u",
+		 "namelen=%u,hash=%u,reqflags=%u",
 		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
 		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
 		 (unsigned)r.res_acmode, (unsigned)r.name_len,
-		 (unsigned)r.dir_hash);
+		 (unsigned)r.dir_hash, (unsigned)r.req_flags);
 	conf_dump("dlm_enq_req", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
@@ -3008,13 +3009,22 @@ static void test_b67a_sublock_request_on_the_wire(void)
 	 * arm's own evidence). */
 	r.parent_own_lkid    = 0x59000076u;
 	r.parent_master_lkid = 0x3c000695u;
-	/* NO HASH: a sub-resource is not in the directory. */
-	r.dir_hash_valid  = 0u;
-	r.res_group       = 1u;
+	/* THE SUB'S HASH (rd vms-d63): the master finds the sub-RSB by it. Off
+	 * the proven function, from the parent RMT9's own carried value
+	 * (0x43395412, the arm's frame 43); the arm's VAX2 put 0x457ebde3 on the
+	 * wire for this S0 (frame 235). */
+	r.res_group       = 0u;              /* the arm's 00 00 03 02 */
 	r.res_acmode      = 3u;
 	r.res_ident_valid = 1u;
 	r.name_len        = 2u;
 	memcpy(r.name, "S0", 2);
+	ct_check(vms_dlm_sub_name_hash_proven(0x43395412u, 0u, 3u,
+					      (const uint8_t *)"S0", 2u,
+					      &r.dir_hash) == VMS_DLM_HASH_OK &&
+		 r.dir_hash == 0x457ebde3u,
+		 "*** the sub hash of S0 under RMT9 is the value the real VAX2 "
+		 "sent (b67a frame 235) ***");
+	r.dir_hash_valid  = 1u;
 
 	memset(frame, 0, sizeof(frame));
 	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
@@ -3027,17 +3037,79 @@ static void test_b67a_sublock_request_on_the_wire(void)
 		 le32_at(b + 40u) == r.parent_master_lkid,
 		 "*** body[36:44] is the PARENT PAIR, which is what makes this a "
 		 "sub-lock and not a second root of the same name ***");
-	ct_check(b[128] == 0 && b[129] == 0 && b[130] == 0 && b[131] == 0,
-		 "*** and body[128:132] is ZERO: the hash indexes a directory "
-		 "this resource is not in, and no directory was ever asked "
-		 "about the name (Rule 8) ***");
+	ct_check(b[128] == 0xe3 && b[129] == 0xbd && b[130] == 0x7e &&
+		 b[131] == 0x45,
+		 "*** and body[128:132] is the SUB's hash, e3 bd 7e 45, byte for "
+		 "byte what VAX2 sent ***");
 	snprintf(state, sizeof(state),
 		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
-		 "namelen=%u,hash=0,parentown=%u,parentmaster=%u",
+		 "namelen=%u,hash=%u,parentown=%u,parentmaster=%u,reqflags=%u",
 		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
 		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
 		 (unsigned)r.res_acmode, (unsigned)r.name_len,
-		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid);
+		 (unsigned)r.dir_hash,
+		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid,
+		 (unsigned)r.req_flags);
+	conf_dump("dlm_enq_req_sub", 72u, state, b, VMS_CM_BODY_LEN);
+
+	/*
+	 * rd vms-d63: THE XQP's F11B$s SUB-LOCK REQUEST -- PW, (group 0, KERNEL),
+	 * 'F11B$s' + LE32(12) counted, and LCK$M_VALBLK, which rides at body[28]
+	 * bit 0 (struct vms_dlm_enq_request). VAX2's own request for the same
+	 * kind of lock carries 0x0239 there (vms-5fa r3 f11b-frames.txt frame
+	 * 21); this node writes the one measured bit and nothing else.
+	 */
+	memset(&r, 0, sizeof(r));
+	r.mode               = 4u;              /* PW */
+	r.req_lkid           = 0x0100036bu;
+	r.req_pid            = 0x10000031u;
+	r.parent_own_lkid    = 0x0100036au;
+	r.parent_master_lkid = 0x24000003u;
+	r.req_flags          = 0x0019u;   /* VALBLK|SYNCSTS|SYSTEM, the ACP's */
+	r.res_group          = 0u;
+	r.res_acmode         = 0u;
+	r.res_ident_valid    = 1u;
+	r.name_len           = 10u;
+	memcpy(r.name, "F11B$s\x0c\x00\x00\x00", 10);
+	/* rd vms-d63 r5: the hash VAX1 finds its own F11B$s<12> RSB by. The
+	 * function first proven on VAX2's own F11B$s<42> under F11B$vSYSDSK1
+	 * (r5 f11b-frames.txt frame 11: d7 68 a6 0b, the parent's value
+	 * 0x20c23c17); then OVMX's under F11B$vEVAC5FA, whose value 0xa0261e5f
+	 * OVMX's root request carried and VAX1 echoed (frames 3493/3494). */
+	{
+		uint32_t v = 0u;
+
+		ct_check(vms_dlm_sub_name_hash_proven(0x20c23c17u, 0u, 0u,
+				(const uint8_t *)"F11B$s\x2a\x00\x00\x00", 10u,
+				&v) == VMS_DLM_HASH_OK && v == 0x0ba668d7u,
+			 "*** r5 frame 11: VAX2's F11B$s<42> sub hash, d7 68 a6 0b ***");
+	}
+	ct_check(vms_dlm_sub_name_hash_proven(0xa0261e5fu, 0u, 0u,
+					      (const uint8_t *)r.name, 10u,
+					      &r.dir_hash) == VMS_DLM_HASH_OK,
+		 "  OVMX's F11B$s<12> sub hash under F11B$vEVAC5FA");
+	r.dir_hash_valid = 1u;
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_enq_request_build(&r, VMS_DLM_WIREOP_ENQ, frame,
+					   sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the F11B$s request's body (rd vms-d63)");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "  the cluster's DLM sequence");
+	cnxman_envelope_originate(m, b, CNXMAN_ENV_REQUEST);
+	ct_check(b[28] == 0x19u && b[29] == 0u,
+		 "*** body[28:30] is the LKB's $ENQ flags, VALBLK|SYNCSTS|SYSTEM "
+		 "(0x0019) -- each of them in VAX2's 0x0239 ***");
+	ct_check(le32_at(b + 128u) == r.dir_hash && r.dir_hash != 0u,
+		 "*** body[128:132] carries that hash, not zero (vms-5fa r5) ***");
+	snprintf(state, sizeof(state),
+		 "seq=%u,cell=%u,lkid=%u,mode=%u,group=%u,acmode=%u,"
+		 "namelen=%u,hash=%u,parentown=%u,parentmaster=%u,reqflags=%u",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)r.req_pid,
+		 (unsigned)r.req_lkid, (unsigned)r.mode, (unsigned)r.res_group,
+		 (unsigned)r.res_acmode, (unsigned)r.name_len,
+		 (unsigned)r.dir_hash,
+		 (unsigned)r.parent_own_lkid, (unsigned)r.parent_master_lkid,
+		 (unsigned)r.req_flags);
 	conf_dump("dlm_enq_req_sub", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
@@ -3335,6 +3407,67 @@ static void test_194_release_on_the_wire(void)
 	conf_dump("dlm_deq", 72u, state, b, VMS_CM_BODY_LEN);
 }
 
+
+/*
+ * rd vms-d63: THE RELEASE THAT WRITES ITS VALUE BLOCK, 132 bytes, all
+ * described -- composed the way the shipping send path composes it (the
+ * codec's body with write_valblk, as dq_build_deq fills it from a post the
+ * engine marked, then the DLM sequence, then the envelope), so the gate's
+ * `dlm_deq_vb` rows read the bytes a real VAX master is handed. The block is
+ * the ACP's: header counter 3, data counter 1, eight zero bytes -- what
+ * vms_f11b_ser_next leaves after a header write on a block granted (2,1).
+ */
+static void test_d63_valblk_release_on_the_wire(void)
+{
+	static const uint8_t vb[16] = { 3, 0, 0, 0, 1, 0, 0, 0 };
+	struct vms_dlm_deq d;
+	struct vms_csb *m;
+	uint8_t frame[VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN];
+	uint8_t *b = frame + VMS_OFF_SYSAP_BODY;
+	char state[200];
+	uint32_t written = 0;
+	unsigned long long lo = 0, hi = 0;
+	int i;
+
+	printf("\n-- rd vms-d63: the value-block release's 132 bytes, all "
+	       "described --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+	if (!g.cl.club.dlm_seq_valid)
+		cnxman_club_dlm_seq_found(&g.cl.club);
+	m = cnxman_club_csb_at(&g.cl.club, 1u);
+
+	memset(&d, 0, sizeof(d));
+	d.master_lkid = 0x070006a0u;   /* the master's handle, off the LKB  */
+	d.req_lkid    = 0x01000388u;   /* this node's own handle            */
+	d.write_valblk = 1u;
+	memcpy(d.valblk, vb, sizeof(vb));
+
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "the codec's body");
+	ct_check(vms_dlm_seq_put(b, VMS_CM_BODY_LEN, g.cl.club.dlm_seq) ==
+		 VMS_CODEC_OK, "the cluster's DLM sequence");
+	cnxman_envelope_originate(m, b,
+				  vms_dlm_body_is_notification(b,
+							       VMS_CM_BODY_LEN)
+					  ? CNXMAN_ENV_NOTIFY
+					  : CNXMAN_ENV_REQUEST);
+	ct_check(b[4] == 0u && b[5] == 0u && b[6] == 0u && b[7] == 0u,
+		 "a value-block release is still a notification: no transaction");
+	ct_check(b[VMS_OFB_DLM_DEQ_REL_CELL] == 1u && b[32] == 1u,
+		 "*** body[30] and body[32] carry the write mark 1 ***");
+	for (i = 7; i >= 0; i--) {
+		lo = (lo << 8) | vb[i];
+		hi = (hi << 8) | vb[8 + i];
+	}
+	snprintf(state, sizeof(state),
+		 "seq=%u,masterlkid=%u,ownlkid=%u,vblo=0x%llx,vbhi=0x%llx",
+		 (unsigned)g.cl.club.dlm_seq, (unsigned)d.master_lkid,
+		 (unsigned)d.req_lkid, lo, hi);
+	conf_dump("dlm_deq_vb", 72u, state, b, VMS_CM_BODY_LEN);
+}
+
 /*
  * rd vms-a4d7: THE DEFERRED GRANT'S 132 BYTES, ALL DESCRIBED.
  *
@@ -3435,6 +3568,7 @@ int main(void)
 	test_194_release_opens_no_transaction();
 	test_a4d7_grant_notify_on_the_wire();
 	test_194_release_on_the_wire();
+	test_d63_valblk_release_on_the_wire();
 
 	test_twelve_times_m_minus_one();
 	test_law_scales_with_m();

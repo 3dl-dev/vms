@@ -73,6 +73,7 @@
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h            */
 #include "vms_dlm_master.h"
 #include "vms_dlm_proxy.h"
+#include "vms_f11b_ser.h"
 #include "vms_dlm_dir.h"
 #include "vms_dlm_ldwv.h"
 #include "vms_dlm_scs_fsm.h"
@@ -143,6 +144,12 @@ struct mixed {
 	uint32_t n_sent;
 	vms_csid_t last_dst;
 	uint8_t  last[VMS_CM_BODY_LEN];
+	/* rd vms-d63: the last few frames, in order, for a sequence check. */
+	uint8_t  hist[8][VMS_CM_BODY_LEN];
+	/* rd vms-d63: a release is STAGED and CLAIMED through the same release
+	 * queue the wire arm uses (vms_dlm_scs.c dlm_arm_post_release ->
+	 * dlm_arm_run_release), so what the queue keeps is what goes out. */
+	struct dlm_relq relq;
 };
 
 static struct mixed g;
@@ -370,6 +377,8 @@ static int fsm_send(void *ctx, vms_csid_t dst, const uint8_t *body, uint32_t len
 	g.last_dst = dst;
 	memset(g.last, 0, sizeof(g.last));
 	memcpy(g.last, body, len > sizeof(g.last) ? sizeof(g.last) : len);
+	memmove(g.hist[1], g.hist[0], sizeof(g.hist) - sizeof(g.hist[0]));
+	memcpy(g.hist[0], g.last, sizeof(g.last));
 	return 0;
 }
 
@@ -444,6 +453,16 @@ static uint32_t eng_post(void *ctx, const struct vms_dlm_proxy_post *p)
 	(void)ctx;
 	if (p == NULL)
 		return SS__BADPARAM;
+	if (p->op == VMS_DLM_POST_DEQ) {
+		struct vms_dlm_proxy_post c;
+		uint32_t slot = 0u, seq = 0u;
+
+		if (dlm_relq_stage(&g.relq, p, &slot, &seq) != DLM_REQ_OK ||
+		    dlm_relq_claim(&g.relq, slot, seq, &c) != DLM_REQ_OK)
+			return SS__INSFMEM;
+		return dlm_req_fsm_post(&g.fsm, &c) == DLM_REQ_OK ?
+		       (uint32_t)SS__NORMAL : (uint32_t)SS__UNSUPPORTED;
+	}
 	return dlm_req_fsm_post(&g.fsm, p) == DLM_REQ_OK ?
 	       (uint32_t)SS__NORMAL : (uint32_t)SS__UNSUPPORTED;
 }
@@ -455,6 +474,7 @@ static void mixed_up(uint8_t ovmx_wt, uint8_t vax_wt)
 	g.now_ms = 1000u;
 	g.n_sent = 0u;
 	g.last_dst = 0u;
+	dlm_relq_init(&g.relq);
 	/* No frame of an EARLIER scenario may stand in for one this scenario
 	 * never sent (rd vms-7649: a check of g.last after a send that did not
 	 * happen read the previous scenario's frame). */
@@ -524,14 +544,17 @@ static const uint8_t *body_of(const uint8_t *frame)
  * directory hash at body[128:132] -- the value this executive may learn and
  * may never compute (Davis p. 6-50).
  */
-static int vax_build_enq(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
-			 uint8_t mode, const char *name, uint32_t hash)
+static int vax_build_enq_flags(uint8_t *frame, uint8_t opcode,
+			       uint32_t vax_lkid, uint8_t mode,
+			       const char *name, uint32_t hash,
+			       uint16_t wire_flags)
 {
 	struct vms_dlm_enq_request r;
 	uint32_t written = 0;
 
 	memset(&r, 0, sizeof(r));
 	r.mode = mode;
+	r.req_flags = wire_flags;       /* body[28:30], LCK$M_ public encoding */
 	r.req_lkid = vax_lkid;
 	r.name_len = (uint8_t)strlen(name);
 	memcpy(r.name, name, r.name_len);
@@ -548,6 +571,12 @@ static int vax_build_enq(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
 	memset(frame, 0, VMS_CM_FRAME_LEN);
 	return vms_dlm_enq_request_build(&r, opcode, frame, VMS_CM_FRAME_LEN,
 					 &written) == VMS_CODEC_OK ? 0 : -1;
+}
+
+static int vax_build_enq(uint8_t *frame, uint8_t opcode, uint32_t vax_lkid,
+			 uint8_t mode, const char *name, uint32_t hash)
+{
+	return vax_build_enq_flags(frame, opcode, vax_lkid, mode, name, hash, 0u);
 }
 
 /*
@@ -2035,7 +2064,7 @@ static void a_vax_noqueue_request_is_denied(void)
 						&e) == VMS_CODEC_OK &&
 		 wireop == VMS_DLM_WIREOP_ENQ,
 		 "frame 7310 parses as an op-0x01 ENQ");
-	ct_check((e.lck_flags & VMS_DLM_REQ_FLAG_NOQUEUE) != 0u,
+	ct_check((e.req_flags & VMS_DLM_REQ_FLAG_NOQUEUE) != 0u,
 		 "*** the parser READS body[28:30]'s NOQUEUE bit off VAX2's "
 		 "own frame ***");
 	/* negctl: dlm-1e58-noqueue-not-read */
@@ -2807,6 +2836,295 @@ static void e3ea_the_requester_forgets_a_released_master(void)
 	mixed_down();
 }
 
+/*
+ * rd vms-d63: A VAX's RELEASE THAT WRITES ITS VALUE BLOCK, served by OVMX AS
+ * MASTER -- the other direction of the F11B$s protocol: when OVMX masters the
+ * volume's tree, a VAX's header change reaches OVMX only if the master STORES
+ * the block the VAX's $DEQ carries (mscp-read-write.pcap frame 1481's form:
+ * the cell 1 at body[30]/body[32], the block at body[36:52]).
+ *
+ * The frame goes through the SHIPPING codec both ways, then into the master
+ * door as the wire arm fills it (dlm_arm_fill_deq_req: the block is handed on
+ * only when the frame is marked). The engine stores it only for a lock it holds
+ * for that sender at a WRITE mode (PW/EX) with LCK$M_VALBLK; an unmarked
+ * release, and a read-mode holder's, leave the master's block alone.
+ */
+static void d63_vax_release(uint32_t vax_lkid, uint32_t master_lkid,
+			    int marked, const uint8_t *vb,
+			    struct vms_dlm_master_result *out)
+{
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	struct vms_dlm_deq d, q;
+	struct vms_dlm_master_request mr;
+	uint32_t written = 0;
+
+	memset(&d, 0, sizeof(d));
+	d.req_lkid = vax_lkid;
+	d.master_lkid = master_lkid;
+	d.write_valblk = (uint8_t)(marked ? 1 : 0);
+	memcpy(d.valblk, vb, 16);
+	memset(frame, 0, sizeof(frame));
+	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &written) ==
+		 VMS_CODEC_OK, "  the VAX's op-0x03 is built");
+	memset(&q, 0, sizeof(q));
+	ct_check(vms_dlm_deq_parse_body(body_of(frame), VMS_CM_BODY_LEN, &q) ==
+		 VMS_CODEC_OK, "  and parsed back by the shipping parser");
+	/* As dlm_arm_fill_deq_req fills it (vms_dlm_scs.c). */
+	memset(&mr, 0, sizeof(mr));
+	mr.op = VMS_DLM_MREQ_DEQ;
+	mr.req_csid = CSID_VAX;
+	mr.req_lkid = q.req_lkid;
+	mr.master_lkid = q.master_lkid;
+	if (q.write_valblk) {
+		memcpy(mr.valblk, q.valblk, sizeof(mr.valblk));
+		mr.valblk_present = 1u;
+	}
+	memset(out, 0, sizeof(*out));
+	(void)vms_lock_dlm_master_serve(&mr, out);
+}
+
+static void d63_read_block(struct vms_proc *app, uint32_t lkid, uint8_t *vb)
+{
+	struct vms_enq_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkid = lkid;
+	a.lkmode = LCK_K_CRMODE;
+	a.flags = LCK_M_CONVERT | LCK_M_VALBLK;
+	vms_ioctl_convert(app, (unsigned long)(void *)&a);
+	memcpy(vb, a.valblk, 16);
+	memset(&a, 0, sizeof(a));
+	a.lkid = lkid;
+	a.lkmode = LCK_K_NLMODE;
+	a.flags = LCK_M_CONVERT;
+	vms_ioctl_convert(app, (unsigned long)(void *)&a);
+}
+
+static void d63_a_vax_release_writes_the_master_block(void)
+{
+	const char *N = "D63$VALBLK";
+	static const uint8_t vax_vb[16] = { 3, 0, 0, 0, 1, 0, 0, 0 };
+	static const uint8_t other[16] = { 9, 0, 0, 0, 9, 0, 0, 0 };
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	struct vms_dlm_master_result res;
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	uint32_t lkid = 0, m1;
+	uint8_t vb[16];
+
+	printf("-- rd vms-d63: a VAX's value-block release, served by OVMX as "
+	       "master --\n");
+	mixed_up(1u, 0u);
+	proc_init(&app);
+	ct_check(do_enq(&app, N, LCK_K_NLMODE, LCK_M_VALBLK, &lkid) ==
+		 SS__NORMAL, "a local NL holder masters the name here");
+
+	/* The VAX takes PW with LCK$M_VALBLK, as its XQP takes F11B$s. */
+	ct_check(vax_build_enq_flags(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
+			       (uint8_t)LCK_K_PWMODE, N, 0x5a3c0d63u,
+			       0x0001u /* LCK$M_VALBLK */) == 0,
+		 "the VAX's PW request is built");
+	(void)vax_lookup(frame, CSID_VAX, &master);
+	vax_served_as_master(frame, CSID_VAX, &res);
+	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
+		 res.master_lkid != 0u, "  granted PW by this master");
+	m1 = res.master_lkid;
+
+	/* UNMARKED first: the master's block must not move. */
+	d63_vax_release(VAX_LKID_1, m1, 0, other, &res);
+	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_RELEASED,
+		 "an UNMARKED release releases");
+	d63_read_block(&app, lkid, vb);
+	ct_check(memcmp(vb, other, 16) != 0,
+		 "*** and writes NOTHING: its body[36:52] is a stale buffer ***");
+
+	/* MARKED, from a PW holder: stored. */
+	ct_check(vax_build_enq_flags(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_2,
+			       (uint8_t)LCK_K_PWMODE, N, 0x5a3c0d63u,
+			       0x0001u /* LCK$M_VALBLK */) == 0,
+		 "the VAX's next PW request");
+	vax_served_as_master(frame, CSID_VAX, &res);
+	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED,
+		 "  granted PW");
+	d63_vax_release(VAX_LKID_2, res.master_lkid, 1, vax_vb, &res);
+	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_RELEASED,
+		 "a MARKED release releases");
+	d63_read_block(&app, lkid, vb);
+	ct_check(memcmp(vb, vax_vb, 16) == 0,
+		 "*** and the master STORES its block: a local reader now reads "
+		 "the VAX's (3,1) -- OVMX learns of the VAX's header change ***");
+
+	/* MARKED, but from a READ-mode holder: refused. */
+	ct_check(vax_build_enq_flags(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
+			       (uint8_t)LCK_K_CRMODE, N, 0x5a3c0d63u,
+			       0x0001u /* LCK$M_VALBLK */) == 0,
+		 "the VAX's CR request");
+	vax_served_as_master(frame, CSID_VAX, &res);
+	ct_check(res.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED, "  granted CR");
+	d63_vax_release(VAX_LKID_1, res.master_lkid, 1, other, &res);
+	d63_read_block(&app, lkid, vb);
+	ct_check(memcmp(vb, vax_vb, 16) == 0,
+		 "*** a CR holder's marked release writes nothing: only PW/EX "
+		 "may set the block ***");
+
+	(void)do_deq(&app, lkid);
+	mixed_down();
+}
+
+/*
+ * rd vms-d63 (r3): OVMX's F11B$s LOCK ON THE WIRE, ENQ TO $DEQ, AGAINST VAX2'S.
+ *
+ * Lab fire vms-5fa r3 (PR #2006, tests/lab/captures/vms-5fa-shared-volume-r3-
+ * 20261102/ci6evac-235551/f11b-frames.txt): VAX1 granted OVMX's F11B$s
+ * requests with an EMPTY value block 48 of 48 times, and OVMX's 48 releases
+ * left unmarked and empty -- so VAX1 overwrote OVMX's records again. Two
+ * causes, both on the path below and neither visible to the engine-level test:
+ *   1. the request left with body[28:30] = 0, where VAX2's request for the same
+ *      kind of lock (frame 21, fid 42) carries 0x0239 -- bit 0 is LCK$M_VALBLK,
+ *      and a real master hands a block only to a request that sets it;
+ *   2. the RELEASE QUEUE the wire arm stages every $DEQ through kept four
+ *      fields and dropped the engine's write mark and block.
+ * Driven through the shipping engine, the shipping FSM and the shipping release
+ * queue, from vms_lock_acp_file_ser on its own thread to the $DEQ frame.
+ */
+#define D63_VRES        "F11B$vEVAC5FA     "
+#define D63_V_MASTER    0x2400000fu
+#define D63_S_MASTER    0x0b000666u
+/* VAX2's own bytes, frames 21 (ENQ) and 26 ($DEQ) of the r3 capture. */
+static const uint8_t d63_vax2_enq_b28[3] = { 0x39, 0x02, 0x04 };   /* body[28:31] */
+static const uint8_t d63_vax2_deq_b30_36[6] = { 0x01, 0x00, 0x01, 0x00, 0x00, 0x00 };
+static const uint8_t d63_vax2_deq_vb[16] = { 1, 0, 0, 0, 1, 0, 0, 0 };
+
+struct d63w {
+	struct vms_proc *proc;
+	uint8_t vb[16];
+	uint32_t par, lkid, status;
+	volatile int done;
+};
+
+static void *d63w_thread(void *arg)
+{
+	struct d63w *w = arg;
+
+	w->status = vms_lock_acp_file_ser(w->proc, D63_VRES, 18u, 12u, w->vb,
+					  &w->par, &w->lkid);
+	w->done = 1;
+	return NULL;
+}
+
+static int d63_grant(uint32_t master_lkid, const uint8_t *vb, uint32_t seq)
+{
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint32_t written = 0;
+
+	memset(frame, 0, sizeof(frame));
+	if (vms_dlm_enq_response_build_grant(g.last, VMS_CM_BODY_LEN,
+					     master_lkid, vb, seq, frame,
+					     (uint32_t)sizeof(frame),
+					     &written) != VMS_CODEC_OK)
+		return -1;
+	return dlm_req_fsm_reply_body(&g.fsm, (vms_csid_t)CSID_VAX, 0u,
+				      body_of(frame), VMS_CM_BODY_LEN) ==
+	       DLM_REQ_OK ? 0 : -1;
+}
+
+static void d63_r3_the_f11b_ser_lock_on_the_wire(void)
+{
+	static const uint8_t granted[16] = { 2, 0, 0, 0, 1, 0, 0, 0 };
+	static const uint8_t written_vb[16] = { 3, 0, 0, 0, 1, 0, 0, 0 };
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	struct vms_proc app;
+	vms_csid_t master = 0;
+	struct d63w w;
+	pthread_t th;
+	uint8_t vb[16];
+	const uint8_t *deq;
+
+	printf("-- rd vms-d63 r3: OVMX's F11B$s ENQ and $DEQ on the wire, "
+	       "against VAX2's --\n");
+	labbed_up(0u, 0u, 0u);
+	lab_proc_init(&app);
+
+	/* VAX1 holds the volume lock and this node's directory records it. */
+	ct_check(vax_build_enq(frame, VMS_DLM_WIREOP_ENQ, VAX_LKID_1,
+			       (uint8_t)LCK_K_CRMODE, D63_VRES, 0x5fa3d063u) == 0,
+		 "VAX1's F11B$vEVAC5FA request");
+	ct_check(vax_lookup(frame, CSID_VAX, &master) ==
+		 VMS_DLM_DIR_ANSWER_YOU && master == CSID_VAX,
+		 "  VAX1 masters the volume's tree");
+
+	memset(&w, 0, sizeof(w));
+	w.proc = &app;
+	if (pthread_create(&th, NULL, d63w_thread, &w) != 0) {
+		ct_check(0, "pthread_create");
+		mixed_down();
+		return;
+	}
+	ct_check(f29f_wait(NULL, &g.n_sent, 1u, 400),
+		 "the parent's request left this node");
+	ct_check(d63_grant(D63_V_MASTER, NULL, 0u) == 0,
+		 "VAX1 grants the NL parent");
+	ct_check(f29f_wait(NULL, &g.n_sent, 2u, 400),
+		 "the F11B$s request left this node");
+	ct_check(g.last[VMS_OFB_DLM_OP] == VMS_DLM_WIREOP_ENQ &&
+		 g.last[VMS_OFB_DLM_NAME_LEN] == 10u &&
+		 memcmp(g.last + VMS_OFB_DLM_NAME, "F11B$s\x0c\x00\x00\x00", 10) == 0,
+		 "  an op-0x01 for 'F11B$s' + 0c 00 00 00");
+	ct_check(g.last[30] == d63_vax2_enq_b28[2],
+		 "  at PW, as VAX2's (body[30] = 4)");
+	{
+		uint32_t ours = (uint32_t)g.last[28] | ((uint32_t)g.last[29] << 8);
+		uint32_t vax2 = (uint32_t)d63_vax2_enq_b28[0] |
+				((uint32_t)d63_vax2_enq_b28[1] << 8);
+
+		ct_check((ours & 0x0001u) && (vax2 & 0x0001u),
+			 "*** body[28:30] carries VALBLK (0x0001), as VAX2's "
+			 "F11B$s request (0x0239): the request asks the master for "
+			 "the value block ***");
+		ct_check((ours & 0x0010u) && (vax2 & 0x0010u),
+			 "*** and SYSTEM (0x0010), as VAX2's: the system-wide "
+			 "resource VAX1's own F11B$s lock is on (rd vms-d63 r4) ***");
+		ct_check((ours & 0x0008u) == (vax2 & 0x0008u),
+			 "  and SYNCSTS (0x0008), as VAX2's");
+		ct_check((ours & ~0x0019u) == 0u,
+			 "  and nothing this LKB does not hold (VAX2's NOQUOTA and "
+			 "NODLCKWT are semantics this lock manager lacks)");
+	}
+
+	ct_check(d63_grant(D63_S_MASTER, granted, 677u) == 0,
+		 "VAX1 grants it with the block (2,1)");
+	ct_check(f29f_wait(&w.done, NULL, 0u, 400), "vms_lock_acp_file_ser returned");
+	if (!w.done) {
+		pthread_detach(th);
+		mixed_down();
+		return;
+	}
+	pthread_join(th, NULL);
+	ct_check(w.status == SS__NORMAL && memcmp(w.vb, granted, 16) == 0,
+		 "*** the ACP holds the master's block (2,1) ***");
+
+	memcpy(vb, w.vb, 16);
+	vms_f11b_ser_next(vb, 1, 0);
+	(void)vms_lock_acp_file_ser_release(&app, w.par, w.lkid, vb);
+	ct_check(g.n_sent == 4u, "two releases left this node");
+	deq = g.hist[1];                    /* the file's lock goes first */
+	ct_check(deq[VMS_OFB_DLM_OP] == VMS_DLM_WIREOP_DEQ &&
+		 f29f_rd32(deq + VMS_OFB_DLM_MASTER_LKID) == D63_S_MASTER,
+		 "  the first is the F11B$s lock's, to its master's handle");
+	ct_check(memcmp(deq + 30, d63_vax2_deq_b30_36, 6) == 0,
+		 "*** its body[30:36] is VAX2's own form for a written release "
+		 "(01 00 01 00 00 00): the WRITE MARK survived the release queue ***");
+	ct_check(memcmp(deq + 36, written_vb, 16) == 0,
+		 "*** and body[36:52] carries (3,1) -- VAX2's frame 26 carries "
+		 "its own block there the same way ***");
+	ct_check(memcmp(d63_vax2_deq_vb + 8, written_vb + 8, 8) == 0,
+		 "  bytes 8..15 zero, as VAX2's");
+	ct_check(g.hist[0][VMS_OFB_DLM_OP] == VMS_DLM_WIREOP_DEQ &&
+		 g.hist[0][30] == 0u,
+		 "  the NL parent's release writes nothing");
+	mixed_down();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_mixed_master (rd vms-025 / vms-db2a / vms-c27: "
@@ -2830,6 +3148,8 @@ int main(void)
 	a_full_directory_table_still_locks();
 
 	ovmx_first_then_the_vax_is_served_as_master();
+	d63_a_vax_release_writes_the_master_block();
+	d63_r3_the_f11b_ser_lock_on_the_wire();
 	a_vax_noqueue_request_is_denied();
 	a_notqueued_sublock_answer_is_refused();
 	a_convert_names_the_blocking_holder();

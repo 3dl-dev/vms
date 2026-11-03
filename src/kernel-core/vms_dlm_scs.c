@@ -1796,8 +1796,10 @@ static int dlm_arm_serve_mixed_held(struct vms_dlm_scs *d,
  *   lkmode       body[30], carried as the mode being released.
  *
  * NOTHING IS DEFAULTED. No resource name is read (a real $DEQ carries none) and
- * `valblk_present` stays 0, so the master's own value block is LEFT ALONE
- * rather than overwritten with sixteen zeros that would read exactly like data.
+ * `valblk_present` stays 0 unless the release is MARKED as writing its value
+ * block (rd vms-d63, the cell 1 at body[30]), so an unmarked release leaves
+ * the master's own value block ALONE rather than overwriting it with a stale
+ * buffer that would read exactly like data.
  */
 static void dlm_arm_fill_deq_req(const struct dlm_scs_request *in,
 				 const struct vms_dlm_deq *q,
@@ -1808,6 +1810,14 @@ static void dlm_arm_fill_deq_req(const struct dlm_scs_request *in,
 	out->req_csid = (uint32_t)in->from_csid;
 	out->req_lkid = q->req_lkid;
 	out->master_lkid = q->master_lkid;
+	/* rd vms-d63: a release MARKED as writing its value block hands the
+	 * engine that block; the engine stores it only for a lock it holds for
+	 * this sender at PW/EX with LCK$M_VALBLK (vms_lock_dlm_xnode_deq). An
+	 * unmarked release hands nothing, so the master's block is left alone. */
+	if (q->write_valblk) {
+		memcpy(out->valblk, q->valblk, sizeof(out->valblk));
+		out->valblk_present = 1u;
+	}
 	/* NO MODE. body[30] of a release is not a lock mode (rd vms-194's
 	 * driven arm: nine real releases, every held mode NL..EX, all 0), and
 	 * the DEQ seam identifies the lock by (csid, handle) and reads no mode

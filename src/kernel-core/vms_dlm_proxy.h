@@ -220,6 +220,14 @@ struct vms_dlm_proxy_post {
 	uint8_t  write_valblk;
 
 	/*
+	 * THE REQUEST'S $ENQ FLAGS, in the public LCK$M_ encoding (rd vms-d63):
+	 * the LKB's own flags, mapped by the engine at post time, carried at
+	 * body[28:30] of a new request (vms_cluster_codec_dlm.h, struct
+	 * vms_dlm_enq_request, for the measurement).
+	 */
+	uint16_t req_flags;
+
+	/*
 	 * DOES THIS NODE ITSELF MASTER THE RESOURCE? (rd vms-3ac)
 	 *
 	 * Read off the RESOURCE BLOCK at post time -- `res->master_csid ==

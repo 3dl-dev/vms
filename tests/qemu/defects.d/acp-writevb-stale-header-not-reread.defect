@@ -1,0 +1,32 @@
+# acp-writevb-stale-header-not-reread -- one facility negative control (tests/qemu/facility_defects.sh).
+# defect_meta: its metadata, by field ($_f). defect_apply: the mutation of $_file.
+
+defect_meta() {
+        case "$_f" in
+        facility)     echo "Files-11 (ODS-2) ACP IO\$_WRITEVBLK under the XQP per-file serialization lock F11B\$s: a header counter the channel did not read under means another accessor changed the header, and the window/EOF are re-read from the disk before use (rd vms-d63)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_acp_rw";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "IO\$_WRITEVBLK takes the file's F11B\$s lock but never acts on its header counter, so a channel whose window and EOF were read before another accessor extended the file writes the header back with its stale EOF/HIBLK and the other's extension is lost -- the rd vms-d63 class (on the lab, VAX1 overwrote OVMX's EVAC.DAT records the same way, from its side).";;
+        require_fail) cat <<'EOF2'
+*** channel B's write RE-READ the header A changed: it keeps EOF/HIBLK 36, not its stale 35 (rd vms-d63) ***
+channel B now maps VBN 36 and reads A's data there
+after both close, the on-disk header still says efblk 36: A's extension survived B
+EOF2
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac
+
+}
+
+defect_apply() {
+        # UNIQUE TEXT: the refresh call in vms_ioctl_acp_writevb. Replaced by a
+        # success status, so the stale snapshot is used; the NEGCTL marker makes
+        # a second application match nothing.
+        sed -i 's|^        status = acp_chan_refresh_from_disk(proc, args.chan, snap, s->hdr);$|        status = SS__NORMAL; /* NEGCTL acp-writevb-stale-header-not-reread */|' "$_file"
+
+    :
+}

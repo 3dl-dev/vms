@@ -2256,6 +2256,85 @@ static void test_grant_notify_is_the_real_one(void)
 		 "why the grant can now leave at all ***");
 }
 
+/*
+ * rd vms-d63: A RELEASE THAT WRITES ITS VALUE BLOCK. A real XQP's $DEQ of its
+ * PW F11B$s lock carries the cell 1 at body[30]/body[32] and the lock's value
+ * block at body[36:52], and the master stores that block (the fixture's
+ * provenance: the next grant of the resource hands it out). The parse reports
+ * it; the build emits it byte for byte; an UNMARKED release's body[36:52] is a
+ * stale buffer and is never read as a block.
+ */
+static void test_d63_deq_carries_the_value_block(void)
+{
+	const struct vms_fixture *f = fixture("dlm-deq-valblk-write");
+	static const uint8_t want_vb[16] = { 3, 0, 0, 0, 1, 0, 0, 0 };
+	struct vms_frame_info fi;
+	struct vms_dlm_deq d;
+	uint8_t built[256];
+	uint8_t body[132];
+	uint32_t written = 0;
+
+	printf("-- rd vms-d63: a release that WRITES its value block "
+	       "(mscp-read-write.pcap frame 1481)\n");
+	ct_check(f != NULL, "fixture loads");
+	if (f == NULL)
+		return;
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "classifies without error");
+	memset(&d, 0, sizeof(d));
+	ct_check(vms_dlm_deq_parse(f->bytes, f->wire_len, &fi, &d) ==
+		 VMS_CODEC_OK, "parses as a $DEQ");
+	ct_check_eq_u32(d.master_lkid, 0x070006a0u,
+			"  body[20:24] the master's handle (VAX1's grant, frame 1475)");
+	ct_check_eq_u32(d.req_lkid, 0x0b000388u,
+			"  body[24:28] the releaser's own handle (frame 1474)");
+	ct_check(d.write_valblk == 1u,
+		 "*** the cell 1 is read as 'this release writes its value "
+		 "block' ***");
+	ct_check(memcmp(d.valblk, want_vb, 16) == 0,
+		 "*** and the block is body[36:52]: header counter 3, data "
+		 "counter 1 -- what VAX1's next grant (frame 1563) handed out ***");
+
+	memset(built, 0xAA, sizeof(built));
+	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
+		 VMS_CODEC_OK, "builds back from the typed struct");
+	assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY, f->wire_len,
+				 "dlm-deq-valblk-write");
+
+	/* Unmarked: the same frame with the cell 0 carries a stale buffer at
+	 * body[36:52]; it must not come back as a block. */
+	memset(body, 0, sizeof(body));
+	memcpy(body, f->bytes + VMS_OFF_SYSAP_BODY,
+	       f->wire_len - VMS_OFF_SYSAP_BODY < sizeof(body)
+		       ? f->wire_len - VMS_OFF_SYSAP_BODY : sizeof(body));
+	body[30] = 0u;
+	body[32] = 0u;
+	memset(&d, 0x5a, sizeof(d));
+	ct_check(vms_dlm_deq_parse_body(body, sizeof(body), &d) == VMS_CODEC_OK,
+		 "an unmarked release parses");
+	ct_check(d.write_valblk == 0u,
+		 "*** an unmarked release writes nothing ***");
+	{
+		static const uint8_t zero[16];
+
+		ct_check(memcmp(d.valblk, zero, 16) == 0,
+			 "*** and its body[36:52] stale buffer is NOT reported "
+			 "as a block ***");
+	}
+
+	/* And the unmarked BUILD is the old frame: cell 0, no block. */
+	d.write_valblk = 0u;
+	memset(d.valblk, 0x77, sizeof(d.valblk));
+	memset(built, 0, sizeof(built));
+	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
+		 VMS_CODEC_OK, "an unmarked release builds");
+	ct_check(built[VMS_OFF_DLM_DEQ_REL_CELL] == 0u &&
+		 built[VMS_OFF_DLM_DEQ_REL_CELL2] == 0u &&
+		 built[VMS_OFF_DLM_VALBLK] == 0u &&
+		 built[VMS_OFF_DLM_VALBLK + 15u] == 0u,
+		 "*** an unmarked build carries cell 0 and no block, as before ***");
+}
+
 int main(void)
 {
 	test_dlm_seq_and_tail();
@@ -2287,5 +2366,6 @@ int main(void)
 	test_op0f_member_answer_keeps_state();
 	test_b67a_parent_span_is_both_or_neither();
 	test_grant_notify_is_the_real_one();
+	test_d63_deq_carries_the_value_block();
 	return ct_summary("test_codec_dlm");
 }

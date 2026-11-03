@@ -20,6 +20,10 @@ VMSDCL="${VMSDCL:-vmsdcl}"
 TDIR="dcl_dota_$$"
 VDIR="$(echo "$TDIR" | tr a-z A-Z)"
 mkdir -p "/vms/$TDIR"
+# LIBRARY writes its libraries through RMS (vms-f8cd), so on the host each is a
+# versioned file NAME.TYP;N (with RMS's .rms_meta sidecar): the library is its
+# highest version.
+vfind() { find "/vms/$TDIR" -iname "$1;*" ! -name '*.rms_meta' 2>/dev/null | sort -t';' -k2 -n | tail -1; }
 CF="-O2 -ffreestanding -fno-builtin -fno-stack-protector -c"
 case "$(uname -m)" in x86_64|amd64) CF="$CF -fcf-protection=none" ;; esac
 gcc $CF -x c - -o "/vms/$TDIR/AMOD.OBJ" <<<'int amod_fn(void){return 1;}'
@@ -46,7 +50,7 @@ printf 'SET DEFAULT SYS$SYSDEVICE:[%s]
 @ARLONG.COM
 DELETE L0.OBJ;*,L1.OBJ;*,L2.OBJ;*,L3.OBJ;*,L4.OBJ;*,L5.OBJ;*,L6.OBJ;*,L7.OBJ;*,L8.OBJ;*
 ' "$VDIR" | $VMSDCL 2>&1
-LONG=$(find "/vms/$TDIR" -iname 'LONG.A' 2>/dev/null | head -1)
+LONG=$(vfind LONG.A)
 if [ -n "$LONG" ] && [ "$(ar t "$LONG" 2>/dev/null | grep -ci '^L[0-9]')" = 10 ]; then
     echo "DOTA-LONG-LIST-ALL-10-OK"
 else
@@ -61,7 +65,7 @@ else
     echo "DOTA-DELETE-LIST-FAIL: $(find "/vms/$TDIR" -iname 'L[0-9].OBJ*' | tr '\n' ' ')"
 fi
 
-LIB=$(find "/vms/$TDIR" -iname 'LIBX.A' 2>/dev/null | head -1)
+LIB=$(vfind LIBX.A)
 if [ -n "$LIB" ] && ar t "$LIB" 2>/dev/null | grep -qi AMOD && ar t "$LIB" 2>/dev/null | grep -qi BMOD; then
     echo "DOTA-AR-ORACLE-OK"
 else
@@ -72,7 +76,7 @@ if [ -n "$LIB" ] && [ "$(ar t "$LIB" 2>/dev/null | grep -ci AMOD)" = 1 ]; then
 else
     echo "DOTA-REPLACE-ONE-MEMBER-FAIL"
 fi
-TLB=$(find "/vms/$TDIR" -iname 'NOTES.TLB' 2>/dev/null | head -1)
+TLB=$(vfind NOTES.TLB)
 if [ -n "$TLB" ] && ! head -c 7 "$TLB" | grep -q '!<arch>'; then
     echo "DOTA-TEXT-LIBRARY-UNCHANGED"
 else

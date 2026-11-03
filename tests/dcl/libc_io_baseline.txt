@@ -8,7 +8,6 @@ dcl_cmd_set.c 2
 dcl_cmd_show.c 7
 dcl_editor.c 2
 dcl_io.c 2
-dcl_library.c 9
 dcl_main.c 4
 dcl_mbx.c 9
 dcl_memfile.c 7

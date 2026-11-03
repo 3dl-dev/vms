@@ -18,6 +18,10 @@ VMSDCL="${VMSDCL:-vmsdcl}"
 TDIR="dcl_cmp_$$"
 VDIR="$(echo "$TDIR" | tr a-z A-Z)"
 mkdir -p "/vms/$TDIR"
+# LIBRARY writes its libraries through RMS (vms-f8cd), so on the host each is a
+# versioned file NAME.TYP;N (with RMS's .rms_meta sidecar): the library is its
+# highest version.
+vfind() { find "/vms/$TDIR" -iname "$1;*" ! -name '*.rms_meta' 2>/dev/null | sort -t';' -k2 -n | tail -1; }
 CF="-O2 -ffreestanding -fno-builtin -fno-stack-protector -c"
 case "$(uname -m)" in x86_64|amd64) CF="$CF -fcf-protection=none" ;; esac
 gcc $CF -x c - -o "/vms/$TDIR/AAA.OBJ" <<<'int aaa_fn(void){return 1;}'
@@ -38,9 +42,9 @@ LIBRARY /TEXT /COMPRESS HIST.TLB
 LIBRARY /OBJECT /VAX /CREATE VAXLIB.OLB AAA.OBJ
 ' "$VDIR" | $VMSDCL 2>&1 | tee /tmp/dcl_cmp_$$.out
 
-HIST=$(find "/vms/$TDIR" -iname 'HIST.OLB' | head -1)
-FRESH=$(find "/vms/$TDIR" -iname 'FRESH.OLB' | head -1)
-PACKED=$(find "/vms/$TDIR" -iname 'PACKED.OLB' | head -1)
+HIST=$(vfind HIST.OLB)
+FRESH=$(vfind FRESH.OLB)
+PACKED=$(vfind PACKED.OLB)
 if [ -n "$PACKED" ] && [ -n "$HIST" ] && cmp -s "$HIST" "$PACKED" && ar t "$PACKED" | grep -qi AAA; then
     echo "COMPRESS-OUTPUT-OK"
 else

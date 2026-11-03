@@ -23,6 +23,7 @@
  * section 3. (vms-ca9)
  */
 
+
 #include "dcl/dcl_out.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,11 +34,10 @@
 #include "dcl/context.h"
 #include "dcl/parser.h"
 #include "dcl/hlb.h"
-#include "dcl/dcl_rms.h"     /* dcl_rms_write_* -- the OBJECT library written over the ACP (vms-8ca) */
-#include "rms/rms.h"         /* rms_read_over_acp, rms_executive_absent */
-#include "vmsfs/device.h"    /* vmsfs_device_spec_kernel_mounted */
+#include "dcl/dcl_rms.h"     /* every library, source and output file: RMS (vms-8ca, vms-f8cd) */
+#include "rms/rms.h"
 #include "ssdef.h"
-#include "starlet.h"          /* sys$getmsg: the reason under OPENOUT */
+#include "starlet.h"          /* sys$getmsg: the RMS reason under OPENIN/OPENOUT */
 #include "descrip.h"
 #include "msgdef.h"
 #include "climsgdef.h"
@@ -46,11 +46,194 @@
 /* External functions */
 extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
-extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
-                            char *linux_path, size_t path_size);
 
 /* The LBRO on-disk format (magic, type/limit constants, header + module
  * structs) is defined in dcl/hlb.h so the HELP reader (dcl_help.c) shares it. */
+
+/* ==========================================================================
+ * File access -- RMS only (rd vms-f8cd).
+ *
+ * Every file LIBRARY touches -- the library itself (.TLB/.HLB/.OLB/.A), the
+ * source modules and objects put in it, the /EXTRACT /OUTPUT file -- is
+ * reached through RMS, as VMS LIBRARIAN reaches them: a library or an object is
+ * read whole by block I/O ($OPEN FAC=BIO, $READ), a text module or a .HLP source
+ * record by record ($GET), and a library is written as one byte-exact image
+ * ($CREATE, fixed-length records with no record size, $PUT). An update
+ * (/INSERT, /REPLACE, /DELETE, a HELP merge) supersedes the version the library
+ * has, as VMS LIBRARIAN updates a library in place; /CREATE, /COMPRESS and an
+ * /OUTPUT file are a new version. A file RMS cannot reach is reported VMS-style:
+ * the LIBRARIAN message, then the RMS reason (-RMS-E-FNF ...), never a host
+ * errno. On the product runtime RMS reaches the Files-11 ACP over /dev/vms; with
+ * no executive (host ctest) RMS's own POSIX backend serves the same calls.
+ * ========================================================================== */
+
+/* Why the last file operation was refused: the RMS status and its secondary
+ * value (STV), reported under the LIBRARIAN message as VMS does. */
+static uint32_t g_lbr_why, g_lbr_whystv;
+
+/* The refusal's messages, chained ('-' for '%'), after the LIBRARIAN message. */
+static void lbr_print_reasons(void)
+{
+    uint32_t sts[2] = { g_lbr_why, g_lbr_whystv };
+    for (int i = 0; i < 2; i++) {
+        char m[256];
+        uint16_t n = 0;
+        struct dsc$descriptor_s md = { sizeof m - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, m };
+        if (!sts[i] || !(sys$getmsg(sts[i], &n, &md, MSG$M_ALL, NULL) & 1))
+            continue;
+        m[n] = '\0';
+        if (m[0] == '%') m[0] = '-';
+        dcl_err_printf("%s\n", m);
+    }
+}
+
+/* Read a whole file by RMS block I/O into a fresh buffer (*len bytes). NULL
+ * when RMS refuses it (g_lbr_why says why). */
+static unsigned char *lbr_file_read(struct dcl_context *ctx, const char *spec,
+                                    size_t *len)
+{
+    uint32_t st = 0;
+    g_lbr_why = g_lbr_whystv = 0;
+    struct dcl_rms_bio *b = dcl_rms_bio_open(ctx, spec, NULL, &st);
+    if (!b) { g_lbr_why = st; return NULL; }
+    size_t cap = 64 * 1024, n = 0;
+    unsigned char *buf = malloc(cap);
+    if (!buf) { dcl_rms_bio_close(b); g_lbr_why = RMS$_DME; return NULL; }
+    for (;;) {
+        if (n == cap) {
+            unsigned char *nb = realloc(buf, cap * 2);
+            if (!nb) { free(buf); dcl_rms_bio_close(b); g_lbr_why = RMS$_DME; return NULL; }
+            buf = nb;
+            cap *= 2;
+        }
+        size_t want = cap - n;
+        long got = dcl_rms_bio_read(b, buf + n, want);
+        if (got < 0) {
+            g_lbr_why = dcl_rms_bio_status(b);
+            free(buf);
+            dcl_rms_bio_close(b);
+            return NULL;
+        }
+        n += (size_t)got;
+        if ((size_t)got < want) break;          /* short: end of file */
+    }
+    dcl_rms_bio_close(b);
+    *len = n;
+    return buf;
+}
+
+/* Read a text file record by record ($GET) as its lines, each ended by a
+ * newline -- the text a TEXT-library module or a .HLP source holds. NULL when
+ * RMS refuses it (g_lbr_why says why). */
+static char *lbr_text_read(struct dcl_context *ctx, const char *spec, size_t *len)
+{
+    uint32_t st = 0;
+    g_lbr_why = g_lbr_whystv = 0;
+    struct dcl_rms_reader *r = dcl_rms_read_open(ctx, spec, &st);
+    if (!r) { g_lbr_why = st; return NULL; }
+    size_t cap = 4096, n = 0;
+    char *buf = malloc(cap);
+    char *rec = malloc(32768);
+    if (!buf || !rec) {
+        free(buf); free(rec); dcl_rms_read_close(r);
+        g_lbr_why = RMS$_DME;
+        return NULL;
+    }
+    for (;;) {
+        int eof = 0;
+        int rl = dcl_rms_read_record(r, rec, 32768, &eof);
+        if (rl < 0) {
+            if (eof) break;
+            g_lbr_why = RMS$_RER;
+            free(buf); free(rec); dcl_rms_read_close(r);
+            return NULL;
+        }
+        while (n + (size_t)rl + 2 > cap) {
+            char *nb = realloc(buf, cap * 2);
+            if (!nb) {
+                free(buf); free(rec); dcl_rms_read_close(r);
+                g_lbr_why = RMS$_DME;
+                return NULL;
+            }
+            buf = nb;
+            cap *= 2;
+        }
+        memcpy(buf + n, rec, (size_t)rl);
+        n += (size_t)rl;
+        buf[n++] = '\n';
+    }
+    free(rec);
+    dcl_rms_read_close(r);
+    buf[n] = '\0';
+    *len = n;
+    return buf;
+}
+
+/* Write `len` bytes as `spec`; 0 on success, -1 (g_lbr_why/g_lbr_whystv say
+ * why). Through RMS the file is fixed-length with no record size, so each $PUT
+ * lands exactly its own bytes (the byte-exact write LINK.EXE's image and
+ * LIBRARIAN.EXE's .OLB use). in_place: supersede the version the file has now
+ * (the highest); otherwise a new version. */
+static int lbr_file_write(struct dcl_context *ctx, const char *spec,
+                          const unsigned char *buf, size_t len, int in_place)
+{
+    g_lbr_why = g_lbr_whystv = 0;
+    uint32_t st = 0;
+    struct dcl_rms_writer *w = NULL;
+    if (in_place) {
+        char eff[1024], cur[1024];
+        struct dcl_rms_dir *d = NULL;
+        if (dcl_rms_effective_spec(ctx, spec, eff, sizeof(eff)) == 0)
+            d = dcl_rms_dir_open(ctx, eff);
+        if (d && dcl_rms_dir_next(d, cur, sizeof(cur), NULL, NULL, NULL))
+            w = dcl_rms_write_supersede(ctx, cur, FAB$C_FIX, 0, 0, &st);
+        else
+            w = dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
+        if (d) dcl_rms_dir_close(d);
+    } else {
+        w = dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
+    }
+    if (!w) { g_lbr_why = st; return -1; }
+    int rc = 0;
+    for (size_t done = 0; done < len && rc == 0; ) {
+        size_t chunk = len - done > 32768 ? 32768 : len - done;
+        rc = dcl_rms_write_record(w, (const char *)buf + done, chunk);
+        done += chunk;
+    }
+    if (rc) g_lbr_why = dcl_rms_write_status(w, &g_lbr_whystv);
+    uint32_t cst = dcl_rms_write_close(w);
+    if (!(cst & 1)) { if (!rc) g_lbr_why = cst; rc = -1; }
+    return rc;
+}
+
+/* Write text (lines ended by newlines) as a new version of `spec`, one
+ * variable-length carriage-control record ($PUT) per line -- an extracted text
+ * or help module, the file VMS LIBRARIAN /EXTRACT /OUTPUT makes. 0 or -1. */
+static int lbr_text_write(struct dcl_context *ctx, const char *spec,
+                          const char *data, size_t len)
+{
+    uint32_t st = 0;
+    g_lbr_why = g_lbr_whystv = 0;
+    struct dcl_rms_writer *w = dcl_rms_write_create(ctx, spec, FAB$C_VAR,
+                                                    FAB$M_CR, 0, &st);
+    if (!w) { g_lbr_why = st; return -1; }
+    int rc = 0;
+    size_t i = 0;
+    while (i < len && rc == 0) {
+        size_t e = i;
+        while (e < len && data[e] != '\n') e++;
+        rc = dcl_rms_write_record(w, data + i, e - i);
+        i = e + 1;
+    }
+    if (rc) g_lbr_why = dcl_rms_write_status(w, &g_lbr_whystv);
+    uint32_t cst = dcl_rms_write_close(w);
+    if (!(cst & 1)) { if (!rc) g_lbr_why = cst; rc = -1; }
+    return rc;
+}
+
+/* ==========================================================================
+ * TEXT / HELP libraries -- the LBRO container (dcl/hlb.h).
+ * ========================================================================== */
 
 /*
  * Determine library type from qualifiers or file extension.
@@ -85,6 +268,39 @@ static const char *lbr_type_name(int type)
 }
 
 /*
+
+/* Build an LBRO image: header, module table, then each module's data. */
+static unsigned char *lbr_build(uint32_t type, const struct lbr_module *mods,
+                                const char *const *datas, uint32_t count,
+                                size_t *out_len)
+{
+    size_t total = sizeof(struct lbr_header) + (size_t)count * sizeof(struct lbr_module);
+    for (uint32_t i = 0; i < count; i++) total += mods[i].length;
+    unsigned char *img = calloc(1, total ? total : 1);
+    if (!img) return NULL;
+
+    struct lbr_header hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.magic = LBR_MAGIC;
+    hdr.type = type;
+    hdr.module_count = count;
+    hdr.reserved = 0;
+    memcpy(img, &hdr, sizeof(hdr));
+
+    size_t off = sizeof(hdr) + (size_t)count * sizeof(struct lbr_module);
+    for (uint32_t i = 0; i < count; i++) {
+        struct lbr_module m = mods[i];
+        m.offset = (uint32_t)off;
+        memcpy(img + sizeof(hdr) + i * sizeof(struct lbr_module), &m, sizeof(m));
+        if (m.length && datas[i])
+            memcpy(img + off, datas[i], m.length);
+        off += m.length;
+    }
+    *out_len = total;
+    return img;
+}
+
+/*
  * LIBRARY /CREATE - create an empty library file
  */
 static int lbr_create(struct dcl_context *ctx, struct dcl_command *cmd)
@@ -95,31 +311,22 @@ static int lbr_create(struct dcl_context *ctx, struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char lib_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
-
     int type = lbr_get_type(cmd, cmd->params[0]);
 
-    FILE *fp = fopen(lib_path, "wb");
-    if (!fp) {
-        dcl_error("LIBRARIAN", 2, "OPENOUT",
-                  "error creating library - %s", cmd->params[0]);
-        return SS$_FILACCERR;
-    }
-
-    struct lbr_header hdr;
-    memset(&hdr, 0, sizeof(hdr));
-    hdr.magic = LBR_MAGIC;
-    hdr.type = (uint32_t)type;
-    hdr.module_count = 0;
-    hdr.reserved = 0;
-
-    if (fwrite(&hdr, sizeof(hdr), 1, fp) != 1) {
-        dcl_error("LIBRARIAN", 2, "WRITEERR", "error writing library header");
-        fclose(fp);
+    size_t len = 0;
+    unsigned char *img = lbr_build((uint32_t)type, NULL, NULL, 0, &len);
+    if (!img) {
+        dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
         return SS$_ABORT;
     }
-    fclose(fp);
+    int rc = lbr_file_write(ctx, cmd->params[0], img, len, 0);
+    free(img);
+    if (rc != 0) {
+        dcl_error("LIBRARIAN", 2, "OPENOUT",
+                  "error creating library - %s", cmd->params[0]);
+        lbr_print_reasons();
+        return SS$_FILACCERR;
+    }
 
     dcl_out_printf("%%LIBRARIAN-S-CREATED, %s library %s created\n",
            lbr_type_name(type), cmd->params[0]);
@@ -127,54 +334,75 @@ static int lbr_create(struct dcl_context *ctx, struct dcl_command *cmd)
 }
 
 /*
- * Read library header and module table from file.
- * Returns file pointer positioned after module table, or NULL on error.
- * Caller must fclose the returned FILE*.
+ * Read a library (whole, through RMS) and its header and module table.
+ * On success *img/*img_len hold the file's bytes and *modules the table (both
+ * the caller's to free); module data lives at img + modules[i].offset.
  */
-static FILE *lbr_open(const char *lib_path, struct lbr_header *hdr,
-                       struct lbr_module **modules, const char *vms_name)
+static int lbr_load(struct dcl_context *ctx, const char *vms_name,
+                    struct lbr_header *hdr, struct lbr_module **modules,
+                    unsigned char **img, size_t *img_len)
 {
-    FILE *fp = fopen(lib_path, "rb");
-    if (!fp) {
+    *modules = NULL;
+    *img = NULL;
+    size_t len = 0;
+    unsigned char *buf = lbr_file_read(ctx, vms_name, &len);
+    if (!buf) {
         dcl_error("LIBRARIAN", 2, "OPENIN",
                   "error opening library - %s", vms_name);
-        return NULL;
+        lbr_print_reasons();
+        return SS$_NOSUCHFILE;
     }
 
-    if (fread(hdr, sizeof(*hdr), 1, fp) != 1 || hdr->magic != LBR_MAGIC) {
+    if (len < sizeof(*hdr)) {
         dcl_error("LIBRARIAN", 2, "ILLHDR",
                   "not a valid OVMX library - %s", vms_name);
-        fclose(fp);
-        return NULL;
+        free(buf);
+        return SS$_NOSUCHFILE;
+    }
+    memcpy(hdr, buf, sizeof(*hdr));
+    if (hdr->magic != LBR_MAGIC) {
+        dcl_error("LIBRARIAN", 2, "ILLHDR",
+                  "not a valid OVMX library - %s", vms_name);
+        free(buf);
+        return SS$_NOSUCHFILE;
     }
 
     if (hdr->module_count > LBR_MAX_MODULES) {
         dcl_error("LIBRARIAN", 2, "TOOMANYMOD",
                   "library has too many modules - %s", vms_name);
-        fclose(fp);
-        return NULL;
+        free(buf);
+        return SS$_NOSUCHFILE;
     }
 
-    *modules = NULL;
     if (hdr->module_count > 0) {
+        size_t tlen = (size_t)hdr->module_count * sizeof(struct lbr_module);
+        if (len < sizeof(*hdr) + tlen) {
+            dcl_error("LIBRARIAN", 2, "READERR",
+                      "error reading module table - %s", vms_name);
+            free(buf);
+            return SS$_NOSUCHFILE;
+        }
         *modules = calloc(hdr->module_count, sizeof(struct lbr_module));
         if (!*modules) {
             dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
-            fclose(fp);
-            return NULL;
+            free(buf);
+            return SS$_NOSUCHFILE;
         }
-        if (fread(*modules, sizeof(struct lbr_module), hdr->module_count, fp)
-                != hdr->module_count) {
-            dcl_error("LIBRARIAN", 2, "READERR",
-                      "error reading module table - %s", vms_name);
-            free(*modules);
-            *modules = NULL;
-            fclose(fp);
-            return NULL;
-        }
+        memcpy(*modules, buf + sizeof(*hdr), tlen);
     }
 
-    return fp;
+    *img = buf;
+    *img_len = len;
+    return SS$_NORMAL;
+}
+
+/* The bytes of module m that the library image really holds (a table entry
+ * reaching past the end of the file yields only what is there). */
+static size_t lbr_module_avail(const struct lbr_module *m, size_t img_len)
+{
+    if (m->offset >= img_len) return 0;
+    size_t avail = img_len - m->offset;
+    return m->length < avail ? m->length : avail;
 }
 
 /*
@@ -191,89 +419,26 @@ static int lbr_insert(struct dcl_context *ctx, struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char lib_path[1024], src_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
-    dcl_resolve_path(ctx, cmd->params[2], src_path, sizeof(src_path));
-
-    /* Read source file */
-    FILE *src = fopen(src_path, "rb");
-    if (!src) {
+    /* Read the source module, record by record */
+    size_t src_len = 0;
+    char *src_data = lbr_text_read(ctx, cmd->params[2], &src_len);
+    if (!src_data) {
         dcl_error("LIBRARIAN", 2, "OPENIN",
                   "error opening source file - %s", cmd->params[2]);
+        lbr_print_reasons();
         return SS$_NOSUCHFILE;
     }
-
-    fseek(src, 0, SEEK_END);
-    long src_len = ftell(src);
-    if (src_len < 0) {
-        dcl_error("LIBRARIAN", 2, "READERR",
-                  "error determining file size - %s", cmd->params[2]);
-        fclose(src);
-        return SS$_ABORT;
-    }
-    fseek(src, 0, SEEK_SET);
-
-    char *src_data = malloc((size_t)src_len + 1);
-    if (!src_data) {
-        dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
-        fclose(src);
-        return SS$_ABORT;
-    }
-    if (src_len > 0) {
-        if ((long)fread(src_data, 1, (size_t)src_len, src) != src_len) {
-            dcl_error("LIBRARIAN", 2, "READERR",
-                      "error reading source file - %s", cmd->params[2]);
-            free(src_data);
-            fclose(src);
-            return SS$_ABORT;
-        }
-    }
-    fclose(src);
 
     /* Read existing library */
     struct lbr_header hdr;
     struct lbr_module *modules = NULL;
-    FILE *fp = lbr_open(lib_path, &hdr, &modules, cmd->params[0]);
-    if (!fp) {
+    unsigned char *img = NULL;
+    size_t img_len = 0;
+    int st = lbr_load(ctx, cmd->params[0], &hdr, &modules, &img, &img_len);
+    if (!$VMS_STATUS_SUCCESS(st)) {
         free(src_data);
-        return SS$_NOSUCHFILE;
+        return st;
     }
-
-    /* Read existing data section */
-    long data_start = (long)(sizeof(struct lbr_header) +
-                     hdr.module_count * sizeof(struct lbr_module));
-    fseek(fp, 0, SEEK_END);
-    long file_end = ftell(fp);
-    if (file_end < 0) {
-        dcl_error("LIBRARIAN", 2, "READERR",
-                  "error determining library size - %s", cmd->params[0]);
-        free(src_data);
-        free(modules);
-        fclose(fp);
-        return SS$_ABORT;
-    }
-    long data_len = file_end - data_start;
-    char *data = NULL;
-
-    if (data_len > 0) {
-        data = malloc((size_t)data_len);
-        if (!data) {
-            dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
-            free(src_data);
-            free(modules);
-            fclose(fp);
-            return SS$_ABORT;
-        }
-        fseek(fp, data_start, SEEK_SET);
-        if ((long)fread(data, 1, (size_t)data_len, fp) != data_len) {
-            free(data);
-            free(src_data);
-            free(modules);
-            fclose(fp);
-            return SS$_ABORT;
-        }
-    }
-    fclose(fp);
 
     /* Prepare module name (uppercase, zero-padded) */
     char mod_name[LBR_NAME_LEN];
@@ -296,109 +461,81 @@ static int lbr_insert(struct dcl_context *ctx, struct dcl_command *cmd)
     if (new_count > LBR_MAX_MODULES) {
         dcl_error("LIBRARIAN", 2, "TOOMANYMOD",
                   "library module limit exceeded");
-        free(data);
+        free(img);
         free(src_data);
         free(modules);
         return SS$_ABORT;
     }
 
     struct lbr_module *new_modules = calloc(new_count, sizeof(struct lbr_module));
-    if (!new_modules) {
-        free(data);
+    const char **datas = calloc(new_count, sizeof(*datas));
+    char **owned = calloc(new_count, sizeof(*owned));
+    if (!new_modules || !datas || !owned) {
+        free(new_modules); free(datas); free(owned);
+        free(img);
         free(src_data);
         free(modules);
         return SS$_ABORT;
     }
 
-    /* Collect data for all kept modules + new one */
-    size_t total_data = 0;
-    size_t data_cap = (size_t)data_len + (size_t)src_len + 1024;
-    char *new_data = malloc(data_cap);
-    if (!new_data) {
-        free(new_modules);
-        free(data);
-        free(src_data);
-        free(modules);
-        return SS$_ABORT;
-    }
-
+    /* Keep existing modules (skip the one being replaced) */
     uint32_t idx = 0;
-    uint32_t data_base = (uint32_t)(sizeof(struct lbr_header) +
-                         new_count * sizeof(struct lbr_module));
-
-    /* Copy existing modules (skip the one being replaced) */
+    int oom = 0;
     for (uint32_t i = 0; i < hdr.module_count; i++) {
         if (replacing && strncasecmp(modules[i].name, mod_name, LBR_NAME_LEN) == 0)
             continue;
-
-        uint32_t old_data_base = (uint32_t)(sizeof(struct lbr_header) +
-                                 hdr.module_count * sizeof(struct lbr_module));
-        uint32_t off_in_data = modules[i].offset - old_data_base;
-
         memcpy(new_modules[idx].name, modules[i].name, LBR_NAME_LEN);
-        new_modules[idx].offset = data_base + (uint32_t)total_data;
         new_modules[idx].length = modules[i].length;
-
-        if (data && off_in_data + modules[i].length <= (uint32_t)data_len) {
-            memcpy(new_data + total_data, data + off_in_data, modules[i].length);
+        size_t avail = lbr_module_avail(&modules[i], img_len);
+        if (avail == modules[i].length) {
+            datas[idx] = (const char *)img + modules[i].offset;
+        } else {
+            /* a truncated entry: what is there, the rest zero */
+            owned[idx] = calloc(1, modules[i].length ? modules[i].length : 1);
+            if (!owned[idx]) { oom = 1; break; }
+            if (avail) memcpy(owned[idx], img + modules[i].offset, avail);
+            datas[idx] = owned[idx];
         }
-        total_data += modules[i].length;
         idx++;
     }
 
     /* Add new module */
-    memcpy(new_modules[idx].name, mod_name, LBR_NAME_LEN);
-    new_modules[idx].offset = data_base + (uint32_t)total_data;
-    new_modules[idx].length = (uint32_t)src_len;
-    memcpy(new_data + total_data, src_data, (size_t)src_len);
-    total_data += (size_t)src_len;
-    idx++;
-
-    /* Write rebuilt library */
-    fp = fopen(lib_path, "wb");
-    if (!fp) {
-        dcl_error("LIBRARIAN", 2, "OPENOUT",
-                  "error writing library - %s", cmd->params[0]);
-        free(new_data);
-        free(new_modules);
-        free(data);
-        free(src_data);
-        free(modules);
-        return SS$_FILACCERR;
+    if (!oom) {
+        memcpy(new_modules[idx].name, mod_name, LBR_NAME_LEN);
+        new_modules[idx].length = (uint32_t)src_len;
+        datas[idx] = src_data;
+        idx++;
     }
 
-    struct lbr_header new_hdr;
-    memset(&new_hdr, 0, sizeof(new_hdr));
-    new_hdr.magic = LBR_MAGIC;
-    new_hdr.type = hdr.type;
-    new_hdr.module_count = idx;
-    new_hdr.reserved = 0;
-
-    if (fwrite(&new_hdr, sizeof(new_hdr), 1, fp) != 1 ||
-        fwrite(new_modules, sizeof(struct lbr_module), idx, fp) != idx ||
-        (total_data > 0 && fwrite(new_data, 1, total_data, fp) != total_data)) {
-        dcl_error("LIBRARIAN", 2, "WRITEERR",
-                  "error writing library - %s", cmd->params[0]);
-        fclose(fp);
-        free(new_data);
-        free(new_modules);
-        free(data);
-        free(src_data);
-        free(modules);
+    size_t out_len = 0;
+    unsigned char *out = oom ? NULL
+                             : lbr_build(hdr.type, new_modules, datas, idx, &out_len);
+    for (uint32_t i = 0; i < new_count; i++) free(owned[i]);
+    free(owned);
+    free(datas);
+    free(new_modules);
+    free(img);
+    free(src_data);
+    free(modules);
+    if (!out) {
+        dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
         return SS$_ABORT;
     }
-    fclose(fp);
+
+    /* Write rebuilt library, superseding the version it has */
+    int rc = lbr_file_write(ctx, cmd->params[0], out, out_len, 1);
+    free(out);
+    if (rc != 0) {
+        dcl_error("LIBRARIAN", 2, "OPENOUT",
+                  "error writing library - %s", cmd->params[0]);
+        lbr_print_reasons();
+        return SS$_FILACCERR;
+    }
 
     dcl_out_printf("%%LIBRARIAN-S-%s, module %s %s\n",
            replacing ? "REPLACED" : "INSERTED",
            mod_name,
            replacing ? "replaced" : "inserted");
-
-    free(new_data);
-    free(new_modules);
-    free(data);
-    free(src_data);
-    free(modules);
     return SS$_NORMAL;
 }
 
@@ -413,14 +550,13 @@ static int lbr_list(struct dcl_context *ctx, struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char lib_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
-
     struct lbr_header hdr;
     struct lbr_module *modules = NULL;
-    FILE *fp = lbr_open(lib_path, &hdr, &modules, cmd->params[0]);
-    if (!fp) return SS$_NOSUCHFILE;
-    fclose(fp);
+    unsigned char *img = NULL;
+    size_t img_len = 0;
+    int st = lbr_load(ctx, cmd->params[0], &hdr, &modules, &img, &img_len);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
+    free(img);
 
     dcl_out_printf("Directory of %s LIBRARY %s\n\n",
            lbr_type_name(hdr.type), cmd->params[0]);
@@ -462,13 +598,12 @@ static int lbr_extract(struct dcl_context *ctx, struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    char lib_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
-
     struct lbr_header hdr;
     struct lbr_module *modules = NULL;
-    FILE *fp = lbr_open(lib_path, &hdr, &modules, cmd->params[0]);
-    if (!fp) return SS$_NOSUCHFILE;
+    unsigned char *img = NULL;
+    size_t img_len = 0;
+    int st = lbr_load(ctx, cmd->params[0], &hdr, &modules, &img, &img_len);
+    if (!$VMS_STATUS_SUCCESS(st)) return st;
 
     /* Find the module (case-insensitive) */
     int found = -1;
@@ -483,50 +618,32 @@ static int lbr_extract(struct dcl_context *ctx, struct dcl_command *cmd)
         dcl_error("LIBRARIAN", 2, "KEYNOTFND",
                   "module %s not found in library", extract_name);
         free(modules);
-        fclose(fp);
+        free(img);
         return SS$_NOSUCHFILE;
     }
 
-    /* Read and output module data */
-    fseek(fp, (long)modules[found].offset, SEEK_SET);
-    uint32_t remaining = modules[found].length;
-    char buf[4096];
+    const char *data = (const char *)img + modules[found].offset;
+    size_t dlen = lbr_module_avail(&modules[found], img_len);
 
-    /* Determine output: /OUTPUT=file or stdout */
+    /* Output: /OUTPUT=file (a text file, through RMS) or SYS$OUTPUT */
     const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
-    FILE *out = NULL;          /* NULL: SYS$OUTPUT */
     if (output_file && output_file[0]) {
-        char out_path[1024];
-        dcl_resolve_path(ctx, output_file, out_path, sizeof(out_path));
-        out = fopen(out_path, "w");
-        if (!out) {
+        if (lbr_text_write(ctx, output_file, data, dlen) != 0) {
             dcl_error("LIBRARIAN", 2, "OPENOUT",
                       "error creating output file - %s", output_file);
+            lbr_print_reasons();
             free(modules);
-            fclose(fp);
+            free(img);
             return SS$_FILACCERR;
         }
-    }
-
-    while (remaining > 0) {
-        size_t chunk = remaining < sizeof(buf) ? remaining : sizeof(buf);
-        size_t got = fread(buf, 1, chunk, fp);
-        if (got == 0) break;
-        if (out)
-            fwrite(buf, 1, got, out);
-        else
-            dcl_out_write(buf, got);
-        remaining -= (uint32_t)got;
-    }
-
-    if (out) {
-        fclose(out);
         dcl_out_printf("%%LIBRARIAN-S-EXTRACTED, module %s extracted to %s\n",
                extract_name, output_file);
+    } else if (dlen) {
+        dcl_out_write(data, dlen);
     }
 
     free(modules);
-    fclose(fp);
+    free(img);
     return SS$_NORMAL;
 }
 
@@ -648,88 +765,39 @@ static void hlp_free_modules(struct hlp_module *mods, uint32_t count)
     free(mods);
 }
 
-/* Write an LBRO HELP container from a module array. */
-static int hlp_write_library(const char *lib_path, const char *vms_name,
-                             struct hlp_module *mods, uint32_t count)
+/* Write an LBRO HELP container from a module array: a new version of the
+ * library, or (in_place) superseding the version it has. */
+static int hlp_write_library(struct dcl_context *ctx, const char *vms_name,
+                             struct hlp_module *mods, uint32_t count, int in_place)
 {
-    FILE *fp = fopen(lib_path, "wb");
-    if (!fp) {
-        dcl_error("LIBRARIAN", 2, "OPENOUT",
-                  "error creating library - %s", vms_name);
-        return SS$_FILACCERR;
-    }
-
-    struct lbr_header hdr;
-    memset(&hdr, 0, sizeof(hdr));
-    hdr.magic = LBR_MAGIC;
-    hdr.type = LBR_TYPE_HELP;
-    hdr.module_count = count;
-
-    uint32_t data_base = (uint32_t)(sizeof(hdr) + count * sizeof(struct lbr_module));
-
     struct lbr_module *idx = calloc(count ? count : 1, sizeof(*idx));
-    if (!idx) {
+    const char **datas = calloc(count ? count : 1, sizeof(*datas));
+    if (!idx || !datas) {
+        free(idx); free(datas);
         dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
-        fclose(fp);
         return SS$_ABORT;
     }
-    uint32_t off = data_base;
     for (uint32_t j = 0; j < count; j++) {
         memcpy(idx[j].name, mods[j].name, LBR_NAME_LEN);
-        idx[j].offset = off;
         idx[j].length = (uint32_t)mods[j].length;
-        off += (uint32_t)mods[j].length;
+        datas[j] = mods[j].data;
     }
-
-    int ok = (fwrite(&hdr, sizeof(hdr), 1, fp) == 1) &&
-             (count == 0 || fwrite(idx, sizeof(*idx), count, fp) == count);
-    for (uint32_t j = 0; ok && j < count; j++) {
-        if (mods[j].length &&
-            fwrite(mods[j].data, 1, mods[j].length, fp) != mods[j].length)
-            ok = 0;
-    }
+    size_t len = 0;
+    unsigned char *img = lbr_build(LBR_TYPE_HELP, idx, datas, count, &len);
     free(idx);
-    if (!ok) {
-        dcl_error("LIBRARIAN", 2, "WRITEERR", "error writing library - %s",
-                  vms_name);
-        fclose(fp);
-        return SS$_ABORT;
-    }
-    fclose(fp);
-    return SS$_NORMAL;
-}
-
-/* Read a whole source file into a fresh buffer (*out/*out_len). */
-static int hlp_read_source(const char *src_path, const char *vms_name,
-                           char **out, size_t *out_len)
-{
-    FILE *src = fopen(src_path, "rb");
-    if (!src) {
-        dcl_error("LIBRARIAN", 2, "OPENIN",
-                  "error opening source file - %s", vms_name);
-        return SS$_NOSUCHFILE;
-    }
-    fseek(src, 0, SEEK_END);
-    long n = ftell(src);
-    if (n < 0) { fclose(src); return SS$_ABORT; }
-    fseek(src, 0, SEEK_SET);
-    char *buf = malloc((size_t)n + 1);
-    if (!buf) {
+    free(datas);
+    if (!img) {
         dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
-        fclose(src);
         return SS$_ABORT;
     }
-    if (n > 0 && (long)fread(buf, 1, (size_t)n, src) != n) {
-        dcl_error("LIBRARIAN", 2, "READERR",
-                  "error reading source file - %s", vms_name);
-        free(buf);
-        fclose(src);
-        return SS$_ABORT;
+    int rc = lbr_file_write(ctx, vms_name, img, len, in_place);
+    free(img);
+    if (rc != 0) {
+        dcl_error("LIBRARIAN", 2, "OPENOUT",
+                  "error creating library - %s", vms_name);
+        lbr_print_reasons();
+        return SS$_FILACCERR;
     }
-    buf[n] = '\0';
-    fclose(src);
-    *out = buf;
-    *out_len = (size_t)n;
     return SS$_NORMAL;
 }
 
@@ -747,14 +815,16 @@ static int hlp_compile(struct dcl_context *ctx, struct dcl_command *cmd,
         return SS$_BADPARAM;
     }
 
-    char lib_path[1024], src_path[1024];
-    dcl_resolve_path(ctx, cmd->params[0], lib_path, sizeof(lib_path));
-    dcl_resolve_path(ctx, cmd->params[1], src_path, sizeof(src_path));
-
-    char *src = NULL;
+    /* The .HLP source, record by record */
     size_t src_len = 0;
-    int st = hlp_read_source(src_path, cmd->params[1], &src, &src_len);
-    if (!$VMS_STATUS_SUCCESS(st)) return st;
+    char *src = lbr_text_read(ctx, cmd->params[1], &src_len);
+    if (!src) {
+        dcl_error("LIBRARIAN", 2, "OPENIN",
+                  "error opening source file - %s", cmd->params[1]);
+        lbr_print_reasons();
+        return SS$_NOSUCHFILE;
+    }
+    int st;
 
     struct hlp_module *newmods = NULL;
     uint32_t newcount = 0;
@@ -766,18 +836,23 @@ static int hlp_compile(struct dcl_context *ctx, struct dcl_command *cmd,
     uint32_t final_count = newcount;
     struct hlp_module *merged = NULL;
 
+    int in_place = 0;
     if (!create) {
         /* Merge onto the existing library: keep old modules whose key is not
-         * being replaced, then all the new ones. */
+         * being replaced, then all the new ones. A library that cannot be read
+         * is reported (OPENIN and the RMS reason) and, as before, created. */
         struct lbr_header hdr;
         struct lbr_module *old = NULL;
-        FILE *fp = lbr_open(lib_path, &hdr, &old, cmd->params[0]);
-        if (fp) {
+        unsigned char *img = NULL;
+        size_t img_len = 0;
+        if ($VMS_STATUS_SUCCESS(lbr_load(ctx, cmd->params[0], &hdr, &old,
+                                         &img, &img_len))) {
+            in_place = 1;
             uint32_t mcap = hdr.module_count + newcount;
             merged = calloc(mcap ? mcap : 1, sizeof(*merged));
             if (!merged) {
                 dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
-                free(old); fclose(fp);
+                free(old); free(img);
                 hlp_free_modules(newmods, newcount);
                 return SS$_ABORT;
             }
@@ -789,24 +864,26 @@ static int hlp_compile(struct dcl_context *ctx, struct dcl_command *cmd,
                         replaced = 1; break;
                     }
                 if (replaced) continue;
+                if (lbr_module_avail(&old[i], img_len) != old[i].length) {
+                    dcl_error("LIBRARIAN", 2, "READERR",
+                              "error reading library - %s", cmd->params[0]);
+                    free(old); free(img);
+                    hlp_free_modules(merged, mc);
+                    hlp_free_modules(newmods, newcount);
+                    return SS$_ABORT;
+                }
                 memcpy(merged[mc].name, old[i].name, LBR_NAME_LEN);
                 merged[mc].length = old[i].length;
                 merged[mc].data = malloc(old[i].length ? old[i].length : 1);
                 if (!merged[mc].data) {
                     dcl_error("LIBRARIAN", 4, "INSFMEM", "insufficient memory");
-                    free(old); fclose(fp);
+                    free(old); free(img);
                     hlp_free_modules(merged, mc);
                     hlp_free_modules(newmods, newcount);
                     return SS$_ABORT;
                 }
-                fseek(fp, (long)old[i].offset, SEEK_SET);
-                if (old[i].length &&
-                    fread(merged[mc].data, 1, old[i].length, fp) != old[i].length) {
-                    free(old); fclose(fp);
-                    hlp_free_modules(merged, mc + 1);
-                    hlp_free_modules(newmods, newcount);
-                    return SS$_ABORT;
-                }
+                if (old[i].length)
+                    memcpy(merged[mc].data, img + old[i].offset, old[i].length);
                 mc++;
             }
             for (uint32_t k = 0; k < newcount; k++) {
@@ -817,7 +894,7 @@ static int hlp_compile(struct dcl_context *ctx, struct dcl_command *cmd,
                 mc++;
             }
             free(old);
-            fclose(fp);
+            free(img);
             hlp_free_modules(newmods, newcount); /* frees only NULLed shells */
             final = merged;
             final_count = mc;
@@ -825,7 +902,7 @@ static int hlp_compile(struct dcl_context *ctx, struct dcl_command *cmd,
         /* If the library does not exist yet, fall through and create it. */
     }
 
-    st = hlp_write_library(lib_path, cmd->params[0], final, final_count);
+    st = hlp_write_library(ctx, cmd->params[0], final, final_count, in_place);
     hlp_free_modules(final, final_count);
 
     if ($VMS_STATUS_SUCCESS(st))
@@ -878,127 +955,12 @@ static void olb_module_name(const char *spec, char *out, size_t out_sz)
     out[n] = '\0';
 }
 
-/*
- * The OBJECT library and the objects put in it are files on the volume, so they
- * are read and written THROUGH the Files-11 ACP (vms-8ca), the way DUMP reads a
- * file (vms-5303e) and LIBRARIAN.EXE / LINK.EXE do (OVMX_OLB_RMS_IO): GNU as and
- * LINK write their objects and images through RMS, and a POSIX fopen() of the
- * translated path is not where those files are on the product runtime -- the
- * GCC port's `ar` (its `library /replace/create libx.a x.o,...`) answered
- * %LIBRARIAN-E-OPENIN for an object the compiler had just written. The host
- * defer (no executive, or a kernel-mounted unit) is the one DUMP has.
- */
-static int olb_host_defer(const char *spec)
-{
-    return rms_executive_absent() || vmsfs_device_spec_kernel_mounted(spec);
-}
-
-/* Read a whole file into a fresh buffer (NULL when it cannot be read). */
-static unsigned char *olb_file_read(struct dcl_context *ctx, const char *spec,
-                                    size_t *len)
-{
-    char eff[1024];
-    if (!olb_host_defer(spec)) {
-        uint8_t *data = NULL;
-        uint64_t dlen = 0;
-        if (dcl_rms_effective_spec(ctx, spec, eff, sizeof(eff)) != 0 ||
-            rms_read_over_acp(eff, &data, &dlen) != RMS$_NORMAL) {
-            free(data);
-            return NULL;
-        }
-        if (!data) data = malloc(1);            /* an empty file */
-        *len = (size_t)dlen;
-        return data;
-    }
-    char linux_path[1024];
-    dcl_resolve_path(ctx, spec, linux_path, sizeof(linux_path));
-    FILE *fp = fopen(linux_path, "rb");
-    if (!fp) return NULL;
-    if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return NULL; }
-    long sz = ftell(fp);
-    if (sz < 0) { fclose(fp); return NULL; }
-    if (fseek(fp, 0, SEEK_SET) != 0) { fclose(fp); return NULL; }
-    unsigned char *buf = malloc((size_t)sz ? (size_t)sz : 1);
-    if (!buf) { fclose(fp); return NULL; }
-    if (sz > 0 && fread(buf, 1, (size_t)sz, fp) != (size_t)sz) {
-        free(buf); fclose(fp); return NULL;
-    }
-    fclose(fp);
-    *len = (size_t)sz;
-    return buf;
-}
-
-/* Why the last library write was refused: the RMS status and its secondary
- * value (STV), which LIBRARIAN reports under %LIBRARIAN-E-OPENOUT as VMS does. */
-static uint32_t g_olb_why, g_olb_whystv;
-
-/* The refusal's messages, chained ('-' for '%'), after the OPENOUT message. */
-static void olb_print_reasons(void)
-{
-    uint32_t sts[2] = { g_olb_why, g_olb_whystv };
-    for (int i = 0; i < 2; i++) {
-        char m[256];
-        uint16_t n = 0;
-        struct dsc$descriptor_s md = { sizeof m - 1, DSC$K_DTYPE_T, DSC$K_CLASS_S, m };
-        if (!sts[i] || !(sys$getmsg(sts[i], &n, &md, MSG$M_ALL, NULL) & 1))
-            continue;
-        m[n] = '\0';
-        if (m[0] == '%') m[0] = '-';
-        dcl_err_printf("%s\n", m);
-    }
-}
-
-/* Write `len` bytes as a new version of `spec`; 0 on success. Through RMS the
- * file is fixed-length with no record size, so each $PUT lands exactly its own
- * bytes (the byte-exact write LINK.EXE's image and LIBRARIAN.EXE's .OLB use). */
-static int olb_file_write(struct dcl_context *ctx, const char *spec,
-                          const unsigned char *buf, size_t len, int in_place)
-{
-    g_olb_why = g_olb_whystv = 0;
-    if (!olb_host_defer(spec)) {
-        uint32_t st = 0;
-        struct dcl_rms_writer *w = NULL;
-        if (in_place) {
-            /* the version the library has now (the highest), superseded */
-            char eff[1024], cur[1024];
-            struct dcl_rms_dir *d = NULL;
-            if (dcl_rms_effective_spec(ctx, spec, eff, sizeof(eff)) == 0)
-                d = dcl_rms_dir_open(ctx, eff);
-            if (d && dcl_rms_dir_next(d, cur, sizeof(cur), NULL, NULL, NULL))
-                w = dcl_rms_write_supersede(ctx, cur, FAB$C_FIX, 0, 0, &st);
-            else
-                w = dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
-            if (d) dcl_rms_dir_close(d);
-        } else {
-            w = dcl_rms_write_create(ctx, spec, FAB$C_FIX, 0, 0, &st);
-        }
-        if (!w) { g_olb_why = st; return -1; }
-        int rc = 0;
-        for (size_t done = 0; done < len && rc == 0; ) {
-            size_t chunk = len - done > 32768 ? 32768 : len - done;
-            rc = dcl_rms_write_record(w, (const char *)buf + done, chunk);
-            done += chunk;
-        }
-        if (rc) g_olb_why = dcl_rms_write_status(w, &g_olb_whystv);
-        uint32_t cst = dcl_rms_write_close(w);
-        if (!(cst & 1)) { if (!rc) g_olb_why = cst; rc = -1; }
-        return rc;
-    }
-    char linux_path[1024];
-    dcl_resolve_path(ctx, spec, linux_path, sizeof(linux_path));
-    FILE *fp = fopen(linux_path, "wb");
-    if (!fp) return -1;
-    int rc = (len && fwrite(buf, 1, len, fp) != len) ? -1 : 0;
-    if (fclose(fp) != 0) rc = -1;
-    return rc;
-}
-
 /* Load the library `spec` into a member array: OLB_OK, OLB_ERR_OPEN, ... */
 static int olb_lib_read(struct dcl_context *ctx, const char *spec,
                         struct olb_member **members, uint32_t *count)
 {
     size_t len = 0;
-    unsigned char *buf = olb_file_read(ctx, spec, &len);
+    unsigned char *buf = lbr_file_read(ctx, spec, &len);
     if (!buf) { *members = NULL; *count = 0; return OLB_ERR_OPEN; }
     return olb_parse(buf, len, members, count);
 }
@@ -1015,7 +977,7 @@ static int olb_lib_write(struct dcl_context *ctx, const char *spec,
     size_t len = 0;
     int rc = olb_build(members, count, &img, &len);
     if (rc != OLB_OK) return rc;
-    rc = olb_file_write(ctx, spec, img, len, in_place) == 0 ? OLB_OK : OLB_ERR_IO;
+    rc = lbr_file_write(ctx, spec, img, len, in_place) == 0 ? OLB_OK : OLB_ERR_IO;
     free(img);
     return rc;
 }
@@ -1030,10 +992,11 @@ static int olb_insert_files(struct dcl_context *ctx, struct dcl_command *cmd,
     for (int i = first; i < dcl_param_total(cmd); i++) {
         const char *in = dcl_param_at(cmd, i);
         size_t len = 0;
-        unsigned char *data = olb_file_read(ctx, in, &len);
+        unsigned char *data = lbr_file_read(ctx, in, &len);
         if (!data) {
             dcl_error("LIBRARIAN", 2, "OPENIN",
                       "error opening object file - %s", in);
+            lbr_print_reasons();
             return SS$_NOSUCHFILE;
         }
         char name[OLB_NAME_MAX + 1];
@@ -1081,6 +1044,7 @@ static int olb_load(struct dcl_context *ctx, const char *vms_name,
     if (rc == OLB_OK) { *cap = *count; return SS$_NORMAL; }
     if (rc == OLB_ERR_OPEN) {
         dcl_error("LIBRARIAN", 2, "OPENIN", "error opening library - %s", vms_name);
+        lbr_print_reasons();
         return SS$_NOSUCHFILE;
     }
     if (rc == OLB_ERR_FORMAT) {
@@ -1103,7 +1067,7 @@ static int olb_create(struct dcl_context *ctx, struct dcl_command *cmd)
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error creating library - %s", cmd->params[0]);
-        olb_print_reasons();
+        lbr_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1130,7 +1094,7 @@ static int olb_insert(struct dcl_context *ctx, struct dcl_command *cmd)
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", cmd->params[0]);
-        olb_print_reasons();
+        lbr_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1181,10 +1145,11 @@ static int olb_extract_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
 
     const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
     if (output_file && output_file[0]) {
-        if (olb_file_write(ctx, output_file, members[idx].data,
+        if (lbr_file_write(ctx, output_file, members[idx].data,
                            members[idx].len, 0) != 0) {
             dcl_error("LIBRARIAN", 2, "OPENOUT",
                       "error creating output file - %s", output_file);
+            lbr_print_reasons();
             olb_free(members, count);
             return SS$_FILACCERR;
         }
@@ -1228,7 +1193,7 @@ static int olb_delete_cmd(struct dcl_context *ctx, struct dcl_command *cmd)
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", cmd->params[0]);
-        olb_print_reasons();
+        lbr_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);
@@ -1255,7 +1220,7 @@ static int olb_compress(struct dcl_context *ctx, struct dcl_command *cmd)
         olb_free(members, count);
         dcl_error("LIBRARIAN", 2, "OPENOUT",
                   "error writing library - %s", outspec && outspec[0] ? outspec : cmd->params[0]);
-        olb_print_reasons();
+        lbr_print_reasons();
         return SS$_FILACCERR;
     }
     olb_free(members, count);

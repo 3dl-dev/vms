@@ -190,7 +190,20 @@ static int sense_terminal(struct rtpad *r, uint8_t sense[12])
                            0, 0, 0, 0);
     if (st & 1)
         st = iosb.iosb$w_status;
-    return (st & 1) && sense[0] == DC$_TERM;
+    if (!(st & 1) || sense[0] != DC$_TERM)
+        return 0;
+    /* OVMX's SENSEMODE does not yet return the TT$/TT2$ characteristics in
+     * bytes 4-6 and 8-11 (it returns device characteristics there: rd
+     * vms-686), and a VMS host would act on them -- a real VAX showed the
+     * session's RTA as Passall. Until it does, those bytes are the ones a
+     * real VAX client reported (oracle docs/oracle/vax-sethost-cterm.*:
+     * TTSYNC LOWER WRAP / 00 32 00 00); class, type, width and page are this
+     * terminal's. */
+    static const uint8_t oracle_tt[3] = { 0xa0, 0x02, 0x00 };
+    static const uint8_t oracle_tt2[4] = { 0x00, 0x32, 0x00, 0x00 };
+    memcpy(sense + 4, oracle_tt, sizeof oracle_tt);
+    memcpy(sense + 8, oracle_tt2, sizeof oracle_tt2);
+    return 1;
 }
 
 /* A file SYS$INPUT: its bytes, split into lines; one line per call. */

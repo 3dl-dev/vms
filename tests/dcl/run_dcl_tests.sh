@@ -11,6 +11,19 @@
 #
 # Each test file is a bash script that runs vmsdcl commands and produces output.
 # The harness captures stdout+stderr and checks against annotations.
+#
+# DCL'S OUTPUT COMES THROUGH RMS (rd vms-a6ce). A test's $VMSDCL is not DCL.EXE
+# itself but dcl_rms_run (tests/dcl/dcl_rms_run.sh, built next to DCL.EXE): it
+# starts DCL with SYS$OUTPUT/SYS$ERROR assigned to a disk file and its stdout/
+# stderr on the null device, so DCL's records reach that file by RMS $PUT, and
+# hands them back read with RMS $GET (rms_read_records). The assertions are the
+# same strings; what they are checked against is the records of DCL's output
+# file, not a stdio pipe. The real image is $DCL_RMS_REAL.
+#
+# A test that cannot run that way says so, with the rd item that tracks it:
+#   # DCL_OUTPUT: stdio <rd-item> <why>
+# and gets DCL.EXE as $VMSDCL, as before. There is no silent fallback: with no
+# dcl_rms_run beside DCL.EXE the harness refuses to run.
 
 set -u
 
@@ -33,6 +46,14 @@ else
 fi
 VMSDCL="${VMSDCL:-vmsdcl}"
 export VMSDCL
+DCL_RMS_REAL="$(command -v "$VMSDCL" 2>/dev/null || echo "$VMSDCL")"
+DCL_RMS_RUN="${DCL_RMS_RUN:-$(dirname "$DCL_RMS_REAL")/dcl_rms_run}"
+export DCL_RMS_REAL
+if [ ! -x "$DCL_RMS_RUN" ]; then
+    echo "ERROR: no dcl_rms_run at $DCL_RMS_RUN (DCL's RMS output route, rd vms-a6ce)"
+    echo "Build the dcl_rms_run target, or set DCL_RMS_RUN"
+    exit 1
+fi
 TIMEOUT="${DCL_TEST_TIMEOUT:-10}"
 
 # Ensure /vms directory exists (required for VMS path resolution)
@@ -43,6 +64,8 @@ PASS=0
 FAIL=0
 SKIP=0
 ERRORS=""
+STDIO=0
+STDIO_LIST=""
 
 # Verify vmsdcl is available
 if ! command -v "$VMSDCL" &>/dev/null; then
@@ -52,7 +75,7 @@ if ! command -v "$VMSDCL" &>/dev/null; then
 fi
 
 echo "=== DCL Integration Test Suite ==="
-echo "Using: $(command -v "$VMSDCL")"
+echo "Using: $DCL_RMS_REAL (output through $DCL_RMS_RUN)"
 echo "Timeout: ${TIMEOUT}s per test"
 echo ""
 
@@ -108,6 +131,20 @@ run_test() {
         return 0
     fi
 
+    # DCL's output route: through the RMS file (dcl_rms_run), unless the test
+    # names the item that keeps it on stdio
+    local dcl="$DCL_RMS_RUN"
+    if grep -qE '^# DCL_OUTPUT: stdio [a-z]+-[0-9a-f]+ ' "$test_file"; then
+        dcl="$DCL_RMS_REAL"
+        STDIO=$((STDIO + 1))
+        STDIO_LIST="${STDIO_LIST}\n  $test_name ($(sed -n 's/^# DCL_OUTPUT: stdio \([a-z]*-[0-9a-f]*\) .*/\1/p' "$test_file" | head -1))"
+    elif grep -q '^# DCL_OUTPUT:' "$test_file"; then
+        echo "FAIL: $description (HARNESS ERROR: '# DCL_OUTPUT:' must be 'stdio <rd-item> <why>')"
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  FAIL: $test_name — malformed DCL_OUTPUT"
+        return 1
+    fi
+
     # Run the test with timeout
     local output
     local exit_code
@@ -116,7 +153,7 @@ run_test() {
     local t_limit
     t_limit=$(sed -n 's/^# TIMEOUT: *\([0-9][0-9]*\)$/\1/p' "$test_file" | head -1)
     t_limit="${t_limit:-$TIMEOUT}"
-    output=$(timeout "$t_limit" bash "$test_file" 2>&1) || true
+    output=$(VMSDCL="$dcl" timeout "$t_limit" bash "$test_file" 2>&1)
     exit_code=$?
 
     if [ $exit_code -eq 124 ]; then
@@ -213,11 +250,15 @@ if [ ${#test_files[@]} -eq 0 ] || [ ! -f "${test_files[0]}" ]; then
 fi
 
 for test_file in "${test_files[@]}"; do
-    VMSDCL="$VMSDCL" run_test "$test_file"
+    run_test "$test_file"
 done
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed, $SKIP skipped ==="
+echo "=== DCL output read through RMS in $(( ${#test_files[@]} - STDIO )) test files; $STDIO still on stdio ==="
+if [ "$STDIO" -gt 0 ]; then
+    echo -e "Still on stdio:$STDIO_LIST"
+fi
 if [ -n "$ERRORS" ]; then
     echo -e "Failures:$ERRORS"
 fi

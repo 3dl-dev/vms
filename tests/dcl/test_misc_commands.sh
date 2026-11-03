@@ -1,4 +1,5 @@
 #!/bin/bash
+# DCL_OUTPUT: stdio vms-380f an image/PIPE segment DCL runs does not yet write the parent's file SYS$OUTPUT
 # TEST: ATTACH, CONVERT, LINK, INSTALL, PRODUCT, PHONE commands exist and respond correctly
 # EXPECT: contains:ATTFAIL
 # EXPECT: contains:NOTAVAIL

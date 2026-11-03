@@ -31,8 +31,13 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-# The harness insists on a usable VMSDCL even for tests that never call it.
+# The harness insists on a usable VMSDCL even for tests that never call it,
+# and on the RMS output route (dcl_rms_run, rd vms-a6ce): a stand-in here, so
+# the cases below can see which one a test was given.
 export VMSDCL=/bin/echo
+export DCL_RMS_RUN="$WORK/dcl_rms_run"
+printf '#!/bin/sh\nexit 0\n' > "$DCL_RMS_RUN"
+chmod +x "$DCL_RMS_RUN"
 
 # The harness looks for its cases next to itself, so give the copy its own dir.
 cp "$HARNESS" "$WORK/run_dcl_tests.sh"
@@ -111,6 +116,32 @@ check dashregex_present FAIL \
 check bad_regex FAIL \
     '# EXPECT_NOT: regex:[unclosed' \
     'echo "anything"'
+
+# 6. A test is given DCL through the RMS output route (rd vms-a6ce): its
+#    $VMSDCL is dcl_rms_run, not the DCL image.
+check route_rms PASS \
+    "# EXPECT: contains:VMSDCL=$DCL_RMS_RUN" \
+    'echo "VMSDCL=$VMSDCL"'
+
+# 7. ...unless it names the item that keeps it on stdio; then it gets the image.
+check route_stdio PASS \
+    "# DCL_OUTPUT: stdio vms-380f an image's output does not reach the file yet
+# EXPECT: contains:VMSDCL=/bin/echo
+# EXPECT_NOT: contains:dcl_rms_run" \
+    'echo "VMSDCL=$VMSDCL"'
+
+# 8. An opt-out that names no item is a harness error, never a quiet stdio run.
+check route_stdio_no_item FAIL \
+    "# DCL_OUTPUT: stdio
+# EXPECT: contains:ok" \
+    'echo ok'
+
+# 9. A test that runs past its bound fails as a TIMEOUT even when the output it
+#    printed first would match (the exit status used to be lost to `|| true`).
+check timeout_reported FAIL \
+    "# TIMEOUT: 1
+# EXPECT: contains:early" \
+    'echo early; sleep 5'
 
 echo ""
 if [ "$FAILURES" -eq 0 ]; then

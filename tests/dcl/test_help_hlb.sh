@@ -1,4 +1,5 @@
 #!/bin/bash
+# DCL_OUTPUT: stdio vms-d1a HELP renders through stdio (dcl_out_stream), not the sink
 # TEST: LIBRARY/HELP/CREATE compiles a .HLP into a .HLB and HELP reads topics
 #       from the compiled library, located through the HLP$LIBRARY search list.
 # EXPECT: contains:LIBRARIAN-S-CREATED

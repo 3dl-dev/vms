@@ -1,4 +1,5 @@
 #!/bin/bash
+# DCL_OUTPUT: stdio vms-d1a HELP renders through stdio (dcl_out_stream), not the sink
 # TEST: HELP walks the hierarchical help library (real topic tree), not a shim
 # EXPECT: contains:COPY
 # EXPECT: contains:DELETE

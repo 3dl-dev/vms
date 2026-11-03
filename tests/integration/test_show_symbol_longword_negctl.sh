@@ -51,6 +51,12 @@ set -u
 
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 GATE="$SRC_ROOT/tests/integration/test_show_symbol_longword.sh"
+# The gate reads DCL's output through RMS (rd vms-a6ce): each DCL it runs is
+# dcl_rms_run (DCL_RMS_RUN, set by ctest) wrapping the mutant DCL_RMS_REAL.
+if [ ! -x "${DCL_RMS_RUN:-}" ]; then
+    echo "FAIL: DCL_RMS_RUN (the build's dcl_rms_run) is not set or not executable"
+    exit 1
+fi
 status=0
 passed=0
 failed=0
@@ -106,7 +112,7 @@ md5_of() { md5sum "$BUILD/bin/DCL.EXE" 2>/dev/null | cut -d' ' -f1; }
 # rather than the mutation being caught -- and it would look identical.
 # ---------------------------------------------------------------------------
 PRISTINE_MD5=""
-if build_dcl && sh "$GATE" "$BUILD/bin/DCL.EXE" >"$WORK/pos.log" 2>&1; then
+if build_dcl && DCL_RMS_REAL="$BUILD/bin/DCL.EXE" sh "$GATE" "$DCL_RMS_RUN" >"$WORK/pos.log" 2>&1; then
     PRISTINE_MD5=$(md5_of)
     echo "  PASS: positive control - unmutated sandbox DCL passes the gate (md5 ${PRISTINE_MD5%%??????????????????????}...)"
     passed=$((passed + 1))
@@ -138,7 +144,7 @@ expect_red() {
         failed=$((failed + 1)); status=1; restore; return
     fi
 
-    out=$(sh "$GATE" "$BUILD/bin/DCL.EXE" 2>&1)
+    out=$(DCL_RMS_REAL="$BUILD/bin/DCL.EXE" sh "$GATE" "$DCL_RMS_RUN" 2>&1)
     rc=$?
     got=$(printf '%s\n' "$out" | sed -n 's/^  FAIL: \(.*\)$/\1/p' | sort)
     want=$(printf '%s\n' "$expect" | grep -v '^$' | sort)

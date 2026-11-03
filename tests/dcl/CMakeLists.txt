@@ -202,3 +202,37 @@ set_tests_properties(dcl-show-device-prefix PROPERTIES
     TIMEOUT 60
     LABELS "dcl;unit"
 )
+
+# The host harness's DCL output route (rd vms-a6ce): run_dcl_tests.sh gives each
+# test dcl_rms_run as $VMSDCL, which starts DCL with SYS$OUTPUT/SYS$ERROR
+# assigned to an RMS file and reads the records back with rms_read_records --
+# RMS $OPEN/$GET (src/vmsrms), never stdio parsing of the file. Both live next
+# to DCL.EXE so a test's `dirname $VMSDCL` still finds its sibling images.
+add_executable(rms_read_records rms_read_records.c)
+target_include_directories(rms_read_records PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(rms_read_records PRIVATE vmsrms vmsfs vmslnm pthread)
+add_custom_command(
+    OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dcl_rms_run
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/dcl_rms_run.sh
+            ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dcl_rms_run
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/dcl_rms_run.sh
+)
+add_custom_target(dcl_rms_run ALL
+    DEPENDS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dcl_rms_run rms_read_records)
+
+# Negative control for that route (rd vms-a6ce): a sandbox DCL whose file
+# SYS$OUTPUT is never bound to RMS must turn ported tests RED.
+add_test(
+    NAME dcl-rms-route-negctl
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/negctl_rms_route.sh ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(dcl-rms-route-negctl PROPERTIES
+    ENVIRONMENT "DCL_RMS_RUN=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/dcl_rms_run"
+    TIMEOUT 300
+    LABELS "dcl;harness;negctl"
+)

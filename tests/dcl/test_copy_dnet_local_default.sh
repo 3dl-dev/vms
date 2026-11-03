@@ -1,4 +1,5 @@
 #!/bin/bash
+# DCL_OUTPUT: stdio vms-380f an image/PIPE segment DCL runs does not yet write the parent's file SYS$OUTPUT
 # TEST: DCL COPY node:: hands DECNETD the LOCAL spec completed with the default directory (vms-ea8)
 #
 # DECNETD.EXE gives its local spec straight to RMS, which completes a missing

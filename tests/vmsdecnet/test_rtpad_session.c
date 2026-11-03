@@ -148,7 +148,6 @@ static void fake_io(struct fake *f, struct rtpad_io *io)
     io->read_line = f_read_line;
     io->read_record = f_read_record;
     io->set_oob = f_set_oob;
-    io->cancel_read = NULL;
 }
 
 /* A client Read Data (09 00 LEN 00 | 03 00 00 00 00 00 <len:2> data term):
@@ -461,12 +460,14 @@ static void test_oob(void)
     check(f.nsent == before + 1 && f.sentlen[before] == sizeof want_y &&
           memcmp(f.sent[before], want_y, sizeof want_y) == 0,
           "CTRL/Y goes as Out-of-Band 04 01 19 (discard, per its attributes)");
-    check(s.read_cleared == 1 && !s.read_pending, "an immediate-clear character ends the local read");
+    check(f.nrecords == 1 && strcmp(f.record, "*INTERRUPT*") == 0,
+          "CTRL/Y (attributes echo it) shows *INTERRUPT* on the terminal");
     before = f.nsent;
     rtpad_session_oob(&s, 0x14);
     static const uint8_t want_t[] = { 0x09, 0x00, 0x03, 0x00, 0x04, 0x00, 0x14 };
-    check(f.nsent == before + 1 && memcmp(f.sent[before], want_t, sizeof want_t) == 0,
-          "CTRL/T (immediate hello) goes as Out-of-Band 04 00 14");
+    check(f.nsent == before + 1 && memcmp(f.sent[before], want_t, sizeof want_t) == 0 &&
+          f.nrecords == 1,
+          "CTRL/T (immediate hello) goes as Out-of-Band 04 00 14, nothing echoed");
     rtpad_session_oob(&s, 0x40);
     check(f.nsent == before + 1, "a character past 31 is not out of band: nothing sent");
 }

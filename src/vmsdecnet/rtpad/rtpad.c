@@ -449,7 +449,7 @@ int main(void)
 
     static const struct rtpad_io io_ops = {
         NULL, io_link_send, io_show, io_record, io_read_line, io_read_record,
-        io_set_oob, NULL
+        io_set_oob
     };
     static struct rtpad_io io;
     io = io_ops;

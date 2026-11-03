@@ -55,9 +55,6 @@ struct rtpad_io {
      * n = character n) out of band: the terminal driver hands each one typed
      * to rtpad_session_oob() instead of acting on it (IO$M_OUTBAND). */
     void (*set_oob)(void *ctx, uint32_t mask);
-    /* (A terminal; may be NULL.) Cancel the terminal read in progress. NULL:
-     * the read runs to its end and its line is dropped (the host cleared it). */
-    void (*cancel_read)(void *ctx);
 };
 
 /* The control characters a terminal pad always takes from the local driver:
@@ -87,7 +84,6 @@ struct rtpad_session {
     uint32_t oob_mask;                  /* what set_oob was last given */
     uint8_t opdu[32];                   /* an Out-of-Band PDU (sent from an AST) */
     unsigned oob_sent, oob_dropped;
-    int read_cleared;                   /* a clearing OOB came during the read */
     int fresh;                          /* the cursor is where an echoed RETURN left it */
     int done;
     uint32_t status;                    /* the session's ending condition */
@@ -121,8 +117,8 @@ void rtpad_session_input(struct rtpad_session *s);
 
 /* A control character the terminal driver gave out of band (from RTPAD's
  * IO$M_OUTBAND AST). One the host declared out-of-band goes to it as a CTERM
- * Out-of-Band message; a clearing one also ends the local read (the host
- * solicits again). Any other is dropped: it never reaches the local DCL. */
+ * Out-of-Band message, echoed as the interrupt when its attributes say so.
+ * Any other is dropped: it never reaches the local DCL. */
 void rtpad_session_oob(struct rtpad_session *s, uint8_t c);
 
 /* Report THIS terminal (IO$_SENSEMODE's 12-byte buffer) to the host. */

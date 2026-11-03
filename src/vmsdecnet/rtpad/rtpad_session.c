@@ -99,15 +99,16 @@ void rtpad_session_oob(struct rtpad_session *s, uint8_t c)
     if (!(s->io->link_send(s->io->ctx, s->opdu, olen) & 1))
         return;
     s->oob_sent++;
-    if (kind == 1 || kind == 2) {
-        /* a clearing character: the read in progress is gone; the host
-         * solicits again */
-        s->read_pending = 0;
-        s->rd_plen = s->rd_init = 0;
-        s->read_cleared = 1;
-        if (s->io->cancel_read)
-            s->io->cancel_read(s->io->ctx);
-    }
+    /* The character's echo (attributes bits 4-5, set for CTRL/Y by a VAX
+     * host): the terminal shows the interrupt as the local driver shows its
+     * own CTRL/Y -- a VAX client's screen shows it; the host sends no text
+     * for it (S2 live bench). */
+    if (s->chattr[c] & 0x30)
+        s->io->record(s->io->ctx, "*INTERRUPT*");
+    /* A read the host has outstanding stays outstanding: a VAX host that
+     * takes CTRL/Y at an idle DCL prompt solicits nothing new, so the line
+     * the user types next still answers it (S2 live bench). */
+    (void)kind;
 }
 
 /* Host output to the screen. The cursor is no longer at the start of the
@@ -314,17 +315,10 @@ void rtpad_session_input(struct rtpad_session *s)
         return;
     if (s->is_terminal) {
         uint8_t term = 0x0d;
-        s->read_cleared = 0;
         st = s->io->read_line(s->io->ctx, s->rd_prompt, s->rd_plen,
                               s->rd_prompt + s->rd_plen, s->rd_init,
                               line, sizeof line, s->rd_echo,
                               s->rd_term_echo, s->rd_timeout, &n, &term);
-        if (s->read_cleared) {
-            /* the host cleared this read (an out-of-band CTRL/Y came while it
-             * ran): its line is not the answer to anything any more */
-            s->read_cleared = 0;
-            return;
-        }
         if (st == SS$_TIMEOUT && s->rd_timeout) {
             /* Read Data, completion code 5: what was typed, no terminator */
             size_t clen = 0;

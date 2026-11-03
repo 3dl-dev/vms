@@ -225,6 +225,28 @@ target_compile_definitions(fuzz_dlm_dir_directed PRIVATE OVMX_CLUSTER_HOST)
 set_tests_properties(cluster_host_fuzz_dlm_dir_directed PROPERTIES
     LABELS "unit;cluster;codec;fuzz;dlm" TIMEOUT 180)
 
+# rd vms-fdeb: the RECEIVE side of a master's directory re-registration -- what
+# a peer's 82/0d (or any body that reaches vms_dlm_rm_dr_answer) does to the
+# shipping remaster table, which is compiled into the fuzz with the sanitizers
+# (its own object library, for the same reason as cluster_host_dlm_dir_fuzz).
+add_library(cluster_host_dlm_rm_fuzz OBJECT
+    ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_dlm_rm_fsm.c)
+target_include_directories(cluster_host_dlm_rm_fuzz PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_definitions(cluster_host_dlm_rm_fuzz PRIVATE OVMX_CLUSTER_HOST)
+if(OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+    target_compile_options(cluster_host_dlm_rm_fuzz PRIVATE
+        -fsanitize=address,undefined)
+endif()
+cluster_host_fuzz(fuzz_dlm_dirreg_answer)
+target_sources(fuzz_dlm_dirreg_answer PRIVATE
+    $<TARGET_OBJECTS:cluster_host_dlm_rm_fuzz>)
+target_include_directories(fuzz_dlm_dirreg_answer PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel-core)
+target_compile_definitions(fuzz_dlm_dirreg_answer PRIVATE OVMX_CLUSTER_HOST)
+set_tests_properties(cluster_host_fuzz_dlm_dirreg_answer PROPERTIES
+    LABELS "unit;cluster;codec;fuzz;dlm" TIMEOUT 180)
+
 # ---- FC-P3.6: the CLUB/CSB model, the ten-state ladder, the reconnect FSM ----
 # Built from src/kernel-core with -DOVMX_CLUSTER_HOST -- the SAME sources both
 # kmods compile, with no kernel headers and no seam. That is the whole point of
@@ -1197,6 +1219,29 @@ set_tests_properties(cluster_host_test_dlm_handover PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-fdeb: a MASTER's directory re-registration (op-0x0d) ----
+# After release 4 of a transition, one record per root this node masters whose
+# directory is another member; the barrier held until each is answered. Driven
+# on the real engine against a REAL V7.3 record and its real 82/0d answer.
+add_executable(test_dlm_dirreg test_dlm_dirreg.c)
+target_include_directories(test_dlm_dirreg PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_dirreg PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_dirreg PRIVATE
+    cluster_host_lock cluster_host_cnxman cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_dirreg PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_dirreg COMMAND test_dlm_dirreg)
+set_tests_properties(cluster_host_test_dlm_dirreg PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- rd vms-874f: the FAILOVER REBUILD, on the real engine + table + codec ----
 # A tree's master LEFT: this node, a surviving holder, re-describes its locks
 # (op-0x08 records, root first, subs carrying the new master's handle), or is
@@ -1411,6 +1456,10 @@ add_test(NAME cluster_frame_conformance_gate
         # tree's new master, its 0xfa answers -- emitted by test_dlm_rebuild
         # replaying RA1b's RMT1 tree on the real engine.
         dlm_rm_08 dlm_rm_08_ans
+        # rd vms-fdeb: the master's op-0x0d directory re-registration, a frame
+        # type OVMX had never sent -- required here so no byte of it reaches a
+        # real directory node ungrounded (test_cnxman_coord composes it).
+        dlm_dir_reg
 )
 set_tests_properties(cluster_frame_conformance_gate PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"

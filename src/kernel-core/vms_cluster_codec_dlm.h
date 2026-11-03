@@ -1337,11 +1337,12 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * manager's, exactly as for vms_dlm_dir_remove_build. The caller passes only a
  * hash the executive holds for that identity (res->hash_known).
  *
- * NOT YET ADDRESSABLE AT A REAL VAX: vms_dlm_shape_fit_for_any_member() still
- * says no to an op-0x0d body. No real VAX has been watched to accept an
- * all-zero residue span from a sender (the nearest are 47 rejoin records whose
- * residue is zero but for body[24] = 0x03, all answered by the real VAX2), and
- * opening that gate is the lab proof's job, not this codec's.
+ * ADDRESSABLE AT A REAL VAX since rd vms-fdeb: vms_dlm_shape_fit_for_any_
+ * member() admits an op-0x0d on its shape, because without it a real directory
+ * holds no entry for a resource OVMX masters after any transition. The nearest
+ * real precedent for the all-zero residue is 47 rejoin records whose residue is
+ * zero but for body[24] = 0x03, all answered by the real VAX2; the lab proof
+ * that a real V7.3 answers OVMX's own is tests/lab/captures/vms-fdeb-*.
  */
 struct vms_dlm_dir_reg {
 	struct vms_dlm_res_ident id;     /* body[44:48+L], body[128:132]      */
@@ -1353,6 +1354,15 @@ struct vms_dlm_dir_reg {
  * length outside 1..31. `*out` written only on VMS_CODEC_OK. */
 vms_codec_status_t vms_dlm_dir_reg_parse_body(const uint8_t *body, uint32_t len,
 					      struct vms_dlm_dir_reg *out);
+
+/* rd vms-fdeb: parse the directory's 82/0d ANSWER to an op-0x0d this node
+ * sent: the echoed identity and DLM sequence into `*out`, body[34] (0xf9 in
+ * every real answer) into `*stamp`. VMS_CODEC_E_CLASS for any other (cat, op),
+ * a body[12:14] other than 0x0001, or a name length outside 1..31. */
+vms_codec_status_t vms_dlm_dir_reg_answer_parse_body(const uint8_t *body,
+						     uint32_t len,
+						     struct vms_dlm_dir_reg *out,
+						     uint8_t *stamp);
 
 /* Build the op-0x0d body for `id` into abs [72,204) of `frame`: cat/op, the
  * identity, the hash, zero elsewhere. VMS_CODEC_E_INVAL for an identity with no

@@ -923,6 +923,25 @@ static void arm_bindings(void)
 	       "d->dir_entries_forgotten += vms_lock_dlm_directory_discarded();",
 	       "*** a transition's start forgets every told-directory record "
 	       "(the V0.7-15 LOCKMGRERR) ***");
+	/* rd vms-fdeb: release 4 re-registers this node's directory entries
+	 * (op-0x0d), the barrier is held on them, and the directory's 82/0d is
+	 * matched by the table before any other reply path sees it. */
+	has("vms_dlm_rm_dr_barrier_released(&d->rm, step, dlm_arm_now_ms(d));",
+	    "*** the barrier's releases reach the re-registration ***");
+	has("vms_dlm_rm_dr_outstanding(&d->rm);",
+	    "*** the barrier is held while a re-registration is unanswered ***");
+	has("d->rm_ops.dr_next            = dlm_arm_dr_next;",
+	    "the engine's walk is bound to the table");
+	has("d->rm_ops.dr_told            = dlm_arm_dr_told;",
+	    "the engine's told-record is bound to the table");
+	before("if (vms_dlm_rm_dr_answer(&d->rm, (uint32_t)req->from_csid,",
+	       "return dlm_arm_handle_reply(d, req);",
+	       "*** the directory's 82/0d is matched before the generic reply "
+	       "path ***");
+	has("vms_dlm_rm_dr_close(&d->rm);",
+	    "a transition's start shuts the re-registration window");
+	has("(void)vms_dlm_rm_dr_expire(&d->rm, dlm_arm_now_ms(d),",
+	    "RECNXINTERVAL bounds an unanswered re-registration");
 	before("(void)vms_dlm_dir_drop_unless(&d->dir, dlm_arm_dir_is_ours, d);",
 	       "(void)dlm_req_fsm_transition_ended(&d->req);",
 	       "*** a held request is released only AFTER the new directory "

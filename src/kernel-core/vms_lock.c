@@ -8171,6 +8171,108 @@ uint32_t vms_lock_dlm_directory_discarded(void)
 }
 
 /*
+ * rd vms-fdeb: THE MASTER RE-REGISTERS ITS DIRECTORY ENTRIES (op-0x0d).
+ *
+ * After the transition above discarded every entry, each master tells the
+ * directory node of every ROOT resource it masters (Davis pp. 7-40..7-42; a
+ * real V7.3 does it after the coordinator's release 4 -- vms_dlm_rm_fsm.h has
+ * the measurement). These two are the engine's half: which resource is owed a
+ * record next, and recording that a directory answered one.
+ *
+ * Owed = a root this node masters, with a name and a known (or computable)
+ * hash, whose directory node by the vector in force is ANOTHER member, and
+ * which no directory has been told of since the discard (dir_told_csid 0).
+ * `vms_lock_dlm_dirreg_told` takes exactly that predicate minus "not told", so
+ * a resource it refuses is one `next` no longer yields either -- the walk
+ * cannot hand the same resource out twice.
+ */
+static int dlm_dirreg_owed(struct vms_lock_resource *res, uint32_t *dir_out)
+{
+    struct vms_dlm_requester_ops ops = dlm_req_ops_get();
+    uint32_t dir = 0u;
+
+    if (res->parent != NULL || res->name_len == 0u ||
+        !res_name_len_ok(res->name_len))
+        return 0;
+    if (res->master_csid == 0u || res->master_csid != vms_local_csid)
+        return 0;
+    if (ops.dir_resolve == NULL)
+        return 0;
+    if (dir_hash_for_routing(res) != SS__NORMAL || !res->hash_known)
+        return 0;
+    if (ops.dir_resolve(ops.ctx, res->dir_hash, &dir) != SS__NORMAL)
+        return 0;
+    if (dir == 0u || dir == vms_local_csid)
+        return 0;   /* this node directs it: nothing goes on the wire */
+    *dir_out = dir;
+    return 1;
+}
+
+int vms_lock_dlm_dirreg_next(const struct vms_dlm_adopt_tree *skip,
+                             uint32_t n_skip, struct vms_dlm_adopt_tree *out,
+                             uint32_t *hash_out, uint32_t *dir_out)
+{
+    struct vms_lock_resource *res;
+    int bkt, found = 0;
+    uint32_t dir = 0u;
+
+    if (out == NULL || hash_out == NULL || dir_out == NULL)
+        return 0;
+    memset(out, 0, sizeof(*out));
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        if (res->parent != NULL || dlm_rebuild_skipped(res, skip, n_skip))
+            continue;
+        exec_lock(&res->lock);
+        if (res->dir_told_csid == 0u && dlm_dirreg_owed(res, &dir) &&
+            res->name_len <= sizeof(out->resnam)) {
+            memcpy(out->resnam, res->name, res->name_len);
+            out->resnam_len = (uint8_t)res->name_len;
+            out->res_group = res->res_group;
+            out->res_mode = res->res_mode;
+            out->ident_valid = 1u;
+            *hash_out = res->dir_hash;
+            *dir_out = dir;
+            found = 1;
+        }
+        exec_unlock(&res->lock);
+        if (found)
+            break;
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return found;
+}
+
+int vms_lock_dlm_dirreg_told(const struct vms_dlm_adopt_tree *id,
+                             uint32_t dir_csid)
+{
+    struct res_key k;
+    struct vms_lock_resource *res;
+    uint32_t dir = 0u;
+    int told = 0;
+
+    if (id == NULL || dir_csid == 0u)
+        return 0;
+    k = res_key_counted(id->resnam, adopt_tree_name_len(id), id->res_group,
+                        id->res_mode);
+    if (!res_name_len_ok(k.name_len))
+        return 0;
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find_key(&k);
+    if (res != NULL) {
+        exec_lock(&res->lock);
+        /* Only where the vector still names the node that answered. */
+        if (dlm_dirreg_owed(res, &dir) && dir == dir_csid) {
+            res->dir_told_csid = dir_csid;
+            told = 1;
+        }
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+    return told;
+}
+
+/*
  * Clear the quorum-stall mark on every waiter of ONE resource. Caller holds
  * res->lock. Nothing else about the request changes: it keeps its place in the
  * FIFO, its requested mode, its value block and (for a convert) the mode it

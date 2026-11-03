@@ -243,8 +243,25 @@ static void test_refusals(void)
 	ct_check(vms_dlm_dir_reg_parse_body(b, BODY_LEN, &r) == VMS_CODEC_OK &&
 		 r.id.name_len == 16u && r.id.mode == 1u && r.dlm_seq == 4u &&
 		 r.id.hash == 0x324324dbu, "and parses back to the same identity");
-	ct_check(!vms_dlm_shape_fit_for_any_member(b, BODY_LEN),
-		 "RULE C still refuses to address an op-0x0d at a real VAX");
+	/* rd vms-fdeb: a real master re-registers with op-0x0d after release 4
+	 * of every transition, so RULE C admits the builder's record -- before
+	 * and after the connection manager stamps body[12:16] -- and still
+	 * refuses one that names no resource. */
+	ct_check(vms_dlm_shape_fit_for_any_member(b, BODY_LEN),
+		 "RULE C admits the master's op-0x0d re-registration");
+	ct_check(vms_dlm_shape_fit_for_any_member(fr + BODY_OFF, BODY_LEN),
+		 "...as the builder wrote it, before body[12:16] is stamped");
+	{
+		uint8_t nameless[BODY_LEN];
+
+		memcpy(nameless, b, BODY_LEN);
+		nameless[47] = 0u;
+		ct_check(!vms_dlm_shape_fit_for_any_member(nameless, BODY_LEN),
+			 "...and refuses an op-0x0d that names no resource");
+		nameless[47] = 32u;
+		ct_check(!vms_dlm_shape_fit_for_any_member(nameless, BODY_LEN),
+			 "...or one whose name length is past 31");
+	}
 
 	ct_check(vms_dlm_dir_reg_parse_body(b, 47u, &r) != VMS_CODEC_OK,
 		 "a body cut before the name length is refused");

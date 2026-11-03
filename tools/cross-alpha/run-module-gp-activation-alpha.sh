@@ -1286,8 +1286,15 @@ run_boot_a() {
       # OVMX_IMGACT_SEAM=1: surface the EXECUTIVE-recorded completion $STATUS per
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
+      # i8042.noaux i8042.nokbd: the clipper machine has PS/2 ports OVMX never
+      # uses (the console is ttyS0). Probed, the kernel announces the mouse
+      # LATE, while startup images run, and with ignore_loglevel that line lands
+      # on the console in the middle of the output of an image: a terminal record
+      # (implied carriage control, LF before / CR after) is open until the LF
+      # of the next record, so the kernel line joined it and an anchored gate grep
+      # missed a correct line (crtl-sig-gate, 2026-11-03). Silenced at source.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m '"${BOOT_MEM_MB:-1024}"' -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 i8042.noaux i8042.nokbd OVMX_IMGACT_SEAM=1 '"${BOOT_APPEND_EXTRA:-}"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot '"${BOOT_QEMU_EXTRA:-}"' <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!

@@ -245,6 +245,7 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 
 	dq_bzero(&req, (uint32_t)sizeof(req));
 	req.mode            = (uint8_t)p->lkmode;
+	req.valblk_requested = p->valblk_requested;   /* rd vms-d63: body[28] bit 0 */
 	req.req_lkid = p->req_lkid;      /* our own executive handle */
 	req.master_lkid     = p->master_lkid;   /* 0 until the master named it */
 	req.req_pid         = p->req_pid;       /* ...and who is asking until then */
@@ -2203,6 +2204,14 @@ static void relq_record_from_post(struct dlm_relq_rec *rec,
 	rec->master_lkid = p->master_lkid;
 	rec->dst_csid    = p->dst_csid;
 	rec->mode        = (uint8_t)p->lkmode;
+	/* rd vms-d63: the written value block rides with the release. */
+	if (p->write_valblk) {
+		uint32_t i;
+
+		rec->write_valblk = 1u;
+		for (i = 0u; i < VMS_DLM_VALBLK_LEN; i++)
+			rec->valblk[i] = p->valblk[i];
+	}
 }
 
 enum dlm_req_status dlm_relq_stage(struct dlm_relq *q,
@@ -2263,6 +2272,13 @@ static void relq_post_from_record(struct vms_dlm_proxy_post *out,
 	out->req_lkid    = rec->req_lkid;
 	out->master_lkid = rec->master_lkid;
 	out->lkmode      = rec->mode;
+	if (rec->write_valblk) {               /* rd vms-d63 */
+		uint32_t i;
+
+		out->write_valblk = 1u;
+		for (i = 0u; i < VMS_DLM_VALBLK_LEN; i++)
+			out->valblk[i] = rec->valblk[i];
+	}
 }
 
 enum dlm_req_status dlm_relq_claim(struct dlm_relq *q, uint32_t slot,

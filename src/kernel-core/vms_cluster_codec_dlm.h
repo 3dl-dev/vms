@@ -329,6 +329,7 @@ enum vms_lck_mode {
 #define VMS_OFF_DLM_MASTER_LKID    92u  /* body[20:24] LE u32: the MASTER's   */
 #define VMS_OFF_DLM_REQ_LKID       96u  /* body[24:28] LE u32: the REQUESTER's*/
 #define VMS_OFF_DLM_MODE          102u  /* body[30]    u8,     spec row     */
+#define VMS_OFF_DLM_REQ_FLAGS     100u  /* body[28]    u8, request: bit 0 = LCK$M_VALBLK (rd vms-d63) */
 /*
  * body[46] IS THE RESOURCE'S ACCESS MODE, NOT A CONSTANT (rd vms-8219,
  * rd vms-b5b0). It was read for a long time as a "name marker" holding a
@@ -451,6 +452,25 @@ struct vms_dlm_enq_request {
 	 * sub-resource -- so there is nothing for this node to write but zero,
 	 * recorded as a `deviation` row rather than passed off as a hash.
 	 */
+	/*
+	 * body[28] BIT 0: THE REQUEST ASKS FOR THE VALUE BLOCK (rd vms-d63).
+	 * body[28:30] is a field whose layout is unpublished (rd vms-6e6), and
+	 * ONE bit of it is now measured two independent ways:
+	 *   - against SDA's own lock flags on VAX1 (vms-5fa r2 vax1.log): the
+	 *     families SDA shows WITH "VALBLK" carry bit 0 on the wire (F11B$s
+	 *     0x0239/0x0039, F11B$v 0x0639, F11B$a 0x007d, RMS$ 0x0e19), the
+	 *     ones it shows WITHOUT it do not (F11B$b 0x0238, CACHE$cm 0x0e70);
+	 *   - against the master's ANSWER: over every capture, a real op-0x01
+	 *     request with bit 0 clear was granted with no value block (sequence
+	 *     0) 6,657 times of 6,804, and with it set 36,324 of 44,172 grants
+	 *     carried one (the rest are resources with no block written yet).
+	 * The r3 lab fire is the cost of leaving it zero: VAX1 granted OVMX's
+	 * F11B$s requests with an empty block (vbseq 0) 48 times of 48.
+	 * So the builder writes bit 0 = LCK$M_VALBLK, read off the LKB, on an
+	 * op-0x01 request and NOTHING ELSE in the span: every other bit stays the
+	 * zero this node always sent, because no other bit is measured.
+	 */
+	uint8_t  valblk_requested;  /* body[28] bit 0, op-0x01 only            */
 	uint32_t parent_own_lkid;   /* body[36:40], 0 on a ROOT request       */
 	uint32_t parent_master_lkid;/* body[40:44], 0 on a ROOT request       */
 	uint8_t  name_len;

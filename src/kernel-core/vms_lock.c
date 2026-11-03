@@ -514,6 +514,7 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
      * of a lock held at PW or EX, as a conversion down from those modes does;
      * a lock still WAITING holds no mode it could write from.
      */
+    p->valblk_requested = (lock->flags & LCK_M_VALBLK) ? 1u : 0u;   /* rd vms-d63 */
     p->write_valblk = ((op == VMS_DLM_POST_CONVERT &&
                         (lock->flags & LCK_M_VALBLK) &&
                         lock->granted_mode >= LCK_K_PWMODE &&

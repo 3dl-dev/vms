@@ -140,6 +140,8 @@
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+dlm-d63-release-queue-drops-the-value-block
+dlm-d63-request-asks-for-no-value-block
 dlm-d63-release-writes-no-value-block
 dlm-d63-read-holder-writes-the-master-block
 dlm-f29f-deferred-grant-not-read
@@ -1200,6 +1202,33 @@ EOF
 the shipping composer opens no transaction on it
 a value-block release is still a notification: no transaction
 EOF
+                      ;;
+        esac;;
+
+    dlm-d63-release-queue-drops-the-value-block)
+        case "$_f" in
+        facility)     echo "the wire arm's RELEASE QUEUE keeps a written value block with the release it stages (vms_dlm_scs_fsm.c relq_record_from_post, rd vms-d63)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the staged snapshot keeps its four lock-id fields and drops the engine's write mark and block, so every F11B\$s release leaves unmarked and empty. MEASURED COST (vms-5fa r3, PR #2006 f11b-ser-trace.txt): 48 of 48 OVMX releases of F11B\$s locks unmarked and zero, and VAX1 overwrote OVMX's EVAC.DAT records again.";;
+        require_fail) hd_lines <<'EOF2'
+*** its body[30:36] is VAX2's own form for a written release (01 00 01 00 00 00): the WRITE MARK survived the release queue ***
+*** and body[36:52] carries (3,1) -- VAX2's frame 26 carries its own block there the same way ***
+EOF2
+                      ;;
+        esac;;
+
+    dlm-d63-request-asks-for-no-value-block)
+        case "$_f" in
+        facility)     echo "an op-0x01 request carries LCK\$M_VALBLK at body[28] bit 0 (vms_cluster_codec_dlm.c vms_dlm_enq_request_build, rd vms-d63) -- a real master hands a value block only to a request that sets it";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_dlm_mixed_master";;
+        isolation)    echo "isolated";;
+        why)          echo "the request goes out with body[28:30] all zero -- what OVMX sent in the vms-5fa r3 fire, where VAX1 granted its F11B\$s requests with an empty value block (vbseq 0) 48 of 48 times while VAX2's, carrying 0x0239, got (1,1).";;
+        require_fail) hd_lines <<'EOF2'
+*** body[28] bit 0 SET, as on VAX2's F11B$s request (0x0239): the request asks the master for the value block ***
+EOF2
                       ;;
         esac;;
 
@@ -3938,6 +3967,15 @@ apply_edit() {
     dlm-release-opens-a-transaction)
         # The release's own admission line, unique in this file.
         sed -i 's|^\tif (op == VMS_DLM_WIREOP_DEQ)$|\tif (0) /* NEGCTL dlm-release-opens-a-transaction */|' "$_file";;
+
+    dlm-d63-release-queue-drops-the-value-block)
+        # The release queue's copy of the write mark; the comment line ahead
+        # of it is unique in vms_dlm_scs_fsm.c.
+        perl -0pi -e 's|(/\* rd vms-d63: the written value block rides with the release\. \*/\n\tif \()p->write_valblk|${1}0 \&\& p->write_valblk /* NEGCTL dlm-d63-release-queue-drops-the-value-block */|' "$_file";;
+
+    dlm-d63-request-asks-for-no-value-block)
+        # The request-flag write; unique in vms_cluster_codec_dlm.c.
+        sed -i 's|^\tif (opcode == VMS_DLM_WIREOP_ENQ \&\& req->valblk_requested)$|\tif (0 \&\& opcode == VMS_DLM_WIREOP_ENQ \&\& req->valblk_requested) /* NEGCTL dlm-d63-request-asks-for-no-value-block */|' "$_file";;
 
     dlm-d63-release-writes-no-value-block)
         # The $DEQ arm of write_valblk; unique in vms_lock.c.

@@ -55,41 +55,58 @@ static inline pid_t ovmx_subprocess_fork(uint32_t *pcb_status, uint32_t *vms_pid
     return ovmx_creprc_fork(VMS_CREPRC_PCB_SUBPROCESS, pcb_status, vms_pid);
 }
 
+/*
+ * The creator and the task synchronise through the executive's creation record
+ * (VMS_IOCTL_CREPRC_SYNC, rd vms-416d), as $CREPRC does -- never a host pipe
+ * (rd vms-ff3). The creator OPENs the record and forks; the task ARRIVEs and
+ * waits; the creator ACCEPTs it, has the executive make its PCB and ANSWERs;
+ * the task REPORTs it has its answer and the creator reads that RESULT before
+ * it CLOSEs the record, so closing never cuts the answer off. A party that dies
+ * ends the other's wait in the executive. With no executive the OPEN fails:
+ * there is no PCB to make, so the task is forked and released as it always
+ * was, and *pcb_status carries the OPEN's honest status.
+ */
 static inline pid_t ovmx_creprc_fork_as(uint32_t kind, const char *username,
                                         uint32_t uic, uint64_t privs,
                                         uint32_t *pcb_status, uint32_t *vms_pid)
 {
-    int go[2];
+    uint32_t rec = 0, st, task, go_pid = 0, report = 0;
     pid_t pid;
-    uint32_t st = SS$_ABORT;
-    ssize_t n;
-    char b = 'g';
 
     if (pcb_status)
         *pcb_status = SS$_ABORT;
     if (vms_pid)
         *vms_pid = 0;
-    if (pipe(go) != 0)
-        return -1;
-    (void)fcntl(go[0], F_SETFD, FD_CLOEXEC);
-    (void)fcntl(go[1], F_SETFD, FD_CLOEXEC);
+    /* NEGCTL-ANCHORED (subprocess-fork-host-pipe) */
+    st = vms_kif_creprc_sync(VMS_CREPRC_SYNC_OPEN, &rec, NULL, NULL, NULL);
+    if (!(st & 1)) {
+        if (pcb_status)
+            *pcb_status = st;
+        return fork();
+    }
 
     pid = fork();
     if (pid == 0) {
-        /* Child: wait until the creator has made this task its subprocess
-         * (or given up: end-of-file). Nothing here touches the executive. */
-        close(go[1]);
-        do { n = read(go[0], &b, 1); } while (n < 0 && errno == EINTR);
-        close(go[0]);
+        /* Child: wait until the creator has made this task its subprocess (or
+         * given up), then say so. Released either way, as before. */
+        uint32_t got = SS$_ABORT, got_pid = 0;
+        if (vms_kif_creprc_sync(VMS_CREPRC_SYNC_ARRIVE, &rec, NULL, &got, &got_pid) & 1)
+            (void)vms_kif_creprc_sync(VMS_CREPRC_SYNC_REPORT, &rec, NULL, &got, NULL);
         return 0;
     }
-    close(go[0]);
-    if (pid > 0)
-        st = vms_kif_creprc_pcb((uint32_t)pid, kind, username, uic, privs, vms_pid);
-    do { n = write(go[1], &b, 1); } while (n < 0 && errno == EINTR);
-    close(go[1]);
+    st = SS$_ABORT;
+    task = (uint32_t)pid;
+    if (pid > 0 &&
+        (vms_kif_creprc_sync(VMS_CREPRC_SYNC_ACCEPT, &rec, &task, NULL, NULL) & 1)) {
+        st = vms_kif_creprc_pcb(task, kind, username, uic, privs, &go_pid);
+        if (vms_kif_creprc_sync(VMS_CREPRC_SYNC_ANSWER, &rec, NULL, &st, &go_pid) & 1)
+            (void)vms_kif_creprc_sync(VMS_CREPRC_SYNC_RESULT, &rec, NULL, &report, NULL);
+    }
+    (void)vms_kif_creprc_sync(VMS_CREPRC_SYNC_CLOSE, &rec, NULL, NULL, NULL);
     if (pcb_status)
         *pcb_status = st;
+    if (vms_pid && (st & 1))
+        *vms_pid = go_pid;
     return pid;
 }
 

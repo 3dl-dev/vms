@@ -19,6 +19,9 @@
  *   1. $CREPRC of a SUBPROCESS running this binary in subject mode, and
  *   2. $CREPRC of a DETACHED process (PRC$M_DETACH: setsid + the intermediate
  *      that holds until the grandchild's PCB exists) running the same,
+ *   3. ovmx_subprocess_fork() (src/libvms/include/ovmx_subprocess.h, the in-tree
+ *      forkers' $CREPRC: ovmx_init's OPCOM, rd vms-ff3), whose child records
+ *      that it ran,
  *
  * waits (by polling the subjects' marker files, no host IPC) until both ran,
  * and exits. Every system-call entry of every traced task is classified, and
@@ -30,8 +33,9 @@
  * The classifier is proven on a control child that makes exactly the
  * forbidden calls (pipe and pipe2): each must be flagged.
  *
- * NEGATIVE CONTROL (a product mutation that must redden this suite):
- * tests/qemu/defects.d/creprc-handshake-host-pipe.defect.
+ * NEGATIVE CONTROLS (product mutations that must redden this suite):
+ * tests/qemu/defects.d/creprc-handshake-host-pipe.defect ($CREPRC) and
+ * subprocess-fork-host-pipe.defect (ovmx_subprocess_fork).
  */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -66,6 +70,7 @@
 #include "ssdef.h"
 #include "vms_kif.h"
 #include "ovmx_test_fork.h"
+#include "ovmx_subprocess.h"   /* ovmx_subprocess_fork (rd vms-ff3) */
 
 #define EXIT_SKIP 77
 #define DIR_      "/tmp/c416d"
@@ -252,6 +257,8 @@ static int subject_main(const char *role)
 #define R_SUB_RAN 0x02
 #define R_DET_OK  0x04
 #define R_DET_RAN 0x08
+#define R_OF_OK   0x10  /* ovmx_subprocess_fork (ovmx_subprocess.h, rd vms-ff3) */
+#define R_OF_RAN  0x20
 static void creator_main(void)
 {
     struct timespec tick = { 0, 20 * 1000 * 1000 };
@@ -272,22 +279,34 @@ static void creator_main(void)
     dst = sys$creprc(&dpid, &di, NULL, &nl, &nl, NULL, NULL, NULL, 0, 0, 0, PRC$M_DETACH);
     if ((dst & 1) && dpid != 0) bits |= R_DET_OK;
 
+    /* The in-tree forkers' path (ovmx_subprocess.h: ovmx_init's OPCOM, DCL):
+     * the same creation record, no pipe either (rd vms-ff3). */
+    uint32_t ost = 0, opid = 0;
+    pid_t of = ovmx_subprocess_fork(&ost, &opid);
+    if (of == 0)
+        _exit(subject_main("OVMXFORK"));
+    if (of > 0 && (ost & 1) && opid != 0) bits |= R_OF_OK;
+
     for (int waited = 0; waited < 1500; waited++) {   /* <= 30 s */
         while (waitpid(-1, NULL, WNOHANG) > 0)
             ;
-        if ((!(bits & R_SUB_OK) || ran("SUBPROC")) && (!(bits & R_DET_OK) || ran("DETACHED")))
+        if ((!(bits & R_SUB_OK) || ran("SUBPROC")) && (!(bits & R_DET_OK) || ran("DETACHED")) &&
+            (!(bits & R_OF_OK) || ran("OVMXFORK")))
             break;
         nanosleep(&tick, NULL);
     }
     if (ran("SUBPROC"))  bits |= R_SUB_RAN;
     if (ran("DETACHED")) bits |= R_DET_RAN;
+    if (ran("OVMXFORK")) bits |= R_OF_RAN;
     for (int i = 0; i < 50 && waitpid(-1, NULL, WNOHANG) >= 0; i++)
         nanosleep(&tick, NULL);             /* reap what is ours to reap */
 
     int fd = open(RESULTS, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) {
-        dprintf(fd, "subprocess status %08X pid %08X; detached status %08X pid %08X\n",
-                (unsigned)sst, (unsigned)spid, (unsigned)dst, (unsigned)dpid);
+        dprintf(fd, "subprocess status %08X pid %08X; detached status %08X pid %08X; "
+                "ovmx_subprocess_fork status %08X pid %08X\n",
+                (unsigned)sst, (unsigned)spid, (unsigned)dst, (unsigned)dpid,
+                (unsigned)ost, (unsigned)opid);
         close(fd);
     }
     _exit(bits);
@@ -395,11 +414,15 @@ int main(int argc, char **argv)
     CHECK(bits >= 0 && (bits & R_DET_OK),
           "$CREPRC of a DETACHED process succeeded with a process ID, under the trace");
     CHECK(bits >= 0 && (bits & R_DET_RAN), "the detached process ran its image");
+    CHECK(bits >= 0 && (bits & R_OF_OK),
+          "ovmx_subprocess_fork made a VMS subprocess (PCB status success, a VMS PID), under the trace");
+    CHECK(bits >= 0 && (bits & R_OF_RAN), "the ovmx_subprocess_fork child ran");
     CHECK(v.execs >= 2 && v.total > 50,
           "the trace is not vacuous: it followed both created tasks into their images");
     CHECK(v.sync_ioctls >= 14,
           "creator and created tasks met in the executive's creation record (VMS_IOCTL_CREPRC_SYNC)");
     /* negctl: creprc-handshake-host-pipe */
+    /* negctl: subprocess-fork-host-pipe */
     CHECK(v.bad_pipe == 0,
           "NO host pipe: no pipe/pipe2/socketpair across $CREPRC and the created processes' runs");
 

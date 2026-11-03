@@ -653,7 +653,7 @@ int main(void)
             type(m, "SHOW NONSENSE\025");
             msleep(200);
             screen(m, scr, sizeof(scr), 300);
-            CHECK(memcmp(scr, "SHOW NONSENSE\r\033[K\r\0$ \033[K", 25) == 0,
+            CHECK(memcmp(scr, "SHOW NONSENSE\r\033[K\r\0$ \033[K", 24) == 0,
                   "CTRL/U on an ANSI CRT: <CR><ESC>[K<CR><NUL>$ <ESC>[K");
             type(m, "\r");
             rd_wait(&r);
@@ -683,7 +683,7 @@ int main(void)
             }
             msleep(200);
             screen(m, scr, sizeof(scr), 300);
-            CHECK(memcmp(scr, "\002\r\033[K\0\0\0$ SHOW TIME", 21) == 0,
+            CHECK(memcmp(scr, "\002\r\033[K\0\0\0$ SHOW TIME", 19) == 0,
                   "a recalled line on an ANSI CRT is drawn in place: <02><CR><ESC>[K<NUL><NUL><NUL>$ SHOW TIME");
             type(m, "\r");
             rd_wait(&r);
